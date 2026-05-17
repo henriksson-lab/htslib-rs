@@ -1385,6 +1385,33 @@ pub unsafe extern "C" fn hfile_c_1342_hfile_always_remote(_fname: *const c_char)
     1
 }
 
+pub unsafe fn hfile_c_1345_hisremote(fname: *const c_char) -> c_int {
+    if libc::strncmp(fname, c"preload:".as_ptr(), 8) == 0 {
+        return hfile_c_726_is_preload_url_remote(fname);
+    }
+    if libc::strncmp(fname, c"mem:".as_ptr(), 4) == 0 {
+        return hfile_c_1342_hfile_always_remote(fname);
+    }
+    if libc::strncmp(fname, c"http://".as_ptr(), 7) == 0
+        || libc::strncmp(fname, c"https://".as_ptr(), 8) == 0
+        || libc::strncmp(fname, c"ftp://".as_ptr(), 6) == 0
+        || libc::strncmp(fname, c"s3://".as_ptr(), 5) == 0
+        || libc::strncmp(fname, c"s3+http://".as_ptr(), 10) == 0
+        || libc::strncmp(fname, c"s3+https://".as_ptr(), 11) == 0
+        || libc::strncmp(fname, c"gs://".as_ptr(), 5) == 0
+        || libc::strncmp(fname, c"gcs://".as_ptr(), 6) == 0
+        || libc::strncmp(fname, c"htsget://".as_ptr(), 9) == 0
+    {
+        return hfile_c_1342_hfile_always_remote(fname);
+    }
+    if libc::strncmp(fname, c"data:".as_ptr(), 5) == 0
+        || libc::strncmp(fname, c"file://".as_ptr(), 7) == 0
+    {
+        return hfile_c_1339_hfile_always_local(fname);
+    }
+    0
+}
+
 pub unsafe fn hfile_c_1353_strip_extension(
     start: *const c_char,
     limit: *const c_char,
@@ -1532,7 +1559,7 @@ pub unsafe fn hdopen(fd: c_int, mode: *const c_char) -> *mut hFILE {
 }
 
 pub unsafe fn hisremote(filename: *const c_char) -> c_int {
-    unsafe { htslib_hisremote(filename) }
+    hfile_c_1345_hisremote(filename)
 }
 
 pub unsafe fn haddextension(
@@ -1815,6 +1842,12 @@ mod tests {
         unsafe {
             assert_eq!(hfile_c_1339_hfile_always_local(c"x".as_ptr()), 0);
             assert_eq!(hfile_c_1342_hfile_always_remote(c"x".as_ptr()), 1);
+            assert_eq!(hisremote(c"/tmp/a.bam".as_ptr()), 0);
+            assert_eq!(hisremote(c"data:,abc".as_ptr()), 0);
+            assert_eq!(hisremote(c"file:///tmp/a.bam".as_ptr()), 0);
+            assert_eq!(hisremote(c"mem:payload".as_ptr()), 1);
+            assert_eq!(hisremote(c"preload:mem:payload".as_ptr()), 1);
+            assert_eq!(hisremote(c"http://example.invalid/ref.fa".as_ptr()), 1);
 
             let path = c"/tmp/a.bam";
             let limit = path

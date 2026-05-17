@@ -6632,7 +6632,14 @@ pub unsafe fn sam_c_4553_sam_write1(
                     return -1;
                 }
             } else {
-                return hts_sys::sam_write1(fp.cast(), h.cast(), b.cast());
+                if crate::htslib_mini_rs::hfile::htslib_hfile_h_292_hwrite(
+                    (*fp).fp.hfile,
+                    (*fp).line.s.cast(),
+                    (*fp).line.l,
+                ) != (*fp).line.l as libc::ssize_t
+                {
+                    return -1;
+                }
             }
             (*fp).line.l as c_int
         }
@@ -6663,7 +6670,14 @@ pub unsafe fn sam_c_4553_sam_write1(
                     return -1;
                 }
             } else {
-                return hts_sys::sam_write1(fp.cast(), h.cast(), b.cast());
+                if crate::htslib_mini_rs::hfile::htslib_hfile_h_292_hwrite(
+                    (*fp).fp.hfile,
+                    (*fp).line.s.cast(),
+                    (*fp).line.l,
+                ) != (*fp).line.l as libc::ssize_t
+                {
+                    return -1;
+                }
             }
             (*fp).line.l as c_int
         }
@@ -9111,6 +9125,45 @@ mod tests {
     }
 
     #[test]
+    fn sam_prob_realn_adds_baq_tag_for_simple_match() {
+        unsafe {
+            let b = bam_init1();
+            assert!(!b.is_null());
+            let cigar = [(4u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32];
+            let qual = [30 as c_char, 30 as c_char, 30 as c_char, 30 as c_char];
+            assert_eq!(
+                bam_set1(
+                    b,
+                    5,
+                    c"read".as_ptr(),
+                    0,
+                    0,
+                    0,
+                    60,
+                    1,
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    4,
+                    c"ACGT".as_ptr(),
+                    qual.as_ptr(),
+                    0,
+                ),
+                18
+            );
+
+            assert_eq!(sam_prob_realn(b, c"ACGT".as_ptr(), 4, 0), 0);
+            let bq = bam_aux_get(b, c"BQ".as_ptr());
+            assert!(!bq.is_null());
+            assert_eq!(*bq, b'Z');
+            assert_eq!(libc::strlen(bq.add(1).cast()), 4);
+
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
     fn bam_data_accessors_match_htslib_macros() {
         let mut data = vec![0u8; 4 + 8 + 3 + 5 + 7];
         let cigar_offset = 4usize;
@@ -10215,6 +10268,143 @@ mod tests {
             assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
             let _ = std::fs::remove_file(path);
         }
+    }
+
+    #[test]
+    fn sam_index_build_public_wrappers_create_default_and_custom_indexes() {
+        unsafe fn write_indexable_bam(path: &std::path::Path) -> CString {
+            let path_c = CString::new(path.to_str().unwrap()).unwrap();
+            let bgzf = crate::htslib_mini_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+            assert!(!bgzf.is_null());
+
+            let hdr = sam_hdr_init();
+            assert!(!hdr.is_null());
+            let text = b"@SQ\tSN:chr1\tLN:100\n";
+            (*hdr).text = crate::htslib_mini_rs::c_compat::malloc(text.len() as u64 + 1).cast();
+            assert!(!(*hdr).text.is_null());
+            crate::htslib_mini_rs::c_compat::memcpy(
+                (*hdr).text.cast(),
+                text.as_ptr().cast(),
+                text.len() as u64,
+            );
+            *(*hdr).text.add(text.len()) = 0;
+            (*hdr).l_text = text.len();
+            (*hdr).n_targets = 1;
+            (*hdr).target_len =
+                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<u32>() as u64)
+                    .cast();
+            (*hdr).target_name = crate::htslib_mini_rs::c_compat::calloc(
+                1,
+                std::mem::size_of::<*mut c_char>() as u64,
+            )
+            .cast();
+            assert!(!(*hdr).target_len.is_null());
+            assert!(!(*hdr).target_name.is_null());
+            *(*hdr).target_len = 100;
+            *(*hdr).target_name = crate::htslib_mini_rs::c_compat::strdup(c"chr1".as_ptr());
+            assert!(!(*(*hdr).target_name).is_null());
+            assert_eq!(bam_hdr_write(bgzf, hdr), 0);
+
+            let b = bam_init1();
+            assert!(!b.is_null());
+            let cigar = [(4u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32];
+            let seq = CString::new("ACGT").unwrap();
+            let qual = [30u8, 31, 32, 33];
+            assert_eq!(
+                bam_set1(
+                    b,
+                    5,
+                    c"read1".as_ptr(),
+                    0,
+                    0,
+                    10,
+                    60,
+                    1,
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    4,
+                    seq.as_ptr(),
+                    qual.as_ptr().cast(),
+                    0,
+                ),
+                18
+            );
+            assert!(bam_write1(bgzf, b) > 0);
+            bam_destroy1(b);
+            sam_hdr_destroy(hdr);
+            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(bgzf), 0);
+            path_c
+        }
+
+        let base = std::env::temp_dir();
+        let path_build3 = base.join(format!(
+            "htslib-mini-rs-sam-index-build3-{}-{}.bam",
+            std::process::id(),
+            line!()
+        ));
+        let path_build2 = base.join(format!(
+            "htslib-mini-rs-sam-index-build2-{}-{}.bam",
+            std::process::id(),
+            line!()
+        ));
+        let path_build = base.join(format!(
+            "htslib-mini-rs-sam-index-build-{}-{}.bam",
+            std::process::id(),
+            line!()
+        ));
+        let path_bam = base.join(format!(
+            "htslib-mini-rs-bam-index-build-{}-{}.bam",
+            std::process::id(),
+            line!()
+        ));
+        let idx_build3 = base.join(format!(
+            "htslib-mini-rs-sam-index-build3-{}-{}.bai",
+            std::process::id(),
+            line!()
+        ));
+        let idx_build2 = base.join(format!(
+            "htslib-mini-rs-sam-index-build2-{}-{}.bai",
+            std::process::id(),
+            line!()
+        ));
+
+        unsafe {
+            let c_build3 = write_indexable_bam(&path_build3);
+            let c_build2 = write_indexable_bam(&path_build2);
+            let c_build = write_indexable_bam(&path_build);
+            let c_bam = write_indexable_bam(&path_bam);
+            let c_idx_build3 = CString::new(idx_build3.to_str().unwrap()).unwrap();
+            let c_idx_build2 = CString::new(idx_build2.to_str().unwrap()).unwrap();
+
+            assert_eq!(
+                sam_index_build3(c_build3.as_ptr(), c_idx_build3.as_ptr(), 0, 0),
+                0
+            );
+            assert_eq!(
+                sam_index_build2(c_build2.as_ptr(), c_idx_build2.as_ptr(), 0),
+                0
+            );
+            assert_eq!(sam_index_build(c_build.as_ptr(), 0), 0);
+            assert_eq!(bam_index_build(c_bam.as_ptr(), 0), 0);
+        }
+
+        let default_build_idx = std::path::PathBuf::from(format!("{}.bai", path_build.display()));
+        let default_bam_idx = std::path::PathBuf::from(format!("{}.bai", path_bam.display()));
+        assert!(idx_build3.exists());
+        assert!(idx_build2.exists());
+        assert!(default_build_idx.exists());
+        assert!(default_bam_idx.exists());
+
+        std::fs::remove_file(path_build3).unwrap();
+        std::fs::remove_file(path_build2).unwrap();
+        std::fs::remove_file(path_build).unwrap();
+        std::fs::remove_file(path_bam).unwrap();
+        std::fs::remove_file(idx_build3).unwrap();
+        std::fs::remove_file(idx_build2).unwrap();
+        std::fs::remove_file(default_build_idx).unwrap();
+        std::fs::remove_file(default_bam_idx).unwrap();
     }
 
     #[test]
@@ -12273,6 +12463,18 @@ mod tests {
                 CStr::from_bytes_with_nul(chr1).unwrap()
             );
             sam_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn sam_hdr_parse_underscore_and_free_wrappers_parse_simple_header() {
+        let text = b"@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:123\n";
+        unsafe {
+            let hdr = sam_hdr_parse_(text.as_ptr().cast(), text.len());
+            assert!(!hdr.is_null());
+            assert_eq!(sam_hdr_nref(hdr), 1);
+            assert_eq!(sam_hdr_tid2len(hdr, 0), 123);
+            sam_hdr_free(hdr);
         }
     }
 

@@ -4,8 +4,8 @@ This is a translation of htslib, git version `7c895563db986143fc33de8164453600f4
 
 **Most Rust developers should not use this crate**. This crate has the benefit of making Rust translation of code that depends on htslib easy, and sometimes it offers more performance.
 But causual developers should first see if the noodles (https://docs.rs/noodles/latest/noodles/) Rust library fulfills their needs. Noodles is designed to be idiomatic safe Rust,
-while this crate merely aims to provide an unfiltered path into the original C htslib. But because the orignal htslib is in C, this crate makes little attempt to prevent to prevent the
-user from doing something harmful. Thus, be careful when using this crate.
+while this crate merely aims to provide an unfiltered path into the original C htslib. But because the original htslib is in C and our translations are 1-1 for auditability,
+this crate makes little attempt to prevent to prevent the user from doing something harmful. Thus, be careful when using this crate.
 
 * 2026-05-14: Minimal testing performed. **This translation is incomplete, features are still missing**
 

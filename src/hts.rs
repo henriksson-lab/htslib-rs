@@ -1496,6 +1496,8 @@ pub unsafe fn hts_parse_decimal(
 
     if sign == b'+' as c_char {
         n as i64
+    } else if n == (i64::MAX as u64) + 1 {
+        i64::MIN
     } else {
         -(n as i64)
     }
@@ -3341,7 +3343,28 @@ pub unsafe fn kputd(d: f64, s: *mut kstring_t) -> c_int {
         return ((*s).l - before) as c_int;
     }
 
-    let text = format!("{d:.6}");
+    let decimals = if d < 0.001 {
+        9
+    } else if d < 0.01 {
+        8
+    } else if d < 0.1 {
+        7
+    } else if d < 1.0 {
+        6
+    } else if d < 10.0 {
+        5
+    } else if d < 100.0 {
+        4
+    } else if d < 1000.0 {
+        3
+    } else if d < 10000.0 {
+        2
+    } else if d < 100000.0 {
+        1
+    } else {
+        0
+    };
+    let text = format!("{d:.decimals$}");
     let text = text.trim_end_matches('0').trim_end_matches('.');
     if kputsn(text.as_ptr().cast(), text.len(), s) < 0 {
         return -1;
@@ -10409,6 +10432,26 @@ mod tests {
     }
 
     #[test]
+    fn kfgetline_uses_stdio_fgets_wrapper() {
+        unsafe {
+            let fp = libc::tmpfile();
+            assert!(!fp.is_null());
+            assert!(libc::fputs(c"alpha\r\nbeta\n".as_ptr(), fp) >= 0);
+            libc::rewind(fp);
+
+            let mut ks: kstring_t = std::mem::zeroed();
+            assert_eq!(kfgetline(&mut ks, fp), 0);
+            assert_eq!(CStr::from_ptr(ks.s).to_bytes(), b"alpha");
+            assert_eq!(kfgetline(&mut ks, fp), 0);
+            assert_eq!(CStr::from_ptr(ks.s).to_bytes(), b"alphabeta");
+            assert_eq!(kfgetline(&mut ks, fp), libc::EOF);
+
+            crate::htslib_mini_rs::c_compat::free(ks.s.cast());
+            assert_eq!(libc::fclose(fp), 0);
+        }
+    }
+
+    #[test]
     fn kstring_integer_writers_match_decimal_c_rules() {
         unsafe {
             let mut ks = kstring_t {
@@ -10818,6 +10861,15 @@ mod tests {
             assert_eq!(hts_close(fp_w), 0);
 
             std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn hts_prefetch_wrappers_accept_valid_memory() {
+        let mut byte = b'x';
+        unsafe {
+            hts_prefetch((&mut byte as *mut u8).cast());
+            hts_prefetch_builtin((&mut byte as *mut u8).cast());
         }
     }
 

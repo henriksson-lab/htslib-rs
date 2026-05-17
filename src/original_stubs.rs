@@ -24,10 +24,19 @@ pub mod structs {
         _private: [u8; 0],
     }
 
+    // original: plp_dat (htslib/test/pileup_mod.c:32)
+    #[repr(C)]
+    pub struct plp_dat {
+        pub fp: *mut crate::htslib_mini_rs::hts::htsFile,
+        pub h: *mut crate::htslib_mini_rs::sam::sam_hdr_t,
+    }
+
     // original: ptest_t (htslib/test/pileup.c:56)
     #[repr(C)]
     pub struct ptest_t {
-        _private: [u8; 0],
+        pub fname: *const std::ffi::c_char,
+        pub fp: *mut crate::htslib_mini_rs::hts::htsFile,
+        pub fp_hdr: *mut crate::htslib_mini_rs::sam::sam_hdr_t,
     }
 
     // original: hFILE_backend (htslib/hfile_internal.h:65)
@@ -285,60 +294,6 @@ pub mod structs {
     // original: bgzf_cache_t (htslib/bgzf_internal.h:41)
     #[repr(C)]
     pub struct bgzf_cache_t {
-        _private: [u8; 0],
-    }
-
-    // original: basecount (htslib/samples/qtask_unordered.c:38)
-    #[repr(C)]
-    pub struct basecount {
-        _private: [u8; 0],
-    }
-
-    // original: data (htslib/samples/qtask_unordered.c:42)
-    #[repr(C)]
-    pub struct samples_qtask_unordered_c_42_data {
-        _private: [u8; 0],
-    }
-
-    // original: datacache (htslib/samples/qtask_unordered.c:52)
-    #[repr(C)]
-    pub struct datacache {
-        _private: [u8; 0],
-    }
-
-    // original: plpconf (htslib/samples/mpileup.c:45)
-    #[repr(C)]
-    pub struct plpconf {
-        _private: [u8; 0],
-    }
-
-    // original: data (htslib/samples/qtask_ordered.c:36)
-    #[repr(C)]
-    pub struct samples_qtask_ordered_c_36_data {
-        _private: [u8; 0],
-    }
-
-    // original: datacache (htslib/samples/qtask_ordered.c:43)
-    #[repr(C)]
-    pub struct samples_qtask_ordered_c_43_datacache {
-        _private: [u8; 0],
-    }
-
-    // original: orderedwrite (htslib/samples/qtask_ordered.c:49)
-    #[repr(C)]
-    pub struct orderedwrite {
-        _private: [u8; 0],
-    }
-
-    // original: plpconf (htslib/samples/pileup_mod.c:45)
-    #[repr(C)]
-    pub struct samples_pileup_mod_c_45_plpconf {
-        _private: [u8; 0],
-    }
-
-    // original: plpconf (htslib/samples/pileup.c:45)
-    #[repr(C)]
-    pub struct samples_pileup_c_45_plpconf {
         _private: [u8; 0],
     }
 
@@ -642,9 +597,28 @@ pub mod functions {
 
     use super::structs;
 
+    unsafe extern "C" {
+        static mut optind: c_int;
+    }
+
     static mut TEST_KFUNC_NFAILED: c_int = 0;
+    static mut TEST_FIELDARITH_NTESTS: c_int = 0;
+    static mut TEST_FIELDARITH_NFAILURES: c_int = 0;
+    pub(crate) static mut TEST_PLUGINS_DLHTS_ERRORS: c_int = 0;
+    static mut TEST_PLUGINS_DLHTS_VERBOSE: c_int = 0;
+    pub(crate) static mut TEST_SAM_STATUS: c_int = libc::EXIT_SUCCESS;
     static mut REF_CACHE_HTTP_LINE: [c_char; REF_CACHE_BUF_SZ as usize + 1] =
         [0; REF_CACHE_BUF_SZ as usize + 1];
+    static mut HFILE_LIBCURL_SHARE_LOCK: libc::pthread_mutex_t = libc::PTHREAD_MUTEX_INITIALIZER;
+    static mut HFILE_S3_SHARE_LOCK: libc::pthread_mutex_t = libc::PTHREAD_MUTEX_INITIALIZER;
+    pub(crate) static mut TEST_HFILE_FIN: *mut hFILE = std::ptr::null_mut();
+    pub(crate) static mut TEST_HFILE_FOUT: *mut hFILE = std::ptr::null_mut();
+
+    const TEST_HFILE_LIBCURL_DATA_SIZE: usize = 16384;
+
+    pub(crate) unsafe fn test_pileup_reset_getopt() {
+        optind = 1;
+    }
 
     #[repr(C)]
     struct HFileLayout {
@@ -707,6 +681,455 @@ pub mod functions {
     const REF_CACHE_NI_MAXHOST: usize = 1025;
     const REF_CACHE_BUF_SZ: c_uint = 0x400;
     const REF_CACHE_BUF_MASK: c_uint = REF_CACHE_BUF_SZ - 1;
+
+    #[repr(C)]
+    struct HFileLibcurlAuthToken {
+        path: *mut c_char,
+        token: *mut c_char,
+        expiry: libc::time_t,
+        failed: c_int,
+        lock: libc::pthread_mutex_t,
+    }
+
+    #[repr(C)]
+    struct HFileLibcurlCurlSlist {
+        data: *mut c_char,
+        next: *mut HFileLibcurlCurlSlist,
+    }
+
+    #[repr(C)]
+    struct HFileLibcurlHdrList {
+        list: *mut HFileLibcurlCurlSlist,
+        num: c_uint,
+        size: c_uint,
+    }
+
+    #[repr(C)]
+    struct HFileLibcurlBuffer {
+        ptr: *mut c_char,
+        len: usize,
+    }
+
+    #[repr(C)]
+    struct HFileLibcurlCallbackPrefix {
+        base: hFILE,
+        easy: *mut c_void,
+        multi: *mut c_void,
+        file_size: libc::off_t,
+        buffer: HFileLibcurlBuffer,
+        final_result: c_int,
+        flags: c_uint,
+    }
+
+    type HFileLibcurlHttpHeaderCallback =
+        unsafe extern "C" fn(*mut c_void, *mut *mut *mut c_char) -> c_int;
+
+    #[repr(C)]
+    struct HFileLibcurlHeaders {
+        fixed: HFileLibcurlHdrList,
+        extra: HFileLibcurlHdrList,
+        callback: Option<HFileLibcurlHttpHeaderCallback>,
+        callback_data: *mut c_void,
+        auth: *mut c_void,
+        auth_hdr_num: c_int,
+        redirect: *mut c_void,
+        redirect_data: *mut c_void,
+        http_response_ptr: *mut libc::c_long,
+        fail_on_error: c_int,
+    }
+
+    #[repr(C)]
+    struct HFileLibcurlHeaderPrefix {
+        base: hFILE,
+        easy: *mut c_void,
+        multi: *mut c_void,
+        file_size: libc::off_t,
+        buffer: HFileLibcurlBuffer,
+        final_result: c_int,
+        flags: c_uint,
+        nrunning: c_int,
+        headers: HFileLibcurlHeaders,
+    }
+
+    #[repr(C)]
+    struct BcfHrecLayout {
+        type_: c_int,
+        key: *mut c_char,
+        value: *mut c_char,
+        nkeys: c_int,
+        keys: *mut *mut c_char,
+        vals: *mut *mut c_char,
+    }
+
+    #[repr(C)]
+    struct KHashVdictLayout {
+        n_buckets: c_uint,
+        size: c_uint,
+        n_occupied: c_uint,
+        upper_bound: c_uint,
+        flags: *mut c_uint,
+        keys: *mut *const c_char,
+        vals: *mut c_void,
+    }
+
+    #[repr(C)]
+    struct BcfHdrAuxLayout {
+        dict: KHashVdictLayout,
+        gen: *mut c_void,
+        key_len: *mut usize,
+        version: c_int,
+        ref_count: c_uint,
+    }
+
+    #[repr(C)]
+    struct BcfIdInfoLayout {
+        info: [u64; 3],
+        hrec: [*mut BcfHrecLayout; 3],
+        id: c_int,
+    }
+
+    #[repr(C)]
+    struct BcfIdPairLayout {
+        key: *const c_char,
+        val: *const BcfIdInfoLayout,
+    }
+
+    #[repr(C)]
+    struct BcfHdrLayout {
+        n: [i32; 3],
+        id: [*mut c_void; 3],
+        dict: [*mut c_void; 3],
+        samples: *mut *mut c_char,
+        hrec: *mut *mut BcfHrecLayout,
+        nhrec: c_int,
+        dirty: c_int,
+        ntransl: c_int,
+        transl: [*mut c_int; 2],
+        nsamples_ori: c_int,
+        keep_samples: *mut u8,
+        mem: kstring_t,
+        m: [i32; 3],
+    }
+
+    #[repr(C)]
+    struct TestBgzfFiles {
+        src_plain: *mut c_char,
+        src_bgzf: *mut c_char,
+        src_idx: *mut c_char,
+        tmp_bgzf: *mut c_char,
+        tmp_idx: *mut c_char,
+        f_plain: *mut libc::FILE,
+        f_bgzf: *mut libc::FILE,
+        f_idx: *mut libc::FILE,
+        text: *const c_uchar,
+        ltext: usize,
+    }
+
+    #[repr(C)]
+    struct AnnotTsvCols {
+        n: c_uint,
+        m: c_uint,
+        off: *mut *mut c_char,
+        rmme: *mut c_char,
+    }
+
+    #[repr(C)]
+    struct AnnotTsvHdr {
+        name2idx: *mut c_void,
+        cols: *mut AnnotTsvCols,
+        annots: *mut AnnotTsvCols,
+        dummy: c_int,
+    }
+
+    #[repr(C)]
+    struct AnnotTsvDatHeaderOnly {
+        fname: *mut c_char,
+        hdr: AnnotTsvHdr,
+    }
+
+    #[repr(C)]
+    struct AnnotTsvDat {
+        fname: *mut c_char,
+        hdr: AnnotTsvHdr,
+        core: *mut AnnotTsvCols,
+        match_: *mut AnnotTsvCols,
+        transfer: *mut AnnotTsvCols,
+        annots: *mut AnnotTsvCols,
+        core_idx: *mut c_int,
+        match_idx: *mut c_int,
+        transfer_idx: *mut c_int,
+        annots_idx: *mut c_int,
+        nannots_added: *mut c_int,
+        coor_base: [c_int; 2],
+        delim: c_char,
+        grow_n: c_int,
+        line: kstring_t,
+        fp: *mut htsFile,
+    }
+
+    #[repr(C)]
+    struct AnnotTsvNbp {
+        n: usize,
+        m: usize,
+        regs: *mut hts_pos_t,
+        beg: hts_pos_t,
+        end: hts_pos_t,
+    }
+
+    #[repr(C)]
+    struct AnnotTsvArgs {
+        nbp: *mut AnnotTsvNbp,
+        dst: AnnotTsvDat,
+        src: AnnotTsvDat,
+        core_str: *mut c_char,
+        coords_str: *mut c_char,
+        match_str: *mut c_char,
+        transfer_str: *mut c_char,
+        annots_str: *mut c_char,
+        headers_str: *mut c_char,
+        delim_str: *mut c_char,
+        temp_dir: *mut c_char,
+        out_fname: *mut c_char,
+        out_fp: *mut BGZF,
+        allow_dups: c_int,
+        max_annots: c_int,
+        mode: c_int,
+        no_write_hdr: c_int,
+        overlap_either: c_int,
+        overlap_src: f64,
+        overlap_dst: f64,
+        idx: *mut c_void,
+        itr: *mut c_void,
+        tmp_kstr: kstring_t,
+        tmp_cols: *mut AnnotTsvCols,
+        tmp_hash: *mut *mut c_void,
+    }
+
+    const ANNOT_TSV_ANN_NBP: c_int = 1;
+    const ANNOT_TSV_ANN_FRAC: c_int = 2;
+    const ANNOT_TSV_ANN_CNT: c_int = 4;
+
+    #[repr(C)]
+    struct PluginPathItr {
+        path: kstring_t,
+        entry: kstring_t,
+        dirv: *mut c_void,
+        pathdir: *const c_char,
+        prefix: *const c_char,
+        suffix: *const c_char,
+        prefix_len: usize,
+        suffix_len: usize,
+        entry_dir_l: usize,
+    }
+
+    #[repr(C)]
+    struct ThreadPoolPipeJob {
+        o: *mut c_void,
+        x: c_uint,
+        eof: c_int,
+    }
+
+    #[repr(C)]
+    struct SyncedBcfRegion1 {
+        start: hts_pos_t,
+        end: hts_pos_t,
+    }
+
+    #[repr(C)]
+    struct BcfSrSortKbitset {
+        n: usize,
+        n_max: usize,
+        b: [c_ulong; 1],
+    }
+
+    #[repr(C)]
+    struct BcfSrSortVar {
+        str_: *mut c_char,
+        type_: c_int,
+        nalt: c_int,
+        nvcf: c_int,
+        mvcf: c_int,
+        vcf: *mut c_int,
+        rec: *mut *mut c_void,
+        mask: *mut BcfSrSortKbitset,
+    }
+
+    #[repr(C)]
+    struct BcfSrSortScores {
+        score: [u8; 256],
+        nvar: c_int,
+        mvar: c_int,
+        var: *mut BcfSrSortVar,
+        nvset: c_int,
+        mvset: c_int,
+        mpmat: c_int,
+        pmat: *mut c_int,
+        ngrp: c_int,
+        mgrp: c_int,
+        mcnt: c_int,
+        cnt: *mut c_int,
+        grp: *mut c_void,
+        vset: *mut c_void,
+        vcf_buf: *mut c_void,
+        sr: *mut c_void,
+        grp_str2int: *mut c_void,
+        var_str2int: *mut c_void,
+        str_: kstring_t,
+        moff: c_int,
+        noff: c_int,
+        off: *mut c_int,
+        mcharp: c_int,
+        charp: *mut *mut c_char,
+        chr: *const c_char,
+        pos: hts_pos_t,
+        nsr: c_int,
+        msr: c_int,
+        pair: c_int,
+        nactive: c_int,
+        mactive: c_int,
+        active: *mut c_int,
+    }
+
+    #[repr(C)]
+    struct BcfSrSortVcfBuf {
+        nrec: c_int,
+        mrec: c_int,
+        rec: *mut *mut c_void,
+    }
+
+    #[repr(C)]
+    struct BcfSrReaderSetPrefix {
+        collapse: c_int,
+        apply_filters: *mut c_char,
+        require_index: c_int,
+        max_unpack: c_int,
+        has_line: *mut c_int,
+        errnum: c_int,
+        readers: *mut c_void,
+        nreaders: c_int,
+    }
+
+    #[repr(C)]
+    struct BcfSrReaderFilterPrefix {
+        file: *mut htsFile,
+        tbx_idx: *mut c_void,
+        bcf_idx: *mut hts_idx_t,
+        header: *mut c_void,
+        itr: *mut hts_itr_t,
+        fname: *mut c_char,
+        buffer: *mut *mut c_void,
+        nbuffer: c_int,
+        mbuffer: c_int,
+        nfilter_ids: c_int,
+        filter_ids: *mut c_int,
+    }
+
+    #[repr(C)]
+    struct BcfSrSortVarset {
+        nvar: c_int,
+        mvar: c_int,
+        var: *mut c_int,
+        cnt: c_int,
+        mask: *mut BcfSrSortKbitset,
+    }
+
+    #[repr(C)]
+    struct HfileS3AuthStringsPrefix {
+        base: hFILE,
+        curl: *mut c_void,
+        ret: c_int,
+        au: *mut c_void,
+        buffer: kstring_t,
+        url: kstring_t,
+        verbose: libc::c_long,
+        write: c_int,
+        part_size: c_int,
+        content_hash: kstring_t,
+        authorisation: kstring_t,
+        content: kstring_t,
+        date: kstring_t,
+        token: kstring_t,
+        range: kstring_t,
+        upload_id: kstring_t,
+        completion_message: kstring_t,
+        part_no: c_int,
+        aborted: c_int,
+        index: usize,
+    }
+
+    static ANNOT_TSV_USAGE_TEXT: &[u8] =
+        b"About: Annotate regions of the target file (TGT) with information from
+       overlapping regions of the source file (SRC). Multiple columns can be
+       transferred (-f) and the transfer can be conditioned on requiring
+       matching values in one or more columns (-m).
+       In addition to column transfer (-f) and special annotations (-a), the
+       program can operate in a simple grep-like mode and print matching lines
+       (when neither -f nor -a are given) or drop matching lines (-x).
+       All indexes and coordinates are 1-based and inclusive.
+
+Usage: annot-tsv [OPTIONS] -s source.txt -t target.txt > output.txt
+
+Common options:
+   -c, --core SRC:TGT      Core columns in SRC and TGT file
+                             [chr,beg,end:chr,beg,end]
+   -f, --transfer SRC:TGT  Columns to transfer. If SRC column does not exist,
+                           interpret as the default value to use. If the TGT
+                           column does not exist, a new column is created. If
+                           the TGT column does exist, its values are overwritten
+                           when overlap is found or left as is otherwise.
+   -m, --match SRC:TGT     Require match in these columns for annotation
+                           transfer
+   -o, --output FILE       Output file name [STDOUT]
+   -s, --source-file FILE  Source file to take annotations from
+   -t, --target-file FILE  Target file to be extend with annotations from -s
+
+Other options:
+       --allow-dups        Add annotations multiple times
+       --help              This help message
+       --max-annots INT    Adding at most INT annotations per column to save
+                           time in big regions
+       --version           Print version string and exit
+   -a, --annotate LIST     Add special annotations, one or more of:
+                             cnt  .. number of overlapping regions
+                             frac .. fraction of the target region with an
+                                       overlap
+                             nbp  .. number of source base pairs in the overlap
+   -C, --coords SRC:TGT    Are coordinates 0 or 1-based, BED=01, TSV=11 [11]
+   -d, --delim SRC:TGT     Column delimiter in SRC and TGT file
+   -h, --headers SRC:TGT   Header row line number, 0:0 is equivalent to -H, negative
+                             value counts from the end of comment line block [1:1]
+   -H, --ignore-headers    Use numeric indices, ignore the headers completely
+   -I, --no-header-idx     Suppress index numbers in the printed header. If given
+                           twice, drop the entire header
+   -O, --overlap FLOAT[,FLOAT]     Minimum required overlap with respect to SRC,TGT.
+                           If single value, the bigger overlap is considered.
+                           Identical values are equivalent to running with -r.
+   -r, --reciprocal        Apply the -O requirement to both overlapping
+                           intervals
+   -x, --drop-overlaps     Drop overlapping regions (precludes -f)
+
+Examples:
+   # Header is present, match and transfer by column name
+   annot-tsv -s src.txt.gz -t tgt.txt.gz -c chr,beg,end:CHR,POS,POS \\
+       -m type,sample:TYPE,SMPL -f info:INFO
+
+   # Header is not present, match and transfer by column index (1-based)
+   annot-tsv -s src.txt.gz -t tgt.txt.gz -c 1,2,3:1,2,3 -m 4,5:4,5 -f 6:6
+
+   # If the TGT part is not given, the program assumes that the SRC:TGT columns
+   # are identical
+   annot-tsv -s src.txt.gz -t tgt.txt.gz -c chr,beg,end -m type,sample -f info
+
+   # One of the SRC or TGT file can be streamed from stdin
+   gunzip -c src.txt.gz | \\
+       annot-tsv -t tgt.txt.gz -c chr,beg,end -m type,sample -f info
+   gunzip -c tgt.txt.gz | \\
+       annot-tsv -s src.txt.gz -c chr,beg,end -m type,sample -f info
+
+   # Print matching regions as above but without modifying the records
+   gunzip -c src.txt.gz | annot-tsv -t tgt.txt.gz -c chr,beg,end -m type,sample
+
+\0";
     const REF_CACHE_MAX_UA_LEN: usize = 128;
     const REF_CACHE_MAX_REFERRER_LEN: usize = 128;
     const REF_CACHE_READING_REQUEST_LINE: c_int = 0;
@@ -1088,23 +1511,89 @@ pub mod functions {
     }
 
     // original: stop_server (htslib/test/test_hfile_libcurl.c:139)
-    pub unsafe fn test_test_hfile_libcurl_c_139_stop_server() {
-        todo!("translate HTSlib stop_server from htslib/test/test_hfile_libcurl.c:139");
+    pub unsafe fn test_test_hfile_libcurl_c_139_stop_server(pid: libc::pid_t) {
+        if pid <= 0 {
+            return;
+        }
+
+        libc::kill(pid, libc::SIGKILL);
+        let mut status = 0;
+        if libc::waitpid(pid, &mut status, 0) < 0 {
+            libc::perror(c"waitpid".as_ptr());
+        }
     }
 
     // original: generate_test_data (htslib/test/test_hfile_libcurl.c:154)
     pub unsafe fn test_test_hfile_libcurl_c_154_generate_test_data() {
-        todo!("translate HTSlib generate_test_data from htslib/test/test_hfile_libcurl.c:154");
+        let f = libc::fopen(c"test/hfile_libcurl.tmp".as_ptr(), c"wb".as_ptr());
+        if f.is_null() {
+            libc::abort();
+        }
+        for i in 0..TEST_HFILE_LIBCURL_DATA_SIZE {
+            libc::fputc(((i * 7 + 13) & 0xff) as c_int, f);
+        }
+        libc::fclose(f);
     }
 
     // original: read_expected_data (htslib/test/test_hfile_libcurl.c:173)
-    pub unsafe fn test_test_hfile_libcurl_c_173_read_expected_data() {
-        todo!("translate HTSlib read_expected_data from htslib/test/test_hfile_libcurl.c:173");
+    pub unsafe fn test_test_hfile_libcurl_c_173_read_expected_data(
+        size_out: *mut usize,
+    ) -> *mut c_uchar {
+        let f = libc::fopen(c"test/hfile_libcurl.tmp".as_ptr(), c"rb".as_ptr());
+        if f.is_null() {
+            return std::ptr::null_mut();
+        }
+        let data = libc::malloc(TEST_HFILE_LIBCURL_DATA_SIZE).cast::<c_uchar>();
+        if data.is_null() {
+            libc::fclose(f);
+            return std::ptr::null_mut();
+        }
+        *size_out = libc::fread(data.cast(), 1, TEST_HFILE_LIBCURL_DATA_SIZE, f);
+        libc::fclose(f);
+        data
     }
 
     // original: hfile_read_all (htslib/test/test_hfile_libcurl.c:196)
-    pub unsafe fn test_test_hfile_libcurl_c_196_hfile_read_all() {
-        todo!("translate HTSlib hfile_read_all from htslib/test/test_hfile_libcurl.c:196");
+    pub unsafe fn test_test_hfile_libcurl_c_196_hfile_read_all(
+        url: *const c_char,
+        size_out: *mut usize,
+    ) -> *mut c_uchar {
+        let fp = crate::htslib_mini_rs::hfile::hopen(url, c"r".as_ptr());
+        if fp.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let buf = libc::malloc(TEST_HFILE_LIBCURL_DATA_SIZE + 1024).cast::<c_uchar>();
+        if buf.is_null() {
+            crate::htslib_mini_rs::hfile::hclose_abruptly(fp);
+            return std::ptr::null_mut();
+        }
+
+        let mut total = 0usize;
+        loop {
+            let n = crate::htslib_mini_rs::hfile::htslib_hfile_h_247_hread(
+                fp,
+                buf.add(total).cast(),
+                4096,
+            );
+            if n <= 0 {
+                if n < 0 {
+                    libc::free(buf.cast());
+                    crate::htslib_mini_rs::hfile::hclose_abruptly(fp);
+                    *size_out = 0;
+                    return std::ptr::null_mut();
+                }
+                break;
+            }
+            total += n as usize;
+            if total > TEST_HFILE_LIBCURL_DATA_SIZE + 512 {
+                break;
+            }
+        }
+
+        crate::htslib_mini_rs::hfile::hclose(fp);
+        *size_out = total;
+        buf
     }
 
     // original: test_normal_transfer (htslib/test/test_hfile_libcurl.c:233)
@@ -1148,8 +1637,10 @@ pub mod functions {
     }
 
     // original: hts_close_or_abort (htslib/test/fuzz/hts_open_fuzzer.c:40)
-    pub unsafe fn test_fuzz_hts_open_fuzzer_c_40_hts_close_or_abort() {
-        todo!("translate HTSlib hts_close_or_abort from htslib/test/fuzz/hts_open_fuzzer.c:40");
+    pub unsafe fn test_fuzz_hts_open_fuzzer_c_40_hts_close_or_abort(file: *mut htsFile) {
+        if crate::htslib_mini_rs::hts::hts_close(file) != 0 {
+            libc::abort();
+        }
     }
 
     // original: view_sam (htslib/test/fuzz/hts_open_fuzzer.c:46)
@@ -1170,13 +1661,317 @@ pub mod functions {
     }
 
     // original: reg_expected (htslib/test/test-parse-reg.c:50)
-    pub unsafe fn test_test_parse_reg_c_50_reg_expected() {
-        todo!("translate HTSlib reg_expected from htslib/test/test-parse-reg.c:50");
+    pub unsafe fn test_test_parse_reg_c_50_reg_expected(
+        hdr: *mut sam::sam_hdr_t,
+        reg: *const c_char,
+        flags: c_int,
+        reg_exp: *const c_char,
+        tid_exp: c_int,
+        beg_exp: hts_pos_t,
+        end_exp: hts_pos_t,
+    ) {
+        let mut tid_out = -1;
+        let mut beg_out: hts_pos_t = -1;
+        let mut end_out: hts_pos_t = -1;
+        let reg_out =
+            sam::sam_parse_region(hdr, reg, &mut tid_out, &mut beg_out, &mut end_out, flags);
+
+        assert_eq!(reg_out.is_null(), reg_exp.is_null());
+        if !reg_exp.is_null() {
+            assert_eq!(libc::strcmp(reg_out, reg_exp), 0);
+            assert_eq!(tid_out, tid_exp);
+            assert_eq!(beg_out, beg_exp);
+            assert_eq!(end_out, end_exp);
+        }
     }
 
     // original: reg_test (htslib/test/test-parse-reg.c:72)
-    pub unsafe fn test_test_parse_reg_c_72_reg_test() {
-        todo!("translate HTSlib reg_test from htslib/test/test-parse-reg.c:72");
+    pub unsafe fn test_test_parse_reg_c_72_reg_test(fn_: *const c_char) -> c_int {
+        let fp = crate::htslib_mini_rs::hts::hts_open(fn_, c"r".as_ptr());
+        if fp.is_null() {
+            return 1;
+        }
+        let hdr = sam::sam_hdr_read(fp);
+        if hdr.is_null() {
+            crate::htslib_mini_rs::hts::hts_close(fp);
+            return 1;
+        }
+
+        let hts_pos_max = crate::htslib_mini_rs::hts::HTS_POS_MAX;
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr1".as_ptr(),
+            0,
+            c"".as_ptr(),
+            0,
+            0,
+            hts_pos_max,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr1:50".as_ptr(),
+            0,
+            c"".as_ptr(),
+            0,
+            49,
+            hts_pos_max,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr1:50".as_ptr(),
+            crate::htslib_mini_rs::hts::HTS_PARSE_ONE_COORD,
+            c"".as_ptr(),
+            0,
+            49,
+            50,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr1:50-100".as_ptr(),
+            0,
+            c"".as_ptr(),
+            0,
+            49,
+            100,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr1:50-".as_ptr(),
+            0,
+            c"".as_ptr(),
+            0,
+            49,
+            hts_pos_max,
+        );
+        test_test_parse_reg_c_50_reg_expected(hdr, c"chr1:-50".as_ptr(), 0, c"".as_ptr(), 0, 0, 50);
+
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr1:100-200".as_ptr(),
+            0,
+            std::ptr::null(),
+            0,
+            0,
+            0,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"{chr1}:100-200".as_ptr(),
+            0,
+            c"".as_ptr(),
+            0,
+            99,
+            200,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"{chr1:100-200}".as_ptr(),
+            0,
+            c"".as_ptr(),
+            2,
+            0,
+            hts_pos_max,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"{chr1:100-200}:100-200".as_ptr(),
+            0,
+            c"".as_ptr(),
+            2,
+            99,
+            200,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"{chr2:100-200}:100-200".as_ptr(),
+            0,
+            c"".as_ptr(),
+            3,
+            99,
+            200,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr2:100-200:100-200".as_ptr(),
+            0,
+            c"".as_ptr(),
+            3,
+            99,
+            200,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr2:100-200".as_ptr(),
+            0,
+            c"".as_ptr(),
+            3,
+            0,
+            hts_pos_max,
+        );
+
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr3".as_ptr(),
+            0,
+            c"".as_ptr(),
+            4,
+            0,
+            hts_pos_max,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr3:".as_ptr(),
+            0,
+            c"".as_ptr(),
+            4,
+            0,
+            hts_pos_max,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr3:1000-1500".as_ptr(),
+            0,
+            c"".as_ptr(),
+            4,
+            999,
+            1500,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr3:1,000-1,500".as_ptr(),
+            0,
+            c"".as_ptr(),
+            4,
+            999,
+            1500,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr3:1k-1.5K".as_ptr(),
+            0,
+            c"".as_ptr(),
+            4,
+            999,
+            1500,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr3:1e3-1.5e3".as_ptr(),
+            0,
+            c"".as_ptr(),
+            4,
+            999,
+            1500,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr3:1e3-15e2".as_ptr(),
+            0,
+            c"".as_ptr(),
+            4,
+            999,
+            1500,
+        );
+
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr1,chr3".as_ptr(),
+            crate::htslib_mini_rs::hts::HTS_PARSE_LIST,
+            c"chr3".as_ptr(),
+            0,
+            0,
+            hts_pos_max,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr1:100-200,chr3".as_ptr(),
+            crate::htslib_mini_rs::hts::HTS_PARSE_LIST,
+            std::ptr::null(),
+            0,
+            0,
+            0,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"{chr1,chr3}".as_ptr(),
+            crate::htslib_mini_rs::hts::HTS_PARSE_LIST,
+            c"".as_ptr(),
+            5,
+            0,
+            hts_pos_max,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"{chr1,chr3},chr1".as_ptr(),
+            crate::htslib_mini_rs::hts::HTS_PARSE_LIST,
+            c"chr1".as_ptr(),
+            5,
+            0,
+            hts_pos_max,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr3:1,000-1,500".as_ptr(),
+            crate::htslib_mini_rs::hts::HTS_PARSE_LIST
+                | crate::htslib_mini_rs::hts::HTS_PARSE_ONE_COORD,
+            c"000-1,500".as_ptr(),
+            4,
+            0,
+            1,
+        );
+
+        test_test_parse_reg_c_50_reg_expected(hdr, c"chr2".as_ptr(), 0, std::ptr::null(), 0, 0, 0);
+        test_test_parse_reg_c_50_reg_expected(hdr, c"chr1,".as_ptr(), 0, std::ptr::null(), 0, 0, 0);
+        test_test_parse_reg_c_50_reg_expected(hdr, c"{chr1".as_ptr(), 0, std::ptr::null(), 0, 0, 0);
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr1:10-10".as_ptr(),
+            0,
+            c"".as_ptr(),
+            0,
+            9,
+            10,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr1:10-9".as_ptr(),
+            0,
+            std::ptr::null(),
+            0,
+            0,
+            0,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr1:x".as_ptr(),
+            0,
+            std::ptr::null(),
+            0,
+            0,
+            0,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr1:1-y".as_ptr(),
+            0,
+            std::ptr::null(),
+            0,
+            0,
+            0,
+        );
+        test_test_parse_reg_c_50_reg_expected(
+            hdr,
+            c"chr1:1,chr3".as_ptr(),
+            0,
+            std::ptr::null(),
+            0,
+            0,
+            0,
+        );
+
+        sam::sam_hdr_destroy(hdr);
+        crate::htslib_mini_rs::hts::hts_close(fp);
+        0
     }
 
     // original: main (htslib/test/test-parse-reg.c:145)
@@ -1204,33 +1999,283 @@ pub mod functions {
     }
 
     // original: t16_bit (htslib/test/hts_endian.c:159)
-    pub unsafe fn test_hts_endian_c_159_t16_bit() {
-        todo!("translate HTSlib t16_bit from htslib/test/hts_endian.c:159");
+    pub unsafe fn test_hts_endian_c_159_t16_bit(_verbose: c_int) -> c_int {
+        let tests: [([u8; 2], i16, u16); 6] = [
+            ([0x00, 0x00], 0, 0),
+            ([0x01, 0x00], 1, 1),
+            ([0x00, 0x01], 256, 256),
+            ([0xff, 0x7f], 32767, 32767),
+            ([0x00, 0x80], -32768, 32768),
+            ([0xff, 0xff], -1, 65535),
+        ];
+        let mut buf = [0u8; 9];
+        let mut errors = 0;
+
+        for (bytes, expected_i16, expected_u16) in tests {
+            let unaligned = [0, bytes[0], bytes[1]];
+            if crate::htslib_mini_rs::hts::le_to_u16(bytes.as_ptr()) != expected_u16 {
+                errors += 1;
+            }
+            if crate::htslib_mini_rs::hts::le_to_i16(bytes.as_ptr()) != expected_i16 {
+                errors += 1;
+            }
+            if crate::htslib_mini_rs::hts::le_to_u16(unaligned.as_ptr().add(1)) != expected_u16 {
+                errors += 1;
+            }
+            if crate::htslib_mini_rs::hts::le_to_i16(unaligned.as_ptr().add(1)) != expected_i16 {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::u16_to_le(expected_u16, buf.as_mut_ptr());
+            if buf[..2] != bytes {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::i16_to_le(expected_i16, buf.as_mut_ptr());
+            if buf[..2] != bytes {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::u16_to_le(expected_u16, buf.as_mut_ptr().add(1));
+            if buf[1..3] != bytes {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::i16_to_le(expected_i16, buf.as_mut_ptr().add(1));
+            if buf[1..3] != bytes {
+                errors += 1;
+            }
+        }
+
+        errors
     }
 
     // original: t32_bit (htslib/test/hts_endian.c:242)
-    pub unsafe fn test_hts_endian_c_242_t32_bit() {
-        todo!("translate HTSlib t32_bit from htslib/test/hts_endian.c:242");
+    pub unsafe fn test_hts_endian_c_242_t32_bit(_verbose: c_int) -> c_int {
+        let tests: [([u8; 4], i32, u32); 7] = [
+            ([0x00, 0x00, 0x00, 0x00], 0, 0),
+            ([0x01, 0x00, 0x00, 0x00], 1, 1),
+            ([0x00, 0x01, 0x00, 0x00], 256, 256),
+            ([0x00, 0x00, 0x01, 0x00], 65536, 65536),
+            ([0xff, 0xff, 0xff, 0x7f], 2147483647, 2147483647),
+            ([0x00, 0x00, 0x00, 0x80], i32::MIN, 2147483648),
+            ([0xff, 0xff, 0xff, 0xff], -1, u32::MAX),
+        ];
+        let mut buf = [0u8; 9];
+        let mut errors = 0;
+
+        for (bytes, expected_i32, expected_u32) in tests {
+            let unaligned = [0, bytes[0], bytes[1], bytes[2], bytes[3]];
+            if crate::htslib_mini_rs::hts::le_to_u32(bytes.as_ptr()) != expected_u32 {
+                errors += 1;
+            }
+            if crate::htslib_mini_rs::hts::le_to_i32(bytes.as_ptr()) != expected_i32 {
+                errors += 1;
+            }
+            if crate::htslib_mini_rs::hts::le_to_u32(unaligned.as_ptr().add(1)) != expected_u32 {
+                errors += 1;
+            }
+            if crate::htslib_mini_rs::hts::le_to_i32(unaligned.as_ptr().add(1)) != expected_i32 {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::u32_to_le(expected_u32, buf.as_mut_ptr());
+            if buf[..4] != bytes {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::i32_to_le(expected_i32, buf.as_mut_ptr());
+            if buf[..4] != bytes {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::u32_to_le(expected_u32, buf.as_mut_ptr().add(1));
+            if buf[1..5] != bytes {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::i32_to_le(expected_i32, buf.as_mut_ptr().add(1));
+            if buf[1..5] != bytes {
+                errors += 1;
+            }
+        }
+
+        errors
     }
 
     // original: t64_bit (htslib/test/hts_endian.c:323)
-    pub unsafe fn test_hts_endian_c_323_t64_bit() {
-        todo!("translate HTSlib t64_bit from htslib/test/hts_endian.c:323");
+    pub unsafe fn test_hts_endian_c_323_t64_bit(_verbose: c_int) -> c_int {
+        let tests: [([u8; 8], i64, u64); 8] = [
+            ([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 0, 0),
+            ([0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 1, 1),
+            ([0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 256, 256),
+            (
+                [0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00],
+                65536,
+                65536,
+            ),
+            (
+                [0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00],
+                4294967296,
+                4294967296,
+            ),
+            (
+                [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f],
+                i64::MAX,
+                i64::MAX as u64,
+            ),
+            (
+                [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80],
+                i64::MIN,
+                9223372036854775808,
+            ),
+            (
+                [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+                -1,
+                u64::MAX,
+            ),
+        ];
+        let mut buf = [0u8; 9];
+        let mut errors = 0;
+
+        for (bytes, expected_i64, expected_u64) in tests {
+            let unaligned = [
+                0, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ];
+            if crate::htslib_mini_rs::hts::le_to_u64(bytes.as_ptr()) != expected_u64 {
+                errors += 1;
+            }
+            if crate::htslib_mini_rs::hts::le_to_i64(bytes.as_ptr()) != expected_i64 {
+                errors += 1;
+            }
+            if crate::htslib_mini_rs::hts::le_to_u64(unaligned.as_ptr().add(1)) != expected_u64 {
+                errors += 1;
+            }
+            if crate::htslib_mini_rs::hts::le_to_i64(unaligned.as_ptr().add(1)) != expected_i64 {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::u64_to_le(expected_u64, buf.as_mut_ptr());
+            if buf[..8] != bytes {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::i64_to_le(expected_i64, buf.as_mut_ptr());
+            if buf[..8] != bytes {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::u64_to_le(expected_u64, buf.as_mut_ptr().add(1));
+            if buf[1..9] != bytes {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::i64_to_le(expected_i64, buf.as_mut_ptr().add(1));
+            if buf[1..9] != bytes {
+                errors += 1;
+            }
+        }
+
+        errors
     }
 
     // original: t_float (htslib/test/hts_endian.c:406)
-    pub unsafe fn test_hts_endian_c_406_t_float() {
-        todo!("translate HTSlib t_float from htslib/test/hts_endian.c:406");
+    pub unsafe fn test_hts_endian_c_406_t_float(_verbose: c_int) -> c_int {
+        let tests: [([u8; 4], f32); 7] = [
+            ([0x00, 0x00, 0x00, 0x00], 0.0),
+            ([0x00, 0x00, 0x80, 0x3f], 1.0),
+            ([0x00, 0x00, 0x80, 0xbf], -1.0),
+            ([0x00, 0x00, 0x20, 0x41], 10.0),
+            ([0xd0, 0x0f, 0x49, 0x40], 3.14159),
+            ([0xa8, 0x0a, 0xff, 0x66], 6.022e23),
+            ([0xcd, 0x84, 0x03, 0x13], 1.66e-27),
+        ];
+        let mut buf = [0u8; 9];
+        let mut errors = 0;
+
+        for (bytes, expected) in tests {
+            let unaligned = [0, bytes[0], bytes[1], bytes[2], bytes[3]];
+            if crate::htslib_mini_rs::hts::le_to_float(bytes.as_ptr()).to_bits()
+                != expected.to_bits()
+            {
+                errors += 1;
+            }
+            if crate::htslib_mini_rs::hts::le_to_float(unaligned.as_ptr().add(1)).to_bits()
+                != expected.to_bits()
+            {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::float_to_le(expected, buf.as_mut_ptr());
+            if buf[..4] != bytes {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::float_to_le(expected, buf.as_mut_ptr().add(1));
+            if buf[1..5] != bytes {
+                errors += 1;
+            }
+        }
+
+        errors
     }
 
     // original: t_double (htslib/test/hts_endian.c:451)
-    pub unsafe fn test_hts_endian_c_451_t_double() {
-        todo!("translate HTSlib t_double from htslib/test/hts_endian.c:451");
+    pub unsafe fn test_hts_endian_c_451_t_double(_verbose: c_int) -> c_int {
+        let tests: [([u8; 8], f64); 7] = [
+            ([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 0.0),
+            ([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f], 1.0),
+            ([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0xbf], -1.0),
+            ([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24, 0x40], 10.0),
+            (
+                [0x18, 0x2d, 0x44, 0x54, 0xfb, 0x21, 0x09, 0x40],
+                std::f64::consts::PI,
+            ),
+            (
+                [0x2b, 0x08, 0x0c, 0xd3, 0x85, 0xe1, 0xdf, 0x44],
+                6.022140858e23,
+            ),
+            (
+                [0x55, 0xfa, 0x81, 0x74, 0xf7, 0x71, 0x60, 0x3a],
+                1.66053904e-27,
+            ),
+        ];
+        let mut buf = [0u8; 9];
+        let mut errors = 0;
+
+        for (bytes, expected) in tests {
+            let unaligned = [
+                0, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ];
+            if crate::htslib_mini_rs::hts::le_to_double(bytes.as_ptr()).to_bits()
+                != expected.to_bits()
+            {
+                errors += 1;
+            }
+            if crate::htslib_mini_rs::hts::le_to_double(unaligned.as_ptr().add(1)).to_bits()
+                != expected.to_bits()
+            {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::double_to_le(expected, buf.as_mut_ptr());
+            if buf[..8] != bytes {
+                errors += 1;
+            }
+            crate::htslib_mini_rs::hts::double_to_le(expected, buf.as_mut_ptr().add(1));
+            if buf[1..9] != bytes {
+                errors += 1;
+            }
+        }
+
+        errors
     }
 
     // original: main (htslib/test/hts_endian.c:496)
-    pub unsafe fn test_hts_endian_c_496_main() {
-        todo!("translate HTSlib main from htslib/test/hts_endian.c:496");
+    pub unsafe fn test_hts_endian_c_496_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+        let verbose =
+            if argc > 1 && !argv.is_null() && libc::strcmp(*argv.add(1), c"-v".as_ptr()) == 0 {
+                1
+            } else {
+                0
+            };
+        let errors = test_hts_endian_c_159_t16_bit(verbose)
+            + test_hts_endian_c_242_t32_bit(verbose)
+            + test_hts_endian_c_323_t64_bit(verbose)
+            + test_hts_endian_c_406_t_float(verbose)
+            + test_hts_endian_c_451_t_double(verbose);
+
+        if errors != 0 {
+            libc::fprintf(hts_sys::stderr.cast(), c"%d errors\n".as_ptr(), errors);
+            libc::EXIT_FAILURE
+        } else {
+            libc::EXIT_SUCCESS
+        }
     }
 
     // original: main (htslib/test/thrash_threads5.c:35)
@@ -1297,8 +2342,76 @@ pub mod functions {
     }
 
     // original: main (htslib/test/test_kfunc.c:59)
-    pub unsafe fn test_test_kfunc_c_59_main() {
-        todo!("translate HTSlib main from htslib/test/test_kfunc.c:59");
+    pub unsafe fn test_test_kfunc_c_59_main(_argc: c_int, _argv: *mut *mut c_char) -> c_int {
+        test_test_kfunc_c_48_test_fisher(
+            2,
+            1,
+            0,
+            31,
+            1.0,
+            0.005347593583,
+            0.005347593583,
+            0.005347593583,
+        );
+        test_test_kfunc_c_48_test_fisher(2, 1, 0, 1, 1.0, 0.5, 1.0, 0.5);
+        test_test_kfunc_c_48_test_fisher(3, 1, 0, 0, 1.0, 1.0, 1.0, 1.0);
+        test_test_kfunc_c_48_test_fisher(
+            3,
+            15,
+            37,
+            45,
+            0.021479750169,
+            0.995659202564,
+            0.033161943699,
+            0.017138952733,
+        );
+        test_test_kfunc_c_48_test_fisher(
+            12,
+            5,
+            29,
+            2,
+            0.044554737835,
+            0.994525206022,
+            0.080268552074,
+            0.039079943857,
+        );
+        test_test_kfunc_c_48_test_fisher(781, 23171, 4963, 2455001, 1.0, 0.0, 0.0, 0.0);
+        test_test_kfunc_c_48_test_fisher(333, 381, 801722, 7664285, 1.0, 0.0, 0.0, 0.0);
+        test_test_kfunc_c_48_test_fisher(4155, 4903, 805463, 8507517, 1.0, 0.0, 0.0, 0.0);
+        test_test_kfunc_c_48_test_fisher(4455, 4903, 805463, 8507517, 1.0, 0.0, 0.0, 0.0);
+        test_test_kfunc_c_48_test_fisher(5455, 4903, 805463, 8507517, 1.0, 0.0, 0.0, 0.0);
+        test_test_kfunc_c_48_test_fisher(
+            1,
+            1,
+            100000,
+            1000000,
+            0.991735477166,
+            0.173555146661,
+            0.173555146661,
+            0.165290623827,
+        );
+        test_test_kfunc_c_48_test_fisher(1000, 1000, 100000, 1000000, 1.0, 0.0, 0.0, 0.0);
+        test_test_kfunc_c_48_test_fisher(1000, 1000, 1000000, 100000, 0.0, 1.0, 0.0, 0.0);
+        test_test_kfunc_c_48_test_fisher(49999, 10001, 90001, 49999, 1.0, 0.0, 0.0, 0.0);
+        test_test_kfunc_c_48_test_fisher(50000, 10000, 90000, 50000, 1.0, 0.0, 0.0, 0.0);
+        test_test_kfunc_c_48_test_fisher(50001, 9999, 89999, 50001, 1.0, 0.0, 0.0, 0.0);
+        test_test_kfunc_c_48_test_fisher(10000, 50000, 130000, 10000, 0.0, 1.0, 0.0, 0.0);
+
+        if TEST_KFUNC_NFAILED > 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed %d test case%s\n".as_ptr(),
+                TEST_KFUNC_NFAILED,
+                if TEST_KFUNC_NFAILED == 1 {
+                    c"".as_ptr()
+                } else {
+                    c"s".as_ptr()
+                },
+            );
+            libc::EXIT_FAILURE
+        } else {
+            libc::EXIT_SUCCESS
+        }
     }
 
     // original: main (htslib/test/thrash_threads2.c:35)
@@ -1307,53 +2420,552 @@ pub mod functions {
     }
 
     // original: file_compare (htslib/test/test_faidx.c:33)
-    pub unsafe fn test_test_faidx_c_33_file_compare() {
-        todo!("translate HTSlib file_compare from htslib/test/test_faidx.c:33");
+    pub unsafe fn test_test_faidx_c_33_file_compare(
+        file1: *const c_char,
+        file2: *const c_char,
+    ) -> c_int {
+        let mut buf1 = [0u8; 1024];
+        let mut buf2 = [0u8; 1024];
+        let mut lno: c_uint = 1;
+        let mut ret = -1;
+
+        let f1 = libc::fopen(file1, c"rb".as_ptr());
+        if f1.is_null() {
+            libc::perror(file1);
+            return -1;
+        }
+        let f2 = libc::fopen(file2, c"rb".as_ptr());
+        if f2.is_null() {
+            libc::perror(file2);
+            libc::fclose(f1);
+            return -1;
+        }
+
+        loop {
+            let got1 = libc::fread(buf1.as_mut_ptr().cast(), 1, buf1.len(), f1);
+            let got2 = libc::fread(buf2.as_mut_ptr().cast(), 1, buf2.len(), f2);
+            let mut i = 0usize;
+            while i < got1 && i < got2 && buf1[i] == buf2[i] {
+                if buf1[i] == b'\n' {
+                    lno += 1;
+                }
+                i += 1;
+            }
+            if i < got1 || i < got2 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"%s and %s differ at line %u\n".as_ptr(),
+                    file1,
+                    file2,
+                    lno,
+                );
+                break;
+            }
+            if got1 == 0 || got2 == 0 {
+                if libc::ferror(f1) != 0 {
+                    libc::perror(file1);
+                } else if libc::ferror(f2) != 0 {
+                    libc::perror(file2);
+                } else if got1 > 0 || got2 > 0 {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"EOF on %s at line %u\n".as_ptr(),
+                        if got1 > 0 { file2 } else { file1 },
+                        lno,
+                    );
+                } else {
+                    ret = 0;
+                }
+                break;
+            }
+        }
+
+        libc::fclose(f1);
+        libc::fclose(f2);
+        ret
     }
 
     // original: load_index (htslib/test/test_faidx.c:87)
-    pub unsafe fn test_test_faidx_c_87_load_index() {
-        todo!("translate HTSlib load_index from htslib/test/test_faidx.c:87");
+    pub unsafe fn test_test_faidx_c_87_load_index(
+        fn_: *const c_char,
+        fnfai: *const c_char,
+        fngzi: *const c_char,
+        flags: c_int,
+        format: crate::htslib_mini_rs::faidx::fai_format_options,
+    ) -> *mut crate::htslib_mini_rs::faidx::faidx_t {
+        let fai = crate::htslib_mini_rs::faidx::fai_load3_format(fn_, fnfai, fngzi, flags, format);
+        if fai.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: fai_load3(%s, %s, %s, %d, %d)\n".as_ptr(),
+                fn_,
+                if fnfai.is_null() {
+                    c"NULL".as_ptr()
+                } else {
+                    fnfai
+                },
+                if fngzi.is_null() {
+                    c"NULL".as_ptr()
+                } else {
+                    fngzi
+                },
+                flags,
+                format as c_int,
+            );
+        }
+        fai
     }
 
     // original: do_retrieval (htslib/test/test_faidx.c:99)
-    pub unsafe fn test_test_faidx_c_99_do_retrieval() {
-        todo!("translate HTSlib do_retrieval from htslib/test/test_faidx.c:99");
+    pub unsafe fn test_test_faidx_c_99_do_retrieval(
+        fn_: *const c_char,
+        fnfai: *const c_char,
+        fngzi: *const c_char,
+        flags: c_int,
+        format: crate::htslib_mini_rs::faidx::fai_format_options,
+        fnout: *const c_char,
+        interface: *const c_char,
+        nreg: c_int,
+        regions: *mut *mut c_char,
+    ) -> c_int {
+        let mut use_64bit = 1;
+        let mut use_parse_reg = 0;
+        let mut use_adjust_reg = 0;
+        let mut out = hts_sys::stdout.cast::<libc::FILE>();
+
+        if !interface.is_null() {
+            if libc::strcmp(interface, c"fai_fetch".as_ptr()) == 0 {
+                use_64bit = 0;
+            } else if libc::strcmp(interface, c"faidx_fetch_seq".as_ptr()) == 0 {
+                use_64bit = 0;
+                use_parse_reg = 1;
+            } else if libc::strcmp(interface, c"faidx_fetch_seq64".as_ptr()) == 0
+                || libc::strcmp(interface, c"fai_parse_region".as_ptr()) == 0
+            {
+                use_parse_reg = 1;
+            } else if libc::strcmp(interface, c"fai_adjust_region".as_ptr()) == 0 {
+                use_parse_reg = 1;
+                use_adjust_reg = 1;
+            }
+        }
+
+        if !fnout.is_null() {
+            out = libc::fopen(fnout, c"wb".as_ptr());
+            if out.is_null() {
+                libc::perror(fnout);
+                return -1;
+            }
+        }
+
+        let fai = test_test_faidx_c_87_load_index(fn_, fnfai, fngzi, flags, format);
+        if fai.is_null() {
+            goto_faidx_retrieval_fail(fai, fnout, out);
+            return -1;
+        }
+
+        for i in 0..nreg {
+            let region = *regions.add(i as usize);
+            let mut len: hts_pos_t = 0;
+            let mut beg: hts_pos_t = 0;
+            let mut end: hts_pos_t = 0;
+            let mut tid: c_int = 0;
+            let seq: *mut c_char;
+
+            if use_parse_reg != 0 {
+                let e = crate::htslib_mini_rs::faidx::fai_parse_region(
+                    fai, region, &mut tid, &mut beg, &mut end, 0,
+                );
+                if e.is_null() {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"Failed: fai_parse_region(fai, %s, &tid, &beg, &end, 0)\n".as_ptr(),
+                        region,
+                    );
+                    goto_faidx_retrieval_fail(fai, fnout, out);
+                    return -1;
+                }
+                if use_adjust_reg != 0 {
+                    let orig_beg = beg;
+                    let orig_end = end;
+                    let r = crate::htslib_mini_rs::faidx::fai_adjust_region(
+                        fai, tid, &mut beg, &mut end,
+                    );
+                    if r < 0
+                        || (((r & 1) != 0) ^ (beg != orig_beg))
+                        || (((r & 2) != 0) ^ (end != orig_end))
+                    {
+                        libc::fprintf(
+                            hts_sys::stderr.cast(),
+                            c"Failed: fai_adjust_region(fai, %d, %lld, %lld) returned %d\nAfter: beg = %lld end = %lld\n".as_ptr(),
+                            tid,
+                            orig_beg as libc::c_longlong,
+                            orig_end as libc::c_longlong,
+                            r,
+                            beg as libc::c_longlong,
+                            end as libc::c_longlong,
+                        );
+                        goto_faidx_retrieval_fail(fai, fnout, out);
+                        return -1;
+                    }
+                }
+                let name = crate::htslib_mini_rs::faidx::faidx_iseq(fai, tid);
+                if use_64bit != 0 {
+                    seq = crate::htslib_mini_rs::faidx::faidx_fetch_seq64(
+                        fai,
+                        name,
+                        beg,
+                        end - 1,
+                        &mut len,
+                    );
+                } else {
+                    let mut ilen: c_int = 0;
+                    seq = crate::htslib_mini_rs::faidx::faidx_fetch_seq(
+                        fai,
+                        name,
+                        beg as c_int,
+                        (end - 1) as c_int,
+                        &mut ilen,
+                    );
+                    len = ilen as hts_pos_t;
+                }
+                if seq.is_null() {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"Failed: faidx_fetch_seq%s(fai, %s, %lld, %lld, &len)\n".as_ptr(),
+                        if use_64bit != 0 {
+                            c"64".as_ptr()
+                        } else {
+                            c"".as_ptr()
+                        },
+                        name,
+                        beg as libc::c_longlong,
+                        end as libc::c_longlong,
+                    );
+                    goto_faidx_retrieval_fail(fai, fnout, out);
+                    return -1;
+                }
+            } else {
+                if use_64bit != 0 {
+                    seq = crate::htslib_mini_rs::faidx::fai_fetch64(fai, region, &mut len);
+                } else {
+                    let mut ilen: c_int = 0;
+                    seq = crate::htslib_mini_rs::faidx::fai_fetch(fai, region, &mut ilen);
+                    len = ilen as hts_pos_t;
+                }
+                if seq.is_null() {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"Failed: fai_fetch%s(fai, %s, &len)\n".as_ptr(),
+                        if use_64bit != 0 {
+                            c"64".as_ptr()
+                        } else {
+                            c"".as_ptr()
+                        },
+                        region,
+                    );
+                    goto_faidx_retrieval_fail(fai, fnout, out);
+                    return -1;
+                }
+            }
+
+            let l = libc::strlen(seq);
+            libc::fprintf(
+                out,
+                c"%c%s length: %lld\n".as_ptr(),
+                if format == crate::htslib_mini_rs::faidx::FAI_FASTQ {
+                    b'@' as c_int
+                } else {
+                    b'>' as c_int
+                },
+                region,
+                len as libc::c_longlong,
+            );
+            let mut pos = 0usize;
+            while pos < l {
+                libc::fprintf(out, c"%.*s\n".as_ptr(), 50, seq.add(pos));
+                pos += 50;
+            }
+            libc::free(seq.cast());
+
+            if format == crate::htslib_mini_rs::faidx::FAI_FASTQ {
+                let mut qual_len: hts_pos_t = 0;
+                let qual: *mut c_char;
+                if use_parse_reg != 0 {
+                    let name = crate::htslib_mini_rs::faidx::faidx_iseq(fai, tid);
+                    if use_64bit != 0 {
+                        qual = crate::htslib_mini_rs::faidx::faidx_fetch_qual64(
+                            fai,
+                            name,
+                            beg,
+                            end - 1,
+                            &mut qual_len,
+                        );
+                    } else {
+                        let mut ilen: c_int = 0;
+                        qual = crate::htslib_mini_rs::faidx::faidx_fetch_qual(
+                            fai,
+                            name,
+                            beg as c_int,
+                            (end - 1) as c_int,
+                            &mut ilen,
+                        );
+                        qual_len = ilen as hts_pos_t;
+                    }
+                } else if use_64bit != 0 {
+                    qual =
+                        crate::htslib_mini_rs::faidx::fai_fetchqual64(fai, region, &mut qual_len);
+                } else {
+                    let mut ilen: c_int = 0;
+                    qual = crate::htslib_mini_rs::faidx::fai_fetchqual(fai, region, &mut ilen);
+                    qual_len = ilen as hts_pos_t;
+                }
+                if qual.is_null() {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"Failed: fai_fetchqual64(fai, %s, &len)\n".as_ptr(),
+                        region,
+                    );
+                    goto_faidx_retrieval_fail(fai, fnout, out);
+                    return -1;
+                }
+                if qual_len != len {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"Sequence and quality lengths differ for %s %s\n".as_ptr(),
+                        fn_,
+                        region,
+                    );
+                    libc::free(qual.cast());
+                    goto_faidx_retrieval_fail(fai, fnout, out);
+                    return -1;
+                }
+                libc::fprintf(out, c"+\n".as_ptr());
+                let l = libc::strlen(qual);
+                let mut pos = 0usize;
+                while pos < l {
+                    libc::fprintf(out, c"%.*s\n".as_ptr(), 50, qual.add(pos));
+                    pos += 50;
+                }
+                libc::free(qual.cast());
+            }
+        }
+
+        crate::htslib_mini_rs::faidx::fai_destroy(fai);
+        if !fnout.is_null() && libc::fclose(out) != 0 {
+            libc::perror(fnout);
+            return -1;
+        }
+        0
+    }
+
+    unsafe fn goto_faidx_retrieval_fail(
+        fai: *mut crate::htslib_mini_rs::faidx::faidx_t,
+        fnout: *const c_char,
+        out: *mut libc::FILE,
+    ) {
+        if !fai.is_null() {
+            crate::htslib_mini_rs::faidx::fai_destroy(fai);
+        }
+        if !fnout.is_null() {
+            libc::fclose(out);
+        }
     }
 
     // original: test_fai_line_length (htslib/test/test_faidx.c:260)
-    pub unsafe fn test_test_faidx_c_260_test_fai_line_length() {
-        todo!("translate HTSlib test_fai_line_length from htslib/test/test_faidx.c:260");
+    pub unsafe fn test_test_faidx_c_260_test_fai_line_length(
+        fn_: *const c_char,
+        fnfai: *const c_char,
+        fngzi: *const c_char,
+        format: crate::htslib_mini_rs::faidx::fai_format_options,
+        expected: *const c_char,
+        reg: *const c_char,
+    ) -> c_int {
+        let fai = test_test_faidx_c_87_load_index(fn_, fnfai, fngzi, 0, format);
+        if fai.is_null() {
+            return -1;
+        }
+        let found_len = crate::htslib_mini_rs::faidx::fai_line_length(fai, reg);
+        crate::htslib_mini_rs::faidx::fai_destroy(fai);
+        if !expected.is_null() {
+            let exp_len = libc::strtoll(expected, std::ptr::null_mut(), 10);
+            if found_len != exp_len {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Unexpected result %lld from fai_line_length, expected %s\n".as_ptr(),
+                    found_len,
+                    expected,
+                );
+                return -1;
+            }
+        } else {
+            libc::printf(c"%lld\n".as_ptr(), found_len);
+        }
+        0
     }
 
     // original: test_faidx_has_seq (htslib/test/test_faidx.c:285)
-    pub unsafe fn test_test_faidx_c_285_test_faidx_has_seq() {
-        todo!("translate HTSlib test_faidx_has_seq from htslib/test/test_faidx.c:285");
+    pub unsafe fn test_test_faidx_c_285_test_faidx_has_seq(
+        fn_: *const c_char,
+        fnfai: *const c_char,
+        fngzi: *const c_char,
+        format: crate::htslib_mini_rs::faidx::fai_format_options,
+        expected: *const c_char,
+        seq: *const c_char,
+    ) -> c_int {
+        let fai = test_test_faidx_c_87_load_index(fn_, fnfai, fngzi, 0, format);
+        if fai.is_null() {
+            return -1;
+        }
+        let res = crate::htslib_mini_rs::faidx::faidx_has_seq(fai, seq);
+        crate::htslib_mini_rs::faidx::fai_destroy(fai);
+        if !expected.is_null() {
+            let exp_res = libc::strtol(expected, std::ptr::null_mut(), 10);
+            if res as libc::c_long != exp_res {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Unexpected result %d from faidx_has_seq(%s) expected %s\n".as_ptr(),
+                    res,
+                    seq,
+                    expected,
+                );
+                return -1;
+            }
+        } else {
+            libc::printf(c"%d\n".as_ptr(), res);
+        }
+        0
     }
 
     // original: test_faidx_iseq (htslib/test/test_faidx.c:310)
-    pub unsafe fn test_test_faidx_c_310_test_faidx_iseq() {
-        todo!("translate HTSlib test_faidx_iseq from htslib/test/test_faidx.c:310");
+    pub unsafe fn test_test_faidx_c_310_test_faidx_iseq(
+        fn_: *const c_char,
+        fnfai: *const c_char,
+        fngzi: *const c_char,
+        format: crate::htslib_mini_rs::faidx::fai_format_options,
+        expected: *const c_char,
+        index: *const c_char,
+    ) -> c_int {
+        let idx = libc::atoi(index);
+        let fai = test_test_faidx_c_87_load_index(fn_, fnfai, fngzi, 0, format);
+        if fai.is_null() {
+            return -1;
+        }
+        let found_name = crate::htslib_mini_rs::faidx::faidx_iseq(fai, idx);
+        let mut ret = 0;
+        if !expected.is_null() {
+            if found_name.is_null() || libc::strcmp(found_name, expected) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Unexpected result %s from faidx_iseq(fai, %d), expected %s\n".as_ptr(),
+                    if found_name.is_null() {
+                        c"(null)".as_ptr()
+                    } else {
+                        found_name
+                    },
+                    idx,
+                    expected,
+                );
+                ret = -1;
+            }
+        } else {
+            libc::printf(
+                c"%s\n".as_ptr(),
+                if found_name.is_null() {
+                    c"(null)".as_ptr()
+                } else {
+                    found_name
+                },
+            );
+        }
+        crate::htslib_mini_rs::faidx::fai_destroy(fai);
+        ret
     }
 
     // original: test_faidx_seq_len (htslib/test/test_faidx.c:339)
-    pub unsafe fn test_test_faidx_c_339_test_faidx_seq_len() {
-        todo!("translate HTSlib test_faidx_seq_len from htslib/test/test_faidx.c:339");
+    pub unsafe fn test_test_faidx_c_339_test_faidx_seq_len(
+        fn_: *const c_char,
+        fnfai: *const c_char,
+        fngzi: *const c_char,
+        format: crate::htslib_mini_rs::faidx::fai_format_options,
+        expected: *const c_char,
+        seq: *const c_char,
+    ) -> c_int {
+        let fai = test_test_faidx_c_87_load_index(fn_, fnfai, fngzi, 0, format);
+        if fai.is_null() {
+            return -1;
+        }
+        let found_len = crate::htslib_mini_rs::faidx::faidx_seq_len(fai, seq);
+        crate::htslib_mini_rs::faidx::fai_destroy(fai);
+        if !expected.is_null() {
+            let exp_len = libc::atoi(expected);
+            if found_len != exp_len {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Unexpected result %d from faidx_seq_len(fai, %s) expected %s\n".as_ptr(),
+                    found_len,
+                    seq,
+                    expected,
+                );
+                return -1;
+            }
+        } else {
+            libc::printf(c"%d\n".as_ptr(), found_len);
+        }
+        0
     }
 
     // original: test_faidx_seq_len64 (htslib/test/test_faidx.c:366)
-    pub unsafe fn test_test_faidx_c_366_test_faidx_seq_len64() {
-        todo!("translate HTSlib test_faidx_seq_len64 from htslib/test/test_faidx.c:366");
+    pub unsafe fn test_test_faidx_c_366_test_faidx_seq_len64(
+        fn_: *const c_char,
+        fnfai: *const c_char,
+        fngzi: *const c_char,
+        format: crate::htslib_mini_rs::faidx::fai_format_options,
+        expected: *const c_char,
+        seq: *const c_char,
+    ) -> c_int {
+        let fai = test_test_faidx_c_87_load_index(fn_, fnfai, fngzi, 0, format);
+        if fai.is_null() {
+            return -1;
+        }
+        let found_len = crate::htslib_mini_rs::faidx::faidx_seq_len64(fai, seq);
+        crate::htslib_mini_rs::faidx::fai_destroy(fai);
+        if !expected.is_null() {
+            let exp_len = libc::strtoll(expected, std::ptr::null_mut(), 10);
+            if found_len != exp_len {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Unexpected result %lld from fai_seq_len64(fai, %s) expected %s\n".as_ptr(),
+                    found_len,
+                    seq,
+                    expected,
+                );
+                return -1;
+            }
+        } else {
+            libc::printf(c"%lld\n".as_ptr(), found_len);
+        }
+        0
     }
 
     // original: usage (htslib/test/test_faidx.c:394)
-    pub unsafe fn test_test_faidx_c_394_usage() {
-        todo!("translate HTSlib usage from htslib/test/test_faidx.c:394");
+    pub unsafe fn test_test_faidx_c_394_usage(out: *mut libc::FILE, arg0: *const c_char) {
+        libc::fprintf(
+            out,
+            c"Usage: %s [-c] -i fasta/q [-f fai_file] [-g gzi_file] [-e expected_fai]\n       %s [-cQ] -i fasta/q [-f fai_file] [-g gzi_file] [region]\n       %s -t FUNC -i fasta/q [-f fai_file] [-g gzi_file] [-e expected] <PARAM>\n       %s -h\n".as_ptr(),
+            arg0,
+            arg0,
+            arg0,
+            arg0,
+        );
     }
 
     // original: help (htslib/test/test_faidx.c:403)
-    pub unsafe fn test_test_faidx_c_403_help() {
-        todo!("translate HTSlib help from htslib/test/test_faidx.c:403");
+    pub unsafe fn test_test_faidx_c_403_help(out: *mut libc::FILE, arg0: *const c_char) {
+        test_test_faidx_c_394_usage(out, arg0);
+        libc::fprintf(
+            out,
+            c"Options:\n  -i FILE      Input file\n  -f FILE      Fasta/q index file name\n  -g FILE      Bgzip index file name\n  -o FILE      Output file name\n  -e FILE|STR  Expected output\n  -c           Set FAI_CREATE flag\n  -Q           Output fastq format\n  -t FUNC      Test function\n  -h           Print this help\n\nExpected output is compared to the FAI file in indexing mode; the output file\nin retrieval mode; expected output for various -t function tests.\n\nUnit tests (-t option):\n   fai_line_length, faidx_has_seq, faidx_iseq, faidx_seq_len, faidx_seq_len64\nIn retrieval mode, -t can change the functions used to fetch data:\n   fai_fetch, fai_fetch64, faidx_fetch_seq, faidx_fetch_seq64,\n   fai_parse_region, fai_adjust_region\n\n".as_ptr(),
+        );
     }
 
     // original: main (htslib/test/test_faidx.c:430)
@@ -1362,38 +2974,239 @@ pub mod functions {
     }
 
     // original: main (htslib/test/test_introspection.c:31)
-    pub unsafe fn test_test_introspection_c_31_main() {
-        todo!("translate HTSlib main from htslib/test/test_introspection.c:31");
+    pub unsafe fn test_test_introspection_c_31_main() -> c_int {
+        libc::printf(
+            c"Version string: %s\n".as_ptr(),
+            crate::htslib_mini_rs::hts::hts_version(),
+        );
+        libc::printf(c"Version number: %d\n".as_ptr(), 1_023_001);
+        libc::printf(
+            c"\nhtscodecs version: %s\n".as_ptr(),
+            crate::htslib_mini_rs::hts::hts_test_feature(
+                crate::htslib_mini_rs::hts::HTS_FEATURE_HTSCODECS,
+            ),
+        );
+
+        libc::printf(
+            c"\nCC:             %s\n".as_ptr(),
+            crate::htslib_mini_rs::hts::hts_test_feature(
+                crate::htslib_mini_rs::hts::HTS_FEATURE_CC,
+            ),
+        );
+        libc::printf(
+            c"CPPFLAGS:       %s\n".as_ptr(),
+            crate::htslib_mini_rs::hts::hts_test_feature(
+                crate::htslib_mini_rs::hts::HTS_FEATURE_CPPFLAGS,
+            ),
+        );
+        libc::printf(
+            c"CFLAGS:         %s\n".as_ptr(),
+            crate::htslib_mini_rs::hts::hts_test_feature(
+                crate::htslib_mini_rs::hts::HTS_FEATURE_CFLAGS,
+            ),
+        );
+        libc::printf(
+            c"LDFLAGS:        %s\n".as_ptr(),
+            crate::htslib_mini_rs::hts::hts_test_feature(
+                crate::htslib_mini_rs::hts::HTS_FEATURE_LDFLAGS,
+            ),
+        );
+
+        let feat = crate::htslib_mini_rs::hts::hts_features();
+        libc::printf(c"\nFeature number: 0x%x\n".as_ptr(), feat);
+        if feat & crate::htslib_mini_rs::hts::HTS_FEATURE_CONFIGURE != 0 {
+            libc::printf(c"                HTS_FEATURE_CONFIGURE\n".as_ptr());
+        }
+        if feat & crate::htslib_mini_rs::hts::HTS_FEATURE_PLUGINS != 0 {
+            libc::printf(c"                HTS_FEATURE_PLUGINS\n".as_ptr());
+        }
+        if feat & crate::htslib_mini_rs::hts::HTS_FEATURE_LIBCURL != 0 {
+            libc::printf(c"                HTS_FEATURE_LIBCURL\n".as_ptr());
+        }
+        if feat & crate::htslib_mini_rs::hts::HTS_FEATURE_S3 != 0 {
+            libc::printf(c"                HTS_FEATURE_S3\n".as_ptr());
+        }
+        if feat & crate::htslib_mini_rs::hts::HTS_FEATURE_GCS != 0 {
+            libc::printf(c"                HTS_FEATURE_GCS\n".as_ptr());
+        }
+        if feat & crate::htslib_mini_rs::hts::HTS_FEATURE_LIBDEFLATE != 0 {
+            libc::printf(c"                HTS_FEATURE_LIBDEFLATE\n".as_ptr());
+        }
+        if feat & crate::htslib_mini_rs::hts::HTS_FEATURE_LZMA != 0 {
+            libc::printf(c"                HTS_FEATURE_LZMA\n".as_ptr());
+        }
+        if feat & crate::htslib_mini_rs::hts::HTS_FEATURE_BZIP2 != 0 {
+            libc::printf(c"                HTS_FEATURE_BZIP2\n".as_ptr());
+        }
+        if feat & crate::htslib_mini_rs::hts::HTS_FEATURE_HTSCODECS != 0 {
+            libc::printf(c"                HTS_FEATURE_HTSCODECS\n".as_ptr());
+        }
+
+        libc::printf(
+            c"\nFeature string: %s\n".as_ptr(),
+            crate::htslib_mini_rs::hts::hts_feature_string(),
+        );
+
+        libc::printf(c"\nPlugins present:\n".as_ptr());
+        let mut plugins = [std::ptr::null(); 100];
+        let mut np = 100;
+        if crate::htslib_mini_rs::hfile::hfile_list_plugins(plugins.as_mut_ptr(), &mut np) < 0 {
+            return 1;
+        }
+
+        for i in 0..np {
+            let mut sc_list = [std::ptr::null(); 100];
+            let mut nschemes = 100;
+            if crate::htslib_mini_rs::hfile::hfile_list_schemes(
+                plugins[i as usize],
+                sc_list.as_mut_ptr(),
+                &mut nschemes,
+            ) < 0
+            {
+                return 1;
+            }
+
+            libc::printf(c"    %s:\n".as_ptr(), plugins[i as usize]);
+            for j in 0..nschemes {
+                libc::printf(c"\t%s\n".as_ptr(), sc_list[j as usize]);
+            }
+            libc::puts(c"".as_ptr());
+        }
+
+        0
     }
 
     // original: check (htslib/test/fieldarith.c:34)
-    pub unsafe fn test_fieldarith_c_34_check() {
-        todo!("translate HTSlib check from htslib/test/fieldarith.c:34");
+    pub unsafe fn test_fieldarith_c_34_check(
+        aln: *const sam::bam1_t,
+        _testname: *const c_char,
+        tag: *const c_char,
+        value: c_int,
+    ) {
+        let aux = sam::bam_aux_get(aln, tag);
+        if aux.is_null() {
+            return;
+        }
+        TEST_FIELDARITH_NTESTS += 1;
+        let refvalue = sam::bam_aux2i(aux);
+        if value as i64 != refvalue {
+            TEST_FIELDARITH_NFAILURES += 1;
+        }
     }
 
     // original: main (htslib/test/fieldarith.c:48)
-    pub unsafe fn test_fieldarith_c_48_main() {
-        todo!("translate HTSlib main from htslib/test/fieldarith.c:48");
+    pub unsafe fn test_fieldarith_c_48_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+        let aln = sam::bam_init1();
+        if aln.is_null() {
+            return 1;
+        }
+
+        for i in 1..argc {
+            let in_ = crate::htslib_mini_rs::hts::hts_open(*argv.add(i as usize), c"r".as_ptr());
+            if in_.is_null() {
+                libc::perror(*argv.add(1));
+                sam::bam_destroy1(aln);
+                return 1;
+            }
+
+            let header = sam::sam_hdr_read(in_);
+            while sam::sam_read1(in_, header, aln) >= 0 {
+                test_fieldarith_c_34_check(
+                    aln,
+                    c"cigar2qlen".as_ptr(),
+                    c"XQ".as_ptr(),
+                    sam::bam_cigar2qlen((*aln).core.n_cigar as c_int, sam::bam_get_cigar(aln))
+                        as c_int,
+                );
+                test_fieldarith_c_34_check(
+                    aln,
+                    c"cigar2rlen".as_ptr(),
+                    c"XR".as_ptr(),
+                    sam::bam_cigar2rlen((*aln).core.n_cigar as c_int, sam::bam_get_cigar(aln))
+                        as c_int,
+                );
+                test_fieldarith_c_34_check(
+                    aln,
+                    c"endpos".as_ptr(),
+                    c"XE".as_ptr(),
+                    sam::bam_endpos(aln) as c_int,
+                );
+            }
+
+            sam::sam_hdr_destroy(header);
+            crate::htslib_mini_rs::hts::hts_close(in_);
+        }
+
+        sam::bam_destroy1(aln);
+        (TEST_FIELDARITH_NFAILURES > 0) as c_int
     }
 
     // original: sym (htslib/test/plugins-dlhts.c:48)
-    pub unsafe fn test_plugins_dlhts_c_48_sym() {
-        todo!("translate HTSlib sym from htslib/test/plugins-dlhts.c:48");
+    pub unsafe fn test_plugins_dlhts_c_48_sym(
+        htslib: *mut c_void,
+        name: *const c_char,
+    ) -> *mut c_void {
+        let ptr = libc::dlsym(htslib, name);
+        if ptr.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Can't find symbol \"%s\": %s\n".as_ptr(),
+                name,
+                libc::dlerror(),
+            );
+            libc::exit(libc::EXIT_FAILURE);
+        }
+        ptr
     }
 
     // original: func (htslib/test/plugins-dlhts.c:59)
-    pub unsafe fn test_plugins_dlhts_c_59_func() {
-        todo!("translate HTSlib func from htslib/test/plugins-dlhts.c:59");
+    pub unsafe fn test_plugins_dlhts_c_59_func(
+        htslib: *mut c_void,
+        name: *const c_char,
+    ) -> *mut c_void {
+        test_plugins_dlhts_c_48_sym(htslib, name)
     }
 
     // original: test_hopen (htslib/test/plugins-dlhts.c:75)
-    pub unsafe fn test_plugins_dlhts_c_75_test_hopen() {
-        todo!("translate HTSlib test_hopen from htslib/test/plugins-dlhts.c:75");
+    pub unsafe fn test_plugins_dlhts_c_75_test_hopen(fname: *const c_char, expected: c_int) {
+        let fp = crate::htslib_mini_rs::hfile::hopen(fname, c"r".as_ptr());
+        if !fp.is_null() {
+            crate::htslib_mini_rs::hfile::hclose_abruptly(fp);
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Opening \"%s\" actually succeeded\n".as_ptr(),
+                fname,
+            );
+            TEST_PLUGINS_DLHTS_ERRORS += 1;
+            return;
+        }
+
+        let errno = *crate::htslib_mini_rs::c_compat::__errno_location();
+        let supported = (errno != libc::EPROTONOSUPPORT) as c_int;
+        if supported != expected {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Opening \"%s\" failed badly: %s\n".as_ptr(),
+                fname,
+                libc::strerror(errno),
+            );
+            TEST_PLUGINS_DLHTS_ERRORS += 1;
+        } else if TEST_PLUGINS_DLHTS_VERBOSE != 0 {
+            libc::printf(
+                c"Opening \"%s\" produces %s\n".as_ptr(),
+                fname,
+                libc::strerror(errno),
+            );
+        }
     }
 
     // original: verbose_log (htslib/test/plugins-dlhts.c:94)
-    pub unsafe fn test_plugins_dlhts_c_94_verbose_log() {
-        todo!("translate HTSlib verbose_log from htslib/test/plugins-dlhts.c:94");
+    pub unsafe fn test_plugins_dlhts_c_94_verbose_log(message: *const c_char) {
+        libc::fflush(hts_sys::stderr.cast());
+        if TEST_PLUGINS_DLHTS_VERBOSE != 0 {
+            libc::puts(message);
+        }
+        libc::fflush(hts_sys::stdout.cast());
     }
 
     // original: main (htslib/test/plugins-dlhts.c:101)
@@ -1427,8 +3240,52 @@ pub mod functions {
     }
 
     // original: usage (htslib/test/test-bcf-sr.c:54)
-    pub unsafe fn test_test_bcf_sr_c_54_usage() {
-        todo!("translate HTSlib usage from htslib/test/test-bcf-sr.c:54");
+    pub unsafe fn test_test_bcf_sr_c_54_usage(exit_code: c_int) -> ! {
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"Usage: test-bcf-sr [OPTIONS] vcf-list.txt\n".as_ptr(),
+        );
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"       test-bcf-sr [OPTIONS] --args file1.bcf [...]\n".as_ptr(),
+        );
+        libc::fprintf(hts_sys::stderr.cast(), c"Options:\n".as_ptr());
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"       --args                   pass filenames directly in argument list\n".as_ptr(),
+        );
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"       --no-index               allow streaming\n".as_ptr(),
+        );
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"   -o, --output <file>          output file (stdout if not set)\n".as_ptr(),
+        );
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"   -O, --output-fmt <fmt>       fmt: vcf,bcf,summary\n".as_ptr(),
+        );
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"   -p, --pair <logic[+ref]>     logic: snps,indels,both,snps+ref,indels+ref,both+ref,exact,some,all\n"
+                .as_ptr(),
+        );
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"   -r, --regions <reg_list>     comma-separated list of regions\n".as_ptr(),
+        );
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"   -t, --targets <reg_list>     comma-separated list of targets\n".as_ptr(),
+        );
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"   -u, --usefptr                use hfile pointer interface on reader addition\n"
+                .as_ptr(),
+        );
+        libc::fprintf(hts_sys::stderr.cast(), c"\n".as_ptr());
+        libc::exit(exit_code);
     }
 
     // original: write_summary_format (htslib/test/test-bcf-sr.c:71)
@@ -1452,19 +3309,13 @@ pub mod functions {
     }
 
     // original: debug (htslib/test/test-regidx.c:45)
-    pub unsafe fn test_test_regidx_c_45_debug() {
-        todo!("translate HTSlib debug from htslib/test/test-regidx.c:45");
-    }
+    pub unsafe fn test_test_regidx_c_45_debug() {}
 
     // original: info (htslib/test/test-regidx.c:55)
-    pub unsafe fn test_test_regidx_c_55_info() {
-        todo!("translate HTSlib info from htslib/test/test-regidx.c:55");
-    }
+    pub unsafe fn test_test_regidx_c_55_info() {}
 
     // original: HTS_FORMAT (htslib/test/test-regidx.c:64)
-    pub unsafe fn test_test_regidx_c_64_HTS_FORMAT() {
-        todo!("translate HTSlib HTS_FORMAT from htslib/test/test-regidx.c:64");
-    }
+    pub unsafe fn test_test_regidx_c_64_HTS_FORMAT() {}
 
     // original: custom_free (htslib/test/test-regidx.c:100)
     pub unsafe fn test_test_regidx_c_100_custom_free(payload: *mut c_void) {
@@ -1483,8 +3334,16 @@ pub mod functions {
     }
 
     // original: get_random_region (htslib/test/test-regidx.c:190)
-    pub unsafe fn test_test_regidx_c_190_get_random_region() {
-        todo!("translate HTSlib get_random_region from htslib/test/test-regidx.c:190");
+    pub unsafe fn test_test_regidx_c_190_get_random_region(
+        min: c_uint,
+        max: c_uint,
+        beg: *mut c_uint,
+        end: *mut c_uint,
+    ) {
+        let b = libc::rand() as u64;
+        let e = libc::rand() as u64;
+        *beg = min + ((b * (max - min) as u64) / libc::RAND_MAX as u64) as c_uint;
+        *end = *beg + ((e * (max - *beg) as u64) / libc::RAND_MAX as u64) as c_uint;
     }
 
     // original: test_random (htslib/test/test-regidx.c:197)
@@ -1536,8 +3395,25 @@ pub mod functions {
     }
 
     // original: usage (htslib/test/test-regidx.c:415)
-    pub unsafe fn test_test_regidx_c_415_usage() {
-        todo!("translate HTSlib usage from htslib/test/test-regidx.c:415");
+    pub unsafe fn test_test_regidx_c_415_usage() -> ! {
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"Usage: test-regidx [OPTIONS]\n".as_ptr(),
+        );
+        libc::fprintf(hts_sys::stderr.cast(), c"Options:\n".as_ptr());
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"   -h, --help          this help message\n".as_ptr(),
+        );
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"   -s, --seed <int>    random seed\n".as_ptr(),
+        );
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"   -v, --verbose       increase verbosity by giving multiple times\n".as_ptr(),
+        );
+        libc::exit(1);
     }
 
     // original: main (htslib/test/test-regidx.c:426)
@@ -1546,8 +3422,12 @@ pub mod functions {
     }
 
     // original: usage (htslib/test/test_realn.c:38)
-    pub unsafe fn test_test_realn_c_38_usage() {
-        todo!("translate HTSlib usage from htslib/test/test_realn.c:38");
+    pub unsafe fn test_test_realn_c_38_usage(prog: *const c_char) {
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"Usage: %s -i <in.sam> -o <out.sam> -f <ref.fa>\n".as_ptr(),
+            prog,
+        );
     }
 
     // original: main (htslib/test/test_realn.c:42)
@@ -1571,103 +3451,1091 @@ pub mod functions {
     }
 
     // original: clamp (htslib/test/test_kstring.c:40)
-    pub unsafe fn test_test_kstring_c_40_clamp() {
-        todo!("translate HTSlib clamp from htslib/test/test_kstring.c:40");
+    pub unsafe fn test_test_kstring_c_40_clamp(val: *mut i64, min: i64, max: i64) {
+        if *val < min {
+            *val = min;
+        }
+        if *val > max {
+            *val = max;
+        }
     }
 
     // original: test_kroundup_size_t (htslib/test/test_kstring.c:45)
-    pub unsafe fn test_test_kstring_c_45_test_kroundup_size_t() {
-        todo!("translate HTSlib test_kroundup_size_t from htslib/test/test_kstring.c:45");
+    pub unsafe fn test_test_kstring_c_45_test_kroundup_size_t(verbose: c_int) -> c_int {
+        fn kroundup_size_t(mut x: usize) -> usize {
+            if x == 0 {
+                return 0;
+            }
+            x -= 1;
+            x |= x >> (std::mem::size_of::<usize>() / 8);
+            x |= x >> (std::mem::size_of::<usize>() / 4);
+            x |= x >> (std::mem::size_of::<usize>() / 2);
+            x |= x >> std::mem::size_of::<usize>();
+            x |= x >> (std::mem::size_of::<usize>() * 2);
+            x |= x >> (std::mem::size_of::<usize>() * 4);
+            if (x & (1usize << (usize::BITS - 1))) == 0 {
+                x += 1;
+            }
+            x
+        }
+
+        let mut ret = 0;
+        let mut val = kroundup_size_t(0);
+        if verbose != 0 {
+            libc::printf(c"kroundup_size_t(0) = 0x%zx\n".as_ptr(), val);
+        }
+        if val != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"kroundup_size_t(0) produced 0x%zx, expected 0\n".as_ptr(),
+                val,
+            );
+            ret = -1;
+        }
+
+        for exp in 0..usize::BITS {
+            let mut expected = 1usize << exp;
+            let first_delta: isize = if exp > 1 { -1 } else { 0 };
+            let last_delta: isize = if exp < 2 { 0 } else { 1 };
+            for delta in first_delta..=last_delta {
+                let val_in = expected.wrapping_add(delta as usize);
+                val = kroundup_size_t(val_in);
+                if verbose != 0 {
+                    libc::printf(c"kroundup_size_t(0x%zx) = 0x%zx\n".as_ptr(), val_in, val);
+                }
+                if delta <= 0 {
+                    if val != expected {
+                        libc::fprintf(
+                            hts_sys::stderr.cast(),
+                            c"kroundup_size_t(0x%zx) produced 0x%zx, expected 0x%zx\n".as_ptr(),
+                            val_in,
+                            val,
+                            expected,
+                        );
+                        ret = -1;
+                    }
+                } else {
+                    expected = expected.wrapping_mul(2);
+                    if expected == 0 {
+                        expected = expected.wrapping_sub(1);
+                    }
+                    if val != expected {
+                        libc::fprintf(
+                            hts_sys::stderr.cast(),
+                            c"kroundup_size_t(0x%zx) produced 0x%zx, expected 0x%zx\n".as_ptr(),
+                            val_in,
+                            val,
+                            expected,
+                        );
+                        ret = -1;
+                    }
+                }
+            }
+        }
+        ret
     }
 
     // original: test_kroundup_signed (htslib/test/test_kstring.c:91)
-    pub unsafe fn test_test_kstring_c_91_test_kroundup_signed() {
-        todo!("translate HTSlib test_kroundup_signed from htslib/test/test_kstring.c:91");
+    pub unsafe fn test_test_kstring_c_91_test_kroundup_signed(verbose: c_int) -> c_int {
+        fn kroundup32(mut x: u32) -> u32 {
+            if x == 0 {
+                return 0;
+            }
+            x -= 1;
+            x |= x >> 1;
+            x |= x >> 2;
+            x |= x >> 4;
+            x |= x >> 8;
+            x |= x >> 16;
+            if (x & 0x8000_0000) == 0 {
+                x += 1;
+            }
+            x
+        }
+
+        let mut ret = 0;
+        for exp in 0..31u32 {
+            let mut expected = 1u32 << exp;
+            let first_delta: i32 = if exp > 1 { -1 } else { 0 };
+            let last_delta: i32 = if exp < 2 { 0 } else { 1 };
+            for delta in first_delta..=last_delta {
+                let val_in = expected.wrapping_add(delta as u32) as i32;
+                let val = kroundup32(val_in as u32) as i32;
+                if verbose != 0 {
+                    libc::printf(c"kroundup32(%d) = %d\n".as_ptr(), val_in, val);
+                }
+                if delta <= 0 {
+                    if val as u32 != expected {
+                        libc::fprintf(
+                            hts_sys::stderr.cast(),
+                            c"kroundup32(%d) produced %d, expected %u\n".as_ptr(),
+                            val_in,
+                            val,
+                            expected,
+                        );
+                        ret = -1;
+                    }
+                } else {
+                    if exp < 30 {
+                        expected = expected.wrapping_mul(2);
+                    } else {
+                        expected = ((expected - 1) << 1) | 1;
+                    }
+                    if val as u32 != expected {
+                        libc::fprintf(
+                            hts_sys::stderr.cast(),
+                            c"kroundup32(%d) produced %d, expected %u\n".as_ptr(),
+                            val_in,
+                            val,
+                            expected,
+                        );
+                        ret = -1;
+                    }
+                }
+            }
+        }
+        ret
     }
 
     // original: test_kputuw_from_to (htslib/test/test_kstring.c:127)
-    pub unsafe fn test_test_kstring_c_127_test_kputuw_from_to() {
-        todo!("translate HTSlib test_kputuw_from_to from htslib/test/test_kstring.c:127");
+    pub unsafe fn test_test_kstring_c_127_test_kputuw_from_to(
+        str_: *mut kstring_t,
+        s: c_uint,
+        e: c_uint,
+    ) -> c_int {
+        let mut i = s;
+        loop {
+            (*str_).l = 0;
+            libc::memset((*str_).s.cast(), 0xff, (*str_).m);
+            if crate::htslib_mini_rs::hts::kputuw(i, str_) < 0 || (*str_).s.is_null() {
+                libc::perror(c"kputuw".as_ptr());
+                return -1;
+            }
+            if (*str_).l >= (*str_).m || *(*str_).s.add((*str_).l) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"No NUL termination on string from kputuw\n".as_ptr(),
+                );
+                return -1;
+            }
+            if i != libc::strtoul((*str_).s, std::ptr::null_mut(), 10) as c_uint {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"kputuw wrote the wrong value, expected %u, got %s\n".as_ptr(),
+                    i,
+                    (*str_).s,
+                );
+                return -1;
+            }
+            if i >= e {
+                break;
+            }
+            i = i.wrapping_add(1);
+        }
+        0
     }
 
     // original: test_kputuw (htslib/test/test_kstring.c:153)
-    pub unsafe fn test_test_kstring_c_153_test_kputuw() {
-        todo!("translate HTSlib test_kputuw from htslib/test/test_kstring.c:153");
+    pub unsafe fn test_test_kstring_c_153_test_kputuw(mut start: i64, mut end: i64) -> c_int {
+        let mut str_: kstring_t = std::mem::zeroed();
+        str_.s = libc::malloc(2).cast();
+        if str_.s.is_null() {
+            libc::perror(c"malloc".as_ptr());
+            return -1;
+        }
+        str_.m = 2;
+
+        let mut val = 0i64;
+        while val < c_uint::MAX as i64 {
+            let s = if val == 0 { 0 } else { val - 5 } as c_uint;
+            let e = (val + 5) as c_uint;
+            if test_test_kstring_c_127_test_kputuw_from_to(&mut str_, s, e) < 0 {
+                libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+                return -1;
+            }
+            val = if val == 0 { 1 } else { val * 10 };
+        }
+
+        if test_test_kstring_c_127_test_kputuw_from_to(&mut str_, c_uint::MAX - 5, c_uint::MAX) < 0
+        {
+            libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+            return -1;
+        }
+
+        str_.m = 1;
+        test_test_kstring_c_40_clamp(&mut start, 0, c_uint::MAX as i64);
+        test_test_kstring_c_40_clamp(&mut end, 0, c_uint::MAX as i64);
+        if test_test_kstring_c_127_test_kputuw_from_to(&mut str_, start as c_uint, end as c_uint)
+            < 0
+        {
+            libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+            return -1;
+        }
+
+        libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+        0
     }
 
     // original: test_kputw_from_to (htslib/test/test_kstring.c:193)
-    pub unsafe fn test_test_kstring_c_193_test_kputw_from_to() {
-        todo!("translate HTSlib test_kputw_from_to from htslib/test/test_kstring.c:193");
+    pub unsafe fn test_test_kstring_c_193_test_kputw_from_to(
+        str_: *mut kstring_t,
+        s: c_int,
+        e: c_int,
+    ) -> c_int {
+        let mut i = s;
+        loop {
+            (*str_).l = 0;
+            libc::memset((*str_).s.cast(), 0xff, (*str_).m);
+            if crate::htslib_mini_rs::hts::kputw(i, str_) < 0 || (*str_).s.is_null() {
+                libc::perror(c"kputw".as_ptr());
+                return -1;
+            }
+            if (*str_).l >= (*str_).m || *(*str_).s.add((*str_).l) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"No NUL termination on string from kputw\n".as_ptr(),
+                );
+                return -1;
+            }
+            if i != libc::strtol((*str_).s, std::ptr::null_mut(), 10) as c_int {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"kputw wrote the wrong value, expected %d, got %s\n".as_ptr(),
+                    i,
+                    (*str_).s,
+                );
+                return -1;
+            }
+            if i >= e {
+                break;
+            }
+            i = i.wrapping_add(1);
+        }
+        0
     }
 
     // original: test_kputw (htslib/test/test_kstring.c:219)
-    pub unsafe fn test_test_kstring_c_219_test_kputw() {
-        todo!("translate HTSlib test_kputw from htslib/test/test_kstring.c:219");
+    pub unsafe fn test_test_kstring_c_219_test_kputw(mut start: i64, mut end: i64) -> c_int {
+        let mut str_: kstring_t = std::mem::zeroed();
+        str_.s = libc::malloc(2).cast();
+        if str_.s.is_null() {
+            libc::perror(c"malloc".as_ptr());
+            return -1;
+        }
+        str_.m = 2;
+
+        let mut val = 1i64;
+        while val < c_int::MAX as i64 {
+            let s = if val > 5 { val - 5 } else { 0 } as c_int;
+            let e = (val + 5) as c_int;
+            if test_test_kstring_c_193_test_kputw_from_to(&mut str_, s, e) < 0 {
+                libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+                return -1;
+            }
+            val *= 10;
+        }
+
+        val = -1;
+        while val > c_int::MIN as i64 {
+            let s = (val - 5) as c_int;
+            let e = if val < -5 { val + 5 } else { 0 } as c_int;
+            if test_test_kstring_c_193_test_kputw_from_to(&mut str_, s, e) < 0 {
+                libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+                return -1;
+            }
+            val *= 10;
+        }
+
+        if test_test_kstring_c_193_test_kputw_from_to(&mut str_, c_int::MAX - 5, c_int::MAX) < 0
+            || test_test_kstring_c_193_test_kputw_from_to(&mut str_, c_int::MIN, c_int::MIN + 5) < 0
+        {
+            libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+            return -1;
+        }
+
+        str_.m = 1;
+        test_test_kstring_c_40_clamp(&mut start, c_int::MIN as i64, c_int::MAX as i64);
+        test_test_kstring_c_40_clamp(&mut end, c_int::MIN as i64, c_int::MAX as i64);
+        if test_test_kstring_c_193_test_kputw_from_to(&mut str_, start as c_int, end as c_int) < 0 {
+            libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+            return -1;
+        }
+
+        libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+        0
     }
 
     // original: test_kputll_from_to (htslib/test/test_kstring.c:268)
-    pub unsafe fn test_test_kstring_c_268_test_kputll_from_to() {
-        todo!("translate HTSlib test_kputll_from_to from htslib/test/test_kstring.c:268");
+    pub unsafe fn test_test_kstring_c_268_test_kputll_from_to(
+        str_: *mut kstring_t,
+        s: i64,
+        e: i64,
+    ) -> c_int {
+        let mut i = s;
+        loop {
+            (*str_).l = 0;
+            libc::memset((*str_).s.cast(), 0xff, (*str_).m);
+            if crate::htslib_mini_rs::hts::kputll(i, str_) < 0 || (*str_).s.is_null() {
+                libc::perror(c"kputll".as_ptr());
+                return -1;
+            }
+            if (*str_).l >= (*str_).m || *(*str_).s.add((*str_).l) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"No NUL termination on string from kputll\n".as_ptr(),
+                );
+                return -1;
+            }
+            if i != libc::strtoll((*str_).s, std::ptr::null_mut(), 10) as i64 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"kputll wrote the wrong value, expected %lld, got %s\n".as_ptr(),
+                    i,
+                    (*str_).s,
+                );
+                return -1;
+            }
+            if i >= e {
+                break;
+            }
+            i = i.wrapping_add(1);
+        }
+        0
     }
 
     // original: test_kputll (htslib/test/test_kstring.c:294)
-    pub unsafe fn test_test_kstring_c_294_test_kputll() {
-        todo!("translate HTSlib test_kputll from htslib/test/test_kstring.c:294");
+    pub unsafe fn test_test_kstring_c_294_test_kputll(mut start: i64, mut end: i64) -> c_int {
+        let mut str_: kstring_t = std::mem::zeroed();
+        str_.s = libc::malloc(2).cast();
+        if str_.s.is_null() {
+            libc::perror(c"malloc".as_ptr());
+            return -1;
+        }
+        str_.m = 2;
+
+        let mut val = 1u64;
+        while val < i64::MAX as u64 - 5 {
+            let s = if val >= 5 { val - 5 } else { val } as i64;
+            if test_test_kstring_c_268_test_kputll_from_to(&mut str_, s, val as i64) < 0 {
+                libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+                return -1;
+            }
+            val *= 10;
+        }
+
+        val = 1;
+        while val < i64::MAX as u64 - 5 {
+            let valm = -(val as i64);
+            let s = if valm >= 5 { valm - 5 } else { valm };
+            if test_test_kstring_c_268_test_kputll_from_to(&mut str_, s, valm) < 0 {
+                libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+                return -1;
+            }
+            val *= 10;
+        }
+
+        if test_test_kstring_c_268_test_kputll_from_to(&mut str_, i64::MAX - 5, i64::MAX) < 0
+            || test_test_kstring_c_268_test_kputll_from_to(&mut str_, i64::MIN, i64::MIN + 5) < 0
+        {
+            libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+            return -1;
+        }
+
+        str_.m = 1;
+        test_test_kstring_c_40_clamp(&mut start, i64::MIN, i64::MAX);
+        test_test_kstring_c_40_clamp(&mut end, i64::MIN, i64::MAX);
+        if test_test_kstring_c_268_test_kputll_from_to(&mut str_, start, end) < 0 {
+            libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+            return -1;
+        }
+
+        libc::free(crate::htslib_mini_rs::hts::ks_release(&mut str_).cast());
+        0
     }
 
     // original: mock_fgets (htslib/test/test_kstring.c:347)
-    pub unsafe fn test_test_kstring_c_347_mock_fgets() {
-        todo!("translate HTSlib mock_fgets from htslib/test/test_kstring.c:347");
+    pub unsafe extern "C" fn test_test_kstring_c_347_mock_fgets(
+        str_: *mut c_char,
+        _num: c_int,
+        p: *mut c_void,
+    ) -> *mut c_char {
+        let mock_state = p.cast::<c_int>();
+        *mock_state += 1;
+        match *mock_state {
+            1 | 4 | 7 => libc::strcpy(str_, c"ABCD".as_ptr()),
+            2 | 3 => libc::strcpy(str_, c"\n".as_ptr()),
+            5 | 6 => libc::strcpy(str_, c"\r\n".as_ptr()),
+            _ => return std::ptr::null_mut(),
+        };
+        str_
     }
 
     // original: test_kgetline (htslib/test/test_kstring.c:375)
-    pub unsafe fn test_test_kstring_c_375_test_kgetline() {
-        todo!("translate HTSlib test_kgetline from htslib/test/test_kstring.c:375");
+    pub unsafe fn test_test_kstring_c_375_test_kgetline() -> c_int {
+        let mut s: kstring_t = std::mem::zeroed();
+        let mut mock_state = 0;
+
+        crate::htslib_mini_rs::hts::kputs(c"_".as_ptr(), &mut s);
+        if crate::htslib_mini_rs::hts::kgetline(
+            &mut s,
+            Some(test_test_kstring_c_347_mock_fgets),
+            (&mut mock_state as *mut c_int).cast(),
+        ) != 0
+            || libc::strcmp(c"_ABCD".as_ptr(), s.s) != 0
+            || s.l != 5
+        {
+            return -1;
+        }
+        s.l = 0;
+        if crate::htslib_mini_rs::hts::kgetline(
+            &mut s,
+            Some(test_test_kstring_c_347_mock_fgets),
+            (&mut mock_state as *mut c_int).cast(),
+        ) != 0
+            || libc::strcmp(c"".as_ptr(), s.s) != 0
+            || s.l != 0
+        {
+            return -1;
+        }
+        s.l = 0;
+        if crate::htslib_mini_rs::hts::kgetline(
+            &mut s,
+            Some(test_test_kstring_c_347_mock_fgets),
+            (&mut mock_state as *mut c_int).cast(),
+        ) != 0
+            || libc::strcmp(c"ABCD".as_ptr(), s.s) != 0
+            || s.l != 4
+        {
+            return -1;
+        }
+        s.l = 0;
+        if crate::htslib_mini_rs::hts::kgetline(
+            &mut s,
+            Some(test_test_kstring_c_347_mock_fgets),
+            (&mut mock_state as *mut c_int).cast(),
+        ) != 0
+            || libc::strcmp(c"".as_ptr(), s.s) != 0
+            || s.l != 0
+        {
+            return -1;
+        }
+        s.l = 0;
+        if crate::htslib_mini_rs::hts::kgetline(
+            &mut s,
+            Some(test_test_kstring_c_347_mock_fgets),
+            (&mut mock_state as *mut c_int).cast(),
+        ) != 0
+            || libc::strcmp(c"ABCD".as_ptr(), s.s) != 0
+            || s.l != 4
+        {
+            return -1;
+        }
+        s.l = 0;
+        if crate::htslib_mini_rs::hts::kgetline(
+            &mut s,
+            Some(test_test_kstring_c_347_mock_fgets),
+            (&mut mock_state as *mut c_int).cast(),
+        ) != libc::EOF
+            || s.l != 0
+        {
+            return -1;
+        }
+
+        crate::htslib_mini_rs::hts::ks_free(&mut s);
+        libc::EXIT_SUCCESS
     }
 
     // original: mock_fgets2 (htslib/test/test_kstring.c:403)
-    pub unsafe fn test_test_kstring_c_403_mock_fgets2() {
-        todo!("translate HTSlib mock_fgets2 from htslib/test/test_kstring.c:403");
+    pub unsafe extern "C" fn test_test_kstring_c_403_mock_fgets2(
+        str_: *mut c_char,
+        _num: usize,
+        p: *mut c_void,
+    ) -> isize {
+        let mock_state = p.cast::<c_int>();
+        *mock_state += 1;
+        match *mock_state {
+            1 | 4 | 7 => libc::strcpy(str_, c"ABCD".as_ptr()),
+            2 | 3 => libc::strcpy(str_, c"\n".as_ptr()),
+            5 | 6 => libc::strcpy(str_, c"\r\n".as_ptr()),
+            _ => return 0,
+        };
+        libc::strlen(str_) as isize
     }
 
     // original: test_kgetline2 (htslib/test/test_kstring.c:431)
-    pub unsafe fn test_test_kstring_c_431_test_kgetline2() {
-        todo!("translate HTSlib test_kgetline2 from htslib/test/test_kstring.c:431");
+    pub unsafe fn test_test_kstring_c_431_test_kgetline2() -> c_int {
+        let mut s: kstring_t = std::mem::zeroed();
+        let mut mock_state = 0;
+
+        crate::htslib_mini_rs::hts::kputs(c"_".as_ptr(), &mut s);
+        if crate::htslib_mini_rs::hts::kgetline2(
+            &mut s,
+            Some(test_test_kstring_c_403_mock_fgets2),
+            (&mut mock_state as *mut c_int).cast(),
+        ) != 0
+            || libc::strcmp(c"_ABCD".as_ptr(), s.s) != 0
+            || s.l != 5
+        {
+            return -1;
+        }
+        s.l = 0;
+        if crate::htslib_mini_rs::hts::kgetline2(
+            &mut s,
+            Some(test_test_kstring_c_403_mock_fgets2),
+            (&mut mock_state as *mut c_int).cast(),
+        ) != 0
+            || libc::strcmp(c"".as_ptr(), s.s) != 0
+            || s.l != 0
+        {
+            return -1;
+        }
+        s.l = 0;
+        if crate::htslib_mini_rs::hts::kgetline2(
+            &mut s,
+            Some(test_test_kstring_c_403_mock_fgets2),
+            (&mut mock_state as *mut c_int).cast(),
+        ) != 0
+            || libc::strcmp(c"ABCD".as_ptr(), s.s) != 0
+            || s.l != 4
+        {
+            return -1;
+        }
+        s.l = 0;
+        if crate::htslib_mini_rs::hts::kgetline2(
+            &mut s,
+            Some(test_test_kstring_c_403_mock_fgets2),
+            (&mut mock_state as *mut c_int).cast(),
+        ) != 0
+            || libc::strcmp(c"".as_ptr(), s.s) != 0
+            || s.l != 0
+        {
+            return -1;
+        }
+        s.l = 0;
+        if crate::htslib_mini_rs::hts::kgetline2(
+            &mut s,
+            Some(test_test_kstring_c_403_mock_fgets2),
+            (&mut mock_state as *mut c_int).cast(),
+        ) != 0
+            || libc::strcmp(c"ABCD".as_ptr(), s.s) != 0
+            || s.l != 4
+        {
+            return -1;
+        }
+        s.l = 0;
+        if crate::htslib_mini_rs::hts::kgetline2(
+            &mut s,
+            Some(test_test_kstring_c_403_mock_fgets2),
+            (&mut mock_state as *mut c_int).cast(),
+        ) != libc::EOF
+            || s.l != 0
+        {
+            return -1;
+        }
+
+        crate::htslib_mini_rs::hts::ks_free(&mut s);
+        libc::EXIT_SUCCESS
     }
 
     // original: test_kinsertchar (htslib/test/test_kstring.c:458)
-    pub unsafe fn test_test_kstring_c_458_test_kinsertchar() {
-        todo!("translate HTSlib test_kinsertchar from htslib/test/test_kstring.c:458");
+    pub unsafe fn test_test_kstring_c_458_test_kinsertchar() -> c_int {
+        let expected = [
+            c"".as_ptr(),
+            c"X0123".as_ptr(),
+            c"0X123".as_ptr(),
+            c"01X23".as_ptr(),
+            c"012X3".as_ptr(),
+            c"0123X".as_ptr(),
+            c"".as_ptr(),
+        ];
+
+        for i in -1..6 {
+            let mut s: kstring_t = std::mem::zeroed();
+            crate::htslib_mini_rs::hts::kputs(c"0123".as_ptr(), &mut s);
+            if crate::htslib_mini_rs::hts::kinsert_char(b'X' as c_char, i as usize, &mut s) < 0 {
+                if !(0..=4).contains(&i) {
+                    crate::htslib_mini_rs::hts::ks_free(&mut s);
+                    continue;
+                }
+                libc::fprintf(hts_sys::stderr.cast(), c"kinsert_char failed\n".as_ptr());
+                crate::htslib_mini_rs::hts::ks_free(&mut s);
+                return -1;
+            }
+            if *s.s.add(s.l) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"No NUL termination on string from kinsert_char\n".as_ptr(),
+                );
+                crate::htslib_mini_rs::hts::ks_free(&mut s);
+                return -1;
+            }
+            if libc::memcmp(s.s.cast(), expected[(i + 1) as usize].cast(), s.l + 1) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"kinsert_char comparison failed\n".as_ptr(),
+                );
+                crate::htslib_mini_rs::hts::ks_free(&mut s);
+                return -1;
+            }
+            crate::htslib_mini_rs::hts::ks_free(&mut s);
+        }
+
+        let mut t: kstring_t = std::mem::zeroed();
+        let mut res: kstring_t = std::mem::zeroed();
+        for i in 0..7 {
+            crate::htslib_mini_rs::hts::kputc(b'A' as c_int + i, &mut res);
+            if crate::htslib_mini_rs::hts::kinsert_char((b'A' as c_int + i) as c_char, t.l, &mut t)
+                < 0
+            {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"kinsert_char failed in realloc\n".as_ptr(),
+                );
+                crate::htslib_mini_rs::hts::ks_free(&mut res);
+                crate::htslib_mini_rs::hts::ks_free(&mut t);
+                return -1;
+            }
+            if *t.s.add(t.l) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"No NUL termination on string from kinsert_char in realloc\n".as_ptr(),
+                );
+                crate::htslib_mini_rs::hts::ks_free(&mut res);
+                crate::htslib_mini_rs::hts::ks_free(&mut t);
+                return -1;
+            }
+            if libc::memcmp(t.s.cast(), res.s.cast(), res.l + 1) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"kinsert_char realloc comparison failed in realloc\n".as_ptr(),
+                );
+                crate::htslib_mini_rs::hts::ks_free(&mut res);
+                crate::htslib_mini_rs::hts::ks_free(&mut t);
+                return -1;
+            }
+        }
+        crate::htslib_mini_rs::hts::ks_free(&mut t);
+        crate::htslib_mini_rs::hts::ks_free(&mut res);
+        0
     }
 
     // original: test_kinsertstr (htslib/test/test_kstring.c:514)
-    pub unsafe fn test_test_kstring_c_514_test_kinsertstr() {
-        todo!("translate HTSlib test_kinsertstr from htslib/test/test_kstring.c:514");
+    pub unsafe fn test_test_kstring_c_514_test_kinsertstr() -> c_int {
+        let expected = [
+            c"".as_ptr(),
+            c"XYZ0123".as_ptr(),
+            c"0XYZ123".as_ptr(),
+            c"01XYZ23".as_ptr(),
+            c"012XYZ3".as_ptr(),
+            c"0123XYZ".as_ptr(),
+            c"".as_ptr(),
+        ];
+
+        for i in -1..6 {
+            let mut s: kstring_t = std::mem::zeroed();
+            crate::htslib_mini_rs::hts::kputs(c"0123".as_ptr(), &mut s);
+            if crate::htslib_mini_rs::hts::kinsert_str(c"XYZ".as_ptr(), i as usize, &mut s) < 0 {
+                if !(0..=4).contains(&i) {
+                    crate::htslib_mini_rs::hts::ks_free(&mut s);
+                    continue;
+                }
+                libc::fprintf(hts_sys::stderr.cast(), c"kinsert_str failed\n".as_ptr());
+                crate::htslib_mini_rs::hts::ks_free(&mut s);
+                return -1;
+            }
+            if *s.s.add(s.l) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"No NUL termination on string from kinsert_str\n".as_ptr(),
+                );
+                crate::htslib_mini_rs::hts::ks_free(&mut s);
+                return -1;
+            }
+            if libc::memcmp(s.s.cast(), expected[(i + 1) as usize].cast(), s.l + 1) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"kinsert_str comparison failed\n".as_ptr(),
+                );
+                crate::htslib_mini_rs::hts::ks_free(&mut s);
+                return -1;
+            }
+            crate::htslib_mini_rs::hts::ks_free(&mut s);
+        }
+
+        let mut t: kstring_t = std::mem::zeroed();
+        let mut res: kstring_t = std::mem::zeroed();
+        for i in 0..15 {
+            let ch = (b'A' + i as u8) as c_int;
+            let mut one = [ch as c_char, 0];
+            crate::htslib_mini_rs::hts::kputs(one.as_mut_ptr(), &mut res);
+            if crate::htslib_mini_rs::hts::kinsert_str(one.as_mut_ptr(), t.l, &mut t) < 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"kinsert_str failed in realloc\n".as_ptr(),
+                );
+                crate::htslib_mini_rs::hts::ks_free(&mut res);
+                crate::htslib_mini_rs::hts::ks_free(&mut t);
+                return -1;
+            }
+            if *t.s.add(t.l) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"No NUL termination on string from kinsert_str in realloc\n".as_ptr(),
+                );
+                crate::htslib_mini_rs::hts::ks_free(&mut res);
+                crate::htslib_mini_rs::hts::ks_free(&mut t);
+                return -1;
+            }
+            if libc::memcmp(t.s.cast(), res.s.cast(), res.l + 1) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"kinsert_str realloc comparison failed in realloc\n".as_ptr(),
+                );
+                crate::htslib_mini_rs::hts::ks_free(&mut res);
+                crate::htslib_mini_rs::hts::ks_free(&mut t);
+                return -1;
+            }
+        }
+
+        crate::htslib_mini_rs::hts::ks_free(&mut t);
+        if crate::htslib_mini_rs::hts::kinsert_str(c"".as_ptr(), 1, &mut t) != 0 {
+            if crate::htslib_mini_rs::hts::kinsert_str(c"".as_ptr(), 0, &mut t) != 0 || t.l != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"kinsert_str empty insertion failed\n".as_ptr(),
+                );
+                crate::htslib_mini_rs::hts::ks_free(&mut res);
+                return -1;
+            }
+        } else {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"kinsert_str empty ins to invalid pos succeeded\n".as_ptr(),
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut res);
+            return -1;
+        }
+
+        let old_len = res.l;
+        if crate::htslib_mini_rs::hts::kinsert_str(c"".as_ptr(), 1, &mut res) != 0
+            || old_len != res.l
+        {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"kinsert_str empty ins to valid pos failed\n".as_ptr(),
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut res);
+            return -1;
+        }
+        crate::htslib_mini_rs::hts::ks_free(&mut res);
+        0
     }
 
     // original: test_kmemmem (htslib/test/test_kstring.c:586)
-    pub unsafe fn test_test_kstring_c_586_test_kmemmem() {
-        todo!("translate HTSlib test_kmemmem from htslib/test/test_kstring.c:586");
+    pub unsafe fn test_test_kstring_c_586_test_kmemmem() -> c_int {
+        let tests: &[(&[u8], c_int, &[u8], c_int, isize)] = &[
+            (b"f\0\0f\0\0f\0\0bar\0\0f\0\0f", 18, b"f\0\0", 3, 0),
+            (b"f\0\0f\0\0f\0\0bar\0\0f\0\0f", 18, b"\0\0f", 3, 1),
+            (b"\0\0f\0\0f\0\0fbar\0\0f\0\0f", 18, b"\0\0f", 3, 0),
+            (b"\0\0f\0\0f\0\0fbar\0\0f\0\0f", 18, b"f\0\0", 3, 2),
+            (b"f\0\0f\0\0f\0\0bar\0\0f\0\0f", 18, b"bar", 3, 9),
+            (b"f\0\0f\0\0f\0\0baz\0\0f\0\0f", 18, b"bar", 3, -1),
+            (b"f\0\0f\0\0f\0\0bar\0\0f\0\0f", 18, b"", 0, 0),
+            (b"f\0\0f\0\0f\0\0bar\0\0f\0\0f", 18, b"\0\0b", 3, 7),
+            (b"f\0\0f\0\0f\0\0bar\0\0f\0\0f", 18, b"r\0\0", 3, 11),
+            (b"bar", 3, b"f\0\0f\0\0f\0\0bar\0\0f\0\0f", 18, -1),
+            (b"", 0, b"bar", 3, -1),
+            (b"", 0, b"", 0, 0),
+        ];
+        let mut pass = 1;
+        for (i, (str_, slen, pat, plen, expected)) in tests.iter().enumerate() {
+            let found = crate::htslib_mini_rs::hts::kmemmem(
+                str_.as_ptr().cast(),
+                *slen,
+                pat.as_ptr().cast(),
+                *plen,
+                std::ptr::null_mut(),
+            );
+            let loc = if found.is_null() {
+                -1
+            } else {
+                found.cast::<u8>().offset_from(str_.as_ptr())
+            };
+            if loc != *expected {
+                pass = 0;
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"kmemmem() test %zd failed - got %lld expected %lld\n".as_ptr(),
+                    i,
+                    loc as i64,
+                    *expected as i64,
+                );
+            }
+
+            let found = crate::htslib_mini_rs::hts::karp_rabin(
+                str_.as_ptr().cast(),
+                *slen as usize,
+                pat.as_ptr().cast(),
+                *plen as usize,
+            );
+            let loc = if found.is_null() {
+                -1
+            } else {
+                found.cast::<u8>().offset_from(str_.as_ptr())
+            };
+            if loc != *expected {
+                pass = 0;
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"karp_rabin() test %zd failed - got %lld expected %lld\n".as_ptr(),
+                    i,
+                    loc as i64,
+                    *expected as i64,
+                );
+            }
+        }
+        if pass != 0 {
+            0
+        } else {
+            -1
+        }
     }
 
     // original: test_kstrstr (htslib/test/test_kstring.c:638)
-    pub unsafe fn test_test_kstring_c_638_test_kstrstr() {
-        todo!("translate HTSlib test_kstrstr from htslib/test/test_kstring.c:638");
+    pub unsafe fn test_test_kstring_c_638_test_kstrstr() -> c_int {
+        let tests = [
+            (c"foofoofoobaroofoof".as_ptr(), c"bar".as_ptr(), 9isize),
+            (c"foofoofoobazoofoof".as_ptr(), c"bar".as_ptr(), -1),
+            (c"foofoofoobaroofoof".as_ptr(), c"".as_ptr(), 0),
+            (c"foofoofoobaroofoof".as_ptr(), c"oob".as_ptr(), 7),
+            (c"foofoofoobaroofoof".as_ptr(), c"roo".as_ptr(), 11),
+            (c"bar".as_ptr(), c"foofoofoobaroofoof".as_ptr(), -1),
+            (c"".as_ptr(), c"bar".as_ptr(), -1),
+            (c"".as_ptr(), c"".as_ptr(), 0),
+        ];
+        let mut pass = 1;
+        for (i, (str_, pat, expected)) in tests.iter().enumerate() {
+            let found = crate::htslib_mini_rs::hts::kstrstr(*str_, *pat, std::ptr::null_mut());
+            let loc = if found.is_null() {
+                -1
+            } else {
+                found.offset_from(*str_)
+            };
+            if loc != *expected {
+                pass = 0;
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"kstrstr() test %zd failed - got %lld expected %lld\n".as_ptr(),
+                    i,
+                    loc as i64,
+                    *expected as i64,
+                );
+            }
+        }
+        if pass != 0 {
+            0
+        } else {
+            -1
+        }
     }
 
     // original: test_kstrnstr (htslib/test/test_kstring.c:673)
-    pub unsafe fn test_test_kstring_c_673_test_kstrnstr() {
-        todo!("translate HTSlib test_kstrnstr from htslib/test/test_kstring.c:673");
+    pub unsafe fn test_test_kstring_c_673_test_kstrnstr() -> c_int {
+        let tests = [
+            (c"foofoofoobaroofoof".as_ptr(), c"bar".as_ptr(), 18, 9isize),
+            (c"foofoofoobazoofoof".as_ptr(), c"bar".as_ptr(), 18, -1),
+            (c"foofoofoobaroofoof".as_ptr(), c"bar".as_ptr(), 9, -1),
+            (c"foofoofoobaroofoof".as_ptr(), c"".as_ptr(), 18, 0),
+            (c"bar".as_ptr(), c"foofoofoobaroofoof".as_ptr(), 18, -1),
+            (
+                b"foofoof\0obaroofoof\0".as_ptr().cast(),
+                c"bar".as_ptr(),
+                18,
+                -1,
+            ),
+            (c"".as_ptr(), c"bar".as_ptr(), 3, -1),
+            (c"".as_ptr(), c"".as_ptr(), 0, 0),
+        ];
+        let mut pass = 1;
+        for (i, (str_, pat, n, expected)) in tests.iter().enumerate() {
+            let found = crate::htslib_mini_rs::hts::kstrnstr(*str_, *pat, *n, std::ptr::null_mut());
+            let loc = if found.is_null() {
+                -1
+            } else {
+                found.offset_from(*str_)
+            };
+            if loc != *expected {
+                pass = 0;
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"kstrnstr() test %zd failed - got %lld expected %lld\n".as_ptr(),
+                    i,
+                    loc as i64,
+                    *expected as i64,
+                );
+            }
+        }
+        if pass != 0 {
+            0
+        } else {
+            -1
+        }
     }
 
     // original: main (htslib/test/test_kstring.c:709)
-    pub unsafe fn test_test_kstring_c_709_main() {
-        todo!("translate HTSlib main from htslib/test/test_kstring.c:709");
+    pub unsafe fn test_test_kstring_c_709_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+        let mut res = libc::EXIT_SUCCESS;
+        let mut start = 0i64;
+        let mut end = 0i64;
+        let mut test: *mut c_char = std::ptr::null_mut();
+        let mut verbose = 0;
+
+        loop {
+            let opt = libc::getopt(argc, argv, c"e:s:t:v".as_ptr());
+            if opt == -1 {
+                break;
+            }
+            match opt as u8 {
+                b's' => start = libc::strtoll(optarg, std::ptr::null_mut(), 0) as i64,
+                b'e' => end = libc::strtoll(optarg, std::ptr::null_mut(), 0) as i64,
+                b't' => test = optarg,
+                b'v' => verbose += 1,
+                _ => {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"Usage : %s [-s <num>] [-e <num>] [-t <test>]\n".as_ptr(),
+                        *argv,
+                    );
+                    return libc::EXIT_FAILURE;
+                }
+            }
+        }
+
+        if test.is_null() || libc::strcmp(test, c"kroundup_size_t".as_ptr()) == 0 {
+            if test_test_kstring_c_45_test_kroundup_size_t(verbose) != 0 {
+                res = libc::EXIT_FAILURE;
+            }
+        }
+        if test.is_null() || libc::strcmp(test, c"kroundup_signed".as_ptr()) == 0 {
+            if test_test_kstring_c_91_test_kroundup_signed(verbose) != 0 {
+                res = libc::EXIT_FAILURE;
+            }
+        }
+        if test.is_null() || libc::strcmp(test, c"kputuw".as_ptr()) == 0 {
+            if test_test_kstring_c_153_test_kputuw(start, end) != 0 {
+                res = libc::EXIT_FAILURE;
+            }
+        }
+        if test.is_null() || libc::strcmp(test, c"kputw".as_ptr()) == 0 {
+            if test_test_kstring_c_219_test_kputw(start, end) != 0 {
+                res = libc::EXIT_FAILURE;
+            }
+        }
+        if test.is_null() || libc::strcmp(test, c"kputll".as_ptr()) == 0 {
+            if test_test_kstring_c_294_test_kputll(start, end) != 0 {
+                res = libc::EXIT_FAILURE;
+            }
+        }
+        if test.is_null() || libc::strcmp(test, c"kgetline".as_ptr()) == 0 {
+            if test_test_kstring_c_375_test_kgetline() != 0 {
+                res = libc::EXIT_FAILURE;
+            }
+        }
+        if test.is_null() || libc::strcmp(test, c"kgetline2".as_ptr()) == 0 {
+            if test_test_kstring_c_431_test_kgetline2() != 0 {
+                res = libc::EXIT_FAILURE;
+            }
+        }
+        if test.is_null() || libc::strcmp(test, c"kinsertchar".as_ptr()) == 0 {
+            if test_test_kstring_c_458_test_kinsertchar() != 0 {
+                res = libc::EXIT_FAILURE;
+            }
+        }
+        if test.is_null() || libc::strcmp(test, c"kinsertstr".as_ptr()) == 0 {
+            if test_test_kstring_c_514_test_kinsertstr() != 0 {
+                res = libc::EXIT_FAILURE;
+            }
+        }
+        if test.is_null() || libc::strcmp(test, c"kmemmem".as_ptr()) == 0 {
+            if test_test_kstring_c_586_test_kmemmem() != 0 {
+                res = libc::EXIT_FAILURE;
+            }
+        }
+        if test.is_null() || libc::strcmp(test, c"kstrstr".as_ptr()) == 0 {
+            if test_test_kstring_c_638_test_kstrstr() != 0 {
+                res = libc::EXIT_FAILURE;
+            }
+        }
+        if test.is_null() || libc::strcmp(test, c"kstrnstr".as_ptr()) == 0 {
+            if test_test_kstring_c_673_test_kstrnstr() != 0 {
+                res = libc::EXIT_FAILURE;
+            }
+        }
+
+        res
     }
 
     // original: lookup (htslib/test/test_expr.c:31)
-    pub unsafe fn test_test_expr_c_31_lookup() {
-        todo!("translate HTSlib lookup from htslib/test/test_expr.c:31");
+    pub unsafe extern "C" fn test_test_expr_c_31_lookup(
+        _data: *mut c_void,
+        str_: *mut c_char,
+        end: *mut *mut c_char,
+        res: *mut crate::htslib_mini_rs::hts::hts_expr_val_t,
+    ) -> c_int {
+        (*res).is_str = 0;
+        if libc::strncmp(str_, c"foo".as_ptr(), 3) == 0 {
+            *end = str_.add(3);
+            (*res).d = 15551.0;
+        } else if *str_ == b'a' as c_char {
+            *end = str_.add(1);
+            (*res).d = 1.0;
+        } else if *str_ == b'b' as c_char {
+            *end = str_.add(1);
+            (*res).d = 2.0;
+        } else if *str_ == b'c' as c_char {
+            *end = str_.add(1);
+            (*res).d = 3.0;
+        } else if libc::strncmp(str_, c"magic".as_ptr(), 5) == 0 {
+            *end = str_.add(5);
+            (*res).is_str = 1;
+            crate::htslib_mini_rs::hts::kputs(
+                c"plugh".as_ptr(),
+                crate::htslib_mini_rs::hts::ks_clear(&mut (*res).s),
+            );
+        } else if libc::strncmp(str_, c"empty-but-true".as_ptr(), 14) == 0 {
+            *end = str_.add(14);
+            (*res).is_true = 1;
+            (*res).is_str = 1;
+            crate::htslib_mini_rs::hts::kputs(
+                c"".as_ptr(),
+                crate::htslib_mini_rs::hts::ks_clear(&mut (*res).s),
+            );
+        } else if libc::strncmp(str_, c"empty".as_ptr(), 5) == 0 {
+            *end = str_.add(5);
+            (*res).is_str = 1;
+            crate::htslib_mini_rs::hts::kputs(
+                c"".as_ptr(),
+                crate::htslib_mini_rs::hts::ks_clear(&mut (*res).s),
+            );
+        } else if libc::strncmp(str_, c"zero-but-true".as_ptr(), 13) == 0 {
+            *end = str_.add(13);
+            (*res).d = 0.0;
+            (*res).is_true = 1;
+        } else if libc::strncmp(str_, c"null-but-true".as_ptr(), 13) == 0 {
+            *end = str_.add(13);
+            crate::htslib_mini_rs::hts::hts_expr_val_undef(res);
+            (*res).is_true = 1;
+        } else if libc::strncmp(str_, c"null".as_ptr(), 4) == 0 {
+            *end = str_.add(4);
+            crate::htslib_mini_rs::hts::hts_expr_val_undef(res);
+        } else if libc::strncmp(str_, c"nan".as_ptr(), 3) == 0 {
+            *end = str_.add(3);
+            crate::htslib_mini_rs::hts::hts_expr_val_undef(res);
+        } else {
+            return -1;
+        }
+
+        0
     }
 
     // original: strcmpnull (htslib/test/test_expr.c:97)
@@ -1690,13 +4558,1119 @@ pub mod functions {
     }
 
     // original: test (htslib/test/test_expr.c:110)
-    pub unsafe fn test_test_expr_c_110_test() {
-        todo!("translate HTSlib test from htslib/test/test_expr.c:110");
+    pub unsafe fn test_test_expr_c_110_test() -> c_int {
+        struct TestEv {
+            truth_val: c_int,
+            dval: f64,
+            sval: *const c_char,
+            str_: *const c_char,
+        }
+
+        let tests = [
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"+1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: -1.0,
+                sval: std::ptr::null(),
+                str_: c"-1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"!7".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"!0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"!(!7)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"!!7".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 5.0,
+                sval: std::ptr::null(),
+                str_: c"2+3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: -1.0,
+                sval: std::ptr::null(),
+                str_: c"2+-3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 6.0,
+                sval: std::ptr::null(),
+                str_: c"1+2+3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"-2+3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"1+null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null-1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"-null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 6.0,
+                sval: std::ptr::null(),
+                str_: c"2*3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 6.0,
+                sval: std::ptr::null(),
+                str_: c"1*2*3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"2*0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 7.0,
+                sval: std::ptr::null(),
+                str_: c"(7)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 7.0,
+                sval: std::ptr::null(),
+                str_: c"((7))".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 21.0,
+                sval: std::ptr::null(),
+                str_: c"(1+2)*(3+4)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 14.0,
+                sval: std::ptr::null(),
+                str_: c"(4*5)-(-2*-3)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"2*null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null/2".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"0/0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"(1+2)*3==9".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"(1+2)*3!=8".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"(1+2)*3!=9".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"(1+2)*3==8".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"1>2".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"1<2".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"3<3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"3>3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"9<=9".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"9>=9".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"2*4==8".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"16==0x10".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"15<0x10".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"17>0x10".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"2*4!=8".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"4+2<3+4".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"4*2<3+4".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 8.0,
+                sval: std::ptr::null(),
+                str_: c"4*(2<3)+4".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"(1<2) == (3>2)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"1<2 == 3>2".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null <= 0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null >= 0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null < 0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null > 0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null == null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null != null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null < 10".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"10 > null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"2 && 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"2 && 0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"0 && 2".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"2 || 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"2 || 0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"0 || 2".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"1 || 2 && 3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"2 && 3 || 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"0 && 3 || 2".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"0 && 3 || 0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c" 5 - 5 && 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"+5 - 5 && 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"null && 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"1 && null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"!null && 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"1 && !null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"1 && null-but-true".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"null || 0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"0 || null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"!null || 0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"0 || !null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"0 || null-but-true".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"null || 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"1 || null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"3 & 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 2.0,
+                sval: std::ptr::null(),
+                str_: c"3 & 2".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 3.0,
+                sval: std::ptr::null(),
+                str_: c"1 | 2".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 3.0,
+                sval: std::ptr::null(),
+                str_: c"1 | 3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 7.0,
+                sval: std::ptr::null(),
+                str_: c"1 | 6".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 2.0,
+                sval: std::ptr::null(),
+                str_: c"1 ^ 3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"1 | null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null | 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"1 & null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null & 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"0 ^ null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null ^ 0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"1 ^ null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null ^ 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"(1^0)&(4^3)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 2.0,
+                sval: std::ptr::null(),
+                str_: c"1 ^(0&4)^ 3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 2.0,
+                sval: std::ptr::null(),
+                str_: c"1 ^ 0&4 ^ 3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 6.0,
+                sval: std::ptr::null(),
+                str_: c"(1|0)^(4|3)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 7.0,
+                sval: std::ptr::null(),
+                str_: c"1 |(0^4)| 3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 7.0,
+                sval: std::ptr::null(),
+                str_: c"1 | 0^4 | 3".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"4 & 2 || 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"(4 & 2) || 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"4 & (2 || 1)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"1 || 4 & 2".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"1 || (4 & 2)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"(1 || 4) & 2".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c" (2*3)&7  > 4".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c" (2*3)&(7 > 4)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"((2*3)&7) > 4".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"((2*3)&7) > 4 && 2*2 <= 4".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: c"plugh".as_ptr(),
+                str_: c"magic".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: c"".as_ptr(),
+                str_: c"empty".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"magic == \"plugh\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"magic != \"xyzzy\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"\"abc\" < \"def\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"\"abc\" <= \"abc\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"\"abc\" < \"ab\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"\"abc\" <= \"ab\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"\"abc\" > \"def\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"\"abc\" >= \"abc\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"\"abc\" > \"ab\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"\"abc\" >= \"ab\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null == \"x\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null != \"x\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null < \"x\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null > \"x\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"\"abbc\" =~ \"^a+b+c+$\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"\"aBBc\" =~ \"^a+b+c+$\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"\"aBBc\" !~ \"^a+b+c+$\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"\"xyzzy plugh abracadabra\" =~ magic".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: c"".as_ptr(),
+                str_: c"empty-but-true".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"!empty-but-true".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"!!empty-but-true".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"1 && empty-but-true && 1".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"1 && empty-but-true && 0".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"!null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"!!null".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"!\"foo\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"!!\"foo\"".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"null-but-true".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"!null-but-true".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"!!null-but-true".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"zero-but-true".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"!zero-but-true".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"!!zero-but-true".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 2.0f64.ln(),
+                sval: std::ptr::null(),
+                str_: c"log(2)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 9.0f64.exp(),
+                sval: std::ptr::null(),
+                str_: c"exp(9)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 9.0,
+                sval: std::ptr::null(),
+                str_: c"log(exp(9))".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 8.0,
+                sval: std::ptr::null(),
+                str_: c"pow(2,3)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 3.0,
+                sval: std::ptr::null(),
+                str_: c"sqrt(9)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"sqrt(-9)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 2.0,
+                sval: std::ptr::null(),
+                str_: c"default(2,3)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 3.0,
+                sval: std::ptr::null(),
+                str_: c"default(null,3)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"default(null,0)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"default(null-but-true,0)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"default(null-but-true,null)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: f64::NAN,
+                sval: std::ptr::null(),
+                str_: c"default(null,null-but-true)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"exists(\"foo\")".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"exists(12)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"exists(\"\")".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"exists(0)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 0,
+                dval: 0.0,
+                sval: std::ptr::null(),
+                str_: c"exists(null)".as_ptr(),
+            },
+            TestEv {
+                truth_val: 1,
+                dval: 1.0,
+                sval: std::ptr::null(),
+                str_: c"exists(null-but-true)".as_ptr(),
+            },
+        ];
+
+        let mut res = 0;
+        let mut r = crate::htslib_mini_rs::hts::hts_expr_val_t {
+            is_true: 0,
+            is_str: 0,
+            s: kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            },
+            d: 0.0,
+        };
+        for test in tests.iter() {
+            let filt = crate::htslib_mini_rs::hts::hts_filter_init(test.str_);
+            if filt.is_null() {
+                return 1;
+            }
+            if crate::htslib_mini_rs::hts::hts_filter_eval2(
+                filt,
+                std::ptr::null_mut(),
+                Some(test_test_expr_c_31_lookup),
+                &mut r,
+            ) != 0
+            {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Failed to parse filter string %s\n".as_ptr(),
+                    test.str_,
+                );
+                res = 1;
+                crate::htslib_mini_rs::hts::hts_filter_free(filt);
+                continue;
+            }
+
+            if crate::htslib_mini_rs::hts::hts_expr_val_exists(&mut r) == 0 {
+                if r.is_true as c_int != test.truth_val
+                    || test_test_expr_c_105_cmpfloat(r.d, test.dval) == 0
+                {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"Failed test: \"%s\" == \"%f\", got %s, \"%s\", %f\n".as_ptr(),
+                        test.str_,
+                        test.dval,
+                        if r.is_true != 0 {
+                            c"true".as_ptr()
+                        } else {
+                            c"false".as_ptr()
+                        },
+                        r.s.s,
+                        r.d,
+                    );
+                    res = 1;
+                }
+            } else if r.is_str != 0
+                && (test_test_expr_c_97_strcmpnull(r.s.s, test.sval) != 0
+                    || test_test_expr_c_105_cmpfloat(r.d, test.dval) == 0
+                    || r.is_true as c_int != test.truth_val)
+            {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Failed test: \"%s\" == \"%s\", got %s, \"%s\", %f\n".as_ptr(),
+                    test.str_,
+                    test.sval,
+                    if r.is_true != 0 {
+                        c"true".as_ptr()
+                    } else {
+                        c"false".as_ptr()
+                    },
+                    r.s.s,
+                    r.d,
+                );
+                res = 1;
+            } else if r.is_str == 0
+                && (test_test_expr_c_105_cmpfloat(r.d, test.dval) == 0
+                    || r.is_true as c_int != test.truth_val)
+            {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Failed test: %s == %f, got %s, %f\n".as_ptr(),
+                    test.str_,
+                    test.dval,
+                    if r.is_true != 0 {
+                        c"true".as_ptr()
+                    } else {
+                        c"false".as_ptr()
+                    },
+                    r.d,
+                );
+                res = 1;
+            }
+
+            crate::htslib_mini_rs::hts::hts_expr_val_free(&mut r);
+            crate::htslib_mini_rs::hts::hts_filter_free(filt);
+        }
+
+        res
     }
 
     // original: main (htslib/test/test_expr.c:346)
-    pub unsafe fn test_test_expr_c_346_main() {
-        todo!("translate HTSlib main from htslib/test/test_expr.c:346");
+    pub unsafe fn test_test_expr_c_346_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+        if argc > 1 {
+            let mut v = crate::htslib_mini_rs::hts::hts_expr_val_t {
+                is_true: 0,
+                is_str: 0,
+                s: kstring_t {
+                    l: 0,
+                    m: 0,
+                    s: std::ptr::null_mut(),
+                },
+                d: 0.0,
+            };
+            let filt = crate::htslib_mini_rs::hts::hts_filter_init(*argv.add(1));
+            if crate::htslib_mini_rs::hts::hts_filter_eval2(
+                filt,
+                std::ptr::null_mut(),
+                Some(test_test_expr_c_31_lookup),
+                &mut v,
+            ) != 0
+            {
+                return 1;
+            }
+
+            libc::printf(
+                c"%s\t".as_ptr(),
+                if v.is_true != 0 {
+                    c"true".as_ptr()
+                } else {
+                    c"false".as_ptr()
+                },
+            );
+
+            if v.is_str != 0 {
+                libc::puts(v.s.s);
+            } else {
+                libc::printf(c"%g\n".as_ptr(), v.d);
+            }
+
+            crate::htslib_mini_rs::hts::hts_expr_val_free(&mut v);
+            crate::htslib_mini_rs::hts::hts_filter_free(filt);
+            return 0;
+        }
+
+        test_test_expr_c_110_test()
     }
 
     // original: write_stats_str2int (htslib/test/test_khash.c:50)
@@ -1705,8 +5679,25 @@ pub mod functions {
     }
 
     // original: make_keys (htslib/test/test_khash.c:66)
-    pub unsafe fn test_test_khash_c_66_make_keys() {
-        todo!("translate HTSlib make_keys from htslib/test/test_khash.c:66");
+    pub unsafe fn test_test_khash_c_66_make_keys(num: usize, kl: usize) -> *mut c_char {
+        const MAX_ENTRIES: usize = 99_999_999;
+        if num > MAX_ENTRIES {
+            return std::ptr::null_mut();
+        }
+        let keys = libc::malloc(kl.saturating_mul(num)).cast::<c_char>();
+        if keys.is_null() {
+            libc::perror(std::ptr::null());
+            return std::ptr::null_mut();
+        }
+        for i in 0..num {
+            let ret = libc::snprintf(keys.add(kl * i), kl, c"test%zu".as_ptr(), i);
+            if ret < 0 || ret as usize >= kl {
+                libc::free(keys.cast());
+                return std::ptr::null_mut();
+            }
+        }
+
+        keys
     }
 
     // original: add_str2int_entry (htslib/test/test_khash.c:86)
@@ -1730,18 +5721,116 @@ pub mod functions {
     }
 
     // original: read_keys (htslib/test/test_khash.c:236)
-    pub unsafe fn test_test_khash_c_236_read_keys() {
-        todo!("translate HTSlib read_keys from htslib/test/test_khash.c:236");
+    pub unsafe fn test_test_khash_c_236_read_keys(
+        keys_file: *const c_char,
+        keys_out: *mut *mut c_char,
+        key_locations_out: *mut *mut *mut c_char,
+    ) -> usize {
+        let mut in_ = libc::fopen(keys_file, c"r".as_ptr());
+        if in_.is_null() {
+            return 0;
+        }
+
+        if libc::fseek(in_, 0, libc::SEEK_END) < 0 {
+            libc::fclose(in_);
+            return 0;
+        }
+        let file_size = libc::ftell(in_);
+        if file_size < 0 || libc::fseek(in_, 0, libc::SEEK_SET) < 0 {
+            libc::fclose(in_);
+            return 0;
+        }
+
+        let keys_size = file_size as usize;
+        let keys = libc::malloc(keys_size + 1).cast::<c_char>();
+        if keys.is_null() {
+            libc::fclose(in_);
+            return 0;
+        }
+
+        let got = libc::fread(keys.cast(), 1, keys_size, in_);
+        *keys.add(got) = 0;
+        if libc::ferror(in_) != 0 || libc::fclose(in_) < 0 {
+            libc::free(keys.cast());
+            *keys_out = std::ptr::null_mut();
+            *key_locations_out = std::ptr::null_mut();
+            return 0;
+        }
+        in_ = std::ptr::null_mut();
+
+        let mut nkeys = 0usize;
+        let mut i = 0usize;
+        while i < got {
+            while i < got && *keys.add(i) == b'\n' as c_char {
+                i += 1;
+            }
+            if i < got {
+                nkeys += 1;
+                while i < got && *keys.add(i) != b'\n' as c_char {
+                    i += 1;
+                }
+            }
+        }
+
+        let key_locations = if nkeys == 0 {
+            std::ptr::null_mut()
+        } else {
+            libc::malloc(nkeys * std::mem::size_of::<*mut c_char>()).cast::<*mut c_char>()
+        };
+        if nkeys != 0 && key_locations.is_null() {
+            if !in_.is_null() {
+                libc::fclose(in_);
+            }
+            libc::free(keys.cast());
+            *keys_out = std::ptr::null_mut();
+            *key_locations_out = std::ptr::null_mut();
+            return 0;
+        }
+
+        let mut idx = 0usize;
+        i = 0;
+        while i < got {
+            while i < got && *keys.add(i) == b'\n' as c_char {
+                *keys.add(i) = 0;
+                i += 1;
+            }
+            if i < got {
+                *key_locations.add(idx) = keys.add(i);
+                idx += 1;
+                while i < got && *keys.add(i) != b'\n' as c_char {
+                    i += 1;
+                }
+            }
+        }
+
+        *keys_out = keys;
+        *key_locations_out = key_locations;
+        nkeys
     }
 
     // original: get_time (htslib/test/test_khash.c:312)
-    pub unsafe fn test_test_khash_c_312_get_time() {
-        todo!("translate HTSlib get_time from htslib/test/test_khash.c:312");
+    pub unsafe fn test_test_khash_c_312_get_time() -> i64 {
+        let mut tv: libc::timeval = std::mem::zeroed();
+        if libc::gettimeofday(&mut tv, std::ptr::null_mut()) < 0 {
+            libc::perror(c"gettimeofday".as_ptr());
+            return -1;
+        }
+        tv.tv_sec as i64 * 1_000_000 + tv.tv_usec as i64
     }
 
     // original: fmt_time (htslib/test/test_khash.c:330)
-    pub unsafe fn test_test_khash_c_330_fmt_time() {
-        todo!("translate HTSlib fmt_time from htslib/test/test_khash.c:330");
+    pub unsafe fn test_test_khash_c_330_fmt_time(elapsed: i64) -> *mut c_char {
+        static mut BUF: [c_char; 64] = [0; 64];
+        let sec = elapsed / 1_000_000;
+        let usec = elapsed % 1_000_000;
+        libc::snprintf(
+            std::ptr::addr_of_mut!(BUF).cast::<c_char>(),
+            64,
+            c"%lld.%06lld wall-time seconds".as_ptr(),
+            sec,
+            usec,
+        );
+        std::ptr::addr_of_mut!(BUF).cast::<c_char>()
     }
 
     // original: benchmark (htslib/test/test_khash.c:344)
@@ -1750,8 +5839,24 @@ pub mod functions {
     }
 
     // original: show_usage (htslib/test/test_khash.c:437)
-    pub unsafe fn test_test_khash_c_437_show_usage() {
-        todo!("translate HTSlib show_usage from htslib/test/test_khash.c:437");
+    pub unsafe fn test_test_khash_c_437_show_usage(out: *mut libc::FILE, prog: *mut c_char) {
+        libc::fprintf(out, c"Usage : %s [-t <test>] [-i <file>]\n".as_ptr(), prog);
+        libc::fprintf(out, c" Options:\n".as_ptr());
+        libc::fprintf(
+            out,
+            c"  -t <TEST>   Test to run (str2int, benchmark)\n".as_ptr(),
+        );
+        libc::fprintf(
+            out,
+            c"  -i <FILE>   Optional input file for benchmark\n".as_ptr(),
+        );
+        libc::fprintf(out, c"  -n <INT>    Number of items to add\n".as_ptr());
+        libc::fprintf(
+            out,
+            c"  -f <FRAC>   Fraction to delete and re-insert\n".as_ptr(),
+        );
+        libc::fprintf(out, c"  -d          Dump hash table stats\n".as_ptr());
+        libc::fprintf(out, c"  -h          Show this help\n".as_ptr());
     }
 
     // original: main (htslib/test/test_khash.c:448)
@@ -1759,14 +5864,29 @@ pub mod functions {
         todo!("translate HTSlib main from htslib/test/test_khash.c:448");
     }
 
+    static mut TEST_NIBBLES_NIBBLE: [c_uchar; 5000] = [0; 5000];
+    static mut TEST_NIBBLES_BUF: [c_char; 10000] = [0; 10000];
+
+    unsafe extern "C" {
+        static mut optarg: *mut c_char;
+    }
+
     // original: gettime (htslib/test/test_nibbles.c:41)
-    pub unsafe fn test_test_nibbles_c_41_gettime() {
-        todo!("translate HTSlib gettime from htslib/test/test_nibbles.c:41");
+    pub unsafe fn test_test_nibbles_c_41_gettime() -> i64 {
+        let mut ts: libc::timespec = std::mem::zeroed();
+        libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, &mut ts);
+        ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64
     }
 
     // original: fmttime (htslib/test/test_nibbles.c:53)
-    pub unsafe fn test_test_nibbles_c_53_fmttime() {
-        todo!("translate HTSlib fmttime from htslib/test/test_nibbles.c:53");
+    pub unsafe fn test_test_nibbles_c_53_fmttime(elapsed: i64) -> *mut c_char {
+        static mut BUF: [c_char; 64] = [0; 64];
+
+        let sec = elapsed / 1_000_000_000;
+        let nsec = elapsed % 1_000_000_000;
+        let buf = std::ptr::addr_of_mut!(BUF).cast::<c_char>();
+        libc::sprintf(buf, c"%lld.%09lld processor seconds".as_ptr(), sec, nsec);
+        buf
     }
 
     // original: nibble2base_single (htslib/test/test_nibbles.c:69)
@@ -1782,58 +5902,689 @@ pub mod functions {
     }
 
     // original: validate_nibble2base (htslib/test/test_nibbles.c:78)
-    pub unsafe fn test_test_nibbles_c_78_validate_nibble2base() {
-        todo!("translate HTSlib validate_nibble2base from htslib/test/test_nibbles.c:78");
+    pub unsafe fn test_test_nibbles_c_78_validate_nibble2base() -> c_int {
+        let mut defbuf = [0 as c_char; 500];
+        let nibble = std::ptr::addr_of_mut!(TEST_NIBBLES_NIBBLE).cast::<c_uchar>();
+        let buf = std::ptr::addr_of_mut!(TEST_NIBBLES_BUF).cast::<c_char>();
+        let mut total = 0u64;
+        let mut failed = 0u64;
+
+        for i in 0..5000 {
+            *nibble.add(i) = (i % 256) as c_uchar;
+        }
+
+        for start in 0..80 {
+            for len in 0..400 {
+                libc::memset(defbuf.as_mut_ptr().cast(), 0, defbuf.len());
+                test_test_nibbles_c_69_nibble2base_single(
+                    nibble.add(start),
+                    defbuf.as_mut_ptr(),
+                    len,
+                );
+
+                libc::memset(buf.cast(), 0, defbuf.len());
+                sam::nibble2base(nibble.add(start), buf, len);
+
+                total += 1;
+                if libc::strcmp(defbuf.as_ptr(), buf) != 0 {
+                    libc::printf(c"%s expected\n%s FAIL\n\n".as_ptr(), defbuf.as_ptr(), buf);
+                    failed += 1;
+                }
+            }
+        }
+
+        if failed > 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failures: %llu (out of %llu tests)\n".as_ptr(),
+                failed,
+                total,
+            );
+            return 1;
+        }
+
+        0
     }
 
     // original: time_nibble2base (htslib/test/test_nibbles.c:109)
-    pub unsafe fn test_test_nibbles_c_109_time_nibble2base() {
-        todo!("translate HTSlib time_nibble2base from htslib/test/test_nibbles.c:109");
+    pub unsafe fn test_test_nibbles_c_109_time_nibble2base(length: c_int, count: c_ulong) -> c_int {
+        let nibble = std::ptr::addr_of_mut!(TEST_NIBBLES_NIBBLE).cast::<c_uchar>();
+        let buf = std::ptr::addr_of_mut!(TEST_NIBBLES_BUF).cast::<c_char>();
+        let mut total = 0 as c_ulong;
+
+        for i in 0..length {
+            *nibble.add(i as usize) = (i % 256) as c_uchar;
+        }
+
+        libc::printf(
+            c"Timing %lu nibble2base iterations with read length %d...\n".as_ptr(),
+            count,
+            length,
+        );
+        let start = test_test_nibbles_c_41_gettime();
+
+        for i in 0..count {
+            sam::nibble2base(nibble, buf, length);
+            total = total.wrapping_add(*buf.add((i % length as c_ulong) as usize) as c_ulong);
+        }
+
+        let stop = test_test_nibbles_c_41_gettime();
+        libc::printf(
+            c"%s (summing to %lu)\n".as_ptr(),
+            test_test_nibbles_c_53_fmttime(stop - start),
+            total,
+        );
+        0
     }
 
     // original: main (htslib/test/test_nibbles.c:128)
-    pub unsafe fn test_test_nibbles_c_128_main() {
-        todo!("translate HTSlib main from htslib/test/test_nibbles.c:128");
+    pub unsafe fn test_test_nibbles_c_128_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+        let mut readlen = 5000;
+        let mut count = 1_000_000 as c_ulong;
+        let mut status = 0;
+
+        if argc == 1 {
+            libc::printf(
+                c"Usage: test_nibbles [-c NUM] [-r NUM] [-n|-v]...\nOptions:\n  -c NUM  Specify number of iterations [%lu]\n  -n      Run nibble2base speed tests\n  -r NUM  Specify read length [%d]\n  -v      Run all validation tests\n".as_ptr(),
+                count,
+                readlen,
+            );
+        }
+
+        loop {
+            let c = libc::getopt(argc, argv, c"c:nr:v".as_ptr());
+            if c < 0 {
+                break;
+            }
+            match c as u8 {
+                b'c' => {
+                    count = libc::strtoul(optarg, std::ptr::null_mut(), 0);
+                }
+                b'n' => {
+                    status += test_test_nibbles_c_109_time_nibble2base(readlen, count);
+                }
+                b'r' => {
+                    readlen = libc::atoi(optarg);
+                }
+                b'v' => {
+                    status += test_test_nibbles_c_78_validate_nibble2base();
+                }
+                _ => {}
+            }
+        }
+
+        status
     }
 
     // original: test_bcf_set_variant_type (htslib/test/test-bcf_set_variant_type.c:42)
-    pub unsafe fn test_test_bcf_set_variant_type_c_42_test_bcf_set_variant_type() {
-        todo!("translate HTSlib test_bcf_set_variant_type from htslib/test/test-bcf_set_variant_type.c:42");
+    pub unsafe fn test_test_bcf_set_variant_type_c_42_test_bcf_set_variant_type() -> c_int {
+        unsafe fn check(
+            ref_: *const c_char,
+            alt: *const c_char,
+            expected: c_int,
+            label: *const c_char,
+        ) -> c_int {
+            let mut var = crate::htslib_mini_rs::vcf::bcf_variant_t { type_: 0, n: 0 };
+            crate::htslib_mini_rs::vcf::vcf_c_5373_bcf_set_variant_type(ref_, alt, &mut var);
+            if var.type_ != expected {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"%s was assigned variant type %d; expected %d\n".as_ptr(),
+                    label,
+                    var.type_,
+                    expected,
+                );
+                1
+            } else {
+                0
+            }
+        }
+
+        let mut failed = 0;
+        failed += check(
+            c"A".as_ptr(),
+            c"T".as_ptr(),
+            hts_sys::VCF_SNP as c_int,
+            c"A -> T".as_ptr(),
+        );
+        failed += check(
+            c"A".as_ptr(),
+            c"AA".as_ptr(),
+            (hts_sys::VCF_INDEL | crate::htslib_mini_rs::vcf::VCF_INS) as c_int,
+            c"A -> AA".as_ptr(),
+        );
+        failed += check(
+            c"AA".as_ptr(),
+            c"A".as_ptr(),
+            (hts_sys::VCF_INDEL | crate::htslib_mini_rs::vcf::VCF_DEL) as c_int,
+            c"AA -> A".as_ptr(),
+        );
+        failed += check(
+            c"N".as_ptr(),
+            c"N]16:33625444]".as_ptr(),
+            hts_sys::VCF_BND as c_int,
+            c"N]16:33625444]".as_ptr(),
+        );
+        failed += check(
+            c"N".as_ptr(),
+            c"N[16:33625444[".as_ptr(),
+            hts_sys::VCF_BND as c_int,
+            c"N[16:33625444[".as_ptr(),
+        );
+        failed += check(
+            c"N".as_ptr(),
+            c"]16:33625444]N".as_ptr(),
+            hts_sys::VCF_BND as c_int,
+            c"]16:33625444]N".as_ptr(),
+        );
+        failed += check(
+            c"N".as_ptr(),
+            c"[16:33625444[N".as_ptr(),
+            hts_sys::VCF_BND as c_int,
+            c"[16:33625444[N".as_ptr(),
+        );
+        failed += check(
+            c"T".as_ptr(),
+            c"]chrB:123]AGTNNNNNCAT".as_ptr(),
+            hts_sys::VCF_BND as c_int,
+            c"]chrB:123]AGTNNNNNCAT".as_ptr(),
+        );
+        failed += check(
+            c"C".as_ptr(),
+            c"CAGTNNNNNCA[chrA:321[".as_ptr(),
+            hts_sys::VCF_BND as c_int,
+            c"CAGTNNNNNCA[chrA:321[".as_ptr(),
+        );
+        failed += check(
+            c"A".as_ptr(),
+            c"<NON_REF>".as_ptr(),
+            hts_sys::VCF_REF as c_int,
+            c"<NON_REF>".as_ptr(),
+        );
+        failed += check(
+            c"A".as_ptr(),
+            c"<*>".as_ptr(),
+            hts_sys::VCF_REF as c_int,
+            c"<*>".as_ptr(),
+        );
+        failed += check(
+            c"AA".as_ptr(),
+            c"TT".as_ptr(),
+            hts_sys::VCF_MNP as c_int,
+            c"AA -> TT".as_ptr(),
+        );
+        failed += check(
+            c"A".as_ptr(),
+            c"*".as_ptr(),
+            hts_sys::VCF_OVERLAP as c_int,
+            c"A -> *".as_ptr(),
+        );
+        failed += check(
+            c"A".as_ptr(),
+            c".".as_ptr(),
+            hts_sys::VCF_REF as c_int,
+            c"A -> .".as_ptr(),
+        );
+
+        failed
     }
 
     // original: main (htslib/test/test-bcf_set_variant_type.c:143)
-    pub unsafe fn test_test_bcf_set_variant_type_c_143_main() {
-        todo!("translate HTSlib main from htslib/test/test-bcf_set_variant_type.c:143");
+    pub unsafe fn test_test_bcf_set_variant_type_c_143_main(
+        _argc: c_int,
+        _argv: *mut *mut c_char,
+    ) -> c_int {
+        if test_test_bcf_set_variant_type_c_42_test_bcf_set_variant_type() == 0 {
+            libc::EXIT_SUCCESS
+        } else {
+            libc::EXIT_FAILURE
+        }
     }
 
     // original: check_str2int (htslib/test/test_str2int.c:41)
-    pub unsafe fn test_test_str2int_c_41_check_str2int() {
-        todo!("translate HTSlib check_str2int from htslib/test/test_str2int.c:41");
+    pub unsafe fn test_test_str2int_c_41_check_str2int(verbose: c_int) -> c_int {
+        let mut buffer = [0 as c_char; 64];
+        let mut end: *mut c_char = std::ptr::null_mut();
+        let mut failed = 0;
+        let sentinel = b'#' as c_char;
+
+        for i in 1..64 {
+            let num = (1u64 << i) - 1;
+            let start_offset: i64 = if i < 5 { -(1_i64 << (i - 1)) } else { -16 };
+            for offset in start_offset..=30 {
+                let efail = (offset > 0) as c_int;
+                let input = num.wrapping_add(offset as u64);
+                libc::snprintf(
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                    c"%llu%c".as_ptr(),
+                    input,
+                    sentinel as c_int,
+                );
+
+                let uval = crate::htslib_mini_rs::hts::hts_str2uint(
+                    buffer.as_ptr(),
+                    &mut end,
+                    i,
+                    &mut failed,
+                );
+                let expected = if efail == 0 { input } else { num };
+                if failed != efail || uval != expected || *end != sentinel {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"hts_str2uint failed: %d bit %s %llu '%c' %d (%d)\n".as_ptr(),
+                        i,
+                        buffer.as_ptr(),
+                        uval,
+                        *end as c_int,
+                        failed,
+                        efail,
+                    );
+                    return -1;
+                } else if verbose != 0 {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"hts_str2uint OK: %d bit %s %llu '%c' %d (%d)\n".as_ptr(),
+                        i,
+                        buffer.as_ptr(),
+                        uval,
+                        *end as c_int,
+                        failed,
+                        efail,
+                    );
+                }
+                failed = 0;
+            }
+
+            for offset in start_offset..=30 {
+                let efail = (offset > 0) as c_int;
+                let input = num.wrapping_add(offset as u64);
+                libc::snprintf(
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                    c"%llu%c".as_ptr(),
+                    input,
+                    sentinel as c_int,
+                );
+
+                let val = crate::htslib_mini_rs::hts::hts_str2int(
+                    buffer.as_ptr(),
+                    &mut end,
+                    i + 1,
+                    &mut failed,
+                );
+                let expected = if efail == 0 { input as i64 } else { num as i64 };
+                if failed != efail || val != expected || *end != sentinel {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"hts_str2int  failed: %d bit %s %lld '%c' %d (%d)\n".as_ptr(),
+                        i + 1,
+                        buffer.as_ptr(),
+                        val,
+                        *end as c_int,
+                        failed,
+                        efail,
+                    );
+                    return -1;
+                } else if verbose != 0 {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"hts_str2int  OK: %d bit %s %lld '%c' %d (%d)\n".as_ptr(),
+                        i + 1,
+                        buffer.as_ptr(),
+                        val,
+                        *end as c_int,
+                        failed,
+                        efail,
+                    );
+                }
+                failed = 0;
+            }
+
+            for offset in start_offset..=30 {
+                let efail = (offset > 0) as c_int;
+                let input = num.wrapping_add(offset as u64).wrapping_add(1);
+                libc::snprintf(
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                    c"-%llu%c".as_ptr(),
+                    input,
+                    sentinel as c_int,
+                );
+
+                let val = crate::htslib_mini_rs::hts::hts_str2int(
+                    buffer.as_ptr(),
+                    &mut end,
+                    i + 1,
+                    &mut failed,
+                );
+                let expected = if efail == 0 {
+                    input
+                } else {
+                    num.wrapping_add(1)
+                };
+                if failed != efail || (val as u64).wrapping_neg() != expected || *end != sentinel {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"hts_str2int  failed: %d bit %s %lld '%c' %d (%d)\n".as_ptr(),
+                        i + 1,
+                        buffer.as_ptr(),
+                        val,
+                        *end as c_int,
+                        failed,
+                        efail,
+                    );
+                    return -1;
+                } else if verbose != 0 {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"hts_str2int  OK: %d bit %s %lld '%c' %d (%d)\n".as_ptr(),
+                        i + 1,
+                        buffer.as_ptr(),
+                        val,
+                        *end as c_int,
+                        failed,
+                        efail,
+                    );
+                }
+                failed = 0;
+            }
+        }
+
+        for offset in 0..=999 {
+            let efail = (offset > 615) as c_int;
+            libc::snprintf(
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                c"18446744073709551%03d%c".as_ptr(),
+                offset,
+                sentinel as c_int,
+            );
+            let uval = crate::htslib_mini_rs::hts::hts_str2uint(
+                buffer.as_ptr(),
+                &mut end,
+                64,
+                &mut failed,
+            );
+            let expected = if efail != 0 {
+                u64::MAX
+            } else {
+                18_446_744_073_709_551_000u64 + offset as u64
+            };
+            if failed != efail || uval != expected || *end != sentinel {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"hts_str2uint failed: 64 bit %s %llu '%c' %d (%d)\n".as_ptr(),
+                    buffer.as_ptr(),
+                    uval,
+                    *end as c_int,
+                    failed,
+                    efail,
+                );
+                return -1;
+            } else if verbose != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"hts_str2uint OK: 64 bit %s %llu '%c' %d (%d)\n".as_ptr(),
+                    buffer.as_ptr(),
+                    uval,
+                    *end as c_int,
+                    failed,
+                    efail,
+                );
+            }
+        }
+
+        0
     }
 
     // original: check_strprint2 (htslib/test/test_str2int.c:141)
-    pub unsafe fn test_test_str2int_c_141_check_strprint2() {
-        todo!("translate HTSlib check_strprint2 from htslib/test/test_str2int.c:141");
+    pub unsafe fn test_test_str2int_c_141_check_strprint2(
+        verbose: c_int,
+        str_: *const c_char,
+        len: usize,
+        destlen: usize,
+        quote: c_char,
+        expect: *const c_char,
+    ) -> c_int {
+        let mut buf = [0 as c_char; 100];
+        crate::htslib_mini_rs::hts::hts_strprint(buf.as_mut_ptr(), destlen, quote, str_, len);
+        if libc::strcmp(buf.as_ptr(), expect) != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"hts_strprint failed: length %zu: got \"%.*s\", expected \"%s\"\n".as_ptr(),
+                destlen,
+                destlen as c_int,
+                buf.as_ptr(),
+                expect,
+            );
+            -1
+        } else {
+            if verbose != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"hts_strprint OK: length %zu: got \"%s\"\n".as_ptr(),
+                    destlen,
+                    expect,
+                );
+            }
+            0
+        }
     }
 
     // original: check_strprint1 (htslib/test/test_str2int.c:158)
-    pub unsafe fn test_test_str2int_c_158_check_strprint1() {
-        todo!("translate HTSlib check_strprint1 from htslib/test/test_str2int.c:158");
+    pub unsafe fn test_test_str2int_c_158_check_strprint1(
+        v: c_int,
+        str_: *const c_char,
+        destlen: usize,
+        expect: *const c_char,
+    ) -> c_int {
+        test_test_str2int_c_141_check_strprint2(v, str_, usize::MAX, destlen, 0, expect)
     }
 
     // original: check_strprintq (htslib/test/test_str2int.c:163)
-    pub unsafe fn test_test_str2int_c_163_check_strprintq() {
-        todo!("translate HTSlib check_strprintq from htslib/test/test_str2int.c:163");
+    pub unsafe fn test_test_str2int_c_163_check_strprintq(
+        v: c_int,
+        str_: *const c_char,
+        destlen: usize,
+        quote: c_char,
+        expect: *const c_char,
+    ) -> c_int {
+        test_test_str2int_c_141_check_strprint2(v, str_, usize::MAX, destlen, quote, expect)
     }
 
     // original: check_strprint (htslib/test/test_str2int.c:169)
-    pub unsafe fn test_test_str2int_c_169_check_strprint() {
-        todo!("translate HTSlib check_strprint from htslib/test/test_str2int.c:169");
+    pub unsafe fn test_test_str2int_c_169_check_strprint(v: c_int) -> c_int {
+        let mut res = 0;
+
+        res |= test_test_str2int_c_158_check_strprint1(v, c"chr10".as_ptr(), 9, c"chr10".as_ptr());
+        res |= test_test_str2int_c_158_check_strprint1(v, c"chr10".as_ptr(), 6, c"chr10".as_ptr());
+        res |= test_test_str2int_c_158_check_strprint1(v, c"chr10".as_ptr(), 5, c"c...".as_ptr());
+        res |= test_test_str2int_c_158_check_strprint1(v, c"chr10".as_ptr(), 4, c"...".as_ptr());
+        res |= test_test_str2int_c_158_check_strprint1(
+            v,
+            c"tab\twxyz".as_ptr(),
+            10,
+            c"tab\\twxyz".as_ptr(),
+        );
+        res |= test_test_str2int_c_158_check_strprint1(
+            v,
+            c"tab\twxyz".as_ptr(),
+            9,
+            c"tab\\t...".as_ptr(),
+        );
+        res |= test_test_str2int_c_158_check_strprint1(
+            v,
+            c"tab\twxyz".as_ptr(),
+            8,
+            c"tab\\...".as_ptr(),
+        );
+        res |= test_test_str2int_c_158_check_strprint1(
+            v,
+            c"tab\twxyz".as_ptr(),
+            7,
+            c"tab...".as_ptr(),
+        );
+        res |=
+            test_test_str2int_c_158_check_strprint1(v, c"tab\twxyz".as_ptr(), 6, c"ta...".as_ptr());
+        res |= test_test_str2int_c_158_check_strprint1(
+            v,
+            b"\xab\0".as_ptr().cast(),
+            5,
+            c"\\xAB".as_ptr(),
+        );
+        res |= test_test_str2int_c_158_check_strprint1(
+            v,
+            b"\xab\0".as_ptr().cast(),
+            4,
+            c"...".as_ptr(),
+        );
+        res |= test_test_str2int_c_158_check_strprint1(
+            v,
+            b"hello\xff\0".as_ptr().cast(),
+            40,
+            c"hello\\xFF".as_ptr(),
+        );
+        res |= test_test_str2int_c_158_check_strprint1(
+            v,
+            b"hello\xff\0".as_ptr().cast(),
+            10,
+            c"hello\\xFF".as_ptr(),
+        );
+        res |= test_test_str2int_c_158_check_strprint1(
+            v,
+            b"hello\xff\0".as_ptr().cast(),
+            9,
+            c"hello...".as_ptr(),
+        );
+        res |= test_test_str2int_c_158_check_strprint1(
+            v,
+            c"hello\t".as_ptr(),
+            40,
+            c"hello\\t".as_ptr(),
+        );
+        res |= test_test_str2int_c_158_check_strprint1(
+            v,
+            c"hello\t".as_ptr(),
+            8,
+            c"hello\\t".as_ptr(),
+        );
+        res |=
+            test_test_str2int_c_158_check_strprint1(v, c"hello\t".as_ptr(), 7, c"hel...".as_ptr());
+        res |= test_test_str2int_c_158_check_strprint1(v, c"\t".as_ptr(), 40, c"\\t".as_ptr());
+        res |= test_test_str2int_c_158_check_strprint1(v, c"".as_ptr(), 40, c"".as_ptr());
+
+        res |= test_test_str2int_c_163_check_strprintq(
+            v,
+            c"chr10".as_ptr(),
+            9,
+            b'\'' as c_char,
+            c"'chr10'".as_ptr(),
+        );
+        res |= test_test_str2int_c_163_check_strprintq(
+            v,
+            c"chr10".as_ptr(),
+            8,
+            b'\'' as c_char,
+            c"'chr10'".as_ptr(),
+        );
+        res |= test_test_str2int_c_163_check_strprintq(
+            v,
+            c"chr10".as_ptr(),
+            7,
+            b'\'' as c_char,
+            c"'c'...".as_ptr(),
+        );
+        res |= test_test_str2int_c_163_check_strprintq(
+            v,
+            c"chr10".as_ptr(),
+            6,
+            b'\'' as c_char,
+            c"''...".as_ptr(),
+        );
+        res |= test_test_str2int_c_163_check_strprintq(
+            v,
+            c"quo'wxyz".as_ptr(),
+            12,
+            b'\'' as c_char,
+            c"'quo\\'wxyz'".as_ptr(),
+        );
+        res |= test_test_str2int_c_163_check_strprintq(
+            v,
+            c"quo'wxyz".as_ptr(),
+            11,
+            b'\'' as c_char,
+            c"'quo\\''...".as_ptr(),
+        );
+        res |= test_test_str2int_c_163_check_strprintq(
+            v,
+            c"quo'wxyz".as_ptr(),
+            10,
+            b'\'' as c_char,
+            c"'quo\\'...".as_ptr(),
+        );
+
+        let nul = b"foo\0bar\0";
+        res |= test_test_str2int_c_141_check_strprint2(
+            v,
+            nul.as_ptr().cast(),
+            usize::MAX,
+            10,
+            0,
+            c"foo".as_ptr(),
+        );
+        res |= test_test_str2int_c_141_check_strprint2(
+            v,
+            nul.as_ptr().cast(),
+            7,
+            10,
+            0,
+            c"foo\\0bar".as_ptr(),
+        );
+        res |= test_test_str2int_c_141_check_strprint2(
+            v,
+            nul.as_ptr().cast(),
+            7,
+            9,
+            0,
+            c"foo\\0bar".as_ptr(),
+        );
+        res |= test_test_str2int_c_141_check_strprint2(
+            v,
+            nul.as_ptr().cast(),
+            7,
+            8,
+            0,
+            c"foo\\...".as_ptr(),
+        );
+
+        res
     }
 
     // original: main (htslib/test/test_str2int.c:208)
-    pub unsafe fn test_test_str2int_c_208_main() {
-        todo!("translate HTSlib main from htslib/test/test_str2int.c:208");
+    pub unsafe fn test_test_str2int_c_208_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+        let mut verbose = 0;
+        loop {
+            let opt = libc::getopt(argc, argv, c"v".as_ptr());
+            if opt == -1 {
+                break;
+            }
+            match opt as u8 {
+                b'v' => verbose = 1,
+                _ => {
+                    libc::fprintf(hts_sys::stderr.cast(), c"Usage: %s [-v]\n".as_ptr(), *argv);
+                    return libc::EXIT_FAILURE;
+                }
+            }
+        }
+
+        let mut res = test_test_str2int_c_41_check_str2int(verbose);
+        res |= test_test_str2int_c_169_check_strprint(verbose);
+        if res != 0 {
+            libc::EXIT_FAILURE
+        } else {
+            libc::EXIT_SUCCESS
+        }
     }
 
     // original: main (htslib/test/thrash_threads4.c:34)
@@ -1842,28 +6593,274 @@ pub mod functions {
     }
 
     // original: check_bam_aux_get (htslib/test/sam.c:78)
-    pub unsafe fn test_sam_c_78_check_bam_aux_get() {
-        todo!("translate HTSlib check_bam_aux_get from htslib/test/sam.c:78");
+    pub unsafe fn test_sam_c_78_check_bam_aux_get(
+        aln: *const sam::bam1_t,
+        tag: *const c_char,
+        type_: c_char,
+    ) -> *mut u8 {
+        let p = sam::bam_aux_get(aln, tag);
+        if !p.is_null() {
+            if *p as c_char == type_ {
+                return p;
+            }
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: %s field of type '%c', expected '%c'\n".as_ptr(),
+                tag,
+                *p as c_int,
+                type_ as c_int,
+            );
+        } else {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: can't find %s field\n".as_ptr(),
+                tag,
+            );
+        }
+        TEST_SAM_STATUS = libc::EXIT_FAILURE;
+        std::ptr::null_mut()
     }
 
     // original: check_aux_count (htslib/test/sam.c:90)
-    pub unsafe fn test_sam_c_90_check_aux_count() {
-        todo!("translate HTSlib check_aux_count from htslib/test/sam.c:90");
+    pub unsafe fn test_sam_c_90_check_aux_count(
+        aln: *const sam::bam1_t,
+        expected: c_int,
+        what: *const c_char,
+    ) {
+        let mut itr = sam::bam_aux_first(aln);
+        let mut n = 0;
+        while !itr.is_null() {
+            n += 1;
+            itr = sam::bam_aux_next(aln, itr);
+        }
+        if n != expected {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: %s has %d aux fields, expected %d\n".as_ptr(),
+                what,
+                n,
+                expected,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+        }
     }
 
     // original: check_int_B_array (htslib/test/sam.c:99)
-    pub unsafe fn test_sam_c_99_check_int_B_array() {
-        todo!("translate HTSlib check_int_B_array from htslib/test/sam.c:99");
+    pub unsafe fn test_sam_c_99_check_int_B_array(
+        aln: *mut sam::bam1_t,
+        tag: *mut c_char,
+        nvals: c_uint,
+        vals: *mut i64,
+    ) {
+        let p = test_sam_c_78_check_bam_aux_get(aln, tag, b'B' as c_char);
+        if p.is_null() {
+            return;
+        }
+
+        let len = sam::bam_auxB_len(p);
+        if len != nvals {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: Wrong length reported for %s field, got %u, expected %u\n".as_ptr(),
+                tag,
+                len,
+                nvals,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+        }
+
+        for i in 0..nvals {
+            let expected = *vals.add(i as usize);
+            let got_i = sam::bam_auxB2i(p, i);
+            if got_i != expected {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Failed: Wrong value from bam_auxB2i for %s field index %u, got %ld expected %ld\n".as_ptr(),
+                    tag,
+                    i,
+                    got_i as libc::c_long,
+                    expected as libc::c_long,
+                );
+                TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            }
+
+            let got_f = sam::bam_auxB2f(p, i);
+            if got_f != expected as f64 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Failed: Wrong value from bam_auxB2f for %s field index %u, got %f expected %f\n".as_ptr(),
+                    tag,
+                    i,
+                    got_f,
+                    expected as f64,
+                );
+                TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            }
+        }
     }
 
     // original: test_update_int (htslib/test/sam.c:136)
-    pub unsafe fn test_sam_c_136_test_update_int() {
-        todo!("translate HTSlib test_update_int from htslib/test/sam.c:136");
+    pub unsafe fn test_sam_c_136_test_update_int(
+        aln: *mut sam::bam1_t,
+        target_id: *const c_char,
+        target_val: i64,
+        expected_type: c_char,
+        next_id: *const c_char,
+        next_val: i64,
+        next_type: c_char,
+    ) -> c_int {
+        if sam::bam_aux_update_int(aln, target_id, target_val) < 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: update %.2s tag\n".as_ptr(),
+                target_id,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            return -1;
+        }
+
+        let mut p = sam::bam_aux_get(aln, target_id);
+        if p.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: find %.2s tag\n".as_ptr(),
+                target_id,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            return -1;
+        }
+        if *p as c_char != expected_type || sam::bam_aux2i(p) != target_val {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: %.2s field is %c:%ld; expected %c:%ld\n".as_ptr(),
+                target_id,
+                *p as c_int,
+                sam::bam_aux2i(p) as libc::c_long,
+                expected_type as c_int,
+                target_val as libc::c_long,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            return -1;
+        }
+
+        if *next_id == 0 {
+            return 0;
+        }
+        p = sam::bam_aux_get(aln, next_id);
+        if p.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: find %.2s tag after updating %.2s\n".as_ptr(),
+                next_id,
+                target_id,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            return -1;
+        }
+        if *p as c_char != next_type || sam::bam_aux2i(p) != next_val {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: after updating %.2s to %ld: %.2s field is %c:%ld; expected %c:%ld\n"
+                    .as_ptr(),
+                target_id,
+                target_val as libc::c_long,
+                next_id,
+                *p as c_int,
+                sam::bam_aux2i(p) as libc::c_long,
+                next_type as c_int,
+                next_val as libc::c_long,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            return -1;
+        }
+        0
     }
 
     // original: test_update_array (htslib/test/sam.c:192)
-    pub unsafe fn test_sam_c_192_test_update_array() {
-        todo!("translate HTSlib test_update_array from htslib/test/sam.c:192");
+    pub unsafe fn test_sam_c_192_test_update_array(
+        aln: *mut sam::bam1_t,
+        target_id: *const c_char,
+        type_: u8,
+        nitems: u32,
+        data: *mut c_void,
+        next_id: *const c_char,
+        next_val: i64,
+        next_type: c_char,
+    ) -> c_int {
+        if sam::bam_aux_update_array(aln, target_id, type_, nitems, data.cast()) < 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: update %.2s tag\n".as_ptr(),
+                target_id,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            return -1;
+        }
+
+        let mut p = sam::bam_aux_get(aln, target_id);
+        if p.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: find %.2s tag\n".as_ptr(),
+                target_id,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            return -1;
+        }
+
+        for i in 0..nitems {
+            let ok = match type_ {
+                b'c' => sam::bam_auxB2i(p, i) == *data.cast::<i8>().add(i as usize) as i64,
+                b'C' => sam::bam_auxB2i(p, i) == *data.cast::<u8>().add(i as usize) as i64,
+                b's' => sam::bam_auxB2i(p, i) == *data.cast::<i16>().add(i as usize) as i64,
+                b'S' => sam::bam_auxB2i(p, i) == *data.cast::<u16>().add(i as usize) as i64,
+                b'i' => sam::bam_auxB2i(p, i) == *data.cast::<i32>().add(i as usize) as i64,
+                b'I' => sam::bam_auxB2i(p, i) == *data.cast::<u32>().add(i as usize) as i64,
+                b'f' => sam::bam_auxB2f(p, i) as f32 == *data.cast::<f32>().add(i as usize),
+                _ => true,
+            };
+            if !ok {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Failed: Wrong value for %.2s field index %u\n".as_ptr(),
+                    target_id,
+                    i,
+                );
+                TEST_SAM_STATUS = libc::EXIT_FAILURE;
+                return -1;
+            }
+        }
+
+        if *next_id == 0 {
+            return 0;
+        }
+        p = sam::bam_aux_get(aln, next_id);
+        if p.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: find %.2s tag after updating %.2s\n".as_ptr(),
+                next_id,
+                target_id,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            return -1;
+        }
+        if *p as c_char != next_type || sam::bam_aux2i(p) != next_val {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: after updating %.2s: %.2s field is %c:%ld; expected %c:%ld\n".as_ptr(),
+                target_id,
+                next_id,
+                *p as c_int,
+                sam::bam_aux2i(p) as libc::c_long,
+                next_type as c_int,
+                next_val as libc::c_long,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            return -1;
+        }
+
+        0
     }
 
     // original: aux_fields1 (htslib/test/sam.c:248)
@@ -1873,22 +6870,291 @@ pub mod functions {
 
     // original: set_qname (htslib/test/sam.c:557)
     pub unsafe fn test_sam_c_557_set_qname() {
-        todo!("translate HTSlib set_qname from htslib/test/sam.c:557");
+        let sam_text = c"data:,@SQ\tSN:one\tLN:1000\n@SQ\tSN:two\tLN:500\nr1\t0\tone\t500\t20\t8M\t*\t0\t0\tATGCATGC\tqqqqqqqq\tXA:A:k\tXi:i:37\tXf:f:3.141592653589793\tXd:d:2.718281828459045\tXZ:Z:Hello, world!\tXH:H:DEADBEEF\tXB:B:c,-2,0,+2\tB0:B:i,-2147483648,-1,0,1,2147483647\tB1:B:I,0,1,2147483648,4294967295\tB2:B:s,-32768,-1,0,1,32767\tB3:B:S,0,1,32768,65535\tB4:B:c,-128,-1,0,1,127\tB5:B:C,0,1,127,255\tBf:B:f,-3.14159,2.71828\tZZ:i:1000000\tF2:d:2.46801\tY1:i:-2147483648\tY2:i:-2147483647\tY3:i:-1\tY4:i:0\tY5:i:1\tY6:i:2147483647\tY7:i:2147483648\tY8:i:4294967295\nr22\t0x8D\t*\t0\t0\t*\t*\t0\t0\tATGC\tqqqq\nr12345678\t0x8D\t*\t0\t0\t*\t*\t0\t0\tATGC\tqqqq\n";
+        let r1 = c"r1\t0\tone\t500\t20\t8M\t*\t0\t0\tATGCATGC\tqqqqqqqq\tXA:A:k\tXi:i:37\tXf:f:3.14159\tXd:d:2.71828\tXZ:Z:Hello, world!\tXH:H:DEADBEEF\tXB:B:c,-2,0,2\tB0:B:i,-2147483648,-1,0,1,2147483647\tB1:B:I,0,1,2147483648,4294967295\tB2:B:s,-32768,-1,0,1,32767\tB3:B:S,0,1,32768,65535\tB4:B:c,-128,-1,0,1,127\tB5:B:C,0,1,127,255\tBf:B:f,-3.14159,2.71828\tZZ:i:1000000\tF2:d:2.46801\tY1:i:-2147483648\tY2:i:-2147483647\tY3:i:-1\tY4:i:0\tY5:i:1\tY6:i:2147483647\tY7:i:2147483648\tY8:i:4294967295";
+        let r2 = c"r234\t141\t*\t0\t0\t*\t*\t0\t0\tATGC\tqqqq";
+        let r3 = c"xyz\t141\t*\t0\t0\t*\t*\t0\t0\tATGC\tqqqq";
+
+        let in_ = crate::htslib_mini_rs::hts::hts_open(sam_text.as_ptr(), c"r".as_ptr());
+        if in_.is_null() {
+            test_sam_bam_set1_fail(c"set_qname".as_ptr(), c"can't open SAM input".as_ptr());
+            return;
+        }
+        let header = sam::sam_hdr_read(in_);
+        if header.is_null() {
+            crate::htslib_mini_rs::hts::hts_close(in_);
+            test_sam_bam_set1_fail(c"set_qname".as_ptr(), c"can't read header".as_ptr());
+            return;
+        }
+        let aln = sam::bam_init1();
+        if aln.is_null() {
+            sam::bam_hdr_destroy(header);
+            crate::htslib_mini_rs::hts::hts_close(in_);
+            test_sam_bam_set1_fail(c"set_qname".as_ptr(), c"can't allocate alignment".as_ptr());
+            return;
+        }
+
+        let mut ks = kstring_t {
+            l: 0,
+            m: 0,
+            s: std::ptr::null_mut(),
+        };
+        let cases = [
+            (c"r1".as_ptr(), r1.as_ptr()),
+            (c"r234".as_ptr(), r2.as_ptr()),
+            (c"xyz".as_ptr(), r3.as_ptr()),
+        ];
+
+        for (qname, expected) in cases {
+            if sam::sam_read1(in_, header, aln) < 0 {
+                test_sam_bam_set1_fail(c"set_qname".as_ptr(), c"can't read record".as_ptr());
+                break;
+            }
+            if sam::bam_set_qname(aln, qname) < 0 {
+                test_sam_bam_set1_fail(c"set_qname".as_ptr(), c"can't set qname".as_ptr());
+                break;
+            }
+            if sam::sam_format1(header, aln, &mut ks) < 0 {
+                test_sam_bam_set1_fail(c"set_qname".as_ptr(), c"can't format record".as_ptr());
+                break;
+            }
+            if libc::strcmp(ks.s, expected) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Failed: record formatted incorrectly:\nGot: \"%s\"\nExp: \"%s\"\n".as_ptr(),
+                    ks.s,
+                    expected,
+                );
+                TEST_SAM_STATUS = libc::EXIT_FAILURE;
+                break;
+            }
+        }
+
+        libc::free(ks.s.cast());
+        sam::bam_destroy1(aln);
+        sam::bam_hdr_destroy(header);
+        crate::htslib_mini_rs::hts::hts_close(in_);
     }
 
     // original: iterators1 (htslib/test/sam.c:604)
     pub unsafe fn test_sam_c_604_iterators1() {
-        todo!("translate HTSlib iterators1 from htslib/test/sam.c:604");
+        crate::htslib_mini_rs::hts::hts_itr_destroy(crate::htslib_mini_rs::sam::sam_itr_queryi(
+            std::ptr::null(),
+            crate::htslib_mini_rs::hts::HTS_IDX_REST,
+            0,
+            0,
+        ));
+        crate::htslib_mini_rs::hts::hts_itr_destroy(crate::htslib_mini_rs::sam::sam_itr_queryi(
+            std::ptr::null(),
+            crate::htslib_mini_rs::hts::HTS_IDX_NONE,
+            0,
+            0,
+        ));
     }
 
     // original: copy_check_alignment (htslib/test/sam.c:612)
-    pub unsafe fn test_sam_c_612_copy_check_alignment() {
-        todo!("translate HTSlib copy_check_alignment from htslib/test/sam.c:612");
+    pub unsafe fn test_sam_c_612_copy_check_alignment(
+        infname: *const c_char,
+        informat: *const c_char,
+        outfname: *const c_char,
+        outmode: *const c_char,
+        outref: *const c_char,
+    ) {
+        let in_ = crate::htslib_mini_rs::hts::hts_open(infname, c"r".as_ptr());
+        let out = crate::htslib_mini_rs::hts::hts_open(outfname, outmode);
+        let aln = sam::bam_init1();
+        let mut header: *mut sam::sam_hdr_t = std::ptr::null_mut();
+
+        if in_.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: couldn't open %s\n".as_ptr(),
+                infname,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            goto_copy_check_alignment_cleanup(in_, out, aln, header);
+            return;
+        }
+        if out.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: couldn't open %s with mode %s\n".as_ptr(),
+                outfname,
+                outmode,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            goto_copy_check_alignment_cleanup(in_, out, aln, header);
+            return;
+        }
+        if aln.is_null() {
+            test_sam_bam_set1_fail(
+                c"copy_check_alignment".as_ptr(),
+                c"bam_init1() failed".as_ptr(),
+            );
+            goto_copy_check_alignment_cleanup(in_, out, aln, header);
+            return;
+        }
+
+        if !outref.is_null()
+            && hts_sys::hts_set_opt(
+                out.cast(),
+                hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE,
+                outref,
+            ) < 0
+        {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: setting reference %s for %s\n".as_ptr(),
+                outref,
+                outfname,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            goto_copy_check_alignment_cleanup(in_, out, aln, header);
+            return;
+        }
+
+        header = sam::sam_hdr_read(in_);
+        if header.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: reading header from %s\n".as_ptr(),
+                infname,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            goto_copy_check_alignment_cleanup(in_, out, aln, header);
+            return;
+        }
+        if sam::sam_hdr_write(out, header) < 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: writing headers to %s\n".as_ptr(),
+                outfname,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+        }
+
+        loop {
+            let res = sam::sam_read1(in_, header, aln);
+            if res < 0 {
+                if res < -1 {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"Failed: failed to read alignment from %s\n".as_ptr(),
+                        infname,
+                    );
+                    TEST_SAM_STATUS = libc::EXIT_FAILURE;
+                }
+                break;
+            }
+
+            let mod4 = (sam::bam_get_cigar(aln) as isize % 4) as c_int;
+            if mod4 != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Failed: %s CIGAR not 4-byte aligned; offset is 4k+%d for \"%s\"\n".as_ptr(),
+                    informat,
+                    mod4,
+                    sam::bam_get_qname(aln),
+                );
+                TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            }
+
+            if sam::sam_c_4553_sam_write1(out, header, aln) < 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Failed: writing to %s\n".as_ptr(),
+                    outfname,
+                );
+                TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            }
+        }
+
+        goto_copy_check_alignment_cleanup(in_, out, aln, header);
+    }
+
+    unsafe fn goto_copy_check_alignment_cleanup(
+        in_: *mut htsFile,
+        out: *mut htsFile,
+        aln: *mut sam::bam1_t,
+        header: *mut sam::sam_hdr_t,
+    ) {
+        sam::bam_destroy1(aln);
+        sam::bam_hdr_destroy(header);
+        if !in_.is_null() {
+            crate::htslib_mini_rs::hts::hts_close(in_);
+        }
+        if !out.is_null() {
+            crate::htslib_mini_rs::hts::hts_close(out);
+        }
     }
 
     // original: check_target_names (htslib/test/sam.c:669)
-    pub unsafe fn test_sam_c_669_check_target_names() {
-        todo!("translate HTSlib check_target_names from htslib/test/sam.c:669");
+    pub unsafe fn test_sam_c_669_check_target_names(
+        header: *mut sam::sam_hdr_t,
+        expected_n_targets: c_int,
+        expected_targets: *mut *const c_char,
+        expected_lengths: *const c_int,
+    ) -> c_int {
+        if (*header).target_name.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: target_name is NULL\n".as_ptr(),
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            return -1;
+        }
+        if (*header).target_len.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: target_len is NULL\n".as_ptr(),
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            return -1;
+        }
+        if (*header).n_targets != expected_n_targets {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: header->n_targets (%d) != expected_n_targets (%d)\n".as_ptr(),
+                (*header).n_targets,
+                expected_n_targets,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            return -1;
+        }
+
+        for i in 0..expected_n_targets {
+            let name = *(*header).target_name.add(i as usize);
+            let expected_name = *expected_targets.add(i as usize);
+            if name.is_null() || libc::strcmp(name, expected_name) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Failed: header->target_name[%d] (%s) != \"%s\"\n".as_ptr(),
+                    i,
+                    if name.is_null() {
+                        c"NULL".as_ptr()
+                    } else {
+                        name
+                    },
+                    expected_name,
+                );
+                TEST_SAM_STATUS = libc::EXIT_FAILURE;
+                return -1;
+            }
+            let len = *(*header).target_len.add(i as usize) as c_int;
+            let expected_len = *expected_lengths.add(i as usize);
+            if len != expected_len {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Failed: header->target_len[%d] (%d) != %d\n".as_ptr(),
+                    i,
+                    len,
+                    expected_len,
+                );
+                TEST_SAM_STATUS = libc::EXIT_FAILURE;
+                return -1;
+            }
+        }
+        0
     }
 
     // original: use_header_api (htslib/test/sam.c:705)
@@ -1928,12 +7194,66 @@ pub mod functions {
 
     // original: samrecord_layout (htslib/test/sam.c:1348)
     pub unsafe fn test_sam_c_1348_samrecord_layout() {
-        todo!("translate HTSlib samrecord_layout from htslib/test/sam.c:1348");
+        let core_size = if std::mem::size_of::<hts_pos_t>() == 8 {
+            48
+        } else {
+            36
+        };
+        let bam1_t_size = core_size
+            + std::mem::size_of::<c_int>()
+            + std::mem::size_of::<*mut c_char>()
+            + std::mem::size_of::<u64>()
+            + 2 * std::mem::size_of::<u32>();
+        let bam1_t_size2 = bam1_t_size + 4;
+
+        let actual_core = std::mem::size_of::<sam::bam1_core_t>();
+        if actual_core != core_size {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: sizeof bam1_core_t is %zu, expected %d\n".as_ptr(),
+                actual_core,
+                core_size as c_int,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+        }
+
+        let actual_bam = std::mem::size_of::<sam::bam1_t>();
+        if actual_bam != bam1_t_size && actual_bam != bam1_t_size2 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: sizeof bam1_t is %zu, expected either %zu or %zu\n".as_ptr(),
+                actual_bam,
+                bam1_t_size,
+                bam1_t_size2,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+        }
     }
 
     // original: check_ref_lengths (htslib/test/sam.c:1388)
-    pub unsafe fn test_sam_c_1388_check_ref_lengths() {
-        todo!("translate HTSlib check_ref_lengths from htslib/test/sam.c:1388");
+    pub unsafe fn test_sam_c_1388_check_ref_lengths(
+        header: *const sam::sam_hdr_t,
+        expected_lengths: *const hts_pos_t,
+        num_refs: c_int,
+        hdr_name: *const c_char,
+    ) -> c_int {
+        for i in 0..num_refs {
+            let ln = sam::sam_hdr_tid2len(header, i);
+            let expected = *expected_lengths.add(i as usize);
+            if ln != expected {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Failed: Wrong length for %s ref %d : expected %ld got %ld\n".as_ptr(),
+                    hdr_name,
+                    i,
+                    expected as libc::c_long,
+                    ln as libc::c_long,
+                );
+                TEST_SAM_STATUS = libc::EXIT_FAILURE;
+                return -1;
+            }
+        }
+        0
     }
 
     // original: check_big_ref (htslib/test/sam.c:1405)
@@ -1942,48 +7262,495 @@ pub mod functions {
     }
 
     // original: faidx1 (htslib/test/sam.c:1578)
-    pub unsafe fn test_sam_c_1578_faidx1() {
-        todo!("translate HTSlib faidx1 from htslib/test/sam.c:1578");
+    pub unsafe fn test_sam_c_1578_faidx1(filename: *const c_char) {
+        let mut n_exp = 0;
+        let mut n_fq_exp = 0;
+        let fin = libc::fopen(filename, c"rb".as_ptr());
+        if fin.is_null() {
+            test_sam_bam_set1_fail(c"faidx1".as_ptr(), c"can't open input file".as_ptr());
+            return;
+        }
+
+        let tmp_len = libc::strlen(filename) + 5;
+        let tmpfilename = libc::malloc(tmp_len).cast::<c_char>();
+        if tmpfilename.is_null() {
+            libc::fclose(fin);
+            test_sam_bam_set1_fail(
+                c"faidx1".as_ptr(),
+                c"can't allocate temporary name".as_ptr(),
+            );
+            return;
+        }
+        libc::snprintf(tmpfilename, tmp_len, c"%s.tmp".as_ptr(), filename);
+
+        let fout = libc::fopen(tmpfilename, c"wb".as_ptr());
+        if fout.is_null() {
+            libc::fclose(fin);
+            libc::free(tmpfilename.cast());
+            test_sam_bam_set1_fail(c"faidx1".as_ptr(), c"can't create temporary file".as_ptr());
+            return;
+        }
+
+        let mut line = [0 as c_char; 500];
+        while !libc::fgets(line.as_mut_ptr(), line.len() as c_int, fin).is_null() {
+            if line[0] == b'>' as c_char {
+                n_exp += 1;
+            }
+            if line[0] == b'+' as c_char && line[1] == b'\n' as c_char {
+                n_fq_exp += 1;
+            }
+            libc::fputs(line.as_ptr(), fout);
+        }
+        libc::fclose(fin);
+        libc::fclose(fout);
+
+        if n_exp == 0 && n_fq_exp != 0 {
+            n_exp = n_fq_exp;
+        }
+
+        if crate::htslib_mini_rs::faidx::fai_build(tmpfilename) < 0 {
+            test_sam_bam_set1_fail(c"faidx1".as_ptr(), c"can't index temporary file".as_ptr());
+            goto_faidx1_cleanup(tmpfilename);
+            return;
+        }
+        let fai = crate::htslib_mini_rs::faidx::fai_load(tmpfilename);
+        if fai.is_null() {
+            test_sam_bam_set1_fail(c"faidx1".as_ptr(), c"can't load faidx file".as_ptr());
+            goto_faidx1_cleanup(tmpfilename);
+            return;
+        }
+
+        let n = crate::htslib_mini_rs::faidx::faidx_fetch_nseq(fai);
+        if n != n_exp {
+            test_sam_bam_set1_fail(
+                c"faidx1".as_ptr(),
+                c"faidx_fetch_nseq returned unexpected count".as_ptr(),
+            );
+        }
+        let n = crate::htslib_mini_rs::faidx::faidx_nseq(fai);
+        if n != n_exp {
+            test_sam_bam_set1_fail(
+                c"faidx1".as_ptr(),
+                c"faidx_nseq returned unexpected count".as_ptr(),
+            );
+        }
+
+        crate::htslib_mini_rs::faidx::fai_destroy(fai);
+        goto_faidx1_cleanup(tmpfilename);
+    }
+
+    unsafe fn goto_faidx1_cleanup(tmpfilename: *mut c_char) {
+        let fai_len = libc::strlen(tmpfilename) + 5;
+        let fai_name = libc::malloc(fai_len).cast::<c_char>();
+        if !fai_name.is_null() {
+            libc::snprintf(fai_name, fai_len, c"%s.fai".as_ptr(), tmpfilename);
+            libc::unlink(fai_name);
+            libc::free(fai_name.cast());
+        }
+        libc::unlink(tmpfilename);
+        libc::free(tmpfilename.cast());
     }
 
     // original: test_empty_sam_file (htslib/test/sam.c:1618)
-    pub unsafe fn test_sam_c_1618_test_empty_sam_file() {
-        todo!("translate HTSlib test_empty_sam_file from htslib/test/sam.c:1618");
+    pub unsafe fn test_sam_c_1618_test_empty_sam_file(filename: *const c_char) {
+        let in_ = crate::htslib_mini_rs::hts::hts_open(filename, c"r".as_ptr());
+        if in_.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_empty_sam_file".as_ptr(),
+                c"can't open file to read as SAM".as_ptr(),
+            );
+            return;
+        }
+
+        let format = (*crate::htslib_mini_rs::hts::hts_get_format(in_)).format;
+        let aln = sam::bam_init1();
+        let header = sam::sam_hdr_read(in_);
+        let ret = sam::sam_read1(in_, header, aln);
+
+        if format != crate::htslib_mini_rs::hts::HTS_FORMAT_EMPTY_FORMAT {
+            test_sam_bam_set1_fail(
+                c"test_empty_sam_file".as_ptr(),
+                c"empty file detected as unexpected format".as_ptr(),
+            );
+        }
+        if !header.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_empty_sam_file".as_ptr(),
+                c"sam_hdr_read from empty file should fail".as_ptr(),
+            );
+        }
+        if ret >= -1 {
+            test_sam_bam_set1_fail(
+                c"test_empty_sam_file".as_ptr(),
+                c"sam_read1 from empty file should fail".as_ptr(),
+            );
+        }
+
+        sam::bam_destroy1(aln);
+        sam::sam_hdr_destroy(header);
+        crate::htslib_mini_rs::hts::hts_close(in_);
     }
 
     // original: test_text_file (htslib/test/sam.c:1641)
-    pub unsafe fn test_sam_c_1641_test_text_file() {
-        todo!("translate HTSlib test_text_file from htslib/test/sam.c:1641");
+    pub unsafe fn test_sam_c_1641_test_text_file(filename: *const c_char, nexp: c_int) {
+        let in_ = crate::htslib_mini_rs::hts::hts_open(filename, c"r".as_ptr());
+        if in_.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_text_file".as_ptr(),
+                c"can't open file to read as text".as_ptr(),
+            );
+            return;
+        }
+
+        let mut str_ = kstring_t {
+            l: 0,
+            m: 0,
+            s: std::ptr::null_mut(),
+        };
+        let mut n = 0;
+        let mut ret;
+        loop {
+            ret = crate::htslib_mini_rs::hts::hts_getline(in_, b'\n' as c_int, &mut str_);
+            if ret < 0 {
+                break;
+            }
+            let len = libc::strlen(str_.s);
+            n += 1;
+            if ret as usize != len {
+                test_sam_bam_set1_fail(
+                    c"test_text_file".as_ptr(),
+                    c"hts_getline read unexpected line length".as_ptr(),
+                );
+            }
+        }
+        if ret != -1 {
+            test_sam_bam_set1_fail(
+                c"test_text_file".as_ptr(),
+                c"hts_getline got an error".as_ptr(),
+            );
+        }
+        if n != nexp {
+            test_sam_bam_set1_fail(
+                c"test_text_file".as_ptr(),
+                c"hts_getline read unexpected number of lines".as_ptr(),
+            );
+        }
+
+        crate::htslib_mini_rs::hts::hts_close(in_);
+        libc::free(str_.s.cast());
     }
 
     // original: check_enum1 (htslib/test/sam.c:1661)
     pub unsafe fn test_sam_c_1661_check_enum1() {
-        todo!("translate HTSlib check_enum1 from htslib/test/sam.c:1661");
+        if hts_sys::htsCompression_no_compression != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: no_compression is %d\n".as_ptr(),
+                hts_sys::htsCompression_no_compression,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+        }
+        if hts_sys::htsCompression_gzip != 1 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: gzip is %d\n".as_ptr(),
+                hts_sys::htsCompression_gzip,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+        }
+        if hts_sys::htsCompression_bgzf != 2 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: bgzf is %d\n".as_ptr(),
+                hts_sys::htsCompression_bgzf,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+        }
     }
 
     // original: check_cigar_tab (htslib/test/sam.c:1669)
     pub unsafe fn test_sam_c_1669_check_cigar_tab() {
-        todo!("translate HTSlib check_cigar_tab from htslib/test/sam.c:1669");
+        let cigar_str = b"MIDNSHP=XB";
+        let mut cigar_table = [-1_i8; 256];
+        for (i, ch) in cigar_str.iter().copied().enumerate() {
+            cigar_table[ch as usize] = i as i8;
+        }
+
+        let n_neg = cigar_table.iter().filter(|value| **value < 0).count();
+        if n_neg + cigar_str.len() != 256 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: bam_cigar_table has %d unset entries\n".as_ptr(),
+                n_neg as c_int,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+        }
+
+        for (i, ch) in cigar_str.iter().copied().enumerate() {
+            if cigar_table[ch as usize] != i as i8 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Failed: bam_cigar_table['%c'] is not %d\n".as_ptr(),
+                    ch as c_int,
+                    i as c_int,
+                );
+                TEST_SAM_STATUS = libc::EXIT_FAILURE;
+            }
+        }
+    }
+
+    unsafe fn goto_generator_cleanup(f: *mut libc::FILE, ref_: *mut c_char, res: c_int) -> c_int {
+        if !f.is_null() {
+            libc::fclose(f);
+        }
+        libc::free(ref_.cast());
+        res
     }
 
     // original: generator (htslib/test/sam.c:1688)
-    pub unsafe fn test_sam_c_1688_generator() {
-        todo!("translate HTSlib generator from htslib/test/sam.c:1688");
+    pub unsafe fn test_sam_c_1688_generator(name: *const c_char) -> c_int {
+        const MAX_RECS: usize = 1000;
+        const SEQ_LEN: usize = 100;
+
+        let mut res = -1;
+        let f = libc::fopen(name, c"w".as_ptr());
+        if f.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Couldn't open \"%s\"\n".as_ptr(),
+                name,
+            );
+            return -1;
+        }
+
+        let ref_ = libc::malloc(MAX_RECS + SEQ_LEN + 1).cast::<c_char>();
+        if ref_.is_null() {
+            libc::fclose(f);
+            return -1;
+        }
+
+        let mut lfsr = 0xbadcafe_u32;
+        for i in 0..(MAX_RECS + SEQ_LEN) {
+            lfsr ^= lfsr << 13;
+            lfsr ^= lfsr >> 17;
+            lfsr ^= lfsr << 5;
+            *ref_.add(i) = *c"ACGT".as_ptr().add((lfsr & 3) as usize);
+        }
+        *ref_.add(MAX_RECS + SEQ_LEN) = 0;
+
+        let mut qual = [0 as c_char; SEQ_LEN + 1];
+        for (i, q) in qual.iter_mut().take(SEQ_LEN).enumerate() {
+            *q = (b'A' + (i as u8 & 0xf)) as c_char;
+        }
+
+        if libc::fputs(c"@HD\tVN:1.4\n".as_ptr(), f) < 0 {
+            goto_generator_cleanup(f, ref_, res);
+            return res;
+        }
+        if libc::fprintf(
+            f,
+            c"@SQ\tSN:ref1\tLN:%d\n".as_ptr(),
+            (MAX_RECS + SEQ_LEN) as c_int,
+        ) < 0
+        {
+            goto_generator_cleanup(f, ref_, res);
+            return res;
+        }
+        for i in 0..MAX_RECS {
+            if libc::fprintf(
+                f,
+                c"read%zu\t0\tref1\t%zu\t64\t100M\t*\t0\t0\t%.*s\t%.*s\n".as_ptr(),
+                i + 1,
+                i + 1,
+                SEQ_LEN as c_int,
+                ref_.add(i),
+                SEQ_LEN as c_int,
+                qual.as_ptr(),
+            ) < 0
+            {
+                goto_generator_cleanup(f, ref_, res);
+                return res;
+            }
+        }
+
+        if libc::fclose(f) == 0 {
+            res = 0;
+        }
+        libc::free(ref_.cast());
+        res
     }
 
     // original: read_data_block (htslib/test/sam.c:1735)
-    pub unsafe fn test_sam_c_1735_read_data_block() {
-        todo!("translate HTSlib read_data_block from htslib/test/sam.c:1735");
+    pub unsafe fn test_sam_c_1735_read_data_block(
+        in_name: *const c_char,
+        fp_in: *mut htsFile,
+        out_name: *const c_char,
+        fp_out: *mut htsFile,
+        header: *mut sam::sam_hdr_t,
+        recs: *mut sam::bam1_t,
+        max_recs: usize,
+        buffer: *mut u8,
+        bufsz: usize,
+        nrecs_out: *mut usize,
+    ) -> c_int {
+        let mut buff_used = 0usize;
+        let mut nrecs = 0usize;
+        let mut ret = -1;
+        let mut res = -1;
+
+        while nrecs < max_recs {
+            let rec = recs.add(nrecs);
+            sam::bam_set_mempolicy(rec, sam::BAM_USER_OWNS_STRUCT | sam::BAM_USER_OWNS_DATA);
+            (*rec).data = buffer.add(buff_used);
+            (*rec).m_data = (bufsz - buff_used) as u32;
+
+            res = sam::sam_read1(fp_in, header, rec);
+            if res < 0 {
+                break;
+            }
+
+            if !fp_out.is_null() && sam::sam_c_4553_sam_write1(fp_out, header, rec) < 0 {
+                nrecs += 1;
+                test_sam_bam_set1_fail(c"read_data_block".as_ptr(), c"sam_write1 failed".as_ptr());
+                *nrecs_out = nrecs;
+                return ret;
+            }
+
+            if (sam::bam_get_mempolicy(rec) & sam::BAM_USER_OWNS_DATA) != 0 {
+                let new_m_data = (((*rec).l_data as u32) + 7) & !7u32;
+                if new_m_data < (*rec).m_data {
+                    (*rec).m_data = new_m_data;
+                }
+                buff_used += (*rec).m_data as usize;
+            }
+
+            nrecs += 1;
+        }
+
+        if res < -1 {
+            let _ = in_name;
+            test_sam_bam_set1_fail(c"read_data_block".as_ptr(), c"sam_read1 failed".as_ptr());
+        } else {
+            ret = 0;
+        }
+        let _ = out_name;
+        *nrecs_out = nrecs;
+        ret
     }
 
     // original: test_parse_decimal1 (htslib/test/sam.c:1781)
-    pub unsafe fn test_sam_c_1781_test_parse_decimal1() {
-        todo!("translate HTSlib test_parse_decimal1 from htslib/test/sam.c:1781");
+    pub unsafe fn test_sam_c_1781_test_parse_decimal1(
+        exp: i64,
+        str_: *const c_char,
+        exp_consumed: usize,
+        flags: c_int,
+        warning: *const c_char,
+    ) {
+        if !warning.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"(Expect %s message for \"%s\")\n".as_ptr(),
+                warning,
+                str_,
+            );
+        }
+
+        let mut val =
+            crate::htslib_mini_rs::hts::hts_parse_decimal(str_, std::ptr::null_mut(), flags);
+        if val != exp {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: hts_parse_decimal(\"%s\", NULL, %d) returned %lld, expected %lld\n"
+                    .as_ptr(),
+                str_,
+                flags,
+                val as libc::c_longlong,
+                exp as libc::c_longlong,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+        }
+
+        let mut end: *mut c_char = std::ptr::null_mut();
+        val = crate::htslib_mini_rs::hts::hts_parse_decimal(str_, &mut end, flags);
+        if val != exp {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: hts_parse_decimal(\"%s\", ..., %d) returned %lld, expected %lld\n"
+                    .as_ptr(),
+                str_,
+                flags,
+                val as libc::c_longlong,
+                exp as libc::c_longlong,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+        }
+
+        let consumed = end.offset_from(str_) as usize;
+        if consumed != exp_consumed {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Failed: hts_parse_decimal(\"%s\", ..., %d) consumed %zu chars, expected %zu\n"
+                    .as_ptr(),
+                str_,
+                flags,
+                consumed,
+                exp_consumed,
+            );
+            TEST_SAM_STATUS = libc::EXIT_FAILURE;
+        }
     }
 
     // original: test_parse_decimal (htslib/test/sam.c:1795)
     pub unsafe fn test_sam_c_1795_test_parse_decimal() {
-        todo!("translate HTSlib test_parse_decimal from htslib/test/sam.c:1795");
+        test_sam_c_1781_test_parse_decimal1(37, c"+37".as_ptr(), 3, 0, std::ptr::null());
+        test_sam_c_1781_test_parse_decimal1(
+            -1001,
+            c" \t -1,001x".as_ptr(),
+            9,
+            crate::htslib_mini_rs::hts::HTS_PARSE_THOUSANDS_SEP,
+            c"trailing 'x'".as_ptr(),
+        );
+        test_sam_c_1781_test_parse_decimal1(
+            i64::MAX,
+            c"+9223372036854775807".as_ptr(),
+            20,
+            0,
+            std::ptr::null(),
+        );
+        test_sam_c_1781_test_parse_decimal1(
+            i64::MIN,
+            c"-9,223,372,036,854,775,808".as_ptr(),
+            26,
+            crate::htslib_mini_rs::hts::HTS_PARSE_THOUSANDS_SEP,
+            std::ptr::null(),
+        );
+        test_sam_c_1781_test_parse_decimal1(1500, c"1.5e3".as_ptr(), 5, 0, std::ptr::null());
+        test_sam_c_1781_test_parse_decimal1(
+            1500,
+            c"1.5e+3k".as_ptr(),
+            6,
+            0,
+            c"trailing 'k'".as_ptr(),
+        );
+        test_sam_c_1781_test_parse_decimal1(1500000000, c"1.5G".as_ptr(), 4, 0, std::ptr::null());
+        test_sam_c_1781_test_parse_decimal1(12345, c"12.345k".as_ptr(), 7, 0, std::ptr::null());
+        test_sam_c_1781_test_parse_decimal1(
+            12345,
+            c"12.3456k".as_ptr(),
+            8,
+            0,
+            c"dropped fraction".as_ptr(),
+        );
+        test_sam_c_1781_test_parse_decimal1(0, c"A".as_ptr(), 0, 0, c"invalid numeric".as_ptr());
+        test_sam_c_1781_test_parse_decimal1(0, c"G".as_ptr(), 0, 0, c"invalid numeric".as_ptr());
+        test_sam_c_1781_test_parse_decimal1(0, c" +/-".as_ptr(), 0, 0, c"invalid numeric".as_ptr());
+        test_sam_c_1781_test_parse_decimal1(
+            0,
+            c" \t -.e+9999".as_ptr(),
+            0,
+            0,
+            c"invalid numeric".as_ptr(),
+        );
     }
 
     // original: test_mempolicy (htslib/test/sam.c:1812)
@@ -1993,52 +7760,793 @@ pub mod functions {
 
     // original: test_bam_set1_minimal (htslib/test/sam.c:2000)
     pub unsafe fn test_sam_c_2000_test_bam_set1_minimal() {
-        todo!("translate HTSlib test_bam_set1_minimal from htslib/test/sam.c:2000");
+        let bam = sam::bam_init1();
+        if bam.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_minimal".as_ptr(),
+                c"failed to initialize BAM struct.".as_ptr(),
+            );
+            return;
+        }
+
+        let r = sam::bam_set1(
+            bam,
+            0,
+            std::ptr::null(),
+            sam::BAM_FUNMAP as u16,
+            -1,
+            0,
+            0xff,
+            0,
+            std::ptr::null(),
+            -1,
+            0,
+            0,
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        );
+        if r != 4
+            || (*bam).core.l_qname != 4
+            || (*bam).core.l_extranul != 2
+            || libc::strcmp(sam::bam_get_qname(bam), c"*".as_ptr()) != 0
+            || (*bam).core.pos != 0
+            || (*bam).core.tid != -1
+            || (*bam).core.bin as c_int != crate::htslib_mini_rs::hts::hts_reg2bin(0, 1, 14, 5)
+            || (*bam).core.qual != 0xff
+            || (*bam).core.flag as c_int != sam::BAM_FUNMAP
+            || (*bam).core.n_cigar != 0
+            || (*bam).core.mtid != -1
+            || (*bam).core.mpos != 0
+            || (*bam).core.isize != 0
+            || (*bam).core.l_qseq != 0
+            || sam::bam_get_l_aux(bam) != 0
+        {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_minimal".as_ptr(),
+                c"bam_set1 minimal checks failed.".as_ptr(),
+            );
+        }
+        sam::bam_destroy1(bam);
     }
 
     // original: test_bam_set1_full (htslib/test/sam.c:2031)
     pub unsafe fn test_sam_c_2031_test_bam_set1_full() {
-        todo!("translate HTSlib test_bam_set1_full from htslib/test/sam.c:2031");
+        let qname = c"!??AAA~~~~".as_ptr();
+        let cigar = [
+            (6u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CMATCH as u32,
+            (2u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CINS as u32,
+            (2u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CMATCH as u32,
+        ];
+        let seq = c"TGGACTACGA".as_ptr();
+        let qual = c"DBBBB+=7=0".as_ptr();
+        let bam = sam::bam_init1();
+        if bam.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_full".as_ptr(),
+                c"failed to initialize BAM struct.".as_ptr(),
+            );
+            return;
+        }
+
+        let r = sam::bam_set1(
+            bam,
+            libc::strlen(qname),
+            qname,
+            sam::BAM_FREVERSE as u16,
+            1,
+            1000,
+            42,
+            cigar.len(),
+            cigar.as_ptr(),
+            2,
+            2000,
+            3000,
+            libc::strlen(seq),
+            seq,
+            qual,
+            64,
+        );
+
+        let mut ok = r == 39
+            && (*bam).core.l_qname == 12
+            && (*bam).core.l_extranul == 1
+            && libc::strcmp(sam::bam_get_qname(bam), qname) == 0
+            && (*bam).core.n_cigar as usize == cigar.len()
+            && libc::memcmp(
+                sam::bam_get_cigar(bam).cast(),
+                cigar.as_ptr().cast(),
+                std::mem::size_of_val(&cigar),
+            ) == 0
+            && (*bam).core.l_qseq as usize == libc::strlen(seq)
+            && libc::memcmp(
+                sam::bam_get_qual(bam).cast(),
+                qual.cast(),
+                libc::strlen(seq),
+            ) == 0
+            && (*bam).core.pos == 1000
+            && (*bam).core.tid == 1
+            && (*bam).core.bin as c_int
+                == crate::htslib_mini_rs::hts::hts_reg2bin(1000, 1010, 14, 5)
+            && (*bam).core.qual == 42
+            && (*bam).core.flag as c_int == sam::BAM_FREVERSE
+            && (*bam).core.mtid == 2
+            && (*bam).core.mpos == 2000
+            && (*bam).core.isize == 3000
+            && sam::bam_get_l_aux(bam) == 0
+            && (*bam).m_data as i64 - (*bam).l_data as i64 >= 64;
+        for i in 0..libc::strlen(seq) {
+            ok &= sam::bam_seqi(sam::bam_get_seq(bam), i)
+                == sam::SEQ_NT16_TABLE[*seq.add(i) as u8 as usize];
+        }
+        if !ok {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_full".as_ptr(),
+                c"bam_set1 full checks failed.".as_ptr(),
+            );
+        }
+        sam::bam_destroy1(bam);
     }
 
     // original: test_bam_set1_even_and_odd_seq_len (htslib/test/sam.c:2078)
     pub unsafe fn test_sam_c_2078_test_bam_set1_even_and_odd_seq_len() {
-        todo!("translate HTSlib test_bam_set1_even_and_odd_seq_len from htslib/test/sam.c:2078");
+        let bam = sam::bam_init1();
+        if bam.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_even_and_odd_seq_len".as_ptr(),
+                c"failed to initialize BAM struct.".as_ptr(),
+            );
+            return;
+        }
+        for seq in [c"TGGACTACGA".as_ptr(), c"TGGACTACGAC".as_ptr()] {
+            let r = sam::bam_set1(
+                bam,
+                0,
+                std::ptr::null(),
+                sam::BAM_FUNMAP as u16,
+                0,
+                0,
+                0,
+                0,
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                libc::strlen(seq),
+                seq,
+                std::ptr::null(),
+                0,
+            );
+            let mut ok = r >= 0 && (*bam).core.l_qseq as usize == libc::strlen(seq);
+            for i in 0..libc::strlen(seq) {
+                ok &= sam::bam_seqi(sam::bam_get_seq(bam), i)
+                    == sam::SEQ_NT16_TABLE[*seq.add(i) as u8 as usize];
+            }
+            if !ok {
+                test_sam_bam_set1_fail(
+                    c"test_bam_set1_even_and_odd_seq_len".as_ptr(),
+                    c"sequence checks failed.".as_ptr(),
+                );
+                break;
+            }
+        }
+        sam::bam_destroy1(bam);
     }
 
     // original: test_bam_set1_with_seq_but_no_qual (htslib/test/sam.c:2108)
     pub unsafe fn test_sam_c_2108_test_bam_set1_with_seq_but_no_qual() {
-        todo!("translate HTSlib test_bam_set1_with_seq_but_no_qual from htslib/test/sam.c:2108");
+        let seq = c"TGGACTACGA".as_ptr();
+        let bam = sam::bam_init1();
+        if bam.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_with_seq_but_no_qual".as_ptr(),
+                c"failed to initialize BAM struct.".as_ptr(),
+            );
+            return;
+        }
+        let r = sam::bam_set1(
+            bam,
+            0,
+            std::ptr::null(),
+            sam::BAM_FUNMAP as u16,
+            0,
+            0,
+            0,
+            0,
+            std::ptr::null(),
+            0,
+            0,
+            0,
+            libc::strlen(seq),
+            seq,
+            std::ptr::null(),
+            0,
+        );
+        let mut ok = r >= 0 && (*bam).core.l_qseq as usize == libc::strlen(seq);
+        for i in 0..libc::strlen(seq) {
+            ok &= sam::bam_seqi(sam::bam_get_seq(bam), i)
+                == sam::SEQ_NT16_TABLE[*seq.add(i) as u8 as usize]
+                && *sam::bam_get_qual(bam).add(i) == 0xff;
+        }
+        if !ok {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_with_seq_but_no_qual".as_ptr(),
+                c"sequence or quality checks failed.".as_ptr(),
+            );
+        }
+        sam::bam_destroy1(bam);
     }
 
     // original: test_bam_set1_validate_qname (htslib/test/sam.c:2132)
     pub unsafe fn test_sam_c_2132_test_bam_set1_validate_qname() {
-        todo!("translate HTSlib test_bam_set1_validate_qname from htslib/test/sam.c:2132");
+        let bam = sam::bam_init1();
+        if bam.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_validate_qname".as_ptr(),
+                c"failed to initialize BAM struct.".as_ptr(),
+            );
+            return;
+        }
+        let too_long = [b'A' as c_char; 255];
+        let r = sam::bam_set1(
+            bam,
+            too_long.len(),
+            too_long.as_ptr(),
+            sam::BAM_FUNMAP as u16,
+            -1,
+            0,
+            0xff,
+            0,
+            std::ptr::null(),
+            -1,
+            0,
+            0,
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        );
+        if r >= 0 || *libc::__errno_location() != libc::EINVAL {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_validate_qname".as_ptr(),
+                c"qname validation failed.".as_ptr(),
+            );
+        }
+        sam::bam_destroy1(bam);
     }
 
     // original: test_bam_set1_validate_seq (htslib/test/sam.c:2149)
     pub unsafe fn test_sam_c_2149_test_bam_set1_validate_seq() {
-        todo!("translate HTSlib test_bam_set1_validate_seq from htslib/test/sam.c:2149");
+        let bam = sam::bam_init1();
+        if bam.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_validate_seq".as_ptr(),
+                c"failed to initialize BAM struct.".as_ptr(),
+            );
+            return;
+        }
+        let sequence = c"C".as_ptr();
+        let r = sam::bam_set1(
+            bam,
+            0,
+            std::ptr::null(),
+            sam::BAM_FUNMAP as u16,
+            -1,
+            0,
+            0xff,
+            0,
+            std::ptr::null(),
+            -1,
+            0,
+            0,
+            i32::MAX as usize + 1,
+            sequence,
+            std::ptr::null(),
+            0,
+        );
+        if r >= 0 || *libc::__errno_location() != libc::EINVAL {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_validate_seq".as_ptr(),
+                c"sequence validation failed.".as_ptr(),
+            );
+        }
+        sam::bam_destroy1(bam);
     }
 
     // original: test_bam_set1_validate_cigar (htslib/test/sam.c:2166)
     pub unsafe fn test_sam_c_2166_test_bam_set1_validate_cigar() {
-        todo!("translate HTSlib test_bam_set1_validate_cigar from htslib/test/sam.c:2166");
+        let cigar = [(20u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CMATCH as u32];
+        let seq = c"TGGACTACGA".as_ptr();
+        let bam = sam::bam_init1();
+        if bam.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_validate_cigar".as_ptr(),
+                c"failed to initialize BAM struct.".as_ptr(),
+            );
+            return;
+        }
+
+        let r1 = sam::bam_set1(
+            bam,
+            0,
+            std::ptr::null(),
+            0,
+            -1,
+            0,
+            0xff,
+            0,
+            std::ptr::null(),
+            -1,
+            0,
+            0,
+            libc::strlen(seq),
+            seq,
+            std::ptr::null(),
+            0,
+        );
+        let e1 = *libc::__errno_location();
+        let r2 = sam::bam_set1(
+            bam,
+            0,
+            std::ptr::null(),
+            0,
+            -1,
+            crate::htslib_mini_rs::hts::HTS_POS_MAX - 10,
+            0xff,
+            cigar.len(),
+            cigar.as_ptr(),
+            -1,
+            0,
+            0,
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        );
+        let e2 = *libc::__errno_location();
+        let r3 = sam::bam_set1(
+            bam,
+            0,
+            std::ptr::null(),
+            0,
+            -1,
+            0,
+            0xff,
+            cigar.len(),
+            cigar.as_ptr(),
+            -1,
+            0,
+            0,
+            libc::strlen(seq),
+            seq,
+            std::ptr::null(),
+            0,
+        );
+        let e3 = *libc::__errno_location();
+        if r1 >= 0
+            || e1 != libc::EINVAL
+            || r2 >= 0
+            || e2 != libc::EINVAL
+            || r3 >= 0
+            || e3 != libc::EINVAL
+        {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_validate_cigar".as_ptr(),
+                c"cigar validation failed.".as_ptr(),
+            );
+        }
+        sam::bam_destroy1(bam);
     }
 
     // original: test_bam_set1_validate_size_limits (htslib/test/sam.c:2195)
     pub unsafe fn test_sam_c_2195_test_bam_set1_validate_size_limits() {
-        todo!("translate HTSlib test_bam_set1_validate_size_limits from htslib/test/sam.c:2195");
+        let cigar = [(20u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CMATCH as u32];
+        let seq = c"TGGACTACGA".as_ptr();
+        let bam = sam::bam_init1();
+        if bam.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_validate_size_limits".as_ptr(),
+                c"failed to initialize BAM struct.".as_ptr(),
+            );
+            return;
+        }
+        let r1 = sam::bam_set1(
+            bam,
+            0,
+            std::ptr::null(),
+            sam::BAM_FUNMAP as u16,
+            -1,
+            0,
+            0xff,
+            0,
+            std::ptr::null(),
+            -1,
+            0,
+            0,
+            2 * (i32::MAX as usize) / 3,
+            seq,
+            std::ptr::null(),
+            0,
+        );
+        let e1 = *libc::__errno_location();
+        let r2 = sam::bam_set1(
+            bam,
+            0,
+            std::ptr::null(),
+            sam::BAM_FUNMAP as u16,
+            -1,
+            0,
+            0xff,
+            i32::MAX as usize / 4,
+            cigar.as_ptr(),
+            -1,
+            0,
+            0,
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        );
+        let e2 = *libc::__errno_location();
+        let r3 = sam::bam_set1(
+            bam,
+            0,
+            std::ptr::null(),
+            sam::BAM_FUNMAP as u16,
+            -1,
+            0,
+            0xff,
+            0,
+            std::ptr::null(),
+            -1,
+            0,
+            0,
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+            i32::MAX as usize,
+        );
+        let e3 = *libc::__errno_location();
+        if r1 >= 0
+            || e1 != libc::EINVAL
+            || r2 >= 0
+            || e2 != libc::EINVAL
+            || r3 >= 0
+            || e3 != libc::EINVAL
+        {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_validate_size_limits".as_ptr(),
+                c"size limit validation failed.".as_ptr(),
+            );
+        }
+        sam::bam_destroy1(bam);
+    }
+
+    unsafe fn test_sam_bam_set1_fail(func: *const c_char, message: *const c_char) {
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"Failed: %s: %s\n".as_ptr(),
+            func,
+            message,
+        );
+        TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
 
     // original: test_bam_set1_write_and_read_back (htslib/test/sam.c:2227)
     pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
-        todo!("translate HTSlib test_bam_set1_write_and_read_back from htslib/test/sam.c:2227");
+        let qname = c"q1".as_ptr();
+        let cigar = [
+            (6u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CMATCH as u32,
+            (2u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CINS as u32,
+            (2u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CMATCH as u32,
+        ];
+        let seq = c"TGGACTACGA".as_ptr();
+        let qual = c"DBBBB+=7=0".as_ptr();
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-test-bam-set1-write-read-{}.bam",
+            std::process::id()
+        ));
+        let temp_fname = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        let mut writer = crate::htslib_mini_rs::hts::hts_open(temp_fname.as_ptr(), c"wb".as_ptr());
+        let mut reader: *mut htsFile = std::ptr::null_mut();
+        let mut w_header: *mut sam::sam_hdr_t = std::ptr::null_mut();
+        let mut r_header: *mut sam::sam_hdr_t = std::ptr::null_mut();
+        let mut w_bam: *mut sam::bam1_t = std::ptr::null_mut();
+        let mut r_bam: *mut sam::bam1_t = std::ptr::null_mut();
+        let mut ks = kstring_t {
+            l: 0,
+            m: 0,
+            s: std::ptr::null_mut(),
+        };
+
+        if writer.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_write_and_read_back".as_ptr(),
+                c"failed to open bam file for writing.".as_ptr(),
+            );
+            goto_test_bam_set1_write_read_cleanup(
+                temp_fname.as_ptr(),
+                writer,
+                reader,
+                w_header,
+                r_header,
+                w_bam,
+                r_bam,
+                &mut ks,
+            );
+            return;
+        }
+
+        w_header = sam::bam_hdr_init();
+        if w_header.is_null()
+            || sam::sam_hdr_add_lines(
+                w_header,
+                c"@SQ\tSN:t1\tLN:5000\n".as_ptr(),
+                libc::strlen(c"@SQ\tSN:t1\tLN:5000\n".as_ptr()),
+            ) != 0
+            || sam::sam_hdr_write(writer, w_header) != 0
+        {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_write_and_read_back".as_ptr(),
+                c"failed to write bam header.".as_ptr(),
+            );
+            goto_test_bam_set1_write_read_cleanup(
+                temp_fname.as_ptr(),
+                writer,
+                reader,
+                w_header,
+                r_header,
+                w_bam,
+                r_bam,
+                &mut ks,
+            );
+            return;
+        }
+
+        w_bam = sam::bam_init1();
+        if w_bam.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_write_and_read_back".as_ptr(),
+                c"failed to initialize BAM struct.".as_ptr(),
+            );
+            goto_test_bam_set1_write_read_cleanup(
+                temp_fname.as_ptr(),
+                writer,
+                reader,
+                w_header,
+                r_header,
+                w_bam,
+                r_bam,
+                &mut ks,
+            );
+            return;
+        }
+        let mut r = sam::bam_set1(
+            w_bam,
+            libc::strlen(qname),
+            qname,
+            (sam::BAM_FPAIRED | sam::BAM_FREVERSE) as u16,
+            0,
+            1000,
+            42,
+            cigar.len(),
+            cigar.as_ptr(),
+            0,
+            2000,
+            3000,
+            libc::strlen(seq),
+            seq,
+            qual,
+            64,
+        );
+        if r < 0 || sam::sam_c_4553_sam_write1(writer, w_header, w_bam) < 0 {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_write_and_read_back".as_ptr(),
+                c"failed to write alignment.".as_ptr(),
+            );
+            goto_test_bam_set1_write_read_cleanup(
+                temp_fname.as_ptr(),
+                writer,
+                reader,
+                w_header,
+                r_header,
+                w_bam,
+                r_bam,
+                &mut ks,
+            );
+            return;
+        }
+        sam::bam_destroy1(w_bam);
+        w_bam = std::ptr::null_mut();
+
+        r = crate::htslib_mini_rs::hts::hts_close(writer);
+        writer = std::ptr::null_mut();
+        if r != 0 {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_write_and_read_back".as_ptr(),
+                c"failed to close bam file for writing.".as_ptr(),
+            );
+            goto_test_bam_set1_write_read_cleanup(
+                temp_fname.as_ptr(),
+                writer,
+                reader,
+                w_header,
+                r_header,
+                w_bam,
+                r_bam,
+                &mut ks,
+            );
+            return;
+        }
+        sam::sam_hdr_destroy(w_header);
+        w_header = std::ptr::null_mut();
+
+        reader = crate::htslib_mini_rs::hts::hts_open(temp_fname.as_ptr(), c"rb".as_ptr());
+        if reader.is_null() {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_write_and_read_back".as_ptr(),
+                c"failed to open bam file for reading.".as_ptr(),
+            );
+            goto_test_bam_set1_write_read_cleanup(
+                temp_fname.as_ptr(),
+                writer,
+                reader,
+                w_header,
+                r_header,
+                w_bam,
+                r_bam,
+                &mut ks,
+            );
+            return;
+        }
+        r_header = sam::sam_hdr_read(reader);
+        if r_header.is_null()
+            || sam::sam_hdr_find_tag_id(
+                r_header,
+                c"SQ".as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                c"SN".as_ptr(),
+                &mut ks,
+            ) != 0
+            || libc::strcmp(
+                crate::htslib_mini_rs::hts::ks_c_str(&mut ks),
+                c"t1".as_ptr(),
+            ) != 0
+            || (*r_header).n_targets != 1
+            || libc::strcmp(*(*r_header).target_name, c"t1".as_ptr()) != 0
+            || *(*r_header).target_len != 5000
+        {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_write_and_read_back".as_ptr(),
+                c"failed to read expected bam header.".as_ptr(),
+            );
+            goto_test_bam_set1_write_read_cleanup(
+                temp_fname.as_ptr(),
+                writer,
+                reader,
+                w_header,
+                r_header,
+                w_bam,
+                r_bam,
+                &mut ks,
+            );
+            return;
+        }
+
+        r_bam = sam::bam_init1();
+        if r_bam.is_null()
+            || sam::sam_read1(reader, r_header, r_bam) < 0
+            || libc::strcmp(sam::bam_get_qname(r_bam), qname) != 0
+            || (*r_bam).core.n_cigar as usize != cigar.len()
+            || libc::memcmp(
+                sam::bam_get_cigar(r_bam).cast(),
+                cigar.as_ptr().cast(),
+                std::mem::size_of_val(&cigar),
+            ) != 0
+            || (*r_bam).core.l_qseq as usize != libc::strlen(seq)
+            || sam::sam_read1(reader, r_header, r_bam) >= 0
+        {
+            test_sam_bam_set1_fail(
+                c"test_bam_set1_write_and_read_back".as_ptr(),
+                c"failed to read expected bam alignment.".as_ptr(),
+            );
+        }
+
+        goto_test_bam_set1_write_read_cleanup(
+            temp_fname.as_ptr(),
+            writer,
+            reader,
+            w_header,
+            r_header,
+            w_bam,
+            r_bam,
+            &mut ks,
+        );
+    }
+
+    unsafe fn goto_test_bam_set1_write_read_cleanup(
+        temp_fname: *const c_char,
+        writer: *mut htsFile,
+        reader: *mut htsFile,
+        w_header: *mut sam::sam_hdr_t,
+        r_header: *mut sam::sam_hdr_t,
+        w_bam: *mut sam::bam1_t,
+        r_bam: *mut sam::bam1_t,
+        ks: *mut kstring_t,
+    ) {
+        if !w_bam.is_null() {
+            sam::bam_destroy1(w_bam);
+        }
+        if !r_bam.is_null() {
+            sam::bam_destroy1(r_bam);
+        }
+        if !w_header.is_null() {
+            sam::sam_hdr_destroy(w_header);
+        }
+        if !r_header.is_null() {
+            sam::sam_hdr_destroy(r_header);
+        }
+        if !writer.is_null() {
+            crate::htslib_mini_rs::hts::hts_close(writer);
+        }
+        if !reader.is_null() {
+            crate::htslib_mini_rs::hts::hts_close(reader);
+        }
+        crate::htslib_mini_rs::hts::ks_free(ks);
+        libc::unlink(temp_fname);
     }
 
     // original: test_cigar_api (htslib/test/sam.c:2307)
     pub unsafe fn test_sam_c_2307_test_cigar_api() {
-        todo!("translate HTSlib test_cigar_api from htslib/test/sam.c:2307");
+        let mut buf: *mut u32 = std::ptr::null_mut();
+        let mut end: *mut c_char = std::ptr::null_mut();
+        let mut m = 0usize;
+
+        let cig = c"*".as_ptr();
+        let mut n = sam::sam_parse_cigar(cig, &mut end, &mut buf, &mut m);
+        if n != 0 || m != 0 || end.offset_from(cig) != 1 {
+            test_sam_bam_set1_fail(
+                c"test_cigar_api".as_ptr(),
+                c"failed to parse undefined CIGAR".as_ptr(),
+            );
+        }
+
+        let cig = c"2M3X1I10M5D".as_ptr();
+        n = sam::sam_parse_cigar(cig, &mut end, &mut buf, &mut m);
+        if n != 5 || m == 0 || end.offset_from(cig) != 11 {
+            test_sam_bam_set1_fail(
+                c"test_cigar_api".as_ptr(),
+                c"failed to parse CIGAR string: 2M3X1I10M5D".as_ptr(),
+            );
+        }
+
+        n = sam::sam_parse_cigar(
+            c"722M15D187217376188323783284M67I".as_ptr(),
+            std::ptr::null_mut(),
+            &mut buf,
+            &mut m,
+        );
+        if n != -1 {
+            test_sam_bam_set1_fail(c"test_cigar_api".as_ptr(), c"failed to flag CIGAR string with long op length: 722M15D187217376188323783284M67I".as_ptr());
+        }
+
+        n = sam::sam_parse_cigar(
+            c"53I722MD8X".as_ptr(),
+            std::ptr::null_mut(),
+            &mut buf,
+            &mut m,
+        );
+        if n != -1 {
+            test_sam_bam_set1_fail(
+                c"test_cigar_api".as_ptr(),
+                c"failed to flag CIGAR string with no op length: 53I722MD8X".as_ptr(),
+            );
+        }
+
+        libc::free(buf.cast());
     }
 
     // original: main (htslib/test/sam.c:2328)
@@ -2047,8 +8555,16 @@ pub mod functions {
     }
 
     // original: code (htslib/test/test_mod.c:76)
-    pub unsafe fn test_test_mod_c_76_code() {
-        todo!("translate HTSlib code from htslib/test/test_mod.c:76");
+    pub unsafe fn test_test_mod_c_76_code(id: c_int) -> *mut c_char {
+        static mut CODE: [c_char; 20] = [0; 20];
+        let code = std::ptr::addr_of_mut!(CODE).cast::<c_char>();
+        if id > 0 {
+            *code = id as c_char;
+            *code.add(1) = 0;
+        } else {
+            libc::snprintf(code, 20, c"(%d)".as_ptr(), -id);
+        }
+        code
     }
 
     // original: main (htslib/test/test_mod.c:88)
@@ -2057,118 +8573,558 @@ pub mod functions {
     }
 
     // original: try_fopen (htslib/test/test_bgzf.c:68)
-    pub unsafe fn test_test_bgzf_c_68_try_fopen() {
-        todo!("translate HTSlib try_fopen from htslib/test/test_bgzf.c:68");
+    pub unsafe fn test_test_bgzf_c_68_try_fopen(
+        name: *const c_char,
+        mode: *const c_char,
+    ) -> *mut libc::FILE {
+        let f = libc::fopen(name, mode);
+        if f.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Couldn't open %s : %s\n".as_ptr(),
+                name,
+                libc::strerror(*libc::__errno_location()),
+            );
+        }
+        f
     }
 
     // original: try_fclose (htslib/test/test_bgzf.c:77)
-    pub unsafe fn test_test_bgzf_c_77_try_fclose() {
-        todo!("translate HTSlib try_fclose from htslib/test/test_bgzf.c:77");
+    pub unsafe fn test_test_bgzf_c_77_try_fclose(
+        file: *mut *mut libc::FILE,
+        name: *const c_char,
+        func: *const c_char,
+    ) -> c_int {
+        let to_close = *file;
+        *file = std::ptr::null_mut();
+        if libc::fclose(to_close) != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Error on closing %s : %s\n".as_ptr(),
+                func,
+                name,
+                libc::strerror(*libc::__errno_location()),
+            );
+            return -1;
+        }
+        0
     }
 
     // original: try_fread (htslib/test/test_bgzf.c:89)
-    pub unsafe fn test_test_bgzf_c_89_try_fread() {
-        todo!("translate HTSlib try_fread from htslib/test/test_bgzf.c:89");
+    pub unsafe fn test_test_bgzf_c_89_try_fread(
+        in_: *mut libc::FILE,
+        buf: *mut c_void,
+        len: usize,
+        func: *const c_char,
+        fname: *const c_char,
+    ) -> libc::ssize_t {
+        let got = libc::fread(buf, 1, len, in_);
+        if got == 0 && libc::ferror(in_) != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Error reading from %s : %s\n".as_ptr(),
+                func,
+                fname,
+                libc::strerror(*libc::__errno_location()),
+            );
+            return -1;
+        }
+        got as libc::ssize_t
     }
 
     // original: try_fseek_start (htslib/test/test_bgzf.c:100)
-    pub unsafe fn test_test_bgzf_c_100_try_fseek_start() {
-        todo!("translate HTSlib try_fseek_start from htslib/test/test_bgzf.c:100");
+    pub unsafe fn test_test_bgzf_c_100_try_fseek_start(
+        f: *mut libc::FILE,
+        name: *const c_char,
+        func: *const c_char,
+    ) -> c_int {
+        if libc::fseek(f, 0, libc::SEEK_SET) != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Couldn't seek on %s : %s\n".as_ptr(),
+                func,
+                name,
+                libc::strerror(*libc::__errno_location()),
+            );
+            return -1;
+        }
+        0
     }
 
     // original: try_bgzf_open (htslib/test/test_bgzf.c:109)
-    pub unsafe fn test_test_bgzf_c_109_try_bgzf_open() {
-        todo!("translate HTSlib try_bgzf_open from htslib/test/test_bgzf.c:109");
+    pub unsafe fn test_test_bgzf_c_109_try_bgzf_open(
+        name: *const c_char,
+        mode: *const c_char,
+        func: *const c_char,
+    ) -> *mut BGZF {
+        let bgz = crate::htslib_mini_rs::bgzf::bgzf_open(name, mode);
+        if bgz.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Couldn't bgzf_open %s with mode %s : %s\n".as_ptr(),
+                func,
+                name,
+                mode,
+                libc::strerror(*libc::__errno_location()),
+            );
+        }
+        bgz
     }
 
     // original: try_bgzf_dopen (htslib/test/test_bgzf.c:120)
-    pub unsafe fn test_test_bgzf_c_120_try_bgzf_dopen() {
-        todo!("translate HTSlib try_bgzf_dopen from htslib/test/test_bgzf.c:120");
+    pub unsafe fn test_test_bgzf_c_120_try_bgzf_dopen(
+        name: *const c_char,
+        mode: *const c_char,
+        func: *const c_char,
+    ) -> *mut BGZF {
+        let fd = libc::open(
+            name,
+            crate::htslib_mini_rs::hfile::hfile_oflags(mode),
+            0o666,
+        );
+        if fd < 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Failed to open %s with mode %s : %s\n".as_ptr(),
+                func,
+                name,
+                mode,
+                libc::strerror(*libc::__errno_location()),
+            );
+            return std::ptr::null_mut();
+        }
+
+        let bgz = crate::htslib_mini_rs::bgzf::bgzf_dopen(fd, mode);
+        if bgz.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : bgzf_dopen failed on %s mode %s : %s\n".as_ptr(),
+                func,
+                name,
+                mode,
+                libc::strerror(*libc::__errno_location()),
+            );
+            libc::close(fd);
+        }
+        bgz
     }
 
     // original: try_bgzf_hopen (htslib/test/test_bgzf.c:141)
-    pub unsafe fn test_test_bgzf_c_141_try_bgzf_hopen() {
-        todo!("translate HTSlib try_bgzf_hopen from htslib/test/test_bgzf.c:141");
+    pub unsafe fn test_test_bgzf_c_141_try_bgzf_hopen(
+        name: *const c_char,
+        mode: *const c_char,
+        func: *const c_char,
+    ) -> *mut BGZF {
+        let hfp = crate::htslib_mini_rs::hfile::hopen(name, mode);
+        if hfp.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : hopen failed on %s mode %s : %s\n".as_ptr(),
+                func,
+                name,
+                mode,
+                libc::strerror(*libc::__errno_location()),
+            );
+            return std::ptr::null_mut();
+        }
+
+        let bgz = crate::htslib_mini_rs::bgzf::bgzf_hopen(hfp, mode);
+        if bgz.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : bgzf_hopen failed on %s mode %s : %s\n".as_ptr(),
+                func,
+                name,
+                mode,
+                libc::strerror(*libc::__errno_location()),
+            );
+            crate::htslib_mini_rs::hfile::hclose_abruptly(hfp);
+        }
+        bgz
     }
 
     // original: try_bgzf_close (htslib/test/test_bgzf.c:163)
-    pub unsafe fn test_test_bgzf_c_163_try_bgzf_close() {
-        todo!("translate HTSlib try_bgzf_close from htslib/test/test_bgzf.c:163");
+    pub unsafe fn test_test_bgzf_c_163_try_bgzf_close(
+        bgz: *mut *mut BGZF,
+        name: *const c_char,
+        func: *const c_char,
+        expected_fail: c_int,
+    ) -> c_int {
+        let to_close = *bgz;
+        *bgz = std::ptr::null_mut();
+        if crate::htslib_mini_rs::bgzf::bgzf_close(to_close) != 0 {
+            if expected_fail == 0 {
+                let errno = *libc::__errno_location();
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"%s : bgzf_close failed on %s%s%s\n".as_ptr(),
+                    func,
+                    name,
+                    if errno != 0 {
+                        c" : ".as_ptr()
+                    } else {
+                        c"".as_ptr()
+                    },
+                    if errno != 0 {
+                        libc::strerror(errno)
+                    } else {
+                        c"".as_ptr()
+                    },
+                );
+            }
+            return -1;
+        } else if expected_fail != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : bgzf_close worked on %s, but expected failure\n".as_ptr(),
+                func,
+                name,
+            );
+        }
+        0
     }
 
     // original: try_bgzf_read (htslib/test/test_bgzf.c:180)
-    pub unsafe fn test_test_bgzf_c_180_try_bgzf_read() {
-        todo!("translate HTSlib try_bgzf_read from htslib/test/test_bgzf.c:180");
+    pub unsafe fn test_test_bgzf_c_180_try_bgzf_read(
+        fp: *mut BGZF,
+        data: *mut c_void,
+        length: usize,
+        name: *const c_char,
+        func: *const c_char,
+    ) -> libc::ssize_t {
+        let got = crate::htslib_mini_rs::bgzf::bgzf_read_small(fp, data, length);
+        if got < 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Error from bgzf_read %s : %s\n".as_ptr(),
+                func,
+                name,
+                libc::strerror(*libc::__errno_location()),
+            );
+        }
+        got as libc::ssize_t
     }
 
     // original: try_bgzf_write (htslib/test/test_bgzf.c:190)
-    pub unsafe fn test_test_bgzf_c_190_try_bgzf_write() {
-        todo!("translate HTSlib try_bgzf_write from htslib/test/test_bgzf.c:190");
+    pub unsafe fn test_test_bgzf_c_190_try_bgzf_write(
+        fp: *mut BGZF,
+        data: *const c_void,
+        length: usize,
+        name: *const c_char,
+        func: *const c_char,
+    ) -> libc::ssize_t {
+        let put = crate::htslib_mini_rs::bgzf::bgzf_write_small(fp, data, length);
+        if put < length as isize {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : %s %s : %s\n".as_ptr(),
+                func,
+                if put < 0 {
+                    c"Error writing to".as_ptr()
+                } else {
+                    c"Short write on".as_ptr()
+                },
+                name,
+                libc::strerror(*libc::__errno_location()),
+            );
+            return -1;
+        }
+        put as libc::ssize_t
     }
 
     // original: try_bgzf_compression (htslib/test/test_bgzf.c:203)
-    pub unsafe fn test_test_bgzf_c_203_try_bgzf_compression() {
-        todo!("translate HTSlib try_bgzf_compression from htslib/test/test_bgzf.c:203");
+    pub unsafe fn test_test_bgzf_c_203_try_bgzf_compression(
+        fp: *mut BGZF,
+        expect: c_int,
+        name: *const c_char,
+        func: *const c_char,
+    ) -> c_int {
+        let res = crate::htslib_mini_rs::bgzf::bgzf_compression(fp);
+        if res != expect {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Unexpected result %d from bgzf_compression on %s; expected %d\n".as_ptr(),
+                func,
+                res,
+                name,
+                expect,
+            );
+            return -1;
+        }
+        0
     }
 
     // original: try_bgzf_mt (htslib/test/test_bgzf.c:216)
-    pub unsafe fn test_test_bgzf_c_216_try_bgzf_mt() {
-        todo!("translate HTSlib try_bgzf_mt from htslib/test/test_bgzf.c:216");
+    pub unsafe fn test_test_bgzf_c_216_try_bgzf_mt(
+        bgz: *mut BGZF,
+        nthreads: c_int,
+        func: *const c_char,
+    ) -> c_int {
+        if crate::htslib_mini_rs::bgzf::bgzf_mt(bgz, nthreads, 64) != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Error from bgzf_mt : %s\n".as_ptr(),
+                func,
+                libc::strerror(*libc::__errno_location()),
+            );
+            return -1;
+        }
+        0
     }
 
     // original: try_bgzf_index_build_init (htslib/test/test_bgzf.c:225)
-    pub unsafe fn test_test_bgzf_c_225_try_bgzf_index_build_init() {
-        todo!("translate HTSlib try_bgzf_index_build_init from htslib/test/test_bgzf.c:225");
+    pub unsafe fn test_test_bgzf_c_225_try_bgzf_index_build_init(
+        bgz: *mut BGZF,
+        name: *const c_char,
+        func: *const c_char,
+    ) -> c_int {
+        if crate::htslib_mini_rs::bgzf::bgzf_index_build_init(bgz) != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Error from bgzf_index_build_init on %s : %s\n".as_ptr(),
+                func,
+                name,
+                libc::strerror(*libc::__errno_location()),
+            );
+            return -1;
+        }
+        0
     }
 
     // original: try_bgzf_index_load (htslib/test/test_bgzf.c:235)
-    pub unsafe fn test_test_bgzf_c_235_try_bgzf_index_load() {
-        todo!("translate HTSlib try_bgzf_index_load from htslib/test/test_bgzf.c:235");
+    pub unsafe fn test_test_bgzf_c_235_try_bgzf_index_load(
+        fp: *mut BGZF,
+        bname: *const c_char,
+        suffix: *const c_char,
+        func: *const c_char,
+    ) -> c_int {
+        if crate::htslib_mini_rs::bgzf::bgzf_index_load(fp, bname, suffix) != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Couldn't bgzf_index_load %s%s : %s\n".as_ptr(),
+                func,
+                bname,
+                if suffix.is_null() {
+                    c"".as_ptr()
+                } else {
+                    suffix
+                },
+                libc::strerror(*libc::__errno_location()),
+            );
+            return -1;
+        }
+        0
     }
 
     // original: try_bgzf_index_dump (htslib/test/test_bgzf.c:245)
-    pub unsafe fn test_test_bgzf_c_245_try_bgzf_index_dump() {
-        todo!("translate HTSlib try_bgzf_index_dump from htslib/test/test_bgzf.c:245");
+    pub unsafe fn test_test_bgzf_c_245_try_bgzf_index_dump(
+        fp: *mut BGZF,
+        bname: *const c_char,
+        suffix: *const c_char,
+        func: *const c_char,
+    ) -> c_int {
+        if crate::htslib_mini_rs::bgzf::bgzf_index_dump(fp, bname, suffix) != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Couldn't bgzf_index_dump %s%s : %s\n".as_ptr(),
+                func,
+                bname,
+                if suffix.is_null() {
+                    c"".as_ptr()
+                } else {
+                    suffix
+                },
+                libc::strerror(*libc::__errno_location()),
+            );
+            return -1;
+        }
+        0
     }
 
     // original: try_bgzf_tell (htslib/test/test_bgzf.c:255)
-    pub unsafe fn test_test_bgzf_c_255_try_bgzf_tell() {
-        todo!("translate HTSlib try_bgzf_tell from htslib/test/test_bgzf.c:255");
+    pub unsafe fn test_test_bgzf_c_255_try_bgzf_tell(
+        fp: *mut BGZF,
+        name: *const c_char,
+        func: *const c_char,
+    ) -> i64 {
+        let told = crate::htslib_mini_rs::bgzf::bgzf_utell(fp);
+        if told < 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : %s %s : %s\n".as_ptr(),
+                func,
+                c"Error telling in".as_ptr(),
+                name,
+                libc::strerror(*libc::__errno_location()),
+            );
+            return -1;
+        }
+        told
     }
 
     // original: try_bgzf_tell_expect (htslib/test/test_bgzf.c:267)
-    pub unsafe fn test_test_bgzf_c_267_try_bgzf_tell_expect() {
-        todo!("translate HTSlib try_bgzf_tell_expect from htslib/test/test_bgzf.c:267");
+    pub unsafe fn test_test_bgzf_c_267_try_bgzf_tell_expect(
+        fp: *mut BGZF,
+        expected: i64,
+        name: *const c_char,
+        func: *const c_char,
+    ) -> i64 {
+        let told = test_test_bgzf_c_255_try_bgzf_tell(fp, name, func);
+        if told != expected {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Unexpected value (%ld) from bgzf_tell on %s; expected %ld\n".as_ptr(),
+                func,
+                told as libc::c_long,
+                name,
+                expected as libc::c_long,
+            );
+            return -1;
+        }
+        told
     }
 
     // original: try_bgzf_seek (htslib/test/test_bgzf.c:278)
-    pub unsafe fn test_test_bgzf_c_278_try_bgzf_seek() {
-        todo!("translate HTSlib try_bgzf_seek from htslib/test/test_bgzf.c:278");
+    pub unsafe fn test_test_bgzf_c_278_try_bgzf_seek(
+        fp: *mut BGZF,
+        pos: i64,
+        whence: c_int,
+        name: *const c_char,
+        func: *const c_char,
+    ) -> c_int {
+        if crate::htslib_mini_rs::bgzf::bgzf_seek(fp, pos, whence) < 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Error from bgzf_seek(%s, %ld, %d) : %s\n".as_ptr(),
+                func,
+                name,
+                pos as libc::c_long,
+                whence,
+                libc::strerror(*libc::__errno_location()),
+            );
+            return -1;
+        }
+        0
     }
 
     // original: try_bgzf_useek (htslib/test/test_bgzf.c:288)
-    pub unsafe fn test_test_bgzf_c_288_try_bgzf_useek() {
-        todo!("translate HTSlib try_bgzf_useek from htslib/test/test_bgzf.c:288");
+    pub unsafe fn test_test_bgzf_c_288_try_bgzf_useek(
+        fp: *mut BGZF,
+        uoffset: libc::c_long,
+        where_: c_int,
+        name: *const c_char,
+        func: *const c_char,
+    ) -> c_int {
+        if crate::htslib_mini_rs::bgzf::bgzf_useek(fp, uoffset as i64, where_) < 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Error from bgzf_useek(%s, %ld, %d) : %s\n".as_ptr(),
+                func,
+                name,
+                uoffset,
+                where_,
+                libc::strerror(*libc::__errno_location()),
+            );
+            return -1;
+        }
+        0
     }
 
     // original: try_bgzf_getc (htslib/test/test_bgzf.c:298)
-    pub unsafe fn test_test_bgzf_c_298_try_bgzf_getc() {
-        todo!("translate HTSlib try_bgzf_getc from htslib/test/test_bgzf.c:298");
+    pub unsafe fn test_test_bgzf_c_298_try_bgzf_getc(
+        fp: *mut BGZF,
+        pos: usize,
+        expected: c_int,
+        name: *const c_char,
+        func: *const c_char,
+    ) -> c_int {
+        let c = crate::htslib_mini_rs::bgzf::bgzf_getc(fp);
+        if c != expected {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : Unexpected value (%d) from bgzf_getc on %s pos %zu; expected %d\n".as_ptr(),
+                func,
+                c,
+                name,
+                pos,
+                expected,
+            );
+            return -1;
+        }
+        c
     }
 
     // original: try_skip (htslib/test/test_bgzf.c:311)
-    pub unsafe fn test_test_bgzf_c_311_try_skip() {
-        todo!("translate HTSlib try_skip from htslib/test/test_bgzf.c:311");
+    pub unsafe fn test_test_bgzf_c_311_try_skip(
+        fp: *mut BGZF,
+        count: usize,
+        name: *const c_char,
+        func: *const c_char,
+    ) -> c_int {
+        for _ in 0..count {
+            if crate::htslib_mini_rs::bgzf::bgzf_getc(fp) < 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"%s : Error from bgzf_getc on %s\n".as_ptr(),
+                    func,
+                    name,
+                );
+                return -1;
+            }
+        }
+        0
     }
 
     // original: compare_buffers (htslib/test/test_bgzf.c:327)
-    pub unsafe fn test_test_bgzf_c_327_compare_buffers() {
-        todo!("translate HTSlib compare_buffers from htslib/test/test_bgzf.c:327");
+    pub unsafe fn test_test_bgzf_c_327_compare_buffers(
+        b1: *const c_uchar,
+        b2: *const c_uchar,
+        l1: usize,
+        l2: usize,
+        name1: *const c_char,
+        name2: *const c_char,
+        func: *const c_char,
+    ) -> c_int {
+        if l1 != l2 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : EOF on %s\n".as_ptr(),
+                func,
+                if l1 < l2 { name1 } else { name2 },
+            );
+            return -1;
+        }
+        if libc::memcmp(b1.cast(), b2.cast(), l1) != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"%s : difference between %s and %s\n".as_ptr(),
+                func,
+                name1,
+                name2,
+            );
+            return -1;
+        }
+        0
     }
 
     // original: cleanup (htslib/test/test_bgzf.c:344)
-    pub unsafe fn test_test_bgzf_c_344_cleanup() {
-        todo!("translate HTSlib cleanup from htslib/test/test_bgzf.c:344");
+    pub unsafe fn test_test_bgzf_c_344_cleanup(f: *mut c_void, retval: c_int) {
+        let f = f.cast::<TestBgzfFiles>();
+        if retval == libc::EXIT_SUCCESS {
+            libc::unlink((*f).tmp_bgzf);
+            libc::unlink((*f).tmp_idx);
+        }
+        if !(*f).f_plain.is_null() {
+            libc::fclose((*f).f_plain);
+        }
+        if !(*f).f_bgzf.is_null() {
+            libc::fclose((*f).f_bgzf);
+        }
+        if !(*f).f_idx.is_null() {
+            libc::fclose((*f).f_idx);
+        }
+        libc::free((*f).src_plain.cast());
+        libc::free((*f).text.cast_mut().cast());
     }
 
     // original: setup (htslib/test/test_bgzf.c:357)
@@ -2239,18 +9195,101 @@ pub mod functions {
     }
 
     // original: check_offset (htslib/test/hfile.c:51)
-    pub unsafe fn test_hfile_c_51_check_offset() {
-        todo!("translate HTSlib check_offset from htslib/test/hfile.c:51");
+    pub unsafe fn test_hfile_c_51_check_offset(
+        f: *mut hFILE,
+        off: libc::off_t,
+        message: *const c_char,
+    ) {
+        let ret = htslib_hfile_h_155_htell(f);
+        if ret < 0 {
+            libc::fprintf(hts_sys::stderr.cast(), c"htell(%s)\n".as_ptr(), message);
+            libc::abort();
+        }
+        if ret == off {
+            return;
+        }
+
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"%s offset incorrect: expected %ld but got %ld\n".as_ptr(),
+            message,
+            off as libc::c_long,
+            ret as libc::c_long,
+        );
+        libc::abort();
     }
 
     // original: slurp (htslib/test/hfile.c:62)
-    pub unsafe fn test_hfile_c_62_slurp() {
-        todo!("translate HTSlib slurp from htslib/test/hfile.c:62");
+    pub unsafe fn test_hfile_c_62_slurp(filename: *const c_char) -> *mut c_char {
+        let f = libc::fopen(filename, c"rb".as_ptr());
+        if f.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"fopen(\"%s\", \"rb\")\n".as_ptr(),
+                filename,
+            );
+            libc::abort();
+        }
+
+        let mut sbuf: libc::stat = std::mem::zeroed();
+        if libc::fstat(libc::fileno(f), &mut sbuf) != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"fstat(\"%s\")\n".as_ptr(),
+                filename,
+            );
+            libc::fclose(f);
+            libc::abort();
+        }
+        let filesize = sbuf.st_size as usize;
+        let text = libc::malloc(filesize + 1).cast::<c_char>();
+        if text.is_null() {
+            libc::fprintf(hts_sys::stderr.cast(), c"malloc(text)\n".as_ptr());
+            libc::fclose(f);
+            libc::abort();
+        }
+
+        if libc::fread(text.cast(), 1, filesize, f) != filesize {
+            libc::fprintf(hts_sys::stderr.cast(), c"fread\n".as_ptr());
+            libc::free(text.cast());
+            libc::fclose(f);
+            libc::abort();
+        }
+        libc::fclose(f);
+        *text.add(filesize) = 0;
+        text
     }
 
     // original: reopen (htslib/test/hfile.c:85)
-    pub unsafe fn test_hfile_c_85_reopen() {
-        todo!("translate HTSlib reopen from htslib/test/hfile.c:85");
+    pub unsafe fn test_hfile_c_85_reopen(infname: *const c_char, outfname: *const c_char) {
+        if !TEST_HFILE_FIN.is_null() {
+            if crate::htslib_mini_rs::hfile::hclose(TEST_HFILE_FIN) != 0 {
+                libc::fprintf(hts_sys::stderr.cast(), c"hclose(input)\n".as_ptr());
+                libc::abort();
+            }
+        }
+        if !TEST_HFILE_FOUT.is_null() {
+            if crate::htslib_mini_rs::hfile::hclose(TEST_HFILE_FOUT) != 0 {
+                libc::fprintf(hts_sys::stderr.cast(), c"hclose(output)\n".as_ptr());
+                libc::abort();
+            }
+        }
+
+        TEST_HFILE_FIN = crate::htslib_mini_rs::hfile::hopen(infname, c"r".as_ptr());
+        if TEST_HFILE_FIN.is_null() {
+            libc::fprintf(hts_sys::stderr.cast(), c"hopen(\"%s\")\n".as_ptr(), infname);
+            libc::abort();
+        }
+
+        TEST_HFILE_FOUT = crate::htslib_mini_rs::hfile::hopen(outfname, c"w".as_ptr());
+        if TEST_HFILE_FOUT.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"hopen(\"%s\")\n".as_ptr(),
+                outfname,
+            );
+            libc::abort();
+        }
     }
 
     // original: main (htslib/test/hfile.c:97)
@@ -2259,8 +9298,23 @@ pub mod functions {
     }
 
     // original: usage (htslib/test/test_index.c:32)
-    pub unsafe fn test_test_index_c_32_usage() {
-        todo!("translate HTSlib usage from htslib/test/test_index.c:32");
+    pub unsafe fn test_test_index_c_32_usage(fp: *mut libc::FILE) -> ! {
+        libc::fprintf(
+            fp,
+            c"Usage: test_index [opts] in.{sam.gz,bam,cram}|in.{vcf.gz,bcf}\n\n".as_ptr(),
+        );
+        libc::fprintf(fp, c"  -b       Use BAI index (BAM, SAM)\n".as_ptr());
+        libc::fprintf(
+            fp,
+            c"  -c       Use CSI index (BAM, SAM, VCF, BCF)\n".as_ptr(),
+        );
+        libc::fprintf(fp, c"  -t       Use TBI index (VCF) \n".as_ptr());
+        libc::fprintf(fp, c"  -m bits  Adjust min_shift; implies CSI\n".as_ptr());
+        libc::fprintf(
+            fp,
+            c"\nThe default index format is CSI for sam/bam/vcf/bcf and CRAI for crams\n".as_ptr(),
+        );
+        libc::exit((fp == hts_sys::stderr.cast::<libc::FILE>()) as c_int);
     }
 
     // original: main (htslib/test/test_index.c:42)
@@ -2269,13 +9323,90 @@ pub mod functions {
     }
 
     // original: check_alleles (htslib/test/test-vcf-api.c:51)
-    pub unsafe fn test_test_vcf_api_c_51_check_alleles() {
-        todo!("translate HTSlib check_alleles from htslib/test/test-vcf-api.c:51");
+    pub unsafe fn test_test_vcf_api_c_51_check_alleles(
+        rec: *mut structs::bcf1_t,
+        alleles: *mut *const c_char,
+        num: c_int,
+    ) -> c_int {
+        let rec = rec.cast::<crate::htslib_mini_rs::vcf::bcf1_t>();
+        if (*rec).n_allele() as c_int != num {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Wrong number of alleles - expected %d, got %d\n".as_ptr(),
+                num,
+                (*rec).n_allele() as c_int,
+            );
+            return -1;
+        }
+        if crate::htslib_mini_rs::vcf::bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int) != 0 {
+            return -1;
+        }
+        for i in 0..num {
+            let expected = *alleles.add(i as usize);
+            let actual = *(*rec).d.allele.add(i as usize);
+            if libc::strcmp(expected, actual) != 0 {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Mismatch for allele %d : expected '%s' got '%s'\n".as_ptr(),
+                    i,
+                    expected,
+                    actual,
+                );
+                return -1;
+            }
+        }
+        0
     }
 
     // original: test_update_alleles (htslib/test/test-vcf-api.c:71)
-    pub unsafe fn test_test_vcf_api_c_71_test_update_alleles() {
-        todo!("translate HTSlib test_update_alleles from htslib/test/test-vcf-api.c:71");
+    pub unsafe fn test_test_vcf_api_c_71_test_update_alleles(
+        hdr: *mut structs::bcf_hdr_t,
+        rec: *mut structs::bcf1_t,
+    ) -> c_int {
+        let mut alleles1 = [c"G".as_ptr(), c"A".as_ptr()];
+        let mut alleles2 = [c"C".as_ptr(), c"TGCA".as_ptr(), c"CATG".as_ptr()];
+        let mut alleles3 = [
+            c"ATTCTAGATCATTCTAGATCATTCTAGATCATTCTAGATCATTCTAGATCATTCTAGATCATTCTAGATCATTCTAGATCATTCTAGATCATTCTAGATC".as_ptr(),
+            c"TGCA".as_ptr(),
+            c"CTATTATCTCTAATGACATGCTATTATCTCTAATGACATGCTATTATCTCTAATGACATGCTATTATCTCTAATGACATGCTATTATCTCTAATGACATGCTATTATCTCTAATGACATGCTATTATCTCTAATGACATGCTATTATCTCTAATGACATGCTATTATCTCTAATGACATGCTATTATCTCTAATGACATG".as_ptr(),
+        ];
+        let mut alleles4 = [alleles3[2], std::ptr::null(), alleles3[0]];
+
+        if vcf_c_5906_bcf_update_alleles(hdr, rec, alleles1.as_mut_ptr(), 2) != 0
+            || test_test_vcf_api_c_51_check_alleles(rec, alleles1.as_mut_ptr(), 2) != 0
+            || vcf_c_5906_bcf_update_alleles(hdr, rec, std::ptr::null_mut(), 0) != 0
+            || test_test_vcf_api_c_51_check_alleles(rec, std::ptr::null_mut(), 0) != 0
+            || vcf_c_5906_bcf_update_alleles(hdr, rec, alleles2.as_mut_ptr(), 3) != 0
+            || test_test_vcf_api_c_51_check_alleles(rec, alleles2.as_mut_ptr(), 3) != 0
+            || vcf_c_5906_bcf_update_alleles(hdr, rec, alleles3.as_mut_ptr(), 3) != 0
+            || test_test_vcf_api_c_51_check_alleles(rec, alleles3.as_mut_ptr(), 3) != 0
+        {
+            return -1;
+        }
+
+        let rec_vcf = rec.cast::<crate::htslib_mini_rs::vcf::bcf1_t>();
+        alleles4[1] = *(*rec_vcf).d.allele.add(1);
+        if vcf_c_5906_bcf_update_alleles(hdr, rec, alleles4.as_mut_ptr(), 3) != 0 {
+            return -1;
+        }
+        alleles4[1] = alleles3[1];
+        if test_test_vcf_api_c_51_check_alleles(rec, alleles4.as_mut_ptr(), 3) != 0 {
+            return -1;
+        }
+
+        let allele0 = *(*rec_vcf).d.allele.add(0);
+        let allele2 = *(*rec_vcf).d.allele.add(2);
+        let tmp = allele0.add(libc::strlen(allele0) - 4);
+        *(*rec_vcf).d.allele.add(0) = allele2.add(libc::strlen(allele2) - 1);
+        *(*rec_vcf).d.allele.add(2) = tmp;
+        if vcf_c_5906_bcf_update_alleles(hdr, rec, (*rec_vcf).d.allele.cast::<*const c_char>(), 3)
+            != 0
+            || test_test_vcf_api_c_51_check_alleles(rec, alleles2.as_mut_ptr(), 3) != 0
+        {
+            return -1;
+        }
+
+        0
     }
 
     // original: write_bcf (htslib/test/test-vcf-api.c:110)
@@ -2334,13 +9465,42 @@ pub mod functions {
     }
 
     // original: read_vcf_line (htslib/test/test-vcf-api.c:909)
-    pub unsafe fn test_test_vcf_api_c_909_read_vcf_line() {
-        todo!("translate HTSlib read_vcf_line from htslib/test/test-vcf-api.c:909");
+    pub unsafe fn test_test_vcf_api_c_909_read_vcf_line(
+        line: *const c_char,
+        hdr: *mut structs::bcf_hdr_t,
+        rec: *mut structs::bcf1_t,
+        kstr: *mut kstring_t,
+    ) -> c_int {
+        if crate::htslib_mini_rs::hts::kputsn(
+            line,
+            libc::strlen(line),
+            crate::htslib_mini_rs::hts::ks_clear(kstr),
+        ) < 0
+        {
+            return -1;
+        }
+
+        let ret = crate::htslib_mini_rs::vcf::vcf_parse(kstr, hdr.cast(), rec.cast());
+        if ret != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"vcf_parse(\"%s\", hdr, rec) returned %d\n".as_ptr(),
+                crate::htslib_mini_rs::hts::ks_c_str(kstr),
+                ret,
+            );
+        }
+        ret
     }
 
     // original: chomp (htslib/test/test-vcf-api.c:924)
-    pub unsafe fn test_test_vcf_api_c_924_chomp() {
-        todo!("translate HTSlib chomp from htslib/test/test-vcf-api.c:924");
+    pub unsafe fn test_test_vcf_api_c_924_chomp(kstr: *mut kstring_t) {
+        if (*kstr).l < 1 {
+            return;
+        }
+        if *(*kstr).s.add((*kstr).l - 1) == b'\n' as c_char {
+            (*kstr).l -= 1;
+            *(*kstr).s.add((*kstr).l) = 0;
+        }
     }
 
     // original: test_bcf_remove_allele_set (htslib/test/test-vcf-api.c:933)
@@ -2354,83 +9514,705 @@ pub mod functions {
     }
 
     // original: readaln (htslib/test/pileup_mod.c:37)
-    pub unsafe fn test_pileup_mod_c_37_readaln() {
-        todo!("translate HTSlib readaln from htslib/test/pileup_mod.c:37");
+    pub unsafe extern "C" fn test_pileup_mod_c_37_readaln(
+        data: *mut c_void,
+        b: *mut sam::bam1_t,
+    ) -> c_int {
+        let dat = data.cast::<structs::plp_dat>();
+        sam::sam_read1((*dat).fp, (*dat).h, b)
     }
 
     // original: process_pileup (htslib/test/pileup_mod.c:49)
-    pub unsafe fn test_pileup_mod_c_49_process_pileup() {
-        todo!("translate HTSlib process_pileup from htslib/test/pileup_mod.c:49");
+    pub unsafe fn test_pileup_mod_c_49_process_pileup(
+        h: *mut sam::sam_hdr_t,
+        mut p: *const sam::bam_pileup1_t,
+        tid: c_int,
+        pos: c_int,
+        n: c_int,
+    ) {
+        const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
+        let mut s = kstring_t {
+            l: 0,
+            m: 0,
+            s: std::ptr::null_mut(),
+        };
+        libc::printf(c"%s\t%d\t".as_ptr(), sam::sam_hdr_tid2name(h, tid), pos);
+        for _ in 0..n {
+            if sam::bam_pileup1_is_del(p) != 0 {
+                libc::putchar(b'*' as c_int);
+                p = p.add(1);
+                continue;
+            }
+
+            let seq = sam::bam_get_seq((*p).b);
+            let qual = sam::bam_get_qual((*p).b);
+            let c = SEQ_NT16_STR[sam::bam_seqi(seq, (*p).qpos as usize) as usize];
+            libc::putchar(c as c_int);
+            let q = b'!'.saturating_add(*qual.add((*p).qpos as usize)).min(b'~');
+            crate::htslib_mini_rs::hts::kputc(q as c_int, &mut s);
+            p = p.add(1);
+        }
+        libc::putchar(b'\t' as c_int);
+        libc::puts(if s.l != 0 {
+            s.s
+        } else {
+            c"".as_ptr().cast_mut()
+        });
+        crate::htslib_mini_rs::c_compat::free(s.s.cast());
     }
 
     // original: pileup_cd_create (htslib/test/pileup_mod.c:74)
-    pub unsafe fn test_pileup_mod_c_74_pileup_cd_create() {
-        todo!("translate HTSlib pileup_cd_create from htslib/test/pileup_mod.c:74");
+    pub unsafe extern "C" fn test_pileup_mod_c_74_pileup_cd_create(
+        _data: *mut c_void,
+        b: *const sam::bam1_t,
+        cd: *mut sam::bam_pileup_cd,
+    ) -> c_int {
+        let m = sam::hts_base_mod_state_alloc();
+        if sam::bam_parse_basemod(b, m) < 0 {
+            sam::hts_base_mod_state_free(m);
+            return -1;
+        }
+        (*cd).p = m.cast();
+        0
     }
 
     // original: pileup_cd_destroy (htslib/test/pileup_mod.c:84)
-    pub unsafe fn test_pileup_mod_c_84_pileup_cd_destroy() {
-        todo!("translate HTSlib pileup_cd_destroy from htslib/test/pileup_mod.c:84");
+    pub unsafe extern "C" fn test_pileup_mod_c_84_pileup_cd_destroy(
+        _data: *mut c_void,
+        _b: *const sam::bam1_t,
+        cd: *mut sam::bam_pileup_cd,
+    ) -> c_int {
+        sam::hts_base_mod_state_free((*cd).p.cast());
+        0
     }
 
     // original: process_mod_pileup1 (htslib/test/pileup_mod.c:91)
-    pub unsafe fn test_pileup_mod_c_91_process_mod_pileup1() {
-        todo!("translate HTSlib process_mod_pileup1 from htslib/test/pileup_mod.c:91");
+    pub unsafe fn test_pileup_mod_c_91_process_mod_pileup1(
+        h: *mut sam::sam_hdr_t,
+        mut p: *const sam::bam_pileup1_t,
+        tid: c_int,
+        pos: c_int,
+        n: c_int,
+    ) {
+        const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
+        let mut s = kstring_t {
+            l: 0,
+            m: 0,
+            s: std::ptr::null_mut(),
+        };
+        libc::printf(c"%s\t%d\t".as_ptr(), sam::sam_hdr_tid2name(h, tid), pos);
+        for _ in 0..n {
+            if sam::bam_pileup1_is_del(p) != 0 {
+                libc::putchar(b'*' as c_int);
+                p = p.add(1);
+                continue;
+            }
+
+            let seq = sam::bam_get_seq((*p).b);
+            let qual = sam::bam_get_qual((*p).b);
+            let c = SEQ_NT16_STR[sam::bam_seqi(seq, (*p).qpos as usize) as usize];
+            libc::putchar(c as c_int);
+            let q = b'!'.saturating_add(*qual.add((*p).qpos as usize)).min(b'~');
+            crate::htslib_mini_rs::hts::kputc(q as c_int, &mut s);
+
+            let m = (*p).cd.p.cast::<sam::hts_base_mod_state>();
+            let mut mods = [sam::hts_base_mod {
+                modified_base: 0,
+                canonical_base: 0,
+                strand: 0,
+                qual: 0,
+            }; 5];
+            let nm = sam::bam_mods_at_qpos((*p).b, (*p).qpos, m, mods.as_mut_ptr(), 5);
+            if nm > 0 {
+                libc::putchar(b'[' as c_int);
+                for item in mods.iter().take(std::cmp::min(nm, 5) as usize) {
+                    if item.modified_base < 0 {
+                        libc::printf(
+                            c"%c(%d)%d".as_ptr(),
+                            if item.strand != 0 {
+                                b'-' as c_int
+                            } else {
+                                b'+' as c_int
+                            },
+                            -item.modified_base,
+                            item.qual,
+                        );
+                    } else {
+                        libc::printf(
+                            c"%c%c%d".as_ptr(),
+                            if item.strand != 0 {
+                                b'-' as c_int
+                            } else {
+                                b'+' as c_int
+                            },
+                            item.modified_base,
+                            item.qual,
+                        );
+                    }
+                }
+                libc::putchar(b']' as c_int);
+            }
+            p = p.add(1);
+        }
+        libc::putchar(b'\t' as c_int);
+        libc::puts(if s.l != 0 {
+            s.s
+        } else {
+            c"".as_ptr().cast_mut()
+        });
+        crate::htslib_mini_rs::c_compat::free(s.s.cast());
     }
 
     // original: process_mod_pileup2 (htslib/test/pileup_mod.c:140)
-    pub unsafe fn test_pileup_mod_c_140_process_mod_pileup2() {
-        todo!("translate HTSlib process_mod_pileup2 from htslib/test/pileup_mod.c:140");
+    pub unsafe fn test_pileup_mod_c_140_process_mod_pileup2(
+        h: *mut sam::sam_hdr_t,
+        mut p: *const sam::bam_pileup1_t,
+        tid: c_int,
+        pos: c_int,
+        n: c_int,
+    ) {
+        const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
+        let mut s = kstring_t {
+            l: 0,
+            m: 0,
+            s: std::ptr::null_mut(),
+        };
+        libc::printf(
+            c"%s\t%d\t%d\t".as_ptr(),
+            sam::sam_hdr_tid2name(h, tid),
+            pos,
+            n,
+        );
+        for _ in 0..n {
+            if sam::bam_pileup1_is_del(p) != 0 {
+                libc::putchar(b'*' as c_int);
+                p = p.add(1);
+                continue;
+            }
+
+            let seq = sam::bam_get_seq((*p).b);
+            let qual = sam::bam_get_qual((*p).b);
+            let c = SEQ_NT16_STR[sam::bam_seqi(seq, (*p).qpos as usize) as usize];
+            let m = (*p).cd.p.cast::<sam::hts_base_mod_state>();
+            let is_rev = sam::bam_is_rev((*p).b);
+            let mut mod_ = sam::hts_base_mod {
+                modified_base: 0,
+                canonical_base: 0,
+                strand: 0,
+                qual: 0,
+            };
+            let mut base = c as c_int;
+            let mut q = *qual.add((*p).qpos as usize);
+            if sam::bam_mods_at_qpos((*p).b, (*p).qpos, m, &mut mod_, 1) > 0 {
+                base = mod_.modified_base;
+                q = (-10.0 * (1.0 - ((mod_.qual as f64 + 0.5) / 256.0)).log10() + 0.5) as u8;
+            }
+
+            if is_rev {
+                libc::printf(c"\x1b[2m%c\x1b[0m".as_ptr(), base);
+            } else {
+                libc::printf(c"\x1b[1m%c\x1b[0m".as_ptr(), base);
+            }
+            let q = b'!'.saturating_add(q).min(b'~');
+            crate::htslib_mini_rs::hts::kputc(q as c_int, &mut s);
+            p = p.add(1);
+        }
+        libc::putchar(b'\t' as c_int);
+        libc::puts(if s.l != 0 {
+            s.s
+        } else {
+            c"".as_ptr().cast_mut()
+        });
+        crate::htslib_mini_rs::c_compat::free(s.s.cast());
     }
 
     // original: main (htslib/test/pileup_mod.c:185)
-    pub unsafe fn test_pileup_mod_c_185_main() {
-        todo!("translate HTSlib main from htslib/test/pileup_mod.c:185");
+    pub unsafe fn test_pileup_mod_c_185_main(mut argc: c_int, mut argv: *mut *mut c_char) -> c_int {
+        let mut compact = 0;
+        while argc > 1 && libc::strcmp(*argv.add(1), c"-c".as_ptr()) == 0 {
+            compact += 1;
+            argc -= 1;
+            argv = argv.add(1);
+        }
+
+        let in_ = crate::htslib_mini_rs::hts::hts_open(
+            if argc > 1 {
+                *argv.add(1)
+            } else {
+                c"-".as_ptr().cast_mut()
+            },
+            c"r".as_ptr(),
+        );
+        let b = sam::bam_init1();
+        let h = sam::sam_hdr_read(in_);
+        let mut dat = structs::plp_dat { fp: in_, h };
+        let iter = sam::bam_plp_init(
+            Some(test_pileup_mod_c_37_readaln),
+            (&mut dat as *mut structs::plp_dat).cast(),
+        );
+        sam::bam_plp_constructor(iter, Some(test_pileup_mod_c_74_pileup_cd_create));
+        sam::bam_plp_destructor(iter, Some(test_pileup_mod_c_84_pileup_cd_destroy));
+
+        let mut tid = 0;
+        let mut pos = 0;
+        let mut n = 0;
+        loop {
+            let p = sam::bam_plp_auto(iter, &mut tid, &mut pos, &mut n);
+            if p.is_null() {
+                break;
+            }
+            match compact {
+                0 => test_pileup_mod_c_91_process_mod_pileup1(h, p, tid, pos, n),
+                1 => test_pileup_mod_c_140_process_mod_pileup2(h, p, tid, pos, n),
+                _ => test_pileup_mod_c_49_process_pileup(h, p, tid, pos, n),
+            }
+        }
+        sam::bam_plp_destroy(iter);
+
+        crate::htslib_mini_rs::hts::hts_close(in_);
+        sam::bam_destroy1(b);
+        sam::sam_hdr_destroy(h);
+
+        (n != 0) as c_int
     }
 
     // original: readaln (htslib/test/pileup.c:62)
-    pub unsafe fn test_pileup_c_62_readaln() {
-        todo!("translate HTSlib readaln from htslib/test/pileup.c:62");
+    pub unsafe extern "C" fn test_pileup_c_62_readaln(
+        data: *mut c_void,
+        b: *mut sam::bam1_t,
+    ) -> c_int {
+        let g = data.cast::<structs::ptest_t>();
+        let mut ret: c_int;
+
+        loop {
+            ret = sam::sam_read1((*g).fp, (*g).fp_hdr, b);
+            if ret < 0 {
+                break;
+            }
+            if ((*b).core.flag as c_int
+                & (sam::BAM_FUNMAP | sam::BAM_FSECONDARY | sam::BAM_FQCFAIL | sam::BAM_FDUP))
+                != 0
+            {
+                continue;
+            }
+            break;
+        }
+
+        ret
     }
 
     // original: print_pileup_seq (htslib/test/pileup.c:76)
-    pub unsafe fn test_pileup_c_76_print_pileup_seq() {
-        todo!("translate HTSlib print_pileup_seq from htslib/test/pileup.c:76");
+    pub unsafe fn test_pileup_c_76_print_pileup_seq(
+        mut p: *const sam::bam_pileup1_t,
+        n: c_int,
+    ) -> c_int {
+        const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
+        let mut ks = kstring_t {
+            l: 0,
+            m: 0,
+            s: std::ptr::null_mut(),
+        };
+        for _ in 0..n {
+            let seq = sam::bam_get_seq((*p).b);
+            let is_rev = ((*(*p).b).core.flag as c_int & sam::BAM_FREVERSE) != 0;
+
+            if sam::bam_pileup1_is_head(p) != 0 {
+                libc::putchar(b'^' as c_int);
+                libc::putchar(b'!' as c_int + std::cmp::min((*(*p).b).core.qual, 93) as c_int);
+            }
+
+            if sam::bam_pileup1_is_del(p) != 0 {
+                let c = if sam::bam_pileup1_is_refskip(p) != 0 {
+                    if is_rev {
+                        b'<'
+                    } else {
+                        b'>'
+                    }
+                } else {
+                    b'*'
+                };
+                libc::putchar(c as c_int);
+            } else {
+                let byte = *seq.add((*p).qpos as usize / 2);
+                let base = if ((*p).qpos & 1) == 0 {
+                    byte >> 4
+                } else {
+                    byte & 0x0f
+                };
+                let c = SEQ_NT16_STR[base as usize];
+                libc::putchar(if is_rev {
+                    libc::tolower(c as c_int)
+                } else {
+                    libc::toupper(c as c_int)
+                });
+            }
+
+            let mut del_len = -(*p).indel;
+            if (*p).indel > 0 {
+                let len = sam::bam_plp_insertion(p, &mut ks, &mut del_len);
+                if len < 0 {
+                    libc::perror(c"bam_plp_insertion".as_ptr());
+                    libc::free(ks.s.cast());
+                    return -1;
+                }
+                libc::printf(c"%+d(".as_ptr(), len);
+                for j in 0..len {
+                    let c = *ks.s.add(j as usize) as u8;
+                    libc::putchar(if is_rev {
+                        libc::tolower(c as c_int)
+                    } else {
+                        libc::toupper(c as c_int)
+                    });
+                }
+                libc::putchar(b')' as c_int);
+            }
+            if del_len > 0 {
+                libc::printf(c"-%d()".as_ptr(), del_len);
+            }
+            if sam::bam_pileup1_is_tail(p) != 0 {
+                libc::putchar(b'$' as c_int);
+            }
+            p = p.add(1);
+        }
+        libc::free(ks.s.cast());
+        0
     }
 
     // original: print_pileup_qual (htslib/test/pileup.c:122)
-    pub unsafe fn test_pileup_c_122_print_pileup_qual() {
-        todo!("translate HTSlib print_pileup_qual from htslib/test/pileup.c:122");
+    pub unsafe fn test_pileup_c_122_print_pileup_qual(mut p: *const sam::bam_pileup1_t, n: c_int) {
+        for _ in 0..n {
+            let qual = sam::bam_get_qual((*p).b);
+            let mut q = b'~';
+            if (*p).qpos < (*(*p).b).core.l_qseq && *qual.add((*p).qpos as usize) + 33 < b'~' {
+                q = *qual.add((*p).qpos as usize) + 33;
+            }
+            libc::putchar(q as c_int);
+            p = p.add(1);
+        }
     }
 
     // original: test_pileup (htslib/test/pileup.c:135)
-    pub unsafe fn test_pileup_c_135_test_pileup() {
-        todo!("translate HTSlib test_pileup from htslib/test/pileup.c:135");
+    pub unsafe fn test_pileup_c_135_test_pileup(input: *mut structs::ptest_t) -> c_int {
+        let mut tid = 0;
+        let mut pos = 0;
+        let mut n = 0;
+
+        let plp = sam::bam_plp_init(Some(test_pileup_c_62_readaln), input.cast());
+        if plp.is_null() {
+            libc::perror(c"bam_plp_init".as_ptr());
+            return -1;
+        }
+        loop {
+            let p = sam::bam_plp_auto(plp, &mut tid, &mut pos, &mut n);
+            if p.is_null() {
+                break;
+            }
+            if tid < 0 {
+                break;
+            }
+            if tid >= (*(*input).fp_hdr).n_targets {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"bam_plp_auto returned tid %d >= header n_targets %d\n".as_ptr(),
+                    tid,
+                    (*(*input).fp_hdr).n_targets,
+                );
+                sam::bam_plp_destroy(plp);
+                return -1;
+            }
+
+            libc::printf(
+                c"%s\t%d\t%d\t".as_ptr(),
+                *(*(*input).fp_hdr).target_name.add(tid as usize),
+                pos + 1,
+                n,
+            );
+            if test_pileup_c_76_print_pileup_seq(p, n) < 0 {
+                sam::bam_plp_destroy(plp);
+                return -1;
+            }
+            libc::putchar(b'\t' as c_int);
+            test_pileup_c_122_print_pileup_qual(p, n);
+            libc::putchar(b'\n' as c_int);
+        }
+        if n < 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"bam_plp_auto failed for \"%s\"\n".as_ptr(),
+                (*input).fname,
+            );
+            sam::bam_plp_destroy(plp);
+            return -1;
+        }
+
+        sam::bam_plp_destroy(plp);
+        0
     }
 
     // original: test_mpileup (htslib/test/pileup.c:177)
-    pub unsafe fn test_pileup_c_177_test_mpileup() {
-        todo!("translate HTSlib test_mpileup from htslib/test/pileup.c:177");
+    pub unsafe fn test_pileup_c_177_test_mpileup(input: *mut structs::ptest_t) -> c_int {
+        let mut data = input.cast::<c_void>();
+        let data_ptr = &mut data as *mut *mut c_void;
+        let mut pileups = [std::ptr::null::<sam::bam_pileup1_t>(); 1];
+        let mut n_plp = [0 as c_int; 1];
+        let mut tid = 0;
+        let mut pos = 0;
+
+        let iter = sam::bam_mplp_init(1, Some(test_pileup_c_62_readaln), data_ptr);
+        if iter.is_null() {
+            libc::perror(c"bam_plp_init".as_ptr());
+            return -1;
+        }
+        if sam::bam_mplp_init_overlaps(iter) < 0 {
+            libc::perror(c"bam_mplp_init_overlaps".as_ptr());
+            sam::bam_mplp_destroy(iter);
+            return -1;
+        }
+
+        let mut n: c_int;
+        loop {
+            n = sam::bam_mplp_auto(
+                iter,
+                &mut tid,
+                &mut pos,
+                n_plp.as_mut_ptr(),
+                pileups.as_mut_ptr(),
+            );
+            if n <= 0 {
+                break;
+            }
+            if tid < 0 {
+                break;
+            }
+            if tid >= (*(*input).fp_hdr).n_targets {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"bam_mplp_auto returned tid %d >= header n_targets %d\n".as_ptr(),
+                    tid,
+                    (*(*input).fp_hdr).n_targets,
+                );
+                sam::bam_mplp_destroy(iter);
+                return -1;
+            }
+
+            libc::printf(
+                c"%s\t%d\t%d\t".as_ptr(),
+                *(*(*input).fp_hdr).target_name.add(tid as usize),
+                pos + 1,
+                n_plp[0],
+            );
+            if test_pileup_c_76_print_pileup_seq(pileups[0], n_plp[0]) < 0 {
+                sam::bam_mplp_destroy(iter);
+                return -1;
+            }
+            libc::putchar(b'\t' as c_int);
+            test_pileup_c_122_print_pileup_qual(pileups[0], n_plp[0]);
+            libc::putchar(b'\n' as c_int);
+        }
+        if n < 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"bam_plp_auto failed for \"%s\"\n".as_ptr(),
+                (*input).fname,
+            );
+            sam::bam_mplp_destroy(iter);
+            return -1;
+        }
+
+        sam::bam_mplp_destroy(iter);
+        0
     }
 
     // original: main (htslib/test/pileup.c:225)
-    pub unsafe fn test_pileup_c_225_main() {
-        todo!("translate HTSlib main from htslib/test/pileup.c:225");
+    pub unsafe fn test_pileup_c_225_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+        let mut g = structs::ptest_t {
+            fname: std::ptr::null(),
+            fp: std::ptr::null_mut(),
+            fp_hdr: std::ptr::null_mut(),
+        };
+        let mut use_mpileup = 0;
+
+        loop {
+            let opt = libc::getopt(argc, argv, c"m".as_ptr());
+            if opt == -1 {
+                break;
+            }
+            match opt {
+                c if c == b'm' as c_int => use_mpileup = 1,
+                _ => {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"Usage: %s [-m] <sorted.sam>\n".as_ptr(),
+                        *argv,
+                    );
+                    return libc::EXIT_FAILURE;
+                }
+            }
+        }
+
+        if optind >= argc {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Usage: %s [-m] <sorted.sam>\n".as_ptr(),
+                *argv,
+            );
+            return libc::EXIT_FAILURE;
+        }
+
+        g.fname = *argv.add(optind as usize);
+        g.fp = crate::htslib_mini_rs::hts::hts_open(g.fname, c"r".as_ptr());
+        if g.fp.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Couldn't open \"%s\" : %s".as_ptr(),
+                g.fname,
+                libc::strerror(*crate::htslib_mini_rs::c_compat::__errno_location()),
+            );
+            return libc::EXIT_FAILURE;
+        }
+        g.fp_hdr = sam::sam_hdr_read(g.fp);
+        if g.fp_hdr.is_null() {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Couldn't read header from \"%s\" : %s".as_ptr(),
+                g.fname,
+                libc::strerror(*crate::htslib_mini_rs::c_compat::__errno_location()),
+            );
+            crate::htslib_mini_rs::hts::hts_close(g.fp);
+            return libc::EXIT_FAILURE;
+        }
+
+        let ret = if use_mpileup != 0 {
+            test_pileup_c_177_test_mpileup(&mut g)
+        } else {
+            test_pileup_c_135_test_pileup(&mut g)
+        };
+        if ret < 0 {
+            sam::sam_hdr_destroy(g.fp_hdr);
+            crate::htslib_mini_rs::hts::hts_close(g.fp);
+            return libc::EXIT_FAILURE;
+        }
+
+        sam::sam_hdr_destroy(g.fp_hdr);
+        crate::htslib_mini_rs::hts::hts_close(g.fp);
+        libc::EXIT_SUCCESS
     }
 
     // original: test_normalised (htslib/test/test_time_funcs.c:36)
-    pub unsafe fn test_test_time_funcs_c_36_test_normalised() {
-        todo!("translate HTSlib test_normalised from htslib/test/test_time_funcs.c:36");
+    pub unsafe fn test_test_time_funcs_c_36_test_normalised(
+        start: libc::time_t,
+        end: libc::time_t,
+        incr: libc::time_t,
+    ) -> c_int {
+        let mut i = start;
+        while i < end {
+            let utc = libc::gmtime(&i as *const libc::time_t);
+            if utc.is_null() {
+                return 1;
+            }
+            let j = crate::htslib_mini_rs::hts::hts_time_gm(utc);
+            if i != j {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"hts_time_gm() failed, got %ld expected %ld\n".as_ptr(),
+                    j as libc::c_long,
+                    i as libc::c_long,
+                );
+                return 1;
+            }
+            i += incr;
+        }
+        0
     }
 
     // original: test_specific (htslib/test/test_time_funcs.c:53)
-    pub unsafe fn test_test_time_funcs_c_53_test_specific() {
-        todo!("translate HTSlib test_specific from htslib/test/test_time_funcs.c:53");
+    pub unsafe fn test_test_time_funcs_c_53_test_specific(
+        year: c_int,
+        mon: c_int,
+        mday: c_int,
+        hour: c_int,
+        min: c_int,
+        sec: c_int,
+        expected: libc::time_t,
+    ) -> c_int {
+        let mut utc: libc::tm = std::mem::zeroed();
+        utc.tm_sec = sec;
+        utc.tm_min = min;
+        utc.tm_hour = hour;
+        utc.tm_mday = mday;
+        utc.tm_mon = mon - 1;
+        utc.tm_year = year - 1900;
+        utc.tm_wday = 0;
+        utc.tm_yday = 0;
+        utc.tm_isdst = 0;
+
+        let res = crate::htslib_mini_rs::hts::hts_time_gm(&mut utc);
+        if res != expected {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"hts_time_gm() failed for %4d/%02d/%02d %02d:%02d:%02d : got %ld expected %ld\n"
+                    .as_ptr(),
+                year,
+                mon,
+                mday,
+                hour,
+                min,
+                sec,
+                res as libc::c_long,
+                expected as libc::c_long,
+            );
+            return 1;
+        }
+        0
     }
 
     // original: main (htslib/test/test_time_funcs.c:68)
-    pub unsafe fn test_test_time_funcs_c_68_main() {
-        todo!("translate HTSlib main from htslib/test/test_time_funcs.c:68");
+    pub unsafe fn test_test_time_funcs_c_68_main(_argc: c_int, _argv: *mut *mut c_char) -> c_int {
+        let int_max = i32::MAX as libc::time_t;
+
+        if test_test_time_funcs_c_36_test_normalised(0, int_max - 1000, 1000) != 0 {
+            return libc::EXIT_FAILURE;
+        }
+        if std::mem::size_of::<libc::time_t>() >= 8
+            && test_test_time_funcs_c_36_test_normalised(
+                int_max - 1000,
+                (i32::MAX as i64 * 2) as libc::time_t,
+                1000,
+            ) != 0
+        {
+            return libc::EXIT_FAILURE;
+        }
+
+        let mut res = 0;
+        res |= test_test_time_funcs_c_53_test_specific(2022, 6, 14, 12, 32, 10, 1655209930);
+        res |= test_test_time_funcs_c_53_test_specific(1993, 9, 10514, 12, 32, 10, 1655209930);
+        res |= test_test_time_funcs_c_53_test_specific(2020, 2, 28, 12, 0, 0, 1582891200);
+        res |= test_test_time_funcs_c_53_test_specific(2020, 2, 29, 12, 0, 0, 1582977600);
+        res |= test_test_time_funcs_c_53_test_specific(2020, 2, 30, 12, 0, 0, 1583064000);
+        res |= test_test_time_funcs_c_53_test_specific(2020, 3, 0, 12, 0, 0, 1582977600);
+        res |= test_test_time_funcs_c_53_test_specific(2019, 14, 1, 12, 0, 0, 1580558400);
+        res |= test_test_time_funcs_c_53_test_specific(2019, 15, 1, 12, 0, 0, 1583064000);
+        res |= test_test_time_funcs_c_53_test_specific(2019, 27, 1, 12, 0, 0, 1614600000);
+        res |= test_test_time_funcs_c_53_test_specific(2019, 62, 1, 12, 0, 0, 1706788800);
+        res |= test_test_time_funcs_c_53_test_specific(2019, 63, 1, 12, 0, 0, 1709294400);
+        res |= test_test_time_funcs_c_53_test_specific(2021, 0, 31, 23, 59, 59, 1609459199);
+        res |= test_test_time_funcs_c_53_test_specific(2021, -9, 1, 12, 0, 0, 1583064000);
+        res |= test_test_time_funcs_c_53_test_specific(2021, -10, 1, 12, 0, 0, 1580558400);
+        res |= test_test_time_funcs_c_53_test_specific(2021, -22, 1, 12, 0, 0, 1549022400);
+        res |= test_test_time_funcs_c_53_test_specific(1970, 1, 1, 0, 0, 0, 0);
+        res |= test_test_time_funcs_c_53_test_specific(1970, 1, 1, 0, 0, i32::MAX, int_max);
+        res |= test_test_time_funcs_c_53_test_specific(2038, 1, 19, 3, 14, 7, int_max);
+        if std::mem::size_of::<libc::time_t>() < 8 {
+            res |= test_test_time_funcs_c_53_test_specific(2038, 1, 19, 3, 14, 8, -1);
+        } else {
+            res |= test_test_time_funcs_c_53_test_specific(2038, 1, 19, 3, 14, 8, int_max + 1);
+        }
+
+        if res == 0 {
+            libc::EXIT_SUCCESS
+        } else {
+            libc::EXIT_FAILURE
+        }
     }
 
     // original: fai_insert_index (htslib/faidx.c:93)
@@ -2531,33 +10313,151 @@ pub mod functions {
     }
 
     // original: easy_errno (htslib/hfile_libcurl.c:153)
-    pub unsafe fn hfile_libcurl_c_153_easy_errno() {
-        todo!("translate HTSlib easy_errno from htslib/hfile_libcurl.c:153");
+    pub unsafe fn hfile_libcurl_c_153_easy_errno(easy: *mut c_void, err: c_int) -> c_int {
+        const CURLE_OK: c_int = 0;
+        const CURLE_UNSUPPORTED_PROTOCOL: c_int = 1;
+        const CURLE_URL_MALFORMAT: c_int = 3;
+        const CURLE_NOT_BUILT_IN: c_int = 4;
+        const CURLE_COULDNT_RESOLVE_PROXY: c_int = 5;
+        const CURLE_COULDNT_RESOLVE_HOST: c_int = 6;
+        const CURLE_COULDNT_CONNECT: c_int = 7;
+        const CURLE_REMOTE_ACCESS_DENIED: c_int = 9;
+        const CURLE_FTP_CANT_GET_HOST: c_int = 15;
+        const CURLE_PARTIAL_FILE: c_int = 18;
+        const CURLE_HTTP_RETURNED_ERROR: c_int = 22;
+        const CURLE_OUT_OF_MEMORY: c_int = 27;
+        const CURLE_OPERATION_TIMEDOUT: c_int = 28;
+        const CURLE_RANGE_ERROR: c_int = 33;
+        const CURLE_SSL_CONNECT_ERROR: c_int = 35;
+        const CURLE_FILE_COULDNT_READ_FILE: c_int = 37;
+        const CURLE_TOO_MANY_REDIRECTS: c_int = 47;
+        const CURLE_SEND_ERROR: c_int = 55;
+        const CURLE_RECV_ERROR: c_int = 56;
+        const CURLE_FILESIZE_EXCEEDED: c_int = 63;
+        const CURLE_LOGIN_DENIED: c_int = 67;
+        const CURLE_TFTP_NOTFOUND: c_int = 68;
+        const CURLE_TFTP_PERM: c_int = 69;
+        const CURLE_REMOTE_DISK_FULL: c_int = 70;
+        const CURLE_REMOTE_FILE_EXISTS: c_int = 73;
+
+        match err {
+            CURLE_OK => 0,
+            CURLE_UNSUPPORTED_PROTOCOL | CURLE_URL_MALFORMAT => libc::EINVAL,
+            CURLE_NOT_BUILT_IN => libc::ENOSYS,
+            CURLE_COULDNT_RESOLVE_PROXY | CURLE_COULDNT_RESOLVE_HOST | CURLE_FTP_CANT_GET_HOST => {
+                libc::EDESTADDRREQ
+            }
+            CURLE_COULDNT_CONNECT | CURLE_SEND_ERROR | CURLE_RECV_ERROR => {
+                if easy.is_null() {
+                    libc::ECONNABORTED
+                } else {
+                    libc::ECONNABORTED
+                }
+            }
+            CURLE_REMOTE_ACCESS_DENIED | CURLE_LOGIN_DENIED | CURLE_TFTP_PERM => libc::EACCES,
+            CURLE_PARTIAL_FILE => libc::EPIPE,
+            CURLE_HTTP_RETURNED_ERROR => {
+                if easy.is_null() {
+                    libc::EIO
+                } else {
+                    libc::EIO
+                }
+            }
+            CURLE_OUT_OF_MEMORY => libc::ENOMEM,
+            CURLE_OPERATION_TIMEDOUT => libc::ETIMEDOUT,
+            CURLE_RANGE_ERROR => libc::ESPIPE,
+            CURLE_SSL_CONNECT_ERROR => libc::ECONNABORTED,
+            CURLE_FILE_COULDNT_READ_FILE | CURLE_TFTP_NOTFOUND => libc::ENOENT,
+            CURLE_TOO_MANY_REDIRECTS => libc::ELOOP,
+            CURLE_FILESIZE_EXCEEDED => libc::EFBIG,
+            CURLE_REMOTE_DISK_FULL => libc::ENOSPC,
+            CURLE_REMOTE_FILE_EXISTS => libc::EEXIST,
+            _ => {
+                hts_sys::hts_log(
+                    hts_sys::htsLogLevel_HTS_LOG_ERROR,
+                    c"easy_errno".as_ptr(),
+                    c"Libcurl reported error %d".as_ptr(),
+                    err,
+                );
+                libc::EIO
+            }
+        }
     }
 
     // original: is_retryable (htslib/hfile_libcurl.c:233)
-    pub unsafe fn hfile_libcurl_c_233_is_retryable() {
-        todo!("translate HTSlib is_retryable from htslib/hfile_libcurl.c:233");
+    pub unsafe fn hfile_libcurl_c_233_is_retryable(easy: *mut c_void, err: c_int) -> c_int {
+        const CURLE_COULDNT_CONNECT: c_int = 7;
+        const CURLE_HTTP2: c_int = 16;
+        const CURLE_PARTIAL_FILE: c_int = 18;
+        const CURLE_HTTP_RETURNED_ERROR: c_int = 22;
+        const CURLE_OPERATION_TIMEDOUT: c_int = 28;
+        const CURLE_SSL_CONNECT_ERROR: c_int = 35;
+        const CURLE_GOT_NOTHING: c_int = 52;
+        const CURLE_SEND_ERROR: c_int = 55;
+        const CURLE_RECV_ERROR: c_int = 56;
+        const CURLE_HTTP2_STREAM: c_int = 92;
+
+        match err {
+            CURLE_COULDNT_CONNECT
+            | CURLE_SEND_ERROR
+            | CURLE_RECV_ERROR
+            | CURLE_PARTIAL_FILE
+            | CURLE_OPERATION_TIMEDOUT
+            | CURLE_GOT_NOTHING
+            | CURLE_SSL_CONNECT_ERROR
+            | CURLE_HTTP2
+            | CURLE_HTTP2_STREAM => 1,
+            CURLE_HTTP_RETURNED_ERROR => {
+                if easy.is_null() {
+                    0
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        }
     }
 
     // original: multi_errno (htslib/hfile_libcurl.c:270)
-    pub unsafe fn hfile_libcurl_c_270_multi_errno() {
-        todo!("translate HTSlib multi_errno from htslib/hfile_libcurl.c:270");
+    pub unsafe fn hfile_libcurl_c_270_multi_errno(errm: c_int) -> c_int {
+        match errm {
+            -1 | 0 => 0,
+            1 | 2 | 5 => libc::EBADF,
+            3 => libc::ENOMEM,
+            _ => {
+                hts_sys::hts_log(
+                    hts_sys::htsLogLevel_HTS_LOG_ERROR,
+                    c"multi_errno".as_ptr(),
+                    c"Libcurl reported error %d".as_ptr(),
+                    errm,
+                );
+                libc::EIO
+            }
+        }
     }
 
     // original: share_lock (htslib/hfile_libcurl.c:309)
     pub unsafe fn hfile_libcurl_c_309_share_lock() {
-        todo!("translate HTSlib share_lock from htslib/hfile_libcurl.c:309");
+        libc::pthread_mutex_lock(std::ptr::addr_of_mut!(HFILE_LIBCURL_SHARE_LOCK));
     }
 
     // original: share_unlock (htslib/hfile_libcurl.c:314)
     pub unsafe fn hfile_libcurl_c_314_share_unlock() {
-        todo!("translate HTSlib share_unlock from htslib/hfile_libcurl.c:314");
+        libc::pthread_mutex_unlock(std::ptr::addr_of_mut!(HFILE_LIBCURL_SHARE_LOCK));
     }
 
     // original: free_auth (htslib/hfile_libcurl.c:318)
-    pub unsafe fn hfile_libcurl_c_318_free_auth() {
-        todo!("translate HTSlib free_auth from htslib/hfile_libcurl.c:318");
+    pub unsafe fn hfile_libcurl_c_318_free_auth(tok: *mut c_void) {
+        let tok = tok.cast::<HFileLibcurlAuthToken>();
+        if tok.is_null() {
+            return;
+        }
+        if libc::pthread_mutex_destroy(&mut (*tok).lock) != 0 {
+            libc::abort();
+        }
+        libc::free((*tok).path.cast());
+        libc::free((*tok).token.cast());
+        libc::free(tok.cast());
     }
 
     // original: libcurl_exit (htslib/hfile_libcurl.c:326)
@@ -2566,28 +10466,152 @@ pub mod functions {
     }
 
     // original: append_header (htslib/hfile_libcurl.c:353)
-    pub unsafe fn hfile_libcurl_c_353_append_header() {
-        todo!("translate HTSlib append_header from htslib/hfile_libcurl.c:353");
+    pub unsafe fn hfile_libcurl_c_353_append_header(
+        hdrs: *mut c_void,
+        data: *const c_char,
+        dup: c_int,
+    ) -> c_int {
+        let hdrs = hdrs.cast::<HFileLibcurlHdrList>();
+        if (*hdrs).num == (*hdrs).size {
+            let new_sz = if (*hdrs).size != 0 {
+                (*hdrs).size * 2
+            } else {
+                4
+            };
+            let new_list = libc::realloc(
+                (*hdrs).list.cast(),
+                new_sz as usize * std::mem::size_of::<HFileLibcurlCurlSlist>(),
+            )
+            .cast::<HFileLibcurlCurlSlist>();
+            if new_list.is_null() {
+                return -1;
+            }
+            (*hdrs).size = new_sz;
+            (*hdrs).list = new_list;
+            for i in 1..(*hdrs).num {
+                (*(*hdrs).list.add(i as usize - 1)).next = (*hdrs).list.add(i as usize);
+            }
+        }
+
+        let entry = (*hdrs).list.add((*hdrs).num as usize);
+        (*entry).data = if dup != 0 {
+            libc::strdup(data)
+        } else {
+            data.cast_mut()
+        };
+        if (*entry).data.is_null() {
+            return -1;
+        }
+        if (*hdrs).num > 0 {
+            (*(*hdrs).list.add((*hdrs).num as usize - 1)).next = entry;
+        }
+        (*entry).next = std::ptr::null_mut();
+        (*hdrs).num += 1;
+        0
     }
 
     // original: free_headers (htslib/hfile_libcurl.c:372)
-    pub unsafe fn hfile_libcurl_c_372_free_headers() {
-        todo!("translate HTSlib free_headers from htslib/hfile_libcurl.c:372");
+    pub unsafe fn hfile_libcurl_c_372_free_headers(hdrs: *mut c_void, completely: c_int) {
+        let hdrs = hdrs.cast::<HFileLibcurlHdrList>();
+        for i in 0..(*hdrs).num {
+            let entry = (*hdrs).list.add(i as usize);
+            libc::free((*entry).data.cast());
+            (*entry).data = std::ptr::null_mut();
+            (*entry).next = std::ptr::null_mut();
+        }
+        (*hdrs).num = 0;
+        if completely != 0 {
+            libc::free((*hdrs).list.cast());
+            (*hdrs).size = 0;
+            (*hdrs).list = std::ptr::null_mut();
+        }
     }
 
     // original: get_header_list (htslib/hfile_libcurl.c:387)
-    pub unsafe fn hfile_libcurl_c_387_get_header_list() {
-        todo!("translate HTSlib get_header_list from htslib/hfile_libcurl.c:387");
+    pub unsafe fn hfile_libcurl_c_387_get_header_list(fp: *mut c_void) -> *mut c_void {
+        let fp = fp.cast::<HFileLibcurlHeaderPrefix>();
+        if (*fp).headers.fixed.num > 0 {
+            return (*fp).headers.fixed.list.cast();
+        }
+        if (*fp).headers.extra.num > 0 {
+            return (*fp).headers.extra.list.cast();
+        }
+        std::ptr::null_mut()
     }
 
     // original: is_authorization (htslib/hfile_libcurl.c:395)
-    pub unsafe fn hfile_libcurl_c_395_is_authorization() {
-        todo!("translate HTSlib is_authorization from htslib/hfile_libcurl.c:395");
+    pub unsafe fn hfile_libcurl_c_395_is_authorization(hdr: *const c_char) -> c_int {
+        (libc::strncasecmp(c"authorization:".as_ptr(), hdr, 14) == 0) as c_int
     }
 
     // original: add_callback_headers (htslib/hfile_libcurl.c:399)
-    pub unsafe fn hfile_libcurl_c_399_add_callback_headers() {
-        todo!("translate HTSlib add_callback_headers from htslib/hfile_libcurl.c:399");
+    pub unsafe fn hfile_libcurl_c_399_add_callback_headers(fp: *mut c_void) -> c_int {
+        let fp = fp.cast::<HFileLibcurlHeaderPrefix>();
+        let Some(callback) = (*fp).headers.callback else {
+            return 0;
+        };
+
+        let mut hdrs: *mut *mut c_char = std::ptr::null_mut();
+        if callback((*fp).headers.callback_data, &mut hdrs) != 0 {
+            return -1;
+        }
+        if hdrs.is_null() {
+            return 0;
+        }
+
+        if (*fp).headers.fixed.num > 0 {
+            (*(*fp)
+                .headers
+                .fixed
+                .list
+                .add((*fp).headers.fixed.num as usize - 1))
+            .next = std::ptr::null_mut();
+        }
+        hfile_libcurl_c_372_free_headers(
+            (&mut (*fp).headers.extra as *mut HFileLibcurlHdrList).cast(),
+            0,
+        );
+
+        if (*fp).headers.auth_hdr_num > 0 || (*fp).headers.auth_hdr_num == -2 {
+            (*fp).headers.auth_hdr_num = 0;
+        }
+
+        let mut hdr = hdrs;
+        while !(*hdr).is_null() {
+            if hfile_libcurl_c_353_append_header(
+                (&mut (*fp).headers.extra as *mut HFileLibcurlHdrList).cast(),
+                *hdr,
+                0,
+            ) < 0
+            {
+                while !hdr.is_null() && !(*hdr).is_null() {
+                    libc::free((*hdr).cast());
+                    *hdr = std::ptr::null_mut();
+                    hdr = hdr.add(1);
+                }
+                return -1;
+            }
+            if hfile_libcurl_c_395_is_authorization(*hdr) != 0 && (*fp).headers.auth_hdr_num == 0 {
+                (*fp).headers.auth_hdr_num = -2;
+            }
+            hdr = hdr.add(1);
+        }
+
+        hdr = hdrs;
+        while !(*hdr).is_null() {
+            *hdr = std::ptr::null_mut();
+            hdr = hdr.add(1);
+        }
+
+        if (*fp).headers.fixed.num > 0 && (*fp).headers.extra.num > 0 {
+            (*(*fp)
+                .headers
+                .fixed
+                .list
+                .add((*fp).headers.fixed.num as usize - 1))
+            .next = (*fp).headers.extra.list;
+        }
+        0
     }
 
     // original: read_auth_json (htslib/hfile_libcurl.c:454)
@@ -2596,8 +10620,53 @@ pub mod functions {
     }
 
     // original: read_auth_plain (htslib/hfile_libcurl.c:515)
-    pub unsafe fn hfile_libcurl_c_515_read_auth_plain() {
-        todo!("translate HTSlib read_auth_plain from htslib/hfile_libcurl.c:515");
+    pub unsafe fn hfile_libcurl_c_515_read_auth_plain(
+        tok: *mut c_void,
+        auth_fp: *mut hFILE,
+    ) -> c_int {
+        let tok = tok.cast::<HFileLibcurlAuthToken>();
+        let mut line: kstring_t = std::mem::zeroed();
+        let mut token: kstring_t = std::mem::zeroed();
+
+        if crate::htslib_mini_rs::hfile::khgetline(&mut line, auth_fp) < 0 {
+            libc::free(line.s.cast());
+            libc::free(token.s.cast());
+            return -1;
+        }
+        if crate::htslib_mini_rs::hts::kputc(0, &mut line) < 0 {
+            libc::free(line.s.cast());
+            libc::free(token.s.cast());
+            return -1;
+        }
+
+        let mut start = line.s;
+        while *start != 0 && libc::isspace(*start as c_uchar as c_int) != 0 {
+            start = start.add(1);
+        }
+        let mut end = start;
+        while *end != 0 && libc::isspace(*end as c_uchar as c_int) == 0 {
+            end = end.add(1);
+        }
+
+        if end > start {
+            if crate::htslib_mini_rs::hts::kputs(c"Authorization: Bearer ".as_ptr(), &mut token) < 0
+                || crate::htslib_mini_rs::hts::kputsn(
+                    start,
+                    end.offset_from(start) as usize,
+                    &mut token,
+                ) < 0
+            {
+                libc::free(line.s.cast());
+                libc::free(token.s.cast());
+                return -1;
+            }
+        }
+
+        libc::free((*tok).token.cast());
+        (*tok).token = crate::htslib_mini_rs::hts::ks_release(&mut token);
+        (*tok).expiry = 0;
+        libc::free(line.s.cast());
+        0
     }
 
     // original: renew_auth_token (htslib/hfile_libcurl.c:543)
@@ -2626,13 +10695,46 @@ pub mod functions {
     }
 
     // original: recv_callback (htslib/hfile_libcurl.c:789)
-    pub unsafe fn hfile_libcurl_c_789_recv_callback() {
-        todo!("translate HTSlib recv_callback from htslib/hfile_libcurl.c:789");
+    pub unsafe fn hfile_libcurl_c_789_recv_callback(
+        ptr: *mut c_char,
+        size: usize,
+        nmemb: usize,
+        fpv: *mut c_void,
+    ) -> usize {
+        const CURL_WRITEFUNC_PAUSE: usize = 0x10000001;
+        const HFILE_LIBCURL_PAUSED: c_uint = 1 << 0;
+
+        let fp = fpv.cast::<HFileLibcurlCallbackPrefix>();
+        let n = size.saturating_mul(nmemb);
+
+        if n > (*fp).buffer.len {
+            (*fp).flags |= HFILE_LIBCURL_PAUSED;
+            CURL_WRITEFUNC_PAUSE
+        } else if n == 0 {
+            0
+        } else {
+            libc::memcpy((*fp).buffer.ptr.cast(), ptr.cast(), n);
+            (*fp).buffer.ptr = (*fp).buffer.ptr.add(n);
+            (*fp).buffer.len -= n;
+            n
+        }
     }
 
     // original: header_callback (htslib/hfile_libcurl.c:807)
-    pub unsafe fn hfile_libcurl_c_807_header_callback() {
-        todo!("translate HTSlib header_callback from htslib/hfile_libcurl.c:807");
+    pub unsafe fn hfile_libcurl_c_807_header_callback(
+        contents: *mut c_void,
+        size: usize,
+        nmemb: usize,
+        userp: *mut c_void,
+    ) -> usize {
+        let realsize = size.saturating_mul(nmemb);
+        let resp = userp.cast::<kstring_t>();
+
+        if crate::htslib_mini_rs::hts::kputsn(contents.cast(), realsize, resp) == libc::EOF {
+            0
+        } else {
+            realsize
+        }
     }
 
     // original: refresh_retry_config (htslib/hfile_libcurl.c:821)
@@ -2641,8 +10743,12 @@ pub mod functions {
     }
 
     // original: retry_sleep (htslib/hfile_libcurl.c:836)
-    pub unsafe fn hfile_libcurl_c_836_retry_sleep() {
-        todo!("translate HTSlib retry_sleep from htslib/hfile_libcurl.c:836");
+    pub unsafe fn hfile_libcurl_c_836_retry_sleep(delay_ms: libc::c_long) {
+        let ts = libc::timespec {
+            tv_sec: delay_ms / 1000,
+            tv_nsec: (delay_ms % 1000) * 1_000_000,
+        };
+        libc::nanosleep(&ts, std::ptr::null_mut());
     }
 
     // original: retry_reconnect (htslib/hfile_libcurl.c:848)
@@ -2656,8 +10762,35 @@ pub mod functions {
     }
 
     // original: send_callback (htslib/hfile_libcurl.c:1006)
-    pub unsafe fn hfile_libcurl_c_1006_send_callback() {
-        todo!("translate HTSlib send_callback from htslib/hfile_libcurl.c:1006");
+    pub unsafe fn hfile_libcurl_c_1006_send_callback(
+        ptr: *mut c_char,
+        size: usize,
+        nmemb: usize,
+        fpv: *mut c_void,
+    ) -> usize {
+        const CURL_READFUNC_PAUSE: usize = 0x10000001;
+        const HFILE_LIBCURL_PAUSED: c_uint = 1 << 0;
+        const HFILE_LIBCURL_CLOSING: c_uint = 1 << 1;
+
+        let fp = fpv.cast::<HFileLibcurlCallbackPrefix>();
+        let mut n = size.saturating_mul(nmemb);
+
+        if (*fp).buffer.len == 0 {
+            if ((*fp).flags & HFILE_LIBCURL_CLOSING) != 0 {
+                0
+            } else {
+                (*fp).flags |= HFILE_LIBCURL_PAUSED;
+                CURL_READFUNC_PAUSE
+            }
+        } else {
+            if n > (*fp).buffer.len {
+                n = (*fp).buffer.len;
+            }
+            libc::memcpy(ptr.cast(), (*fp).buffer.ptr.cast(), n);
+            (*fp).buffer.ptr = (*fp).buffer.ptr.add(n);
+            (*fp).buffer.len -= n;
+            n
+        }
     }
 
     // original: libcurl_write (htslib/hfile_libcurl.c:1024)
@@ -2711,43 +10844,209 @@ pub mod functions {
     }
 
     // original: open_nextdir (htslib/plugin.c:42)
-    pub unsafe fn plugin_c_42_open_nextdir() {
-        todo!("translate HTSlib open_nextdir from htslib/plugin.c:42");
+    pub unsafe fn plugin_c_42_open_nextdir(itr: *mut c_void) -> *mut c_void {
+        let itr = itr.cast::<PluginPathItr>();
+        loop {
+            let colon = libc::strchr((*itr).pathdir, b':' as c_int);
+            if colon.is_null() {
+                return std::ptr::null_mut();
+            }
+
+            (*itr).entry.l = 0;
+            crate::htslib_mini_rs::hts::kputsn(
+                (*itr).pathdir,
+                colon.offset_from((*itr).pathdir) as usize,
+                &mut (*itr).entry,
+            );
+            (*itr).pathdir = colon.add(1);
+            if (*itr).entry.l == 0 {
+                continue;
+            }
+
+            let dir = libc::opendir((*itr).entry.s);
+            if !dir.is_null() {
+                if *(*itr).entry.s.add((*itr).entry.l - 1) != b'/' as c_char {
+                    crate::htslib_mini_rs::hts::kputc(b'/' as c_int, &mut (*itr).entry);
+                }
+                (*itr).entry_dir_l = (*itr).entry.l;
+                return dir.cast();
+            }
+        }
     }
 
     // original: hts_path_itr_setup (htslib/plugin.c:69)
-    pub unsafe fn plugin_c_69_hts_path_itr_setup() {
-        todo!("translate HTSlib hts_path_itr_setup from htslib/plugin.c:69");
+    pub unsafe fn plugin_c_69_hts_path_itr_setup(
+        itr: *mut c_void,
+        mut path: *const c_char,
+        mut builtin_path: *const c_char,
+        prefix: *const c_char,
+        prefix_len: usize,
+        suffix: *const c_char,
+        suffix_len: usize,
+    ) {
+        let itr = itr.cast::<PluginPathItr>();
+        (*itr).prefix = prefix;
+        (*itr).prefix_len = prefix_len;
+
+        if !suffix.is_null() {
+            (*itr).suffix = suffix;
+            (*itr).suffix_len = suffix_len;
+        } else {
+            (*itr).suffix = c".so".as_ptr();
+            (*itr).suffix_len = 3;
+        }
+
+        (*itr).path = std::mem::zeroed();
+        (*itr).entry = std::mem::zeroed();
+
+        if builtin_path.is_null() {
+            builtin_path = c"".as_ptr();
+        }
+        if path.is_null() {
+            path = libc::getenv(c"HTS_PATH".as_ptr());
+            if path.is_null() {
+                path = c"".as_ptr();
+            }
+        }
+
+        loop {
+            let len = libc::strcspn(path, c":".as_ptr());
+            if len == 0 {
+                crate::htslib_mini_rs::hts::kputs(builtin_path, &mut (*itr).path);
+            } else {
+                crate::htslib_mini_rs::hts::kputsn(path, len, &mut (*itr).path);
+            }
+            crate::htslib_mini_rs::hts::kputc(b':' as c_int, &mut (*itr).path);
+
+            path = path.add(len);
+            if *path == b':' as c_char {
+                path = path.add(1);
+            } else {
+                break;
+            }
+        }
+
+        (*itr).pathdir = (*itr).path.s;
+        (*itr).dirv = plugin_c_42_open_nextdir(itr.cast());
     }
 
     // original: hts_path_itr_next (htslib/plugin.c:104)
-    pub unsafe fn plugin_c_104_hts_path_itr_next() {
-        todo!("translate HTSlib hts_path_itr_next from htslib/plugin.c:104");
+    pub unsafe fn plugin_c_104_hts_path_itr_next(itr: *mut c_void) -> *const c_char {
+        let itr = itr.cast::<PluginPathItr>();
+        while !(*itr).dirv.is_null() {
+            loop {
+                let e = libc::readdir((*itr).dirv.cast());
+                if e.is_null() {
+                    break;
+                }
+                let d_name = (*e).d_name.as_ptr();
+                let d_name_len = libc::strlen(d_name);
+                if libc::strncmp(d_name, (*itr).prefix, (*itr).prefix_len) == 0
+                    && d_name_len >= (*itr).suffix_len
+                    && libc::strncmp(
+                        d_name.add(d_name_len - (*itr).suffix_len),
+                        (*itr).suffix,
+                        (*itr).suffix_len,
+                    ) == 0
+                {
+                    (*itr).entry.l = (*itr).entry_dir_l;
+                    crate::htslib_mini_rs::hts::kputs(d_name, &mut (*itr).entry);
+                    return (*itr).entry.s;
+                }
+            }
+
+            libc::closedir((*itr).dirv.cast());
+            (*itr).dirv = plugin_c_42_open_nextdir(itr.cast());
+        }
+
+        (*itr).pathdir = std::ptr::null();
+        libc::free((*itr).path.s.cast());
+        (*itr).path.s = std::ptr::null_mut();
+        libc::free((*itr).entry.s.cast());
+        (*itr).entry.s = std::ptr::null_mut();
+        std::ptr::null()
     }
 
     // original: load_plugin (htslib/plugin.c:135)
-    pub unsafe fn plugin_c_135_load_plugin() {
-        todo!("translate HTSlib load_plugin from htslib/plugin.c:135");
+    pub unsafe fn plugin_c_135_load_plugin(
+        pluginp: *mut *mut c_void,
+        filename: *const c_char,
+        symbol: *const c_char,
+    ) -> *mut c_void {
+        let mut lib = libc::dlopen(filename, libc::RTLD_NOW | libc::RTLD_LOCAL);
+        if lib.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let mut sym = libc::dlsym(lib, symbol);
+        if sym.is_null() {
+            let libg = libc::dlopen(
+                filename,
+                libc::RTLD_NOLOAD | libc::RTLD_NOW | libc::RTLD_GLOBAL,
+            );
+            if libg.is_null() {
+                libc::dlclose(lib);
+                return std::ptr::null_mut();
+            }
+            libc::dlclose(lib);
+            lib = libg;
+
+            let mut symbolg: kstring_t = std::mem::zeroed();
+            crate::htslib_mini_rs::hts::kputs(symbol, &mut symbolg);
+            crate::htslib_mini_rs::hts::kputc(b'_' as c_int, &mut symbolg);
+            let slash = libc::strrchr(filename, b'/' as c_int);
+            let basename = if slash.is_null() {
+                filename
+            } else {
+                slash.add(1)
+            };
+            crate::htslib_mini_rs::hts::kputsn(
+                basename,
+                libc::strcspn(basename, c".-+".as_ptr()),
+                &mut symbolg,
+            );
+            sym = libc::dlsym(lib, symbolg.s);
+            libc::free(symbolg.s.cast());
+            if sym.is_null() {
+                libc::dlclose(lib);
+                return std::ptr::null_mut();
+            }
+        }
+
+        *pluginp = lib;
+        sym
     }
 
     // original: plugin_sym (htslib/plugin.c:172)
-    pub unsafe fn plugin_c_172_plugin_sym() {
-        todo!("translate HTSlib plugin_sym from htslib/plugin.c:172");
+    pub unsafe fn plugin_c_172_plugin_sym(
+        plugin: *mut c_void,
+        name: *const c_char,
+        errmsg: *mut *const c_char,
+    ) -> *mut c_void {
+        let sym = libc::dlsym(plugin, name);
+        if sym.is_null() && !errmsg.is_null() {
+            *errmsg = libc::dlerror();
+        }
+        sym
     }
 
     // original: plugin_func (htslib/plugin.c:179)
-    pub unsafe fn plugin_c_179_plugin_func() {
-        todo!("translate HTSlib plugin_func from htslib/plugin.c:179");
+    pub unsafe fn plugin_c_179_plugin_func(
+        plugin: *mut c_void,
+        name: *const c_char,
+        errmsg: *mut *const c_char,
+    ) -> *mut c_void {
+        plugin_c_172_plugin_sym(plugin, name, errmsg)
     }
 
     // original: close_plugin (htslib/plugin.c:186)
-    pub unsafe fn plugin_c_186_close_plugin() {
-        todo!("translate HTSlib close_plugin from htslib/plugin.c:186");
+    pub unsafe fn plugin_c_186_close_plugin(plugin: *mut c_void) {
+        libc::dlclose(plugin);
     }
 
     // original: hts_plugin_path (htslib/plugin.c:195)
-    pub unsafe fn plugin_c_195_hts_plugin_path() {
-        todo!("translate HTSlib hts_plugin_path from htslib/plugin.c:195");
+    pub unsafe fn plugin_c_195_hts_plugin_path() -> *const c_char {
+        std::ptr::null()
     }
 
     // original: fscan_string (htslib/textutils.c:164)
@@ -2847,7 +11146,54 @@ pub mod functions {
         token: *mut crate::htslib_mini_rs::hts::hts_json_token,
         kstr: *mut kstring_t,
     ) -> c_char {
-        crate::htslib_mini_rs::hts::hts_json_fnext(fp, token, kstr)
+        loop {
+            let mut c = htslib_hfile_h_163_hgetc(fp);
+            match c {
+                x if matches!(x as u8, b' ' | b'\t' | b'\r' | b'\n' | b',' | b':') => continue,
+                x if x == libc::EOF => {
+                    (*token).type_ = 0;
+                    return (*token).type_;
+                }
+                x if matches!(x as u8, b'{' | b'[' | b'}' | b']') => {
+                    (*token).type_ = x as c_char;
+                    return (*token).type_;
+                }
+                x if x == b'"' as c_int => {
+                    (*kstr).l = 0;
+                    textutils_c_164_fscan_string(fp, kstr);
+                    if (*kstr).l == 0 {
+                        crate::htslib_mini_rs::hts::kputsn(c"".as_ptr(), 0, kstr);
+                    }
+                    (*token).str_ = (*kstr).s;
+                    (*token).type_ = b's' as c_char;
+                    return (*token).type_;
+                }
+                _ => {
+                    (*kstr).l = 0;
+                    crate::htslib_mini_rs::hts::kputc(c, kstr);
+                    let mut peek = 0 as c_char;
+                    while crate::htslib_mini_rs::hfile::hpeek(
+                        fp,
+                        (&mut peek as *mut c_char).cast(),
+                        1,
+                    ) == 1
+                        && !matches!(
+                            peek as u8,
+                            b' ' | b'\t' | b'\r' | b'\n' | b',' | b']' | b'}'
+                        )
+                    {
+                        c = htslib_hfile_h_163_hgetc(fp);
+                        if c == libc::EOF {
+                            break;
+                        }
+                        crate::htslib_mini_rs::hts::kputc(c, kstr);
+                    }
+                    (*token).str_ = (*kstr).s;
+                    (*token).type_ = crate::htslib_mini_rs::hts::token_type(token);
+                    return (*token).type_;
+                }
+            }
+        }
     }
 
     // original: fnext (htslib/textutils.c:397)
@@ -2861,17 +11207,46 @@ pub mod functions {
 
     // original: hts_json_fskip_value (htslib/textutils.c:402)
     pub unsafe fn textutils_c_402_hts_json_fskip_value(fp: *mut hFILE, type_: c_char) -> c_char {
-        crate::htslib_mini_rs::hts::hts_json_fskip_value(fp, type_)
+        let mut str_: kstring_t = std::mem::zeroed();
+        let ret = crate::htslib_mini_rs::hts::skip_value(
+            type_,
+            Some(textutils_c_397_fnext),
+            fp.cast(),
+            (&mut str_ as *mut kstring_t).cast(),
+        );
+        libc::free(str_.s.cast());
+        ret
     }
 
     // original: HTS_FORMAT (htslib/bgzip.c:51)
-    pub unsafe fn bgzip_c_51_HTS_FORMAT() {
-        todo!("translate HTSlib HTS_FORMAT from htslib/bgzip.c:51");
-    }
+    pub unsafe fn bgzip_c_51_HTS_FORMAT() {}
 
     // original: confirm_overwrite (htslib/bgzip.c:68)
-    pub unsafe fn bgzip_c_68_confirm_overwrite() {
-        todo!("translate HTSlib confirm_overwrite from htslib/bgzip.c:68");
+    pub unsafe fn bgzip_c_68_confirm_overwrite(fn_: *const c_char) -> c_int {
+        let save_errno = *libc::__errno_location();
+        let mut ret = 0;
+
+        if libc::isatty(libc::STDIN_FILENO) != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"[bgzip] %s already exists; do you wish to overwrite (y or n)? ".as_ptr(),
+                fn_,
+            );
+            let mut line = [0 as c_char; 1024];
+            if !libc::fgets(
+                line.as_mut_ptr(),
+                line.len() as c_int,
+                hts_sys::stdin.cast(),
+            )
+            .is_null()
+                && (line[0] == b'Y' as c_char || line[0] == b'y' as c_char)
+            {
+                ret = 1;
+            }
+        }
+
+        *libc::__errno_location() = save_errno;
+        ret
     }
 
     // original: known_extension (htslib/bgzip.c:82)
@@ -2979,8 +11354,80 @@ pub mod functions {
     }
 
     // original: bgzip_main_usage (htslib/bgzip.c:192)
-    pub unsafe fn bgzip_c_192_bgzip_main_usage() {
-        todo!("translate HTSlib bgzip_main_usage from htslib/bgzip.c:192");
+    pub unsafe fn bgzip_c_192_bgzip_main_usage(fp: *mut libc::FILE, status: c_int) -> c_int {
+        libc::fprintf(fp, c"\n".as_ptr());
+        libc::fprintf(
+            fp,
+            c"Version: %s\n".as_ptr(),
+            crate::htslib_mini_rs::hts::hts_version(),
+        );
+        libc::fprintf(fp, c"Usage:   bgzip [OPTIONS] [FILE] ...\n".as_ptr());
+        libc::fprintf(fp, c"Options:\n".as_ptr());
+        libc::fprintf(
+            fp,
+            c"   -b, --offset INT           decompress at virtual file pointer (0-based uncompressed offset)\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -c, --stdout               write on standard output, keep original files unchanged\n"
+                .as_ptr(),
+        );
+        libc::fprintf(fp, c"   -d, --decompress           decompress\n".as_ptr());
+        libc::fprintf(
+            fp,
+            c"   -f, --force                overwrite files without asking\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -g, --rebgzip              use an index file to bgzip a file\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -h, --help                 give this help\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -i, --index                compress and create BGZF index\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -I, --index-name FILE      name of BGZF index file [file.gz.gzi]\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -k, --keep                 don't delete input files during operation\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -l, --compress-level INT   Compression level to use when compressing; 0 to 9, or -1 for default [-1]\n"
+                .as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -o, --output FILE          write to file, keep original files unchanged\n"
+                .as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -r, --reindex              (re)index compressed file\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -s, --size INT             decompress INT bytes (uncompressed size)\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -t, --test                 test integrity of compressed file\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"       --binary               Don't align blocks with text lines\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -@, --threads INT          number of compression threads to use [1]\n".as_ptr(),
+        );
+        status
     }
 
     // original: main (htslib/bgzip.c:217)
@@ -3042,9 +11489,7 @@ pub mod functions {
     }
 
     // original: KHASH_DECLARE (htslib/header.c:44)
-    pub unsafe fn header_c_44_KHASH_DECLARE() {
-        todo!("translate HTSlib KHASH_DECLARE from htslib/header.c:44");
-    }
+    pub unsafe fn header_c_44_KHASH_DECLARE() {}
 
     // original: sam_hrecs_init_type_order (htslib/header.c:69)
     pub unsafe fn header_c_69_sam_hrecs_init_type_order() {
@@ -3107,13 +11552,70 @@ pub mod functions {
     }
 
     // original: known_stderr (htslib/header.c:780)
-    pub unsafe fn header_c_780_known_stderr() {
-        todo!("translate HTSlib known_stderr from htslib/header.c:780");
+    pub unsafe fn header_c_780_known_stderr(tool: *const c_char, advice: *const c_char) {
+        hts_sys::hts_log(
+            hts_sys::htsLogLevel_HTS_LOG_WARNING,
+            c"known_stderr".as_ptr(),
+            c"SAM file corrupted by embedded %s error/log message".as_ptr(),
+            tool,
+        );
+        hts_sys::hts_log(
+            hts_sys::htsLogLevel_HTS_LOG_WARNING,
+            c"known_stderr".as_ptr(),
+            c"%s".as_ptr(),
+            advice,
+        );
     }
 
     // original: warn_if_known_stderr (htslib/header.c:788)
-    pub unsafe fn header_c_788_warn_if_known_stderr() {
-        todo!("translate HTSlib warn_if_known_stderr from htslib/header.c:788");
+    pub unsafe fn header_c_788_warn_if_known_stderr(line: *const c_char, len: usize) {
+        let ilen = if len < c_int::MAX as usize {
+            len as c_int
+        } else {
+            c_int::MAX
+        };
+
+        if !crate::htslib_mini_rs::hts::kmemmem(
+            line.cast(),
+            ilen,
+            c"M::bwa_idx_load_from_disk".as_ptr().cast(),
+            25,
+            std::ptr::null_mut(),
+        )
+        .is_null()
+        {
+            header_c_780_known_stderr(
+                c"bwa".as_ptr(),
+                c"Use `bwa mem -o file.sam ...` or `bwa sampe -f file.sam ...` instead of `bwa ... > file.sam`"
+                    .as_ptr(),
+            );
+        } else if !crate::htslib_mini_rs::hts::kmemmem(
+            line.cast(),
+            ilen,
+            c"M::mem_pestat".as_ptr().cast(),
+            13,
+            std::ptr::null_mut(),
+        )
+        .is_null()
+        {
+            header_c_780_known_stderr(
+                c"bwa".as_ptr(),
+                c"Use `bwa mem -o file.sam ...` instead of `bwa mem ... > file.sam`".as_ptr(),
+            );
+        } else if !crate::htslib_mini_rs::hts::kmemmem(
+            line.cast(),
+            ilen,
+            c"loaded/built the index".as_ptr().cast(),
+            22,
+            std::ptr::null_mut(),
+        )
+        .is_null()
+        {
+            header_c_780_known_stderr(
+                c"minimap2".as_ptr(),
+                c"Use `minimap2 -o file.sam ...` instead of `minimap2 ... > file.sam`".as_ptr(),
+            );
+        }
     }
 
     // original: parse_comment_line (htslib/header.c:800)
@@ -3162,8 +11664,17 @@ pub mod functions {
     }
 
     // original: valid_sam_header_type (htslib/header.c:1325)
-    pub unsafe fn header_c_1325_valid_sam_header_type() {
-        todo!("translate HTSlib valid_sam_header_type from htslib/header.c:1325");
+    pub unsafe fn header_c_1325_valid_sam_header_type(s: *const c_char) -> c_int {
+        if *s != b'@' as c_char {
+            return 0;
+        }
+        match *s.add(1) as u8 {
+            b'H' => (*s.add(2) == b'D' as c_char && *s.add(3) == b'\t' as c_char) as c_int,
+            b'S' => (*s.add(2) == b'Q' as c_char && *s.add(3) == b'\t' as c_char) as c_int,
+            b'R' | b'P' => (*s.add(2) == b'G' as c_char && *s.add(3) == b'\t' as c_char) as c_int,
+            b'C' => (*s.add(2) == b'O' as c_char) as c_int,
+            _ => 0,
+        }
     }
 
     // original: sam_hdr_build_from_sam_file (htslib/header.c:1353)
@@ -3172,13 +11683,29 @@ pub mod functions {
     }
 
     // original: redact_header_text (htslib/header.c:1530)
-    pub unsafe fn header_c_1530_redact_header_text() {
-        todo!("translate HTSlib redact_header_text from htslib/header.c:1530");
+    pub unsafe fn header_c_1530_redact_header_text(bh: *mut crate::htslib_mini_rs::sam::sam_hdr_t) {
+        (*bh).l_text = 0;
+        libc::free((*bh).text.cast());
+        (*bh).text = std::ptr::null_mut();
     }
 
     // original: sam_hrecs_find_type_pos (htslib/header.c:1546)
     pub unsafe fn header_c_1546_sam_hrecs_find_type_pos() {
         todo!("translate HTSlib sam_hrecs_find_type_pos from htslib/header.c:1546");
+    }
+
+    // original: sam_hdr_length (htslib/header.c:1578)
+    pub unsafe fn header_c_1578_sam_hdr_length(
+        h: *mut crate::htslib_mini_rs::sam::sam_hdr_t,
+    ) -> usize {
+        crate::htslib_mini_rs::sam::sam_hdr_length(h)
+    }
+
+    // original: sam_hdr_str (htslib/header.c:1585)
+    pub unsafe fn header_c_1585_sam_hdr_str(
+        h: *mut crate::htslib_mini_rs::sam::sam_hdr_t,
+    ) -> *const c_char {
+        crate::htslib_mini_rs::sam::sam_hdr_str(h)
     }
 
     // original: sam_hdr_rebuild (htslib/header.c:1604)
@@ -3430,8 +11957,114 @@ pub mod functions {
     }
 
     // original: usage (htslib/tabix.c:580)
-    pub unsafe fn tabix_c_580_usage() {
-        todo!("translate HTSlib usage from htslib/tabix.c:580");
+    pub unsafe fn tabix_c_580_usage(fp: *mut libc::FILE, status: c_int) -> c_int {
+        libc::fprintf(fp, c"\n".as_ptr());
+        libc::fprintf(
+            fp,
+            c"Version: %s\n".as_ptr(),
+            crate::htslib_mini_rs::hts::hts_version(),
+        );
+        libc::fprintf(
+            fp,
+            c"Usage:   tabix [OPTIONS] [FILE] [REGION [...]]\n".as_ptr(),
+        );
+        libc::fprintf(fp, c"\n".as_ptr());
+        libc::fprintf(fp, c"Indexing Options:\n".as_ptr());
+        libc::fprintf(
+            fp,
+            c"   -0, --zero-based           coordinates are zero-based\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -b, --begin INT            column number for region start [4]\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -c, --comment CHAR         skip comment lines starting with CHAR [null]\n"
+                .as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -C, --csi                  generate CSI index for VCF (default is TBI)\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -e, --end INT              column number for region end (if no end, set INT to -b) [5]\n"
+                .as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -f, --force                overwrite existing index without asking\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -m, --min-shift INT        set minimal interval size for CSI indices to 2^INT [14]\n"
+                .as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -p, --preset STR           gff, bed, sam, vcf, gaf\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -s, --sequence INT         column number for sequence names (suppressed by -p) [1]\n"
+                .as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -S, --skip-lines INT       skip first INT lines [0]\n".as_ptr(),
+        );
+        libc::fprintf(fp, c"\n".as_ptr());
+        libc::fprintf(fp, c"Querying and other options:\n".as_ptr());
+        libc::fprintf(
+            fp,
+            c"   -h, --print-header         print also the header lines\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -H, --only-header          print only the header lines\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -l, --list-chroms          list chromosome names\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -r, --reheader FILE        replace the header with the content of FILE\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -R, --regions FILE         restrict to regions listed in the file\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -T, --targets FILE         similar to -R but streams rather than index-jumps\n"
+                .as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -D                         do not download the index file\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"       --cache INT            set cache size to INT megabytes (0 disables) [10]\n"
+                .as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"       --separate-regions     separate the output by corresponding regions\n"
+                .as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"       --verbosity INT        set verbosity [3]\n".as_ptr(),
+        );
+        libc::fprintf(
+            fp,
+            c"   -@, --threads INT          number of additional threads to use [0]\n".as_ptr(),
+        );
+        libc::fprintf(fp, c"\n".as_ptr());
+        status
     }
 
     // original: main (htslib/tabix.c:614)
@@ -3605,18 +12238,85 @@ pub mod functions {
     }
 
     // original: zlib_mem_deflate (htslib/cram/cram_io.c:1222)
-    pub unsafe fn cram_cram_io_c_1222_zlib_mem_deflate() {
-        todo!("translate HTSlib zlib_mem_deflate from htslib/cram/cram_io.c:1222");
+    pub unsafe fn cram_cram_io_c_1222_zlib_mem_deflate(
+        data: *mut c_char,
+        size: usize,
+        cdata_size: *mut usize,
+        level: c_int,
+        _strat: c_int,
+    ) -> *mut c_char {
+        *cdata_size = 0;
+        let input = std::slice::from_raw_parts(data.cast::<u8>(), size);
+        let compression = flate2::Compression::new(level.clamp(0, 9) as u32);
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), compression);
+        if std::io::Write::write_all(&mut encoder, input).is_err() {
+            return std::ptr::null_mut();
+        }
+        let compressed = match encoder.finish() {
+            Ok(compressed) => compressed,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        let out = libc::malloc(compressed.len().max(1)).cast::<u8>();
+        if out.is_null() {
+            return std::ptr::null_mut();
+        }
+        if !compressed.is_empty() {
+            std::ptr::copy_nonoverlapping(compressed.as_ptr(), out, compressed.len());
+        }
+        *cdata_size = compressed.len();
+        out.cast()
     }
 
     // original: lzma_mem_deflate (htslib/cram/cram_io.c:1295)
-    pub unsafe fn cram_cram_io_c_1295_lzma_mem_deflate() {
-        todo!("translate HTSlib lzma_mem_deflate from htslib/cram/cram_io.c:1295");
+    pub unsafe fn cram_cram_io_c_1295_lzma_mem_deflate(
+        data: *mut c_char,
+        size: usize,
+        cdata_size: *mut usize,
+        level: c_int,
+    ) -> *mut c_char {
+        *cdata_size = 0;
+        let input = std::slice::from_raw_parts(data.cast::<u8>(), size);
+        let mut encoder = xz2::write::XzEncoder::new(Vec::new(), level as u32);
+        if std::io::Write::write_all(&mut encoder, input).is_err() {
+            return std::ptr::null_mut();
+        }
+        let compressed = match encoder.finish() {
+            Ok(compressed) => compressed,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        let out = libc::malloc(compressed.len().max(1)).cast::<u8>();
+        if out.is_null() {
+            return std::ptr::null_mut();
+        }
+        if !compressed.is_empty() {
+            std::ptr::copy_nonoverlapping(compressed.as_ptr(), out, compressed.len());
+        }
+        *cdata_size = compressed.len();
+        out.cast()
     }
 
     // original: lzma_mem_inflate (htslib/cram/cram_io.c:1313)
-    pub unsafe fn cram_cram_io_c_1313_lzma_mem_inflate() {
-        todo!("translate HTSlib lzma_mem_inflate from htslib/cram/cram_io.c:1313");
+    pub unsafe fn cram_cram_io_c_1313_lzma_mem_inflate(
+        cdata: *mut c_char,
+        csize: usize,
+        size: *mut usize,
+    ) -> *mut c_char {
+        *size = 0;
+        let input = std::slice::from_raw_parts(cdata.cast::<u8>(), csize);
+        let mut decoder = xz2::read::XzDecoder::new(std::io::Cursor::new(input));
+        let mut decoded = Vec::new();
+        if std::io::Read::read_to_end(&mut decoder, &mut decoded).is_err() {
+            return std::ptr::null_mut();
+        }
+        let out = libc::malloc(decoded.len().max(1)).cast::<u8>();
+        if out.is_null() {
+            return std::ptr::null_mut();
+        }
+        if !decoded.is_empty() {
+            std::ptr::copy_nonoverlapping(decoded.as_ptr(), out, decoded.len());
+        }
+        *size = decoded.len();
+        out.cast()
     }
 
     // original: cram_compress_by_method (htslib/cram/cram_io.c:1756)
@@ -3852,13 +12552,65 @@ pub mod functions {
     }
 
     // original: kget_int32 (htslib/cram/cram_index.c:120)
-    pub unsafe fn cram_cram_index_c_120_kget_int32() {
-        todo!("translate HTSlib kget_int32 from htslib/cram/cram_index.c:120");
+    pub unsafe fn cram_cram_index_c_120_kget_int32(
+        k: *mut kstring_t,
+        pos: *mut usize,
+        val_p: *mut i32,
+    ) -> c_int {
+        let mut sign = 1i32;
+        let mut val = 0i32;
+        let mut p = *pos;
+
+        while p < (*k).l && matches!(*(*k).s.add(p) as u8, b' ' | b'\t') {
+            p += 1;
+        }
+        if p < (*k).l && *(*k).s.add(p) as u8 == b'-' {
+            sign = -1;
+            p += 1;
+        }
+        if p >= (*k).l || !(*(*k).s.add(p) as u8).is_ascii_digit() {
+            return -1;
+        }
+        while p < (*k).l && (*(*k).s.add(p) as u8).is_ascii_digit() {
+            let digit = (*(*k).s.add(p) as u8 - b'0') as i32;
+            p += 1;
+            val = val.wrapping_mul(10).wrapping_add(digit);
+        }
+
+        *pos = p;
+        *val_p = sign.wrapping_mul(val);
+        0
     }
 
     // original: kget_int64 (htslib/cram/cram_index.c:145)
-    pub unsafe fn cram_cram_index_c_145_kget_int64() {
-        todo!("translate HTSlib kget_int64 from htslib/cram/cram_index.c:145");
+    pub unsafe fn cram_cram_index_c_145_kget_int64(
+        k: *mut kstring_t,
+        pos: *mut usize,
+        val_p: *mut i64,
+    ) -> c_int {
+        let mut sign = 1i64;
+        let mut val = 0i64;
+        let mut p = *pos;
+
+        while p < (*k).l && matches!(*(*k).s.add(p) as u8, b' ' | b'\t') {
+            p += 1;
+        }
+        if p < (*k).l && *(*k).s.add(p) as u8 == b'-' {
+            sign = -1;
+            p += 1;
+        }
+        if p >= (*k).l || !(*(*k).s.add(p) as u8).is_ascii_digit() {
+            return -1;
+        }
+        while p < (*k).l && (*(*k).s.add(p) as u8).is_ascii_digit() {
+            let digit = (*(*k).s.add(p) as u8 - b'0') as i64;
+            p += 1;
+            val = val.wrapping_mul(10).wrapping_add(digit);
+        }
+
+        *pos = p;
+        *val_p = sign.wrapping_mul(val);
+        0
     }
 
     // original: cram_index_load (htslib/cram/cram_index.c:176)
@@ -4014,13 +12766,29 @@ pub mod functions {
     }
 
     // original: nbits (htslib/cram/cram_decode.c:1051)
-    pub unsafe fn cram_cram_decode_c_1051_nbits() {
-        todo!("translate HTSlib nbits from htslib/cram/cram_decode.c:1051");
+    pub unsafe fn cram_cram_decode_c_1051_nbits(mut v: c_int) -> c_int {
+        const MULTIPLY_DEBRUIJN_BIT_POSITION: [c_int; 32] = [
+            1, 10, 2, 11, 14, 22, 3, 30, 12, 15, 17, 19, 23, 26, 4, 31, 9, 13, 21, 29, 16, 18, 25,
+            8, 20, 28, 24, 7, 27, 6, 5, 32,
+        ];
+
+        v |= v >> 1;
+        v |= v >> 2;
+        v |= v >> 4;
+        v |= v >> 8;
+        v |= v >> 16;
+
+        MULTIPLY_DEBRUIJN_BIT_POSITION[((v as u32).wrapping_mul(0x07C4_ACDD) >> 27) as usize]
     }
 
     // original: sort_freqs (htslib/cram/cram_decode.c:1069)
-    pub unsafe fn cram_cram_decode_c_1069_sort_freqs() {
-        todo!("translate HTSlib sort_freqs from htslib/cram/cram_decode.c:1069");
+    pub unsafe fn cram_cram_decode_c_1069_sort_freqs(
+        vp1: *const c_void,
+        vp2: *const c_void,
+    ) -> c_int {
+        let i1 = *vp1.cast::<c_int>();
+        let i2 = *vp2.cast::<c_int>();
+        i1 - i2
     }
 
     // original: add_md_char (htslib/cram/cram_decode.c:1080)
@@ -4044,8 +12812,14 @@ pub mod functions {
     }
 
     // original: aux_ele_size (htslib/cram/cram_decode.c:1989)
-    pub unsafe fn cram_cram_decode_c_1989_aux_ele_size() {
-        todo!("translate HTSlib aux_ele_size from htslib/cram/cram_decode.c:1989");
+    pub unsafe fn cram_cram_decode_c_1989_aux_ele_size(type_: u8) -> c_int {
+        match type_ {
+            b'A' | b'c' | b'C' => 1,
+            b's' | b'S' => 2,
+            b'i' | b'I' | b'f' => 4,
+            b'd' => 8,
+            _ => 1,
+        }
     }
 
     // original: cram_decode_aux (htslib/cram/cram_decode.c:2008)
@@ -4059,8 +12833,18 @@ pub mod functions {
     }
 
     // original: md5_print (htslib/cram/cram_decode.c:2305)
-    pub unsafe fn cram_cram_decode_c_2305_md5_print() {
-        todo!("translate HTSlib md5_print from htslib/cram/cram_decode.c:2305");
+    pub unsafe fn cram_cram_decode_c_2305_md5_print(
+        md5: *mut c_uchar,
+        out: *mut c_char,
+    ) -> *mut c_char {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for i in 0..16 {
+            let byte = *md5.add(i);
+            *out.add(i * 2) = HEX[(byte >> 4) as usize] as c_char;
+            *out.add(i * 2 + 1) = HEX[(byte & 15) as usize] as c_char;
+        }
+        *out.add(32) = 0;
+        out
     }
 
     // original: cram_decode_tlen (htslib/cram/cram_decode.c:2322)
@@ -4251,18 +13035,36 @@ pub mod functions {
     }
 
     // original: debug_buffer (htslib/synced_bcf_reader.c:518)
-    pub unsafe fn synced_bcf_reader_c_518_debug_buffer() {
-        todo!("translate HTSlib debug_buffer from htslib/synced_bcf_reader.c:518");
-    }
+    pub unsafe fn synced_bcf_reader_c_518_debug_buffer() {}
 
     // original: debug_buffers (htslib/synced_bcf_reader.c:531)
-    pub unsafe fn synced_bcf_reader_c_531_debug_buffers() {
-        todo!("translate HTSlib debug_buffers from htslib/synced_bcf_reader.c:531");
-    }
+    pub unsafe fn synced_bcf_reader_c_531_debug_buffers() {}
 
     // original: has_filter (htslib/synced_bcf_reader.c:543)
-    pub unsafe fn synced_bcf_reader_c_543_has_filter() {
-        todo!("translate HTSlib has_filter from htslib/synced_bcf_reader.c:543");
+    pub unsafe fn synced_bcf_reader_c_543_has_filter(
+        reader: *mut c_void,
+        line: *mut c_void,
+    ) -> c_int {
+        let reader = reader.cast::<BcfSrReaderFilterPrefix>();
+        let line = line.cast::<crate::htslib_mini_rs::vcf::bcf1_t>();
+
+        if (*line).d.n_flt == 0 {
+            for j in 0..(*reader).nfilter_ids {
+                if *(*reader).filter_ids.add(j as usize) < 0 {
+                    return 1;
+                }
+            }
+            return 0;
+        }
+
+        for i in 0..(*line).d.n_flt {
+            for j in 0..(*reader).nfilter_ids {
+                if *(*line).d.flt.add(i as usize) == *(*reader).filter_ids.add(j as usize) {
+                    return 1;
+                }
+            }
+        }
+        0
     }
 
     // original: _reader_seek (htslib/synced_bcf_reader.c:560)
@@ -4336,8 +13138,23 @@ pub mod functions {
     }
 
     // original: regions_cmp (htslib/synced_bcf_reader.c:1060)
-    pub unsafe fn synced_bcf_reader_c_1060_regions_cmp() {
-        todo!("translate HTSlib regions_cmp from htslib/synced_bcf_reader.c:1060");
+    pub unsafe fn synced_bcf_reader_c_1060_regions_cmp(
+        aptr: *const c_void,
+        bptr: *const c_void,
+    ) -> c_int {
+        let a = aptr.cast::<SyncedBcfRegion1>();
+        let b = bptr.cast::<SyncedBcfRegion1>();
+        if (*a).start < (*b).start {
+            -1
+        } else if (*a).start > (*b).start {
+            1
+        } else if (*a).end < (*b).end {
+            -1
+        } else if (*a).end > (*b).end {
+            1
+        } else {
+            0
+        }
     }
 
     // original: regions_merge (htslib/synced_bcf_reader.c:1070)
@@ -4456,13 +13273,62 @@ pub mod functions {
     }
 
     // original: urldecode_kput (htslib/hfile_s3.c:165)
-    pub unsafe fn hfile_s3_c_165_urldecode_kput() {
-        todo!("translate HTSlib urldecode_kput from htslib/hfile_s3.c:165");
+    pub unsafe fn hfile_s3_c_165_urldecode_kput(
+        s: *const c_char,
+        len: c_int,
+        str_: *mut kstring_t,
+    ) {
+        let mut buf = [0 as c_char; 3];
+        let mut i = 0;
+
+        while i < len {
+            if *s.add(i as usize) == b'%' as c_char && i + 2 < len {
+                buf[0] = *s.add((i + 1) as usize);
+                buf[1] = *s.add((i + 2) as usize);
+                crate::htslib_mini_rs::hts::kputc(
+                    libc::strtol(buf.as_ptr(), std::ptr::null_mut(), 16) as c_int,
+                    str_,
+                );
+                i += 3;
+            } else {
+                crate::htslib_mini_rs::hts::kputc(*s.add(i as usize) as c_int, str_);
+                i += 1;
+            }
+        }
     }
 
     // original: base64_kput (htslib/hfile_s3.c:181)
-    pub unsafe fn hfile_s3_c_181_base64_kput() {
-        todo!("translate HTSlib base64_kput from htslib/hfile_s3.c:181");
+    pub unsafe fn hfile_s3_c_181_base64_kput(
+        data: *const c_uchar,
+        len: usize,
+        str_: *mut kstring_t,
+    ) {
+        static BASE64: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+        let mut i = 0usize;
+        let mut x = 0u32;
+        let mut bits = 0;
+        let mut pad = 0usize;
+
+        while bits != 0 || i < len {
+            if bits < 6 {
+                x <<= 8;
+                bits += 8;
+                if i < len {
+                    x |= *data.add(i) as u32;
+                    i += 1;
+                } else {
+                    pad += 1;
+                }
+            }
+
+            bits -= 6;
+            crate::htslib_mini_rs::hts::kputc(BASE64[((x >> bits) & 63) as usize] as c_int, str_);
+        }
+
+        (*str_).l -= pad;
+        crate::htslib_mini_rs::hts::kputsn(c"==".as_ptr(), pad, str_);
     }
 
     // original: is_dns_compliant (htslib/hfile_s3.c:206)
@@ -4505,8 +13371,26 @@ pub mod functions {
     }
 
     // original: expand_tilde_open (htslib/hfile_s3.c:231)
-    pub unsafe fn hfile_s3_c_231_expand_tilde_open() {
-        todo!("translate HTSlib expand_tilde_open from htslib/hfile_s3.c:231");
+    pub unsafe fn hfile_s3_c_231_expand_tilde_open(
+        fname: *const c_char,
+        mode: *const c_char,
+    ) -> *mut libc::FILE {
+        if libc::strncmp(fname, c"~/".as_ptr(), 2) == 0 {
+            let mut full_fname: kstring_t = std::mem::zeroed();
+            let home = libc::getenv(c"HOME".as_ptr());
+            if home.is_null() {
+                return std::ptr::null_mut();
+            }
+
+            crate::htslib_mini_rs::hts::kputs(home, &mut full_fname);
+            crate::htslib_mini_rs::hts::kputs(fname.add(1), &mut full_fname);
+
+            let fp = libc::fopen(full_fname.s, mode);
+            libc::free(full_fname.s.cast());
+            fp
+        } else {
+            libc::fopen(fname, mode)
+        }
     }
 
     // original: parse_ini (htslib/hfile_s3.c:252)
@@ -4515,18 +13399,173 @@ pub mod functions {
     }
 
     // original: parse_simple (htslib/hfile_s3.c:294)
-    pub unsafe fn hfile_s3_c_294_parse_simple() {
-        todo!("translate HTSlib parse_simple from htslib/hfile_s3.c:294");
+    pub unsafe fn hfile_s3_c_294_parse_simple(
+        fname: *const c_char,
+        id: *mut kstring_t,
+        secret: *mut kstring_t,
+    ) {
+        let mut text: kstring_t = std::mem::zeroed();
+        let fp = hfile_s3_c_231_expand_tilde_open(fname, c"r".as_ptr());
+        if fp.is_null() {
+            return;
+        }
+
+        while crate::htslib_mini_rs::hts::kfgetline(&mut text, fp) >= 0 {
+            crate::htslib_mini_rs::hts::kputc(b' ' as c_int, &mut text);
+        }
+        libc::fclose(fp);
+
+        let mut s = text.s;
+        while libc::isspace(*s as c_uchar as c_int) != 0 {
+            s = s.add(1);
+        }
+        let len = libc::strcspn(s, c" \t".as_ptr());
+        crate::htslib_mini_rs::hts::kputsn(s, len, id);
+
+        s = s.add(len);
+        while libc::isspace(*s as c_uchar as c_int) != 0 {
+            s = s.add(1);
+        }
+        crate::htslib_mini_rs::hts::kputsn(s, libc::strcspn(s, c" \t".as_ptr()), secret);
+
+        libc::free(text.s.cast());
+    }
+
+    #[repr(C)]
+    struct S3AuthDataLayout {
+        id: kstring_t,
+        token: kstring_t,
+        secret: kstring_t,
+        region: kstring_t,
+        canonical_query_string: kstring_t,
+        user_query_string: kstring_t,
+        host: kstring_t,
+        profile: kstring_t,
+        url_style: c_int,
+        creds_expiry_time: libc::time_t,
+        bucket: *mut c_char,
+        auth_time: libc::time_t,
+        date: [c_char; 40],
+        date_long: [c_char; 17],
+        date_short: [c_char; 9],
+        date_html: kstring_t,
+        mode: c_char,
+        is_v4: c_int,
     }
 
     // original: free_auth_data (htslib/hfile_s3.c:319)
-    pub unsafe fn hfile_s3_c_319_free_auth_data() {
-        todo!("translate HTSlib free_auth_data from htslib/hfile_s3.c:319");
+    pub unsafe fn hfile_s3_c_319_free_auth_data(ad: *mut structs::s3_auth_data) {
+        let ad = ad.cast::<S3AuthDataLayout>();
+        libc::free((*ad).profile.s.cast());
+        libc::free((*ad).id.s.cast());
+        libc::free((*ad).token.s.cast());
+        libc::free((*ad).secret.s.cast());
+        libc::free((*ad).region.s.cast());
+        libc::free((*ad).canonical_query_string.s.cast());
+        libc::free((*ad).user_query_string.s.cast());
+        libc::free((*ad).host.s.cast());
+        libc::free((*ad).bucket.cast());
+        libc::free((*ad).date_html.s.cast());
+        libc::free(ad.cast());
     }
 
     // original: parse_rfc3339_date (htslib/hfile_s3.c:333)
-    pub unsafe fn hfile_s3_c_333_parse_rfc3339_date() {
-        todo!("translate HTSlib parse_rfc3339_date from htslib/hfile_s3.c:333");
+    pub unsafe fn hfile_s3_c_333_parse_rfc3339_date(datetime: *mut kstring_t) -> libc::time_t {
+        let mut offset = 0;
+        let mut should_be_t = 0 as c_char;
+        let mut timezone = [0 as c_char; 10];
+        let mut year = 0 as c_uint;
+        let mut mon = 0 as c_uint;
+        let mut day = 0 as c_uint;
+        let mut hour = 0 as c_uint;
+        let mut min = 0 as c_uint;
+        let mut sec = 0 as c_uint;
+
+        if (*datetime).s.is_null() {
+            return 0;
+        }
+
+        let num = libc::sscanf(
+            (*datetime).s,
+            c"%4u-%2u-%2u%c%2u:%2u:%2u%9s".as_ptr(),
+            &mut year,
+            &mut mon,
+            &mut day,
+            &mut should_be_t,
+            &mut hour,
+            &mut min,
+            &mut sec,
+            timezone.as_mut_ptr(),
+        );
+        if num < 8 {
+            return 0;
+        }
+        if should_be_t != b'T' as c_char
+            && should_be_t != b't' as c_char
+            && should_be_t != b' ' as c_char
+        {
+            return 0;
+        }
+
+        let mut parsed = libc::tm {
+            tm_sec: sec as c_int,
+            tm_min: min as c_int,
+            tm_hour: hour as c_int,
+            tm_mday: day as c_int,
+            tm_mon: mon as c_int - 1,
+            tm_year: year as c_int - 1900,
+            tm_wday: 0,
+            tm_yday: 0,
+            tm_isdst: 0,
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "android",
+                target_os = "emscripten",
+                target_os = "fuchsia",
+                target_os = "l4re"
+            ))]
+            tm_gmtoff: 0,
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "android",
+                target_os = "emscripten",
+                target_os = "fuchsia",
+                target_os = "l4re"
+            ))]
+            tm_zone: std::ptr::null(),
+        };
+
+        match timezone[0] as u8 {
+            b'Z' | b'z' | 0 => {}
+            b'+' | b'-' => {
+                let mut hr_off = 0 as c_uint;
+                let mut min_off = 0 as c_uint;
+                if libc::sscanf(
+                    timezone.as_ptr().add(1),
+                    c"%2u:%2u".as_ptr(),
+                    &mut hr_off,
+                    &mut min_off,
+                ) != 0
+                    && hr_off < 24
+                    && min_off <= 60
+                {
+                    offset = ((hr_off * 60 + min_off) as c_int)
+                        * if timezone[0] == b'+' as c_char {
+                            -60
+                        } else {
+                            60
+                        };
+                }
+            }
+            _ => return 0,
+        }
+
+        let when = crate::htslib_mini_rs::hts::hts_time_gm(&mut parsed);
+        if when >= 0 {
+            when + offset as libc::time_t
+        } else {
+            0
+        }
     }
 
     // original: refresh_auth_data (htslib/hfile_s3.c:378)
@@ -4535,13 +13574,75 @@ pub mod functions {
     }
 
     // original: escape_query (htslib/hfile_s3.c:396)
-    pub unsafe fn hfile_s3_c_396_escape_query() {
-        todo!("translate HTSlib escape_query from htslib/hfile_s3.c:396");
+    pub unsafe fn hfile_s3_c_396_escape_query(qs: *const c_char) -> *mut c_char {
+        let length = libc::strlen(qs);
+        let alloced = length * 3 + 1;
+        let escaped = libc::malloc(alloced).cast::<c_char>();
+        if escaped.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let mut j = 0usize;
+        for i in 0..length {
+            let c = *qs.add(i) as u8;
+            if c.is_ascii_alphanumeric()
+                || matches!(c, b'_' | b'-' | b'~' | b'.' | b'/' | b'=' | b'&')
+            {
+                *escaped.add(j) = c as c_char;
+                j += 1;
+            } else {
+                libc::snprintf(
+                    escaped.add(j),
+                    alloced - j,
+                    c"%%%02X".as_ptr(),
+                    *qs.add(i) as c_int,
+                );
+                j += 3;
+            }
+        }
+
+        *escaped.add(j) = 0;
+        escaped
     }
 
     // original: escape_path (htslib/hfile_s3.c:424)
-    pub unsafe fn hfile_s3_c_424_escape_path() {
-        todo!("translate HTSlib escape_path from htslib/hfile_s3.c:424");
+    pub unsafe fn hfile_s3_c_424_escape_path(path: *const c_char) -> *mut c_char {
+        let length = libc::strlen(path);
+        let alloced = length * 3 + 1;
+        let escaped = libc::malloc(alloced).cast::<c_char>();
+        if escaped.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let mut j = 0usize;
+        let mut i = 0usize;
+        while i < length {
+            let c = *path.add(i) as u8;
+            if c == b'?' {
+                break;
+            }
+
+            if c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'~' | b'.' | b'/') {
+                *escaped.add(j) = c as c_char;
+                j += 1;
+            } else {
+                libc::snprintf(
+                    escaped.add(j),
+                    alloced - j,
+                    c"%%%02X".as_ptr(),
+                    *path.add(i) as c_int,
+                );
+                j += 3;
+            }
+            i += 1;
+        }
+
+        if i != length {
+            libc::strcpy(escaped.add(j), path.add(i));
+        } else {
+            *escaped.add(j) = 0;
+        }
+        escaped
     }
 
     // original: is_escaped (htslib/hfile_s3.c:460)
@@ -4609,8 +13710,42 @@ pub mod functions {
     }
 
     // original: update_time (htslib/hfile_s3.c:968)
-    pub unsafe fn hfile_s3_c_968_update_time() {
-        todo!("translate HTSlib update_time from htslib/hfile_s3.c:968");
+    pub unsafe fn hfile_s3_c_968_update_time(
+        ad: *mut structs::s3_auth_data,
+        now: libc::time_t,
+    ) -> c_int {
+        const AUTH_LIFETIME: libc::time_t = 60;
+        let ad = ad.cast::<S3AuthDataLayout>();
+        let mut ret = -1;
+        let tm = libc::gmtime(&now);
+
+        if now - (*ad).auth_time > AUTH_LIFETIME {
+            (*ad).auth_time = now;
+
+            if libc::strftime(
+                (*ad).date_long.as_mut_ptr(),
+                17,
+                c"%Y%m%dT%H%M%SZ".as_ptr(),
+                tm,
+            ) != 16
+            {
+                return -1;
+            }
+
+            if libc::strftime((*ad).date_short.as_mut_ptr(), 9, c"%Y%m%d".as_ptr(), tm) != 8 {
+                return -1;
+            }
+
+            (*ad).date_html.l = 0;
+            crate::htslib_mini_rs::hts::kputs(c"x-amz-date: ".as_ptr(), &mut (*ad).date_html);
+            crate::htslib_mini_rs::hts::kputs((*ad).date_long.as_ptr(), &mut (*ad).date_html);
+        }
+
+        if (*ad).date_html.l != 0 {
+            ret = 0;
+        }
+
+        ret
     }
 
     // original: query_cmp (htslib/hfile_s3.c:999)
@@ -4621,8 +13756,41 @@ pub mod functions {
     }
 
     // original: order_query_string (htslib/hfile_s3.c:1009)
-    pub unsafe fn hfile_s3_c_1009_order_query_string() {
-        todo!("translate HTSlib order_query_string from htslib/hfile_s3.c:1009");
+    pub unsafe fn hfile_s3_c_1009_order_query_string(qs: *mut kstring_t) -> c_int {
+        let mut num_queries = 0;
+        let query_offset = crate::htslib_mini_rs::hts::ksplit(qs, b'&' as c_int, &mut num_queries);
+        if query_offset.is_null() {
+            return -1;
+        }
+
+        let mut queries = Vec::with_capacity(num_queries as usize);
+        for i in 0..num_queries {
+            queries.push((*qs).s.add(*query_offset.add(i as usize) as usize));
+        }
+        queries.sort_by(|a, b| unsafe { libc::strcmp(*a, *b).cmp(&0) });
+
+        let mut ordered: kstring_t = std::mem::zeroed();
+        let mut ret = -1;
+
+        for (i, query) in queries.iter().enumerate() {
+            if i != 0 {
+                crate::htslib_mini_rs::hts::kputs(c"&".as_ptr(), &mut ordered);
+            }
+            crate::htslib_mini_rs::hts::kputs(*query, &mut ordered);
+        }
+
+        let escaped = hfile_s3_c_396_escape_query(ordered.s);
+        if !escaped.is_null() {
+            (*qs).l = 0;
+            crate::htslib_mini_rs::hts::kputs(escaped, qs);
+            ret = 0;
+        }
+
+        libc::free(ordered.s.cast());
+        libc::free(query_offset.cast());
+        libc::free(escaped.cast());
+
+        ret
     }
 
     // original: v4_authorisation (htslib/hfile_s3.c:1055)
@@ -4631,43 +13799,115 @@ pub mod functions {
     }
 
     // original: set_region (htslib/hfile_s3.c:1112)
-    pub unsafe fn hfile_s3_c_1112_set_region() {
-        todo!("translate HTSlib set_region from htslib/hfile_s3.c:1112");
+    pub unsafe fn hfile_s3_c_1112_set_region(
+        ad: *mut structs::s3_auth_data,
+        region: *mut kstring_t,
+    ) -> c_int {
+        let ad = ad.cast::<S3AuthDataLayout>();
+        (*ad).region.l = 0;
+        (crate::htslib_mini_rs::hts::kputsn((*region).s, (*region).l, &mut (*ad).region) < 0)
+            as c_int
     }
 
     // original: share_lock (htslib/hfile_s3.c:1133)
     pub unsafe fn hfile_s3_c_1133_share_lock() {
-        todo!("translate HTSlib share_lock from htslib/hfile_s3.c:1133");
+        libc::pthread_mutex_lock(std::ptr::addr_of_mut!(HFILE_S3_SHARE_LOCK));
     }
 
     // original: share_unlock (htslib/hfile_s3.c:1138)
     pub unsafe fn hfile_s3_c_1138_share_unlock() {
-        todo!("translate HTSlib share_unlock from htslib/hfile_s3.c:1138");
+        libc::pthread_mutex_unlock(std::ptr::addr_of_mut!(HFILE_S3_SHARE_LOCK));
     }
 
     // original: initialise_authorisation_values (htslib/hfile_s3.c:1143)
-    pub unsafe fn hfile_s3_c_1143_initialise_authorisation_values() {
-        todo!("translate HTSlib initialise_authorisation_values from htslib/hfile_s3.c:1143");
+    pub unsafe fn hfile_s3_c_1143_initialise_authorisation_values(fp: *mut c_void) {
+        let fp = fp.cast::<HfileS3AuthStringsPrefix>();
+        crate::htslib_mini_rs::hts::ks_initialize(&mut (*fp).content_hash);
+        crate::htslib_mini_rs::hts::ks_initialize(&mut (*fp).authorisation);
+        crate::htslib_mini_rs::hts::ks_initialize(&mut (*fp).content);
+        crate::htslib_mini_rs::hts::ks_initialize(&mut (*fp).date);
+        crate::htslib_mini_rs::hts::ks_initialize(&mut (*fp).token);
+        crate::htslib_mini_rs::hts::ks_initialize(&mut (*fp).range);
     }
 
     // original: clear_authorisation_values (htslib/hfile_s3.c:1153)
-    pub unsafe fn hfile_s3_c_1153_clear_authorisation_values() {
-        todo!("translate HTSlib clear_authorisation_values from htslib/hfile_s3.c:1153");
+    pub unsafe fn hfile_s3_c_1153_clear_authorisation_values(fp: *mut c_void) {
+        let fp = fp.cast::<HfileS3AuthStringsPrefix>();
+        crate::htslib_mini_rs::hts::ks_clear(&mut (*fp).content_hash);
+        crate::htslib_mini_rs::hts::ks_clear(&mut (*fp).authorisation);
+        crate::htslib_mini_rs::hts::ks_clear(&mut (*fp).content);
+        crate::htslib_mini_rs::hts::ks_clear(&mut (*fp).date);
+        crate::htslib_mini_rs::hts::ks_clear(&mut (*fp).token);
+        crate::htslib_mini_rs::hts::ks_clear(&mut (*fp).range);
     }
 
     // original: free_authorisation_values (htslib/hfile_s3.c:1163)
-    pub unsafe fn hfile_s3_c_1163_free_authorisation_values() {
-        todo!("translate HTSlib free_authorisation_values from htslib/hfile_s3.c:1163");
+    pub unsafe fn hfile_s3_c_1163_free_authorisation_values(fp: *mut c_void) {
+        let fp = fp.cast::<HfileS3AuthStringsPrefix>();
+        crate::htslib_mini_rs::hts::ks_free(&mut (*fp).content_hash);
+        crate::htslib_mini_rs::hts::ks_free(&mut (*fp).authorisation);
+        crate::htslib_mini_rs::hts::ks_free(&mut (*fp).content);
+        crate::htslib_mini_rs::hts::ks_free(&mut (*fp).date);
+        crate::htslib_mini_rs::hts::ks_free(&mut (*fp).token);
+        crate::htslib_mini_rs::hts::ks_free(&mut (*fp).range);
     }
 
     // original: stristr (htslib/hfile_s3.c:1176)
-    pub unsafe fn hfile_s3_c_1176_stristr() {
-        todo!("translate HTSlib stristr from htslib/hfile_s3.c:1176");
+    pub unsafe fn hfile_s3_c_1176_stristr(
+        mut haystack: *mut c_char,
+        needle: *mut c_char,
+    ) -> *mut c_char {
+        while *haystack != 0 {
+            let mut h = haystack;
+            let mut n = needle;
+
+            while crate::htslib_mini_rs::hts::toupper_c(*h)
+                == crate::htslib_mini_rs::hts::toupper_c(*n)
+            {
+                h = h.add(1);
+                n = n.add(1);
+                if *h == 0 || *n == 0 {
+                    break;
+                }
+            }
+
+            if *n == 0 {
+                break;
+            }
+
+            haystack = haystack.add(1);
+        }
+
+        if *haystack == 0 {
+            std::ptr::null_mut()
+        } else {
+            haystack
+        }
     }
 
     // original: get_entry (htslib/hfile_s3.c:1198)
-    pub unsafe fn hfile_s3_c_1198_get_entry() {
-        todo!("translate HTSlib get_entry from htslib/hfile_s3.c:1198");
+    pub unsafe fn hfile_s3_c_1198_get_entry(
+        in_: *mut c_char,
+        start_tag: *mut c_char,
+        end_tag: *mut c_char,
+        out: *mut kstring_t,
+    ) -> c_int {
+        if in_.is_null() {
+            return libc::EOF;
+        }
+
+        let mut start = hfile_s3_c_1176_stristr(in_, start_tag);
+        if start.is_null() {
+            return libc::EOF;
+        }
+
+        start = start.add(libc::strlen(start_tag));
+        let end = hfile_s3_c_1176_stristr(start, end_tag);
+        if end.is_null() {
+            return libc::EOF;
+        }
+
+        crate::htslib_mini_rs::hts::kputsn(start, end.offset_from(start) as usize, out)
     }
 
     // original: report_s3_error (htslib/hfile_s3.c:1218)
@@ -4703,33 +13943,122 @@ pub mod functions {
     }
 
     // original: initialise_local (htslib/hfile_s3.c:1268)
-    pub unsafe fn hfile_s3_c_1268_initialise_local() {
-        todo!("translate HTSlib initialise_local from htslib/hfile_s3.c:1268");
+    pub unsafe fn hfile_s3_c_1268_initialise_local(fp: *mut c_void) {
+        let fp = fp.cast::<HfileS3AuthStringsPrefix>();
+        crate::htslib_mini_rs::hts::ks_initialize(&mut (*fp).buffer);
+        crate::htslib_mini_rs::hts::ks_initialize(&mut (*fp).url);
+        crate::htslib_mini_rs::hts::ks_initialize(&mut (*fp).upload_id);
+        crate::htslib_mini_rs::hts::ks_initialize(&mut (*fp).completion_message);
     }
 
     // original: cleanup_local (htslib/hfile_s3.c:1276)
-    pub unsafe fn hfile_s3_c_1276_cleanup_local() {
-        todo!("translate HTSlib cleanup_local from htslib/hfile_s3.c:1276");
+    pub unsafe fn hfile_s3_c_1276_cleanup_local(fp: *mut c_void) {
+        let fp = fp.cast::<HfileS3AuthStringsPrefix>();
+        crate::htslib_mini_rs::hts::ks_free(&mut (*fp).buffer);
+        crate::htslib_mini_rs::hts::ks_free(&mut (*fp).url);
+        crate::htslib_mini_rs::hts::ks_free(&mut (*fp).upload_id);
+        crate::htslib_mini_rs::hts::ks_free(&mut (*fp).completion_message);
+        hfile_s3_c_1163_free_authorisation_values(fp.cast());
     }
 
     // original: cleanup (htslib/hfile_s3.c:1286)
-    pub unsafe fn hfile_s3_c_1286_cleanup() {
-        todo!("translate HTSlib cleanup from htslib/hfile_s3.c:1286");
+    pub unsafe fn hfile_s3_c_1286_cleanup(fp: *mut c_void) {
+        let fp_s3 = fp.cast::<HfileS3AuthStringsPrefix>();
+        if !(*fp_s3).au.is_null() {
+            hfile_s3_c_319_free_auth_data((*fp_s3).au.cast());
+        }
+        (*fp_s3).au = std::ptr::null_mut();
+        hfile_s3_c_1276_cleanup_local(fp);
     }
 
     // original: response_callback (htslib/hfile_s3.c:1292)
-    pub unsafe fn hfile_s3_c_1292_response_callback() {
-        todo!("translate HTSlib response_callback from htslib/hfile_s3.c:1292");
+    pub unsafe fn hfile_s3_c_1292_response_callback(
+        contents: *mut c_void,
+        size: usize,
+        nmemb: usize,
+        userp: *mut c_void,
+    ) -> usize {
+        let realsize = size.saturating_mul(nmemb);
+        let resp = userp.cast::<kstring_t>();
+
+        if crate::htslib_mini_rs::hts::kputsn(contents.cast(), realsize, resp) == libc::EOF {
+            0
+        } else {
+            realsize
+        }
     }
 
     // original: add_header (htslib/hfile_s3.c:1304)
-    pub unsafe fn hfile_s3_c_1304_add_header() {
-        todo!("translate HTSlib add_header from htslib/hfile_s3.c:1304");
+    pub unsafe fn hfile_s3_c_1304_add_header(head: *mut *mut c_void, value: *mut c_char) -> c_int {
+        let head = head.cast::<*mut HFileLibcurlCurlSlist>();
+        let tmp = libc::calloc(1, std::mem::size_of::<HFileLibcurlCurlSlist>())
+            .cast::<HFileLibcurlCurlSlist>();
+        if tmp.is_null() {
+            return 1;
+        }
+        (*tmp).data = libc::strdup(value);
+        if (*tmp).data.is_null() {
+            libc::free(tmp.cast());
+            return 1;
+        }
+
+        if (*head).is_null() {
+            *head = tmp;
+        } else {
+            let mut tail = *head;
+            while !(*tail).next.is_null() {
+                tail = (*tail).next;
+            }
+            (*tail).next = tmp;
+        }
+        0
+    }
+
+    unsafe fn free_curl_slist(mut head: *mut HFileLibcurlCurlSlist) {
+        while !head.is_null() {
+            let next = (*head).next;
+            libc::free((*head).data.cast());
+            libc::free(head.cast());
+            head = next;
+        }
     }
 
     // original: set_html_headers (htslib/hfile_s3.c:1318)
-    pub unsafe fn hfile_s3_c_1318_set_html_headers() {
-        todo!("translate HTSlib set_html_headers from htslib/hfile_s3.c:1318");
+    pub unsafe fn hfile_s3_c_1318_set_html_headers(
+        _fp: *mut c_void,
+        auth: *mut kstring_t,
+        date: *mut kstring_t,
+        content: *mut kstring_t,
+        token: *mut kstring_t,
+        range: *mut kstring_t,
+    ) -> *mut c_void {
+        let mut headers: *mut c_void = std::ptr::null_mut();
+        let mut err =
+            hfile_s3_c_1304_add_header(&mut headers, c"Content-Type:".as_ptr().cast_mut());
+        err |= hfile_s3_c_1304_add_header(&mut headers, c"Expect:".as_ptr().cast_mut());
+
+        if err == 0 && !auth.is_null() && (*auth).l != 0 {
+            err = hfile_s3_c_1304_add_header(&mut headers, (*auth).s);
+        }
+        if err == 0 && !date.is_null() {
+            err = hfile_s3_c_1304_add_header(&mut headers, (*date).s);
+        }
+        if err == 0 && !content.is_null() && (*content).l != 0 {
+            err = hfile_s3_c_1304_add_header(&mut headers, (*content).s);
+        }
+        if err == 0 && !range.is_null() {
+            err = hfile_s3_c_1304_add_header(&mut headers, (*range).s);
+        }
+        if err == 0 && !token.is_null() && (*token).l != 0 {
+            err = hfile_s3_c_1304_add_header(&mut headers, (*token).s);
+        }
+
+        if err != 0 {
+            free_curl_slist(headers.cast());
+            std::ptr::null_mut()
+        } else {
+            headers
+        }
     }
 
     // original: abort_upload (htslib/hfile_s3.c:1417)
@@ -4743,8 +14072,27 @@ pub mod functions {
     }
 
     // original: upload_callback (htslib/hfile_s3.c:1545)
-    pub unsafe fn hfile_s3_c_1545_upload_callback() {
-        todo!("translate HTSlib upload_callback from htslib/hfile_s3.c:1545");
+    pub unsafe fn hfile_s3_c_1545_upload_callback(
+        ptr: *mut c_void,
+        size: usize,
+        nmemb: usize,
+        stream: *mut c_void,
+    ) -> usize {
+        let realsize = size.saturating_mul(nmemb);
+        let fp = stream.cast::<HfileS3AuthStringsPrefix>();
+        let available = (*fp).buffer.l.saturating_sub((*fp).index);
+        let read_length = if realsize > available {
+            available
+        } else {
+            realsize
+        };
+
+        if read_length != 0 {
+            libc::memcpy(ptr, (*fp).buffer.s.add((*fp).index).cast(), read_length);
+        }
+        (*fp).index += read_length;
+
+        read_length
     }
 
     // original: upload_part (htslib/hfile_s3.c:1563)
@@ -4778,8 +14126,24 @@ pub mod functions {
     }
 
     // original: recv_callback (htslib/hfile_s3.c:1854)
-    pub unsafe fn hfile_s3_c_1854_recv_callback() {
-        todo!("translate HTSlib recv_callback from htslib/hfile_s3.c:1854");
+    pub unsafe fn hfile_s3_c_1854_recv_callback(
+        ptr: *mut c_char,
+        size: usize,
+        nmemb: usize,
+        fpv: *mut c_void,
+    ) -> usize {
+        let fp = fpv.cast::<HfileS3AuthStringsPrefix>();
+        let n = size.saturating_mul(nmemb);
+
+        if n != 0 && crate::htslib_mini_rs::hts::kputsn(ptr, n, &mut (*fp).buffer) == libc::EOF {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"hfile_s3: error: unable to allocate memory to read data.\n".as_ptr(),
+            );
+            return 0;
+        }
+
+        n
     }
 
     // original: s3_read_close (htslib/hfile_s3.c:1869)
@@ -4853,48 +14217,341 @@ pub mod functions {
     }
 
     // original: kbs_logical_and (htslib/bcf_sr_sort.c:43)
-    pub unsafe fn bcf_sr_sort_c_43_kbs_logical_and() {
-        todo!("translate HTSlib kbs_logical_and from htslib/bcf_sr_sort.c:43");
+    pub unsafe fn bcf_sr_sort_c_43_kbs_logical_and(
+        bs1: *mut structs::kbitset_t,
+        bs2: *mut structs::kbitset_t,
+    ) -> c_int {
+        let bs1 = bs1.cast::<BcfSrSortKbitset>();
+        let bs2 = bs2.cast::<BcfSrSortKbitset>();
+        for i in 0..(*bs1).n {
+            if *(*bs1).b.as_ptr().add(i) & *(*bs2).b.as_ptr().add(i) != 0 {
+                return 1;
+            }
+        }
+        0
     }
 
     // original: kbs_bitwise_or (htslib/bcf_sr_sort.c:54)
-    pub unsafe fn bcf_sr_sort_c_54_kbs_bitwise_or() {
-        todo!("translate HTSlib kbs_bitwise_or from htslib/bcf_sr_sort.c:54");
+    pub unsafe fn bcf_sr_sort_c_54_kbs_bitwise_or(
+        dst: *mut structs::kbitset_t,
+        src: *mut structs::kbitset_t,
+    ) {
+        let dst = dst.cast::<BcfSrSortKbitset>();
+        let src = src.cast::<BcfSrSortKbitset>();
+        for i in 0..(*dst).n {
+            *(*dst).b.as_mut_ptr().add(i) |= *(*src).b.as_ptr().add(i);
+        }
     }
 
     // original: bcf_sr_init_scores (htslib/bcf_sr_sort.c:61)
-    pub unsafe fn bcf_sr_sort_c_61_bcf_sr_init_scores() {
-        todo!("translate HTSlib bcf_sr_init_scores from htslib/bcf_sr_sort.c:61");
+    pub unsafe fn bcf_sr_sort_c_61_bcf_sr_init_scores(srt: *mut c_void) {
+        const SR_REF: usize = 1;
+        const SR_SNP: usize = 2;
+        const SR_INDEL: usize = 4;
+        const BCF_SR_PAIR_SNPS: c_int = 1 << 0;
+        const BCF_SR_PAIR_INDELS: c_int = 1 << 1;
+        const BCF_SR_PAIR_ANY: c_int = 1 << 2;
+        const BCF_SR_PAIR_SNP_REF: c_int = 1 << 4;
+        const BCF_SR_PAIR_INDEL_REF: c_int = 1 << 5;
+
+        let srt = srt.cast::<BcfSrSortScores>();
+        if ((*srt).pair & BCF_SR_PAIR_ANY) != 0 {
+            (*srt).pair |=
+                BCF_SR_PAIR_SNPS | BCF_SR_PAIR_INDELS | BCF_SR_PAIR_SNP_REF | BCF_SR_PAIR_INDEL_REF;
+        }
+        if ((*srt).pair & BCF_SR_PAIR_SNPS) != 0 {
+            (*srt).score[(SR_SNP << 4) | SR_SNP] = 3;
+        }
+        if ((*srt).pair & BCF_SR_PAIR_INDELS) != 0 {
+            (*srt).score[(SR_INDEL << 4) | SR_INDEL] = 3;
+        }
+        if ((*srt).pair & BCF_SR_PAIR_SNP_REF) != 0 {
+            (*srt).score[(SR_SNP << 4) | SR_REF] = 2;
+            (*srt).score[(SR_REF << 4) | SR_SNP] = 2;
+        }
+        if ((*srt).pair & BCF_SR_PAIR_INDEL_REF) != 0 {
+            (*srt).score[(SR_INDEL << 4) | SR_REF] = 2;
+            (*srt).score[(SR_REF << 4) | SR_INDEL] = 2;
+        }
+        if ((*srt).pair & BCF_SR_PAIR_ANY) != 0 {
+            for i in 0..256 {
+                if *(*srt).score.as_ptr().add(i) == 0 {
+                    (*srt).score[i] = 1;
+                }
+            }
+        }
+
+        for i in 0..256 {
+            if *(*srt).score.as_ptr().add(i) != 0 {
+                continue;
+            }
+            let mut max = 0u8;
+            for jbit in 0..4 {
+                let j = 1usize << jbit;
+                if (i & (j << 4)) == 0 {
+                    continue;
+                }
+                for kbit in 0..4 {
+                    let k = 1usize << kbit;
+                    if (i & k) == 0 {
+                        continue;
+                    }
+                    let score = (*srt).score[(j << 4) | k];
+                    if max < score {
+                        max = score;
+                    }
+                }
+            }
+            (*srt).score[i] = max;
+        }
     }
 
     // original: multi_is_exact (htslib/bcf_sr_sort.c:105)
-    pub unsafe fn bcf_sr_sort_c_105_multi_is_exact() {
-        todo!("translate HTSlib multi_is_exact from htslib/bcf_sr_sort.c:105");
+    pub unsafe fn bcf_sr_sort_c_105_multi_is_exact(avar: *mut c_void, bvar: *mut c_void) -> c_int {
+        let avar = avar.cast::<BcfSrSortVar>();
+        let bvar = bvar.cast::<BcfSrSortVar>();
+        if (*avar).nalt != (*bvar).nalt {
+            return 0;
+        }
+
+        let alen = libc::strlen((*avar).str_);
+        let blen = libc::strlen((*bvar).str_);
+        if alen != blen {
+            return 0;
+        }
+
+        let mut abeg = (*avar).str_;
+        while *abeg != 0 {
+            let mut aend = abeg;
+            while *aend != 0 && *aend != b',' as c_char {
+                aend = aend.add(1);
+            }
+
+            let mut bbeg = (*bvar).str_;
+            while *bbeg != 0 {
+                let mut bend = bbeg;
+                while *bend != 0 && *bend != b',' as c_char {
+                    bend = bend.add(1);
+                }
+                let len = bend.offset_from(bbeg);
+                if len == aend.offset_from(abeg) && libc::strncasecmp(abeg, bbeg, len as usize) == 0
+                {
+                    break;
+                }
+                bbeg = if *bend != 0 { bend.add(1) } else { bend };
+            }
+            if *bbeg == 0 {
+                return 0;
+            }
+
+            abeg = if *aend != 0 { aend.add(1) } else { aend };
+        }
+        1
     }
 
     // original: multi_is_subset (htslib/bcf_sr_sort.c:133)
-    pub unsafe fn bcf_sr_sort_c_133_multi_is_subset() {
-        todo!("translate HTSlib multi_is_subset from htslib/bcf_sr_sort.c:133");
+    pub unsafe fn bcf_sr_sort_c_133_multi_is_subset(avar: *mut c_void, bvar: *mut c_void) -> c_int {
+        let avar = avar.cast::<BcfSrSortVar>();
+        let bvar = bvar.cast::<BcfSrSortVar>();
+        let mut abeg = (*avar).str_;
+        while *abeg != 0 {
+            let mut aend = abeg;
+            while *aend != 0 && *aend != b',' as c_char {
+                aend = aend.add(1);
+            }
+
+            let mut bbeg = (*bvar).str_;
+            while *bbeg != 0 {
+                let mut bend = bbeg;
+                while *bend != 0 && *bend != b',' as c_char {
+                    bend = bend.add(1);
+                }
+                let len = bend.offset_from(bbeg);
+                if len == aend.offset_from(abeg) && libc::strncasecmp(abeg, bbeg, len as usize) == 0
+                {
+                    return 1;
+                }
+                bbeg = if *bend != 0 { bend.add(1) } else { bend };
+            }
+            abeg = if *aend != 0 { aend.add(1) } else { aend };
+        }
+        0
     }
 
     // original: pairing_score (htslib/bcf_sr_sort.c:153)
-    pub unsafe fn bcf_sr_sort_c_153_pairing_score() {
-        todo!("translate HTSlib pairing_score from htslib/bcf_sr_sort.c:153");
+    pub unsafe fn bcf_sr_sort_c_153_pairing_score(
+        srt: *mut c_void,
+        ivset: c_int,
+        jvset: c_int,
+    ) -> c_uint {
+        const BCF_SR_PAIR_EXACT: c_int = 1 << 6;
+
+        let srt = srt.cast::<BcfSrSortScores>();
+        let vset = (*srt).vset.cast::<BcfSrSortVarset>();
+        let iv = vset.add(ivset as usize);
+        let jv = vset.add(jvset as usize);
+
+        let mut min = c_uint::MAX;
+        for i in 0..(*iv).nvar {
+            let ivar = (*srt).var.add(*(*iv).var.add(i as usize) as usize);
+            for j in 0..(*jv).nvar {
+                let jvar = (*srt).var.add(*(*jv).var.add(j as usize) as usize);
+                if ((*srt).pair & BCF_SR_PAIR_EXACT) != 0 {
+                    if (*ivar).type_ != (*jvar).type_ {
+                        continue;
+                    }
+                    if libc::strcmp((*ivar).str_, (*jvar).str_) == 0 {
+                        return c_uint::MAX;
+                    }
+                    if bcf_sr_sort_c_105_multi_is_exact(ivar.cast(), jvar.cast()) != 0 {
+                        return c_uint::MAX;
+                    }
+                    continue;
+                }
+                if (*ivar).type_ == (*jvar).type_ && libc::strcmp((*ivar).str_, (*jvar).str_) == 0 {
+                    return c_uint::MAX;
+                }
+                if ((*ivar).type_ & (*jvar).type_) != 0
+                    && bcf_sr_sort_c_133_multi_is_subset(ivar.cast(), jvar.cast()) != 0
+                {
+                    return c_uint::MAX;
+                }
+
+                let score = (*srt).score[(((*ivar).type_ << 4) | (*jvar).type_) as usize] as c_uint;
+                if score == 0 {
+                    return 0;
+                }
+                if min > score {
+                    min = score;
+                }
+            }
+        }
+        if ((*srt).pair & BCF_SR_PAIR_EXACT) != 0 {
+            return 0;
+        }
+
+        let mut cnt = 0u32;
+        for i in 0..(*iv).nvar {
+            cnt += (*(*srt).var.add(*(*iv).var.add(i as usize) as usize)).nvcf as u32;
+        }
+        for j in 0..(*jv).nvar {
+            cnt += (*(*srt).var.add(*(*jv).var.add(j as usize) as usize)).nvcf as u32;
+        }
+
+        (1u32 << (28 + min)) + cnt
     }
 
     // original: remove_vset (htslib/bcf_sr_sort.c:193)
-    pub unsafe fn bcf_sr_sort_c_193_remove_vset() {
-        todo!("translate HTSlib remove_vset from htslib/bcf_sr_sort.c:193");
+    pub unsafe fn bcf_sr_sort_c_193_remove_vset(srt: *mut c_void, jvset: c_int) {
+        let srt = srt.cast::<BcfSrSortScores>();
+        let vset = (*srt).vset.cast::<BcfSrSortVarset>();
+        if jvset + 1 < (*srt).nvset {
+            let tmp = std::ptr::read(vset.add(jvset as usize));
+            libc::memmove(
+                vset.add(jvset as usize).cast(),
+                vset.add(jvset as usize + 1).cast(),
+                ((*srt).nvset - jvset - 1) as usize * std::mem::size_of::<BcfSrSortVarset>(),
+            );
+            std::ptr::write(vset.add((*srt).nvset as usize - 1), tmp);
+
+            let jmat = (*srt).pmat.add(jvset as usize * (*srt).ngrp as usize);
+            libc::memmove(
+                jmat.cast(),
+                jmat.add((*srt).ngrp as usize).cast(),
+                ((*srt).nvset - jvset - 1) as usize
+                    * (*srt).ngrp as usize
+                    * std::mem::size_of::<c_int>(),
+            );
+            libc::memmove(
+                (*srt).cnt.add(jvset as usize).cast(),
+                (*srt).cnt.add(jvset as usize + 1).cast(),
+                ((*srt).nvset - jvset - 1) as usize * std::mem::size_of::<c_int>(),
+            );
+        }
+        (*srt).nvset -= 1;
     }
 
     // original: merge_vsets (htslib/bcf_sr_sort.c:208)
-    pub unsafe fn bcf_sr_sort_c_208_merge_vsets() {
-        todo!("translate HTSlib merge_vsets from htslib/bcf_sr_sort.c:208");
+    pub unsafe fn bcf_sr_sort_c_208_merge_vsets(
+        srt: *mut c_void,
+        mut ivset: c_int,
+        mut jvset: c_int,
+    ) -> c_int {
+        let srt = srt.cast::<BcfSrSortScores>();
+        let vset = (*srt).vset.cast::<BcfSrSortVarset>();
+        if ivset > jvset {
+            std::mem::swap(&mut ivset, &mut jvset);
+        }
+
+        let iv = vset.add(ivset as usize);
+        let jv = vset.add(jvset as usize);
+        bcf_sr_sort_c_54_kbs_bitwise_or((*iv).mask.cast(), (*jv).mask.cast());
+
+        let old_nvar = (*iv).nvar;
+        (*iv).nvar += (*jv).nvar;
+        if (*iv).mvar < (*iv).nvar {
+            let new_var = libc::realloc(
+                (*iv).var.cast(),
+                (*iv).nvar as usize * std::mem::size_of::<c_int>(),
+            )
+            .cast::<c_int>();
+            if new_var.is_null() {
+                return -1;
+            }
+            (*iv).mvar = (*iv).nvar;
+            (*iv).var = new_var;
+        }
+        for j in 0..(*jv).nvar {
+            *(*iv).var.add((old_nvar + j) as usize) = *(*jv).var.add(j as usize);
+        }
+
+        let imat = (*srt).pmat.add(ivset as usize * (*srt).ngrp as usize);
+        let jmat = (*srt).pmat.add(jvset as usize * (*srt).ngrp as usize);
+        for i in 0..(*srt).ngrp {
+            *imat.add(i as usize) += *jmat.add(i as usize);
+        }
+        *(*srt).cnt.add(ivset as usize) += *(*srt).cnt.add(jvset as usize);
+
+        bcf_sr_sort_c_193_remove_vset(srt.cast(), jvset);
+
+        ivset
     }
 
     // original: push_vset (htslib/bcf_sr_sort.c:233)
-    pub unsafe fn bcf_sr_sort_c_233_push_vset() {
-        todo!("translate HTSlib push_vset from htslib/bcf_sr_sort.c:233");
+    pub unsafe fn bcf_sr_sort_c_233_push_vset(srt: *mut c_void, ivset: c_int) -> c_int {
+        let srt = srt.cast::<BcfSrSortScores>();
+        let sr = (*srt).sr.cast::<BcfSrReaderSetPrefix>();
+        let vset = (*srt).vset.cast::<BcfSrSortVarset>();
+        let iv = vset.add(ivset as usize);
+        let vcf_buf = (*srt).vcf_buf.cast::<BcfSrSortVcfBuf>();
+
+        for i in 0..(*sr).nreaders {
+            let buf = vcf_buf.add(i as usize);
+            (*buf).nrec += 1;
+            if (*buf).mrec < (*buf).nrec {
+                let new_rec = libc::realloc(
+                    (*buf).rec.cast(),
+                    (*buf).nrec as usize * std::mem::size_of::<*mut c_void>(),
+                )
+                .cast::<*mut c_void>();
+                if new_rec.is_null() {
+                    return -1;
+                }
+                (*buf).mrec = (*buf).nrec;
+                (*buf).rec = new_rec;
+            }
+            *(*buf).rec.add((*buf).nrec as usize - 1) = std::ptr::null_mut();
+        }
+        for i in 0..(*iv).nvar {
+            let var = (*srt).var.add(*(*iv).var.add(i as usize) as usize);
+            for j in 0..(*var).nvcf {
+                let jvcf = *(*var).vcf.add(j as usize);
+                let buf = vcf_buf.add(jvcf as usize);
+                *(*buf).rec.add((*buf).nrec as usize - 1) = *(*var).rec.add(j as usize);
+            }
+        }
+        bcf_sr_sort_c_193_remove_vset(srt.cast(), ivset);
+        0
     }
 
     // original: cmpstringp (htslib/bcf_sr_sort.c:258)
@@ -4905,28 +14562,100 @@ pub mod functions {
     }
 
     // original: debug_vsets (htslib/bcf_sr_sort.c:265)
-    pub unsafe fn bcf_sr_sort_c_265_debug_vsets() {
-        todo!("translate HTSlib debug_vsets from htslib/bcf_sr_sort.c:265");
-    }
+    pub unsafe fn bcf_sr_sort_c_265_debug_vsets() {}
 
     // original: debug_vbuf (htslib/bcf_sr_sort.c:287)
-    pub unsafe fn bcf_sr_sort_c_287_debug_vbuf() {
-        todo!("translate HTSlib debug_vbuf from htslib/bcf_sr_sort.c:287");
-    }
+    pub unsafe fn bcf_sr_sort_c_287_debug_vbuf() {}
 
     // original: grp_create_key (htslib/bcf_sr_sort.c:303)
-    pub unsafe fn bcf_sr_sort_c_303_grp_create_key() {
-        todo!("translate HTSlib grp_create_key from htslib/bcf_sr_sort.c:303");
+    pub unsafe fn bcf_sr_sort_c_303_grp_create_key(srt: *mut c_void) -> *mut c_char {
+        let srt = srt.cast::<BcfSrSortScores>();
+        if (*srt).str_.l == 0 {
+            return libc::strdup(c"".as_ptr());
+        }
+
+        if (*srt).mcharp < (*srt).noff {
+            let new_charp = libc::realloc(
+                (*srt).charp.cast(),
+                (*srt).noff as usize * std::mem::size_of::<*mut c_char>(),
+            )
+            .cast::<*mut c_char>();
+            if new_charp.is_null() {
+                return std::ptr::null_mut();
+            }
+            (*srt).mcharp = (*srt).noff;
+            (*srt).charp = new_charp;
+        }
+
+        for i in 0..(*srt).noff {
+            *(*srt).charp.add(i as usize) = (*srt).str_.s.add(*(*srt).off.add(i as usize) as usize);
+            if i > 0 {
+                *(*(*srt).charp.add(i as usize)).sub(1) = 0;
+            }
+        }
+        std::slice::from_raw_parts_mut((*srt).charp, (*srt).noff as usize)
+            .sort_unstable_by(|a, b| libc::strcmp(*a, *b).cmp(&0));
+
+        let ret = libc::malloc((*srt).str_.l + 1).cast::<c_char>();
+        if ret.is_null() {
+            return std::ptr::null_mut();
+        }
+        let mut ptr = ret;
+        for i in 0..(*srt).noff {
+            let src = *(*srt).charp.add(i as usize);
+            let len = libc::strlen(src);
+            libc::memcpy(ptr.cast(), src.cast(), len);
+            ptr = ptr.add(len);
+            *ptr = if i + 1 == (*srt).noff {
+                0
+            } else {
+                b';' as c_char
+            };
+            ptr = ptr.add(1);
+        }
+        ret
     }
 
     // original: bcf_sr_sort_set_active (htslib/bcf_sr_sort.c:324)
-    pub unsafe fn bcf_sr_sort_c_324_bcf_sr_sort_set_active() {
-        todo!("translate HTSlib bcf_sr_sort_set_active from htslib/bcf_sr_sort.c:324");
+    pub unsafe fn bcf_sr_sort_c_324_bcf_sr_sort_set_active(srt: *mut c_void, idx: c_int) -> c_int {
+        let srt = srt.cast::<BcfSrSortScores>();
+        if (*srt).mactive < idx + 1 {
+            let new_m = idx + 1;
+            let new_active = libc::realloc(
+                (*srt).active.cast(),
+                new_m as usize * std::mem::size_of::<c_int>(),
+            )
+            .cast::<c_int>();
+            if new_active.is_null() {
+                return -1;
+            }
+            (*srt).mactive = new_m;
+            (*srt).active = new_active;
+        }
+        (*srt).nactive = 1;
+        *(*srt).active.add((*srt).nactive as usize - 1) = idx;
+        0
     }
 
     // original: bcf_sr_sort_add_active (htslib/bcf_sr_sort.c:331)
-    pub unsafe fn bcf_sr_sort_c_331_bcf_sr_sort_add_active() {
-        todo!("translate HTSlib bcf_sr_sort_add_active from htslib/bcf_sr_sort.c:331");
+    pub unsafe fn bcf_sr_sort_c_331_bcf_sr_sort_add_active(srt: *mut c_void, idx: c_int) -> c_int {
+        let srt = srt.cast::<BcfSrSortScores>();
+        if (*srt).mactive < idx + 1 {
+            let new_m = idx + 1;
+            let new_active = libc::realloc(
+                (*srt).active.cast(),
+                new_m as usize * std::mem::size_of::<c_int>(),
+            )
+            .cast::<c_int>();
+            if new_active.is_null() {
+                return -1;
+            }
+            (*srt).mactive = new_m;
+            (*srt).active = new_active;
+        }
+        (*srt).nactive += 1;
+        *(*srt).active.add((*srt).nactive as usize - 1) = idx;
+        0
     }
 
     // original: bcf_sr_sort_set (htslib/bcf_sr_sort.c:338)
@@ -4940,18 +14669,43 @@ pub mod functions {
     }
 
     // original: bcf_sr_sort_remove_reader (htslib/bcf_sr_sort.c:662)
-    pub unsafe fn bcf_sr_sort_c_662_bcf_sr_sort_remove_reader() {
-        todo!("translate HTSlib bcf_sr_sort_remove_reader from htslib/bcf_sr_sort.c:662");
+    pub unsafe fn bcf_sr_sort_c_662_bcf_sr_sort_remove_reader(
+        _readers: *mut c_void,
+        srt: *mut c_void,
+        i: c_int,
+    ) {
+        let srt = srt.cast::<BcfSrSortScores>();
+        if !(*srt).vcf_buf.is_null() {
+            let vcf_buf = (*srt).vcf_buf.cast::<BcfSrSortVcfBuf>();
+            libc::free((*vcf_buf.add(i as usize)).rec.cast());
+            if i + 1 < (*srt).nsr {
+                libc::memmove(
+                    vcf_buf.add(i as usize).cast(),
+                    vcf_buf.add(i as usize + 1).cast(),
+                    ((*srt).nsr - i - 1) as usize * std::mem::size_of::<BcfSrSortVcfBuf>(),
+                );
+            }
+            libc::memset(
+                vcf_buf.add((*srt).nsr as usize - 1).cast(),
+                0,
+                std::mem::size_of::<BcfSrSortVcfBuf>(),
+            );
+        }
     }
 
     // original: bcf_sr_sort_init (htslib/bcf_sr_sort.c:675)
-    pub unsafe fn bcf_sr_sort_c_675_bcf_sr_sort_init() {
-        todo!("translate HTSlib bcf_sr_sort_init from htslib/bcf_sr_sort.c:675");
+    pub unsafe fn bcf_sr_sort_c_675_bcf_sr_sort_init(srt: *mut c_void) -> *mut c_void {
+        if srt.is_null() {
+            libc::calloc(1, std::mem::size_of::<BcfSrSortScores>())
+        } else {
+            libc::memset(srt, 0, std::mem::size_of::<BcfSrSortScores>());
+            srt
+        }
     }
 
     // original: bcf_sr_sort_reset (htslib/bcf_sr_sort.c:681)
-    pub unsafe fn bcf_sr_sort_c_681_bcf_sr_sort_reset() {
-        todo!("translate HTSlib bcf_sr_sort_reset from htslib/bcf_sr_sort.c:681");
+    pub unsafe fn bcf_sr_sort_c_681_bcf_sr_sort_reset(srt: *mut c_void) {
+        (*(srt.cast::<BcfSrSortScores>())).chr = std::ptr::null();
     }
 
     // original: bcf_sr_sort_destroy (htslib/bcf_sr_sort.c:685)
@@ -4969,38 +14723,101 @@ pub mod functions {
     }
 
     // original: get_hdr_aux (htslib/vcf.c:125)
-    pub unsafe fn vcf_c_125_get_hdr_aux() {
-        todo!("translate HTSlib get_hdr_aux from htslib/vcf.c:125");
+    pub unsafe fn vcf_c_125_get_hdr_aux(hdr: *const structs::bcf_hdr_t) -> *mut c_void {
+        (*hdr.cast::<BcfHdrLayout>()).dict[0]
     }
 
     // original: bcf_get_version (htslib/vcf.c:145)
-    pub unsafe fn vcf_c_145_bcf_get_version() {
-        todo!("translate HTSlib bcf_get_version from htslib/vcf.c:145");
+    pub unsafe fn vcf_c_145_bcf_get_version(
+        hdr: *const structs::bcf_hdr_t,
+        verstr: *const c_char,
+    ) -> c_int {
+        let version = if !hdr.is_null() {
+            crate::htslib_mini_rs::vcf::bcf_hdr_get_version(hdr.cast())
+        } else {
+            verstr
+        };
+        if version.is_null() {
+            return 4_002_000;
+        }
+
+        let major = libc::strstr(version, c"VCFv".as_ptr());
+        if major.is_null() {
+            return 4_002_000;
+        }
+        let major = major.add(4);
+        let minor = libc::strchr(major, b'.' as c_int);
+        if minor.is_null() {
+            return 4_002_000;
+        }
+
+        let major_val = libc::strtol(major, std::ptr::null_mut(), 10);
+        let minor_val = libc::strtol(minor.add(1), std::ptr::null_mut(), 10);
+        (major_val * 100 * 10_000 + minor_val * 1_000) as c_int
     }
 
     // original: bcf_hdr_incr_ref (htslib/vcf.c:196)
-    pub unsafe fn vcf_c_196_bcf_hdr_incr_ref() {
-        todo!("translate HTSlib bcf_hdr_incr_ref from htslib/vcf.c:196");
+    pub unsafe fn vcf_c_196_bcf_hdr_incr_ref(h: *mut structs::bcf_hdr_t) {
+        let aux = vcf_c_125_get_hdr_aux(h).cast::<BcfHdrAuxLayout>();
+        (*aux).ref_count = (*aux).ref_count.wrapping_add(2);
     }
 
     // original: bcf_hdr_decr_ref (htslib/vcf.c:202)
-    pub unsafe fn vcf_c_202_bcf_hdr_decr_ref() {
-        todo!("translate HTSlib bcf_hdr_decr_ref from htslib/vcf.c:202");
+    pub unsafe fn vcf_c_202_bcf_hdr_decr_ref(h: *mut structs::bcf_hdr_t) {
+        let aux = vcf_c_125_get_hdr_aux(h).cast::<BcfHdrAuxLayout>();
+        if (*aux).ref_count >= 2 {
+            (*aux).ref_count -= 2;
+        }
+        if (*aux).ref_count == 0 {
+            crate::htslib_mini_rs::vcf::bcf_hdr_destroy(h.cast());
+        }
     }
 
     // original: hdr_bgzf_private_data_cleanup (htslib/vcf.c:212)
-    pub unsafe fn vcf_c_212_hdr_bgzf_private_data_cleanup() {
-        todo!("translate HTSlib hdr_bgzf_private_data_cleanup from htslib/vcf.c:212");
+    pub unsafe fn vcf_c_212_hdr_bgzf_private_data_cleanup(data: *mut c_void) {
+        vcf_c_202_bcf_hdr_decr_ref(data.cast());
     }
 
     // original: find_chrom_header_line (htslib/vcf.c:218)
-    pub unsafe fn vcf_c_218_find_chrom_header_line() {
-        todo!("translate HTSlib find_chrom_header_line from htslib/vcf.c:218");
+    pub unsafe fn vcf_c_218_find_chrom_header_line(s: *mut c_char) -> *mut c_char {
+        if libc::strncmp(s, c"#CHROM\t".as_ptr(), 7) == 0 {
+            return s;
+        }
+        let nl = libc::strstr(s, c"\n#CHROM\t".as_ptr());
+        if nl.is_null() {
+            std::ptr::null_mut()
+        } else {
+            nl.add(1)
+        }
     }
 
     // original: bcf_hdr_add_sample_len (htslib/vcf.c:232)
-    pub unsafe fn vcf_c_232_bcf_hdr_add_sample_len() {
-        todo!("translate HTSlib bcf_hdr_add_sample_len from htslib/vcf.c:232");
+    pub unsafe fn vcf_c_232_bcf_hdr_add_sample_len(
+        h: *mut structs::bcf_hdr_t,
+        s: *const c_char,
+        len: usize,
+    ) -> c_int {
+        let mut ss = s;
+        while !ss.is_null() && *ss != 0 && (ss as usize).wrapping_sub(s as usize) < len {
+            let ch = *ss as u8;
+            if !matches!(ch, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c) {
+                break;
+            }
+            ss = ss.add(1);
+        }
+        if s.is_null() || *ss == 0 || (ss as usize).wrapping_sub(s as usize) == len {
+            return -1;
+        }
+
+        let sdup = libc::malloc(len + 1).cast::<c_char>();
+        if sdup.is_null() {
+            return -1;
+        }
+        std::ptr::copy_nonoverlapping(s, sdup, len);
+        *sdup.add(len) = 0;
+        let ret = crate::htslib_mini_rs::vcf::bcf_hdr_add_sample(h.cast(), sdup);
+        libc::free(sdup.cast());
+        ret
     }
 
     // original: bcf_hdr_add_sample (htslib/vcf.c:276)
@@ -5012,8 +14829,40 @@ pub mod functions {
     }
 
     // original: bcf_hdr_parse_sample_line (htslib/vcf.c:286)
-    pub unsafe fn vcf_c_286_bcf_hdr_parse_sample_line() {
-        todo!("translate HTSlib bcf_hdr_parse_sample_line from htslib/vcf.c:286");
+    pub unsafe fn vcf_c_286_bcf_hdr_parse_sample_line(
+        hdr: *mut structs::bcf_hdr_t,
+        str_: *const c_char,
+    ) -> c_int {
+        let mandatory = c"#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO";
+        let mandatory_len = libc::strlen(mandatory.as_ptr());
+        if libc::strncmp(str_, mandatory.as_ptr(), mandatory_len) != 0 {
+            return -1;
+        }
+
+        let mut beg = str_.add(mandatory_len);
+        if *beg == 0 || *beg == b'\n' as c_char {
+            return 0;
+        }
+        if libc::strncmp(beg, c"\tFORMAT\t".as_ptr(), 8) != 0 {
+            return -1;
+        }
+        beg = beg.add(8);
+
+        let mut ret = 0;
+        while *beg != 0 {
+            let mut end = beg;
+            while *end != 0 && *end != b'\t' as c_char && *end != b'\n' as c_char {
+                end = end.add(1);
+            }
+            if vcf_c_232_bcf_hdr_add_sample_len(hdr, beg, end.offset_from(beg) as usize) < 0 {
+                ret = -1;
+            }
+            if *end == 0 || *end == b'\n' as c_char || ret < 0 {
+                break;
+            }
+            beg = end.add(1);
+        }
+        ret
     }
 
     // original: bcf_hdr_sync (htslib/vcf.c:316)
@@ -5034,13 +14883,62 @@ pub mod functions {
     }
 
     // original: bcf_hrec_debug (htslib/vcf.c:413)
-    pub unsafe fn vcf_c_413_bcf_hrec_debug() {
-        todo!("translate HTSlib bcf_hrec_debug from htslib/vcf.c:413");
+    pub unsafe fn vcf_c_413_bcf_hrec_debug(fp: *mut libc::FILE, hrec: *mut structs::bcf_hrec_t) {
+        let hrec = hrec.cast::<BcfHrecLayout>();
+        libc::fprintf(
+            fp,
+            c"key=[%s] value=[%s]".as_ptr(),
+            (*hrec).key,
+            if (*hrec).value.is_null() {
+                c"".as_ptr()
+            } else {
+                (*hrec).value
+            },
+        );
+        for i in 0..(*hrec).nkeys {
+            libc::fprintf(
+                fp,
+                c"\t[%s]=[%s]".as_ptr(),
+                *(*hrec).keys.add(i as usize),
+                *(*hrec).vals.add(i as usize),
+            );
+        }
+        libc::fprintf(fp, c"\n".as_ptr());
     }
 
     // original: bcf_header_debug (htslib/vcf.c:422)
-    pub unsafe fn vcf_c_422_bcf_header_debug() {
-        todo!("translate HTSlib bcf_header_debug from htslib/vcf.c:422");
+    pub unsafe fn vcf_c_422_bcf_header_debug(hdr: *mut structs::bcf_hdr_t) {
+        let hdr = hdr.cast::<BcfHdrLayout>();
+        for i in 0..(*hdr).nhrec {
+            let hrec = *(*hdr).hrec.add(i as usize);
+            if (*hrec).value.is_null() {
+                libc::fprintf(hts_sys::stderr.cast(), c"##%s=<".as_ptr(), (*hrec).key);
+                if (*hrec).nkeys > 0 {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"%s=%s".as_ptr(),
+                        *(*hrec).keys,
+                        *(*hrec).vals,
+                    );
+                    for j in 1..(*hrec).nkeys {
+                        libc::fprintf(
+                            hts_sys::stderr.cast(),
+                            c",%s=%s".as_ptr(),
+                            *(*hrec).keys.add(j as usize),
+                            *(*hrec).vals.add(j as usize),
+                        );
+                    }
+                }
+                libc::fprintf(hts_sys::stderr.cast(), c">\n".as_ptr());
+            } else {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"##%s=%s\n".as_ptr(),
+                    (*hrec).key,
+                    (*hrec).value,
+                );
+            }
+        }
     }
 
     // original: bcf_hrec_add_key (htslib/vcf.c:440)
@@ -5077,13 +14975,94 @@ pub mod functions {
     }
 
     // original: bcf_hrec_set_type (htslib/vcf.c:527)
-    pub unsafe fn vcf_c_527_bcf_hrec_set_type() {
-        todo!("translate HTSlib bcf_hrec_set_type from htslib/vcf.c:527");
+    pub unsafe fn vcf_c_527_bcf_hrec_set_type(hrec: *mut structs::bcf_hrec_t) {
+        let hrec = hrec.cast::<BcfHrecLayout>();
+        (*hrec).type_ = if libc::strcmp((*hrec).key, c"contig".as_ptr()) == 0 {
+            hts_sys::BCF_HL_CTG as c_int
+        } else if libc::strcmp((*hrec).key, c"INFO".as_ptr()) == 0 {
+            hts_sys::BCF_HL_INFO as c_int
+        } else if libc::strcmp((*hrec).key, c"FILTER".as_ptr()) == 0 {
+            hts_sys::BCF_HL_FLT as c_int
+        } else if libc::strcmp((*hrec).key, c"FORMAT".as_ptr()) == 0 {
+            hts_sys::BCF_HL_FMT as c_int
+        } else if (*hrec).nkeys > 0 {
+            hts_sys::BCF_HL_STR as c_int
+        } else {
+            hts_sys::BCF_HL_GEN as c_int
+        };
     }
 
     // original: bcf_hrec_check (htslib/vcf.c:596)
-    pub unsafe fn vcf_c_596_bcf_hrec_check() {
-        todo!("translate HTSlib bcf_hrec_check from htslib/vcf.c:596");
+    pub unsafe fn vcf_c_596_bcf_hrec_check(hrec: *mut structs::bcf_hrec_t) -> c_int {
+        unsafe fn find_key(hrec: *mut BcfHrecLayout, key: *const c_char) -> c_int {
+            for i in 0..(*hrec).nkeys {
+                if libc::strcasecmp(key, *(*hrec).keys.add(i as usize)) == 0 {
+                    return i;
+                }
+            }
+            -1
+        }
+
+        fn valid_ctg_char(ch: u8) -> bool {
+            matches!(
+                ch,
+                b'!' | b'#' | b'$' | b'%' | b'&' | b'*' | b'+' | b'.' | b'/' | b':'
+                    | b';' | b'=' | b'?' | b'@' | b'^' | b'_' | b'|' | b'~' | b'-'
+                    | b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9'
+            )
+        }
+
+        fn valid_tag_char(ch: u8) -> bool {
+            matches!(ch, b'_' | b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9')
+        }
+
+        unsafe fn is_valid_tail(mut val: *const c_char, valid: fn(u8) -> bool) -> bool {
+            while *val != 0 {
+                if !valid(*val as u8) {
+                    return false;
+                }
+                val = val.add(1);
+            }
+            true
+        }
+
+        vcf_c_527_bcf_hrec_set_type(hrec);
+        let hrec = hrec.cast::<BcfHrecLayout>();
+
+        if (*hrec).type_ == hts_sys::BCF_HL_CTG as c_int {
+            let i = find_key(hrec, c"ID".as_ptr());
+            if i < 0 {
+                return -1;
+            }
+            let val = *(*hrec).vals.add(i as usize);
+            let first = *val as u8;
+            if first == b'*' || first == b'=' || !valid_ctg_char(first) {
+                return -1;
+            }
+            return is_valid_tail(val.add(1), valid_ctg_char) as c_int - 1;
+        }
+
+        if (*hrec).type_ == hts_sys::BCF_HL_INFO as c_int
+            || (*hrec).type_ == hts_sys::BCF_HL_FMT as c_int
+        {
+            let i = find_key(hrec, c"ID".as_ptr());
+            if i < 0 {
+                return -1;
+            }
+            let val = *(*hrec).vals.add(i as usize);
+            if (*hrec).type_ == hts_sys::BCF_HL_INFO as c_int
+                && libc::strcmp(val, c"1000G".as_ptr()) == 0
+            {
+                return 0;
+            }
+            let first = *val as u8;
+            if first == b'.' || first.is_ascii_digit() || !valid_tag_char(first) {
+                return -1;
+            }
+            return is_valid_tail(val.add(1), valid_tag_char) as c_int - 1;
+        }
+
+        0
     }
 
     // original: is_escaped (htslib/vcf.c:647)
@@ -5324,13 +15303,90 @@ pub mod functions {
     }
 
     // original: updatephasing (htslib/vcf.c:1985)
-    pub unsafe fn vcf_c_1985_updatephasing() {
-        todo!("translate HTSlib updatephasing from htslib/vcf.c:1985");
+    pub unsafe fn vcf_c_1985_updatephasing(
+        mut p: *mut u8,
+        end: *mut u8,
+        q: *mut *mut u8,
+        samples: c_int,
+        ploidy: c_int,
+        type_: c_int,
+    ) -> c_int {
+        fn bcf_type_shift(type_: c_int) -> c_int {
+            match type_ as u32 {
+                x if x == hts_sys::BCF_BT_INT16 => 1,
+                x if x == hts_sys::BCF_BT_INT32 || x == hts_sys::BCF_BT_FLOAT => 2,
+                x if x == hts_sys::BCF_BT_INT64 => 3,
+                _ => 0,
+            }
+        }
+
+        let inc = 1usize << bcf_type_shift(type_);
+        let Some(items) = samples
+            .checked_mul(ploidy)
+            .and_then(|items| usize::try_from(items).ok())
+        else {
+            return 1;
+        };
+        let Some(bytes) = items.checked_mul(inc) else {
+            return 1;
+        };
+        if samples < 0 || ploidy < 0 || end.offset_from(p) < bytes as isize {
+            return 1;
+        }
+
+        match ploidy {
+            1 => {
+                for _ in 0..samples {
+                    if *p != 0 {
+                        *p |= 1;
+                    }
+                    p = p.add(inc);
+                }
+            }
+            2 => {
+                for _ in 0..samples {
+                    *p |= *p.add(inc) & 1;
+                    p = p.add(2 * inc);
+                }
+            }
+            _ => {
+                for _ in 0..samples {
+                    let mut allphased = 1;
+                    for k in 1..ploidy as usize {
+                        allphased &= *p.add(inc * k);
+                    }
+                    *p |= allphased;
+                    p = p.add(ploidy as usize * inc);
+                }
+            }
+        }
+        *q = p;
+        0
     }
 
     // original: bcf_record_check_err (htslib/vcf.c:2031)
-    pub unsafe fn vcf_c_2031_bcf_record_check_err() {
-        todo!("translate HTSlib bcf_record_check_err from htslib/vcf.c:2031");
+    pub unsafe fn vcf_c_2031_bcf_record_check_err(
+        hdr: *const hts_sys::bcf_hdr_t,
+        rec: *mut hts_sys::bcf1_t,
+        type_: *mut c_char,
+        reports: *mut c_uint,
+        i: c_int,
+    ) {
+        if *reports == 0
+            || crate::htslib_mini_rs::hts::hts_get_log_level()
+                >= crate::htslib_mini_rs::hts::HTS_LOG_DEBUG
+        {
+            hts_sys::hts_log(
+                hts_sys::htsLogLevel_HTS_LOG_WARNING,
+                c"vcf".as_ptr(),
+                c"Bad BCF record at %s:%ld: Invalid FORMAT %s %d".as_ptr(),
+                htslib_vcf_h_1238_bcf_seqname_safe(hdr.cast(), rec.cast()),
+                (*rec).pos + 1,
+                type_,
+                i,
+            );
+        }
+        *reports += 1;
     }
 
     // original: bcf_record_check (htslib/vcf.c:2040)
@@ -5415,8 +15471,53 @@ pub mod functions {
     }
 
     // original: add_missing_contig_hrec (htslib/vcf.c:2571)
-    pub unsafe fn vcf_c_2571_add_missing_contig_hrec() {
-        todo!("translate HTSlib add_missing_contig_hrec from htslib/vcf.c:2571");
+    pub unsafe fn vcf_c_2571_add_missing_contig_hrec(
+        h: *mut hts_sys::bcf_hdr_t,
+        name: *const c_char,
+    ) -> c_int {
+        let hrec = libc::calloc(1, std::mem::size_of::<hts_sys::bcf_hrec_t>())
+            .cast::<hts_sys::bcf_hrec_t>();
+        if hrec.is_null() {
+            return vcf_c_2571_add_missing_contig_hrec_fail(hrec);
+        }
+
+        (*hrec).key = libc::strdup(c"contig".as_ptr());
+        if (*hrec).key.is_null() {
+            return vcf_c_2571_add_missing_contig_hrec_fail(hrec);
+        }
+
+        if crate::htslib_mini_rs::vcf::bcf_hrec_add_key(hrec, c"ID".as_ptr(), 2) < 0 {
+            return vcf_c_2571_add_missing_contig_hrec_fail(hrec);
+        }
+        if crate::htslib_mini_rs::vcf::bcf_hrec_set_val(
+            hrec,
+            (*hrec).nkeys - 1,
+            name,
+            libc::strlen(name),
+            0,
+        ) < 0
+        {
+            return vcf_c_2571_add_missing_contig_hrec_fail(hrec);
+        }
+        if crate::htslib_mini_rs::vcf::bcf_hdr_add_hrec(h, hrec) < 0 {
+            return vcf_c_2571_add_missing_contig_hrec_fail(hrec);
+        }
+        0
+    }
+
+    unsafe fn vcf_c_2571_add_missing_contig_hrec_fail(hrec: *mut hts_sys::bcf_hrec_t) -> c_int {
+        let save_errno = *libc::__errno_location();
+        hts_sys::hts_log(
+            hts_sys::htsLogLevel_HTS_LOG_ERROR,
+            c"vcf".as_ptr(),
+            c"%s".as_ptr(),
+            libc::strerror(*libc::__errno_location()),
+        );
+        if !hrec.is_null() {
+            crate::htslib_mini_rs::vcf::bcf_hrec_destroy(hrec);
+        }
+        *libc::__errno_location() = save_errno;
+        -1
     }
 
     // original: vcf_hdr_read (htslib/vcf.c:2594)
@@ -5433,8 +15534,45 @@ pub mod functions {
     }
 
     // original: _bcf_hrec_format (htslib/vcf.c:2712)
-    pub unsafe fn vcf_c_2712__bcf_hrec_format() {
-        todo!("translate HTSlib _bcf_hrec_format from htslib/vcf.c:2712");
+    pub unsafe fn vcf_c_2712__bcf_hrec_format(
+        hrec: *const hts_sys::bcf_hrec_t,
+        is_bcf: c_int,
+        str_: *mut kstring_t,
+    ) -> c_int {
+        let mut e = 0;
+        if (*hrec).value.is_null() {
+            let mut nout = 0;
+            e |= (crate::htslib_mini_rs::hts::kputs(c"##".as_ptr(), str_) < 0) as c_int;
+            e |= (crate::htslib_mini_rs::hts::kputs((*hrec).key, str_) < 0) as c_int;
+            e |= (crate::htslib_mini_rs::hts::kputs(c"=<".as_ptr(), str_) < 0) as c_int;
+            for j in 0..(*hrec).nkeys {
+                let key = *(*hrec).keys.add(j as usize);
+                if is_bcf == 0 && libc::strcmp(c"IDX".as_ptr(), key) == 0 {
+                    continue;
+                }
+                if nout != 0 {
+                    e |= (crate::htslib_mini_rs::hts::kputc(b',' as c_int, str_) < 0) as c_int;
+                }
+                e |= (crate::htslib_mini_rs::hts::kputs(key, str_) < 0) as c_int;
+                e |= (crate::htslib_mini_rs::hts::kputc(b'=' as c_int, str_) < 0) as c_int;
+                e |= (crate::htslib_mini_rs::hts::kputs(*(*hrec).vals.add(j as usize), str_) < 0)
+                    as c_int;
+                nout += 1;
+            }
+            e |= (crate::htslib_mini_rs::hts::kputs(c">\n".as_ptr(), str_) < 0) as c_int;
+        } else {
+            e |= (crate::htslib_mini_rs::hts::kputs(c"##".as_ptr(), str_) < 0) as c_int;
+            e |= (crate::htslib_mini_rs::hts::kputs((*hrec).key, str_) < 0) as c_int;
+            e |= (crate::htslib_mini_rs::hts::kputc(b'=' as c_int, str_) < 0) as c_int;
+            e |= (crate::htslib_mini_rs::hts::kputs((*hrec).value, str_) < 0) as c_int;
+            e |= (crate::htslib_mini_rs::hts::kputc(b'\n' as c_int, str_) < 0) as c_int;
+        }
+
+        if e == 0 {
+            0
+        } else {
+            -1
+        }
     }
 
     // original: bcf_hrec_format (htslib/vcf.c:2735)
@@ -5490,13 +15628,63 @@ pub mod functions {
     }
 
     // original: bcf_enc_long1 (htslib/vcf.c:2925)
-    pub unsafe fn vcf_c_2925_bcf_enc_long1() {
-        todo!("translate HTSlib bcf_enc_long1 from htslib/vcf.c:2925");
+    pub unsafe fn vcf_c_2925_bcf_enc_long1(s: *mut kstring_t, x: i64) -> c_int {
+        const BCF_MAX_BT_INT32: i64 = 0x7fffffff;
+        const BCF_MIN_BT_INT32: i64 = -2147483640;
+        const BCF_INT64_VECTOR_END: i64 = i64::MIN + 1;
+        const BCF_INT64_MISSING: i64 = i64::MIN;
+        const BCF_INT8_VECTOR_END: i8 = -127;
+        const BCF_INT8_MISSING: i8 = -128;
+
+        if x <= BCF_MAX_BT_INT32 && x >= BCF_MIN_BT_INT32 {
+            return htslib_vcf_h_1582_bcf_enc_int1(s, x as i32);
+        }
+
+        let mut e = 0;
+        if x == BCF_INT64_VECTOR_END {
+            e |= htslib_vcf_h_1540_bcf_enc_size(s, 1, hts_sys::BCF_BT_INT8 as c_int);
+            e |= (crate::htslib_mini_rs::hts::kputc(BCF_INT8_VECTOR_END as c_int, s) < 0) as c_int;
+        } else if x == BCF_INT64_MISSING {
+            e |= htslib_vcf_h_1540_bcf_enc_size(s, 1, hts_sys::BCF_BT_INT8 as c_int);
+            e |= (crate::htslib_mini_rs::hts::kputc(BCF_INT8_MISSING as c_int, s) < 0) as c_int;
+        } else {
+            e |= htslib_vcf_h_1540_bcf_enc_size(s, 1, hts_sys::BCF_BT_INT64 as c_int);
+            e |= crate::htslib_mini_rs::hts::ks_expand(s, 8);
+            if e == 0 {
+                crate::htslib_mini_rs::hts::i64_to_le(x, (*s).s.add((*s).l).cast::<u8>());
+                (*s).l += 8;
+            }
+        }
+        if e == 0 {
+            0
+        } else {
+            -1
+        }
     }
 
     // original: serialize_float_array (htslib/vcf.c:2944)
-    pub unsafe fn vcf_c_2944_serialize_float_array() {
-        todo!("translate HTSlib serialize_float_array from htslib/vcf.c:2944");
+    pub unsafe fn vcf_c_2944_serialize_float_array(
+        s: *mut kstring_t,
+        n: usize,
+        a: *const f32,
+    ) -> c_int {
+        let Some(bytes) = n.checked_mul(std::mem::size_of::<f32>()) else {
+            return -1;
+        };
+        if bytes / std::mem::size_of::<f32>() != n {
+            return -1;
+        }
+        if crate::htslib_mini_rs::hts::ks_resize(s, (*s).l + bytes) < 0 {
+            return -1;
+        }
+
+        let mut p = (*s).s.add((*s).l).cast::<u8>();
+        for i in 0..n {
+            crate::htslib_mini_rs::hts::float_to_le(*a.add(i), p);
+            p = p.add(std::mem::size_of::<f32>());
+        }
+        (*s).l += bytes;
+        0
     }
 
     // original: bcf_enc_vfloat (htslib/vcf.c:2962)
@@ -5510,8 +15698,87 @@ pub mod functions {
     }
 
     // original: bcf_fmt_array1 (htslib/vcf.c:2979)
-    pub unsafe fn vcf_c_2979_bcf_fmt_array1() {
-        todo!("translate HTSlib bcf_fmt_array1 from htslib/vcf.c:2979");
+    pub unsafe fn vcf_c_2979_bcf_fmt_array1(
+        s: *mut kstring_t,
+        type_: c_int,
+        data: *mut c_void,
+    ) -> c_int {
+        const BCF_INT8_VECTOR_END: i8 = -127;
+        const BCF_INT16_VECTOR_END: i16 = -32767;
+        const BCF_INT32_VECTOR_END: i32 = -2147483647;
+        const BCF_INT8_MISSING: i8 = -128;
+        const BCF_INT16_MISSING: i16 = -32768;
+        const BCF_INT32_MISSING: i32 = -2147483648;
+
+        let p = data.cast::<u8>();
+        let mut e = 0;
+        match type_ {
+            x if x == hts_sys::BCF_BT_CHAR as c_int => {
+                let c = if *p == hts_sys::BCF_BT_CHAR as u8 {
+                    b'.'
+                } else {
+                    *p
+                };
+                e |= (crate::htslib_mini_rs::hts::kputc_(c as c_int, s) < 0) as c_int;
+            }
+            x if x == hts_sys::BCF_BT_INT8 as c_int => {
+                let v = *(p.cast::<i8>());
+                if v != BCF_INT8_VECTOR_END {
+                    e |= if v == BCF_INT8_MISSING {
+                        (crate::htslib_mini_rs::hts::kputc_(b'.' as c_int, s) < 0) as c_int
+                    } else {
+                        (crate::htslib_mini_rs::hts::kputw(v as c_int, s) < 0) as c_int
+                    };
+                }
+            }
+            x if x == hts_sys::BCF_BT_INT16 as c_int => {
+                let v = crate::htslib_mini_rs::hts::le_to_i16(p);
+                if v != BCF_INT16_VECTOR_END {
+                    e |= if v == BCF_INT16_MISSING {
+                        (crate::htslib_mini_rs::hts::kputc_(b'.' as c_int, s) < 0) as c_int
+                    } else {
+                        (crate::htslib_mini_rs::hts::kputw(v as c_int, s) < 0) as c_int
+                    };
+                }
+            }
+            x if x == hts_sys::BCF_BT_INT32 as c_int => {
+                let v = crate::htslib_mini_rs::hts::le_to_i32(p);
+                if v != BCF_INT32_VECTOR_END {
+                    e |= if v == BCF_INT32_MISSING {
+                        (crate::htslib_mini_rs::hts::kputc_(b'.' as c_int, s) < 0) as c_int
+                    } else {
+                        (crate::htslib_mini_rs::hts::kputw(v, s) < 0) as c_int
+                    };
+                }
+            }
+            x if x == hts_sys::BCF_BT_FLOAT as c_int => {
+                let v = crate::htslib_mini_rs::hts::le_to_u32(p);
+                if v != hts_sys::bcf_float_vector_end {
+                    e |= if v == hts_sys::bcf_float_missing {
+                        (crate::htslib_mini_rs::hts::kputc_(b'.' as c_int, s) < 0) as c_int
+                    } else {
+                        (crate::htslib_mini_rs::hts::kputd(
+                            crate::htslib_mini_rs::hts::le_to_float(p) as f64,
+                            s,
+                        ) < 0) as c_int
+                    };
+                }
+            }
+            _ => {
+                hts_sys::hts_log(
+                    hts_sys::htsLogLevel_HTS_LOG_ERROR,
+                    c"vcf".as_ptr(),
+                    c"Unexpected type %d".as_ptr(),
+                    type_,
+                );
+                return -1;
+            }
+        }
+        if e == 0 {
+            0
+        } else {
+            -1
+        }
     }
 
     // original: bcf_fmt_array (htslib/vcf.c:3036)
@@ -5530,13 +15797,51 @@ pub mod functions {
     }
 
     // original: align_mem (htslib/vcf.c:3124)
-    pub unsafe fn vcf_c_3124_align_mem() {
-        todo!("translate HTSlib align_mem from htslib/vcf.c:3124");
+    pub unsafe fn vcf_c_3124_align_mem(s: *mut kstring_t) -> c_int {
+        let mut e = 0;
+        if (*s).l & 7 != 0 {
+            let zero: u64 = 0;
+            e = (crate::htslib_mini_rs::hts::kputsn(
+                (&zero as *const u64).cast::<c_char>(),
+                8 - ((*s).l & 7),
+                s,
+            ) < 0) as c_int;
+        }
+        if e == 0 {
+            0
+        } else {
+            -1
+        }
     }
 
     // original: vcf_parse_format_empty1 (htslib/vcf.c:3137)
-    pub unsafe fn vcf_c_3137_vcf_parse_format_empty1() {
-        todo!("translate HTSlib vcf_parse_format_empty1 from htslib/vcf.c:3137");
+    pub unsafe fn vcf_c_3137_vcf_parse_format_empty1(
+        s: *mut kstring_t,
+        h: *const hts_sys::bcf_hdr_t,
+        v: *mut hts_sys::bcf1_t,
+        p: *const c_char,
+        q: *const c_char,
+    ) -> c_int {
+        let end = (*s).s.add((*s).l);
+        if q >= end {
+            hts_sys::hts_log(
+                hts_sys::htsLogLevel_HTS_LOG_ERROR,
+                c"vcf".as_ptr(),
+                c"FORMAT column with no sample columns starting at %s:%ld".as_ptr(),
+                htslib_vcf_h_1238_bcf_seqname_safe(h.cast(), v.cast()),
+                (*v).pos + 1,
+            );
+            (*v).errcode |= hts_sys::BCF_ERR_NCOLS as c_int;
+            return -1;
+        }
+
+        (*v).set_n_fmt(0);
+        if *p == b'.' as c_char && *p.add(1) == 0 {
+            (*v).set_n_sample((*h).n[hts_sys::BCF_DT_SAMPLE as usize] as u32);
+            return 1;
+        }
+
+        0
     }
 
     // original: vcf_parse_format_dict2 (htslib/vcf.c:3158)
@@ -5565,8 +15870,39 @@ pub mod functions {
     }
 
     // original: vcf_parse_format_check7 (htslib/vcf.c:3664)
-    pub unsafe fn vcf_c_3664_vcf_parse_format_check7() {
-        todo!("translate HTSlib vcf_parse_format_check7 from htslib/vcf.c:3664");
+    pub unsafe fn vcf_c_3664_vcf_parse_format_check7(
+        h: *const hts_sys::bcf_hdr_t,
+        v: *mut hts_sys::bcf1_t,
+    ) -> c_int {
+        let nsamples = (*h).n[hts_sys::BCF_DT_SAMPLE as usize];
+        if (*v).n_sample() != nsamples as u32 {
+            hts_sys::hts_log(
+                hts_sys::htsLogLevel_HTS_LOG_ERROR,
+                c"vcf".as_ptr(),
+                c"Number of columns at %s:%ld does not match the number of samples (%d vs %d)"
+                    .as_ptr(),
+                htslib_vcf_h_1238_bcf_seqname_safe(h.cast(), v.cast()),
+                (*v).pos + 1,
+                (*v).n_sample() as c_int,
+                nsamples,
+            );
+            (*v).errcode |= hts_sys::BCF_ERR_NCOLS as c_int;
+            return -1;
+        }
+        if (*v).indiv.l > u32::MAX as u64 {
+            hts_sys::hts_log(
+                hts_sys::htsLogLevel_HTS_LOG_ERROR,
+                c"vcf".as_ptr(),
+                c"The FORMAT at %s:%ld is too long".as_ptr(),
+                htslib_vcf_h_1238_bcf_seqname_safe(h.cast(), v.cast()),
+                (*v).pos + 1,
+            );
+            (*v).errcode |= hts_sys::BCF_ERR_LIMITS as c_int;
+            (*v).set_n_fmt(0);
+            return -1;
+        }
+
+        0
     }
 
     // original: vcf_parse_format (htslib/vcf.c:3686)
@@ -5617,13 +15953,86 @@ pub mod functions {
     }
 
     // original: bcf_unpack_fmt_core1 (htslib/vcf.c:4178)
-    pub unsafe fn vcf_c_4178_bcf_unpack_fmt_core1() {
-        todo!("translate HTSlib bcf_unpack_fmt_core1 from htslib/vcf.c:4178");
+    pub unsafe fn vcf_c_4178_bcf_unpack_fmt_core1(
+        ptr: *mut u8,
+        n_sample: c_int,
+        fmt: *mut hts_sys::bcf_fmt_t,
+    ) -> *mut u8 {
+        fn bcf_type_shift(type_: c_int) -> c_int {
+            match type_ as u32 {
+                x if x == hts_sys::BCF_BT_INT16 => 1,
+                x if x == hts_sys::BCF_BT_INT32 || x == hts_sys::BCF_BT_FLOAT => 2,
+                x if x == hts_sys::BCF_BT_INT64 => 3,
+                _ => 0,
+            }
+        }
+
+        let ptr_start = ptr;
+        let mut ptr = ptr;
+        (*fmt).id = htslib_vcf_h_1665_bcf_dec_typed_int1(ptr, &mut ptr) as c_int;
+        (*fmt).n = htslib_vcf_h_1670_bcf_dec_size(ptr, &mut ptr, &mut (*fmt).type_);
+        (*fmt).size = (*fmt).n << bcf_type_shift((*fmt).type_);
+        (*fmt).p = ptr;
+        (*fmt).set_p_off(ptr.offset_from(ptr_start) as u32);
+        (*fmt).set_p_free(0);
+        ptr = ptr.add((n_sample * (*fmt).size) as usize);
+        (*fmt).p_len = ptr.offset_from((*fmt).p) as u32;
+        ptr
     }
 
     // original: bcf_unpack_info_core1 (htslib/vcf.c:4192)
-    pub unsafe fn vcf_c_4192_bcf_unpack_info_core1() {
-        todo!("translate HTSlib bcf_unpack_info_core1 from htslib/vcf.c:4192");
+    pub unsafe fn vcf_c_4192_bcf_unpack_info_core1(
+        ptr: *mut u8,
+        info: *mut hts_sys::bcf_info_t,
+    ) -> *mut u8 {
+        fn bcf_type_shift(type_: c_int) -> c_int {
+            match type_ as u32 {
+                x if x == hts_sys::BCF_BT_INT16 => 1,
+                x if x == hts_sys::BCF_BT_INT32 || x == hts_sys::BCF_BT_FLOAT => 2,
+                x if x == hts_sys::BCF_BT_INT64 => 3,
+                _ => 0,
+            }
+        }
+
+        let ptr_start = ptr;
+        let mut ptr = ptr;
+        (*info).key = htslib_vcf_h_1665_bcf_dec_typed_int1(ptr, &mut ptr) as c_int;
+        let mut len = htslib_vcf_h_1670_bcf_dec_size(ptr, &mut ptr, &mut (*info).type_) as i64;
+        (*info).len = len as c_int;
+        (*info).vptr = ptr;
+        (*info).set_vptr_off(ptr.offset_from(ptr_start) as u32);
+        (*info).set_vptr_free(0);
+        (*info).v1.i = 0;
+        if (*info).len == 1 {
+            match (*info).type_ as u32 {
+                x if x == hts_sys::BCF_BT_INT8 || x == hts_sys::BCF_BT_CHAR => {
+                    (*info).v1.i = *(ptr.cast::<i8>()) as i64;
+                }
+                x if x == hts_sys::BCF_BT_INT16 => {
+                    (*info).v1.i = crate::htslib_mini_rs::hts::le_to_i16(ptr) as i64;
+                    len <<= 1;
+                }
+                x if x == hts_sys::BCF_BT_INT32 => {
+                    (*info).v1.i = crate::htslib_mini_rs::hts::le_to_i32(ptr) as i64;
+                    len <<= 2;
+                }
+                x if x == hts_sys::BCF_BT_FLOAT => {
+                    (*info).v1.f = crate::htslib_mini_rs::hts::le_to_float(ptr);
+                    len <<= 2;
+                }
+                x if x == hts_sys::BCF_BT_INT64 => {
+                    (*info).v1.i = crate::htslib_mini_rs::hts::le_to_i64(ptr);
+                    len <<= 3;
+                }
+                _ => {}
+            }
+        } else {
+            len <<= bcf_type_shift((*info).type_);
+        }
+        ptr = ptr.add(len as usize);
+
+        (*info).vptr_len = ptr.offset_from((*info).vptr) as u32;
+        ptr
     }
 
     // original: bcf_unpack (htslib/vcf.c:4234)
@@ -5664,8 +16073,44 @@ pub mod functions {
     }
 
     // original: idx_calc_n_lvls_ids (htslib/vcf.c:4636)
-    pub unsafe fn vcf_c_4636_idx_calc_n_lvls_ids() {
-        todo!("translate HTSlib idx_calc_n_lvls_ids from htslib/vcf.c:4636");
+    pub unsafe fn vcf_c_4636_idx_calc_n_lvls_ids(
+        h: *const structs::bcf_hdr_t,
+        min_shift_in_out: *mut c_int,
+        starting_n_lvls: c_int,
+        nids_out: *mut c_int,
+    ) -> c_int {
+        let h = h.cast::<BcfHdrLayout>();
+        let mut n_lvls = starting_n_lvls;
+        let mut nids = 0;
+        let mut max_len = 0i64;
+        let ctg = hts_sys::BCF_DT_CTG as usize;
+        let ids = (*h).id[ctg].cast::<BcfIdPairLayout>();
+
+        for i in 0..(*h).n[ctg] {
+            let pair = ids.add(i as usize);
+            if (*pair).val.is_null() {
+                continue;
+            }
+            let len = (*(*pair).val).info[0] as i64;
+            if max_len < len {
+                max_len = len;
+            }
+            nids += 1;
+        }
+        if max_len == 0 {
+            max_len = (1i64 << 31) - 1;
+        }
+
+        crate::htslib_mini_rs::hts::hts_c_2372_hts_adjust_csi_settings(
+            max_len,
+            min_shift_in_out,
+            &mut n_lvls,
+        );
+
+        if !nids_out.is_null() {
+            *nids_out = nids;
+        }
+        n_lvls
     }
 
     // original: bcf_index (htslib/vcf.c:4657)
@@ -6036,8 +16481,44 @@ pub mod functions {
     }
 
     // original: add_desc_to_buffer (htslib/vcf.c:6287)
-    pub unsafe fn vcf_c_6287_add_desc_to_buffer() {
-        todo!("translate HTSlib add_desc_to_buffer from htslib/vcf.c:6287");
+    pub unsafe fn vcf_c_6287_add_desc_to_buffer(
+        buffer: *mut c_char,
+        offset: *mut usize,
+        maxbuffer: usize,
+        description: *const c_char,
+    ) -> c_int {
+        if description.is_null() || buffer.is_null() || offset.is_null() || maxbuffer < 4 {
+            return -1;
+        }
+
+        let rembuffer = maxbuffer - *offset;
+        let desc_len = libc::strlen(description);
+        if rembuffer > desc_len + if rembuffer == maxbuffer { 0 } else { 1 } {
+            let written = libc::snprintf(
+                buffer.add(*offset),
+                rembuffer,
+                c"%s%s".as_ptr(),
+                if rembuffer == maxbuffer {
+                    c"".as_ptr()
+                } else {
+                    c",".as_ptr()
+                },
+                description,
+            );
+            if written < 0 {
+                return -1;
+            }
+            *offset += written as usize;
+        } else {
+            let tmppos = if rembuffer <= 4 {
+                maxbuffer - 4
+            } else {
+                *offset
+            };
+            libc::snprintf(buffer.add(tmppos), 4, c"...".as_ptr());
+            return -1;
+        }
+        0
     }
 
     // original: bcf_strerror (htslib/vcf.c:6304)
@@ -6064,14 +16545,49 @@ pub mod functions {
         todo!("translate HTSlib get_rlen from htslib/vcf.c:6420");
     }
 
+    #[repr(C)]
+    struct MultipartPartLayout {
+        url: *mut c_char,
+        headers: *mut *mut c_char,
+    }
+
+    #[repr(C)]
+    struct HFileMultipartLayout {
+        base: hFILE,
+        parts: *mut MultipartPartLayout,
+        nparts: usize,
+        maxparts: usize,
+        current: usize,
+        currentfp: *mut hFILE,
+    }
+
+    unsafe fn multipart_free_part_layout(p: *mut MultipartPartLayout) {
+        libc::free((*p).url.cast());
+        if !(*p).headers.is_null() {
+            let mut hdr = (*p).headers;
+            while !(*hdr).is_null() {
+                libc::free((*hdr).cast());
+                hdr = hdr.add(1);
+            }
+            libc::free((*p).headers.cast());
+        }
+
+        (*p).url = std::ptr::null_mut();
+        (*p).headers = std::ptr::null_mut();
+    }
+
     // original: free_part (htslib/multipart.c:53)
-    pub unsafe fn multipart_c_53_free_part() {
-        todo!("translate HTSlib free_part from htslib/multipart.c:53");
+    pub unsafe fn multipart_c_53_free_part(p: *mut structs::hfile_part) {
+        multipart_free_part_layout(p.cast());
     }
 
     // original: free_all_parts (htslib/multipart.c:66)
-    pub unsafe fn multipart_c_66_free_all_parts() {
-        todo!("translate HTSlib free_all_parts from htslib/multipart.c:66");
+    pub unsafe fn multipart_c_66_free_all_parts(fp: *mut c_void) {
+        let fp = fp.cast::<HFileMultipartLayout>();
+        for i in 0..(*fp).nparts {
+            multipart_free_part_layout((*fp).parts.add(i));
+        }
+        libc::free((*fp).parts.cast());
     }
 
     // original: multipart_read (htslib/multipart.c:73)
@@ -6080,28 +16596,190 @@ pub mod functions {
     }
 
     // original: multipart_write (htslib/multipart.c:114)
-    pub unsafe fn multipart_c_114_multipart_write() {
-        todo!("translate HTSlib multipart_write from htslib/multipart.c:114");
+    pub unsafe fn multipart_c_114_multipart_write(
+        _fpv: *mut hFILE,
+        _buffer: *const c_void,
+        _nbytes: usize,
+    ) -> libc::ssize_t {
+        *crate::htslib_mini_rs::c_compat::__errno_location() = libc::EROFS;
+        -1
     }
 
     // original: multipart_seek (htslib/multipart.c:120)
-    pub unsafe fn multipart_c_120_multipart_seek() {
-        todo!("translate HTSlib multipart_seek from htslib/multipart.c:120");
+    pub unsafe fn multipart_c_120_multipart_seek(
+        _fpv: *mut hFILE,
+        _offset: libc::off_t,
+        _whence: c_int,
+    ) -> libc::off_t {
+        *crate::htslib_mini_rs::c_compat::__errno_location() = libc::ESPIPE;
+        -1
     }
 
     // original: multipart_close (htslib/multipart.c:126)
-    pub unsafe fn multipart_c_126_multipart_close() {
-        todo!("translate HTSlib multipart_close from htslib/multipart.c:126");
+    pub unsafe fn multipart_c_126_multipart_close(fpv: *mut hFILE) -> c_int {
+        let fp = fpv.cast::<HFileMultipartLayout>();
+        multipart_c_66_free_all_parts(fp.cast());
+        if !(*fp).currentfp.is_null() && crate::htslib_mini_rs::hfile::hclose((*fp).currentfp) < 0 {
+            return -1;
+        }
+        0
     }
 
     // original: parse_ga4gh_body_json (htslib/multipart.c:149)
-    pub unsafe fn multipart_c_149_parse_ga4gh_body_json() {
-        todo!("translate HTSlib parse_ga4gh_body_json from htslib/multipart.c:149");
+    pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
+        fp: *mut c_void,
+        json: *mut hFILE,
+        b: *mut kstring_t,
+        header: *mut kstring_t,
+    ) -> c_char {
+        let fp = fp.cast::<HFileMultipartLayout>();
+        let mut t = crate::htslib_mini_rs::hts::hts_json_token {
+            type_: 0,
+            str_: std::ptr::null_mut(),
+        };
+
+        if textutils_c_292_hts_json_fnext(json, &mut t, b) != b'{' as c_char {
+            return t.type_;
+        }
+
+        while textutils_c_292_hts_json_fnext(json, &mut t, b) != b'}' as c_char {
+            if t.type_ != b's' as c_char {
+                return b'?' as c_char;
+            }
+
+            if libc::strcmp(t.str_, c"urls".as_ptr()) == 0 {
+                if textutils_c_292_hts_json_fnext(json, &mut t, b) != b'[' as c_char {
+                    return t.type_;
+                }
+
+                while textutils_c_292_hts_json_fnext(json, &mut t, b) != b']' as c_char {
+                    let needed = (*fp).nparts + 1;
+                    if needed > (*fp).maxparts {
+                        let new_max = needed.max((*fp).maxparts.saturating_mul(2)).max(4);
+                        let new_parts = libc::realloc(
+                            (*fp).parts.cast(),
+                            new_max * std::mem::size_of::<MultipartPartLayout>(),
+                        )
+                        .cast::<MultipartPartLayout>();
+                        if new_parts.is_null() {
+                            return b'?' as c_char;
+                        }
+                        (*fp).parts = new_parts;
+                        (*fp).maxparts = new_max;
+                    }
+                    let part = (*fp).parts.add((*fp).nparts);
+                    (*fp).nparts += 1;
+                    (*part).url = std::ptr::null_mut();
+                    (*part).headers = std::ptr::null_mut();
+
+                    if t.type_ != b'{' as c_char {
+                        return t.type_;
+                    }
+                    let mut n = 0usize;
+                    let mut max = 0usize;
+                    while textutils_c_292_hts_json_fnext(json, &mut t, b) != b'}' as c_char {
+                        if t.type_ != b's' as c_char {
+                            return b'?' as c_char;
+                        }
+
+                        if libc::strcmp(t.str_, c"url".as_ptr()) == 0 {
+                            if textutils_c_292_hts_json_fnext(json, &mut t, b) != b's' as c_char {
+                                return t.type_;
+                            }
+                            (*part).url = crate::htslib_mini_rs::hts::ks_release(b);
+                        } else if libc::strcmp(t.str_, c"headers".as_ptr()) == 0 {
+                            if textutils_c_292_hts_json_fnext(json, &mut t, b) != b'{' as c_char {
+                                return t.type_;
+                            }
+
+                            while textutils_c_292_hts_json_fnext(json, &mut t, header)
+                                != b'}' as c_char
+                            {
+                                if t.type_ != b's' as c_char {
+                                    return b'?' as c_char;
+                                }
+                                if textutils_c_292_hts_json_fnext(json, &mut t, b) != b's' as c_char
+                                {
+                                    return t.type_;
+                                }
+                                if crate::htslib_mini_rs::hts::kputs(c": ".as_ptr(), header) < 0
+                                    || crate::htslib_mini_rs::hts::kputs(t.str_, header) < 0
+                                {
+                                    return b'?' as c_char;
+                                }
+
+                                n += 1;
+                                if n + 1 > max {
+                                    let new_max = (n + 1).max(max.saturating_mul(2)).max(4);
+                                    let new_headers = libc::realloc(
+                                        (*part).headers.cast(),
+                                        new_max * std::mem::size_of::<*mut c_char>(),
+                                    )
+                                    .cast::<*mut c_char>();
+                                    if new_headers.is_null() {
+                                        return b'?' as c_char;
+                                    }
+                                    (*part).headers = new_headers;
+                                    max = new_max;
+                                }
+                                *(*part).headers.add(n - 1) =
+                                    crate::htslib_mini_rs::hts::ks_release(header);
+                                *(*part).headers.add(n) = std::ptr::null_mut();
+                            }
+                        } else if textutils_c_402_hts_json_fskip_value(json, 0) != b'v' as c_char {
+                            return b'?' as c_char;
+                        }
+                    }
+
+                    if (*part).url.is_null() {
+                        return b'i' as c_char;
+                    }
+                }
+            } else if libc::strcmp(t.str_, c"format".as_ptr()) == 0 {
+                if textutils_c_292_hts_json_fnext(json, &mut t, b) != b's' as c_char {
+                    return t.type_;
+                }
+            } else if textutils_c_402_hts_json_fskip_value(json, 0) != b'v' as c_char {
+                return b'?' as c_char;
+            }
+        }
+
+        b'v' as c_char
     }
 
     // original: parse_ga4gh_redirect_json (htslib/multipart.c:220)
-    pub unsafe fn multipart_c_220_parse_ga4gh_redirect_json() {
-        todo!("translate HTSlib parse_ga4gh_redirect_json from htslib/multipart.c:220");
+    pub unsafe fn multipart_c_220_parse_ga4gh_redirect_json(
+        fp: *mut c_void,
+        json: *mut hFILE,
+        b: *mut kstring_t,
+        header: *mut kstring_t,
+    ) -> c_char {
+        let mut t = crate::htslib_mini_rs::hts::hts_json_token {
+            type_: 0,
+            str_: std::ptr::null_mut(),
+        };
+
+        if textutils_c_292_hts_json_fnext(json, &mut t, b) != b'{' as c_char {
+            return t.type_;
+        }
+        while textutils_c_292_hts_json_fnext(json, &mut t, b) != b'}' as c_char {
+            if t.type_ != b's' as c_char {
+                return b'?' as c_char;
+            }
+            if libc::strcmp(t.str_, c"htsget".as_ptr()) == 0 {
+                let ret = multipart_c_149_parse_ga4gh_body_json(fp, json, b, header);
+                if ret != b'v' as c_char {
+                    return ret;
+                }
+            } else {
+                return b'?' as c_char;
+            }
+        }
+
+        if textutils_c_292_hts_json_fnext(json, &mut t, b) != 0 {
+            return b'?' as c_char;
+        }
+        b'v' as c_char
     }
 
     // original: hopen_htsget_redirect (htslib/multipart.c:241)
@@ -6229,8 +16907,50 @@ pub mod functions {
     }
 
     // original: razf_info (htslib/bgzf.c:315)
-    pub unsafe fn bgzf_c_315_razf_info() {
-        todo!("translate HTSlib razf_info from htslib/bgzf.c:315");
+    pub unsafe fn bgzf_c_315_razf_info(hfp: *mut hFILE, mut filename: *const c_char) {
+        if filename.is_null() || libc::strcmp(filename, c"-".as_ptr()) == 0 {
+            filename = c"FILE".as_ptr();
+        }
+
+        let sizes_pos = crate::htslib_mini_rs::hfile::hseek(hfp, -16, libc::SEEK_END);
+        if sizes_pos >= 0 {
+            let mut usize_buf = [0_u8; 8];
+            let mut csize_buf = [0_u8; 8];
+            let read_usize = crate::htslib_mini_rs::hfile::htslib_hfile_h_247_hread(
+                hfp,
+                usize_buf.as_mut_ptr().cast(),
+                usize_buf.len(),
+            );
+            let read_csize = crate::htslib_mini_rs::hfile::htslib_hfile_h_247_hread(
+                hfp,
+                csize_buf.as_mut_ptr().cast(),
+                csize_buf.len(),
+            );
+
+            if read_usize == 8 && read_csize == 8 {
+                let usize = u64::from_be_bytes(usize_buf);
+                let csize = u64::from_be_bytes(csize_buf);
+                if csize < sizes_pos as u64 {
+                    hts_sys::hts_log(
+                        hts_sys::htsLogLevel_HTS_LOG_ERROR,
+                        c"bgzf".as_ptr(),
+                        c"To decompress this file, use the following commands:\n    truncate -s %llu %s\n    gunzip %s\nThe resulting uncompressed file should be %llu bytes in length.\nIf you do not have a truncate command, skip that step (though gunzip will\nlikely produce a \"trailing garbage ignored\" message, which can be ignored).".as_ptr(),
+                        csize as libc::c_ulonglong,
+                        filename,
+                        filename,
+                        usize as libc::c_ulonglong,
+                    );
+                    return;
+                }
+            }
+        }
+
+        hts_sys::hts_log(
+            hts_sys::htsLogLevel_HTS_LOG_ERROR,
+            c"bgzf".as_ptr(),
+            c"To decompress this file, use the following command:\n    gunzip %s\nThis will likely produce a \"trailing garbage ignored\" message, which can\nusually be safely ignored.".as_ptr(),
+            filename,
+        );
     }
 
     // original: bgzf_gzip_compress (htslib/bgzf.c:686)
@@ -6279,8 +16999,8 @@ pub mod functions {
     }
 
     // original: bgzf_nul_func (htslib/bgzf.c:1390)
-    pub unsafe fn bgzf_c_1390_bgzf_nul_func() {
-        todo!("translate HTSlib bgzf_nul_func from htslib/bgzf.c:1390");
+    pub unsafe fn bgzf_c_1390_bgzf_nul_func(arg: *mut c_void) -> *mut c_void {
+        arg
     }
 
     // original: bgzf_mt_writer (htslib/bgzf.c:1398)
@@ -6378,18 +17098,96 @@ pub mod functions {
     }
 
     // original: view_raw (htslib/htsfile.c:152)
-    pub unsafe fn htsfile_c_152_view_raw() {
-        todo!("translate HTSlib view_raw from htslib/htsfile.c:152");
+    pub unsafe fn htsfile_c_152_view_raw(fp: *mut hFILE, _filename: *const c_char) {
+        let mut prev = b'\n' as c_int;
+        loop {
+            let c = crate::htslib_mini_rs::hfile::htslib_hfile_h_163_hgetc(fp);
+            if c == libc::EOF {
+                break;
+            }
+            if libc::isprint(c) != 0 || c == b'\n' as c_int || c == b'\t' as c_int {
+                libc::putchar(c);
+            } else if c == b'\r' as c_int {
+                libc::fputs(c"\\r".as_ptr(), hts_sys::stdout.cast());
+            } else if c == 0 {
+                libc::fputs(c"\\0".as_ptr(), hts_sys::stdout.cast());
+            } else {
+                libc::printf(c"\\x%02x".as_ptr(), c);
+            }
+            prev = c;
+        }
+
+        if prev != b'\n' as c_int {
+            libc::putchar(b'\n' as c_int);
+        }
+
+        if crate::htslib_mini_rs::hfile::htslib_hfile_h_134_herrno(fp) != 0 {
+            *libc::__errno_location() = crate::htslib_mini_rs::hfile::htslib_hfile_h_134_herrno(fp);
+            libc::abort();
+        }
     }
 
     // original: copy_raw (htslib/htsfile.c:169)
-    pub unsafe fn htsfile_c_169_copy_raw() {
-        todo!("translate HTSlib copy_raw from htslib/htsfile.c:169");
+    pub unsafe fn htsfile_c_169_copy_raw(srcfilename: *const c_char, destfilename: *const c_char) {
+        let mut src = crate::htslib_mini_rs::hfile::hopen(srcfilename, c"r".as_ptr());
+        if src.is_null() {
+            libc::abort();
+        }
+
+        let bufsize = 1_048_576usize;
+        let buffer = libc::malloc(bufsize);
+        if buffer.is_null() {
+            crate::htslib_mini_rs::hfile::hclose_abruptly(src);
+            libc::abort();
+        }
+
+        let mut dest = crate::htslib_mini_rs::hfile::hopen(destfilename, c"w".as_ptr());
+        if dest.is_null() {
+            crate::htslib_mini_rs::hfile::hclose_abruptly(src);
+            libc::free(buffer);
+            libc::abort();
+        }
+
+        loop {
+            let n = crate::htslib_mini_rs::hfile::htslib_hfile_h_247_hread(src, buffer, bufsize);
+            if n <= 0 {
+                if n < 0 {
+                    crate::htslib_mini_rs::hfile::hclose_abruptly(src);
+                    src = std::ptr::null_mut();
+                    crate::htslib_mini_rs::hfile::hclose_abruptly(dest);
+                    dest = std::ptr::null_mut();
+                }
+                break;
+            }
+            if crate::htslib_mini_rs::hfile::htslib_hfile_h_292_hwrite(
+                dest,
+                buffer.cast(),
+                n as usize,
+            ) != n
+            {
+                crate::htslib_mini_rs::hfile::hclose_abruptly(dest);
+                dest = std::ptr::null_mut();
+                break;
+            }
+        }
+
+        if !dest.is_null() && crate::htslib_mini_rs::hfile::hclose(dest) < 0 {
+            libc::abort();
+        }
+        if !src.is_null() && crate::htslib_mini_rs::hfile::hclose(src) < 0 {
+            libc::abort();
+        }
+        libc::free(buffer);
     }
 
     // original: usage (htslib/htsfile.c:213)
-    pub unsafe fn htsfile_c_213_usage() {
-        todo!("translate HTSlib usage from htslib/htsfile.c:213");
+    pub unsafe fn htsfile_c_213_usage(fp: *mut libc::FILE, status: c_int) -> ! {
+        libc::fprintf(
+            fp,
+            c"Usage: htsfile [-chHv] FILE...\n       htsfile --copy [-v] FILE DESTFILE\nOptions:\n  -c, --view         Write textual form of FILEs to standard output\n  -C, --copy         Copy the exact contents of FILE to DESTFILE\n  -h, --header-only  Display only headers in view mode, not records\n  -H, --no-header    Suppress header display in view mode\n  -v, --verbose      Increase verbosity of warnings and diagnostics\n"
+                .as_ptr(),
+        );
+        libc::exit(status);
     }
 
     // original: main (htslib/htsfile.c:227)
@@ -6426,63 +17224,276 @@ pub mod functions {
     }
 
     // original: HTS_FORMAT (htslib/annot-tsv.c:119)
-    pub unsafe fn annot_tsv_c_119_HTS_FORMAT() {
-        todo!("translate HTSlib HTS_FORMAT from htslib/annot-tsv.c:119");
-    }
+    pub unsafe fn annot_tsv_c_119_HTS_FORMAT() {}
 
     // original: nbp_destroy (htslib/annot-tsv.c:137)
-    pub unsafe fn annot_tsv_c_137_nbp_destroy() {
-        todo!("translate HTSlib nbp_destroy from htslib/annot-tsv.c:137");
+    pub unsafe fn annot_tsv_c_137_nbp_destroy(nbp: *mut c_void) {
+        let nbp = nbp.cast::<AnnotTsvNbp>();
+        libc::free((*nbp).regs.cast());
+        libc::free(nbp.cast());
     }
 
     // original: nbp_reset (htslib/annot-tsv.c:142)
-    pub unsafe fn annot_tsv_c_142_nbp_reset() {
-        todo!("translate HTSlib nbp_reset from htslib/annot-tsv.c:142");
+    pub unsafe fn annot_tsv_c_142_nbp_reset(nbp: *mut c_void, beg: hts_pos_t, end: hts_pos_t) {
+        let nbp = nbp.cast::<AnnotTsvNbp>();
+        (*nbp).n = 0;
+        (*nbp).beg = beg;
+        (*nbp).end = end;
     }
 
     // original: nbp_add (htslib/annot-tsv.c:148)
-    pub unsafe fn annot_tsv_c_148_nbp_add() {
-        todo!("translate HTSlib nbp_add from htslib/annot-tsv.c:148");
+    pub unsafe fn annot_tsv_c_148_nbp_add(nbp: *mut c_void, beg: hts_pos_t, end: hts_pos_t) {
+        let nbp = nbp.cast::<AnnotTsvNbp>();
+        (*nbp).n += 2;
+        if (*nbp).n >= (*nbp).m {
+            (*nbp).m += 2;
+            (*nbp).regs = libc::realloc(
+                (*nbp).regs.cast(),
+                (*nbp).m * std::mem::size_of::<hts_pos_t>(),
+            )
+            .cast();
+            if (*nbp).regs.is_null() {
+                libc::abort();
+            }
+        }
+        *(*nbp).regs.add((*nbp).n - 2) = beg << 1;
+        *(*nbp).regs.add((*nbp).n - 1) = (end << 1) + 1;
     }
 
     // original: compare_hts_pos (htslib/annot-tsv.c:160)
-    pub unsafe fn annot_tsv_c_160_compare_hts_pos() {
-        todo!("translate HTSlib compare_hts_pos from htslib/annot-tsv.c:160");
+    pub unsafe fn annot_tsv_c_160_compare_hts_pos(
+        aptr: *const c_void,
+        bptr: *const c_void,
+    ) -> c_int {
+        let a = *aptr.cast::<hts_pos_t>();
+        let b = *bptr.cast::<hts_pos_t>();
+        if a < b {
+            -1
+        } else if a > b {
+            1
+        } else {
+            0
+        }
     }
 
     // original: nbp_length (htslib/annot-tsv.c:168)
-    pub unsafe fn annot_tsv_c_168_nbp_length() {
-        todo!("translate HTSlib nbp_length from htslib/annot-tsv.c:168");
+    pub unsafe fn annot_tsv_c_168_nbp_length(nbp: *mut c_void) -> hts_pos_t {
+        let nbp = nbp.cast::<AnnotTsvNbp>();
+        if (*nbp).n == 0 {
+            return 0;
+        }
+        let regs = std::slice::from_raw_parts_mut((*nbp).regs, (*nbp).n);
+        regs.sort_unstable();
+
+        let mut nopen = 0;
+        let mut beg = 0;
+        let mut length = 0;
+        for &reg in regs.iter() {
+            if reg & 1 == 0 {
+                if nopen == 0 {
+                    beg = reg >> 1;
+                }
+                nopen += 1;
+            } else {
+                nopen -= 1;
+            }
+            assert!(nopen >= 0);
+            if nopen == 0 && beg > 0 {
+                length += (reg >> 1) - beg + 1;
+            }
+        }
+        length
     }
 
     // original: cols_split (htslib/annot-tsv.c:187)
-    pub unsafe fn annot_tsv_c_187_cols_split() {
-        todo!("translate HTSlib cols_split from htslib/annot-tsv.c:187");
+    pub unsafe fn annot_tsv_c_187_cols_split(
+        line: *const c_char,
+        cols: *mut c_void,
+        delim: c_char,
+    ) -> *mut c_void {
+        let cols = if cols.is_null() {
+            libc::calloc(1, std::mem::size_of::<AnnotTsvCols>()).cast::<AnnotTsvCols>()
+        } else {
+            cols.cast::<AnnotTsvCols>()
+        };
+        if cols.is_null() {
+            libc::abort();
+        }
+        if !(*cols).rmme.is_null() {
+            libc::free((*cols).rmme.cast());
+        }
+        (*cols).n = 0;
+        (*cols).rmme = libc::strdup(line);
+        if (*cols).rmme.is_null() {
+            libc::abort();
+        }
+
+        let mut ss = (*cols).rmme;
+        loop {
+            let mut se = ss;
+            while *se != 0 && *se != delim {
+                se = se.add(1);
+            }
+            let tmp = *se;
+            *se = 0;
+            (*cols).n += 1;
+            if (*cols).n > (*cols).m {
+                (*cols).m += 10;
+                (*cols).off = libc::realloc(
+                    (*cols).off.cast(),
+                    (*cols).m as usize * std::mem::size_of::<*mut c_char>(),
+                )
+                .cast();
+                if (*cols).off.is_null() {
+                    libc::abort();
+                }
+            }
+            *(*cols).off.add(((*cols).n - 1) as usize) = ss;
+            if tmp == 0 {
+                break;
+            }
+            ss = se.add(1);
+        }
+        cols.cast()
     }
 
     // original: cols_append (htslib/annot-tsv.c:217)
-    pub unsafe fn annot_tsv_c_217_cols_append() {
-        todo!("translate HTSlib cols_append from htslib/annot-tsv.c:217");
+    pub unsafe fn annot_tsv_c_217_cols_append(cols: *mut c_void, str_: *mut c_char) {
+        let cols = cols.cast::<AnnotTsvCols>();
+        if !(*cols).rmme.is_null() {
+            let str_len = libc::strlen(str_);
+            let last = *(*cols).off.add(((*cols).n - 1) as usize);
+            let lst_len = libc::strlen(last);
+            let tot_len = 2 + str_len + lst_len + last.offset_from((*cols).rmme) as usize;
+
+            let tmp_cols =
+                libc::calloc(1, std::mem::size_of::<AnnotTsvCols>()).cast::<AnnotTsvCols>();
+            if tmp_cols.is_null() {
+                libc::abort();
+            }
+            (*tmp_cols).rmme = libc::calloc(tot_len, 1).cast();
+            (*tmp_cols).off =
+                libc::calloc(((*cols).n + 1) as usize, std::mem::size_of::<*mut c_char>()).cast();
+            if (*tmp_cols).rmme.is_null() || (*tmp_cols).off.is_null() {
+                libc::abort();
+            }
+
+            let mut ptr = (*tmp_cols).rmme;
+            for i in 0..(*cols).n as usize {
+                let old = *(*cols).off.add(i);
+                let len = libc::strlen(old);
+                libc::memcpy(ptr.cast(), old.cast(), len);
+                *(*tmp_cols).off.add(i) = ptr;
+                ptr = ptr.add(len + 1);
+            }
+            libc::memcpy(ptr.cast(), str_.cast(), str_len);
+            *(*tmp_cols).off.add((*cols).n as usize) = ptr;
+
+            libc::free((*cols).off.cast());
+            libc::free((*cols).rmme.cast());
+            (*cols).rmme = (*tmp_cols).rmme;
+            (*cols).off = (*tmp_cols).off;
+            (*cols).n += 1;
+            (*cols).m = (*cols).n;
+            libc::free(tmp_cols.cast());
+            return;
+        }
+        (*cols).n += 1;
+        if (*cols).n > (*cols).m {
+            (*cols).m += 1;
+            (*cols).off = libc::realloc(
+                (*cols).off.cast(),
+                (*cols).m as usize * std::mem::size_of::<*mut c_char>(),
+            )
+            .cast();
+            if (*cols).off.is_null() {
+                libc::abort();
+            }
+        }
+        *(*cols).off.add(((*cols).n - 1) as usize) = str_;
     }
 
     // original: cols_clear (htslib/annot-tsv.c:261)
-    pub unsafe fn annot_tsv_c_261_cols_clear() {
-        todo!("translate HTSlib cols_clear from htslib/annot-tsv.c:261");
+    pub unsafe fn annot_tsv_c_261_cols_clear(cols: *mut c_void) {
+        let cols = cols.cast::<AnnotTsvCols>();
+        if cols.is_null() {
+            return;
+        }
+        libc::free((*cols).rmme.cast());
+        libc::free((*cols).off.cast());
+        (*cols).rmme = std::ptr::null_mut();
+        (*cols).off = std::ptr::null_mut();
     }
 
     // original: cols_destroy (htslib/annot-tsv.c:269)
-    pub unsafe fn annot_tsv_c_269_cols_destroy() {
-        todo!("translate HTSlib cols_destroy from htslib/annot-tsv.c:269");
+    pub unsafe fn annot_tsv_c_269_cols_destroy(cols: *mut c_void) {
+        let cols = cols.cast::<AnnotTsvCols>();
+        if cols.is_null() {
+            return;
+        }
+        annot_tsv_c_261_cols_clear(cols.cast());
+        libc::free(cols.cast());
     }
 
     // original: parse_tab_with_payload (htslib/annot-tsv.c:276)
-    pub unsafe fn annot_tsv_c_276_parse_tab_with_payload() {
-        todo!("translate HTSlib parse_tab_with_payload from htslib/annot-tsv.c:276");
+    pub unsafe fn annot_tsv_c_276_parse_tab_with_payload(
+        line: *const c_char,
+        chr_beg: *mut *mut c_char,
+        chr_end: *mut *mut c_char,
+        beg: *mut hts_pos_t,
+        end: *mut hts_pos_t,
+        payload: *mut c_void,
+        usr: *mut c_void,
+    ) -> c_int {
+        if *line == b'#' as c_char {
+            *(payload.cast::<*mut AnnotTsvCols>()) = std::ptr::null_mut();
+            return -1;
+        }
+
+        let dat = usr.cast::<AnnotTsvDat>();
+        let cols = annot_tsv_c_187_cols_split(line, std::ptr::null_mut(), (*dat).delim)
+            .cast::<AnnotTsvCols>();
+        *(payload.cast::<*mut AnnotTsvCols>()) = cols;
+
+        if (*cols).n < *(*dat).core_idx.add(0) as c_uint {
+            libc::abort();
+        }
+        *chr_beg = *(*cols).off.add(*(*dat).core_idx.add(0) as usize);
+        *chr_end = (*chr_beg).add(libc::strlen(*chr_beg) - 1);
+
+        if (*cols).n < *(*dat).core_idx.add(1) as c_uint {
+            libc::abort();
+        }
+        let mut tmp: *mut c_char = std::ptr::null_mut();
+        let mut ptr = *(*cols).off.add(*(*dat).core_idx.add(1) as usize);
+        *beg = libc::strtod(ptr, &mut tmp) as hts_pos_t;
+        if tmp == ptr {
+            libc::abort();
+        }
+
+        if (*cols).n < *(*dat).core_idx.add(2) as c_uint {
+            libc::abort();
+        }
+        ptr = *(*cols).off.add(*(*dat).core_idx.add(2) as usize);
+        *end = libc::strtod(ptr, &mut tmp) as hts_pos_t;
+        if tmp == ptr {
+            libc::abort();
+        }
+
+        *beg -= (*dat).coor_base[0] as hts_pos_t - 1;
+        *end -= (*dat).coor_base[1] as hts_pos_t - 1;
+
+        if *end < *beg {
+            std::mem::swap(&mut *beg, &mut *end);
+        }
+
+        0
     }
 
     // original: free_payload (htslib/annot-tsv.c:322)
-    pub unsafe fn annot_tsv_c_322_free_payload() {
-        todo!("translate HTSlib free_payload from htslib/annot-tsv.c:322");
+    pub unsafe fn annot_tsv_c_322_free_payload(payload: *mut c_void) {
+        let cols = *(payload.cast::<*mut AnnotTsvCols>());
+        annot_tsv_c_269_cols_destroy(cols.cast());
     }
 
     // original: parse_header (htslib/annot-tsv.c:335)
@@ -6496,23 +17507,90 @@ pub mod functions {
     }
 
     // original: destroy_header (htslib/annot-tsv.c:465)
-    pub unsafe fn annot_tsv_c_465_destroy_header() {
-        todo!("translate HTSlib destroy_header from htslib/annot-tsv.c:465");
+    pub unsafe fn annot_tsv_c_465_destroy_header(dat: *mut c_void) {
+        let dat = dat.cast::<AnnotTsvDatHeaderOnly>();
+        if !(*dat).hdr.cols.is_null() {
+            annot_tsv_c_269_cols_destroy((*dat).hdr.cols.cast());
+        }
+        sam::khash_str2int_destroy((*dat).hdr.name2idx);
     }
 
     // original: read_next_line (htslib/annot-tsv.c:471)
-    pub unsafe fn annot_tsv_c_471_read_next_line() {
-        todo!("translate HTSlib read_next_line from htslib/annot-tsv.c:471");
+    pub unsafe fn annot_tsv_c_471_read_next_line(dat: *mut c_void) -> c_int {
+        let dat = dat.cast::<AnnotTsvDat>();
+        if (*dat).line.l != 0 {
+            return (*dat).line.l as c_int;
+        }
+        let ret = crate::htslib_mini_rs::hts::hts_getline((*dat).fp, 2, &mut (*dat).line);
+        if ret > 0 {
+            return (*dat).line.l as c_int;
+        }
+        if ret < -1 {
+            libc::abort();
+        }
+        0
     }
 
     // original: sanity_check_columns (htslib/annot-tsv.c:480)
-    pub unsafe fn annot_tsv_c_480_sanity_check_columns() {
-        todo!("translate HTSlib sanity_check_columns from htslib/annot-tsv.c:480");
+    pub unsafe fn annot_tsv_c_480_sanity_check_columns(
+        _fname: *mut c_char,
+        hdr: *mut c_void,
+        cols: *mut c_void,
+        col2idx: *mut *mut c_int,
+        force: c_int,
+    ) {
+        let hdr = hdr.cast::<AnnotTsvHdr>();
+        let cols = cols.cast::<AnnotTsvCols>();
+        *col2idx = libc::malloc((*cols).n as usize * std::mem::size_of::<c_int>()).cast::<c_int>();
+        if (*col2idx).is_null() {
+            libc::abort();
+        }
+        for i in 0..(*cols).n as usize {
+            let mut idx = 0;
+            if sam::khash_str2int_get((*hdr).name2idx, *(*cols).off.add(i), &mut idx) < 0 {
+                if force == 0 {
+                    libc::abort();
+                }
+                idx = -1;
+            }
+            *(*col2idx).add(i) = idx;
+        }
     }
 
     // original: parse_coor_base (htslib/annot-tsv.c:495)
-    pub unsafe fn annot_tsv_c_495_parse_coor_base() {
-        todo!("translate HTSlib parse_coor_base from htslib/annot-tsv.c:495");
+    pub unsafe fn annot_tsv_c_495_parse_coor_base(
+        _args: *mut c_void,
+        str_: *mut c_char,
+        dat: *mut c_void,
+    ) {
+        let dat = dat.cast::<AnnotTsvDat>();
+        let len = libc::strlen((*dat).fname);
+        let mut beg = 1;
+        let mut end = 1;
+        if *str_ != 0 {
+            if *str_ == b'0' as c_char {
+                beg = 0;
+            } else if *str_ == b'1' as c_char {
+                beg = 1;
+            } else {
+                libc::abort();
+            }
+
+            if *str_.add(1) == b'0' as c_char {
+                end = 0;
+            } else if *str_.add(1) == b'1' as c_char {
+                end = 1;
+            } else {
+                libc::abort();
+            }
+        } else if len >= 4 && libc::strcasecmp(c".bed".as_ptr(), (*dat).fname.add(len - 4)) == 0 {
+            beg = 0;
+        } else if len >= 7 && libc::strcasecmp(c".bed.gz".as_ptr(), (*dat).fname.add(len - 7)) == 0
+        {
+            beg = 0;
+        }
+        (*dat).coor_base[0] = beg;
+        (*dat).coor_base[1] = end;
     }
 
     // original: init_data (htslib/annot-tsv.c:515)
@@ -6521,18 +17599,114 @@ pub mod functions {
     }
 
     // original: destroy_data (htslib/annot-tsv.c:666)
-    pub unsafe fn annot_tsv_c_666_destroy_data() {
-        todo!("translate HTSlib destroy_data from htslib/annot-tsv.c:666");
+    pub unsafe fn annot_tsv_c_666_destroy_data(args: *mut c_void) {
+        let args = args.cast::<AnnotTsvArgs>();
+        if crate::htslib_mini_rs::bgzf::bgzf_close((*args).out_fp) != 0 {
+            libc::abort();
+        }
+        if crate::htslib_mini_rs::hts::hts_close((*args).dst.fp) != 0 {
+            libc::abort();
+        }
+        for i in 0..(*(*args).src.transfer).n as usize {
+            sam::khash_str2int_destroy(*(*args).tmp_hash.add(i));
+        }
+        libc::free((*args).tmp_hash.cast());
+        for i in 0..(*(*args).src.transfer).n as usize {
+            annot_tsv_c_261_cols_clear((*args).tmp_cols.add(i).cast());
+        }
+        libc::free((*args).tmp_cols.cast());
+        annot_tsv_c_269_cols_destroy((*args).src.core.cast());
+        annot_tsv_c_269_cols_destroy((*args).dst.core.cast());
+        annot_tsv_c_269_cols_destroy((*args).src.match_.cast());
+        annot_tsv_c_269_cols_destroy((*args).dst.match_.cast());
+        annot_tsv_c_269_cols_destroy((*args).src.transfer.cast());
+        annot_tsv_c_269_cols_destroy((*args).dst.transfer.cast());
+        if !(*args).src.annots.is_null() {
+            annot_tsv_c_269_cols_destroy((*args).src.annots.cast());
+        }
+        if !(*args).dst.annots.is_null() {
+            annot_tsv_c_269_cols_destroy((*args).dst.annots.cast());
+        }
+        if !(*args).nbp.is_null() {
+            annot_tsv_c_137_nbp_destroy((*args).nbp.cast());
+        }
+        annot_tsv_c_465_destroy_header((&mut (*args).src as *mut AnnotTsvDat).cast());
+        annot_tsv_c_465_destroy_header((&mut (*args).dst as *mut AnnotTsvDat).cast());
+        libc::free((*args).src.nannots_added.cast());
+        libc::free((*args).src.core_idx.cast());
+        libc::free((*args).dst.core_idx.cast());
+        libc::free((*args).src.match_idx.cast());
+        libc::free((*args).dst.match_idx.cast());
+        libc::free((*args).src.transfer_idx.cast());
+        libc::free((*args).dst.transfer_idx.cast());
+        libc::free((*args).src.annots_idx.cast());
+        libc::free((*args).dst.annots_idx.cast());
+        libc::free((*args).src.line.s.cast());
+        libc::free((*args).dst.line.s.cast());
+        if !(*args).itr.is_null() {
+            crate::htslib_mini_rs::regidx::regidx_c_606_regitr_destroy(
+                (*args)
+                    .itr
+                    .cast::<crate::htslib_mini_rs::regidx::regitr_t>(),
+            );
+        }
+        if !(*args).idx.is_null() {
+            crate::htslib_mini_rs::regidx::regidx_c_311_regidx_destroy(
+                (*args)
+                    .idx
+                    .cast::<crate::htslib_mini_rs::regidx::regidx_t>(),
+            );
+        }
+        libc::free((*args).tmp_kstr.s.cast());
     }
 
     // original: write_string (htslib/annot-tsv.c:703)
-    pub unsafe fn annot_tsv_c_703_write_string() {
-        todo!("translate HTSlib write_string from htslib/annot-tsv.c:703");
+    pub unsafe fn annot_tsv_c_703_write_string(
+        args: *mut c_void,
+        mut str_: *mut c_char,
+        mut len: usize,
+    ) {
+        let args = args.cast::<AnnotTsvArgs>();
+        if len == 0 {
+            len = libc::strlen(str_);
+        }
+        if len == 0 {
+            str_ = c".".as_ptr().cast_mut();
+            len = 1;
+        }
+        if crate::htslib_mini_rs::bgzf::bgzf_write((*args).out_fp, str_.cast(), len) != len as isize
+        {
+            libc::abort();
+        }
     }
 
     // original: write_annots (htslib/annot-tsv.c:709)
-    pub unsafe fn annot_tsv_c_709_write_annots() {
-        todo!("translate HTSlib write_annots from htslib/annot-tsv.c:709");
+    pub unsafe fn annot_tsv_c_709_write_annots(args: *mut c_void) {
+        let args = args.cast::<AnnotTsvArgs>();
+        if (*args).dst.annots.is_null() {
+            return;
+        }
+
+        (*args).tmp_kstr.l = 0;
+        let len = annot_tsv_c_168_nbp_length((*args).nbp.cast());
+        for i in 0..(*(*args).dst.annots).n as usize {
+            crate::htslib_mini_rs::hts::kputc((*args).dst.delim as c_int, &mut (*args).tmp_kstr);
+            let ann = *(*args).dst.annots_idx.add(i);
+            if ann == ANNOT_TSV_ANN_NBP {
+                crate::htslib_mini_rs::hts::kputw(len as c_int, &mut (*args).tmp_kstr);
+            } else if ann == ANNOT_TSV_ANN_FRAC {
+                crate::htslib_mini_rs::hts::kputd(
+                    len as f64 / ((*(*args).nbp).end - (*(*args).nbp).beg + 1) as f64,
+                    &mut (*args).tmp_kstr,
+                );
+            } else if ann == ANNOT_TSV_ANN_CNT {
+                crate::htslib_mini_rs::hts::kputw(
+                    ((*(*args).nbp).n / 2) as c_int,
+                    &mut (*args).tmp_kstr,
+                );
+            }
+        }
+        annot_tsv_c_703_write_string(args.cast(), (*args).tmp_kstr.s, (*args).tmp_kstr.l);
     }
 
     // original: process_line (htslib/annot-tsv.c:737)
@@ -6541,8 +17715,8 @@ pub mod functions {
     }
 
     // original: usage_text (htslib/annot-tsv.c:880)
-    pub unsafe fn annot_tsv_c_880_usage_text() {
-        todo!("translate HTSlib usage_text from htslib/annot-tsv.c:880");
+    pub unsafe fn annot_tsv_c_880_usage_text() -> *const c_char {
+        ANNOT_TSV_USAGE_TEXT.as_ptr().cast()
     }
 
     // original: main (htslib/annot-tsv.c:956)
@@ -6587,6 +17761,20 @@ pub mod functions {
         rm_set: *const structs::kbitset_t,
     ) -> c_int {
         crate::htslib_mini_rs::vcf::bcf_remove_allele_set(header.cast(), line.cast(), rm_set.cast())
+    }
+
+    // original: hts_open_format (htslib/hts.c:891)
+    pub unsafe fn hts_c_891_hts_open_format(
+        fn_: *const c_char,
+        mode: *const c_char,
+        fmt: *const htsFormat,
+    ) -> *mut htsFile {
+        crate::htslib_mini_rs::hts::hts_open_format(fn_, mode, fmt)
+    }
+
+    // original: hts_open (htslib/hts.c:991)
+    pub unsafe fn hts_c_991_hts_open(fn_: *const c_char, mode: *const c_char) -> *mut htsFile {
+        crate::htslib_mini_rs::hts::hts_open(fn_, mode)
     }
 
     // original: hts_detect_format (htslib/hts.c:551)
@@ -6760,404 +17948,24 @@ pub mod functions {
     // original: nibble2base_resolve (htslib/simd.c:220)
     pub unsafe fn simd_c_220_nibble2base_resolve() {}
 
-    // original: print_usage (htslib/samples/read_aux.c:37)
-    pub unsafe fn samples_read_aux_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/read_aux.c:37");
+    // original: hts_srand48 (htslib/hts_os.c:35)
+    pub unsafe fn hts_os_c_35_hts_srand48(seed: libc::c_long) {
+        crate::htslib_mini_rs::os_rand::hts_os_c_35_hts_srand48(seed)
     }
 
-    // original: printauxdata (htslib/samples/read_aux.c:51)
-    pub unsafe fn samples_read_aux_c_51_printauxdata() {
-        todo!("translate HTSlib printauxdata from htslib/samples/read_aux.c:51");
+    // original: hts_erand48 (htslib/hts_os.c:45)
+    pub unsafe fn hts_os_c_45_hts_erand48(xseed: *mut u16) -> f64 {
+        crate::htslib_mini_rs::os_rand::hts_os_c_45_hts_erand48(xseed)
     }
 
-    // original: main (htslib/samples/read_aux.c:114)
-    pub unsafe fn samples_read_aux_c_114_main() {
-        todo!("translate HTSlib main from htslib/samples/read_aux.c:114");
+    // original: hts_drand48 (htslib/hts_os.c:48)
+    pub unsafe fn hts_os_c_48_hts_drand48() -> f64 {
+        crate::htslib_mini_rs::os_rand::hts_os_c_48_hts_drand48()
     }
 
-    // original: print_usage (htslib/samples/index_multireg_read.c:37)
-    pub unsafe fn samples_index_multireg_read_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/index_multireg_read.c:37");
-    }
-
-    // original: main (htslib/samples/index_multireg_read.c:50)
-    pub unsafe fn samples_index_multireg_read_c_50_main() {
-        todo!("translate HTSlib main from htslib/samples/index_multireg_read.c:50");
-    }
-
-    // original: print_usage (htslib/samples/flags_htsopt_field.c:37)
-    pub unsafe fn samples_flags_htsopt_field_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/flags_htsopt_field.c:37");
-    }
-
-    // original: main (htslib/samples/flags_htsopt_field.c:50)
-    pub unsafe fn samples_flags_htsopt_field_c_50_main() {
-        todo!("translate HTSlib main from htslib/samples/flags_htsopt_field.c:50");
-    }
-
-    // original: print_usage (htslib/samples/index_write.c:38)
-    pub unsafe fn samples_index_write_c_38_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/index_write.c:38");
-    }
-
-    // original: main (htslib/samples/index_write.c:50)
-    pub unsafe fn samples_index_write_c_50_main() {
-        todo!("translate HTSlib main from htslib/samples/index_write.c:50");
-    }
-
-    // original: print_usage (htslib/samples/qtask_unordered.c:62)
-    pub unsafe fn samples_qtask_unordered_c_62_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/qtask_unordered.c:62");
-    }
-
-    // original: getbamstorage (htslib/samples/qtask_unordered.c:76)
-    pub unsafe fn samples_qtask_unordered_c_76_getbamstorage() {
-        todo!("translate HTSlib getbamstorage from htslib/samples/qtask_unordered.c:76");
-    }
-
-    // original: cleanup_bamstorage (htslib/samples/qtask_unordered.c:128)
-    pub unsafe fn samples_qtask_unordered_c_128_cleanup_bamstorage() {
-        todo!("translate HTSlib cleanup_bamstorage from htslib/samples/qtask_unordered.c:128");
-    }
-
-    // original: thread_unordered_proc (htslib/samples/qtask_unordered.c:148)
-    pub unsafe fn samples_qtask_unordered_c_148_thread_unordered_proc() {
-        todo!("translate HTSlib thread_unordered_proc from htslib/samples/qtask_unordered.c:148");
-    }
-
-    // original: main (htslib/samples/qtask_unordered.c:181)
-    pub unsafe fn samples_qtask_unordered_c_181_main() {
-        todo!("translate HTSlib main from htslib/samples/qtask_unordered.c:181");
-    }
-
-    // original: print_usage (htslib/samples/flags_demo.c:37)
-    pub unsafe fn samples_flags_demo_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/flags_demo.c:37");
-    }
-
-    // original: main (htslib/samples/flags_demo.c:50)
-    pub unsafe fn samples_flags_demo_c_50_main() {
-        todo!("translate HTSlib main from htslib/samples/flags_demo.c:50");
-    }
-
-    // original: print_usage (htslib/samples/read_header.c:37)
-    pub unsafe fn samples_read_header_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/read_header.c:37");
-    }
-
-    // original: main (htslib/samples/read_header.c:49)
-    pub unsafe fn samples_read_header_c_49_main() {
-        todo!("translate HTSlib main from htslib/samples/read_header.c:49");
-    }
-
-    // original: print_usage (htslib/samples/index_fasta.c:39)
-    pub unsafe fn samples_index_fasta_c_39_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/index_fasta.c:39");
-    }
-
-    // original: main (htslib/samples/index_fasta.c:51)
-    pub unsafe fn samples_index_fasta_c_51_main() {
-        todo!("translate HTSlib main from htslib/samples/index_fasta.c:51");
-    }
-
-    // original: print_usage (htslib/samples/read_bam.c:37)
-    pub unsafe fn samples_read_bam_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/read_bam.c:37");
-    }
-
-    // original: main (htslib/samples/read_bam.c:48)
-    pub unsafe fn samples_read_bam_c_48_main() {
-        todo!("translate HTSlib main from htslib/samples/read_bam.c:48");
-    }
-
-    // original: print_usage (htslib/samples/mod_aux.c:38)
-    pub unsafe fn samples_mod_aux_c_38_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/mod_aux.c:38");
-    }
-
-    // original: main (htslib/samples/mod_aux.c:50)
-    pub unsafe fn samples_mod_aux_c_50_main() {
-        todo!("translate HTSlib main from htslib/samples/mod_aux.c:50");
-    }
-
-    // original: print_usage (htslib/samples/read_refname.c:37)
-    pub unsafe fn samples_read_refname_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/read_refname.c:37");
-    }
-
-    // original: main (htslib/samples/read_refname.c:49)
-    pub unsafe fn samples_read_refname_c_49_main() {
-        todo!("translate HTSlib main from htslib/samples/read_refname.c:49");
-    }
-
-    // original: print_usage (htslib/samples/index_reg_read.c:37)
-    pub unsafe fn samples_index_reg_read_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/index_reg_read.c:37");
-    }
-
-    // original: main (htslib/samples/index_reg_read.c:55)
-    pub unsafe fn samples_index_reg_read_c_55_main() {
-        todo!("translate HTSlib main from htslib/samples/index_reg_read.c:55");
-    }
-
-    // original: print_usage (htslib/samples/split.c:37)
-    pub unsafe fn samples_split_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/split.c:37");
-    }
-
-    // original: main (htslib/samples/split.c:50)
-    pub unsafe fn samples_split_c_50_main() {
-        todo!("translate HTSlib main from htslib/samples/split.c:50");
-    }
-
-    // original: print_usage (htslib/samples/add_header.c:37)
-    pub unsafe fn samples_add_header_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/add_header.c:37");
-    }
-
-    // original: main (htslib/samples/add_header.c:49)
-    pub unsafe fn samples_add_header_c_49_main() {
-        todo!("translate HTSlib main from htslib/samples/add_header.c:49");
-    }
-
-    // original: print_usage (htslib/samples/read_fast_index.c:38)
-    pub unsafe fn samples_read_fast_index_c_38_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/read_fast_index.c:38");
-    }
-
-    // original: main (htslib/samples/read_fast_index.c:53)
-    pub unsafe fn samples_read_fast_index_c_53_main() {
-        todo!("translate HTSlib main from htslib/samples/read_fast_index.c:53");
-    }
-
-    // original: print_usage (htslib/samples/read_fast.c:37)
-    pub unsafe fn samples_read_fast_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/read_fast.c:37");
-    }
-
-    // original: main (htslib/samples/read_fast.c:49)
-    pub unsafe fn samples_read_fast_c_49_main() {
-        todo!("translate HTSlib main from htslib/samples/read_fast.c:49");
-    }
-
-    // original: print_usage (htslib/samples/mpileup.c:38)
-    pub unsafe fn samples_mpileup_c_38_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/mpileup.c:38");
-    }
-
-    // original: plpconstructor (htslib/samples/mpileup.c:56)
-    pub unsafe fn samples_mpileup_c_56_plpconstructor() {
-        todo!("translate HTSlib plpconstructor from htslib/samples/mpileup.c:56");
-    }
-
-    // original: plpdestructor (htslib/samples/mpileup.c:60)
-    pub unsafe fn samples_mpileup_c_60_plpdestructor() {
-        todo!("translate HTSlib plpdestructor from htslib/samples/mpileup.c:60");
-    }
-
-    // original: readdata (htslib/samples/mpileup.c:68)
-    pub unsafe fn samples_mpileup_c_68_readdata() {
-        todo!("translate HTSlib readdata from htslib/samples/mpileup.c:68");
-    }
-
-    // original: main (htslib/samples/mpileup.c:84)
-    pub unsafe fn samples_mpileup_c_84_main() {
-        todo!("translate HTSlib main from htslib/samples/mpileup.c:84");
-    }
-
-    // original: print_usage (htslib/samples/mod_aux_ba.c:37)
-    pub unsafe fn samples_mod_aux_ba_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/mod_aux_ba.c:37");
-    }
-
-    // original: main (htslib/samples/mod_aux_ba.c:49)
-    pub unsafe fn samples_mod_aux_ba_c_49_main() {
-        todo!("translate HTSlib main from htslib/samples/mod_aux_ba.c:49");
-    }
-
-    // original: print_usage (htslib/samples/modstate.c:37)
-    pub unsafe fn samples_modstate_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/modstate.c:37");
-    }
-
-    // original: main (htslib/samples/modstate.c:49)
-    pub unsafe fn samples_modstate_c_49_main() {
-        todo!("translate HTSlib main from htslib/samples/modstate.c:49");
-    }
-
-    // original: print_usage (htslib/samples/write_fast.c:39)
-    pub unsafe fn samples_write_fast_c_39_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/write_fast.c:39");
-    }
-
-    // original: main (htslib/samples/write_fast.c:51)
-    pub unsafe fn samples_write_fast_c_51_main() {
-        todo!("translate HTSlib main from htslib/samples/write_fast.c:51");
-    }
-
-    // original: print_usage (htslib/samples/split_thread2.c:38)
-    pub unsafe fn samples_split_thread2_c_38_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/split_thread2.c:38");
-    }
-
-    // original: main (htslib/samples/split_thread2.c:51)
-    pub unsafe fn samples_split_thread2_c_51_main() {
-        todo!("translate HTSlib main from htslib/samples/split_thread2.c:51");
-    }
-
-    // original: print_usage (htslib/samples/qtask_ordered.c:61)
-    pub unsafe fn samples_qtask_ordered_c_61_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/qtask_ordered.c:61");
-    }
-
-    // original: getbamstorage (htslib/samples/qtask_ordered.c:75)
-    pub unsafe fn samples_qtask_ordered_c_75_getbamstorage() {
-        todo!("translate HTSlib getbamstorage from htslib/samples/qtask_ordered.c:75");
-    }
-
-    // original: cleanup_bamstorage (htslib/samples/qtask_ordered.c:121)
-    pub unsafe fn samples_qtask_ordered_c_121_cleanup_bamstorage() {
-        todo!("translate HTSlib cleanup_bamstorage from htslib/samples/qtask_ordered.c:121");
-    }
-
-    // original: thread_ordered_proc (htslib/samples/qtask_ordered.c:143)
-    pub unsafe fn samples_qtask_ordered_c_143_thread_ordered_proc() {
-        todo!("translate HTSlib thread_ordered_proc from htslib/samples/qtask_ordered.c:143");
-    }
-
-    // original: threadfn_orderedwrite (htslib/samples/qtask_ordered.c:176)
-    pub unsafe fn samples_qtask_ordered_c_176_threadfn_orderedwrite() {
-        todo!("translate HTSlib threadfn_orderedwrite from htslib/samples/qtask_ordered.c:176");
-    }
-
-    // original: main (htslib/samples/qtask_ordered.c:223)
-    pub unsafe fn samples_qtask_ordered_c_223_main() {
-        todo!("translate HTSlib main from htslib/samples/qtask_ordered.c:223");
-    }
-
-    // original: print_usage (htslib/samples/split2.c:37)
-    pub unsafe fn samples_split2_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/split2.c:37");
-    }
-
-    // original: main (htslib/samples/split2.c:50)
-    pub unsafe fn samples_split2_c_50_main() {
-        todo!("translate HTSlib main from htslib/samples/split2.c:50");
-    }
-
-    // original: print_usage (htslib/samples/mod_bam.c:38)
-    pub unsafe fn samples_mod_bam_c_38_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/mod_bam.c:38");
-    }
-
-    // original: main (htslib/samples/mod_bam.c:50)
-    pub unsafe fn samples_mod_bam_c_50_main() {
-        todo!("translate HTSlib main from htslib/samples/mod_bam.c:50");
-    }
-
-    // original: print_usage (htslib/samples/split_thread1.c:37)
-    pub unsafe fn samples_split_thread1_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/split_thread1.c:37");
-    }
-
-    // original: main (htslib/samples/split_thread1.c:50)
-    pub unsafe fn samples_split_thread1_c_50_main() {
-        todo!("translate HTSlib main from htslib/samples/split_thread1.c:50");
-    }
-
-    // original: print_usage (htslib/samples/update_header.c:37)
-    pub unsafe fn samples_update_header_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/update_header.c:37");
-    }
-
-    // original: main (htslib/samples/update_header.c:49)
-    pub unsafe fn samples_update_header_c_49_main() {
-        todo!("translate HTSlib main from htslib/samples/update_header.c:49");
-    }
-
-    // original: print_usage (htslib/samples/dump_aux.c:37)
-    pub unsafe fn samples_dump_aux_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/dump_aux.c:37");
-    }
-
-    // original: printauxdata (htslib/samples/dump_aux.c:51)
-    pub unsafe fn samples_dump_aux_c_51_printauxdata() {
-        todo!("translate HTSlib printauxdata from htslib/samples/dump_aux.c:51");
-    }
-
-    // original: main (htslib/samples/dump_aux.c:114)
-    pub unsafe fn samples_dump_aux_c_114_main() {
-        todo!("translate HTSlib main from htslib/samples/dump_aux.c:114");
-    }
-
-    // original: print_usage (htslib/samples/rem_header.c:37)
-    pub unsafe fn samples_rem_header_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/rem_header.c:37");
-    }
-
-    // original: main (htslib/samples/rem_header.c:49)
-    pub unsafe fn samples_rem_header_c_49_main() {
-        todo!("translate HTSlib main from htslib/samples/rem_header.c:49");
-    }
-
-    // original: print_usage (htslib/samples/pileup_mod.c:38)
-    pub unsafe fn samples_pileup_mod_c_38_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/pileup_mod.c:38");
-    }
-
-    // original: plpconstructor (htslib/samples/pileup_mod.c:56)
-    pub unsafe fn samples_pileup_mod_c_56_plpconstructor() {
-        todo!("translate HTSlib plpconstructor from htslib/samples/pileup_mod.c:56");
-    }
-
-    // original: plpdestructor (htslib/samples/pileup_mod.c:70)
-    pub unsafe fn samples_pileup_mod_c_70_plpdestructor() {
-        todo!("translate HTSlib plpdestructor from htslib/samples/pileup_mod.c:70");
-    }
-
-    // original: readdata (htslib/samples/pileup_mod.c:82)
-    pub unsafe fn samples_pileup_mod_c_82_readdata() {
-        todo!("translate HTSlib readdata from htslib/samples/pileup_mod.c:82");
-    }
-
-    // original: main (htslib/samples/pileup_mod.c:98)
-    pub unsafe fn samples_pileup_mod_c_98_main() {
-        todo!("translate HTSlib main from htslib/samples/pileup_mod.c:98");
-    }
-
-    // original: print_usage (htslib/samples/cram.c:37)
-    pub unsafe fn samples_cram_c_37_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/cram.c:37");
-    }
-
-    // original: main (htslib/samples/cram.c:53)
-    pub unsafe fn samples_cram_c_53_main() {
-        todo!("translate HTSlib main from htslib/samples/cram.c:53");
-    }
-
-    // original: print_usage (htslib/samples/pileup.c:38)
-    pub unsafe fn samples_pileup_c_38_print_usage() {
-        todo!("translate HTSlib print_usage from htslib/samples/pileup.c:38");
-    }
-
-    // original: plpconstructor (htslib/samples/pileup.c:56)
-    pub unsafe fn samples_pileup_c_56_plpconstructor() {
-        todo!("translate HTSlib plpconstructor from htslib/samples/pileup.c:56");
-    }
-
-    // original: plpdestructor (htslib/samples/pileup.c:65)
-    pub unsafe fn samples_pileup_c_65_plpdestructor() {
-        todo!("translate HTSlib plpdestructor from htslib/samples/pileup.c:65");
-    }
-
-    // original: readdata (htslib/samples/pileup.c:76)
-    pub unsafe fn samples_pileup_c_76_readdata() {
-        todo!("translate HTSlib readdata from htslib/samples/pileup.c:76");
-    }
-
-    // original: main (htslib/samples/pileup.c:92)
-    pub unsafe fn samples_pileup_c_92_main() {
-        todo!("translate HTSlib main from htslib/samples/pileup.c:92");
+    // original: hts_lrand48 (htslib/hts_os.c:51)
+    pub unsafe fn hts_os_c_51_hts_lrand48() -> libc::c_long {
+        crate::htslib_mini_rs::os_rand::hts_os_c_51_hts_lrand48()
     }
 
     // original: tbx_index_build3 (htslib/tbx.c:526)
@@ -7225,6 +18033,41 @@ pub mod functions {
     // original: cram_itr_query (htslib/sam.c:1686)
     pub unsafe fn sam_c_1686_cram_itr_query() {
         todo!("translate HTSlib cram_itr_query from htslib/sam.c:1686");
+    }
+
+    // original: sam_idx_init (htslib/sam.c:1095)
+    pub unsafe fn sam_c_1095_sam_idx_init(
+        fp: *mut htsFile,
+        h: *mut crate::htslib_mini_rs::sam::sam_hdr_t,
+        min_shift: c_int,
+        fnidx: *const c_char,
+    ) -> c_int {
+        crate::htslib_mini_rs::sam::sam_idx_init(fp, h, min_shift, fnidx)
+    }
+
+    // original: sam_idx_save (htslib/sam.c:1123)
+    pub unsafe fn sam_c_1123_sam_idx_save(fp: *mut htsFile) -> c_int {
+        crate::htslib_mini_rs::sam::sam_idx_save(fp)
+    }
+
+    // original: sam_itr_regarray (htslib/sam.c:1768)
+    pub unsafe fn sam_c_1768_sam_itr_regarray(
+        idx: *const hts_idx_t,
+        hdr: *mut crate::htslib_mini_rs::sam::sam_hdr_t,
+        regarray: *mut *mut c_char,
+        regcount: c_uint,
+    ) -> *mut hts_itr_t {
+        crate::htslib_mini_rs::sam::sam_c_1768_sam_itr_regarray(idx, hdr, regarray, regcount)
+    }
+
+    // original: sam_itr_regions (htslib/sam.c:1798)
+    pub unsafe fn sam_c_1798_sam_itr_regions(
+        idx: *const hts_idx_t,
+        hdr: *mut crate::htslib_mini_rs::sam::sam_hdr_t,
+        reglist: *mut hts_reglist_t,
+        regcount: c_uint,
+    ) -> *mut hts_itr_t {
+        crate::htslib_mini_rs::sam::sam_c_1798_sam_itr_regions(idx, hdr, reglist, regcount)
     }
 
     // original: sam_dispatcher_read (htslib/sam.c:3325)
@@ -9068,8 +19911,47 @@ pub mod functions {
     }
 
     // original: usage (htslib/ref_cache/main.c:857)
-    pub unsafe fn ref_cache_main_c_857_usage() {
-        todo!("translate HTSlib usage from htslib/ref_cache/main.c:857");
+    pub unsafe fn ref_cache_main_c_857_usage(
+        prog: *const c_char,
+        help: c_int,
+        opts: *const structs::Options,
+    ) {
+        let opts = opts.cast::<RefCacheOptionsLayout>();
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"Usage: %s [options] -d <dir>\n".as_ptr(),
+            prog,
+        );
+        if help != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"Options:\n  -b         Run in background as a daemon\n  -d <dir>   Directory for cached reference files\n  -h         Show help\n  -l <dir>   Directory for log files.  Log to stdout if not set and running in\n             foreground\n  -L         Don't log\n  -m <list>  Only respond to connections from these networks\n  -n <1-4>   Number of server processes to run [%u]\n  -p <num>   Port number to listen on [%u]\n  -r <num>   Number of request log files to keep [%u]\n  -R <num>   Maximum size of a single request log file (MiB) [%lld]\n  -s         Run as a systemd socket service\n  -u <url>   URL for upstream server%s%s%s\n  -U         Only serve local files, turn off upstream\n  -v         Turn on debugging output\n"
+                    .as_ptr(),
+                (*opts).max_kids as c_uint,
+                (*opts).port as c_uint,
+                (*opts).nlogs as c_uint,
+                ((*opts).max_log_sz >> 20) as libc::c_longlong,
+                if !(*opts).upstream_url.is_null() {
+                    if (*opts).upstream_url_len > 40 {
+                        c"\n             [".as_ptr()
+                    } else {
+                        c" [".as_ptr()
+                    }
+                } else {
+                    c"".as_ptr()
+                },
+                if !(*opts).upstream_url.is_null() {
+                    (*opts).upstream_url
+                } else {
+                    c"".as_ptr()
+                },
+                if !(*opts).upstream_url.is_null() {
+                    c"]".as_ptr()
+                } else {
+                    c"".as_ptr()
+                },
+            );
+        }
     }
 
     // original: get_opt_val (htslib/ref_cache/main.c:889)
@@ -12162,8 +23044,18 @@ pub mod functions {
     }
 
     // original: hopenv_mem (htslib/hfile.c:878)
-    pub unsafe fn hfile_c_878_hopenv_mem() {
-        todo!("translate HTSlib hopenv_mem from htslib/hfile.c:878");
+    pub unsafe fn hfile_c_878_hopenv_mem(
+        _filename: *const c_char,
+        mode: *const c_char,
+        buffer: *mut c_char,
+        sz: usize,
+    ) -> *mut hFILE {
+        let hf = crate::htslib_mini_rs::hfile::hfile_c_835_create_hfile_mem(buffer, mode, sz, sz);
+        if hf.is_null() {
+            libc::free(buffer.cast());
+            return std::ptr::null_mut();
+        }
+        hf
     }
 
     // original: hfile_add_scheme_handler (htslib/hfile.c:1053)
@@ -12222,9 +23114,7 @@ pub mod functions {
     }
 
     // original: DBG_OUT (htslib/thread_pool.c:69)
-    pub unsafe fn thread_pool_c_69_DBG_OUT() {
-        todo!("translate HTSlib DBG_OUT from htslib/thread_pool.c:69");
-    }
+    pub unsafe fn thread_pool_c_69_DBG_OUT() {}
 
     // original: hts_tpool_add_result (htslib/thread_pool.c:95)
     pub unsafe fn thread_pool_c_95_hts_tpool_add_result() {
@@ -12454,8 +23344,11 @@ pub mod functions {
     }
 
     // original: doit_square_u (htslib/thread_pool.c:1171)
-    pub unsafe fn thread_pool_c_1171_doit_square_u() {
-        todo!("translate HTSlib doit_square_u from htslib/thread_pool.c:1171");
+    pub unsafe fn thread_pool_c_1171_doit_square_u(arg: *mut c_void) -> *mut c_void {
+        let job = *(arg.cast::<c_int>());
+        libc::printf(c"RESULT: %d\n".as_ptr(), job * job);
+        libc::free(arg);
+        std::ptr::null_mut()
     }
 
     // original: test_square_u (htslib/thread_pool.c:1182)
@@ -12464,8 +23357,16 @@ pub mod functions {
     }
 
     // original: doit_square (htslib/thread_pool.c:1209)
-    pub unsafe fn thread_pool_c_1209_doit_square() {
-        todo!("translate HTSlib doit_square from htslib/thread_pool.c:1209");
+    pub unsafe fn thread_pool_c_1209_doit_square(arg: *mut c_void) -> *mut c_void {
+        let job = *(arg.cast::<c_int>());
+        let res = libc::malloc(std::mem::size_of::<c_int>()).cast::<c_int>();
+        if res.is_null() {
+            libc::free(arg);
+            return std::ptr::null_mut();
+        }
+        *res = if job < 0 { -job * job } else { job * job };
+        libc::free(arg);
+        res.cast()
     }
 
     // original: test_square (htslib/thread_pool.c:1224)
@@ -12489,8 +23390,12 @@ pub mod functions {
     }
 
     // original: pipe_stage1 (htslib/thread_pool.c:1408)
-    pub unsafe fn thread_pool_c_1408_pipe_stage1() {
-        todo!("translate HTSlib pipe_stage1 from htslib/thread_pool.c:1408");
+    pub unsafe fn thread_pool_c_1408_pipe_stage1(arg: *mut c_void) -> *mut c_void {
+        let j = arg.cast::<ThreadPoolPipeJob>();
+        (*j).x <<= 8;
+        crate::htslib_mini_rs::hts::hts_usleep((hts_sys::random() % 10000) as i64);
+        libc::printf(c"1  %08x\n".as_ptr(), (*j).x);
+        arg
     }
 
     // original: pipe_stage1to2 (htslib/thread_pool.c:1418)
@@ -12499,8 +23404,12 @@ pub mod functions {
     }
 
     // original: pipe_stage2 (htslib/thread_pool.c:1434)
-    pub unsafe fn thread_pool_c_1434_pipe_stage2() {
-        todo!("translate HTSlib pipe_stage2 from htslib/thread_pool.c:1434");
+    pub unsafe fn thread_pool_c_1434_pipe_stage2(arg: *mut c_void) -> *mut c_void {
+        let j = arg.cast::<ThreadPoolPipeJob>();
+        (*j).x <<= 8;
+        crate::htslib_mini_rs::hts::hts_usleep((hts_sys::random() % 100000) as i64);
+        libc::printf(c"2  %08x\n".as_ptr(), (*j).x);
+        arg
     }
 
     // original: pipe_stage2to3 (htslib/thread_pool.c:1444)
@@ -12509,8 +23418,11 @@ pub mod functions {
     }
 
     // original: pipe_stage3 (htslib/thread_pool.c:1460)
-    pub unsafe fn thread_pool_c_1460_pipe_stage3() {
-        todo!("translate HTSlib pipe_stage3 from htslib/thread_pool.c:1460");
+    pub unsafe fn thread_pool_c_1460_pipe_stage3(arg: *mut c_void) -> *mut c_void {
+        let j = arg.cast::<ThreadPoolPipeJob>();
+        crate::htslib_mini_rs::hts::hts_usleep((hts_sys::random() % 10000) as i64);
+        (*j).x <<= 8;
+        arg
     }
 
     // original: pipe_output_thread (htslib/thread_pool.c:1468)
@@ -12546,5 +23458,8960 @@ pub mod functions {
     // original: PLUGIN_GLOBAL (htslib/hfile_gcs.c:141)
     pub unsafe fn hfile_gcs_c_141_PLUGIN_GLOBAL() {
         todo!("translate HTSlib PLUGIN_GLOBAL from htslib/hfile_gcs.c:141");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::{c_char, c_void};
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    use crate::htslib_mini_rs::original::htslib::samples;
+
+    use super::{functions, structs};
+
+    const TEST_REF_CACHE_READING_HEADERS: libc::c_int = 1;
+    const TEST_REF_CACHE_REQ_GET: libc::c_int = 1;
+    const TEST_REF_CACHE_WRITE_MORE: libc::c_int = 2;
+    const TEST_TRANSACT_TEXT_CONST: libc::c_uint = 1;
+    const TEST_TRANSACT_KEEP_ALIVE: libc::c_uint = 2;
+    const TEST_TRANSACT_GOT_TEXT: libc::c_int = 1;
+    const TEST_HTTP_1_1: libc::c_int = 2;
+    const TEST_REF_CACHE_LOG_BUF_SZ: usize = 0x10000;
+    const TEST_REF_CACHE_LOG_BUF_MASK: usize = TEST_REF_CACHE_LOG_BUF_SZ - 1;
+
+    #[repr(C)]
+    struct TestHttpParserLayout {
+        state: libc::c_int,
+        req_type: libc::c_int,
+        http_vers: libc::c_int,
+        trans_enc: libc::c_int,
+        content_length: libc::c_ulong,
+        bytes: libc::c_ulong,
+        uri: *mut c_char,
+        key: *mut c_char,
+        val: *mut c_char,
+        buffer: *mut c_char,
+        user_agent: *mut c_char,
+        referrer: *mut c_char,
+        range_from: libc::off_t,
+        range_to: libc::off_t,
+        key_sz: usize,
+        key_used: usize,
+        val_sz: usize,
+        val_used: usize,
+        upstream: libc::c_int,
+        flags: libc::c_uint,
+        in_: libc::c_uint,
+        out: libc::c_uint,
+        pos: libc::c_uint,
+        used: libc::c_uint,
+    }
+
+    #[repr(C)]
+    struct TestRefCacheOptionsLayout {
+        cache_dir: *const c_char,
+        log_dir: *const c_char,
+        error_log_file: *const c_char,
+        log: *mut libc::FILE,
+        upstream_url: *const c_char,
+        upstream_url_len: usize,
+        match_addrs: *mut c_void,
+        num_match_addrs: usize,
+        match_addrs_size: usize,
+        first_ip6: usize,
+        max_log_sz: libc::off_t,
+        cache_fd: libc::c_int,
+        listen_fds: libc::c_int,
+        daemon: libc::c_int,
+        port: u16,
+        nlogs: u16,
+        max_kids: u16,
+        verbosity: u8,
+        no_log: u8,
+    }
+
+    #[repr(C)]
+    struct TestTransactionPrefixLayout {
+        state: libc::c_int,
+        flags: libc::c_uint,
+        next: *mut structs::Transaction,
+        next_id: *mut structs::Transaction,
+        client: *mut structs::Client,
+        user_agent: *mut c_char,
+        referrer: *mut c_char,
+        req_str: *mut c_char,
+        text: *mut c_char,
+        range_from: libc::off_t,
+        range_to: libc::off_t,
+        sz: usize,
+        out: usize,
+        ref_: *mut structs::RefFile,
+        fd_sz: libc::off_t,
+        fd_sent: libc::off_t,
+        rc: libc::c_uint,
+        http_vers: libc::c_int,
+    }
+
+    #[repr(C)]
+    struct TestRefCacheUpstreamMsgLayout {
+        id: libc::c_uint,
+        code: libc::c_int,
+        val: i64,
+    }
+
+    #[repr(C)]
+    struct TestRefCacheDownstreamLayout {
+        download: *mut structs::Download,
+        prev: *mut structs::Downstream,
+        next: *mut structs::Downstream,
+        cmd_fd: libc::c_int,
+        id: libc::c_uint,
+    }
+
+    #[repr(C)]
+    struct TestRefCacheMultiDataLayout {
+        multi: *mut c_void,
+        pw: *mut structs::Poll_wrap,
+        timeout: libc::c_long,
+        downloads: *mut *mut structs::Download,
+        waiting: *mut structs::Download,
+        last_waiting: *mut structs::Download,
+        ncurls: libc::c_uint,
+        free_curls: libc::c_uint,
+        running: libc::c_int,
+    }
+
+    #[repr(C)]
+    struct TestRefCacheLogBufferLayout {
+        buffer: [c_char; TEST_REF_CACHE_LOG_BUF_SZ],
+        in_: usize,
+        out: usize,
+    }
+
+    #[repr(C)]
+    struct TestRefCacheDownloadLayout {
+        hexmd5: [c_char; 32],
+        md5_ctx: *mut c_void,
+        mdata: *mut structs::Multi_data,
+        next: *mut structs::Download,
+        waiting: *mut structs::Download,
+        downstream: *mut c_void,
+        cache_dir: *const c_char,
+        file: *mut c_char,
+        url: *mut c_char,
+        curl: *mut c_void,
+        cmd_fd: libc::c_int,
+        curlid: libc::c_int,
+        flags: libc::c_int,
+        cache_fd: libc::c_int,
+        file_fd: libc::c_int,
+        size: libc::off_t,
+        received: libc::off_t,
+    }
+
+    static TRANSLATED_HTS_ITR_QUERY_TID: AtomicI32 = AtomicI32::new(-999);
+
+    unsafe extern "C" fn translated_thread_pool_echo(arg: *mut c_void) -> *mut c_void {
+        arg
+    }
+
+    unsafe extern "C" fn translated_hts_itr_query_probe(
+        _idx: *const crate::htslib_mini_rs::hts::hts_idx_t,
+        tid: libc::c_int,
+        _beg: crate::htslib_mini_rs::hts::hts_pos_t,
+        _end: crate::htslib_mini_rs::hts::hts_pos_t,
+        _readrec: crate::htslib_mini_rs::hts::hts_readrec_func,
+    ) -> *mut crate::htslib_mini_rs::hts::hts_itr_t {
+        TRANSLATED_HTS_ITR_QUERY_TID.store(tid, Ordering::SeqCst);
+        std::ptr::null_mut()
+    }
+
+    #[repr(C)]
+    struct TestCramBlockSliceHdr {
+        content_type: hts_sys::cram_content_type,
+        ref_seq_id: i32,
+        ref_seq_start: i64,
+        ref_seq_span: i64,
+        num_records: i32,
+        record_counter: i64,
+        num_blocks: i32,
+        num_content_ids: i32,
+        block_content_ids: *mut i32,
+        ref_base_id: i32,
+        md5: [u8; 16],
+    }
+
+    #[test]
+    fn translated_hts_endian_main_passes() {
+        unsafe {
+            assert_eq!(
+                functions::test_hts_endian_c_496_main(0, std::ptr::null_mut()),
+                libc::EXIT_SUCCESS
+            );
+        }
+    }
+
+    #[test]
+    fn translated_bcf_set_variant_type_main_passes() {
+        unsafe {
+            assert_eq!(
+                functions::test_test_bcf_set_variant_type_c_143_main(0, std::ptr::null_mut()),
+                libc::EXIT_SUCCESS
+            );
+        }
+    }
+
+    #[test]
+    fn translated_expr_lookup_matches_c_symbols() {
+        unsafe {
+            assert_eq!(functions::test_test_expr_c_110_test(), 0);
+            assert_eq!(
+                functions::test_test_expr_c_346_main(1, std::ptr::null_mut()),
+                0
+            );
+
+            let filt = functions::hts_expr_c_849_hts_filter_init(c"foo + a".as_ptr());
+            assert!(!filt.is_null());
+            let mut val = crate::htslib_mini_rs::hts::hts_expr_val_t {
+                is_str: 0,
+                is_true: 0,
+                s: crate::htslib_mini_rs::hts::kstring_t {
+                    l: 0,
+                    m: 0,
+                    s: std::ptr::null_mut(),
+                },
+                d: 0.0,
+            };
+            assert_eq!(
+                functions::hts_expr_c_920_hts_filter_eval2(
+                    filt,
+                    std::ptr::null_mut(),
+                    Some(functions::test_test_expr_c_31_lookup),
+                    &mut val,
+                ),
+                0
+            );
+            assert_eq!(val.is_true, 1);
+            assert_eq!(val.d, 15552.0);
+            crate::htslib_mini_rs::hts::hts_expr_val_free(&mut val);
+            functions::hts_expr_c_863_hts_filter_free(filt);
+
+            let filt = functions::hts_expr_c_849_hts_filter_init(c"foo == 15551".as_ptr());
+            assert!(!filt.is_null());
+            assert_eq!(
+                functions::hts_expr_c_903_hts_filter_eval(
+                    filt,
+                    std::ptr::null_mut(),
+                    Some(functions::test_test_expr_c_31_lookup),
+                    &mut val,
+                ),
+                0
+            );
+            assert_eq!(val.is_true, 1);
+            crate::htslib_mini_rs::hts::hts_expr_val_free(&mut val);
+            functions::hts_expr_c_863_hts_filter_free(filt);
+
+            let mut expr = c"magic".as_ptr() as *mut c_char;
+            let mut end = std::ptr::null_mut();
+            assert_eq!(
+                functions::test_test_expr_c_31_lookup(
+                    std::ptr::null_mut(),
+                    expr,
+                    &mut end,
+                    &mut val,
+                ),
+                0
+            );
+            assert_eq!(end, expr.add(5));
+            assert_eq!(val.is_str, 1);
+            assert_eq!(std::ffi::CStr::from_ptr(val.s.s), c"plugh");
+            crate::htslib_mini_rs::hts::hts_expr_val_free(&mut val);
+
+            expr = c"null-but-true".as_ptr() as *mut c_char;
+            assert_eq!(
+                functions::test_test_expr_c_31_lookup(
+                    std::ptr::null_mut(),
+                    expr,
+                    &mut end,
+                    &mut val,
+                ),
+                0
+            );
+            assert_eq!(end, expr.add(13));
+            assert_eq!(val.is_true, 1);
+            assert_eq!(crate::htslib_mini_rs::hts::hts_expr_val_exists(&mut val), 0);
+            crate::htslib_mini_rs::hts::hts_expr_val_free(&mut val);
+        }
+    }
+
+    #[test]
+    fn translated_khash_utility_helpers_match_c_shapes() {
+        unsafe {
+            let keys = functions::test_test_khash_c_66_make_keys(3, 16);
+            assert!(!keys.is_null());
+            assert_eq!(std::ffi::CStr::from_ptr(keys), c"test0");
+            assert_eq!(std::ffi::CStr::from_ptr(keys.add(16)), c"test1");
+            assert_eq!(std::ffi::CStr::from_ptr(keys.add(32)), c"test2");
+            libc::free(keys.cast());
+
+            assert!(functions::test_test_khash_c_66_make_keys(1, 5).is_null());
+
+            let now = functions::test_test_khash_c_312_get_time();
+            assert!(now > 0);
+
+            let formatted = functions::test_test_khash_c_330_fmt_time(1_234_567);
+            assert_eq!(
+                std::ffi::CStr::from_ptr(formatted),
+                c"1.234567 wall-time seconds"
+            );
+        }
+    }
+
+    #[test]
+    fn translated_khash_read_keys_splits_lines_like_c() {
+        let path =
+            std::env::temp_dir().join(format!("htslib-mini-rs-khash-keys-{}", std::process::id()));
+        std::fs::write(&path, b"\nalpha\nbeta\n\ngamma").unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let mut keys: *mut c_char = std::ptr::null_mut();
+            let mut locations: *mut *mut c_char = std::ptr::null_mut();
+            assert_eq!(
+                functions::test_test_khash_c_236_read_keys(
+                    c_path.as_ptr(),
+                    &mut keys,
+                    &mut locations,
+                ),
+                3
+            );
+            assert!(!keys.is_null());
+            assert!(!locations.is_null());
+            assert_eq!(std::ffi::CStr::from_ptr(*locations.add(0)), c"alpha");
+            assert_eq!(std::ffi::CStr::from_ptr(*locations.add(1)), c"beta");
+            assert_eq!(std::ffi::CStr::from_ptr(*locations.add(2)), c"gamma");
+            libc::free(locations.cast());
+            libc::free(keys.cast());
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_ref_cache_misc_helpers_read_write_and_truncate() {
+        unsafe {
+            let mut fds = [-1; 2];
+            assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+            let payload = b"abcdef";
+            assert_eq!(
+                functions::ref_cache_misc_h_55_do_write_all(
+                    fds[1],
+                    payload.as_ptr().cast(),
+                    payload.len(),
+                ),
+                0
+            );
+            assert_eq!(libc::close(fds[1]), 0);
+
+            let mut out = [0_u8; 8];
+            assert_eq!(
+                functions::ref_cache_misc_h_72_do_read_all(
+                    fds[0],
+                    out.as_mut_ptr().cast(),
+                    payload.len(),
+                ),
+                payload.len() as libc::ssize_t
+            );
+            assert_eq!(&out[..payload.len()], payload);
+            assert_eq!(libc::close(fds[0]), 0);
+
+            let full = functions::ref_cache_misc_h_91_lim_strdup(c"abcdef".as_ptr(), 6, 8);
+            assert_eq!(std::ffi::CStr::from_ptr(full), c"abcdef");
+            libc::free(full.cast());
+
+            let truncated = functions::ref_cache_misc_h_91_lim_strdup(c"abcdef".as_ptr(), 6, 5);
+            assert_eq!(std::ffi::CStr::from_ptr(truncated), c"ab...");
+            libc::free(truncated.cast());
+
+            assert!(functions::ref_cache_misc_h_91_lim_strdup(c"abcdef".as_ptr(), 0, 5).is_null());
+        }
+    }
+
+    #[test]
+    fn translated_ref_cache_poll_wrappers_register_modify_and_remove_fds() {
+        unsafe {
+            let mut fds = [-1; 2];
+            assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+
+            let poll_pw = functions::ref_cache_poll_wrap_poll_c_69_pw_init(0);
+            assert!(!poll_pw.is_null());
+            let poll_item = functions::ref_cache_poll_wrap_poll_c_95_pw_register(
+                poll_pw,
+                fds[0],
+                1,
+                libc::POLLIN as u32,
+                fds.as_mut_ptr().cast(),
+            );
+            assert!(!poll_item.is_null());
+            assert_eq!(
+                functions::ref_cache_poll_wrap_poll_c_157_pw_mod(
+                    poll_pw,
+                    poll_item,
+                    libc::POLLERR as u32,
+                ),
+                0
+            );
+            assert_eq!(
+                functions::ref_cache_poll_wrap_poll_c_220_pw_remove(poll_pw, poll_item, 0),
+                0
+            );
+            functions::ref_cache_poll_wrap_poll_c_60_pw_close(poll_pw);
+
+            let epoll_pw = functions::ref_cache_poll_wrap_epoll_c_49_pw_init(0);
+            assert!(!epoll_pw.is_null());
+            let epoll_item = functions::ref_cache_poll_wrap_epoll_c_78_pw_register(
+                epoll_pw,
+                fds[0],
+                1,
+                libc::EPOLLIN as u32,
+                fds.as_mut_ptr().cast(),
+            );
+            assert!(!epoll_item.is_null());
+            assert_eq!(
+                functions::ref_cache_poll_wrap_epoll_c_106_pw_mod(
+                    epoll_pw,
+                    epoll_item,
+                    libc::EPOLLERR as u32,
+                ),
+                0
+            );
+            assert_eq!(
+                functions::ref_cache_poll_wrap_epoll_c_126_pw_remove(epoll_pw, epoll_item, 0),
+                0
+            );
+            functions::ref_cache_poll_wrap_epoll_c_72_pw_close(epoll_pw);
+
+            assert_eq!(libc::close(fds[0]), 0);
+            assert_eq!(libc::close(fds[1]), 0);
+        }
+    }
+
+    #[test]
+    fn translated_ref_cache_request_parser_reads_and_dispatches_gets() {
+        unsafe {
+            let mut parser = std::mem::MaybeUninit::<TestHttpParserLayout>::zeroed().assume_init();
+            assert_eq!(
+                functions::ref_cache_http_parser_c_111_init_http_parser(
+                    (&mut parser as *mut TestHttpParserLayout).cast(),
+                    0,
+                ),
+                0
+            );
+
+            let mut fds = [-1; 2];
+            assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+            let request = b"GET /hello HTTP/1.1\r\n";
+            assert_eq!(
+                libc::write(fds[1], request.as_ptr().cast(), request.len()),
+                request.len() as libc::ssize_t
+            );
+            assert_eq!(libc::close(fds[1]), 0);
+
+            assert_eq!(
+                functions::ref_cache_http_parser_c_201_parser_read_input(
+                    (&mut parser as *mut TestHttpParserLayout).cast(),
+                    fds[0],
+                ),
+                0
+            );
+            assert_eq!(libc::close(fds[0]), 0);
+
+            let opts = TestRefCacheOptionsLayout {
+                cache_dir: std::ptr::null(),
+                log_dir: std::ptr::null(),
+                error_log_file: std::ptr::null(),
+                log: std::ptr::null_mut(),
+                upstream_url: std::ptr::null(),
+                upstream_url_len: 0,
+                match_addrs: std::ptr::null_mut(),
+                num_match_addrs: 0,
+                match_addrs_size: 0,
+                first_ip6: 0,
+                max_log_sz: 0,
+                cache_fd: -1,
+                listen_fds: 0,
+                daemon: 0,
+                port: 0,
+                nlogs: 0,
+                max_kids: 0,
+                verbosity: 0,
+                no_log: 0,
+            };
+            functions::ref_cache_http_parser_c_246_read_request_line(
+                (&opts as *const TestRefCacheOptionsLayout).cast(),
+                (&mut parser as *mut TestHttpParserLayout).cast(),
+            );
+            assert_eq!(parser.state, TEST_REF_CACHE_READING_HEADERS);
+            assert_eq!(parser.req_type, TEST_REF_CACHE_REQ_GET);
+            assert_eq!(parser.http_vers, TEST_HTTP_1_1);
+            assert_eq!(
+                parser.flags & TEST_TRANSACT_KEEP_ALIVE,
+                TEST_TRANSACT_KEEP_ALIVE
+            );
+            assert_eq!(std::ffi::CStr::from_ptr(parser.uri), c"/hello");
+
+            let mut transact =
+                std::mem::MaybeUninit::<TestTransactionPrefixLayout>::zeroed().assume_init();
+            transact.flags = parser.flags;
+            transact.http_vers = parser.http_vers;
+            functions::ref_cache_request_handler_c_126_handle_get(
+                (&opts as *const TestRefCacheOptionsLayout).cast(),
+                (&mut parser as *mut TestHttpParserLayout).cast(),
+                (&mut transact as *mut TestTransactionPrefixLayout).cast(),
+            );
+            assert_eq!(transact.rc, 200);
+            assert_eq!(transact.state, TEST_TRANSACT_GOT_TEXT);
+            assert_eq!(std::ffi::CStr::from_ptr(transact.req_str), c"/hello");
+            assert!(std::ffi::CStr::from_ptr(transact.text)
+                .to_bytes()
+                .windows(b"Hello\r\n".len())
+                .any(|chunk| chunk == b"Hello\r\n"));
+            libc::free(transact.req_str.cast());
+            libc::free(transact.text.cast());
+
+            functions::ref_cache_http_parser_c_131_cleanup_http_parser(
+                (&mut parser as *mut TestHttpParserLayout).cast(),
+            );
+
+            let mut bad_parser =
+                std::mem::MaybeUninit::<TestHttpParserLayout>::zeroed().assume_init();
+            assert_eq!(
+                functions::ref_cache_http_parser_c_111_init_http_parser(
+                    (&mut bad_parser as *mut TestHttpParserLayout).cast(),
+                    0,
+                ),
+                0
+            );
+            bad_parser.uri = libc::strdup(c"/missing".as_ptr());
+            bad_parser.http_vers = TEST_HTTP_1_1;
+
+            let mut bad_transact =
+                std::mem::MaybeUninit::<TestTransactionPrefixLayout>::zeroed().assume_init();
+            bad_transact.flags = TEST_TRANSACT_KEEP_ALIVE;
+            bad_transact.http_vers = TEST_HTTP_1_1;
+            functions::ref_cache_request_handler_c_126_handle_get(
+                (&opts as *const TestRefCacheOptionsLayout).cast(),
+                (&mut bad_parser as *mut TestHttpParserLayout).cast(),
+                (&mut bad_transact as *mut TestTransactionPrefixLayout).cast(),
+            );
+            assert_eq!(bad_transact.rc, 404);
+            assert_eq!(bad_transact.state, TEST_TRANSACT_GOT_TEXT);
+            assert_eq!(
+                bad_transact.flags & TEST_TRANSACT_TEXT_CONST,
+                TEST_TRANSACT_TEXT_CONST
+            );
+            assert_eq!(std::ffi::CStr::from_ptr(bad_transact.req_str), c"/missing");
+            libc::free(bad_transact.req_str.cast());
+            functions::ref_cache_http_parser_c_131_cleanup_http_parser(
+                (&mut bad_parser as *mut TestHttpParserLayout).cast(),
+            );
+        }
+    }
+
+    #[test]
+    fn translated_ref_cache_eat_input_reports_short_read_and_eof() {
+        unsafe {
+            let mut fds = [-1; 2];
+            assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+            assert_eq!(libc::write(fds[1], b"discard".as_ptr().cast(), 7), 7);
+            assert_eq!(functions::ref_cache_server_c_422_eat_input(fds[0]), 0);
+            assert_eq!(libc::close(fds[1]), 0);
+            assert_eq!(functions::ref_cache_server_c_422_eat_input(fds[0]), 2);
+            assert_eq!(libc::close(fds[0]), 0);
+        }
+    }
+
+    #[test]
+    fn translated_ref_cache_upstream_socket_helpers_round_trip_messages() {
+        unsafe {
+            let mut sockets = [-1; 2];
+            assert_eq!(
+                libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sockets.as_mut_ptr()),
+                0
+            );
+
+            let md5 = c"0123456789abcdef0123456789abcdef";
+            assert_eq!(
+                functions::ref_cache_upstream_c_122_upstream_send_cmd(
+                    sockets[0],
+                    md5.as_ptr(),
+                    12345,
+                ),
+                0
+            );
+            let mut got_md5 = [0 as c_char; 33];
+            let mut got_id = 0_u32;
+            assert_eq!(
+                functions::ref_cache_upstream_c_146_recv_cmd_data(
+                    sockets[1],
+                    got_md5.as_mut_ptr(),
+                    &mut got_id,
+                ),
+                36
+            );
+            assert_eq!(std::ffi::CStr::from_ptr(got_md5.as_ptr()), md5);
+            assert_eq!(got_id, 12345);
+
+            let mut msg = TestRefCacheUpstreamMsgLayout {
+                id: 77,
+                code: 2,
+                val: 9876,
+            };
+            assert_eq!(
+                functions::ref_cache_upstream_c_172_upstream_send_msg(
+                    sockets[0],
+                    (&mut msg as *mut TestRefCacheUpstreamMsgLayout).cast(),
+                    -1,
+                ),
+                0
+            );
+            let mut got_msg =
+                std::mem::MaybeUninit::<TestRefCacheUpstreamMsgLayout>::zeroed().assume_init();
+            let mut passed_fd = -1;
+            assert_eq!(
+                functions::ref_cache_upstream_c_215_upstream_recv_msg(
+                    sockets[1],
+                    (&mut got_msg as *mut TestRefCacheUpstreamMsgLayout).cast(),
+                    &mut passed_fd,
+                ),
+                1
+            );
+            assert_eq!(got_msg.id, 77);
+            assert_eq!(got_msg.code, 2);
+            assert_eq!(got_msg.val, 9876);
+            assert_eq!(passed_fd, -1);
+
+            assert_eq!(libc::close(sockets[0]), 0);
+            assert_eq!(libc::close(sockets[1]), 0);
+        }
+    }
+
+    #[test]
+    fn translated_ref_cache_send_result_code_forwards_downstream_status() {
+        unsafe {
+            let mut sockets = [-1; 2];
+            assert_eq!(
+                libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sockets.as_mut_ptr()),
+                0
+            );
+
+            let mut downstream =
+                std::mem::MaybeUninit::<TestRefCacheDownstreamLayout>::zeroed().assume_init();
+            downstream.cmd_fd = sockets[0];
+            downstream.id = 444;
+            assert_eq!(
+                functions::ref_cache_upstream_c_635_send_result_code(
+                    (&mut downstream as *mut TestRefCacheDownstreamLayout).cast(),
+                    503,
+                ),
+                0
+            );
+
+            let mut got_msg =
+                std::mem::MaybeUninit::<TestRefCacheUpstreamMsgLayout>::zeroed().assume_init();
+            let mut passed_fd = -1;
+            assert_eq!(
+                functions::ref_cache_upstream_c_215_upstream_recv_msg(
+                    sockets[1],
+                    (&mut got_msg as *mut TestRefCacheUpstreamMsgLayout).cast(),
+                    &mut passed_fd,
+                ),
+                1
+            );
+            assert_eq!(got_msg.id, 444);
+            assert_eq!(got_msg.code, 3);
+            assert_eq!(got_msg.val, 503);
+            assert_eq!(passed_fd, -1);
+            assert_eq!(libc::close(sockets[0]), 0);
+            assert_eq!(libc::close(sockets[1]), 0);
+        }
+    }
+
+    #[test]
+    fn translated_ref_cache_send_to_log_flushes_linear_and_wrapped_buffers() {
+        unsafe {
+            let mut fds = [-1; 2];
+            assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+            let mut log_buf =
+                std::mem::MaybeUninit::<TestRefCacheLogBufferLayout>::zeroed().assume_init();
+
+            let first = b"alpha\n";
+            for (idx, byte) in first.iter().enumerate() {
+                log_buf.buffer[idx] = *byte as c_char;
+            }
+            log_buf.in_ = first.len();
+            log_buf.out = 0;
+            assert_eq!(
+                functions::ref_cache_server_c_470_send_to_log(
+                    (&mut log_buf as *mut TestRefCacheLogBufferLayout).cast(),
+                    fds[1],
+                ),
+                TEST_REF_CACHE_WRITE_MORE
+            );
+            assert_eq!(log_buf.out, log_buf.in_);
+
+            log_buf.out = TEST_REF_CACHE_LOG_BUF_SZ - 3;
+            log_buf.in_ = 2;
+            log_buf.buffer[TEST_REF_CACHE_LOG_BUF_SZ - 3] = b'e' as c_char;
+            log_buf.buffer[TEST_REF_CACHE_LOG_BUF_SZ - 2] = b'n' as c_char;
+            log_buf.buffer[TEST_REF_CACHE_LOG_BUF_SZ - 1] = b'd' as c_char;
+            log_buf.buffer[0] = b'!' as c_char;
+            log_buf.buffer[1] = b'\n' as c_char;
+            assert_eq!(
+                functions::ref_cache_server_c_470_send_to_log(
+                    (&mut log_buf as *mut TestRefCacheLogBufferLayout).cast(),
+                    fds[1],
+                ),
+                TEST_REF_CACHE_WRITE_MORE
+            );
+            assert_eq!(log_buf.out, log_buf.in_);
+            assert_eq!(libc::close(fds[1]), 0);
+
+            let mut got = [0_u8; 16];
+            let n = libc::read(fds[0], got.as_mut_ptr().cast(), got.len());
+            assert_eq!(n, 11);
+            assert_eq!(&got[..n as usize], b"alpha\nend!\n");
+            assert_eq!(libc::close(fds[0]), 0);
+
+            assert_eq!(TEST_REF_CACHE_LOG_BUF_MASK, TEST_REF_CACHE_LOG_BUF_SZ - 1);
+        }
+    }
+
+    #[test]
+    fn translated_ref_cache_make_subdir_creates_md5_prefix_dirs() {
+        let dir = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-ref-cache-subdir-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let c_dir = std::ffi::CString::new(dir.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let fd = libc::open(c_dir.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY);
+            assert!(fd >= 0);
+            let opts = TestRefCacheOptionsLayout {
+                cache_dir: c_dir.as_ptr(),
+                log_dir: std::ptr::null(),
+                error_log_file: std::ptr::null(),
+                log: std::ptr::null_mut(),
+                upstream_url: std::ptr::null(),
+                upstream_url_len: 0,
+                match_addrs: std::ptr::null_mut(),
+                num_match_addrs: 0,
+                match_addrs_size: 0,
+                first_ip6: 0,
+                max_log_sz: 0,
+                cache_fd: fd,
+                listen_fds: 0,
+                daemon: 0,
+                port: 0,
+                nlogs: 0,
+                max_kids: 0,
+                verbosity: 0,
+                no_log: 0,
+            };
+            let mut hexmd5 = *b"abcdef0123456789abcdef0123456789\0";
+            assert_eq!(
+                functions::ref_cache_upstream_c_252_make_subdir(
+                    (&opts as *const TestRefCacheOptionsLayout as *mut TestRefCacheOptionsLayout)
+                        .cast(),
+                    hexmd5.as_mut_ptr().cast(),
+                ),
+                0
+            );
+            assert_eq!(libc::close(fd), 0);
+        }
+
+        assert!(dir.join("ab").is_dir());
+        assert!(dir.join("ab/cd").is_dir());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn translated_ref_cache_rename_download_file_moves_completed_cache_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-ref-cache-rename-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(dir.join("ab/cd")).unwrap();
+        std::fs::write(dir.join("incoming.tmp"), b"reference").unwrap();
+        let c_dir = std::ffi::CString::new(dir.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let fd = libc::open(c_dir.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY);
+            assert!(fd >= 0);
+            let mut file_buf = [0 as c_char; 35];
+            libc::strcpy(file_buf.as_mut_ptr(), c"incoming.tmp".as_ptr());
+            let mut download =
+                std::mem::MaybeUninit::<TestRefCacheDownloadLayout>::zeroed().assume_init();
+            let md5 = b"abcdef0123456789abcdef0123456789";
+            for (dst, src) in download.hexmd5.iter_mut().zip(md5.iter()) {
+                *dst = *src as c_char;
+            }
+            download.cache_dir = c_dir.as_ptr();
+            download.file = file_buf.as_mut_ptr();
+            download.flags = 1;
+            download.cache_fd = fd;
+            assert_eq!(
+                functions::ref_cache_upstream_c_897_rename_download_file(
+                    (&mut download as *mut TestRefCacheDownloadLayout).cast(),
+                ),
+                0
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(file_buf.as_ptr()),
+                c"ab/cd/ef0123456789abcdef0123456789"
+            );
+            assert_eq!(libc::close(fd), 0);
+        }
+
+        assert!(!dir.join("incoming.tmp").exists());
+        assert!(dir.join("ab/cd/ef0123456789abcdef0123456789").is_file());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn translated_ref_cache_free_download_unlinks_active_slot_and_downstreams() {
+        let c_dir = std::ffi::CString::new("/tmp").unwrap();
+        unsafe {
+            let mut downloads = vec![std::ptr::null_mut::<structs::Download>(); 0x4000];
+            let mut mdata =
+                std::mem::MaybeUninit::<TestRefCacheMultiDataLayout>::zeroed().assume_init();
+            mdata.downloads = downloads.as_mut_ptr();
+            mdata.ncurls = 4;
+            mdata.free_curls = 0;
+
+            let opts = TestRefCacheOptionsLayout {
+                cache_dir: c_dir.as_ptr(),
+                log_dir: std::ptr::null(),
+                error_log_file: std::ptr::null(),
+                log: std::ptr::null_mut(),
+                upstream_url: std::ptr::null(),
+                upstream_url_len: 0,
+                match_addrs: std::ptr::null_mut(),
+                num_match_addrs: 0,
+                match_addrs_size: 0,
+                first_ip6: 0,
+                max_log_sz: 0,
+                cache_fd: -1,
+                listen_fds: 0,
+                daemon: 0,
+                port: 0,
+                nlogs: 0,
+                max_kids: 0,
+                verbosity: 0,
+                no_log: 0,
+            };
+
+            let mut hexmd5 = *b"abcdef0123456789abcdef0123456789\0";
+            let download = functions::ref_cache_upstream_c_306_new_download(
+                (&opts as *const TestRefCacheOptionsLayout as *mut TestRefCacheOptionsLayout)
+                    .cast(),
+                (&mut mdata as *mut TestRefCacheMultiDataLayout).cast(),
+                hexmd5.as_mut_ptr().cast(),
+            );
+            assert!(!download.is_null());
+
+            let slot = 0x2bcdusize;
+            downloads[slot] = download;
+            let layout = download.cast::<TestRefCacheDownloadLayout>();
+            (*layout).file = libc::strdup(c"in-progress.tmp".as_ptr());
+            (*layout).url = libc::strdup(c"http://example.invalid/ref".as_ptr());
+            (*layout).curlid = 2;
+            (*layout).curl = std::ptr::dangling_mut::<c_void>();
+
+            let downstream = functions::ref_cache_upstream_c_296_new_downstream(-1, 99);
+            assert!(!downstream.is_null());
+            (*layout).downstream = downstream.cast();
+            functions::ref_cache_upstream_c_331_free_download(download);
+
+            assert!(downloads[slot].is_null());
+            assert_eq!(mdata.free_curls, 1 << 2);
+        }
+    }
+
+    #[test]
+    fn translated_synced_bcf_strerror_returns_static_messages() {
+        unsafe {
+            assert!(!functions::synced_bcf_reader_c_84_bcf_sr_strerror(0).is_null());
+            assert!(!functions::synced_bcf_reader_c_84_bcf_sr_strerror(-2).is_null());
+            assert!(!functions::synced_bcf_reader_c_84_bcf_sr_strerror(12345).is_null());
+        }
+    }
+
+    #[test]
+    fn translated_vcf_add_desc_to_buffer_appends_and_truncates() {
+        unsafe {
+            let mut buffer = [0 as libc::c_char; 32];
+            let mut offset = 0usize;
+            assert_eq!(
+                functions::vcf_c_6287_add_desc_to_buffer(
+                    buffer.as_mut_ptr(),
+                    &mut offset,
+                    buffer.len(),
+                    c"first".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(buffer.as_ptr()).to_bytes(),
+                b"first"
+            );
+            assert_eq!(offset, 5);
+
+            assert_eq!(
+                functions::vcf_c_6287_add_desc_to_buffer(
+                    buffer.as_mut_ptr(),
+                    &mut offset,
+                    buffer.len(),
+                    c"second".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(buffer.as_ptr()).to_bytes(),
+                b"first,second"
+            );
+            assert_eq!(offset, 12);
+
+            let mut small = [0 as libc::c_char; 8];
+            let mut small_offset = 6usize;
+            assert_eq!(
+                functions::vcf_c_6287_add_desc_to_buffer(
+                    small.as_mut_ptr(),
+                    &mut small_offset,
+                    small.len(),
+                    c"long".as_ptr(),
+                ),
+                -1
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(small.as_ptr().add(4)).to_bytes(),
+                b"..."
+            );
+
+            assert_eq!(
+                functions::vcf_c_6287_add_desc_to_buffer(
+                    std::ptr::null_mut(),
+                    &mut offset,
+                    buffer.len(),
+                    c"x".as_ptr(),
+                ),
+                -1
+            );
+        }
+    }
+
+    #[test]
+    fn translated_vcfutils_remove_allele_set_updates_parsed_record() {
+        unsafe {
+            let hdr = crate::htslib_mini_rs::vcf::bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+            assert_eq!(
+                crate::htslib_mini_rs::vcf::bcf_hdr_append(hdr, c"##fileformat=VCFv4.3".as_ptr()),
+                0
+            );
+            assert_eq!(
+                crate::htslib_mini_rs::vcf::bcf_hdr_append(
+                    hdr,
+                    c"##contig=<ID=chr1,length=100>".as_ptr()
+                ),
+                0
+            );
+            assert_eq!(crate::htslib_mini_rs::vcf::bcf_hdr_sync(hdr), 0);
+
+            let rec = crate::htslib_mini_rs::vcf::bcf_init();
+            assert!(!rec.is_null());
+            let mut line = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert!(
+                crate::htslib_mini_rs::hts::kputs(
+                    c"chr1\t1\t.\tA\tC,G\t.\t.\t.".as_ptr(),
+                    &mut line,
+                ) >= 0
+            );
+            assert_eq!(
+                crate::htslib_mini_rs::vcf::vcf_parse(&mut line, hdr, rec),
+                0
+            );
+            assert_eq!((*rec).n_allele(), 3);
+
+            let rm_set = crate::htslib_mini_rs::hts::kbs_init(3);
+            assert!(!rm_set.is_null());
+            crate::htslib_mini_rs::hts::kbs_insert(rm_set, 2);
+            assert_eq!(
+                functions::vcfutils_c_659_bcf_remove_allele_set(
+                    hdr.cast(),
+                    rec.cast(),
+                    rm_set.cast(),
+                ),
+                0
+            );
+            assert_eq!((*rec).n_allele(), 2);
+            assert_eq!(std::ffi::CStr::from_ptr(*(*rec).d.allele.add(1)), c"C");
+
+            crate::htslib_mini_rs::hts::kbs_destroy(rm_set);
+            crate::htslib_mini_rs::hts::ks_free(&mut line);
+            crate::htslib_mini_rs::vcf::bcf_destroy(rec);
+            crate::htslib_mini_rs::vcf::bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn translated_ref_cache_get_ref_file_loads_cached_file_or_reports_missing() {
+        let dir = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-ref-cache-get-ref-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(dir.join("ab/cd")).unwrap();
+        std::fs::write(dir.join("ab/cd/ef0123456789abcdef0123456789"), b"reference").unwrap();
+        let c_dir = std::ffi::CString::new(dir.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let fd = libc::open(c_dir.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY);
+            assert!(fd >= 0);
+            let opts = TestRefCacheOptionsLayout {
+                cache_dir: c_dir.as_ptr(),
+                log_dir: std::ptr::null(),
+                error_log_file: std::ptr::null(),
+                log: std::ptr::null_mut(),
+                upstream_url: std::ptr::null(),
+                upstream_url_len: 0,
+                match_addrs: std::ptr::null_mut(),
+                num_match_addrs: 0,
+                match_addrs_size: 0,
+                first_ip6: 0,
+                max_log_sz: 0,
+                cache_fd: fd,
+                listen_fds: 0,
+                daemon: 0,
+                port: 0,
+                nlogs: 0,
+                max_kids: 0,
+                verbosity: 0,
+                no_log: 0,
+            };
+
+            let found = functions::ref_cache_ref_files_c_94_get_ref_file(
+                (&opts as *const TestRefCacheOptionsLayout).cast(),
+                c"abcdef0123456789abcdef0123456789".as_ptr(),
+                -1,
+            );
+            assert!(!found.is_null());
+            assert_eq!(
+                functions::ref_cache_ref_files_c_141_get_ref_status(found),
+                3
+            );
+            assert_eq!(functions::ref_cache_ref_files_c_145_get_ref_size(found), 9);
+            assert_eq!(
+                functions::ref_cache_ref_files_c_149_get_ref_available(found),
+                9
+            );
+            assert_eq!(
+                functions::ref_cache_ref_files_c_157_get_ref_complete(found),
+                1
+            );
+            assert!(functions::ref_cache_ref_files_c_161_get_ref_fd(found) >= 0);
+            assert_eq!(
+                functions::ref_cache_ref_files_c_193_release_ref_file(found),
+                0
+            );
+
+            let missing = functions::ref_cache_ref_files_c_94_get_ref_file(
+                (&opts as *const TestRefCacheOptionsLayout).cast(),
+                c"123456789abcdef0123456789abcdef0".as_ptr(),
+                -1,
+            );
+            assert!(!missing.is_null());
+            assert_eq!(
+                functions::ref_cache_ref_files_c_141_get_ref_status(missing),
+                1
+            );
+            assert_eq!(
+                functions::ref_cache_ref_files_c_193_release_ref_file(missing),
+                0
+            );
+            assert_eq!(libc::close(fd), 0);
+        }
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn translated_faidx_usage_helpers_write_to_c_stream() {
+        unsafe {
+            let out = libc::tmpfile();
+            assert!(!out.is_null());
+            functions::test_test_faidx_c_394_usage(out, c"test_faidx".as_ptr());
+            functions::test_test_faidx_c_403_help(out, c"test_faidx".as_ptr());
+            assert_eq!(libc::fclose(out), 0);
+        }
+    }
+
+    #[test]
+    fn translated_faidx_test_helpers_query_existing_index() {
+        let dir =
+            std::env::temp_dir().join(format!("htslib-mini-rs-faidx-stubs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fasta = dir.join("ref.fa");
+        let fai = dir.join("ref.fa.fai");
+        let copy = dir.join("ref-copy.fa");
+        std::fs::write(&fasta, b">chr1\nACGT\nACGT\n>chr2\nTTTT\n").unwrap();
+        std::fs::write(&copy, b">chr1\nACGT\nACGT\n>chr2\nTTTT\n").unwrap();
+        std::fs::write(&fai, b"chr1\t8\t6\t4\t5\nchr2\t4\t22\t4\t5\n").unwrap();
+
+        let c_fasta = std::ffi::CString::new(fasta.to_string_lossy().as_bytes()).unwrap();
+        let c_copy = std::ffi::CString::new(copy.to_string_lossy().as_bytes()).unwrap();
+        let c_chr1 = c"chr1";
+
+        unsafe {
+            assert_eq!(
+                functions::test_test_faidx_c_33_file_compare(c_fasta.as_ptr(), c_copy.as_ptr()),
+                0
+            );
+            let loaded = functions::test_test_faidx_c_87_load_index(
+                c_fasta.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                crate::htslib_mini_rs::faidx::FAI_FASTA,
+            );
+            assert!(!loaded.is_null());
+            crate::htslib_mini_rs::faidx::fai_destroy(loaded);
+
+            assert_eq!(
+                functions::test_test_faidx_c_260_test_fai_line_length(
+                    c_fasta.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    crate::htslib_mini_rs::faidx::FAI_FASTA,
+                    c"4".as_ptr(),
+                    c_chr1.as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_faidx_c_285_test_faidx_has_seq(
+                    c_fasta.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    crate::htslib_mini_rs::faidx::FAI_FASTA,
+                    c"1".as_ptr(),
+                    c_chr1.as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_faidx_c_310_test_faidx_iseq(
+                    c_fasta.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    crate::htslib_mini_rs::faidx::FAI_FASTA,
+                    c_chr1.as_ptr(),
+                    c"0".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_faidx_c_339_test_faidx_seq_len(
+                    c_fasta.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    crate::htslib_mini_rs::faidx::FAI_FASTA,
+                    c"8".as_ptr(),
+                    c_chr1.as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_faidx_c_366_test_faidx_seq_len64(
+                    c_fasta.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    crate::htslib_mini_rs::faidx::FAI_FASTA,
+                    c"8".as_ptr(),
+                    c_chr1.as_ptr(),
+                ),
+                0
+            );
+
+            let out = dir.join("retrieved.fa");
+            let c_out = std::ffi::CString::new(out.to_string_lossy().as_bytes()).unwrap();
+            let region = std::ffi::CString::new("chr1:2-6").unwrap();
+            let mut regions = [region.as_ptr() as *mut c_char];
+            assert_eq!(
+                functions::test_test_faidx_c_99_do_retrieval(
+                    c_fasta.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    crate::htslib_mini_rs::faidx::FAI_FASTA,
+                    c_out.as_ptr(),
+                    c"faidx_fetch_seq64".as_ptr(),
+                    regions.len() as libc::c_int,
+                    regions.as_mut_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                std::fs::read_to_string(&out).unwrap(),
+                ">chr1:2-6 length: 5\nCGTAC\n"
+            );
+        }
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn translated_regidx_random_region_stays_in_bounds() {
+        unsafe {
+            libc::srand(1);
+            for _ in 0..16 {
+                let mut beg = 0;
+                let mut end = 0;
+                functions::test_test_regidx_c_190_get_random_region(10, 100, &mut beg, &mut end);
+                assert!((10..=100).contains(&beg));
+                assert!((beg..=100).contains(&end));
+            }
+        }
+    }
+
+    #[test]
+    fn translated_regidx_verbose_helpers_are_noops_by_default() {
+        unsafe {
+            functions::test_test_regidx_c_45_debug();
+            functions::test_test_regidx_c_55_info();
+            functions::test_test_regidx_c_64_HTS_FORMAT();
+            functions::bgzip_c_51_HTS_FORMAT();
+        }
+    }
+
+    #[test]
+    fn translated_sample_print_usage_functions_write_to_c_stream() {
+        unsafe {
+            let usage_functions: [unsafe fn(*mut libc::FILE); 31] = [
+                samples::read_aux::samples_read_aux_c_37_print_usage,
+                samples::index_multireg_read::samples_index_multireg_read_c_37_print_usage,
+                samples::flags_htsopt_field::samples_flags_htsopt_field_c_37_print_usage,
+                samples::index_write::samples_index_write_c_38_print_usage,
+                samples::qtask_unordered::samples_qtask_unordered_c_62_print_usage,
+                samples::flags_demo::samples_flags_demo_c_37_print_usage,
+                samples::read_header::samples_read_header_c_37_print_usage,
+                samples::index_fasta::samples_index_fasta_c_39_print_usage,
+                samples::read_bam::samples_read_bam_c_37_print_usage,
+                samples::mod_aux::samples_mod_aux_c_38_print_usage,
+                samples::read_refname::samples_read_refname_c_37_print_usage,
+                samples::index_reg_read::samples_index_reg_read_c_37_print_usage,
+                samples::split::samples_split_c_37_print_usage,
+                samples::add_header::samples_add_header_c_37_print_usage,
+                samples::read_fast_index::samples_read_fast_index_c_38_print_usage,
+                samples::read_fast::samples_read_fast_c_37_print_usage,
+                samples::mpileup::samples_mpileup_c_38_print_usage,
+                samples::mod_aux_ba::samples_mod_aux_ba_c_37_print_usage,
+                samples::modstate::samples_modstate_c_37_print_usage,
+                samples::write_fast::samples_write_fast_c_39_print_usage,
+                samples::split_thread2::samples_split_thread2_c_38_print_usage,
+                samples::qtask_ordered::samples_qtask_ordered_c_61_print_usage,
+                samples::split2::samples_split2_c_37_print_usage,
+                samples::mod_bam::samples_mod_bam_c_38_print_usage,
+                samples::split_thread1::samples_split_thread1_c_37_print_usage,
+                samples::update_header::samples_update_header_c_37_print_usage,
+                samples::dump_aux::samples_dump_aux_c_37_print_usage,
+                samples::rem_header::samples_rem_header_c_37_print_usage,
+                samples::pileup_mod::samples_pileup_mod_c_38_print_usage,
+                samples::cram::samples_cram_c_37_print_usage,
+                samples::pileup::samples_pileup_c_38_print_usage,
+            ];
+
+            for print_usage in usage_functions {
+                let out = libc::tmpfile();
+                assert!(!out.is_null());
+                print_usage(out);
+                assert_eq!(libc::fclose(out), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn translated_test_mod_code_formats_ids() {
+        unsafe {
+            assert_eq!(
+                std::ffi::CStr::from_ptr(functions::test_test_mod_c_76_code('m' as i32)),
+                c"m"
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(functions::test_test_mod_c_76_code(-123)),
+                c"(123)"
+            );
+        }
+    }
+
+    #[test]
+    fn translated_test_time_funcs_match_c_cases() {
+        unsafe {
+            assert_eq!(
+                functions::test_test_time_funcs_c_36_test_normalised(0, 10_000, 1_000),
+                0
+            );
+            assert_eq!(
+                functions::test_test_time_funcs_c_53_test_specific(
+                    1993, 9, 10514, 12, 32, 10, 1655209930,
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_time_funcs_c_68_main(0, std::ptr::null_mut()),
+                libc::EXIT_SUCCESS
+            );
+        }
+    }
+
+    #[test]
+    fn translated_test_bgzf_file_helpers_cover_stdio_paths() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-bgzf-helpers-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"abcdef").unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let mut f = functions::test_test_bgzf_c_68_try_fopen(c_path.as_ptr(), c"rb".as_ptr());
+            assert!(!f.is_null());
+
+            let mut buf = [0_u8; 3];
+            assert_eq!(
+                functions::test_test_bgzf_c_89_try_fread(
+                    f,
+                    buf.as_mut_ptr().cast(),
+                    buf.len(),
+                    c"unit".as_ptr(),
+                    c_path.as_ptr(),
+                ),
+                3
+            );
+            assert_eq!(&buf, b"abc");
+
+            assert_eq!(
+                functions::test_test_bgzf_c_100_try_fseek_start(
+                    f,
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                0
+            );
+
+            let mut first = [0_u8; 1];
+            assert_eq!(
+                functions::test_test_bgzf_c_89_try_fread(
+                    f,
+                    first.as_mut_ptr().cast(),
+                    first.len(),
+                    c"unit".as_ptr(),
+                    c_path.as_ptr(),
+                ),
+                1
+            );
+            assert_eq!(first[0], b'a');
+
+            assert_eq!(
+                functions::test_test_bgzf_c_77_try_fclose(
+                    &mut f,
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                0
+            );
+            assert!(f.is_null());
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_test_bgzf_wrappers_round_trip_small_file() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-bgzf-wrapper-{}.bgz",
+            std::process::id()
+        ));
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let mut out = functions::test_test_bgzf_c_109_try_bgzf_open(
+                c_path.as_ptr(),
+                c"w".as_ptr(),
+                c"unit".as_ptr(),
+            );
+            assert!(!out.is_null());
+
+            let compression = crate::htslib_mini_rs::bgzf::bgzf_compression(out);
+            assert_eq!(
+                functions::test_test_bgzf_c_203_try_bgzf_compression(
+                    out,
+                    compression,
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_bgzf_c_216_try_bgzf_mt(out, 1, c"unit".as_ptr()),
+                0
+            );
+            assert_eq!(
+                functions::test_test_bgzf_c_225_try_bgzf_index_build_init(
+                    out,
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                0
+            );
+
+            let payload = b"bgzf helper payload\n";
+            assert_eq!(
+                functions::test_test_bgzf_c_190_try_bgzf_write(
+                    out,
+                    payload.as_ptr().cast(),
+                    payload.len(),
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                payload.len() as libc::ssize_t
+            );
+            assert_eq!(
+                functions::test_test_bgzf_c_245_try_bgzf_index_dump(
+                    out,
+                    c_path.as_ptr(),
+                    c".gzi".as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_bgzf_c_163_try_bgzf_close(
+                    &mut out,
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                    0,
+                ),
+                0
+            );
+            assert!(out.is_null());
+
+            let mut in_dopen = functions::test_test_bgzf_c_120_try_bgzf_dopen(
+                c_path.as_ptr(),
+                c"r".as_ptr(),
+                c"unit".as_ptr(),
+            );
+            assert!(!in_dopen.is_null());
+            assert_eq!(
+                functions::test_test_bgzf_c_235_try_bgzf_index_load(
+                    in_dopen,
+                    c_path.as_ptr(),
+                    c".gzi".as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_bgzf_c_255_try_bgzf_tell(
+                    in_dopen,
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_bgzf_c_267_try_bgzf_tell_expect(
+                    in_dopen,
+                    0,
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_bgzf_c_298_try_bgzf_getc(
+                    in_dopen,
+                    0,
+                    payload[0] as i32,
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                payload[0] as i32
+            );
+            assert_eq!(
+                functions::test_test_bgzf_c_311_try_skip(
+                    in_dopen,
+                    1,
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_bgzf_c_288_try_bgzf_useek(
+                    in_dopen,
+                    0,
+                    libc::SEEK_SET,
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                0
+            );
+            let mut buf = vec![0_u8; payload.len()];
+            assert_eq!(
+                functions::test_test_bgzf_c_180_try_bgzf_read(
+                    in_dopen,
+                    buf.as_mut_ptr().cast(),
+                    buf.len(),
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                payload.len() as libc::ssize_t
+            );
+            assert_eq!(&buf, payload);
+            assert_eq!(
+                functions::test_test_bgzf_c_327_compare_buffers(
+                    buf.as_ptr(),
+                    payload.as_ptr(),
+                    buf.len(),
+                    payload.len(),
+                    c"buf".as_ptr(),
+                    c"payload".as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_bgzf_c_278_try_bgzf_seek(
+                    in_dopen,
+                    0,
+                    libc::SEEK_SET,
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_bgzf_c_163_try_bgzf_close(
+                    &mut in_dopen,
+                    c_path.as_ptr(),
+                    c"unit".as_ptr(),
+                    0,
+                ),
+                0
+            );
+        }
+
+        std::fs::remove_file(&path).unwrap();
+        let _ = std::fs::remove_file(path.with_extension("bgz.gzi"));
+    }
+
+    #[test]
+    fn translated_hfile_helpers_slurp_reopen_and_check_offsets() {
+        let dir = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-hfile-helpers-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("in.txt");
+        let output = dir.join("out.txt");
+        std::fs::write(&input, b"alpha\nbeta\n").unwrap();
+        let c_input = std::ffi::CString::new(input.to_string_lossy().as_bytes()).unwrap();
+        let c_output = std::ffi::CString::new(output.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let text = functions::test_hfile_c_62_slurp(c_input.as_ptr());
+            assert_eq!(std::ffi::CStr::from_ptr(text), c"alpha\nbeta\n");
+            libc::free(text.cast());
+
+            let fp = crate::htslib_mini_rs::hfile::hopen(c_input.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            functions::test_hfile_c_51_check_offset(fp, 0, c"start".as_ptr());
+            let mut one = [0_u8; 1];
+            assert_eq!(
+                functions::htslib_hfile_h_247_hread(fp, one.as_mut_ptr().cast(), one.len()),
+                1
+            );
+            functions::test_hfile_c_51_check_offset(fp, 1, c"after one byte".as_ptr());
+            assert_eq!(crate::htslib_mini_rs::hfile::hclose(fp), 0);
+
+            functions::test_hfile_c_85_reopen(c_input.as_ptr(), c_output.as_ptr());
+            assert!(!functions::TEST_HFILE_FIN.is_null());
+            assert!(!functions::TEST_HFILE_FOUT.is_null());
+            let payload = b"copied\n";
+            assert_eq!(
+                functions::htslib_hfile_h_292_hwrite(
+                    functions::TEST_HFILE_FOUT,
+                    payload.as_ptr().cast(),
+                    payload.len(),
+                ),
+                payload.len() as libc::ssize_t
+            );
+            assert_eq!(
+                crate::htslib_mini_rs::hfile::hclose(functions::TEST_HFILE_FIN),
+                0
+            );
+            assert_eq!(
+                crate::htslib_mini_rs::hfile::hclose(functions::TEST_HFILE_FOUT),
+                0
+            );
+            functions::TEST_HFILE_FIN = std::ptr::null_mut();
+            functions::TEST_HFILE_FOUT = std::ptr::null_mut();
+        }
+
+        assert_eq!(std::fs::read(&output).unwrap(), b"copied\n");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn translated_hfile_hopenv_mem_wraps_owned_buffer() {
+        unsafe {
+            let payload = b"memory-data";
+            let buffer = libc::malloc(payload.len()).cast::<libc::c_char>();
+            assert!(!buffer.is_null());
+            std::ptr::copy_nonoverlapping(payload.as_ptr(), buffer.cast::<u8>(), payload.len());
+
+            let fp = functions::hfile_c_878_hopenv_mem(
+                c"mem".as_ptr(),
+                c"r".as_ptr(),
+                buffer,
+                payload.len(),
+            );
+            assert!(!fp.is_null());
+
+            let mut out = [0u8; 16];
+            assert_eq!(
+                functions::htslib_hfile_h_247_hread(fp, out.as_mut_ptr().cast(), payload.len()),
+                payload.len() as libc::ssize_t
+            );
+            assert_eq!(&out[..payload.len()], payload);
+            assert_eq!(crate::htslib_mini_rs::hfile::hclose(fp), 0);
+        }
+    }
+
+    #[test]
+    fn translated_hfile_plugin_listing_wrappers_report_builtins() {
+        unsafe {
+            let mut plugins = [std::ptr::null(); 16];
+            let mut nplugins = plugins.len() as libc::c_int;
+            let listed =
+                functions::hfile_c_1257_hfile_list_plugins(plugins.as_mut_ptr(), &mut nplugins);
+            assert!(listed >= 0);
+            assert_eq!(listed, nplugins);
+            assert!(nplugins >= 0);
+
+            let mut saw_mem = false;
+            for plugin in plugins.iter().take(nplugins as usize) {
+                assert!(!plugin.is_null());
+                if std::ffi::CStr::from_ptr(*plugin).to_bytes() == b"mem" {
+                    saw_mem = true;
+                    let mut schemes = [std::ptr::null(); 16];
+                    let mut nschemes = schemes.len() as libc::c_int;
+                    let listed_schemes = functions::hfile_c_1218_hfile_list_schemes(
+                        *plugin,
+                        schemes.as_mut_ptr(),
+                        &mut nschemes,
+                    );
+                    assert!(listed_schemes >= 0);
+                    assert_eq!(listed_schemes, nschemes);
+                    assert!(schemes
+                        .iter()
+                        .take(nschemes as usize)
+                        .any(|scheme| std::ffi::CStr::from_ptr(*scheme).to_bytes() == b"mem"));
+                }
+            }
+
+            assert!(saw_mem);
+            assert_eq!(functions::hfile_c_1293_hfile_has_plugin(c"mem".as_ptr()), 1);
+            assert_eq!(
+                functions::hfile_c_1293_hfile_has_plugin(c"definitely-not-a-plugin".as_ptr()),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn translated_hfile_libcurl_test_data_helpers_round_trip_local_file() {
+        let test_dir = std::path::Path::new("test");
+        std::fs::create_dir_all(test_dir).unwrap();
+        let path = test_dir.join("hfile_libcurl.tmp");
+        let _ = std::fs::remove_file(&path);
+
+        unsafe {
+            functions::test_test_hfile_libcurl_c_154_generate_test_data();
+
+            let mut expected_size = 0usize;
+            let expected =
+                functions::test_test_hfile_libcurl_c_173_read_expected_data(&mut expected_size);
+            assert!(!expected.is_null());
+            assert_eq!(expected_size, 16384);
+
+            let mut read_size = 0usize;
+            let read = functions::test_test_hfile_libcurl_c_196_hfile_read_all(
+                c"test/hfile_libcurl.tmp".as_ptr(),
+                &mut read_size,
+            );
+            assert!(!read.is_null());
+            assert_eq!(read_size, expected_size);
+            assert_eq!(
+                std::slice::from_raw_parts(read, read_size),
+                std::slice::from_raw_parts(expected, expected_size)
+            );
+            assert_eq!(*expected, 13);
+            assert_eq!(*expected.add(1), 20);
+            assert_eq!(*expected.add(255), ((255 * 7 + 13) & 0xff) as u8);
+
+            libc::free(expected.cast());
+            libc::free(read.cast());
+        }
+
+        std::fs::remove_file(path).unwrap();
+        if std::fs::read_dir(test_dir).unwrap().next().is_none() {
+            std::fs::remove_dir(test_dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn translated_hfile_libcurl_stop_server_ignores_nonpositive_pid() {
+        unsafe {
+            functions::test_test_hfile_libcurl_c_139_stop_server(0);
+            functions::test_test_hfile_libcurl_c_139_stop_server(-1);
+        }
+    }
+
+    #[test]
+    fn translated_htsfile_copy_raw_copies_exact_bytes() {
+        let dir = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-htsfile-copy-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("input.bin");
+        let dst = dir.join("output.bin");
+        let payload = b"raw\0bytes\n\xff\x01tail";
+        std::fs::write(&src, payload).unwrap();
+        let c_src = std::ffi::CString::new(src.to_string_lossy().as_bytes()).unwrap();
+        let c_dst = std::ffi::CString::new(dst.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            functions::htsfile_c_169_copy_raw(c_src.as_ptr(), c_dst.as_ptr());
+        }
+
+        assert_eq!(std::fs::read(&dst).unwrap(), payload);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[ignore = "temporarily redirects process stdout; run serially"]
+    fn translated_htsfile_view_raw_escapes_binary_bytes() {
+        let dir = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-htsfile-view-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("raw.bin");
+        std::fs::write(&path, b"Alpha\r\0\x01\tZ").unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let fp = crate::htslib_mini_rs::hfile::hopen(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+
+            let mut pipefd = [0; 2];
+            assert_eq!(libc::pipe(pipefd.as_mut_ptr()), 0);
+            let saved_stdout = libc::dup(libc::STDOUT_FILENO);
+            assert!(saved_stdout >= 0);
+            libc::fflush(hts_sys::stdout.cast());
+            assert_eq!(
+                libc::dup2(pipefd[1], libc::STDOUT_FILENO),
+                libc::STDOUT_FILENO
+            );
+
+            functions::htsfile_c_152_view_raw(fp, c"data".as_ptr());
+
+            libc::fflush(hts_sys::stdout.cast());
+            assert_eq!(
+                libc::dup2(saved_stdout, libc::STDOUT_FILENO),
+                libc::STDOUT_FILENO
+            );
+            libc::close(saved_stdout);
+            libc::close(pipefd[1]);
+
+            let mut out = [0u8; 128];
+            let n = libc::read(pipefd[0], out.as_mut_ptr().cast(), out.len());
+            assert!(n > 0);
+            libc::close(pipefd[0]);
+            assert_eq!(&out[..n as usize], b"Alpha\\r\\0\\x01\tZ\n");
+
+            assert_eq!(crate::htslib_mini_rs::hfile::hclose(fp), 0);
+        }
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[ignore = "temporarily redirects process stdout; run serially"]
+    fn translated_thread_pool_square_workers_match_test_callbacks() {
+        unsafe {
+            let pos = libc::malloc(std::mem::size_of::<libc::c_int>()).cast::<libc::c_int>();
+            assert!(!pos.is_null());
+            *pos = 12;
+            let res = functions::thread_pool_c_1209_doit_square(pos.cast()).cast::<libc::c_int>();
+            assert!(!res.is_null());
+            assert_eq!(*res, 144);
+            libc::free(res.cast());
+
+            let neg = libc::malloc(std::mem::size_of::<libc::c_int>()).cast::<libc::c_int>();
+            assert!(!neg.is_null());
+            *neg = -1;
+            let res = functions::thread_pool_c_1209_doit_square(neg.cast()).cast::<libc::c_int>();
+            assert!(!res.is_null());
+            assert_eq!(*res, -1);
+            libc::free(res.cast());
+
+            let mut pipefd = [0; 2];
+            assert_eq!(libc::pipe(pipefd.as_mut_ptr()), 0);
+            let saved_stdout = libc::dup(libc::STDOUT_FILENO);
+            assert!(saved_stdout >= 0);
+            libc::fflush(hts_sys::stdout.cast());
+            assert_eq!(
+                libc::dup2(pipefd[1], libc::STDOUT_FILENO),
+                libc::STDOUT_FILENO
+            );
+
+            let arg = libc::malloc(std::mem::size_of::<libc::c_int>()).cast::<libc::c_int>();
+            assert!(!arg.is_null());
+            *arg = 7;
+            assert!(functions::thread_pool_c_1171_doit_square_u(arg.cast()).is_null());
+
+            libc::fflush(hts_sys::stdout.cast());
+            assert_eq!(
+                libc::dup2(saved_stdout, libc::STDOUT_FILENO),
+                libc::STDOUT_FILENO
+            );
+            libc::close(saved_stdout);
+            libc::close(pipefd[1]);
+
+            let mut out = [0u8; 64];
+            let n = libc::read(pipefd[0], out.as_mut_ptr().cast(), out.len());
+            assert!(n > 0);
+            libc::close(pipefd[0]);
+            assert_eq!(&out[..n as usize], b"RESULT: 49\n");
+        }
+    }
+
+    #[repr(C)]
+    struct TestThreadPoolPipeJob {
+        o: *mut libc::c_void,
+        x: libc::c_uint,
+        eof: libc::c_int,
+    }
+
+    #[test]
+    #[ignore = "temporarily redirects process stdout; run serially"]
+    fn translated_thread_pool_pipe_stages_shift_and_report_progress() {
+        unsafe {
+            let mut job = TestThreadPoolPipeJob {
+                o: std::ptr::null_mut(),
+                x: 0x12,
+                eof: 0,
+            };
+
+            let mut pipefd = [0; 2];
+            assert_eq!(libc::pipe(pipefd.as_mut_ptr()), 0);
+            let saved_stdout = libc::dup(libc::STDOUT_FILENO);
+            assert!(saved_stdout >= 0);
+            libc::fflush(hts_sys::stdout.cast());
+            assert_eq!(
+                libc::dup2(pipefd[1], libc::STDOUT_FILENO),
+                libc::STDOUT_FILENO
+            );
+
+            let ptr = (&mut job as *mut TestThreadPoolPipeJob).cast();
+            assert_eq!(functions::thread_pool_c_1408_pipe_stage1(ptr), ptr);
+            assert_eq!(job.x, 0x1200);
+            assert_eq!(functions::thread_pool_c_1434_pipe_stage2(ptr), ptr);
+            assert_eq!(job.x, 0x120000);
+            assert_eq!(functions::thread_pool_c_1460_pipe_stage3(ptr), ptr);
+            assert_eq!(job.x, 0x12000000);
+
+            libc::fflush(hts_sys::stdout.cast());
+            assert_eq!(
+                libc::dup2(saved_stdout, libc::STDOUT_FILENO),
+                libc::STDOUT_FILENO
+            );
+            libc::close(saved_stdout);
+            libc::close(pipefd[1]);
+
+            let mut out = [0u8; 128];
+            let n = libc::read(pipefd[0], out.as_mut_ptr().cast(), out.len());
+            assert!(n > 0);
+            libc::close(pipefd[0]);
+            assert_eq!(&out[..n as usize], b"1  00001200\n2  00120000\n");
+        }
+    }
+
+    #[repr(C)]
+    struct TestPluginPathItr {
+        path: crate::htslib_mini_rs::hts::kstring_t,
+        entry: crate::htslib_mini_rs::hts::kstring_t,
+        dirv: *mut libc::c_void,
+        pathdir: *const libc::c_char,
+        prefix: *const libc::c_char,
+        suffix: *const libc::c_char,
+        prefix_len: usize,
+        suffix_len: usize,
+        entry_dir_l: usize,
+    }
+
+    #[test]
+    fn translated_plugin_path_iterator_scans_matching_entries() {
+        let base = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-plugin-itr-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let missing = base.join("missing");
+        let dir1 = base.join("one");
+        let dir2 = base.join("two");
+        std::fs::create_dir_all(&dir1).unwrap();
+        std::fs::create_dir_all(&dir2).unwrap();
+        std::fs::write(dir1.join("hfile_alpha.so"), b"").unwrap();
+        std::fs::write(dir1.join("other_alpha.so"), b"").unwrap();
+        std::fs::write(dir2.join("hfile_beta.so"), b"").unwrap();
+        std::fs::write(dir2.join("hfile_gamma.txt"), b"").unwrap();
+
+        let path = std::ffi::CString::new(format!(
+            "{}::{}:{}",
+            missing.display(),
+            dir1.display(),
+            dir2.display()
+        ))
+        .unwrap();
+
+        unsafe {
+            let mut itr: TestPluginPathItr = std::mem::zeroed();
+            functions::plugin_c_69_hts_path_itr_setup(
+                (&mut itr as *mut TestPluginPathItr).cast(),
+                path.as_ptr(),
+                c"".as_ptr(),
+                c"hfile_".as_ptr(),
+                6,
+                c".so".as_ptr(),
+                3,
+            );
+
+            let mut names = Vec::new();
+            loop {
+                let next = functions::plugin_c_104_hts_path_itr_next(
+                    (&mut itr as *mut TestPluginPathItr).cast(),
+                );
+                if next.is_null() {
+                    break;
+                }
+                names.push(
+                    std::ffi::CStr::from_ptr(next)
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+            names.sort();
+            assert_eq!(names.len(), 2);
+            assert!(names[0].ends_with("hfile_alpha.so"));
+            assert!(names[1].ends_with("hfile_beta.so"));
+            assert!(itr.path.s.is_null());
+            assert!(itr.entry.s.is_null());
+            assert!(itr.pathdir.is_null());
+        }
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn translated_plugin_path_reports_null_when_plugins_disabled() {
+        unsafe {
+            assert!(functions::plugin_c_195_hts_plugin_path().is_null());
+        }
+    }
+
+    #[test]
+    fn translated_plugin_symbol_wrappers_find_and_close_libc() {
+        unsafe {
+            let handle = libc::dlopen(c"libc.so.6".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+            assert!(!handle.is_null());
+
+            let mut errmsg: *const libc::c_char = std::ptr::null();
+            let malloc_sym =
+                functions::plugin_c_172_plugin_sym(handle, c"malloc".as_ptr(), &mut errmsg);
+            assert!(!malloc_sym.is_null());
+            assert!(errmsg.is_null());
+
+            let free_sym =
+                functions::plugin_c_179_plugin_func(handle, c"free".as_ptr(), &mut errmsg);
+            assert!(!free_sym.is_null());
+
+            let missing = functions::plugin_c_172_plugin_sym(
+                handle,
+                c"definitely_missing_htslib_test_symbol".as_ptr(),
+                &mut errmsg,
+            );
+            assert!(missing.is_null());
+            assert!(!errmsg.is_null());
+
+            functions::plugin_c_186_close_plugin(handle);
+        }
+    }
+
+    #[test]
+    fn translated_plugin_load_plugin_opens_library_and_symbol() {
+        unsafe {
+            let mut handle: *mut libc::c_void = std::ptr::null_mut();
+            let sym = functions::plugin_c_135_load_plugin(
+                &mut handle,
+                c"libc.so.6".as_ptr(),
+                c"malloc".as_ptr(),
+            );
+            assert!(!sym.is_null());
+            assert!(!handle.is_null());
+            functions::plugin_c_186_close_plugin(handle);
+
+            let mut missing_handle: *mut libc::c_void = std::ptr::null_mut();
+            let missing = functions::plugin_c_135_load_plugin(
+                &mut missing_handle,
+                c"libc.so.6".as_ptr(),
+                c"definitely_missing_htslib_test_symbol".as_ptr(),
+            );
+            assert!(missing.is_null());
+            assert!(missing_handle.is_null());
+        }
+    }
+
+    #[test]
+    fn translated_sam_header_lookup_wrappers_query_and_remove_lines() {
+        let text = b"@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:100\tM5:abc\n@SQ\tSN:chr2\tLN:200\n@SQ\tSN:chr3\tLN:300\n@RG\tID:rg1\tSM:s1\n@PG\tID:pg1\tPN:prog\n";
+
+        unsafe {
+            let hdr = crate::htslib_mini_rs::sam::sam_hdr_parse(text.len(), text.as_ptr().cast());
+            assert!(!hdr.is_null());
+
+            assert_eq!(functions::header_c_1578_sam_hdr_length(hdr), text.len());
+            assert_eq!(
+                std::slice::from_raw_parts(
+                    functions::header_c_1585_sam_hdr_str(hdr).cast::<u8>(),
+                    functions::header_c_1578_sam_hdr_length(hdr),
+                ),
+                text
+            );
+            assert_eq!(
+                functions::header_c_2142_sam_hdr_count_lines(hdr, c"SQ".as_ptr()),
+                3
+            );
+            assert_eq!(
+                functions::header_c_2142_sam_hdr_count_lines(hdr, c"RG".as_ptr()),
+                1
+            );
+            assert_eq!(
+                functions::header_c_2142_sam_hdr_count_lines(hdr, c"PG".as_ptr()),
+                1
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(functions::header_c_2561_sam_hdr_pg_id(
+                    hdr,
+                    c"pg1".as_ptr(),
+                )),
+                c"pg1.1"
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(functions::header_c_2235_sam_hdr_line_name(
+                    hdr,
+                    c"SQ".as_ptr(),
+                    0,
+                )),
+                c"chr1"
+            );
+            assert_eq!(
+                functions::header_c_2185_sam_hdr_line_index(hdr, c"SQ".as_ptr(), c"chr2".as_ptr(),),
+                1
+            );
+            assert_eq!(
+                functions::header_c_2185_sam_hdr_line_index(hdr, c"RG".as_ptr(), c"rg1".as_ptr(),),
+                0
+            );
+
+            let mut line = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                functions::header_c_1725_sam_hdr_find_line_id(
+                    hdr,
+                    c"SQ".as_ptr(),
+                    c"SN".as_ptr(),
+                    c"chr1".as_ptr(),
+                    &mut line,
+                ),
+                0
+            );
+            assert!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut line))
+                    .to_bytes()
+                    .windows(7)
+                    .any(|window| window == b"SN:chr1")
+            );
+            crate::htslib_mini_rs::hts::ks_clear(&mut line);
+
+            assert_eq!(
+                functions::header_c_1749_sam_hdr_find_line_pos(hdr, c"RG".as_ptr(), 0, &mut line),
+                0
+            );
+            assert!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut line))
+                    .to_bytes()
+                    .windows(6)
+                    .any(|window| window == b"ID:rg1")
+            );
+            crate::htslib_mini_rs::hts::ks_clear(&mut line);
+
+            assert_eq!(
+                functions::header_c_2282_sam_hdr_find_tag_id(
+                    hdr,
+                    c"RG".as_ptr(),
+                    c"ID".as_ptr(),
+                    c"rg1".as_ptr(),
+                    c"SM".as_ptr(),
+                    &mut line,
+                ),
+                0
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut line)),
+                c"s1"
+            );
+            crate::htslib_mini_rs::hts::ks_clear(&mut line);
+            assert!(
+                functions::header_c_2345_sam_hdr_remove_tag_id(
+                    hdr,
+                    c"RG".as_ptr(),
+                    c"ID".as_ptr(),
+                    c"rg1".as_ptr(),
+                    c"SM".as_ptr(),
+                ) > 0
+            );
+            assert_ne!(
+                functions::header_c_2282_sam_hdr_find_tag_id(
+                    hdr,
+                    c"RG".as_ptr(),
+                    c"ID".as_ptr(),
+                    c"rg1".as_ptr(),
+                    c"SM".as_ptr(),
+                    &mut line,
+                ),
+                0
+            );
+            crate::htslib_mini_rs::hts::ks_clear(&mut line);
+
+            assert_eq!(
+                functions::header_c_2314_sam_hdr_find_tag_pos(
+                    hdr,
+                    c"SQ".as_ptr(),
+                    0,
+                    c"LN".as_ptr(),
+                    &mut line,
+                ),
+                0
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut line)),
+                c"100"
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut line);
+
+            assert_eq!(
+                functions::header_c_1822_sam_hdr_remove_line_pos(hdr, c"SQ".as_ptr(), 2),
+                0
+            );
+            assert_eq!(
+                functions::header_c_2142_sam_hdr_count_lines(hdr, c"SQ".as_ptr()),
+                2
+            );
+            assert_eq!(
+                functions::header_c_1783_sam_hdr_remove_line_id(
+                    hdr,
+                    c"SQ".as_ptr(),
+                    c"SN".as_ptr(),
+                    c"chr2".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::header_c_2142_sam_hdr_count_lines(hdr, c"SQ".as_ptr()),
+                1
+            );
+            assert_eq!(
+                functions::header_c_2014_sam_hdr_remove_except(
+                    hdr,
+                    c"SQ".as_ptr(),
+                    c"SN".as_ptr(),
+                    c"chr1".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::header_c_2142_sam_hdr_count_lines(hdr, c"SQ".as_ptr()),
+                1
+            );
+            assert_eq!(
+                functions::header_c_2070_sam_hdr_remove_lines(
+                    hdr,
+                    c"RG".as_ptr(),
+                    c"ID".as_ptr(),
+                    std::ptr::null_mut(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::header_c_2142_sam_hdr_count_lines(hdr, c"RG".as_ptr()),
+                0
+            );
+
+            crate::htslib_mini_rs::sam::sam_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn translated_cram_container_wrappers_allocate_measure_and_free() {
+        unsafe {
+            let container = functions::cram_cram_io_c_3637_cram_new_container(7, 2);
+            assert!(!container.is_null());
+            assert!(functions::cram_cram_io_c_3945_cram_container_size(container) > 0);
+            functions::cram_cram_io_c_3703_cram_free_container(container);
+        }
+    }
+
+    #[test]
+    fn translated_cram_decode_small_helpers_match_c_math() {
+        unsafe {
+            assert_eq!(functions::cram_cram_decode_c_1051_nbits(1), 1);
+            assert_eq!(functions::cram_cram_decode_c_1051_nbits(2), 2);
+            assert_eq!(functions::cram_cram_decode_c_1051_nbits(3), 2);
+            assert_eq!(functions::cram_cram_decode_c_1051_nbits(255), 8);
+            assert_eq!(functions::cram_cram_decode_c_1051_nbits(256), 9);
+            assert_eq!(functions::cram_cram_decode_c_1051_nbits(i32::MAX), 31);
+
+            let a = 3 as libc::c_int;
+            let b = 10 as libc::c_int;
+            assert!(
+                functions::cram_cram_decode_c_1069_sort_freqs(
+                    (&a as *const libc::c_int).cast(),
+                    (&b as *const libc::c_int).cast(),
+                ) < 0
+            );
+            assert!(
+                functions::cram_cram_decode_c_1069_sort_freqs(
+                    (&b as *const libc::c_int).cast(),
+                    (&a as *const libc::c_int).cast(),
+                ) > 0
+            );
+            assert_eq!(
+                functions::cram_cram_decode_c_1069_sort_freqs(
+                    (&a as *const libc::c_int).cast(),
+                    (&a as *const libc::c_int).cast(),
+                ),
+                0
+            );
+
+            assert_eq!(functions::cram_cram_decode_c_1989_aux_ele_size(b'A'), 1);
+            assert_eq!(functions::cram_cram_decode_c_1989_aux_ele_size(b'S'), 2);
+            assert_eq!(functions::cram_cram_decode_c_1989_aux_ele_size(b'i'), 4);
+            assert_eq!(functions::cram_cram_decode_c_1989_aux_ele_size(b'f'), 4);
+            assert_eq!(functions::cram_cram_decode_c_1989_aux_ele_size(b'd'), 8);
+            assert_eq!(functions::cram_cram_decode_c_1989_aux_ele_size(b'Z'), 1);
+
+            let mut md5 = [
+                0x00u8, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98,
+                0x76, 0x54, 0x32,
+            ];
+            let mut out = [0 as libc::c_char; 33];
+            assert_eq!(
+                functions::cram_cram_decode_c_2305_md5_print(md5.as_mut_ptr(), out.as_mut_ptr()),
+                out.as_mut_ptr()
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(out.as_ptr()).to_bytes(),
+                b"000123456789abcdeffedcba98765432"
+            );
+        }
+    }
+
+    #[test]
+    fn translated_sam_header_redact_text_clears_owned_text_buffer() {
+        unsafe {
+            let hdr = crate::htslib_mini_rs::sam::sam_hdr_init();
+            assert!(!hdr.is_null());
+            (*hdr).text = libc::strdup(c"@HD\tVN:1.6\n".as_ptr());
+            assert!(!(*hdr).text.is_null());
+            (*hdr).l_text = libc::strlen((*hdr).text);
+
+            functions::header_c_1530_redact_header_text(hdr);
+            assert_eq!((*hdr).l_text, 0);
+            assert!((*hdr).text.is_null());
+
+            crate::htslib_mini_rs::sam::sam_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn translated_cram_slice_header_free_releases_owned_header_shape() {
+        unsafe {
+            functions::cram_cram_io_c_4407_cram_free_slice_header(std::ptr::null_mut());
+
+            let hdr = libc::calloc(1, std::mem::size_of::<TestCramBlockSliceHdr>())
+                .cast::<TestCramBlockSliceHdr>();
+            assert!(!hdr.is_null());
+            let ids = libc::malloc(2 * std::mem::size_of::<i32>()).cast::<i32>();
+            assert!(!ids.is_null());
+            *ids.add(0) = 101;
+            *ids.add(1) = 202;
+            (*hdr).num_blocks = 2;
+            (*hdr).num_content_ids = 2;
+            (*hdr).block_content_ids = ids;
+
+            functions::cram_cram_io_c_4407_cram_free_slice_header(hdr.cast());
+        }
+    }
+
+    #[test]
+    fn translated_cram_lzma_mem_helpers_round_trip_malloc_buffers() {
+        unsafe {
+            let mut input = b"cram lzma helper input with repeated repeated bytes".to_vec();
+            let mut compressed_size = 123usize;
+            let compressed = functions::cram_cram_io_c_1295_lzma_mem_deflate(
+                input.as_mut_ptr().cast(),
+                input.len(),
+                &mut compressed_size,
+                6,
+            );
+            assert!(!compressed.is_null());
+            assert!(compressed_size > 0);
+
+            let mut decoded_size = 0usize;
+            let decoded = functions::cram_cram_io_c_1313_lzma_mem_inflate(
+                compressed,
+                compressed_size,
+                &mut decoded_size,
+            );
+            assert!(!decoded.is_null());
+            assert_eq!(decoded_size, input.len());
+            assert_eq!(
+                std::slice::from_raw_parts(decoded.cast::<u8>(), decoded_size),
+                input.as_slice()
+            );
+
+            libc::free(decoded.cast());
+            libc::free(compressed.cast());
+
+            let mut bad = b"not an xz stream".to_vec();
+            decoded_size = 77;
+            assert!(functions::cram_cram_io_c_1313_lzma_mem_inflate(
+                bad.as_mut_ptr().cast(),
+                bad.len(),
+                &mut decoded_size,
+            )
+            .is_null());
+            assert_eq!(decoded_size, 0);
+        }
+    }
+
+    #[test]
+    fn translated_cram_zlib_mem_deflate_round_trips_with_inflate_helper() {
+        unsafe {
+            let mut input = b"cram zlib helper input with repeated repeated bytes".to_vec();
+            let mut compressed_size = 0usize;
+            let compressed = functions::cram_cram_io_c_1222_zlib_mem_deflate(
+                input.as_mut_ptr().cast(),
+                input.len(),
+                &mut compressed_size,
+                6,
+                0,
+            );
+            assert!(!compressed.is_null());
+            assert!(compressed_size > 0);
+
+            let mut decoded_size = 0usize;
+            let decoded = crate::htslib_mini_rs::cram::cram_cram_io_c_1157_zlib_mem_inflate(
+                compressed,
+                compressed_size,
+                &mut decoded_size,
+            );
+            assert!(!decoded.is_null());
+            assert_eq!(decoded_size, input.len());
+            assert_eq!(
+                std::slice::from_raw_parts(decoded.cast::<u8>(), decoded_size),
+                input.as_slice()
+            );
+
+            libc::free(decoded.cast());
+            libc::free(compressed.cast());
+        }
+    }
+
+    #[test]
+    fn translated_cram_index_kget_int_helpers_parse_signed_decimal_fields() {
+        unsafe {
+            let mut text = b" \t-123 45678901234 x".to_vec();
+            let mut k = crate::htslib_mini_rs::hts::kstring_t {
+                l: text.len(),
+                m: text.len(),
+                s: text.as_mut_ptr().cast(),
+            };
+            let mut pos = 0usize;
+            let mut val32 = 0i32;
+            assert_eq!(
+                functions::cram_cram_index_c_120_kget_int32(&mut k, &mut pos, &mut val32),
+                0
+            );
+            assert_eq!(val32, -123);
+            assert_eq!(pos, 6);
+
+            let mut val64 = 0i64;
+            assert_eq!(
+                functions::cram_cram_index_c_145_kget_int64(&mut k, &mut pos, &mut val64),
+                0
+            );
+            assert_eq!(val64, 45_678_901_234);
+            assert_eq!(pos, 18);
+
+            let old_pos = pos;
+            assert_eq!(
+                functions::cram_cram_index_c_120_kget_int32(&mut k, &mut pos, &mut val32),
+                -1
+            );
+            assert_eq!(pos, old_pos);
+        }
+    }
+
+    #[test]
+    fn translated_vcf_api_line_helpers_parse_and_chomp() {
+        unsafe {
+            let hdr = functions::vcf_c_1635_bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+            assert_eq!(
+                functions::vcf_c_1491_bcf_hdr_append(hdr, c"##fileformat=VCFv4.3".as_ptr(),),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_1491_bcf_hdr_append(
+                    hdr,
+                    c"##contig=<ID=chr1,length=100>".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(functions::vcf_c_316_bcf_hdr_sync(hdr), 0);
+            assert_eq!(
+                std::ffi::CStr::from_ptr(functions::vcf_c_1596_bcf_hdr_get_version(hdr)),
+                c"VCFv4.2"
+            );
+            assert_eq!(
+                functions::vcf_c_145_bcf_get_version(hdr, std::ptr::null()),
+                4_002_000
+            );
+            assert_eq!(
+                functions::vcf_c_145_bcf_get_version(std::ptr::null(), c"VCFv4.2".as_ptr()),
+                4_002_000
+            );
+            assert_eq!(
+                functions::vcf_c_145_bcf_get_version(std::ptr::null(), c"bad".as_ptr()),
+                4_002_000
+            );
+            assert_eq!(
+                functions::vcf_c_4621_bcf_hdr_id2int(
+                    hdr,
+                    hts_sys::BCF_DT_CTG as libc::c_int,
+                    c"chr1".as_ptr(),
+                ),
+                0
+            );
+
+            let mut parsed_len = 0;
+            let hrec = functions::vcf_c_654_bcf_hdr_parse_line(
+                hdr,
+                c"##FILTER=<ID=q10,Description=\"low qual\">".as_ptr(),
+                &mut parsed_len,
+            );
+            assert!(!hrec.is_null());
+            assert_eq!(
+                functions::vcf_c_519_bcf_hrec_find_key(hrec, c"ID".as_ptr()),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_440_bcf_hrec_add_key(hrec, c"Source".as_ptr(), 6),
+                0
+            );
+            let source_idx = functions::vcf_c_519_bcf_hrec_find_key(hrec, c"Source".as_ptr());
+            assert!(source_idx >= 0);
+            assert_eq!(
+                functions::vcf_c_461_bcf_hrec_set_val(hrec, source_idx, c"unit".as_ptr(), 4, 1,),
+                0
+            );
+            assert_eq!(functions::vcf_c_495_hrec_add_idx(hrec, 7), 0);
+
+            let mut private_vcf_text = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                functions::vcf_c_2712__bcf_hrec_format(hrec.cast(), 0, &mut private_vcf_text),
+                0
+            );
+            let private_vcf_bytes = std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(
+                &mut private_vcf_text,
+            ))
+            .to_bytes();
+            assert!(private_vcf_bytes
+                .windows(6)
+                .any(|window| window == b"ID=q10"));
+            assert!(!private_vcf_bytes.windows(3).any(|window| window == b"IDX"));
+            crate::htslib_mini_rs::hts::ks_free(&mut private_vcf_text);
+
+            let mut private_bcf_text = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                functions::vcf_c_2712__bcf_hrec_format(hrec.cast(), 1, &mut private_bcf_text),
+                0
+            );
+            assert!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(
+                    &mut private_bcf_text,
+                ))
+                .to_bytes()
+                .windows(5)
+                .any(|window| window == b"IDX=7")
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut private_bcf_text);
+
+            let mut hrec_text = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                functions::vcf_c_2735_bcf_hrec_format(hrec, &mut hrec_text),
+                0
+            );
+            assert!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut hrec_text))
+                    .to_bytes()
+                    .windows(3)
+                    .any(|window| window == b"q10")
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut hrec_text);
+            functions::vcf_c_351_bcf_hrec_destroy(hrec);
+
+            let value_hrec = functions::vcf_c_654_bcf_hdr_parse_line(
+                hdr,
+                c"##source=unit-test".as_ptr(),
+                &mut parsed_len,
+            );
+            assert!(!value_hrec.is_null());
+            let mut value_text = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                functions::vcf_c_2712__bcf_hrec_format(value_hrec.cast(), 0, &mut value_text),
+                0
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut value_text))
+                    .to_bytes(),
+                b"##source=unit-test\n"
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut value_text);
+            functions::vcf_c_351_bcf_hrec_destroy(value_hrec);
+
+            let info_hrec = functions::vcf_c_654_bcf_hdr_parse_line(
+                hdr,
+                c"##INFO=<ID=DP,Number=1,Type=Integer,Description=\"depth\">".as_ptr(),
+                &mut parsed_len,
+            );
+            assert!(!info_hrec.is_null());
+            assert_eq!(functions::vcf_c_1124_bcf_hdr_add_hrec(hdr, info_hrec), 1);
+            assert_eq!(functions::vcf_c_316_bcf_hdr_sync(hdr), 0);
+            assert!(!functions::vcf_c_1209_bcf_hdr_get_hrec(
+                hdr,
+                hts_sys::BCF_HL_INFO as libc::c_int,
+                std::ptr::null(),
+                c"DP".as_ptr(),
+                std::ptr::null(),
+            )
+            .is_null());
+
+            assert_eq!(
+                functions::vcf_c_2571_add_missing_contig_hrec(hdr.cast(), c"chr_extra".as_ptr()),
+                0
+            );
+            assert_eq!(functions::vcf_c_316_bcf_hdr_sync(hdr), 0);
+            let chr_extra_id = functions::vcf_c_4621_bcf_hdr_id2int(
+                hdr,
+                hts_sys::BCF_DT_CTG as libc::c_int,
+                c"chr_extra".as_ptr(),
+            );
+            assert!(chr_extra_id >= 0);
+            assert!(!functions::vcf_c_1209_bcf_hdr_get_hrec(
+                hdr,
+                hts_sys::BCF_HL_CTG as libc::c_int,
+                std::ptr::null(),
+                c"chr_extra".as_ptr(),
+                std::ptr::null(),
+            )
+            .is_null());
+
+            let mut hdr_text = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                functions::vcf_c_2740_bcf_hdr_format(hdr, 0, &mut hdr_text),
+                0
+            );
+            assert!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut hdr_text))
+                    .to_bytes()
+                    .windows(9)
+                    .any(|window| window == b"ID=chr1,l")
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut hdr_text);
+
+            let mut raw_hdr_len = 0;
+            let raw_hdr = functions::vcf_c_2758_bcf_hdr_fmt_text(hdr, 0, &mut raw_hdr_len);
+            assert!(!raw_hdr.is_null());
+            assert!(raw_hdr_len > 0);
+            assert!(std::ffi::CStr::from_ptr(raw_hdr)
+                .to_bytes()
+                .windows(7)
+                .any(|window| window == b"ID=chr1"));
+            libc::free(raw_hdr.cast());
+
+            let mut nseqs = 0;
+            let seqnames = functions::vcf_c_2767_bcf_hdr_seqnames(hdr, &mut nseqs);
+            assert!(!seqnames.is_null());
+            assert_eq!(nseqs, 2);
+            assert_eq!(std::ffi::CStr::from_ptr(*seqnames), c"chr1");
+            assert_eq!(
+                std::ffi::CStr::from_ptr(*seqnames.add(chr_extra_id as usize)),
+                c"chr_extra"
+            );
+            libc::free(seqnames.cast());
+
+            let hdr_dup = functions::vcf_c_5137_bcf_hdr_dup(hdr);
+            assert!(!hdr_dup.is_null());
+            assert_eq!(
+                functions::vcf_c_1607_bcf_hdr_set_version(hdr_dup, c"VCFv4.3".as_ptr()),
+                0
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(functions::vcf_c_1596_bcf_hdr_get_version(hdr_dup)),
+                c"VCFv4.3"
+            );
+            functions::vcf_c_1674_bcf_hdr_destroy(hdr_dup);
+
+            let hdr_parsed = functions::vcf_c_1635_bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr_parsed.is_null());
+            let htxt = std::ffi::CString::new(
+                "##fileformat=VCFv4.2\n##contig=<ID=chr2,length=50>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            )
+            .unwrap();
+            assert_eq!(
+                functions::vcf_c_1410_bcf_hdr_parse(hdr_parsed, htxt.as_ptr().cast_mut()),
+                0
+            );
+            assert_eq!(functions::vcf_c_316_bcf_hdr_sync(hdr_parsed), 0);
+            assert_eq!(
+                functions::vcf_c_4621_bcf_hdr_id2int(
+                    hdr_parsed,
+                    hts_sys::BCF_DT_CTG as libc::c_int,
+                    c"chr2".as_ptr(),
+                ),
+                0
+            );
+            functions::vcf_c_1674_bcf_hdr_destroy(hdr_parsed);
+
+            let rec = functions::vcf_c_1815_bcf_init();
+            assert!(!rec.is_null());
+            let mut line = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+
+            assert_eq!(
+                functions::test_test_vcf_api_c_909_read_vcf_line(
+                    c"chr1\t10\t.\tA\tC\t.\tPASS\t.".as_ptr(),
+                    hdr.cast(),
+                    rec.cast(),
+                    &mut line,
+                ),
+                0
+            );
+            let rec_vcf = rec.cast::<crate::htslib_mini_rs::vcf::bcf1_t>();
+            assert_eq!((*rec_vcf).rid, 0);
+            assert_eq!((*rec_vcf).pos, 9);
+
+            crate::htslib_mini_rs::hts::ks_clear(&mut line);
+            let chomp_line = c"chr1\t10\t.\tA\tC\t.\tPASS\t.\n";
+            assert_eq!(
+                crate::htslib_mini_rs::hts::kputsn(
+                    chomp_line.as_ptr(),
+                    libc::strlen(chomp_line.as_ptr()),
+                    &mut line,
+                ),
+                libc::strlen(chomp_line.as_ptr()) as libc::c_int
+            );
+            functions::test_test_vcf_api_c_924_chomp(&mut line);
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut line)),
+                c"chr1\t10\t.\tA\tC\t.\tPASS\t."
+            );
+            functions::test_test_vcf_api_c_924_chomp(&mut line);
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut line)),
+                c"chr1\t10\t.\tA\tC\t.\tPASS\t."
+            );
+
+            crate::htslib_mini_rs::hts::ks_free(&mut line);
+            functions::vcf_c_1867_bcf_destroy(rec);
+            functions::vcf_c_1674_bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn translated_vcf_sample_line_helpers_add_and_validate_samples() {
+        unsafe {
+            let hdr = functions::vcf_c_1635_bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+            assert_eq!(
+                functions::vcf_c_286_bcf_hdr_parse_sample_line(
+                    hdr,
+                    c"#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\n".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(functions::vcf_c_316_bcf_hdr_sync(hdr), 0);
+            let hdr_layout = hdr.cast::<TestBcfHdrLayout>();
+            assert_eq!((*hdr_layout).n[hts_sys::BCF_DT_SAMPLE as usize], 2);
+            assert_eq!(std::ffi::CStr::from_ptr(*(*hdr_layout).samples), c"S1");
+            assert_eq!(
+                std::ffi::CStr::from_ptr(*(*hdr_layout).samples.add(1)),
+                c"S2"
+            );
+
+            assert_eq!(
+                functions::vcf_c_286_bcf_hdr_parse_sample_line(
+                    hdr,
+                    c"#CHROM POS ID REF ALT QUAL FILTER INFO FORMAT S3\n".as_ptr(),
+                ),
+                -1
+            );
+            assert_eq!(
+                functions::vcf_c_232_bcf_hdr_add_sample_len(hdr, c"   ".as_ptr(), 3),
+                -1
+            );
+
+            functions::vcf_c_1674_bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn translated_vcf_header_private_helpers_handle_aux_records_and_chrom_line() {
+        unsafe {
+            let mut aux: TestBcfHdrAuxLayout = std::mem::zeroed();
+            aux.ref_count = 6;
+            let mut hdr: TestBcfHdrLayout = std::mem::zeroed();
+            hdr.dict[0] = (&mut aux as *mut TestBcfHdrAuxLayout).cast();
+
+            assert_eq!(
+                functions::vcf_c_125_get_hdr_aux((&hdr as *const TestBcfHdrLayout).cast()),
+                (&mut aux as *mut TestBcfHdrAuxLayout).cast()
+            );
+            functions::vcf_c_196_bcf_hdr_incr_ref((&mut hdr as *mut TestBcfHdrLayout).cast());
+            assert_eq!(aux.ref_count, 8);
+            functions::vcf_c_202_bcf_hdr_decr_ref((&mut hdr as *mut TestBcfHdrLayout).cast());
+            assert_eq!(aux.ref_count, 6);
+            functions::vcf_c_212_hdr_bgzf_private_data_cleanup(
+                (&mut hdr as *mut TestBcfHdrLayout).cast(),
+            );
+            assert_eq!(aux.ref_count, 4);
+
+            let mut header_line =
+                b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\0".to_vec();
+            let chrom =
+                functions::vcf_c_218_find_chrom_header_line(header_line.as_mut_ptr().cast());
+            assert!(!chrom.is_null());
+            assert_eq!(
+                std::ffi::CStr::from_ptr(chrom),
+                c"#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
+            );
+
+            let mut no_chrom = b"##fileformat=VCFv4.2\n\0".to_vec();
+            assert!(
+                functions::vcf_c_218_find_chrom_header_line(no_chrom.as_mut_ptr().cast()).is_null()
+            );
+        }
+    }
+
+    #[test]
+    fn translated_vcf_hrec_type_and_check_validate_known_header_ids() {
+        unsafe {
+            let hdr = functions::vcf_c_1635_bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+
+            let mut parsed_len = 0;
+            let contig = functions::vcf_c_654_bcf_hdr_parse_line(
+                hdr,
+                c"##contig=<ID=chr1,length=100>".as_ptr(),
+                &mut parsed_len,
+            );
+            assert!(!contig.is_null());
+            functions::vcf_c_527_bcf_hrec_set_type(contig);
+            assert_eq!(
+                (*(contig.cast::<TestBcfHrecLayout>())).type_,
+                hts_sys::BCF_HL_CTG as libc::c_int
+            );
+            assert_eq!(functions::vcf_c_596_bcf_hrec_check(contig), 0);
+
+            let invalid_contig = functions::vcf_c_654_bcf_hdr_parse_line(
+                hdr,
+                c"##contig=<ID==bad,length=100>".as_ptr(),
+                &mut parsed_len,
+            );
+            assert!(!invalid_contig.is_null());
+            assert_eq!(functions::vcf_c_596_bcf_hrec_check(invalid_contig), -1);
+
+            let info = functions::vcf_c_654_bcf_hdr_parse_line(
+                hdr,
+                c"##INFO=<ID=1000G,Number=1,Type=Integer,Description=\"ok\">".as_ptr(),
+                &mut parsed_len,
+            );
+            assert!(!info.is_null());
+            assert_eq!(functions::vcf_c_596_bcf_hrec_check(info), 0);
+
+            let format = functions::vcf_c_654_bcf_hdr_parse_line(
+                hdr,
+                c"##FORMAT=<ID=GT,Number=1,Type=String,Description=\"genotype\">".as_ptr(),
+                &mut parsed_len,
+            );
+            assert!(!format.is_null());
+            assert_eq!(functions::vcf_c_596_bcf_hrec_check(format), 0);
+
+            let invalid_format = functions::vcf_c_654_bcf_hdr_parse_line(
+                hdr,
+                c"##FORMAT=<ID=1GT,Number=1,Type=String,Description=\"bad\">".as_ptr(),
+                &mut parsed_len,
+            );
+            assert!(!invalid_format.is_null());
+            assert_eq!(functions::vcf_c_596_bcf_hrec_check(invalid_format), -1);
+
+            functions::vcf_c_351_bcf_hrec_destroy(invalid_format);
+            functions::vcf_c_351_bcf_hrec_destroy(format);
+            functions::vcf_c_351_bcf_hrec_destroy(info);
+            functions::vcf_c_351_bcf_hrec_destroy(invalid_contig);
+            functions::vcf_c_351_bcf_hrec_destroy(contig);
+            functions::vcf_c_1674_bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn translated_vcf_idx_calc_counts_contigs_and_adjusts_csi_levels() {
+        unsafe {
+            let hdr = functions::vcf_c_1635_bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+            assert_eq!(
+                functions::vcf_c_1491_bcf_hdr_append(hdr, c"##fileformat=VCFv4.2".as_ptr()),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_1491_bcf_hdr_append(
+                    hdr,
+                    c"##contig=<ID=chr1,length=100>".as_ptr()
+                ),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_1491_bcf_hdr_append(
+                    hdr,
+                    c"##contig=<ID=chr2,length=200>".as_ptr()
+                ),
+                0
+            );
+            assert_eq!(functions::vcf_c_316_bcf_hdr_sync(hdr), 0);
+
+            let mut min_shift = 14;
+            let mut expected_min_shift = 14;
+            let mut expected_n_lvls = 0;
+            crate::htslib_mini_rs::hts::hts_c_2372_hts_adjust_csi_settings(
+                200,
+                &mut expected_min_shift,
+                &mut expected_n_lvls,
+            );
+
+            let mut nids = -1;
+            let n_lvls =
+                functions::vcf_c_4636_idx_calc_n_lvls_ids(hdr, &mut min_shift, 0, &mut nids);
+            assert_eq!(nids, 2);
+            assert_eq!(min_shift, expected_min_shift);
+            assert_eq!(n_lvls, expected_n_lvls);
+
+            functions::vcf_c_1674_bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn translated_vcf_header_metadata_wrappers_set_file_and_duplicate_records() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-vcf-header-set-{}-{}.vcf",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(
+            &path,
+            b"##fileformat=VCFv4.3\n##contig=<ID=chr9,length=900>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+        )
+        .unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let hdr = functions::vcf_c_1635_bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+            assert_eq!(functions::vcf_c_2680_bcf_hdr_set(hdr, c_path.as_ptr()), 0);
+            let mut nseqs = 0;
+            let seqnames = functions::vcf_c_2767_bcf_hdr_seqnames(hdr, &mut nseqs);
+            assert!(!seqnames.is_null());
+            assert_eq!(nseqs, 1);
+            assert_eq!(std::ffi::CStr::from_ptr(*seqnames), c"chr9");
+            libc::free(seqnames.cast());
+
+            let mut parsed_len = 0;
+            let hrec = functions::vcf_c_654_bcf_hdr_parse_line(
+                hdr,
+                c"##FILTER=<ID=q20,Description=\"quality\">".as_ptr(),
+                &mut parsed_len,
+            );
+            assert!(!hrec.is_null());
+            let dup = functions::vcf_c_368_bcf_hrec_dup(hrec);
+            assert!(!dup.is_null());
+
+            let mut dup_text = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(functions::vcf_c_2735_bcf_hrec_format(dup, &mut dup_text), 0);
+            assert!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut dup_text,))
+                    .to_bytes()
+                    .windows(3)
+                    .any(|window| window == b"q20")
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut dup_text);
+
+            functions::vcf_c_351_bcf_hrec_destroy(dup);
+            functions::vcf_c_351_bcf_hrec_destroy(hrec);
+            functions::vcf_c_1674_bcf_hdr_destroy(hdr);
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_vcf_debug_helpers_accept_header_records() {
+        unsafe {
+            let fp = libc::fopen(c"/dev/null".as_ptr(), c"w".as_ptr());
+            assert!(!fp.is_null());
+
+            let mut keys = [
+                c"ID".as_ptr().cast_mut(),
+                c"Description".as_ptr().cast_mut(),
+            ];
+            let mut vals = [c"DP".as_ptr().cast_mut(), c"Depth".as_ptr().cast_mut()];
+            let mut hrec = TestBcfHrecLayout {
+                type_: 0,
+                key: c"INFO".as_ptr().cast_mut(),
+                value: std::ptr::null_mut(),
+                nkeys: 2,
+                keys: keys.as_mut_ptr(),
+                vals: vals.as_mut_ptr(),
+            };
+            functions::vcf_c_413_bcf_hrec_debug(fp, (&mut hrec as *mut TestBcfHrecLayout).cast());
+            assert_eq!(libc::fclose(fp), 0);
+
+            let mut hdr: TestBcfHdrLayout = std::mem::zeroed();
+            functions::vcf_c_422_bcf_header_debug((&mut hdr as *mut TestBcfHdrLayout).cast());
+        }
+    }
+
+    #[test]
+    fn translated_hts_os_rand48_wrappers_match_seeded_sequences() {
+        unsafe {
+            let mut seed = [0x330e_u16, 0xabcd, 0x1234];
+            let value = functions::hts_os_c_45_hts_erand48(seed.as_mut_ptr());
+            assert!((value - 0.39646477376027534).abs() < 1e-18);
+            assert_eq!(seed, [0x5101, 0xb725, 0x657e]);
+
+            functions::hts_os_c_35_hts_srand48(1);
+            assert_eq!(functions::hts_os_c_51_hts_lrand48(), 89400484);
+
+            functions::hts_os_c_35_hts_srand48(1);
+            assert!((functions::hts_os_c_48_hts_drand48() - 0.041630344771878214).abs() < 1e-18);
+        }
+    }
+
+    #[test]
+    fn translated_vcf_api_check_alleles_matches_updated_record() {
+        unsafe {
+            let hdr = functions::vcf_c_1635_bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+            assert_eq!(
+                functions::vcf_c_1491_bcf_hdr_append(
+                    hdr,
+                    c"##contig=<ID=chr1,length=100>".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_1491_bcf_hdr_append(
+                    hdr,
+                    c"##FILTER=<ID=q10,Description=\"low qual\">".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_1491_bcf_hdr_append(
+                    hdr,
+                    c"##INFO=<ID=DP,Number=1,Type=Integer,Description=\"depth\">".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_1491_bcf_hdr_append(
+                    hdr,
+                    c"##INFO=<ID=RM,Number=1,Type=Integer,Description=\"remove\">".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_1491_bcf_hdr_append(
+                    hdr,
+                    c"##FORMAT=<ID=GT,Number=1,Type=Integer,Description=\"genotype\">".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_1491_bcf_hdr_append(
+                    hdr,
+                    c"##FORMAT=<ID=DPF,Number=1,Type=Integer,Description=\"sample depth\">"
+                        .as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_1491_bcf_hdr_append(
+                    hdr,
+                    c"##FORMAT=<ID=FT,Number=1,Type=String,Description=\"sample filter\">".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_276_bcf_hdr_add_sample(hdr, c"S1".as_ptr()),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_276_bcf_hdr_add_sample(hdr, c"S2".as_ptr()),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_276_bcf_hdr_add_sample(hdr, std::ptr::null()),
+                0
+            );
+            assert_eq!(functions::vcf_c_316_bcf_hdr_sync(hdr), 0);
+            let mut sample_names = [c"S1".as_ptr().cast_mut()];
+            let mut imap = [-1_i32; 2];
+            let subhdr = functions::vcf_c_5157_bcf_hdr_subset(
+                hdr,
+                1,
+                sample_names.as_mut_ptr(),
+                imap.as_mut_ptr(),
+            );
+            assert!(!subhdr.is_null());
+            assert_eq!(imap[0], 0);
+            assert_eq!(
+                functions::vcf_c_5220_bcf_hdr_set_samples(subhdr, c"S1".as_ptr(), 0),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_4827_bcf_hdr_name2id_wrapper(hdr.cast(), c"chr1".as_ptr(),),
+                0
+            );
+
+            let hdr_merge = functions::vcf_c_1635_bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr_merge.is_null());
+            assert_eq!(
+                functions::vcf_c_1491_bcf_hdr_append(
+                    hdr_merge,
+                    c"##contig=<ID=chr2,length=50>".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(functions::vcf_c_316_bcf_hdr_sync(hdr_merge), 0);
+            assert_eq!(functions::vcf_c_4842_bcf_hdr_combine(hdr_merge, hdr), 0);
+            assert_eq!(functions::vcf_c_316_bcf_hdr_sync(hdr_merge), 0);
+            assert!(
+                functions::vcf_c_4621_bcf_hdr_id2int(
+                    hdr_merge,
+                    hts_sys::BCF_DT_CTG as libc::c_int,
+                    c"chr1".as_ptr(),
+                ) >= 0
+            );
+            let hdr_merge = functions::vcf_c_4918_bcf_hdr_merge(hdr_merge, hdr);
+            assert!(!hdr_merge.is_null());
+            functions::vcf_c_1674_bcf_hdr_destroy(hdr_merge);
+
+            functions::vcf_c_1501_bcf_hdr_remove(
+                hdr,
+                hts_sys::BCF_HL_INFO as libc::c_int,
+                c"RM".as_ptr(),
+            );
+            assert_eq!(functions::vcf_c_316_bcf_hdr_sync(hdr), 0);
+            assert!(functions::vcf_c_1209_bcf_hdr_get_hrec(
+                hdr,
+                hts_sys::BCF_HL_INFO as libc::c_int,
+                std::ptr::null(),
+                c"RM".as_ptr(),
+                std::ptr::null(),
+            )
+            .is_null());
+
+            let rec = functions::vcf_c_1815_bcf_init();
+            assert!(!rec.is_null());
+
+            let mut alleles = [c"G".as_ptr(), c"A".as_ptr()];
+            assert_eq!(
+                functions::vcf_c_5906_bcf_update_alleles(
+                    hdr,
+                    rec,
+                    alleles.as_mut_ptr(),
+                    alleles.len() as libc::c_int,
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_vcf_api_c_51_check_alleles(
+                    rec.cast(),
+                    alleles.as_mut_ptr(),
+                    alleles.len() as libc::c_int,
+                ),
+                0
+            );
+
+            assert_eq!(
+                functions::vcf_c_5906_bcf_update_alleles(hdr, rec, std::ptr::null_mut(), 0,),
+                0
+            );
+            assert_eq!(
+                functions::test_test_vcf_api_c_51_check_alleles(
+                    rec.cast(),
+                    std::ptr::null_mut(),
+                    0
+                ),
+                0
+            );
+            assert_eq!(
+                functions::test_test_vcf_api_c_71_test_update_alleles(hdr.cast(), rec.cast()),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_5970_bcf_update_alleles_str(
+                    hdr.cast(),
+                    rec.cast(),
+                    c"A,C".as_ptr()
+                ),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_4234_bcf_unpack(rec.cast(), hts_sys::BCF_UN_STR as i32),
+                0
+            );
+            assert_eq!(functions::vcf_c_5355_bcf_is_snp(rec.cast()), 1);
+            assert_eq!(
+                functions::vcf_c_5988_bcf_update_id(hdr, rec, c"rs1".as_ptr()),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_6002_bcf_add_id(hdr, rec, c"rs2".as_ptr()),
+                0
+            );
+
+            let q10_id = functions::vcf_c_4621_bcf_hdr_id2int(
+                hdr,
+                hts_sys::BCF_DT_ID as libc::c_int,
+                c"q10".as_ptr(),
+            );
+            assert!(q10_id >= 0);
+            let mut filters = [q10_id];
+            assert_eq!(
+                functions::vcf_c_5824_bcf_update_filter(hdr, rec, filters.as_mut_ptr(), 1),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_5869_bcf_has_filter(hdr, rec, c"q10".as_ptr().cast_mut()),
+                1
+            );
+            assert_eq!(
+                functions::vcf_c_5855_bcf_remove_filter(hdr, rec, q10_id, 1),
+                0
+            );
+            assert_eq!(
+                functions::vcf_c_5869_bcf_has_filter(hdr, rec, c"q10".as_ptr().cast_mut()),
+                0
+            );
+            assert!(functions::vcf_c_5837_bcf_add_filter(hdr, rec, q10_id) >= 0);
+            assert_eq!(
+                functions::vcf_c_5869_bcf_has_filter(hdr, rec, c"q10".as_ptr().cast_mut()),
+                1
+            );
+
+            let dp_value = 17_i32;
+            assert_eq!(
+                functions::vcf_c_5546_bcf_update_info(
+                    hdr,
+                    rec,
+                    c"DP".as_ptr(),
+                    (&dp_value as *const i32).cast(),
+                    1,
+                    hts_sys::BCF_HT_INT as libc::c_int,
+                ),
+                0
+            );
+            assert!(!functions::vcf_c_6038_bcf_get_info(hdr, rec, c"DP".as_ptr()).is_null());
+            let dp_id = functions::vcf_c_4621_bcf_hdr_id2int(
+                hdr,
+                hts_sys::BCF_DT_ID as libc::c_int,
+                c"DP".as_ptr(),
+            );
+            assert!(dp_id >= 0);
+            assert!(!functions::vcf_c_6056_bcf_get_info_id(rec, dp_id).is_null());
+            let mut info_dst: *mut libc::c_void = std::ptr::null_mut();
+            let mut info_ndst = 0;
+            assert_eq!(
+                functions::vcf_c_6068_bcf_get_info_values(
+                    hdr,
+                    rec,
+                    c"DP".as_ptr(),
+                    &mut info_dst,
+                    &mut info_ndst,
+                    hts_sys::BCF_HT_INT as libc::c_int,
+                ),
+                1
+            );
+            assert!(!info_dst.is_null());
+            assert!(info_ndst >= 1);
+            assert_eq!(*(info_dst as *mut i32), dp_value);
+            libc::free(info_dst);
+
+            let gt_values = [2_i32, 4_i32];
+            assert_eq!(
+                functions::vcf_c_5710_bcf_update_format(
+                    hdr,
+                    rec,
+                    c"GT".as_ptr(),
+                    gt_values.as_ptr().cast(),
+                    gt_values.len() as libc::c_int,
+                    hts_sys::BCF_HT_INT as libc::c_int,
+                ),
+                0
+            );
+            assert!(!functions::vcf_c_6031_bcf_get_fmt(hdr, rec, c"GT".as_ptr()).is_null());
+            let gt_id = functions::vcf_c_4621_bcf_hdr_id2int(
+                hdr,
+                hts_sys::BCF_DT_ID as libc::c_int,
+                c"GT".as_ptr(),
+            );
+            assert!(gt_id >= 0);
+            let gt_fmt = functions::vcf_c_6045_bcf_get_fmt_id(rec, gt_id);
+            assert!(!gt_fmt.is_null());
+            let dpf_values = [12_i32, 34_i32];
+            assert_eq!(
+                functions::vcf_c_5710_bcf_update_format(
+                    hdr,
+                    rec,
+                    c"DPF".as_ptr(),
+                    dpf_values.as_ptr().cast(),
+                    dpf_values.len() as libc::c_int,
+                    hts_sys::BCF_HT_INT as libc::c_int,
+                ),
+                0
+            );
+            let mut fmt_dst: *mut libc::c_void = std::ptr::null_mut();
+            let mut fmt_ndst = 0;
+            assert_eq!(
+                functions::vcf_c_6191_bcf_get_format_values(
+                    hdr,
+                    rec,
+                    c"DPF".as_ptr(),
+                    &mut fmt_dst,
+                    &mut fmt_ndst,
+                    hts_sys::BCF_HT_INT as libc::c_int,
+                ),
+                dpf_values.len() as libc::c_int
+            );
+            assert!(!fmt_dst.is_null());
+            assert!(fmt_ndst >= dpf_values.len() as libc::c_int);
+            libc::free(fmt_dst);
+
+            let mut sample_filters = [c"PASS".as_ptr(), c"q10".as_ptr()];
+            assert_eq!(
+                functions::vcf_c_5684_bcf_update_format_string(
+                    hdr,
+                    rec,
+                    c"FT".as_ptr(),
+                    sample_filters.as_mut_ptr(),
+                    sample_filters.len() as libc::c_int,
+                ),
+                0
+            );
+            assert!(!functions::vcf_c_6031_bcf_get_fmt(hdr, rec, c"FT".as_ptr()).is_null());
+            let mut string_dst: *mut *mut libc::c_char = std::ptr::null_mut();
+            let mut string_ndst = 0;
+            assert!(
+                functions::vcf_c_6152_bcf_get_format_string(
+                    hdr,
+                    rec,
+                    c"FT".as_ptr(),
+                    &mut string_dst,
+                    &mut string_ndst,
+                ) > 0
+            );
+            assert!(!string_dst.is_null());
+            assert_eq!(std::ffi::CStr::from_ptr(*string_dst), c"PASS");
+            libc::free((*string_dst).cast());
+            libc::free(string_dst.cast());
+
+            let mut err_buf = [0_i8; 64];
+            let err = functions::vcf_c_6304_bcf_strerror(-1, err_buf.as_mut_ptr(), err_buf.len());
+            assert!(!err.is_null());
+            assert!(!std::ffi::CStr::from_ptr(err).to_bytes().is_empty());
+
+            let subset_copy = functions::vcf_c_2504_bcf_dup(rec);
+            assert!(!subset_copy.is_null());
+            let format_subset_copy = functions::vcf_c_2504_bcf_dup(rec);
+            assert!(!format_subset_copy.is_null());
+            assert_eq!(
+                functions::vcf_c_2215_bcf_subset_format(subhdr, format_subset_copy),
+                0
+            );
+            assert_eq!(
+                (*format_subset_copy.cast::<crate::htslib_mini_rs::vcf::bcf1_t>()).n_sample(),
+                1
+            );
+            functions::vcf_c_1867_bcf_destroy(format_subset_copy);
+            assert_eq!(
+                functions::vcf_c_5328_bcf_subset(subhdr, subset_copy, 2, imap.as_mut_ptr()),
+                0
+            );
+            assert_eq!(
+                (*subset_copy.cast::<crate::htslib_mini_rs::vcf::bcf1_t>()).n_sample(),
+                1
+            );
+            functions::vcf_c_1867_bcf_destroy(subset_copy);
+            functions::vcf_c_1674_bcf_hdr_destroy(subhdr);
+
+            let dup = functions::vcf_c_2504_bcf_dup(rec);
+            assert!(!dup.is_null());
+            assert_eq!(
+                (*dup.cast::<crate::htslib_mini_rs::vcf::bcf1_t>()).n_allele(),
+                2
+            );
+
+            let copy = functions::vcf_c_1815_bcf_init();
+            assert!(!copy.is_null());
+            assert_eq!(functions::vcf_c_2474_bcf_copy(copy, rec), copy);
+            assert_eq!(
+                (*copy.cast::<crate::htslib_mini_rs::vcf::bcf1_t>()).n_allele(),
+                2
+            );
+            functions::vcf_c_1854_bcf_empty(copy);
+            assert_eq!(
+                (*copy.cast::<crate::htslib_mini_rs::vcf::bcf1_t>()).n_allele(),
+                0
+            );
+            functions::vcf_c_1867_bcf_destroy(copy);
+            functions::vcf_c_1867_bcf_destroy(dup);
+            functions::vcf_c_1822_bcf_clear(rec);
+            assert_eq!(
+                (*rec.cast::<crate::htslib_mini_rs::vcf::bcf1_t>()).n_allele(),
+                0
+            );
+
+            functions::vcf_c_1867_bcf_destroy(rec);
+            functions::vcf_c_1674_bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn translated_vcf_index_wrappers_report_missing_inputs() {
+        let missing = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-missing-vcf-index-{}-{}.vcf.gz",
+            std::process::id(),
+            line!()
+        ));
+        let missing_idx = missing.with_extension("vcf.gz.csi");
+        let c_missing = std::ffi::CString::new(missing.to_string_lossy().as_bytes()).unwrap();
+        let c_missing_idx =
+            std::ffi::CString::new(missing_idx.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            assert!(functions::vcf_c_4690_bcf_index_load2(
+                c_missing.as_ptr(),
+                c_missing_idx.as_ptr(),
+            )
+            .is_null());
+            assert!(functions::vcf_c_4695_bcf_index_load3(
+                c_missing.as_ptr(),
+                c_missing_idx.as_ptr(),
+                0,
+            )
+            .is_null());
+            assert!(functions::vcf_c_4749_bcf_index_build(c_missing.as_ptr(), 14) < 0);
+            assert!(
+                functions::vcf_c_4744_bcf_index_build2(
+                    c_missing.as_ptr(),
+                    c_missing_idx.as_ptr(),
+                    14,
+                ) < 0
+            );
+            assert!(
+                functions::vcf_c_4700_bcf_index_build3(
+                    c_missing.as_ptr(),
+                    c_missing_idx.as_ptr(),
+                    14,
+                    0,
+                ) < 0
+            );
+        }
+    }
+
+    #[test]
+    fn translated_bcf_itr_querys1_wrapper_queries_indexed_vcf() {
+        let input = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-bcf-itr-querys1-{}-{}.vcf.gz",
+            std::process::id(),
+            line!()
+        ));
+        let index = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-bcf-itr-querys1-{}-{}.csi",
+            std::process::id(),
+            line!()
+        ));
+        let c_input = std::ffi::CString::new(input.to_string_lossy().as_bytes()).unwrap();
+        let c_index = std::ffi::CString::new(index.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let payload =
+                b"##fileformat=VCFv4.3\n##contig=<ID=chr1>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t2\t.\tA\tC\t.\tPASS\t.\n";
+            let out = crate::htslib_mini_rs::bgzf::bgzf_open(c_input.as_ptr(), c"w".as_ptr());
+            assert!(!out.is_null());
+            assert_eq!(
+                crate::htslib_mini_rs::bgzf::bgzf_write(
+                    out,
+                    payload.as_ptr().cast(),
+                    payload.len(),
+                ),
+                payload.len() as isize
+            );
+            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(out), 0);
+
+            assert_eq!(
+                functions::vcf_c_4700_bcf_index_build3(c_input.as_ptr(), c_index.as_ptr(), 14, 0,),
+                0
+            );
+
+            let idx = functions::vcf_c_4690_bcf_index_load2(c_input.as_ptr(), c_index.as_ptr());
+            assert!(!idx.is_null());
+            let fp = functions::hts_c_991_hts_open(c_input.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            let hdr = functions::vcf_c_1710_bcf_hdr_read(fp);
+            assert!(!hdr.is_null());
+            let itr = functions::vcf_c_4831_bcf_itr_querys1(idx, hdr, c"chr1:1-3".as_ptr());
+            assert!(!itr.is_null());
+            let rec = functions::vcf_c_1815_bcf_init();
+            assert!(!rec.is_null());
+            assert_eq!(
+                functions::htslib_vcf_h_1327_bcf_itr_next(fp, itr, rec.cast()),
+                -2
+            );
+
+            functions::vcf_c_1867_bcf_destroy(rec);
+            crate::htslib_mini_rs::hts::hts_itr_destroy(itr);
+            crate::htslib_mini_rs::hts::hts_idx_destroy(idx);
+            functions::vcf_c_1674_bcf_hdr_destroy(hdr);
+            let _ = crate::htslib_mini_rs::hts::hts_close(fp);
+        }
+
+        std::fs::remove_file(input).unwrap();
+        std::fs::remove_file(index).unwrap();
+    }
+
+    #[test]
+    fn translated_vcf_binary_encoding_helpers_round_trip_text() {
+        unsafe {
+            let mut encoded = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            let mut ints = [1_i32, 2_i32];
+            assert_eq!(
+                functions::vcf_c_2834_bcf_enc_vint(
+                    &mut encoded,
+                    ints.len() as libc::c_int,
+                    ints.as_mut_ptr(),
+                    0,
+                ),
+                0
+            );
+            assert!(encoded.l > 0);
+
+            let mut formatted = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            let next =
+                functions::vcf_c_3081_bcf_fmt_sized_array(&mut formatted, encoded.s.cast::<u8>());
+            assert!(!next.is_null());
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut formatted)),
+                c"1,2"
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut formatted);
+
+            let raw_ints = [7_i32, 8_i32];
+            let mut array_text = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                functions::vcf_c_3036_bcf_fmt_array(
+                    &mut array_text,
+                    raw_ints.len() as libc::c_int,
+                    hts_sys::BCF_BT_INT32 as libc::c_int,
+                    raw_ints.as_ptr().cast_mut().cast(),
+                ),
+                0
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut array_text)),
+                c"7,8"
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut array_text);
+
+            let mut scalar_text = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            let mut int8 = 42_i8;
+            assert_eq!(
+                functions::vcf_c_2979_bcf_fmt_array1(
+                    &mut scalar_text,
+                    hts_sys::BCF_BT_INT8 as libc::c_int,
+                    (&mut int8 as *mut i8).cast(),
+                ),
+                0
+            );
+            let mut missing_i16 = (-32768_i16).to_le_bytes();
+            assert_eq!(
+                functions::vcf_c_2979_bcf_fmt_array1(
+                    &mut scalar_text,
+                    hts_sys::BCF_BT_INT16 as libc::c_int,
+                    missing_i16.as_mut_ptr().cast(),
+                ),
+                0
+            );
+            let mut vector_end_i32 = (-2147483647_i32).to_le_bytes();
+            assert_eq!(
+                functions::vcf_c_2979_bcf_fmt_array1(
+                    &mut scalar_text,
+                    hts_sys::BCF_BT_INT32 as libc::c_int,
+                    vector_end_i32.as_mut_ptr().cast(),
+                ),
+                0
+            );
+            let mut missing_char = [hts_sys::BCF_BT_CHAR as u8];
+            assert_eq!(
+                functions::vcf_c_2979_bcf_fmt_array1(
+                    &mut scalar_text,
+                    hts_sys::BCF_BT_CHAR as libc::c_int,
+                    missing_char.as_mut_ptr().cast(),
+                ),
+                0
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(scalar_text.s.cast::<u8>(), scalar_text.l),
+                b"42.."
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut scalar_text);
+
+            let mut encoded_chars = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                functions::vcf_c_2970_bcf_enc_vchar(&mut encoded_chars, 2, c"AC".as_ptr(),),
+                0
+            );
+            assert!(encoded_chars.l >= 3);
+            crate::htslib_mini_rs::hts::ks_free(&mut encoded_chars);
+
+            let mut floats = [1.0_f32, 2.5_f32];
+            let mut long_values = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                functions::vcf_c_2925_bcf_enc_long1(&mut long_values, 5_000_000_000),
+                0
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(long_values.s.cast::<u8>(), long_values.l),
+                &[0x14, 0x00, 0xf2, 0x05, 0x2a, 0x01, 0x00, 0x00, 0x00]
+            );
+            long_values.l = 0;
+            assert_eq!(
+                functions::vcf_c_2925_bcf_enc_long1(&mut long_values, i64::MIN),
+                0
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(long_values.s.cast::<u8>(), long_values.l),
+                &[0x11, 0x80]
+            );
+            long_values.l = 0;
+            assert_eq!(
+                functions::vcf_c_2925_bcf_enc_long1(&mut long_values, i64::MIN + 1),
+                0
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(long_values.s.cast::<u8>(), long_values.l),
+                &[0x11, 0x81]
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut long_values);
+
+            let mut raw_floats = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                functions::vcf_c_2944_serialize_float_array(
+                    &mut raw_floats,
+                    floats.len(),
+                    floats.as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(raw_floats.l, floats.len() * std::mem::size_of::<f32>());
+            assert_eq!(
+                std::slice::from_raw_parts(raw_floats.s.cast::<u8>(), raw_floats.l),
+                &[0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x20, 0x40,]
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut raw_floats);
+
+            let mut encoded_floats = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                functions::vcf_c_2962_bcf_enc_vfloat(
+                    &mut encoded_floats,
+                    floats.len() as libc::c_int,
+                    floats.as_mut_ptr(),
+                ),
+                0
+            );
+            assert!(encoded_floats.l > 0);
+            crate::htslib_mini_rs::hts::ks_free(&mut encoded_floats);
+            crate::htslib_mini_rs::hts::ks_free(&mut encoded);
+        }
+    }
+
+    #[test]
+    fn translated_vcf_unpack_core_helpers_decode_in_place_layout() {
+        unsafe {
+            let mut padded = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                crate::htslib_mini_rs::hts::kputsn(c"abc".as_ptr(), 3, &mut padded),
+                3
+            );
+            assert_eq!(functions::vcf_c_3124_align_mem(&mut padded), 0);
+            assert_eq!(padded.l, 8);
+            assert_eq!(
+                std::slice::from_raw_parts(padded.s.cast::<u8>(), padded.l),
+                &[b'a', b'b', b'c', 0, 0, 0, 0, 0]
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut padded);
+
+            let mut fmt_buf = [
+                0x11,
+                0x05,
+                (2 << 4) | hts_sys::BCF_BT_INT16 as u8,
+                0x01,
+                0x00,
+                0x02,
+                0x00,
+                0x03,
+                0x00,
+                0x04,
+                0x00,
+                0x05,
+                0x00,
+                0x06,
+                0x00,
+            ];
+            let mut fmt: hts_sys::bcf_fmt_t = std::mem::zeroed();
+            let fmt_next =
+                functions::vcf_c_4178_bcf_unpack_fmt_core1(fmt_buf.as_mut_ptr(), 3, &mut fmt);
+            assert_eq!(
+                fmt_next.offset_from(fmt_buf.as_mut_ptr()),
+                fmt_buf.len() as isize
+            );
+            assert_eq!(fmt.id, 5);
+            assert_eq!(fmt.n, 2);
+            assert_eq!(fmt.type_, hts_sys::BCF_BT_INT16 as libc::c_int);
+            assert_eq!(fmt.size, 4);
+            assert_eq!(fmt.p, fmt_buf.as_mut_ptr().add(3));
+            assert_eq!(fmt.p_off(), 3);
+            assert_eq!(fmt.p_free(), 0);
+            assert_eq!(fmt.p_len, 12);
+
+            let mut info_i8 = [0x11, 0x07, (1 << 4) | hts_sys::BCF_BT_INT8 as u8, 99];
+            let mut info: hts_sys::bcf_info_t = std::mem::zeroed();
+            let info_next =
+                functions::vcf_c_4192_bcf_unpack_info_core1(info_i8.as_mut_ptr(), &mut info);
+            assert_eq!(info_next.offset_from(info_i8.as_mut_ptr()), 4);
+            assert_eq!(info.key, 7);
+            assert_eq!(info.type_, hts_sys::BCF_BT_INT8 as libc::c_int);
+            assert_eq!(info.len, 1);
+            assert_eq!(info.vptr, info_i8.as_mut_ptr().add(3));
+            assert_eq!(info.vptr_off(), 3);
+            assert_eq!(info.vptr_free(), 0);
+            assert_eq!(info.v1.i, 99);
+            assert_eq!(info.vptr_len, 1);
+
+            let value = (-1234_i16).to_le_bytes();
+            let mut info_i16 = [
+                0x11,
+                0x08,
+                (1 << 4) | hts_sys::BCF_BT_INT16 as u8,
+                value[0],
+                value[1],
+            ];
+            let mut info2: hts_sys::bcf_info_t = std::mem::zeroed();
+            let info2_next =
+                functions::vcf_c_4192_bcf_unpack_info_core1(info_i16.as_mut_ptr(), &mut info2);
+            assert_eq!(info2_next.offset_from(info_i16.as_mut_ptr()), 5);
+            assert_eq!(info2.key, 8);
+            assert_eq!(info2.type_, hts_sys::BCF_BT_INT16 as libc::c_int);
+            assert_eq!(info2.v1.i, -1234);
+            assert_eq!(info2.vptr_len, 2);
+
+            let mut haploid = [0_u8, 2, 4];
+            let mut next = std::ptr::null_mut();
+            assert_eq!(
+                functions::vcf_c_1985_updatephasing(
+                    haploid.as_mut_ptr(),
+                    haploid.as_mut_ptr().add(haploid.len()),
+                    &mut next,
+                    3,
+                    1,
+                    hts_sys::BCF_BT_INT8 as libc::c_int,
+                ),
+                0
+            );
+            assert_eq!(haploid, [0, 3, 5]);
+            assert_eq!(next, haploid.as_mut_ptr().add(haploid.len()));
+
+            let mut diploid_i16 = [
+                2_u8, 0, 3, 0, // first sample: second allele phased
+                4, 0, 6, 0, // second sample: second allele unphased
+            ];
+            assert_eq!(
+                functions::vcf_c_1985_updatephasing(
+                    diploid_i16.as_mut_ptr(),
+                    diploid_i16.as_mut_ptr().add(diploid_i16.len()),
+                    &mut next,
+                    2,
+                    2,
+                    hts_sys::BCF_BT_INT16 as libc::c_int,
+                ),
+                0
+            );
+            assert_eq!(diploid_i16, [3, 0, 3, 0, 4, 0, 6, 0]);
+            assert_eq!(next, diploid_i16.as_mut_ptr().add(diploid_i16.len()));
+
+            let mut triploid = [2_u8, 1, 3, 4, 1, 2];
+            assert_eq!(
+                functions::vcf_c_1985_updatephasing(
+                    triploid.as_mut_ptr(),
+                    triploid.as_mut_ptr().add(triploid.len()),
+                    &mut next,
+                    2,
+                    3,
+                    hts_sys::BCF_BT_INT8 as libc::c_int,
+                ),
+                0
+            );
+            assert_eq!(triploid, [3, 1, 3, 4, 1, 2]);
+            assert_eq!(next, triploid.as_mut_ptr().add(triploid.len()));
+
+            let mut too_short = [2_u8, 1, 3];
+            assert_eq!(
+                functions::vcf_c_1985_updatephasing(
+                    too_short.as_mut_ptr(),
+                    too_short.as_mut_ptr().add(too_short.len()),
+                    &mut next,
+                    2,
+                    2,
+                    hts_sys::BCF_BT_INT8 as libc::c_int,
+                ),
+                1
+            );
+
+            let mut hdr: hts_sys::bcf_hdr_t = std::mem::zeroed();
+            hdr.n[hts_sys::BCF_DT_SAMPLE as usize] = 3;
+            let mut rec: hts_sys::bcf1_t = std::mem::zeroed();
+            let old_log_level = crate::htslib_mini_rs::hts::hts_get_log_level();
+            crate::htslib_mini_rs::hts::hts_set_log_level(crate::htslib_mini_rs::hts::HTS_LOG_OFF);
+            let mut reports = 1_u32;
+            rec.pos = 4;
+            functions::vcf_c_2031_bcf_record_check_err(
+                &hdr,
+                &mut rec,
+                c"type".as_ptr().cast_mut(),
+                &mut reports,
+                7,
+            );
+            assert_eq!(reports, 2);
+            crate::htslib_mini_rs::hts::hts_set_log_level(old_log_level);
+
+            rec.set_n_fmt(2);
+            rec.set_n_sample(0);
+            let mut line = [b'.' as libc::c_char, 0, b'\t' as libc::c_char, 0];
+            let mut line_str = crate::htslib_mini_rs::hts::kstring_t {
+                l: line.len(),
+                m: line.len(),
+                s: line.as_mut_ptr(),
+            };
+            assert_eq!(
+                functions::vcf_c_3137_vcf_parse_format_empty1(
+                    &mut line_str,
+                    &hdr,
+                    &mut rec,
+                    line.as_ptr(),
+                    line.as_ptr().add(2),
+                ),
+                1
+            );
+            assert_eq!(rec.n_fmt(), 0);
+            assert_eq!(rec.n_sample(), 3);
+
+            rec.set_n_fmt(2);
+            rec.set_n_sample(0);
+            let mut gt_line = [
+                b'G' as libc::c_char,
+                b'T' as libc::c_char,
+                0,
+                b'\t' as libc::c_char,
+                0,
+            ];
+            line_str.l = gt_line.len();
+            line_str.m = gt_line.len();
+            line_str.s = gt_line.as_mut_ptr();
+            assert_eq!(
+                functions::vcf_c_3137_vcf_parse_format_empty1(
+                    &mut line_str,
+                    &hdr,
+                    &mut rec,
+                    gt_line.as_ptr(),
+                    gt_line.as_ptr().add(3),
+                ),
+                0
+            );
+            assert_eq!(rec.n_fmt(), 0);
+            assert_eq!(rec.n_sample(), 0);
+
+            rec.errcode = 0;
+            assert_eq!(
+                functions::vcf_c_3137_vcf_parse_format_empty1(
+                    &mut line_str,
+                    &hdr,
+                    &mut rec,
+                    gt_line.as_ptr(),
+                    gt_line.as_ptr().add(gt_line.len()),
+                ),
+                -1
+            );
+            assert_ne!(rec.errcode & hts_sys::BCF_ERR_NCOLS as libc::c_int, 0);
+
+            rec.errcode = 0;
+            rec.pos = 9;
+            rec.set_n_sample(2);
+            assert_eq!(
+                functions::vcf_c_3664_vcf_parse_format_check7(&hdr, &mut rec),
+                -1
+            );
+            assert_ne!(rec.errcode & hts_sys::BCF_ERR_NCOLS as libc::c_int, 0);
+
+            rec.errcode = 0;
+            rec.set_n_sample(3);
+            rec.set_n_fmt(4);
+            rec.indiv.l = u32::MAX as u64 + 1;
+            assert_eq!(
+                functions::vcf_c_3664_vcf_parse_format_check7(&hdr, &mut rec),
+                -1
+            );
+            assert_ne!(rec.errcode & hts_sys::BCF_ERR_LIMITS as libc::c_int, 0);
+            assert_eq!(rec.n_fmt(), 0);
+
+            rec.errcode = 0;
+            rec.indiv.l = 12;
+            rec.set_n_sample(3);
+            rec.set_n_fmt(2);
+            assert_eq!(
+                functions::vcf_c_3664_vcf_parse_format_check7(&hdr, &mut rec),
+                0
+            );
+            assert_eq!(rec.errcode, 0);
+            assert_eq!(rec.n_fmt(), 2);
+        }
+    }
+
+    #[test]
+    fn translated_thread_pool_dbg_out_noops_when_debug_disabled() {
+        unsafe {
+            functions::thread_pool_c_69_DBG_OUT();
+        }
+    }
+
+    #[test]
+    fn translated_thread_pool_wrappers_dispatch_and_drain_results() {
+        unsafe {
+            let pool = functions::thread_pool_c_725_hts_tpool_init(1);
+            assert!(!pool.is_null());
+            assert_eq!(functions::thread_pool_c_819_hts_tpool_size(pool), 1);
+
+            let queue = functions::thread_pool_c_372_hts_tpool_process_init(pool, 4, 0);
+            assert!(!queue.is_null());
+            assert_eq!(
+                functions::thread_pool_c_258_hts_tpool_process_empty(queue),
+                1
+            );
+            assert_eq!(functions::thread_pool_c_289_hts_tpool_process_len(queue), 0);
+            assert!(functions::thread_pool_c_303_hts_tpool_process_sz(queue) >= 0);
+            assert_eq!(
+                functions::thread_pool_c_1081_hts_tpool_process_qsize(queue),
+                4
+            );
+            assert_eq!(
+                functions::thread_pool_c_333_hts_tpool_process_is_shutdown(queue),
+                0
+            );
+
+            functions::thread_pool_c_268_hts_tpool_process_ref_incr(queue);
+            functions::thread_pool_c_274_hts_tpool_process_ref_decr(queue);
+
+            let mut values = [11_i32, 12_i32, 13_i32];
+            assert_eq!(
+                functions::thread_pool_c_829_hts_tpool_dispatch(
+                    pool,
+                    queue,
+                    Some(translated_thread_pool_echo),
+                    values.as_mut_ptr().cast(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::thread_pool_c_841_hts_tpool_dispatch2(
+                    pool,
+                    queue,
+                    Some(translated_thread_pool_echo),
+                    values.as_mut_ptr().add(1).cast(),
+                    0,
+                ),
+                0
+            );
+            assert_eq!(
+                functions::thread_pool_c_846_hts_tpool_dispatch3(
+                    pool,
+                    queue,
+                    Some(translated_thread_pool_echo),
+                    values.as_mut_ptr().add(2).cast(),
+                    None,
+                    None,
+                    0,
+                ),
+                0
+            );
+            functions::thread_pool_c_923_hts_tpool_wake_dispatch(queue);
+            assert_eq!(
+                functions::thread_pool_c_941_hts_tpool_process_flush(queue),
+                0
+            );
+
+            let first = functions::thread_pool_c_200_hts_tpool_next_result(queue);
+            assert!(!first.is_null());
+            let first_data = functions::thread_pool_c_358_hts_tpool_result_data(first);
+            assert!(values
+                .iter_mut()
+                .any(|value| std::ptr::addr_eq(value as *mut i32, first_data.cast::<i32>())));
+            functions::thread_pool_c_344_hts_tpool_delete_result(first, 0);
+
+            for _ in 0..2 {
+                let result = functions::thread_pool_c_224_hts_tpool_next_result_wait(queue);
+                assert!(!result.is_null());
+                let data = functions::thread_pool_c_358_hts_tpool_result_data(result);
+                assert!(values
+                    .iter_mut()
+                    .any(|value| std::ptr::addr_eq(value as *mut i32, data.cast::<i32>())));
+                functions::thread_pool_c_344_hts_tpool_delete_result(result, 0);
+            }
+
+            assert_eq!(
+                functions::thread_pool_c_1013_hts_tpool_process_reset(queue, 0),
+                0
+            );
+            functions::thread_pool_c_495_hts_tpool_process_detach(pool, queue);
+            functions::thread_pool_c_456_hts_tpool_process_attach(pool, queue);
+            functions::thread_pool_c_327_hts_tpool_process_shutdown(queue);
+            assert_ne!(
+                functions::thread_pool_c_333_hts_tpool_process_is_shutdown(queue),
+                0
+            );
+            functions::thread_pool_c_410_hts_tpool_process_destroy(queue);
+            functions::thread_pool_c_1089_hts_tpool_destroy(pool);
+        }
+    }
+
+    #[test]
+    fn translated_hts_option_wrappers_update_plain_htsfile_state() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-hts-options-{}-{}.sam",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, b"@HD\tVN:1.6\n").unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let hfile = crate::htslib_mini_rs::hfile::hopen(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!hfile.is_null());
+            let mut raw = [0 as c_char; 16];
+            assert_eq!(
+                functions::hts_c_2031_hgetln_wrapper(raw.as_mut_ptr(), raw.len(), hfile.cast()),
+                11
+            );
+            assert_eq!(std::ffi::CStr::from_ptr(raw.as_ptr()), c"@HD\tVN:1.6\n");
+            assert_eq!(crate::htslib_mini_rs::hfile::hclose(hfile), 0);
+
+            let hfile = crate::htslib_mini_rs::hfile::hopen(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!hfile.is_null());
+            let fp = functions::hts_c_1463_hts_hopen(hfile, c_path.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+
+            assert_eq!(functions::hts_c_1922_hts_set_threads(fp, 0), 0);
+            functions::hts_c_1945_hts_set_cache_size(fp, 32);
+            assert_eq!(
+                functions::hts_c_1951_hts_set_fai_filename(fp, c"ref.fa".as_ptr()),
+                0
+            );
+            assert_eq!(std::ffi::CStr::from_ptr((*fp).fn_aux), c"ref.fa");
+
+            assert_eq!(
+                functions::hts_c_1967_hts_set_filter_expression(fp, c"1".as_ptr()),
+                0
+            );
+            assert!(!(*fp).filter.is_null());
+
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_hts_getline_reads_plain_text_lines() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-hts-getline-{}-{}.txt",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, b"alpha\nbeta\n").unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let hfile = crate::htslib_mini_rs::hfile::hopen(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!hfile.is_null());
+            let fp = functions::hts_c_1463_hts_hopen(hfile, c_path.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+
+            let mut line = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                functions::hts_c_2035_hts_getline(fp, b'\n' as libc::c_int, &mut line),
+                5
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut line)),
+                c"alpha"
+            );
+            crate::htslib_mini_rs::hts::ks_clear(&mut line);
+            assert_eq!(
+                functions::hts_c_2035_hts_getline(fp, b'\n' as libc::c_int, &mut line),
+                4
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut line)),
+                c"beta"
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut line);
+
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_hts_realloc_or_die_grows_and_zeroes_new_slots() {
+        unsafe {
+            let mut ptr: *mut c_void = std::ptr::null_mut();
+            let mut capacity = functions::hts_c_5035_hts_realloc_or_die(
+                3,
+                0,
+                std::mem::size_of::<usize>(),
+                std::mem::size_of::<u32>(),
+                1,
+                &mut ptr,
+                c"unit".as_ptr(),
+            );
+            assert!(capacity >= 3);
+            assert!(!ptr.is_null());
+            let values = ptr.cast::<u32>();
+            for i in 0..capacity {
+                assert_eq!(*values.add(i), 0);
+            }
+            *values = 0x1234_5678;
+
+            let old_capacity = capacity;
+            capacity = functions::hts_c_5035_hts_realloc_or_die(
+                old_capacity + 1,
+                old_capacity,
+                std::mem::size_of::<usize>(),
+                std::mem::size_of::<u32>(),
+                1,
+                &mut ptr,
+                c"unit".as_ptr(),
+            );
+            assert!(capacity > old_capacity);
+            let values = ptr.cast::<u32>();
+            assert_eq!(*values, 0x1234_5678);
+            for i in old_capacity..capacity {
+                assert_eq!(*values.add(i), 0);
+            }
+            libc::free(ptr);
+        }
+    }
+
+    #[test]
+    fn translated_hts_open_wrappers_open_plain_sam_file() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-hts-open-{}-{}.sam",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, b"@HD\tVN:1.6\n").unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let hfile = crate::htslib_mini_rs::hfile::hopen(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!hfile.is_null());
+            let mut detected: crate::htslib_mini_rs::hts::htsFormat = std::mem::zeroed();
+            assert_eq!(
+                functions::hts_c_551_hts_detect_format(hfile, &mut detected),
+                0
+            );
+            assert_eq!(detected.format, crate::htslib_mini_rs::hts::HTS_FORMAT_SAM);
+            assert_eq!(crate::htslib_mini_rs::hfile::hclose(hfile), 0);
+
+            let fp = functions::hts_c_991_hts_open(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            assert_eq!(
+                (*fp).format.format,
+                crate::htslib_mini_rs::hts::HTS_FORMAT_SAM
+            );
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+
+            let fp_fmt = functions::hts_c_891_hts_open_format(
+                c_path.as_ptr(),
+                c"r".as_ptr(),
+                std::ptr::null(),
+            );
+            assert!(!fp_fmt.is_null());
+            assert_eq!(
+                (*fp_fmt).format.format,
+                crate::htslib_mini_rs::hts::HTS_FORMAT_SAM
+            );
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp_fmt), 0);
+
+            let fp_abort = functions::hts_c_991_hts_open(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!fp_abort.is_null());
+            functions::test_fuzz_hts_open_fuzzer_c_40_hts_close_or_abort(fp_abort);
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_parse_reg_expected_checks_sam_regions() {
+        let text = b"@SQ\tSN:chr1\tLN:100\n@SQ\tSN:chr2\tLN:200\n\0";
+        unsafe {
+            let hdr =
+                crate::htslib_mini_rs::sam::sam_hdr_parse(text.len() - 1, text.as_ptr().cast());
+            assert!(!hdr.is_null());
+            functions::test_test_parse_reg_c_50_reg_expected(
+                hdr,
+                c"chr1:10-20".as_ptr(),
+                0,
+                c"".as_ptr(),
+                0,
+                9,
+                20,
+            );
+            functions::test_test_parse_reg_c_50_reg_expected(
+                hdr,
+                c"chr2:5".as_ptr(),
+                crate::htslib_mini_rs::hts::HTS_PARSE_ONE_COORD,
+                c"".as_ptr(),
+                1,
+                4,
+                5,
+            );
+            functions::test_test_parse_reg_c_50_reg_expected(
+                hdr,
+                c"missing:1-2".as_ptr(),
+                0,
+                std::ptr::null(),
+                0,
+                0,
+                0,
+            );
+            crate::htslib_mini_rs::sam::sam_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn translated_parse_reg_test_exercises_full_region_table() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-test-parse-reg-{}.sam",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            b"@SQ\tSN:chr1\tLN:1000\n@SQ\tSN:chr1:100\tLN:1000\n@SQ\tSN:chr1:100-200\tLN:1000\n@SQ\tSN:chr2:100-200\tLN:1000\n@SQ\tSN:chr3\tLN:2000\n@SQ\tSN:chr1,chr3\tLN:3000\n",
+        )
+        .unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        unsafe {
+            assert_eq!(
+                functions::test_test_parse_reg_c_72_reg_test(c_path.as_ptr()),
+                0
+            );
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn translated_fieldarith_check_reads_aux_expected_values() {
+        unsafe {
+            let b = crate::htslib_mini_rs::sam::bam_init1();
+            assert!(!b.is_null());
+            let cigar = [(4u32 << crate::htslib_mini_rs::sam::BAM_CIGAR_SHIFT)
+                | crate::htslib_mini_rs::sam::BAM_CMATCH as u32];
+            let qual = [30 as c_char, 30 as c_char, 30 as c_char, 30 as c_char];
+            assert_eq!(
+                crate::htslib_mini_rs::sam::bam_set1(
+                    b,
+                    5,
+                    c"read".as_ptr(),
+                    0,
+                    0,
+                    10,
+                    60,
+                    1,
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    4,
+                    c"ACGT".as_ptr(),
+                    qual.as_ptr(),
+                    0,
+                ),
+                18
+            );
+            let xq = [4u8];
+            assert_eq!(
+                crate::htslib_mini_rs::sam::bam_aux_append(
+                    b,
+                    c"XQ".as_ptr(),
+                    b'C' as c_char,
+                    1,
+                    xq.as_ptr(),
+                ),
+                0
+            );
+            functions::test_fieldarith_c_34_check(b, c"cigar2qlen".as_ptr(), c"XQ".as_ptr(), 4);
+            functions::test_fieldarith_c_34_check(b, c"missing".as_ptr(), c"ZZ".as_ptr(), 0);
+            crate::htslib_mini_rs::sam::bam_destroy1(b);
+
+            let path = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-fieldarith-{}.sam",
+                std::process::id()
+            ));
+            std::fs::write(
+                &path,
+                b"@SQ\tSN:ref\tLN:100\nr1\t0\tref\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\tXQ:i:4\tXR:i:4\tXE:i:4\n",
+            )
+            .unwrap();
+            let prog = std::ffi::CString::new("fieldarith").unwrap();
+            let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+            let mut argv = [prog.as_ptr() as *mut c_char, c_path.as_ptr() as *mut c_char];
+            assert_eq!(
+                functions::test_fieldarith_c_48_main(2, argv.as_mut_ptr()),
+                0
+            );
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn translated_sam_aux_check_helpers_validate_tags_and_arrays() {
+        unsafe {
+            let b = crate::htslib_mini_rs::sam::bam_init1();
+            assert!(!b.is_null());
+            let cigar = [(4u32 << crate::htslib_mini_rs::sam::BAM_CIGAR_SHIFT)
+                | crate::htslib_mini_rs::sam::BAM_CMATCH as u32];
+            assert!(
+                crate::htslib_mini_rs::sam::bam_set1(
+                    b,
+                    5,
+                    c"aux".as_ptr(),
+                    0,
+                    0,
+                    10,
+                    60,
+                    1,
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    4,
+                    c"ACGT".as_ptr(),
+                    std::ptr::null(),
+                    0,
+                ) > 0
+            );
+            let xq = [7u8];
+            assert_eq!(
+                crate::htslib_mini_rs::sam::bam_aux_append(
+                    b,
+                    c"XQ".as_ptr(),
+                    b'C' as libc::c_char,
+                    1,
+                    xq.as_ptr(),
+                ),
+                0
+            );
+            let xa = [b'c', 3, 0, 0, 0, 1, 2, 3];
+            assert_eq!(
+                crate::htslib_mini_rs::sam::bam_aux_append(
+                    b,
+                    c"XA".as_ptr(),
+                    b'B' as libc::c_char,
+                    xa.len() as libc::c_int,
+                    xa.as_ptr(),
+                ),
+                0
+            );
+            let xn = [9u8];
+            assert_eq!(
+                crate::htslib_mini_rs::sam::bam_aux_append(
+                    b,
+                    c"XN".as_ptr(),
+                    b'C' as libc::c_char,
+                    1,
+                    xn.as_ptr(),
+                ),
+                0
+            );
+
+            assert!(!functions::test_sam_c_78_check_bam_aux_get(
+                b,
+                c"XQ".as_ptr(),
+                b'C' as libc::c_char,
+            )
+            .is_null());
+            functions::test_sam_c_90_check_aux_count(b, 3, c"record".as_ptr());
+            let mut vals = [1_i64, 2, 3];
+            functions::test_sam_c_99_check_int_B_array(
+                b,
+                c"XA".as_ptr().cast_mut(),
+                vals.len() as libc::c_uint,
+                vals.as_mut_ptr(),
+            );
+            assert_eq!(
+                functions::test_sam_c_136_test_update_int(
+                    b,
+                    c"XQ".as_ptr(),
+                    42,
+                    b'C' as libc::c_char,
+                    c"XN".as_ptr(),
+                    9,
+                    b'C' as libc::c_char,
+                ),
+                0
+            );
+            let mut narrow_vals = [-5_i16, 0, 12];
+            assert_eq!(
+                functions::test_sam_c_192_test_update_array(
+                    b,
+                    c"XA".as_ptr(),
+                    b's',
+                    narrow_vals.len() as u32,
+                    narrow_vals.as_mut_ptr().cast(),
+                    c"XQ".as_ptr(),
+                    42,
+                    b'C' as libc::c_char,
+                ),
+                0
+            );
+            crate::htslib_mini_rs::sam::bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn translated_test_sam_generator_writes_expected_alignment_fixture() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-test-sam-generator-{}.sam",
+            std::process::id()
+        ));
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        unsafe {
+            assert_eq!(functions::test_sam_c_1688_generator(c_path.as_ptr()), 0);
+        }
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut lines = text.lines();
+        assert_eq!(lines.next(), Some("@HD\tVN:1.4"));
+        assert_eq!(lines.next(), Some("@SQ\tSN:ref1\tLN:1100"));
+        let first = lines.next().unwrap();
+        assert!(first.starts_with("read1\t0\tref1\t1\t64\t100M\t*\t0\t0\t"));
+        assert_eq!(text.lines().count(), 1002);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn translated_test_sam_faidx1_counts_fasta_sequences() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-test-sam-faidx1-{}.fa",
+            std::process::id()
+        ));
+        std::fs::write(&path, b">one\nACGT\n>two\nA\n").unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        unsafe {
+            functions::TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+            functions::test_sam_c_1578_faidx1(c_path.as_ptr());
+            let status = functions::TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn translated_test_sam_file_helpers_check_empty_and_text_inputs() {
+        let empty_path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-test-sam-empty-{}.sam",
+            std::process::id()
+        ));
+        let text_path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-test-sam-text-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&empty_path, b"").unwrap();
+        std::fs::write(&text_path, b"alpha\nbeta\n").unwrap();
+        let empty_c = std::ffi::CString::new(empty_path.to_string_lossy().as_bytes()).unwrap();
+        let text_c = std::ffi::CString::new(text_path.to_string_lossy().as_bytes()).unwrap();
+        unsafe {
+            functions::TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+            functions::test_sam_c_1618_test_empty_sam_file(empty_c.as_ptr());
+            functions::test_sam_c_1641_test_text_file(text_c.as_ptr(), 2);
+            let status = functions::TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+        }
+        let _ = std::fs::remove_file(empty_path);
+        let _ = std::fs::remove_file(text_path);
+    }
+
+    #[test]
+    fn translated_test_sam_copy_check_alignment_copies_plain_sam() {
+        let dir = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-test-sam-copy-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("in.sam");
+        let output = dir.join("out.sam");
+        std::fs::write(
+            &input,
+            b"@SQ\tSN:ref\tLN:100\nr1\t0\tref\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\n",
+        )
+        .unwrap();
+
+        let input_c = std::ffi::CString::new(input.to_string_lossy().as_bytes()).unwrap();
+        let output_c = std::ffi::CString::new(output.to_string_lossy().as_bytes()).unwrap();
+        unsafe {
+            functions::TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+            functions::test_sam_c_612_copy_check_alignment(
+                input_c.as_ptr(),
+                c"SAM".as_ptr(),
+                output_c.as_ptr(),
+                c"w".as_ptr(),
+                std::ptr::null(),
+            );
+            let status = functions::TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+        }
+
+        let copied = std::fs::read_to_string(&output).unwrap();
+        assert!(copied.contains("@SQ\tSN:ref\tLN:100"));
+        assert!(copied.contains("r1\t0\tref\t1\t60\t4M"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn translated_test_sam_read_data_block_reads_into_user_buffer() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-test-sam-read-block-{}.sam",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            b"@SQ\tSN:ref\tLN:100\nr1\t0\tref\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\nr2\t0\tref\t2\t60\t4M\t*\t0\t0\tTGCA\tJJJJ\n",
+        )
+        .unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        unsafe {
+            functions::TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+            let fp = crate::htslib_mini_rs::hts::hts_open(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            let hdr = crate::htslib_mini_rs::sam::sam_hdr_read(fp);
+            assert!(!hdr.is_null());
+            let mut recs: Vec<crate::htslib_mini_rs::sam::bam1_t> =
+                (0..4).map(|_| std::mem::zeroed()).collect();
+            let mut buffer = vec![0u8; 1024];
+            let mut nrecs = 0usize;
+            assert_eq!(
+                functions::test_sam_c_1735_read_data_block(
+                    c_path.as_ptr(),
+                    fp,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    hdr,
+                    recs.as_mut_ptr(),
+                    recs.len(),
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                    &mut nrecs,
+                ),
+                0
+            );
+            assert_eq!(nrecs, 2);
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::sam::bam_get_qname(recs.as_ptr()))
+                    .to_bytes(),
+                b"r1"
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::sam::bam_get_qname(
+                    recs.as_ptr().add(1)
+                ))
+                .to_bytes(),
+                b"r2"
+            );
+            for rec in recs.iter_mut().take(nrecs) {
+                crate::htslib_mini_rs::sam::bam_destroy1(rec);
+            }
+            crate::htslib_mini_rs::sam::sam_hdr_destroy(hdr);
+            crate::htslib_mini_rs::hts::hts_close(fp);
+            let status = functions::TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn translated_test_sam_parse_decimal_cases_match_hts_parser() {
+        unsafe {
+            functions::TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+            functions::test_sam_c_1781_test_parse_decimal1(
+                37,
+                c"+37".as_ptr(),
+                3,
+                0,
+                std::ptr::null(),
+            );
+            let status = functions::TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+
+            functions::test_sam_c_1795_test_parse_decimal();
+            let status = functions::TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+        }
+    }
+
+    #[test]
+    fn translated_test_sam_bam_set1_helpers_match_c_checks() {
+        unsafe {
+            functions::TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+            functions::test_sam_c_2000_test_bam_set1_minimal();
+            functions::test_sam_c_2031_test_bam_set1_full();
+            functions::test_sam_c_2078_test_bam_set1_even_and_odd_seq_len();
+            functions::test_sam_c_2108_test_bam_set1_with_seq_but_no_qual();
+            functions::test_sam_c_2132_test_bam_set1_validate_qname();
+            functions::test_sam_c_2149_test_bam_set1_validate_seq();
+            functions::test_sam_c_2166_test_bam_set1_validate_cigar();
+            functions::test_sam_c_2195_test_bam_set1_validate_size_limits();
+            functions::test_sam_c_2307_test_cigar_api();
+            functions::test_sam_c_557_set_qname();
+            let status = functions::TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+        }
+    }
+
+    #[test]
+    fn translated_sam_header_check_helpers_validate_targets_and_lengths() {
+        let text = b"@SQ\tSN:chr1\tLN:100\n@SQ\tSN:chr2\tLN:200\n\0";
+        unsafe {
+            let hdr =
+                crate::htslib_mini_rs::sam::sam_hdr_parse(text.len() - 1, text.as_ptr().cast());
+            assert!(!hdr.is_null());
+            let mut expected_names = [c"chr1".as_ptr(), c"chr2".as_ptr()];
+            let expected_target_lens = [100 as libc::c_int, 200 as libc::c_int];
+            assert_eq!(
+                functions::test_sam_c_669_check_target_names(
+                    hdr,
+                    2,
+                    expected_names.as_mut_ptr(),
+                    expected_target_lens.as_ptr(),
+                ),
+                0
+            );
+            let expected_ref_lens = [100, 200];
+            assert_eq!(
+                functions::test_sam_c_1388_check_ref_lengths(
+                    hdr,
+                    expected_ref_lens.as_ptr(),
+                    expected_ref_lens.len() as libc::c_int,
+                    c"header".as_ptr(),
+                ),
+                0
+            );
+            crate::htslib_mini_rs::sam::sam_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn translated_sam_header_type_validator_matches_spec_prefixes() {
+        unsafe {
+            functions::header_c_44_KHASH_DECLARE();
+            assert_eq!(
+                functions::header_c_1325_valid_sam_header_type(c"@HD\t".as_ptr()),
+                1
+            );
+            assert_eq!(
+                functions::header_c_1325_valid_sam_header_type(c"@SQ\t".as_ptr()),
+                1
+            );
+            assert_eq!(
+                functions::header_c_1325_valid_sam_header_type(c"@RG\t".as_ptr()),
+                1
+            );
+            assert_eq!(
+                functions::header_c_1325_valid_sam_header_type(c"@PG\t".as_ptr()),
+                1
+            );
+            assert_eq!(
+                functions::header_c_1325_valid_sam_header_type(c"@CO".as_ptr()),
+                1
+            );
+            assert_eq!(
+                functions::header_c_1325_valid_sam_header_type(c"@HD ".as_ptr()),
+                0
+            );
+            assert_eq!(
+                functions::header_c_1325_valid_sam_header_type(c"@SQ".as_ptr()),
+                0
+            );
+            assert_eq!(
+                functions::header_c_1325_valid_sam_header_type(c"@XX\t".as_ptr()),
+                0
+            );
+            assert_eq!(
+                functions::header_c_1325_valid_sam_header_type(c"SQ\t".as_ptr()),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn translated_sam_structural_checks_pass_current_layouts() {
+        unsafe {
+            functions::test_sam_c_1348_samrecord_layout();
+            functions::test_sam_c_1661_check_enum1();
+            functions::test_sam_c_1669_check_cigar_tab();
+        }
+    }
+
+    #[test]
+    fn translated_pileup_print_helpers_accept_simple_pileup_entries() {
+        unsafe {
+            let b = crate::htslib_mini_rs::sam::bam_init1();
+            assert!(!b.is_null());
+            let cigar = [(4u32 << crate::htslib_mini_rs::sam::BAM_CIGAR_SHIFT)
+                | crate::htslib_mini_rs::sam::BAM_CMATCH as u32];
+            let qual = [
+                30 as libc::c_char,
+                31 as libc::c_char,
+                32 as libc::c_char,
+                33 as libc::c_char,
+            ];
+            assert!(
+                crate::htslib_mini_rs::sam::bam_set1(
+                    b,
+                    5,
+                    c"pile".as_ptr(),
+                    0,
+                    0,
+                    10,
+                    60,
+                    1,
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    4,
+                    c"ACGT".as_ptr(),
+                    qual.as_ptr(),
+                    0,
+                ) > 0
+            );
+            let mut plp = [
+                crate::htslib_mini_rs::sam::bam_pileup1_t {
+                    b,
+                    qpos: 0,
+                    indel: 0,
+                    level: 0,
+                    bitfields: 1 << 1,
+                    cd: crate::htslib_mini_rs::sam::bam_pileup_cd { i: 0 },
+                    cigar_ind: 0,
+                },
+                crate::htslib_mini_rs::sam::bam_pileup1_t {
+                    b,
+                    qpos: 3,
+                    indel: 0,
+                    level: 0,
+                    bitfields: 1 << 2,
+                    cd: crate::htslib_mini_rs::sam::bam_pileup_cd { i: 0 },
+                    cigar_ind: 0,
+                },
+            ];
+            assert_eq!(
+                functions::test_pileup_c_76_print_pileup_seq(plp.as_ptr(), 2),
+                0
+            );
+            functions::test_pileup_c_122_print_pileup_qual(plp.as_ptr(), 2);
+            let hdr = crate::htslib_mini_rs::sam::sam_hdr_init();
+            assert!(!hdr.is_null());
+            let header_text = b"@SQ\tSN:chr1\tLN:20\n";
+            assert_eq!(
+                crate::htslib_mini_rs::sam::sam_hdr_add_lines(
+                    hdr,
+                    header_text.as_ptr().cast(),
+                    header_text.len(),
+                ),
+                0
+            );
+            functions::test_pileup_mod_c_49_process_pileup(hdr, plp.as_ptr(), 0, 10, 2);
+            let state_a = crate::htslib_mini_rs::sam::hts_base_mod_state_alloc();
+            let state_b = crate::htslib_mini_rs::sam::hts_base_mod_state_alloc();
+            assert!(!state_a.is_null());
+            assert!(!state_b.is_null());
+            assert_eq!(crate::htslib_mini_rs::sam::bam_parse_basemod(b, state_a), 0);
+            assert_eq!(crate::htslib_mini_rs::sam::bam_parse_basemod(b, state_b), 0);
+            plp[0].cd = crate::htslib_mini_rs::sam::bam_pileup_cd { p: state_a.cast() };
+            plp[1].cd = crate::htslib_mini_rs::sam::bam_pileup_cd { p: state_b.cast() };
+            functions::test_pileup_mod_c_91_process_mod_pileup1(hdr, plp.as_ptr(), 0, 10, 2);
+            crate::htslib_mini_rs::sam::hts_base_mod_state_free(state_a);
+            crate::htslib_mini_rs::sam::hts_base_mod_state_free(state_b);
+
+            let state_c = crate::htslib_mini_rs::sam::hts_base_mod_state_alloc();
+            let state_d = crate::htslib_mini_rs::sam::hts_base_mod_state_alloc();
+            assert!(!state_c.is_null());
+            assert!(!state_d.is_null());
+            assert_eq!(crate::htslib_mini_rs::sam::bam_parse_basemod(b, state_c), 0);
+            assert_eq!(crate::htslib_mini_rs::sam::bam_parse_basemod(b, state_d), 0);
+            plp[0].cd = crate::htslib_mini_rs::sam::bam_pileup_cd { p: state_c.cast() };
+            plp[1].cd = crate::htslib_mini_rs::sam::bam_pileup_cd { p: state_d.cast() };
+            functions::test_pileup_mod_c_140_process_mod_pileup2(hdr, plp.as_ptr(), 0, 10, 2);
+            crate::htslib_mini_rs::sam::hts_base_mod_state_free(state_c);
+            crate::htslib_mini_rs::sam::hts_base_mod_state_free(state_d);
+            crate::htslib_mini_rs::sam::sam_hdr_destroy(hdr);
+            crate::htslib_mini_rs::sam::bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    #[ignore = "opens translated SAM streams; run serially with this test name"]
+    fn translated_pileup_readaln_callbacks_match_c_filtering() {
+        unsafe {
+            let path = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-pileup-readaln-{}-{}.sam",
+                std::process::id(),
+                line!()
+            ));
+            std::fs::write(
+                &path,
+                b"@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:20\n\
+skip_secondary\t256\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\n\
+skip_dup\t1024\tchr1\t2\t60\t4M\t*\t0\t0\tCGTA\tIIII\n\
+keep\t0\tchr1\t3\t60\t4M\t*\t0\t0\tGTAC\tIIII\n",
+            )
+            .unwrap();
+            let path_c = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+            let fp_mod = crate::htslib_mini_rs::hts::hts_open(path_c.as_ptr(), c"r".as_ptr());
+            assert!(!fp_mod.is_null());
+            let hdr_mod = crate::htslib_mini_rs::sam::sam_hdr_read(fp_mod);
+            assert!(!hdr_mod.is_null());
+            let b_mod = crate::htslib_mini_rs::sam::bam_init1();
+            assert!(!b_mod.is_null());
+            let mut plp_dat = structs::plp_dat {
+                fp: fp_mod,
+                h: hdr_mod,
+            };
+
+            assert_eq!(
+                functions::test_pileup_mod_c_37_readaln((&mut plp_dat as *mut _) as *mut _, b_mod),
+                0
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::sam::bam_get_qname(b_mod))
+                    .to_bytes(),
+                b"skip_secondary"
+            );
+            crate::htslib_mini_rs::sam::bam_destroy1(b_mod);
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp_mod), 0);
+
+            let fp = crate::htslib_mini_rs::hts::hts_open(path_c.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            let hdr = crate::htslib_mini_rs::sam::sam_hdr_read(fp);
+            assert!(!hdr.is_null());
+            let b = crate::htslib_mini_rs::sam::bam_init1();
+            assert!(!b.is_null());
+            let mut state = structs::ptest_t {
+                fname: path_c.as_ptr(),
+                fp,
+                fp_hdr: hdr,
+            };
+
+            assert_eq!(
+                functions::test_pileup_c_62_readaln((&mut state as *mut _) as *mut _, b),
+                0
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::sam::bam_get_qname(b)).to_bytes(),
+                b"keep"
+            );
+            assert_eq!(
+                functions::test_pileup_c_62_readaln((&mut state as *mut _) as *mut _, b),
+                -1
+            );
+
+            crate::htslib_mini_rs::sam::bam_destroy1(b);
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+
+            let fp_pileup = crate::htslib_mini_rs::hts::hts_open(path_c.as_ptr(), c"r".as_ptr());
+            assert!(!fp_pileup.is_null());
+            let hdr_pileup = crate::htslib_mini_rs::sam::sam_hdr_read(fp_pileup);
+            assert!(!hdr_pileup.is_null());
+            let mut pileup_state = structs::ptest_t {
+                fname: path_c.as_ptr(),
+                fp: fp_pileup,
+                fp_hdr: hdr_pileup,
+            };
+            assert_eq!(
+                functions::test_pileup_c_135_test_pileup(&mut pileup_state),
+                0
+            );
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp_pileup), 0);
+
+            let fp_mpileup = crate::htslib_mini_rs::hts::hts_open(path_c.as_ptr(), c"r".as_ptr());
+            assert!(!fp_mpileup.is_null());
+            let hdr_mpileup = crate::htslib_mini_rs::sam::sam_hdr_read(fp_mpileup);
+            assert!(!hdr_mpileup.is_null());
+            let mut mpileup_state = structs::ptest_t {
+                fname: path_c.as_ptr(),
+                fp: fp_mpileup,
+                fp_hdr: hdr_mpileup,
+            };
+            assert_eq!(
+                functions::test_pileup_c_177_test_mpileup(&mut mpileup_state),
+                0
+            );
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp_mpileup), 0);
+
+            let prog = std::ffi::CString::new("pileup").unwrap();
+            let mut argv = [
+                prog.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+            ];
+            functions::test_pileup_reset_getopt();
+            assert_eq!(
+                functions::test_pileup_c_225_main(2, argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let opt_m = std::ffi::CString::new("-m").unwrap();
+            let mut argv_m = [
+                prog.as_ptr() as *mut libc::c_char,
+                opt_m.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+            ];
+            functions::test_pileup_reset_getopt();
+            assert_eq!(
+                functions::test_pileup_c_225_main(3, argv_m.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let prog_mod = std::ffi::CString::new("pileup_mod").unwrap();
+            let mut mod_argv = [
+                prog_mod.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                functions::test_pileup_mod_c_185_main(2, mod_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let mut mod_argv_c = [
+                prog_mod.as_ptr() as *mut libc::c_char,
+                opt_m.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+            ];
+            // pileup_mod.c uses "-c"; reuse a fresh CString rather than the pileup "-m" option.
+            let opt_c = std::ffi::CString::new("-c").unwrap();
+            mod_argv_c[1] = opt_c.as_ptr() as *mut libc::c_char;
+            assert_eq!(
+                functions::test_pileup_mod_c_185_main(3, mod_argv_c.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let mut mod_argv_cc = [
+                prog_mod.as_ptr() as *mut libc::c_char,
+                opt_c.as_ptr() as *mut libc::c_char,
+                opt_c.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                functions::test_pileup_mod_c_185_main(4, mod_argv_cc.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn translated_sample_flags_and_refname_mains_accept_plain_sam() {
+        unsafe {
+            let path = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-sample-main-{}-{}.sam",
+                std::process::id(),
+                line!()
+            ));
+            std::fs::write(
+                &path,
+                b"@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:50\n@SQ\tSN:chr2\tLN:5\n\
+r1\t65\tchr1\t1\t60\t4M\t=\t1\t0\tACGT\tIIII\tCB:Z:cell1\n\
+r2\t129\tchr1\t2\t60\t4M\t=\t2\t0\tTGCA\tIIII\tCB:Z:cell2\n",
+            )
+            .unwrap();
+            let path_c = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+            let prog_flags = std::ffi::CString::new("flags").unwrap();
+            let mut flags_argv = [
+                prog_flags.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::flags_demo::samples_flags_demo_c_50_main(2, flags_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let prog_ref = std::ffi::CString::new("read_refname").unwrap();
+            let min_size = std::ffi::CString::new("10").unwrap();
+            let mut ref_argv = [
+                prog_ref.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+                min_size.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::read_refname::samples_read_refname_c_49_main(3, ref_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let prog_read_bam = std::ffi::CString::new("read_bam").unwrap();
+            let mut read_bam_argv = [
+                prog_read_bam.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::read_bam::samples_read_bam_c_48_main(2, read_bam_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let prog_header = std::ffi::CString::new("read_header").unwrap();
+            let header_sq = std::ffi::CString::new("SQ").unwrap();
+            let header_sn = std::ffi::CString::new("SN").unwrap();
+            let header_chr1 = std::ffi::CString::new("chr1").unwrap();
+            let header_ln = std::ffi::CString::new("LN").unwrap();
+            let mut header_tag_argv = [
+                prog_header.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+                header_sq.as_ptr() as *mut libc::c_char,
+                header_sn.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::read_header::samples_read_header_c_49_main(
+                    4,
+                    header_tag_argv.as_mut_ptr()
+                ),
+                libc::EXIT_SUCCESS
+            );
+            let mut header_line_argv = [
+                prog_header.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+                header_sq.as_ptr() as *mut libc::c_char,
+                header_sn.as_ptr() as *mut libc::c_char,
+                header_chr1.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::read_header::samples_read_header_c_49_main(
+                    5,
+                    header_line_argv.as_mut_ptr()
+                ),
+                libc::EXIT_SUCCESS
+            );
+            let mut header_id_tag_argv = [
+                prog_header.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+                header_sq.as_ptr() as *mut libc::c_char,
+                header_sn.as_ptr() as *mut libc::c_char,
+                header_chr1.as_ptr() as *mut libc::c_char,
+                header_ln.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::read_header::samples_read_header_c_49_main(
+                    6,
+                    header_id_tag_argv.as_mut_ptr()
+                ),
+                libc::EXIT_SUCCESS
+            );
+
+            let prog_rem_header = std::ffi::CString::new("rem_header").unwrap();
+            let mut rem_header_argv = [
+                prog_rem_header.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+                header_sq.as_ptr() as *mut libc::c_char,
+                header_chr1.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::rem_header::samples_rem_header_c_49_main(4, rem_header_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let prog_aux = std::ffi::CString::new("read_aux").unwrap();
+            let tag_cb = std::ffi::CString::new("CB").unwrap();
+            let mut aux_argv = [
+                prog_aux.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+                tag_cb.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::read_aux::samples_read_aux_c_114_main(3, aux_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let prog_dump_aux = std::ffi::CString::new("dump_aux").unwrap();
+            let mut dump_aux_argv = [
+                prog_dump_aux.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::dump_aux::samples_dump_aux_c_114_main(2, dump_aux_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let prog_mod_aux_ba = std::ffi::CString::new("mod_aux_ba").unwrap();
+            let mut mod_aux_ba_argv = [
+                prog_mod_aux_ba.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::mod_aux_ba::samples_mod_aux_ba_c_49_main(2, mod_aux_ba_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let prog_mod_aux = std::ffi::CString::new("mod_aux").unwrap();
+            let qname_r1 = std::ffi::CString::new("r1").unwrap();
+            let type_z = std::ffi::CString::new("Z").unwrap();
+            let new_cb = std::ffi::CString::new("cellX").unwrap();
+            let mut mod_aux_argv = [
+                prog_mod_aux.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+                qname_r1.as_ptr() as *mut libc::c_char,
+                tag_cb.as_ptr() as *mut libc::c_char,
+                type_z.as_ptr() as *mut libc::c_char,
+                new_cb.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::mod_aux::samples_mod_aux_c_50_main(6, mod_aux_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let prog_mpileup = std::ffi::CString::new("mpileup").unwrap();
+            let mut mpileup_argv = [
+                prog_mpileup.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::mpileup::samples_mpileup_c_84_main(2, mpileup_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let prog_pileup = std::ffi::CString::new("pileup").unwrap();
+            let mut pileup_argv = [
+                prog_pileup.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::pileup::samples_pileup_c_92_main(2, pileup_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let prog_pileup_mod = std::ffi::CString::new("pileup_mod").unwrap();
+            let mut pileup_mod_argv = [
+                prog_pileup_mod.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::pileup_mod::samples_pileup_mod_c_98_main(2, pileup_mod_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let prog_modstate = std::ffi::CString::new("modstate").unwrap();
+            let modstate_opt1 = std::ffi::CString::new("1").unwrap();
+            let modstate_opt2 = std::ffi::CString::new("2").unwrap();
+            let mut modstate_argv1 = [
+                prog_modstate.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+                modstate_opt1.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::modstate::samples_modstate_c_49_main(3, modstate_argv1.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+            let mut modstate_argv2 = [
+                prog_modstate.as_ptr() as *mut libc::c_char,
+                path_c.as_ptr() as *mut libc::c_char,
+                modstate_opt2.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::modstate::samples_modstate_c_49_main(3, modstate_argv2.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let _ = std::fs::remove_file(path);
+
+            let fq_path = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-sample-fast-{}-{}.fq",
+                std::process::id(),
+                line!()
+            ));
+            std::fs::write(&fq_path, b"@seq1\nACGT\n+\nIIII\n").unwrap();
+            let fq_c = std::ffi::CString::new(fq_path.to_string_lossy().as_bytes()).unwrap();
+            let prog_fast = std::ffi::CString::new("read_fast").unwrap();
+            let mut fast_argv = [
+                prog_fast.as_ptr() as *mut libc::c_char,
+                fq_c.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::read_fast::samples_read_fast_c_49_main(2, fast_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+
+            let write_fast_path = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-sample-write-fast-{}-{}.fq",
+                std::process::id(),
+                line!()
+            ));
+            let _ = std::fs::remove_file(&write_fast_path);
+            let write_fast_c =
+                std::ffi::CString::new(write_fast_path.to_string_lossy().as_bytes()).unwrap();
+            let prog_write_fast = std::ffi::CString::new("write_fast").unwrap();
+            let write_seq = std::ffi::CString::new("ACGT").unwrap();
+            let write_qual = std::ffi::CString::new("IIII").unwrap();
+            let mut write_fast_argv = [
+                prog_write_fast.as_ptr() as *mut libc::c_char,
+                write_fast_c.as_ptr() as *mut libc::c_char,
+                write_seq.as_ptr() as *mut libc::c_char,
+                write_qual.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::write_fast::samples_write_fast_c_51_main(4, write_fast_argv.as_mut_ptr()),
+                libc::EXIT_SUCCESS
+            );
+            let mut read_written_fast_argv = [
+                prog_fast.as_ptr() as *mut libc::c_char,
+                write_fast_c.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::read_fast::samples_read_fast_c_49_main(
+                    2,
+                    read_written_fast_argv.as_mut_ptr()
+                ),
+                libc::EXIT_SUCCESS
+            );
+
+            let fa_path = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-sample-index-{}-{}.fa",
+                std::process::id(),
+                line!()
+            ));
+            std::fs::write(&fa_path, b">chrA\nACGT\n").unwrap();
+            let fa_c = std::ffi::CString::new(fa_path.to_string_lossy().as_bytes()).unwrap();
+            let prog_index_fasta = std::ffi::CString::new("index_fasta").unwrap();
+            let mut index_fasta_argv = [
+                prog_index_fasta.as_ptr() as *mut libc::c_char,
+                fa_c.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::index_fasta::samples_index_fasta_c_51_main(
+                    2,
+                    index_fasta_argv.as_mut_ptr()
+                ),
+                libc::EXIT_SUCCESS
+            );
+            let fai_path = fa_path.with_extension("fa.fai");
+            assert!(fai_path.exists());
+
+            let prog_read_fast_i = std::ffi::CString::new("read_fast_i").unwrap();
+            let fasta_kind = std::ffi::CString::new("A").unwrap();
+            let single_region = std::ffi::CString::new("chrA:1-4").unwrap();
+            let single_count = std::ffi::CString::new("0").unwrap();
+            let mut read_fast_i_single_argv = [
+                prog_read_fast_i.as_ptr() as *mut libc::c_char,
+                fa_c.as_ptr() as *mut libc::c_char,
+                fasta_kind.as_ptr() as *mut libc::c_char,
+                single_count.as_ptr() as *mut libc::c_char,
+                single_region.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::read_fast_index::samples_read_fast_index_c_53_main(
+                    5,
+                    read_fast_i_single_argv.as_mut_ptr()
+                ),
+                libc::EXIT_SUCCESS
+            );
+
+            let multi_count = std::ffi::CString::new("1").unwrap();
+            let multi_region = std::ffi::CString::new("chrA:1-2,chrA:3-4").unwrap();
+            let mut read_fast_i_multi_argv = [
+                prog_read_fast_i.as_ptr() as *mut libc::c_char,
+                fa_c.as_ptr() as *mut libc::c_char,
+                fasta_kind.as_ptr() as *mut libc::c_char,
+                multi_count.as_ptr() as *mut libc::c_char,
+                multi_region.as_ptr() as *mut libc::c_char,
+            ];
+            assert_eq!(
+                samples::read_fast_index::samples_read_fast_index_c_53_main(
+                    5,
+                    read_fast_i_multi_argv.as_mut_ptr()
+                ),
+                libc::EXIT_SUCCESS
+            );
+
+            let _ = std::fs::remove_file(fq_path);
+            let _ = std::fs::remove_file(write_fast_path);
+            let _ = std::fs::remove_file(fai_path);
+            let _ = std::fs::remove_file(fa_path);
+        }
+    }
+
+    #[repr(C)]
+    struct TestBgzfCleanupFiles {
+        src_plain: *mut libc::c_char,
+        src_bgzf: *mut libc::c_char,
+        src_idx: *mut libc::c_char,
+        tmp_bgzf: *mut libc::c_char,
+        tmp_idx: *mut libc::c_char,
+        f_plain: *mut libc::FILE,
+        f_bgzf: *mut libc::FILE,
+        f_idx: *mut libc::FILE,
+        text: *const libc::c_uchar,
+        ltext: usize,
+    }
+
+    #[test]
+    fn translated_bgzf_razf_info_reports_valid_and_fallback_messages() {
+        unsafe {
+            let old_level = crate::htslib_mini_rs::hts::hts_get_log_level();
+            crate::htslib_mini_rs::hts::hts_set_log_level(crate::htslib_mini_rs::hts::HTS_LOG_OFF);
+
+            let valid_path = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-razf-valid-{}-{}",
+                std::process::id(),
+                line!()
+            ));
+            let mut valid = vec![0_u8; 8];
+            valid.extend_from_slice(&123_u64.to_be_bytes());
+            valid.extend_from_slice(&4_u64.to_be_bytes());
+            std::fs::write(&valid_path, valid).unwrap();
+            let valid_c = std::ffi::CString::new(valid_path.to_string_lossy().as_bytes()).unwrap();
+            let valid_hfp = crate::htslib_mini_rs::hfile::hopen(valid_c.as_ptr(), c"r".as_ptr());
+            assert!(!valid_hfp.is_null());
+            functions::bgzf_c_315_razf_info(valid_hfp, valid_c.as_ptr());
+            assert_eq!(crate::htslib_mini_rs::hfile::hclose(valid_hfp), 0);
+
+            let short_path = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-razf-short-{}-{}",
+                std::process::id(),
+                line!()
+            ));
+            let mut invalid = Vec::new();
+            invalid.extend_from_slice(&1_u64.to_be_bytes());
+            invalid.extend_from_slice(&1_u64.to_be_bytes());
+            std::fs::write(&short_path, invalid).unwrap();
+            let short_c = std::ffi::CString::new(short_path.to_string_lossy().as_bytes()).unwrap();
+            let short_hfp = crate::htslib_mini_rs::hfile::hopen(short_c.as_ptr(), c"r".as_ptr());
+            assert!(!short_hfp.is_null());
+            functions::bgzf_c_315_razf_info(short_hfp, c"-".as_ptr());
+            assert_eq!(crate::htslib_mini_rs::hfile::hclose(short_hfp), 0);
+
+            crate::htslib_mini_rs::hts::hts_set_log_level(old_level);
+            std::fs::remove_file(valid_path).unwrap();
+            std::fs::remove_file(short_path).unwrap();
+        }
+    }
+
+    #[test]
+    fn translated_bgzf_cleanup_closes_frees_and_unlinks_on_success() {
+        unsafe {
+            let base = c"/data/henriksson/github/claude/cellsnp-lite/htslib-rs/.tmp/cargo-tmp/bgzf-cleanup";
+            let tmp_bgzf = c"/data/henriksson/github/claude/cellsnp-lite/htslib-rs/.tmp/cargo-tmp/bgzf-cleanup.tmp.gz";
+            let tmp_idx = c"/data/henriksson/github/claude/cellsnp-lite/htslib-rs/.tmp/cargo-tmp/bgzf-cleanup.tmp.gz.gzi";
+            let fp = libc::fopen(base.as_ptr(), c"w".as_ptr());
+            assert!(!fp.is_null());
+            let tmp_bgzf_fp = libc::fopen(tmp_bgzf.as_ptr(), c"w".as_ptr());
+            assert!(!tmp_bgzf_fp.is_null());
+            assert_eq!(libc::fclose(tmp_bgzf_fp), 0);
+            let tmp_idx_fp = libc::fopen(tmp_idx.as_ptr(), c"w".as_ptr());
+            assert!(!tmp_idx_fp.is_null());
+            assert_eq!(libc::fclose(tmp_idx_fp), 0);
+
+            let mem_len = 256;
+            let mem = libc::calloc(1, mem_len).cast::<libc::c_char>();
+            assert!(!mem.is_null());
+            libc::snprintf(mem, mem_len, c"%s".as_ptr(), base.as_ptr());
+            libc::snprintf(mem.add(64), mem_len - 64, c"%s.gz".as_ptr(), base.as_ptr());
+            libc::snprintf(
+                mem.add(128),
+                mem_len - 128,
+                c"%s.gz.gzi".as_ptr(),
+                base.as_ptr(),
+            );
+            let text = libc::malloc(8).cast::<libc::c_uchar>();
+            assert!(!text.is_null());
+            let mut files = TestBgzfCleanupFiles {
+                src_plain: mem,
+                src_bgzf: mem.add(64),
+                src_idx: mem.add(128),
+                tmp_bgzf: tmp_bgzf.as_ptr().cast_mut(),
+                tmp_idx: tmp_idx.as_ptr().cast_mut(),
+                f_plain: fp,
+                f_bgzf: std::ptr::null_mut(),
+                f_idx: std::ptr::null_mut(),
+                text,
+                ltext: 8,
+            };
+            functions::test_test_bgzf_c_344_cleanup(
+                (&mut files as *mut TestBgzfCleanupFiles).cast(),
+                libc::EXIT_SUCCESS,
+            );
+            assert!(libc::fopen(tmp_bgzf.as_ptr(), c"r".as_ptr()).is_null());
+            assert!(libc::fopen(tmp_idx.as_ptr(), c"r".as_ptr()).is_null());
+        }
+    }
+
+    #[test]
+    fn translated_bgzf_nul_func_returns_argument() {
+        unsafe {
+            let mut value = 7u8;
+            let ptr = (&mut value as *mut u8).cast::<libc::c_void>();
+            assert_eq!(functions::bgzf_c_1390_bgzf_nul_func(ptr), ptr);
+            assert!(functions::bgzf_c_1390_bgzf_nul_func(std::ptr::null_mut()).is_null());
+        }
+    }
+
+    #[repr(C)]
+    struct TestAnnotTsvCols {
+        n: libc::c_uint,
+        m: libc::c_uint,
+        off: *mut *mut libc::c_char,
+        rmme: *mut libc::c_char,
+    }
+
+    #[repr(C)]
+    struct TestAnnotTsvHdr {
+        name2idx: *mut libc::c_void,
+        cols: *mut TestAnnotTsvCols,
+        annots: *mut TestAnnotTsvCols,
+        dummy: libc::c_int,
+    }
+
+    #[repr(C)]
+    struct TestAnnotTsvDatHeaderOnly {
+        fname: *mut libc::c_char,
+        hdr: TestAnnotTsvHdr,
+    }
+
+    #[repr(C)]
+    struct TestAnnotTsvDat {
+        fname: *mut libc::c_char,
+        hdr: TestAnnotTsvHdr,
+        core: *mut TestAnnotTsvCols,
+        match_: *mut TestAnnotTsvCols,
+        transfer: *mut TestAnnotTsvCols,
+        annots: *mut TestAnnotTsvCols,
+        core_idx: *mut libc::c_int,
+        match_idx: *mut libc::c_int,
+        transfer_idx: *mut libc::c_int,
+        annots_idx: *mut libc::c_int,
+        nannots_added: *mut libc::c_int,
+        coor_base: [libc::c_int; 2],
+        delim: libc::c_char,
+        grow_n: libc::c_int,
+        line: crate::htslib_mini_rs::hts::kstring_t,
+        fp: *mut crate::htslib_mini_rs::hts::htsFile,
+    }
+
+    #[repr(C)]
+    struct TestAnnotTsvNbp {
+        n: usize,
+        m: usize,
+        regs: *mut crate::htslib_mini_rs::hts::hts_pos_t,
+        beg: crate::htslib_mini_rs::hts::hts_pos_t,
+        end: crate::htslib_mini_rs::hts::hts_pos_t,
+    }
+
+    #[repr(C)]
+    struct TestAnnotTsvArgs {
+        nbp: *mut TestAnnotTsvNbp,
+        dst: TestAnnotTsvDat,
+        src: TestAnnotTsvDat,
+        core_str: *mut libc::c_char,
+        coords_str: *mut libc::c_char,
+        match_str: *mut libc::c_char,
+        transfer_str: *mut libc::c_char,
+        annots_str: *mut libc::c_char,
+        headers_str: *mut libc::c_char,
+        delim_str: *mut libc::c_char,
+        temp_dir: *mut libc::c_char,
+        out_fname: *mut libc::c_char,
+        out_fp: *mut crate::htslib_mini_rs::hts::BGZF,
+        allow_dups: libc::c_int,
+        max_annots: libc::c_int,
+        mode: libc::c_int,
+        no_write_hdr: libc::c_int,
+        overlap_either: libc::c_int,
+        overlap_src: f64,
+        overlap_dst: f64,
+        idx: *mut libc::c_void,
+        itr: *mut libc::c_void,
+        tmp_kstr: crate::htslib_mini_rs::hts::kstring_t,
+        tmp_cols: *mut TestAnnotTsvCols,
+        tmp_hash: *mut *mut libc::c_void,
+    }
+
+    unsafe fn make_test_annot_cols() -> *mut TestAnnotTsvCols {
+        let cols =
+            libc::calloc(1, std::mem::size_of::<TestAnnotTsvCols>()).cast::<TestAnnotTsvCols>();
+        assert!(!cols.is_null());
+        (*cols).n = 2;
+        (*cols).m = 2;
+        (*cols).rmme = libc::strdup(c"a\tb".as_ptr());
+        (*cols).off = libc::calloc(2, std::mem::size_of::<*mut libc::c_char>()).cast();
+        assert!(!(*cols).rmme.is_null());
+        assert!(!(*cols).off.is_null());
+        *(*cols).off = (*cols).rmme;
+        *(*cols).off.add(1) = (*cols).rmme.add(2);
+        cols
+    }
+
+    #[test]
+    fn translated_annot_tsv_nbp_helpers_measure_interval_union() {
+        unsafe {
+            let nbp =
+                libc::calloc(1, std::mem::size_of::<TestAnnotTsvNbp>()).cast::<TestAnnotTsvNbp>();
+            assert!(!nbp.is_null());
+
+            functions::annot_tsv_c_142_nbp_reset(nbp.cast(), 10, 40);
+            assert_eq!((*nbp).n, 0);
+            assert_eq!((*nbp).beg, 10);
+            assert_eq!((*nbp).end, 40);
+            assert_eq!(functions::annot_tsv_c_168_nbp_length(nbp.cast()), 0);
+
+            functions::annot_tsv_c_148_nbp_add(nbp.cast(), 10, 15);
+            functions::annot_tsv_c_148_nbp_add(nbp.cast(), 14, 20);
+            functions::annot_tsv_c_148_nbp_add(nbp.cast(), 30, 32);
+            assert_eq!(functions::annot_tsv_c_168_nbp_length(nbp.cast()), 14);
+
+            let a: crate::htslib_mini_rs::hts::hts_pos_t = 5;
+            let b: crate::htslib_mini_rs::hts::hts_pos_t = 7;
+            assert_eq!(
+                functions::annot_tsv_c_160_compare_hts_pos(
+                    (&a as *const crate::htslib_mini_rs::hts::hts_pos_t).cast(),
+                    (&b as *const crate::htslib_mini_rs::hts::hts_pos_t).cast()
+                ),
+                -1
+            );
+            assert_eq!(
+                functions::annot_tsv_c_160_compare_hts_pos(
+                    (&b as *const crate::htslib_mini_rs::hts::hts_pos_t).cast(),
+                    (&a as *const crate::htslib_mini_rs::hts::hts_pos_t).cast()
+                ),
+                1
+            );
+            assert_eq!(
+                functions::annot_tsv_c_160_compare_hts_pos(
+                    (&a as *const crate::htslib_mini_rs::hts::hts_pos_t).cast(),
+                    (&a as *const crate::htslib_mini_rs::hts::hts_pos_t).cast()
+                ),
+                0
+            );
+
+            functions::annot_tsv_c_137_nbp_destroy(nbp.cast());
+        }
+    }
+
+    #[test]
+    fn translated_annot_tsv_cols_split_and_append_preserve_fields() {
+        unsafe {
+            let cols = functions::annot_tsv_c_187_cols_split(
+                c"alpha\tbeta\t".as_ptr(),
+                std::ptr::null_mut(),
+                b'\t' as libc::c_char,
+            )
+            .cast::<TestAnnotTsvCols>();
+            assert!(!cols.is_null());
+            assert_eq!((*cols).n, 3);
+            assert_eq!(
+                std::ffi::CStr::from_ptr(*(*cols).off.add(0)).to_bytes(),
+                b"alpha"
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(*(*cols).off.add(1)).to_bytes(),
+                b"beta"
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(*(*cols).off.add(2)).to_bytes(),
+                b""
+            );
+
+            functions::annot_tsv_c_217_cols_append(cols.cast(), c"gamma".as_ptr().cast_mut());
+            assert_eq!((*cols).n, 4);
+            assert_eq!((*cols).m, 4);
+            assert_eq!(
+                std::ffi::CStr::from_ptr(*(*cols).off.add(3)).to_bytes(),
+                b"gamma"
+            );
+            assert!(!(*cols).rmme.is_null());
+
+            let mut borrowed = TestAnnotTsvCols {
+                n: 0,
+                m: 0,
+                off: std::ptr::null_mut(),
+                rmme: std::ptr::null_mut(),
+            };
+            functions::annot_tsv_c_217_cols_append(
+                (&mut borrowed as *mut TestAnnotTsvCols).cast(),
+                c"borrowed".as_ptr().cast_mut(),
+            );
+            assert_eq!(borrowed.n, 1);
+            assert_eq!(
+                std::ffi::CStr::from_ptr(*borrowed.off).to_bytes(),
+                b"borrowed"
+            );
+            libc::free(borrowed.off.cast());
+
+            functions::annot_tsv_c_269_cols_destroy(cols.cast());
+        }
+    }
+
+    #[test]
+    fn translated_annot_tsv_read_next_line_reuses_buffer_then_reads_stream() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-annot-tsv-read-line-{}-{}.txt",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, b"first\nsecond\n").unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let fp = crate::htslib_mini_rs::hts::hts_open(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            let mut dat: TestAnnotTsvDat = std::mem::zeroed();
+            dat.fname = c_path.as_ptr().cast_mut();
+            dat.fp = fp;
+
+            assert_eq!(
+                functions::annot_tsv_c_471_read_next_line(
+                    (&mut dat as *mut TestAnnotTsvDat).cast()
+                ),
+                5
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut dat.line)),
+                c"first"
+            );
+            assert_eq!(
+                functions::annot_tsv_c_471_read_next_line(
+                    (&mut dat as *mut TestAnnotTsvDat).cast()
+                ),
+                5
+            );
+
+            crate::htslib_mini_rs::hts::ks_clear(&mut dat.line);
+            assert_eq!(
+                functions::annot_tsv_c_471_read_next_line(
+                    (&mut dat as *mut TestAnnotTsvDat).cast()
+                ),
+                6
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::hts::ks_c_str(&mut dat.line)),
+                c"second"
+            );
+
+            crate::htslib_mini_rs::hts::ks_clear(&mut dat.line);
+            assert_eq!(
+                functions::annot_tsv_c_471_read_next_line(
+                    (&mut dat as *mut TestAnnotTsvDat).cast()
+                ),
+                0
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut dat.line);
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_annot_tsv_sanity_check_columns_maps_header_indices() {
+        unsafe {
+            let name2idx = crate::htslib_mini_rs::sam::khash_str2int_init();
+            assert!(!name2idx.is_null());
+            crate::htslib_mini_rs::sam::khash_str2int_set(name2idx, c"CHROM".as_ptr(), 0);
+            crate::htslib_mini_rs::sam::khash_str2int_set(name2idx, c"POS".as_ptr(), 1);
+            let mut hdr = TestAnnotTsvHdr {
+                name2idx,
+                cols: std::ptr::null_mut(),
+                annots: std::ptr::null_mut(),
+                dummy: 0,
+            };
+            let cols = functions::annot_tsv_c_187_cols_split(
+                c"POS\tMISSING\tCHROM".as_ptr(),
+                std::ptr::null_mut(),
+                b'\t' as libc::c_char,
+            )
+            .cast::<TestAnnotTsvCols>();
+
+            let mut col2idx: *mut libc::c_int = std::ptr::null_mut();
+            functions::annot_tsv_c_480_sanity_check_columns(
+                c"unit.tsv".as_ptr().cast_mut(),
+                (&mut hdr as *mut TestAnnotTsvHdr).cast(),
+                cols.cast(),
+                &mut col2idx,
+                1,
+            );
+            assert!(!col2idx.is_null());
+            assert_eq!(*col2idx.add(0), 1);
+            assert_eq!(*col2idx.add(1), -1);
+            assert_eq!(*col2idx.add(2), 0);
+
+            libc::free(col2idx.cast());
+            functions::annot_tsv_c_269_cols_destroy(cols.cast());
+            crate::htslib_mini_rs::sam::khash_str2int_destroy(name2idx);
+        }
+    }
+
+    #[test]
+    fn translated_annot_tsv_parse_coor_base_handles_explicit_and_bed_defaults() {
+        unsafe {
+            let mut dat: TestAnnotTsvDat = std::mem::zeroed();
+
+            dat.fname = c"input.tsv".as_ptr().cast_mut();
+            let mut explicit = *b"01\0";
+            functions::annot_tsv_c_495_parse_coor_base(
+                std::ptr::null_mut(),
+                explicit.as_mut_ptr().cast(),
+                (&mut dat as *mut TestAnnotTsvDat).cast(),
+            );
+            assert_eq!(dat.coor_base, [0, 1]);
+
+            dat.fname = c"regions.BED.gz".as_ptr().cast_mut();
+            let mut empty = [0i8];
+            functions::annot_tsv_c_495_parse_coor_base(
+                std::ptr::null_mut(),
+                empty.as_mut_ptr(),
+                (&mut dat as *mut TestAnnotTsvDat).cast(),
+            );
+            assert_eq!(dat.coor_base, [0, 1]);
+
+            dat.fname = c"regions.tsv".as_ptr().cast_mut();
+            functions::annot_tsv_c_495_parse_coor_base(
+                std::ptr::null_mut(),
+                empty.as_mut_ptr(),
+                (&mut dat as *mut TestAnnotTsvDat).cast(),
+            );
+            assert_eq!(dat.coor_base, [1, 1]);
+        }
+    }
+
+    #[test]
+    fn translated_annot_tsv_parse_tab_with_payload_extracts_region_columns() {
+        unsafe {
+            let mut core_idx = [0, 1, 2];
+            let mut dat: TestAnnotTsvDat = std::mem::zeroed();
+            dat.core_idx = core_idx.as_mut_ptr();
+            dat.coor_base = [1, 1];
+            dat.delim = b'\t' as libc::c_char;
+
+            let mut chr_beg: *mut libc::c_char = std::ptr::null_mut();
+            let mut chr_end: *mut libc::c_char = std::ptr::null_mut();
+            let mut beg: crate::htslib_mini_rs::hts::hts_pos_t = 0;
+            let mut end: crate::htslib_mini_rs::hts::hts_pos_t = 0;
+            let mut payload: *mut TestAnnotTsvCols = std::ptr::null_mut();
+
+            assert_eq!(
+                functions::annot_tsv_c_276_parse_tab_with_payload(
+                    c"chr1\t10\t20".as_ptr(),
+                    &mut chr_beg,
+                    &mut chr_end,
+                    &mut beg,
+                    &mut end,
+                    (&mut payload as *mut *mut TestAnnotTsvCols).cast(),
+                    (&mut dat as *mut TestAnnotTsvDat).cast(),
+                ),
+                0
+            );
+            assert!(!payload.is_null());
+            assert_eq!(std::ffi::CStr::from_ptr(chr_beg).to_bytes(), b"chr1");
+            assert_eq!(*chr_end, b'1' as libc::c_char);
+            assert_eq!(beg, 10);
+            assert_eq!(end, 20);
+            functions::annot_tsv_c_322_free_payload(
+                (&mut payload as *mut *mut TestAnnotTsvCols).cast(),
+            );
+
+            dat.coor_base = [0, 1];
+            assert_eq!(
+                functions::annot_tsv_c_276_parse_tab_with_payload(
+                    c"chr2\t0\t10".as_ptr(),
+                    &mut chr_beg,
+                    &mut chr_end,
+                    &mut beg,
+                    &mut end,
+                    (&mut payload as *mut *mut TestAnnotTsvCols).cast(),
+                    (&mut dat as *mut TestAnnotTsvDat).cast(),
+                ),
+                0
+            );
+            assert_eq!(beg, 1);
+            assert_eq!(end, 10);
+            functions::annot_tsv_c_322_free_payload(
+                (&mut payload as *mut *mut TestAnnotTsvCols).cast(),
+            );
+
+            assert_eq!(
+                functions::annot_tsv_c_276_parse_tab_with_payload(
+                    c"#comment".as_ptr(),
+                    &mut chr_beg,
+                    &mut chr_end,
+                    &mut beg,
+                    &mut end,
+                    (&mut payload as *mut *mut TestAnnotTsvCols).cast(),
+                    (&mut dat as *mut TestAnnotTsvDat).cast(),
+                ),
+                -1
+            );
+            assert!(payload.is_null());
+        }
+    }
+
+    #[test]
+    fn translated_annot_tsv_write_helpers_emit_strings_and_annotations() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-annot-tsv-write-{}-{}.txt",
+            std::process::id(),
+            line!()
+        ));
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let out_fp = crate::htslib_mini_rs::bgzf::bgzf_open(c_path.as_ptr(), c"wu".as_ptr());
+            assert!(!out_fp.is_null());
+
+            let nbp =
+                libc::calloc(1, std::mem::size_of::<TestAnnotTsvNbp>()).cast::<TestAnnotTsvNbp>();
+            assert!(!nbp.is_null());
+            functions::annot_tsv_c_142_nbp_reset(nbp.cast(), 10, 20);
+            functions::annot_tsv_c_148_nbp_add(nbp.cast(), 10, 15);
+            functions::annot_tsv_c_148_nbp_add(nbp.cast(), 14, 20);
+
+            let annots = functions::annot_tsv_c_187_cols_split(
+                c"nbp,frac,cnt".as_ptr(),
+                std::ptr::null_mut(),
+                b',' as libc::c_char,
+            )
+            .cast::<TestAnnotTsvCols>();
+            let mut annots_idx = [1, 2, 4];
+            let mut args: TestAnnotTsvArgs = std::mem::zeroed();
+            args.nbp = nbp;
+            args.dst.annots = annots;
+            args.dst.annots_idx = annots_idx.as_mut_ptr();
+            args.dst.delim = b'\t' as libc::c_char;
+            args.out_fp = out_fp;
+
+            functions::annot_tsv_c_703_write_string(
+                (&mut args as *mut TestAnnotTsvArgs).cast(),
+                c"row".as_ptr().cast_mut(),
+                0,
+            );
+            functions::annot_tsv_c_703_write_string(
+                (&mut args as *mut TestAnnotTsvArgs).cast(),
+                c"".as_ptr().cast_mut(),
+                0,
+            );
+            functions::annot_tsv_c_709_write_annots((&mut args as *mut TestAnnotTsvArgs).cast());
+            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(out_fp), 0);
+
+            crate::htslib_mini_rs::hts::ks_free(&mut args.tmp_kstr);
+            functions::annot_tsv_c_269_cols_destroy(annots.cast());
+            functions::annot_tsv_c_137_nbp_destroy(nbp.cast());
+        }
+
+        let output = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(output, "row.\t11\t1\t2");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_annot_tsv_destroy_data_releases_owned_state() {
+        let input_path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-annot-tsv-destroy-in-{}-{}.sam",
+            std::process::id(),
+            line!()
+        ));
+        let output_path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-annot-tsv-destroy-out-{}-{}.txt",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&input_path, b"@HD\tVN:1.6\n").unwrap();
+        let c_input = std::ffi::CString::new(input_path.to_string_lossy().as_bytes()).unwrap();
+        let c_output = std::ffi::CString::new(output_path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let out_fp = crate::htslib_mini_rs::bgzf::bgzf_open(c_output.as_ptr(), c"wu".as_ptr());
+            assert!(!out_fp.is_null());
+            let dst_fp = crate::htslib_mini_rs::hts::hts_open(c_input.as_ptr(), c"r".as_ptr());
+            assert!(!dst_fp.is_null());
+
+            let src_transfer = functions::annot_tsv_c_187_cols_split(
+                c"A,B".as_ptr(),
+                std::ptr::null_mut(),
+                b',' as libc::c_char,
+            )
+            .cast::<TestAnnotTsvCols>();
+            let dst_transfer = functions::annot_tsv_c_187_cols_split(
+                c"C,D".as_ptr(),
+                std::ptr::null_mut(),
+                b',' as libc::c_char,
+            )
+            .cast::<TestAnnotTsvCols>();
+            let tmp_cols =
+                libc::calloc(2, std::mem::size_of::<TestAnnotTsvCols>()).cast::<TestAnnotTsvCols>();
+            assert!(!tmp_cols.is_null());
+            (*tmp_cols).n = 1;
+            (*tmp_cols).m = 1;
+            (*tmp_cols).rmme = libc::strdup(c"value".as_ptr());
+            (*tmp_cols).off = libc::calloc(1, std::mem::size_of::<*mut libc::c_char>()).cast();
+            assert!(!(*tmp_cols).rmme.is_null());
+            assert!(!(*tmp_cols).off.is_null());
+            *(*tmp_cols).off = (*tmp_cols).rmme;
+
+            let tmp_hash = libc::calloc(2, std::mem::size_of::<*mut libc::c_void>())
+                .cast::<*mut libc::c_void>();
+            assert!(!tmp_hash.is_null());
+            *tmp_hash = crate::htslib_mini_rs::sam::khash_str2int_init();
+            *tmp_hash.add(1) = crate::htslib_mini_rs::sam::khash_str2int_init();
+
+            let nbp =
+                libc::calloc(1, std::mem::size_of::<TestAnnotTsvNbp>()).cast::<TestAnnotTsvNbp>();
+            assert!(!nbp.is_null());
+            functions::annot_tsv_c_148_nbp_add(nbp.cast(), 1, 2);
+
+            let mut args: TestAnnotTsvArgs = std::mem::zeroed();
+            args.nbp = nbp;
+            args.out_fp = out_fp;
+            args.dst.fp = dst_fp;
+            args.src.transfer = src_transfer;
+            args.dst.transfer = dst_transfer;
+            args.src.core = make_test_annot_cols();
+            args.dst.core = make_test_annot_cols();
+            args.src.match_ = make_test_annot_cols();
+            args.dst.match_ = make_test_annot_cols();
+            args.src.annots = make_test_annot_cols();
+            args.dst.annots = make_test_annot_cols();
+            args.src.hdr.cols = make_test_annot_cols();
+            args.dst.hdr.cols = make_test_annot_cols();
+            args.src.nannots_added = libc::calloc(2, std::mem::size_of::<libc::c_int>()).cast();
+            args.src.core_idx = libc::calloc(3, std::mem::size_of::<libc::c_int>()).cast();
+            args.dst.core_idx = libc::calloc(3, std::mem::size_of::<libc::c_int>()).cast();
+            args.src.match_idx = libc::calloc(1, std::mem::size_of::<libc::c_int>()).cast();
+            args.dst.match_idx = libc::calloc(1, std::mem::size_of::<libc::c_int>()).cast();
+            args.src.transfer_idx = libc::calloc(2, std::mem::size_of::<libc::c_int>()).cast();
+            args.dst.transfer_idx = libc::calloc(2, std::mem::size_of::<libc::c_int>()).cast();
+            args.src.annots_idx = libc::calloc(1, std::mem::size_of::<libc::c_int>()).cast();
+            args.dst.annots_idx = libc::calloc(1, std::mem::size_of::<libc::c_int>()).cast();
+            args.src.line.s = libc::strdup(c"src".as_ptr());
+            args.src.line.l = 3;
+            args.src.line.m = 4;
+            args.dst.line.s = libc::strdup(c"dst".as_ptr());
+            args.dst.line.l = 3;
+            args.dst.line.m = 4;
+            args.tmp_kstr.s = libc::strdup(c"tmp".as_ptr());
+            args.tmp_kstr.l = 3;
+            args.tmp_kstr.m = 4;
+            args.tmp_cols = tmp_cols;
+            args.tmp_hash = tmp_hash;
+
+            functions::annot_tsv_c_666_destroy_data((&mut args as *mut TestAnnotTsvArgs).cast());
+        }
+
+        std::fs::remove_file(input_path).unwrap();
+        std::fs::remove_file(output_path).unwrap();
+    }
+
+    #[test]
+    fn translated_annot_tsv_column_cleanup_helpers_free_owned_buffers() {
+        unsafe {
+            let mut cols = TestAnnotTsvCols {
+                n: 2,
+                m: 2,
+                off: libc::calloc(2, std::mem::size_of::<*mut libc::c_char>()).cast(),
+                rmme: libc::strdup(c"a\tb".as_ptr()),
+            };
+            assert!(!cols.off.is_null());
+            assert!(!cols.rmme.is_null());
+            *cols.off = cols.rmme;
+            *cols.off.add(1) = cols.rmme.add(2);
+            functions::annot_tsv_c_261_cols_clear((&mut cols as *mut TestAnnotTsvCols).cast());
+            assert!(cols.rmme.is_null());
+            assert!(cols.off.is_null());
+
+            let cols_owned = make_test_annot_cols();
+            functions::annot_tsv_c_269_cols_destroy(cols_owned.cast());
+
+            let payload_cols = make_test_annot_cols();
+            let mut payload = payload_cols;
+            functions::annot_tsv_c_322_free_payload(
+                (&mut payload as *mut *mut TestAnnotTsvCols).cast(),
+            );
+
+            let header_cols = make_test_annot_cols();
+            let mut dat = TestAnnotTsvDatHeaderOnly {
+                fname: std::ptr::null_mut(),
+                hdr: TestAnnotTsvHdr {
+                    name2idx: std::ptr::null_mut(),
+                    cols: header_cols,
+                    annots: std::ptr::null_mut(),
+                    dummy: 0,
+                },
+            };
+            functions::annot_tsv_c_465_destroy_header(
+                (&mut dat as *mut TestAnnotTsvDatHeaderOnly).cast(),
+            );
+        }
+    }
+
+    #[test]
+    fn translated_annot_tsv_usage_text_returns_static_help() {
+        unsafe {
+            functions::annot_tsv_c_119_HTS_FORMAT();
+            let text = std::ffi::CStr::from_ptr(functions::annot_tsv_c_880_usage_text())
+                .to_str()
+                .unwrap();
+            assert!(text.contains("Usage: annot-tsv [OPTIONS]"));
+            assert!(text.contains("--source-file FILE"));
+            assert!(text.contains("--drop-overlaps"));
+        }
+    }
+
+    #[test]
+    fn translated_sample_printauxdata_accepts_scalar_and_array_aux() {
+        unsafe {
+            let fp = libc::fopen(c"/dev/null".as_ptr(), c"w".as_ptr());
+            assert!(!fp.is_null());
+            let b = crate::htslib_mini_rs::sam::bam_init1();
+            assert!(!b.is_null());
+
+            let xq = [7u8];
+            assert_eq!(
+                crate::htslib_mini_rs::sam::bam_aux_append(
+                    b,
+                    c"XQ".as_ptr(),
+                    b'C' as libc::c_char,
+                    1,
+                    xq.as_ptr(),
+                ),
+                0
+            );
+            let cb = b"cell\0";
+            assert_eq!(
+                crate::htslib_mini_rs::sam::bam_aux_append(
+                    b,
+                    c"CB".as_ptr(),
+                    b'Z' as libc::c_char,
+                    cb.len() as libc::c_int,
+                    cb.as_ptr(),
+                ),
+                0
+            );
+            let xa = [b'C', 2, 0, 0, 0, 10, 20];
+            assert_eq!(
+                crate::htslib_mini_rs::sam::bam_aux_append(
+                    b,
+                    c"XA".as_ptr(),
+                    b'B' as libc::c_char,
+                    xa.len() as libc::c_int,
+                    xa.as_ptr(),
+                ),
+                0
+            );
+
+            for tag in [c"XQ".as_ptr(), c"CB".as_ptr(), c"XA".as_ptr()] {
+                let aux = crate::htslib_mini_rs::sam::bam_aux_get(b, tag);
+                assert!(!aux.is_null());
+                let type_ = crate::htslib_mini_rs::sam::bam_aux_type(aux);
+                assert_eq!(
+                    samples::read_aux::samples_read_aux_c_51_printauxdata(fp, type_, -1, aux),
+                    libc::EXIT_SUCCESS
+                );
+                assert_eq!(
+                    samples::dump_aux::samples_dump_aux_c_51_printauxdata(fp, type_, -1, aux),
+                    libc::EXIT_SUCCESS
+                );
+            }
+            let aux = crate::htslib_mini_rs::sam::bam_aux_get(b, c"XQ".as_ptr());
+            assert_eq!(
+                samples::read_aux::samples_read_aux_c_51_printauxdata(
+                    fp,
+                    b'?' as libc::c_char,
+                    -1,
+                    aux
+                ),
+                libc::EXIT_FAILURE
+            );
+
+            crate::htslib_mini_rs::sam::bam_destroy1(b);
+            assert_eq!(libc::fclose(fp), 0);
+        }
+    }
+
+    #[test]
+    fn translated_sample_pileup_callbacks_are_noops() {
+        unsafe {
+            let mut cd = crate::htslib_mini_rs::sam::bam_pileup_cd { i: 123 };
+            assert_eq!(
+                samples::mpileup::samples_mpileup_c_56_plpconstructor(
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    &mut cd,
+                ),
+                0
+            );
+            assert_eq!(
+                samples::mpileup::samples_mpileup_c_60_plpdestructor(
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    &mut cd,
+                ),
+                0
+            );
+            assert_eq!(
+                samples::pileup::samples_pileup_c_56_plpconstructor(
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    &mut cd,
+                ),
+                0
+            );
+            assert_eq!(
+                samples::pileup::samples_pileup_c_65_plpdestructor(
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    &mut cd,
+                ),
+                0
+            );
+            let b = crate::htslib_mini_rs::sam::bam_init1();
+            assert!(!b.is_null());
+            let cigar = [(4u32 << crate::htslib_mini_rs::sam::BAM_CIGAR_SHIFT)
+                | crate::htslib_mini_rs::sam::BAM_CMATCH as u32];
+            assert!(
+                crate::htslib_mini_rs::sam::bam_set1(
+                    b,
+                    5,
+                    c"bmod".as_ptr(),
+                    0,
+                    0,
+                    0,
+                    60,
+                    1,
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    4,
+                    c"ACAN".as_ptr(),
+                    std::ptr::null(),
+                    0,
+                ) > 0
+            );
+            let mm = b"A+m,1;\0";
+            assert_eq!(
+                crate::htslib_mini_rs::sam::bam_aux_append(
+                    b,
+                    c"MM".as_ptr(),
+                    b'Z' as c_char,
+                    mm.len() as libc::c_int,
+                    mm.as_ptr(),
+                ),
+                0
+            );
+            let ml = [b'C', 1, 0, 0, 0, 37];
+            assert_eq!(
+                crate::htslib_mini_rs::sam::bam_aux_append(
+                    b,
+                    c"ML".as_ptr(),
+                    b'B' as c_char,
+                    ml.len() as libc::c_int,
+                    ml.as_ptr(),
+                ),
+                0
+            );
+            let mut mod_cd = crate::htslib_mini_rs::sam::bam_pileup_cd {
+                p: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                samples::pileup_mod::samples_pileup_mod_c_56_plpconstructor(
+                    std::ptr::null_mut(),
+                    b,
+                    &mut mod_cd,
+                ),
+                0
+            );
+            assert!(!mod_cd.p.is_null());
+            assert_eq!(
+                (*(mod_cd
+                    .p
+                    .cast::<crate::htslib_mini_rs::sam::hts_base_mod_state>()))
+                .nmods,
+                1
+            );
+            assert_eq!(
+                samples::pileup_mod::samples_pileup_mod_c_70_plpdestructor(
+                    std::ptr::null_mut(),
+                    b,
+                    &mut mod_cd,
+                ),
+                0
+            );
+            assert!(mod_cd.p.is_null());
+            crate::htslib_mini_rs::sam::bam_destroy1(b);
+            assert_eq!(
+                samples::mpileup::samples_mpileup_c_68_readdata(
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut()
+                ),
+                -2
+            );
+            assert_eq!(
+                samples::pileup_mod::samples_pileup_mod_c_82_readdata(
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                -2
+            );
+            assert_eq!(
+                samples::pileup::samples_pileup_c_76_readdata(
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut()
+                ),
+                -2
+            );
+        }
+    }
+
+    #[repr(C)]
+    struct TestQTaskUnorderedData {
+        count: libc::c_int,
+        maxsize: libc::c_int,
+        bamarray: *mut *mut crate::htslib_mini_rs::sam::bam1_t,
+        cache: *mut TestQTaskUnorderedDataCache,
+        bases: *mut libc::c_void,
+        next: *mut TestQTaskUnorderedData,
+    }
+
+    #[repr(C)]
+    struct TestQTaskUnorderedDataCache {
+        lock: libc::pthread_mutex_t,
+        list: *mut TestQTaskUnorderedData,
+    }
+
+    #[repr(C)]
+    struct TestQTaskOrderedData {
+        count: libc::c_int,
+        maxsize: libc::c_int,
+        bamarray: *mut *mut crate::htslib_mini_rs::sam::bam1_t,
+        next: *mut TestQTaskOrderedData,
+    }
+
+    #[repr(C)]
+    struct TestQTaskOrderedDataCache {
+        lock: libc::pthread_mutex_t,
+        list: *mut TestQTaskOrderedData,
+    }
+
+    #[test]
+    fn translated_qtask_bamstorage_helpers_allocate_and_cleanup_chunks() {
+        unsafe {
+            let mut unordered_cache: TestQTaskUnorderedDataCache = std::mem::zeroed();
+            assert_eq!(
+                libc::pthread_mutex_init(&mut unordered_cache.lock, std::ptr::null()),
+                0
+            );
+            let mut bases = [0_u64; 16];
+            let unordered = samples::qtask_unordered::samples_qtask_unordered_c_76_getbamstorage(
+                2,
+                bases.as_mut_ptr().cast(),
+                (&mut unordered_cache as *mut TestQTaskUnorderedDataCache).cast(),
+            )
+            .cast::<TestQTaskUnorderedData>();
+            assert!(!unordered.is_null());
+            assert_eq!((*unordered).count, 0);
+            assert_eq!((*unordered).maxsize, 2);
+            assert_eq!((*unordered).bases, bases.as_mut_ptr().cast());
+            assert!(!(*unordered).bamarray.is_null());
+            assert!(!(*(*unordered).bamarray).is_null());
+            assert!(!(*(*unordered).bamarray.add(1)).is_null());
+            samples::qtask_unordered::samples_qtask_unordered_c_128_cleanup_bamstorage(
+                unordered.cast(),
+            );
+            assert_eq!(libc::pthread_mutex_destroy(&mut unordered_cache.lock), 0);
+            assert!(
+                samples::qtask_unordered::samples_qtask_unordered_c_76_getbamstorage(
+                    2,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+                .is_null()
+            );
+
+            let mut ordered_cache: TestQTaskOrderedDataCache = std::mem::zeroed();
+            assert_eq!(
+                libc::pthread_mutex_init(&mut ordered_cache.lock, std::ptr::null()),
+                0
+            );
+            let ordered = samples::qtask_ordered::samples_qtask_ordered_c_75_getbamstorage(
+                3,
+                (&mut ordered_cache as *mut TestQTaskOrderedDataCache).cast(),
+            )
+            .cast::<TestQTaskOrderedData>();
+            assert!(!ordered.is_null());
+            assert_eq!((*ordered).count, 0);
+            assert_eq!((*ordered).maxsize, 3);
+            assert!(!(*ordered).bamarray.is_null());
+            for i in 0..3 {
+                assert!(!(*(*ordered).bamarray.add(i)).is_null());
+            }
+            samples::qtask_ordered::samples_qtask_ordered_c_121_cleanup_bamstorage(ordered.cast());
+            assert_eq!(libc::pthread_mutex_destroy(&mut ordered_cache.lock), 0);
+            assert!(
+                samples::qtask_ordered::samples_qtask_ordered_c_75_getbamstorage(
+                    3,
+                    std::ptr::null_mut(),
+                )
+                .is_null()
+            );
+
+            samples::qtask_unordered::samples_qtask_unordered_c_128_cleanup_bamstorage(
+                std::ptr::null_mut(),
+            );
+            samples::qtask_ordered::samples_qtask_ordered_c_121_cleanup_bamstorage(
+                std::ptr::null_mut(),
+            );
+        }
+    }
+
+    #[test]
+    fn translated_qtask_processors_count_bases_and_add_gc_ratio() {
+        unsafe {
+            let mut unordered_cache: TestQTaskUnorderedDataCache = std::mem::zeroed();
+            assert_eq!(
+                libc::pthread_mutex_init(&mut unordered_cache.lock, std::ptr::null()),
+                0
+            );
+            let mut bases = [0_u64; 16];
+            let unordered = samples::qtask_unordered::samples_qtask_unordered_c_76_getbamstorage(
+                1,
+                bases.as_mut_ptr().cast(),
+                (&mut unordered_cache as *mut TestQTaskUnorderedDataCache).cast(),
+            )
+            .cast::<TestQTaskUnorderedData>();
+            assert!(!unordered.is_null());
+
+            let cigar = [(4u32 << crate::htslib_mini_rs::sam::BAM_CIGAR_SHIFT)
+                | crate::htslib_mini_rs::sam::BAM_CMATCH as u32];
+            assert!(
+                crate::htslib_mini_rs::sam::bam_set1(
+                    *(*unordered).bamarray,
+                    6,
+                    c"qtask".as_ptr(),
+                    0,
+                    0,
+                    0,
+                    60,
+                    1,
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    4,
+                    c"ACGT".as_ptr(),
+                    std::ptr::null(),
+                    0,
+                ) > 0
+            );
+            (*unordered).count = 1;
+            assert!(
+                samples::qtask_unordered::samples_qtask_unordered_c_148_thread_unordered_proc(
+                    unordered.cast(),
+                )
+                .is_null()
+            );
+            assert_eq!(bases[1], 1);
+            assert_eq!(bases[2], 1);
+            assert_eq!(bases[4], 1);
+            assert_eq!(bases[8], 1);
+            assert_eq!(unordered_cache.list, unordered);
+            samples::qtask_unordered::samples_qtask_unordered_c_128_cleanup_bamstorage(
+                unordered_cache.list.cast(),
+            );
+            assert_eq!(libc::pthread_mutex_destroy(&mut unordered_cache.lock), 0);
+
+            let mut ordered_cache: TestQTaskOrderedDataCache = std::mem::zeroed();
+            assert_eq!(
+                libc::pthread_mutex_init(&mut ordered_cache.lock, std::ptr::null()),
+                0
+            );
+            let ordered = samples::qtask_ordered::samples_qtask_ordered_c_75_getbamstorage(
+                1,
+                (&mut ordered_cache as *mut TestQTaskOrderedDataCache).cast(),
+            )
+            .cast::<TestQTaskOrderedData>();
+            assert!(!ordered.is_null());
+            assert!(
+                crate::htslib_mini_rs::sam::bam_set1(
+                    *(*ordered).bamarray,
+                    6,
+                    c"qtask".as_ptr(),
+                    0,
+                    0,
+                    0,
+                    60,
+                    1,
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    4,
+                    c"ACGT".as_ptr(),
+                    std::ptr::null(),
+                    0,
+                ) > 0
+            );
+            (*ordered).count = 1;
+            assert_eq!(
+                samples::qtask_ordered::samples_qtask_ordered_c_143_thread_ordered_proc(
+                    ordered.cast()
+                ),
+                ordered.cast()
+            );
+            let xr = crate::htslib_mini_rs::sam::bam_aux_get(*(*ordered).bamarray, c"xr".as_ptr());
+            assert!(!xr.is_null());
+            assert!((crate::htslib_mini_rs::sam::bam_aux2f(xr) - 0.5).abs() < 1e-6);
+            samples::qtask_ordered::samples_qtask_ordered_c_121_cleanup_bamstorage(ordered.cast());
+            assert_eq!(libc::pthread_mutex_destroy(&mut ordered_cache.lock), 0);
+            assert!(
+                samples::qtask_ordered::samples_qtask_ordered_c_143_thread_ordered_proc(
+                    std::ptr::null_mut(),
+                )
+                .is_null()
+            );
+        }
+    }
+
+    #[test]
+    fn translated_plugins_dlhts_verbose_log_flushes_when_quiet() {
+        unsafe {
+            functions::test_plugins_dlhts_c_94_verbose_log(c"quiet message".as_ptr());
+        }
+    }
+
+    #[test]
+    fn translated_plugins_dlhts_symbol_helpers_find_libc_symbols() {
+        unsafe {
+            let handle = libc::dlopen(c"libc.so.6".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+            assert!(!handle.is_null());
+
+            let malloc_sym = functions::test_plugins_dlhts_c_48_sym(handle, c"malloc".as_ptr());
+            assert!(!malloc_sym.is_null());
+            let free_func = functions::test_plugins_dlhts_c_59_func(handle, c"free".as_ptr());
+            assert!(!free_func.is_null());
+
+            assert_eq!(libc::dlclose(handle), 0);
+        }
+    }
+
+    #[test]
+    fn translated_plugins_dlhts_hopen_classifies_supported_failures() {
+        unsafe {
+            functions::TEST_PLUGINS_DLHTS_ERRORS = 0;
+
+            functions::test_plugins_dlhts_c_75_test_hopen(
+                c"no-such-htslib-plugin-scheme://missing".as_ptr(),
+                0,
+            );
+            let errors = functions::TEST_PLUGINS_DLHTS_ERRORS;
+            assert_eq!(errors, 0);
+
+            functions::test_plugins_dlhts_c_75_test_hopen(
+                c"/definitely/not/a/real/htslib-mini-rs-input".as_ptr(),
+                1,
+            );
+            let errors = functions::TEST_PLUGINS_DLHTS_ERRORS;
+            assert_eq!(errors, 0);
+        }
+    }
+
+    #[test]
+    fn translated_libcurl_is_authorization_checks_header_prefix() {
+        unsafe {
+            assert_eq!(
+                functions::hfile_libcurl_c_395_is_authorization(
+                    c"Authorization: Bearer token".as_ptr(),
+                ),
+                1
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_395_is_authorization(
+                    c"authorization: Basic xyz".as_ptr(),
+                ),
+                1
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_395_is_authorization(
+                    c"Content-Type: text/plain".as_ptr()
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn translated_curl_share_lock_callbacks_lock_and_unlock() {
+        unsafe {
+            functions::hfile_libcurl_c_309_share_lock();
+            functions::hfile_libcurl_c_314_share_unlock();
+            functions::hfile_s3_c_1133_share_lock();
+            functions::hfile_s3_c_1138_share_unlock();
+        }
+    }
+
+    #[test]
+    fn translated_libcurl_retry_sleep_accepts_zero_delay() {
+        unsafe {
+            functions::hfile_libcurl_c_836_retry_sleep(0);
+        }
+    }
+
+    #[repr(C)]
+    struct TestHFileLibcurlAuthToken {
+        path: *mut libc::c_char,
+        token: *mut libc::c_char,
+        expiry: libc::time_t,
+        failed: libc::c_int,
+        lock: libc::pthread_mutex_t,
+    }
+
+    #[repr(C)]
+    struct TestHFileLibcurlCurlSlist {
+        data: *mut libc::c_char,
+        next: *mut TestHFileLibcurlCurlSlist,
+    }
+
+    #[repr(C)]
+    struct TestHFileLibcurlHdrList {
+        list: *mut TestHFileLibcurlCurlSlist,
+        num: libc::c_uint,
+        size: libc::c_uint,
+    }
+
+    #[repr(C)]
+    struct TestHFileLibcurlHeaderBuffer {
+        ptr: *mut libc::c_char,
+        len: usize,
+    }
+
+    type TestHFileLibcurlHttpHeaderCallback =
+        unsafe extern "C" fn(*mut libc::c_void, *mut *mut *mut libc::c_char) -> libc::c_int;
+
+    #[repr(C)]
+    struct TestHFileLibcurlHeaders {
+        fixed: TestHFileLibcurlHdrList,
+        extra: TestHFileLibcurlHdrList,
+        callback: Option<TestHFileLibcurlHttpHeaderCallback>,
+        callback_data: *mut libc::c_void,
+        auth: *mut libc::c_void,
+        auth_hdr_num: libc::c_int,
+        redirect: *mut libc::c_void,
+        redirect_data: *mut libc::c_void,
+        http_response_ptr: *mut libc::c_long,
+        fail_on_error: libc::c_int,
+    }
+
+    #[repr(C)]
+    struct TestHFileLibcurlHeaderPrefix {
+        base: crate::htslib_mini_rs::hts::hFILE,
+        easy: *mut libc::c_void,
+        multi: *mut libc::c_void,
+        file_size: libc::off_t,
+        buffer: TestHFileLibcurlHeaderBuffer,
+        final_result: libc::c_int,
+        flags: libc::c_uint,
+        nrunning: libc::c_int,
+        headers: TestHFileLibcurlHeaders,
+    }
+
+    unsafe extern "C" fn translated_libcurl_header_callback(
+        data: *mut libc::c_void,
+        hdrs: *mut *mut *mut libc::c_char,
+    ) -> libc::c_int {
+        *hdrs = data.cast();
+        0
+    }
+
+    #[repr(C)]
+    struct TestMultipartPartLayout {
+        url: *mut libc::c_char,
+        headers: *mut *mut libc::c_char,
+    }
+
+    #[repr(C)]
+    struct TestHFileMultipartLayout {
+        base: crate::htslib_mini_rs::hts::hFILE,
+        parts: *mut TestMultipartPartLayout,
+        nparts: usize,
+        maxparts: usize,
+        current: usize,
+        currentfp: *mut crate::htslib_mini_rs::hts::hFILE,
+    }
+
+    #[test]
+    fn translated_libcurl_cleanup_helpers_free_owned_state() {
+        unsafe {
+            let tok = libc::calloc(1, std::mem::size_of::<TestHFileLibcurlAuthToken>())
+                .cast::<TestHFileLibcurlAuthToken>();
+            assert!(!tok.is_null());
+            (*tok).path = libc::strdup(c"/auth/path".as_ptr());
+            (*tok).token = libc::strdup(c"Authorization: Bearer token".as_ptr());
+            assert!(!(*tok).path.is_null());
+            assert!(!(*tok).token.is_null());
+            assert_eq!(
+                libc::pthread_mutex_init(&mut (*tok).lock, std::ptr::null()),
+                0
+            );
+            functions::hfile_libcurl_c_318_free_auth(tok.cast());
+            functions::hfile_libcurl_c_318_free_auth(std::ptr::null_mut());
+
+            let mut partial = TestHFileLibcurlHdrList {
+                list: libc::calloc(2, std::mem::size_of::<TestHFileLibcurlCurlSlist>()).cast(),
+                num: 2,
+                size: 2,
+            };
+            assert!(!partial.list.is_null());
+            (*partial.list).data = libc::strdup(c"X-Test: one".as_ptr());
+            (*partial.list.add(1)).data = libc::strdup(c"X-Test: two".as_ptr());
+            (*partial.list).next = partial.list.add(1);
+            assert!(!(*partial.list).data.is_null());
+            assert!(!(*partial.list.add(1)).data.is_null());
+            functions::hfile_libcurl_c_372_free_headers(
+                (&mut partial as *mut TestHFileLibcurlHdrList).cast(),
+                0,
+            );
+            assert_eq!(partial.num, 0);
+            assert_eq!(partial.size, 2);
+            assert!(!partial.list.is_null());
+            assert!((*partial.list).data.is_null());
+            assert!((*partial.list).next.is_null());
+            libc::free(partial.list.cast());
+
+            let mut complete = TestHFileLibcurlHdrList {
+                list: libc::calloc(1, std::mem::size_of::<TestHFileLibcurlCurlSlist>()).cast(),
+                num: 1,
+                size: 1,
+            };
+            assert!(!complete.list.is_null());
+            (*complete.list).data = libc::strdup(c"X-Test: three".as_ptr());
+            functions::hfile_libcurl_c_372_free_headers(
+                (&mut complete as *mut TestHFileLibcurlHdrList).cast(),
+                1,
+            );
+            assert_eq!(complete.num, 0);
+            assert_eq!(complete.size, 0);
+            assert!(complete.list.is_null());
+        }
+    }
+
+    #[test]
+    fn translated_libcurl_append_header_grows_and_links_list() {
+        unsafe {
+            let mut headers = TestHFileLibcurlHdrList {
+                list: std::ptr::null_mut(),
+                num: 0,
+                size: 0,
+            };
+            assert_eq!(
+                functions::hfile_libcurl_c_353_append_header(
+                    (&mut headers as *mut TestHFileLibcurlHdrList).cast(),
+                    c"X-One: 1".as_ptr(),
+                    1,
+                ),
+                0
+            );
+            assert_eq!(headers.num, 1);
+            assert_eq!(headers.size, 4);
+            assert!(!headers.list.is_null());
+            assert!(!(*headers.list).data.is_null());
+            assert!((*headers.list).next.is_null());
+
+            let borrowed = c"X-Two: 2".as_ptr();
+            assert_eq!(
+                functions::hfile_libcurl_c_353_append_header(
+                    (&mut headers as *mut TestHFileLibcurlHdrList).cast(),
+                    borrowed,
+                    0,
+                ),
+                0
+            );
+            assert_eq!(headers.num, 2);
+            assert_eq!((*headers.list).next, headers.list.add(1));
+            assert_eq!((*headers.list.add(1)).data, borrowed.cast_mut());
+            assert!((*headers.list.add(1)).next.is_null());
+
+            (*headers.list.add(1)).data = std::ptr::null_mut();
+            functions::hfile_libcurl_c_372_free_headers(
+                (&mut headers as *mut TestHFileLibcurlHdrList).cast(),
+                1,
+            );
+        }
+    }
+
+    #[test]
+    fn translated_libcurl_get_header_list_prefers_fixed_then_extra_headers() {
+        unsafe {
+            let mut fixed = [TestHFileLibcurlCurlSlist {
+                data: c"Fixed: one".as_ptr().cast_mut(),
+                next: std::ptr::null_mut(),
+            }];
+            let mut extra = [TestHFileLibcurlCurlSlist {
+                data: c"Extra: one".as_ptr().cast_mut(),
+                next: std::ptr::null_mut(),
+            }];
+            let mut fp: TestHFileLibcurlHeaderPrefix = std::mem::zeroed();
+
+            assert!(functions::hfile_libcurl_c_387_get_header_list(
+                (&mut fp as *mut TestHFileLibcurlHeaderPrefix).cast(),
+            )
+            .is_null());
+
+            fp.headers.extra.list = extra.as_mut_ptr();
+            fp.headers.extra.num = 1;
+            assert_eq!(
+                functions::hfile_libcurl_c_387_get_header_list(
+                    (&mut fp as *mut TestHFileLibcurlHeaderPrefix).cast(),
+                ),
+                extra.as_mut_ptr().cast()
+            );
+
+            fp.headers.fixed.list = fixed.as_mut_ptr();
+            fp.headers.fixed.num = 1;
+            assert_eq!(
+                functions::hfile_libcurl_c_387_get_header_list(
+                    (&mut fp as *mut TestHFileLibcurlHeaderPrefix).cast(),
+                ),
+                fixed.as_mut_ptr().cast()
+            );
+        }
+    }
+
+    #[test]
+    fn translated_libcurl_add_callback_headers_steals_and_links_headers() {
+        unsafe {
+            let mut fixed = [TestHFileLibcurlCurlSlist {
+                data: libc::strdup(c"Fixed: one".as_ptr()),
+                next: std::ptr::null_mut(),
+            }];
+            let mut callback_headers = [
+                libc::strdup(c"Authorization: Bearer token".as_ptr()),
+                libc::strdup(c"X-Trace: abc".as_ptr()),
+                std::ptr::null_mut(),
+            ];
+            assert!(!fixed[0].data.is_null());
+            assert!(!callback_headers[0].is_null());
+            assert!(!callback_headers[1].is_null());
+
+            let mut fp: TestHFileLibcurlHeaderPrefix = std::mem::zeroed();
+            fp.headers.fixed.list = fixed.as_mut_ptr();
+            fp.headers.fixed.num = 1;
+            fp.headers.fixed.size = 1;
+            fp.headers.callback = Some(translated_libcurl_header_callback);
+            fp.headers.callback_data = callback_headers.as_mut_ptr().cast();
+
+            assert_eq!(
+                functions::hfile_libcurl_c_399_add_callback_headers(
+                    (&mut fp as *mut TestHFileLibcurlHeaderPrefix).cast(),
+                ),
+                0
+            );
+            assert_eq!(fp.headers.extra.num, 2);
+            assert_eq!(fp.headers.auth_hdr_num, -2);
+            assert_eq!(fixed[0].next, fp.headers.extra.list);
+            assert!(callback_headers[0].is_null());
+            assert!(callback_headers[1].is_null());
+            assert_eq!(
+                std::ffi::CStr::from_ptr((*fp.headers.extra.list).data).to_bytes(),
+                b"Authorization: Bearer token"
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr((*fp.headers.extra.list.add(1)).data).to_bytes(),
+                b"X-Trace: abc"
+            );
+
+            functions::hfile_libcurl_c_372_free_headers(
+                (&mut fp.headers.extra as *mut TestHFileLibcurlHdrList).cast(),
+                1,
+            );
+            libc::free(fixed[0].data.cast());
+        }
+    }
+
+    #[test]
+    fn translated_libcurl_read_auth_plain_builds_bearer_header() {
+        let dir = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-auth-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("token.txt");
+        std::fs::write(&path, b"  abc.def token-ignored\n").unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let fp = crate::htslib_mini_rs::hfile::hopen(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            let mut tok: TestHFileLibcurlAuthToken = std::mem::zeroed();
+            tok.token = libc::strdup(c"old".as_ptr());
+
+            assert_eq!(
+                functions::hfile_libcurl_c_515_read_auth_plain(
+                    (&mut tok as *mut TestHFileLibcurlAuthToken).cast(),
+                    fp,
+                ),
+                0
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(tok.token).to_bytes(),
+                b"Authorization: Bearer abc.def"
+            );
+            assert_eq!(tok.expiry, 0);
+            assert_eq!(crate::htslib_mini_rs::hfile::hclose(fp), 0);
+            libc::free(tok.token.cast());
+        }
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn translated_multipart_write_seek_and_close_match_readonly_backend() {
+        unsafe {
+            let mut byte = 0u8;
+            assert_eq!(
+                functions::multipart_c_114_multipart_write(
+                    std::ptr::null_mut(),
+                    (&mut byte as *mut u8).cast(),
+                    1,
+                ),
+                -1
+            );
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                libc::EROFS
+            );
+            assert_eq!(
+                functions::multipart_c_120_multipart_seek(std::ptr::null_mut(), 12, libc::SEEK_SET),
+                -1
+            );
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                libc::ESPIPE
+            );
+
+            let parts = libc::calloc(2, std::mem::size_of::<TestMultipartPartLayout>())
+                .cast::<TestMultipartPartLayout>();
+            assert!(!parts.is_null());
+            (*parts.add(0)).url = libc::strdup(c"https://example.test/one".as_ptr());
+            (*parts.add(1)).url = libc::strdup(c"https://example.test/two".as_ptr());
+            let headers = libc::calloc(2, std::mem::size_of::<*mut libc::c_char>())
+                .cast::<*mut libc::c_char>();
+            assert!(!headers.is_null());
+            *headers = libc::strdup(c"Range: bytes=0-9".as_ptr());
+            (*parts.add(0)).headers = headers;
+
+            let mut fp: TestHFileMultipartLayout = std::mem::zeroed();
+            fp.parts = parts;
+            fp.nparts = 2;
+            fp.maxparts = 2;
+            assert_eq!(
+                functions::multipart_c_126_multipart_close(
+                    (&mut fp as *mut TestHFileMultipartLayout).cast(),
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn translated_multipart_ga4gh_json_parsers_collect_parts_and_headers() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-ga4gh-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(
+            &path,
+            br#"{"htsget":{"format":"BAM","urls":[{"url":"https://example.test/one.bam","headers":{"Authorization":"Bearer token","Range":"bytes=0-9"}},{"url":"https://example.test/two.bam"}]}}"#,
+        )
+        .unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let json = crate::htslib_mini_rs::hfile::hopen(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!json.is_null());
+            let mut fp: TestHFileMultipartLayout = std::mem::zeroed();
+            let mut b: crate::htslib_mini_rs::hts::kstring_t = std::mem::zeroed();
+            let mut header: crate::htslib_mini_rs::hts::kstring_t = std::mem::zeroed();
+
+            assert_eq!(
+                functions::multipart_c_220_parse_ga4gh_redirect_json(
+                    (&mut fp as *mut TestHFileMultipartLayout).cast(),
+                    json,
+                    &mut b,
+                    &mut header,
+                ),
+                b'v' as libc::c_char
+            );
+            assert_eq!(fp.nparts, 2);
+            assert!(fp.maxparts >= 2);
+            assert_eq!(
+                std::ffi::CStr::from_ptr((*fp.parts).url).to_bytes(),
+                b"https://example.test/one.bam"
+            );
+            assert!(!(*fp.parts).headers.is_null());
+            assert_eq!(
+                std::ffi::CStr::from_ptr(*(*fp.parts).headers).to_bytes(),
+                b"Authorization: Bearer token"
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(*(*fp.parts).headers.add(1)).to_bytes(),
+                b"Range: bytes=0-9"
+            );
+            assert!((*(*fp.parts).headers.add(2)).is_null());
+            assert_eq!(
+                std::ffi::CStr::from_ptr((*fp.parts.add(1)).url).to_bytes(),
+                b"https://example.test/two.bam"
+            );
+            assert!((*fp.parts.add(1)).headers.is_null());
+
+            crate::htslib_mini_rs::hts::ks_free(&mut b);
+            crate::htslib_mini_rs::hts::ks_free(&mut header);
+            functions::multipart_c_66_free_all_parts(
+                (&mut fp as *mut TestHFileMultipartLayout).cast(),
+            );
+            assert_eq!(crate::htslib_mini_rs::hfile::hclose(json), 0);
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_multipart_ga4gh_body_parser_rejects_missing_url() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-ga4gh-invalid-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, br#"{"urls":[{"headers":{"Range":"bytes=0-9"}}]}"#).unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let json = crate::htslib_mini_rs::hfile::hopen(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!json.is_null());
+            let mut fp: TestHFileMultipartLayout = std::mem::zeroed();
+            let mut b: crate::htslib_mini_rs::hts::kstring_t = std::mem::zeroed();
+            let mut header: crate::htslib_mini_rs::hts::kstring_t = std::mem::zeroed();
+
+            assert_eq!(
+                functions::multipart_c_149_parse_ga4gh_body_json(
+                    (&mut fp as *mut TestHFileMultipartLayout).cast(),
+                    json,
+                    &mut b,
+                    &mut header,
+                ),
+                b'i' as libc::c_char
+            );
+
+            crate::htslib_mini_rs::hts::ks_free(&mut b);
+            crate::htslib_mini_rs::hts::ks_free(&mut header);
+            functions::multipart_c_66_free_all_parts(
+                (&mut fp as *mut TestHFileMultipartLayout).cast(),
+            );
+            assert_eq!(crate::htslib_mini_rs::hfile::hclose(json), 0);
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_synced_bcf_reader_lifecycle_wrappers_init_threads_and_destroy() {
+        unsafe {
+            let readers = functions::synced_bcf_reader_c_451_bcf_sr_init();
+            assert!(!readers.is_null());
+            assert_eq!(
+                functions::synced_bcf_reader_c_227_bcf_sr_set_threads(readers, 0),
+                0
+            );
+            functions::synced_bcf_reader_c_243_bcf_sr_destroy_threads(readers);
+            functions::synced_bcf_reader_c_480_bcf_sr_destroy(readers);
+        }
+    }
+
+    #[test]
+    fn translated_synced_bcf_region_wrappers_parse_memory_regions() {
+        unsafe {
+            let readers = functions::synced_bcf_reader_c_451_bcf_sr_init();
+            assert!(!readers.is_null());
+            assert_eq!(
+                functions::synced_bcf_reader_c_190_bcf_sr_set_regions(
+                    readers,
+                    c"chr1:1-3,chr1:10-12".as_ptr(),
+                    0,
+                ),
+                0
+            );
+            functions::synced_bcf_reader_c_480_bcf_sr_destroy(readers);
+
+            let readers = functions::synced_bcf_reader_c_451_bcf_sr_init();
+            assert!(!readers.is_null());
+            assert_eq!(
+                functions::synced_bcf_reader_c_208_bcf_sr_set_targets(
+                    readers,
+                    c"chr2:4-8".as_ptr(),
+                    0,
+                    0,
+                ),
+                0
+            );
+            functions::synced_bcf_reader_c_480_bcf_sr_destroy(readers);
+
+            let regions = functions::synced_bcf_reader_c_1244_bcf_sr_regions_init(
+                c"chr1:1-3,chr1:10-12".as_ptr(),
+                0,
+                0,
+                1,
+                -2,
+            );
+            assert!(!regions.is_null());
+            assert_eq!(
+                functions::synced_bcf_reader_c_1348_bcf_sr_regions_seek(regions, c"chr1".as_ptr(),),
+                0
+            );
+            assert_eq!(
+                functions::synced_bcf_reader_c_1378_bcf_sr_regions_next(regions),
+                0
+            );
+            assert_eq!(
+                functions::synced_bcf_reader_c_1521_bcf_sr_regions_overlap(
+                    regions,
+                    c"chr1".as_ptr(),
+                    0,
+                    2,
+                ),
+                0
+            );
+            assert!(
+                functions::synced_bcf_reader_c_1521_bcf_sr_regions_overlap(
+                    regions,
+                    c"chr3".as_ptr(),
+                    0,
+                    2,
+                ) < 0
+            );
+            assert_eq!(
+                functions::synced_bcf_reader_c_1555_bcf_sr_regions_flush(regions),
+                0
+            );
+            functions::synced_bcf_reader_c_1323_bcf_sr_regions_destroy(regions);
+        }
+    }
+
+    #[test]
+    fn translated_synced_bcf_reader_stream_wrappers_add_read_seek_and_samples() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-sr-stream-{}-{}.vcf",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(
+            &path,
+            b"##fileformat=VCFv4.3\n##contig=<ID=chr1>\n##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\nchr1\t2\t.\tA\tC\t.\tPASS\t.\tGT\t0/1\n",
+        )
+        .unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let readers = functions::synced_bcf_reader_c_451_bcf_sr_init();
+            assert!(!readers.is_null());
+            assert_eq!(
+                functions::synced_bcf_reader_c_252_bcf_sr_add_reader(readers, c_path.as_ptr()),
+                1
+            );
+            assert_eq!(
+                functions::synced_bcf_reader_c_908_bcf_sr_seek(readers, std::ptr::null(), 0,),
+                0
+            );
+            assert_eq!(
+                functions::synced_bcf_reader_c_937_bcf_sr_set_samples(readers, c"-".as_ptr(), 0,),
+                1
+            );
+            assert_eq!(
+                functions::synced_bcf_reader_c_866_bcf_sr_next_line(readers),
+                1
+            );
+            functions::synced_bcf_reader_c_480_bcf_sr_destroy(readers);
+
+            let readers = functions::synced_bcf_reader_c_451_bcf_sr_init();
+            assert!(!readers.is_null());
+            assert_eq!(
+                functions::synced_bcf_reader_c_252_bcf_sr_add_reader(readers, c_path.as_ptr()),
+                1
+            );
+            functions::synced_bcf_reader_c_501_bcf_sr_remove_reader(readers, 0);
+            functions::synced_bcf_reader_c_480_bcf_sr_destroy(readers);
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_tbx_index_build_wrappers_create_queryable_indexes() {
+        unsafe fn write_bgzf_vcf(path: &std::path::Path) -> std::ffi::CString {
+            let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+            let payload =
+                b"##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t2\t.\tA\tC\t.\t.\t.\n";
+            let out = crate::htslib_mini_rs::bgzf::bgzf_open(c_path.as_ptr(), c"w".as_ptr());
+            assert!(!out.is_null());
+            assert_eq!(
+                crate::htslib_mini_rs::bgzf::bgzf_write(
+                    out,
+                    payload.as_ptr().cast(),
+                    payload.len(),
+                ),
+                payload.len() as isize
+            );
+            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(out), 0);
+            c_path
+        }
+
+        let base = std::env::temp_dir();
+        let path_default = base.join(format!(
+            "htslib-mini-rs-tbx-build-default-{}-{}.vcf.gz",
+            std::process::id(),
+            line!()
+        ));
+        let path_build2 = base.join(format!(
+            "htslib-mini-rs-tbx-build2-{}-{}.vcf.gz",
+            std::process::id(),
+            line!()
+        ));
+        let path_build3 = base.join(format!(
+            "htslib-mini-rs-tbx-build3-{}-{}.vcf.gz",
+            std::process::id(),
+            line!()
+        ));
+        let idx_build2_path = base.join(format!(
+            "htslib-mini-rs-tbx-build2-{}-{}.tbi",
+            std::process::id(),
+            line!()
+        ));
+        let idx_build3_path = base.join(format!(
+            "htslib-mini-rs-tbx-build3-{}-{}.tbi",
+            std::process::id(),
+            line!()
+        ));
+        let idx_build2 =
+            std::ffi::CString::new(idx_build2_path.to_string_lossy().as_bytes()).unwrap();
+        let idx_build3 =
+            std::ffi::CString::new(idx_build3_path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let c_default = write_bgzf_vcf(&path_default);
+            let c_build2 = write_bgzf_vcf(&path_build2);
+            let c_build3 = write_bgzf_vcf(&path_build3);
+            let conf = crate::htslib_mini_rs::tbx::tbx_conf_vcf();
+
+            assert_eq!(
+                functions::tbx_c_547_tbx_index_build(
+                    c_default.as_ptr(),
+                    0,
+                    (&conf as *const crate::htslib_mini_rs::tbx::tbx_conf_t).cast(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::tbx_c_542_tbx_index_build2(
+                    c_build2.as_ptr(),
+                    idx_build2.as_ptr(),
+                    0,
+                    (&conf as *const crate::htslib_mini_rs::tbx::tbx_conf_t).cast(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::tbx_c_526_tbx_index_build3(
+                    c_build3.as_ptr(),
+                    idx_build3.as_ptr(),
+                    0,
+                    0,
+                    (&conf as *const crate::htslib_mini_rs::tbx::tbx_conf_t).cast(),
+                ),
+                0
+            );
+
+            let tbx = crate::htslib_mini_rs::tbx::tbx_index_load(c_default.as_ptr());
+            assert!(!tbx.is_null());
+            let itr = functions::tbx_c_649_tbx_itr_querys1(tbx.cast(), c"chr1".as_ptr());
+            assert!(!itr.is_null());
+            crate::htslib_mini_rs::hts::hts_itr_destroy(itr);
+            crate::htslib_mini_rs::tbx::tbx_destroy(tbx);
+        }
+
+        let default_idx = std::path::PathBuf::from(format!("{}.tbi", path_default.display()));
+        std::fs::remove_file(path_default).unwrap();
+        std::fs::remove_file(path_build2).unwrap();
+        std::fs::remove_file(path_build3).unwrap();
+        std::fs::remove_file(default_idx).unwrap();
+        std::fs::remove_file(idx_build2_path).unwrap();
+        std::fs::remove_file(idx_build3_path).unwrap();
+    }
+
+    #[test]
+    fn translated_vcf_io_wrappers_read_and_write_plain_vcf() {
+        let input = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-vcf-io-in-{}-{}.vcf",
+            std::process::id(),
+            line!()
+        ));
+        let output_vcf = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-vcf-io-out-vcf-{}-{}.vcf",
+            std::process::id(),
+            line!()
+        ));
+        let output_bcf = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-vcf-io-out-bcf-{}-{}.vcf",
+            std::process::id(),
+            line!()
+        ));
+        let output_line = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-vcf-io-line-{}-{}.vcf",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(
+            &input,
+            b"##fileformat=VCFv4.3\n##contig=<ID=chr1>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t13\t.\tA\tG\t.\tPASS\t.\n",
+        )
+        .unwrap();
+        let c_input = std::ffi::CString::new(input.to_string_lossy().as_bytes()).unwrap();
+        let c_output_vcf = std::ffi::CString::new(output_vcf.to_string_lossy().as_bytes()).unwrap();
+        let c_output_bcf = std::ffi::CString::new(output_bcf.to_string_lossy().as_bytes()).unwrap();
+        let c_output_line =
+            std::ffi::CString::new(output_line.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let fp = functions::hts_c_991_hts_open(c_input.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            let hdr = functions::vcf_c_2594_vcf_hdr_read(fp);
+            assert!(!hdr.is_null());
+            let rec = functions::vcf_c_1815_bcf_init();
+            assert!(!rec.is_null());
+            assert_eq!(functions::vcf_c_4170_vcf_read(fp, hdr, rec), 0);
+            let rec_typed = rec.cast::<crate::htslib_mini_rs::vcf::bcf1_t>();
+            assert_eq!((*rec_typed).rid, 0);
+            assert_eq!((*rec_typed).pos, 12);
+            let mut formatted = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                functions::vcf_c_4304_vcf_format(hdr, rec, &mut formatted),
+                0
+            );
+            assert!(std::ffi::CStr::from_ptr(
+                crate::htslib_mini_rs::hts::ks_c_str(&mut formatted,)
+            )
+            .to_bytes()
+            .starts_with(b"chr1\t13"));
+            crate::htslib_mini_rs::hts::ks_free(&mut formatted);
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+
+            let fp = functions::hts_c_991_hts_open(c_output_vcf.as_ptr(), c"w".as_ptr());
+            assert!(!fp.is_null());
+            assert_eq!(functions::vcf_c_2811_vcf_hdr_write(fp, hdr), 0);
+            assert_eq!(functions::vcf_c_4587_vcf_write(fp, hdr, rec), 0);
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+
+            let fp = functions::hts_c_991_hts_open(c_output_bcf.as_ptr(), c"w".as_ptr());
+            assert!(!fp.is_null());
+            assert_eq!(functions::vcf_c_1771_bcf_hdr_write(fp, hdr), 0);
+            assert_eq!(functions::vcf_c_2510_bcf_write(fp, hdr, rec), 0);
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+
+            let fp = functions::hts_c_991_hts_open(c_input.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            let hdr_bcf = functions::vcf_c_1710_bcf_hdr_read(fp);
+            assert!(!hdr_bcf.is_null());
+            let rec_bcf = functions::vcf_c_1815_bcf_init();
+            assert!(!rec_bcf.is_null());
+            assert_eq!(functions::vcf_c_2256_bcf_read(fp, hdr_bcf, rec_bcf), 0);
+            let rec_bcf_typed = rec_bcf.cast::<crate::htslib_mini_rs::vcf::bcf1_t>();
+            assert_eq!((*rec_bcf_typed).rid, 0);
+            assert_eq!((*rec_bcf_typed).pos, 12);
+            functions::vcf_c_1867_bcf_destroy(rec_bcf);
+            functions::vcf_c_1674_bcf_hdr_destroy(hdr_bcf);
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+
+            let fp = functions::hts_c_991_hts_open(c_output_line.as_ptr(), c"w".as_ptr());
+            assert!(!fp.is_null());
+            let mut line = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            crate::htslib_mini_rs::hts::kputs(c"##fileformat=VCFv4.3".as_ptr(), &mut line);
+            assert_eq!(functions::vcf_c_4576_vcf_write_line(fp, &mut line), 0);
+            crate::htslib_mini_rs::hts::ks_free(&mut line);
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+
+            functions::vcf_c_1867_bcf_destroy(rec);
+            functions::vcf_c_1674_bcf_hdr_destroy(hdr);
+
+            let mut mode = [0 as c_char; 8];
+            assert_eq!(
+                functions::vcf_c_4154_vcf_open_mode(
+                    mode.as_mut_ptr(),
+                    c"sample.vcf.gz".as_ptr(),
+                    std::ptr::null(),
+                ),
+                0
+            );
+            assert_eq!(std::ffi::CStr::from_ptr(mode.as_ptr()), c"z");
+            assert_eq!(
+                functions::vcf_c_4154_vcf_open_mode(
+                    mode.as_mut_ptr(),
+                    c"sample.any".as_ptr(),
+                    c"bcf".as_ptr(),
+                ),
+                0
+            );
+            assert_eq!(std::ffi::CStr::from_ptr(mode.as_ptr()), c"b");
+        }
+
+        let written = std::fs::read_to_string(&output_vcf).unwrap();
+        assert!(written.contains("chr1\t13"));
+        let written = std::fs::read_to_string(&output_bcf).unwrap();
+        assert!(written.contains("chr1\t13"));
+        assert_eq!(
+            std::fs::read_to_string(&output_line).unwrap(),
+            "##fileformat=VCFv4.3\n"
+        );
+
+        std::fs::remove_file(input).unwrap();
+        std::fs::remove_file(output_vcf).unwrap();
+        std::fs::remove_file(output_bcf).unwrap();
+        std::fs::remove_file(output_line).unwrap();
+    }
+
+    #[test]
+    fn translated_vcf_sweep_wrappers_open_read_and_destroy_plain_vcf() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-vcf-sweep-{}-{}.vcf",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(
+            &path,
+            b"##fileformat=VCFv4.3\n##contig=<ID=chr1>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t7\t.\tA\tC\t.\tPASS\t.\n",
+        )
+        .unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let sweep = functions::vcf_sweep_c_114_bcf_sweep_init(c_path.as_ptr());
+            assert!(!sweep.is_null());
+            let hdr = functions::vcf_sweep_c_189_bcf_sweep_hdr(sweep);
+            assert!(!hdr.is_null());
+            assert_eq!(
+                std::ffi::CStr::from_ptr(crate::htslib_mini_rs::vcf::bcf_hdr_id2name(
+                    hdr.cast(),
+                    0,
+                )),
+                c"chr1"
+            );
+
+            let rec = functions::vcf_sweep_c_152_bcf_sweep_fwd(sweep);
+            assert!(!rec.is_null());
+            let rec = rec.cast::<crate::htslib_mini_rs::vcf::bcf1_t>();
+            assert_eq!((*rec).rid, 0);
+            assert_eq!((*rec).pos, 6);
+            assert!(functions::vcf_sweep_c_152_bcf_sweep_fwd(sweep).is_null());
+
+            let rec = functions::vcf_sweep_c_181_bcf_sweep_bwd(sweep);
+            assert!(!rec.is_null());
+            let rec = rec.cast::<crate::htslib_mini_rs::vcf::bcf1_t>();
+            assert_eq!((*rec).rid, 0);
+            assert_eq!((*rec).pos, 6);
+
+            functions::vcf_sweep_c_128_bcf_sweep_destroy(sweep);
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_sam_index_state_wrappers_reject_plain_sam_stream() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-sam-index-state-{}-{}.sam",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, b"@HD\tVN:1.6\n").unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let fp = functions::hts_c_991_hts_open(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            assert_eq!(
+                functions::sam_c_1095_sam_idx_init(fp, std::ptr::null_mut(), 0, std::ptr::null(),),
+                -1
+            );
+            assert_eq!(functions::sam_c_1123_sam_idx_save(fp), -1);
+            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_header_known_stderr_helpers_scan_known_log_lines() {
+        unsafe {
+            let old_level = crate::htslib_mini_rs::hts::hts_get_log_level();
+            crate::htslib_mini_rs::hts::hts_set_log_level(crate::htslib_mini_rs::hts::HTS_LOG_OFF);
+
+            functions::header_c_780_known_stderr(c"tool".as_ptr(), c"advice".as_ptr());
+
+            let clean = c"@SQ\tSN:chr1\tLN:1";
+            functions::header_c_788_warn_if_known_stderr(
+                clean.as_ptr(),
+                libc::strlen(clean.as_ptr()),
+            );
+
+            let bwa_index = c"[M::bwa_idx_load_from_disk] read 1 ALT contigs";
+            functions::header_c_788_warn_if_known_stderr(
+                bwa_index.as_ptr(),
+                libc::strlen(bwa_index.as_ptr()),
+            );
+
+            let bwa_pestat = c"[M::mem_pestat] low and high boundaries";
+            functions::header_c_788_warn_if_known_stderr(
+                bwa_pestat.as_ptr(),
+                libc::strlen(bwa_pestat.as_ptr()),
+            );
+
+            let minimap = c"[M::main] loaded/built the index for 1 target sequence";
+            functions::header_c_788_warn_if_known_stderr(
+                minimap.as_ptr(),
+                libc::strlen(minimap.as_ptr()),
+            );
+
+            crate::htslib_mini_rs::hts::hts_set_log_level(old_level);
+        }
+    }
+
+    #[repr(C)]
+    struct TestHfileS3AuthStringsPrefix {
+        base: crate::htslib_mini_rs::hts::hFILE,
+        curl: *mut libc::c_void,
+        ret: libc::c_int,
+        au: *mut libc::c_void,
+        buffer: crate::htslib_mini_rs::hts::kstring_t,
+        url: crate::htslib_mini_rs::hts::kstring_t,
+        verbose: libc::c_long,
+        write: libc::c_int,
+        part_size: libc::c_int,
+        content_hash: crate::htslib_mini_rs::hts::kstring_t,
+        authorisation: crate::htslib_mini_rs::hts::kstring_t,
+        content: crate::htslib_mini_rs::hts::kstring_t,
+        date: crate::htslib_mini_rs::hts::kstring_t,
+        token: crate::htslib_mini_rs::hts::kstring_t,
+        range: crate::htslib_mini_rs::hts::kstring_t,
+        upload_id: crate::htslib_mini_rs::hts::kstring_t,
+        completion_message: crate::htslib_mini_rs::hts::kstring_t,
+        part_no: libc::c_int,
+        aborted: libc::c_int,
+        index: usize,
+    }
+
+    #[repr(C)]
+    struct TestHFileLibcurlBuffer {
+        ptr: *mut c_char,
+        len: usize,
+    }
+
+    #[repr(C)]
+    struct TestHFileLibcurlCallbackPrefix {
+        base: crate::htslib_mini_rs::hts::hFILE,
+        easy: *mut libc::c_void,
+        multi: *mut libc::c_void,
+        file_size: libc::off_t,
+        buffer: TestHFileLibcurlBuffer,
+        final_result: libc::c_int,
+        flags: libc::c_uint,
+    }
+
+    #[repr(C)]
+    struct TestSyncedBcfRegion1 {
+        start: crate::htslib_mini_rs::hts::hts_pos_t,
+        end: crate::htslib_mini_rs::hts::hts_pos_t,
+    }
+
+    #[repr(C)]
+    struct TestBcfSrSortKbitset2 {
+        n: usize,
+        n_max: usize,
+        b: [libc::c_ulong; 2],
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct TestBcfSrSortVar {
+        str_: *mut c_char,
+        type_: libc::c_int,
+        nalt: libc::c_int,
+        nvcf: libc::c_int,
+        mvcf: libc::c_int,
+        vcf: *mut libc::c_int,
+        rec: *mut *mut libc::c_void,
+        mask: *mut libc::c_void,
+    }
+
+    #[repr(C)]
+    struct TestBcfSrSortScores {
+        score: [u8; 256],
+        nvar: libc::c_int,
+        mvar: libc::c_int,
+        var: *mut libc::c_void,
+        nvset: libc::c_int,
+        mvset: libc::c_int,
+        mpmat: libc::c_int,
+        pmat: *mut libc::c_int,
+        ngrp: libc::c_int,
+        mgrp: libc::c_int,
+        mcnt: libc::c_int,
+        cnt: *mut libc::c_int,
+        grp: *mut libc::c_void,
+        vset: *mut libc::c_void,
+        vcf_buf: *mut libc::c_void,
+        sr: *mut libc::c_void,
+        grp_str2int: *mut libc::c_void,
+        var_str2int: *mut libc::c_void,
+        str_: crate::htslib_mini_rs::hts::kstring_t,
+        moff: libc::c_int,
+        noff: libc::c_int,
+        off: *mut libc::c_int,
+        mcharp: libc::c_int,
+        charp: *mut *mut c_char,
+        chr: *const c_char,
+        pos: crate::htslib_mini_rs::hts::hts_pos_t,
+        nsr: libc::c_int,
+        msr: libc::c_int,
+        pair: libc::c_int,
+        nactive: libc::c_int,
+        mactive: libc::c_int,
+        active: *mut libc::c_int,
+    }
+
+    #[repr(C)]
+    struct TestBcfSrSortVcfBuf {
+        nrec: libc::c_int,
+        mrec: libc::c_int,
+        rec: *mut *mut libc::c_void,
+    }
+
+    #[repr(C)]
+    struct TestBcfSrReaderSetPrefix {
+        collapse: libc::c_int,
+        apply_filters: *mut c_char,
+        require_index: libc::c_int,
+        max_unpack: libc::c_int,
+        has_line: *mut libc::c_int,
+        errnum: libc::c_int,
+        readers: *mut libc::c_void,
+        nreaders: libc::c_int,
+    }
+
+    #[repr(C)]
+    struct TestBcfSrReaderFilterPrefix {
+        file: *mut crate::htslib_mini_rs::hts::htsFile,
+        tbx_idx: *mut libc::c_void,
+        bcf_idx: *mut crate::htslib_mini_rs::hts::hts_idx_t,
+        header: *mut libc::c_void,
+        itr: *mut crate::htslib_mini_rs::hts::hts_itr_t,
+        fname: *mut c_char,
+        buffer: *mut *mut libc::c_void,
+        nbuffer: libc::c_int,
+        mbuffer: libc::c_int,
+        nfilter_ids: libc::c_int,
+        filter_ids: *mut libc::c_int,
+    }
+
+    #[repr(C)]
+    struct TestBcfSrSortVarset {
+        nvar: libc::c_int,
+        mvar: libc::c_int,
+        var: *mut libc::c_int,
+        cnt: libc::c_int,
+        mask: *mut libc::c_void,
+    }
+
+    #[repr(C)]
+    struct TestBcfHrecLayout {
+        type_: libc::c_int,
+        key: *mut c_char,
+        value: *mut c_char,
+        nkeys: libc::c_int,
+        keys: *mut *mut c_char,
+        vals: *mut *mut c_char,
+    }
+
+    #[repr(C)]
+    struct TestKHashVdictLayout {
+        n_buckets: libc::c_uint,
+        size: libc::c_uint,
+        n_occupied: libc::c_uint,
+        upper_bound: libc::c_uint,
+        flags: *mut libc::c_uint,
+        keys: *mut *const c_char,
+        vals: *mut libc::c_void,
+    }
+
+    #[repr(C)]
+    struct TestBcfHdrAuxLayout {
+        dict: TestKHashVdictLayout,
+        gen: *mut libc::c_void,
+        key_len: *mut usize,
+        version: libc::c_int,
+        ref_count: libc::c_uint,
+    }
+
+    #[repr(C)]
+    struct TestBcfHdrLayout {
+        n: [i32; 3],
+        id: [*mut libc::c_void; 3],
+        dict: [*mut libc::c_void; 3],
+        samples: *mut *mut c_char,
+        hrec: *mut *mut TestBcfHrecLayout,
+        nhrec: libc::c_int,
+        dirty: libc::c_int,
+        ntransl: libc::c_int,
+        transl: [*mut libc::c_int; 2],
+        nsamples_ori: libc::c_int,
+        keep_samples: *mut u8,
+        mem: crate::htslib_mini_rs::hts::kstring_t,
+        m: [i32; 3],
+    }
+
+    #[test]
+    fn translated_s3_authorisation_kstrings_init_clear_and_free() {
+        unsafe {
+            let mut fp: TestHfileS3AuthStringsPrefix = std::mem::zeroed();
+
+            functions::hfile_s3_c_1143_initialise_authorisation_values(
+                (&mut fp as *mut TestHfileS3AuthStringsPrefix).cast(),
+            );
+            assert!(fp.content_hash.s.is_null());
+            assert_eq!(fp.authorisation.l, 0);
+            assert_eq!(fp.range.m, 0);
+
+            crate::htslib_mini_rs::hts::kputs(c"hash".as_ptr(), &mut fp.content_hash);
+            crate::htslib_mini_rs::hts::kputs(c"auth".as_ptr(), &mut fp.authorisation);
+            crate::htslib_mini_rs::hts::kputs(c"content".as_ptr(), &mut fp.content);
+            crate::htslib_mini_rs::hts::kputs(c"date".as_ptr(), &mut fp.date);
+            crate::htslib_mini_rs::hts::kputs(c"token".as_ptr(), &mut fp.token);
+            crate::htslib_mini_rs::hts::kputs(c"bytes=0-1".as_ptr(), &mut fp.range);
+
+            functions::hfile_s3_c_1153_clear_authorisation_values(
+                (&mut fp as *mut TestHfileS3AuthStringsPrefix).cast(),
+            );
+            assert_eq!(fp.content_hash.l, 0);
+            assert_eq!(fp.authorisation.l, 0);
+            assert_eq!(fp.content.l, 0);
+            assert_eq!(fp.date.l, 0);
+            assert_eq!(fp.token.l, 0);
+            assert_eq!(fp.range.l, 0);
+            assert!(!fp.content_hash.s.is_null());
+
+            functions::hfile_s3_c_1163_free_authorisation_values(
+                (&mut fp as *mut TestHfileS3AuthStringsPrefix).cast(),
+            );
+            assert!(fp.content_hash.s.is_null());
+            assert!(fp.authorisation.s.is_null());
+            assert!(fp.content.s.is_null());
+            assert!(fp.date.s.is_null());
+            assert!(fp.token.s.is_null());
+            assert!(fp.range.s.is_null());
+        }
+    }
+
+    #[test]
+    fn translated_s3_simple_credentials_parser_reads_id_and_secret() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-s3-simple-creds-{}-{}.txt",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, b" \n\tACCESS123   SECRET456 extra\n").unwrap();
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            let fp = functions::hfile_s3_c_231_expand_tilde_open(c_path.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            assert_eq!(libc::fclose(fp), 0);
+
+            let mut id: crate::htslib_mini_rs::hts::kstring_t = std::mem::zeroed();
+            let mut secret: crate::htslib_mini_rs::hts::kstring_t = std::mem::zeroed();
+            functions::hfile_s3_c_294_parse_simple(c_path.as_ptr(), &mut id, &mut secret);
+
+            assert_eq!(std::ffi::CStr::from_ptr(id.s).to_bytes(), b"ACCESS123");
+            assert_eq!(std::ffi::CStr::from_ptr(secret.s).to_bytes(), b"SECRET456");
+
+            crate::htslib_mini_rs::hts::ks_free(&mut id);
+            crate::htslib_mini_rs::hts::ks_free(&mut secret);
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn translated_s3_local_init_and_response_callback_manage_kstrings() {
+        unsafe {
+            let mut fp: TestHfileS3AuthStringsPrefix = std::mem::zeroed();
+            functions::hfile_s3_c_1268_initialise_local(
+                (&mut fp as *mut TestHfileS3AuthStringsPrefix).cast(),
+            );
+            assert!(fp.buffer.s.is_null());
+            assert!(fp.url.s.is_null());
+            assert_eq!(fp.upload_id.l, 0);
+            assert_eq!(fp.completion_message.m, 0);
+
+            let mut response: crate::htslib_mini_rs::hts::kstring_t = std::mem::zeroed();
+            let mut chunk = *b"hello-world";
+            assert_eq!(
+                functions::hfile_s3_c_1292_response_callback(
+                    chunk.as_mut_ptr().cast(),
+                    5,
+                    2,
+                    (&mut response as *mut crate::htslib_mini_rs::hts::kstring_t).cast(),
+                ),
+                10
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(response.s.cast::<u8>(), response.l),
+                b"hello-worl"
+            );
+
+            crate::htslib_mini_rs::hts::kputs(c"buf".as_ptr(), &mut fp.buffer);
+            crate::htslib_mini_rs::hts::kputs(c"url".as_ptr(), &mut fp.url);
+            crate::htslib_mini_rs::hts::kputs(c"upload".as_ptr(), &mut fp.upload_id);
+            crate::htslib_mini_rs::hts::kputs(c"complete".as_ptr(), &mut fp.completion_message);
+            crate::htslib_mini_rs::hts::kputs(c"auth".as_ptr(), &mut fp.authorisation);
+
+            crate::htslib_mini_rs::hts::ks_free(&mut response);
+            functions::hfile_s3_c_1276_cleanup_local(
+                (&mut fp as *mut TestHfileS3AuthStringsPrefix).cast(),
+            );
+            assert!(fp.buffer.s.is_null());
+            assert!(fp.url.s.is_null());
+            assert!(fp.upload_id.s.is_null());
+            assert!(fp.completion_message.s.is_null());
+            assert!(fp.authorisation.s.is_null());
+        }
+    }
+
+    #[test]
+    fn translated_s3_upload_and_recv_callbacks_move_buffer_bytes() {
+        unsafe {
+            let mut fp: TestHfileS3AuthStringsPrefix = std::mem::zeroed();
+            crate::htslib_mini_rs::hts::kputs(c"abcdef".as_ptr(), &mut fp.buffer);
+            fp.index = 2;
+
+            let mut out = [0u8; 8];
+            assert_eq!(
+                functions::hfile_s3_c_1545_upload_callback(
+                    out.as_mut_ptr().cast(),
+                    2,
+                    2,
+                    (&mut fp as *mut TestHfileS3AuthStringsPrefix).cast(),
+                ),
+                4
+            );
+            assert_eq!(&out[..4], b"cdef");
+            assert_eq!(fp.index, 6);
+            assert_eq!(
+                functions::hfile_s3_c_1545_upload_callback(
+                    out.as_mut_ptr().cast(),
+                    1,
+                    8,
+                    (&mut fp as *mut TestHfileS3AuthStringsPrefix).cast(),
+                ),
+                0
+            );
+
+            crate::htslib_mini_rs::hts::ks_clear(&mut fp.buffer);
+            let mut incoming = *b"response";
+            assert_eq!(
+                functions::hfile_s3_c_1854_recv_callback(
+                    incoming.as_mut_ptr().cast(),
+                    4,
+                    2,
+                    (&mut fp as *mut TestHfileS3AuthStringsPrefix).cast(),
+                ),
+                8
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(fp.buffer.s.cast::<u8>(), fp.buffer.l),
+                b"response"
+            );
+
+            crate::htslib_mini_rs::hts::ks_free(&mut fp.buffer);
+        }
+    }
+
+    #[test]
+    fn translated_libcurl_transfer_callbacks_move_bytes_and_pause() {
+        const CURL_PAUSE: usize = 0x10000001;
+        const PAUSED: libc::c_uint = 1 << 0;
+        const CLOSING: libc::c_uint = 1 << 1;
+
+        unsafe {
+            let mut read_dest = [0u8; 6];
+            let mut recv_src = *b"abcdef";
+            let mut fp = TestHFileLibcurlCallbackPrefix {
+                base: std::mem::zeroed(),
+                easy: std::ptr::null_mut(),
+                multi: std::ptr::null_mut(),
+                file_size: 0,
+                buffer: TestHFileLibcurlBuffer {
+                    ptr: read_dest.as_mut_ptr().cast(),
+                    len: 4,
+                },
+                final_result: 0,
+                flags: 0,
+            };
+
+            assert_eq!(
+                functions::hfile_libcurl_c_789_recv_callback(
+                    recv_src.as_mut_ptr().cast(),
+                    2,
+                    2,
+                    (&mut fp as *mut TestHFileLibcurlCallbackPrefix).cast(),
+                ),
+                4
+            );
+            assert_eq!(&read_dest[..4], b"abcd");
+            assert_eq!(fp.buffer.len, 0);
+            assert_eq!(
+                functions::hfile_libcurl_c_789_recv_callback(
+                    recv_src.as_mut_ptr().cast(),
+                    1,
+                    1,
+                    (&mut fp as *mut TestHFileLibcurlCallbackPrefix).cast(),
+                ),
+                CURL_PAUSE
+            );
+            assert_ne!(fp.flags & PAUSED, 0);
+
+            let mut header = crate::htslib_mini_rs::hts::kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            let mut header_src = *b"HTTP/1.1 200 OK\r\n";
+            assert_eq!(
+                functions::hfile_libcurl_c_807_header_callback(
+                    header_src.as_mut_ptr().cast(),
+                    header_src.len(),
+                    1,
+                    (&mut header as *mut crate::htslib_mini_rs::hts::kstring_t).cast(),
+                ),
+                header_src.len()
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(header.s.cast::<u8>(), header.l),
+                b"HTTP/1.1 200 OK\r\n"
+            );
+            crate::htslib_mini_rs::hts::ks_free(&mut header);
+
+            let mut send_src = *b"wxyz";
+            let mut send_dest = [0u8; 8];
+            fp.buffer.ptr = send_src.as_mut_ptr().cast();
+            fp.buffer.len = send_src.len();
+            fp.flags = 0;
+            assert_eq!(
+                functions::hfile_libcurl_c_1006_send_callback(
+                    send_dest.as_mut_ptr().cast(),
+                    8,
+                    1,
+                    (&mut fp as *mut TestHFileLibcurlCallbackPrefix).cast(),
+                ),
+                4
+            );
+            assert_eq!(&send_dest[..4], b"wxyz");
+            assert_eq!(fp.buffer.len, 0);
+            assert_eq!(
+                functions::hfile_libcurl_c_1006_send_callback(
+                    send_dest.as_mut_ptr().cast(),
+                    1,
+                    1,
+                    (&mut fp as *mut TestHFileLibcurlCallbackPrefix).cast(),
+                ),
+                CURL_PAUSE
+            );
+            assert_ne!(fp.flags & PAUSED, 0);
+            fp.flags = CLOSING;
+            assert_eq!(
+                functions::hfile_libcurl_c_1006_send_callback(
+                    send_dest.as_mut_ptr().cast(),
+                    1,
+                    1,
+                    (&mut fp as *mut TestHFileLibcurlCallbackPrefix).cast(),
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn translated_synced_bcf_regions_cmp_orders_start_then_end() {
+        unsafe {
+            let a = TestSyncedBcfRegion1 { start: 10, end: 20 };
+            let b = TestSyncedBcfRegion1 { start: 11, end: 12 };
+            let c = TestSyncedBcfRegion1 { start: 10, end: 21 };
+            let d = TestSyncedBcfRegion1 { start: 10, end: 20 };
+
+            assert_eq!(
+                functions::synced_bcf_reader_c_1060_regions_cmp(
+                    (&a as *const TestSyncedBcfRegion1).cast(),
+                    (&b as *const TestSyncedBcfRegion1).cast(),
+                ),
+                -1
+            );
+            assert_eq!(
+                functions::synced_bcf_reader_c_1060_regions_cmp(
+                    (&b as *const TestSyncedBcfRegion1).cast(),
+                    (&a as *const TestSyncedBcfRegion1).cast(),
+                ),
+                1
+            );
+            assert_eq!(
+                functions::synced_bcf_reader_c_1060_regions_cmp(
+                    (&a as *const TestSyncedBcfRegion1).cast(),
+                    (&c as *const TestSyncedBcfRegion1).cast(),
+                ),
+                -1
+            );
+            assert_eq!(
+                functions::synced_bcf_reader_c_1060_regions_cmp(
+                    (&a as *const TestSyncedBcfRegion1).cast(),
+                    (&d as *const TestSyncedBcfRegion1).cast(),
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn translated_synced_bcf_has_filter_matches_reader_filter_ids() {
+        unsafe {
+            let mut reader_filters = [-1, 7, 11];
+            let mut reader: TestBcfSrReaderFilterPrefix = std::mem::zeroed();
+            reader.nfilter_ids = reader_filters.len() as libc::c_int;
+            reader.filter_ids = reader_filters.as_mut_ptr();
+
+            let mut line: crate::htslib_mini_rs::vcf::bcf1_t = std::mem::zeroed();
+            line.d.n_flt = 0;
+            line.d.flt = std::ptr::null_mut();
+            assert_eq!(
+                functions::synced_bcf_reader_c_543_has_filter(
+                    (&mut reader as *mut TestBcfSrReaderFilterPrefix).cast(),
+                    (&mut line as *mut crate::htslib_mini_rs::vcf::bcf1_t).cast(),
+                ),
+                1
+            );
+
+            let mut reader_filters_no_missing = [3, 7, 11];
+            reader.filter_ids = reader_filters_no_missing.as_mut_ptr();
+            assert_eq!(
+                functions::synced_bcf_reader_c_543_has_filter(
+                    (&mut reader as *mut TestBcfSrReaderFilterPrefix).cast(),
+                    (&mut line as *mut crate::htslib_mini_rs::vcf::bcf1_t).cast(),
+                ),
+                0
+            );
+
+            let mut line_filters = [5, 11];
+            line.d.n_flt = line_filters.len() as libc::c_int;
+            line.d.flt = line_filters.as_mut_ptr();
+            reader.filter_ids = reader_filters.as_mut_ptr();
+            assert_eq!(
+                functions::synced_bcf_reader_c_543_has_filter(
+                    (&mut reader as *mut TestBcfSrReaderFilterPrefix).cast(),
+                    (&mut line as *mut crate::htslib_mini_rs::vcf::bcf1_t).cast(),
+                ),
+                1
+            );
+
+            reader_filters = [1, 2, 3];
+            reader.filter_ids = reader_filters.as_mut_ptr();
+            assert_eq!(
+                functions::synced_bcf_reader_c_543_has_filter(
+                    (&mut reader as *mut TestBcfSrReaderFilterPrefix).cast(),
+                    (&mut line as *mut crate::htslib_mini_rs::vcf::bcf1_t).cast(),
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn translated_bcf_sr_sort_bitset_and_multi_allele_helpers_match_c_rules() {
+        unsafe {
+            functions::bcf_sr_sort_c_265_debug_vsets();
+            functions::bcf_sr_sort_c_287_debug_vbuf();
+            functions::synced_bcf_reader_c_518_debug_buffer();
+            functions::synced_bcf_reader_c_531_debug_buffers();
+
+            let mut a = TestBcfSrSortKbitset2 {
+                n: 2,
+                n_max: 2,
+                b: [0b0101, 0],
+            };
+            let mut b = TestBcfSrSortKbitset2 {
+                n: 2,
+                n_max: 2,
+                b: [0b1000, 0b0010],
+            };
+            assert_eq!(
+                functions::bcf_sr_sort_c_43_kbs_logical_and(
+                    (&mut a as *mut TestBcfSrSortKbitset2).cast(),
+                    (&mut b as *mut TestBcfSrSortKbitset2).cast(),
+                ),
+                0
+            );
+            b.b[0] = 0b0100;
+            assert_eq!(
+                functions::bcf_sr_sort_c_43_kbs_logical_and(
+                    (&mut a as *mut TestBcfSrSortKbitset2).cast(),
+                    (&mut b as *mut TestBcfSrSortKbitset2).cast(),
+                ),
+                1
+            );
+            functions::bcf_sr_sort_c_54_kbs_bitwise_or(
+                (&mut a as *mut TestBcfSrSortKbitset2).cast(),
+                (&mut b as *mut TestBcfSrSortKbitset2).cast(),
+            );
+            assert_eq!(a.b, [0b0101, 0b0010]);
+
+            let alleles_a = std::ffi::CString::new("A>C,A>G").unwrap();
+            let alleles_b = std::ffi::CString::new("a>g,a>c").unwrap();
+            let alleles_c = std::ffi::CString::new("A>T,A>C").unwrap();
+            let mut var_a = TestBcfSrSortVar {
+                str_: alleles_a.as_ptr().cast_mut(),
+                type_: 0,
+                nalt: 2,
+                nvcf: 0,
+                mvcf: 0,
+                vcf: std::ptr::null_mut(),
+                rec: std::ptr::null_mut(),
+                mask: std::ptr::null_mut(),
+            };
+            let mut var_b = TestBcfSrSortVar {
+                str_: alleles_b.as_ptr().cast_mut(),
+                nalt: 2,
+                ..var_a
+            };
+            let mut var_c = TestBcfSrSortVar {
+                str_: alleles_c.as_ptr().cast_mut(),
+                nalt: 2,
+                ..var_a
+            };
+
+            assert_eq!(
+                functions::bcf_sr_sort_c_105_multi_is_exact(
+                    (&mut var_a as *mut TestBcfSrSortVar).cast(),
+                    (&mut var_b as *mut TestBcfSrSortVar).cast(),
+                ),
+                1
+            );
+            assert_eq!(
+                functions::bcf_sr_sort_c_105_multi_is_exact(
+                    (&mut var_a as *mut TestBcfSrSortVar).cast(),
+                    (&mut var_c as *mut TestBcfSrSortVar).cast(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::bcf_sr_sort_c_133_multi_is_subset(
+                    (&mut var_a as *mut TestBcfSrSortVar).cast(),
+                    (&mut var_c as *mut TestBcfSrSortVar).cast(),
+                ),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn translated_bcf_sr_sort_init_scores_builds_pairing_table() {
+        const SR_REF: usize = 1;
+        const SR_SNP: usize = 2;
+        const SR_INDEL: usize = 4;
+        const BCF_SR_PAIR_SNPS: libc::c_int = 1 << 0;
+        const BCF_SR_PAIR_ANY: libc::c_int = 1 << 2;
+        const BCF_SR_PAIR_SNP_REF: libc::c_int = 1 << 4;
+        const BCF_SR_PAIR_INDEL_REF: libc::c_int = 1 << 5;
+
+        unsafe {
+            let mut scores: TestBcfSrSortScores = std::mem::zeroed();
+            scores.pair = BCF_SR_PAIR_SNPS | BCF_SR_PAIR_SNP_REF;
+            functions::bcf_sr_sort_c_61_bcf_sr_init_scores(
+                (&mut scores as *mut TestBcfSrSortScores).cast(),
+            );
+            assert_eq!(scores.score[(SR_SNP << 4) | SR_SNP], 3);
+            assert_eq!(scores.score[(SR_SNP << 4) | SR_REF], 2);
+            assert_eq!(scores.score[(SR_REF << 4) | SR_SNP], 2);
+            assert_eq!(scores.score[(SR_INDEL << 4) | SR_REF], 0);
+            assert_eq!(scores.score[((SR_SNP | SR_INDEL) << 4) | SR_REF], 2);
+
+            let mut any_scores: TestBcfSrSortScores = std::mem::zeroed();
+            any_scores.pair = BCF_SR_PAIR_ANY;
+            functions::bcf_sr_sort_c_61_bcf_sr_init_scores(
+                (&mut any_scores as *mut TestBcfSrSortScores).cast(),
+            );
+            assert_ne!(any_scores.pair & BCF_SR_PAIR_SNP_REF, 0);
+            assert_ne!(any_scores.pair & BCF_SR_PAIR_INDEL_REF, 0);
+            assert_eq!(any_scores.score[(SR_REF << 4) | SR_REF], 1);
+            assert_eq!(any_scores.score[(SR_INDEL << 4) | SR_INDEL], 3);
+        }
+    }
+
+    #[test]
+    fn translated_bcf_sr_sort_active_helpers_set_and_append_indices() {
+        unsafe {
+            let mut srt: TestBcfSrSortScores = std::mem::zeroed();
+            assert_eq!(
+                functions::bcf_sr_sort_c_324_bcf_sr_sort_set_active(
+                    (&mut srt as *mut TestBcfSrSortScores).cast(),
+                    3,
+                ),
+                0
+            );
+            assert_eq!(srt.nactive, 1);
+            assert!(srt.mactive >= 4);
+            assert_eq!(*srt.active, 3);
+
+            assert_eq!(
+                functions::bcf_sr_sort_c_331_bcf_sr_sort_add_active(
+                    (&mut srt as *mut TestBcfSrSortScores).cast(),
+                    1,
+                ),
+                0
+            );
+            assert_eq!(srt.nactive, 2);
+            assert_eq!(*srt.active.add(0), 3);
+            assert_eq!(*srt.active.add(1), 1);
+
+            libc::free(srt.active.cast());
+        }
+    }
+
+    #[test]
+    fn translated_bcf_sr_sort_lifecycle_helpers_init_reset_and_remove_reader() {
+        unsafe {
+            let allocated = functions::bcf_sr_sort_c_675_bcf_sr_sort_init(std::ptr::null_mut());
+            assert!(!allocated.is_null());
+            let allocated_srt = allocated.cast::<TestBcfSrSortScores>();
+            assert_eq!((*allocated_srt).nactive, 0);
+            libc::free(allocated);
+
+            let mut srt: TestBcfSrSortScores = std::mem::zeroed();
+            srt.nactive = 7;
+            srt.chr = c"chr1".as_ptr();
+            assert_eq!(
+                functions::bcf_sr_sort_c_675_bcf_sr_sort_init(
+                    (&mut srt as *mut TestBcfSrSortScores).cast(),
+                ),
+                (&mut srt as *mut TestBcfSrSortScores).cast()
+            );
+            assert_eq!(srt.nactive, 0);
+
+            srt.chr = c"chr2".as_ptr();
+            functions::bcf_sr_sort_c_681_bcf_sr_sort_reset(
+                (&mut srt as *mut TestBcfSrSortScores).cast(),
+            );
+            assert!(srt.chr.is_null());
+
+            let mut bufs = [
+                TestBcfSrSortVcfBuf {
+                    nrec: 1,
+                    mrec: 1,
+                    rec: libc::calloc(1, std::mem::size_of::<*mut libc::c_void>()).cast(),
+                },
+                TestBcfSrSortVcfBuf {
+                    nrec: 2,
+                    mrec: 2,
+                    rec: libc::calloc(2, std::mem::size_of::<*mut libc::c_void>()).cast(),
+                },
+                TestBcfSrSortVcfBuf {
+                    nrec: 3,
+                    mrec: 3,
+                    rec: libc::calloc(3, std::mem::size_of::<*mut libc::c_void>()).cast(),
+                },
+            ];
+            srt.nsr = 3;
+            srt.vcf_buf = bufs.as_mut_ptr().cast();
+            functions::bcf_sr_sort_c_662_bcf_sr_sort_remove_reader(
+                std::ptr::null_mut(),
+                (&mut srt as *mut TestBcfSrSortScores).cast(),
+                1,
+            );
+            assert_eq!(bufs[1].nrec, 3);
+            assert_eq!(bufs[1].mrec, 3);
+            assert_eq!(bufs[2].nrec, 0);
+            assert!(bufs[2].rec.is_null());
+            libc::free(bufs[0].rec.cast());
+            libc::free(bufs[1].rec.cast());
+        }
+    }
+
+    #[test]
+    fn translated_bcf_sr_sort_pairing_score_scores_variant_sets() {
+        const SR_REF: usize = 1;
+        const SR_SNP: usize = 2;
+        const BCF_SR_PAIR_EXACT: libc::c_int = 1 << 6;
+
+        unsafe {
+            let str_ac = std::ffi::CString::new("A>C").unwrap();
+            let str_ag = std::ffi::CString::new("A>G").unwrap();
+            let mut vars = [
+                TestBcfSrSortVar {
+                    str_: str_ac.as_ptr().cast_mut(),
+                    type_: SR_SNP as libc::c_int,
+                    nalt: 1,
+                    nvcf: 2,
+                    mvcf: 0,
+                    vcf: std::ptr::null_mut(),
+                    rec: std::ptr::null_mut(),
+                    mask: std::ptr::null_mut(),
+                },
+                TestBcfSrSortVar {
+                    str_: str_ag.as_ptr().cast_mut(),
+                    type_: SR_REF as libc::c_int,
+                    nalt: 1,
+                    nvcf: 3,
+                    mvcf: 0,
+                    vcf: std::ptr::null_mut(),
+                    rec: std::ptr::null_mut(),
+                    mask: std::ptr::null_mut(),
+                },
+                TestBcfSrSortVar {
+                    str_: str_ac.as_ptr().cast_mut(),
+                    type_: SR_SNP as libc::c_int,
+                    nalt: 1,
+                    nvcf: 1,
+                    mvcf: 0,
+                    vcf: std::ptr::null_mut(),
+                    rec: std::ptr::null_mut(),
+                    mask: std::ptr::null_mut(),
+                },
+            ];
+            let mut vset0_vars = [0];
+            let mut vset1_vars = [1];
+            let mut vset2_vars = [2];
+            let mut vsets = [
+                TestBcfSrSortVarset {
+                    nvar: 1,
+                    mvar: 1,
+                    var: vset0_vars.as_mut_ptr(),
+                    cnt: 0,
+                    mask: std::ptr::null_mut(),
+                },
+                TestBcfSrSortVarset {
+                    nvar: 1,
+                    mvar: 1,
+                    var: vset1_vars.as_mut_ptr(),
+                    cnt: 0,
+                    mask: std::ptr::null_mut(),
+                },
+                TestBcfSrSortVarset {
+                    nvar: 1,
+                    mvar: 1,
+                    var: vset2_vars.as_mut_ptr(),
+                    cnt: 0,
+                    mask: std::ptr::null_mut(),
+                },
+            ];
+            let mut srt: TestBcfSrSortScores = std::mem::zeroed();
+            srt.var = vars.as_mut_ptr().cast();
+            srt.vset = vsets.as_mut_ptr().cast();
+            srt.score[(SR_SNP << 4) | SR_REF] = 2;
+
+            assert_eq!(
+                functions::bcf_sr_sort_c_153_pairing_score(
+                    (&mut srt as *mut TestBcfSrSortScores).cast(),
+                    0,
+                    1,
+                ),
+                (1u32 << 30) + 5
+            );
+            assert_eq!(
+                functions::bcf_sr_sort_c_153_pairing_score(
+                    (&mut srt as *mut TestBcfSrSortScores).cast(),
+                    1,
+                    0,
+                ),
+                0
+            );
+            assert_eq!(
+                functions::bcf_sr_sort_c_153_pairing_score(
+                    (&mut srt as *mut TestBcfSrSortScores).cast(),
+                    0,
+                    2,
+                ),
+                u32::MAX
+            );
+
+            srt.pair = BCF_SR_PAIR_EXACT;
+            assert_eq!(
+                functions::bcf_sr_sort_c_153_pairing_score(
+                    (&mut srt as *mut TestBcfSrSortScores).cast(),
+                    0,
+                    1,
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn translated_bcf_sr_sort_remove_vset_compacts_sets_matrix_and_counts() {
+        unsafe {
+            let mut vars0 = [0];
+            let mut vars1 = [1];
+            let mut vars2 = [2];
+            let mut vsets = [
+                TestBcfSrSortVarset {
+                    nvar: 1,
+                    mvar: 1,
+                    var: vars0.as_mut_ptr(),
+                    cnt: 10,
+                    mask: std::ptr::null_mut(),
+                },
+                TestBcfSrSortVarset {
+                    nvar: 1,
+                    mvar: 1,
+                    var: vars1.as_mut_ptr(),
+                    cnt: 20,
+                    mask: std::ptr::null_mut(),
+                },
+                TestBcfSrSortVarset {
+                    nvar: 1,
+                    mvar: 1,
+                    var: vars2.as_mut_ptr(),
+                    cnt: 30,
+                    mask: std::ptr::null_mut(),
+                },
+            ];
+            let mut pmat = [10, 11, 20, 21, 30, 31];
+            let mut cnt = [100, 200, 300];
+            let mut srt: TestBcfSrSortScores = std::mem::zeroed();
+            srt.nvset = 3;
+            srt.ngrp = 2;
+            srt.vset = vsets.as_mut_ptr().cast();
+            srt.pmat = pmat.as_mut_ptr();
+            srt.cnt = cnt.as_mut_ptr();
+
+            functions::bcf_sr_sort_c_193_remove_vset(
+                (&mut srt as *mut TestBcfSrSortScores).cast(),
+                1,
+            );
+
+            assert_eq!(srt.nvset, 2);
+            assert_eq!(vsets[1].nvar, 1);
+            assert_eq!(*vsets[1].var, 2);
+            assert_eq!(&pmat[..4], &[10, 11, 30, 31]);
+            assert_eq!(&cnt[..2], &[100, 300]);
+        }
+    }
+
+    #[test]
+    fn translated_bcf_sr_sort_merge_vsets_combines_masks_vars_matrix_and_counts() {
+        unsafe {
+            let mut ivar = libc::malloc(std::mem::size_of::<libc::c_int>()).cast::<libc::c_int>();
+            assert!(!ivar.is_null());
+            *ivar = 0;
+            let mut jvars = [1, 2];
+            let mut kvar = [3];
+            let mut imask = TestBcfSrSortKbitset2 {
+                n: 2,
+                n_max: 2,
+                b: [0b0011, 0b0100],
+            };
+            let mut jmask = TestBcfSrSortKbitset2 {
+                n: 2,
+                n_max: 2,
+                b: [0b1100, 0b0010],
+            };
+            let mut kmask = TestBcfSrSortKbitset2 {
+                n: 2,
+                n_max: 2,
+                b: [0, 0],
+            };
+            let mut vsets = [
+                TestBcfSrSortVarset {
+                    nvar: 1,
+                    mvar: 1,
+                    var: ivar,
+                    cnt: 0,
+                    mask: (&mut imask as *mut TestBcfSrSortKbitset2).cast(),
+                },
+                TestBcfSrSortVarset {
+                    nvar: 2,
+                    mvar: 2,
+                    var: jvars.as_mut_ptr(),
+                    cnt: 0,
+                    mask: (&mut jmask as *mut TestBcfSrSortKbitset2).cast(),
+                },
+                TestBcfSrSortVarset {
+                    nvar: 1,
+                    mvar: 1,
+                    var: kvar.as_mut_ptr(),
+                    cnt: 0,
+                    mask: (&mut kmask as *mut TestBcfSrSortKbitset2).cast(),
+                },
+            ];
+            let mut pmat = [10, 11, 20, 21, 30, 31];
+            let mut cnt = [100, 200, 300];
+            let mut srt: TestBcfSrSortScores = std::mem::zeroed();
+            srt.nvset = 3;
+            srt.ngrp = 2;
+            srt.vset = vsets.as_mut_ptr().cast();
+            srt.pmat = pmat.as_mut_ptr();
+            srt.cnt = cnt.as_mut_ptr();
+
+            assert_eq!(
+                functions::bcf_sr_sort_c_208_merge_vsets(
+                    (&mut srt as *mut TestBcfSrSortScores).cast(),
+                    0,
+                    1,
+                ),
+                0
+            );
+
+            ivar = vsets[0].var;
+            assert_eq!(srt.nvset, 2);
+            assert_eq!(vsets[0].nvar, 3);
+            assert_eq!(vsets[0].mvar, 3);
+            assert_eq!(std::slice::from_raw_parts(ivar, 3), &[0, 1, 2]);
+            assert_eq!(imask.b, [0b1111, 0b0110]);
+            assert_eq!(&pmat[..4], &[30, 32, 30, 31]);
+            assert_eq!(&cnt[..2], &[300, 300]);
+            assert_eq!(*vsets[1].var, 3);
+
+            libc::free(ivar.cast());
+        }
+    }
+
+    #[test]
+    fn translated_bcf_sr_sort_push_vset_appends_records_and_removes_set() {
+        unsafe {
+            let old0 = 0x10usize as *mut libc::c_void;
+            let old1 = 0x20usize as *mut libc::c_void;
+            let rec0 = 0x30usize as *mut libc::c_void;
+            let rec1 = 0x40usize as *mut libc::c_void;
+
+            let rec_slots0 =
+                libc::malloc(std::mem::size_of::<*mut libc::c_void>()).cast::<*mut libc::c_void>();
+            let rec_slots1 =
+                libc::malloc(std::mem::size_of::<*mut libc::c_void>()).cast::<*mut libc::c_void>();
+            assert!(!rec_slots0.is_null());
+            assert!(!rec_slots1.is_null());
+            *rec_slots0 = old0;
+            *rec_slots1 = old1;
+
+            let mut bufs = [
+                TestBcfSrSortVcfBuf {
+                    nrec: 1,
+                    mrec: 1,
+                    rec: rec_slots0,
+                },
+                TestBcfSrSortVcfBuf {
+                    nrec: 1,
+                    mrec: 1,
+                    rec: rec_slots1,
+                },
+            ];
+            let mut var0_vcfs = [1];
+            let mut var1_vcfs = [0];
+            let mut var0_recs = [rec1];
+            let mut var1_recs = [rec0];
+            let mut vars = [
+                TestBcfSrSortVar {
+                    str_: std::ptr::null_mut(),
+                    type_: 0,
+                    nalt: 0,
+                    nvcf: 1,
+                    mvcf: 1,
+                    vcf: var0_vcfs.as_mut_ptr(),
+                    rec: var0_recs.as_mut_ptr(),
+                    mask: std::ptr::null_mut(),
+                },
+                TestBcfSrSortVar {
+                    str_: std::ptr::null_mut(),
+                    type_: 0,
+                    nalt: 0,
+                    nvcf: 1,
+                    mvcf: 1,
+                    vcf: var1_vcfs.as_mut_ptr(),
+                    rec: var1_recs.as_mut_ptr(),
+                    mask: std::ptr::null_mut(),
+                },
+            ];
+            let mut vset0_vars = [0, 1];
+            let mut vset1_vars = [1];
+            let mut vsets = [
+                TestBcfSrSortVarset {
+                    nvar: 2,
+                    mvar: 2,
+                    var: vset0_vars.as_mut_ptr(),
+                    cnt: 0,
+                    mask: std::ptr::null_mut(),
+                },
+                TestBcfSrSortVarset {
+                    nvar: 1,
+                    mvar: 1,
+                    var: vset1_vars.as_mut_ptr(),
+                    cnt: 0,
+                    mask: std::ptr::null_mut(),
+                },
+            ];
+            let mut pmat = [1, 2, 3, 4];
+            let mut cnt = [2, 1];
+            let mut sr: TestBcfSrReaderSetPrefix = std::mem::zeroed();
+            sr.nreaders = 2;
+            let mut srt: TestBcfSrSortScores = std::mem::zeroed();
+            srt.sr = (&mut sr as *mut TestBcfSrReaderSetPrefix).cast();
+            srt.nvset = 2;
+            srt.ngrp = 2;
+            srt.var = vars.as_mut_ptr().cast();
+            srt.vset = vsets.as_mut_ptr().cast();
+            srt.vcf_buf = bufs.as_mut_ptr().cast();
+            srt.pmat = pmat.as_mut_ptr();
+            srt.cnt = cnt.as_mut_ptr();
+
+            assert_eq!(
+                functions::bcf_sr_sort_c_233_push_vset(
+                    (&mut srt as *mut TestBcfSrSortScores).cast(),
+                    0,
+                ),
+                0
+            );
+
+            assert_eq!(bufs[0].nrec, 2);
+            assert_eq!(bufs[1].nrec, 2);
+            assert_eq!(*bufs[0].rec.add(0), old0);
+            assert_eq!(*bufs[1].rec.add(0), old1);
+            assert_eq!(*bufs[0].rec.add(1), rec0);
+            assert_eq!(*bufs[1].rec.add(1), rec1);
+            assert_eq!(srt.nvset, 1);
+            assert_eq!(*vsets[0].var, 1);
+            assert_eq!(&pmat[..2], &[3, 4]);
+            assert_eq!(cnt[0], 1);
+
+            libc::free(bufs[0].rec.cast());
+            libc::free(bufs[1].rec.cast());
+        }
+    }
+
+    #[test]
+    fn translated_bcf_sr_sort_grp_create_key_sorts_offsets_into_key() {
+        unsafe {
+            let mut srt: TestBcfSrSortScores = std::mem::zeroed();
+            let mut text = b"delta;alpha;beta\0".to_vec();
+            let mut off = [0, 6, 12];
+            srt.str_.l = 16;
+            srt.str_.m = text.len();
+            srt.str_.s = text.as_mut_ptr().cast();
+            srt.noff = 3;
+            srt.off = off.as_mut_ptr();
+
+            let key = functions::bcf_sr_sort_c_303_grp_create_key(
+                (&mut srt as *mut TestBcfSrSortScores).cast(),
+            );
+            assert!(!key.is_null());
+            assert_eq!(
+                std::ffi::CStr::from_ptr(key).to_bytes(),
+                b"alpha;beta;delta"
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(srt.charp.add(0).read()).to_bytes(),
+                b"alpha"
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(srt.charp.add(1).read()).to_bytes(),
+                b"beta"
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(srt.charp.add(2).read()).to_bytes(),
+                b"delta"
+            );
+
+            libc::free(key.cast());
+            libc::free(srt.charp.cast());
+
+            let mut empty: TestBcfSrSortScores = std::mem::zeroed();
+            let empty_key = functions::bcf_sr_sort_c_303_grp_create_key(
+                (&mut empty as *mut TestBcfSrSortScores).cast(),
+            );
+            assert!(!empty_key.is_null());
+            assert_eq!(std::ffi::CStr::from_ptr(empty_key).to_bytes(), b"");
+            libc::free(empty_key.cast());
+        }
+    }
+
+    #[test]
+    fn translated_s3_add_header_appends_curl_slist_nodes() {
+        unsafe {
+            let mut head: *mut libc::c_void = std::ptr::null_mut();
+            assert_eq!(
+                functions::hfile_s3_c_1304_add_header(
+                    &mut head,
+                    c"Content-Type:".as_ptr().cast_mut(),
+                ),
+                0
+            );
+            assert_eq!(
+                functions::hfile_s3_c_1304_add_header(&mut head, c"Expect:".as_ptr().cast_mut()),
+                0
+            );
+            let head = head.cast::<TestHFileLibcurlCurlSlist>();
+            assert!(!head.is_null());
+            assert_eq!(std::ffi::CStr::from_ptr((*head).data), c"Content-Type:");
+            assert!(!(*head).next.is_null());
+            assert_eq!(std::ffi::CStr::from_ptr((*(*head).next).data), c"Expect:");
+            assert!((*(*head).next).next.is_null());
+
+            let second = (*head).next;
+            libc::free((*head).data.cast());
+            libc::free(head.cast());
+            libc::free((*second).data.cast());
+            libc::free(second.cast());
+        }
+    }
+
+    #[test]
+    fn translated_s3_set_html_headers_orders_optional_headers() {
+        unsafe {
+            let mut fp: TestHfileS3AuthStringsPrefix = std::mem::zeroed();
+            let mut auth: crate::htslib_mini_rs::hts::kstring_t = std::mem::zeroed();
+            let mut date: crate::htslib_mini_rs::hts::kstring_t = std::mem::zeroed();
+            let mut content: crate::htslib_mini_rs::hts::kstring_t = std::mem::zeroed();
+            let mut token: crate::htslib_mini_rs::hts::kstring_t = std::mem::zeroed();
+            let mut range: crate::htslib_mini_rs::hts::kstring_t = std::mem::zeroed();
+
+            crate::htslib_mini_rs::hts::kputs(c"Authorization: sig".as_ptr(), &mut auth);
+            crate::htslib_mini_rs::hts::kputs(c"Date: now".as_ptr(), &mut date);
+            crate::htslib_mini_rs::hts::kputs(c"Content-SHA256: abc".as_ptr(), &mut content);
+            crate::htslib_mini_rs::hts::kputs(c"X-Amz-Token: tok".as_ptr(), &mut token);
+            crate::htslib_mini_rs::hts::kputs(c"Range: bytes=0-1".as_ptr(), &mut range);
+
+            let head = functions::hfile_s3_c_1318_set_html_headers(
+                (&mut fp as *mut TestHfileS3AuthStringsPrefix).cast(),
+                &mut auth,
+                &mut date,
+                &mut content,
+                &mut token,
+                &mut range,
+            )
+            .cast::<TestHFileLibcurlCurlSlist>();
+            assert!(!head.is_null());
+
+            let expected = [
+                c"Content-Type:".as_ptr(),
+                c"Expect:".as_ptr(),
+                c"Authorization: sig".as_ptr(),
+                c"Date: now".as_ptr(),
+                c"Content-SHA256: abc".as_ptr(),
+                c"Range: bytes=0-1".as_ptr(),
+                c"X-Amz-Token: tok".as_ptr(),
+            ];
+            let mut node = head;
+            for expected_header in expected {
+                assert!(!node.is_null());
+                assert_eq!(
+                    std::ffi::CStr::from_ptr((*node).data),
+                    std::ffi::CStr::from_ptr(expected_header)
+                );
+                let next = (*node).next;
+                libc::free((*node).data.cast());
+                libc::free(node.cast());
+                node = next;
+            }
+            assert!(node.is_null());
+
+            crate::htslib_mini_rs::hts::ks_free(&mut auth);
+            crate::htslib_mini_rs::hts::ks_free(&mut date);
+            crate::htslib_mini_rs::hts::ks_free(&mut content);
+            crate::htslib_mini_rs::hts::ks_free(&mut token);
+            crate::htslib_mini_rs::hts::ks_free(&mut range);
+        }
+    }
+
+    #[test]
+    fn translated_libcurl_multi_errno_maps_curlm_codes() {
+        unsafe {
+            let old_level = crate::htslib_mini_rs::hts::hts_get_log_level();
+            crate::htslib_mini_rs::hts::hts_set_log_level(crate::htslib_mini_rs::hts::HTS_LOG_OFF);
+
+            assert_eq!(functions::hfile_libcurl_c_270_multi_errno(-1), 0);
+            assert_eq!(functions::hfile_libcurl_c_270_multi_errno(0), 0);
+            assert_eq!(functions::hfile_libcurl_c_270_multi_errno(1), libc::EBADF);
+            assert_eq!(functions::hfile_libcurl_c_270_multi_errno(2), libc::EBADF);
+            assert_eq!(functions::hfile_libcurl_c_270_multi_errno(5), libc::EBADF);
+            assert_eq!(functions::hfile_libcurl_c_270_multi_errno(3), libc::ENOMEM);
+
+            crate::htslib_mini_rs::hts::hts_set_log_level(old_level);
+        }
+    }
+
+    #[test]
+    fn translated_libcurl_easy_errno_and_retryable_map_curl_codes() {
+        unsafe {
+            let old_level = crate::htslib_mini_rs::hts::hts_get_log_level();
+            crate::htslib_mini_rs::hts::hts_set_log_level(crate::htslib_mini_rs::hts::HTS_LOG_OFF);
+
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 0),
+                0
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 1),
+                libc::EINVAL
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 4),
+                libc::ENOSYS
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 6),
+                libc::EDESTADDRREQ
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 7),
+                libc::ECONNABORTED
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 9),
+                libc::EACCES
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 18),
+                libc::EPIPE
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 22),
+                libc::EIO
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 27),
+                libc::ENOMEM
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 28),
+                libc::ETIMEDOUT
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 33),
+                libc::ESPIPE
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 37),
+                libc::ENOENT
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 47),
+                libc::ELOOP
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 63),
+                libc::EFBIG
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 70),
+                libc::ENOSPC
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), 73),
+                libc::EEXIST
+            );
+
+            for err in [7, 16, 18, 28, 35, 52, 55, 56, 92] {
+                assert_eq!(
+                    functions::hfile_libcurl_c_233_is_retryable(std::ptr::null_mut(), err),
+                    1
+                );
+            }
+            assert_eq!(
+                functions::hfile_libcurl_c_233_is_retryable(std::ptr::null_mut(), 22),
+                0
+            );
+            assert_eq!(
+                functions::hfile_libcurl_c_233_is_retryable(std::ptr::null_mut(), 9),
+                0
+            );
+
+            crate::htslib_mini_rs::hts::hts_set_log_level(old_level);
+        }
+    }
+
+    #[test]
+    fn translated_test_pileup_mod_callbacks_allocate_and_free_cd_state() {
+        unsafe {
+            let b = crate::htslib_mini_rs::sam::bam_init1();
+            assert!(!b.is_null());
+            let mut cd = crate::htslib_mini_rs::sam::bam_pileup_cd {
+                p: std::ptr::null_mut(),
+            };
+
+            assert_eq!(
+                functions::test_pileup_mod_c_74_pileup_cd_create(std::ptr::null_mut(), b, &mut cd,),
+                0
+            );
+            assert!(!cd.p.is_null());
+            assert_eq!(
+                functions::test_pileup_mod_c_84_pileup_cd_destroy(std::ptr::null_mut(), b, &mut cd,),
+                0
+            );
+
+            crate::htslib_mini_rs::sam::bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn translated_sam_iterator_wrappers_reject_null_inputs() {
+        unsafe {
+            functions::test_sam_c_604_iterators1();
+
+            assert!(functions::sam_c_1768_sam_itr_regarray(
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+            )
+            .is_null());
+            assert!(functions::sam_c_1798_sam_itr_regions(
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+            )
+            .is_null());
+            assert!(functions::hts_c_4217_hts_itr_regions(
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                0,
+                None,
+                std::ptr::null_mut(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .is_null());
+        }
+    }
+
+    #[test]
+    fn translated_hts_itr_querys_wrapper_dispatches_special_regions() {
+        unsafe {
+            TRANSLATED_HTS_ITR_QUERY_TID.store(-999, Ordering::SeqCst);
+            assert!(functions::hts_c_4201_hts_itr_querys(
+                std::ptr::null(),
+                c".".as_ptr(),
+                None,
+                std::ptr::null_mut(),
+                Some(translated_hts_itr_query_probe),
+                None,
+            )
+            .is_null());
+            assert_eq!(
+                TRANSLATED_HTS_ITR_QUERY_TID.load(Ordering::SeqCst),
+                crate::htslib_mini_rs::hts::HTS_IDX_START
+            );
+
+            TRANSLATED_HTS_ITR_QUERY_TID.store(-999, Ordering::SeqCst);
+            assert!(functions::hts_c_4201_hts_itr_querys(
+                std::ptr::null(),
+                c"*".as_ptr(),
+                None,
+                std::ptr::null_mut(),
+                Some(translated_hts_itr_query_probe),
+                None,
+            )
+            .is_null());
+            assert_eq!(
+                TRANSLATED_HTS_ITR_QUERY_TID.load(Ordering::SeqCst),
+                crate::htslib_mini_rs::hts::HTS_IDX_NOCOOR
+            );
+        }
     }
 }
