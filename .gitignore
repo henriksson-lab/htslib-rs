@@ -1,0 +1,8 @@
+/target/
+/.tmp/
+/Cargo.lock
+/ccc_c.json
+/ccc_rust.json
+/htslib/
+/prev_htslib/
+/prev_src/
