@@ -245,6 +245,10 @@ unsafe fn assert_mplp_matches_original_fixture(sam: &str, out: &str) {
 fn original_pileup_insertions_and_refskips_match_htslib_expected_outputs() {
     unsafe {
         assert_plp_matches_original_fixture(
+            "htslib/test/mpileup/mp_D.sam",
+            "htslib/test/mpileup/mp_D.out",
+        );
+        assert_plp_matches_original_fixture(
             "htslib/test/mpileup/mp_DI.sam",
             "htslib/test/mpileup/mp_DI.out",
         );
@@ -263,6 +267,10 @@ fn original_pileup_insertions_and_refskips_match_htslib_expected_outputs() {
         assert_plp_matches_original_fixture(
             "htslib/test/mpileup/mp_N2.sam",
             "htslib/test/mpileup/mp_N2.out",
+        );
+        assert_plp_matches_original_fixture(
+            "htslib/test/mpileup/mp_ID.sam",
+            "htslib/test/mpileup/mp_ID.out",
         );
     }
 }
@@ -289,12 +297,62 @@ fn original_pileup_pad_columns_match_htslib_expected_outputs() {
 fn original_mpileup_overlap_and_small_bam_match_htslib_expected_outputs() {
     unsafe {
         assert_mplp_matches_original_fixture(
+            "htslib/test/mpileup/mp_overlap1.sam",
+            "htslib/test/mpileup/mp_overlap1.out",
+        );
+        assert_mplp_matches_original_fixture(
             "htslib/test/mpileup/mp_overlap2.sam",
             "htslib/test/mpileup/mp_overlap2.out",
         );
         assert_mplp_matches_original_fixture(
             "htslib/test/mpileup/small.bam",
             "htslib/test/mpileup/small.out",
+        );
+    }
+}
+
+#[test]
+fn original_mpileup_indels_refskips_and_pads_match_htslib_expected_outputs() {
+    unsafe {
+        assert_mplp_matches_original_fixture(
+            "htslib/test/mpileup/mp_D.sam",
+            "htslib/test/mpileup/mp_D.out",
+        );
+        assert_mplp_matches_original_fixture(
+            "htslib/test/mpileup/mp_DI.sam",
+            "htslib/test/mpileup/mp_DI.out",
+        );
+        assert_mplp_matches_original_fixture(
+            "htslib/test/mpileup/mp_I.sam",
+            "htslib/test/mpileup/mp_I.out",
+        );
+        assert_mplp_matches_original_fixture(
+            "htslib/test/mpileup/mp_P.sam",
+            "htslib/test/mpileup/mp_P.out",
+        );
+        assert_mplp_matches_original_fixture(
+            "htslib/test/mpileup/mp_ID.sam",
+            "htslib/test/mpileup/mp_ID.out",
+        );
+        assert_mplp_matches_original_fixture(
+            "htslib/test/mpileup/mp_N.sam",
+            "htslib/test/mpileup/mp_N.out",
+        );
+        assert_mplp_matches_original_fixture(
+            "htslib/test/mpileup/mp_N2.sam",
+            "htslib/test/mpileup/mp_N2.out",
+        );
+        assert_mplp_matches_original_fixture(
+            "htslib/test/mpileup/c1#pad1.sam",
+            "htslib/test/mpileup/c1#pad1.out",
+        );
+        assert_mplp_matches_original_fixture(
+            "htslib/test/mpileup/c1#pad2.sam",
+            "htslib/test/mpileup/c1#pad2.out",
+        );
+        assert_mplp_matches_original_fixture(
+            "htslib/test/mpileup/c1#pad3.sam",
+            "htslib/test/mpileup/c1#pad3.out",
         );
     }
 }

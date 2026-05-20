@@ -307,6 +307,10 @@ fn actual_filter_expression_path_matches_original_outputs() {
             expected_count(include_str!("../htslib/test/sam_filter/int1.out"))
         );
         assert_eq!(
+            filtered_count_with_expression("htslib/test/ce#1000.sam", c"qlen/(flag*mapq+pos)>5"),
+            expected_count(include_str!("../htslib/test/sam_filter/int2.out"))
+        );
+        assert_eq!(
             filtered_count_with_expression(
                 "htslib/test/ce#1000.sam",
                 c"[NM]>=10 || [MD]=~\"A.*A.*A\""
@@ -316,6 +320,18 @@ fn actual_filter_expression_path_matches_original_outputs() {
         assert_eq!(
             filtered_sam_with_expression("htslib/test/realn02.sam", false, c"sclen>=20"),
             include_str!("../htslib/test/sam_filter/func5.out")
+        );
+        assert_eq!(
+            filtered_sam_with_expression("htslib/test/realn02.sam", false, c"rlen<50"),
+            include_str!("../htslib/test/sam_filter/func6.out")
+        );
+        assert_eq!(
+            filtered_sam_with_expression("htslib/test/realn02.sam", false, c"qlen>100"),
+            include_str!("../htslib/test/sam_filter/func7.out")
+        );
+        assert_eq!(
+            filtered_sam_with_expression("htslib/test/c1#clip.sam", false, c"hclen>=4"),
+            include_str!("../htslib/test/sam_filter/func8.out")
         );
     }
 }
