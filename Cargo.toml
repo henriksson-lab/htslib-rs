@@ -13,9 +13,9 @@ path = "src/lib.rs"
 [features]
 default = []
 cram-mirror = ["dep:c2rust-bitfields"]
-gcs = []
+gcs = ["libcurl"]
 libcurl = []
-s3 = []
+s3 = ["libcurl"]
 
 [dependencies]
 c2rust-bitfields = { version = "0.22.1", optional = true }

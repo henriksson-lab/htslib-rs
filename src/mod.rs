@@ -14,8 +14,11 @@ pub mod cram_mirror;
 pub mod errmod;
 pub mod faidx;
 pub mod hfile;
+#[cfg(feature = "gcs")]
 pub mod hfile_gcs;
+#[cfg(feature = "libcurl")]
 pub mod hfile_libcurl;
+#[cfg(feature = "s3")]
 pub mod hfile_s3;
 pub mod hts;
 pub mod hts_os;

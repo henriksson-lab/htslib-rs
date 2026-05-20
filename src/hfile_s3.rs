@@ -774,6 +774,7 @@ pub unsafe fn hfile_s3_c_1276_cleanup_local(fp: *mut c_void) {
     crate::htslib_rs::hts::ks_free(&mut (*fp).url);
     crate::htslib_rs::hts::ks_free(&mut (*fp).upload_id);
     crate::htslib_rs::hts::ks_free(&mut (*fp).completion_message);
+    curl_easy_cleanup((*fp).curl.cast());
     hfile_s3_c_1163_free_authorisation_values(fp.cast());
 }
 
@@ -837,6 +838,11 @@ unsafe fn free_curl_slist(mut head: *mut HFileLibcurlCurlSlist) {
         libc::free(head.cast());
         head = next;
     }
+}
+
+#[link(name = "curl")]
+unsafe extern "C" {
+    fn curl_easy_cleanup(curl: *mut crate::htslib_rs::ref_cache::upstream::CURL);
 }
 
 // original: set_html_headers (htslib/hfile_s3.c:1318)
