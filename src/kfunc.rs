@@ -1,4 +1,4 @@
-use std::ffi::c_int;
+use std::ffi::{c_char, c_int};
 
 const KF_GAMMA_EPS: f64 = 1e-14;
 const KF_TINY: f64 = 1e-290;
@@ -6,6 +6,7 @@ const KF_TINY: f64 = 1e-290;
 extern "C" {
     fn lgamma(x: f64) -> f64;
     fn erfc(x: f64) -> f64;
+    fn tgamma(x: f64) -> f64;
 }
 
 #[repr(C)]
@@ -169,6 +170,32 @@ pub fn kf_betai(a: f64, b: f64, x: f64) -> f64 {
     }
 }
 
+pub unsafe fn kfunc_c_183_main(_argc: c_int, _argv: *mut *mut c_char) -> c_int {
+    let mut x = 5.5;
+    let y = 3.0;
+
+    libc::printf(c"erfc(%lg): %lg, %lg\n".as_ptr(), x, erfc(x), kf_erfc(x));
+    libc::printf(
+        c"upper-gamma(%lg,%lg): %lg\n".as_ptr(),
+        x,
+        y,
+        kf_gammaq(y, x) * tgamma(y),
+    );
+
+    let a = 2.0;
+    let b = 2.0;
+    x = 0.5;
+    libc::printf(
+        c"incomplete-beta(%lg,%lg,%lg): %lg\n".as_ptr(),
+        a,
+        b,
+        x,
+        kf_betai(a, b, x) / (kf_lgamma(a + b) - kf_lgamma(a) - kf_lgamma(b)).exp(),
+    );
+
+    0
+}
+
 pub fn lbinom(n: c_int, k: c_int) -> f64 {
     if k == 0 || n == k {
         return 0.0;
@@ -318,6 +345,56 @@ mod tests {
     }
 
     #[test]
+    fn kfunc_boundary_branches_match_htslib_formulas() {
+        assert_eq!(kf_erfc(27.0), 0.0);
+        assert_eq!(kf_erfc(-27.0), 2.0);
+        assert_eq!(kf_betai_aux(0.5, 2.0, 0.0), 0.0);
+        assert_eq!(kf_betai_aux(0.5, 2.0, 1.0), 1.0);
+        assert_eq!(kf_betai(2.0, 5.0, 0.0), 0.0);
+        assert_eq!(kf_betai(2.0, 5.0, 1.0), 1.0);
+    }
+
+    #[test]
+    fn kfunc_complement_identities_hold_on_branch_boundaries() {
+        for &(s, z) in &[(0.5, 1.0), (2.0, 1.0), (5.0, 4.999), (5.0, 5.0)] {
+            let p = kf_gammap(s, z);
+            let q = kf_gammaq(s, z);
+            assert!((p + q - 1.0).abs() < 1e-12, "s={s} z={z}");
+        }
+
+        for &x in &[0.0, 0.125, 1.0, 6.5] {
+            assert!((kf_erfc(x) + kf_erfc(-x) - 2.0).abs() < 1e-12, "x={x}");
+        }
+
+        let a = 2.5;
+        let b = 4.0;
+        let x = 0.37;
+        assert!((kf_betai(a, b, x) + kf_betai(b, a, 1.0 - x) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn gamma_helpers_handle_zero_argument_limits() {
+        assert_eq!(kf_gammap(2.5, 0.0), 0.0);
+        assert_eq!(kf_gammaq(2.5, 0.0), 1.0);
+    }
+
+    #[test]
+    fn combinatoric_helpers_match_symmetry_and_degenerate_tables() {
+        assert!((lbinom(25, 7) - lbinom(25, 18)).abs() < 1e-12);
+        assert_eq!(hypergeo(0, 0, 12, 20), 1.0);
+        assert_eq!(hypergeo(12, 12, 12, 12), 1.0);
+    }
+
+    #[test]
+    fn hypergeo_matches_equivalent_transposed_tables() {
+        let p = hypergeo(3, 8, 7, 20);
+        assert_eq!(p.to_bits(), 0x3fd6_e2ac_c7ba_410d);
+        assert_eq!(hypergeo(4, 12, 7, 20).to_bits(), 0x3fd6_e2ac_c7ba_410d);
+        assert_eq!(hypergeo(5, 8, 13, 20).to_bits(), 0x3fd6_e2ac_c7ba_40f6);
+        assert_eq!(hypergeo(8, 12, 13, 20).to_bits(), 0x3fd6_e2ac_c7ba_40f6);
+    }
+
+    #[test]
     fn fisher_exact_returns_expected_tail_probabilities() {
         unsafe {
             let mut left = 0.0;
@@ -328,6 +405,162 @@ mod tests {
             assert!((left - 0.0013797280926100418).abs() < 1e-15);
             assert!((right - 0.9999663480953022).abs() < 1e-15);
             assert!((two - 0.0027594561852200836).abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn fisher_exact_matches_htslib_underflow_and_tail_cases() {
+        let cases = [
+            (
+                2,
+                1,
+                0,
+                31,
+                1.0,
+                0.005347593583,
+                0.005347593583,
+                0.005347593583,
+            ),
+            (2, 1, 0, 1, 1.0, 0.5, 1.0, 0.5),
+            (3, 1, 0, 0, 1.0, 1.0, 1.0, 1.0),
+            (
+                3,
+                15,
+                37,
+                45,
+                0.021479750169,
+                0.995659202564,
+                0.033161943699,
+                0.017138952733,
+            ),
+            (
+                12,
+                5,
+                29,
+                2,
+                0.044554737835,
+                0.994525206022,
+                0.080268552074,
+                0.039079943857,
+            ),
+            (781, 23171, 4963, 2455001, 1.0, 0.0, 0.0, 0.0),
+            (333, 381, 801722, 7664285, 1.0, 0.0, 0.0, 0.0),
+            (4155, 4903, 805463, 8507517, 1.0, 0.0, 0.0, 0.0),
+            (4455, 4903, 805463, 8507517, 1.0, 0.0, 0.0, 0.0),
+            (5455, 4903, 805463, 8507517, 1.0, 0.0, 0.0, 0.0),
+            (
+                1,
+                1,
+                100000,
+                1000000,
+                0.991735477166,
+                0.173555146661,
+                0.173555146661,
+                0.165290623827,
+            ),
+            (1000, 1000, 100000, 1000000, 1.0, 0.0, 0.0, 0.0),
+            (1000, 1000, 1000000, 100000, 0.0, 1.0, 0.0, 0.0),
+            (49999, 10001, 90001, 49999, 1.0, 0.0, 0.0, 0.0),
+            (50000, 10000, 90000, 50000, 1.0, 0.0, 0.0, 0.0),
+            (50001, 9999, 89999, 50001, 1.0, 0.0, 0.0, 0.0),
+            (10000, 50000, 130000, 10000, 0.0, 1.0, 0.0, 0.0),
+        ];
+
+        unsafe {
+            for &(n11, n12, n21, n22, eleft, eright, etwo, eprob) in &cases {
+                let mut left = 0.0;
+                let mut right = 0.0;
+                let mut two = 0.0;
+                let prob = kt_fisher_exact(n11, n12, n21, n22, &mut left, &mut right, &mut two);
+
+                assert!((left - eleft).abs() <= 1e-8, "{n11} {n12} {n21} {n22} left");
+                assert!(
+                    (right - eright).abs() <= 1e-8,
+                    "{n11} {n12} {n21} {n22} right"
+                );
+                assert!((two - etwo).abs() <= 1e-8, "{n11} {n12} {n21} {n22} two");
+                assert!((prob - eprob).abs() <= 1e-8, "{n11} {n12} {n21} {n22} prob");
+            }
+        }
+    }
+
+    #[test]
+    fn hypergeo_acc_reuses_and_refreshes_cached_state() {
+        unsafe {
+            let mut aux = hgacc_t {
+                n11: 0,
+                n1_: 0,
+                n_1: 0,
+                n: 0,
+                p: 0.0,
+            };
+
+            let p5 = hypergeo_acc(5, 20, 18, 40, &mut aux);
+            assert!((p5 - hypergeo(5, 20, 18, 40)).abs() < 1e-12);
+
+            let p6 = hypergeo_acc(6, 0, 0, 0, &mut aux);
+            assert!((p6 - hypergeo(6, 20, 18, 40)).abs() < 1e-12);
+            assert_eq!(aux.n11, 6);
+
+            let p11 = hypergeo_acc(11, 0, 0, 0, &mut aux);
+            assert!((p11 - hypergeo(11, 20, 18, 40)).abs() < 1e-12);
+            assert_eq!(aux.n11, 11);
+        }
+    }
+
+    #[test]
+    fn hypergeo_acc_reuses_cached_state_when_stepping_down() {
+        unsafe {
+            let mut aux = hgacc_t {
+                n11: 0,
+                n1_: 0,
+                n_1: 0,
+                n: 0,
+                p: 0.0,
+            };
+
+            let p6 = hypergeo_acc(6, 20, 18, 40, &mut aux);
+            assert!((p6 - hypergeo(6, 20, 18, 40)).abs() < 1e-12);
+
+            let p5 = hypergeo_acc(5, 0, 0, 0, &mut aux);
+            assert!((p5 - hypergeo(5, 20, 18, 40)).abs() < 1e-12);
+            assert_eq!(aux.n11, 5);
+        }
+    }
+
+    #[test]
+    fn hypergeo_acc_supplied_margins_replace_cached_table() {
+        unsafe {
+            let mut aux = hgacc_t {
+                n11: 0,
+                n1_: 0,
+                n_1: 0,
+                n: 0,
+                p: 0.0,
+            };
+
+            hypergeo_acc(6, 20, 18, 40, &mut aux);
+            let refreshed = hypergeo_acc(2, 7, 9, 16, &mut aux);
+
+            assert_eq!(aux.n11, 2);
+            assert_eq!(aux.n1_, 7);
+            assert_eq!(aux.n_1, 9);
+            assert_eq!(aux.n, 16);
+            assert_eq!(refreshed, hypergeo(2, 7, 9, 16));
+        }
+    }
+
+    #[test]
+    fn fisher_exact_single_possible_table_is_certain() {
+        unsafe {
+            let mut left = -1.0;
+            let mut right = -1.0;
+            let mut two = -1.0;
+            let q = kt_fisher_exact(0, 0, 7, 5, &mut left, &mut right, &mut two);
+            assert_eq!(q, 1.0);
+            assert_eq!(left, 1.0);
+            assert_eq!(right, 1.0);
+            assert_eq!(two, 1.0);
         }
     }
 }

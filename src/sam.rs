@@ -1,25 +1,27 @@
 use std::{
-    collections::HashMap,
-    ffi::{c_char, c_int, c_void, CStr},
+    collections::{HashMap, VecDeque},
+    ffi::{c_char, c_int, c_uint, c_void, CStr},
+    sync::{Mutex, OnceLock},
 };
 
 use crate::htslib_mini_rs::bgzf::{
     bgzf_check_EOF, bgzf_flush, bgzf_flush_try, bgzf_peek, bgzf_read, bgzf_read_small, bgzf_seek,
     bgzf_write, bgzf_write_small,
 };
+use crate::htslib_mini_rs::hfile::hflush;
 use crate::htslib_mini_rs::hts::{
     __ac_FNV1a_hash_string, __ac_Wang_hash, __ac_X31_hash_string, double_to_le, ed_swap_4p,
     find_file_extension, float_to_le, htsFile, htsLogLevel, hts_bin_maxpos, hts_expr_val_t,
-    hts_filter_eval2, hts_filter_t, hts_idx_destroy, hts_idx_load3, hts_idx_t, hts_itr_multi_next,
-    hts_itr_next, hts_itr_query, hts_itr_t, hts_parse_region, hts_pos_t, hts_reg2bin,
-    hts_reglist_t, hts_str2int, hts_str2uint, i16_to_le, i32_to_le, isalnum_c, isalpha_c,
-    isdigit_c, islower_c, isspace_c, isupper_c, kputc, kputc_, kputd, kputll, kputs, kputsn,
-    kputsn_, kputuw, kputw, ks_clear, ks_expand, ks_free, ks_resize, kstring_t, toupper_c,
-    u16_to_le, u32_to_le, u64_to_le, BGZF, HTS_FMT_BAI, HTS_FMT_CRAI, HTS_FMT_CSI, HTS_FORMAT_BAM,
-    HTS_FORMAT_BINARY_FORMAT, HTS_FORMAT_CRAM, HTS_FORMAT_EMPTY_FORMAT, HTS_FORMAT_FASTA_FORMAT,
-    HTS_FORMAT_FASTQ_FORMAT, HTS_FORMAT_SAM, HTS_FORMAT_SEQUENCE_DATA, HTS_FORMAT_TEXT_FORMAT,
-    HTS_IDX_NOCOOR, HTS_IDX_SAVE_REMOTE, HTS_IDX_START, HTS_MAX_EXT_LEN, HTS_PARSE_THOUSANDS_SEP,
-    HTS_POS_MAX,
+    hts_filter_eval2, hts_filter_t, hts_idx_destroy, hts_idx_load3, hts_idx_t, hts_itr_multi_bam,
+    hts_itr_multi_next, hts_itr_next, hts_itr_query, hts_itr_regions, hts_itr_t, hts_parse_region,
+    hts_pos_t, hts_reg2bin, hts_reglist_create, hts_reglist_free, hts_reglist_t, hts_str2int,
+    hts_str2uint, i16_to_le, i32_to_le, isalnum_c, isalpha_c, isdigit_c, islower_c, isspace_c,
+    isupper_c, kputc, kputc_, kputll, kputs, kputsn, kputsn_, kputuw, kputw, ks_clear, ks_expand,
+    ks_free, ks_resize, kstring_t, toupper_c, u16_to_le, u32_to_le, u64_to_le, BGZF, HTS_FMT_BAI,
+    HTS_FMT_CRAI, HTS_FMT_CSI, HTS_FORMAT_BAM, HTS_FORMAT_BINARY_FORMAT, HTS_FORMAT_CRAM,
+    HTS_FORMAT_EMPTY_FORMAT, HTS_FORMAT_FASTA_FORMAT, HTS_FORMAT_FASTQ_FORMAT, HTS_FORMAT_SAM,
+    HTS_FORMAT_SEQUENCE_DATA, HTS_FORMAT_TEXT_FORMAT, HTS_IDX_NOCOOR, HTS_IDX_SAVE_REMOTE,
+    HTS_IDX_START, HTS_MAX_EXT_LEN, HTS_PARSE_THOUSANDS_SEP, HTS_POS_MAX,
 };
 
 extern "C" {
@@ -44,7 +46,19 @@ pub const BAM_CIGAR_SHIFT: u32 = 4;
 pub const BAM_CIGAR_MASK: u32 = 0x0f;
 
 pub const BAM_CIGAR_TYPE: [i32; 16] = [3, 1, 2, 2, 1, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0];
-pub static BAM_CIGAR_TABLE: [i8; 16] = [3, 1, 2, 2, 1, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0];
+pub static BAM_CIGAR_TABLE: [i8; 256] = [
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 7, -1, -1, -1, -1, 9, -1, 2, -1, -1, -1, 5,
+    1, -1, -1, -1, 0, 3, -1, 6, -1, -1, 4, -1, -1, -1, -1, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+];
 pub static SEQ_NT16_TABLE: [u8; 256] = [
     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
@@ -271,6 +285,25 @@ pub struct sam_hrec_sq_t {
     pub ty: *mut c_void,
 }
 
+// original: sam_hrec_tag_s (htslib/header.h:98)
+#[repr(C)]
+pub struct sam_hrec_tag_t {
+    pub next: *mut sam_hrec_tag_t,
+    pub str_: *const c_char,
+    pub len: c_int,
+}
+
+// original: sam_hrec_type_s (htslib/header.h:119)
+#[repr(C)]
+pub struct sam_hrec_type_t {
+    pub next: *mut sam_hrec_type_t,
+    pub prev: *mut sam_hrec_type_t,
+    pub global_next: *mut sam_hrec_type_t,
+    pub global_prev: *mut sam_hrec_type_t,
+    pub tag: *mut sam_hrec_tag_t,
+    pub type_: u32,
+}
+
 #[repr(C)]
 pub struct sam_hrecs_t {
     pub h: *mut c_void,
@@ -446,37 +479,199 @@ pub unsafe fn sam_hdr_init() -> *mut sam_hdr_t {
     h
 }
 
-unsafe fn parse_sq_target(line: &[u8]) -> Option<(&[u8], u32)> {
+unsafe fn parse_sq_target(line: &[u8]) -> Option<(&[u8], hts_pos_t)> {
     if !line.starts_with(b"@SQ\t") {
         return None;
     }
     let mut name = None;
     let mut len = None;
     for field in line.split(|&b| b == b'\t').skip(1) {
-        if field.starts_with(b"SN:") {
-            name = Some(&field[3..]);
-        } else if field.starts_with(b"LN:") {
+        let field = field.strip_suffix(b"\r").unwrap_or(field);
+        if let Some(value) = field.strip_prefix(b"SN:") {
+            name = Some(value);
+        } else if let Some(raw_len) = field.strip_prefix(b"LN:") {
             let mut value = 0u64;
-            let digits = &field[3..];
-            if digits.is_empty() {
+            let mut digits = raw_len;
+            if digits.first() == Some(&b'+') {
+                digits = &digits[1..];
+            }
+            if digits.is_empty() || !digits[0].is_ascii_digit() {
                 return None;
             }
             for &ch in digits {
                 if !ch.is_ascii_digit() {
-                    return None;
+                    break;
                 }
                 value = value.checked_mul(10)?.checked_add((ch - b'0') as u64)?;
-                if value > u32::MAX as u64 {
+                if value > HTS_POS_MAX as u64 {
                     return None;
                 }
             }
-            len = Some(value as u32);
+            if value == 0 {
+                return None;
+            }
+            let value = value as hts_pos_t;
+            if let Some(prev) = len {
+                if prev != value {
+                    return None;
+                }
+            } else {
+                len = Some(value);
+            }
         }
     }
     Some((name?, len?))
 }
 
-unsafe fn sam_hdr_append_target(h: *mut sam_hdr_t, name: &[u8], len: u32) -> c_int {
+unsafe fn kh_resize_s2i(h: *mut khash_s2i_t, new_n_buckets: u32) -> c_int {
+    let n_flags = if new_n_buckets < 16 {
+        1
+    } else {
+        new_n_buckets >> 4
+    };
+    let flags =
+        crate::htslib_mini_rs::c_compat::malloc(n_flags as u64 * std::mem::size_of::<u32>() as u64)
+            .cast::<u32>();
+    let keys = crate::htslib_mini_rs::c_compat::malloc(
+        new_n_buckets as u64 * std::mem::size_of::<*mut c_char>() as u64,
+    )
+    .cast::<*mut c_char>();
+    let vals = crate::htslib_mini_rs::c_compat::malloc(
+        new_n_buckets as u64 * std::mem::size_of::<i64>() as u64,
+    )
+    .cast::<i64>();
+    if flags.is_null() || keys.is_null() || vals.is_null() {
+        crate::htslib_mini_rs::c_compat::free(flags.cast());
+        crate::htslib_mini_rs::c_compat::free(keys.cast());
+        crate::htslib_mini_rs::c_compat::free(vals.cast());
+        return -1;
+    }
+    for i in 0..n_flags {
+        *flags.add(i as usize) = 0xaaaa_aaaa;
+    }
+
+    let old_flags = (*h).flags;
+    let old_keys = (*h).keys;
+    let old_vals = (*h).vals;
+    let old_n = (*h).n_buckets;
+
+    (*h).flags = flags;
+    (*h).keys = keys;
+    (*h).vals = vals;
+    (*h).n_buckets = new_n_buckets;
+    (*h).size = 0;
+    (*h).n_occupied = 0;
+    (*h).upper_bound = (new_n_buckets as f64 * 0.77) as u32;
+
+    for i in 0..old_n {
+        if !kh_iseither(old_flags, i) {
+            let key = *old_keys.add(i as usize);
+            let mask = (*h).n_buckets - 1;
+            let mut site = __ac_FNV1a_hash_string(key) & mask;
+            let mut step = 0;
+            while !kh_isempty((*h).flags, site) {
+                step += 1;
+                site = (site + step) & mask;
+            }
+            *(*h).keys.add(site as usize) = key;
+            *(*h).vals.add(site as usize) = *old_vals.add(i as usize);
+            kh_set_occupied((*h).flags, site);
+            (*h).size += 1;
+            (*h).n_occupied += 1;
+        }
+    }
+
+    crate::htslib_mini_rs::c_compat::free(old_flags.cast());
+    crate::htslib_mini_rs::c_compat::free(old_keys.cast());
+    crate::htslib_mini_rs::c_compat::free(old_vals.cast());
+    0
+}
+
+unsafe fn kh_put_s2i(h: *mut khash_s2i_t, key: *const c_char, ret: *mut c_int) -> u32 {
+    if h.is_null() {
+        *ret = -1;
+        return 0;
+    }
+    if (*h).n_occupied >= (*h).upper_bound {
+        let mut new_n = if (*h).n_buckets == 0 {
+            4
+        } else {
+            (*h).n_buckets << 1
+        };
+        if new_n < 4 {
+            new_n = 4;
+        }
+        if kh_resize_s2i(h, new_n) < 0 {
+            *ret = -1;
+            return (*h).n_buckets;
+        }
+    }
+
+    let mask = (*h).n_buckets - 1;
+    let mut i = __ac_FNV1a_hash_string(key) & mask;
+    let mut site = (*h).n_buckets;
+    let last = i;
+    let mut step = 0;
+    while !kh_isempty((*h).flags, i) {
+        if kh_isdel((*h).flags, i) {
+            if site == (*h).n_buckets {
+                site = i;
+            }
+        } else if cstr_eq(*(*h).keys.add(i as usize), key) {
+            *ret = 0;
+            return i;
+        }
+        step += 1;
+        i = (i + step) & mask;
+        if i == last {
+            break;
+        }
+    }
+    if site == (*h).n_buckets {
+        site = i;
+    }
+    *(*h).keys.add(site as usize) = key.cast_mut();
+    if kh_isempty((*h).flags, site) {
+        (*h).n_occupied += 1;
+        *ret = 1;
+    } else {
+        *ret = 2;
+    }
+    kh_set_occupied((*h).flags, site);
+    (*h).size += 1;
+    site
+}
+
+unsafe fn sam_hdr_set_long_target_len(
+    h: *mut sam_hdr_t,
+    name: *const c_char,
+    len: hts_pos_t,
+) -> c_int {
+    if (*h).sdict.is_null() {
+        let sdict =
+            crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<khash_s2i_t>() as u64)
+                .cast::<khash_s2i_t>();
+        if sdict.is_null() {
+            return -1;
+        }
+        if kh_resize_s2i(sdict, 4) < 0 {
+            kh_destroy_s2i(sdict);
+            return -1;
+        }
+        (*h).sdict = sdict.cast();
+    }
+
+    let long_refs = (*h).sdict.cast::<khash_s2i_t>();
+    let mut ret = 0;
+    let k = kh_put_s2i(long_refs, name, &mut ret);
+    if ret < 0 {
+        return -1;
+    }
+    *(*long_refs).vals.add(k as usize) = len as i64;
+    0
+}
+
+unsafe fn sam_hdr_append_target(h: *mut sam_hdr_t, name: &[u8], len: hts_pos_t) -> c_int {
     let new_n = (*h).n_targets + 1;
     if new_n <= 0 {
         *crate::htslib_mini_rs::c_compat::__errno_location() =
@@ -513,9 +708,40 @@ unsafe fn sam_hdr_append_target(h: *mut sam_hdr_t, name: &[u8], len: u32) -> c_i
 
     let idx = (*h).n_targets as usize;
     *(*h).target_name.add(idx) = dup;
-    *(*h).target_len.add(idx) = len;
+    *(*h).target_len.add(idx) = if len >= u32::MAX as hts_pos_t {
+        u32::MAX
+    } else {
+        len as u32
+    };
+    if len > u32::MAX as hts_pos_t && sam_hdr_set_long_target_len(h, dup, len) < 0 {
+        crate::htslib_mini_rs::c_compat::free(dup.cast());
+        *(*h).target_name.add(idx) = std::ptr::null_mut();
+        return -1;
+    }
     (*h).n_targets = new_n;
     0
+}
+
+unsafe fn sam_hdr_free_tmp_targets(tmp: *mut sam_hdr_t) {
+    for i in 0..(*tmp).n_targets {
+        let name = *(*tmp).target_name.add(i as usize);
+        if !name.is_null() {
+            crate::htslib_mini_rs::c_compat::free(name.cast());
+        }
+    }
+    crate::htslib_mini_rs::c_compat::free((*tmp).target_name.cast());
+    crate::htslib_mini_rs::c_compat::free((*tmp).target_len.cast());
+    kh_destroy_s2i((*tmp).sdict.cast());
+}
+
+unsafe fn sam_hdr_restore_text_len(h: *mut sam_hdr_t, old_len: usize) {
+    (*h).l_text = old_len;
+    if old_len == 0 {
+        crate::htslib_mini_rs::c_compat::free((*h).text.cast());
+        (*h).text = std::ptr::null_mut();
+    } else if !(*h).text.is_null() {
+        *(*h).text.add(old_len) = 0;
+    }
 }
 
 unsafe fn sam_hdr_fill_targets_from_text(h: *mut sam_hdr_t) -> c_int {
@@ -551,8 +777,13 @@ pub unsafe fn sam_hdr_add_lines(_h: *mut sam_hdr_t, _lines: *const c_char, _len:
         return -1;
     }
 
+    let len = if _len == 0 {
+        libc::strlen(_lines)
+    } else {
+        _len
+    };
     let old_len = (*_h).l_text;
-    let new_len = match old_len.checked_add(_len) {
+    let new_len = match old_len.checked_add(len) {
         Some(v) => v,
         None => {
             *crate::htslib_mini_rs::c_compat::__errno_location() =
@@ -566,11 +797,11 @@ pub unsafe fn sam_hdr_add_lines(_h: *mut sam_hdr_t, _lines: *const c_char, _len:
         return -1;
     }
     (*_h).text = text;
-    if _len > 0 {
+    if len > 0 {
         crate::htslib_mini_rs::c_compat::memcpy(
             (*_h).text.add(old_len).cast(),
             _lines.cast(),
-            _len as u64,
+            len as u64,
         );
     }
     (*_h).l_text = new_len;
@@ -579,7 +810,7 @@ pub unsafe fn sam_hdr_add_lines(_h: *mut sam_hdr_t, _lines: *const c_char, _len:
     let mut tmp = sam_hdr_t {
         n_targets: 0,
         ignore_sam_err: 0,
-        l_text: _len,
+        l_text: len,
         target_len: std::ptr::null_mut(),
         cigar_tab: std::ptr::null(),
         target_name: std::ptr::null_mut(),
@@ -590,31 +821,38 @@ pub unsafe fn sam_hdr_add_lines(_h: *mut sam_hdr_t, _lines: *const c_char, _len:
     };
     let ret = sam_hdr_fill_targets_from_text(&mut tmp);
     if ret < 0 {
-        for i in 0..tmp.n_targets {
-            crate::htslib_mini_rs::c_compat::free(
-                *tmp.target_name.add(i as usize).cast::<*mut c_void>(),
-            );
-        }
-        crate::htslib_mini_rs::c_compat::free(tmp.target_name.cast());
-        crate::htslib_mini_rs::c_compat::free(tmp.target_len.cast());
+        sam_hdr_restore_text_len(_h, old_len);
+        sam_hdr_free_tmp_targets(&mut tmp);
         return ret;
     }
     if tmp.n_targets > 0 {
         let old_n = (*_h).n_targets;
         let new_n = old_n + tmp.n_targets;
+        for i in 0..tmp.n_targets {
+            let target_name = *tmp.target_name.add(i as usize);
+            for j in 0..old_n {
+                if cstr_eq(*(*_h).target_name.add(j as usize), target_name) {
+                    sam_hdr_restore_text_len(_h, old_len);
+                    sam_hdr_free_tmp_targets(&mut tmp);
+                    return -1;
+                }
+            }
+            for j in 0..i {
+                if cstr_eq(*tmp.target_name.add(j as usize), target_name) {
+                    sam_hdr_restore_text_len(_h, old_len);
+                    sam_hdr_free_tmp_targets(&mut tmp);
+                    return -1;
+                }
+            }
+        }
         let target_len = crate::htslib_mini_rs::c_compat::realloc(
             (*_h).target_len.cast(),
             new_n as u64 * std::mem::size_of::<u32>() as u64,
         )
         .cast::<u32>();
         if target_len.is_null() {
-            for i in 0..tmp.n_targets {
-                crate::htslib_mini_rs::c_compat::free(
-                    *tmp.target_name.add(i as usize).cast::<*mut c_void>(),
-                );
-            }
-            crate::htslib_mini_rs::c_compat::free(tmp.target_name.cast());
-            crate::htslib_mini_rs::c_compat::free(tmp.target_len.cast());
+            sam_hdr_restore_text_len(_h, old_len);
+            sam_hdr_free_tmp_targets(&mut tmp);
             return -1;
         }
         (*_h).target_len = target_len;
@@ -624,25 +862,41 @@ pub unsafe fn sam_hdr_add_lines(_h: *mut sam_hdr_t, _lines: *const c_char, _len:
         )
         .cast::<*mut c_char>();
         if target_name.is_null() {
-            for i in 0..tmp.n_targets {
-                crate::htslib_mini_rs::c_compat::free(
-                    *tmp.target_name.add(i as usize).cast::<*mut c_void>(),
-                );
-            }
-            crate::htslib_mini_rs::c_compat::free(tmp.target_name.cast());
-            crate::htslib_mini_rs::c_compat::free(tmp.target_len.cast());
+            sam_hdr_restore_text_len(_h, old_len);
+            sam_hdr_free_tmp_targets(&mut tmp);
             return -1;
         }
         (*_h).target_name = target_name;
         for i in 0..tmp.n_targets {
-            *(*_h).target_name.add((old_n + i) as usize) = *tmp.target_name.add(i as usize);
+            let target_name = *tmp.target_name.add(i as usize);
+            *(*_h).target_name.add((old_n + i) as usize) = target_name;
             *(*_h).target_len.add((old_n + i) as usize) = *tmp.target_len.add(i as usize);
+            if *tmp.target_len.add(i as usize) == u32::MAX && !tmp.sdict.is_null() {
+                let tmp_long_refs = tmp.sdict.cast::<khash_s2i_t>();
+                let k = kh_get_s2i(tmp_long_refs, target_name);
+                if k != (*tmp_long_refs).n_buckets {
+                    let len = *(*tmp_long_refs).vals.add(k as usize) as hts_pos_t;
+                    if len > u32::MAX as hts_pos_t
+                        && sam_hdr_set_long_target_len(_h, target_name, len) < 0
+                    {
+                        for j in i..tmp.n_targets {
+                            crate::htslib_mini_rs::c_compat::free(
+                                *tmp.target_name.add(j as usize).cast::<*mut c_void>(),
+                            );
+                        }
+                        crate::htslib_mini_rs::c_compat::free(tmp.target_name.cast());
+                        crate::htslib_mini_rs::c_compat::free(tmp.target_len.cast());
+                        kh_destroy_s2i(tmp.sdict.cast());
+                        sam_hdr_restore_text_len(_h, old_len);
+                        return -1;
+                    }
+                }
+            }
             *tmp.target_name.add(i as usize) = std::ptr::null_mut();
         }
         (*_h).n_targets = new_n;
     }
-    crate::htslib_mini_rs::c_compat::free(tmp.target_name.cast());
-    crate::htslib_mini_rs::c_compat::free(tmp.target_len.cast());
+    sam_hdr_free_tmp_targets(&mut tmp);
     ret
 }
 
@@ -799,6 +1053,104 @@ pub unsafe fn sam_hdr_nref(_h: *const sam_hdr_t) -> c_int {
         return (*(*_h).hrecs).nref;
     }
     (*_h).n_targets
+}
+
+// original: KHASH_DECLARE (htslib/header.c:44)
+// Translated by the concrete khash_s2i_t declarations and helpers in this file.
+
+// original: TYPEKEY (htslib/header.h:58)
+pub unsafe fn header_h_58_TYPEKEY(type_: *const c_char) -> c_uint {
+    let u0 = *type_ as u8 as c_uint;
+    let u1 = *type_.add(1) as u8 as c_uint;
+    (u0 << 8) | u1
+}
+
+// original: known_stderr (htslib/header.c:780)
+pub unsafe fn header_c_780_known_stderr(tool: *const c_char, advice: *const c_char) {
+    hts_sys::hts_log(
+        hts_sys::htsLogLevel_HTS_LOG_WARNING,
+        c"known_stderr".as_ptr(),
+        c"SAM file corrupted by embedded %s error/log message".as_ptr(),
+        tool,
+    );
+    hts_sys::hts_log(
+        hts_sys::htsLogLevel_HTS_LOG_WARNING,
+        c"known_stderr".as_ptr(),
+        c"%s".as_ptr(),
+        advice,
+    );
+}
+
+// original: warn_if_known_stderr (htslib/header.c:788)
+pub unsafe fn header_c_788_warn_if_known_stderr(line: *const c_char, len: usize) {
+    let ilen = if len < c_int::MAX as usize {
+        len as c_int
+    } else {
+        c_int::MAX
+    };
+
+    if !crate::htslib_mini_rs::hts::kmemmem(
+        line.cast(),
+        ilen,
+        c"M::bwa_idx_load_from_disk".as_ptr().cast(),
+        25,
+        std::ptr::null_mut(),
+    )
+    .is_null()
+    {
+        header_c_780_known_stderr(
+            c"bwa".as_ptr(),
+            c"Use `bwa mem -o file.sam ...` or `bwa sampe -f file.sam ...` instead of `bwa ... > file.sam`"
+                .as_ptr(),
+        );
+    } else if !crate::htslib_mini_rs::hts::kmemmem(
+        line.cast(),
+        ilen,
+        c"M::mem_pestat".as_ptr().cast(),
+        13,
+        std::ptr::null_mut(),
+    )
+    .is_null()
+    {
+        header_c_780_known_stderr(
+            c"bwa".as_ptr(),
+            c"Use `bwa mem -o file.sam ...` instead of `bwa mem ... > file.sam`".as_ptr(),
+        );
+    } else if !crate::htslib_mini_rs::hts::kmemmem(
+        line.cast(),
+        ilen,
+        c"loaded/built the index".as_ptr().cast(),
+        22,
+        std::ptr::null_mut(),
+    )
+    .is_null()
+    {
+        header_c_780_known_stderr(
+            c"minimap2".as_ptr(),
+            c"Use `minimap2 -o file.sam ...` instead of `minimap2 ... > file.sam`".as_ptr(),
+        );
+    }
+}
+
+// original: valid_sam_header_type (htslib/header.c:1325)
+pub unsafe fn header_c_1325_valid_sam_header_type(s: *const c_char) -> c_int {
+    if *s != b'@' as c_char {
+        return 0;
+    }
+    match *s.add(1) as u8 {
+        b'H' => (*s.add(2) == b'D' as c_char && *s.add(3) == b'\t' as c_char) as c_int,
+        b'S' => (*s.add(2) == b'Q' as c_char && *s.add(3) == b'\t' as c_char) as c_int,
+        b'R' | b'P' => (*s.add(2) == b'G' as c_char && *s.add(3) == b'\t' as c_char) as c_int,
+        b'C' => (*s.add(2) == b'O' as c_char) as c_int,
+        _ => 0,
+    }
+}
+
+// original: redact_header_text (htslib/header.c:1530)
+pub unsafe fn header_c_1530_redact_header_text(bh: *mut sam_hdr_t) {
+    (*bh).l_text = 0;
+    crate::htslib_mini_rs::c_compat::free((*bh).text.cast());
+    (*bh).text = std::ptr::null_mut();
 }
 
 unsafe fn sam_c_144_sam_hdr_dup_sdict(h0: *const sam_hdr_t, h: *mut sam_hdr_t) -> c_int {
@@ -1198,9 +1550,7 @@ pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
                 return -1;
             }
         }
-        HTS_FORMAT_CRAM => {
-            return hts_sys::sam_hdr_write(fp.cast(), h.cast());
-        }
+        HTS_FORMAT_CRAM => return sam_hdr_write_cram(fp, h),
         HTS_FORMAT_TEXT_FORMAT => {
             (*fp).format.category = HTS_FORMAT_SEQUENCE_DATA;
             (*fp).format.format = HTS_FORMAT_SAM;
@@ -1211,9 +1561,6 @@ pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
                 return 0;
             }
             if !(*h).hrecs.is_null() {
-                return hts_sys::sam_hdr_write(fp.cast(), h.cast());
-            }
-            if ((*fp).bitfields & (1 << 4)) == 0 {
                 return hts_sys::sam_hdr_write(fp.cast(), h.cast());
             }
             if !(*h).text.is_null() {
@@ -1228,8 +1575,7 @@ pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
                     q = p.add(4);
                 };
                 let no_sq = p.is_null();
-                let bytes = bgzf_write((*fp).fp.bgzf, text.cast(), l_text);
-                if bytes != l_text as isize {
+                if sam_hdr_write_bytes(fp, text.cast(), l_text) < 0 {
                     return -1;
                 }
 
@@ -1244,15 +1590,18 @@ pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
                         {
                             return -1;
                         }
-                        let bytes = bgzf_write((*fp).fp.bgzf, (*fp).line.s.cast(), (*fp).line.l);
-                        if bytes != (*fp).line.l as isize {
+                        if sam_hdr_write_bytes(fp, (*fp).line.s.cast(), (*fp).line.l) < 0 {
                             return -1;
                         }
                     }
                 }
             }
 
-            if bgzf_flush((*fp).fp.bgzf) != 0 {
+            if ((*fp).bitfields & (1 << 4)) != 0 {
+                if bgzf_flush((*fp).fp.bgzf) != 0 {
+                    return -1;
+                }
+            } else if hflush((*fp).fp.hfile) != 0 {
                 return -1;
             }
         }
@@ -1264,6 +1613,70 @@ pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
     }
 
     sam_hdr_write_store_copy(fp, h)
+}
+
+unsafe fn sam_hdr_write_cram(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
+    if !(*h).hrecs.is_null() {
+        return hts_sys::sam_hdr_write(fp.cast(), h.cast());
+    }
+    if (*h).text.is_null() {
+        return 0;
+    }
+
+    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text);
+    let mut no_sq = true;
+    let mut start = 0usize;
+    while let Some(pos) = text[start..].windows(4).position(|w| w == b"@SQ\t") {
+        let abs = start + pos;
+        if abs == 0 || text[abs - 1] == b'\n' {
+            no_sq = false;
+            break;
+        }
+        start = abs + 4;
+    }
+
+    let mut header_text = text.to_vec();
+    if no_sq {
+        for i in 0..(*h).n_targets {
+            let name = *(*h).target_name.add(i as usize);
+            if name.is_null() {
+                continue;
+            }
+            header_text.extend_from_slice(b"@SQ\tSN:");
+            header_text.extend_from_slice(CStr::from_ptr(name).to_bytes());
+            header_text.extend_from_slice(b"\tLN:");
+            header_text
+                .extend_from_slice((*(*h).target_len.add(i as usize)).to_string().as_bytes());
+            header_text.push(b'\n');
+        }
+    }
+
+    let hts_hdr = hts_sys::sam_hdr_parse(header_text.len() as u64, header_text.as_ptr().cast());
+    if hts_hdr.is_null() {
+        return -1;
+    }
+    let ret = hts_sys::sam_hdr_write(fp.cast(), hts_hdr);
+    hts_sys::sam_hdr_destroy(hts_hdr);
+    ret
+}
+
+unsafe fn sam_hdr_write_bytes(fp: *mut htsFile, bytes: *const c_void, len: usize) -> c_int {
+    if len == 0 {
+        return 0;
+    }
+    if ((*fp).bitfields & (1 << 4)) != 0 {
+        if bgzf_write((*fp).fp.bgzf, bytes, len) == len as isize {
+            0
+        } else {
+            -1
+        }
+    } else if crate::htslib_mini_rs::hfile::htslib_hfile_h_292_hwrite((*fp).fp.hfile, bytes, len)
+        == len as libc::ssize_t
+    {
+        0
+    } else {
+        -1
+    }
 }
 
 unsafe fn sam_hdr_write_store_copy(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
@@ -1392,22 +1805,28 @@ pub unsafe fn sam_hdr_read(_fp: *mut htsFile) -> *mut sam_hdr_t {
             crate::htslib_mini_rs::c_compat::EINVAL as c_int;
         return std::ptr::null_mut();
     }
-    match (*_fp).format.format {
+    let h = match (*_fp).format.format {
         HTS_FORMAT_BAM => sam_hdr_sanitise(bam_hdr_read((*_fp).fp.bgzf)),
         HTS_FORMAT_FASTQ_FORMAT | HTS_FORMAT_FASTA_FORMAT => sam_hdr_init(),
         HTS_FORMAT_EMPTY_FORMAT => {
             *crate::htslib_mini_rs::c_compat::__errno_location() =
                 crate::htslib_mini_rs::c_compat::EPIPE as c_int;
-            std::ptr::null_mut()
+            return std::ptr::null_mut();
         }
         HTS_FORMAT_SAM => sam_c_1907_sam_hdr_create(_fp),
         HTS_FORMAT_CRAM => hts_sys::sam_hdr_read(_fp.cast()).cast(),
         _ => {
             *crate::htslib_mini_rs::c_compat::__errno_location() =
                 crate::htslib_mini_rs::c_compat::ENOEXEC as c_int;
-            std::ptr::null_mut()
+            return std::ptr::null_mut();
         }
+    };
+
+    if !h.is_null() && (*_fp).bam_header.is_null() {
+        (*_fp).bam_header = h.cast();
+        sam_hdr_incr_ref(h);
     }
+    h
 }
 
 pub unsafe fn sam_hdr_destroy(_h: *mut sam_hdr_t) {
@@ -3058,6 +3477,7 @@ pub unsafe fn sam_c_3802_fastq_state_destroy(fp: *mut htsFile) {
         }
         libc::regfree(&mut (*x).regex);
         crate::htslib_mini_rs::c_compat::free((*fp).state);
+        (*fp).state = std::ptr::null_mut();
     }
 }
 
@@ -4779,7 +5199,36 @@ pub unsafe fn sam_c_1768_sam_itr_regarray(
     if idx.is_null() || hdr.is_null() {
         return std::ptr::null_mut();
     }
-    hts_sys::sam_itr_regarray(idx.cast(), hdr.cast(), regarray, regcount).cast()
+    if (*idx).fmt == HTS_FMT_CRAI {
+        return hts_sys::sam_itr_regarray(idx.cast(), hdr.cast(), regarray, regcount).cast();
+    }
+
+    let mut reg_count = 0;
+    let reglist = hts_reglist_create(
+        regarray,
+        regcount as c_int,
+        &mut reg_count,
+        hdr.cast(),
+        Some(sam_c_418_bam_name2id_wrapper),
+    );
+    if reglist.is_null() {
+        return std::ptr::null_mut();
+    }
+    let itr = hts_itr_regions(
+        idx,
+        reglist,
+        reg_count,
+        Some(sam_c_418_bam_name2id_wrapper),
+        hdr.cast(),
+        Some(hts_itr_multi_bam),
+        Some(sam_readrec),
+        Some(sam_c_1631_bam_pseek),
+        Some(sam_c_1638_bam_ptell),
+    );
+    if itr.is_null() {
+        hts_reglist_free(reglist, reg_count);
+    }
+    itr
 }
 
 pub unsafe fn sam_c_1798_sam_itr_regions(
@@ -4946,7 +5395,181 @@ unsafe fn sam_read1_bam(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut bam1_t) -> 
 }
 
 unsafe fn sam_c_4145_sam_read1_cram(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut bam1_t) -> c_int {
-    hts_sys::sam_read1(fp.cast(), h.cast(), b.cast())
+    if let Some((pending, ret)) = sam_cram_pending_pop(fp) {
+        let copied = bam_copy1(b, pending);
+        bam_destroy1(pending);
+        return if copied.is_null() { -1 } else { ret };
+    }
+
+    let ret = if let Some((lookahead, ret)) = sam_cram_lookahead_take(fp) {
+        let copied = bam_copy1(b, lookahead);
+        bam_destroy1(lookahead);
+        if copied.is_null() {
+            return -1;
+        }
+        ret
+    } else {
+        hts_sys::sam_read1(fp.cast(), h.cast(), b.cast())
+    };
+    if ret < 0 || !sam_cram_tlen_candidate(b) {
+        return ret;
+    }
+
+    let first_qname = CStr::from_ptr(bam_get_qname(b)).to_bytes().to_vec();
+    let mut group = vec![b];
+    let mut group_rets = vec![ret];
+    let mut next_group: Option<(*mut bam1_t, c_int)> = None;
+
+    loop {
+        let next = bam_init1();
+        if next.is_null() {
+            break;
+        }
+        let next_ret = hts_sys::sam_read1(fp.cast(), h.cast(), next.cast());
+        if next_ret < 0 {
+            bam_destroy1(next);
+            break;
+        }
+        if CStr::from_ptr(bam_get_qname(next)).to_bytes() == first_qname.as_slice() {
+            group.push(next);
+            group_rets.push(next_ret);
+        } else {
+            next_group = Some((next, next_ret));
+            break;
+        }
+    }
+
+    sam_fix_cram_group_tlen(&group);
+    for (rec, rec_ret) in group.iter().copied().zip(group_rets).skip(1) {
+        sam_cram_pending_push(fp, rec, rec_ret);
+    }
+    if let Some((rec, rec_ret)) = next_group {
+        sam_cram_lookahead_store(fp, rec, rec_ret);
+    }
+
+    ret
+}
+
+fn sam_cram_pending() -> &'static Mutex<HashMap<usize, VecDeque<(usize, c_int)>>> {
+    static PENDING: OnceLock<Mutex<HashMap<usize, VecDeque<(usize, c_int)>>>> = OnceLock::new();
+    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+unsafe fn sam_cram_pending_pop(fp: *mut htsFile) -> Option<(*mut bam1_t, c_int)> {
+    let mut pending = sam_cram_pending().lock().unwrap();
+    let queue = pending.get_mut(&(fp as usize))?;
+    let (rec, ret) = queue.pop_front()?;
+    if queue.is_empty() {
+        pending.remove(&(fp as usize));
+    }
+    Some((rec as *mut bam1_t, ret))
+}
+
+unsafe fn sam_cram_pending_push(fp: *mut htsFile, rec: *mut bam1_t, ret: c_int) {
+    let mut pending = sam_cram_pending().lock().unwrap();
+    pending
+        .entry(fp as usize)
+        .or_default()
+        .push_back((rec as usize, ret));
+}
+
+fn sam_cram_lookahead() -> &'static Mutex<HashMap<usize, (usize, c_int)>> {
+    static LOOKAHEAD: OnceLock<Mutex<HashMap<usize, (usize, c_int)>>> = OnceLock::new();
+    LOOKAHEAD.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+unsafe fn sam_cram_lookahead_take(fp: *mut htsFile) -> Option<(*mut bam1_t, c_int)> {
+    let mut lookahead = sam_cram_lookahead().lock().unwrap();
+    lookahead
+        .remove(&(fp as usize))
+        .map(|(rec, ret)| (rec as *mut bam1_t, ret))
+}
+
+unsafe fn sam_cram_lookahead_store(fp: *mut htsFile, rec: *mut bam1_t, ret: c_int) {
+    let mut lookahead = sam_cram_lookahead().lock().unwrap();
+    if let Some((old, _)) = lookahead.insert(fp as usize, (rec as usize, ret)) {
+        bam_destroy1(old as *mut bam1_t);
+    }
+}
+
+unsafe fn sam_cram_tlen_candidate(b: *const bam1_t) -> bool {
+    let c = &(*b).core;
+    c.tid >= 0 && c.mtid == c.tid && c.isize != 0 && c.n_cigar != 0
+}
+
+unsafe fn sam_cram_record_right(b: *const bam1_t) -> Option<hts_pos_t> {
+    let c = &(*b).core;
+    let rlen = bam_cigar2rlen(c.n_cigar as c_int, bam_get_cigar(b));
+    if rlen <= 0 {
+        None
+    } else {
+        Some(c.pos + rlen - 1)
+    }
+}
+
+unsafe fn sam_fix_cram_group_tlen(group: &[*mut bam1_t]) {
+    if group.len() < 2 || !group.iter().all(|&b| sam_cram_tlen_candidate(b)) {
+        return;
+    }
+
+    let ref_id = (*group[0]).core.tid;
+    if !group.iter().all(|&b| (*b).core.tid == ref_id) {
+        for &b in group {
+            (*b).core.isize = 0;
+        }
+        return;
+    }
+
+    let mut aleft = (*group[0]).core.pos;
+    let mut aright = match sam_cram_record_right(group[0]) {
+        Some(right) => right,
+        None => return,
+    };
+    let mut left_cnt = 0;
+    let mut right_cnt = 0;
+
+    for &b in group {
+        let pos = (*b).core.pos;
+        let Some(right) = sam_cram_record_right(b) else {
+            return;
+        };
+        if pos < aleft {
+            aleft = pos;
+            left_cnt = 1;
+        } else if pos == aleft {
+            left_cnt += 1;
+        }
+        if right > aright {
+            aright = right;
+            right_cnt = 1;
+        } else if right == aright {
+            right_cnt += 1;
+        }
+    }
+
+    let mut tlen = aright - aleft + 1;
+    let first = group[0];
+    let first_right = match sam_cram_record_right(first) {
+        Some(right) => right,
+        None => return,
+    };
+    if (*first).core.pos == aleft && (first_right < aright || left_cnt <= 1) {
+        (*first).core.isize = tlen;
+        tlen = -tlen;
+    } else if (*first).core.pos == aleft && first_right == aright && left_cnt > 1 && right_cnt > 1 {
+        if ((*first).core.flag as c_int & BAM_FREAD1) != 0 {
+            (*first).core.isize = tlen;
+            tlen = -tlen;
+        } else {
+            (*first).core.isize = -tlen;
+        }
+    } else {
+        (*first).core.isize = -tlen;
+    }
+
+    for &b in group.iter().skip(1) {
+        (*b).core.isize = tlen;
+    }
 }
 
 pub unsafe fn sam_c_3719_sam_set_thread_pool(
@@ -5110,7 +5733,26 @@ unsafe fn sam_c_4157_sam_read1_sam(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut 
 
 pub unsafe fn sam_read1(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut bam1_t) -> c_int {
     if !(*fp).filter.is_null() {
-        return hts_sys::sam_read1(fp.cast(), h.cast(), b.cast());
+        loop {
+            let ret = sam_read1_unfiltered(fp, h, b);
+            if ret < 0 {
+                return ret;
+            }
+            let pass = sam_c_1535_sam_passes_filter(h, b, (*fp).filter);
+            if pass < 0 {
+                return -3;
+            }
+            if pass != 0 {
+                return ret;
+            }
+        }
+    }
+    sam_read1_unfiltered(fp, h, b)
+}
+
+unsafe fn sam_read1_unfiltered(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut bam1_t) -> c_int {
+    if fp.is_null() || b.is_null() {
+        return -3;
     }
     match (*fp).format.format {
         HTS_FORMAT_BAM => sam_read1_bam(fp, h, b),
@@ -6274,7 +6916,364 @@ pub unsafe fn sam_prob_realn(
     ref_len: hts_pos_t,
     flag: c_int,
 ) -> c_int {
-    hts_sys::sam_prob_realn(b.cast(), ref_, ref_len, flag)
+    let mut k: c_int;
+    let mut bw: c_int;
+    let mut y: c_int;
+    let mut yb: c_int;
+    let mut ye: c_int;
+    let mut xb: hts_pos_t;
+    let mut xe: hts_pos_t;
+    let mut fix_bq: c_int = 0;
+    let apply_baq = flag & 1;
+    let extend_baq = flag & 2;
+    let redo_baq = flag & 4;
+    let system = flag & (0xff << 3);
+    let mut i: hts_pos_t;
+    let mut x: hts_pos_t;
+    let cigar = bam_get_cigar(b);
+    const BAQ_ILLUMINA: c_int = 1 << 3;
+    const SEQ_NT16_INT: [u8; 16] = [4, 0, 1, 4, 2, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4];
+
+    let mut conf = crate::htslib_mini_rs::probaln::probaln_par_t {
+        d: 0.001,
+        e: 0.1,
+        bw: 10,
+    };
+
+    if (*b).core.l_qseq > 1000 || system > BAQ_ILLUMINA {
+        conf.d = 1e-7;
+        conf.e = 1e-1;
+    }
+
+    let mut bq;
+    let mut zq;
+    let qual = bam_get_qual(b).cast_mut();
+    if ((*b).core.flag as c_int & BAM_FUNMAP) != 0 || (*b).core.l_qseq == 0 || *qual == u8::MAX {
+        return -1;
+    }
+
+    bq = bam_aux_get(b, c"BQ".as_ptr());
+    if !bq.is_null() {
+        if redo_baq == 0
+            && realn_check_tag(
+                bq,
+                crate::htslib_mini_rs::hts::HTS_LOG_WARNING,
+                c"BQ".as_ptr(),
+                b,
+            ) < 0
+        {
+            fix_bq = 1;
+        }
+        bq = bq.add(1);
+    }
+    zq = bam_aux_get(b, c"ZQ".as_ptr());
+    if !zq.is_null() {
+        if realn_check_tag(
+            zq,
+            crate::htslib_mini_rs::hts::HTS_LOG_ERROR,
+            c"ZQ".as_ptr(),
+            b,
+        ) < 0
+        {
+            return -4;
+        }
+        zq = zq.add(1);
+    }
+    if !bq.is_null() && redo_baq != 0 {
+        bam_aux_del(b, bq.sub(1));
+        bq = std::ptr::null_mut();
+    }
+    if !bq.is_null() && !zq.is_null() {
+        bam_aux_del(b, zq.sub(1));
+        zq = std::ptr::null_mut();
+    }
+    if zq.is_null() && fix_bq != 0 {
+        bam_aux_del(b, bq.sub(1));
+        bq = std::ptr::null_mut();
+    }
+
+    if !bq.is_null() || !zq.is_null() {
+        if (apply_baq != 0 && !zq.is_null()) || (apply_baq == 0 && !bq.is_null()) {
+            return -3;
+        }
+        if !bq.is_null() && apply_baq != 0 {
+            i = 0;
+            while i < (*b).core.l_qseq as hts_pos_t {
+                let q = qual.add(i as usize);
+                let v = bq.add(i as usize);
+                *q = if (*q as c_int) + 64 < *v as c_int {
+                    0
+                } else {
+                    ((*q as c_int) - ((*v as c_int) - 64)) as u8
+                };
+                i += 1;
+            }
+            *bq.sub(3) = b'Z';
+        } else if !zq.is_null() && apply_baq == 0 {
+            i = 0;
+            while i < (*b).core.l_qseq as hts_pos_t {
+                let q = qual.add(i as usize);
+                *q = ((*q as c_int) + (*zq.add(i as usize) as c_int) - 64) as u8;
+                i += 1;
+            }
+            *zq.sub(3) = b'B';
+        }
+        return 0;
+    }
+
+    x = (*b).core.pos;
+    y = 0;
+    yb = -1;
+    ye = -1;
+    xb = -1;
+    xe = -1;
+    k = 0;
+    while k < (*b).core.n_cigar as c_int {
+        let op = (*cigar.add(k as usize) & 0xf) as c_int;
+        let l = (*cigar.add(k as usize) >> 4) as c_int;
+        if op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF {
+            if yb < 0 {
+                yb = y;
+            }
+            if xb < 0 {
+                xb = x;
+            }
+            ye = y + l;
+            xe = x + l as hts_pos_t;
+            x += l as hts_pos_t;
+            y += l;
+        } else if op == BAM_CSOFT_CLIP || op == BAM_CINS {
+            y += l;
+        } else if op == BAM_CDEL {
+            x += l as hts_pos_t;
+        } else if op == BAM_CREF_SKIP {
+            return -1;
+        }
+        k += 1;
+    }
+    if xb == -1 {
+        return -1;
+    }
+
+    bw = 7;
+    if ((xe - xb) - (ye - yb) as hts_pos_t).abs() > bw as hts_pos_t {
+        bw = ((xe - xb) - (ye - yb) as hts_pos_t).abs() as c_int + 3;
+    }
+    conf.bw = bw;
+
+    xb -= yb as hts_pos_t + (bw / 2) as hts_pos_t;
+    if xb < 0 {
+        xb = 0;
+    }
+    xe += ((*b).core.l_qseq - ye) as hts_pos_t + (bw / 2) as hts_pos_t;
+    if xe - xb - (*b).core.l_qseq as hts_pos_t > bw as hts_pos_t {
+        xb += (xe - xb - (*b).core.l_qseq as hts_pos_t - bw as hts_pos_t) / 2;
+        xe -= (xe - xb - (*b).core.l_qseq as hts_pos_t - bw as hts_pos_t) / 2;
+    }
+
+    let seq = bam_get_seq(b);
+    let mut lref = if xe > xb { (xe - xb) as usize } else { 1 };
+    if extend_baq != 0 && lref < (*b).core.l_qseq as usize {
+        lref = (*b).core.l_qseq as usize;
+    }
+    let align_lqseq = (((*b).core.l_qseq as usize + 1) | 0xf) + 1;
+    if (usize::MAX - lref) / (3 + std::mem::size_of::<c_int>()) < align_lqseq {
+        *crate::htslib_mini_rs::c_compat::__errno_location() =
+            crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+        return -4;
+    }
+    let Some(total) = align_lqseq.checked_mul(3).and_then(|n| n.checked_add(lref)) else {
+        *crate::htslib_mini_rs::c_compat::__errno_location() =
+            crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+        return -4;
+    };
+    let mut bq_buf = vec![0_u8; total];
+    bq = bq_buf.as_mut_ptr();
+    let q = bq.add(align_lqseq);
+    let tseq = q.add(align_lqseq);
+    let tref = tseq.add(align_lqseq);
+
+    std::ptr::copy_nonoverlapping(qual, bq, (*b).core.l_qseq as usize);
+    *bq.add((*b).core.l_qseq as usize) = 0;
+    i = 0;
+    while i < (*b).core.l_qseq as hts_pos_t {
+        *tseq.add(i as usize) = SEQ_NT16_INT[bam_seqi(seq, i as usize) as usize];
+        i += 1;
+    }
+    i = xb;
+    while i < xe {
+        if i >= ref_len || *ref_.add(i as usize) == 0 {
+            xe = i;
+            break;
+        }
+        *tref.add((i - xb) as usize) =
+            SEQ_NT16_INT[SEQ_NT16_TABLE[*ref_.add(i as usize) as u8 as usize] as usize];
+        i += 1;
+    }
+
+    let mut state_buf = vec![0 as c_int; (*b).core.l_qseq as usize];
+    let state = state_buf.as_mut_ptr();
+    if crate::htslib_mini_rs::probaln::probaln_glocal(
+        tref,
+        (xe - xb) as c_int,
+        tseq,
+        (*b).core.l_qseq,
+        qual,
+        &conf,
+        state,
+        q,
+    ) == c_int::MIN
+    {
+        return -4;
+    }
+
+    if extend_baq == 0 {
+        k = 0;
+        x = (*b).core.pos;
+        y = 0;
+        while k < (*b).core.n_cigar as c_int {
+            let op = (*cigar.add(k as usize) & 0xf) as c_int;
+            let mut l = (*cigar.add(k as usize) >> 4) as c_int;
+            if l == 0 {
+                k += 1;
+                continue;
+            }
+            if op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF {
+                if l > (*b).core.l_qseq - y {
+                    l = (*b).core.l_qseq - y;
+                }
+                i = y as hts_pos_t;
+                while i < (y + l) as hts_pos_t {
+                    if (*state.add(i as usize) & 3) != 0
+                        || (*state.add(i as usize) >> 2) != (x - xb + (i - y as hts_pos_t)) as c_int
+                    {
+                        *bq.add(i as usize) = 0;
+                    } else {
+                        *bq.add(i as usize) = (*bq.add(i as usize)).min(*q.add(i as usize));
+                    }
+                    i += 1;
+                }
+                x += l as hts_pos_t;
+                y += l;
+            } else if op == BAM_CSOFT_CLIP || op == BAM_CINS {
+                if l > (*b).core.l_qseq - y {
+                    l = (*b).core.l_qseq - y;
+                }
+                y += l;
+            } else if op == BAM_CDEL {
+                x += l as hts_pos_t;
+            }
+            k += 1;
+        }
+        i = 0;
+        while i < (*b).core.l_qseq as hts_pos_t {
+            *bq.add(i as usize) =
+                ((*qual.add(i as usize) as c_int) - (*bq.add(i as usize) as c_int) + 64) as u8;
+            i += 1;
+        }
+    } else {
+        let left = tseq;
+        let rght = tref;
+        let mut len: c_int = 0;
+
+        k = 0;
+        x = (*b).core.pos;
+        y = 0;
+        while k < (*b).core.n_cigar as c_int {
+            let op = (*cigar.add(k as usize) & 0xf) as c_int;
+            let mut l = (*cigar.add(k as usize) >> 4) as c_int;
+            if op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF {
+                if k + 1 < (*b).core.n_cigar as c_int {
+                    let next_op = bam_cigar_op(*cigar.add(k as usize + 1));
+                    if next_op == BAM_CMATCH || next_op == BAM_CEQUAL || next_op == BAM_CDIFF {
+                        len += l;
+                        k += 1;
+                        continue;
+                    }
+                }
+                l += len;
+                len = 0;
+            }
+
+            if l == 0 {
+                k += 1;
+                continue;
+            }
+            if op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF {
+                if l > (*b).core.l_qseq - y {
+                    l = (*b).core.l_qseq - y;
+                }
+                i = y as hts_pos_t;
+                while i < (y + l) as hts_pos_t {
+                    *bq.add(i as usize) = if (*state.add(i as usize) & 3) != 0
+                        || (*state.add(i as usize) >> 2) != (x - xb + (i - y as hts_pos_t)) as c_int
+                    {
+                        0
+                    } else {
+                        *q.add(i as usize)
+                    };
+                    i += 1;
+                }
+                *left.add(y as usize) = *bq.add(y as usize);
+                i = (y + 1) as hts_pos_t;
+                while i < (y + l) as hts_pos_t {
+                    *left.add(i as usize) = (*bq.add(i as usize)).max(*left.add(i as usize - 1));
+                    i += 1;
+                }
+                *rght.add((y + l - 1) as usize) = *bq.add((y + l - 1) as usize);
+                if l > 1 {
+                    i = (y + l - 2) as hts_pos_t;
+                    loop {
+                        *rght.add(i as usize) =
+                            (*bq.add(i as usize)).max(*rght.add(i as usize + 1));
+                        if i == y as hts_pos_t {
+                            break;
+                        }
+                        i -= 1;
+                    }
+                }
+                i = y as hts_pos_t;
+                while i < (y + l) as hts_pos_t {
+                    *bq.add(i as usize) = (*left.add(i as usize)).min(*rght.add(i as usize));
+                    i += 1;
+                }
+                x += l as hts_pos_t;
+                y += l;
+            } else if op == BAM_CSOFT_CLIP || op == BAM_CINS {
+                if l > (*b).core.l_qseq - y {
+                    l = (*b).core.l_qseq - y;
+                }
+                y += l;
+            } else if op == BAM_CDEL {
+                x += l as hts_pos_t;
+            }
+            k += 1;
+        }
+        i = 0;
+        while i < (*b).core.l_qseq as hts_pos_t {
+            *bq.add(i as usize) = (64
+                + if *qual.add(i as usize) <= *bq.add(i as usize) {
+                    0
+                } else {
+                    (*qual.add(i as usize) as c_int) - (*bq.add(i as usize) as c_int)
+                }) as u8;
+            i += 1;
+        }
+    }
+
+    if apply_baq != 0 {
+        i = 0;
+        while i < (*b).core.l_qseq as hts_pos_t {
+            *qual.add(i as usize) =
+                ((*qual.add(i as usize) as c_int) - ((*bq.add(i as usize) as c_int) - 64)) as u8;
+            i += 1;
+        }
+        bam_aux_append(b, c"ZQ".as_ptr(), b'Z' as c_char, (*b).core.l_qseq + 1, bq);
+    } else {
+        bam_aux_append(b, c"BQ".as_ptr(), b'Z' as c_char, (*b).core.l_qseq + 1, bq);
+    }
+
+    0
 }
 
 pub unsafe fn realn_check_tag(
@@ -6962,7 +7961,7 @@ pub unsafe fn sam_format_aux1(
                 return std::ptr::null();
             }
             r |= (kputsn_(b"f:".as_ptr().cast(), 2, ks) < 0) as c_int;
-            r |= (kputd(
+            r |= (sam_put_aux_float(
                 f32::from_le_bytes([*s, *s.add(1), *s.add(2), *s.add(3)]) as f64,
                 ks,
             ) < 0) as c_int;
@@ -6975,7 +7974,7 @@ pub unsafe fn sam_format_aux1(
                 return std::ptr::null();
             }
             r |= (kputsn_(b"d:".as_ptr().cast(), 2, ks) < 0) as c_int;
-            r |= (kputd(
+            r |= (sam_put_aux_float(
                 f64::from_le_bytes([
                     *s,
                     *s.add(1),
@@ -7033,6 +8032,11 @@ pub unsafe fn sam_format_aux1(
             }
             r |= (kputsn_(b"B:".as_ptr().cast(), 2, ks) < 0) as c_int;
             r |= (kputc(sub_type as c_int, ks) < 0) as c_int;
+            if sub_type == b'A' {
+                *crate::htslib_mini_rs::c_compat::__errno_location() =
+                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                return std::ptr::null();
+            }
             if ks_expand(ks, n as usize * 12) < 0 {
                 *crate::htslib_mini_rs::c_compat::__errno_location() =
                     crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
@@ -7063,7 +8067,7 @@ pub unsafe fn sam_format_aux1(
                         ) < 0) as c_int;
                     }
                     b'f' => {
-                        r |= (kputd(
+                        r |= (sam_put_aux_float(
                             f32::from_le_bytes([*s, *s.add(1), *s.add(2), *s.add(3)]) as f64,
                             ks,
                         ) < 0) as c_int;
@@ -7091,6 +8095,15 @@ pub unsafe fn sam_format_aux1(
     } else {
         s
     }
+}
+
+unsafe fn sam_put_aux_float(value: f64, ks: *mut kstring_t) -> c_int {
+    let mut buf = [0 as c_char; 128];
+    let len = libc::snprintf(buf.as_mut_ptr(), buf.len(), c"%.6g".as_ptr(), value);
+    if len < 0 || len as usize >= buf.len() {
+        return -1;
+    }
+    kputsn(buf.as_ptr(), len as usize, ks)
 }
 
 unsafe fn sam_c_4317_add33(a: *mut u8, b: *const u8, len: i32) {
@@ -7193,7 +8206,7 @@ unsafe fn sam_c_4324_sam_format1_append(
         }
     }
     r |= (kputsn(std::ptr::null(), 0, str_) < 0) as c_int;
-    if r < 0 {
+    if r != 0 {
         *crate::htslib_mini_rs::c_compat::__errno_location() =
             crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
         return -1;
@@ -7829,9 +8842,7 @@ pub unsafe fn bam_parse_basemod2(
     }
 
     let mut freq = [0; 16];
-    if ((*b).core.flag as c_int & BAM_FREVERSE) != 0 {
-        seq_freq(b, freq.as_mut_ptr());
-    }
+    seq_freq(b, freq.as_mut_ptr());
 
     let mut cp = mm.add(1).cast::<c_char>();
     let mut mod_num = 0usize;
@@ -7921,9 +8932,6 @@ pub unsafe fn bam_parse_basemod2(
 
         let mut ms_iter = ms;
         while ms_iter < me {
-            if mod_num >= MAX_BASE_MOD {
-                return -1;
-            }
             (*state).type_[mod_num] = if chebi != 0 {
                 -chebi
             } else {
@@ -7941,7 +8949,8 @@ pub unsafe fn bam_parse_basemod2(
                 (*state).mm[mod_num] = me.add(1);
                 (*state).mmend[mod_num] = cp_end;
                 (*state).ml[mod_num] = if !ml.is_null() {
-                    ml.add(n + (ndelta.saturating_sub(1)) * stride as usize)
+                    ml.add(n)
+                        .wrapping_offset((ndelta as isize - 1) * stride as isize)
                 } else {
                     std::ptr::null_mut()
                 };
@@ -7955,6 +8964,9 @@ pub unsafe fn bam_parse_basemod2(
                 };
             }
             mod_num += 1;
+            if mod_num >= MAX_BASE_MOD {
+                return -1;
+            }
             ms_iter = ms_iter.add(1);
             n += 1;
         }
@@ -8503,6 +9515,10 @@ mod tests {
         assert_eq!(align_of::<bam_pileup_cd>(), 8);
         assert_eq!(size_of::<bam_pileup1_t>(), 40);
         assert_eq!(align_of::<bam_pileup1_t>(), 8);
+        assert_eq!(size_of::<sam_hrec_tag_t>(), 24);
+        assert_eq!(align_of::<sam_hrec_tag_t>(), 8);
+        assert_eq!(size_of::<sam_hrec_type_t>(), 48);
+        assert_eq!(align_of::<sam_hrec_type_t>(), 8);
         assert_eq!(size_of::<sam_hrec_sq_t>(), 24);
         assert_eq!(align_of::<sam_hrec_sq_t>(), 8);
         assert_eq!(size_of::<sam_hdr_t>(), 72);
@@ -8527,6 +9543,15 @@ mod tests {
         assert_eq!(std::mem::offset_of!(sam_hdr_t, sdict), 48);
         assert_eq!(std::mem::offset_of!(sam_hdr_t, hrecs), 56);
         assert_eq!(std::mem::offset_of!(sam_hdr_t, ref_count), 64);
+        assert_eq!(std::mem::offset_of!(sam_hrec_tag_t, next), 0);
+        assert_eq!(std::mem::offset_of!(sam_hrec_tag_t, str_), 8);
+        assert_eq!(std::mem::offset_of!(sam_hrec_tag_t, len), 16);
+        assert_eq!(std::mem::offset_of!(sam_hrec_type_t, next), 0);
+        assert_eq!(std::mem::offset_of!(sam_hrec_type_t, prev), 8);
+        assert_eq!(std::mem::offset_of!(sam_hrec_type_t, global_next), 16);
+        assert_eq!(std::mem::offset_of!(sam_hrec_type_t, global_prev), 24);
+        assert_eq!(std::mem::offset_of!(sam_hrec_type_t, tag), 32);
+        assert_eq!(std::mem::offset_of!(sam_hrec_type_t, type_), 40);
         assert_eq!(std::mem::offset_of!(cstate_t, k), 0);
         assert_eq!(std::mem::offset_of!(cstate_t, y), 4);
         assert_eq!(std::mem::offset_of!(cstate_t, x), 8);
@@ -8928,6 +9953,118 @@ mod tests {
     }
 
     #[test]
+    fn bam_parse_basemod_defers_forward_runover_errors_until_iteration() {
+        unsafe {
+            let b = bam_init1();
+            assert!(!b.is_null());
+            let cigar = [(1u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32];
+            assert!(
+                bam_set1(
+                    b,
+                    5,
+                    c"bmov".as_ptr(),
+                    0,
+                    0,
+                    0,
+                    60,
+                    1,
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    1,
+                    c"C".as_ptr(),
+                    std::ptr::null(),
+                    0,
+                ) > 0
+            );
+            let mm = b"C+m,1;\0";
+            assert_eq!(
+                bam_aux_append(
+                    b,
+                    c"MM".as_ptr(),
+                    b'Z' as c_char,
+                    mm.len() as c_int,
+                    mm.as_ptr(),
+                ),
+                0
+            );
+
+            let state = hts_base_mod_state_alloc();
+            assert!(!state.is_null());
+            assert_eq!(bam_parse_basemod(b, state), 0);
+            assert_eq!((*state).nmods, 1);
+            assert_eq!((*state).mmcount[0], 1);
+
+            let mut mods = [hts_base_mod {
+                modified_base: 0,
+                canonical_base: 0,
+                strand: 0,
+                qual: 0,
+            }];
+            let mut pos = -1;
+            assert_eq!(
+                bam_next_basemod(b, state, mods.as_mut_ptr(), 1, &mut pos),
+                -1
+            );
+
+            hts_base_mod_state_free(state);
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn bam_parse_basemod_rejects_256_mod_codes_like_htslib() {
+        unsafe {
+            let b = bam_init1();
+            assert!(!b.is_null());
+            let cigar = [(1u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32];
+            assert!(
+                bam_set1(
+                    b,
+                    5,
+                    c"bm256".as_ptr(),
+                    0,
+                    0,
+                    0,
+                    60,
+                    1,
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    1,
+                    c"C".as_ptr(),
+                    std::ptr::null(),
+                    0,
+                ) > 0
+            );
+
+            let mut mm = Vec::with_capacity(5 + MAX_BASE_MOD + 1);
+            mm.extend_from_slice(b"C+");
+            mm.extend(std::iter::repeat(b'm').take(MAX_BASE_MOD));
+            mm.extend_from_slice(b",0;\0");
+            assert_eq!(
+                bam_aux_append(
+                    b,
+                    c"MM".as_ptr(),
+                    b'Z' as c_char,
+                    mm.len() as c_int,
+                    mm.as_ptr(),
+                ),
+                0
+            );
+
+            let state = hts_base_mod_state_alloc();
+            assert!(!state.is_null());
+            assert_eq!(bam_parse_basemod(b, state), -1);
+
+            hts_base_mod_state_free(state);
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
     fn aux_to_le_copies_and_validates_aux_payloads() {
         unsafe {
             let input = [0x34, 0x12, 0x78, 0x56];
@@ -9160,6 +10297,59 @@ mod tests {
             assert_eq!(libc::strlen(bq.add(1).cast()), 4);
 
             bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn sam_prob_realn_trims_reference_window_like_htslib_for_deletion_heavy_reads() {
+        unsafe fn make_realn_record() -> *mut bam1_t {
+            let b = bam_init1();
+            assert!(!b.is_null());
+            let cigar = [
+                (5u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32,
+                (10u32 << BAM_CIGAR_SHIFT) | BAM_CDEL as u32,
+                (5u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32,
+            ];
+            let qual = [35 as c_char; 10];
+            assert!(
+                bam_set1(
+                    b,
+                    6,
+                    c"delrw".as_ptr(),
+                    0,
+                    0,
+                    20,
+                    60,
+                    cigar.len(),
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    10,
+                    c"ACGTACGTAA".as_ptr(),
+                    qual.as_ptr(),
+                    0,
+                ) > 0
+            );
+            b
+        }
+
+        unsafe {
+            let ref_seq = c"TTGCAACGTACGTTACGATCGTACCTAGGCTAATCGGATCCGTAACGTTAGCTA";
+            let rust_b = make_realn_record();
+            let c_b = make_realn_record();
+
+            let rust_ret = sam_prob_realn(rust_b, ref_seq.as_ptr(), 60, 0);
+            let c_ret = hts_sys::sam_prob_realn(c_b.cast(), ref_seq.as_ptr(), 60, 0);
+            assert_eq!(rust_ret, c_ret);
+            assert_eq!((*rust_b).l_data, (*c_b).l_data);
+            assert_eq!(
+                std::slice::from_raw_parts((*rust_b).data, (*rust_b).l_data as usize),
+                std::slice::from_raw_parts((*c_b).data, (*c_b).l_data as usize)
+            );
+
+            bam_destroy1(rust_b);
+            bam_destroy1(c_b);
         }
     }
 
@@ -9831,8 +11021,7 @@ mod tests {
             let mut fp: htsFile = std::mem::zeroed();
             fp.state = x.cast();
             sam_c_3802_fastq_state_destroy(&mut fp);
-            assert!(!fp.state.is_null());
-            fp.state = std::ptr::null_mut();
+            assert!(fp.state.is_null());
             sam_c_3802_fastq_state_destroy(&mut fp);
         }
     }
@@ -10452,6 +11641,27 @@ mod tests {
     }
 
     #[test]
+    fn sam_index_load_public_wrappers_reject_non_indexable_formats() {
+        unsafe {
+            let mut fp: htsFile = std::mem::zeroed();
+            fp.format.format = HTS_FORMAT_FASTQ_FORMAT;
+
+            assert!(sam_index_load3(
+                &mut fp,
+                std::ptr::null(),
+                std::ptr::null(),
+                HTS_IDX_SAVE_REMOTE,
+            )
+            .is_null());
+            assert!(sam_index_load2(&mut fp, std::ptr::null(), std::ptr::null()).is_null());
+            assert!(sam_index_load(&mut fp, std::ptr::null()).is_null());
+
+            fp.format.format = HTS_FORMAT_EMPTY_FORMAT;
+            assert!(sam_index_load3(&mut fp, std::ptr::null(), std::ptr::null(), 0).is_null());
+        }
+    }
+
+    #[test]
     fn sam_state_create_err_and_destroy_manage_owned_state() {
         unsafe {
             let mut fp: htsFile = std::mem::zeroed();
@@ -10858,6 +12068,271 @@ mod tests {
             let xa = bam_aux_get(b, b"XA".as_ptr().cast());
             assert_eq!(bam_aux_del(b, xa), 0);
             assert!(bam_aux_get(b, b"XA".as_ptr().cast()).is_null());
+
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn bam_aux_update_int_preserves_middle_tag_neighbors() {
+        unsafe {
+            let b = bam_init1();
+            assert!(!b.is_null());
+
+            let aa = [1u8];
+            assert_eq!(
+                bam_aux_append(b, b"AA".as_ptr().cast(), b'C' as c_char, 1, aa.as_ptr()),
+                0
+            );
+            let nm = [7u8];
+            assert_eq!(
+                bam_aux_append(b, b"NM".as_ptr().cast(), b'C' as c_char, 1, nm.as_ptr()),
+                0
+            );
+            assert_eq!(
+                bam_aux_append(
+                    b,
+                    b"ZZ".as_ptr().cast(),
+                    b'Z' as c_char,
+                    5,
+                    b"tail\0".as_ptr(),
+                ),
+                0
+            );
+
+            let old_len = (*b).l_data;
+            assert_eq!(bam_aux_update_int(b, b"NM".as_ptr().cast(), 70_000), 0);
+            assert_eq!((*b).l_data, old_len + 3);
+
+            let first = bam_aux_first(b);
+            assert!(!first.is_null());
+            assert_eq!(
+                std::slice::from_raw_parts(bam_aux_tag(first).cast::<u8>(), 2),
+                b"AA"
+            );
+            assert_eq!(bam_aux_type(first), b'C' as c_char);
+            assert_eq!(bam_aux2i(first), 1);
+
+            let middle = bam_aux_next(b, first);
+            assert!(!middle.is_null());
+            assert_eq!(
+                std::slice::from_raw_parts(bam_aux_tag(middle).cast::<u8>(), 2),
+                b"NM"
+            );
+            assert_eq!(bam_aux_type(middle), b'I' as c_char);
+            assert_eq!(bam_aux2i(middle), 70_000);
+
+            let last = bam_aux_next(b, middle);
+            assert!(!last.is_null());
+            assert_eq!(
+                std::slice::from_raw_parts(bam_aux_tag(last).cast::<u8>(), 2),
+                b"ZZ"
+            );
+            assert_eq!(bam_aux_type(last), b'Z' as c_char);
+            assert_eq!(CStr::from_ptr(bam_aux2Z(last)).to_bytes(), b"tail");
+            assert!(bam_aux_next(b, last).is_null());
+
+            assert_eq!(bam_aux_update_int(b, b"NM".as_ptr().cast(), 8), 0);
+            let middle = bam_aux_get(b, b"NM".as_ptr().cast());
+            assert!(!middle.is_null());
+            assert_eq!(bam_aux_type(middle), b'I' as c_char);
+            assert_eq!(bam_aux2i(middle), 8);
+            let last = bam_aux_get(b, b"ZZ".as_ptr().cast());
+            assert!(!last.is_null());
+            assert_eq!(CStr::from_ptr(bam_aux2Z(last)).to_bytes(), b"tail");
+
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn bam_aux_update_int_boundary_types_match_htslib() {
+        let cases = [
+            (i32::MIN as i64, b'i'),
+            (-32769, b'i'),
+            (-32768, b's'),
+            (-129, b's'),
+            (-128, b'c'),
+            (-1, b'c'),
+            (0, b'C'),
+            (254, b'C'),
+            (255, b'S'),
+            (65534, b'S'),
+            (65535, b'I'),
+            (u32::MAX as i64, b'I'),
+        ];
+
+        unsafe {
+            for (value, expected_type) in cases {
+                let b = bam_init1();
+                assert!(!b.is_null());
+                assert_eq!(bam_aux_update_int(b, b"NM".as_ptr().cast(), value), 0);
+                let nm = bam_aux_get(b, b"NM".as_ptr().cast());
+                assert!(!nm.is_null());
+                assert_eq!(bam_aux_type(nm), expected_type as c_char, "value {value}");
+                assert_eq!(bam_aux2i(nm), value);
+                bam_destroy1(b);
+            }
+
+            let b = bam_init1();
+            assert!(!b.is_null());
+            assert_eq!(
+                bam_aux_update_int(b, b"NM".as_ptr().cast(), i32::MIN as i64 - 1),
+                -1
+            );
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::EOVERFLOW as c_int
+            );
+            assert_eq!(
+                bam_aux_update_int(b, b"NM".as_ptr().cast(), u32::MAX as i64 + 1),
+                -1
+            );
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::EOVERFLOW as c_int
+            );
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn bam_aux_accessors_report_truncated_payloads_as_invalid() {
+        let mut data = vec![b'X', b'Y', b'B', b'C', 2, 0, 0, 0, 9];
+        let b = bam1_t {
+            core: bam1_core_t {
+                pos: 0,
+                tid: 0,
+                bin: 0,
+                qual: 0,
+                l_extranul: 0,
+                flag: 0,
+                l_qname: 0,
+                n_cigar: 0,
+                l_qseq: 0,
+                mtid: 0,
+                mpos: 0,
+                isize: 0,
+            },
+            id: 0,
+            data: data.as_mut_ptr(),
+            l_data: data.len() as c_int,
+            m_data: data.len() as u32,
+            mempolicy_and_reserved: BAM_USER_OWNS_STRUCT | BAM_USER_OWNS_DATA,
+        };
+
+        unsafe {
+            let first = bam_aux_first(&b);
+            assert!(!first.is_null());
+            assert_eq!(bam_aux_type(first), b'B' as c_char);
+            assert!(bam_aux_next(&b, first).is_null());
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+            );
+
+            assert!(bam_aux_get(&b, c"XY".as_ptr()).is_null());
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+            );
+        }
+    }
+
+    #[test]
+    fn bam_aux_get_l_aux_tracks_record_payload_after_mutations() {
+        unsafe {
+            let b = bam_init1();
+            assert!(!b.is_null());
+            let cigar = [(3u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32];
+            let seq = CString::new("ACG").unwrap();
+            assert_eq!(
+                bam_set1(
+                    b,
+                    4,
+                    c"read".as_ptr(),
+                    0,
+                    0,
+                    0,
+                    20,
+                    1,
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    3,
+                    seq.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                ),
+                17
+            );
+            assert_eq!(bam_get_l_aux(b), 0);
+
+            assert_eq!(bam_aux_update_int(b, c"NM".as_ptr(), 300), 0);
+            assert_eq!(bam_get_l_aux(b), 5);
+            assert_eq!(
+                bam_aux_update_str(b, c"CB".as_ptr(), -1, c"cell".as_ptr()),
+                0
+            );
+            assert_eq!(bam_get_l_aux(b), 13);
+
+            let nm = bam_aux_get(b, c"NM".as_ptr());
+            assert_eq!(bam_aux_del(b, nm), 0);
+            assert_eq!(bam_get_l_aux(b), 8);
+            let cb = bam_aux_get(b, c"CB".as_ptr());
+            assert_eq!(bam_aux_del(b, cb), 0);
+            assert_eq!(bam_get_l_aux(b), 0);
+
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn bam_aux_numeric_converters_set_errno_on_wrong_type_and_bounds() {
+        unsafe {
+            let b = bam_init1();
+            assert!(!b.is_null());
+            assert_eq!(
+                bam_aux_update_str(b, c"CB".as_ptr(), -1, c"cell".as_ptr()),
+                0
+            );
+            let cb = bam_aux_get(b, c"CB".as_ptr());
+            assert!(!cb.is_null());
+            assert_eq!(bam_aux2A(cb), 0);
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+            );
+            assert_eq!(bam_auxB_len(cb), 0);
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+            );
+
+            let values = [1u8, 2u8];
+            assert_eq!(
+                bam_aux_update_array(
+                    b,
+                    c"XA".as_ptr(),
+                    b'C',
+                    values.len() as u32,
+                    values.as_ptr().cast_mut().cast::<c_void>(),
+                ),
+                0
+            );
+            let xa = bam_aux_get(b, c"XA".as_ptr());
+            assert!(!xa.is_null());
+            assert_eq!(bam_auxB2i(xa, 2), 0);
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::ERANGE as c_int
+            );
+            assert_eq!(bam_auxB2f(xa, 2), 0.0);
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::ERANGE as c_int
+            );
 
             bam_destroy1(b);
         }
@@ -11866,6 +13341,64 @@ mod tests {
     }
 
     #[test]
+    fn aux_parse_strict_and_lenient_malformed_fields_match_htslib() {
+        unsafe {
+            let b = bam_init1();
+            assert!(!b.is_null());
+
+            let strict = CString::new("NM:i:1\tbad\tAS:i:2").unwrap();
+            assert_eq!(
+                sam_c_2524_aux_parse(
+                    strict.as_ptr().cast_mut(),
+                    strict.as_ptr().add(strict.as_bytes().len()).cast_mut(),
+                    b,
+                    0,
+                    std::ptr::null_mut(),
+                ),
+                -2
+            );
+
+            (*b).l_data = 0;
+            let lenient = CString::new("NM:i:1\tbad\tAS:i:2").unwrap();
+            assert_eq!(
+                sam_c_2524_aux_parse(
+                    lenient.as_ptr().cast_mut(),
+                    lenient.as_ptr().add(lenient.as_bytes().len()).cast_mut(),
+                    b,
+                    1,
+                    std::ptr::null_mut(),
+                ),
+                0
+            );
+            let nm = bam_aux_get(b, c"NM".as_ptr());
+            assert!(!nm.is_null());
+            assert_eq!(bam_aux2i(nm), 1);
+            let as_ = bam_aux_get(b, c"AS".as_ptr());
+            assert!(!as_.is_null());
+            assert_eq!(bam_aux2i(as_), 2);
+
+            (*b).l_data = 0;
+            let odd_hex = CString::new("HX:H:abc\tNM:i:3").unwrap();
+            assert_eq!(
+                sam_c_2524_aux_parse(
+                    odd_hex.as_ptr().cast_mut(),
+                    odd_hex.as_ptr().add(odd_hex.as_bytes().len()).cast_mut(),
+                    b,
+                    1,
+                    std::ptr::null_mut(),
+                ),
+                0
+            );
+            assert!(bam_aux_get(b, c"HX".as_ptr()).is_null());
+            let nm = bam_aux_get(b, c"NM".as_ptr());
+            assert!(!nm.is_null());
+            assert_eq!(bam_aux2i(nm), 3);
+
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
     fn sam_parse1_builds_bam_record_with_core_sequence_quality_and_aux() {
         unsafe {
             let chr1 = CString::new("chr1").unwrap();
@@ -12069,6 +13602,162 @@ mod tests {
             assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(bgzf), 0);
             let _ = std::fs::remove_file(&path);
 
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn sam_parse1_and_format1_preserve_equal_mate_and_missing_quality() {
+        unsafe {
+            let chr1 = CString::new("chr1").unwrap();
+            let mut target_names = [chr1.as_ptr() as *mut c_char];
+            let mut target_lens = [100u32];
+            let mut hdr = sam_hdr_t {
+                n_targets: 1,
+                ignore_sam_err: 0,
+                l_text: 0,
+                target_len: target_lens.as_mut_ptr(),
+                cigar_tab: std::ptr::null(),
+                target_name: target_names.as_mut_ptr(),
+                text: std::ptr::null_mut(),
+                sdict: std::ptr::null_mut(),
+                hrecs: std::ptr::null_mut(),
+                ref_count: 0,
+            };
+            let b = bam_init1();
+            assert!(!b.is_null());
+
+            let line = b"read_eq\t99\tchr1\t5\t0\t2M\t=\t7\t2\tAC\t*\tNM:i:0\0";
+            let mut buf = line.to_vec();
+            let mut ks = kstring_t {
+                l: line.len() - 1,
+                m: line.len(),
+                s: buf.as_mut_ptr().cast(),
+            };
+            assert_eq!(sam_c_2662_sam_parse1(&mut ks, &mut hdr, b), 0);
+            assert_eq!((*b).core.tid, 0);
+            assert_eq!((*b).core.pos, 4);
+            assert_eq!((*b).core.mtid, 0);
+            assert_eq!((*b).core.mpos, 6);
+            assert_eq!((*b).core.isize, 2);
+            assert_eq!(*bam_get_qual(b), 0xff);
+
+            let mut out = kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert!(sam_format1(&hdr, b, &mut out) > 0);
+            assert_eq!(
+                CStr::from_ptr(out.s).to_bytes(),
+                b"read_eq\t99\tchr1\t5\t0\t2M\t=\t7\t2\tAC\t*\tNM:i:0"
+            );
+            ks_free(&mut out);
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn sam_format1_formats_unmapped_empty_sequence_like_htslib() {
+        unsafe {
+            let mut hdr = sam_hdr_t {
+                n_targets: 0,
+                ignore_sam_err: 0,
+                l_text: 0,
+                target_len: std::ptr::null_mut(),
+                cigar_tab: std::ptr::null(),
+                target_name: std::ptr::null_mut(),
+                text: std::ptr::null_mut(),
+                sdict: std::ptr::null_mut(),
+                hrecs: std::ptr::null_mut(),
+                ref_count: 0,
+            };
+            let b = bam_init1();
+            assert!(!b.is_null());
+            assert_eq!(
+                bam_set1(
+                    b,
+                    1,
+                    c"r".as_ptr(),
+                    BAM_FUNMAP as u16,
+                    -1,
+                    -1,
+                    0,
+                    0,
+                    std::ptr::null(),
+                    -1,
+                    -1,
+                    0,
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                ),
+                4
+            );
+
+            let mut out = kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert!(sam_format1(&mut hdr, b, &mut out) > 0);
+            assert_eq!(
+                CStr::from_ptr(out.s).to_bytes(),
+                b"r\t4\t*\t0\t0\t*\t*\t0\t0\t*\t*"
+            );
+            ks_free(&mut out);
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn aux_get_str_formats_character_hex_and_rejects_b_a_arrays_like_htslib() {
+        unsafe {
+            let b = bam_init1();
+            assert!(!b.is_null());
+
+            let achar = [b'Z'];
+            assert_eq!(
+                bam_aux_append(b, c"AC".as_ptr(), b'A' as c_char, 1, achar.as_ptr()),
+                0
+            );
+            assert_eq!(
+                bam_aux_append(b, c"HX".as_ptr(), b'H' as c_char, 5, b"0A0b\0".as_ptr(),),
+                0
+            );
+            let array = [b'A', 2, 0, 0, 0, b'X', b'Y'];
+            assert_eq!(
+                bam_aux_append(
+                    b,
+                    c"BA".as_ptr(),
+                    b'B' as c_char,
+                    array.len() as c_int,
+                    array.as_ptr(),
+                ),
+                0
+            );
+
+            let mut ks = kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(bam_aux_get_str(b, c"AC".as_ptr(), &mut ks), 1);
+            assert_eq!(CStr::from_ptr(ks.s).to_bytes(), b"AC:A:Z");
+            ks.l = 0;
+
+            assert_eq!(bam_aux_get_str(b, c"HX".as_ptr(), &mut ks), 1);
+            assert_eq!(CStr::from_ptr(ks.s).to_bytes(), b"HX:H:0A0b");
+            ks.l = 0;
+
+            assert_eq!(bam_aux_get_str(b, c"BA".as_ptr(), &mut ks), -1);
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+            );
+
+            ks_free(&mut ks);
             bam_destroy1(b);
         }
     }
@@ -12475,6 +14164,173 @@ mod tests {
             assert_eq!(sam_hdr_nref(hdr), 1);
             assert_eq!(sam_hdr_tid2len(hdr, 0), 123);
             sam_hdr_free(hdr);
+        }
+    }
+
+    #[test]
+    fn sam_hdr_parse_accepts_sq_tags_in_any_order_with_extra_fields() {
+        let text = b"@HD\tVN:1.6\n@SQ\tLN:12\tSN:chr1\tAS:asm\r\n@SQ\tM5:abc\tSN:chr2\tLN:34\n";
+        unsafe {
+            let hdr = sam_hdr_parse(text.len(), text.as_ptr().cast());
+            assert!(!hdr.is_null());
+            assert_eq!(sam_hdr_nref(hdr), 2);
+            assert_eq!(sam_hdr_name2tid(hdr, c"chr1".as_ptr()), 0);
+            assert_eq!(sam_hdr_name2tid(hdr, c"chr2".as_ptr()), 1);
+            assert_eq!(sam_hdr_tid2len(hdr, 0), 12);
+            assert_eq!(sam_hdr_tid2len(hdr, 1), 34);
+            assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 0)).to_bytes(), b"chr1");
+            assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 1)).to_bytes(), b"chr2");
+            sam_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn translated_header_type_helpers_match_htslib_boundaries() {
+        unsafe {
+            assert_eq!(header_h_58_TYPEKEY(c"HD".as_ptr()), 0x4844);
+            assert_eq!(header_h_58_TYPEKEY(c"SQ".as_ptr()), 0x5351);
+
+            assert_eq!(
+                header_c_1325_valid_sam_header_type(c"@HD\tVN:1.6".as_ptr()),
+                1
+            );
+            assert_eq!(
+                header_c_1325_valid_sam_header_type(c"@SQ\tSN:chr1".as_ptr()),
+                1
+            );
+            assert_eq!(
+                header_c_1325_valid_sam_header_type(c"@RG\tID:rg1".as_ptr()),
+                1
+            );
+            assert_eq!(
+                header_c_1325_valid_sam_header_type(c"@PG\tID:pg1".as_ptr()),
+                1
+            );
+            assert_eq!(
+                header_c_1325_valid_sam_header_type(c"@COcomment text".as_ptr()),
+                1
+            );
+            assert_eq!(
+                header_c_1325_valid_sam_header_type(c"@HD VN:1.6".as_ptr()),
+                0
+            );
+            assert_eq!(
+                header_c_1325_valid_sam_header_type(c"@SQ SN:chr1".as_ptr()),
+                0
+            );
+            assert_eq!(
+                header_c_1325_valid_sam_header_type(c"@XX\tID:x".as_ptr()),
+                0
+            );
+            assert_eq!(
+                header_c_1325_valid_sam_header_type(c"not-a-header".as_ptr()),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn sam_hdr_add_lines_accumulates_text_and_targets_from_new_lines_only() {
+        unsafe {
+            let hdr = sam_hdr_init();
+            assert!(!hdr.is_null());
+
+            let first = b"@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:10\r\n";
+            assert_eq!(
+                sam_hdr_add_lines(hdr, first.as_ptr().cast(), first.len()),
+                0
+            );
+            assert_eq!(sam_hdr_length(hdr), first.len());
+            assert_eq!(
+                std::slice::from_raw_parts(sam_hdr_str(hdr).cast::<u8>(), first.len()),
+                first
+            );
+            assert_eq!(*(*hdr).text.add((*hdr).l_text), 0);
+            assert_eq!(sam_hdr_nref(hdr), 1);
+            assert_eq!(sam_hdr_name2tid(hdr, c"chr1".as_ptr()), 0);
+            assert_eq!(sam_hdr_tid2len(hdr, 0), 10);
+
+            let second = b"@RG\tID:rg1\n@SQ\tSN:chr2\tLN:20\n";
+            assert_eq!(
+                sam_hdr_add_lines(hdr, second.as_ptr().cast(), second.len()),
+                0
+            );
+            assert_eq!(sam_hdr_length(hdr), first.len() + second.len());
+            assert_eq!(sam_hdr_nref(hdr), 2);
+            assert_eq!(sam_hdr_name2tid(hdr, c"chr1".as_ptr()), 0);
+            assert_eq!(sam_hdr_name2tid(hdr, c"chr2".as_ptr()), 1);
+            assert_eq!(sam_hdr_tid2len(hdr, 1), 20);
+            assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 1)).to_bytes(), b"chr2");
+
+            sam_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn sam_hdr_add_lines_rejects_duplicate_sq_names_without_changing_header() {
+        unsafe {
+            let hdr = sam_hdr_init();
+            assert!(!hdr.is_null());
+
+            let first = b"@SQ\tSN:chr1\tLN:10\n";
+            assert_eq!(
+                sam_hdr_add_lines(hdr, first.as_ptr().cast(), first.len()),
+                0
+            );
+            assert_eq!(sam_hdr_nref(hdr), 1);
+            assert_eq!(sam_hdr_tid2len(hdr, 0), 10);
+            assert_eq!(sam_hdr_length(hdr), first.len());
+
+            let duplicate_existing = b"@SQ\tSN:chr1\tLN:20\n";
+            assert_eq!(
+                sam_hdr_add_lines(
+                    hdr,
+                    duplicate_existing.as_ptr().cast(),
+                    duplicate_existing.len()
+                ),
+                -1
+            );
+            assert_eq!(sam_hdr_nref(hdr), 1);
+            assert_eq!(sam_hdr_tid2len(hdr, 0), 10);
+            assert_eq!(sam_hdr_length(hdr), first.len());
+            assert_eq!(
+                std::slice::from_raw_parts(sam_hdr_str(hdr).cast::<u8>(), sam_hdr_length(hdr)),
+                first
+            );
+
+            let duplicate_new = b"@SQ\tSN:chr2\tLN:20\n@SQ\tSN:chr2\tLN:20\n";
+            assert_eq!(
+                sam_hdr_add_lines(hdr, duplicate_new.as_ptr().cast(), duplicate_new.len()),
+                -1
+            );
+            assert_eq!(sam_hdr_nref(hdr), 1);
+            assert_eq!(sam_hdr_name2tid(hdr, c"chr2".as_ptr()), -1);
+            assert_eq!(sam_hdr_length(hdr), first.len());
+
+            sam_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn redact_header_text_clears_only_serialized_text() {
+        let text = b"@SQ\tSN:chr1\tLN:123\n";
+        unsafe {
+            let hdr = sam_hdr_parse(text.len(), text.as_ptr().cast());
+            assert!(!hdr.is_null());
+            assert!(!(*hdr).text.is_null());
+            assert_eq!(sam_hdr_nref(hdr), 1);
+            assert_eq!(sam_hdr_name2tid(hdr, c"chr1".as_ptr()), 0);
+
+            header_c_1530_redact_header_text(hdr);
+            assert_eq!((*hdr).l_text, 0);
+            assert!((*hdr).text.is_null());
+            assert_eq!(sam_hdr_length(hdr), 0);
+            assert!(sam_hdr_str(hdr).is_null());
+            assert_eq!(sam_hdr_nref(hdr), 1);
+            assert_eq!(sam_hdr_name2tid(hdr, c"chr1".as_ptr()), 0);
+            assert_eq!(sam_hdr_tid2len(hdr, 0), 123);
+
+            sam_hdr_destroy(hdr);
         }
     }
 
@@ -12942,6 +14798,647 @@ mod tests {
             let empty = bam_flag2str(0);
             assert_eq!(CStr::from_ptr(empty).to_bytes(), b"");
             crate::htslib_mini_rs::c_compat::free(empty.cast());
+        }
+    }
+
+    #[test]
+    fn aux_get_and_conversion_reject_malformed_payload_edges() {
+        let mut z_data = b"r\0\0\0ZZZabc".to_vec();
+        let z_record = bam1_t {
+            core: bam1_core_t {
+                pos: 0,
+                tid: -1,
+                bin: 0,
+                qual: 0,
+                l_extranul: 2,
+                flag: BAM_FUNMAP as u16,
+                l_qname: 4,
+                n_cigar: 0,
+                l_qseq: 0,
+                mtid: -1,
+                mpos: -1,
+                isize: 0,
+            },
+            id: 0,
+            data: z_data.as_mut_ptr(),
+            l_data: z_data.len() as c_int,
+            m_data: z_data.len() as u32,
+            mempolicy_and_reserved: BAM_USER_OWNS_STRUCT | BAM_USER_OWNS_DATA,
+        };
+
+        unsafe {
+            assert!(bam_aux_get(&z_record, c"ZZ".as_ptr()).is_null());
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+            );
+        }
+
+        let mut b_data = b"r\0\0\0XABC\x02\0\0\0\x07".to_vec();
+        let b_record = bam1_t {
+            data: b_data.as_mut_ptr(),
+            l_data: b_data.len() as c_int,
+            m_data: b_data.len() as u32,
+            ..z_record
+        };
+
+        unsafe {
+            assert!(bam_aux_get(&b_record, c"XA".as_ptr()).is_null());
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+            );
+
+            let b = bam_init1();
+            assert!(!b.is_null());
+            let array = [b'C', 2, 0, 0, 0, 10, 20];
+            assert_eq!(
+                bam_aux_append(
+                    b,
+                    c"BC".as_ptr(),
+                    b'B' as c_char,
+                    array.len() as c_int,
+                    array.as_ptr(),
+                ),
+                0
+            );
+            let bc = bam_aux_get(b, c"BC".as_ptr());
+            assert!(!bc.is_null());
+            assert_eq!(bam_auxB2i(bc, 1), 20);
+            assert_eq!(bam_auxB2i(bc, 2), 0);
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::ERANGE as c_int
+            );
+            assert_eq!(bam_auxB2f(bc, 9), 0.0);
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::ERANGE as c_int
+            );
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn aux_update_int_preserves_htslib_size_thresholds_and_type_checks() {
+        unsafe {
+            let b = bam_init1();
+            assert!(!b.is_null());
+
+            assert_eq!(bam_aux_update_int(b, c"IV".as_ptr(), -128), 0);
+            let iv = bam_aux_get(b, c"IV".as_ptr());
+            assert_eq!(bam_aux_type(iv), b'c' as c_char);
+            assert_eq!(bam_aux2i(iv), -128);
+
+            assert_eq!(bam_aux_update_int(b, c"IV".as_ptr(), -129), 0);
+            let iv = bam_aux_get(b, c"IV".as_ptr());
+            assert_eq!(bam_aux_type(iv), b's' as c_char);
+            assert_eq!(bam_aux2i(iv), -129);
+
+            assert_eq!(bam_aux_update_int(b, c"IV".as_ptr(), 254), 0);
+            let iv = bam_aux_get(b, c"IV".as_ptr());
+            assert_eq!(bam_aux_type(iv), b'S' as c_char);
+            assert_eq!(bam_aux2i(iv), 254);
+
+            assert_eq!(bam_aux_update_int(b, c"UV".as_ptr(), u32::MAX as i64), 0);
+            let uv = bam_aux_get(b, c"UV".as_ptr());
+            assert_eq!(bam_aux_type(uv), b'I' as c_char);
+            assert_eq!(bam_aux2i(uv), u32::MAX as i64);
+
+            assert_eq!(
+                bam_aux_update_int(b, c"OV".as_ptr(), u32::MAX as i64 + 1),
+                -1
+            );
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::EOVERFLOW as c_int
+            );
+
+            assert_eq!(
+                bam_aux_update_str(b, c"ZS".as_ptr(), -1, c"text".as_ptr()),
+                0
+            );
+            assert_eq!(bam_aux_update_int(b, c"ZS".as_ptr(), 1), -1);
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+            );
+
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn malformed_header_sq_lines_do_not_create_targets() {
+        unsafe {
+            let hdr = sam_hdr_init();
+            assert!(!hdr.is_null());
+
+            let zero_len = b"@SQ\tSN:zero\tLN:0\n";
+            assert_eq!(
+                sam_hdr_add_lines(hdr, zero_len.as_ptr().cast(), zero_len.len()),
+                -1
+            );
+            assert_eq!(sam_hdr_nref(hdr), 0);
+            assert_eq!(sam_hdr_length(hdr), 0);
+            assert!(sam_hdr_str(hdr).is_null());
+            assert_eq!(sam_hdr_name2tid(hdr, c"zero".as_ptr()), -1);
+
+            let conflicting_len = b"@SQ\tSN:dup\tLN:10\tLN:11\n";
+            assert_eq!(
+                sam_hdr_add_lines(hdr, conflicting_len.as_ptr().cast(), conflicting_len.len()),
+                -1
+            );
+            assert_eq!(sam_hdr_nref(hdr), 0);
+            assert_eq!(sam_hdr_length(hdr), 0);
+            assert!(sam_hdr_str(hdr).is_null());
+            assert_eq!(sam_hdr_name2tid(hdr, c"dup".as_ptr()), -1);
+
+            let duplicate_same_len = b"@SQ\tSN:same\tLN:12\tLN:12\n";
+            assert_eq!(
+                sam_hdr_add_lines(
+                    hdr,
+                    duplicate_same_len.as_ptr().cast(),
+                    duplicate_same_len.len()
+                ),
+                0
+            );
+            assert_eq!(sam_hdr_nref(hdr), 1);
+            assert_eq!(sam_hdr_name2tid(hdr, c"same".as_ptr()), 0);
+            assert_eq!(sam_hdr_tid2len(hdr, 0), 12);
+            let text_len_after_good = sam_hdr_length(hdr);
+
+            let bad_missing_len = b"@SQ\tSN:bad\tLN:\n";
+            assert_eq!(
+                sam_hdr_add_lines(hdr, bad_missing_len.as_ptr().cast(), bad_missing_len.len()),
+                -1
+            );
+            assert_eq!(sam_hdr_nref(hdr), 1);
+            assert_eq!(sam_hdr_length(hdr), text_len_after_good);
+            assert_eq!(sam_hdr_name2tid(hdr, c"bad".as_ptr()), -1);
+
+            let long = b"@SQ\tSN:long\tLN:4294967296\n";
+            assert_eq!(sam_hdr_add_lines(hdr, long.as_ptr().cast(), long.len()), 0);
+            assert_eq!(sam_hdr_nref(hdr), 2);
+            assert_eq!(sam_hdr_name2tid(hdr, c"long".as_ptr()), 1);
+            assert_eq!(sam_hdr_tid2len(hdr, 1), 4_294_967_296);
+
+            let bad_overflow = b"@SQ\tSN:huge\tLN:9223372034707292161\n";
+            assert_eq!(
+                sam_hdr_add_lines(hdr, bad_overflow.as_ptr().cast(), bad_overflow.len()),
+                -1
+            );
+            assert_eq!(sam_hdr_nref(hdr), 2);
+            assert_eq!(sam_hdr_length(hdr), text_len_after_good + long.len());
+            assert_eq!(sam_hdr_name2tid(hdr, c"huge".as_ptr()), -1);
+
+            let good = b"@SQ\tSN:chr1\tLN:10\n";
+            assert_eq!(sam_hdr_add_lines(hdr, good.as_ptr().cast(), good.len()), 0);
+            assert_eq!(sam_hdr_nref(hdr), 3);
+            assert_eq!(sam_hdr_name2tid(hdr, c"chr1".as_ptr()), 2);
+            assert_eq!(sam_hdr_tid2len(hdr, 2), 10);
+
+            sam_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn header_sq_target_parsing_accepts_crlf_and_u32_max_len_edges() {
+        unsafe {
+            let hdr = sam_hdr_init();
+            assert!(!hdr.is_null());
+
+            let text = b"@HD\tVN:1.6\r\n@SQ\tLN:4294967295\tSN:max\r\n@CO\tignored\r\n";
+            assert_eq!(sam_hdr_add_lines(hdr, text.as_ptr().cast(), text.len()), 0);
+            assert_eq!(sam_hdr_nref(hdr), 1);
+            assert_eq!(sam_hdr_name2tid(hdr, c"max".as_ptr()), 0);
+            assert_eq!(sam_hdr_tid2len(hdr, 0), u32::MAX as hts_pos_t);
+            assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 0)).to_bytes(), b"max");
+
+            sam_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn sam_hdr_add_lines_len_zero_uses_nul_terminated_input() {
+        unsafe {
+            let hdr = sam_hdr_init();
+            assert!(!hdr.is_null());
+
+            let text = c"@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:10\n";
+            assert_eq!(sam_hdr_add_lines(hdr, text.as_ptr(), 0), 0);
+            assert_eq!(sam_hdr_length(hdr), text.to_bytes().len());
+            assert_eq!(sam_hdr_nref(hdr), 1);
+            assert_eq!(sam_hdr_name2tid(hdr, c"chr1".as_ptr()), 0);
+            assert_eq!(sam_hdr_tid2len(hdr, 0), 10);
+
+            sam_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn sam_hdr_add_lines_rejects_null_and_hrec_backed_inputs() {
+        unsafe {
+            assert_eq!(
+                sam_hdr_add_lines(std::ptr::null_mut(), c"@HD\tVN:1.6\n".as_ptr(), 11),
+                -1
+            );
+
+            let hdr = sam_hdr_init();
+            assert!(!hdr.is_null());
+            assert_eq!(sam_hdr_add_lines(hdr, std::ptr::null(), 0), -1);
+
+            let empty = c"";
+            assert_eq!(sam_hdr_add_lines(hdr, empty.as_ptr(), 0), 0);
+            assert_eq!(sam_hdr_length(hdr), 0);
+            assert!(sam_hdr_str(hdr).is_null());
+
+            let mut hrecs: sam_hrecs_t = std::mem::zeroed();
+            let line = b"@SQ\tSN:chr1\tLN:1\n";
+            (*hdr).hrecs = &mut hrecs;
+            assert_eq!(sam_hdr_add_lines(hdr, line.as_ptr().cast(), line.len()), -1);
+            (*hdr).hrecs = std::ptr::null_mut();
+            sam_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn sam_hdr_parse_rejects_null_text_without_leaking_header() {
+        unsafe {
+            assert!(sam_hdr_parse(0, std::ptr::null()).is_null());
+            assert!(sam_hdr_parse_(std::ptr::null(), 0).is_null());
+        }
+    }
+
+    #[test]
+    fn cigar_parse_failures_leave_end_at_input_and_record_unchanged() {
+        unsafe {
+            assert_eq!(
+                sam_parse_cigar(
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                -1
+            );
+
+            let mut end: *mut c_char = std::ptr::null_mut();
+            let mut a_cigar: *mut u32 = std::ptr::null_mut();
+            let mut a_mem = 0usize;
+            let invalid_op = c"1Q\t";
+            assert_eq!(
+                sam_parse_cigar(invalid_op.as_ptr(), &mut end, &mut a_cigar, &mut a_mem),
+                -1
+            );
+            assert_eq!(end, invalid_op.as_ptr().cast_mut());
+
+            let overflow = c"268435456M\t";
+            assert_eq!(
+                sam_parse_cigar(overflow.as_ptr(), &mut end, &mut a_cigar, &mut a_mem),
+                -1
+            );
+            assert_eq!(end, overflow.as_ptr().cast_mut());
+            crate::htslib_mini_rs::c_compat::free(a_cigar.cast());
+
+            let b = bam_init1();
+            assert!(!b.is_null());
+            let cigar = [(3u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32];
+            assert!(
+                bam_set1(
+                    b,
+                    5,
+                    c"cigx".as_ptr(),
+                    0,
+                    0,
+                    0,
+                    60,
+                    1,
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    3,
+                    c"ACG".as_ptr(),
+                    std::ptr::null(),
+                    0,
+                ) > 0
+            );
+            let old_l_data = (*b).l_data;
+            assert_eq!(bam_parse_cigar(invalid_op.as_ptr(), &mut end, b), -1);
+            assert_eq!(end, invalid_op.as_ptr().cast_mut());
+            assert_eq!((*b).core.n_cigar, 1);
+            assert_eq!((*b).l_data, old_l_data);
+            assert_eq!(*bam_get_cigar(b), cigar[0]);
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn resolve_cigar2_tracks_refskip_deletion_and_tail_state() {
+        unsafe {
+            let b = bam_init1();
+            assert!(!b.is_null());
+            let cigar = [
+                (2u32 << BAM_CIGAR_SHIFT) | BAM_CSOFT_CLIP as u32,
+                (2u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32,
+                (3u32 << BAM_CIGAR_SHIFT) | BAM_CREF_SKIP as u32,
+                (1u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32,
+                (2u32 << BAM_CIGAR_SHIFT) | BAM_CDEL as u32,
+                (1u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32,
+            ];
+            assert!(
+                bam_set1(
+                    b,
+                    6,
+                    c"pilex".as_ptr(),
+                    0,
+                    0,
+                    10,
+                    60,
+                    cigar.len(),
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    6,
+                    c"AACCGG".as_ptr(),
+                    std::ptr::null(),
+                    0,
+                ) > 0
+            );
+
+            let mut p = bam_pileup1_t {
+                b,
+                qpos: -1,
+                indel: 99,
+                level: 0,
+                bitfields: 0xffff,
+                cd: bam_pileup_cd { i: 0 },
+                cigar_ind: -1,
+            };
+            let mut state = G_CSTATE_NULL;
+            state.end = bam_endpos(b) - 1;
+
+            assert_eq!(resolve_cigar2(&mut p, 10, &mut state), 1);
+            assert_eq!(p.qpos, 2);
+            assert_eq!(p.cigar_ind, 1);
+            assert_eq!(bam_pileup1_is_head(&p), 1);
+            assert_eq!(bam_pileup1_is_del(&p), 0);
+            assert_eq!(bam_pileup1_is_refskip(&p), 0);
+
+            assert_eq!(resolve_cigar2(&mut p, 12, &mut state), 1);
+            assert_eq!(p.qpos, 4);
+            assert_eq!(p.cigar_ind, 2);
+            assert_eq!(bam_pileup1_is_del(&p), 1);
+            assert_eq!(bam_pileup1_is_refskip(&p), 1);
+            assert_eq!(p.indel, 0);
+
+            assert_eq!(resolve_cigar2(&mut p, 15, &mut state), 1);
+            assert_eq!(p.qpos, 4);
+            assert_eq!(p.cigar_ind, 3);
+            assert_eq!(bam_pileup1_is_del(&p), 0);
+            assert_eq!(bam_pileup1_is_refskip(&p), 0);
+            assert_eq!(p.indel, -2);
+
+            assert_eq!(resolve_cigar2(&mut p, 16, &mut state), 1);
+            assert_eq!(p.qpos, 5);
+            assert_eq!(p.cigar_ind, 4);
+            assert_eq!(bam_pileup1_is_del(&p), 1);
+            assert_eq!(bam_pileup1_is_refskip(&p), 0);
+
+            assert_eq!(resolve_cigar2(&mut p, 18, &mut state), 1);
+            assert_eq!(p.qpos, 5);
+            assert_eq!(p.cigar_ind, 5);
+            assert_eq!(bam_pileup1_is_tail(&p), 1);
+            assert_eq!(bam_pileup1_is_del(&p), 0);
+
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn resolve_cigar2_accumulates_insertions_across_padding() {
+        unsafe {
+            let b = bam_init1();
+            assert!(!b.is_null());
+            let cigar = [
+                (1u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32,
+                (1u32 << BAM_CIGAR_SHIFT) | BAM_CPAD as u32,
+                (2u32 << BAM_CIGAR_SHIFT) | BAM_CINS as u32,
+                (1u32 << BAM_CIGAR_SHIFT) | BAM_CPAD as u32,
+                (1u32 << BAM_CIGAR_SHIFT) | BAM_CINS as u32,
+                (1u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32,
+            ];
+            assert!(
+                bam_set1(
+                    b,
+                    5,
+                    c"padx".as_ptr(),
+                    0,
+                    0,
+                    20,
+                    60,
+                    cigar.len(),
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    5,
+                    c"AACCG".as_ptr(),
+                    std::ptr::null(),
+                    0,
+                ) > 0
+            );
+
+            let mut p = bam_pileup1_t {
+                b,
+                qpos: -1,
+                indel: 0,
+                level: 0,
+                bitfields: 0,
+                cd: bam_pileup_cd { i: 0 },
+                cigar_ind: -1,
+            };
+            let mut state = G_CSTATE_NULL;
+            state.end = bam_endpos(b) - 1;
+
+            assert_eq!(resolve_cigar2(&mut p, 20, &mut state), 1);
+            assert_eq!(p.qpos, 0);
+            assert_eq!(p.cigar_ind, 0);
+            assert_eq!(p.indel, 3);
+            assert_eq!(bam_pileup1_is_del(&p), 0);
+            assert_eq!(bam_pileup1_is_refskip(&p), 0);
+
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn resolve_cigar2_skips_leading_hard_clip_and_padding() {
+        unsafe {
+            let b = bam_init1();
+            assert!(!b.is_null());
+            let cigar = [
+                (2u32 << BAM_CIGAR_SHIFT) | BAM_CHARD_CLIP as u32,
+                (1u32 << BAM_CIGAR_SHIFT) | BAM_CPAD as u32,
+                (3u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32,
+                (2u32 << BAM_CIGAR_SHIFT) | BAM_CHARD_CLIP as u32,
+            ];
+            assert!(
+                bam_set1(
+                    b,
+                    5,
+                    c"hpad".as_ptr(),
+                    0,
+                    0,
+                    30,
+                    60,
+                    cigar.len(),
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    3,
+                    c"ACG".as_ptr(),
+                    std::ptr::null(),
+                    0,
+                ) > 0
+            );
+
+            let mut p = bam_pileup1_t {
+                b,
+                qpos: -1,
+                indel: -1,
+                level: 0,
+                bitfields: 0,
+                cd: bam_pileup_cd { i: 0 },
+                cigar_ind: -1,
+            };
+            let mut state = G_CSTATE_NULL;
+            state.end = bam_endpos(b) - 1;
+
+            assert_eq!(resolve_cigar2(&mut p, 30, &mut state), 1);
+            assert_eq!(p.qpos, 0);
+            assert_eq!(p.cigar_ind, 2);
+            assert_eq!(bam_pileup1_is_head(&p), 1);
+            assert_eq!(bam_pileup1_is_tail(&p), 0);
+
+            assert_eq!(resolve_cigar2(&mut p, 32, &mut state), 1);
+            assert_eq!(p.qpos, 2);
+            assert_eq!(p.cigar_ind, 2);
+            assert_eq!(bam_pileup1_is_head(&p), 0);
+            assert_eq!(bam_pileup1_is_tail(&p), 1);
+
+            bam_destroy1(b);
+        }
+    }
+
+    #[test]
+    fn pileup_bitfield_accessors_preserve_htslib_layout() {
+        let p = bam_pileup1_t {
+            b: std::ptr::null_mut(),
+            qpos: 0,
+            indel: 0,
+            level: 0,
+            bitfields: 0b1010_1111_1111,
+            cd: bam_pileup_cd { i: 0 },
+            cigar_ind: 0,
+        };
+
+        unsafe {
+            assert_eq!(bam_pileup1_is_del(&p), 1);
+            assert_eq!(bam_pileup1_is_head(&p), 1);
+            assert_eq!(bam_pileup1_is_tail(&p), 1);
+            assert_eq!(bam_pileup1_is_refskip(&p), 1);
+            assert_eq!(bam_pileup1_aux(&p), p.bitfields >> 5);
+        }
+    }
+
+    #[test]
+    fn base_mod_parser_reports_co_located_multi_mod_calls() {
+        unsafe {
+            let b = bam_init1();
+            assert!(!b.is_null());
+            let cigar = [(1u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32];
+            assert!(
+                bam_set1(
+                    b,
+                    5,
+                    c"bmm2".as_ptr(),
+                    0,
+                    0,
+                    0,
+                    60,
+                    1,
+                    cigar.as_ptr(),
+                    -1,
+                    -1,
+                    0,
+                    1,
+                    c"C".as_ptr(),
+                    std::ptr::null(),
+                    0,
+                ) > 0
+            );
+            let mm = b"C+mh,0;\0";
+            assert_eq!(
+                bam_aux_append(
+                    b,
+                    c"MM".as_ptr(),
+                    b'Z' as c_char,
+                    mm.len() as c_int,
+                    mm.as_ptr()
+                ),
+                0
+            );
+            let ml = [b'C', 2, 0, 0, 0, 11, 22];
+            assert_eq!(
+                bam_aux_append(
+                    b,
+                    c"ML".as_ptr(),
+                    b'B' as c_char,
+                    ml.len() as c_int,
+                    ml.as_ptr()
+                ),
+                0
+            );
+
+            let state = hts_base_mod_state_alloc();
+            assert!(!state.is_null());
+            assert_eq!(bam_parse_basemod(b, state), 0);
+            assert_eq!((*state).nmods, 2);
+            assert_eq!((*state).type_[0], b'm' as c_int);
+            assert_eq!((*state).type_[1], b'h' as c_int);
+            assert_eq!((*state).canonical[0], 2);
+            assert_eq!((*state).canonical[1], 2);
+            assert_eq!((*state).mlstride[0], 2);
+            assert_eq!((*state).mlstride[1], 2);
+            assert_eq!((*state).mm[0], (*state).mm[1]);
+
+            let mut mods = [hts_base_mod {
+                modified_base: 0,
+                canonical_base: 0,
+                strand: 0,
+                qual: 0,
+            }; 2];
+            let mut pos = -1;
+            assert_eq!(
+                bam_next_basemod(b, state, mods.as_mut_ptr(), mods.len() as c_int, &mut pos),
+                2
+            );
+            assert_eq!(pos, 0);
+            assert_eq!(mods[0].modified_base, b'm' as c_int);
+            assert_eq!(mods[0].qual, 11);
+            assert_eq!(mods[1].modified_base, b'h' as c_int);
+            assert_eq!(mods[1].qual, 22);
+            assert_eq!(
+                bam_next_basemod(b, state, mods.as_mut_ptr(), mods.len() as c_int, &mut pos),
+                0
+            );
+
+            hts_base_mod_state_free(state);
+            bam_destroy1(b);
         }
     }
 }

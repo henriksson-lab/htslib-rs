@@ -376,4 +376,163 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn md5_final_clears_context_like_htslib_memset() {
+        unsafe {
+            let ctx = hts_md5_init();
+            assert!(!ctx.is_null());
+            hts_md5_update(ctx, b"abc".as_ptr().cast(), 3);
+
+            let mut digest = [0u8; 16];
+            hts_md5_final(digest.as_mut_ptr(), ctx);
+
+            let bytes = std::slice::from_raw_parts(ctx.cast::<u8>(), size_of::<hts_md5_context>());
+            assert!(bytes.iter().all(|&byte| byte == 0));
+            hts_md5_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn md5_update_accepts_zero_length_update() {
+        unsafe {
+            assert_eq!(hex_digest(&[b"", b""]), b"d41d8cd98f00b204e9800998ecf8427e");
+            assert_eq!(
+                hex_digest(&[b"", b"abc", b""]),
+                b"900150983cd24fb0d6963f7d28e17f72"
+            );
+        }
+    }
+
+    #[test]
+    fn md5_update_buffers_short_input_without_transforming_block() {
+        unsafe {
+            let ctx = hts_md5_init();
+            assert!(!ctx.is_null());
+            hts_md5_update(ctx, b"abc".as_ptr().cast(), 3);
+
+            assert_eq!((*ctx).lo, 3);
+            assert_eq!((*ctx).hi, 0);
+            assert_eq!(&(&(*ctx).buffer)[..3], b"abc");
+            assert_eq!((*ctx).a, 0x67452301);
+            assert_eq!((*ctx).b, 0xefcdab89);
+            assert_eq!((*ctx).c, 0x98badcfe);
+            assert_eq!((*ctx).d, 0x10325476);
+
+            hts_md5_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn md5_c_wrappers_accept_zero_length_and_null_destroy() {
+        unsafe {
+            let ctx = md5_c_344_hts_md5_init();
+            assert!(!ctx.is_null());
+            md5_c_360_hts_md5_update(ctx, b"abc".as_ptr().cast(), 3);
+            md5_c_360_hts_md5_update(ctx, b"".as_ptr().cast(), 0);
+
+            let mut digest = [0u8; 16];
+            md5_c_365_hts_md5_final(digest.as_mut_ptr(), ctx);
+            let mut hex = [0 as c_char; 33];
+            md5_c_380_hts_md5_hex(hex.as_mut_ptr(), digest.as_ptr());
+            assert_eq!(
+                hex[..32].iter().map(|&ch| ch as u8).collect::<Vec<_>>(),
+                b"900150983cd24fb0d6963f7d28e17f72"
+            );
+
+            md5_c_372_hts_md5_destroy(ctx);
+            md5_c_372_hts_md5_destroy(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn md5_reset_discards_prior_partial_update() {
+        unsafe {
+            let ctx = hts_md5_init();
+            assert!(!ctx.is_null());
+
+            hts_md5_update(ctx, b"prefix that must be discarded".as_ptr().cast(), 29);
+            hts_md5_reset(ctx);
+            hts_md5_update(ctx, b"abc".as_ptr().cast(), 3);
+
+            let mut digest = [0u8; 16];
+            hts_md5_final(digest.as_mut_ptr(), ctx);
+            let mut hex = [0 as c_char; 33];
+            hts_md5_hex(hex.as_mut_ptr(), digest.as_ptr());
+            assert_eq!(
+                hex[..32].iter().map(|&ch| ch as u8).collect::<Vec<_>>(),
+                b"900150983cd24fb0d6963f7d28e17f72"
+            );
+            hts_md5_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn md5_hex_writes_lowercase_digits_and_nul_terminator() {
+        unsafe {
+            let digest = [
+                0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76,
+                0x54, 0x32,
+            ];
+            let mut hex = [b'X' as c_char; 34];
+            hts_md5_hex(hex.as_mut_ptr(), digest.as_ptr());
+
+            assert_eq!(
+                hex[..32].iter().map(|&ch| ch as u8).collect::<Vec<_>>(),
+                b"000123456789abcdeffedcba98765432"
+            );
+            assert_eq!(hex[32], 0);
+            assert_eq!(hex[33], b'X' as c_char);
+        }
+    }
+
+    #[test]
+    fn md5_split_padding_boundary_matches_one_shot() {
+        unsafe {
+            let payload = [b'a'; 120];
+            assert_eq!(
+                hex_digest(&[
+                    &payload[..55],
+                    &payload[55..56],
+                    &payload[56..64],
+                    &payload[64..]
+                ]),
+                hex_digest(&[&payload])
+            );
+        }
+    }
+
+    #[test]
+    fn md5_padding_edge_lengths_are_chunking_invariant() {
+        unsafe {
+            for len in [55, 56, 57, 64, 65] {
+                let payload = vec![b'x'; len];
+                assert_eq!(
+                    hex_digest(&[&payload[..len / 2], &payload[len / 2..]]),
+                    hex_digest(&[&payload]),
+                    "len={len}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn md5_update_carries_low_count_at_29_bit_boundary() {
+        unsafe {
+            let mut ctx = hts_md5_context {
+                lo: 0x1fff_ffff,
+                hi: 7,
+                a: 0x67452301,
+                b: 0xefcdab89,
+                c: 0x98badcfe,
+                d: 0x10325476,
+                buffer: [0; 64],
+                block: [0; 16],
+            };
+
+            md5_c_237_hts_md5_update(&mut ctx, b"x".as_ptr().cast(), 1);
+            assert_eq!(ctx.lo, 0);
+            assert_eq!(ctx.hi, 8);
+        }
+    }
 }

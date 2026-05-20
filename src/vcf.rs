@@ -2,9 +2,10 @@ use std::ffi::{c_char, c_int, c_void};
 use std::mem::size_of;
 
 use super::hts::{
-    htsFile, hts_idx_t, hts_pos_t, i16_to_le, i32_to_le, kbitset_t, kbs_destroy, kbs_exists,
-    kbs_init, kbs_insert, kputsn, kstring_t, le_to_float, le_to_i16, le_to_i32, le_to_i64,
-    le_to_i8, toupper_c, BGZF,
+    htsFile, hts_getline, hts_idx_t, hts_pos_t, i16_to_le, i32_to_le, i64_to_le, kbitset_t,
+    kbs_destroy, kbs_exists, kbs_init, kbs_insert, kputc, kputsn, kputw, ks_resize, kstring_t,
+    le_to_float, le_to_i16, le_to_i32, le_to_i64, le_to_i8, toupper_c, BGZF, HTS_FORMAT_VCF,
+    KS_SEP_LINE,
 };
 
 pub type bcf_hdr_t = hts_sys::bcf_hdr_t;
@@ -19,6 +20,14 @@ pub type bcf_variant_match = c_int;
 
 pub const VCF_INS: u32 = 1 << 6;
 pub const VCF_DEL: u32 = 1 << 7;
+pub const BCF_SR_REQUIRE_IDX: hts_sys::bcf_sr_opt_t = 0;
+pub const BCF_SR_PAIR_LOGIC: hts_sys::bcf_sr_opt_t = 1;
+pub const BCF_SR_ALLOW_NO_IDX: hts_sys::bcf_sr_opt_t = 2;
+pub const BCF_SR_REGIONS_OVERLAP: hts_sys::bcf_sr_opt_t = 3;
+pub const BCF_SR_TARGETS_OVERLAP: hts_sys::bcf_sr_opt_t = 4;
+const BCF_IS_64BIT: c_int = 1 << 30;
+const BCF_MIN_BT_INT32: i64 = -2_147_483_640;
+const BCF_MIN_BT_INT64: i64 = -9_223_372_036_854_775_800;
 
 #[repr(C)]
 pub struct bcf_sweep_t {
@@ -51,13 +60,6 @@ unsafe extern "C" {
         buffer: *mut c_char,
         maxbuffer: usize,
     ) -> *const c_char;
-    #[link_name = "bcf_format_gt_v2"]
-    fn htslib_bcf_format_gt_v2(
-        hdr: *const bcf_hdr_t,
-        fmt: *mut bcf_fmt_t,
-        isample: c_int,
-        str_: *mut kstring_t,
-    ) -> c_int;
 }
 
 pub unsafe fn bcf_hdr_init(mode: *const c_char) -> *mut bcf_hdr_t {
@@ -126,7 +128,11 @@ pub unsafe fn bcf_sr_add_hreader(
 }
 
 pub unsafe fn bcf_subset_format(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> c_int {
-    hts_sys::bcf_subset_format(hdr, rec)
+    let ret = hts_sys::bcf_subset_format(hdr, rec);
+    if ret == 0 {
+        bcf_canonicalize_duplicate_format(rec);
+    }
+    ret
 }
 
 pub unsafe fn bcf_hdr_write(fp: *mut htsFile, h: *mut bcf_hdr_t) -> c_int {
@@ -134,14 +140,403 @@ pub unsafe fn bcf_hdr_write(fp: *mut htsFile, h: *mut bcf_hdr_t) -> c_int {
 }
 
 pub unsafe fn vcf_parse(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int {
-    hts_sys::vcf_parse(s.cast(), h, v)
+    let end = vcf_line_info_end_i64(s);
+    let gt_phasing = if vcf_hdr_version_ge_44(h) {
+        vcf44_strip_prefixed_gt_phasing(s)
+    } else {
+        None
+    };
+    let ret = if let Some(phasing) = gt_phasing {
+        let ret = hts_sys::vcf_parse(s.cast(), h, v);
+        if ret == 0 {
+            vcf44_repair_prefixed_gt_phasing(h, v, &phasing);
+        }
+        ret
+    } else {
+        hts_sys::vcf_parse(s.cast(), h, v)
+    };
+    if ret == 0 {
+        if let Some(end) = end {
+            if vcf_repair_info_end_i64(h, v, end) < 0 {
+                return -1;
+            }
+        }
+    }
+    ret
+}
+
+unsafe fn vcf_hdr_version_ge_44(hdr: *const bcf_hdr_t) -> bool {
+    if hdr.is_null() {
+        return false;
+    }
+    let version = hts_sys::bcf_hdr_get_version(hdr);
+    if version.is_null() {
+        return false;
+    }
+    let version = std::ffi::CStr::from_ptr(version).to_bytes();
+    vcf_version_number(version).is_some_and(|version| version >= 4_004_000)
+}
+
+fn vcf_version_number(version: &[u8]) -> Option<i64> {
+    let prefix = version.windows(4).position(|window| window == b"VCFv")? + 4;
+    let dot = version[prefix..].iter().position(|&ch| ch == b'.')? + prefix;
+    let major = parse_decimal_prefix(&version[prefix..dot])?;
+    let minor = parse_decimal_prefix(&version[dot + 1..])?;
+    Some(major * 100 * 10_000 + minor * 1_000)
+}
+
+fn parse_decimal_prefix(bytes: &[u8]) -> Option<i64> {
+    let mut value = 0i64;
+    let mut saw_digit = false;
+    for &ch in bytes {
+        if !ch.is_ascii_digit() {
+            break;
+        }
+        saw_digit = true;
+        value = value.checked_mul(10)?.checked_add((ch - b'0') as i64)?;
+    }
+    saw_digit.then_some(value)
+}
+
+unsafe fn vcf44_strip_prefixed_gt_phasing(line: *mut kstring_t) -> Option<Vec<i8>> {
+    if line.is_null() || (*line).s.is_null() {
+        return None;
+    }
+
+    let bytes = std::slice::from_raw_parts((*line).s.cast::<u8>(), (*line).l);
+    let mut fields = Vec::new();
+    let mut start = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\t' {
+            fields.push((start, i));
+            start = i + 1;
+        }
+    }
+    fields.push((start, bytes.len()));
+    if fields.len() < 10 {
+        return None;
+    }
+
+    let (format_start, format_end) = fields[8];
+    let gt_index = bytes[format_start..format_end]
+        .split(|&b| b == b':')
+        .position(|tag| tag == b"GT")?;
+    let mut sample_phasing = Vec::with_capacity(fields.len() - 9);
+    let mut removals = Vec::new();
+
+    for &(field_start, field_end) in &fields[9..] {
+        let mut cursor = 0usize;
+        let field = &bytes[field_start..field_end];
+        let mut gt_start = field_end;
+        for idx in 0..=gt_index {
+            gt_start = field_start + cursor;
+            while cursor < field.len() && field[cursor] != b':' {
+                cursor += 1;
+            }
+            if idx == gt_index {
+                break;
+            }
+            if cursor < field.len() {
+                cursor += 1;
+            }
+        }
+
+        let phase = if gt_start < field_end
+            && (*(*line).s.add(gt_start) == b'/' as c_char
+                || *(*line).s.add(gt_start) == b'|' as c_char)
+        {
+            removals.push(gt_start);
+            Some((*(*line).s.add(gt_start) == b'|' as c_char) as i8)
+        } else {
+            None
+        };
+        sample_phasing.push(phase.unwrap_or(-1));
+    }
+
+    for offset in removals.into_iter().rev() {
+        std::ptr::copy(
+            (*line).s.add(offset + 1),
+            (*line).s.add(offset),
+            (*line).l - offset,
+        );
+        (*line).l -= 1;
+    }
+    Some(sample_phasing)
+}
+
+unsafe fn vcf44_repair_prefixed_gt_phasing(
+    hdr: *const bcf_hdr_t,
+    rec: *mut bcf1_t,
+    sample_phasing: &[i8],
+) {
+    if sample_phasing.is_empty() || bcf_unpack(rec, hts_sys::BCF_UN_FMT as c_int) != 0 {
+        return;
+    }
+
+    let gt_id = bcf_hdr_id2int(hdr, hts_sys::BCF_DT_ID as c_int, c"GT".as_ptr());
+    if gt_id < 0 {
+        return;
+    }
+    let fmt = bcf_get_fmt_id(rec, gt_id);
+    if fmt.is_null() || (*fmt).p.is_null() {
+        return;
+    }
+
+    let n_sample = (*rec).n_sample() as usize;
+    for sample in 0..n_sample.min(sample_phasing.len()) {
+        let phased = sample_phasing[sample];
+        let ptr = (*fmt).p.add(sample * (*fmt).size as usize);
+        let inferred = if phased >= 0 {
+            phased as u8
+        } else {
+            vcf44_infer_first_gt_phase(fmt, ptr)
+        };
+        match (*fmt).type_ {
+            x if x == hts_sys::BCF_BT_INT8 as c_int => {
+                *ptr = (*ptr & !1) | inferred;
+            }
+            x if x == hts_sys::BCF_BT_INT16 as c_int => {
+                let val = le_to_i16(ptr) as u16;
+                i16_to_le(((val & !1) | inferred as u16) as i16, ptr);
+            }
+            x if x == hts_sys::BCF_BT_INT32 as c_int => {
+                let val = le_to_i32(ptr) as u32;
+                i32_to_le(((val & !1) | inferred as u32) as i32, ptr);
+            }
+            _ => {}
+        }
+    }
+    (*rec).d.indiv_dirty = 1;
+}
+
+unsafe fn vcf44_infer_first_gt_phase(fmt: *const bcf_fmt_t, ptr: *const u8) -> u8 {
+    let mut values = Vec::new();
+    for i in 0..(*fmt).n as usize {
+        let val = match (*fmt).type_ {
+            x if x == hts_sys::BCF_BT_INT8 as c_int => le_to_i8(ptr.add(i)) as i32,
+            x if x == hts_sys::BCF_BT_INT16 as c_int => {
+                le_to_i16(ptr.add(i * size_of::<i16>())) as i32
+            }
+            x if x == hts_sys::BCF_BT_INT32 as c_int => le_to_i32(ptr.add(i * size_of::<i32>())),
+            _ => return 0,
+        };
+        let vector_end = match (*fmt).type_ {
+            x if x == hts_sys::BCF_BT_INT8 as c_int => hts_sys::bcf_int8_vector_end,
+            x if x == hts_sys::BCF_BT_INT16 as c_int => hts_sys::bcf_int16_vector_end,
+            _ => hts_sys::bcf_int32_vector_end,
+        };
+        if val == vector_end {
+            break;
+        }
+        values.push(val);
+    }
+
+    if values.len() == 1 {
+        (values[0] >> 1 != 0) as u8
+    } else if values.len() > 1 {
+        (!values.iter().skip(1).any(|val| val & 1 == 0)) as u8
+    } else {
+        0
+    }
 }
 
 pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_t) -> c_int {
-    hts_sys::vcf_format(h, v, s.cast())
+    let ret = hts_sys::vcf_format(h, v, s.cast());
+    if ret == 0 && vcf_hdr_version_ge_44(h) {
+        if vcf44_format_gt_fields(h, v.cast_mut(), s) < 0 {
+            return -1;
+        }
+    }
+    ret
+}
+
+unsafe fn vcf44_format_gt_fields(
+    hdr: *const bcf_hdr_t,
+    rec: *mut bcf1_t,
+    line: *mut kstring_t,
+) -> c_int {
+    if line.is_null() || (*line).s.is_null() {
+        return 0;
+    }
+    if bcf_unpack(rec, hts_sys::BCF_UN_FMT as c_int) != 0 {
+        return -1;
+    }
+    let gt_id = bcf_hdr_id2int(hdr, hts_sys::BCF_DT_ID as c_int, c"GT".as_ptr());
+    if gt_id < 0 {
+        return 0;
+    }
+    let fmt = bcf_get_fmt_id(rec, gt_id);
+    if fmt.is_null() {
+        return 0;
+    }
+
+    let bytes = std::slice::from_raw_parts((*line).s.cast::<u8>(), (*line).l);
+    let trailing_newline = bytes.last() == Some(&b'\n');
+    let body = if trailing_newline {
+        &bytes[..bytes.len() - 1]
+    } else {
+        bytes
+    };
+    let fields: Vec<&[u8]> = body.split(|&b| b == b'\t').collect();
+    if fields.len() < 10 {
+        return 0;
+    }
+    let gt_index = match fields[8].split(|&b| b == b':').position(|tag| tag == b"GT") {
+        Some(idx) => idx,
+        None => return 0,
+    };
+
+    let mut out = kstring_t {
+        l: 0,
+        m: 0,
+        s: std::ptr::null_mut(),
+    };
+    let mut gt = kstring_t {
+        l: 0,
+        m: 0,
+        s: std::ptr::null_mut(),
+    };
+
+    for (field_index, field) in fields.iter().enumerate() {
+        if field_index != 0 && kputsn(c"\t".as_ptr(), 1, &mut out) < 0 {
+            super::hts::ks_free(&mut out);
+            super::hts::ks_free(&mut gt);
+            return -1;
+        }
+
+        if field_index < 9 {
+            if kputsn(field.as_ptr().cast(), field.len(), &mut out) < 0 {
+                super::hts::ks_free(&mut out);
+                super::hts::ks_free(&mut gt);
+                return -1;
+            }
+            continue;
+        }
+
+        let sample = field_index - 9;
+        let subfields: Vec<&[u8]> = field.split(|&b| b == b':').collect();
+        for (subfield_index, subfield) in subfields.iter().enumerate() {
+            if subfield_index != 0 && kputsn(c":".as_ptr(), 1, &mut out) < 0 {
+                super::hts::ks_free(&mut out);
+                super::hts::ks_free(&mut gt);
+                return -1;
+            }
+            if subfield_index == gt_index {
+                gt.l = 0;
+                if vcf44_format_gt(fmt, sample, &mut gt) < 0 || kputsn(gt.s, gt.l, &mut out) < 0 {
+                    super::hts::ks_free(&mut out);
+                    super::hts::ks_free(&mut gt);
+                    return -1;
+                }
+            } else if kputsn(subfield.as_ptr().cast(), subfield.len(), &mut out) < 0 {
+                super::hts::ks_free(&mut out);
+                super::hts::ks_free(&mut gt);
+                return -1;
+            }
+        }
+    }
+    if trailing_newline && kputsn(c"\n".as_ptr(), 1, &mut out) < 0 {
+        super::hts::ks_free(&mut out);
+        super::hts::ks_free(&mut gt);
+        return -1;
+    }
+
+    if super::hts::ks_resize(line, out.l + 1) < 0 {
+        super::hts::ks_free(&mut out);
+        super::hts::ks_free(&mut gt);
+        return -1;
+    }
+    libc::memcpy((*line).s.cast(), out.s.cast(), out.l);
+    (*line).l = out.l;
+    *(*line).s.add((*line).l) = 0;
+    super::hts::ks_free(&mut out);
+    super::hts::ks_free(&mut gt);
+    0
+}
+
+unsafe fn vcf44_format_gt(fmt: *mut bcf_fmt_t, sample: usize, out: *mut kstring_t) -> c_int {
+    if fmt.is_null() || (*fmt).p.is_null() {
+        return kputsn(c".".as_ptr(), 1, out);
+    }
+
+    let mut values = Vec::new();
+    let ptr = (*fmt).p.add(sample * (*fmt).size as usize);
+    for i in 0..(*fmt).n as usize {
+        let val = match (*fmt).type_ {
+            x if x == hts_sys::BCF_BT_INT8 as c_int => le_to_i8(ptr.add(i)) as i32,
+            x if x == hts_sys::BCF_BT_INT16 as c_int => {
+                le_to_i16(ptr.add(i * size_of::<i16>())) as i32
+            }
+            x if x == hts_sys::BCF_BT_INT32 as c_int => le_to_i32(ptr.add(i * size_of::<i32>())),
+            x if x == hts_sys::BCF_BT_NULL as c_int => break,
+            _ => return -2,
+        };
+        let vector_end = match (*fmt).type_ {
+            x if x == hts_sys::BCF_BT_INT8 as c_int => hts_sys::bcf_int8_vector_end,
+            x if x == hts_sys::BCF_BT_INT16 as c_int => hts_sys::bcf_int16_vector_end,
+            _ => hts_sys::bcf_int32_vector_end,
+        };
+        if val == vector_end {
+            break;
+        }
+        values.push(val);
+    }
+
+    if values.is_empty() {
+        return kputsn(c".".as_ptr(), 1, out);
+    }
+
+    let val0 = values[0];
+    let ploidy = values.len();
+    let anyunphased = values.iter().skip(1).any(|val| val & 1 == 0);
+    let prefix = if val0 & 1 != 0 {
+        if (ploidy > 1 && anyunphased) || (ploidy <= 1 && val0 >> 1 == 0) {
+            Some(b'|')
+        } else {
+            None
+        }
+    } else if (ploidy <= 1 && val0 != 0) || (ploidy > 1 && !anyunphased) {
+        Some(b'/')
+    } else {
+        None
+    };
+
+    if let Some(prefix) = prefix {
+        if kputsn((&prefix as *const u8).cast(), 1, out) < 0 {
+            return -1;
+        }
+    }
+
+    for (i, val) in values.iter().enumerate() {
+        if i > 0 {
+            let sep = if val & 1 != 0 { b'|' } else { b'/' };
+            if kputsn((&sep as *const u8).cast(), 1, out) < 0 {
+                return -1;
+            }
+        }
+        if val >> 1 == 0 {
+            if kputsn(c".".as_ptr(), 1, out) < 0 {
+                return -1;
+            }
+        } else {
+            let allele = ((val >> 1) - 1).to_string();
+            if kputsn(allele.as_ptr().cast(), allele.len(), out) < 0 {
+                return -1;
+            }
+        }
+    }
+    0
 }
 
 pub unsafe fn bcf_read(fp: *mut htsFile, h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int {
+    if !fp.is_null() && (*fp).format.format == HTS_FORMAT_VCF {
+        let ret = hts_getline(fp, KS_SEP_LINE, &mut (*fp).line);
+        if ret < 0 {
+            return ret;
+        }
+        return vcf_parse(&mut (*fp).line, h, v);
+    }
+
     hts_sys::bcf_read(fp.cast(), h, v)
 }
 
@@ -167,6 +562,91 @@ pub unsafe fn bcf_has_variant_types(
     mode: bcf_variant_match,
 ) -> c_int {
     vcf_c_5522_bcf_has_variant_types(rec, bitmask, mode)
+}
+
+unsafe fn vcf_line_info_end_i64(line: *const kstring_t) -> Option<i64> {
+    if line.is_null() || (*line).s.is_null() {
+        return None;
+    }
+
+    let bytes = std::slice::from_raw_parts((*line).s.cast::<u8>(), (*line).l);
+    let mut fields = bytes.split(|&b| b == b'\t');
+    for _ in 0..7 {
+        fields.next()?;
+    }
+    let info = fields.next()?;
+    if info == b"." {
+        return None;
+    }
+
+    for item in info.split(|&b| b == b';') {
+        if let Some(value) = item.strip_prefix(b"END=") {
+            if value.contains(&b',') {
+                return None;
+            }
+            let text = std::str::from_utf8(value).ok()?;
+            return text.parse::<i64>().ok();
+        }
+    }
+    None
+}
+
+unsafe fn vcf_repair_info_end_i64(h: *const bcf_hdr_t, v: *mut bcf1_t, end: i64) -> c_int {
+    if h.is_null() || v.is_null() {
+        return 0;
+    }
+    if end < BCF_MIN_BT_INT64 {
+        return 0;
+    }
+    if end >= BCF_MIN_BT_INT32 && end <= i32::MAX as i64 {
+        return 0;
+    }
+
+    let end_id = bcf_hdr_id2int(h, hts_sys::BCF_DT_ID as c_int, c"END".as_ptr());
+    if end_id < 0 {
+        return 0;
+    }
+    if bcf_unpack(v, hts_sys::BCF_UN_INFO as c_int) < 0 {
+        return -1;
+    }
+
+    let info = bcf_get_info_id(v, end_id);
+    if info.is_null() || (*info).len != 1 {
+        return 0;
+    }
+    if (*info).type_ == hts_sys::BCF_BT_INT64 as c_int && (*info).v1.i == end {
+        return 0;
+    }
+
+    let mut str_ = kstring_t {
+        l: 0,
+        m: 0,
+        s: std::ptr::null_mut(),
+    };
+    if bcf_enc_int1(&mut str_, end_id) < 0
+        || bcf_enc_size(&mut str_, 1, hts_sys::BCF_BT_INT64 as c_int) < 0
+        || ks_resize(&mut str_, str_.l + size_of::<i64>()) < 0
+    {
+        super::hts::ks_free(&mut str_);
+        return -1;
+    }
+    let vptr_off = str_.l;
+    i64_to_le(end, str_.s.add(str_.l).cast());
+    str_.l += size_of::<i64>();
+
+    if (*info).vptr_free() != 0 && !(*info).vptr.is_null() {
+        libc::free((*info).vptr.sub((*info).vptr_off() as usize).cast());
+    }
+    (*info).key = end_id;
+    (*info).type_ = hts_sys::BCF_BT_INT64 as c_int;
+    (*info).v1.i = end;
+    (*info).vptr = str_.s.cast::<u8>().add(vptr_off);
+    (*info).vptr_len = size_of::<i64>() as u32;
+    (*info).set_vptr_off(vptr_off as u32);
+    (*info).set_vptr_free(1);
+    (*v).unpacked |= BCF_IS_64BIT | hts_sys::BCF_UN_INFO as c_int;
+    (*v).d.shared_dirty |= hts_sys::BCF1_DIRTY_INF as c_int;
+    0
 }
 
 pub unsafe fn vcf_c_5373_bcf_set_variant_type(
@@ -302,6 +782,56 @@ pub unsafe fn vcf_c_5373_bcf_set_variant_type(
     } else {
         ae.offset_from(a) as c_int + 1
     };
+}
+
+unsafe fn bcf_canonicalize_duplicate_format(rec: *mut bcf1_t) {
+    if rec.is_null() || (*rec).n_fmt() < 2 || (*rec).n_sample() == 0 {
+        return;
+    }
+    if bcf_unpack(rec, hts_sys::BCF_UN_FMT as c_int) != 0 {
+        return;
+    }
+
+    let n_fmt = (*rec).n_fmt() as usize;
+    let fmt = (*rec).d.fmt;
+    if fmt.is_null() {
+        return;
+    }
+
+    let mut dst = 0usize;
+    for src in 0..n_fmt {
+        let src_fmt = fmt.add(src);
+        let mut duplicate = false;
+        for prev in 0..dst {
+            if (*fmt.add(prev)).id == (*src_fmt).id {
+                duplicate = true;
+                break;
+            }
+        }
+        if duplicate {
+            bcf_clear_owned_format_storage(src_fmt);
+            continue;
+        }
+        if dst != src {
+            std::ptr::copy(src_fmt, fmt.add(dst), 1);
+        }
+        dst += 1;
+    }
+
+    if dst != n_fmt {
+        for i in dst..n_fmt {
+            (*fmt.add(i)).set_p_free(0);
+        }
+        (*rec).set_n_fmt(dst as u32);
+        (*rec).d.indiv_dirty = 1;
+    }
+}
+
+unsafe fn bcf_clear_owned_format_storage(fmt: *mut bcf_fmt_t) {
+    if !fmt.is_null() && (*fmt).p_free() != 0 && !(*fmt).p.is_null() {
+        libc::free((*fmt).p.sub((*fmt).p_off() as usize).cast());
+        (*fmt).set_p_free(0);
+    }
 }
 
 pub unsafe fn vcf_c_5444_bcf_set_variant_types(b: *mut bcf1_t) -> c_int {
@@ -452,7 +982,94 @@ pub unsafe fn bcf_format_gt_v2(
     isample: c_int,
     str_: *mut kstring_t,
 ) -> c_int {
-    unsafe { htslib_bcf_format_gt_v2(hdr, fmt, isample, str_) }
+    if fmt.is_null() || str_.is_null() {
+        return -1;
+    }
+
+    let pos = (*str_).l;
+    let mut val0 = 0;
+    let mut ploidy = 0;
+    let mut any_unphased = false;
+
+    macro_rules! branch {
+        ($read:ident, $step:expr, $vector_end:expr) => {{
+            let mut ptr = (*fmt).p.add(isample as usize * (*fmt).size as usize);
+            for i in 0..(*fmt).n {
+                let val = $read(ptr);
+                if val == $vector_end {
+                    break;
+                }
+                if i == 0 {
+                    val0 = val as i32;
+                } else {
+                    if kputc(if val & 1 != 0 { b'|' } else { b'/' } as c_int, str_) < 0 {
+                        return -1;
+                    }
+                    any_unphased |= val & 1 == 0;
+                }
+                if val >> 1 == 0 {
+                    if kputc(b'.' as c_int, str_) < 0 {
+                        return -1;
+                    }
+                } else if kputw((val >> 1) as c_int - 1, str_) < 0 {
+                    return -1;
+                }
+                ploidy = i + 1;
+                ptr = ptr.add($step);
+            }
+            if ploidy == 0 && kputc(b'.' as c_int, str_) < 0 {
+                return -1;
+            }
+        }};
+    }
+
+    match (*fmt).type_ {
+        x if x == hts_sys::BCF_BT_INT8 as c_int => {
+            branch!(le_to_i8, 1, hts_sys::bcf_int8_vector_end as i8);
+        }
+        x if x == hts_sys::BCF_BT_INT16 as c_int => {
+            branch!(
+                le_to_i16,
+                size_of::<i16>(),
+                hts_sys::bcf_int16_vector_end as i16
+            );
+        }
+        x if x == hts_sys::BCF_BT_INT32 as c_int => {
+            branch!(le_to_i32, size_of::<i32>(), hts_sys::bcf_int32_vector_end);
+        }
+        x if x == hts_sys::BCF_BT_NULL as c_int => {
+            if kputc(b'.' as c_int, str_) < 0 {
+                return -1;
+            }
+        }
+        _ => return -2,
+    }
+
+    if vcf_hdr_version_ge_44(hdr) {
+        if val0 & 1 != 0 {
+            if (ploidy > 1 && any_unphased) || (ploidy <= 1 && val0 >> 1 == 0) {
+                return kstring_insert_char(str_, pos, b'|' as c_char);
+            }
+        } else if (ploidy <= 1 && val0 != 0) || (ploidy > 1 && !any_unphased) {
+            return kstring_insert_char(str_, pos, b'/' as c_char);
+        }
+    }
+
+    0
+}
+
+unsafe fn kstring_insert_char(str_: *mut kstring_t, pos: usize, c: c_char) -> c_int {
+    if pos > (*str_).l || ks_resize(str_, (*str_).l + 2) < 0 {
+        return -1;
+    }
+    std::ptr::copy(
+        (*str_).s.add(pos),
+        (*str_).s.add(pos + 1),
+        (*str_).l - pos + 1,
+    );
+    *(*str_).s.add(pos) = c;
+    (*str_).l += 1;
+    0
 }
 
 pub unsafe fn bcf_dup(src: *mut bcf1_t) -> *mut bcf1_t {
@@ -468,7 +1085,7 @@ pub unsafe fn bcf_write(fp: *mut htsFile, h: *mut bcf_hdr_t, v: *mut bcf1_t) -> 
 }
 
 pub unsafe fn vcf_hdr_read(fp: *mut htsFile) -> *mut bcf_hdr_t {
-    hts_sys::vcf_hdr_read(fp.cast())
+    hts_sys::bcf_hdr_read(fp.cast())
 }
 
 pub unsafe fn vcf_hdr_write(fp: *mut htsFile, h: *const bcf_hdr_t) -> c_int {
@@ -476,7 +1093,7 @@ pub unsafe fn vcf_hdr_write(fp: *mut htsFile, h: *const bcf_hdr_t) -> c_int {
 }
 
 pub unsafe fn vcf_read(fp: *mut htsFile, h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int {
-    hts_sys::vcf_read(fp.cast(), h, v)
+    bcf_read(fp, h, v)
 }
 
 pub unsafe fn vcf_write(fp: *mut htsFile, h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int {
@@ -611,7 +1228,7 @@ pub unsafe fn bcf_translate(
         let dst_size = bcf_translate_id_size(dst_id);
         if src_size == dst_size {
             let vptr = (*info).vptr.sub((*info).vptr_off() as usize);
-            bcf_translate_store_id(vptr, dst_id, dst_size);
+            bcf_translate_store_info_id(vptr, dst_id, dst_size);
         } else {
             let mut str_ = kstring_t {
                 l: 0,
@@ -620,12 +1237,15 @@ pub unsafe fn bcf_translate(
             };
             if bcf_enc_int1(&mut str_, dst_id) < 0
                 || bcf_enc_size(&mut str_, (*info).len, (*info).type_) < 0
-                || kputsn((*info).vptr.cast(), (*info).vptr_len as usize, &mut str_) < 0
             {
                 super::hts::ks_free(&mut str_);
                 return -1;
             }
             let vptr_off = str_.l;
+            if kputsn((*info).vptr.cast(), (*info).vptr_len as usize, &mut str_) < 0 {
+                super::hts::ks_free(&mut str_);
+                return -1;
+            }
             if (*info).vptr_free() != 0 {
                 libc::free((*info).vptr.sub((*info).vptr_off() as usize).cast());
             }
@@ -661,12 +1281,15 @@ pub unsafe fn bcf_translate(
             };
             if bcf_enc_int1(&mut str_, dst_id) < 0
                 || bcf_enc_size(&mut str_, (*fmt).n, (*fmt).type_) < 0
-                || kputsn((*fmt).p.cast(), (*fmt).p_len as usize, &mut str_) < 0
             {
                 super::hts::ks_free(&mut str_);
                 return -1;
             }
             let p_off = str_.l;
+            if kputsn((*fmt).p.cast(), (*fmt).p_len as usize, &mut str_) < 0 {
+                super::hts::ks_free(&mut str_);
+                return -1;
+            }
             if (*fmt).p_free() != 0 {
                 libc::free((*fmt).p.sub((*fmt).p_off() as usize).cast());
             }
@@ -699,6 +1322,14 @@ unsafe fn bcf_translate_store_id(ptr: *mut u8, id: c_int, size: c_int) {
         i16_to_le(id as i16, ptr);
     } else {
         i32_to_le(id, ptr);
+    }
+}
+
+unsafe fn bcf_translate_store_info_id(ptr: *mut u8, id: c_int, size: c_int) {
+    if size == hts_sys::BCF_BT_INT8 as c_int {
+        *ptr.add(1) = id as u8;
+    } else {
+        bcf_translate_store_id(ptr, id, size);
     }
 }
 
@@ -738,7 +1369,15 @@ unsafe fn bcf_enc_int1(s: *mut kstring_t, x: c_int) -> c_int {
         return -1;
     }
     let p = (*s).s.add((*s).l).cast::<u8>();
-    if x <= 0x7f && x >= -120 {
+    if x == hts_sys::bcf_int32_vector_end {
+        *p = ((1 << 4) | hts_sys::BCF_BT_INT8 as c_int) as u8;
+        *p.add(1) = hts_sys::bcf_int8_vector_end as u8;
+        (*s).l += 2;
+    } else if x == hts_sys::bcf_int32_missing {
+        *p = ((1 << 4) | hts_sys::BCF_BT_INT8 as c_int) as u8;
+        *p.add(1) = hts_sys::bcf_int8_missing as u8;
+        (*s).l += 2;
+    } else if x <= 0x7f && x >= -120 {
         *p = ((1 << 4) | hts_sys::BCF_BT_INT8 as c_int) as u8;
         *p.add(1) = x as u8;
         (*s).l += 2;
@@ -1941,6 +2580,26 @@ pub unsafe fn bcf_sr_set_threads(files: *mut bcf_srs_t, n_threads: c_int) -> c_i
     hts_sys::bcf_sr_set_threads(files, n_threads)
 }
 
+pub unsafe fn bcf_sr_set_opt_require_idx(readers: *mut bcf_srs_t) -> c_int {
+    hts_sys::bcf_sr_set_opt(readers, BCF_SR_REQUIRE_IDX)
+}
+
+pub unsafe fn bcf_sr_set_opt_allow_no_idx(readers: *mut bcf_srs_t) -> c_int {
+    hts_sys::bcf_sr_set_opt(readers, BCF_SR_ALLOW_NO_IDX)
+}
+
+pub unsafe fn bcf_sr_set_opt_pair_logic(readers: *mut bcf_srs_t, pair_logic: c_int) -> c_int {
+    hts_sys::bcf_sr_set_opt(readers, BCF_SR_PAIR_LOGIC, pair_logic)
+}
+
+pub unsafe fn bcf_sr_set_opt_regions_overlap(readers: *mut bcf_srs_t, overlap: c_int) -> c_int {
+    hts_sys::bcf_sr_set_opt(readers, BCF_SR_REGIONS_OVERLAP, overlap)
+}
+
+pub unsafe fn bcf_sr_set_opt_targets_overlap(readers: *mut bcf_srs_t, overlap: c_int) -> c_int {
+    hts_sys::bcf_sr_set_opt(readers, BCF_SR_TARGETS_OVERLAP, overlap)
+}
+
 pub unsafe fn bcf_sr_destroy_threads(files: *mut bcf_srs_t) {
     hts_sys::bcf_sr_destroy_threads(files)
 }
@@ -1955,6 +2614,31 @@ pub unsafe fn bcf_sr_remove_reader(files: *mut bcf_srs_t, i: c_int) {
 
 pub unsafe fn bcf_sr_next_line(readers: *mut bcf_srs_t) -> c_int {
     hts_sys::bcf_sr_next_line(readers)
+}
+
+pub unsafe fn bcf_sr_has_line(readers: *mut bcf_srs_t, i: c_int) -> c_int {
+    if readers.is_null() || i < 0 || i >= (*readers).nreaders || (*readers).has_line.is_null() {
+        return 0;
+    }
+    *(*readers).has_line.add(i as usize)
+}
+
+pub unsafe fn bcf_sr_get_line(readers: *mut bcf_srs_t, i: c_int) -> *mut bcf1_t {
+    if bcf_sr_has_line(readers, i) == 0 || (*readers).readers.is_null() {
+        return std::ptr::null_mut();
+    }
+    let reader = (*readers).readers.add(i as usize);
+    if (*reader).buffer.is_null() {
+        return std::ptr::null_mut();
+    }
+    *(*reader).buffer
+}
+
+pub unsafe fn bcf_sr_get_header(readers: *mut bcf_srs_t, i: c_int) -> *mut bcf_hdr_t {
+    if readers.is_null() || i < 0 || i >= (*readers).nreaders || (*readers).readers.is_null() {
+        return std::ptr::null_mut();
+    }
+    (*(*readers).readers.add(i as usize)).header
 }
 
 pub unsafe fn bcf_sr_seek(readers: *mut bcf_srs_t, seq: *const c_char, pos: hts_pos_t) -> c_int {
@@ -2038,6 +2722,15 @@ mod tests {
     }
 
     #[test]
+    fn vcf_version_gate_parses_minor_versions_numerically() {
+        assert_eq!(vcf_version_number(b"VCFv4.3"), Some(4_003_000));
+        assert_eq!(vcf_version_number(b"VCFv4.4"), Some(4_004_000));
+        assert_eq!(vcf_version_number(b"VCFv4.10"), Some(4_010_000));
+        assert_eq!(vcf_version_number(b"##fileformat=VCFv5.0"), Some(5_000_000));
+        assert_eq!(vcf_version_number(b"VCFv4.x"), None);
+    }
+
+    #[test]
     fn vcf_inline_name_helpers_match_contig_table() {
         unsafe {
             let hdr = bcf_hdr_init(c"w".as_ptr());
@@ -2063,6 +2756,167 @@ mod tests {
                 c"(unknown)"
             );
             bcf_destroy(rec);
+            bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn vcf_seqname_safe_handles_null_records_and_missing_contigs() {
+        unsafe {
+            let hdr = bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+            assert_eq!(
+                bcf_hdr_append(hdr, c"##contig=<ID=chr1,length=100>".as_ptr()),
+                0
+            );
+            assert_eq!(bcf_hdr_sync(hdr), 0);
+
+            assert!(bcf_seqname(hdr, std::ptr::null()).is_null());
+            assert_eq!(
+                std::ffi::CStr::from_ptr(bcf_seqname_safe(hdr, std::ptr::null())),
+                c"(unknown)"
+            );
+            assert!(bcf_hdr_id2name(std::ptr::null(), 0).is_null());
+
+            let rec = bcf_init();
+            assert!(!rec.is_null());
+            (*rec).rid = -1;
+            assert!(bcf_seqname(hdr, rec).is_null());
+            assert_eq!(
+                std::ffi::CStr::from_ptr(bcf_seqname_safe(hdr, rec)),
+                c"(unknown)"
+            );
+
+            bcf_destroy(rec);
+            bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn vcf_header_seqnames_and_filter_helpers_cover_order_and_pass_state() {
+        unsafe {
+            let hdr = bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+            assert_eq!(bcf_hdr_append(hdr, c"##fileformat=VCFv4.3".as_ptr()), 0);
+            assert_eq!(bcf_hdr_append(hdr, c"##contig=<ID=chr2>".as_ptr()), 0);
+            assert_eq!(bcf_hdr_append(hdr, c"##contig=<ID=chr1>".as_ptr()), 0);
+            assert_eq!(
+                bcf_hdr_append(
+                    hdr,
+                    c"##FILTER=<ID=LowQ,Description=\"Low quality\">".as_ptr()
+                ),
+                0
+            );
+            assert_eq!(bcf_hdr_sync(hdr), 0);
+
+            let mut nseqs = -1;
+            let seqnames = bcf_hdr_seqnames(hdr, &mut nseqs);
+            assert!(!seqnames.is_null());
+            assert_eq!(nseqs, 2);
+            assert_eq!(std::ffi::CStr::from_ptr(*seqnames.add(0)), c"chr2");
+            assert_eq!(std::ffi::CStr::from_ptr(*seqnames.add(1)), c"chr1");
+            libc::free(seqnames.cast());
+
+            let filter_hrec = bcf_hdr_get_hrec(
+                hdr,
+                hts_sys::BCF_HL_FLT as c_int,
+                c"ID".as_ptr(),
+                c"LowQ".as_ptr(),
+                std::ptr::null(),
+            );
+            assert!(!filter_hrec.is_null());
+
+            let rec = bcf_init();
+            assert!(!rec.is_null());
+            (*rec).rid = bcf_hdr_name2id(hdr, c"chr1".as_ptr());
+            (*rec).pos = 9;
+            assert_eq!(bcf_update_alleles_str(hdr, rec, c"A,C".as_ptr()), 0);
+
+            let lowq = bcf_hdr_id2int(hdr, hts_sys::BCF_DT_ID as c_int, c"LowQ".as_ptr());
+            assert!(lowq >= 0);
+            assert_eq!(bcf_add_filter(hdr, rec, lowq), 1);
+            assert_eq!(bcf_has_filter(hdr, rec, c"LowQ".as_ptr().cast_mut()), 1);
+            assert_eq!(bcf_has_filter(hdr, rec, c"PASS".as_ptr().cast_mut()), 0);
+
+            assert_eq!(bcf_remove_filter(hdr, rec, lowq, 1), 0);
+            assert_eq!(bcf_has_filter(hdr, rec, c"LowQ".as_ptr().cast_mut()), 0);
+            assert_eq!(bcf_has_filter(hdr, rec, c"PASS".as_ptr().cast_mut()), 1);
+
+            bcf_destroy(rec);
+            bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn vcf_header_parse_line_formats_quoted_commas() {
+        unsafe {
+            let hdr = bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+
+            let line =
+                c"##INFO=<ID=TXT,Number=1,Type=String,Description=\"has,comma\",Source=\"x\">";
+            let mut len = -1;
+            let hrec = bcf_hdr_parse_line(hdr, line.as_ptr(), &mut len);
+            assert!(!hrec.is_null());
+
+            let mut out = kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert_eq!(bcf_hrec_format(hrec, &mut out), 0);
+            assert!(out.l > 0);
+            assert!(!out.s.is_null());
+            let formatted = std::slice::from_raw_parts(out.s.cast::<u8>(), out.l);
+            assert!(formatted
+                .windows(b"Description=\"has,comma\"".len())
+                .any(|w| w == b"Description=\"has,comma\""));
+            assert!(formatted
+                .windows(b"Source=\"x\"".len())
+                .any(|w| w == b"Source=\"x\""));
+
+            super::super::hts::ks_free(&mut out);
+            bcf_hrec_destroy(hrec);
+            bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn vcf_header_get_hrec_respects_record_type_when_ids_collide() {
+        unsafe {
+            let hdr = bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+            assert_eq!(bcf_hdr_append(hdr, c"##fileformat=VCFv4.3".as_ptr()), 0);
+            assert_eq!(bcf_hdr_append(hdr, c"##contig=<ID=DP>".as_ptr()), 0);
+            assert_eq!(
+                bcf_hdr_append(
+                    hdr,
+                    c"##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">".as_ptr()
+                ),
+                0
+            );
+            assert_eq!(bcf_hdr_sync(hdr), 0);
+
+            let info = bcf_hdr_get_hrec(
+                hdr,
+                hts_sys::BCF_HL_INFO as c_int,
+                c"ID".as_ptr(),
+                c"DP".as_ptr(),
+                std::ptr::null(),
+            );
+            assert!(!info.is_null());
+            assert_eq!(bcf_hrec_find_key(info, c"Number".as_ptr()), 1);
+
+            let contig = bcf_hdr_get_hrec(
+                hdr,
+                hts_sys::BCF_HL_CTG as c_int,
+                c"ID".as_ptr(),
+                c"DP".as_ptr(),
+                std::ptr::null(),
+            );
+            assert!(!contig.is_null());
+            assert_eq!(bcf_hrec_find_key(contig, c"Number".as_ptr()), -1);
+
             bcf_hdr_destroy(hdr);
         }
     }
@@ -2156,6 +3010,314 @@ mod tests {
             super::super::hts::ks_free(&mut line);
             bcf_destroy(rec);
             bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn vcf_parse_decodes_info_and_format_integer_boundaries() {
+        unsafe {
+            let fmt_int = |fmt: *mut bcf_fmt_t, sample: usize, idx: usize| -> i32 {
+                let p = (*fmt).p.add(sample * (*fmt).size as usize);
+                match (*fmt).type_ {
+                    x if x == hts_sys::BCF_BT_INT8 as c_int => le_to_i8(p.add(idx)) as i32,
+                    x if x == hts_sys::BCF_BT_INT16 as c_int => {
+                        le_to_i16(p.add(idx * size_of::<i16>())) as i32
+                    }
+                    x if x == hts_sys::BCF_BT_INT32 as c_int => {
+                        le_to_i32(p.add(idx * size_of::<i32>()))
+                    }
+                    _ => hts_sys::bcf_int32_missing,
+                }
+            };
+
+            let hdr = bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+            assert_eq!(bcf_hdr_append(hdr, c"##fileformat=VCFv4.3".as_ptr()), 0);
+            assert_eq!(
+                bcf_hdr_append(hdr, c"##contig=<ID=chr1,length=100>".as_ptr()),
+                0
+            );
+            assert_eq!(
+                bcf_hdr_append(
+                    hdr,
+                    c"##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">".as_ptr()
+                ),
+                0
+            );
+            assert_eq!(
+                bcf_hdr_append(
+                    hdr,
+                    c"##FORMAT=<ID=GT,Number=1,Type=String,Description=\"GT\">".as_ptr()
+                ),
+                0
+            );
+            assert_eq!(
+                bcf_hdr_append(
+                    hdr,
+                    c"##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allele depths\">"
+                        .as_ptr()
+                ),
+                0
+            );
+            assert_eq!(bcf_hdr_add_sample(hdr, c"S1".as_ptr()), 0);
+            assert_eq!(bcf_hdr_add_sample(hdr, c"S2".as_ptr()), 0);
+            assert_eq!(bcf_hdr_add_sample(hdr, std::ptr::null()), 0);
+            assert_eq!(bcf_hdr_sync(hdr), 0);
+
+            let rec = bcf_init();
+            assert!(!rec.is_null());
+            let mut line = kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert!(
+                super::super::hts::kputs(
+                    c"chr1\t5\trs1\tA\tC\t.\tPASS\tDP=32768\tGT:AD\t0/1:3,32768\t./.:.,.".as_ptr(),
+                    &mut line,
+                ) >= 0
+            );
+            assert_eq!(vcf_parse(&mut line, hdr, rec), 0);
+
+            let dp = bcf_get_info(hdr, rec, c"DP".as_ptr());
+            assert!(!dp.is_null());
+            assert_eq!((*dp).len, 1);
+            assert_eq!(vcfutils_c_280_get_int32_info_value(dp, 0), 32768);
+            assert_eq!(
+                vcfutils_c_280_get_int32_info_value(dp, 1),
+                hts_sys::bcf_int32_missing
+            );
+
+            let ad = bcf_get_fmt(hdr, rec, c"AD".as_ptr());
+            assert!(!ad.is_null());
+            assert_eq!((*ad).n, 2);
+            assert_eq!(fmt_int(ad, 0, 0), 3);
+            assert_eq!(fmt_int(ad, 0, 1), 32768);
+            assert_eq!(fmt_int(ad, 1, 0), hts_sys::bcf_int32_missing);
+            assert_eq!(fmt_int(ad, 1, 1), hts_sys::bcf_int32_missing);
+
+            super::super::hts::ks_free(&mut line);
+            bcf_destroy(rec);
+            bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn vcf_end_i64_repair_matches_htslib_integer_boundaries() {
+        unsafe {
+            let hdr = bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+            assert_eq!(bcf_hdr_append(hdr, c"##fileformat=VCFv4.3".as_ptr()), 0);
+            assert_eq!(
+                bcf_hdr_append(hdr, c"##contig=<ID=chr1,length=100>".as_ptr()),
+                0
+            );
+            assert_eq!(
+                bcf_hdr_append(
+                    hdr,
+                    c"##INFO=<ID=END,Number=1,Type=Integer,Description=\"End\">".as_ptr()
+                ),
+                0
+            );
+            assert_eq!(bcf_hdr_sync(hdr), 0);
+
+            let rec = bcf_init();
+            assert!(!rec.is_null());
+            let mut line = kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert!(
+                super::super::hts::kputs(
+                    c"chr1\t5\t.\tA\t<DEL>\t.\tPASS\tEND=.".as_ptr(),
+                    &mut line,
+                ) >= 0
+            );
+            assert_eq!(vcf_parse(&mut line, hdr, rec), 0);
+
+            let end_id = bcf_hdr_id2int(hdr, hts_sys::BCF_DT_ID as c_int, c"END".as_ptr());
+            assert!(end_id >= 0);
+            assert_eq!(vcf_repair_info_end_i64(hdr, rec, BCF_MIN_BT_INT32 - 1), 0);
+            let info = bcf_get_info_id(rec, end_id);
+            assert!(!info.is_null());
+            assert_eq!((*info).type_, hts_sys::BCF_BT_INT64 as c_int);
+            assert_eq!((*info).v1.i, BCF_MIN_BT_INT32 - 1);
+            assert_eq!(le_to_i64((*info).vptr), BCF_MIN_BT_INT32 - 1);
+
+            bcf_clear(rec);
+            line.l = 0;
+            assert!(
+                super::super::hts::kputs(
+                    c"chr1\t5\t.\tA\t<DEL>\t.\tPASS\tEND=.".as_ptr(),
+                    &mut line,
+                ) >= 0
+            );
+            assert_eq!(vcf_parse(&mut line, hdr, rec), 0);
+            assert_eq!(vcf_repair_info_end_i64(hdr, rec, BCF_MIN_BT_INT64 - 1), 0);
+            let info = bcf_get_info_id(rec, end_id);
+            assert!(!info.is_null());
+            assert!(
+                (*info).type_ != hts_sys::BCF_BT_INT64 as c_int
+                    || (*info).v1.i != BCF_MIN_BT_INT64 - 1
+            );
+
+            super::super::hts::ks_free(&mut line);
+            bcf_destroy(rec);
+            bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn vcf_private_encoders_use_htslib_extended_width_boundaries() {
+        unsafe {
+            let mut str_ = kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+
+            assert_eq!(
+                bcf_enc_size(&mut str_, 14, hts_sys::BCF_BT_INT8 as c_int),
+                0
+            );
+            assert_eq!(str_.l, 1);
+            assert_eq!(
+                *str_.s.cast::<u8>(),
+                ((14 << 4) | hts_sys::BCF_BT_INT8 as c_int) as u8
+            );
+
+            str_.l = 0;
+            assert_eq!(
+                bcf_enc_size(&mut str_, 15, hts_sys::BCF_BT_INT16 as c_int),
+                0
+            );
+            assert_eq!(str_.l, 3);
+            assert_eq!(
+                *str_.s.cast::<u8>(),
+                ((15 << 4) | hts_sys::BCF_BT_INT16 as c_int) as u8
+            );
+            assert_eq!(
+                *str_.s.add(1).cast::<u8>(),
+                ((1 << 4) | hts_sys::BCF_BT_INT8 as c_int) as u8
+            );
+            assert_eq!(*str_.s.add(2).cast::<u8>(), 15);
+
+            str_.l = 0;
+            assert_eq!(
+                bcf_enc_size(&mut str_, 32768, hts_sys::BCF_BT_INT32 as c_int),
+                0
+            );
+            assert_eq!(str_.l, 6);
+            assert_eq!(
+                *str_.s.cast::<u8>(),
+                ((15 << 4) | hts_sys::BCF_BT_INT32 as c_int) as u8
+            );
+            assert_eq!(
+                *str_.s.add(1).cast::<u8>(),
+                ((1 << 4) | hts_sys::BCF_BT_INT32 as c_int) as u8
+            );
+            assert_eq!(le_to_i32(str_.s.add(2).cast()), 32768);
+
+            str_.l = 0;
+            assert_eq!(bcf_enc_int1(&mut str_, -120), 0);
+            assert_eq!(str_.l, 2);
+            assert_eq!(
+                *str_.s.cast::<u8>(),
+                ((1 << 4) | hts_sys::BCF_BT_INT8 as c_int) as u8
+            );
+            assert_eq!(le_to_i8(str_.s.add(1).cast()) as i32, -120);
+
+            str_.l = 0;
+            assert_eq!(bcf_enc_int1(&mut str_, -121), 0);
+            assert_eq!(str_.l, 3);
+            assert_eq!(
+                *str_.s.cast::<u8>(),
+                ((1 << 4) | hts_sys::BCF_BT_INT16 as c_int) as u8
+            );
+            assert_eq!(le_to_i16(str_.s.add(1).cast()) as i32, -121);
+
+            str_.l = 0;
+            assert_eq!(bcf_enc_int1(&mut str_, 32768), 0);
+            assert_eq!(str_.l, 5);
+            assert_eq!(
+                *str_.s.cast::<u8>(),
+                ((1 << 4) | hts_sys::BCF_BT_INT32 as c_int) as u8
+            );
+            assert_eq!(le_to_i32(str_.s.add(1).cast()), 32768);
+
+            str_.l = 0;
+            assert_eq!(bcf_enc_int1(&mut str_, hts_sys::bcf_int32_missing), 0);
+            assert_eq!(str_.l, 2);
+            assert_eq!(
+                *str_.s.cast::<u8>(),
+                ((1 << 4) | hts_sys::BCF_BT_INT8 as c_int) as u8
+            );
+            assert_eq!(
+                le_to_i8(str_.s.add(1).cast()) as i32,
+                hts_sys::bcf_int8_missing
+            );
+
+            str_.l = 0;
+            assert_eq!(bcf_enc_int1(&mut str_, hts_sys::bcf_int32_vector_end), 0);
+            assert_eq!(str_.l, 2);
+            assert_eq!(
+                *str_.s.cast::<u8>(),
+                ((1 << 4) | hts_sys::BCF_BT_INT8 as c_int) as u8
+            );
+            assert_eq!(
+                le_to_i8(str_.s.add(1).cast()) as i32,
+                hts_sys::bcf_int8_vector_end
+            );
+
+            super::super::hts::ks_free(&mut str_);
+        }
+    }
+
+    #[test]
+    fn vcfutils_get_int32_info_value_widens_narrow_sentinels() {
+        unsafe {
+            let mut int8_values = [
+                hts_sys::bcf_int8_vector_end as u8,
+                (hts_sys::bcf_int8_vector_end - 1) as u8,
+                7u8,
+            ];
+            let mut info: bcf_info_t = std::mem::zeroed();
+            info.len = int8_values.len() as c_int;
+            info.type_ = hts_sys::BCF_BT_INT8 as c_int;
+            info.vptr = int8_values.as_mut_ptr();
+
+            assert_eq!(
+                vcfutils_c_280_get_int32_info_value(&info, 0),
+                hts_sys::bcf_int32_vector_end
+            );
+            assert_eq!(
+                vcfutils_c_280_get_int32_info_value(&info, 1),
+                hts_sys::bcf_int32_vector_end - 1
+            );
+            assert_eq!(vcfutils_c_280_get_int32_info_value(&info, 2), 7);
+
+            let mut int16_values = [0u8; 4];
+            i16_to_le(
+                hts_sys::bcf_int16_vector_end as i16,
+                int16_values.as_mut_ptr(),
+            );
+            i16_to_le(
+                (hts_sys::bcf_int16_vector_end - 1) as i16,
+                int16_values.as_mut_ptr().add(size_of::<i16>()),
+            );
+            info.len = 2;
+            info.type_ = hts_sys::BCF_BT_INT16 as c_int;
+            info.vptr = int16_values.as_mut_ptr();
+
+            assert_eq!(
+                vcfutils_c_280_get_int32_info_value(&info, 0),
+                hts_sys::bcf_int32_vector_end
+            );
+            assert_eq!(
+                vcfutils_c_280_get_int32_info_value(&info, 1),
+                hts_sys::bcf_int32_vector_end - 1
+            );
         }
     }
 
@@ -2435,6 +3597,41 @@ mod tests {
     }
 
     #[test]
+    fn vcf_variant_type_classifiers_cover_symbolic_and_breakend_edges() {
+        unsafe {
+            let mut var = bcf_variant_t { type_: -1, n: -99 };
+
+            vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c".".as_ptr(), &mut var);
+            assert_eq!(var.type_, hts_sys::VCF_REF as c_int);
+            assert_eq!(var.n, 0);
+
+            vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"X".as_ptr(), &mut var);
+            assert_eq!(var.type_, hts_sys::VCF_REF as c_int);
+            assert_eq!(var.n, 0);
+
+            vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"<X>".as_ptr(), &mut var);
+            assert_eq!(var.type_, hts_sys::VCF_REF as c_int);
+            assert_eq!(var.n, 0);
+
+            vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"<*>".as_ptr(), &mut var);
+            assert_eq!(var.type_, hts_sys::VCF_REF as c_int);
+            assert_eq!(var.n, 0);
+
+            var.n = -99;
+            vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"<DEL>".as_ptr(), &mut var);
+            assert_eq!(var.type_, hts_sys::VCF_OTHER as c_int);
+            assert_eq!(var.n, -99);
+
+            vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"AC]chr2:3]".as_ptr(), &mut var);
+            assert_eq!(var.type_, hts_sys::VCF_BND as c_int);
+
+            vcf_c_5373_bcf_set_variant_type(c"ACG".as_ptr(), c"AT".as_ptr(), &mut var);
+            assert_eq!(var.type_, hts_sys::VCF_OTHER as c_int);
+            assert_eq!(var.n, -1);
+        }
+    }
+
+    #[test]
     fn vcf_set_variant_types_populates_record_variant_array() {
         unsafe {
             let hdr = bcf_hdr_init(c"w".as_ptr());
@@ -2479,6 +3676,225 @@ mod tests {
     }
 
     #[test]
+    fn bcf_has_variant_types_matches_htslib_exact_and_subset_collapse() {
+        unsafe {
+            let hdr = bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+            assert_eq!(bcf_hdr_append(hdr, c"##fileformat=VCFv4.3".as_ptr()), 0);
+            assert_eq!(
+                bcf_hdr_append(hdr, c"##contig=<ID=chr1,length=100>".as_ptr()),
+                0
+            );
+            assert_eq!(bcf_hdr_sync(hdr), 0);
+
+            let rec = bcf_init();
+            assert!(!rec.is_null());
+            let mut line = kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert!(
+                super::super::hts::kputs(c"chr1\t1\t.\tA\tAC\t.\t.\t.".as_ptr(), &mut line) >= 0
+            );
+            assert_eq!(vcf_parse(&mut line, hdr, rec), 0);
+
+            assert_eq!(bcf_has_variant_types(rec, VCF_INS, 0), VCF_INS as c_int);
+            assert_eq!(
+                bcf_has_variant_types(rec, hts_sys::VCF_INDEL, 0),
+                hts_sys::VCF_INDEL as c_int
+            );
+            assert_eq!(bcf_has_variant_types(rec, VCF_DEL, 0), 0);
+            assert_eq!(
+                bcf_has_variant_types(rec, hts_sys::VCF_INDEL | VCF_INS, 2),
+                (hts_sys::VCF_INDEL | VCF_INS) as c_int
+            );
+
+            bcf_clear(rec);
+            line.l = 0;
+            assert!(
+                super::super::hts::kputs(c"chr1\t1\t.\tACG\tA,ACGT\t.\t.\t.".as_ptr(), &mut line,)
+                    >= 0
+            );
+            assert_eq!(vcf_parse(&mut line, hdr, rec), 0);
+
+            assert_eq!(
+                bcf_has_variant_types(rec, hts_sys::VCF_INDEL, 0),
+                hts_sys::VCF_INDEL as c_int
+            );
+            assert_eq!(bcf_has_variant_types(rec, VCF_INS, 0), 0);
+            assert_eq!(
+                bcf_has_variant_types(rec, VCF_INS | VCF_DEL, 1),
+                (VCF_INS | VCF_DEL) as c_int
+            );
+
+            super::super::hts::ks_free(&mut line);
+            bcf_destroy(rec);
+            bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn bcf_per_allele_variant_queries_cover_ref_alt_and_invalid_bounds() {
+        unsafe {
+            let hdr = bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr.is_null());
+            assert_eq!(bcf_hdr_append(hdr, c"##fileformat=VCFv4.3".as_ptr()), 0);
+            assert_eq!(
+                bcf_hdr_append(hdr, c"##contig=<ID=chr1,length=100>".as_ptr()),
+                0
+            );
+            assert_eq!(bcf_hdr_sync(hdr), 0);
+
+            let rec = bcf_init();
+            assert!(!rec.is_null());
+            let mut line = kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            };
+            assert!(
+                super::super::hts::kputs(c"chr1\t1\t.\tA\tAC,G\t.\t.\t.".as_ptr(), &mut line) >= 0
+            );
+            assert_eq!(vcf_parse(&mut line, hdr, rec), 0);
+
+            assert_eq!(bcf_has_variant_type(rec, 0, hts_sys::VCF_REF), 1);
+            assert_eq!(bcf_variant_length(rec, 0), 0);
+            assert_eq!(bcf_has_variant_type(rec, 1, VCF_INS), VCF_INS as c_int);
+            assert_eq!(bcf_variant_length(rec, 1), 1);
+            assert_eq!(
+                bcf_has_variant_type(rec, 2, hts_sys::VCF_SNP),
+                hts_sys::VCF_SNP as c_int
+            );
+            assert_eq!(bcf_variant_length(rec, 2), 1);
+            assert_eq!(bcf_has_variant_type(rec, -1, hts_sys::VCF_REF), -1);
+            assert_eq!(bcf_has_variant_type(rec, 3, hts_sys::VCF_REF), -1);
+            assert_eq!(bcf_variant_length(rec, -1), hts_sys::bcf_int32_missing);
+            assert_eq!(bcf_variant_length(rec, 3), hts_sys::bcf_int32_missing);
+
+            super::super::hts::ks_free(&mut line);
+            bcf_destroy(rec);
+            bcf_hdr_destroy(hdr);
+        }
+    }
+
+    #[test]
+    fn bcf_translate_width_promoted_ids_keep_info_and_format_payload_offsets() {
+        unsafe {
+            let hdr1 = bcf_hdr_init(c"w".as_ptr());
+            let hdr2 = bcf_hdr_init(c"w".as_ptr());
+            assert!(!hdr1.is_null());
+            assert!(!hdr2.is_null());
+
+            for hdr in [hdr1, hdr2] {
+                assert_eq!(bcf_hdr_append(hdr, c"##contig=<ID=1>".as_ptr()), 0);
+            }
+            for i in 0..130 {
+                let line = std::ffi::CString::new(format!(
+                    "##INFO=<ID=D{i},Number=1,Type=Integer,Description=\"dummy\">"
+                ))
+                .unwrap();
+                assert_eq!(bcf_hdr_append(hdr2, line.as_ptr()), 0);
+            }
+            for (hdr, line) in [
+                (
+                    hdr1,
+                    c"##INFO=<ID=INF,Number=1,Type=Integer,Description=\"info\">".as_ptr(),
+                ),
+                (
+                    hdr1,
+                    c"##FORMAT=<ID=FMT,Number=1,Type=Integer,Description=\"fmt\">".as_ptr(),
+                ),
+                (
+                    hdr2,
+                    c"##INFO=<ID=INF,Number=1,Type=Integer,Description=\"info\">".as_ptr(),
+                ),
+                (
+                    hdr2,
+                    c"##FORMAT=<ID=FMT,Number=1,Type=Integer,Description=\"fmt\">".as_ptr(),
+                ),
+            ] {
+                assert_eq!(bcf_hdr_append(hdr, line), 0);
+            }
+            assert_eq!(bcf_hdr_add_sample(hdr1, c"S1".as_ptr()), 0);
+            assert_eq!(bcf_hdr_add_sample(hdr2, c"S1".as_ptr()), 0);
+            assert_eq!(bcf_hdr_sync(hdr1), 0);
+            assert_eq!(bcf_hdr_sync(hdr2), 0);
+
+            let rec = bcf_init();
+            assert!(!rec.is_null());
+            (*rec).rid = bcf_hdr_name2id(hdr1, c"1".as_ptr());
+            (*rec).pos = 0;
+            assert_eq!(bcf_update_alleles_str(hdr1, rec, c"A,C".as_ptr()), 0);
+            let info_val = 42i32;
+            let fmt_val = 7i32;
+            assert_eq!(
+                bcf_update_info(
+                    hdr1,
+                    rec,
+                    c"INF".as_ptr(),
+                    (&info_val as *const i32).cast(),
+                    1,
+                    hts_sys::BCF_HT_INT as c_int,
+                ),
+                0
+            );
+            assert_eq!(
+                bcf_update_format(
+                    hdr1,
+                    rec,
+                    c"FMT".as_ptr(),
+                    (&fmt_val as *const i32).cast(),
+                    1,
+                    hts_sys::BCF_HT_INT as c_int,
+                ),
+                0
+            );
+
+            let src_info_id = bcf_hdr_id2int(hdr1, hts_sys::BCF_DT_ID as c_int, c"INF".as_ptr());
+            let dst_info_id = bcf_hdr_id2int(hdr2, hts_sys::BCF_DT_ID as c_int, c"INF".as_ptr());
+            let src_fmt_id = bcf_hdr_id2int(hdr1, hts_sys::BCF_DT_ID as c_int, c"FMT".as_ptr());
+            let dst_fmt_id = bcf_hdr_id2int(hdr2, hts_sys::BCF_DT_ID as c_int, c"FMT".as_ptr());
+            assert_eq!(
+                bcf_translate_id_size(src_info_id),
+                hts_sys::BCF_BT_INT8 as c_int
+            );
+            assert_eq!(
+                bcf_translate_id_size(src_fmt_id),
+                hts_sys::BCF_BT_INT8 as c_int
+            );
+            assert!(bcf_translate_id_size(dst_info_id) > hts_sys::BCF_BT_INT8 as c_int);
+            assert!(bcf_translate_id_size(dst_fmt_id) > hts_sys::BCF_BT_INT8 as c_int);
+
+            assert_eq!(bcf_translate(hdr2, hdr1, rec), 0);
+            let info = bcf_get_info(hdr2, rec, c"INF".as_ptr());
+            assert!(!info.is_null());
+            assert_eq!((*info).vptr_off(), 4);
+            assert_eq!(le_to_i8((*info).vptr), info_val as i8);
+
+            let fmt = bcf_get_fmt(hdr2, rec, c"FMT".as_ptr());
+            assert!(!fmt.is_null());
+            assert_eq!((*fmt).p_off(), 4);
+            assert_eq!(le_to_i8((*fmt).p), fmt_val as i8);
+
+            bcf_destroy(rec);
+            bcf_hdr_destroy(hdr1);
+            bcf_hdr_destroy(hdr2);
+        }
+    }
+
+    #[test]
+    fn bcf_translate_id_size_uses_htslib_width_boundaries() {
+        unsafe {
+            assert_eq!(bcf_translate_id_size(0), hts_sys::BCF_BT_INT8 as c_int);
+            assert_eq!(bcf_translate_id_size(127), hts_sys::BCF_BT_INT8 as c_int);
+            assert_eq!(bcf_translate_id_size(128), hts_sys::BCF_BT_INT16 as c_int);
+            assert_eq!(bcf_translate_id_size(32767), hts_sys::BCF_BT_INT16 as c_int);
+            assert_eq!(bcf_translate_id_size(32768), hts_sys::BCF_BT_INT32 as c_int);
+        }
+    }
+
+    #[test]
     fn synced_bcf_reader_wrappers_create_and_destroy_reader_set() {
         unsafe {
             let readers = bcf_sr_init();
@@ -2486,6 +3902,29 @@ mod tests {
             assert!(!bcf_sr_strerror(0).is_null());
             assert_eq!(bcf_sr_set_threads(readers, 0), 0);
             bcf_sr_destroy_threads(readers);
+            bcf_sr_destroy(readers);
+        }
+    }
+
+    #[test]
+    fn synced_bcf_reader_set_opt_wrappers_match_htslib_enum_paths() {
+        unsafe {
+            let readers = bcf_sr_init();
+            assert!(!readers.is_null());
+
+            assert_eq!(bcf_sr_set_opt_require_idx(readers), 0);
+            assert_eq!((*readers).require_index, 1);
+
+            assert_eq!(bcf_sr_set_opt_allow_no_idx(readers), 0);
+            assert_eq!((*readers).require_index, 2);
+
+            assert_eq!(
+                bcf_sr_set_opt_pair_logic(readers, hts_sys::BCF_SR_PAIR_BOTH as c_int),
+                0
+            );
+            assert_eq!(bcf_sr_set_opt_regions_overlap(readers, 2), 0);
+            assert_eq!(bcf_sr_set_opt_targets_overlap(readers, 1), 0);
+
             bcf_sr_destroy(readers);
         }
     }

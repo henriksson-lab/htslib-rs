@@ -1,0 +1,93 @@
+use htslib_mini_rs::{
+    bcf_destroy, bcf_hdr_destroy, bcf_hdr_fmt_text, bcf_init, bcf_subset_format, hts_close,
+    hts_open, ks_free, kstring_t, vcf_format, vcf_hdr_read, vcf_read,
+};
+use std::ffi::{CStr, CString};
+
+fn fixture(path: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
+}
+
+fn c_fixture(path: &str) -> CString {
+    CString::new(fixture(path).to_string_lossy().as_bytes()).unwrap()
+}
+
+unsafe fn render_vcf(path: &str) -> String {
+    let path_c = c_fixture(path);
+    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+    assert!(!fp.is_null(), "failed to open {path}");
+
+    let hdr = vcf_hdr_read(fp);
+    assert!(!hdr.is_null(), "failed to read VCF header from {path}");
+
+    let mut len = 0;
+    let header_text = bcf_hdr_fmt_text(hdr, 0, &mut len);
+    assert!(!header_text.is_null());
+    let mut out = CStr::from_ptr(header_text).to_string_lossy().into_owned();
+    assert_eq!(out.len(), len as usize);
+    libc::free(header_text.cast());
+
+    let rec = bcf_init();
+    assert!(!rec.is_null());
+    let mut line = kstring_t {
+        l: 0,
+        m: 0,
+        s: std::ptr::null_mut(),
+    };
+    loop {
+        let ret = vcf_read(fp, hdr, rec);
+        if ret < 0 {
+            break;
+        }
+        assert_eq!(bcf_subset_format(hdr, rec), 0);
+        line.l = 0;
+        assert_eq!(vcf_format(hdr, rec, &mut line), 0);
+        out.push_str(&CStr::from_ptr(line.s).to_string_lossy());
+    }
+
+    ks_free(&mut line);
+    bcf_destroy(rec);
+    bcf_hdr_destroy(hdr);
+    assert_eq!(hts_close(fp), 0);
+    out
+}
+
+#[test]
+fn original_formatmissing_vcf_renders_exact_expected_output() {
+    unsafe {
+        assert_eq!(
+            render_vcf("htslib/test/formatmissing.vcf"),
+            std::fs::read_to_string(fixture("htslib/test/formatmissing-out.vcf")).unwrap()
+        );
+    }
+}
+
+#[test]
+fn original_noroundtrip_vcf_renders_exact_expected_output() {
+    unsafe {
+        assert_eq!(
+            render_vcf("htslib/test/noroundtrip.vcf"),
+            std::fs::read_to_string(fixture("htslib/test/noroundtrip-out.vcf")).unwrap()
+        );
+    }
+}
+
+#[test]
+fn original_tabix_bcf_renders_exact_vcf_fixture() {
+    unsafe {
+        assert_eq!(
+            render_vcf("htslib/test/tabix/vcf_file.bcf"),
+            std::fs::read_to_string(fixture("htslib/test/tabix/vcf_file.vcf")).unwrap()
+        );
+    }
+}
+
+#[test]
+fn original_vcf44_1_renders_exact_expected_output() {
+    unsafe {
+        assert_eq!(
+            render_vcf("htslib/test/vcf44_1.vcf"),
+            std::fs::read_to_string(fixture("htslib/test/vcf44_1.expected")).unwrap()
+        );
+    }
+}

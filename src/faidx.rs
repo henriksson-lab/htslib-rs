@@ -2,12 +2,20 @@ use std::{
     ffi::{c_char, c_int, c_void, CStr},
     fs,
     io::Write,
+    ptr,
 };
 
 use super::bgzf::{
-    bgzf_close, bgzf_getc, bgzf_open, bgzf_read, bgzf_set_cache_size, bgzf_thread_pool, bgzf_useek,
+    bgzf_close, bgzf_compression, bgzf_getc, bgzf_index_build_init, bgzf_index_dump,
+    bgzf_index_load, bgzf_open, bgzf_read, bgzf_set_cache_size, bgzf_thread_pool, bgzf_useek,
+    bgzf_utell,
 };
-use super::hts::{hts_pos_t, BGZF, HTS_POS_MAX};
+use super::hfile::{hclose, hclose_abruptly, hisremote, hopen, hputs2, htslib_hfile_h_195_hgetln};
+use super::hts::hFILE;
+use super::hts::{
+    hts_c_4756_hts_idx_check_local, hts_c_4920_hts_idx_locatefn, hts_parse_region, hts_pos_t, BGZF,
+    HTS_FMT_FAI, HTS_POS_MAX,
+};
 use super::thread_pool::hts_tpool;
 use super::{path_bytes, path_from_bytes};
 
@@ -23,6 +31,7 @@ const HTS_PARSE_LIST: c_int = 4;
 extern "C" {
     fn free(ptr: *mut c_void);
     fn malloc(size: usize) -> *mut c_void;
+    fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void;
 }
 
 pub fn isgraph_(c: u8) -> c_int {
@@ -49,10 +58,22 @@ pub unsafe fn fai_path(fa: *const c_char) -> *mut c_char {
     }
     let delim = c"##idx##";
     let fai_tmp = libc::strstr(fa, delim.as_ptr());
-    if fai_tmp.is_null() {
-        return std::ptr::null_mut();
+    if !fai_tmp.is_null() {
+        return libc::strdup(fai_tmp.add(delim.to_bytes().len()));
     }
-    libc::strdup(fai_tmp.add(delim.to_bytes().len()))
+
+    if hisremote(fa) != 0 {
+        return hts_c_4920_hts_idx_locatefn(fa, c".fai".as_ptr());
+    }
+
+    let mut fai = std::ptr::null_mut();
+    if hts_c_4756_hts_idx_check_local(fa, HTS_FMT_FAI, &mut fai) == 0 && !fai.is_null() {
+        if fai_build3(fa, fai, std::ptr::null()) == -1 {
+            free(fai.cast());
+            return std::ptr::null_mut();
+        }
+    }
+    fai
 }
 
 #[repr(C)]
@@ -88,22 +109,12 @@ pub struct faidx_t {
 }
 
 pub unsafe fn fai_load3(
-    _fn_: *const c_char,
-    _fnfai: *const c_char,
-    _fngzi: *const c_char,
-    _flags: c_int,
+    fn_: *const c_char,
+    fnfai: *const c_char,
+    fngzi: *const c_char,
+    flags: c_int,
 ) -> *mut faidx_t {
-    if !_fngzi.is_null() {
-        return std::ptr::null_mut();
-    }
-    match fai_load_existing(_fn_, _fnfai) {
-        Some(fai) => fai,
-        None if (_flags & FAI_CREATE) != 0 => match fai_build_plain_fasta(_fn_, _fnfai) {
-            Some(fai) => fai,
-            None => std::ptr::null_mut(),
-        },
-        None => std::ptr::null_mut(),
-    }
+    faidx_c_567_fai_load3_core(fn_, fnfai, fngzi, flags, FAI_FASTA as c_int)
 }
 
 pub unsafe fn fai_load(_fn_: *const c_char) -> *mut faidx_t {
@@ -111,16 +122,7 @@ pub unsafe fn fai_load(_fn_: *const c_char) -> *mut faidx_t {
 }
 
 pub unsafe fn fai_build3(fn_: *const c_char, fnfai: *const c_char, fngzi: *const c_char) -> c_int {
-    if !fngzi.is_null() {
-        return -1;
-    }
-    match fai_build_plain_fasta(fn_, fnfai) {
-        Some(fai) => {
-            fai_destroy(fai);
-            0
-        }
-        None => -1,
-    }
+    faidx_c_557_fai_build3(fn_, fnfai, fngzi)
 }
 
 pub unsafe fn fai_build(fn_: *const c_char) -> c_int {
@@ -134,15 +136,441 @@ pub unsafe fn fai_load3_format(
     flags: c_int,
     format: fai_format_options,
 ) -> *mut faidx_t {
-    match format {
-        FAI_NONE | FAI_FASTA => fai_load3(fn_, fnfai, fngzi, flags),
-        FAI_FASTQ => std::ptr::null_mut(),
-        _ => std::ptr::null_mut(),
-    }
+    faidx_c_705_fai_load3_format(fn_, fnfai, fngzi, flags, format)
 }
 
 pub unsafe fn fai_load_format(fn_: *const c_char, format: fai_format_options) -> *mut faidx_t {
-    fai_load3_format(fn_, std::ptr::null(), std::ptr::null(), FAI_CREATE, format)
+    faidx_c_711_fai_load_format(fn_, format)
+}
+
+unsafe fn fai_load3_core(
+    fn_: *const c_char,
+    fnfai: *const c_char,
+    fngzi: *const c_char,
+    flags: c_int,
+    format: c_int,
+) -> *mut faidx_t {
+    if fn_.is_null()
+        || (format != FAI_NONE as c_int
+            && format != FAI_FASTA as c_int
+            && format != FAI_FASTQ as c_int)
+    {
+        return ptr::null_mut();
+    }
+    let fai_path = resolved_index_path(fn_, fnfai, b".fai");
+    if fai_path.is_none() {
+        return ptr::null_mut();
+    }
+    let fngzi_path = resolved_index_path(fn_, fngzi, b".gzi");
+    if fngzi_path.is_none() {
+        return ptr::null_mut();
+    }
+    let mut build_index = !fai_path.as_ref().unwrap().exists();
+    if !build_index {
+        let bgzf = bgzf_open(fn_, b"r\0".as_ptr().cast());
+        if bgzf.is_null() {
+            return ptr::null_mut();
+        }
+        if bgzf_compression(bgzf) == 2 && !fngzi_path.as_ref().unwrap().exists() {
+            build_index = true;
+        }
+        bgzf_close(bgzf);
+    }
+    if build_index {
+        if (flags & FAI_CREATE) == 0 || fai_build3_core(fn_, fnfai, fngzi) != 0 {
+            return ptr::null_mut();
+        }
+    }
+    let Some(fai) = fai_read(fn_, fnfai, format) else {
+        return ptr::null_mut();
+    };
+    if bgzf_compression((*fai).bgzf) == 2 {
+        let mut gzi_bytes = path_bytes(fngzi_path.as_ref().unwrap()).into_owned();
+        gzi_bytes.push(0);
+        if bgzf_index_load((*fai).bgzf, gzi_bytes.as_ptr().cast(), ptr::null()) < 0 {
+            fai_destroy(fai);
+            return ptr::null_mut();
+        }
+    }
+    fai
+}
+
+unsafe fn fai_build3_core(fn_: *const c_char, fnfai: *const c_char, fngzi: *const c_char) -> c_int {
+    if fn_.is_null() {
+        return -1;
+    }
+    let bgzf = bgzf_open(fn_, b"r\0".as_ptr().cast());
+    if bgzf.is_null() {
+        return -1;
+    }
+    if bgzf_compression(bgzf) == 2 && bgzf_index_build_init(bgzf) != 0 {
+        bgzf_close(bgzf);
+        return -1;
+    }
+    let fai = fai_build_core(bgzf);
+    if fai.is_null() {
+        bgzf_close(bgzf);
+        return -1;
+    }
+    let fai_path = resolved_index_path(fn_, fnfai, b".fai");
+    let gzi_path = resolved_index_path(fn_, fngzi, b".gzi");
+    if fai_path.is_none() || gzi_path.is_none() {
+        bgzf_close(bgzf);
+        fai_destroy(fai);
+        return -1;
+    }
+    if bgzf_compression(bgzf) == 2 {
+        let mut gzi_bytes = path_bytes(gzi_path.as_ref().unwrap()).into_owned();
+        gzi_bytes.push(0);
+        if bgzf_index_dump(bgzf, gzi_bytes.as_ptr().cast(), ptr::null()) < 0 {
+            bgzf_close(bgzf);
+            fai_destroy(fai);
+            return -1;
+        }
+    }
+    if bgzf_close(bgzf) < 0 {
+        fai_destroy(fai);
+        return -1;
+    }
+    let ret = fai_save(fai, fai_path.as_ref().unwrap());
+    fai_destroy(fai);
+    ret
+}
+
+fn resolved_index_path(
+    fn_: *const c_char,
+    explicit: *const c_char,
+    suffix: &[u8],
+) -> Option<std::path::PathBuf> {
+    unsafe {
+        if fn_.is_null() {
+            return None;
+        }
+        if explicit.is_null() {
+            let fasta_path = path_from_bytes(CStr::from_ptr(fn_).to_bytes());
+            let mut bytes = path_bytes(&fasta_path).into_owned();
+            bytes.extend_from_slice(suffix);
+            Some(path_from_bytes(&bytes))
+        } else {
+            Some(path_from_bytes(CStr::from_ptr(explicit).to_bytes()))
+        }
+    }
+}
+
+unsafe fn fai_read(
+    fn_: *const c_char,
+    fnfai: *const c_char,
+    format: c_int,
+) -> Option<*mut faidx_t> {
+    let fai_path = resolved_index_path(fn_, fnfai, b".fai")?;
+    let text = fs::read(&fai_path).ok()?;
+    let mut rows = Vec::new();
+    for line in text.split(|&b| b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let line = if line.last() == Some(&b'\r') {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
+        let name_end = line
+            .iter()
+            .position(|&b| is_fai_index_space(b))
+            .unwrap_or(line.len());
+        let name = &line[..name_end];
+        let fields: Vec<&[u8]> = line[name_end..]
+            .split(|&b| is_fai_index_space(b))
+            .filter(|s| !s.is_empty())
+            .collect();
+        let needed = if format == FAI_FASTA as c_int { 5 } else { 6 };
+        if fields.len() + 1 < needed {
+            return None;
+        }
+        let parse_u64 = |b: &[u8]| std::str::from_utf8(b).ok()?.parse::<u64>().ok();
+        let parse_u32 = |b: &[u8]| std::str::from_utf8(b).ok()?.parse::<u32>().ok();
+        let len = parse_u64(fields[0])?;
+        let seq_offset = parse_u64(fields[1])?;
+        let line_blen = parse_u32(fields[2])?;
+        let line_len = parse_u32(fields[3])?;
+        let qual_offset = if format == FAI_FASTA as c_int {
+            0
+        } else {
+            parse_u64(fields[4])?
+        };
+        if line_blen == 0 || line_len < line_blen {
+            return None;
+        }
+        if fai_insert_index(
+            &mut rows,
+            name.to_vec(),
+            len,
+            line_len,
+            line_blen,
+            seq_offset,
+            qual_offset,
+        ) != 0
+        {
+            return None;
+        }
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    fai_from_rows(fn_, rows, format)
+}
+
+fn is_fai_index_space(b: u8) -> bool {
+    matches!(b, b'\t' | b'\n' | 0x0b | 0x0c | b'\r' | b' ')
+}
+
+unsafe fn fai_save(fai: *const faidx_t, path: &std::path::Path) -> c_int {
+    let mut out = Vec::new();
+    for i in 0..(*fai).n {
+        let name = *(*fai).name.add(i as usize);
+        let k = kh_get_s((*fai).hash, name);
+        if k == (*(*fai).hash).n_buckets {
+            return -1;
+        }
+        let val = *(*(*fai).hash).vals.add(k as usize);
+        out.extend_from_slice(CStr::from_ptr(name).to_bytes());
+        if (*fai).format == FAI_FASTQ as c_int {
+            out.extend_from_slice(
+                format!(
+                    "\t{}\t{}\t{}\t{}\t{}\n",
+                    val.len, val.seq_offset, val.line_blen, val.line_len, val.qual_offset
+                )
+                .as_bytes(),
+            );
+        } else {
+            out.extend_from_slice(
+                format!(
+                    "\t{}\t{}\t{}\t{}\n",
+                    val.len, val.seq_offset, val.line_blen, val.line_len
+                )
+                .as_bytes(),
+            );
+        }
+    }
+    fs::write(path, out).map(|_| 0).unwrap_or(-1)
+}
+
+unsafe fn fai_build_core(bgzf: *mut BGZF) -> *mut faidx_t {
+    let pathless = ptr::null();
+    let _ = bgzf_utell(bgzf);
+    let data = read_all_bgzf(bgzf);
+    let Some(data) = data else {
+        return ptr::null_mut();
+    };
+    let Some((rows, format)) = parse_fasta_fastq_index_rows(&data) else {
+        return ptr::null_mut();
+    };
+    match fai_from_rows(pathless, rows, format) {
+        Some(fai) => {
+            (*fai).bgzf = ptr::null_mut();
+            fai
+        }
+        None => ptr::null_mut(),
+    }
+}
+
+unsafe fn read_all_bgzf(bgzf: *mut BGZF) -> Option<Vec<u8>> {
+    let mut data = Vec::new();
+    loop {
+        let c = bgzf_getc(bgzf);
+        if c == -1 {
+            break;
+        }
+        if c < 0 {
+            return None;
+        }
+        data.push(c as u8);
+    }
+    Some(data)
+}
+
+unsafe fn fai_insert_index(
+    rows: &mut Vec<(Vec<u8>, faidx1_t)>,
+    name: Vec<u8>,
+    len: u64,
+    line_len: u32,
+    line_blen: u32,
+    seq_offset: u64,
+    qual_offset: u64,
+) -> c_int {
+    if rows.iter().any(|(n, _)| *n == name) {
+        return 0;
+    }
+    rows.push((
+        name,
+        faidx1_t {
+            id: rows.len() as c_int,
+            line_len,
+            line_blen,
+            len,
+            seq_offset,
+            qual_offset,
+        },
+    ));
+    0
+}
+
+fn parse_fasta_fastq_index_rows(data: &[u8]) -> Option<(Vec<(Vec<u8>, faidx1_t)>, c_int)> {
+    let mut rows = Vec::new();
+    let mut i = 0usize;
+    let mut format = FAI_NONE as c_int;
+    while i < data.len() {
+        while i < data.len() && (data[i] == b'\n' || data[i] == b'\r') {
+            i += 1;
+        }
+        if i >= data.len() {
+            break;
+        }
+        let marker = data[i];
+        if marker != b'>' && marker != b'@' {
+            return None;
+        }
+        let this_format = if marker == b'>' {
+            FAI_FASTA as c_int
+        } else {
+            FAI_FASTQ as c_int
+        };
+        if format != FAI_NONE as c_int && format != this_format {
+            return None;
+        }
+        format = this_format;
+        i += 1;
+        while i < data.len() && data[i].is_ascii_whitespace() && data[i] != b'\n' {
+            i += 1;
+        }
+        let name_start = i;
+        while i < data.len() && !data[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let name = data[name_start..i].to_vec();
+        while i < data.len() && data[i] != b'\n' {
+            i += 1;
+        }
+        if i < data.len() {
+            i += 1;
+        }
+        let seq_offset = i as u64;
+        let mut seq_len = 0u64;
+        let mut line_len = 0u32;
+        let mut line_blen = 0u32;
+        let mut final_short_line = false;
+
+        while i < data.len() {
+            if format == FAI_FASTA as c_int && data[i] == b'>' {
+                break;
+            }
+            if format == FAI_FASTA as c_int && (data[i] == b'\n' || data[i] == b'\r') && seq_len > 0
+            {
+                break;
+            }
+            if format == FAI_FASTQ as c_int && data[i] == b'+' {
+                while i < data.len() && data[i] != b'\n' {
+                    i += 1;
+                }
+                if i < data.len() {
+                    i += 1;
+                }
+                break;
+            }
+            if data[i] == b'\n' || data[i] == b'\r' {
+                return None;
+            }
+            if final_short_line {
+                return None;
+            }
+            let mut ll = 0u32;
+            let mut bl = 0u32;
+            while i < data.len() && data[i] != b'\n' {
+                ll += 1;
+                if isgraph_(data[i]) != 0 {
+                    bl += 1;
+                }
+                i += 1;
+            }
+            ll += 1;
+            if i < data.len() {
+                i += 1;
+            }
+            seq_len += bl as u64;
+            if line_len == 0 {
+                line_len = ll;
+                line_blen = bl;
+            } else if line_len < ll {
+                return None;
+            } else if line_len > ll {
+                final_short_line = true;
+            }
+        }
+
+        if seq_len == 0 || line_len == 0 || line_blen == 0 {
+            return None;
+        }
+
+        let mut qual_offset = 0;
+        if format == FAI_FASTQ as c_int {
+            qual_offset = i as u64;
+            let mut qual_len = 0u64;
+            while i < data.len() {
+                if data[i] == b'@' && qual_len == seq_len {
+                    break;
+                }
+                if data[i] == b'\n' || data[i] == b'\r' {
+                    return None;
+                }
+                let mut ll = 0u32;
+                let mut bl = 0u32;
+                while i < data.len() && data[i] != b'\n' {
+                    ll += 1;
+                    if isgraph_(data[i]) != 0 {
+                        bl += 1;
+                    }
+                    i += 1;
+                }
+                ll += 1;
+                if i < data.len() {
+                    i += 1;
+                }
+                if ll > line_len {
+                    return None;
+                }
+                qual_len += bl as u64;
+                if qual_len > seq_len || (qual_len < seq_len && ll < line_len) {
+                    return None;
+                }
+                if qual_len == seq_len {
+                    break;
+                }
+            }
+            if qual_len != seq_len {
+                return None;
+            }
+        }
+
+        unsafe {
+            if fai_insert_index(
+                &mut rows,
+                name,
+                seq_len,
+                line_len,
+                line_blen,
+                seq_offset,
+                qual_offset,
+            ) != 0
+            {
+                return None;
+            }
+        }
+    }
+    if rows.is_empty() || format == FAI_NONE as c_int {
+        None
+    } else {
+        Some((rows, format))
+    }
 }
 
 unsafe fn fai_load_existing(fn_: *const c_char, fnfai: *const c_char) -> Option<*mut faidx_t> {
@@ -188,12 +616,13 @@ unsafe fn fai_load_existing(fn_: *const c_char, fnfai: *const c_char) -> Option<
         return None;
     }
 
-    fai_from_rows(fn_, rows)
+    fai_from_rows(fn_, rows, FAI_FASTA as c_int)
 }
 
 unsafe fn fai_from_rows(
     fn_: *const c_char,
     rows: Vec<(Vec<u8>, faidx1_t)>,
+    format: c_int,
 ) -> Option<*mut faidx_t> {
     let fai = malloc(std::mem::size_of::<faidx_t>()).cast::<faidx_t>();
     if fai.is_null() {
@@ -202,11 +631,13 @@ unsafe fn fai_from_rows(
     std::ptr::write_bytes(fai, 0, 1);
     (*fai).n = 0;
     (*fai).m = rows.len() as c_int;
-    (*fai).format = 0;
-    (*fai).bgzf = bgzf_open(fn_, b"r\0".as_ptr().cast());
-    if (*fai).bgzf.is_null() {
-        free(fai.cast());
-        return None;
+    (*fai).format = format;
+    if !fn_.is_null() {
+        (*fai).bgzf = bgzf_open(fn_, b"r\0".as_ptr().cast());
+        if (*fai).bgzf.is_null() {
+            free(fai.cast());
+            return None;
+        }
     }
     (*fai).name = malloc(rows.len() * std::mem::size_of::<*mut c_char>()).cast::<*mut c_char>();
     if (*fai).name.is_null() {
@@ -302,9 +733,6 @@ unsafe fn fai_build_plain_fasta(fn_: *const c_char, fnfai: *const c_char) -> Opt
         while i < data.len() && !data[i].is_ascii_whitespace() {
             i += 1;
         }
-        if i == name_start {
-            return None;
-        }
         let name = data[name_start..i].to_vec();
         while i < data.len() && data[i] != b'\n' {
             i += 1;
@@ -399,7 +827,7 @@ unsafe fn fai_build_plain_fasta(fn_: *const c_char, fnfai: *const c_char) -> Opt
     }
     fs::write(&fai_path, out).ok()?;
 
-    fai_from_rows(fn_, rows)
+    fai_from_rows(fn_, rows, FAI_FASTA as c_int)
 }
 
 pub unsafe fn fai_destroy(_fai: *mut faidx_t) {
@@ -586,117 +1014,15 @@ pub unsafe fn fai_parse_region(
     end: *mut hts_pos_t,
     flags: c_int,
 ) -> *const c_char {
-    if fai.is_null() || s.is_null() || tid.is_null() || beg.is_null() || end.is_null() {
-        return std::ptr::null();
-    }
-
-    let mut parse_flags = flags;
-    if (parse_flags & HTS_PARSE_LIST) != 0 {
-        parse_flags &= !HTS_PARSE_THOUSANDS_SEP;
-    } else {
-        parse_flags |= HTS_PARSE_THOUSANDS_SEP;
-    }
-
-    let bytes = CStr::from_ptr(s).to_bytes();
-    let mut item_len = bytes.len();
-    if (parse_flags & HTS_PARSE_LIST) != 0 {
-        if let Some(pos) = bytes.iter().position(|&b| b == b',') {
-            item_len = pos;
-        }
-    }
-    let item = &bytes[..item_len];
-    let s_end = s.add(item_len + usize::from(item_len < bytes.len()));
-
-    let (name_start, name_end, coord_start, quoted) = if item.first() == Some(&b'{') {
-        let Some(close) = item.iter().position(|&b| b == b'}') else {
-            *tid = -1;
-            return std::ptr::null();
-        };
-        let coord_start = if item.get(close + 1) == Some(&b':') {
-            Some(close + 2)
-        } else {
-            None
-        };
-        (1, close, coord_start, true)
-    } else {
-        let colon = item.iter().rposition(|&b| b == b':');
-        (0, colon.unwrap_or(item.len()), colon.map(|p| p + 1), false)
-    };
-
-    if coord_start.is_none() {
-        *beg = 0;
-        *end = HTS_POS_MAX;
-        return if parse_region_name(fai, &item[name_start..name_end], tid).is_some() {
-            s_end
-        } else {
-            std::ptr::null()
-        };
-    }
-
-    if !quoted && parse_region_name(fai, item, tid).is_some() {
-        let mut prefix_tid = -1;
-        if parse_region_name(fai, &item[..name_end], &mut prefix_tid).is_some() {
-            *tid = -1;
-            return std::ptr::null();
-        }
-        *beg = 0;
-        *end = HTS_POS_MAX;
-        return s_end;
-    }
-
-    let Some(_) = parse_region_name(fai, &item[name_start..name_end], tid) else {
-        return std::ptr::null();
-    };
-    let mut i = coord_start.unwrap();
-    let Some((parsed_beg, next_i)) = parse_region_decimal(item, i, parse_flags) else {
-        return std::ptr::null();
-    };
-    i = next_i;
-    *beg = parsed_beg - 1;
-    if *beg < 0 {
-        if (*beg != -1 && item.get(i) == Some(&b'-') && coord_start != Some(item.len()))
-            || !matches!(item.get(i), Some(b'0'..=b'9') | Some(b',') | None)
-        {
-            return std::ptr::null();
-        }
-        *end = if *beg == -1 { HTS_POS_MAX } else { -(*beg + 1) };
-        *beg = 0;
-        return s_end;
-    }
-
-    if i == item.len() || ((parse_flags & HTS_PARSE_LIST) != 0 && item.get(i) == Some(&b',')) {
-        *end = if (parse_flags & HTS_PARSE_ONE_COORD) != 0 {
-            *beg + 1
-        } else {
-            HTS_POS_MAX
-        };
-    } else if item.get(i) == Some(&b'-') {
-        i += 1;
-        if i == item.len() {
-            *end = HTS_POS_MAX;
-        } else {
-            let Some((parsed_end, next_i)) = parse_region_decimal(item, i, parse_flags) else {
-                return std::ptr::null();
-            };
-            i = next_i;
-            if i != item.len()
-                && !((parse_flags & HTS_PARSE_LIST) != 0 && item.get(i) == Some(&b','))
-            {
-                return std::ptr::null();
-            }
-            *end = parsed_end;
-        }
-    } else {
-        return std::ptr::null();
-    }
-
-    if *end == 0 {
-        *end = HTS_POS_MAX;
-    }
-    if *beg >= *end {
-        return std::ptr::null();
-    }
-    s_end
+    hts_parse_region(
+        s,
+        tid,
+        beg,
+        end,
+        Some(fai_name2id),
+        fai.cast_mut().cast(),
+        flags,
+    )
 }
 
 pub unsafe fn fai_set_cache_size(fai: *mut faidx_t, cache_size: c_int) {
@@ -1281,6 +1607,53 @@ mod tests {
     }
 
     #[test]
+    fn faidx_fetch_seq64_clamps_negative_reversed_and_past_end_coordinates() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-faidx-fetch-clamp-{}-{}.fa",
+            std::process::id(),
+            stamp
+        ));
+        let fai_path = path.with_extension("fa.fai");
+        fs::write(&path, b">chr1\nACGT\nTGCA\n").unwrap();
+        fs::write(&fai_path, b"chr1\t8\t6\t4\t5\n").unwrap();
+
+        unsafe {
+            let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
+            let chr1 = CString::new("chr1").unwrap();
+            let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
+            assert!(!fai.is_null());
+
+            let mut len = 0;
+            let seq = faidx_fetch_seq64(fai, chr1.as_ptr(), -5, 2, &mut len);
+            assert!(!seq.is_null());
+            assert_eq!(len, 3);
+            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"ACG");
+            free(seq.cast());
+
+            let seq = faidx_fetch_seq64(fai, chr1.as_ptr(), 6, 2, &mut len);
+            assert!(!seq.is_null());
+            assert_eq!(len, 1);
+            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"G");
+            free(seq.cast());
+
+            let seq = faidx_fetch_seq64(fai, chr1.as_ptr(), 99, 120, &mut len);
+            assert!(!seq.is_null());
+            assert_eq!(len, 0);
+            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"");
+            free(seq.cast());
+
+            fai_destroy(fai);
+        }
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&fai_path);
+    }
+
+    #[test]
     fn fai_parse_region_handles_names_ranges_and_braces_without_htslib() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1334,11 +1707,521 @@ mod tests {
             .is_null());
             assert_eq!((tid, beg, end), (0, 2, 3));
 
+            let reg = CString::new("chr1:alt").unwrap();
+            assert!(fai_parse_region(fai, reg.as_ptr(), &mut tid, &mut beg, &mut end, 0).is_null());
+            assert_eq!(tid, -1);
+
             fai_destroy(fai);
         }
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(&fai_path);
+    }
+
+    #[test]
+    fn fai_parse_region_braced_ambiguous_name_alone_means_whole_contig() {
+        unsafe {
+            let fai = fai_from_rows(
+                ptr::null(),
+                vec![
+                    (
+                        b"chr1".to_vec(),
+                        faidx1_t {
+                            id: 0,
+                            line_len: 80,
+                            line_blen: 80,
+                            len: 100,
+                            seq_offset: 0,
+                            qual_offset: 0,
+                        },
+                    ),
+                    (
+                        b"chr1:alt".to_vec(),
+                        faidx1_t {
+                            id: 1,
+                            line_len: 80,
+                            line_blen: 80,
+                            len: 50,
+                            seq_offset: 0,
+                            qual_offset: 0,
+                        },
+                    ),
+                ],
+                FAI_FASTA as c_int,
+            )
+            .unwrap();
+
+            let mut tid = -1;
+            let mut beg = -1;
+            let mut end = -1;
+            let reg = CString::new("{chr1:alt}").unwrap();
+            let rest = fai_parse_region(fai, reg.as_ptr(), &mut tid, &mut beg, &mut end, 0);
+            assert!(!rest.is_null());
+            assert_eq!(CStr::from_ptr(rest).to_bytes(), b"");
+            assert_eq!((tid, beg, end), (1, 0, HTS_POS_MAX));
+
+            let reg = CString::new("{chr1:alt}:2-1").unwrap();
+            assert!(fai_parse_region(fai, reg.as_ptr(), &mut tid, &mut beg, &mut end, 0).is_null());
+
+            fai_destroy(fai);
+        }
+    }
+
+    #[test]
+    fn fai_line_length_uses_parsed_region_name_and_reports_missing_names() {
+        unsafe {
+            let fai = fai_from_rows(
+                ptr::null(),
+                vec![
+                    (
+                        b"chr1".to_vec(),
+                        faidx1_t {
+                            id: 0,
+                            line_len: 81,
+                            line_blen: 80,
+                            len: 100,
+                            seq_offset: 0,
+                            qual_offset: 0,
+                        },
+                    ),
+                    (
+                        b"chr1:alt".to_vec(),
+                        faidx1_t {
+                            id: 1,
+                            line_len: 51,
+                            line_blen: 50,
+                            len: 100,
+                            seq_offset: 0,
+                            qual_offset: 0,
+                        },
+                    ),
+                ],
+                FAI_FASTA as c_int,
+            )
+            .unwrap();
+
+            assert_eq!(fai_line_length(fai, c"chr1:2-3".as_ptr()), 80);
+            assert_eq!(fai_line_length(fai, c"{chr1:alt}:2-3".as_ptr()), 50);
+            assert_eq!(fai_line_length(fai, c"missing:1-2".as_ptr()), -1);
+
+            fai_destroy(fai);
+        }
+    }
+
+    #[test]
+    fn fai_parse_region_list_mode_matches_htslib_comma_boundaries() {
+        unsafe {
+            let fai = fai_from_rows(
+                ptr::null(),
+                vec![
+                    (
+                        b"chr1".to_vec(),
+                        faidx1_t {
+                            id: 0,
+                            line_len: 80,
+                            line_blen: 80,
+                            len: 2000,
+                            seq_offset: 0,
+                            qual_offset: 0,
+                        },
+                    ),
+                    (
+                        b"chr3".to_vec(),
+                        faidx1_t {
+                            id: 1,
+                            line_len: 80,
+                            line_blen: 80,
+                            len: 2000,
+                            seq_offset: 0,
+                            qual_offset: 0,
+                        },
+                    ),
+                ],
+                FAI_FASTA as c_int,
+            )
+            .unwrap();
+
+            let mut tid = -1;
+            let mut beg = -1;
+            let mut end = -1;
+            let reg = CString::new("chr1,chr3").unwrap();
+            let rest = fai_parse_region(
+                fai,
+                reg.as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                HTS_PARSE_LIST,
+            );
+            assert!(!rest.is_null());
+            assert_eq!(CStr::from_ptr(rest).to_bytes(), b"chr3");
+            assert_eq!((tid, beg, end), (0, 0, HTS_POS_MAX));
+
+            let reg = CString::new("chr3:1,000-1,500").unwrap();
+            let rest = fai_parse_region(
+                fai,
+                reg.as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                HTS_PARSE_LIST | HTS_PARSE_ONE_COORD,
+            );
+            assert!(!rest.is_null());
+            assert_eq!(CStr::from_ptr(rest).to_bytes(), b"000-1,500");
+            assert_eq!((tid, beg, end), (1, 0, 1));
+
+            fai_destroy(fai);
+        }
+    }
+
+    #[test]
+    fn fai_parse_region_allows_thousands_separators_only_outside_list_mode() {
+        unsafe {
+            let fai = fai_from_rows(
+                ptr::null(),
+                vec![(
+                    b"chr1".to_vec(),
+                    faidx1_t {
+                        id: 0,
+                        line_len: 80,
+                        line_blen: 80,
+                        len: 5000,
+                        seq_offset: 0,
+                        qual_offset: 0,
+                    },
+                )],
+                FAI_FASTA as c_int,
+            )
+            .unwrap();
+
+            let mut tid = -1;
+            let mut beg = -1;
+            let mut end = -1;
+            let reg = CString::new("chr1:1,000-1,002").unwrap();
+            let rest = fai_parse_region(fai, reg.as_ptr(), &mut tid, &mut beg, &mut end, 0);
+            assert!(!rest.is_null());
+            assert_eq!(CStr::from_ptr(rest).to_bytes(), b"");
+            assert_eq!((tid, beg, end), (0, 999, 1002));
+
+            let rest = fai_parse_region(
+                fai,
+                reg.as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                HTS_PARSE_LIST,
+            );
+            assert!(!rest.is_null());
+            assert_eq!(CStr::from_ptr(rest).to_bytes(), b"000-1,002");
+            assert_eq!((tid, beg, end), (0, 0, HTS_POS_MAX));
+
+            fai_destroy(fai);
+        }
+    }
+
+    #[test]
+    fn resolved_index_path_honors_explicit_fai_and_gzi_paths() {
+        let fasta = CString::new("/tmp/ref.fa").unwrap();
+        let explicit_fai = CString::new("/tmp/custom.index").unwrap();
+        let explicit_gzi = CString::new("/tmp/custom.gzi").unwrap();
+
+        let inferred = resolved_index_path(fasta.as_ptr(), ptr::null(), b".fai").unwrap();
+        assert_eq!(path_bytes(&inferred).as_ref(), b"/tmp/ref.fa.fai");
+
+        let explicit = resolved_index_path(fasta.as_ptr(), explicit_fai.as_ptr(), b".fai").unwrap();
+        assert_eq!(path_bytes(&explicit).as_ref(), b"/tmp/custom.index");
+
+        let explicit = resolved_index_path(fasta.as_ptr(), explicit_gzi.as_ptr(), b".gzi").unwrap();
+        assert_eq!(path_bytes(&explicit).as_ref(), b"/tmp/custom.gzi");
+
+        assert!(resolved_index_path(ptr::null(), explicit_fai.as_ptr(), b".fai").is_none());
+    }
+
+    #[test]
+    fn fai_read_accepts_htslib_whitespace_separated_index_fields() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-fai-whitespace-{}-{}.fa",
+            std::process::id(),
+            stamp
+        ));
+        let fai_path = path.with_extension("fa.fai");
+        fs::write(&path, b">chr1\nACGT\n>chr2\nNNNN\n").unwrap();
+        fs::write(&fai_path, b"chr1 4 6 4 5\r\nchr2\t4 17\t4 5\n").unwrap();
+
+        unsafe {
+            let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
+            let chr1 = CString::new("chr1").unwrap();
+            let chr2 = CString::new("chr2").unwrap();
+            let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
+            assert!(!fai.is_null());
+            assert_eq!(faidx_nseq(fai), 2);
+            assert_eq!(faidx_seq_len64(fai, chr1.as_ptr()), 4);
+            assert_eq!(faidx_seq_len64(fai, chr2.as_ptr()), 4);
+            fai_destroy(fai);
+        }
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&fai_path);
+    }
+
+    #[test]
+    fn fai_read_accepts_all_c_whitespace_between_index_fields() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-fai-cspace-{}-{}.fa",
+            std::process::id(),
+            stamp
+        ));
+        let fai_path = path.with_extension("fa.fai");
+        fs::write(&path, b">chr1\nACGT\n>chr2\nNNNN\n").unwrap();
+        fs::write(&fai_path, b"chr1\t4\x0b6\x0c4 5\nchr2\t4\t17\t4\t5\n").unwrap();
+
+        unsafe {
+            let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
+            let chr1 = CString::new("chr1").unwrap();
+            let chr2 = CString::new("chr2").unwrap();
+            let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
+            assert!(!fai.is_null());
+            assert_eq!(faidx_nseq(fai), 2);
+            assert_eq!(faidx_seq_len64(fai, chr1.as_ptr()), 4);
+            assert_eq!(faidx_seq_len64(fai, chr2.as_ptr()), 4);
+            fai_destroy(fai);
+        }
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&fai_path);
+    }
+
+    #[test]
+    fn fai_read_existing_index_ignores_duplicate_sequence_rows() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-fai-duplicate-{}-{}.fa",
+            std::process::id(),
+            stamp
+        ));
+        let fai_path = path.with_extension("fa.fai");
+        fs::write(&path, b">dup\nAAAA\n>other\nCC\n").unwrap();
+        fs::write(
+            &fai_path,
+            b"dup\t4\t5\t4\t5\ndup\t4\t16\t4\t5\nother\t2\t21\t2\t3\n",
+        )
+        .unwrap();
+
+        unsafe {
+            let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
+            let dup = CString::new("dup").unwrap();
+            let other = CString::new("other").unwrap();
+            let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
+            assert!(!fai.is_null());
+            assert_eq!(faidx_nseq(fai), 2);
+            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)).to_bytes(), b"dup");
+            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 1)).to_bytes(), b"other");
+            assert_eq!(faidx_seq_len64(fai, dup.as_ptr()), 4);
+            assert_eq!(faidx_seq_len64(fai, other.as_ptr()), 2);
+            fai_destroy(fai);
+        }
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&fai_path);
+    }
+
+    #[test]
+    fn fai_read_matches_c_field_parsing_without_geometry_validation() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-fai-invalid-{}-{}.fa",
+            std::process::id(),
+            stamp
+        ));
+        let fai_path = path.with_extension("fa.fai");
+        fs::write(&path, b">chr1\nACGT\n").unwrap();
+
+        unsafe {
+            let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
+            let chr1 = CString::new("chr1").unwrap();
+            for row in [
+                b"chr1\t4\t6\t0\t5\n".as_slice(),
+                b"chr1\t4\t6\t5\t4\n".as_slice(),
+            ] {
+                fs::write(&fai_path, row).unwrap();
+                let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
+                assert!(!fai.is_null());
+                assert_eq!(faidx_seq_len64(fai, chr1.as_ptr()), 4);
+                fai_destroy(fai);
+            }
+
+            fs::write(&fai_path, b"chr1\t4\tbad\t4\t5\n").unwrap();
+            let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
+            assert!(fai.is_null());
+        }
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&fai_path);
+    }
+
+    #[test]
+    fn fai_read_fastq_index_keeps_first_duplicate_and_requires_quality_offset() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-fai-fastq-index-{}-{}.fq",
+            std::process::id(),
+            stamp
+        ));
+        let fai_path = path.with_extension("fq.fai");
+        fs::write(&path, b"@r1\nACGT\n+\n!!!!\n@r2\nNN\n+\n##\n").unwrap();
+        fs::write(
+            &fai_path,
+            b"r1\t4\t4\t4\t5\t11\nr1\t4\t21\t4\t5\t28\nr2\t2\t21\t2\t3\t26\n",
+        )
+        .unwrap();
+
+        unsafe {
+            let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
+            let r1 = CString::new("r1").unwrap();
+            let r2 = CString::new("r2").unwrap();
+            let fai = fai_load3_format(path_c.as_ptr(), ptr::null(), ptr::null(), 0, FAI_FASTQ);
+            assert!(!fai.is_null());
+            assert_eq!(faidx_nseq(fai), 2);
+            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)).to_bytes(), b"r1");
+            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 1)).to_bytes(), b"r2");
+
+            let mut len = 0;
+            let qual = faidx_fetch_qual64(fai, r1.as_ptr(), 0, 3, &mut len);
+            assert!(!qual.is_null());
+            assert_eq!(len, 4);
+            assert_eq!(CStr::from_ptr(qual).to_bytes(), b"!!!!");
+            free(qual.cast());
+            assert_eq!(faidx_seq_len64(fai, r2.as_ptr()), 2);
+            fai_destroy(fai);
+
+            for row in [
+                b"r1\t4\t4\t4\t5\n".as_slice(),
+                b"r1\t4\t4\t4\t5\tbad\n".as_slice(),
+            ] {
+                fs::write(&fai_path, row).unwrap();
+                let fai = fai_load3_format(path_c.as_ptr(), ptr::null(), ptr::null(), 0, FAI_FASTQ);
+                assert!(fai.is_null());
+            }
+
+            for row in [
+                b"r1\t4\t4\t0\t5\t11\n".as_slice(),
+                b"r1\t4\t4\t5\t4\t11\n".as_slice(),
+            ] {
+                fs::write(&fai_path, row).unwrap();
+                let fai = fai_load3_format(path_c.as_ptr(), ptr::null(), ptr::null(), 0, FAI_FASTQ);
+                assert!(!fai.is_null());
+                fai_destroy(fai);
+            }
+        }
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&fai_path);
+    }
+
+    #[test]
+    fn parse_fasta_fastq_duplicate_names_keep_first_index_entry() {
+        let data = b">dup\nAAAA\n>dup\nTTTT\n>other\nCC\n";
+        let (rows, format) = parse_fasta_fastq_index_rows(data).unwrap();
+
+        assert_eq!(format, FAI_FASTA as c_int);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, b"dup");
+        assert_eq!(rows[0].1.id, 0);
+        assert_eq!(rows[0].1.seq_offset, 5);
+        assert_eq!(rows[1].0, b"other");
+        assert_eq!(rows[1].1.id, 1);
+    }
+
+    #[test]
+    fn parse_fasta_fastq_counts_crlf_line_widths_like_fai() {
+        let data = b">r1 comment\r\nACGT\r\nTG\r\n>r2\r\nNN\r\n";
+        let (rows, format) = parse_fasta_fastq_index_rows(data).unwrap();
+
+        assert_eq!(format, FAI_FASTA as c_int);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, b"r1");
+        assert_eq!(rows[0].1.len, 6);
+        assert_eq!(rows[0].1.seq_offset, 13);
+        assert_eq!(rows[0].1.line_blen, 4);
+        assert_eq!(rows[0].1.line_len, 6);
+        assert_eq!(rows[1].0, b"r2");
+        assert_eq!(rows[1].1.seq_offset, 28);
+        assert_eq!(rows[1].1.line_blen, 2);
+        assert_eq!(rows[1].1.line_len, 4);
+    }
+
+    #[test]
+    fn parse_fasta_final_unterminated_line_counts_htslib_line_width() {
+        let data = b">r1\nACGT";
+        let (rows, format) = parse_fasta_fastq_index_rows(data).unwrap();
+
+        assert_eq!(format, FAI_FASTA as c_int);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1.len, 4);
+        assert_eq!(rows[0].1.seq_offset, 4);
+        assert_eq!(rows[0].1.line_blen, 4);
+        assert_eq!(rows[0].1.line_len, 5);
+    }
+
+    #[test]
+    fn fai_load3_builds_fai_with_htslib_line_width_for_unterminated_final_line() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-build-unterminated-{}-{}.fa",
+            std::process::id(),
+            stamp
+        ));
+        let fai_path = path.with_extension("fa.fai");
+        fs::write(&path, b">chr1\nACGT").unwrap();
+
+        unsafe {
+            let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
+            let name = CString::new("chr1").unwrap();
+            let fai = fai_load3(
+                path_c.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                FAI_CREATE,
+            );
+            assert!(!fai.is_null());
+            assert_eq!(faidx_seq_len64(fai, name.as_ptr()), 4);
+            fai_destroy(fai);
+        }
+
+        assert_eq!(fs::read(&fai_path).unwrap(), b"chr1\t4\t6\t4\t5\n");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&fai_path);
+    }
+
+    #[test]
+    fn parse_fasta_allows_empty_sequence_name_like_fai_fixture() {
+        let data = include_bytes!("../htslib/test/faidx/faidx.fa");
+        let (rows, format) = parse_fasta_fastq_index_rows(data).unwrap();
+
+        assert_eq!(format, FAI_FASTA as c_int);
+        assert_eq!(rows[0].0, b"");
+        assert_eq!(rows[0].1.len, 4);
+        assert_eq!(rows[0].1.seq_offset, 2);
     }
 
     #[test]
@@ -1427,6 +2310,150 @@ mod tests {
     }
 
     #[test]
+    fn fai_load_format_builds_and_fetches_plain_fastq_quality() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-build-fastq-{}-{}.fq",
+            std::process::id(),
+            stamp
+        ));
+        let fai_path = path.with_extension("fq.fai");
+        fs::write(&path, b"@r1 comment\nACGT\n+\n!!!!\n").unwrap();
+
+        unsafe {
+            let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
+            let name = CString::new("r1").unwrap();
+            let fai = fai_load3_format(
+                path_c.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                FAI_CREATE,
+                FAI_FASTQ,
+            );
+            assert!(!fai.is_null());
+            assert!(fai_path.exists());
+            assert_eq!((*fai).format, FAI_NONE as c_int);
+            assert_eq!(faidx_seq_len64(fai, name.as_ptr()), 4);
+
+            let mut len = 0;
+            let qual = faidx_fetch_qual64(fai, name.as_ptr(), 1, 3, &mut len);
+            assert!(!qual.is_null());
+            assert_eq!(len, 3);
+            assert_eq!(CStr::from_ptr(qual).to_bytes(), b"!!!");
+            free(qual.cast());
+            fai_destroy(fai);
+        }
+
+        let index = fs::read(&fai_path).unwrap();
+        assert_eq!(index, b"r1\t4\t12\t4\t5\t19\n");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&fai_path);
+    }
+
+    #[test]
+    fn fai_load_format_fetches_fastq_sequence_and_quality_across_wrapped_lines() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-fastq-wrapped-{}-{}.fq",
+            std::process::id(),
+            stamp
+        ));
+        let fai_path = path.with_extension("fq.fai");
+        fs::write(&path, b"@r1\nACGT\nTG\n+\n!!!!\n??\n").unwrap();
+
+        unsafe {
+            let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
+            let name = CString::new("r1").unwrap();
+            let fai = fai_load3_format(
+                path_c.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                FAI_CREATE,
+                FAI_FASTQ,
+            );
+            assert!(!fai.is_null());
+
+            let mut len = 0;
+            let seq = faidx_fetch_seq64(fai, name.as_ptr(), 2, 5, &mut len);
+            assert!(!seq.is_null());
+            assert_eq!(len, 4);
+            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"GTTG");
+            free(seq.cast());
+
+            let qual = faidx_fetch_qual64(fai, name.as_ptr(), 3, 5, &mut len);
+            assert!(!qual.is_null());
+            assert_eq!(len, 3);
+            assert_eq!(CStr::from_ptr(qual).to_bytes(), b"!??");
+            free(qual.cast());
+
+            let empty = faidx_fetch_seq64(fai, name.as_ptr(), 6, 99, &mut len);
+            assert!(!empty.is_null());
+            assert_eq!(len, 0);
+            assert_eq!(CStr::from_ptr(empty).to_bytes(), b"");
+            free(empty.cast());
+
+            fai_destroy(fai);
+        }
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&fai_path);
+    }
+
+    #[test]
+    fn parse_fastq_keeps_at_sign_quality_until_expected_length() {
+        let data = b"@r1\nABC\nDEF\n+\n@@@\n!!!\n@r2\nN\n+\n#\n";
+        let (rows, format) = parse_fasta_fastq_index_rows(data).unwrap();
+
+        assert_eq!(format, FAI_FASTQ as c_int);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, b"r1");
+        assert_eq!(rows[0].1.len, 6);
+        assert_eq!(rows[0].1.line_blen, 3);
+        assert_eq!(rows[0].1.line_len, 4);
+        assert_eq!(rows[0].1.qual_offset, 14);
+        assert_eq!(rows[1].0, b"r2");
+        assert_eq!(rows[1].1.len, 1);
+    }
+
+    #[test]
+    fn parse_fastq_rejects_short_quality_before_next_record() {
+        let data = b"@r1\nABC\n+\n!!\n@r2\nN\n+\n#\n";
+        assert!(parse_fasta_fastq_index_rows(data).is_none());
+    }
+
+    #[test]
+    fn parse_index_rows_rejects_mixed_fasta_fastq_records() {
+        let data = b"@r1\nAC\n+\n!!\n>r2\nAC\n";
+        assert!(parse_fasta_fastq_index_rows(data).is_none());
+    }
+
+    #[test]
+    fn parse_index_rows_rejects_nonfinal_short_fasta_and_fastq_lines() {
+        assert!(parse_fasta_fastq_index_rows(b">r1\nAC\nACGT\n").is_none());
+        assert!(parse_fasta_fastq_index_rows(b"@r1\nAC\nACGT\n+\n!!!!!!\n").is_none());
+        assert!(parse_fasta_fastq_index_rows(b"@r1\nACGT\n+\n!!\n!!\n").is_none());
+    }
+
+    #[test]
+    fn parse_fasta_allows_blank_line_after_completed_sequence() {
+        let data = b">r1\nACGT\n\n>r2\nNN\n";
+        let (rows, format) = parse_fasta_fastq_index_rows(data).unwrap();
+
+        assert_eq!(format, FAI_FASTA as c_int);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, b"r1");
+        assert_eq!(rows[0].1.len, 4);
+        assert_eq!(rows[1].0, b"r2");
+        assert_eq!(rows[1].1.len, 2);
+    }
+
+    #[test]
     fn faidx_inline_ascii_and_bgzf_getc_wrappers_match_c_rules() {
         assert_eq!(isgraph_(b'!'), 1);
         assert_eq!(isgraph_(b'~'), 1);
@@ -1461,8 +2488,39 @@ mod tests {
             assert!(!explicit.is_null());
             assert_eq!(CStr::from_ptr(explicit).to_bytes(), b"custom.fai");
             free(explicit.cast());
-            assert!(fai_path(c"ref.fa".as_ptr()).is_null());
         }
+    }
+
+    #[test]
+    fn fai_path_returns_or_builds_local_fai_path_like_htslib() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-fai-path-{}-{}.fa",
+            std::process::id(),
+            stamp
+        ));
+        let fai_path_buf = path_bytes(&path).into_owned();
+        let expected = {
+            let mut bytes = fai_path_buf.clone();
+            bytes.extend_from_slice(b".fai");
+            bytes
+        };
+        fs::write(&path, b">chr1\nACGT\n").unwrap();
+
+        unsafe {
+            let path_c = CString::new(fai_path_buf).unwrap();
+            let resolved = fai_path(path_c.as_ptr());
+            assert!(!resolved.is_null());
+            assert_eq!(CStr::from_ptr(resolved).to_bytes(), expected.as_slice());
+            assert!(path_from_bytes(&expected).exists());
+            free(resolved.cast());
+        }
+
+        let _ = fs::remove_file(path_from_bytes(&expected));
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -1499,4 +2557,861 @@ mod tests {
         }
         assert_eq!(bgzf.cache_size, 4096);
     }
+
+    #[test]
+    fn original_fai_build_core_starts_next_fasta_record_at_name_after_marker() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-original-fai-build-fasta-{}-{}.fa",
+            std::process::id(),
+            stamp
+        ));
+        fs::write(&path, b">r1\nACGT\n>r2\nNN\n").unwrap();
+
+        unsafe {
+            let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
+            let bgzf = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+            assert!(!bgzf.is_null());
+            let fai = faidx_c_132_fai_build_core(bgzf);
+            bgzf_close(bgzf);
+
+            assert!(!fai.is_null());
+            assert_eq!(faidx_nseq(fai), 2);
+            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)).to_bytes(), b"r1");
+            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 1)).to_bytes(), b"r2");
+            assert_eq!(faidx_seq_len64(fai, c"r1".as_ptr()), 4);
+            assert_eq!(faidx_seq_len64(fai, c"r2".as_ptr()), 2);
+            fai_destroy(fai);
+        }
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn original_fai_build_core_treats_at_after_complete_quality_as_next_fastq_record() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "htslib-mini-rs-original-fai-build-fastq-{}-{}.fq",
+            std::process::id(),
+            stamp
+        ));
+        fs::write(&path, b"@r1\nABC\n+\n@@@\n@r2\nN\n+\n#\n").unwrap();
+
+        unsafe {
+            let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
+            let bgzf = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+            assert!(!bgzf.is_null());
+            let fai = faidx_c_132_fai_build_core(bgzf);
+            bgzf_close(bgzf);
+
+            assert!(!fai.is_null());
+            assert_eq!(faidx_nseq(fai), 2);
+            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)).to_bytes(), b"r1");
+            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 1)).to_bytes(), b"r2");
+            assert_eq!(faidx_seq_len64(fai, c"r1".as_ptr()), 3);
+            assert_eq!(faidx_seq_len64(fai, c"r2".as_ptr()), 1);
+            fai_destroy(fai);
+        }
+
+        let _ = fs::remove_file(&path);
+    }
+}
+
+// original: fai_insert_index (htslib/faidx.c:93)
+pub unsafe fn faidx_c_93_fai_insert_index(
+    idx: *mut faidx_t,
+    name: *const c_char,
+    len: u64,
+    line_len: u32,
+    line_blen: u32,
+    seq_offset: u64,
+    qual_offset: u64,
+) -> c_int {
+    if idx.is_null() || name.is_null() {
+        return -1;
+    }
+
+    let name_key = libc::strdup(name);
+    if name_key.is_null() {
+        return -1;
+    }
+
+    let mut absent = 0;
+    let k = kh_put_s((*idx).hash, name_key, &mut absent);
+    if k == u32::MAX {
+        free(name_key.cast());
+        return -1;
+    }
+
+    if absent == 0 {
+        free(name_key.cast());
+        return 0;
+    }
+
+    if (*idx).n == (*idx).m {
+        let new_m = if (*idx).m != 0 { (*idx).m << 1 } else { 16 };
+        let tmp = realloc(
+            (*idx).name.cast(),
+            new_m as usize * std::mem::size_of::<*mut c_char>(),
+        )
+        .cast::<*mut c_char>();
+        if tmp.is_null() {
+            return -1;
+        }
+        (*idx).m = new_m;
+        (*idx).name = tmp;
+    }
+
+    let v = (*(*idx).hash).vals.add(k as usize);
+    (*v).id = (*idx).n;
+    *(*idx).name.add((*idx).n as usize) = name_key;
+    (*idx).n += 1;
+    (*v).len = len;
+    (*v).line_len = line_len;
+    (*v).line_blen = line_blen;
+    (*v).seq_offset = seq_offset;
+    (*v).qual_offset = qual_offset;
+
+    0
+}
+
+// original: fai_build_core (htslib/faidx.c:132)
+pub unsafe fn faidx_c_132_fai_build_core(bgzf: *mut BGZF) -> *mut faidx_t {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum ReadState {
+        OutRead,
+        InName,
+        InSeq,
+        SeqEnd,
+        InQual,
+    }
+
+    let idx = calloc_faidx();
+    if idx.is_null() {
+        return ptr::null_mut();
+    }
+    (*idx).hash = kh_init_s();
+    if (*idx).hash.is_null() {
+        fai_destroy(idx);
+        return ptr::null_mut();
+    }
+    (*idx).format = FAI_NONE as c_int;
+
+    let mut name = Vec::<u8>::new();
+    let mut state = ReadState::OutRead;
+    let mut read_done = false;
+    let mut line_num = 1;
+    let mut seq_offset = 0_u64;
+    let mut qual_offset = 0_u64;
+    let mut seq_len = 0_u64;
+    let mut qual_len = 0_u64;
+    let mut char_len = 0_u64;
+    let mut line_len = 0_u64;
+
+    let mut c = bgzf_getc(bgzf);
+    while c >= 0 {
+        match state {
+            ReadState::OutRead => match c {
+                x if x == b'>' as c_int => {
+                    if (*idx).format == FAI_FASTQ as c_int {
+                        goto_fai_build_core_fail(idx);
+                        return ptr::null_mut();
+                    }
+                    (*idx).format = FAI_FASTA as c_int;
+                    state = ReadState::InName;
+                }
+                x if x == b'@' as c_int => {
+                    if (*idx).format == FAI_FASTA as c_int {
+                        goto_fai_build_core_fail(idx);
+                        return ptr::null_mut();
+                    }
+                    (*idx).format = FAI_FASTQ as c_int;
+                    state = ReadState::InName;
+                }
+                x if x == b'\r' as c_int => {
+                    c = bgzf_getc(bgzf);
+                    if c == b'\n' as c_int {
+                        line_num += 1;
+                    } else {
+                        goto_fai_build_core_fail(idx);
+                        return ptr::null_mut();
+                    }
+                }
+                x if x == b'\n' as c_int => {
+                    line_num += 1;
+                }
+                _ => {
+                    goto_fai_build_core_fail(idx);
+                    return ptr::null_mut();
+                }
+            },
+            ReadState::InName => {
+                if read_done {
+                    name.push(0);
+                    if faidx_c_93_fai_insert_index(
+                        idx,
+                        name.as_ptr().cast(),
+                        seq_len,
+                        line_len as u32,
+                        char_len as u32,
+                        seq_offset,
+                        qual_offset,
+                    ) != 0
+                    {
+                        goto_fai_build_core_fail(idx);
+                        return ptr::null_mut();
+                    }
+                    name.pop();
+                    read_done = false;
+                }
+
+                name.clear();
+                loop {
+                    if libc::isspace(c as u8 as c_int) == 0 {
+                        name.push(c as u8);
+                    } else if !name.is_empty() || c == b'\n' as c_int {
+                        break;
+                    }
+
+                    c = bgzf_getc(bgzf);
+                    if c < 0 {
+                        break;
+                    }
+                }
+
+                if c < 0 {
+                    goto_fai_build_core_fail(idx);
+                    return ptr::null_mut();
+                }
+
+                while c != b'\n' as c_int {
+                    c = bgzf_getc(bgzf);
+                    if c < 0 {
+                        break;
+                    }
+                }
+
+                state = ReadState::InSeq;
+                seq_len = 0;
+                qual_len = 0;
+                char_len = 0;
+                line_len = 0;
+                seq_offset = bgzf_utell(bgzf) as u64;
+                line_num += 1;
+            }
+            ReadState::InSeq => {
+                if (*idx).format == FAI_FASTA as c_int {
+                    if c == b'\n' as c_int {
+                        state = ReadState::OutRead;
+                        line_num += 1;
+                        c = bgzf_getc(bgzf);
+                        continue;
+                    } else if c == b'>' as c_int {
+                        state = ReadState::InName;
+                        c = bgzf_getc(bgzf);
+                        continue;
+                    }
+                } else if (*idx).format == FAI_FASTQ as c_int {
+                    if c == b'+' as c_int {
+                        state = ReadState::InQual;
+                        while c != b'\n' as c_int {
+                            c = bgzf_getc(bgzf);
+                            if c < 0 {
+                                break;
+                            }
+                        }
+                        qual_offset = bgzf_utell(bgzf) as u64;
+                        line_num += 1;
+                        c = bgzf_getc(bgzf);
+                        continue;
+                    } else if c == b'\n' as c_int {
+                        goto_fai_build_core_fail(idx);
+                        return ptr::null_mut();
+                    }
+                }
+
+                let mut ll = 0_u64;
+                let mut cl = 0_u64;
+                if (*idx).format == FAI_FASTA as c_int {
+                    read_done = true;
+                }
+
+                loop {
+                    ll += 1;
+                    if isgraph_(c as u8) != 0 {
+                        cl += 1;
+                    }
+                    c = bgzf_getc(bgzf);
+                    if c < 0 || c == b'\n' as c_int {
+                        break;
+                    }
+                }
+
+                ll += 1;
+                seq_len += cl;
+                if line_len == 0 {
+                    line_len = ll;
+                    char_len = cl;
+                } else if line_len > ll {
+                    state = if (*idx).format == FAI_FASTA as c_int {
+                        ReadState::OutRead
+                    } else {
+                        ReadState::SeqEnd
+                    };
+                } else if line_len < ll {
+                    goto_fai_build_core_fail(idx);
+                    return ptr::null_mut();
+                }
+                line_num += 1;
+            }
+            ReadState::SeqEnd => {
+                if c == b'+' as c_int {
+                    state = ReadState::InQual;
+                    while c != b'\n' as c_int {
+                        c = bgzf_getc(bgzf);
+                        if c < 0 {
+                            break;
+                        }
+                    }
+                    qual_offset = bgzf_utell(bgzf) as u64;
+                    line_num += 1;
+                } else {
+                    goto_fai_build_core_fail(idx);
+                    return ptr::null_mut();
+                }
+            }
+            ReadState::InQual => {
+                if c == b'\n' as c_int {
+                    if !read_done {
+                        goto_fai_build_core_fail(idx);
+                        return ptr::null_mut();
+                    }
+                    state = ReadState::OutRead;
+                    line_num += 1;
+                    c = bgzf_getc(bgzf);
+                    continue;
+                } else if c == b'@' as c_int && read_done {
+                    state = ReadState::InName;
+                    c = bgzf_getc(bgzf);
+                    continue;
+                }
+
+                let mut ll = 0_u64;
+                let mut cl = 0_u64;
+                loop {
+                    ll += 1;
+                    if isgraph_(c as u8) != 0 {
+                        cl += 1;
+                    }
+                    c = bgzf_getc(bgzf);
+                    if c < 0 || c == b'\n' as c_int {
+                        break;
+                    }
+                }
+
+                ll += 1;
+                qual_len += cl;
+                if line_len < ll {
+                    goto_fai_build_core_fail(idx);
+                    return ptr::null_mut();
+                } else if qual_len == seq_len {
+                    read_done = true;
+                } else if qual_len > seq_len || line_len > ll {
+                    goto_fai_build_core_fail(idx);
+                    return ptr::null_mut();
+                }
+                line_num += 1;
+            }
+        }
+        let _ = line_num;
+        c = bgzf_getc(bgzf);
+    }
+
+    if read_done {
+        name.push(0);
+        if faidx_c_93_fai_insert_index(
+            idx,
+            name.as_ptr().cast(),
+            seq_len,
+            line_len as u32,
+            char_len as u32,
+            seq_offset,
+            qual_offset,
+        ) != 0
+        {
+            goto_fai_build_core_fail(idx);
+            return ptr::null_mut();
+        }
+    } else {
+        goto_fai_build_core_fail(idx);
+        return ptr::null_mut();
+    }
+
+    idx
+}
+
+// original: fai_save (htslib/faidx.c:352)
+pub unsafe fn faidx_c_352_fai_save(fai: *const faidx_t, fp: *mut hFILE) -> c_int {
+    for i in 0..(*fai).n {
+        let k = kh_get_s((*fai).hash, *(*fai).name.add(i as usize));
+        if k >= (*(*fai).hash).n_buckets {
+            return -1;
+        }
+        let x = *(*(*fai).hash).vals.add(k as usize);
+        let buf = if (*fai).format == FAI_FASTA as c_int {
+            format!(
+                "\t{}\t{}\t{}\t{}\n",
+                x.len, x.seq_offset, x.line_blen, x.line_len
+            )
+        } else {
+            format!(
+                "\t{}\t{}\t{}\t{}\t{}\n",
+                x.len, x.seq_offset, x.line_blen, x.line_len, x.qual_offset
+            )
+        };
+
+        let name = *(*fai).name.add(i as usize);
+        if hputs2(name, CStr::from_ptr(name).to_bytes().len(), 0, fp) != 0 {
+            return -1;
+        }
+        if hputs2(buf.as_ptr().cast(), buf.len(), 0, fp) != 0 {
+            return -1;
+        }
+    }
+    0
+}
+
+// original: fai_read (htslib/faidx.c:380)
+pub unsafe fn faidx_c_380_fai_read(
+    fp: *mut hFILE,
+    _fname: *const c_char,
+    format: c_int,
+) -> *mut faidx_t {
+    let fai = calloc_faidx();
+    if fai.is_null() {
+        return ptr::null_mut();
+    }
+    (*fai).hash = kh_init_s();
+    if (*fai).hash.is_null() {
+        fai_destroy(fai);
+        return ptr::null_mut();
+    }
+
+    let buf = libc::calloc(0x10000, 1).cast::<c_char>();
+    if buf.is_null() {
+        fai_destroy(fai);
+        return ptr::null_mut();
+    }
+
+    loop {
+        let l = htslib_hfile_h_195_hgetln(buf, 0x10000, fp);
+        if l <= 0 {
+            if l < 0 {
+                free(buf.cast());
+                fai_destroy(fai);
+                return ptr::null_mut();
+            }
+            break;
+        }
+
+        let mut p = buf;
+        while *p != 0 && libc::isspace(*p as u8 as c_int) == 0 {
+            p = p.add(1);
+        }
+        if p.offset_from(buf) < l {
+            *p = 0;
+            p = p.add(1);
+        }
+
+        let fields = CStr::from_ptr(p).to_bytes();
+        let mut nums = fields
+            .split(|b| libc::isspace(*b as c_int) != 0)
+            .filter(|s| !s.is_empty());
+        let Some(len) = nums.next().and_then(parse_u64_bytes) else {
+            free(buf.cast());
+            fai_destroy(fai);
+            return ptr::null_mut();
+        };
+        let Some(seq_offset) = nums.next().and_then(parse_u64_bytes) else {
+            free(buf.cast());
+            fai_destroy(fai);
+            return ptr::null_mut();
+        };
+        let Some(line_blen) = nums.next().and_then(parse_u32_bytes) else {
+            free(buf.cast());
+            fai_destroy(fai);
+            return ptr::null_mut();
+        };
+        let Some(line_len) = nums.next().and_then(parse_u32_bytes) else {
+            free(buf.cast());
+            fai_destroy(fai);
+            return ptr::null_mut();
+        };
+        let qual_offset = if format == FAI_FASTA as c_int {
+            0
+        } else {
+            let Some(qoff) = nums.next().and_then(parse_u64_bytes) else {
+                free(buf.cast());
+                fai_destroy(fai);
+                return ptr::null_mut();
+            };
+            qoff
+        };
+
+        if faidx_c_93_fai_insert_index(fai, buf, len, line_len, line_blen, seq_offset, qual_offset)
+            != 0
+        {
+            free(buf.cast());
+            fai_destroy(fai);
+            return ptr::null_mut();
+        }
+    }
+
+    free(buf.cast());
+    fai
+}
+
+// original: fai_build3_core (htslib/faidx.c:460)
+pub unsafe fn faidx_c_460_fai_build3_core(
+    fn_: *const c_char,
+    fnfai: *const c_char,
+    fngzi: *const c_char,
+) -> c_int {
+    let bgzf = bgzf_open(fn_, c"r".as_ptr());
+    if bgzf.is_null() {
+        return -1;
+    }
+
+    if bgzf_compression(bgzf) != 0 && bgzf_index_build_init(bgzf) != 0 {
+        bgzf_close(bgzf);
+        return -1;
+    }
+
+    let fai = faidx_c_132_fai_build_core(bgzf);
+    if fai.is_null() {
+        bgzf_close(bgzf);
+        return -1;
+    }
+
+    let fai_name = owned_index_cstring(fn_, fnfai, b".fai");
+    let gzi_name = owned_index_cstring(fn_, fngzi, b".gzi");
+    let Some(fai_name) = fai_name else {
+        bgzf_close(bgzf);
+        fai_destroy(fai);
+        return -1;
+    };
+    let Some(gzi_name) = gzi_name else {
+        bgzf_close(bgzf);
+        fai_destroy(fai);
+        return -1;
+    };
+
+    if bgzf_compression(bgzf) != 0 && bgzf_index_dump(bgzf, gzi_name.as_ptr(), ptr::null()) < 0 {
+        bgzf_close(bgzf);
+        fai_destroy(fai);
+        return -1;
+    }
+
+    if bgzf_close(bgzf) < 0 {
+        fai_destroy(fai);
+        return -1;
+    }
+
+    let fp = hopen(fai_name.as_ptr(), c"wb".as_ptr());
+    if fp.is_null() {
+        fai_destroy(fai);
+        return -1;
+    }
+
+    if faidx_c_352_fai_save(fai, fp) != 0 {
+        hclose_abruptly(fp);
+        fai_destroy(fai);
+        return -1;
+    }
+
+    if hclose(fp) != 0 {
+        fai_destroy(fai);
+        return -1;
+    }
+
+    fai_destroy(fai);
+    0
+}
+
+// original: fai_build3 (htslib/faidx.c:557)
+pub unsafe fn faidx_c_557_fai_build3(
+    fn_: *const c_char,
+    fnfai: *const c_char,
+    fngzi: *const c_char,
+) -> c_int {
+    faidx_c_460_fai_build3_core(fn_, fnfai, fngzi)
+}
+
+// original: fai_build (htslib/faidx.c:562)
+pub unsafe fn faidx_c_562_fai_build(fn_: *const c_char) -> c_int {
+    faidx_c_557_fai_build3(fn_, ptr::null(), ptr::null())
+}
+
+// original: fai_load3_core (htslib/faidx.c:567)
+pub unsafe fn faidx_c_567_fai_load3_core(
+    fn_: *const c_char,
+    fnfai: *const c_char,
+    fngzi: *const c_char,
+    flags: c_int,
+    format: c_int,
+) -> *mut faidx_t {
+    if fn_.is_null() {
+        return ptr::null_mut();
+    }
+
+    let fai_name = owned_index_cstring(fn_, fnfai, b".fai");
+    let gzi_name = owned_index_cstring(fn_, fngzi, b".gzi");
+    let Some(fai_name) = fai_name else {
+        return ptr::null_mut();
+    };
+    let Some(gzi_name) = gzi_name else {
+        return ptr::null_mut();
+    };
+
+    let mut fp = hopen(fai_name.as_ptr(), c"rb".as_ptr());
+    let mut gzi_index_needed = false;
+
+    if !fp.is_null() {
+        let bgzf = bgzf_open(fn_, c"rb".as_ptr());
+        if bgzf.is_null() {
+            hclose_abruptly(fp);
+            return ptr::null_mut();
+        }
+        if bgzf_compression(bgzf) == 2 {
+            let gz = hopen(gzi_name.as_ptr(), c"rb".as_ptr());
+            if gz.is_null() {
+                if (flags & FAI_CREATE) == 0 {
+                    bgzf_close(bgzf);
+                    hclose_abruptly(fp);
+                    return ptr::null_mut();
+                }
+                gzi_index_needed = true;
+                if hclose(fp) < 0 {
+                    bgzf_close(bgzf);
+                    return ptr::null_mut();
+                }
+                fp = ptr::null_mut();
+            } else if hclose(gz) < 0 {
+                bgzf_close(bgzf);
+                hclose_abruptly(fp);
+                return ptr::null_mut();
+            }
+        }
+        bgzf_close(bgzf);
+    }
+
+    if fp.is_null() || gzi_index_needed {
+        if (flags & FAI_CREATE) == 0 {
+            return ptr::null_mut();
+        }
+        if faidx_c_460_fai_build3_core(fn_, fai_name.as_ptr(), gzi_name.as_ptr()) < 0 {
+            return ptr::null_mut();
+        }
+        fp = hopen(fai_name.as_ptr(), c"rb".as_ptr());
+        if fp.is_null() {
+            return ptr::null_mut();
+        }
+    }
+
+    let fai = faidx_c_380_fai_read(fp, fai_name.as_ptr(), format);
+    if fai.is_null() {
+        hclose_abruptly(fp);
+        return ptr::null_mut();
+    }
+
+    if hclose(fp) < 0 {
+        fai_destroy(fai);
+        return ptr::null_mut();
+    }
+
+    (*fai).bgzf = bgzf_open(fn_, c"rb".as_ptr());
+    if (*fai).bgzf.is_null() {
+        fai_destroy(fai);
+        return ptr::null_mut();
+    }
+
+    if bgzf_compression((*fai).bgzf) == 2
+        && bgzf_index_load((*fai).bgzf, gzi_name.as_ptr(), ptr::null()) < 0
+    {
+        fai_destroy(fai);
+        return ptr::null_mut();
+    }
+
+    fai
+}
+
+// original: fai_load3_format (htslib/faidx.c:705)
+pub unsafe fn faidx_c_705_fai_load3_format(
+    fn_: *const c_char,
+    fnfai: *const c_char,
+    fngzi: *const c_char,
+    flags: c_int,
+    format: fai_format_options,
+) -> *mut faidx_t {
+    faidx_c_567_fai_load3_core(fn_, fnfai, fngzi, flags, format as c_int)
+}
+
+// original: fai_load_format (htslib/faidx.c:711)
+pub unsafe fn faidx_c_711_fai_load_format(
+    fn_: *const c_char,
+    format: fai_format_options,
+) -> *mut faidx_t {
+    faidx_c_705_fai_load3_format(fn_, ptr::null(), ptr::null(), FAI_CREATE, format)
+}
+
+// original: fai_thread_pool (htslib/faidx.c:1033)
+pub unsafe fn faidx_c_1033_fai_thread_pool(
+    fai: *mut faidx_t,
+    pool: *mut hts_tpool,
+    qsize: c_int,
+) -> c_int {
+    bgzf_thread_pool((*fai).bgzf, pool, qsize)
+}
+
+unsafe fn calloc_faidx() -> *mut faidx_t {
+    libc::calloc(1, std::mem::size_of::<faidx_t>()).cast::<faidx_t>()
+}
+
+unsafe fn goto_fai_build_core_fail(idx: *mut faidx_t) {
+    fai_destroy(idx);
+}
+
+unsafe fn kh_init_s() -> *mut faidx_hash_t {
+    let h = libc::calloc(1, std::mem::size_of::<faidx_hash_t>()).cast::<faidx_hash_t>();
+    if h.is_null() {
+        return ptr::null_mut();
+    }
+    if kh_resize_s(h, 32) != 0 {
+        free(h.cast());
+        return ptr::null_mut();
+    }
+    h
+}
+
+unsafe fn kh_put_s(h: *mut faidx_hash_t, key: *const c_char, absent: *mut c_int) -> u32 {
+    if (*h).n_occupied >= (*h).upper_bound {
+        let new_n = if (*h).n_buckets != 0 {
+            (*h).n_buckets << 1
+        } else {
+            32
+        };
+        if kh_resize_s(h, new_n) != 0 {
+            return u32::MAX;
+        }
+    }
+
+    let mask = (*h).n_buckets - 1;
+    let mut k = kh_str_hash_string(key) & mask;
+    let mut step = 0;
+    while !kh_isempty((*h).flags, k) {
+        if !kh_isdel((*h).flags, k) && cstr_eq(*(*h).keys.add(k as usize), key) {
+            *absent = 0;
+            return k;
+        }
+        step += 1;
+        k = (k + step) & mask;
+    }
+
+    *(*h).keys.add(k as usize) = key.cast_mut();
+    let flag = (*h).flags.add((k >> 4) as usize);
+    *flag &= !(3 << ((k & 0x0f) << 1));
+    (*h).size += 1;
+    (*h).n_occupied += 1;
+    *absent = 1;
+    k
+}
+
+unsafe fn kh_resize_s(h: *mut faidx_hash_t, new_n_buckets: u32) -> c_int {
+    let mut n_buckets = 4_u32;
+    while n_buckets < new_n_buckets {
+        n_buckets <<= 1;
+    }
+    let n_flags = if n_buckets < 16 {
+        1
+    } else {
+        (n_buckets >> 4) as usize
+    };
+
+    let new_flags = malloc(n_flags * std::mem::size_of::<u32>()).cast::<u32>();
+    let new_keys =
+        malloc(n_buckets as usize * std::mem::size_of::<*mut c_char>()).cast::<*mut c_char>();
+    let new_vals = malloc(n_buckets as usize * std::mem::size_of::<faidx1_t>()).cast::<faidx1_t>();
+    if new_flags.is_null() || new_keys.is_null() || new_vals.is_null() {
+        free(new_flags.cast());
+        free(new_keys.cast());
+        free(new_vals.cast());
+        return -1;
+    }
+    for i in 0..n_flags {
+        *new_flags.add(i) = 0xaaaa_aaaa;
+    }
+
+    if !(*h).keys.is_null() {
+        let old_n = (*h).n_buckets;
+        let old_flags = (*h).flags;
+        let old_keys = (*h).keys;
+        let old_vals = (*h).vals;
+        for i in 0..old_n {
+            if !kh_iseither(old_flags, i) {
+                let key = *old_keys.add(i as usize);
+                let mask = n_buckets - 1;
+                let mut k = kh_str_hash_string(key) & mask;
+                let mut step = 0;
+                while !kh_isempty(new_flags, k) {
+                    step += 1;
+                    k = (k + step) & mask;
+                }
+                *new_keys.add(k as usize) = key;
+                *new_vals.add(k as usize) = *old_vals.add(i as usize);
+                let flag = new_flags.add((k >> 4) as usize);
+                *flag &= !(3 << ((k & 0x0f) << 1));
+            }
+        }
+        free(old_flags.cast());
+        free(old_keys.cast());
+        free(old_vals.cast());
+    }
+
+    (*h).n_buckets = n_buckets;
+    (*h).n_occupied = (*h).size;
+    (*h).upper_bound = (n_buckets as f64 * 0.77) as u32;
+    (*h).flags = new_flags;
+    (*h).keys = new_keys;
+    (*h).vals = new_vals;
+    0
+}
+
+fn parse_u64_bytes(bytes: &[u8]) -> Option<u64> {
+    std::str::from_utf8(bytes).ok()?.parse::<u64>().ok()
+}
+
+fn parse_u32_bytes(bytes: &[u8]) -> Option<u32> {
+    std::str::from_utf8(bytes).ok()?.parse::<u32>().ok()
+}
+
+unsafe fn owned_index_cstring(
+    fn_: *const c_char,
+    explicit: *const c_char,
+    suffix: &[u8],
+) -> Option<std::ffi::CString> {
+    let mut bytes = if explicit.is_null() {
+        CStr::from_ptr(fn_).to_bytes().to_vec()
+    } else {
+        CStr::from_ptr(explicit).to_bytes().to_vec()
+    };
+    if explicit.is_null() {
+        bytes.extend_from_slice(suffix);
+    }
+    std::ffi::CString::new(bytes).ok()
 }

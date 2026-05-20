@@ -11,7 +11,6 @@ pub mod hts;
 pub mod kfunc;
 pub mod md5;
 pub mod original;
-pub mod original_stubs;
 pub mod os_rand;
 pub mod probaln;
 pub mod regidx;

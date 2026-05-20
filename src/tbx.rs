@@ -1,10 +1,13 @@
 use std::ffi::{c_char, c_int, c_void};
 
-use super::bgzf::bgzf_getline;
+use super::bgzf::{bgzf_close, bgzf_compression, bgzf_getline, bgzf_mt, bgzf_open};
 use super::hts::{
-    hts_c_2372_hts_adjust_csi_settings, hts_idx_destroy, hts_idx_finish, hts_idx_get_meta,
-    hts_idx_init, hts_idx_load3, hts_idx_push, hts_idx_set_meta, hts_is_utf16_text, hts_pos_t,
-    i32_to_le, kstring_t, le_to_i32, le_to_u32, svlen_on_ref_for_vcf_alt, toupper_c, BGZF,
+    hts_c_2372_hts_adjust_csi_settings, hts_c_2405_hts_idx_init, hts_c_2515_hts_idx_finish,
+    hts_c_2558_hts_idx_push, hts_c_2869_hts_idx_save_as, hts_c_3062_hts_idx_set_meta,
+    hts_c_3084_hts_idx_get_meta, hts_idx_destroy, hts_idx_load3, hts_is_utf16_text, hts_itr_query,
+    hts_itr_t, hts_parse_region, hts_pos_t, i32_to_le, kstring_t, le_to_i32, le_to_u32,
+    svlen_on_ref_for_vcf_alt, toupper_c, BGZF, HTS_IDX_NOCOOR, HTS_IDX_START,
+    HTS_PARSE_THOUSANDS_SEP,
 };
 
 pub type tbx_conf_t = hts_sys::tbx_conf_t;
@@ -63,6 +66,17 @@ pub unsafe fn tbx_conf_sam() -> tbx_conf_t {
 
 pub unsafe fn tbx_conf_vcf() -> tbx_conf_t {
     hts_sys::tbx_conf_vcf
+}
+
+pub unsafe fn tbx_conf_gaf() -> tbx_conf_t {
+    tbx_conf_t {
+        preset: TBX_GAF,
+        sc: 1,
+        bc: 6,
+        ec: 0,
+        meta_char: b'#' as c_int,
+        line_skip: 0,
+    }
 }
 
 pub unsafe fn tbx_name2id(tbx: *mut tbx_t, ss: *const c_char) -> c_int {
@@ -236,10 +250,12 @@ pub unsafe fn tbx_c_96_tbx_parse1(
                         {
                             getlen = 1;
                         }
+                        if !t.is_null() {
+                            *t = b',' as c_char;
+                        }
                         if t.is_null() || alcnt >= 65536 {
                             break;
                         }
-                        *t = b',' as c_char;
                         s = t.add(1);
                     }
                     *line.add(i) = c;
@@ -416,7 +432,7 @@ pub unsafe fn tbx_c_315_get_intv(
     }
 }
 
-pub unsafe fn tbx_readrec(
+pub unsafe extern "C" fn tbx_readrec(
     fp: *mut BGZF,
     tbxv: *mut c_void,
     sv: *mut c_void,
@@ -501,7 +517,7 @@ pub unsafe fn tbx_c_375_tbx_set_meta(tbx: *mut tbx_t) -> c_int {
         off += len;
     }
     libc::free(name.cast());
-    hts_idx_set_meta((*tbx).idx.cast(), off as u32, meta, 0)
+    hts_c_3062_hts_idx_set_meta((*tbx).idx.cast(), off as u32, meta, 0)
 }
 
 unsafe fn tbx_kh_exist(h: *const kh_s2i_t, x: u32) -> bool {
@@ -605,7 +621,7 @@ pub unsafe fn tbx_c_437_tbx_index(
                     };
                 }
             }
-            (*tbx).idx = hts_idx_init(0, fmt, last_off, min_shift, n_lvls).cast();
+            (*tbx).idx = hts_c_2405_hts_idx_init(0, fmt, last_off, min_shift, n_lvls).cast();
             if (*tbx).idx.is_null() {
                 libc::free(str_.s.cast());
                 tbx_c_512_tbx_destroy(tbx);
@@ -616,7 +632,7 @@ pub unsafe fn tbx_c_437_tbx_index(
         let mut intv: tbx_intv_t = std::mem::zeroed();
         ret = tbx_c_315_get_intv(tbx, &mut str_, &mut intv, 1);
         if ret < 0
-            || hts_idx_push(
+            || hts_c_2558_hts_idx_push(
                 (*tbx).idx.cast(),
                 intv.tid,
                 intv.beg,
@@ -636,7 +652,7 @@ pub unsafe fn tbx_c_437_tbx_index(
         return std::ptr::null_mut();
     }
     if (*tbx).idx.is_null() {
-        (*tbx).idx = hts_idx_init(0, fmt, last_off, min_shift, n_lvls).cast();
+        (*tbx).idx = hts_c_2405_hts_idx_init(0, fmt, last_off, min_shift, n_lvls).cast();
     }
     if (*tbx).idx.is_null() {
         libc::free(str_.s.cast());
@@ -647,7 +663,7 @@ pub unsafe fn tbx_c_437_tbx_index(
         (*tbx).dict = kh_init_s2i().cast();
     }
     if (*tbx).dict.is_null()
-        || hts_idx_finish((*tbx).idx.cast(), tbx_bgzf_tell(fp)) != 0
+        || hts_c_2515_hts_idx_finish((*tbx).idx.cast(), tbx_bgzf_tell(fp)) != 0
         || tbx_c_375_tbx_set_meta(tbx) != 0
     {
         libc::free(str_.s.cast());
@@ -667,7 +683,7 @@ pub unsafe fn tbx_index_build(
     min_shift: c_int,
     conf: *const tbx_conf_t,
 ) -> c_int {
-    hts_sys::tbx_index_build(fn_, min_shift, conf)
+    tbx_c_547_tbx_index_build(fn_, min_shift, conf)
 }
 
 pub unsafe fn tbx_index_build2(
@@ -676,7 +692,7 @@ pub unsafe fn tbx_index_build2(
     min_shift: c_int,
     conf: *const tbx_conf_t,
 ) -> c_int {
-    hts_sys::tbx_index_build2(fn_, fnidx, min_shift, conf)
+    tbx_c_542_tbx_index_build2(fn_, fnidx, min_shift, conf)
 }
 
 pub unsafe fn tbx_index_build3(
@@ -686,7 +702,64 @@ pub unsafe fn tbx_index_build3(
     n_threads: c_int,
     conf: *const tbx_conf_t,
 ) -> c_int {
-    hts_sys::tbx_index_build3(fn_, fnidx, min_shift, n_threads, conf)
+    tbx_c_526_tbx_index_build3(fn_, fnidx, min_shift, n_threads, conf)
+}
+
+// original: tbx_index_build3 (htslib/tbx.c:526)
+pub unsafe fn tbx_c_526_tbx_index_build3(
+    fn_: *const c_char,
+    fnidx: *const c_char,
+    min_shift: c_int,
+    n_threads: c_int,
+    conf: *const tbx_conf_t,
+) -> c_int {
+    let fp = bgzf_open(fn_, c"r".as_ptr());
+    if fp.is_null() {
+        return -1;
+    }
+    if n_threads != 0 {
+        bgzf_mt(fp, n_threads, 256);
+    }
+    if bgzf_compression(fp) != hts_sys::htsCompression_bgzf as c_int {
+        bgzf_close(fp);
+        return -2;
+    }
+    let tbx = tbx_c_437_tbx_index(fp, min_shift, conf);
+    bgzf_close(fp);
+    if tbx.is_null() {
+        return -1;
+    }
+    let ret = hts_c_2869_hts_idx_save_as(
+        (*tbx).idx.cast(),
+        fn_,
+        fnidx,
+        if min_shift > 0 {
+            hts_sys::HTS_FMT_CSI as c_int
+        } else {
+            hts_sys::HTS_FMT_TBI as c_int
+        },
+    );
+    tbx_c_512_tbx_destroy(tbx);
+    ret
+}
+
+// original: tbx_index_build2 (htslib/tbx.c:542)
+pub unsafe fn tbx_c_542_tbx_index_build2(
+    fn_: *const c_char,
+    fnidx: *const c_char,
+    min_shift: c_int,
+    conf: *const tbx_conf_t,
+) -> c_int {
+    tbx_c_526_tbx_index_build3(fn_, fnidx, min_shift, 0, conf)
+}
+
+// original: tbx_index_build (htslib/tbx.c:547)
+pub unsafe fn tbx_c_547_tbx_index_build(
+    fn_: *const c_char,
+    min_shift: c_int,
+    conf: *const tbx_conf_t,
+) -> c_int {
+    tbx_c_526_tbx_index_build3(fn_, std::ptr::null(), min_shift, 0, conf)
 }
 
 pub unsafe fn tbx_index_load(fn_: *const c_char) -> *mut tbx_t {
@@ -729,7 +802,7 @@ pub unsafe fn tbx_c_552_index_load(
     }
 
     let mut l_meta = 0u32;
-    let meta = hts_idx_get_meta((*tbx).idx.cast(), &mut l_meta);
+    let meta = hts_c_3084_hts_idx_get_meta((*tbx).idx.cast(), &mut l_meta);
     if meta.is_null() || l_meta < 28 {
         hts_sys::hts_log(
             hts_sys::htsLogLevel_HTS_LOG_ERROR,
@@ -802,6 +875,7 @@ pub unsafe fn tbx_c_614_tbx_seqnames(tbx: *mut tbx_t, n: *mut c_int) -> *mut *co
     let names = libc::calloc((*d).size as usize, std::mem::size_of::<*const c_char>())
         .cast::<*const c_char>();
     if names.is_null() {
+        *n = 0;
         return std::ptr::null_mut();
     }
     for k in 0..(*d).n_buckets {
@@ -813,8 +887,44 @@ pub unsafe fn tbx_c_614_tbx_seqnames(tbx: *mut tbx_t, n: *mut c_int) -> *mut *co
     names
 }
 
-pub unsafe fn tbx_c_644_tbx_name2id_wrapper(vhdr: *mut c_void, ref_: *const c_char) -> c_int {
+pub unsafe extern "C" fn tbx_c_644_tbx_name2id_wrapper(
+    vhdr: *mut c_void,
+    ref_: *const c_char,
+) -> c_int {
     tbx_c_91_tbx_name2id(vhdr.cast::<tbx_t>(), ref_)
+}
+
+pub unsafe fn tbx_itr_querys1(tbx: *mut tbx_t, region: *const c_char) -> *mut hts_itr_t {
+    tbx_c_649_tbx_itr_querys1(tbx, region)
+}
+
+// original: tbx_itr_querys1 (htslib/tbx.c:649)
+pub unsafe fn tbx_c_649_tbx_itr_querys1(tbx: *mut tbx_t, region: *const c_char) -> *mut hts_itr_t {
+    let mut tid = 0;
+    let mut beg = 0;
+    let mut end = 0;
+
+    if libc::strcmp(region, c".".as_ptr()) == 0 {
+        return hts_itr_query((*tbx).idx.cast(), HTS_IDX_START, 0, 0, Some(tbx_readrec));
+    } else if libc::strcmp(region, c"*".as_ptr()) == 0 {
+        return hts_itr_query((*tbx).idx.cast(), HTS_IDX_NOCOOR, 0, 0, Some(tbx_readrec));
+    }
+
+    if hts_parse_region(
+        region,
+        &mut tid,
+        &mut beg,
+        &mut end,
+        Some(tbx_c_644_tbx_name2id_wrapper),
+        tbx.cast(),
+        HTS_PARSE_THOUSANDS_SEP,
+    )
+    .is_null()
+    {
+        return std::ptr::null_mut();
+    }
+
+    hts_itr_query((*tbx).idx.cast(), tid, beg, end, Some(tbx_readrec))
 }
 
 pub unsafe fn tbx_c_512_tbx_destroy(tbx: *mut tbx_t) {
@@ -850,6 +960,13 @@ mod tests {
             assert_eq!(sam.sc, 3);
             assert_eq!(sam.bc, 4);
             assert_eq!(sam.meta_char, b'@' as c_int);
+
+            let gaf = tbx_conf_gaf();
+            assert_eq!(gaf.preset, TBX_GAF);
+            assert_eq!(gaf.sc, 1);
+            assert_eq!(gaf.bc, 6);
+            assert_eq!(gaf.ec, 0);
+            assert_eq!(gaf.meta_char, b'#' as c_int);
         }
     }
 
@@ -883,6 +1000,177 @@ mod tests {
     }
 
     #[test]
+    fn tbx_parse1_vcf_gvcf_symbolic_alt_uses_format_len() {
+        unsafe {
+            let conf = tbx_conf_vcf();
+            let mut line = b"chr1\t100\t.\tA\t<*>\t.\t.\t.\tGT:LEN\t0/0:12\t0/1:5\0".to_vec();
+            let mut intv = tbx_intv_t {
+                beg: 0,
+                end: 0,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            assert_eq!(
+                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                0
+            );
+            assert_eq!(intv.beg, 99);
+            assert_eq!(intv.end, 111);
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_vcf_gvcf_len_field_can_follow_other_format_fields() {
+        unsafe {
+            let conf = tbx_conf_vcf();
+            let mut line =
+                b"chr1\t100\t.\tA\t<NON_REF>\t.\t.\t.\tGT:DP:LEN\t0/0:7:4\t0/0:8:11\0".to_vec();
+            let original = line.clone();
+            let mut intv = tbx_intv_t {
+                beg: -1,
+                end: -1,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            assert_eq!(
+                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                0
+            );
+            assert_eq!((intv.beg, intv.end), (99, 110));
+            assert_eq!(line, original);
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_vcf_gvcf_without_len_uses_ref_span_and_restores_line() {
+        unsafe {
+            let conf = tbx_conf_vcf();
+            let mut line = b"chr1\t100\t.\tAC\t<NON_REF>\t.\t.\t.\tGT:DP\t0/0:12\0".to_vec();
+            let original = line.clone();
+            let mut intv = tbx_intv_t {
+                beg: -1,
+                end: -1,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            assert_eq!(
+                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                0
+            );
+            assert_eq!((intv.beg, intv.end), (99, 101));
+            assert_eq!(line, original);
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_vcf_clamps_non_positive_pos_to_first_base() {
+        unsafe {
+            let conf = tbx_conf_vcf();
+            let mut line = b"chr1\t0\t.\tA\tC\t.\t.\t.\0".to_vec();
+            let mut intv = tbx_intv_t {
+                beg: -1,
+                end: -1,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            assert_eq!(
+                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                0
+            );
+            assert_eq!(intv.beg, 0);
+            assert_eq!(intv.end, 1);
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_vcf_end_requires_info_key_boundary_and_restores_line() {
+        unsafe {
+            let conf = tbx_conf_vcf();
+            let mut intv = tbx_intv_t {
+                beg: 0,
+                end: 0,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            let mut non_key_end = b"chr1\t100\t.\tA\tC\t.\t.\tXEND=500\0".to_vec();
+            let original = non_key_end.clone();
+            assert_eq!(
+                tbx_c_96_tbx_parse1(
+                    &conf,
+                    non_key_end.len() - 1,
+                    non_key_end.as_mut_ptr().cast(),
+                    &mut intv
+                ),
+                0
+            );
+            assert_eq!((intv.beg, intv.end), (99, 100));
+            assert_eq!(non_key_end, original);
+
+            let mut semicolon_end = b"chr1\t100\t.\tA\tC\t.\t.\tNS=1;END=105\0".to_vec();
+            assert_eq!(
+                tbx_c_96_tbx_parse1(
+                    &conf,
+                    semicolon_end.len() - 1,
+                    semicolon_end.as_mut_ptr().cast(),
+                    &mut intv
+                ),
+                0
+            );
+            assert_eq!((intv.beg, intv.end), (99, 105));
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_vcf_ignores_missing_or_non_advancing_end_values() {
+        unsafe {
+            let conf = tbx_conf_vcf();
+            let mut intv = tbx_intv_t {
+                beg: 0,
+                end: 0,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            let mut missing_end = b"chr1\t100\t.\tAC\tA\t.\t.\tEND=.\0".to_vec();
+            let original = missing_end.clone();
+            assert_eq!(
+                tbx_c_96_tbx_parse1(
+                    &conf,
+                    missing_end.len() - 1,
+                    missing_end.as_mut_ptr().cast(),
+                    &mut intv
+                ),
+                0
+            );
+            assert_eq!((intv.beg, intv.end), (99, 101));
+            assert_eq!(missing_end, original);
+
+            let mut before_beg_end = b"chr1\t100\t.\tAC\tA\t.\t.\tEND=50\0".to_vec();
+            assert_eq!(
+                tbx_c_96_tbx_parse1(
+                    &conf,
+                    before_beg_end.len() - 1,
+                    before_beg_end.as_mut_ptr().cast(),
+                    &mut intv
+                ),
+                0
+            );
+            assert_eq!((intv.beg, intv.end), (99, 101));
+        }
+    }
+
+    #[test]
     fn tbx_parse1_sam_uses_cigar_reference_span() {
         unsafe {
             let conf = tbx_conf_sam();
@@ -901,6 +1189,288 @@ mod tests {
             );
             assert_eq!(intv.beg, 6);
             assert_eq!(intv.end, 22);
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_sam_zero_reference_cigar_spans_one_base() {
+        unsafe {
+            let conf = tbx_conf_sam();
+            let mut line = b"r001\t0\tref\t7\t30\t5S10I\t*\t0\t0\tACGT\t*\0".to_vec();
+            let mut intv = tbx_intv_t {
+                beg: 0,
+                end: 0,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            assert_eq!(
+                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                0
+            );
+            assert_eq!(intv.beg, 6);
+            assert_eq!(intv.end, 7);
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_generic_ucsc_single_position_is_half_open() {
+        unsafe {
+            let conf = tbx_conf_t {
+                preset: TBX_GENERIC | TBX_UCSC,
+                sc: 1,
+                bc: 2,
+                ec: 2,
+                meta_char: b'#' as c_int,
+                line_skip: 0,
+            };
+            let mut line = b"chr7\t100\0".to_vec();
+            let mut intv = tbx_intv_t {
+                beg: 0,
+                end: 0,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            assert_eq!(
+                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                0
+            );
+            assert_eq!(intv.beg, 100);
+            assert_eq!(intv.end, 101);
+            assert_eq!(
+                std::slice::from_raw_parts(
+                    intv.ss.cast::<u8>(),
+                    intv.se.offset_from(intv.ss) as usize
+                ),
+                b"chr7"
+            );
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_rejects_missing_sequence_or_nonnumeric_begin() {
+        unsafe {
+            let conf = tbx_conf_t {
+                preset: TBX_GENERIC,
+                sc: 1,
+                bc: 2,
+                ec: 3,
+                meta_char: b'#' as c_int,
+                line_skip: 0,
+            };
+            let mut intv = tbx_intv_t {
+                beg: 0,
+                end: 0,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            let mut no_seq = b"chr7\0".to_vec();
+            assert_eq!(
+                tbx_c_96_tbx_parse1(
+                    &conf,
+                    no_seq.len() - 1,
+                    no_seq.as_mut_ptr().cast(),
+                    &mut intv
+                ),
+                -1
+            );
+
+            let mut nonnumeric_begin = b"chr7\tabc\t12\0".to_vec();
+            assert_eq!(
+                tbx_c_96_tbx_parse1(
+                    &conf,
+                    nonnumeric_begin.len() - 1,
+                    nonnumeric_begin.as_mut_ptr().cast(),
+                    &mut intv
+                ),
+                -1
+            );
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_generic_one_based_closed_interval_is_half_open() {
+        unsafe {
+            let conf = tbx_conf_t {
+                preset: TBX_GENERIC,
+                sc: 1,
+                bc: 2,
+                ec: 3,
+                meta_char: b'#' as c_int,
+                line_skip: 0,
+            };
+            let mut line = b"chr7\t10\t12\0".to_vec();
+            let original = line.clone();
+            let mut intv = tbx_intv_t {
+                beg: 0,
+                end: 0,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            assert_eq!(
+                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                0
+            );
+            assert_eq!(intv.beg, 9);
+            assert_eq!(intv.end, 12);
+            assert_eq!(line, original);
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_generic_missing_end_column_falls_back_to_begin_column() {
+        unsafe {
+            let conf = tbx_conf_t {
+                preset: TBX_GENERIC,
+                sc: 1,
+                bc: 2,
+                ec: 3,
+                meta_char: b'#' as c_int,
+                line_skip: 0,
+            };
+            let mut line = b"chr7\t10\0".to_vec();
+            let original = line.clone();
+            let mut intv = tbx_intv_t {
+                beg: 0,
+                end: 0,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            assert_eq!(
+                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                0
+            );
+            assert_eq!(intv.beg, 9);
+            assert_eq!(intv.end, 10);
+            assert_eq!(line, original);
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_bed_preset_keeps_zero_based_half_open_interval() {
+        unsafe {
+            let conf = tbx_conf_bed();
+            assert_eq!(conf.preset & 0xffff, TBX_GENERIC);
+            assert_ne!(conf.preset & TBX_UCSC, 0);
+
+            let mut line = b"chr7\t10\t12\tfeature1\0".to_vec();
+            let original = line.clone();
+            let mut intv = tbx_intv_t {
+                beg: -1,
+                end: -1,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            assert_eq!(
+                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                0
+            );
+            assert_eq!((intv.beg, intv.end), (10, 12));
+            assert_eq!(
+                std::slice::from_raw_parts(
+                    intv.ss.cast::<u8>(),
+                    intv.se.offset_from(intv.ss) as usize
+                ),
+                b"chr7"
+            );
+            assert_eq!(line, original);
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_vcf_svlen_requires_info_key_boundary_and_restores_line() {
+        unsafe {
+            let conf = tbx_conf_vcf();
+            let mut intv = tbx_intv_t {
+                beg: 0,
+                end: 0,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            let mut non_key_svlen = b"chr1\t100\t.\tA\t<DEL>\t.\t.\tXSVLEN=-50\0".to_vec();
+            let original = non_key_svlen.clone();
+            assert_eq!(
+                tbx_c_96_tbx_parse1(
+                    &conf,
+                    non_key_svlen.len() - 1,
+                    non_key_svlen.as_mut_ptr().cast(),
+                    &mut intv
+                ),
+                0
+            );
+            assert_eq!((intv.beg, intv.end), (99, 100));
+            assert_eq!(non_key_svlen, original);
+
+            let mut semicolon_svlen = b"chr1\t100\t.\tA\t<DEL>\t.\t.\tNS=1;SVLEN=-6\0".to_vec();
+            assert_eq!(
+                tbx_c_96_tbx_parse1(
+                    &conf,
+                    semicolon_svlen.len() - 1,
+                    semicolon_svlen.as_mut_ptr().cast(),
+                    &mut intv
+                ),
+                0
+            );
+            assert_eq!((intv.beg, intv.end), (99, 105));
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_vcf_symbolic_svlen_uses_largest_absolute_annotated_alt() {
+        unsafe {
+            let conf = tbx_conf_vcf();
+            let mut line = b"chr1\t100\t.\tA\t<DEL>,<DUP>,G\t.\t.\tSVLEN=-8,12,50\0".to_vec();
+            let original = line.clone();
+            let mut intv = tbx_intv_t {
+                beg: 0,
+                end: 0,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            assert_eq!(
+                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                0
+            );
+            assert_eq!((intv.beg, intv.end), (99, 111));
+            assert_eq!(line, original);
+        }
+    }
+
+    #[test]
+    fn tbx_parse1_vcf_zero_svlen_does_not_shrink_ref_or_end_span() {
+        unsafe {
+            let conf = tbx_conf_vcf();
+            let mut line = b"chr1\t100\t.\tACGT\t<DEL>\t.\t.\tEND=102;SVLEN=0\0".to_vec();
+            let original = line.clone();
+            let mut intv = tbx_intv_t {
+                beg: 0,
+                end: 0,
+                ss: std::ptr::null_mut(),
+                se: std::ptr::null_mut(),
+                tid: 0,
+            };
+
+            assert_eq!(
+                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                0
+            );
+            assert_eq!((intv.beg, intv.end), (99, 103));
+            assert_eq!(line, original);
         }
     }
 
@@ -956,6 +1526,58 @@ mod tests {
             assert_eq!(intv.beg, 3);
             assert_eq!(intv.end, 99);
             assert!(tbx.dict.is_null());
+        }
+    }
+
+    #[test]
+    fn tbx_gaf_name_lookup_is_single_tid_and_does_not_allocate_dictionary() {
+        unsafe {
+            let mut tbx = tbx_t {
+                conf: tbx_conf_t {
+                    preset: TBX_GAF,
+                    sc: 1,
+                    bc: 6,
+                    ec: 0,
+                    meta_char: b'#' as c_int,
+                    line_skip: 0,
+                },
+                idx: std::ptr::null_mut(),
+                dict: std::ptr::null_mut(),
+            };
+
+            assert_eq!(tbx_c_91_tbx_name2id(&mut tbx, c"any-path".as_ptr()), 0);
+            assert_eq!(tbx_c_64_get_tid(&mut tbx, c"other-path".as_ptr(), 1), 0);
+            assert!(tbx.dict.is_null());
+        }
+    }
+
+    #[test]
+    fn tbx_seqnames_returns_empty_array_for_null_dictionary() {
+        unsafe {
+            let mut tbx = tbx_t {
+                conf: tbx_conf_vcf(),
+                idx: std::ptr::null_mut(),
+                dict: std::ptr::null_mut(),
+            };
+            let mut n = -1;
+            let names = tbx_c_614_tbx_seqnames(&mut tbx, &mut n);
+            assert!(!names.is_null());
+            assert_eq!(n, 0);
+            libc::free(names.cast());
+        }
+    }
+
+    #[test]
+    fn tbx_name_lookup_on_empty_dictionary_reports_missing_without_names() {
+        unsafe {
+            let tbx = libc::calloc(1, std::mem::size_of::<tbx_t>()).cast::<tbx_t>();
+            assert!(!tbx.is_null());
+            (*tbx).conf = tbx_conf_vcf();
+
+            assert_eq!(tbx_name2id(tbx, c"chr1".as_ptr()), -1);
+            assert!(!(*tbx).dict.is_null());
+            assert_eq!((*(*tbx).dict.cast::<kh_s2i_t>()).size, 0);
+            tbx_c_512_tbx_destroy(tbx);
         }
     }
 

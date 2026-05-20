@@ -1,3 +1,7 @@
+use std::ffi::{c_char, c_int};
+
+use crate::htslib_mini_rs::{hts, sam, thread_pool};
+
 // original: print_usage (htslib/samples/split_thread2.c:38)
 pub unsafe fn samples_split_thread2_c_38_print_usage(fp: *mut libc::FILE) {
     libc::fprintf(
@@ -7,6 +11,114 @@ pub unsafe fn samples_split_thread2_c_38_print_usage(fp: *mut libc::FILE) {
 }
 
 // original: main (htslib/samples/split_thread2.c:51)
-pub unsafe fn samples_split_thread2_c_51_main() {
-    todo!("translate HTSlib main from htslib/samples/split_thread2.c:51");
+pub unsafe fn samples_split_thread2_c_51_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+    let mut ret = libc::EXIT_FAILURE;
+    let mut infile = std::ptr::null_mut();
+    let mut outfile1 = std::ptr::null_mut();
+    let mut outfile2 = std::ptr::null_mut();
+    let mut in_samhdr = std::ptr::null_mut();
+    let mut bamdata = std::ptr::null_mut();
+    let mut tpool = hts::htsThreadPool {
+        pool: std::ptr::null_mut(),
+        qsize: 0,
+    };
+
+    if argc != 3 {
+        samples_split_thread2_c_38_print_usage(hts_sys::stdout.cast());
+        return ret;
+    }
+    let inname = *argv.add(1);
+    let outdir = *argv.add(2);
+
+    let size = libc::strlen(outdir) + c"/1.sam".to_bytes_with_nul().len();
+    let file1 = libc::malloc(size).cast::<c_char>();
+    let file2 = libc::malloc(size).cast::<c_char>();
+    if file1.is_null() || file2.is_null() {
+        libc::printf(c"Failed to set output path\n".as_ptr());
+    } else {
+        libc::snprintf(file1, size, c"%s/1.sam".as_ptr(), outdir);
+        libc::snprintf(file2, size, c"%s/2.bam".as_ptr(), outdir);
+        bamdata = sam::bam_init1();
+        if bamdata.is_null() {
+            libc::printf(c"Failed to initialize bamdata\n".as_ptr());
+        } else {
+            infile = hts::hts_open(inname, c"r".as_ptr());
+            if infile.is_null() {
+                libc::printf(c"Could not open %s\n".as_ptr(), inname);
+            } else {
+                outfile1 = hts::hts_open(file1, c"w".as_ptr());
+                outfile2 = hts::hts_open(file2, c"wb".as_ptr());
+                if outfile1.is_null() || outfile2.is_null() {
+                    libc::printf(c"Could not open output file\n".as_ptr());
+                } else {
+                    tpool.pool = thread_pool::hts_tpool_init(4);
+                    if tpool.pool.is_null() {
+                        libc::printf(c"Failed to initialize the thread pool\n".as_ptr());
+                    } else if hts::hts_set_thread_pool(infile, &mut tpool) < 0
+                        || hts::hts_set_thread_pool(outfile1, &mut tpool) < 0
+                        || hts::hts_set_thread_pool(outfile2, &mut tpool) < 0
+                    {
+                        libc::printf(c"Failed to set thread options\n".as_ptr());
+                    } else {
+                        in_samhdr = sam::sam_hdr_read(infile);
+                        if in_samhdr.is_null() {
+                            libc::printf(c"Failed to read header from file!\n".as_ptr());
+                        } else if sam::sam_hdr_write(outfile1, in_samhdr) == -1
+                            || sam::sam_hdr_write(outfile2, in_samhdr) == -1
+                        {
+                            libc::printf(c"Failed to write header\n".as_ptr());
+                        } else {
+                            let mut c = sam::sam_read1(infile, in_samhdr, bamdata);
+                            while c >= 0 {
+                                if ((*bamdata).core.flag as c_int & sam::BAM_FREAD1) != 0 {
+                                    if sam::sam_c_4553_sam_write1(outfile1, in_samhdr, bamdata) < 0
+                                    {
+                                        libc::printf(c"Failed to write output data\n".as_ptr());
+                                        break;
+                                    }
+                                } else if ((*bamdata).core.flag as c_int & sam::BAM_FREAD2) != 0
+                                    && sam::sam_c_4553_sam_write1(outfile2, in_samhdr, bamdata) < 0
+                                {
+                                    libc::printf(c"Failed to write output data\n".as_ptr());
+                                    break;
+                                }
+                                c = sam::sam_read1(infile, in_samhdr, bamdata);
+                            }
+                            if c == -1 {
+                                ret = libc::EXIT_SUCCESS;
+                            } else {
+                                libc::printf(c"Error in reading data\n".as_ptr());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !in_samhdr.is_null() {
+        sam::sam_hdr_destroy(in_samhdr);
+    }
+    if !infile.is_null() {
+        hts::hts_close(infile);
+    }
+    if !bamdata.is_null() {
+        sam::bam_destroy1(bamdata);
+    }
+    if !file1.is_null() {
+        libc::free(file1.cast());
+    }
+    if !file2.is_null() {
+        libc::free(file2.cast());
+    }
+    if !outfile1.is_null() {
+        hts::hts_close(outfile1);
+    }
+    if !outfile2.is_null() {
+        hts::hts_close(outfile2);
+    }
+    if !tpool.pool.is_null() {
+        thread_pool::hts_tpool_destroy(tpool.pool);
+    }
+    ret
 }

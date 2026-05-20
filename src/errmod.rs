@@ -1,6 +1,6 @@
 use std::ffi::c_int;
 
-use crate::htslib_mini_rs::{c_compat, kfunc::lbinom};
+use crate::htslib_mini_rs::{c_compat, kfunc::lbinom, os_rand::hts_drand48};
 
 #[repr(C)]
 pub struct errmod_t {
@@ -141,7 +141,7 @@ pub unsafe fn errmod_cal(
     if n > 255 {
         let mut i = n - 1;
         while i > 0 {
-            let j = (libc::drand48() * (i + 1) as f64) as c_int;
+            let j = (hts_drand48() * (i + 1) as f64) as c_int;
             let tmp = *bases.add(i as usize);
             *bases.add(i as usize) = *bases.add(j as usize);
             *bases.add(j as usize) = tmp;
@@ -189,7 +189,7 @@ pub unsafe fn errmod_cal(
         let mut tmp2 = 0;
         while k < m {
             if k != j {
-                tmp1 += aux.bsum[k as usize] as f32;
+                tmp1 = (tmp1 as f64 + aux.bsum[k as usize]) as f32;
                 tmp2 += aux.c[k as usize] as c_int;
             }
             k += 1;
@@ -206,18 +206,20 @@ pub unsafe fn errmod_cal(
             tmp2 = 0;
             while i < m {
                 if i != j && i != k {
-                    tmp1 += aux.bsum[i as usize] as f32;
+                    tmp1 = (tmp1 as f64 + aux.bsum[i as usize]) as f32;
                     tmp2 += aux.c[i as usize] as c_int;
                 }
                 i += 1;
             }
-            let val = -4.343f32 * *(*em).lhet.add(((cjk << 8) | aux.c[k as usize]) as usize) as f32;
+            let val = -4.343f64 * *(*em).lhet.add(((cjk << 8) | aux.c[k as usize]) as usize);
             if tmp2 != 0 {
-                *q.add((j * m + k) as usize) = val + tmp1;
-                *q.add((k * m + j) as usize) = val + tmp1;
+                let out = (val + tmp1 as f64) as f32;
+                *q.add((j * m + k) as usize) = out;
+                *q.add((k * m + j) as usize) = out;
             } else {
-                *q.add((j * m + k) as usize) = val;
-                *q.add((k * m + j) as usize) = val;
+                let out = val as f32;
+                *q.add((j * m + k) as usize) = out;
+                *q.add((k * m + j) as usize) = out;
             }
             k += 1;
         }
@@ -238,6 +240,16 @@ pub unsafe fn errmod_cal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rand48_next(seed: [u16; 3]) -> [u16; 3] {
+        let state = seed[0] as u64 | ((seed[1] as u64) << 16) | ((seed[2] as u64) << 32);
+        let next = state.wrapping_mul(0x5deece66d).wrapping_add(0x0b) & ((1u64 << 48) - 1);
+        [next as u16, (next >> 16) as u16, (next >> 32) as u16]
+    }
+
+    fn rand48_lrand(seed: [u16; 3]) -> libc::c_long {
+        ((seed[2] as libc::c_long) << 15) + ((seed[1] as libc::c_long) >> 1)
+    }
 
     #[test]
     fn errmod_init_calculates_likelihoods_and_destroy_frees() {
@@ -279,6 +291,291 @@ mod tests {
             assert!(q.iter().any(|v| *v > 0.0));
             errmod_destroy(em);
             errmod_destroy(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn logbinomial_table_populates_internal_triangle_only() {
+        unsafe {
+            let table = logbinomial_table(256);
+            assert!(!table.is_null());
+            assert_eq!(*table.add((1 << 8) | 0), 0.0);
+            assert_eq!(*table.add((1 << 8) | 1), 0.0);
+            assert_eq!(*table.add((7 << 8) | 7), 0.0);
+            assert!((*table.add((7 << 8) | 3) - lbinom(7, 3)).abs() < 1e-12);
+            assert!((*table.add((7 << 8) | 4) - lbinom(7, 4)).abs() < 1e-12);
+            c_compat::free(table.cast());
+        }
+    }
+
+    #[test]
+    fn errmod_cal_zero_depth_only_clears_output_matrix() {
+        unsafe {
+            let em = errmod_init(0.0);
+            assert!(!em.is_null());
+
+            let mut bases = [(30u16 << 5) | 3];
+            let original_bases = bases;
+            let mut q = [7.0f32; 16];
+            assert_eq!(errmod_cal(em, 0, 4, bases.as_mut_ptr(), q.as_mut_ptr()), 0);
+            assert_eq!(bases, original_bases);
+            assert_eq!(q, [0.0; 16]);
+
+            errmod_destroy(em);
+        }
+    }
+
+    #[test]
+    fn errmod_cal_single_base_leaves_homozygous_call_at_zero() {
+        unsafe {
+            let em = errmod_init(0.0);
+            assert!(!em.is_null());
+
+            let mut bases = [(30u16 << 5) | 2];
+            let mut q = [9.0f32; 16];
+            assert_eq!(errmod_cal(em, 1, 4, bases.as_mut_ptr(), q.as_mut_ptr()), 0);
+            assert_eq!(bases, [(30u16 << 5) | 2]);
+            assert_eq!(q[2 * 4 + 2], 0.0);
+            assert!(q[0] > 0.0);
+            assert!(q[1 * 4 + 1] > 0.0);
+            assert!(q[3 * 4 + 3] > 0.0);
+
+            errmod_destroy(em);
+        }
+    }
+
+    #[test]
+    fn errmod_cal_clamps_quality_scores_to_supported_boundaries() {
+        unsafe {
+            let em = errmod_init(0.0);
+            assert!(!em.is_null());
+
+            let mut low_clamped = [(0u16 << 5) | 0, (20u16 << 5) | 1, (30u16 << 5) | 2];
+            let mut low_boundary = [(4u16 << 5) | 0, (20u16 << 5) | 1, (30u16 << 5) | 2];
+            let mut q_low_clamped = [0.0f32; 16];
+            let mut q_low_boundary = [0.0f32; 16];
+            assert_eq!(
+                errmod_cal(
+                    em,
+                    low_clamped.len() as c_int,
+                    4,
+                    low_clamped.as_mut_ptr(),
+                    q_low_clamped.as_mut_ptr()
+                ),
+                0
+            );
+            assert_eq!(
+                errmod_cal(
+                    em,
+                    low_boundary.len() as c_int,
+                    4,
+                    low_boundary.as_mut_ptr(),
+                    q_low_boundary.as_mut_ptr()
+                ),
+                0
+            );
+            assert_eq!(q_low_clamped, q_low_boundary);
+
+            let mut high_clamped = [(63u16 << 5) | 0, (80u16 << 5) | 1, (30u16 << 5) | 2];
+            let mut high_boundary = [(63u16 << 5) | 0, (63u16 << 5) | 1, (30u16 << 5) | 2];
+            let mut q_high_clamped = [0.0f32; 16];
+            let mut q_high_boundary = [0.0f32; 16];
+            assert_eq!(
+                errmod_cal(
+                    em,
+                    high_clamped.len() as c_int,
+                    4,
+                    high_clamped.as_mut_ptr(),
+                    q_high_clamped.as_mut_ptr()
+                ),
+                0
+            );
+            assert_eq!(
+                errmod_cal(
+                    em,
+                    high_boundary.len() as c_int,
+                    4,
+                    high_boundary.as_mut_ptr(),
+                    q_high_boundary.as_mut_ptr()
+                ),
+                0
+            );
+            assert_eq!(q_high_clamped, q_high_boundary);
+
+            errmod_destroy(em);
+        }
+    }
+
+    #[test]
+    fn errmod_cal_strand_bit_does_not_change_base_index() {
+        unsafe {
+            let em = errmod_init(0.0);
+            assert!(!em.is_null());
+
+            let mut bases = [(30u16 << 5) | 17, (30u16 << 5) | 1];
+            let mut q = [0.0f32; 16];
+            assert_eq!(
+                errmod_cal(
+                    em,
+                    bases.len() as c_int,
+                    4,
+                    bases.as_mut_ptr(),
+                    q.as_mut_ptr()
+                ),
+                0
+            );
+
+            assert_eq!(bases, [(30u16 << 5) | 1, (30u16 << 5) | 17]);
+            assert_eq!(q[1 * 4 + 1], 0.0);
+            assert!(q[0] > 0.0);
+            assert!(q[2 * 4 + 2] > 0.0);
+            assert!(q[3 * 4 + 3] > 0.0);
+
+            errmod_destroy(em);
+        }
+    }
+
+    #[test]
+    fn errmod_cal_only_clears_requested_square_matrix() {
+        unsafe {
+            let em = errmod_init(0.0);
+            assert!(!em.is_null());
+
+            let mut bases = [(30u16 << 5) | 0, (30u16 << 5) | 1];
+            let mut q = [7.0f32; 9];
+            assert_eq!(errmod_cal(em, 2, 2, bases.as_mut_ptr(), q.as_mut_ptr()), 0);
+
+            assert_eq!(q[4..], [7.0; 5]);
+            assert_eq!(q[1], q[2]);
+            assert!(q[..4].iter().all(|v| *v >= 0.0));
+
+            errmod_destroy(em);
+        }
+    }
+
+    #[test]
+    fn errmod_cal_matches_htslib_outputs_bitwise_for_fixed_inputs() {
+        unsafe {
+            let cases: &[&[u16]] = &[
+                &[
+                    (30u16 << 5) | 0,
+                    (25u16 << 5) | 0,
+                    (20u16 << 5) | 1,
+                    (35u16 << 5) | 17,
+                ],
+                &[
+                    (0u16 << 5) | 2,
+                    (4u16 << 5) | 18,
+                    (63u16 << 5) | 3,
+                    (80u16 << 5) | 19,
+                    (41u16 << 5) | 0,
+                ],
+            ];
+
+            for &depcorr in &[0.0, 0.1, 0.25] {
+                let rust_em = errmod_init(depcorr);
+                let c_em = hts_sys::errmod_init(depcorr);
+                assert!(!rust_em.is_null());
+                assert!(!c_em.is_null());
+
+                for input in cases {
+                    let mut rust_bases = input.to_vec();
+                    let mut c_bases = input.to_vec();
+                    let mut rust_q = [0.0f32; 16];
+                    let mut c_q = [0.0f32; 16];
+
+                    assert_eq!(
+                        errmod_cal(
+                            rust_em,
+                            rust_bases.len() as c_int,
+                            4,
+                            rust_bases.as_mut_ptr(),
+                            rust_q.as_mut_ptr(),
+                        ),
+                        0
+                    );
+                    assert_eq!(
+                        hts_sys::errmod_cal(
+                            c_em,
+                            c_bases.len() as c_int,
+                            4,
+                            c_bases.as_mut_ptr(),
+                            c_q.as_mut_ptr(),
+                        ),
+                        0
+                    );
+
+                    assert_eq!(rust_bases, c_bases);
+                    assert_eq!(
+                        rust_q.map(f32::to_bits),
+                        c_q.map(f32::to_bits),
+                        "depcorr={depcorr} input={input:?}",
+                    );
+                }
+
+                errmod_destroy(rust_em);
+                hts_sys::errmod_destroy(c_em);
+            }
+        }
+    }
+
+    #[test]
+    fn errmod_cal_downsampling_uses_htslib_rand48_state() {
+        unsafe {
+            let _guard = crate::htslib_mini_rs::original::htslib::hts_os::rand48_test_lock();
+            let em = errmod_init(0.0);
+            assert!(!em.is_null());
+
+            let mut bases = (0..260)
+                .map(|i| (((4 + (i % 60)) as u16) << 5) | ((i % 4) as u16))
+                .collect::<Vec<_>>();
+            let mut q = [0.0f32; 16];
+
+            crate::htslib_mini_rs::os_rand::hts_srand48(1);
+            assert_eq!(
+                errmod_cal(
+                    em,
+                    bases.len() as c_int,
+                    4,
+                    bases.as_mut_ptr(),
+                    q.as_mut_ptr()
+                ),
+                0
+            );
+
+            let mut seed = [0x330e, 0x0001, 0x0000];
+            for _ in 1..260 {
+                seed = rand48_next(seed);
+            }
+            seed = rand48_next(seed);
+            assert_eq!(
+                crate::htslib_mini_rs::os_rand::hts_lrand48(),
+                rand48_lrand(seed)
+            );
+
+            errmod_destroy(em);
+        }
+    }
+
+    #[test]
+    fn cal_coef_sets_dependency_and_heterozygous_boundary_tables() {
+        unsafe {
+            let em = c_compat::calloc(1, std::mem::size_of::<errmod_t>() as u64).cast::<errmod_t>();
+            assert!(!em.is_null());
+            assert_eq!(cal_coef(em, 0.25, 0.03), 0);
+
+            assert_eq!(*(*em).fk.add(0), 1.0);
+            assert!((*(*em).fk.add(1) - 0.7575).abs() < 1e-12);
+            assert!((*(*em).fk.add(2) - 0.575625).abs() < 1e-12);
+            assert_eq!(*(*em).lhet.add(0), 0.0);
+            assert_eq!(*(*em).lhet.add((1 << 8) | 0), -std::f64::consts::LN_2);
+            assert_eq!(*(*em).lhet.add((1 << 8) | 1), -std::f64::consts::LN_2);
+            assert_eq!(*(*em).beta.add((4 << 16) | (1 << 8) | 1), f64::INFINITY);
+
+            c_compat::free((*em).lhet.cast());
+            c_compat::free((*em).fk.cast());
+            c_compat::free((*em).beta.cast());
+            c_compat::free(em.cast());
         }
     }
 }

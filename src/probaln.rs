@@ -1,6 +1,11 @@
-use std::ffi::c_int;
+use std::ffi::{c_char, c_int};
 
 pub type probaln_par_t = hts_sys::probaln_par_t;
+
+unsafe extern "C" {
+    static mut optarg: *mut c_char;
+    static mut optind: c_int;
+}
 
 const EI: f64 = 0.25;
 const EM: f64 = 0.33333333333;
@@ -71,19 +76,41 @@ pub unsafe fn probaln_glocal(
         return c_int::MIN;
     }
 
-    let mut f = vec![0.0_f64; f_len];
-    let mut b = if is_backward {
-        vec![0.0_f64; f_len]
-    } else {
-        Vec::new()
-    };
-    let mut s = vec![0.0_f64; (l_query as usize) + 2];
-    let mut qual = vec![0.0_f32; l_query as usize];
+    let mut f = Vec::new();
+    if f.try_reserve_exact(f_len).is_err() {
+        *crate::htslib_mini_rs::c_compat::__errno_location() = libc::ENOMEM;
+        return c_int::MIN;
+    }
+    f.resize(f_len, 0.0_f64);
+
+    let mut b = Vec::new();
+    if is_backward {
+        if b.try_reserve_exact(f_len).is_err() {
+            *crate::htslib_mini_rs::c_compat::__errno_location() = libc::ENOMEM;
+            return c_int::MIN;
+        }
+        b.resize(f_len, 0.0_f64);
+    }
+
+    let s_len = (l_query as usize) + 2;
+    let mut s = Vec::new();
+    if s.try_reserve_exact(s_len).is_err() {
+        *crate::htslib_mini_rs::c_compat::__errno_location() = libc::ENOMEM;
+        return c_int::MIN;
+    }
+    s.resize(s_len, 0.0_f64);
+
+    let mut qual = Vec::new();
+    if qual.try_reserve_exact(l_query as usize).is_err() {
+        *crate::htslib_mini_rs::c_compat::__errno_location() = libc::ENOMEM;
+        return c_int::MIN;
+    }
+    qual.resize(l_query as usize, 0.0_f32);
 
     if G_QUAL2PROB[0] == 0.0 {
         i = 0;
         while i < 256 {
-            G_QUAL2PROB[i as usize] = 10.0_f32.powf(-(i as f32) / 10.0);
+            G_QUAL2PROB[i as usize] = 10.0_f64.powf(-(i as f64) / 10.0) as f32;
             i += 1;
         }
     }
@@ -443,6 +470,402 @@ mod tests {
     }
 
     #[test]
+    fn probaln_glocal_rejects_negative_lengths_before_dereferencing() {
+        unsafe {
+            let par = probaln_par_t {
+                d: 0.001,
+                e: 0.1,
+                bw: 10,
+            };
+            *crate::htslib_mini_rs::c_compat::__errno_location() = 0;
+            assert_eq!(
+                probaln_glocal(
+                    std::ptr::null(),
+                    -1,
+                    std::ptr::null(),
+                    1,
+                    std::ptr::null(),
+                    &par,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                c_int::MIN
+            );
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                libc::EINVAL
+            );
+
+            *crate::htslib_mini_rs::c_compat::__errno_location() = 0;
+            assert_eq!(
+                probaln_glocal(
+                    std::ptr::null(),
+                    1,
+                    std::ptr::null(),
+                    -1,
+                    std::ptr::null(),
+                    &par,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                c_int::MIN
+            );
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                libc::EINVAL
+            );
+        }
+    }
+
+    #[test]
+    fn probaln_glocal_rejects_overflow_prone_query_length() {
+        unsafe {
+            let par = probaln_par_t {
+                d: 0.001,
+                e: 0.1,
+                bw: 10,
+            };
+            *crate::htslib_mini_rs::c_compat::__errno_location() = 0;
+            assert_eq!(
+                probaln_glocal(
+                    std::ptr::null(),
+                    1,
+                    std::ptr::null(),
+                    c_int::MAX - 2,
+                    std::ptr::null(),
+                    &par,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                c_int::MIN
+            );
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                libc::EINVAL
+            );
+        }
+    }
+
+    #[test]
+    fn probaln_glocal_returns_zero_for_empty_dimensions() {
+        unsafe {
+            let par = probaln_par_t {
+                d: 0.001,
+                e: 0.1,
+                bw: 10,
+            };
+            assert_eq!(
+                probaln_glocal(
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    4,
+                    std::ptr::null(),
+                    &par,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                0
+            );
+            assert_eq!(
+                probaln_glocal(
+                    std::ptr::null(),
+                    4,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    &par,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn probaln_glocal_empty_dimensions_leave_outputs_untouched() {
+        unsafe {
+            let par = probaln_par_t {
+                d: 0.001,
+                e: 0.1,
+                bw: 10,
+            };
+            let mut state = [123];
+            let mut q = [45];
+            assert_eq!(
+                probaln_glocal(
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    &par,
+                    state.as_mut_ptr(),
+                    q.as_mut_ptr(),
+                ),
+                0
+            );
+            assert_eq!(state, [123]);
+            assert_eq!(q, [45]);
+        }
+    }
+
+    #[test]
+    fn probaln_glocal_widens_band_to_length_difference() {
+        unsafe {
+            let ref_ = encode_bases(b"ACGTACGTACGT");
+            let query = encode_bases(b"ACGT");
+            let par_narrow = probaln_par_t {
+                d: 0.001,
+                e: 0.1,
+                bw: 0,
+            };
+            let par_wide = probaln_par_t {
+                d: 0.001,
+                e: 0.1,
+                bw: (ref_.len() - query.len()) as c_int,
+            };
+
+            assert_eq!(
+                probaln_glocal(
+                    ref_.as_ptr(),
+                    ref_.len() as c_int,
+                    query.as_ptr(),
+                    query.len() as c_int,
+                    std::ptr::null(),
+                    &par_narrow,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                probaln_glocal(
+                    ref_.as_ptr(),
+                    ref_.len() as c_int,
+                    query.as_ptr(),
+                    query.len() as c_int,
+                    std::ptr::null(),
+                    &par_wide,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn probaln_glocal_does_not_enter_backward_pass_with_one_output_buffer() {
+        unsafe {
+            let ref_ = encode_bases(b"ACGTACGT");
+            let query = encode_bases(b"ACGT");
+            let par = probaln_par_t {
+                d: 0.001,
+                e: 0.1,
+                bw: 6,
+            };
+            let mut state = [-7; 4];
+            let score_with_state_only = probaln_glocal(
+                ref_.as_ptr(),
+                ref_.len() as c_int,
+                query.as_ptr(),
+                query.len() as c_int,
+                std::ptr::null(),
+                &par,
+                state.as_mut_ptr(),
+                std::ptr::null_mut(),
+            );
+            let score_without_outputs = probaln_glocal(
+                ref_.as_ptr(),
+                ref_.len() as c_int,
+                query.as_ptr(),
+                query.len() as c_int,
+                std::ptr::null(),
+                &par,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+
+            assert_eq!(score_with_state_only, score_without_outputs);
+            assert_eq!(state, [-7; 4]);
+        }
+    }
+
+    #[test]
+    fn probaln_glocal_does_not_enter_backward_pass_with_q_only() {
+        unsafe {
+            let ref_ = encode_bases(b"ACGTACGT");
+            let query = encode_bases(b"ACGT");
+            let par = probaln_par_t {
+                d: 0.001,
+                e: 0.1,
+                bw: 6,
+            };
+            let mut q = [77; 4];
+            let score_with_q_only = probaln_glocal(
+                ref_.as_ptr(),
+                ref_.len() as c_int,
+                query.as_ptr(),
+                query.len() as c_int,
+                std::ptr::null(),
+                &par,
+                std::ptr::null_mut(),
+                q.as_mut_ptr(),
+            );
+            let score_without_outputs = probaln_glocal(
+                ref_.as_ptr(),
+                ref_.len() as c_int,
+                query.as_ptr(),
+                query.len() as c_int,
+                std::ptr::null(),
+                &par,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+
+            assert_eq!(score_with_q_only, score_without_outputs);
+            assert_eq!(q, [77; 4]);
+        }
+    }
+
+    #[test]
+    fn probaln_glocal_null_quality_matches_explicit_q30() {
+        unsafe {
+            let ref_ = encode_bases(b"ACGTNNACGT");
+            let query = encode_bases(b"ACGTTACGT");
+            let qual = [30; 9];
+            let par = probaln_par_t {
+                d: 0.001,
+                e: 0.1,
+                bw: 7,
+            };
+
+            assert_eq!(
+                probaln_glocal(
+                    ref_.as_ptr(),
+                    ref_.len() as c_int,
+                    query.as_ptr(),
+                    query.len() as c_int,
+                    std::ptr::null(),
+                    &par,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                probaln_glocal(
+                    ref_.as_ptr(),
+                    ref_.len() as c_int,
+                    query.as_ptr(),
+                    query.len() as c_int,
+                    qual.as_ptr(),
+                    &par,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn probaln_glocal_ambiguous_bases_match_htslib_outputs() {
+        unsafe {
+            let ref_ = encode_bases(b"NNNN");
+            let query = encode_bases(b"NN");
+            let qual = [0, 255];
+            let par = probaln_par_t {
+                d: 0.001,
+                e: 0.1,
+                bw: 2,
+            };
+            let mut rust_state = [-1; 2];
+            let mut rust_q = [255; 2];
+            let mut c_state = [-1; 2];
+            let mut c_q = [255; 2];
+
+            let rust_score = probaln_glocal(
+                ref_.as_ptr(),
+                ref_.len() as c_int,
+                query.as_ptr(),
+                query.len() as c_int,
+                qual.as_ptr(),
+                &par,
+                rust_state.as_mut_ptr(),
+                rust_q.as_mut_ptr(),
+            );
+            let c_score = hts_sys::probaln_glocal(
+                ref_.as_ptr(),
+                ref_.len() as c_int,
+                query.as_ptr(),
+                query.len() as c_int,
+                qual.as_ptr(),
+                &par,
+                c_state.as_mut_ptr(),
+                c_q.as_mut_ptr(),
+            );
+
+            assert_eq!(rust_score, c_score);
+            assert_eq!(rust_state, c_state);
+            assert_eq!(rust_q, c_q);
+        }
+    }
+
+    #[test]
+    fn probaln_glocal_accepts_highest_quality_table_index() {
+        unsafe {
+            let ref_ = encode_bases(b"ACGTACGT");
+            let query = encode_bases(b"ACGT");
+            let qual = [255; 4];
+            let par = probaln_par_t {
+                d: 0.001,
+                e: 0.1,
+                bw: 6,
+            };
+
+            assert_ne!(
+                probaln_glocal(
+                    ref_.as_ptr(),
+                    ref_.len() as c_int,
+                    query.as_ptr(),
+                    query.len() as c_int,
+                    qual.as_ptr(),
+                    &par,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                c_int::MIN
+            );
+        }
+    }
+
+    #[test]
+    fn probaln_glocal_populates_backward_outputs_when_both_buffers_are_present() {
+        unsafe {
+            let ref_ = encode_bases(b"ACGTACGT");
+            let query = encode_bases(b"ACGT");
+            let qual = [30; 4];
+            let par = probaln_par_t {
+                d: 0.001,
+                e: 0.1,
+                bw: 6,
+            };
+            let mut state = [-1; 4];
+            let mut q = [255; 4];
+
+            let score = probaln_glocal(
+                ref_.as_ptr(),
+                ref_.len() as c_int,
+                query.as_ptr(),
+                query.len() as c_int,
+                qual.as_ptr(),
+                &par,
+                state.as_mut_ptr(),
+                q.as_mut_ptr(),
+            );
+
+            assert_ne!(score, c_int::MIN);
+            assert!(state.iter().all(|&s| s >= 0));
+            assert!(q.iter().all(|&posterior| posterior <= 99));
+        }
+    }
+
+    #[test]
     fn probaln_glocal_matches_htslib_state_and_posterior() {
         unsafe {
             let ref_ = encode_bases(b"ACGTACGTNNACGTACGT");
@@ -482,4 +905,136 @@ mod tests {
             assert_eq!(rust_q, c_q);
         }
     }
+
+    #[test]
+    fn probaln_glocal_matches_htslib_high_quality_table_path() {
+        unsafe {
+            let ref_ = encode_bases(b"ACGTACGTACGTACGTNNNNACGTACGT");
+            let query = encode_bases(b"ACGTTCGTACGTNNACGT");
+            let qual = [
+                255, 254, 253, 252, 251, 250, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34,
+            ];
+            let par = probaln_par_t {
+                d: 0.001,
+                e: 0.1,
+                bw: 10,
+            };
+            let mut rust_state = vec![0; query.len()];
+            let mut rust_q = vec![0; query.len()];
+            let mut c_state = vec![0; query.len()];
+            let mut c_q = vec![0; query.len()];
+            let rust_score = probaln_glocal(
+                ref_.as_ptr(),
+                ref_.len() as c_int,
+                query.as_ptr(),
+                query.len() as c_int,
+                qual.as_ptr(),
+                &par,
+                rust_state.as_mut_ptr(),
+                rust_q.as_mut_ptr(),
+            );
+            let c_score = hts_sys::probaln_glocal(
+                ref_.as_ptr(),
+                ref_.len() as c_int,
+                query.as_ptr(),
+                query.len() as c_int,
+                qual.as_ptr(),
+                &par,
+                c_state.as_mut_ptr(),
+                c_q.as_mut_ptr(),
+            );
+            assert_eq!(rust_score, c_score);
+            assert_eq!(rust_state, c_state);
+            assert_eq!(rust_q, c_q);
+        }
+    }
+}
+
+// original: probaln_glocal (htslib/probaln.c:77)
+pub unsafe fn probaln_c_77_probaln_glocal(
+    ref_: *const u8,
+    l_ref: c_int,
+    query: *const u8,
+    l_query: c_int,
+    iqual: *const u8,
+    c: *const probaln_par_t,
+    state: *mut c_int,
+    q: *mut u8,
+) -> c_int {
+    probaln_glocal(ref_, l_ref, query, l_query, iqual, c, state, q)
+}
+
+// original: main (htslib/probaln.c:438)
+pub unsafe fn probaln_c_438_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+    let mut conv = [4u8; 256];
+    let mut par = probaln_par_t {
+        d: 0.001,
+        e: 0.1,
+        bw: 10,
+    };
+    let mut q = 30;
+    let mut b = 10;
+
+    loop {
+        let c = libc::getopt(argc, argv, c"b:q:".as_ptr());
+        if c < 0 {
+            break;
+        }
+        match c {
+            c if c == b'b' as c_int => b = libc::atoi(optarg),
+            c if c == b'q' as c_int => q = libc::atoi(optarg),
+            _ => {}
+        }
+    }
+    if optind + 2 > argc {
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"Usage: %s [-q %d] [-b %d] <ref> <query>\n".as_ptr(),
+            *argv,
+            q,
+            b,
+        );
+        return 1;
+    }
+
+    conv[b'a' as usize] = 0;
+    conv[b'A' as usize] = 0;
+    conv[b'c' as usize] = 1;
+    conv[b'C' as usize] = 1;
+    conv[b'g' as usize] = 2;
+    conv[b'G' as usize] = 2;
+    conv[b't' as usize] = 3;
+    conv[b'T' as usize] = 3;
+
+    let ref_ = *argv.add(optind as usize) as *mut u8;
+    let query = *argv.add(optind as usize + 1) as *mut u8;
+    let l_ref = libc::strlen(ref_.cast()) as c_int;
+    let l_query = libc::strlen(query.cast()) as c_int;
+    let mut i = 0;
+    while i < l_ref {
+        *ref_.add(i as usize) = conv[*ref_.add(i as usize) as usize];
+        i += 1;
+    }
+    i = 0;
+    while i < l_query {
+        *query.add(i as usize) = conv[*query.add(i as usize) as usize];
+        i += 1;
+    }
+
+    let iqual = libc::malloc(l_query as usize).cast::<u8>();
+    libc::memset(iqual.cast(), q, l_query as usize);
+    par.bw = b;
+    let p = probaln_glocal(
+        ref_,
+        l_ref,
+        query,
+        l_query,
+        iqual,
+        &par,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
+    libc::fprintf(hts_sys::stderr.cast(), c"%d\n".as_ptr(), p);
+    libc::free(iqual.cast());
+    0
 }

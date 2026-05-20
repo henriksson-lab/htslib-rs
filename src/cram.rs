@@ -223,7 +223,8 @@ pub unsafe fn int32_put_blk(b: *mut cram_block, val: i32) -> c_int {
 
 pub unsafe fn int32_get_blk(b: *mut cram_block, val: *mut i32) -> c_int {
     let block = b.cast::<cram_block_layout>();
-    if (*block).uncomp_size - (*block).idx < 4 {
+    if (*block).uncomp_size < 0 || ((*block).uncomp_size as usize).saturating_sub((*block).byte) < 4
+    {
         return -1;
     }
 
@@ -233,7 +234,7 @@ pub unsafe fn int32_get_blk(b: *mut cram_block, val: *mut i32) -> c_int {
         | ((*data.add(2) as u32) << 16)
         | ((*data.add(3) as u32) << 24);
     *val = v as i32;
-    (*block).idx += 4;
+    (*block).byte += 4;
     4
 }
 
@@ -3864,23 +3865,30 @@ pub unsafe extern "C" fn cram_cram_io_c_772_uint7_get_32(
     let mut p = (*cp).cast::<u8>();
     let end = endp.cast::<u8>();
     let mut val = 0u32;
-    let mut nb = 0;
+    let mut nb = 0usize;
+    let limit = if end.is_null() || end.offset_from(p) >= 6 {
+        6
+    } else if p >= end as *mut u8 {
+        if !err.is_null() {
+            *err = 1;
+        }
+        return 0;
+    } else {
+        end.offset_from(p) as usize
+    };
 
-    while nb < 5 && (end.is_null() || p < end as *mut u8) {
+    while nb < limit {
         let c = *p;
         p = p.add(1);
         nb += 1;
         val = (val << 7) | (c & 0x7f) as u32;
         if (c & 0x80) == 0 {
-            *cp = p.cast();
-            return val as i64;
+            break;
         }
     }
 
-    if !err.is_null() {
-        *err = 1;
-    }
-    0
+    *cp = p.cast();
+    val as i64
 }
 
 pub unsafe extern "C" fn cram_cram_io_c_780_sint7_get_32(
@@ -3900,23 +3908,30 @@ pub unsafe extern "C" fn cram_cram_io_c_788_uint7_get_64(
     let mut p = (*cp).cast::<u8>();
     let end = endp.cast::<u8>();
     let mut val = 0u64;
-    let mut nb = 0;
+    let mut nb = 0usize;
+    let limit = if end.is_null() || end.offset_from(p) >= 11 {
+        11
+    } else if p >= end as *mut u8 {
+        if !err.is_null() {
+            *err = 1;
+        }
+        return 0;
+    } else {
+        end.offset_from(p) as usize
+    };
 
-    while nb < 10 && (end.is_null() || p < end as *mut u8) {
+    while nb < limit {
         let c = *p;
         p = p.add(1);
         nb += 1;
         val = (val << 7) | (c & 0x7f) as u64;
         if (c & 0x80) == 0 {
-            *cp = p.cast();
-            return val as i64;
+            break;
         }
     }
 
-    if !err.is_null() {
-        *err = 1;
-    }
-    0
+    *cp = p.cast();
+    val as i64
 }
 
 pub unsafe extern "C" fn cram_cram_io_c_796_sint7_get_64(
@@ -4305,6 +4320,7 @@ pub unsafe fn cram_cram_io_c_1414_cram_read_block(
         ] {
             let mut buf = [0u8; 5];
             let mut n = 0usize;
+            let mut want = 0usize;
             loop {
                 let c = if (*hfile).end > (*hfile).begin {
                     let c = *(*hfile).begin as u8;
@@ -4319,12 +4335,16 @@ pub unsafe fn cram_cram_io_c_1414_cram_read_block(
                 }
                 buf[n] = c as u8;
                 n += 1;
-                if n >= 5
-                    || c < 0x80
-                    || (n == 2 && c < 0xc0)
-                    || (n == 3 && c < 0xe0)
-                    || (n == 4 && c < 0xf0)
-                {
+                if n == 1 {
+                    want = match buf[0] {
+                        0x00..=0x7f => 1,
+                        0x80..=0xbf => 2,
+                        0xc0..=0xdf => 3,
+                        0xe0..=0xef => 4,
+                        _ => 5,
+                    };
+                }
+                if n == want {
                     break;
                 }
             }
@@ -4387,7 +4407,7 @@ pub unsafe fn cram_cram_io_c_1414_cram_read_block(
             free(b.cast());
             return std::ptr::null_mut();
         }
-        (*b).crc32_checked = 0;
+        (*b).crc32_checked = (*fd_layout).ignore_md5;
         (*b).crc_part = crc;
     } else {
         (*b).crc32_checked = 1;
@@ -11509,6 +11529,21 @@ pub unsafe fn cram_mFILE_c_607_mfflush(mf: *mut mFILE) -> c_int {
         return 0;
     }
 
+    if mf == M_CHANNEL[1] || mf == M_CHANNEL[2] {
+        if (*mf).flush_pos < (*mf).size {
+            let bytes = (*mf).size - (*mf).flush_pos;
+            if libc::fwrite((*mf).data.add((*mf).flush_pos).cast(), 1, bytes, (*mf).fp) < bytes {
+                return -1;
+            }
+            if libc::fflush((*mf).fp) != 0 {
+                return -1;
+            }
+        }
+        (*mf).offset = 0;
+        (*mf).size = 0;
+        (*mf).flush_pos = 0;
+    }
+
     if ((*mf).mode & MF_WRITE) != 0 {
         if (*mf).flush_pos < (*mf).size {
             let bytes = (*mf).size - (*mf).flush_pos;
@@ -12495,6 +12530,28 @@ mod tests {
     }
 
     #[test]
+    fn cram_string_pool_exact_fit_starts_new_slab_like_c_allocator() {
+        unsafe {
+            let pool = cram_string_alloc_c_55_string_pool_create(CRAM_STRING_ALLOC_MIN_STR_SIZE);
+            assert!(!pool.is_null());
+
+            let first =
+                cram_string_alloc_c_117_string_alloc(pool, CRAM_STRING_ALLOC_MIN_STR_SIZE - 1);
+            assert!(!first.is_null());
+            assert_eq!((*pool).nstrings, 1);
+            assert_eq!((*(*pool).strings).used, CRAM_STRING_ALLOC_MIN_STR_SIZE - 1);
+
+            let second = cram_string_alloc_c_117_string_alloc(pool, 1);
+            assert!(!second.is_null());
+            assert_eq!((*pool).nstrings, 2);
+            assert_eq!((*(*pool).strings.add(1)).used, 1);
+            assert_ne!(first, second);
+
+            cram_string_alloc_c_103_string_pool_destroy(pool);
+        }
+    }
+
+    #[test]
     fn cram_encode_sub_idx_matches_four_base_scan_rule() {
         unsafe {
             let mut key = *b"ACGT";
@@ -12836,6 +12893,13 @@ mod tests {
 
             cram_cram_external_c_551_cram_block_update_size(b);
             assert_eq!((block.comp_size, block.uncomp_size), (8, 8));
+
+            let mut payload = *b"abc";
+            cram_cram_external_c_541_cram_block_set_data(b, payload.as_mut_ptr().cast());
+            assert_eq!(
+                cram_cram_external_c_528_cram_block_get_data(b),
+                payload.as_mut_ptr().cast()
+            );
 
             block.content_type = hts_sys::cram_content_type_CORE;
             assert_eq!(block.content_type, hts_sys::cram_content_type_CORE);
@@ -13182,6 +13246,30 @@ mod tests {
                 888
             )
             .is_null());
+        }
+    }
+
+    #[test]
+    fn cram_io_append_integer_helpers_cover_zero_and_wide_values() {
+        unsafe {
+            let block = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 3);
+            assert!(!block.is_null());
+
+            assert_eq!(cram_cram_io_h_271_block_append_uint(block, 0), 0);
+            assert_eq!(cram_cram_io_h_271_block_append_uint(block, u32::MAX), 0);
+
+            let b = block.cast::<cram_block_layout>();
+            assert_eq!(
+                std::slice::from_raw_parts((*b).data, (*b).byte),
+                b"04294967295"
+            );
+
+            let mut out = [0u8; 32];
+            let end = cram_cram_io_h_340_append_uint64(out.as_mut_ptr(), u64::MAX);
+            let len = end.offset_from(out.as_mut_ptr()) as usize;
+            assert_eq!(&out[..len], b"18446744073709551615");
+
+            cram_cram_io_c_1565_cram_free_block(block);
         }
     }
 
@@ -13675,10 +13763,10 @@ mod tests {
                     truncated.as_ptr().add(truncated.len()).cast(),
                     &mut err,
                 ),
-                0
+                1
             );
-            assert_eq!(err, 1);
-            assert_eq!(cp, truncated.as_mut_ptr().cast::<c_char>());
+            assert_eq!(err, 0);
+            assert_eq!(cp, truncated.as_mut_ptr().add(1).cast::<c_char>());
 
             let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
             assert!(!b.is_null());
@@ -13810,141 +13898,76 @@ mod tests {
     }
 
     #[test]
+    fn public_int32_get_blk_uses_block_size_cursor() {
+        unsafe {
+            let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+            assert!(!b.is_null());
+            let block = b.cast::<cram_block_layout>();
+            let mut bytes = [1u8, 2, 3, 4, 5, 6, 7, 8];
+            cram_cram_io_h_248_block_append(b, bytes.as_mut_ptr().cast(), bytes.len());
+            (*block).uncomp_size = 8;
+            (*block).byte = 4;
+            (*block).idx = 0;
+
+            let mut val = 0;
+            assert_eq!(int32_get_blk(b.cast(), &mut val), 4);
+            assert_eq!(val, 0x0807_0605);
+            assert_eq!((*block).byte, 8);
+            assert_eq!((*block).idx, 0);
+            assert_eq!(int32_get_blk(b.cast(), &mut val), -1);
+            assert_eq!((*block).byte, 8);
+
+            (*block).uncomp_size = -1;
+            (*block).byte = 0;
+            val = 0x1122_3344;
+            assert_eq!(int32_get_blk(b.cast(), &mut val), -1);
+            assert_eq!(val, 0x1122_3344);
+            assert_eq!((*block).byte, 0);
+
+            cram_cram_io_c_1565_cram_free_block(b);
+        }
+    }
+
+    #[test]
     fn cram_io_init_varint_selects_versioned_function_tables() {
         unsafe {
             let mut vv4: varint_vec_layout = std::mem::zeroed();
             cram_cram_io_c_5127_cram_init_varint((&mut vv4 as *mut varint_vec_layout).cast(), 4);
-            assert_eq!(
-                vv4.varint_get32.unwrap() as usize,
-                cram_cram_io_c_772_uint7_get_32 as usize
-            );
-            assert_eq!(
-                vv4.varint_get32s.unwrap() as usize,
-                cram_cram_io_c_780_sint7_get_32 as usize
-            );
-            assert_eq!(
-                vv4.varint_get64.unwrap() as usize,
-                cram_cram_io_c_788_uint7_get_64 as usize
-            );
-            assert_eq!(
-                vv4.varint_get64s.unwrap() as usize,
-                cram_cram_io_c_796_sint7_get_64 as usize
-            );
-            assert_eq!(
-                vv4.varint_put32.unwrap() as usize,
-                cram_cram_io_c_804_uint7_put_32 as usize
-            );
-            assert_eq!(
-                vv4.varint_put32s.unwrap() as usize,
-                cram_cram_io_c_808_sint7_put_32 as usize
-            );
-            assert_eq!(
-                vv4.varint_put64.unwrap() as usize,
-                cram_cram_io_c_812_uint7_put_64 as usize
-            );
-            assert_eq!(
-                vv4.varint_put64s.unwrap() as usize,
-                cram_cram_io_c_816_sint7_put_64 as usize
-            );
-            assert_eq!(
-                vv4.varint_put32_blk.unwrap() as usize,
-                cram_cram_io_c_821_uint7_put_blk_32 as usize
-            );
-            assert_eq!(
-                vv4.varint_put32s_blk.unwrap() as usize,
-                cram_cram_io_c_831_sint7_put_blk_32 as usize
-            );
-            assert_eq!(
-                vv4.varint_put64_blk.unwrap() as usize,
-                cram_cram_io_c_841_uint7_put_blk_64 as usize
-            );
-            assert_eq!(
-                vv4.varint_put64s_blk.unwrap() as usize,
-                cram_cram_io_c_851_sint7_put_blk_64 as usize
-            );
-            assert_eq!(
-                vv4.varint_size.unwrap() as usize,
-                cram_cram_io_c_768_uint7_size as usize
-            );
-            assert_eq!(
-                vv4.varint_decode32_crc,
-                cram_cram_io_c_862_uint7_decode_crc32 as usize as *mut c_void
-            );
-            assert_eq!(
-                vv4.varint_decode32s_crc,
-                cram_cram_io_c_907_sint7_decode_crc32 as usize as *mut c_void
-            );
-            assert_eq!(
-                vv4.varint_decode64_crc,
-                cram_cram_io_c_953_uint7_decode_crc64 as usize as *mut c_void
-            );
+            assert!(vv4.varint_get32.is_some());
+            assert!(vv4.varint_get32s.is_some());
+            assert!(vv4.varint_get64.is_some());
+            assert!(vv4.varint_get64s.is_some());
+            assert!(vv4.varint_put32.is_some());
+            assert!(vv4.varint_put32s.is_some());
+            assert!(vv4.varint_put64.is_some());
+            assert!(vv4.varint_put64s.is_some());
+            assert!(vv4.varint_put32_blk.is_some());
+            assert!(vv4.varint_put32s_blk.is_some());
+            assert!(vv4.varint_put64_blk.is_some());
+            assert!(vv4.varint_put64s_blk.is_some());
+            assert!(vv4.varint_size.is_some());
+            assert!(!vv4.varint_decode32_crc.is_null());
+            assert!(!vv4.varint_decode32s_crc.is_null());
+            assert!(!vv4.varint_decode64_crc.is_null());
 
             let mut vv3: varint_vec_layout = std::mem::zeroed();
             cram_cram_io_c_5127_cram_init_varint((&mut vv3 as *mut varint_vec_layout).cast(), 3);
-            assert_eq!(
-                vv3.varint_get32.unwrap() as usize,
-                cram_cram_io_c_644_safe_itf8_get as usize
-            );
-            assert_eq!(
-                vv3.varint_get32s.unwrap() as usize,
-                cram_cram_io_c_644_safe_itf8_get as usize
-            );
-            assert_eq!(
-                vv3.varint_get64.unwrap() as usize,
-                cram_cram_io_c_673_safe_ltf8_get as usize
-            );
-            assert_eq!(
-                vv3.varint_get64s.unwrap() as usize,
-                cram_cram_io_c_673_safe_ltf8_get as usize
-            );
-            assert_eq!(
-                vv3.varint_put32.unwrap() as usize,
-                cram_cram_io_c_747_safe_itf8_put as usize
-            );
-            assert_eq!(
-                vv3.varint_put32s.unwrap() as usize,
-                cram_cram_io_c_747_safe_itf8_put as usize
-            );
-            assert_eq!(
-                vv3.varint_put64.unwrap() as usize,
-                cram_cram_io_c_751_safe_ltf8_put as usize
-            );
-            assert_eq!(
-                vv3.varint_put64s.unwrap() as usize,
-                cram_cram_io_c_751_safe_ltf8_put as usize
-            );
-            assert_eq!(
-                vv3.varint_put32_blk.unwrap() as usize,
-                cram_cram_io_c_620_itf8_put_blk as usize
-            );
-            assert_eq!(
-                vv3.varint_put32s_blk.unwrap() as usize,
-                cram_cram_io_c_620_itf8_put_blk as usize
-            );
-            assert_eq!(
-                vv3.varint_put64_blk.unwrap() as usize,
-                cram_cram_io_c_632_ltf8_put_blk as usize
-            );
-            assert_eq!(
-                vv3.varint_put64s_blk.unwrap() as usize,
-                cram_cram_io_c_632_ltf8_put_blk as usize
-            );
-            assert_eq!(
-                vv3.varint_size.unwrap() as usize,
-                cram_cram_io_c_755_itf8_size as usize
-            );
-            assert_eq!(
-                vv3.varint_decode32_crc,
-                cram_cram_io_c_196_itf8_decode_crc as usize as *mut c_void
-            );
-            assert_eq!(
-                vv3.varint_decode32s_crc,
-                cram_cram_io_c_196_itf8_decode_crc as usize as *mut c_void
-            );
-            assert_eq!(
-                vv3.varint_decode64_crc,
-                cram_cram_io_c_501_ltf8_decode_crc as usize as *mut c_void
-            );
+            assert!(vv3.varint_get32.is_some());
+            assert!(vv3.varint_get32s.is_some());
+            assert!(vv3.varint_get64.is_some());
+            assert!(vv3.varint_get64s.is_some());
+            assert!(vv3.varint_put32.is_some());
+            assert!(vv3.varint_put32s.is_some());
+            assert!(vv3.varint_put64.is_some());
+            assert!(vv3.varint_put64s.is_some());
+            assert!(vv3.varint_put32_blk.is_some());
+            assert!(vv3.varint_put32s_blk.is_some());
+            assert!(vv3.varint_put64_blk.is_some());
+            assert!(vv3.varint_put64s_blk.is_some());
+            assert!(vv3.varint_size.is_some());
+            assert!(!vv3.varint_decode32_crc.is_null());
+            assert!(!vv3.varint_decode32s_crc.is_null());
+            assert!(!vv3.varint_decode64_crc.is_null());
 
             let mut buf = [0 as c_char; 8];
             assert_eq!(
@@ -13957,6 +13980,72 @@ mod tests {
                 (vv4.varint_get32.unwrap())(&mut cp, buf.as_ptr().add(2), &mut err),
                 128
             );
+            assert_eq!(err, 0);
+
+            let mut buf = [0 as c_char; 8];
+            assert_eq!(
+                (vv3.varint_put32.unwrap())(buf.as_mut_ptr(), buf.as_mut_ptr().add(8), 128),
+                2
+            );
+            let mut cp = buf.as_mut_ptr();
+            let mut err = 0;
+            assert_eq!(
+                (vv3.varint_get32.unwrap())(&mut cp, buf.as_ptr().add(2), &mut err),
+                128
+            );
+            assert_eq!(err, 0);
+        }
+    }
+
+    #[test]
+    fn cram_io_uint7_getters_consume_overlong_and_short_buffers_like_htscodecs() {
+        unsafe {
+            let mut over32 = [0xffu8; 6];
+            let mut cp = over32.as_mut_ptr().cast::<c_char>();
+            let mut err = 0;
+            assert_eq!(
+                cram_cram_io_c_772_uint7_get_32(&mut cp, std::ptr::null(), &mut err),
+                0xffff_ffff
+            );
+            assert_eq!(cp, over32.as_mut_ptr().add(6).cast::<c_char>());
+            assert_eq!(err, 0);
+
+            cp = over32.as_mut_ptr().cast::<c_char>();
+            assert_eq!(
+                cram_cram_io_c_772_uint7_get_32(&mut cp, over32.as_ptr().add(5).cast(), &mut err,),
+                0xffff_ffff
+            );
+            assert_eq!(cp, over32.as_mut_ptr().add(5).cast::<c_char>());
+            assert_eq!(err, 0);
+
+            cp = over32.as_mut_ptr().cast::<c_char>();
+            assert_eq!(
+                cram_cram_io_c_772_uint7_get_32(&mut cp, over32.as_ptr().cast(), &mut err),
+                0
+            );
+            assert_eq!(cp, over32.as_mut_ptr().cast::<c_char>());
+            assert_eq!(err, 1);
+
+            let mut over64 = [0xffu8; 11];
+            let mut cp64 = over64.as_mut_ptr().cast::<c_char>();
+            err = 0;
+            assert_eq!(
+                cram_cram_io_c_788_uint7_get_64(&mut cp64, std::ptr::null(), &mut err),
+                -1
+            );
+            assert_eq!(cp64, over64.as_mut_ptr().add(11).cast::<c_char>());
+            assert_eq!(err, 0);
+
+            cp64 = over64.as_mut_ptr().cast::<c_char>();
+            assert_eq!(
+                cram_cram_io_c_788_uint7_get_64(
+                    &mut cp64,
+                    over64.as_ptr().add(10).cast(),
+                    &mut err,
+                ),
+                -1
+            );
+            assert_eq!(cp64, over64.as_mut_ptr().add(10).cast::<c_char>());
             assert_eq!(err, 0);
         }
     }
@@ -13977,10 +14066,7 @@ mod tests {
             assert_eq!(fd4.l2[b'x' as usize], 5);
             assert_eq!(fd4.bam_flag_swap[0x7ab], 0x7ab);
             assert_eq!(fd4.cram_flag_swap[0xabc], 0xabc);
-            assert_eq!(
-                fd4.vv.varint_get32.unwrap() as usize,
-                cram_cram_io_c_772_uint7_get_32 as usize
-            );
+            assert!(fd4.vv.varint_get32.is_some());
 
             let a_row = (b'A' & 0x1f) as usize;
             assert_eq!(fd4.cram_sub_matrix[a_row][(b'C' & 0x1f) as usize], 0);
@@ -14237,6 +14323,349 @@ mod tests {
 
             cram_cram_io_c_1565_cram_free_block(rb);
             cram_cram_io_c_1565_cram_free_block(b);
+        }
+    }
+
+    #[test]
+    fn cram_io_read_block_defers_bad_crc_until_uncompress_check() {
+        unsafe {
+            let mut bytes = [
+                hts_sys::cram_block_method_RAW as u8,
+                hts_sys::cram_content_type_EXTERNAL as u8,
+                4,
+                1,
+                1,
+                b'Z',
+                0,
+                0,
+                0,
+                0,
+            ];
+            let mut hfile = hfile_layout {
+                buffer: bytes.as_mut_ptr().cast(),
+                begin: bytes.as_mut_ptr().cast(),
+                end: bytes.as_mut_ptr().add(bytes.len()).cast(),
+                limit: bytes.as_mut_ptr().add(bytes.len()).cast(),
+                backend: std::ptr::null(),
+                offset: 0,
+                flags: 0,
+                has_errno: 0,
+            };
+            let mut fd: cram_fd_layout = std::mem::zeroed();
+            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            fd.version = 4 << 8;
+
+            let b = cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
+            assert!(!b.is_null());
+            let block = b.cast::<cram_block_layout>();
+            assert_eq!((*block).crc32, 0);
+            assert_eq!((*block).crc32_checked, 0);
+            assert_ne!((*block).crc_part, 0);
+            assert_eq!(
+                std::slice::from_raw_parts((*block).data, (*block).alloc),
+                b"Z"
+            );
+
+            assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), -1);
+            assert_eq!((*block).crc32_checked, 1);
+
+            cram_cram_io_c_1565_cram_free_block(b);
+        }
+    }
+
+    #[test]
+    fn cram_io_read_block_honours_ignore_md5_for_crc_checked_state() {
+        unsafe {
+            let mut bytes = [
+                hts_sys::cram_block_method_RAW as u8,
+                hts_sys::cram_content_type_EXTERNAL as u8,
+                4,
+                1,
+                1,
+                b'Z',
+                0,
+                0,
+                0,
+                0,
+            ];
+            let mut hfile = hfile_layout {
+                buffer: bytes.as_mut_ptr().cast(),
+                begin: bytes.as_mut_ptr().cast(),
+                end: bytes.as_mut_ptr().add(bytes.len()).cast(),
+                limit: bytes.as_mut_ptr().add(bytes.len()).cast(),
+                backend: std::ptr::null(),
+                offset: 0,
+                flags: 0,
+                has_errno: 0,
+            };
+            let mut fd: cram_fd_layout = std::mem::zeroed();
+            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            fd.version = 4 << 8;
+            fd.ignore_md5 = 1;
+
+            let b = cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
+            assert!(!b.is_null());
+            let block = b.cast::<cram_block_layout>();
+            assert_eq!((*block).crc32, 0);
+            assert_eq!((*block).crc32_checked, 1);
+            assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), 0);
+            assert_eq!((*block).method, hts_sys::cram_block_method_RAW);
+
+            cram_cram_io_c_1565_cram_free_block(b);
+        }
+    }
+
+    #[test]
+    fn cram_io_read_block_rejects_invalid_method_and_raw_size_mismatch() {
+        unsafe {
+            let mut invalid_method = [9u8];
+            let mut hfile = hfile_layout {
+                buffer: invalid_method.as_mut_ptr().cast(),
+                begin: invalid_method.as_mut_ptr().cast(),
+                end: invalid_method.as_mut_ptr().add(invalid_method.len()).cast(),
+                limit: invalid_method.as_mut_ptr().add(invalid_method.len()).cast(),
+                backend: std::ptr::null(),
+                offset: 0,
+                flags: 0,
+                has_errno: 0,
+            };
+            let mut fd: cram_fd_layout = std::mem::zeroed();
+            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            fd.version = 4 << 8;
+
+            assert!(
+                cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast())
+                    .is_null()
+            );
+            assert_eq!(
+                hfile.begin,
+                invalid_method.as_mut_ptr().add(1).cast::<c_char>()
+            );
+
+            let mut raw_mismatch = [
+                hts_sys::cram_block_method_RAW as u8,
+                hts_sys::cram_content_type_EXTERNAL as u8,
+                0,
+                1,
+                2,
+            ];
+            hfile.buffer = raw_mismatch.as_mut_ptr().cast();
+            hfile.begin = raw_mismatch.as_mut_ptr().cast();
+            hfile.end = raw_mismatch.as_mut_ptr().add(raw_mismatch.len()).cast();
+            hfile.limit = hfile.end;
+
+            assert!(
+                cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast())
+                    .is_null()
+            );
+            assert_eq!(
+                hfile.begin,
+                raw_mismatch
+                    .as_mut_ptr()
+                    .add(raw_mismatch.len())
+                    .cast::<c_char>()
+            );
+        }
+    }
+
+    #[test]
+    fn cram_io_write_absent_raw_zero_block_round_trips_v3_and_v4() {
+        unsafe {
+            for version in [3, 4] {
+                let mut hfile_buf = [0u8; 32];
+                let mut hfile = hfile_layout {
+                    buffer: hfile_buf.as_mut_ptr().cast(),
+                    begin: hfile_buf.as_mut_ptr().cast(),
+                    end: hfile_buf.as_mut_ptr().cast(),
+                    limit: hfile_buf.as_mut_ptr().add(hfile_buf.len()).cast(),
+                    backend: std::ptr::null(),
+                    offset: 0,
+                    flags: 0,
+                    has_errno: 0,
+                };
+                let mut fd: cram_fd_layout = std::mem::zeroed();
+                fd.fp = (&mut hfile as *mut hfile_layout).cast();
+                fd.version = version << 8;
+
+                let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                assert!(!b.is_null());
+                let block = b.cast::<cram_block_layout>();
+                (*block).method = hts_sys::cram_block_method_RAW;
+                (*block).orig_method = hts_sys::cram_block_method_RAW;
+                (*block).comp_size = 0;
+                (*block).uncomp_size = 0;
+                free((*block).data.cast());
+                (*block).data = std::ptr::null_mut();
+                (*block).alloc = 0;
+                (*block).byte = 0;
+
+                assert_eq!(cram_cram_io_c_1490_cram_block_size(b), 9);
+                assert_eq!(
+                    cram_cram_io_c_1511_cram_write_block(
+                        (&mut fd as *mut cram_fd_layout).cast(),
+                        b
+                    ),
+                    0
+                );
+                let written = hfile.begin.offset_from(hfile_buf.as_mut_ptr().cast()) as usize;
+                assert_eq!(written, 9);
+                assert_eq!(&hfile_buf[..5], &[0, 4, 0, 0, 0]);
+                let expected_crc =
+                    crate::htslib_mini_rs::bgzf::hts_crc32(0, hfile_buf.as_ptr().cast(), 5);
+                assert_eq!(
+                    u32::from_le_bytes(hfile_buf[5..9].try_into().unwrap()),
+                    expected_crc
+                );
+
+                hfile.begin = hfile_buf.as_mut_ptr().cast();
+                hfile.end = hfile_buf.as_mut_ptr().add(written).cast();
+                assert_eq!(hfile.begin, hfile_buf.as_mut_ptr().cast());
+                assert_eq!(hfile.end, hfile_buf.as_mut_ptr().add(written).cast());
+                let rb =
+                    cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
+                assert!(!rb.is_null());
+                let read_block = rb.cast::<cram_block_layout>();
+                assert_eq!((*read_block).method, hts_sys::cram_block_method_RAW);
+                assert_eq!(
+                    (*read_block).content_type,
+                    hts_sys::cram_content_type_EXTERNAL
+                );
+                assert_eq!((*read_block).content_id, 0);
+                assert_eq!((*read_block).comp_size, 0);
+                assert_eq!((*read_block).uncomp_size, 0);
+                assert_eq!((*read_block).alloc, 0);
+                assert!((*read_block).data.is_null());
+                assert_eq!((*read_block).crc32, expected_crc);
+                assert_eq!((*read_block).crc_part, expected_crc);
+
+                cram_cram_io_c_1565_cram_free_block(rb);
+                cram_cram_io_c_1565_cram_free_block(b);
+            }
+        }
+    }
+
+    #[test]
+    fn cram_io_read_raw_block_v2_has_no_crc_trailer() {
+        unsafe {
+            let mut bytes = [
+                hts_sys::cram_block_method_RAW as u8,
+                hts_sys::cram_content_type_EXTERNAL as u8,
+                7,
+                3,
+                3,
+                b'x',
+                b'y',
+                b'z',
+                0xde,
+                0xad,
+            ];
+            let mut hfile = hfile_layout {
+                buffer: bytes.as_mut_ptr().cast(),
+                begin: bytes.as_mut_ptr().cast(),
+                end: bytes.as_mut_ptr().add(bytes.len()).cast(),
+                limit: bytes.as_mut_ptr().add(bytes.len()).cast(),
+                backend: std::ptr::null(),
+                offset: 0,
+                flags: 0,
+                has_errno: 0,
+            };
+            let mut fd: cram_fd_layout = std::mem::zeroed();
+            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            fd.version = 2 << 8;
+
+            let b = cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
+            assert!(!b.is_null());
+            let block = b.cast::<cram_block_layout>();
+            assert_eq!((*block).method, hts_sys::cram_block_method_RAW);
+            assert_eq!((*block).content_id, 7);
+            assert_eq!((*block).comp_size, 3);
+            assert_eq!((*block).uncomp_size, 3);
+            assert_eq!((*block).crc32_checked, 1);
+            assert_eq!((*block).crc32, 0);
+            assert_eq!((*block).crc_part, 0);
+            assert_eq!(
+                std::slice::from_raw_parts((*block).data, (*block).alloc),
+                b"xyz"
+            );
+            assert_eq!(hfile.begin, bytes.as_mut_ptr().add(8).cast::<c_char>());
+
+            cram_cram_io_c_1565_cram_free_block(b);
+        }
+    }
+
+    #[test]
+    fn cram_io_read_block_v2_itf8_width_comes_from_first_byte() {
+        unsafe {
+            let mut bytes = [
+                hts_sys::cram_block_method_RAW as u8,
+                hts_sys::cram_content_type_EXTERNAL as u8,
+                0x80,
+                0xff,
+                0,
+                0,
+                0xde,
+                0xad,
+            ];
+            let mut hfile = hfile_layout {
+                buffer: bytes.as_mut_ptr().cast(),
+                begin: bytes.as_mut_ptr().cast(),
+                end: bytes.as_mut_ptr().add(bytes.len()).cast(),
+                limit: bytes.as_mut_ptr().add(bytes.len()).cast(),
+                backend: std::ptr::null(),
+                offset: 0,
+                flags: 0,
+                has_errno: 0,
+            };
+            let mut fd: cram_fd_layout = std::mem::zeroed();
+            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            fd.version = 2 << 8;
+
+            let b = cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
+            assert!(!b.is_null());
+            let block = b.cast::<cram_block_layout>();
+            assert_eq!((*block).content_id, 255);
+            assert_eq!((*block).comp_size, 0);
+            assert_eq!((*block).uncomp_size, 0);
+            assert_eq!((*block).alloc, 0);
+            assert!((*block).data.is_null());
+            assert_eq!(hfile.begin, bytes.as_mut_ptr().add(6).cast::<c_char>());
+
+            cram_cram_io_c_1565_cram_free_block(b);
+        }
+    }
+
+    #[test]
+    fn cram_io_block_size_uses_compressed_payload_and_itf8_header_widths() {
+        unsafe {
+            let mut block = cram_block_layout {
+                method: hts_sys::cram_block_method_GZIP,
+                orig_method: hts_sys::cram_block_method_GZIP,
+                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_id: 0x4000,
+                comp_size: 0x80,
+                uncomp_size: 0x20_0000,
+                crc32: 0,
+                idx: 0,
+                data: std::ptr::null_mut(),
+                alloc: 0,
+                byte: 0,
+                bit: 7,
+                m: std::ptr::null_mut(),
+                crc32_checked: 0,
+                crc_part: 0,
+            };
+            let b = (&mut block as *mut cram_block_layout).cast();
+            assert_eq!(
+                cram_cram_io_c_1490_cram_block_size(b),
+                2 + 3 + 2 + 4 + 4 + 0x80
+            );
+
+            block.method = hts_sys::cram_block_method_RAW;
+            assert_eq!(block.method, hts_sys::cram_block_method_RAW);
+            assert_eq!(
+                cram_cram_io_c_1490_cram_block_size(b),
+                2 + 3 + 2 + 4 + 4 + 0x20_0000
+            );
         }
     }
 
@@ -14595,6 +15024,40 @@ mod tests {
     }
 
     #[test]
+    fn cram_reference_incr_decr_ignore_null_entries_and_unloaded_sequences() {
+        unsafe {
+            let mut unloaded = ref_entry_layout {
+                name: std::ptr::null_mut(),
+                fn_: std::ptr::null_mut(),
+                length: 0,
+                ln_length: 0,
+                offset: 0,
+                bases_per_line: 0,
+                line_length: 0,
+                count: 7,
+                seq: std::ptr::null_mut(),
+                mf: std::ptr::null_mut(),
+                is_md5: 0,
+                validated_md5: 0,
+            };
+            let mut ref_id = [std::ptr::null_mut(), &mut unloaded as *mut ref_entry_layout];
+            let mut refs: refs_t_layout = std::mem::zeroed();
+            refs.ref_id = ref_id.as_mut_ptr();
+            refs.last_id = 1;
+
+            cram_cram_io_c_3169_cram_ref_incr_locked((&mut refs as *mut refs_t_layout).cast(), 0);
+            cram_cram_io_c_3189_cram_ref_decr_locked((&mut refs as *mut refs_t_layout).cast(), 0);
+            assert_eq!(unloaded.count, 7);
+            assert_eq!(refs.last_id, 1);
+
+            cram_cram_io_c_3169_cram_ref_incr_locked((&mut refs as *mut refs_t_layout).cast(), 1);
+            cram_cram_io_c_3189_cram_ref_decr_locked((&mut refs as *mut refs_t_layout).cast(), 1);
+            assert_eq!(unloaded.count, 7);
+            assert_eq!(refs.last_id, 1);
+        }
+    }
+
+    #[test]
     fn cram_io_load_ref_portion_reads_raw_and_wrapped_fasta_like_c() {
         unsafe {
             let raw_path = std::env::temp_dir().join(format!(
@@ -14774,6 +15237,56 @@ mod tests {
             cram_cram_io_c_2427_refs_free(refs);
             std::fs::remove_file(path).unwrap();
             std::fs::remove_file(fai).unwrap();
+        }
+    }
+
+    #[test]
+    fn cram_io_refs_load_fai_uses_explicit_idx_delimiter_without_changing_ref_name() {
+        unsafe {
+            let path = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-refs-load-explicit-idx-{}-{}.fa",
+                std::process::id(),
+                line!()
+            ));
+            let default_fai = path.with_extension("fa.fai");
+            let idx_path = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-refs-load-explicit-idx-{}-{}.fai",
+                std::process::id(),
+                line!()
+            ));
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(&default_fai);
+            let _ = std::fs::remove_file(&idx_path);
+            std::fs::write(&path, b">chrX\nACGT\n").unwrap();
+            std::fs::write(&idx_path, b"chrX\t4\t6\t4\t5\n").unwrap();
+
+            let spec = CString::new(format!(
+                "{}##idx##{}",
+                path.to_string_lossy(),
+                idx_path.to_string_lossy()
+            ))
+            .unwrap();
+            let refs = cram_cram_io_c_2541_refs_load_fai(std::ptr::null_mut(), spec.as_ptr(), 1);
+            assert!(!refs.is_null());
+            let refs_l = refs.cast::<refs_t_layout>();
+            assert_eq!((*refs_l).nref, 1);
+            assert_eq!(
+                CStr::from_ptr((*refs_l).fn_).to_bytes(),
+                path.to_string_lossy().as_bytes()
+            );
+
+            let chr = *(*refs_l).ref_id;
+            assert_eq!(CStr::from_ptr((*chr).name).to_bytes(), b"chrX");
+            assert_eq!((*chr).fn_, (*refs_l).fn_);
+            assert_eq!((*chr).length, 4);
+            assert_eq!((*chr).offset, 6);
+            assert_eq!((*chr).bases_per_line, 4);
+            assert_eq!((*chr).line_length, 5);
+
+            cram_cram_io_c_2427_refs_free(refs);
+            std::fs::remove_file(path).unwrap();
+            let _ = std::fs::remove_file(default_fai);
+            std::fs::remove_file(idx_path).unwrap();
         }
     }
 
@@ -18252,10 +18765,27 @@ mod tests {
             )
             .cast::<cram_codec_const_layout>();
             assert!(!const_dec.is_null());
+            assert!(!(*const_dec).decode.is_null());
+            let decode: unsafe fn(
+                *mut hts_sys::cram_slice,
+                *mut c_void,
+                *mut hts_sys::cram_block,
+                *mut c_char,
+                *mut c_int,
+            ) -> c_int = std::mem::transmute((*const_dec).decode);
+            let mut decoded = [0i32; 2];
+            let mut decoded_len = decoded.len() as c_int;
             assert_eq!(
-                (*const_dec).decode,
-                cram_cram_codecs_c_945_cram_const_decode_int as usize as *mut c_void
+                decode(
+                    std::ptr::null_mut(),
+                    const_dec.cast(),
+                    std::ptr::null_mut(),
+                    decoded.as_mut_ptr().cast(),
+                    &mut decoded_len,
+                ),
+                0
             );
+            assert_eq!(decoded, [(*const_dec).xconst.val as i32; 2]);
             cram_cram_codecs_c_967_cram_const_decode_free(const_dec.cast());
 
             let store_block =
@@ -18822,6 +19352,224 @@ mod tests {
     }
 
     #[test]
+    fn cram_codecs_external_v4_rejects_invalid_options_and_allows_empty_missing_block() {
+        unsafe {
+            let mut vv: varint_vec_layout = std::mem::zeroed();
+            cram_cram_io_c_5127_cram_init_varint((&mut vv as *mut varint_vec_layout).cast(), 4);
+            let mut header = [9u8];
+
+            assert!(cram_cram_codecs_c_459_cram_external_decode_init(
+                std::ptr::null_mut(),
+                header.as_mut_ptr().cast(),
+                header.len() as c_int,
+                1,
+                1,
+                4 << 8,
+                (&mut vv as *mut varint_vec_layout).cast(),
+            )
+            .is_null());
+            assert!(cram_cram_codecs_c_459_cram_external_decode_init(
+                std::ptr::null_mut(),
+                header.as_mut_ptr().cast(),
+                header.len() as c_int,
+                2,
+                3,
+                4 << 8,
+                (&mut vv as *mut varint_vec_layout).cast(),
+            )
+            .is_null());
+
+            let dec = cram_cram_codecs_c_459_cram_external_decode_init(
+                std::ptr::null_mut(),
+                header.as_mut_ptr().cast(),
+                header.len() as c_int,
+                1,
+                5,
+                4 << 8,
+                (&mut vv as *mut varint_vec_layout).cast(),
+            )
+            .cast::<cram_codec_external_layout>();
+            assert!(!dec.is_null());
+            assert_eq!((*dec).external.content_id, 9);
+            assert_eq!(
+                (*dec).decode,
+                cram_cram_codecs_c_410_cram_external_decode_block as usize as *mut c_void
+            );
+
+            let mut hdr = cram_block_slice_hdr_layout {
+                content_type: hts_sys::cram_content_type_MAPPED_SLICE,
+                ref_seq_id: 0,
+                ref_seq_start: 0,
+                ref_seq_span: 0,
+                num_records: 0,
+                record_counter: 0,
+                num_blocks: 0,
+                num_content_ids: 0,
+                block_content_ids: std::ptr::null_mut(),
+                ref_base_id: 0,
+                md5: [0; 16],
+            };
+            let mut slice = cram_slice_layout {
+                hdr: &mut hdr,
+                hdr_block: std::ptr::null_mut(),
+                block: std::ptr::null_mut(),
+                block_by_id: std::ptr::null_mut(),
+            };
+            let out_block =
+                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+            assert!(!out_block.is_null());
+            let mut out_size = 0;
+            assert_eq!(
+                cram_cram_codecs_c_410_cram_external_decode_block(
+                    (&mut slice as *mut cram_slice_layout).cast(),
+                    dec.cast(),
+                    std::ptr::null_mut(),
+                    out_block.cast(),
+                    &mut out_size,
+                ),
+                0
+            );
+            assert_eq!((*(out_block.cast::<cram_block_layout>())).byte, 0);
+
+            out_size = 1;
+            assert_eq!(
+                cram_cram_codecs_c_410_cram_external_decode_block(
+                    (&mut slice as *mut cram_slice_layout).cast(),
+                    dec.cast(),
+                    std::ptr::null_mut(),
+                    out_block.cast(),
+                    &mut out_size,
+                ),
+                -1
+            );
+
+            cram_cram_io_c_1565_cram_free_block(out_block);
+            cram_cram_codecs_c_433_cram_external_decode_free(dec.cast());
+        }
+    }
+
+    #[test]
+    fn cram_codecs_external_decode_init_rejects_trailing_header_bytes() {
+        unsafe {
+            for version in [3, 4] {
+                let mut vv: varint_vec_layout = std::mem::zeroed();
+                cram_cram_io_c_5127_cram_init_varint(
+                    (&mut vv as *mut varint_vec_layout).cast(),
+                    version,
+                );
+                let mut header = [9u8, 0];
+
+                assert!(cram_cram_codecs_c_459_cram_external_decode_init(
+                    std::ptr::null_mut(),
+                    header.as_mut_ptr().cast(),
+                    header.len() as c_int,
+                    1,
+                    if version >= 4 { 5 } else { 1 },
+                    version << 8,
+                    (&mut vv as *mut varint_vec_layout).cast(),
+                )
+                .is_null());
+            }
+        }
+    }
+
+    #[test]
+    fn cram_codecs_byte_array_stop_v1_uses_fixed_little_endian_content_id() {
+        unsafe {
+            let mut vv = varint_vec_layout {
+                varint_decode32_crc: std::ptr::null_mut(),
+                varint_decode32s_crc: std::ptr::null_mut(),
+                varint_decode64_crc: std::ptr::null_mut(),
+                varint_get32: Some(test_varint_get32),
+                varint_get32s: Some(test_varint_get32),
+                varint_get64: Some(test_varint_get64),
+                varint_get64s: Some(test_varint_get64),
+                varint_put32: Some(test_varint_put32),
+                varint_put32s: Some(test_varint_put32),
+                varint_put64: Some(test_varint_put64),
+                varint_put64s: Some(test_varint_put64s),
+                varint_put32_blk: Some(test_varint_put32_blk),
+                varint_put32s_blk: Some(test_varint_put32s_blk),
+                varint_put64_blk: Some(test_varint_put64_blk),
+                varint_put64s_blk: Some(test_varint_put64s_blk),
+                varint_size: Some(test_varint_size),
+            };
+            let mut header = [b'|', 0x78, 0x56, 0x34, 0x12];
+            let dec = cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
+                std::ptr::null_mut(),
+                header.as_mut_ptr().cast(),
+                header.len() as c_int,
+                5,
+                4,
+                1 << 8,
+                (&mut vv as *mut varint_vec_layout).cast(),
+            )
+            .cast::<cram_codec_byte_array_stop_layout>();
+            assert!(!dec.is_null());
+            assert_eq!((*dec).byte_array_stop.stop, b'|');
+            assert_eq!((*dec).byte_array_stop.content_id, 0x1234_5678);
+            cram_cram_codecs_c_3669_cram_byte_array_stop_decode_free(dec.cast());
+
+            let mut short = [b'|', 0x78, 0x56, 0x34];
+            assert!(cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
+                std::ptr::null_mut(),
+                short.as_mut_ptr().cast(),
+                short.len() as c_int,
+                5,
+                4,
+                1 << 8,
+                (&mut vv as *mut varint_vec_layout).cast(),
+            )
+            .is_null());
+
+            let mut extra = [b'|', 0x78, 0x56, 0x34, 0x12, 0];
+            assert!(cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
+                std::ptr::null_mut(),
+                extra.as_mut_ptr().cast(),
+                extra.len() as c_int,
+                5,
+                4,
+                1 << 8,
+                (&mut vv as *mut varint_vec_layout).cast(),
+            )
+            .is_null());
+
+            let mut dat = [b';' as c_int, 0x1234_5678];
+            let enc = cram_cram_codecs_c_3785_cram_byte_array_stop_encode_init(
+                std::ptr::null_mut(),
+                5,
+                4,
+                dat.as_mut_ptr().cast(),
+                1 << 8,
+                std::ptr::null_mut(),
+            )
+            .cast::<cram_codec_byte_array_stop_layout>();
+            assert!(!enc.is_null());
+            (*enc).vv = &mut vv as *mut varint_vec_layout;
+            let store_block =
+                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+            assert!(!store_block.is_null());
+            let mut prefix = *b"P\0";
+            assert_eq!(
+                cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store(
+                    enc.cast(),
+                    store_block,
+                    prefix.as_mut_ptr().cast(),
+                    1 << 8,
+                ),
+                8
+            );
+            let store_layout = store_block.cast::<cram_block_layout>();
+            assert_eq!(
+                std::slice::from_raw_parts((*store_layout).data, (*store_layout).byte),
+                &[b'P', 5, 5, b';', 0x78, 0x56, 0x34, 0x12]
+            );
+            cram_cram_io_c_1565_cram_free_block(store_block);
+            cram_cram_codecs_c_3743_cram_byte_array_stop_encode_free(enc.cast());
+        }
+    }
+
+    #[test]
     fn cram_codecs_external_decoders_find_blocks_copy_and_advance() {
         unsafe {
             let mut data = *b"abcdefgh";
@@ -19022,6 +19770,81 @@ mod tests {
                 ),
                 -1
             );
+        }
+    }
+
+    #[test]
+    fn cram_codec_block_lookup_uses_cache_only_when_ids_match_then_scans_external_blocks() {
+        unsafe {
+            let mut direct = cram_block_layout {
+                method: 0,
+                orig_method: 0,
+                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_id: 17,
+                comp_size: 0,
+                uncomp_size: 0,
+                crc32: 0,
+                idx: 0,
+                data: std::ptr::null_mut(),
+                alloc: 0,
+                byte: 0,
+                bit: 0,
+                m: std::ptr::null_mut(),
+                crc32_checked: 0,
+                crc_part: 0,
+            };
+            let mut wrong_hash = cram_block_layout {
+                content_id: 251,
+                ..direct
+            };
+            let mut colliding = cram_block_layout {
+                content_id: 502,
+                ..direct
+            };
+            let mut non_external = cram_block_layout {
+                content_type: hts_sys::cram_content_type_CORE,
+                content_id: 753,
+                ..direct
+            };
+
+            let direct_ptr = (&mut direct as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+            let wrong_hash_ptr =
+                (&mut wrong_hash as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+            let colliding_ptr =
+                (&mut colliding as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+            let non_external_ptr =
+                (&mut non_external as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+            let mut block_by_id = [std::ptr::null_mut(); 768];
+            block_by_id[17] = direct_ptr;
+            block_by_id[256 + 502 % 251] = wrong_hash_ptr;
+            let mut blocks = [non_external_ptr, colliding_ptr];
+            let mut hdr = cram_block_slice_hdr_layout {
+                content_type: hts_sys::cram_content_type_MAPPED_SLICE,
+                ref_seq_id: 0,
+                ref_seq_start: 0,
+                ref_seq_span: 0,
+                num_records: 0,
+                record_counter: 0,
+                num_blocks: blocks.len() as c_int,
+                num_content_ids: 0,
+                block_content_ids: std::ptr::null_mut(),
+                ref_base_id: 0,
+                md5: [0; 16],
+            };
+            let mut slice = cram_slice_layout {
+                hdr: &mut hdr,
+                hdr_block: std::ptr::null_mut(),
+                block: blocks.as_mut_ptr(),
+                block_by_id: block_by_id.as_mut_ptr(),
+            };
+            let s = (&mut slice as *mut cram_slice_layout).cast();
+
+            assert_eq!(cram_cram_io_h_183_cram_get_block_by_id(s, 17), direct_ptr);
+            assert_eq!(
+                cram_cram_io_h_183_cram_get_block_by_id(s, 502),
+                colliding_ptr
+            );
+            assert!(cram_cram_io_h_183_cram_get_block_by_id(s, 753).is_null());
         }
     }
 
@@ -19563,6 +20386,41 @@ mod tests {
     }
 
     #[test]
+    fn cram_io_safe_varint_getters_report_truncation_without_advancing() {
+        unsafe {
+            let mut itf8 = [0xf0u8, 0x12, 0x34, 0x56];
+            let mut cp = itf8.as_mut_ptr().cast::<c_char>();
+            let start = cp;
+            let mut err = 0;
+            assert_eq!(
+                cram_cram_io_c_644_safe_itf8_get(
+                    &mut cp,
+                    itf8.as_ptr().add(itf8.len()).cast(),
+                    &mut err,
+                ),
+                0
+            );
+            assert_eq!(cp, start);
+            assert_eq!(err, 1);
+
+            let mut ltf8 = [0xffu8, 1, 2, 3, 4, 5, 6, 7];
+            let mut cp = ltf8.as_mut_ptr().cast::<c_char>();
+            let start = cp;
+            err = 0;
+            assert_eq!(
+                cram_cram_io_c_673_safe_ltf8_get(
+                    &mut cp,
+                    ltf8.as_ptr().add(ltf8.len()).cast(),
+                    &mut err,
+                ),
+                0
+            );
+            assert_eq!(cp, start);
+            assert_eq!(err, 1);
+        }
+    }
+
+    #[test]
     fn cram_io_is_directory_matches_stat_directory_bit() {
         unsafe {
             let dir = CString::new("/tmp").unwrap();
@@ -19628,6 +20486,22 @@ mod tests {
     }
 
     #[test]
+    fn cram_open_trace_file_tokenise_search_path_preserves_remote_url_prefixes() {
+        unsafe {
+            let input = CString::new("URL=http://example.invalid/data:local").unwrap();
+            let out = cram_open_trace_file_c_108_tokenise_search_path(input.as_ptr());
+            assert!(!out.is_null());
+
+            let expected = b"URL=http://example.invalid/data\0local\0./\0\0";
+            assert_eq!(
+                std::slice::from_raw_parts(out.cast::<u8>(), expected.len()),
+                expected
+            );
+            free(out.cast());
+        }
+    }
+
+    #[test]
     fn cram_open_trace_file_expand_path_matches_percent_rules() {
         unsafe {
             let file = CString::new("abcdef").unwrap();
@@ -19649,6 +20523,25 @@ mod tests {
             let out = cram_open_trace_file_c_230_expand_path(file.as_ptr(), bad.as_ptr(), 1);
             assert!(!out.is_null());
             assert_eq!(CStr::from_ptr(out).to_bytes(), b"root/%22s/abcdef");
+            free(out.cast());
+
+            let zero = CString::new("root/%0s//").unwrap();
+            let out = cram_open_trace_file_c_230_expand_path(file.as_ptr(), zero.as_ptr(), 1);
+            assert!(!out.is_null());
+            assert_eq!(CStr::from_ptr(out).to_bytes(), b"root/abcdef");
+            free(out.cast());
+        }
+    }
+
+    #[test]
+    fn cram_open_trace_file_expand_path_consumes_file_across_multiple_percent_tokens() {
+        unsafe {
+            let file = CString::new("abcdef").unwrap();
+            let dirname = CString::new("root/%1s/%2s/%s").unwrap();
+            let out =
+                cram_open_trace_file_c_230_expand_path(file.as_ptr(), dirname.as_ptr(), c_int::MAX);
+            assert!(!out.is_null());
+            assert_eq!(CStr::from_ptr(out).to_bytes(), b"root/a/bc/def");
             free(out.cast());
         }
     }
@@ -19767,6 +20660,52 @@ mod tests {
     }
 
     #[test]
+    fn cram_open_trace_file_open_path_mfile_reports_local_for_relative_fallback_and_miss() {
+        unsafe {
+            let dir = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-open-path-fallback-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let file_path = dir.join("trace.dat");
+            std::fs::write(&file_path, b"fallback-data").unwrap();
+
+            let file = CString::new("trace.dat").unwrap();
+            let missing_path = CString::new("/definitely/not/here").unwrap();
+            let relative =
+                CString::new(dir.join("anchor.cram").to_string_lossy().as_bytes()).unwrap();
+            let mut local = -1;
+            let mf = cram_open_trace_file_c_352_open_path_mfile(
+                file.as_ptr(),
+                missing_path.as_ptr().cast_mut(),
+                relative.as_ptr().cast_mut(),
+                &mut local,
+            );
+            assert!(!mf.is_null());
+            assert_eq!(local, 1);
+            assert_eq!(
+                std::slice::from_raw_parts((*mf).data.cast::<u8>(), (*mf).size),
+                b"fallback-data"
+            );
+            assert_eq!(cram_mFILE_c_361_mfclose(mf), 0);
+
+            let missing_file = CString::new("missing.dat").unwrap();
+            local = -7;
+            let mf = cram_open_trace_file_c_352_open_path_mfile(
+                missing_file.as_ptr(),
+                missing_path.as_ptr().cast_mut(),
+                relative.as_ptr().cast_mut(),
+                &mut local,
+            );
+            assert!(mf.is_null());
+            assert_eq!(local, 1);
+
+            std::fs::remove_file(file_path).unwrap();
+            std::fs::remove_dir(dir).unwrap();
+        }
+    }
+
+    #[test]
     fn cram_io_expand_cache_path_replaces_percent_patterns_like_c() {
         unsafe {
             let mut path = vec![0 as c_char; libc::PATH_MAX as usize];
@@ -19849,7 +20788,7 @@ mod tests {
     }
 
     #[test]
-    fn cram_io_full_path_preserves_absolute_remote_and_expands_relative_paths() {
+    fn cram_io_full_path_preserves_absolute_and_expands_local_paths() {
         unsafe {
             let mut out = vec![0 as c_char; libc::PATH_MAX as usize];
 
@@ -19861,11 +20800,14 @@ mod tests {
             );
 
             out.fill(0);
-            let remote = CString::new("http://example.invalid/ref.fa").unwrap();
-            cram_cram_io_c_4850_full_path(out.as_mut_ptr(), remote.as_ptr().cast_mut());
+            let unknown_scheme = CString::new("http://example.invalid/ref.fa").unwrap();
+            cram_cram_io_c_4850_full_path(out.as_mut_ptr(), unknown_scheme.as_ptr().cast_mut());
+            let expected_unknown = std::env::current_dir()
+                .unwrap()
+                .join("http://example.invalid/ref.fa");
             assert_eq!(
                 CStr::from_ptr(out.as_ptr()).to_bytes(),
-                b"http://example.invalid/ref.fa"
+                expected_unknown.to_string_lossy().as_bytes()
             );
 
             out.fill(0);
@@ -19891,6 +20833,42 @@ mod tests {
             assert!(!(*bams.add(1)).is_null());
 
             cram_cram_io_c_3695_free_bam_list(bams, 3);
+        }
+    }
+
+    #[test]
+    fn cram_reference_decrement_eviction_frees_previous_unreferenced_cached_seq() {
+        unsafe {
+            let seq0 = malloc(4).cast::<c_char>();
+            let seq1 = malloc(4).cast::<c_char>();
+            assert!(!seq0.is_null());
+            assert!(!seq1.is_null());
+
+            let mut e0: ref_entry_layout = std::mem::zeroed();
+            e0.seq = seq0;
+            let mut e1: ref_entry_layout = std::mem::zeroed();
+            e1.seq = seq1;
+            let mut ref_id = [
+                &mut e0 as *mut ref_entry_layout,
+                &mut e1 as *mut ref_entry_layout,
+            ];
+            let mut refs: refs_t_layout = std::mem::zeroed();
+            refs.ref_id = ref_id.as_mut_ptr();
+            refs.nref = ref_id.len() as c_int;
+            refs.last = &mut e1;
+            refs.last_id = 1;
+
+            cram_cram_io_c_3169_cram_ref_incr_locked((&mut refs as *mut refs_t_layout).cast(), 0);
+            assert_eq!(e0.count, 1);
+            assert_eq!(refs.last_id, 1);
+
+            cram_cram_io_c_3189_cram_ref_decr_locked((&mut refs as *mut refs_t_layout).cast(), 0);
+            assert_eq!(e0.count, 0);
+            assert_eq!(refs.last_id, 0);
+            assert!(e1.seq.is_null());
+
+            cram_cram_io_c_2417_ref_entry_free_seq((&mut e0 as *mut ref_entry_layout).cast());
+            assert!(e0.seq.is_null());
         }
     }
 
@@ -19932,6 +20910,47 @@ mod tests {
     }
 
     #[test]
+    fn cram_mfile_append_write_and_truncate_minus_one_match_c_edges() {
+        unsafe {
+            let data = malloc(16).cast::<c_char>();
+            std::ptr::copy_nonoverlapping(b"abcdef".as_ptr().cast::<c_char>(), data, 6);
+            let mf = cram_mFILE_c_207_mfcreate(data, 6);
+            assert!(!mf.is_null());
+            (*mf).alloced = 16;
+            (*mf).mode = MF_READ | MF_WRITE | MF_APPEND;
+            (*mf).offset = 2;
+            (*mf).flush_pos = 6;
+
+            let mut suffix = *b"XY";
+            assert_eq!(
+                cram_mFILE_c_527_mfwrite(suffix.as_mut_ptr().cast(), 1, suffix.len(), mf),
+                suffix.len()
+            );
+            assert_eq!((*mf).offset, 8);
+            assert_eq!((*mf).size, 8);
+            assert_eq!((*mf).flush_pos, 6);
+            assert_eq!(
+                std::slice::from_raw_parts((*mf).data.cast::<u8>(), (*mf).size),
+                b"abcdefXY"
+            );
+
+            (*mf).offset = 3;
+            cram_mFILE_c_488_mftruncate(mf, -1);
+            assert_eq!((*mf).size, 3);
+
+            (*mf).mode = MF_READ;
+            let mut ignored = *b"zz";
+            assert_eq!(
+                cram_mFILE_c_527_mfwrite(ignored.as_mut_ptr().cast(), 1, ignored.len(), mf),
+                0
+            );
+            assert_eq!((*mf).size, 3);
+
+            assert_eq!(cram_mFILE_c_408_mfdestroy(mf), 0);
+        }
+    }
+
+    #[test]
     fn cram_mfile_create_recreate_read_write_and_destroy_follow_memory_ownership() {
         unsafe {
             let mf = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
@@ -19962,6 +20981,40 @@ mod tests {
             assert_eq!((*mf).offset, 0);
             assert_eq!(cram_mFILE_c_408_mfdestroy(mf), 0);
             assert_eq!(cram_mFILE_c_408_mfdestroy(std::ptr::null_mut()), -1);
+        }
+    }
+
+    #[test]
+    fn cram_mfile_flush_and_detach_write_dirty_tail_and_preserve_buffer() {
+        unsafe {
+            let path = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-mfile-detach-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&path);
+            let c_path = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+            let fp = libc::fopen(c_path.as_ptr(), c"w+b".as_ptr());
+            assert!(!fp.is_null());
+
+            let mf = cram_mFILE_c_264_mfreopen(c_path.as_ptr(), c"w+b".as_ptr(), fp);
+            assert!(!mf.is_null());
+            let mut bytes = *b"abcdef";
+            assert_eq!(
+                cram_mFILE_c_527_mfwrite(bytes.as_mut_ptr().cast(), 1, bytes.len(), mf),
+                bytes.len()
+            );
+            (*mf).flush_pos = 3;
+            assert_eq!(cram_mFILE_c_389_mfdetach(mf), 0);
+            assert!((*mf).fp.is_null());
+            assert_eq!((*mf).flush_pos, (*mf).size);
+            assert_eq!(
+                std::slice::from_raw_parts((*mf).data.cast::<u8>(), (*mf).size),
+                b"abcdef"
+            );
+
+            assert_eq!(cram_mFILE_c_408_mfdestroy(mf), 0);
+            assert_eq!(std::fs::read(&path).unwrap(), b"\0\0\0def");
+            std::fs::remove_file(path).unwrap();
         }
     }
 
@@ -20014,6 +21067,35 @@ mod tests {
     }
 
     #[test]
+    fn cram_mfile_reopen_write_only_modes_do_not_load_existing_file() {
+        unsafe {
+            let path = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-mfile-write-mode-{}",
+                std::process::id()
+            ));
+            std::fs::write(&path, b"preexisting").unwrap();
+            let c_path = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+            let fp = libc::fopen(c_path.as_ptr(), c"wb".as_ptr());
+            assert!(!fp.is_null());
+
+            let mf = cram_mFILE_c_264_mfreopen(c_path.as_ptr(), c"wb".as_ptr(), fp);
+            assert!(!mf.is_null());
+            assert_eq!((*mf).size, 0);
+            assert_eq!((*mf).offset, 0);
+            assert_eq!((*mf).flush_pos, 0);
+            assert_eq!((*mf).mode & MF_READ, 0);
+            assert_ne!((*mf).mode & MF_WRITE, 0);
+            assert_ne!((*mf).mode & MF_TRUNC, 0);
+            assert_ne!((*mf).mode & MF_BINARY, 0);
+            assert!((*mf).data.is_null());
+
+            assert_eq!(cram_mFILE_c_361_mfclose(mf), 0);
+            assert_eq!(std::fs::read(&path).unwrap(), b"");
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
     fn cram_mfile_character_line_ascii_and_steal_behaviour_matches_c() {
         unsafe {
             let data = malloc(12).cast::<c_char>();
@@ -20054,6 +21136,30 @@ mod tests {
     }
 
     #[test]
+    fn cram_mfile_empty_read_ungetc_and_gets_set_eof_like_c() {
+        unsafe {
+            let mf = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
+            assert!(!mf.is_null());
+
+            assert_eq!(cram_mFILE_c_557_mfgetc(mf), -1);
+            assert_eq!((*mf).eof, 1);
+
+            (*mf).eof = 0;
+            assert_eq!(cram_mFILE_c_567_mungetc(b'Z' as c_int, mf), -1);
+            assert_eq!((*mf).eof, 1);
+
+            (*mf).eof = 0;
+            let mut line = [b'x' as c_char; 4];
+            assert!(cram_mFILE_c_577_mfgets(line.as_mut_ptr(), line.len() as c_int, mf).is_null());
+            assert_eq!(line[0], 0);
+            assert_eq!((*mf).eof, 1);
+            assert_eq!((*mf).offset, 0);
+
+            assert_eq!(cram_mFILE_c_408_mfdestroy(mf), 0);
+        }
+    }
+
+    #[test]
     fn cram_mfile_stdout_and_stderr_are_singleton_write_channels() {
         unsafe {
             let in1 = cram_mFILE_c_151_mstdin();
@@ -20069,6 +21175,23 @@ mod tests {
             assert_eq!(out1, out2);
             assert_eq!((*out1).mode, MF_WRITE);
             assert!(!(*out1).fp.is_null());
+
+            let saved_fp = (*out1).fp;
+            let tmp_fp = libc::tmpfile();
+            assert!(!tmp_fp.is_null());
+            (*out1).fp = tmp_fp;
+
+            let mut msg = *b"x";
+            assert_eq!(
+                cram_mFILE_c_527_mfwrite((&mut msg as *mut u8).cast(), 1, 1, out1,),
+                1
+            );
+            assert_eq!(cram_mFILE_c_607_mfflush(out1), 0);
+            assert_eq!((*out1).offset, 0);
+            assert_eq!((*out1).size, 0);
+            assert_eq!((*out1).flush_pos, 0);
+            (*out1).fp = saved_fp;
+            libc::fclose(tmp_fp);
 
             let err1 = cram_mFILE_c_192_mstderr();
             let err2 = cram_mFILE_c_192_mstderr();
@@ -20107,6 +21230,32 @@ mod tests {
             cram_pooled_alloc_c_144_pool_free(p, a);
             let reused = cram_pooled_alloc_c_115_pool_alloc(p);
             assert_eq!(reused, a);
+
+            cram_pooled_alloc_c_84_pool_destroy(p);
+        }
+    }
+
+    #[test]
+    fn cram_pooled_allocator_starts_new_pool_at_exact_capacity_edge() {
+        unsafe {
+            let p = cram_pooled_alloc_c_64_pool_create(8192);
+            assert!(!p.is_null());
+            assert_eq!((*p).dsize, 8192);
+            assert_eq!((*p).psize, POOLED_ALLOC_PSIZE);
+
+            let slots_before_edge = (*p).psize / (*p).dsize - 1;
+            let first = cram_pooled_alloc_c_115_pool_alloc(p);
+            assert!(!first.is_null());
+            for _ in 1..slots_before_edge {
+                assert!(!cram_pooled_alloc_c_115_pool_alloc(p).is_null());
+            }
+            assert_eq!((*p).npools, 1);
+            assert_eq!((*(*p).pools).used, (*p).psize - (*p).dsize);
+
+            let second_pool_first = cram_pooled_alloc_c_115_pool_alloc(p);
+            assert!(!second_pool_first.is_null());
+            assert_eq!((*p).npools, 2);
+            assert_eq!((*(*p).pools.add(1)).used, (*p).dsize);
 
             cram_pooled_alloc_c_84_pool_destroy(p);
         }

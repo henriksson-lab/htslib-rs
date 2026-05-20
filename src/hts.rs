@@ -4,13 +4,15 @@ use std::{
 };
 
 use super::bgzf::{
-    bgzf_check_EOF, bgzf_close, bgzf_flush, bgzf_getline, bgzf_hfile, bgzf_hopen, bgzf_open,
-    bgzf_read, bgzf_seek, bgzf_useek, bgzf_utell, bgzf_write,
+    bgzf_check_EOF, bgzf_close, bgzf_flush, bgzf_getline, bgzf_hfile, bgzf_hopen, bgzf_mt,
+    bgzf_open, bgzf_read, bgzf_seek, bgzf_set_cache_size, bgzf_thread_pool, bgzf_useek, bgzf_utell,
+    bgzf_write,
 };
 use super::c_compat;
 use super::cram::{cram_check_EOF, cram_dopen};
 use super::hfile::{
-    hclose_abruptly, hisremote, hopen, hpeek, htslib_hfile_h_247_hread, htslib_hfile_h_292_hwrite,
+    hclose_abruptly, hfile_set_blksize, hisremote, hopen, hpeek, htslib_hfile_h_134_herrno,
+    htslib_hfile_h_195_hgetln, htslib_hfile_h_247_hread, htslib_hfile_h_292_hwrite,
 };
 use super::{path_bytes, path_from_bytes};
 
@@ -40,8 +42,8 @@ pub const HTS_FORMAT_VCF: htsExactFormat = 8;
 pub const HTS_FORMAT_BCF: htsExactFormat = 9;
 pub const HTS_FORMAT_CSI: htsExactFormat = 10;
 pub const HTS_FORMAT_GZI: htsExactFormat = 11;
-pub const HTS_FORMAT_BED: htsExactFormat = 12;
-pub const HTS_FORMAT_TBI: htsExactFormat = 13;
+pub const HTS_FORMAT_TBI: htsExactFormat = 12;
+pub const HTS_FORMAT_BED: htsExactFormat = 13;
 pub const HTS_FORMAT_HTSGET: htsExactFormat = 14;
 pub const HTS_FORMAT_EMPTY_FORMAT: htsExactFormat = 15;
 pub const HTS_FORMAT_FASTA_FORMAT: htsExactFormat = 16;
@@ -72,6 +74,7 @@ pub const HTS_IDX_START: c_int = -3;
 pub const HTS_IDX_REST: c_int = -4;
 pub const HTS_IDX_NONE: c_int = -5;
 pub const HTS_RESIZE_CLEAR: c_int = 1;
+pub const KS_SEP_LINE: c_int = 2;
 pub const CRAM_OPT_RANGE_NOSEEK: hts_fmt_option = 23;
 pub const CRAM_OPT_USE_TOK: hts_fmt_option = 24;
 pub const CRAM_OPT_USE_FQZ: hts_fmt_option = 25;
@@ -1891,6 +1894,22 @@ pub unsafe fn hts_resize_array_(
     0
 }
 
+fn kroundup_size_t(x: &mut size_t) {
+    if *x == 0 {
+        return;
+    }
+    *x -= 1;
+    *x |= *x >> 1;
+    *x |= *x >> 2;
+    *x |= *x >> 4;
+    *x |= *x >> 8;
+    *x |= *x >> 16;
+    if std::mem::size_of::<size_t>() == 8 {
+        *x |= *x >> 32;
+    }
+    *x += 1;
+}
+
 pub unsafe fn hts_free(ptr: *mut c_void) {
     crate::htslib_mini_rs::c_compat::free(ptr);
 }
@@ -1904,19 +1923,54 @@ pub unsafe fn hts_realloc_or_die(
     ptr: *mut *mut c_void,
     func: *const c_char,
 ) -> size_t {
-    unsafe { htslib_hts_realloc_or_die(n, m, m_sz, size, clear, ptr, func) }
+    let safe = 1usize << (std::mem::size_of::<size_t>() * 4);
+    let mut new_m = n;
+    kroundup_size_t(&mut new_m);
+    let bytes = size.wrapping_mul(new_m);
+
+    if new_m > ((1usize << (m_sz * 8 - 1)) - 1)
+        || ((size > safe || new_m > safe) && new_m != 0 && bytes / new_m != size)
+    {
+        *c_compat::__errno_location() = libc::ENOMEM;
+        hts_log_cstr(
+            HTS_LOG_ERROR,
+            func,
+            libc::strerror(*c_compat::__errno_location()),
+        );
+        std::process::exit(1);
+    }
+
+    let new_ptr = c_compat::realloc(*ptr, bytes as u64);
+    if new_ptr.is_null() {
+        hts_log_cstr(
+            HTS_LOG_ERROR,
+            func,
+            libc::strerror(*c_compat::__errno_location()),
+        );
+        std::process::exit(1);
+    }
+
+    if clear != 0 && new_m > m {
+        libc::memset(
+            new_ptr.cast::<c_char>().add(m * size).cast(),
+            0,
+            (new_m - m) * size,
+        );
+    }
+    *ptr = new_ptr;
+    new_m
 }
 
 pub unsafe fn hts_lib_shutdown() {
-    unsafe { htslib_hts_lib_shutdown() }
+    crate::htslib_mini_rs::hfile::hfile_c_983_hfile_shutdown(1);
 }
 
 pub unsafe fn hts_filter_init(str_: *const c_char) -> *mut hts_filter_t {
-    unsafe { htslib_hts_filter_init(str_) }
+    hts_expr_c_849_hts_filter_init(str_)
 }
 
 pub unsafe fn hts_filter_free(filt: *mut hts_filter_t) {
-    unsafe { htslib_hts_filter_free(filt) }
+    hts_expr_c_863_hts_filter_free(filt)
 }
 
 pub unsafe fn hts_filter_eval(
@@ -1925,7 +1979,7 @@ pub unsafe fn hts_filter_eval(
     sym_func: hts_expr_sym_func,
     res: *mut hts_expr_val_t,
 ) -> c_int {
-    unsafe { htslib_hts_filter_eval(filt, data, sym_func, res) }
+    hts_expr_c_903_hts_filter_eval(filt, data, sym_func, res)
 }
 
 pub unsafe fn hts_filter_eval2(
@@ -1934,7 +1988,7 @@ pub unsafe fn hts_filter_eval2(
     sym_func: hts_expr_sym_func,
     res: *mut hts_expr_val_t,
 ) -> c_int {
-    unsafe { htslib_hts_filter_eval2(filt, data, sym_func, res) }
+    hts_expr_c_920_hts_filter_eval2(filt, data, sym_func, res)
 }
 
 pub unsafe fn hts_set_log_level(level: htsLogLevel) {
@@ -1954,6 +2008,20 @@ pub fn get_severity_tag(severity: htsLogLevel) -> c_char {
         HTS_LOG_TRACE => b'T' as c_char,
         _ => b'*' as c_char,
     }
+}
+
+pub unsafe fn hts_log_cstr(severity: htsLogLevel, context: *const c_char, message: *const c_char) {
+    let save_errno = *c_compat::__errno_location();
+    if severity <= hts_verbose {
+        libc::fprintf(
+            hts_sys::stderr.cast::<libc::FILE>(),
+            c"[%c::%s] %s\n".as_ptr(),
+            get_severity_tag(severity) as c_int,
+            context,
+            message,
+        );
+    }
+    *c_compat::__errno_location() = save_errno;
 }
 
 pub fn hts_bin_bot(bin: c_int, n_lvls: c_int) -> c_int {
@@ -3202,6 +3270,7 @@ pub fn bcf_acgt2int(mut c: c_char) -> c_int {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct hts_expr_val_t {
     pub is_str: c_char,
     pub is_true: c_char,
@@ -3211,8 +3280,14 @@ pub struct hts_expr_val_t {
 
 #[repr(C)]
 pub struct hts_filter_t {
-    _private: [u8; 0],
+    pub str_: *mut c_char,
+    pub parsed: c_int,
+    pub curr_regex: c_int,
+    pub max_regex: c_int,
+    pub preg: [libc::regex_t; MAX_REGEX],
 }
+
+const MAX_REGEX: usize = 10;
 
 pub unsafe fn hts_expr_val_exists(v: *mut hts_expr_val_t) -> c_int {
     (!v.is_null()
@@ -3300,6 +3375,883 @@ pub unsafe fn expr_func_avg(res: *mut hts_expr_val_t) -> c_int {
     (*res).is_str = 0;
     (*res).d = v;
     0
+}
+
+fn expr_val_init() -> hts_expr_val_t {
+    hts_expr_val_t {
+        is_str: 0,
+        is_true: 0,
+        s: kstring_t {
+            l: 0,
+            m: 0,
+            s: std::ptr::null_mut(),
+        },
+        d: 0.0,
+    }
+}
+
+unsafe fn c_bool(v: bool) -> c_char {
+    v as c_int as c_char
+}
+
+unsafe fn cstrncmp(s: *const c_char, lit: &[u8]) -> bool {
+    libc::strncmp(s, lit.as_ptr().cast(), lit.len()) == 0
+}
+
+// original: func_expr (htslib/hts_expr.c:154)
+unsafe fn func_expr(
+    filt: *mut hts_filter_t,
+    data: *mut c_void,
+    sym_func: hts_expr_sym_func,
+    str_: *mut c_char,
+    end: *mut *mut c_char,
+    res: *mut hts_expr_val_t,
+) -> c_int {
+    let mut func_ok = -1;
+    match *str_ as u8 {
+        b'a' => {
+            if cstrncmp(str_, b"avg(") {
+                if expression(filt, data, sym_func, str_.add(4), end, res) != 0 {
+                    return -1;
+                }
+                func_ok = expr_func_avg(res);
+            }
+        }
+        b'd' => {
+            if cstrncmp(str_, b"default(") {
+                if expression(filt, data, sym_func, str_.add(8), end, res) != 0 {
+                    return -1;
+                }
+                if **end != b',' as c_char {
+                    return -1;
+                }
+                *end = (*end).add(1);
+                let mut val = expr_val_init();
+                if expression(filt, data, sym_func, ws(*end), end, &mut val) != 0 {
+                    return -1;
+                }
+                func_ok = 1;
+                if hts_expr_val_existsT(res) == 0 {
+                    let swap = (*res).s;
+                    *res = val;
+                    val.s = swap;
+                    hts_expr_val_free(&mut val);
+                }
+            }
+        }
+        b'e' => {
+            if cstrncmp(str_, b"exists(") {
+                if expression(filt, data, sym_func, str_.add(7), end, res) != 0 {
+                    return -1;
+                }
+                func_ok = 1;
+                let exists = hts_expr_val_existsT(res);
+                (*res).is_true = exists as c_char;
+                (*res).d = exists as f64;
+                (*res).is_str = 0;
+            } else if cstrncmp(str_, b"exp(") {
+                if expression(filt, data, sym_func, str_.add(4), end, res) != 0 {
+                    return -1;
+                }
+                func_ok = 1;
+                (*res).d = (*res).d.exp();
+                (*res).is_str = 0;
+                if (*res).d.is_nan() {
+                    hts_expr_val_undef(res);
+                }
+            }
+        }
+        b'l' => {
+            if cstrncmp(str_, b"length(") {
+                if expression(filt, data, sym_func, str_.add(7), end, res) != 0 {
+                    return -1;
+                }
+                func_ok = expr_func_length(res);
+            } else if cstrncmp(str_, b"log(") {
+                if expression(filt, data, sym_func, str_.add(4), end, res) != 0 {
+                    return -1;
+                }
+                func_ok = 1;
+                (*res).d = (*res).d.ln();
+                (*res).is_str = 0;
+                if (*res).d.is_nan() {
+                    hts_expr_val_undef(res);
+                }
+            }
+        }
+        b'm' => {
+            if cstrncmp(str_, b"min(") {
+                if expression(filt, data, sym_func, str_.add(4), end, res) != 0 {
+                    return -1;
+                }
+                func_ok = expr_func_min(res);
+            } else if cstrncmp(str_, b"max(") {
+                if expression(filt, data, sym_func, str_.add(4), end, res) != 0 {
+                    return -1;
+                }
+                func_ok = expr_func_max(res);
+            }
+        }
+        b'p' => {
+            if cstrncmp(str_, b"pow(") {
+                if expression(filt, data, sym_func, str_.add(4), end, res) != 0 {
+                    return -1;
+                }
+                func_ok = 1;
+                if **end != b',' as c_char {
+                    return -1;
+                }
+                *end = (*end).add(1);
+                let mut val = expr_val_init();
+                if expression(filt, data, sym_func, ws(*end), end, &mut val) != 0 {
+                    return -1;
+                }
+                if hts_expr_val_exists(res) == 0 || hts_expr_val_exists(&mut val) == 0 {
+                    hts_expr_val_undef(res);
+                } else if (*res).is_str != 0 || val.is_str != 0 {
+                    hts_expr_val_free(&mut val);
+                    return -1;
+                } else {
+                    func_ok = 1;
+                    (*res).d = (*res).d.powf(val.d);
+                    hts_expr_val_free(&mut val);
+                    (*res).is_str = 0;
+                }
+                if (*res).d.is_nan() {
+                    hts_expr_val_undef(res);
+                }
+            }
+        }
+        b's' => {
+            if cstrncmp(str_, b"sqrt(") {
+                if expression(filt, data, sym_func, str_.add(5), end, res) != 0 {
+                    return -1;
+                }
+                func_ok = 1;
+                (*res).d = (*res).d.sqrt();
+                (*res).is_str = 0;
+                if (*res).d.is_nan() {
+                    hts_expr_val_undef(res);
+                }
+            }
+        }
+        _ => {}
+    }
+
+    if func_ok < 0 {
+        return -1;
+    }
+
+    let str_ = ws(*end);
+    if *str_ != b')' as c_char {
+        libc::fprintf(
+            hts_sys::stderr.cast::<libc::FILE>(),
+            c"Missing ')'\n".as_ptr(),
+        );
+        return -1;
+    }
+    *end = str_.add(1);
+    0
+}
+
+// original: simple_expr (htslib/hts_expr.c:284)
+unsafe fn simple_expr(
+    filt: *mut hts_filter_t,
+    data: *mut c_void,
+    sym_func: hts_expr_sym_func,
+    mut str_: *mut c_char,
+    end: *mut *mut c_char,
+    res: *mut hts_expr_val_t,
+) -> c_int {
+    str_ = ws(str_);
+    if *str_ == b'(' as c_char {
+        if expression(filt, data, sym_func, str_.add(1), end, res) != 0 {
+            return -1;
+        }
+        let e = ws(*end);
+        if *e != b')' as c_char {
+            libc::fprintf(
+                hts_sys::stderr.cast::<libc::FILE>(),
+                c"Missing ')'\n".as_ptr(),
+            );
+            return -1;
+        }
+        *end = e.add(1);
+        return 0;
+    }
+
+    let mut fail = 0;
+    let d = hts_str2dbl(str_, end, &mut fail);
+    if str_ != *end {
+        (*res).is_str = 0;
+        (*res).d = d;
+        return 0;
+    }
+
+    if *str_ == b'"' as c_char {
+        (*res).is_str = 1;
+        let mut e = str_.add(1);
+        let mut backslash = 0;
+        while *e != 0 && *e != b'"' as c_char {
+            if *e == b'\\' as c_char {
+                backslash = 1;
+                e = e.add(1 + (*e.add(1) != 0) as usize);
+            } else {
+                e = e.add(1);
+            }
+        }
+        kputsn(
+            str_.add(1),
+            e.offset_from(str_.add(1)) as usize,
+            ks_clear(&mut (*res).s),
+        );
+        if backslash != 0 {
+            let mut i = 0usize;
+            let mut j = 0usize;
+            while i < (*res).s.l {
+                *(*res).s.s.add(j) = *(*res).s.s.add(i);
+                j += 1;
+                if *(*res).s.s.add(i) == b'\\' as c_char {
+                    i += 1;
+                    match *(*res).s.s.add(i) as u8 {
+                        b'"' => *(*res).s.s.add(j - 1) = b'"' as c_char,
+                        b'\\' => *(*res).s.s.add(j - 1) = b'\\' as c_char,
+                        b't' => *(*res).s.s.add(j - 1) = b'\t' as c_char,
+                        b'n' => *(*res).s.s.add(j - 1) = b'\n' as c_char,
+                        b'r' => *(*res).s.s.add(j - 1) = b'\r' as c_char,
+                        _ => {
+                            *(*res).s.s.add(j) = *(*res).s.s.add(i);
+                            j += 1;
+                        }
+                    }
+                }
+                i += 1;
+            }
+            *(*res).s.s.add(j) = 0;
+            (*res).s.l = j;
+        }
+        if *e != b'"' as c_char {
+            return -1;
+        }
+        *end = e.add(1);
+    } else if let Some(fn_) = sym_func {
+        if fn_(data, str_, end, res) == 0 {
+            return 0;
+        }
+        return func_expr(filt, data, sym_func, str_, end, res);
+    } else {
+        return -1;
+    }
+    0
+}
+
+// original: unary_expr (htslib/hts_expr.c:364)
+unsafe fn unary_expr(
+    filt: *mut hts_filter_t,
+    data: *mut c_void,
+    sym_func: hts_expr_sym_func,
+    mut str_: *mut c_char,
+    end: *mut *mut c_char,
+    res: *mut hts_expr_val_t,
+) -> c_int {
+    str_ = ws(str_);
+    let err;
+    if *str_ == b'+' as c_char || *str_ == b'-' as c_char {
+        err = simple_expr(filt, data, sym_func, str_.add(1), end, res);
+        if hts_expr_val_exists(res) == 0 {
+            hts_expr_val_undef(res);
+        } else {
+            if (*res).is_str != 0 {
+                return -1;
+            }
+            if *str_ == b'-' as c_char {
+                (*res).d = -(*res).d;
+            }
+            (*res).is_true = c_bool((*res).d != 0.0);
+        }
+    } else if *str_ == b'!' as c_char {
+        err = unary_expr(filt, data, sym_func, str_.add(1), end, res);
+        if (*res).is_true != 0 {
+            (*res).d = 0.0;
+            (*res).is_true = 0;
+        } else if hts_expr_val_exists(res) == 0 {
+            (*res).d = ((*res).is_true == 0) as c_int as f64;
+            (*res).is_true = c_bool((*res).d != 0.0);
+        } else if (*res).is_str != 0 {
+            (*res).d = (*res).s.s.is_null() as c_int as f64;
+            (*res).is_true = c_bool((*res).d != 0.0);
+        } else {
+            (*res).d = (!((*res).d as i64 != 0)) as c_int as f64;
+            (*res).is_true = c_bool((*res).d != 0.0);
+        }
+        (*res).is_str = 0;
+    } else if *str_ == b'~' as c_char {
+        err = unary_expr(filt, data, sym_func, str_.add(1), end, res);
+        if hts_expr_val_exists(res) == 0 {
+            hts_expr_val_undef(res);
+        } else {
+            if (*res).is_str != 0 {
+                return -1;
+            }
+            (*res).d = !((*res).d as i64) as f64;
+            (*res).is_true = c_bool((*res).d != 0.0);
+        }
+    } else {
+        err = simple_expr(filt, data, sym_func, str_, end, res);
+    }
+    if err != 0 {
+        -1
+    } else {
+        0
+    }
+}
+
+// original: mul_expr (htslib/hts_expr.c:423)
+unsafe fn mul_expr(
+    filt: *mut hts_filter_t,
+    data: *mut c_void,
+    sym_func: hts_expr_sym_func,
+    str_: *mut c_char,
+    end: *mut *mut c_char,
+    res: *mut hts_expr_val_t,
+) -> c_int {
+    if unary_expr(filt, data, sym_func, str_, end, res) != 0 {
+        return -1;
+    }
+    let mut str_ = *end;
+    let mut val = expr_val_init();
+    while *str_ != 0 {
+        str_ = ws(str_);
+        if *str_ == b'*' as c_char || *str_ == b'/' as c_char || *str_ == b'%' as c_char {
+            if unary_expr(filt, data, sym_func, str_.add(1), end, &mut val) != 0 {
+                return -1;
+            }
+            if hts_expr_val_exists(&mut val) == 0 || hts_expr_val_exists(res) == 0 {
+                hts_expr_val_undef(res);
+            } else if val.is_str != 0 || (*res).is_str != 0 {
+                hts_expr_val_free(&mut val);
+                return -1;
+            }
+        }
+        if *str_ == b'*' as c_char {
+            (*res).d *= val.d;
+        } else if *str_ == b'/' as c_char {
+            (*res).d /= val.d;
+        } else if *str_ == b'%' as c_char {
+            if val.d != 0.0 {
+                (*res).d = ((*res).d as i64 % val.d as i64) as f64;
+            } else {
+                hts_expr_val_undef(res);
+            }
+        } else {
+            break;
+        }
+        (*res).is_true = c_bool(hts_expr_val_exists(res) != 0 && (*res).d != 0.0);
+        str_ = *end;
+    }
+    hts_expr_val_free(&mut val);
+    0
+}
+
+// original: add_expr (htslib/hts_expr.c:470)
+unsafe fn add_expr(
+    filt: *mut hts_filter_t,
+    data: *mut c_void,
+    sym_func: hts_expr_sym_func,
+    str_: *mut c_char,
+    end: *mut *mut c_char,
+    res: *mut hts_expr_val_t,
+) -> c_int {
+    if mul_expr(filt, data, sym_func, str_, end, res) != 0 {
+        return -1;
+    }
+    let mut str_ = *end;
+    let mut val = expr_val_init();
+    while *str_ != 0 {
+        str_ = ws(str_);
+        let mut undef = 0;
+        if *str_ == b'+' as c_char || *str_ == b'-' as c_char {
+            if mul_expr(filt, data, sym_func, str_.add(1), end, &mut val) != 0 {
+                return -1;
+            }
+            if hts_expr_val_exists(&mut val) == 0 || hts_expr_val_exists(res) == 0 {
+                undef = 1;
+            } else if val.is_str != 0 || (*res).is_str != 0 {
+                hts_expr_val_free(&mut val);
+                return -1;
+            }
+        }
+        if *str_ == b'+' as c_char {
+            (*res).d += val.d;
+        } else if *str_ == b'-' as c_char {
+            (*res).d -= val.d;
+        } else {
+            break;
+        }
+        if undef != 0 {
+            hts_expr_val_undef(res);
+        } else {
+            (*res).is_true = c_bool((*res).d != 0.0);
+        }
+        str_ = *end;
+    }
+    hts_expr_val_free(&mut val);
+    0
+}
+
+unsafe fn bit_expr(
+    next: unsafe fn(
+        *mut hts_filter_t,
+        *mut c_void,
+        hts_expr_sym_func,
+        *mut c_char,
+        *mut *mut c_char,
+        *mut hts_expr_val_t,
+    ) -> c_int,
+    op: u8,
+    filt: *mut hts_filter_t,
+    data: *mut c_void,
+    sym_func: hts_expr_sym_func,
+    str_: *mut c_char,
+    end: *mut *mut c_char,
+    res: *mut hts_expr_val_t,
+) -> c_int {
+    if next(filt, data, sym_func, str_, end, res) != 0 {
+        return -1;
+    }
+    let mut val = expr_val_init();
+    let mut undef = 0;
+    loop {
+        let str_ = ws(*end);
+        let is_op = match op {
+            b'&' => *str_ == b'&' as c_char && *str_.add(1) != b'&' as c_char,
+            b'|' => *str_ == b'|' as c_char && *str_.add(1) != b'|' as c_char,
+            _ => *str_ == op as c_char,
+        };
+        if !is_op {
+            break;
+        }
+        if next(filt, data, sym_func, str_.add(1), end, &mut val) != 0 {
+            return -1;
+        }
+        if hts_expr_val_exists(&mut val) == 0 || hts_expr_val_exists(res) == 0 {
+            undef = 1;
+        } else if (*res).is_str != 0 || val.is_str != 0 {
+            hts_expr_val_free(&mut val);
+            return -1;
+        } else {
+            let r = match op {
+                b'&' => (*res).d as i64 & val.d as i64,
+                b'^' => (*res).d as i64 ^ val.d as i64,
+                _ => (*res).d as i64 | val.d as i64,
+            };
+            (*res).d = r as f64;
+            (*res).is_true = c_bool(r != 0);
+        }
+    }
+    hts_expr_val_free(&mut val);
+    if undef != 0 {
+        hts_expr_val_undef(res);
+    }
+    0
+}
+
+// original: bitand_expr (htslib/hts_expr.c:515)
+unsafe fn bitand_expr(
+    f: *mut hts_filter_t,
+    d: *mut c_void,
+    s: hts_expr_sym_func,
+    st: *mut c_char,
+    e: *mut *mut c_char,
+    r: *mut hts_expr_val_t,
+) -> c_int {
+    bit_expr(add_expr, b'&', f, d, s, st, e, r)
+}
+
+// original: bitxor_expr (htslib/hts_expr.c:550)
+unsafe fn bitxor_expr(
+    f: *mut hts_filter_t,
+    d: *mut c_void,
+    s: hts_expr_sym_func,
+    st: *mut c_char,
+    e: *mut *mut c_char,
+    r: *mut hts_expr_val_t,
+) -> c_int {
+    bit_expr(bitand_expr, b'^', f, d, s, st, e, r)
+}
+
+// original: bitor_expr (htslib/hts_expr.c:585)
+unsafe fn bitor_expr(
+    f: *mut hts_filter_t,
+    d: *mut c_void,
+    s: hts_expr_sym_func,
+    st: *mut c_char,
+    e: *mut *mut c_char,
+    r: *mut hts_expr_val_t,
+) -> c_int {
+    bit_expr(bitxor_expr, b'|', f, d, s, st, e, r)
+}
+
+// original: cmp_expr (htslib/hts_expr.c:623)
+unsafe fn cmp_expr(
+    filt: *mut hts_filter_t,
+    data: *mut c_void,
+    sym_func: hts_expr_sym_func,
+    str_: *mut c_char,
+    end: *mut *mut c_char,
+    res: *mut hts_expr_val_t,
+) -> c_int {
+    if bitor_expr(filt, data, sym_func, str_, end, res) != 0 {
+        return -1;
+    }
+    let str_ = ws(*end);
+    let mut val = expr_val_init();
+    let mut err = 0;
+    let mut cmp_done = 0;
+    let op = if *str_ == b'>' as c_char && *str_.add(1) == b'=' as c_char {
+        cmp_done = 1;
+        err = cmp_expr(filt, data, sym_func, str_.add(2), end, &mut val);
+        b'G'
+    } else if *str_ == b'>' as c_char {
+        cmp_done = 1;
+        err = cmp_expr(filt, data, sym_func, str_.add(1), end, &mut val);
+        b'>'
+    } else if *str_ == b'<' as c_char && *str_.add(1) == b'=' as c_char {
+        cmp_done = 1;
+        err = cmp_expr(filt, data, sym_func, str_.add(2), end, &mut val);
+        b'L'
+    } else if *str_ == b'<' as c_char {
+        cmp_done = 1;
+        err = cmp_expr(filt, data, sym_func, str_.add(1), end, &mut val);
+        b'<'
+    } else {
+        0
+    };
+
+    if cmp_done != 0 {
+        if hts_expr_val_exists(res) == 0 || hts_expr_val_exists(&mut val) == 0 {
+            hts_expr_val_undef(res);
+        } else {
+            let r = if (*res).is_str != 0
+                && !(*res).s.s.is_null()
+                && val.is_str != 0
+                && !val.s.s.is_null()
+            {
+                let c = libc::strcmp((*res).s.s, val.s.s);
+                match op {
+                    b'G' => c >= 0,
+                    b'>' => c > 0,
+                    b'L' => c <= 0,
+                    _ => c < 0,
+                }
+            } else if (*res).is_str == 0 && val.is_str == 0 {
+                match op {
+                    b'G' => (*res).d >= val.d,
+                    b'>' => (*res).d > val.d,
+                    b'L' => (*res).d <= val.d,
+                    _ => (*res).d < val.d,
+                }
+            } else {
+                false
+            };
+            (*res).is_true = c_bool(r);
+            (*res).d = r as c_int as f64;
+            (*res).is_str = 0;
+        }
+    }
+    if cmp_done != 0 && (hts_expr_val_exists(&mut val) == 0 || hts_expr_val_exists(res) == 0) {
+        hts_expr_val_undef(res);
+    }
+    hts_expr_val_free(&mut val);
+    if err != 0 {
+        -1
+    } else {
+        0
+    }
+}
+
+// original: eq_expr (htslib/hts_expr.c:696)
+unsafe fn eq_expr(
+    filt: *mut hts_filter_t,
+    data: *mut c_void,
+    sym_func: hts_expr_sym_func,
+    str_: *mut c_char,
+    end: *mut *mut c_char,
+    res: *mut hts_expr_val_t,
+) -> c_int {
+    if cmp_expr(filt, data, sym_func, str_, end, res) != 0 {
+        return -1;
+    }
+    let str_ = ws(*end);
+    let mut val = expr_val_init();
+    let mut err = 0;
+    let mut eq_done = 0;
+    if *str_ == b'=' as c_char && *str_.add(1) == b'=' as c_char {
+        eq_done = 1;
+        err = eq_expr(filt, data, sym_func, str_.add(2), end, &mut val);
+        if err != 0 {
+            (*res).is_true = 0;
+            (*res).d = 0.0;
+        } else if hts_expr_val_exists(res) == 0 || hts_expr_val_exists(&mut val) == 0 {
+            hts_expr_val_undef(res);
+        } else {
+            let r = if (*res).is_str != 0 {
+                !(*res).s.s.is_null()
+                    && !val.s.s.is_null()
+                    && libc::strcmp((*res).s.s, val.s.s) == 0
+            } else {
+                val.is_str == 0 && (*res).d == val.d
+            };
+            (*res).is_true = c_bool(r);
+            (*res).d = r as c_int as f64;
+        }
+        (*res).is_str = 0;
+    } else if *str_ == b'!' as c_char && *str_.add(1) == b'=' as c_char {
+        eq_done = 1;
+        err = eq_expr(filt, data, sym_func, str_.add(2), end, &mut val);
+        if err != 0 {
+            (*res).is_true = 0;
+            (*res).d = 0.0;
+        } else if hts_expr_val_exists(res) == 0 || hts_expr_val_exists(&mut val) == 0 {
+            hts_expr_val_undef(res);
+        } else {
+            let r = if (*res).is_str != 0 {
+                if !(*res).s.s.is_null() && !val.s.s.is_null() {
+                    libc::strcmp((*res).s.s, val.s.s) != 0
+                } else {
+                    true
+                }
+            } else {
+                val.is_str != 0 || (*res).d != val.d
+            };
+            (*res).is_true = c_bool(r);
+            (*res).d = r as c_int as f64;
+        }
+        (*res).is_str = 0;
+    } else if (*str_ == b'=' as c_char || *str_ == b'!' as c_char) && *str_.add(1) == b'~' as c_char
+    {
+        eq_done = 1;
+        err = eq_expr(filt, data, sym_func, str_.add(2), end, &mut val);
+        if val.is_str == 0 || (*res).is_str == 0 {
+            hts_expr_val_free(&mut val);
+            return -1;
+        }
+        if !val.s.s.is_null() && !(*res).s.s.is_null() && val.is_true >= 0 && (*res).is_true >= 0 {
+            let mut preg_tmp: libc::regex_t = std::mem::zeroed();
+            let mut compile_regex = false;
+            let preg_tmp_ptr = std::ptr::addr_of_mut!(preg_tmp);
+            let preg = if (*filt).curr_regex >= (*filt).max_regex {
+                if (*filt).curr_regex >= MAX_REGEX as c_int {
+                    compile_regex = true;
+                    preg_tmp_ptr
+                } else {
+                    compile_regex = true;
+                    let idx = (*filt).curr_regex as usize;
+                    (*filt).max_regex += 1;
+                    std::ptr::addr_of_mut!((*filt).preg[idx])
+                }
+            } else {
+                std::ptr::addr_of_mut!((*filt).preg[(*filt).curr_regex as usize])
+            };
+            if compile_regex {
+                let ec = libc::regcomp(preg, val.s.s, libc::REG_EXTENDED | libc::REG_NOSUB);
+                if ec != 0 {
+                    let mut errbuf = [0 as c_char; 1024];
+                    libc::regerror(ec, preg, errbuf.as_mut_ptr(), errbuf.len());
+                    libc::fprintf(
+                        hts_sys::stderr.cast::<libc::FILE>(),
+                        c"Failed regex: %.1024s\n".as_ptr(),
+                        errbuf.as_ptr(),
+                    );
+                    hts_expr_val_free(&mut val);
+                    return -1;
+                }
+            }
+            let matched = libc::regexec(preg, (*res).s.s, 0, std::ptr::null_mut(), 0) == 0;
+            let r = if matched {
+                *str_ == b'=' as c_char
+            } else {
+                *str_ == b'!' as c_char
+            };
+            (*res).is_true = c_bool(r);
+            (*res).d = r as c_int as f64;
+            if preg == preg_tmp_ptr {
+                libc::regfree(preg);
+            }
+            (*filt).curr_regex += 1;
+        } else {
+            (*res).is_true = 0;
+        }
+        (*res).is_str = 0;
+    }
+    if eq_done != 0 && (hts_expr_val_exists(&mut val) == 0 || hts_expr_val_exists(res) == 0) {
+        hts_expr_val_undef(res);
+    }
+    hts_expr_val_free(&mut val);
+    if err != 0 {
+        -1
+    } else {
+        0
+    }
+}
+
+unsafe fn expr_truth(v: *mut hts_expr_val_t) -> bool {
+    (*v).is_true != 0 || ((*v).is_str != 0 && !(*v).s.s.is_null()) || (*v).d != 0.0
+}
+
+// original: and_expr (htslib/hts_expr.c:795)
+unsafe fn and_expr(
+    filt: *mut hts_filter_t,
+    data: *mut c_void,
+    sym_func: hts_expr_sym_func,
+    str_: *mut c_char,
+    end: *mut *mut c_char,
+    res: *mut hts_expr_val_t,
+) -> c_int {
+    if eq_expr(filt, data, sym_func, str_, end, res) != 0 {
+        return -1;
+    }
+    loop {
+        let mut val = expr_val_init();
+        let str_ = ws(*end);
+        if *str_ == b'&' as c_char && *str_.add(1) == b'&' as c_char {
+            if eq_expr(filt, data, sym_func, str_.add(2), end, &mut val) != 0 {
+                return -1;
+            }
+            if hts_expr_val_existsT(res) == 0 || hts_expr_val_existsT(&mut val) == 0 {
+                hts_expr_val_undef(res);
+                (*res).d = 0.0;
+            } else {
+                let r = expr_truth(res) && expr_truth(&mut val);
+                (*res).is_true = c_bool(r);
+                (*res).d = r as c_int as f64;
+                (*res).is_str = 0;
+            }
+        } else if *str_ == b'|' as c_char && *str_.add(1) == b'|' as c_char {
+            if eq_expr(filt, data, sym_func, str_.add(2), end, &mut val) != 0 {
+                return -1;
+            }
+            if hts_expr_val_existsT(res) == 0 && hts_expr_val_existsT(&mut val) == 0 {
+                hts_expr_val_undef(res);
+                (*res).d = 0.0;
+            } else if hts_expr_val_existsT(res) == 0 && !expr_truth(&mut val) {
+                hts_expr_val_undef(res);
+                (*res).d = 0.0;
+            } else if hts_expr_val_existsT(&mut val) == 0 && !expr_truth(res) {
+                hts_expr_val_undef(res);
+                (*res).d = 0.0;
+            } else {
+                let r = expr_truth(res) || expr_truth(&mut val);
+                (*res).is_true = c_bool(r);
+                (*res).d = r as c_int as f64;
+                (*res).is_str = 0;
+            }
+        } else {
+            break;
+        }
+        hts_expr_val_free(&mut val);
+    }
+    0
+}
+
+// original: expression (htslib/hts_expr.c:844)
+unsafe fn expression(
+    filt: *mut hts_filter_t,
+    data: *mut c_void,
+    sym_func: hts_expr_sym_func,
+    str_: *mut c_char,
+    end: *mut *mut c_char,
+    res: *mut hts_expr_val_t,
+) -> c_int {
+    and_expr(filt, data, sym_func, str_, end, res)
+}
+
+// original: hts_filter_init (htslib/hts_expr.c:849)
+pub unsafe fn hts_expr_c_849_hts_filter_init(str_: *const c_char) -> *mut hts_filter_t {
+    let f = c_compat::calloc(1, std::mem::size_of::<hts_filter_t>() as u64).cast::<hts_filter_t>();
+    if f.is_null() {
+        return std::ptr::null_mut();
+    }
+    let len = libc::strlen(str_) + 100;
+    (*f).str_ = c_compat::malloc(len as u64).cast::<c_char>();
+    if (*f).str_.is_null() {
+        c_compat::free(f.cast());
+        return std::ptr::null_mut();
+    }
+    libc::strcpy((*f).str_, str_);
+    f
+}
+
+// original: hts_filter_free (htslib/hts_expr.c:863)
+pub unsafe fn hts_expr_c_863_hts_filter_free(filt: *mut hts_filter_t) {
+    if filt.is_null() {
+        return;
+    }
+    for i in 0..(*filt).max_regex {
+        libc::regfree(&mut (*filt).preg[i as usize]);
+    }
+    c_compat::free((*filt).str_.cast());
+    c_compat::free(filt.cast());
+}
+
+// original: hts_filter_eval_ (htslib/hts_expr.c:875)
+unsafe fn hts_filter_eval_(
+    filt: *mut hts_filter_t,
+    data: *mut c_void,
+    sym_func: hts_expr_sym_func,
+    res: *mut hts_expr_val_t,
+) -> c_int {
+    let mut end: *mut c_char = std::ptr::null_mut();
+    (*filt).curr_regex = 0;
+    if expression(filt, data, sym_func, (*filt).str_, &mut end, res) != 0 {
+        return -1;
+    }
+    if !end.is_null() && *ws(end) != 0 {
+        libc::fprintf(
+            hts_sys::stderr.cast::<libc::FILE>(),
+            c"Unable to parse expression at %s\n".as_ptr(),
+            (*filt).str_,
+        );
+        return -1;
+    }
+    if (*res).is_str != 0 {
+        (*res).is_true |= (!(*res).s.s.is_null()) as c_int as c_char;
+        (*res).d = (*res).is_true as f64;
+    } else if hts_expr_val_exists(res) != 0 {
+        (*res).is_true |= ((*res).d != 0.0) as c_int as c_char;
+    }
+    0
+}
+
+// original: hts_filter_eval (htslib/hts_expr.c:903)
+pub unsafe fn hts_expr_c_903_hts_filter_eval(
+    filt: *mut hts_filter_t,
+    data: *mut c_void,
+    sym_func: hts_expr_sym_func,
+    res: *mut hts_expr_val_t,
+) -> c_int {
+    if (*res).s.l != 0 || (*res).s.m != 0 || !(*res).s.s.is_null() {
+        hts_log_cstr(
+            HTS_LOG_ERROR,
+            c"hts_filter_eval".as_ptr(),
+            c"Results structure must be cleared before calling this function".as_ptr(),
+        );
+        return -1;
+    }
+    libc::memset(res.cast(), 0, std::mem::size_of::<hts_expr_val_t>());
+    hts_filter_eval_(filt, data, sym_func, res)
+}
+
+// original: hts_filter_eval2 (htslib/hts_expr.c:920)
+pub unsafe fn hts_expr_c_920_hts_filter_eval2(
+    filt: *mut hts_filter_t,
+    data: *mut c_void,
+    sym_func: hts_expr_sym_func,
+    res: *mut hts_expr_val_t,
+) -> c_int {
+    ks_free(&mut (*res).s);
+    libc::memset(res.cast(), 0, std::mem::size_of::<hts_expr_val_t>());
+    hts_filter_eval_(filt, data, sym_func, res)
 }
 
 pub unsafe fn kputd(d: f64, s: *mut kstring_t) -> c_int {
@@ -3573,46 +4525,8 @@ unsafe extern "C" {
     ) -> c_char;
     #[link_name = "hts_json_fskip_value"]
     fn htslib_hts_json_fskip_value(fp: *mut hFILE, type_: c_char) -> c_char;
-    #[link_name = "hts_filter_init"]
-    fn htslib_hts_filter_init(str_: *const c_char) -> *mut hts_filter_t;
-    #[link_name = "hts_filter_free"]
-    fn htslib_hts_filter_free(filt: *mut hts_filter_t);
-    #[link_name = "hts_filter_eval"]
-    fn htslib_hts_filter_eval(
-        filt: *mut hts_filter_t,
-        data: *mut c_void,
-        sym_func: hts_expr_sym_func,
-        res: *mut hts_expr_val_t,
-    ) -> c_int;
-    #[link_name = "hts_filter_eval2"]
-    fn htslib_hts_filter_eval2(
-        filt: *mut hts_filter_t,
-        data: *mut c_void,
-        sym_func: hts_expr_sym_func,
-        res: *mut hts_expr_val_t,
-    ) -> c_int;
-    #[link_name = "hts_detect_format2"]
-    fn htslib_hts_detect_format2(
-        hfile: *mut hFILE,
-        fname: *const c_char,
-        fmt: *mut htsFormat,
-    ) -> c_int;
-    #[link_name = "hts_set_filter_expression"]
-    fn htslib_hts_set_filter_expression(fp: *mut htsFile, expr: *const c_char) -> c_int;
     #[link_name = "hts_idx_nseq"]
     fn htslib_hts_idx_nseq(idx: *const hts_idx_t) -> c_int;
-    #[link_name = "hts_realloc_or_die"]
-    fn htslib_hts_realloc_or_die(
-        n: size_t,
-        m: size_t,
-        m_sz: size_t,
-        size: size_t,
-        clear: c_int,
-        ptr: *mut *mut c_void,
-        func: *const c_char,
-    ) -> size_t;
-    #[link_name = "hts_lib_shutdown"]
-    fn htslib_hts_lib_shutdown();
 }
 
 unsafe fn bgzf_is_compressed(fp: *const BGZF) -> bool {
@@ -3648,66 +4562,142 @@ pub unsafe fn hts_open_format(
     mode: *const c_char,
     fmt: *const htsFormat,
 ) -> *mut htsFile {
-    if let Some(fp) = hts_open_format_bam_read(fn_, mode, fmt) {
-        return fp;
+    let mut smode = [0 as c_char; 101];
+    let mut fmt_code = 0 as c_char;
+    let mut uncomp: *mut c_char = std::ptr::null_mut();
+    let mut hfile: *mut hFILE = std::ptr::null_mut();
+    let format_to_mode = b"\0g\0\0b\0c\0\0b\0g\0\0\0\0\0Ff\0\0";
+
+    libc::strncpy(smode.as_mut_ptr(), mode, 99);
+    smode[99] = 0;
+    let comma = libc::strchr(smode.as_mut_ptr(), b',' as c_int);
+    if !comma.is_null() {
+        *comma = 0;
     }
-    hts_sys::hts_open_format(fn_, mode, fmt.cast()).cast()
+
+    let mut cp = smode.as_mut_ptr();
+    let mut cp2 = smode.as_mut_ptr();
+    while *cp != 0 {
+        if *cp == b'b' as c_char {
+            fmt_code = b'b' as c_char;
+        } else if *cp == b'c' as c_char {
+            fmt_code = b'c' as c_char;
+        } else {
+            *cp2 = *cp;
+            cp2 = cp2.add(1);
+            if uncomp.is_null() && *cp == b'u' as c_char {
+                uncomp = cp2.sub(1);
+            }
+        }
+        cp = cp.add(1);
+    }
+    let mode_c = cp2;
+    *cp2 = fmt_code;
+    cp2 = cp2.add(1);
+    *cp2 = 0;
+
+    if !fmt.is_null()
+        && (*fmt).format > HTS_FORMAT_UNKNOWN_FORMAT
+        && ((*fmt).format as usize) < format_to_mode.len()
+    {
+        *mode_c = format_to_mode[(*fmt).format as usize] as c_char;
+    }
+
+    if !uncomp.is_null()
+        && *mode_c == b'b' as c_char
+        && (!libc::strchr(smode.as_ptr(), b'w' as c_int).is_null()
+            || !libc::strchr(smode.as_ptr(), b'a' as c_int).is_null())
+    {
+        *uncomp = b'0' as c_char;
+    }
+
+    if !libc::strchr(mode, b'w' as c_int).is_null()
+        && !fmt.is_null()
+        && (*fmt).compression == hts_sys::htsCompression_bgzf
+        && ((*fmt).format == HTS_FORMAT_SAM
+            || (*fmt).format == HTS_FORMAT_VCF
+            || (*fmt).format == HTS_FORMAT_TEXT_FORMAT)
+    {
+        *mode_c = b'z' as c_char;
+    }
+
+    let idx_delim = c"##idx##";
+    let mut rmme: *mut c_char = std::ptr::null_mut();
+    let fnidx = libc::strstr(fn_, idx_delim.as_ptr());
+    let mut fn_open = fn_;
+    if !fnidx.is_null() {
+        rmme = c_compat::strdup(fn_);
+        if rmme.is_null() {
+            goto_hts_open_format_error(fn_open, rmme, hfile);
+            return std::ptr::null_mut();
+        }
+        *rmme.add(fnidx.offset_from(fn_) as usize) = 0;
+        fn_open = rmme;
+    }
+
+    hfile = hopen(fn_open, smode.as_ptr());
+    if hfile.is_null() {
+        goto_hts_open_format_error(fn_open, rmme, hfile);
+        return std::ptr::null_mut();
+    }
+
+    let fp = hts_hopen(hfile, fn_open, smode.as_ptr());
+    if fp.is_null() {
+        goto_hts_open_format_error(fn_open, rmme, hfile);
+        return std::ptr::null_mut();
+    }
+
+    if ((*fp).bitfields & (1 << 1)) != 0
+        && !fmt.is_null()
+        && ((*fmt).format == HTS_FORMAT_BAM
+            || (*fmt).format == HTS_FORMAT_SAM
+            || (*fmt).format == HTS_FORMAT_VCF
+            || (*fmt).format == HTS_FORMAT_BCF
+            || (*fmt).format == HTS_FORMAT_BED
+            || (*fmt).format == HTS_FORMAT_FASTA_FORMAT
+            || (*fmt).format == HTS_FORMAT_FASTQ_FORMAT)
+    {
+        (*fp).format.format = (*fmt).format;
+    }
+
+    if !fmt.is_null()
+        && !(*fmt).specific.is_null()
+        && hts_opt_apply(fp, (*fmt).specific.cast()) != 0
+    {
+        let opt = (*fmt).specific.cast::<hts_opt>();
+        let errno = *c_compat::__errno_location();
+        if !opt.is_null()
+            && (*opt).opt == hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE
+            && (errno == libc::ENOENT
+                || errno == libc::EIO
+                || errno == libc::EBADF
+                || errno == libc::EACCES
+                || errno == libc::EISDIR)
+        {
+            *c_compat::__errno_location() = libc::EINVAL;
+        }
+        goto_hts_open_format_error(fn_open, rmme, hfile);
+        return std::ptr::null_mut();
+    }
+
+    if !rmme.is_null() {
+        c_compat::free(rmme.cast());
+    }
+    fp
 }
 
-unsafe fn hts_open_format_bam_read(
-    fn_: *const c_char,
-    mode: *const c_char,
-    fmt: *const htsFormat,
-) -> Option<*mut htsFile> {
-    if fn_.is_null() || mode.is_null() || !fmt.is_null() {
-        return None;
+unsafe fn goto_hts_open_format_error(fn_: *const c_char, rmme: *mut c_char, hfile: *mut hFILE) {
+    libc::fprintf(
+        hts_sys::stderr.cast::<libc::FILE>(),
+        c"[E::hts_open_format] Failed to open file \"%s\"\n".as_ptr(),
+        fn_,
+    );
+    if !rmme.is_null() {
+        c_compat::free(rmme.cast());
     }
-    let mode_bytes = std::ffi::CStr::from_ptr(mode).to_bytes();
-    if !mode_bytes.contains(&b'r')
-        || mode_bytes.contains(&b'w')
-        || mode_bytes.contains(&b'a')
-        || mode_bytes.contains(&b',')
-    {
-        return None;
+    if !hfile.is_null() {
+        hclose_abruptly(hfile);
     }
-
-    let bgzf = bgzf_open(fn_, b"r\0".as_ptr().cast());
-    if bgzf.is_null() {
-        return None;
-    }
-    let mut magic = [0u8; 4];
-    if bgzf_read(bgzf, magic.as_mut_ptr().cast(), 4) != 4 || &magic != b"BAM\x01" {
-        bgzf_close(bgzf.cast());
-        return None;
-    }
-    if bgzf_seek(bgzf, 0, 0) < 0 {
-        bgzf_close(bgzf.cast());
-        return None;
-    }
-
-    let fp = crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<htsFile>() as u64)
-        .cast::<htsFile>();
-    if fp.is_null() {
-        bgzf_close(bgzf.cast());
-        return None;
-    }
-    (*fp).fn_ = crate::htslib_mini_rs::c_compat::strdup(fn_);
-    if (*fp).fn_.is_null() {
-        bgzf_close(bgzf.cast());
-        crate::htslib_mini_rs::c_compat::free(fp.cast());
-        return None;
-    }
-    (*fp).bitfields = 1 | (1 << 4);
-    if ed_is_big() != 0 {
-        (*fp).bitfields |= 1 << 2;
-    }
-    (*fp).fp.bgzf = bgzf;
-    (*fp).format.format = HTS_FORMAT_BAM;
-    (*fp).format.compression = 2;
-    (*fp).format.version.major = -1;
-    (*fp).format.version.minor = -1;
-    (*fp).format.compression_level = -1;
-    Some(fp)
 }
 
 pub unsafe fn hts_open(fn_: *const c_char, mode: *const c_char) -> *mut htsFile {
@@ -3820,6 +4810,13 @@ pub unsafe fn hts_hopen(fp: *mut hFILE, fn_: *const c_char, mode: *const c_char)
                 goto_hts_hopen_error(hts_fp);
                 return std::ptr::null_mut();
             }
+            if ((*hts_fp).bitfields & (1 << 1)) == 0 {
+                hts_sys::cram_set_option(
+                    (*hts_fp).fp.cram.cast(),
+                    hts_sys::hts_fmt_option_CRAM_OPT_DECODE_MD,
+                    -1,
+                );
+            }
             (*hts_fp).bitfields |= 1 << 3;
         }
         HTS_FORMAT_EMPTY_FORMAT
@@ -3841,7 +4838,7 @@ pub unsafe fn hts_hopen(fp: *mut hFILE, fn_: *const c_char, mode: *const c_char)
             }
         }
         _ => {
-            *c_compat::__errno_location() = libc::EINVAL;
+            *c_compat::__errno_location() = libc::ENOEXEC;
             goto_hts_hopen_error(hts_fp);
             return std::ptr::null_mut();
         }
@@ -3863,7 +4860,7 @@ unsafe fn goto_hts_hopen_error(fp: *mut htsFile) {
 }
 
 pub unsafe fn hts_detect_format(fp: *mut hFILE, fmt: *mut htsFormat) -> c_int {
-    hts_sys::hts_detect_format(fp.cast(), fmt.cast())
+    hts_detect_format2(fp, std::ptr::null(), fmt)
 }
 
 pub unsafe fn hts_detect_format2(
@@ -3871,7 +4868,7 @@ pub unsafe fn hts_detect_format2(
     fname: *const c_char,
     fmt: *mut htsFormat,
 ) -> c_int {
-    unsafe { htslib_hts_detect_format2(fp, fname, fmt) }
+    hts_c_556_hts_detect_format2(fp, fname, fmt)
 }
 
 pub unsafe fn hts_c_556_hts_detect_format2(
@@ -4315,6 +5312,15 @@ pub unsafe fn hts_c_1002_scan_keyword(
     }
 }
 
+fn hts_c_1021_opt_key_matches(key: &[u8], lower: &[u8]) -> bool {
+    key == lower
+        || (key.len() == lower.len()
+            && key
+                .iter()
+                .zip(lower.iter())
+                .all(|(&k, &l)| k == l.to_ascii_uppercase()))
+}
+
 pub unsafe fn hts_c_1021_hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_char) -> c_int {
     if c_arg.is_null() {
         return -1;
@@ -4340,76 +5346,76 @@ pub unsafe fn hts_c_1021_hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_ch
 
     let key = CStr::from_ptr((*o).arg).to_bytes();
     let mut endp: *mut c_char = std::ptr::null_mut();
-    if key.eq_ignore_ascii_case(b"decode_md") {
+    if hts_c_1021_opt_key_matches(key, b"decode_md") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_DECODE_MD;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"verbosity") {
+    } else if hts_c_1021_opt_key_matches(key, b"verbosity") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_VERBOSITY;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"seqs_per_slice") {
+    } else if hts_c_1021_opt_key_matches(key, b"seqs_per_slice") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_SEQS_PER_SLICE;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"bases_per_slice") {
+    } else if hts_c_1021_opt_key_matches(key, b"bases_per_slice") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_BASES_PER_SLICE;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"slices_per_container") {
+    } else if hts_c_1021_opt_key_matches(key, b"slices_per_container") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_SLICES_PER_CONTAINER;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"embed_ref") {
+    } else if hts_c_1021_opt_key_matches(key, b"embed_ref") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_EMBED_REF;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"no_ref") {
+    } else if hts_c_1021_opt_key_matches(key, b"no_ref") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_NO_REF;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"pos_delta") {
+    } else if hts_c_1021_opt_key_matches(key, b"pos_delta") {
         (*o).opt = CRAM_OPT_POS_DELTA;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"ignore_md5") {
+    } else if hts_c_1021_opt_key_matches(key, b"ignore_md5") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_IGNORE_MD5;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"use_bzip2") {
+    } else if hts_c_1021_opt_key_matches(key, b"use_bzip2") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_USE_BZIP2;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"use_rans") {
+    } else if hts_c_1021_opt_key_matches(key, b"use_rans") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_USE_RANS;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"use_lzma") {
+    } else if hts_c_1021_opt_key_matches(key, b"use_lzma") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_USE_LZMA;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"use_tok") {
+    } else if hts_c_1021_opt_key_matches(key, b"use_tok") {
         (*o).opt = CRAM_OPT_USE_TOK;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"use_fqz") {
+    } else if hts_c_1021_opt_key_matches(key, b"use_fqz") {
         (*o).opt = CRAM_OPT_USE_FQZ;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"use_arith") {
+    } else if hts_c_1021_opt_key_matches(key, b"use_arith") {
         (*o).opt = CRAM_OPT_USE_ARITH;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"fast") {
+    } else if hts_c_1021_opt_key_matches(key, b"fast") {
         (*o).opt = HTS_OPT_PROFILE;
         (*o).val.i = HTS_PROFILE_FAST;
-    } else if key.eq_ignore_ascii_case(b"normal") {
+    } else if hts_c_1021_opt_key_matches(key, b"normal") {
         (*o).opt = HTS_OPT_PROFILE;
         (*o).val.i = HTS_PROFILE_NORMAL;
-    } else if key.eq_ignore_ascii_case(b"small") {
+    } else if hts_c_1021_opt_key_matches(key, b"small") {
         (*o).opt = HTS_OPT_PROFILE;
         (*o).val.i = HTS_PROFILE_SMALL;
-    } else if key.eq_ignore_ascii_case(b"archive") {
+    } else if hts_c_1021_opt_key_matches(key, b"archive") {
         (*o).opt = HTS_OPT_PROFILE;
         (*o).val.i = HTS_PROFILE_ARCHIVE;
-    } else if key.eq_ignore_ascii_case(b"reference") {
+    } else if hts_c_1021_opt_key_matches(key, b"reference") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE;
         (*o).val.s = val;
-    } else if key.eq_ignore_ascii_case(b"version") {
+    } else if hts_c_1021_opt_key_matches(key, b"version") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_VERSION;
         (*o).val.s = val;
-    } else if key.eq_ignore_ascii_case(b"multi_seq_per_slice") {
+    } else if hts_c_1021_opt_key_matches(key, b"multi_seq_per_slice") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_MULTI_SEQ_PER_SLICE;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"nthreads") {
+    } else if hts_c_1021_opt_key_matches(key, b"nthreads") {
         (*o).opt = hts_sys::hts_fmt_option_HTS_OPT_NTHREADS;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"cache_size") {
+    } else if hts_c_1021_opt_key_matches(key, b"cache_size") {
         (*o).opt = hts_sys::hts_fmt_option_HTS_OPT_CACHE_SIZE;
         (*o).val.i = libc::strtol(val, &mut endp, 0) as c_int;
         match *endp {
@@ -4432,13 +5438,13 @@ pub unsafe fn hts_c_1021_hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_ch
                 return -1;
             }
         }
-    } else if key.eq_ignore_ascii_case(b"required_fields") {
+    } else if hts_c_1021_opt_key_matches(key, b"required_fields") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_REQUIRED_FIELDS;
         (*o).val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
-    } else if key.eq_ignore_ascii_case(b"lossy_names") {
+    } else if hts_c_1021_opt_key_matches(key, b"lossy_names") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_LOSSY_NAMES;
         (*o).val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
-    } else if key.eq_ignore_ascii_case(b"name_prefix") {
+    } else if hts_c_1021_opt_key_matches(key, b"name_prefix") {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_PREFIX;
         (*o).val.s = val;
     } else if key == b"store_md" {
@@ -4447,34 +5453,34 @@ pub unsafe fn hts_c_1021_hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_ch
     } else if key == b"store_nm" {
         (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_STORE_NM;
         (*o).val.i = libc::atoi(val);
-    } else if key.eq_ignore_ascii_case(b"block_size") {
+    } else if hts_c_1021_opt_key_matches(key, b"block_size") {
         (*o).opt = hts_sys::hts_fmt_option_HTS_OPT_BLOCK_SIZE;
         (*o).val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
-    } else if key.eq_ignore_ascii_case(b"level") {
+    } else if hts_c_1021_opt_key_matches(key, b"level") {
         (*o).opt = hts_sys::hts_fmt_option_HTS_OPT_COMPRESSION_LEVEL;
         (*o).val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
-    } else if key.eq_ignore_ascii_case(b"filter") {
+    } else if hts_c_1021_opt_key_matches(key, b"filter") {
         (*o).opt = HTS_OPT_FILTER;
         (*o).val.s = val;
-    } else if key.eq_ignore_ascii_case(b"fastq_aux") {
+    } else if hts_c_1021_opt_key_matches(key, b"fastq_aux") {
         (*o).opt = crate::htslib_mini_rs::sam::FASTQ_OPT_AUX as hts_fmt_option;
         (*o).val.s = val;
-    } else if key.eq_ignore_ascii_case(b"fastq_barcode") {
+    } else if hts_c_1021_opt_key_matches(key, b"fastq_barcode") {
         (*o).opt = crate::htslib_mini_rs::sam::FASTQ_OPT_BARCODE as hts_fmt_option;
         (*o).val.s = val;
-    } else if key.eq_ignore_ascii_case(b"fastq_rnum") {
+    } else if hts_c_1021_opt_key_matches(key, b"fastq_rnum") {
         (*o).opt = crate::htslib_mini_rs::sam::FASTQ_OPT_RNUM as hts_fmt_option;
         (*o).val.i = 1;
-    } else if key.eq_ignore_ascii_case(b"fastq_casava") {
+    } else if hts_c_1021_opt_key_matches(key, b"fastq_casava") {
         (*o).opt = crate::htslib_mini_rs::sam::FASTQ_OPT_CASAVA as hts_fmt_option;
         (*o).val.i = 1;
-    } else if key.eq_ignore_ascii_case(b"fastq_name2") {
+    } else if hts_c_1021_opt_key_matches(key, b"fastq_name2") {
         (*o).opt = crate::htslib_mini_rs::sam::FASTQ_OPT_NAME2 as hts_fmt_option;
         (*o).val.i = 1;
-    } else if key.eq_ignore_ascii_case(b"fastq_umi") {
+    } else if hts_c_1021_opt_key_matches(key, b"fastq_umi") {
         (*o).opt = crate::htslib_mini_rs::sam::FASTQ_OPT_UMI as hts_fmt_option;
         (*o).val.s = val;
-    } else if key.eq_ignore_ascii_case(b"fastq_umi_regex") {
+    } else if hts_c_1021_opt_key_matches(key, b"fastq_umi_regex") {
         (*o).opt = crate::htslib_mini_rs::sam::FASTQ_OPT_UMI_REGEX as hts_fmt_option;
         (*o).val.s = val;
     } else {
@@ -4497,7 +5503,7 @@ pub unsafe fn hts_c_1021_hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_ch
 }
 
 pub unsafe fn hts_opt_apply(fp: *mut htsFile, opts: *mut hts_opt) -> c_int {
-    hts_sys::hts_opt_apply(fp.cast(), opts)
+    hts_c_1247_hts_opt_apply(fp, opts)
 }
 
 pub unsafe fn hts_c_1247_hts_opt_apply(fp: *mut htsFile, mut opts: *mut hts_opt) -> c_int {
@@ -4508,7 +5514,7 @@ pub unsafe fn hts_c_1247_hts_opt_apply(fp: *mut htsFile, mut opts: *mut hts_opt)
                 if (*fp).fn_aux.is_null() {
                     return -1;
                 }
-                if hts_sys::hts_set_opt(fp.cast(), (*opts).opt, (*opts).val.s) != 0 {
+                if hts_set_opt_ptr(fp, (*opts).opt, (*opts).val.s.cast()) != 0 {
                     return -1;
                 }
             }
@@ -4520,12 +5526,12 @@ pub unsafe fn hts_c_1247_hts_opt_apply(fp: *mut htsFile, mut opts: *mut hts_opt)
                 || x == crate::htslib_mini_rs::sam::FASTQ_OPT_UMI as hts_fmt_option
                 || x == crate::htslib_mini_rs::sam::FASTQ_OPT_UMI_REGEX as hts_fmt_option =>
             {
-                if hts_sys::hts_set_opt(fp.cast(), (*opts).opt, (*opts).val.s) != 0 {
+                if hts_set_opt_ptr(fp, (*opts).opt, (*opts).val.s.cast()) != 0 {
                     return -1;
                 }
             }
             _ => {
-                if hts_sys::hts_set_opt(fp.cast(), (*opts).opt, (*opts).val.i) != 0 {
+                if hts_set_opt_int(fp, (*opts).opt, (*opts).val.i) != 0 {
                     return -1;
                 }
             }
@@ -4533,6 +5539,111 @@ pub unsafe fn hts_c_1247_hts_opt_apply(fp: *mut htsFile, mut opts: *mut hts_opt)
         opts = (*opts).next;
     }
     0
+}
+
+pub unsafe fn hts_set_opt_int(fp: *mut htsFile, opt: hts_fmt_option, val: c_int) -> c_int {
+    match opt {
+        x if x == hts_sys::hts_fmt_option_HTS_OPT_NTHREADS => hts_set_threads(fp, val),
+        x if x == hts_sys::hts_fmt_option_HTS_OPT_CACHE_SIZE => {
+            hts_set_cache_size(fp, val);
+            0
+        }
+        x if x == hts_sys::hts_fmt_option_HTS_OPT_BLOCK_SIZE => {
+            let hf = hts_hfile(fp);
+            if !hf.is_null() {
+                if hfile_set_blksize(hf, val as size_t) != 0 {
+                    hts_log_cstr(
+                        HTS_LOG_WARNING,
+                        c"hts_set_opt".as_ptr(),
+                        c"Failed to change block size".as_ptr(),
+                    );
+                }
+            } else {
+                hts_log_cstr(
+                    HTS_LOG_WARNING,
+                    c"hts_set_opt".as_ptr(),
+                    c"Cannot change block size for this format".as_ptr(),
+                );
+            }
+            0
+        }
+        x if x == crate::htslib_mini_rs::sam::FASTQ_OPT_CASAVA as hts_fmt_option
+            || x == crate::htslib_mini_rs::sam::FASTQ_OPT_RNUM as hts_fmt_option
+            || x == crate::htslib_mini_rs::sam::FASTQ_OPT_NAME2 as hts_fmt_option =>
+        {
+            if (*fp).format.format == HTS_FORMAT_FASTQ_FORMAT
+                || (*fp).format.format == HTS_FORMAT_FASTA_FORMAT
+            {
+                super::sam::sam_c_3815_fastq_state_set(fp, opt as c_int, std::ptr::null())
+            } else {
+                0
+            }
+        }
+        x if x == hts_sys::hts_fmt_option_HTS_OPT_COMPRESSION_LEVEL => {
+            if ((*fp).bitfields & (1 << 4)) != 0 {
+                (*(*fp).fp.bgzf).bitfields &= !(0x1ff << 20);
+                (*(*fp).fp.bgzf).bitfields |= ((val as u32) & 0x1ff) << 20;
+                0
+            } else if (*fp).format.format == HTS_FORMAT_CRAM {
+                hts_sys::cram_set_option((*fp).fp.cram.cast(), opt, val)
+            } else {
+                0
+            }
+        }
+        x if x == HTS_OPT_PROFILE => {
+            if ((*fp).bitfields & (1 << 4)) != 0 {
+                let level = match val {
+                    HTS_PROFILE_FAST => 1,
+                    HTS_PROFILE_NORMAL => -1,
+                    HTS_PROFILE_SMALL => 8,
+                    HTS_PROFILE_ARCHIVE => 9,
+                    _ => (*(*fp).fp.bgzf).bitfields.wrapping_shr(20) as c_int & 0x1ff,
+                };
+                (*(*fp).fp.bgzf).bitfields &= !(0x1ff << 20);
+                (*(*fp).fp.bgzf).bitfields |= ((level as u32) & 0x1ff) << 20;
+            }
+            0
+        }
+        _ => {
+            if (*fp).format.format == HTS_FORMAT_CRAM {
+                hts_sys::cram_set_option((*fp).fp.cram.cast(), opt, val)
+            } else {
+                0
+            }
+        }
+    }
+}
+
+pub unsafe fn hts_set_opt_ptr(fp: *mut htsFile, opt: hts_fmt_option, val: *mut c_void) -> c_int {
+    match opt {
+        x if x == hts_sys::hts_fmt_option_HTS_OPT_THREAD_POOL => {
+            hts_set_thread_pool(fp, val.cast::<htsThreadPool>())
+        }
+        x if x == hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE => {
+            hts_set_fai_filename(fp, val.cast::<c_char>())
+        }
+        x if x == HTS_OPT_FILTER => hts_set_filter_expression(fp, val.cast::<c_char>()),
+        x if x == crate::htslib_mini_rs::sam::FASTQ_OPT_AUX as hts_fmt_option
+            || x == crate::htslib_mini_rs::sam::FASTQ_OPT_BARCODE as hts_fmt_option
+            || x == crate::htslib_mini_rs::sam::FASTQ_OPT_UMI as hts_fmt_option
+            || x == crate::htslib_mini_rs::sam::FASTQ_OPT_UMI_REGEX as hts_fmt_option =>
+        {
+            if (*fp).format.format == HTS_FORMAT_FASTQ_FORMAT
+                || (*fp).format.format == HTS_FORMAT_FASTA_FORMAT
+            {
+                super::sam::sam_c_3815_fastq_state_set(fp, opt as c_int, val.cast::<c_char>())
+            } else {
+                0
+            }
+        }
+        _ => {
+            if (*fp).format.format == HTS_FORMAT_CRAM {
+                hts_sys::cram_set_option((*fp).fp.cram.cast(), opt, val)
+            } else {
+                0
+            }
+        }
+    }
 }
 
 pub unsafe fn hts_opt_free(opts: *mut hts_opt) {
@@ -4720,23 +5831,75 @@ pub unsafe fn hts_parse_opt_list(opt: *mut htsFormat, str_: *const c_char) -> c_
 }
 
 pub unsafe fn hts_set_threads(fp: *mut htsFile, n: c_int) -> c_int {
-    hts_sys::hts_set_threads(fp.cast(), n)
+    if (*fp).format.format == HTS_FORMAT_SAM {
+        super::sam::sam_c_3746_sam_set_threads(fp, n)
+    } else if (*fp).format.compression == hts_sys::htsCompression_bgzf {
+        bgzf_mt(hts_get_bgzfp(fp), n, 256)
+    } else if (*fp).format.format == HTS_FORMAT_CRAM {
+        hts_sys::hts_set_opt(fp.cast(), hts_sys::hts_fmt_option_CRAM_OPT_NTHREADS, n)
+    } else {
+        0
+    }
 }
 
 pub unsafe fn hts_set_thread_pool(fp: *mut htsFile, p: *mut htsThreadPool) -> c_int {
-    hts_sys::hts_set_thread_pool(fp.cast(), p)
+    if (*fp).format.format == HTS_FORMAT_SAM || (*fp).format.format == HTS_FORMAT_TEXT_FORMAT {
+        super::sam::sam_c_3719_sam_set_thread_pool(fp, p)
+    } else if (*fp).format.compression == hts_sys::htsCompression_bgzf {
+        bgzf_thread_pool(hts_get_bgzfp(fp), (*p).pool, (*p).qsize)
+    } else if (*fp).format.format == HTS_FORMAT_CRAM {
+        hts_sys::hts_set_opt(fp.cast(), hts_sys::hts_fmt_option_CRAM_OPT_THREAD_POOL, p)
+    } else {
+        0
+    }
 }
 
 pub unsafe fn hts_set_cache_size(fp: *mut htsFile, n: c_int) {
-    hts_sys::hts_set_cache_size(fp.cast(), n)
+    if (*fp).format.compression == hts_sys::htsCompression_bgzf {
+        bgzf_set_cache_size(hts_get_bgzfp(fp), n);
+    }
 }
 
 pub unsafe fn hts_set_fai_filename(fp: *mut htsFile, fn_aux: *const c_char) -> c_int {
-    hts_sys::hts_set_fai_filename(fp.cast(), fn_aux)
+    c_compat::free((*fp).fn_aux.cast());
+    if !fn_aux.is_null() {
+        (*fp).fn_aux = c_compat::strdup(fn_aux);
+        if (*fp).fn_aux.is_null() {
+            return -1;
+        }
+    } else {
+        (*fp).fn_aux = std::ptr::null_mut();
+    }
+
+    if (*fp).format.format == HTS_FORMAT_CRAM
+        && hts_sys::cram_set_option(
+            (*fp).fp.cram.cast(),
+            hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE,
+            (*fp).fn_aux,
+        ) != 0
+    {
+        return -1;
+    }
+
+    0
 }
 
 pub unsafe fn hts_set_filter_expression(fp: *mut htsFile, expr: *const c_char) -> c_int {
-    unsafe { htslib_hts_set_filter_expression(fp, expr) }
+    if !(*fp).filter.is_null() {
+        hts_filter_free((*fp).filter.cast());
+    }
+
+    if expr.is_null() {
+        (*fp).filter = std::ptr::null_mut();
+        return 0;
+    }
+
+    (*fp).filter = hts_filter_init(expr).cast();
+    if !(*fp).filter.is_null() {
+        0
+    } else {
+        -1
+    }
 }
 
 pub unsafe fn hts_c_1979_hts_open_tmpfile(
@@ -4889,7 +6052,48 @@ pub unsafe fn hts_c_2281_idx_dump(idx: *const hts_idx_t) {
 }
 
 pub unsafe fn hts_getline(fp: *mut htsFile, delimiter: c_int, str: *mut kstring_t) -> c_int {
-    hts_sys::hts_getline(fp.cast(), delimiter, str.cast())
+    if !(delimiter == KS_SEP_LINE || delimiter == b'\n' as c_int) {
+        libc::fprintf(
+            hts_sys::stderr.cast::<libc::FILE>(),
+            c"[E::hts_getline] Unexpected delimiter %d\n".as_ptr(),
+            delimiter,
+        );
+        std::process::abort();
+    }
+
+    let ret = match (*fp).format.compression {
+        HTS_COMPRESSION_NO_COMPRESSION => {
+            (*str).l = 0;
+            let mut ret = kgetline2(str, Some(hgetln_wrapper), (*fp).fp.hfile.cast::<c_void>());
+            if ret >= 0 {
+                ret = if (*str).l <= c_int::MAX as usize {
+                    (*str).l as c_int
+                } else {
+                    c_int::MAX
+                };
+            } else if htslib_hfile_h_134_herrno((*fp).fp.hfile) != 0 {
+                ret = -2;
+                *c_compat::__errno_location() = htslib_hfile_h_134_herrno((*fp).fp.hfile);
+            } else {
+                ret = -1;
+            }
+            ret
+        }
+        x if x == hts_sys::htsCompression_gzip || x == hts_sys::htsCompression_bgzf => {
+            bgzf_getline((*fp).fp.bgzf, b'\n' as c_int, str)
+        }
+        _ => std::process::abort(),
+    };
+    (*fp).lineno += 1;
+    ret
+}
+
+pub unsafe extern "C" fn hgetln_wrapper(
+    buf: *mut c_char,
+    len: usize,
+    vfp: *mut c_void,
+) -> libc::ssize_t {
+    htslib_hfile_h_195_hgetln(buf, len, vfp.cast())
 }
 
 pub unsafe fn hts_readlist(fn_: *const c_char, is_file: c_int, n: *mut c_int) -> *mut *mut c_char {
@@ -5237,7 +6441,8 @@ pub unsafe fn hts_close(fp: *mut htsFile) -> c_int {
         return -1;
     }
     if !(*fp).filter.is_null() {
-        return hts_sys::hts_close(fp.cast());
+        hts_filter_free((*fp).filter.cast());
+        (*fp).filter = std::ptr::null_mut();
     }
     match (*fp).format.format {
         HTS_FORMAT_BINARY_FORMAT | HTS_FORMAT_BAM | HTS_FORMAT_BCF => {
@@ -5294,7 +6499,23 @@ pub unsafe fn hts_close(fp: *mut htsFile) -> c_int {
             ret
         }
         HTS_FORMAT_SAM | HTS_FORMAT_FASTA_FORMAT | HTS_FORMAT_FASTQ_FORMAT => {
-            hts_sys::hts_close(fp.cast())
+            if (*fp).format.format == HTS_FORMAT_FASTA_FORMAT
+                || (*fp).format.format == HTS_FORMAT_FASTQ_FORMAT
+            {
+                super::sam::sam_c_3802_fastq_state_destroy(fp);
+            }
+            let ret = if (*fp).format.compression != HTS_COMPRESSION_NO_COMPRESSION {
+                bgzf_close((*fp).fp.bgzf.cast())
+            } else {
+                hclose((*fp).fp.hfile)
+            } | hts_idx_close_otf_fp((*fp).idx);
+            super::sam::sam_hdr_destroy((*fp).bam_header.cast());
+            hts_idx_destroy((*fp).idx);
+            crate::htslib_mini_rs::c_compat::free((*fp).fn_.cast());
+            crate::htslib_mini_rs::c_compat::free((*fp).fn_aux.cast());
+            crate::htslib_mini_rs::c_compat::free((*fp).line.s.cast());
+            crate::htslib_mini_rs::c_compat::free(fp.cast());
+            ret
         }
         _ => {
             let _ = hts_idx_close_otf_fp((*fp).idx);
@@ -6364,9 +7585,14 @@ pub unsafe fn hts_c_2925_idx_read_core(idx: *mut hts_idx_t, fp: *mut BGZF, fmt: 
             let Some(x) = bgzf_read_u32(fp) else {
                 return -1;
             };
+            if x > c_int::MAX as u32 {
+                return -3;
+            }
             (*l).n = x as hts_pos_t;
             (*l).m = x as hts_pos_t;
-            let bytes = x as usize * std::mem::size_of::<u64>();
+            let Some(bytes) = (x as usize).checked_mul(std::mem::size_of::<u64>()) else {
+                return -2;
+            };
             (*l).offset = c_compat::malloc(bytes as u64).cast::<u64>();
             if (*l).offset.is_null() {
                 return -2;
@@ -6734,6 +7960,13 @@ pub unsafe fn hts_c_4756_hts_idx_check_local(
     } else if fmt == HTS_FMT_CRAI {
         push_pair(&mut candidates, b".crai");
     } else if fmt == HTS_FMT_FAI {
+        let mut gzi_ok = true;
+        if fn_tmp.ends_with(b".gz") || fn_tmp.ends_with(b".bgzf") {
+            let mut gzi = fn_tmp.to_vec();
+            gzi.extend_from_slice(b".gzi");
+            gzi_ok = path_from_bytes(&gzi).exists();
+        }
+
         let mut fai = fn_tmp.to_vec();
         fai.extend_from_slice(b".fai");
         *fnidx = c_compat::calloc(1, fai.len() as u64 + 1).cast::<c_char>();
@@ -6741,7 +7974,7 @@ pub unsafe fn hts_c_4756_hts_idx_check_local(
             return 0;
         }
         c_compat::memcpy((*fnidx).cast(), fai.as_ptr().cast(), fai.len() as u64);
-        return path_from_bytes(&fai).exists() as c_int;
+        return (gzi_ok && path_from_bytes(&fai).exists()) as c_int;
     }
 
     for candidate in candidates {
@@ -6827,9 +8060,15 @@ pub unsafe fn hts_c_4925_idx_find_and_load(
     let delim = b"##idx##";
     let fn_bytes = CStr::from_ptr(fn_).to_bytes();
     if let Some(pos) = fn_bytes.windows(delim.len()).position(|w| w == delim) {
+        let fn2 = c_compat::calloc(1, pos as u64 + 1).cast::<c_char>();
+        if fn2.is_null() {
+            return std::ptr::null_mut();
+        }
+        c_compat::memcpy(fn2.cast(), fn_bytes.as_ptr().cast(), pos as u64);
         let fnidx_bytes = &fn_bytes[pos + delim.len()..];
         let fnidx = c_compat::calloc(1, fnidx_bytes.len() as u64 + 1).cast::<c_char>();
         if fnidx.is_null() {
+            c_compat::free(fn2.cast());
             return std::ptr::null_mut();
         }
         c_compat::memcpy(
@@ -6837,7 +8076,8 @@ pub unsafe fn hts_c_4925_idx_find_and_load(
             fnidx_bytes.as_ptr().cast(),
             fnidx_bytes.len() as u64,
         );
-        let idx = hts_idx_load3(fn_, fnidx, fmt, flags);
+        let idx = hts_idx_load3(fn2, fnidx, fmt, flags);
+        c_compat::free(fn2.cast());
         c_compat::free(fnidx.cast());
         return idx;
     }
@@ -6866,7 +8106,11 @@ pub unsafe fn hts_idx_load3(
     fmt: c_int,
     flags: c_int,
 ) -> *mut hts_idx_t {
-    if fmt == HTS_FMT_BAI || fmt == HTS_FMT_CSI || (fmt == 0 && !fnidx.is_null()) {
+    if fmt == HTS_FMT_BAI
+        || fmt == HTS_FMT_CSI
+        || fmt == hts_sys::HTS_FMT_TBI as c_int
+        || (fmt == 0 && !fnidx.is_null())
+    {
         if let Some(idx) = hts_idx_load3_local_index(fn_, fnidx, fmt) {
             return idx;
         }
@@ -7015,8 +8259,8 @@ pub unsafe fn hts_idx_seqnames(
     hts_sys::hts_idx_seqnames(idx.cast(), n, getid, hdr)
 }
 
-pub unsafe fn hts_itr_multi_bam(idx: *const hts_idx_t, iter: *mut hts_itr_t) -> c_int {
-    hts_sys::hts_itr_multi_bam(idx.cast(), iter.cast())
+pub unsafe extern "C" fn hts_itr_multi_bam(idx: *const hts_idx_t, iter: *mut hts_itr_t) -> c_int {
+    hts_c_3602_hts_itr_multi_bam(idx, iter)
 }
 
 pub unsafe fn hts_c_3602_hts_itr_multi_bam(idx: *const hts_idx_t, iter: *mut hts_itr_t) -> c_int {
@@ -7202,9 +8446,35 @@ pub unsafe fn hts_itr_querys(
     itr_query: hts_itr_query_func,
     readrec: hts_readrec_func,
 ) -> *mut hts_itr_t {
-    let itr_query = std::mem::transmute(itr_query);
-    let readrec = std::mem::transmute(readrec);
-    hts_sys::hts_itr_querys(idx.cast(), reg, getid, hdr, itr_query, readrec).cast()
+    let mut tid = 0;
+    let mut beg = 0;
+    let mut end = 0;
+
+    if libc::strcmp(reg, c".".as_ptr()) == 0 {
+        return itr_query.map_or(std::ptr::null_mut(), |f| {
+            f(idx, HTS_IDX_START, 0, 0, readrec)
+        });
+    } else if libc::strcmp(reg, c"*".as_ptr()) == 0 {
+        return itr_query.map_or(std::ptr::null_mut(), |f| {
+            f(idx, HTS_IDX_NOCOOR, 0, 0, readrec)
+        });
+    }
+
+    if hts_parse_region(
+        reg,
+        &mut tid,
+        &mut beg,
+        &mut end,
+        getid,
+        hdr,
+        HTS_PARSE_THOUSANDS_SEP,
+    )
+    .is_null()
+    {
+        return std::ptr::null_mut();
+    }
+
+    itr_query.map_or(std::ptr::null_mut(), |f| f(idx, tid, beg, end, readrec))
 }
 
 pub unsafe fn hts_itr_regions(
@@ -7218,20 +8488,80 @@ pub unsafe fn hts_itr_regions(
     seek: hts_seek_func,
     tell: hts_tell_func,
 ) -> *mut hts_itr_t {
-    let itr_specific = std::mem::transmute(itr_specific);
-    let readrec = std::mem::transmute(readrec);
-    hts_sys::hts_itr_regions(
-        idx.cast(),
-        reglist.cast(),
-        count,
-        getid,
-        hdr,
-        itr_specific,
-        readrec,
-        seek,
-        tell,
-    )
-    .cast()
+    if reglist.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let itr = c_compat::calloc(1, std::mem::size_of::<hts_itr_t>() as u64).cast::<hts_itr_t>();
+    if itr.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    (*itr).n_reg = count;
+    (*itr).readrec = readrec;
+    (*itr).seek = seek;
+    (*itr).tell = tell;
+    (*itr).reg_list = reglist;
+    (*itr).bitfields |= 1 << 4;
+
+    for i in 0..(*itr).n_reg {
+        let curr = (*itr).reg_list.add(i as usize);
+        if !(*curr).reg.is_null() {
+            if libc::strcmp((*curr).reg, c".".as_ptr()) == 0 {
+                (*curr).tid = HTS_IDX_START;
+                continue;
+            }
+            if libc::strcmp((*curr).reg, c"*".as_ptr()) == 0 {
+                (*curr).tid = HTS_IDX_NOCOOR;
+                continue;
+            }
+            (*curr).tid = getid.map_or(-1, |f| f(hdr, (*curr).reg));
+            if (*curr).tid < 0 {
+                if (*curr).tid < -1 {
+                    hts_log_cstr(
+                        HTS_LOG_ERROR,
+                        c"hts_itr_regions".as_ptr(),
+                        c"Failed to parse header".as_ptr(),
+                    );
+                    hts_itr_destroy(itr);
+                    return std::ptr::null_mut();
+                } else {
+                    libc::fprintf(
+                        hts_sys::stderr.cast::<libc::FILE>(),
+                        c"[W::hts_itr_regions] Region '%s' specifies an unknown reference name. Continue anyway\n".as_ptr(),
+                        (*curr).reg,
+                    );
+                }
+            }
+        }
+    }
+
+    if (*itr).n_reg > 1 {
+        let regs = std::slice::from_raw_parts_mut((*itr).reg_list, (*itr).n_reg as usize);
+        regs.sort_by(|a, b| compare_regions_ref(a, b).cmp(&0));
+    }
+
+    if itr_specific.map_or(-1, |f| f(idx, itr)) != 0 {
+        hts_log_cstr(
+            HTS_LOG_ERROR,
+            c"hts_itr_regions".as_ptr(),
+            c"Failed to create the multi-region iterator!".as_ptr(),
+        );
+        hts_itr_destroy(itr);
+        std::ptr::null_mut()
+    } else {
+        itr
+    }
+}
+
+fn compare_regions_ref(reg1: &hts_reglist_t, reg2: &hts_reglist_t) -> c_int {
+    if reg1.tid < 0 && reg2.tid >= 0 {
+        1
+    } else if reg1.tid >= 0 && reg2.tid < 0 {
+        -1
+    } else {
+        reg1.tid - reg2.tid
+    }
 }
 
 unsafe fn hts_idx_load3_local_index(
@@ -7262,12 +8592,26 @@ unsafe fn local_index_path(
     if fn_.is_null() {
         return None;
     }
-    let data_path = path_from_bytes(CStr::from_ptr(fn_).to_bytes());
+    let fn_bytes = CStr::from_ptr(fn_).to_bytes();
+    let idx_delim = b"##idx##";
+    let data_bytes = if let Some(pos) = fn_bytes
+        .windows(idx_delim.len())
+        .position(|w| w == idx_delim)
+    {
+        let idx_path = path_from_bytes(&fn_bytes[pos + idx_delim.len()..]);
+        return idx_path.exists().then_some(idx_path);
+    } else {
+        fn_bytes
+    };
+    let data_path = path_from_bytes(data_bytes);
     if let Some(path) = index_path_with_ext(&data_path, b".csi") {
         return Some(path);
     }
     if fmt == HTS_FMT_CSI {
         return None;
+    }
+    if fmt == hts_sys::HTS_FMT_TBI as c_int {
+        return index_path_with_ext(&data_path, b".tbi");
     }
     index_path_with_ext(&data_path, b".bai")
 }
@@ -7313,6 +8657,9 @@ unsafe fn read_local_index(fp: *mut BGZF) -> Option<*mut hts_idx_t> {
     if &magic == b"CSI\x01" {
         return read_csi_index(fp);
     }
+    if &magic == b"TBI\x01" {
+        return read_tbi_index(fp);
+    }
     if &magic != b"BAI\x01" {
         return None;
     }
@@ -7325,6 +8672,43 @@ unsafe fn read_bai_index(fp: *mut BGZF) -> Option<*mut hts_idx_t> {
         return None;
     }
     let idx = hts_idx_init_local(n as c_int, HTS_FMT_BAI, 14, 5)?;
+    for tid in 0..n as c_int {
+        if read_index_reference(fp, idx, tid).is_none() {
+            hts_idx_destroy(idx);
+            return None;
+        }
+    }
+    (*idx).n_no_coor = bgzf_read_u64(fp).unwrap_or(0);
+    Some(idx)
+}
+
+unsafe fn read_tbi_index(fp: *mut BGZF) -> Option<*mut hts_idx_t> {
+    let mut x = [0u8; 8 * 4];
+    if !bgzf_read_exact(fp, x.as_mut_ptr().cast(), x.len()) {
+        return None;
+    }
+    let n = u32::from_le_bytes([x[0], x[1], x[2], x[3]]);
+    if n > c_int::MAX as u32 {
+        return None;
+    }
+    let idx = hts_idx_init_local(n as c_int, hts_sys::HTS_FMT_TBI as c_int, 14, 5)?;
+    let name_len = u32::from_le_bytes([x[28], x[29], x[30], x[31]]);
+    if name_len > u32::MAX - 29 {
+        hts_idx_destroy(idx);
+        return None;
+    }
+    (*idx).l_meta = 28 + name_len;
+    (*idx).meta = crate::htslib_mini_rs::c_compat::malloc((*idx).l_meta as u64 + 1).cast::<u8>();
+    if (*idx).meta.is_null() {
+        hts_idx_destroy(idx);
+        return None;
+    }
+    crate::htslib_mini_rs::c_compat::memcpy((*idx).meta.cast(), x.as_ptr().add(4).cast(), 28);
+    if !bgzf_read_exact(fp, (*idx).meta.add(28).cast(), name_len as usize) {
+        hts_idx_destroy(idx);
+        return None;
+    }
+    *(*idx).meta.add((*idx).l_meta as usize) = 0;
     for tid in 0..n as c_int {
         if read_index_reference(fp, idx, tid).is_none() {
             hts_idx_destroy(idx);
@@ -7414,6 +8798,9 @@ unsafe fn hts_idx_init_local(
 
 unsafe fn read_index_reference(fp: *mut BGZF, idx: *mut hts_idx_t, tid: c_int) -> Option<()> {
     let n_bin = bgzf_read_u32(fp)?;
+    if n_bin > c_int::MAX as u32 {
+        return None;
+    }
     let bidx = alloc_bidx(n_bin)?;
     *(*idx).bidx.add(tid as usize) = bidx;
     for _ in 0..n_bin {
@@ -7424,21 +8811,18 @@ unsafe fn read_index_reference(fp: *mut BGZF, idx: *mut hts_idx_t, tid: c_int) -
             (*val).loff = bgzf_read_u64(fp)?;
         }
         let n_chunk = bgzf_read_u32(fp)?;
+        if n_chunk > c_int::MAX as u32 {
+            return None;
+        }
         (*val).n = n_chunk as c_int;
         (*val).m = n_chunk as c_int;
         if n_chunk > 0 {
-            (*val).list = crate::htslib_mini_rs::c_compat::malloc(
-                n_chunk as u64 * std::mem::size_of::<hts_pair64_t>() as u64,
-            )
-            .cast();
+            let bytes = (n_chunk as usize).checked_mul(std::mem::size_of::<hts_pair64_t>())?;
+            (*val).list = crate::htslib_mini_rs::c_compat::malloc(bytes as u64).cast();
             if (*val).list.is_null() {
                 return None;
             }
-            if !bgzf_read_exact(
-                fp,
-                (*val).list.cast(),
-                n_chunk as usize * std::mem::size_of::<hts_pair64_t>(),
-            ) {
+            if !bgzf_read_exact(fp, (*val).list.cast(), bytes) {
                 return None;
             }
         }
@@ -7447,22 +8831,19 @@ unsafe fn read_index_reference(fp: *mut BGZF, idx: *mut hts_idx_t, tid: c_int) -
         return Some(());
     }
     let n_intv = bgzf_read_u32(fp)?;
+    if n_intv > c_int::MAX as u32 {
+        return None;
+    }
     let lidx = (*idx).lidx.add(tid as usize);
     (*lidx).n = n_intv as hts_pos_t;
     (*lidx).m = n_intv as hts_pos_t;
     if n_intv > 0 {
-        (*lidx).offset = crate::htslib_mini_rs::c_compat::malloc(
-            n_intv as u64 * std::mem::size_of::<u64>() as u64,
-        )
-        .cast();
+        let bytes = (n_intv as usize).checked_mul(std::mem::size_of::<u64>())?;
+        (*lidx).offset = crate::htslib_mini_rs::c_compat::malloc(bytes as u64).cast();
         if (*lidx).offset.is_null() {
             return None;
         }
-        if !bgzf_read_exact(
-            fp,
-            (*lidx).offset.cast(),
-            n_intv as usize * std::mem::size_of::<u64>(),
-        ) {
+        if !bgzf_read_exact(fp, (*lidx).offset.cast(), bytes) {
             return None;
         }
         let mut k = 0usize;
@@ -7482,6 +8863,9 @@ unsafe fn read_index_reference(fp: *mut BGZF, idx: *mut hts_idx_t, tid: c_int) -
 }
 
 unsafe fn alloc_bidx(n_bin: u32) -> Option<*mut hts_idx_bidx_t> {
+    if n_bin > c_int::MAX as u32 {
+        return None;
+    }
     let bidx =
         crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<hts_idx_bidx_t>() as u64)
             .cast::<hts_idx_bidx_t>();
@@ -7606,7 +8990,7 @@ fn meta_bin(idx: *const hts_idx_t) -> u32 {
 pub unsafe fn hts_itr_destroy(iter: *mut hts_itr_t) {
     if !iter.is_null() {
         if ((*iter).bitfields & (1 << 4)) != 0 {
-            hts_sys::hts_reglist_free((*iter).reg_list.cast(), (*iter).n_reg);
+            hts_reglist_free((*iter).reg_list, (*iter).n_reg);
         } else {
             crate::htslib_mini_rs::c_compat::free((*iter).bins.a.cast());
         }
@@ -8776,6 +10160,79 @@ mod tests {
     }
 
     #[test]
+    fn textutils_numeric_conversion_boundary_edges_match_c_rules() {
+        unsafe {
+            let mut end: *mut c_char = std::ptr::null_mut();
+            let mut failed = 0;
+
+            let input = CString::new("9223372036854775807!").unwrap();
+            assert_eq!(
+                hts_str2int(input.as_ptr(), &mut end, 64, &mut failed),
+                i64::MAX
+            );
+            assert_eq!(failed, 0);
+            assert_eq!(end.offset_from(input.as_ptr()), 19);
+
+            let input = CString::new("9223372036854775808!").unwrap();
+            failed = 0;
+            assert_eq!(
+                hts_str2int(input.as_ptr(), &mut end, 64, &mut failed),
+                i64::MAX
+            );
+            assert_eq!(failed, 1);
+            assert_eq!(end.offset_from(input.as_ptr()), 19);
+
+            let input = CString::new("-9223372036854775808!").unwrap();
+            failed = 0;
+            assert_eq!(
+                hts_str2int(input.as_ptr(), &mut end, 64, &mut failed),
+                i64::MIN
+            );
+            assert_eq!(failed, 0);
+            assert_eq!(end.offset_from(input.as_ptr()), 20);
+
+            let input = CString::new("-9223372036854775809!").unwrap();
+            failed = 0;
+            assert_eq!(
+                hts_str2int(input.as_ptr(), &mut end, 64, &mut failed),
+                i64::MIN
+            );
+            assert_eq!(failed, 1);
+            assert_eq!(end.offset_from(input.as_ptr()), 20);
+
+            let input = CString::new("18446744073709551615!").unwrap();
+            failed = 0;
+            assert_eq!(
+                hts_str2uint(input.as_ptr(), &mut end, 64, &mut failed),
+                u64::MAX
+            );
+            assert_eq!(failed, 0);
+            assert_eq!(end.offset_from(input.as_ptr()), 20);
+
+            let input = CString::new("18446744073709551616!").unwrap();
+            failed = 0;
+            assert_eq!(
+                hts_str2uint(input.as_ptr(), &mut end, 64, &mut failed),
+                u64::MAX
+            );
+            assert_eq!(failed, 1);
+            assert_eq!(end.offset_from(input.as_ptr()), 20);
+
+            let input = CString::new("+x").unwrap();
+            failed = 0;
+            assert_eq!(hts_str2int(input.as_ptr(), &mut end, 8, &mut failed), 0);
+            assert_eq!(failed, 0);
+            assert_eq!(end.offset_from(input.as_ptr()), 1);
+
+            let input = CString::new("-x").unwrap();
+            failed = 0;
+            assert_eq!(hts_str2uint(input.as_ptr(), &mut end, 8, &mut failed), 0);
+            assert_eq!(failed, 0);
+            assert_eq!(end.offset_from(input.as_ptr()), 0);
+        }
+    }
+
+    #[test]
     fn textutils_percent_and_base64_helpers_match_c_rules() {
         unsafe {
             assert_eq!(dehex(b'a' as c_char), 10);
@@ -9300,6 +10757,470 @@ mod tests {
         }
     }
 
+    unsafe extern "C" fn test_expr_sym(
+        _data: *mut c_void,
+        str_: *mut c_char,
+        end: *mut *mut c_char,
+        res: *mut hts_expr_val_t,
+    ) -> c_int {
+        if libc::strncmp(str_, c"NUM".as_ptr(), 3) == 0 {
+            *end = str_.add(3);
+            (*res).is_str = 0;
+            (*res).is_true = 1;
+            (*res).d = 5.0;
+            0
+        } else if libc::strncmp(str_, c"ZERO".as_ptr(), 4) == 0 {
+            *end = str_.add(4);
+            (*res).is_str = 0;
+            (*res).is_true = 0;
+            (*res).d = 0.0;
+            0
+        } else if libc::strncmp(str_, c"STR".as_ptr(), 3) == 0 {
+            *end = str_.add(3);
+            (*res).is_str = 1;
+            (*res).is_true = 1;
+            kputsn(c"abc".as_ptr(), 3, ks_clear(&mut (*res).s));
+            0
+        } else if libc::strncmp(str_, c"MISSING".as_ptr(), 7) == 0 {
+            *end = str_.add(7);
+            hts_expr_val_undef(res);
+            0
+        } else {
+            -1
+        }
+    }
+
+    unsafe extern "C" fn upstream_expr_sym(
+        _data: *mut c_void,
+        str_: *mut c_char,
+        end: *mut *mut c_char,
+        res: *mut hts_expr_val_t,
+    ) -> c_int {
+        if libc::strncmp(str_, c"foo".as_ptr(), 3) == 0 {
+            *end = str_.add(3);
+            (*res).is_str = 0;
+            (*res).d = 15551.0;
+            0
+        } else if *str_ == b'a' as c_char {
+            *end = str_.add(1);
+            (*res).is_str = 0;
+            (*res).d = 1.0;
+            0
+        } else if *str_ == b'b' as c_char {
+            *end = str_.add(1);
+            (*res).is_str = 0;
+            (*res).d = 2.0;
+            0
+        } else if *str_ == b'c' as c_char {
+            *end = str_.add(1);
+            (*res).is_str = 0;
+            (*res).d = 3.0;
+            0
+        } else if libc::strncmp(str_, c"magic".as_ptr(), 5) == 0 {
+            *end = str_.add(5);
+            (*res).is_str = 1;
+            kputsn(c"plugh".as_ptr(), 5, ks_clear(&mut (*res).s));
+            0
+        } else if libc::strncmp(str_, c"empty-but-true".as_ptr(), 14) == 0 {
+            *end = str_.add(14);
+            (*res).is_true = 1;
+            (*res).is_str = 1;
+            kputsn(c"".as_ptr(), 0, ks_clear(&mut (*res).s));
+            0
+        } else if libc::strncmp(str_, c"empty".as_ptr(), 5) == 0 {
+            *end = str_.add(5);
+            (*res).is_str = 1;
+            kputsn(c"".as_ptr(), 0, ks_clear(&mut (*res).s));
+            0
+        } else if libc::strncmp(str_, c"zero-but-true".as_ptr(), 13) == 0 {
+            *end = str_.add(13);
+            (*res).is_str = 0;
+            (*res).d = 0.0;
+            (*res).is_true = 1;
+            0
+        } else if libc::strncmp(str_, c"null-but-true".as_ptr(), 13) == 0 {
+            *end = str_.add(13);
+            hts_expr_val_undef(res);
+            (*res).is_true = 1;
+            0
+        } else if libc::strncmp(str_, c"null".as_ptr(), 4) == 0 {
+            *end = str_.add(4);
+            hts_expr_val_undef(res);
+            0
+        } else if libc::strncmp(str_, c"nan".as_ptr(), 3) == 0 {
+            *end = str_.add(3);
+            hts_expr_val_undef(res);
+            0
+        } else {
+            -1
+        }
+    }
+
+    struct ExprCase {
+        expr: &'static str,
+        truth: c_char,
+        d: f64,
+        s: Option<&'static str>,
+    }
+
+    fn same_float(actual: f64, expected: f64) -> bool {
+        actual == expected || (actual.is_nan() && expected.is_nan())
+    }
+
+    unsafe fn assert_upstream_expr_cases(cases: &[ExprCase]) {
+        for case in cases {
+            let expr = CString::new(case.expr).unwrap();
+            let filt = hts_expr_c_849_hts_filter_init(expr.as_ptr());
+            assert!(!filt.is_null(), "failed to init {}", case.expr);
+            let mut res: hts_expr_val_t = std::mem::zeroed();
+            assert_eq!(
+                hts_expr_c_920_hts_filter_eval2(
+                    filt,
+                    std::ptr::null_mut(),
+                    Some(upstream_expr_sym),
+                    &mut res,
+                ),
+                0,
+                "failed to eval {}",
+                case.expr
+            );
+            assert_eq!(res.is_true, case.truth, "truth for {}", case.expr);
+            assert!(
+                same_float(res.d, case.d),
+                "numeric value for {}: got {}, expected {}",
+                case.expr,
+                res.d,
+                case.d
+            );
+            match case.s {
+                Some(expected) => {
+                    assert_ne!(res.is_str, 0, "string flag for {}", case.expr);
+                    assert!(!res.s.s.is_null(), "string pointer for {}", case.expr);
+                    assert_eq!(
+                        CStr::from_ptr(res.s.s).to_str().unwrap(),
+                        expected,
+                        "string value for {}",
+                        case.expr
+                    );
+                }
+                None => assert_eq!(res.is_str, 0, "string flag for {}", case.expr),
+            }
+            hts_expr_val_free(&mut res);
+            hts_expr_c_863_hts_filter_free(filt);
+        }
+    }
+
+    #[test]
+    fn hts_expr_parser_eval_edges_match_c_rules() {
+        unsafe {
+            let cases = [
+                c"1 + 2 * 3 == 7 && (5 & 3) == 1".as_ptr(),
+                c"length(\"A\\nB\") == 3".as_ptr(),
+                c"STR =~ \"^ab\" && STR !~ \"zz\"".as_ptr(),
+                c"default(MISSING, NUM) == 5".as_ptr(),
+                c"!exists(MISSING) && exists(ZERO)".as_ptr(),
+                c"MISSING || NUM".as_ptr(),
+            ];
+
+            for expr in cases {
+                let filt = hts_expr_c_849_hts_filter_init(expr);
+                assert!(!filt.is_null());
+                let mut res: hts_expr_val_t = std::mem::zeroed();
+                assert_eq!(
+                    hts_expr_c_920_hts_filter_eval2(
+                        filt,
+                        std::ptr::null_mut(),
+                        Some(test_expr_sym),
+                        &mut res,
+                    ),
+                    0
+                );
+                assert_eq!(res.is_str, 0);
+                assert_eq!(res.is_true, 1);
+                assert_eq!(res.d, 1.0);
+                hts_expr_val_free(&mut res);
+                hts_expr_c_863_hts_filter_free(filt);
+            }
+
+            let filt = hts_expr_c_849_hts_filter_init(c"MISSING && NUM".as_ptr());
+            assert!(!filt.is_null());
+            let mut res: hts_expr_val_t = std::mem::zeroed();
+            assert_eq!(
+                hts_expr_c_920_hts_filter_eval2(
+                    filt,
+                    std::ptr::null_mut(),
+                    Some(test_expr_sym),
+                    &mut res,
+                ),
+                0
+            );
+            assert_eq!(res.is_true, 0);
+            assert_eq!(res.d, 0.0);
+            hts_expr_val_free(&mut res);
+            hts_expr_c_863_hts_filter_free(filt);
+        }
+    }
+
+    #[test]
+    fn hts_expr_upstream_precedence_and_bit_ops_match_test_expr_table() {
+        unsafe {
+            assert_upstream_expr_cases(&[
+                ExprCase {
+                    expr: "1<2 == 3>2",
+                    truth: 1,
+                    d: 1.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "1 ^ 0&4 ^ 3",
+                    truth: 1,
+                    d: 2.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "1 | 0^4 | 3",
+                    truth: 1,
+                    d: 7.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "4 & 2 || 1",
+                    truth: 1,
+                    d: 1.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "4 & (2 || 1)",
+                    truth: 0,
+                    d: 0.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: " (2*3)&7  > 4",
+                    truth: 1,
+                    d: 1.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: " (2*3)&(7 > 4)",
+                    truth: 0,
+                    d: 0.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "1 | null",
+                    truth: 0,
+                    d: f64::NAN,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "null ^ 1",
+                    truth: 0,
+                    d: f64::NAN,
+                    s: None,
+                },
+            ]);
+        }
+    }
+
+    #[test]
+    fn hts_expr_upstream_null_nan_truthiness_matches_test_expr_table() {
+        unsafe {
+            assert_upstream_expr_cases(&[
+                ExprCase {
+                    expr: "null",
+                    truth: 0,
+                    d: f64::NAN,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "!null",
+                    truth: 1,
+                    d: 1.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "!!null",
+                    truth: 0,
+                    d: 0.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "null && 1",
+                    truth: 0,
+                    d: 0.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "null || 1",
+                    truth: 1,
+                    d: 1.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "null <= 0",
+                    truth: 0,
+                    d: f64::NAN,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "nan",
+                    truth: 0,
+                    d: f64::NAN,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "null-but-true",
+                    truth: 1,
+                    d: f64::NAN,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "zero-but-true",
+                    truth: 1,
+                    d: 0.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "empty-but-true",
+                    truth: 1,
+                    d: 1.0,
+                    s: Some(""),
+                },
+                ExprCase {
+                    expr: "!empty-but-true",
+                    truth: 0,
+                    d: 0.0,
+                    s: None,
+                },
+            ]);
+        }
+    }
+
+    #[test]
+    fn hts_expr_upstream_string_regex_and_functions_match_test_expr_table() {
+        unsafe {
+            assert_upstream_expr_cases(&[
+                ExprCase {
+                    expr: "magic",
+                    truth: 1,
+                    d: 1.0,
+                    s: Some("plugh"),
+                },
+                ExprCase {
+                    expr: "empty",
+                    truth: 1,
+                    d: 1.0,
+                    s: Some(""),
+                },
+                ExprCase {
+                    expr: "\"abc\" < \"def\"",
+                    truth: 1,
+                    d: 1.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "\"abc\" > \"ab\"",
+                    truth: 1,
+                    d: 1.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "null == \"x\"",
+                    truth: 0,
+                    d: f64::NAN,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "\"abbc\" =~ \"^a+b+c+$\"",
+                    truth: 1,
+                    d: 1.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "\"aBBc\" =~ \"^a+b+c+$\"",
+                    truth: 0,
+                    d: 0.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "\"aBBc\" !~ \"^a+b+c+$\"",
+                    truth: 1,
+                    d: 1.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "\"xyzzy plugh abracadabra\" =~ magic",
+                    truth: 1,
+                    d: 1.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "log(exp(9))",
+                    truth: 1,
+                    d: 9.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "pow(2,3)",
+                    truth: 1,
+                    d: 8.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "sqrt(-9)",
+                    truth: 0,
+                    d: f64::NAN,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "default(null,3)",
+                    truth: 1,
+                    d: 3.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "default(null-but-true,0)",
+                    truth: 1,
+                    d: f64::NAN,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "exists(null)",
+                    truth: 0,
+                    d: 0.0,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "exists(null-but-true)",
+                    truth: 1,
+                    d: 1.0,
+                    s: None,
+                },
+            ]);
+        }
+    }
+
+    #[test]
+    fn hts_expr_pow_with_null_operand_is_undefined_not_parse_error() {
+        unsafe {
+            assert_upstream_expr_cases(&[
+                ExprCase {
+                    expr: "pow(null,3)",
+                    truth: 0,
+                    d: f64::NAN,
+                    s: None,
+                },
+                ExprCase {
+                    expr: "pow(3,null)",
+                    truth: 0,
+                    d: f64::NAN,
+                    s: None,
+                },
+            ]);
+        }
+    }
+
     #[test]
     fn hts_inline_binning_and_endian_helpers_match_c_rules() {
         assert_eq!(hts_bin_first(0), 0);
@@ -9482,6 +11403,7 @@ mod tests {
             c_compat::free((*insert_bidx).keys.cast());
             c_compat::free((*insert_bidx).vals.cast());
             c_compat::free(insert_bidx.cast());
+            assert!(alloc_bidx(c_int::MAX as u32 + 1).is_none());
 
             let update = hts_c_2405_hts_idx_init(1, HTS_FMT_BAI, 0, 14, 5);
             assert!(!update.is_null());
@@ -9878,6 +11800,48 @@ mod tests {
                 path_bytes(&save_bai).as_ref()
             );
             c_compat::free(checked_fnidx.cast());
+
+            let fai_base = std::env::temp_dir().join(format!(
+                "htslib_mini_idx_check_fai_{}_{}.fa.gz",
+                std::process::id(),
+                4
+            ));
+            let mut fai_bytes = path_bytes(&fai_base).into_owned();
+            fai_bytes.extend_from_slice(b".fai");
+            let fai_path = path_from_bytes(&fai_bytes);
+            let mut gzi_bytes = path_bytes(&fai_base).into_owned();
+            gzi_bytes.extend_from_slice(b".gzi");
+            let gzi_path = path_from_bytes(&gzi_bytes);
+            std::fs::write(&fai_base, b">ref\nA\n").unwrap();
+            std::fs::write(&fai_path, b"ref\t1\t5\t1\t2\n").unwrap();
+            let c_fai_base = CString::new(path_bytes(&fai_base).as_ref()).unwrap();
+
+            let mut checked_fai: *mut c_char = std::ptr::null_mut();
+            assert_eq!(
+                hts_c_4756_hts_idx_check_local(c_fai_base.as_ptr(), HTS_FMT_FAI, &mut checked_fai),
+                0
+            );
+            assert_eq!(
+                CStr::from_ptr(checked_fai).to_bytes(),
+                path_bytes(&fai_path).as_ref()
+            );
+            c_compat::free(checked_fai.cast());
+
+            std::fs::write(&gzi_path, b"\0\0\0\0\0\0\0\0").unwrap();
+            let mut checked_fai: *mut c_char = std::ptr::null_mut();
+            assert_eq!(
+                hts_c_4756_hts_idx_check_local(c_fai_base.as_ptr(), HTS_FMT_FAI, &mut checked_fai),
+                1
+            );
+            assert_eq!(
+                CStr::from_ptr(checked_fai).to_bytes(),
+                path_bytes(&fai_path).as_ref()
+            );
+            c_compat::free(checked_fai.cast());
+            std::fs::remove_file(&gzi_path).unwrap();
+            std::fs::remove_file(&fai_path).unwrap();
+            std::fs::remove_file(&fai_base).unwrap();
+
             let located = hts_c_4920_hts_idx_locatefn(c_save_base.as_ptr(), c".bai".as_ptr());
             assert!(!located.is_null());
             assert_eq!(
@@ -9916,6 +11880,14 @@ mod tests {
             assert!(!found_idx.is_null());
             assert_eq!((*found_idx).fmt, HTS_FMT_BAI);
             hts_idx_destroy(found_idx);
+            let mut decorated = path_bytes(&save_base).into_owned();
+            decorated.extend_from_slice(b"##idx##");
+            decorated.extend_from_slice(path_bytes(&save_bai).as_ref());
+            let c_decorated = CString::new(decorated).unwrap();
+            let decorated_idx = hts_c_4925_idx_find_and_load(c_decorated.as_ptr(), HTS_FMT_BAI, 0);
+            assert!(!decorated_idx.is_null());
+            assert_eq!((*decorated_idx).fmt, HTS_FMT_BAI);
+            hts_idx_destroy(decorated_idx);
             std::fs::remove_file(save_bai).unwrap();
             hts_idx_destroy(save_idx);
 
@@ -9942,6 +11914,161 @@ mod tests {
             assert_eq!(&otf[otf.len() - 8..], &9u64.to_le_bytes());
             std::fs::remove_file(otf_path).unwrap();
             hts_idx_destroy(otf_idx);
+        }
+    }
+
+    #[test]
+    fn hts_idx_csi_save_load_preserves_meta_loff_and_nocoor() {
+        unsafe {
+            let path = std::env::temp_dir().join(format!(
+                "htslib_mini_idx_csi_{}_{}",
+                std::process::id(),
+                line!()
+            ));
+            let csi_path = path.with_extension("csi");
+            let c_path = CString::new(path_bytes(&path).as_ref()).unwrap();
+            let c_csi_path = CString::new(path_bytes(&csi_path).as_ref()).unwrap();
+            let idx = hts_c_2405_hts_idx_init(1, HTS_FMT_CSI, 7, 5, 2);
+            assert!(!idx.is_null());
+            let meta = *b"csi-meta";
+            assert_eq!(
+                hts_c_3062_hts_idx_set_meta(
+                    idx,
+                    meta.len() as u32,
+                    meta.as_ptr().cast::<u8>().cast_mut(),
+                    1,
+                ),
+                0
+            );
+            assert_eq!(hts_c_2558_hts_idx_push(idx, 0, 0, 16, 100 << 16, 1), 0);
+            assert_eq!(hts_c_2515_hts_idx_finish(idx, 200 << 16), 0);
+            (*idx).n_no_coor = 1;
+            assert_eq!(
+                hts_c_2825_hts_idx_save(idx, c_path.as_ptr(), HTS_FMT_CSI),
+                0
+            );
+
+            let read_idx = hts_c_2990_idx_read(c_csi_path.as_ptr());
+            assert!(!read_idx.is_null());
+            assert_eq!((*read_idx).fmt, HTS_FMT_CSI);
+            assert_eq!((*read_idx).min_shift, 5);
+            assert_eq!((*read_idx).n_lvls, 2);
+            assert_eq!((*read_idx).n, 1);
+            assert_eq!((*read_idx).n_no_coor, 1);
+            assert_eq!((*read_idx).l_meta, meta.len() as u32);
+            assert_eq!(
+                std::slice::from_raw_parts((*read_idx).meta, (*read_idx).l_meta as usize),
+                b"csi-meta"
+            );
+
+            let bidx = *(*read_idx).bidx;
+            assert!(!bidx.is_null());
+            let bin_k = kh_get_bin(bidx, hts_reg2bin(0, 16, 5, 2) as u32);
+            assert_ne!(bin_k, (*bidx).n_buckets);
+            let bin = (*bidx).vals.add(bin_k as usize);
+            assert_eq!((*bin).loff, 7);
+            assert_eq!((*bin).n, 1);
+            assert_eq!((*(*bin).list).u, 7);
+            assert_eq!((*(*bin).list).v, 200 << 16);
+            let meta_k = kh_get_bin(bidx, meta_bin(read_idx));
+            assert_ne!(meta_k, (*bidx).n_buckets);
+            let meta_bin_val = (*bidx).vals.add(meta_k as usize);
+            assert_eq!((*meta_bin_val).n, 2);
+            assert_eq!((*(*meta_bin_val).list.add(1)).u, 1);
+            assert_eq!((*(*meta_bin_val).list.add(1)).v, 0);
+
+            hts_idx_destroy(read_idx);
+            hts_idx_destroy(idx);
+            std::fs::remove_file(csi_path).unwrap();
+        }
+    }
+
+    #[test]
+    fn hts_reg2bins_wide_clamps_negative_begin_and_skips_meta_bins() {
+        unsafe {
+            let idx = hts_c_2405_hts_idx_init(1, HTS_FMT_BAI, 0, 14, 5);
+            assert!(!idx.is_null());
+            let bidx = alloc_bidx(3).unwrap();
+            *(*idx).bidx = bidx;
+
+            assert!(insert_bidx_bin(bidx, 0).is_some());
+            assert!(insert_bidx_bin(bidx, hts_bin_first(5) as u32).is_some());
+            assert!(insert_bidx_bin(bidx, (hts_bin_first(5) + 1) as u32).is_some());
+            assert!(insert_bidx_bin(bidx, meta_bin(idx)).is_some());
+
+            let mut iter: hts_itr_t = std::mem::zeroed();
+            assert_eq!(reg2bins(-100, 10, &mut iter, 14, 5, bidx), 2);
+            assert_eq!(iter.bins.n, 2);
+            let bins = std::slice::from_raw_parts(iter.bins.a, iter.bins.n as usize);
+            assert!(bins.contains(&0));
+            assert!(bins.contains(&hts_bin_first(5)));
+            assert!(!bins.contains(&(hts_bin_first(5) + 1)));
+            assert!(!bins.contains(&(meta_bin(idx) as c_int)));
+            c_compat::free(iter.bins.a.cast());
+
+            hts_idx_destroy(idx);
+        }
+    }
+
+    #[test]
+    fn hts_reg2bins_clamps_end_at_index_max_position() {
+        unsafe {
+            let idx = hts_c_2405_hts_idx_init(1, HTS_FMT_BAI, 0, 14, 5);
+            assert!(!idx.is_null());
+            let bidx = alloc_bidx(8).unwrap();
+            *(*idx).bidx = bidx;
+
+            let max_pos = hts_bin_maxpos(14, 5);
+            assert!(insert_bidx_bin(bidx, 0).is_some());
+            assert!(insert_bidx_bin(bidx, (hts_bin_first(5) - 1) as u32).is_some());
+            assert!(insert_bidx_bin(bidx, hts_bin_first(5) as u32).is_some());
+
+            let mut iter: hts_itr_t = std::mem::zeroed();
+            assert_eq!(
+                reg2bins(max_pos - 1, max_pos + 1000, &mut iter, 14, 5, bidx),
+                2
+            );
+            assert_eq!(iter.bins.n, 2);
+            let bins = std::slice::from_raw_parts(iter.bins.a, iter.bins.n as usize);
+            assert!(bins.contains(&0));
+            assert!(bins.contains(&(hts_bin_first(5) - 1)));
+            assert!(!bins.contains(&hts_bin_first(5)));
+            c_compat::free(iter.bins.a.cast());
+
+            hts_idx_destroy(idx);
+        }
+    }
+
+    #[test]
+    fn hts_reg2bin_uses_end_exclusive_boundaries_and_no_coor_pushes_stay_unbinned() {
+        assert_eq!(hts_bin_parent(hts_bin_first(5)), hts_bin_first(4));
+        assert_eq!(hts_bin_level(hts_bin_first(5)), 5);
+        assert_eq!(hts_reg2bin(0, 1, 14, 5), hts_bin_first(5));
+        assert_eq!(hts_reg2bin(0, 1 << 14, 14, 5), hts_bin_first(5));
+        assert_eq!(
+            hts_reg2bin(0, (1 << 14) + 1, 14, 5),
+            hts_bin_parent(hts_bin_first(5))
+        );
+
+        unsafe {
+            let idx = hts_c_2405_hts_idx_init(1, HTS_FMT_BAI, 10, 14, 5);
+            assert!(!idx.is_null());
+
+            assert_eq!(hts_c_2558_hts_idx_push(idx, -1, 0, 0, 20, 0), 0);
+            assert_eq!(hts_c_2558_hts_idx_push(idx, -1, 0, 0, 30, 0), 0);
+            assert_eq!((*idx).n_no_coor, 2);
+            assert_eq!((*idx).z.save_tid, -1);
+            assert_eq!((*idx).z.last_tid, -1);
+            assert_eq!((*idx).z.n_mapped, 0);
+            assert_eq!((*idx).z.n_unmapped, 2);
+            assert!((*(*idx).bidx).is_null());
+
+            assert_eq!(hts_c_2558_hts_idx_push(idx, 0, 0, 1, 40, 1), -1);
+            assert_eq!(hts_c_2515_hts_idx_finish(idx, 50), 0);
+            assert!((*(*idx).bidx).is_null());
+            assert_eq!((*idx).z.finished, 1);
+
+            hts_idx_destroy(idx);
         }
     }
 
@@ -10054,6 +12181,63 @@ mod tests {
             assert_eq!((*iter).curr_off, 0);
             hts_itr_destroy(iter);
 
+            let iter = hts_itr_query(
+                std::ptr::null(),
+                HTS_IDX_REST,
+                0,
+                0,
+                Some(synthetic_readrec),
+            );
+            assert!(!iter.is_null());
+            assert_ne!((*iter).bitfields & 1, 0);
+            assert_eq!((*iter).bitfields & (1 << 1), 0);
+            assert_eq!((*iter).curr_off, 0);
+            hts_itr_destroy(iter);
+
+            *crate::htslib_mini_rs::c_compat::__errno_location() = 0;
+            assert!(hts_itr_query(std::ptr::null(), 0, 0, 1, Some(synthetic_readrec)).is_null());
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+            );
+            assert!(hts_itr_query(std::ptr::null(), HTS_IDX_START, 0, 0, None).is_null());
+            assert!(hts_itr_query(std::ptr::null(), HTS_IDX_NOCOOR, 0, 0, None).is_null());
+
+            hts_idx_destroy(idx);
+        }
+    }
+
+    #[test]
+    fn hts_itr_special_offsets_follow_meta_bin_rules() {
+        unsafe {
+            assert_eq!(hts_itr_off(std::ptr::null(), HTS_IDX_REST), 0);
+            assert_eq!(hts_itr_off(std::ptr::null(), HTS_IDX_NONE), 0);
+            assert_eq!(hts_itr_off(std::ptr::null(), HTS_IDX_START), u64::MAX);
+
+            let idx = hts_c_2405_hts_idx_init(2, HTS_FMT_BAI, 0, 14, 5);
+            assert!(!idx.is_null());
+            (*idx).n_no_coor = 3;
+            assert_eq!(hts_itr_off(idx, HTS_IDX_START), 0);
+            assert_eq!(hts_itr_off(idx, HTS_IDX_NOCOOR), 0);
+
+            for &(tid, beg, end) in &[(0, 500u64, 800u64), (1, 100u64, 900u64)] {
+                let bidx = alloc_bidx(2).unwrap();
+                let k = insert_bidx_bin(bidx, meta_bin(idx)).unwrap();
+                let p = (*bidx).vals.add(k as usize);
+                (*p).m = 1;
+                (*p).n = 1;
+                (*p).list =
+                    c_compat::calloc(1, size_of::<hts_pair64_t>() as u64).cast::<hts_pair64_t>();
+                assert!(!(*p).list.is_null());
+                *(*p).list = hts_pair64_t { u: beg, v: end };
+                *(*idx).bidx.add(tid as usize) = bidx;
+            }
+
+            assert_eq!(hts_itr_off(idx, HTS_IDX_START), 100);
+            assert_eq!(hts_itr_off(idx, HTS_IDX_NOCOOR), 900);
+            assert_eq!(hts_itr_off(idx, HTS_IDX_REST), 0);
+            assert_eq!(hts_itr_off(idx, HTS_IDX_NONE), 0);
+            assert_eq!(hts_itr_off(idx, -99), u64::MAX);
             hts_idx_destroy(idx);
         }
     }
@@ -10475,6 +12659,74 @@ mod tests {
     }
 
     #[test]
+    fn kstring_insert_and_c_string_accessors_match_c_rules() {
+        unsafe {
+            let mut ks: kstring_t = std::mem::zeroed();
+            assert_eq!(CStr::from_ptr(ks_c_str(&mut ks)).to_bytes(), b"");
+            assert_eq!(kputs(c"ace".as_ptr(), &mut ks), 3);
+            assert_eq!(kinsert_char(b'b' as c_char, 1, &mut ks), 0);
+            assert_eq!(kinsert_str(c"de".as_ptr(), 3, &mut ks), 0);
+            assert_eq!(ks_len(&mut ks), 6);
+            assert_eq!(CStr::from_ptr(ks_c_str(&mut ks)).to_bytes(), b"abcdee");
+            assert_eq!(kinsert_str(c"".as_ptr(), ks.l, &mut ks), 0);
+            assert_eq!(kinsert_char(b'!' as c_char, ks.l + 1, &mut ks), -1);
+            assert_eq!(kinsert_str(std::ptr::null(), 0, &mut ks), -1);
+            let released = ks_release(&mut ks);
+            assert!(!released.is_null());
+            assert_eq!(ks.l, 0);
+            assert_eq!(ks.m, 0);
+            assert!(ks.s.is_null());
+            c_compat::free(released.cast());
+        }
+    }
+
+    #[test]
+    fn kstring_raw_append_clear_and_release_match_c_rules() {
+        unsafe {
+            let mut ks: kstring_t = std::mem::zeroed();
+
+            assert_eq!(CStr::from_ptr(ks_c_str(&mut ks)).to_bytes(), b"");
+            assert_eq!(kputsn_(b"abc".as_ptr().cast(), 3, &mut ks), 3);
+            assert_eq!(ks_len(&mut ks), 3);
+            assert_eq!(
+                std::slice::from_raw_parts(ks_str(&mut ks).cast::<u8>(), ks_len(&mut ks)),
+                b"abc"
+            );
+
+            assert_eq!(kputc_(b'X' as c_int, &mut ks), 1);
+            assert_eq!(ks_len(&mut ks), 4);
+            assert_eq!(
+                std::slice::from_raw_parts(ks_str(&mut ks).cast::<u8>(), ks_len(&mut ks)),
+                b"abcX"
+            );
+
+            assert_eq!(kputc(0xff, &mut ks), 0xff);
+            assert_eq!(ks_len(&mut ks), 5);
+            assert_eq!(
+                std::slice::from_raw_parts(ks_str(&mut ks).cast::<u8>(), ks_len(&mut ks)),
+                b"abcX\xff"
+            );
+
+            assert_eq!(ks_clear(&mut ks), &mut ks as *mut kstring_t);
+            assert_eq!(ks_len(&mut ks), 0);
+            assert_eq!(CStr::from_ptr(ks_c_str(&mut ks)).to_bytes(), b"");
+            assert!(!ks_str(&mut ks).is_null());
+
+            let released = ks_release(&mut ks);
+            assert!(!released.is_null());
+            assert_eq!(ks_len(&mut ks), 0);
+            assert_eq!(ks_str(&mut ks), std::ptr::null_mut());
+            crate::htslib_mini_rs::c_compat::free(released.cast());
+
+            ks_initialize(&mut ks);
+            assert_eq!(kputsn(c"".as_ptr(), 0, &mut ks), 0);
+            assert_eq!(ks_len(&mut ks), 0);
+            assert_eq!(CStr::from_ptr(ks_str(&mut ks)).to_bytes(), b"");
+            ks_free(&mut ks);
+        }
+    }
+
+    #[test]
     fn hts_resize_array_rounds_updates_and_clears_like_htslib() {
         unsafe {
             let mut size: u64 = 2;
@@ -10650,10 +12902,34 @@ mod tests {
             }
             c_compat::free(list.cast());
 
+            let list = hts_c_2065_hts_readlist(c",alpha,,beta,".as_ptr(), 0, &mut n);
+            assert_eq!(n, 5);
+            assert_eq!(CStr::from_ptr(*list.add(0)).to_bytes(), b"");
+            assert_eq!(CStr::from_ptr(*list.add(1)).to_bytes(), b"alpha");
+            assert_eq!(CStr::from_ptr(*list.add(2)).to_bytes(), b"");
+            assert_eq!(CStr::from_ptr(*list.add(3)).to_bytes(), b"beta");
+            assert_eq!(CStr::from_ptr(*list.add(4)).to_bytes(), b"");
+            for i in 0..n {
+                c_compat::free((*list.add(i as usize)).cast());
+            }
+            c_compat::free(list.cast());
+
             let lines = hts_c_2130_hts_readlines(c":gamma,delta".as_ptr(), &mut n);
             assert_eq!(n, 2);
             assert_eq!(CStr::from_ptr(*lines.add(0)).to_bytes(), b"gamma");
             assert_eq!(CStr::from_ptr(*lines.add(1)).to_bytes(), b"delta");
+            for i in 0..n {
+                c_compat::free((*lines.add(i as usize)).cast());
+            }
+            c_compat::free(lines.cast());
+
+            let lines = hts_c_2130_hts_readlines(c":,gamma,,delta,".as_ptr(), &mut n);
+            assert_eq!(n, 5);
+            assert_eq!(CStr::from_ptr(*lines.add(0)).to_bytes(), b"");
+            assert_eq!(CStr::from_ptr(*lines.add(1)).to_bytes(), b"gamma");
+            assert_eq!(CStr::from_ptr(*lines.add(2)).to_bytes(), b"");
+            assert_eq!(CStr::from_ptr(*lines.add(3)).to_bytes(), b"delta");
+            assert_eq!(CStr::from_ptr(*lines.add(4)).to_bytes(), b"");
             for i in 0..n {
                 c_compat::free((*lines.add(i as usize)).cast());
             }
@@ -10735,6 +13011,32 @@ mod tests {
             c_compat::free(apply_fp.fn_aux.cast());
             hts_c_1279_hts_opt_free(opts);
 
+            let mut uppercase_opts: *mut hts_opt = std::ptr::null_mut();
+            assert_eq!(
+                hts_c_1021_hts_opt_add(&mut uppercase_opts, c"CACHE_SIZE=2K".as_ptr()),
+                0
+            );
+            assert_eq!(
+                (*uppercase_opts).opt,
+                hts_sys::hts_fmt_option_HTS_OPT_CACHE_SIZE
+            );
+            assert_eq!((*uppercase_opts).val.i, 2048);
+            hts_c_1279_hts_opt_free(uppercase_opts);
+
+            let mut mixed_case_opts: *mut hts_opt = std::ptr::null_mut();
+            assert_eq!(
+                hts_c_1021_hts_opt_add(&mut mixed_case_opts, c"Cache_Size=2K".as_ptr()),
+                -1
+            );
+            assert!(mixed_case_opts.is_null());
+
+            let mut store_md_opts: *mut hts_opt = std::ptr::null_mut();
+            assert_eq!(
+                hts_c_1021_hts_opt_add(&mut store_md_opts, c"STORE_MD=1".as_ptr()),
+                -1
+            );
+            assert!(store_md_opts.is_null());
+
             let mut parsed: htsFormat = std::mem::zeroed();
             assert_eq!(
                 hts_c_1337_hts_parse_format(&mut parsed, c"fq.gz,level=7,fastq_rnum".as_ptr()),
@@ -10813,6 +13115,108 @@ mod tests {
     }
 
     #[test]
+    fn hts_detect_format_recognizes_index_magic_and_extension_fallbacks() {
+        unsafe {
+            let cases: &[(&[u8], *const c_char, htsFormatCategory, htsExactFormat)] = &[
+                (
+                    b"BAI\x01\x00\x00\x00\x00",
+                    c"sample.bam.bai".as_ptr(),
+                    hts_sys::htsFormatCategory_index_file,
+                    hts_sys::htsExactFormat_bai,
+                ),
+                (
+                    b"CSI\x01\x00\x00\x00\x00",
+                    c"sample.bam.csi".as_ptr(),
+                    hts_sys::htsFormatCategory_index_file,
+                    hts_sys::htsExactFormat_csi,
+                ),
+                (
+                    b"TBI\x01\x00\x00\x00\x00",
+                    c"sample.vcf.gz.tbi".as_ptr(),
+                    hts_sys::htsFormatCategory_index_file,
+                    hts_sys::htsExactFormat_tbi,
+                ),
+                (
+                    b"\x00\x00\x00\x00\x00\x00\x00\x00",
+                    c"sample.bgz.gzi".as_ptr(),
+                    hts_sys::htsFormatCategory_index_file,
+                    hts_sys::htsExactFormat_gzi,
+                ),
+            ];
+
+            for &(bytes, name, category, format) in cases {
+                let buffer =
+                    crate::htslib_mini_rs::c_compat::malloc(bytes.len() as u64).cast::<c_char>();
+                assert!(!buffer.is_null());
+                crate::htslib_mini_rs::c_compat::memcpy(
+                    buffer.cast(),
+                    bytes.as_ptr().cast(),
+                    bytes.len() as u64,
+                );
+                let fp = crate::htslib_mini_rs::hfile::hfile_c_835_create_hfile_mem(
+                    buffer,
+                    c"r".as_ptr(),
+                    bytes.len(),
+                    bytes.len(),
+                );
+                assert!(!fp.is_null());
+
+                let mut detected: htsFormat = std::mem::zeroed();
+                assert_eq!(hts_c_556_hts_detect_format2(fp, name, &mut detected), 0);
+                assert_eq!(detected.category, category);
+                assert_eq!(detected.format, format);
+                assert_eq!(hclose(fp), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn hts_detect_format_distinguishes_plain_text_from_unknown_binary() {
+        unsafe {
+            let cases: &[(&[u8], htsFormatCategory, htsExactFormat)] = &[
+                (
+                    b"plain text without a known hts shape\n",
+                    hts_sys::htsFormatCategory_unknown_category,
+                    hts_sys::htsExactFormat_text_format,
+                ),
+                (
+                    b"\x00\xff\x10binary",
+                    hts_sys::htsFormatCategory_unknown_category,
+                    hts_sys::htsExactFormat_unknown_format,
+                ),
+            ];
+
+            for &(bytes, category, format) in cases {
+                let buffer =
+                    crate::htslib_mini_rs::c_compat::malloc(bytes.len() as u64).cast::<c_char>();
+                assert!(!buffer.is_null());
+                crate::htslib_mini_rs::c_compat::memcpy(
+                    buffer.cast(),
+                    bytes.as_ptr().cast(),
+                    bytes.len() as u64,
+                );
+                let fp = crate::htslib_mini_rs::hfile::hfile_c_835_create_hfile_mem(
+                    buffer,
+                    c"r".as_ptr(),
+                    bytes.len(),
+                    bytes.len(),
+                );
+                assert!(!fp.is_null());
+
+                let mut detected: htsFormat = std::mem::zeroed();
+                assert_eq!(
+                    hts_c_556_hts_detect_format2(fp, c"sample.dat".as_ptr(), &mut detected),
+                    0
+                );
+                assert_eq!(detected.category, category);
+                assert_eq!(detected.format, format);
+                assert_eq!(detected.compression, hts_sys::htsCompression_no_compression);
+                assert_eq!(hclose(fp), 0);
+            }
+        }
+    }
+
+    #[test]
     fn textutils_ctype_wrappers_match_unsigned_char_ctype_calls() {
         assert_ne!(isalnum_c(b'A' as c_char), 0);
         assert_ne!(isalpha_c(b'z' as c_char), 0);
@@ -10861,6 +13265,98 @@ mod tests {
             assert_eq!(hts_close(fp_w), 0);
 
             std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn hts_hopen_unknown_format_failure_sets_eftype_and_leaves_hfile_to_caller() {
+        unsafe {
+            let bytes = b"\x00\xff\x10binary";
+            let buffer =
+                crate::htslib_mini_rs::c_compat::malloc(bytes.len() as u64).cast::<c_char>();
+            assert!(!buffer.is_null());
+            crate::htslib_mini_rs::c_compat::memcpy(
+                buffer.cast(),
+                bytes.as_ptr().cast(),
+                bytes.len() as u64,
+            );
+            let hfile = crate::htslib_mini_rs::hfile::hfile_c_835_create_hfile_mem(
+                buffer,
+                c"r".as_ptr(),
+                bytes.len(),
+                bytes.len(),
+            );
+            assert!(!hfile.is_null());
+
+            *c_compat::__errno_location() = 0;
+            let fp = hts_hopen(hfile, c"sample.bin".as_ptr(), c"r".as_ptr());
+            assert!(fp.is_null());
+            assert_eq!(*c_compat::__errno_location(), libc::ENOEXEC);
+            assert_eq!(crate::htslib_mini_rs::hfile::hclose(hfile), 0);
+        }
+    }
+
+    #[test]
+    fn hts_open_format_rewrites_modes_and_strips_idx_delimiter_like_htslib() {
+        unsafe {
+            let base = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-open-format-{}-{}.fa",
+                std::process::id(),
+                line!()
+            ));
+            let mut decorated = path_bytes(&base).into_owned();
+            decorated.extend_from_slice(b"##idx##ignored.fai");
+            let c_decorated = CString::new(decorated).unwrap();
+            let fmt = htsFormat {
+                category: HTS_FORMAT_SEQUENCE_DATA,
+                format: HTS_FORMAT_FASTA_FORMAT,
+                version: htsFormatVersion {
+                    major: -1,
+                    minor: -1,
+                },
+                compression: HTS_COMPRESSION_NO_COMPRESSION,
+                compression_level: -1,
+                specific: std::ptr::null_mut(),
+            };
+
+            let fp = hts_open_format(c_decorated.as_ptr(), c"wbu,ignored=1".as_ptr(), &fmt);
+            assert!(!fp.is_null());
+            assert_ne!((*fp).bitfields & (1 << 1), 0);
+            assert_eq!((*fp).format.format, HTS_FORMAT_FASTA_FORMAT);
+            assert_eq!((*fp).format.compression, HTS_COMPRESSION_NO_COMPRESSION);
+            assert_eq!(
+                CStr::from_ptr((*fp).fn_).to_bytes(),
+                path_bytes(&base).as_ref()
+            );
+            assert_eq!(hts_flush(fp), 0);
+            assert_eq!(hts_close(fp), 0);
+            assert!(base.exists());
+            std::fs::remove_file(base).unwrap();
+
+            let bgzf_path = std::env::temp_dir().join(format!(
+                "htslib-mini-rs-open-format-{}-{}.sam.gz",
+                std::process::id(),
+                line!()
+            ));
+            let c_bgzf_path = CString::new(path_bytes(&bgzf_path).as_ref()).unwrap();
+            let bgzf_fmt = htsFormat {
+                category: HTS_FORMAT_SEQUENCE_DATA,
+                format: HTS_FORMAT_SAM,
+                version: htsFormatVersion {
+                    major: -1,
+                    minor: -1,
+                },
+                compression: hts_sys::htsCompression_bgzf,
+                compression_level: -1,
+                specific: std::ptr::null_mut(),
+            };
+            let fp = hts_open_format(c_bgzf_path.as_ptr(), c"wu".as_ptr(), &bgzf_fmt);
+            assert!(!fp.is_null());
+            assert_eq!((*fp).format.format, HTS_FORMAT_SAM);
+            assert_eq!((*fp).format.compression, hts_sys::htsCompression_bgzf);
+            assert!(!hts_get_bgzfp(fp).is_null());
+            assert_eq!(hts_close(fp), 0);
+            std::fs::remove_file(bgzf_path).unwrap();
         }
     }
 
@@ -10936,6 +13432,8 @@ mod tests {
             b"chr1" => 0,
             b"chr1:100-200" => 1,
             b"HLA-DRB1*12:17" => 2,
+            b"chr3" => 3,
+            b"chr1,chr3" => 4,
             _ => -1,
         }
     }
@@ -10958,6 +13456,20 @@ mod tests {
             let invalid = c"abc";
             assert_eq!(hts_parse_decimal(invalid.as_ptr(), &mut endp, 0), 0);
             assert_eq!(endp, invalid.as_ptr().cast_mut());
+
+            let comma_stops_without_flag = c"1,234";
+            assert_eq!(
+                hts_parse_decimal(comma_stops_without_flag.as_ptr(), &mut endp, 0),
+                1
+            );
+            assert_eq!(CStr::from_ptr(endp).to_bytes(), b",234");
+
+            let suffix_without_digits = c"k";
+            assert_eq!(
+                hts_parse_decimal(suffix_without_digits.as_ptr(), &mut endp, 0),
+                0
+            );
+            assert_eq!(endp, suffix_without_digits.as_ptr().cast_mut());
 
             let hay = b"ab:cd:ef";
             let p = hts_memrchr(hay.as_ptr().cast(), b':' as c_int, hay.len());
@@ -10993,6 +13505,42 @@ mod tests {
             assert_eq!((tid, beg, end), (0, 6, 9));
 
             let ret = hts_parse_region(
+                c"chr1:7".as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                Some(test_name2id),
+                std::ptr::null_mut(),
+                0,
+            );
+            assert!(!ret.is_null());
+            assert_eq!((tid, beg, end), (0, 6, HTS_POS_MAX));
+
+            let ret = hts_parse_region(
+                c"chr1:7".as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                Some(test_name2id),
+                std::ptr::null_mut(),
+                HTS_PARSE_ONE_COORD,
+            );
+            assert!(!ret.is_null());
+            assert_eq!((tid, beg, end), (0, 6, 7));
+
+            let ret = hts_parse_region(
+                c"chr1:7-0".as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                Some(test_name2id),
+                std::ptr::null_mut(),
+                0,
+            );
+            assert!(!ret.is_null());
+            assert_eq!((tid, beg, end), (0, 6, HTS_POS_MAX));
+
+            let ret = hts_parse_region(
                 c"{HLA-DRB1*12:17}:3-3,chr1".as_ptr(),
                 &mut tid,
                 &mut beg,
@@ -11005,6 +13553,66 @@ mod tests {
             assert_eq!(CStr::from_ptr(ret).to_bytes(), b"chr1");
             assert_eq!((tid, beg, end), (2, 2, 3));
 
+            let ret = hts_parse_region(
+                c"{chr1,chr3},chr1".as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                Some(test_name2id),
+                std::ptr::null_mut(),
+                HTS_PARSE_LIST,
+            );
+            assert!(!ret.is_null());
+            assert_eq!(CStr::from_ptr(ret).to_bytes(), b"chr1");
+            assert_eq!((tid, beg, end), (4, 0, HTS_POS_MAX));
+
+            let ret = hts_parse_region(
+                c"chr3:1,000-1,500".as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                Some(test_name2id),
+                std::ptr::null_mut(),
+                HTS_PARSE_LIST | HTS_PARSE_ONE_COORD,
+            );
+            assert!(!ret.is_null());
+            assert_eq!(CStr::from_ptr(ret).to_bytes(), b"000-1,500");
+            assert_eq!((tid, beg, end), (3, 0, 1));
+
+            let invalid_comma = hts_parse_region(
+                c"chr1:1,chr3".as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                Some(test_name2id),
+                std::ptr::null_mut(),
+                0,
+            );
+            assert!(invalid_comma.is_null());
+
+            let invalid_negative_start = hts_parse_region(
+                c"chr1:-1-10".as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                Some(test_name2id),
+                std::ptr::null_mut(),
+                0,
+            );
+            assert!(invalid_negative_start.is_null());
+
+            let mismatched_brace = hts_parse_region(
+                c"{chr1".as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                Some(test_name2id),
+                std::ptr::null_mut(),
+                0,
+            );
+            assert!(mismatched_brace.is_null());
+            assert_eq!(tid, -1);
+
             let ambiguous = hts_parse_region(
                 c"chr1:100-200".as_ptr(),
                 &mut tid,
@@ -11016,6 +13624,105 @@ mod tests {
             );
             assert!(ambiguous.is_null());
             assert_eq!(tid, -1);
+        }
+    }
+
+    #[test]
+    fn hts_region_parsers_reject_nulls_and_32bit_overflow_like_c_rules() {
+        unsafe {
+            let mut tid = 0;
+            let mut beg = 0;
+            let mut end = 0;
+            assert!(hts_parse_region(
+                std::ptr::null(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                Some(test_name2id),
+                std::ptr::null_mut(),
+                0,
+            )
+            .is_null());
+            assert!(hts_parse_region(
+                c"chr1".as_ptr(),
+                std::ptr::null_mut(),
+                &mut beg,
+                &mut end,
+                Some(test_name2id),
+                std::ptr::null_mut(),
+                0,
+            )
+            .is_null());
+            assert!(hts_parse_region(
+                c"chr1".as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                None,
+                std::ptr::null_mut(),
+                0,
+            )
+            .is_null());
+
+            let mut beg32 = 0;
+            let mut end32 = 0;
+            assert!(hts_parse_reg(
+                c"chr1:2147483648-2147483649".as_ptr(),
+                &mut beg32,
+                &mut end32
+            )
+            .is_null());
+            assert!(hts_parse_reg(c"chr1:1-2147483648".as_ptr(), &mut beg32, &mut end32).is_null());
+
+            let mut beg64 = 0;
+            let mut end64 = 0;
+            assert!(hts_parse_reg64(c"chr1:20-10".as_ptr(), &mut beg64, &mut end64).is_null());
+        }
+    }
+
+    #[test]
+    fn hts_region_parser_list_and_open_ended_edges_match_c_rules() {
+        unsafe {
+            let mut tid = -99;
+            let mut beg = -1;
+            let mut end = -1;
+            let next = hts_parse_region(
+                c"chr1:5-,chr3".as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                Some(test_name2id),
+                std::ptr::null_mut(),
+                HTS_PARSE_LIST,
+            );
+            assert!(!next.is_null());
+            assert_eq!(CStr::from_ptr(next).to_bytes(), b"chr3");
+            assert_eq!((tid, beg, end), (0, 4, HTS_POS_MAX));
+
+            let next = hts_parse_region(
+                c"chr1:5-5,chr3".as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                Some(test_name2id),
+                std::ptr::null_mut(),
+                HTS_PARSE_LIST | HTS_PARSE_ONE_COORD,
+            );
+            assert!(!next.is_null());
+            assert_eq!(CStr::from_ptr(next).to_bytes(), b"chr3");
+            assert_eq!((tid, beg, end), (0, 4, 5));
+
+            let empty_coord = hts_parse_region(
+                c"chr1:".as_ptr(),
+                &mut tid,
+                &mut beg,
+                &mut end,
+                Some(test_name2id),
+                std::ptr::null_mut(),
+                0,
+            );
+            assert!(!empty_coord.is_null());
+            assert_eq!((tid, beg, end), (0, 0, HTS_POS_MAX));
         }
     }
 }

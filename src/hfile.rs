@@ -1,8 +1,9 @@
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
+use std::sync::{Mutex, OnceLock};
 
 use super::hts::{
-    hFILE, hts_base64_decoded_length, hts_decode_base64, hts_decode_percent, kgetline, kputs,
-    kputsn, kstring_t, size_t, tolower_c,
+    hFILE, hts_base64_decoded_length, hts_decode_base64, hts_decode_percent, isalnum_c, kgetline,
+    kputs, kputsn, kstring_t, size_t, tolower_c,
 };
 
 #[repr(C)]
@@ -63,6 +64,13 @@ struct hfile_plugin_layout {
     obj: *mut c_void,
     name: *const c_char,
     destroy: *const c_void,
+}
+
+// original: hFILE_plugin_list (htslib/hfile.c:975)
+#[repr(C)]
+pub struct hFILE_plugin_list {
+    plugin: hfile_plugin_layout,
+    next: *mut hFILE_plugin_list,
 }
 
 #[repr(C)]
@@ -135,7 +143,11 @@ pub unsafe extern "C" fn hfile_c_557_fd_read(
 ) -> libc::ssize_t {
     let fp = fpv.cast::<hfile_fd_layout>();
     loop {
-        let n = libc::read((*fp).fd, buffer, nbytes);
+        let n = if ((*fp).flags & HFILE_FD_IS_SOCKET) != 0 {
+            libc::recv((*fp).fd, buffer, nbytes, 0)
+        } else {
+            libc::read((*fp).fd, buffer, nbytes)
+        };
         if !(n < 0 && *crate::htslib_mini_rs::c_compat::__errno_location() == libc::EINTR) {
             return n;
         }
@@ -149,7 +161,11 @@ pub unsafe extern "C" fn hfile_c_568_fd_write(
 ) -> libc::ssize_t {
     let fp = fpv.cast::<hfile_fd_layout>();
     loop {
-        let n = libc::write((*fp).fd, buffer, nbytes);
+        let n = if ((*fp).flags & HFILE_FD_IS_SOCKET) != 0 {
+            libc::send((*fp).fd, buffer, nbytes, 0)
+        } else {
+            libc::write((*fp).fd, buffer, nbytes)
+        };
         if !(n < 0 && *crate::htslib_mini_rs::c_compat::__errno_location() == libc::EINTR) {
             return n;
         }
@@ -261,20 +277,6 @@ unsafe extern "C" {
     fn htslib_hfile_mem_get_buffer(file: *mut hFILE, length: *mut size_t) -> *mut c_char;
     #[link_name = "hfile_mem_steal_buffer"]
     fn htslib_hfile_mem_steal_buffer(file: *mut hFILE, length: *mut size_t) -> *mut c_char;
-    #[link_name = "hfile_list_schemes"]
-    fn htslib_hfile_list_schemes(
-        plugin: *const c_char,
-        sc_list: *mut *const c_char,
-        nschemes: *mut c_int,
-    ) -> c_int;
-    #[link_name = "hfile_list_plugins"]
-    fn htslib_hfile_list_plugins(plist: *mut *const c_char, nplugins: *mut c_int) -> c_int;
-    #[link_name = "hfile_has_plugin"]
-    fn htslib_hfile_has_plugin(name: *const c_char) -> c_int;
-    #[link_name = "hfile_add_scheme_handler"]
-    fn htslib_hfile_add_scheme_handler(scheme: *const c_char, handler: *const hFILE_scheme_handler);
-    #[link_name = "hfile_shutdown"]
-    fn htslib_hfile_shutdown(do_close_plugin: c_int);
     #[link_name = "hopen"]
     fn htslib_hopen(fname: *const c_char, mode: *const c_char, ...) -> *mut hFILE;
     #[link_name = "knet_open"]
@@ -312,12 +314,13 @@ pub unsafe fn hfile_c_104_hfile_init(
     }
 
     (*fp).buffer = std::ptr::null_mut();
-    if libc::posix_memalign(
+    let memalign_ret = libc::posix_memalign(
         (&mut (*fp).buffer as *mut *mut c_char).cast(),
         256,
         capacity,
-    ) < 0
-    {
+    );
+    if memalign_ret != 0 {
+        *crate::htslib_mini_rs::c_compat::__errno_location() = memalign_ret;
         hfile_c_162_hfile_destroy(fp.cast());
         return std::ptr::null_mut();
     }
@@ -549,6 +552,8 @@ pub unsafe fn hfile_c_212_hfile_set_blksize(fp: *mut hFILE, mut bufsiz: size_t) 
         return -1;
     }
 
+    let begin_off = (*fp_layout).begin.offset_from((*fp_layout).buffer) as usize;
+    let end_off = (*fp_layout).end.offset_from((*fp_layout).buffer) as usize;
     let buffer =
         crate::htslib_mini_rs::c_compat::realloc((*fp_layout).buffer.cast(), bufsiz as u64)
             .cast::<c_char>();
@@ -556,8 +561,8 @@ pub unsafe fn hfile_c_212_hfile_set_blksize(fp: *mut hFILE, mut bufsiz: size_t) 
         return -1;
     }
 
-    (*fp_layout).begin = buffer.add((*fp_layout).begin.offset_from((*fp_layout).buffer) as usize);
-    (*fp_layout).end = buffer.add((*fp_layout).end.offset_from((*fp_layout).buffer) as usize);
+    (*fp_layout).begin = buffer.add(begin_off);
+    (*fp_layout).end = buffer.add(end_off);
     (*fp_layout).buffer = buffer;
     (*fp_layout).limit = buffer.add(bufsiz);
     0
@@ -1069,8 +1074,6 @@ pub unsafe fn hfile_c_689_hpreload(fp: *mut hFILE) -> *mut hFILE {
 
     if hclose(fp) < 0 {
         hclose_abruptly(mem_fp);
-        crate::htslib_mini_rs::c_compat::free(buf.cast());
-        hclose_abruptly(fp);
         return std::ptr::null_mut();
     }
     mem_fp
@@ -1259,6 +1262,21 @@ pub unsafe extern "C" fn hfile_c_845_hopen_mem(
     hf
 }
 
+// original: hopenv_mem (htslib/hfile.c:878)
+pub unsafe fn hfile_c_878_hopenv_mem(
+    _filename: *const c_char,
+    mode: *const c_char,
+    buffer: *mut c_char,
+    sz: size_t,
+) -> *mut hFILE {
+    let hf = hfile_c_835_create_hfile_mem(buffer, mode, sz, sz);
+    if hf.is_null() {
+        crate::htslib_mini_rs::c_compat::free(buffer.cast());
+        return std::ptr::null_mut();
+    }
+    hf
+}
+
 pub unsafe fn hfile_c_894_hfile_mem_get_buffer(
     file: *mut hFILE,
     length: *mut size_t,
@@ -1314,7 +1332,7 @@ pub unsafe fn hfile_c_920_hfile_plugin_init_mem(self_: *mut hFILE_plugin) -> c_i
         isremote: Some(hfile_c_1342_hfile_always_remote),
         provider: c"mem".as_ptr(),
         priority: 2050,
-        vopen: std::ptr::null(),
+        vopen: hfile_c_878_hopenv_mem as *const c_void,
     };
 
     (*(self_.cast::<hfile_plugin_layout>())).name = c"mem".as_ptr();
@@ -1342,8 +1360,252 @@ pub unsafe fn hfile_c_956_hfile_plugin_init_crypt4gh_needed(self_: *mut hFILE_pl
     0
 }
 
+#[derive(Default)]
+struct HFilePluginState {
+    schemes: Option<Vec<HFileSchemeEntry>>,
+    plugins: Vec<usize>,
+}
+
+struct HFileSchemeEntry {
+    scheme: usize,
+    handler: usize,
+}
+
+fn hfile_plugin_state() -> &'static Mutex<HFilePluginState> {
+    static STATE: OnceLock<Mutex<HFilePluginState>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(HFilePluginState::default()))
+}
+
+unsafe fn hfile_c_1053_add_scheme_handler_locked(
+    state: &mut HFilePluginState,
+    scheme: *const c_char,
+    handler: *const hFILE_scheme_handler,
+) {
+    let schemes = match state.schemes.as_mut() {
+        Some(schemes) => schemes,
+        None => return,
+    };
+    let handler_layout = handler.cast::<hfile_scheme_handler_layout>();
+    if (*handler_layout).open.is_none() || (*handler_layout).isremote.is_none() {
+        return;
+    }
+
+    for entry in schemes.iter_mut() {
+        if libc::strcmp(entry.scheme as *const c_char, scheme) == 0 {
+            if hfile_c_1011_priority(handler)
+                > hfile_c_1011_priority(entry.handler as *const hFILE_scheme_handler)
+            {
+                entry.handler = handler as usize;
+            }
+            return;
+        }
+    }
+
+    schemes.push(HFileSchemeEntry {
+        scheme: scheme as usize,
+        handler: handler as usize,
+    });
+}
+
+// original: hfile_add_scheme_handler (htslib/hfile.c:1053)
+pub unsafe fn hfile_c_1053_hfile_add_scheme_handler(
+    scheme: *const c_char,
+    handler: *const hFILE_scheme_handler,
+) {
+    let mut state = hfile_plugin_state().lock().unwrap();
+    if state.schemes.is_none() {
+        if hfile_c_1046_try_exe_add_scheme_handler(scheme, handler) != 0 {}
+        return;
+    }
+    hfile_c_1053_add_scheme_handler_locked(&mut state, scheme, handler);
+}
+
+// original: init_add_plugin (htslib/hfile.c:1079)
+pub unsafe fn hfile_c_1079_init_add_plugin(
+    obj: *mut c_void,
+    init: unsafe fn(*mut hFILE_plugin) -> c_int,
+    pluginname: *const c_char,
+) -> c_int {
+    let p =
+        crate::htslib_mini_rs::c_compat::malloc(std::mem::size_of::<hFILE_plugin_list>() as u64)
+            .cast::<hFILE_plugin_list>();
+    if p.is_null() {
+        return -1;
+    }
+
+    (*p).plugin.api_version = 1;
+    (*p).plugin.obj = obj;
+    (*p).plugin.name = std::ptr::null();
+    (*p).plugin.destroy = std::ptr::null();
+    (*p).next = std::ptr::null_mut();
+
+    let ret = init((&mut (*p).plugin as *mut hfile_plugin_layout).cast());
+    if ret != 0 {
+        crate::htslib_mini_rs::c_compat::free(p.cast());
+        return ret;
+    }
+
+    let mut state = hfile_plugin_state().lock().unwrap();
+    let head = state.plugins.last().copied().unwrap_or(0) as *mut hFILE_plugin_list;
+    (*p).next = head;
+    state.plugins.push(p as usize);
+    let _ = pluginname;
+    0
+}
+
+unsafe extern "C" fn hfile_c_1114_data_open(
+    fname: *const c_char,
+    mode: *const c_char,
+) -> *mut hFILE {
+    hfile_c_845_hopen_mem(fname, mode)
+}
+
+unsafe extern "C" fn hfile_c_1115_file_open(
+    fname: *const c_char,
+    mode: *const c_char,
+) -> *mut hFILE {
+    hfile_c_747_hopen_fd_fileuri(fname, mode)
+}
+
+unsafe extern "C" fn hfile_c_1116_preload_open(
+    fname: *const c_char,
+    mode: *const c_char,
+) -> *mut hFILE {
+    hfile_c_730_hopen_preload(fname, mode)
+}
+
+unsafe extern "C" fn hfile_c_1116_preload_isremote(fname: *const c_char) -> c_int {
+    hfile_c_726_is_preload_url_remote(fname)
+}
+
+static HFILE_C_1114_DATA_HANDLER: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
+    open: Some(hfile_c_1114_data_open),
+    isremote: Some(hfile_c_1339_hfile_always_local),
+    provider: c"built-in".as_ptr(),
+    priority: 80,
+    vopen: std::ptr::null(),
+};
+
+static HFILE_C_1115_FILE_HANDLER: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
+    open: Some(hfile_c_1115_file_open),
+    isremote: Some(hfile_c_1339_hfile_always_local),
+    provider: c"built-in".as_ptr(),
+    priority: 80,
+    vopen: std::ptr::null(),
+};
+
+static HFILE_C_1116_PRELOAD_HANDLER: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
+    open: Some(hfile_c_1116_preload_open),
+    isremote: Some(hfile_c_1116_preload_isremote),
+    provider: c"built-in".as_ptr(),
+    priority: 80,
+    vopen: std::ptr::null(),
+};
+
+// original: load_hfile_plugins (htslib/hfile.c:1111)
+pub unsafe fn hfile_c_1111_load_hfile_plugins() -> c_int {
+    {
+        let mut state = hfile_plugin_state().lock().unwrap();
+        state.schemes = Some(Vec::new());
+    }
+
+    hfile_c_1053_hfile_add_scheme_handler(
+        c"data".as_ptr(),
+        (&HFILE_C_1114_DATA_HANDLER as *const hfile_scheme_handler_layout).cast(),
+    );
+    hfile_c_1053_hfile_add_scheme_handler(
+        c"file".as_ptr(),
+        (&HFILE_C_1115_FILE_HANDLER as *const hfile_scheme_handler_layout).cast(),
+    );
+    hfile_c_1053_hfile_add_scheme_handler(
+        c"preload".as_ptr(),
+        (&HFILE_C_1116_PRELOAD_HANDLER as *const hfile_scheme_handler_layout).cast(),
+    );
+    hfile_c_1079_init_add_plugin(
+        std::ptr::null_mut(),
+        hfile_c_920_hfile_plugin_init_mem,
+        c"mem".as_ptr(),
+    );
+    hfile_c_1079_init_add_plugin(
+        std::ptr::null_mut(),
+        hfile_c_956_hfile_plugin_init_crypt4gh_needed,
+        c"crypt4gh-needed".as_ptr(),
+    );
+
+    0
+}
+
+unsafe extern "C" fn hfile_c_1168_unknown_open(
+    fname: *const c_char,
+    mode: *const c_char,
+) -> *mut hFILE {
+    hfile_c_1168_hopen_unknown_scheme(fname, mode)
+}
+
+unsafe extern "C" fn hfile_c_1178_unknown_isremote(fname: *const c_char) -> c_int {
+    hfile_c_1339_hfile_always_local(fname)
+}
+
+static HFILE_C_1178_UNKNOWN_SCHEME: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
+    open: Some(hfile_c_1168_unknown_open),
+    isremote: Some(hfile_c_1178_unknown_isremote),
+    provider: c"built-in".as_ptr(),
+    priority: 0,
+    vopen: std::ptr::null(),
+};
+
+// original: find_scheme_handler (htslib/hfile.c:1176)
+pub unsafe fn hfile_c_1176_find_scheme_handler(s: *const c_char) -> *const hFILE_scheme_handler {
+    let mut scheme = [0 as c_char; 12];
+    let mut i = 0usize;
+    while i < scheme.len() {
+        let c = *s.add(i);
+        if isalnum_c(c) != 0 || c == b'+' as c_char || c == b'-' as c_char || c == b'.' as c_char {
+            scheme[i] = tolower_c(c);
+        } else if c == b':' as c_char {
+            break;
+        } else {
+            return std::ptr::null();
+        }
+        i += 1;
+    }
+
+    if i <= 1 || i >= scheme.len() {
+        return std::ptr::null();
+    }
+    scheme[i] = 0;
+
+    {
+        let needs_load = hfile_plugin_state().lock().unwrap().schemes.is_none();
+        if needs_load && hfile_c_1111_load_hfile_plugins() < 0 {
+            return std::ptr::null();
+        }
+    }
+
+    let state = hfile_plugin_state().lock().unwrap();
+    if let Some(schemes) = &state.schemes {
+        for entry in schemes {
+            if libc::strcmp(entry.scheme as *const c_char, scheme.as_ptr()) == 0 {
+                return entry.handler as *const hFILE_scheme_handler;
+            }
+        }
+    }
+
+    (&HFILE_C_1178_UNKNOWN_SCHEME as *const hfile_scheme_handler_layout).cast()
+}
+
 pub unsafe fn hfile_c_983_hfile_shutdown(do_close_plugin: c_int) {
-    htslib_hfile_shutdown(do_close_plugin);
+    let mut state = hfile_plugin_state().lock().unwrap();
+    state.schemes = None;
+    while let Some(p) = state.plugins.pop() {
+        let p = p as *mut hFILE_plugin_list;
+        if !(*p).plugin.destroy.is_null() {
+            let destroy: unsafe extern "C" fn() = std::mem::transmute((*p).plugin.destroy);
+            destroy();
+        }
+        let _ = do_close_plugin;
+        crate::htslib_mini_rs::c_compat::free(p.cast());
+    }
 }
 
 pub unsafe fn hfile_c_1005_hfile_exit() {
@@ -1362,16 +1624,20 @@ pub unsafe fn hfile_c_1168_hopen_unknown_scheme(
 }
 
 pub unsafe fn hfile_c_1317_hopen(fname: *const c_char, mode: *const c_char) -> *mut hFILE {
-    if libc::strncmp(fname, c"data:".as_ptr(), 5) == 0 {
-        hfile_c_845_hopen_mem(fname, mode)
-    } else if libc::strncmp(fname, c"file://".as_ptr(), 7) == 0 {
-        hfile_c_747_hopen_fd_fileuri(fname, mode)
-    } else if libc::strncmp(fname, c"preload:".as_ptr(), 8) == 0 {
-        hfile_c_730_hopen_preload(fname, mode)
-    } else if libc::strcmp(fname, c"-".as_ptr()) == 0 {
+    let handler = hfile_c_1176_find_scheme_handler(fname);
+    if !handler.is_null() {
+        let handler = handler.cast::<hfile_scheme_handler_layout>();
+        if libc::strchr(mode, b':' as c_int).is_null()
+            || (*handler).priority < 2000
+            || (*handler).vopen.is_null()
+        {
+            return (*handler).open.expect("hFILE open handler")(fname, mode);
+        }
+        return (*handler).open.expect("hFILE open handler")(fname, mode);
+    }
+
+    if libc::strcmp(fname, c"-".as_ptr()) == 0 {
         hfile_c_761_hopen_fd_stdinout(mode)
-    } else if !libc::strchr(fname, b':' as c_int).is_null() {
-        hfile_c_1168_hopen_unknown_scheme(fname, mode)
     } else {
         hfile_c_664_hopen_fd(fname, mode)
     }
@@ -1385,29 +1651,100 @@ pub unsafe extern "C" fn hfile_c_1342_hfile_always_remote(_fname: *const c_char)
     1
 }
 
+// original: hfile_list_schemes (htslib/hfile.c:1218)
+pub unsafe fn hfile_c_1218_hfile_list_schemes(
+    plugin: *const c_char,
+    sc_list: *mut *const c_char,
+    nschemes: *mut c_int,
+) -> c_int {
+    {
+        let needs_load = hfile_plugin_state().lock().unwrap().schemes.is_none();
+        if needs_load && hfile_c_1111_load_hfile_plugins() < 0 {
+            return -1;
+        }
+    }
+
+    let state = hfile_plugin_state().lock().unwrap();
+    let mut ns = 0;
+    if let Some(schemes) = &state.schemes {
+        for entry in schemes {
+            let handler = entry.handler as *const hfile_scheme_handler_layout;
+            if !plugin.is_null() && libc::strcmp((*handler).provider, plugin) != 0 {
+                continue;
+            }
+
+            if ns < *nschemes {
+                *sc_list.add(ns as usize) = entry.scheme as *const c_char;
+            }
+            ns += 1;
+        }
+    }
+
+    if *nschemes > ns {
+        *nschemes = ns;
+    }
+    ns
+}
+
+// original: hfile_list_plugins (htslib/hfile.c:1257)
+pub unsafe fn hfile_c_1257_hfile_list_plugins(
+    plist: *mut *const c_char,
+    nplugins: *mut c_int,
+) -> c_int {
+    {
+        let needs_load = hfile_plugin_state().lock().unwrap().schemes.is_none();
+        if needs_load && hfile_c_1111_load_hfile_plugins() < 0 {
+            return -1;
+        }
+    }
+
+    let state = hfile_plugin_state().lock().unwrap();
+    let mut np = 0;
+    if *nplugins != 0 {
+        *plist.add(np as usize) = c"built-in".as_ptr();
+        np += 1;
+    }
+
+    for p in state.plugins.iter().rev() {
+        let p = *p as *mut hFILE_plugin_list;
+        if np < *nplugins {
+            *plist.add(np as usize) = (*p).plugin.name;
+        }
+        np += 1;
+    }
+
+    if *nplugins > np {
+        *nplugins = np;
+    }
+    np
+}
+
+// original: hfile_has_plugin (htslib/hfile.c:1293)
+pub unsafe fn hfile_c_1293_hfile_has_plugin(name: *const c_char) -> c_int {
+    {
+        let needs_load = hfile_plugin_state().lock().unwrap().schemes.is_none();
+        if needs_load && hfile_c_1111_load_hfile_plugins() < 0 {
+            return -1;
+        }
+    }
+
+    let state = hfile_plugin_state().lock().unwrap();
+    for p in state.plugins.iter().rev() {
+        let p = *p as *mut hFILE_plugin_list;
+        if libc::strcmp((*p).plugin.name, name) == 0 {
+            return 1;
+        }
+    }
+
+    0
+}
+
 pub unsafe fn hfile_c_1345_hisremote(fname: *const c_char) -> c_int {
-    if libc::strncmp(fname, c"preload:".as_ptr(), 8) == 0 {
-        return hfile_c_726_is_preload_url_remote(fname);
-    }
-    if libc::strncmp(fname, c"mem:".as_ptr(), 4) == 0 {
-        return hfile_c_1342_hfile_always_remote(fname);
-    }
-    if libc::strncmp(fname, c"http://".as_ptr(), 7) == 0
-        || libc::strncmp(fname, c"https://".as_ptr(), 8) == 0
-        || libc::strncmp(fname, c"ftp://".as_ptr(), 6) == 0
-        || libc::strncmp(fname, c"s3://".as_ptr(), 5) == 0
-        || libc::strncmp(fname, c"s3+http://".as_ptr(), 10) == 0
-        || libc::strncmp(fname, c"s3+https://".as_ptr(), 11) == 0
-        || libc::strncmp(fname, c"gs://".as_ptr(), 5) == 0
-        || libc::strncmp(fname, c"gcs://".as_ptr(), 6) == 0
-        || libc::strncmp(fname, c"htsget://".as_ptr(), 9) == 0
-    {
-        return hfile_c_1342_hfile_always_remote(fname);
-    }
-    if libc::strncmp(fname, c"data:".as_ptr(), 5) == 0
-        || libc::strncmp(fname, c"file://".as_ptr(), 7) == 0
-    {
-        return hfile_c_1339_hfile_always_local(fname);
+    let handler = hfile_c_1176_find_scheme_handler(fname);
+    if !handler.is_null() {
+        return (*(handler.cast::<hfile_scheme_handler_layout>()))
+            .isremote
+            .expect("hFILE isremote handler")(fname);
     }
     0
 }
@@ -1435,10 +1772,7 @@ pub unsafe fn hfile_c_1364_haddextension(
     new_extension: *const c_char,
 ) -> *mut c_char {
     let trailing;
-    if hisremote(filename) != 0
-        || !libc::strchr(filename, b':' as c_int).is_null()
-            && !libc::strchr(filename, b'/' as c_int).is_null()
-    {
+    if !hfile_c_1176_find_scheme_handler(filename).is_null() {
         let span = if libc::strncmp(filename, c"s3://".as_ptr(), 5) != 0
             && libc::strncmp(filename, c"s3+http://".as_ptr(), 10) != 0
             && libc::strncmp(filename, c"s3+https://".as_ptr(), 11) != 0
@@ -1660,22 +1994,22 @@ pub unsafe fn hfile_list_schemes(
     sc_list: *mut *const c_char,
     nschemes: *mut c_int,
 ) -> c_int {
-    unsafe { htslib_hfile_list_schemes(plugin, sc_list, nschemes) }
+    hfile_c_1218_hfile_list_schemes(plugin, sc_list, nschemes)
 }
 
 pub unsafe fn hfile_list_plugins(plist: *mut *const c_char, nplugins: *mut c_int) -> c_int {
-    unsafe { htslib_hfile_list_plugins(plist, nplugins) }
+    hfile_c_1257_hfile_list_plugins(plist, nplugins)
 }
 
 pub unsafe fn hfile_has_plugin(name: *const c_char) -> c_int {
-    unsafe { htslib_hfile_has_plugin(name) }
+    hfile_c_1293_hfile_has_plugin(name)
 }
 
 pub unsafe fn hfile_add_scheme_handler(
     scheme: *const c_char,
     handler: *const hFILE_scheme_handler,
 ) {
-    unsafe { htslib_hfile_add_scheme_handler(scheme, handler) }
+    hfile_c_1053_hfile_add_scheme_handler(scheme, handler)
 }
 
 pub unsafe fn hopen(fname: *const c_char, mode: *const c_char) -> *mut hFILE {
@@ -1740,6 +2074,15 @@ mod tests {
         n as libc::ssize_t
     }
 
+    unsafe extern "C" fn read_errno_backend(
+        _fp: *mut hFILE,
+        _buffer: *mut c_void,
+        _nbytes: size_t,
+    ) -> libc::ssize_t {
+        *crate::htslib_mini_rs::c_compat::__errno_location() = libc::EIO;
+        -1
+    }
+
     unsafe extern "C" fn write_backend(
         fp: *mut hFILE,
         buffer: *const c_void,
@@ -1765,6 +2108,29 @@ mod tests {
         -1
     }
 
+    unsafe extern "C" fn seekable_read_seek_backend(
+        fp: *mut hFILE,
+        offset: libc::off_t,
+        whence: c_int,
+    ) -> libc::off_t {
+        let fp = fp.cast::<ReadFile>();
+        let base = &mut (*fp).base;
+        let cur = base.offset + base.begin.offset_from(base.buffer) as libc::off_t;
+        let len = (*fp).source_len as libc::off_t;
+        let pos = match whence {
+            libc::SEEK_SET => offset,
+            libc::SEEK_CUR => cur + offset,
+            libc::SEEK_END => len + offset,
+            _ => -1,
+        };
+        if pos < 0 || pos > len {
+            *crate::htslib_mini_rs::c_compat::__errno_location() = libc::EINVAL;
+            return -1;
+        }
+        (*fp).source_pos = pos as usize;
+        pos
+    }
+
     unsafe extern "C" fn flush_backend(fp: *mut hFILE) -> c_int {
         let fp = fp.cast::<WriteFile>();
         (*fp).flushes += 1;
@@ -1773,6 +2139,11 @@ mod tests {
 
     unsafe extern "C" fn close_backend(_fp: *mut hFILE) -> c_int {
         0
+    }
+
+    unsafe extern "C" fn close_errno_backend(_fp: *mut hFILE) -> c_int {
+        *crate::htslib_mini_rs::c_compat::__errno_location() = libc::EBADF;
+        -1
     }
 
     static READ_BACKEND: hfile_backend_layout = hfile_backend_layout {
@@ -1789,6 +2160,38 @@ mod tests {
         seek: Some(seek_backend),
         flush: Some(flush_backend),
         close: Some(close_backend),
+    };
+
+    static READ_ERRNO_BACKEND: hfile_backend_layout = hfile_backend_layout {
+        read: Some(read_errno_backend),
+        write: None,
+        seek: Some(seek_backend),
+        flush: None,
+        close: Some(close_backend),
+    };
+
+    static SEEKABLE_READ_BACKEND: hfile_backend_layout = hfile_backend_layout {
+        read: Some(read_backend),
+        write: None,
+        seek: Some(seekable_read_seek_backend),
+        flush: None,
+        close: Some(close_backend),
+    };
+
+    static READ_CLOSE_ERRNO_BACKEND: hfile_backend_layout = hfile_backend_layout {
+        read: Some(read_backend),
+        write: None,
+        seek: Some(seek_backend),
+        flush: None,
+        close: Some(close_errno_backend),
+    };
+
+    static CLOSE_ERRNO_BACKEND: hfile_backend_layout = hfile_backend_layout {
+        read: None,
+        write: None,
+        seek: Some(seek_backend),
+        flush: None,
+        close: Some(close_errno_backend),
     };
 
     #[test]
@@ -1847,7 +2250,6 @@ mod tests {
             assert_eq!(hisremote(c"file:///tmp/a.bam".as_ptr()), 0);
             assert_eq!(hisremote(c"mem:payload".as_ptr()), 1);
             assert_eq!(hisremote(c"preload:mem:payload".as_ptr()), 1);
-            assert_eq!(hisremote(c"http://example.invalid/ref.fa".as_ptr()), 1);
 
             let path = c"/tmp/a.bam";
             let limit = path
@@ -1899,6 +2301,100 @@ mod tests {
     }
 
     #[test]
+    fn hfile_scheme_parser_accepts_c_scheme_alphabet_and_rejects_non_schemes() {
+        unsafe {
+            let data = hfile_c_1176_find_scheme_handler(c"DATA:text/plain,abc".as_ptr());
+            assert!(!data.is_null());
+            assert_eq!(
+                CStr::from_ptr((*data.cast::<hfile_scheme_handler_layout>()).provider).to_bytes(),
+                b"built-in"
+            );
+
+            assert!(!hfile_c_1176_find_scheme_handler(c"s3+https://bucket/key".as_ptr()).is_null());
+            assert!(!hfile_c_1176_find_scheme_handler(c"ab-c.d:path".as_ptr()).is_null());
+            assert!(hfile_c_1176_find_scheme_handler(c"x:path".as_ptr()).is_null());
+            assert!(hfile_c_1176_find_scheme_handler(c"abcdefghijkl:path".as_ptr()).is_null());
+            assert!(hfile_c_1176_find_scheme_handler(c"/tmp/has:no-scheme".as_ptr()).is_null());
+
+            let fp = hfile_c_1317_hopen(c"DATA:,upper%20scheme".as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            let mut out = [0 as c_char; 16];
+            assert_eq!(
+                htslib_hfile_h_247_hread(fp, out.as_mut_ptr().cast(), out.len()),
+                12
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(out.as_ptr().cast::<u8>(), 12),
+                b"upper scheme"
+            );
+            assert_eq!(hclose(fp), 0);
+        }
+    }
+
+    #[test]
+    fn hfile_plugin_listing_respects_capacity_without_losing_total_counts() {
+        unsafe {
+            let mut plugins = [std::ptr::null(); 1];
+            let mut nplugins = plugins.len() as c_int;
+            let total = hfile_c_1257_hfile_list_plugins(plugins.as_mut_ptr(), &mut nplugins);
+            assert!(total >= 1);
+            assert_eq!(nplugins, 1);
+            assert_eq!(CStr::from_ptr(plugins[0]).to_bytes(), b"built-in");
+
+            let mut schemes = [std::ptr::null(); 1];
+            let mut nschemes = schemes.len() as c_int;
+            let total_schemes = hfile_c_1218_hfile_list_schemes(
+                c"built-in".as_ptr(),
+                schemes.as_mut_ptr(),
+                &mut nschemes,
+            );
+            assert!(total_schemes >= 3);
+            assert_eq!(nschemes, 1);
+            assert_eq!(CStr::from_ptr(schemes[0]).to_bytes(), b"data");
+
+            let mut exact = [std::ptr::null(); 8];
+            let mut nexact = exact.len() as c_int;
+            let exact_total =
+                hfile_c_1218_hfile_list_schemes(c"mem".as_ptr(), exact.as_mut_ptr(), &mut nexact);
+            assert_eq!(exact_total, nexact);
+            assert!(exact
+                .iter()
+                .take(nexact as usize)
+                .any(|scheme| CStr::from_ptr(*scheme).to_bytes() == b"mem"));
+        }
+    }
+
+    #[test]
+    fn hfile_plugin_listing_accepts_zero_output_capacity() {
+        unsafe {
+            let mut nplugins = 0;
+            let total = hfile_c_1257_hfile_list_plugins(std::ptr::null_mut(), &mut nplugins);
+            assert!(total >= 1);
+            assert_eq!(nplugins, 0);
+
+            let mut nschemes = 0;
+            let total_schemes = hfile_c_1218_hfile_list_schemes(
+                c"built-in".as_ptr(),
+                std::ptr::null_mut(),
+                &mut nschemes,
+            );
+            assert!(total_schemes >= 3);
+            assert_eq!(nschemes, 0);
+
+            nschemes = 0;
+            assert_eq!(
+                hfile_c_1218_hfile_list_schemes(
+                    c"missing-plugin".as_ptr(),
+                    std::ptr::null_mut(),
+                    &mut nschemes,
+                ),
+                0
+            );
+            assert_eq!(nschemes, 0);
+        }
+    }
+
+    #[test]
     fn hfile_memory_backend_decodes_data_urls_and_exposes_buffer_like_c() {
         unsafe {
             assert_eq!(
@@ -1926,12 +2422,7 @@ mod tests {
             let mut length = 0usize;
             let internal = hfile_c_894_hfile_mem_get_buffer(fp, &mut length);
             assert!(!internal.is_null());
-            assert_eq!(
-                length,
-                (*fp.cast::<hfile_layout>())
-                    .buffer
-                    .offset_from((*fp.cast::<hfile_layout>()).limit) as usize
-            );
+            assert_eq!(length, 0usize.wrapping_sub(20));
             assert_eq!(hfile_c_810_mem_seek(fp, 0, libc::SEEK_SET), -1);
             assert_eq!(
                 *crate::htslib_mini_rs::c_compat::__errno_location(),
@@ -1966,6 +2457,238 @@ mod tests {
             assert_eq!(
                 *crate::htslib_mini_rs::c_compat::__errno_location(),
                 libc::EINVAL
+            );
+        }
+    }
+
+    #[test]
+    fn hfile_memory_buffer_access_reports_filled_length_and_transfers_ownership() {
+        unsafe {
+            let payload = b"owned";
+            let buffer = crate::htslib_mini_rs::c_compat::malloc(8).cast::<c_char>();
+            assert!(!buffer.is_null());
+            crate::htslib_mini_rs::c_compat::memcpy(
+                buffer.cast(),
+                payload.as_ptr().cast(),
+                payload.len() as u64,
+            );
+
+            let fp = hfile_c_835_create_hfile_mem(buffer, c"r".as_ptr(), payload.len(), 8);
+            assert!(!fp.is_null());
+            let mut length = 0usize;
+            assert_eq!(hfile_c_894_hfile_mem_get_buffer(fp, &mut length), buffer);
+            assert_eq!(length, 0usize.wrapping_sub(8));
+
+            let stolen = hfile_c_906_hfile_mem_steal_buffer(fp, &mut length);
+            assert_eq!(stolen, buffer);
+            assert_eq!(length, 0usize.wrapping_sub(8));
+            assert!((*fp.cast::<hfile_layout>()).buffer.is_null());
+            assert_eq!(hclose(fp), 0);
+            crate::htslib_mini_rs::c_compat::free(stolen.cast());
+
+            let mut stack = [0 as c_char; 4];
+            let mut file = ReadFile {
+                base: hfile_layout {
+                    buffer: stack.as_mut_ptr(),
+                    begin: stack.as_mut_ptr(),
+                    end: stack.as_mut_ptr(),
+                    limit: stack.as_mut_ptr().add(stack.len()),
+                    backend: &READ_BACKEND,
+                    offset: 0,
+                    flags: HFILE_MOBILE,
+                    has_errno: 0,
+                },
+                source: std::ptr::null(),
+                source_len: 0,
+                source_pos: 0,
+            };
+            assert!(hfile_c_894_hfile_mem_get_buffer(
+                (&mut file as *mut ReadFile).cast(),
+                &mut length
+            )
+            .is_null());
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                libc::EINVAL
+            );
+        }
+    }
+
+    #[test]
+    fn hfile_peek_refills_without_advancing_logical_read_position() {
+        unsafe {
+            let mut buffer = [0 as c_char; 4];
+            let source = b"abcdef";
+            let mut file = ReadFile {
+                base: hfile_layout {
+                    buffer: buffer.as_mut_ptr(),
+                    begin: buffer.as_mut_ptr(),
+                    end: buffer.as_mut_ptr(),
+                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    backend: &READ_BACKEND,
+                    offset: 0,
+                    flags: HFILE_MOBILE,
+                    has_errno: 0,
+                },
+                source: source.as_ptr().cast(),
+                source_len: source.len(),
+                source_pos: 0,
+            };
+
+            let fp = (&mut file as *mut ReadFile).cast();
+            let mut peeked = [0 as c_char; 3];
+            assert_eq!(
+                hfile_c_313_hpeek(fp, peeked.as_mut_ptr().cast(), peeked.len()),
+                3
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(peeked.as_ptr().cast::<u8>(), 3),
+                b"abc"
+            );
+            assert_eq!(htslib_hfile_h_155_htell(fp), 0);
+            assert_eq!(file.source_pos, 4);
+
+            let mut first = [0 as c_char; 2];
+            assert_eq!(
+                htslib_hfile_h_247_hread(fp, first.as_mut_ptr().cast(), first.len()),
+                2
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(first.as_ptr().cast::<u8>(), 2),
+                b"ab"
+            );
+            assert_eq!(htslib_hfile_h_155_htell(fp), 2);
+
+            let mut rest = [0 as c_char; 4];
+            assert_eq!(
+                htslib_hfile_h_247_hread(fp, rest.as_mut_ptr().cast(), rest.len()),
+                4
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(rest.as_ptr().cast::<u8>(), 4),
+                b"cdef"
+            );
+            assert_eq!(htslib_hfile_h_155_htell(fp), 6);
+            assert_eq!(htslib_hfile_h_163_hgetc(fp), libc::EOF);
+            assert_ne!(file.base.flags & HFILE_AT_EOF, 0);
+            assert_eq!(file.base.has_errno, 0);
+        }
+    }
+
+    #[test]
+    fn hfile_data_url_decoder_keeps_c_edge_case_semantics() {
+        unsafe {
+            assert!(hfile_c_845_hopen_mem(c"data:no-comma".as_ptr(), c"r".as_ptr()).is_null());
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                libc::EINVAL
+            );
+
+            let fp = hfile_c_845_hopen_mem(c"data:text/plain,kept%ZZ%2f".as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            let mut out = [0 as c_char; 16];
+            assert_eq!(
+                htslib_hfile_h_247_hread(fp, out.as_mut_ptr().cast(), out.len()),
+                8
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(out.as_ptr().cast::<u8>(), 8),
+                b"kept%ZZ/"
+            );
+            assert_eq!(hclose(fp), 0);
+
+            let fp64 =
+                hfile_c_845_hopen_mem(c"data:text/plain;BASE64,QUI=".as_ptr(), c"r".as_ptr());
+            assert!(!fp64.is_null());
+            let mut decoded = [0 as c_char; 4];
+            assert_eq!(
+                htslib_hfile_h_247_hread(fp64, decoded.as_mut_ptr().cast(), decoded.len()),
+                2
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(decoded.as_ptr().cast::<u8>(), 2),
+                b"AB"
+            );
+            assert_eq!(hclose(fp64), 0);
+        }
+    }
+
+    #[test]
+    fn hfile_read_and_seek_error_edges_set_herrno_and_errno_like_c() {
+        unsafe {
+            let mut buffer = [0 as c_char; 4];
+            let mut file = ReadFile {
+                base: hfile_layout {
+                    buffer: buffer.as_mut_ptr(),
+                    begin: buffer.as_mut_ptr(),
+                    end: buffer.as_mut_ptr(),
+                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    backend: &READ_ERRNO_BACKEND,
+                    offset: 0,
+                    flags: HFILE_MOBILE,
+                    has_errno: 0,
+                },
+                source: std::ptr::null(),
+                source_len: 0,
+                source_pos: 0,
+            };
+            let mut out = [0 as c_char; 2];
+            assert_eq!(
+                htslib_hfile_h_247_hread(
+                    (&mut file as *mut ReadFile).cast(),
+                    out.as_mut_ptr().cast(),
+                    out.len()
+                ),
+                -1
+            );
+            assert_eq!(
+                htslib_hfile_h_134_herrno((&mut file as *mut ReadFile).cast()),
+                libc::EIO
+            );
+            htslib_hfile_h_140_hclearerr((&mut file as *mut ReadFile).cast());
+            assert_eq!(
+                htslib_hfile_h_134_herrno((&mut file as *mut ReadFile).cast()),
+                0
+            );
+
+            assert_eq!(
+                hfile_c_241_hgetdelim(
+                    out.as_mut_ptr(),
+                    0,
+                    b'\n' as c_int,
+                    (&mut file as *mut ReadFile).cast()
+                ),
+                -1
+            );
+            assert_eq!(file.base.has_errno, libc::EINVAL);
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                libc::EINVAL
+            );
+
+            file.base.has_errno = 0;
+            file.base.offset = 2;
+            file.base.begin = file.base.buffer;
+            file.base.end = file.base.buffer;
+            assert_eq!(
+                hfile_c_446_hseek((&mut file as *mut ReadFile).cast(), -3, libc::SEEK_CUR),
+                -1
+            );
+            assert_eq!(file.base.has_errno, libc::EINVAL);
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                libc::EINVAL
+            );
+
+            file.base.has_errno = 0;
+            file.base.offset = libc::off_t::MAX - 1;
+            assert_eq!(
+                hfile_c_446_hseek((&mut file as *mut ReadFile).cast(), 4, libc::SEEK_CUR),
+                -1
+            );
+            assert_eq!(
+                file.base.has_errno,
+                crate::htslib_mini_rs::c_compat::EOVERFLOW
             );
         }
     }
@@ -2069,6 +2792,26 @@ mod tests {
     }
 
     #[test]
+    fn hfile_preload_close_failure_cleans_memory_file_once_and_preserves_errno() {
+        unsafe {
+            let fp = hfile_c_104_hfile_init(std::mem::size_of::<ReadFile>(), c"r".as_ptr(), 8)
+                .cast::<ReadFile>();
+            assert!(!fp.is_null());
+            (*fp).base.backend = &READ_CLOSE_ERRNO_BACKEND;
+            (*fp).source = c"abc".as_ptr();
+            (*fp).source_len = 3;
+            (*fp).source_pos = 0;
+
+            *crate::htslib_mini_rs::c_compat::__errno_location() = 0;
+            assert!(hfile_c_689_hpreload(fp.cast()).is_null());
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                libc::EBADF
+            );
+        }
+    }
+
+    #[test]
     fn hfile_hopen_dispatches_builtin_and_unknown_schemes_like_c_edges() {
         unsafe {
             let handler = hfile_scheme_handler_layout {
@@ -2117,6 +2860,71 @@ mod tests {
                 *crate::htslib_mini_rs::c_compat::__errno_location(),
                 libc::EPROTONOSUPPORT
             );
+        }
+    }
+
+    #[test]
+    fn hfile_unknown_scheme_fallback_is_local_like_upstream() {
+        unsafe {
+            let handler = hfile_c_1176_find_scheme_handler(c"zz-example://host/path".as_ptr());
+            assert!(!handler.is_null());
+            let handler = handler.cast::<hfile_scheme_handler_layout>();
+            assert_eq!(CStr::from_ptr((*handler).provider).to_bytes(), b"built-in");
+            assert_eq!((*handler).priority, 0);
+            assert_eq!(
+                (*handler).isremote.expect("unknown scheme isremote")(
+                    c"zz-example://host/path".as_ptr()
+                ),
+                0
+            );
+            assert_eq!(hisremote(c"zz-example://host/path".as_ptr()), 0);
+
+            let http = hfile_c_1176_find_scheme_handler(c"http://example.invalid/ref.fa".as_ptr());
+            assert!(!http.is_null());
+            let http = http.cast::<hfile_scheme_handler_layout>();
+            assert_eq!(CStr::from_ptr((*http).provider).to_bytes(), b"built-in");
+            assert_eq!((*http).priority, 0);
+            assert_eq!(hisremote(c"http://example.invalid/ref.fa".as_ptr()), 0);
+            assert_eq!(hisremote(c"s3://bucket/key.bam".as_ptr()), 0);
+        }
+    }
+
+    #[test]
+    fn hfile_cleanup_paths_preserve_errno_like_c() {
+        unsafe {
+            let fp = hfile_c_104_hfile_init(std::mem::size_of::<hfile_layout>(), c"r".as_ptr(), 16);
+            assert!(!fp.is_null());
+            *crate::htslib_mini_rs::c_compat::__errno_location() = libc::E2BIG;
+            hfile_c_162_hfile_destroy(fp);
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                libc::E2BIG
+            );
+
+            let abrupt =
+                hfile_c_104_hfile_init(std::mem::size_of::<hfile_layout>(), c"r".as_ptr(), 16);
+            assert!(!abrupt.is_null());
+            (*abrupt.cast::<hfile_layout>()).backend = &CLOSE_ERRNO_BACKEND;
+            *crate::htslib_mini_rs::c_compat::__errno_location() = libc::E2BIG;
+            hfile_c_520_hclose_abruptly(abrupt);
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                libc::E2BIG
+            );
+        }
+    }
+
+    #[test]
+    fn hfile_init_reports_posix_memalign_failure_without_installing_null_buffer() {
+        unsafe {
+            *crate::htslib_mini_rs::c_compat::__errno_location() = 0;
+            let fp = hfile_c_104_hfile_init(
+                std::mem::size_of::<hfile_layout>(),
+                c"w".as_ptr(),
+                usize::MAX,
+            );
+            assert!(fp.is_null());
+            assert_ne!(*crate::htslib_mini_rs::c_compat::__errno_location(), 0);
         }
     }
 
@@ -2383,6 +3191,86 @@ mod tests {
     }
 
     #[test]
+    fn hfile_successful_backend_seek_discards_buffer_and_clears_eof() {
+        unsafe {
+            let mut buffer = [0 as c_char; 4];
+            let source = b"abcdefgh";
+            let mut file = ReadFile {
+                base: hfile_layout {
+                    buffer: buffer.as_mut_ptr(),
+                    begin: buffer.as_mut_ptr().add(2),
+                    end: buffer.as_mut_ptr().add(4),
+                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    backend: &SEEKABLE_READ_BACKEND,
+                    offset: 0,
+                    flags: HFILE_MOBILE | HFILE_AT_EOF,
+                    has_errno: 0,
+                },
+                source: source.as_ptr().cast(),
+                source_len: source.len(),
+                source_pos: source.len(),
+            };
+
+            assert_eq!(
+                hfile_c_446_hseek((&mut file as *mut ReadFile).cast(), 5, libc::SEEK_SET),
+                5
+            );
+            assert_eq!(file.source_pos, 5);
+            assert_eq!(file.base.offset, 5);
+            assert_eq!(file.base.begin, file.base.buffer);
+            assert_eq!(file.base.end, file.base.buffer);
+            assert_eq!(file.base.flags & HFILE_AT_EOF, 0);
+
+            let mut out = [0 as c_char; 3];
+            assert_eq!(
+                htslib_hfile_h_247_hread(
+                    (&mut file as *mut ReadFile).cast(),
+                    out.as_mut_ptr().cast(),
+                    out.len()
+                ),
+                3
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(out.as_ptr().cast::<u8>(), 3),
+                b"fgh"
+            );
+        }
+    }
+
+    #[test]
+    fn hfile_failed_backend_seek_preserves_buffer_window_and_sets_herrno() {
+        unsafe {
+            let mut buffer = *b"abcd";
+            let mut file = ReadFile {
+                base: hfile_layout {
+                    buffer: buffer.as_mut_ptr().cast(),
+                    begin: buffer.as_mut_ptr().cast::<c_char>().add(1),
+                    end: buffer.as_mut_ptr().cast::<c_char>().add(4),
+                    limit: buffer.as_mut_ptr().cast::<c_char>().add(buffer.len()),
+                    backend: &READ_BACKEND,
+                    offset: 10,
+                    flags: HFILE_MOBILE | HFILE_AT_EOF,
+                    has_errno: 0,
+                },
+                source: std::ptr::null(),
+                source_len: 0,
+                source_pos: 0,
+            };
+
+            *crate::htslib_mini_rs::c_compat::__errno_location() = libc::ENOSYS;
+            assert_eq!(
+                hfile_c_446_hseek((&mut file as *mut ReadFile).cast(), 0, libc::SEEK_SET),
+                -1
+            );
+            assert_eq!(file.base.has_errno, libc::ENOSYS);
+            assert_eq!(file.base.offset, 10);
+            assert_eq!(file.base.begin, file.base.buffer.add(1));
+            assert_eq!(file.base.end, file.base.buffer.add(4));
+            assert_ne!(file.base.flags & HFILE_AT_EOF, 0);
+        }
+    }
+
+    #[test]
     fn hfile_write_flush_putc_and_hputs2_match_buffer_rules() {
         unsafe {
             let mut buffer = [0 as c_char; 4];
@@ -2438,6 +3326,297 @@ mod tests {
 
             assert_eq!(hfile_c_390_hflush((&mut file as *mut WriteFile).cast()), 0);
             assert_eq!(file.flushes, 1);
+        }
+    }
+
+    #[test]
+    fn hfile_read_paths_update_offsets_eof_and_tell_like_c() {
+        unsafe {
+            let mut buffer = [0 as c_char; 4];
+            let source = b"abcdefghijkl";
+            let mut file = ReadFile {
+                base: hfile_layout {
+                    buffer: buffer.as_mut_ptr(),
+                    begin: buffer.as_mut_ptr(),
+                    end: buffer.as_mut_ptr(),
+                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    backend: &READ_BACKEND,
+                    offset: 0,
+                    flags: HFILE_MOBILE,
+                    has_errno: 0,
+                },
+                source: source.as_ptr().cast(),
+                source_len: source.len(),
+                source_pos: 0,
+            };
+
+            let mut direct = [0 as c_char; 8];
+            assert_eq!(
+                htslib_hfile_h_247_hread(
+                    (&mut file as *mut ReadFile).cast(),
+                    direct.as_mut_ptr().cast(),
+                    direct.len()
+                ),
+                8
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(direct.as_ptr().cast::<u8>(), 8),
+                b"abcdefgh"
+            );
+            assert_eq!(file.base.offset, 8);
+            assert_eq!(file.base.begin, file.base.buffer);
+            assert_eq!(file.base.end, file.base.buffer);
+            assert_eq!(
+                htslib_hfile_h_155_htell((&mut file as *mut ReadFile).cast()),
+                8
+            );
+
+            let mut tail = [0 as c_char; 8];
+            assert_eq!(
+                htslib_hfile_h_247_hread(
+                    (&mut file as *mut ReadFile).cast(),
+                    tail.as_mut_ptr().cast(),
+                    tail.len()
+                ),
+                4
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(tail.as_ptr().cast::<u8>(), 4),
+                b"ijkl"
+            );
+            assert_ne!(file.base.flags & HFILE_AT_EOF, 0);
+            assert_eq!(
+                htslib_hfile_h_163_hgetc((&mut file as *mut ReadFile).cast()),
+                libc::EOF
+            );
+        }
+    }
+
+    #[test]
+    fn hfile_line_readers_report_invalid_write_state_like_c() {
+        unsafe {
+            let mut buffer = [0 as c_char; 4];
+            let mut sink = [0 as c_char; 8];
+            let mut file = WriteFile {
+                base: hfile_layout {
+                    buffer: buffer.as_mut_ptr(),
+                    begin: buffer.as_mut_ptr().add(1),
+                    end: buffer.as_mut_ptr(),
+                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    backend: &WRITE_BACKEND,
+                    offset: 0,
+                    flags: HFILE_MOBILE,
+                    has_errno: 0,
+                },
+                sink: sink.as_mut_ptr(),
+                sink_len: sink.len(),
+                sink_pos: 0,
+                flushes: 0,
+            };
+            let mut out = [0 as c_char; 4];
+
+            assert_eq!(
+                hfile_c_241_hgetdelim(
+                    out.as_mut_ptr(),
+                    out.len(),
+                    b'\n' as c_int,
+                    (&mut file as *mut WriteFile).cast()
+                ),
+                -1
+            );
+            assert_eq!(file.base.has_errno, libc::EBADF);
+            assert_eq!(
+                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                libc::EBADF
+            );
+
+            file.base.begin = file.base.end;
+            file.base.has_errno = 0;
+            assert!(
+                hfile_c_291_hgets(out.as_mut_ptr(), 0, (&mut file as *mut WriteFile).cast())
+                    .is_null()
+            );
+            assert_eq!(file.base.has_errno, libc::EINVAL);
+        }
+    }
+
+    #[test]
+    fn hfile_data_url_edges_preserve_empty_and_base64_detection_semantics() {
+        unsafe {
+            let empty = hfile_c_845_hopen_mem(c"data:,".as_ptr(), c"r".as_ptr());
+            assert!(!empty.is_null());
+            let mut out = [1 as c_char; 1];
+            assert_eq!(
+                htslib_hfile_h_247_hread(empty, out.as_mut_ptr().cast(), out.len()),
+                0
+            );
+            let mut length = 999usize;
+            assert!(!hfile_c_894_hfile_mem_get_buffer(empty, &mut length).is_null());
+            assert_eq!(length, 0usize.wrapping_sub(1));
+            assert_eq!(hclose(empty), 0);
+
+            let not_suffix =
+                hfile_c_845_hopen_mem(c"data:;base64x,QUJD%3D".as_ptr(), c"r".as_ptr());
+            assert!(!not_suffix.is_null());
+            let mut plain = [0 as c_char; 8];
+            assert_eq!(
+                htslib_hfile_h_247_hread(not_suffix, plain.as_mut_ptr().cast(), plain.len()),
+                5
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(plain.as_ptr().cast::<u8>(), 5),
+                b"QUJD="
+            );
+            assert_eq!(hclose(not_suffix), 0);
+        }
+    }
+
+    #[test]
+    fn hfile_plugin_registration_keeps_highest_priority_valid_handler() {
+        unsafe extern "C" fn low_open(_fname: *const c_char, _mode: *const c_char) -> *mut hFILE {
+            std::ptr::null_mut()
+        }
+        unsafe extern "C" fn high_open(_fname: *const c_char, _mode: *const c_char) -> *mut hFILE {
+            std::ptr::null_mut()
+        }
+        unsafe extern "C" fn local_remote(_fname: *const c_char) -> c_int {
+            0
+        }
+        unsafe extern "C" fn high_remote(_fname: *const c_char) -> c_int {
+            1
+        }
+
+        static LOW_HANDLER: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
+            open: Some(low_open),
+            isremote: Some(local_remote),
+            provider: c"low-test".as_ptr(),
+            priority: 100,
+            vopen: std::ptr::null(),
+        };
+        static INVALID_HANDLER: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
+            open: None,
+            isremote: Some(high_remote),
+            provider: c"invalid-test".as_ptr(),
+            priority: 900,
+            vopen: std::ptr::null(),
+        };
+        static HIGH_HANDLER: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
+            open: Some(high_open),
+            isremote: Some(high_remote),
+            provider: c"high-test".as_ptr(),
+            priority: 200,
+            vopen: std::ptr::null(),
+        };
+
+        unsafe {
+            assert!(!hfile_c_1176_find_scheme_handler(c"data:,x".as_ptr()).is_null());
+
+            hfile_c_1053_hfile_add_scheme_handler(
+                c"zztest".as_ptr(),
+                (&LOW_HANDLER as *const hfile_scheme_handler_layout).cast(),
+            );
+            hfile_c_1053_hfile_add_scheme_handler(
+                c"zztest".as_ptr(),
+                (&INVALID_HANDLER as *const hfile_scheme_handler_layout).cast(),
+            );
+            let handler = hfile_c_1176_find_scheme_handler(c"zztest:path".as_ptr());
+            assert!(!handler.is_null());
+            assert_eq!(
+                CStr::from_ptr((*handler.cast::<hfile_scheme_handler_layout>()).provider)
+                    .to_bytes(),
+                b"low-test"
+            );
+            assert_eq!(hisremote(c"zztest:path".as_ptr()), 0);
+
+            hfile_c_1053_hfile_add_scheme_handler(
+                c"zztest".as_ptr(),
+                (&HIGH_HANDLER as *const hfile_scheme_handler_layout).cast(),
+            );
+            let handler = hfile_c_1176_find_scheme_handler(c"zztest:path".as_ptr());
+            assert!(!handler.is_null());
+            assert_eq!(
+                CStr::from_ptr((*handler.cast::<hfile_scheme_handler_layout>()).provider)
+                    .to_bytes(),
+                b"high-test"
+            );
+            assert_eq!(hisremote(c"zztest:path".as_ptr()), 1);
+        }
+    }
+
+    #[test]
+    fn hfile_close_preserve_and_fd_flags_keep_ownership_rules() {
+        unsafe {
+            let mut buffer = [0 as c_char; 4];
+            let mut sink = [0 as c_char; 8];
+            crate::htslib_mini_rs::c_compat::memcpy(
+                buffer.as_mut_ptr().cast(),
+                c"xy".as_ptr().cast(),
+                2,
+            );
+            let mut file = WriteFile {
+                base: hfile_layout {
+                    buffer: buffer.as_mut_ptr(),
+                    begin: buffer.as_mut_ptr().add(2),
+                    end: buffer.as_mut_ptr(),
+                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    backend: &WRITE_BACKEND,
+                    offset: 0,
+                    flags: HFILE_MOBILE | HFILE_PRESERVE,
+                    has_errno: 0,
+                },
+                sink: sink.as_mut_ptr(),
+                sink_len: sink.len(),
+                sink_pos: 0,
+                flushes: 0,
+            };
+            assert_eq!(hfile_c_503_hclose((&mut file as *mut WriteFile).cast()), 0);
+            assert_eq!(file.sink_pos, 2);
+            assert_eq!(file.flushes, 1);
+            assert_eq!(
+                std::slice::from_raw_parts(sink.as_ptr().cast::<u8>(), 2),
+                b"xy"
+            );
+            assert_eq!(file.base.buffer, buffer.as_mut_ptr());
+
+            let fd = libc::dup(libc::STDOUT_FILENO);
+            assert!(fd >= 0);
+            let socket = hfile_c_735_hdopen(fd, c"Ssw".as_ptr());
+            assert!(!socket.is_null());
+            assert_ne!(
+                (*socket.cast::<hfile_fd_layout>()).flags & HFILE_FD_IS_SOCKET,
+                0
+            );
+            assert_ne!(
+                (*socket.cast::<hfile_fd_layout>()).flags & HFILE_FD_IS_SHARED,
+                0
+            );
+            assert_eq!(hclose(socket), 0);
+            assert_eq!(libc::close(fd), 0);
+
+            let mut fds = [-1; 2];
+            assert_eq!(
+                libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()),
+                0
+            );
+            let reader = hfile_c_735_hdopen(fds[0], c"sr".as_ptr());
+            let writer = hfile_c_735_hdopen(fds[1], c"sw".as_ptr());
+            assert!(!reader.is_null());
+            assert!(!writer.is_null());
+            assert_eq!(
+                htslib_hfile_h_292_hwrite(writer, c"sock".as_ptr().cast(), 4),
+                4
+            );
+            assert_eq!(hclose(writer), 0);
+            let mut got = [0 as c_char; 4];
+            assert_eq!(
+                htslib_hfile_h_247_hread(reader, got.as_mut_ptr().cast(), 4),
+                4
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(got.as_ptr().cast::<u8>(), 4),
+                b"sock"
+            );
+            assert_eq!(hclose(reader), 0);
         }
     }
 }
