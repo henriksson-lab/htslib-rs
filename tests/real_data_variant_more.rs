@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bcf_destroy, bcf_get_info_values, bcf_hdr_destroy, bcf_hdr_id2name, bcf_hdr_name2id,
     bcf_hdr_read, bcf_hdr_seqnames, bcf_hdr_write, bcf_index_build, bcf_index_load2, bcf_init,
     bcf_read, bcf_readrec, bcf_seqname, bcf_sr_add_reader, bcf_sr_destroy, bcf_sr_get_header,
@@ -95,7 +95,7 @@ unsafe fn count_indexed_variant_records(
 
 fn tmp_fixture_path(label: &str, ext: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
-        "htslib-mini-rs-bcf-sr-{}-{}.{}",
+        "htslib_rs-bcf-sr-{}-{}.{}",
         std::process::id(),
         label,
         ext

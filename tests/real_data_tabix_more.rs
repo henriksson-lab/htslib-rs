@@ -1,5 +1,5 @@
-use htslib_mini_rs::bgzf::{bgzf_close, bgzf_open, bgzf_write};
-use htslib_mini_rs::{
+use htslib_rs::bgzf::{bgzf_close, bgzf_open, bgzf_write};
+use htslib_rs::{
     hts_close, hts_get_bgzfp, hts_itr_destroy, hts_itr_next, hts_open, ks_free, kstring_t,
     tbx_c_96_tbx_parse1, tbx_conf_bed, tbx_conf_gff, tbx_conf_vcf, tbx_destroy, tbx_index_build2,
     tbx_index_load, tbx_index_load2, tbx_intv_t, tbx_itr_querys1, tbx_seqnames,
@@ -33,7 +33,7 @@ unsafe fn bgzip_copy(src: &std::path::Path, dst: &std::path::Path) {
     assert_eq!(bgzf_close(fp), 0);
 }
 
-unsafe fn parse_interval(conf: &htslib_mini_rs::tbx_conf_t, line: &str) -> (String, i64, i64) {
+unsafe fn parse_interval(conf: &htslib_rs::tbx_conf_t, line: &str) -> (String, i64, i64) {
     let mut bytes = CString::new(line).unwrap().into_bytes_with_nul();
     let mut intv: tbx_intv_t = std::mem::zeroed();
     assert_eq!(

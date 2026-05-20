@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     regidx_c_105_regidx_seq_names, regidx_c_246_regidx_init, regidx_c_311_regidx_destroy,
     regidx_c_401_regidx_overlap, regidx_c_498_regidx_parse_tab, regidx_c_584_regitr_init,
     regidx_c_606_regitr_destroy, regidx_c_612_regitr_overlap, regidx_c_91_regidx_seq_nregs,
@@ -12,7 +12,7 @@ fn c_fixture(path: &str) -> CString {
     CString::new(path.to_string_lossy().as_bytes()).unwrap()
 }
 
-unsafe fn open_tab_index(path: &str) -> *mut htslib_mini_rs::regidx_t {
+unsafe fn open_tab_index(path: &str) -> *mut htslib_rs::regidx_t {
     let path = c_fixture(path);
     let idx = regidx_c_246_regidx_init(
         path.as_ptr(),
@@ -26,7 +26,7 @@ unsafe fn open_tab_index(path: &str) -> *mut htslib_mini_rs::regidx_t {
 }
 
 unsafe fn collect_overlaps(
-    idx: *mut htslib_mini_rs::regidx_t,
+    idx: *mut htslib_rs::regidx_t,
     seq: &CStr,
     beg: i64,
     end: i64,
@@ -45,7 +45,7 @@ unsafe fn collect_overlaps(
     out
 }
 
-unsafe fn assert_no_overlap(idx: *mut htslib_mini_rs::regidx_t, seq: &CStr, beg: i64, end: i64) {
+unsafe fn assert_no_overlap(idx: *mut htslib_rs::regidx_t, seq: &CStr, beg: i64, end: i64) {
     let itr = regidx_c_584_regitr_init(idx);
     assert!(!itr.is_null());
     assert_eq!(

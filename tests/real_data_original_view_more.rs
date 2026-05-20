@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam_destroy1, bam_init1, bcf_destroy, bcf_hdr_destroy, bcf_hdr_fmt_text, bcf_init,
     htsExactFormat, hts_close, hts_get_format, hts_idx_destroy, hts_itr_destroy, hts_open,
     hts_opt_add, hts_opt_apply, hts_opt_free, hts_set_fai_filename, kstring_t,
@@ -17,7 +17,7 @@ fn c_fixture(path: &str) -> CString {
     CString::new(fixture(path).to_string_lossy().as_bytes()).unwrap()
 }
 
-unsafe fn sam_header_text(hdr: *mut htslib_mini_rs::sam_hdr_t) -> String {
+unsafe fn sam_header_text(hdr: *mut htslib_rs::sam_hdr_t) -> String {
     let len = sam_hdr_length(hdr);
     if len == 0 {
         return String::new();
@@ -28,8 +28,8 @@ unsafe fn sam_header_text(hdr: *mut htslib_mini_rs::sam_hdr_t) -> String {
 }
 
 unsafe fn append_formatted_record(
-    hdr: *mut htslib_mini_rs::sam_hdr_t,
-    rec: *const htslib_mini_rs::bam1_t,
+    hdr: *mut htslib_rs::sam_hdr_t,
+    rec: *const htslib_rs::bam1_t,
     line: &mut kstring_t,
     out: &mut String,
 ) {
@@ -45,7 +45,7 @@ fn temp_output_path(name: &str) -> std::path::PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "htslib-mini-rs-{name}-{}-{nanos}.sam",
+        "htslib_rs-{name}-{}-{nanos}.sam",
         std::process::id()
     ))
 }
@@ -118,7 +118,7 @@ unsafe fn copy_alignment_to_cram_with_index(
     let out_fp = hts_open(out_path_c.as_ptr(), c"wc".as_ptr());
     assert!(!out_fp.is_null(), "failed to open temp CRAM output");
 
-    let mut opts: *mut htslib_mini_rs::hts_opt = std::ptr::null_mut();
+    let mut opts: *mut htslib_rs::hts_opt = std::ptr::null_mut();
     for opt in output_opts {
         let opt_c = CString::new(*opt).unwrap();
         assert_eq!(
@@ -180,7 +180,7 @@ unsafe fn copy_alignment_to_cram(
         assert_eq!(hts_set_fai_filename(out_fp, reference_c.as_ptr()), 0);
     }
 
-    let mut opts: *mut htslib_mini_rs::hts_opt = std::ptr::null_mut();
+    let mut opts: *mut htslib_rs::hts_opt = std::ptr::null_mut();
     for opt in output_opts {
         let opt_c = CString::new(*opt).unwrap();
         assert_eq!(
@@ -235,8 +235,8 @@ unsafe fn alignment_max_ref_ends(input_path: &str) -> Vec<i64> {
         let tid = (*rec).core.tid;
         if tid >= 0 && (tid as usize) < max_ref_ends.len() {
             let pos = (*rec).core.pos;
-            let cigar = htslib_mini_rs::bam_get_cigar(rec);
-            let rlen = htslib_mini_rs::bam_cigar2rlen((*rec).core.n_cigar as i32, cigar);
+            let cigar = htslib_rs::bam_get_cigar(rec);
+            let rlen = htslib_rs::bam_cigar2rlen((*rec).core.n_cigar as i32, cigar);
             if rlen > 0 {
                 max_ref_ends[tid as usize] = max_ref_ends[tid as usize].max(pos + rlen);
             }
@@ -249,10 +249,7 @@ unsafe fn alignment_max_ref_ends(input_path: &str) -> Vec<i64> {
     max_ref_ends
 }
 
-unsafe fn extend_header_reference_lengths(
-    hdr: *mut htslib_mini_rs::sam_hdr_t,
-    max_ref_ends: &[i64],
-) {
+unsafe fn extend_header_reference_lengths(hdr: *mut htslib_rs::sam_hdr_t, max_ref_ends: &[i64]) {
     let mut changed = false;
     for (tid, &end) in max_ref_ends.iter().enumerate() {
         if end <= 0 || tid >= (*hdr).n_targets as usize {
@@ -278,7 +275,7 @@ unsafe fn extend_header_reference_lengths(
     }
 }
 
-unsafe fn rewrite_header_text_reference_lengths(hdr: *mut htslib_mini_rs::sam_hdr_t) {
+unsafe fn rewrite_header_text_reference_lengths(hdr: *mut htslib_rs::sam_hdr_t) {
     if (*hdr).text.is_null() {
         return;
     }

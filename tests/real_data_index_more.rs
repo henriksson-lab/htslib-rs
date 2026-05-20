@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam_destroy1, bam_get_qname, bam_init1, hts_close, hts_idx_destroy, hts_itr_destroy, hts_open,
     hts_set_fai_filename, sam_c_4553_sam_write1, sam_hdr_destroy, sam_hdr_read, sam_hdr_write,
     sam_index_build, sam_index_load, sam_itr_next, sam_itr_querys, sam_read1,
@@ -108,7 +108,7 @@ fn indexed_real_cram_query_uses_reference_and_returns_records() {
 
 fn temp_index2_bam(label: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
-        "htslib-mini-rs-index2-{}-{}.bam",
+        "htslib_rs-index2-{}-{}.bam",
         std::process::id(),
         label
     ))

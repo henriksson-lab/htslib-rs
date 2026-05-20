@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bcf_destroy, bcf_hdr_destroy, bcf_hdr_fmt_text, bcf_init, bcf_subset_format, hts_close,
     hts_open, ks_free, kstring_t, vcf_format, vcf_hdr_read, vcf_read,
 };

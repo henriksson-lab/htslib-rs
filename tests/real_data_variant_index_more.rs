@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bcf_hdr_destroy, bcf_hdr_get_version, bcf_hdr_id2name, bcf_hdr_name2id, bcf_index_load2,
     bcf_readrec, hts_close, hts_idx_destroy, hts_idx_get_n_no_coor, hts_idx_nseq, hts_itr_query,
     hts_open, hts_pos_t, vcf_hdr_read, BGZF,

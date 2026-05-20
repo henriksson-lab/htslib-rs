@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     hts_close, hts_open, hts_pos_t, hts_set_fai_filename, sam_hdr_destroy, sam_hdr_name2tid,
     sam_hdr_nref, sam_hdr_read, sam_hdr_tid2len, sam_hdr_tid2name,
 };

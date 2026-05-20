@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam1_t, bam_get_qual, bam_get_seq, bam_mplp_auto, bam_mplp_destroy, bam_mplp_init,
     bam_mplp_init_overlaps, bam_pileup1_is_del, bam_pileup1_is_head, bam_pileup1_is_refskip,
     bam_pileup1_is_tail, bam_pileup1_t, bam_plp_auto, bam_plp_destroy, bam_plp_init,

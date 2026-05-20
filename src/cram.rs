@@ -4,25 +4,25 @@ use std::{
     io::Read,
 };
 
-use crate::htslib_mini_rs::bgzf::{bgzf_close, bgzf_index_load, bgzf_open, bgzf_read, bgzf_useek};
-use crate::htslib_mini_rs::c_compat::{
+use crate::htslib_rs::bgzf::{bgzf_close, bgzf_index_load, bgzf_open, bgzf_read, bgzf_useek};
+use crate::htslib_rs::c_compat::{
     __errno_location, calloc, free, malloc, memcpy, realloc, EINVAL, ENOMEM,
 };
-use crate::htslib_mini_rs::faidx::fai_build;
-use crate::htslib_mini_rs::hfile::{hclose, hclose_abruptly, hgets, hisremote, hopen};
-use crate::htslib_mini_rs::hfile::{
+use crate::htslib_rs::faidx::fai_build;
+use crate::htslib_rs::hfile::{hclose, hclose_abruptly, hgets, hisremote, hopen};
+use crate::htslib_rs::hfile::{
     htslib_hfile_h_163_hgetc, htslib_hfile_h_247_hread, htslib_hfile_h_292_hwrite,
 };
-use crate::htslib_mini_rs::hts::{
+use crate::htslib_rs::hts::{
     cram_fd, hFILE, htsFile, hts_fmt_option, isspace_c, kputc, kputll, kputsn, kputw, kstring_t,
     toupper_c, BGZF, HTS_FORMAT_CRAM,
 };
-use crate::htslib_mini_rs::sam::{
+use crate::htslib_rs::sam::{
     bam1_t, bam_aux_get, bam_cigar_type, bam_destroy1, sam_hdr_destroy, sam_hdr_dup, sam_hdr_t,
     BAM_CIGAR_MASK, BAM_CIGAR_SHIFT, BAM_FDUP, BAM_FPAIRED, BAM_FPROPER_PAIR, BAM_FQCFAIL,
     BAM_FREAD1, BAM_FREAD2, BAM_FREVERSE, BAM_FSECONDARY, BAM_FUNMAP,
 };
-use crate::htslib_mini_rs::thread_pool::{hts_tpool_process, hts_tpool_process_flush};
+use crate::htslib_rs::thread_pool::{hts_tpool_process, hts_tpool_process_flush};
 
 pub type cram_block = hts_sys::cram_block;
 pub type cram_container = hts_sys::cram_container;
@@ -1816,8 +1816,8 @@ pub unsafe fn cram_cram_external_c_504_cram_slice_hdr_get_embed_ref_id(
 pub unsafe fn cram_cram_external_c_508_cram_slice_hdr_get_coords(
     h: *mut hts_sys::cram_block_slice_hdr,
     refid: *mut c_int,
-    start: *mut crate::htslib_mini_rs::hts::hts_pos_t,
-    span: *mut crate::htslib_mini_rs::hts::hts_pos_t,
+    start: *mut crate::htslib_rs::hts::hts_pos_t,
+    span: *mut crate::htslib_rs::hts::hts_pos_t,
 ) {
     let h = h.cast::<cram_block_slice_hdr_layout>();
     if !refid.is_null() {
@@ -3215,20 +3215,20 @@ pub unsafe fn cram_cram_io_c_196_itf8_decode_crc(
     match i {
         0 => {
             *val_p = val;
-            *crc = crate::htslib_mini_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 1);
+            *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 1);
             1
         }
         1 => {
             val = (val << 8) | c[1] as c_int;
             *val_p = val;
-            *crc = crate::htslib_mini_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 2);
+            *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 2);
             2
         }
         2 => {
             val = (val << 8) | c[1] as c_int;
             val = (val << 8) | c[2] as c_int;
             *val_p = val;
-            *crc = crate::htslib_mini_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 3);
+            *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 3);
             3
         }
         3 => {
@@ -3236,7 +3236,7 @@ pub unsafe fn cram_cram_io_c_196_itf8_decode_crc(
             val = (val << 8) | c[2] as c_int;
             val = (val << 8) | c[3] as c_int;
             *val_p = val;
-            *crc = crate::htslib_mini_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 4);
+            *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 4);
             4
         }
         _ => {
@@ -3246,7 +3246,7 @@ pub unsafe fn cram_cram_io_c_196_itf8_decode_crc(
             uv = (uv << 8) | c[3] as u32;
             uv = (uv << 4) | (c[4] as u32 & 0x0f);
             *val_p = uv as i32;
-            *crc = crate::htslib_mini_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 5);
+            *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 5);
             5
         }
     }
@@ -3571,7 +3571,7 @@ pub unsafe fn cram_cram_io_c_501_ltf8_decode_crc(
 
     if val < 0x80 {
         *val_p = val as i64;
-        *crc = crate::htslib_mini_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 1);
+        *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 1);
         return 1;
     } else if val < 0xc0 {
         let v = htslib_hfile_h_163_hgetc(fp);
@@ -3581,7 +3581,7 @@ pub unsafe fn cram_cram_io_c_501_ltf8_decode_crc(
         c[1] = v as u8;
         val = (val << 8) | c[1] as c_int;
         *val_p = (val & ((1 << (6 + 8)) - 1)) as i64;
-        *crc = crate::htslib_mini_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 2);
+        *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 2);
         return 2;
     }
 
@@ -3631,7 +3631,7 @@ pub unsafe fn cram_cram_io_c_501_ltf8_decode_crc(
             -((0xffff_ffff_ffff_ffffu64 - uval) as i64) - 1
         };
     }
-    *crc = crate::htslib_mini_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), len);
+    *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), len);
     len as c_int
 }
 
@@ -4074,7 +4074,7 @@ pub unsafe fn cram_cram_io_c_862_uint7_decode_crc32(
             (*layout).begin = (*layout).begin.add(1);
             c as c_int
         } else {
-            crate::htslib_mini_rs::hfile::hgetc2(fp.cast())
+            crate::htslib_rs::hfile::hgetc2(fp.cast())
         };
         if c < 0 {
             return -1;
@@ -4087,7 +4087,7 @@ pub unsafe fn cram_cram_io_c_862_uint7_decode_crc32(
         }
     }
 
-    *crc = crate::htslib_mini_rs::bgzf::hts_crc32(*crc, b.as_ptr().cast(), i);
+    *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, b.as_ptr().cast(), i);
     *val_p = v as i32;
     i as c_int
 }
@@ -4109,7 +4109,7 @@ pub unsafe fn cram_cram_io_c_907_sint7_decode_crc32(
             (*layout).begin = (*layout).begin.add(1);
             c as c_int
         } else {
-            crate::htslib_mini_rs::hfile::hgetc2(fp.cast())
+            crate::htslib_rs::hfile::hgetc2(fp.cast())
         };
         if c < 0 {
             return -1;
@@ -4122,7 +4122,7 @@ pub unsafe fn cram_cram_io_c_907_sint7_decode_crc32(
         }
     }
 
-    *crc = crate::htslib_mini_rs::bgzf::hts_crc32(*crc, b.as_ptr().cast(), i);
+    *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, b.as_ptr().cast(), i);
     *val_p = ((v >> 1) as i32) ^ -((v & 1) as i32);
     i as c_int
 }
@@ -4144,7 +4144,7 @@ pub unsafe fn cram_cram_io_c_953_uint7_decode_crc64(
             (*layout).begin = (*layout).begin.add(1);
             c as c_int
         } else {
-            crate::htslib_mini_rs::hfile::hgetc2(fp.cast())
+            crate::htslib_rs::hfile::hgetc2(fp.cast())
         };
         if c < 0 {
             return -1;
@@ -4157,7 +4157,7 @@ pub unsafe fn cram_cram_io_c_953_uint7_decode_crc64(
         }
     }
 
-    *crc = crate::htslib_mini_rs::bgzf::hts_crc32(*crc, b.as_ptr().cast(), i);
+    *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, b.as_ptr().cast(), i);
     *val_p = v as i64;
     i as c_int
 }
@@ -4177,7 +4177,7 @@ pub unsafe fn cram_cram_io_c_1005_int32_decode(fd: *mut hts_sys::cram_fd, val: *
     let got = if n == nbytes || ((*layout).flags & HFILE_MOBILE) == 0 {
         n as libc::ssize_t
     } else {
-        crate::htslib_mini_rs::hfile::hread2(fp.cast(), buffer, nbytes, n)
+        crate::htslib_rs::hfile::hread2(fp.cast(), buffer, nbytes, n)
     };
     if got != nbytes as libc::ssize_t {
         return -1;
@@ -4197,7 +4197,7 @@ pub unsafe fn cram_cram_io_c_1020_int32_encode(fd: *mut hts_sys::cram_fd, val: i
     if ((*layout).flags & HFILE_MOBILE) == 0 {
         let n = (*layout).limit.offset_from((*layout).begin) as usize;
         if n < nbytes {
-            crate::htslib_mini_rs::hfile::hfile_set_blksize(
+            crate::htslib_rs::hfile::hfile_set_blksize(
                 fp.cast(),
                 (*layout).limit.offset_from((*layout).buffer) as usize + nbytes,
             );
@@ -4207,7 +4207,7 @@ pub unsafe fn cram_cram_io_c_1020_int32_encode(fd: *mut hts_sys::cram_fd, val: i
 
     let mut n = (*layout).limit.offset_from((*layout).begin) as usize;
     let wrote = if nbytes >= n && (*layout).begin == (*layout).buffer {
-        crate::htslib_mini_rs::hfile::hwrite2(fp.cast(), buffer, nbytes, 0)
+        crate::htslib_rs::hfile::hwrite2(fp.cast(), buffer, nbytes, 0)
     } else {
         if n > nbytes {
             n = nbytes;
@@ -4217,7 +4217,7 @@ pub unsafe fn cram_cram_io_c_1020_int32_encode(fd: *mut hts_sys::cram_fd, val: i
         if n == nbytes {
             n as libc::ssize_t
         } else {
-            crate::htslib_mini_rs::hfile::hwrite2(fp.cast(), buffer, nbytes, n)
+            crate::htslib_rs::hfile::hwrite2(fp.cast(), buffer, nbytes, n)
         }
     };
 
@@ -4277,7 +4277,7 @@ pub unsafe fn cram_cram_io_c_1414_cram_read_block(
         (*hfile).begin = (*hfile).begin.add(1);
         c as c_int
     } else {
-        crate::htslib_mini_rs::hfile::hgetc2(fp.cast())
+        crate::htslib_rs::hfile::hgetc2(fp.cast())
     };
     if c == -1 {
         free(b.cast());
@@ -4288,21 +4288,21 @@ pub unsafe fn cram_cram_io_c_1414_cram_read_block(
         free(b.cast());
         return std::ptr::null_mut();
     }
-    let mut crc = crate::htslib_mini_rs::bgzf::hts_crc32(0, (&c as *const c_int).cast(), 1);
+    let mut crc = crate::htslib_rs::bgzf::hts_crc32(0, (&c as *const c_int).cast(), 1);
 
     let c = if (*hfile).end > (*hfile).begin {
         let c = *(*hfile).begin as u8;
         (*hfile).begin = (*hfile).begin.add(1);
         c as c_int
     } else {
-        crate::htslib_mini_rs::hfile::hgetc2(fp.cast())
+        crate::htslib_rs::hfile::hgetc2(fp.cast())
     };
     if c == -1 {
         free(b.cast());
         return std::ptr::null_mut();
     }
     (*b).content_type = c;
-    crc = crate::htslib_mini_rs::bgzf::hts_crc32(crc, (&c as *const c_int).cast(), 1);
+    crc = crate::htslib_rs::bgzf::hts_crc32(crc, (&c as *const c_int).cast(), 1);
 
     if ((*fd_layout).version >> 8) >= 4 {
         if cram_cram_io_c_862_uint7_decode_crc32(fd, &mut (*b).content_id, &mut crc) == -1
@@ -4327,7 +4327,7 @@ pub unsafe fn cram_cram_io_c_1414_cram_read_block(
                     (*hfile).begin = (*hfile).begin.add(1);
                     c as c_int
                 } else {
-                    crate::htslib_mini_rs::hfile::hgetc2(fp.cast())
+                    crate::htslib_rs::hfile::hgetc2(fp.cast())
                 };
                 if c < 0 {
                     free(b.cast());
@@ -4354,7 +4354,7 @@ pub unsafe fn cram_cram_io_c_1414_cram_read_block(
                 buf.as_ptr().add(n).cast::<c_char>(),
                 std::ptr::null_mut(),
             ) as i32;
-            crc = crate::htslib_mini_rs::bgzf::hts_crc32(crc, buf.as_ptr().cast(), n);
+            crc = crate::htslib_rs::bgzf::hts_crc32(crc, buf.as_ptr().cast(), n);
         }
     }
 
@@ -4393,7 +4393,7 @@ pub unsafe fn cram_cram_io_c_1414_cram_read_block(
     let got = if n == data_len || ((*hfile).flags & HFILE_MOBILE) == 0 {
         n as libc::ssize_t
     } else {
-        crate::htslib_mini_rs::hfile::hread2(fp.cast(), (*b).data.cast(), data_len, n)
+        crate::htslib_rs::hfile::hread2(fp.cast(), (*b).data.cast(), data_len, n)
     };
     if got != data_len as libc::ssize_t {
         free((*b).data.cast());
@@ -4437,7 +4437,7 @@ pub unsafe fn cram_cram_io_c_1511_cram_write_block(
             (*hfile).begin = (*hfile).begin.add(1);
             c
         } else {
-            crate::htslib_mini_rs::hfile::hputc2(c, fp.cast())
+            crate::htslib_rs::hfile::hputc2(c, fp.cast())
         };
         if r == libc::EOF {
             return -1;
@@ -4467,7 +4467,7 @@ pub unsafe fn cram_cram_io_c_1511_cram_write_block(
 
     let mut n = (*hfile).limit.offset_from((*hfile).begin) as usize;
     let wrote = if vardata_o >= n && (*hfile).begin == (*hfile).buffer {
-        crate::htslib_mini_rs::hfile::hwrite2(fp.cast(), vardata.as_ptr().cast(), vardata_o, 0)
+        crate::htslib_rs::hfile::hwrite2(fp.cast(), vardata.as_ptr().cast(), vardata_o, 0)
     } else {
         if n > vardata_o {
             n = vardata_o;
@@ -4477,7 +4477,7 @@ pub unsafe fn cram_cram_io_c_1511_cram_write_block(
         if n == vardata_o {
             n as libc::ssize_t
         } else {
-            crate::htslib_mini_rs::hfile::hwrite2(fp.cast(), vardata.as_ptr().cast(), vardata_o, n)
+            crate::htslib_rs::hfile::hwrite2(fp.cast(), vardata.as_ptr().cast(), vardata_o, n)
         }
     };
     if wrote != vardata_o as libc::ssize_t {
@@ -4493,7 +4493,7 @@ pub unsafe fn cram_cram_io_c_1511_cram_write_block(
         let data_len = data_len as usize;
         let mut n = (*hfile).limit.offset_from((*hfile).begin) as usize;
         let wrote = if data_len >= n && (*hfile).begin == (*hfile).buffer {
-            crate::htslib_mini_rs::hfile::hwrite2(fp.cast(), (*b).data.cast(), data_len, 0)
+            crate::htslib_rs::hfile::hwrite2(fp.cast(), (*b).data.cast(), data_len, 0)
         } else {
             if n > data_len {
                 n = data_len;
@@ -4503,7 +4503,7 @@ pub unsafe fn cram_cram_io_c_1511_cram_write_block(
             if n == data_len {
                 n as libc::ssize_t
             } else {
-                crate::htslib_mini_rs::hfile::hwrite2(fp.cast(), (*b).data.cast(), data_len, n)
+                crate::htslib_rs::hfile::hwrite2(fp.cast(), (*b).data.cast(), data_len, n)
             }
         };
         if wrote != data_len as libc::ssize_t {
@@ -4531,13 +4531,13 @@ pub unsafe fn cram_cram_io_c_1511_cram_write_block(
                 cp += cram_cram_io_c_277_itf8_put(dat.as_mut_ptr().add(cp).cast(), val) as usize;
             }
         }
-        let mut crc = crate::htslib_mini_rs::bgzf::hts_crc32(0, dat.as_ptr().cast(), cp);
+        let mut crc = crate::htslib_rs::bgzf::hts_crc32(0, dat.as_ptr().cast(), cp);
         let data_len = if (*b).method == hts_sys::cram_block_method_RAW {
             (*b).uncomp_size
         } else {
             (*b).comp_size
         } as usize;
-        crc = crate::htslib_mini_rs::bgzf::hts_crc32(
+        crc = crate::htslib_rs::bgzf::hts_crc32(
             crc,
             if (*b).data.is_null() {
                 c"".as_ptr().cast()
@@ -4559,7 +4559,7 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
     let b = b.cast::<cram_block_layout>();
 
     if (*b).crc32_checked == 0 {
-        let crc = crate::htslib_mini_rs::bgzf::hts_crc32(
+        let crc = crate::htslib_rs::bgzf::hts_crc32(
             (*b).crc_part,
             if (*b).data.is_null() {
                 c"".as_ptr().cast()
@@ -10583,7 +10583,7 @@ pub unsafe fn cram_open_trace_file_c_182_find_file_url(
         return std::ptr::null_mut();
     }
 
-    let hf = crate::htslib_mini_rs::hfile::hopen(path, c"r".as_ptr());
+    let hf = crate::htslib_rs::hfile::hopen(path, c"r".as_ptr());
     if hf.is_null() {
         free(path.cast());
         return std::ptr::null_mut();
@@ -10591,16 +10591,16 @@ pub unsafe fn cram_open_trace_file_c_182_find_file_url(
 
     let mf = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
     if mf.is_null() {
-        crate::htslib_mini_rs::hfile::hclose_abruptly(hf);
+        crate::htslib_rs::hfile::hclose_abruptly(hf);
         free(path.cast());
         return std::ptr::null_mut();
     }
 
     let mut buf = [0u8; 8192];
     loop {
-        let len = crate::htslib_mini_rs::hfile::hread2(hf, buf.as_mut_ptr().cast(), buf.len(), 0);
+        let len = crate::htslib_rs::hfile::hread2(hf, buf.as_mut_ptr().cast(), buf.len(), 0);
         if len <= 0 {
-            if crate::htslib_mini_rs::hfile::hclose(hf) < 0 || len < 0 {
+            if crate::htslib_rs::hfile::hclose(hf) < 0 || len < 0 {
                 cram_mFILE_c_408_mfdestroy(mf);
                 free(path.cast());
                 return std::ptr::null_mut();
@@ -10608,7 +10608,7 @@ pub unsafe fn cram_open_trace_file_c_182_find_file_url(
             break;
         }
         if cram_mFILE_c_527_mfwrite(buf.as_mut_ptr().cast(), len as usize, 1, mf) == 0 {
-            crate::htslib_mini_rs::hfile::hclose_abruptly(hf);
+            crate::htslib_rs::hfile::hclose_abruptly(hf);
             cram_mFILE_c_408_mfdestroy(mf);
             free(path.cast());
             return std::ptr::null_mut();
@@ -10788,7 +10788,7 @@ pub unsafe fn cram_open_trace_file_c_352_open_path_mfile(
                 free(newsearch.cast());
                 return fp;
             }
-        } else if crate::htslib_mini_rs::hfile::hisremote(ele2) != 0 {
+        } else if crate::htslib_rs::hfile::hisremote(ele2) != 0 {
             let fp = cram_open_trace_file_c_182_find_file_url(file, ele2);
             if !fp.is_null() {
                 if !local.is_null() {
@@ -12487,7 +12487,7 @@ pub fn cram_os_h_158_le_int2(x: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::htslib_mini_rs::sam::{
+    use crate::htslib_rs::sam::{
         bam1_core_t, BAM_CDEL, BAM_CINS, BAM_CMATCH, BAM_CSOFT_CLIP, BAM_FPAIRED,
     };
     use std::ffi::{CStr, CString};
@@ -12996,13 +12996,13 @@ mod tests {
                 ..std::mem::zeroed()
             };
             let mut fp: htsFile = std::mem::zeroed();
-            fp.fp = crate::htslib_mini_rs::hts::htsFilePtr {
+            fp.fp = crate::htslib_rs::hts::htsFilePtr {
                 cram: (&mut cram_fd as *mut cram_fd_layout).cast(),
             };
             fp.format.format = HTS_FORMAT_CRAM;
             assert_eq!(cram_cram_external_c_1029_cram_get_refs(&mut fp), refs);
 
-            fp.format.format = crate::htslib_mini_rs::hts::HTS_FORMAT_BAM;
+            fp.format.format = crate::htslib_rs::hts::HTS_FORMAT_BAM;
             assert!(cram_cram_external_c_1029_cram_get_refs(&mut fp).is_null());
         }
     }
@@ -13520,7 +13520,7 @@ mod tests {
             cram_cram_io_c_1565_cram_free_block(b);
 
             let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-cram-varint-stream-{}",
+                "htslib_rs-cram-varint-stream-{}",
                 std::process::id()
             ));
 
@@ -13595,7 +13595,7 @@ mod tests {
                 assert_eq!(val, expected_val);
                 assert_eq!(
                     crc,
-                    crate::htslib_mini_rs::bgzf::hts_crc32(
+                    crate::htslib_rs::bgzf::hts_crc32(
                         before,
                         bytes.as_ptr().add(offset).cast(),
                         expected_len as usize,
@@ -13624,7 +13624,7 @@ mod tests {
                 assert_eq!(val, expected_val);
                 assert_eq!(
                     crc,
-                    crate::htslib_mini_rs::bgzf::hts_crc32(
+                    crate::htslib_rs::bgzf::hts_crc32(
                         before,
                         bytes.as_ptr().add(offset).cast(),
                         expected_len as usize,
@@ -13813,7 +13813,7 @@ mod tests {
             assert_eq!(val32, 0x4000);
             assert_eq!(
                 crc,
-                crate::htslib_mini_rs::bgzf::hts_crc32(0, input.as_ptr().cast(), 3)
+                crate::htslib_rs::bgzf::hts_crc32(0, input.as_ptr().cast(), 3)
             );
 
             let mut signed = 0i32;
@@ -13829,7 +13829,7 @@ mod tests {
             assert_eq!(signed, -1);
             assert_eq!(
                 crc,
-                crate::htslib_mini_rs::bgzf::hts_crc32(before, input.as_ptr().add(3).cast(), 1)
+                crate::htslib_rs::bgzf::hts_crc32(before, input.as_ptr().add(3).cast(), 1)
             );
 
             let mut val64 = 0i64;
@@ -13845,7 +13845,7 @@ mod tests {
             assert_eq!(val64, 1i64 << 28);
             assert_eq!(
                 crc,
-                crate::htslib_mini_rs::bgzf::hts_crc32(before, input.as_ptr().add(4).cast(), 5)
+                crate::htslib_rs::bgzf::hts_crc32(before, input.as_ptr().add(4).cast(), 5)
             );
             assert_eq!(hfile.begin, hfile.end);
 
@@ -14291,8 +14291,7 @@ mod tests {
             let written = hfile.begin.offset_from(hfile_buf.as_mut_ptr().cast()) as usize;
             assert_eq!(&hfile_buf[..8], &[0, 4, 7, 3, 3, b'a', b'b', b'c']);
             assert_eq!(written, 12);
-            let expected_crc =
-                crate::htslib_mini_rs::bgzf::hts_crc32(0, hfile_buf.as_ptr().cast(), 8);
+            let expected_crc = crate::htslib_rs::bgzf::hts_crc32(0, hfile_buf.as_ptr().cast(), 8);
             assert_eq!(
                 u32::from_le_bytes(hfile_buf[8..12].try_into().unwrap()),
                 expected_crc
@@ -14511,7 +14510,7 @@ mod tests {
                 assert_eq!(written, 9);
                 assert_eq!(&hfile_buf[..5], &[0, 4, 0, 0, 0]);
                 let expected_crc =
-                    crate::htslib_mini_rs::bgzf::hts_crc32(0, hfile_buf.as_ptr().cast(), 5);
+                    crate::htslib_rs::bgzf::hts_crc32(0, hfile_buf.as_ptr().cast(), 5);
                 assert_eq!(
                     u32::from_le_bytes(hfile_buf[5..9].try_into().unwrap()),
                     expected_crc
@@ -14688,7 +14687,7 @@ mod tests {
             assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), -1);
             assert_eq!((*block).crc32_checked, 1);
 
-            (*block).crc32 = crate::htslib_mini_rs::bgzf::hts_crc32(0, (*block).data.cast(), 3);
+            (*block).crc32 = crate::htslib_rs::bgzf::hts_crc32(0, (*block).data.cast(), 3);
             (*block).crc32_checked = 0;
             assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), 0);
             assert_eq!((*block).method, hts_sys::cram_block_method_RAW);
@@ -14943,7 +14942,7 @@ mod tests {
     fn cram_io_bgzf_open_ref_strips_file_scheme_and_builds_fai_like_c() {
         unsafe {
             let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-bgzf-open-ref-{}-{}.fa",
+                "htslib_rs-bgzf-open-ref-{}-{}.fa",
                 std::process::id(),
                 line!()
             ));
@@ -15061,12 +15060,12 @@ mod tests {
     fn cram_io_load_ref_portion_reads_raw_and_wrapped_fasta_like_c() {
         unsafe {
             let raw_path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-load-ref-raw-{}-{}.fa",
+                "htslib_rs-load-ref-raw-{}-{}.fa",
                 std::process::id(),
                 line!()
             ));
             let wrapped_path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-load-ref-wrapped-{}-{}.fa",
+                "htslib_rs-load-ref-wrapped-{}-{}.fa",
                 std::process::id(),
                 line!()
             ));
@@ -15143,7 +15142,7 @@ mod tests {
     fn cram_io_cram_ref_load_opens_reference_and_tracks_last_like_c() {
         unsafe {
             let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-cram-ref-load-{}-{}.fa",
+                "htslib_rs-cram-ref-load-{}-{}.fa",
                 std::process::id(),
                 line!()
             ));
@@ -15198,7 +15197,7 @@ mod tests {
     fn cram_io_refs_load_fai_parses_real_index_and_feeds_ref_loader() {
         unsafe {
             let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-refs-load-fai-{}-{}.fa",
+                "htslib_rs-refs-load-fai-{}-{}.fa",
                 std::process::id(),
                 line!()
             ));
@@ -15244,13 +15243,13 @@ mod tests {
     fn cram_io_refs_load_fai_uses_explicit_idx_delimiter_without_changing_ref_name() {
         unsafe {
             let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-refs-load-explicit-idx-{}-{}.fa",
+                "htslib_rs-refs-load-explicit-idx-{}-{}.fa",
                 std::process::id(),
                 line!()
             ));
             let default_fai = path.with_extension("fa.fai");
             let idx_path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-refs-load-explicit-idx-{}-{}.fai",
+                "htslib_rs-refs-load-explicit-idx-{}-{}.fai",
                 std::process::id(),
                 line!()
             ));
@@ -15294,7 +15293,7 @@ mod tests {
     fn cram_io_refs2id_and_sanitise_sq_lines_match_header_names() {
         unsafe {
             let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-refs2id-{}-{}.fa",
+                "htslib_rs-refs2id-{}-{}.fa",
                 std::process::id(),
                 line!()
             ));
@@ -15313,23 +15312,23 @@ mod tests {
             assert_eq!(CStr::from_ptr((*chr2).name).to_bytes(), b"chr2");
 
             let mut header_refs = [
-                crate::htslib_mini_rs::sam::sam_hrec_sq_t {
+                crate::htslib_rs::sam::sam_hrec_sq_t {
                     name: (*chr2).name,
                     len: 1,
                     ty: std::ptr::null_mut(),
                 },
-                crate::htslib_mini_rs::sam::sam_hrec_sq_t {
+                crate::htslib_rs::sam::sam_hrec_sq_t {
                     name: (*chr1).name,
                     len: 2,
                     ty: std::ptr::null_mut(),
                 },
-                crate::htslib_mini_rs::sam::sam_hrec_sq_t {
+                crate::htslib_rs::sam::sam_hrec_sq_t {
                     name: c"missing".as_ptr(),
                     len: 9,
                     ty: std::ptr::null_mut(),
                 },
             ];
-            let mut hrecs: crate::htslib_mini_rs::sam::sam_hrecs_t = std::mem::zeroed();
+            let mut hrecs: crate::htslib_rs::sam::sam_hrecs_t = std::mem::zeroed();
             hrecs.nref = header_refs.len() as c_int;
             hrecs.ref_ = header_refs.as_mut_ptr();
             let mut hdr: sam_hdr_t = std::mem::zeroed();
@@ -15367,18 +15366,18 @@ mod tests {
             let chr1 = c"chr1";
             let chr2 = c"chr2";
             let mut header_refs = [
-                crate::htslib_mini_rs::sam::sam_hrec_sq_t {
+                crate::htslib_rs::sam::sam_hrec_sq_t {
                     name: chr1.as_ptr(),
                     len: 123,
                     ty: std::ptr::null_mut(),
                 },
-                crate::htslib_mini_rs::sam::sam_hrec_sq_t {
+                crate::htslib_rs::sam::sam_hrec_sq_t {
                     name: chr2.as_ptr(),
                     len: 456,
                     ty: std::ptr::null_mut(),
                 },
             ];
-            let mut hrecs: crate::htslib_mini_rs::sam::sam_hrecs_t = std::mem::zeroed();
+            let mut hrecs: crate::htslib_rs::sam::sam_hrecs_t = std::mem::zeroed();
             hrecs.nref = header_refs.len() as c_int;
             hrecs.ref_ = header_refs.as_mut_ptr();
             let mut hdr: sam_hdr_t = std::mem::zeroed();
@@ -15418,7 +15417,7 @@ mod tests {
     fn cram_io_load_reference_uses_fai_or_header_refs_like_c() {
         unsafe {
             let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-load-ref-{}-{}.fa",
+                "htslib_rs-load-ref-{}-{}.fa",
                 std::process::id(),
                 line!()
             ));
@@ -15436,12 +15435,12 @@ mod tests {
             );
 
             let chr2 = c"chr2";
-            let mut header_refs = [crate::htslib_mini_rs::sam::sam_hrec_sq_t {
+            let mut header_refs = [crate::htslib_rs::sam::sam_hrec_sq_t {
                 name: chr2.as_ptr(),
                 len: 1,
                 ty: std::ptr::null_mut(),
             }];
-            let mut hrecs: crate::htslib_mini_rs::sam::sam_hrecs_t = std::mem::zeroed();
+            let mut hrecs: crate::htslib_rs::sam::sam_hrecs_t = std::mem::zeroed();
             hrecs.nref = 1;
             hrecs.ref_ = header_refs.as_mut_ptr();
             let mut hdr: sam_hdr_t = std::mem::zeroed();
@@ -15469,12 +15468,12 @@ mod tests {
             cram_cram_io_c_2427_refs_free(fd.refs.cast());
 
             let refs = cram_cram_io_c_2467_refs_create();
-            let mut header_refs = [crate::htslib_mini_rs::sam::sam_hrec_sq_t {
+            let mut header_refs = [crate::htslib_rs::sam::sam_hrec_sq_t {
                 name: c"header_only".as_ptr(),
                 len: 77,
                 ty: std::ptr::null_mut(),
             }];
-            let mut hrecs2: crate::htslib_mini_rs::sam::sam_hrecs_t = std::mem::zeroed();
+            let mut hrecs2: crate::htslib_rs::sam::sam_hrecs_t = std::mem::zeroed();
             hrecs2.nref = 1;
             hrecs2.ref_ = header_refs.as_mut_ptr();
             let mut hdr2: sam_hdr_t = std::mem::zeroed();
@@ -15514,12 +15513,12 @@ mod tests {
             assert!(!refs.is_null());
             let refs_l = refs.cast::<refs_t_layout>();
 
-            let mut header_refs = [crate::htslib_mini_rs::sam::sam_hrec_sq_t {
+            let mut header_refs = [crate::htslib_rs::sam::sam_hrec_sq_t {
                 name: c"chr_set".as_ptr(),
                 len: 30,
                 ty: std::ptr::null_mut(),
             }];
-            let mut hrecs: crate::htslib_mini_rs::sam::sam_hrecs_t = std::mem::zeroed();
+            let mut hrecs: crate::htslib_rs::sam::sam_hrecs_t = std::mem::zeroed();
             hrecs.nref = 1;
             hrecs.ref_ = header_refs.as_mut_ptr();
             let mut hdr: sam_hdr_t = std::mem::zeroed();
@@ -20426,7 +20425,7 @@ mod tests {
             let dir = CString::new("/tmp").unwrap();
             assert_eq!(cram_cram_io_c_2873_is_directory(dir.as_ptr().cast_mut()), 1);
 
-            let missing = CString::new("/tmp/htslib-mini-rs-missing-directory-probe").unwrap();
+            let missing = CString::new("/tmp/htslib_rs-missing-directory-probe").unwrap();
             assert_eq!(
                 cram_cram_io_c_2873_is_directory(missing.as_ptr().cast_mut()),
                 0
@@ -20438,7 +20437,7 @@ mod tests {
     fn cram_open_trace_file_is_file_matches_regular_file_stat_bit() {
         unsafe {
             let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-open-trace-is-file-{}",
+                "htslib_rs-open-trace-is-file-{}",
                 std::process::id()
             ));
             std::fs::write(&path, b"trace").unwrap();
@@ -20454,7 +20453,7 @@ mod tests {
                 0
             );
 
-            let missing = CString::new("/tmp/htslib-mini-rs-missing-file-probe").unwrap();
+            let missing = CString::new("/tmp/htslib_rs-missing-file-probe").unwrap();
             assert_eq!(
                 cram_open_trace_file_c_90_is_file(missing.as_ptr().cast_mut()),
                 0
@@ -20549,8 +20548,8 @@ mod tests {
     #[test]
     fn cram_open_trace_file_find_path_skips_remote_and_returns_existing_local_path() {
         unsafe {
-            let dir = std::env::temp_dir()
-                .join(format!("htslib-mini-rs-find-path-{}", std::process::id()));
+            let dir =
+                std::env::temp_dir().join(format!("htslib_rs-find-path-{}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             let file_path = dir.join("trace.ab1");
             std::fs::write(&file_path, b"trace").unwrap();
@@ -20577,10 +20576,8 @@ mod tests {
     #[test]
     fn cram_open_trace_file_find_file_dir_opens_existing_file_as_mfile() {
         unsafe {
-            let dir = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-find-file-dir-{}",
-                std::process::id()
-            ));
+            let dir = std::env::temp_dir()
+                .join(format!("htslib_rs-find-file-dir-{}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             let file_path = dir.join("trace.dat");
             std::fs::write(&file_path, b"dir-data").unwrap();
@@ -20606,10 +20603,8 @@ mod tests {
     #[test]
     fn cram_open_trace_file_url_and_open_path_mfile_load_contents() {
         unsafe {
-            let dir = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-open-trace-path-{}",
-                std::process::id()
-            ));
+            let dir = std::env::temp_dir()
+                .join(format!("htslib_rs-open-trace-path-{}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             let file_path = dir.join("trace.dat");
             std::fs::write(&file_path, b"trace payload").unwrap();
@@ -20663,7 +20658,7 @@ mod tests {
     fn cram_open_trace_file_open_path_mfile_reports_local_for_relative_fallback_and_miss() {
         unsafe {
             let dir = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-open-path-fallback-{}",
+                "htslib_rs-open-path-fallback-{}",
                 std::process::id()
             ));
             std::fs::create_dir_all(&dir).unwrap();
@@ -20755,10 +20750,8 @@ mod tests {
     #[test]
     fn cram_io_mkdir_prefix_creates_parent_directories_and_restores_path() {
         unsafe {
-            let base = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-mkdir-prefix-{}",
-                std::process::id()
-            ));
+            let base =
+                std::env::temp_dir().join(format!("htslib_rs-mkdir-prefix-{}", std::process::id()));
             let full = base.join("aa").join("bb").join("ref.fa");
             let mut path = CString::new(full.to_string_lossy().as_bytes())
                 .unwrap()
@@ -20826,8 +20819,8 @@ mod tests {
         unsafe {
             let bams = calloc(3, std::mem::size_of::<*mut bam1_t>() as u64).cast::<*mut bam1_t>();
             assert!(!bams.is_null());
-            *bams.add(0) = crate::htslib_mini_rs::sam::bam_init1();
-            *bams.add(1) = crate::htslib_mini_rs::sam::bam_init1();
+            *bams.add(0) = crate::htslib_rs::sam::bam_init1();
+            *bams.add(1) = crate::htslib_rs::sam::bam_init1();
             *bams.add(2) = std::ptr::null_mut();
             assert!(!(*bams.add(0)).is_null());
             assert!(!(*bams.add(1)).is_null());
@@ -20987,10 +20980,8 @@ mod tests {
     #[test]
     fn cram_mfile_flush_and_detach_write_dirty_tail_and_preserve_buffer() {
         unsafe {
-            let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-mfile-detach-{}",
-                std::process::id()
-            ));
+            let path =
+                std::env::temp_dir().join(format!("htslib_rs-mfile-detach-{}", std::process::id()));
             let _ = std::fs::remove_file(&path);
             let c_path = CString::new(path.to_string_lossy().as_bytes()).unwrap();
             let fp = libc::fopen(c_path.as_ptr(), c"w+b".as_ptr());
@@ -21021,8 +21012,8 @@ mod tests {
     #[test]
     fn cram_mfile_load_open_reopen_and_create_from_read_file_contents() {
         unsafe {
-            let path = std::env::temp_dir()
-                .join(format!("htslib-mini-rs-mfile-open-{}", std::process::id()));
+            let path =
+                std::env::temp_dir().join(format!("htslib_rs-mfile-open-{}", std::process::id()));
             std::fs::write(&path, b"abcdef").unwrap();
             let c_path = CString::new(path.to_string_lossy().as_bytes()).unwrap();
             let mode = CString::new("rb").unwrap();
@@ -21069,10 +21060,8 @@ mod tests {
     #[test]
     fn cram_mfile_reopen_write_only_modes_do_not_load_existing_file() {
         unsafe {
-            let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-mfile-write-mode-{}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .join(format!("htslib_rs-mfile-write-mode-{}", std::process::id()));
             std::fs::write(&path, b"preexisting").unwrap();
             let c_path = CString::new(path.to_string_lossy().as_bytes()).unwrap();
             let fp = libc::fopen(c_path.as_ptr(), c"wb".as_ptr());

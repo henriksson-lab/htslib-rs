@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bgzf::{
         bgzf_close, bgzf_index_destroy, bgzf_index_load, bgzf_open, bgzf_raw_read, bgzf_read,
         bgzf_seek, bgzf_utell, bgzidx_t,

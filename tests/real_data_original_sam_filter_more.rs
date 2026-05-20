@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam1_t, bam_aux2Z, bam_aux2i, bam_aux_get, bam_cigar2qlen, bam_cigar2rlen, bam_cigar_op,
     bam_cigar_oplen, bam_destroy1, bam_get_cigar, bam_get_qname, bam_get_qual, bam_get_seq,
     bam_init1, bam_seqi, hts_close, hts_open, hts_set_opt_ptr, ks_free, kstring_t, sam_format1,

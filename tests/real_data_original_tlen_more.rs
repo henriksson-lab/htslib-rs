@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam_destroy1, bam_init1, hts_close, hts_open, kstring_t, sam_format1, sam_hdr_destroy,
     sam_hdr_read, sam_read1,
 };

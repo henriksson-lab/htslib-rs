@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     regidx_c_105_regidx_seq_names, regidx_c_246_regidx_init, regidx_c_311_regidx_destroy,
     regidx_c_401_regidx_overlap, regidx_c_466_regidx_parse_bed, regidx_c_498_regidx_parse_tab,
     regidx_c_584_regitr_init, regidx_c_606_regitr_destroy, regidx_c_612_regitr_overlap,
@@ -12,14 +12,14 @@ fn c_fixture(path: &str) -> CString {
     CString::new(path.to_string_lossy().as_bytes()).unwrap()
 }
 
-unsafe fn open_index(path: &str, parsef: regidx_parse_f) -> *mut htslib_mini_rs::regidx_t {
+unsafe fn open_index(path: &str, parsef: regidx_parse_f) -> *mut htslib_rs::regidx_t {
     let path = c_fixture(path);
     let idx = regidx_c_246_regidx_init(path.as_ptr(), parsef, None, 0, std::ptr::null_mut());
     assert!(!idx.is_null(), "failed to load {}", path.to_string_lossy());
     idx
 }
 
-unsafe fn seq_names(idx: *mut htslib_mini_rs::regidx_t) -> Vec<String> {
+unsafe fn seq_names(idx: *mut htslib_rs::regidx_t) -> Vec<String> {
     let mut nseq: c_int = -1;
     let names = regidx_c_105_regidx_seq_names(idx, &mut nseq);
     assert!(!names.is_null());
@@ -33,7 +33,7 @@ unsafe fn seq_names(idx: *mut htslib_mini_rs::regidx_t) -> Vec<String> {
 }
 
 unsafe fn overlaps(
-    idx: *mut htslib_mini_rs::regidx_t,
+    idx: *mut htslib_rs::regidx_t,
     seq: &CStr,
     beg: i64,
     end: i64,

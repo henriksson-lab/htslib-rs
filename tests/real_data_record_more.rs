@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam_aux2A, bam_aux2Z, bam_aux2i, bam_auxB2i, bam_auxB_len, bam_aux_get, bam_cigar2qlen,
     bam_cigar2rlen, bam_destroy1, bam_endpos, bam_get_cigar, bam_get_l_aux, bam_get_qname,
     bam_init1, hts_close, hts_open, hts_set_fai_filename, kstring_t, sam_format1, sam_hdr_destroy,
@@ -11,7 +11,7 @@ fn c_fixture(path: &str) -> CString {
     CString::new(path.to_string_lossy().as_bytes()).unwrap()
 }
 
-unsafe fn with_sam_records(path: &str, mut f: impl FnMut(usize, *mut htslib_mini_rs::bam1_t)) {
+unsafe fn with_sam_records(path: &str, mut f: impl FnMut(usize, *mut htslib_rs::bam1_t)) {
     let path = c_fixture(path);
     let fp = hts_open(path.as_ptr(), c"r".as_ptr());
     assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
@@ -145,7 +145,7 @@ fn canonical_cram_aux_records(lines: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-unsafe fn aux(rec: *mut htslib_mini_rs::bam1_t, tag: &'static CStr) -> *mut u8 {
+unsafe fn aux(rec: *mut htslib_rs::bam1_t, tag: &'static CStr) -> *mut u8 {
     let ptr = bam_aux_get(rec, tag.as_ptr());
     assert!(!ptr.is_null(), "missing aux tag {:?}", tag);
     ptr

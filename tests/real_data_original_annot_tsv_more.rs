@@ -1,8 +1,8 @@
-mod htslib_mini_rs {
-    pub use ::htslib_mini_rs::*;
+mod htslib_rs {
+    pub use ::htslib_rs::*;
 }
 
-#[path = "../src/original/htslib/annot-tsv.rs"]
+#[path = "../src/annot_tsv.rs"]
 mod annot_tsv;
 
 use std::ffi::CString;
@@ -17,7 +17,7 @@ fn fixture(path: &str) -> PathBuf {
 
 fn run_annot_tsv(src: &str, dst: &str, args: &[&str]) -> String {
     let out = std::env::temp_dir().join(format!(
-        "htslib-mini-rs-annot-tsv-{}-{}.txt",
+        "htslib_rs-annot-tsv-{}-{}.txt",
         std::process::id(),
         args.join("_")
             .bytes()

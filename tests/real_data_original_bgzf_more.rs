@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bgzf::{
         bgzf_block_write, bgzf_check_EOF, bgzf_close, bgzf_index_destroy, bgzf_index_load,
         bgzf_is_bgzf, bgzf_open, bgzf_raw_read, bgzf_read, bgzf_seek, bgzf_useek, bgzf_utell,
@@ -52,7 +52,7 @@ fn bgziptest_rebgzip_reconstructs_exact_original_bgzf_stream() {
     let plain = std::fs::read(fixture("htslib/test/bgziptest.txt")).unwrap();
     let expected = std::fs::read(fixture("htslib/test/bgziptest.txt.gz")).unwrap();
     let out = std::env::temp_dir().join(format!(
-        "htslib-mini-rs-rebgzip-{}-{}.gz",
+        "htslib_rs-rebgzip-{}-{}.gz",
         std::process::id(),
         "exact"
     ));

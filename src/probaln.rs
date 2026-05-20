@@ -41,7 +41,7 @@ pub unsafe fn probaln_glocal(
     }
 
     if l_ref < 0 || l_query < 0 || l_query >= c_int::MAX - 2 {
-        *crate::htslib_mini_rs::c_compat::__errno_location() = libc::EINVAL;
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
         return c_int::MIN;
     }
     if l_ref == 0 || l_query == 0 {
@@ -67,18 +67,18 @@ pub unsafe fn probaln_glocal(
     let f_len = match rows.checked_mul(i_dim) {
         Some(n) => n,
         None => {
-            *crate::htslib_mini_rs::c_compat::__errno_location() = libc::ENOMEM;
+            *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
             return c_int::MIN;
         }
     };
     if usize::MAX / ((l_query as usize) + 1) / i_dim < std::mem::size_of::<f64>() {
-        *crate::htslib_mini_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
         return c_int::MIN;
     }
 
     let mut f = Vec::new();
     if f.try_reserve_exact(f_len).is_err() {
-        *crate::htslib_mini_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
         return c_int::MIN;
     }
     f.resize(f_len, 0.0_f64);
@@ -86,7 +86,7 @@ pub unsafe fn probaln_glocal(
     let mut b = Vec::new();
     if is_backward {
         if b.try_reserve_exact(f_len).is_err() {
-            *crate::htslib_mini_rs::c_compat::__errno_location() = libc::ENOMEM;
+            *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
             return c_int::MIN;
         }
         b.resize(f_len, 0.0_f64);
@@ -95,14 +95,14 @@ pub unsafe fn probaln_glocal(
     let s_len = (l_query as usize) + 2;
     let mut s = Vec::new();
     if s.try_reserve_exact(s_len).is_err() {
-        *crate::htslib_mini_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
         return c_int::MIN;
     }
     s.resize(s_len, 0.0_f64);
 
     let mut qual = Vec::new();
     if qual.try_reserve_exact(l_query as usize).is_err() {
-        *crate::htslib_mini_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
         return c_int::MIN;
     }
     qual.resize(l_query as usize, 0.0_f32);
@@ -477,7 +477,7 @@ mod tests {
                 e: 0.1,
                 bw: 10,
             };
-            *crate::htslib_mini_rs::c_compat::__errno_location() = 0;
+            *crate::htslib_rs::c_compat::__errno_location() = 0;
             assert_eq!(
                 probaln_glocal(
                     std::ptr::null(),
@@ -492,11 +492,11 @@ mod tests {
                 c_int::MIN
             );
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                *crate::htslib_rs::c_compat::__errno_location(),
                 libc::EINVAL
             );
 
-            *crate::htslib_mini_rs::c_compat::__errno_location() = 0;
+            *crate::htslib_rs::c_compat::__errno_location() = 0;
             assert_eq!(
                 probaln_glocal(
                     std::ptr::null(),
@@ -511,7 +511,7 @@ mod tests {
                 c_int::MIN
             );
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                *crate::htslib_rs::c_compat::__errno_location(),
                 libc::EINVAL
             );
         }
@@ -525,7 +525,7 @@ mod tests {
                 e: 0.1,
                 bw: 10,
             };
-            *crate::htslib_mini_rs::c_compat::__errno_location() = 0;
+            *crate::htslib_rs::c_compat::__errno_location() = 0;
             assert_eq!(
                 probaln_glocal(
                     std::ptr::null(),
@@ -540,7 +540,7 @@ mod tests {
                 c_int::MIN
             );
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
+                *crate::htslib_rs::c_compat::__errno_location(),
                 libc::EINVAL
             );
         }

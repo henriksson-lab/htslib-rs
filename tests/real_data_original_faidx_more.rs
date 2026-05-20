@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bgzf::{bgzf_close, bgzf_index_build_init, bgzf_index_dump, bgzf_open, bgzf_write},
     fai_adjust_region, fai_destroy, fai_fetch, fai_fetch64, fai_fetchqual, fai_fetchqual64,
     fai_line_length, fai_load3_format, fai_parse_region, faidx_fetch_qual64, faidx_fetch_seq64,
@@ -16,8 +16,8 @@ fn c_fixture(path: &str) -> CString {
 unsafe fn load_fai(
     path: &str,
     index: &str,
-    format: htslib_mini_rs::fai_format_options,
-) -> *mut htslib_mini_rs::faidx_t {
+    format: htslib_rs::fai_format_options,
+) -> *mut htslib_rs::faidx_t {
     let input = c_fixture(path);
     let index = c_fixture(index);
     let fai = fai_load3_format(input.as_ptr(), index.as_ptr(), std::ptr::null(), 0, format);
@@ -31,7 +31,7 @@ fn unique_temp_path(name: &str) -> std::path::PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "htslib-mini-rs-faidx-{name}-{}-{nanos}",
+        "htslib_rs-faidx-{name}-{}-{nanos}",
         std::process::id()
     ))
 }
@@ -101,9 +101,9 @@ fn append_wrapped(out: &mut String, text: &str) {
 }
 
 unsafe fn format_fasta_records(
-    fai: *const htslib_mini_rs::faidx_t,
+    fai: *const htslib_rs::faidx_t,
     regions: &[&'static CStr],
-    fetch: unsafe fn(*const htslib_mini_rs::faidx_t, &'static CStr) -> (String, hts_pos_t),
+    fetch: unsafe fn(*const htslib_rs::faidx_t, &'static CStr) -> (String, hts_pos_t),
 ) -> String {
     let mut out = String::new();
     for &region in regions {
@@ -119,9 +119,9 @@ unsafe fn format_fasta_records(
 }
 
 unsafe fn format_fastq_records(
-    fai: *const htslib_mini_rs::faidx_t,
+    fai: *const htslib_rs::faidx_t,
     regions: &[&'static CStr],
-    fetch: unsafe fn(*const htslib_mini_rs::faidx_t, &'static CStr) -> (String, String, hts_pos_t),
+    fetch: unsafe fn(*const htslib_rs::faidx_t, &'static CStr) -> (String, String, hts_pos_t),
 ) -> String {
     let mut out = String::new();
     for &region in regions {
@@ -140,7 +140,7 @@ unsafe fn format_fastq_records(
 }
 
 unsafe fn fetch64_record(
-    fai: *const htslib_mini_rs::faidx_t,
+    fai: *const htslib_rs::faidx_t,
     region: &'static CStr,
 ) -> (String, hts_pos_t) {
     let mut len = 0;
@@ -149,7 +149,7 @@ unsafe fn fetch64_record(
 }
 
 unsafe fn fetch32_record(
-    fai: *const htslib_mini_rs::faidx_t,
+    fai: *const htslib_rs::faidx_t,
     region: &'static CStr,
 ) -> (String, hts_pos_t) {
     let mut len = 0;
@@ -158,7 +158,7 @@ unsafe fn fetch32_record(
 }
 
 unsafe fn adjusted_fetch_seq64_record(
-    fai: *const htslib_mini_rs::faidx_t,
+    fai: *const htslib_rs::faidx_t,
     region: &'static CStr,
 ) -> (String, hts_pos_t) {
     let mut tid = 0;
@@ -180,7 +180,7 @@ unsafe fn adjusted_fetch_seq64_record(
 }
 
 unsafe fn fastq_fetch64_record(
-    fai: *const htslib_mini_rs::faidx_t,
+    fai: *const htslib_rs::faidx_t,
     region: &'static CStr,
 ) -> (String, String, hts_pos_t) {
     let mut seq_len = 0;
@@ -197,7 +197,7 @@ unsafe fn fastq_fetch64_record(
 }
 
 unsafe fn fastq_fetch32_record(
-    fai: *const htslib_mini_rs::faidx_t,
+    fai: *const htslib_rs::faidx_t,
     region: &'static CStr,
 ) -> (String, String, hts_pos_t) {
     let mut seq_len = 0;
@@ -217,7 +217,7 @@ unsafe fn fastq_fetch32_record(
 }
 
 unsafe fn fastq_fetch_seq64_record(
-    fai: *const htslib_mini_rs::faidx_t,
+    fai: *const htslib_rs::faidx_t,
     region: &'static CStr,
 ) -> (String, String, hts_pos_t) {
     let mut tid = 0;

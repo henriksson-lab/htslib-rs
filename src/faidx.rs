@@ -1491,19 +1491,18 @@ mod tests {
     #[test]
     fn fai_destroy_frees_c_allocated_index_shape() {
         unsafe {
-            let fai = crate::htslib_mini_rs::c_compat::malloc(size_of::<faidx_t>() as u64)
-                .cast::<faidx_t>();
+            let fai =
+                crate::htslib_rs::c_compat::malloc(size_of::<faidx_t>() as u64).cast::<faidx_t>();
             assert!(!fai.is_null());
-            let name_array =
-                crate::htslib_mini_rs::c_compat::malloc(size_of::<*mut c_char>() as u64)
-                    .cast::<*mut c_char>();
+            let name_array = crate::htslib_rs::c_compat::malloc(size_of::<*mut c_char>() as u64)
+                .cast::<*mut c_char>();
             assert!(!name_array.is_null());
-            let chr_name = crate::htslib_mini_rs::c_compat::malloc(5).cast::<c_char>();
+            let chr_name = crate::htslib_rs::c_compat::malloc(5).cast::<c_char>();
             assert!(!chr_name.is_null());
             ptr::copy_nonoverlapping(b"chr1\0".as_ptr().cast::<c_char>(), chr_name, 5);
             *name_array = chr_name;
 
-            let hash = crate::htslib_mini_rs::c_compat::malloc(size_of::<faidx_hash_t>() as u64)
+            let hash = crate::htslib_rs::c_compat::malloc(size_of::<faidx_hash_t>() as u64)
                 .cast::<faidx_hash_t>();
             assert!(!hash.is_null());
             ptr::write(
@@ -1544,7 +1543,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-faidx-fetch-{}-{}.fa",
+            "htslib_rs-faidx-fetch-{}-{}.fa",
             std::process::id(),
             stamp
         ));
@@ -1613,7 +1612,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-faidx-fetch-clamp-{}-{}.fa",
+            "htslib_rs-faidx-fetch-clamp-{}-{}.fa",
             std::process::id(),
             stamp
         ));
@@ -1660,7 +1659,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-parse-region-{}-{}.fa",
+            "htslib_rs-parse-region-{}-{}.fa",
             std::process::id(),
             stamp
         ));
@@ -1944,7 +1943,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-fai-whitespace-{}-{}.fa",
+            "htslib_rs-fai-whitespace-{}-{}.fa",
             std::process::id(),
             stamp
         ));
@@ -1975,7 +1974,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-fai-cspace-{}-{}.fa",
+            "htslib_rs-fai-cspace-{}-{}.fa",
             std::process::id(),
             stamp
         ));
@@ -2006,7 +2005,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-fai-duplicate-{}-{}.fa",
+            "htslib_rs-fai-duplicate-{}-{}.fa",
             std::process::id(),
             stamp
         ));
@@ -2043,7 +2042,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-fai-invalid-{}-{}.fa",
+            "htslib_rs-fai-invalid-{}-{}.fa",
             std::process::id(),
             stamp
         ));
@@ -2080,7 +2079,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-fai-fastq-index-{}-{}.fq",
+            "htslib_rs-fai-fastq-index-{}-{}.fq",
             std::process::id(),
             stamp
         ));
@@ -2187,7 +2186,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-build-unterminated-{}-{}.fa",
+            "htslib_rs-build-unterminated-{}-{}.fa",
             std::process::id(),
             stamp
         ));
@@ -2231,7 +2230,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-existing-fai-{}-{}.fa",
+            "htslib_rs-existing-fai-{}-{}.fa",
             std::process::id(),
             stamp
         ));
@@ -2272,7 +2271,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-build-fai-{}-{}.fa",
+            "htslib_rs-build-fai-{}-{}.fa",
             std::process::id(),
             stamp
         ));
@@ -2316,7 +2315,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-build-fastq-{}-{}.fq",
+            "htslib_rs-build-fastq-{}-{}.fq",
             std::process::id(),
             stamp
         ));
@@ -2360,7 +2359,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-fastq-wrapped-{}-{}.fq",
+            "htslib_rs-fastq-wrapped-{}-{}.fq",
             std::process::id(),
             stamp
         ));
@@ -2498,7 +2497,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-fai-path-{}-{}.fa",
+            "htslib_rs-fai-path-{}-{}.fa",
             std::process::id(),
             stamp
         ));
@@ -2565,7 +2564,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-original-fai-build-fasta-{}-{}.fa",
+            "htslib_rs-original-fai-build-fasta-{}-{}.fa",
             std::process::id(),
             stamp
         ));
@@ -2597,7 +2596,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-original-fai-build-fastq-{}-{}.fq",
+            "htslib_rs-original-fai-build-fastq-{}-{}.fq",
             std::process::id(),
             stamp
         ));

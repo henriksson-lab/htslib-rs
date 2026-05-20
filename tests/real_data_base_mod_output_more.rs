@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam1_t, bam_destroy1, bam_get_qual, bam_get_seq, bam_init1, bam_mods_at_next_pos,
     bam_mods_at_qpos, bam_mods_query_type, bam_mods_queryi, bam_mods_recorded, bam_next_basemod,
     bam_parse_basemod, bam_parse_basemod2, bam_pileup1_is_del, bam_pileup1_t, bam_plp_auto,
@@ -72,10 +72,7 @@ fn rendered_mod(m: &hts_base_mod) -> String {
     )
 }
 
-fn rendered_extended_mod(
-    state: *mut htslib_mini_rs::hts_base_mod_state,
-    m: &hts_base_mod,
-) -> String {
+fn rendered_extended_mod(state: *mut htslib_rs::hts_base_mod_state, m: &hts_base_mod) -> String {
     unsafe {
         let mut strand = 0;
         let mut implicit = 0;
@@ -110,7 +107,7 @@ unsafe fn append_mod_line(
     pos: i32,
     base: char,
     mods: &[hts_base_mod],
-    state: *mut htslib_mini_rs::hts_base_mod_state,
+    state: *mut htslib_rs::hts_base_mod_state,
     extended: bool,
 ) {
     out.push_str(&format!("{pos}\t{base}"));
@@ -128,7 +125,7 @@ unsafe fn append_mod_line(
     out.push('\n');
 }
 
-unsafe fn append_present_line(out: &mut String, state: *mut htslib_mini_rs::hts_base_mod_state) {
+unsafe fn append_present_line(out: &mut String, state: *mut htslib_rs::hts_base_mod_state) {
     let mut ntype = 0;
     let types = bam_mods_recorded(state, &mut ntype);
     out.push_str("Present:");
@@ -245,7 +242,7 @@ unsafe extern "C" fn read_record(data: *mut c_void, rec: *mut bam1_t) -> c_int {
 unsafe extern "C" fn pileup_cd_create(
     _data: *mut c_void,
     rec: *const bam1_t,
-    cd: *mut htslib_mini_rs::bam_pileup_cd,
+    cd: *mut htslib_rs::bam_pileup_cd,
 ) -> c_int {
     let state = hts_base_mod_state_alloc();
     if state.is_null() {
@@ -262,7 +259,7 @@ unsafe extern "C" fn pileup_cd_create(
 unsafe extern "C" fn pileup_cd_destroy(
     _data: *mut c_void,
     _rec: *const bam1_t,
-    cd: *mut htslib_mini_rs::bam_pileup_cd,
+    cd: *mut htslib_rs::bam_pileup_cd,
 ) -> c_int {
     hts_base_mod_state_free((*cd).p.cast());
     0
@@ -292,7 +289,7 @@ unsafe fn append_pileup_mod_line(
         let qual = *bam_get_qual(rec).add(qpos as usize);
         quals.push(std::cmp::min(b'~', b'!'.saturating_add(qual)) as char);
 
-        let state = (*p).cd.p.cast::<htslib_mini_rs::hts_base_mod_state>();
+        let state = (*p).cd.p.cast::<htslib_rs::hts_base_mod_state>();
         let mut mods = [hts_base_mod {
             modified_base: 0,
             canonical_base: 0,

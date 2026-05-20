@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam_cigar_op, bam_cigar_oplen, bam_destroy1, bam_endpos, bam_get_cigar, bam_get_qname,
     bam_init1, fai_build3, fai_destroy, fai_fetch, fai_fetchqual, fai_load3_format, faidx_has_seq,
     faidx_iseq, faidx_nseq, faidx_seq_len, hclose, hopen, htsFormat, hts_detect_format2,
@@ -23,7 +23,7 @@ fn c_path(path: PathBuf) -> CString {
 
 fn temp_index_path(label: &str, suffix: &str) -> CString {
     let path = std::env::temp_dir().join(format!(
-        "htslib-mini-rs-real-data-samples-more-{}-{}{}",
+        "htslib_rs-real-data-samples-more-{}-{}{}",
         std::process::id(),
         label,
         suffix
@@ -44,7 +44,7 @@ fn detect_fixture_format(path: &str) -> htsFormat {
     }
 }
 
-unsafe fn fetch_text(fai: *const htslib_mini_rs::faidx_t, region: &CStr) -> String {
+unsafe fn fetch_text(fai: *const htslib_rs::faidx_t, region: &CStr) -> String {
     let mut len = 0;
     let seq = fai_fetch(fai, region.as_ptr(), &mut len);
     assert!(!seq.is_null());
@@ -54,7 +54,7 @@ unsafe fn fetch_text(fai: *const htslib_mini_rs::faidx_t, region: &CStr) -> Stri
     text
 }
 
-unsafe fn fetch_qual_text(fai: *const htslib_mini_rs::faidx_t, region: &CStr) -> String {
+unsafe fn fetch_qual_text(fai: *const htslib_rs::faidx_t, region: &CStr) -> String {
     let mut len = 0;
     let qual = fai_fetchqual(fai, region.as_ptr(), &mut len);
     assert!(!qual.is_null());
@@ -91,7 +91,7 @@ fn detects_demo_sample_fixture_formats() {
 fn reads_demo_sample_sam_header_and_exact_records() {
     unsafe {
         let path = c_fixture("htslib/samples/sample.sam");
-        let fp = htslib_mini_rs::hts_open(path.as_ptr(), c"r".as_ptr());
+        let fp = htslib_rs::hts_open(path.as_ptr(), c"r".as_ptr());
         assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
 
         let hdr = sam_hdr_read(fp);
@@ -138,7 +138,7 @@ fn reads_demo_sample_sam_header_and_exact_records() {
 
         bam_destroy1(rec);
         sam_hdr_destroy(hdr);
-        assert_eq!(htslib_mini_rs::hts_close(fp), 0);
+        assert_eq!(htslib_rs::hts_close(fp), 0);
     }
 }
 

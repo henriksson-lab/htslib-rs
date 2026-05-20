@@ -1,6 +1,6 @@
 use std::ffi::c_int;
 
-use crate::htslib_mini_rs::{c_compat, kfunc::lbinom, os_rand::hts_drand48};
+use crate::htslib_rs::{c_compat, kfunc::lbinom, os_rand::hts_drand48};
 
 #[repr(C)]
 pub struct errmod_t {
@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn errmod_cal_downsampling_uses_htslib_rand48_state() {
         unsafe {
-            let _guard = crate::htslib_mini_rs::original::htslib::hts_os::rand48_test_lock();
+            let _guard = crate::htslib_rs::hts_os::rand48_test_lock();
             let em = errmod_init(0.0);
             assert!(!em.is_null());
 
@@ -531,7 +531,7 @@ mod tests {
                 .collect::<Vec<_>>();
             let mut q = [0.0f32; 16];
 
-            crate::htslib_mini_rs::os_rand::hts_srand48(1);
+            crate::htslib_rs::os_rand::hts_srand48(1);
             assert_eq!(
                 errmod_cal(
                     em,
@@ -548,10 +548,7 @@ mod tests {
                 seed = rand48_next(seed);
             }
             seed = rand48_next(seed);
-            assert_eq!(
-                crate::htslib_mini_rs::os_rand::hts_lrand48(),
-                rand48_lrand(seed)
-            );
+            assert_eq!(crate::htslib_rs::os_rand::hts_lrand48(), rand48_lrand(seed));
 
             errmod_destroy(em);
         }

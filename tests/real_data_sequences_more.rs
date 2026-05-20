@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bgzf::{
         bgzf_check_EOF, bgzf_close, bgzf_compression, bgzf_getline, bgzf_is_bgzf, bgzf_open,
         bgzf_read,
@@ -34,7 +34,7 @@ fn detect_fixture_format_with_name(path: &str, format_name: &str) -> htsFormat {
     }
 }
 
-unsafe fn load_indexed_fasta(path: &str, index: &str) -> *mut htslib_mini_rs::faidx_t {
+unsafe fn load_indexed_fasta(path: &str, index: &str) -> *mut htslib_rs::faidx_t {
     let fasta = c_fixture(path);
     let fai_path = c_fixture(index);
     let fai = fai_load3_format(
@@ -48,7 +48,7 @@ unsafe fn load_indexed_fasta(path: &str, index: &str) -> *mut htslib_mini_rs::fa
     fai
 }
 
-unsafe fn load_indexed_fastq(path: &str, index: &str) -> *mut htslib_mini_rs::faidx_t {
+unsafe fn load_indexed_fastq(path: &str, index: &str) -> *mut htslib_rs::faidx_t {
     let fastq = c_fixture(path);
     let fai_path = c_fixture(index);
     let fai = fai_load3_format(
@@ -62,7 +62,7 @@ unsafe fn load_indexed_fastq(path: &str, index: &str) -> *mut htslib_mini_rs::fa
     fai
 }
 
-unsafe fn fetch_text(fai: *const htslib_mini_rs::faidx_t, region: &CStr) -> String {
+unsafe fn fetch_text(fai: *const htslib_rs::faidx_t, region: &CStr) -> String {
     let mut len = 0;
     let seq = fai_fetch(fai, region.as_ptr(), &mut len);
     assert!(!seq.is_null());
@@ -72,7 +72,7 @@ unsafe fn fetch_text(fai: *const htslib_mini_rs::faidx_t, region: &CStr) -> Stri
     text
 }
 
-unsafe fn fetch_qual_text(fai: *const htslib_mini_rs::faidx_t, region: &CStr) -> String {
+unsafe fn fetch_qual_text(fai: *const htslib_rs::faidx_t, region: &CStr) -> String {
     let mut len = 0;
     let qual = fai_fetchqual(fai, region.as_ptr(), &mut len);
     assert!(!qual.is_null());
@@ -82,7 +82,7 @@ unsafe fn fetch_qual_text(fai: *const htslib_mini_rs::faidx_t, region: &CStr) ->
     text
 }
 
-unsafe fn render_fasta_queries(fai: *const htslib_mini_rs::faidx_t, queries: &[&CStr]) -> String {
+unsafe fn render_fasta_queries(fai: *const htslib_rs::faidx_t, queries: &[&CStr]) -> String {
     let mut out = String::new();
     for query in queries {
         let seq = fetch_text(fai, query);
@@ -99,7 +99,7 @@ unsafe fn render_fasta_queries(fai: *const htslib_mini_rs::faidx_t, queries: &[&
     out
 }
 
-unsafe fn render_fastq_queries(fai: *const htslib_mini_rs::faidx_t, queries: &[&CStr]) -> String {
+unsafe fn render_fastq_queries(fai: *const htslib_rs::faidx_t, queries: &[&CStr]) -> String {
     let mut out = String::new();
     for query in queries {
         let seq = fetch_text(fai, query);

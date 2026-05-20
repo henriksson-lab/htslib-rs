@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     fai_adjust_region, fai_destroy, fai_fetch64, fai_line_length, fai_load3_format,
     fai_parse_region, faidx_fetch_qual64, faidx_fetch_seq64, faidx_has_seq, faidx_iseq,
     faidx_seq_len, faidx_seq_len64, hts_pos_t, FAI_FASTQ,
@@ -10,7 +10,7 @@ fn c_fixture(path: &str) -> CString {
     CString::new(path.to_string_lossy().as_bytes()).unwrap()
 }
 
-unsafe fn load_fastq_fai() -> *mut htslib_mini_rs::faidx_t {
+unsafe fn load_fastq_fai() -> *mut htslib_rs::faidx_t {
     let input = c_fixture("htslib/test/faidx/fastqs.fq");
     let index = c_fixture("htslib/test/faidx/fastqs.fq.expected.fai");
     let fai = fai_load3_format(
@@ -41,7 +41,7 @@ fn append_wrapped(out: &mut String, text: &str) {
 }
 
 unsafe fn format_adjusted_fastq_records(
-    fai: *const htslib_mini_rs::faidx_t,
+    fai: *const htslib_rs::faidx_t,
     regions: &[&'static CStr],
 ) -> String {
     let mut out = String::new();
@@ -77,10 +77,7 @@ unsafe fn format_adjusted_fastq_records(
     out
 }
 
-unsafe fn fetch_region_len(
-    fai: *const htslib_mini_rs::faidx_t,
-    region: &'static CStr,
-) -> hts_pos_t {
+unsafe fn fetch_region_len(fai: *const htslib_rs::faidx_t, region: &'static CStr) -> hts_pos_t {
     let mut len = 0;
     let seq = fai_fetch64(fai, region.as_ptr(), &mut len);
     let _ = fetched_string(seq, len);

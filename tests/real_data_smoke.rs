@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam_destroy1, bam_get_qname, bam_init1, bcf_destroy, bcf_get_format_values, bcf_hdr_destroy,
     bcf_hdr_id2name, bcf_hdr_name2id, bcf_hdr_read, bcf_hdr_seqnames, bcf_hdr_set_samples,
     bcf_index_load2, bcf_init, bcf_read, bcf_readrec, bcf_seqname,

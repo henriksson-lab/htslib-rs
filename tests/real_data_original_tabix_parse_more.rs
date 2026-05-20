@@ -1,4 +1,4 @@
-use htslib_mini_rs::{tbx_c_96_tbx_parse1, tbx_conf_bed, tbx_conf_gff, tbx_conf_vcf};
+use htslib_rs::{tbx_c_96_tbx_parse1, tbx_conf_bed, tbx_conf_gff, tbx_conf_vcf};
 use std::ffi::{CStr, CString};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -8,9 +8,9 @@ struct ParsedInterval {
     end: i64,
 }
 
-unsafe fn parse_interval(conf: &htslib_mini_rs::tbx_conf_t, line: &str) -> ParsedInterval {
+unsafe fn parse_interval(conf: &htslib_rs::tbx_conf_t, line: &str) -> ParsedInterval {
     let mut bytes = CString::new(line).unwrap().into_bytes_with_nul();
-    let mut intv: htslib_mini_rs::tbx_intv_t = std::mem::zeroed();
+    let mut intv: htslib_rs::tbx_intv_t = std::mem::zeroed();
     assert_eq!(
         tbx_c_96_tbx_parse1(conf, bytes.len() - 1, bytes.as_mut_ptr().cast(), &mut intv),
         0,
@@ -254,7 +254,7 @@ fn vcf_alt_allele_limit_restores_temporary_field_split_like_c() {
         let line = format!("1\t100\t.\tG\t{alt}\t.\tPASS\t.");
         let mut bytes = CString::new(line.as_str()).unwrap().into_bytes_with_nul();
         let original = bytes.clone();
-        let mut intv: htslib_mini_rs::tbx_intv_t = std::mem::zeroed();
+        let mut intv: htslib_rs::tbx_intv_t = std::mem::zeroed();
 
         assert_eq!(
             tbx_c_96_tbx_parse1(&conf, bytes.len() - 1, bytes.as_mut_ptr().cast(), &mut intv),

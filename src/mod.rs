@@ -2,23 +2,46 @@
 #![allow(non_snake_case)]
 #![allow(clippy::missing_safety_doc)]
 
+pub mod annot_tsv;
 pub mod bgzf;
+pub mod bgzip;
+#[path = "cram.rs"]
 pub mod cram;
+#[rustfmt::skip]
+#[cfg(any())]
+#[path = "cram/mod.rs"]
+pub mod cram_mirror;
 pub mod errmod;
 pub mod faidx;
 pub mod hfile;
+pub mod hfile_gcs;
+pub mod hfile_libcurl;
+pub mod hfile_s3;
 pub mod hts;
+pub mod hts_os;
+pub mod htsfile;
+pub mod htslib;
 pub mod kfunc;
+pub mod kstring;
 pub mod md5;
-pub mod original;
+pub mod multipart;
 pub mod os_rand;
+pub mod plugin;
 pub mod probaln;
+pub mod realn;
+pub mod ref_cache;
 pub mod regidx;
 pub mod region;
 pub mod sam;
+pub mod samples;
+pub mod simd;
+pub mod tabix;
 pub mod tbx;
+pub mod test;
+pub mod textutils;
 pub mod thread_pool;
 pub mod vcf;
+pub mod vcfutils;
 
 pub(crate) mod c_compat;
 

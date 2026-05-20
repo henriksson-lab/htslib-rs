@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam_destroy1, bam_init1, bcf_destroy, bcf_hdr_destroy, bcf_hdr_get_version, bcf_hdr_id2name,
     bcf_hdr_name2id, bcf_init, bcf_read, hts_close, hts_idx_destroy, hts_itr_destroy, hts_open,
     ks_free, kstring_t, sam_c_1768_sam_itr_regarray, sam_c_4553_sam_write1, sam_format1,
@@ -22,12 +22,12 @@ fn temp_longrefs_path(name: &str) -> std::path::PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "htslib-mini-rs-longrefs-{name}-{}-{nanos}.sam.gz",
+        "htslib_rs-longrefs-{name}-{}-{nanos}.sam.gz",
         std::process::id()
     ))
 }
 
-unsafe fn sam_header_text(hdr: *mut htslib_mini_rs::sam_hdr_t) -> String {
+unsafe fn sam_header_text(hdr: *mut htslib_rs::sam_hdr_t) -> String {
     let len = sam_hdr_length(hdr);
     assert!(!sam_hdr_str(hdr).is_null());
     String::from_utf8(std::slice::from_raw_parts(sam_hdr_str(hdr).cast::<u8>(), len).to_vec())
@@ -35,8 +35,8 @@ unsafe fn sam_header_text(hdr: *mut htslib_mini_rs::sam_hdr_t) -> String {
 }
 
 unsafe fn append_formatted_record(
-    hdr: *mut htslib_mini_rs::sam_hdr_t,
-    rec: *const htslib_mini_rs::bam1_t,
+    hdr: *mut htslib_rs::sam_hdr_t,
+    rec: *const htslib_rs::bam1_t,
     line: &mut kstring_t,
     out: &mut String,
 ) {

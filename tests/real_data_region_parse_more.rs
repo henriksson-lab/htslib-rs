@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     hts_close, hts_open, hts_pos_t, sam_hdr_destroy, sam_hdr_read, sam_hdr_t, sam_parse_region,
     HTS_PARSE_LIST, HTS_PARSE_ONE_COORD, HTS_POS_MAX,
 };

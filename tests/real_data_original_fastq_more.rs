@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam1_t, bam_aux2Z, bam_aux_get, bam_destroy1, bam_get_qname, bam_get_qual, bam_get_seq,
     bam_init1, bam_seqi, hts_close, hts_fmt_option, hts_open, hts_set_opt_int, hts_set_opt_ptr,
     sam_c_4553_sam_write1, sam_hdr_destroy, sam_hdr_read, sam_read1, FASTQ_OPT_AUX,
@@ -73,11 +73,11 @@ unsafe fn qual_string(rec: *const bam1_t) -> String {
         .collect()
 }
 
-unsafe fn set_fastq_flag(fp: *mut htslib_mini_rs::htsFile, opt: i32) {
+unsafe fn set_fastq_flag(fp: *mut htslib_rs::htsFile, opt: i32) {
     assert_eq!(hts_set_opt_int(fp, opt as hts_fmt_option, 1), 0);
 }
 
-unsafe fn set_fastq_string(fp: *mut htslib_mini_rs::htsFile, opt: i32, value: Option<&CStr>) {
+unsafe fn set_fastq_string(fp: *mut htslib_rs::htsFile, opt: i32, value: Option<&CStr>) {
     assert_eq!(
         hts_set_opt_ptr(
             fp,
@@ -90,7 +90,7 @@ unsafe fn set_fastq_string(fp: *mut htslib_mini_rs::htsFile, opt: i32, value: Op
 
 unsafe fn read_fastq_records(
     path: &str,
-    configure: impl FnOnce(*mut htslib_mini_rs::htsFile),
+    configure: impl FnOnce(*mut htslib_rs::htsFile),
     aux_tags: &[&'static CStr],
 ) -> Vec<FastqRecord> {
     let path = c_fixture(path);
@@ -143,7 +143,7 @@ unsafe fn read_sam_records(path: &str, aux_tags: &[&'static CStr]) -> Vec<FastqR
 unsafe fn assert_read_case(
     input: &str,
     expected_sam: &str,
-    configure: impl FnOnce(*mut htslib_mini_rs::htsFile),
+    configure: impl FnOnce(*mut htslib_rs::htsFile),
     aux_tags: &[&'static CStr],
 ) -> Vec<FastqRecord> {
     let actual = read_fastq_records(input, configure, aux_tags);
@@ -154,7 +154,7 @@ unsafe fn assert_read_case(
 
 fn temp_output_path(case: &str, extension: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
-        "htslib-mini-rs-fastq-write-{}-{}-{}.{}",
+        "htslib_rs-fastq-write-{}-{}-{}.{}",
         std::process::id(),
         case,
         std::thread::current().name().unwrap_or("test"),
@@ -166,7 +166,7 @@ unsafe fn write_sam_as_sequence_file(
     input_sam: &str,
     mode: &'static CStr,
     out_path: &std::path::Path,
-    configure: impl FnOnce(*mut htslib_mini_rs::htsFile),
+    configure: impl FnOnce(*mut htslib_rs::htsFile),
 ) {
     let input = c_fixture(input_sam);
     let in_fp = hts_open(input.as_ptr(), c"r".as_ptr());
@@ -211,7 +211,7 @@ unsafe fn assert_write_case(
     expected_output: &str,
     mode: &'static CStr,
     extension: &str,
-    configure: impl FnOnce(*mut htslib_mini_rs::htsFile),
+    configure: impl FnOnce(*mut htslib_rs::htsFile),
 ) -> String {
     let case = input_sam
         .rsplit('/')

@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam1_t, bam_aux2Z, bam_aux_get, bam_destroy1, bam_get_qname, bam_get_qual, bam_get_seq,
     bam_init1, bam_seqi, hts_close, hts_fmt_option, hts_open, hts_set_opt_int, hts_set_opt_ptr,
     sam_hdr_destroy, sam_hdr_read, sam_read1, FASTQ_OPT_AUX, FASTQ_OPT_BARCODE, FASTQ_OPT_CASAVA,
@@ -70,11 +70,11 @@ unsafe fn qual_string(rec: *const bam1_t) -> String {
         .collect()
 }
 
-unsafe fn set_fastq_flag(fp: *mut htslib_mini_rs::htsFile, opt: i32) {
+unsafe fn set_fastq_flag(fp: *mut htslib_rs::htsFile, opt: i32) {
     assert_eq!(hts_set_opt_int(fp, opt as hts_fmt_option, 1), 0);
 }
 
-unsafe fn set_fastq_string(fp: *mut htslib_mini_rs::htsFile, opt: i32, value: Option<&CStr>) {
+unsafe fn set_fastq_string(fp: *mut htslib_rs::htsFile, opt: i32, value: Option<&CStr>) {
     assert_eq!(
         hts_set_opt_ptr(
             fp,
@@ -87,7 +87,7 @@ unsafe fn set_fastq_string(fp: *mut htslib_mini_rs::htsFile, opt: i32, value: Op
 
 unsafe fn read_fastq_records(
     path: &str,
-    configure: impl FnOnce(*mut htslib_mini_rs::htsFile),
+    configure: impl FnOnce(*mut htslib_rs::htsFile),
     aux_tags: &[&'static CStr],
 ) -> Vec<FastqRecord> {
     let path = c_fixture(path);

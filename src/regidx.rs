@@ -1,6 +1,6 @@
 use std::ffi::{c_char, c_int, c_void};
 
-use crate::htslib_mini_rs::{
+use crate::htslib_rs::{
     hts::{
         hts_close, hts_getline, hts_open, hts_parse_decimal, hts_pos_t, hts_resize_array_,
         isspace_c, kputsn, ks_clear, ks_free, kstring_t, HTS_RESIZE_CLEAR,

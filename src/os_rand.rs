@@ -1,4 +1,4 @@
-pub use crate::htslib_mini_rs::original::htslib::hts_os::*;
+pub use crate::htslib_rs::hts_os::*;
 
 #[cfg(test)]
 mod tests {
@@ -42,7 +42,7 @@ mod tests {
     #[test]
     fn os_rand_erand48_uses_caller_seed_without_advancing_global_state() {
         unsafe {
-            let _guard = crate::htslib_mini_rs::original::htslib::hts_os::rand48_test_lock();
+            let _guard = crate::htslib_rs::hts_os::rand48_test_lock();
             hts_srand48(0x0000_0001);
             let expected_global_seed = reference_next([0x330e, 0x0001, 0x0000]);
             let expected_global_value = reference_erand(expected_global_seed);
@@ -63,7 +63,7 @@ mod tests {
     #[test]
     fn os_rand_drand48_and_lrand48_advance_same_global_sequence() {
         unsafe {
-            let _guard = crate::htslib_mini_rs::original::htslib::hts_os::rand48_test_lock();
+            let _guard = crate::htslib_rs::hts_os::rand48_test_lock();
             hts_srand48(0);
             let first_seed = reference_next([0x330e, 0x0000, 0x0000]);
             let second_seed = reference_next(first_seed);
@@ -81,7 +81,7 @@ mod tests {
     #[test]
     fn os_rand_srand48_reinitializes_signed_seed_words() {
         unsafe {
-            let _guard = crate::htslib_mini_rs::original::htslib::hts_os::rand48_test_lock();
+            let _guard = crate::htslib_rs::hts_os::rand48_test_lock();
             let first_seed = reference_next([0x330e, 0xffff, 0xffff]);
             let first_lrand = ((first_seed[2] as c_long) << 15) + ((first_seed[1] as c_long) >> 1);
 
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn os_rand_srand48_uses_low_32_seed_bits() {
         unsafe {
-            let _guard = crate::htslib_mini_rs::original::htslib::hts_os::rand48_test_lock();
+            let _guard = crate::htslib_rs::hts_os::rand48_test_lock();
             hts_srand48(1);
             let low_seed_lrand = hts_lrand48();
 
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn os_rand_reexported_aliases_share_global_rand48_lifecycle() {
         unsafe {
-            let _guard = crate::htslib_mini_rs::original::htslib::hts_os::rand48_test_lock();
+            let _guard = crate::htslib_rs::hts_os::rand48_test_lock();
             hts_os_c_35_hts_srand48(1);
             assert_eq!(hts_lrand48(), 89400484);
 

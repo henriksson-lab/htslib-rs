@@ -2,7 +2,7 @@ use std::ffi::{c_int, c_void};
 use std::mem;
 use std::ptr;
 
-use crate::htslib_mini_rs::c_compat;
+use crate::htslib_rs::c_compat;
 
 // original: hts_tpool (htslib/thread_pool_internal.h:136)
 pub type hts_tpool = hts_sys::hts_tpool;

@@ -1,5 +1,5 @@
 [package]
-name = "htslib-mini-rs"
+name = "htslib_rs"
 version = "0.0.1"
 edition = "2021"
 license = "MIT OR BSD-3-Clause"
@@ -7,10 +7,15 @@ description = "Rust translation of HTSlib"
 readme = "README.md"
 
 [lib]
-name = "htslib_mini_rs"
+name = "htslib_rs"
 path = "src/lib.rs"
 
+[features]
+default = []
+cram-mirror = ["dep:c2rust-bitfields"]
+
 [dependencies]
+c2rust-bitfields = { version = "0.22.1", optional = true }
 flate2 = "1"
 hts-sys = "2.2.0"
 libc = "0.2"

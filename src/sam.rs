@@ -4,12 +4,12 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use crate::htslib_mini_rs::bgzf::{
+use crate::htslib_rs::bgzf::{
     bgzf_check_EOF, bgzf_flush, bgzf_flush_try, bgzf_peek, bgzf_read, bgzf_read_small, bgzf_seek,
     bgzf_write, bgzf_write_small,
 };
-use crate::htslib_mini_rs::hfile::hflush;
-use crate::htslib_mini_rs::hts::{
+use crate::htslib_rs::hfile::hflush;
+use crate::htslib_rs::hts::{
     __ac_FNV1a_hash_string, __ac_Wang_hash, __ac_X31_hash_string, double_to_le, ed_swap_4p,
     find_file_extension, float_to_le, htsFile, htsLogLevel, hts_bin_maxpos, hts_expr_val_t,
     hts_filter_eval2, hts_filter_t, hts_idx_destroy, hts_idx_load3, hts_idx_t, hts_itr_multi_bam,
@@ -25,11 +25,7 @@ use crate::htslib_mini_rs::hts::{
 };
 
 extern "C" {
-    fn hpeek(
-        fp: *mut crate::htslib_mini_rs::hts::hFILE,
-        buffer: *mut c_void,
-        nbytes: usize,
-    ) -> isize;
+    fn hpeek(fp: *mut crate::htslib_rs::hts::hFILE, buffer: *mut c_void, nbytes: usize) -> isize;
 }
 
 pub const BAM_CMATCH: c_int = 0;
@@ -470,7 +466,7 @@ pub struct bam_mplp_s {
 }
 
 pub unsafe fn sam_hdr_init() -> *mut sam_hdr_t {
-    let h = crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<sam_hdr_t>() as u64)
+    let h = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sam_hdr_t>() as u64)
         .cast::<sam_hdr_t>();
     if h.is_null() {
         return std::ptr::null_mut();
@@ -530,20 +526,20 @@ unsafe fn kh_resize_s2i(h: *mut khash_s2i_t, new_n_buckets: u32) -> c_int {
         new_n_buckets >> 4
     };
     let flags =
-        crate::htslib_mini_rs::c_compat::malloc(n_flags as u64 * std::mem::size_of::<u32>() as u64)
+        crate::htslib_rs::c_compat::malloc(n_flags as u64 * std::mem::size_of::<u32>() as u64)
             .cast::<u32>();
-    let keys = crate::htslib_mini_rs::c_compat::malloc(
+    let keys = crate::htslib_rs::c_compat::malloc(
         new_n_buckets as u64 * std::mem::size_of::<*mut c_char>() as u64,
     )
     .cast::<*mut c_char>();
-    let vals = crate::htslib_mini_rs::c_compat::malloc(
+    let vals = crate::htslib_rs::c_compat::malloc(
         new_n_buckets as u64 * std::mem::size_of::<i64>() as u64,
     )
     .cast::<i64>();
     if flags.is_null() || keys.is_null() || vals.is_null() {
-        crate::htslib_mini_rs::c_compat::free(flags.cast());
-        crate::htslib_mini_rs::c_compat::free(keys.cast());
-        crate::htslib_mini_rs::c_compat::free(vals.cast());
+        crate::htslib_rs::c_compat::free(flags.cast());
+        crate::htslib_rs::c_compat::free(keys.cast());
+        crate::htslib_rs::c_compat::free(vals.cast());
         return -1;
     }
     for i in 0..n_flags {
@@ -581,9 +577,9 @@ unsafe fn kh_resize_s2i(h: *mut khash_s2i_t, new_n_buckets: u32) -> c_int {
         }
     }
 
-    crate::htslib_mini_rs::c_compat::free(old_flags.cast());
-    crate::htslib_mini_rs::c_compat::free(old_keys.cast());
-    crate::htslib_mini_rs::c_compat::free(old_vals.cast());
+    crate::htslib_rs::c_compat::free(old_flags.cast());
+    crate::htslib_rs::c_compat::free(old_keys.cast());
+    crate::htslib_rs::c_compat::free(old_vals.cast());
     0
 }
 
@@ -649,7 +645,7 @@ unsafe fn sam_hdr_set_long_target_len(
 ) -> c_int {
     if (*h).sdict.is_null() {
         let sdict =
-            crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<khash_s2i_t>() as u64)
+            crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<khash_s2i_t>() as u64)
                 .cast::<khash_s2i_t>();
         if sdict.is_null() {
             return -1;
@@ -674,12 +670,12 @@ unsafe fn sam_hdr_set_long_target_len(
 unsafe fn sam_hdr_append_target(h: *mut sam_hdr_t, name: &[u8], len: hts_pos_t) -> c_int {
     let new_n = (*h).n_targets + 1;
     if new_n <= 0 {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EOVERFLOW as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EOVERFLOW as c_int;
         return -1;
     }
 
-    let target_len = crate::htslib_mini_rs::c_compat::realloc(
+    let target_len = crate::htslib_rs::c_compat::realloc(
         (*h).target_len.cast(),
         new_n as u64 * std::mem::size_of::<u32>() as u64,
     )
@@ -689,7 +685,7 @@ unsafe fn sam_hdr_append_target(h: *mut sam_hdr_t, name: &[u8], len: hts_pos_t) 
     }
     (*h).target_len = target_len;
 
-    let target_name = crate::htslib_mini_rs::c_compat::realloc(
+    let target_name = crate::htslib_rs::c_compat::realloc(
         (*h).target_name.cast(),
         new_n as u64 * std::mem::size_of::<*mut c_char>() as u64,
     )
@@ -699,11 +695,11 @@ unsafe fn sam_hdr_append_target(h: *mut sam_hdr_t, name: &[u8], len: hts_pos_t) 
     }
     (*h).target_name = target_name;
 
-    let dup = crate::htslib_mini_rs::c_compat::malloc(name.len() as u64 + 1).cast::<c_char>();
+    let dup = crate::htslib_rs::c_compat::malloc(name.len() as u64 + 1).cast::<c_char>();
     if dup.is_null() {
         return -1;
     }
-    crate::htslib_mini_rs::c_compat::memcpy(dup.cast(), name.as_ptr().cast(), name.len() as u64);
+    crate::htslib_rs::c_compat::memcpy(dup.cast(), name.as_ptr().cast(), name.len() as u64);
     *dup.add(name.len()) = 0;
 
     let idx = (*h).n_targets as usize;
@@ -714,7 +710,7 @@ unsafe fn sam_hdr_append_target(h: *mut sam_hdr_t, name: &[u8], len: hts_pos_t) 
         len as u32
     };
     if len > u32::MAX as hts_pos_t && sam_hdr_set_long_target_len(h, dup, len) < 0 {
-        crate::htslib_mini_rs::c_compat::free(dup.cast());
+        crate::htslib_rs::c_compat::free(dup.cast());
         *(*h).target_name.add(idx) = std::ptr::null_mut();
         return -1;
     }
@@ -726,18 +722,18 @@ unsafe fn sam_hdr_free_tmp_targets(tmp: *mut sam_hdr_t) {
     for i in 0..(*tmp).n_targets {
         let name = *(*tmp).target_name.add(i as usize);
         if !name.is_null() {
-            crate::htslib_mini_rs::c_compat::free(name.cast());
+            crate::htslib_rs::c_compat::free(name.cast());
         }
     }
-    crate::htslib_mini_rs::c_compat::free((*tmp).target_name.cast());
-    crate::htslib_mini_rs::c_compat::free((*tmp).target_len.cast());
+    crate::htslib_rs::c_compat::free((*tmp).target_name.cast());
+    crate::htslib_rs::c_compat::free((*tmp).target_len.cast());
     kh_destroy_s2i((*tmp).sdict.cast());
 }
 
 unsafe fn sam_hdr_restore_text_len(h: *mut sam_hdr_t, old_len: usize) {
     (*h).l_text = old_len;
     if old_len == 0 {
-        crate::htslib_mini_rs::c_compat::free((*h).text.cast());
+        crate::htslib_rs::c_compat::free((*h).text.cast());
         (*h).text = std::ptr::null_mut();
     } else if !(*h).text.is_null() {
         *(*h).text.add(old_len) = 0;
@@ -786,19 +782,19 @@ pub unsafe fn sam_hdr_add_lines(_h: *mut sam_hdr_t, _lines: *const c_char, _len:
     let new_len = match old_len.checked_add(len) {
         Some(v) => v,
         None => {
-            *crate::htslib_mini_rs::c_compat::__errno_location() =
-                crate::htslib_mini_rs::c_compat::EOVERFLOW as c_int;
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::EOVERFLOW as c_int;
             return -1;
         }
     };
-    let text = crate::htslib_mini_rs::c_compat::realloc((*_h).text.cast(), new_len as u64 + 1)
-        .cast::<c_char>();
+    let text =
+        crate::htslib_rs::c_compat::realloc((*_h).text.cast(), new_len as u64 + 1).cast::<c_char>();
     if text.is_null() {
         return -1;
     }
     (*_h).text = text;
     if len > 0 {
-        crate::htslib_mini_rs::c_compat::memcpy(
+        crate::htslib_rs::c_compat::memcpy(
             (*_h).text.add(old_len).cast(),
             _lines.cast(),
             len as u64,
@@ -845,7 +841,7 @@ pub unsafe fn sam_hdr_add_lines(_h: *mut sam_hdr_t, _lines: *const c_char, _len:
                 }
             }
         }
-        let target_len = crate::htslib_mini_rs::c_compat::realloc(
+        let target_len = crate::htslib_rs::c_compat::realloc(
             (*_h).target_len.cast(),
             new_n as u64 * std::mem::size_of::<u32>() as u64,
         )
@@ -856,7 +852,7 @@ pub unsafe fn sam_hdr_add_lines(_h: *mut sam_hdr_t, _lines: *const c_char, _len:
             return -1;
         }
         (*_h).target_len = target_len;
-        let target_name = crate::htslib_mini_rs::c_compat::realloc(
+        let target_name = crate::htslib_rs::c_compat::realloc(
             (*_h).target_name.cast(),
             new_n as u64 * std::mem::size_of::<*mut c_char>() as u64,
         )
@@ -880,12 +876,12 @@ pub unsafe fn sam_hdr_add_lines(_h: *mut sam_hdr_t, _lines: *const c_char, _len:
                         && sam_hdr_set_long_target_len(_h, target_name, len) < 0
                     {
                         for j in i..tmp.n_targets {
-                            crate::htslib_mini_rs::c_compat::free(
+                            crate::htslib_rs::c_compat::free(
                                 *tmp.target_name.add(j as usize).cast::<*mut c_void>(),
                             );
                         }
-                        crate::htslib_mini_rs::c_compat::free(tmp.target_name.cast());
-                        crate::htslib_mini_rs::c_compat::free(tmp.target_len.cast());
+                        crate::htslib_rs::c_compat::free(tmp.target_name.cast());
+                        crate::htslib_rs::c_compat::free(tmp.target_len.cast());
                         kh_destroy_s2i(tmp.sdict.cast());
                         sam_hdr_restore_text_len(_h, old_len);
                         return -1;
@@ -1089,7 +1085,7 @@ pub unsafe fn header_c_788_warn_if_known_stderr(line: *const c_char, len: usize)
         c_int::MAX
     };
 
-    if !crate::htslib_mini_rs::hts::kmemmem(
+    if !crate::htslib_rs::hts::kmemmem(
         line.cast(),
         ilen,
         c"M::bwa_idx_load_from_disk".as_ptr().cast(),
@@ -1103,7 +1099,7 @@ pub unsafe fn header_c_788_warn_if_known_stderr(line: *const c_char, len: usize)
             c"Use `bwa mem -o file.sam ...` or `bwa sampe -f file.sam ...` instead of `bwa ... > file.sam`"
                 .as_ptr(),
         );
-    } else if !crate::htslib_mini_rs::hts::kmemmem(
+    } else if !crate::htslib_rs::hts::kmemmem(
         line.cast(),
         ilen,
         c"M::mem_pestat".as_ptr().cast(),
@@ -1116,7 +1112,7 @@ pub unsafe fn header_c_788_warn_if_known_stderr(line: *const c_char, len: usize)
             c"bwa".as_ptr(),
             c"Use `bwa mem -o file.sam ...` instead of `bwa mem ... > file.sam`".as_ptr(),
         );
-    } else if !crate::htslib_mini_rs::hts::kmemmem(
+    } else if !crate::htslib_rs::hts::kmemmem(
         line.cast(),
         ilen,
         c"loaded/built the index".as_ptr().cast(),
@@ -1149,14 +1145,14 @@ pub unsafe fn header_c_1325_valid_sam_header_type(s: *const c_char) -> c_int {
 // original: redact_header_text (htslib/header.c:1530)
 pub unsafe fn header_c_1530_redact_header_text(bh: *mut sam_hdr_t) {
     (*bh).l_text = 0;
-    crate::htslib_mini_rs::c_compat::free((*bh).text.cast());
+    crate::htslib_rs::c_compat::free((*bh).text.cast());
     (*bh).text = std::ptr::null_mut();
 }
 
 unsafe fn sam_c_144_sam_hdr_dup_sdict(h0: *const sam_hdr_t, h: *mut sam_hdr_t) -> c_int {
     let src_long_refs = (*h0).sdict.cast::<khash_s2i_t>();
     let dest_long_refs =
-        crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<khash_s2i_t>() as u64)
+        crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<khash_s2i_t>() as u64)
             .cast::<khash_s2i_t>();
     if dest_long_refs.is_null() {
         return -1;
@@ -1175,15 +1171,14 @@ unsafe fn sam_c_144_sam_hdr_dup_sdict(h0: *const sam_hdr_t, h: *mut sam_hdr_t) -
             n_buckets <<= 1;
         }
         let n_flags = if n_buckets < 16 { 1 } else { n_buckets >> 4 };
-        (*dest_long_refs).flags = crate::htslib_mini_rs::c_compat::malloc(
-            n_flags as u64 * std::mem::size_of::<u32>() as u64,
-        )
-        .cast::<u32>();
-        (*dest_long_refs).keys = crate::htslib_mini_rs::c_compat::malloc(
+        (*dest_long_refs).flags =
+            crate::htslib_rs::c_compat::malloc(n_flags as u64 * std::mem::size_of::<u32>() as u64)
+                .cast::<u32>();
+        (*dest_long_refs).keys = crate::htslib_rs::c_compat::malloc(
             n_buckets as u64 * std::mem::size_of::<*mut c_char>() as u64,
         )
         .cast::<*mut c_char>();
-        (*dest_long_refs).vals = crate::htslib_mini_rs::c_compat::malloc(
+        (*dest_long_refs).vals = crate::htslib_rs::c_compat::malloc(
             n_buckets as u64 * std::mem::size_of::<i64>() as u64,
         )
         .cast::<i64>();
@@ -1256,7 +1251,7 @@ pub unsafe fn sam_hdr_dup(_h0: *const sam_hdr_t) -> *mut sam_hdr_t {
     (*h).l_text = 0;
 
     if (*_h0).n_targets > 0 {
-        (*h).target_len = crate::htslib_mini_rs::c_compat::calloc(
+        (*h).target_len = crate::htslib_rs::c_compat::calloc(
             (*_h0).n_targets as u64,
             std::mem::size_of::<u32>() as u64,
         )
@@ -1265,7 +1260,7 @@ pub unsafe fn sam_hdr_dup(_h0: *const sam_hdr_t) -> *mut sam_hdr_t {
             sam_hdr_destroy(h);
             return std::ptr::null_mut();
         }
-        (*h).target_name = crate::htslib_mini_rs::c_compat::calloc(
+        (*h).target_name = crate::htslib_rs::c_compat::calloc(
             (*_h0).n_targets as u64,
             std::mem::size_of::<*mut c_char>() as u64,
         )
@@ -1279,7 +1274,7 @@ pub unsafe fn sam_hdr_dup(_h0: *const sam_hdr_t) -> *mut sam_hdr_t {
         while i < (*_h0).n_targets {
             *(*h).target_len.add(i as usize) = *(*_h0).target_len.add(i as usize);
             *(*h).target_name.add(i as usize) =
-                crate::htslib_mini_rs::c_compat::strdup(*(*_h0).target_name.add(i as usize));
+                crate::htslib_rs::c_compat::strdup(*(*_h0).target_name.add(i as usize));
             if (*(*h).target_name.add(i as usize)).is_null() {
                 break;
             }
@@ -1297,13 +1292,13 @@ pub unsafe fn sam_hdr_dup(_h0: *const sam_hdr_t) -> *mut sam_hdr_t {
     } else {
         0
     };
-    (*h).text = crate::htslib_mini_rs::c_compat::malloc((*h).l_text as u64 + 1).cast();
+    (*h).text = crate::htslib_rs::c_compat::malloc((*h).l_text as u64 + 1).cast();
     if (*h).text.is_null() {
         sam_hdr_destroy(h);
         return std::ptr::null_mut();
     }
     if !(*_h0).text.is_null() {
-        crate::htslib_mini_rs::c_compat::memcpy(
+        crate::htslib_rs::c_compat::memcpy(
             (*h).text.cast(),
             (*_h0).text.cast(),
             (*h).l_text as u64,
@@ -1357,7 +1352,7 @@ pub unsafe fn bam_hdr_read(_fp: *mut BGZF) -> *mut sam_hdr_t {
         sam_hdr_destroy(h);
         return std::ptr::null_mut();
     }
-    (*h).text = crate::htslib_mini_rs::c_compat::malloc(bufsize as _).cast();
+    (*h).text = crate::htslib_rs::c_compat::malloc(bufsize as _).cast();
     if (*h).text.is_null() {
         sam_hdr_destroy(h);
         return std::ptr::null_mut();
@@ -1381,7 +1376,7 @@ pub unsafe fn bam_hdr_read(_fp: *mut BGZF) -> *mut sam_hdr_t {
     }
 
     if (*h).n_targets > 0 {
-        (*h).target_name = crate::htslib_mini_rs::c_compat::calloc(
+        (*h).target_name = crate::htslib_rs::c_compat::calloc(
             (*h).n_targets as u64,
             std::mem::size_of::<*mut c_char>() as u64,
         )
@@ -1390,7 +1385,7 @@ pub unsafe fn bam_hdr_read(_fp: *mut BGZF) -> *mut sam_hdr_t {
             sam_hdr_destroy(h);
             return std::ptr::null_mut();
         }
-        (*h).target_len = crate::htslib_mini_rs::c_compat::calloc(
+        (*h).target_len = crate::htslib_rs::c_compat::calloc(
             (*h).n_targets as u64,
             std::mem::size_of::<u32>() as u64,
         )
@@ -1417,7 +1412,7 @@ pub unsafe fn bam_hdr_read(_fp: *mut BGZF) -> *mut sam_hdr_t {
         }
 
         *(*h).target_name.add(i as usize) =
-            crate::htslib_mini_rs::c_compat::malloc(name_len as _).cast();
+            crate::htslib_rs::c_compat::malloc(name_len as _).cast();
         if (*(*h).target_name.add(i as usize)).is_null() {
             (*h).n_targets = num_names;
             sam_hdr_destroy(h);
@@ -1442,7 +1437,7 @@ pub unsafe fn bam_hdr_read(_fp: *mut BGZF) -> *mut sam_hdr_t {
                 sam_hdr_destroy(h);
                 return std::ptr::null_mut();
             }
-            let new_name = crate::htslib_mini_rs::c_compat::realloc(
+            let new_name = crate::htslib_rs::c_compat::realloc(
                 (*(*h).target_name.add(i as usize)).cast(),
                 (name_len as usize + 1) as _,
             )
@@ -1532,8 +1527,8 @@ pub unsafe fn bam_hdr_write(fp: *mut BGZF, h: *const sam_hdr_t) -> c_int {
 
 pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
     if fp.is_null() || h.is_null() {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
         return -1;
     }
 
@@ -1607,7 +1602,7 @@ pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
         }
         HTS_FORMAT_FASTQ_FORMAT | HTS_FORMAT_FASTA_FORMAT => return 0,
         _ => {
-            *crate::htslib_mini_rs::c_compat::__errno_location() = libc::EBADF as c_int;
+            *crate::htslib_rs::c_compat::__errno_location() = libc::EBADF as c_int;
             return -1;
         }
     }
@@ -1670,7 +1665,7 @@ unsafe fn sam_hdr_write_bytes(fp: *mut htsFile, bytes: *const c_void, len: usize
         } else {
             -1
         }
-    } else if crate::htslib_mini_rs::hfile::htslib_hfile_h_292_hwrite((*fp).fp.hfile, bytes, len)
+    } else if crate::htslib_rs::hfile::htslib_hfile_h_292_hwrite((*fp).fp.hfile, bytes, len)
         == len as libc::ssize_t
     {
         0
@@ -1719,11 +1714,9 @@ unsafe fn sam_hdr_sanitise(_h: *mut sam_hdr_t) -> *mut sam_hdr_t {
                 sam_hdr_destroy(_h);
                 return std::ptr::null_mut();
             }
-            let cp = crate::htslib_mini_rs::c_compat::realloc(
-                (*_h).text.cast(),
-                ((*_h).l_text + 2) as _,
-            )
-            .cast::<c_char>();
+            let cp =
+                crate::htslib_rs::c_compat::realloc((*_h).text.cast(), ((*_h).l_text + 2) as _)
+                    .cast::<c_char>();
             if cp.is_null() {
                 sam_hdr_destroy(_h);
                 return std::ptr::null_mut();
@@ -1767,7 +1760,7 @@ unsafe fn sam_c_1907_sam_hdr_create(fp: *mut htsFile) -> *mut sam_hdr_t {
         let ret = hts_sys::hts_getline(
             fp.cast(),
             2,
-            (&mut (*fp).line as *mut crate::htslib_mini_rs::hts::kstring_t).cast(),
+            (&mut (*fp).line as *mut crate::htslib_rs::hts::kstring_t).cast(),
         );
         if ret < 0 {
             if ret < -1 {
@@ -1801,23 +1794,23 @@ unsafe fn sam_c_1907_sam_hdr_create(fp: *mut htsFile) -> *mut sam_hdr_t {
 
 pub unsafe fn sam_hdr_read(_fp: *mut htsFile) -> *mut sam_hdr_t {
     if _fp.is_null() {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
         return std::ptr::null_mut();
     }
     let h = match (*_fp).format.format {
         HTS_FORMAT_BAM => sam_hdr_sanitise(bam_hdr_read((*_fp).fp.bgzf)),
         HTS_FORMAT_FASTQ_FORMAT | HTS_FORMAT_FASTA_FORMAT => sam_hdr_init(),
         HTS_FORMAT_EMPTY_FORMAT => {
-            *crate::htslib_mini_rs::c_compat::__errno_location() =
-                crate::htslib_mini_rs::c_compat::EPIPE as c_int;
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::EPIPE as c_int;
             return std::ptr::null_mut();
         }
         HTS_FORMAT_SAM => sam_c_1907_sam_hdr_create(_fp),
         HTS_FORMAT_CRAM => hts_sys::sam_hdr_read(_fp.cast()).cast(),
         _ => {
-            *crate::htslib_mini_rs::c_compat::__errno_location() =
-                crate::htslib_mini_rs::c_compat::ENOEXEC as c_int;
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::ENOEXEC as c_int;
             return std::ptr::null_mut();
         }
     };
@@ -1843,16 +1836,16 @@ pub unsafe fn sam_hdr_destroy(_h: *mut sam_hdr_t) {
     }
     if !(*_h).target_name.is_null() {
         for i in 0..(*_h).n_targets {
-            crate::htslib_mini_rs::c_compat::free(
+            crate::htslib_rs::c_compat::free(
                 *(*_h).target_name.add(i as usize).cast::<*mut c_void>(),
             );
         }
-        crate::htslib_mini_rs::c_compat::free((*_h).target_name.cast());
-        crate::htslib_mini_rs::c_compat::free((*_h).target_len.cast());
+        crate::htslib_rs::c_compat::free((*_h).target_name.cast());
+        crate::htslib_rs::c_compat::free((*_h).target_len.cast());
     }
-    crate::htslib_mini_rs::c_compat::free((*_h).text.cast());
+    crate::htslib_rs::c_compat::free((*_h).text.cast());
     kh_destroy_s2i((*_h).sdict.cast());
-    crate::htslib_mini_rs::c_compat::free(_h.cast());
+    crate::htslib_rs::c_compat::free(_h.cast());
 }
 
 pub unsafe fn sam_hdr_free(hdr: *mut sam_hdr_t) {
@@ -1950,8 +1943,7 @@ unsafe fn sam_c_2080_old_sam_hdr_change_HD(
         new_text.extend_from_slice(old_text);
     }
 
-    let newtext =
-        crate::htslib_mini_rs::c_compat::malloc(new_text.len() as u64 + 1).cast::<c_char>();
+    let newtext = crate::htslib_rs::c_compat::malloc(new_text.len() as u64 + 1).cast::<c_char>();
     if newtext.is_null() {
         return -1;
     }
@@ -1959,7 +1951,7 @@ unsafe fn sam_c_2080_old_sam_hdr_change_HD(
         std::ptr::copy_nonoverlapping(new_text.as_ptr(), newtext.cast::<u8>(), new_text.len());
     }
     *newtext.add(new_text.len()) = 0;
-    crate::htslib_mini_rs::c_compat::free((*h).text.cast());
+    crate::htslib_rs::c_compat::free((*h).text.cast());
     (*h).text = newtext;
     (*h).l_text = new_text.len();
     0
@@ -2038,14 +2030,14 @@ unsafe fn sam_c_1173_bam_get_library(h: *const sam_hdr_t, b: *const bam1_t) -> *
         std::ptr::copy_nonoverlapping(lib.s, lb_text, len);
     }
     *lb_text.add(len) = 0;
-    crate::htslib_mini_rs::c_compat::free(lib.s.cast());
+    crate::htslib_rs::c_compat::free(lib.s.cast());
     lb_text.cast_const()
 }
 
 unsafe fn sam_c_2221_grow_B_array(b: *mut bam1_t, n: *mut u32, size: usize) -> i64 {
     if *n > (c_int::MAX as f64 * 0.666) as u32 {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOMEM as c_int;
         return -1;
     }
 
@@ -2544,7 +2536,7 @@ unsafe fn sam_c_2524_aux_parse(
             if possibly_expand_bam_data(b, zlen + 1) < 0 {
                 return -2;
             }
-            crate::htslib_mini_rs::c_compat::memcpy(
+            crate::htslib_rs::c_compat::memcpy(
                 (*b).data.add((*b).l_data as usize).cast(),
                 q.cast(),
                 zlen as u64,
@@ -2628,7 +2620,7 @@ pub unsafe fn sam_c_2662_sam_parse1(s: *mut kstring_t, h: *mut sam_hdr_t, b: *mu
     if possibly_expand_bam_data(b, p.offset_from(q) as usize + 4) < 0 {
         return -2;
     }
-    crate::htslib_mini_rs::c_compat::memcpy(
+    crate::htslib_rs::c_compat::memcpy(
         (*b).data.add((*b).l_data as usize).cast(),
         q.cast(),
         p.offset_from(q) as u64,
@@ -2811,7 +2803,7 @@ unsafe fn sam_c_3048_sam_state_create(fp: *mut htsFile) -> *mut SAM_state {
     if (*fp).format.format != HTS_FORMAT_SAM && (*fp).format.format != HTS_FORMAT_TEXT_FORMAT {
         return std::ptr::null_mut();
     }
-    let fd = crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<SAM_state>() as u64)
+    let fd = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<SAM_state>() as u64)
         .cast::<SAM_state>();
     if fd.is_null() {
         return std::ptr::null_mut();
@@ -2835,12 +2827,12 @@ unsafe fn sam_c_3076_sam_free_sp_bams(b: *mut sp_bams) {
         for i in 0..(*b).abams {
             let bam = (*b).bams.add(i as usize);
             if !(*bam).data.is_null() {
-                crate::htslib_mini_rs::c_compat::free((*bam).data.cast());
+                crate::htslib_rs::c_compat::free((*bam).data.cast());
             }
         }
-        crate::htslib_mini_rs::c_compat::free((*b).bams.cast());
+        crate::htslib_rs::c_compat::free((*b).bams.cast());
     }
-    crate::htslib_mini_rs::c_compat::free(b.cast());
+    crate::htslib_rs::c_compat::free(b.cast());
 }
 
 unsafe extern "C" fn sam_c_3200_cleanup_sp_lines(arg: *mut c_void) {
@@ -2851,9 +2843,9 @@ unsafe extern "C" fn sam_c_3200_cleanup_sp_lines(arg: *mut c_void) {
 
     assert!((*gl).next.is_null());
 
-    crate::htslib_mini_rs::c_compat::free((*gl).data.cast());
+    crate::htslib_rs::c_compat::free((*gl).data.cast());
     sam_c_3076_sam_free_sp_bams((*gl).bams);
-    crate::htslib_mini_rs::c_compat::free(gl.cast());
+    crate::htslib_rs::c_compat::free(gl.cast());
 }
 
 unsafe extern "C" fn sam_c_3313_sam_parse_eof(_arg: *mut c_void) -> *mut c_void {
@@ -2876,19 +2868,19 @@ unsafe extern "C" fn sam_c_3215_sam_parse_worker(arg: *mut c_void) -> *mut c_voi
     }
 
     if gb.is_null() {
-        gb = crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<sp_bams>() as u64)
+        gb = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sp_bams>() as u64)
             .cast::<sp_bams>();
         if gb.is_null() {
             return std::ptr::null_mut();
         }
         (*gb).abams = 100;
-        (*gb).bams = crate::htslib_mini_rs::c_compat::calloc(
+        (*gb).bams = crate::htslib_rs::c_compat::calloc(
             (*gb).abams as u64,
             std::mem::size_of::<bam1_t>() as u64,
         )
         .cast::<bam1_t>();
         if (*gb).bams.is_null() {
-            sam_c_3069_sam_state_err(fd, crate::htslib_mini_rs::c_compat::ENOMEM as c_int);
+            sam_c_3069_sam_state_err(fd, crate::htslib_rs::c_compat::ENOMEM as c_int);
             sam_c_3076_sam_free_sp_bams(gb);
             return std::ptr::null_mut();
         }
@@ -2900,7 +2892,7 @@ unsafe extern "C" fn sam_c_3215_sam_parse_worker(arg: *mut c_void) -> *mut c_voi
 
     let mut b = (*gb).bams;
     if b.is_null() {
-        sam_c_3069_sam_state_err(fd, crate::htslib_mini_rs::c_compat::ENOMEM as c_int);
+        sam_c_3069_sam_state_err(fd, crate::htslib_rs::c_compat::ENOMEM as c_int);
         sam_c_3076_sam_free_sp_bams(gb);
         return std::ptr::null_mut();
     }
@@ -2912,14 +2904,14 @@ unsafe extern "C" fn sam_c_3215_sam_parse_worker(arg: *mut c_void) -> *mut c_voi
         if i >= (*gb).abams {
             let old_abams = (*gb).abams;
             (*gb).abams *= 2;
-            b = crate::htslib_mini_rs::c_compat::realloc(
+            b = crate::htslib_rs::c_compat::realloc(
                 (*gb).bams.cast(),
                 (*gb).abams as u64 * std::mem::size_of::<bam1_t>() as u64,
             )
             .cast::<bam1_t>();
             if b.is_null() {
                 (*gb).abams = old_abams;
-                sam_c_3069_sam_state_err(fd, crate::htslib_mini_rs::c_compat::ENOMEM as c_int);
+                sam_c_3069_sam_state_err(fd, crate::htslib_rs::c_compat::ENOMEM as c_int);
                 sam_c_3076_sam_free_sp_bams(gb);
                 return std::ptr::null_mut();
             }
@@ -2947,7 +2939,7 @@ unsafe extern "C" fn sam_c_3215_sam_parse_worker(arg: *mut c_void) -> *mut c_voi
             s: cp,
         };
         if sam_c_2662_sam_parse1(&mut ks, (*fd).h, b.add(i as usize)) < 0 {
-            let errno = *crate::htslib_mini_rs::c_compat::__errno_location();
+            let errno = *crate::htslib_rs::c_compat::__errno_location();
             sam_c_3069_sam_state_err(
                 fd,
                 if errno != 0 {
@@ -2985,10 +2977,10 @@ unsafe extern "C" fn sam_c_3652_sam_format_worker(arg: *mut c_void) -> *mut c_vo
     }
 
     if gl.is_null() {
-        gl = crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<sp_lines>() as u64)
+        gl = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sp_lines>() as u64)
             .cast::<sp_lines>();
         if gl.is_null() {
-            sam_c_3069_sam_state_err(fd, crate::htslib_mini_rs::c_compat::ENOMEM as c_int);
+            sam_c_3069_sam_state_err(fd, crate::htslib_rs::c_compat::ENOMEM as c_int);
             return std::ptr::null_mut();
         }
         (*gl).alloc = 0;
@@ -3005,7 +2997,7 @@ unsafe extern "C" fn sam_c_3652_sam_format_worker(arg: *mut c_void) -> *mut c_vo
     };
     for i in 0..(*gb).nbams {
         if sam_c_4324_sam_format1_append((*fd).h, (*gb).bams.add(i as usize), &mut ks) < 0 {
-            let errno = *crate::htslib_mini_rs::c_compat::__errno_location();
+            let errno = *crate::htslib_rs::c_compat::__errno_location();
             sam_c_3069_sam_state_err(
                 fd,
                 if errno != 0 {
@@ -3014,8 +3006,8 @@ unsafe extern "C" fn sam_c_3652_sam_format_worker(arg: *mut c_void) -> *mut c_vo
                     libc::EIO as c_int
                 },
             );
-            crate::htslib_mini_rs::c_compat::free(ks.s.cast());
-            crate::htslib_mini_rs::c_compat::free(gl.cast());
+            crate::htslib_rs::c_compat::free(ks.s.cast());
+            crate::htslib_rs::c_compat::free(gl.cast());
             return std::ptr::null_mut();
         }
         kputc(b'\n' as c_int, &mut ks);
@@ -3046,8 +3038,8 @@ pub unsafe fn sam_state_destroy(fp: *mut htsFile) -> c_int {
     let mut l = (*fd).lines;
     while !l.is_null() {
         let n = (*l).next;
-        crate::htslib_mini_rs::c_compat::free((*l).data.cast());
-        crate::htslib_mini_rs::c_compat::free(l.cast());
+        crate::htslib_rs::c_compat::free((*l).data.cast());
+        crate::htslib_rs::c_compat::free(l.cast());
         l = n;
     }
 
@@ -3064,7 +3056,7 @@ pub unsafe fn sam_state_destroy(fp: *mut htsFile) -> c_int {
         sam_c_3076_sam_free_sp_bams((*fd).curr_bam);
     }
     sam_hdr_destroy((*fd).h);
-    crate::htslib_mini_rs::c_compat::free((*fp).state);
+    crate::htslib_rs::c_compat::free((*fp).state);
     (*fp).state = std::ptr::null_mut();
     ret
 }
@@ -3288,7 +3280,7 @@ unsafe extern "C" fn sam_c_1210_bam_sym_lookup(
             if ks_resize(s, (*b).core.l_qseq as usize + 1) < 0 {
                 return -1;
             }
-            crate::htslib_mini_rs::c_compat::memcpy(
+            crate::htslib_rs::c_compat::memcpy(
                 (*s).s.cast(),
                 bam_get_qual(b).cast(),
                 (*b).core.l_qseq as u64,
@@ -3430,17 +3422,17 @@ pub unsafe fn sam_c_1535_sam_passes_filter(
         &mut res,
     ) != 0
     {
-        crate::htslib_mini_rs::hts::hts_expr_val_free(&mut res);
+        crate::htslib_rs::hts::hts_expr_val_free(&mut res);
         return -1;
     }
 
     let t = res.is_true as c_int;
-    crate::htslib_mini_rs::hts::hts_expr_val_free(&mut res);
+    crate::htslib_rs::hts::hts_expr_val_free(&mut res);
     t
 }
 
 unsafe fn sam_c_3786_fastq_state_init(name_char: c_int) -> *mut fastq_state {
-    let x = crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<fastq_state>() as u64)
+    let x = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<fastq_state>() as u64)
         .cast::<fastq_state>();
     if x.is_null() {
         return std::ptr::null_mut();
@@ -3456,7 +3448,7 @@ unsafe fn sam_c_3786_fastq_state_init(name_char: c_int) -> *mut fastq_state {
         libc::REG_EXTENDED,
     ) != 0
     {
-        crate::htslib_mini_rs::c_compat::free(x.cast());
+        crate::htslib_rs::c_compat::free(x.cast());
         return std::ptr::null_mut();
     }
 
@@ -3471,12 +3463,12 @@ pub unsafe fn sam_c_3802_fastq_state_destroy(fp: *mut htsFile) {
         ks_free(&mut (*x).qual);
         if !(*x).tags.is_null() {
             let tags = (*x).tags.cast::<khash_tag_t>();
-            crate::htslib_mini_rs::c_compat::free((*tags).flags.cast());
-            crate::htslib_mini_rs::c_compat::free((*tags).keys.cast());
-            crate::htslib_mini_rs::c_compat::free(tags.cast());
+            crate::htslib_rs::c_compat::free((*tags).flags.cast());
+            crate::htslib_rs::c_compat::free((*tags).keys.cast());
+            crate::htslib_rs::c_compat::free(tags.cast());
         }
         libc::regfree(&mut (*x).regex);
-        crate::htslib_mini_rs::c_compat::free((*fp).state);
+        crate::htslib_rs::c_compat::free((*fp).state);
         (*fp).state = std::ptr::null_mut();
     }
 }
@@ -3511,7 +3503,7 @@ pub unsafe fn sam_c_3815_fastq_state_set(
             (*x).aux = 1;
             if !arg.is_null() && libc::strcmp(arg, c"1".as_ptr()) != 0 {
                 if (*x).tags.is_null() {
-                    let tags = crate::htslib_mini_rs::c_compat::calloc(
+                    let tags = crate::htslib_rs::c_compat::calloc(
                         1,
                         std::mem::size_of::<khash_tag_t>() as u64,
                     )
@@ -3525,18 +3517,18 @@ pub unsafe fn sam_c_3815_fastq_state_set(
                         n_buckets <<= 1;
                     }
                     let n_flags = if n_buckets < 16 { 1 } else { n_buckets >> 4 };
-                    (*tags).flags = crate::htslib_mini_rs::c_compat::malloc(
+                    (*tags).flags = crate::htslib_rs::c_compat::malloc(
                         n_flags as u64 * std::mem::size_of::<u32>() as u64,
                     )
                     .cast::<u32>();
-                    (*tags).keys = crate::htslib_mini_rs::c_compat::malloc(
+                    (*tags).keys = crate::htslib_rs::c_compat::malloc(
                         n_buckets as u64 * std::mem::size_of::<c_int>() as u64,
                     )
                     .cast::<c_int>();
                     if (*tags).flags.is_null() || (*tags).keys.is_null() {
-                        crate::htslib_mini_rs::c_compat::free((*tags).flags.cast());
-                        crate::htslib_mini_rs::c_compat::free((*tags).keys.cast());
-                        crate::htslib_mini_rs::c_compat::free(tags.cast());
+                        crate::htslib_rs::c_compat::free((*tags).flags.cast());
+                        crate::htslib_rs::c_compat::free((*tags).keys.cast());
+                        crate::htslib_rs::c_compat::free(tags.cast());
                         return -1;
                     }
                     for i in 0..n_flags {
@@ -3644,7 +3636,7 @@ unsafe fn sam_c_3927_fastq_parse1(fp: *mut htsFile, b: *mut bam1_t) -> c_int {
         if (*fp).line.l == 0 {
             return -1;
         }
-        crate::htslib_mini_rs::c_compat::free((*x).name.s.cast());
+        crate::htslib_rs::c_compat::free((*x).name.s.cast());
         (*x).name = (*fp).line;
         (*fp).line.l = 0;
         (*fp).line.m = 0;
@@ -3653,7 +3645,7 @@ unsafe fn sam_c_3927_fastq_parse1(fp: *mut htsFile, b: *mut bam1_t) -> c_int {
         ret = hts_sys::hts_getline(
             fp.cast(),
             2,
-            (&mut (*x).name as *mut crate::htslib_mini_rs::hts::kstring_t).cast(),
+            (&mut (*x).name as *mut crate::htslib_rs::hts::kstring_t).cast(),
         );
         if ret == -1 {
             return -1;
@@ -3704,7 +3696,7 @@ unsafe fn sam_c_3927_fastq_parse1(fp: *mut htsFile, b: *mut bam1_t) -> c_int {
         ret = hts_sys::hts_getline(
             fp.cast(),
             2,
-            (&mut (*fp).line as *mut crate::htslib_mini_rs::hts::kstring_t).cast(),
+            (&mut (*fp).line as *mut crate::htslib_rs::hts::kstring_t).cast(),
         );
         if ret < 0 && ((*fp).format.format == HTS_FORMAT_FASTQ_FORMAT || ret < -1) {
             return -2;
@@ -3731,7 +3723,7 @@ unsafe fn sam_c_3927_fastq_parse1(fp: *mut htsFile, b: *mut bam1_t) -> c_int {
             if hts_sys::hts_getline(
                 fp.cast(),
                 2,
-                (&mut (*fp).line as *mut crate::htslib_mini_rs::hts::kstring_t).cast(),
+                (&mut (*fp).line as *mut crate::htslib_rs::hts::kstring_t).cast(),
             ) < 0
             {
                 return -2;
@@ -3925,7 +3917,7 @@ unsafe fn sam_c_4413_fastq_format1(
         }
 
         if *(*str_).s.add(name_len) == b'#' as c_char && (*str_).l - name_len < 255 {
-            crate::htslib_mini_rs::c_compat::memcpy(
+            crate::htslib_rs::c_compat::memcpy(
                 plex.as_mut_ptr().cast(),
                 (*str_).s.add(name_len).cast(),
                 ((*str_).l - name_len) as u64,
@@ -4176,26 +4168,26 @@ fn kroundup32(mut x: u32) -> u32 {
 
 pub unsafe fn sam_realloc_bam_data(b: *mut bam1_t, desired: usize) -> c_int {
     if desired > (i32::MAX as f64 * 0.666) as usize {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOMEM as c_int;
         return -1;
     }
     let mut new_m_data = kroundup32(desired as u32);
     new_m_data = new_m_data.wrapping_add(32);
     if (new_m_data as usize) < desired {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOMEM as c_int;
         return -1;
     }
 
     let new_data = if (bam_get_mempolicy(b) & BAM_USER_OWNS_DATA) == 0 {
-        crate::htslib_mini_rs::c_compat::realloc((*b).data.cast(), new_m_data as u64).cast::<u8>()
+        crate::htslib_rs::c_compat::realloc((*b).data.cast(), new_m_data as u64).cast::<u8>()
     } else {
-        let ptr = crate::htslib_mini_rs::c_compat::malloc(new_m_data as u64).cast::<u8>();
+        let ptr = crate::htslib_rs::c_compat::malloc(new_m_data as u64).cast::<u8>();
         if !ptr.is_null() {
             if (*b).l_data > 0 {
                 let copied = ((*b).l_data as u32).min((*b).m_data) as u64;
-                crate::htslib_mini_rs::c_compat::memcpy(ptr.cast(), (*b).data.cast(), copied);
+                crate::htslib_rs::c_compat::memcpy(ptr.cast(), (*b).data.cast(), copied);
             }
             bam_set_mempolicy(b, bam_get_mempolicy(b) & !BAM_USER_OWNS_DATA);
         }
@@ -4217,7 +4209,7 @@ pub unsafe fn realloc_bam_data(b: *mut bam1_t, desired: usize) -> c_int {
 }
 
 pub unsafe fn bam_init1() -> *mut bam1_t {
-    crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<bam1_t>() as u64).cast()
+    crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<bam1_t>() as u64).cast()
 }
 
 pub unsafe fn bam_destroy1(b: *mut bam1_t) {
@@ -4225,7 +4217,7 @@ pub unsafe fn bam_destroy1(b: *mut bam1_t) {
         return;
     }
     if (bam_get_mempolicy(b) & BAM_USER_OWNS_DATA) == 0 {
-        crate::htslib_mini_rs::c_compat::free((*b).data.cast());
+        crate::htslib_rs::c_compat::free((*b).data.cast());
         if (bam_get_mempolicy(b) & BAM_USER_OWNS_STRUCT) != 0 {
             (*b).data = std::ptr::null_mut();
             (*b).m_data = 0;
@@ -4233,7 +4225,7 @@ pub unsafe fn bam_destroy1(b: *mut bam1_t) {
         }
     }
     if (bam_get_mempolicy(b) & BAM_USER_OWNS_STRUCT) == 0 {
-        crate::htslib_mini_rs::c_compat::free(b.cast());
+        crate::htslib_rs::c_compat::free(b.cast());
     }
 }
 
@@ -4241,7 +4233,7 @@ pub unsafe fn bam_copy1(bdst: *mut bam1_t, bsrc: *const bam1_t) -> *mut bam1_t {
     if realloc_bam_data(bdst, (*bsrc).l_data as usize) < 0 {
         return std::ptr::null_mut();
     }
-    crate::htslib_mini_rs::c_compat::memcpy(
+    crate::htslib_rs::c_compat::memcpy(
         (*bdst).data.cast(),
         (*bsrc).data.cast(),
         (*bsrc).l_data as u64,
@@ -4268,23 +4260,23 @@ pub unsafe fn bam_dup1(bsrc: *const bam1_t) -> *mut bam1_t {
 }
 
 pub unsafe fn mp_init() -> *mut mempool_t {
-    crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<mempool_t>() as u64).cast()
+    crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<mempool_t>() as u64).cast()
 }
 
 pub unsafe fn mp_destroy(mp: *mut mempool_t) {
     for k in 0..(*mp).n {
         let node = *(*mp).buf.add(k as usize);
-        crate::htslib_mini_rs::c_compat::free((*node).b.data.cast());
-        crate::htslib_mini_rs::c_compat::free(node.cast());
+        crate::htslib_rs::c_compat::free((*node).b.data.cast());
+        crate::htslib_rs::c_compat::free(node.cast());
     }
-    crate::htslib_mini_rs::c_compat::free((*mp).buf.cast());
-    crate::htslib_mini_rs::c_compat::free(mp.cast());
+    crate::htslib_rs::c_compat::free((*mp).buf.cast());
+    crate::htslib_rs::c_compat::free(mp.cast());
 }
 
 pub unsafe fn mp_alloc(mp: *mut mempool_t) -> *mut lbnode_t {
     (*mp).cnt += 1;
     if (*mp).n == 0 {
-        crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<lbnode_t>() as u64).cast()
+        crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<lbnode_t>() as u64).cast()
     } else {
         (*mp).n -= 1;
         *(*mp).buf.add((*mp).n as usize)
@@ -4296,7 +4288,7 @@ pub unsafe fn mp_free(mp: *mut mempool_t, p: *mut lbnode_t) {
     (*p).next = std::ptr::null_mut();
     if (*mp).n == (*mp).max {
         (*mp).max = if (*mp).max != 0 { (*mp).max << 1 } else { 256 };
-        (*mp).buf = crate::htslib_mini_rs::c_compat::realloc(
+        (*mp).buf = crate::htslib_rs::c_compat::realloc(
             (*mp).buf.cast(),
             (std::mem::size_of::<*mut lbnode_t>() * (*mp).max as usize) as u64,
         )
@@ -4829,20 +4821,20 @@ unsafe fn kh_destroy_s2i(h: *mut khash_s2i_t) {
     if h.is_null() {
         return;
     }
-    crate::htslib_mini_rs::c_compat::free((*h).flags.cast());
-    crate::htslib_mini_rs::c_compat::free((*h).keys.cast());
-    crate::htslib_mini_rs::c_compat::free((*h).vals.cast());
-    crate::htslib_mini_rs::c_compat::free(h.cast());
+    crate::htslib_rs::c_compat::free((*h).flags.cast());
+    crate::htslib_rs::c_compat::free((*h).keys.cast());
+    crate::htslib_rs::c_compat::free((*h).vals.cast());
+    crate::htslib_rs::c_compat::free(h.cast());
 }
 
 unsafe fn kh_destroy_m_s2i(h: *mut khash_m_s2i_t) {
     if h.is_null() {
         return;
     }
-    crate::htslib_mini_rs::c_compat::free((*h).flags.cast());
-    crate::htslib_mini_rs::c_compat::free((*h).keys.cast());
-    crate::htslib_mini_rs::c_compat::free((*h).vals.cast());
-    crate::htslib_mini_rs::c_compat::free(h.cast());
+    crate::htslib_rs::c_compat::free((*h).flags.cast());
+    crate::htslib_rs::c_compat::free((*h).keys.cast());
+    crate::htslib_rs::c_compat::free((*h).vals.cast());
+    crate::htslib_rs::c_compat::free(h.cast());
 }
 
 unsafe fn kh_get_str2int(h: *const khash_m_s2i_t, key: *const c_char) -> u32 {
@@ -4935,20 +4927,20 @@ unsafe fn kh_resize_str2int(h: *mut khash_m_s2i_t, new_n_buckets: u32) -> c_int 
         new_n_buckets >> 4
     };
     let flags =
-        crate::htslib_mini_rs::c_compat::malloc(n_flags as u64 * std::mem::size_of::<u32>() as u64)
+        crate::htslib_rs::c_compat::malloc(n_flags as u64 * std::mem::size_of::<u32>() as u64)
             .cast::<u32>();
-    let keys = crate::htslib_mini_rs::c_compat::malloc(
+    let keys = crate::htslib_rs::c_compat::malloc(
         new_n_buckets as u64 * std::mem::size_of::<*mut c_char>() as u64,
     )
     .cast::<*mut c_char>();
-    let vals = crate::htslib_mini_rs::c_compat::malloc(
+    let vals = crate::htslib_rs::c_compat::malloc(
         new_n_buckets as u64 * std::mem::size_of::<c_int>() as u64,
     )
     .cast::<c_int>();
     if flags.is_null() || keys.is_null() || vals.is_null() {
-        crate::htslib_mini_rs::c_compat::free(flags.cast());
-        crate::htslib_mini_rs::c_compat::free(keys.cast());
-        crate::htslib_mini_rs::c_compat::free(vals.cast());
+        crate::htslib_rs::c_compat::free(flags.cast());
+        crate::htslib_rs::c_compat::free(keys.cast());
+        crate::htslib_rs::c_compat::free(vals.cast());
         return -1;
     }
     for i in 0..n_flags {
@@ -4977,14 +4969,14 @@ unsafe fn kh_resize_str2int(h: *mut khash_m_s2i_t, new_n_buckets: u32) -> c_int 
             *(*h).vals.add(k as usize) = *old_vals.add(i as usize);
         }
     }
-    crate::htslib_mini_rs::c_compat::free(old_flags.cast());
-    crate::htslib_mini_rs::c_compat::free(old_keys.cast());
-    crate::htslib_mini_rs::c_compat::free(old_vals.cast());
+    crate::htslib_rs::c_compat::free(old_flags.cast());
+    crate::htslib_rs::c_compat::free(old_keys.cast());
+    crate::htslib_rs::c_compat::free(old_vals.cast());
     0
 }
 
 pub unsafe fn khash_str2int_init() -> *mut c_void {
-    let h = crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<khash_m_s2i_t>() as u64)
+    let h = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<khash_m_s2i_t>() as u64)
         .cast::<khash_m_s2i_t>();
     h.cast()
 }
@@ -5000,9 +4992,7 @@ pub unsafe fn khash_str2int_destroy_free(_hash: *mut c_void) {
     }
     for k in 0..(*hash).n_buckets {
         if !kh_iseither((*hash).flags, k) {
-            crate::htslib_mini_rs::c_compat::free(
-                *(*hash).keys.add(k as usize).cast::<*mut c_void>(),
-            );
+            crate::htslib_rs::c_compat::free(*(*hash).keys.add(k as usize).cast::<*mut c_void>());
         }
     }
     kh_destroy_m_s2i(hash);
@@ -5387,8 +5377,8 @@ unsafe fn sam_read1_bam(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut bam1_t) -> 
             || (*b).core.mtid >= (*h).n_targets
             || (*b).core.mtid < -1)
     {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ERANGE as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ERANGE as c_int;
         return -3;
     }
     ret
@@ -5714,7 +5704,7 @@ unsafe fn sam_c_4157_sam_read1_sam(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut 
         let ret = hts_sys::hts_getline(
             fp.cast(),
             2,
-            (&mut (*fp).line as *mut crate::htslib_mini_rs::hts::kstring_t).cast(),
+            (&mut (*fp).line as *mut crate::htslib_rs::hts::kstring_t).cast(),
         );
         if ret < 0 {
             return ret;
@@ -5757,8 +5747,8 @@ unsafe fn sam_read1_unfiltered(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut bam1
     match (*fp).format.format {
         HTS_FORMAT_BAM => sam_read1_bam(fp, h, b),
         HTS_FORMAT_EMPTY_FORMAT => {
-            *crate::htslib_mini_rs::c_compat::__errno_location() =
-                crate::htslib_mini_rs::c_compat::EPIPE as c_int;
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::EPIPE as c_int;
             -3
         }
         HTS_FORMAT_SAM => sam_c_4157_sam_read1_sam(fp, h, b),
@@ -5780,15 +5770,15 @@ unsafe fn sam_read1_unfiltered(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut bam1
             sam_c_3927_fastq_parse1(fp, b)
         }
         _ => {
-            *crate::htslib_mini_rs::c_compat::__errno_location() =
-                crate::htslib_mini_rs::c_compat::ENOEXEC as c_int;
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::ENOEXEC as c_int;
             -3
         }
     }
 }
 
 unsafe extern "C" fn sam_readrec(
-    _ignored: *mut crate::htslib_mini_rs::hts::BGZF,
+    _ignored: *mut crate::htslib_rs::hts::BGZF,
     fpv: *mut c_void,
     bv: *mut c_void,
     tid: *mut c_int,
@@ -5808,7 +5798,7 @@ unsafe extern "C" fn sam_readrec(
 }
 
 unsafe extern "C" fn sam_readrec_rest(
-    _ignored: *mut crate::htslib_mini_rs::hts::BGZF,
+    _ignored: *mut crate::htslib_rs::hts::BGZF,
     fpv: *mut c_void,
     bv: *mut c_void,
     _tid: *mut c_int,
@@ -5822,7 +5812,7 @@ unsafe extern "C" fn sam_readrec_rest(
 }
 
 pub unsafe fn bam_plp_init(_func: bam_plp_auto_f, _data: *mut c_void) -> bam_plp_t {
-    let iter = crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<bam_plp_s>() as u64)
+    let iter = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<bam_plp_s>() as u64)
         .cast::<bam_plp_s>();
     (*iter).mp = mp_init();
     (*iter).head = mp_alloc((*iter).mp);
@@ -5867,8 +5857,8 @@ pub unsafe fn bam_plp_destroy(_iter: bam_plp_t) {
     if !(*_iter).b.is_null() {
         bam_destroy1((*_iter).b);
     }
-    crate::htslib_mini_rs::c_compat::free((*_iter).plp.cast());
-    crate::htslib_mini_rs::c_compat::free(_iter.cast());
+    crate::htslib_rs::c_compat::free((*_iter).plp.cast());
+    crate::htslib_rs::c_compat::free(_iter.cast());
 }
 
 pub unsafe fn bam_plp_constructor(_plp: bam_plp_t, _func: bam_plp_constructor_f) {
@@ -5988,7 +5978,7 @@ pub unsafe fn bam_plp64_next(
                         } else {
                             256
                         };
-                        (*_iter).plp = crate::htslib_mini_rs::c_compat::realloc(
+                        (*_iter).plp = crate::htslib_rs::c_compat::realloc(
                             (*_iter).plp.cast(),
                             (std::mem::size_of::<bam_pileup1_t>() * (*_iter).max_plp as usize)
                                 as u64,
@@ -6140,24 +6130,22 @@ pub unsafe fn bam_mplp_init(
     _func: bam_plp_auto_f,
     _data: *mut *mut c_void,
 ) -> bam_mplp_t {
-    let iter = crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<bam_mplp_s>() as u64)
+    let iter = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<bam_mplp_s>() as u64)
         .cast::<bam_mplp_s>();
     (*iter).pos =
-        crate::htslib_mini_rs::c_compat::calloc(_n as u64, std::mem::size_of::<hts_pos_t>() as u64)
+        crate::htslib_rs::c_compat::calloc(_n as u64, std::mem::size_of::<hts_pos_t>() as u64)
             .cast();
     (*iter).tid =
-        crate::htslib_mini_rs::c_compat::calloc(_n as u64, std::mem::size_of::<i32>() as u64)
-            .cast();
+        crate::htslib_rs::c_compat::calloc(_n as u64, std::mem::size_of::<i32>() as u64).cast();
     (*iter).n_plp =
-        crate::htslib_mini_rs::c_compat::calloc(_n as u64, std::mem::size_of::<c_int>() as u64)
-            .cast();
-    (*iter).plp = crate::htslib_mini_rs::c_compat::calloc(
+        crate::htslib_rs::c_compat::calloc(_n as u64, std::mem::size_of::<c_int>() as u64).cast();
+    (*iter).plp = crate::htslib_rs::c_compat::calloc(
         _n as u64,
         std::mem::size_of::<*const bam_pileup1_t>() as u64,
     )
     .cast();
     (*iter).iter =
-        crate::htslib_mini_rs::c_compat::calloc(_n as u64, std::mem::size_of::<bam_plp_t>() as u64)
+        crate::htslib_rs::c_compat::calloc(_n as u64, std::mem::size_of::<bam_plp_t>() as u64)
             .cast();
     (*iter).n = _n;
     (*iter).min_pos = HTS_POS_MAX;
@@ -6177,12 +6165,12 @@ pub unsafe fn bam_mplp_destroy(_iter: bam_mplp_t) {
     for i in 0..(*_iter).n {
         bam_plp_destroy(*(*_iter).iter.add(i as usize));
     }
-    crate::htslib_mini_rs::c_compat::free((*_iter).iter.cast());
-    crate::htslib_mini_rs::c_compat::free((*_iter).pos.cast());
-    crate::htslib_mini_rs::c_compat::free((*_iter).tid.cast());
-    crate::htslib_mini_rs::c_compat::free((*_iter).n_plp.cast());
-    crate::htslib_mini_rs::c_compat::free((*_iter).plp.cast());
-    crate::htslib_mini_rs::c_compat::free(_iter.cast());
+    crate::htslib_rs::c_compat::free((*_iter).iter.cast());
+    crate::htslib_rs::c_compat::free((*_iter).pos.cast());
+    crate::htslib_rs::c_compat::free((*_iter).tid.cast());
+    crate::htslib_rs::c_compat::free((*_iter).n_plp.cast());
+    crate::htslib_rs::c_compat::free((*_iter).plp.cast());
+    crate::htslib_rs::c_compat::free(_iter.cast());
 }
 
 pub unsafe fn bam_mplp_init_overlaps(_iter: bam_mplp_t) -> c_int {
@@ -6589,7 +6577,7 @@ pub unsafe fn sam_parse_cigar(
         return 0;
     }
     if n_cigar > *a_mem {
-        let a_tmp = crate::htslib_mini_rs::c_compat::realloc(
+        let a_tmp = crate::htslib_rs::c_compat::realloc(
             (*a_cigar).cast(),
             (n_cigar * std::mem::size_of::<u32>()) as u64,
         )
@@ -6715,23 +6703,23 @@ pub unsafe fn bam_set1(
     }
 
     if l_qname > 254 {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
         return -1;
     }
     if HTS_POS_MAX - rlen <= pos {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
         return -1;
     }
     if (flag as c_int & BAM_FUNMAP) == 0 && l_seq > 0 && n_cigar == 0 {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
         return -1;
     }
     if (flag as c_int & BAM_FUNMAP) == 0 && l_seq > 0 && l_seq as hts_pos_t != qlen {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
         return -1;
     }
 
@@ -6742,8 +6730,8 @@ pub unsafe fn bam_set1(
     u += subtract_check_underflow(l_seq, &mut limit);
     u += subtract_check_underflow(l_aux, &mut limit);
     if u != 0 {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
         return -1;
     }
 
@@ -6767,14 +6755,14 @@ pub unsafe fn bam_set1(
     (*bam).core.isize = isize;
 
     let mut cp = (*bam).data;
-    crate::htslib_mini_rs::c_compat::memcpy(cp.cast(), qname.cast(), l_qname as u64);
+    crate::htslib_rs::c_compat::memcpy(cp.cast(), qname.cast(), l_qname as u64);
     for i in 0..qname_nuls {
         *cp.add(l_qname + i) = 0;
     }
     cp = cp.add(l_qname + qname_nuls);
 
     if n_cigar > 0 {
-        crate::htslib_mini_rs::c_compat::memcpy(cp.cast(), cigar.cast(), (n_cigar * 4) as u64);
+        crate::htslib_rs::c_compat::memcpy(cp.cast(), cigar.cast(), (n_cigar * 4) as u64);
     }
     cp = cp.add(n_cigar * 4);
 
@@ -6803,7 +6791,7 @@ pub unsafe fn bam_set1(
     }
 
     if !qual.is_null() {
-        crate::htslib_mini_rs::c_compat::memcpy(cp.cast(), qual.cast(), l_seq as u64);
+        crate::htslib_rs::c_compat::memcpy(cp.cast(), qual.cast(), l_seq as u64);
     } else {
         libc::memset(cp.cast(), 0xff, l_seq);
     }
@@ -6934,7 +6922,7 @@ pub unsafe fn sam_prob_realn(
     const BAQ_ILLUMINA: c_int = 1 << 3;
     const SEQ_NT16_INT: [u8; 16] = [4, 0, 1, 4, 2, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4];
 
-    let mut conf = crate::htslib_mini_rs::probaln::probaln_par_t {
+    let mut conf = crate::htslib_rs::probaln::probaln_par_t {
         d: 0.001,
         e: 0.1,
         bw: 10,
@@ -6957,7 +6945,7 @@ pub unsafe fn sam_prob_realn(
         if redo_baq == 0
             && realn_check_tag(
                 bq,
-                crate::htslib_mini_rs::hts::HTS_LOG_WARNING,
+                crate::htslib_rs::hts::HTS_LOG_WARNING,
                 c"BQ".as_ptr(),
                 b,
             ) < 0
@@ -6968,13 +6956,7 @@ pub unsafe fn sam_prob_realn(
     }
     zq = bam_aux_get(b, c"ZQ".as_ptr());
     if !zq.is_null() {
-        if realn_check_tag(
-            zq,
-            crate::htslib_mini_rs::hts::HTS_LOG_ERROR,
-            c"ZQ".as_ptr(),
-            b,
-        ) < 0
-        {
+        if realn_check_tag(zq, crate::htslib_rs::hts::HTS_LOG_ERROR, c"ZQ".as_ptr(), b) < 0 {
             return -4;
         }
         zq = zq.add(1);
@@ -7078,13 +7060,13 @@ pub unsafe fn sam_prob_realn(
     }
     let align_lqseq = (((*b).core.l_qseq as usize + 1) | 0xf) + 1;
     if (usize::MAX - lref) / (3 + std::mem::size_of::<c_int>()) < align_lqseq {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOMEM as c_int;
         return -4;
     }
     let Some(total) = align_lqseq.checked_mul(3).and_then(|n| n.checked_add(lref)) else {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOMEM as c_int;
         return -4;
     };
     let mut bq_buf = vec![0_u8; total];
@@ -7113,7 +7095,7 @@ pub unsafe fn sam_prob_realn(
 
     let mut state_buf = vec![0 as c_int; (*b).core.l_qseq as usize];
     let state = state_buf.as_mut_ptr();
-    if crate::htslib_mini_rs::probaln::probaln_glocal(
+    if crate::htslib_rs::probaln::probaln_glocal(
         tref,
         (xe - xb) as c_int,
         tseq,
@@ -7381,14 +7363,14 @@ unsafe fn bam_tag2cigar(b: *mut bam1_t, recal_bin: c_int, _give_warning: c_int) 
     }
 
     let cg = bam_aux_get(b, b"CG\0".as_ptr().cast());
-    let saved_errno = *crate::htslib_mini_rs::c_compat::__errno_location();
+    let saved_errno = *crate::htslib_rs::c_compat::__errno_location();
     if cg.is_null() {
-        if *crate::htslib_mini_rs::c_compat::__errno_location()
-            != crate::htslib_mini_rs::c_compat::ENOENT as c_int
+        if *crate::htslib_rs::c_compat::__errno_location()
+            != crate::htslib_rs::c_compat::ENOENT as c_int
         {
             return -1;
         }
-        *crate::htslib_mini_rs::c_compat::__errno_location() = saved_errno;
+        *crate::htslib_rs::c_compat::__errno_location() = saved_errno;
         return 0;
     }
     if *cg != b'B' || (*cg.add(1) != b'I' && *cg.add(1) != b'i') {
@@ -7413,12 +7395,12 @@ unsafe fn bam_tag2cigar(b: *mut bam1_t, recal_bin: c_int, _give_warning: c_int) 
     }
     (*b).l_data = (ori_len - fake_bytes + n_cigar4) as c_int;
 
-    crate::htslib_mini_rs::c_compat::memmove(
+    crate::htslib_rs::c_compat::memmove(
         (*b).data.add((cigar_st + n_cigar4) as usize).cast(),
         (*b).data.add((cigar_st + fake_bytes) as usize).cast(),
         (ori_len - (cigar_st + fake_bytes)) as u64,
     );
-    crate::htslib_mini_rs::c_compat::memcpy(
+    crate::htslib_rs::c_compat::memcpy(
         (*b).data.add(cigar_st as usize).cast(),
         (*b).data
             .add((n_cigar4 - fake_bytes + cg_st + 8) as usize)
@@ -7426,7 +7408,7 @@ unsafe fn bam_tag2cigar(b: *mut bam1_t, recal_bin: c_int, _give_warning: c_int) 
         n_cigar4 as u64,
     );
     if ori_len > cg_en {
-        crate::htslib_mini_rs::c_compat::memmove(
+        crate::htslib_rs::c_compat::memmove(
             (*b).data
                 .add((cg_st + n_cigar4 - fake_bytes) as usize)
                 .cast(),
@@ -7481,8 +7463,8 @@ pub unsafe fn bam_write1(fp: *mut BGZF, b: *const bam1_t) -> c_int {
 
     let qname_len = c.l_qname as u32 - c.l_extranul as u32;
     if qname_len > 255 {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EOVERFLOW as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EOVERFLOW as c_int;
         return -1;
     }
     if c.n_cigar > 0xffff {
@@ -7631,7 +7613,7 @@ pub unsafe fn sam_c_4553_sam_write1(
                     return -1;
                 }
             } else {
-                if crate::htslib_mini_rs::hfile::htslib_hfile_h_292_hwrite(
+                if crate::htslib_rs::hfile::htslib_hfile_h_292_hwrite(
                     (*fp).fp.hfile,
                     (*fp).line.s.cast(),
                     (*fp).line.l,
@@ -7669,7 +7651,7 @@ pub unsafe fn sam_c_4553_sam_write1(
                     return -1;
                 }
             } else {
-                if crate::htslib_mini_rs::hfile::htslib_hfile_h_292_hwrite(
+                if crate::htslib_rs::hfile::htslib_hfile_h_292_hwrite(
                     (*fp).fp.hfile,
                     (*fp).line.s.cast(),
                     (*fp).line.l,
@@ -7681,7 +7663,7 @@ pub unsafe fn sam_c_4553_sam_write1(
             (*fp).line.l as c_int
         }
         _ => {
-            *crate::htslib_mini_rs::c_compat::__errno_location() = libc::EBADF;
+            *crate::htslib_rs::c_compat::__errno_location() = libc::EBADF;
             -1
         }
     }
@@ -7712,7 +7694,7 @@ pub unsafe fn bam_set_qname(rec: *mut bam1_t, qname: *const c_char) -> c_int {
             (*rec).l_data as usize - (*rec).core.l_qname as usize,
         );
     }
-    crate::htslib_mini_rs::c_compat::memcpy((*rec).data.cast(), qname.cast(), new_len as u64);
+    crate::htslib_rs::c_compat::memcpy((*rec).data.cast(), qname.cast(), new_len as u64);
     for n in 0..extranul {
         *(*rec).data.add(new_len + n) = 0;
     }
@@ -7730,7 +7712,7 @@ pub unsafe fn aux_to_le(type_: c_char, mut out: *mut u8, in_: *const u8, len: us
 
     match tsz {
         x if x == b'H' as c_int || x == b'Z' as c_int || x == 1 => {
-            crate::htslib_mini_rs::c_compat::memcpy(out.cast(), in_.cast(), len as u64);
+            crate::htslib_rs::c_compat::memcpy(out.cast(), in_.cast(), len as u64);
         }
         2 => {
             let mut i = 0;
@@ -7831,8 +7813,8 @@ pub unsafe fn bam_aux_first(b: *const bam1_t) -> *mut u8 {
     let s = bam_get_aux(b).cast_mut();
     let end = (*b).data.add((*b).l_data as usize);
     if end.offset_from(s) <= 2 {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOENT as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOENT as c_int;
         return std::ptr::null_mut();
     }
     s.add(2)
@@ -7846,13 +7828,13 @@ pub unsafe fn bam_aux_next(b: *const bam1_t, s: *const u8) -> *mut u8 {
         skip_aux(s.cast_mut(), end)
     };
     if next.is_null() {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
         return std::ptr::null_mut();
     }
     if end.offset_from(next) <= 2 {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOENT as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOENT as c_int;
         return std::ptr::null_mut();
     }
     next.add(2)
@@ -7864,8 +7846,8 @@ pub unsafe fn bam_aux_get(b: *const bam1_t, tag: *const c_char) -> *mut u8 {
         if *s.sub(2) == *tag.cast::<u8>() && *s.sub(1) == *tag.cast::<u8>().add(1) {
             let e = skip_aux(s, (*b).data.add((*b).l_data as usize));
             if e.is_null() || ((*s == b'Z' || *s == b'H') && *e.sub(1) != 0) {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return std::ptr::null_mut();
             }
             return s;
@@ -7900,8 +7882,8 @@ pub unsafe fn sam_format_aux1(
         }
         b'S' => {
             if end.offset_from(s) < 2 {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return std::ptr::null();
             }
             r |= (kputsn_(b"i:".as_ptr().cast(), 2, ks) < 0) as c_int;
@@ -7910,8 +7892,8 @@ pub unsafe fn sam_format_aux1(
         }
         b's' => {
             if end.offset_from(s) < 2 {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return std::ptr::null();
             }
             r |= (kputsn_(b"i:".as_ptr().cast(), 2, ks) < 0) as c_int;
@@ -7920,8 +7902,8 @@ pub unsafe fn sam_format_aux1(
         }
         b'I' => {
             if end.offset_from(s) < 4 {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return std::ptr::null();
             }
             r |= (kputsn_(b"i:".as_ptr().cast(), 2, ks) < 0) as c_int;
@@ -7933,8 +7915,8 @@ pub unsafe fn sam_format_aux1(
         }
         b'i' => {
             if end.offset_from(s) < 4 {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return std::ptr::null();
             }
             r |= (kputsn_(b"i:".as_ptr().cast(), 2, ks) < 0) as c_int;
@@ -7946,8 +7928,8 @@ pub unsafe fn sam_format_aux1(
         }
         b'A' => {
             if s >= end {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return std::ptr::null();
             }
             r |= (kputsn_(b"A:".as_ptr().cast(), 2, ks) < 0) as c_int;
@@ -7956,8 +7938,8 @@ pub unsafe fn sam_format_aux1(
         }
         b'f' => {
             if end.offset_from(s) < 4 {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return std::ptr::null();
             }
             r |= (kputsn_(b"f:".as_ptr().cast(), 2, ks) < 0) as c_int;
@@ -7969,8 +7951,8 @@ pub unsafe fn sam_format_aux1(
         }
         b'd' => {
             if end.offset_from(s) < 8 {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return std::ptr::null();
             }
             r |= (kputsn_(b"d:".as_ptr().cast(), 2, ks) < 0) as c_int;
@@ -7998,16 +7980,16 @@ pub unsafe fn sam_format_aux1(
             }
             r |= (kputsn(std::ptr::null(), 0, ks) < 0) as c_int;
             if s >= end {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return std::ptr::null();
             }
             s = s.add(1);
         }
         b'B' => {
             if s >= end {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return std::ptr::null();
             }
             let sub_type = *s;
@@ -8019,27 +8001,27 @@ pub unsafe fn sam_format_aux1(
                 _ => 0,
             };
             if sub_type_size == 0 || end.offset_from(s) < 4 {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return std::ptr::null();
             }
             let n = u32::from_le_bytes([*s, *s.add(1), *s.add(2), *s.add(3)]);
             s = s.add(4);
             if (end.offset_from(s) as usize) / sub_type_size < n as usize {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return std::ptr::null();
             }
             r |= (kputsn_(b"B:".as_ptr().cast(), 2, ks) < 0) as c_int;
             r |= (kputc(sub_type as c_int, ks) < 0) as c_int;
             if sub_type == b'A' {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return std::ptr::null();
             }
             if ks_expand(ks, n as usize * 12) < 0 {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::ENOMEM as c_int;
                 return std::ptr::null();
             }
             for _ in 0..n {
@@ -8073,8 +8055,8 @@ pub unsafe fn sam_format_aux1(
                         ) < 0) as c_int;
                     }
                     _ => {
-                        *crate::htslib_mini_rs::c_compat::__errno_location() =
-                            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                        *crate::htslib_rs::c_compat::__errno_location() =
+                            crate::htslib_rs::c_compat::EINVAL as c_int;
                         return std::ptr::null();
                     }
                 }
@@ -8082,15 +8064,15 @@ pub unsafe fn sam_format_aux1(
             }
         }
         _ => {
-            *crate::htslib_mini_rs::c_compat::__errno_location() =
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::EINVAL as c_int;
             return std::ptr::null();
         }
     }
 
     if r != 0 {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOMEM as c_int;
         std::ptr::null()
     } else {
         s
@@ -8169,8 +8151,8 @@ unsafe fn sam_c_4324_sam_format1_append(
     if c.l_qseq != 0 {
         let l_qseq = c.l_qseq as usize;
         if ks_resize(str_, (*str_).l + 2 + 2 * l_qseq) < 0 {
-            *crate::htslib_mini_rs::c_compat::__errno_location() =
-                crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::ENOMEM as c_int;
             return -1;
         }
         let mut cp = (*str_).s.add((*str_).l);
@@ -8200,15 +8182,15 @@ unsafe fn sam_c_4324_sam_format1_append(
         r |= (kputc_(b'\t' as c_int, str_) < 0) as c_int;
         s = sam_format_aux1(s, *s.add(2), s.add(3), end, str_).cast_mut();
         if s.is_null() {
-            *crate::htslib_mini_rs::c_compat::__errno_location() =
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::EINVAL as c_int;
             return -1;
         }
     }
     r |= (kputsn(std::ptr::null(), 0, str_) < 0) as c_int;
     if r != 0 {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOMEM as c_int;
         return -1;
     }
     (*str_).l as c_int
@@ -8222,8 +8204,8 @@ pub unsafe fn sam_format1(h: *const sam_hdr_t, b: *const bam1_t, str_: *mut kstr
 pub unsafe fn bam_aux_get_str(b: *const bam1_t, tag: *const c_char, s: *mut kstring_t) -> c_int {
     let t = bam_aux_get(b, tag);
     if t.is_null() {
-        return if *crate::htslib_mini_rs::c_compat::__errno_location()
-            == crate::htslib_mini_rs::c_compat::ENOENT as c_int
+        return if *crate::htslib_rs::c_compat::__errno_location()
+            == crate::htslib_rs::c_compat::ENOENT as c_int
         {
             0
         } else {
@@ -8269,8 +8251,8 @@ unsafe fn get_int_aux_val(type_: u8, s: *const u8, idx: u32) -> i64 {
             *s.add((4 * idx + 3) as usize),
         ]) as i64,
         _ => {
-            *crate::htslib_mini_rs::c_compat::__errno_location() =
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::EINVAL as c_int;
             0
         }
     }
@@ -8303,8 +8285,8 @@ pub unsafe fn bam_aux2A(s: *const u8) -> c_char {
     if *s == b'A' {
         *s.add(1) as c_char
     } else {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
         0
     }
 }
@@ -8313,16 +8295,16 @@ pub unsafe fn bam_aux2Z(s: *const u8) -> *mut c_char {
     if *s == b'Z' || *s == b'H' {
         s.add(1).cast::<c_char>().cast_mut()
     } else {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
         std::ptr::null_mut()
     }
 }
 
 pub unsafe fn bam_auxB_len(s: *const u8) -> u32 {
     if *s != b'B' {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
         return 0;
     }
     u32::from_le_bytes([*s.add(2), *s.add(3), *s.add(4), *s.add(5)])
@@ -8331,8 +8313,8 @@ pub unsafe fn bam_auxB_len(s: *const u8) -> u32 {
 pub unsafe fn bam_auxB2i(s: *const u8, idx: u32) -> i64 {
     let len = bam_auxB_len(s);
     if idx >= len {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ERANGE as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ERANGE as c_int;
         return 0;
     }
     get_int_aux_val(*s.add(1), s.add(6), idx)
@@ -8341,8 +8323,8 @@ pub unsafe fn bam_auxB2i(s: *const u8, idx: u32) -> i64 {
 pub unsafe fn bam_auxB2f(s: *const u8, idx: u32) -> f64 {
     let len = bam_auxB_len(s);
     if idx >= len {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ERANGE as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ERANGE as c_int;
         return 0.0;
     }
     if *s.add(1) == b'f' {
@@ -8361,19 +8343,19 @@ pub unsafe fn bam_aux_append(
     data: *const u8,
 ) -> c_int {
     let Ok(add_len) = u32::try_from(3_i64 + len as i64) else {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOMEM as c_int;
         return -1;
     };
     let new_len = (*b).l_data as u32;
     let Some(new_len) = new_len.checked_add(add_len) else {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOMEM as c_int;
         return -1;
     };
     if new_len > c_int::MAX as u32 {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOMEM as c_int;
         return -1;
     }
     if realloc_bam_data(b, new_len as usize) < 0 {
@@ -8384,7 +8366,7 @@ pub unsafe fn bam_aux_append(
     *s = *tag.cast::<u8>();
     *s.add(1) = *tag.cast::<u8>().add(1);
     *s.add(2) = type_ as u8;
-    crate::htslib_mini_rs::c_compat::memcpy(s.add(3).cast(), data.cast(), len as u64);
+    crate::htslib_rs::c_compat::memcpy(s.add(3).cast(), data.cast(), len as u64);
     (*b).l_data = new_len as c_int;
     0
 }
@@ -8393,30 +8375,26 @@ pub unsafe fn bam_aux_remove(b: *mut bam1_t, s: *mut u8) -> *mut u8 {
     let end = (*b).data.add((*b).l_data as usize);
     let next = skip_aux(s, end);
     if next.is_null() {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
         return std::ptr::null_mut();
     }
 
     (*b).l_data -= next.offset_from(s.sub(2)) as c_int;
     if next >= end {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOENT as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOENT as c_int;
         return std::ptr::null_mut();
     }
-    crate::htslib_mini_rs::c_compat::memmove(
-        s.sub(2).cast(),
-        next.cast(),
-        end.offset_from(next) as u64,
-    );
+    crate::htslib_rs::c_compat::memmove(s.sub(2).cast(), next.cast(), end.offset_from(next) as u64);
     s
 }
 
 pub unsafe fn bam_aux_del(b: *mut bam1_t, s: *mut u8) -> c_int {
     let ret = bam_aux_remove(b, s);
     if !ret.is_null()
-        || *crate::htslib_mini_rs::c_compat::__errno_location()
-            == crate::htslib_mini_rs::c_compat::ENOENT as c_int
+        || *crate::htslib_rs::c_compat::__errno_location()
+            == crate::htslib_rs::c_compat::ENOENT as c_int
     {
         0
     } else {
@@ -8450,14 +8428,14 @@ pub unsafe fn bam_aux_update_str(
     };
     let mut old_ln = 0usize;
     let need_nul = ln == 0 || *data.cast::<u8>().add(ln - 1) != 0;
-    let save_errno = *crate::htslib_mini_rs::c_compat::__errno_location();
+    let save_errno = *crate::htslib_rs::c_compat::__errno_location();
     let mut new_tag = 0usize;
     let mut s = bam_aux_get(b, tag);
 
     if !s.is_null() {
         if *s != b'Z' {
-            *crate::htslib_mini_rs::c_compat::__errno_location() =
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::EINVAL as c_int;
             return -1;
         }
         s = s.add(1);
@@ -8468,12 +8446,12 @@ pub unsafe fn bam_aux_update_str(
         }
         old_ln = e.offset_from(s) as usize + 1;
         s = s.sub(3);
-    } else if *crate::htslib_mini_rs::c_compat::__errno_location()
-        != crate::htslib_mini_rs::c_compat::ENOENT as c_int
+    } else if *crate::htslib_rs::c_compat::__errno_location()
+        != crate::htslib_rs::c_compat::ENOENT as c_int
     {
         return -1;
     } else {
-        *crate::htslib_mini_rs::c_compat::__errno_location() = save_errno;
+        *crate::htslib_rs::c_compat::__errno_location() = save_errno;
         s = (*b).data.add((*b).l_data as usize);
         new_tag = 3;
     }
@@ -8487,7 +8465,7 @@ pub unsafe fn bam_aux_update_str(
         s = (*b).data.add(s_offset);
     }
     if new_tag == 0 {
-        crate::htslib_mini_rs::c_compat::memmove(
+        crate::htslib_rs::c_compat::memmove(
             s.add(3 + new_ln).cast(),
             s.add(3 + old_ln).cast(),
             ((*b).l_data as usize - (s.add(3).offset_from((*b).data) as usize) - old_ln) as u64,
@@ -8498,7 +8476,7 @@ pub unsafe fn bam_aux_update_str(
     *s = *tag.cast::<u8>();
     *s.add(1) = *tag.cast::<u8>().add(1);
     *s.add(2) = b'Z';
-    crate::htslib_mini_rs::c_compat::memmove(s.add(3).cast(), data.cast(), ln as u64);
+    crate::htslib_rs::c_compat::memmove(s.add(3).cast(), data.cast(), ln as u64);
     if need_nul {
         *s.add(3 + ln) = 0;
     }
@@ -8507,8 +8485,8 @@ pub unsafe fn bam_aux_update_str(
 
 pub unsafe fn bam_aux_update_int(b: *mut bam1_t, tag: *const c_char, val: i64) -> c_int {
     if val < i32::MIN as i64 || val > u32::MAX as i64 {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EOVERFLOW as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EOVERFLOW as c_int;
         return -1;
     }
     let (mut type_, mut sz): (u8, u32) = if val < i16::MIN as i64 {
@@ -8534,13 +8512,13 @@ pub unsafe fn bam_aux_update_int(b: *mut bam1_t, tag: *const c_char, val: i64) -
             b's' | b'S' => 2,
             b'i' | b'I' => 4,
             _ => {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return -1;
             }
         };
-    } else if *crate::htslib_mini_rs::c_compat::__errno_location()
-        == crate::htslib_mini_rs::c_compat::ENOENT as c_int
+    } else if *crate::htslib_rs::c_compat::__errno_location()
+        == crate::htslib_rs::c_compat::ENOENT as c_int
     {
         s = (*b).data.add((*b).l_data as usize);
         new = true;
@@ -8561,7 +8539,7 @@ pub unsafe fn bam_aux_update_int(b: *mut bam1_t, tag: *const c_char, val: i64) -
             *s.add(1) = *tag.cast::<u8>().add(1);
             s = s.add(2);
         } else {
-            crate::htslib_mini_rs::c_compat::memmove(
+            crate::htslib_rs::c_compat::memmove(
                 s.add(sz as usize).cast(),
                 s.add(old_sz as usize).cast(),
                 ((*b).l_data as usize - s_offset - old_sz as usize) as u64,
@@ -8578,7 +8556,7 @@ pub unsafe fn bam_aux_update_int(b: *mut bam1_t, tag: *const c_char, val: i64) -
     *s = type_;
     s = s.add(1);
     let le = val.to_le_bytes();
-    crate::htslib_mini_rs::c_compat::memcpy(s.cast(), le.as_ptr().cast(), sz as u64);
+    crate::htslib_rs::c_compat::memcpy(s.cast(), le.as_ptr().cast(), sz as u64);
     (*b).l_data += (if new { 3 } else { 0 }) + sz as c_int - old_sz as c_int;
     0
 }
@@ -8592,13 +8570,13 @@ pub unsafe fn bam_aux_update_float(b: *mut bam1_t, tag: *const c_char, val: f32)
             b'f' => {}
             b'd' => shrink = true,
             _ => {
-                *crate::htslib_mini_rs::c_compat::__errno_location() =
-                    crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+                *crate::htslib_rs::c_compat::__errno_location() =
+                    crate::htslib_rs::c_compat::EINVAL as c_int;
                 return -1;
             }
         }
-    } else if *crate::htslib_mini_rs::c_compat::__errno_location()
-        == crate::htslib_mini_rs::c_compat::ENOENT as c_int
+    } else if *crate::htslib_rs::c_compat::__errno_location()
+        == crate::htslib_rs::c_compat::ENOENT as c_int
     {
         new = true;
     } else {
@@ -8614,7 +8592,7 @@ pub unsafe fn bam_aux_update_float(b: *mut bam1_t, tag: *const c_char, val: f32)
         *s.add(1) = *tag.cast::<u8>().add(1);
         s = s.add(2);
     } else if shrink {
-        crate::htslib_mini_rs::c_compat::memmove(
+        crate::htslib_rs::c_compat::memmove(
             s.add(5).cast(),
             s.add(9).cast(),
             ((*b).l_data as usize - s.add(9).offset_from((*b).data) as usize) as u64,
@@ -8623,7 +8601,7 @@ pub unsafe fn bam_aux_update_float(b: *mut bam1_t, tag: *const c_char, val: f32)
     }
     *s = b'f';
     let le = val.to_le_bytes();
-    crate::htslib_mini_rs::c_compat::memcpy(s.add(1).cast(), le.as_ptr().cast(), 4);
+    crate::htslib_rs::c_compat::memcpy(s.add(1).cast(), le.as_ptr().cast(), 4);
     if new {
         (*b).l_data += 7;
     }
@@ -8642,19 +8620,19 @@ pub unsafe fn bam_aux_update_array(
     let mut s = bam_aux_get(b, tag);
     if !s.is_null() {
         if *s != b'B' {
-            *crate::htslib_mini_rs::c_compat::__errno_location() =
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::EINVAL as c_int;
             return -1;
         }
         old_sz = aux_type2size(*s.add(1)) as usize;
         if !(1..=4).contains(&old_sz) {
-            *crate::htslib_mini_rs::c_compat::__errno_location() =
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::EINVAL as c_int;
             return -1;
         }
         old_sz *= u32::from_le_bytes([*s.add(2), *s.add(3), *s.add(4), *s.add(5)]) as usize;
-    } else if *crate::htslib_mini_rs::c_compat::__errno_location()
-        == crate::htslib_mini_rs::c_compat::ENOENT as c_int
+    } else if *crate::htslib_rs::c_compat::__errno_location()
+        == crate::htslib_rs::c_compat::ENOENT as c_int
     {
         s = (*b).data.add((*b).l_data as usize);
         new = true;
@@ -8664,13 +8642,13 @@ pub unsafe fn bam_aux_update_array(
 
     let item_sz = aux_type2size(type_) as usize;
     if !(1..=4).contains(&item_sz) {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::EINVAL as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
         return -1;
     }
     if items as usize > c_int::MAX as usize / item_sz {
-        *crate::htslib_mini_rs::c_compat::__errno_location() =
-            crate::htslib_mini_rs::c_compat::ENOMEM as c_int;
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::ENOMEM as c_int;
         return -1;
     }
     let new_sz = item_sz * items as usize;
@@ -8689,7 +8667,7 @@ pub unsafe fn bam_aux_update_array(
         *s = b'B';
         (*b).l_data += (8 + new_sz) as c_int;
     } else if old_sz != new_sz {
-        crate::htslib_mini_rs::c_compat::memmove(
+        crate::htslib_rs::c_compat::memmove(
             s.add(6 + new_sz).cast(),
             s.add(6 + old_sz).cast(),
             ((*b).l_data as usize - s.add(6 + old_sz).offset_from((*b).data) as usize) as u64,
@@ -8699,9 +8677,9 @@ pub unsafe fn bam_aux_update_array(
 
     *s.add(1) = type_;
     let len = items.to_le_bytes();
-    crate::htslib_mini_rs::c_compat::memcpy(s.add(2).cast(), len.as_ptr().cast(), 4);
+    crate::htslib_rs::c_compat::memcpy(s.add(2).cast(), len.as_ptr().cast(), 4);
     if new_sz > 0 {
-        crate::htslib_mini_rs::c_compat::memcpy(s.add(6).cast(), data, new_sz as u64);
+        crate::htslib_rs::c_compat::memcpy(s.add(6).cast(), data, new_sz as u64);
     }
     0
 }
@@ -8716,12 +8694,11 @@ pub unsafe fn bam_set_seqi(s: *mut u8, i: usize, b: u8) {
 }
 
 pub unsafe fn hts_base_mod_state_alloc() -> *mut hts_base_mod_state {
-    crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<hts_base_mod_state>() as u64)
-        .cast()
+    crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<hts_base_mod_state>() as u64).cast()
 }
 
 pub unsafe fn hts_base_mod_state_free(state: *mut hts_base_mod_state) {
-    crate::htslib_mini_rs::c_compat::free(state.cast());
+    crate::htslib_rs::c_compat::free(state.cast());
 }
 
 pub unsafe fn seq_freq(b: *const bam1_t, freq: *mut c_int) {
@@ -9327,10 +9304,9 @@ pub unsafe fn sam_open_mode_opts(
     } else {
         libc::strlen(mode)
     };
-    let mode_opts = crate::htslib_mini_rs::c_compat::malloc(
-        (format_len_for_alloc + mode_len_for_alloc + 12) as u64,
-    )
-    .cast::<c_char>();
+    let mode_opts =
+        crate::htslib_rs::c_compat::malloc((format_len_for_alloc + mode_len_for_alloc + 12) as u64)
+            .cast::<c_char>();
 
     if mode_opts.is_null() {
         return std::ptr::null_mut();
@@ -9342,13 +9318,13 @@ pub unsafe fn sam_open_mode_opts(
     if format.is_null() {
         let mut extension = [0 as c_char; HTS_MAX_EXT_LEN];
         if find_file_extension(fn_, extension.as_mut_ptr()) < 0 {
-            crate::htslib_mini_rs::c_compat::free(mode_opts.cast());
+            crate::htslib_rs::c_compat::free(mode_opts.cast());
             return std::ptr::null_mut();
         }
         if sam_open_mode(cp, fn_, extension.as_ptr()) == 0 {
             return mode_opts;
         } else {
-            crate::htslib_mini_rs::c_compat::free(mode_opts.cast());
+            crate::htslib_rs::c_compat::free(mode_opts.cast());
             return std::ptr::null_mut();
         }
     }
@@ -9405,7 +9381,7 @@ pub unsafe fn sam_open_mode_opts(
         *cp = b'z' as c_char;
         cp = cp.add(1);
     } else {
-        crate::htslib_mini_rs::c_compat::free(mode_opts.cast());
+        crate::htslib_rs::c_compat::free(mode_opts.cast());
         return std::ptr::null_mut();
     }
 
@@ -9646,13 +9622,13 @@ mod tests {
                 CStr::from_ptr(opts).to_bytes(),
                 b"wc,VERSION=3.0,seqs_per_slice=10"
             );
-            crate::htslib_mini_rs::c_compat::free(opts.cast());
+            crate::htslib_rs::c_compat::free(opts.cast());
 
             let opts =
                 sam_open_mode_opts(c"reads.sam.gz".as_ptr(), std::ptr::null(), std::ptr::null());
             assert!(!opts.is_null());
             assert_eq!(CStr::from_ptr(opts).to_bytes(), b"rz");
-            crate::htslib_mini_rs::c_compat::free(opts.cast());
+            crate::htslib_rs::c_compat::free(opts.cast());
 
             assert!(
                 sam_open_mode_opts(c"reads.bin".as_ptr(), c"r".as_ptr(), std::ptr::null())
@@ -10145,7 +10121,7 @@ mod tests {
                 *a_cigar.add(1),
                 (1 << BAM_CIGAR_SHIFT) | BAM_CSOFT_CLIP as u32
             );
-            crate::htslib_mini_rs::c_compat::free(a_cigar.cast());
+            crate::htslib_rs::c_compat::free(a_cigar.cast());
 
             let star = c"*";
             assert_eq!(
@@ -10405,8 +10381,8 @@ mod tests {
             assert_eq!(bam_aux_first(&b), nm);
             assert!(bam_aux_next(&b, nm).is_null());
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::ENOENT as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::ENOENT as c_int
             );
             assert_eq!(
                 bam_aux_tag(bam_get_aux(&b).add(2)),
@@ -10417,8 +10393,8 @@ mod tests {
             assert_eq!(bam_aux2f(nm), 5.0);
             assert_eq!(bam_aux2A(nm), 0);
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EINVAL as c_int
             );
             assert_eq!(*bam_get_cigar(&b), (10u32 << 4) | 0);
             assert_eq!(*bam_get_cigar(&b).add(1), (1u32 << 4) | 2);
@@ -10548,8 +10524,8 @@ mod tests {
             );
             assert_eq!(bad, -1);
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EINVAL as c_int
             );
 
             let bad = bam_set1(
@@ -10631,7 +10607,7 @@ mod tests {
     #[test]
     fn bam_write1_round_trips_record_through_translated_reader() {
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-bam-write1-{}-{}.bam",
+            "htslib_rs-bam-write1-{}-{}.bam",
             std::process::id(),
             line!()
         ));
@@ -10675,14 +10651,14 @@ mod tests {
                 0
             );
 
-            let fpw = crate::htslib_mini_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+            let fpw = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!fpw.is_null());
             assert_eq!(bam_hdr_write(fpw, hdr), 0);
             let written = bam_write1(fpw, b);
             assert!(written > 0);
-            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(fpw), 0);
+            assert_eq!(crate::htslib_rs::bgzf::bgzf_close(fpw), 0);
 
-            let fpr = crate::htslib_mini_rs::bgzf::bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+            let fpr = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fpr.is_null());
             let read_hdr = bam_hdr_read(fpr);
             assert!(!read_hdr.is_null());
@@ -10703,7 +10679,7 @@ mod tests {
             assert!(!cb.is_null());
             assert_eq!(CStr::from_ptr(bam_aux2Z(cb)).to_bytes(), b"cell");
             assert_eq!(bam_read1(fpr, read), -1);
-            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(fpr), 0);
+            assert_eq!(crate::htslib_rs::bgzf::bgzf_close(fpr), 0);
 
             bam_destroy1(read);
             bam_destroy1(b);
@@ -10766,7 +10742,7 @@ mod tests {
                 b"read\t0\tchr1\t10\t50\t4M\t=\t30\t-7\tACGT\t@ABC\tCB:Z:cell"
             );
 
-            crate::htslib_mini_rs::c_compat::free(ks.s.cast());
+            crate::htslib_rs::c_compat::free(ks.s.cast());
             bam_destroy1(b);
             sam_hdr_destroy(hdr);
         }
@@ -10977,19 +10953,19 @@ mod tests {
                 -1
             );
 
-            let filt = crate::htslib_mini_rs::hts::hts_filter_init(
+            let filt = crate::htslib_rs::hts::hts_filter_init(
                 c"mapq >= 50 && rname == \"chr1\" && [NM] == 3".as_ptr(),
             );
             assert!(!filt.is_null());
             assert_eq!(sam_c_1535_sam_passes_filter(hdr, b, filt.cast()), 1);
-            crate::htslib_mini_rs::hts::hts_filter_free(filt);
+            crate::htslib_rs::hts::hts_filter_free(filt);
 
-            let filt = crate::htslib_mini_rs::hts::hts_filter_init(c"flag.read2 || [ZZ]".as_ptr());
+            let filt = crate::htslib_rs::hts::hts_filter_init(c"flag.read2 || [ZZ]".as_ptr());
             assert!(!filt.is_null());
             assert_eq!(sam_c_1535_sam_passes_filter(hdr, b, filt.cast()), 0);
-            crate::htslib_mini_rs::hts::hts_filter_free(filt);
+            crate::htslib_rs::hts::hts_filter_free(filt);
 
-            crate::htslib_mini_rs::c_compat::free(res.s.s.cast());
+            crate::htslib_rs::c_compat::free(res.s.s.cast());
             bam_destroy1(b);
             sam_hdr_destroy(hdr);
         }
@@ -11113,7 +11089,7 @@ mod tests {
     #[test]
     fn fastq_parse1_reads_real_fastq_record_with_tags() {
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-fastq-parse-{}-{}.fq",
+            "htslib_rs-fastq-parse-{}-{}.fq",
             std::process::id(),
             line!()
         ));
@@ -11125,7 +11101,7 @@ mod tests {
         let path_c = CString::new(path.to_str().unwrap()).unwrap();
 
         unsafe {
-            let fp = crate::htslib_mini_rs::hts::hts_open(path_c.as_ptr(), c"r".as_ptr());
+            let fp = crate::htslib_rs::hts::hts_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             assert_eq!((*fp).format.format, HTS_FORMAT_FASTQ_FORMAT);
 
@@ -11178,7 +11154,7 @@ mod tests {
             bam_destroy1(b);
             sam_c_3802_fastq_state_destroy(fp);
             (*fp).state = std::ptr::null_mut();
-            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+            assert_eq!(crate::htslib_rs::hts::hts_close(fp), 0);
         }
 
         let _ = std::fs::remove_file(path);
@@ -11278,12 +11254,12 @@ mod tests {
             ks_free(&mut out);
 
             let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-fastq-write-{}-{}.fq.gz",
+                "htslib_rs-fastq-write-{}-{}.fq.gz",
                 std::process::id(),
                 line!()
             ));
             let path_c = CString::new(path.to_str().unwrap()).unwrap();
-            let bgzf = crate::htslib_mini_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+            let bgzf = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!bgzf.is_null());
             let mut out_fp: htsFile = std::mem::zeroed();
             out_fp.bitfields = 1 << 4;
@@ -11295,10 +11271,10 @@ mod tests {
                 sam_c_4553_sam_write1(&mut out_fp, std::ptr::null(), b),
                 expected.len() as c_int
             );
-            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(bgzf), 0);
+            assert_eq!(crate::htslib_rs::bgzf::bgzf_close(bgzf), 0);
             sam_c_3802_fastq_state_destroy(&mut out_fp);
 
-            let bgzf = crate::htslib_mini_rs::bgzf::bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+            let bgzf = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!bgzf.is_null());
             let mut buf = vec![0u8; expected.len()];
             assert_eq!(
@@ -11306,7 +11282,7 @@ mod tests {
                 expected.len() as isize
             );
             assert_eq!(buf, expected);
-            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(bgzf), 0);
+            assert_eq!(crate::htslib_rs::bgzf::bgzf_close(bgzf), 0);
 
             bam_destroy1(b);
             let _ = std::fs::remove_file(path);
@@ -11316,7 +11292,7 @@ mod tests {
     #[test]
     fn sam_hdr_write_writes_sam_text_and_stores_header_copy() {
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-sam-hdr-write-{}-{}.sam.gz",
+            "htslib_rs-sam-hdr-write-{}-{}.sam.gz",
             std::process::id(),
             line!()
         ));
@@ -11333,7 +11309,7 @@ mod tests {
                 0
             );
 
-            let bgzf = crate::htslib_mini_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+            let bgzf = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!bgzf.is_null());
             let mut fp: htsFile = std::mem::zeroed();
             fp.bitfields = 1 << 4;
@@ -11344,15 +11320,15 @@ mod tests {
             assert_eq!(sam_hdr_write(&mut fp, hdr), 0);
             assert!(!fp.bam_header.is_null());
             assert_ne!(fp.bam_header, hdr.cast::<c_void>());
-            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(bgzf), 0);
+            assert_eq!(crate::htslib_rs::bgzf::bgzf_close(bgzf), 0);
 
-            let bgzf = crate::htslib_mini_rs::bgzf::bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+            let bgzf = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!bgzf.is_null());
             let mut out = [0u8; 64];
             let n = bgzf_read(bgzf, out.as_mut_ptr().cast(), header_text.len());
             assert_eq!(n, header_text.len() as isize);
             assert_eq!(&out[..header_text.len()], header_text);
-            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(bgzf), 0);
+            assert_eq!(crate::htslib_rs::bgzf::bgzf_close(bgzf), 0);
 
             sam_hdr_destroy(fp.bam_header.cast());
             sam_hdr_destroy(hdr);
@@ -11364,7 +11340,7 @@ mod tests {
     fn sam_index_build_wrappers_report_missing_inputs_like_htslib() {
         unsafe {
             let missing = CString::new(format!(
-                "/tmp/htslib-mini-rs-missing-index-input-{}-{}.bam",
+                "/tmp/htslib_rs-missing-index-input-{}-{}.bam",
                 std::process::id(),
                 line!()
             ))
@@ -11381,20 +11357,20 @@ mod tests {
     fn sam_index_builds_index_from_generated_bam_stream() {
         unsafe {
             let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-sam-index-{}-{}.bam",
+                "htslib_rs-sam-index-{}-{}.bam",
                 std::process::id(),
                 line!()
             ));
             let path_c = CString::new(path.to_str().unwrap()).unwrap();
-            let bgzf = crate::htslib_mini_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+            let bgzf = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!bgzf.is_null());
 
             let hdr = sam_hdr_init();
             assert!(!hdr.is_null());
             let text = b"@SQ\tSN:chr1\tLN:100\n";
-            (*hdr).text = crate::htslib_mini_rs::c_compat::malloc(text.len() as u64 + 1).cast();
+            (*hdr).text = crate::htslib_rs::c_compat::malloc(text.len() as u64 + 1).cast();
             assert!(!(*hdr).text.is_null());
-            crate::htslib_mini_rs::c_compat::memcpy(
+            crate::htslib_rs::c_compat::memcpy(
                 (*hdr).text.cast(),
                 text.as_ptr().cast(),
                 text.len() as u64,
@@ -11403,17 +11379,14 @@ mod tests {
             (*hdr).l_text = text.len();
             (*hdr).n_targets = 1;
             (*hdr).target_len =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<u32>() as u64)
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<u32>() as u64).cast();
+            (*hdr).target_name =
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<*mut c_char>() as u64)
                     .cast();
-            (*hdr).target_name = crate::htslib_mini_rs::c_compat::calloc(
-                1,
-                std::mem::size_of::<*mut c_char>() as u64,
-            )
-            .cast();
             assert!(!(*hdr).target_len.is_null());
             assert!(!(*hdr).target_name.is_null());
             *(*hdr).target_len = 100;
-            *(*hdr).target_name = crate::htslib_mini_rs::c_compat::strdup(c"chr1".as_ptr());
+            *(*hdr).target_name = crate::htslib_rs::c_compat::strdup(c"chr1".as_ptr());
             assert!(!(*(*hdr).target_name).is_null());
             assert_eq!(bam_hdr_write(bgzf, hdr), 0);
 
@@ -11446,15 +11419,15 @@ mod tests {
             assert!(bam_write1(bgzf, b) > 0);
             bam_destroy1(b);
             sam_hdr_destroy(hdr);
-            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(bgzf), 0);
+            assert_eq!(crate::htslib_rs::bgzf::bgzf_close(bgzf), 0);
 
-            let fp = crate::htslib_mini_rs::hts::hts_open(path_c.as_ptr(), c"r".as_ptr());
+            let fp = crate::htslib_rs::hts::hts_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             let idx = sam_c_994_sam_index(fp, 0);
             assert!(!idx.is_null());
             assert_eq!((*idx).fmt, HTS_FMT_BAI);
             hts_idx_destroy(idx);
-            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+            assert_eq!(crate::htslib_rs::hts::hts_close(fp), 0);
             let _ = std::fs::remove_file(path);
         }
     }
@@ -11463,15 +11436,15 @@ mod tests {
     fn sam_index_build_public_wrappers_create_default_and_custom_indexes() {
         unsafe fn write_indexable_bam(path: &std::path::Path) -> CString {
             let path_c = CString::new(path.to_str().unwrap()).unwrap();
-            let bgzf = crate::htslib_mini_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+            let bgzf = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!bgzf.is_null());
 
             let hdr = sam_hdr_init();
             assert!(!hdr.is_null());
             let text = b"@SQ\tSN:chr1\tLN:100\n";
-            (*hdr).text = crate::htslib_mini_rs::c_compat::malloc(text.len() as u64 + 1).cast();
+            (*hdr).text = crate::htslib_rs::c_compat::malloc(text.len() as u64 + 1).cast();
             assert!(!(*hdr).text.is_null());
-            crate::htslib_mini_rs::c_compat::memcpy(
+            crate::htslib_rs::c_compat::memcpy(
                 (*hdr).text.cast(),
                 text.as_ptr().cast(),
                 text.len() as u64,
@@ -11480,17 +11453,14 @@ mod tests {
             (*hdr).l_text = text.len();
             (*hdr).n_targets = 1;
             (*hdr).target_len =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<u32>() as u64)
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<u32>() as u64).cast();
+            (*hdr).target_name =
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<*mut c_char>() as u64)
                     .cast();
-            (*hdr).target_name = crate::htslib_mini_rs::c_compat::calloc(
-                1,
-                std::mem::size_of::<*mut c_char>() as u64,
-            )
-            .cast();
             assert!(!(*hdr).target_len.is_null());
             assert!(!(*hdr).target_name.is_null());
             *(*hdr).target_len = 100;
-            *(*hdr).target_name = crate::htslib_mini_rs::c_compat::strdup(c"chr1".as_ptr());
+            *(*hdr).target_name = crate::htslib_rs::c_compat::strdup(c"chr1".as_ptr());
             assert!(!(*(*hdr).target_name).is_null());
             assert_eq!(bam_hdr_write(bgzf, hdr), 0);
 
@@ -11523,38 +11493,38 @@ mod tests {
             assert!(bam_write1(bgzf, b) > 0);
             bam_destroy1(b);
             sam_hdr_destroy(hdr);
-            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(bgzf), 0);
+            assert_eq!(crate::htslib_rs::bgzf::bgzf_close(bgzf), 0);
             path_c
         }
 
         let base = std::env::temp_dir();
         let path_build3 = base.join(format!(
-            "htslib-mini-rs-sam-index-build3-{}-{}.bam",
+            "htslib_rs-sam-index-build3-{}-{}.bam",
             std::process::id(),
             line!()
         ));
         let path_build2 = base.join(format!(
-            "htslib-mini-rs-sam-index-build2-{}-{}.bam",
+            "htslib_rs-sam-index-build2-{}-{}.bam",
             std::process::id(),
             line!()
         ));
         let path_build = base.join(format!(
-            "htslib-mini-rs-sam-index-build-{}-{}.bam",
+            "htslib_rs-sam-index-build-{}-{}.bam",
             std::process::id(),
             line!()
         ));
         let path_bam = base.join(format!(
-            "htslib-mini-rs-bam-index-build-{}-{}.bam",
+            "htslib_rs-bam-index-build-{}-{}.bam",
             std::process::id(),
             line!()
         ));
         let idx_build3 = base.join(format!(
-            "htslib-mini-rs-sam-index-build3-{}-{}.bai",
+            "htslib_rs-sam-index-build3-{}-{}.bai",
             std::process::id(),
             line!()
         ));
         let idx_build2 = base.join(format!(
-            "htslib-mini-rs-sam-index-build2-{}-{}.bai",
+            "htslib_rs-sam-index-build2-{}-{}.bai",
             std::process::id(),
             line!()
         ));
@@ -11614,7 +11584,7 @@ mod tests {
             );
 
             let missing = CString::new(format!(
-                "/tmp/htslib-mini-rs-missing-index-load-{}-{}.bam",
+                "/tmp/htslib_rs-missing-index-load-{}-{}.bam",
                 std::process::id(),
                 line!()
             ))
@@ -11666,7 +11636,7 @@ mod tests {
         unsafe {
             let mut fp: htsFile = std::mem::zeroed();
             fp.format.format = HTS_FORMAT_SAM;
-            fp.format.compression = crate::htslib_mini_rs::hts::HTS_COMPRESSION_NO_COMPRESSION;
+            fp.format.compression = crate::htslib_rs::hts::HTS_COMPRESSION_NO_COMPRESSION;
 
             let fd = sam_c_3048_sam_state_create(&mut fp);
             assert!(!fd.is_null());
@@ -11678,22 +11648,21 @@ mod tests {
             assert_eq!((*fd).errcode, 5);
 
             let lines =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<sp_lines>() as u64)
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sp_lines>() as u64)
                     .cast::<sp_lines>();
             assert!(!lines.is_null());
-            (*lines).data = crate::htslib_mini_rs::c_compat::malloc(8).cast();
+            (*lines).data = crate::htslib_rs::c_compat::malloc(8).cast();
             (*fd).lines = lines;
 
-            let curr =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<sp_bams>() as u64)
-                    .cast::<sp_bams>();
+            let curr = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sp_bams>() as u64)
+                .cast::<sp_bams>();
             assert!(!curr.is_null());
             (*curr).abams = 1;
             (*curr).bams =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<bam1_t>() as u64)
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<bam1_t>() as u64)
                     .cast::<bam1_t>();
             assert!(!(*curr).bams.is_null());
-            (*(*curr).bams).data = crate::htslib_mini_rs::c_compat::malloc(4).cast();
+            (*(*curr).bams).data = crate::htslib_rs::c_compat::malloc(4).cast();
             (*fd).curr_bam = curr;
 
             assert_eq!(sam_state_destroy(&mut fp), -5);
@@ -11711,35 +11680,34 @@ mod tests {
     fn sam_worker_cleanup_callbacks_free_owned_blocks() {
         unsafe {
             let lines =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<sp_lines>() as u64)
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sp_lines>() as u64)
                     .cast::<sp_lines>();
             assert!(!lines.is_null());
-            (*lines).data = crate::htslib_mini_rs::c_compat::malloc(16).cast();
+            (*lines).data = crate::htslib_rs::c_compat::malloc(16).cast();
             assert!(!(*lines).data.is_null());
 
             let nested =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<sp_bams>() as u64)
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sp_bams>() as u64)
                     .cast::<sp_bams>();
             assert!(!nested.is_null());
             (*nested).abams = 1;
             (*nested).bams =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<bam1_t>() as u64)
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<bam1_t>() as u64)
                     .cast::<bam1_t>();
             assert!(!(*nested).bams.is_null());
-            (*(*nested).bams).data = crate::htslib_mini_rs::c_compat::malloc(8).cast();
+            (*(*nested).bams).data = crate::htslib_rs::c_compat::malloc(8).cast();
             assert!(!(*(*nested).bams).data.is_null());
             (*lines).bams = nested;
 
             sam_c_3200_cleanup_sp_lines(lines.cast());
             sam_c_3200_cleanup_sp_lines(std::ptr::null_mut());
 
-            let bams =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<sp_bams>() as u64)
-                    .cast::<sp_bams>();
+            let bams = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sp_bams>() as u64)
+                .cast::<sp_bams>();
             assert!(!bams.is_null());
             (*bams).abams = 1;
             (*bams).bams =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<bam1_t>() as u64)
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<bam1_t>() as u64)
                     .cast::<bam1_t>();
             assert!(!(*bams).bams.is_null());
             sam_c_3318_cleanup_sp_bams(bams.cast());
@@ -11773,15 +11741,14 @@ mod tests {
             fd.fp = &mut fp;
 
             let text = b"read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\t!!!!\tNM:i:1\nread2\t4\t*\t0\t0\t*\t*\t0\t0\t*\t*\tZZ:Z:tag\n";
-            let gl =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<sp_lines>() as u64)
-                    .cast::<sp_lines>();
+            let gl = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sp_lines>() as u64)
+                .cast::<sp_lines>();
             assert!(!gl.is_null());
             (*gl).alloc = text.len() as c_int + 8;
             (*gl).data_size = text.len() as c_int;
-            (*gl).data = crate::htslib_mini_rs::c_compat::malloc((*gl).alloc as u64).cast();
+            (*gl).data = crate::htslib_rs::c_compat::malloc((*gl).alloc as u64).cast();
             assert!(!(*gl).data.is_null());
-            crate::htslib_mini_rs::c_compat::memcpy(
+            crate::htslib_rs::c_compat::memcpy(
                 (*gl).data.cast(),
                 text.as_ptr().cast(),
                 text.len() as u64,
@@ -12054,15 +12021,15 @@ mod tests {
                 bam_aux_get_str(b, b"ZZ".as_ptr().cast(), &mut ks as *mut kstring_t),
                 0
             );
-            crate::htslib_mini_rs::c_compat::free(ks.s.cast());
+            crate::htslib_rs::c_compat::free(ks.s.cast());
 
             let cb = bam_aux_get(b, b"CB".as_ptr().cast());
             let next = bam_aux_remove(b, cb);
             assert!(!next.is_null());
             assert!(bam_aux_get(b, b"CB".as_ptr().cast()).is_null());
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::ENOENT as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::ENOENT as c_int
             );
 
             let xa = bam_aux_get(b, b"XA".as_ptr().cast());
@@ -12181,16 +12148,16 @@ mod tests {
                 -1
             );
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EOVERFLOW as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EOVERFLOW as c_int
             );
             assert_eq!(
                 bam_aux_update_int(b, b"NM".as_ptr().cast(), u32::MAX as i64 + 1),
                 -1
             );
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EOVERFLOW as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EOVERFLOW as c_int
             );
             bam_destroy1(b);
         }
@@ -12227,14 +12194,14 @@ mod tests {
             assert_eq!(bam_aux_type(first), b'B' as c_char);
             assert!(bam_aux_next(&b, first).is_null());
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EINVAL as c_int
             );
 
             assert!(bam_aux_get(&b, c"XY".as_ptr()).is_null());
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EINVAL as c_int
             );
         }
     }
@@ -12301,13 +12268,13 @@ mod tests {
             assert!(!cb.is_null());
             assert_eq!(bam_aux2A(cb), 0);
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EINVAL as c_int
             );
             assert_eq!(bam_auxB_len(cb), 0);
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EINVAL as c_int
             );
 
             let values = [1u8, 2u8];
@@ -12325,13 +12292,13 @@ mod tests {
             assert!(!xa.is_null());
             assert_eq!(bam_auxB2i(xa, 2), 0);
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::ERANGE as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::ERANGE as c_int
             );
             assert_eq!(bam_auxB2f(xa, 2), 0.0);
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::ERANGE as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::ERANGE as c_int
             );
 
             bam_destroy1(b);
@@ -12360,7 +12327,7 @@ mod tests {
             assert_eq!((*node).beg, 0);
             assert_eq!((*node).s.k, 0);
             (*node).next = node;
-            (*node).b.data = crate::htslib_mini_rs::c_compat::malloc(4).cast();
+            (*node).b.data = crate::htslib_rs::c_compat::malloc(4).cast();
             (*node).b.m_data = 4;
 
             mp_free(mp, node);
@@ -12618,25 +12585,25 @@ mod tests {
 
     #[test]
     fn sam_itr_next_inline_rejects_non_bgzf_non_cram_and_null_iter_like_htslib() {
-        let mut fp = crate::htslib_mini_rs::hts::htsFile {
+        let mut fp = crate::htslib_rs::hts::htsFile {
             bitfields: 0,
             padding_0: 0,
             lineno: 0,
-            line: crate::htslib_mini_rs::hts::kstring_t {
+            line: crate::htslib_rs::hts::kstring_t {
                 l: 0,
                 m: 0,
                 s: std::ptr::null_mut(),
             },
             fn_: std::ptr::null_mut(),
             fn_aux: std::ptr::null_mut(),
-            fp: crate::htslib_mini_rs::hts::htsFilePtr {
+            fp: crate::htslib_rs::hts::htsFilePtr {
                 bgzf: std::ptr::null_mut(),
             },
             state: std::ptr::null_mut(),
-            format: crate::htslib_mini_rs::hts::htsFormat {
+            format: crate::htslib_rs::hts::htsFormat {
                 category: 0,
                 format: 0,
-                version: crate::htslib_mini_rs::hts::htsFormatVersion { major: 0, minor: 0 },
+                version: crate::htslib_rs::hts::htsFormatVersion { major: 0, minor: 0 },
                 compression: 0,
                 compression_level: 0,
                 specific: std::ptr::null_mut(),
@@ -12885,20 +12852,17 @@ mod tests {
     fn sam_hdr_destroy_frees_simple_c_allocated_header() {
         unsafe {
             let hdr =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<sam_hdr_t>() as u64)
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sam_hdr_t>() as u64)
                     .cast::<sam_hdr_t>();
             assert!(!hdr.is_null());
             (*hdr).n_targets = 1;
-            (*hdr).target_name = crate::htslib_mini_rs::c_compat::calloc(
-                1,
-                std::mem::size_of::<*mut c_char>() as u64,
-            )
-            .cast();
-            (*hdr).target_len =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<u32>() as u64)
+            (*hdr).target_name =
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<*mut c_char>() as u64)
                     .cast();
-            (*hdr).text = crate::htslib_mini_rs::c_compat::malloc(5).cast();
-            let name = crate::htslib_mini_rs::c_compat::malloc(5).cast::<c_char>();
+            (*hdr).target_len =
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<u32>() as u64).cast();
+            (*hdr).text = crate::htslib_rs::c_compat::malloc(5).cast();
+            let name = crate::htslib_rs::c_compat::malloc(5).cast::<c_char>();
             assert!(!(*hdr).target_name.is_null());
             assert!(!(*hdr).target_len.is_null());
             assert!(!(*hdr).text.is_null());
@@ -13087,25 +13051,25 @@ mod tests {
                 sam_hdr_add_lines(hdr, b"@SQ\tSN:chr1\tLN:10\n".as_ptr().cast(), 18),
                 0
             );
-            let mut fp = crate::htslib_mini_rs::hts::htsFile {
+            let mut fp = crate::htslib_rs::hts::htsFile {
                 bitfields: 0,
                 padding_0: 0,
                 lineno: 0,
-                line: crate::htslib_mini_rs::hts::kstring_t {
+                line: crate::htslib_rs::hts::kstring_t {
                     l: 0,
                     m: 0,
                     s: std::ptr::null_mut(),
                 },
                 fn_: std::ptr::null_mut(),
                 fn_aux: std::ptr::null_mut(),
-                fp: crate::htslib_mini_rs::hts::htsFilePtr {
+                fp: crate::htslib_rs::hts::htsFilePtr {
                     bgzf: std::ptr::null_mut(),
                 },
                 state: std::ptr::null_mut(),
-                format: crate::htslib_mini_rs::hts::htsFormat {
+                format: crate::htslib_rs::hts::htsFormat {
                     category: 0,
                     format: 0,
-                    version: crate::htslib_mini_rs::hts::htsFormatVersion { major: 0, minor: 0 },
+                    version: crate::htslib_rs::hts::htsFormatVersion { major: 0, minor: 0 },
                     compression: 0,
                     compression_level: 0,
                     specific: std::ptr::null_mut(),
@@ -13554,16 +13518,16 @@ mod tests {
             );
 
             let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-sam-write1-{}-{}.sam.gz",
+                "htslib_rs-sam-write1-{}-{}.sam.gz",
                 std::process::id(),
                 line!()
             ));
             let path_c = CString::new(path.to_str().unwrap()).unwrap();
-            let bgzf = crate::htslib_mini_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+            let bgzf = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!bgzf.is_null());
             let mut fp: htsFile = std::mem::zeroed();
             fp.bitfields = 1 << 4;
-            fp.fp = crate::htslib_mini_rs::hts::htsFilePtr { bgzf };
+            fp.fp = crate::htslib_rs::hts::htsFilePtr { bgzf };
             fp.format.category = HTS_FORMAT_SEQUENCE_DATA;
             fp.format.format = HTS_FORMAT_SAM;
             let written = sam_c_4553_sam_write1(&mut fp, &hdr, b);
@@ -13572,34 +13536,33 @@ mod tests {
                 std::slice::from_raw_parts(fp.line.s.cast::<u8>(), fp.line.l)
                     .starts_with(b"read1\t0\tchr1\t1\t60\t4M")
             );
-            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(bgzf), 0);
+            assert_eq!(crate::htslib_rs::bgzf::bgzf_close(bgzf), 0);
 
-            let bgzf = crate::htslib_mini_rs::bgzf::bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+            let bgzf = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!bgzf.is_null());
             let mut buf = [0u8; 128];
-            let n =
-                crate::htslib_mini_rs::bgzf::bgzf_read(bgzf, buf.as_mut_ptr().cast(), buf.len());
+            let n = crate::htslib_rs::bgzf::bgzf_read(bgzf, buf.as_mut_ptr().cast(), buf.len());
             assert!(n > 0);
             assert!(buf[..n as usize].starts_with(b"read1\t0\tchr1\t1\t60\t4M"));
-            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(bgzf), 0);
+            assert_eq!(crate::htslib_rs::bgzf::bgzf_close(bgzf), 0);
             let _ = std::fs::remove_file(&path);
             ks_free(&mut fp.line);
 
             let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-binary-write1-{}-{}.bam",
+                "htslib_rs-binary-write1-{}-{}.bam",
                 std::process::id(),
                 line!()
             ));
             let path_c = CString::new(path.to_str().unwrap()).unwrap();
-            let bgzf = crate::htslib_mini_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+            let bgzf = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!bgzf.is_null());
             let mut fp: htsFile = std::mem::zeroed();
-            fp.fp = crate::htslib_mini_rs::hts::htsFilePtr { bgzf };
+            fp.fp = crate::htslib_rs::hts::htsFilePtr { bgzf };
             fp.format.format = HTS_FORMAT_BINARY_FORMAT;
             assert!(sam_c_4553_sam_write1(&mut fp, &hdr, b) > 0);
             assert_eq!(fp.format.category, HTS_FORMAT_SEQUENCE_DATA);
             assert_eq!(fp.format.format, HTS_FORMAT_BAM);
-            assert_eq!(crate::htslib_mini_rs::bgzf::bgzf_close(bgzf), 0);
+            assert_eq!(crate::htslib_rs::bgzf::bgzf_close(bgzf), 0);
             let _ = std::fs::remove_file(&path);
 
             bam_destroy1(b);
@@ -13753,8 +13716,8 @@ mod tests {
 
             assert_eq!(bam_aux_get_str(b, c"BA".as_ptr(), &mut ks), -1);
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EINVAL as c_int
             );
 
             ks_free(&mut ks);
@@ -13810,45 +13773,36 @@ mod tests {
     fn sam_hdr_destroy_frees_c_allocated_long_ref_hash() {
         unsafe {
             let hdr =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<sam_hdr_t>() as u64)
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sam_hdr_t>() as u64)
                     .cast::<sam_hdr_t>();
             assert!(!hdr.is_null());
             (*hdr).n_targets = 1;
-            (*hdr).target_name = crate::htslib_mini_rs::c_compat::calloc(
-                1,
-                std::mem::size_of::<*mut c_char>() as u64,
-            )
-            .cast();
-            (*hdr).target_len =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<u32>() as u64)
+            (*hdr).target_name =
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<*mut c_char>() as u64)
                     .cast();
-            let name = crate::htslib_mini_rs::c_compat::malloc(5).cast::<c_char>();
+            (*hdr).target_len =
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<u32>() as u64).cast();
+            let name = crate::htslib_rs::c_compat::malloc(5).cast::<c_char>();
             assert!(!name.is_null());
             std::ptr::copy_nonoverlapping(b"chr1\0".as_ptr().cast::<c_char>(), name, 5);
             *(*hdr).target_name = name;
             *(*hdr).target_len = u32::MAX;
 
-            let sdict = crate::htslib_mini_rs::c_compat::calloc(
-                1,
-                std::mem::size_of::<khash_s2i_t>() as u64,
-            )
-            .cast::<khash_s2i_t>();
+            let sdict =
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<khash_s2i_t>() as u64)
+                    .cast::<khash_s2i_t>();
             assert!(!sdict.is_null());
             (*sdict).n_buckets = 1;
             (*sdict).size = 1;
             (*sdict).n_occupied = 1;
             (*sdict).upper_bound = 1;
             (*sdict).flags =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<u32>() as u64)
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<u32>() as u64).cast();
+            (*sdict).keys =
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<*mut c_char>() as u64)
                     .cast();
-            (*sdict).keys = crate::htslib_mini_rs::c_compat::calloc(
-                1,
-                std::mem::size_of::<*mut c_char>() as u64,
-            )
-            .cast();
             (*sdict).vals =
-                crate::htslib_mini_rs::c_compat::calloc(1, std::mem::size_of::<i64>() as u64)
-                    .cast();
+                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<i64>() as u64).cast();
             assert!(!(*sdict).flags.is_null());
             assert!(!(*sdict).keys.is_null());
             assert!(!(*sdict).vals.is_null());
@@ -13881,25 +13835,25 @@ mod tests {
 
     #[test]
     fn sam_hdr_read_translated_simple_format_branches_match_htslib() {
-        let mut fp = crate::htslib_mini_rs::hts::htsFile {
+        let mut fp = crate::htslib_rs::hts::htsFile {
             bitfields: 0,
             padding_0: 0,
             lineno: 0,
-            line: crate::htslib_mini_rs::hts::kstring_t {
+            line: crate::htslib_rs::hts::kstring_t {
                 l: 0,
                 m: 0,
                 s: std::ptr::null_mut(),
             },
             fn_: std::ptr::null_mut(),
             fn_aux: std::ptr::null_mut(),
-            fp: crate::htslib_mini_rs::hts::htsFilePtr {
+            fp: crate::htslib_rs::hts::htsFilePtr {
                 bgzf: std::ptr::null_mut(),
             },
             state: std::ptr::null_mut(),
-            format: crate::htslib_mini_rs::hts::htsFormat {
+            format: crate::htslib_rs::hts::htsFormat {
                 category: 0,
                 format: HTS_FORMAT_FASTA_FORMAT,
-                version: crate::htslib_mini_rs::hts::htsFormatVersion { major: 0, minor: 0 },
+                version: crate::htslib_rs::hts::htsFormatVersion { major: 0, minor: 0 },
                 compression: 0,
                 compression_level: 0,
                 specific: std::ptr::null_mut(),
@@ -13913,8 +13867,8 @@ mod tests {
         unsafe {
             assert!(sam_hdr_read(std::ptr::null_mut()).is_null());
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EINVAL as c_int
             );
 
             let hdr = sam_hdr_read(&mut fp);
@@ -13925,8 +13879,8 @@ mod tests {
             fp.format.format = HTS_FORMAT_EMPTY_FORMAT;
             assert!(sam_hdr_read(&mut fp).is_null());
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EPIPE as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EPIPE as c_int
             );
 
             let mut record = bam1_t {
@@ -13952,15 +13906,15 @@ mod tests {
             };
             assert_eq!(sam_read1(&mut fp, std::ptr::null_mut(), &mut record), -3);
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EPIPE as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EPIPE as c_int
             );
 
-            fp.format.format = crate::htslib_mini_rs::hts::HTS_FORMAT_BINARY_FORMAT;
+            fp.format.format = crate::htslib_rs::hts::HTS_FORMAT_BINARY_FORMAT;
             assert_eq!(sam_read1(&mut fp, std::ptr::null_mut(), &mut record), -3);
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::ENOEXEC as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::ENOEXEC as c_int
             );
         }
     }
@@ -13968,7 +13922,7 @@ mod tests {
     #[test]
     fn sam_hdr_read_sam_branch_reads_header_without_consuming_first_record() {
         let path = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-sam-header-{}-{}.sam",
+            "htslib_rs-sam-header-{}-{}.sam",
             std::process::id(),
             line!()
         ));
@@ -13980,7 +13934,7 @@ mod tests {
 
         let path_c = CString::new(path.to_str().unwrap()).unwrap();
         unsafe {
-            let fp = crate::htslib_mini_rs::hts::hts_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = crate::htslib_rs::hts::hts_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
             assert!(!fp.is_null());
             let hdr = sam_hdr_read(fp);
             assert!(!hdr.is_null());
@@ -13997,7 +13951,7 @@ mod tests {
             bam_destroy1(b);
 
             sam_hdr_destroy(hdr);
-            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp), 0);
+            assert_eq!(crate::htslib_rs::hts::hts_close(fp), 0);
         }
         let _ = std::fs::remove_file(path);
     }
@@ -14007,7 +13961,7 @@ mod tests {
         use std::process::Command;
 
         let dir = std::env::temp_dir().join(format!(
-            "htslib-mini-rs-bam-read1-{}-{}",
+            "htslib_rs-bam-read1-{}-{}",
             std::process::id(),
             line!()
         ));
@@ -14050,8 +14004,7 @@ mod tests {
 
         let bam_c = CString::new(bam_path.to_str().unwrap()).unwrap();
         unsafe {
-            let fp_rust =
-                crate::htslib_mini_rs::hts::hts_open(bam_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp_rust = crate::htslib_rs::hts::hts_open(bam_c.as_ptr(), b"r\0".as_ptr().cast());
             let fp_c = hts_sys::hts_open(bam_c.as_ptr(), b"r\0".as_ptr().cast());
             assert!(!fp_rust.is_null());
             assert!(!fp_c.is_null());
@@ -14085,11 +14038,10 @@ mod tests {
             bam_destroy1(b_c);
             sam_hdr_destroy(hdr_rust);
             hts_sys::sam_hdr_destroy(hdr_c);
-            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp_rust), 0);
+            assert_eq!(crate::htslib_rs::hts::hts_close(fp_rust), 0);
             assert_eq!(hts_sys::hts_close(fp_c), 0);
 
-            let fp_query =
-                crate::htslib_mini_rs::hts::hts_open(bam_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp_query = crate::htslib_rs::hts::hts_open(bam_c.as_ptr(), b"r\0".as_ptr().cast());
             assert!(!fp_query.is_null());
             let hdr_query = sam_hdr_read(fp_query);
             assert!(!hdr_query.is_null());
@@ -14103,7 +14055,7 @@ mod tests {
             assert_eq!((*b_query).core.pos, 2);
             assert_eq!(sam_itr_next(fp_query, itr, b_query), -1);
             bam_destroy1(b_query);
-            crate::htslib_mini_rs::hts::hts_itr_destroy(itr);
+            crate::htslib_rs::hts::hts_itr_destroy(itr);
 
             let itr = sam_itr_querys(idx, hdr_query, c"chr1:1-50".as_ptr());
             assert!(!itr.is_null());
@@ -14113,18 +14065,18 @@ mod tests {
             assert_eq!((*b_query).core.pos, 2);
             assert_eq!(sam_itr_next(fp_query, itr, b_query), -1);
             bam_destroy1(b_query);
-            crate::htslib_mini_rs::hts::hts_itr_destroy(itr);
+            crate::htslib_rs::hts::hts_itr_destroy(itr);
 
             assert!(sam_itr_querys(idx, hdr_query, c"missing:1-2".as_ptr()).is_null());
-            crate::htslib_mini_rs::hts::hts_idx_destroy(idx);
+            crate::htslib_rs::hts::hts_idx_destroy(idx);
             sam_hdr_destroy(hdr_query);
-            assert_eq!(crate::htslib_mini_rs::hts::hts_close(fp_query), 0);
+            assert_eq!(crate::htslib_rs::hts::hts_close(fp_query), 0);
 
             let bai_path = bam_path.with_extension("bam.bai");
             let bai_c = CString::new(bai_path.to_str().unwrap()).unwrap();
-            let idx2 = crate::htslib_mini_rs::hts::hts_idx_load2(bam_c.as_ptr(), bai_c.as_ptr());
+            let idx2 = crate::htslib_rs::hts::hts_idx_load2(bam_c.as_ptr(), bai_c.as_ptr());
             assert!(!idx2.is_null());
-            crate::htslib_mini_rs::hts::hts_idx_destroy(idx2);
+            crate::htslib_rs::hts::hts_idx_destroy(idx2);
         }
 
         let _ = std::fs::remove_dir_all(dir);
@@ -14341,9 +14293,9 @@ mod tests {
         unsafe {
             let hdr = sam_hdr_init();
             assert!(!hdr.is_null());
-            (*hdr).text = crate::htslib_mini_rs::c_compat::malloc(text.len() as u64 + 1).cast();
+            (*hdr).text = crate::htslib_rs::c_compat::malloc(text.len() as u64 + 1).cast();
             assert!(!(*hdr).text.is_null());
-            crate::htslib_mini_rs::c_compat::memcpy(
+            crate::htslib_rs::c_compat::memcpy(
                 (*hdr).text.cast(),
                 text.as_ptr().cast(),
                 text.len() as u64,
@@ -14741,7 +14693,7 @@ mod tests {
             assert_eq!(bam_plp_insertion(&no_ins, &mut ins, &mut del_len), 0);
             assert_eq!(CStr::from_ptr(ins.s).to_bytes(), b"");
 
-            crate::htslib_mini_rs::c_compat::free(ins.s.cast());
+            crate::htslib_rs::c_compat::free(ins.s.cast());
             hts_base_mod_state_free(state);
             bam_destroy1(b);
         }
@@ -14793,11 +14745,11 @@ mod tests {
                 CStr::from_ptr(text).to_bytes(),
                 b"PAIRED,UNMAP,READ1,DUP,SUPPLEMENTARY"
             );
-            crate::htslib_mini_rs::c_compat::free(text.cast());
+            crate::htslib_rs::c_compat::free(text.cast());
 
             let empty = bam_flag2str(0);
             assert_eq!(CStr::from_ptr(empty).to_bytes(), b"");
-            crate::htslib_mini_rs::c_compat::free(empty.cast());
+            crate::htslib_rs::c_compat::free(empty.cast());
         }
     }
 
@@ -14829,8 +14781,8 @@ mod tests {
         unsafe {
             assert!(bam_aux_get(&z_record, c"ZZ".as_ptr()).is_null());
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EINVAL as c_int
             );
         }
 
@@ -14845,8 +14797,8 @@ mod tests {
         unsafe {
             assert!(bam_aux_get(&b_record, c"XA".as_ptr()).is_null());
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EINVAL as c_int
             );
 
             let b = bam_init1();
@@ -14867,13 +14819,13 @@ mod tests {
             assert_eq!(bam_auxB2i(bc, 1), 20);
             assert_eq!(bam_auxB2i(bc, 2), 0);
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::ERANGE as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::ERANGE as c_int
             );
             assert_eq!(bam_auxB2f(bc, 9), 0.0);
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::ERANGE as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::ERANGE as c_int
             );
             bam_destroy1(b);
         }
@@ -14910,8 +14862,8 @@ mod tests {
                 -1
             );
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EOVERFLOW as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EOVERFLOW as c_int
             );
 
             assert_eq!(
@@ -14920,8 +14872,8 @@ mod tests {
             );
             assert_eq!(bam_aux_update_int(b, c"ZS".as_ptr(), 1), -1);
             assert_eq!(
-                *crate::htslib_mini_rs::c_compat::__errno_location(),
-                crate::htslib_mini_rs::c_compat::EINVAL as c_int
+                *crate::htslib_rs::c_compat::__errno_location(),
+                crate::htslib_rs::c_compat::EINVAL as c_int
             );
 
             bam_destroy1(b);
@@ -15099,7 +15051,7 @@ mod tests {
                 -1
             );
             assert_eq!(end, overflow.as_ptr().cast_mut());
-            crate::htslib_mini_rs::c_compat::free(a_cigar.cast());
+            crate::htslib_rs::c_compat::free(a_cigar.cast());
 
             let b = bam_init1();
             assert!(!b.is_null());

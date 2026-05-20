@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam1_t, bam_destroy1, bam_get_seq, bam_init1, bam_next_basemod, bam_parse_basemod,
     bam_parse_basemod2, bam_seqi, hts_base_mod, hts_base_mod_state_alloc, hts_base_mod_state_free,
     hts_close, hts_open, sam_hdr_destroy, sam_hdr_read, sam_read1, HTS_MOD_UNCHECKED,

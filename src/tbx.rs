@@ -1609,7 +1609,7 @@ mod tests {
     fn tbx_index_builds_dictionary_from_bgzf_records() {
         unsafe {
             let path = std::env::temp_dir().join(format!(
-                "htslib-mini-rs-tbx-index-{}-{}.vcf.gz",
+                "htslib_rs-tbx-index-{}-{}.vcf.gz",
                 std::process::id(),
                 line!()
             ));

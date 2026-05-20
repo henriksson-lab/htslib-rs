@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bcf_hdr_destroy, bcf_hdr_fmt_text, bcf_hdr_get_version, bcf_hdr_id2int, bcf_hdr_read,
     hts_close, hts_open, ks_free, kstring_t, sam_hdr_count_lines, sam_hdr_destroy,
     sam_hdr_find_line_pos, sam_hdr_find_tag_id, sam_hdr_find_tag_pos, sam_hdr_line_name,
@@ -21,7 +21,7 @@ unsafe fn kstring_bytes(ks: &kstring_t) -> Vec<u8> {
 }
 
 unsafe fn assert_sam_tag_by_pos(
-    hdr: *mut htslib_mini_rs::sam_hdr_t,
+    hdr: *mut htslib_rs::sam_hdr_t,
     type_: &CStr,
     pos: c_int,
     key: &CStr,
@@ -38,7 +38,7 @@ unsafe fn assert_sam_tag_by_pos(
 }
 
 unsafe fn assert_sam_tag_by_id(
-    hdr: *mut htslib_mini_rs::sam_hdr_t,
+    hdr: *mut htslib_rs::sam_hdr_t,
     type_: &CStr,
     id_key: &CStr,
     id_value: &CStr,
@@ -62,7 +62,7 @@ unsafe fn assert_sam_tag_by_id(
     ks_free(&mut ks);
 }
 
-unsafe fn sam_header(path: &str) -> (*mut htslib_mini_rs::htsFile, *mut htslib_mini_rs::sam_hdr_t) {
+unsafe fn sam_header(path: &str) -> (*mut htslib_rs::htsFile, *mut htslib_rs::sam_hdr_t) {
     let path_c = c_fixture(path);
     let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
     assert!(!fp.is_null(), "failed to open {path}");
@@ -71,12 +71,12 @@ unsafe fn sam_header(path: &str) -> (*mut htslib_mini_rs::htsFile, *mut htslib_m
     (fp, hdr)
 }
 
-unsafe fn close_sam_header(fp: *mut htslib_mini_rs::htsFile, hdr: *mut htslib_mini_rs::sam_hdr_t) {
+unsafe fn close_sam_header(fp: *mut htslib_rs::htsFile, hdr: *mut htslib_rs::sam_hdr_t) {
     sam_hdr_destroy(hdr);
     assert_eq!(hts_close(fp), 0);
 }
 
-unsafe fn formatted_vcf_header(hdr: *const htslib_mini_rs::bcf_hdr_t) -> String {
+unsafe fn formatted_vcf_header(hdr: *const htslib_rs::bcf_hdr_t) -> String {
     let mut len = 0;
     let text = bcf_hdr_fmt_text(hdr, 0, &mut len);
     assert!(!text.is_null());

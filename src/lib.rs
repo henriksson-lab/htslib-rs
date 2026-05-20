@@ -1,3 +1,4 @@
+#![cfg_attr(feature = "cram-mirror", feature(c_variadic, extern_types))]
 #![allow(
     dead_code,
     non_camel_case_types,
@@ -7,6 +8,10 @@
 )]
 
 #[path = "mod.rs"]
-pub mod htslib_mini_rs;
+pub mod htslib_rs;
 
-pub use htslib_mini_rs::*;
+#[cfg(feature = "cram-mirror")]
+#[path = "cram/mod.rs"]
+pub mod cram_mirror;
+
+pub use htslib_rs::*;

@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bcf_destroy, bcf_get_format_string, bcf_get_format_values, bcf_get_info, bcf_hdr_destroy,
     bcf_hdr_fmt_text, bcf_hdr_get_version, bcf_hdr_id2int, bcf_hdr_id2name, bcf_hdr_name2id,
     bcf_hdr_read, bcf_hdr_seqnames, bcf_init, bcf_read, bcf_seqname, bcf_unpack, hts_close,
@@ -19,7 +19,7 @@ fn fixture_text(path: &str) -> String {
 
 fn tmp_path(label: &str, extension: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
-        "htslib-mini-rs-{}-{}-{}.{}",
+        "htslib_rs-{}-{}-{}.{}",
         label,
         std::process::id(),
         std::thread::current().name().unwrap_or("test"),
@@ -27,7 +27,7 @@ fn tmp_path(label: &str, extension: &str) -> std::path::PathBuf {
     ))
 }
 
-unsafe fn header_text(hdr: *const htslib_mini_rs::bcf_hdr_t) -> String {
+unsafe fn header_text(hdr: *const htslib_rs::bcf_hdr_t) -> String {
     let mut len = 0;
     let text = bcf_hdr_fmt_text(hdr, 0, &mut len);
     assert!(!text.is_null());
@@ -67,7 +67,7 @@ unsafe fn render_vcf(path: &str) -> String {
     out
 }
 
-unsafe fn assert_sample_names(hdr: *const htslib_mini_rs::bcf_hdr_t, expected: &[&[u8]]) {
+unsafe fn assert_sample_names(hdr: *const htslib_rs::bcf_hdr_t, expected: &[&[u8]]) {
     assert_eq!(
         (*hdr).n[hts_sys::BCF_DT_SAMPLE as usize] as usize,
         expected.len()
@@ -85,7 +85,7 @@ unsafe fn assert_sample_names(hdr: *const htslib_mini_rs::bcf_hdr_t, expected: &
     }
 }
 
-unsafe fn assert_alleles(rec: *mut htslib_mini_rs::bcf1_t, expected: &[&CStr]) {
+unsafe fn assert_alleles(rec: *mut htslib_rs::bcf1_t, expected: &[&CStr]) {
     assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
     assert_eq!((*rec).n_allele() as usize, expected.len());
     for (i, allele) in expected.iter().enumerate() {

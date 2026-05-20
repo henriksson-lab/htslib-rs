@@ -1,6 +1,6 @@
-# htslib-mini-rs
+# htslib_rs
 
-This is a translation of htslib, git version `7c895563db986143fc33de8164453600f4956bac`
+This is a translation of htslib, git version `c9e7a96448b7a307d2acf24705491f1a4ab8dea6`
 
 **Most Rust developers should not use this crate**. This crate has the benefit of making Rust translation of code that depends on htslib easy, and sometimes it offers more performance.
 But causual developers should first see if the noodles (https://docs.rs/noodles/latest/noodles/) Rust library fulfills their needs. Noodles is designed to be idiomatic safe Rust,

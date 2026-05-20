@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bcf_destroy, bcf_get_format_string, bcf_get_format_values, bcf_get_info_values,
     bcf_hdr_add_sample, bcf_hdr_append, bcf_hdr_destroy, bcf_hdr_get_version, bcf_hdr_id2int,
     bcf_hdr_init, bcf_hdr_merge, bcf_hdr_name2id, bcf_hdr_read, bcf_hdr_sync, bcf_hdr_write,
@@ -17,13 +17,13 @@ fn c_fixture(path: &str) -> CString {
 
 fn tmp_vcf_path(label: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
-        "htslib-mini-rs-vcf-{}-{}.vcf",
+        "htslib_rs-vcf-{}-{}.vcf",
         std::process::id(),
         label
     ))
 }
 
-unsafe fn assert_alleles(rec: *mut htslib_mini_rs::bcf1_t, expected: &[&CStr]) {
+unsafe fn assert_alleles(rec: *mut htslib_rs::bcf1_t, expected: &[&CStr]) {
     assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
     assert_eq!((*rec).n_allele() as usize, expected.len());
     for (i, allele) in expected.iter().enumerate() {
@@ -31,7 +31,7 @@ unsafe fn assert_alleles(rec: *mut htslib_mini_rs::bcf1_t, expected: &[&CStr]) {
     }
 }
 
-unsafe fn assert_sample_names(hdr: *const htslib_mini_rs::bcf_hdr_t, expected: &[&CStr]) {
+unsafe fn assert_sample_names(hdr: *const htslib_rs::bcf_hdr_t, expected: &[&CStr]) {
     assert_eq!(
         (*hdr).n[hts_sys::BCF_DT_SAMPLE as usize] as usize,
         expected.len()
@@ -43,8 +43,8 @@ unsafe fn assert_sample_names(hdr: *const htslib_mini_rs::bcf_hdr_t, expected: &
 }
 
 unsafe fn get_info_i32(
-    hdr: *const htslib_mini_rs::bcf_hdr_t,
-    rec: *mut htslib_mini_rs::bcf1_t,
+    hdr: *const htslib_rs::bcf_hdr_t,
+    rec: *mut htslib_rs::bcf1_t,
     tag: &CStr,
 ) -> Vec<i32> {
     let mut values = std::ptr::null_mut();
@@ -65,8 +65,8 @@ unsafe fn get_info_i32(
 }
 
 unsafe fn get_info_f32(
-    hdr: *const htslib_mini_rs::bcf_hdr_t,
-    rec: *mut htslib_mini_rs::bcf1_t,
+    hdr: *const htslib_rs::bcf_hdr_t,
+    rec: *mut htslib_rs::bcf1_t,
     tag: &CStr,
 ) -> Vec<f32> {
     let mut values = std::ptr::null_mut();
@@ -87,8 +87,8 @@ unsafe fn get_info_f32(
 }
 
 unsafe fn get_format_i32(
-    hdr: *const htslib_mini_rs::bcf_hdr_t,
-    rec: *mut htslib_mini_rs::bcf1_t,
+    hdr: *const htslib_rs::bcf_hdr_t,
+    rec: *mut htslib_rs::bcf1_t,
     tag: &CStr,
 ) -> Vec<i32> {
     let mut values: *mut c_void = std::ptr::null_mut();
@@ -109,8 +109,8 @@ unsafe fn get_format_i32(
 }
 
 unsafe fn get_format_strings(
-    hdr: *const htslib_mini_rs::bcf_hdr_t,
-    rec: *mut htslib_mini_rs::bcf1_t,
+    hdr: *const htslib_rs::bcf_hdr_t,
+    rec: *mut htslib_rs::bcf1_t,
     tag: &CStr,
 ) -> Vec<String> {
     let mut values: *mut *mut c_char = std::ptr::null_mut();

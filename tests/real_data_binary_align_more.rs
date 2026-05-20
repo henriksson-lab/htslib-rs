@@ -1,4 +1,4 @@
-use htslib_mini_rs::{
+use htslib_rs::{
     bam_destroy1, bam_get_qname, bam_init1, hclose, hopen, htsFormat, hts_check_EOF, hts_close,
     hts_detect_format2, hts_open, hts_set_fai_filename, sam_hdr_destroy, sam_hdr_read, sam_read1,
     HTS_FORMAT_BAM, HTS_FORMAT_CRAM,
@@ -25,7 +25,7 @@ struct RecordCore {
 }
 
 impl RecordCore {
-    unsafe fn from_record(rec: *mut htslib_mini_rs::bam1_t) -> Self {
+    unsafe fn from_record(rec: *mut htslib_rs::bam1_t) -> Self {
         Self {
             qname: CStr::from_ptr(bam_get_qname(rec))
                 .to_string_lossy()
