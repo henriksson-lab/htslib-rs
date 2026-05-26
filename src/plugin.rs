@@ -35,7 +35,7 @@ const HTS_PATH_SEPARATOR_CHAR: c_int = b':' as c_int;
 const HTS_PATH_SEPARATOR_STR: *const c_char = c":".as_ptr();
 
 #[repr(C)]
-struct PluginPathItr {
+pub(crate) struct PluginPathItr {
     path: kstring_t,
     entry: kstring_t,
     dirv: *mut c_void,
@@ -302,4 +302,84 @@ pub unsafe fn plugin_c_186_close_plugin(plugin: *mut c_void) {
 pub unsafe fn plugin_c_195_hts_plugin_path() -> *const c_char {
     // ENABLE_PLUGINS is not defined for this translation build.
     std::ptr::null()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::{CStr, CString};
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+
+    fn temp_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "htslib-rs-plugin-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn c_path(path: &Path) -> CString {
+        CString::new(path.as_os_str().as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn hts_path_iterator_filters_hfile_shared_objects_across_path_entries() {
+        let first = temp_dir("first");
+        let second = temp_dir("second");
+        std::fs::write(first.join("hfile_alpha.so"), b"").unwrap();
+        std::fs::write(first.join("not_hfile.so"), b"").unwrap();
+        std::fs::write(second.join("hfile_beta.so"), b"").unwrap();
+        std::fs::write(second.join("hfile_gamma.dylib"), b"").unwrap();
+
+        let first_c = c_path(&first);
+        let second_c = c_path(&second);
+        let path = CString::new(format!(
+            ":{}:{}",
+            first_c.to_str().unwrap(),
+            second_c.to_str().unwrap()
+        ))
+        .unwrap();
+        let builtin = c_path(&first);
+
+        unsafe {
+            let mut itr: PluginPathItr = std::mem::zeroed();
+            plugin_c_69_hts_path_itr_setup(
+                (&mut itr as *mut PluginPathItr).cast(),
+                path.as_ptr(),
+                builtin.as_ptr(),
+                c"hfile_".as_ptr(),
+                6,
+                std::ptr::null(),
+                0,
+            );
+
+            let mut found = Vec::new();
+            loop {
+                let next = plugin_c_104_hts_path_itr_next((&mut itr as *mut PluginPathItr).cast());
+                if next.is_null() {
+                    break;
+                }
+                found.push(
+                    CStr::from_ptr(next)
+                        .to_string_lossy()
+                        .rsplit('/')
+                        .next()
+                        .unwrap()
+                        .to_owned(),
+                );
+            }
+            found.sort();
+            assert_eq!(found, ["hfile_alpha.so", "hfile_alpha.so", "hfile_beta.so"]);
+        }
+
+        let _ = std::fs::remove_dir_all(first);
+        let _ = std::fs::remove_dir_all(second);
+    }
 }

@@ -88,6 +88,14 @@ unsafe fn render_longref_single_region(
     path: &std::path::Path,
     index_path: &std::path::Path,
 ) -> String {
+    render_longref_region(path, index_path, c"CHROMOSOME_I:10000000000-10000000003")
+}
+
+unsafe fn render_longref_region(
+    path: &std::path::Path,
+    index_path: &std::path::Path,
+    region: &CStr,
+) -> String {
     let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
     let index_path_c = CString::new(index_path.to_string_lossy().as_bytes()).unwrap();
     let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
@@ -96,7 +104,7 @@ unsafe fn render_longref_single_region(
     assert!(!hdr.is_null());
     let idx = sam_index_load2(fp, path_c.as_ptr(), index_path_c.as_ptr());
     assert!(!idx.is_null());
-    let iter = sam_itr_querys(idx, hdr, c"CHROMOSOME_I:10000000000-10000000003".as_ptr());
+    let iter = sam_itr_querys(idx, hdr, region.as_ptr());
     assert!(!iter.is_null());
     let rec = bam_init1();
     assert!(!rec.is_null());
@@ -260,6 +268,17 @@ fn longrefs_sam_single_region_iterator_matches_original_expected_output_exactly(
             actual,
             include_str!("../htslib/test/longrefs/longref_itr.expected.sam")
         );
+    }
+}
+
+#[test]
+fn longrefs_sam_empty_region_iterator_returns_header_only() {
+    unsafe {
+        let (path, index_path) = build_longref_bgzf_sam_with_csi("empty");
+        let actual =
+            render_longref_region(&path, &index_path, c"CHROMOSOME_I:10000900000-10000900100");
+        remove_temp_longrefs(&path, &index_path);
+        assert_eq!(actual, "@SQ\tSN:CHROMOSOME_I\tLN:10001009800\n");
     }
 }
 

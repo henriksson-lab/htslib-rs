@@ -670,3 +670,18 @@ pub unsafe fn test_test_hfile_libcurl_c_464_main() -> c_int {
     libc::fprintf(hts_sys::stderr.cast(), c"All tests passed.\n".as_ptr());
     libc::EXIT_SUCCESS
 }
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn translated_hfile_libcurl_retry_suite() {
+    unsafe {
+        if libc::access(c"test/mock_http_server.py".as_ptr(), libc::R_OK) != 0 {
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"test/mock_http_server.py not found, skipping libcurl retry tests\n".as_ptr(),
+            );
+            return;
+        }
+        assert_eq!(test_test_hfile_libcurl_c_464_main(), libc::EXIT_SUCCESS);
+    }
+}

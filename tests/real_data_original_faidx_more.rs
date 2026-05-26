@@ -1,11 +1,12 @@
 use htslib_rs::{
     bgzf::{bgzf_close, bgzf_index_build_init, bgzf_index_dump, bgzf_open, bgzf_write},
-    fai_adjust_region, fai_destroy, fai_fetch, fai_fetch64, fai_fetchqual, fai_fetchqual64,
-    fai_line_length, fai_load3_format, fai_parse_region, faidx_fetch_qual64, faidx_fetch_seq64,
-    faidx_has_seq, faidx_iseq, faidx_nseq, faidx_seq_len, faidx_seq_len64, hts_pos_t, FAI_CREATE,
-    FAI_FASTA, FAI_FASTQ, FAI_NONE,
+    fai_adjust_region, fai_build3, fai_destroy, fai_fetch, fai_fetch64, fai_fetchqual,
+    fai_fetchqual64, fai_line_length, fai_load3_format, fai_parse_region, faidx_fetch_qual64,
+    faidx_fetch_seq64, faidx_has_seq, faidx_iseq, faidx_nseq, faidx_seq_len, faidx_seq_len64,
+    hts_pos_t, FAI_CREATE, FAI_FASTA, FAI_FASTQ, FAI_NONE,
 };
 use std::ffi::{CStr, CString};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn c_fixture(path: &str) -> CString {
@@ -242,6 +243,93 @@ unsafe fn fastq_fetch_seq64_record(
     (seq, qual, seq_len)
 }
 
+fn generated_fastq_path(record_count: usize, label: &str) -> std::path::PathBuf {
+    let path = unique_temp_path(label).with_extension("fq");
+    let bases = b"ACGTN";
+    let quals = b"BCDEF";
+    let mut out = String::with_capacity(record_count * 180);
+    for i in 0..record_count {
+        out.push_str(&format!("@read_{i:06}\n"));
+        for j in 0..96 {
+            out.push(bases[(i + j) % bases.len()] as char);
+        }
+        out.push_str("\n+\n");
+        for j in 0..96 {
+            out.push(quals[(i + j) % quals.len()] as char);
+        }
+        out.push('\n');
+    }
+    std::fs::write(&path, out).unwrap();
+    path
+}
+
+fn run_read_fast_index(path: &std::path::Path, fmt: &str, multi: &str, regions: &str) -> Vec<u8> {
+    let output = Command::new(env!("CARGO_BIN_EXE_perf_read_fast_index"))
+        .arg(path)
+        .arg(fmt)
+        .arg(multi)
+        .arg(regions)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "read_fast_index failed with {:?}; stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+unsafe fn expected_read_fast_index_multi_fastq(path: &std::path::Path, regions: &str) -> Vec<u8> {
+    const HTS_PARSE_LIST: i32 = 4;
+
+    let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+    let fai_path = CString::new(format!("{}.fai", path.display())).unwrap();
+    let fai = fai_load3_format(
+        path_c.as_ptr(),
+        fai_path.as_ptr(),
+        std::ptr::null(),
+        0,
+        FAI_FASTQ,
+    );
+    assert!(!fai.is_null());
+
+    let mut region_storage = CString::new(regions).unwrap().into_bytes_with_nul();
+    let mut region = region_storage.as_mut_ptr().cast::<libc::c_char>();
+    let mut expected = Vec::new();
+    loop {
+        let mut tid = -1;
+        let mut beg = 0;
+        let mut end = 0;
+        let remaining = fai_parse_region(fai, region, &mut tid, &mut beg, &mut end, HTS_PARSE_LIST);
+        if remaining.is_null() {
+            break;
+        }
+        assert_eq!(fai_adjust_region(fai, tid, &mut beg, &mut end), 0);
+
+        let name = faidx_iseq(fai, tid);
+        let mut len = 0;
+        let seq = faidx_fetch_seq64(fai, name, beg, end, &mut len);
+        assert!(!seq.is_null());
+        expected.extend_from_slice(
+            format!("Data: {len} {}\n", CStr::from_ptr(seq).to_string_lossy()).as_bytes(),
+        );
+        libc::free(seq.cast());
+
+        let qual = faidx_fetch_qual64(fai, name, beg, end, &mut len);
+        assert!(!qual.is_null());
+        expected.extend_from_slice(
+            format!("Qual: {len} {}\n", CStr::from_ptr(qual).to_string_lossy()).as_bytes(),
+        );
+        libc::free(qual.cast());
+
+        region = remaining.cast_mut();
+    }
+
+    fai_destroy(fai);
+    expected
+}
+
 #[test]
 fn fastq_expected_index_metadata_matches_faidx_apis() {
     unsafe {
@@ -435,5 +523,27 @@ fn fastq_retrieval_expected_output_matches_sequence_and_quality_apis() {
         );
 
         fai_destroy(fai);
+    }
+}
+
+#[test]
+fn generated_large_fastq_read_fast_index_cli_matches_faidx_api() {
+    unsafe {
+        let path = generated_fastq_path(20_000, "large-read-fast-index");
+        let fai_path = std::path::PathBuf::from(format!("{}.fai", path.display()));
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        let fai_c = CString::new(fai_path.to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(
+            fai_build3(path_c.as_ptr(), fai_c.as_ptr(), std::ptr::null()),
+            0
+        );
+
+        let regions = "read_000000:1-96,read_010000:11-70,read_019999:30-96";
+        let actual = run_read_fast_index(&path, "Q", "1", regions);
+        let expected = expected_read_fast_index_multi_fastq(&path, regions);
+        assert_eq!(actual, expected);
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(fai_path);
     }
 }

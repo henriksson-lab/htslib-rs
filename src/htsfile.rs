@@ -62,7 +62,7 @@ macro_rules! error {
 // original: view_sam (htslib/htsfile.c:64)
 pub unsafe fn htsfile_c_64_view_sam(in_: *mut hts::htsFile, filename: *const c_char) {
     let mut b: *mut sam::bam1_t = ptr::null_mut();
-    let mut hdr: *mut sam::sam_hdr_t = ptr::null_mut();
+    let hdr: *mut sam::sam_hdr_t;
     let mut out: *mut hts::htsFile = ptr::null_mut();
 
     'clean: loop {
@@ -123,7 +123,7 @@ pub unsafe fn htsfile_c_64_view_sam(in_: *mut hts::htsFile, filename: *const c_c
 // original: view_vcf (htslib/htsfile.c:108)
 pub unsafe fn htsfile_c_108_view_vcf(in_: *mut hts::htsFile, filename: *const c_char) {
     let mut rec: *mut hts_sys::bcf1_t = ptr::null_mut();
-    let mut hdr: *mut hts_sys::bcf_hdr_t = ptr::null_mut();
+    let hdr: *mut hts_sys::bcf_hdr_t;
     let mut out: *mut hts::htsFile = ptr::null_mut();
 
     'clean: loop {

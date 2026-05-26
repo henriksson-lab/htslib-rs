@@ -69,7 +69,7 @@ pool_alloc,htslib/cram/pooled_alloc.c,115,,,TRUE
 pool_alloc,htslib/cram/pooled_alloc.c,151,,,TRUE
 pool_free,htslib/cram/pooled_alloc.c,144,,,TRUE
 pool_free,htslib/cram/pooled_alloc.c,155,,,TRUE
-job_cleanup,htslib/bgzf.c,1322,,,FALSE
+job_cleanup,htslib/bgzf.c,1322,,,TRUE
 wake_next_worker,htslib/thread_pool.c,654,,,FALSE
 hts_tpool_dispatch3,htslib/thread_pool.c,846,,,TRUE
 mt_queue,htslib/bgzf.c,1852,,,FALSE
@@ -90,7 +90,7 @@ hts_tpool_delete_result,htslib/thread_pool.c,344,,,TRUE
 hts_tpool_process_reset,htslib/thread_pool.c,1013,,,TRUE
 hts_tpool_process_destroy,htslib/thread_pool.c,410,,,TRUE
 hts_tpool_wake_dispatch,htslib/thread_pool.c,923,,,TRUE
-mt_destroy,htslib/bgzf.c,1805,,,FALSE
+mt_destroy,htslib/bgzf.c,1805,,,TRUE
 bgzf_close_mt,htslib/bgzf.c,2071,,,FALSE
 bgzf_index_destroy,htslib/bgzf.c,2336,,,TRUE
 hclose,htslib/hfile.c,503,,,TRUE
@@ -282,7 +282,7 @@ ks_initialize,htslib/htslib/kstring.h,157,,,TRUE
 ks_free,htslib/htslib/kstring.h,234,,,TRUE
 cram_decode_slice,htslib/cram/cram_decode.c,2346,,,FALSE
 lazy_flush,htslib/bgzf.c,1927,,,FALSE
-lazy_flush,htslib/bgzf.c,1942,,,FALSE
+lazy_flush,htslib/bgzf.c,1942,,,TRUE
 bgzf_write,htslib/bgzf.c,2002,,,TRUE
 cram_index_build_multiref,htslib/cram/cram_index.c,632,,,FALSE
 cram_index_slice,htslib/cram/cram_index.c,695,,,FALSE
@@ -949,7 +949,7 @@ bcf_sr_destroy_threads,htslib/synced_bcf_reader.c,243,,,TRUE
 bcf_sr_destroy1,htslib/synced_bcf_reader.c,461,,,FALSE
 khash_str2int_destroy_free,htslib/htslib/khash_str2int.h,53,,,TRUE
 kbs_destroy,htslib/htslib/kbitset.h,131,,,TRUE
-bcf_sr_sort_destroy,htslib/bcf_sr_sort.c,685,,,FALSE
+bcf_sr_sort_destroy,htslib/bcf_sr_sort.c,685,,,TRUE
 bcf_sr_destroy,htslib/synced_bcf_reader.c,480,,,TRUE
 alternate_zeros,htslib/hts.c,437,,,TRUE
 is_utf16_text,htslib/hts.c,445,,,TRUE
@@ -1808,10 +1808,10 @@ handle_bad_request,htslib/hfile_s3.c,1762,,,FALSE
 initialise_upload,htslib/hfile_s3.c,1779,,,FALSE
 get_upload_id,htslib/hfile_s3.c,1837,,,FALSE
 recv_callback,htslib/hfile_s3.c,1854,,,TRUE
-s3_read_close,htslib/hfile_s3.c,1869,,,FALSE
+s3_read_close,htslib/hfile_s3.c,1869,,,TRUE
 get_part,htslib/hfile_s3.c,1878,,,FALSE
 s3_read,htslib/hfile_s3.c,1949,,,FALSE
-s3_seek,htslib/hfile_s3.c,2015,,,FALSE
+s3_seek,htslib/hfile_s3.c,2015,,,TRUE
 initialise_download,htslib/hfile_s3.c,2074,,,FALSE
 s3_close,htslib/hfile_s3.c,2083,,,FALSE
 s3_write_open,htslib/hfile_s3.c,2102,,,FALSE
@@ -1820,7 +1820,7 @@ s3_open_v4,htslib/hfile_s3.c,2348,,,FALSE
 s3_open_v2,htslib/hfile_s3.c,2374,,,FALSE
 hopen_s3,htslib/hfile_s3.c,2400,,,FALSE
 vhopen_s3,htslib/hfile_s3.c,2414,,,FALSE
-s3_exit,htslib/hfile_s3.c,2426,,,FALSE
+s3_exit,htslib/hfile_s3.c,2426,,,TRUE
 PLUGIN_GLOBAL,htslib/hfile_s3.c,2436,,,FALSE
 cmpstringp,htslib/bcf_sr_sort.c,258,,,TRUE
 xstreq,htslib/vcf.c,63,,,TRUE
@@ -1876,8 +1876,8 @@ bgzf_decode_func,htslib/bgzf.c,1373,,,FALSE
 bgzf_nul_func,htslib/bgzf.c,1390,,,TRUE
 bgzf_mt_writer,htslib/bgzf.c,1398,,,FALSE
 bgzf_mt_read_block,htslib/bgzf.c,1485,,,FALSE
-bgzf_mt_eof,htslib/bgzf.c,1566,,,FALSE
-bgzf_mt_seek,htslib/bgzf.c,1583,,,FALSE
+bgzf_mt_eof,htslib/bgzf.c,1566,,,TRUE
+bgzf_mt_seek,htslib/bgzf.c,1583,,,TRUE
 hts_tpool_process_ref_decr,htslib/thread_pool.c,274,,,TRUE
 bgzf_mt_reader,htslib/bgzf.c,1598,,,FALSE
 bgzf_is_bgzf,htslib/bgzf.c,2260,,,TRUE

@@ -1,17 +1,43 @@
 use htslib_rs::{
-    bam_destroy1, bam_get_qname, bam_init1, hts_close, hts_idx_destroy, hts_itr_destroy, hts_open,
+    bam_destroy1, bam_endpos, bam_get_l_aux, bam_get_qname, bam_init1,
+    hts_c_4756_hts_idx_check_local, hts_close, hts_idx_destroy, hts_itr_destroy, hts_open,
     hts_set_fai_filename, sam_c_4553_sam_write1, sam_hdr_destroy, sam_hdr_read, sam_hdr_write,
-    sam_index_build, sam_index_load, sam_itr_next, sam_itr_querys, sam_read1,
+    sam_index_build, sam_index_load, sam_index_load2, sam_itr_next, sam_itr_querys, sam_read1,
+    HTS_FMT_BAI,
 };
 use std::ffi::{CStr, CString};
+use std::path::{Path, PathBuf};
 
 fn c_fixture(path: &str) -> CString {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
     CString::new(path.to_string_lossy().as_bytes()).unwrap()
 }
 
+fn c_path(path: &Path) -> CString {
+    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+}
+
+fn optional_external_cellsnp_bam() -> Option<PathBuf> {
+    let path = PathBuf::from("/husky/henriksson/for_claude/cellsnp/gex_chr22_5m.bam");
+    if path.is_file() && path.with_extension("bam.bai").is_file() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
 unsafe fn query_alignment_names(
     path: &str,
+    reference: Option<&str>,
+    region: &str,
+    max_records: usize,
+) -> Vec<String> {
+    query_alignment_names_with_index(path, None, reference, region, max_records)
+}
+
+unsafe fn query_alignment_names_with_index(
+    path: &str,
+    index: Option<&str>,
     reference: Option<&str>,
     region: &str,
     max_records: usize,
@@ -26,7 +52,13 @@ unsafe fn query_alignment_names(
 
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
-    let idx = sam_index_load(fp, path.as_ptr());
+    let index_c;
+    let idx = if let Some(index) = index {
+        index_c = c_fixture(index);
+        sam_index_load2(fp, path.as_ptr(), index_c.as_ptr())
+    } else {
+        sam_index_load(fp, path.as_ptr())
+    };
     assert!(!idx.is_null());
 
     let region = CString::new(region).unwrap();
@@ -56,6 +88,76 @@ unsafe fn query_alignment_names(
     names
 }
 
+unsafe fn query_alignment_count_for_path(path: &Path, region: &CStr) -> usize {
+    let path_c = c_path(path);
+    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+    assert!(!fp.is_null(), "failed to open {}", path.display());
+    let hdr = sam_hdr_read(fp);
+    assert!(!hdr.is_null());
+    let idx = sam_index_load(fp, path_c.as_ptr());
+    assert!(!idx.is_null());
+    let itr = sam_itr_querys(idx, hdr, region.as_ptr());
+    assert!(!itr.is_null());
+    let rec = bam_init1();
+    assert!(!rec.is_null());
+
+    let mut count = 0usize;
+    loop {
+        let ret = sam_itr_next(fp, itr, rec);
+        if ret < 0 {
+            break;
+        }
+        count += 1;
+    }
+
+    bam_destroy1(rec);
+    hts_itr_destroy(itr);
+    hts_idx_destroy(idx);
+    sam_hdr_destroy(hdr);
+    assert_eq!(hts_close(fp), 0);
+    count
+}
+
+unsafe fn scan_alignment_prefix_for_path(path: &Path, limit: usize) -> (usize, usize, i64, i64) {
+    let path_c = c_path(path);
+    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+    assert!(!fp.is_null(), "failed to open {}", path.display());
+    let hdr = sam_hdr_read(fp);
+    assert!(!hdr.is_null());
+    let rec = bam_init1();
+    assert!(!rec.is_null());
+
+    let mut count = 0usize;
+    let mut with_aux = 0usize;
+    let mut min_pos = i64::MAX;
+    let mut max_end = i64::MIN;
+    while count < limit {
+        let ret = sam_read1(fp, hdr, rec);
+        if ret < 0 {
+            break;
+        }
+        assert!(!bam_get_qname(rec).is_null());
+        let tid = (*rec).core.tid;
+        if tid >= 0 {
+            assert!(tid < (*hdr).n_targets);
+            assert!((*rec).core.pos >= 0);
+            let end = bam_endpos(rec);
+            assert!(end >= (*rec).core.pos);
+            min_pos = min_pos.min((*rec).core.pos);
+            max_end = max_end.max(end);
+        }
+        if bam_get_l_aux(rec) > 0 {
+            with_aux += 1;
+        }
+        count += 1;
+    }
+
+    bam_destroy1(rec);
+    sam_hdr_destroy(hdr);
+    assert_eq!(hts_close(fp), 0);
+    (count, with_aux, min_pos, max_end)
+}
+
 #[test]
 fn indexed_range_bam_queries_return_expected_real_records() {
     unsafe {
@@ -76,6 +178,28 @@ fn indexed_range_bam_queries_return_expected_real_records() {
         assert!(names
             .iter()
             .any(|name| name == "HS18_09653:4:1303:14310:57578"));
+    }
+}
+
+#[test]
+fn indexed_range_bam_explicit_sidecar_index_matches_default_query_results() {
+    unsafe {
+        let default_names =
+            query_alignment_names("htslib/test/range.bam", None, "CHROMOSOME_II:2976-3070", 8);
+        let explicit_names = query_alignment_names_with_index(
+            "htslib/test/range.bam",
+            Some("htslib/test/range.bam.bai"),
+            None,
+            "CHROMOSOME_II:2976-3070",
+            8,
+        );
+
+        assert_eq!(explicit_names, default_names);
+        assert_eq!(
+            explicit_names.first().map(String::as_str),
+            Some("HS18_09653:4:2112:13048:11874")
+        );
+        assert!(explicit_names.len() > 1);
     }
 }
 
@@ -106,12 +230,56 @@ fn indexed_real_cram_query_uses_reference_and_returns_records() {
     }
 }
 
+#[test]
+fn explicit_real_csi_index_returns_no_sq_bam_fixture_records() {
+    unsafe {
+        let csi_names = query_alignment_names_with_index(
+            "htslib/test/no_hdr_sq_1.bam",
+            Some("htslib/test/no_hdr_sq_1.bam.csi"),
+            None,
+            "CHROMOSOME_I:2-2",
+            8,
+        );
+
+        assert_eq!(csi_names, ["I", "II.14978392", "III", "IV", "V", "VI"]);
+    }
+}
+
+#[test]
+fn external_cellsnp_chr22_bam_index_query_counts_all_real_records_when_available() {
+    let Some(path) = optional_external_cellsnp_bam() else {
+        return;
+    };
+    unsafe {
+        assert_eq!(query_alignment_count_for_path(&path, c"chr22"), 5_000_000);
+        assert_eq!(query_alignment_count_for_path(&path, c"chr22:1-1000000"), 0);
+    }
+}
+
+#[test]
+fn external_cellsnp_chr22_bam_prefix_scan_has_realistic_mapped_records_when_available() {
+    let Some(path) = optional_external_cellsnp_bam() else {
+        return;
+    };
+    unsafe {
+        let (count, with_aux, min_pos, max_end) = scan_alignment_prefix_for_path(&path, 100_000);
+        assert_eq!(count, 100_000);
+        assert!(with_aux > 90_000, "expected most records to carry aux tags");
+        assert!(min_pos >= 0);
+        assert!(max_end > min_pos);
+    }
+}
+
 fn temp_index2_bam(label: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
         "htslib_rs-index2-{}-{}.bam",
         std::process::id(),
         label
     ))
+}
+
+fn repo_temp_name(label: &str) -> String {
+    format!("htslib_rs-index-{}-{}", std::process::id(), label)
 }
 
 unsafe fn build_index2_bam(label: &str) -> std::path::PathBuf {
@@ -169,5 +337,26 @@ fn indexed_index2_mapped_unmapped_mate_point_queries_match_htslib_counts() {
 
         let _ = std::fs::remove_file(&bam_path);
         let _ = std::fs::remove_file(format!("{}.bai", bam_path.display()));
+    }
+}
+
+#[test]
+fn remote_index_check_probes_local_basename_like_htslib() {
+    unsafe {
+        let base = repo_temp_name("remote-basename.bam");
+        let csi = format!("{base}.csi");
+        std::fs::write(&csi, b"not read by hts_idx_check_local").unwrap();
+
+        let remote = CString::new(format!("mem:/path/{base}")).unwrap();
+        let mut fnidx = std::ptr::null_mut();
+        assert_eq!(
+            hts_c_4756_hts_idx_check_local(remote.as_ptr(), HTS_FMT_BAI, &mut fnidx),
+            1
+        );
+        assert!(!fnidx.is_null());
+        assert_eq!(CStr::from_ptr(fnidx).to_bytes(), csi.as_bytes());
+
+        libc::free(fnidx.cast());
+        std::fs::remove_file(csi).unwrap();
     }
 }

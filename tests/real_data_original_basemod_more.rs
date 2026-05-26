@@ -378,3 +378,48 @@ fn original_base_mod_reverse_bounds_fixture_is_rejected() {
         destroy_records(records);
     }
 }
+
+#[test]
+fn original_base_mod_orientation_fixture_keeps_strand_and_record_orientation_distinct() {
+    unsafe {
+        let records = read_records("htslib/test/base_mods/MM-orient.sam");
+        assert_eq!(records.len(), 4);
+
+        assert_eq!(
+            collect_base_mod_calls(records[0]),
+            vec![
+                (7, 'C', vec!["C+m128".to_string()]),
+                (30, 'C', vec!["C+m153".to_string()]),
+                (31, 'C', vec!["C+m179".to_string()]),
+            ]
+        );
+        assert_eq!(
+            collect_base_mod_calls(records[1]),
+            vec![
+                (4, 'G', vec!["C+m179".to_string()]),
+                (5, 'G', vec!["C+m153".to_string()]),
+                (28, 'G', vec!["C+m128".to_string()]),
+            ]
+        );
+        assert_eq!(
+            collect_base_mod_calls(records[2]),
+            vec![
+                (1, 'G', vec!["G-m115".to_string()]),
+                (2, 'G', vec!["G-m141".to_string()]),
+                (18, 'G', vec!["G-m166".to_string()]),
+                (23, 'G', vec!["G-m192".to_string()]),
+            ]
+        );
+        assert_eq!(
+            collect_base_mod_calls(records[3]),
+            vec![
+                (12, 'C', vec!["G-m192".to_string()]),
+                (17, 'C', vec!["G-m166".to_string()]),
+                (33, 'C', vec!["G-m141".to_string()]),
+                (34, 'C', vec!["G-m115".to_string()]),
+            ]
+        );
+
+        destroy_records(records);
+    }
+}

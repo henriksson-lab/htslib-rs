@@ -16,11 +16,9 @@ pub unsafe fn kstring_c_142_kvsprintf(
     if *fmt == b'%' as c_char && *fmt.add(1) == b'g' as c_char && *fmt.add(2) == 0 {
         let d = if args.fp_offset <= 160 {
             let p = args.reg_save_area.cast::<u8>().add(args.fp_offset as usize);
-            args.fp_offset += 16;
             std::ptr::read_unaligned(p.cast::<f64>())
         } else {
             let p = args.overflow_arg_area.cast::<u8>();
-            args.overflow_arg_area = p.add(8).cast();
             std::ptr::read_unaligned(p.cast::<f64>())
         };
         return kputd(d, s);

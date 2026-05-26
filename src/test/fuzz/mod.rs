@@ -1,3 +1,3 @@
 #[rustfmt::skip]
-#[cfg(any())]
+#[cfg(test)]
 pub mod hts_open_fuzzer;

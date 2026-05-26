@@ -1,5 +1,58 @@
 use std::ffi::{c_char, c_int, c_void};
 
+unsafe fn run_thrash_threads4(
+    input: *const c_char,
+    pre_reads: usize,
+    iterations: usize,
+    n_threads: c_int,
+    sleep_usecs: i64,
+    verbose: bool,
+) -> c_int {
+    let mut fpin = crate::htslib_rs::bgzf::bgzf_open(input, c"r".as_ptr());
+    if fpin.is_null() {
+        return libc::EXIT_FAILURE;
+    }
+
+    let mut buf = [0_u8; 65536];
+    for _ in 0..pre_reads {
+        if crate::htslib_rs::bgzf::bgzf_read(fpin, buf.as_mut_ptr().cast::<c_void>(), buf.len()) < 0
+        {
+            libc::abort();
+        }
+    }
+    let pos = ((*fpin).block_address << 16) | ((*fpin).block_offset as i64 & 0xffff);
+    if crate::htslib_rs::bgzf::bgzf_close(fpin) != 0 {
+        libc::abort();
+    }
+
+    for i in 0..iterations {
+        if verbose {
+            libc::printf(c"i=%d\n".as_ptr(), i as c_int);
+        }
+        fpin = crate::htslib_rs::bgzf::bgzf_open(input, c"r".as_ptr());
+        if fpin.is_null() {
+            return libc::EXIT_FAILURE;
+        }
+        if crate::htslib_rs::bgzf::bgzf_mt(fpin, n_threads, 256) != 0 {
+            crate::htslib_rs::bgzf::bgzf_close(fpin);
+            return libc::EXIT_FAILURE;
+        }
+        if crate::htslib_rs::bgzf::bgzf_seek(fpin, pos, libc::SEEK_SET) < 0 {
+            libc::puts(c"!".as_ptr());
+        }
+        crate::htslib_rs::hts::hts_usleep(sleep_usecs);
+        if crate::htslib_rs::bgzf::bgzf_seek(fpin, 0, libc::SEEK_SET) < 0 {
+            libc::puts(c"!".as_ptr());
+        }
+        crate::htslib_rs::hts::hts_usleep(sleep_usecs);
+        if crate::htslib_rs::bgzf::bgzf_close(fpin) != 0 {
+            libc::abort();
+        }
+    }
+
+    0
+}
+
 // original: main (htslib/test/thrash_threads4.c:34)
 pub unsafe fn test_thrash_threads4_c_34_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     if argc <= 1 {
@@ -10,35 +63,37 @@ pub unsafe fn test_thrash_threads4_c_34_main(argc: c_int, argv: *mut *mut c_char
         libc::exit(1);
     }
 
-    let mut fpin = crate::htslib_rs::bgzf::bgzf_open(*argv.add(1), c"r".as_ptr());
-    let mut buf = [0_u8; 65536];
-    for _ in 0..1000 {
-        if crate::htslib_rs::bgzf::bgzf_read(fpin, buf.as_mut_ptr().cast::<c_void>(), buf.len()) < 0
-        {
-            libc::abort();
-        }
-    }
-    let pos = ((*fpin).block_address << 16) | ((*fpin).block_offset as i64 & 0xffff);
-    crate::htslib_rs::bgzf::bgzf_close(fpin);
+    run_thrash_threads4(*argv.add(1), 1000, 1000, 8, 1000, true)
+}
 
-    const N: i64 = 1000;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::{c_void, CString};
+    use std::os::unix::ffi::OsStrExt;
 
-    for i in 0..1000 {
-        libc::printf(c"i=%d\n".as_ptr(), i);
-        fpin = crate::htslib_rs::bgzf::bgzf_open(*argv.add(1), c"r".as_ptr());
-        crate::htslib_rs::bgzf::bgzf_mt(fpin, 8, 256);
-        if crate::htslib_rs::bgzf::bgzf_seek(fpin, pos, libc::SEEK_SET) < 0 {
-            libc::puts(c"!".as_ptr());
-        }
-        crate::htslib_rs::hts::hts_usleep(N);
-        if crate::htslib_rs::bgzf::bgzf_seek(fpin, 0, libc::SEEK_SET) < 0 {
-            libc::puts(c"!".as_ptr());
-        }
-        crate::htslib_rs::hts::hts_usleep(N);
-        if crate::htslib_rs::bgzf::bgzf_close(fpin) != 0 {
-            libc::abort();
-        }
+    fn temp_bgzf_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("htslib-rs-{label}-{}", std::process::id()))
     }
 
-    0
+    #[test]
+    fn deterministic_thrash_threads4_reopens_and_seeks_threaded_reader() {
+        let path = temp_bgzf_path("thrash-threads4.bgz");
+        let path_c = CString::new(path.as_os_str().as_bytes()).unwrap();
+
+        unsafe {
+            let fp = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+            assert!(!fp.is_null());
+            let data = vec![b'A'; 70_000];
+            assert_eq!(
+                crate::htslib_rs::bgzf::bgzf_write(fp, data.as_ptr().cast::<c_void>(), data.len()),
+                data.len() as isize
+            );
+            assert_eq!(crate::htslib_rs::bgzf::bgzf_close(fp), 0);
+
+            assert_eq!(run_thrash_threads4(path_c.as_ptr(), 1, 3, 2, 0, false), 0);
+        }
+
+        let _ = std::fs::remove_file(path);
+    }
 }

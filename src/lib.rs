@@ -1,4 +1,3 @@
-#![cfg_attr(feature = "cram-mirror", feature(c_variadic, extern_types))]
 #![allow(
     dead_code,
     non_camel_case_types,

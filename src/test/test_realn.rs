@@ -4,6 +4,7 @@ use crate::htslib_rs::{faidx, hts, sam};
 
 unsafe extern "C" {
     static mut optarg: *mut c_char;
+    static mut optind: c_int;
 }
 
 // original: usage (htslib/test/test_realn.c:38)
@@ -24,7 +25,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
     let mut ref_name: *mut c_char = std::ptr::null_mut();
     let mut ref_seq: *mut c_char = std::ptr::null_mut();
     let modew = c"w".as_ptr();
-    let mut fai: *mut faidx::faidx_t = std::ptr::null_mut();
+    let fai: *mut faidx::faidx_t;
     let mut hdr: *mut sam::sam_hdr_t = std::ptr::null_mut();
     let mut rec: *mut sam::bam1_t = std::ptr::null_mut();
     let mut res: c_int;
@@ -221,4 +222,95 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
     faidx::fai_destroy(fai);
 
     exit_status
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::htslib_rs::sam::{bam_aux2Z, bam_aux_get, bam_get_qname, bam_init1};
+    use std::ffi::{CStr, CString};
+
+    fn fixture(path: &str) -> CString {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+        CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    }
+
+    fn temp_sam(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "htslib-rs-test-realn-{name}-{}-{}.sam",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("unnamed")
+        ))
+    }
+
+    unsafe fn run_main(args: &[CString]) -> c_int {
+        let mut argv = args
+            .iter()
+            .map(|arg| arg.as_ptr().cast_mut())
+            .collect::<Vec<_>>();
+        optind = 1;
+        test_test_realn_c_42_main(argv.len() as c_int, argv.as_mut_ptr())
+    }
+
+    unsafe fn collect_qnames_and_bq(path: &CStr) -> Vec<(String, i64, Option<String>)> {
+        let fp = hts::hts_open(path.as_ptr(), c"r".as_ptr());
+        assert!(!fp.is_null());
+        let hdr = sam::sam_hdr_read(fp);
+        assert!(!hdr.is_null());
+        let rec = bam_init1();
+        assert!(!rec.is_null());
+        let mut rows = Vec::new();
+
+        while sam::sam_read1(fp, hdr, rec) >= 0 {
+            let qname = CStr::from_ptr(bam_get_qname(rec))
+                .to_string_lossy()
+                .into_owned();
+            let bq = {
+                let aux = bam_aux_get(rec, c"BQ".as_ptr());
+                if aux.is_null() {
+                    None
+                } else {
+                    Some(
+                        CStr::from_ptr(bam_aux2Z(aux))
+                            .to_string_lossy()
+                            .into_owned(),
+                    )
+                }
+            };
+            rows.push((qname, (*rec).core.pos, bq));
+        }
+
+        sam::bam_destroy1(rec);
+        sam::sam_hdr_destroy(hdr);
+        assert_eq!(hts::hts_close(fp), 0);
+        rows
+    }
+
+    #[test]
+    fn original_test_realn_main_writes_expected_baq_records() {
+        unsafe {
+            let out_path = temp_sam("realn01-default");
+            let _ = std::fs::remove_file(&out_path);
+            let out = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
+            let argv = [
+                CString::new("test_realn").unwrap(),
+                CString::new("-f").unwrap(),
+                fixture("htslib/test/realn01.fa"),
+                CString::new("-i").unwrap(),
+                fixture("htslib/test/realn01.sam"),
+                CString::new("-o").unwrap(),
+                out.clone(),
+            ];
+
+            assert_eq!(run_main(&argv), libc::EXIT_SUCCESS);
+
+            let expected = fixture("htslib/test/realn01_exp.sam");
+            assert_eq!(
+                collect_qnames_and_bq(&out),
+                collect_qnames_and_bq(&expected)
+            );
+
+            let _ = std::fs::remove_file(out_path);
+        }
+    }
 }

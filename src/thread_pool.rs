@@ -1081,13 +1081,66 @@ mod tests {
 
     static JOB_CLEANUPS: AtomicUsize = AtomicUsize::new(0);
     static RESULT_CLEANUPS: AtomicUsize = AtomicUsize::new(0);
+    static SQUAREB_DISPATCH_FAILURES: AtomicUsize = AtomicUsize::new(0);
+    static UNORDERED_SQUARE_JOBS: AtomicUsize = AtomicUsize::new(0);
     static WORKER_ID_FAILURES: AtomicUsize = AtomicUsize::new(0);
+
+    #[repr(C)]
+    struct SquareBOpt {
+        pool: *mut hts_tpool,
+        queue: *mut hts_tpool_process,
+        n: c_int,
+    }
+
+    #[repr(C)]
+    struct PipeOpt {
+        pool: *mut hts_tpool,
+        q1: *mut hts_tpool_process,
+        q2: *mut hts_tpool_process,
+        q3: *mut hts_tpool_process,
+        n: c_int,
+        failures: AtomicUsize,
+        output_next: AtomicUsize,
+        output_checksum: AtomicUsize,
+    }
+
+    #[repr(C)]
+    struct PipeJob {
+        opt: *mut PipeOpt,
+        x: u32,
+        eof: c_int,
+    }
 
     #[repr(C)]
     struct TestWorkerArg {
         pool: *mut hts_tpool,
         value: c_int,
         delay_us: libc::useconds_t,
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    enum TestMainMode {
+        Usage,
+        Unknown,
+        Unordered(c_int),
+        OrderedNonblocking(c_int),
+        OrderedDispatchThread(c_int),
+        Pipe(c_int),
+    }
+
+    fn classify_test_main_args(args: &[&str]) -> TestMainMode {
+        if args.len() < 3 {
+            return TestMainMode::Usage;
+        }
+
+        let nthreads = args[2].parse::<c_int>().unwrap_or(0);
+        match args[1] {
+            "unordered" => TestMainMode::Unordered(nthreads),
+            "ordered1" => TestMainMode::OrderedNonblocking(nthreads),
+            "ordered2" => TestMainMode::OrderedDispatchThread(nthreads),
+            "pipe" => TestMainMode::Pipe(nthreads),
+            _ => TestMainMode::Unknown,
+        }
     }
 
     unsafe fn init_test_mutex(mutex: *mut libc::pthread_mutex_t) {
@@ -1181,6 +1234,225 @@ mod tests {
         result.cast()
     }
 
+    unsafe extern "C" fn unordered_square_in_only(arg: *mut c_void) -> *mut c_void {
+        let value = unsafe { *(arg.cast::<c_int>()) };
+        let square = value * value;
+        assert!(square >= 0);
+        UNORDERED_SQUARE_JOBS.fetch_add(1, Ordering::SeqCst);
+        unsafe {
+            libc::free(arg);
+        }
+        ptr::null_mut()
+    }
+
+    unsafe extern "C" fn ordered_square_with_slow_serial(arg: *mut c_void) -> *mut c_void {
+        let value = unsafe { *(arg.cast::<c_int>()) };
+        if value & 31 == 31 {
+            unsafe { libc::usleep(50_000) };
+        }
+
+        let result = unsafe { libc::malloc(mem::size_of::<c_int>()).cast::<c_int>() };
+        assert!(!result.is_null());
+        unsafe {
+            *result = if value < 0 {
+                -(value * value)
+            } else {
+                value * value
+            };
+            libc::free(arg);
+        }
+        result.cast()
+    }
+
+    extern "C" fn test_squareb_dispatcher(arg: *mut c_void) -> *mut c_void {
+        let opt = arg.cast::<SquareBOpt>();
+        let pool = unsafe { (*opt).pool };
+        let queue = unsafe { (*opt).queue };
+        let n = unsafe { (*opt).n };
+
+        for value in 0..n {
+            let job_arg = unsafe { libc::malloc(mem::size_of::<c_int>()).cast::<c_int>() };
+            if job_arg.is_null() {
+                SQUAREB_DISPATCH_FAILURES.fetch_add(1, Ordering::SeqCst);
+                return ptr::null_mut();
+            }
+            unsafe {
+                *job_arg = value;
+                if hts_tpool_dispatch(
+                    pool,
+                    queue,
+                    Some(ordered_square_with_slow_serial),
+                    job_arg.cast(),
+                ) != 0
+                {
+                    libc::free(job_arg.cast());
+                    SQUAREB_DISPATCH_FAILURES.fetch_add(1, Ordering::SeqCst);
+                    return ptr::null_mut();
+                }
+            }
+        }
+
+        let sentinel = unsafe { libc::malloc(mem::size_of::<c_int>()).cast::<c_int>() };
+        if sentinel.is_null() {
+            SQUAREB_DISPATCH_FAILURES.fetch_add(1, Ordering::SeqCst);
+            return ptr::null_mut();
+        }
+        unsafe {
+            *sentinel = -1;
+            if hts_tpool_dispatch(
+                pool,
+                queue,
+                Some(ordered_square_with_slow_serial),
+                sentinel.cast(),
+            ) != 0
+            {
+                libc::free(sentinel.cast());
+                SQUAREB_DISPATCH_FAILURES.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        ptr::null_mut()
+    }
+
+    extern "C" fn pipe_input_thread(arg: *mut c_void) -> *mut c_void {
+        let opt = arg.cast::<PipeOpt>();
+        let n = unsafe { (*opt).n };
+
+        for value in 1..=n {
+            let job = unsafe { libc::malloc(mem::size_of::<PipeJob>()).cast::<PipeJob>() };
+            if job.is_null() {
+                unsafe { (*opt).failures.fetch_add(1, Ordering::SeqCst) };
+                return 1usize as *mut c_void;
+            }
+
+            unsafe {
+                ptr::write(
+                    job,
+                    PipeJob {
+                        opt,
+                        x: value as u32,
+                        eof: c_int::from(value == n),
+                    },
+                );
+
+                if hts_tpool_dispatch((*opt).pool, (*opt).q1, Some(pipe_stage1), job.cast()) != 0 {
+                    libc::free(job.cast());
+                    (*opt).failures.fetch_add(1, Ordering::SeqCst);
+                    return 1usize as *mut c_void;
+                }
+            }
+        }
+
+        ptr::null_mut()
+    }
+
+    unsafe extern "C" fn pipe_stage1(arg: *mut c_void) -> *mut c_void {
+        let job = arg.cast::<PipeJob>();
+        unsafe {
+            (*job).x <<= 8;
+            libc::usleep(((*job).x & 3) * 1_000);
+        }
+        arg
+    }
+
+    extern "C" fn pipe_stage1to2(arg: *mut c_void) -> *mut c_void {
+        let opt = arg.cast::<PipeOpt>();
+
+        loop {
+            let result = unsafe { hts_tpool_next_result_wait((*opt).q1) };
+            if result.is_null() {
+                return ptr::null_mut();
+            }
+
+            let job = unsafe { hts_tpool_result_data(result).cast::<PipeJob>() };
+            unsafe {
+                hts_tpool_delete_result(result, 0);
+                if hts_tpool_dispatch((*(*job).opt).pool, (*opt).q2, Some(pipe_stage2), job.cast())
+                    != 0
+                {
+                    libc::free(job.cast());
+                    (*opt).failures.fetch_add(1, Ordering::SeqCst);
+                    return 1usize as *mut c_void;
+                }
+                if (*job).eof != 0 {
+                    return ptr::null_mut();
+                }
+            }
+        }
+    }
+
+    unsafe extern "C" fn pipe_stage2(arg: *mut c_void) -> *mut c_void {
+        let job = arg.cast::<PipeJob>();
+        unsafe {
+            (*job).x <<= 8;
+            libc::usleep(((*job).x & 7) * 1_000);
+        }
+        arg
+    }
+
+    extern "C" fn pipe_stage2to3(arg: *mut c_void) -> *mut c_void {
+        let opt = arg.cast::<PipeOpt>();
+
+        loop {
+            let result = unsafe { hts_tpool_next_result_wait((*opt).q2) };
+            if result.is_null() {
+                return ptr::null_mut();
+            }
+
+            let job = unsafe { hts_tpool_result_data(result).cast::<PipeJob>() };
+            unsafe {
+                hts_tpool_delete_result(result, 0);
+                if hts_tpool_dispatch((*(*job).opt).pool, (*opt).q3, Some(pipe_stage3), job.cast())
+                    != 0
+                {
+                    libc::free(job.cast());
+                    (*opt).failures.fetch_add(1, Ordering::SeqCst);
+                    return 1usize as *mut c_void;
+                }
+                if (*job).eof != 0 {
+                    return ptr::null_mut();
+                }
+            }
+        }
+    }
+
+    unsafe extern "C" fn pipe_stage3(arg: *mut c_void) -> *mut c_void {
+        let job = arg.cast::<PipeJob>();
+        unsafe {
+            libc::usleep(((*job).x & 3) * 1_000);
+            (*job).x <<= 8;
+        }
+        arg
+    }
+
+    extern "C" fn pipe_output_thread(arg: *mut c_void) -> *mut c_void {
+        let opt = arg.cast::<PipeOpt>();
+
+        loop {
+            let result = unsafe { hts_tpool_next_result_wait((*opt).q3) };
+            if result.is_null() {
+                return ptr::null_mut();
+            }
+
+            let job = unsafe { hts_tpool_result_data(result).cast::<PipeJob>() };
+            let (x, eof) = unsafe { ((*job).x, (*job).eof != 0) };
+            let expected = unsafe { (*opt).output_next.fetch_add(1, Ordering::SeqCst) + 1 };
+            if x != ((expected as u32) << 24) {
+                unsafe { (*opt).failures.fetch_add(1, Ordering::SeqCst) };
+            }
+            unsafe {
+                (*opt)
+                    .output_checksum
+                    .fetch_add(x as usize, Ordering::SeqCst);
+                hts_tpool_delete_result(result, 1);
+            }
+
+            if eof {
+                return ptr::null_mut();
+            }
+        }
+    }
+
     unsafe fn alloc_worker_arg(
         pool: *mut hts_tpool,
         value: c_int,
@@ -1262,6 +1534,22 @@ mod tests {
     }
 
     #[test]
+    fn tpool_kill_releases_zero_worker_pool_without_signalling_threads() {
+        unsafe {
+            let pool = xmalloc::<HtsTpool>();
+            assert!(!pool.is_null());
+            ptr::write_bytes(pool, 0, 1);
+            (*pool).t_stack_top = -1;
+            assert_eq!(
+                libc::pthread_mutex_init(ptr::addr_of_mut!((*pool).pool_m), ptr::null()),
+                0
+            );
+
+            hts_tpool_kill(pool.cast());
+        }
+    }
+
+    #[test]
     fn thread_pool_executes_jobs_and_returns_results_in_serial_order() {
         unsafe {
             WORKER_ID_FAILURES.store(0, Ordering::SeqCst);
@@ -1298,6 +1586,284 @@ mod tests {
             hts_tpool_process_destroy(queue);
             hts_tpool_destroy(pool);
         }
+    }
+
+    #[test]
+    fn original_test_square_nonblocking_dispatch_drains_ordered_results() {
+        const TASK_SIZE: c_int = 96;
+
+        unsafe {
+            let pool = hts_tpool_init(4);
+            assert!(!pool.is_null());
+            let queue = hts_tpool_process_init(pool, hts_tpool_size(pool) * 2, 0);
+            assert!(!queue.is_null());
+
+            let mut next_result_value = 0;
+            for value in 0..TASK_SIZE {
+                let arg = libc::malloc(mem::size_of::<c_int>()).cast::<c_int>();
+                assert!(!arg.is_null());
+                *arg = value;
+
+                loop {
+                    let dispatch_rc = hts_tpool_dispatch2(
+                        pool,
+                        queue,
+                        Some(ordered_square_with_slow_serial),
+                        arg.cast(),
+                        1,
+                    );
+
+                    let result = hts_tpool_next_result(queue);
+                    if !result.is_null() {
+                        let data = hts_tpool_result_data(result).cast::<c_int>();
+                        assert_eq!(*data, next_result_value * next_result_value);
+                        next_result_value += 1;
+                        hts_tpool_delete_result(result, 1);
+                    }
+
+                    if dispatch_rc == 0 {
+                        break;
+                    }
+                    assert_eq!(dispatch_rc, -1);
+                    assert_eq!(*c_compat::__errno_location(), libc::EAGAIN);
+                    libc::usleep(1_000);
+                }
+            }
+
+            assert_eq!(hts_tpool_process_flush(queue), 0);
+
+            loop {
+                let result = hts_tpool_next_result(queue);
+                if result.is_null() {
+                    break;
+                }
+                let data = hts_tpool_result_data(result).cast::<c_int>();
+                assert_eq!(*data, next_result_value * next_result_value);
+                next_result_value += 1;
+                hts_tpool_delete_result(result, 1);
+            }
+
+            assert_eq!(next_result_value, TASK_SIZE);
+            assert_eq!(hts_tpool_process_empty(queue), 1);
+
+            hts_tpool_process_destroy(queue);
+            hts_tpool_destroy(pool);
+        }
+    }
+
+    #[test]
+    fn original_test_square_u_in_only_jobs_flush_before_destroy() {
+        const TASK_SIZE: c_int = 96;
+
+        unsafe {
+            UNORDERED_SQUARE_JOBS.store(0, Ordering::SeqCst);
+
+            let pool = hts_tpool_init(4);
+            assert!(!pool.is_null());
+            let queue = hts_tpool_process_init(pool, 8, 1);
+            assert!(!queue.is_null());
+
+            for value in 0..TASK_SIZE {
+                let arg = libc::malloc(mem::size_of::<c_int>()).cast::<c_int>();
+                assert!(!arg.is_null());
+                *arg = value;
+                assert_eq!(
+                    hts_tpool_dispatch(pool, queue, Some(unordered_square_in_only), arg.cast()),
+                    0
+                );
+            }
+
+            assert_eq!(hts_tpool_process_flush(queue), 0);
+            assert_eq!(
+                UNORDERED_SQUARE_JOBS.load(Ordering::SeqCst),
+                TASK_SIZE as usize
+            );
+            assert_eq!(hts_tpool_process_empty(queue), 1);
+
+            hts_tpool_process_destroy(queue);
+            hts_tpool_destroy(pool);
+        }
+    }
+
+    #[test]
+    fn original_test_squareb_dispatch_thread_consumes_until_sentinel() {
+        const TASK_SIZE: c_int = 96;
+
+        unsafe {
+            SQUAREB_DISPATCH_FAILURES.store(0, Ordering::SeqCst);
+
+            let pool = hts_tpool_init(4);
+            assert!(!pool.is_null());
+            let queue = hts_tpool_process_init(pool, hts_tpool_size(pool) * 2, 0);
+            assert!(!queue.is_null());
+
+            let mut opt = SquareBOpt {
+                pool,
+                queue,
+                n: TASK_SIZE,
+            };
+            let mut tid: libc::pthread_t = mem::zeroed();
+            assert_eq!(
+                libc::pthread_create(
+                    ptr::addr_of_mut!(tid),
+                    ptr::null(),
+                    test_squareb_dispatcher,
+                    ptr::addr_of_mut!(opt).cast(),
+                ),
+                0
+            );
+
+            let mut next_result_value = 0;
+            loop {
+                let result = hts_tpool_next_result_wait(queue);
+                assert!(!result.is_null());
+                let data = hts_tpool_result_data(result).cast::<c_int>();
+                let value = *data;
+                hts_tpool_delete_result(result, 1);
+
+                if value == -1 {
+                    break;
+                }
+                assert_eq!(value, next_result_value * next_result_value);
+                next_result_value += 1;
+            }
+
+            assert_eq!(next_result_value, TASK_SIZE);
+            assert_eq!(hts_tpool_process_flush(queue), 0);
+            assert!(hts_tpool_next_result(queue).is_null());
+
+            hts_tpool_process_destroy(queue);
+            hts_tpool_destroy(pool);
+            assert_eq!(libc::pthread_join(tid, ptr::null_mut()), 0);
+            assert_eq!(SQUAREB_DISPATCH_FAILURES.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn original_test_pipe_runs_three_ordered_stages_to_eof() {
+        const TASK_SIZE: c_int = 24;
+
+        unsafe {
+            let pool = hts_tpool_init(4);
+            assert!(!pool.is_null());
+            let qsize = hts_tpool_size(pool) * 2;
+            let q1 = hts_tpool_process_init(pool, qsize, 0);
+            let q2 = hts_tpool_process_init(pool, qsize, 0);
+            let q3 = hts_tpool_process_init(pool, qsize, 0);
+            assert!(!q1.is_null());
+            assert!(!q2.is_null());
+            assert!(!q3.is_null());
+
+            let mut opt = PipeOpt {
+                pool,
+                q1,
+                q2,
+                q3,
+                n: TASK_SIZE,
+                failures: AtomicUsize::new(0),
+                output_next: AtomicUsize::new(0),
+                output_checksum: AtomicUsize::new(0),
+            };
+
+            let mut input_tid: libc::pthread_t = mem::zeroed();
+            let mut stage1_tid: libc::pthread_t = mem::zeroed();
+            let mut stage2_tid: libc::pthread_t = mem::zeroed();
+            let mut output_tid: libc::pthread_t = mem::zeroed();
+            assert_eq!(
+                libc::pthread_create(
+                    ptr::addr_of_mut!(input_tid),
+                    ptr::null(),
+                    pipe_input_thread,
+                    ptr::addr_of_mut!(opt).cast(),
+                ),
+                0
+            );
+            assert_eq!(
+                libc::pthread_create(
+                    ptr::addr_of_mut!(stage1_tid),
+                    ptr::null(),
+                    pipe_stage1to2,
+                    ptr::addr_of_mut!(opt).cast(),
+                ),
+                0
+            );
+            assert_eq!(
+                libc::pthread_create(
+                    ptr::addr_of_mut!(stage2_tid),
+                    ptr::null(),
+                    pipe_stage2to3,
+                    ptr::addr_of_mut!(opt).cast(),
+                ),
+                0
+            );
+            assert_eq!(
+                libc::pthread_create(
+                    ptr::addr_of_mut!(output_tid),
+                    ptr::null(),
+                    pipe_output_thread,
+                    ptr::addr_of_mut!(opt).cast(),
+                ),
+                0
+            );
+
+            let mut retv: *mut c_void = ptr::null_mut();
+            assert_eq!(libc::pthread_join(input_tid, ptr::addr_of_mut!(retv)), 0);
+            assert!(retv.is_null());
+            assert_eq!(libc::pthread_join(stage1_tid, ptr::addr_of_mut!(retv)), 0);
+            assert!(retv.is_null());
+            assert_eq!(libc::pthread_join(stage2_tid, ptr::addr_of_mut!(retv)), 0);
+            assert!(retv.is_null());
+            assert_eq!(libc::pthread_join(output_tid, ptr::addr_of_mut!(retv)), 0);
+            assert!(retv.is_null());
+
+            assert_eq!(opt.failures.load(Ordering::SeqCst), 0);
+            assert_eq!(opt.output_next.load(Ordering::SeqCst), TASK_SIZE as usize);
+            let expected_checksum = ((TASK_SIZE as usize) * ((TASK_SIZE + 1) as usize) / 2) << 24;
+            assert_eq!(
+                opt.output_checksum.load(Ordering::SeqCst),
+                expected_checksum
+            );
+            assert_eq!(hts_tpool_process_empty(q1), 1);
+            assert_eq!(hts_tpool_process_empty(q2), 1);
+            assert_eq!(hts_tpool_process_empty(q3), 1);
+
+            hts_tpool_process_destroy(q1);
+            hts_tpool_process_destroy(q2);
+            hts_tpool_process_destroy(q3);
+            hts_tpool_destroy(pool);
+        }
+    }
+
+    #[test]
+    fn original_thread_pool_test_main_policy_routes_only_demo_modes() {
+        assert_eq!(
+            classify_test_main_args(&["thread_pool"]),
+            TestMainMode::Usage
+        );
+        assert_eq!(
+            classify_test_main_args(&["thread_pool", "unknown", "4"]),
+            TestMainMode::Unknown
+        );
+        assert_eq!(
+            classify_test_main_args(&["thread_pool", "unordered", "2"]),
+            TestMainMode::Unordered(2)
+        );
+        assert_eq!(
+            classify_test_main_args(&["thread_pool", "ordered1", "3"]),
+            TestMainMode::OrderedNonblocking(3)
+        );
+        assert_eq!(
+            classify_test_main_args(&["thread_pool", "ordered2", "4"]),
+            TestMainMode::OrderedDispatchThread(4)
+        );
+        assert_eq!(
+            classify_test_main_args(&["thread_pool", "pipe", "5"]),
+            TestMainMode::Pipe(5)
+        );
+        assert_eq!(
+            classify_test_main_args(&["thread_pool", "pipe", "not-a-number"]),
+            TestMainMode::Pipe(0)
+        );
     }
 
     #[test]
@@ -1379,6 +1945,49 @@ mod tests {
             assert!(second.next.is_null());
             assert!(second.prev.is_null());
 
+            assert_eq!(
+                libc::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn process_destroy_detaches_and_shutdowns_queue_with_outstanding_reference() {
+        unsafe {
+            let mut pool: HtsTpool = mem::zeroed();
+            init_test_mutex(ptr::addr_of_mut!(pool.pool_m));
+            pool.t_stack_top = -1;
+
+            let mut first: HtsTpoolProcess = mem::zeroed();
+            init_test_process_conds(ptr::addr_of_mut!(first));
+            first.p = ptr::addr_of_mut!(pool);
+            first.qsize = 4;
+            first.ref_count = 2;
+
+            let mut second: HtsTpoolProcess = mem::zeroed();
+            second.p = ptr::addr_of_mut!(pool);
+            second.qsize = 4;
+            second.ref_count = 1;
+
+            let first_ptr = ptr::addr_of_mut!(first);
+            let second_ptr = ptr::addr_of_mut!(second);
+            hts_tpool_process_attach(ptr::addr_of_mut!(pool).cast(), first_ptr.cast());
+            hts_tpool_process_attach(ptr::addr_of_mut!(pool).cast(), second_ptr.cast());
+            assert_eq!(pool.q_head, second_ptr);
+
+            hts_tpool_process_destroy(first_ptr.cast());
+
+            assert_eq!(first.no_more_input, 1);
+            assert_eq!(first.shutdown, 1);
+            assert_eq!(first.ref_count, 1);
+            assert!(first.next.is_null());
+            assert!(first.prev.is_null());
+            assert_eq!(pool.q_head, second_ptr);
+            assert_eq!(second.next, second_ptr);
+            assert_eq!(second.prev, second_ptr);
+
+            destroy_test_process_conds(first_ptr);
             assert_eq!(
                 libc::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
                 0

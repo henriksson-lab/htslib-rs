@@ -1,12 +1,12 @@
 use std::{
     collections::HashMap,
-    ffi::{c_char, c_int, c_uint, c_void},
+    ffi::{c_char, c_int, c_uint, c_void, CStr},
     io::Read,
 };
 
 use crate::htslib_rs::bgzf::{bgzf_close, bgzf_index_load, bgzf_open, bgzf_read, bgzf_useek};
 use crate::htslib_rs::c_compat::{
-    __errno_location, calloc, free, malloc, memcpy, realloc, EINVAL, ENOMEM,
+    __errno_location, calloc, free, malloc, memcpy, realloc, strdup, EINVAL, ENOMEM,
 };
 use crate::htslib_rs::faidx::fai_build;
 use crate::htslib_rs::hfile::{hclose, hclose_abruptly, hgets, hisremote, hopen};
@@ -15,14 +15,24 @@ use crate::htslib_rs::hfile::{
 };
 use crate::htslib_rs::hts::{
     cram_fd, hFILE, htsFile, hts_fmt_option, isspace_c, kputc, kputll, kputsn, kputw, kstring_t,
-    toupper_c, BGZF, HTS_FORMAT_CRAM,
+    toupper_c, BGZF, CRAM_OPT_POS_DELTA, CRAM_OPT_RANGE_NOSEEK, CRAM_OPT_USE_ARITH,
+    CRAM_OPT_USE_FQZ, CRAM_OPT_USE_TOK, HTS_FORMAT_CRAM, HTS_IDX_NOCOOR, HTS_IDX_REST,
+    HTS_IDX_START, HTS_OPT_PROFILE, HTS_PROFILE_ARCHIVE, HTS_PROFILE_FAST, HTS_PROFILE_NORMAL,
+    HTS_PROFILE_SMALL,
 };
 use crate::htslib_rs::sam::{
     bam1_t, bam_aux_get, bam_cigar_type, bam_destroy1, sam_hdr_destroy, sam_hdr_dup, sam_hdr_t,
     BAM_CIGAR_MASK, BAM_CIGAR_SHIFT, BAM_FDUP, BAM_FPAIRED, BAM_FPROPER_PAIR, BAM_FQCFAIL,
     BAM_FREAD1, BAM_FREAD2, BAM_FREVERSE, BAM_FSECONDARY, BAM_FUNMAP,
 };
-use crate::htslib_rs::thread_pool::{hts_tpool_process, hts_tpool_process_flush};
+use crate::htslib_rs::thread_pool::{
+    hts_tpool_init, hts_tpool_process, hts_tpool_process_flush, hts_tpool_process_init,
+    hts_tpool_size,
+};
+
+#[allow(unused_assignments)]
+#[path = "cram/cram_external.rs"]
+mod cram_external;
 
 pub type cram_block = hts_sys::cram_block;
 pub type cram_container = hts_sys::cram_container;
@@ -120,17 +130,6 @@ unsafe extern "C" {
         first: *mut libc::off_t,
         last: *mut libc::off_t,
     ) -> c_int;
-    #[link_name = "cram_container_get_num_records"]
-    fn htslib_cram_container_get_num_records(c: *mut cram_container) -> i32;
-    #[link_name = "cram_container_get_num_bases"]
-    fn htslib_cram_container_get_num_bases(c: *mut cram_container) -> i64;
-    #[link_name = "cram_container_get_coords"]
-    fn htslib_cram_container_get_coords(
-        c: *mut cram_container,
-        refid: *mut c_int,
-        start: *mut i64,
-        span: *mut i64,
-    );
     #[link_name = "cram_describe_encodings"]
     fn htslib_cram_describe_encodings(
         hdr: *mut cram_block_compression_hdr,
@@ -146,13 +145,6 @@ unsafe extern "C" {
     fn htslib_cram_codec_get_content_ids(c: *mut cram_codec, ids: *mut c_int);
     #[link_name = "cram_codec_describe"]
     fn htslib_cram_codec_describe(c: *mut cram_codec, ks: *mut kstring_t) -> c_int;
-    #[link_name = "cram_filter_container"]
-    fn htslib_cram_filter_container(
-        in_: *mut cram_fd,
-        out: *mut cram_fd,
-        c: *mut cram_container,
-        ref_id: *mut c_int,
-    ) -> c_int;
     #[link_name = "hts_pack"]
     fn htscodecs_hts_pack(
         data: *mut u8,
@@ -295,11 +287,11 @@ pub unsafe fn cram_decode_slice_header(
 }
 
 pub unsafe fn cram_container_get_num_records(c: *mut cram_container) -> i32 {
-    unsafe { htslib_cram_container_get_num_records(c) }
+    cram_cram_external_c_92_cram_container_get_num_records(c)
 }
 
 pub unsafe fn cram_container_get_num_bases(c: *mut cram_container) -> i64 {
-    unsafe { htslib_cram_container_get_num_bases(c) }
+    cram_cram_external_c_96_cram_container_get_num_bases(c)
 }
 
 pub unsafe fn cram_container_get_coords(
@@ -308,7 +300,7 @@ pub unsafe fn cram_container_get_coords(
     start: *mut i64,
     span: *mut i64,
 ) {
-    unsafe { htslib_cram_container_get_coords(c, refid, start, span) }
+    cram_cram_external_c_124_cram_container_get_coords(c, refid, start, span)
 }
 
 pub unsafe fn cram_read_container(fd: *mut cram_fd) -> *mut cram_container {
@@ -415,7 +407,14 @@ pub unsafe fn cram_filter_container(
     c: *mut cram_container,
     ref_id: *mut c_int,
 ) -> c_int {
-    unsafe { htslib_cram_filter_container(in_, out, c, ref_id) }
+    unsafe {
+        cram_external::cram_cram_external_c_776_cram_filter_container(
+            in_.cast(),
+            out.cast(),
+            c,
+            ref_id,
+        )
+    }
 }
 
 pub unsafe fn cram_open(filename: *const c_char, mode: *const c_char) -> *mut cram_fd {
@@ -451,7 +450,318 @@ pub unsafe fn cram_set_voption(
     opt: hts_fmt_option,
     args: *mut hts_sys::__va_list_tag,
 ) -> c_int {
-    hts_sys::cram_set_voption(fd.cast(), opt, args)
+    unsafe { cram_cram_io_c_5692_cram_set_voption(fd, opt, args) }
+}
+
+unsafe fn cram_voption_va_arg_word(args: *mut hts_sys::__va_list_tag) -> usize {
+    unsafe {
+        if args.is_null() {
+            return 0;
+        }
+        if (*args).gp_offset <= 40 {
+            let p = (*args)
+                .reg_save_area
+                .cast::<u8>()
+                .add((*args).gp_offset as usize);
+            (*args).gp_offset += 8;
+            p.cast::<usize>().read_unaligned()
+        } else {
+            let p = (*args).overflow_arg_area.cast::<u8>();
+            (*args).overflow_arg_area = p.add(8).cast();
+            p.cast::<usize>().read_unaligned()
+        }
+    }
+}
+
+unsafe fn cram_voption_va_arg_int(args: *mut hts_sys::__va_list_tag) -> c_int {
+    unsafe { cram_voption_va_arg_word(args) as c_int }
+}
+
+unsafe fn cram_voption_va_arg_ptr<T>(args: *mut hts_sys::__va_list_tag) -> *mut T {
+    unsafe { cram_voption_va_arg_word(args) as *mut T }
+}
+
+unsafe fn cram_voption_set_version(fd: *mut cram_fd, s: *const c_char) -> c_int {
+    unsafe {
+        if s.is_null() {
+            *__errno_location() = EINVAL;
+            return -1;
+        }
+
+        let Ok(ver) = CStr::from_ptr(s).to_str() else {
+            *__errno_location() = EINVAL;
+            return -1;
+        };
+        let Some((major_s, minor_s)) = ver.split_once('.') else {
+            *__errno_location() = EINVAL;
+            return -1;
+        };
+        let Ok(major) = major_s.parse::<c_int>() else {
+            *__errno_location() = EINVAL;
+            return -1;
+        };
+        let Ok(minor) = minor_s.parse::<c_int>() else {
+            *__errno_location() = EINVAL;
+            return -1;
+        };
+
+        let valid = (major == 1 && minor == 0)
+            || (major == 2 && (minor == 0 || minor == 1))
+            || (major == 3 && (minor == 0 || minor == 1))
+            || (major == 4 && minor == 0);
+        if !valid {
+            *__errno_location() = EINVAL;
+            return -1;
+        }
+
+        let fd = fd.cast::<cram_fd_layout>();
+        (*fd).version = major * 256 + minor;
+        (*fd).use_rans = if major >= 3 { 1 } else { 0 };
+        (*fd).use_tok = if (major == 3 && minor >= 1) || major >= 4 {
+            1
+        } else {
+            0
+        };
+        cram_cram_io_c_5170_cram_init_tables(fd.cast());
+        0
+    }
+}
+
+unsafe fn cram_voption_set_range_noseek(fd: *mut cram_fd, r: *const cram_range_layout) -> c_int {
+    unsafe {
+        if r.is_null() {
+            *__errno_location() = EINVAL;
+            return -1;
+        }
+
+        let fd = fd.cast::<cram_fd_layout>();
+        libc::pthread_mutex_lock(&mut (*fd).range_lock);
+        (*fd).range = *r;
+        if (*r).refid == HTS_IDX_NOCOOR {
+            (*fd).range.refid = -1;
+            (*fd).range.start = 0;
+        } else if (*r).refid == HTS_IDX_START || (*r).refid == HTS_IDX_REST {
+            (*fd).range.refid = -2;
+        }
+        if (*fd).range.refid != -2 {
+            (*fd).required_fields |= hts_sys::sam_fields_SAM_POS;
+        }
+        (*fd).ooc = 0;
+        (*fd).eof = 0;
+        libc::pthread_mutex_unlock(&mut (*fd).range_lock);
+        0
+    }
+}
+
+// original: cram_set_voption (htslib/cram/cram_io.c:5692)
+pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
+    fd: *mut cram_fd,
+    opt: hts_fmt_option,
+    args: *mut hts_sys::__va_list_tag,
+) -> c_int {
+    unsafe {
+        if fd.is_null() {
+            *__errno_location() = libc::EBADF;
+            return -1;
+        }
+
+        let fdl = fd.cast::<cram_fd_layout>();
+        match opt {
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_DECODE_MD => {
+                (*fdl).decode_md = cram_voption_va_arg_int(args);
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_PREFIX => {
+                let prefix = cram_voption_va_arg_ptr::<c_char>(args);
+                free((*fdl).prefix.cast());
+                (*fdl).prefix = if prefix.is_null() {
+                    std::ptr::null_mut()
+                } else {
+                    strdup(prefix)
+                };
+                if !prefix.is_null() && (*fdl).prefix.is_null() {
+                    return -1;
+                }
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_VERBOSITY => {}
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_SEQS_PER_SLICE => {
+                (*fdl).seqs_per_slice = cram_voption_va_arg_int(args);
+                if (*fdl).bases_per_slice == CRAM_DEFAULT_BASES_PER_SLICE {
+                    (*fdl).bases_per_slice = (*fdl).seqs_per_slice * 500;
+                }
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_BASES_PER_SLICE => {
+                (*fdl).bases_per_slice = cram_voption_va_arg_int(args);
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_SLICES_PER_CONTAINER => {
+                (*fdl).slices_per_container = cram_voption_va_arg_int(args);
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_EMBED_REF => {
+                (*fdl).embed_ref = cram_voption_va_arg_int(args);
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_NO_REF => {
+                (*fdl).no_ref = cram_voption_va_arg_int(args);
+            }
+            x if x == CRAM_OPT_POS_DELTA => {
+                (*fdl).ap_delta = cram_voption_va_arg_int(args);
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_IGNORE_MD5 => {
+                (*fdl).ignore_md5 = cram_voption_va_arg_int(args);
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_LOSSY_NAMES => {
+                (*fdl).lossy_read_names = cram_voption_va_arg_int(args);
+                (*fdl).tlen_approx = (*fdl).lossy_read_names;
+                (*fdl).tlen_zero = (*fdl).lossy_read_names;
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_USE_BZIP2 => {
+                (*fdl).use_bz2 = cram_voption_va_arg_int(args);
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_USE_RANS => {
+                (*fdl).use_rans = cram_voption_va_arg_int(args);
+            }
+            x if x == CRAM_OPT_USE_TOK => {
+                (*fdl).use_tok = cram_voption_va_arg_int(args);
+            }
+            x if x == CRAM_OPT_USE_FQZ => {
+                (*fdl).use_fqz = cram_voption_va_arg_int(args);
+            }
+            x if x == CRAM_OPT_USE_ARITH => {
+                (*fdl).use_arith = cram_voption_va_arg_int(args);
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_USE_LZMA => {
+                (*fdl).use_lzma = cram_voption_va_arg_int(args);
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_SHARED_REF => {
+                (*fdl).shared_ref = 1;
+                let refs = cram_voption_va_arg_ptr::<hts_sys::refs_t>(args);
+                if refs != (*fdl).refs {
+                    if !(*fdl).refs.is_null() {
+                        cram_cram_io_c_2427_refs_free((*fdl).refs.cast());
+                    }
+                    (*fdl).refs = refs;
+                    if !(*fdl).refs.is_null() {
+                        (*(*fdl).refs.cast::<refs_t_layout>()).count += 1;
+                    }
+                }
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_RANGE => {
+                return hts_sys::cram_set_voption(fd.cast(), opt, args);
+            }
+            x if x == CRAM_OPT_RANGE_NOSEEK => {
+                return cram_voption_set_range_noseek(
+                    fd,
+                    cram_voption_va_arg_ptr::<cram_range_layout>(args),
+                );
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE => {
+                return cram_cram_io_c_3597_cram_load_reference(
+                    fd,
+                    cram_voption_va_arg_ptr::<c_char>(args),
+                );
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_VERSION => {
+                return cram_voption_set_version(fd, cram_voption_va_arg_ptr::<c_char>(args));
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_MULTI_SEQ_PER_SLICE => {
+                let multi_seq = cram_voption_va_arg_int(args);
+                (*fdl).multi_seq = multi_seq;
+                (*fdl).multi_seq_user = multi_seq;
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_NTHREADS => {
+                let nthreads = cram_voption_va_arg_int(args);
+                if !(*fdl).pool.is_null() {
+                    return -2;
+                }
+                if nthreads >= 1 {
+                    (*fdl).pool = hts_tpool_init(nthreads).cast();
+                    if (*fdl).pool.is_null() {
+                        return -1;
+                    }
+                    (*fdl).rqueue =
+                        hts_tpool_process_init((*fdl).pool.cast(), nthreads * 2, 0).cast();
+                    (*fdl).shared_ref = 1;
+                    (*fdl).own_pool = 1;
+                }
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_THREAD_POOL => {
+                let p = cram_voption_va_arg_ptr::<hts_sys::htsThreadPool>(args);
+                if !(*fdl).pool.is_null() {
+                    return -2;
+                }
+                (*fdl).pool = if p.is_null() {
+                    std::ptr::null_mut()
+                } else {
+                    (*p).pool.cast()
+                };
+                if !(*fdl).pool.is_null() {
+                    let qsize = if (*p).qsize != 0 {
+                        (*p).qsize
+                    } else {
+                        hts_tpool_size((*fdl).pool.cast()) * 2
+                    };
+                    (*fdl).rqueue = hts_tpool_process_init((*fdl).pool.cast(), qsize, 0).cast();
+                }
+                (*fdl).shared_ref = 1;
+                (*fdl).own_pool = 0;
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_REQUIRED_FIELDS => {
+                (*fdl).required_fields = cram_voption_va_arg_int(args) as c_uint;
+                if (*fdl).range.refid != -2 {
+                    (*fdl).required_fields |= hts_sys::sam_fields_SAM_POS;
+                }
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_STORE_MD => {
+                (*fdl).store_md = cram_voption_va_arg_int(args);
+            }
+            x if x == hts_sys::hts_fmt_option_CRAM_OPT_STORE_NM => {
+                (*fdl).store_nm = cram_voption_va_arg_int(args);
+            }
+            x if x == hts_sys::hts_fmt_option_HTS_OPT_COMPRESSION_LEVEL => {
+                (*fdl).level = cram_voption_va_arg_int(args);
+            }
+            x if x == HTS_OPT_PROFILE => {
+                match cram_voption_va_arg_int(args) {
+                    HTS_PROFILE_FAST => {
+                        if (*fdl).level == CRAM_DEFAULT_LEVEL {
+                            (*fdl).level = 1;
+                        }
+                        (*fdl).use_tok = 0;
+                        (*fdl).seqs_per_slice = 10000;
+                    }
+                    HTS_PROFILE_NORMAL => {}
+                    HTS_PROFILE_SMALL => {
+                        if (*fdl).level == CRAM_DEFAULT_LEVEL {
+                            (*fdl).level = 6;
+                        }
+                        (*fdl).use_bz2 = 1;
+                        (*fdl).use_fqz = 1;
+                        (*fdl).seqs_per_slice = 25000;
+                    }
+                    HTS_PROFILE_ARCHIVE => {
+                        if (*fdl).level == CRAM_DEFAULT_LEVEL {
+                            (*fdl).level = 7;
+                        }
+                        (*fdl).use_bz2 = 1;
+                        (*fdl).use_fqz = 1;
+                        (*fdl).use_arith = 1;
+                        if (*fdl).level > 7 {
+                            (*fdl).use_lzma = 1;
+                        }
+                        (*fdl).seqs_per_slice = 100000;
+                    }
+                    _ => {}
+                }
+                if (*fdl).bases_per_slice == CRAM_DEFAULT_BASES_PER_SLICE {
+                    (*fdl).bases_per_slice = (*fdl).seqs_per_slice * 500;
+                }
+            }
+            _ => {
+                *__errno_location() = EINVAL;
+                return -1;
+            }
+        }
+
+        0
+    }
 }
 
 pub unsafe fn cram_check_EOF(fd: *mut cram_fd) -> c_int {
@@ -470,7 +780,16 @@ pub unsafe fn cram_transcode_rg(
     in_rg: *mut c_int,
     out_rg: *mut c_int,
 ) -> c_int {
-    hts_sys::cram_transcode_rg(in_.cast(), out.cast(), c, nrg, in_rg, out_rg)
+    unsafe {
+        cram_external::cram_cram_external_c_934_cram_transcode_rg(
+            in_.cast(),
+            out.cast(),
+            c,
+            nrg,
+            in_rg,
+            out_rg,
+        )
+    }
 }
 
 pub unsafe fn cram_get_refs(fd: *mut htsFile) -> *mut refs_t {
@@ -593,6 +912,7 @@ struct cram_slice_layout {
 const CRAM_DS_END: usize = 47;
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct cram_range_layout {
     refid: c_int,
     start: i64,
@@ -698,6 +1018,9 @@ struct hfile_layout {
 }
 
 const HFILE_MOBILE: c_uint = 1 << 1;
+const CRAM_DEFAULT_LEVEL: c_int = 5;
+const CRAM_DEFAULT_SEQS_PER_SLICE: c_int = 10000;
+const CRAM_DEFAULT_BASES_PER_SLICE: c_int = CRAM_DEFAULT_SEQS_PER_SLICE * 500;
 
 #[repr(C)]
 struct cram_stats_layout {
@@ -1029,7 +1352,39 @@ pub unsafe fn cram_cram_stats_c_80_cram_stats_del(st: *mut c_void, val: c_int) {
     (*st).nsamp += 1;
 }
 
-pub unsafe fn cram_cram_stats_c_105_cram_stats_dump(_st: *mut c_void) {}
+pub unsafe fn cram_cram_stats_c_105_cram_stats_dump(st: *mut c_void) {
+    let st = st.cast::<cram_stats_layout>();
+    libc::fprintf(hts_sys::stderr.cast(), c"cram_stats:\n".as_ptr());
+
+    for i in 0..1024usize {
+        let freq = (*st).freqs[i];
+        if freq == 0 {
+            continue;
+        }
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"\t%d\t%d\n".as_ptr(),
+            i as c_int,
+            freq,
+        );
+    }
+
+    if !(*st).h.is_null() {
+        let h = (*st).h.cast::<kh_m_i2i_layout>();
+        for k in 0..(*h).n_buckets {
+            let flag = *(*h).flags.add((k >> 4) as usize);
+            if ((flag >> ((k & 0x0f) << 1)) & 3) != 0 {
+                continue;
+            }
+            libc::fprintf(
+                hts_sys::stderr.cast(),
+                c"\t%lld\t%d\n".as_ptr(),
+                *(*h).keys.add(k as usize) as libc::c_longlong,
+                *(*h).vals.add(k as usize),
+            );
+        }
+    }
+}
 
 pub unsafe fn cram_cram_stats_c_134_cram_stats_encoding(fd: *mut c_void, st: *mut c_void) -> c_int {
     let fd = fd.cast::<cram_fd_layout>();
@@ -4288,7 +4643,8 @@ pub unsafe fn cram_cram_io_c_1414_cram_read_block(
         free(b.cast());
         return std::ptr::null_mut();
     }
-    let mut crc = crate::htslib_rs::bgzf::hts_crc32(0, (&c as *const c_int).cast(), 1);
+    let c_byte = c as u8;
+    let mut crc = crate::htslib_rs::bgzf::hts_crc32(0, (&c_byte as *const u8).cast(), 1);
 
     let c = if (*hfile).end > (*hfile).begin {
         let c = *(*hfile).begin as u8;
@@ -4302,7 +4658,8 @@ pub unsafe fn cram_cram_io_c_1414_cram_read_block(
         return std::ptr::null_mut();
     }
     (*b).content_type = c;
-    crc = crate::htslib_rs::bgzf::hts_crc32(crc, (&c as *const c_int).cast(), 1);
+    let c_byte = c as u8;
+    crc = crate::htslib_rs::bgzf::hts_crc32(crc, (&c_byte as *const u8).cast(), 1);
 
     if ((*fd_layout).version >> 8) >= 4 {
         if cram_cram_io_c_862_uint7_decode_crc32(fd, &mut (*b).content_id, &mut crc) == -1
@@ -12492,6 +12849,160 @@ mod tests {
     };
     use std::ffi::{CStr, CString};
 
+    unsafe fn call_cram_voption_words(
+        fd: *mut cram_fd,
+        opt: hts_fmt_option,
+        words: &mut [usize],
+    ) -> c_int {
+        let mut reg_save = [0usize; 6];
+        let mut overflow = [0usize; 8];
+        for (i, word) in words.iter().copied().enumerate() {
+            if i < reg_save.len() {
+                reg_save[i] = word;
+            } else {
+                overflow[i - reg_save.len()] = word;
+            }
+        }
+        let mut args = hts_sys::__va_list_tag {
+            gp_offset: 0,
+            fp_offset: 48,
+            overflow_arg_area: overflow.as_mut_ptr().cast(),
+            reg_save_area: reg_save.as_mut_ptr().cast(),
+        };
+        unsafe { cram_set_voption(fd, opt, &mut args) }
+    }
+
+    #[test]
+    fn cram_set_voption_updates_direct_integer_string_and_profile_options() {
+        unsafe {
+            let mut fd: cram_fd_layout = std::mem::zeroed();
+            fd.bases_per_slice = CRAM_DEFAULT_BASES_PER_SLICE;
+            fd.level = CRAM_DEFAULT_LEVEL;
+            fd.range.refid = 0;
+            let fd_ptr = (&mut fd as *mut cram_fd_layout).cast::<cram_fd>();
+
+            let mut words = [7usize];
+            assert_eq!(
+                call_cram_voption_words(
+                    fd_ptr,
+                    hts_sys::hts_fmt_option_CRAM_OPT_DECODE_MD,
+                    &mut words,
+                ),
+                0
+            );
+            assert_eq!(fd.decode_md, 7);
+
+            let mut words = [11usize];
+            assert_eq!(
+                call_cram_voption_words(
+                    fd_ptr,
+                    hts_sys::hts_fmt_option_CRAM_OPT_SEQS_PER_SLICE,
+                    &mut words,
+                ),
+                0
+            );
+            assert_eq!(fd.seqs_per_slice, 11);
+            assert_eq!(fd.bases_per_slice, 5500);
+
+            let mut words = [1usize];
+            assert_eq!(
+                call_cram_voption_words(
+                    fd_ptr,
+                    hts_sys::hts_fmt_option_CRAM_OPT_LOSSY_NAMES,
+                    &mut words
+                ),
+                0
+            );
+            assert_eq!(fd.lossy_read_names, 1);
+            assert_eq!(fd.tlen_approx, 1);
+            assert_eq!(fd.tlen_zero, 1);
+
+            let prefix = CString::new("translated-prefix").unwrap();
+            let mut words = [prefix.as_ptr() as usize];
+            assert_eq!(
+                call_cram_voption_words(
+                    fd_ptr,
+                    hts_sys::hts_fmt_option_CRAM_OPT_PREFIX,
+                    &mut words
+                ),
+                0
+            );
+            assert_eq!(CStr::from_ptr(fd.prefix).to_bytes(), b"translated-prefix");
+
+            let mut words = [0usize];
+            assert_eq!(
+                call_cram_voption_words(
+                    fd_ptr,
+                    hts_sys::hts_fmt_option_CRAM_OPT_REQUIRED_FIELDS,
+                    &mut words,
+                ),
+                0
+            );
+            assert_ne!(fd.required_fields & hts_sys::sam_fields_SAM_POS, 0);
+
+            let mut words = [HTS_PROFILE_SMALL as usize];
+            assert_eq!(
+                call_cram_voption_words(fd_ptr, HTS_OPT_PROFILE, &mut words),
+                0
+            );
+            assert_eq!(fd.level, 6);
+            assert_eq!(fd.use_bz2, 1);
+            assert_eq!(fd.use_fqz, 1);
+            assert_eq!(fd.seqs_per_slice, 25000);
+
+            free(fd.prefix.cast());
+        }
+    }
+
+    #[test]
+    fn cram_set_voption_version_and_error_paths_match_public_contract() {
+        unsafe {
+            let mut fd: cram_fd_layout = std::mem::zeroed();
+            let fd_ptr = (&mut fd as *mut cram_fd_layout).cast::<cram_fd>();
+
+            let version = CString::new("3.1").unwrap();
+            let mut words = [version.as_ptr() as usize];
+            assert_eq!(
+                call_cram_voption_words(
+                    fd_ptr,
+                    hts_sys::hts_fmt_option_CRAM_OPT_VERSION,
+                    &mut words
+                ),
+                0
+            );
+            assert_eq!(fd.version, 3 * 256 + 1);
+            assert_eq!(fd.use_rans, 1);
+            assert_eq!(fd.use_tok, 1);
+
+            let bad_version = CString::new("9.9").unwrap();
+            let mut words = [bad_version.as_ptr() as usize];
+            assert_eq!(
+                call_cram_voption_words(
+                    fd_ptr,
+                    hts_sys::hts_fmt_option_CRAM_OPT_VERSION,
+                    &mut words
+                ),
+                -1
+            );
+            assert_eq!(*__errno_location(), EINVAL);
+
+            let mut words = [0usize];
+            assert_eq!(
+                call_cram_voption_words(
+                    std::ptr::null_mut(),
+                    hts_sys::hts_fmt_option_CRAM_OPT_DECODE_MD,
+                    &mut words
+                ),
+                -1
+            );
+            assert_eq!(*__errno_location(), libc::EBADF);
+
+            let mut words = [0usize];
+            assert_eq!(call_cram_voption_words(fd_ptr, 9999, &mut words), -1);
+            assert_eq!(*__errno_location(), EINVAL);
+        }
+    }
+
     #[test]
     fn cram_os_little_endian_helpers_match_host_macros() {
         assert_eq!(cram_os_h_155_le_int4(0x1234_5678), 0x1234_5678);
@@ -12805,10 +13316,12 @@ mod tests {
                 cram_cram_external_c_92_cram_container_get_num_records(c),
                 56
             );
+            assert_eq!(cram_container_get_num_records(c), 56);
             assert_eq!(
                 cram_cram_external_c_96_cram_container_get_num_bases(c),
                 1234
             );
+            assert_eq!(cram_container_get_num_bases(c), 1234);
 
             let mut nlandmarks = 0;
             let got = cram_cram_external_c_104_cram_container_get_landmarks(c, &mut nlandmarks);
@@ -12830,6 +13343,11 @@ mod tests {
             cram_cram_external_c_124_cram_container_get_coords(
                 c, &mut refid, &mut start, &mut span,
             );
+            assert_eq!((refid, start, span), (4, 500, 75));
+            refid = 0;
+            start = 0;
+            span = 0;
+            cram_container_get_coords(c, &mut refid, &mut start, &mut span);
             assert_eq!((refid, start, span), (4, 500, 75));
 
             refid = -1;

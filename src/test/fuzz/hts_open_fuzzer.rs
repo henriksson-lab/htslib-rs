@@ -3,7 +3,7 @@ use std::ffi::{c_char, c_int};
 
 unsafe extern "C" {
     #[link_name = "hopen"]
-    fn htslib_hopen_variadic(fname: *const c_char, mode: *const c_char, ...) -> *mut hfile::hFILE;
+    fn htslib_hopen_variadic(fname: *const c_char, mode: *const c_char, ...) -> *mut hts::hFILE;
 }
 
 // original: hts_close_or_abort (htslib/test/fuzz/hts_open_fuzzer.c:40)
@@ -220,4 +220,79 @@ pub unsafe fn test_fuzz_hts_open_fuzzer_c_171_LLVMFuzzerTestOneInput(
         _ => {}
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_in_child(f: impl FnOnce()) {
+        unsafe {
+            let pid = libc::fork();
+            assert!(pid >= 0, "fork failed");
+            if pid == 0 {
+                f();
+                libc::_exit(libc::EXIT_SUCCESS);
+            }
+
+            let mut status = 0;
+            assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
+            assert!(libc::WIFEXITED(status), "child did not exit normally");
+            assert_eq!(libc::WEXITSTATUS(status), libc::EXIT_SUCCESS);
+        }
+    }
+
+    #[test]
+    fn hts_open_fuzzer_view_sam_accepts_valid_sam_payload() {
+        let sam = b"@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:10\nr1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\n";
+        run_in_child(|| unsafe {
+            test_fuzz_hts_open_fuzzer_c_46_view_sam(
+                sam.as_ptr(),
+                sam.len(),
+                c"w".as_ptr().cast_mut(),
+                1,
+            );
+        });
+    }
+
+    #[test]
+    fn hts_open_fuzzer_view_sam_tolerates_malformed_sam_payload() {
+        let sam = b"@SQ\tSN:chr1\tLN:10\nnot a sam record\n";
+        run_in_child(|| unsafe {
+            test_fuzz_hts_open_fuzzer_c_46_view_sam(
+                sam.as_ptr(),
+                sam.len(),
+                c"w".as_ptr().cast_mut(),
+                0,
+            );
+        });
+    }
+
+    #[test]
+    fn hts_open_fuzzer_view_vcf_accepts_valid_vcf_payload() {
+        let vcf = b"##fileformat=VCFv4.3\n##contig=<ID=chr1>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t1\t.\tA\tC\t.\tPASS\t.\n";
+        run_in_child(|| unsafe {
+            test_fuzz_hts_open_fuzzer_c_121_view_vcf(
+                vcf.as_ptr(),
+                vcf.len(),
+                c"w".as_ptr().cast_mut(),
+            );
+        });
+    }
+
+    #[test]
+    fn hts_open_fuzzer_entrypoint_dispatches_known_payloads() {
+        let sam = b"@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:10\nr1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\n";
+        let vcf = b"##fileformat=VCFv4.3\n##contig=<ID=chr1>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t1\t.\tA\tC\t.\tPASS\t.\n";
+        run_in_child(|| unsafe {
+            assert_eq!(
+                test_fuzz_hts_open_fuzzer_c_171_LLVMFuzzerTestOneInput(sam.as_ptr(), sam.len()),
+                0
+            );
+            assert_eq!(
+                test_fuzz_hts_open_fuzzer_c_171_LLVMFuzzerTestOneInput(vcf.as_ptr(), vcf.len()),
+                0
+            );
+        });
+    }
 }

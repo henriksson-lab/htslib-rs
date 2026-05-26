@@ -1,11 +1,11 @@
 use htslib_rs::{
     bam_destroy1, bam_init1, bcf_destroy, bcf_hdr_destroy, bcf_hdr_fmt_text, bcf_init,
-    htsExactFormat, hts_close, hts_get_format, hts_idx_destroy, hts_itr_destroy, hts_open,
-    hts_opt_add, hts_opt_apply, hts_opt_free, hts_set_fai_filename, kstring_t,
-    sam_c_1768_sam_itr_regarray, sam_c_4553_sam_write1, sam_format1, sam_hdr_destroy,
-    sam_hdr_length, sam_hdr_read, sam_hdr_str, sam_hdr_write, sam_idx_init, sam_idx_save,
-    sam_index_load, sam_itr_next, sam_itr_querys, sam_read1, vcf_format, vcf_hdr_read, vcf_read,
-    HTS_FORMAT_BAM, HTS_FORMAT_CRAM, HTS_FORMAT_VCF,
+    htsExactFormat, hts_c_2208_hts_check_EOF, hts_close, hts_get_format, hts_idx_destroy,
+    hts_itr_destroy, hts_open, hts_opt_add, hts_opt_apply, hts_opt_free, hts_set_fai_filename,
+    hts_set_threads, kstring_t, sam_c_1768_sam_itr_regarray, sam_c_4553_sam_write1, sam_format1,
+    sam_hdr_destroy, sam_hdr_length, sam_hdr_read, sam_hdr_str, sam_hdr_write, sam_idx_init,
+    sam_idx_save, sam_index_load, sam_itr_next, sam_itr_querys, sam_read1, vcf_format,
+    vcf_hdr_read, vcf_read, HTS_FORMAT_BAM, HTS_FORMAT_CRAM, HTS_FORMAT_VCF,
 };
 use std::ffi::{CStr, CString};
 
@@ -718,6 +718,17 @@ fn original_view_sam_md_tags_survive_parse_and_format_exactly() {
 }
 
 #[test]
+fn original_view_index_dos_sam_roundtrip_normalizes_crlf_to_lf() {
+    unsafe {
+        let actual = render_alignment_through_sam_writer("htslib/test/index_dos.sam");
+        let expected = std::fs::read_to_string(fixture("htslib/test/index_dos.sam"))
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
 fn original_view_cram_embed_ref2_round_trips_like_compare_sam() {
     unsafe {
         for (sam_path, output_name, opts, reference) in [
@@ -857,6 +868,52 @@ fn original_view_index3_cram_multiregion_matches_expected_container_skipping_out
             actual,
             std::fs::read_to_string(fixture("htslib/test/index3_exp.sam")).unwrap()
         );
+
+        let _ = std::fs::remove_file(cram_path.with_extension("cram.crai"));
+        let _ = std::fs::remove_file(cram_path);
+    }
+}
+
+#[test]
+fn original_view_index3_cram_eof_and_threaded_decode_match_original_records() {
+    unsafe {
+        let cram_path = copy_alignment_to_cram_with_index(
+            "htslib/test/index3.sam",
+            "index3-threaded-eof",
+            &["seqs_per_slice=2", "embed_ref=2"],
+        );
+        let cram_path_c = CString::new(cram_path.to_string_lossy().as_bytes()).unwrap();
+        let fp = hts_open(cram_path_c.as_ptr(), c"r".as_ptr());
+        assert!(!fp.is_null(), "failed to open generated index3 CRAM");
+        assert_eq!(hts_set_threads(fp, 2), 0);
+        assert_eq!(hts_c_2208_hts_check_EOF(fp), 1);
+
+        let hdr = sam_hdr_read(fp);
+        assert!(
+            !hdr.is_null(),
+            "failed to read generated index3 CRAM header"
+        );
+        let mut actual = sam_header_text(hdr);
+
+        let rec = bam_init1();
+        assert!(!rec.is_null());
+        let mut line: kstring_t = std::mem::zeroed();
+        loop {
+            let ret = sam_read1(fp, hdr, rec);
+            if ret < 0 {
+                assert_eq!(ret, -1, "read error for generated index3 CRAM");
+                break;
+            }
+            append_formatted_record(hdr, rec, &mut line, &mut actual);
+        }
+
+        libc::free(line.s.cast());
+        bam_destroy1(rec);
+        sam_hdr_destroy(hdr);
+        assert_eq!(hts_close(fp), 0);
+
+        let expected = std::fs::read_to_string(fixture("htslib/test/index3.sam")).unwrap();
+        assert_compare_sam_records(&expected, &actual, "threaded index3 CRAM linear decode");
 
         let _ = std::fs::remove_file(cram_path.with_extension("cram.crai"));
         let _ = std::fs::remove_file(cram_path);

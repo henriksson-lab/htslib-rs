@@ -1,11 +1,13 @@
 use htslib_rs::{
-    bcf_destroy, bcf_get_info_values, bcf_hdr_destroy, bcf_hdr_id2name, bcf_hdr_name2id,
-    bcf_hdr_read, bcf_hdr_seqnames, bcf_hdr_write, bcf_index_build, bcf_index_load2, bcf_init,
-    bcf_read, bcf_readrec, bcf_seqname, bcf_sr_add_reader, bcf_sr_destroy, bcf_sr_get_header,
-    bcf_sr_get_line, bcf_sr_has_line, bcf_sr_init, bcf_sr_next_line, bcf_sr_set_opt_allow_no_idx,
-    bcf_sr_set_opt_pair_logic, bcf_sr_set_regions, bcf_sr_set_targets, bcf_unpack, bcf_write,
-    hts_close, hts_get_bgzfp, hts_idx_destroy, hts_itr_destroy, hts_itr_next, hts_itr_query,
-    hts_open, hts_pos_t, vcf_hdr_read, vcf_read, BGZF,
+    bcf_destroy, bcf_get_format_values, bcf_get_info_values, bcf_get_variant_type,
+    bcf_get_variant_types, bcf_has_variant_type, bcf_has_variant_types, bcf_hdr_destroy,
+    bcf_hdr_id2name, bcf_hdr_name2id, bcf_hdr_read, bcf_hdr_seqnames, bcf_hdr_write,
+    bcf_index_build, bcf_index_load2, bcf_init, bcf_read, bcf_readrec, bcf_seqname,
+    bcf_sr_add_reader, bcf_sr_destroy, bcf_sr_get_header, bcf_sr_get_line, bcf_sr_has_line,
+    bcf_sr_init, bcf_sr_next_line, bcf_sr_set_opt_allow_no_idx, bcf_sr_set_opt_pair_logic,
+    bcf_sr_set_regions, bcf_sr_set_targets, bcf_unpack, bcf_write, hts_close, hts_get_bgzfp,
+    hts_idx_destroy, hts_itr_destroy, hts_itr_next, hts_itr_query, hts_open, hts_pos_t,
+    vcf_hdr_read, vcf_read, BGZF, VCF_INS,
 };
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_int, c_void};
@@ -50,6 +52,10 @@ unsafe extern "C" fn bcf_readrec_adapter(
     end: *mut hts_pos_t,
 ) -> c_int {
     unsafe { bcf_readrec(fp, data, rec, tid, beg, end) }
+}
+
+fn bcf_gt_unphased(idx: c_int) -> c_int {
+    (idx + 1) << 1
 }
 
 unsafe fn count_indexed_variant_records(
@@ -341,6 +347,266 @@ fn reads_real_bcf_fixture_record_metadata() {
 
     unsafe {
         assert_eq!(count_variant_records("htslib/test/tabix/vcf_file.bcf"), 15);
+    }
+}
+
+#[test]
+fn index_vcf_first_record_decodes_real_info_and_format_arrays() {
+    unsafe {
+        let vcf = c_fixture("htslib/test/index.vcf");
+        let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+        assert!(!fp.is_null());
+
+        let hdr = vcf_hdr_read(fp);
+        assert!(!hdr.is_null());
+        let rec = bcf_init();
+        assert!(!rec.is_null());
+        assert_eq!(bcf_read(fp, hdr, rec), 0);
+        assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec)), c"1");
+        assert_eq!((*rec).pos, 9_999_918);
+        assert_eq!((*rec).rlen, 1);
+        assert_eq!((*rec).n_sample(), 1);
+        assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
+        assert_eq!(CStr::from_ptr(*(*rec).d.allele), c"G");
+        assert_eq!(CStr::from_ptr(*(*rec).d.allele.add(1)), c"<*>");
+
+        let mut dp = std::ptr::null_mut();
+        let mut ndp = 0;
+        assert_eq!(
+            bcf_get_info_values(
+                hdr,
+                rec,
+                c"DP".as_ptr(),
+                &mut dp,
+                &mut ndp,
+                hts_sys::BCF_HT_INT as c_int,
+            ),
+            1
+        );
+        assert!(ndp >= 1);
+        assert_eq!(*dp.cast::<i32>(), 1);
+        libc::free(dp);
+
+        let mut i16 = std::ptr::null_mut();
+        let mut ni16 = 0;
+        assert_eq!(
+            bcf_get_info_values(
+                hdr,
+                rec,
+                c"I16".as_ptr(),
+                &mut i16,
+                &mut ni16,
+                hts_sys::BCF_HT_REAL as c_int,
+            ),
+            16
+        );
+        assert!(ni16 >= 16);
+        let i16 = std::slice::from_raw_parts(i16.cast::<f32>(), 16);
+        assert_eq!(
+            i16.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+            [
+                1.0f32, 0.0, 0.0, 0.0, 26.0, 676.0, 0.0, 0.0, 60.0, 3600.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0,
+            ]
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+        );
+        libc::free(i16.as_ptr().cast_mut().cast());
+
+        let mut qs = std::ptr::null_mut();
+        let mut nqs = 0;
+        assert_eq!(
+            bcf_get_info_values(
+                hdr,
+                rec,
+                c"QS".as_ptr(),
+                &mut qs,
+                &mut nqs,
+                hts_sys::BCF_HT_REAL as c_int,
+            ),
+            2
+        );
+        assert!(nqs >= 2);
+        assert_eq!(
+            std::slice::from_raw_parts(qs.cast::<f32>(), 2)
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            [1.0f32, 0.0]
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+        libc::free(qs);
+
+        let mut pl = std::ptr::null_mut();
+        let mut npl = 0;
+        assert_eq!(
+            bcf_get_format_values(
+                hdr,
+                rec,
+                c"PL".as_ptr(),
+                &mut pl,
+                &mut npl,
+                hts_sys::BCF_HT_INT as c_int,
+            ),
+            3
+        );
+        assert!(npl >= 3);
+        assert_eq!(std::slice::from_raw_parts(pl.cast::<i32>(), 3), &[0, 3, 26]);
+        libc::free(pl);
+
+        bcf_destroy(rec);
+        bcf_hdr_destroy(hdr);
+        assert_eq!(hts_close(fp), 0);
+    }
+}
+
+#[test]
+fn tabix_vcf_fixture_variant_type_matrix_matches_htslib_classification() {
+    unsafe {
+        let vcf = c_fixture("htslib/test/tabix/vcf_file.vcf");
+        let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+        assert!(!fp.is_null());
+
+        let hdr = vcf_hdr_read(fp);
+        assert!(!hdr.is_null());
+        let rec = bcf_init();
+        assert!(!rec.is_null());
+
+        let mut seen = Vec::new();
+        while bcf_read(fp, hdr, rec) >= 0 {
+            let pos = (*rec).pos + 1;
+            if matches!(
+                pos,
+                3_000_150 | 3_062_915 | 3_106_154 | 3_177_144 | 3_199_812
+            ) {
+                assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
+                seen.push((
+                    pos,
+                    CStr::from_ptr(*(*rec).d.allele)
+                        .to_string_lossy()
+                        .into_owned(),
+                    (1..(*rec).n_allele())
+                        .map(|i| bcf_get_variant_type(rec, i as c_int))
+                        .collect::<Vec<_>>(),
+                    bcf_get_variant_types(rec),
+                ));
+            }
+        }
+
+        assert_eq!(
+            seen,
+            vec![
+                (
+                    3_000_150,
+                    "C".to_string(),
+                    vec![hts_sys::VCF_SNP as c_int],
+                    hts_sys::VCF_SNP as c_int
+                ),
+                (
+                    3_062_915,
+                    "GTTT".to_string(),
+                    vec![hts_sys::VCF_INDEL as c_int],
+                    hts_sys::VCF_INDEL as c_int
+                ),
+                (
+                    3_062_915,
+                    "G".to_string(),
+                    vec![hts_sys::VCF_SNP as c_int, hts_sys::VCF_SNP as c_int],
+                    hts_sys::VCF_SNP as c_int
+                ),
+                (
+                    3_106_154,
+                    "CAAA".to_string(),
+                    vec![hts_sys::VCF_INDEL as c_int],
+                    hts_sys::VCF_INDEL as c_int
+                ),
+                (
+                    3_106_154,
+                    "C".to_string(),
+                    vec![hts_sys::VCF_INDEL as c_int],
+                    hts_sys::VCF_INDEL as c_int
+                ),
+                (
+                    3_177_144,
+                    "G".to_string(),
+                    vec![hts_sys::VCF_SNP as c_int],
+                    hts_sys::VCF_SNP as c_int
+                ),
+                (3_177_144, "G".to_string(), vec![], 0),
+                (
+                    3_199_812,
+                    "G".to_string(),
+                    vec![hts_sys::VCF_INDEL as c_int, hts_sys::VCF_INDEL as c_int],
+                    hts_sys::VCF_INDEL as c_int
+                ),
+            ]
+        );
+
+        bcf_destroy(rec);
+        bcf_hdr_destroy(hdr);
+        assert_eq!(hts_close(fp), 0);
+    }
+}
+
+#[test]
+fn tabix_vcf_fixture_decodes_high_numbered_gt_alleles() {
+    unsafe {
+        let vcf = c_fixture("htslib/test/tabix/vcf_file.vcf");
+        let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+        assert!(!fp.is_null());
+
+        let hdr = vcf_hdr_read(fp);
+        assert!(!hdr.is_null());
+        let rec = bcf_init();
+        assert!(!rec.is_null());
+
+        while bcf_read(fp, hdr, rec) >= 0 && (*rec).pos + 1 != 3_258_501 {}
+        assert_eq!((*rec).pos + 1, 3_258_501);
+        assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
+        assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec)), c"4");
+        assert_eq!(CStr::from_ptr(*(*rec).d.allele), c"C");
+        assert_eq!((*rec).n_allele(), 306);
+        assert_eq!(
+            bcf_has_variant_types(rec, hts_sys::VCF_SNP, 1),
+            hts_sys::VCF_SNP as c_int
+        );
+        assert_eq!(
+            bcf_has_variant_types(rec, hts_sys::VCF_INDEL | VCF_INS, 1),
+            (hts_sys::VCF_INDEL | VCF_INS) as c_int
+        );
+        assert_eq!(bcf_has_variant_type(rec, 300, VCF_INS), VCF_INS as c_int);
+
+        let mut gt = std::ptr::null_mut();
+        let mut ngt = 0;
+        assert_eq!(
+            bcf_get_format_values(
+                hdr,
+                rec,
+                c"GT".as_ptr(),
+                &mut gt,
+                &mut ngt,
+                hts_sys::BCF_HT_INT as c_int,
+            ),
+            4
+        );
+        assert!(ngt >= 4);
+        assert_eq!(
+            std::slice::from_raw_parts(gt.cast::<i32>(), 4),
+            &[
+                bcf_gt_unphased(0),
+                bcf_gt_unphased(300),
+                bcf_gt_unphased(240),
+                bcf_gt_unphased(260),
+            ]
+        );
+        libc::free(gt);
+
+        bcf_destroy(rec);
+        bcf_hdr_destroy(hdr);
+        assert_eq!(hts_close(fp), 0);
     }
 }
 

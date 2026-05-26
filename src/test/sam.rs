@@ -1,14 +1,8 @@
-use super::*;
 use crate::htslib_rs::{
-    cram,
-    hts::{
-        hFILE, htsFile, htsFormat, htsThreadPool, hts_idx_t, hts_itr_multi_query_func,
-        hts_itr_query_func, hts_itr_t, hts_name2id_f, hts_pos_t, hts_readrec_func, hts_reglist_t,
-        hts_seek_func, hts_tell_func, kstring_t, BGZF,
-    },
-    kfunc, sam,
+    hts::{htsFile, htsFormat, hts_pos_t, kstring_t},
+    sam,
 };
-use std::ffi::{c_char, c_int, c_uchar, c_uint, c_ulong, c_void};
+use std::ffi::{c_char, c_int, c_uint, c_void};
 
 static mut TEST_SAM_STATUS: c_int = libc::EXIT_SUCCESS;
 
@@ -348,7 +342,6 @@ pub unsafe fn test_sam_c_248_aux_fields1() -> c_int {
             libc::strlen(c"Yo, dude".as_ptr()) as c_int + 1,
             c"Yo, dude".as_ptr(),
         );
-        sam::bam_aux_update_float(aln, c"F1".as_ptr(), 4.5678);
         sam::bam_aux_update_float(aln, c"F2".as_ptr(), 9.8765);
         let mut ival: i32 = -1234;
         let mut uval: u32 = 1234;
@@ -368,6 +361,7 @@ pub unsafe fn test_sam_c_248_aux_fields1() -> c_int {
         );
         sam::bam_aux_update_int(aln, c"N2".as_ptr(), -2);
         sam::bam_aux_update_int(aln, c"N3".as_ptr(), 3);
+        sam::bam_aux_update_float(aln, c"F1".as_ptr(), 4.5678);
         let mut n4v7 = [65535u16, 32768, 1, 0];
         test_sam_c_192_test_update_array(
             aln,
@@ -558,9 +552,17 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
         return;
     }
 
+    let ref_target = if !in_.is_null()
+        && (*crate::htslib_rs::hts::hts_get_format(in_)).format
+            == crate::htslib_rs::hts::HTS_FORMAT_CRAM
+    {
+        in_
+    } else {
+        out
+    };
     if !outref.is_null()
         && hts_sys::hts_set_opt(
-            out.cast(),
+            ref_target.cast(),
             hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE,
             outref,
         ) < 0
@@ -1607,12 +1609,10 @@ pub unsafe fn test_sam_c_1661_check_enum1() {
 // original: check_cigar_tab (htslib/test/sam.c:1669)
 pub unsafe fn test_sam_c_1669_check_cigar_tab() {
     let cigar_str = b"MIDNSHP=XB";
-    let mut cigar_table = [-1_i8; 256];
-    for (i, ch) in cigar_str.iter().copied().enumerate() {
-        cigar_table[ch as usize] = i as i8;
-    }
-
-    let n_neg = cigar_table.iter().filter(|value| **value < 0).count();
+    let n_neg = sam::BAM_CIGAR_TABLE
+        .iter()
+        .filter(|value| **value < 0)
+        .count();
     if n_neg + cigar_str.len() != 256 {
         libc::fprintf(
             hts_sys::stderr.cast(),
@@ -1623,7 +1623,7 @@ pub unsafe fn test_sam_c_1669_check_cigar_tab() {
     }
 
     for (i, ch) in cigar_str.iter().copied().enumerate() {
-        if cigar_table[ch as usize] != i as i8 {
+        if sam::BAM_CIGAR_TABLE[ch as usize] != i as i8 {
             libc::fprintf(
                 hts_sys::stderr.cast(),
                 c"Failed: bam_cigar_table['%c'] is not %d\n".as_ptr(),
@@ -2936,4 +2936,296 @@ pub unsafe fn test_sam_c_2328_main(argc: c_int, argv: *mut *mut c_char) -> c_int
     test_sam_c_2227_test_bam_set1_write_and_read_back();
     test_sam_c_2307_test_cigar_api();
     TEST_SAM_STATUS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use std::{env, ffi::CString, fs, path::PathBuf};
+
+    static TEST_SAM_LOCK: Mutex<()> = Mutex::new(());
+
+    fn sam_test_temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "htslib_rs_sam_{}_{}_{}",
+            name,
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ))
+    }
+
+    struct CurrentDirGuard {
+        original: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn enter(path: &std::path::Path) -> Self {
+            let original = env::current_dir().unwrap();
+            env::set_current_dir(path).unwrap();
+            Self { original }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            let _ = env::set_current_dir(&self.original);
+        }
+    }
+
+    #[test]
+    fn original_sam_c_header_helpers_cover_pg_updates_removal_altnames_and_big_refs() {
+        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        unsafe {
+            TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+            test_sam_c_921_test_header_pg_lines();
+            test_sam_c_1008_test_header_pg_loops();
+            test_sam_c_1087_test_header_updates();
+            test_sam_c_1182_test_header_remove_lines();
+            test_sam_c_1258_test_header_ref_altnames();
+            test_sam_c_1405_check_big_ref_parse(0);
+            test_sam_c_1405_check_big_ref_parse(1);
+            let status = TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+        }
+    }
+
+    #[test]
+    fn original_sam_c_non_header_helpers_cover_aux_qname_parse_bam_set1_and_cigar_paths() {
+        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        unsafe {
+            TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+
+            let in_ = crate::htslib_rs::hts::hts_open(
+                c"data:,@SQ\tSN:one\tLN:1000\nr1\t0\tone\t500\t20\t8M\t*\t0\t0\tATGCATGC\tqqqqqqqq\tXA:A:k\tXi:i:37\n"
+                    .as_ptr(),
+                c"r".as_ptr(),
+            );
+            assert!(!in_.is_null());
+            let header = sam::sam_hdr_read(in_);
+            let aln = sam::bam_init1();
+            assert!(!header.is_null());
+            assert!(!aln.is_null());
+            assert!(sam::sam_read1(in_, header, aln) >= 0);
+            let xa = test_sam_c_78_check_bam_aux_get(aln, c"XA".as_ptr(), b'A' as c_char);
+            assert!(!xa.is_null());
+            assert_eq!(sam::bam_aux2A(xa), b'k' as c_char);
+            test_sam_c_90_check_aux_count(aln, 2, c"direct AUX record".as_ptr());
+            assert_eq!(
+                test_sam_c_136_test_update_int(
+                    aln,
+                    c"Xi".as_ptr(),
+                    -129,
+                    b's' as c_char,
+                    b"\0\0".as_ptr().cast(),
+                    0,
+                    0,
+                ),
+                0
+            );
+            sam::bam_destroy1(aln);
+            sam::sam_hdr_destroy(header);
+            crate::htslib_rs::hts::hts_close(in_);
+
+            test_sam_c_557_set_qname();
+            test_sam_c_1795_test_parse_decimal();
+            test_sam_c_2000_test_bam_set1_minimal();
+            test_sam_c_2031_test_bam_set1_full();
+            test_sam_c_2078_test_bam_set1_even_and_odd_seq_len();
+            test_sam_c_2108_test_bam_set1_with_seq_but_no_qual();
+            test_sam_c_2132_test_bam_set1_validate_qname();
+            test_sam_c_2149_test_bam_set1_validate_seq();
+            test_sam_c_2166_test_bam_set1_validate_cigar();
+            test_sam_c_2195_test_bam_set1_validate_size_limits();
+            test_sam_c_2227_test_bam_set1_write_and_read_back();
+            test_sam_c_2307_test_cigar_api();
+            let status = TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+        }
+    }
+
+    #[test]
+    fn original_sam_c_aux_fields1_formats_full_updated_records() {
+        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        unsafe {
+            TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+            assert_eq!(test_sam_c_248_aux_fields1(), 1);
+            let status = TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+        }
+    }
+
+    #[test]
+    fn original_sam_c_executable_edges_cover_iterators_and_enum_tables() {
+        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        unsafe {
+            TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+            test_sam_c_604_iterators1();
+            test_sam_c_1661_check_enum1();
+            test_sam_c_1669_check_cigar_tab();
+            let status = TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+        }
+    }
+
+    #[test]
+    fn original_sam_c_copy_check_alignment_roundtrips_fixture_formats() {
+        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        let tmpdir = sam_test_temp_path("copy_check_alignment");
+        fs::create_dir_all(&tmpdir).unwrap();
+
+        let bam = tmpdir.join("sam_alignment.tmp.bam");
+        let cram = tmpdir.join("sam_alignment.tmp.cram");
+        let sam_out = tmpdir.join("sam_alignment.tmp.sam_");
+
+        let abc50 = "abcdefghijklmnopqrstuvwxyabcdefghijklmnopqrstuvwxy";
+        let abc250 = abc50.repeat(5);
+        let qnames = format!(
+            "data:,\
+@SQ\tSN:CHROMOSOME_II\tLN:5000\n\
+a\t0\tCHROMOSOME_II\t100\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
+bc\t0\tCHROMOSOME_II\t200\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
+def\t0\tCHROMOSOME_II\t300\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
+ghij\t0\tCHROMOSOME_II\t400\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
+klmno\t0\tCHROMOSOME_II\t500\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
+{abc250}\t0\tCHROMOSOME_II\t600\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
+{abc250}1\t0\tCHROMOSOME_II\t650\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
+{abc250}12\t0\tCHROMOSOME_II\t700\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
+{abc250}123\t0\tCHROMOSOME_II\t750\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
+{abc250}1234\t0\tCHROMOSOME_II\t800\t10\t4M\t*\t0\t0\tATGC\tqqqq\n"
+        );
+
+        unsafe {
+            TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+            let qnames_c = CString::new(qnames).unwrap();
+            let bam_c = CString::new(bam.to_string_lossy().as_bytes()).unwrap();
+            let cram_c = CString::new(cram.to_string_lossy().as_bytes()).unwrap();
+            let sam_out_c = CString::new(sam_out.to_string_lossy().as_bytes()).unwrap();
+            let ref_c = CString::new("htslib/test/ce.fa").unwrap();
+
+            test_sam_c_612_copy_check_alignment(
+                qnames_c.as_ptr(),
+                c"SAM".as_ptr(),
+                bam_c.as_ptr(),
+                c"wb".as_ptr(),
+                std::ptr::null(),
+            );
+            test_sam_c_612_copy_check_alignment(
+                bam_c.as_ptr(),
+                c"BAM".as_ptr(),
+                cram_c.as_ptr(),
+                c"wc".as_ptr(),
+                ref_c.as_ptr(),
+            );
+            test_sam_c_612_copy_check_alignment(
+                cram_c.as_ptr(),
+                c"CRAM".as_ptr(),
+                sam_out_c.as_ptr(),
+                c"w".as_ptr(),
+                ref_c.as_ptr(),
+            );
+            test_sam_c_1641_test_text_file(sam_out_c.as_ptr(), 11);
+
+            let status = TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+        }
+
+        fs::remove_dir_all(tmpdir).unwrap();
+    }
+
+    #[test]
+    fn original_sam_c_empty_and_text_file_paths_cover_fixture_read_counts() {
+        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        let tmpdir = sam_test_temp_path("empty_text");
+        fs::create_dir_all(&tmpdir).unwrap();
+
+        let empty = tmpdir.join("emptyfile");
+        let pair_sam = tmpdir.join("xx#pair.sam");
+        let fasta = tmpdir.join("xx.fa");
+        let fastq = tmpdir.join("fastqs.fq");
+
+        fs::write(&empty, b"").unwrap();
+        fs::write(
+            &pair_sam,
+            b"@SQ\tSN:one\tLN:100\nr1\t0\tone\t1\t60\t4M\t*\t0\t0\tACGT\t!!!!\nr2\t4\t*\t0\t0\t*\t*\t0\t0\t*\t*\nr3\t0\tone\t2\t60\t4M\t*\t0\t0\tCGTA\t!!!!\nr4\t0\tone\t3\t60\t4M\t*\t0\t0\tGTAC\t!!!!\nr5\t0\tone\t4\t60\t4M\t*\t0\t0\tTACG\t!!!!\nr6\t0\tone\t5\t60\t4M\t*\t0\t0\tAAAA\t!!!!\n",
+        )
+        .unwrap();
+        fs::write(&fasta, b">one\nACGT\n>two\nCGTA\n>three\nGTAC\n>four\n").unwrap();
+        let mut fastq_text = String::new();
+        for i in 0..125 {
+            fastq_text.push_str(&format!("@read{i}\nACGT\n+\n!!!!\n"));
+        }
+        fs::write(&fastq, fastq_text).unwrap();
+
+        unsafe {
+            TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+            let empty_c = CString::new(empty.to_string_lossy().as_bytes()).unwrap();
+            let pair_c = CString::new(pair_sam.to_string_lossy().as_bytes()).unwrap();
+            let fasta_c = CString::new(fasta.to_string_lossy().as_bytes()).unwrap();
+            let fastq_c = CString::new(fastq.to_string_lossy().as_bytes()).unwrap();
+
+            test_sam_c_1618_test_empty_sam_file(empty_c.as_ptr());
+            test_sam_c_1641_test_text_file(empty_c.as_ptr(), 0);
+            test_sam_c_1641_test_text_file(pair_c.as_ptr(), 7);
+            test_sam_c_1641_test_text_file(fasta_c.as_ptr(), 7);
+            test_sam_c_1641_test_text_file(fastq_c.as_ptr(), 500);
+
+            let status = TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+        }
+
+        fs::remove_dir_all(tmpdir).unwrap();
+    }
+
+    #[test]
+    fn original_sam_c_mempolicy_runs_sam_to_bam_to_cram_block_io() {
+        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        let tmpdir = sam_test_temp_path("mempolicy");
+        fs::create_dir_all(tmpdir.join("test")).unwrap();
+
+        let status;
+        let bam_len;
+        let cram_len;
+        {
+            let _cwd = CurrentDirGuard::enter(&tmpdir);
+            unsafe {
+                TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+                test_sam_c_1812_test_mempolicy();
+                status = TEST_SAM_STATUS;
+            }
+            bam_len = fs::metadata("test/sam_alignment.tmp.bam").unwrap().len();
+            cram_len = fs::metadata("test/sam_alignment.tmp.cram").unwrap().len();
+        }
+
+        fs::remove_dir_all(tmpdir).unwrap();
+        assert_eq!(status, libc::EXIT_SUCCESS);
+        assert!(bam_len > 0);
+        assert!(cram_len > 0);
+    }
+
+    #[test]
+    fn original_sam_c_main_argv_files_cover_faidx_counts() {
+        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        let tmpdir = sam_test_temp_path("faidx_argv");
+        fs::create_dir_all(&tmpdir).unwrap();
+
+        let fasta = tmpdir.join("argv.fa");
+        let fastq = tmpdir.join("argv.fq");
+        fs::write(&fasta, b">one\nACGT\n>two\nCGTA\n>three\nGTAC\n").unwrap();
+        fs::write(&fastq, b"@r1\nACGT\n+\n!!!!\n@r2\nCGTA\n+\n####\n").unwrap();
+
+        unsafe {
+            TEST_SAM_STATUS = libc::EXIT_SUCCESS;
+            let fasta_c = CString::new(fasta.to_string_lossy().as_bytes()).unwrap();
+            let fastq_c = CString::new(fastq.to_string_lossy().as_bytes()).unwrap();
+
+            test_sam_c_1578_faidx1(fasta_c.as_ptr());
+            test_sam_c_1578_faidx1(fastq_c.as_ptr());
+
+            let status = TEST_SAM_STATUS;
+            assert_eq!(status, libc::EXIT_SUCCESS);
+        }
+
+        fs::remove_dir_all(tmpdir).unwrap();
+    }
 }

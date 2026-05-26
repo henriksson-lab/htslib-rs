@@ -698,3 +698,68 @@ pub unsafe fn test_test_faidx_c_430_main(argc: c_int, argv: *mut *mut c_char) ->
         libc::EXIT_FAILURE
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static GETOPT_LOCK: Mutex<()> = Mutex::new(());
+
+    fn fixture(path: &str) -> CString {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+        CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    }
+
+    fn temp_path(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "htslib-rs-test-faidx-{name}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    unsafe fn run_main(args: &[CString]) -> c_int {
+        let _guard = GETOPT_LOCK.lock().unwrap();
+        optarg = std::ptr::null_mut();
+        optind = 1;
+        let mut argv = args
+            .iter()
+            .map(|arg| arg.as_ptr() as *mut c_char)
+            .collect::<Vec<_>>();
+        test_test_faidx_c_430_main(argv.len() as c_int, argv.as_mut_ptr())
+    }
+
+    #[test]
+    fn original_test_faidx_main_fastq_retrieval_compares_expected_output() {
+        let out_path = temp_path("fastq-retrieval").with_extension("fq");
+        let out = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
+        let args = vec![
+            c"test_faidx".into(),
+            c"-i".into(),
+            fixture("htslib/test/faidx/fastqs.fq"),
+            c"-f".into(),
+            fixture("htslib/test/faidx/fastqs.fq.expected.fai"),
+            c"-o".into(),
+            out.clone(),
+            c"-e".into(),
+            fixture("htslib/test/faidx/fastqs.1.expected.fq"),
+            c"-Q".into(),
+            c"FAKE0006_1:4-12".into(),
+            c"FSRRS4401BE7HA_1:81-120".into(),
+            c"FAKE0010_2".into(),
+            c"SRR014849.50939_3:71-90".into(),
+        ];
+
+        unsafe {
+            assert_eq!(run_main(&args), libc::EXIT_SUCCESS);
+        }
+        let _ = std::fs::remove_file(out_path);
+    }
+}

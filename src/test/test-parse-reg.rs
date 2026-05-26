@@ -400,3 +400,47 @@ pub unsafe fn test_test_parse_reg_c_145_main(mut argc: c_int, mut argv: *mut *mu
 
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+
+    unsafe fn run_main(args: &[&str]) -> c_int {
+        let c_args: Vec<CString> = args.iter().map(|arg| CString::new(*arg).unwrap()).collect();
+        let mut argv: Vec<*mut c_char> = c_args
+            .iter()
+            .map(|arg| arg.as_ptr().cast_mut())
+            .chain(std::iter::once(std::ptr::null_mut()))
+            .collect();
+
+        test_test_parse_reg_c_145_main(args.len() as c_int, argv.as_mut_ptr())
+    }
+
+    #[test]
+    fn test_parse_reg_main_parses_fixture_regions_and_options() {
+        unsafe {
+            assert_eq!(
+                run_main(&[
+                    "test-parse-reg",
+                    "htslib/test/colons.bam",
+                    "{chr1:100-200}:100-200"
+                ]),
+                0
+            );
+            assert_eq!(
+                run_main(&[
+                    "test-parse-reg",
+                    "-m",
+                    "htslib/test/colons.bam",
+                    "chr1,chr3"
+                ]),
+                0
+            );
+            assert_eq!(
+                run_main(&["test-parse-reg", "-c", "htslib/test/colons.bam", "chr1:50"]),
+                0
+            );
+        }
+    }
+}

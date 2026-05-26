@@ -297,7 +297,7 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
 
     let original = test_hfile_c_62_slurp(c"vcf.c".as_ptr());
     for i in 1..=6 {
-        let mut text: *mut c_char;
+        let text: *mut c_char;
         libc::snprintf(
             buffer.as_mut_ptr(),
             buffer.len(),
@@ -593,4 +593,71 @@ of knowledge, exceeds the short vehemence of any carnal pleasure."
     libc::free(ks_release(&mut kstr).cast());
 
     libc::EXIT_SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::process::Command;
+
+    fn temp_dir() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "htslib-rs-test-hfile-main-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("unnamed")
+        ))
+    }
+
+    #[test]
+    fn original_hfile_main_child_entry() {
+        let Some(workdir) = std::env::var_os("HTSLIB_RS_HFILE_MAIN_WORKDIR") else {
+            return;
+        };
+        unsafe {
+            let cwd = CString::new(
+                std::path::PathBuf::from(workdir)
+                    .to_string_lossy()
+                    .as_bytes(),
+            )
+            .unwrap();
+            if libc::chdir(cwd.as_ptr()) != 0 {
+                std::process::exit(120);
+            }
+            std::process::exit(test_hfile_c_97_main());
+        }
+    }
+
+    #[test]
+    fn original_hfile_main_runs_in_isolated_workdir() {
+        let workdir = temp_dir();
+        let test_dir = workdir.join("test");
+        let _ = std::fs::remove_dir_all(&workdir);
+        std::fs::create_dir_all(&test_dir).unwrap();
+        std::fs::write(
+            workdir.join("vcf.c"),
+            b"line one\nline two with more text\nline three\n".repeat(200),
+        )
+        .unwrap();
+        std::fs::write(test_dir.join("emptyfile"), b"").unwrap();
+
+        let output = Command::new(std::env::current_exe().unwrap())
+            .env("HTSLIB_RS_HFILE_MAIN_WORKDIR", &workdir)
+            .args([
+                "htslib_rs::test::hfile::tests::original_hfile_main_child_entry",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child stdout:\n{}\nchild stderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let _ = std::fs::remove_dir_all(workdir);
+    }
 }

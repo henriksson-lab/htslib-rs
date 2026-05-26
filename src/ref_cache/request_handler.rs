@@ -106,7 +106,7 @@ pub unsafe fn ref_cache_request_handler_c_49_is_hexmd5(str_: *mut c_char) -> c_i
 pub unsafe fn ref_cache_request_handler_c_56_decode_uri(parser: *mut Http_Parser) -> *mut c_char {
     let parser = parser.cast::<HttpParserLayout>();
     let mut uri = (*parser).uri;
-    let mut querypart: *mut c_char;
+    let querypart: *mut c_char;
     let mut out: *mut c_char;
     let mut last: c_char;
     let mut in_: *const c_char;
@@ -192,8 +192,8 @@ pub unsafe fn ref_cache_request_handler_c_99_handle_md5(
     // int have_range = 0;
     let parser = parser.cast::<HttpParserLayout>();
     let ref_file = ref_cache_ref_files_c_94_get_ref_file(opts, md5, (*parser).upstream);
-    let mut status: c_int;
-    let mut size: libc::off_t;
+    let status: c_int;
+    let size: libc::off_t;
 
     if ref_file.is_null() {
         ref_cache_transaction_c_277_set_error_response(transact, REF_CACHE_ERR_INTERNAL as c_uint);

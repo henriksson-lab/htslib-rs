@@ -111,8 +111,8 @@ unsafe fn kh_resize_str2int(h: *mut kh_str2int_t, mut new_n_buckets: khint_t) ->
     let mut j = 0;
     while j != old_n_buckets {
         if !kh_iseither(old_flags, j) {
-            let key = *(*h).keys.add(j as usize);
-            let val = *(*h).vals.add(j as usize);
+            let mut key = *(*h).keys.add(j as usize);
+            let mut val = *(*h).vals.add(j as usize);
             kh_set_isdel_true(old_flags, j);
             loop {
                 let mut new_mask = new_n_buckets - 1;
@@ -125,10 +125,9 @@ unsafe fn kh_resize_str2int(h: *mut kh_str2int_t, mut new_n_buckets: khint_t) ->
                 }
                 kh_set_isboth_false(new_flags, i);
                 if i < old_n_buckets && !kh_iseither(old_flags, i) {
-                    *(*h).keys.add(j as usize) = *(*h).keys.add(i as usize);
-                    *(*h).vals.add(j as usize) = *(*h).vals.add(i as usize);
+                    std::mem::swap(&mut *(*h).keys.add(i as usize), &mut key);
+                    std::mem::swap(&mut *(*h).vals.add(i as usize), &mut val);
                     kh_set_isdel_true(old_flags, i);
-                    j = i;
                 } else {
                     *(*h).keys.add(i as usize) = key;
                     *(*h).vals.add(i as usize) = val;
@@ -242,7 +241,7 @@ unsafe fn kh_put_str2int(h: *mut kh_str2int_t, key: *mut c_char, ret: *mut c_int
 unsafe fn kh_get_str2int(h: *const kh_str2int_t, key: *const c_char) -> khint_t {
     if (*h).n_buckets != 0 {
         let mask = (*h).n_buckets - 1;
-        let mut k = kh_str_hash_func(key);
+        let k = kh_str_hash_func(key);
         let mut i = k & mask;
         let last = i;
         let mut step = 0;
@@ -634,11 +633,9 @@ pub unsafe fn test_test_khash_c_236_read_keys(
     key_locations_out: *mut *mut *mut c_char,
 ) -> usize {
     let mut in_ = libc::fopen(keys_file, c"r".as_ptr());
-    let mut keys: *mut c_char = std::ptr::null_mut();
     let mut keys_size = 1_000_000usize;
     let mut keys_used = 0usize;
     let mut nkeys = 0usize;
-    let mut key_locations: *mut *mut c_char = std::ptr::null_mut();
     let mut fileinfo: libc::stat = std::mem::zeroed();
 
     if in_.is_null() {
@@ -652,7 +649,7 @@ pub unsafe fn test_test_khash_c_236_read_keys(
         }
     }
 
-    keys = libc::malloc(keys_size + 1).cast::<c_char>();
+    let mut keys = libc::malloc(keys_size + 1).cast::<c_char>();
     if keys.is_null() {
         if !in_.is_null() {
             libc::fclose(in_);
@@ -714,7 +711,8 @@ pub unsafe fn test_test_khash_c_236_read_keys(
         key = libc::memchr(key.cast(), b'\n' as c_int, end.offset_from(key) as usize).cast();
     }
 
-    key_locations = libc::malloc(nkeys * std::mem::size_of::<*mut c_char>()).cast::<*mut c_char>();
+    let key_locations =
+        libc::malloc(nkeys * std::mem::size_of::<*mut c_char>()).cast::<*mut c_char>();
     if key_locations.is_null() {
         if !in_.is_null() {
             libc::fclose(in_);
@@ -1002,4 +1000,78 @@ pub unsafe fn test_test_khash_c_448_main(argc: c_int, argv: *mut *mut c_char) ->
 
 unsafe extern "C" {
     static mut optarg: *mut c_char;
+    static mut optind: c_int;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::fs;
+
+    unsafe fn run_main(args: &[CString]) -> c_int {
+        let mut argv = args
+            .iter()
+            .map(|arg| arg.as_ptr().cast_mut())
+            .collect::<Vec<_>>();
+        optind = 0;
+        test_test_khash_c_448_main(argv.len() as c_int, argv.as_mut_ptr())
+    }
+
+    #[test]
+    fn original_test_khash_main_runs_minimal_str2int_path() {
+        unsafe {
+            let argv = [
+                CString::new("test_khash").unwrap(),
+                CString::new("-t").unwrap(),
+                CString::new("str2int").unwrap(),
+                CString::new("-n").unwrap(),
+                CString::new("1").unwrap(),
+                CString::new("-f").unwrap(),
+                CString::new("0.0").unwrap(),
+            ];
+            assert_eq!(run_main(&argv), libc::EXIT_SUCCESS);
+        }
+    }
+
+    #[test]
+    fn original_test_khash_main_rejects_invalid_item_count() {
+        unsafe {
+            let argv = [
+                CString::new("test_khash").unwrap(),
+                CString::new("-t").unwrap(),
+                CString::new("str2int").unwrap(),
+                CString::new("-n").unwrap(),
+                CString::new("0").unwrap(),
+            ];
+            assert_eq!(run_main(&argv), libc::EXIT_FAILURE);
+        }
+    }
+
+    #[test]
+    fn original_test_khash_str2int_delete_reinsert_path_is_bounded() {
+        unsafe {
+            assert_eq!(test_test_khash_c_137_test_str2int(128, 37, 0), 0);
+        }
+    }
+
+    #[test]
+    fn original_test_khash_benchmark_path_accepts_file_backed_keys() {
+        let path = std::env::temp_dir().join(format!(
+            "htslib_rs_test_khash_keys_{}.txt",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            b"alpha\nbeta\ngamma\nalpha\ndelta\nbucket-collision-candidate\n",
+        )
+        .unwrap();
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            assert_eq!(test_test_khash_c_344_benchmark(path_c.as_ptr()), 0);
+        }
+
+        fs::remove_file(path).unwrap();
+    }
 }

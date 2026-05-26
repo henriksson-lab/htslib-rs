@@ -257,7 +257,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
     check0!(vcf::bcf_update_alleles(hdr, rec, ptr::null_mut(), 0));
 
     // Create VCF header
-    let mut str_: kstring_t = kstring_t {
+    let str_: kstring_t = kstring_t {
         l: 0,
         m: 0,
         s: ptr::null_mut(),
@@ -1606,7 +1606,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
         );
         libc::exit(-1);
     }
-    let mut tmpi: i32 = 4323;
+    let tmpi: i32 = 4323;
     id += 1;
     check0!(vcf::bcf_update_info(
         hdr,
@@ -1953,7 +1953,7 @@ pub unsafe fn test_test_vcf_api_c_909_read_vcf_line(
     rec: *mut vcf::bcf1_t,
     kstr: *mut kstring_t,
 ) -> c_int {
-    let mut ret;
+    let ret;
     if kputsn(line, libc::strlen(line), ks_clear(kstr)) < 0 {
         return -1;
     }
@@ -2132,4 +2132,243 @@ pub unsafe fn test_test_vcf_api_c_1047_main(argc: c_int, argv: *mut *mut c_char)
     test_test_vcf_api_c_664_test_rlen_values();
     test_test_vcf_api_c_933_test_bcf_remove_allele_set();
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    static TEST_VCF_API_LOCK: Mutex<()> = Mutex::new(());
+
+    fn temp_bcf_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "htslib_rs-test-vcf-api-{}-{}.bcf",
+            std::process::id(),
+            label
+        ))
+    }
+
+    fn temp_path(label: &str, ext: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "htslib_rs-test-vcf-api-{label}-{}-{}.{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("unnamed"),
+            ext
+        ))
+    }
+
+    fn c_path(path: &Path) -> CString {
+        CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    }
+
+    fn cleanup_generated_bcf(path: &Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(path.with_extension("bcf.gz"));
+        let _ = std::fs::remove_file(path.with_extension("bcf.csi"));
+        let _ = std::fs::remove_file(path.with_extension("bcf.tbi"));
+    }
+
+    unsafe fn run_bcf_to_vcf_capture_stdout(bcf_path: &Path, out_path: &Path) -> c_int {
+        let _ = std::fs::remove_file(out_path);
+        libc::fflush(ptr::null_mut());
+        let pid = libc::fork();
+        assert!(pid >= 0, "fork failed");
+
+        if pid == 0 {
+            let out_c = c_path(out_path);
+            let out_fd = libc::open(
+                out_c.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                0o600,
+            );
+            if out_fd < 0 {
+                libc::_exit(libc::EXIT_FAILURE);
+            }
+            if libc::dup2(out_fd, libc::STDOUT_FILENO) < 0 {
+                libc::close(out_fd);
+                libc::_exit(libc::EXIT_FAILURE);
+            }
+            libc::close(out_fd);
+
+            let bcf_path_c = c_path(bcf_path);
+            test_test_vcf_api_c_287_bcf_to_vcf(bcf_path_c.as_ptr().cast_mut());
+            libc::fflush(ptr::null_mut());
+            libc::_exit(libc::EXIT_SUCCESS);
+        }
+
+        let mut status = 0;
+        assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
+        assert!(libc::WIFEXITED(status), "child did not exit normally");
+        libc::WEXITSTATUS(status)
+    }
+
+    unsafe fn run_main_capture_stdout(args: &mut [CString], out_path: &Path) -> c_int {
+        let _ = std::fs::remove_file(out_path);
+        libc::fflush(ptr::null_mut());
+        let pid = libc::fork();
+        assert!(pid >= 0, "fork failed");
+
+        if pid == 0 {
+            let out_c = c_path(out_path);
+            let out_fd = libc::open(
+                out_c.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                0o600,
+            );
+            if out_fd < 0 {
+                libc::_exit(libc::EXIT_FAILURE);
+            }
+            if libc::dup2(out_fd, libc::STDOUT_FILENO) < 0 {
+                libc::close(out_fd);
+                libc::_exit(libc::EXIT_FAILURE);
+            }
+            libc::close(out_fd);
+
+            let mut argv = args
+                .iter_mut()
+                .map(|arg| arg.as_ptr().cast_mut())
+                .collect::<Vec<_>>();
+            let ret = test_test_vcf_api_c_1047_main(argv.len() as c_int, argv.as_mut_ptr());
+            libc::fflush(ptr::null_mut());
+            libc::_exit(ret);
+        }
+
+        let mut status = 0;
+        assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
+        assert!(libc::WIFEXITED(status), "child did not exit normally");
+        libc::WEXITSTATUS(status)
+    }
+
+    #[test]
+    fn original_test_vcf_api_quiet_helpers_cover_format_end_and_rlen() {
+        let _guard = TEST_VCF_API_LOCK.lock().unwrap();
+        let bcf_path = temp_bcf_path("format-values");
+        let _ = std::fs::remove_file(&bcf_path);
+        let bcf_path_c = CString::new(bcf_path.to_string_lossy().as_bytes()).unwrap();
+
+        unsafe {
+            test_test_vcf_api_c_561_test_get_format_values(bcf_path_c.as_ptr());
+            test_test_vcf_api_c_567_test_invalid_end_tag();
+            test_test_vcf_api_c_630_test_open_format();
+            test_test_vcf_api_c_664_test_rlen_values();
+        }
+
+        let _ = std::fs::remove_file(&bcf_path);
+    }
+
+    #[test]
+    fn original_test_vcf_api_vl_header_types_cover_local_number_codes() {
+        let _guard = TEST_VCF_API_LOCK.lock().unwrap();
+
+        unsafe {
+            test_test_vcf_api_c_807_test_vl_types();
+        }
+    }
+
+    #[test]
+    fn original_test_vcf_api_allele_removal_matches_expected_records() {
+        let _guard = TEST_VCF_API_LOCK.lock().unwrap();
+
+        unsafe {
+            test_test_vcf_api_c_933_test_bcf_remove_allele_set();
+        }
+    }
+
+    #[test]
+    fn original_test_vcf_api_iterator_query_reads_indexed_record() {
+        let _guard = TEST_VCF_API_LOCK.lock().unwrap();
+        let bcf_path = temp_path("iterator", "bcf");
+        cleanup_generated_bcf(&bcf_path);
+        let bcf_path_c = c_path(&bcf_path);
+
+        unsafe {
+            test_test_vcf_api_c_110_write_bcf(bcf_path_c.as_ptr().cast_mut());
+            assert_eq!(vcf::bcf_index_build(bcf_path_c.as_ptr(), 14), 0);
+
+            let fp = hts_open(bcf_path_c.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            let hdr = vcf::bcf_hdr_read(fp);
+            assert!(!hdr.is_null());
+            let idx = vcf::bcf_index_load2(bcf_path_c.as_ptr(), ptr::null());
+            assert!(!idx.is_null());
+            let iter = bcf_itr_querys1(idx.cast(), hdr, c"20:1110600-1110800".as_ptr());
+            assert!(!iter.is_null());
+            let rec = vcf::bcf_init();
+            assert!(!rec.is_null());
+
+            assert_eq!(
+                hts::hts_itr_next(hts::hts_get_bgzfp(fp), iter, rec.cast(), hdr.cast()),
+                0
+            );
+            assert_eq!((*rec).pos, 1_110_695);
+            let mut expected_alleles = [c"A".as_ptr(), c"G".as_ptr(), c"T".as_ptr()];
+            check0!(test_test_vcf_api_c_51_check_alleles(
+                rec,
+                expected_alleles.as_mut_ptr(),
+                3
+            ));
+            assert_eq!(
+                hts::hts_itr_next(hts::hts_get_bgzfp(fp), iter, rec.cast(), hdr.cast()),
+                -1
+            );
+
+            vcf::bcf_destroy(rec);
+            crate::htslib_rs::hts::hts_itr_destroy(iter);
+            hts_idx_destroy(idx);
+            vcf::bcf_hdr_destroy(hdr);
+            assert_eq!(hts_close(fp), 0);
+        }
+
+        cleanup_generated_bcf(&bcf_path);
+    }
+
+    #[test]
+    fn original_test_vcf_api_bcf_to_vcf_writes_gzip_vcf_without_crashing() {
+        let _guard = TEST_VCF_API_LOCK.lock().unwrap();
+        let bcf_path = temp_path("bcf-to-vcf", "bcf");
+        let out_path = temp_path("bcf-to-vcf-stdout", "out");
+        cleanup_generated_bcf(&bcf_path);
+        let bcf_path_c = c_path(&bcf_path);
+
+        unsafe {
+            test_test_vcf_api_c_110_write_bcf(bcf_path_c.as_ptr().cast_mut());
+            assert_eq!(run_bcf_to_vcf_capture_stdout(&bcf_path, &out_path), 0);
+        }
+
+        let stdout_vcf = std::fs::read_to_string(&out_path).unwrap();
+        assert!(stdout_vcf.starts_with("##fileformat=VCFv4.2\n"));
+        assert!(stdout_vcf.contains(
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNA00001\tNA00002\tNA00003\n"
+        ));
+        assert!(stdout_vcf.contains("20\t1110696\t.\tA\tG,T"));
+        assert!(!stdout_vcf.contains("##unused=<ID=BB"));
+        assert!(bcf_path.with_extension("bcf.gz").exists());
+
+        cleanup_generated_bcf(&bcf_path);
+        let _ = std::fs::remove_file(out_path);
+    }
+
+    #[test]
+    fn original_test_vcf_api_main_writes_expected_stdout_vcf() {
+        let _guard = TEST_VCF_API_LOCK.lock().unwrap();
+        let bcf_path = temp_path("main", "bcf");
+        let out_path = temp_path("main-stdout", "out");
+        cleanup_generated_bcf(&bcf_path);
+
+        let mut args = vec![CString::new("test-vcf-api").unwrap(), c_path(&bcf_path)];
+        unsafe {
+            assert_eq!(run_main_capture_stdout(&mut args, &out_path), 0);
+        }
+
+        let stdout_vcf = std::fs::read_to_string(&out_path).unwrap();
+        assert!(stdout_vcf.starts_with("##fileformat=VCFv4.2\n"));
+        assert!(stdout_vcf.contains("20\t1110696\t.\tA\tG,T"));
+        assert!(stdout_vcf.contains("20\t14370\trs6054257\tG\tA"));
+
+        cleanup_generated_bcf(&bcf_path);
+        let _ = std::fs::remove_file(out_path);
+    }
 }

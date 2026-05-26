@@ -27,7 +27,7 @@ use super::{
     log_files::{self, Logfiles},
     misc, options,
     options::{DaemonType, MatchAddr, Options},
-    ping, poll_wrap,
+    ping,
     poll_wrap::{Pw_fd_type, Pw_item, PW_ERR, PW_HUP, PW_IN},
     poll_wrap_epoll as poll_impl,
 };
@@ -162,7 +162,7 @@ pub unsafe fn ref_cache_main_c_107_init_children(opts: *mut Options) -> c_int {
     }
 
     /* Pipe for signals */
-    if libc::pipe(sig_fds.as_mut_ptr()) != 0 {
+    if libc::pipe(std::ptr::addr_of_mut!(sig_fds).cast::<c_int>()) != 0 {
         libc::perror(c"pipe".as_ptr());
         let mut i = 0;
         while i < (*opts).max_kids as c_int {
@@ -892,13 +892,12 @@ pub unsafe fn ref_cache_main_c_677_add_match_addr(
     let mut host = [0 as c_char; NI_MAXHOST + 1];
     let addr_list_len = libc::strlen(addr_list);
     let mut host_start = 0usize;
-    let mut p = 0usize;
     let mut addrs: *mut libc::addrinfo;
     let mut hints: libc::addrinfo = std::mem::zeroed();
 
     while host_start < addr_list_len {
         // Look for the IP address part
-        p = host_start;
+        let mut p = host_start;
         let host_len = libc::strcspn(addr_list.add(p), c"/,".as_ptr());
         if host_len >= NI_MAXHOST {
             libc::fprintf(

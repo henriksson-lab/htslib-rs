@@ -145,6 +145,12 @@ fn canonical_cram_aux_records(lines: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+unsafe fn assert_sam_formats_to_original_records(path: &str) {
+    let actual = formatted_alignment_records(path, None);
+    let expected = expected_sam_record_lines(path);
+    assert_eq!(actual, expected, "formatted record parity for {path}");
+}
+
 unsafe fn aux(rec: *mut htslib_rs::bam1_t, tag: &'static CStr) -> *mut u8 {
     let ptr = bam_aux_get(rec, tag.as_ptr());
     assert!(!ptr.is_null(), "missing aux tag {:?}", tag);
@@ -203,6 +209,59 @@ fn real_large_aux_java_cram_formats_exactly_like_expected_sam() {
             canonical_cram_aux_records(actual),
             canonical_cram_aux_records(expected)
         );
+    }
+}
+
+#[test]
+fn real_cigar_edge_sam_fixtures_format_back_to_original_records() {
+    unsafe {
+        for path in [
+            "htslib/test/c1#pad1.sam",
+            "htslib/test/c1#pad2.sam",
+            "htslib/test/c1#pad3.sam",
+            "htslib/test/c1#clip.sam",
+            "htslib/test/c1#bounds.sam",
+            "htslib/test/c1#unknown.sam",
+            "htslib/test/c2#pad.sam",
+        ] {
+            assert_sam_formats_to_original_records(path);
+        }
+    }
+}
+
+#[test]
+fn real_alignment_tag_and_mate_fixtures_format_back_to_original_records() {
+    unsafe {
+        for path in [
+            "htslib/test/ce#tag_padded.sam",
+            "htslib/test/ce#tag_depadded.sam",
+            "htslib/test/ce#supp.sam",
+            "htslib/test/xx#pair.sam",
+            "htslib/test/xx#rg.sam",
+            "htslib/test/xx#triplet.sam",
+        ] {
+            assert_sam_formats_to_original_records(path);
+        }
+    }
+}
+
+#[test]
+fn real_unmapped_md_and_repeated_fixtures_format_back_to_original_records() {
+    unsafe {
+        for path in [
+            "htslib/test/ce#unmap.sam",
+            "htslib/test/ce#unmap1.sam",
+            "htslib/test/ce#unmap2.sam",
+            "htslib/test/embed_MD.sam",
+            "htslib/test/md#1.sam",
+            "htslib/test/xx#MD.sam",
+            "htslib/test/xx#MD2.sam",
+            "htslib/test/xx#minimal.sam",
+            "htslib/test/xx#repeated.sam",
+            "htslib/test/xx#repeated2.sam",
+        ] {
+            assert_sam_formats_to_original_records(path);
+        }
     }
 }
 

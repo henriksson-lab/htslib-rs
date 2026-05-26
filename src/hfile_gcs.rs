@@ -26,7 +26,7 @@ use crate::htslib_rs::{
     hfile::{hFILE_plugin, hFILE_scheme_handler, hfile_add_scheme_handler},
     hts::{hFILE, hts_verbose, kputc, kputs, kputsn, kstring_t},
 };
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::{c_char, c_int, c_uint, c_void};
 
 type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> c_int;
@@ -57,6 +57,169 @@ unsafe extern "C" {
     fn htslib_hopen(fname: *const c_char, mode: *const c_char, ...) -> *mut hFILE;
 }
 
+type HFileLibcurlHttpHeaderCallback =
+    unsafe extern "C" fn(*mut c_void, *mut *mut *mut c_char) -> c_int;
+
+#[repr(C)]
+struct GcsLibcurlCurlSlist {
+    data: *mut c_char,
+    next: *mut GcsLibcurlCurlSlist,
+}
+
+#[repr(C)]
+struct GcsLibcurlHdrList {
+    list: *mut GcsLibcurlCurlSlist,
+    num: c_uint,
+    size: c_uint,
+}
+
+#[repr(C)]
+struct GcsLibcurlHeaders {
+    fixed: GcsLibcurlHdrList,
+    extra: GcsLibcurlHdrList,
+    callback: Option<HFileLibcurlHttpHeaderCallback>,
+    callback_data: *mut c_void,
+    auth: *mut c_void,
+    auth_hdr_num: c_int,
+    redirect: *mut c_void,
+    redirect_data: *mut c_void,
+    http_response_ptr: *mut libc::c_long,
+    fail_on_error: c_int,
+}
+
+unsafe fn hfile_gcs_c_41_build_rewrite(
+    gsurl: *const c_char,
+    mode: *const c_char,
+    url: *mut kstring_t,
+    auth_hdr: *mut kstring_t,
+    requester_pays_hdr: *mut kstring_t,
+) -> c_int {
+    // GCS URL format is gs[+SCHEME]://BUCKET/PATH
+
+    let mut bucket = if *gsurl.add(2) == b'+' as c_char {
+        let bucket = libc::strchr(gsurl, b':' as c_int).add(1);
+        if kputsn(gsurl.add(3), bucket.offset_from(gsurl.add(3)) as usize, url) < 0 {
+            return -1;
+        }
+        bucket
+    } else {
+        if kputs(c"https:".as_ptr(), url) < 0 {
+            return -1;
+        }
+        gsurl.add(3)
+    };
+
+    while *bucket == b'/' as c_char {
+        if kputc(*bucket as c_int, url) < 0 {
+            return -1;
+        }
+        bucket = bucket.add(1);
+    }
+
+    let path = bucket.add(libc::strcspn(bucket, c"/?#".as_ptr()));
+
+    if kputsn(bucket, path.offset_from(bucket) as usize, url) < 0 {
+        return -1;
+    }
+    if !libc::strchr(mode, b'r' as c_int).is_null() {
+        if kputs(c".storage-download".as_ptr(), url) < 0 {
+            return -1;
+        }
+    } else if !libc::strchr(mode, b'w' as c_int).is_null() {
+        if kputs(c".storage-upload".as_ptr(), url) < 0 {
+            return -1;
+        }
+    } else if kputs(c".storage".as_ptr(), url) < 0 {
+        return -1;
+    }
+    if kputs(c".googleapis.com".as_ptr(), url) < 0 || kputs(path, url) < 0 {
+        return -1;
+    }
+
+    if hts_verbose >= 8 {
+        libc::fprintf(
+            hts_sys::stderr.cast(),
+            c"[M::gcs_open] rewrote URL as %s\n".as_ptr(),
+            (*url).s,
+        );
+    }
+
+    // Preserve HTSlib's explicit GCS override.  If it is absent, translated
+    // libcurl can supply refreshed bearer tokens via HTS_AUTH_LOCATION.
+    let access_token = libc::getenv(c"GCS_OAUTH_TOKEN".as_ptr());
+
+    if !access_token.is_null()
+        && (kputs(c"Authorization: Bearer ".as_ptr(), auth_hdr) < 0
+            || kputs(access_token, auth_hdr) < 0)
+    {
+        return -1;
+    }
+
+    let requester_pays_project = libc::getenv(c"GCS_REQUESTER_PAYS_PROJECT".as_ptr());
+
+    if !requester_pays_project.is_null()
+        && (kputs(c"X-Goog-User-Project: ".as_ptr(), requester_pays_hdr) < 0
+            || kputs(requester_pays_project, requester_pays_hdr) < 0)
+    {
+        return -1;
+    }
+
+    0
+}
+
+unsafe fn hfile_gcs_c_41_open_translated_libcurl(
+    url: *const c_char,
+    mode: *const c_char,
+    auth_hdr: *const c_char,
+    requester_pays_hdr: *const c_char,
+) -> *mut hFILE {
+    let mut headers: GcsLibcurlHeaders = std::mem::zeroed();
+    headers.fail_on_error = 1;
+
+    if !auth_hdr.is_null() {
+        if crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_353_append_header(
+            (&mut headers.fixed as *mut GcsLibcurlHdrList).cast(),
+            auth_hdr,
+            1,
+        ) < 0
+        {
+            crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_372_free_headers(
+                (&mut headers.fixed as *mut GcsLibcurlHdrList).cast(),
+                1,
+            );
+            return std::ptr::null_mut();
+        }
+        headers.auth_hdr_num = -2;
+    }
+
+    if !requester_pays_hdr.is_null()
+        && crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_353_append_header(
+            (&mut headers.fixed as *mut GcsLibcurlHdrList).cast(),
+            requester_pays_hdr,
+            1,
+        ) < 0
+    {
+        crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_372_free_headers(
+            (&mut headers.fixed as *mut GcsLibcurlHdrList).cast(),
+            1,
+        );
+        return std::ptr::null_mut();
+    }
+
+    let fp = crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_1313_libcurl_open(
+        url,
+        mode,
+        (&mut headers as *mut GcsLibcurlHeaders).cast(),
+    );
+    if fp.is_null() {
+        crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_372_free_headers(
+            (&mut headers.fixed as *mut GcsLibcurlHdrList).cast(),
+            1,
+        );
+    }
+    fp
+}
+
 // original: gcs_rewrite (htslib/hfile_gcs.c:41)
 unsafe fn hfile_gcs_c_41_gcs_rewrite(
     gsurl: *const c_char,
@@ -68,66 +231,27 @@ unsafe fn hfile_gcs_c_41_gcs_rewrite(
     let mut url: kstring_t = std::mem::zeroed();
     let mut auth_hdr: kstring_t = std::mem::zeroed();
     let mut requester_pays_hdr: kstring_t = std::mem::zeroed();
-    let mut fp: *mut hFILE = std::ptr::null_mut();
+    let fp: *mut hFILE;
 
-    // GCS URL format is gs[+SCHEME]://BUCKET/PATH
-
-    let mut bucket = if *gsurl.add(2) == b'+' as c_char {
-        let bucket = libc::strchr(gsurl, b':' as c_int).add(1);
-        kputsn(
-            gsurl.add(3),
-            bucket.offset_from(gsurl.add(3)) as usize,
+    if hfile_gcs_c_41_build_rewrite(
+        gsurl,
+        mode,
+        &mut url,
+        &mut auth_hdr,
+        &mut requester_pays_hdr,
+    ) < 0
+    {
+        fp = std::ptr::null_mut();
+        goto_gcs_rewrite_done(
+            &mut mode_colon,
             &mut url,
+            &mut auth_hdr,
+            &mut requester_pays_hdr,
         );
-        bucket
-    } else {
-        kputs(c"https:".as_ptr(), &mut url);
-        gsurl.add(3)
-    };
-
-    while *bucket == b'/' as c_char {
-        kputc(*bucket as c_int, &mut url);
-        bucket = bucket.add(1);
+        return fp;
     }
 
-    let path = bucket.add(libc::strcspn(bucket, c"/?#".as_ptr()));
-
-    kputsn(bucket, path.offset_from(bucket) as usize, &mut url);
-    if !libc::strchr(mode, b'r' as c_int).is_null() {
-        kputs(c".storage-download".as_ptr(), &mut url);
-    } else if !libc::strchr(mode, b'w' as c_int).is_null() {
-        kputs(c".storage-upload".as_ptr(), &mut url);
-    } else {
-        kputs(c".storage".as_ptr(), &mut url);
-    }
-    kputs(c".googleapis.com".as_ptr(), &mut url);
-
-    kputs(path, &mut url);
-
-    if hts_verbose >= 8 {
-        libc::fprintf(
-            hts_sys::stderr.cast(),
-            c"[M::gcs_open] rewrote URL as %s\n".as_ptr(),
-            url.s,
-        );
-    }
-
-    // TODO Find the access token in a more standard way
-    let access_token = libc::getenv(c"GCS_OAUTH_TOKEN".as_ptr());
-
-    if !access_token.is_null() {
-        kputs(c"Authorization: Bearer ".as_ptr(), &mut auth_hdr);
-        kputs(access_token, &mut auth_hdr);
-    }
-
-    let requester_pays_project = libc::getenv(c"GCS_REQUESTER_PAYS_PROJECT".as_ptr());
-
-    if !requester_pays_project.is_null() {
-        kputs(c"X-Goog-User-Project: ".as_ptr(), &mut requester_pays_hdr);
-        kputs(requester_pays_project, &mut requester_pays_hdr);
-    }
-
-    if !argsp.is_null() || mode_has_colon != 0 || auth_hdr.l > 0 || requester_pays_hdr.l > 0 {
+    if !argsp.is_null() || mode_has_colon != 0 {
         if mode_has_colon == 0 {
             kputs(mode, &mut mode_colon);
             kputc(b':' as c_int, &mut mode_colon);
@@ -161,15 +285,44 @@ unsafe fn hfile_gcs_c_41_gcs_rewrite(
                 std::ptr::null::<c_char>(),
             );
         }
+    } else if auth_hdr.l > 0 || requester_pays_hdr.l > 0 {
+        fp = hfile_gcs_c_41_open_translated_libcurl(
+            url.s,
+            mode,
+            if auth_hdr.l > 0 {
+                auth_hdr.s
+            } else {
+                std::ptr::null()
+            },
+            if requester_pays_hdr.l > 0 {
+                requester_pays_hdr.s
+            } else {
+                std::ptr::null()
+            },
+        );
     } else {
-        fp = htslib_hopen(url.s, mode);
+        fp = crate::htslib_rs::hfile::hopen(url.s, mode);
     }
 
-    libc::free(mode_colon.s.cast());
-    libc::free(url.s.cast());
-    libc::free(auth_hdr.s.cast());
-    libc::free(requester_pays_hdr.s.cast());
+    goto_gcs_rewrite_done(
+        &mut mode_colon,
+        &mut url,
+        &mut auth_hdr,
+        &mut requester_pays_hdr,
+    );
     fp
+}
+
+unsafe fn goto_gcs_rewrite_done(
+    mode_colon: *mut kstring_t,
+    url: *mut kstring_t,
+    auth_hdr: *mut kstring_t,
+    requester_pays_hdr: *mut kstring_t,
+) {
+    libc::free((*mode_colon).s.cast());
+    libc::free((*url).s.cast());
+    libc::free((*auth_hdr).s.cast());
+    libc::free((*requester_pays_hdr).s.cast());
 }
 
 // original: gcs_open (htslib/hfile_gcs.c:125)
@@ -217,4 +370,116 @@ pub unsafe fn hfile_gcs_c_141_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> c_int {
         (&HANDLER as *const hFILE_scheme_handler_layout).cast::<hFILE_scheme_handler>(),
     );
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CStr;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    unsafe fn clear_env() {
+        libc::unsetenv(c"GCS_OAUTH_TOKEN".as_ptr());
+        libc::unsetenv(c"GCS_REQUESTER_PAYS_PROJECT".as_ptr());
+    }
+
+    unsafe fn free_kstring(s: &mut kstring_t) {
+        libc::free(s.s.cast());
+        s.l = 0;
+        s.m = 0;
+        s.s = std::ptr::null_mut();
+    }
+
+    #[test]
+    fn gcs_rewrite_builds_explicit_auth_and_requester_pays_headers() {
+        let _guard = env_lock();
+        unsafe {
+            clear_env();
+            libc::setenv(c"GCS_OAUTH_TOKEN".as_ptr(), c"tok123".as_ptr(), 1);
+            libc::setenv(
+                c"GCS_REQUESTER_PAYS_PROJECT".as_ptr(),
+                c"proj-7".as_ptr(),
+                1,
+            );
+
+            let mut url: kstring_t = std::mem::zeroed();
+            let mut auth: kstring_t = std::mem::zeroed();
+            let mut requester: kstring_t = std::mem::zeroed();
+
+            assert_eq!(
+                hfile_gcs_c_41_build_rewrite(
+                    c"gs://bucket-name/path/to.bam?generation=3".as_ptr(),
+                    c"r".as_ptr(),
+                    &mut url,
+                    &mut auth,
+                    &mut requester,
+                ),
+                0
+            );
+            assert_eq!(
+                CStr::from_ptr(url.s).to_str().unwrap(),
+                "https://bucket-name.storage-download.googleapis.com/path/to.bam?generation=3"
+            );
+            assert_eq!(
+                CStr::from_ptr(auth.s).to_str().unwrap(),
+                "Authorization: Bearer tok123"
+            );
+            assert_eq!(
+                CStr::from_ptr(requester.s).to_str().unwrap(),
+                "X-Goog-User-Project: proj-7"
+            );
+
+            free_kstring(&mut url);
+            free_kstring(&mut auth);
+            free_kstring(&mut requester);
+            clear_env();
+        }
+    }
+
+    #[test]
+    fn gcs_rewrite_leaves_auth_empty_when_gcs_token_absent() {
+        let _guard = env_lock();
+        unsafe {
+            clear_env();
+            libc::setenv(
+                c"GCS_REQUESTER_PAYS_PROJECT".as_ptr(),
+                c"billing-proj".as_ptr(),
+                1,
+            );
+
+            let mut url: kstring_t = std::mem::zeroed();
+            let mut auth: kstring_t = std::mem::zeroed();
+            let mut requester: kstring_t = std::mem::zeroed();
+
+            assert_eq!(
+                hfile_gcs_c_41_build_rewrite(
+                    c"gs+http://bucket/object".as_ptr(),
+                    c"w".as_ptr(),
+                    &mut url,
+                    &mut auth,
+                    &mut requester,
+                ),
+                0
+            );
+            assert_eq!(
+                CStr::from_ptr(url.s).to_str().unwrap(),
+                "http://bucket.storage-upload.googleapis.com/object"
+            );
+            assert!(auth.s.is_null());
+            assert_eq!(
+                CStr::from_ptr(requester.s).to_str().unwrap(),
+                "X-Goog-User-Project: billing-proj"
+            );
+
+            free_kstring(&mut url);
+            free_kstring(&mut auth);
+            free_kstring(&mut requester);
+            clear_env();
+        }
+    }
 }

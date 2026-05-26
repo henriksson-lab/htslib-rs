@@ -95,3 +95,61 @@ pub unsafe fn test_thrash_threads7_c_49_main(_argc: c_int, _argv: *mut *mut c_ch
 
     libc::EXIT_SUCCESS
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deterministic_thrash_threads7_recreates_process_queues() {
+        unsafe {
+            let pool = crate::htslib_rs::thread_pool::hts_tpool_init(3);
+            assert!(!pool.is_null());
+
+            let mut queues = [std::ptr::null_mut(); 3];
+            for queue in queues.iter_mut() {
+                *queue = crate::htslib_rs::thread_pool::hts_tpool_process_init(pool, 4, 1);
+                assert!(!queue.is_null());
+            }
+
+            let queue_order = [0_usize, 2, 1, 0, 2, 1];
+            let mut delays = [[100_u32; 4]; 6];
+            for (cycle, &queue_index) in queue_order.iter().enumerate() {
+                for delay in delays[cycle].iter_mut() {
+                    assert_eq!(
+                        crate::htslib_rs::thread_pool::hts_tpool_dispatch(
+                            pool,
+                            queues[queue_index],
+                            Some(test_thrash_threads7_c_43_job),
+                            delay as *mut c_uint as *mut c_void,
+                        ),
+                        0
+                    );
+                }
+
+                assert_eq!(
+                    crate::htslib_rs::thread_pool::hts_tpool_process_flush(queues[queue_index]),
+                    0
+                );
+                assert_eq!(
+                    crate::htslib_rs::thread_pool::hts_tpool_process_empty(queues[queue_index]),
+                    1
+                );
+                crate::htslib_rs::thread_pool::hts_tpool_process_destroy(queues[queue_index]);
+
+                queues[queue_index] =
+                    crate::htslib_rs::thread_pool::hts_tpool_process_init(pool, 4, 1);
+                assert!(!queues[queue_index].is_null());
+            }
+
+            for queue in queues {
+                assert_eq!(
+                    crate::htslib_rs::thread_pool::hts_tpool_process_flush(queue),
+                    0
+                );
+                crate::htslib_rs::thread_pool::hts_tpool_process_destroy(queue);
+            }
+            crate::htslib_rs::thread_pool::hts_tpool_destroy(pool);
+        }
+    }
+}

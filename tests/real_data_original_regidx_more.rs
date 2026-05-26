@@ -160,6 +160,64 @@ fn tabix_vcf_fixture_auto_parser_indexes_positions_as_points() {
 }
 
 #[test]
+fn tabix_large_chr_vcf_fixture_keeps_high_coordinates_as_zero_based_points() {
+    unsafe {
+        let idx = open_index("htslib/test/tabix/large_chr.vcf", None);
+
+        assert_eq!(regidx_c_98_regidx_nregs(idx), 12);
+        assert_eq!(seq_names(idx), vec!["chr11", "chr20"]);
+        assert_eq!(regidx_c_91_regidx_seq_nregs(idx, c"chr11".as_ptr()), 3);
+        assert_eq!(regidx_c_91_regidx_seq_nregs(idx, c"chr20".as_ptr()), 9);
+        assert_eq!(overlaps(idx, c"chr20", 76_960, 76_960), vec![]);
+        assert_eq!(
+            overlaps(idx, c"chr20", 76_961, 76_961),
+            vec![(76_961, 76_961)]
+        );
+        assert_eq!(
+            overlaps(idx, c"chr20", 620_255_099, 630_255_199),
+            vec![(620_255_099, 620_255_099), (630_255_199, 630_255_199)]
+        );
+        assert_eq!(
+            overlaps(idx, c"chr20", 2_147_483_646, 2_147_483_646),
+            vec![(2_147_483_646, 2_147_483_646)]
+        );
+        assert_eq!(
+            overlaps(idx, c"chr20", 2_147_483_647, 2_147_483_647),
+            vec![]
+        );
+
+        regidx_c_311_regidx_destroy(idx);
+    }
+}
+
+#[test]
+fn tabix_bed_fixture_multi_region_queries_match_expected_windows() {
+    unsafe {
+        let idx = open_index("htslib/test/tabix/bed_file.bed", None);
+
+        let x = overlaps(idx, c"X", 1099, 1399);
+        assert_eq!(x, vec![(1000, 1099), (1200, 1299)]);
+        assert_eq!(clipped_covered_bases((1099, 1399), &x), 101);
+
+        let y = overlaps(idx, c"Y", 99_999, 100_549);
+        assert_eq!(
+            y,
+            vec![(100000, 100899), (100200, 100699), (100400, 100499)]
+        );
+        assert_eq!(clipped_covered_bases((99_999, 100_549), &y), 550);
+
+        let z = overlaps(idx, c"Z", 99_999, 100_004);
+        assert_eq!(
+            z,
+            vec![(100000, 100000), (100002, 100002), (100004, 100004)]
+        );
+        assert_eq!(clipped_covered_bases((99_999, 100_004), &z), 3);
+
+        regidx_c_311_regidx_destroy(idx);
+    }
+}
+
+#[test]
 fn annot_tsv_nbp_fixture_matches_exact_regidx_overlaps() {
     unsafe {
         let src = open_index(

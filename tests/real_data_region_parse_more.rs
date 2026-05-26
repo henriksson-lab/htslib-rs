@@ -35,6 +35,28 @@ unsafe fn expect_region(
     }
 }
 
+unsafe fn parse_region_once(
+    hdr: *mut sam_hdr_t,
+    region: &str,
+    flags: c_int,
+) -> Option<(String, c_int, hts_pos_t, hts_pos_t)> {
+    let region = CString::new(region).unwrap();
+    let mut tid = -1;
+    let mut beg = -1;
+    let mut end = -1;
+    let rest = sam_parse_region(hdr, region.as_ptr(), &mut tid, &mut beg, &mut end, flags);
+    if rest.is_null() {
+        None
+    } else {
+        Some((
+            CStr::from_ptr(rest).to_string_lossy().into_owned(),
+            tid,
+            beg,
+            end,
+        ))
+    }
+}
+
 unsafe fn with_colons_header(test: impl FnOnce(*mut sam_hdr_t)) {
     let path = c_fixture("htslib/test/colons.bam");
     let fp = hts_open(path.as_ptr(), c"r".as_ptr());
@@ -133,6 +155,42 @@ fn parses_real_colon_contig_header_list_mode_edges() {
                 0,
                 1,
             );
+        });
+    }
+}
+
+#[test]
+fn parses_real_colon_contig_header_list_mode_quoted_comma_then_region() {
+    unsafe {
+        with_colons_header(|hdr| {
+            assert_eq!(
+                parse_region_once(hdr, "{chr1,chr3},chr1:7", HTS_PARSE_LIST),
+                Some(("chr1:7".to_string(), 5, 0, HTS_POS_MAX))
+            );
+            assert_eq!(
+                parse_region_once(hdr, "chr1:7", HTS_PARSE_LIST | HTS_PARSE_ONE_COORD),
+                Some(("".to_string(), 0, 6, 7))
+            );
+        });
+    }
+}
+
+#[test]
+fn parses_real_colon_contig_header_list_mode_repeated_remainder_steps() {
+    unsafe {
+        with_colons_header(|hdr| {
+            let first = parse_region_once(hdr, "chr1,{chr1,chr3},chr3:1-2", HTS_PARSE_LIST)
+                .expect("first region");
+            assert_eq!(
+                first,
+                ("{chr1,chr3},chr3:1-2".to_string(), 0, 0, HTS_POS_MAX)
+            );
+
+            let second = parse_region_once(hdr, &first.0, HTS_PARSE_LIST).expect("second region");
+            assert_eq!(second, ("chr3:1-2".to_string(), 5, 0, HTS_POS_MAX));
+
+            let third = parse_region_once(hdr, &second.0, HTS_PARSE_LIST).expect("third region");
+            assert_eq!(third, ("".to_string(), 4, 0, 2));
         });
     }
 }

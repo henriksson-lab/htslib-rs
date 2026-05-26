@@ -78,22 +78,20 @@ pub unsafe fn realn_c_106_sam_prob_realn(
         conf.e = 1e-1;
     }
 
-    let mut bq: *mut u8 = std::ptr::null_mut();
-    let mut zq: *mut u8 = std::ptr::null_mut();
     let qual = bam_get_qual(b).cast_mut();
     if ((*b).core.flag as c_int & BAM_FUNMAP) != 0 || (*b).core.l_qseq == 0 || *qual == u8::MAX {
         return -1; // do nothing
     }
 
     // test if BQ or ZQ is present, and make sanity checks
-    bq = bam_aux_get(b, c"BQ".as_ptr());
+    let mut bq = bam_aux_get(b, c"BQ".as_ptr());
     if !bq.is_null() {
         if redo_baq == 0 && realn_check_tag(bq, HTS_LOG_WARNING, c"BQ".as_ptr(), b) < 0 {
             fix_bq = 1;
         }
         bq = bq.add(1);
     }
-    zq = bam_aux_get(b, c"ZQ".as_ptr());
+    let mut zq = bam_aux_get(b, c"ZQ".as_ptr());
     if !zq.is_null() {
         if realn_check_tag(zq, HTS_LOG_ERROR, c"ZQ".as_ptr(), b) < 0 {
             return -4;
@@ -196,9 +194,8 @@ pub unsafe fn realn_c_106_sam_prob_realn(
     }
     xe += ((*b).core.l_qseq - ye) as hts_pos_t + (bw / 2) as hts_pos_t;
     if xe - xb - (*b).core.l_qseq as hts_pos_t > bw as hts_pos_t {
-        let d = (xe - xb - (*b).core.l_qseq as hts_pos_t - bw as hts_pos_t) / 2;
-        xb += d;
-        xe -= d;
+        xb += (xe - xb - (*b).core.l_qseq as hts_pos_t - bw as hts_pos_t) / 2;
+        xe -= (xe - xb - (*b).core.l_qseq as hts_pos_t - bw as hts_pos_t) / 2;
     }
 
     {

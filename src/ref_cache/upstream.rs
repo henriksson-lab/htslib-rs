@@ -150,6 +150,7 @@ type TimerCallback =
     unsafe extern "C" fn(multi: *mut CURLM, timeout_ms: c_long, userp: *mut c_void) -> c_int;
 
 #[link(name = "curl")]
+#[allow(clashing_extern_declarations)]
 extern "C" {
     #[link_name = "curl_global_init"]
     fn curl_global_init(flags: c_long) -> CURLcode;
@@ -963,7 +964,7 @@ unsafe fn ref_cache_upstream_c_563_get_cmd_multi(
         code: Upstream_msg_code::US_RESULT,
         val: 0,
     };
-    let mut res = -1;
+    let res = -1;
     let mut downstream_id: c_uint = 0;
 
     let clen =

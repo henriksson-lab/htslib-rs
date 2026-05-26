@@ -90,3 +90,124 @@ pub unsafe fn test_test_index_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
 
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::{CStr, CString};
+    use std::path::{Path, PathBuf};
+    use std::ptr;
+    use std::sync::Mutex;
+
+    static GETOPT_LOCK: Mutex<()> = Mutex::new(());
+
+    fn fixture(path: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
+    }
+
+    fn temp_bam(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "htslib-rs-test-index-{label}-{}-{}.bam",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("unnamed")
+        ))
+    }
+
+    fn c_path(path: &Path) -> CString {
+        CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    }
+
+    unsafe fn run_main(args: &[CString]) -> c_int {
+        let _guard = GETOPT_LOCK.lock().unwrap();
+        optarg = ptr::null_mut();
+        optind = 1;
+        let mut argv = args
+            .iter()
+            .map(|arg| arg.as_ptr().cast_mut())
+            .collect::<Vec<_>>();
+        test_test_index_c_42_main(argv.len() as c_int, argv.as_mut_ptr())
+    }
+
+    unsafe fn count_region_records(path: &Path, region: &CStr) -> usize {
+        let path_c = c_path(path);
+        let fp = hts::hts_open(path_c.as_ptr(), c"r".as_ptr());
+        assert!(!fp.is_null(), "failed to open {}", path.display());
+
+        let hdr = sam::sam_hdr_read(fp);
+        assert!(!hdr.is_null());
+        let idx = sam::sam_index_load(fp, path_c.as_ptr());
+        assert!(
+            !idx.is_null(),
+            "failed to load index for {}",
+            path.display()
+        );
+        let itr = sam::sam_itr_querys(idx, hdr, region.as_ptr());
+        assert!(!itr.is_null());
+        let rec = sam::bam_init1();
+        assert!(!rec.is_null());
+
+        let mut count = 0usize;
+        while sam::sam_itr_next(fp, itr, rec) >= 0 {
+            count += 1;
+        }
+
+        sam::bam_destroy1(rec);
+        hts::hts_itr_destroy(itr);
+        hts::hts_idx_destroy(idx);
+        sam::sam_hdr_destroy(hdr);
+        assert_eq!(hts::hts_close(fp), 0);
+        count
+    }
+
+    fn copy_range_bam_without_indexes(label: &str) -> PathBuf {
+        let bam = temp_bam(label);
+        let _ = std::fs::remove_file(&bam);
+        let _ = std::fs::remove_file(format!("{}.bai", bam.display()));
+        let _ = std::fs::remove_file(format!("{}.csi", bam.display()));
+        std::fs::copy(fixture("htslib/test/range.bam"), &bam).unwrap();
+        bam
+    }
+
+    #[test]
+    fn original_test_index_main_builds_bam_bai_and_loads_region() {
+        unsafe {
+            let bam = copy_range_bam_without_indexes("bai");
+            let bam_c = c_path(&bam);
+            let args = [
+                CString::new("test_index").unwrap(),
+                CString::new("-b").unwrap(),
+                bam_c,
+            ];
+
+            assert_eq!(run_main(&args), 0);
+
+            assert!(PathBuf::from(format!("{}.bai", bam.display())).is_file());
+            assert_eq!(count_region_records(&bam, c"CHROMOSOME_II:2976-3070"), 2);
+
+            let _ = std::fs::remove_file(format!("{}.bai", bam.display()));
+            let _ = std::fs::remove_file(bam);
+        }
+    }
+
+    #[test]
+    fn original_test_index_main_builds_bam_csi_with_min_shift_option() {
+        unsafe {
+            let bam = copy_range_bam_without_indexes("csi");
+            let bam_c = c_path(&bam);
+            let args = [
+                CString::new("test_index").unwrap(),
+                CString::new("-m").unwrap(),
+                CString::new("12").unwrap(),
+                bam_c,
+            ];
+
+            assert_eq!(run_main(&args), 0);
+
+            assert!(PathBuf::from(format!("{}.csi", bam.display())).is_file());
+            assert_eq!(count_region_records(&bam, c"CHROMOSOME_IV:1422-1483"), 3);
+
+            let _ = std::fs::remove_file(format!("{}.csi", bam.display()));
+            let _ = std::fs::remove_file(bam);
+        }
+    }
+}

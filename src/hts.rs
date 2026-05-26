@@ -16,6 +16,19 @@ use super::hfile::{
 };
 use super::{path_bytes, path_from_bytes};
 
+#[allow(unused_assignments, unused_mut, private_interfaces)]
+#[path = "cram/cram_index.rs"]
+mod cram_index;
+#[path = "cram/cram_structs.rs"]
+mod cram_structs;
+
+use cram_index::{
+    cram_cram_index_c_404_cram_index_query, cram_cram_index_c_503_cram_index_last,
+    cram_cram_index_c_531_cram_index_query_last,
+};
+
+const BGZF_HTS_OPEN_FAST_BAM_READ: u32 = 1 << 16;
+
 pub type hts_pos_t = i64;
 pub const HTS_POS_MAX: hts_pos_t = ((i32::MAX as hts_pos_t) << 32) | i32::MAX as hts_pos_t;
 pub type size_t = usize;
@@ -4437,6 +4450,12 @@ pub struct hts_idx_t {
 }
 
 #[repr(C)]
+pub struct hts_cram_idx_t {
+    pub fmt: c_int,
+    pub cram: *mut cram_fd,
+}
+
+#[repr(C)]
 pub struct hts_itr_t {
     pub bitfields: u32,
     pub tid: c_int,
@@ -4793,6 +4812,9 @@ pub unsafe fn hts_hopen(fp: *mut hFILE, fn_: *const c_char, mode: *const c_char)
             if (*hts_fp).fp.bgzf.is_null() {
                 goto_hts_hopen_error(hts_fp);
                 return std::ptr::null_mut();
+            }
+            if ((*hts_fp).bitfields & (1 << 1)) == 0 && (*hts_fp).format.format == HTS_FORMAT_BAM {
+                (*(*hts_fp).fp.bgzf).bitfields |= BGZF_HTS_OPEN_FAST_BAM_READ;
             }
             (*hts_fp).bitfields |= 1 | (1 << 4);
         }
@@ -7922,7 +7944,12 @@ pub unsafe fn hts_c_4756_hts_idx_check_local(
         return 0;
     }
     let bytes = CStr::from_ptr(fn_).to_bytes();
-    let fn_tmp = if bytes.starts_with(b"file://localhost/") {
+    let fn_tmp = if hisremote(fn_) != 0 {
+        match bytes.iter().rposition(|&b| b == b'/') {
+            Some(pos) => &bytes[pos + 1..],
+            None => return 0,
+        }
+    } else if bytes.starts_with(b"file://localhost/") {
         &bytes[16..]
     } else if bytes.starts_with(b"file:///") {
         &bytes[7..]
@@ -8427,7 +8454,173 @@ pub unsafe fn hts_c_3602_hts_itr_multi_bam(idx: *const hts_idx_t, iter: *mut hts
 }
 
 pub unsafe fn hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut hts_itr_t) -> c_int {
-    hts_sys::hts_itr_multi_cram(idx.cast(), iter.cast())
+    hts_c_3748_hts_itr_multi_cram(idx, iter)
+}
+
+pub unsafe fn hts_c_3748_hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut hts_itr_t) -> c_int {
+    let cidx = idx.cast::<hts_cram_idx_t>();
+    if cidx.is_null() || iter.is_null() || ((*iter).bitfields & (1 << 4)) == 0 {
+        return -1;
+    }
+
+    (*iter).bitfields |= 1 << 2;
+    (*iter).bitfields &= !1;
+    (*iter).off = std::ptr::null_mut();
+    (*iter).n_off = 0;
+    (*iter).curr_off = 0;
+    (*iter).i = -1;
+
+    let mut off: *mut hts_pair64_max_t = std::ptr::null_mut();
+    let mut n_off = 0usize;
+
+    for i in 0..(*iter).n_reg {
+        let curr_reg = (*iter).reg_list.add(i as usize);
+        let tid = (*curr_reg).tid;
+
+        if tid >= 0 {
+            let count = (*curr_reg).count as usize;
+            if count == 0 {
+                continue;
+            }
+            let new_len = match n_off.checked_add(count) {
+                Some(len) => len,
+                None => return hts_itr_multi_cram_err(off),
+            };
+            let bytes = match new_len.checked_mul(std::mem::size_of::<hts_pair64_max_t>()) {
+                Some(bytes) => bytes,
+                None => return hts_itr_multi_cram_err(off),
+            };
+            let tmp = c_compat::realloc(off.cast(), bytes as u64).cast::<hts_pair64_max_t>();
+            if tmp.is_null() {
+                return hts_itr_multi_cram_err(off);
+            }
+            off = tmp;
+
+            for j in 0..(*curr_reg).count {
+                let curr_intv = (*curr_reg).intervals.add(j as usize);
+                if (*curr_intv).end < (*curr_intv).beg {
+                    continue;
+                }
+
+                let beg = (*curr_intv).beg;
+                let end = (*curr_intv).end;
+                let mut e = cram_cram_index_c_404_cram_index_query(
+                    (*cidx).cram,
+                    tid,
+                    beg + 1,
+                    std::ptr::null_mut(),
+                );
+                if e.is_null() {
+                    continue;
+                }
+
+                (*off.add(n_off)).u = (*e).offset as u64;
+                (*off.add(n_off)).max = ((tid as u64) << 32) | j as u64;
+
+                e = if end >= HTS_POS_MAX {
+                    cram_cram_index_c_503_cram_index_last((*cidx).cram, tid, std::ptr::null_mut())
+                } else {
+                    cram_cram_index_c_531_cram_index_query_last((*cidx).cram, tid, end + 1)
+                };
+
+                if !e.is_null() {
+                    (*off.add(n_off)).v = if !(*e).e_next.is_null() {
+                        (*(*e).e_next).offset as u64
+                    } else {
+                        ((*e).offset + (*e).slice as i64 + (*e).len as i64) as u64
+                    };
+                    n_off += 1;
+                } else {
+                    hts_log_cstr(
+                        HTS_LOG_WARNING,
+                        c"hts_itr_multi_cram".as_ptr(),
+                        c"Could not set offset end for region; skipping".as_ptr(),
+                    );
+                }
+            }
+        } else {
+            match tid {
+                HTS_IDX_NOCOOR => {
+                    let e = cram_cram_index_c_404_cram_index_query(
+                        (*cidx).cram,
+                        tid,
+                        1,
+                        std::ptr::null_mut(),
+                    );
+                    if !e.is_null() {
+                        (*iter).bitfields |= 1 << 3;
+                        (*iter).nocoor_off = (*e).offset as u64;
+                    } else {
+                        hts_log_cstr(
+                            HTS_LOG_WARNING,
+                            c"hts_itr_multi_cram".as_ptr(),
+                            c"No index entry for NOCOOR region".as_ptr(),
+                        );
+                    }
+                }
+                HTS_IDX_START => {
+                    let e = cram_cram_index_c_404_cram_index_query(
+                        (*cidx).cram,
+                        tid,
+                        1,
+                        std::ptr::null_mut(),
+                    );
+                    if !e.is_null() {
+                        (*iter).bitfields |= 1;
+                        let tmp = c_compat::realloc(
+                            off.cast(),
+                            std::mem::size_of::<hts_pair64_max_t>() as u64,
+                        )
+                        .cast::<hts_pair64_max_t>();
+                        if tmp.is_null() {
+                            return hts_itr_multi_cram_err(off);
+                        }
+                        off = tmp;
+                        (*off).u = (*e).offset as u64;
+                        (*off).v = 0;
+                        (*off).max = 0;
+                        n_off = 1;
+                    } else {
+                        hts_log_cstr(
+                            HTS_LOG_WARNING,
+                            c"hts_itr_multi_cram".as_ptr(),
+                            c"No index entries".as_ptr(),
+                        );
+                    }
+                }
+                HTS_IDX_REST => {}
+                HTS_IDX_NONE => {
+                    itr_set_finished(iter);
+                }
+                _ => {
+                    hts_log_cstr(
+                        HTS_LOG_ERROR,
+                        c"hts_itr_multi_cram".as_ptr(),
+                        c"Query with this tid is not implemented for CRAM files".as_ptr(),
+                    );
+                }
+            }
+        }
+    }
+
+    if n_off != 0 {
+        let off_slice = std::slice::from_raw_parts_mut(off, n_off);
+        off_slice.sort_by(|a, b| a.u.cmp(&b.u).then_with(|| a.max.cmp(&b.max)));
+        (*iter).n_off = n_off as c_int;
+        (*iter).off = off;
+    } else {
+        c_compat::free(off.cast());
+    }
+
+    if n_off == 0 && !itr_nocoor(iter) {
+        itr_set_finished(iter);
+    }
+    0
+}
+
+unsafe fn hts_itr_multi_cram_err(off: *mut hts_pair64_max_t) -> c_int {
+    c_compat::free(off.cast());
+    -1
 }
 
 pub unsafe fn hts_itr_querys(
@@ -9898,6 +10091,8 @@ mod tests {
         assert_eq!(align_of::<hts_idx_z_t>(), 8);
         assert_eq!(size_of::<hts_idx_t>(), 160);
         assert_eq!(align_of::<hts_idx_t>(), 8);
+        assert_eq!(size_of::<hts_cram_idx_t>(), 16);
+        assert_eq!(align_of::<hts_cram_idx_t>(), 8);
         assert_eq!(size_of::<hts_itr_bins_t>(), 16);
         assert_eq!(align_of::<hts_itr_bins_t>(), 8);
         assert_eq!(size_of::<hts_itr_t>(), 144);
@@ -9927,6 +10122,8 @@ mod tests {
         assert_eq!(std::mem::offset_of!(hts_idx_t, tbi_n), 64);
         assert_eq!(std::mem::offset_of!(hts_idx_t, z), 72);
         assert_eq!(std::mem::offset_of!(hts_idx_t, otf_fp), 152);
+        assert_eq!(std::mem::offset_of!(hts_cram_idx_t, fmt), 0);
+        assert_eq!(std::mem::offset_of!(hts_cram_idx_t, cram), 8);
 
         assert_eq!(std::mem::offset_of!(hts_itr_t, tid), 4);
         assert_eq!(std::mem::offset_of!(hts_itr_t, n_off), 8);
@@ -9958,6 +10155,59 @@ mod tests {
         assert_eq!(std::mem::offset_of!(hts_reglist_t, count), 20);
         assert_eq!(std::mem::offset_of!(hts_reglist_t, min_beg), 24);
         assert_eq!(std::mem::offset_of!(hts_reglist_t, max_end), 32);
+    }
+
+    #[test]
+    fn hts_itr_multi_cram_rejects_invalid_inputs() {
+        unsafe {
+            let mut iter: hts_itr_t = std::mem::zeroed();
+            let mut cidx = hts_cram_idx_t {
+                fmt: HTS_FMT_CRAI,
+                cram: std::ptr::null_mut(),
+            };
+            let cidx_ptr = &mut cidx as *mut hts_cram_idx_t as *const hts_idx_t;
+
+            assert_eq!(hts_itr_multi_cram(std::ptr::null(), &mut iter), -1);
+            assert_eq!(hts_itr_multi_cram(cidx_ptr, std::ptr::null_mut()), -1);
+            assert_eq!(hts_itr_multi_cram(cidx_ptr, &mut iter), -1);
+        }
+    }
+
+    #[test]
+    fn hts_itr_multi_cram_marks_none_region_finished_without_cram_index_lookup() {
+        unsafe {
+            let mut reg = hts_reglist_t {
+                reg: std::ptr::null(),
+                intervals: std::ptr::null_mut(),
+                tid: HTS_IDX_NONE,
+                count: 0,
+                min_beg: 0,
+                max_end: 0,
+            };
+            let mut iter: hts_itr_t = std::mem::zeroed();
+            iter.bitfields = (1 << 4) | 1;
+            iter.n_reg = 1;
+            iter.reg_list = &mut reg;
+            iter.off = 1usize as *mut hts_pair64_max_t;
+            iter.n_off = 7;
+            iter.curr_off = 123;
+            iter.i = 9;
+
+            let mut cidx = hts_cram_idx_t {
+                fmt: HTS_FMT_CRAI,
+                cram: std::ptr::null_mut(),
+            };
+            let cidx_ptr = &mut cidx as *mut hts_cram_idx_t as *const hts_idx_t;
+
+            assert_eq!(hts_itr_multi_cram(cidx_ptr, &mut iter), 0);
+            assert_ne!(iter.bitfields & (1 << 2), 0);
+            assert_eq!(iter.bitfields & 1, 0);
+            assert_ne!(iter.bitfields & (1 << 1), 0);
+            assert_eq!(iter.n_off, 0);
+            assert_eq!(iter.off, std::ptr::null_mut());
+            assert_eq!(iter.curr_off, 0);
+            assert_eq!(iter.i, -1);
+        }
     }
 
     #[test]

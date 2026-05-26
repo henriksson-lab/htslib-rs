@@ -646,12 +646,21 @@ pub unsafe fn regidx_c_335_reglist_build_index_(
 pub unsafe fn regidx_c_401_regidx_overlap(
     idx: *mut regidx_t,
     chr: *const c_char,
-    beg: hts_pos_t,
-    end: hts_pos_t,
+    mut beg: hts_pos_t,
+    mut end: hts_pos_t,
     itr: *mut regitr_t,
 ) -> c_int {
     if !itr.is_null() {
         (*itr).seq = std::ptr::null_mut();
+    }
+    if beg < 0 {
+        beg = 0;
+    }
+    if end > MAX_COOR_0 {
+        end = MAX_COOR_0;
+    }
+    if end < 0 {
+        end = 0;
     }
 
     let mut iseq = 0;
@@ -2003,6 +2012,18 @@ mod tests {
                 1
             );
             assert_eq!(((*itr).beg, (*itr).end), (0, MAX_COOR_0));
+            assert_eq!(
+                regidx_c_401_regidx_overlap(
+                    idx,
+                    query_chr.as_ptr(),
+                    0,
+                    crate::htslib_rs::hts::HTS_POS_MAX,
+                    itr
+                ),
+                1
+            );
+            assert_eq!(regidx_c_612_regitr_overlap(itr), 1);
+            assert_eq!(regidx_c_612_regitr_overlap(itr), 0);
 
             regidx_c_606_regitr_destroy(itr);
             regidx_c_311_regidx_destroy(idx);

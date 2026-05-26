@@ -33,6 +33,15 @@ But:
 
 This blurb might be out of date. Go to [this page](https://github.com/henriksson-lab/rustification) for the latest information and further information about how we approach translation
 
+## Real-data performance comparisons
+
+`tools/compare-real-data-performance.sh` compares translated release binaries with the checked-out original htslib binaries on larger local real-data workloads. It writes timing CSVs and per-run output hashes under `/tmp/htslib-rs-real-data-perf` by default, avoiding large outputs in the repository.
+
+The default workloads cover ordinary gzip FASTQ viewing, BAM viewing, BAM record counting, bgzip decompression of a large BGZF-compressed reference, and bgzip compression of a large FASTA. Override `FASTQ_GZ`, `BAM`, `BAM_REGION`, `REF_GZ`, `FASTA`, `OUT_DIR`, or `RUNS` to use different data:
+
+```bash
+RUNS=3 tools/compare-real-data-performance.sh
+```
 
 ## License
 

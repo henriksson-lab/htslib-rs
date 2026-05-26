@@ -11,18 +11,10 @@ use std::{ffi::c_char, os::raw::c_int, ptr};
 
 unsafe extern "C" {
     static mut optarg: *mut c_char;
+    static mut optind: c_int;
 }
 
 static mut VERBOSE: c_int = 0;
-
-// original: debug (htslib/test/test-regidx.c:45)
-pub unsafe fn test_test_regidx_c_45_debug() {}
-
-// original: info (htslib/test/test-regidx.c:55)
-pub unsafe fn test_test_regidx_c_55_info() {}
-
-// original: HTS_FORMAT (htslib/test/test-regidx.c:64)
-pub unsafe fn test_test_regidx_c_64_HTS_FORMAT() {}
 
 // original: custom_parse (htslib/test/test-regidx.c:75)
 pub unsafe extern "C" fn test_test_regidx_c_75_custom_parse(
@@ -1154,4 +1146,78 @@ pub unsafe fn test_test_regidx_c_426_main(argc: c_int, argv: *mut *mut c_char) -
     }
 
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::{CStr, CString};
+    use std::sync::Mutex;
+
+    static GETOPT_LOCK: Mutex<()> = Mutex::new(());
+
+    unsafe fn run_main(args: &[CString]) -> c_int {
+        let _guard = GETOPT_LOCK.lock().unwrap();
+        optarg = ptr::null_mut();
+        optind = 1;
+        VERBOSE = 0;
+        let mut argv = args
+            .iter()
+            .map(|arg| arg.as_ptr() as *mut c_char)
+            .collect::<Vec<_>>();
+        test_test_regidx_c_426_main(argv.len() as c_int, argv.as_mut_ptr())
+    }
+
+    #[test]
+    fn original_test_regidx_main_runs_full_harness_with_fixed_seed() {
+        let args = vec![c"test-regidx".into(), c"-s".into(), c"17".into()];
+
+        unsafe {
+            assert_eq!(run_main(&args), 0);
+        }
+    }
+
+    #[test]
+    fn original_test_regidx_create_line_helpers_match_expected_formats() {
+        unsafe {
+            let mut line = [0 as c_char; 64];
+            let chr = CString::new("chrA").unwrap();
+
+            test_test_regidx_c_311_create_line_tab(
+                line.as_mut_ptr(),
+                line.len(),
+                chr.as_ptr() as *mut c_char,
+                11,
+                13,
+            );
+            assert_eq!(
+                CStr::from_ptr(line.as_ptr()).to_str().unwrap(),
+                "chrA\t11\t13\n"
+            );
+
+            test_test_regidx_c_315_create_line_reg(
+                line.as_mut_ptr(),
+                line.len(),
+                chr.as_ptr() as *mut c_char,
+                11,
+                13,
+            );
+            assert_eq!(
+                CStr::from_ptr(line.as_ptr()).to_str().unwrap(),
+                "chrA:11-13\n"
+            );
+
+            test_test_regidx_c_307_create_line_bed(
+                line.as_mut_ptr(),
+                line.len(),
+                chr.as_ptr() as *mut c_char,
+                11,
+                13,
+            );
+            assert_eq!(
+                CStr::from_ptr(line.as_ptr()).to_str().unwrap(),
+                "chrA\t10\t13\n"
+            );
+        }
+    }
 }

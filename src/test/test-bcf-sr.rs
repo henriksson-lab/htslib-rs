@@ -179,8 +179,8 @@ pub unsafe fn test_test_bcf_sr_c_107_write_vcf_bcf_format(
             if rec.is_null() {
                 error!(c"bcf_sr_get_line() unexpectedly returned NULL\n");
             }
-            if crate::htslib_rs::vcf::vcf_write(vcf_out, hdr, rec) < 0 {
-                error!(c"vcf_write() failed\n");
+            if crate::htslib_rs::vcf::bcf_write(vcf_out, hdr, rec) < 0 {
+                error!(c"bcf_write() failed\n");
             }
             i += 1;
         }
@@ -517,4 +517,311 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
     }
 
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::{CStr, CString};
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    static GETOPT_LOCK: Mutex<()> = Mutex::new(());
+
+    fn fixture(path: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
+    }
+
+    fn c_path(path: &Path) -> CString {
+        CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    }
+
+    fn temp_path(label: &str, ext: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "htslib-rs-test-bcf-sr-main-{label}-{}-{}.{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("unnamed"),
+            ext
+        ))
+    }
+
+    unsafe fn run_main(args: &mut [CString]) -> c_int {
+        let _guard = GETOPT_LOCK.lock().unwrap();
+        let pid = libc::fork();
+        assert!(pid >= 0, "fork failed");
+
+        if pid == 0 {
+            optarg = std::ptr::null_mut();
+            optind = 1;
+            let mut argv = args
+                .iter_mut()
+                .map(|arg| arg.as_ptr().cast_mut())
+                .collect::<Vec<_>>();
+            let ret = test_test_bcf_sr_c_126_main(argv.len() as c_int, argv.as_mut_ptr());
+            libc::fflush(std::ptr::null_mut());
+            libc::_exit(ret);
+        }
+
+        let mut status = 0;
+        assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
+        assert!(libc::WIFEXITED(status), "child did not exit normally");
+        libc::WEXITSTATUS(status)
+    }
+
+    unsafe fn read_bcf_sites(path: &Path) -> Vec<String> {
+        let path = c_path(path);
+        let fp = crate::htslib_rs::hts::hts_open(path.as_ptr(), c"r".as_ptr());
+        assert!(!fp.is_null());
+        let hdr = crate::htslib_rs::vcf::bcf_hdr_read(fp);
+        assert!(!hdr.is_null());
+        let rec = crate::htslib_rs::vcf::bcf_init();
+        assert!(!rec.is_null());
+
+        let mut sites = Vec::new();
+        while crate::htslib_rs::vcf::bcf_read(fp, hdr, rec) >= 0 {
+            assert_eq!(
+                crate::htslib_rs::vcf::bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int),
+                0
+            );
+            let chrom = CStr::from_ptr(crate::htslib_rs::vcf::bcf_seqname(hdr, rec))
+                .to_str()
+                .unwrap();
+            let ref_allele = CStr::from_ptr(*(*rec).d.allele).to_str().unwrap();
+            let alt_allele = if (*rec).n_allele() > 1 {
+                CStr::from_ptr(*(*rec).d.allele.add(1)).to_str().unwrap()
+            } else {
+                "."
+            };
+            sites.push(format!(
+                "{chrom}\t{}\t{ref_allele}\t{alt_allele}",
+                (*rec).pos + 1
+            ));
+        }
+
+        crate::htslib_rs::vcf::bcf_destroy(rec);
+        crate::htslib_rs::vcf::bcf_hdr_destroy(hdr);
+        assert_eq!(crate::htslib_rs::hts::hts_close(fp), 0);
+        sites
+    }
+
+    unsafe fn make_indexed_bcf_from_vcf(vcf_path: &Path, label: &str) -> PathBuf {
+        let bcf_path = temp_path(label, "bcf");
+        let csi_path = bcf_path.with_extension("bcf.csi");
+        let _ = std::fs::remove_file(&bcf_path);
+        let _ = std::fs::remove_file(&csi_path);
+
+        let c_vcf_path = c_path(vcf_path);
+        let c_bcf_path = c_path(&bcf_path);
+        let c_csi_path = c_path(&csi_path);
+
+        let in_fp = crate::htslib_rs::hts::hts_open(c_vcf_path.as_ptr(), c"r".as_ptr());
+        assert!(!in_fp.is_null());
+        let hdr = crate::htslib_rs::vcf::bcf_hdr_read(in_fp);
+        assert!(!hdr.is_null());
+
+        let out_fp = crate::htslib_rs::hts::hts_open(c_bcf_path.as_ptr(), c"wb".as_ptr());
+        assert!(!out_fp.is_null());
+        assert_eq!(crate::htslib_rs::vcf::bcf_hdr_write(out_fp, hdr), 0);
+
+        let rec = crate::htslib_rs::vcf::bcf_init();
+        assert!(!rec.is_null());
+        while crate::htslib_rs::vcf::bcf_read(in_fp, hdr, rec) >= 0 {
+            assert_eq!(crate::htslib_rs::vcf::bcf_write(out_fp, hdr, rec), 0);
+        }
+
+        crate::htslib_rs::vcf::bcf_destroy(rec);
+        assert_eq!(crate::htslib_rs::hts::hts_close(out_fp), 0);
+        crate::htslib_rs::vcf::bcf_hdr_destroy(hdr);
+        assert_eq!(crate::htslib_rs::hts::hts_close(in_fp), 0);
+        assert_eq!(
+            crate::htslib_rs::vcf::bcf_index_build2(c_bcf_path.as_ptr(), c_csi_path.as_ptr(), 14),
+            0
+        );
+
+        bcf_path
+    }
+
+    #[test]
+    fn original_test_bcf_sr_main_args_summary_matches_no_index_merge_fixture() {
+        let out = temp_path("args-summary", "out");
+        let _ = std::fs::remove_file(&out);
+
+        let mut args = vec![
+            CString::new("test-bcf-sr").unwrap(),
+            CString::new("--args").unwrap(),
+            CString::new("--no-index").unwrap(),
+            CString::new("-O").unwrap(),
+            CString::new("summary").unwrap(),
+            CString::new("-p").unwrap(),
+            CString::new("any").unwrap(),
+            CString::new("-o").unwrap(),
+            c_path(&out),
+            c_path(&fixture("htslib/test/bcf-sr/merge.noidx.a.vcf")),
+            c_path(&fixture("htslib/test/bcf-sr/merge.noidx.b.vcf")),
+            c_path(&fixture("htslib/test/bcf-sr/merge.noidx.c.vcf")),
+        ];
+
+        unsafe {
+            assert_eq!(run_main(&mut args), 0);
+        }
+        let actual = std::fs::read_to_string(&out).unwrap();
+        let expected =
+            std::fs::read_to_string(fixture("htslib/test/bcf-sr/merge.noidx.abc.expected.out"))
+                .unwrap();
+        assert_eq!(actual, expected);
+        let _ = std::fs::remove_file(out);
+    }
+
+    #[test]
+    fn original_test_bcf_sr_main_fofn_vcf_output_matches_weird_chromosome_fixture() {
+        let out = temp_path("fofn-vcf", "vcf");
+        let list = temp_path("fofn-vcf", "list");
+        let _ = std::fs::remove_file(&out);
+        let _ = std::fs::remove_file(&list);
+        std::fs::write(
+            &list,
+            format!(
+                "{}\n",
+                fixture("htslib/test/bcf-sr/weird-chr-names.vcf").display()
+            ),
+        )
+        .unwrap();
+
+        let mut args = vec![
+            CString::new("test-bcf-sr").unwrap(),
+            CString::new("--no-index").unwrap(),
+            CString::new("-O").unwrap(),
+            CString::new("vcf").unwrap(),
+            CString::new("-o").unwrap(),
+            c_path(&out),
+            c_path(&list),
+        ];
+
+        unsafe {
+            assert_eq!(run_main(&mut args), 0);
+        }
+        let actual = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(
+            actual,
+            concat!(
+                "##fileformat=VCFv4.3\n",
+                "##FILTER=<ID=PASS,Description=\"All filters passed\">\n",
+                "##reference=ref.fa\n",
+                "##contig=<ID=1>\n",
+                "##contig=<ID=1:1>\n",
+                "##contig=<ID=1:1-1>\n",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+                "1\t1\t.\tC\tT\t.\t.\t.\n",
+                "1\t2\t.\tC\tT\t.\t.\t.\n",
+                "1:1\t1\t.\tC\tT\t.\t.\t.\n",
+                "1:1\t2\t.\tC\tT\t.\t.\t.\n",
+                "1:1-1\t1\t.\tC\tT\t.\t.\t.\n",
+                "1:1-1\t2\t.\tC\tT\t.\t.\t.\n",
+            )
+        );
+        let _ = std::fs::remove_file(out);
+        let _ = std::fs::remove_file(list);
+    }
+
+    #[test]
+    fn original_test_bcf_sr_main_indexed_regions_and_targets_match_weird_chromosome_outputs() {
+        let bcf = unsafe {
+            make_indexed_bcf_from_vcf(
+                &fixture("htslib/test/bcf-sr/weird-chr-names.vcf"),
+                "indexed-weird",
+            )
+        };
+
+        let cases = [
+            (
+                "-r",
+                "1:1-2",
+                "htslib/test/bcf-sr/weird-chr-names.1.out",
+                "region-plain-range",
+            ),
+            (
+                "-r",
+                "{1:1}:1-1",
+                "htslib/test/bcf-sr/weird-chr-names.4.out",
+                "region-braced-range",
+            ),
+            (
+                "-t",
+                "{1:1}:1,{1:1}:2",
+                "htslib/test/bcf-sr/weird-chr-names.3.out",
+                "target-braced-list",
+            ),
+            (
+                "-t",
+                "{1:1-1}:1-1",
+                "htslib/test/bcf-sr/weird-chr-names.6.out",
+                "target-braced-range",
+            ),
+        ];
+
+        for (flag, range, expected_path, label) in cases {
+            let out = temp_path(label, "vcf");
+            let _ = std::fs::remove_file(&out);
+            let mut args = vec![
+                CString::new("test-bcf-sr").unwrap(),
+                CString::new("--args").unwrap(),
+                CString::new("-O").unwrap(),
+                CString::new("vcf").unwrap(),
+                CString::new("-o").unwrap(),
+                c_path(&out),
+                CString::new(flag).unwrap(),
+                CString::new(range).unwrap(),
+                c_path(&bcf),
+            ];
+
+            unsafe {
+                assert_eq!(run_main(&mut args), 0, "{label}");
+            }
+            let actual = std::fs::read_to_string(&out).unwrap();
+            let expected = std::fs::read_to_string(fixture(expected_path)).unwrap();
+            assert_eq!(actual, expected, "{label}");
+            let _ = std::fs::remove_file(out);
+        }
+
+        let _ = std::fs::remove_file(&bcf);
+        let _ = std::fs::remove_file(bcf.with_extension("bcf.csi"));
+    }
+
+    #[test]
+    fn original_test_bcf_sr_main_args_bcf_output_round_trips_weird_chromosome_fixture() {
+        let out = temp_path("args-bcf", "bcf");
+        let _ = std::fs::remove_file(&out);
+
+        let mut args = vec![
+            CString::new("test-bcf-sr").unwrap(),
+            CString::new("--args").unwrap(),
+            CString::new("--no-index").unwrap(),
+            CString::new("-O").unwrap(),
+            CString::new("bcf").unwrap(),
+            CString::new("-o").unwrap(),
+            c_path(&out),
+            c_path(&fixture("htslib/test/bcf-sr/weird-chr-names.vcf")),
+        ];
+
+        unsafe {
+            assert_eq!(run_main(&mut args), 0);
+        }
+
+        let bytes = std::fs::read(&out).unwrap();
+        assert!(bytes.starts_with(&[0x1f, 0x8b]));
+        unsafe {
+            assert_eq!(
+                read_bcf_sites(&out),
+                vec![
+                    "1\t1\tC\tT",
+                    "1\t2\tC\tT",
+                    "1:1\t1\tC\tT",
+                    "1:1\t2\tC\tT",
+                    "1:1-1\t1\tC\tT",
+                    "1:1-1\t2\tC\tT",
+                ]
+            );
+        }
+        let _ = std::fs::remove_file(out);
+    }
 }

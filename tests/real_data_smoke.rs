@@ -5,13 +5,15 @@ use htslib_rs::{
     bgzf::{bgzf_check_EOF, bgzf_close, bgzf_is_bgzf, bgzf_open, bgzf_read},
     fai_destroy, fai_fetch, fai_fetchqual, fai_load, fai_load3_format, faidx_has_seq, faidx_iseq,
     faidx_nseq, faidx_seq_len, hclose, hopen, htsFormat, hts_check_EOF, hts_close,
-    hts_detect_format2, hts_get_bgzfp, hts_idx_destroy, hts_itr_destroy, hts_itr_next,
-    hts_itr_query, hts_open, hts_pos_t, hts_set_fai_filename, sam_hdr_destroy, sam_hdr_name2tid,
-    sam_hdr_nref, sam_hdr_read, sam_hdr_t, sam_hdr_tid2len, sam_hdr_tid2name, sam_index_load,
-    sam_itr_next, sam_itr_queryi, sam_itr_querys, sam_parse_region, sam_read1, vcf_hdr_read, BGZF,
-    FAI_FASTA, FAI_FASTQ, HTS_FORMAT_BAI, HTS_FORMAT_BAM, HTS_FORMAT_BCF, HTS_FORMAT_CRAI_EXACT,
-    HTS_FORMAT_CRAM, HTS_FORMAT_CSI, HTS_FORMAT_EMPTY_FORMAT, HTS_FORMAT_GZI, HTS_FORMAT_SAM,
-    HTS_FORMAT_TBI, HTS_FORMAT_VCF, HTS_PARSE_LIST, HTS_PARSE_ONE_COORD, HTS_POS_MAX,
+    hts_detect_format2, hts_format_description, hts_format_file_extension, hts_get_bgzfp,
+    hts_get_format, hts_idx_destroy, hts_itr_destroy, hts_itr_next, hts_itr_query, hts_open,
+    hts_pos_t, hts_set_fai_filename, sam_hdr_destroy, sam_hdr_name2tid, sam_hdr_nref, sam_hdr_read,
+    sam_hdr_t, sam_hdr_tid2len, sam_hdr_tid2name, sam_index_load, sam_itr_next, sam_itr_queryi,
+    sam_itr_querys, sam_parse_region, sam_read1, vcf_hdr_read, BGZF, FAI_FASTA, FAI_FASTQ,
+    HTS_FORMAT_BAI, HTS_FORMAT_BAM, HTS_FORMAT_BCF, HTS_FORMAT_CRAI_EXACT, HTS_FORMAT_CRAM,
+    HTS_FORMAT_CSI, HTS_FORMAT_EMPTY_FORMAT, HTS_FORMAT_GZI, HTS_FORMAT_INDEX_FILE, HTS_FORMAT_SAM,
+    HTS_FORMAT_SEQUENCE_DATA, HTS_FORMAT_TBI, HTS_FORMAT_VARIANT_DATA, HTS_FORMAT_VCF,
+    HTS_PARSE_LIST, HTS_PARSE_ONE_COORD, HTS_POS_MAX,
 };
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_int, c_void};
@@ -189,6 +191,82 @@ fn detects_real_compressed_and_index_fixtures() {
 
     let empty = detect_fixture_format("htslib/test/emptyfile");
     assert_eq!(empty.format, HTS_FORMAT_EMPTY_FORMAT);
+}
+
+#[test]
+fn real_fixture_format_accessors_report_original_metadata() {
+    unsafe {
+        for (path, expected_category, expected_format, expected_ext, expected_description_part) in [
+            (
+                "htslib/test/range.bam",
+                HTS_FORMAT_SEQUENCE_DATA,
+                HTS_FORMAT_BAM,
+                c"bam",
+                "BAM",
+            ),
+            (
+                "htslib/test/range.cram",
+                HTS_FORMAT_SEQUENCE_DATA,
+                HTS_FORMAT_CRAM,
+                c"cram",
+                "CRAM",
+            ),
+            (
+                "htslib/test/tabix/vcf_file.bcf",
+                HTS_FORMAT_VARIANT_DATA,
+                HTS_FORMAT_BCF,
+                c"bcf",
+                "BCF",
+            ),
+            (
+                "htslib/test/index.vcf.gz.tbi",
+                HTS_FORMAT_INDEX_FILE,
+                HTS_FORMAT_TBI,
+                c"tbi",
+                "Tabix",
+            ),
+        ] {
+            let fmt = detect_fixture_format(path);
+            assert_eq!(fmt.category, expected_category, "{path}");
+            assert_eq!(fmt.format, expected_format, "{path}");
+            assert_eq!(
+                CStr::from_ptr(hts_format_file_extension(&fmt)).to_bytes(),
+                expected_ext.to_bytes(),
+                "{path}"
+            );
+
+            let description = hts_format_description(&fmt);
+            assert!(!description.is_null(), "{path}");
+            let description_text = CStr::from_ptr(description).to_string_lossy().into_owned();
+            libc::free(description.cast());
+            assert!(
+                description_text.contains(expected_description_part),
+                "{path}: {description_text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn real_opened_files_expose_detected_format_state() {
+    unsafe {
+        for (path, expected_format) in [
+            ("htslib/test/index.sam", HTS_FORMAT_SAM),
+            ("htslib/test/range.bam", HTS_FORMAT_BAM),
+            ("htslib/test/range.cram", HTS_FORMAT_CRAM),
+            ("htslib/test/tabix/vcf_file.vcf", HTS_FORMAT_VCF),
+            ("htslib/test/tabix/vcf_file.bcf", HTS_FORMAT_BCF),
+        ] {
+            let path_c = c_fixture(path);
+            let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null(), "failed to open {path}");
+
+            let fmt = hts_get_format(fp);
+            assert!(!fmt.is_null(), "{path}");
+            assert_eq!((*fmt).format, expected_format, "{path}");
+            assert_eq!(hts_close(fp), 0);
+        }
+    }
 }
 
 #[test]

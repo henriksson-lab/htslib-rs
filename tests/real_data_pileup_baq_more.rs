@@ -1,9 +1,11 @@
+use htslib_rs::realn::realn_c_106_sam_prob_realn;
 use htslib_rs::{
     bam1_t, bam_aux2Z, bam_aux_get, bam_destroy1, bam_get_qname, bam_get_qual, bam_init1,
     bam_pileup1_is_del, bam_pileup1_is_head, bam_pileup1_is_refskip, bam_pileup1_is_tail,
     bam_pileup1_t, bam_plp_auto, bam_plp_destroy, bam_plp_init, bam_plp_init_overlaps, fai_destroy,
-    fai_load3_format, faidx_fetch_seq, htsFile, hts_close, hts_open, sam_hdr_destroy, sam_hdr_read,
-    sam_hdr_t, sam_hdr_tid2len, sam_hdr_tid2name, sam_prob_realn, sam_read1, FAI_FASTA,
+    fai_load3_format, faidx_fetch_seq, htsFile, hts_close, hts_open, hts_pos_t, sam_hdr_destroy,
+    sam_hdr_read, sam_hdr_t, sam_hdr_tid2len, sam_hdr_tid2name, sam_prob_realn, sam_read1,
+    FAI_FASTA,
 };
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_int, c_void};
@@ -189,6 +191,28 @@ unsafe fn assert_realigned_records_match_expected(
     expected_path: &str,
     flags: c_int,
 ) {
+    assert_realigned_records_match_expected_with(
+        fasta_path,
+        fai_path,
+        target_name,
+        expected_ref_len,
+        input_path,
+        expected_path,
+        flags,
+        sam_prob_realn,
+    );
+}
+
+unsafe fn assert_realigned_records_match_expected_with(
+    fasta_path: &str,
+    fai_path: &str,
+    target_name: &CStr,
+    expected_ref_len: c_int,
+    input_path: &str,
+    expected_path: &str,
+    flags: c_int,
+    realign: unsafe fn(*mut bam1_t, *const i8, hts_pos_t, c_int) -> c_int,
+) {
     let fasta = c_fixture(fasta_path);
     let fai_path = c_fixture(fai_path);
     let fai = fai_load3_format(
@@ -214,7 +238,7 @@ unsafe fn assert_realigned_records_match_expected(
 
     for (observed, expected) in input_records.iter().zip(expected_records.iter()) {
         if (**observed).core.tid >= 0 {
-            let ret = sam_prob_realn(*observed, ref_seq, ref_len.into(), flags);
+            let ret = realign(*observed, ref_seq, ref_len.into(), flags);
             assert!(ret > -4, "sam_prob_realn returned {ret}");
         }
 
@@ -489,6 +513,35 @@ fn mpileup_insertion_deletion_fixture_preserves_indel_lengths_and_positions() {
 }
 
 #[test]
+fn mpileup_refskip_fixture_preserves_skip_columns_and_terminal_positions() {
+    unsafe {
+        let columns = collect_pileup("htslib/test/mpileup/mp_N.sam", false);
+        assert_eq!(columns.len(), 11);
+        assert!(columns.iter().all(|column| column.target == "z"));
+        assert!(columns.iter().all(|column| column.depth == 3));
+
+        assert_eq!(
+            columns.iter().map(|column| column.pos1).collect::<Vec<_>>(),
+            (2..=12).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            columns
+                .iter()
+                .map(|column| column.refskips)
+                .collect::<Vec<_>>(),
+            vec![1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 1]
+        );
+        assert_eq!(
+            columns.iter().map(|column| column.dels).collect::<Vec<_>>(),
+            vec![1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 1]
+        );
+        assert_eq!(columns[0].heads, 3);
+        assert_eq!(columns[10].tails, 3);
+        assert_eq!(columns[10].qpos, vec![10, 7, 7]);
+    }
+}
+
+#[test]
 fn mpileup_overlap_fixture_reports_overlap_adjusted_qualities() {
     unsafe {
         let mut reader = SamReader::open("htslib/test/mpileup/mp_overlap1.sam");
@@ -543,6 +596,62 @@ fn mpileup_overlap_fixture_reports_overlap_adjusted_qualities() {
         assert_eq!(qualities, vec![0, 90]);
 
         bam_plp_destroy(iter);
+    }
+}
+
+#[test]
+fn mpileup_small_bam_skips_all_insert_softclip_record_but_keeps_neighbor_columns() {
+    unsafe {
+        let (_hdr, records) = read_all_records("htslib/test/mpileup/small.bam");
+        assert_eq!(records.len(), 8);
+        assert!(records.iter().any(|rec| {
+            CStr::from_ptr(bam_get_qname(*rec)).to_bytes() == b"HS23_15644:7:2210:15769:16789#30"
+                && (**rec).core.pos == 647
+                && (**rec).core.n_cigar == 3
+        }));
+
+        let columns = collect_pileup("htslib/test/mpileup/small.bam", true);
+        assert!(columns.iter().all(|column| {
+            column.pos1 != 648
+                || !column
+                    .qnames
+                    .iter()
+                    .any(|name| name == "HS23_15644:7:2210:15769:16789#30")
+        }));
+
+        assert_eq!(
+            (
+                columns[0].target.as_str(),
+                columns[0].pos1,
+                columns[0].depth,
+                columns[0].heads,
+                columns[0].qpos.as_slice()
+            ),
+            ("2", 1, 1, 1, &[0][..])
+        );
+        assert_eq!(
+            (
+                columns[30].pos1,
+                columns[30].depth,
+                columns[30].heads,
+                columns[30].qpos.as_slice()
+            ),
+            (31, 2, 1, &[30, 0][..])
+        );
+        assert_eq!(
+            (
+                columns[63].pos1,
+                columns[63].depth,
+                columns[63].heads,
+                columns[63].qpos.as_slice()
+            ),
+            (64, 3, 1, &[63, 33, 0][..])
+        );
+
+        for rec in records {
+            bam_destroy1(rec);
+        }
+        sam_hdr_destroy(_hdr);
     }
 }
 
@@ -675,6 +784,22 @@ fn realn03_baq_extend_matches_upstream_expected_fixture() {
             "htslib/test/realn03.sam",
             "htslib/test/realn03_exp.sam",
             2,
+        );
+    }
+}
+
+#[test]
+fn translated_realn_module_trims_reference_window_like_upstream_fixture() {
+    unsafe {
+        assert_realigned_records_match_expected_with(
+            "htslib/test/realn03.fa",
+            "htslib/test/realn03.fa.fai",
+            c"MX",
+            11,
+            "htslib/test/realn03.sam",
+            "htslib/test/realn03_exp.sam",
+            2,
+            realn_c_106_sam_prob_realn,
         );
     }
 }

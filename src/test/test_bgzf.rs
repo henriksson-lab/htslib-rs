@@ -758,11 +758,10 @@ pub unsafe fn test_test_bgzf_c_435_test_write_read(
     nthreads: c_int,
     expected_compression: c_int,
 ) -> c_int {
-    let mut bgz: *mut BGZF = ptr::null_mut();
     let mut pos = 0usize;
     let mut bg_buf = [0u8; BUFSZ];
 
-    bgz = match method {
+    let mut bgz = match method {
         Open_method::USE_BGZF_DOPEN => {
             test_test_bgzf_c_120_try_bgzf_dopen((*f).tmp_bgzf, mode, c"test_write_read".as_ptr())
         }
@@ -906,7 +905,6 @@ pub unsafe fn test_test_bgzf_c_511_test_embed_eof(
     mode: *const c_char,
     nthreads: c_int,
 ) -> c_int {
-    let mut bgz: *mut BGZF = ptr::null_mut();
     let mut pos = 0usize;
     let half = if BUFSZ < (*f).ltext {
         BUFSZ
@@ -926,7 +924,8 @@ pub unsafe fn test_test_bgzf_c_511_test_embed_eof(
     }
     append_mode[pos] = 0;
 
-    bgz = test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf, mode, c"test_embed_eof".as_ptr());
+    let mut bgz =
+        test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf, mode, c"test_embed_eof".as_ptr());
     if bgz.is_null() {
         return -1;
     }
@@ -1064,7 +1063,6 @@ pub unsafe fn test_test_bgzf_c_584_test_index_load_dump(f: *mut Files) -> c_int 
         c"r".as_ptr(),
         c"test_index_load_dump".as_ptr(),
     );
-    let mut fdest: *mut libc::FILE = ptr::null_mut();
     let mut buf_src = [0u8; BUFSZ];
     let mut buf_dest = [0u8; BUFSZ];
     if bgz.is_null() {
@@ -1091,7 +1089,7 @@ pub unsafe fn test_test_bgzf_c_584_test_index_load_dump(f: *mut Files) -> c_int 
         return -1;
     }
 
-    fdest = test_test_bgzf_c_68_try_fopen((*f).tmp_idx, c"r".as_ptr());
+    let mut fdest = test_test_bgzf_c_68_try_fopen((*f).tmp_idx, c"r".as_ptr());
     loop {
         let got_src = test_test_bgzf_c_89_try_fread(
             (*f).f_idx,

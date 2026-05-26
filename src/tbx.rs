@@ -717,8 +717,9 @@ pub unsafe fn tbx_c_526_tbx_index_build3(
     if fp.is_null() {
         return -1;
     }
-    if n_threads != 0 {
-        bgzf_mt(fp, n_threads, 256);
+    if n_threads > 1 && bgzf_mt(fp, n_threads, 256) != 0 {
+        bgzf_close(fp);
+        return -1;
     }
     if bgzf_compression(fp) != hts_sys::htsCompression_bgzf as c_int {
         bgzf_close(fp);

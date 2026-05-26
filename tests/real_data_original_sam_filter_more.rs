@@ -337,6 +337,55 @@ fn actual_filter_expression_path_matches_original_outputs() {
 }
 
 #[test]
+fn actual_filter_expression_path_covers_remaining_original_outputs() {
+    unsafe {
+        assert_eq!(
+            filtered_sam_with_expression(
+                "htslib/test/ce#5b.sam",
+                true,
+                c"rname == \"CHROMOSOME_II\""
+            ),
+            include_str!("../htslib/test/sam_filter/string2.out")
+        );
+        assert_eq!(
+            filtered_sam_with_expression(
+                "htslib/test/ce#5b.sam",
+                true,
+                c"rname =~ \"CHROMOSOME_II\""
+            ),
+            include_str!("../htslib/test/sam_filter/string3.out")
+        );
+        assert_eq!(
+            filtered_sam_with_expression("htslib/test/ce#1000.sam", true, c"cigar =~ \"D\""),
+            include_str!("../htslib/test/sam_filter/string4.out")
+        );
+        assert_eq!(
+            filtered_sam_with_expression("htslib/test/ce#1000.sam", true, c"seq =~ \"ATAT\""),
+            include_str!("../htslib/test/sam_filter/string5.out")
+        );
+        assert_eq!(
+            filtered_count_with_expression("htslib/test/ce#5b.sam", c"length(seq) != qlen"),
+            expected_count(include_str!("../htslib/test/sam_filter/func1.out"))
+        );
+        assert_eq!(
+            filtered_count_with_expression("htslib/test/ce#1000.sam", c"min(qual) >= 20"),
+            expected_count(include_str!("../htslib/test/sam_filter/func2.out"))
+        );
+        assert_eq!(
+            filtered_count_with_expression("htslib/test/ce#1000.sam", c"max(qual) <= 20"),
+            expected_count(include_str!("../htslib/test/sam_filter/func3.out"))
+        );
+        assert_eq!(
+            filtered_count_with_expression(
+                "htslib/test/ce#1000.sam",
+                c"avg(qual) >= 20 && avg(qual) <= 30"
+            ),
+            expected_count(include_str!("../htslib/test/sam_filter/func4.out"))
+        );
+    }
+}
+
+#[test]
 fn read_group_library_filters_match_original_sam_filter_expected_sam_outputs() {
     unsafe {
         let mut libraries = HashMap::new();

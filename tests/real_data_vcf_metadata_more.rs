@@ -104,6 +104,26 @@ fn formatcols_vcf_renders_exact_original_fixture() {
 }
 
 #[test]
+fn formatmissing_vcf_renders_expected_missing_format_columns() {
+    unsafe {
+        assert_eq!(
+            render_vcf("htslib/test/formatmissing.vcf"),
+            fixture_text("htslib/test/formatmissing-out.vcf")
+        );
+    }
+}
+
+#[test]
+fn vcf44_explicit_and_implicit_phasing_markers_render_like_htslib() {
+    unsafe {
+        assert_eq!(
+            render_vcf("htslib/test/vcf44_1.vcf"),
+            fixture_text("htslib/test/vcf44_1.expected")
+        );
+    }
+}
+
+#[test]
 fn formatcols_vcf_preserves_utf8_samples_and_string_format_values() {
     unsafe {
         let vcf = c_fixture("htslib/test/formatcols.vcf");
@@ -317,6 +337,15 @@ fn large_chr_vcf_preserves_contig_order_lengths_and_terminal_record_metadata() {
 }
 
 #[test]
+fn tabix_bcf_fixture_formats_like_original_vcf_records() {
+    unsafe {
+        let rendered = render_vcf("htslib/test/tabix/vcf_file.bcf");
+        let expected = fixture_text("htslib/test/tabix/vcf_file.vcf");
+        assert_eq!(rendered, expected);
+    }
+}
+
+#[test]
 fn large_info_end_repair_keeps_packed_info_prefix() {
     let input = tmp_path("large-end-input", "vcf");
     let _ = std::fs::remove_file(&input);
@@ -347,6 +376,7 @@ fn large_info_end_repair_keeps_packed_info_prefix() {
         assert!(!end_info.is_null());
         assert_eq!((*end_info).type_, hts_sys::BCF_BT_INT64 as c_int);
         assert_eq!((*end_info).v1.i, 3_000_000_000);
+        assert_eq!((*rec).rlen, 3_000_000_000);
         assert_eq!((*end_info).vptr_len, std::mem::size_of::<i64>() as u32);
         assert!((*end_info).vptr_off() > 0);
         let packed = std::slice::from_raw_parts(

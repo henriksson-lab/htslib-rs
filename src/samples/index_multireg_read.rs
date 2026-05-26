@@ -66,13 +66,15 @@ pub unsafe fn samples_index_multireg_read_c_50_main(argc: c_int, argv: *mut *mut
                         } else {
                             libc::free(regions.cast());
                             regions = std::ptr::null_mut();
-                            c = hts::hts_itr_multi_next(infile, iter, bamdata.cast());
-                            while c >= 0 {
+                            c = (hts::hts_itr_multi_next(infile, iter, bamdata.cast()) >= 0)
+                                as c_int;
+                            while c != 0 {
                                 if sam::sam_c_4553_sam_write1(outfile, in_samhdr, bamdata) < 0 {
                                     libc::printf(c"Failed to write output\n".as_ptr());
                                     break;
                                 }
-                                c = hts::hts_itr_multi_next(infile, iter, bamdata.cast());
+                                c = (hts::hts_itr_multi_next(infile, iter, bamdata.cast()) >= 0)
+                                    as c_int;
                             }
                             if c == -1 {
                                 ret = libc::EXIT_SUCCESS;

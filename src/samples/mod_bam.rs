@@ -119,7 +119,6 @@ pub unsafe fn samples_mod_bam_c_50_main(argc: c_int, argv: *mut *mut c_char) -> 
                                             sam::bam_get_aux(bamdata).cast(),
                                             sam::bam_get_l_aux(bamdata) as usize,
                                         );
-                                        (*newbam).l_data += sam::bam_get_l_aux(bamdata);
                                         sam::bam_destroy1(bamdata);
                                         bamdata = newbam;
                                     }

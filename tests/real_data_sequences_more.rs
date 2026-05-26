@@ -3,11 +3,11 @@ use htslib_rs::{
         bgzf_check_EOF, bgzf_close, bgzf_compression, bgzf_getline, bgzf_is_bgzf, bgzf_open,
         bgzf_read,
     },
-    fai_destroy, fai_fetch, fai_fetchqual, fai_load3_format, faidx_has_seq, faidx_iseq, faidx_nseq,
-    faidx_seq_len, hclose, hopen, htsFormat, hts_detect_format2, kstring_t, FAI_FASTA, FAI_FASTQ,
-    HTS_COMPRESSION_NO_COMPRESSION, HTS_FORMAT_FAI_FORMAT, HTS_FORMAT_FASTA_FORMAT,
-    HTS_FORMAT_FASTQ_FORMAT, HTS_FORMAT_FQI_FORMAT, HTS_FORMAT_SEQUENCE_DATA,
-    HTS_FORMAT_TEXT_FORMAT,
+    fai_destroy, fai_fetch, fai_fetchqual, fai_line_length, fai_load3_format, faidx_fetch_qual64,
+    faidx_fetch_seq64, faidx_has_seq, faidx_iseq, faidx_nseq, faidx_seq_len, hclose, hopen,
+    htsFormat, hts_detect_format2, kstring_t, FAI_FASTA, FAI_FASTQ, HTS_COMPRESSION_NO_COMPRESSION,
+    HTS_FORMAT_FAI_FORMAT, HTS_FORMAT_FASTA_FORMAT, HTS_FORMAT_FASTQ_FORMAT, HTS_FORMAT_FQI_FORMAT,
+    HTS_FORMAT_SEQUENCE_DATA, HTS_FORMAT_TEXT_FORMAT,
 };
 use std::ffi::{CStr, CString};
 
@@ -75,6 +75,36 @@ unsafe fn fetch_text(fai: *const htslib_rs::faidx_t, region: &CStr) -> String {
 unsafe fn fetch_qual_text(fai: *const htslib_rs::faidx_t, region: &CStr) -> String {
     let mut len = 0;
     let qual = fai_fetchqual(fai, region.as_ptr(), &mut len);
+    assert!(!qual.is_null());
+    let text = CStr::from_ptr(qual).to_string_lossy().into_owned();
+    assert_eq!(text.len(), len as usize);
+    libc::free(qual.cast());
+    text
+}
+
+unsafe fn fetch_seq64_text(
+    fai: *const htslib_rs::faidx_t,
+    name: &CStr,
+    beg: htslib_rs::hts_pos_t,
+    end: htslib_rs::hts_pos_t,
+) -> String {
+    let mut len = 0;
+    let seq = faidx_fetch_seq64(fai, name.as_ptr(), beg, end, &mut len);
+    assert!(!seq.is_null());
+    let text = CStr::from_ptr(seq).to_string_lossy().into_owned();
+    assert_eq!(text.len(), len as usize);
+    libc::free(seq.cast());
+    text
+}
+
+unsafe fn fetch_qual64_text(
+    fai: *const htslib_rs::faidx_t,
+    name: &CStr,
+    beg: htslib_rs::hts_pos_t,
+    end: htslib_rs::hts_pos_t,
+) -> String {
+    let mut len = 0;
+    let qual = faidx_fetch_qual64(fai, name.as_ptr(), beg, end, &mut len);
     assert!(!qual.is_null());
     let text = CStr::from_ptr(qual).to_string_lossy().into_owned();
     assert_eq!(text.len(), len as usize);
@@ -204,6 +234,31 @@ fn fetches_fastq_sequences_and_quality_slices_from_expected_fai() {
 }
 
 #[test]
+fn fastq_index_direct_fetch_clips_sequence_and_quality_together() {
+    unsafe {
+        let fai = load_indexed_fastq(
+            "htslib/test/faidx/fastqs.fq",
+            "htslib/test/faidx/fastqs.fq.expected.fai",
+        );
+
+        assert_eq!(fetch_seq64_text(fai, c"FAKE0005_1", -12, 7), "ACGTACGT");
+        assert_eq!(fetch_qual64_text(fai, c"FAKE0005_1", -12, 7), "@ABCDEFG");
+        assert_eq!(
+            fetch_seq64_text(fai, c"SRR014849.50939_3", 130, 999),
+            "TTCGG"
+        );
+        assert_eq!(
+            fetch_qual64_text(fai, c"SRR014849.50939_3", 130, 999),
+            "^LY\\S"
+        );
+        assert_eq!(fetch_seq64_text(fai, c"FAKE0010_2", 63, 99), "");
+        assert_eq!(fetch_qual64_text(fai, c"FAKE0010_2", 63, 99), "");
+
+        fai_destroy(fai);
+    }
+}
+
+#[test]
 fn faidx_fasta_queries_render_exact_upstream_expected_output() {
     unsafe {
         let fai = load_indexed_fasta(
@@ -220,6 +275,30 @@ fn faidx_fasta_queries_render_exact_upstream_expected_output() {
         )
         .unwrap();
         assert_eq!(actual, expected);
+        fai_destroy(fai);
+    }
+}
+
+#[test]
+fn faidx_fasta_real_fixture_line_lengths_and_clipped_direct_fetches() {
+    unsafe {
+        let fai = load_indexed_fasta(
+            "htslib/test/faidx/faidx.fa",
+            "htslib/test/faidx/faidx.fa.expected.fai",
+        );
+
+        assert_eq!(fai_line_length(fai, c"".as_ptr()), 4);
+        assert_eq!(fai_line_length(fai, c"trailingblank2".as_ptr()), 24);
+        assert_eq!(fai_line_length(fai, c"trailingblank3".as_ptr()), 4);
+        assert_eq!(fai_line_length(fai, c"foo".as_ptr()), 6);
+        assert_eq!(fai_line_length(fai, c"bar".as_ptr()), 8);
+        assert_eq!(fai_line_length(fai, c"missing".as_ptr()), -1);
+
+        assert_eq!(fetch_text(fai, c"bar:1-999"), "TTTTAAAA");
+        assert_eq!(fetch_seq64_text(fai, c"bar", -10, 99), "TTTTAAAA");
+        assert_eq!(fetch_seq64_text(fai, c"trailingblank3", 3, 99), "TA");
+        assert_eq!(fetch_seq64_text(fai, c"trailingblank2", 70, 99), "TT");
+
         fai_destroy(fai);
     }
 }

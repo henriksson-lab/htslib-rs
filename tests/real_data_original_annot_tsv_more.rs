@@ -76,6 +76,12 @@ fn annot_tsv_priority_fixtures_match_exact_expected_output() {
         &["-f", "smpl:overlap", "--allow-dups", "--max-annots", "2"],
     );
     assert_fixture(
+        "src.1.txt",
+        "dst.1.txt",
+        "out.1.5.txt",
+        &["-f", "smpl:overlap", "-rO", "0.5"],
+    );
+    assert_fixture(
         "src.9.txt",
         "dst.9.txt",
         "out.9.1.txt",
@@ -189,6 +195,37 @@ fn annot_tsv_missing_htslib_fixtures_match_exact_expected_output() {
             ],
         ),
         (
+            "src.5.txt",
+            "dst.5.txt",
+            "out.5.1.txt",
+            &["-c", "2,3,4:2,3,4", "-a", "nbp,frac"],
+        ),
+        (
+            "src.6.txt",
+            "dst.6.txt",
+            "out.6.1.txt",
+            &["-c", "1,2,2:1,2,2", "-a", "nbp"],
+        ),
+        (
+            "src.7.txt",
+            "dst.7.txt",
+            "out.7.1.txt",
+            &["-c", "1,2,2:1,2,2", "-f", "overlap", "-H"],
+        ),
+        (
+            "src.8.txt",
+            "dst.8.txt",
+            "out.8.1.txt",
+            &[
+                "-c",
+                "chr,beg,end:chr,start,end",
+                "-m",
+                "sample",
+                "-f",
+                "is_tp",
+            ],
+        ),
+        (
             "src.11.txt",
             "dst.11.txt",
             "out.11.1.txt",
@@ -205,8 +242,7 @@ fn annot_tsv_missing_htslib_fixtures_match_exact_expected_output() {
                 "smpl1:src_smpl",
                 "-h",
                 "2:2",
-                "-I",
-                "-I",
+                "-II",
             ],
         ),
         (

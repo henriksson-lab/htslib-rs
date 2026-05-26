@@ -5,10 +5,21 @@ use htslib_rs::{
     FASTQ_OPT_NAME2,
 };
 use std::ffi::{CStr, CString};
+use std::path::{Path, PathBuf};
 
 fn c_fixture(path: &str) -> CString {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
     CString::new(path.to_string_lossy().as_bytes()).unwrap()
+}
+
+fn c_path(path: &Path) -> CString {
+    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+}
+
+fn optional_external_hifi_fastq() -> Option<PathBuf> {
+    let path =
+        PathBuf::from("/husky/henriksson/for_claude/minimap/testdata/hg002_hifi_20370reads.fq.gz");
+    path.is_file().then_some(path)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -137,6 +148,70 @@ unsafe fn read_sam_records(path: &str, aux_tags: &[&'static CStr]) -> Vec<FastqR
     records
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct FastqStats {
+    records: usize,
+    bases: usize,
+    min_len: i32,
+    max_len: i32,
+    qname_samples: Vec<String>,
+}
+
+unsafe fn scan_fastq_path(path: &Path) -> FastqStats {
+    let path = c_path(path);
+    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
+    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let rec = bam_init1();
+    assert!(!rec.is_null());
+
+    let mut stats = FastqStats {
+        records: 0,
+        bases: 0,
+        min_len: i32::MAX,
+        max_len: 0,
+        qname_samples: Vec::new(),
+    };
+
+    loop {
+        let ret = sam_read1(fp, std::ptr::null_mut(), rec);
+        if ret < 0 {
+            break;
+        }
+
+        let len = (*rec).core.l_qseq;
+        assert!(len > 0);
+        assert_eq!((*rec).core.flag, 4);
+        assert!(!bam_get_qname(rec).is_null());
+        if stats.qname_samples.len() < 3 {
+            stats.qname_samples.push(
+                CStr::from_ptr(bam_get_qname(rec))
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+
+        let seq = bam_get_seq(rec);
+        let qual = bam_get_qual(rec);
+        assert_ne!(*qual, 0xff);
+        for i in 0..len as usize {
+            assert!(matches!(bam_seqi(seq, i), 1 | 2 | 4 | 8 | 15));
+            assert!(
+                *qual.add(i) <= 93,
+                "FASTQ quality should stay in printable Phred+33 range"
+            );
+        }
+
+        stats.records += 1;
+        stats.bases += len as usize;
+        stats.min_len = stats.min_len.min(len);
+        stats.max_len = stats.max_len.max(len);
+    }
+
+    bam_destroy1(rec);
+    assert_eq!(hts_close(fp), 0);
+    stats
+}
+
 #[test]
 fn reads_minimal_fastq_record_with_exact_sam_payload() {
     unsafe {
@@ -245,6 +320,30 @@ fn reads_name2_fastq_qnames_exactly_from_expected_sam() {
         assert_eq!(
             actual.iter().map(|r| r.qname.as_str()).collect::<Vec<_>>(),
             vec!["name_001", "name_002", "name_003", "name_004"]
+        );
+    }
+}
+
+#[test]
+fn external_hifi_fastq_gz_scans_real_read_lengths_and_qualities_when_available() {
+    let Some(path) = optional_external_hifi_fastq() else {
+        return;
+    };
+    unsafe {
+        let stats = scan_fastq_path(&path);
+        assert_eq!(
+            stats,
+            FastqStats {
+                records: 20_370,
+                bases: 195_341_223,
+                min_len: 1_960,
+                max_len: 11_550,
+                qname_samples: vec![
+                    "m54238_180628_014238/4194606/ccs".to_string(),
+                    "m54238_180628_014238/4194841/ccs".to_string(),
+                    "m54238_180628_014238/4194870/ccs".to_string(),
+                ],
+            }
         );
     }
 }

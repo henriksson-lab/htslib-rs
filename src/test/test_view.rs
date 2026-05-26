@@ -102,7 +102,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
     out: *mut htsFile,
 ) -> c_int {
     let mut r = 0;
-    let mut h: *mut sam::sam_hdr_t = std::ptr::null_mut();
+    let h: *mut sam::sam_hdr_t;
     let mut idx: *mut hts_idx_t = std::ptr::null_mut();
     let mut b: *mut sam::bam1_t = std::ptr::null_mut();
 
@@ -440,9 +440,9 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
 ) -> c_int {
     let h = vcf::bcf_hdr_read(in_);
     let b = vcf::bcf_init();
-    let mut idx: *mut hts_idx_t;
+    let idx: *mut hts_idx_t;
     let mut exit_code = 0;
-    let mut r = 0;
+    let mut r: c_int;
 
     if h.is_null() {
         return 1;
@@ -556,8 +556,8 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
 
 // original: main (htslib/test/test_view.c:279)
 pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
-    let mut in_: *mut htsFile;
-    let mut out: *mut htsFile;
+    let in_: *mut htsFile;
+    let out: *mut htsFile;
     let mut moder = [0 as c_char; 8];
     let mut modew = [0 as c_char; 800];
     let mut c: c_int;
@@ -776,6 +776,7 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
         pool: std::ptr::null_mut(),
         qsize: 0,
     };
+    let mut thread_pool_failed = 0;
     if opts.nthreads > 0 {
         p.pool = hts_tpool_init(opts.nthreads);
         if p.pool.is_null() {
@@ -785,32 +786,42 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
             );
             exit_code = 1;
         } else {
-            hts::hts_set_thread_pool(in_, &mut p);
-            hts::hts_set_thread_pool(out, &mut p);
+            if hts::hts_set_thread_pool(in_, &mut p) < 0
+                || hts::hts_set_thread_pool(out, &mut p) < 0
+            {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Threaded BGZF is not yet supported in this translation\n".as_ptr(),
+                );
+                exit_code = 1;
+                thread_pool_failed = 1;
+            }
         }
     }
 
     let mut ret;
-    match (*hts::hts_get_format(in_)).category {
-        HTS_FORMAT_SEQUENCE_DATA => {
-            ret = test_test_view_c_65_sam_loop(argc, argv, local_optind, &mut opts, in_, out);
+    if thread_pool_failed == 0 {
+        match (*hts::hts_get_format(in_)).category {
+            HTS_FORMAT_SEQUENCE_DATA => {
+                ret = test_test_view_c_65_sam_loop(argc, argv, local_optind, &mut opts, in_, out);
+            }
+
+            HTS_FORMAT_VARIANT_DATA => {
+                ret = test_test_view_c_196_vcf_loop(argc, argv, local_optind, &mut opts, in_, out);
+            }
+
+            _ => {
+                libc::fprintf(
+                    hts_sys::stderr.cast(),
+                    c"Unsupported or unknown category of data in input file\n".as_ptr(),
+                );
+                return libc::EXIT_FAILURE;
+            }
         }
 
-        HTS_FORMAT_VARIANT_DATA => {
-            ret = test_test_view_c_196_vcf_loop(argc, argv, local_optind, &mut opts, in_, out);
+        if ret != 0 {
+            exit_code = libc::EXIT_FAILURE;
         }
-
-        _ => {
-            libc::fprintf(
-                hts_sys::stderr.cast(),
-                c"Unsupported or unknown category of data in input file\n".as_ptr(),
-            );
-            return libc::EXIT_FAILURE;
-        }
-    }
-
-    if ret != 0 {
-        exit_code = libc::EXIT_FAILURE;
     }
 
     ret = hts::hts_close(out);
@@ -839,4 +850,84 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
     }
 
     exit_code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::path::{Path, PathBuf};
+
+    fn fixture(path: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
+    }
+
+    fn temp_path(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "htslib-rs-test-view-{label}-{}-{nanos}.sam",
+            std::process::id()
+        ))
+    }
+
+    unsafe fn run_main_in_child(args: &mut [CString]) -> c_int {
+        let pid = libc::fork();
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            optind = 1;
+            let mut argv = args
+                .iter_mut()
+                .map(|arg| arg.as_ptr().cast_mut())
+                .collect::<Vec<_>>();
+            let rc = test_test_view_c_279_main(argv.len() as c_int, argv.as_mut_ptr());
+            libc::_exit(rc);
+        }
+
+        let mut status = 0;
+        assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
+        assert!(libc::WIFEXITED(status), "child did not exit normally");
+        libc::WEXITSTATUS(status)
+    }
+
+    #[test]
+    fn original_test_view_main_writes_limited_bam_as_sam() {
+        unsafe {
+            let out = temp_path("limited-bam");
+            let mut args = vec![
+                CString::new("test_view").unwrap(),
+                CString::new("-N").unwrap(),
+                CString::new("2").unwrap(),
+                CString::new("-p").unwrap(),
+                CString::new(out.to_string_lossy().as_bytes()).unwrap(),
+                CString::new(
+                    fixture("htslib/test/range.bam")
+                        .to_string_lossy()
+                        .as_bytes(),
+                )
+                .unwrap(),
+            ];
+
+            assert_eq!(run_main_in_child(&mut args), libc::EXIT_SUCCESS);
+
+            let actual = std::fs::read_to_string(&out).unwrap();
+            assert!(actual.starts_with("@HD\tVN:1.4\tSO:coordinate\n"));
+            assert!(actual.contains("@SQ\tSN:CHROMOSOME_I\tLN:1009800\t"));
+
+            let records = actual
+                .lines()
+                .filter(|line| !line.starts_with('@'))
+                .collect::<Vec<_>>();
+            assert_eq!(records.len(), 2);
+            for record in records {
+                let fields = record.split('\t').collect::<Vec<_>>();
+                assert!(fields.len() >= 11, "malformed SAM record: {record}");
+                assert!(!fields[0].is_empty(), "record has empty query name");
+            }
+
+            let _ = std::fs::remove_file(out);
+        }
+    }
 }

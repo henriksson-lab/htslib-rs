@@ -118,7 +118,6 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         return -1;
     }
 
-    let mut mdat = 0;
     let mut mdat_bytes = 0;
     for i in 0..(*line).n_info() {
         let info = (*line).d.info.add(i as usize);
@@ -155,7 +154,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                 1
             };
 
-        mdat = mdat_bytes / size;
+        let mut mdat = mdat_bytes / size;
         let mut nret = vcf::bcf_get_info_values(
             header,
             line,
@@ -391,7 +390,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         i += 1;
     }
     if i < n_r_ori {
-        mdat = mdat_bytes / 4;
+        let mut mdat = mdat_bytes / 4;
         let mut nret = vcf::bcf_get_format_values(
             header,
             line,
@@ -567,7 +566,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                 1
             };
 
-        mdat = mdat_bytes / size;
+        let mut mdat = mdat_bytes / size;
         let mut nret = vcf::bcf_get_format_values(
             header,
             line,

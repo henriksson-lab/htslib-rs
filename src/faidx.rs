@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     ffi::{c_char, c_int, c_void, CStr},
     fs,
     io::Write,
@@ -114,7 +115,7 @@ pub unsafe fn fai_load3(
     fngzi: *const c_char,
     flags: c_int,
 ) -> *mut faidx_t {
-    faidx_c_567_fai_load3_core(fn_, fnfai, fngzi, flags, FAI_FASTA as c_int)
+    fai_load3_core(fn_, fnfai, fngzi, flags, FAI_FASTA as c_int)
 }
 
 pub unsafe fn fai_load(_fn_: *const c_char) -> *mut faidx_t {
@@ -136,11 +137,11 @@ pub unsafe fn fai_load3_format(
     flags: c_int,
     format: fai_format_options,
 ) -> *mut faidx_t {
-    faidx_c_705_fai_load3_format(fn_, fnfai, fngzi, flags, format)
+    fai_load3_core(fn_, fnfai, fngzi, flags, format as c_int)
 }
 
 pub unsafe fn fai_load_format(fn_: *const c_char, format: fai_format_options) -> *mut faidx_t {
-    faidx_c_711_fai_load_format(fn_, format)
+    fai_load3_core(fn_, ptr::null(), ptr::null(), FAI_CREATE, format as c_int)
 }
 
 unsafe fn fai_load3_core(
@@ -289,35 +290,49 @@ unsafe fn fai_read(
         }
         let parse_u64 = |b: &[u8]| std::str::from_utf8(b).ok()?.parse::<u64>().ok();
         let parse_u32 = |b: &[u8]| std::str::from_utf8(b).ok()?.parse::<u32>().ok();
+        let parse_u64_prefix = |b: &[u8]| {
+            let end = b
+                .iter()
+                .position(|c| !c.is_ascii_digit())
+                .unwrap_or(b.len());
+            if end == 0 {
+                None
+            } else {
+                std::str::from_utf8(&b[..end]).ok()?.parse::<u64>().ok()
+            }
+        };
+        let parse_u32_prefix = |b: &[u8]| parse_u64_prefix(b).and_then(|v| u32::try_from(v).ok());
         let len = parse_u64(fields[0])?;
         let seq_offset = parse_u64(fields[1])?;
         let line_blen = parse_u32(fields[2])?;
-        let line_len = parse_u32(fields[3])?;
+        let line_len = if format == FAI_FASTA as c_int {
+            parse_u32_prefix(fields[3])?
+        } else {
+            parse_u32(fields[3])?
+        };
         let qual_offset = if format == FAI_FASTA as c_int {
             0
         } else {
-            parse_u64(fields[4])?
+            parse_u64_prefix(fields[4])?
         };
-        if line_blen == 0 || line_len < line_blen {
-            return None;
-        }
-        if fai_insert_index(
-            &mut rows,
+        rows.push((
             name.to_vec(),
-            len,
-            line_len,
-            line_blen,
-            seq_offset,
-            qual_offset,
-        ) != 0
-        {
-            return None;
-        }
+            faidx1_t {
+                id: rows.len() as c_int,
+                line_len,
+                line_blen,
+                len,
+                seq_offset,
+                qual_offset,
+            },
+        ));
     }
     if rows.is_empty() {
         return None;
     }
-    fai_from_rows(fn_, rows, format)
+    let fai = fai_from_rows(fn_, rows, format)?;
+    (*fai).format = FAI_NONE as c_int;
+    Some(fai)
 }
 
 fn is_fai_index_space(b: u8) -> bool {
@@ -417,6 +432,7 @@ unsafe fn fai_insert_index(
 
 fn parse_fasta_fastq_index_rows(data: &[u8]) -> Option<(Vec<(Vec<u8>, faidx1_t)>, c_int)> {
     let mut rows = Vec::new();
+    let mut seen = HashSet::new();
     let mut i = 0usize;
     let mut format = FAI_NONE as c_int;
     while i < data.len() {
@@ -551,19 +567,18 @@ fn parse_fasta_fastq_index_rows(data: &[u8]) -> Option<(Vec<(Vec<u8>, faidx1_t)>
             }
         }
 
-        unsafe {
-            if fai_insert_index(
-                &mut rows,
+        if seen.insert(name.clone()) {
+            rows.push((
                 name,
-                seq_len,
-                line_len,
-                line_blen,
-                seq_offset,
-                qual_offset,
-            ) != 0
-            {
-                return None;
-            }
+                faidx1_t {
+                    id: rows.len() as c_int,
+                    line_len,
+                    line_blen,
+                    len: seq_len,
+                    seq_offset,
+                    qual_offset,
+                },
+            ));
         }
     }
     if rows.is_empty() || format == FAI_NONE as c_int {
@@ -656,8 +671,8 @@ unsafe fn fai_from_rows(
     }
     std::ptr::write_bytes(hash, 0, 1);
     (*hash).n_buckets = n_buckets as u32;
-    (*hash).size = rows.len() as u32;
-    (*hash).n_occupied = rows.len() as u32;
+    (*hash).size = 0;
+    (*hash).n_occupied = 0;
     (*hash).upper_bound = (n_buckets as f64 * 0.77) as u32;
     let n_flags = if n_buckets < 16 { 1 } else { n_buckets >> 4 };
     (*hash).flags = malloc(n_flags * std::mem::size_of::<u32>()).cast::<u32>();
@@ -673,7 +688,7 @@ unsafe fn fai_from_rows(
     }
     (*fai).hash = hash;
 
-    for (i, (name, val)) in rows.into_iter().enumerate() {
+    for (name, mut val) in rows.into_iter() {
         let name_ptr = malloc(name.len() + 1).cast::<c_char>();
         if name_ptr.is_null() {
             fai_destroy(fai);
@@ -681,8 +696,15 @@ unsafe fn fai_from_rows(
         }
         std::ptr::copy_nonoverlapping(name.as_ptr().cast::<c_char>(), name_ptr, name.len());
         *name_ptr.add(name.len()) = 0;
-        *(*fai).name.add(i) = name_ptr;
+        if kh_get_s(hash, name_ptr) != (*hash).n_buckets {
+            free(name_ptr.cast());
+            continue;
+        }
+        *(*fai).name.add((*fai).n as usize) = name_ptr;
+        val.id = (*fai).n;
         (*fai).n += 1;
+        (*hash).size += 1;
+        (*hash).n_occupied += 1;
 
         let mask = (*hash).n_buckets - 1;
         let mut k = kh_str_hash_string(name_ptr) & mask;
@@ -3028,43 +3050,48 @@ pub unsafe fn faidx_c_380_fai_read(
             p = p.add(1);
         }
 
-        let fields = CStr::from_ptr(p).to_bytes();
-        let mut nums = fields
-            .split(|b| libc::isspace(*b as c_int) != 0)
-            .filter(|s| !s.is_empty());
-        let Some(len) = nums.next().and_then(parse_u64_bytes) else {
-            free(buf.cast());
-            fai_destroy(fai);
-            return ptr::null_mut();
-        };
-        let Some(seq_offset) = nums.next().and_then(parse_u64_bytes) else {
-            free(buf.cast());
-            fai_destroy(fai);
-            return ptr::null_mut();
-        };
-        let Some(line_blen) = nums.next().and_then(parse_u32_bytes) else {
-            free(buf.cast());
-            fai_destroy(fai);
-            return ptr::null_mut();
-        };
-        let Some(line_len) = nums.next().and_then(parse_u32_bytes) else {
-            free(buf.cast());
-            fai_destroy(fai);
-            return ptr::null_mut();
-        };
-        let qual_offset = if format == FAI_FASTA as c_int {
-            0
+        let mut len = 0 as libc::c_ulong;
+        let mut seq_offset = 0 as libc::c_ulong;
+        let mut line_blen = 0 as libc::c_uint;
+        let mut line_len = 0 as libc::c_uint;
+        let mut qual_offset = 0 as libc::c_ulong;
+
+        let n = if format == FAI_FASTA as c_int {
+            libc::sscanf(
+                p,
+                c"%lu%lu%u%u".as_ptr(),
+                &mut len,
+                &mut seq_offset,
+                &mut line_blen,
+                &mut line_len,
+            )
         } else {
-            let Some(qoff) = nums.next().and_then(parse_u64_bytes) else {
-                free(buf.cast());
-                fai_destroy(fai);
-                return ptr::null_mut();
-            };
-            qoff
+            libc::sscanf(
+                p,
+                c"%lu%lu%u%u%lu".as_ptr(),
+                &mut len,
+                &mut seq_offset,
+                &mut line_blen,
+                &mut line_len,
+                &mut qual_offset,
+            )
         };
 
-        if faidx_c_93_fai_insert_index(fai, buf, len, line_len, line_blen, seq_offset, qual_offset)
-            != 0
+        if n != if format == FAI_FASTA as c_int { 4 } else { 5 } {
+            free(buf.cast());
+            fai_destroy(fai);
+            return ptr::null_mut();
+        }
+
+        if faidx_c_93_fai_insert_index(
+            fai,
+            buf,
+            len as u64,
+            line_len as u32,
+            line_blen as u32,
+            seq_offset as u64,
+            qual_offset as u64,
+        ) != 0
         {
             free(buf.cast());
             fai_destroy(fai);
@@ -3389,14 +3416,6 @@ unsafe fn kh_resize_s(h: *mut faidx_hash_t, new_n_buckets: u32) -> c_int {
     (*h).keys = new_keys;
     (*h).vals = new_vals;
     0
-}
-
-fn parse_u64_bytes(bytes: &[u8]) -> Option<u64> {
-    std::str::from_utf8(bytes).ok()?.parse::<u64>().ok()
-}
-
-fn parse_u32_bytes(bytes: &[u8]) -> Option<u32> {
-    std::str::from_utf8(bytes).ok()?.parse::<u32>().ok()
 }
 
 unsafe fn owned_index_cstring(

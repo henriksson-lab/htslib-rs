@@ -1,7 +1,8 @@
 use crate::htslib_rs::{
     bgzf::{
-        bgzf_block_write, bgzf_close, bgzf_compression, bgzf_flush_try, bgzf_index_build_init,
-        bgzf_index_dump, bgzf_index_load, bgzf_mt, bgzf_open, bgzf_read, bgzf_useek, bgzf_write,
+        bgzf_block_write, bgzf_close, bgzf_compression, bgzf_dopen, bgzf_flush_try,
+        bgzf_index_build_init, bgzf_index_dump, bgzf_index_load, bgzf_mt, bgzf_open, bgzf_read,
+        bgzf_read_block_data, bgzf_useek, bgzf_write, bgzf_write_direct_block,
     },
     hfile::{hclose, hclose_abruptly, hopen, htslib_hfile_h_247_hread},
     hts::{
@@ -532,7 +533,6 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
         statfilename = ptr::null_mut();
 
         if compress == 1 {
-            let mut f_src: *mut crate::htslib_rs::hts::hFILE = ptr::null_mut();
             let mut out_mode = [b'w' as c_char, 0, 0];
             let mut out_mode_exclusive = [b'w' as c_char, b'x' as c_char, 0, 0];
 
@@ -548,7 +548,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 out_mode[1] = (compress_level + b'0' as c_int) as c_char;
                 out_mode_exclusive[2] = (compress_level + b'0' as c_int) as c_char;
             }
-            f_src = hopen(
+            let f_src = hopen(
                 if isstdin == 0 {
                     *argv.add(optind as usize)
                 } else {
@@ -587,7 +587,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 }
             } else if argc > optind && isstdin == 0 {
                 if pstdout != 0 {
-                    fp = bgzf_open(c"-".as_ptr(), out_mode.as_ptr());
+                    fp = bgzf_dopen(libc::STDOUT_FILENO, out_mode.as_ptr());
                 } else {
                     let name =
                         libc::malloc(libc::strlen(*argv.add(optind as usize)) + 5).cast::<c_char>();
@@ -636,14 +636,26 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 );
                 return 1;
             } else {
-                fp = bgzf_open(c"-".as_ptr(), out_mode.as_ptr());
+                fp = bgzf_dopen(libc::STDOUT_FILENO, out_mode.as_ptr());
             }
 
             if index != 0 {
                 bgzf_index_build_init(fp);
             }
             if threads > 1 {
-                bgzf_mt(fp, threads, 256);
+                if bgzf_mt(fp, threads, 256) != 0 {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"[bgzip] threaded BGZF is not yet supported in this translation\n"
+                            .as_ptr(),
+                    );
+                    bgzf_close(fp);
+                    if !statfilename.is_null() {
+                        libc::free(statfilename.cast());
+                    }
+                    hclose_abruptly(f_src);
+                    return 1;
+                }
             }
 
             buffer = libc::malloc(WINDOW_SIZE).cast::<c_char>();
@@ -786,7 +798,12 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                             }
                         }
 
-                        if bgzf_write(fp, buffer.cast(), n as usize) < 0 {
+                        let wrote = if flush != 0 && (*fp).block_offset == 0 {
+                            bgzf_write_direct_block(fp, buffer.cast(), n as usize)
+                        } else {
+                            bgzf_write(fp, buffer.cast(), n as usize)
+                        };
+                        if wrote < 0 {
                             libc::fprintf(
                                 hts_sys::stderr.cast(),
                                 c"Could not write %d bytes: Error %d\n".as_ptr(),
@@ -795,7 +812,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                             );
                             libc::exit(libc::EXIT_FAILURE);
                         }
-                        if flush != 0 && bgzf_flush_try(fp, 65536) < 0 {
+                        if flush != 0 && (*fp).block_offset != 0 && bgzf_flush_try(fp, 65536) < 0 {
                             if !statfilename.is_null() {
                                 libc::free(statfilename.cast());
                             }
@@ -1154,49 +1171,81 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             }
 
             if threads > 1 {
-                bgzf_mt(fp, threads, 256);
+                if bgzf_mt(fp, threads, 256) != 0 {
+                    libc::fprintf(
+                        hts_sys::stderr.cast(),
+                        c"[bgzip] threaded BGZF is not yet supported in this translation\n"
+                            .as_ptr(),
+                    );
+                    bgzf_close(fp);
+                    return 1;
+                }
             }
 
             let start_reg = start;
             let end_reg = end;
-            loop {
-                c = if end < 0 {
-                    bgzf_read(fp, buffer.cast(), WINDOW_SIZE) as c_int
-                } else {
-                    bgzf_read(
+            if end < 0 && start == 0 {
+                loop {
+                    let mut block_data: *const libc::c_void = ptr::null();
+                    c = bgzf_read_block_data(fp, &mut block_data) as c_int;
+                    if c == 0 {
+                        break;
+                    }
+                    if c < 0 {
+                        libc::fprintf(
+                            hts_sys::stderr.cast(),
+                            c"Error %d in block starting at offset %ld(%lX)\n".as_ptr(),
+                            (*fp).bitfields >> 16,
+                            (*fp).block_address,
+                            (*fp).block_address,
+                        );
+                        libc::exit(libc::EXIT_FAILURE);
+                    }
+                    if test == 0 && libc::write(f_dst, block_data, c as usize) != c as isize {
+                        libc::fprintf(
+                            hts_sys::stderr.cast(),
+                            c"Could not write %d bytes\n".as_ptr(),
+                            c,
+                        );
+                        libc::exit(libc::EXIT_FAILURE);
+                    }
+                }
+            } else {
+                loop {
+                    c = bgzf_read(
                         fp,
                         buffer.cast(),
-                        if end - start > WINDOW_SIZE as libc::c_long {
+                        if end < 0 || end - start > WINDOW_SIZE as libc::c_long {
                             WINDOW_SIZE
                         } else {
                             (end - start) as usize
                         },
-                    ) as c_int
-                };
-                if c == 0 {
-                    break;
-                }
-                if c < 0 {
-                    libc::fprintf(
-                        hts_sys::stderr.cast(),
-                        c"Error %d in block starting at offset %ld(%lX)\n".as_ptr(),
-                        (*fp).bitfields >> 16,
-                        (*fp).block_address,
-                        (*fp).block_address,
-                    );
-                    libc::exit(libc::EXIT_FAILURE);
-                }
-                start += c as libc::c_long;
-                if test == 0 && libc::write(f_dst, buffer.cast(), c as usize) != c as isize {
-                    libc::fprintf(
-                        hts_sys::stderr.cast(),
-                        c"Could not write %d bytes\n".as_ptr(),
-                        c,
-                    );
-                    libc::exit(libc::EXIT_FAILURE);
-                }
-                if end >= 0 && start >= end {
-                    break;
+                    ) as c_int;
+                    if c == 0 {
+                        break;
+                    }
+                    if c < 0 {
+                        libc::fprintf(
+                            hts_sys::stderr.cast(),
+                            c"Error %d in block starting at offset %ld(%lX)\n".as_ptr(),
+                            (*fp).bitfields >> 16,
+                            (*fp).block_address,
+                            (*fp).block_address,
+                        );
+                        libc::exit(libc::EXIT_FAILURE);
+                    }
+                    start += c as libc::c_long;
+                    if test == 0 && libc::write(f_dst, buffer.cast(), c as usize) != c as isize {
+                        libc::fprintf(
+                            hts_sys::stderr.cast(),
+                            c"Could not write %d bytes\n".as_ptr(),
+                            c,
+                        );
+                        libc::exit(libc::EXIT_FAILURE);
+                    }
+                    if end >= 0 && start >= end {
+                        break;
+                    }
                 }
             }
             start = start_reg;

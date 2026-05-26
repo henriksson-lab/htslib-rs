@@ -176,9 +176,6 @@ Examples:
 
 \0";
 
-// original: HTS_FORMAT (htslib/annot-tsv.c:119)
-pub unsafe fn annot_tsv_c_119_HTS_FORMAT() {}
-
 // original: nbp_init (htslib/annot-tsv.c:131)
 unsafe fn nbp_init() -> *mut AnnotTsvNbp {
     let nbp = libc::calloc(1, std::mem::size_of::<AnnotTsvNbp>()).cast::<AnnotTsvNbp>();
@@ -1399,23 +1396,37 @@ pub unsafe fn annot_tsv_c_956_main(argc: c_int, argv: *mut *mut c_char) -> c_int
                 _ => libc::abort(),
             }
         } else if arg.starts_with(b"-") && arg.len() > 1 {
-            let opt = arg[1];
-            match opt {
-                b'c' | b'C' | b'f' | b'm' | b'o' | b's' | b't' | b'a' | b'O' | b'h' | b'd' => {
-                    optarg = if arg.len() > 2 {
-                        argv_slice[i].cast::<c_char>().add(2)
-                    } else {
-                        i += 1;
-                        if i >= argv_slice.len() {
-                            libc::abort();
-                        }
-                        argv_slice[i]
-                    };
-                    opt as c_int
+            let mut pos = 1usize;
+            let mut parsed = 0;
+            while pos < arg.len() {
+                let opt = arg[pos];
+                match opt {
+                    b'I' => (*args).no_write_hdr += 1,
+                    b'H' => (*args).headers_str = c"0:0".as_ptr().cast_mut(),
+                    b'r' => reciprocal = 1,
+                    b'x' => (*args).mode = ANNOT_TSV_PRINT_NONMATCHING,
+                    b'c' | b'C' | b'f' | b'm' | b'o' | b's' | b't' | b'a' | b'O' | b'h' | b'd' => {
+                        optarg = if pos + 1 < arg.len() {
+                            argv_slice[i].cast::<c_char>().add(pos + 1)
+                        } else {
+                            i += 1;
+                            if i >= argv_slice.len() {
+                                libc::abort();
+                            }
+                            argv_slice[i]
+                        };
+                        parsed = opt as c_int;
+                        break;
+                    }
+                    _ => libc::abort(),
                 }
-                b'I' | b'H' | b'r' | b'x' => opt as c_int,
-                _ => libc::abort(),
+                pos += 1;
             }
+            if parsed == 0 {
+                i += 1;
+                continue;
+            }
+            parsed
         } else {
             libc::abort();
         };

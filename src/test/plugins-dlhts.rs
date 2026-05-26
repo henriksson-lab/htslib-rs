@@ -116,7 +116,10 @@ pub unsafe fn test_plugins_dlhts_c_94_verbose_log(message: *const c_char) {
 // original: main (htslib/test/plugins-dlhts.c:101)
 pub unsafe fn test_plugins_dlhts_c_101_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     let mut dlflags = libc::RTLD_NOW;
-    let mut skip = 0;
+    #[cfg(target_os = "macos")]
+    let skip = ((dlflags & libc::RTLD_LOCAL) != 0) as c_int;
+    #[cfg(not(target_os = "macos"))]
+    let skip = 0;
 
     loop {
         let c = libc::getopt(argc, argv, c"glv".as_ptr());
@@ -170,11 +173,6 @@ pub unsafe fn test_plugins_dlhts_c_101_main(argc: c_int, argv: *mut *mut c_char)
 
     test_plugins_dlhts_c_75_test_hopen(c"bad-scheme:unsupported".as_ptr(), 0);
 
-    #[cfg(target_os = "macos")]
-    {
-        skip = ((dlflags & libc::RTLD_LOCAL) != 0) as c_int;
-    }
-
     if skip == 0 {
         #[cfg(feature = "libcurl")]
         test_plugins_dlhts_c_75_test_hopen(c"https://localhost:99999/invalid_port".as_ptr(), 1);
@@ -220,4 +218,80 @@ pub unsafe fn test_plugins_dlhts_c_101_main(argc: c_int, argv: *mut *mut c_char)
 pub unsafe fn test_plugins_dlhts_c_180_main() -> c_int {
     libc::printf(c"Tests skipped due to plugins being disabled\n".as_ptr());
     libc::EXIT_SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::sync::{Mutex, OnceLock};
+
+    unsafe extern "C" {
+        #[link_name = "hopen"]
+        fn linked_hopen(fname: *const c_char, mode: *const c_char, ...) -> *mut hFILE;
+        #[link_name = "hclose_abruptly"]
+        fn linked_hclose_abruptly(fp: *mut hFILE);
+    }
+
+    fn plugins_dlhts_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    unsafe fn reset_state() {
+        TEST_PLUGINS_DLHTS_ERRORS = 0;
+        TEST_PLUGINS_DLHTS_VERBOSE = 0;
+        TEST_PLUGINS_DLHTS_HOPEN_P = linked_hopen as *mut c_void;
+        TEST_PLUGINS_DLHTS_HCLOSE_ABRUPTLY_P = linked_hclose_abruptly as *mut c_void;
+        optind = 1;
+    }
+
+    #[test]
+    fn plugins_dlhts_test_hopen_distinguishes_scheme_support_without_network() {
+        let _guard = plugins_dlhts_test_lock();
+        unsafe {
+            reset_state();
+
+            test_plugins_dlhts_c_75_test_hopen(c"bad-scheme:unsupported".as_ptr(), 0);
+            let errors = TEST_PLUGINS_DLHTS_ERRORS;
+            assert_eq!(errors, 0);
+
+            let missing =
+                CString::new(format!("/tmp/plugins-dlhts-missing-{}", std::process::id())).unwrap();
+            test_plugins_dlhts_c_75_test_hopen(missing.as_ptr(), 1);
+            let errors = TEST_PLUGINS_DLHTS_ERRORS;
+            assert_eq!(errors, 0);
+        }
+    }
+
+    #[test]
+    fn plugins_dlhts_main_reports_usage_without_library_argument() {
+        let _guard = plugins_dlhts_test_lock();
+        unsafe {
+            reset_state();
+            let mut argv = [c"plugins-dlhts".as_ptr().cast_mut()];
+
+            let rc = test_plugins_dlhts_c_101_main(argv.len() as c_int, argv.as_mut_ptr());
+
+            assert_eq!(rc, libc::EXIT_FAILURE);
+            let errors = TEST_PLUGINS_DLHTS_ERRORS;
+            let next_arg = optind;
+            assert_eq!(errors, 0);
+            assert_eq!(next_arg, 1);
+        }
+    }
+
+    #[test]
+    fn plugins_dlhts_disabled_main_matches_original_success_skip() {
+        let _guard = plugins_dlhts_test_lock();
+        unsafe {
+            reset_state();
+
+            let rc = test_plugins_dlhts_c_180_main();
+
+            assert_eq!(rc, libc::EXIT_SUCCESS);
+            let errors = TEST_PLUGINS_DLHTS_ERRORS;
+            assert_eq!(errors, 0);
+        }
+    }
 }

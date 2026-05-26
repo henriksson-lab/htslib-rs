@@ -1,5 +1,5 @@
 use crate::htslib_rs::hts::kstring_t;
-use std::ffi::{c_char, c_int, c_uchar, c_uint, c_void};
+use std::ffi::{c_char, c_int, c_uint, c_void};
 
 unsafe extern "C" {
     static mut optarg: *mut c_char;

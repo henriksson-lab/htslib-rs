@@ -6,18 +6,53 @@ Rust translation of htslib/cram/cram_decode.c.
 */
 
 use c2rust_bitfields::BitfieldStruct;
+
+#[repr(C)]
+pub struct _IO_wide_data {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct _IO_codecvt {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct _IO_marker {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct BGZF {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct hts_tpool_process {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct hts_tpool {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct hFILE_backend {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct hts_idx_t {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct hts_filter_t {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct hts_md5_context {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct hts_tpool_result {
+    _private: [u8; 0],
+}
+
 extern "C" {
-    pub type _IO_wide_data;
-    pub type _IO_codecvt;
-    pub type _IO_marker;
-    pub type BGZF;
-    pub type hts_tpool_process;
-    pub type hts_tpool;
-    pub type hFILE_backend;
-    pub type hts_idx_t;
-    pub type hts_filter_t;
-    pub type hts_md5_context;
-    pub type hts_tpool_result;
     fn __errno_location() -> *mut ::core::ffi::c_int;
     fn malloc(__size: size_t) -> *mut ::core::ffi::c_void;
     fn calloc(__nmemb: size_t, __size: size_t) -> *mut ::core::ffi::c_void;

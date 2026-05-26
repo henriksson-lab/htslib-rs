@@ -10,8 +10,6 @@ pub struct errmod_t {
     pub lhet: *mut f64,
 }
 
-pub fn errmod_t() {}
-
 #[repr(C)]
 struct call_aux_t {
     fsum: [f64; 16],

@@ -1,6 +1,6 @@
 use super::http_parser::{
     ref_cache_http_parser_c_111_init_http_parser, ref_cache_http_parser_c_131_cleanup_http_parser,
-    ref_cache_http_parser_c_601_parser_read_data, Http_Parser,
+    ref_cache_http_parser_c_601_parser_read_data,
 };
 use super::listener::Listeners;
 use super::misc::ref_cache_misc_h_40_setnonblock;
@@ -1120,8 +1120,8 @@ pub unsafe fn ref_cache_server_c_721_run_poll_loop(
 ) -> c_int {
     let opts_l = opts.cast::<RefCacheOptionsLayout>();
     let mut clients: RefCacheClientsLayout = std::mem::zeroed();
-    let mut polled_upstream: *mut Pw_item = std::ptr::null_mut();
-    let mut polled_log: *mut Pw_item;
+    let polled_upstream: *mut Pw_item;
+    let polled_log: *mut Pw_item;
     let mut events = [std::mem::zeroed::<libc::epoll_event>(); REF_CACHE_MAX_EVENTS as usize];
     let mut log_buf: RefCacheLogBufferLayout = std::mem::zeroed();
     let mut log_can_write = 0;

@@ -39,7 +39,6 @@ pub unsafe fn ref_cache_log_files_c_69_rotate_logs(
     let mut now = libc::time(std::ptr::null_mut());
     let gmt = libc::gmtime(&mut now);
     let mut log_fd = -1;
-    let mut file: *mut libc::FILE = std::ptr::null_mut();
 
     for i in 0..99u32 {
         libc::snprintf(
@@ -87,7 +86,7 @@ pub unsafe fn ref_cache_log_files_c_69_rotate_logs(
         return -1;
     }
 
-    file = libc::fdopen(log_fd, b"w\0".as_ptr().cast());
+    let file = libc::fdopen(log_fd, b"w\0".as_ptr().cast());
     if file.is_null() {
         libc::fprintf(
             crate::htslib_rs::ref_cache::compat::stderr(),

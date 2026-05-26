@@ -265,7 +265,6 @@ pub unsafe fn tabix_c_135_parse_regions(
     argc: c_int,
     nregs: *mut c_int,
 ) -> *mut *mut c_char {
-    let mut iseq = 0;
     let mut ireg = 0;
     let mut regs: *mut *mut c_char = ptr::null_mut();
     *nregs = argc;
@@ -297,7 +296,7 @@ pub unsafe fn tabix_c_135_parse_regions(
 
         let mut nseq = 0;
         let seqs = regidx::regidx_c_105_regidx_seq_names(idx, &mut nseq);
-        iseq = 0;
+        let mut iseq = 0;
         while iseq < nseq {
             if regidx::regidx_c_401_regidx_overlap(
                 idx,
@@ -326,8 +325,8 @@ pub unsafe fn tabix_c_135_parse_regions(
             }
             iseq += 1;
         }
-        regidx::regidx_c_311_regidx_destroy(idx);
         regidx::regidx_c_606_regitr_destroy(itr);
+        regidx::regidx_c_311_regidx_destroy(idx);
     }
 
     if ireg == 0 {
@@ -350,7 +349,7 @@ pub unsafe fn tabix_c_135_parse_regions(
         }
     }
 
-    iseq = 0;
+    let mut iseq = 0;
     while iseq < argc {
         *regs.add(ireg as usize) = libc::strdup(*argv.add(iseq as usize));
         if (*regs.add(ireg as usize)).is_null() {
@@ -390,7 +389,12 @@ pub unsafe fn tabix_c_206_query_regions(
     if (*args).threads >= 1 {
         tpool.pool = thread_pool::hts_tpool_init((*args).threads);
         if !tpool.pool.is_null() {
-            hts::hts_set_thread_pool(fp, &mut tpool);
+            if hts::hts_set_thread_pool(fp, &mut tpool) < 0 {
+                release_tpool(tpool.pool.cast());
+                error_errno_message(Some(
+                    "Threaded BGZF is not yet supported in this translation".to_string(),
+                ));
+            }
         }
     }
 
@@ -413,7 +417,12 @@ pub unsafe fn tabix_c_206_query_regions(
             release_tpool(tpool.pool.cast());
             error_errno_message(Some("Could not open stdout".to_string()));
         }
-        hts::hts_set_thread_pool(out, &mut tpool);
+        if !tpool.pool.is_null() && hts::hts_set_thread_pool(out, &mut tpool) < 0 {
+            release_tpool(tpool.pool.cast());
+            error_errno_message(Some(
+                "Threaded BGZF is not yet supported in this translation".to_string(),
+            ));
+        }
         let idx = vcf::bcf_index_load3(
             fname,
             ptr::null(),
@@ -753,7 +762,11 @@ pub unsafe fn tabix_c_437_reheader_file(
             release_tpool(tpool);
             return -1;
         }
-        bgzf::bgzf_thread_pool(fp, tpool, 0);
+        if !tpool.is_null() && bgzf::bgzf_thread_pool(fp, tpool, 0) < 0 {
+            release_tpool(tpool);
+            bgzf::bgzf_close(fp);
+            return -1;
+        }
         if hts_sys::bgzf_read_block(fp.cast()) != 0 || (*fp).block_length == 0 {
             release_tpool(tpool);
             return -1;
@@ -822,7 +835,12 @@ pub unsafe fn tabix_c_437_reheader_file(
             release_tpool(tpool);
             error_errno_message(Some("Couldn't open output stream".to_string()));
         }
-        bgzf::bgzf_thread_pool(bgzf_out, tpool, 0);
+        if !tpool.is_null() && bgzf::bgzf_thread_pool(bgzf_out, tpool, 0) < 0 {
+            release_tpool(tpool);
+            bgzf::bgzf_close(fp);
+            bgzf::bgzf_close(bgzf_out);
+            return -1;
+        }
         let mut nread = libc::fread(buf.cast(), 1, page_size - 1, hdr) as isize;
         while nread > 0 {
             if nread < (page_size - 1) as isize && *buf.add((nread - 1) as usize) != b'\n' as c_char
@@ -1463,6 +1481,4 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             )),
         }
     }
-
-    0
 }

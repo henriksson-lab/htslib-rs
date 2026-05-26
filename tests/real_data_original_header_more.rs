@@ -1,8 +1,9 @@
 use htslib_rs::{
     bcf_hdr_destroy, bcf_hdr_fmt_text, bcf_hdr_get_version, bcf_hdr_id2int, bcf_hdr_read,
     hts_close, hts_open, ks_free, kstring_t, sam_hdr_count_lines, sam_hdr_destroy,
-    sam_hdr_find_line_pos, sam_hdr_find_tag_id, sam_hdr_find_tag_pos, sam_hdr_line_name,
-    sam_hdr_name2tid, sam_hdr_read, sam_hdr_tid2len, sam_hdr_tid2name, vcf_hdr_read,
+    sam_hdr_find_line_pos, sam_hdr_find_tag_id, sam_hdr_find_tag_pos, sam_hdr_length,
+    sam_hdr_line_name, sam_hdr_name2tid, sam_hdr_read, sam_hdr_str, sam_hdr_tid2len,
+    sam_hdr_tid2name, vcf_hdr_read,
 };
 use std::ffi::{CStr, CString};
 use std::os::raw::c_int;
@@ -18,6 +19,13 @@ fn c_fixture(path: &str) -> CString {
 unsafe fn kstring_bytes(ks: &kstring_t) -> Vec<u8> {
     assert!(!ks.s.is_null());
     std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l).to_vec()
+}
+
+unsafe fn sam_header_text(hdr: *mut htslib_rs::sam_hdr_t) -> String {
+    let len = sam_hdr_length(hdr);
+    assert!(!sam_hdr_str(hdr).is_null());
+    String::from_utf8(std::slice::from_raw_parts(sam_hdr_str(hdr).cast::<u8>(), len).to_vec())
+        .unwrap()
 }
 
 unsafe fn assert_sam_tag_by_pos(
@@ -195,6 +203,69 @@ fn index3_expected_sam_header_keeps_original_comments_and_m5_tag() {
 }
 
 #[test]
+fn index_dos_sam_header_normalizes_crlf_and_keeps_all_sq_targets() {
+    unsafe {
+        let (fp, hdr) = sam_header("htslib/test/index_dos.sam");
+
+        assert_eq!(sam_hdr_count_lines(hdr, c"SQ".as_ptr()), 7);
+        for (tid, (name, len, md5)) in [
+            (
+                c"CHROMOSOME_I",
+                1_009_800,
+                b"8ede36131e0dbf3417807e48f77f3ebd".as_slice(),
+            ),
+            (
+                c"CHROMOSOME_II",
+                5_000,
+                b"8e7993f7a93158587ee897d7287948ec".as_slice(),
+            ),
+            (
+                c"CHROMOSOME_III",
+                5_000,
+                b"3adcb065e1cf74fafdbba1e8c352b323".as_slice(),
+            ),
+            (
+                c"CHROMOSOME_IV",
+                5_000,
+                b"251af66a69ee589c9f3757340ec2de6f".as_slice(),
+            ),
+            (
+                c"CHROMOSOME_V",
+                5_000,
+                b"cf200a65fb754836dcc56b24b3170ee8".as_slice(),
+            ),
+            (
+                c"CHROMOSOME_X",
+                5_000,
+                b"6f9368fd2192c89c613718399d2d31fc".as_slice(),
+            ),
+            (
+                c"CHROMOSOME_MtDNA",
+                5_000,
+                b"cd05857ece6411f40257a565ccfe15bb".as_slice(),
+            ),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let tid = tid as c_int;
+            assert_eq!(sam_hdr_name2tid(hdr, name.as_ptr()), tid);
+            assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, tid)), *name);
+            assert_eq!(sam_hdr_tid2len(hdr, tid), *len);
+            assert_sam_tag_by_pos(hdr, c"SQ", tid, c"M5", md5);
+        }
+
+        assert_sam_tag_by_id(hdr, c"PG", c"ID", c"bowtie2", c"PN", b"bowtie2");
+        assert_sam_tag_by_id(hdr, c"PG", c"ID", c"bowtie2", c"VN", b"2.0.0-beta5");
+        let text = sam_header_text(hdr);
+        assert!(!text.contains('\r'));
+        assert!(text.ends_with("@PG\tID:bowtie2\tPN:bowtie2\tVN:2.0.0-beta5\n"));
+
+        close_sam_header(fp, hdr);
+    }
+}
+
+#[test]
 fn test_vcf_hdr_in_formats_exact_original_expected_header() {
     unsafe {
         let vcf = c_fixture("htslib/test/test-vcf-hdr-in.vcf");
@@ -235,5 +306,29 @@ fn modhdr_vcf_gz_formats_exact_original_expected_header() {
 
         bcf_hdr_destroy(hdr);
         assert_eq!(hts_close(fp), 0);
+    }
+}
+
+#[test]
+fn minimal_sam_header_without_hd_keeps_two_original_targets_only() {
+    unsafe {
+        let (fp, hdr) = sam_header("htslib/test/xx#minimal.sam");
+
+        assert_eq!(sam_hdr_count_lines(hdr, c"HD".as_ptr()), 0);
+        assert_eq!(sam_hdr_count_lines(hdr, c"SQ".as_ptr()), 2);
+        assert_eq!(sam_hdr_count_lines(hdr, c"RG".as_ptr()), 0);
+        assert_eq!(sam_hdr_count_lines(hdr, c"PG".as_ptr()), 0);
+        assert_eq!(sam_hdr_name2tid(hdr, c"xx".as_ptr()), 0);
+        assert_eq!(sam_hdr_name2tid(hdr, c"yy".as_ptr()), 1);
+        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 0)), c"xx");
+        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 1)), c"yy");
+        assert_eq!(sam_hdr_tid2len(hdr, 0), 20);
+        assert_eq!(sam_hdr_tid2len(hdr, 1), 20);
+        assert_eq!(
+            sam_header_text(hdr),
+            "@SQ\tSN:xx\tLN:20\n@SQ\tSN:yy\tLN:20\n"
+        );
+
+        close_sam_header(fp, hdr);
     }
 }

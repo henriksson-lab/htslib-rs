@@ -70,7 +70,7 @@ pub struct hfile_part {
 }
 
 #[repr(C)]
-struct hFILE_multipart {
+pub struct hFILE_multipart {
     base: hFILE_layout,
     parts: *mut hfile_part,
     nparts: usize,

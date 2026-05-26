@@ -1,4 +1,5 @@
 use htslib_rs::bgzf::{bgzf_close, bgzf_open, bgzf_write};
+use htslib_rs::tabix::tabix_c_135_parse_regions;
 use htslib_rs::{
     hts_close, hts_get_bgzfp, hts_itr_destroy, hts_itr_next, hts_open, ks_free, kstring_t,
     tbx_c_96_tbx_parse1, tbx_conf_bed, tbx_conf_gff, tbx_conf_vcf, tbx_destroy, tbx_index_build2,
@@ -6,6 +7,7 @@ use htslib_rs::{
 };
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, PartialEq, Eq)]
 struct ParsedInterval {
@@ -23,9 +25,15 @@ fn c_path(path: &std::path::Path) -> CString {
 }
 
 fn temp_path(name: &str) -> std::path::PathBuf {
+    static NEXT_TEMP_ID: AtomicUsize = AtomicUsize::new(0);
     let dir = fixture(".tmp").join("real_data_original_tabix_parse_more");
     std::fs::create_dir_all(&dir).unwrap();
-    dir.join(format!("{}-{}", std::process::id(), name))
+    dir.join(format!(
+        "{}-{}-{}",
+        std::process::id(),
+        NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed),
+        name
+    ))
 }
 
 unsafe fn bgzip_copy(src: &std::path::Path, dst: &std::path::Path) {
@@ -118,6 +126,42 @@ unsafe fn parse_interval(conf: &htslib_rs::tbx_conf_t, line: &str) -> ParsedInte
 }
 
 #[test]
+fn tabix_parse_regions_expands_region_file_and_appends_argv_regions() {
+    unsafe {
+        let regions = fixture("htslib/test/tabix/bed_file.bed");
+        let regions_c = c_path(&regions);
+        let argv = [CString::new("chr7:10-20").unwrap()];
+        let mut argv_ptrs = argv
+            .iter()
+            .map(|arg| arg.as_ptr().cast_mut())
+            .collect::<Vec<_>>();
+        let mut nregs = 0;
+
+        let regs = tabix_c_135_parse_regions(
+            regions_c.as_ptr().cast_mut(),
+            argv_ptrs.as_mut_ptr(),
+            argv_ptrs.len() as libc::c_int,
+            &mut nregs,
+        );
+        assert!(!regs.is_null());
+        assert_eq!(nregs, 16);
+
+        let expanded = (0..nregs as usize)
+            .map(|i| CStr::from_ptr(*regs.add(i)).to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(expanded.first().unwrap(), "X:1001-1100");
+        assert_eq!(expanded[5], "Y:100001-100900");
+        assert_eq!(expanded[14], "Z:100009-100009");
+        assert_eq!(expanded.last().unwrap(), "chr7:10-20");
+
+        for i in 0..nregs as usize {
+            libc::free((*regs.add(i)).cast());
+        }
+        libc::free(regs.cast());
+    }
+}
+
+#[test]
 fn indexes_original_tabix_vcf_tbi_and_csi_queries_exact_expected_output() {
     unsafe {
         let conf = tbx_conf_vcf();
@@ -203,6 +247,23 @@ fn original_large_chr_tbi_fails_but_csi_query_matches_expected_output() {
                 c"chr20:1-2147483647",
             ),
             include_str!("../htslib/test/tabix/large_chr.20.1.2147483647.out")
+        );
+    }
+}
+
+#[test]
+fn original_large_chr_csi_query_includes_terminal_i32_boundary_record() {
+    unsafe {
+        let conf = tbx_conf_vcf();
+        assert_eq!(
+            query_tabix_rows(
+                "htslib/test/tabix/large_chr.vcf",
+                "csi",
+                14,
+                &conf,
+                c"chr20:2147483647-2147483647",
+            ),
+            "chr20\t2147483647\t.\tA\tT\t999\tPASS\t.\n"
         );
     }
 }

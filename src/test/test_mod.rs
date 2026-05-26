@@ -230,3 +230,105 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
     sam::hts_base_mod_state_free(m);
     ret
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::path::{Path, PathBuf};
+
+    fn fixture(path: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
+    }
+
+    fn c_path(path: &Path) -> CString {
+        CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    }
+
+    fn temp_output(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "htslib-rs-test-mod-main-{label}-{}-{}.out",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("unnamed")
+        ))
+    }
+
+    unsafe fn run_main_capture_stdout(args: &mut [CString], out_path: &Path) -> c_int {
+        let _ = std::fs::remove_file(out_path);
+        libc::fflush(std::ptr::null_mut());
+        let pid = libc::fork();
+        assert!(pid >= 0, "fork failed");
+
+        if pid == 0 {
+            let out_c = c_path(out_path);
+            let out_fd = libc::open(
+                out_c.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                0o600,
+            );
+            if out_fd < 0 {
+                libc::_exit(libc::EXIT_FAILURE);
+            }
+            if libc::dup2(out_fd, libc::STDOUT_FILENO) < 0 {
+                libc::close(out_fd);
+                libc::_exit(libc::EXIT_FAILURE);
+            }
+            libc::close(out_fd);
+
+            let mut argv = args
+                .iter_mut()
+                .map(|arg| arg.as_ptr().cast_mut())
+                .collect::<Vec<_>>();
+            let ret = test_test_mod_c_88_main(argv.len() as c_int, argv.as_mut_ptr());
+            libc::fflush(std::ptr::null_mut());
+            libc::_exit(ret);
+        }
+
+        let mut status = 0;
+        assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
+        assert!(libc::WIFEXITED(status), "child did not exit normally");
+        libc::WEXITSTATUS(status)
+    }
+
+    fn assert_main_output(label: &str, mut args: Vec<CString>, expected: &str) {
+        let out = temp_output(label);
+        unsafe {
+            assert_eq!(run_main_capture_stdout(&mut args, &out), 0);
+        }
+        let actual = std::fs::read_to_string(&out).unwrap();
+        let expected = std::fs::read_to_string(fixture(expected)).unwrap();
+        assert_eq!(actual, expected);
+        let _ = std::fs::remove_file(out);
+    }
+
+    #[test]
+    fn original_test_mod_main_matches_base_mod_fixture_outputs() {
+        assert_main_output(
+            "chebi-default",
+            vec![
+                CString::new("test_mod").unwrap(),
+                c_path(&fixture("htslib/test/base_mods/MM-chebi.sam")),
+            ],
+            "htslib/test/base_mods/MM-chebi.out",
+        );
+        assert_main_output(
+            "explicit-extended",
+            vec![
+                CString::new("test_mod").unwrap(),
+                CString::new("-x").unwrap(),
+                c_path(&fixture("htslib/test/base_mods/MM-explicit.sam")),
+            ],
+            "htslib/test/base_mods/MM-explicit-x.out",
+        );
+        assert_main_output(
+            "explicit-flags",
+            vec![
+                CString::new("test_mod").unwrap(),
+                CString::new("-f").unwrap(),
+                CString::new("1").unwrap(),
+                c_path(&fixture("htslib/test/base_mods/MM-explicit.sam")),
+            ],
+            "htslib/test/base_mods/MM-explicit-f.out",
+        );
+    }
+}
