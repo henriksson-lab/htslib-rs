@@ -39,7 +39,7 @@ unsafe extern "C" {
 
 macro_rules! error {
     ($fmt:expr $(, $arg:expr)* $(,)?) => {{
-        libc::fprintf(hts_sys::stderr.cast(), $fmt.as_ptr() $(, $arg)*);
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), $fmt.as_ptr() $(, $arg)*);
         libc::exit(libc::EXIT_FAILURE);
     }};
 }
@@ -47,49 +47,49 @@ macro_rules! error {
 // original: usage (htslib/test/test-bcf-sr.c:54)
 pub unsafe fn test_test_bcf_sr_c_54_usage(exit_code: c_int) -> ! {
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"Usage: test-bcf-sr [OPTIONS] vcf-list.txt\n".as_ptr(),
     );
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"       test-bcf-sr [OPTIONS] --args file1.bcf [...]\n".as_ptr(),
     );
-    libc::fprintf(hts_sys::stderr.cast(), c"Options:\n".as_ptr());
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Options:\n".as_ptr());
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"       --args                   pass filenames directly in argument list\n".as_ptr(),
     );
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"       --no-index               allow streaming\n".as_ptr(),
     );
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"   -o, --output <file>          output file (stdout if not set)\n".as_ptr(),
     );
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"   -O, --output-fmt <fmt>       fmt: vcf,bcf,summary\n".as_ptr(),
     );
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"   -p, --pair <logic[+ref]>     logic: snps,indels,both,snps+ref,indels+ref,both+ref,exact,some,all\n"
             .as_ptr(),
     );
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"   -r, --regions <reg_list>     comma-separated list of regions\n".as_ptr(),
     );
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"   -t, --targets <reg_list>     comma-separated list of targets\n".as_ptr(),
     );
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"   -u, --usefptr                use hfile pointer interface on reader addition\n"
             .as_ptr(),
     );
-    libc::fprintf(hts_sys::stderr.cast(), c"\n".as_ptr());
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"\n".as_ptr());
     libc::exit(exit_code);
 }
 
@@ -441,7 +441,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
     }
 
     if out_fmt == hts_sys::htsExactFormat_text_format {
-        let mut out = hts_sys::stdout.cast::<libc::FILE>();
+        let mut out = crate::htslib_rs::c_compat::stdout.cast::<libc::FILE>();
         if !out_fn.is_null() {
             out = libc::fopen(out_fn, c"w".as_ptr());
             if out.is_null() {

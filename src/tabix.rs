@@ -66,31 +66,31 @@ unsafe fn cstr_to_string(s: *const c_char) -> String {
 }
 
 unsafe fn error_message(message: String) -> ! {
-    libc::fflush(hts_sys::stdout.cast());
+    libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
     let message = CString::new(message).unwrap_or_else(|_| CString::new("fatal error\n").unwrap());
-    libc::fputs(message.as_ptr(), hts_sys::stderr.cast());
-    libc::fflush(hts_sys::stderr.cast());
+    libc::fputs(message.as_ptr(), crate::htslib_rs::c_compat::stderr.cast());
+    libc::fflush(crate::htslib_rs::c_compat::stderr.cast());
     libc::exit(libc::EXIT_FAILURE);
 }
 
 unsafe fn error_errno_message(message: Option<String>) -> ! {
     let eno = *libc::__errno_location();
-    libc::fflush(hts_sys::stdout.cast());
+    libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
     if let Some(message) = message.as_ref() {
         let message =
             CString::new(message.as_str()).unwrap_or_else(|_| CString::new("fatal error").unwrap());
-        libc::fputs(message.as_ptr(), hts_sys::stderr.cast());
+        libc::fputs(message.as_ptr(), crate::htslib_rs::c_compat::stderr.cast());
     }
     if eno != 0 {
         if message.is_some() {
-            libc::fputs(c": ".as_ptr(), hts_sys::stderr.cast());
+            libc::fputs(c": ".as_ptr(), crate::htslib_rs::c_compat::stderr.cast());
         }
-        libc::fputs(libc::strerror(eno), hts_sys::stderr.cast());
-        libc::fputc(b'\n' as c_int, hts_sys::stderr.cast());
+        libc::fputs(libc::strerror(eno), crate::htslib_rs::c_compat::stderr.cast());
+        libc::fputc(b'\n' as c_int, crate::htslib_rs::c_compat::stderr.cast());
     } else {
-        libc::fputc(b'\n' as c_int, hts_sys::stderr.cast());
+        libc::fputc(b'\n' as c_int, crate::htslib_rs::c_compat::stderr.cast());
     }
-    libc::fflush(hts_sys::stderr.cast());
+    libc::fflush(crate::htslib_rs::c_compat::stderr.cast());
     libc::exit(libc::EXIT_FAILURE);
 }
 
@@ -172,7 +172,7 @@ unsafe fn tbx_itr_querys1(tbx_: *mut tbx::tbx_t, region: *const c_char) -> *mut 
 
 unsafe fn bcf_itr_next(htsfp: *mut htsFile, itr: *mut hts_itr_t, r: *mut vcf::bcf1_t) -> c_int {
     if ((*htsfp).bitfields & (1 << 4)) != 0 {
-        return hts_sys::hts_itr_next(
+        return hts::hts_itr_next(
             (*htsfp).fp.bgzf.cast(),
             itr.cast(),
             r.cast(),
@@ -767,7 +767,7 @@ pub unsafe fn tabix_c_437_reheader_file(
             bgzf::bgzf_close(fp);
             return -1;
         }
-        if hts_sys::bgzf_read_block(fp.cast()) != 0 || (*fp).block_length == 0 {
+        if bgzf::bgzf_c_1485_bgzf_mt_read_block(fp) != 0 || (*fp).block_length == 0 {
             release_tpool(tpool);
             return -1;
         }
@@ -782,7 +782,7 @@ pub unsafe fn tabix_c_437_reheader_file(
                 if *buffer.add(skip_until as usize) == b'\n' as c_char {
                     skip_until += 1;
                     if skip_until >= (*fp).block_length {
-                        if hts_sys::bgzf_read_block(fp.cast()) != 0 || (*fp).block_length == 0 {
+                        if bgzf::bgzf_c_1485_bgzf_mt_read_block(fp) != 0 || (*fp).block_length == 0 {
                             release_tpool(tpool);
                             error_message(format!(
                                 "FIXME: No body in the file: {}\n",
@@ -798,7 +798,7 @@ pub unsafe fn tabix_c_437_reheader_file(
                 }
                 skip_until += 1;
                 if skip_until >= (*fp).block_length {
-                    if hts_sys::bgzf_read_block(fp.cast()) != 0 || (*fp).block_length == 0 {
+                    if bgzf::bgzf_c_1485_bgzf_mt_read_block(fp) != 0 || (*fp).block_length == 0 {
                         release_tpool(tpool);
                         error_message(format!(
                             "FIXME: No body in the file: {}\n",
@@ -1304,7 +1304,7 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 );
                 return libc::EXIT_SUCCESS;
             }
-            2 => return tabix_c_580_usage(hts_sys::stdout.cast(), libc::EXIT_SUCCESS),
+            2 => return tabix_c_580_usage(crate::htslib_rs::c_compat::stdout.cast(), libc::EXIT_SUCCESS),
             3 => {
                 let mut v = libc::atoi(optarg);
                 if v < 0 {
@@ -1322,7 +1322,7 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             }
             5 => args.separate_regs = 1,
             x if x == b'@' as c_int => args.threads = libc::atoi(optarg),
-            _ => return tabix_c_580_usage(hts_sys::stderr.cast(), libc::EXIT_FAILURE),
+            _ => return tabix_c_580_usage(crate::htslib_rs::c_compat::stderr.cast(), libc::EXIT_FAILURE),
         }
     }
 
@@ -1331,7 +1331,7 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     }
 
     if optind == argc {
-        return tabix_c_580_usage(hts_sys::stderr.cast(), libc::EXIT_FAILURE);
+        return tabix_c_580_usage(crate::htslib_rs::c_compat::stderr.cast(), libc::EXIT_FAILURE);
     }
 
     if list_chroms != 0 {

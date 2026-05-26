@@ -62,7 +62,7 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
 
         if sam::bam_parse_basemod2(b, m, flags) < 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed to parse MM/ML aux tags\n".as_ptr(),
             );
             sam::bam_destroy1(b);
@@ -219,7 +219,7 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
         libc::puts(c"\n===\n".as_ptr());
     }
 
-    libc::fflush(hts_sys::stdout.cast());
+    libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
     let mut ret = 0;
     if hts::hts_close(in_) != 0 || r < -1 {
         ret = 1;

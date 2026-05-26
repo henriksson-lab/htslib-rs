@@ -1,6 +1,13 @@
 use std::ffi::{c_char, c_int};
 
-pub type probaln_par_t = hts_sys::probaln_par_t;
+// original: probaln_par_t (htslib/htslib/hts.h:1435)
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct probaln_par_t {
+    pub d: f32,
+    pub e: f32,
+    pub bw: c_int,
+}
 
 unsafe extern "C" {
     static mut optarg: *mut c_char;
@@ -460,7 +467,7 @@ mod tests {
                     query.as_ptr(),
                     query.len() as c_int,
                     qual.as_ptr(),
-                    &par,
+                    (&par as *const probaln_par_t).cast(),
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
                 );
@@ -795,7 +802,7 @@ mod tests {
                 query.as_ptr(),
                 query.len() as c_int,
                 qual.as_ptr(),
-                &par,
+                (&par as *const probaln_par_t).cast(),
                 c_state.as_mut_ptr(),
                 c_q.as_mut_ptr(),
             );
@@ -896,7 +903,7 @@ mod tests {
                 query.as_ptr(),
                 query.len() as c_int,
                 qual.as_ptr(),
-                &par,
+                (&par as *const probaln_par_t).cast(),
                 c_state.as_mut_ptr(),
                 c_q.as_mut_ptr(),
             );
@@ -939,7 +946,7 @@ mod tests {
                 query.as_ptr(),
                 query.len() as c_int,
                 qual.as_ptr(),
-                &par,
+                (&par as *const probaln_par_t).cast(),
                 c_state.as_mut_ptr(),
                 c_q.as_mut_ptr(),
             );
@@ -988,7 +995,7 @@ pub unsafe fn probaln_c_438_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     }
     if optind + 2 > argc {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Usage: %s [-q %d] [-b %d] <ref> <query>\n".as_ptr(),
             *argv,
             q,
@@ -1034,7 +1041,7 @@ pub unsafe fn probaln_c_438_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
         std::ptr::null_mut(),
         std::ptr::null_mut(),
     );
-    libc::fprintf(hts_sys::stderr.cast(), c"%d\n".as_ptr(), p);
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"%d\n".as_ptr(), p);
     libc::free(iqual.cast());
     0
 }

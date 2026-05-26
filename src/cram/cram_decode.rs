@@ -207,15 +207,21 @@ extern "C" {
     fn hts_tpool_process_sz(q: *mut hts_tpool_process) -> ::core::ffi::c_int;
     fn pthread_mutex_lock(__mutex: *mut pthread_mutex_t) -> ::core::ffi::c_int;
     fn pthread_mutex_unlock(__mutex: *mut pthread_mutex_t) -> ::core::ffi::c_int;
-    fn cram_get_ref(
-        fd: *mut cram_fd,
-        id: ::core::ffi::c_int,
-        start: hts_pos_t,
-        end: hts_pos_t,
-    ) -> *mut ::core::ffi::c_char;
     fn cram_ref_decr(r: *mut refs_t, id: ::core::ffi::c_int);
     fn cram_free_slice(s: *mut cram_slice);
     fn cram_read_slice(fd: *mut cram_fd) -> *mut cram_slice;
+}
+
+// Native CRAM reference-sequence cache (see src/cram.rs). The cram_fd here is a
+// full-field repr(C) mirror of the C-allocated struct, so a cast is sound.
+#[inline]
+unsafe fn cram_get_ref(
+    fd: *mut cram_fd,
+    id: ::core::ffi::c_int,
+    start: hts_pos_t,
+    end: hts_pos_t,
+) -> *mut ::core::ffi::c_char {
+    crate::htslib_rs::cram::cram_cram_io_c_3409_cram_get_ref(fd.cast(), id, start, end)
 }
 pub type size_t = usize;
 pub type __int8_t = i8;
@@ -5595,16 +5601,12 @@ unsafe extern "C" fn htell(mut fp: *mut hFILE) -> off_t {
 }
 #[inline]
 unsafe extern "C" fn hgetc(mut fp: *mut hFILE) -> ::core::ffi::c_int {
-    extern "C" {
-        #[link_name = "hgetc2"]
-        fn hgetc2_0(_: *mut hFILE) -> ::core::ffi::c_int;
-    }
     return if (*fp).end > (*fp).begin {
         let fresh151 = (*fp).begin;
         (*fp).begin = (*fp).begin.offset(1);
         *fresh151 as ::core::ffi::c_uchar as ::core::ffi::c_int
     } else {
-        hgetc2_0(fp)
+        crate::htslib_rs::hfile::hgetc2(fp.cast())
     };
 }
 #[inline]
@@ -5621,10 +5623,6 @@ unsafe extern "C" fn hread(
     mut buffer: *mut ::core::ffi::c_void,
     mut nbytes: size_t,
 ) -> ssize_t {
-    extern "C" {
-        #[link_name = "hread2"]
-        fn hread2_0(_: *mut hFILE, _: *mut ::core::ffi::c_void, _: size_t, _: size_t) -> ssize_t;
-    }
     let mut n: size_t = (*fp).end.offset_from((*fp).begin) as ::core::ffi::c_long as size_t;
     if n > nbytes {
         n = nbytes;
@@ -5634,21 +5632,17 @@ unsafe extern "C" fn hread(
     return if n == nbytes || (*fp).mobile() == 0 {
         n as ssize_t
     } else {
-        hread2_0(fp, buffer, nbytes, n)
+        crate::htslib_rs::hfile::hread2(fp.cast(), buffer, nbytes, n)
     };
 }
 #[inline]
 unsafe extern "C" fn hputc(mut c: ::core::ffi::c_int, mut fp: *mut hFILE) -> ::core::ffi::c_int {
-    extern "C" {
-        #[link_name = "hputc2"]
-        fn hputc2_0(_: ::core::ffi::c_int, _: *mut hFILE) -> ::core::ffi::c_int;
-    }
     if (*fp).begin < (*fp).limit {
         let fresh152 = (*fp).begin;
         (*fp).begin = (*fp).begin.offset(1);
         *fresh152 = c as ::core::ffi::c_char;
     } else {
-        c = hputc2_0(c, fp);
+        c = crate::htslib_rs::hfile::hputc2(c, fp.cast());
     }
     return c;
 }
@@ -5657,15 +5651,6 @@ unsafe extern "C" fn hputs(
     mut text: *const ::core::ffi::c_char,
     mut fp: *mut hFILE,
 ) -> ::core::ffi::c_int {
-    extern "C" {
-        #[link_name = "hputs2"]
-        fn hputs2_0(
-            _: *const ::core::ffi::c_char,
-            _: size_t,
-            _: size_t,
-            _: *mut hFILE,
-        ) -> ::core::ffi::c_int;
-    }
     let mut nbytes: size_t = strlen(text);
     let mut n: size_t = (*fp).limit.offset_from((*fp).begin) as ::core::ffi::c_long as size_t;
     if n > nbytes {
@@ -5680,7 +5665,7 @@ unsafe extern "C" fn hputs(
     return if n == nbytes {
         0 as ::core::ffi::c_int
     } else {
-        hputs2_0(text, nbytes, n, fp)
+        crate::htslib_rs::hfile::hputs2(text, nbytes, n, fp.cast())
     };
 }
 #[inline]
@@ -5689,20 +5674,11 @@ unsafe extern "C" fn hwrite(
     mut buffer: *const ::core::ffi::c_void,
     mut nbytes: size_t,
 ) -> ssize_t {
-    extern "C" {
-        #[link_name = "hwrite2"]
-        fn hwrite2_0(_: *mut hFILE, _: *const ::core::ffi::c_void, _: size_t, _: size_t)
-            -> ssize_t;
-    }
-    extern "C" {
-        #[link_name = "hfile_set_blksize"]
-        fn hfile_set_blksize_0(fp_0: *mut hFILE, bufsiz: size_t) -> ::core::ffi::c_int;
-    }
     if (*fp).mobile() == 0 {
         let mut n: size_t = (*fp).limit.offset_from((*fp).begin) as ::core::ffi::c_long as size_t;
         if n < nbytes {
-            hfile_set_blksize_0(
-                fp,
+            crate::htslib_rs::hfile::hfile_set_blksize(
+                fp.cast(),
                 ((*fp).limit.offset_from((*fp).buffer) as ::core::ffi::c_long as size_t)
                     .wrapping_add(nbytes),
             );
@@ -5711,7 +5687,7 @@ unsafe extern "C" fn hwrite(
     }
     let mut n_0: size_t = (*fp).limit.offset_from((*fp).begin) as ::core::ffi::c_long as size_t;
     if nbytes >= n_0 && (*fp).begin == (*fp).buffer {
-        return hwrite2_0(fp, buffer, nbytes, 0 as size_t);
+        return crate::htslib_rs::hfile::hwrite2(fp.cast(), buffer, nbytes, 0 as size_t);
     }
     if n_0 > nbytes {
         n_0 = nbytes;
@@ -5721,7 +5697,7 @@ unsafe extern "C" fn hwrite(
     return if n_0 == nbytes {
         n_0 as ssize_t
     } else {
-        hwrite2_0(fp, buffer, nbytes, n_0)
+        crate::htslib_rs::hfile::hwrite2(fp.cast(), buffer, nbytes, n_0)
     };
 }
 pub const BAM_CMATCH: ::core::ffi::c_int = 0 as ::core::ffi::c_int;

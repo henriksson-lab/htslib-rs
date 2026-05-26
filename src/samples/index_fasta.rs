@@ -14,7 +14,7 @@ pub unsafe fn samples_index_fasta_c_51_main(argc: c_int, argv: *mut *mut c_char)
     let mut ret = libc::EXIT_FAILURE;
 
     if argc != 2 {
-        samples_index_fasta_c_39_print_usage(hts_sys::stdout.cast());
+        samples_index_fasta_c_39_print_usage(crate::htslib_rs::c_compat::stdout.cast());
         return ret;
     }
     let filename = *argv.add(1);

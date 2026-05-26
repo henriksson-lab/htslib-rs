@@ -13,7 +13,8 @@ use crate::htslib_rs::hfile::hflush;
 use crate::htslib_rs::hts::{
     __ac_FNV1a_hash_string, __ac_Wang_hash, __ac_X31_hash_string, double_to_le, ed_swap_4p,
     find_file_extension, float_to_le, htsFile, htsLogLevel, hts_bin_maxpos, hts_expr_val_t,
-    hts_filter_eval2, hts_filter_t, hts_getline, hts_idx_destroy, hts_idx_load3, hts_idx_t,
+    hts_filter_eval2, hts_filter_t, hts_getline, hts_idx_destroy, hts_idx_finish, hts_idx_init,
+    hts_idx_load3, hts_idx_push, hts_idx_save_as, hts_idx_t,
     hts_itr_multi_bam, hts_itr_multi_next, hts_itr_next, hts_itr_query, hts_itr_regions, hts_itr_t,
     hts_parse_region, hts_pos_t, hts_reg2bin, hts_reglist_create, hts_reglist_free, hts_reglist_t,
     hts_str2int, hts_str2uint, i16_to_le, i32_to_le, isalnum_c, isalpha_c, isdigit_c, islower_c,
@@ -25,8 +26,6 @@ use crate::htslib_rs::hts::{
     HTS_IDX_NOCOOR, HTS_IDX_SAVE_REMOTE, HTS_IDX_START, HTS_MAX_EXT_LEN, HTS_PARSE_THOUSANDS_SEP,
     HTS_POS_MAX,
 };
-
-const BGZF_HTS_OPEN_FAST_BAM_READ: u32 = 1 << 16;
 
 extern "C" {
     fn hpeek(fp: *mut crate::htslib_rs::hts::hFILE, buffer: *mut c_void, nbytes: usize) -> isize;
@@ -3932,16 +3931,24 @@ pub unsafe fn sam_hrecs_group_order(hrecs: *mut sam_hrecs_t) -> c_int {
 
 // original: known_stderr (htslib/header.c:780)
 pub unsafe fn header_c_780_known_stderr(tool: *const c_char, advice: *const c_char) {
-    hts_sys::hts_log(
-        hts_sys::htsLogLevel_HTS_LOG_WARNING,
+    let tool_s = if tool.is_null() {
+        std::borrow::Cow::Borrowed("")
+    } else {
+        CStr::from_ptr(tool).to_string_lossy()
+    };
+    let msg = std::ffi::CString::new(format!(
+        "SAM file corrupted by embedded {tool_s} error/log message"
+    ))
+    .unwrap_or_default();
+    crate::htslib_rs::hts::hts_log_cstr(
+        crate::htslib_rs::hts::HTS_LOG_WARNING,
         c"known_stderr".as_ptr(),
-        c"SAM file corrupted by embedded %s error/log message".as_ptr(),
-        tool,
+        msg.as_ptr(),
     );
-    hts_sys::hts_log(
-        hts_sys::htsLogLevel_HTS_LOG_WARNING,
+    // Second message was logged via "%s" with `advice`; pass it through verbatim.
+    crate::htslib_rs::hts::hts_log_cstr(
+        crate::htslib_rs::hts::HTS_LOG_WARNING,
         c"known_stderr".as_ptr(),
-        c"%s".as_ptr(),
         advice,
     );
 }
@@ -4626,11 +4633,7 @@ unsafe fn sam_c_1907_sam_hdr_create(fp: *mut htsFile) -> *mut sam_hdr_t {
             break;
         }
 
-        let ret = hts_sys::hts_getline(
-            fp.cast(),
-            2,
-            (&mut (*fp).line as *mut crate::htslib_rs::hts::kstring_t).cast(),
-        );
+        let ret = crate::htslib_rs::hts::hts_getline(fp, 2, &mut (*fp).line);
         if ret < 0 {
             if ret < -1 {
                 sam_hdr_destroy(h);
@@ -8178,19 +8181,18 @@ unsafe fn sam_c_994_sam_index(fp: *mut htsFile, mut min_shift: c_int) -> *mut ht
         (HTS_FMT_BAI, 5)
     };
 
-    let idx = hts_sys::hts_idx_init(
+    let idx = hts_idx_init(
         (*h).n_targets,
         fmt,
         sam_c_1638_bam_ptell((*fp).fp.bgzf.cast()) as u64,
         min_shift,
         n_lvls,
-    )
-    .cast::<hts_idx_t>();
+    );
     let b = bam_init1();
     let mut ret = sam_read1(fp, h, b);
     while ret >= 0 {
-        ret = hts_sys::hts_idx_push(
-            idx.cast(),
+        ret = hts_idx_push(
+            idx,
             (*b).core.tid,
             (*b).core.pos,
             bam_endpos(b),
@@ -8210,8 +8212,8 @@ unsafe fn sam_c_994_sam_index(fp: *mut htsFile, mut min_shift: c_int) -> *mut ht
         return std::ptr::null_mut();
     }
 
-    hts_sys::hts_idx_finish(
-        idx.cast(),
+    hts_idx_finish(
+        idx,
         sam_c_1638_bam_ptell((*fp).fp.bgzf.cast()) as u64,
     );
     sam_hdr_destroy(h);
@@ -8225,7 +8227,59 @@ pub unsafe fn sam_index_build3(
     min_shift: c_int,
     nthreads: c_int,
 ) -> c_int {
-    hts_sys::sam_index_build3(fn_, fnidx, min_shift, nthreads)
+    let fp = crate::htslib_rs::hts::hts_open(fn_, c"r".as_ptr());
+    if fp.is_null() {
+        return -2;
+    }
+
+    // CRAM indexing is owned by another module and remains delegated to the
+    // C implementation; close our probe handle and hand off the whole call.
+    if (*fp).format.format == HTS_FORMAT_CRAM {
+        crate::htslib_rs::hts::hts_close(fp);
+        return hts_sys::sam_index_build3(fn_, fnidx, min_shift, nthreads);
+    }
+
+    if nthreads != 0 {
+        crate::htslib_rs::hts::hts_set_threads(fp, nthreads);
+    }
+
+    let ret = match (*fp).format.format {
+        HTS_FORMAT_BAM | HTS_FORMAT_SAM => {
+            if (*fp).format.compression != hts_sys::htsCompression_bgzf {
+                crate::htslib_rs::hts::hts_log_cstr(
+                    crate::htslib_rs::hts::HTS_LOG_ERROR,
+                    c"sam_index_build3".as_ptr(),
+                    if (*fp).format.format == HTS_FORMAT_BAM {
+                        c"BAM file not BGZF compressed".as_ptr()
+                    } else {
+                        c"SAM file not BGZF compressed".as_ptr()
+                    },
+                );
+                -1
+            } else {
+                let idx = sam_c_994_sam_index(fp, min_shift);
+                if idx.is_null() {
+                    -1
+                } else {
+                    let mut ret = hts_idx_save_as(
+                        idx,
+                        fn_,
+                        fnidx,
+                        if min_shift > 0 { HTS_FMT_CSI } else { HTS_FMT_BAI },
+                    );
+                    if ret < 0 {
+                        ret = -4;
+                    }
+                    hts_idx_destroy(idx);
+                    ret
+                }
+            }
+        }
+        _ => -3,
+    };
+    crate::htslib_rs::hts::hts_close(fp);
+
+    ret
 }
 
 pub unsafe fn sam_index_build2(
@@ -8475,7 +8529,7 @@ unsafe fn sam_fix_cram_group_tlen(group: &[*mut bam1_t]) {
 
 pub unsafe fn sam_c_3719_sam_set_thread_pool(
     fp: *mut htsFile,
-    p: *mut hts_sys::htsThreadPool,
+    p: *mut crate::htslib_rs::hts::htsThreadPool,
 ) -> c_int {
     if fp.is_null() || p.is_null() {
         return -1;
@@ -8500,10 +8554,8 @@ pub unsafe fn sam_c_3746_sam_set_threads(fp: *mut htsFile, nthreads: c_int) -> c
 }
 
 pub unsafe fn bam_read1(fp: *mut BGZF, b: *mut bam1_t) -> c_int {
-    if !fp.is_null() && ((*fp).bitfields & BGZF_HTS_OPEN_FAST_BAM_READ) != 0 {
-        return hts_sys::bam_read1(fp.cast(), b.cast());
-    }
-
+    // Fully native BAM record reader over the (now native) bgzf layer; the C
+    // fast-read delegation was removed (the open-time fast-read flag is inert).
     let c = &mut (*b).core;
     let mut block_len_buf = [0u8; 4];
     let mut core_buf = [0u8; 32];
@@ -8619,11 +8671,7 @@ unsafe fn sam_c_4157_sam_read1_sam(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut 
     }
 
     loop {
-        let ret = hts_sys::hts_getline(
-            fp.cast(),
-            2,
-            (&mut (*fp).line as *mut crate::htslib_rs::hts::kstring_t).cast(),
-        );
+        let ret = crate::htslib_rs::hts::hts_getline(fp, 2, &mut (*fp).line);
         if ret < 0 {
             return ret;
         }
@@ -16749,20 +16797,20 @@ mod tests {
             assert_eq!(
                 sam_c_3719_sam_set_thread_pool(
                     &mut fp,
-                    (&mut hts_sys::htsThreadPool {
+                    (&mut crate::htslib_rs::hts::htsThreadPool {
                         pool: std::ptr::null_mut(),
                         qsize: 0,
-                    }) as *mut hts_sys::htsThreadPool,
+                    }) as *mut crate::htslib_rs::hts::htsThreadPool,
                 ),
                 -1
             );
             assert_eq!(
                 sam_c_3719_sam_set_thread_pool(
                     &mut fp,
-                    (&mut hts_sys::htsThreadPool {
+                    (&mut crate::htslib_rs::hts::htsThreadPool {
                         pool: std::ptr::dangling_mut(),
                         qsize: 0,
-                    }) as *mut hts_sys::htsThreadPool,
+                    }) as *mut crate::htslib_rs::hts::htsThreadPool,
                 ),
                 0
             );
@@ -16770,10 +16818,10 @@ mod tests {
             assert_eq!(
                 sam_c_3719_sam_set_thread_pool(
                     &mut fp,
-                    (&mut hts_sys::htsThreadPool {
+                    (&mut crate::htslib_rs::hts::htsThreadPool {
                         pool: std::ptr::null_mut(),
                         qsize: 0,
-                    }) as *mut hts_sys::htsThreadPool,
+                    }) as *mut crate::htslib_rs::hts::htsThreadPool,
                 ),
                 -2
             );

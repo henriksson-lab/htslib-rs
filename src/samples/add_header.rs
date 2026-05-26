@@ -20,7 +20,7 @@ pub unsafe fn samples_add_header_c_49_main(argc: c_int, argv: *mut *mut c_char) 
         s: std::ptr::null_mut(),
     };
     if argc != 2 {
-        samples_add_header_c_37_print_usage(hts_sys::stderr.cast());
+        samples_add_header_c_37_print_usage(crate::htslib_rs::c_compat::stderr.cast());
         crate::htslib_rs::hts::ks_free(&mut data);
         return ret;
     }

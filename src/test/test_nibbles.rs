@@ -112,7 +112,7 @@ pub unsafe fn test_test_nibbles_c_78_validate_nibble2base() -> c_int {
 
     if failed > 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failures: %llu (out of %llu tests)\n".as_ptr(),
             failed,
             total,

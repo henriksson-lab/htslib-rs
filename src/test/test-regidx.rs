@@ -85,7 +85,7 @@ pub unsafe fn test_test_regidx_c_106_test_sequential_access() {
         ptr::null_mut(),
     );
     if idx.is_null() {
-        libc::fprintf(hts_sys::stderr.cast(), c"init failed\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"init failed\n".as_ptr());
         libc::exit(-1);
     }
 
@@ -106,7 +106,7 @@ pub unsafe fn test_test_regidx_c_106_test_sequential_access() {
         kputsn(buf.as_ptr(), len as usize, &mut str_);
         if regidx_c_198_regidx_insert(idx, str_.s) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert failed: %s\n".as_ptr(),
                 str_.s,
             );
@@ -119,7 +119,7 @@ pub unsafe fn test_test_regidx_c_106_test_sequential_access() {
     while regidx_c_646_regitr_loop(itr) != 0 {
         if (*itr).beg != (*itr).end || (*itr).beg + 1 != 10 * (i + 1) as hts_pos_t {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"listing failed, expected %d, found %ld\n".as_ptr(),
                 10 * (i + 1),
                 (*itr).beg + 1,
@@ -133,7 +133,7 @@ pub unsafe fn test_test_regidx_c_106_test_sequential_access() {
         let payload = *(*itr).payload.cast::<*mut c_char>();
         if libc::strcmp(payload, str_.s) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"listing failed, expected payload \"%s\", found \"%s\"\n".as_ptr(),
                 str_.s,
                 payload,
@@ -144,7 +144,7 @@ pub unsafe fn test_test_regidx_c_106_test_sequential_access() {
     }
     if i != n {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Expected %d regions, listed %d\n".as_ptr(),
             n,
             i,
@@ -153,7 +153,7 @@ pub unsafe fn test_test_regidx_c_106_test_sequential_access() {
     }
     if VERBOSE >= 2 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"ok: listed %d regions\n".as_ptr(),
             n,
         );
@@ -174,14 +174,14 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
         ptr::null_mut(),
     );
     if idx.is_null() {
-        libc::fprintf(hts_sys::stderr.cast(), c"init failed\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"init failed\n".as_ptr());
         libc::exit(-1);
     }
 
     let mut line = c"1 10000000 10000000 1:10000000-10000000".as_ptr() as *mut c_char;
     if regidx_c_198_regidx_insert(idx, line) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"insert failed: %s\n".as_ptr(),
             line,
         );
@@ -190,7 +190,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     line = c"1 20000000 20000001 1:20000000-20000001".as_ptr() as *mut c_char;
     if regidx_c_198_regidx_insert(idx, line) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"insert failed: %s\n".as_ptr(),
             line,
         );
@@ -199,7 +199,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     line = c"1 20000002 20000002 1:20000002-20000002".as_ptr() as *mut c_char;
     if regidx_c_198_regidx_insert(idx, line) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"insert failed: %s\n".as_ptr(),
             line,
         );
@@ -208,7 +208,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     line = c"1 30000000 30000000 1:30000000-30000000".as_ptr() as *mut c_char;
     if regidx_c_198_regidx_insert(idx, line) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"insert failed: %s\n".as_ptr(),
             line,
         );
@@ -217,7 +217,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     line = c"1 8000000000 8000000000 1:8000000000-8000000000".as_ptr() as *mut c_char;
     if regidx_c_198_regidx_insert(idx, line) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"insert failed: %s\n".as_ptr(),
             line,
         );
@@ -230,7 +230,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
 
     if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 1, to - 1, itr) == 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
             from,
             to,
@@ -243,7 +243,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     ) != 0
     {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld vs %s\n".as_ptr(),
             from,
             to,
@@ -253,7 +253,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     }
     if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 2, to - 1, itr) == 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
             from - 1,
             to,
@@ -262,7 +262,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     }
     if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 2, to + 3, itr) == 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
             from - 1,
             to + 2,
@@ -271,7 +271,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     }
     if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 2, to - 2, itr) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
             from - 1,
             to - 1,
@@ -283,7 +283,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     to = 20000000;
     if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 1, to - 1, itr) == 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
             from,
             to,
@@ -295,7 +295,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     to = 20000002;
     if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 1, to - 1, itr) == 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
             from,
             to,
@@ -307,7 +307,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     to = 30000000;
     if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 1, to - 1, itr) == 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
             from,
             to,
@@ -319,7 +319,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     to = 8000000000;
     if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 1, to - 1, itr) == 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
             from,
             to,
@@ -331,7 +331,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     to &= 0xffffffffu32 as hts_pos_t;
     if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 1, to - 1, itr) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"query should not succeed: 1:%ld-%ld\n".as_ptr(),
             from,
             to,
@@ -369,7 +369,7 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
         ptr::null_mut(),
     );
     if idx.is_null() {
-        libc::fprintf(hts_sys::stderr.cast(), c"init failed\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"init failed\n".as_ptr());
         libc::exit(-1);
     }
 
@@ -397,7 +397,7 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
         kputsn(buf.as_ptr(), len as usize, &mut str_);
         if regidx_c_198_regidx_insert(idx, str_.s) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert failed: %s\n".as_ptr(),
                 str_.s,
             );
@@ -414,7 +414,7 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
         regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), beg as hts_pos_t, end as hts_pos_t, itr);
     if nexp != 0 && ret == 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed, expected %d overlap(s), found none: %d-%d\n".as_ptr(),
             nexp,
             beg + 1,
@@ -424,7 +424,7 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
     }
     if nexp == 0 && ret != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed, expected no overlaps, found some: %d-%d\n".as_ptr(),
             beg + 1,
             end + 1,
@@ -445,7 +445,7 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
         let payload = *(*itr).payload.cast::<*mut c_char>();
         if libc::strcmp(str_.s, payload) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"query failed, incorrect payload: %s vs %s (%d-%d)\n".as_ptr(),
                 str_.s,
                 payload,
@@ -456,7 +456,7 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
         }
         if (*itr).beg > end as hts_pos_t || (*itr).end < beg as hts_pos_t {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"query failed, incorrect hit: %d-%d vs %ld-%ld, payload %s\n".as_ptr(),
                 beg + 1,
                 end + 1,
@@ -470,7 +470,7 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
     }
     if nexp != nhit {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed, expected %d overlap(s), found %d: %d-%d\n".as_ptr(),
             nexp,
             nhit,
@@ -481,7 +481,7 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
     }
     if VERBOSE >= 2 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"ok: found %d overlaps\n".as_ptr(),
             nexp,
         );
@@ -518,11 +518,11 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
         str_.l = 0;
         kputsn(beg_p, end_p.offset_from(beg_p) as usize, &mut str_);
         if VERBOSE >= 2 {
-            libc::fprintf(hts_sys::stderr.cast(), c"insert: %s\n".as_ptr(), str_.s);
+            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"insert: %s\n".as_ptr(), str_.s);
         }
         if regidx_c_198_regidx_insert(idx, str_.s) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert failed: %s\n".as_ptr(),
                 str_.s,
             );
@@ -556,7 +556,7 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
         ) != 0
         {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"could not parse: %s in %s\n".as_ptr(),
                 str_.s,
                 qry,
@@ -568,7 +568,7 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
         if *exp == b'1' as c_char {
             if hit == 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"query failed, there should be a hit .. %s:%ld-%ld\n".as_ptr(),
                     chr_beg,
                     reg_beg + 1,
@@ -577,7 +577,7 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
                 libc::exit(-1);
             } else if VERBOSE >= 2 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"ok: overlap found for %s:%ld-%ld\n".as_ptr(),
                     chr_beg,
                     reg_beg + 1,
@@ -587,7 +587,7 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
         } else if *exp == b'0' as c_char {
             if hit != 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"query failed, there should be no hit .. %s:%ld-%ld\n".as_ptr(),
                     chr_beg,
                     reg_beg + 1,
@@ -596,7 +596,7 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
                 libc::exit(-1);
             } else if VERBOSE >= 2 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"ok: no overlap found for %s:%ld-%ld\n".as_ptr(),
                     chr_beg,
                     reg_beg + 1,
@@ -605,7 +605,7 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
             }
         } else {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"could not parse: %s\n".as_ptr(),
                 exp_ori,
             );
@@ -657,7 +657,7 @@ type set_line_f = unsafe fn(*mut c_char, usize, *mut c_char, c_int, c_int);
 pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_parse_f) {
     let idx = regidx_c_246_regidx_init(ptr::null(), parse, None, 0, ptr::null_mut());
     if idx.is_null() {
-        libc::fprintf(hts_sys::stderr.cast(), c"init failed\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"init failed\n".as_ptr());
         libc::exit(-1);
     }
 
@@ -670,14 +670,14 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         set_line(line.as_mut_ptr(), line.len(), chr, start, end);
         if VERBOSE >= 2 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert: %s".as_ptr(),
                 line.as_ptr(),
             );
         }
         if regidx_c_198_regidx_insert(idx, line.as_mut_ptr()) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert failed: %s\n".as_ptr(),
                 line.as_ptr(),
             );
@@ -689,14 +689,14 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         set_line(line.as_mut_ptr(), line.len(), chr, start, end);
         if VERBOSE >= 2 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert: %s".as_ptr(),
                 line.as_ptr(),
             );
         }
         if regidx_c_198_regidx_insert(idx, line.as_mut_ptr()) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert failed: %s\n".as_ptr(),
                 line.as_ptr(),
             );
@@ -708,14 +708,14 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         set_line(line.as_mut_ptr(), line.len(), chr, start, end);
         if VERBOSE >= 2 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert: %s".as_ptr(),
                 line.as_ptr(),
             );
         }
         if regidx_c_198_regidx_insert(idx, line.as_mut_ptr()) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert failed: %s\n".as_ptr(),
                 line.as_ptr(),
             );
@@ -736,7 +736,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         ) != 0
         {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"query failed, there should be no hit: %s:%d-%d\n".as_ptr(),
                 chr,
                 start,
@@ -746,7 +746,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         }
         if VERBOSE >= 2 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"ok: no overlap found for %s:%d-%d\n".as_ptr(),
                 chr,
                 start,
@@ -765,7 +765,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         ) == 0
         {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"query failed, there should be a hit: %s:%d-%d\n".as_ptr(),
                 chr,
                 start,
@@ -775,7 +775,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         }
         if VERBOSE >= 2 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"ok: overlap(s) found for %s:%d-%d\n".as_ptr(),
                 chr,
                 start,
@@ -786,7 +786,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         while regidx_c_612_regitr_overlap(itr) != 0 {
             if (*itr).beg > (end - 1) as hts_pos_t || (*itr).end < (start - 1) as hts_pos_t {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"query failed, incorrect region: %ld-%ld for %d-%d\n".as_ptr(),
                     (*itr).beg + 1,
                     (*itr).end + 1,
@@ -797,7 +797,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
             }
             if VERBOSE >= 2 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"\t %ld-%ld\n".as_ptr(),
                     (*itr).beg + 1,
                     (*itr).end + 1,
@@ -807,7 +807,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         }
         if nhit != 1 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"query failed, expected one hit, found %d: %s:%d-%d\n".as_ptr(),
                 nhit,
                 chr,
@@ -828,7 +828,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         ) == 0
         {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"query failed, there should be a hit: %s:%d-%d\n".as_ptr(),
                 chr,
                 start,
@@ -838,7 +838,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         }
         if VERBOSE >= 2 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"ok: overlap(s) found for %s:%d-%d\n".as_ptr(),
                 chr,
                 start,
@@ -849,7 +849,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         while regidx_c_612_regitr_overlap(itr) != 0 {
             if (*itr).beg > (end - 1) as hts_pos_t || (*itr).end < (start - 1) as hts_pos_t {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"query failed, incorrect region: %ld-%ld for %d-%d\n".as_ptr(),
                     (*itr).beg + 1,
                     (*itr).end + 1,
@@ -860,7 +860,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
             }
             if VERBOSE >= 2 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"\t %ld-%ld\n".as_ptr(),
                     (*itr).beg + 1,
                     (*itr).end + 1,
@@ -870,7 +870,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         }
         if nhit != 1 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"query failed, expected one hit, found %d: %s:%d-%d\n".as_ptr(),
                 nhit,
                 chr,
@@ -891,7 +891,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         ) == 0
         {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"query failed, there should be a hit: %s:%d-%d\n".as_ptr(),
                 chr,
                 start,
@@ -901,7 +901,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         }
         if VERBOSE >= 2 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"ok: overlap(s) found for %s:%d-%d\n".as_ptr(),
                 chr,
                 start,
@@ -912,7 +912,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         while regidx_c_612_regitr_overlap(itr) != 0 {
             if (*itr).beg > (end - 1) as hts_pos_t || (*itr).end < (start - 1) as hts_pos_t {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"query failed, incorrect region: %ld-%ld for %d-%d\n".as_ptr(),
                     (*itr).beg + 1,
                     (*itr).end + 1,
@@ -923,7 +923,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
             }
             if VERBOSE >= 2 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"\t %ld-%ld\n".as_ptr(),
                     (*itr).beg + 1,
                     (*itr).end + 1,
@@ -933,7 +933,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         }
         if nhit != 2 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"query failed, expected two hits, found %d: %s:%d-%d\n".as_ptr(),
                 nhit,
                 chr,
@@ -955,7 +955,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         ) == 0
         {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"query failed, there should be a hit: %s:%d-%d\n".as_ptr(),
                 chr,
                 start,
@@ -965,7 +965,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         }
         if VERBOSE >= 2 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"ok: overlap(s) found for %s:%d-%d\n".as_ptr(),
                 chr,
                 start,
@@ -976,7 +976,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         while regidx_c_612_regitr_overlap(itr) != 0 {
             if (*itr).beg > (end - 1) as hts_pos_t || (*itr).end < (start - 1) as hts_pos_t {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"query failed, incorrect region: %ld-%ld for %d-%d\n".as_ptr(),
                     (*itr).beg + 1,
                     (*itr).end + 1,
@@ -987,7 +987,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
             }
             if VERBOSE >= 2 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"\t %ld-%ld\n".as_ptr(),
                     (*itr).beg + 1,
                     (*itr).end + 1,
@@ -997,7 +997,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         }
         if nhit != 1 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"query failed, expected one hit, found %d: %s:%d-%d\n".as_ptr(),
                 nhit,
                 chr,
@@ -1014,20 +1014,20 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
 // original: usage (htslib/test/test-regidx.c:415)
 pub unsafe fn test_test_regidx_c_415_usage() -> ! {
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"Usage: test-regidx [OPTIONS]\n".as_ptr(),
     );
-    libc::fprintf(hts_sys::stderr.cast(), c"Options:\n".as_ptr());
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Options:\n".as_ptr());
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"   -h, --help          this help message\n".as_ptr(),
     );
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"   -s, --seed <int>    random seed\n".as_ptr(),
     );
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"   -v, --verbose       increase verbosity by giving multiple times\n".as_ptr(),
     );
     libc::exit(1);
@@ -1082,14 +1082,14 @@ pub unsafe fn test_test_regidx_c_426_main(argc: c_int, argv: *mut *mut c_char) -
 
     if VERBOSE >= 1 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Testing sequential access\n".as_ptr(),
         );
     }
     test_test_regidx_c_106_test_sequential_access();
 
     if VERBOSE >= 1 {
-        libc::fprintf(hts_sys::stderr.cast(), c"Testing TAB\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Testing TAB\n".as_ptr());
     }
     test_test_regidx_c_322_test(
         test_test_regidx_c_311_create_line_tab,
@@ -1097,7 +1097,7 @@ pub unsafe fn test_test_regidx_c_426_main(argc: c_int, argv: *mut *mut c_char) -
     );
 
     if VERBOSE >= 1 {
-        libc::fprintf(hts_sys::stderr.cast(), c"Testing REG\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Testing REG\n".as_ptr());
     }
     test_test_regidx_c_322_test(
         test_test_regidx_c_315_create_line_reg,
@@ -1105,7 +1105,7 @@ pub unsafe fn test_test_regidx_c_426_main(argc: c_int, argv: *mut *mut c_char) -
     );
 
     if VERBOSE >= 1 {
-        libc::fprintf(hts_sys::stderr.cast(), c"Testing BED\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Testing BED\n".as_ptr());
     }
     test_test_regidx_c_322_test(
         test_test_regidx_c_307_create_line_bed,
@@ -1113,13 +1113,13 @@ pub unsafe fn test_test_regidx_c_426_main(argc: c_int, argv: *mut *mut c_char) -
     );
 
     if VERBOSE >= 1 {
-        libc::fprintf(hts_sys::stderr.cast(), c"Testing custom payload\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Testing custom payload\n".as_ptr());
     }
     test_test_regidx_c_143_test_custom_payload();
 
     if VERBOSE >= 1 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Testing cases encountered in past\n".as_ptr(),
         );
     }
@@ -1134,7 +1134,7 @@ pub unsafe fn test_test_regidx_c_426_main(argc: c_int, argv: *mut *mut c_char) -
     libc::srand(seed as libc::c_uint);
     if VERBOSE >= 1 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%d randomized tests, %d regions per test. Random seed is %d\n".as_ptr(),
             ntest,
             nreg,

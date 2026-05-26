@@ -104,7 +104,7 @@ type HFileLibcurlRedirectCallback =
 type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> c_int;
 type HFileVOpenFn =
-    unsafe extern "C" fn(*const c_char, *const c_char, *mut hts_sys::__va_list_tag) -> *mut hFILE;
+    unsafe extern "C" fn(*const c_char, *const c_char, *mut crate::htslib_rs::c_compat::__va_list_tag) -> *mut hFILE;
 
 #[repr(C)]
 struct HFileSchemeHandlerLayout {
@@ -1905,7 +1905,7 @@ pub unsafe fn hfile_libcurl_c_1549_hopen_libcurl(
     hfile_libcurl_c_1313_libcurl_open(url, modes, std::ptr::null_mut())
 }
 
-unsafe fn hfile_libcurl_va_arg_word(args: *mut hts_sys::__va_list_tag) -> usize {
+unsafe fn hfile_libcurl_va_arg_word(args: *mut crate::htslib_rs::c_compat::__va_list_tag) -> usize {
     let args = &mut *args;
     if args.gp_offset <= 40 {
         let p = args.reg_save_area.cast::<u8>().add(args.gp_offset as usize);
@@ -1921,7 +1921,7 @@ unsafe fn hfile_libcurl_va_arg_word(args: *mut hts_sys::__va_list_tag) -> usize 
 // original: parse_va_list (htslib/hfile_libcurl.c:1554)
 pub unsafe fn hfile_libcurl_c_1554_parse_va_list(
     headers: *mut HFileLibcurlHeaders,
-    args: *mut hts_sys::__va_list_tag,
+    args: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> c_int {
     if headers.is_null() || args.is_null() {
         *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
@@ -1996,7 +1996,7 @@ pub unsafe fn hfile_libcurl_c_1554_parse_va_list(
         } else if libc::strcmp(argtype, c"httphdr_callback_data".as_ptr()) == 0 {
             (*headers).callback_data = hfile_libcurl_va_arg_word(args) as *mut c_void;
         } else if libc::strcmp(argtype, c"va_list".as_ptr()) == 0 {
-            let args2 = hfile_libcurl_va_arg_word(args) as *mut hts_sys::__va_list_tag;
+            let args2 = hfile_libcurl_va_arg_word(args) as *mut crate::htslib_rs::c_compat::__va_list_tag;
             if !args2.is_null() && hfile_libcurl_c_1554_parse_va_list(headers, args2) < 0 {
                 return -1;
             }
@@ -2024,7 +2024,7 @@ pub unsafe fn hfile_libcurl_c_1554_parse_va_list(
 pub unsafe extern "C" fn hfile_libcurl_c_1664_vhopen_libcurl(
     url: *const c_char,
     modes: *const c_char,
-    args: *mut hts_sys::__va_list_tag,
+    args: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     let mut headers: HFileLibcurlHeaders = std::mem::zeroed();
     headers.fail_on_error = 1;
@@ -2173,7 +2173,7 @@ mod tests {
                 overflow[i - reg_save.len()] = word;
             }
         }
-        let mut args = hts_sys::__va_list_tag {
+        let mut args = crate::htslib_rs::c_compat::__va_list_tag {
             gp_offset: 0,
             fp_offset: 48,
             overflow_arg_area: overflow.as_mut_ptr().cast(),
@@ -2255,7 +2255,7 @@ mod tests {
             let mut nested_reg = [0usize; 6];
             nested_reg[..nested_words.len()].copy_from_slice(&nested_words);
             let mut nested_overflow = [0usize; 1];
-            let mut nested = hts_sys::__va_list_tag {
+            let mut nested = crate::htslib_rs::c_compat::__va_list_tag {
                 gp_offset: 0,
                 fp_offset: 48,
                 overflow_arg_area: nested_overflow.as_mut_ptr().cast(),
@@ -2265,7 +2265,7 @@ mod tests {
                 c"httphdr:v".as_ptr() as usize,
                 vector.as_ptr() as usize,
                 c"va_list".as_ptr() as usize,
-                (&mut nested as *mut hts_sys::__va_list_tag) as usize,
+                (&mut nested as *mut crate::htslib_rs::c_compat::__va_list_tag) as usize,
                 0,
             ];
 

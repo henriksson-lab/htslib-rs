@@ -26,7 +26,7 @@ pub unsafe fn samples_cram_c_53_main(argc: c_int, argv: *mut *mut c_char) -> c_i
     let mut fmt4: hts::htsFormat = std::mem::zeroed();
 
     if argc != 4 {
-        samples_cram_c_37_print_usage(hts_sys::stdout.cast());
+        samples_cram_c_37_print_usage(crate::htslib_rs::c_compat::stdout.cast());
         return ret;
     }
     let inname = *argv.add(1);

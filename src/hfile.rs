@@ -47,7 +47,7 @@ pub struct hFILE_plugin {
 type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> c_int;
 type HFileVOpenFn =
-    unsafe extern "C" fn(*const c_char, *const c_char, *mut hts_sys::__va_list_tag) -> *mut hFILE;
+    unsafe extern "C" fn(*const c_char, *const c_char, *mut crate::htslib_rs::c_compat::__va_list_tag) -> *mut hFILE;
 type HFilePluginInitFn = unsafe extern "C" fn(*mut hFILE_plugin) -> c_int;
 
 #[repr(C)]
@@ -208,90 +208,6 @@ pub unsafe fn hfile_c_1046_try_exe_add_scheme_handler(
     _handler: *const hFILE_scheme_handler,
 ) -> c_int {
     -1
-}
-
-unsafe extern "C" {
-    #[link_name = "hfile_init"]
-    fn htslib_hfile_init(struct_size: size_t, mode: *const c_char, capacity: size_t) -> *mut hFILE;
-    #[link_name = "hfile_destroy"]
-    fn htslib_hfile_destroy(fp: *mut hFILE);
-    #[link_name = "hfile_oflags"]
-    fn htslib_hfile_oflags(mode: *const c_char) -> c_int;
-    #[link_name = "hdopen"]
-    fn htslib_hdopen(fd: c_int, mode: *const c_char) -> *mut hFILE;
-    #[link_name = "hisremote"]
-    fn htslib_hisremote(filename: *const c_char) -> c_int;
-    #[link_name = "haddextension"]
-    fn htslib_haddextension(
-        buffer: *mut kstring_t,
-        filename: *const c_char,
-        replace: c_int,
-        extension: *const c_char,
-    ) -> *mut c_char;
-    #[link_name = "hclose"]
-    fn htslib_hclose(fp: *mut hFILE) -> c_int;
-    #[link_name = "hclose_abruptly"]
-    fn htslib_hclose_abruptly(fp: *mut hFILE);
-    #[link_name = "hseek"]
-    fn htslib_hseek(fp: *mut hFILE, offset: libc::off_t, whence: c_int) -> libc::off_t;
-    #[link_name = "hfile_set_blksize"]
-    fn htslib_hfile_set_blksize(fp: *mut hFILE, bufsiz: size_t) -> c_int;
-    #[link_name = "hgetc2"]
-    fn htslib_hgetc2(fp: *mut hFILE) -> c_int;
-    #[link_name = "hgetdelim"]
-    fn htslib_hgetdelim(
-        buffer: *mut c_char,
-        size: size_t,
-        delim: c_int,
-        fp: *mut hFILE,
-    ) -> libc::ssize_t;
-    #[link_name = "hgets"]
-    fn htslib_hgets(buffer: *mut c_char, size: c_int, fp: *mut hFILE) -> *mut c_char;
-    #[link_name = "khgetline"]
-    fn htslib_khgetline(kstr: *mut kstring_t, fp: *mut hFILE) -> c_int;
-    #[link_name = "hpeek"]
-    fn htslib_hpeek(fp: *mut hFILE, buffer: *mut c_void, nbytes: size_t) -> libc::ssize_t;
-    #[link_name = "hread2"]
-    fn htslib_hread2(
-        fp: *mut hFILE,
-        destv: *mut c_void,
-        nbytes: size_t,
-        nread: size_t,
-    ) -> libc::ssize_t;
-    #[link_name = "hputc2"]
-    fn htslib_hputc2(c: c_int, fp: *mut hFILE) -> c_int;
-    #[link_name = "hwrite2"]
-    fn htslib_hwrite2(
-        fp: *mut hFILE,
-        srcv: *const c_void,
-        totalbytes: size_t,
-        ncopied: size_t,
-    ) -> libc::ssize_t;
-    #[link_name = "hputs2"]
-    fn htslib_hputs2(
-        text: *const c_char,
-        totalbytes: size_t,
-        ncopied: size_t,
-        fp: *mut hFILE,
-    ) -> c_int;
-    #[link_name = "hflush"]
-    fn htslib_hflush(fp: *mut hFILE) -> c_int;
-    #[link_name = "hfile_mem_get_buffer"]
-    fn htslib_hfile_mem_get_buffer(file: *mut hFILE, length: *mut size_t) -> *mut c_char;
-    #[link_name = "hfile_mem_steal_buffer"]
-    fn htslib_hfile_mem_steal_buffer(file: *mut hFILE, length: *mut size_t) -> *mut c_char;
-    #[link_name = "hopen"]
-    fn htslib_hopen(fname: *const c_char, mode: *const c_char, ...) -> *mut hFILE;
-    #[link_name = "knet_open"]
-    fn htslib_knet_open(fn_: *const c_char, mode: *const c_char) -> *mut knetFile;
-    #[link_name = "knet_dopen"]
-    fn htslib_knet_dopen(fd: c_int, mode: *const c_char) -> *mut knetFile;
-    #[link_name = "knet_read"]
-    fn htslib_knet_read(fp: *mut knetFile, buf: *mut c_void, len: size_t) -> libc::ssize_t;
-    #[link_name = "knet_seek"]
-    fn htslib_knet_seek(fp: *mut knetFile, off: libc::off_t, whence: c_int) -> libc::off_t;
-    #[link_name = "knet_close"]
-    fn htslib_knet_close(fp: *mut knetFile) -> c_int;
 }
 
 pub unsafe fn hfile_init(struct_size: size_t, mode: *const c_char, capacity: size_t) -> *mut hFILE {
@@ -1274,7 +1190,7 @@ pub unsafe fn hfile_c_878_hopenv_mem(
     hf
 }
 
-unsafe fn hfile_c_va_arg_word(args: *mut hts_sys::__va_list_tag) -> usize {
+unsafe fn hfile_c_va_arg_word(args: *mut crate::htslib_rs::c_compat::__va_list_tag) -> usize {
     let args = &mut *args;
     if args.gp_offset <= 40 {
         let p = args.reg_save_area.cast::<u8>().add(args.gp_offset as usize);
@@ -1290,7 +1206,7 @@ unsafe fn hfile_c_va_arg_word(args: *mut hts_sys::__va_list_tag) -> usize {
 unsafe extern "C" fn hfile_c_878_hopenv_mem_va(
     filename: *const c_char,
     mode: *const c_char,
-    args: *mut hts_sys::__va_list_tag,
+    args: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     if args.is_null() {
         *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
@@ -1307,7 +1223,8 @@ pub unsafe fn hfile_c_894_hfile_mem_get_buffer(
 ) -> *mut c_char {
     let file_layout = file.cast::<hfile_layout>();
     if (*file_layout).backend != &MEM_BACKEND {
-        return htslib_hfile_mem_get_buffer(file, length);
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
     }
 
     if !length.is_null() {
@@ -1321,10 +1238,6 @@ pub unsafe fn hfile_c_906_hfile_mem_steal_buffer(
     file: *mut hFILE,
     length: *mut size_t,
 ) -> *mut c_char {
-    if (*(file.cast::<hfile_layout>())).backend != &MEM_BACKEND {
-        return htslib_hfile_mem_steal_buffer(file, length);
-    }
-
     let buf = hfile_c_894_hfile_mem_get_buffer(file, length);
     if !buf.is_null() {
         (*(file.cast::<hfile_layout>())).buffer = std::ptr::null_mut();
@@ -1726,7 +1639,7 @@ pub unsafe fn hfile_c_1168_hopen_unknown_scheme(
 pub unsafe fn hfile_c_1317_hopen_vargs(
     fname: *const c_char,
     mode: *const c_char,
-    args: *mut hts_sys::__va_list_tag,
+    args: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     let handler = hfile_c_1176_find_scheme_handler(fname);
     if !handler.is_null() {
@@ -2978,7 +2891,7 @@ mod tests {
         unsafe extern "C" fn tracked_vopen(
             _fname: *const c_char,
             _mode: *const c_char,
-            args: *mut hts_sys::__va_list_tag,
+            args: *mut crate::htslib_rs::c_compat::__va_list_tag,
         ) -> *mut hFILE {
             assert!(!args.is_null());
             VOPEN_CALLS.fetch_add(1, Ordering::SeqCst);
@@ -3019,7 +2932,7 @@ mod tests {
             assert_eq!(OPEN_CALLS.load(Ordering::SeqCst), 1);
             assert_eq!(VOPEN_CALLS.load(Ordering::SeqCst), 0);
 
-            let mut args = std::mem::MaybeUninit::<hts_sys::__va_list_tag>::uninit();
+            let mut args = std::mem::MaybeUninit::<crate::htslib_rs::c_compat::__va_list_tag>::uninit();
             assert!(hfile_c_1317_hopen_vargs(
                 c"zzvopen:path".as_ptr(),
                 c"r:".as_ptr(),
@@ -3045,7 +2958,7 @@ mod tests {
 
             let mut reg_save = [buffer as usize, payload.len()];
             let mut overflow = [0usize; 2];
-            let mut args = hts_sys::__va_list_tag {
+            let mut args = crate::htslib_rs::c_compat::__va_list_tag {
                 gp_offset: 0,
                 fp_offset: 48,
                 overflow_arg_area: overflow.as_mut_ptr().cast(),

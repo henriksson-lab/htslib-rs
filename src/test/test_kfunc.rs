@@ -20,7 +20,7 @@ pub unsafe fn test_test_kfunc_c_40_fail(
     n22: c_int,
 ) {
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"[%d %d | %d %d] %s: %g (expected %g)\n".as_ptr(),
         n11,
         n12,
@@ -128,7 +128,7 @@ pub unsafe fn test_test_kfunc_c_59_main(_argc: c_int, _argv: *mut *mut c_char) -
             c"s".as_ptr()
         };
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed %d test case%s\n".as_ptr(),
             TEST_KFUNC_NFAILED,
             plural,

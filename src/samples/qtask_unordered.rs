@@ -134,7 +134,7 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: c_int, argv: *mut *mut c_
     libc::pthread_mutex_init(&mut bamcache.lock, std::ptr::null());
 
     if argc != 3 && argc != 4 {
-        samples_qtask_unordered_c_62_print_usage(hts_sys::stdout.cast());
+        samples_qtask_unordered_c_62_print_usage(crate::htslib_rs::c_compat::stdout.cast());
     } else {
         let inname = *argv.add(1);
         let mut cnt = libc::atoi(*argv.add(2));
@@ -153,32 +153,32 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: c_int, argv: *mut *mut c_
         pool = thread_pool::hts_tpool_init(cnt);
         if pool.is_null() {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed to create thread pool\n".as_ptr(),
             );
         } else {
             tpool.pool = pool;
             queue = thread_pool::hts_tpool_process_init(pool, cnt * 2, 1);
             if queue.is_null() {
-                libc::fprintf(hts_sys::stderr.cast(), c"Failed to create queue\n".as_ptr());
+                libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Failed to create queue\n".as_ptr());
             } else {
                 infile = hts::hts_open(inname, c"r".as_ptr());
                 if infile.is_null() {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Could not open %s\n".as_ptr(),
                         inname,
                     );
                 } else if hts::hts_set_thread_pool(infile, &mut tpool) < 0 {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Failed to set threads to i/o files\n".as_ptr(),
                     );
                 } else {
                     in_samhdr = sam::sam_hdr_read(infile);
                     if in_samhdr.is_null() {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"Failed to read header from file!\n".as_ptr(),
                         );
                     } else {
@@ -192,7 +192,7 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: c_int, argv: *mut *mut c_
                             .cast();
                             if bamdata.is_null() {
                                 libc::fprintf(
-                                    hts_sys::stderr.cast(),
+                                    crate::htslib_rs::c_compat::stderr.cast(),
                                     c"Failed to allocate memory\n".as_ptr(),
                                 );
                                 break;
@@ -222,7 +222,7 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: c_int, argv: *mut *mut c_
                                 ) == -1
                                 {
                                     libc::fprintf(
-                                        hts_sys::stderr.cast(),
+                                        crate::htslib_rs::c_compat::stderr.cast(),
                                         c"Failed to schedule processing\n".as_ptr(),
                                     );
                                     break;
@@ -230,7 +230,7 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: c_int, argv: *mut *mut c_
                                 bamdata = std::ptr::null_mut();
                             } else {
                                 libc::fprintf(
-                                    hts_sys::stderr.cast(),
+                                    crate::htslib_rs::c_compat::stderr.cast(),
                                     c"Error in reading data\n".as_ptr(),
                                 );
                                 break;
@@ -240,12 +240,12 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: c_int, argv: *mut *mut c_
                         if c == -1 {
                             if thread_pool::hts_tpool_process_flush(queue) == -1 {
                                 libc::fprintf(
-                                    hts_sys::stderr.cast(),
+                                    crate::htslib_rs::c_compat::stderr.cast(),
                                     c"Failed to flush queue\n".as_ptr(),
                                 );
                             } else {
                                 libc::fprintf(
-                                    hts_sys::stdout.cast(),
+                                    crate::htslib_rs::c_compat::stdout.cast(),
                                     c"GCratio: %f\nBase counts:\n".as_ptr(),
                                     (gccount[2] + gccount[4]) as f64
                                         / (gccount[1] + gccount[8] + gccount[2] + gccount[4])
@@ -253,7 +253,7 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: c_int, argv: *mut *mut c_
                                 );
                                 for i in 0..16 {
                                     libc::fprintf(
-                                        hts_sys::stdout.cast(),
+                                        crate::htslib_rs::c_compat::stdout.cast(),
                                         c"%c: %llu\n".as_ptr(),
                                         SEQ_NT16_STR[i] as c_int,
                                         gccount[i] as libc::c_ulonglong,

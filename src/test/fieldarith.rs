@@ -21,7 +21,7 @@ pub unsafe fn test_fieldarith_c_34_check(
     let refvalue = sam::bam_aux2i(aux);
     if value as i64 != refvalue {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s FAIL for %s: computed %d != %d expected\n".as_ptr(),
             testname,
             sam::bam_get_qname(aln),

@@ -48,7 +48,7 @@ pub unsafe fn test_plugins_dlhts_c_48_sym(htslib: *mut c_void, name: *const c_ch
     let ptr = libc::dlsym(htslib, name);
     if ptr.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Can't find symbol \"%s\": %s\n".as_ptr(),
             name,
             libc::dlerror(),
@@ -77,7 +77,7 @@ pub unsafe fn test_plugins_dlhts_c_75_test_hopen(fname: *const c_char, expected:
             TEST_PLUGINS_DLHTS_HCLOSE_ABRUPTLY_P,
         ))(fp);
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Opening \"%s\" actually succeeded\n".as_ptr(),
             fname,
         );
@@ -89,7 +89,7 @@ pub unsafe fn test_plugins_dlhts_c_75_test_hopen(fname: *const c_char, expected:
     let supported = (errno != EPROTONOSUPPORT) as c_int;
     if supported != expected {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Opening \"%s\" failed badly: %s\n".as_ptr(),
             fname,
             libc::strerror(errno),
@@ -106,11 +106,11 @@ pub unsafe fn test_plugins_dlhts_c_75_test_hopen(fname: *const c_char, expected:
 
 // original: verbose_log (htslib/test/plugins-dlhts.c:94)
 pub unsafe fn test_plugins_dlhts_c_94_verbose_log(message: *const c_char) {
-    libc::fflush(hts_sys::stderr.cast());
+    libc::fflush(crate::htslib_rs::c_compat::stderr.cast());
     if TEST_PLUGINS_DLHTS_VERBOSE != 0 {
         libc::puts(message);
     }
-    libc::fflush(hts_sys::stdout.cast());
+    libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
 }
 
 // original: main (htslib/test/plugins-dlhts.c:101)
@@ -136,7 +136,7 @@ pub unsafe fn test_plugins_dlhts_c_101_main(argc: c_int, argv: *mut *mut c_char)
 
     if optind >= argc {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Usage: plugins-dlhts [-glv] LIBHTSFILE\n".as_ptr(),
         );
         return libc::EXIT_FAILURE;
@@ -145,7 +145,7 @@ pub unsafe fn test_plugins_dlhts_c_101_main(argc: c_int, argv: *mut *mut c_char)
     let htslib = libc::dlopen(*argv.add(optind as usize), dlflags);
     if htslib.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Can't dlopen \"%s\": %s\n".as_ptr(),
             *argv.add(optind as usize),
             libc::dlerror(),
@@ -193,7 +193,7 @@ pub unsafe fn test_plugins_dlhts_c_101_main(argc: c_int, argv: *mut *mut c_char)
     test_plugins_dlhts_c_94_verbose_log(c"Calling dlclose(htslib)".as_ptr());
     if libc::dlclose(htslib) < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Can't dlclose \"%s\": %s\n".as_ptr(),
             *argv.add(optind as usize),
             libc::dlerror(),

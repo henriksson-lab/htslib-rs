@@ -10,7 +10,7 @@ unsafe extern "C" {
 // original: usage (htslib/test/test_realn.c:38)
 pub unsafe fn test_test_realn_c_38_usage(prog: *const c_char) {
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"Usage: %s -i <in.sam> -o <out.sam> -f <ref.fa>\n".as_ptr(),
         prog,
     );
@@ -73,7 +73,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
         fai = faidx::fai_load(ref_name);
         if fai.is_null() {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Couldn't load reference %s\n".as_ptr(),
                 ref_name,
             );
@@ -89,7 +89,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
         in_ = hts::hts_open(in_name, c"r".as_ptr());
         if in_.is_null() {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Couldn't open %s : %s\n".as_ptr(),
                 in_name,
                 libc::strerror(*libc::__errno_location()),
@@ -100,7 +100,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
         hdr = sam::sam_hdr_read(in_);
         if hdr.is_null() {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Couldn't read header for %s\n".as_ptr(),
                 in_name,
             );
@@ -110,7 +110,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
         out = hts::hts_open(out_name, modew);
         if out.is_null() {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Couldn't open %s : %s\n".as_ptr(),
                 out_name,
                 libc::strerror(*libc::__errno_location()),
@@ -120,7 +120,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
 
         if sam::sam_hdr_write(out, hdr) < 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Couldn't write header to %s : %s\n".as_ptr(),
                 out_name,
                 libc::strerror(*libc::__errno_location()),
@@ -135,7 +135,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
             }
             if (*rec).core.tid >= (*hdr).n_targets {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Invalid BAM reference id %d\n".as_ptr(),
                     (*rec).core.tid,
                 );
@@ -152,7 +152,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
                 );
                 if ref_seq.is_null() {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Couldn't get reference %s\n".as_ptr(),
                         *(*hdr).target_name.add((*rec).core.tid as usize),
                     );
@@ -164,7 +164,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
                 res = sam::sam_prob_realn(rec, ref_seq, ref_len.into(), flags);
                 if res <= -4 {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Error running sam_prob_realn : %s\n".as_ptr(),
                         libc::strerror(*libc::__errno_location()),
                     );
@@ -173,7 +173,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
             }
             if sam::sam_c_4553_sam_write1(out, hdr, rec) < 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Error writing to %s\n".as_ptr(),
                     out_name,
                 );
@@ -185,7 +185,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
         in_ = std::ptr::null_mut();
         if res < 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Error closing %s\n".as_ptr(),
                 in_name,
             );
@@ -196,7 +196,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
         out = std::ptr::null_mut();
         if res < 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Error closing %s\n".as_ptr(),
                 out_name,
             );

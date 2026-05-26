@@ -51,7 +51,7 @@ unsafe fn run_thrash_threads5(
         if l != n as isize {
             if verbose {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"expected %d bytes, got %d\n".as_ptr(),
                     n as c_int,
                     l as c_int,
@@ -68,7 +68,7 @@ unsafe fn run_thrash_threads5(
 
     let close_ret = crate::htslib_rs::bgzf::bgzf_close(fpin) as c_int;
     if verbose {
-        libc::fprintf(hts_sys::stderr.cast(), c"close=%d\n".as_ptr(), close_ret);
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"close=%d\n".as_ptr(), close_ret);
     }
     if !p.is_null() {
         crate::htslib_rs::thread_pool::hts_tpool_destroy(p);
@@ -76,7 +76,7 @@ unsafe fn run_thrash_threads5(
 
     if verbose {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"wrote %d bytes\n".as_ptr(),
             t as c_int,
         );
@@ -89,7 +89,7 @@ unsafe fn run_thrash_threads5(
 pub unsafe fn test_thrash_threads5_c_35_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     if argc < 2 || libc::isatty(libc::STDOUT_FILENO) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Usage: thrash_threads5 input.bam num_threads | md5sum\n".as_ptr(),
         );
         libc::exit(1);

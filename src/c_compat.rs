@@ -73,6 +73,27 @@ pub unsafe fn __errno_location() -> *mut c_int {
     libc::__error()
 }
 
+// Native x86-64 System V AMD64 ABI `va_list` element, layout-identical to the C
+// `__va_list_tag` that bindgen exposes. Used by the variadic FFI shims (hopen /
+// vopen plugin handlers, ksprintf, vsnprintf). Defining it here removes the
+// dependency on hts_sys for variadic argument handling.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct __va_list_tag {
+    pub gp_offset: u32,
+    pub fp_offset: u32,
+    pub overflow_arg_area: *mut c_void,
+    pub reg_save_area: *mut c_void,
+}
+
+// The C standard streams, linked directly from the C runtime rather than via
+// hts_sys. On glibc/musl/BSD/macOS these are real `extern FILE *` symbols.
+extern "C" {
+    pub static mut stderr: *mut libc::FILE;
+    pub static mut stdout: *mut libc::FILE;
+    pub static mut stdin: *mut libc::FILE;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

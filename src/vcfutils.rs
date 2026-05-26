@@ -1,8 +1,15 @@
 use std::ffi::{c_char, c_int, c_void};
 use std::mem::size_of;
 
-use crate::htslib_rs::hts::{kbitset_t, kbs_exists, kputc, kputs, kputsn, kstring_t};
-use crate::htslib_rs::vcf::{self, bcf1_t, bcf_hdr_t};
+use crate::htslib_rs::hts::{
+    hts_log_cstr, kbitset_t, kbs_exists, kputc, kputs, kputsn, kstring_t, HTS_LOG_ERROR,
+};
+use crate::htslib_rs::vcf::{
+    self, bcf1_t, bcf_hdr_t, bcf_float_missing, bcf_float_vector_end, bcf_int16_missing,
+    bcf_int32_missing, bcf_int32_vector_end, bcf_int8_missing, BCF_BT_FLOAT, BCF_BT_INT16,
+    BCF_BT_INT32, BCF_BT_INT8, BCF_DT_ID, BCF_HL_FMT, BCF_HL_INFO, BCF_HT_FLAG, BCF_HT_INT,
+    BCF_HT_REAL, BCF_HT_STR, BCF_UN_ALL, BCF_VL_A, BCF_VL_G, BCF_VL_R, BCF_VL_VAR,
+};
 
 const BCF_VL_LA: c_int = 6;
 const BCF_VL_LG: c_int = 7;
@@ -15,10 +22,10 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
     rm_set: *const kbitset_t,
 ) -> c_int {
     let vl_a_g_r =
-        (1_u32 << hts_sys::BCF_VL_A) | (1_u32 << hts_sys::BCF_VL_G) | (1_u32 << hts_sys::BCF_VL_R);
+        (1_u32 << BCF_VL_A) | (1_u32 << BCF_VL_G) | (1_u32 << BCF_VL_R);
     let vl_la_lg_lr = (1_u32 << BCF_VL_LA) | (1_u32 << BCF_VL_LG) | (1_u32 << BCF_VL_LR);
     let vl_a_g_r_la_lg_lr = vl_a_g_r | vl_la_lg_lr;
-    let vl_a_r = (1_u32 << hts_sys::BCF_VL_A) | (1_u32 << hts_sys::BCF_VL_R);
+    let vl_a_r = (1_u32 << BCF_VL_A) | (1_u32 << BCF_VL_R);
     let vl_la_lr = (1_u32 << BCF_VL_LA) | (1_u32 << BCF_VL_LR);
     let vl_a_r_la_lr = vl_a_r | vl_la_lr;
     let map = libc::malloc((*line).n_allele() as usize * size_of::<c_int>()).cast::<c_int>();
@@ -34,7 +41,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         return -1;
     }
 
-    vcf::bcf_unpack(line, hts_sys::BCF_UN_ALL as c_int);
+    vcf::bcf_unpack(line, BCF_UN_ALL as c_int);
 
     let n_sample = (*line).n_sample() as c_int;
     let mut str_: kstring_t = std::mem::zeroed();
@@ -81,13 +88,23 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
     let n_r_ori = (*line).n_allele() as c_int;
     let n_r_new = (*line).n_allele() as c_int - nrm;
     if n_r_new <= 0 {
-        hts_sys::hts_log(
-            hts_sys::htsLogLevel_HTS_LOG_ERROR,
-            c"bcf_remove_allele_set".as_ptr(),
-            c"Cannot remove reference allele at %s:%ld [%d]".as_ptr(),
-            vcf::bcf_seqname_safe(header, line),
+        let seqname = vcf::bcf_seqname_safe(header, line);
+        let seqname_str = if seqname.is_null() {
+            std::borrow::Cow::Borrowed("")
+        } else {
+            std::ffi::CStr::from_ptr(seqname).to_string_lossy()
+        };
+        let msg = std::ffi::CString::new(format!(
+            "Cannot remove reference allele at {}:{} [{}]",
+            seqname_str,
             (*line).pos + 1,
-            n_r_new,
+            n_r_new
+        ))
+        .unwrap_or_default();
+        hts_log_cstr(
+            HTS_LOG_ERROR,
+            c"bcf_remove_allele_set".as_ptr(),
+            msg.as_ptr(),
         );
         libc::free(str_.s.cast());
         libc::free(map.cast());
@@ -108,8 +125,8 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         && vcf::vcfutils_c_561_fixup_cnv_tr_info_tags(header, line, n_a_ori as usize, rm_set.cast())
             < 0
     {
-        hts_sys::hts_log(
-            hts_sys::htsLogLevel_HTS_LOG_ERROR,
+        hts_log_cstr(
+            HTS_LOG_ERROR,
             c"bcf_remove_allele_set".as_ptr(),
             c"Out of memory".as_ptr(),
         );
@@ -122,33 +139,33 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
     for i in 0..(*line).n_info() {
         let info = (*line).d.info.add(i as usize);
         let info_key = (*info).key as usize;
-        let id = (*(*header).id[hts_sys::BCF_DT_ID as usize].add(info_key)).key;
-        let mut vlen = ((*(*(*header).id[hts_sys::BCF_DT_ID as usize].add(info_key)).val).info
-            [hts_sys::BCF_HL_INFO as usize]
+        let id = (*(*header).id[BCF_DT_ID as usize].add(info_key)).key;
+        let mut vlen = ((*(*(*header).id[BCF_DT_ID as usize].add(info_key)).val).info
+            [BCF_HL_INFO as usize]
             >> 8
             & 0xf) as c_int;
 
-        let multiple = if vlen == hts_sys::BCF_VL_VAR as c_int {
+        let multiple = if vlen == BCF_VL_VAR as c_int {
             vcf::vcfutils_c_254_is_special_info_type(id)
         } else {
             1
         };
         if multiple > 1 {
-            vlen = hts_sys::BCF_VL_A as c_int;
+            vlen = BCF_VL_A as c_int;
         }
 
         if (vl_a_g_r & (1_u32 << vlen)) == 0 {
             continue;
         }
-        let type_ = ((*(*(*header).id[hts_sys::BCF_DT_ID as usize].add(info_key)).val).info
-            [hts_sys::BCF_HL_INFO as usize]
+        let type_ = ((*(*(*header).id[BCF_DT_ID as usize].add(info_key)).val).info
+            [BCF_HL_INFO as usize]
             >> 4
             & 0xf) as c_int;
-        if type_ == hts_sys::BCF_HT_FLAG as c_int {
+        if type_ == BCF_HT_FLAG as c_int {
             continue;
         }
         let size =
-            if type_ == hts_sys::BCF_HT_REAL as c_int || type_ == hts_sys::BCF_HT_INT as c_int {
+            if type_ == BCF_HT_REAL as c_int || type_ == BCF_HT_INT as c_int {
                 4
             } else {
                 1
@@ -171,14 +188,14 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
             continue;
         }
 
-        if type_ == hts_sys::BCF_HT_STR as c_int {
+        if type_ == BCF_HT_STR as c_int {
             str_.l = 0;
             let mut ss = dat.cast::<c_char>();
             let mut se = dat.cast::<c_char>();
             let s0 = *ss;
-            if vlen == hts_sys::BCF_VL_A as c_int || vlen == hts_sys::BCF_VL_R as c_int {
+            if vlen == BCF_VL_A as c_int || vlen == BCF_VL_R as c_int {
                 let mut inc = 0;
-                let nexp = if vlen == hts_sys::BCF_VL_A as c_int {
+                let nexp = if vlen == BCF_VL_A as c_int {
                     inc = 1;
                     n_a_ori * multiple
                 } else {
@@ -263,18 +280,18 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
 
         if nret == 1 {
             let missing = match (*info).type_ {
-                x if x == hts_sys::BCF_BT_INT8 as c_int => {
-                    *(*info).vptr.cast::<i8>() as c_int == hts_sys::bcf_int8_missing
+                x if x == BCF_BT_INT8 as c_int => {
+                    *(*info).vptr.cast::<i8>() as c_int == bcf_int8_missing
                 }
-                x if x == hts_sys::BCF_BT_INT16 as c_int => {
-                    i16::from_le(*(*info).vptr.cast::<i16>()) as c_int == hts_sys::bcf_int16_missing
+                x if x == BCF_BT_INT16 as c_int => {
+                    i16::from_le(*(*info).vptr.cast::<i16>()) as c_int == bcf_int16_missing
                 }
-                x if x == hts_sys::BCF_BT_INT32 as c_int => {
-                    i32::from_le(*(*info).vptr.cast::<i32>()) == hts_sys::bcf_int32_missing
+                x if x == BCF_BT_INT32 as c_int => {
+                    i32::from_le(*(*info).vptr.cast::<i32>()) == bcf_int32_missing
                 }
-                x if x == hts_sys::BCF_BT_FLOAT as c_int => {
+                x if x == BCF_BT_FLOAT as c_int => {
                     f32::from_bits(u32::from_le(*(*info).vptr.cast::<u32>())).to_bits()
-                        == hts_sys::bcf_float_missing
+                        == bcf_float_missing
                 }
                 _ => {
                     err!();
@@ -286,8 +303,8 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         }
 
         let ndat;
-        if vlen == hts_sys::BCF_VL_A as c_int || vlen == hts_sys::BCF_VL_R as c_int {
-            let (inc, ntop, new_ndat) = if vlen == hts_sys::BCF_VL_A as c_int {
+        if vlen == BCF_VL_A as c_int || vlen == BCF_VL_R as c_int {
+            let (inc, ntop, new_ndat) = if vlen == BCF_VL_A as c_int {
                 if nret != n_a_ori * multiple {
                     err!();
                 }
@@ -300,10 +317,10 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
             };
             ndat = new_ndat;
             let mut k = 0;
-            if type_ == hts_sys::BCF_HT_INT as c_int {
+            if type_ == BCF_HT_INT as c_int {
                 let ptr = dat.cast::<i32>();
                 for jj in 0..ntop {
-                    if *ptr.add(jj as usize) == hts_sys::bcf_int32_vector_end {
+                    if *ptr.add(jj as usize) == bcf_int32_vector_end {
                         *ptr.add(k as usize) = *ptr.add(jj as usize);
                         break;
                     }
@@ -315,10 +332,10 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     }
                     k += 1;
                 }
-            } else if type_ == hts_sys::BCF_HT_REAL as c_int {
+            } else if type_ == BCF_HT_REAL as c_int {
                 let ptr = dat.cast::<f32>();
                 for jj in 0..ntop {
-                    if (*ptr.add(jj as usize)).to_bits() == hts_sys::bcf_float_vector_end {
+                    if (*ptr.add(jj as usize)).to_bits() == bcf_float_vector_end {
                         *ptr.add(k as usize) = *ptr.add(jj as usize);
                         break;
                     }
@@ -338,12 +355,12 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
             ndat = n_g_new;
             let mut l_ori = -1;
             let mut l_new = 0;
-            if type_ == hts_sys::BCF_HT_INT as c_int {
+            if type_ == BCF_HT_INT as c_int {
                 let ptr = dat.cast::<i32>();
                 for jj in 0..n_r_ori {
                     for k in 0..=jj {
                         l_ori += 1;
-                        if *ptr.add(l_ori as usize) == hts_sys::bcf_int32_vector_end {
+                        if *ptr.add(l_ori as usize) == bcf_int32_vector_end {
                             *ptr.add(l_new as usize) = *ptr.add(l_ori as usize);
                             break;
                         }
@@ -356,12 +373,12 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                         l_new += 1;
                     }
                 }
-            } else if type_ == hts_sys::BCF_HT_REAL as c_int {
+            } else if type_ == BCF_HT_REAL as c_int {
                 let ptr = dat.cast::<f32>();
                 for jj in 0..n_r_ori {
                     for k in 0..=jj {
                         l_ori += 1;
-                        if (*ptr.add(l_ori as usize)).to_bits() == hts_sys::bcf_float_vector_end {
+                        if (*ptr.add(l_ori as usize)).to_bits() == bcf_float_vector_end {
                             *ptr.add(l_new as usize) = *ptr.add(l_ori as usize);
                             break;
                         }
@@ -397,7 +414,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
             c"GT".as_ptr(),
             (&mut dat as *mut *mut u8).cast::<*mut c_void>(),
             &mut mdat,
-            hts_sys::BCF_HT_INT as c_int,
+            BCF_HT_INT as c_int,
         );
         mdat_bytes = mdat * 4;
         if nret > 0 {
@@ -409,7 +426,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     if (v >> 1) == 0 {
                         continue;
                     }
-                    if v == hts_sys::bcf_int32_vector_end {
+                    if v == bcf_int32_vector_end {
                         break;
                     }
                     let al = (v >> 1) - 1;
@@ -430,7 +447,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                 c"GT".as_ptr(),
                 dat.cast(),
                 nret * n_sample,
-                hts_sys::BCF_HT_INT as c_int,
+                BCF_HT_INT as c_int,
             ) < 0
             {
                 err!();
@@ -444,7 +461,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         c"LAA".as_ptr(),
         (&mut laa as *mut *mut c_int).cast::<*mut c_void>(),
         &mut laa_size,
-        hts_sys::BCF_HT_INT as c_int,
+        BCF_HT_INT as c_int,
     );
     if num_laa < -1 && num_laa != -3 {
         err!();
@@ -471,7 +488,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
             let mut jj = 0;
             while jj < num_laa_vals {
                 let val = *sample_laa.add(jj as usize);
-                if val == hts_sys::bcf_int32_vector_end || val == hts_sys::bcf_int32_missing {
+                if val == bcf_int32_vector_end || val == bcf_int32_missing {
                     break;
                 }
                 let allele = if val > 0 && val < n_r_ori { val } else { 0 };
@@ -499,9 +516,9 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
             }
             while k < num_laa_vals {
                 *sample_laa.add(k as usize) = if k > 0 {
-                    hts_sys::bcf_int32_vector_end
+                    bcf_int32_vector_end
                 } else {
-                    hts_sys::bcf_int32_missing
+                    bcf_int32_missing
                 };
                 k += 1;
             }
@@ -520,7 +537,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     new_num_laa = n_sample * max_k;
                 } else {
                     for sample in 0..n_sample {
-                        *laa.add(sample as usize) = hts_sys::bcf_int32_missing;
+                        *laa.add(sample as usize) = bcf_int32_missing;
                     }
                     new_num_laa = n_sample;
                 }
@@ -531,7 +548,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                 c"LAA".as_ptr(),
                 laa.cast(),
                 new_num_laa,
-                hts_sys::BCF_HT_INT as c_int,
+                BCF_HT_INT as c_int,
             ) < 0
             {
                 err!();
@@ -542,9 +559,9 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
     for fmt_i in 0..(*line).n_fmt() {
         let fmt = (*line).d.fmt.add(fmt_i as usize);
         let fmt_id = (*fmt).id as usize;
-        let id = (*(*header).id[hts_sys::BCF_DT_ID as usize].add(fmt_id)).key;
-        let vlen = ((*(*(*header).id[hts_sys::BCF_DT_ID as usize].add(fmt_id)).val).info
-            [hts_sys::BCF_HL_FMT as usize]
+        let id = (*(*header).id[BCF_DT_ID as usize].add(fmt_id)).key;
+        let vlen = ((*(*(*header).id[BCF_DT_ID as usize].add(fmt_id)).val).info
+            [BCF_HL_FMT as usize]
             >> 8
             & 0xf) as c_int;
 
@@ -552,15 +569,15 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
             continue;
         }
         let is_local = ((vl_la_lg_lr & (1_u32 << vlen)) != 0) as c_int;
-        let type_ = ((*(*(*header).id[hts_sys::BCF_DT_ID as usize].add(fmt_id)).val).info
-            [hts_sys::BCF_HL_FMT as usize]
+        let type_ = ((*(*(*header).id[BCF_DT_ID as usize].add(fmt_id)).val).info
+            [BCF_HL_FMT as usize]
             >> 4
             & 0xf) as c_int;
-        if type_ == hts_sys::BCF_HT_FLAG as c_int {
+        if type_ == BCF_HT_FLAG as c_int {
             continue;
         }
         let size =
-            if type_ == hts_sys::BCF_HT_REAL as c_int || type_ == hts_sys::BCF_HT_INT as c_int {
+            if type_ == BCF_HT_REAL as c_int || type_ == BCF_HT_INT as c_int {
                 4
             } else {
                 1
@@ -583,18 +600,18 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
             continue;
         }
 
-        if type_ == hts_sys::BCF_HT_STR as c_int {
+        if type_ == BCF_HT_STR as c_int {
             let width = nret / n_sample;
             str_.l = 0;
             if (vl_a_r_la_lr & (1_u32 << vlen)) != 0 {
                 let mut nexp = 0;
                 let mut inc = 0;
                 match vlen {
-                    x if x == hts_sys::BCF_VL_A as c_int => {
+                    x if x == BCF_VL_A as c_int => {
                         nexp = n_a_ori;
                         inc = 1;
                     }
-                    x if x == hts_sys::BCF_VL_R as c_int => nexp = n_r_ori,
+                    x if x == BCF_VL_R as c_int => nexp = n_r_ori,
                     x if x == BCF_VL_LA => {
                         inc = 1;
                         if laa_map.is_null() {
@@ -771,43 +788,43 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         }
 
         let nori = nret / n_sample;
-        if nori == 1 && !(vlen == hts_sys::BCF_VL_A as c_int && nori == n_a_ori) {
+        if nori == 1 && !(vlen == BCF_VL_A as c_int && nori == n_a_ori) {
             let mut all_missing = 1;
             match (*fmt).type_ {
-                x if x == hts_sys::BCF_BT_INT8 as c_int => {
+                x if x == BCF_BT_INT8 as c_int => {
                     for sample in 0..n_sample {
                         let val = *(*fmt).p.add((sample * (*fmt).size) as usize).cast::<i8>();
-                        if val as c_int != hts_sys::bcf_int8_missing {
+                        if val as c_int != bcf_int8_missing {
                             all_missing = 0;
                             break;
                         }
                     }
                 }
-                x if x == hts_sys::BCF_BT_INT16 as c_int => {
+                x if x == BCF_BT_INT16 as c_int => {
                     for sample in 0..n_sample {
                         let val =
                             i16::from_le(*(*fmt).p.add((sample * (*fmt).size) as usize).cast());
-                        if val as c_int != hts_sys::bcf_int16_missing {
+                        if val as c_int != bcf_int16_missing {
                             all_missing = 0;
                             break;
                         }
                     }
                 }
-                x if x == hts_sys::BCF_BT_INT32 as c_int => {
+                x if x == BCF_BT_INT32 as c_int => {
                     for sample in 0..n_sample {
                         let val =
                             i32::from_le(*(*fmt).p.add((sample * (*fmt).size) as usize).cast());
-                        if val != hts_sys::bcf_int32_missing {
+                        if val != bcf_int32_missing {
                             all_missing = 0;
                             break;
                         }
                     }
                 }
-                x if x == hts_sys::BCF_BT_FLOAT as c_int => {
+                x if x == BCF_BT_FLOAT as c_int => {
                     for sample in 0..n_sample {
                         let val =
                             u32::from_le(*(*fmt).p.add((sample * (*fmt).size) as usize).cast());
-                        if val != hts_sys::bcf_float_missing {
+                        if val != bcf_float_missing {
                             all_missing = 0;
                             break;
                         }
@@ -824,12 +841,12 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
 
         let ndat;
         if (vl_a_r_la_lr & (1_u32 << vlen)) != 0
-            || (vlen == hts_sys::BCF_VL_G as c_int && nori == n_r_ori)
+            || (vlen == BCF_VL_G as c_int && nori == n_r_ori)
         {
             let mut inc = 0;
             let nnew;
             match vlen {
-                x if x == hts_sys::BCF_VL_A as c_int => {
+                x if x == BCF_VL_A as c_int => {
                     if nori != n_a_ori {
                         err!();
                     }
@@ -837,14 +854,14 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     nnew = n_a_new;
                     inc = 1;
                 }
-                x if x == hts_sys::BCF_VL_R as c_int => {
+                x if x == BCF_VL_R as c_int => {
                     if nori != n_r_ori {
                         err!();
                     }
                     ndat = n_r_new * n_sample;
                     nnew = n_r_new;
                 }
-                x if x == hts_sys::BCF_VL_G as c_int => {
+                x if x == BCF_VL_G as c_int => {
                     ndat = n_r_new * n_sample;
                     nnew = n_r_new;
                 }
@@ -869,7 +886,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                 }
             }
 
-            if type_ == hts_sys::BCF_HT_INT as c_int {
+            if type_ == BCF_HT_INT as c_int {
                 for sample in 0..n_sample {
                     let ptr_src = dat.cast::<i32>().add((sample * nori) as usize);
                     let ptr_dst = dat.cast::<i32>().add((sample * nnew) as usize);
@@ -885,7 +902,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     };
                     let mut k_dst = 0;
                     for k_src in 0..sample_nori {
-                        if *ptr_src.add(k_src as usize) == hts_sys::bcf_int32_vector_end {
+                        if *ptr_src.add(k_src as usize) == bcf_int32_vector_end {
                             break;
                         }
                         if *sample_map.add((k_src + inc) as usize) < 0 {
@@ -895,15 +912,15 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                         k_dst += 1;
                     }
                     if k_dst == 0 {
-                        *ptr_dst.add(k_dst as usize) = hts_sys::bcf_int32_missing;
+                        *ptr_dst.add(k_dst as usize) = bcf_int32_missing;
                         k_dst += 1;
                     }
                     while k_dst < nnew {
-                        *ptr_dst.add(k_dst as usize) = hts_sys::bcf_int32_vector_end;
+                        *ptr_dst.add(k_dst as usize) = bcf_int32_vector_end;
                         k_dst += 1;
                     }
                 }
-            } else if type_ == hts_sys::BCF_HT_REAL as c_int {
+            } else if type_ == BCF_HT_REAL as c_int {
                 for sample in 0..n_sample {
                     let ptr_src = dat.cast::<f32>().add((sample * nori) as usize);
                     let ptr_dst = dat.cast::<f32>().add((sample * nnew) as usize);
@@ -919,7 +936,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     };
                     let mut k_dst = 0;
                     for k_src in 0..sample_nori {
-                        if (*ptr_src.add(k_src as usize)).to_bits() == hts_sys::bcf_float_vector_end
+                        if (*ptr_src.add(k_src as usize)).to_bits() == bcf_float_vector_end
                         {
                             break;
                         }
@@ -930,12 +947,12 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                         k_dst += 1;
                     }
                     if k_dst == 0 {
-                        *ptr_dst.add(k_dst as usize) = f32::from_bits(hts_sys::bcf_float_missing);
+                        *ptr_dst.add(k_dst as usize) = f32::from_bits(bcf_float_missing);
                         k_dst += 1;
                     }
                     while k_dst < nnew {
                         *ptr_dst.add(k_dst as usize) =
-                            f32::from_bits(hts_sys::bcf_float_vector_end);
+                            f32::from_bits(bcf_float_vector_end);
                         k_dst += 1;
                     }
                 }
@@ -948,7 +965,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                 n_g_new = nori;
             }
             ndat = n_g_new * n_sample;
-            if type_ == hts_sys::BCF_HT_INT as c_int {
+            if type_ == BCF_HT_INT as c_int {
                 for sample in 0..n_sample {
                     let ptr_src = dat.cast::<i32>().add((sample * nori) as usize);
                     let ptr_dst = dat.cast::<i32>().add((sample * n_g_new) as usize);
@@ -969,7 +986,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     };
                     let mut nset = 0;
                     for k_src in 0..sample_n_g_ori {
-                        if *ptr_src.add(k_src as usize) == hts_sys::bcf_int32_vector_end {
+                        if *ptr_src.add(k_src as usize) == bcf_int32_vector_end {
                             break;
                         }
                         nset += 1;
@@ -988,7 +1005,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                         'outer_int: for ia in 0..sample_n_r_ori {
                             for ib in 0..=ia {
                                 k_src += 1;
-                                if *ptr_src.add(k_src as usize) == hts_sys::bcf_int32_vector_end {
+                                if *ptr_src.add(k_src as usize) == bcf_int32_vector_end {
                                     *ptr_dst.add(k_dst as usize) = *ptr_src.add(k_src as usize);
                                     break 'outer_int;
                                 }
@@ -1003,11 +1020,11 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                         }
                     }
                     while k_dst < n_g_new {
-                        *ptr_dst.add(k_dst as usize) = hts_sys::bcf_int32_vector_end;
+                        *ptr_dst.add(k_dst as usize) = bcf_int32_vector_end;
                         k_dst += 1;
                     }
                 }
-            } else if type_ == hts_sys::BCF_HT_REAL as c_int {
+            } else if type_ == BCF_HT_REAL as c_int {
                 for sample in 0..n_sample {
                     let ptr_src = dat.cast::<f32>().add((sample * nori) as usize);
                     let ptr_dst = dat.cast::<f32>().add((sample * n_g_new) as usize);
@@ -1028,7 +1045,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     };
                     let mut nset = 0;
                     for k_src in 0..sample_n_g_ori {
-                        if (*ptr_src.add(k_src as usize)).to_bits() == hts_sys::bcf_float_vector_end
+                        if (*ptr_src.add(k_src as usize)).to_bits() == bcf_float_vector_end
                         {
                             break;
                         }
@@ -1049,7 +1066,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                             for ib in 0..=ia {
                                 k_src += 1;
                                 if (*ptr_src.add(k_src as usize)).to_bits()
-                                    == hts_sys::bcf_float_vector_end
+                                    == bcf_float_vector_end
                                 {
                                     *ptr_dst.add(k_dst as usize) = *ptr_src.add(k_src as usize);
                                     break 'outer_real;
@@ -1066,7 +1083,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     }
                     while k_dst < n_g_new {
                         *ptr_dst.add(k_dst as usize) =
-                            f32::from_bits(hts_sys::bcf_float_vector_end);
+                            f32::from_bits(bcf_float_vector_end);
                         k_dst += 1;
                     }
                 }

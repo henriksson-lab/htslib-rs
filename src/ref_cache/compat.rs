@@ -13,12 +13,12 @@ unsafe extern "C" {
 
 #[inline]
 pub unsafe fn stdout() -> *mut libc::FILE {
-    hts_sys::stdout.cast()
+    crate::htslib_rs::c_compat::stdout.cast()
 }
 
 #[inline]
 pub unsafe fn stderr() -> *mut libc::FILE {
-    hts_sys::stderr.cast()
+    crate::htslib_rs::c_compat::stderr.cast()
 }
 
 #[inline]

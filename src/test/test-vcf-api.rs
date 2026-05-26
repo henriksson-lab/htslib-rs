@@ -93,7 +93,7 @@ unsafe fn bcf_float_is_vector_end(f: f32) -> c_int {
 
 unsafe fn fail_open(fname: *const c_char) -> ! {
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"Failed to open \"%s\" : %s\n".as_ptr(),
         fname,
         libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
@@ -103,7 +103,7 @@ unsafe fn fail_open(fname: *const c_char) -> ! {
 
 unsafe fn fail_errno(label: *const c_char) -> ! {
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"%s : %s\n".as_ptr(),
         label,
         libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
@@ -124,9 +124,9 @@ unsafe fn bcf_hdr_id2number(hdr: *mut vcf::bcf_hdr_t, type_: c_int, int_id: c_in
 
 // original: error (htslib/test/test-vcf-api.c:38)
 pub unsafe fn test_test_vcf_api_c_38_error(format: *const c_char) -> ! {
-    libc::fputs(format, hts_sys::stderr.cast());
+    libc::fputs(format, crate::htslib_rs::c_compat::stderr.cast());
     if libc::strrchr(format, b'\n' as c_int).is_null() {
-        libc::fputc(b'\n' as c_int, hts_sys::stderr.cast());
+        libc::fputc(b'\n' as c_int, crate::htslib_rs::c_compat::stderr.cast());
     }
     libc::exit(-1);
 }
@@ -139,7 +139,7 @@ pub unsafe fn test_test_vcf_api_c_51_check_alleles(
 ) -> c_int {
     if (*rec).n_allele() as c_int != num {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Wrong number of alleles - expected %d, got %d\n".as_ptr(),
             num,
             (*rec).n_allele() as c_int,
@@ -152,7 +152,7 @@ pub unsafe fn test_test_vcf_api_c_51_check_alleles(
     for i in 0..num {
         if libc::strcmp(*alleles.add(i as usize), *(*rec).d.allele.add(i as usize)) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Mismatch for allele %d : expected '%s' got '%s'\n".as_ptr(),
                 i,
                 *alleles.add(i as usize),
@@ -391,7 +391,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
     check0!(vcf::bcf_hdr_add_sample(hdr, ptr::null()));
     if vcf::bcf_hdr_write(fp, hdr) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed to write to %s\n".as_ptr(),
             fname,
         );
@@ -596,7 +596,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
     ));
     if vcf::bcf_write(fp, hdr, rec) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed to write to %s\n".as_ptr(),
             fname,
         );
@@ -695,7 +695,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
     ));
     if vcf::bcf_write(fp, hdr, rec) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed to write to %s\n".as_ptr(),
             fname,
         );
@@ -712,7 +712,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
     let ret = hts_close(fp);
     if ret != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"hts_close(%s): non-zero status %d\n".as_ptr(),
             fname,
             ret,
@@ -744,7 +744,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     let out = hts_open(gz_fname, c"wg".as_ptr());
     if out.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Couldn't open \"%s\" : %s\n".as_ptr(),
             gz_fname,
             libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
@@ -907,7 +907,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
 
     if vcf::bcf_hdr_write(out, hdr_out) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed to write to %s\n".as_ptr(),
             fname,
         );
@@ -921,7 +921,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
         }
         if vcf::bcf_write(out, hdr_out, rec) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed to write to %s\n".as_ptr(),
                 fname,
             );
@@ -945,7 +945,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
         let dup = vcf::bcf_dup(rec); // force bcf1_sync call
         if vcf::bcf_write(out, hdr_out, dup) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed to write to %s\n".as_ptr(),
                 fname,
             );
@@ -975,7 +975,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
 
         if vcf::bcf_write(out, hdr_out, rec) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed to write to %s\n".as_ptr(),
                 fname,
             );
@@ -992,7 +992,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     let mut ret = hts_close(fp);
     if ret != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"hts_close(%s): non-zero status %d\n".as_ptr(),
             fname,
             ret,
@@ -1002,7 +1002,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     ret = hts_close(out);
     if ret != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"hts_close(%s): non-zero status %d\n".as_ptr(),
             gz_fname,
             ret,
@@ -1014,7 +1014,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     let gz_in = hts_open(gz_fname, c"r".as_ptr());
     if gz_in.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Could not read: %s\n".as_ptr(),
             gz_fname,
         );
@@ -1028,13 +1028,13 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     };
     while hts_getline(gz_in, KS_SEP_LINE, &mut line) > 0 {
         kputc(b'\n' as c_int, &mut line);
-        libc::fwrite(line.s.cast(), 1, line.l, hts_sys::stdout.cast());
+        libc::fwrite(line.s.cast(), 1, line.l, crate::htslib_rs::c_compat::stdout.cast());
     }
 
     ret = hts_close(gz_in);
     if ret != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"hts_close(%s): non-zero status %d\n".as_ptr(),
             gz_fname,
             ret,
@@ -1070,7 +1070,7 @@ pub unsafe fn test_test_vcf_api_c_406_iterator(fname: *const c_char) {
     let ret = hts_close(fp);
     if ret != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"hts_close(%s): non-zero status %d\n".as_ptr(),
             fname,
             ret,
@@ -1114,14 +1114,14 @@ pub unsafe fn test_test_vcf_api_c_434_test_get_info_values(fname: *const c_char)
         if (*line).pos == 14369 {
             if ret != 1 || *afs.add(0) != 0.5 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"AF on position 14370 should be 0.5\n".as_ptr(),
                 );
                 libc::exit(-1);
             }
         } else if ret != 2 || *afs.add(0) != 0.333 || bcf_float_is_missing(*afs.add(1)) == 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"AF on position 1110696 should be 0.333, missing\n".as_ptr(),
             );
             libc::exit(-1);
@@ -1142,20 +1142,20 @@ pub unsafe fn test_test_vcf_api_c_434_test_get_info_values(fname: *const c_char)
         if ret != 1 || *negs.add(0) != expected {
             if ret < 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"NEG should be %d, got error ret=%d\n".as_ptr(),
                     expected,
                     ret,
                 );
             } else if ret == 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"NEG should be %d, got no entries\n".as_ptr(),
                     expected,
                 );
             } else {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"NEG should be %d, got %d entries (first is %d)\n".as_ptr(),
                     expected,
                     ret,
@@ -1201,7 +1201,7 @@ pub unsafe fn test_test_vcf_api_c_491_write_format_values(fname: *const c_char) 
     check0!(vcf::bcf_hdr_add_sample(hdr, ptr::null()));
     if vcf::bcf_hdr_write(fp, hdr) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed to write to %s\n".as_ptr(),
             fname,
         );
@@ -1225,7 +1225,7 @@ pub unsafe fn test_test_vcf_api_c_491_write_format_values(fname: *const c_char) 
     ));
     if vcf::bcf_write(fp, hdr, rec) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed to write to %s\n".as_ptr(),
             fname,
         );
@@ -1237,7 +1237,7 @@ pub unsafe fn test_test_vcf_api_c_491_write_format_values(fname: *const c_char) 
     let ret = hts_close(fp);
     if ret != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"hts_close(%s): non-zero status %d\n".as_ptr(),
             fname,
             ret,
@@ -1274,7 +1274,7 @@ pub unsafe fn test_test_vcf_api_c_528_check_format_values(fname: *const c_char) 
             || bcf_float_is_vector_end(*values.add(3)) == 0
         {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"bcf_get_format_float didn't produce the expected output.\n".as_ptr(),
             );
             libc::exit(-1);
@@ -1327,7 +1327,7 @@ X	86470038	rs59780433b	T	TGGTT,T	.	.	END=86470047
     // rec->rlen should ignore the bogus END tag value on the first read
     if (*rec).rlen != 5 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen - expected 5 got %ld\n".as_ptr(),
             (*rec).rlen,
         );
@@ -1338,7 +1338,7 @@ X	86470038	rs59780433b	T	TGGTT,T	.	.	END=86470047
     // While on the second it should use it
     if (*rec).rlen != 10 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen - expected 10 got %ld\n".as_ptr(),
             (*rec).rlen,
         );
@@ -1358,7 +1358,7 @@ X	86470038	rs59780433b	T	TGGTT,T	.	.	END=86470047
 
     if (*rec).rlen != 1 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen - expected 1 got %ld\n".as_ptr(),
             (*rec).rlen,
         );
@@ -1368,7 +1368,7 @@ X	86470038	rs59780433b	T	TGGTT,T	.	.	END=86470047
     let ret = vcf::bcf_read(fp, hdr, rec);
     if ret != -1 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Unexpected return code %d from bcf_read at EOF\n".as_ptr(),
             ret,
         );
@@ -1380,7 +1380,7 @@ X	86470038	rs59780433b	T	TGGTT,T	.	.	END=86470047
     let ret = hts_close(fp);
     if ret != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Unexpected return code %d from hts_close\n".as_ptr(),
             ret,
         );
@@ -1397,7 +1397,7 @@ pub unsafe fn test_test_vcf_api_c_630_test_open_format() {
     let mut ret = vcf::vcf_open_mode(mode.as_mut_ptr().add(1), c"mode1.bcf".as_ptr(), ptr::null());
     if libc::strncmp(mode.as_ptr(), c"rb".as_ptr(), 2) != 0 || ret != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Mode '%s' does not match the expected value '%s'\n".as_ptr(),
             mode.as_ptr(),
             c"rb".as_ptr(),
@@ -1408,7 +1408,7 @@ pub unsafe fn test_test_vcf_api_c_630_test_open_format() {
     ret = vcf::vcf_open_mode(mode.as_mut_ptr().add(1), c"mode1.vcf".as_ptr(), ptr::null());
     if libc::strncmp(mode.as_ptr(), c"r".as_ptr(), 1) != 0 || ret != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Mode '%s' does not match the expected value '%s'\n".as_ptr(),
             mode.as_ptr(),
             c"r".as_ptr(),
@@ -1423,7 +1423,7 @@ pub unsafe fn test_test_vcf_api_c_630_test_open_format() {
     );
     if libc::strncmp(mode.as_ptr(), c"rz".as_ptr(), 2) != 0 || ret != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Mode '%s' does not match the expected value '%s'\n".as_ptr(),
             mode.as_ptr(),
             c"rz".as_ptr(),
@@ -1438,7 +1438,7 @@ pub unsafe fn test_test_vcf_api_c_630_test_open_format() {
     );
     if libc::strncmp(mode.as_ptr(), c"rz".as_ptr(), 2) != 0 || ret != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Mode '%s' does not match the expected value '%s'\n".as_ptr(),
             mode.as_ptr(),
             c"rz".as_ptr(),
@@ -1540,7 +1540,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
             check0!(vcf::bcf_read(fp, hdr, rec));
             if (*rec).rlen != rarr[i][j] {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Incorrect rlen @ vcf %d on test %d - expected %d got %ld\n".as_ptr(),
                     j as c_int + 1,
                     i as c_int + 1,
@@ -1566,7 +1566,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     check0!(vcf::bcf_read(fp, hdr, rec));
     if (*rec).rlen != 1 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen set, expected 1 got %ld @ %d\n".as_ptr(),
             (*rec).rlen,
             id,
@@ -1577,7 +1577,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     check0!(vcf::bcf_update_alleles_str(hdr, rec, c"G,AT".as_ptr()));
     if (*rec).rlen != 1 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen set, expected 1 got %ld @ %d\n".as_ptr(),
             (*rec).rlen,
             id,
@@ -1588,7 +1588,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     check0!(vcf::bcf_update_alleles_str(hdr, rec, c"GC,A".as_ptr()));
     if (*rec).rlen != 2 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen set, expected 2 got %ld @ %d\n".as_ptr(),
             (*rec).rlen,
             id,
@@ -1599,7 +1599,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     check0!(vcf::bcf_update_alleles_str(hdr, rec, c"G,<*>".as_ptr()));
     if (*rec).rlen != 1 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen set, expected 1 got %ld @ %d\n".as_ptr(),
             (*rec).rlen,
             id,
@@ -1618,7 +1618,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     ));
     if (*rec).rlen != 14 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen set, expected 14 got %ld @ %d\n".as_ptr(),
             (*rec).rlen,
             id,
@@ -1636,7 +1636,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     ));
     if (*rec).rlen != 15 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen set, expected 15 got %ld @ %d\n".as_ptr(),
             (*rec).rlen,
             id,
@@ -1654,7 +1654,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     ));
     if (*rec).rlen != 15 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen set, expected 15 got %ld @ %d\n".as_ptr(),
             (*rec).rlen,
             id,
@@ -1672,7 +1672,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     ));
     if (*rec).rlen != 1 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen set, expected 1 got %ld @ %d\n".as_ptr(),
             (*rec).rlen,
             id,
@@ -1683,7 +1683,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     check0!(vcf::bcf_update_alleles_str(hdr, rec, c"G,T,<DEL>".as_ptr()));
     if (*rec).rlen != 1 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen set, expected 1 got %ld @ %d\n".as_ptr(),
             (*rec).rlen,
             id,
@@ -1703,7 +1703,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     ));
     if (*rec).rlen != 6 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen set, expected 6 got %ld @ %d\n".as_ptr(),
             (*rec).rlen,
             id,
@@ -1714,7 +1714,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     vcf::bcf_copy(rec2, rec);
     if (*rec2).rlen != 6 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Incorrect rlen set, expected 6 got %ld @ %d\n".as_ptr(),
             (*rec).rlen,
             id,
@@ -1881,7 +1881,7 @@ pub unsafe fn test_test_vcf_api_c_807_test_vl_types() {
         let id_num = vcf::bcf_hdr_id2int(hdr, hts_sys::BCF_DT_ID as c_int, exp.id);
         if id_num < 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Couldn't look up VCF header ID %s\n".as_ptr(),
                 exp.id,
             );
@@ -1903,7 +1903,7 @@ pub unsafe fn test_test_vcf_api_c_807_test_vl_types() {
             ];
             if vl_code >= 0 && (vl_code as usize) < length_types.len() {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Unexpected length code for %s: expected %s got %s\n".as_ptr(),
                     exp.id,
                     length_types[exp.expected_vl_code as usize],
@@ -1911,7 +1911,7 @@ pub unsafe fn test_test_vcf_api_c_807_test_vl_types() {
                 );
             } else {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Unexpected length code for %s: expected %s got %d\n".as_ptr(),
                     exp.id,
                     length_types[exp.expected_vl_code as usize],
@@ -1923,7 +1923,7 @@ pub unsafe fn test_test_vcf_api_c_807_test_vl_types() {
         let num = bcf_hdr_id2number(hdr, exp.type_, id_num);
         if num != exp.expected_number {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Unexpected number for %s: expected %d%s got %d%s\n".as_ptr(),
                 exp.id,
                 exp.expected_number,
@@ -1961,7 +1961,7 @@ pub unsafe fn test_test_vcf_api_c_909_read_vcf_line(
     ret = vcf::vcf_parse(kstr, hdr, rec);
     if ret != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"vcf_parse(\"%s\", hdr, rec) returned %d\n".as_ptr(),
             ks_c_str(kstr),
             ret,
@@ -2094,7 +2094,7 @@ pub unsafe fn test_test_vcf_api_c_933_test_bcf_remove_allele_set() {
         test_test_vcf_api_c_924_chomp(&mut kstr);
         if libc::strcmp(expected[i], ks_c_str(&mut kstr)) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"bcf_remove_allele_set() output differs\nExpected:\n%s\nGot:\n%s\n".as_ptr(),
                 expected[i],
                 ks_c_str(&mut kstr),

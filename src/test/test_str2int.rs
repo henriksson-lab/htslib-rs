@@ -26,7 +26,7 @@ pub unsafe fn test_test_str2int_c_41_check_str2int(verbose: c_int) -> c_int {
             let expected = if efail == 0 { input } else { num };
             if failed != efail || uval != expected || *end != sentinel {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"hts_str2uint failed: %d bit %s %llu '%c' %d (%d)\n".as_ptr(),
                     i,
                     buffer.as_ptr(),
@@ -38,7 +38,7 @@ pub unsafe fn test_test_str2int_c_41_check_str2int(verbose: c_int) -> c_int {
                 return -1;
             } else if verbose != 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"hts_str2uint OK: %d bit %s %llu '%c' %d (%d)\n".as_ptr(),
                     i,
                     buffer.as_ptr(),
@@ -67,7 +67,7 @@ pub unsafe fn test_test_str2int_c_41_check_str2int(verbose: c_int) -> c_int {
             let expected = if efail == 0 { input as i64 } else { num as i64 };
             if failed != efail || val != expected || *end != sentinel {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"hts_str2int  failed: %d bit %s %lld '%c' %d (%d)\n".as_ptr(),
                     i + 1,
                     buffer.as_ptr(),
@@ -79,7 +79,7 @@ pub unsafe fn test_test_str2int_c_41_check_str2int(verbose: c_int) -> c_int {
                 return -1;
             } else if verbose != 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"hts_str2int  OK: %d bit %s %lld '%c' %d (%d)\n".as_ptr(),
                     i + 1,
                     buffer.as_ptr(),
@@ -112,7 +112,7 @@ pub unsafe fn test_test_str2int_c_41_check_str2int(verbose: c_int) -> c_int {
             };
             if failed != efail || (val as u64).wrapping_neg() != expected || *end != sentinel {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"hts_str2int  failed: %d bit %s %lld '%c' %d (%d)\n".as_ptr(),
                     i + 1,
                     buffer.as_ptr(),
@@ -124,7 +124,7 @@ pub unsafe fn test_test_str2int_c_41_check_str2int(verbose: c_int) -> c_int {
                 return -1;
             } else if verbose != 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"hts_str2int  OK: %d bit %s %lld '%c' %d (%d)\n".as_ptr(),
                     i + 1,
                     buffer.as_ptr(),
@@ -155,7 +155,7 @@ pub unsafe fn test_test_str2int_c_41_check_str2int(verbose: c_int) -> c_int {
         };
         if failed != efail || uval != expected || *end != sentinel {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"hts_str2uint failed: 64 bit %s %llu '%c' %d (%d)\n".as_ptr(),
                 buffer.as_ptr(),
                 uval,
@@ -166,7 +166,7 @@ pub unsafe fn test_test_str2int_c_41_check_str2int(verbose: c_int) -> c_int {
             return -1;
         } else if verbose != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"hts_str2uint OK: 64 bit %s %llu '%c' %d (%d)\n".as_ptr(),
                 buffer.as_ptr(),
                 uval,
@@ -193,7 +193,7 @@ pub unsafe fn test_test_str2int_c_141_check_strprint2(
     crate::htslib_rs::hts::hts_strprint(buf.as_mut_ptr(), destlen, quote, str_, len);
     if libc::strcmp(buf.as_ptr(), expect) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"hts_strprint failed: length %zu: got \"%.*s\", expected \"%s\"\n".as_ptr(),
             destlen,
             destlen as c_int,
@@ -204,7 +204,7 @@ pub unsafe fn test_test_str2int_c_141_check_strprint2(
     } else {
         if verbose != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"hts_strprint OK: length %zu: got \"%s\"\n".as_ptr(),
                 destlen,
                 expect,
@@ -382,7 +382,7 @@ pub unsafe fn test_test_str2int_c_208_main(argc: c_int, argv: *mut *mut c_char) 
         match opt as u8 {
             b'v' => verbose = 1,
             _ => {
-                libc::fprintf(hts_sys::stderr.cast(), c"Usage: %s [-v]\n".as_ptr(), *argv);
+                libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Usage: %s [-v]\n".as_ptr(), *argv);
                 return libc::EXIT_FAILURE;
             }
         }

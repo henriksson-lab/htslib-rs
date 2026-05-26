@@ -1073,7 +1073,7 @@ pub unsafe fn test_test_expr_c_110_test() -> c_int {
         ) != 0
         {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed to parse filter string %s\n".as_ptr(),
                 test.str_,
             );
@@ -1087,7 +1087,7 @@ pub unsafe fn test_test_expr_c_110_test() -> c_int {
                 || test_test_expr_c_105_cmpfloat(r.d, test.dval) == 0
             {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Failed test: \"%s\" == \"%f\", got %s, \"%s\", %f\n".as_ptr(),
                     test.str_,
                     test.dval,
@@ -1107,7 +1107,7 @@ pub unsafe fn test_test_expr_c_110_test() -> c_int {
                 || r.is_true as c_int != test.truth_val)
         {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed test: \"%s\" == \"%s\", got %s, \"%s\", %f\n".as_ptr(),
                 test.str_,
                 test.sval,
@@ -1125,7 +1125,7 @@ pub unsafe fn test_test_expr_c_110_test() -> c_int {
                 || r.is_true as c_int != test.truth_val)
         {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed test: %s == %f, got %s, %f\n".as_ptr(),
                 test.str_,
                 test.dval,

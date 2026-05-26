@@ -118,7 +118,7 @@ pub unsafe extern "C" fn samples_qtask_ordered_c_143_thread_ordered_proc(
         ) < 0
         {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed to add aux tag xr, errno: %d\n".as_ptr(),
                 *libc::__errno_location(),
             );
@@ -155,7 +155,7 @@ pub extern "C" fn samples_qtask_ordered_c_176_threadfn_orderedwrite(
                 ) < 0
                 {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Failed to write output data\n".as_ptr(),
                     );
                     (*tdata).result = -1;
@@ -196,7 +196,7 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
     libc::pthread_mutex_init(&mut bamcache.lock, std::ptr::null());
 
     if argc != 4 && argc != 5 {
-        samples_qtask_ordered_c_61_print_usage(hts_sys::stdout.cast());
+        samples_qtask_ordered_c_61_print_usage(crate::htslib_rs::c_compat::stdout.cast());
     } else {
         let inname = *argv.add(1);
         let mut cnt = libc::atoi(*argv.add(2));
@@ -217,7 +217,7 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
         let file = libc::malloc(size).cast::<c_char>();
         if file.is_null() {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed to set output path\n".as_ptr(),
             );
         } else {
@@ -225,19 +225,19 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
             pool = thread_pool::hts_tpool_init(cnt);
             if pool.is_null() {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Failed to create thread pool\n".as_ptr(),
                 );
             } else {
                 tpool.pool = pool;
                 queue = thread_pool::hts_tpool_process_init(pool, cnt * 2, 0);
                 if queue.is_null() {
-                    libc::fprintf(hts_sys::stderr.cast(), c"Failed to create queue\n".as_ptr());
+                    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Failed to create queue\n".as_ptr());
                 } else {
                     infile = hts::hts_open(inname, c"r".as_ptr());
                     if infile.is_null() {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"Could not open %s\n".as_ptr(),
                             inname,
                         );
@@ -245,26 +245,26 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
                         outfile = hts::hts_open(file, c"wb".as_ptr());
                         if outfile.is_null() {
                             libc::fprintf(
-                                hts_sys::stderr.cast(),
+                                crate::htslib_rs::c_compat::stderr.cast(),
                                 c"Could not open output file\n".as_ptr(),
                             );
                         } else if hts::hts_set_thread_pool(infile, &mut tpool) < 0
                             || hts::hts_set_thread_pool(outfile, &mut tpool) < 0
                         {
                             libc::fprintf(
-                                hts_sys::stderr.cast(),
+                                crate::htslib_rs::c_compat::stderr.cast(),
                                 c"Failed to set threads to i/o files\n".as_ptr(),
                             );
                         } else {
                             in_samhdr = sam::sam_hdr_read(infile);
                             if in_samhdr.is_null() {
                                 libc::fprintf(
-                                    hts_sys::stderr.cast(),
+                                    crate::htslib_rs::c_compat::stderr.cast(),
                                     c"Failed to read header from file!\n".as_ptr(),
                                 );
                             } else if sam::sam_hdr_write(outfile, in_samhdr) == -1 {
                                 libc::fprintf(
-                                    hts_sys::stderr.cast(),
+                                    crate::htslib_rs::c_compat::stderr.cast(),
                                     c"Failed to write header\n".as_ptr(),
                                 );
                             } else {
@@ -281,7 +281,7 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
                                 ) != 0
                                 {
                                     libc::fprintf(
-                                        hts_sys::stderr.cast(),
+                                        crate::htslib_rs::c_compat::stderr.cast(),
                                         c"Failed to create writer thread\n".as_ptr(),
                                     );
                                 } else {
@@ -296,7 +296,7 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
                                         .cast();
                                         if bamdata.is_null() {
                                             libc::fprintf(
-                                                hts_sys::stderr.cast(),
+                                                crate::htslib_rs::c_compat::stderr.cast(),
                                                 c"Failed to allocate memory\n".as_ptr(),
                                             );
                                             break;
@@ -332,7 +332,7 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
                                             ) == -1
                                             {
                                                 libc::fprintf(
-                                                    hts_sys::stderr.cast(),
+                                                    crate::htslib_rs::c_compat::stderr.cast(),
                                                     c"Failed to schedule processing\n".as_ptr(),
                                                 );
                                                 dispatch_failed = true;
@@ -341,7 +341,7 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
                                             bamdata = std::ptr::null_mut();
                                         } else {
                                             libc::fprintf(
-                                                hts_sys::stderr.cast(),
+                                                crate::htslib_rs::c_compat::stderr.cast(),
                                                 c"Error in reading data\n".as_ptr(),
                                             );
                                             break;
@@ -370,7 +370,7 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
             ) == -1
             {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Failed to schedule sentinel job\n".as_ptr(),
                 );
                 ret = libc::EXIT_FAILURE;

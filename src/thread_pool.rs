@@ -4,12 +4,16 @@ use std::ptr;
 
 use crate::htslib_rs::c_compat;
 
+// Native thread pool types. The public names alias the native structs defined
+// below; the implementation in this module operates on them directly (the
+// previous opaque C-pointer casts become identity casts). These were the only
+// references to the C library in this module, so it is now C-library-free.
 // original: hts_tpool (htslib/thread_pool_internal.h:136)
-pub type hts_tpool = hts_sys::hts_tpool;
+pub type hts_tpool = HtsTpool;
 // original: hts_tpool_process (htslib/thread_pool_internal.h:100)
-pub type hts_tpool_process = hts_sys::hts_tpool_process;
+pub type hts_tpool_process = HtsTpoolProcess;
 // original: hts_tpool_result (htslib/thread_pool_internal.h:71)
-pub type hts_tpool_result = hts_sys::hts_tpool_result;
+pub type hts_tpool_result = HtsTpoolResult;
 
 pub type hts_tpool_worker = Option<unsafe extern "C" fn(arg: *mut c_void) -> *mut c_void>;
 pub type hts_tpool_cleanup = Option<unsafe extern "C" fn(arg: *mut c_void)>;
@@ -32,7 +36,7 @@ struct HtsTpoolJob {
 
 // original: hts_tpool_result (htslib/thread_pool_internal.h:71)
 #[repr(C)]
-struct HtsTpoolResult {
+pub struct HtsTpoolResult {
     next: *mut HtsTpoolResult,
     result_cleanup: hts_tpool_cleanup,
     serial: u64,
@@ -50,7 +54,7 @@ struct HtsTpoolWorker {
 
 // original: hts_tpool_process (htslib/thread_pool_internal.h:100)
 #[repr(C)]
-struct HtsTpoolProcess {
+pub struct HtsTpoolProcess {
     p: *mut HtsTpool,
     input_head: *mut HtsTpoolJob,
     input_tail: *mut HtsTpoolJob,
@@ -77,7 +81,7 @@ struct HtsTpoolProcess {
 
 // original: hts_tpool (htslib/thread_pool_internal.h:136)
 #[repr(C)]
-struct HtsTpool {
+pub struct HtsTpool {
     nwaiting: c_int,
     njobs: c_int,
     shutdown: c_int,

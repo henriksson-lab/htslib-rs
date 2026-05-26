@@ -10,8 +10,16 @@ readme = "README.md"
 name = "htslib_rs"
 path = "src/lib.rs"
 
+# `parity` enables the hts-sys (C HTSlib) dependency. The goal is to remove
+# hts_sys from production code entirely; it is retained only for (a) parity
+# tests that compare native output against the C library and (b) transitional
+# delegation while subsystems are still being translated. `parity` is in
+# `default` so the crate builds today; the authoritative "are we done"
+# signal is `cargo build --no-default-features` (no hts_sys) compiling cleanly.
+# See docs/HTS_SYS_CUTOVER.md.
 [features]
-default = []
+default = ["parity"]
+parity = ["dep:hts-sys"]
 cram-mirror = ["dep:c2rust-bitfields"]
 gcs = ["libcurl"]
 libcurl = []
@@ -20,7 +28,7 @@ s3 = ["libcurl"]
 [dependencies]
 c2rust-bitfields = { version = "0.22.1", optional = true }
 flate2 = "1"
-hts-sys = "2.2.0"
+hts-sys = { version = "2.2.0", optional = true }
 libc = "0.2"
 tracehash-rs = "0.2.0"
 xz2 = "0.1"

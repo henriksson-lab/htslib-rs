@@ -21,7 +21,7 @@ pub unsafe fn samples_index_multireg_read_c_50_main(argc: c_int, argv: *mut *mut
     let mut iter = std::ptr::null_mut();
 
     if argc != 4 {
-        samples_index_multireg_read_c_37_print_usage(hts_sys::stderr.cast());
+        samples_index_multireg_read_c_37_print_usage(crate::htslib_rs::c_compat::stderr.cast());
         return ret;
     }
     let inname = *argv.add(1);

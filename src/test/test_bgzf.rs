@@ -48,7 +48,7 @@ pub unsafe fn test_test_bgzf_c_68_try_fopen(
     let f = libc::fopen(name, mode);
     if f.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Couldn't open %s : %s\n".as_ptr(),
             name,
             libc::strerror(*libc::__errno_location()),
@@ -68,7 +68,7 @@ pub unsafe fn test_test_bgzf_c_77_try_fclose(
     *file = ptr::null_mut();
     if libc::fclose(to_close) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Error on closing %s : %s\n".as_ptr(),
             func,
             name,
@@ -91,7 +91,7 @@ pub unsafe fn test_test_bgzf_c_89_try_fread(
     let got = libc::fread(buf, 1, len, in_);
     if got == 0 && libc::ferror(in_) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Error reading from %s : %s\n".as_ptr(),
             func,
             fname,
@@ -110,7 +110,7 @@ pub unsafe fn test_test_bgzf_c_100_try_fseek_start(
 ) -> c_int {
     if libc::fseek(f, 0, libc::SEEK_SET) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Couldn't seek on %s : %s\n".as_ptr(),
             func,
             name,
@@ -130,7 +130,7 @@ pub unsafe fn test_test_bgzf_c_109_try_bgzf_open(
     let bgz = bgzf_open(name, mode);
     if bgz.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Couldn't bgzf_open %s with mode %s : %s\n".as_ptr(),
             func,
             name,
@@ -151,7 +151,7 @@ pub unsafe fn test_test_bgzf_c_120_try_bgzf_dopen(
     let fd = libc::open(name, hfile_oflags(mode), 0o666);
     if fd < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Failed to open %s with mode %s : %s\n".as_ptr(),
             func,
             name,
@@ -164,7 +164,7 @@ pub unsafe fn test_test_bgzf_c_120_try_bgzf_dopen(
     let bgz = bgzf_dopen(fd, mode);
     if bgz.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : bgzf_dopen failed on %s mode %s : %s\n".as_ptr(),
             func,
             name,
@@ -187,7 +187,7 @@ pub unsafe fn test_test_bgzf_c_141_try_bgzf_hopen(
     let hfp = hopen(name, mode);
     if hfp.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : hopen failed on %s mode %s : %s\n".as_ptr(),
             func,
             name,
@@ -200,7 +200,7 @@ pub unsafe fn test_test_bgzf_c_141_try_bgzf_hopen(
     let bgz = bgzf_hopen(hfp, mode);
     if bgz.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : bgzf_hopen failed on %s mode %s : %s\n".as_ptr(),
             func,
             name,
@@ -227,7 +227,7 @@ pub unsafe fn test_test_bgzf_c_163_try_bgzf_close(
         if expected_fail == 0 {
             let errno = *libc::__errno_location();
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s : bgzf_close failed on %s%s%s\n".as_ptr(),
                 func,
                 name,
@@ -246,7 +246,7 @@ pub unsafe fn test_test_bgzf_c_163_try_bgzf_close(
         return -1;
     } else if expected_fail != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : bgzf_close worked on %s, but expected failure\n".as_ptr(),
             func,
             name,
@@ -266,7 +266,7 @@ pub unsafe fn test_test_bgzf_c_180_try_bgzf_read(
     let got = bgzf_read_small(fp, data, length);
     if got < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Error from bgzf_read %s : %s\n".as_ptr(),
             func,
             name,
@@ -287,7 +287,7 @@ pub unsafe fn test_test_bgzf_c_190_try_bgzf_write(
     let put = bgzf_write_small(fp, data, length);
     if put < length as isize {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : %s %s : %s\n".as_ptr(),
             func,
             if put < 0 {
@@ -314,7 +314,7 @@ pub unsafe fn test_test_bgzf_c_203_try_bgzf_compression(
     let res = bgzf_compression(fp);
     if res != expect {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Unexpected result %d from bgzf_compression on %s; expected %d\n".as_ptr(),
             func,
             res,
@@ -334,7 +334,7 @@ pub unsafe fn test_test_bgzf_c_216_try_bgzf_mt(
 ) -> c_int {
     if bgzf_mt(bgz, nthreads, 64) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Error from bgzf_mt : %s\n".as_ptr(),
             func,
             libc::strerror(*libc::__errno_location()),
@@ -352,7 +352,7 @@ pub unsafe fn test_test_bgzf_c_225_try_bgzf_index_build_init(
 ) -> c_int {
     if bgzf_index_build_init(bgz) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Error from bgzf_index_build_init on %s : %s\n".as_ptr(),
             func,
             name,
@@ -372,7 +372,7 @@ pub unsafe fn test_test_bgzf_c_235_try_bgzf_index_load(
 ) -> c_int {
     if bgzf_index_load(fp, bname, suffix) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Couldn't bgzf_index_load %s%s : %s\n".as_ptr(),
             func,
             bname,
@@ -397,7 +397,7 @@ pub unsafe fn test_test_bgzf_c_245_try_bgzf_index_dump(
 ) -> c_int {
     if bgzf_index_dump(fp, bname, suffix) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Couldn't bgzf_index_dump %s%s : %s\n".as_ptr(),
             func,
             bname,
@@ -422,7 +422,7 @@ pub unsafe fn test_test_bgzf_c_255_try_bgzf_tell(
     let told = (((*fp).block_address as u64) << 16 | ((*fp).block_offset as u64 & 0xffff)) as i64;
     if told < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : %s %s : %s\n".as_ptr(),
             func,
             c"Error telling in".as_ptr(),
@@ -444,7 +444,7 @@ pub unsafe fn test_test_bgzf_c_267_try_bgzf_tell_expect(
     let told = test_test_bgzf_c_255_try_bgzf_tell(fp, name, func);
     if told != expected {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Unexpected value (%ld) from bgzf_tell on %s; expected %ld\n".as_ptr(),
             func,
             told as libc::c_long,
@@ -466,7 +466,7 @@ pub unsafe fn test_test_bgzf_c_278_try_bgzf_seek(
 ) -> c_int {
     if bgzf_seek(fp, pos, whence) < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Error from bgzf_seek(%s, %ld, %d) : %s\n".as_ptr(),
             func,
             name,
@@ -489,7 +489,7 @@ pub unsafe fn test_test_bgzf_c_288_try_bgzf_useek(
 ) -> c_int {
     if bgzf_useek(fp, uoffset as i64, where_) < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Error from bgzf_useek(%s, %ld, %d) : %s\n".as_ptr(),
             func,
             name,
@@ -513,7 +513,7 @@ pub unsafe fn test_test_bgzf_c_298_try_bgzf_getc(
     let c = bgzf_getc(fp);
     if c != expected {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Unexpected value (%d) from bgzf_getc on %s pos %zu; expected %d\n".as_ptr(),
             func,
             c,
@@ -537,7 +537,7 @@ pub unsafe fn test_test_bgzf_c_311_try_skip(
         let c = bgzf_getc(fp);
         if c < 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s : Error from bgzf_getc on %s\n".as_ptr(),
                 func,
                 name,
@@ -560,7 +560,7 @@ pub unsafe fn test_test_bgzf_c_327_compare_buffers(
 ) -> c_int {
     if l1 != l2 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : EOF on %s\n".as_ptr(),
             func,
             if l1 < l2 { name1 } else { name2 },
@@ -569,7 +569,7 @@ pub unsafe fn test_test_bgzf_c_327_compare_buffers(
     }
     if libc::memcmp(b1.cast(), b2.cast(), l1) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : difference between %s and %s\n".as_ptr(),
             func,
             name1,
@@ -861,7 +861,7 @@ pub unsafe fn test_test_bgzf_c_435_test_write_read(
             };
             if libc::memcmp((*f).text.add(pos).cast(), bg_buf.as_ptr().cast(), cmp_len) != 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"%s : Got wrong data from %s, pos %zu\n".as_ptr(),
                     c"test_write_read".as_ptr(),
                     (*f).tmp_bgzf,
@@ -880,7 +880,7 @@ pub unsafe fn test_test_bgzf_c_435_test_write_read(
 
     if pos != bg_put as usize {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : bgzf_read got %zd bytes; expected %zd\n".as_ptr(),
             c"test_write_read".as_ptr(),
             pos,
@@ -1019,7 +1019,7 @@ pub unsafe fn test_test_bgzf_c_511_test_embed_eof(
             };
             if libc::memcmp((*f).text.add(pos).cast(), bg_buf.as_ptr().cast(), cmp_len) != 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"%s : Got wrong data from %s, pos %zu\n".as_ptr(),
                     c"test_embed_eof".as_ptr(),
                     (*f).tmp_bgzf,
@@ -1037,7 +1037,7 @@ pub unsafe fn test_test_bgzf_c_511_test_embed_eof(
 
     if pos != (*f).ltext {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : bgzf_read got %zd bytes; expected %zd\n".as_ptr(),
             c"test_embed_eof".as_ptr(),
             pos,
@@ -1161,7 +1161,7 @@ pub unsafe fn test_test_bgzf_c_622_test_check_EOF(name: *mut c_char, expected: c
     let eof = bgzf_check_EOF(bgz);
     if eof != expected {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Unexpected result %d from bgzf_check_EOF on %s; expected %d\n".as_ptr(),
             c"test_check_EOF".as_ptr(),
             eof,
@@ -1693,7 +1693,7 @@ pub unsafe fn test_test_bgzf_c_831_test_tell_read(f: *mut Files, mode: *const c_
             ) != 0
         {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s: failed\n".as_ptr(),
                 c"test_tell_read".as_ptr(),
             );
@@ -1791,7 +1791,7 @@ pub unsafe fn test_test_bgzf_c_881_test_useek_read_small(
         || libc::memcmp(bg_buf.as_ptr().cast(), c"World".as_ptr().cast(), 5) != 0
     {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%s: failed\n".as_ptr(),
             c"test_useek_read_small".as_ptr(),
         );
@@ -1875,7 +1875,7 @@ pub unsafe fn test_test_bgzf_c_924_test_bgzf_getline(
         let res = bgzf_getline(bgz, b'\n' as c_int, &mut str_);
         if res < 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s : %s from bgzf_getline on %s : %s\n".as_ptr(),
                 c"test_bgzf_getline".as_ptr(),
                 if res < -1 {
@@ -1896,7 +1896,7 @@ pub unsafe fn test_test_bgzf_c_924_test_bgzf_getline(
         }
         if str_.l != l || libc::memcmp(text.add(pos).cast(), str_.s.cast(), l) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s : Unexpected data from bgzf_getline on %s\nExpected : %.*s\nGot      : %.*s\n"
                     .as_ptr(),
                 c"test_bgzf_getline".as_ptr(),
@@ -2041,7 +2041,7 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
                 break;
             } else if res == -1 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"%s : %s from bgzf_getline on %s\n".as_ptr(),
                     c"test_bgzf_getline_on_truncated_file".as_ptr(),
                     c"Unexpected EOF".as_ptr(),
@@ -2054,7 +2054,7 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
             }
             if str_.l != l || libc::memcmp(text.add(pos).cast(), str_.s.cast(), l) != 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"%s : Unexpected data from bgzf_getline on %s\nExpected : %.*s\nGot      : %.*s\n".as_ptr(),
                     c"test_bgzf_getline_on_truncated_file".as_ptr(),
                     (*f).tmp_bgzf,
@@ -2075,7 +2075,7 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
             let res = bgzf_getline(bgz, b'\n' as c_int, &mut str_);
             if res > -2 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"%s : unexpected bgzf_getline result %d\n".as_ptr(),
                     c"test_bgzf_getline_on_truncated_file".as_ptr(),
                     res,
@@ -2122,7 +2122,7 @@ pub unsafe fn test_test_bgzf_c_1073_main(argc: c_int, argv: *mut *mut c_char) ->
 
     if argc != 2 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Usage: %s <source file>\n".as_ptr(),
             *argv,
         );

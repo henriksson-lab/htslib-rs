@@ -109,7 +109,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
     h = sam::sam_hdr_read(in_);
     if h.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Couldn't read header for \"%s\"\n".as_ptr(),
             *argv.add(local_optind as usize),
         );
@@ -124,7 +124,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
         .cast::<c_char>();
         if new_text.is_null() {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Error reallocing header text\n".as_ptr(),
             );
             if !b.is_null() {
@@ -150,7 +150,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
     b = sam::bam_init1();
     if b.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Out of memory allocating BAM struct\n".as_ptr(),
         );
         if !b.is_null() {
@@ -186,7 +186,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
 
     if (*opts).benchmark == 0 && sam::sam_hdr_write(out, h) < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Error writing output header.\n".as_ptr(),
         );
         if !b.is_null() {
@@ -204,7 +204,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
     if !(*opts).index.is_null() {
         if sam::sam_idx_init(out, h, (*opts).min_shift, (*opts).index) < 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed to initialise index\n".as_ptr(),
             );
             if !b.is_null() {
@@ -227,7 +227,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
             idx.is_null()
         } {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"[E::%s] fail to load the BAM index\n".as_ptr(),
                 c"sam_loop".as_ptr(),
             );
@@ -266,7 +266,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
                 r >= 0
             } {
                 if (*opts).benchmark == 0 && sam::sam_c_4553_sam_write1(out, h, b) < 0 {
-                    libc::fprintf(hts_sys::stderr.cast(), c"Error writing output.\n".as_ptr());
+                    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error writing output.\n".as_ptr());
                     hts::hts_itr_destroy(iter);
                     if !b.is_null() {
                         sam::bam_destroy1(b);
@@ -288,7 +288,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
             }
             hts::hts_itr_destroy(iter);
             if r < -1 {
-                libc::fprintf(hts_sys::stderr.cast(), c"Error reading input.\n".as_ptr());
+                libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error reading input.\n".as_ptr());
                 if !b.is_null() {
                     sam::bam_destroy1(b);
                 }
@@ -306,7 +306,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
                 let iter: *mut hts_itr_t = sam::sam_itr_querys(idx, h, *argv.add(i as usize));
                 if iter.is_null() {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"[E::%s] fail to parse region '%s'\n".as_ptr(),
                         c"sam_loop".as_ptr(),
                         *argv.add(i as usize),
@@ -327,7 +327,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
                     r >= 0
                 } {
                     if (*opts).benchmark == 0 && sam::sam_c_4553_sam_write1(out, h, b) < 0 {
-                        libc::fprintf(hts_sys::stderr.cast(), c"Error writing output.\n".as_ptr());
+                        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error writing output.\n".as_ptr());
                         hts::hts_itr_destroy(iter);
                         if !b.is_null() {
                             sam::bam_destroy1(b);
@@ -349,7 +349,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
                 }
                 hts::hts_itr_destroy(iter);
                 if r < -1 {
-                    libc::fprintf(hts_sys::stderr.cast(), c"Error reading input.\n".as_ptr());
+                    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error reading input.\n".as_ptr());
                     if !b.is_null() {
                         sam::bam_destroy1(b);
                     }
@@ -372,7 +372,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
             r >= 0
         } {
             if (*opts).benchmark == 0 && sam::sam_c_4553_sam_write1(out, h, b) < 0 {
-                libc::fprintf(hts_sys::stderr.cast(), c"Error writing output.\n".as_ptr());
+                libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error writing output.\n".as_ptr());
                 if !b.is_null() {
                     sam::bam_destroy1(b);
                 }
@@ -394,7 +394,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
     }
 
     if r < -1 {
-        libc::fprintf(hts_sys::stderr.cast(), c"Error parsing input.\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error parsing input.\n".as_ptr());
         if !b.is_null() {
             sam::bam_destroy1(b);
         }
@@ -409,7 +409,7 @@ pub unsafe fn test_test_view_c_65_sam_loop(
 
     if !(*opts).index.is_null() {
         if sam::sam_idx_save(out) < 0 {
-            libc::fprintf(hts_sys::stderr.cast(), c"Error saving index\n".as_ptr());
+            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error saving index\n".as_ptr());
             if !b.is_null() {
                 sam::bam_destroy1(b);
             }
@@ -458,7 +458,7 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
     if !(*opts).index.is_null() {
         if vcf::bcf_idx_init(out, h, (*opts).min_shift, (*opts).index) < 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed to initialise index\n".as_ptr(),
             );
             return 1;
@@ -470,7 +470,7 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
         idx = vcf::bcf_index_load2(*argv.add(local_optind as usize), std::ptr::null());
         if idx.is_null() {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"[E::%s] fail to load the BVCF index\n".as_ptr(),
                 c"vcf_loop".as_ptr(),
             );
@@ -482,7 +482,7 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
             let iter = bcf_itr_querys1(idx, h, *argv.add(i as usize));
             if iter.is_null() {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"[E::%s] fail to parse region '%s'\n".as_ptr(),
                     c"vcf_loop".as_ptr(),
                     *argv.add(i as usize),
@@ -495,7 +495,7 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
                 r >= 0
             } {
                 if (*opts).benchmark == 0 && vcf::bcf_write(out, h, b) < 0 {
-                    libc::fprintf(hts_sys::stderr.cast(), c"Error writing output.\n".as_ptr());
+                    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error writing output.\n".as_ptr());
                     exit_code = 1;
                     break;
                 }
@@ -507,7 +507,7 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
                 }
             }
             if r < -1 {
-                libc::fprintf(hts_sys::stderr.cast(), c"Error reading input.\n".as_ptr());
+                libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error reading input.\n".as_ptr());
                 exit_code = 1;
             }
             hts::hts_itr_destroy(iter);
@@ -525,7 +525,7 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
             r >= 0
         } {
             if (*opts).benchmark == 0 && vcf::bcf_write(out, h, b) < 0 {
-                libc::fprintf(hts_sys::stderr.cast(), c"Error writing output.\n".as_ptr());
+                libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error writing output.\n".as_ptr());
                 exit_code = 1;
                 break;
             }
@@ -537,14 +537,14 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
             }
         }
         if r < -1 {
-            libc::fprintf(hts_sys::stderr.cast(), c"Error reading input.\n".as_ptr());
+            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error reading input.\n".as_ptr());
             exit_code = 1;
         }
     }
 
     if exit_code == 0 && !(*opts).index.is_null() {
         if vcf::bcf_idx_save(out) < 0 {
-            libc::fprintf(hts_sys::stderr.cast(), c"Error saving index\n".as_ptr());
+            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error saving index\n".as_ptr());
             exit_code = 1;
         }
     }
@@ -622,91 +622,91 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
     let local_optind = optind;
     if argc == local_optind {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Usage: test_view [-DSI] [-t fn_ref] [-i option=value] [-bC] [-l level] [-o option=value] [-N num_reads] [-B] [-Z hdr_nuls] [-@ num_threads] [-x index_fn] [-m min_shift] [-p out] [-v] <in.bam>|<in.sam>|<in.cram> [region]\n".as_ptr(),
         );
-        libc::fprintf(hts_sys::stderr.cast(), c"\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"\n".as_ptr());
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-D: read CRAM format (mode 'c')\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-S: read compressed BCF, BAM, FAI (mode 'b')\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-I: ignore SAM parsing errors\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-t: fn_ref: load CRAM references from the specified fasta file instead of @SQ headers when writing a CRAM file\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-i: option=value: set an option for CRAM input\n".as_ptr(),
         );
-        libc::fprintf(hts_sys::stderr.cast(), c"\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"\n".as_ptr());
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-b: write binary compressed BCF, BAM, FAI (mode 'b')\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-z: write text compressed VCF.gz, SAM.gz or FASTQ.gz (mode 'z')\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-C: write CRAM format (mode 'c')\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-f: write FASTQ format (mode 'f')\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-l 0-9: set zlib compression level\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-o option=value: set an option for CRAM output\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-N: num_reads: limit the output to the first num_reads reads\n".as_ptr(),
         );
-        libc::fprintf(hts_sys::stderr.cast(), c"\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"\n".as_ptr());
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-B: enable benchmarking\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-M: use hts_itr_multi iterator\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-Z hdr_nuls: append specified number of null bytes to the SAM header\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-@ num_threads: use thread pool with specified number of threads\n\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-x fn: write index to fn\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-m min_shift: specifies BAI/CSI bin size; 0 is BAI(BAM) or TBI(VCF), 14 is CSI default\n".as_ptr(),
         );
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"-p out_fn: output to out_fn instead of stdout\n".as_ptr(),
         );
-        libc::fprintf(hts_sys::stderr.cast(), c"-v: increase verbosity\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"-v: increase verbosity\n".as_ptr());
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"The region list entries should be specified as 'reg:beg-end', with intervals of a region being disjunct and sorted by the starting coordinate.\n".as_ptr(),
         );
         return 1;
@@ -721,7 +721,7 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
     in_ = hts::hts_open(*argv.add(local_optind as usize), moder.as_ptr());
     if in_.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Error opening \"%s\"\n".as_ptr(),
             *argv.add(local_optind as usize),
         );
@@ -754,7 +754,7 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
     out = hts::hts_open(out_fn, modew.as_ptr());
     if out.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Error opening standard output\n".as_ptr(),
         );
         return libc::EXIT_FAILURE;
@@ -781,7 +781,7 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
         p.pool = hts_tpool_init(opts.nthreads);
         if p.pool.is_null() {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Error creating thread pool\n".as_ptr(),
             );
             exit_code = 1;
@@ -790,7 +790,7 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
                 || hts::hts_set_thread_pool(out, &mut p) < 0
             {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Threaded BGZF is not yet supported in this translation\n".as_ptr(),
                 );
                 exit_code = 1;
@@ -812,7 +812,7 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
 
             _ => {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Unsupported or unknown category of data in input file\n".as_ptr(),
                 );
                 return libc::EXIT_FAILURE;
@@ -826,12 +826,12 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
 
     ret = hts::hts_close(out);
     if ret < 0 {
-        libc::fprintf(hts_sys::stderr.cast(), c"Error closing output.\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error closing output.\n".as_ptr());
         exit_code = libc::EXIT_FAILURE;
     }
     ret = hts::hts_close(in_);
     if ret < 0 {
-        libc::fprintf(hts_sys::stderr.cast(), c"Error closing input.\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error closing input.\n".as_ptr());
         exit_code = libc::EXIT_FAILURE;
     }
 
@@ -839,11 +839,11 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
         hts_tpool_destroy(p.pool);
     }
 
-    if libc::fclose(hts_sys::stdout.cast()) != 0
+    if libc::fclose(crate::htslib_rs::c_compat::stdout.cast()) != 0
         && *crate::htslib_rs::c_compat::__errno_location() != libc::EBADF
     {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Error closing standard output.\n".as_ptr(),
         );
         exit_code = libc::EXIT_FAILURE;

@@ -50,7 +50,7 @@ pub unsafe fn test_thrash_threads7_c_49_main(_argc: c_int, _argv: *mut *mut c_ch
 
         count += 1;
         if (count & 15) == 1 {
-            libc::fprintf(hts_sys::stderr.cast(), c"\r%d ".as_ptr(), count);
+            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"\r%d ".as_ptr(), count);
             libc::alarm(10);
         }
 
@@ -91,7 +91,7 @@ pub unsafe fn test_thrash_threads7_c_49_main(_argc: c_int, _argv: *mut *mut c_ch
         crate::htslib_rs::thread_pool::hts_tpool_process_destroy(*queue);
     }
     crate::htslib_rs::thread_pool::hts_tpool_destroy(p);
-    libc::fprintf(hts_sys::stderr.cast(), c"\n".as_ptr());
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"\n".as_ptr());
 
     libc::EXIT_SUCCESS
 }

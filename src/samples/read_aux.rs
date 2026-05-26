@@ -113,7 +113,7 @@ pub unsafe fn samples_read_aux_c_114_main(argc: c_int, argv: *mut *mut c_char) -
     };
 
     if argc != 3 {
-        samples_read_aux_c_37_print_usage(hts_sys::stderr.cast());
+        samples_read_aux_c_37_print_usage(crate::htslib_rs::c_compat::stderr.cast());
         return ret;
     }
     let inname = *argv.add(1);
@@ -173,7 +173,7 @@ pub unsafe fn samples_read_aux_c_114_main(argc: c_int, argv: *mut *mut c_char) -
                 }
             } else {
                 if samples_read_aux_c_51_printauxdata(
-                    hts_sys::stdout.cast(),
+                    crate::htslib_rs::c_compat::stdout.cast(),
                     sam::bam_aux_type(data),
                     -1,
                     data,

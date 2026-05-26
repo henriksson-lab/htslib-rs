@@ -41,7 +41,7 @@ pub unsafe fn test_test_faidx_c_33_file_compare(
         }
         if i < got1 || i < got2 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s and %s differ at line %u\n".as_ptr(),
                 file1,
                 file2,
@@ -56,7 +56,7 @@ pub unsafe fn test_test_faidx_c_33_file_compare(
                 libc::perror(file2);
             } else if got1 > 0 || got2 > 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"EOF on %s at line %u\n".as_ptr(),
                     if got1 > 0 { file2 } else { file1 },
                     lno,
@@ -84,7 +84,7 @@ pub unsafe fn test_test_faidx_c_87_load_index(
     let fai = crate::htslib_rs::faidx::fai_load3_format(fn_, fnfai, fngzi, flags, format);
     if fai.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: fai_load3(%s, %s, %s, %d, %d)\n".as_ptr(),
             fn_,
             if fnfai.is_null() {
@@ -119,7 +119,7 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
     let mut use_64bit = 1;
     let mut use_parse_reg = 0;
     let mut use_adjust_reg = 0;
-    let mut out = hts_sys::stdout.cast::<libc::FILE>();
+    let mut out = crate::htslib_rs::c_compat::stdout.cast::<libc::FILE>();
 
     if !interface.is_null() {
         if libc::strcmp(interface, c"fai_fetch".as_ptr()) == 0 {
@@ -167,7 +167,7 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
             );
             if e.is_null() {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Failed: fai_parse_region(fai, %s, &tid, &beg, &end, 0)\n".as_ptr(),
                     region,
                 );
@@ -186,7 +186,7 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
                     || (((r & 2) != 0) ^ (end != orig_end))
                 {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Failed: fai_adjust_region(fai, %d, %lld, %lld) returned %d\nAfter: beg = %lld end = %lld\n".as_ptr(),
                         tid,
                         orig_beg as libc::c_longlong,
@@ -218,7 +218,7 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
             }
             if seq.is_null() {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Failed: faidx_fetch_seq%s(fai, %s, %lld, %lld, &len)\n".as_ptr(),
                     if use_64bit != 0 {
                         c"64".as_ptr()
@@ -245,7 +245,7 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
             }
             if seq.is_null() {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Failed: fai_fetch%s(fai, %s, &len)\n".as_ptr(),
                     if use_64bit != 0 {
                         c"64".as_ptr()
@@ -309,7 +309,7 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
                 qual = crate::htslib_rs::faidx::fai_fetchqual64(fai, region, &mut qual_len);
                 if qual.is_null() {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Failed: fai_fetchqual64(fai, %s, &len)\n".as_ptr(),
                         region,
                     );
@@ -325,7 +325,7 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
                 qual_len = ilen as hts_pos_t;
                 if qual.is_null() {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Failed: fai_fetchqual64(fai, %s, &len)\n".as_ptr(),
                         region,
                     );
@@ -338,7 +338,7 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
             }
             if qual_len != len {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Sequence and quality lengths differ for %s %s\n".as_ptr(),
                     fn_,
                     region,
@@ -388,7 +388,7 @@ pub unsafe fn test_test_faidx_c_260_test_fai_line_length(
         let exp_len = libc::strtoll(expected, std::ptr::null_mut(), 10);
         if found_len != exp_len {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Unexpected result %lld from fai_line_length, expected %s\n".as_ptr(),
                 found_len,
                 expected,
@@ -420,7 +420,7 @@ pub unsafe fn test_test_faidx_c_285_test_faidx_has_seq(
         let exp_res = libc::strtol(expected, std::ptr::null_mut(), 10);
         if res as libc::c_long != exp_res {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Unexpected result %d from faidx_has_seq(%s) expected %s\n".as_ptr(),
                 res,
                 seq,
@@ -453,7 +453,7 @@ pub unsafe fn test_test_faidx_c_310_test_faidx_iseq(
     if !expected.is_null() {
         if found_name.is_null() || libc::strcmp(found_name, expected) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Unexpected result %s from faidx_iseq(fai, %d), expected %s\n".as_ptr(),
                 if found_name.is_null() {
                     c"(null)".as_ptr()
@@ -498,7 +498,7 @@ pub unsafe fn test_test_faidx_c_339_test_faidx_seq_len(
         let exp_len = libc::atoi(expected);
         if found_len != exp_len {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Unexpected result %d from faidx_seq_len(fai, %s) expected %s\n".as_ptr(),
                 found_len,
                 seq,
@@ -531,7 +531,7 @@ pub unsafe fn test_test_faidx_c_366_test_faidx_seq_len64(
         let exp_len = libc::strtoll(expected, std::ptr::null_mut(), 10);
         if found_len != exp_len {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Unexpected result %lld from fai_seq_len64(fai, %s) expected %s\n".as_ptr(),
                 found_len,
                 seq,
@@ -592,18 +592,18 @@ pub unsafe fn test_test_faidx_c_430_main(argc: c_int, argv: *mut *mut c_char) ->
             b'Q' => format = faidx::FAI_FASTQ,
             b't' => func = optarg,
             b'h' => {
-                test_test_faidx_c_403_help(hts_sys::stdout.cast(), *argv);
+                test_test_faidx_c_403_help(crate::htslib_rs::c_compat::stdout.cast(), *argv);
                 return libc::EXIT_SUCCESS;
             }
             _ => {
-                test_test_faidx_c_394_usage(hts_sys::stderr.cast(), *argv);
+                test_test_faidx_c_394_usage(crate::htslib_rs::c_compat::stderr.cast(), *argv);
                 return libc::EXIT_FAILURE;
             }
         }
     }
 
     if fn_.is_null() {
-        test_test_faidx_c_394_usage(hts_sys::stderr.cast(), *argv);
+        test_test_faidx_c_394_usage(crate::htslib_rs::c_compat::stderr.cast(), *argv);
         return libc::EXIT_FAILURE;
     }
 
@@ -611,7 +611,7 @@ pub unsafe fn test_test_faidx_c_430_main(argc: c_int, argv: *mut *mut c_char) ->
         let mut res = faidx::fai_build3(fn_, fnfai, fngzi);
         if res != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed: fai_build3(%s, %s, %s)\n".as_ptr(),
                 fn_,
                 if fnfai.is_null() {

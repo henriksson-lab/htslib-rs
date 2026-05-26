@@ -20,7 +20,7 @@ pub unsafe fn samples_split_c_50_main(argc: c_int, argv: *mut *mut c_char) -> c_
     let mut bamdata = std::ptr::null_mut();
 
     if argc != 3 {
-        samples_split_c_37_print_usage(hts_sys::stdout.cast());
+        samples_split_c_37_print_usage(crate::htslib_rs::c_compat::stdout.cast());
         return ret;
     }
     let inname = *argv.add(1);

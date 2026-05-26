@@ -25,7 +25,7 @@ pub unsafe fn test_test_parse_reg_c_50_reg_expected(
         || (!reg_exp.is_null() && end_out != end_exp)
     {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Parsing \"%s\" expected return \"%s\", %d:%lld-%lld, but got \"%s\", %d:%lld-%lld\n"
                 .as_ptr(),
             reg,
@@ -118,7 +118,7 @@ pub unsafe fn test_test_parse_reg_c_72_reg_test(fn_: *const c_char) -> c_int {
     test_test_parse_reg_c_50_reg_expected(hdr, c"chr1:-50".as_ptr(), 0, c"".as_ptr(), 0, 0, 50);
 
     // Check quoting
-    libc::fprintf(hts_sys::stderr.cast(), c"Expected error: ".as_ptr());
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Expected error: ".as_ptr());
     test_test_parse_reg_c_50_reg_expected(
         hdr,
         c"chr1:100-200".as_ptr(),
@@ -258,7 +258,7 @@ pub unsafe fn test_test_parse_reg_c_72_reg_test(fn_: *const c_char) -> c_int {
         0,
         hts::HTS_POS_MAX,
     );
-    libc::fprintf(hts_sys::stderr.cast(), c"Expected error: ".as_ptr());
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Expected error: ".as_ptr());
     test_test_parse_reg_c_50_reg_expected(
         hdr,
         c"chr1:100-200,chr3".as_ptr(),
@@ -300,15 +300,15 @@ pub unsafe fn test_test_parse_reg_c_72_reg_test(fn_: *const c_char) -> c_int {
     // More expected failures
     test_test_parse_reg_c_50_reg_expected(hdr, c"chr2".as_ptr(), 0, std::ptr::null(), 0, 0, 0);
     test_test_parse_reg_c_50_reg_expected(hdr, c"chr1,".as_ptr(), 0, std::ptr::null(), 0, 0, 0);
-    libc::fprintf(hts_sys::stderr.cast(), c"Expected error: ".as_ptr());
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Expected error: ".as_ptr());
     test_test_parse_reg_c_50_reg_expected(hdr, c"{chr1".as_ptr(), 0, std::ptr::null(), 0, 0, 0);
     test_test_parse_reg_c_50_reg_expected(hdr, c"chr1:10-10".as_ptr(), 0, c"".as_ptr(), 0, 9, 10); // OK
     test_test_parse_reg_c_50_reg_expected(hdr, c"chr1:10-9".as_ptr(), 0, std::ptr::null(), 0, 0, 0); // Issue#353
-    libc::fprintf(hts_sys::stderr.cast(), c"Expected error: ".as_ptr());
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Expected error: ".as_ptr());
     test_test_parse_reg_c_50_reg_expected(hdr, c"chr1:x".as_ptr(), 0, std::ptr::null(), 0, 0, 0);
-    libc::fprintf(hts_sys::stderr.cast(), c"Expected error: ".as_ptr());
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Expected error: ".as_ptr());
     test_test_parse_reg_c_50_reg_expected(hdr, c"chr1:1-y".as_ptr(), 0, std::ptr::null(), 0, 0, 0);
-    libc::fprintf(hts_sys::stderr.cast(), c"Expected error: ".as_ptr());
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Expected error: ".as_ptr());
     test_test_parse_reg_c_50_reg_expected(
         hdr,
         c"chr1:1,chr3".as_ptr(),
@@ -355,7 +355,7 @@ pub unsafe fn test_test_parse_reg_c_145_main(mut argc: c_int, mut argv: *mut *mu
     // Interactive mode for debugging
     if argc != 3 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Usage: test-parse-reg [-m] [-c] region[,region]...\n".as_ptr(),
         );
         libc::exit(1);
@@ -369,7 +369,7 @@ pub unsafe fn test_test_parse_reg_c_145_main(mut argc: c_int, mut argv: *mut *mu
 
     let hdr = sam::sam_hdr_read(fp);
     if hdr.is_null() {
-        libc::fprintf(hts_sys::stderr.cast(), c"Couldn't read header\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Couldn't read header\n".as_ptr());
         libc::exit(1);
     }
 
@@ -380,7 +380,7 @@ pub unsafe fn test_test_parse_reg_c_145_main(mut argc: c_int, mut argv: *mut *mu
         let mut end = 0;
         reg = sam::sam_parse_region(hdr, reg, &mut tid, &mut beg, &mut end, flags);
         if reg.is_null() {
-            libc::fprintf(hts_sys::stderr.cast(), c"Failed to parse region\n".as_ptr());
+            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Failed to parse region\n".as_ptr());
             libc::exit(1);
         }
         libc::printf(

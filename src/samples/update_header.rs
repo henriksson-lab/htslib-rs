@@ -15,7 +15,7 @@ pub unsafe fn samples_update_header_c_49_main(argc: c_int, argv: *mut *mut c_cha
     let mut ret = libc::EXIT_FAILURE;
 
     if argc != 6 {
-        samples_update_header_c_37_print_usage(hts_sys::stderr.cast());
+        samples_update_header_c_37_print_usage(crate::htslib_rs::c_compat::stderr.cast());
         return ret;
     }
 

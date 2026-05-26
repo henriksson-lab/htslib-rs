@@ -77,7 +77,7 @@ unsafe fn plugin_c_42_open_nextdir(itr: *mut PluginPathItr) -> *mut c_void {
 
         if hts_verbose >= 4 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"[W::hts_path_itr] can't scan directory \"%s\": %s\n".as_ptr(),
                 (*itr).entry.s,
                 libc::strerror(*__errno_location()),
@@ -195,7 +195,7 @@ pub unsafe fn plugin_c_135_load_plugin(
     if lib.is_null() {
         if hts_verbose >= 4 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"[W::%s] can't load plugin \"%s\": %s\n".as_ptr(),
                 c"load_plugin".as_ptr(),
                 filename,
@@ -215,7 +215,7 @@ pub unsafe fn plugin_c_135_load_plugin(
         if libg.is_null() {
             if hts_verbose >= 4 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"[W::%s] can't load plugin \"%s\": %s\n".as_ptr(),
                     c"load_plugin".as_ptr(),
                     filename,
@@ -248,7 +248,7 @@ pub unsafe fn plugin_c_135_load_plugin(
         if sym.is_null() {
             if hts_verbose >= 4 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"[W::%s] can't load plugin \"%s\": %s\n".as_ptr(),
                     c"load_plugin".as_ptr(),
                     filename,
@@ -290,7 +290,7 @@ pub unsafe fn plugin_c_179_plugin_func(
 pub unsafe fn plugin_c_186_close_plugin(plugin: *mut c_void) {
     if libc::dlclose(plugin) != 0 && hts_verbose >= 4 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"[W::%s] dlclose() failed: %s\n".as_ptr(),
             c"close_plugin".as_ptr(),
             libc::dlerror(),

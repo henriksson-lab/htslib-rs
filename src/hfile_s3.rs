@@ -54,7 +54,7 @@ type HFileCloseFn = unsafe extern "C" fn(*mut hFILE) -> c_int;
 type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> c_int;
 type HFileVOpenFn =
-    unsafe extern "C" fn(*const c_char, *const c_char, *mut hts_sys::__va_list_tag) -> *mut hFILE;
+    unsafe extern "C" fn(*const c_char, *const c_char, *mut crate::htslib_rs::c_compat::__va_list_tag) -> *mut hFILE;
 
 #[repr(C)]
 struct hFILE_backend {
@@ -1762,7 +1762,7 @@ pub unsafe fn hfile_s3_c_1218_report_s3_error(
     }
 
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"hfile_s3: S3 error %ld: %s\n".as_ptr(),
         resp_code,
         entry.s,
@@ -1785,7 +1785,7 @@ pub unsafe fn hfile_s3_c_1218_report_s3_error(
     }
 
     if entry.l != 0 {
-        libc::fprintf(hts_sys::stderr.cast(), c"%s\n".as_ptr(), entry.s);
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"%s\n".as_ptr(), entry.s);
     }
 
     libc::free(entry.s.cast());
@@ -2353,7 +2353,7 @@ pub unsafe extern "C" fn hfile_s3_c_1854_recv_callback(
         let fp = fpv.cast::<hFILE_s3>();
         if crate::htslib_rs::hts::kputsn(ptr, n, &mut (*fp).buffer) == libc::EOF {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"hfile_s3: error: unable to allocate memory to read data.\n".as_ptr(),
             );
             return 0;
@@ -2437,7 +2437,7 @@ pub unsafe extern "C" fn hfile_s3_c_1682_s3_write_close(fpv: *mut hFILE) -> c_in
                         && hfile_s3_c_1218_report_s3_error(&mut response, response_code) != 0
                     {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"hfile_s3: warning, unable to report full S3 error status.\n".as_ptr(),
                         );
                     }
@@ -2720,7 +2720,7 @@ pub unsafe fn hfile_s3_c_2102_s3_write_open(
                 && hfile_s3_c_1218_report_s3_error(&mut response, response_code) != 0
             {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"hfile_s3: warning, unable to report full S3 error status.\n".as_ptr(),
                 );
             }
@@ -2780,7 +2780,7 @@ unsafe fn hfile_s3_hopen_vargs(
             overflow[i - reg_save.len()] = word;
         }
     }
-    let mut args = hts_sys::__va_list_tag {
+    let mut args = crate::htslib_rs::c_compat::__va_list_tag {
         gp_offset: 0,
         fp_offset: 48,
         overflow_arg_area: overflow.as_mut_ptr().cast(),
@@ -2806,7 +2806,7 @@ unsafe fn hfile_s3_hopen_vargs(
 unsafe fn hfile_s3_c_2348_hopen_v4_read(
     url: *const c_char,
     mode: *const c_char,
-    argsp: *mut hts_sys::__va_list_tag,
+    argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
     ad: *mut S3AuthDataLayout,
     http_response: *mut libc::c_long,
     fail_on_error: c_int,
@@ -2837,7 +2837,7 @@ unsafe fn hfile_s3_c_2348_hopen_v4_read(
 unsafe fn hfile_s3_c_774_hopen_v2_read(
     url: *const c_char,
     mode: *const c_char,
-    argsp: *mut hts_sys::__va_list_tag,
+    argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
     ad: *mut s3_auth_data,
 ) -> *mut hFILE {
     let mut words = Vec::with_capacity(if argsp.is_null() { 9 } else { 11 });
@@ -2862,7 +2862,7 @@ unsafe fn hfile_s3_c_774_hopen_v2_read(
 unsafe fn hfile_s3_c_2348_hopen_v4_write(
     url: *const c_char,
     mode: *const c_char,
-    argsp: *mut hts_sys::__va_list_tag,
+    argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
     ad: *mut S3AuthDataLayout,
 ) -> *mut hFILE {
     let _ = (mode, argsp);
@@ -2872,7 +2872,7 @@ unsafe fn hfile_s3_c_2348_hopen_v4_write(
 unsafe fn hfile_s3_c_774_s3_rewrite(
     s3url: *const c_char,
     mode: *const c_char,
-    argsp: *mut hts_sys::__va_list_tag,
+    argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     let mut url: kstring_t = std::mem::zeroed();
     let ad = hfile_s3_c_545_setup_auth_data(s3url, mode, 2, &mut url);
@@ -2891,7 +2891,7 @@ unsafe fn hfile_s3_c_774_s3_rewrite(
 pub unsafe fn hfile_s3_c_2348_s3_open_v4(
     s3url: *const c_char,
     mode: *const c_char,
-    argsp: *mut hts_sys::__va_list_tag,
+    argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     let mut url: kstring_t = std::mem::zeroed();
     let ad = hfile_s3_c_545_setup_auth_data(s3url, mode, 4, &mut url).cast::<S3AuthDataLayout>();
@@ -2941,7 +2941,7 @@ pub unsafe fn hfile_s3_c_2348_s3_open_v4(
 pub unsafe fn hfile_s3_c_2374_s3_open_v2(
     s3url: *const c_char,
     mode: *const c_char,
-    argsp: *mut hts_sys::__va_list_tag,
+    argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     hfile_s3_c_774_s3_rewrite(s3url, mode, argsp)
 }
@@ -2962,9 +2962,9 @@ unsafe extern "C" fn hfile_s3_c_2400_hopen_s3(
 unsafe extern "C" fn hfile_s3_c_2414_vhopen_s3(
     url: *const c_char,
     mode_colon: *const c_char,
-    args0: *mut hts_sys::__va_list_tag,
+    args0: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
-    let mut args = std::mem::MaybeUninit::<hts_sys::__va_list_tag>::uninit();
+    let mut args = std::mem::MaybeUninit::<crate::htslib_rs::c_compat::__va_list_tag>::uninit();
     std::ptr::copy_nonoverlapping(args0, args.as_mut_ptr(), 1);
 
     if libc::getenv(c"HTS_S3_V2".as_ptr()).is_null() {

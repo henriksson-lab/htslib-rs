@@ -298,7 +298,7 @@ pub unsafe fn test_hts_endian_c_159_t16_bit(verbose: c_int) -> c_int {
 
         if verbose != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s %6d %6d\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 2),
                 test.i16_ as c_int,
@@ -309,7 +309,7 @@ pub unsafe fn test_hts_endian_c_159_t16_bit(verbose: c_int) -> c_int {
         u16_ = le_to_u16(test.u8.as_ptr());
         if u16_ != test.u16_ {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %s => %u; expected %u\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 2),
                 u16_ as libc::c_uint,
@@ -321,7 +321,7 @@ pub unsafe fn test_hts_endian_c_159_t16_bit(verbose: c_int) -> c_int {
         i16_ = le_to_i16(test.u8.as_ptr());
         if i16_ != test.i16_ {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %s => %d; expected %d\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 2),
                 i16_ as c_int,
@@ -333,7 +333,7 @@ pub unsafe fn test_hts_endian_c_159_t16_bit(verbose: c_int) -> c_int {
         u16_ = le_to_u16(test.u8_unaligned.as_ptr().add(1));
         if u16_ != test.u16_ {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %s => %u; expected %u\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 2),
                 u16_ as libc::c_uint,
@@ -345,7 +345,7 @@ pub unsafe fn test_hts_endian_c_159_t16_bit(verbose: c_int) -> c_int {
         i16_ = le_to_i16(test.u8_unaligned.as_ptr().add(1));
         if i16_ != test.i16_ {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %s => %d; expected %d\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 2),
                 i16_ as c_int,
@@ -357,7 +357,7 @@ pub unsafe fn test_hts_endian_c_159_t16_bit(verbose: c_int) -> c_int {
         u16_to_le(test.u16_, buf.as_mut_ptr());
         if libc::memcmp(buf.as_ptr().cast(), test.u8.as_ptr().cast(), 2) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %u => %s; expected %s\n".as_ptr(),
                 test.u16_ as libc::c_uint,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 2),
@@ -369,7 +369,7 @@ pub unsafe fn test_hts_endian_c_159_t16_bit(verbose: c_int) -> c_int {
         i16_to_le(test.i16_, buf.as_mut_ptr());
         if libc::memcmp(buf.as_ptr().cast(), test.u8.as_ptr().cast(), 2) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %d => %s; expected %s\n".as_ptr(),
                 test.i16_ as c_int,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 2),
@@ -381,7 +381,7 @@ pub unsafe fn test_hts_endian_c_159_t16_bit(verbose: c_int) -> c_int {
         u16_to_le(test.u16_, buf.as_mut_ptr().add(1));
         if libc::memcmp(buf.as_ptr().add(1).cast(), test.u8.as_ptr().cast(), 2) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %u => %s; expected %s\n".as_ptr(),
                 test.u16_ as libc::c_uint,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 2),
@@ -393,7 +393,7 @@ pub unsafe fn test_hts_endian_c_159_t16_bit(verbose: c_int) -> c_int {
         i16_to_le(test.i16_, buf.as_mut_ptr().add(1));
         if libc::memcmp(buf.as_ptr().add(1).cast(), test.u8.as_ptr().cast(), 2) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %d => %s; expected %s\n".as_ptr(),
                 test.i16_ as c_int,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 2),
@@ -417,7 +417,7 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
 
         if verbose != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s %11d %11u\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
                 test.i32_,
@@ -428,7 +428,7 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
         u32_ = le_to_u32(test.u8.as_ptr());
         if u32_ != test.u32_ {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %s => %u; expected %u\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
                 u32_,
@@ -440,7 +440,7 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
         i32_ = le_to_i32(test.u8.as_ptr());
         if i32_ != test.i32_ {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %s => %d; expected %d\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
                 i32_,
@@ -452,7 +452,7 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
         u32_ = le_to_u32(test.u8_unaligned.as_ptr().add(1));
         if u32_ != test.u32_ {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %s => %u; expected %u\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 4),
                 u32_,
@@ -464,7 +464,7 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
         i32_ = le_to_i32(test.u8_unaligned.as_ptr().add(1));
         if i32_ != test.i32_ {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %s => %d; expected %d\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 4),
                 i32_,
@@ -476,7 +476,7 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
         u32_to_le(test.u32_, buf.as_mut_ptr());
         if libc::memcmp(buf.as_ptr().cast(), test.u8.as_ptr().cast(), 4) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %u => %s; expected %s\n".as_ptr(),
                 test.u32_,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 4),
@@ -488,7 +488,7 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
         i32_to_le(test.i32_, buf.as_mut_ptr());
         if libc::memcmp(buf.as_ptr().cast(), test.u8.as_ptr().cast(), 4) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %d => %s; expected %s\n".as_ptr(),
                 test.i32_,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 4),
@@ -500,7 +500,7 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
         u32_to_le(test.u32_, buf.as_mut_ptr().add(1));
         if libc::memcmp(buf.as_ptr().add(1).cast(), test.u8.as_ptr().cast(), 4) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %u => %s; expected %s\n".as_ptr(),
                 test.u32_,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 4),
@@ -512,7 +512,7 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
         i32_to_le(test.i32_, buf.as_mut_ptr().add(1));
         if libc::memcmp(buf.as_ptr().add(1).cast(), test.u8.as_ptr().cast(), 4) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %d => %s; expected %s\n".as_ptr(),
                 test.i32_,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 4),
@@ -536,7 +536,7 @@ pub unsafe fn test_hts_endian_c_323_t64_bit(verbose: c_int) -> c_int {
 
         if verbose != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s %20lld %20llu\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
                 test.i64_ as libc::c_longlong,
@@ -547,7 +547,7 @@ pub unsafe fn test_hts_endian_c_323_t64_bit(verbose: c_int) -> c_int {
         u64_ = le_to_u64(test.u8.as_ptr());
         if u64_ != test.u64_ {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %s => %llu; expected %llu\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
                 u64_ as libc::c_ulonglong,
@@ -559,7 +559,7 @@ pub unsafe fn test_hts_endian_c_323_t64_bit(verbose: c_int) -> c_int {
         i64_ = le_to_i64(test.u8.as_ptr());
         if i64_ != test.i64_ {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %s => %lld; expected %lld\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
                 i64_ as libc::c_longlong,
@@ -571,7 +571,7 @@ pub unsafe fn test_hts_endian_c_323_t64_bit(verbose: c_int) -> c_int {
         u64_ = le_to_u64(test.u8_unaligned.as_ptr().add(1));
         if u64_ != test.u64_ {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %s => %llu; expected %llu\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 8),
                 u64_ as libc::c_ulonglong,
@@ -583,7 +583,7 @@ pub unsafe fn test_hts_endian_c_323_t64_bit(verbose: c_int) -> c_int {
         i64_ = le_to_i64(test.u8_unaligned.as_ptr().add(1));
         if i64_ != test.i64_ {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %s => %lld; expected %lld\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 8),
                 i64_ as libc::c_longlong,
@@ -595,7 +595,7 @@ pub unsafe fn test_hts_endian_c_323_t64_bit(verbose: c_int) -> c_int {
         u64_to_le(test.u64_, buf.as_mut_ptr());
         if libc::memcmp(buf.as_ptr().cast(), test.u8.as_ptr().cast(), 8) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %llu => %s; expected %s\n".as_ptr(),
                 test.u64_ as libc::c_ulonglong,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 8),
@@ -607,7 +607,7 @@ pub unsafe fn test_hts_endian_c_323_t64_bit(verbose: c_int) -> c_int {
         i64_to_le(test.i64_, buf.as_mut_ptr());
         if libc::memcmp(buf.as_ptr().cast(), test.u8.as_ptr().cast(), 8) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %lld => %s; expected %s\n".as_ptr(),
                 test.i64_ as libc::c_longlong,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 8),
@@ -619,7 +619,7 @@ pub unsafe fn test_hts_endian_c_323_t64_bit(verbose: c_int) -> c_int {
         u64_to_le(test.u64_, buf.as_mut_ptr().add(1));
         if libc::memcmp(buf.as_ptr().add(1).cast(), test.u8.as_ptr().cast(), 8) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %llu => %s; expected %s\n".as_ptr(),
                 test.u64_ as libc::c_ulonglong,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 8),
@@ -631,7 +631,7 @@ pub unsafe fn test_hts_endian_c_323_t64_bit(verbose: c_int) -> c_int {
         i64_to_le(test.i64_, buf.as_mut_ptr().add(1));
         if libc::memcmp(buf.as_ptr().add(1).cast(), test.u8.as_ptr().cast(), 8) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %lld => %s; expected %s\n".as_ptr(),
                 test.i64_ as libc::c_longlong,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 8),
@@ -654,7 +654,7 @@ pub unsafe fn test_hts_endian_c_406_t_float(verbose: c_int) -> c_int {
 
         if verbose != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s %g\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
                 test.f as f64,
@@ -664,7 +664,7 @@ pub unsafe fn test_hts_endian_c_406_t_float(verbose: c_int) -> c_int {
         f = le_to_float(test.u8.as_ptr());
         if f != test.f {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %s => %g; expected %g\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
                 f as f64,
@@ -676,7 +676,7 @@ pub unsafe fn test_hts_endian_c_406_t_float(verbose: c_int) -> c_int {
         f = le_to_float(test.u8_unaligned.as_ptr().add(1));
         if f != test.f {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %s => %g; expected %g\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 4),
                 f as f64,
@@ -688,7 +688,7 @@ pub unsafe fn test_hts_endian_c_406_t_float(verbose: c_int) -> c_int {
         float_to_le(test.f, buf.as_mut_ptr());
         if libc::memcmp(test.u8.as_ptr().cast(), buf.as_ptr().cast(), 4) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %g => %s; expected %s\n".as_ptr(),
                 test.f as f64,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 4),
@@ -699,7 +699,7 @@ pub unsafe fn test_hts_endian_c_406_t_float(verbose: c_int) -> c_int {
         float_to_le(test.f, buf.as_mut_ptr().add(1));
         if libc::memcmp(test.u8.as_ptr().cast(), buf.as_ptr().add(1).cast(), 4) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %g => %s; expected %s\n".as_ptr(),
                 test.f as f64,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 4),
@@ -721,7 +721,7 @@ pub unsafe fn test_hts_endian_c_451_t_double(verbose: c_int) -> c_int {
 
         if verbose != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s %.15g\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
                 test.d,
@@ -731,7 +731,7 @@ pub unsafe fn test_hts_endian_c_451_t_double(verbose: c_int) -> c_int {
         f = le_to_double(test.u8.as_ptr());
         if f != test.d {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %s => %.15g; expected %.15g\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
                 f,
@@ -743,7 +743,7 @@ pub unsafe fn test_hts_endian_c_451_t_double(verbose: c_int) -> c_int {
         f = le_to_double(test.u8_unaligned.as_ptr().add(1));
         if f != test.d {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %s => %.15g; expected %.15g\n".as_ptr(),
                 test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 8),
                 f,
@@ -755,7 +755,7 @@ pub unsafe fn test_hts_endian_c_451_t_double(verbose: c_int) -> c_int {
         double_to_le(test.d, buf.as_mut_ptr());
         if libc::memcmp(test.u8.as_ptr().cast(), buf.as_ptr().cast(), 8) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed %.15g => %s; expected %s\n".as_ptr(),
                 test.d,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 8),
@@ -766,7 +766,7 @@ pub unsafe fn test_hts_endian_c_451_t_double(verbose: c_int) -> c_int {
         double_to_le(test.d, buf.as_mut_ptr().add(1));
         if libc::memcmp(test.u8.as_ptr().cast(), buf.as_ptr().add(1).cast(), 8) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed unaligned %.15g => %s; expected %s\n".as_ptr(),
                 test.d,
                 test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 8),
@@ -794,7 +794,7 @@ pub unsafe fn test_hts_endian_c_496_main(argc: c_int, argv: *mut *mut c_char) ->
     errors += test_hts_endian_c_451_t_double(verbose);
 
     if errors != 0 {
-        libc::fprintf(hts_sys::stderr.cast(), c"%d errors\n".as_ptr(), errors);
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"%d errors\n".as_ptr(), errors);
         return libc::EXIT_FAILURE;
     }
 

@@ -704,8 +704,8 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     let new_rg = *out_rg;
 
     if nrg != 1 {
-        hts_sys::hts_log(
-            hts_sys::htsLogLevel_HTS_LOG_ERROR,
+        crate::htslib_rs::hts::hts_log_cstr(
+            crate::htslib_rs::hts::HTS_LOG_ERROR,
             c"cram_transcode_rg".as_ptr(),
             c"CRAM transcode supports only a single RG".as_ptr(),
         );

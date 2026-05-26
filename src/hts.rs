@@ -41,7 +41,13 @@ pub const HTS_FORMAT_REGION_LIST: htsFormatCategory = 4;
 pub type htsExactFormat = u32;
 pub type htsCompression = u32;
 pub type hts_fmt_option = u32;
-pub type htsThreadPool = hts_sys::htsThreadPool;
+// original: htsThreadPool (htslib/htslib/hts.h) — native mirror; `pool` is the
+// native thread pool. Layout matches the C struct (pool pointer + qsize).
+#[repr(C)]
+pub struct htsThreadPool {
+    pub pool: *mut crate::htslib_rs::thread_pool::hts_tpool,
+    pub qsize: c_int,
+}
 pub type hts_opt = hts_sys::hts_opt;
 pub const HTS_FORMAT_UNKNOWN_FORMAT: htsExactFormat = 0;
 pub const HTS_FORMAT_BINARY_FORMAT: htsExactFormat = 1;
@@ -95,6 +101,40 @@ pub const CRAM_OPT_USE_ARITH: hts_fmt_option = 26;
 pub const CRAM_OPT_POS_DELTA: hts_fmt_option = 27;
 pub const HTS_OPT_FILTER: hts_fmt_option = 105;
 pub const HTS_OPT_PROFILE: hts_fmt_option = 106;
+// Remaining htsCompression values (values from the C enum).
+pub const HTS_COMPRESSION_GZIP: htsCompression = 1;
+pub const HTS_COMPRESSION_BGZF: htsCompression = 2;
+pub const HTS_COMPRESSION_CUSTOM: htsCompression = 3;
+pub const HTS_COMPRESSION_BZIP2: htsCompression = 4;
+// Tabix index format tag.
+pub const HTS_FMT_TBI: c_int = 2;
+// hts_fmt_option values used by the core open/option paths.
+pub const CRAM_OPT_DECODE_MD: hts_fmt_option = 0;
+pub const CRAM_OPT_PREFIX: hts_fmt_option = 1;
+pub const CRAM_OPT_VERSION: hts_fmt_option = 6;
+pub const CRAM_OPT_REFERENCE: hts_fmt_option = 9;
+pub const HTS_OPT_COMPRESSION_LEVEL: hts_fmt_option = 100;
+pub const HTS_OPT_NTHREADS: hts_fmt_option = 101;
+pub const HTS_OPT_CACHE_SIZE: hts_fmt_option = 103;
+pub const HTS_OPT_BLOCK_SIZE: hts_fmt_option = 104;
+pub const HTS_OPT_THREAD_POOL: hts_fmt_option = 102;
+pub const CRAM_OPT_VERBOSITY: hts_fmt_option = 2;
+pub const CRAM_OPT_SEQS_PER_SLICE: hts_fmt_option = 3;
+pub const CRAM_OPT_SLICES_PER_CONTAINER: hts_fmt_option = 4;
+pub const CRAM_OPT_EMBED_REF: hts_fmt_option = 7;
+pub const CRAM_OPT_IGNORE_MD5: hts_fmt_option = 8;
+pub const CRAM_OPT_MULTI_SEQ_PER_SLICE: hts_fmt_option = 10;
+pub const CRAM_OPT_NO_REF: hts_fmt_option = 11;
+pub const CRAM_OPT_USE_BZIP2: hts_fmt_option = 12;
+pub const CRAM_OPT_NTHREADS: hts_fmt_option = 14;
+pub const CRAM_OPT_THREAD_POOL: hts_fmt_option = 15;
+pub const CRAM_OPT_USE_LZMA: hts_fmt_option = 16;
+pub const CRAM_OPT_USE_RANS: hts_fmt_option = 17;
+pub const CRAM_OPT_REQUIRED_FIELDS: hts_fmt_option = 18;
+pub const CRAM_OPT_LOSSY_NAMES: hts_fmt_option = 19;
+pub const CRAM_OPT_BASES_PER_SLICE: hts_fmt_option = 20;
+pub const CRAM_OPT_STORE_MD: hts_fmt_option = 21;
+pub const CRAM_OPT_STORE_NM: hts_fmt_option = 22;
 pub const HTS_PROFILE_FAST: c_int = 0;
 pub const HTS_PROFILE_NORMAL: c_int = 1;
 pub const HTS_PROFILE_SMALL: c_int = 2;
@@ -775,16 +815,140 @@ pub unsafe fn hts_json_snext(
     }
 }
 
+unsafe fn fscan_string(fp: *mut hFILE, d: *mut kstring_t) -> c_int {
+    let mut e: u32 = 0;
+    loop {
+        let mut c = super::hfile::htslib_hfile_h_163_hgetc(fp);
+        if c == libc::EOF {
+            break;
+        }
+        match c as u8 {
+            b'\\' => {
+                c = super::hfile::htslib_hfile_h_163_hgetc(fp);
+                if c == libc::EOF {
+                    return if e == 0 { 0 } else { -1 };
+                }
+                match c as u8 {
+                    b'b' => e |= (kputc(b'\x08' as c_int, d) < 0) as u32,
+                    b'f' => e |= (kputc(b'\x0c' as c_int, d) < 0) as u32,
+                    b'n' => e |= (kputc(b'\n' as c_int, d) < 0) as u32,
+                    b'r' => e |= (kputc(b'\r' as c_int, d) < 0) as u32,
+                    b't' => e |= (kputc(b'\t' as c_int, d) < 0) as u32,
+                    b'u' => {
+                        let c1 = super::hfile::htslib_hfile_h_163_hgetc(fp);
+                        let d1 = if c1 != libc::EOF { dehex(c1 as c_char) } else { -1 };
+                        let c2 = if c1 != libc::EOF && d1 >= 0 {
+                            super::hfile::htslib_hfile_h_163_hgetc(fp)
+                        } else {
+                            libc::EOF
+                        };
+                        let d2 = if c2 != libc::EOF { dehex(c2 as c_char) } else { -1 };
+                        let c3 = if c2 != libc::EOF && d2 >= 0 {
+                            super::hfile::htslib_hfile_h_163_hgetc(fp)
+                        } else {
+                            libc::EOF
+                        };
+                        let d3 = if c3 != libc::EOF { dehex(c3 as c_char) } else { -1 };
+                        let c4 = if c3 != libc::EOF && d3 >= 0 {
+                            super::hfile::htslib_hfile_h_163_hgetc(fp)
+                        } else {
+                            libc::EOF
+                        };
+                        let d4 = if c4 != libc::EOF { dehex(c4 as c_char) } else { -1 };
+                        if d1 >= 0 && d2 >= 0 && d3 >= 0 && d4 >= 0 {
+                            let mut buf = [0 as c_char; 8];
+                            let lim = encode_utf8(
+                                buf.as_mut_ptr(),
+                                ((d1 << 12) | (d2 << 8) | (d3 << 4) | d4) as u32,
+                            );
+                            let len = lim.offset_from(buf.as_ptr()) as size_t;
+                            e |= (kputsn(buf.as_ptr(), len, d) < 0) as u32;
+                        }
+                    }
+                    _ => e |= (kputc(c, d) < 0) as u32,
+                }
+            }
+            b'"' => return if e == 0 { 0 } else { -1 },
+            _ => e |= (kputc(c, d) < 0) as u32,
+        }
+    }
+    if e == 0 { 0 } else { -1 }
+}
+
 pub unsafe fn hts_json_fnext(
     fp: *mut hFILE,
     token: *mut hts_json_token,
     kstr: *mut kstring_t,
 ) -> c_char {
-    unsafe { htslib_hts_json_fnext(fp, token, kstr) }
+    loop {
+        let c = super::hfile::htslib_hfile_h_163_hgetc(fp);
+        match c {
+            x if x == b' ' as c_int
+                || x == b'\t' as c_int
+                || x == b'\r' as c_int
+                || x == b'\n' as c_int
+                || x == b',' as c_int
+                || x == b':' as c_int =>
+            {
+                continue;
+            }
+            x if x == libc::EOF => {
+                (*token).type_ = 0;
+                return (*token).type_;
+            }
+            x if x == b'{' as c_int
+                || x == b'[' as c_int
+                || x == b'}' as c_int
+                || x == b']' as c_int =>
+            {
+                (*token).type_ = c as c_char;
+                return (*token).type_;
+            }
+            x if x == b'"' as c_int => {
+                (*kstr).l = 0;
+                fscan_string(fp, kstr);
+                if (*kstr).l == 0 {
+                    kputsn(c"".as_ptr(), 0, kstr);
+                }
+                (*token).str_ = (*kstr).s;
+                (*token).type_ = b's' as c_char;
+                return (*token).type_;
+            }
+            _ => {
+                (*kstr).l = 0;
+                kputc(c, kstr);
+                let mut peek: c_char = 0;
+                while hpeek(fp, (&mut peek as *mut c_char).cast(), 1) == 1
+                    && libc::strchr(c" \t\r\n,]}".as_ptr(), peek as c_int).is_null()
+                {
+                    let nc = super::hfile::htslib_hfile_h_163_hgetc(fp);
+                    if nc == libc::EOF {
+                        break;
+                    }
+                    kputc(nc, kstr);
+                }
+                (*token).str_ = (*kstr).s;
+                (*token).type_ = token_type(token);
+                return (*token).type_;
+            }
+        }
+    }
+}
+
+unsafe fn fnext(arg1: *mut c_void, arg2: *mut c_void, token: *mut hts_json_token) -> c_char {
+    hts_json_fnext(arg1.cast(), token, arg2.cast())
 }
 
 pub unsafe fn hts_json_fskip_value(fp: *mut hFILE, type_: c_char) -> c_char {
-    unsafe { htslib_hts_json_fskip_value(fp, type_) }
+    let mut str_: kstring_t = std::mem::zeroed();
+    let ret = skip_value(
+        type_,
+        Some(fnext),
+        fp.cast(),
+        (&mut str_ as *mut kstring_t).cast(),
+    );
+    libc::free(str_.s.cast());
+    ret
 }
 
 pub type hts_json_nextfn =
@@ -2023,7 +2187,7 @@ pub unsafe fn hts_log_cstr(severity: htsLogLevel, context: *const c_char, messag
     let save_errno = *c_compat::__errno_location();
     if severity <= hts_verbose {
         libc::fprintf(
-            hts_sys::stderr.cast::<libc::FILE>(),
+            crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
             c"[%c::%s] %s\n".as_ptr(),
             get_severity_tag(severity) as c_int,
             context,
@@ -3550,7 +3714,7 @@ unsafe fn func_expr(
     let str_ = ws(*end);
     if *str_ != b')' as c_char {
         libc::fprintf(
-            hts_sys::stderr.cast::<libc::FILE>(),
+            crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
             c"Missing ')'\n".as_ptr(),
         );
         return -1;
@@ -3576,7 +3740,7 @@ unsafe fn simple_expr(
         let e = ws(*end);
         if *e != b')' as c_char {
             libc::fprintf(
-                hts_sys::stderr.cast::<libc::FILE>(),
+                crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
                 c"Missing ')'\n".as_ptr(),
             );
             return -1;
@@ -4064,7 +4228,7 @@ unsafe fn eq_expr(
                     let mut errbuf = [0 as c_char; 1024];
                     libc::regerror(ec, preg, errbuf.as_mut_ptr(), errbuf.len());
                     libc::fprintf(
-                        hts_sys::stderr.cast::<libc::FILE>(),
+                        crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
                         c"Failed regex: %.1024s\n".as_ptr(),
                         errbuf.as_ptr(),
                     );
@@ -4213,7 +4377,7 @@ unsafe fn hts_filter_eval_(
     }
     if !end.is_null() && *ws(end) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast::<libc::FILE>(),
+            crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
             c"Unable to parse expression at %s\n".as_ptr(),
             (*filt).str_,
         );
@@ -4332,7 +4496,7 @@ pub unsafe fn kputd(d: f64, s: *mut kstring_t) -> c_int {
 pub unsafe fn kvsprintf(
     s: *mut kstring_t,
     fmt: *const c_char,
-    ap: *mut hts_sys::__va_list_tag,
+    ap: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> c_int {
     unsafe { htslib_kvsprintf(s, fmt, ap) }
 }
@@ -4517,27 +4681,16 @@ pub struct htsFile {
 extern "C" {
     fn hclose(fp: *mut hFILE) -> c_int;
     fn clock() -> libc::clock_t;
-    #[link_name = "hopen"]
-    fn htslib_hopen_variadic(fname: *const c_char, mode: *const c_char, ...) -> *mut hFILE;
 }
 
 unsafe extern "C" {
+    // Variadic (va_list) printf: translating C variadics is out of scope.
     #[link_name = "kvsprintf"]
     fn htslib_kvsprintf(
         s: *mut kstring_t,
         fmt: *const c_char,
-        ap: *mut hts_sys::__va_list_tag,
+        ap: *mut crate::htslib_rs::c_compat::__va_list_tag,
     ) -> c_int;
-    #[link_name = "hts_json_fnext"]
-    fn htslib_hts_json_fnext(
-        fp: *mut hFILE,
-        token: *mut hts_json_token,
-        kstr: *mut kstring_t,
-    ) -> c_char;
-    #[link_name = "hts_json_fskip_value"]
-    fn htslib_hts_json_fskip_value(fp: *mut hFILE, type_: c_char) -> c_char;
-    #[link_name = "hts_idx_nseq"]
-    fn htslib_hts_idx_nseq(idx: *const hts_idx_t) -> c_int;
 }
 
 unsafe fn bgzf_is_compressed(fp: *const BGZF) -> bool {
@@ -4624,7 +4777,7 @@ pub unsafe fn hts_open_format(
 
     if !libc::strchr(mode, b'w' as c_int).is_null()
         && !fmt.is_null()
-        && (*fmt).compression == hts_sys::htsCompression_bgzf
+        && (*fmt).compression == HTS_COMPRESSION_BGZF
         && ((*fmt).format == HTS_FORMAT_SAM
             || (*fmt).format == HTS_FORMAT_VCF
             || (*fmt).format == HTS_FORMAT_TEXT_FORMAT)
@@ -4678,7 +4831,7 @@ pub unsafe fn hts_open_format(
         let opt = (*fmt).specific.cast::<hts_opt>();
         let errno = *c_compat::__errno_location();
         if !opt.is_null()
-            && (*opt).opt == hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE
+            && (*opt).opt == CRAM_OPT_REFERENCE
             && (errno == libc::ENOENT
                 || errno == libc::EIO
                 || errno == libc::EBADF
@@ -4699,7 +4852,7 @@ pub unsafe fn hts_open_format(
 
 unsafe fn goto_hts_open_format_error(fn_: *const c_char, rmme: *mut c_char, hfile: *mut hFILE) {
     libc::fprintf(
-        hts_sys::stderr.cast::<libc::FILE>(),
+        crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
         c"[E::hts_open_format] Failed to open file \"%s\"\n".as_ptr(),
         fn_,
     );
@@ -4776,15 +4929,15 @@ pub unsafe fn hts_hopen(fp: *mut hFILE, fn_: *const c_char, mode: *const c_char)
         }
 
         if !libc::strchr(simple_mode.as_ptr(), b'z' as c_int).is_null() {
-            fmt.compression = hts_sys::htsCompression_bgzf;
+            fmt.compression = HTS_COMPRESSION_BGZF;
         } else if !libc::strchr(simple_mode.as_ptr(), b'g' as c_int).is_null() {
-            fmt.compression = hts_sys::htsCompression_gzip;
+            fmt.compression = HTS_COMPRESSION_GZIP;
         } else if !libc::strchr(simple_mode.as_ptr(), b'u' as c_int).is_null() {
             fmt.compression = HTS_COMPRESSION_NO_COMPRESSION;
         } else {
             fmt.compression = match fmt.format {
-                HTS_FORMAT_BINARY_FORMAT => hts_sys::htsCompression_bgzf,
-                HTS_FORMAT_CRAM => hts_sys::htsCompression_custom,
+                HTS_FORMAT_BINARY_FORMAT => HTS_COMPRESSION_BGZF,
+                HTS_FORMAT_CRAM => HTS_COMPRESSION_CUSTOM,
                 HTS_FORMAT_FASTQ_FORMAT | HTS_FORMAT_FASTA_FORMAT | HTS_FORMAT_TEXT_FORMAT => {
                     HTS_COMPRESSION_NO_COMPRESSION
                 }
@@ -4827,7 +4980,7 @@ pub unsafe fn hts_hopen(fp: *mut hFILE, fn_: *const c_char, mode: *const c_char)
             if ((*hts_fp).bitfields & (1 << 1)) == 0 {
                 hts_sys::cram_set_option(
                     (*hts_fp).fp.cram.cast(),
-                    hts_sys::hts_fmt_option_CRAM_OPT_DECODE_MD,
+                    CRAM_OPT_DECODE_MD,
                     -1,
                 );
             }
@@ -4899,19 +5052,19 @@ pub unsafe fn hts_c_556_hts_detect_format2(
         return -1;
     }
 
-    (*fmt).category = hts_sys::htsFormatCategory_unknown_category;
-    (*fmt).format = hts_sys::htsExactFormat_unknown_format;
+    (*fmt).category = HTS_FORMAT_UNKNOWN_CATEGORY;
+    (*fmt).format = HTS_FORMAT_UNKNOWN_FORMAT;
     (*fmt).version.major = -1;
     (*fmt).version.minor = -1;
-    (*fmt).compression = hts_sys::htsCompression_no_compression;
+    (*fmt).compression = HTS_COMPRESSION_NO_COMPRESSION;
     (*fmt).compression_level = -1;
     (*fmt).specific = std::ptr::null_mut();
 
     if len >= 2 && s[0] == 0x1f && s[1] == 0x8b {
-        (*fmt).compression = hts_sys::htsCompression_gzip;
+        (*fmt).compression = HTS_COMPRESSION_GZIP;
         if len >= 18 && (s[3] & 4) != 0 {
             if &s[12..16] == b"BC\x02\x00" {
-                (*fmt).compression = hts_sys::htsCompression_bgzf;
+                (*fmt).compression = HTS_COMPRESSION_BGZF;
             } else if &s[12..16] == b"RAZF" {
                 (*fmt).compression = HTS_COMPRESSION_RAZF;
             }
@@ -4930,7 +5083,7 @@ pub unsafe fn hts_c_556_hts_detect_format2(
         && &s[..3] == b"BZh"
         && (&s[4..10] == b"\x31\x41\x59\x26\x53\x59" || &s[4..10] == b"\x17\x72\x45\x38\x50\x90")
     {
-        (*fmt).compression = hts_sys::htsCompression_bzip2_compression;
+        (*fmt).compression = HTS_COMPRESSION_BZIP2;
         (*fmt).compression_level = (s[3] - b'0') as c_short;
         if s[4] == b'\x31' {
             return 0;
@@ -4952,7 +5105,7 @@ pub unsafe fn hts_c_556_hts_detect_format2(
     let len_usize = len as usize;
 
     if len == 0 {
-        (*fmt).format = hts_sys::htsExactFormat_empty_format;
+        (*fmt).format = HTS_FORMAT_EMPTY_FORMAT;
         return 0;
     }
 
@@ -4970,34 +5123,34 @@ pub unsafe fn hts_c_556_hts_detect_format2(
     }
 
     if len >= 6 && &s[..4] == b"CRAM" && s[4] >= 1 && s[4] <= 7 && s[5] <= 7 {
-        (*fmt).category = hts_sys::htsFormatCategory_sequence_data;
-        (*fmt).format = hts_sys::htsExactFormat_cram;
+        (*fmt).category = HTS_FORMAT_SEQUENCE_DATA;
+        (*fmt).format = HTS_FORMAT_CRAM;
         (*fmt).version.major = s[4] as c_short;
         (*fmt).version.minor = s[5] as c_short;
-        (*fmt).compression = hts_sys::htsCompression_custom;
+        (*fmt).compression = HTS_COMPRESSION_CUSTOM;
         return 0;
     } else if len >= 4 && s[3] <= 4 {
         if &s[..4] == b"BAM\x01" {
-            (*fmt).category = hts_sys::htsFormatCategory_sequence_data;
-            (*fmt).format = hts_sys::htsExactFormat_bam;
+            (*fmt).category = HTS_FORMAT_SEQUENCE_DATA;
+            (*fmt).format = HTS_FORMAT_BAM;
             (*fmt).version.major = 1;
             (*fmt).version.minor = -1;
             return 0;
         } else if &s[..4] == b"BAI\x01" {
-            (*fmt).category = hts_sys::htsFormatCategory_index_file;
-            (*fmt).format = hts_sys::htsExactFormat_bai;
+            (*fmt).category = HTS_FORMAT_INDEX_FILE;
+            (*fmt).format = HTS_FORMAT_BAI;
             (*fmt).version.major = -1;
             (*fmt).version.minor = -1;
             return 0;
         } else if &s[..4] == b"BCF\x04" {
-            (*fmt).category = hts_sys::htsFormatCategory_variant_data;
-            (*fmt).format = hts_sys::htsExactFormat_bcf;
+            (*fmt).category = HTS_FORMAT_VARIANT_DATA;
+            (*fmt).format = HTS_FORMAT_BCF;
             (*fmt).version.major = 1;
             (*fmt).version.minor = -1;
             return 0;
         } else if &s[..4] == b"BCF\x02" {
-            (*fmt).category = hts_sys::htsFormatCategory_variant_data;
-            (*fmt).format = hts_sys::htsExactFormat_bcf;
+            (*fmt).category = HTS_FORMAT_VARIANT_DATA;
+            (*fmt).format = HTS_FORMAT_BCF;
             (*fmt).version.major = s[3] as c_short;
             (*fmt).version.minor = if len >= 5 && s[4] <= 2 {
                 s[4] as c_short
@@ -5006,23 +5159,23 @@ pub unsafe fn hts_c_556_hts_detect_format2(
             };
             return 0;
         } else if &s[..4] == b"CSI\x01" {
-            (*fmt).category = hts_sys::htsFormatCategory_index_file;
-            (*fmt).format = hts_sys::htsExactFormat_csi;
+            (*fmt).category = HTS_FORMAT_INDEX_FILE;
+            (*fmt).format = HTS_FORMAT_CSI;
             (*fmt).version.major = 1;
             (*fmt).version.minor = -1;
             return 0;
         } else if &s[..4] == b"TBI\x01" {
-            (*fmt).category = hts_sys::htsFormatCategory_index_file;
-            (*fmt).format = hts_sys::htsExactFormat_tbi;
+            (*fmt).category = HTS_FORMAT_INDEX_FILE;
+            (*fmt).format = HTS_FORMAT_TBI;
             return 0;
         } else if libc::strcmp(extension.as_ptr(), c"gzi".as_ptr()) == 0 {
-            (*fmt).category = hts_sys::htsFormatCategory_index_file;
-            (*fmt).format = hts_sys::htsExactFormat_gzi;
+            (*fmt).category = HTS_FORMAT_INDEX_FILE;
+            (*fmt).format = HTS_FORMAT_GZI;
             return 0;
         }
     } else if len >= 16 && &s[..16] == b"##fileformat=VCF" {
-        (*fmt).category = hts_sys::htsFormatCategory_variant_data;
-        (*fmt).format = hts_sys::htsExactFormat_vcf;
+        (*fmt).category = HTS_FORMAT_VARIANT_DATA;
+        (*fmt).format = HTS_FORMAT_VCF;
         if len >= 21 && s[16] == b'v' {
             parse_version(fmt, s.as_ptr().add(17), s.as_ptr().add(len_usize));
         }
@@ -5035,8 +5188,8 @@ pub unsafe fn hts_c_556_hts_detect_format2(
             || &s[..4] == b"@PG\t"
             || &s[..4] == b"@CO\t")
     {
-        (*fmt).category = hts_sys::htsFormatCategory_sequence_data;
-        (*fmt).format = hts_sys::htsExactFormat_sam;
+        (*fmt).category = HTS_FORMAT_SEQUENCE_DATA;
+        (*fmt).format = HTS_FORMAT_SAM;
         if len >= 9 && &s[..7] == b"@HD\tVN:" {
             parse_version(fmt, s.as_ptr().add(7), s.as_ptr().add(len_usize));
         } else {
@@ -5045,7 +5198,7 @@ pub unsafe fn hts_c_556_hts_detect_format2(
         }
         return 0;
     } else if len >= 8 && &s[..4] == b"d4\xdd\xdd" {
-        (*fmt).category = hts_sys::htsFormatCategory_region_list;
+        (*fmt).category = HTS_FORMAT_REGION_LIST;
         (*fmt).format = HTS_FORMAT_D4_FORMAT;
         return 0;
     } else if cmp_nonblank(
@@ -5054,26 +5207,26 @@ pub unsafe fn hts_c_556_hts_detect_format2(
         s.as_ptr().add(len_usize),
     ) == 0
     {
-        (*fmt).category = hts_sys::htsFormatCategory_unknown_category;
-        (*fmt).format = hts_sys::htsExactFormat_htsget;
+        (*fmt).category = HTS_FORMAT_UNKNOWN_CATEGORY;
+        (*fmt).format = HTS_FORMAT_HTSGET;
         return 0;
     } else if len > 8 && &s[..8] == b"crypt4gh" {
-        (*fmt).category = hts_sys::htsFormatCategory_unknown_category;
+        (*fmt).category = HTS_FORMAT_UNKNOWN_CATEGORY;
         (*fmt).format = HTS_FORMAT_CRYPT4GH_FORMAT;
         return 0;
     } else if len >= 1
         && s[0] == b'>'
         && hts_c_458_is_fastaq(s.as_ptr(), s.as_ptr().add(len_usize)) != 0
     {
-        (*fmt).category = hts_sys::htsFormatCategory_sequence_data;
-        (*fmt).format = hts_sys::htsExactFormat_fasta_format;
+        (*fmt).category = HTS_FORMAT_SEQUENCE_DATA;
+        (*fmt).format = HTS_FORMAT_FASTA_FORMAT;
         return 0;
     } else if len >= 1
         && s[0] == b'@'
         && hts_c_458_is_fastaq(s.as_ptr(), s.as_ptr().add(len_usize)) != 0
     {
-        (*fmt).category = hts_sys::htsFormatCategory_sequence_data;
-        (*fmt).format = hts_sys::htsExactFormat_fastq_format;
+        (*fmt).category = HTS_FORMAT_SEQUENCE_DATA;
+        (*fmt).format = HTS_FORMAT_FASTQ_FORMAT;
         return 0;
     } else if hts_c_483_parse_tabbed_text(
         columns.as_mut_ptr(),
@@ -5088,45 +5241,45 @@ pub unsafe fn hts_c_556_hts_detect_format2(
             c"ZiZiiCZiiZZOOOOOOOOOOOOOOOOOOOO+".as_ptr(),
         ) >= 9 + 2 * complete
         {
-            (*fmt).category = hts_sys::htsFormatCategory_sequence_data;
-            (*fmt).format = hts_sys::htsExactFormat_sam;
+            (*fmt).category = HTS_FORMAT_SEQUENCE_DATA;
+            (*fmt).format = HTS_FORMAT_SAM;
             (*fmt).version.major = 1;
             (*fmt).version.minor = -1;
             return 0;
-        } else if (*fmt).compression == hts_sys::htsCompression_gzip
+        } else if (*fmt).compression == HTS_COMPRESSION_GZIP
             && hts_c_540_colmatch(columns.as_ptr(), c"iiiiii".as_ptr()) == 6
         {
-            (*fmt).category = hts_sys::htsFormatCategory_index_file;
-            (*fmt).format = hts_sys::htsExactFormat_crai;
+            (*fmt).category = HTS_FORMAT_INDEX_FILE;
+            (*fmt).format = HTS_FORMAT_CRAI_EXACT;
             return 0;
         } else if !libc::strstr(extension.as_ptr(), c"fqi".as_ptr()).is_null()
             && hts_c_540_colmatch(columns.as_ptr(), c"Ziiiii".as_ptr()) == 6
         {
-            (*fmt).category = hts_sys::htsFormatCategory_index_file;
-            (*fmt).format = hts_sys::htsExactFormat_fqi_format;
+            (*fmt).category = HTS_FORMAT_INDEX_FILE;
+            (*fmt).format = HTS_FORMAT_FQI_FORMAT;
             return 0;
         } else if !libc::strstr(extension.as_ptr(), c"fai".as_ptr()).is_null()
             && hts_c_540_colmatch(columns.as_ptr(), c"Ziiii".as_ptr()) == 5
         {
-            (*fmt).category = hts_sys::htsFormatCategory_index_file;
-            (*fmt).format = hts_sys::htsExactFormat_fai_format;
+            (*fmt).category = HTS_FORMAT_INDEX_FILE;
+            (*fmt).format = HTS_FORMAT_FAI_FORMAT;
             return 0;
         } else if hts_c_540_colmatch(columns.as_ptr(), c"Zii+".as_ptr()) >= 3 {
-            (*fmt).category = hts_sys::htsFormatCategory_region_list;
-            (*fmt).format = hts_sys::htsExactFormat_bed;
+            (*fmt).category = HTS_FORMAT_REGION_LIST;
+            (*fmt).format = HTS_FORMAT_BED;
             return 0;
         }
     }
 
     if is_text_only(s.as_ptr(), s.as_ptr().add(len_usize)) != 0 {
-        (*fmt).format = hts_sys::htsExactFormat_text_format;
+        (*fmt).format = HTS_FORMAT_TEXT_FORMAT;
     }
 
     0
 }
 
 pub unsafe fn hts_format_description(format: *const htsFormat) -> *mut c_char {
-    hts_sys::hts_format_description(format.cast())
+    hts_c_775_hts_format_description(format)
 }
 
 pub unsafe fn hts_c_775_hts_format_description(format: *const htsFormat) -> *mut c_char {
@@ -5137,65 +5290,65 @@ pub unsafe fn hts_c_775_hts_format_description(format: *const htsFormat) -> *mut
     let mut str_: kstring_t = std::mem::zeroed();
 
     match (*format).format {
-        x if x == hts_sys::htsExactFormat_sam => {
+        x if x == HTS_FORMAT_SAM => {
             kputs(c"SAM".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_bam => {
+        x if x == HTS_FORMAT_BAM => {
             kputs(c"BAM".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_cram => {
+        x if x == HTS_FORMAT_CRAM => {
             kputs(c"CRAM".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_fasta_format => {
+        x if x == HTS_FORMAT_FASTA_FORMAT => {
             kputs(c"FASTA".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_fastq_format => {
+        x if x == HTS_FORMAT_FASTQ_FORMAT => {
             kputs(c"FASTQ".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_vcf => {
+        x if x == HTS_FORMAT_VCF => {
             kputs(c"VCF".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_bcf => {
+        x if x == HTS_FORMAT_BCF => {
             if (*format).version.major == 1 {
                 kputs(c"Legacy BCF".as_ptr(), &mut str_);
             } else {
                 kputs(c"BCF".as_ptr(), &mut str_);
             }
         }
-        x if x == hts_sys::htsExactFormat_bai => {
+        x if x == HTS_FORMAT_BAI => {
             kputs(c"BAI".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_crai => {
+        x if x == HTS_FORMAT_CRAI_EXACT => {
             kputs(c"CRAI".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_csi => {
+        x if x == HTS_FORMAT_CSI => {
             kputs(c"CSI".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_fai_format => {
+        x if x == HTS_FORMAT_FAI_FORMAT => {
             kputs(c"FASTA-IDX".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_fqi_format => {
+        x if x == HTS_FORMAT_FQI_FORMAT => {
             kputs(c"FASTQ-IDX".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_gzi => {
+        x if x == HTS_FORMAT_GZI => {
             kputs(c"GZI".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_tbi => {
+        x if x == HTS_FORMAT_TBI => {
             kputs(c"Tabix".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_bed => {
+        x if x == HTS_FORMAT_BED => {
             kputs(c"BED".as_ptr(), &mut str_);
         }
         x if x == HTS_FORMAT_D4_FORMAT => {
             kputs(c"D4".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_htsget => {
+        x if x == HTS_FORMAT_HTSGET => {
             kputs(c"htsget".as_ptr(), &mut str_);
         }
         x if x == HTS_FORMAT_CRYPT4GH_FORMAT => {
             kputs(c"crypt4gh".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsExactFormat_empty_format => {
+        x if x == HTS_FORMAT_EMPTY_FORMAT => {
             kputs(c"empty".as_ptr(), &mut str_);
         }
         _ => {
@@ -5213,7 +5366,7 @@ pub unsafe fn hts_c_775_hts_format_description(format: *const htsFormat) -> *mut
     }
 
     match (*format).compression {
-        x if x == hts_sys::htsCompression_bzip2_compression => {
+        x if x == HTS_COMPRESSION_BZIP2 => {
             kputs(c" bzip2-compressed".as_ptr(), &mut str_);
         }
         RAZF_COMPRESSION => {
@@ -5225,17 +5378,17 @@ pub unsafe fn hts_c_775_hts_format_description(format: *const htsFormat) -> *mut
         ZSTD_COMPRESSION => {
             kputs(c" Zstandard-compressed".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsCompression_custom => {
+        x if x == HTS_COMPRESSION_CUSTOM => {
             kputs(c" compressed".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsCompression_gzip => {
+        x if x == HTS_COMPRESSION_GZIP => {
             kputs(c" gzip-compressed".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsCompression_bgzf => match (*format).format {
-            x if x == hts_sys::htsExactFormat_bam
-                || x == hts_sys::htsExactFormat_bcf
-                || x == hts_sys::htsExactFormat_csi
-                || x == hts_sys::htsExactFormat_tbi =>
+        x if x == HTS_COMPRESSION_BGZF => match (*format).format {
+            x if x == HTS_FORMAT_BAM
+                || x == HTS_FORMAT_BCF
+                || x == HTS_FORMAT_CSI
+                || x == HTS_FORMAT_TBI =>
             {
                 kputs(c" compressed".as_ptr(), &mut str_);
             }
@@ -5243,12 +5396,12 @@ pub unsafe fn hts_c_775_hts_format_description(format: *const htsFormat) -> *mut
                 kputs(c" BGZF-compressed".as_ptr(), &mut str_);
             }
         },
-        x if x == hts_sys::htsCompression_no_compression => match (*format).format {
-            x if x == hts_sys::htsExactFormat_bam
-                || x == hts_sys::htsExactFormat_bcf
-                || x == hts_sys::htsExactFormat_cram
-                || x == hts_sys::htsExactFormat_csi
-                || x == hts_sys::htsExactFormat_tbi =>
+        x if x == HTS_COMPRESSION_NO_COMPRESSION => match (*format).format {
+            x if x == HTS_FORMAT_BAM
+                || x == HTS_FORMAT_BCF
+                || x == HTS_FORMAT_CRAM
+                || x == HTS_FORMAT_CSI
+                || x == HTS_FORMAT_TBI =>
             {
                 kputs(c" uncompressed".as_ptr(), &mut str_);
             }
@@ -5258,37 +5411,37 @@ pub unsafe fn hts_c_775_hts_format_description(format: *const htsFormat) -> *mut
     }
 
     match (*format).category {
-        x if x == hts_sys::htsFormatCategory_sequence_data => {
+        x if x == HTS_FORMAT_SEQUENCE_DATA => {
             kputs(c" sequence".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsFormatCategory_variant_data => {
+        x if x == HTS_FORMAT_VARIANT_DATA => {
             kputs(c" variant calling".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsFormatCategory_index_file => {
+        x if x == HTS_FORMAT_INDEX_FILE => {
             kputs(c" index".as_ptr(), &mut str_);
         }
-        x if x == hts_sys::htsFormatCategory_region_list => {
+        x if x == HTS_FORMAT_REGION_LIST => {
             kputs(c" genomic region".as_ptr(), &mut str_);
         }
         _ => {}
     }
 
-    if (*format).compression == hts_sys::htsCompression_no_compression {
+    if (*format).compression == HTS_COMPRESSION_NO_COMPRESSION {
         match (*format).format {
-            x if x == hts_sys::htsExactFormat_text_format
-                || x == hts_sys::htsExactFormat_sam
-                || x == hts_sys::htsExactFormat_crai
-                || x == hts_sys::htsExactFormat_vcf
-                || x == hts_sys::htsExactFormat_bed
-                || x == hts_sys::htsExactFormat_fai_format
-                || x == hts_sys::htsExactFormat_fqi_format
-                || x == hts_sys::htsExactFormat_fasta_format
-                || x == hts_sys::htsExactFormat_fastq_format
-                || x == hts_sys::htsExactFormat_htsget =>
+            x if x == HTS_FORMAT_TEXT_FORMAT
+                || x == HTS_FORMAT_SAM
+                || x == HTS_FORMAT_CRAI_EXACT
+                || x == HTS_FORMAT_VCF
+                || x == HTS_FORMAT_BED
+                || x == HTS_FORMAT_FAI_FORMAT
+                || x == HTS_FORMAT_FQI_FORMAT
+                || x == HTS_FORMAT_FASTA_FORMAT
+                || x == HTS_FORMAT_FASTQ_FORMAT
+                || x == HTS_FORMAT_HTSGET =>
             {
                 kputs(c" text".as_ptr(), &mut str_);
             }
-            x if x == hts_sys::htsExactFormat_empty_format => {}
+            x if x == HTS_FORMAT_EMPTY_FORMAT => {}
             _ => {
                 kputs(c" data".as_ptr(), &mut str_);
             }
@@ -5301,7 +5454,7 @@ pub unsafe fn hts_c_775_hts_format_description(format: *const htsFormat) -> *mut
 }
 
 pub unsafe fn hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_char) -> c_int {
-    hts_sys::hts_opt_add(opts, c_arg)
+    hts_c_1021_hts_opt_add(opts, c_arg)
 }
 
 pub unsafe fn hts_c_1002_scan_keyword(
@@ -5361,40 +5514,40 @@ pub unsafe fn hts_c_1021_hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_ch
     let key = CStr::from_ptr((*o).arg).to_bytes();
     let mut endp: *mut c_char = std::ptr::null_mut();
     if hts_c_1021_opt_key_matches(key, b"decode_md") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_DECODE_MD;
+        (*o).opt = CRAM_OPT_DECODE_MD;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"verbosity") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_VERBOSITY;
+        (*o).opt = CRAM_OPT_VERBOSITY;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"seqs_per_slice") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_SEQS_PER_SLICE;
+        (*o).opt = CRAM_OPT_SEQS_PER_SLICE;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"bases_per_slice") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_BASES_PER_SLICE;
+        (*o).opt = CRAM_OPT_BASES_PER_SLICE;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"slices_per_container") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_SLICES_PER_CONTAINER;
+        (*o).opt = CRAM_OPT_SLICES_PER_CONTAINER;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"embed_ref") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_EMBED_REF;
+        (*o).opt = CRAM_OPT_EMBED_REF;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"no_ref") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_NO_REF;
+        (*o).opt = CRAM_OPT_NO_REF;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"pos_delta") {
         (*o).opt = CRAM_OPT_POS_DELTA;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"ignore_md5") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_IGNORE_MD5;
+        (*o).opt = CRAM_OPT_IGNORE_MD5;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"use_bzip2") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_USE_BZIP2;
+        (*o).opt = CRAM_OPT_USE_BZIP2;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"use_rans") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_USE_RANS;
+        (*o).opt = CRAM_OPT_USE_RANS;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"use_lzma") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_USE_LZMA;
+        (*o).opt = CRAM_OPT_USE_LZMA;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"use_tok") {
         (*o).opt = CRAM_OPT_USE_TOK;
@@ -5418,19 +5571,19 @@ pub unsafe fn hts_c_1021_hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_ch
         (*o).opt = HTS_OPT_PROFILE;
         (*o).val.i = HTS_PROFILE_ARCHIVE;
     } else if hts_c_1021_opt_key_matches(key, b"reference") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE;
+        (*o).opt = CRAM_OPT_REFERENCE;
         (*o).val.s = val;
     } else if hts_c_1021_opt_key_matches(key, b"version") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_VERSION;
+        (*o).opt = CRAM_OPT_VERSION;
         (*o).val.s = val;
     } else if hts_c_1021_opt_key_matches(key, b"multi_seq_per_slice") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_MULTI_SEQ_PER_SLICE;
+        (*o).opt = CRAM_OPT_MULTI_SEQ_PER_SLICE;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"nthreads") {
-        (*o).opt = hts_sys::hts_fmt_option_HTS_OPT_NTHREADS;
+        (*o).opt = HTS_OPT_NTHREADS;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"cache_size") {
-        (*o).opt = hts_sys::hts_fmt_option_HTS_OPT_CACHE_SIZE;
+        (*o).opt = HTS_OPT_CACHE_SIZE;
         (*o).val.i = libc::strtol(val, &mut endp, 0) as c_int;
         match *endp {
             x if x == b'g' as c_char || x == b'G' as c_char => {
@@ -5453,25 +5606,25 @@ pub unsafe fn hts_c_1021_hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_ch
             }
         }
     } else if hts_c_1021_opt_key_matches(key, b"required_fields") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_REQUIRED_FIELDS;
+        (*o).opt = CRAM_OPT_REQUIRED_FIELDS;
         (*o).val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
     } else if hts_c_1021_opt_key_matches(key, b"lossy_names") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_LOSSY_NAMES;
+        (*o).opt = CRAM_OPT_LOSSY_NAMES;
         (*o).val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
     } else if hts_c_1021_opt_key_matches(key, b"name_prefix") {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_PREFIX;
+        (*o).opt = CRAM_OPT_PREFIX;
         (*o).val.s = val;
     } else if key == b"store_md" {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_STORE_MD;
+        (*o).opt = CRAM_OPT_STORE_MD;
         (*o).val.i = libc::atoi(val);
     } else if key == b"store_nm" {
-        (*o).opt = hts_sys::hts_fmt_option_CRAM_OPT_STORE_NM;
+        (*o).opt = CRAM_OPT_STORE_NM;
         (*o).val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"block_size") {
-        (*o).opt = hts_sys::hts_fmt_option_HTS_OPT_BLOCK_SIZE;
+        (*o).opt = HTS_OPT_BLOCK_SIZE;
         (*o).val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
     } else if hts_c_1021_opt_key_matches(key, b"level") {
-        (*o).opt = hts_sys::hts_fmt_option_HTS_OPT_COMPRESSION_LEVEL;
+        (*o).opt = HTS_OPT_COMPRESSION_LEVEL;
         (*o).val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
     } else if hts_c_1021_opt_key_matches(key, b"filter") {
         (*o).opt = HTS_OPT_FILTER;
@@ -5523,7 +5676,7 @@ pub unsafe fn hts_opt_apply(fp: *mut htsFile, opts: *mut hts_opt) -> c_int {
 pub unsafe fn hts_c_1247_hts_opt_apply(fp: *mut htsFile, mut opts: *mut hts_opt) -> c_int {
     while !opts.is_null() {
         match (*opts).opt {
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE => {
+            x if x == CRAM_OPT_REFERENCE => {
                 (*fp).fn_aux = c_compat::strdup((*opts).val.s);
                 if (*fp).fn_aux.is_null() {
                     return -1;
@@ -5532,8 +5685,8 @@ pub unsafe fn hts_c_1247_hts_opt_apply(fp: *mut htsFile, mut opts: *mut hts_opt)
                     return -1;
                 }
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_VERSION
-                || x == hts_sys::hts_fmt_option_CRAM_OPT_PREFIX
+            x if x == CRAM_OPT_VERSION
+                || x == CRAM_OPT_PREFIX
                 || x == HTS_OPT_FILTER
                 || x == crate::htslib_rs::sam::FASTQ_OPT_AUX as hts_fmt_option
                 || x == crate::htslib_rs::sam::FASTQ_OPT_BARCODE as hts_fmt_option
@@ -5557,12 +5710,12 @@ pub unsafe fn hts_c_1247_hts_opt_apply(fp: *mut htsFile, mut opts: *mut hts_opt)
 
 pub unsafe fn hts_set_opt_int(fp: *mut htsFile, opt: hts_fmt_option, val: c_int) -> c_int {
     match opt {
-        x if x == hts_sys::hts_fmt_option_HTS_OPT_NTHREADS => hts_set_threads(fp, val),
-        x if x == hts_sys::hts_fmt_option_HTS_OPT_CACHE_SIZE => {
+        x if x == HTS_OPT_NTHREADS => hts_set_threads(fp, val),
+        x if x == HTS_OPT_CACHE_SIZE => {
             hts_set_cache_size(fp, val);
             0
         }
-        x if x == hts_sys::hts_fmt_option_HTS_OPT_BLOCK_SIZE => {
+        x if x == HTS_OPT_BLOCK_SIZE => {
             let hf = hts_hfile(fp);
             if !hf.is_null() {
                 if hfile_set_blksize(hf, val as size_t) != 0 {
@@ -5593,7 +5746,7 @@ pub unsafe fn hts_set_opt_int(fp: *mut htsFile, opt: hts_fmt_option, val: c_int)
                 0
             }
         }
-        x if x == hts_sys::hts_fmt_option_HTS_OPT_COMPRESSION_LEVEL => {
+        x if x == HTS_OPT_COMPRESSION_LEVEL => {
             if ((*fp).bitfields & (1 << 4)) != 0 {
                 (*(*fp).fp.bgzf).bitfields &= !(0x1ff << 20);
                 (*(*fp).fp.bgzf).bitfields |= ((val as u32) & 0x1ff) << 20;
@@ -5630,10 +5783,10 @@ pub unsafe fn hts_set_opt_int(fp: *mut htsFile, opt: hts_fmt_option, val: c_int)
 
 pub unsafe fn hts_set_opt_ptr(fp: *mut htsFile, opt: hts_fmt_option, val: *mut c_void) -> c_int {
     match opt {
-        x if x == hts_sys::hts_fmt_option_HTS_OPT_THREAD_POOL => {
+        x if x == HTS_OPT_THREAD_POOL => {
             hts_set_thread_pool(fp, val.cast::<htsThreadPool>())
         }
-        x if x == hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE => {
+        x if x == CRAM_OPT_REFERENCE => {
             hts_set_fai_filename(fp, val.cast::<c_char>())
         }
         x if x == HTS_OPT_FILTER => hts_set_filter_expression(fp, val.cast::<c_char>()),
@@ -5661,7 +5814,7 @@ pub unsafe fn hts_set_opt_ptr(fp: *mut htsFile, opt: hts_fmt_option, val: *mut c
 }
 
 pub unsafe fn hts_opt_free(opts: *mut hts_opt) {
-    hts_sys::hts_opt_free(opts)
+    hts_c_1279_hts_opt_free(opts)
 }
 
 pub unsafe fn hts_c_1279_hts_opt_free(mut opts: *mut hts_opt) {
@@ -5674,7 +5827,7 @@ pub unsafe fn hts_c_1279_hts_opt_free(mut opts: *mut hts_opt) {
 }
 
 pub unsafe fn hts_parse_format(opt: *mut htsFormat, str_: *const c_char) -> c_int {
-    hts_sys::hts_parse_format(opt.cast(), str_)
+    hts_c_1337_hts_parse_format(opt, str_)
 }
 
 pub unsafe fn hts_c_1300_hts_parse_opt_list(fmt: *mut htsFormat, mut str_: *const c_char) -> c_int {
@@ -5715,54 +5868,54 @@ pub unsafe fn hts_c_1337_hts_parse_format(format: *mut htsFormat, str_: *const c
 
     let key = CStr::from_ptr(fmt.as_ptr()).to_bytes();
     if key == b"sam" {
-        (*format).category = hts_sys::htsFormatCategory_sequence_data;
-        (*format).format = hts_sys::htsExactFormat_sam;
-        (*format).compression = hts_sys::htsCompression_no_compression;
+        (*format).category = HTS_FORMAT_SEQUENCE_DATA;
+        (*format).format = HTS_FORMAT_SAM;
+        (*format).compression = HTS_COMPRESSION_NO_COMPRESSION;
         (*format).compression_level = 0;
     } else if key == b"sam.gz" {
-        (*format).category = hts_sys::htsFormatCategory_sequence_data;
-        (*format).format = hts_sys::htsExactFormat_sam;
-        (*format).compression = hts_sys::htsCompression_bgzf;
+        (*format).category = HTS_FORMAT_SEQUENCE_DATA;
+        (*format).format = HTS_FORMAT_SAM;
+        (*format).compression = HTS_COMPRESSION_BGZF;
         (*format).compression_level = -1;
     } else if key == b"bam" {
-        (*format).category = hts_sys::htsFormatCategory_sequence_data;
-        (*format).format = hts_sys::htsExactFormat_bam;
-        (*format).compression = hts_sys::htsCompression_bgzf;
+        (*format).category = HTS_FORMAT_SEQUENCE_DATA;
+        (*format).format = HTS_FORMAT_BAM;
+        (*format).compression = HTS_COMPRESSION_BGZF;
         (*format).compression_level = -1;
     } else if key == b"cram" {
-        (*format).category = hts_sys::htsFormatCategory_sequence_data;
-        (*format).format = hts_sys::htsExactFormat_cram;
-        (*format).compression = hts_sys::htsCompression_custom;
+        (*format).category = HTS_FORMAT_SEQUENCE_DATA;
+        (*format).format = HTS_FORMAT_CRAM;
+        (*format).compression = HTS_COMPRESSION_CUSTOM;
         (*format).compression_level = -1;
     } else if key == b"vcf" {
-        (*format).category = hts_sys::htsFormatCategory_variant_data;
-        (*format).format = hts_sys::htsExactFormat_vcf;
-        (*format).compression = hts_sys::htsCompression_no_compression;
+        (*format).category = HTS_FORMAT_VARIANT_DATA;
+        (*format).format = HTS_FORMAT_VCF;
+        (*format).compression = HTS_COMPRESSION_NO_COMPRESSION;
         (*format).compression_level = 0;
     } else if key == b"bcf" {
-        (*format).category = hts_sys::htsFormatCategory_variant_data;
-        (*format).format = hts_sys::htsExactFormat_bcf;
-        (*format).compression = hts_sys::htsCompression_bgzf;
+        (*format).category = HTS_FORMAT_VARIANT_DATA;
+        (*format).format = HTS_FORMAT_BCF;
+        (*format).compression = HTS_COMPRESSION_BGZF;
         (*format).compression_level = -1;
     } else if key == b"fastq" || key == b"fq" {
-        (*format).category = hts_sys::htsFormatCategory_sequence_data;
-        (*format).format = hts_sys::htsExactFormat_fastq_format;
-        (*format).compression = hts_sys::htsCompression_no_compression;
+        (*format).category = HTS_FORMAT_SEQUENCE_DATA;
+        (*format).format = HTS_FORMAT_FASTQ_FORMAT;
+        (*format).compression = HTS_COMPRESSION_NO_COMPRESSION;
         (*format).compression_level = 0;
     } else if key == b"fastq.gz" || key == b"fq.gz" {
-        (*format).category = hts_sys::htsFormatCategory_sequence_data;
-        (*format).format = hts_sys::htsExactFormat_fastq_format;
-        (*format).compression = hts_sys::htsCompression_bgzf;
+        (*format).category = HTS_FORMAT_SEQUENCE_DATA;
+        (*format).format = HTS_FORMAT_FASTQ_FORMAT;
+        (*format).compression = HTS_COMPRESSION_BGZF;
         (*format).compression_level = 0;
     } else if key == b"fasta" || key == b"fa" {
-        (*format).category = hts_sys::htsFormatCategory_sequence_data;
-        (*format).format = hts_sys::htsExactFormat_fasta_format;
-        (*format).compression = hts_sys::htsCompression_no_compression;
+        (*format).category = HTS_FORMAT_SEQUENCE_DATA;
+        (*format).format = HTS_FORMAT_FASTA_FORMAT;
+        (*format).compression = HTS_COMPRESSION_NO_COMPRESSION;
         (*format).compression_level = 0;
     } else if key == b"fasta.gz" || key == b"fa.gz" {
-        (*format).category = hts_sys::htsFormatCategory_sequence_data;
-        (*format).format = hts_sys::htsExactFormat_fasta_format;
-        (*format).compression = hts_sys::htsCompression_bgzf;
+        (*format).category = HTS_FORMAT_SEQUENCE_DATA;
+        (*format).format = HTS_FORMAT_FASTA_FORMAT;
+        (*format).compression = HTS_COMPRESSION_BGZF;
         (*format).compression_level = 0;
     } else {
         return -1;
@@ -5822,13 +5975,30 @@ pub unsafe fn hts_c_1430_hts_crypt4gh_redirect(
         },
     );
 
-    let hfile2 = htslib_hopen_variadic(
-        fn2,
-        mode2.as_ptr(),
-        c"parent".as_ptr(),
-        hfile1,
-        std::ptr::null::<c_void>(),
-    );
+    // Native equivalent of hopen(fn2, mode2, "parent", hfile1, NULL).
+    // Build a synthetic va_list carrying the pointer-sized varargs so the
+    // crypt4gh scheme handler's vopen can read the "parent" key/value.
+    let words: [usize; 3] = [
+        c"parent".as_ptr() as usize,
+        hfile1 as usize,
+        std::ptr::null::<c_void>() as usize,
+    ];
+    let mut reg_save = [0usize; 6];
+    let mut overflow = vec![0usize; words.len().saturating_sub(reg_save.len())];
+    for (i, word) in words.iter().copied().enumerate() {
+        if i < reg_save.len() {
+            reg_save[i] = word;
+        } else {
+            overflow[i - reg_save.len()] = word;
+        }
+    }
+    let mut va = crate::htslib_rs::c_compat::__va_list_tag {
+        gp_offset: 0,
+        fp_offset: 48,
+        overflow_arg_area: overflow.as_mut_ptr().cast(),
+        reg_save_area: reg_save.as_mut_ptr().cast(),
+    };
+    let hfile2 = super::hfile::hfile_c_1317_hopen_vargs(fn2, mode2.as_ptr(), &mut va);
     if !hfile2.is_null() {
         *hfile_ptr = hfile2;
         ret = 0;
@@ -5841,16 +6011,16 @@ pub unsafe fn hts_c_1430_hts_crypt4gh_redirect(
 }
 
 pub unsafe fn hts_parse_opt_list(opt: *mut htsFormat, str_: *const c_char) -> c_int {
-    hts_sys::hts_parse_opt_list(opt.cast(), str_)
+    hts_c_1300_hts_parse_opt_list(opt, str_)
 }
 
 pub unsafe fn hts_set_threads(fp: *mut htsFile, n: c_int) -> c_int {
     if (*fp).format.format == HTS_FORMAT_SAM {
         super::sam::sam_c_3746_sam_set_threads(fp, n)
-    } else if (*fp).format.compression == hts_sys::htsCompression_bgzf {
+    } else if (*fp).format.compression == HTS_COMPRESSION_BGZF {
         bgzf_mt(hts_get_bgzfp(fp), n, 256)
     } else if (*fp).format.format == HTS_FORMAT_CRAM {
-        hts_sys::hts_set_opt(fp.cast(), hts_sys::hts_fmt_option_CRAM_OPT_NTHREADS, n)
+        hts_sys::hts_set_opt(fp.cast(), CRAM_OPT_NTHREADS, n)
     } else {
         0
     }
@@ -5859,17 +6029,17 @@ pub unsafe fn hts_set_threads(fp: *mut htsFile, n: c_int) -> c_int {
 pub unsafe fn hts_set_thread_pool(fp: *mut htsFile, p: *mut htsThreadPool) -> c_int {
     if (*fp).format.format == HTS_FORMAT_SAM || (*fp).format.format == HTS_FORMAT_TEXT_FORMAT {
         super::sam::sam_c_3719_sam_set_thread_pool(fp, p)
-    } else if (*fp).format.compression == hts_sys::htsCompression_bgzf {
+    } else if (*fp).format.compression == HTS_COMPRESSION_BGZF {
         bgzf_thread_pool(hts_get_bgzfp(fp), (*p).pool, (*p).qsize)
     } else if (*fp).format.format == HTS_FORMAT_CRAM {
-        hts_sys::hts_set_opt(fp.cast(), hts_sys::hts_fmt_option_CRAM_OPT_THREAD_POOL, p)
+        hts_sys::hts_set_opt(fp.cast(), CRAM_OPT_THREAD_POOL, p)
     } else {
         0
     }
 }
 
 pub unsafe fn hts_set_cache_size(fp: *mut htsFile, n: c_int) {
-    if (*fp).format.compression == hts_sys::htsCompression_bgzf {
+    if (*fp).format.compression == HTS_COMPRESSION_BGZF {
         bgzf_set_cache_size(hts_get_bgzfp(fp), n);
     }
 }
@@ -5888,7 +6058,7 @@ pub unsafe fn hts_set_fai_filename(fp: *mut htsFile, fn_aux: *const c_char) -> c
     if (*fp).format.format == HTS_FORMAT_CRAM
         && hts_sys::cram_set_option(
             (*fp).fp.cram.cast(),
-            hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE,
+            CRAM_OPT_REFERENCE,
             (*fp).fn_aux,
         ) != 0
     {
@@ -5947,13 +6117,13 @@ pub unsafe fn hts_c_1979_hts_open_tmpfile(
 }
 
 pub unsafe fn hts_check_EOF(fp: *mut htsFile) -> c_int {
-    hts_sys::hts_check_EOF(fp.cast())
+    hts_c_2208_hts_check_EOF(fp)
 }
 
 pub unsafe fn hts_c_2208_hts_check_EOF(fp: *mut htsFile) -> c_int {
-    if (*fp).format.compression == hts_sys::htsCompression_bgzf {
+    if (*fp).format.compression == HTS_COMPRESSION_BGZF {
         bgzf_check_EOF(hts_get_bgzfp(fp))
-    } else if (*fp).format.format == hts_sys::htsExactFormat_cram {
+    } else if (*fp).format.format == HTS_FORMAT_CRAM {
         cram_check_EOF((*fp).fp.cram)
     } else {
         3
@@ -5964,14 +6134,14 @@ pub unsafe fn hts_c_2270_idx_format_name(fmt: c_int) -> *mut c_char {
     match fmt {
         x if x == HTS_FMT_CSI => c"csi".as_ptr().cast_mut(),
         x if x == HTS_FMT_BAI => c"bai".as_ptr().cast_mut(),
-        x if x == hts_sys::HTS_FMT_TBI as c_int => c"tbi".as_ptr().cast_mut(),
+        x if x == HTS_FMT_TBI as c_int => c"tbi".as_ptr().cast_mut(),
         x if x == HTS_FMT_CRAI => c"crai".as_ptr().cast_mut(),
         _ => c"unknown".as_ptr().cast_mut(),
     }
 }
 
 pub unsafe fn hts_c_2281_idx_dump(idx: *const hts_idx_t) {
-    let stderr = hts_sys::stderr.cast::<libc::FILE>();
+    let stderr = crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>();
     if idx.is_null() {
         libc::fprintf(stderr, c"Null index\n".as_ptr());
         return;
@@ -6068,7 +6238,7 @@ pub unsafe fn hts_c_2281_idx_dump(idx: *const hts_idx_t) {
 pub unsafe fn hts_getline(fp: *mut htsFile, delimiter: c_int, str: *mut kstring_t) -> c_int {
     if !(delimiter == KS_SEP_LINE || delimiter == b'\n' as c_int) {
         libc::fprintf(
-            hts_sys::stderr.cast::<libc::FILE>(),
+            crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
             c"[E::hts_getline] Unexpected delimiter %d\n".as_ptr(),
             delimiter,
         );
@@ -6093,7 +6263,7 @@ pub unsafe fn hts_getline(fp: *mut htsFile, delimiter: c_int, str: *mut kstring_
             }
             ret
         }
-        x if x == hts_sys::htsCompression_gzip || x == hts_sys::htsCompression_bgzf => {
+        x if x == HTS_COMPRESSION_GZIP || x == HTS_COMPRESSION_BGZF => {
             bgzf_getline((*fp).fp.bgzf, b'\n' as c_int, str)
         }
         _ => std::process::abort(),
@@ -6111,7 +6281,7 @@ pub unsafe extern "C" fn hgetln_wrapper(
 }
 
 pub unsafe fn hts_readlist(fn_: *const c_char, is_file: c_int, n: *mut c_int) -> *mut *mut c_char {
-    hts_sys::hts_readlist(fn_, is_file, n)
+    hts_c_2065_hts_readlist(fn_, is_file, n)
 }
 
 pub unsafe fn hts_c_2065_hts_readlist(
@@ -6140,12 +6310,16 @@ pub unsafe fn hts_c_2065_hts_readlist(
                 continue;
             }
             if n == 0 && hts_is_utf16_text(&str_) != 0 {
-                hts_sys::hts_log(
-                    hts_sys::htsLogLevel_HTS_LOG_WARNING,
-                    c"hts_readlist".as_ptr(),
-                    c"'%s' appears to be encoded as UTF-16".as_ptr(),
-                    string,
-                );
+                let s = if string.is_null() {
+                    std::borrow::Cow::Borrowed("")
+                } else {
+                    std::ffi::CStr::from_ptr(string).to_string_lossy()
+                };
+                let msg = std::ffi::CString::new(format!(
+                    "'{s}' appears to be encoded as UTF-16"
+                ))
+                .unwrap_or_default();
+                hts_log_cstr(HTS_LOG_WARNING, c"hts_readlist".as_ptr(), msg.as_ptr());
             }
             if hts_resize_array_(
                 std::mem::size_of::<*mut c_char>(),
@@ -6247,7 +6421,7 @@ pub unsafe fn hts_c_2065_hts_readlist(
 }
 
 pub unsafe fn hts_readlines(fn_: *const c_char, n: *mut c_int) -> *mut *mut c_char {
-    hts_sys::hts_readlines(fn_, n)
+    hts_c_2130_hts_readlines(fn_, n)
 }
 
 pub unsafe fn hts_c_2130_hts_readlines(fn_: *const c_char, n_out: *mut c_int) -> *mut *mut c_char {
@@ -6268,12 +6442,16 @@ pub unsafe fn hts_c_2130_hts_readlines(fn_: *const c_char, n_out: *mut c_int) ->
                 continue;
             }
             if n == 0 && hts_is_utf16_text(&str_) != 0 {
-                hts_sys::hts_log(
-                    hts_sys::htsLogLevel_HTS_LOG_WARNING,
-                    c"hts_readlines".as_ptr(),
-                    c"'%s' appears to be encoded as UTF-16".as_ptr(),
-                    fn_,
-                );
+                let s = if fn_.is_null() {
+                    std::borrow::Cow::Borrowed("")
+                } else {
+                    std::ffi::CStr::from_ptr(fn_).to_string_lossy()
+                };
+                let msg = std::ffi::CString::new(format!(
+                    "'{s}' appears to be encoded as UTF-16"
+                ))
+                .unwrap_or_default();
+                hts_log_cstr(HTS_LOG_WARNING, c"hts_readlines".as_ptr(), msg.as_ptr());
             }
             if hts_resize_array_(
                 std::mem::size_of::<*mut c_char>(),
@@ -6377,7 +6555,7 @@ pub unsafe fn hts_c_2130_hts_readlines(fn_: *const c_char, n_out: *mut c_int) ->
 }
 
 pub unsafe fn hts_file_type(fname: *const c_char) -> c_int {
-    hts_sys::hts_file_type(fname)
+    hts_c_2186_hts_file_type(fname)
 }
 
 pub unsafe fn hts_c_2186_hts_file_type(fname: *const c_char) -> c_int {
@@ -6410,21 +6588,21 @@ pub unsafe fn hts_c_2186_hts_file_type(fname: *const c_char) -> c_int {
 
     let mut fmt: htsFormat = std::mem::zeroed();
     if hts_detect_format2(f, fname, &mut fmt) < 0 {
-        hclose(f);
+        hclose_abruptly(f);
         return FT_UNKN;
     }
     if hclose(f) < 0 {
         return FT_UNKN;
     }
 
-    if fmt.format == hts_sys::htsExactFormat_vcf {
-        if fmt.compression == hts_sys::htsCompression_no_compression {
+    if fmt.format == HTS_FORMAT_VCF {
+        if fmt.compression == HTS_COMPRESSION_NO_COMPRESSION {
             FT_VCF
         } else {
             FT_VCF_GZ
         }
-    } else if fmt.format == hts_sys::htsExactFormat_bcf {
-        if fmt.compression == hts_sys::htsCompression_no_compression {
+    } else if fmt.format == HTS_FORMAT_BCF {
+        if fmt.compression == HTS_COMPRESSION_NO_COMPRESSION {
             FT_BCF
         } else {
             FT_BCF_GZ
@@ -7278,7 +7456,11 @@ pub unsafe fn hts_idx_fmt(idx: *mut hts_idx_t) -> c_int {
 }
 
 pub unsafe fn hts_idx_nseq(idx: *const hts_idx_t) -> c_int {
-    unsafe { htslib_hts_idx_nseq(idx) }
+    if idx.is_null() {
+        -1
+    } else {
+        (*idx).n
+    }
 }
 
 pub unsafe fn hts_c_3110_hts_idx_nseq(idx: *const hts_idx_t) -> c_int {
@@ -7342,7 +7524,7 @@ pub unsafe fn hts_c_2759_idx_save_core(idx: *const hts_idx_t, fp: *mut BGZF, fmt
     if hts_c_2721_idx_write_int32(fp, nids) < 0 {
         return -1;
     }
-    if fmt == hts_sys::HTS_FMT_TBI as c_int
+    if fmt == HTS_FMT_TBI as c_int
         && (*idx).l_meta != 0
         && bgzf_write(fp, (*idx).meta.cast(), (*idx).l_meta as usize) < 0
     {
@@ -7432,7 +7614,7 @@ pub unsafe fn hts_c_2847_hts_idx_write_out(
         if (*idx).l_meta != 0 && bgzf_write(fp, (*idx).meta.cast(), (*idx).l_meta as usize) < 0 {
             return -1;
         }
-    } else if fmt == hts_sys::HTS_FMT_TBI as c_int {
+    } else if fmt == HTS_FMT_TBI as c_int {
         if bgzf_write(fp, b"TBI\x01".as_ptr().cast(), 4) < 0 {
             return -1;
         }
@@ -7467,7 +7649,7 @@ pub unsafe fn hts_c_2825_hts_idx_save(
         c".bai".as_ptr()
     } else if fmt == HTS_FMT_CSI {
         c".csi".as_ptr()
-    } else if fmt == hts_sys::HTS_FMT_TBI as c_int {
+    } else if fmt == HTS_FMT_TBI as c_int {
         c".tbi".as_ptr()
     } else {
         std::process::abort();
@@ -7710,7 +7892,7 @@ pub unsafe fn hts_c_2990_idx_read(fn_: *const c_char) -> *mut hts_idx_t {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         }
-        idx = hts_c_2405_hts_idx_init(n as c_int, hts_sys::HTS_FMT_TBI as c_int, 0, 14, 5);
+        idx = hts_c_2405_hts_idx_init(n as c_int, HTS_FMT_TBI as c_int, 0, 14, 5);
         if idx.is_null() {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
@@ -7732,7 +7914,7 @@ pub unsafe fn hts_c_2990_idx_read(fn_: *const c_char) -> *mut hts_idx_t {
             return std::ptr::null_mut();
         }
         *(*idx).meta.add((*idx).l_meta as usize) = 0;
-        if hts_c_2925_idx_read_core(idx, fp, hts_sys::HTS_FMT_TBI as c_int) < 0 {
+        if hts_c_2925_idx_read_core(idx, fp, HTS_FMT_TBI as c_int) < 0 {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         }
@@ -7819,12 +8001,12 @@ pub unsafe fn hts_c_4623_idx_test_and_fetch(
             *c_compat::__errno_location() = save_errno;
             return -2;
         }
-        if fmt.category != hts_sys::htsFormatCategory_index_file
-            || !(fmt.format == hts_sys::htsExactFormat_bai
-                || fmt.format == hts_sys::htsExactFormat_csi
-                || fmt.format == hts_sys::htsExactFormat_tbi
-                || fmt.format == hts_sys::htsExactFormat_crai
-                || fmt.format == hts_sys::htsExactFormat_fai_format)
+        if fmt.category != HTS_FORMAT_INDEX_FILE
+            || !(fmt.format == HTS_FORMAT_BAI
+                || fmt.format == HTS_FORMAT_CSI
+                || fmt.format == HTS_FORMAT_TBI
+                || fmt.format == HTS_FORMAT_CRAI_EXACT
+                || fmt.format == HTS_FORMAT_FAI_FORMAT)
         {
             let save_errno = *c_compat::__errno_location();
             hclose_abruptly(remote_hfp);
@@ -7974,7 +8156,7 @@ pub unsafe fn hts_c_4756_hts_idx_check_local(
     push_pair(&mut candidates, b".csi");
     if fmt == HTS_FMT_BAI {
         push_pair(&mut candidates, b".bai");
-    } else if fmt == hts_sys::HTS_FMT_TBI as c_int {
+    } else if fmt == HTS_FMT_TBI as c_int {
         push_pair(&mut candidates, b".tbi");
     } else if fmt == HTS_FMT_CRAI {
         push_pair(&mut candidates, b".crai");
@@ -8127,7 +8309,7 @@ pub unsafe fn hts_idx_load3(
 ) -> *mut hts_idx_t {
     if fmt == HTS_FMT_BAI
         || fmt == HTS_FMT_CSI
-        || fmt == hts_sys::HTS_FMT_TBI as c_int
+        || fmt == HTS_FMT_TBI as c_int
         || (fmt == 0 && !fnidx.is_null())
     {
         if let Some(idx) = hts_idx_load3_local_index(fn_, fnidx, fmt) {
@@ -8712,7 +8894,7 @@ pub unsafe fn hts_itr_regions(
                     return std::ptr::null_mut();
                 } else {
                     libc::fprintf(
-                        hts_sys::stderr.cast::<libc::FILE>(),
+                        crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
                         c"[W::hts_itr_regions] Region '%s' specifies an unknown reference name. Continue anyway\n".as_ptr(),
                         (*curr).reg,
                     );
@@ -8795,7 +8977,7 @@ unsafe fn local_index_path(
     if fmt == HTS_FMT_CSI {
         return None;
     }
-    if fmt == hts_sys::HTS_FMT_TBI as c_int {
+    if fmt == HTS_FMT_TBI as c_int {
         return index_path_with_ext(&data_path, b".tbi");
     }
     index_path_with_ext(&data_path, b".bai")
@@ -8876,7 +9058,7 @@ unsafe fn read_tbi_index(fp: *mut BGZF) -> Option<*mut hts_idx_t> {
     if n > c_int::MAX as u32 {
         return None;
     }
-    let idx = hts_idx_init_local(n as c_int, hts_sys::HTS_FMT_TBI as c_int, 14, 5)?;
+    let idx = hts_idx_init_local(n as c_int, HTS_FMT_TBI as c_int, 14, 5)?;
     let name_len = u32::from_le_bytes([x[28], x[29], x[30], x[31]]);
     if name_len > u32::MAX - 29 {
         hts_idx_destroy(idx);
@@ -11483,7 +11665,7 @@ mod tests {
                 c"bai"
             );
             assert_eq!(
-                CStr::from_ptr(hts_c_2270_idx_format_name(hts_sys::HTS_FMT_TBI as c_int)),
+                CStr::from_ptr(hts_c_2270_idx_format_name(HTS_FMT_TBI as c_int)),
                 c"tbi"
             );
             assert_eq!(
@@ -11554,10 +11736,10 @@ mod tests {
             assert!(bgzf_is_compressed(&fp));
             assert_eq!(hts_c_2748_need_idx_ugly_delay_hack(&idx), 0);
 
-            idx.fmt = hts_sys::HTS_FMT_TBI as c_int;
+            idx.fmt = HTS_FMT_TBI as c_int;
             assert_eq!(
                 hts_c_2714_hts_idx_fmt(&mut idx),
-                hts_sys::HTS_FMT_TBI as c_int
+                HTS_FMT_TBI as c_int
             );
 
             let meta_len = 28u32;
@@ -13183,13 +13365,13 @@ mod tests {
             std::fs::remove_file(&list_file).unwrap();
 
             let mut desc_fmt = htsFormat {
-                category: hts_sys::htsFormatCategory_variant_data,
-                format: hts_sys::htsExactFormat_vcf,
+                category: HTS_FORMAT_VARIANT_DATA,
+                format: HTS_FORMAT_VCF,
                 version: htsFormatVersion {
                     major: -1,
                     minor: -1,
                 },
-                compression: hts_sys::htsCompression_no_compression,
+                compression: HTS_COMPRESSION_NO_COMPRESSION,
                 compression_level: -1,
                 specific: std::ptr::null_mut(),
             };
@@ -13197,9 +13379,9 @@ mod tests {
             assert_eq!(CStr::from_ptr(desc).to_bytes(), b"VCF variant calling text");
             c_compat::free(desc.cast());
 
-            desc_fmt.format = hts_sys::htsExactFormat_bam;
-            desc_fmt.category = hts_sys::htsFormatCategory_sequence_data;
-            desc_fmt.compression = hts_sys::htsCompression_bgzf;
+            desc_fmt.format = HTS_FORMAT_BAM;
+            desc_fmt.category = HTS_FORMAT_SEQUENCE_DATA;
+            desc_fmt.compression = HTS_COMPRESSION_BGZF;
             let desc = hts_c_775_hts_format_description(&desc_fmt);
             assert_eq!(
                 CStr::from_ptr(desc).to_bytes(),
@@ -13222,7 +13404,7 @@ mod tests {
                 hts_c_1021_hts_opt_add(&mut opts, c"cache_size=2K".as_ptr()),
                 0
             );
-            assert_eq!((*opts).opt, hts_sys::hts_fmt_option_HTS_OPT_CACHE_SIZE);
+            assert_eq!((*opts).opt, HTS_OPT_CACHE_SIZE);
             assert_eq!((*opts).val.i, 2048);
             assert_eq!(
                 hts_c_1021_hts_opt_add(&mut opts, c"reference=ref.fa".as_ptr()),
@@ -13230,7 +13412,7 @@ mod tests {
             );
             assert_eq!(
                 (*(*opts).next).opt,
-                hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE
+                CRAM_OPT_REFERENCE
             );
             assert_eq!(CStr::from_ptr((*(*opts).next).val.s).to_bytes(), b"ref.fa");
 
@@ -13248,7 +13430,7 @@ mod tests {
             );
             assert_eq!(
                 (*uppercase_opts).opt,
-                hts_sys::hts_fmt_option_HTS_OPT_CACHE_SIZE
+                HTS_OPT_CACHE_SIZE
             );
             assert_eq!((*uppercase_opts).val.i, 2048);
             hts_c_1279_hts_opt_free(uppercase_opts);
@@ -13272,14 +13454,14 @@ mod tests {
                 hts_c_1337_hts_parse_format(&mut parsed, c"fq.gz,level=7,fastq_rnum".as_ptr()),
                 0
             );
-            assert_eq!(parsed.category, hts_sys::htsFormatCategory_sequence_data);
-            assert_eq!(parsed.format, hts_sys::htsExactFormat_fastq_format);
-            assert_eq!(parsed.compression, hts_sys::htsCompression_bgzf);
+            assert_eq!(parsed.category, HTS_FORMAT_SEQUENCE_DATA);
+            assert_eq!(parsed.format, HTS_FORMAT_FASTQ_FORMAT);
+            assert_eq!(parsed.compression, HTS_COMPRESSION_BGZF);
             assert!(!parsed.specific.is_null());
             let parsed_opt = parsed.specific.cast::<hts_opt>();
             assert_eq!(
                 (*parsed_opt).opt,
-                hts_sys::hts_fmt_option_HTS_OPT_COMPRESSION_LEVEL
+                HTS_OPT_COMPRESSION_LEVEL
             );
             assert_eq!((*parsed_opt).val.i, 7);
             assert_eq!(
@@ -13317,8 +13499,8 @@ mod tests {
                 hts_c_556_hts_detect_format2(hf, detect_c.as_ptr(), &mut detected),
                 0
             );
-            assert_eq!(detected.category, hts_sys::htsFormatCategory_variant_data);
-            assert_eq!(detected.format, hts_sys::htsExactFormat_vcf);
+            assert_eq!(detected.category, HTS_FORMAT_VARIANT_DATA);
+            assert_eq!(detected.format, HTS_FORMAT_VCF);
             assert_eq!(detected.version.major, 4);
             assert_eq!(detected.version.minor, 3);
             assert_eq!(hclose(hf), 0);
@@ -13337,8 +13519,8 @@ mod tests {
                 hts_c_556_hts_detect_format2(hf, detect_c.as_ptr(), &mut detected),
                 0
             );
-            assert_eq!(detected.category, hts_sys::htsFormatCategory_index_file);
-            assert_eq!(detected.format, hts_sys::htsExactFormat_fai_format);
+            assert_eq!(detected.category, HTS_FORMAT_INDEX_FILE);
+            assert_eq!(detected.format, HTS_FORMAT_FAI_FORMAT);
             assert_eq!(hclose(hf), 0);
             std::fs::remove_file(&detect_path).unwrap();
         }
@@ -13351,26 +13533,26 @@ mod tests {
                 (
                     b"BAI\x01\x00\x00\x00\x00",
                     c"sample.bam.bai".as_ptr(),
-                    hts_sys::htsFormatCategory_index_file,
-                    hts_sys::htsExactFormat_bai,
+                    HTS_FORMAT_INDEX_FILE,
+                    HTS_FORMAT_BAI,
                 ),
                 (
                     b"CSI\x01\x00\x00\x00\x00",
                     c"sample.bam.csi".as_ptr(),
-                    hts_sys::htsFormatCategory_index_file,
-                    hts_sys::htsExactFormat_csi,
+                    HTS_FORMAT_INDEX_FILE,
+                    HTS_FORMAT_CSI,
                 ),
                 (
                     b"TBI\x01\x00\x00\x00\x00",
                     c"sample.vcf.gz.tbi".as_ptr(),
-                    hts_sys::htsFormatCategory_index_file,
-                    hts_sys::htsExactFormat_tbi,
+                    HTS_FORMAT_INDEX_FILE,
+                    HTS_FORMAT_TBI,
                 ),
                 (
                     b"\x00\x00\x00\x00\x00\x00\x00\x00",
                     c"sample.bgz.gzi".as_ptr(),
-                    hts_sys::htsFormatCategory_index_file,
-                    hts_sys::htsExactFormat_gzi,
+                    HTS_FORMAT_INDEX_FILE,
+                    HTS_FORMAT_GZI,
                 ),
             ];
 
@@ -13406,13 +13588,13 @@ mod tests {
             let cases: &[(&[u8], htsFormatCategory, htsExactFormat)] = &[
                 (
                     b"plain text without a known hts shape\n",
-                    hts_sys::htsFormatCategory_unknown_category,
-                    hts_sys::htsExactFormat_text_format,
+                    HTS_FORMAT_UNKNOWN_CATEGORY,
+                    HTS_FORMAT_TEXT_FORMAT,
                 ),
                 (
                     b"\x00\xff\x10binary",
-                    hts_sys::htsFormatCategory_unknown_category,
-                    hts_sys::htsExactFormat_unknown_format,
+                    HTS_FORMAT_UNKNOWN_CATEGORY,
+                    HTS_FORMAT_UNKNOWN_FORMAT,
                 ),
             ];
 
@@ -13440,7 +13622,7 @@ mod tests {
                 );
                 assert_eq!(detected.category, category);
                 assert_eq!(detected.format, format);
-                assert_eq!(detected.compression, hts_sys::htsCompression_no_compression);
+                assert_eq!(detected.compression, HTS_COMPRESSION_NO_COMPRESSION);
                 assert_eq!(hclose(fp), 0);
             }
         }
@@ -13575,14 +13757,14 @@ mod tests {
                     major: -1,
                     minor: -1,
                 },
-                compression: hts_sys::htsCompression_bgzf,
+                compression: HTS_COMPRESSION_BGZF,
                 compression_level: -1,
                 specific: std::ptr::null_mut(),
             };
             let fp = hts_open_format(c_bgzf_path.as_ptr(), c"wu".as_ptr(), &bgzf_fmt);
             assert!(!fp.is_null());
             assert_eq!((*fp).format.format, HTS_FORMAT_SAM);
-            assert_eq!((*fp).format.compression, hts_sys::htsCompression_bgzf);
+            assert_eq!((*fp).format.compression, HTS_COMPRESSION_BGZF);
             assert!(!hts_get_bgzfp(fp).is_null());
             assert_eq!(hts_close(fp), 0);
             std::fs::remove_file(bgzf_path).unwrap();

@@ -40,7 +40,7 @@ unsafe fn run_thrash_threads3(
 pub unsafe fn test_thrash_threads3_c_33_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     if argc <= 1 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Usage: thrash_threads3 input.bam\n".as_ptr(),
         );
         libc::exit(1);

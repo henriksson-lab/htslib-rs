@@ -18,7 +18,7 @@ pub unsafe fn samples_mod_bam_c_50_main(argc: c_int, argv: *mut *mut c_char) -> 
     let mut outfile = std::ptr::null_mut();
 
     if argc != 5 {
-        samples_mod_bam_c_38_print_usage(hts_sys::stderr.cast());
+        samples_mod_bam_c_38_print_usage(crate::htslib_rs::c_compat::stderr.cast());
         return ret;
     }
     let inname = *argv.add(1);

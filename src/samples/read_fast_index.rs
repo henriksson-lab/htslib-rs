@@ -16,7 +16,7 @@ pub unsafe fn samples_read_fast_index_c_53_main(argc: c_int, argv: *mut *mut c_c
     let mut ret = libc::EXIT_FAILURE;
 
     if argc != 5 {
-        samples_read_fast_index_c_38_print_usage(hts_sys::stdout.cast());
+        samples_read_fast_index_c_38_print_usage(crate::htslib_rs::c_compat::stdout.cast());
         return ret;
     }
     let inname = *argv.add(1);

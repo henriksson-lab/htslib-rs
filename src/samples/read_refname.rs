@@ -20,7 +20,7 @@ pub unsafe fn samples_read_refname_c_49_main(argc: c_int, argv: *mut *mut c_char
     };
 
     if argc != 3 && argc != 2 {
-        samples_read_refname_c_37_print_usage(hts_sys::stdout.cast());
+        samples_read_refname_c_37_print_usage(crate::htslib_rs::c_compat::stdout.cast());
         return ret;
     }
     let inname = *argv.add(1);

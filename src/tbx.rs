@@ -5,11 +5,21 @@ use super::hts::{
     hts_c_2372_hts_adjust_csi_settings, hts_c_2405_hts_idx_init, hts_c_2515_hts_idx_finish,
     hts_c_2558_hts_idx_push, hts_c_2869_hts_idx_save_as, hts_c_3062_hts_idx_set_meta,
     hts_c_3084_hts_idx_get_meta, hts_idx_destroy, hts_idx_load3, hts_is_utf16_text, hts_itr_query,
-    hts_itr_t, hts_parse_region, hts_pos_t, i32_to_le, kstring_t, le_to_i32, le_to_u32,
-    svlen_on_ref_for_vcf_alt, toupper_c, BGZF, HTS_IDX_NOCOOR, HTS_IDX_START,
-    HTS_PARSE_THOUSANDS_SEP,
+    hts_itr_t, hts_log_cstr, hts_parse_region, hts_pos_t, i32_to_le, kstring_t,
+    le_to_i32, le_to_u32, svlen_on_ref_for_vcf_alt, toupper_c, BGZF, HTS_FMT_CSI, HTS_IDX_NOCOOR,
+    HTS_IDX_START, HTS_LOG_ERROR, HTS_PARSE_THOUSANDS_SEP,
 };
 
+// HTS_FMT_TBI is 2 (htslib/htslib/hts.h); hts.rs only re-exports CSI/BAI/CRAI/FAI.
+const HTS_FMT_TBI: c_int = 2;
+// htsCompression::bgzf == 2 (htslib/htslib/hts.h).
+const HTS_COMPRESSION_BGZF: c_int = 2;
+
+// NOTE: tbx_conf_t / tbx_t remain hts_sys type aliases. Converting them to native
+// #[repr(C)] structs is inconsistent: vcf.rs's reader struct (from hts_sys) holds
+// tbx_idx: *mut hts_sys::tbx_t and passes it to tbx_destroy, which would require
+// editing vcf.rs (out of scope). The structs are #[repr(C)] and byte-identical, so
+// the aliases interoperate freely with the native hts_idx_* code via .cast().
 pub type tbx_conf_t = hts_sys::tbx_conf_t;
 pub type tbx_t = hts_sys::tbx_t;
 
@@ -49,23 +59,63 @@ pub struct tbx_intv_t {
 }
 
 pub unsafe fn tbx_conf_gff() -> tbx_conf_t {
-    hts_sys::tbx_conf_gff
+    // htslib/tbx.c:44 { 0, 1, 4, 5, '#', 0 }
+    tbx_conf_t {
+        preset: 0,
+        sc: 1,
+        bc: 4,
+        ec: 5,
+        meta_char: b'#' as c_int,
+        line_skip: 0,
+    }
 }
 
 pub unsafe fn tbx_conf_bed() -> tbx_conf_t {
-    hts_sys::tbx_conf_bed
+    // htslib/tbx.c:47 { TBX_UCSC, 1, 2, 3, '#', 0 }
+    tbx_conf_t {
+        preset: TBX_UCSC,
+        sc: 1,
+        bc: 2,
+        ec: 3,
+        meta_char: b'#' as c_int,
+        line_skip: 0,
+    }
 }
 
 pub unsafe fn tbx_conf_psltbl() -> tbx_conf_t {
-    hts_sys::tbx_conf_psltbl
+    // htslib/tbx.c:50 { TBX_UCSC, 15, 17, 18, '#', 0 }
+    tbx_conf_t {
+        preset: TBX_UCSC,
+        sc: 15,
+        bc: 17,
+        ec: 18,
+        meta_char: b'#' as c_int,
+        line_skip: 0,
+    }
 }
 
 pub unsafe fn tbx_conf_sam() -> tbx_conf_t {
-    hts_sys::tbx_conf_sam
+    // htslib/tbx.c:53 { TBX_SAM, 3, 4, 0, '@', 0 }
+    tbx_conf_t {
+        preset: TBX_SAM,
+        sc: 3,
+        bc: 4,
+        ec: 0,
+        meta_char: b'@' as c_int,
+        line_skip: 0,
+    }
 }
 
 pub unsafe fn tbx_conf_vcf() -> tbx_conf_t {
-    hts_sys::tbx_conf_vcf
+    // htslib/tbx.c:56 { TBX_VCF, 1, 2, 0, '#', 0 }
+    tbx_conf_t {
+        preset: TBX_VCF,
+        sc: 1,
+        bc: 2,
+        ec: 0,
+        meta_char: b'#' as c_int,
+        line_skip: 0,
+    }
 }
 
 pub unsafe fn tbx_conf_gaf() -> tbx_conf_t {
@@ -404,29 +454,34 @@ pub unsafe fn tbx_c_315_get_intv(
             -1
         }
     } else {
-        let type_ = match (*tbx).conf.preset & 0xffff {
-            TBX_SAM => c"TBX_SAM".as_ptr(),
-            TBX_VCF => c"TBX_VCF".as_ptr(),
-            TBX_GAF => c"TBX_GAF".as_ptr(),
-            TBX_UCSC => c"TBX_UCSC".as_ptr(),
-            _ => c"TBX_GENERIC".as_ptr(),
+        let type_: &str = match (*tbx).conf.preset & 0xffff {
+            TBX_SAM => "TBX_SAM",
+            TBX_VCF => "TBX_VCF",
+            TBX_GAF => "TBX_GAF",
+            TBX_UCSC => "TBX_UCSC",
+            _ => "TBX_GENERIC",
         };
         if hts_is_utf16_text(str_) != 0 {
-            hts_sys::hts_log(
-                hts_sys::htsLogLevel_HTS_LOG_ERROR,
-                c"get_intv".as_ptr(),
-                c"Failed to parse %s: offending line appears to be encoded as UTF-16".as_ptr(),
-                type_,
-            );
+            let msg = std::ffi::CString::new(format!(
+                "Failed to parse {type_}: offending line appears to be encoded as UTF-16"
+            ))
+            .unwrap();
+            hts_log_cstr(HTS_LOG_ERROR, c"get_intv".as_ptr(), msg.as_ptr());
         } else {
-            hts_sys::hts_log(
-                hts_sys::htsLogLevel_HTS_LOG_ERROR,
-                c"get_intv".as_ptr(),
-                c"Failed to parse %s: was wrong -p [type] used?\nThe offending line was: \"%s\""
-                    .as_ptr(),
-                type_,
-                (*str_).s,
-            );
+            let line = if (*str_).s.is_null() {
+                String::new()
+            } else {
+                std::ffi::CStr::from_ptr((*str_).s)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let msg = std::ffi::CString::new(format!(
+                "Failed to parse {type_}: was wrong -p [type] used?\nThe offending line was: \"{line}\""
+            ))
+            .unwrap_or_else(|_| std::ffi::CString::new(format!(
+                "Failed to parse {type_}: was wrong -p [type] used?"
+            )).unwrap());
+            hts_log_cstr(HTS_LOG_ERROR, c"get_intv".as_ptr(), msg.as_ptr());
         }
         -1
     }
@@ -577,11 +632,11 @@ pub unsafe fn tbx_c_437_tbx_index(
     let fmt;
     if min_shift > 0 {
         n_lvls = (TBX_MAX_SHIFT - min_shift + 2) / 3;
-        fmt = hts_sys::HTS_FMT_CSI as c_int;
+        fmt = HTS_FMT_CSI;
     } else {
         min_shift = 14;
         n_lvls = 5;
-        fmt = hts_sys::HTS_FMT_TBI as c_int;
+        fmt = HTS_FMT_TBI;
     }
 
     let mut first = 0;
@@ -595,7 +650,7 @@ pub unsafe fn tbx_c_437_tbx_index(
             break;
         }
         lineno += 1;
-        if *str_.s == (*tbx).conf.meta_char as c_char && fmt == hts_sys::HTS_FMT_CSI as c_int {
+        if *str_.s == (*tbx).conf.meta_char as c_char && fmt == HTS_FMT_CSI {
             match (*tbx).conf.preset {
                 TBX_SAM => tbx_c_425_adjust_max_ref_len_sam(str_.s, &mut max_ref_len),
                 TBX_VCF => tbx_c_412_adjust_max_ref_len_vcf(str_.s, &mut max_ref_len),
@@ -607,7 +662,7 @@ pub unsafe fn tbx_c_437_tbx_index(
             continue;
         }
         if first == 0 {
-            if fmt == hts_sys::HTS_FMT_CSI as c_int {
+            if fmt == HTS_FMT_CSI {
                 if max_ref_len != 0 {
                     hts_c_2372_hts_adjust_csi_settings(max_ref_len, &mut min_shift, &mut n_lvls);
                 } else {
@@ -721,7 +776,7 @@ pub unsafe fn tbx_c_526_tbx_index_build3(
         bgzf_close(fp);
         return -1;
     }
-    if bgzf_compression(fp) != hts_sys::htsCompression_bgzf as c_int {
+    if bgzf_compression(fp) != HTS_COMPRESSION_BGZF {
         bgzf_close(fp);
         return -2;
     }
@@ -735,9 +790,9 @@ pub unsafe fn tbx_c_526_tbx_index_build3(
         fn_,
         fnidx,
         if min_shift > 0 {
-            hts_sys::HTS_FMT_CSI as c_int
+            HTS_FMT_CSI
         } else {
-            hts_sys::HTS_FMT_TBI as c_int
+            HTS_FMT_TBI
         },
     );
     tbx_c_512_tbx_destroy(tbx);
@@ -796,7 +851,7 @@ pub unsafe fn tbx_c_552_index_load(
     if tbx.is_null() {
         return std::ptr::null_mut();
     }
-    (*tbx).idx = hts_idx_load3(fn_, fnidx, hts_sys::HTS_FMT_TBI as c_int, flags).cast();
+    (*tbx).idx = hts_idx_load3(fn_, fnidx, HTS_FMT_TBI, flags).cast();
     if (*tbx).idx.is_null() {
         libc::free(tbx.cast());
         return std::ptr::null_mut();
@@ -805,12 +860,13 @@ pub unsafe fn tbx_c_552_index_load(
     let mut l_meta = 0u32;
     let meta = hts_c_3084_hts_idx_get_meta((*tbx).idx.cast(), &mut l_meta);
     if meta.is_null() || l_meta < 28 {
-        hts_sys::hts_log(
-            hts_sys::htsLogLevel_HTS_LOG_ERROR,
-            c"index_load".as_ptr(),
-            c"Invalid index header for %s".as_ptr(),
-            if !fnidx.is_null() { fnidx } else { fn_ },
-        );
+        let target = if !fnidx.is_null() { fnidx } else { fn_ };
+        let msg = std::ffi::CString::new(format!(
+            "Invalid index header for {}",
+            std::ffi::CStr::from_ptr(target).to_string_lossy()
+        ))
+        .unwrap();
+        hts_log_cstr(HTS_LOG_ERROR, c"index_load".as_ptr(), msg.as_ptr());
         tbx_c_512_tbx_destroy(tbx);
         return std::ptr::null_mut();
     }
@@ -823,12 +879,13 @@ pub unsafe fn tbx_c_552_index_load(
     (*tbx).conf.line_skip = le_to_i32(meta.add(20));
     let l_nm = le_to_u32(meta.add(24));
     if l_nm > l_meta - 28 {
-        hts_sys::hts_log(
-            hts_sys::htsLogLevel_HTS_LOG_ERROR,
-            c"index_load".as_ptr(),
-            c"Invalid index header for %s".as_ptr(),
-            if !fnidx.is_null() { fnidx } else { fn_ },
-        );
+        let target = if !fnidx.is_null() { fnidx } else { fn_ };
+        let msg = std::ffi::CString::new(format!(
+            "Invalid index header for {}",
+            std::ffi::CStr::from_ptr(target).to_string_lossy()
+        ))
+        .unwrap();
+        hts_log_cstr(HTS_LOG_ERROR, c"index_load".as_ptr(), msg.as_ptr());
         tbx_c_512_tbx_destroy(tbx);
         return std::ptr::null_mut();
     }
@@ -837,10 +894,9 @@ pub unsafe fn tbx_c_552_index_load(
     let mut p = nm;
     while p.offset_from(nm) < l_nm as isize {
         if tbx_c_64_get_tid(tbx, p, 1) < 0 {
-            hts_sys::hts_log(
-                hts_sys::htsLogLevel_HTS_LOG_ERROR,
+            hts_log_cstr(
+                HTS_LOG_ERROR,
                 c"index_load".as_ptr(),
-                c"%s".as_ptr(),
                 libc::strerror(*libc::__errno_location()),
             );
             tbx_c_512_tbx_destroy(tbx);

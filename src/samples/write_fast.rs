@@ -18,7 +18,7 @@ pub unsafe fn samples_write_fast_c_51_main(argc: c_int, argv: *mut *mut c_char) 
     let mut name = [0 as c_char; 256];
 
     if argc > 4 || argc < 3 {
-        samples_write_fast_c_39_print_usage(hts_sys::stdout.cast());
+        samples_write_fast_c_39_print_usage(crate::htslib_rs::c_compat::stdout.cast());
         return ret;
     }
 

@@ -44,15 +44,15 @@ unsafe extern "C" {
 macro_rules! test_hfile_c_38_fail {
     ($format:expr $(, $arg:expr)* $(,)?) => {{
         let err = *crate::htslib_rs::c_compat::__errno_location();
-        libc::fprintf(hts_sys::stderr.cast(), $format $(, $arg)*);
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), $format $(, $arg)*);
         if err != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c": %s".as_ptr(),
                 libc::strerror(err),
             );
         }
-        libc::fprintf(hts_sys::stderr.cast(), c"\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"\n".as_ptr());
         libc::exit(libc::EXIT_FAILURE);
     }};
 }
@@ -72,7 +72,7 @@ pub unsafe fn test_hfile_c_51_check_offset(
     }
 
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"%s offset incorrect: expected %ld but got %ld\n".as_ptr(),
         message,
         off as libc::c_long,
@@ -307,7 +307,7 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
         text = test_hfile_c_62_slurp(buffer.as_ptr());
         if libc::strcmp(original, text) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s differs from vcf.c\n".as_ptr(),
                 buffer.as_ptr(),
             );

@@ -4,9 +4,9 @@ use crate::htslib_rs::vcf;
 
 // original: error (htslib/test/test-bcf_set_variant_type.c:32)
 pub unsafe fn test_test_bcf_set_variant_type_c_32_error(format: *const c_char) -> ! {
-    libc::fputs(format, hts_sys::stderr.cast());
+    libc::fputs(format, crate::htslib_rs::c_compat::stderr.cast());
     if libc::strrchr(format, b'\n' as c_int).is_null() {
-        libc::fputc(b'\n' as c_int, hts_sys::stderr.cast());
+        libc::fputc(b'\n' as c_int, crate::htslib_rs::c_compat::stderr.cast());
     }
     libc::exit(-1);
 }

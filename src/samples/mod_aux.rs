@@ -15,7 +15,7 @@ pub unsafe fn samples_mod_aux_c_50_main(argc: c_int, argv: *mut *mut c_char) -> 
     let mut ret = libc::EXIT_FAILURE;
 
     if argc != 6 {
-        samples_mod_aux_c_38_print_usage(hts_sys::stderr.cast());
+        samples_mod_aux_c_38_print_usage(crate::htslib_rs::c_compat::stderr.cast());
         return ret;
     }
     let inname = *argv.add(1);

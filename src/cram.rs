@@ -14,11 +14,12 @@ use crate::htslib_rs::hfile::{
     htslib_hfile_h_163_hgetc, htslib_hfile_h_247_hread, htslib_hfile_h_292_hwrite,
 };
 use crate::htslib_rs::hts::{
-    cram_fd, hFILE, htsFile, hts_fmt_option, isspace_c, kputc, kputll, kputsn, kputw, kstring_t,
-    toupper_c, BGZF, CRAM_OPT_POS_DELTA, CRAM_OPT_RANGE_NOSEEK, CRAM_OPT_USE_ARITH,
+    cram_fd, hFILE, htsFile, hts_fmt_option, hts_log_cstr, isspace_c, kputc, kputll, kputsn, kputw,
+    kstring_t, toupper_c, BGZF, CRAM_OPT_POS_DELTA, CRAM_OPT_RANGE_NOSEEK, CRAM_OPT_USE_ARITH,
     CRAM_OPT_USE_FQZ, CRAM_OPT_USE_TOK, HTS_FORMAT_CRAM, HTS_IDX_NOCOOR, HTS_IDX_REST,
-    HTS_IDX_START, HTS_OPT_PROFILE, HTS_PROFILE_ARCHIVE, HTS_PROFILE_FAST, HTS_PROFILE_NORMAL,
-    HTS_PROFILE_SMALL,
+    HTS_IDX_START, HTS_LOG_ERROR, HTS_LOG_INFO, HTS_LOG_WARNING, HTS_OPT_PROFILE,
+    HTS_PROFILE_ARCHIVE,
+    HTS_PROFILE_FAST, HTS_PROFILE_NORMAL, HTS_PROFILE_SMALL,
 };
 use crate::htslib_rs::sam::{
     bam1_t, bam_aux_get, bam_cigar_type, bam_destroy1, sam_hdr_destroy, sam_hdr_dup, sam_hdr_t,
@@ -42,6 +43,54 @@ pub type cram_metrics = hts_sys::cram_metrics;
 pub type refs_t = hts_sys::refs_t;
 pub type cram_content_type = hts_sys::cram_content_type;
 pub type cram_block_method = hts_sys::cram_block_method;
+
+// Native cram_block_method enum values (cram/cram_structs.h).
+pub const CRAM_BLOCK_METHOD_RAW: cram_block_method = 0;
+pub const CRAM_BLOCK_METHOD_GZIP: cram_block_method = 1;
+pub const CRAM_BLOCK_METHOD_BZIP2: cram_block_method = 2;
+pub const CRAM_BLOCK_METHOD_LZMA: cram_block_method = 3;
+pub const CRAM_BLOCK_METHOD_RANS: cram_block_method = 4;
+
+// Native cram_content_type enum values (cram/cram_structs.h).
+pub const CRAM_CONTENT_TYPE_FILE_HEADER: cram_content_type = 0;
+pub const CRAM_CONTENT_TYPE_COMPRESSION_HEADER: cram_content_type = 1;
+pub const CRAM_CONTENT_TYPE_MAPPED_SLICE: cram_content_type = 2;
+pub const CRAM_CONTENT_TYPE_EXTERNAL: cram_content_type = 4;
+pub const CRAM_CONTENT_TYPE_CORE: cram_content_type = 5;
+
+// Native hts_fmt_option enum values (htslib/hts.h) not already defined in hts.rs.
+pub const CRAM_OPT_DECODE_MD: hts_fmt_option = 0;
+pub const CRAM_OPT_PREFIX: hts_fmt_option = 1;
+pub const CRAM_OPT_VERBOSITY: hts_fmt_option = 2;
+pub const CRAM_OPT_SEQS_PER_SLICE: hts_fmt_option = 3;
+pub const CRAM_OPT_SLICES_PER_CONTAINER: hts_fmt_option = 4;
+pub const CRAM_OPT_RANGE: hts_fmt_option = 5;
+pub const CRAM_OPT_VERSION: hts_fmt_option = 6;
+pub const CRAM_OPT_EMBED_REF: hts_fmt_option = 7;
+pub const CRAM_OPT_IGNORE_MD5: hts_fmt_option = 8;
+pub const CRAM_OPT_REFERENCE: hts_fmt_option = 9;
+pub const CRAM_OPT_MULTI_SEQ_PER_SLICE: hts_fmt_option = 10;
+pub const CRAM_OPT_NO_REF: hts_fmt_option = 11;
+pub const CRAM_OPT_USE_BZIP2: hts_fmt_option = 12;
+pub const CRAM_OPT_SHARED_REF: hts_fmt_option = 13;
+pub const CRAM_OPT_NTHREADS: hts_fmt_option = 14;
+pub const CRAM_OPT_THREAD_POOL: hts_fmt_option = 15;
+pub const CRAM_OPT_USE_LZMA: hts_fmt_option = 16;
+pub const CRAM_OPT_USE_RANS: hts_fmt_option = 17;
+pub const CRAM_OPT_REQUIRED_FIELDS: hts_fmt_option = 18;
+pub const CRAM_OPT_LOSSY_NAMES: hts_fmt_option = 19;
+pub const CRAM_OPT_BASES_PER_SLICE: hts_fmt_option = 20;
+pub const CRAM_OPT_STORE_MD: hts_fmt_option = 21;
+pub const CRAM_OPT_STORE_NM: hts_fmt_option = 22;
+pub const HTS_OPT_COMPRESSION_LEVEL: hts_fmt_option = 100;
+
+// Native sam_fields bitflags (htslib/sam.h).
+pub const SAM_RNAME: c_uint = 4;
+pub const SAM_POS: c_uint = 8;
+pub const SAM_CIGAR: c_uint = 32;
+
+// Native HTS_IDX_DELIM separator (htslib/hts.h).
+pub const HTS_IDX_DELIM: &[u8; 8] = b"##idx##\0";
 
 #[derive(Clone, Copy)]
 struct cram_ds_list {
@@ -177,12 +226,31 @@ unsafe extern "C" {
     ) -> *mut u8;
     #[link_name = "sam_hdr_fill_hrecs"]
     fn htslib_sam_hdr_fill_hrecs(h: *mut sam_hdr_t) -> c_int;
-    #[link_name = "sam_hrecs_find_key"]
-    fn htslib_sam_hrecs_find_key(
-        type_: *mut c_void,
-        key: *const c_char,
-        prev: *mut *mut c_void,
-    ) -> *mut sam_hrec_tag_layout;
+    #[link_name = "sam_hrecs_find_type_id"]
+    fn htslib_sam_hrecs_find_type_id(
+        hrecs: *mut c_void,
+        type_: *const c_char,
+        id_key: *const c_char,
+        id_value: *const c_char,
+    ) -> *mut c_void;
+    // MD5 helpers (htslib/hts.c) — used by the reference-cache populate path.
+    #[link_name = "hts_md5_init"]
+    fn htslib_hts_md5_init() -> *mut c_void;
+    #[link_name = "hts_md5_update"]
+    fn htslib_hts_md5_update(ctx: *mut c_void, data: *const c_void, size: std::ffi::c_ulong);
+    #[link_name = "hts_md5_final"]
+    fn htslib_hts_md5_final(digest: *mut u8, ctx: *mut c_void);
+    #[link_name = "hts_md5_destroy"]
+    fn htslib_hts_md5_destroy(ctx: *mut c_void);
+    #[link_name = "hts_md5_hex"]
+    fn htslib_hts_md5_hex(hex: *mut c_char, digest: *const u8);
+    // Temporary-file helper (htslib/hts.c) — used when writing into REF_CACHE.
+    #[link_name = "hts_open_tmpfile"]
+    fn htslib_hts_open_tmpfile(
+        fname: *const c_char,
+        mode: *const c_char,
+        tmpname: *mut kstring_t,
+    ) -> *mut hFILE;
     #[link_name = "stdin"]
     static mut HTSLIB_STDIN: *mut libc::FILE;
     #[link_name = "stdout"]
@@ -448,12 +516,12 @@ pub unsafe fn cram_eof(fd: *mut cram_fd) -> c_int {
 pub unsafe fn cram_set_voption(
     fd: *mut cram_fd,
     opt: hts_fmt_option,
-    args: *mut hts_sys::__va_list_tag,
+    args: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> c_int {
     unsafe { cram_cram_io_c_5692_cram_set_voption(fd, opt, args) }
 }
 
-unsafe fn cram_voption_va_arg_word(args: *mut hts_sys::__va_list_tag) -> usize {
+unsafe fn cram_voption_va_arg_word(args: *mut crate::htslib_rs::c_compat::__va_list_tag) -> usize {
     unsafe {
         if args.is_null() {
             return 0;
@@ -473,11 +541,11 @@ unsafe fn cram_voption_va_arg_word(args: *mut hts_sys::__va_list_tag) -> usize {
     }
 }
 
-unsafe fn cram_voption_va_arg_int(args: *mut hts_sys::__va_list_tag) -> c_int {
+unsafe fn cram_voption_va_arg_int(args: *mut crate::htslib_rs::c_compat::__va_list_tag) -> c_int {
     unsafe { cram_voption_va_arg_word(args) as c_int }
 }
 
-unsafe fn cram_voption_va_arg_ptr<T>(args: *mut hts_sys::__va_list_tag) -> *mut T {
+unsafe fn cram_voption_va_arg_ptr<T>(args: *mut crate::htslib_rs::c_compat::__va_list_tag) -> *mut T {
     unsafe { cram_voption_va_arg_word(args) as *mut T }
 }
 
@@ -544,7 +612,7 @@ unsafe fn cram_voption_set_range_noseek(fd: *mut cram_fd, r: *const cram_range_l
             (*fd).range.refid = -2;
         }
         if (*fd).range.refid != -2 {
-            (*fd).required_fields |= hts_sys::sam_fields_SAM_POS;
+            (*fd).required_fields |= crate::htslib_rs::cram::SAM_POS;
         }
         (*fd).ooc = 0;
         (*fd).eof = 0;
@@ -557,7 +625,7 @@ unsafe fn cram_voption_set_range_noseek(fd: *mut cram_fd, r: *const cram_range_l
 pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
     fd: *mut cram_fd,
     opt: hts_fmt_option,
-    args: *mut hts_sys::__va_list_tag,
+    args: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> c_int {
     unsafe {
         if fd.is_null() {
@@ -567,10 +635,10 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
 
         let fdl = fd.cast::<cram_fd_layout>();
         match opt {
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_DECODE_MD => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_DECODE_MD => {
                 (*fdl).decode_md = cram_voption_va_arg_int(args);
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_PREFIX => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_PREFIX => {
                 let prefix = cram_voption_va_arg_ptr::<c_char>(args);
                 free((*fdl).prefix.cast());
                 (*fdl).prefix = if prefix.is_null() {
@@ -582,40 +650,40 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
                     return -1;
                 }
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_VERBOSITY => {}
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_SEQS_PER_SLICE => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_VERBOSITY => {}
+            x if x == crate::htslib_rs::cram::CRAM_OPT_SEQS_PER_SLICE => {
                 (*fdl).seqs_per_slice = cram_voption_va_arg_int(args);
                 if (*fdl).bases_per_slice == CRAM_DEFAULT_BASES_PER_SLICE {
                     (*fdl).bases_per_slice = (*fdl).seqs_per_slice * 500;
                 }
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_BASES_PER_SLICE => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_BASES_PER_SLICE => {
                 (*fdl).bases_per_slice = cram_voption_va_arg_int(args);
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_SLICES_PER_CONTAINER => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_SLICES_PER_CONTAINER => {
                 (*fdl).slices_per_container = cram_voption_va_arg_int(args);
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_EMBED_REF => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_EMBED_REF => {
                 (*fdl).embed_ref = cram_voption_va_arg_int(args);
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_NO_REF => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_NO_REF => {
                 (*fdl).no_ref = cram_voption_va_arg_int(args);
             }
             x if x == CRAM_OPT_POS_DELTA => {
                 (*fdl).ap_delta = cram_voption_va_arg_int(args);
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_IGNORE_MD5 => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_IGNORE_MD5 => {
                 (*fdl).ignore_md5 = cram_voption_va_arg_int(args);
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_LOSSY_NAMES => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_LOSSY_NAMES => {
                 (*fdl).lossy_read_names = cram_voption_va_arg_int(args);
                 (*fdl).tlen_approx = (*fdl).lossy_read_names;
                 (*fdl).tlen_zero = (*fdl).lossy_read_names;
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_USE_BZIP2 => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_USE_BZIP2 => {
                 (*fdl).use_bz2 = cram_voption_va_arg_int(args);
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_USE_RANS => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_USE_RANS => {
                 (*fdl).use_rans = cram_voption_va_arg_int(args);
             }
             x if x == CRAM_OPT_USE_TOK => {
@@ -627,10 +695,10 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
             x if x == CRAM_OPT_USE_ARITH => {
                 (*fdl).use_arith = cram_voption_va_arg_int(args);
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_USE_LZMA => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_USE_LZMA => {
                 (*fdl).use_lzma = cram_voption_va_arg_int(args);
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_SHARED_REF => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_SHARED_REF => {
                 (*fdl).shared_ref = 1;
                 let refs = cram_voption_va_arg_ptr::<hts_sys::refs_t>(args);
                 if refs != (*fdl).refs {
@@ -643,8 +711,10 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
                     }
                 }
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_RANGE => {
-                return hts_sys::cram_set_voption(fd.cast(), opt, args);
+            x if x == crate::htslib_rs::cram::CRAM_OPT_RANGE => {
+                // Native va_list element is layout-identical to the C one; cast
+                // the pointer when forwarding to the C library.
+                return hts_sys::cram_set_voption(fd.cast(), opt, args.cast());
             }
             x if x == CRAM_OPT_RANGE_NOSEEK => {
                 return cram_voption_set_range_noseek(
@@ -652,21 +722,21 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
                     cram_voption_va_arg_ptr::<cram_range_layout>(args),
                 );
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_REFERENCE => {
                 return cram_cram_io_c_3597_cram_load_reference(
                     fd,
                     cram_voption_va_arg_ptr::<c_char>(args),
                 );
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_VERSION => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_VERSION => {
                 return cram_voption_set_version(fd, cram_voption_va_arg_ptr::<c_char>(args));
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_MULTI_SEQ_PER_SLICE => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_MULTI_SEQ_PER_SLICE => {
                 let multi_seq = cram_voption_va_arg_int(args);
                 (*fdl).multi_seq = multi_seq;
                 (*fdl).multi_seq_user = multi_seq;
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_NTHREADS => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_NTHREADS => {
                 let nthreads = cram_voption_va_arg_int(args);
                 if !(*fdl).pool.is_null() {
                     return -2;
@@ -682,7 +752,7 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
                     (*fdl).own_pool = 1;
                 }
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_THREAD_POOL => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_THREAD_POOL => {
                 let p = cram_voption_va_arg_ptr::<hts_sys::htsThreadPool>(args);
                 if !(*fdl).pool.is_null() {
                     return -2;
@@ -703,19 +773,19 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
                 (*fdl).shared_ref = 1;
                 (*fdl).own_pool = 0;
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_REQUIRED_FIELDS => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_REQUIRED_FIELDS => {
                 (*fdl).required_fields = cram_voption_va_arg_int(args) as c_uint;
                 if (*fdl).range.refid != -2 {
-                    (*fdl).required_fields |= hts_sys::sam_fields_SAM_POS;
+                    (*fdl).required_fields |= crate::htslib_rs::cram::SAM_POS;
                 }
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_STORE_MD => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_STORE_MD => {
                 (*fdl).store_md = cram_voption_va_arg_int(args);
             }
-            x if x == hts_sys::hts_fmt_option_CRAM_OPT_STORE_NM => {
+            x if x == crate::htslib_rs::cram::CRAM_OPT_STORE_NM => {
                 (*fdl).store_nm = cram_voption_va_arg_int(args);
             }
-            x if x == hts_sys::hts_fmt_option_HTS_OPT_COMPRESSION_LEVEL => {
+            x if x == crate::htslib_rs::cram::HTS_OPT_COMPRESSION_LEVEL => {
                 (*fdl).level = cram_voption_va_arg_int(args);
             }
             x if x == HTS_OPT_PROFILE => {
@@ -1354,7 +1424,7 @@ pub unsafe fn cram_cram_stats_c_80_cram_stats_del(st: *mut c_void, val: c_int) {
 
 pub unsafe fn cram_cram_stats_c_105_cram_stats_dump(st: *mut c_void) {
     let st = st.cast::<cram_stats_layout>();
-    libc::fprintf(hts_sys::stderr.cast(), c"cram_stats:\n".as_ptr());
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"cram_stats:\n".as_ptr());
 
     for i in 0..1024usize {
         let freq = (*st).freqs[i];
@@ -1362,7 +1432,7 @@ pub unsafe fn cram_cram_stats_c_105_cram_stats_dump(st: *mut c_void) {
             continue;
         }
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"\t%d\t%d\n".as_ptr(),
             i as c_int,
             freq,
@@ -1377,7 +1447,7 @@ pub unsafe fn cram_cram_stats_c_105_cram_stats_dump(st: *mut c_void) {
                 continue;
             }
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"\t%lld\t%d\n".as_ptr(),
                 *(*h).keys.add(k as usize) as libc::c_longlong,
                 *(*h).vals.add(k as usize),
@@ -2223,7 +2293,7 @@ pub unsafe fn cram_cram_io_h_183_cram_get_block_by_id(
         let b = *(*slice).block.add(i as usize);
         if !b.is_null()
             && (*(b.cast::<cram_block_layout>())).content_type
-                == hts_sys::cram_content_type_EXTERNAL
+                == crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL
             && (*(b.cast::<cram_block_layout>())).content_id == id
         {
             return b;
@@ -3373,8 +3443,8 @@ pub unsafe fn cram_cram_io_c_1388_cram_new_block(
     if b.is_null() {
         return std::ptr::null_mut();
     }
-    (*b).method = hts_sys::cram_block_method_RAW;
-    (*b).orig_method = hts_sys::cram_block_method_RAW;
+    (*b).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
+    (*b).orig_method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
     (*b).content_type = content_type;
     (*b).content_id = content_id;
     (*b).comp_size = 0;
@@ -4715,7 +4785,7 @@ pub unsafe fn cram_cram_io_c_1414_cram_read_block(
         }
     }
 
-    let data_len = if (*b).method == hts_sys::cram_block_method_RAW {
+    let data_len = if (*b).method == crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW {
         if (*b).uncomp_size < 0 || (*b).comp_size != (*b).uncomp_size {
             free(b.cast());
             return std::ptr::null_mut();
@@ -4841,7 +4911,7 @@ pub unsafe fn cram_cram_io_c_1511_cram_write_block(
         return -1;
     }
 
-    let data_len = if (*b).method == hts_sys::cram_block_method_RAW {
+    let data_len = if (*b).method == crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW {
         (*b).uncomp_size
     } else {
         (*b).comp_size
@@ -4889,7 +4959,7 @@ pub unsafe fn cram_cram_io_c_1511_cram_write_block(
             }
         }
         let mut crc = crate::htslib_rs::bgzf::hts_crc32(0, dat.as_ptr().cast(), cp);
-        let data_len = if (*b).method == hts_sys::cram_block_method_RAW {
+        let data_len = if (*b).method == crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW {
             (*b).uncomp_size
         } else {
             (*b).comp_size
@@ -4932,13 +5002,13 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
     }
 
     if (*b).uncomp_size == 0 {
-        (*b).method = hts_sys::cram_block_method_RAW;
+        (*b).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
         return 0;
     }
 
     match (*b).method {
-        hts_sys::cram_block_method_RAW => 0,
-        hts_sys::cram_block_method_GZIP => {
+        crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW => 0,
+        crate::htslib_rs::cram::CRAM_BLOCK_METHOD_GZIP => {
             let mut uncomp_size = (*b).uncomp_size as usize;
             let uncomp = htslib_zlib_mem_inflate(
                 (*b).data.cast::<c_char>(),
@@ -4955,12 +5025,12 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
             free((*b).data.cast());
             (*b).data = uncomp.cast();
             (*b).alloc = uncomp_size;
-            (*b).method = hts_sys::cram_block_method_RAW;
+            (*b).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
             0
         }
-        hts_sys::cram_block_method_BZIP2 => -1,
-        hts_sys::cram_block_method_LZMA => -1,
-        hts_sys::cram_block_method_RANS => {
+        crate::htslib_rs::cram::CRAM_BLOCK_METHOD_BZIP2 => -1,
+        crate::htslib_rs::cram::CRAM_BLOCK_METHOD_LZMA => -1,
+        crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RANS => {
             let usize = (*b).uncomp_size as c_uint;
             let mut usize2 = 0 as c_uint;
             let uncomp = rans_uncompress((*b).data, (*b).comp_size as c_uint, &mut usize2);
@@ -4974,7 +5044,7 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
             free((*b).data.cast());
             (*b).data = uncomp;
             (*b).alloc = usize2 as usize;
-            (*b).method = hts_sys::cram_block_method_RAW;
+            (*b).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
             (*b).uncomp_size = usize2 as i32;
             0
         }
@@ -4993,7 +5063,7 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
             free((*b).data.cast());
             (*b).data = uncomp.cast();
             (*b).alloc = uncomp_size;
-            (*b).method = hts_sys::cram_block_method_RAW;
+            (*b).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
             (*b).uncomp_size = uncomp_size as i32;
             0
         }
@@ -5012,7 +5082,7 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
             free((*b).data.cast());
             (*b).data = uncomp;
             (*b).alloc = usize2 as usize;
-            (*b).method = hts_sys::cram_block_method_RAW;
+            (*b).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
             (*b).uncomp_size = usize2 as i32;
             0
         }
@@ -5036,7 +5106,7 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
             free((*b).data.cast());
             (*b).data = uncomp;
             (*b).alloc = usize2 as usize;
-            (*b).method = hts_sys::cram_block_method_RAW;
+            (*b).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
             (*b).uncomp_size = usize2 as i32;
             0
         }
@@ -5047,7 +5117,7 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
                 return -1;
             }
             (*b).orig_method = 8;
-            (*b).method = hts_sys::cram_block_method_RAW;
+            (*b).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
             free((*b).data.cast());
             (*b).data = cp;
             (*b).alloc = out_len as usize;
@@ -5067,7 +5137,7 @@ pub unsafe fn cram_cram_io_c_2327_cram_new_metrics() -> *mut hts_sys::cram_metri
 
     (*m).trial = 2;
     (*m).next_trial = 35;
-    (*m).method = hts_sys::cram_block_method_RAW;
+    (*m).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
     (*m).strat = 0;
     (*m).revised_method = 0;
     (*m).unpackable = 0;
@@ -5192,12 +5262,12 @@ pub unsafe fn cram_cram_io_c_2503_bgzf_open_ref(
     }
 
     if ((*fp).bitfields & (1 << 30)) != 0 && bgzf_index_load(fp, fn_, c".gzi".as_ptr()) < 0 {
-        hts_sys::hts_log(
-            hts_sys::htsLogLevel_HTS_LOG_ERROR,
-            c"bgzf_open_ref".as_ptr(),
-            c"Unable to load .gzi index '%s.gzi'".as_ptr(),
-            fn_,
-        );
+        let msg = std::ffi::CString::new(format!(
+            "Unable to load .gzi index '{}.gzi'",
+            CStr::from_ptr(fn_).to_string_lossy()
+        ))
+        .unwrap();
+        hts_log_cstr(HTS_LOG_ERROR, c"bgzf_open_ref".as_ptr(), msg.as_ptr());
         bgzf_close(fp);
         return std::ptr::null_mut();
     }
@@ -5284,12 +5354,12 @@ pub unsafe fn cram_cram_io_c_2541_refs_load_fai(
 
     (*r).fp = cram_cram_io_c_2503_bgzf_open_ref((*r).fn_, c"r".as_ptr().cast_mut(), 0);
     if (*r).fp.is_null() {
-        hts_sys::hts_log(
-            hts_sys::htsLogLevel_HTS_LOG_ERROR,
-            c"refs_load_fai".as_ptr(),
-            c"Failed to open reference file '%s'".as_ptr(),
-            (*r).fn_,
-        );
+        let msg = std::ffi::CString::new(format!(
+            "Failed to open reference file '{}'",
+            CStr::from_ptr((*r).fn_).to_string_lossy()
+        ))
+        .unwrap();
+        hts_log_cstr(HTS_LOG_ERROR, c"refs_load_fai".as_ptr(), msg.as_ptr());
         if r_orig.is_null() {
             cram_cram_io_c_2427_refs_free(r.cast());
         }
@@ -5298,12 +5368,12 @@ pub unsafe fn cram_cram_io_c_2541_refs_load_fai(
 
     let fp = hopen(fai_fn.as_ptr(), c"r".as_ptr());
     if fp.is_null() {
-        hts_sys::hts_log(
-            hts_sys::htsLogLevel_HTS_LOG_ERROR,
-            c"refs_load_fai".as_ptr(),
-            c"Failed to open index file '%s'".as_ptr(),
-            fai_fn.as_ptr(),
-        );
+        let msg = std::ffi::CString::new(format!(
+            "Failed to open index file '{}'",
+            CStr::from_ptr(fai_fn.as_ptr()).to_string_lossy()
+        ))
+        .unwrap();
+        hts_log_cstr(HTS_LOG_ERROR, c"refs_load_fai".as_ptr(), msg.as_ptr());
         if is_err != 0 {
             libc::perror(fai_fn.as_ptr());
         }
@@ -5605,14 +5675,14 @@ pub unsafe fn cram_cram_io_c_2693_sanitise_SQ_lines(fd: *mut cram_fd) {
                 libc::strcmp((*r).name, (*(*hrecs).ref_.add(iref as usize)).name),
                 0
             );
-            hts_sys::hts_log(
-                hts_sys::htsLogLevel_HTS_LOG_WARNING,
-                c"sanitise_SQ_lines".as_ptr(),
-                c"Header @SQ length mismatch for ref %s, %ld vs %d".as_ptr(),
-                (*r).name,
+            let msg = std::ffi::CString::new(format!(
+                "Header @SQ length mismatch for ref {}, {} vs {}",
+                CStr::from_ptr((*r).name).to_string_lossy(),
                 (*(*hrecs).ref_.add(iref as usize)).len,
                 (*r).length as c_int,
-            );
+            ))
+            .unwrap();
+            hts_log_cstr(HTS_LOG_WARNING, c"sanitise_SQ_lines".as_ptr(), msg.as_ptr());
             (*(*hrecs).ref_.add(iref as usize)).len = (*r).length;
         }
     }
@@ -5672,12 +5742,12 @@ pub unsafe fn cram_cram_io_c_2737_refs2id(r: *mut refs_t, hdr: *mut sam_hdr_t) -
         if k != (*h).n_buckets {
             *(*r).ref_id.add(iref as usize) = *(*h).vals.add(k as usize);
         } else {
-            hts_sys::hts_log(
-                hts_sys::htsLogLevel_HTS_LOG_WARNING,
-                c"refs2id".as_ptr(),
-                c"Unable to find ref name '%s'".as_ptr(),
-                name,
-            );
+            let msg = std::ffi::CString::new(format!(
+                "Unable to find ref name '{}'",
+                CStr::from_ptr(name).to_string_lossy()
+            ))
+            .unwrap();
+            hts_log_cstr(HTS_LOG_WARNING, c"refs2id".as_ptr(), msg.as_ptr());
         }
     }
 
@@ -5800,12 +5870,22 @@ pub unsafe fn cram_cram_io_c_2768_refs_from_header(fd: *mut cram_fd) -> c_int {
         (*e).length = 0;
 
         if !(*h_ref).ty.is_null() {
-            let tag = htslib_sam_hrecs_find_key((*h_ref).ty, c"M5".as_ptr(), std::ptr::null_mut());
+            let tag = crate::htslib_rs::sam::sam_hrecs_find_key(
+                (*h_ref).ty.cast(),
+                c"M5".as_ptr(),
+                std::ptr::null_mut(),
+            )
+            .cast::<sam_hrec_tag_layout>();
             if !tag.is_null() {
                 (*e).fn_ = cram_string_alloc_c_149_string_dup((*r).pool, (*tag).str_.add(3));
             }
 
-            let tag = htslib_sam_hrecs_find_key((*h_ref).ty, c"LN".as_ptr(), std::ptr::null_mut());
+            let tag = crate::htslib_rs::sam::sam_hrecs_find_key(
+                (*h_ref).ty.cast(),
+                c"LN".as_ptr(),
+                std::ptr::null_mut(),
+            )
+            .cast::<sam_hrec_tag_layout>();
             if !tag.is_null() {
                 (*e).ln_length = libc::strtoll((*tag).str_.add(3), std::ptr::null_mut(), 0);
                 if (*e).ln_length < 0 {
@@ -6091,8 +6171,8 @@ pub unsafe fn cram_cram_io_c_3228_load_ref_portion(
         }
 
         if j != end - start + 1 {
-            hts_sys::hts_log(
-                hts_sys::htsLogLevel_HTS_LOG_ERROR,
+            hts_log_cstr(
+                HTS_LOG_ERROR,
                 c"load_ref_portion".as_ptr(),
                 c"Malformed reference file".as_ptr(),
             );
@@ -6159,6 +6239,450 @@ pub unsafe fn cram_cram_io_c_3323_cram_ref_load(
     (*e).count += 1;
 
     e.cast()
+}
+
+// original: cram_populate_ref (htslib/cram/cram_io.c:2979)
+//
+// Locates the on-disk reference for ref id `id` and, where possible, fills in
+// the ref_entry so that cram_get_ref can read the bases via load_ref_portion.
+//
+// Mirrors the HAVE_MMAP-defined build of htslib (the default): the
+// `#ifndef HAVE_MMAP` REF_PATH `find_path` shortcut is omitted, and we rely on
+// the native `open_path_mfile` to load full sequences from REF_PATH/REF_CACHE.
+pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
+    fd: *mut cram_fd,
+    id: c_int,
+    r: *mut c_void,
+) -> c_int {
+    let fdl = fd.cast::<cram_fd_layout>();
+    let r = r.cast::<ref_entry_layout>();
+    let ref_path = libc::getenv(c"REF_PATH".as_ptr());
+    let local_cache = libc::getenv(c"REF_CACHE".as_ptr());
+    let mut path = [0i8; libc::PATH_MAX as usize];
+    let mut path_tmp: kstring_t = std::mem::zeroed();
+    let mut local_path = 0i32;
+
+    {
+        let msg = std::ffi::CString::new(format!(
+            "Running cram_populate_ref on fd {:p}, id {}",
+            fd, id
+        ))
+        .unwrap();
+        hts_log_cstr(HTS_LOG_INFO, c"cram_populate_ref".as_ptr(), msg.as_ptr());
+    }
+
+    if (*r).name.is_null() {
+        return -1;
+    }
+
+    let hrecs = (*(*fdl).header.cast::<sam_hdr_t>()).hrecs;
+    let ty = htslib_sam_hrecs_find_type_id(
+        hrecs.cast(),
+        c"SQ".as_ptr(),
+        c"SN".as_ptr(),
+        (*r).name,
+    );
+    if ty.is_null() {
+        return -1;
+    }
+
+    let m5tag = crate::htslib_rs::sam::sam_hrecs_find_key(
+        ty.cast(),
+        c"M5".as_ptr(),
+        std::ptr::null_mut(),
+    )
+    .cast::<sam_hrec_tag_layout>();
+
+    // `'no_M5` block models C's `goto no_M5;` target.
+    let from_m5: bool = !m5tag.is_null();
+    if from_m5 {
+        let m5 = (*m5tag).str_.add(3);
+        {
+            let msg = std::ffi::CString::new(format!(
+                "Querying ref {}",
+                CStr::from_ptr(m5).to_string_lossy()
+            ))
+            .unwrap();
+            hts_log_cstr(HTS_LOG_INFO, c"cram_populate_ref".as_ptr(), msg.as_ptr());
+        }
+
+        // Use cache if available.
+        if !local_cache.is_null() && *local_cache != 0 {
+            let mut sb = std::mem::MaybeUninit::<libc::stat>::uninit();
+            if cram_cram_io_c_2884_expand_cache_path(path.as_mut_ptr(), local_cache, m5) == 0
+                && libc::stat(path.as_ptr(), sb.as_mut_ptr()) == 0
+            {
+                local_path = 1;
+            }
+        }
+
+        // Found via REF_CACHE: open it and fall back to cram_get_ref().
+        if local_path != 0 {
+            let mut sb = std::mem::MaybeUninit::<libc::stat>::uninit();
+            if libc::stat(path.as_ptr(), sb.as_mut_ptr()) == 0 {
+                let sb = sb.assume_init();
+                if (sb.st_mode & libc::S_IFMT) == libc::S_IFREG {
+                    let fp = bgzf_open(path.as_ptr(), c"r".as_ptr());
+                    if !fp.is_null() {
+                        (*r).length = sb.st_size as i64;
+                        (*r).offset = 0;
+                        (*r).line_length = 0;
+                        (*r).bases_per_line = 0;
+                        (*r).fn_ = cram_string_alloc_c_149_string_dup(
+                            (*(*fdl).refs.cast::<refs_t_layout>()).pool,
+                            path.as_ptr(),
+                        );
+                        let refs = (*fdl).refs.cast::<refs_t_layout>();
+                        if !(*refs).fp.is_null() && bgzf_close((*refs).fp) != 0 {
+                            return -1;
+                        }
+                        (*refs).fp = fp;
+                        (*refs).fn_ = (*r).fn_;
+                        (*r).is_md5 = 1;
+                        (*r).validated_md5 = 1;
+                        return 0;
+                    }
+                }
+            }
+        }
+
+        // Otherwise search full REF_PATH; slower as it loads the entire file.
+        let mut is_local = 0i32;
+        let mf = cram_open_trace_file_c_352_open_path_mfile(
+            m5,
+            ref_path,
+            std::ptr::null_mut(),
+            &mut is_local,
+        );
+        if !mf.is_null() {
+            let mut sz: usize = 0;
+            let stolen = cram_mFILE_c_428_mfsteal(mf, &mut sz).cast::<c_char>();
+            if !stolen.is_null() {
+                (*r).seq = stolen;
+                (*r).mf = std::ptr::null_mut();
+            } else {
+                // Couldn't detach; keep mf around.
+                (*r).seq = (*mf).data;
+                (*r).mf = mf;
+            }
+            (*r).length = sz as i64;
+            (*r).is_md5 = 1;
+            (*r).validated_md5 = 1;
+
+            // Populate the local disk cache if required.
+            if is_local == 0 && !local_cache.is_null() && *local_cache != 0 {
+                if cram_cram_io_c_2884_expand_cache_path(path.as_mut_ptr(), local_cache, m5) < 0 {
+                    return 0; // Not fatal - we have the data already.
+                }
+                {
+                    let msg = std::ffi::CString::new(format!(
+                        "Writing cache file '{}'",
+                        CStr::from_ptr(path.as_ptr()).to_string_lossy()
+                    ))
+                    .unwrap();
+                    hts_log_cstr(HTS_LOG_INFO, c"cram_populate_ref".as_ptr(), msg.as_ptr());
+                }
+                cram_cram_io_c_2947_mkdir_prefix(path.as_mut_ptr(), 0o1777);
+
+                let fp = htslib_hts_open_tmpfile(path.as_ptr(), c"wx".as_ptr(), &mut path_tmp);
+                if fp.is_null() {
+                    libc::perror(path_tmp.s);
+                    free(path_tmp.s.cast());
+                    return 0; // Not fatal.
+                }
+
+                // Verify md5sum.
+                let md5 = htslib_hts_md5_init();
+                if md5.is_null() {
+                    hclose_abruptly(fp);
+                    libc::unlink(path_tmp.s);
+                    free(path_tmp.s.cast());
+                    return -1;
+                }
+                let mut md5_buf1 = [0u8; 16];
+                let mut md5_buf2 = [0i8; 33];
+                htslib_hts_md5_update(md5, (*r).seq.cast(), (*r).length as std::ffi::c_ulong);
+                htslib_hts_md5_final(md5_buf1.as_mut_ptr(), md5);
+                htslib_hts_md5_destroy(md5);
+                htslib_hts_md5_hex(md5_buf2.as_mut_ptr(), md5_buf1.as_ptr());
+
+                if libc::strncmp(m5, md5_buf2.as_ptr(), 32) != 0 {
+                    hts_log_cstr(
+                        HTS_LOG_ERROR,
+                        c"cram_populate_ref".as_ptr(),
+                        c"Mismatching md5sum for downloaded reference".as_ptr(),
+                    );
+                    hclose_abruptly(fp);
+                    libc::unlink(path_tmp.s);
+                    free(path_tmp.s.cast());
+                    return -1;
+                }
+
+                let length_written =
+                    htslib_hfile_h_292_hwrite(fp, (*r).seq.cast(), (*r).length as usize);
+                if hclose(fp) < 0
+                    || length_written != (*r).length as isize
+                    || libc::chmod(path_tmp.s, 0o444) < 0
+                    || libc::rename(path_tmp.s, path.as_ptr()) < 0
+                {
+                    let msg = std::ffi::CString::new(format!(
+                        "Creating reference at {} failed: {}",
+                        CStr::from_ptr(path.as_ptr()).to_string_lossy(),
+                        CStr::from_ptr(libc::strerror(*__errno_location())).to_string_lossy()
+                    ))
+                    .unwrap();
+                    hts_log_cstr(HTS_LOG_ERROR, c"cram_populate_ref".as_ptr(), msg.as_ptr());
+                    libc::unlink(path_tmp.s);
+                }
+            }
+
+            free(path_tmp.s.cast());
+            return 0;
+        }
+    }
+
+    // no_M5: failed to find in search path or M5 cache; try @SQ UR: tag.
+    let ur_tag = crate::htslib_rs::sam::sam_hrecs_find_key(
+        ty.cast(),
+        c"UR".as_ptr(),
+        std::ptr::null_mut(),
+    )
+    .cast::<sam_hrec_tag_layout>();
+    if ur_tag.is_null() {
+        return -1;
+    }
+
+    let ur = (*ur_tag).str_.add(3);
+    if !libc::strstr(ur, c"://".as_ptr()).is_null()
+        && libc::strncmp(ur, c"file:".as_ptr(), 5) != 0
+    {
+        hts_log_cstr(
+            HTS_LOG_ERROR,
+            c"cram_populate_ref".as_ptr(),
+            c"UR tags pointing to remote files are not supported".as_ptr(),
+        );
+        return -1;
+    }
+
+    let fn_ = if libc::strncmp(ur, c"file:".as_ptr(), 5) == 0 {
+        (*ur_tag).str_.add(8)
+    } else {
+        ur
+    };
+
+    let refs0 = (*fdl).refs.cast::<refs_t_layout>();
+    if !(*refs0).fp.is_null() {
+        if bgzf_close((*refs0).fp) != 0 {
+            return -1;
+        }
+        (*refs0).fp = std::ptr::null_mut();
+    }
+
+    let refs = cram_cram_io_c_2541_refs_load_fai((*fdl).refs, fn_, 0);
+    if refs.is_null() {
+        return -1;
+    }
+    cram_cram_io_c_2693_sanitise_SQ_lines(fd);
+
+    (*fdl).refs = refs.cast();
+    let refsl = (*fdl).refs.cast::<refs_t_layout>();
+    if !(*refsl).fp.is_null() {
+        if bgzf_close((*refsl).fp) != 0 {
+            return -1;
+        }
+        (*refsl).fp = std::ptr::null_mut();
+    }
+
+    if (*refsl).fn_.is_null() {
+        return -1;
+    }
+
+    if cram_cram_io_c_2737_refs2id((*fdl).refs, (*fdl).header.cast()) == -1 {
+        return -1;
+    }
+    if (*refsl).ref_id.is_null() || (*(*refsl).ref_id.add(id as usize)).is_null() {
+        return -1;
+    }
+
+    // Local copy already, so fall back to cram_get_ref().
+    0
+}
+
+// original: cram_get_ref (htslib/cram/cram_io.c:3411)
+pub unsafe fn cram_cram_io_c_3409_cram_get_ref(
+    fd: *mut cram_fd,
+    id: c_int,
+    mut start: i64,
+    mut end: i64,
+) -> *mut c_char {
+    let fdl = fd.cast::<cram_fd_layout>();
+    let ostart = start;
+
+    if id == -1 || start < 1 {
+        return std::ptr::null_mut();
+    }
+
+    libc::pthread_mutex_lock(&mut (*fdl).ref_lock);
+
+    // Unsorted data implies we want to fetch an entire reference at a time.
+    if (*fdl).unsorted != 0 {
+        (*fdl).shared_ref = 1;
+    }
+
+    // Sanity checking: does this ID exist?
+    let refs = (*fdl).refs.cast::<refs_t_layout>();
+    if (*fdl).refs.is_null()
+        || id < 0
+        || id >= (*refs).nref
+        || (*(*refs).ref_id.add(id as usize)).is_null()
+    {
+        let msg =
+            std::ffi::CString::new(format!("No reference found for id {}", id)).unwrap();
+        hts_log_cstr(HTS_LOG_ERROR, c"cram_get_ref".as_ptr(), msg.as_ptr());
+        libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+        return std::ptr::null_mut();
+    }
+
+    let mut r = *(*refs).ref_id.add(id as usize);
+
+    libc::pthread_mutex_lock(&mut (*refs).lock);
+    if (*r).length == 0 {
+        if !(*fdl).ref_fn.is_null() {
+            let msg = std::ffi::CString::new(format!(
+                "Reference file given, but ref '{}' not present",
+                CStr::from_ptr((*r).name).to_string_lossy()
+            ))
+            .unwrap();
+            hts_log_cstr(HTS_LOG_WARNING, c"cram_get_ref".as_ptr(), msg.as_ptr());
+        }
+        if cram_cram_io_c_2977_cram_populate_ref(fd, id, r.cast()) == -1 {
+            let msg = std::ffi::CString::new(format!(
+                "Failed to populate reference \"{}\"",
+                CStr::from_ptr((*r).name).to_string_lossy()
+            ))
+            .unwrap();
+            hts_log_cstr(HTS_LOG_WARNING, c"cram_get_ref".as_ptr(), msg.as_ptr());
+            hts_log_cstr(
+                HTS_LOG_WARNING,
+                c"cram_get_ref".as_ptr(),
+                c"See https://www.htslib.org/doc/reference_seqs.html for further suggestions"
+                    .as_ptr(),
+            );
+            libc::pthread_mutex_unlock(&mut (*refs).lock);
+            libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+            return std::ptr::null_mut();
+        }
+        // cram_populate_ref may have replaced fd->refs.
+        let refs = (*fdl).refs.cast::<refs_t_layout>();
+        r = *(*refs).ref_id.add(id as usize);
+        if (*fdl).unsorted != 0 {
+            cram_cram_io_c_3169_cram_ref_incr_locked((*fdl).refs, id);
+        }
+    }
+
+    // Re-read refs in case cram_populate_ref reassigned fd->refs.
+    let refs = (*fdl).refs.cast::<refs_t_layout>();
+
+    if end < 1 {
+        end = (*r).length;
+    }
+    if end >= (*r).length {
+        end = (*r).length;
+    }
+
+    if (end - start) as f64 >= 0.5 * (*r).length as f64 || (*fdl).shared_ref != 0 {
+        start = 1;
+        end = (*r).length;
+    }
+
+    if (*fdl).shared_ref != 0 || !(*r).seq.is_null() || (start == 1 && end == (*r).length) {
+        let cp: *mut c_char;
+        if id >= 0 {
+            if !(*r).seq.is_null() {
+                cram_cram_io_c_3169_cram_ref_incr_locked((*fdl).refs, id);
+            } else {
+                let e = cram_cram_io_c_3323_cram_ref_load((*fdl).refs, id, (*r).is_md5);
+                if e.is_null() {
+                    libc::pthread_mutex_unlock(&mut (*refs).lock);
+                    libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+                    return std::ptr::null_mut();
+                }
+                if (*fdl).unsorted != 0 {
+                    cram_cram_io_c_3169_cram_ref_incr_locked((*fdl).refs, id);
+                }
+            }
+
+            (*fdl).ref_ = std::ptr::null_mut();
+            (*fdl).ref_start = 1;
+            (*fdl).ref_end = (*r).length;
+            (*fdl).ref_id = id;
+
+            cp = (*(*(*refs).ref_id.add(id as usize))).seq.add((ostart - 1) as usize);
+        } else {
+            (*fdl).ref_ = std::ptr::null_mut();
+            cp = std::ptr::null_mut();
+        }
+
+        libc::pthread_mutex_unlock(&mut (*refs).lock);
+        libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+        return cp;
+    }
+
+    // Not sharing, no cached copy, only a small portion requested.
+
+    // Unmapped ref ID.
+    if id < 0 || (*refs).fn_.is_null() {
+        if !(*fdl).ref_free.is_null() {
+            free((*fdl).ref_free.cast());
+            (*fdl).ref_free = std::ptr::null_mut();
+        }
+        (*fdl).ref_ = std::ptr::null_mut();
+        (*fdl).ref_id = id;
+        libc::pthread_mutex_unlock(&mut (*refs).lock);
+        libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+        return std::ptr::null_mut();
+    }
+
+    // Open file if it's not already the current open reference.
+    if libc::strcmp((*refs).fn_, (*r).fn_) != 0 || (*refs).fp.is_null() {
+        if !(*refs).fp.is_null() && bgzf_close((*refs).fp) != 0 {
+            return std::ptr::null_mut();
+        }
+        (*refs).fn_ = (*r).fn_;
+        (*refs).fp = cram_cram_io_c_2503_bgzf_open_ref((*refs).fn_, c"r".as_ptr().cast_mut(), (*r).is_md5);
+        if (*refs).fp.is_null() {
+            libc::pthread_mutex_unlock(&mut (*refs).lock);
+            libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+            return std::ptr::null_mut();
+        }
+    }
+
+    let loaded = cram_cram_io_c_3228_load_ref_portion((*refs).fp, r.cast(), start, end);
+    if loaded.is_null() {
+        libc::pthread_mutex_unlock(&mut (*refs).lock);
+        libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+        return std::ptr::null_mut();
+    }
+    (*fdl).ref_ = loaded;
+
+    if !(*fdl).ref_free.is_null() {
+        free((*fdl).ref_free.cast());
+    }
+
+    (*fdl).ref_id = id;
+    (*fdl).ref_start = start;
+    (*fdl).ref_end = end;
+    (*fdl).ref_free = (*fdl).ref_;
+    let seq = (*fdl).ref_;
+
+    libc::pthread_mutex_unlock(&mut (*refs).lock);
+    libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+
+    if seq.is_null() {
+        std::ptr::null_mut()
+    } else {
+        seq.add((ostart - start) as usize)
+    }
 }
 
 pub unsafe fn cram_cram_io_c_3597_cram_load_reference(
@@ -6232,7 +6756,7 @@ pub unsafe fn cram_cram_io_c_1490_cram_block_size(b: *mut hts_sys::cram_block) -
         + itf8_len((*b).comp_size as i64)
         + itf8_len((*b).uncomp_size as i64)
         + 4;
-    let payload = if (*b).method == hts_sys::cram_block_method_RAW {
+    let payload = if (*b).method == crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW {
         (*b).uncomp_size
     } else {
         (*b).comp_size
@@ -6251,7 +6775,7 @@ pub unsafe fn cram_cram_io_c_4330_cram_new_compression_header(
         return std::ptr::null_mut();
     }
 
-    (*hdr).td_blk = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_CORE, 0);
+    (*hdr).td_blk = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE, 0);
     if (*hdr).td_blk.is_null() {
         free(hdr.cast());
         return std::ptr::null_mut();
@@ -7077,7 +7601,7 @@ pub unsafe fn cram_cram_codecs_c_1377_cram_xpack_decode_expand_char(
         return -1;
     }
 
-    let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_FILE_HEADER, 0);
+    let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER, 0);
     if b.is_null() {
         return -1;
     }
@@ -7422,7 +7946,7 @@ pub unsafe fn cram_cram_codecs_c_1537_cram_xpack_encode_store(
     }
 
     let tc = (*c).xpack.sub_codec;
-    let tb = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_FILE_HEADER, 0);
+    let tb = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER, 0);
     if tb.is_null() {
         return -1;
     }
@@ -7782,7 +8306,7 @@ pub unsafe fn cram_cram_codecs_c_1781_cram_xdelta_decode_init(
 
 pub unsafe extern "C" fn cram_cram_codecs_c_1835_cram_xdelta_encode_flush(c: *mut c_void) -> c_int {
     let c = c.cast::<cram_codec_xdelta_layout>();
-    let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_FILE_HEADER, 0);
+    let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER, 0);
     if b.is_null() {
         return -1;
     }
@@ -7883,7 +8407,7 @@ pub unsafe fn cram_cram_codecs_c_1930_cram_xdelta_encode_store(
     }
 
     let tc = (*c).xdelta.sub_codec;
-    let tb = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_FILE_HEADER, 0);
+    let tb = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER, 0);
     if tb.is_null() {
         return -1;
     }
@@ -10005,7 +10529,7 @@ pub unsafe fn cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
     }
 
     let tc = (*c).byte_array_len.len_codec;
-    let b_len = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_FILE_HEADER, 0);
+    let b_len = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER, 0);
     if b_len.is_null() {
         return -1;
     }
@@ -10018,7 +10542,7 @@ pub unsafe fn cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
     }
 
     let tc = (*c).byte_array_len.val_codec;
-    let b_val = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_FILE_HEADER, 0);
+    let b_val = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER, 0);
     if b_val.is_null() {
         cram_cram_io_c_1565_cram_free_block(b_len);
         return -1;
@@ -11316,12 +11840,12 @@ pub unsafe fn cram_cram_io_c_4850_full_path(out: *mut c_char, in_: *mut c_char) 
     let in_l = libc::strlen(in_);
     if hisremote(in_) != 0 {
         if in_l > libc::PATH_MAX as usize {
-            hts_sys::hts_log(
-                hts_sys::htsLogLevel_HTS_LOG_ERROR,
-                c"full_path".as_ptr(),
-                c"Reference path is longer than %d".as_ptr(),
-                libc::PATH_MAX,
-            );
+            let msg = std::ffi::CString::new(format!(
+                "Reference path is longer than {}",
+                libc::PATH_MAX
+            ))
+            .unwrap();
+            hts_log_cstr(HTS_LOG_ERROR, c"full_path".as_ptr(), msg.as_ptr());
             return;
         }
         libc::strncpy(out, in_, libc::PATH_MAX as usize - 1);
@@ -12547,7 +13071,7 @@ pub unsafe fn cram_cram_external_c_522_cram_block_get_content_id(
     b: *mut hts_sys::cram_block,
 ) -> i32 {
     let b = b.cast::<cram_block_layout>();
-    if (*b).content_type == hts_sys::cram_content_type_CORE {
+    if (*b).content_type == crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE {
         -1
     } else {
         (*b).content_id
@@ -12863,7 +13387,7 @@ mod tests {
                 overflow[i - reg_save.len()] = word;
             }
         }
-        let mut args = hts_sys::__va_list_tag {
+        let mut args = crate::htslib_rs::c_compat::__va_list_tag {
             gp_offset: 0,
             fp_offset: 48,
             overflow_arg_area: overflow.as_mut_ptr().cast(),
@@ -12885,7 +13409,7 @@ mod tests {
             assert_eq!(
                 call_cram_voption_words(
                     fd_ptr,
-                    hts_sys::hts_fmt_option_CRAM_OPT_DECODE_MD,
+                    crate::htslib_rs::cram::CRAM_OPT_DECODE_MD,
                     &mut words,
                 ),
                 0
@@ -12896,7 +13420,7 @@ mod tests {
             assert_eq!(
                 call_cram_voption_words(
                     fd_ptr,
-                    hts_sys::hts_fmt_option_CRAM_OPT_SEQS_PER_SLICE,
+                    crate::htslib_rs::cram::CRAM_OPT_SEQS_PER_SLICE,
                     &mut words,
                 ),
                 0
@@ -12908,7 +13432,7 @@ mod tests {
             assert_eq!(
                 call_cram_voption_words(
                     fd_ptr,
-                    hts_sys::hts_fmt_option_CRAM_OPT_LOSSY_NAMES,
+                    crate::htslib_rs::cram::CRAM_OPT_LOSSY_NAMES,
                     &mut words
                 ),
                 0
@@ -12922,7 +13446,7 @@ mod tests {
             assert_eq!(
                 call_cram_voption_words(
                     fd_ptr,
-                    hts_sys::hts_fmt_option_CRAM_OPT_PREFIX,
+                    crate::htslib_rs::cram::CRAM_OPT_PREFIX,
                     &mut words
                 ),
                 0
@@ -12933,12 +13457,12 @@ mod tests {
             assert_eq!(
                 call_cram_voption_words(
                     fd_ptr,
-                    hts_sys::hts_fmt_option_CRAM_OPT_REQUIRED_FIELDS,
+                    crate::htslib_rs::cram::CRAM_OPT_REQUIRED_FIELDS,
                     &mut words,
                 ),
                 0
             );
-            assert_ne!(fd.required_fields & hts_sys::sam_fields_SAM_POS, 0);
+            assert_ne!(fd.required_fields & crate::htslib_rs::cram::SAM_POS, 0);
 
             let mut words = [HTS_PROFILE_SMALL as usize];
             assert_eq!(
@@ -12965,7 +13489,7 @@ mod tests {
             assert_eq!(
                 call_cram_voption_words(
                     fd_ptr,
-                    hts_sys::hts_fmt_option_CRAM_OPT_VERSION,
+                    crate::htslib_rs::cram::CRAM_OPT_VERSION,
                     &mut words
                 ),
                 0
@@ -12979,7 +13503,7 @@ mod tests {
             assert_eq!(
                 call_cram_voption_words(
                     fd_ptr,
-                    hts_sys::hts_fmt_option_CRAM_OPT_VERSION,
+                    crate::htslib_rs::cram::CRAM_OPT_VERSION,
                     &mut words
                 ),
                 -1
@@ -12990,7 +13514,7 @@ mod tests {
             assert_eq!(
                 call_cram_voption_words(
                     std::ptr::null_mut(),
-                    hts_sys::hts_fmt_option_CRAM_OPT_DECODE_MD,
+                    crate::htslib_rs::cram::CRAM_OPT_DECODE_MD,
                     &mut words
                 ),
                 -1
@@ -13247,7 +13771,7 @@ mod tests {
     fn cram_external_slice_header_accessors_read_nullable_outputs_like_c() {
         unsafe {
             let mut hdr = cram_block_slice_hdr_layout {
-                content_type: hts_sys::cram_content_type_MAPPED_SLICE,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_MAPPED_SLICE,
                 ref_seq_id: 17,
                 ref_seq_start: 101,
                 ref_seq_span: 250,
@@ -13365,9 +13889,9 @@ mod tests {
     fn cram_external_block_size_and_method_accessors_match_fields() {
         unsafe {
             let mut block = cram_block_layout {
-                method: hts_sys::cram_block_method_GZIP,
-                orig_method: hts_sys::cram_block_method_RAW,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                method: crate::htslib_rs::cram::CRAM_BLOCK_METHOD_GZIP,
+                orig_method: crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 7,
                 comp_size: 12,
                 uncomp_size: 18,
@@ -13388,12 +13912,12 @@ mod tests {
             assert_eq!(cram_cram_external_c_527_cram_block_get_crc32(b), 99);
             assert_eq!(
                 cram_cram_external_c_533_cram_block_get_content_type(b),
-                hts_sys::cram_content_type_EXTERNAL
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL
             );
             assert_eq!(cram_cram_external_c_529_cram_block_get_size(b), 5);
             assert_eq!(
                 cram_cram_external_c_530_cram_block_get_method(b),
-                hts_sys::cram_block_method_RAW
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW
             );
             cram_cram_external_c_542_cram_block_set_size(b, 23);
             assert_eq!(block.byte, 23);
@@ -13419,8 +13943,8 @@ mod tests {
                 payload.as_mut_ptr().cast()
             );
 
-            block.content_type = hts_sys::cram_content_type_CORE;
-            assert_eq!(block.content_type, hts_sys::cram_content_type_CORE);
+            block.content_type = crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE;
+            assert_eq!(block.content_type, crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE);
             assert_eq!(cram_cram_external_c_522_cram_block_get_content_id(b), -1);
         }
     }
@@ -13690,7 +14214,7 @@ mod tests {
     fn cram_io_block_lookup_uses_cache_hash_and_linear_collision_fallback() {
         unsafe {
             let mut hdr = cram_block_slice_hdr_layout {
-                content_type: hts_sys::cram_content_type_MAPPED_SLICE,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_MAPPED_SLICE,
                 ref_seq_id: 0,
                 ref_seq_start: 0,
                 ref_seq_span: 0,
@@ -13705,7 +14229,7 @@ mod tests {
             let mut direct = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 42,
                 comp_size: 0,
                 uncomp_size: 0,
@@ -13724,7 +14248,7 @@ mod tests {
                 ..direct
             };
             let mut ignored_core = cram_block_layout {
-                content_type: hts_sys::cram_content_type_CORE,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE,
                 content_id: 888,
                 ..direct
             };
@@ -13770,7 +14294,7 @@ mod tests {
     #[test]
     fn cram_io_append_integer_helpers_cover_zero_and_wide_values() {
         unsafe {
-            let block = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 3);
+            let block = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 3);
             assert!(!block.is_null());
 
             assert_eq!(cram_cram_io_h_271_block_append_uint(block, 0), 0);
@@ -13873,7 +14397,7 @@ mod tests {
             let mut block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: 0,
@@ -14025,7 +14549,7 @@ mod tests {
             assert_eq!(cram_cram_io_c_755_itf8_size(0x0fff_ffff), 4);
             assert_eq!(cram_cram_io_c_755_itf8_size(0x1000_0000), 5);
 
-            let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             assert!(!b.is_null());
             assert_eq!(cram_cram_io_c_620_itf8_put_blk(b, 0x4000), 3);
             assert_eq!(cram_cram_io_c_632_ltf8_put_blk(b, 0x80), 2);
@@ -14286,7 +14810,7 @@ mod tests {
             assert_eq!(err, 0);
             assert_eq!(cp, truncated.as_mut_ptr().add(1).cast::<c_char>());
 
-            let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             assert!(!b.is_null());
             assert_eq!(cram_cram_io_c_821_uint7_put_blk_32(b, 0x80), 2);
             assert_eq!(cram_cram_io_c_831_sint7_put_blk_32(b, -1), 1);
@@ -14395,7 +14919,7 @@ mod tests {
             assert_eq!(&out[..4], &[0xfe, 0xff, 0xff, 0xff]);
             assert_eq!(hfile.begin, out.as_mut_ptr().add(4).cast());
 
-            let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             assert!(!b.is_null());
             assert_eq!(cram_cram_io_c_1045_int32_put_blk(b, -2), 0);
             let block = b.cast::<cram_block_layout>();
@@ -14418,7 +14942,7 @@ mod tests {
     #[test]
     fn public_int32_get_blk_uses_block_size_cursor() {
         unsafe {
-            let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             assert!(!b.is_null());
             let block = b.cast::<cram_block_layout>();
             let mut bytes = [1u8, 2, 3, 4, 5, 6, 7, 8];
@@ -14790,11 +15314,11 @@ mod tests {
             fd.fp = (&mut hfile as *mut hfile_layout).cast();
             fd.version = 4 << 8;
 
-            let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 7);
+            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 7);
             assert!(!b.is_null());
             let block = b.cast::<cram_block_layout>();
-            (*block).method = hts_sys::cram_block_method_RAW;
-            (*block).orig_method = hts_sys::cram_block_method_RAW;
+            (*block).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
+            (*block).orig_method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
             assert_eq!(
                 cram_cram_io_h_248_block_append(b, b"abc".as_ptr().cast(), 3),
                 0
@@ -14820,11 +15344,11 @@ mod tests {
             let rb = cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
             assert!(!rb.is_null());
             let read_block = rb.cast::<cram_block_layout>();
-            assert_eq!((*read_block).method, hts_sys::cram_block_method_RAW);
-            assert_eq!((*read_block).orig_method, hts_sys::cram_block_method_RAW);
+            assert_eq!((*read_block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
+            assert_eq!((*read_block).orig_method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
             assert_eq!(
                 (*read_block).content_type,
-                hts_sys::cram_content_type_EXTERNAL
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL
             );
             assert_eq!((*read_block).content_id, 7);
             assert_eq!((*read_block).comp_size, 3);
@@ -14847,8 +15371,8 @@ mod tests {
     fn cram_io_read_block_defers_bad_crc_until_uncompress_check() {
         unsafe {
             let mut bytes = [
-                hts_sys::cram_block_method_RAW as u8,
-                hts_sys::cram_content_type_EXTERNAL as u8,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW as u8,
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL as u8,
                 4,
                 1,
                 1,
@@ -14894,8 +15418,8 @@ mod tests {
     fn cram_io_read_block_honours_ignore_md5_for_crc_checked_state() {
         unsafe {
             let mut bytes = [
-                hts_sys::cram_block_method_RAW as u8,
-                hts_sys::cram_content_type_EXTERNAL as u8,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW as u8,
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL as u8,
                 4,
                 1,
                 1,
@@ -14926,7 +15450,7 @@ mod tests {
             assert_eq!((*block).crc32, 0);
             assert_eq!((*block).crc32_checked, 1);
             assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), 0);
-            assert_eq!((*block).method, hts_sys::cram_block_method_RAW);
+            assert_eq!((*block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
 
             cram_cram_io_c_1565_cram_free_block(b);
         }
@@ -14960,8 +15484,8 @@ mod tests {
             );
 
             let mut raw_mismatch = [
-                hts_sys::cram_block_method_RAW as u8,
-                hts_sys::cram_content_type_EXTERNAL as u8,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW as u8,
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL as u8,
                 0,
                 1,
                 2,
@@ -15004,11 +15528,11 @@ mod tests {
                 fd.fp = (&mut hfile as *mut hfile_layout).cast();
                 fd.version = version << 8;
 
-                let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
                 assert!(!b.is_null());
                 let block = b.cast::<cram_block_layout>();
-                (*block).method = hts_sys::cram_block_method_RAW;
-                (*block).orig_method = hts_sys::cram_block_method_RAW;
+                (*block).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
+                (*block).orig_method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
                 (*block).comp_size = 0;
                 (*block).uncomp_size = 0;
                 free((*block).data.cast());
@@ -15042,10 +15566,10 @@ mod tests {
                     cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
                 assert!(!rb.is_null());
                 let read_block = rb.cast::<cram_block_layout>();
-                assert_eq!((*read_block).method, hts_sys::cram_block_method_RAW);
+                assert_eq!((*read_block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
                 assert_eq!(
                     (*read_block).content_type,
-                    hts_sys::cram_content_type_EXTERNAL
+                    crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL
                 );
                 assert_eq!((*read_block).content_id, 0);
                 assert_eq!((*read_block).comp_size, 0);
@@ -15065,8 +15589,8 @@ mod tests {
     fn cram_io_read_raw_block_v2_has_no_crc_trailer() {
         unsafe {
             let mut bytes = [
-                hts_sys::cram_block_method_RAW as u8,
-                hts_sys::cram_content_type_EXTERNAL as u8,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW as u8,
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL as u8,
                 7,
                 3,
                 3,
@@ -15093,7 +15617,7 @@ mod tests {
             let b = cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
             assert!(!b.is_null());
             let block = b.cast::<cram_block_layout>();
-            assert_eq!((*block).method, hts_sys::cram_block_method_RAW);
+            assert_eq!((*block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
             assert_eq!((*block).content_id, 7);
             assert_eq!((*block).comp_size, 3);
             assert_eq!((*block).uncomp_size, 3);
@@ -15114,8 +15638,8 @@ mod tests {
     fn cram_io_read_block_v2_itf8_width_comes_from_first_byte() {
         unsafe {
             let mut bytes = [
-                hts_sys::cram_block_method_RAW as u8,
-                hts_sys::cram_content_type_EXTERNAL as u8,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW as u8,
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL as u8,
                 0x80,
                 0xff,
                 0,
@@ -15155,9 +15679,9 @@ mod tests {
     fn cram_io_block_size_uses_compressed_payload_and_itf8_header_widths() {
         unsafe {
             let mut block = cram_block_layout {
-                method: hts_sys::cram_block_method_GZIP,
-                orig_method: hts_sys::cram_block_method_GZIP,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                method: crate::htslib_rs::cram::CRAM_BLOCK_METHOD_GZIP,
+                orig_method: crate::htslib_rs::cram::CRAM_BLOCK_METHOD_GZIP,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0x4000,
                 comp_size: 0x80,
                 uncomp_size: 0x20_0000,
@@ -15177,8 +15701,8 @@ mod tests {
                 2 + 3 + 2 + 4 + 4 + 0x80
             );
 
-            block.method = hts_sys::cram_block_method_RAW;
-            assert_eq!(block.method, hts_sys::cram_block_method_RAW);
+            block.method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
+            assert_eq!(block.method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
             assert_eq!(
                 cram_cram_io_c_1490_cram_block_size(b),
                 2 + 3 + 2 + 4 + 4 + 0x20_0000
@@ -15189,14 +15713,14 @@ mod tests {
     #[test]
     fn cram_io_uncompress_block_matches_crc_and_method_rules() {
         unsafe {
-            let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             assert!(!b.is_null());
             let block = b.cast::<cram_block_layout>();
             assert_eq!(
                 cram_cram_io_h_248_block_append(b, b"abc".as_ptr().cast(), 3),
                 0
             );
-            (*block).method = hts_sys::cram_block_method_RAW;
+            (*block).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
             (*block).uncomp_size = 3;
             (*block).alloc = 3;
             (*block).crc32_checked = 0;
@@ -15208,22 +15732,22 @@ mod tests {
             (*block).crc32 = crate::htslib_rs::bgzf::hts_crc32(0, (*block).data.cast(), 3);
             (*block).crc32_checked = 0;
             assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), 0);
-            assert_eq!((*block).method, hts_sys::cram_block_method_RAW);
+            assert_eq!((*block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
             assert_eq!(
                 std::slice::from_raw_parts((*block).data, (*block).alloc),
                 b"abc"
             );
 
-            (*block).method = hts_sys::cram_block_method_GZIP;
+            (*block).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_GZIP;
             (*block).uncomp_size = 0;
             (*block).crc32_checked = 1;
             assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), 0);
-            assert_eq!((*block).method, hts_sys::cram_block_method_RAW);
+            assert_eq!((*block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
 
-            (*block).method = hts_sys::cram_block_method_BZIP2;
+            (*block).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_BZIP2;
             (*block).uncomp_size = 3;
             assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), -1);
-            (*block).method = hts_sys::cram_block_method_LZMA;
+            (*block).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_LZMA;
             assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), -1);
             cram_cram_io_c_1565_cram_free_block(b);
 
@@ -15232,19 +15756,19 @@ mod tests {
             std::io::Write::write_all(&mut encoder, b"translated gzip payload").unwrap();
             let compressed = encoder.finish().unwrap();
 
-            let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             assert!(!b.is_null());
             let block = b.cast::<cram_block_layout>();
             assert_eq!(
                 cram_cram_io_h_248_block_append(b, compressed.as_ptr().cast(), compressed.len()),
                 0
             );
-            (*block).method = hts_sys::cram_block_method_GZIP;
+            (*block).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_GZIP;
             (*block).comp_size = compressed.len() as i32;
             (*block).uncomp_size = b"translated gzip payload".len() as i32;
             (*block).crc32_checked = 1;
             assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), 0);
-            assert_eq!((*block).method, hts_sys::cram_block_method_RAW);
+            assert_eq!((*block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
             assert_eq!((*block).alloc, b"translated gzip payload".len());
             assert_eq!(
                 std::slice::from_raw_parts((*block).data, (*block).alloc),
@@ -15263,7 +15787,7 @@ mod tests {
             assert_eq!((*metrics).trial, 2);
             assert_eq!((*metrics).next_trial, 35);
             assert_eq!((*metrics).consistency, 0);
-            assert_eq!((*metrics).method, hts_sys::cram_block_method_RAW);
+            assert_eq!((*metrics).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
             assert_eq!((*metrics).strat, 0);
             assert_eq!((*metrics).revised_method, 0);
             assert_eq!((*metrics).unpackable, 0);
@@ -15291,7 +15815,7 @@ mod tests {
             assert!((*layout).codecs.iter().all(|p| p.is_null()));
 
             let block = (*layout).td_blk.cast::<cram_block_layout>();
-            assert_eq!((*block).content_type, hts_sys::cram_content_type_CORE);
+            assert_eq!((*block).content_type, crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE);
             assert_eq!((*block).content_id, 0);
             let pool = (*layout).td_keys.cast::<cram_string_alloc_t>();
             assert_eq!((*pool).max_length, 8192);
@@ -16236,7 +16760,7 @@ mod tests {
             let mut block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: data.len() as i32,
@@ -16280,7 +16804,7 @@ mod tests {
             let mut block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: 0,
@@ -16326,7 +16850,7 @@ mod tests {
             let mut block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: data.len() as i32,
@@ -16434,7 +16958,7 @@ mod tests {
             let mut out_block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: 0,
@@ -16578,7 +17102,7 @@ mod tests {
             let mut input_block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: input_data.len() as i32,
@@ -16595,7 +17119,7 @@ mod tests {
             let mut out_block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: 0,
@@ -16768,7 +17292,7 @@ mod tests {
             codec.vv = &mut vv as *mut varint_vec_layout;
             codec.xpack.sub_codec = (&mut sub_codec as *mut cram_codec_xpack_layout).cast();
             let store_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_1537_cram_xpack_encode_store(
@@ -16787,7 +17311,7 @@ mod tests {
             cram_cram_io_c_1565_cram_free_block(store_block);
 
             let sub_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 9);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 9);
             let mut packed = [0b01_10_11_00u8];
             assert_eq!(
                 cram_cram_io_h_248_block_append(
@@ -16965,7 +17489,7 @@ mod tests {
             let mut block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: 6,
@@ -16993,12 +17517,12 @@ mod tests {
     #[test]
     fn cram_io_new_and_free_block_initialise_c_fields() {
         unsafe {
-            let b = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 99);
+            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 99);
             assert!(!b.is_null());
             let block = b.cast::<cram_block_layout>();
-            assert_eq!((*block).method, hts_sys::cram_block_method_RAW);
-            assert_eq!((*block).orig_method, hts_sys::cram_block_method_RAW);
-            assert_eq!((*block).content_type, hts_sys::cram_content_type_EXTERNAL);
+            assert_eq!((*block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
+            assert_eq!((*block).orig_method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
+            assert_eq!((*block).content_type, crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL);
             assert_eq!((*block).content_id, 99);
             assert_eq!((*block).byte, 0);
             assert_eq!((*block).bit, 7);
@@ -17016,7 +17540,7 @@ mod tests {
             (*block).uncomp_size = 5;
             (*block).comp_size = 3;
             assert_eq!(cram_cram_io_c_1490_cram_block_size(b), 14);
-            (*block).method = hts_sys::cram_block_method_GZIP;
+            (*block).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_GZIP;
             assert_eq!(cram_cram_io_c_1490_cram_block_size(b), 12);
             (*block).content_id = 16_384;
             assert_eq!(cram_cram_io_c_1490_cram_block_size(b), 14);
@@ -17091,7 +17615,7 @@ mod tests {
             let mut block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: 17,
@@ -17152,7 +17676,7 @@ mod tests {
             let mut sub_value_block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: 0,
@@ -17226,7 +17750,7 @@ mod tests {
             let mut varint_block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: varint_data.len() as i32,
@@ -17264,7 +17788,7 @@ mod tests {
             codec.vv = &mut vv;
             codec.xdelta.last = 99;
             let out_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             out_size = 4;
             assert_eq!(
                 cram_cram_codecs_c_1719_cram_xdelta_decode_block(
@@ -17331,7 +17855,7 @@ mod tests {
             cram_cram_codecs_c_1762_cram_xdelta_decode_free(dec.cast());
 
             let sub_out =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let mut sub_enc = cram_codec_xdelta_layout {
                 codec: 0,
                 out: sub_out,
@@ -17374,7 +17898,7 @@ mod tests {
             );
 
             let store_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_1930_cram_xdelta_encode_store(
@@ -17556,7 +18080,7 @@ mod tests {
             let mut len_block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: len_payload.len() as i32,
@@ -17657,9 +18181,9 @@ mod tests {
                 varint_size: Some(test_varint_size),
             };
             let len_out =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let lit_out =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let mut len_enc = cram_codec_byte_array_len_layout {
                 out: len_out,
                 encode: test_byte_array_len_encode_val as usize as *mut c_void,
@@ -17713,7 +18237,7 @@ mod tests {
             );
 
             let store_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_2303_cram_xrle_encode_store(
@@ -17847,7 +18371,7 @@ mod tests {
             let mut subexp_block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: subexp_data.len() as i32,
@@ -17950,7 +18474,7 @@ mod tests {
             let mut gamma_block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: gamma_data.len() as i32,
@@ -18079,7 +18603,7 @@ mod tests {
             let mut block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: data.len() as i32,
@@ -18291,7 +18815,7 @@ mod tests {
             let mut val2code = [0i32; 129];
             val2code[(b'A' + 1) as usize] = 0;
             val2code[(b'B' + 1) as usize] = 1;
-            let out = cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+            let out = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let mut codec = cram_codec_huffman_encoder_layout {
                 codec: 0,
                 out,
@@ -18415,7 +18939,7 @@ mod tests {
             codec.codec = 3;
             codec.huffman.option = 3;
             let store_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_3112_cram_huffman_encode_store(
@@ -18502,7 +19026,7 @@ mod tests {
                 },
             };
             let out_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             len_codec.out = out_block;
             let mut val_codec = cram_codec_byte_array_len_layout {
                 codec: 0,
@@ -18619,7 +19143,7 @@ mod tests {
             codec.vv = &mut vv as *mut varint_vec_layout;
             assert!(!codec.vv.is_null());
             let store_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
@@ -18730,7 +19254,7 @@ mod tests {
             let mut input_block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: data.len() as i32,
@@ -18809,7 +19333,7 @@ mod tests {
             input_block.idx = 0;
             assert_eq!(input_block.idx, 0);
             let out_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             out_size = 8;
             assert_eq!(
                 cram_cram_codecs_c_3626_cram_byte_array_stop_decode_block(
@@ -18830,7 +19354,7 @@ mod tests {
             cram_cram_io_c_1565_cram_free_block(out_block);
 
             let enc_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             codec.out = enc_block;
             let mut payload = *b"xy";
             assert_eq!(
@@ -19010,7 +19534,7 @@ mod tests {
             );
             (*enc).vv = &mut vv as *mut varint_vec_layout;
             let store_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store(
@@ -19120,7 +19644,7 @@ mod tests {
             assert!(!ext_enc.is_null());
             (*ext_enc).vv = &mut vv;
             let store_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_562_cram_external_encode_store(
@@ -19196,7 +19720,7 @@ mod tests {
             cram_cram_codecs_c_732_cram_varint_decode_free(var_dec.cast());
 
             let store_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_854_cram_varint_encode_store(
@@ -19306,7 +19830,7 @@ mod tests {
             cram_cram_codecs_c_967_cram_const_decode_free(const_dec.cast());
 
             let store_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_1025_cram_const_encode_store(
@@ -19399,7 +19923,7 @@ mod tests {
             cram_cram_codecs_c_1131_cram_beta_decode_free(beta_dec.cast());
 
             let store_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_1183_cram_beta_encode_store(
@@ -19914,7 +20438,7 @@ mod tests {
             );
 
             let mut hdr = cram_block_slice_hdr_layout {
-                content_type: hts_sys::cram_content_type_MAPPED_SLICE,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_MAPPED_SLICE,
                 ref_seq_id: 0,
                 ref_seq_start: 0,
                 ref_seq_span: 0,
@@ -19933,7 +20457,7 @@ mod tests {
                 block_by_id: std::ptr::null_mut(),
             };
             let out_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             assert!(!out_block.is_null());
             let mut out_size = 0;
             assert_eq!(
@@ -20064,7 +20588,7 @@ mod tests {
             assert!(!enc.is_null());
             (*enc).vv = &mut vv as *mut varint_vec_layout;
             let store_block =
-                cram_cram_io_c_1388_cram_new_block(hts_sys::cram_content_type_EXTERNAL, 0);
+                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
             assert!(!store_block.is_null());
             let mut prefix = *b"P\0";
             assert_eq!(
@@ -20093,7 +20617,7 @@ mod tests {
             let mut ext_block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 17,
                 comp_size: 0,
                 uncomp_size: data.len() as i32,
@@ -20110,7 +20634,7 @@ mod tests {
             let ext_ptr = (&mut ext_block as *mut cram_block_layout).cast::<hts_sys::cram_block>();
             let mut blocks = [ext_ptr];
             let mut hdr = cram_block_slice_hdr_layout {
-                content_type: hts_sys::cram_content_type_MAPPED_SLICE,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_MAPPED_SLICE,
                 ref_seq_id: 0,
                 ref_seq_start: 0,
                 ref_seq_span: 0,
@@ -20197,7 +20721,7 @@ mod tests {
                 byte: 0,
                 idx: 0,
                 uncomp_size: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 method: 0,
                 orig_method: 0,
@@ -20296,7 +20820,7 @@ mod tests {
             let mut direct = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 17,
                 comp_size: 0,
                 uncomp_size: 0,
@@ -20319,7 +20843,7 @@ mod tests {
                 ..direct
             };
             let mut non_external = cram_block_layout {
-                content_type: hts_sys::cram_content_type_CORE,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE,
                 content_id: 753,
                 ..direct
             };
@@ -20336,7 +20860,7 @@ mod tests {
             block_by_id[256 + 502 % 251] = wrong_hash_ptr;
             let mut blocks = [non_external_ptr, colliding_ptr];
             let mut hdr = cram_block_slice_hdr_layout {
-                content_type: hts_sys::cram_content_type_MAPPED_SLICE,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_MAPPED_SLICE,
                 ref_seq_id: 0,
                 ref_seq_start: 0,
                 ref_seq_span: 0,
@@ -20389,7 +20913,7 @@ mod tests {
             let mut out_block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: 0,
@@ -20496,7 +21020,7 @@ mod tests {
             let mut var_block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 23,
                 comp_size: 0,
                 uncomp_size: data.len() as i32,
@@ -20513,7 +21037,7 @@ mod tests {
             let var_ptr = (&mut var_block as *mut cram_block_layout).cast::<hts_sys::cram_block>();
             let mut blocks = [var_ptr];
             let mut hdr = cram_block_slice_hdr_layout {
-                content_type: hts_sys::cram_content_type_MAPPED_SLICE,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_MAPPED_SLICE,
                 ref_seq_id: 0,
                 ref_seq_start: 0,
                 ref_seq_span: 0,
@@ -20692,7 +21216,7 @@ mod tests {
             let mut out_block = cram_block_layout {
                 method: 0,
                 orig_method: 0,
-                content_type: hts_sys::cram_content_type_EXTERNAL,
+                content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
                 content_id: 0,
                 comp_size: 0,
                 uncomp_size: 0,
@@ -20890,7 +21414,7 @@ mod tests {
             );
             assert_eq!(
                 CStr::from_ptr(cram_cram_io_c_2378_cram_content_type2str(
-                    hts_sys::cram_content_type_CORE
+                    crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE
                 ))
                 .to_bytes(),
                 b"CORE"

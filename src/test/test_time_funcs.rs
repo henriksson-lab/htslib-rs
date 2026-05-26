@@ -12,7 +12,7 @@ pub unsafe fn test_test_time_funcs_c_36_test_normalised(
         let j = crate::htslib_rs::hts::hts_time_gm(utc);
         if i != j {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"hts_time_gm() failed, got %ld expected %ld\n".as_ptr(),
                 j as libc::c_long,
                 i as libc::c_long,
@@ -48,7 +48,7 @@ pub unsafe fn test_test_time_funcs_c_53_test_specific(
     let res = crate::htslib_rs::hts::hts_time_gm(&mut utc);
     if res != expected {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"hts_time_gm() failed for %4d/%02d/%02d %02d:%02d:%02d : got %ld expected %ld\n"
                 .as_ptr(),
             year,

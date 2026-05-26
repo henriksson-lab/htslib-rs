@@ -315,7 +315,7 @@ pub struct bgzf_mtaux_t {
     pub curr_job: *mut bgzf_job,
     pub n_threads: c_int,
     pub own_pool: c_int,
-    pub pool: *mut hts_sys::hts_tpool,
+    pub pool: *mut super::thread_pool::hts_tpool,
     pub out_queue: *mut c_void,
     pub io_task: libc::pthread_t,
     pub job_pool_m: libc::pthread_mutex_t,
@@ -1484,26 +1484,45 @@ pub unsafe fn bgzf_c_315_razf_info(hfp: *mut super::hts::hFILE, mut filename: *c
                 csize = ed_swap_8(csize);
             }
             if csize < sizes_pos as u64 {
-                hts_sys::hts_log(
-                    hts_sys::htsLogLevel_HTS_LOG_ERROR,
+                let fname = bgzf_filename_lossy(filename);
+                let msg = std::ffi::CString::new(format!(
+                    "To decompress this file, use the following commands:\n    truncate -s {csize} {fname}\n    gunzip {fname}\nThe resulting uncompressed file should be {usize} bytes in length.\nIf you do not have a truncate command, skip that step (though gunzip will\nlikely produce a \"trailing garbage ignored\" message, which can be ignored)."
+                ))
+                .unwrap_or_default();
+                crate::htslib_rs::hts::hts_log_cstr(
+                    crate::htslib_rs::hts::HTS_LOG_ERROR,
                     c"bgzf".as_ptr(),
-                    c"To decompress this file, use the following commands:\n    truncate -s %llu %s\n    gunzip %s\nThe resulting uncompressed file should be %llu bytes in length.\nIf you do not have a truncate command, skip that step (though gunzip will\nlikely produce a \"trailing garbage ignored\" message, which can be ignored).".as_ptr(),
-                    csize as libc::c_ulonglong,
-                    filename,
-                    filename,
-                    usize as libc::c_ulonglong,
+                    msg.as_ptr(),
                 );
                 return;
             }
         }
     }
 
-    hts_sys::hts_log(
-        hts_sys::htsLogLevel_HTS_LOG_ERROR,
+    let fname = bgzf_filename_lossy(filename);
+    let msg = std::ffi::CString::new(format!(
+        "To decompress this file, use the following command:\n    gunzip {fname}\nThis will likely produce a \"trailing garbage ignored\" message, which can\nusually be safely ignored."
+    ))
+    .unwrap_or_default();
+    crate::htslib_rs::hts::hts_log_cstr(
+        crate::htslib_rs::hts::HTS_LOG_ERROR,
         c"bgzf".as_ptr(),
-        c"To decompress this file, use the following command:\n    gunzip %s\nThis will likely produce a \"trailing garbage ignored\" message, which can\nusually be safely ignored.".as_ptr(),
-        filename,
+        msg.as_ptr(),
     );
+}
+
+// Renders a possibly-null C filename for log messages, matching printf's
+// tolerance of NULL (`%s` of NULL is rendered as an empty string here).
+unsafe fn bgzf_filename_lossy(filename: *const c_char) -> std::borrow::Cow<'static, str> {
+    if filename.is_null() {
+        std::borrow::Cow::Borrowed("")
+    } else {
+        std::borrow::Cow::Owned(
+            std::ffi::CStr::from_ptr(filename)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
 }
 
 unsafe fn inflate_block(fp: *mut BGZF, block_length: usize) -> c_int {
@@ -2144,7 +2163,9 @@ pub unsafe fn bgzf_c_1805_mt_destroy(mt: *mut bgzf_mtaux_t) -> c_int {
     }
 
     c_compat::free(mt.cast());
-    libc::fflush(hts_sys::stderr.cast());
+    // fflush(NULL) flushes all open output streams (incl. stderr) without
+    // referencing the C library's stderr global.
+    libc::fflush(std::ptr::null_mut());
 
     ret
 }
@@ -3108,7 +3129,7 @@ pub unsafe fn bgzf_getline(fp: *mut BGZF, delim: c_int, str_: *mut kstring_t) ->
 
 unsafe fn bgzf_mt_init(
     fp: *mut BGZF,
-    pool: *mut hts_sys::hts_tpool,
+    pool: *mut super::thread_pool::hts_tpool,
     qsize: c_int,
     own_pool: c_int,
 ) -> c_int {
@@ -3196,7 +3217,7 @@ unsafe fn bgzf_mt_init(
 
 pub unsafe fn bgzf_thread_pool(
     fp: *mut BGZF,
-    pool: *mut hts_sys::hts_tpool,
+    pool: *mut super::thread_pool::hts_tpool,
     qsize: c_int,
 ) -> c_int {
     if fp.is_null() {

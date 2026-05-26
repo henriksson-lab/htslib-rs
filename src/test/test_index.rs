@@ -24,7 +24,7 @@ pub unsafe fn test_test_index_c_32_usage(fp: *mut libc::FILE) -> ! {
         fp,
         c"\nThe default index format is CSI for sam/bam/vcf/bcf and CRAI for crams\n".as_ptr(),
     );
-    libc::exit((fp == hts_sys::stderr.cast::<libc::FILE>()) as c_int);
+    libc::exit((fp == crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>()) as c_int);
 }
 
 // original: main (htslib/test/test_index.c:42)
@@ -40,20 +40,20 @@ pub unsafe fn test_test_index_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
             c if c == b't' as c_int || c == b'b' as c_int => min_shift = 0,
             c if c == b'c' as c_int => min_shift = 14,
             c if c == b'm' as c_int => min_shift = libc::atoi(optarg),
-            c if c == b'h' as c_int => test_test_index_c_32_usage(hts_sys::stdout.cast()),
-            _ => test_test_index_c_32_usage(hts_sys::stderr.cast()),
+            c if c == b'h' as c_int => test_test_index_c_32_usage(crate::htslib_rs::c_compat::stdout.cast()),
+            _ => test_test_index_c_32_usage(crate::htslib_rs::c_compat::stderr.cast()),
         }
     }
 
     if optind >= argc {
-        test_test_index_c_32_usage(hts_sys::stderr.cast());
+        test_test_index_c_32_usage(crate::htslib_rs::c_compat::stderr.cast());
     }
 
     let fname = *argv.add(optind as usize);
     let in_ = hts::hts_open(fname, c"r".as_ptr());
     if in_.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Error opening \"%s\"\n".as_ptr(),
             fname,
         );
@@ -72,7 +72,7 @@ pub unsafe fn test_test_index_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
 
     if ret < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed to build index for \"%s\"\n".as_ptr(),
             fname,
         );
@@ -81,7 +81,7 @@ pub unsafe fn test_test_index_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
 
     if hts::hts_close(in_) < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Error closing \"%s\"\n".as_ptr(),
             fname,
         );

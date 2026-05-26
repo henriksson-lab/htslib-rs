@@ -33,14 +33,6 @@ use std::ffi::{c_char, c_int, c_void};
 use std::io::{Read, Write};
 
 unsafe extern "C" {
-    #[link_name = "cram_get_ref"]
-    fn htslib_cram_get_ref(
-        fd: *mut hts_sys::cram_fd,
-        id: c_int,
-        start: hts_sys::hts_pos_t,
-        end: hts_sys::hts_pos_t,
-    ) -> *mut c_char;
-
     #[link_name = "cram_flush_container"]
     fn htslib_cram_flush_container(
         fd: *mut hts_sys::cram_fd,
@@ -170,10 +162,10 @@ pub unsafe fn cram_cram_io_c_1756_cram_compress_by_method(
     strat: c_int,
 ) -> *mut c_char {
     match method {
-        x if x == hts_sys::cram_block_method_GZIP => {
+        x if x == crate::htslib_rs::cram::CRAM_BLOCK_METHOD_GZIP => {
             cram_cram_io_c_1222_zlib_mem_deflate(in_, in_size, out_size, level, strat)
         }
-        x if x == hts_sys::cram_block_method_LZMA => {
+        x if x == crate::htslib_rs::cram::CRAM_BLOCK_METHOD_LZMA => {
             cram_cram_io_c_1295_lzma_mem_deflate(in_, in_size, out_size, level)
         }
         _ => std::ptr::null_mut(),
@@ -218,11 +210,11 @@ pub unsafe fn cram_cram_io_c_2322_cram_compress_block(
 
 // original: cram_populate_ref (htslib/cram/cram_io.c:2977)
 pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
-    _fd: *mut hts_sys::cram_fd,
-    _id: c_int,
-    _r: *mut c_void,
+    fd: *mut hts_sys::cram_fd,
+    id: c_int,
+    r: *mut c_void,
 ) -> c_int {
-    -1
+    crate::htslib_rs::cram::cram_cram_io_c_2977_cram_populate_ref(fd.cast(), id, r)
 }
 
 // original: cram_get_ref (htslib/cram/cram_io.c:3409)
@@ -232,7 +224,7 @@ pub unsafe fn cram_cram_io_c_3409_cram_get_ref(
     start: hts_sys::hts_pos_t,
     end: hts_sys::hts_pos_t,
 ) -> *mut c_char {
-    htslib_cram_get_ref(fd, id, start, end)
+    crate::htslib_rs::cram::cram_cram_io_c_3409_cram_get_ref(fd.cast(), id, start, end)
 }
 
 // original: cram_new_container (htslib/cram/cram_io.c:3637)
@@ -407,7 +399,7 @@ pub unsafe fn cram_cram_io_c_5556_cram_close(fd: *mut hts_sys::cram_fd) -> c_int
 pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
     fd: *mut hts_sys::cram_fd,
     opt: hts_sys::hts_fmt_option,
-    args: *mut hts_sys::__va_list_tag,
+    args: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> c_int {
     hts_sys::cram_set_voption(fd, opt, args)
 }

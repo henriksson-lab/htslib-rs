@@ -48,7 +48,7 @@ unsafe fn bgzip_c_59_ask_yn() -> c_int {
     if libc::fgets(
         line.as_mut_ptr(),
         line.len() as c_int,
-        hts_sys::stdin.cast(),
+        crate::htslib_rs::c_compat::stdin.cast(),
     )
     .is_null()
     {
@@ -64,7 +64,7 @@ pub unsafe fn bgzip_c_68_confirm_overwrite(fn_: *const c_char) -> c_int {
 
     if libc::isatty(libc::STDIN_FILENO) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"[bgzip] %s already exists; do you wish to overwrite (y or n)? ".as_ptr(),
             fn_,
         );
@@ -104,7 +104,7 @@ pub unsafe fn bgzip_c_95_confirm_filename(
     }
 
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"[bgzip] .%s is not a known extension; do you wish to decompress to %s (y or n)? "
             .as_ptr(),
         ext,
@@ -148,7 +148,7 @@ pub unsafe fn bgzip_c_134_setfilespec(path: *const c_char, status: *const libc::
     ];
     if libc::utimes(path, tval.as_mut_ptr()) < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"[bgzip] Failed to set file specifications.\n".as_ptr(),
         );
         return -1;
@@ -169,7 +169,7 @@ pub unsafe fn bgzip_c_168_check_name_and_extension(name: *mut c_char, forced: *m
 
     if pos == 0 || *name.add(pos) != b'.' as c_char {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"[bgzip] can't find an extension in %s -- please rename\n".as_ptr(),
             name,
         );
@@ -183,7 +183,7 @@ pub unsafe fn bgzip_c_168_check_name_and_extension(name: *mut c_char, forced: *m
         || bgzip_c_95_confirm_filename(forced, name, ext) != 0)
     {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"[bgzip] unknown extension .%s -- declining to decompress to %s\n".as_ptr(),
             ext,
             name,
@@ -456,10 +456,10 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             }
             2 => binary = 1,
             x if x == b'h' as c_int => {
-                return bgzip_c_192_bgzip_main_usage(hts_sys::stdout.cast(), libc::EXIT_SUCCESS)
+                return bgzip_c_192_bgzip_main_usage(crate::htslib_rs::c_compat::stdout.cast(), libc::EXIT_SUCCESS)
             }
             x if x == b'?' as c_int => {
-                return bgzip_c_192_bgzip_main_usage(hts_sys::stderr.cast(), libc::EXIT_FAILURE)
+                return bgzip_c_192_bgzip_main_usage(crate::htslib_rs::c_compat::stderr.cast(), libc::EXIT_FAILURE)
             }
             _ => {}
         }
@@ -470,7 +470,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     }
     if end >= 0 && end < start {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"[bgzip] Illegal region: [%ld, %ld]\n".as_ptr(),
             start,
             end,
@@ -480,14 +480,14 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
 
     if (index != 0 || reindex != 0) && rebgzip != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"[bgzip] Can't produce a index and rebgzip simultaneously\n".as_ptr(),
         );
         return 1;
     }
     if rebgzip != 0 && index_fname.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"[bgzip] Index file name expected with rebgzip.  See -I option.\n".as_ptr(),
         );
         return 1;
@@ -498,7 +498,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
         && argc - optind > 1
     {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"[bgzip] Cannot specify index filename with multiple data file on index, reindex.\n"
                 .as_ptr(),
         );
@@ -508,7 +508,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     if !write_fname.is_null() {
         if pstdout != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"[bgzip] Cannot write to %s and stdout at the same time.\n".as_ptr(),
                 write_fname,
             );
@@ -538,7 +538,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
 
             if compress_level < -1 || compress_level > 9 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"[bgzip] Invalid compress-level: %d\n".as_ptr(),
                     compress_level,
                 );
@@ -558,7 +558,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             );
             if f_src.is_null() {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"[bgzip] %s: %s\n".as_ptr(),
                     libc::strerror(*libc::__errno_location()),
                     if isstdin != 0 {
@@ -575,7 +575,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                     fp = bgzf_open(write_fname, out_mode.as_ptr());
                     if fp.is_null() {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"[bgzip] can't create %s: %s\n".as_ptr(),
                             write_fname,
                             libc::strerror(*libc::__errno_location()),
@@ -617,7 +617,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                     }
                     if fp.is_null() {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"[bgzip] can't create %s: %s\n".as_ptr(),
                             name,
                             libc::strerror(*libc::__errno_location()),
@@ -627,11 +627,11 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                     }
                     statfilename = name;
                 }
-            } else if pstdout == 0 && libc::isatty(libc::fileno(hts_sys::stdout.cast())) != 0 {
-                return bgzip_c_192_bgzip_main_usage(hts_sys::stderr.cast(), libc::EXIT_FAILURE);
+            } else if pstdout == 0 && libc::isatty(libc::fileno(crate::htslib_rs::c_compat::stdout.cast())) != 0 {
+                return bgzip_c_192_bgzip_main_usage(crate::htslib_rs::c_compat::stderr.cast(), libc::EXIT_FAILURE);
             } else if index != 0 && index_fname.is_null() {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"[bgzip] Index file name expected when writing to stdout\n".as_ptr(),
                 );
                 return 1;
@@ -645,7 +645,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             if threads > 1 {
                 if bgzf_mt(fp, threads, 256) != 0 {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"[bgzip] threaded BGZF is not yet supported in this translation\n"
                             .as_ptr(),
                     );
@@ -668,7 +668,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             if rebgzip != 0 {
                 if bgzf_index_load(fp, index_fname, ptr::null()) < 0 {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Could not load index: %s.%s\n".as_ptr(),
                         if isstdin == 0 {
                             *argv.add(optind as usize)
@@ -691,7 +691,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                     }
                     if bgzf_block_write(fp, buffer.cast(), c as usize) < 0 {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"Could not write %d bytes: Error %d\n".as_ptr(),
                             c,
                             (*fp).bitfields >> 16,
@@ -727,7 +727,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                         }
                         if bgzf_write(fp, buffer.cast(), c as usize) < 0 {
                             libc::fprintf(
-                                hts_sys::stderr.cast(),
+                                crate::htslib_rs::c_compat::stderr.cast(),
                                 c"Could not write %d bytes: Error %d\n".as_ptr(),
                                 c,
                                 (*fp).bitfields >> 16,
@@ -805,7 +805,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                         };
                         if wrote < 0 {
                             libc::fprintf(
-                                hts_sys::stderr.cast(),
+                                crate::htslib_rs::c_compat::stderr.cast(),
                                 c"Could not write %d bytes: Error %d\n".as_ptr(),
                                 n,
                                 (*fp).bitfields >> 16,
@@ -829,7 +829,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
 
                     if bgzf_write(fp, buffer.cast(), n as usize) < 0 {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"Could not write %d bytes: Error %d\n".as_ptr(),
                             n,
                             (*fp).bitfields >> 16,
@@ -842,7 +842,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 if !index_fname.is_null() {
                     if bgzf_index_dump(fp, index_fname, ptr::null()) < 0 {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"Could not write index to '%s'\n".as_ptr(),
                             index_fname,
                         );
@@ -851,7 +851,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 } else if isstdin == 0 {
                     if bgzf_index_dump(fp, *argv.add(optind as usize), c".gz.gzi".as_ptr()) < 0 {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"Could not write index to '%s.gz.gzi'\n".as_ptr(),
                             *argv.add(optind as usize),
                         );
@@ -859,7 +859,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                     }
                 } else {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Can not write index for stdin data without index filename, use -I option to set index file.\n".as_ptr(),
                     );
                     libc::exit(libc::EXIT_FAILURE);
@@ -868,7 +868,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
 
             if write_fname.is_null() && bgzf_close(fp) < 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Output close failed: Error %d\n".as_ptr(),
                     (*fp).bitfields >> 16,
                 );
@@ -876,7 +876,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             }
 
             if hclose(f_src) < 0 {
-                libc::fprintf(hts_sys::stderr.cast(), c"Input close failed\n".as_ptr());
+                libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Input close failed\n".as_ptr());
                 libc::exit(libc::EXIT_FAILURE);
             }
 
@@ -884,13 +884,13 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 if bgzip_c_114_getfilespec(*argv.add(optind as usize), &mut filestat) == 0 {
                     if bgzip_c_134_setfilespec(statfilename, &filestat) < 0 {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"[bgzip] Failed to set file specification.\n".as_ptr(),
                         );
                     }
                 } else {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"[bgzip] Failed to get file specification.\n".as_ptr(),
                     );
                 }
@@ -907,7 +907,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 fp = bgzf_open(*argv.add(optind as usize), c"r".as_ptr());
                 if fp.is_null() {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"[bgzip] Could not open file: %s\n".as_ptr(),
                         *argv.add(optind as usize),
                     );
@@ -916,7 +916,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             } else {
                 if index_fname.is_null() {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"[bgzip] Index file name expected when reading from stdin\n".as_ptr(),
                     );
                     libc::exit(libc::EXIT_FAILURE);
@@ -924,7 +924,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 fp = bgzf_open(c"-".as_ptr(), c"r".as_ptr());
                 if fp.is_null() {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"[bgzip] Could not read from stdin: %s\n".as_ptr(),
                         libc::strerror(*libc::__errno_location()),
                     );
@@ -944,7 +944,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             libc::free(buffer.cast());
             if read_ret < 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Is the file gzipped or bgzipped? The latter is required for indexing.\n"
                         .as_ptr(),
                 );
@@ -954,7 +954,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             if !index_fname.is_null() {
                 if bgzf_index_dump(fp, index_fname, ptr::null()) < 0 {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Could not write index to '%s'\n".as_ptr(),
                         index_fname,
                     );
@@ -963,7 +963,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             } else if isstdin == 0 {
                 if bgzf_index_dump(fp, *argv.add(optind as usize), c".gzi".as_ptr()) < 0 {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Could not write index to '%s.gzi'\n".as_ptr(),
                         *argv.add(optind as usize),
                     );
@@ -971,7 +971,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 }
             } else {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Can not write index for stdin data without index filename, use -I option to set index file.\n".as_ptr(),
                 );
                 libc::exit(libc::EXIT_FAILURE);
@@ -979,7 +979,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
 
             if bgzf_close(fp) < 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Close failed: Error %d\n".as_ptr(),
                     (*fp).bitfields >> 16,
                 );
@@ -992,7 +992,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 fp = bgzf_open(*argv.add(optind as usize), c"r".as_ptr());
                 if fp.is_null() {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"[bgzip] Could not open %s: %s\n".as_ptr(),
                         *argv.add(optind as usize),
                         libc::strerror(*libc::__errno_location()),
@@ -1001,7 +1001,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 }
                 if bgzf_compression(fp) == HTS_COMPRESSION_NO_COMPRESSION as c_int {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"[bgzip] %s: not a compressed file -- ignored\n".as_ptr(),
                         *argv.add(optind as usize),
                     );
@@ -1010,13 +1010,13 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 }
 
                 if pstdout != 0 || test != 0 {
-                    f_dst = libc::fileno(hts_sys::stdout.cast());
+                    f_dst = libc::fileno(crate::htslib_rs::c_compat::stdout.cast());
                 } else {
                     let wrflags = libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC;
                     let name = libc::strdup(*argv.add(optind as usize));
                     if name.is_null() {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"[bgzip] unable to allocate memory for output file name.\n".as_ptr(),
                         );
                         bgzf_close(fp);
@@ -1075,7 +1075,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                         }
                         if f_dst < 0 {
                             libc::fprintf(
-                                hts_sys::stderr.cast(),
+                                crate::htslib_rs::c_compat::stderr.cast(),
                                 c"[bgzip] can't create %s: %s\n".as_ptr(),
                                 name,
                                 libc::strerror(*libc::__errno_location()),
@@ -1087,14 +1087,14 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
 
                     statfilename = name;
                 }
-            } else if pstdout == 0 && libc::isatty(libc::fileno(hts_sys::stdin.cast())) != 0 {
-                return bgzip_c_192_bgzip_main_usage(hts_sys::stderr.cast(), libc::EXIT_FAILURE);
+            } else if pstdout == 0 && libc::isatty(libc::fileno(crate::htslib_rs::c_compat::stdin.cast())) != 0 {
+                return bgzip_c_192_bgzip_main_usage(crate::htslib_rs::c_compat::stderr.cast(), libc::EXIT_FAILURE);
             } else {
-                f_dst = libc::fileno(hts_sys::stdout.cast());
+                f_dst = libc::fileno(crate::htslib_rs::c_compat::stdout.cast());
                 fp = bgzf_open(c"-".as_ptr(), c"r".as_ptr());
                 if fp.is_null() {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"[bgzip] Could not read from stdin: %s\n".as_ptr(),
                         libc::strerror(*libc::__errno_location()),
                     );
@@ -1102,7 +1102,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 }
                 if bgzf_compression(fp) == HTS_COMPRESSION_NO_COMPRESSION as c_int {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"[bgzip] stdin is not compressed -- ignored\n".as_ptr(),
                     );
                     bgzf_close(fp);
@@ -1110,7 +1110,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 }
 
                 if write_fname.is_null() {
-                    f_dst = libc::fileno(hts_sys::stdout.cast());
+                    f_dst = libc::fileno(crate::htslib_rs::c_compat::stdout.cast());
                 } else if exp_out_open == 0 {
                     exp_out_open = 1;
 
@@ -1122,7 +1122,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
 
                     if f_dst < 0 {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"[bgzip] can't create %s: %s\n".as_ptr(),
                             write_fname,
                             libc::strerror(*libc::__errno_location()),
@@ -1137,7 +1137,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 if !index_fname.is_null() {
                     if bgzf_index_load(fp, index_fname, ptr::null()) < 0 {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"Could not load index: %s\n".as_ptr(),
                             index_fname,
                         );
@@ -1146,14 +1146,14 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 } else {
                     if optind >= argc || isstdin != 0 {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"The -b option requires -I when reading from stdin (and stdin must be seekable)\n".as_ptr(),
                         );
                         libc::exit(libc::EXIT_FAILURE);
                     }
                     if bgzf_index_load(fp, *argv.add(optind as usize), c".gzi".as_ptr()) < 0 {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"Could not load index: %s.gzi\n".as_ptr(),
                             *argv.add(optind as usize),
                         );
@@ -1162,7 +1162,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 }
                 if bgzf_useek(fp, start, libc::SEEK_SET) < 0 {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Could not seek to %ld-th (uncompressd) byte\n".as_ptr(),
                         start,
                     );
@@ -1173,7 +1173,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             if threads > 1 {
                 if bgzf_mt(fp, threads, 256) != 0 {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"[bgzip] threaded BGZF is not yet supported in this translation\n"
                             .as_ptr(),
                     );
@@ -1193,7 +1193,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                     }
                     if c < 0 {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"Error %d in block starting at offset %ld(%lX)\n".as_ptr(),
                             (*fp).bitfields >> 16,
                             (*fp).block_address,
@@ -1203,7 +1203,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                     }
                     if test == 0 && libc::write(f_dst, block_data, c as usize) != c as isize {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"Could not write %d bytes\n".as_ptr(),
                             c,
                         );
@@ -1226,7 +1226,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                     }
                     if c < 0 {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"Error %d in block starting at offset %ld(%lX)\n".as_ptr(),
                             (*fp).bitfields >> 16,
                             (*fp).block_address,
@@ -1237,7 +1237,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                     start += c as libc::c_long;
                     if test == 0 && libc::write(f_dst, buffer.cast(), c as usize) != c as isize {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"Could not write %d bytes\n".as_ptr(),
                             c,
                         );
@@ -1253,7 +1253,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             libc::free(buffer.cast());
             if bgzf_close(fp) < 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Close failed: Error %d\n".as_ptr(),
                     (*fp).bitfields >> 16,
                 );
@@ -1265,13 +1265,13 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                     if bgzip_c_114_getfilespec(*argv.add(optind as usize), &mut filestat) == 0 {
                         if bgzip_c_134_setfilespec(statfilename, &filestat) < 0 {
                             libc::fprintf(
-                                hts_sys::stderr.cast(),
+                                crate::htslib_rs::c_compat::stderr.cast(),
                                 c"[bgzip] Failed to set file specification.\n".as_ptr(),
                             );
                         }
                     } else {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"[bgzip] Failed to get file specification.\n".as_ptr(),
                         );
                     }
@@ -1301,9 +1301,9 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     }
 
     if usedstdout != 0 && reindex == 0 {
-        if libc::fclose(hts_sys::stdout.cast()) != 0 && *libc::__errno_location() != libc::EBADF {
+        if libc::fclose(crate::htslib_rs::c_compat::stdout.cast()) != 0 && *libc::__errno_location() != libc::EBADF {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"[bgzip] Failed to close stdout, errno %d".as_ptr(),
                 *libc::__errno_location(),
             );
@@ -1315,7 +1315,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 if !index_fname.is_null() {
                     if bgzf_index_dump(fp, index_fname, ptr::null()) < 0 {
                         libc::fprintf(
-                            hts_sys::stderr.cast(),
+                            crate::htslib_rs::c_compat::stderr.cast(),
                             c"Could not write index to '%s'\n".as_ptr(),
                             index_fname,
                         );
@@ -1323,7 +1323,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                     }
                 } else if bgzf_index_dump(fp, write_fname, c".gzi".as_ptr()) < 0 {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"Could not write index to '%s.gzi'\n".as_ptr(),
                         write_fname,
                     );
@@ -1333,7 +1333,7 @@ pub unsafe fn bgzip_c_217_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
 
             if bgzf_close(fp) < 0 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Output close failed: Error %d\n".as_ptr(),
                     (*fp).bitfields >> 16,
                 );

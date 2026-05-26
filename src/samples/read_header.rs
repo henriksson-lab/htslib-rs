@@ -20,7 +20,7 @@ pub unsafe fn samples_read_header_c_49_main(argc: c_int, argv: *mut *mut c_char)
     };
 
     if argc < 3 || argc > 6 {
-        samples_read_header_c_37_print_usage(hts_sys::stderr.cast());
+        samples_read_header_c_37_print_usage(crate::htslib_rs::c_compat::stderr.cast());
         return ret;
     }
 

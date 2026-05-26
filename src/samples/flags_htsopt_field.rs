@@ -18,7 +18,7 @@ pub unsafe fn samples_flags_htsopt_field_c_50_main(argc: c_int, argv: *mut *mut 
     let mut in_samhdr = std::ptr::null_mut();
 
     if argc != 2 {
-        samples_flags_htsopt_field_c_37_print_usage(hts_sys::stdout.cast());
+        samples_flags_htsopt_field_c_37_print_usage(crate::htslib_rs::c_compat::stdout.cast());
         return ret;
     }
     let inname = *argv.add(1);

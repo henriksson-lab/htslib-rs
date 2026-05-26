@@ -155,11 +155,6 @@ extern "C" {
         ID_key: *const ::core::ffi::c_char,
         ID_value: *const ::core::ffi::c_char,
     ) -> *mut sam_hrec_type_t;
-    fn sam_hrecs_find_key(
-        type_0: *mut sam_hrec_type_t,
-        key: *const ::core::ffi::c_char,
-        prev: *mut *mut sam_hrec_tag_t,
-    ) -> *mut sam_hrec_tag_t;
     fn sam_hrecs_find_rg(
         hrecs: *mut sam_hrecs_t,
         rg: *const ::core::ffi::c_char,
@@ -181,12 +176,6 @@ extern "C" {
     fn pthread_mutex_unlock(__mutex: *mut pthread_mutex_t) -> ::core::ffi::c_int;
     fn itf8_put_blk(blk: *mut cram_block, val: int32_t) -> ::core::ffi::c_int;
     fn cram_new_metrics() -> *mut cram_metrics;
-    fn cram_get_ref(
-        fd: *mut cram_fd,
-        id: ::core::ffi::c_int,
-        start: hts_pos_t,
-        end: hts_pos_t,
-    ) -> *mut ::core::ffi::c_char;
     fn cram_ref_incr(r: *mut refs_t, id: ::core::ffi::c_int);
     fn cram_ref_decr(r: *mut refs_t, id: ::core::ffi::c_int);
     fn cram_flush_container_mt(fd: *mut cram_fd, c: *mut cram_container) -> ::core::ffi::c_int;
@@ -197,6 +186,19 @@ extern "C" {
     fn cram_stats_encoding(fd: *mut cram_fd, st: *mut cram_stats) -> cram_encoding;
     fn sam_realloc_bam_data(b: *mut bam1_t, desired: size_t) -> ::core::ffi::c_int;
 }
+
+// Native CRAM reference-sequence cache (see src/cram.rs). The cram_fd here is a
+// full-field repr(C) mirror of the C-allocated struct, so a cast is sound.
+#[inline]
+unsafe fn cram_get_ref(
+    fd: *mut cram_fd,
+    id: ::core::ffi::c_int,
+    start: hts_pos_t,
+    end: hts_pos_t,
+) -> *mut ::core::ffi::c_char {
+    crate::htslib_rs::cram::cram_cram_io_c_3409_cram_get_ref(fd.cast(), id, start, end)
+}
+
 pub type size_t = usize;
 pub type __int8_t = i8;
 pub type __uint8_t = u8;
@@ -12461,11 +12463,12 @@ unsafe extern "C" fn validate_md5(
     if ty.is_null() {
         return 0 as ::core::ffi::c_int;
     }
-    let mut m5tag: *mut sam_hrec_tag_t = sam_hrecs_find_key(
-        ty,
+    let mut m5tag: *mut sam_hrec_tag_t = crate::htslib_rs::sam::sam_hrecs_find_key(
+        ty.cast(),
         b"M5\0" as *const u8 as *const ::core::ffi::c_char,
-        ::core::ptr::null_mut::<*mut sam_hrec_tag_t>(),
-    );
+        ::core::ptr::null_mut(),
+    )
+    .cast::<sam_hrec_tag_t>();
     if m5tag.is_null() {
         return 0 as ::core::ffi::c_int;
     }

@@ -31,7 +31,7 @@ use std::ffi::{c_char, c_int, c_uint, c_void};
 type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> c_int;
 type HFileVOpenFn =
-    unsafe extern "C" fn(*const c_char, *const c_char, *mut hts_sys::__va_list_tag) -> *mut hFILE;
+    unsafe extern "C" fn(*const c_char, *const c_char, *mut crate::htslib_rs::c_compat::__va_list_tag) -> *mut hFILE;
 
 #[repr(C)]
 struct hFILE_scheme_handler_layout {
@@ -138,7 +138,7 @@ unsafe fn hfile_gcs_c_41_build_rewrite(
 
     if hts_verbose >= 8 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"[M::gcs_open] rewrote URL as %s\n".as_ptr(),
             (*url).s,
         );
@@ -225,7 +225,7 @@ unsafe fn hfile_gcs_c_41_gcs_rewrite(
     gsurl: *const c_char,
     mut mode: *const c_char,
     mode_has_colon: c_int,
-    argsp: *mut hts_sys::__va_list_tag,
+    argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     let mut mode_colon: kstring_t = std::mem::zeroed();
     let mut url: kstring_t = std::mem::zeroed();
@@ -337,11 +337,11 @@ unsafe extern "C" fn hfile_gcs_c_125_gcs_open(
 unsafe extern "C" fn hfile_gcs_c_130_gcs_vopen(
     url: *const c_char,
     mode_colon: *const c_char,
-    args0: *mut hts_sys::__va_list_tag,
+    args0: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     // Need to use va_copy() as we can only take the address of an actual
     // va_list object, not that of a parameter as its type may have decayed.
-    let mut args = std::mem::MaybeUninit::<hts_sys::__va_list_tag>::uninit();
+    let mut args = std::mem::MaybeUninit::<crate::htslib_rs::c_compat::__va_list_tag>::uninit();
     std::ptr::copy_nonoverlapping(args0, args.as_mut_ptr(), 1);
     hfile_gcs_c_41_gcs_rewrite(url, mode_colon, 1, args.as_mut_ptr())
 }

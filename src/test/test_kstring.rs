@@ -41,7 +41,7 @@ pub unsafe fn test_test_kstring_c_45_test_kroundup_size_t(verbose: c_int) -> c_i
     }
     if val != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"kroundup_size_t(0) produced 0x%zx, expected 0\n".as_ptr(),
             val,
         );
@@ -61,7 +61,7 @@ pub unsafe fn test_test_kstring_c_45_test_kroundup_size_t(verbose: c_int) -> c_i
             if delta <= 0 {
                 if val != expected {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"kroundup_size_t(0x%zx) produced 0x%zx, expected 0x%zx\n".as_ptr(),
                         val_in,
                         val,
@@ -76,7 +76,7 @@ pub unsafe fn test_test_kstring_c_45_test_kroundup_size_t(verbose: c_int) -> c_i
                 }
                 if val != expected {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"kroundup_size_t(0x%zx) produced 0x%zx, expected 0x%zx\n".as_ptr(),
                         val_in,
                         val,
@@ -122,7 +122,7 @@ pub unsafe fn test_test_kstring_c_91_test_kroundup_signed(verbose: c_int) -> c_i
             if delta <= 0 {
                 if val as u32 != expected {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"kroundup32(%d) produced %d, expected %u\n".as_ptr(),
                         val_in,
                         val,
@@ -138,7 +138,7 @@ pub unsafe fn test_test_kstring_c_91_test_kroundup_signed(verbose: c_int) -> c_i
                 }
                 if val as u32 != expected {
                     libc::fprintf(
-                        hts_sys::stderr.cast(),
+                        crate::htslib_rs::c_compat::stderr.cast(),
                         c"kroundup32(%d) produced %d, expected %u\n".as_ptr(),
                         val_in,
                         val,
@@ -168,14 +168,14 @@ pub unsafe fn test_test_kstring_c_127_test_kputuw_from_to(
         }
         if (*str_).l >= (*str_).m || *(*str_).s.add((*str_).l) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"No NUL termination on string from kputuw\n".as_ptr(),
             );
             return -1;
         }
         if i != libc::strtoul((*str_).s, std::ptr::null_mut(), 10) as c_uint {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"kputuw wrote the wrong value, expected %u, got %s\n".as_ptr(),
                 i,
                 (*str_).s,
@@ -244,14 +244,14 @@ pub unsafe fn test_test_kstring_c_193_test_kputw_from_to(
         }
         if (*str_).l >= (*str_).m || *(*str_).s.add((*str_).l) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"No NUL termination on string from kputw\n".as_ptr(),
             );
             return -1;
         }
         if i != libc::strtol((*str_).s, std::ptr::null_mut(), 10) as c_int {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"kputw wrote the wrong value, expected %d, got %s\n".as_ptr(),
                 i,
                 (*str_).s,
@@ -333,14 +333,14 @@ pub unsafe fn test_test_kstring_c_268_test_kputll_from_to(
         }
         if (*str_).l >= (*str_).m || *(*str_).s.add((*str_).l) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"No NUL termination on string from kputll\n".as_ptr(),
             );
             return -1;
         }
         if i != libc::strtoll((*str_).s, std::ptr::null_mut(), 10) as i64 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"kputll wrote the wrong value, expected %lld, got %s\n".as_ptr(),
                 i,
                 (*str_).s,
@@ -609,13 +609,13 @@ pub unsafe fn test_test_kstring_c_458_test_kinsertchar() -> c_int {
                 crate::htslib_rs::hts::ks_free(&mut s);
                 continue;
             }
-            libc::fprintf(hts_sys::stderr.cast(), c"kinsert_char failed\n".as_ptr());
+            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"kinsert_char failed\n".as_ptr());
             crate::htslib_rs::hts::ks_free(&mut s);
             return -1;
         }
         if *s.s.add(s.l) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"No NUL termination on string from kinsert_char\n".as_ptr(),
             );
             crate::htslib_rs::hts::ks_free(&mut s);
@@ -623,7 +623,7 @@ pub unsafe fn test_test_kstring_c_458_test_kinsertchar() -> c_int {
         }
         if libc::memcmp(s.s.cast(), expected[(i + 1) as usize].cast(), s.l + 1) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"kinsert_char comparison failed\n".as_ptr(),
             );
             crate::htslib_rs::hts::ks_free(&mut s);
@@ -638,7 +638,7 @@ pub unsafe fn test_test_kstring_c_458_test_kinsertchar() -> c_int {
         crate::htslib_rs::hts::kputc(b'A' as c_int + i, &mut res);
         if crate::htslib_rs::hts::kinsert_char((b'A' as c_int + i) as c_char, t.l, &mut t) < 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"kinsert_char failed in realloc\n".as_ptr(),
             );
             crate::htslib_rs::hts::ks_free(&mut res);
@@ -647,7 +647,7 @@ pub unsafe fn test_test_kstring_c_458_test_kinsertchar() -> c_int {
         }
         if *t.s.add(t.l) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"No NUL termination on string from kinsert_char in realloc\n".as_ptr(),
             );
             crate::htslib_rs::hts::ks_free(&mut res);
@@ -656,7 +656,7 @@ pub unsafe fn test_test_kstring_c_458_test_kinsertchar() -> c_int {
         }
         if libc::memcmp(t.s.cast(), res.s.cast(), res.l + 1) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"kinsert_char realloc comparison failed in realloc\n".as_ptr(),
             );
             crate::htslib_rs::hts::ks_free(&mut res);
@@ -695,13 +695,13 @@ pub unsafe fn test_test_kstring_c_514_test_kinsertstr() -> c_int {
                 crate::htslib_rs::hts::ks_free(&mut s);
                 continue;
             }
-            libc::fprintf(hts_sys::stderr.cast(), c"kinsert_str failed\n".as_ptr());
+            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"kinsert_str failed\n".as_ptr());
             crate::htslib_rs::hts::ks_free(&mut s);
             return -1;
         }
         if *s.s.add(s.l) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"No NUL termination on string from kinsert_str\n".as_ptr(),
             );
             crate::htslib_rs::hts::ks_free(&mut s);
@@ -709,7 +709,7 @@ pub unsafe fn test_test_kstring_c_514_test_kinsertstr() -> c_int {
         }
         if libc::memcmp(s.s.cast(), expected[(i + 1) as usize].cast(), s.l + 1) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"kinsert_str comparison failed\n".as_ptr(),
             );
             crate::htslib_rs::hts::ks_free(&mut s);
@@ -726,7 +726,7 @@ pub unsafe fn test_test_kstring_c_514_test_kinsertstr() -> c_int {
         crate::htslib_rs::hts::kputs(one.as_mut_ptr(), &mut res);
         if crate::htslib_rs::hts::kinsert_str(one.as_mut_ptr(), t.l, &mut t) < 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"kinsert_str failed in realloc\n".as_ptr(),
             );
             crate::htslib_rs::hts::ks_free(&mut res);
@@ -735,7 +735,7 @@ pub unsafe fn test_test_kstring_c_514_test_kinsertstr() -> c_int {
         }
         if *t.s.add(t.l) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"No NUL termination on string from kinsert_str in realloc\n".as_ptr(),
             );
             crate::htslib_rs::hts::ks_free(&mut res);
@@ -744,7 +744,7 @@ pub unsafe fn test_test_kstring_c_514_test_kinsertstr() -> c_int {
         }
         if libc::memcmp(t.s.cast(), res.s.cast(), res.l + 1) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"kinsert_str realloc comparison failed in realloc\n".as_ptr(),
             );
             crate::htslib_rs::hts::ks_free(&mut res);
@@ -757,7 +757,7 @@ pub unsafe fn test_test_kstring_c_514_test_kinsertstr() -> c_int {
     if crate::htslib_rs::hts::kinsert_str(c"".as_ptr(), 1, &mut t) != 0 {
         if crate::htslib_rs::hts::kinsert_str(c"".as_ptr(), 0, &mut t) != 0 || t.l != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"kinsert_str empty insertion failed\n".as_ptr(),
             );
             crate::htslib_rs::hts::ks_free(&mut res);
@@ -765,7 +765,7 @@ pub unsafe fn test_test_kstring_c_514_test_kinsertstr() -> c_int {
         }
     } else {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"kinsert_str empty ins to invalid pos succeeded\n".as_ptr(),
         );
         crate::htslib_rs::hts::ks_free(&mut res);
@@ -775,7 +775,7 @@ pub unsafe fn test_test_kstring_c_514_test_kinsertstr() -> c_int {
     let old_len = res.l;
     if crate::htslib_rs::hts::kinsert_str(c"".as_ptr(), 1, &mut res) != 0 || old_len != res.l {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"kinsert_str empty ins to valid pos failed\n".as_ptr(),
         );
         crate::htslib_rs::hts::ks_free(&mut res);
@@ -824,7 +824,7 @@ pub unsafe fn test_test_kstring_c_586_test_kmemmem() -> c_int {
         if loc != *expected {
             pass = 0;
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"kmemmem() test %zd failed - got %lld expected %lld\n".as_ptr(),
                 i,
                 loc as i64,
@@ -846,7 +846,7 @@ pub unsafe fn test_test_kstring_c_586_test_kmemmem() -> c_int {
         if loc != *expected {
             pass = 0;
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"karp_rabin() test %zd failed - got %lld expected %lld\n".as_ptr(),
                 i,
                 loc as i64,
@@ -884,7 +884,7 @@ pub unsafe fn test_test_kstring_c_638_test_kstrstr() -> c_int {
         if loc != *expected {
             pass = 0;
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"kstrstr() test %zd failed - got %lld expected %lld\n".as_ptr(),
                 i,
                 loc as i64,
@@ -927,7 +927,7 @@ pub unsafe fn test_test_kstring_c_673_test_kstrnstr() -> c_int {
         if loc != *expected {
             pass = 0;
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"kstrnstr() test %zd failed - got %lld expected %lld\n".as_ptr(),
                 i,
                 loc as i64,
@@ -962,7 +962,7 @@ pub unsafe fn test_test_kstring_c_709_main(argc: c_int, argv: *mut *mut c_char) 
             b'v' => verbose += 1,
             _ => {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Usage : %s [-s <num>] [-e <num>] [-t <test>]\n".as_ptr(),
                     *argv,
                 );

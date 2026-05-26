@@ -3,7 +3,7 @@ use std::ffi::{c_char, c_int, c_void};
 pub unsafe fn test_test_vcf_sweep_c_31_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     if argc != 2 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Usage: test-vcf-sweep <file.bcf|file.vcf>\n".as_ptr(),
         );
         return 1;

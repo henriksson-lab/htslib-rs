@@ -7,9 +7,9 @@ use std::ffi::{c_char, c_int, CStr};
 pub unsafe fn kstring_c_142_kvsprintf(
     s: *mut kstring_t,
     fmt: *const c_char,
-    ap: *mut hts_sys::__va_list_tag,
+    ap: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> c_int {
-    let mut args = std::mem::MaybeUninit::<hts_sys::__va_list_tag>::uninit();
+    let mut args = std::mem::MaybeUninit::<crate::htslib_rs::c_compat::__va_list_tag>::uninit();
     std::ptr::copy_nonoverlapping(ap, args.as_mut_ptr(), 1);
     let mut args = args.assume_init();
 
@@ -38,20 +38,20 @@ pub unsafe fn kstring_c_142_kvsprintf(
         (*s).s.add((*s).l),
         ((*s).m - (*s).l) as u64,
         fmt,
-        (&mut args as *mut hts_sys::__va_list_tag).cast(),
+        (&mut args as *mut crate::htslib_rs::c_compat::__va_list_tag).cast(),
     );
     if l + 1 > ((*s).m - (*s).l) as c_int {
         if ks_resize(s, (*s).l + l as usize + 2) < 0 {
             return -1;
         }
-        let mut args = std::mem::MaybeUninit::<hts_sys::__va_list_tag>::uninit();
+        let mut args = std::mem::MaybeUninit::<crate::htslib_rs::c_compat::__va_list_tag>::uninit();
         std::ptr::copy_nonoverlapping(ap, args.as_mut_ptr(), 1);
         let mut args = args.assume_init();
         l = hts_sys::vsnprintf(
             (*s).s.add((*s).l),
             ((*s).m - (*s).l) as u64,
             fmt,
-            (&mut args as *mut hts_sys::__va_list_tag).cast(),
+            (&mut args as *mut crate::htslib_rs::c_compat::__va_list_tag).cast(),
         );
     }
     (*s).l += l as usize;

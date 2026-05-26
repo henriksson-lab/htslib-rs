@@ -18,7 +18,7 @@ pub unsafe fn test_sam_c_78_check_bam_aux_get(
             return p;
         }
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: %s field of type '%c', expected '%c'\n".as_ptr(),
             tag,
             *p as c_int,
@@ -26,7 +26,7 @@ pub unsafe fn test_sam_c_78_check_bam_aux_get(
         );
     } else {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: can't find %s field\n".as_ptr(),
             tag,
         );
@@ -49,7 +49,7 @@ pub unsafe fn test_sam_c_90_check_aux_count(
     }
     if n != expected {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: %s has %d aux fields, expected %d\n".as_ptr(),
             what,
             n,
@@ -74,7 +74,7 @@ pub unsafe fn test_sam_c_99_check_int_B_array(
     let len = sam::bam_auxB_len(p);
     if len != nvals {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: Wrong length reported for %s field, got %u, expected %u\n".as_ptr(),
             tag,
             len,
@@ -88,7 +88,7 @@ pub unsafe fn test_sam_c_99_check_int_B_array(
         let got_i = sam::bam_auxB2i(p, i);
         if got_i != expected {
             libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Failed: Wrong value from bam_auxB2i for %s field index %u, got %ld expected %ld\n".as_ptr(),
                     tag,
                     i,
@@ -101,7 +101,7 @@ pub unsafe fn test_sam_c_99_check_int_B_array(
         let got_f = sam::bam_auxB2f(p, i);
         if got_f != expected as f64 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed: Wrong value from bam_auxB2f for %s field index %u, got %f expected %f\n"
                     .as_ptr(),
                 tag,
@@ -126,7 +126,7 @@ pub unsafe fn test_sam_c_136_test_update_int(
 ) -> c_int {
     if sam::bam_aux_update_int(aln, target_id, target_val) < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: update %.2s tag\n".as_ptr(),
             target_id,
         );
@@ -137,7 +137,7 @@ pub unsafe fn test_sam_c_136_test_update_int(
     let mut p = sam::bam_aux_get(aln, target_id);
     if p.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: find %.2s tag\n".as_ptr(),
             target_id,
         );
@@ -146,7 +146,7 @@ pub unsafe fn test_sam_c_136_test_update_int(
     }
     if *p as c_char != expected_type || sam::bam_aux2i(p) != target_val {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: %.2s field is %c:%ld; expected %c:%ld\n".as_ptr(),
             target_id,
             *p as c_int,
@@ -164,7 +164,7 @@ pub unsafe fn test_sam_c_136_test_update_int(
     p = sam::bam_aux_get(aln, next_id);
     if p.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: find %.2s tag after updating %.2s\n".as_ptr(),
             next_id,
             target_id,
@@ -174,7 +174,7 @@ pub unsafe fn test_sam_c_136_test_update_int(
     }
     if *p as c_char != next_type || sam::bam_aux2i(p) != next_val {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: after updating %.2s to %ld: %.2s field is %c:%ld; expected %c:%ld\n".as_ptr(),
             target_id,
             target_val as libc::c_long,
@@ -203,7 +203,7 @@ pub unsafe fn test_sam_c_192_test_update_array(
 ) -> c_int {
     if sam::bam_aux_update_array(aln, target_id, type_, nitems, data.cast()) < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: update %.2s tag\n".as_ptr(),
             target_id,
         );
@@ -214,7 +214,7 @@ pub unsafe fn test_sam_c_192_test_update_array(
     let mut p = sam::bam_aux_get(aln, target_id);
     if p.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: find %.2s tag\n".as_ptr(),
             target_id,
         );
@@ -235,7 +235,7 @@ pub unsafe fn test_sam_c_192_test_update_array(
         };
         if !ok {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed: Wrong value for %.2s field index %u\n".as_ptr(),
                 target_id,
                 i,
@@ -251,7 +251,7 @@ pub unsafe fn test_sam_c_192_test_update_array(
     p = sam::bam_aux_get(aln, next_id);
     if p.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: find %.2s tag after updating %.2s\n".as_ptr(),
             next_id,
             target_id,
@@ -261,7 +261,7 @@ pub unsafe fn test_sam_c_192_test_update_array(
     }
     if *p as c_char != next_type || sam::bam_aux2i(p) != next_val {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: after updating %.2s: %.2s field is %c:%ld; expected %c:%ld\n".as_ptr(),
             target_id,
             next_id,
@@ -477,7 +477,7 @@ pub unsafe fn test_sam_c_557_set_qname() {
         }
         if libc::strcmp(ks.s, expected) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed: record formatted incorrectly:\nGot: \"%s\"\nExp: \"%s\"\n".as_ptr(),
                 ks.s,
                 expected,
@@ -524,7 +524,7 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
 
     if in_.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: couldn't open %s\n".as_ptr(),
             infname,
         );
@@ -534,7 +534,7 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
     }
     if out.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: couldn't open %s with mode %s\n".as_ptr(),
             outfname,
             outmode,
@@ -568,7 +568,7 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
         ) < 0
     {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: setting reference %s for %s\n".as_ptr(),
             outref,
             outfname,
@@ -581,7 +581,7 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
     header = sam::sam_hdr_read(in_);
     if header.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: reading header from %s\n".as_ptr(),
             infname,
         );
@@ -591,7 +591,7 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
     }
     if sam::sam_hdr_write(out, header) < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: writing headers to %s\n".as_ptr(),
             outfname,
         );
@@ -603,7 +603,7 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
         if res < 0 {
             if res < -1 {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Failed: failed to read alignment from %s\n".as_ptr(),
                     infname,
                 );
@@ -615,7 +615,7 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
         let mod4 = (sam::bam_get_cigar(aln) as isize % 4) as c_int;
         if mod4 != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed: %s CIGAR not 4-byte aligned; offset is 4k+%d for \"%s\"\n".as_ptr(),
                 informat,
                 mod4,
@@ -626,7 +626,7 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
 
         if sam::sam_c_4553_sam_write1(out, header, aln) < 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed: writing to %s\n".as_ptr(),
                 outfname,
             );
@@ -662,7 +662,7 @@ pub unsafe fn test_sam_c_669_check_target_names(
 ) -> c_int {
     if (*header).target_name.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: target_name is NULL\n".as_ptr(),
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
@@ -670,7 +670,7 @@ pub unsafe fn test_sam_c_669_check_target_names(
     }
     if (*header).target_len.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: target_len is NULL\n".as_ptr(),
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
@@ -678,7 +678,7 @@ pub unsafe fn test_sam_c_669_check_target_names(
     }
     if (*header).n_targets != expected_n_targets {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: header->n_targets (%d) != expected_n_targets (%d)\n".as_ptr(),
             (*header).n_targets,
             expected_n_targets,
@@ -692,7 +692,7 @@ pub unsafe fn test_sam_c_669_check_target_names(
         let expected_name = *expected_targets.add(i as usize);
         if name.is_null() || libc::strcmp(name, expected_name) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed: header->target_name[%d] (%s) != \"%s\"\n".as_ptr(),
                 i,
                 if name.is_null() {
@@ -709,7 +709,7 @@ pub unsafe fn test_sam_c_669_check_target_names(
         let expected_len = *expected_lengths.add(i as usize);
         if len != expected_len {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed: header->target_len[%d] (%d) != %d\n".as_ptr(),
                 i,
                 len,
@@ -1274,7 +1274,7 @@ pub unsafe fn test_sam_c_1348_samrecord_layout() {
     let actual_core = std::mem::size_of::<sam::bam1_core_t>();
     if actual_core != core_size {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: sizeof bam1_core_t is %zu, expected %d\n".as_ptr(),
             actual_core,
             core_size as c_int,
@@ -1285,7 +1285,7 @@ pub unsafe fn test_sam_c_1348_samrecord_layout() {
     let actual_bam = std::mem::size_of::<sam::bam1_t>();
     if actual_bam != bam1_t_size && actual_bam != bam1_t_size2 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: sizeof bam1_t is %zu, expected either %zu or %zu\n".as_ptr(),
             actual_bam,
             bam1_t_size,
@@ -1307,7 +1307,7 @@ pub unsafe fn test_sam_c_1388_check_ref_lengths(
         let expected = *expected_lengths.add(i as usize);
         if ln != expected {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed: Wrong length for %s ref %d : expected %ld got %ld\n".as_ptr(),
                 hdr_name,
                 i,
@@ -1582,7 +1582,7 @@ pub unsafe fn test_sam_c_1641_test_text_file(filename: *const c_char, nexp: c_in
 pub unsafe fn test_sam_c_1661_check_enum1() {
     if hts_sys::htsCompression_no_compression != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: no_compression is %d\n".as_ptr(),
             hts_sys::htsCompression_no_compression,
         );
@@ -1590,7 +1590,7 @@ pub unsafe fn test_sam_c_1661_check_enum1() {
     }
     if hts_sys::htsCompression_gzip != 1 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: gzip is %d\n".as_ptr(),
             hts_sys::htsCompression_gzip,
         );
@@ -1598,7 +1598,7 @@ pub unsafe fn test_sam_c_1661_check_enum1() {
     }
     if hts_sys::htsCompression_bgzf != 2 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: bgzf is %d\n".as_ptr(),
             hts_sys::htsCompression_bgzf,
         );
@@ -1615,7 +1615,7 @@ pub unsafe fn test_sam_c_1669_check_cigar_tab() {
         .count();
     if n_neg + cigar_str.len() != 256 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: bam_cigar_table has %d unset entries\n".as_ptr(),
             n_neg as c_int,
         );
@@ -1625,7 +1625,7 @@ pub unsafe fn test_sam_c_1669_check_cigar_tab() {
     for (i, ch) in cigar_str.iter().copied().enumerate() {
         if sam::BAM_CIGAR_TABLE[ch as usize] != i as i8 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed: bam_cigar_table['%c'] is not %d\n".as_ptr(),
                 ch as c_int,
                 i as c_int,
@@ -1652,7 +1652,7 @@ pub unsafe fn test_sam_c_1688_generator(name: *const c_char) -> c_int {
     let f = libc::fopen(name, c"w".as_ptr());
     if f.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Couldn't open \"%s\"\n".as_ptr(),
             name,
         );
@@ -1784,7 +1784,7 @@ pub unsafe fn test_sam_c_1781_test_parse_decimal1(
 ) {
     if !warning.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"(Expect %s message for \"%s\")\n".as_ptr(),
             warning,
             str_,
@@ -1794,7 +1794,7 @@ pub unsafe fn test_sam_c_1781_test_parse_decimal1(
     let mut val = crate::htslib_rs::hts::hts_parse_decimal(str_, std::ptr::null_mut(), flags);
     if val != exp {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: hts_parse_decimal(\"%s\", NULL, %d) returned %lld, expected %lld\n".as_ptr(),
             str_,
             flags,
@@ -1808,7 +1808,7 @@ pub unsafe fn test_sam_c_1781_test_parse_decimal1(
     val = crate::htslib_rs::hts::hts_parse_decimal(str_, &mut end, flags);
     if val != exp {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: hts_parse_decimal(\"%s\", ..., %d) returned %lld, expected %lld\n".as_ptr(),
             str_,
             flags,
@@ -1821,7 +1821,7 @@ pub unsafe fn test_sam_c_1781_test_parse_decimal1(
     let consumed = end.offset_from(str_) as usize;
     if consumed != exp_consumed {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: hts_parse_decimal(\"%s\", ..., %d) consumed %zu chars, expected %zu\n"
                 .as_ptr(),
             str_,
@@ -2572,7 +2572,7 @@ pub unsafe fn test_sam_c_2195_test_bam_set1_validate_size_limits() {
 
 unsafe fn test_sam_bam_set1_fail(func: *const c_char, message: *const c_char) {
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"Failed: %s: %s\n".as_ptr(),
         func,
         message,

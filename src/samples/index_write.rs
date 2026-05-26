@@ -18,7 +18,7 @@ pub unsafe fn samples_index_write_c_50_main(argc: c_int, argv: *mut *mut c_char)
     let mut in_samhdr = std::ptr::null_mut();
 
     if argc != 4 {
-        samples_index_write_c_38_print_usage(hts_sys::stderr.cast());
+        samples_index_write_c_38_print_usage(crate::htslib_rs::c_compat::stderr.cast());
         return ret;
     }
 

@@ -83,7 +83,7 @@ pub unsafe fn samples_pileup_mod_c_98_main(argc: c_int, argv: *mut *mut c_char) 
     };
 
     if argc != 2 {
-        samples_pileup_mod_c_38_print_usage(hts_sys::stderr.cast());
+        samples_pileup_mod_c_38_print_usage(crate::htslib_rs::c_compat::stderr.cast());
         return ret;
     }
     conf.inname = *argv.add(1);
@@ -207,7 +207,7 @@ pub unsafe fn samples_pileup_mod_c_98_main(argc: c_int, argv: *mut *mut c_char) 
             libc::printf(c" ".as_ptr());
         }
         libc::printf(c"\n".as_ptr());
-        libc::fflush(hts_sys::stdout.cast());
+        libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
     }
 
     ret = libc::EXIT_SUCCESS;

@@ -108,7 +108,7 @@ pub unsafe fn samples_dump_aux_c_114_main(argc: c_int, argv: *mut *mut c_char) -
     let mut ret = libc::EXIT_FAILURE;
 
     if argc != 2 {
-        samples_dump_aux_c_37_print_usage(hts_sys::stderr.cast());
+        samples_dump_aux_c_37_print_usage(crate::htslib_rs::c_compat::stderr.cast());
         return ret;
     }
     let inname = *argv.add(1);
@@ -149,7 +149,7 @@ pub unsafe fn samples_dump_aux_c_114_main(argc: c_int, argv: *mut *mut c_char) -
                     b'i' as c_int
                 },
             );
-            if samples_dump_aux_c_51_printauxdata(hts_sys::stdout.cast(), type_, -1, data)
+            if samples_dump_aux_c_51_printauxdata(crate::htslib_rs::c_compat::stdout.cast(), type_, -1, data)
                 == libc::EXIT_FAILURE
             {
                 libc::printf(c"Failed to dump aux data\n".as_ptr());

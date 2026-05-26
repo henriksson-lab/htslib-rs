@@ -50,7 +50,7 @@ unsafe fn run_thrash_threads6(
 
     if uend < upos + min_tail {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Please supply a bigger input file\n".as_ptr(),
         );
         libc::exit(1);
@@ -72,7 +72,7 @@ unsafe fn run_thrash_threads6(
                 .unwrap_or_else(|| libc::rand() % 7);
             if verbose {
                 libc::putchar('0' as c_int + n);
-                libc::fflush(hts_sys::stdout.cast());
+                libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
             }
             match n {
                 0 => {
@@ -142,7 +142,7 @@ unsafe fn run_thrash_threads6(
 pub unsafe fn test_thrash_threads6_c_34_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     if argc <= 1 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Usage: thrash_threads4 input.bam\n".as_ptr(),
         );
         libc::exit(1);

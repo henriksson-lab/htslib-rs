@@ -31,7 +31,7 @@ static mut FAILURES: c_int = 0;
 // original: main (htslib/test/test_hfile_libcurl.c:30)
 pub unsafe fn test_test_hfile_libcurl_c_30_main() -> c_int {
     libc::fprintf(
-        hts_sys::stderr.cast(),
+        crate::htslib_rs::c_compat::stderr.cast(),
         c"libcurl retry tests not supported on Windows, skipping\n".as_ptr(),
     );
     0
@@ -72,16 +72,16 @@ const EPROTONOSUPPORT: c_int = libc::ENOSYS;
 #[cfg(not(target_os = "windows"))]
 macro_rules! pass {
     ($name:expr) => {{
-        libc::fprintf(hts_sys::stderr.cast(), c"  PASS: %s\n".as_ptr(), $name);
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"  PASS: %s\n".as_ptr(), $name);
     }};
 }
 
 #[cfg(not(target_os = "windows"))]
 macro_rules! fail {
     ($name:expr, $format:expr $(, $arg:expr)* $(,)?) => {{
-        libc::fprintf(hts_sys::stderr.cast(), c"  FAIL: %s: ".as_ptr(), $name);
-        libc::fprintf(hts_sys::stderr.cast(), $format $(, $arg)*);
-        libc::fprintf(hts_sys::stderr.cast(), c"\n".as_ptr());
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"  FAIL: %s: ".as_ptr(), $name);
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), $format $(, $arg)*);
+        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"\n".as_ptr());
         FAILURES += 1;
     }};
 }
@@ -157,7 +157,7 @@ pub unsafe fn test_test_hfile_libcurl_c_65_start_server(
 
     if n <= 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed to read port from mock server\n".as_ptr(),
         );
         libc::kill(pid, libc::SIGTERM);
@@ -169,7 +169,7 @@ pub unsafe fn test_test_hfile_libcurl_c_65_start_server(
     *port_out = libc::atoi(port_buf.as_ptr());
     if *port_out <= 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Invalid port from mock server: %s\n".as_ptr(),
             port_buf.as_ptr(),
         );
@@ -625,7 +625,7 @@ pub unsafe fn test_test_hfile_libcurl_c_436_test_retry_disabled() {
 pub unsafe fn test_test_hfile_libcurl_c_464_main() -> c_int {
     if libc::system(c"python3 --version >/dev/null 2>&1".as_ptr()) != 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"python3 not found, skipping libcurl retry tests\n".as_ptr(),
         );
         return 0;
@@ -638,7 +638,7 @@ pub unsafe fn test_test_hfile_libcurl_c_464_main() -> c_int {
         crate::htslib_rs::hfile::hclose_abruptly(probe);
     } else if *crate::htslib_rs::c_compat::__errno_location() == EPROTONOSUPPORT {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"HTTP not supported, skipping libcurl retry tests\n".as_ptr(),
         );
         return 0;
@@ -646,7 +646,7 @@ pub unsafe fn test_test_hfile_libcurl_c_464_main() -> c_int {
 
     test_test_hfile_libcurl_c_154_generate_test_data();
 
-    libc::fprintf(hts_sys::stderr.cast(), c"test_hfile_libcurl:\n".as_ptr());
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"test_hfile_libcurl:\n".as_ptr());
 
     test_test_hfile_libcurl_c_233_test_normal_transfer();
     test_test_hfile_libcurl_c_265_test_503_retry();
@@ -660,14 +660,14 @@ pub unsafe fn test_test_hfile_libcurl_c_464_main() -> c_int {
 
     if FAILURES > 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"%d test(s) FAILED\n".as_ptr(),
             FAILURES,
         );
         return libc::EXIT_FAILURE;
     }
 
-    libc::fprintf(hts_sys::stderr.cast(), c"All tests passed.\n".as_ptr());
+    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"All tests passed.\n".as_ptr());
     libc::EXIT_SUCCESS
 }
 
@@ -677,7 +677,7 @@ fn translated_hfile_libcurl_retry_suite() {
     unsafe {
         if libc::access(c"test/mock_http_server.py".as_ptr(), libc::R_OK) != 0 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"test/mock_http_server.py not found, skipping libcurl retry tests\n".as_ptr(),
             );
             return;

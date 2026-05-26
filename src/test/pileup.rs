@@ -149,7 +149,7 @@ pub unsafe fn test_pileup_c_135_test_pileup(input: *mut ptest_t) -> c_int {
         }
         if tid >= (*(*input).fp_hdr).n_targets {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"bam_plp_auto returned tid %d >= header n_targets %d\n".as_ptr(),
                 tid,
                 (*(*input).fp_hdr).n_targets,
@@ -174,7 +174,7 @@ pub unsafe fn test_pileup_c_135_test_pileup(input: *mut ptest_t) -> c_int {
     }
     if n < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"bam_plp_auto failed for \"%s\"\n".as_ptr(),
             (*input).fname,
         );
@@ -223,7 +223,7 @@ pub unsafe fn test_pileup_c_177_test_mpileup(input: *mut ptest_t) -> c_int {
         }
         if tid >= (*(*input).fp_hdr).n_targets {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"bam_mplp_auto returned tid %d >= header n_targets %d\n".as_ptr(),
                 tid,
                 (*(*input).fp_hdr).n_targets,
@@ -248,7 +248,7 @@ pub unsafe fn test_pileup_c_177_test_mpileup(input: *mut ptest_t) -> c_int {
     }
     if n < 0 {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"bam_plp_auto failed for \"%s\"\n".as_ptr(),
             (*input).fname,
         );
@@ -278,7 +278,7 @@ pub unsafe fn test_pileup_c_225_main(argc: c_int, argv: *mut *mut c_char) -> c_i
             c if c == b'm' as c_int => use_mpileup = 1,
             _ => {
                 libc::fprintf(
-                    hts_sys::stderr.cast(),
+                    crate::htslib_rs::c_compat::stderr.cast(),
                     c"Usage: %s [-m] <sorted.sam>\n".as_ptr(),
                     *argv,
                 );
@@ -289,7 +289,7 @@ pub unsafe fn test_pileup_c_225_main(argc: c_int, argv: *mut *mut c_char) -> c_i
 
     if optind >= argc {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Usage: %s [-m] <sorted.sam>\n".as_ptr(),
             *argv,
         );
@@ -300,7 +300,7 @@ pub unsafe fn test_pileup_c_225_main(argc: c_int, argv: *mut *mut c_char) -> c_i
     g.fp = hts_open(g.fname, c"r".as_ptr());
     if g.fp.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Couldn't open \"%s\" : %s".as_ptr(),
             g.fname,
             libc::strerror(*libc::__errno_location()),
@@ -310,7 +310,7 @@ pub unsafe fn test_pileup_c_225_main(argc: c_int, argv: *mut *mut c_char) -> c_i
     g.fp_hdr = sam::sam_hdr_read(g.fp);
     if g.fp_hdr.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Couldn't read header from \"%s\" : %s".as_ptr(),
             g.fname,
             libc::strerror(*libc::__errno_location()),

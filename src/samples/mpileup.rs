@@ -58,7 +58,7 @@ pub unsafe fn samples_mpileup_c_84_main(argc: c_int, argv: *mut *mut c_char) -> 
     let mut mplpiter: sam::bam_mplp_t = std::ptr::null_mut();
 
     if argc < 2 {
-        samples_mpileup_c_38_print_usage(hts_sys::stderr.cast());
+        samples_mpileup_c_38_print_usage(crate::htslib_rs::c_compat::stderr.cast());
         return ret;
     }
 
@@ -174,7 +174,7 @@ pub unsafe fn samples_mpileup_c_84_main(argc: c_int, argv: *mut *mut c_char) -> 
             libc::printf(c" ".as_ptr());
         }
         libc::printf(c"\n".as_ptr());
-        libc::fflush(hts_sys::stdout.cast());
+        libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
     }
 
     ret = libc::EXIT_SUCCESS;

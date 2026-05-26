@@ -381,9 +381,9 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
     *idx_stack.add(idx_stack_ptr as usize) = idx;
 
     // Support pathX.cram##idx##pathY.crai
-    let fn_delim = libc::strstr(fn_, hts_sys::HTS_IDX_DELIM.as_ptr().cast());
+    let fn_delim = libc::strstr(fn_, crate::htslib_rs::cram::HTS_IDX_DELIM.as_ptr().cast());
     if !fn_delim.is_null() && fn_idx.is_null() {
-        fn_idx = fn_delim.add(libc::strlen(hts_sys::HTS_IDX_DELIM.as_ptr().cast()));
+        fn_idx = fn_delim.add(libc::strlen(crate::htslib_rs::cram::HTS_IDX_DELIM.as_ptr().cast()));
     }
 
     if fn_idx.is_null() {
@@ -395,7 +395,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
 
         if tfn_idx.is_null() {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Could not retrieve index file for '%s'\n".as_ptr(),
                 fn_,
             );
@@ -407,7 +407,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
     fp = hopen(fn_idx, c"r".as_ptr());
     if fp.is_null() {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"Could not open index file '%s'\n".as_ptr(),
             fn_idx,
         );
@@ -468,7 +468,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
 
         if e.refid < -1 {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Malformed index file, refid %d\n".as_ptr(),
                 e.refid,
             );
@@ -893,7 +893,7 @@ pub unsafe fn cram_cram_index_c_632_cram_index_build_multiref(
         let rec = (*s).crecs.add(i as usize);
         if (*rec).ref_id == last_ref && (*rec).apos < last_pos {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"CRAM file is not sorted by chromosome / position\n".as_ptr(),
             );
             return -2;
@@ -966,7 +966,7 @@ pub unsafe fn cram_cram_index_c_695_cram_index_slice(
 
     if sz > c_int::MAX as libc::off_t {
         libc::fprintf(
-            hts_sys::stderr.cast(),
+            crate::htslib_rs::c_compat::stderr.cast(),
             c"CRAM slice is too big (%ld bytes)\n".as_ptr(),
             sz as i64,
         );
@@ -1011,7 +1011,7 @@ pub unsafe fn cram_cram_index_c_727_cram_index_container(
         if spos - cpos - (*c).offset as libc::off_t != *(*c).landmark.add(j as usize) as libc::off_t
         {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"CRAM slice offset %ld does not match landmark %d in container header (%d)\n"
                     .as_ptr(),
                 (spos - cpos - (*c).offset as libc::off_t) as i64,
@@ -1063,8 +1063,8 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
     // Useful for cram_index_build_multiref
     htslib_cram_set_option(
         fd,
-        hts_sys::hts_fmt_option_CRAM_OPT_REQUIRED_FIELDS,
-        hts_sys::sam_fields_SAM_RNAME | hts_sys::sam_fields_SAM_POS | hts_sys::sam_fields_SAM_CIGAR,
+        crate::htslib_rs::cram::CRAM_OPT_REQUIRED_FIELDS,
+        crate::htslib_rs::cram::SAM_RNAME | crate::htslib_rs::cram::SAM_POS | crate::htslib_rs::cram::SAM_CIGAR,
     );
 
     if fn_idx.is_null() {
@@ -1101,7 +1101,7 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
         }
         assert!(
             (*(*c).comp_hdr_block.cast::<cram_block_layout>()).content_type
-                == hts_sys::cram_content_type_COMPRESSION_HEADER
+                == crate::htslib_rs::cram::CRAM_CONTENT_TYPE_COMPRESSION_HEADER
         );
 
         (*c).comp_hdr = cram_decode_compression_header(fd, (*c).comp_hdr_block.cast())
@@ -1112,7 +1112,7 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
 
         if (*c).ref_seq_id as i64 == last_ref && (*c).ref_seq_start < last_start {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"CRAM file is not sorted by chromosome / position\n".as_ptr(),
             );
             return -2;
@@ -1128,7 +1128,7 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
         let next_cpos = htslib_hfile_h_155_htell((*fdl).fp);
         if next_cpos != hpos + (*c).length as libc::off_t {
             libc::fprintf(
-                hts_sys::stderr.cast(),
+                crate::htslib_rs::c_compat::stderr.cast(),
                 c"Length %d in container header at offset %lld does not match block lengths (%lld)\n"
                     .as_ptr(),
                 (*c).length,
