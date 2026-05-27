@@ -22,6 +22,7 @@ pub mod hfile_libcurl;
 pub mod hfile_s3;
 pub mod hts;
 pub mod hts_os;
+pub mod htscodecs;
 pub mod htsfile;
 pub mod htslib;
 pub mod kfunc;

@@ -126,22 +126,9 @@ pub struct cram_codec {
 unsafe extern "C" {
     #[link_name = "zlib_mem_inflate"]
     fn htslib_zlib_mem_inflate(cdata: *mut c_char, csize: usize, size: *mut usize) -> *mut c_char;
-    fn rans_uncompress(in_: *mut u8, in_size: c_uint, out_size: *mut c_uint) -> *mut u8;
-    fn fqz_decompress(
-        in_: *mut c_char,
-        in_size: usize,
-        out_size: *mut usize,
-        fqz_slice: *mut c_void,
-        flags: c_int,
-    ) -> *mut c_char;
-    fn rans_uncompress_4x16(in_: *mut u8, in_size: c_uint, out_size: *mut c_uint) -> *mut u8;
-    fn arith_uncompress_to(
-        in_: *mut u8,
-        in_size: c_uint,
-        out: *mut u8,
-        out_size: *mut c_uint,
-    ) -> *mut u8;
-    fn tok3_decode_names(in_: *mut u8, in_size: c_uint, out_len: *mut u32) -> *mut u8;
+    // rans_uncompress / fqz_decompress / rans_uncompress_4x16 / arith_uncompress_to /
+    // tok3_decode_names are now served by the native `htscodecs` modules (see
+    // cram_uncompress_block below) — the libhts externs were removed.
     #[link_name = "cram_free_compression_header"]
     fn htslib_cram_free_compression_header(hdr: *mut cram_block_compression_hdr);
     #[link_name = "cram_free_slice_header"]
@@ -4982,6 +4969,21 @@ pub unsafe fn cram_cram_io_c_1511_cram_write_block(
     0
 }
 
+/// Copy a Rust-owned buffer into a libc-`malloc`'d block so the surrounding
+/// C-style cram code can `free()` it. Empty input is treated as decoder
+/// failure (returns null) — the dispatch short-circuits genuine zero-length
+/// blocks before reaching a decoder, so a real output is always non-empty.
+unsafe fn cram_dup_to_malloc(src: &[u8]) -> *mut u8 {
+    if src.is_empty() {
+        return std::ptr::null_mut();
+    }
+    let p = malloc(src.len() as u64).cast::<u8>();
+    if !p.is_null() {
+        std::ptr::copy_nonoverlapping(src.as_ptr(), p, src.len());
+    }
+    p
+}
+
 pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_block) -> c_int {
     let b = b.cast::<cram_block_layout>();
 
@@ -5033,7 +5035,11 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
         crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RANS => {
             let usize = (*b).uncomp_size as c_uint;
             let mut usize2 = 0 as c_uint;
-            let uncomp = rans_uncompress((*b).data, (*b).comp_size as c_uint, &mut usize2);
+            let uncomp = crate::htslib_rs::htscodecs::rans_4x8::rans_uncompress(
+                (*b).data,
+                (*b).comp_size as c_uint,
+                &mut usize2,
+            );
             if uncomp.is_null() {
                 return -1;
             }
@@ -5050,18 +5056,19 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
         }
         7 => {
             let mut uncomp_size = (*b).uncomp_size as usize;
-            let uncomp = fqz_decompress(
-                (*b).data.cast::<c_char>(),
-                (*b).comp_size as usize,
+            let input = std::slice::from_raw_parts((*b).data, (*b).comp_size as usize);
+            let v = crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_decompress(
+                input,
                 &mut uncomp_size,
-                std::ptr::null_mut(),
+                &mut [],
                 0,
             );
+            let uncomp = cram_dup_to_malloc(&v);
             if uncomp.is_null() {
                 return -1;
             }
             free((*b).data.cast());
-            (*b).data = uncomp.cast();
+            (*b).data = uncomp;
             (*b).alloc = uncomp_size;
             (*b).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
             (*b).uncomp_size = uncomp_size as i32;
@@ -5070,7 +5077,12 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
         5 => {
             let usize = (*b).uncomp_size as c_uint;
             let mut usize2 = 0 as c_uint;
-            let uncomp = rans_uncompress_4x16((*b).data, (*b).comp_size as c_uint, &mut usize2);
+            let input = std::slice::from_raw_parts((*b).data, (*b).comp_size as usize);
+            let v = crate::htslib_rs::htscodecs::rans_static_4x16pr::rans_uncompress_4x16(
+                input,
+                &mut usize2,
+            );
+            let uncomp = cram_dup_to_malloc(&v);
             if uncomp.is_null() {
                 return -1;
             }
@@ -5089,12 +5101,13 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
         6 => {
             let usize = (*b).uncomp_size as c_uint;
             let mut usize2 = 0 as c_uint;
-            let uncomp = arith_uncompress_to(
-                (*b).data,
-                (*b).comp_size as c_uint,
-                std::ptr::null_mut(),
+            let input = std::slice::from_raw_parts((*b).data, (*b).comp_size as usize);
+            let v = crate::htslib_rs::htscodecs::arith_dynamic::arith_uncompress_to(
+                input,
+                None,
                 &mut usize2,
             );
+            let uncomp = cram_dup_to_malloc(&v);
             if uncomp.is_null() {
                 return -1;
             }
@@ -5112,7 +5125,15 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
         }
         8 => {
             let mut out_len = 0u32;
-            let cp = tok3_decode_names((*b).data, (*b).comp_size as c_uint, &mut out_len);
+            let input = std::slice::from_raw_parts((*b).data, (*b).comp_size as usize);
+            let cp = match crate::htslib_rs::htscodecs::tokenise_name3::tok3_decode_names(
+                input,
+                (*b).comp_size as u32,
+                &mut out_len,
+            ) {
+                Some(v) => cram_dup_to_malloc(&v),
+                None => std::ptr::null_mut(),
+            };
             if cp.is_null() {
                 return -1;
             }
