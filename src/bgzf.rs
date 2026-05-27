@@ -1784,6 +1784,10 @@ unsafe fn bgzf_read_block(fp: *mut BGZF) -> c_int {
             (*fp).block_address = block_address;
             (*fp).block_clength = block_length as c_int;
             (*fp).block_length = count;
+            if (*fp).idx_build_otf != 0 {
+                bgzf_index_add_block(fp);
+                (*(*fp).idx.cast::<bgzidx_t>()).ublock_addr += count as u64;
+            }
             cache_block(fp, block_length as c_int);
             return 0;
         }
@@ -2076,6 +2080,12 @@ pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
     (*fp).block_clength = (*job).comp_len as c_int;
     (*fp).block_length = (*job).uncomp_len as c_int;
     set_flag(fp, 29, (*job).uncomp_len == 0);
+
+    if (*job).uncomp_len != 0 && (*fp).idx_build_otf != 0 {
+        bgzf_index_add_block(fp);
+        (*(*fp).idx.cast::<bgzidx_t>()).ublock_addr += (*job).uncomp_len as u64;
+    }
+
     bgzf_mt_free_job(fp, job);
     0
 }
@@ -5776,5 +5786,91 @@ mod tests {
             bgzf_internal_h_58_bgzf_clear_private_data(&mut fp);
             assert_eq!(PRIVATE_DATA_CLEANUPS.load(Ordering::SeqCst), 1);
         }
+    }
+
+    // Regression test for read-side on-the-fly index population (htslib/bgzf.c:1233).
+    // With idx_build_otf enabled, native reads must record each block boundary so
+    // that a subsequent bgzf_useek back to an earlier virtual offset works.
+    #[test]
+    fn bgzf_useek_works_after_native_read_with_otf_index() {
+        let path = std::env::temp_dir().join(format!(
+            "cellsnp-lite-bgzf-otf-{}-{}.gz",
+            std::process::id(),
+            "useek"
+        ));
+        // Payload spanning several bgzf blocks so the OTF index has many entries.
+        let payload: Vec<u8> = (0..(BGZF_BLOCK_SIZE * 5 + 12345))
+            .map(|i| (i as u32).wrapping_mul(2654435761) as u8)
+            .collect();
+        {
+            let file = File::create(&path).unwrap();
+            let mut writer = noodles::bgzf::io::Writer::new(file);
+            writer.write_all(&payload).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
+        unsafe {
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            // Enable on-the-fly index building during reading.
+            assert_eq!(bgzf_index_build_init(fp), 0);
+            assert_eq!((*fp).idx_build_otf, 1);
+
+            // Read forward through several blocks natively, in chunks. This must
+            // populate the OTF read index via bgzf_read_block.
+            let chunk = BGZF_BLOCK_SIZE + 777;
+            let mut total = 0usize;
+            let mut buf = vec![0u8; chunk];
+            while total < BGZF_BLOCK_SIZE * 3 + 500 {
+                let got = bgzf_read(fp, buf.as_mut_ptr().cast(), chunk);
+                assert!(got > 0, "native read returned {got}");
+                assert_eq!(&buf[..got as usize], &payload[total..total + got as usize]);
+                total += got as usize;
+            }
+
+            // Index must have recorded multiple block boundaries.
+            let idx = (*fp).idx.cast::<bgzidx_t>();
+            assert!(
+                (*idx).noffs >= 3,
+                "expected >=3 recorded blocks, got {}",
+                (*idx).noffs
+            );
+
+            // Seek back to an earlier virtual offset that lives in a prior block
+            // (well before the current position) and confirm bytes match.
+            let target = (BGZF_BLOCK_SIZE / 2) as i64;
+            assert_eq!(
+                bgzf_useek(fp, target, SEEK_SET),
+                0,
+                "bgzf_useek back failed after native read"
+            );
+            let mut back = vec![0u8; 4096];
+            assert_eq!(
+                bgzf_read(fp, back.as_mut_ptr().cast(), back.len()),
+                back.len() as isize
+            );
+            assert_eq!(
+                &back[..],
+                &payload[target as usize..target as usize + back.len()]
+            );
+
+            // Seek forward to a far offset (in a later block) and verify too.
+            let target2 = (BGZF_BLOCK_SIZE * 4 + 100) as i64;
+            assert_eq!(bgzf_useek(fp, target2, SEEK_SET), 0);
+            let mut fwd = vec![0u8; 2048];
+            assert_eq!(
+                bgzf_read(fp, fwd.as_mut_ptr().cast(), fwd.len()),
+                fwd.len() as isize
+            );
+            assert_eq!(
+                &fwd[..],
+                &payload[target2 as usize..target2 as usize + fwd.len()]
+            );
+
+            assert_eq!(bgzf_close(fp), 0);
+        }
+
+        let _ = std::fs::remove_file(path);
     }
 }
