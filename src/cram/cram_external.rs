@@ -745,7 +745,7 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     }
 
     cram_block_set_size(n_blk, cram_block_get_size(n_blk) - 2);
-    hts_sys::cram_block_append(n_blk, op.cast(), i32_);
+    cram_api::cram_cram_external_c_544_cram_block_append(n_blk, op.cast(), i32_);
     cram_block_update_size(n_blk);
 
     let new_size = cram_api::cram_block_size(n_blk) as c_int;

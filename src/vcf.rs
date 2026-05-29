@@ -31,7 +31,8 @@ pub type bcf_idpair_t = hts_sys::bcf_idpair_t;
 pub type bcf_sr_t = hts_sys::bcf_sr_t;
 pub type bcf_sr_regions_t = hts_sys::bcf_sr_regions_t;
 pub type bcf_srs_t = hts_sys::bcf_srs_t;
-pub type bcf_variant_t = hts_sys::variant_t;
+// HTSlib v1.23 renamed the internal `variant_t` struct to `bcf_variant_t`.
+pub type bcf_variant_t = hts_sys::bcf_variant_t;
 pub type bcf_variant_match = c_int;
 
 // Native BCF/VCF enum constants and sentinel values (values from the C headers /
@@ -2417,7 +2418,7 @@ unsafe fn bcf_subset_format_core(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> c_i
             dst = dst.add((*fmt_i).size as usize);
         }
         (*rec).indiv.l -=
-            ((*fmt_i).p_len as usize - (dst as usize - (*fmt_i).p as usize)) as u64;
+            (*fmt_i).p_len as usize - (dst as usize - (*fmt_i).p as usize);
         (*fmt_i).p_len = (dst as usize - (*fmt_i).p as usize) as u32;
     }
     (*rec).unpacked |= BCF_UN_FMT as c_int;
@@ -2943,6 +2944,7 @@ unsafe fn vcf_parse_format_fill5(
     let mut t = q.add(1) as *mut c_char;
     let mut m: usize = 0; // m: sample id
     let nsamples = bcf_hdr_nsamples_native(h);
+    let ver = bcf_get_version(h, std::ptr::null());
 
     let end = (*s).s.add((*s).l) as *mut c_char;
     while t < end {
@@ -2984,18 +2986,39 @@ unsafe fn vcf_parse_format_fill5(
                 }
             } else if htype == BCF_HT_STR {
                 if z.is_gt {
-                    // Genotypes. <val>([|/]<val>)+... where <val> is [0-9]+ or ".".
+                    // Genotypes.
+                    //([/|])?<val>)([|/]<val>)+... where <val> is [0-9]+ or ".".
                     let mut is_phased: i32 = 0;
                     let x = z.buf.add(z.size as usize * m).cast::<u32>();
                     let mut unreadable: u32 = 0;
                     let mut max: u32 = 0;
                     let mut overflow: c_int = 0;
                     let mut l: usize = 0;
+                    let mut ploidy: c_int = 0;
+                    let mut anyunphased: c_int = 0;
+                    let mut phasingprfx: c_int = 0;
+                    let mut unknown1: c_int = 0;
+
+                    // with prefixed phasing, it is explicitly given for 1st one
+                    // with non-prefixed, set based on ploidy and phasing of other
+                    // alleles.
+                    if ver >= VCF44 && (*t == b'|' as c_char || *t == b'/' as c_char) {
+                        // cache prefix and phasing status
+                        is_phased = (*t == b'|' as c_char) as i32;
+                        t = t.add(1);
+                        phasingprfx = 1;
+                    }
+
                     loop {
+                        ploidy += 1;
                         if *t == b'.' as c_char {
                             t = t.add(1);
                             *x.add(l) = is_phased as u32;
                             l += 1;
+                            if l == 1 {
+                                // for 1st allele only
+                                unknown1 = 1;
+                            }
                         } else {
                             let tt = t;
                             let val: u32;
@@ -3022,11 +3045,26 @@ unsafe fn vcf_parse_format_fill5(
                             *x.add(l) = (val + 1) << 1 | is_phased as u32;
                             l += 1;
                         }
+                        anyunphased |= ((ploidy != 1) && is_phased == 0) as c_int;
                         is_phased = (*t == b'|' as c_char) as i32;
                         if *t != b'|' as c_char && *t != b'/' as c_char {
                             break;
                         }
                         t = t.add(1);
+                    }
+                    if phasingprfx == 0 {
+                        // no prefixed phasing, get GT in v44 way
+                        // no explicit phasing for 1st allele, set based on
+                        // other alleles and ploidy
+                        if ploidy == 1 {
+                            // implicitly phased
+                            if unknown1 == 0 {
+                                *x |= 1;
+                            }
+                        } else {
+                            // set by other unphased alleles
+                            *x |= if anyunphased != 0 { 0 } else { 1 };
+                        }
                     }
                     if overflow != 0 || max > (i32::MAX >> 1) as u32 - 1 {
                         vcf_log_error(format!(
@@ -4752,8 +4790,8 @@ unsafe fn bcf_read1_core(fp: *mut BGZF, v: *mut bcf1_t) -> c_int {
     (*v).set_n_allele(le_to_u16(x.as_ptr().add(26)) as u32);
     (*v).set_n_sample(le_to_u32(x.as_ptr().add(28)) & 0xffffff);
     (*v).set_n_fmt(x[31] as u32);
-    (*v).shared.l = shared_len as u64;
-    (*v).indiv.l = indiv_len as u64;
+    (*v).shared.l = shared_len as usize;
+    (*v).indiv.l = indiv_len as usize;
     // silent fix of broken BCFs produced by earlier versions of bcf_subset,
     // prior to and including bd6ed8b4
     if ((*v).indiv.l == 0 || (*v).n_sample() == 0) && (*v).n_fmt() != 0 {
@@ -10282,8 +10320,8 @@ pub unsafe fn bcf_subset(_h: *const bcf_hdr_t, v: *mut bcf1_t, n: c_int, imap: *
         (*v).set_n_fmt(0);
     }
     libc::free((*v).indiv.s.cast());
-    (*v).indiv.l = ind.l as u64;
-    (*v).indiv.m = ind.m as u64;
+    (*v).indiv.l = ind.l;
+    (*v).indiv.m = ind.m;
     (*v).indiv.s = ind.s;
     // Only BCF is ready for output; VCF will need to unpack again.
     (*v).unpacked &= !(BCF_UN_FMT as c_int);
@@ -11415,8 +11453,9 @@ unsafe fn kh_get_vdict(h: *const kh_vdict_t, key: *const c_char) -> u32 {
     }
     let mask = (*h).n_buckets - 1;
     // The C library that builds this dict (hts-sys) uses kh_str_hash_func =
-    // __ac_X31_hash_string for KHASH_MAP_INIT_STR. Match it exactly.
-    let mut i = super::hts::__ac_X31_hash_string(key) & mask;
+    // __ac_FNV1a_hash_string for KHASH_MAP_INIT_STR (changed from X31 in
+    // htslib v1.23). Match it exactly.
+    let mut i = super::hts::__ac_FNV1a_hash_string(key) & mask;
     let last = i;
     let mut step: u32 = 0;
     while !vcf_kh_isempty((*h).flags, i)
@@ -11443,9 +11482,10 @@ unsafe fn kh_get_vdict(h: *const kh_vdict_t, key: *const c_char) -> u32 {
 // for the two concrete instantiations used by vcf.c:
 //   KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)   -> kh_vdict_t (above)
 //   KHASH_MAP_INIT_STR(hdict, bcf_hrec_t*)    -> kh_hdict_t (below)
-// Both use the X31 string hash (kh_str_hash_func == __ac_X31_hash_string) and
-// strcmp equality, matching the hts-sys C library byte-for-byte so the dicts
-// built natively can be read back by either native kh_get_vdict or by C.
+// Both use the FNV-1a string hash (kh_str_hash_func == __ac_FNV1a_hash_string
+// as of htslib v1.23, changed from __ac_X31_hash_string) and strcmp equality,
+// matching the hts-sys C library byte-for-byte so the dicts built natively
+// can be read back by either native kh_get_vdict or by C.
 // Memory is allocated with the libc allocator (same as hts-sys, via
 // crate::htslib_rs::c_compat) so the dicts are interchangeable with C.
 // ---------------------------------------------------------------------------
@@ -11615,7 +11655,7 @@ unsafe fn kh_resize_vdict(h: *mut kh_vdict_t, mut new_n_buckets: u32) -> c_int {
                 let new_mask = new_n_buckets - 1;
                 kh_set_isdel_true((*h).flags, jj);
                 loop {
-                    let k = super::hts::__ac_X31_hash_string(key);
+                    let k = super::hts::__ac_FNV1a_hash_string(key);
                     let mut i = k & new_mask;
                     let mut step: u32 = 0;
                     while !kh_isempty(new_flags, i) {
@@ -11677,7 +11717,7 @@ unsafe fn kh_put_vdict(h: *mut kh_vdict_t, key: *const c_char, ret: *mut c_int) 
         let mask = (*h).n_buckets - 1;
         let mut site = (*h).n_buckets;
         let mut xx = (*h).n_buckets;
-        let k = super::hts::__ac_X31_hash_string(key);
+        let k = super::hts::__ac_FNV1a_hash_string(key);
         let mut i = k & mask;
         if kh_isempty((*h).flags, i) {
             xx = i;
@@ -11760,7 +11800,7 @@ unsafe fn kh_get_hdict(h: *const kh_hdict_t, key: *const c_char) -> u32 {
         return 0;
     }
     let mask = (*h).n_buckets - 1;
-    let mut i = super::hts::__ac_X31_hash_string(key) & mask;
+    let mut i = super::hts::__ac_FNV1a_hash_string(key) & mask;
     let last = i;
     let mut step: u32 = 0;
     while !kh_isempty((*h).flags, i)
@@ -11829,7 +11869,7 @@ unsafe fn kh_resize_hdict(h: *mut kh_hdict_t, mut new_n_buckets: u32) -> c_int {
                 let new_mask = new_n_buckets - 1;
                 kh_set_isdel_true((*h).flags, jj);
                 loop {
-                    let k = super::hts::__ac_X31_hash_string(key);
+                    let k = super::hts::__ac_FNV1a_hash_string(key);
                     let mut i = k & new_mask;
                     let mut step: u32 = 0;
                     while !kh_isempty(new_flags, i) {
@@ -11888,7 +11928,7 @@ unsafe fn kh_put_hdict(h: *mut kh_hdict_t, key: *const c_char, ret: *mut c_int) 
         let mask = (*h).n_buckets - 1;
         let mut site = (*h).n_buckets;
         let mut xx = (*h).n_buckets;
-        let k = super::hts::__ac_X31_hash_string(key);
+        let k = super::hts::__ac_FNV1a_hash_string(key);
         let mut i = k & mask;
         if kh_isempty((*h).flags, i) {
             xx = i;
@@ -17367,11 +17407,11 @@ mod tests {
             )
             .unwrap();
             let path_c = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
-            let fp = hts_sys::hts_open(path_c.as_ptr(), c"r".as_ptr());
+            let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
 
             let mut reader: bcf_sr_t = std::mem::zeroed();
-            reader.file = fp;
+            reader.file = fp.cast();
             reader.fname = libc::strdup(path_c.as_ptr());
             assert!(!reader.fname.is_null());
             reader.header = bcf_hdr_init(c"r".as_ptr());
@@ -17389,7 +17429,7 @@ mod tests {
             assert!(!reader.filter_ids.is_null());
 
             synced_bcf_reader_c_461_bcf_sr_destroy1(&mut reader, 0);
-            assert_eq!(hts_sys::hts_close(fp), 0);
+            assert_eq!(hts_close(fp), 0);
             let _ = std::fs::remove_file(path);
         }
     }
@@ -18361,11 +18401,11 @@ mod tests {
         assert_eq!((*a).d.n_flt, (*b).d.n_flt, "n_flt differs");
         assert_eq!((*a).shared.l, (*b).shared.l, "shared.l differs");
         assert_eq!((*a).indiv.l, (*b).indiv.l, "indiv.l differs");
-        unsafe fn bytes<'x>(s: *const c_char, l: u64) -> &'x [u8] {
+        unsafe fn bytes<'x>(s: *const c_char, l: usize) -> &'x [u8] {
             if l == 0 || s.is_null() {
                 &[]
             } else {
-                std::slice::from_raw_parts(s.cast::<u8>(), l as usize)
+                std::slice::from_raw_parts(s.cast::<u8>(), l)
             }
         }
         assert_eq!(

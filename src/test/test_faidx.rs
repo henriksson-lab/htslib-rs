@@ -728,7 +728,8 @@ mod tests {
     unsafe fn run_main(args: &[CString]) -> c_int {
         let _guard = GETOPT_LOCK.lock().unwrap();
         optarg = std::ptr::null_mut();
-        optind = 1;
+        // optind = 0 forces glibc getopt full reinit (shared-process tests).
+        optind = 0;
         let mut argv = args
             .iter()
             .map(|arg| arg.as_ptr() as *mut c_char)

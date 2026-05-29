@@ -1224,6 +1224,7 @@ pub unsafe fn sam_hdr_remove_line_id(
         return -1;
     }
     if !(*h).hrecs.is_null() {
+        // TODO(P5): no native sam_hdr_remove_line_id hrecs path yet
         return hts_sys::sam_hdr_remove_line_id(h.cast(), type_, id_key, id_value);
     }
     if *type_ as u8 == b'P' && *type_.add(1) as u8 == b'G' {
@@ -1254,6 +1255,7 @@ pub unsafe fn sam_hdr_remove_line_pos(
         return -1;
     }
     if !(*h).hrecs.is_null() {
+        // TODO(P5): no native sam_hdr_remove_line_pos hrecs path yet
         return hts_sys::sam_hdr_remove_line_pos(h.cast(), type_, position);
     }
     if *type_ as u8 == b'P' && *type_.add(1) as u8 == b'G' {
@@ -1278,6 +1280,7 @@ pub unsafe fn sam_hdr_remove_except(
         return -1;
     }
     if !(*h).hrecs.is_null() {
+        // TODO(P5): no native sam_hdr_remove_except hrecs path yet
         return hts_sys::sam_hdr_remove_except(h.cast(), type_, id_key, id_value);
     }
     let type0 = *type_ as u8;
@@ -1319,6 +1322,7 @@ pub unsafe fn sam_hdr_remove_lines(
         return -1;
     }
     if !(*h).hrecs.is_null() {
+        // TODO(P5): no native sam_hdr_remove_lines hrecs path yet
         return hts_sys::sam_hdr_remove_lines(h.cast(), type_, id, rh);
     }
     if (*h).text.is_null() {
@@ -2287,6 +2291,7 @@ pub unsafe fn sam_hdr_remove_tag_id(
         return -1;
     }
     if !(*h).hrecs.is_null() {
+        // TODO(P5): no native sam_hdr_remove_tag_id hrecs path yet
         return hts_sys::sam_hdr_remove_tag_id(h.cast(), type_, id_key, id_value, key);
     }
     if (*h).text.is_null() {
@@ -2312,6 +2317,7 @@ pub unsafe fn sam_hdr_pg_id(h: *mut sam_hdr_t, name: *const c_char) -> *const c_
         return std::ptr::null();
     }
     if !(*h).hrecs.is_null() {
+        // TODO(P5): no native sam_hdr_pg_id hrecs path yet
         return hts_sys::sam_hdr_pg_id(h.cast(), name);
     }
 
@@ -3769,14 +3775,28 @@ pub unsafe fn sam_hdr_rebuild(bh: *mut sam_hdr_t) -> c_int {
     if hrecs.is_null() {
         return if (*bh).text.is_null() { -1 } else { 0 };
     }
-    if (*hrecs).refs_changed >= 0 {
+
+    if (*hrecs).refs_changed >= 0 && rebuild_target_arrays(bh) < 0 {
+        crate::htslib_rs::hts::hts_log_cstr(
+            crate::htslib_rs::hts::HTS_LOG_ERROR,
+            c"sam_hdr_rebuild".as_ptr(),
+            c"Header target array rebuild has failed".as_ptr(),
+        );
         return -1;
     }
-    if (*hrecs).pgs_changed != 0 {
-        return -1;
-    }
+
+    /* If header text wasn't changed or header is empty, don't rebuild it. */
     if (*hrecs).dirty == 0 {
         return 0;
+    }
+
+    if (*hrecs).pgs_changed != 0 && sam_hdr_link_pg(bh) < 0 {
+        crate::htslib_rs::hts::hts_log_cstr(
+            crate::htslib_rs::hts::HTS_LOG_ERROR,
+            c"sam_hdr_rebuild".as_ptr(),
+            c"Linking @PG lines has failed".as_ptr(),
+        );
+        return -1;
     }
 
     let mut ks = kstring_t {
@@ -3784,15 +3804,22 @@ pub unsafe fn sam_hdr_rebuild(bh: *mut sam_hdr_t) -> c_int {
         m: 0,
         s: std::ptr::null_mut(),
     };
-    if sam_hrecs_rebuild_text(hrecs, &mut ks) < 0 {
+    if sam_hrecs_rebuild_text(hrecs, &mut ks) != 0 {
         ks_free(&mut ks);
+        crate::htslib_rs::hts::hts_log_cstr(
+            crate::htslib_rs::hts::HTS_LOG_ERROR,
+            c"sam_hdr_rebuild".as_ptr(),
+            c"Header text rebuild has failed".as_ptr(),
+        );
         return -1;
     }
 
+    (*hrecs).dirty = 0;
+
+    /* Sync */
     crate::htslib_rs::c_compat::free((*bh).text.cast());
     (*bh).l_text = ks.l;
     (*bh).text = ks_release(&mut ks);
-    (*hrecs).dirty = 0;
     0
 }
 
@@ -4114,6 +4141,7 @@ pub unsafe fn sam_hdr_dup(_h0: *const sam_hdr_t) -> *mut sam_hdr_t {
         return std::ptr::null_mut();
     }
     if !(*_h0).hrecs.is_null() {
+        // TODO(P5): no native sam_hdr_dup hrecs path yet
         return hts_sys::sam_hdr_dup(_h0.cast()).cast();
     }
 
@@ -4345,6 +4373,7 @@ pub unsafe fn bam_hdr_write(fp: *mut BGZF, h: *const sam_hdr_t) -> c_int {
         return -1;
     }
     if !(*h).hrecs.is_null() {
+        // TODO(P5): no native bam_hdr_write hrecs path yet
         return hts_sys::bam_hdr_write(fp.cast(), h.cast());
     }
     if (*h).l_text > u32::MAX as usize {
@@ -4432,6 +4461,7 @@ pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
                 return 0;
             }
             if !(*h).hrecs.is_null() {
+                // TODO(P5): no native sam_hdr_write hrecs path yet
                 return hts_sys::sam_hdr_write(fp.cast(), h.cast());
             }
             if !(*h).text.is_null() {
@@ -4488,6 +4518,7 @@ pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
 
 unsafe fn sam_hdr_write_cram(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
     if !(*h).hrecs.is_null() {
+        // TODO(P5): no native sam_hdr_write hrecs path for CRAM yet
         return hts_sys::sam_hdr_write(fp.cast(), h.cast());
     }
     if (*h).text.is_null() {
@@ -4522,7 +4553,11 @@ unsafe fn sam_hdr_write_cram(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
         }
     }
 
-    let hts_hdr = hts_sys::sam_hdr_parse(header_text.len() as u64, header_text.as_ptr().cast());
+    // TODO(P5): native sam_hdr_parse exists at sam.rs:2413, but native parse
+    // does not populate hrecs and the libhts cram writer expects hrecs-backed
+    // headers; the parse/write/destroy trio stays C-side until a native CRAM
+    // header writer lands.
+    let hts_hdr = hts_sys::sam_hdr_parse(header_text.len(), header_text.as_ptr().cast());
     if hts_hdr.is_null() {
         return -1;
     }
@@ -4680,6 +4715,7 @@ pub unsafe fn sam_hdr_read(_fp: *mut htsFile) -> *mut sam_hdr_t {
         }
         HTS_FORMAT_SAM => sam_c_1907_sam_hdr_create(_fp),
         HTS_FORMAT_CRAM => {
+            // TODO(P5): no native CRAM header reader yet
             let ch: *mut sam_hdr_t = hts_sys::sam_hdr_read(_fp.cast()).cast();
             sam_hdr_mark_c_owned(ch);
             ch
@@ -4716,6 +4752,8 @@ pub unsafe fn sam_hdr_destroy(_h: *mut sam_hdr_t) {
                 scratch.remove(&(_h as usize));
             }
         }
+        // TODO(P5): C-owned headers (e.g. from CRAM reader) must be released via
+        // the libhts allocator; remove once a native CRAM header reader lands.
         hts_sys::sam_hdr_destroy(_h.cast());
         return;
     }
@@ -4860,6 +4898,7 @@ pub unsafe fn sam_hdr_change_HD(
     if (*h).hrecs.is_null() {
         return sam_c_2080_old_sam_hdr_change_HD(h, key, val);
     }
+    // TODO(P5): no native sam_hdr_change_HD hrecs path yet
     hts_sys::sam_hdr_change_HD(h.cast(), key, val)
 }
 
@@ -8005,6 +8044,7 @@ unsafe fn sam_c_1649_index_load(
 ) -> *mut hts_idx_t {
     match (*fp).format.format {
         HTS_FORMAT_BAM | HTS_FORMAT_SAM => hts_idx_load3(fn_, fnidx, HTS_FMT_BAI, flags),
+        // TODO(P5): no native CRAM index loader yet
         HTS_FORMAT_CRAM => hts_sys::sam_index_load3(fp.cast(), fn_, fnidx, flags).cast(),
         _ => std::ptr::null_mut(),
     }
@@ -8041,6 +8081,7 @@ pub unsafe fn sam_itr_queryi(
         return hts_itr_query(_idx, _tid, _beg, _end, Some(sam_readrec_rest));
     }
     if (*_idx).fmt == HTS_FMT_CRAI {
+        // TODO(P5): no native CRAM iterator yet
         return hts_sys::sam_itr_queryi(_idx.cast(), _tid, _beg, _end).cast();
     }
     hts_itr_query(_idx, _tid, _beg, _end, Some(sam_readrec))
@@ -8055,6 +8096,7 @@ pub unsafe fn sam_itr_querys(
         return std::ptr::null_mut();
     }
     if (*idx).fmt == HTS_FMT_CRAI {
+        // TODO(P5): no native CRAM region-string iterator yet
         return hts_sys::sam_itr_querys(idx.cast(), hdr.cast(), region).cast();
     }
     if libc::strcmp(region, c".".as_ptr()) == 0 {
@@ -8086,6 +8128,7 @@ unsafe extern "C" fn sam_c_1754_cram_name2id(fdv: *mut c_void, ref_: *const c_ch
     if fdv.is_null() || ref_.is_null() {
         return -1;
     }
+    // TODO(P5): no native cram_fd_get_header accessor yet
     let hdr = hts_sys::cram_fd_get_header(fdv.cast()).cast::<sam_hdr_t>();
     sam_hdr_name2tid(hdr, ref_)
 }
@@ -8100,6 +8143,7 @@ pub unsafe fn sam_c_1768_sam_itr_regarray(
         return std::ptr::null_mut();
     }
     if (*idx).fmt == HTS_FMT_CRAI {
+        // TODO(P5): no native CRAM region-array iterator yet
         return hts_sys::sam_itr_regarray(idx.cast(), hdr.cast(), regarray, regcount).cast();
     }
 
@@ -8140,7 +8184,22 @@ pub unsafe fn sam_c_1798_sam_itr_regions(
     if idx.is_null() || hdr.is_null() || reglist.is_null() {
         return std::ptr::null_mut();
     }
-    hts_sys::sam_itr_regions(idx.cast(), hdr.cast(), reglist.cast(), regcount).cast()
+    if (*idx).fmt == HTS_FMT_CRAI {
+        // TODO(P5): native cram readrec/pseek/ptell/itr_multi_cram not yet
+        // available; CRAI iterator still delegates to libhts.
+        return hts_sys::sam_itr_regions(idx.cast(), hdr.cast(), reglist.cast(), regcount).cast();
+    }
+    hts_itr_regions(
+        idx,
+        reglist,
+        regcount as c_int,
+        Some(sam_c_418_bam_name2id_wrapper),
+        hdr.cast(),
+        Some(hts_itr_multi_bam),
+        Some(sam_readrec),
+        Some(sam_c_1631_bam_pseek),
+        Some(sam_c_1638_bam_ptell),
+    )
 }
 
 unsafe fn sam_c_994_sam_index(fp: *mut htsFile, mut min_shift: c_int) -> *mut hts_idx_t {
@@ -8236,6 +8295,7 @@ pub unsafe fn sam_index_build3(
     // C implementation; close our probe handle and hand off the whole call.
     if (*fp).format.format == HTS_FORMAT_CRAM {
         crate::htslib_rs::hts::hts_close(fp);
+        // TODO(P5): no native CRAM index builder yet
         return hts_sys::sam_index_build3(fn_, fnidx, min_shift, nthreads);
     }
 
@@ -8304,10 +8364,12 @@ pub unsafe fn sam_idx_init(
     min_shift: c_int,
     fnidx: *const c_char,
 ) -> c_int {
+    // TODO(P5): no native sam_idx_init yet
     hts_sys::sam_idx_init(fp.cast(), h.cast(), min_shift, fnidx)
 }
 
 pub unsafe fn sam_idx_save(fp: *mut htsFile) -> c_int {
+    // TODO(P5): no native sam_idx_save yet
     hts_sys::sam_idx_save(fp.cast())
 }
 
@@ -8345,6 +8407,40 @@ unsafe fn sam_read1_bam(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut bam1_t) -> 
     ret
 }
 
+// Native equivalent of C `sam_read1_cram` (htslib/sam.c:4147):
+//
+//     static inline int sam_read1_cram(htsFile *fp, sam_hdr_t *h, bam1_t **b)
+//     {
+//         int ret = cram_get_bam_seq(fp->fp.cram, b);
+//         if (ret < 0)
+//             return cram_eof(fp->fp.cram) ? -1 : -2;
+//         if (bam_tag2cigar(*b, 1, 1) < 0)
+//             return -2;
+//         return ret;
+//     }
+//
+// We drive the **native** CRAM decode pipeline (`cram_get_bam_seq_native`)
+// instead of the C `cram_get_bam_seq`, then perform the same eof-vs-error
+// disambiguation and CG-overflow CIGAR fixup. The sam_hdr_t arg is unused at
+// this layer — the cram_fd carries its own header copy and the native
+// pipeline reads tid/mtid from the cram_fd's header / cram_slice metadata
+// (see decode_pipeline::cram_to_bam), exactly mirroring the C behaviour.
+unsafe fn sam_read1_cram_native_decode(fp: *mut htsFile, _h: *mut sam_hdr_t, b: *mut bam1_t) -> c_int {
+    let cram_fd = (*fp).fp.cram;
+    let ret = crate::htslib_rs::cram::cram_get_bam_seq_native(cram_fd, b);
+    if ret < 0 {
+        return if crate::htslib_rs::cram::cram_cram_io_c_5662_cram_eof(cram_fd) != 0 {
+            -1
+        } else {
+            -2
+        };
+    }
+    if bam_tag2cigar(b, 1, 1) < 0 {
+        return -2;
+    }
+    ret
+}
+
 unsafe fn sam_c_4145_sam_read1_cram(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut bam1_t) -> c_int {
     if let Some((pending, ret)) = sam_cram_pending_pop(fp) {
         let copied = bam_copy1(b, pending);
@@ -8360,7 +8456,7 @@ unsafe fn sam_c_4145_sam_read1_cram(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut
         }
         ret
     } else {
-        hts_sys::sam_read1(fp.cast(), h.cast(), b.cast())
+        sam_read1_cram_native_decode(fp, h, b)
     };
     if ret < 0 || !sam_cram_tlen_candidate(b) {
         return ret;
@@ -8376,7 +8472,7 @@ unsafe fn sam_c_4145_sam_read1_cram(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut
         if next.is_null() {
             break;
         }
-        let next_ret = hts_sys::sam_read1(fp.cast(), h.cast(), next.cast());
+        let next_ret = sam_read1_cram_native_decode(fp, h, next);
         if next_ret < 0 {
             bam_destroy1(next);
             break;
@@ -8550,6 +8646,8 @@ pub unsafe fn sam_c_3746_sam_set_threads(fp: *mut htsFile, nthreads: c_int) -> c
     if fp.is_null() {
         return -1;
     }
+    // TODO(P5): no native SAM thread-state setup yet; called BY hts.rs's
+    // native hts_set_threads dispatch, so cannot recurse here.
     hts_sys::hts_set_threads(fp.cast(), nthreads)
 }
 
@@ -8667,6 +8765,7 @@ unsafe fn sam_c_4157_sam_read1_sam(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut 
     }
 
     if !(*fp).state.is_null() {
+        // TODO(P5): no native SAM threaded-decoder state pump yet
         return hts_sys::sam_read1(fp.cast(), h.cast(), b.cast());
     }
 
@@ -10638,6 +10737,7 @@ pub unsafe fn sam_c_4553_sam_write1(
             sam_c_933_bam_write_idx1(fp, h, b)
         }
         HTS_FORMAT_BAM => sam_c_933_bam_write_idx1(fp, h, b),
+        // TODO(P5): no native CRAM record writer yet
         HTS_FORMAT_CRAM => hts_sys::sam_write1(fp.cast(), h.cast(), b.cast()),
         HTS_FORMAT_TEXT_FORMAT => {
             (*fp).format.category = HTS_FORMAT_SEQUENCE_DATA;
@@ -10646,6 +10746,7 @@ pub unsafe fn sam_c_4553_sam_write1(
         }
         HTS_FORMAT_SAM => {
             if !(*fp).state.is_null() || !(*fp).idx.is_null() {
+                // TODO(P5): no native SAM threaded-encoder / on-the-fly-index writer yet
                 return hts_sys::sam_write1(fp.cast(), h.cast(), b.cast());
             }
             if sam_format1(h, b, &mut (*fp).line) < 0 {

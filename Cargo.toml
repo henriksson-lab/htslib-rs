@@ -35,3 +35,10 @@ xz2 = "0.1"
 
 [dev-dependencies]
 noodles = { version = "0.109.0", features = ["bgzf"] }
+
+# Redirect hts-sys to the locally vendored crate, which links the in-tree v1.23
+# HTSlib source (HTS_VERSION 102390) and regenerates bindgen bindings against it.
+# This keeps the C `hts_sys::*` structs byte-identical to the native Rust
+# translation (which targets v1.23), fixing the v1.19.1 ABI mismatch.
+[patch.crates-io]
+hts-sys = { path = "third_party/hts-sys" }

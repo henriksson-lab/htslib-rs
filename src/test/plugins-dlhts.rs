@@ -243,7 +243,8 @@ mod tests {
         TEST_PLUGINS_DLHTS_VERBOSE = 0;
         TEST_PLUGINS_DLHTS_HOPEN_P = linked_hopen as *mut c_void;
         TEST_PLUGINS_DLHTS_HCLOSE_ABRUPTLY_P = linked_hclose_abruptly as *mut c_void;
-        optind = 1;
+        // optind = 0 forces glibc getopt full reinit (shared-process tests).
+        optind = 0;
     }
 
     #[test]

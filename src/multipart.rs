@@ -57,9 +57,30 @@ struct hFILE_layout {
 
 const HFILE_MOBILE: c_uint = 1 << 1;
 
-unsafe extern "C" {
-    #[link_name = "hopen"]
-    fn htslib_hopen(fname: *const c_char, mode: *const c_char, ...) -> *mut hFILE;
+// Synthesize a System V AMD64 __va_list_tag from pointer-sized words so the
+// recursive open can be routed through native hfile_c_1317_hopen_vargs instead
+// of the C variadic hopen. Mirrors the pattern used by hfile_s3 and hts.rs.
+unsafe fn multipart_hopen_vargs(
+    url: *const c_char,
+    mode: *const c_char,
+    words: &[usize],
+) -> *mut hFILE {
+    let mut reg_save = [0usize; 6];
+    let mut overflow = vec![0usize; words.len().saturating_sub(reg_save.len())];
+    for (i, word) in words.iter().copied().enumerate() {
+        if i < reg_save.len() {
+            reg_save[i] = word;
+        } else {
+            overflow[i - reg_save.len()] = word;
+        }
+    }
+    let mut args = crate::htslib_rs::c_compat::__va_list_tag {
+        gp_offset: 0,
+        fp_offset: 48,
+        overflow_arg_area: overflow.as_mut_ptr().cast(),
+        reg_save_area: reg_save.as_mut_ptr().cast(),
+    };
+    hfile::hfile_c_1317_hopen_vargs(url, mode, &mut args)
 }
 
 // original: hfile_part (htslib/multipart.c:41)
@@ -132,23 +153,21 @@ pub unsafe extern "C" fn multipart_c_73_multipart_read(
                 );
 
                 (*fp).currentfp = if !(*p).headers.is_null() {
-                    htslib_hopen(
-                        (*p).url,
-                        c"r:".as_ptr(),
-                        c"httphdr:v".as_ptr(),
-                        (*p).headers,
-                        c"auth_token_enabled".as_ptr(),
-                        c"false".as_ptr(),
-                        std::ptr::null::<c_void>(),
-                    )
+                    let words: [usize; 5] = [
+                        c"httphdr:v".as_ptr() as usize,
+                        (*p).headers as usize,
+                        c"auth_token_enabled".as_ptr() as usize,
+                        c"false".as_ptr() as usize,
+                        std::ptr::null::<c_void>() as usize,
+                    ];
+                    multipart_hopen_vargs((*p).url, c"r:".as_ptr(), &words)
                 } else {
-                    htslib_hopen(
-                        (*p).url,
-                        c"r:".as_ptr(),
-                        c"auth_token_enabled".as_ptr(),
-                        c"false".as_ptr(),
-                        std::ptr::null::<c_void>(),
-                    )
+                    let words: [usize; 3] = [
+                        c"auth_token_enabled".as_ptr() as usize,
+                        c"false".as_ptr() as usize,
+                        std::ptr::null::<c_void>() as usize,
+                    ];
+                    multipart_hopen_vargs((*p).url, c"r:".as_ptr(), &words)
                 };
 
                 if (*fp).currentfp.is_null() {

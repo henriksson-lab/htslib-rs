@@ -120,7 +120,10 @@ mod tests {
     unsafe fn run_main(args: &[CString]) -> c_int {
         let _guard = GETOPT_LOCK.lock().unwrap();
         optarg = ptr::null_mut();
-        optind = 1;
+        // optind = 0 (not 1) forces glibc getopt to fully reinitialize its
+        // internal scan state; these C-`main()` tests share one process, so a
+        // prior getopt run would otherwise leave stale state ("invalid option").
+        optind = 0;
         let mut argv = args
             .iter()
             .map(|arg| arg.as_ptr().cast_mut())

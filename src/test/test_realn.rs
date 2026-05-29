@@ -248,7 +248,8 @@ mod tests {
             .iter()
             .map(|arg| arg.as_ptr().cast_mut())
             .collect::<Vec<_>>();
-        optind = 1;
+        // optind = 0 forces glibc getopt full reinit (shared-process tests).
+        optind = 0;
         test_test_realn_c_42_main(argv.len() as c_int, argv.as_mut_ptr())
     }
 

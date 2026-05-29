@@ -73,6 +73,21 @@ pub(crate) fn path_from_bytes(bytes: &[u8]) -> PathBuf {
     PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
 }
 
+// The hts_fmt_option constants below are declared with identical values in
+// both `hts` and `cram` (verified bit-for-bit). To prevent the
+// `ambiguous_glob_reexports` lint and to make `hts` the unambiguous canonical
+// source, we explicitly re-export them from `hts` before the globs.  An
+// explicit re-export shadows subsequent glob re-exports for the lint, so the
+// globs no longer race.
+pub use hts::{
+    CRAM_OPT_BASES_PER_SLICE, CRAM_OPT_DECODE_MD, CRAM_OPT_EMBED_REF, CRAM_OPT_IGNORE_MD5,
+    CRAM_OPT_LOSSY_NAMES, CRAM_OPT_MULTI_SEQ_PER_SLICE, CRAM_OPT_NO_REF, CRAM_OPT_NTHREADS,
+    CRAM_OPT_PREFIX, CRAM_OPT_REFERENCE, CRAM_OPT_REQUIRED_FIELDS, CRAM_OPT_SEQS_PER_SLICE,
+    CRAM_OPT_SLICES_PER_CONTAINER, CRAM_OPT_STORE_MD, CRAM_OPT_STORE_NM, CRAM_OPT_THREAD_POOL,
+    CRAM_OPT_USE_BZIP2, CRAM_OPT_USE_LZMA, CRAM_OPT_USE_RANS, CRAM_OPT_VERBOSITY,
+    CRAM_OPT_VERSION, HTS_OPT_COMPRESSION_LEVEL,
+};
+
 pub use cram::*;
 pub use errmod::*;
 pub use faidx::*;

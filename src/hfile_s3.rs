@@ -2761,11 +2761,6 @@ unsafe fn goto_write_open_error(
     hfile_destroy(fp.cast());
 }
 
-unsafe extern "C" {
-    #[link_name = "hopen"]
-    fn htslib_hopen_bridge(fname: *const c_char, mode: *const c_char, ...) -> *mut hFILE;
-}
-
 unsafe fn hfile_s3_hopen_vargs(
     url: *const c_char,
     mode: *const c_char,

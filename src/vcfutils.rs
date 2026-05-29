@@ -284,13 +284,25 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     *(*info).vptr.cast::<i8>() as c_int == bcf_int8_missing
                 }
                 x if x == BCF_BT_INT16 as c_int => {
-                    i16::from_le(*(*info).vptr.cast::<i16>()) as c_int == bcf_int16_missing
+                    // `(*info).vptr` points into a packed BCF record byte buffer
+                    // whose alignment is not guaranteed for multi-byte ints, so
+                    // read via `read_unaligned` to avoid misaligned-pointer UB.
+                    i16::from_le(core::ptr::read_unaligned((*info).vptr.cast::<i16>())) as c_int
+                        == bcf_int16_missing
                 }
                 x if x == BCF_BT_INT32 as c_int => {
-                    i32::from_le(*(*info).vptr.cast::<i32>()) == bcf_int32_missing
+                    // See above: vptr is a packed-record byte pointer; use
+                    // `read_unaligned` to avoid misaligned-pointer UB.
+                    i32::from_le(core::ptr::read_unaligned((*info).vptr.cast::<i32>()))
+                        == bcf_int32_missing
                 }
                 x if x == BCF_BT_FLOAT as c_int => {
-                    f32::from_bits(u32::from_le(*(*info).vptr.cast::<u32>())).to_bits()
+                    // See above: vptr is a packed-record byte pointer; use
+                    // `read_unaligned` to avoid misaligned-pointer UB.
+                    f32::from_bits(u32::from_le(core::ptr::read_unaligned(
+                        (*info).vptr.cast::<u32>(),
+                    )))
+                    .to_bits()
                         == bcf_float_missing
                 }
                 _ => {
@@ -802,8 +814,12 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                 }
                 x if x == BCF_BT_INT16 as c_int => {
                     for sample in 0..n_sample {
-                        let val =
-                            i16::from_le(*(*fmt).p.add((sample * (*fmt).size) as usize).cast());
+                        // `(*fmt).p` indexes into a packed BCF record byte
+                        // buffer whose alignment is not guaranteed for
+                        // multi-byte ints; use `read_unaligned` to avoid UB.
+                        let val = i16::from_le(core::ptr::read_unaligned(
+                            (*fmt).p.add((sample * (*fmt).size) as usize).cast::<i16>(),
+                        ));
                         if val as c_int != bcf_int16_missing {
                             all_missing = 0;
                             break;
@@ -812,8 +828,10 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                 }
                 x if x == BCF_BT_INT32 as c_int => {
                     for sample in 0..n_sample {
-                        let val =
-                            i32::from_le(*(*fmt).p.add((sample * (*fmt).size) as usize).cast());
+                        // See above: packed-record byte pointer, use `read_unaligned`.
+                        let val = i32::from_le(core::ptr::read_unaligned(
+                            (*fmt).p.add((sample * (*fmt).size) as usize).cast::<i32>(),
+                        ));
                         if val != bcf_int32_missing {
                             all_missing = 0;
                             break;
@@ -822,8 +840,10 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                 }
                 x if x == BCF_BT_FLOAT as c_int => {
                     for sample in 0..n_sample {
-                        let val =
-                            u32::from_le(*(*fmt).p.add((sample * (*fmt).size) as usize).cast());
+                        // See above: packed-record byte pointer, use `read_unaligned`.
+                        let val = u32::from_le(core::ptr::read_unaligned(
+                            (*fmt).p.add((sample * (*fmt).size) as usize).cast::<u32>(),
+                        ));
                         if val != bcf_float_missing {
                             all_missing = 0;
                             break;

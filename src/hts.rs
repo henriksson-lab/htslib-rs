@@ -2044,6 +2044,11 @@ pub unsafe fn hts_resize_array_(
     }
 
     if (flags & HTS_RESIZE_CLEAR) != 0 {
+        // SAFETY: every in-tree caller of `hts_resize_array_` passes a
+        // `&mut u32`, `&mut u64`, or `&mut c_int` cast to `*mut c_void` for
+        // `size_in_out` (see `bcf_hdr_seqnames`, `bcf_hdr_set_idx`,
+        // `hts_readlist`, `hts_readlines`, `hts_resize_i32`, `hts_resize_u32`),
+        // all of which are naturally aligned for the matching width.
         let old_size = match size_sz {
             4 => *(size_in_out.cast::<u32>()) as usize,
             8 => *(size_in_out.cast::<u64>()) as usize,
@@ -2058,6 +2063,8 @@ pub unsafe fn hts_resize_array_(
         }
     }
 
+    // SAFETY: see comment above — `size_in_out` is always a naturally aligned
+    // pointer to a `u32`/`u64` (or sign-equivalent) sized field.
     match size_sz {
         4 => *(size_in_out.cast::<u32>()) = new_size as u32,
         8 => *(size_in_out.cast::<u64>()) = new_size as u64,
@@ -2219,6 +2226,10 @@ pub fn ed_swap_2(v: u16) -> u16 {
 }
 
 pub unsafe fn ed_swap_2p(x: *mut c_void) -> *mut c_void {
+    // SAFETY: in-tree callers pass naturally aligned `*mut u16` targets
+    // (see `hts_c_*_idx_dump_meta` in this file). The BAM/SAM byte-swap
+    // helpers operate on htslib-laid-out records whose multi-byte fields
+    // sit on aligned offsets within the malloc'd `bam1_t::data` buffer.
     *x.cast::<u16>() = ed_swap_2(*x.cast::<u16>());
     x
 }
@@ -2228,6 +2239,10 @@ pub fn ed_swap_4(v: u32) -> u32 {
 }
 
 pub unsafe fn ed_swap_4p(x: *mut c_void) -> *mut c_void {
+    // SAFETY: in-tree callers pass either naturally aligned `*mut u32`/
+    // `*mut c_int` locals or pointers into BAM record data at aligned
+    // offsets (cigar starts at `data + l_qname` where `l_qname` is padded
+    // to a multiple of 4 via `l_extranul` per the htslib BAM layout).
     *x.cast::<u32>() = ed_swap_4(*x.cast::<u32>());
     x
 }
@@ -2237,6 +2252,8 @@ pub fn ed_swap_8(v: u64) -> u64 {
 }
 
 pub unsafe fn ed_swap_8p(x: *mut c_void) -> *mut c_void {
+    // SAFETY: in-tree callers pass naturally aligned `*mut u64` targets
+    // (`hts_pair64_*_t` fields and stack `u64` locals).
     *x.cast::<u64>() = ed_swap_8(*x.cast::<u64>());
     x
 }
@@ -4424,7 +4441,6 @@ pub unsafe fn hts_expr_c_920_hts_filter_eval2(
 }
 
 pub unsafe fn kputd(d: f64, s: *mut kstring_t) -> c_int {
-    let before = (*s).l;
     if d == 0.0 {
         if d.is_sign_negative() {
             return kputsn(b"-0\0".as_ptr().cast(), 2, s);
@@ -4443,25 +4459,19 @@ pub unsafe fn kputd(d: f64, s: *mut kstring_t) -> c_int {
     }
 
     if !(0.0001..=999999.0).contains(&d) {
-        let text = format!("{d:e}");
-        let mut mantissa_exp = text.split('e');
-        let mut mantissa = mantissa_exp
-            .next()
-            .unwrap_or_default()
-            .trim_end_matches('0')
-            .to_string();
-        if mantissa.ends_with('.') {
-            mantissa.pop();
+        if ks_resize(s, (*s).l + 50) < 0 {
+            return libc::EOF;
         }
-        let exp = mantissa_exp
-            .next()
-            .and_then(|e| e.parse::<i32>().ok())
-            .unwrap_or(0);
-        let text = format!("{mantissa}e{exp:+03}");
-        if kputsn(text.as_ptr().cast(), text.len(), s) < 0 {
-            return -1;
-        }
-        return ((*s).l - before) as c_int;
+        // We let stdio handle the exponent cases
+        let s2 = libc::snprintf(
+            (*s).s.add((*s).l),
+            ((*s).m - (*s).l) as libc::size_t,
+            b"%g\0".as_ptr().cast(),
+            d,
+        );
+        len += s2;
+        (*s).l += s2 as size_t;
+        return len;
     }
 
     let decimals = if d < 0.001 {
@@ -4978,6 +4988,7 @@ pub unsafe fn hts_hopen(fp: *mut hFILE, fn_: *const c_char, mode: *const c_char)
                 return std::ptr::null_mut();
             }
             if ((*hts_fp).bitfields & (1 << 1)) == 0 {
+                // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
                 hts_sys::cram_set_option(
                     (*hts_fp).fp.cram.cast(),
                     CRAM_OPT_DECODE_MD,
@@ -5752,6 +5763,7 @@ pub unsafe fn hts_set_opt_int(fp: *mut htsFile, opt: hts_fmt_option, val: c_int)
                 (*(*fp).fp.bgzf).bitfields |= ((val as u32) & 0x1ff) << 20;
                 0
             } else if (*fp).format.format == HTS_FORMAT_CRAM {
+                // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
                 hts_sys::cram_set_option((*fp).fp.cram.cast(), opt, val)
             } else {
                 0
@@ -5773,6 +5785,7 @@ pub unsafe fn hts_set_opt_int(fp: *mut htsFile, opt: hts_fmt_option, val: c_int)
         }
         _ => {
             if (*fp).format.format == HTS_FORMAT_CRAM {
+                // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
                 hts_sys::cram_set_option((*fp).fp.cram.cast(), opt, val)
             } else {
                 0
@@ -5805,6 +5818,7 @@ pub unsafe fn hts_set_opt_ptr(fp: *mut htsFile, opt: hts_fmt_option, val: *mut c
         }
         _ => {
             if (*fp).format.format == HTS_FORMAT_CRAM {
+                // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
                 hts_sys::cram_set_option((*fp).fp.cram.cast(), opt, val)
             } else {
                 0
@@ -6020,6 +6034,7 @@ pub unsafe fn hts_set_threads(fp: *mut htsFile, n: c_int) -> c_int {
     } else if (*fp).format.compression == HTS_COMPRESSION_BGZF {
         bgzf_mt(hts_get_bgzfp(fp), n, 256)
     } else if (*fp).format.format == HTS_FORMAT_CRAM {
+        // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
         hts_sys::hts_set_opt(fp.cast(), CRAM_OPT_NTHREADS, n)
     } else {
         0
@@ -6032,6 +6047,7 @@ pub unsafe fn hts_set_thread_pool(fp: *mut htsFile, p: *mut htsThreadPool) -> c_
     } else if (*fp).format.compression == HTS_COMPRESSION_BGZF {
         bgzf_thread_pool(hts_get_bgzfp(fp), (*p).pool, (*p).qsize)
     } else if (*fp).format.format == HTS_FORMAT_CRAM {
+        // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
         hts_sys::hts_set_opt(fp.cast(), CRAM_OPT_THREAD_POOL, p)
     } else {
         0
@@ -6056,6 +6072,7 @@ pub unsafe fn hts_set_fai_filename(fp: *mut htsFile, fn_aux: *const c_char) -> c
     }
 
     if (*fp).format.format == HTS_FORMAT_CRAM
+        // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
         && hts_sys::cram_set_option(
             (*fp).fp.cram.cast(),
             CRAM_OPT_REFERENCE,
@@ -6663,8 +6680,10 @@ pub unsafe fn hts_close(fp: *mut htsFile) -> c_int {
         }
         HTS_FORMAT_CRAM => {
             if ((*fp).bitfields & (1 << 1)) == 0 {
+                // TODO(P5): foundational; needs broader cutover (cram_eof native missing)
                 let _ = hts_sys::cram_eof((*fp).fp.cram.cast());
             }
+            // TODO(P5): foundational; needs broader cutover (cram_close native missing)
             let ret = hts_sys::cram_close((*fp).fp.cram.cast()) | hts_idx_close_otf_fp((*fp).idx);
             super::sam::sam_hdr_destroy((*fp).bam_header.cast());
             hts_idx_destroy((*fp).idx);
@@ -6840,6 +6859,7 @@ pub unsafe fn hts_idx_destroy(idx: *mut hts_idx_t) {
         return;
     }
     if (*idx).fmt == HTS_FMT_CRAI {
+        // TODO(P5): foundational; needs broader cutover
         hts_sys::hts_idx_destroy(idx.cast());
         return;
     }
@@ -6872,7 +6892,7 @@ pub unsafe fn hts_idx_init(
     min_shift: c_int,
     n_lvls: c_int,
 ) -> *mut hts_idx_t {
-    hts_sys::hts_idx_init(n, fmt, offset0, min_shift, n_lvls).cast()
+    hts_c_2405_hts_idx_init(n, fmt, offset0, min_shift, n_lvls)
 }
 
 pub unsafe fn hts_idx_push(
@@ -6883,7 +6903,7 @@ pub unsafe fn hts_idx_push(
     offset: u64,
     is_mapped: c_int,
 ) -> c_int {
-    hts_sys::hts_idx_push(idx.cast(), tid, beg, end, offset, is_mapped)
+    hts_c_2558_hts_idx_push(idx, tid, beg, end, offset, is_mapped)
 }
 
 pub unsafe fn hts_c_2558_hts_idx_push(
@@ -7393,7 +7413,7 @@ pub unsafe fn hts_c_2515_hts_idx_finish(idx: *mut hts_idx_t, final_offset: u64) 
 }
 
 pub unsafe fn hts_idx_finish(idx: *mut hts_idx_t, final_offset: u64) -> c_int {
-    hts_sys::hts_idx_finish(idx.cast(), final_offset)
+    hts_c_2515_hts_idx_finish(idx, final_offset)
 }
 
 pub unsafe fn hts_c_2533_hts_idx_maxpos(idx: *const hts_idx_t) -> hts_pos_t {
@@ -7452,7 +7472,7 @@ pub unsafe fn hts_c_2714_hts_idx_fmt(idx: *mut hts_idx_t) -> c_int {
 }
 
 pub unsafe fn hts_idx_fmt(idx: *mut hts_idx_t) -> c_int {
-    hts_sys::hts_idx_fmt(idx.cast())
+    hts_c_2714_hts_idx_fmt(idx)
 }
 
 pub unsafe fn hts_idx_nseq(idx: *const hts_idx_t) -> c_int {
@@ -7472,7 +7492,7 @@ pub unsafe fn hts_c_3110_hts_idx_nseq(idx: *const hts_idx_t) -> c_int {
 }
 
 pub unsafe fn hts_idx_tbi_name(idx: *mut hts_idx_t, tid: c_int, name: *const c_char) -> c_int {
-    hts_sys::hts_idx_tbi_name(idx.cast(), tid, name)
+    hts_c_2648_hts_idx_tbi_name(idx, tid, name)
 }
 
 pub unsafe fn hts_c_2721_idx_write_int32(fp: *mut BGZF, mut x: i32) -> isize {
@@ -7633,7 +7653,7 @@ pub unsafe fn hts_c_2847_hts_idx_write_out(
 }
 
 pub unsafe fn hts_idx_save(idx: *const hts_idx_t, fn_: *const c_char, fmt: c_int) -> c_int {
-    hts_sys::hts_idx_save(idx.cast(), fn_, fmt)
+    hts_c_2825_hts_idx_save(idx, fn_, fmt)
 }
 
 pub unsafe fn hts_c_2825_hts_idx_save(
@@ -7674,7 +7694,7 @@ pub unsafe fn hts_idx_save_as(
     fnidx: *const c_char,
     fmt: c_int,
 ) -> c_int {
-    hts_sys::hts_idx_save_as(idx.cast(), fn_, fnidx, fmt)
+    hts_c_2869_hts_idx_save_as(idx, fn_, fnidx, fmt)
 }
 
 pub unsafe fn hts_c_2869_hts_idx_save_as(
@@ -8328,7 +8348,7 @@ pub unsafe fn hts_idx_load2(fn_: *const c_char, fnidx: *const c_char) -> *mut ht
 }
 
 pub unsafe fn hts_idx_get_meta(idx: *mut hts_idx_t, l_meta: *mut u32) -> *mut u8 {
-    hts_sys::hts_idx_get_meta(idx.cast(), l_meta)
+    hts_c_3084_hts_idx_get_meta(idx, l_meta)
 }
 
 pub unsafe fn hts_c_3084_hts_idx_get_meta(idx: *mut hts_idx_t, l_meta: *mut u32) -> *mut u8 {
@@ -8342,7 +8362,7 @@ pub unsafe fn hts_idx_set_meta(
     meta: *mut u8,
     is_copy: c_int,
 ) -> c_int {
-    hts_sys::hts_idx_set_meta(idx.cast(), l_meta, meta, is_copy)
+    hts_c_3062_hts_idx_set_meta(idx, l_meta, meta, is_copy)
 }
 
 pub unsafe fn hts_c_3062_hts_idx_set_meta(
@@ -8444,11 +8464,11 @@ pub unsafe fn hts_idx_get_stat(
     mapped: *mut u64,
     unmapped: *mut u64,
 ) -> c_int {
-    hts_sys::hts_idx_get_stat(idx.cast(), tid, mapped, unmapped)
+    hts_c_3115_hts_idx_get_stat(idx, tid, mapped, unmapped)
 }
 
 pub unsafe fn hts_idx_get_n_no_coor(idx: *const hts_idx_t) -> u64 {
-    hts_sys::hts_idx_get_n_no_coor(idx.cast())
+    hts_c_3136_hts_idx_get_n_no_coor(idx)
 }
 
 pub unsafe fn hts_idx_seqnames(
@@ -8457,7 +8477,7 @@ pub unsafe fn hts_idx_seqnames(
     getid: hts_id2name_f,
     hdr: *mut c_void,
 ) -> *mut *const c_char {
-    hts_sys::hts_idx_seqnames(idx.cast(), n, getid, hdr)
+    hts_c_3090_hts_idx_seqnames(idx, n, getid, hdr)
 }
 
 pub unsafe extern "C" fn hts_itr_multi_bam(idx: *const hts_idx_t, iter: *mut hts_itr_t) -> c_int {
@@ -10049,6 +10069,7 @@ pub unsafe fn hts_itr_multi_next(fd: *mut htsFile, iter: *mut hts_itr_t, r: *mut
         return -1;
     }
     if itr_is_cram(iter) && !itr_read_rest(iter) {
+        // TODO(P5): foundational; needs broader cutover
         return hts_sys::hts_itr_multi_next(fd.cast(), iter.cast(), r);
     }
     let fp = if itr_is_cram(iter) {

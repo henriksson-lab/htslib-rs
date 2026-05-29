@@ -52,9 +52,30 @@ struct hFILE_plugin_layout {
     destroy: *const c_void,
 }
 
-unsafe extern "C" {
-    #[link_name = "hopen"]
-    fn htslib_hopen(fname: *const c_char, mode: *const c_char, ...) -> *mut hFILE;
+// Synthesize a System V AMD64 __va_list_tag from pointer-sized words so the
+// recursive open can be routed through native hfile_c_1317_hopen_vargs instead
+// of the C variadic hopen. Mirrors the pattern used by hfile_s3 and hts.rs.
+unsafe fn hfile_gcs_hopen_vargs(
+    url: *const c_char,
+    mode: *const c_char,
+    words: &[usize],
+) -> *mut hFILE {
+    let mut reg_save = [0usize; 6];
+    let mut overflow = vec![0usize; words.len().saturating_sub(reg_save.len())];
+    for (i, word) in words.iter().copied().enumerate() {
+        if i < reg_save.len() {
+            reg_save[i] = word;
+        } else {
+            overflow[i - reg_save.len()] = word;
+        }
+    }
+    let mut args = crate::htslib_rs::c_compat::__va_list_tag {
+        gp_offset: 0,
+        fp_offset: 48,
+        overflow_arg_area: overflow.as_mut_ptr().cast(),
+        reg_save_area: reg_save.as_mut_ptr().cast(),
+    };
+    crate::htslib_rs::hfile::hfile_c_1317_hopen_vargs(url, mode, &mut args)
 }
 
 type HFileLibcurlHttpHeaderCallback =
@@ -259,31 +280,29 @@ unsafe fn hfile_gcs_c_41_gcs_rewrite(
         }
 
         if auth_hdr.l > 0 && requester_pays_hdr.l > 0 {
-            fp = htslib_hopen(
-                url.s,
-                mode,
-                c"va_list".as_ptr(),
-                argsp,
-                c"httphdr:l".as_ptr(),
-                auth_hdr.s,
-                requester_pays_hdr.s,
-                std::ptr::null::<c_char>(),
-                std::ptr::null::<c_char>(),
-            );
+            let words: [usize; 7] = [
+                c"va_list".as_ptr() as usize,
+                argsp as usize,
+                c"httphdr:l".as_ptr() as usize,
+                auth_hdr.s as usize,
+                requester_pays_hdr.s as usize,
+                std::ptr::null::<c_char>() as usize,
+                std::ptr::null::<c_char>() as usize,
+            ];
+            fp = hfile_gcs_hopen_vargs(url.s, mode, &words);
         } else {
-            fp = htslib_hopen(
-                url.s,
-                mode,
-                c"va_list".as_ptr(),
-                argsp,
-                c"httphdr".as_ptr(),
+            let words: [usize; 5] = [
+                c"va_list".as_ptr() as usize,
+                argsp as usize,
+                c"httphdr".as_ptr() as usize,
                 if auth_hdr.l > 0 {
-                    auth_hdr.s
+                    auth_hdr.s as usize
                 } else {
-                    std::ptr::null_mut()
+                    std::ptr::null::<c_char>() as usize
                 },
-                std::ptr::null::<c_char>(),
-            );
+                std::ptr::null::<c_char>() as usize,
+            ];
+            fp = hfile_gcs_hopen_vargs(url.s, mode, &words);
         }
     } else if auth_hdr.l > 0 || requester_pays_hdr.l > 0 {
         fp = hfile_gcs_c_41_open_translated_libcurl(

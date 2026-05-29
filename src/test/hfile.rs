@@ -26,7 +26,8 @@ use std::ffi::{c_char, c_int};
 
 use crate::htslib_rs::{
     hfile::{
-        haddextension, hclose, hfile_mem_get_buffer, hfile_mem_steal_buffer, hflush, hgets, hopen,
+        haddextension, hclose, hfile_c_878_hopenv_mem, hfile_mem_get_buffer, hfile_mem_steal_buffer,
+        hflush, hgets, hopen,
         hpeek, hseek, htslib_hfile_h_134_herrno as herrno, htslib_hfile_h_155_htell as htell,
         htslib_hfile_h_163_hgetc as hgetc, htslib_hfile_h_247_hread as hread,
         htslib_hfile_h_263_hputc as hputc, htslib_hfile_h_275_hputs as hputs,
@@ -34,11 +35,6 @@ use crate::htslib_rs::{
     },
     hts::{hFILE, ks_release, kstring_t, size_t},
 };
-
-unsafe extern "C" {
-    #[link_name = "hopen"]
-    fn htslib_hopen(fname: *const c_char, mode: *const c_char, ...) -> *mut hFILE;
-}
 
 // original: fail (htslib/test/hfile.c:38)
 macro_rules! test_hfile_c_38_fail {
@@ -388,7 +384,10 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
     }
 
     let mut test_string = libc::strdup(c"Test string".as_ptr());
-    TEST_HFILE_FIN = htslib_hopen(c"mem:".as_ptr(), c"r:".as_ptr(), test_string, 12usize);
+    // Native hopen is non-variadic, so route the mem-buffer open through the
+    // function the variadic mem vopen handler dispatches to, giving a native
+    // MEM_BACKEND hfile that the native hfile_mem_get_buffer recognises.
+    TEST_HFILE_FIN = hfile_c_878_hopenv_mem(c"mem:".as_ptr(), c"r:".as_ptr(), test_string, 12usize);
     if TEST_HFILE_FIN.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"mem:\", \"r:\", ...)".as_ptr());
     }
@@ -412,7 +411,7 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
     }
 
     test_string = libc::strdup(c"Test string".as_ptr());
-    TEST_HFILE_FIN = htslib_hopen(c"mem:".as_ptr(), c"wr:".as_ptr(), test_string, 12usize);
+    TEST_HFILE_FIN = hfile_c_878_hopenv_mem(c"mem:".as_ptr(), c"wr:".as_ptr(), test_string, 12usize);
     if TEST_HFILE_FIN.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"mem:\", \"w:\", ...)".as_ptr());
     }

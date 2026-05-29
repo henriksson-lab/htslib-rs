@@ -238,8 +238,6 @@ struct CurlMsg {
 unsafe extern "C" {
     #[link_name = "hfile_plugin_init_libcurl"]
     fn htslib_hfile_plugin_init_libcurl(self_: *mut hFILE_plugin) -> c_int;
-    #[link_name = "hopen"]
-    fn htslib_hopen(fname: *const c_char, mode: *const c_char, ...) -> *mut hFILE;
 }
 
 #[link(name = "curl")]
