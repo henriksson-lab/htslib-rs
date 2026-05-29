@@ -145,6 +145,79 @@ struct GzipStream {
 unsafe fn system_zlib() -> Option<&'static ZlibFns> {
     static ZLIB: OnceLock<Option<ZlibFns>> = OnceLock::new();
     ZLIB.get_or_init(|| unsafe {
+        // Prefer a dlopen()-loaded libz.so.1 (the real system zlib) over the
+        // statically-linked zlib provider that libz-sys may have bundled into
+        // the binary. Some libz-sys builds pull in zlib-ng, whose deflate
+        // output is not byte-identical to vanilla zlib for short inputs; using
+        // vanilla zlib here keeps the bgzip rebuild path bit-exact against
+        // fixtures produced with stock zlib (htslib's bgzip), which is what
+        // the rebgzip parity tests assert.
+        let dlopen_handles: [&[u8]; 4] = [
+            b"libz.so.1\0",
+            b"libz.so\0",
+            b"libz.dylib\0",
+            b"libz.1.dylib\0",
+        ];
+        for name in dlopen_handles.iter() {
+            let handle = libc::dlopen(
+                name.as_ptr().cast(),
+                libc::RTLD_LAZY | libc::RTLD_LOCAL,
+            );
+            if handle.is_null() {
+                continue;
+            }
+            let deflate_init2 = libc::dlsym(handle, c"deflateInit2_".as_ptr());
+            let deflate = libc::dlsym(handle, c"deflate".as_ptr());
+            let deflate_end = libc::dlsym(handle, c"deflateEnd".as_ptr());
+            let inflate_init2 = libc::dlsym(handle, c"inflateInit2_".as_ptr());
+            let inflate = libc::dlsym(handle, c"inflate".as_ptr());
+            let inflate_reset = libc::dlsym(handle, c"inflateReset".as_ptr());
+            let inflate_end = libc::dlsym(handle, c"inflateEnd".as_ptr());
+            let crc32 = libc::dlsym(handle, c"crc32".as_ptr());
+            let zlib_version = libc::dlsym(handle, c"zlibVersion".as_ptr());
+
+            if !deflate_init2.is_null()
+                && !deflate.is_null()
+                && !deflate_end.is_null()
+                && !inflate_init2.is_null()
+                && !inflate.is_null()
+                && !inflate_reset.is_null()
+                && !inflate_end.is_null()
+                && !crc32.is_null()
+                && !zlib_version.is_null()
+            {
+                let version_fn: ZlibVersionFn =
+                    std::mem::transmute::<*mut c_void, ZlibVersionFn>(zlib_version);
+                let raw_ver = version_fn();
+                // Reject zlib-ng even if it is what dlopen happens to find
+                // first (e.g. via LD_LIBRARY_PATH). We want stock zlib's
+                // deflate output for byte-exact reconstruction tests.
+                let is_ng = !raw_ver.is_null()
+                    && !libc::strstr(raw_ver, c"zlib-ng".as_ptr()).is_null();
+                if !is_ng {
+                    return Some(ZlibFns {
+                        deflate_init2: std::mem::transmute::<*mut c_void, DeflateInit2Fn>(
+                            deflate_init2,
+                        ),
+                        deflate: std::mem::transmute::<*mut c_void, DeflateFn>(deflate),
+                        deflate_end: std::mem::transmute::<*mut c_void, DeflateEndFn>(deflate_end),
+                        inflate_init2: std::mem::transmute::<*mut c_void, InflateInit2Fn>(
+                            inflate_init2,
+                        ),
+                        inflate: std::mem::transmute::<*mut c_void, InflateFn>(inflate),
+                        inflate_reset: std::mem::transmute::<*mut c_void, InflateResetFn>(
+                            inflate_reset,
+                        ),
+                        inflate_end: std::mem::transmute::<*mut c_void, InflateEndFn>(inflate_end),
+                        crc32: std::mem::transmute::<*mut c_void, Crc32Fn>(crc32),
+                        zlib_version: version_fn,
+                    });
+                }
+            }
+            libc::dlclose(handle);
+        }
+
+        // Fall back to whatever's statically linked into the binary.
         if !linked_zlib_version().is_null() {
             return Some(ZlibFns {
                 deflate_init2: linked_deflate_init2,
@@ -159,75 +232,7 @@ unsafe fn system_zlib() -> Option<&'static ZlibFns> {
             });
         }
 
-        let mut should_close = false;
-        let mut handle = libc::RTLD_DEFAULT;
-        let mut deflate_init2 = libc::dlsym(handle, c"deflateInit2_".as_ptr());
-        let mut deflate = libc::dlsym(handle, c"deflate".as_ptr());
-        let mut deflate_end = libc::dlsym(handle, c"deflateEnd".as_ptr());
-        let mut inflate_init2 = libc::dlsym(handle, c"inflateInit2_".as_ptr());
-        let mut inflate = libc::dlsym(handle, c"inflate".as_ptr());
-        let mut inflate_reset = libc::dlsym(handle, c"inflateReset".as_ptr());
-        let mut inflate_end = libc::dlsym(handle, c"inflateEnd".as_ptr());
-        let mut crc32 = libc::dlsym(handle, c"crc32".as_ptr());
-        let mut zlib_version = libc::dlsym(handle, c"zlibVersion".as_ptr());
-
-        if deflate_init2.is_null()
-            || deflate.is_null()
-            || deflate_end.is_null()
-            || inflate_init2.is_null()
-            || inflate.is_null()
-            || inflate_reset.is_null()
-            || inflate_end.is_null()
-            || crc32.is_null()
-            || zlib_version.is_null()
-        {
-            handle = libc::dlopen(c"libz.so.1".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
-            if handle.is_null() {
-                handle = libc::dlopen(c"libz.so".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
-            }
-            if handle.is_null() {
-                return None;
-            }
-            should_close = true;
-
-            deflate_init2 = libc::dlsym(handle, c"deflateInit2_".as_ptr());
-            deflate = libc::dlsym(handle, c"deflate".as_ptr());
-            deflate_end = libc::dlsym(handle, c"deflateEnd".as_ptr());
-            inflate_init2 = libc::dlsym(handle, c"inflateInit2_".as_ptr());
-            inflate = libc::dlsym(handle, c"inflate".as_ptr());
-            inflate_reset = libc::dlsym(handle, c"inflateReset".as_ptr());
-            inflate_end = libc::dlsym(handle, c"inflateEnd".as_ptr());
-            crc32 = libc::dlsym(handle, c"crc32".as_ptr());
-            zlib_version = libc::dlsym(handle, c"zlibVersion".as_ptr());
-        }
-
-        if deflate_init2.is_null()
-            || deflate.is_null()
-            || deflate_end.is_null()
-            || inflate_init2.is_null()
-            || inflate.is_null()
-            || inflate_reset.is_null()
-            || inflate_end.is_null()
-            || crc32.is_null()
-            || zlib_version.is_null()
-        {
-            if should_close {
-                libc::dlclose(handle);
-            }
-            return None;
-        }
-
-        Some(ZlibFns {
-            deflate_init2: std::mem::transmute::<*mut c_void, DeflateInit2Fn>(deflate_init2),
-            deflate: std::mem::transmute::<*mut c_void, DeflateFn>(deflate),
-            deflate_end: std::mem::transmute::<*mut c_void, DeflateEndFn>(deflate_end),
-            inflate_init2: std::mem::transmute::<*mut c_void, InflateInit2Fn>(inflate_init2),
-            inflate: std::mem::transmute::<*mut c_void, InflateFn>(inflate),
-            inflate_reset: std::mem::transmute::<*mut c_void, InflateResetFn>(inflate_reset),
-            inflate_end: std::mem::transmute::<*mut c_void, InflateEndFn>(inflate_end),
-            crc32: std::mem::transmute::<*mut c_void, Crc32Fn>(crc32),
-            zlib_version: std::mem::transmute::<*mut c_void, ZlibVersionFn>(zlib_version),
-        })
+        None
     })
     .as_ref()
 }
@@ -1966,6 +1971,13 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
 }
 
 // original: bgzf_mt_read_block (htslib/bgzf.c:1485)
+//
+// The native MT reader path runs the decode synchronously here rather than via
+// a separate prefetch thread. To match the C semantics we still have to skip
+// past *embedded* empty BGZF blocks (28-byte EOF markers in the middle of a
+// concatenated stream): the C reader does this via the `if (!j->hit_eof &&
+// j->uncomp_len == 0) goto again;` arm of bgzf_read_block. We mirror that here
+// by looping until we either decode a non-empty block or hit a real EOF.
 pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
     if fp.is_null() || (*fp).mt.is_null() {
         return bgzf_read_block(fp);
@@ -1975,119 +1987,144 @@ pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
     }
 
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
-    let block_address = if (*fp).block_clength < 0 {
-        (*fp).block_address
-    } else {
-        bgzf_htell(fp)
-    };
-    let mut header = [0u8; BLOCK_HEADER_LENGTH];
-    let count = if (*fp).block_clength < 0 {
-        let preloaded = (-(*fp).block_clength) as usize;
-        (*fp).block_clength = 0;
-        if preloaded == BLOCK_HEADER_LENGTH {
-            ptr::copy_nonoverlapping(
-                (*fp).compressed_block.cast::<u8>(),
-                header.as_mut_ptr(),
-                header.len(),
-            );
-        }
-        preloaded as isize
-    } else {
-        bgzf_hread_ptr((*fp).fp, header.as_mut_ptr().cast(), header.len())
-    };
 
-    if count == 0 {
-        if !flag(fp, 29) && !flag(fp, 18) {
-            set_flag(fp, 18, true);
+    loop {
+        let block_address = if (*fp).block_clength < 0 {
+            (*fp).block_address
+        } else {
+            bgzf_htell(fp)
+        };
+        let mut header = [0u8; BLOCK_HEADER_LENGTH];
+        let count = if (*fp).block_clength < 0 {
+            let preloaded = (-(*fp).block_clength) as usize;
+            (*fp).block_clength = 0;
+            if preloaded == BLOCK_HEADER_LENGTH {
+                ptr::copy_nonoverlapping(
+                    (*fp).compressed_block.cast::<u8>(),
+                    header.as_mut_ptr(),
+                    header.len(),
+                );
+            }
+            preloaded as isize
+        } else {
+            bgzf_hread_ptr((*fp).fp, header.as_mut_ptr().cast(), header.len())
+        };
+
+        if count == 0 {
+            if !flag(fp, 29) && !flag(fp, 18) {
+                set_flag(fp, 18, true);
+            }
+            (*fp).block_length = 0;
+            (*mt).hit_eof = 1;
+            return 0;
         }
-        (*fp).block_length = 0;
-        (*mt).hit_eof = 1;
+        if count != header.len() as isize || check_header(header.as_ptr()) != 0 {
+            add_errcode(fp, BGZF_ERR_HEADER);
+            (*mt).errcode = BGZF_ERR_HEADER as c_int;
+            return -1;
+        }
+
+        let block_length = unpack_u16(&header[16..18]) as usize + 1;
+        if !(BLOCK_HEADER_LENGTH + BLOCK_FOOTER_LENGTH..=BGZF_MAX_BLOCK_SIZE)
+            .contains(&block_length)
+        {
+            add_errcode(fp, BGZF_ERR_HEADER);
+            (*mt).errcode = BGZF_ERR_HEADER as c_int;
+            return -1;
+        }
+
+        let job = bgzf_mt_alloc_job(fp);
+        if job.is_null() {
+            add_errcode(fp, BGZF_ERR_IO);
+            (*mt).errcode = BGZF_ERR_IO as c_int;
+            return -1;
+        }
+        ptr::copy_nonoverlapping(header.as_ptr(), (*job).comp_data.as_mut_ptr(), header.len());
+        let remaining = block_length - BLOCK_HEADER_LENGTH;
+        let read = bgzf_hread_ptr(
+            (*fp).fp,
+            (*job)
+                .comp_data
+                .as_mut_ptr()
+                .add(BLOCK_HEADER_LENGTH)
+                .cast(),
+            remaining,
+        );
+        if read != remaining as isize {
+            bgzf_mt_free_job(fp, job);
+            add_errcode(fp, BGZF_ERR_IO);
+            (*mt).errcode = BGZF_ERR_IO as c_int;
+            return -1;
+        }
+        (*job).comp_len = block_length;
+        (*job).block_address = block_address;
+
+        if bgzf_mt_dispatch(fp, job, Some(bgzf_decode_func)) != 0 {
+            bgzf_mt_free_job(fp, job);
+            add_errcode(fp, BGZF_ERR_IO);
+            (*mt).errcode = BGZF_ERR_IO as c_int;
+            return -1;
+        }
+
+        let result = super::thread_pool::hts_tpool_next_result_wait((*mt).out_queue.cast());
+        if result.is_null() {
+            (*mt).jobs_pending -= 1;
+            add_errcode(fp, BGZF_ERR_IO);
+            (*mt).errcode = BGZF_ERR_IO as c_int;
+            return -1;
+        }
+        let job = super::thread_pool::hts_tpool_result_data(result).cast::<bgzf_job>();
+        super::thread_pool::hts_tpool_delete_result(result, 0);
+        (*mt).jobs_pending -= 1;
+
+        if (*job).errcode != 0 {
+            add_errcode(fp, (*job).errcode as u32);
+            (*mt).errcode = (*job).errcode;
+            bgzf_mt_free_job(fp, job);
+            return -1;
+        }
+
+        // Match C bgzf_read_block (htslib/bgzf.c:1058):
+        //   // Zero length blocks in the middle of a file are (wrongly)
+        //   // considered as EOF by many callers.  We work around this by
+        //   // trying again to see if we hit a genuine EOF.
+        //   if (!j->hit_eof && j->uncomp_len == 0) {
+        //       fp->last_block_eof = 1;
+        //       hts_tpool_delete_result(r, 0);
+        //       goto again;
+        //   }
+        // We don't have hit_eof tracking per-job in this synchronous path
+        // (the hread above already returned a real block header, so we know
+        // we're not at the true file EOF here), so an empty decoded block
+        // is necessarily an embedded EOF marker. Skip it and loop to read
+        // the next compressed block from the same hFILE position.
+        if (*job).uncomp_len == 0 {
+            set_flag(fp, 29, true);
+            bgzf_mt_free_job(fp, job);
+            continue;
+        }
+
+        if (*fp).block_length != 0 {
+            (*fp).block_offset = 0;
+        }
+        ptr::copy_nonoverlapping(
+            (*job).uncomp_data.as_ptr(),
+            (*fp).uncompressed_block.cast(),
+            (*job).uncomp_len,
+        );
+        (*fp).block_address = (*job).block_address;
+        (*fp).block_clength = (*job).comp_len as c_int;
+        (*fp).block_length = (*job).uncomp_len as c_int;
+        set_flag(fp, 29, (*job).uncomp_len == 0);
+
+        if (*job).uncomp_len != 0 && (*fp).idx_build_otf != 0 {
+            bgzf_index_add_block(fp);
+            (*(*fp).idx.cast::<bgzidx_t>()).ublock_addr += (*job).uncomp_len as u64;
+        }
+
+        bgzf_mt_free_job(fp, job);
         return 0;
     }
-    if count != header.len() as isize || check_header(header.as_ptr()) != 0 {
-        add_errcode(fp, BGZF_ERR_HEADER);
-        (*mt).errcode = BGZF_ERR_HEADER as c_int;
-        return -1;
-    }
-
-    let block_length = unpack_u16(&header[16..18]) as usize + 1;
-    if !(BLOCK_HEADER_LENGTH + BLOCK_FOOTER_LENGTH..=BGZF_MAX_BLOCK_SIZE).contains(&block_length) {
-        add_errcode(fp, BGZF_ERR_HEADER);
-        (*mt).errcode = BGZF_ERR_HEADER as c_int;
-        return -1;
-    }
-
-    let job = bgzf_mt_alloc_job(fp);
-    if job.is_null() {
-        add_errcode(fp, BGZF_ERR_IO);
-        (*mt).errcode = BGZF_ERR_IO as c_int;
-        return -1;
-    }
-    ptr::copy_nonoverlapping(header.as_ptr(), (*job).comp_data.as_mut_ptr(), header.len());
-    let remaining = block_length - BLOCK_HEADER_LENGTH;
-    let read = bgzf_hread_ptr(
-        (*fp).fp,
-        (*job)
-            .comp_data
-            .as_mut_ptr()
-            .add(BLOCK_HEADER_LENGTH)
-            .cast(),
-        remaining,
-    );
-    if read != remaining as isize {
-        bgzf_mt_free_job(fp, job);
-        add_errcode(fp, BGZF_ERR_IO);
-        (*mt).errcode = BGZF_ERR_IO as c_int;
-        return -1;
-    }
-    (*job).comp_len = block_length;
-    (*job).block_address = block_address;
-
-    if bgzf_mt_dispatch(fp, job, Some(bgzf_decode_func)) != 0 {
-        bgzf_mt_free_job(fp, job);
-        add_errcode(fp, BGZF_ERR_IO);
-        (*mt).errcode = BGZF_ERR_IO as c_int;
-        return -1;
-    }
-
-    let result = super::thread_pool::hts_tpool_next_result_wait((*mt).out_queue.cast());
-    if result.is_null() {
-        (*mt).jobs_pending -= 1;
-        add_errcode(fp, BGZF_ERR_IO);
-        (*mt).errcode = BGZF_ERR_IO as c_int;
-        return -1;
-    }
-    let job = super::thread_pool::hts_tpool_result_data(result).cast::<bgzf_job>();
-    super::thread_pool::hts_tpool_delete_result(result, 0);
-    (*mt).jobs_pending -= 1;
-
-    if (*job).errcode != 0 {
-        add_errcode(fp, (*job).errcode as u32);
-        (*mt).errcode = (*job).errcode;
-        bgzf_mt_free_job(fp, job);
-        return -1;
-    }
-
-    if (*fp).block_length != 0 {
-        (*fp).block_offset = 0;
-    }
-    ptr::copy_nonoverlapping(
-        (*job).uncomp_data.as_ptr(),
-        (*fp).uncompressed_block.cast(),
-        (*job).uncomp_len,
-    );
-    (*fp).block_address = (*job).block_address;
-    (*fp).block_clength = (*job).comp_len as c_int;
-    (*fp).block_length = (*job).uncomp_len as c_int;
-    set_flag(fp, 29, (*job).uncomp_len == 0);
-
-    if (*job).uncomp_len != 0 && (*fp).idx_build_otf != 0 {
-        bgzf_index_add_block(fp);
-        (*(*fp).idx.cast::<bgzidx_t>()).ublock_addr += (*job).uncomp_len as u64;
-    }
-
-    bgzf_mt_free_job(fp, job);
-    0
 }
 
 // original: bgzf_mt_reader (htslib/bgzf.c:1598)
@@ -2289,38 +2326,27 @@ pub unsafe fn bgzf_c_1897_mt_flush_queue(fp: *mut BGZF) -> c_int {
     0
 }
 
-// original: bgzf_close_mt (htslib/bgzf.c:2071)
+// original: bgzf_close_mt (htslib/bgzf.c:2073)
+//
+// Helper for tidying up fp->mt and setting errcode. Mirrors the C helper
+// byte-for-byte: when the reader thread holds its own free_block, the main
+// fp->uncompressed_block pointer must be cleared so we don't double-free
+// the buffer that the reader thread already owns. Then mt_destroy joins
+// the I/O thread and frees the mtaux_t.
 pub unsafe fn bgzf_c_2071_bgzf_close_mt(fp: *mut BGZF) -> c_int {
     if fp.is_null() || (*fp).mt.is_null() {
         return 0;
     }
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
-    let mut ret = 0;
-
-    if (*fp).block_offset > 0 && bgzf_c_1852_mt_queue(fp) != 0 {
-        ret = -1;
+    if (*mt).free_block.is_null() {
+        (*fp).uncompressed_block = ptr::null_mut();
     }
-    if bgzf_c_1897_mt_flush_queue(fp) != 0 {
-        ret = -1;
-    }
-
-    set_compress_level(fp, Z_DEFAULT_COMPRESSION);
-    let block_length = deflate_block(fp, 0);
-    if block_length < 0
-        || bgzf_hwrite_ptr((*fp).fp, (*fp).compressed_block, block_length as usize)
-            != block_length as isize
-        || bgzf_hflush_ptr((*fp).fp) != 0
-    {
+    let ret = if bgzf_c_1805_mt_destroy(mt) < 0 {
         add_errcode(fp, BGZF_ERR_IO);
-        ret = -1;
+        -1
     } else {
-        (*mt).block_address += block_length as u64;
-        (*fp).block_address = (*mt).block_address as i64;
-    }
-
-    if bgzf_c_1805_mt_destroy(mt) != 0 {
-        ret = -1;
-    }
+        0
+    };
     (*fp).mt = ptr::null_mut();
     ret
 }
@@ -2436,36 +2462,48 @@ pub unsafe fn bgzf_close(fp: *mut BGZF) -> c_int {
     if flag(fp, 17) && flag(fp, 30) && flag(fp, 31) {
         if bgzf_gzip_flush(fp, Z_FINISH) != 0 || bgzf_hflush_ptr((*fp).fp) != 0 {
             add_errcode(fp, BGZF_ERR_IO);
+            // Match C: still tear down the mt I/O thread before freeing fp.
+            let _ = bgzf_c_2071_bgzf_close_mt(fp);
             let _ = bgzf_hclose_ptr((*fp).fp);
             bgzf_free_without_hclose(fp);
             return -1;
         }
     } else if flag(fp, 17) && flag(fp, 30) {
-        if !(*fp).mt.is_null() {
-            if bgzf_c_2071_bgzf_close_mt(fp) != 0 {
-                let _ = bgzf_hclose_ptr((*fp).fp);
-                bgzf_free_without_hclose(fp);
-                return -1;
-            }
-        } else if bgzf_flush(fp) != 0 {
+        // C bgzf_close (htslib/bgzf.c:2086): writer + compressed path.
+        // 1) bgzf_flush -- which internally handles mt_queue + mt_flush_queue
+        //    when fp->mt is set.
+        if bgzf_flush(fp) != 0 {
+            let _ = bgzf_c_2071_bgzf_close_mt(fp);
             let _ = bgzf_hclose_ptr((*fp).fp);
             bgzf_free_without_hclose(fp);
             return -1;
-        } else {
-            set_compress_level(fp, Z_DEFAULT_COMPRESSION);
-            let block_length = deflate_block(fp, 0);
-            if block_length < 0
-                || bgzf_hwrite_ptr((*fp).fp, (*fp).compressed_block, block_length as usize)
-                    != block_length as isize
-                || bgzf_hflush_ptr((*fp).fp) != 0
-            {
-                add_errcode(fp, BGZF_ERR_IO);
-                let _ = bgzf_hclose_ptr((*fp).fp);
-                bgzf_free_without_hclose(fp);
-                return -1;
-            }
+        }
+        // 2) Write the terminating empty block at compress_level = -1.
+        set_compress_level(fp, Z_DEFAULT_COMPRESSION);
+        let block_length = deflate_block(fp, 0);
+        if block_length < 0 {
+            let _ = bgzf_c_2071_bgzf_close_mt(fp);
+            let _ = bgzf_hclose_ptr((*fp).fp);
+            bgzf_free_without_hclose(fp);
+            return -1;
+        }
+        if bgzf_hwrite_ptr((*fp).fp, (*fp).compressed_block, block_length as usize)
+            != block_length as isize
+            || bgzf_hflush_ptr((*fp).fp) != 0
+        {
+            add_errcode(fp, BGZF_ERR_IO);
+            let _ = bgzf_c_2071_bgzf_close_mt(fp);
+            let _ = bgzf_hclose_ptr((*fp).fp);
+            bgzf_free_without_hclose(fp);
+            return -1;
         }
     }
+
+    // Match C bgzf_close (htslib/bgzf.c:2106): always call bgzf_close_mt
+    // before tearing the rest of fp down. This is what shuts down the
+    // reader I/O thread when fp was opened for read with bgzf_mt().
+    let _ = bgzf_c_2071_bgzf_close_mt(fp);
+
     let had_error = errcode(fp) != 0;
     let ret = bgzf_hclose_ptr((*fp).fp);
     bgzf_index_destroy(fp);
@@ -3752,6 +3790,314 @@ mod tests {
                 payload.len() as isize
             );
             assert_eq!(buf, payload);
+            assert_eq!(bgzf_close(fp), 0);
+        }
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn embedded_eof_after_repeated_mt_sequence_decodes_full_payload() {
+        // Long sequence mimicking htslib test_bgzf.c main():
+        //   * many write+read passes (some MT, some single-thread, some "wg")
+        //   * then test_embed_eof in single-thread mode
+        // Goal: trigger any cross-test state leak (orphan MT thread, recycled
+        // BGZF address, etc.) that the real fixture exposes.
+        let path = std::env::temp_dir().join(format!(
+            "cellsnp-lite-bgzf-embed-eof-repeated-{}.gz",
+            std::process::id(),
+        ));
+        let payload: Vec<u8> = (0..50000u32)
+            .flat_map(|i| format!("{:07}\n", i).into_bytes())
+            .collect();
+        let half = 32768usize.min(payload.len());
+        let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
+        let mut tmp = vec![0u8; payload.len()];
+
+        let modes: [(&[u8], i32); 8] = [
+            (b"wu\0", 0),
+            (b"w\0", 0),
+            (b"w0\0", 0),
+            (b"w1\0", 0),
+            (b"w9\0", 0),
+            (b"w\0", 1),
+            (b"w\0", 2),
+            (b"w\0", 2),
+        ];
+
+        unsafe {
+            for (mode, nthreads) in modes.iter() {
+                let fp = bgzf_open(path_c.as_ptr(), mode.as_ptr().cast());
+                assert!(!fp.is_null());
+                if *nthreads > 0 {
+                    assert_eq!(bgzf_mt(fp, *nthreads, 64), 0);
+                }
+                assert_eq!(
+                    bgzf_write(fp, payload.as_ptr().cast(), payload.len()),
+                    payload.len() as isize,
+                );
+                assert_eq!(bgzf_close(fp), 0);
+
+                let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+                assert!(!fp.is_null());
+                if *nthreads > 0 {
+                    assert_eq!(bgzf_mt(fp, *nthreads, 64), 0);
+                }
+                let mut got = 0usize;
+                while got < payload.len() {
+                    let n = bgzf_read(
+                        fp,
+                        tmp.as_mut_ptr().add(got).cast(),
+                        payload.len() - got,
+                    );
+                    assert!(n > 0, "short read in pre-warm");
+                    got += n as usize;
+                }
+                assert_eq!(bgzf_close(fp), 0);
+            }
+
+            // Finally: embed_eof sequence (single-thread).
+            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            assert_eq!(
+                bgzf_write(fp, payload.as_ptr().cast(), half),
+                half as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+            let fp = bgzf_open(path_c.as_ptr(), b"a\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            let rest = payload.len() - half;
+            assert_eq!(
+                bgzf_write(fp, payload.as_ptr().add(half).cast(), rest),
+                rest as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            let mut out = vec![0u8; payload.len()];
+            let mut pos = 0usize;
+            loop {
+                let mut buf = [0u8; 32768];
+                let n = bgzf_read(fp, buf.as_mut_ptr().cast(), buf.len());
+                assert!(n >= 0, "bgzf_read failed at pos {pos}");
+                if n == 0 {
+                    break;
+                }
+                out[pos..pos + n as usize].copy_from_slice(&buf[..n as usize]);
+                pos += n as usize;
+            }
+            assert_eq!(pos, payload.len(), "embedded EOF caused short read after repeated MT sequence");
+            assert_eq!(out, payload);
+            assert_eq!(bgzf_close(fp), 0);
+        }
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn embedded_eof_after_mt_write_read_sequence_decodes_full_payload() {
+        let path = std::env::temp_dir().join(format!(
+            "cellsnp-lite-bgzf-embed-eof-mt-seq-{}.gz",
+            std::process::id(),
+        ));
+        let payload: Vec<u8> = (0..50000u32)
+            .flat_map(|i| format!("{:07}\n", i).into_bytes())
+            .collect();
+        let half = 32768usize.min(payload.len());
+        let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
+
+        unsafe {
+            // ===== mimic test_write_read("w", nthreads=2) =====
+            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            assert_eq!(bgzf_mt(fp, 2, 64), 0);
+            assert_eq!(
+                bgzf_write(fp, payload.as_ptr().cast(), payload.len()),
+                payload.len() as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            assert_eq!(bgzf_mt(fp, 2, 64), 0);
+            let mut tmp = vec![0u8; payload.len()];
+            assert_eq!(
+                bgzf_read(fp, tmp.as_mut_ptr().cast(), tmp.len()),
+                payload.len() as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+
+            // ===== mimic test_embed_eof(nthreads=0) =====
+            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            assert_eq!(
+                bgzf_write(fp, payload.as_ptr().cast(), half),
+                half as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+            let fp = bgzf_open(path_c.as_ptr(), b"a\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            let rest = payload.len() - half;
+            assert_eq!(
+                bgzf_write(fp, payload.as_ptr().add(half).cast(), rest),
+                rest as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            let mut out = vec![0u8; payload.len()];
+            let mut pos = 0usize;
+            loop {
+                let mut buf = [0u8; 32768];
+                let got = bgzf_read(fp, buf.as_mut_ptr().cast(), buf.len());
+                assert!(got >= 0, "bgzf_read failed at pos {pos}");
+                if got == 0 {
+                    break;
+                }
+                out[pos..pos + got as usize].copy_from_slice(&buf[..got as usize]);
+                pos += got as usize;
+            }
+            assert_eq!(pos, payload.len(), "embedded EOF caused short read after MT sequence");
+            assert_eq!(out, payload);
+            assert_eq!(bgzf_close(fp), 0);
+        }
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn embedded_eof_after_write_read_sequence_decodes_full_payload() {
+        let path = std::env::temp_dir().join(format!(
+            "cellsnp-lite-bgzf-embed-eof-seq-{}.gz",
+            std::process::id(),
+        ));
+        let payload: Vec<u8> = (0..50000u32)
+            .flat_map(|i| format!("{:07}\n", i).into_bytes())
+            .collect();
+        let half = 32768usize.min(payload.len());
+        let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
+
+        unsafe {
+            // ===== mimic test_write_read("w") =====
+            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            assert_eq!(
+                bgzf_write(fp, payload.as_ptr().cast(), payload.len()),
+                payload.len() as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            let mut tmp = vec![0u8; payload.len()];
+            assert_eq!(
+                bgzf_read(fp, tmp.as_mut_ptr().cast(), tmp.len()),
+                payload.len() as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+
+            // ===== mimic test_write_read("wu") =====
+            let fp = bgzf_open(path_c.as_ptr(), b"wu\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            assert_eq!(
+                bgzf_write(fp, payload.as_ptr().cast(), payload.len()),
+                payload.len() as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            assert_eq!(
+                bgzf_read(fp, tmp.as_mut_ptr().cast(), tmp.len()),
+                payload.len() as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+
+            // ===== mimic test_embed_eof =====
+            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            assert_eq!(
+                bgzf_write(fp, payload.as_ptr().cast(), half),
+                half as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+            let fp = bgzf_open(path_c.as_ptr(), b"a\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            let rest = payload.len() - half;
+            assert_eq!(
+                bgzf_write(fp, payload.as_ptr().add(half).cast(), rest),
+                rest as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            let mut out = vec![0u8; payload.len()];
+            let mut pos = 0usize;
+            loop {
+                let mut buf = [0u8; 32768];
+                let got = bgzf_read(fp, buf.as_mut_ptr().cast(), buf.len());
+                assert!(got >= 0, "bgzf_read failed at pos {pos}");
+                if got == 0 {
+                    break;
+                }
+                out[pos..pos + got as usize].copy_from_slice(&buf[..got as usize]);
+                pos += got as usize;
+            }
+            assert_eq!(pos, payload.len(), "embedded EOF caused short read after sequence");
+            assert_eq!(out, payload);
+            assert_eq!(bgzf_close(fp), 0);
+        }
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn embedded_eof_in_appended_bgzf_is_skipped_during_read() {
+        let path = std::env::temp_dir().join(format!(
+            "cellsnp-lite-bgzf-embed-eof-{}-{}.gz",
+            std::process::id(),
+            "embed",
+        ));
+        let payload: Vec<u8> = (0..50000u32)
+            .flat_map(|i| format!("{:07}\n", i).into_bytes())
+            .collect();
+        let half = 32768usize.min(payload.len());
+        let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
+
+        unsafe {
+            // Write first half in "w" mode (terminates with empty EOF block).
+            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            assert_eq!(
+                bgzf_write(fp, payload.as_ptr().cast(), half),
+                half as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+
+            // Append remainder in "a" mode (writes more blocks then another EOF).
+            let fp = bgzf_open(path_c.as_ptr(), b"a\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            let rest = payload.len() - half;
+            assert_eq!(
+                bgzf_write(fp, payload.as_ptr().add(half).cast(), rest),
+                rest as isize,
+            );
+            assert_eq!(bgzf_close(fp), 0);
+
+            // Read back: every byte must come through, despite the embedded EOF block.
+            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            assert!(!fp.is_null());
+            let mut out = vec![0u8; payload.len()];
+            let mut pos = 0usize;
+            loop {
+                let mut buf = [0u8; 32768];
+                let got = bgzf_read(fp, buf.as_mut_ptr().cast(), buf.len());
+                assert!(got >= 0, "bgzf_read failed at pos {pos}");
+                if got == 0 {
+                    break;
+                }
+                out[pos..pos + got as usize].copy_from_slice(&buf[..got as usize]);
+                pos += got as usize;
+            }
+            assert_eq!(pos, payload.len(), "embedded EOF caused short read");
+            assert_eq!(out, payload);
             assert_eq!(bgzf_close(fp), 0);
         }
 

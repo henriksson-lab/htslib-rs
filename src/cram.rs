@@ -304,8 +304,7 @@ pub unsafe fn cram_compress_block(
     method: c_int,
     level: c_int,
 ) -> c_int {
-    // TODO(P5): no native cram_compress_block yet; needs translation
-    hts_sys::cram_compress_block(fd.cast(), b, metrics, method, level)
+    cram_cram_io_c_2323_cram_compress_block(fd, b, metrics, method, level)
 }
 
 pub unsafe fn cram_set_header(fd: *mut cram_fd, hdr: *mut sam_hdr_t) -> c_int {
@@ -1390,8 +1389,7 @@ pub unsafe fn cram_dopen(
 }
 
 pub unsafe fn cram_seek(fd: *mut cram_fd, offset: libc::off_t, whence: c_int) -> c_int {
-    // TODO(P5): no native cram_seek yet; needs translation
-    hts_sys::cram_seek(fd.cast(), offset, whence)
+    cram_cram_io_c_5431_cram_seek(fd, offset, whence)
 }
 
 pub unsafe fn cram_flush(fd: *mut cram_fd) -> c_int {
@@ -1731,8 +1729,7 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
 }
 
 pub unsafe fn cram_check_EOF(fd: *mut cram_fd) -> c_int {
-    // TODO(P5): no native cram_check_EOF yet; needs translation
-    hts_sys::cram_check_EOF(fd.cast())
+    cram_cram_io_c_5960_cram_check_eof(fd)
 }
 
 pub unsafe fn cram_copy_slice(in_: *mut cram_fd, out: *mut cram_fd, num_slice: i32) -> c_int {
@@ -3463,6 +3460,104 @@ pub unsafe fn cram_cram_io_h_646_cram_hfile(fd: *mut hts_sys::cram_fd) -> *mut h
 
 pub unsafe fn cram_cram_io_c_5662_cram_eof(fd: *mut cram_fd) -> c_int {
     (*fd.cast::<cram_fd_layout>()).eof
+}
+
+/// `cram_seek` (htslib/cram/cram_io.c:5431).
+///
+/// Seeks within a CRAM file: clears the out-of-coord flag, drains the
+/// per-fd decode queue (if any), then forwards the request to `hseek`.
+/// Returns 0 on success, -1 on failure.
+pub unsafe fn cram_cram_io_c_5431_cram_seek(
+    fd: *mut cram_fd,
+    offset: libc::off_t,
+    whence: c_int,
+) -> c_int {
+    let fdl = fd.cast::<cram_fd_layout>();
+    (*fdl).ooc = 0;
+
+    // cram_drain_rqueue: an early `if (!fd->pool || !fd->rqueue) return;`.
+    // When either is null we are in single-threaded read mode, the common
+    // case for our consumers; no work to do. The multi-threaded drain has
+    // not yet been ported, so fall back to the C path in that case.
+    if !(*fdl).pool.is_null() && !(*fdl).rqueue.is_null() {
+        return hts_sys::cram_seek(fd.cast(), offset, whence);
+    }
+
+    if crate::htslib_rs::hfile::hseek((*fdl).fp, offset, whence) >= 0 {
+        0
+    } else {
+        -1
+    }
+}
+
+/// `cram_check_EOF` (htslib/cram/cram_io.c:5960).
+///
+/// Detects the CRAM EOF block by reading and comparing a fixed template
+/// from the tail of the file. Returns 1 if found, 0 if not, 2 if the
+/// underlying stream is not seekable, 3 if the CRAM version doesn't
+/// support an EOF marker, and -1 on I/O failure.
+pub unsafe fn cram_cram_io_c_5960_cram_check_eof(fd: *mut cram_fd) -> c_int {
+    // Byte 9 in these templates is & with 0x0f to resolve differences
+    // between ITF-8 interpretations between early Java and C
+    // implementations of CRAM.
+    const TEMPLATE_2_1: [u8; 30] = [
+        0x0b, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x0f, 0xe0, 0x45, 0x4f, 0x46, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x06, 0x06, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00,
+    ];
+    const TEMPLATE_3: [u8; 38] = [
+        0x0f, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x0f, 0xe0, 0x45, 0x4f, 0x46, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x05, 0xbd, 0xd9, 0x4f, 0x00, 0x01, 0x00, 0x06, 0x06, 0x01, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0xee, 0x63, 0x01, 0x4b,
+    ];
+
+    let fdl = fd.cast::<cram_fd_layout>();
+    let version = (*fdl).version;
+    let major = (version >> 8) as u8;
+    let minor = (version & 0xff) as u8;
+
+    let template: &[u8] = if major < 2 || (major == 2 && minor == 0) {
+        return 3; // No EOF support in cram versions less than 2.1
+    } else if major == 2 && minor == 1 {
+        &TEMPLATE_2_1
+    } else {
+        &TEMPLATE_3
+    };
+    let template_len = template.len() as libc::ssize_t;
+
+    let fp = (*fdl).fp;
+    // htell() == fp->offset + (fp->begin - fp->buffer)
+    let layout = fp.cast::<hfile_layout>();
+    let offset: libc::off_t =
+        (*layout).offset + (*layout).begin.offset_from((*layout).buffer) as libc::off_t;
+
+    if crate::htslib_rs::hfile::hseek(fp, -(template_len as libc::off_t), libc::SEEK_END) < 0 {
+        if *__errno_location() == libc::ESPIPE {
+            // hclearerr(fp): clear pending error.
+            (*layout).has_errno = 0;
+            return 2;
+        } else {
+            return -1;
+        }
+    }
+
+    let mut buf = [0u8; 38];
+    if crate::htslib_rs::hfile::htslib_hfile_h_247_hread(
+        fp,
+        buf.as_mut_ptr().cast(),
+        template_len as libc::size_t,
+    ) != template_len
+    {
+        return -1;
+    }
+    if crate::htslib_rs::hfile::hseek(fp, offset, libc::SEEK_SET) < 0 {
+        return -1;
+    }
+    buf[8] &= 0x0f;
+    if buf[..template_len as usize] == *template {
+        1
+    } else {
+        0
+    }
 }
 
 pub unsafe fn cram_cram_codecs_c_73_get_bit_MSB(block: *mut hts_sys::cram_block) -> c_int {
@@ -6191,6 +6286,777 @@ pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_bl
         }
         _ => -1,
     }
+}
+
+// CRAM compression-method enum tags (cram_block_method_int, cram_structs.h:215).
+// Externally-visible values share names with the public CRAM_BLOCK_METHOD_*
+// constants but the encoder dispatch operates on the *internal* enum, which
+// includes the parameterised forms (GZIP_RLE, RANS_PR*, ARITH_PR*, FQZ_*, TOKA).
+const CBMI_RAW: c_int = 0;
+const CBMI_GZIP: c_int = 1;
+const CBMI_BZIP2: c_int = 2;
+const CBMI_LZMA: c_int = 3;
+const CBMI_RANS0: c_int = 4;
+const CBMI_RANS_PR0: c_int = 5;
+const CBMI_ARITH_PR0: c_int = 6;
+const CBMI_FQZ: c_int = 7;
+const CBMI_TOK3: c_int = 8;
+const CBMI_GZIP_RLE: c_int = 11;
+const CBMI_GZIP_1: c_int = 12;
+const CBMI_FQZ_B: c_int = 13;
+const CBMI_FQZ_C: c_int = 14;
+const CBMI_FQZ_D: c_int = 15;
+const CBMI_RANS1: c_int = 16;
+const CBMI_RANS_PR1: c_int = 17;
+const CBMI_RANS_PR64: c_int = 18;
+const CBMI_RANS_PR9: c_int = 19;
+const CBMI_RANS_PR128: c_int = 20;
+const CBMI_RANS_PR129: c_int = 21;
+const CBMI_RANS_PR192: c_int = 22;
+const CBMI_RANS_PR193: c_int = 23;
+const CBMI_TOKA: c_int = 24;
+const CBMI_ARITH_PR1: c_int = 25;
+const CBMI_ARITH_PR64: c_int = 26;
+const CBMI_ARITH_PR9: c_int = 27;
+const CBMI_ARITH_PR128: c_int = 28;
+const CBMI_ARITH_PR129: c_int = 29;
+const CBMI_ARITH_PR192: c_int = 30;
+const CBMI_ARITH_PR193: c_int = 31;
+
+const CRAM_MAX_METHOD: usize = 32;
+
+// zlib strategy constants.
+const Z_FILTERED: c_int = 1;
+const Z_DEFAULT_STRATEGY: c_int = 0;
+const Z_RLE: c_int = 3;
+
+const DS_RN_LOCAL: c_int = 11;
+
+/// `zlib_mem_deflate` (htslib/cram/cram_io.c:1222).  GZIP wrapper deflate
+/// for `[data, data+size)` at the given level/strategy. Returns a libc
+/// malloc-owned buffer of size `*cdata_size`, or null on failure.
+///
+/// Note: `strat` is currently ignored — flate2 does not expose deflate
+/// strategy directly. The C code defaults strategy to `Z_FILTERED` for the
+/// common GZIP method (best for cram-style bit-packed data) but this only
+/// affects the encoder's choice of optimization heuristics, not the on-wire
+/// format. The output is still a valid gzip stream.
+unsafe fn cram_cram_io_c_1222_zlib_mem_deflate(
+    data: *mut c_char,
+    size: usize,
+    cdata_size: *mut usize,
+    level: c_int,
+    _strat: c_int,
+) -> *mut c_char {
+    *cdata_size = 0;
+    let input = std::slice::from_raw_parts(data.cast::<u8>(), size);
+    let compression = flate2::Compression::new(level.clamp(0, 9) as u32);
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), compression);
+    if std::io::Write::write_all(&mut encoder, input).is_err() {
+        return std::ptr::null_mut();
+    }
+    match encoder.finish() {
+        Ok(out) => {
+            *cdata_size = out.len();
+            let alloc = out.len().max(1);
+            let p = malloc(alloc as u64).cast::<c_char>();
+            if p.is_null() {
+                *cdata_size = 0;
+                return std::ptr::null_mut();
+            }
+            if !out.is_empty() {
+                memcpy(p.cast(), out.as_ptr().cast(), out.len() as u64);
+            }
+            p
+        }
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// `cram_compress_by_method` (htslib/cram/cram_io.c:1757).
+///
+/// Dispatch a single encoder for the given internal-enum `method`. The
+/// caller-owned output buffer is returned via libc malloc; its size is
+/// written to `*out_size`. Returns null on failure.
+///
+/// `s` is the cram_slice (needed by FQZ to walk per-record lengths/flags);
+/// may be null for non-FQZ methods.
+unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
+    s: *mut cram_slice_layout,
+    in_: *mut c_char,
+    in_size: usize,
+    _content_id: c_int,
+    out_size: *mut usize,
+    method: c_int,
+    level: c_int,
+    strat: c_int,
+) -> *mut c_char {
+    match method {
+        CBMI_GZIP | CBMI_GZIP_RLE | CBMI_GZIP_1 => {
+            cram_cram_io_c_1222_zlib_mem_deflate(in_, in_size, out_size, level, strat)
+        }
+
+        CBMI_BZIP2 => {
+            // libbz2 not linked in pure-Rust build; behave like C without
+            // HAVE_LIBBZ2 (return null, caller treats as failure).
+            std::ptr::null_mut()
+        }
+
+        CBMI_FQZ | CBMI_FQZ_B | CBMI_FQZ_C | CBMI_FQZ_D => {
+            if s.is_null() {
+                return std::ptr::null_mut();
+            }
+            // Build an fqz_slice from this cram_slice's records: per-record
+            // qual offsets into the DS_QS block give per-record lengths.
+            let num_records = (*(*s).hdr).num_records;
+            if num_records < 0 {
+                return std::ptr::null_mut();
+            }
+            // sizeof(fqz_slice) + 2*num_records*sizeof(uint32_t).
+            let f_sz = std::mem::size_of::<crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_slice>()
+                + 2 * (num_records as usize) * std::mem::size_of::<u32>();
+            let f = malloc(f_sz as u64)
+                .cast::<crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_slice>();
+            if f.is_null() {
+                return std::ptr::null_mut();
+            }
+            (*f).num_records = num_records;
+            let len_ptr = (f as *mut u8)
+                .add(std::mem::size_of::<crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_slice>())
+                .cast::<u32>();
+            let flags_ptr = len_ptr.add(num_records as usize);
+            (*f).len = len_ptr;
+            (*f).flags = flags_ptr;
+            // DS_QS index (12) — see cram_structs.h.
+            const DS_QS_IDX: usize = 12;
+            let qs_block = *(*s).block.add(DS_QS_IDX);
+            let qs_uncomp = (*qs_block).uncomp_size;
+            for i in 0..num_records as isize {
+                let rec = (*s).crecs.offset(i);
+                *(*f).flags.offset(i) = (*rec).flags as u32;
+                let this_qual = (*rec).qual as i32;
+                let next_qual = if (i + 1) < num_records as isize {
+                    (*(*s).crecs.offset(i + 1)).qual as i32
+                } else {
+                    qs_uncomp
+                };
+                *(*f).len.offset(i) = (next_qual - this_qual) as u32;
+            }
+            // Run fqz_compress (strat & 0xff is cram vers; strat >> 8 is fqz strat).
+            let mut out_sz_local: usize = 0;
+            let in_slice = std::slice::from_raw_parts_mut(in_.cast::<u8>(), in_size);
+            let v = crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_compress(
+                strat & 0xff,
+                &mut *f,
+                in_slice,
+                &mut out_sz_local,
+                strat >> 8,
+                None,
+            );
+            free(f.cast());
+            if v.is_empty() {
+                *out_size = 0;
+                return std::ptr::null_mut();
+            }
+            *out_size = v.len();
+            let alloc = v.len().max(1);
+            let p = malloc(alloc as u64).cast::<c_char>();
+            if p.is_null() {
+                *out_size = 0;
+                return std::ptr::null_mut();
+            }
+            memcpy(p.cast(), v.as_ptr().cast(), v.len() as u64);
+            // Honour the C contract: write the codec-reported size.
+            let _ = out_sz_local;
+            p
+        }
+
+        CBMI_LZMA => {
+            // xz2 is wired in the dormant mirror but not in this module's
+            // dependency surface; treat as unavailable (the C build can be
+            // configured the same way via HAVE_LIBLZMA=no).
+            std::ptr::null_mut()
+        }
+
+        CBMI_RANS0 | CBMI_RANS1 => {
+            let mut out_size_u: c_uint = 0;
+            let order: c_int = if method == CBMI_RANS0 { 0 } else { 1 };
+            let cp = crate::htslib_rs::htscodecs::rans_4x8::rans_compress(
+                in_.cast::<u8>(),
+                in_size as c_uint,
+                &mut out_size_u,
+                order,
+            );
+            *out_size = out_size_u as usize;
+            cp.cast::<c_char>()
+        }
+
+        CBMI_RANS_PR0
+        | CBMI_RANS_PR1
+        | CBMI_RANS_PR64
+        | CBMI_RANS_PR9
+        | CBMI_RANS_PR128
+        | CBMI_RANS_PR129
+        | CBMI_RANS_PR192
+        | CBMI_RANS_PR193 => {
+            // methmap maps RANS_PR1..RANS_PR193 to order bit-fields.
+            const METHMAP: [c_int; 7] = [1, 64, 9, 128, 129, 192, 193];
+            let m_order = if method == CBMI_RANS_PR0 {
+                0
+            } else {
+                METHMAP[(method - CBMI_RANS_PR1) as usize]
+            };
+            // RANS_ORDER_SIMD_AUTO = 0x800 (htscodecs/rANS_static4x16.h).
+            const RANS_ORDER_SIMD_AUTO: c_int = 0x800;
+            let mut out_size_u: u32 = 0;
+            let input = std::slice::from_raw_parts(in_.cast::<u8>(), in_size);
+            let v = crate::htslib_rs::htscodecs::rans_static_4x16pr::rans_compress_4x16(
+                input,
+                &mut out_size_u,
+                m_order | RANS_ORDER_SIMD_AUTO,
+            );
+            *out_size = v.len();
+            if v.is_empty() {
+                return std::ptr::null_mut();
+            }
+            let p = malloc(v.len().max(1) as u64).cast::<c_char>();
+            if p.is_null() {
+                *out_size = 0;
+                return std::ptr::null_mut();
+            }
+            memcpy(p.cast(), v.as_ptr().cast(), v.len() as u64);
+            p
+        }
+
+        CBMI_ARITH_PR0
+        | CBMI_ARITH_PR1
+        | CBMI_ARITH_PR64
+        | CBMI_ARITH_PR9
+        | CBMI_ARITH_PR128
+        | CBMI_ARITH_PR129
+        | CBMI_ARITH_PR192
+        | CBMI_ARITH_PR193 => {
+            const METHMAP: [c_int; 7] = [1, 64, 9, 128, 129, 192, 193];
+            let order = if method == CBMI_ARITH_PR0 {
+                0
+            } else {
+                METHMAP[(method - CBMI_ARITH_PR1) as usize]
+            };
+            let mut out_size_u: u32 = 0;
+            let input = std::slice::from_raw_parts(in_.cast::<u8>(), in_size);
+            let v = crate::htslib_rs::htscodecs::arith_dynamic::arith_compress_to(
+                input,
+                None,
+                &mut out_size_u,
+                order,
+            );
+            *out_size = v.len();
+            if v.is_empty() {
+                return std::ptr::null_mut();
+            }
+            let p = malloc(v.len().max(1) as u64).cast::<c_char>();
+            if p.is_null() {
+                *out_size = 0;
+                return std::ptr::null_mut();
+            }
+            memcpy(p.cast(), v.as_ptr().cast(), v.len() as u64);
+            p
+        }
+
+        CBMI_TOK3 | CBMI_TOKA => {
+            let mut out_len: i32 = 0;
+            let mut lev = level;
+            if method == CBMI_TOK3 && lev > 3 {
+                lev = 3;
+            }
+            let use_arith = if method == CBMI_TOK3 { 0 } else { 1 };
+            let blk = std::slice::from_raw_parts_mut(in_, in_size);
+            let v = crate::htslib_rs::htscodecs::tokenise_name3::tok3_encode_names(
+                blk,
+                in_size as i32,
+                lev,
+                use_arith,
+                &mut out_len,
+                None,
+            );
+            *out_size = out_len as usize;
+            match v {
+                Some(buf) => {
+                    if buf.is_empty() {
+                        return std::ptr::null_mut();
+                    }
+                    let p = malloc(buf.len().max(1) as u64).cast::<c_char>();
+                    if p.is_null() {
+                        *out_size = 0;
+                        return std::ptr::null_mut();
+                    }
+                    memcpy(p.cast(), buf.as_ptr().cast(), buf.len() as u64);
+                    p
+                }
+                None => std::ptr::null_mut(),
+            }
+        }
+
+        CBMI_RAW => std::ptr::null_mut(),
+
+        _ => std::ptr::null_mut(),
+    }
+}
+
+/// `cram_compress_block3` (htslib/cram/cram_io.c:1913).
+///
+/// Core encoder dispatch: optionally selects between a curated set of codecs
+/// using per-block metrics, otherwise compresses with the cached best method.
+/// On success, replaces `b->data` with the compressed buffer and sets
+/// `b->method`/`b->comp_size`. Returns 0 on success, -1 on failure.
+unsafe fn cram_cram_io_c_1913_cram_compress_block3(
+    fd: *mut cram_fd,
+    s: *mut cram_slice_layout,
+    b: *mut cram_block_layout,
+    metrics: *mut cram_metrics_layout,
+    mut method: c_int,
+    mut level: c_int,
+    recurse: c_int,
+) -> c_int {
+    if b.is_null() {
+        return 0;
+    }
+
+    let orig_method = method;
+    let mut comp: *mut c_char = std::ptr::null_mut();
+    let mut comp_size: usize = 0;
+    let mut strat: c_int;
+
+    // methmap (cram_io.c:1929): maps internal enum to the "external" enum
+    // for the on-wire b->method field.
+    const METHMAP: [c_int; 32] = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8,   // RAW..TOK3
+        0, 0,                        // reserved
+        1, 1,                        // GZIP_RLE, GZIP_1 -> GZIP
+        7, 7, 7,                     // FQZ_b, FQZ_c, FQZ_d -> FQZ
+        4,                           // RANS1 -> RANS
+        5, 5, 5, 5, 5, 5, 5,         // RANS_PR1..RANS_PR193 -> RANSPR
+        8,                           // TOKA -> TOK3
+        6, 6, 6, 6, 6, 6, 6,         // ARITH_PR1..ARITH_PR193 -> ARITH
+    ];
+
+    let fdl = fd.cast::<cram_fd_layout>();
+
+    if (*b).method != CBMI_RAW {
+        // Already compressed (eg shared block reused).
+        return 0;
+    }
+
+    if method == -1 {
+        method = 1 << CBMI_GZIP;
+        if (*fdl).use_bz2 != 0 {
+            method |= 1 << CBMI_BZIP2;
+        }
+        if (*fdl).use_lzma != 0 {
+            method |= 1 << CBMI_LZMA;
+        }
+    }
+
+    if level == -1 {
+        level = (*fdl).level;
+    }
+
+    if method == CBMI_RAW || level == 0 || (*b).uncomp_size == 0 {
+        (*b).method = CBMI_RAW;
+        (*b).comp_size = (*b).uncomp_size;
+        return 0;
+    }
+
+    fn abs_i32(a: i32) -> i32 {
+        if a >= 0 {
+            a
+        } else {
+            -a
+        }
+    }
+
+    if !metrics.is_null() {
+        libc::pthread_mutex_lock(&mut (*fdl).metrics_lock);
+        // Sudden changes in size trigger a retrial.
+        if (*metrics).input_avg_sz != 0
+            && ((*b).uncomp_size / 4 - 750 > (*metrics).input_avg_sz
+                || (*b).uncomp_size < (*metrics).input_avg_sz / 4 - 750)
+            && abs_i32((*b).uncomp_size - (*metrics).input_avg_sz) / 10
+                > (*metrics).input_avg_delta
+        {
+            (*metrics).next_trial = 0;
+        }
+
+        if (*metrics).trial > 0 || {
+            (*metrics).next_trial -= 1;
+            (*metrics).next_trial <= 0
+        } {
+            let unpackable = (*metrics).unpackable;
+            let mut sz_best: usize = (*b).uncomp_size as usize;
+            let mut sz: [usize; CRAM_MAX_METHOD] = [0; CRAM_MAX_METHOD];
+            let mut method_best: c_int = 0; // RAW
+            let mut c_best: *mut c_char = std::ptr::null_mut();
+
+            (*metrics).input_avg_delta = (0.9
+                * ((*metrics).input_avg_delta as f64
+                    + abs_i32((*b).uncomp_size - (*metrics).input_avg_sz) as f64))
+                as c_int;
+
+            (*metrics).input_avg_sz += ((*b).uncomp_size as f64 * 0.2) as c_int;
+            (*metrics).input_avg_sz = ((*metrics).input_avg_sz as f64 * 0.8) as c_int;
+
+            if (*metrics).revised_method != 0 {
+                method = (*metrics).revised_method;
+            } else {
+                (*metrics).revised_method = method;
+            }
+
+            if (*metrics).next_trial <= 0 {
+                (*metrics).next_trial = TRIAL_SPAN;
+                (*metrics).trial = NTRIALS;
+                for m in 0..CRAM_MAX_METHOD {
+                    (*metrics).sz[m] /= 2;
+                }
+                (*metrics).unpackable = 0;
+            }
+
+            // Unpackable: avoid bit-pack methods on data with too many symbols.
+            if unpackable != 0 && ((*fdl).version >> 8) > 3 {
+                if (method & (1 << CBMI_RANS_PR128)) != 0 {
+                    method =
+                        (method | (1 << CBMI_RANS_PR0)) & !(1 << CBMI_RANS_PR128);
+                }
+                if (method & (1 << CBMI_RANS_PR129)) != 0 {
+                    method =
+                        (method | (1 << CBMI_RANS_PR1)) & !(1 << CBMI_RANS_PR129);
+                }
+                if (method & (1 << CBMI_RANS_PR192)) != 0 {
+                    method =
+                        (method | (1 << CBMI_RANS_PR64)) & !(1 << CBMI_RANS_PR192);
+                }
+                if (method & (1 << CBMI_RANS_PR193)) != 0 {
+                    method = (method | (1 << CBMI_RANS_PR64) | (1 << CBMI_RANS_PR1))
+                        & !(1 << CBMI_RANS_PR193);
+                }
+
+                if (method & (1 << CBMI_ARITH_PR128)) != 0 {
+                    method =
+                        (method | (1 << CBMI_ARITH_PR0)) & !(1 << CBMI_ARITH_PR128);
+                }
+                if (method & (1 << CBMI_ARITH_PR129)) != 0 {
+                    method =
+                        (method | (1 << CBMI_ARITH_PR1)) & !(1 << CBMI_ARITH_PR129);
+                }
+                if (method & (1 << CBMI_ARITH_PR192)) != 0 {
+                    method =
+                        (method | (1 << CBMI_ARITH_PR64)) & !(1 << CBMI_ARITH_PR192);
+                }
+                if (method & (1u32 << CBMI_ARITH_PR193) as c_int) != 0 {
+                    method = (method
+                        | (1 << CBMI_ARITH_PR64)
+                        | (1 << CBMI_ARITH_PR1))
+                        & !((1u32 << CBMI_ARITH_PR193) as c_int);
+                }
+            }
+
+            libc::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
+
+            for m in 0..CRAM_MAX_METHOD as c_int {
+                if (method & (1u32 << m) as c_int) != 0 {
+                    let mut lvl = level;
+                    let mstrat: c_int = match m {
+                        x if x == CBMI_GZIP => Z_FILTERED,
+                        x if x == CBMI_GZIP_1 => {
+                            lvl = 1;
+                            Z_DEFAULT_STRATEGY
+                        }
+                        x if x == CBMI_GZIP_RLE => Z_RLE,
+                        x if x == CBMI_FQZ => (*fdl).version >> 8,
+                        x if x == CBMI_FQZ_B => ((*fdl).version >> 8) + 256,
+                        x if x == CBMI_FQZ_C => ((*fdl).version >> 8) + 2 * 256,
+                        x if x == CBMI_FQZ_D => ((*fdl).version >> 8) + 3 * 256,
+                        x if x == CBMI_TOK3 => 0,
+                        x if x == CBMI_TOKA => 1,
+                        _ => 0,
+                    };
+
+                    let c = cram_cram_io_c_1757_cram_compress_by_method(
+                        s,
+                        (*b).data.cast::<c_char>(),
+                        (*b).uncomp_size as usize,
+                        (*b).content_id,
+                        &mut sz[m as usize],
+                        m,
+                        lvl,
+                        mstrat,
+                    );
+
+                    if !c.is_null() && sz_best > sz[m as usize] {
+                        sz_best = sz[m as usize];
+                        method_best = m;
+                        if !c_best.is_null() {
+                            free(c_best.cast());
+                        }
+                        c_best = c;
+                    } else if !c.is_null() {
+                        free(c.cast());
+                    } else {
+                        sz[m as usize] = c_uint::MAX as usize;
+                    }
+                } else {
+                    sz[m as usize] = c_uint::MAX as usize;
+                }
+            }
+
+            if !c_best.is_null() {
+                free((*b).data.cast());
+                (*b).data = c_best.cast::<u8>();
+                (*b).method = method_best;
+                (*b).comp_size = sz_best as i32;
+            }
+
+            // Accumulate stats for all methods tried.
+            libc::pthread_mutex_lock(&mut (*fdl).metrics_lock);
+            for m in 0..CRAM_MAX_METHOD {
+                (*metrics).sz[m] = ((*metrics).sz[m] as usize).saturating_add(sz[m] + 2000) as c_int;
+            }
+
+            // When enough trials performed, find the best on average.
+            (*metrics).trial -= 1;
+            if (*metrics).trial == 0 {
+                let mut best_method: c_int = CBMI_RAW;
+                let mut best_sz: c_int = c_int::MAX;
+
+                // Relative costs of methods. See cram_io.c:2117.
+                let mut meth_cost: [f64; 32] = [
+                    1.00, 1.04, 1.07, 1.08, 1.00, 1.00, 1.04, 1.05, 1.05, 1.00, 1.00,
+                    1.01, 1.01, 1.05, 1.05, 1.05, 1.01, 1.01, 1.00, 1.03, 1.00, 1.01,
+                    1.00, 1.01, 1.07, 1.04, 1.04, 1.04, 1.03, 1.04, 1.04, 1.04,
+                ];
+                let _ = &mut meth_cost; // suppress unused-mut
+
+                let fd_level = (*fdl).level;
+                if fd_level <= 1 {
+                    for m in 0..CRAM_MAX_METHOD {
+                        (*metrics).sz[m] = ((*metrics).sz[m] as f64
+                            * (1.0 + (meth_cost[m] - 1.0) * 4.0))
+                            as c_int;
+                    }
+                } else if fd_level <= 3 {
+                    for m in 0..CRAM_MAX_METHOD {
+                        (*metrics).sz[m] =
+                            ((*metrics).sz[m] as f64 * (1.0 + (meth_cost[m] - 1.0))) as c_int;
+                    }
+                } else if fd_level <= 6 {
+                    for m in 0..CRAM_MAX_METHOD {
+                        (*metrics).sz[m] = ((*metrics).sz[m] as f64
+                            * (1.0 + (meth_cost[m] - 1.0) / 2.0))
+                            as c_int;
+                    }
+                } else if fd_level <= 7 {
+                    for m in 0..CRAM_MAX_METHOD {
+                        (*metrics).sz[m] = ((*metrics).sz[m] as f64
+                            * (1.0 + (meth_cost[m] - 1.0) / 3.0))
+                            as c_int;
+                    }
+                }
+
+                // Ensure these are never used; BSC and ZSTD slots.
+                (*metrics).sz[9] = c_int::MAX;
+                (*metrics).sz[10] = c_int::MAX;
+
+                for m in 0..CRAM_MAX_METHOD as c_int {
+                    if (*metrics).sz[m as usize] == 0
+                        || (method & (1u32 << m) as c_int) == 0
+                    {
+                        continue;
+                    }
+                    if best_sz > (*metrics).sz[m as usize] {
+                        best_sz = (*metrics).sz[m as usize];
+                        best_method = m;
+                    }
+                }
+
+                if best_method != (*metrics).method {
+                    (*metrics).consistency = 0;
+                } else {
+                    let factor = 2.0f64.min(1.0 + (*metrics).consistency as f64 / 4.0);
+                    (*metrics).next_trial =
+                        ((*metrics).next_trial as f64 * factor) as c_int;
+                    (*metrics).consistency += 1;
+                }
+
+                (*metrics).method = best_method;
+                strat = match best_method {
+                    x if x == CBMI_GZIP => Z_FILTERED,
+                    x if x == CBMI_GZIP_1 => Z_DEFAULT_STRATEGY,
+                    x if x == CBMI_GZIP_RLE => Z_RLE,
+                    x if x == CBMI_FQZ => (*fdl).version >> 8,
+                    x if x == CBMI_FQZ_B => ((*fdl).version >> 8) + 256,
+                    x if x == CBMI_FQZ_C => ((*fdl).version >> 8) + 2 * 256,
+                    x if x == CBMI_FQZ_D => ((*fdl).version >> 8) + 3 * 256,
+                    x if x == CBMI_TOK3 => 0,
+                    x if x == CBMI_TOKA => 1,
+                    _ => 0,
+                };
+                (*metrics).strat = strat;
+
+                // MAXDELTA=0.20, MAXFAILS=4.
+                const MAXDELTA: f64 = 0.20;
+                const MAXFAILS: c_int = 4;
+                for m in 0..CRAM_MAX_METHOD as c_int {
+                    if best_method == m {
+                        (*metrics).cnt[m as usize] = 0;
+                        (*metrics).extra[m as usize] = 0.0;
+                    } else if best_sz < (*metrics).sz[m as usize] {
+                        let r =
+                            (*metrics).sz[m as usize] as f64 / best_sz as f64 - 1.0;
+                        let mul = 1 + (if (*fdl).level >= 7 { 1 } else { 0 });
+                        (*metrics).cnt[m as usize] += 1;
+                        if (*metrics).cnt[m as usize] >= MAXFAILS * mul {
+                            (*metrics).extra[m as usize] += r;
+                            if (*metrics).extra[m as usize] >= MAXDELTA * mul as f64 {
+                                method &= !(1u32 << m) as c_int;
+                            }
+                        }
+
+                        // Special case for fqzcomp.
+                        if m == CBMI_FQZ
+                            || m == CBMI_FQZ_B
+                            || m == CBMI_FQZ_C
+                            || m == CBMI_FQZ_D
+                        {
+                            if (*metrics).sz[m as usize] > best_sz {
+                                method &= !(1u32 << m) as c_int;
+                            }
+                        }
+                    }
+                }
+
+                (*metrics).revised_method = method;
+            }
+            libc::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
+        } else {
+            (*metrics).input_avg_delta = (0.9
+                * ((*metrics).input_avg_delta as f64
+                    + abs_i32((*b).uncomp_size - (*metrics).input_avg_sz) as f64))
+                as c_int;
+
+            (*metrics).input_avg_sz += ((*b).uncomp_size as f64 * 0.2) as c_int;
+            (*metrics).input_avg_sz = ((*metrics).input_avg_sz as f64 * 0.8) as c_int;
+
+            strat = (*metrics).strat;
+            let cached_method = (*metrics).method;
+
+            libc::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
+            comp = cram_cram_io_c_1757_cram_compress_by_method(
+                s,
+                (*b).data.cast::<c_char>(),
+                (*b).uncomp_size as usize,
+                (*b).content_id,
+                &mut comp_size,
+                cached_method,
+                if cached_method == CBMI_GZIP_1 { 1 } else { level },
+                strat,
+            );
+            if comp.is_null() {
+                if recurse == 0 {
+                    hts_log_cstr(
+                        HTS_LOG_WARNING,
+                        c"cram_compress_block".as_ptr(),
+                        c"Compressed block method failed, redoing trial".as_ptr(),
+                    );
+                    libc::pthread_mutex_lock(&mut (*fdl).metrics_lock);
+                    (*metrics).trial = NTRIALS;
+                    (*metrics).next_trial = TRIAL_SPAN;
+                    (*metrics).revised_method = orig_method;
+                    libc::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
+                    return cram_cram_io_c_1913_cram_compress_block3(
+                        fd, s, b, metrics, method, level, 1,
+                    );
+                }
+                return -1;
+            }
+
+            if comp_size < (*b).uncomp_size as usize {
+                free((*b).data.cast());
+                (*b).data = comp.cast::<u8>();
+                (*b).comp_size = comp_size as i32;
+                (*b).method = cached_method;
+            } else {
+                free(comp.cast());
+            }
+        }
+    } else {
+        // No cached metrics — just do GZIP.
+        comp = cram_cram_io_c_1757_cram_compress_by_method(
+            s,
+            (*b).data.cast::<c_char>(),
+            (*b).uncomp_size as usize,
+            (*b).content_id,
+            &mut comp_size,
+            CBMI_GZIP,
+            level,
+            Z_FILTERED,
+        );
+        if comp.is_null() {
+            hts_log_cstr(
+                HTS_LOG_ERROR,
+                c"cram_compress_block".as_ptr(),
+                c"Compression failed!".as_ptr(),
+            );
+            return -1;
+        }
+        if comp_size < (*b).uncomp_size as usize {
+            free((*b).data.cast());
+            (*b).data = comp.cast::<u8>();
+            (*b).comp_size = comp_size as i32;
+            (*b).method = CBMI_GZIP;
+        } else {
+            free(comp.cast());
+        }
+        strat = Z_FILTERED;
+        let _ = strat;
+    }
+
+    (*b).method = METHMAP[(*b).method as usize];
+
+    let _ = DS_RN_LOCAL; // referenced for compatibility with cram_io.c layout
+    0
+}
+
+/// `cram_compress_block2` (htslib/cram/cram_io.c:2317): thin wrapper.
+///
+/// The slice pointer is opaque here (cram_slice doesn't have a pub native
+/// type alias yet); pass it via `*mut c_void` and cast inside.
+pub unsafe fn cram_cram_io_c_2317_cram_compress_block2(
+    fd: *mut cram_fd,
+    s: *mut c_void,
+    b: *mut cram_block,
+    metrics: *mut cram_metrics,
+    method: c_int,
+    level: c_int,
+) -> c_int {
+    cram_cram_io_c_1913_cram_compress_block3(
+        fd,
+        s.cast::<cram_slice_layout>(),
+        b.cast::<cram_block_layout>(),
+        metrics.cast::<cram_metrics_layout>(),
+        method,
+        level,
+        0,
+    )
+}
+
+/// `cram_compress_block` (htslib/cram/cram_io.c:2323): public entry, no slice.
+pub unsafe fn cram_cram_io_c_2323_cram_compress_block(
+    fd: *mut cram_fd,
+    b: *mut cram_block,
+    metrics: *mut cram_metrics,
+    method: c_int,
+    level: c_int,
+) -> c_int {
+    cram_cram_io_c_2317_cram_compress_block2(fd, std::ptr::null_mut(), b, metrics, method, level)
 }
 
 pub unsafe fn cram_cram_io_c_2327_cram_new_metrics() -> *mut hts_sys::cram_metrics {
