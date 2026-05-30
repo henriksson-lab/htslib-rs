@@ -849,6 +849,42 @@ unsafe fn sam_hdr_is_c_owned(h: *mut sam_hdr_t) -> bool {
     }
 }
 
+// Registry of `sam_hdr_t` pointers whose `hrecs` field points at a Rust-built
+// sam_hrecs_t. This lets us distinguish from headers whose hrecs was filled
+// by the C library (e.g. via a stray `hts_sys::sam_hdr_add_*` call in a test
+// helper) — those still have a non-null hrecs, but the memory inside lives
+// in C string/type pools and cannot be walked or freed from our side. Used
+// by sam_hdr_write/sam_hdr_str to dispatch correctly.
+fn sam_hdr_rust_hrecs_registry() -> &'static Mutex<HashSet<usize>> {
+    static RUST_HRECS: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+    RUST_HRECS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+unsafe fn sam_hdr_mark_rust_hrecs(h: *mut sam_hdr_t) {
+    if h.is_null() {
+        return;
+    }
+    if let Ok(mut set) = sam_hdr_rust_hrecs_registry().lock() {
+        set.insert(h as usize);
+    }
+}
+
+unsafe fn sam_hdr_has_rust_hrecs(h: *mut sam_hdr_t) -> bool {
+    if h.is_null() {
+        return false;
+    }
+    match sam_hdr_rust_hrecs_registry().lock() {
+        Ok(set) => set.contains(&(h as usize)),
+        Err(_) => false,
+    }
+}
+
+unsafe fn sam_hdr_forget_rust_hrecs(h: *mut sam_hdr_t) {
+    if let Ok(mut set) = sam_hdr_rust_hrecs_registry().lock() {
+        set.remove(&(h as usize));
+    }
+}
+
 unsafe fn sam_hdr_forget_c_owned(h: *mut sam_hdr_t) {
     if let Ok(mut set) = sam_hdr_c_owned_registry().lock() {
         set.remove(&(h as usize));
@@ -887,23 +923,20 @@ unsafe fn sam_hdr_fill_targets_from_text(h: *mut sam_hdr_t) -> c_int {
     0
 }
 
-pub unsafe fn sam_hdr_add_lines(_h: *mut sam_hdr_t, _lines: *const c_char, _len: usize) -> c_int {
-    if _h.is_null() || _lines.is_null() {
+// Append `len` bytes of header text to `(*h).text` without populating
+// hrecs. Used only by the initial parse path (sam_c_1907_sam_hdr_create) so
+// the header can stay text-only until a real mutation lands; that way the
+// first mutator — Rust or hts_sys — gets to fill hrecs with records its
+// own allocators can later read/free. Returns 0 on success, -1 on overflow
+// or allocation failure.
+unsafe fn sam_hdr_append_text_raw(h: *mut sam_hdr_t, src: *const c_char, len: usize) -> c_int {
+    if h.is_null() || src.is_null() {
         return -1;
     }
-    if _len == 0 && *_lines == 0 {
+    if len == 0 {
         return 0;
     }
-    if !(*_h).hrecs.is_null() {
-        return -1;
-    }
-
-    let len = if _len == 0 {
-        libc::strlen(_lines)
-    } else {
-        _len
-    };
-    let old_len = (*_h).l_text;
+    let old_len = (*h).l_text;
     let new_len = match old_len.checked_add(len) {
         Some(v) => v,
         None => {
@@ -912,121 +945,67 @@ pub unsafe fn sam_hdr_add_lines(_h: *mut sam_hdr_t, _lines: *const c_char, _len:
             return -1;
         }
     };
-    let text =
-        crate::htslib_rs::c_compat::realloc((*_h).text.cast(), new_len as u64 + 1).cast::<c_char>();
+    let text = crate::htslib_rs::c_compat::realloc((*h).text.cast(), new_len as u64 + 1)
+        .cast::<c_char>();
     if text.is_null() {
         return -1;
     }
-    (*_h).text = text;
-    if len > 0 {
-        crate::htslib_rs::c_compat::memcpy(
-            (*_h).text.add(old_len).cast(),
-            _lines.cast(),
-            len as u64,
-        );
-    }
-    (*_h).l_text = new_len;
-    *(*_h).text.add(new_len) = 0;
-
-    let added_text = std::slice::from_raw_parts(_lines.cast::<u8>(), len);
-    if sam_hdr_text_contains_sq_line(added_text) && sam_hdr_validate_ref_aliases_from_text(_h) < 0 {
-        sam_hdr_restore_text_len(_h, old_len);
-        return -1;
-    }
-
-    let mut tmp = sam_hdr_t {
-        n_targets: 0,
-        ignore_sam_err: 0,
-        l_text: len,
-        target_len: std::ptr::null_mut(),
-        cigar_tab: std::ptr::null(),
-        target_name: std::ptr::null_mut(),
-        text: _lines.cast_mut(),
-        sdict: std::ptr::null_mut(),
-        hrecs: std::ptr::null_mut(),
-        ref_count: 0,
-    };
-    let ret = sam_hdr_fill_targets_from_text(&mut tmp);
-    if ret < 0 {
-        sam_hdr_restore_text_len(_h, old_len);
-        sam_hdr_free_tmp_targets(&mut tmp);
-        return ret;
-    }
-    if tmp.n_targets > 0 {
-        let old_n = (*_h).n_targets;
-        let new_n = old_n + tmp.n_targets;
-        for i in 0..tmp.n_targets {
-            let target_name = *tmp.target_name.add(i as usize);
-            for j in 0..old_n {
-                if cstr_eq(*(*_h).target_name.add(j as usize), target_name) {
-                    sam_hdr_restore_text_len(_h, old_len);
-                    sam_hdr_free_tmp_targets(&mut tmp);
-                    return -1;
-                }
-            }
-            for j in 0..i {
-                if cstr_eq(*tmp.target_name.add(j as usize), target_name) {
-                    sam_hdr_restore_text_len(_h, old_len);
-                    sam_hdr_free_tmp_targets(&mut tmp);
-                    return -1;
-                }
-            }
-        }
-        let target_len = crate::htslib_rs::c_compat::realloc(
-            (*_h).target_len.cast(),
-            new_n as u64 * std::mem::size_of::<u32>() as u64,
-        )
-        .cast::<u32>();
-        if target_len.is_null() {
-            sam_hdr_restore_text_len(_h, old_len);
-            sam_hdr_free_tmp_targets(&mut tmp);
-            return -1;
-        }
-        (*_h).target_len = target_len;
-        let target_name = crate::htslib_rs::c_compat::realloc(
-            (*_h).target_name.cast(),
-            new_n as u64 * std::mem::size_of::<*mut c_char>() as u64,
-        )
-        .cast::<*mut c_char>();
-        if target_name.is_null() {
-            sam_hdr_restore_text_len(_h, old_len);
-            sam_hdr_free_tmp_targets(&mut tmp);
-            return -1;
-        }
-        (*_h).target_name = target_name;
-        for i in 0..tmp.n_targets {
-            let target_name = *tmp.target_name.add(i as usize);
-            *(*_h).target_name.add((old_n + i) as usize) = target_name;
-            *(*_h).target_len.add((old_n + i) as usize) = *tmp.target_len.add(i as usize);
-            if *tmp.target_len.add(i as usize) == u32::MAX && !tmp.sdict.is_null() {
-                let tmp_long_refs = tmp.sdict.cast::<khash_s2i_t>();
-                let k = kh_get_s2i(tmp_long_refs, target_name);
-                if k != (*tmp_long_refs).n_buckets {
-                    let len = *(*tmp_long_refs).vals.add(k as usize) as hts_pos_t;
-                    if len > u32::MAX as hts_pos_t
-                        && sam_hdr_set_long_target_len(_h, target_name, len) < 0
-                    {
-                        for j in i..tmp.n_targets {
-                            crate::htslib_rs::c_compat::free(
-                                *tmp.target_name.add(j as usize).cast::<*mut c_void>(),
-                            );
-                        }
-                        crate::htslib_rs::c_compat::free(tmp.target_name.cast());
-                        crate::htslib_rs::c_compat::free(tmp.target_len.cast());
-                        kh_destroy_s2i(tmp.sdict.cast());
-                        sam_hdr_restore_text_len(_h, old_len);
-                        return -1;
-                    }
-                }
-            }
-            *tmp.target_name.add(i as usize) = std::ptr::null_mut();
-        }
-        (*_h).n_targets = new_n;
-    }
-    sam_hdr_free_tmp_targets(&mut tmp);
-    ret
+    (*h).text = text;
+    crate::htslib_rs::c_compat::memcpy(
+        (*h).text.add(old_len).cast(),
+        src.cast(),
+        len as u64,
+    );
+    (*h).l_text = new_len;
+    *(*h).text.add(new_len) = 0;
+    0
 }
 
+// original: sam_hdr_add_lines (htslib/header.c:1658)
+//
+// Matches htslib's invariant of routing every header mutation through hrecs:
+// fill hrecs from the cached text on first call, parse the incoming lines into
+// the hrecs global list, refresh the hashes, rebuild the target arrays, mark
+// dirty, and redact the cached text (so the next read/write rebuilds from
+// hrecs). The previous text-append fallback was an intentional divergence from
+// C that produced verbatim insertion order; closing it brings serialization
+// into line with htslib's canonical type-grouped output.
+pub unsafe fn sam_hdr_add_lines(h: *mut sam_hdr_t, lines: *const c_char, len: usize) -> c_int {
+    if h.is_null() || lines.is_null() {
+        return -1;
+    }
+    if len == 0 && *lines == 0 {
+        return 0;
+    }
+    if (*h).hrecs.is_null() && sam_hdr_fill_hrecs(h) < 0 {
+        return -1;
+    }
+    let hrecs = (*h).hrecs;
+    let actual_len = if len == 0 { libc::strlen(lines) } else { len };
+    if sam_hrecs_parse_lines(hrecs, lines, actual_len) != 0 {
+        return -1;
+    }
+    // parse_single_line only appends to the global list; refresh ref_/rg_/pg_
+    // arrays and the per-type hash tables so subsequent lookups see the new
+    // records.
+    if sam_hrecs_update_hashes(hrecs) < 0 {
+        return -1;
+    }
+    if rebuild_target_arrays(h) != 0 {
+        return -1;
+    }
+    (*hrecs).dirty = 1;
+    header_c_1530_redact_header_text(h);
+    0
+}
+
+// original: sam_hdr_add_line (htslib/header.c:1693)
+//
+// Pre-validates the type / tag pairs (rejecting embedded tabs, colons in
+// keys, and newlines), fills hrecs if not yet populated, then routes through
+// sam_hdr_add_line_hrecs. The pre-validation is stricter than C's
+// sam_hrecs_vadd (which does fewer checks); we keep it so callers that relied
+// on the previous text-mode rejection of bad inputs still see -1.
 pub unsafe fn sam_hdr_add_line(
     h: *mut sam_hdr_t,
     type_: *const c_char,
@@ -1040,9 +1019,6 @@ pub unsafe fn sam_hdr_add_line(
     if type_bytes.len() != 2 {
         return -1;
     }
-    let mut line = Vec::new();
-    line.push(b'@');
-    line.extend_from_slice(type_bytes);
 
     if type_bytes == b"CO" {
         if tags.len() != 1 || tags[0].0.is_null() || !tags[0].1.is_null() {
@@ -1052,46 +1028,32 @@ pub unsafe fn sam_hdr_add_line(
         if comment.contains(&b'\n') {
             return -1;
         }
-        if !(*h).hrecs.is_null() {
-            return sam_hdr_add_line_hrecs(h, type_, tags);
+    } else {
+        if !matches!(type_bytes, b"HD" | b"SQ" | b"RG" | b"PG") || tags.is_empty() {
+            return -1;
         }
-        // `@CO\t<comment>\n` — the tab between the type and comment is required
-        // per the SAM spec (and required for the parser to tokenize the line).
-        line.push(b'\t');
-        line.extend_from_slice(comment);
-        line.push(b'\n');
-        return sam_hdr_add_lines(h, line.as_ptr().cast(), line.len());
+        for &(key, value) in tags {
+            if key.is_null() || value.is_null() {
+                return -1;
+            }
+            let key = CStr::from_ptr(key).to_bytes();
+            let value = CStr::from_ptr(value).to_bytes();
+            if key.is_empty()
+                || key.contains(&b'\t')
+                || key.contains(&b':')
+                || key.contains(&b'\n')
+                || value.contains(&b'\t')
+                || value.contains(&b'\n')
+            {
+                return -1;
+            }
+        }
     }
 
-    if !matches!(type_bytes, b"HD" | b"SQ" | b"RG" | b"PG") || tags.is_empty() {
+    if (*h).hrecs.is_null() && sam_hdr_fill_hrecs(h) < 0 {
         return -1;
     }
-
-    for &(key, value) in tags {
-        if key.is_null() || value.is_null() {
-            return -1;
-        }
-        let key = CStr::from_ptr(key).to_bytes();
-        let value = CStr::from_ptr(value).to_bytes();
-        if key.is_empty()
-            || key.contains(&b'\t')
-            || key.contains(&b':')
-            || key.contains(&b'\n')
-            || value.contains(&b'\t')
-            || value.contains(&b'\n')
-        {
-            return -1;
-        }
-        line.push(b'\t');
-        line.extend_from_slice(key);
-        line.push(b':');
-        line.extend_from_slice(value);
-    }
-    if !(*h).hrecs.is_null() {
-        return sam_hdr_add_line_hrecs(h, type_, tags);
-    }
-    line.push(b'\n');
-    sam_hdr_add_lines(h, line.as_ptr().cast(), line.len())
+    sam_hdr_add_line_hrecs(h, type_, tags)
 }
 
 // hrecs-backed path for sam_hdr_add_line (mirrors htslib/header.c:1693, which
@@ -1114,6 +1076,10 @@ unsafe fn sam_hdr_add_line_hrecs(
     {
         return -1;
     }
+    // sam_hrecs_vadd sets dirty; clear the cached text so the next read/write
+    // rebuilds from hrecs (matches the redact_header_text call in htslib C's
+    // sam_hdr_add_line).
+    header_c_1530_redact_header_text(h);
     0
 }
 
@@ -1811,6 +1777,12 @@ unsafe fn sam_hdr_text_add_pg_line(
     sam_hdr_text_append_bytes(h, &line)
 }
 
+// original: sam_hdr_add_pg (htslib/header.c:2614)
+//
+// Pre-validates the supplied tag pairs (rejecting embedded tabs/colons/
+// newlines), fills hrecs if not yet populated, then routes through
+// sam_hdr_add_pg_hrecs. The pre-validation is kept (stricter than C) so
+// callers see the same -1 they used to get from the dropped text-mode path.
 pub unsafe fn sam_hdr_add_pg(
     h: *mut sam_hdr_t,
     name: *const c_char,
@@ -1819,84 +1791,25 @@ pub unsafe fn sam_hdr_add_pg(
     if h.is_null() || name.is_null() {
         return -1;
     }
-    if !(*h).hrecs.is_null() {
-        return sam_hdr_add_pg_hrecs(h, name, tags);
-    }
-
-    let name = CStr::from_ptr(name).to_bytes();
-    let mut parsed_tags = Vec::<(&[u8], &[u8])>::new();
-    let mut id = None;
-    let mut explicit_pp = None;
     for &(key, value) in tags {
         if key.is_null() || value.is_null() {
             return -1;
         }
-        let key = CStr::from_ptr(key).to_bytes();
-        let value = CStr::from_ptr(value).to_bytes();
-        if key.is_empty()
-            || key.contains(&b'\t')
-            || key.contains(&b':')
-            || value.contains(&b'\t')
-            || value.contains(&b'\n')
+        let key_b = CStr::from_ptr(key).to_bytes();
+        let value_b = CStr::from_ptr(value).to_bytes();
+        if key_b.is_empty()
+            || key_b.contains(&b'\t')
+            || key_b.contains(&b':')
+            || value_b.contains(&b'\t')
+            || value_b.contains(&b'\n')
         {
             return -1;
         }
-        if key == b"ID" {
-            id = Some(value);
-        } else if key == b"PP" {
-            explicit_pp = Some(value);
-        }
-        parsed_tags.push((key, value));
     }
-
-    let explicit_id = id;
-    let id = if let Some(explicit_id) = explicit_id {
-        if sam_hdr_text_pg_id_exists(h, explicit_id) {
-            return -1;
-        }
-        explicit_id.to_vec()
-    } else {
-        let unique = sam_hdr_pg_id(h, name.as_ptr().cast());
-        if unique.is_null() {
-            return -1;
-        }
-        CStr::from_ptr(unique).to_bytes().to_vec()
-    };
-
-    if let Some(pp) = explicit_pp {
-        if !sam_hdr_text_pg_id_exists(h, pp) {
-            return -1;
-        }
-        return sam_hdr_text_add_pg_line(h, &id, name, &parsed_tags, None);
+    if (*h).hrecs.is_null() && sam_hdr_fill_hrecs(h) < 0 {
+        return -1;
     }
-
-    let leaves = sam_hdr_text_pg_leaf_ids(h);
-    if leaves.is_empty() {
-        sam_hdr_text_add_pg_line(h, &id, name, &parsed_tags, None)
-    } else {
-        for (idx, pp) in leaves.iter().enumerate() {
-            let line_id = if explicit_id.is_some() {
-                let mut line_id = id.clone();
-                if idx > 0 {
-                    line_id.push(b'.');
-                    line_id.extend_from_slice(idx.to_string().as_bytes());
-                }
-                line_id
-            } else {
-                let unique = sam_hdr_pg_id(h, name.as_ptr().cast());
-                if unique.is_null() {
-                    return -1;
-                }
-                CStr::from_ptr(unique).to_bytes().to_vec()
-            };
-            if sam_hdr_text_pg_id_exists(h, &line_id)
-                || sam_hdr_text_add_pg_line(h, &line_id, name, &parsed_tags, Some(pp)) < 0
-            {
-                return -1;
-            }
-        }
-        0
-    }
+    sam_hdr_add_pg_hrecs(h, name, tags)
 }
 
 // Generates a unique @PG ID against the hrecs pg_hash, mirroring
@@ -2290,7 +2203,13 @@ pub unsafe fn sam_hdr_remove_tag_id(
         return -1;
     }
     if !(*h).hrecs.is_null() {
-        return header_c_2346_sam_hdr_remove_tag_id_hrecs(h, type_, id_key, id_value, key);
+        // The hrecs path mirrors htslib's `sam_hdr_remove_tag_id`, which
+        // returns 1 when a tag was actually removed and 0 when there was no
+        // matching tag. Normalize to our public contract (matching the
+        // retired text-mode entrypoint): 0 on real removal, -1 on
+        // not-found/error, so callers and tests see a single behaviour.
+        let ret = header_c_2346_sam_hdr_remove_tag_id_hrecs(h, type_, id_key, id_value, key);
+        return if ret > 0 { 0 } else { -1 };
     }
     if (*h).text.is_null() {
         return -1;
@@ -2448,11 +2367,17 @@ pub unsafe fn sam_hdr_str(_h: *mut sam_hdr_t) -> *const c_char {
         return std::ptr::null();
     }
     if !(*_h).hrecs.is_null() {
-        return if sam_hdr_rebuild(_h) == 0 {
-            (*_h).text
-        } else {
-            std::ptr::null()
-        };
+        // Rust-built hrecs: rebuild from our own walkers. C-built (test
+        // helpers that mutate via hts_sys): delegate so libhts walks its own
+        // string pool. See sam_hdr_rust_hrecs_registry for context.
+        if sam_hdr_has_rust_hrecs(_h) {
+            return if sam_hdr_rebuild(_h) == 0 {
+                (*_h).text
+            } else {
+                std::ptr::null()
+            };
+        }
+        return hts_sys::sam_hdr_str(_h.cast());
     }
     (*_h).text
 }
@@ -2567,24 +2492,94 @@ unsafe fn sam_hrecs_free_tags(mut tag: *mut sam_hrec_tag_t) {
 }
 
 // original: sam_hrecs_global_list_add (htslib/header.c:216)
-unsafe fn sam_hrecs_global_list_add(hrecs: *mut sam_hrecs_t, line: *mut sam_hrec_type_t) -> c_int {
+// Mirrors htslib/header.c:216's sam_hrecs_global_list_add. `after = NULL`
+// means "append at the end" (with @HD special-cased to the top if no @HD
+// already exists); a non-NULL `after` inserts the new line directly after it.
+//
+// Also splices `line` into the per-type ring (next/prev fields). The ring
+// invariant — each line links to the next/prev line of the same type, with
+// every type's ring closing on itself — is what
+// header_c_704_sam_hrecs_remove_line walks via (*cur).next; uninitialized
+// next/prev fields produce a SIGSEGV during type-wide removes.
+unsafe fn sam_hrecs_global_list_add(
+    hrecs: *mut sam_hrecs_t,
+    line: *mut sam_hrec_type_t,
+    after: *mut sam_hrec_type_t,
+) -> c_int {
     if hrecs.is_null() || line.is_null() {
         return -1;
     }
     if (*hrecs).first_line.is_null() {
         (*line).global_next = line;
         (*line).global_prev = line;
+        (*line).next = line;
+        (*line).prev = line;
         (*hrecs).first_line = line.cast();
-    } else {
-        let first = (*hrecs).first_line.cast::<sam_hrec_type_t>();
-        let last = (*first).global_prev;
-        (*line).global_next = first;
-        (*line).global_prev = last;
-        (*last).global_next = line;
-        (*first).global_prev = line;
+        (*hrecs).dirty = 1;
+        return 0;
     }
+
+    let first = (*hrecs).first_line.cast::<sam_hrec_type_t>();
+    let hd_key = header_h_58_TYPEKEY(c"HD".as_ptr());
+    let mut anchor = after;
+    let mut update_first_line = false;
+    // @HD floats to the top (unless an @HD already exists there).
+    if (*line).type_ == hd_key && (*first).type_ != hd_key {
+        anchor = (*first).global_prev;
+        update_first_line = true;
+    }
+    if anchor.is_null() {
+        anchor = (*first).global_prev;
+    }
+    let next = (*anchor).global_next;
+    (*line).global_prev = anchor;
+    (*line).global_next = next;
+    (*anchor).global_next = line;
+    (*next).global_prev = line;
+    if update_first_line {
+        (*hrecs).first_line = line.cast();
+    }
+
+    // Per-type ring: find any existing line of the same type and splice in
+    // at its tail. If no existing record of this type, the ring is self.
+    let same_type = sam_hrecs_find_last_of_type_excluding(hrecs, (*line).type_, line);
+    if same_type.is_null() {
+        (*line).next = line;
+        (*line).prev = line;
+    } else {
+        let ring_next = (*same_type).next;
+        (*line).prev = same_type;
+        (*line).next = ring_next;
+        (*same_type).next = line;
+        if !ring_next.is_null() {
+            (*ring_next).prev = line;
+        } else {
+            // Shouldn't happen if invariants hold, but recover defensively.
+            (*line).next = line;
+            (*line).prev = same_type;
+            (*same_type).next = line;
+        }
+    }
+
     (*hrecs).dirty = 1;
     0
+}
+
+// Walk the global list and return the last record of `type_`, skipping
+// `exclude` (the newly-added line itself). Returns null if none exists.
+unsafe fn sam_hrecs_find_last_of_type_excluding(
+    hrecs: *mut sam_hrecs_t,
+    type_: u32,
+    exclude: *mut sam_hrec_type_t,
+) -> *mut sam_hrec_type_t {
+    let mut found: *mut sam_hrec_type_t = std::ptr::null_mut();
+    sam_hrecs_walk_global(hrecs, |cur| {
+        if cur != exclude && (*cur).type_ == type_ {
+            found = cur;
+        }
+        true
+    });
+    found
 }
 
 unsafe fn sam_hrecs_type_rank(hrecs: *mut sam_hrecs_t, type_: u32) -> c_int {
@@ -2600,30 +2595,29 @@ unsafe fn sam_hrecs_type_rank(hrecs: *mut sam_hrecs_t, type_: u32) -> c_int {
     c_int::MAX
 }
 
-unsafe fn sam_hrecs_type_list_add(hrecs: *mut sam_hrecs_t, line: *mut sam_hrec_type_t) {
-    let rank = sam_hrecs_type_rank(hrecs, (*line).type_);
-    let mut insert_before = std::ptr::null_mut();
+// Locate the last line of `type_` in the global list (or null if none). Used
+// to mimic C's per-type-ring "h_type->prev" insertion anchor inside
+// sam_hrecs_vadd.
+unsafe fn sam_hrecs_find_last_of_type(
+    hrecs: *mut sam_hrecs_t,
+    type_: u32,
+) -> *mut sam_hrec_type_t {
+    let mut found: *mut sam_hrec_type_t = std::ptr::null_mut();
     sam_hrecs_walk_global(hrecs, |cur| {
-        if sam_hrecs_type_rank(hrecs, (*cur).type_) > rank {
-            insert_before = cur;
-            return false;
+        if (*cur).type_ == type_ {
+            found = cur;
         }
         true
     });
-    if insert_before.is_null() {
-        let _ = sam_hrecs_global_list_add(hrecs, line);
-        return;
-    }
+    found
+}
 
-    let prev = (*insert_before).global_prev;
-    (*line).global_next = insert_before;
-    (*line).global_prev = prev;
-    (*prev).global_next = line;
-    (*insert_before).global_prev = line;
-    if (*hrecs).first_line == insert_before.cast() {
-        (*hrecs).first_line = line.cast();
-    }
-    (*hrecs).dirty = 1;
+unsafe fn sam_hrecs_type_list_add(hrecs: *mut sam_hrecs_t, line: *mut sam_hrec_type_t) {
+    // Match C: append immediately after the last existing line of the same
+    // type, or at the global end if none exists yet (with the @HD-at-top
+    // special case handled by sam_hrecs_global_list_add).
+    let after = sam_hrecs_find_last_of_type(hrecs, (*line).type_);
+    let _ = sam_hrecs_global_list_add(hrecs, line, after);
 }
 
 // original: sam_hrecs_remove_line (htslib/header.c:250)
@@ -3374,7 +3368,11 @@ unsafe fn sam_hrecs_parse_single_line(hrecs: *mut sam_hrecs_t, line: &[u8]) -> c
     if ty.is_null() {
         return -1;
     }
-    sam_hrecs_type_list_add(hrecs, ty);
+    // C's sam_hrecs_parse_single_line appends each parsed line at the global
+    // end (with @HD floated to the top by sam_hrecs_global_list_add). It does
+    // NOT type-group, so the canonical text order is preserved verbatim — for
+    // both the initial header parse and incremental sam_hdr_add_lines calls.
+    sam_hrecs_global_list_add(hrecs, ty, std::ptr::null_mut());
     0
 }
 
@@ -3880,6 +3878,11 @@ unsafe fn sam_hdr_fill_hrecs(bh: *mut sam_hdr_t) -> c_int {
         return -1;
     }
     (*hrecs).dirty = 0;
+    // Mark the header as having a Rust-built hrecs. sam_hdr_write/_str check
+    // this to decide whether to use our native rebuild path or delegate to
+    // hts_sys (when hrecs was populated by a C-side mutator and our walkers
+    // would mis-interpret C pool-allocated records).
+    sam_hdr_mark_rust_hrecs(bh);
     0
 }
 
@@ -4404,11 +4407,17 @@ unsafe fn header_c_2015_sam_hdr_remove_except_hrecs(
     }
 
     // For SQ/RG, faster to drop & rebuild the secondary hashes than delete
-    // each entry individually.
+    // each entry individually. We also refresh the dense ref_/rg_/pg_ arrays
+    // by calling sam_hrecs_update_hashes — without it, a subsequent
+    // sam_hrecs_find_type_pos would dereference a stale pointer into a
+    // freed record (the rg[] array indexes into removed records).
     if (t0 == b'S' && t1 == b'Q') || (t0 == b'R' && t1 == b'G') {
         if rebuild_hash(hrecs, header_h_58_TYPEKEY(type_)) != 0 {
             return -1;
         }
+    }
+    if sam_hrecs_update_hashes(hrecs) < 0 {
+        return -1;
     }
 
     if ret == 0 && (*hrecs).dirty != 0 {
@@ -4681,7 +4690,27 @@ unsafe fn sam_c_2157_sam_hdr_change_HD_hrecs(
     val: *const c_char,
 ) -> c_int {
     if !val.is_null() {
-        if sam_hdr_update_line(
+        // Add a fresh @HD line if none exists yet (matches the text-mode
+        // behavior in htslib's old_sam_hdr_change_HD). update_line on a
+        // missing HD record returns -1 in the hrecs path; without this branch
+        // callers would see a regression vs the text-mode entry-point.
+        let hrecs = (*h).hrecs;
+        let hd = sam_hrecs_find_type_id(
+            hrecs,
+            c"HD".as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+        if hd.is_null() {
+            if sam_hdr_add_line(
+                h,
+                c"HD".as_ptr(),
+                &[(c"VN".as_ptr(), c"1.6".as_ptr()), (key, val)],
+            ) != 0
+            {
+                return -1;
+            }
+        } else if sam_hdr_update_line(
             h,
             c"HD".as_ptr(),
             std::ptr::null(),
@@ -4697,8 +4726,11 @@ unsafe fn sam_c_2157_sam_hdr_change_HD_hrecs(
         std::ptr::null(),
         std::ptr::null(),
         key,
-    ) != 0
+    ) < 0
     {
+        // sam_hdr_remove_tag_id returns 1 on actual removal and 0 on no-op
+        // (mirroring htslib); both are success. Only -1 (find_type_id failed
+        // or null inputs) is an error.
         return -1;
     }
     sam_hdr_rebuild(h)
@@ -5034,9 +5066,19 @@ pub unsafe fn bam_hdr_write(fp: *mut BGZF, h: *const sam_hdr_t) -> c_int {
     if h.is_null() {
         return -1;
     }
+    // If hrecs was built by Rust (via sam_hdr_fill_hrecs), it's the source of
+    // truth — sync the cached text via sam_hdr_rebuild and fall through to
+    // the native text-emitting code. If hrecs is non-null but was built by
+    // hts_sys (e.g. a test helper invoked the variadic C add_pg), our walkers
+    // can't interpret its pool-allocated records — delegate the whole write.
     if !(*h).hrecs.is_null() {
-        // TODO(P5): no native bam_hdr_write hrecs path yet
-        return hts_sys::bam_hdr_write(fp.cast(), h.cast());
+        if sam_hdr_has_rust_hrecs(h.cast_mut()) {
+            if sam_hdr_rebuild(h.cast_mut()) < 0 {
+                return -1;
+            }
+        } else {
+            return hts_sys::bam_hdr_write(fp.cast(), h.cast());
+        }
     }
     if (*h).l_text > u32::MAX as usize {
         return -1;
@@ -5122,9 +5164,17 @@ pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
             if (*h).hrecs.is_null() && (*h).text.is_null() {
                 return 0;
             }
+            // Rust-built hrecs: rebuild cached text and fall through. C-built
+            // hrecs (e.g. populated by hts_sys helpers in test::sam): delegate
+            // to libhts so it walks its own pool-allocated records.
             if !(*h).hrecs.is_null() {
-                // TODO(P5): no native sam_hdr_write hrecs path yet
-                return hts_sys::sam_hdr_write(fp.cast(), h.cast());
+                if sam_hdr_has_rust_hrecs(h.cast_mut()) {
+                    if sam_hdr_rebuild(h.cast_mut()) < 0 {
+                        return -1;
+                    }
+                } else {
+                    return hts_sys::sam_hdr_write(fp.cast(), h.cast());
+                }
             }
             if !(*h).text.is_null() {
                 let text = (*h).text;
@@ -5179,9 +5229,16 @@ pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
 }
 
 unsafe fn sam_hdr_write_cram(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
+    // Rust-built hrecs: rebuild text. C-built hrecs: let libhts handle the
+    // whole write (same dispatch rule as sam_hdr_write/bam_hdr_write).
     if !(*h).hrecs.is_null() {
-        // TODO(P5): no native sam_hdr_write hrecs path for CRAM yet
-        return hts_sys::sam_hdr_write(fp.cast(), h.cast());
+        if sam_hdr_has_rust_hrecs(h.cast_mut()) {
+            if sam_hdr_rebuild(h.cast_mut()) < 0 {
+                return -1;
+            }
+        } else {
+            return hts_sys::sam_hdr_write(fp.cast(), h.cast());
+        }
     }
     if (*h).text.is_null() {
         return 0;
@@ -5377,14 +5434,28 @@ unsafe fn sam_c_1907_sam_hdr_create(fp: *mut htsFile) -> *mut sam_hdr_t {
             (*fp).line.l = 0;
             break;
         }
-        if sam_hdr_add_lines(h, (*fp).line.s, (*fp).line.l) != 0
-            || sam_hdr_add_lines(h, b"\n".as_ptr().cast(), 1) != 0
+        // Append raw line text to (*h).text without filling hrecs. Lazy
+        // hrecs population — by the first Rust or C mutation — is the
+        // mechanism the test/runtime relies on to route subsequent
+        // reads/writes through the correct (matching-allocator) library.
+        // Going through sam_hdr_add_lines here would eagerly fill a
+        // Rust-built hrecs, which then breaks downstream hts_sys mutators
+        // in test::sam helpers that operate on the same header.
+        if sam_hdr_append_text_raw(h, (*fp).line.s, (*fp).line.l) != 0
+            || sam_hdr_append_text_raw(h, b"\n".as_ptr().cast(), 1) != 0
         {
             sam_hdr_destroy(h);
             return std::ptr::null_mut();
         }
     }
 
+    // Fill the target arrays from the accumulated text without populating
+    // hrecs — keeps the header in text-only mode so the first mutator
+    // (Rust or hts_sys) gets to decide who owns hrecs.
+    if sam_hdr_fill_targets_from_text(h) < 0 {
+        sam_hdr_destroy(h);
+        return std::ptr::null_mut();
+    }
     if !(*fp).bam_header.is_null() {
         sam_hdr_destroy((*fp).bam_header.cast());
     }
@@ -5461,6 +5532,7 @@ pub unsafe fn sam_hdr_destroy(_h: *mut sam_hdr_t) {
     if let Ok(mut scratch) = sam_hdr_text_scratch().lock() {
         scratch.remove(&(_h as usize));
     }
+    sam_hdr_forget_rust_hrecs(_h);
     if !(*_h).target_name.is_null() {
         for i in 0..(*_h).n_targets {
             crate::htslib_rs::c_compat::free(
@@ -13887,7 +13959,7 @@ mod tests {
             let text = c"@HD\tVN:1.6\n@SQ\tSN:ref1\tLN:10\n@SQ\tSN:ref2\tLN:20\n@RG\tID:run1\n@PG\tID:prog1\n@CO\tfirst\n@CO\tsecond\n";
             let hdr = sam_hdr_parse(text.to_bytes().len(), text.as_ptr());
             assert!(!hdr.is_null());
-            assert!((*hdr).hrecs.is_null());
+            assert!(!(*hdr).hrecs.is_null());
 
             assert_eq!(sam_hdr_count_lines(hdr, c"HD".as_ptr()), 1);
             assert_eq!(sam_hdr_count_lines(hdr, c"SQ".as_ptr()), 2);
@@ -13922,7 +13994,7 @@ mod tests {
                 c"@HD\tVN:1.6\n@SQ\tSN:ref1\tLN:10\n@SQ\tSN:ref2\tLN:20\tM5:abc\n@CO\tfree text\n";
             let hdr = sam_hdr_parse(text.to_bytes().len(), text.as_ptr());
             assert!(!hdr.is_null());
-            assert!((*hdr).hrecs.is_null());
+            assert!(!(*hdr).hrecs.is_null());
 
             let mut ks = kstring_t {
                 l: 0,
@@ -13962,7 +14034,7 @@ mod tests {
             let text = c"@HD\tVN:1.6\n@SQ\tSN:ref1\tLN:10\n@SQ\tSN:ref2\tLN:20\tM5:abc\n@RG\tID:run1\tSM:sample1\n";
             let hdr = sam_hdr_parse(text.to_bytes().len(), text.as_ptr());
             assert!(!hdr.is_null());
-            assert!((*hdr).hrecs.is_null());
+            assert!(!(*hdr).hrecs.is_null());
 
             let mut ks = kstring_t {
                 l: 0,
@@ -14041,7 +14113,7 @@ mod tests {
             let text = c"@HD\tVN:1.6\n@SQ\tSN:ref1\tLN:10\n@SQ\tSN:ref2\tLN:20\n@RG\tID:run1\tSM:sample1\n@RG\tID:run2\n@PG\tID:prog1\n";
             let hdr = sam_hdr_parse(text.to_bytes().len(), text.as_ptr());
             assert!(!hdr.is_null());
-            assert!((*hdr).hrecs.is_null());
+            assert!(!(*hdr).hrecs.is_null());
 
             assert_eq!(
                 CStr::from_ptr(sam_hdr_line_name(hdr, c"SQ".as_ptr(), 1)).to_bytes(),
@@ -14065,10 +14137,15 @@ mod tests {
     #[test]
     fn sam_hdr_pg_id_generates_text_backed_unique_ids_without_hrecs() {
         unsafe {
-            let text = c"@HD\tVN:1.6\n@RG\tID:tool\n@PG\tPN:missing-id\n@PG\tID:tool\tPN:tool\n@PG\tID:tool.1\n@PG\tID:other\n";
+            // Dropped the `@PG\tPN:missing-id\n` line: the hrecs path rejects
+            // `@PG` records that lack the required `ID` tag during the
+            // update_hashes pass (matching htslib's validation), so
+            // sam_hdr_parse on the old fixture would return null. The unique-ID
+            // generation logic exercised here is unaffected.
+            let text = c"@HD\tVN:1.6\n@RG\tID:tool\n@PG\tID:tool\tPN:tool\n@PG\tID:tool.1\n@PG\tID:other\n";
             let hdr = sam_hdr_parse(text.to_bytes().len(), text.as_ptr());
             assert!(!hdr.is_null());
-            assert!((*hdr).hrecs.is_null());
+            assert!(!(*hdr).hrecs.is_null());
 
             assert_eq!(
                 CStr::from_ptr(sam_hdr_pg_id(hdr, c"unused".as_ptr())).to_bytes(),
@@ -14078,9 +14155,14 @@ mod tests {
                 CStr::from_ptr(sam_hdr_pg_id(hdr, c"tool".as_ptr())).to_bytes(),
                 b"tool.2"
             );
+            // The hrecs path uses a single shared `ID_cnt` counter (not a
+            // per-name counter), so the suffix continues to advance across
+            // successive sam_hdr_pg_id calls. The previous expectation
+            // (`other.1`) was specific to the text-mode generator, which
+            // searched from .0 per name.
             assert_eq!(
                 CStr::from_ptr(sam_hdr_pg_id(hdr, c"other".as_ptr())).to_bytes(),
-                b"other.1"
+                b"other.3"
             );
             assert!(sam_hdr_pg_id(std::ptr::null_mut(), c"tool".as_ptr()).is_null());
             assert!(sam_hdr_pg_id(hdr, std::ptr::null()).is_null());
@@ -14095,7 +14177,7 @@ mod tests {
             let text = c"@HD\tVN:1.5\n@PG\tID:prog1\tPN:prog1\n@PG\tID:prog2\tPN:prog2\tPP:prog1\n";
             let hdr = sam_hdr_parse(text.to_bytes().len(), text.as_ptr());
             assert!(!hdr.is_null());
-            assert!((*hdr).hrecs.is_null());
+            assert!(!(*hdr).hrecs.is_null());
 
             assert_eq!(sam_hdr_add_pg(hdr, c"prog3".as_ptr(), &[]), 0);
             assert_eq!(
@@ -14252,13 +14334,17 @@ mod tests {
     #[test]
     fn sam_hdr_add_pg_handles_text_backed_pg_loops_without_hrecs() {
         unsafe {
+            // Self-loop @PG: the hrecs path's sam_hrecs_link_pg classifies a
+            // self-referential @PG as a non-leaf (npg_end == 0), so the new
+            // record is appended without a PP. The previous expectation
+            // (PP:loop1) was specific to our retired text-mode leaf scan.
             let self_loop = c"@HD\tVN:1.5\n@PG\tID:loop1\tPN:prog1\tPP:loop1\n";
             let hdr = sam_hdr_parse(self_loop.to_bytes().len(), self_loop.as_ptr());
             assert!(!hdr.is_null());
             assert_eq!(sam_hdr_add_pg(hdr, c"new_prog".as_ptr(), &[]), 0);
             assert_eq!(
                 CStr::from_ptr(sam_hdr_str(hdr)).to_bytes(),
-                b"@HD\tVN:1.5\n@PG\tID:loop1\tPN:prog1\tPP:loop1\n@PG\tID:new_prog\tPN:new_prog\tPP:loop1\n"
+                b"@HD\tVN:1.5\n@PG\tID:loop1\tPN:prog1\tPP:loop1\n@PG\tID:new_prog\tPN:new_prog\n"
             );
             sam_hdr_destroy(hdr);
 
@@ -14280,7 +14366,7 @@ mod tests {
             let text = c"@HD\tVN:1.6\n@SQ\tSN:ref1\tLN:10\n@SQ\tSN:ref2\tLN:20\n@SQ\tSN:ref3\tLN:30\n@RG\tID:run1\tSM:sample1\n@RG\tID:run2\n@PG\tID:prog1\n";
             let hdr = sam_hdr_parse(text.to_bytes().len(), text.as_ptr());
             assert!(!hdr.is_null());
-            assert!((*hdr).hrecs.is_null());
+            assert!(!(*hdr).hrecs.is_null());
             assert_eq!(sam_hdr_nref(hdr), 3);
 
             assert_eq!(
@@ -14327,7 +14413,7 @@ mod tests {
             let text = c"@HD\tVN:1.6\n@SQ\tSN:ref1\tLN:10\n@SQ\tSN:ref2\tLN:20\n@SQ\tSN:ref3\tLN:30\n@RG\tID:run1\tSM:sample1\n@RG\tID:run2\n@RG\tID:run3\n@PG\tID:prog1\n";
             let hdr = sam_hdr_parse(text.to_bytes().len(), text.as_ptr());
             assert!(!hdr.is_null());
-            assert!((*hdr).hrecs.is_null());
+            assert!(!(*hdr).hrecs.is_null());
 
             assert_eq!(
                 sam_hdr_remove_except(hdr, c"RG".as_ptr(), c"ID".as_ptr(), c"run2".as_ptr()),
@@ -14375,7 +14461,7 @@ mod tests {
             let text = c"@HD\tVN:1.6\n@SQ\tSN:ref1\tLN:10\tAN:chr1,one\n@RG\tID:run1\tSM:sample1\tLB:lib1\n@RG\tID:run2\tSM:sample2\n";
             let hdr = sam_hdr_parse(text.to_bytes().len(), text.as_ptr());
             assert!(!hdr.is_null());
-            assert!((*hdr).hrecs.is_null());
+            assert!(!(*hdr).hrecs.is_null());
             assert_eq!(sam_hdr_name2tid(hdr, c"chr1".as_ptr()), 0);
 
             assert_eq!(
@@ -17957,20 +18043,23 @@ mod tests {
                 sam_hdr_change_HD(hdr, c"SO".as_ptr(), c"unsorted".as_ptr()),
                 0
             );
+            // sam_hdr_str triggers rebuild from hrecs (the cached text is
+            // redacted on every mutation now that header writes go through the
+            // hrecs path).
             assert_eq!(
-                CStr::from_ptr((*hdr).text).to_bytes(),
+                CStr::from_ptr(sam_hdr_str(hdr)).to_bytes(),
                 b"@HD\tVN:1.6\tSO:unsorted\n@SQ\tSN:chr1\tLN:10\n"
             );
 
             assert_eq!(sam_hdr_change_HD(hdr, c"GO".as_ptr(), c"query".as_ptr()), 0);
             assert_eq!(
-                CStr::from_ptr((*hdr).text).to_bytes(),
+                CStr::from_ptr(sam_hdr_str(hdr)).to_bytes(),
                 b"@HD\tVN:1.6\tSO:unsorted\tGO:query\n@SQ\tSN:chr1\tLN:10\n"
             );
 
             assert_eq!(sam_hdr_change_HD(hdr, c"SO".as_ptr(), std::ptr::null()), 0);
             assert_eq!(
-                CStr::from_ptr((*hdr).text).to_bytes(),
+                CStr::from_ptr(sam_hdr_str(hdr)).to_bytes(),
                 b"@HD\tVN:1.6\tGO:query\n@SQ\tSN:chr1\tLN:10\n"
             );
             sam_hdr_destroy(hdr);
@@ -17991,7 +18080,7 @@ mod tests {
                 0
             );
             assert_eq!(
-                CStr::from_ptr((*hdr).text).to_bytes(),
+                CStr::from_ptr(sam_hdr_str(hdr)).to_bytes(),
                 b"@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:chr1\tLN:10\n"
             );
             sam_hdr_destroy(hdr);
@@ -18044,7 +18133,14 @@ mod tests {
             let dup = sam_hdr_get(&mut fp);
             assert!(!dup.is_null());
             assert_ne!(dup, hdr);
-            assert_eq!(CStr::from_ptr((*dup).text), CStr::from_ptr((*hdr).text));
+            // Use sam_hdr_str to rebuild text from hrecs on each header. The
+            // cached `(*hdr).text` is redacted after every mutation now that
+            // the hrecs path is the canonical one, so a direct read would
+            // null-deref.
+            assert_eq!(
+                CStr::from_ptr(sam_hdr_str(hdr)),
+                CStr::from_ptr(sam_hdr_str(dup))
+            );
 
             sam_hdr_destroy(hdr);
             sam_hdr_destroy(dup);
@@ -18776,7 +18872,7 @@ mod tests {
             let text = c"@HD\tVN:1.6\n@SQ\tSN:ref1\tLN:10\n@SQ\tSN:ref2\tLN:20\n@RG\tID:run1\n@RG\tID:run2\n@PG\tID:prog1\n";
             let hdr = sam_hdr_parse(text.to_bytes().len(), text.as_ptr());
             assert!(!hdr.is_null());
-            assert!((*hdr).hrecs.is_null());
+            assert!(!(*hdr).hrecs.is_null());
 
             assert_eq!(sam_hdr_line_index(hdr, c"SQ".as_ptr(), c"ref1".as_ptr()), 0);
             assert_eq!(sam_hdr_line_index(hdr, c"SQ".as_ptr(), c"ref2".as_ptr()), 1);
@@ -19171,7 +19267,10 @@ mod tests {
             let hdr = sam_hdr_init();
             assert!(!hdr.is_null());
 
-            let first = b"@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:10\r\n";
+            // Use canonical LF terminators: hrecs serialization always emits
+            // bare \n (matching htslib's `sam_hrecs_rebuild_text`), so CR-LF
+            // is normalized away during rebuild.
+            let first = b"@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:10\n";
             assert_eq!(
                 sam_hdr_add_lines(hdr, first.as_ptr().cast(), first.len()),
                 0
@@ -19275,203 +19374,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn sam_hdr_add_line_rejects_invalid_and_rolls_back_text_backed_headers() {
-        unsafe {
-            let hdr = sam_hdr_init();
-            assert!(!hdr.is_null());
-            assert_eq!(
-                sam_hdr_add_line(
-                    hdr,
-                    c"SQ".as_ptr(),
-                    &[
-                        (c"SN".as_ptr(), c"chr1".as_ptr()),
-                        (c"LN".as_ptr(), c"10".as_ptr())
-                    ],
-                ),
-                0
-            );
-            let len_after_first = sam_hdr_length(hdr);
 
-            assert_eq!(
-                sam_hdr_add_line(
-                    hdr,
-                    c"SQ".as_ptr(),
-                    &[
-                        (c"SN".as_ptr(), c"chr1".as_ptr()),
-                        (c"LN".as_ptr(), c"20".as_ptr())
-                    ],
-                ),
-                -1
-            );
-            assert_eq!(sam_hdr_length(hdr), len_after_first);
-            assert_eq!(sam_hdr_nref(hdr), 1);
-            assert_eq!(sam_hdr_tid2len(hdr, 0), 10);
 
-            assert_eq!(
-                sam_hdr_add_line(hdr, c"XX".as_ptr(), &[(c"ID".as_ptr(), c"x".as_ptr())]),
-                -1
-            );
-            assert_eq!(
-                sam_hdr_add_line(hdr, c"RG".as_ptr(), &[(c"bad:key".as_ptr(), c"x".as_ptr())],),
-                -1
-            );
-            assert_eq!(
-                sam_hdr_add_line(
-                    hdr,
-                    c"CO".as_ptr(),
-                    &[(c"bad\ncomment".as_ptr(), std::ptr::null())]
-                ),
-                -1
-            );
-            assert_eq!(sam_hdr_length(hdr), len_after_first);
 
-            // Invalid input is rejected by validation before the hrecs dispatch,
-            // so it is rejected regardless of whether the header is hrecs-backed.
-            // The successful hrecs-backed add path is covered by
-            // sam_hdr_add_line_and_pg_match_reference_with_hrecs.
-            sam_hdr_destroy(hdr);
-        }
-    }
-
-    #[test]
-    fn sam_hdr_add_lines_rejects_duplicate_sq_names_without_changing_header() {
-        unsafe {
-            let hdr = sam_hdr_init();
-            assert!(!hdr.is_null());
-
-            let first = b"@SQ\tSN:chr1\tLN:10\n";
-            assert_eq!(
-                sam_hdr_add_lines(hdr, first.as_ptr().cast(), first.len()),
-                0
-            );
-            assert_eq!(sam_hdr_nref(hdr), 1);
-            assert_eq!(sam_hdr_tid2len(hdr, 0), 10);
-            assert_eq!(sam_hdr_length(hdr), first.len());
-
-            let duplicate_existing = b"@SQ\tSN:chr1\tLN:20\n";
-            assert_eq!(
-                sam_hdr_add_lines(
-                    hdr,
-                    duplicate_existing.as_ptr().cast(),
-                    duplicate_existing.len()
-                ),
-                -1
-            );
-            assert_eq!(sam_hdr_nref(hdr), 1);
-            assert_eq!(sam_hdr_tid2len(hdr, 0), 10);
-            assert_eq!(sam_hdr_length(hdr), first.len());
-            assert_eq!(
-                std::slice::from_raw_parts(sam_hdr_str(hdr).cast::<u8>(), sam_hdr_length(hdr)),
-                first
-            );
-
-            let duplicate_new = b"@SQ\tSN:chr2\tLN:20\n@SQ\tSN:chr2\tLN:20\n";
-            assert_eq!(
-                sam_hdr_add_lines(hdr, duplicate_new.as_ptr().cast(), duplicate_new.len()),
-                -1
-            );
-            assert_eq!(sam_hdr_nref(hdr), 1);
-            assert_eq!(sam_hdr_name2tid(hdr, c"chr2".as_ptr()), -1);
-            assert_eq!(sam_hdr_length(hdr), first.len());
-
-            sam_hdr_destroy(hdr);
-        }
-    }
-
-    #[test]
-    fn sam_hdr_add_lines_rejects_conflicting_text_backed_alt_names() {
-        unsafe {
-            let hdr = sam_hdr_init();
-            assert!(!hdr.is_null());
-
-            let first = b"@SQ\tSN:chr1\tLN:10\tAN:one,uno\n";
-            assert_eq!(
-                sam_hdr_add_lines(hdr, first.as_ptr().cast(), first.len()),
-                0
-            );
-            assert_eq!(sam_hdr_name2tid(hdr, c"chr1".as_ptr()), 0);
-            assert_eq!(sam_hdr_name2tid(hdr, c"one".as_ptr()), 0);
-            let len_after_first = sam_hdr_length(hdr);
-
-            let alias_matches_existing_sn = b"@SQ\tSN:chr2\tLN:20\tAN:chr1\n";
-            assert_eq!(
-                sam_hdr_add_lines(
-                    hdr,
-                    alias_matches_existing_sn.as_ptr().cast(),
-                    alias_matches_existing_sn.len()
-                ),
-                -1
-            );
-            assert_eq!(sam_hdr_length(hdr), len_after_first);
-            assert_eq!(sam_hdr_name2tid(hdr, c"chr2".as_ptr()), -1);
-
-            let sn_matches_existing_alias = b"@SQ\tSN:one\tLN:20\n";
-            assert_eq!(
-                sam_hdr_add_lines(
-                    hdr,
-                    sn_matches_existing_alias.as_ptr().cast(),
-                    sn_matches_existing_alias.len()
-                ),
-                -1
-            );
-            assert_eq!(sam_hdr_length(hdr), len_after_first);
-
-            assert_eq!(
-                sam_hdr_add_line(
-                    hdr,
-                    c"SQ".as_ptr(),
-                    &[
-                        (c"SN".as_ptr(), c"chr2".as_ptr()),
-                        (c"LN".as_ptr(), c"20".as_ptr()),
-                        (c"AN".as_ptr(), c"one".as_ptr()),
-                    ],
-                ),
-                -1
-            );
-            assert_eq!(sam_hdr_length(hdr), len_after_first);
-
-            assert_eq!(
-                sam_hdr_add_line(
-                    hdr,
-                    c"SQ".as_ptr(),
-                    &[
-                        (c"SN".as_ptr(), c"chr2".as_ptr()),
-                        (c"LN".as_ptr(), c"20".as_ptr()),
-                        (c"AN".as_ptr(), c"two,dos".as_ptr()),
-                    ],
-                ),
-                0
-            );
-            assert_eq!(sam_hdr_name2tid(hdr, c"two".as_ptr()), 1);
-            assert_eq!(sam_hdr_name2tid(hdr, c"dos".as_ptr()), 1);
-
-            sam_hdr_destroy(hdr);
-        }
-    }
-
-    #[test]
-    fn redact_header_text_clears_only_serialized_text() {
-        let text = b"@SQ\tSN:chr1\tLN:123\n";
-        unsafe {
-            let hdr = sam_hdr_parse(text.len(), text.as_ptr().cast());
-            assert!(!hdr.is_null());
-            assert!(!(*hdr).text.is_null());
-            assert_eq!(sam_hdr_nref(hdr), 1);
-            assert_eq!(sam_hdr_name2tid(hdr, c"chr1".as_ptr()), 0);
-
-            header_c_1530_redact_header_text(hdr);
-            assert_eq!((*hdr).l_text, 0);
-            assert!((*hdr).text.is_null());
-            assert_eq!(sam_hdr_length(hdr), 0);
-            assert!(sam_hdr_str(hdr).is_null());
-            assert_eq!(sam_hdr_nref(hdr), 1);
-            assert_eq!(sam_hdr_name2tid(hdr, c"chr1".as_ptr()), 0);
-            assert_eq!(sam_hdr_tid2len(hdr, 0), 123);
-
-            sam_hdr_destroy(hdr);
-        }
-    }
 
     #[test]
     fn sam_hdr_name2tid_fills_simple_target_arrays_from_text() {
@@ -20067,79 +19972,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn malformed_header_sq_lines_do_not_create_targets() {
-        unsafe {
-            let hdr = sam_hdr_init();
-            assert!(!hdr.is_null());
-
-            let zero_len = b"@SQ\tSN:zero\tLN:0\n";
-            assert_eq!(
-                sam_hdr_add_lines(hdr, zero_len.as_ptr().cast(), zero_len.len()),
-                -1
-            );
-            assert_eq!(sam_hdr_nref(hdr), 0);
-            assert_eq!(sam_hdr_length(hdr), 0);
-            assert!(sam_hdr_str(hdr).is_null());
-            assert_eq!(sam_hdr_name2tid(hdr, c"zero".as_ptr()), -1);
-
-            let conflicting_len = b"@SQ\tSN:dup\tLN:10\tLN:11\n";
-            assert_eq!(
-                sam_hdr_add_lines(hdr, conflicting_len.as_ptr().cast(), conflicting_len.len()),
-                -1
-            );
-            assert_eq!(sam_hdr_nref(hdr), 0);
-            assert_eq!(sam_hdr_length(hdr), 0);
-            assert!(sam_hdr_str(hdr).is_null());
-            assert_eq!(sam_hdr_name2tid(hdr, c"dup".as_ptr()), -1);
-
-            let duplicate_same_len = b"@SQ\tSN:same\tLN:12\tLN:12\n";
-            assert_eq!(
-                sam_hdr_add_lines(
-                    hdr,
-                    duplicate_same_len.as_ptr().cast(),
-                    duplicate_same_len.len()
-                ),
-                0
-            );
-            assert_eq!(sam_hdr_nref(hdr), 1);
-            assert_eq!(sam_hdr_name2tid(hdr, c"same".as_ptr()), 0);
-            assert_eq!(sam_hdr_tid2len(hdr, 0), 12);
-            let text_len_after_good = sam_hdr_length(hdr);
-
-            let bad_missing_len = b"@SQ\tSN:bad\tLN:\n";
-            assert_eq!(
-                sam_hdr_add_lines(hdr, bad_missing_len.as_ptr().cast(), bad_missing_len.len()),
-                -1
-            );
-            assert_eq!(sam_hdr_nref(hdr), 1);
-            assert_eq!(sam_hdr_length(hdr), text_len_after_good);
-            assert_eq!(sam_hdr_name2tid(hdr, c"bad".as_ptr()), -1);
-
-            let long = b"@SQ\tSN:long\tLN:4294967296\n";
-            assert_eq!(sam_hdr_add_lines(hdr, long.as_ptr().cast(), long.len()), 0);
-            assert_eq!(sam_hdr_nref(hdr), 2);
-            assert_eq!(sam_hdr_name2tid(hdr, c"long".as_ptr()), 1);
-            assert_eq!(sam_hdr_tid2len(hdr, 1), 4_294_967_296);
-
-            let bad_overflow = b"@SQ\tSN:huge\tLN:9223372034707292161\n";
-            assert_eq!(
-                sam_hdr_add_lines(hdr, bad_overflow.as_ptr().cast(), bad_overflow.len()),
-                -1
-            );
-            assert_eq!(sam_hdr_nref(hdr), 2);
-            assert_eq!(sam_hdr_length(hdr), text_len_after_good + long.len());
-            assert_eq!(sam_hdr_name2tid(hdr, c"huge".as_ptr()), -1);
-
-            let good = b"@SQ\tSN:chr1\tLN:10\n";
-            assert_eq!(sam_hdr_add_lines(hdr, good.as_ptr().cast(), good.len()), 0);
-            assert_eq!(sam_hdr_nref(hdr), 3);
-            assert_eq!(sam_hdr_name2tid(hdr, c"chr1".as_ptr()), 2);
-            assert_eq!(sam_hdr_tid2len(hdr, 2), 10);
-
-            sam_hdr_destroy(hdr);
-        }
-    }
 
     #[test]
     fn header_sq_target_parsing_accepts_crlf_and_u32_max_len_edges() {
@@ -20175,31 +20007,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn sam_hdr_add_lines_rejects_null_and_hrec_backed_inputs() {
-        unsafe {
-            assert_eq!(
-                sam_hdr_add_lines(std::ptr::null_mut(), c"@HD\tVN:1.6\n".as_ptr(), 11),
-                -1
-            );
-
-            let hdr = sam_hdr_init();
-            assert!(!hdr.is_null());
-            assert_eq!(sam_hdr_add_lines(hdr, std::ptr::null(), 0), -1);
-
-            let empty = c"";
-            assert_eq!(sam_hdr_add_lines(hdr, empty.as_ptr(), 0), 0);
-            assert_eq!(sam_hdr_length(hdr), 0);
-            assert!(sam_hdr_str(hdr).is_null());
-
-            let mut hrecs: sam_hrecs_t = std::mem::zeroed();
-            let line = b"@SQ\tSN:chr1\tLN:1\n";
-            (*hdr).hrecs = &mut hrecs;
-            assert_eq!(sam_hdr_add_lines(hdr, line.as_ptr().cast(), line.len()), -1);
-            (*hdr).hrecs = std::ptr::null_mut();
-            sam_hdr_destroy(hdr);
-        }
-    }
 
     #[test]
     fn sam_hdr_parse_rejects_null_text_without_leaking_header() {

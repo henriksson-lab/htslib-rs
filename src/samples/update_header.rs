@@ -63,18 +63,12 @@ pub unsafe fn samples_update_header_c_49_main(argc: c_int, argv: *mut *mut c_cha
         return ret;
     }
 
-    // TODO(P5): native sam_hdr_update_line uses a slice signature, the variadic
-    // C entry-point is libhts-only
-    if hts_sys::sam_hdr_update_line(
-        in_samhdr.cast(),
-        header,
-        id,
-        idval,
-        tag,
-        val,
-        std::ptr::null::<c_char>(),
-    ) < 0
-    {
+    // Stay on the native slice-arg sam_hdr_update_line so the header's hrecs
+    // is populated by Rust code (matching layout). Routing through hts_sys'
+    // variadic C entry-point would write a C-allocated sam_hrecs_t into
+    // (*h).hrecs that our native sam_hdr_rebuild/sam_hdr_write cannot
+    // interpret afterwards.
+    if sam::sam_hdr_update_line(in_samhdr, header, id, idval, &[(tag, val)]) < 0 {
         libc::printf(c"Failed to update data\n".as_ptr());
     } else if sam::sam_hdr_write(outfile, in_samhdr) < 0 {
         libc::printf(c"Failed to write output\n".as_ptr());
