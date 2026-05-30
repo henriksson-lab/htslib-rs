@@ -5632,7 +5632,7 @@ unsafe extern "C" fn hread(
     return if n == nbytes || (*fp).mobile() == 0 {
         n as ssize_t
     } else {
-        crate::htslib_rs::hfile::hread2(fp.cast(), buffer, nbytes, n)
+        crate::htslib_rs::hfile::hread2(fp.cast(), buffer, nbytes, n) as ssize_t
     };
 }
 #[inline]
@@ -5687,7 +5687,7 @@ unsafe extern "C" fn hwrite(
     }
     let mut n_0: size_t = (*fp).limit.offset_from((*fp).begin) as ::core::ffi::c_long as size_t;
     if nbytes >= n_0 && (*fp).begin == (*fp).buffer {
-        return crate::htslib_rs::hfile::hwrite2(fp.cast(), buffer, nbytes, 0 as size_t);
+        return crate::htslib_rs::hfile::hwrite2(fp.cast(), buffer, nbytes, 0 as size_t) as ssize_t;
     }
     if n_0 > nbytes {
         n_0 = nbytes;
@@ -5697,7 +5697,7 @@ unsafe extern "C" fn hwrite(
     return if n_0 == nbytes {
         n_0 as ssize_t
     } else {
-        crate::htslib_rs::hfile::hwrite2(fp.cast(), buffer, nbytes, n_0)
+        crate::htslib_rs::hfile::hwrite2(fp.cast(), buffer, nbytes, n_0) as ssize_t
     };
 }
 pub const BAM_CMATCH: ::core::ffi::c_int = 0 as ::core::ffi::c_int;

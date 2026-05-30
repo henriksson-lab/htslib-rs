@@ -131,6 +131,21 @@ pub struct hFILE_s3 {
     keep_going: c_int,
 }
 
+// Concurrency note (audit 2026-05):
+//
+// `HFILE_S3_USERAGENT` is a `static mut kstring_t` that mirrors the file-scope
+// `useragent` in `htslib/hfile_s3.c`. It is initialized exactly once inside
+// `hfile_s3_c_2436_PLUGIN_GLOBAL`, which is dispatched from
+// `hfile_c_1111_load_hfile_plugins` under the `hfile_plugin_state` mutex
+// (see `src/hfile.rs`). After init the `s`/`l`/`m` fields are not mutated
+// (only the immutable `.s` pointer is read via `CURLOPT_USERAGENT`) until
+// `hfile_s3_c_2426_s3_exit` runs as the plugin destroy callback at process
+// shutdown.
+//
+// SAFETY: init-once-then-read, protected by the plugin-load mutex. Read
+// sites only consume `HFILE_S3_USERAGENT.s` (a `*const c_char`) by value and
+// hand it to libcurl, which performs its own internal synchronization for
+// per-easy-handle option storage.
 static mut HFILE_S3_USERAGENT: kstring_t = kstring_t {
     l: 0,
     m: 0,

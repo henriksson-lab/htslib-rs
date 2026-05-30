@@ -1272,13 +1272,11 @@ pub unsafe fn cram_store_container(
     dat: *mut c_char,
     size: *mut c_int,
 ) -> c_int {
-    // TODO(P5): no native cram_store_container yet; needs translation
-    hts_sys::cram_store_container(fd.cast(), c, dat, size)
+    cram_cram_io_c_3960_cram_store_container(fd.cast(), c.cast(), dat, size)
 }
 
 pub unsafe fn cram_write_container(fd: *mut cram_fd, h: *mut cram_container) -> c_int {
-    // TODO(P5): no native cram_write_container yet; needs translation
-    hts_sys::cram_write_container(fd.cast(), h)
+    cram_cram_io_c_4023_cram_write_container(fd.cast(), h.cast())
 }
 
 pub unsafe fn cram_num_containers_between(
@@ -1375,8 +1373,7 @@ pub unsafe fn cram_filter_container(
 }
 
 pub unsafe fn cram_open(filename: *const c_char, mode: *const c_char) -> *mut cram_fd {
-    // TODO(P5): no native cram_open yet; needs translation
-    hts_sys::cram_open(filename, mode).cast()
+    cram_cram_io_c_5264_cram_open(filename, mode)
 }
 
 pub unsafe fn cram_dopen(
@@ -1384,8 +1381,7 @@ pub unsafe fn cram_dopen(
     filename: *const c_char,
     mode: *const c_char,
 ) -> *mut cram_fd {
-    // TODO(P5): no native cram_dopen yet; needs translation
-    hts_sys::cram_dopen(fp.cast(), filename, mode).cast()
+    cram_cram_io_c_5289_cram_dopen(fp, filename, mode)
 }
 
 pub unsafe fn cram_seek(fd: *mut cram_fd, offset: libc::off_t, whence: c_int) -> c_int {
@@ -1393,13 +1389,74 @@ pub unsafe fn cram_seek(fd: *mut cram_fd, offset: libc::off_t, whence: c_int) ->
 }
 
 pub unsafe fn cram_flush(fd: *mut cram_fd) -> c_int {
-    // TODO(P5): no native cram_flush yet; needs translation
-    hts_sys::cram_flush(fd.cast())
+    cram_cram_io_c_5446_cram_flush(fd)
+}
+
+/// original: cram_flush (htslib/cram/cram_io.c:5446)
+///
+/// Flushes a CRAM file. Useful for when writing to stdout without wishing to
+/// close the stream. Byte-faithful 1:1 translation.
+///
+/// MT-pool deviation: when fd->pool is set, the bridge's
+/// `cram_cram_io_c_4275_cram_flush_container_mt` runs the flush
+/// single-threaded (the C cram_flush_thread / cram_flush_result / reset_metrics
+/// helpers are not yet translated). On-disk output is bit-identical to the
+/// MT path; only throughput is lost for that one flush.
+pub unsafe fn cram_cram_io_c_5446_cram_flush(fd: *mut cram_fd) -> c_int {
+    if fd.is_null() {
+        return -1;
+    }
+    let mut ret: c_int = 0;
+
+    let fdl = fd.cast::<cram_fd_layout>();
+    if (*fdl).mode == b'w' as c_int && !(*fdl).ctr.is_null() {
+        let ctr = (*fdl).ctr;
+        if !(*ctr).slice.is_null() {
+            // cram_update_curr_slice lives in the mirror.
+            crate::cram_mirror::cram_encode::cram_update_curr_slice(
+                ctr.cast(),
+                (*fdl).version,
+            );
+        }
+
+        if -1
+            == crate::cram_flush_bridge::cram_cram_io_c_4275_cram_flush_container_mt(
+                fd,
+                ctr.cast(),
+            )
+        {
+            ret = -1;
+        }
+
+        cram_cram_io_c_3705_cram_free_container(ctr.cast());
+        if (*fdl).ctr_mt == (*fdl).ctr {
+            (*fdl).ctr_mt = std::ptr::null_mut();
+        }
+        (*fdl).ctr = std::ptr::null_mut();
+    }
+
+    ret
 }
 
 pub unsafe fn cram_close(fd: *mut cram_fd) -> c_int {
-    // TODO(P5): no native cram_close yet; needs translation
-    hts_sys::cram_close(fd.cast())
+    cram_cram_io_c_5558_cram_close(fd)
+}
+
+// Public shims bridging production's hts_sys-aliased cram types to the
+// native flush helpers in `cram_flush_bridge`. The pointer casts are pure
+// type-system noise: production's `cram_fd` / `cram_container` are aliases
+// onto `hts_sys::*`, which are #[repr(C)] and byte-identical to the
+// concrete struct types the mirror exposes.
+pub unsafe fn cram_flush_container(fd: *mut cram_fd, c: *mut cram_container) -> c_int {
+    crate::cram_flush_bridge::cram_cram_io_c_4143_cram_flush_container(fd, c)
+}
+
+pub unsafe fn cram_flush_container_mt(fd: *mut cram_fd, c: *mut cram_container) -> c_int {
+    crate::cram_flush_bridge::cram_cram_io_c_4275_cram_flush_container_mt(fd, c)
+}
+
+pub unsafe fn cram_write_eof_block(fd: *mut cram_fd) -> c_int {
+    crate::cram_flush_bridge::cram_cram_io_c_5474_cram_write_eof_block(fd)
 }
 
 pub unsafe fn cram_eof(fd: *mut cram_fd) -> c_int {
@@ -1605,10 +1662,25 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
                 }
             }
             x if x == crate::htslib_rs::cram::CRAM_OPT_RANGE => {
-                // Native va_list element is layout-identical to the C one; cast
-                // the pointer when forwarding to the C library.
-                // TODO(P5): no native CRAM_OPT_RANGE handler yet; falls back to C cram_set_voption
-                return hts_sys::cram_set_voption(fd.cast(), opt, args.cast());
+                // Byte-faithful translation of htslib/cram/cram_io.c:5792-5801:
+                //
+                //   int r = cram_seek_to_refpos(fd, va_arg(args, cram_range *));
+                //   pthread_mutex_lock(&fd->range_lock);
+                //   if (fd->range.refid != -2)
+                //       fd->required_fields |= SAM_POS;
+                //   pthread_mutex_unlock(&fd->range_lock);
+                //   return r;
+                let range_ptr = cram_voption_va_arg_ptr::<cram_range_layout>(args);
+                let r = crate::cram_flush_bridge::cram_cram_index_c_573_cram_seek_to_refpos(
+                    fd,
+                    range_ptr.cast(),
+                );
+                libc::pthread_mutex_lock(&mut (*fdl).range_lock);
+                if (*fdl).range.refid != -2 {
+                    (*fdl).required_fields |= crate::htslib_rs::cram::SAM_POS;
+                }
+                libc::pthread_mutex_unlock(&mut (*fdl).range_lock);
+                return r;
             }
             x if x == CRAM_OPT_RANGE_NOSEEK => {
                 return cram_voption_set_range_noseek(
@@ -3460,6 +3532,13 @@ pub unsafe fn cram_cram_io_h_646_cram_hfile(fd: *mut hts_sys::cram_fd) -> *mut h
 
 pub unsafe fn cram_cram_io_c_5662_cram_eof(fd: *mut cram_fd) -> c_int {
     (*fd.cast::<cram_fd_layout>()).eof
+}
+
+// Accessor used by `cram_flush_bridge` to peek at the cram_fd's `idxfp`
+// field without re-declaring the (large, private) `cram_fd_layout` struct
+// outside this module.
+pub unsafe fn cram_fd_idxfp_get(fd: *mut cram_fd) -> *mut BGZF {
+    (*fd.cast::<cram_fd_layout>()).idxfp
 }
 
 /// `cram_seek` (htslib/cram/cram_io.c:5431).
@@ -8873,6 +8952,587 @@ pub unsafe fn cram_cram_io_c_4698_cram_free_file_def(def: *mut cram_file_def_lay
     }
 }
 
+/// original: cram_read_SAM_hdr (htslib/cram/cram_io.c:4717)
+///
+/// Reads the SAM header from the first CRAM data block of a CRAM file. Reads
+/// the SAM-header container (content_type=FILE_HEADER, ref_seq_id=0),
+/// decompresses the first block (which holds an int32 length-prefix followed
+/// by the SAM header text), parses the text into a native `sam_hdr_t`, and
+/// returns it.
+///
+/// Returns the freshly-built header on success, NULL on failure.
+pub unsafe fn cram_cram_io_c_4717_cram_read_SAM_hdr(fd: *mut cram_fd) -> *mut sam_hdr_t {
+    let fdl = fd.cast::<cram_fd_layout>();
+    let major = (*fdl).version >> 8;
+
+    // v1.x stores the header inline (no container). Our consumers only see
+    // 2.x/3.x/4.x CRAMs, so port the 2+ path and leave v1 unsupported; mirrors
+    // what the live decode pipeline already accepts.
+    if major == 1 {
+        return std::ptr::null_mut();
+    }
+
+    let c = cram_cram_io_c_3788_cram_read_container(fd.cast());
+    if c.is_null() {
+        return std::ptr::null_mut();
+    }
+    let cl = c.cast::<cram_container_layout>();
+    (*fdl).first_container += (*cl).length as libc::off_t + (*cl).offset as libc::off_t;
+    (*fdl).curr_position = (*fdl).first_container;
+
+    if (*cl).num_blocks < 1 {
+        cram_cram_io_c_3705_cram_free_container(c);
+        return std::ptr::null_mut();
+    }
+
+    let b = cram_cram_io_c_1414_cram_read_block(fd.cast());
+    if b.is_null() {
+        cram_cram_io_c_3705_cram_free_container(c);
+        return std::ptr::null_mut();
+    }
+    if cram_cram_io_c_1576_cram_uncompress_block(b) != 0 {
+        cram_cram_io_c_3705_cram_free_container(c);
+        cram_cram_io_c_1565_cram_free_block(b);
+        return std::ptr::null_mut();
+    }
+
+    let vv = &(*fdl).vv;
+    let varint_size = vv.varint_size.expect("varint_size set by cram_init_tables");
+    let crc_extra = if major >= 3 { 4 } else { 0 };
+
+    let bl = b.cast::<cram_block_layout>();
+    let mut len: i64 = (*bl).comp_size as i64
+        + 2
+        + crc_extra
+        + varint_size((*bl).content_id as i64) as i64
+        + varint_size((*bl).uncomp_size as i64) as i64
+        + varint_size((*bl).comp_size as i64) as i64;
+
+    /* Extract header from 1st block */
+    let mut header_len: i32 = 0;
+    if int32_get_blk(b, &mut header_len) == -1
+        || header_len < 0
+        || ((*bl).uncomp_size as i64) - 4 < header_len as i64
+    {
+        cram_cram_io_c_3705_cram_free_container(c);
+        cram_cram_io_c_1565_cram_free_block(b);
+        return std::ptr::null_mut();
+    }
+    let header = malloc(header_len as u64 + 1).cast::<c_char>();
+    if header.is_null() {
+        cram_cram_io_c_3705_cram_free_container(c);
+        cram_cram_io_c_1565_cram_free_block(b);
+        return std::ptr::null_mut();
+    }
+    // memcpy(header, BLOCK_END(b), header_len) where BLOCK_END = &b->data[b->byte]
+    memcpy(
+        header.cast(),
+        (*bl).data.add((*bl).byte).cast(),
+        header_len as u64,
+    );
+    *header.add(header_len as usize) = 0;
+    cram_cram_io_c_1565_cram_free_block(b);
+
+    /* Consume any remaining blocks */
+    for _ in 1..(*cl).num_blocks {
+        let b2 = cram_cram_io_c_1414_cram_read_block(fd.cast());
+        if b2.is_null() {
+            cram_cram_io_c_3705_cram_free_container(c);
+            free(header.cast());
+            return std::ptr::null_mut();
+        }
+        let bl2 = b2.cast::<cram_block_layout>();
+        len += (*bl2).comp_size as i64
+            + 2
+            + crc_extra
+            + varint_size((*bl2).content_id as i64) as i64
+            + varint_size((*bl2).uncomp_size as i64) as i64
+            + varint_size((*bl2).comp_size as i64) as i64;
+        cram_cram_io_c_1565_cram_free_block(b2);
+    }
+
+    // Consume padding
+    if (*cl).length > 0 && len > 0 && (*cl).length as i64 > len {
+        let pad_len = (*cl).length as i64 - len;
+        let pads = malloc(pad_len as u64).cast::<c_char>();
+        if pads.is_null() {
+            cram_cram_io_c_3705_cram_free_container(c);
+            free(header.cast());
+            return std::ptr::null_mut();
+        }
+        if pad_len
+            != htslib_hfile_h_247_hread((*fdl).fp, pads.cast(), pad_len as usize) as i64
+        {
+            cram_cram_io_c_3705_cram_free_container(c);
+            free(header.cast());
+            free(pads.cast());
+            return std::ptr::null_mut();
+        }
+        free(pads.cast());
+    }
+
+    cram_cram_io_c_3705_cram_free_container(c);
+
+    /* Parse */
+    let hdr = crate::htslib_rs::sam::sam_hdr_init();
+    if hdr.is_null() {
+        free(header.cast());
+        return std::ptr::null_mut();
+    }
+
+    if crate::htslib_rs::sam::sam_hdr_add_lines(hdr, header, header_len as usize) == -1 {
+        free(header.cast());
+        crate::htslib_rs::sam::sam_hdr_destroy(hdr);
+        return std::ptr::null_mut();
+    }
+
+    (*hdr).l_text = header_len as usize;
+    (*hdr).text = header;
+
+    hdr
+}
+
+// Default CRAM version numbers (htslib/cram/cram_io.c:5254).
+const CRAM_OPEN_DEFAULT_MAJOR: c_int = 3;
+const CRAM_OPEN_DEFAULT_MINOR: c_int = 1;
+
+/// original: cram_dopen (htslib/cram/cram_io.c:5289)
+///
+/// Wraps an existing hFILE as a CRAM file descriptor. For read mode reads the
+/// file-def + SAM header; for write mode initialises a blank file-def and
+/// leaves the SAM header to be written later. The fd is allocated via
+/// `calloc` so byte-identical to C `calloc(1, sizeof(cram_fd))`.
+pub unsafe fn cram_cram_io_c_5289_cram_dopen(
+    fp: *mut hFILE,
+    filename: *const c_char,
+    mode: *const c_char,
+) -> *mut cram_fd {
+    let fd = calloc(1, std::mem::size_of::<cram_fd_layout>() as u64).cast::<cram_fd_layout>();
+    if fd.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    (*fd).level = CRAM_DEFAULT_LEVEL;
+    let mut i: usize = 0;
+    loop {
+        let c = *mode.add(i);
+        if c == 0 {
+            break;
+        }
+        if c >= b'0' as c_char && c <= b'9' as c_char {
+            (*fd).level = (c - b'0' as c_char) as c_int;
+            break;
+        }
+        i += 1;
+    }
+
+    (*fd).fp = fp;
+    (*fd).mode = *mode as c_int;
+    (*fd).first_container = 0;
+    (*fd).curr_position = 0;
+
+    if (*fd).mode == b'r' as c_int {
+        /* Reader */
+        let def = cram_cram_io_c_4660_cram_read_file_def(fd.cast());
+        if def.is_null() {
+            free(fd.cast());
+            return std::ptr::null_mut();
+        }
+        (*fd).file_def = def.cast();
+
+        (*fd).version = (*def).major_version as c_int * 256 + (*def).minor_version as c_int;
+
+        cram_cram_io_c_5170_cram_init_tables(fd.cast());
+
+        let hdr = cram_cram_io_c_4717_cram_read_SAM_hdr(fd.cast());
+        if hdr.is_null() {
+            cram_cram_io_c_4698_cram_free_file_def(def);
+            free(fd.cast());
+            return std::ptr::null_mut();
+        }
+        (*fd).header = hdr.cast();
+    } else {
+        /* Writer */
+        let def = calloc(1, std::mem::size_of::<cram_file_def_layout>() as u64)
+            .cast::<cram_file_def_layout>();
+        if def.is_null() {
+            free(fd.cast());
+            return std::ptr::null_mut();
+        }
+
+        (*fd).file_def = def.cast();
+
+        (*def).magic[0] = b'C' as c_char;
+        (*def).magic[1] = b'R' as c_char;
+        (*def).magic[2] = b'A' as c_char;
+        (*def).magic[3] = b'M' as c_char;
+        (*def).major_version = 0; // Indicator to write file def later.
+        (*def).minor_version = 0;
+        libc::memset((*def).file_id.as_mut_ptr().cast(), 0, 20);
+        libc::strncpy((*def).file_id.as_mut_ptr(), filename, 20);
+
+        (*fd).version = CRAM_OPEN_DEFAULT_MAJOR * 256 + CRAM_OPEN_DEFAULT_MINOR;
+        cram_cram_io_c_5170_cram_init_tables(fd.cast());
+
+        /* SAM header written later along with this file_def */
+    }
+
+    // prefix = strdup(basename(filename))
+    let bn = libc::strrchr(filename, b'/' as c_int);
+    let bn = if bn.is_null() {
+        filename
+    } else {
+        bn.add(1)
+    };
+    (*fd).prefix = strdup(bn);
+    if (*fd).prefix.is_null() {
+        if !(*fd).file_def.is_null() {
+            cram_cram_io_c_4698_cram_free_file_def((*fd).file_def.cast());
+        }
+        if !(*fd).header.is_null() {
+            crate::htslib_rs::sam::sam_hdr_destroy((*fd).header.cast());
+        }
+        free(fd.cast());
+        return std::ptr::null_mut();
+    }
+    (*fd).first_base = -1;
+    (*fd).last_base = -1;
+    (*fd).record_counter = 0;
+
+    (*fd).ctr = std::ptr::null_mut();
+    (*fd).ctr_mt = std::ptr::null_mut();
+    (*fd).refs = cram_cram_io_c_2467_refs_create().cast();
+    if (*fd).refs.is_null() {
+        cram_cram_io_c_4698_cram_free_file_def((*fd).file_def.cast());
+        if !(*fd).header.is_null() {
+            crate::htslib_rs::sam::sam_hdr_destroy((*fd).header.cast());
+        }
+        free((*fd).prefix.cast());
+        free(fd.cast());
+        return std::ptr::null_mut();
+    }
+    (*fd).ref_id = -2;
+    (*fd).ref_ = std::ptr::null_mut();
+
+    (*fd).decode_md = 0;
+    (*fd).seqs_per_slice = CRAM_DEFAULT_SEQS_PER_SLICE;
+    (*fd).bases_per_slice = CRAM_DEFAULT_BASES_PER_SLICE;
+    (*fd).slices_per_container = 1; // SLICE_PER_CNT
+    (*fd).embed_ref = -1;
+    (*fd).no_ref = 0;
+    (*fd).no_ref_counter = 0;
+    (*fd).ap_delta = 0;
+    (*fd).ignore_md5 = 0;
+    (*fd).lossy_read_names = 0;
+    (*fd).use_bz2 = 0;
+    let major = (*fd).version >> 8;
+    let minor = (*fd).version & 0xff;
+    (*fd).use_rans = if major >= 3 { 1 } else { 0 };
+    (*fd).use_tok = if major >= 3 && minor >= 1 { 1 } else { 0 };
+    (*fd).use_lzma = 0;
+    (*fd).multi_seq = -1;
+    (*fd).multi_seq_user = -1;
+    (*fd).unsorted = 0;
+    (*fd).shared_ref = 0;
+    (*fd).store_md = 0;
+    (*fd).store_nm = 0;
+    (*fd).last_ri_count = 0;
+
+    (*fd).index = std::ptr::null_mut();
+    (*fd).own_pool = 0;
+    (*fd).pool = std::ptr::null_mut();
+    (*fd).rqueue = std::ptr::null_mut();
+    (*fd).job_pending = std::ptr::null_mut();
+    (*fd).ooc = 0;
+    (*fd).required_fields = c_int::MAX as c_uint;
+
+    libc::pthread_mutex_init(&mut (*fd).metrics_lock, std::ptr::null());
+    libc::pthread_mutex_init(&mut (*fd).ref_lock, std::ptr::null());
+    libc::pthread_mutex_init(&mut (*fd).range_lock, std::ptr::null());
+    libc::pthread_mutex_init(&mut (*fd).bam_list_lock, std::ptr::null());
+
+    for k in 0..CRAM_DS_END {
+        (*fd).m[k] = cram_cram_io_c_2327_cram_new_metrics().cast();
+        if (*fd).m[k].is_null() {
+            cram_cram_io_c_5560_cram_dopen_cleanup_err(fd);
+            return std::ptr::null_mut();
+        }
+    }
+
+    // fd->tags_used = kh_init(m_metrics)  ==  calloc(1, sizeof(kh_m_metrics_t))
+    (*fd).tags_used =
+        calloc(1, std::mem::size_of::<kh_generic_layout>() as u64).cast::<c_void>();
+    if (*fd).tags_used.is_null() {
+        cram_cram_io_c_5560_cram_dopen_cleanup_err(fd);
+        return std::ptr::null_mut();
+    }
+
+    (*fd).range.refid = -2; // no ref.
+    (*fd).eof = 1;
+    (*fd).ref_fn = std::ptr::null_mut();
+
+    (*fd).bl = std::ptr::null_mut();
+
+    /* Initialise dummy refs from the @SQ headers (only meaningful if header set) */
+    if cram_cram_io_c_2768_refs_from_header(fd.cast()) == -1 {
+        cram_cram_io_c_5560_cram_dopen_cleanup_err(fd);
+        return std::ptr::null_mut();
+    }
+
+    fd.cast()
+}
+
+// Internal helper: free up a partially-built cram_fd from the C `err:` label
+// of cram_dopen (htslib/cram/cram_io.c:5418). Mirrors the cascading free path
+// the C original would take from goto err, including the cram_close-style
+// teardown of any allocations that completed before failure.
+unsafe fn cram_cram_io_c_5560_cram_dopen_cleanup_err(fd: *mut cram_fd_layout) {
+    // metrics
+    for k in 0..CRAM_DS_END {
+        if !(*fd).m[k].is_null() {
+            free((*fd).m[k].cast());
+        }
+    }
+    if !(*fd).tags_used.is_null() {
+        let h = (*fd).tags_used.cast::<kh_generic_layout>();
+        if !(*h).flags.is_null() {
+            free((*h).flags.cast());
+        }
+        if !(*h).keys.is_null() {
+            free((*h).keys.cast());
+        }
+        if !(*h).vals.is_null() {
+            free((*h).vals.cast());
+        }
+        free(h.cast());
+    }
+    libc::pthread_mutex_destroy(&mut (*fd).metrics_lock);
+    libc::pthread_mutex_destroy(&mut (*fd).ref_lock);
+    libc::pthread_mutex_destroy(&mut (*fd).range_lock);
+    libc::pthread_mutex_destroy(&mut (*fd).bam_list_lock);
+    if !(*fd).refs.is_null() {
+        cram_cram_io_c_2427_refs_free((*fd).refs.cast());
+    }
+    if !(*fd).file_def.is_null() {
+        cram_cram_io_c_4698_cram_free_file_def((*fd).file_def.cast());
+    }
+    if !(*fd).header.is_null() {
+        crate::htslib_rs::sam::sam_hdr_destroy((*fd).header.cast());
+    }
+    if !(*fd).prefix.is_null() {
+        free((*fd).prefix.cast());
+    }
+    free(fd.cast());
+}
+
+/// original: cram_open (htslib/cram/cram_io.c:5264)
+///
+/// Open a CRAM file by name for read ("r") or write ("w"). Returns the fd on
+/// success or NULL on failure.
+pub unsafe fn cram_cram_io_c_5264_cram_open(
+    filename: *const c_char,
+    mode: *const c_char,
+) -> *mut cram_fd {
+    let mut fmode: [c_char; 3] = [*mode, 0, 0];
+    if libc::strlen(mode) > 1
+        && (*mode.add(1) == b'b' as c_char || *mode.add(1) == b'c' as c_char)
+    {
+        fmode[1] = b'b' as c_char;
+    }
+
+    let fp = hopen(filename, fmode.as_ptr());
+    if fp.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let fd = cram_cram_io_c_5289_cram_dopen(fp, filename, mode);
+    if fd.is_null() {
+        hclose_abruptly(fp);
+    }
+    fd
+}
+
+/// original: cram_close (htslib/cram/cram_io.c:5558)
+///
+/// Closes a CRAM file. For READ mode this drains any decode-queue work (a
+/// no-op for single-threaded fds, which the live read tests always use),
+/// then releases every per-fd allocation. For WRITE mode it now drives the
+/// native `cram_flush_container_mt` + `cram_write_eof_block` pair from the
+/// `cram_flush_bridge` translation before tearing down. The pool/rqueue,
+/// spare_bams (`bl`), and loaded-CRAI (`index`) paths still fall back to
+/// the C library because their dependent helpers (cram_flush_thread /
+/// cram_flush_result / reset_metrics / free_bam_list / cram_index_free)
+/// have not been translated yet. Returns 0 on success, -1 on failure.
+pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
+    if fd.is_null() {
+        return -1;
+    }
+    let fdl = fd.cast::<cram_fd_layout>();
+
+    // Decide upfront whether the native teardown can handle this fd. The
+    // following C-only paths are not yet ported and require the libhts
+    // close to be safe:
+    //   * pool/rqueue set → multi-threaded drain + hts_tpool_process_destroy.
+    //     (We have native `hts_tpool_process_*` but the cram-side helpers
+    //     `cram_flush_thread` / `cram_flush_result` / `reset_metrics` are
+    //     not yet translated; the MT path needs all of those.)
+    //
+    // The `bl` (spare_bams chain) and `index` (loaded CRAI tree) paths are
+    // now handled natively below via the cram_flush_bridge translations of
+    // `free_bam_list` (htslib/cram/cram_io.c:3697) and `cram_index_free`
+    // (htslib/cram/cram_index.c:374).
+    let needs_c_close = !(*fdl).pool.is_null() || !(*fdl).rqueue.is_null();
+    if needs_c_close {
+        return hts_sys::cram_close(fd.cast());
+    }
+
+    let mut ret: c_int = 0;
+
+    // C: if (fd->mode == 'w' && fd->ctr) { ... flush ... }
+    if (*fdl).mode == b'w' as c_int && !(*fdl).ctr.is_null() {
+        let ctr_w = (*fdl).ctr;
+        if !(*ctr_w).slice.is_null() {
+            crate::cram_mirror::cram_encode::cram_update_curr_slice(
+                ctr_w.cast(),
+                (*fdl).version,
+            );
+        }
+        if -1
+            == crate::cram_flush_bridge::cram_cram_io_c_4275_cram_flush_container_mt(
+                fd,
+                ctr_w.cast(),
+            )
+        {
+            ret = -1;
+        }
+    }
+
+    // cram_drain_rqueue / hts_tpool_process_flush: pool/rqueue NULL ⇒ no-op.
+
+    // C: if (ret == 0 && fd->mode == 'w') cram_write_eof_block(fd)
+    if ret == 0 && (*fdl).mode == b'w' as c_int {
+        if 0 != crate::cram_flush_bridge::cram_cram_io_c_5474_cram_write_eof_block(fd) {
+            ret = -1;
+        }
+    }
+
+    // cram_drain_rqueue: early `if (!fd->pool || !fd->rqueue) return;`
+    // → single-threaded read mode, no-op.
+
+    libc::pthread_mutex_destroy(&mut (*fdl).metrics_lock);
+    libc::pthread_mutex_destroy(&mut (*fdl).ref_lock);
+    libc::pthread_mutex_destroy(&mut (*fdl).range_lock);
+    libc::pthread_mutex_destroy(&mut (*fdl).bam_list_lock);
+
+    // C (cram_io.c:5601-5607): walk the spare_bams chain freeing each per-slot
+    // bam1_t array and the chain node itself.
+    //
+    //     for (bl = fd->bl; bl; bl = next) {
+    //         int max_rec = fd->seqs_per_slice * fd->slices_per_container;
+    //         next = bl->next;
+    //         free_bam_list(bl->bams, max_rec);
+    //         free(bl);
+    //     }
+    //
+    // The struct layout is htslib/cram/cram_structs.h:747-750: { bams; next; }.
+    #[repr(C)]
+    struct SpareBamsLayout {
+        bams: *mut *mut bam1_t,
+        next: *mut SpareBamsLayout,
+    }
+    let mut bl = (*fdl).bl.cast::<SpareBamsLayout>();
+    while !bl.is_null() {
+        let max_rec = (*fdl).seqs_per_slice * (*fdl).slices_per_container;
+        let next = (*bl).next;
+        crate::cram_flush_bridge::cram_cram_io_c_3697_free_bam_list((*bl).bams, max_rec);
+        free(bl.cast());
+        bl = next;
+    }
+
+    if hclose((*fdl).fp) != 0 {
+        ret = -1;
+    }
+
+    if !(*fdl).file_def.is_null() {
+        cram_cram_io_c_4698_cram_free_file_def((*fdl).file_def.cast());
+    }
+
+    if !(*fdl).header.is_null() {
+        crate::htslib_rs::sam::sam_hdr_destroy((*fdl).header.cast());
+    }
+
+    free((*fdl).prefix.cast());
+
+    if !(*fdl).ctr.is_null() {
+        cram_cram_io_c_3705_cram_free_container((*fdl).ctr.cast());
+    }
+
+    if !(*fdl).ctr_mt.is_null() && (*fdl).ctr_mt != (*fdl).ctr {
+        cram_cram_io_c_3705_cram_free_container((*fdl).ctr_mt.cast());
+    }
+
+    if !(*fdl).refs.is_null() {
+        cram_cram_io_c_2427_refs_free((*fdl).refs.cast());
+    }
+    if !(*fdl).ref_free.is_null() {
+        free((*fdl).ref_free.cast());
+    }
+
+    for k in 0..CRAM_DS_END {
+        if !(*fdl).m[k].is_null() {
+            free((*fdl).m[k].cast());
+        }
+    }
+
+    if !(*fdl).tags_used.is_null() {
+        // For read-mode CRAM fds, tags_used is only populated by the encode
+        // side; here it's the empty kh_init(m_metrics) table allocated at
+        // open. khash buckets are NULL ⇒ free the (NULL) arrays and the
+        // table.
+        let h = (*fdl).tags_used.cast::<kh_generic_layout>();
+        if !(*h).flags.is_null() {
+            // Walk vals freeing kh_val entries (cram_metrics*) if any exist.
+            for k in 0..(*h).n_buckets {
+                if ((*(*h).flags.add((k >> 4) as usize) >> ((k & 0x0f) << 1)) & 3) != 0 {
+                    continue;
+                }
+                // m_metrics values are cram_metrics*. cram_metrics is just a
+                // freeable malloc'd struct in C (cram_new_metrics).
+                let val_ptr = (*h).vals.cast::<*mut c_void>().add(k as usize);
+                let v = *val_ptr;
+                if !v.is_null() {
+                    free(v);
+                }
+            }
+            free((*h).flags.cast());
+        }
+        if !(*h).keys.is_null() {
+            free((*h).keys.cast());
+        }
+        if !(*h).vals.is_null() {
+            free((*h).vals.cast());
+        }
+        free(h.cast());
+    }
+
+    // C (cram_io.c:5646-5647): if (fd->index) cram_index_free(fd);
+    if !(*fdl).index.is_null() {
+        crate::cram_flush_bridge::cram_cram_index_c_374_cram_index_free(fd);
+    }
+
+    // idxfp: only set when a CRAI index was loaded; we don't load one in the
+    // native open path, so this is NULL.
+    if !(*fdl).idxfp.is_null() {
+        if crate::htslib_rs::bgzf::bgzf_close((*fdl).idxfp) < 0 {
+            ret = -1;
+        }
+    }
+
+    free(fdl.cast());
+
+    ret
+}
+
 pub unsafe fn cram_cram_io_c_1565_cram_free_block(b: *mut hts_sys::cram_block) {
     if b.is_null() {
         return;
@@ -8911,6 +9571,189 @@ unsafe fn vv_decode64(vv: &varint_vec_layout, fd: *mut hts_sys::cram_fd, val: *m
 pub unsafe fn cram_cram_io_c_3947_cram_container_size(c: *mut hts_sys::cram_container) -> c_int {
     let c = c.cast::<cram_container_layout>();
     55 + 5 * (*c).num_landmarks
+}
+
+/// original: cram_store_container (htslib/cram/cram_io.c:3960)
+///
+/// Serializes the container struct fields (length, ref_seq_id, start/span,
+/// num_records, record_counter, num_bases, num_blocks, num_landmarks,
+/// landmark[], CRC32) into the caller's `dat` buffer using the fd's varint
+/// dispatch vector. Updates `*size` to the actual bytes written; returns 0
+/// on success and -1 if the supplied buffer is too small. Byte-for-byte
+/// equivalent to the C cram_store_container — uses the same varint
+/// function pointers (varint_put32/32s/64) that the C code calls via
+/// `fd->vv.varint_put32(...)`.
+unsafe fn cram_cram_io_c_3960_cram_store_container(
+    fd: *mut cram_fd_layout,
+    c: *mut cram_container_layout,
+    dat: *mut c_char,
+    size: *mut c_int,
+) -> c_int {
+    let fdl = fd;
+    let cl = c;
+
+    if cram_cram_io_c_3947_cram_container_size(c.cast()) > *size {
+        return -1;
+    }
+
+    let dat_start = dat;
+    let mut cp = dat;
+    let null_end: *mut c_char = std::ptr::null_mut();
+
+    let major = (*fdl).version >> 8;
+
+    // length: v1 → itf8; v2/3 → raw LE int32; v4 → varint32.
+    // (The C code emits LE int32 for everything that isn't v1, since
+    // cram_store_container is invoked only with v2/v3 in practice; we
+    // mirror that exactly. v4 currently uses the same LE-int32 path via
+    // the fall-through, matching the C source.)
+    if major == 1 {
+        cp = cp.add(cram_cram_io_c_277_itf8_put(cp, (*cl).length) as usize);
+    } else {
+        // *(int32_t *)cp = le_int4(c->length)
+        std::ptr::write_unaligned(cp.cast::<i32>(), (*cl).length.to_le());
+        cp = cp.add(4);
+    }
+
+    if (*cl).multi_seq != 0 {
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, -2) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, 0) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, 0) as usize);
+    } else {
+        cp = cp.add(((*fdl).vv.varint_put32s.unwrap())(cp, null_end, (*cl).ref_seq_id) as usize);
+        if major >= 4 {
+            cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_start) as usize);
+            cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_span) as usize);
+        } else {
+            cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_start as i32) as usize);
+            cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_span as i32) as usize);
+        }
+    }
+    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_records) as usize);
+    if major == 2 {
+        cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).record_counter) as usize);
+    } else if major >= 3 {
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).record_counter as i32) as usize);
+    }
+    cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).num_bases) as usize);
+    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_blocks) as usize);
+    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_landmarks) as usize);
+    let mut i = 0;
+    while i < (*cl).num_landmarks {
+        let lm = *(*cl).landmark.add(i as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, lm) as usize);
+        i += 1;
+    }
+
+    if major >= 3 {
+        let consumed = cp.offset_from(dat_start) as usize;
+        (*cl).crc32 = crate::htslib_rs::bgzf::hts_crc32(0, dat_start.cast(), consumed);
+        *cp = ((*cl).crc32 & 0xff) as c_char;
+        *cp.add(1) = (((*cl).crc32 >> 8) & 0xff) as c_char;
+        *cp.add(2) = (((*cl).crc32 >> 16) & 0xff) as c_char;
+        *cp.add(3) = (((*cl).crc32 >> 24) & 0xff) as c_char;
+        cp = cp.add(4);
+    }
+
+    *size = cp.offset_from(dat_start) as c_int;
+    0
+}
+
+/// original: cram_write_container (htslib/cram/cram_io.c:4023)
+///
+/// Writes the container struct fields directly to the underlying hFILE,
+/// using a stack buffer for the typical short-landmark case and falling
+/// back to a heap allocation for very large landmark arrays (matching C's
+/// `61 + c->num_landmarks * 10 >= 1024` fallback). Returns 0 on success,
+/// -1 on allocation or hwrite failure. Byte-for-byte equivalent to the
+/// C cram_write_container — identical varint dispatch and CRC32 layout.
+unsafe fn cram_cram_io_c_4023_cram_write_container(
+    fd: *mut cram_fd_layout,
+    c: *mut cram_container_layout,
+) -> c_int {
+    let fdl = fd;
+    let cl = c;
+
+    let mut buf_a = [0u8; 1024];
+    let need = 61 + (*cl).num_landmarks * 10;
+    let (buf, owned): (*mut c_char, bool) = if need >= 1024 {
+        let p = malloc(need as u64).cast::<c_char>();
+        if p.is_null() {
+            return -1;
+        }
+        (p, true)
+    } else {
+        (buf_a.as_mut_ptr().cast::<c_char>(), false)
+    };
+
+    let mut cp = buf;
+    let null_end: *mut c_char = std::ptr::null_mut();
+    let major = (*fdl).version >> 8;
+
+    // length: v1 → itf8; v2..=3 → raw LE int32; v4+ → varint32.
+    if major == 1 {
+        cp = cp.add(cram_cram_io_c_277_itf8_put(cp, (*cl).length) as usize);
+    } else if major <= 3 {
+        std::ptr::write_unaligned(cp.cast::<i32>(), (*cl).length.to_le());
+        cp = cp.add(4);
+    } else {
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).length) as usize);
+    }
+
+    if (*cl).multi_seq != 0 {
+        // C uses (uint32_t)-2 here; varint_put32 takes int32_t, so -2 is identical.
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, -2) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, 0) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, 0) as usize);
+    } else {
+        cp = cp.add(((*fdl).vv.varint_put32s.unwrap())(cp, null_end, (*cl).ref_seq_id) as usize);
+        if major >= 4 {
+            cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_start) as usize);
+            cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_span) as usize);
+        } else {
+            cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_start as i32) as usize);
+            cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_span as i32) as usize);
+        }
+    }
+    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_records) as usize);
+    if major >= 3 {
+        cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).record_counter) as usize);
+    } else {
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).record_counter as i32) as usize);
+    }
+    cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).num_bases) as usize);
+    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_blocks) as usize);
+    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_landmarks) as usize);
+    let mut i = 0;
+    while i < (*cl).num_landmarks {
+        let lm = *(*cl).landmark.add(i as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, lm) as usize);
+        i += 1;
+    }
+
+    if major >= 3 {
+        let consumed = cp.offset_from(buf) as usize;
+        (*cl).crc32 = crate::htslib_rs::bgzf::hts_crc32(0, buf.cast(), consumed);
+        *cp = ((*cl).crc32 & 0xff) as c_char;
+        *cp.add(1) = (((*cl).crc32 >> 8) & 0xff) as c_char;
+        *cp.add(2) = (((*cl).crc32 >> 16) & 0xff) as c_char;
+        *cp.add(3) = (((*cl).crc32 >> 24) & 0xff) as c_char;
+        cp = cp.add(4);
+    }
+
+    let nbytes = cp.offset_from(buf) as usize;
+    let fp = (*fdl).fp;
+    let wrote = htslib_hfile_h_292_hwrite(fp, buf.cast(), nbytes);
+    if wrote != nbytes as libc::ssize_t {
+        if owned {
+            free(buf.cast());
+        }
+        return -1;
+    }
+    if owned {
+        free(buf.cast());
+    }
+    0
 }
 
 /// original: cram_new_container (htslib/cram/cram_io.c:3639)

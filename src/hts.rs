@@ -4508,7 +4508,7 @@ pub unsafe fn kvsprintf(
     fmt: *const c_char,
     ap: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> c_int {
-    unsafe { htslib_kvsprintf(s, fmt, ap) }
+    crate::htslib_rs::kstring::kstring_c_142_kvsprintf(s, fmt, ap)
 }
 
 #[repr(C)]
@@ -4693,15 +4693,8 @@ extern "C" {
     fn clock() -> libc::clock_t;
 }
 
-unsafe extern "C" {
-    // Variadic (va_list) printf: translating C variadics is out of scope.
-    #[link_name = "kvsprintf"]
-    fn htslib_kvsprintf(
-        s: *mut kstring_t,
-        fmt: *const c_char,
-        ap: *mut crate::htslib_rs::c_compat::__va_list_tag,
-    ) -> c_int;
-}
+// (the libhts `kvsprintf` extern was removed 2026-05-29 — the public
+// `kvsprintf` wrapper above now routes to the native `kstring_c_142_kvsprintf`.)
 
 unsafe fn bgzf_is_compressed(fp: *const BGZF) -> bool {
     ((*fp).bitfields & (1 << 30)) != 0
@@ -4988,9 +4981,8 @@ pub unsafe fn hts_hopen(fp: *mut hFILE, fn_: *const c_char, mode: *const c_char)
                 return std::ptr::null_mut();
             }
             if ((*hts_fp).bitfields & (1 << 1)) == 0 {
-                // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
-                hts_sys::cram_set_option(
-                    (*hts_fp).fp.cram.cast(),
+                crate::cram_options_bridge::cram_set_option_int(
+                    (*hts_fp).fp.cram,
                     CRAM_OPT_DECODE_MD,
                     -1,
                 );
@@ -5763,8 +5755,7 @@ pub unsafe fn hts_set_opt_int(fp: *mut htsFile, opt: hts_fmt_option, val: c_int)
                 (*(*fp).fp.bgzf).bitfields |= ((val as u32) & 0x1ff) << 20;
                 0
             } else if (*fp).format.format == HTS_FORMAT_CRAM {
-                // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
-                hts_sys::cram_set_option((*fp).fp.cram.cast(), opt, val)
+                crate::cram_options_bridge::cram_set_option_int((*fp).fp.cram, opt, val)
             } else {
                 0
             }
@@ -5785,8 +5776,7 @@ pub unsafe fn hts_set_opt_int(fp: *mut htsFile, opt: hts_fmt_option, val: c_int)
         }
         _ => {
             if (*fp).format.format == HTS_FORMAT_CRAM {
-                // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
-                hts_sys::cram_set_option((*fp).fp.cram.cast(), opt, val)
+                crate::cram_options_bridge::cram_set_option_int((*fp).fp.cram, opt, val)
             } else {
                 0
             }
@@ -5818,8 +5808,7 @@ pub unsafe fn hts_set_opt_ptr(fp: *mut htsFile, opt: hts_fmt_option, val: *mut c
         }
         _ => {
             if (*fp).format.format == HTS_FORMAT_CRAM {
-                // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
-                hts_sys::cram_set_option((*fp).fp.cram.cast(), opt, val)
+                crate::cram_options_bridge::cram_set_option_ptr((*fp).fp.cram, opt, val)
             } else {
                 0
             }
@@ -6034,8 +6023,7 @@ pub unsafe fn hts_set_threads(fp: *mut htsFile, n: c_int) -> c_int {
     } else if (*fp).format.compression == HTS_COMPRESSION_BGZF {
         bgzf_mt(hts_get_bgzfp(fp), n, 256)
     } else if (*fp).format.format == HTS_FORMAT_CRAM {
-        // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
-        hts_sys::hts_set_opt(fp.cast(), CRAM_OPT_NTHREADS, n)
+        crate::cram_options_bridge::cram_set_option_int((*fp).fp.cram, CRAM_OPT_NTHREADS, n)
     } else {
         0
     }
@@ -6047,8 +6035,11 @@ pub unsafe fn hts_set_thread_pool(fp: *mut htsFile, p: *mut htsThreadPool) -> c_
     } else if (*fp).format.compression == HTS_COMPRESSION_BGZF {
         bgzf_thread_pool(hts_get_bgzfp(fp), (*p).pool, (*p).qsize)
     } else if (*fp).format.format == HTS_FORMAT_CRAM {
-        // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
-        hts_sys::hts_set_opt(fp.cast(), CRAM_OPT_THREAD_POOL, p)
+        crate::cram_options_bridge::cram_set_option_ptr(
+            (*fp).fp.cram,
+            CRAM_OPT_THREAD_POOL,
+            p.cast::<c_void>(),
+        )
     } else {
         0
     }
@@ -6072,11 +6063,10 @@ pub unsafe fn hts_set_fai_filename(fp: *mut htsFile, fn_aux: *const c_char) -> c
     }
 
     if (*fp).format.format == HTS_FORMAT_CRAM
-        // TODO(P5): foundational; needs broader cutover (cram_set_option native missing)
-        && hts_sys::cram_set_option(
-            (*fp).fp.cram.cast(),
+        && crate::cram_options_bridge::cram_set_option_ptr(
+            (*fp).fp.cram,
             CRAM_OPT_REFERENCE,
-            (*fp).fn_aux,
+            (*fp).fn_aux.cast::<c_void>(),
         ) != 0
     {
         return -1;
@@ -6680,11 +6670,10 @@ pub unsafe fn hts_close(fp: *mut htsFile) -> c_int {
         }
         HTS_FORMAT_CRAM => {
             if ((*fp).bitfields & (1 << 1)) == 0 {
-                // TODO(P5): foundational; needs broader cutover (cram_eof native missing)
-                let _ = hts_sys::cram_eof((*fp).fp.cram.cast());
+                let _ = crate::htslib_rs::cram::cram_eof((*fp).fp.cram);
             }
-            // TODO(P5): foundational; needs broader cutover (cram_close native missing)
-            let ret = hts_sys::cram_close((*fp).fp.cram.cast()) | hts_idx_close_otf_fp((*fp).idx);
+            let ret = crate::htslib_rs::cram::cram_close((*fp).fp.cram)
+                | hts_idx_close_otf_fp((*fp).idx);
             super::sam::sam_hdr_destroy((*fp).bam_header.cast());
             hts_idx_destroy((*fp).idx);
             crate::htslib_rs::c_compat::free((*fp).fn_.cast());

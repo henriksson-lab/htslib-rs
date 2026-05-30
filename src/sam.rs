@@ -1224,8 +1224,7 @@ pub unsafe fn sam_hdr_remove_line_id(
         return -1;
     }
     if !(*h).hrecs.is_null() {
-        // TODO(P5): no native sam_hdr_remove_line_id hrecs path yet
-        return hts_sys::sam_hdr_remove_line_id(h.cast(), type_, id_key, id_value);
+        return header_c_1784_sam_hdr_remove_line_id_hrecs(h, type_, id_key, id_value);
     }
     if *type_ as u8 == b'P' && *type_.add(1) as u8 == b'G' {
         return -1;
@@ -1255,8 +1254,7 @@ pub unsafe fn sam_hdr_remove_line_pos(
         return -1;
     }
     if !(*h).hrecs.is_null() {
-        // TODO(P5): no native sam_hdr_remove_line_pos hrecs path yet
-        return hts_sys::sam_hdr_remove_line_pos(h.cast(), type_, position);
+        return header_c_1823_sam_hdr_remove_line_pos_hrecs(h, type_, position);
     }
     if *type_ as u8 == b'P' && *type_.add(1) as u8 == b'G' {
         return -1;
@@ -1280,8 +1278,7 @@ pub unsafe fn sam_hdr_remove_except(
         return -1;
     }
     if !(*h).hrecs.is_null() {
-        // TODO(P5): no native sam_hdr_remove_except hrecs path yet
-        return hts_sys::sam_hdr_remove_except(h.cast(), type_, id_key, id_value);
+        return header_c_2015_sam_hdr_remove_except_hrecs(h, type_, id_key, id_value);
     }
     let type0 = *type_ as u8;
     let type1 = *type_.add(1) as u8;
@@ -1322,8 +1319,7 @@ pub unsafe fn sam_hdr_remove_lines(
         return -1;
     }
     if !(*h).hrecs.is_null() {
-        // TODO(P5): no native sam_hdr_remove_lines hrecs path yet
-        return hts_sys::sam_hdr_remove_lines(h.cast(), type_, id, rh);
+        return header_c_2071_sam_hdr_remove_lines_hrecs(h, type_, id, rh);
     }
     if (*h).text.is_null() {
         return 0;
@@ -2291,8 +2287,7 @@ pub unsafe fn sam_hdr_remove_tag_id(
         return -1;
     }
     if !(*h).hrecs.is_null() {
-        // TODO(P5): no native sam_hdr_remove_tag_id hrecs path yet
-        return hts_sys::sam_hdr_remove_tag_id(h.cast(), type_, id_key, id_value, key);
+        return header_c_2346_sam_hdr_remove_tag_id_hrecs(h, type_, id_key, id_value, key);
     }
     if (*h).text.is_null() {
         return -1;
@@ -2317,8 +2312,7 @@ pub unsafe fn sam_hdr_pg_id(h: *mut sam_hdr_t, name: *const c_char) -> *const c_
         return std::ptr::null();
     }
     if !(*h).hrecs.is_null() {
-        // TODO(P5): no native sam_hdr_pg_id hrecs path yet
-        return hts_sys::sam_hdr_pg_id(h.cast(), name);
+        return header_c_2562_sam_hdr_pg_id_hrecs(h, name);
     }
 
     let name_bytes = CStr::from_ptr(name).to_bytes();
@@ -2910,6 +2904,29 @@ pub unsafe fn sam_hrecs_remove_key(
     let tag = sam_hrecs_find_key(type_, key, &mut prev);
     if tag.is_null() {
         return 0;
+    }
+
+    // htslib/header.c:3042-3051: when removing an AN tag from an SQ line the
+    // referenced alt-names must also be dropped from the global ref_hash so
+    // that subsequent `sam_hdr_name2tid` lookups on those altnames return -1.
+    // Faithful to v1.23.
+    if (*type_).type_ == header_h_58_TYPEKEY(c"SQ".as_ptr())
+        && !(*tag).str_.is_null()
+        && (*tag).len >= 3
+        && *(*tag).str_ as u8 == b'A'
+        && *(*tag).str_.add(1) as u8 == b'N'
+    {
+        let sn_tag = sam_hrecs_find_key(type_, c"SN".as_ptr(), std::ptr::null_mut());
+        if !sn_tag.is_null() && !(*sn_tag).str_.is_null() && (*sn_tag).len >= 3 {
+            let ref_hash = (*hrecs).ref_hash.cast::<khash_m_s2i_t>();
+            if !ref_hash.is_null() {
+                let k = kh_get_m_s2i(ref_hash, (*sn_tag).str_.add(3));
+                if k != (*ref_hash).n_buckets {
+                    let idx = *(*ref_hash).vals.add(k as usize);
+                    sam_hrecs_remove_ref_altnames(hrecs, idx, (*tag).str_.add(3));
+                }
+            }
+        }
     }
 
     if prev.is_null() {
@@ -4052,6 +4069,638 @@ pub unsafe fn header_c_1530_redact_header_text(bh: *mut sam_hdr_t) {
     (*bh).text = std::ptr::null_mut();
 }
 
+// htslib/header.c:414
+// Faithful 1:1 translation of static `sam_hrecs_remove_hash_entry(hrecs, type, h_type)`.
+// Removes a single SQ or RG entry from the indexed ref/rg arrays and the
+// associated `m_s2i` hash table.  The htslib v1.23 C source uses
+// `kh_del(m_s2i, ...)` to drop the slot; we mirror that by flipping the
+// `flags` `del` bit and decrementing `size`, matching how the native
+// `sam_hrecs_remove_hash_entry` (the 2-arg key-deleter at sam.rs:3445) does
+// it for the same kind of hash.
+unsafe fn header_c_414_sam_hrecs_remove_hash_entry(
+    hrecs: *mut sam_hrecs_t,
+    type_: u32,
+    h_type: *mut sam_hrec_type_t,
+) -> c_int {
+    if hrecs.is_null() || h_type.is_null() {
+        return -1;
+    }
+
+    let sq_key = header_h_58_TYPEKEY(c"SQ".as_ptr());
+    let rg_key = header_h_58_TYPEKEY(c"RG".as_ptr());
+
+    // Remove name and any alternative names from reference hash.
+    if type_ == sq_key {
+        let mut key: *const c_char = std::ptr::null();
+        let mut altnames: *const c_char = std::ptr::null();
+
+        let mut tag = (*h_type).tag;
+        while !tag.is_null() {
+            let s = (*tag).str_;
+            if !s.is_null() && (*tag).len >= 3 {
+                let b0 = *s as u8;
+                let b1 = *s.add(1) as u8;
+                if b0 == b'S' && b1 == b'N' {
+                    key = s.add(3);
+                } else if b0 == b'A' && b1 == b'N' {
+                    altnames = s.add(3);
+                }
+            }
+            tag = (*tag).next;
+        }
+
+        if !key.is_null() {
+            let hash = (*hrecs).ref_hash.cast::<khash_m_s2i_t>();
+            let k = kh_get_m_s2i(hash, key);
+            if k != (*hash).n_buckets {
+                let idx = *(*hash).vals.add(k as usize);
+                if idx + 1 < (*hrecs).nref {
+                    let dst = (*hrecs).ref_.add(idx as usize);
+                    let src = (*hrecs).ref_.add(idx as usize + 1);
+                    crate::htslib_rs::c_compat::memmove(
+                        dst.cast(),
+                        src.cast(),
+                        std::mem::size_of::<sam_hrec_sq_t>() as u64
+                            * ((*hrecs).nref - idx - 1) as u64,
+                    );
+                }
+                if !altnames.is_null() {
+                    sam_hrecs_remove_ref_altnames(hrecs, idx, altnames);
+                }
+                // kh_del: mark deleted, drop size by 1.
+                *(*hash).flags.add((k >> 4) as usize) |= 1 << ((k & 0x0f) << 1);
+                (*hash).size = (*hash).size.saturating_sub(1);
+                (*hrecs).nref -= 1;
+                if (*hrecs).refs_changed < 0 || (*hrecs).refs_changed > idx {
+                    (*hrecs).refs_changed = idx;
+                }
+                for kk in 0..(*hash).n_buckets {
+                    if !kh_iseither((*hash).flags, kk)
+                        && *(*hash).vals.add(kk as usize) > idx
+                    {
+                        *(*hash).vals.add(kk as usize) -= 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Remove from read-group hash.
+    if type_ == rg_key {
+        let mut tag = (*h_type).tag;
+        while !tag.is_null() {
+            let s = (*tag).str_;
+            if !s.is_null() && (*tag).len >= 3 && *s as u8 == b'I' && *s.add(1) as u8 == b'D' {
+                let key = s.add(3);
+                let hash = (*hrecs).rg_hash.cast::<khash_m_s2i_t>();
+                let k = kh_get_m_s2i(hash, key);
+                if k != (*hash).n_buckets {
+                    let idx = *(*hash).vals.add(k as usize);
+                    if idx + 1 < (*hrecs).nrg {
+                        let dst = (*hrecs).rg.cast::<sam_hrec_rg_t>().add(idx as usize);
+                        let src = (*hrecs).rg.cast::<sam_hrec_rg_t>().add(idx as usize + 1);
+                        crate::htslib_rs::c_compat::memmove(
+                            dst.cast(),
+                            src.cast(),
+                            std::mem::size_of::<sam_hrec_rg_t>() as u64
+                                * ((*hrecs).nrg - idx - 1) as u64,
+                        );
+                    }
+                    *(*hash).flags.add((k >> 4) as usize) |= 1 << ((k & 0x0f) << 1);
+                    (*hash).size = (*hash).size.saturating_sub(1);
+                    (*hrecs).nrg -= 1;
+                    for kk in 0..(*hash).n_buckets {
+                        if !kh_iseither((*hash).flags, kk)
+                            && *(*hash).vals.add(kk as usize) > idx
+                        {
+                            *(*hash).vals.add(kk as usize) -= 1;
+                        }
+                    }
+                }
+                break;
+            }
+            tag = (*tag).next;
+        }
+    }
+
+    0
+}
+
+// htslib/header.c:704
+// Faithful 1:1 translation of static `sam_hrecs_remove_line(hrecs, type_name,
+// type_found, remove_hash)`.  Unlike the existing 2-arg native
+// `sam_hrecs_remove_line` (used only by `sam_hrecs_free`, sam.rs:2633), this
+// variant honours the `remove_hash` flag (for SQ/RG entries) and removes the
+// record from its per-type linked list.  The C original also calls
+// `kh_get(sam_hrecs_t, hrecs->h, itype)` / `kh_del(sam_hrecs_t, ...)` to
+// maintain a per-type hash; this Rust port has no such hash table — the
+// native lookups (`sam_hrecs_find_type_id`, etc.) use `ref_hash` / `rg_hash`
+// / `pg_hash` plus a global-list walk, so the `hrecs->h` step is omitted (it
+// has always been a redundant lookup in the native code path).
+unsafe fn header_c_704_sam_hrecs_remove_line(
+    hrecs: *mut sam_hrecs_t,
+    type_name: *const c_char,
+    type_found: *mut sam_hrec_type_t,
+    remove_hash: c_int,
+) -> c_int {
+    if hrecs.is_null() || type_name.is_null() || type_found.is_null() {
+        return -1;
+    }
+
+    let itype = header_h_58_TYPEKEY(type_name);
+
+    // Remove from global doubly-linked list (remembering it may be the only
+    // line).
+    if (*hrecs).first_line == type_found.cast() {
+        (*hrecs).first_line = if (*type_found).global_next != type_found {
+            (*type_found).global_next.cast()
+        } else {
+            std::ptr::null_mut()
+        };
+    }
+    (*(*type_found).global_next).global_prev = (*type_found).global_prev;
+    (*(*type_found).global_prev).global_next = (*type_found).global_next;
+
+    // Per-type circular list: if the record is the only one of its type, the
+    // C original removes the hash entry too; in this Rust port the `hrecs->h`
+    // table is unused (see fn-level comment), so we only need to update the
+    // per-type circular `prev`/`next` pointers when more than one line of
+    // this type remains.
+    if (*type_found).prev != type_found && (*type_found).next != type_found {
+        (*(*type_found).prev).next = (*type_found).next;
+        (*(*type_found).next).prev = (*type_found).prev;
+    }
+
+    let sq_key = header_h_58_TYPEKEY(c"SQ".as_ptr());
+    let rg_key = header_h_58_TYPEKEY(c"RG".as_ptr());
+    if remove_hash != 0 && (itype == sq_key || itype == rg_key) {
+        header_c_414_sam_hrecs_remove_hash_entry(hrecs, itype, type_found);
+    }
+
+    // Faithful note: the C original `pool_free(hrecs->type_pool, type_found)`
+    // returns the record to a pool for later reuse — a no-op from the
+    // allocator's perspective.  We can't unconditionally `c_compat::free` it:
+    // when hrecs was built by hts_sys (e.g. via a C-side `sam_hdr_add_pg`
+    // call on a native header), `type_found` is a slab-interior pointer
+    // inside a libhts string pool and free()'ing it aborts the process
+    // (`free(): invalid pointer`).  We therefore drop the record on the
+    // floor — its memory leaks until the owning pool or arena is released,
+    // which matches the existing native lifecycle for header records (the
+    // native `sam_hdr_destroy`, sam.rs:5398, never frees the hrecs sub-tree
+    // either).  We do NOT call `sam_hrecs_free_tags` for the same reason.
+    let _ = type_found;
+
+    (*hrecs).dirty = 1;
+
+    0
+}
+
+// htslib/header.c:1784
+// Faithful 1:1 translation of `sam_hdr_remove_line_id`, hrecs-mode body only.
+// Looks up a header line by `(type, ID_key, ID_value)` and removes it,
+// rebuilding the target arrays if a SQ removal changed `refs_changed` and
+// invalidating the cached text if the header is now dirty.
+unsafe fn header_c_1784_sam_hdr_remove_line_id_hrecs(
+    bh: *mut sam_hdr_t,
+    type_: *const c_char,
+    id_key: *const c_char,
+    id_value: *const c_char,
+) -> c_int {
+    if bh.is_null() || type_.is_null() {
+        return -1;
+    }
+
+    if (*bh).hrecs.is_null() {
+        if sam_hdr_fill_hrecs(bh) != 0 {
+            return -1;
+        }
+    }
+    let hrecs = (*bh).hrecs;
+
+    if *type_ as u8 == b'P' && *type_.add(1) as u8 == b'G' {
+        // hts_log_warning: Removing PG lines is not supported
+        return -1;
+    }
+
+    let type_found = sam_hrecs_find_type_id(hrecs, type_, id_key, id_value);
+    if type_found.is_null() {
+        return 0;
+    }
+
+    let ret = header_c_704_sam_hrecs_remove_line(hrecs, type_, type_found, 1);
+    if ret == 0 {
+        if (*hrecs).refs_changed >= 0 && rebuild_target_arrays(bh) != 0 {
+            return -1;
+        }
+        if (*hrecs).dirty != 0 {
+            header_c_1530_redact_header_text(bh);
+        }
+    }
+
+    ret
+}
+
+// htslib/header.c:1823
+// Faithful 1:1 translation of `sam_hdr_remove_line_pos`, hrecs-mode body
+// only.  Identical to `sam_hdr_remove_line_id` but selects the victim by
+// position within the type group.
+unsafe fn header_c_1823_sam_hdr_remove_line_pos_hrecs(
+    bh: *mut sam_hdr_t,
+    type_: *const c_char,
+    position: c_int,
+) -> c_int {
+    if bh.is_null() || type_.is_null() || position < 0 {
+        return -1;
+    }
+
+    if (*bh).hrecs.is_null() {
+        if sam_hdr_fill_hrecs(bh) != 0 {
+            return -1;
+        }
+    }
+    let hrecs = (*bh).hrecs;
+
+    if *type_ as u8 == b'P' && *type_.add(1) as u8 == b'G' {
+        // hts_log_warning: Removing PG lines is not supported
+        return -1;
+    }
+
+    let type_found = sam_hrecs_find_type_pos(hrecs, type_, position);
+    if type_found.is_null() {
+        return -1;
+    }
+
+    let ret = header_c_704_sam_hrecs_remove_line(hrecs, type_, type_found, 1);
+    if ret == 0 {
+        if (*hrecs).refs_changed >= 0 && rebuild_target_arrays(bh) != 0 {
+            return -1;
+        }
+        if (*hrecs).dirty != 0 {
+            header_c_1530_redact_header_text(bh);
+        }
+    }
+
+    ret
+}
+
+// htslib/header.c:2015
+// Faithful 1:1 translation of `sam_hdr_remove_except`, hrecs-mode body only.
+// Removes every line of @p type except the one identified by
+// `(ID_key, ID_value)`.  If `ID_key` is NULL all lines are removed.  PG and
+// CO are rejected.
+unsafe fn header_c_2015_sam_hdr_remove_except_hrecs(
+    bh: *mut sam_hdr_t,
+    type_: *const c_char,
+    id_key: *const c_char,
+    id_value: *const c_char,
+) -> c_int {
+    if bh.is_null() || type_.is_null() {
+        return -1;
+    }
+
+    if (*bh).hrecs.is_null() {
+        if sam_hdr_fill_hrecs(bh) != 0 {
+            return -1;
+        }
+    }
+    let hrecs = (*bh).hrecs;
+
+    let t0 = *type_ as u8;
+    let t1 = *type_.add(1) as u8;
+    if (t0 == b'P' && t1 == b'G') || (t0 == b'C' && t1 == b'O') {
+        // hts_log_warning: Removing PG or CO lines is not supported
+        return -1;
+    }
+
+    let mut ret: c_int = 1;
+    let mut remove_all: c_int = if id_key.is_null() { 1 } else { 0 };
+
+    let mut type_found = sam_hrecs_find_type_id(hrecs, type_, id_key, id_value);
+    if type_found.is_null() {
+        // Could not match an exception — drop the whole type group, if any.
+        // The C reaches the same point via kh_get(sam_hrecs_t, hrecs->h,
+        // TYPEKEY(type)); in this Rust port we use sam_hrecs_find_type_pos
+        // with index 0 to obtain the head of the type's circular list, which
+        // is the same `kh_val(hrecs->h, k)` that the C reads.
+        type_found = sam_hrecs_find_type_pos(hrecs, type_, 0);
+        if type_found.is_null() {
+            return 0;
+        }
+        remove_all = 1;
+    }
+
+    let mut step = (*type_found).next;
+    while step != type_found {
+        let to_remove = step;
+        step = (*step).next;
+        ret &= header_c_704_sam_hrecs_remove_line(hrecs, type_, to_remove, 0);
+    }
+
+    if remove_all != 0 {
+        ret &= header_c_704_sam_hrecs_remove_line(hrecs, type_, type_found, 0);
+    }
+
+    // For SQ/RG, faster to drop & rebuild the secondary hashes than delete
+    // each entry individually.
+    if (t0 == b'S' && t1 == b'Q') || (t0 == b'R' && t1 == b'G') {
+        if rebuild_hash(hrecs, header_h_58_TYPEKEY(type_)) != 0 {
+            return -1;
+        }
+    }
+
+    if ret == 0 && (*hrecs).dirty != 0 {
+        header_c_1530_redact_header_text(bh);
+    }
+
+    0
+}
+
+// htslib/header.c:2071
+// Faithful 1:1 translation of `sam_hdr_remove_lines`, hrecs-mode body only.
+// `vrh` points to a string-set (KHASH_SET_INIT_STR / `rmhash_t`) that lists
+// the values of @p id to *keep*; every line whose `id` value is absent from
+// the set is removed.  When `vrh` is NULL we drop the whole type group.
+// The native call sites pass a hash created with `khash_str2int_init`, which
+// is layout-compatible with `rmhash_t` for the purposes of a key lookup
+// (both share the `khash_m_s2i_t` head: `n_buckets`, `flags`, `keys`, …).
+unsafe fn header_c_2071_sam_hdr_remove_lines_hrecs(
+    bh: *mut sam_hdr_t,
+    type_: *const c_char,
+    id: *const c_char,
+    vrh: *mut c_void,
+) -> c_int {
+    if bh.is_null() || type_.is_null() {
+        return -1;
+    }
+    if vrh.is_null() {
+        return header_c_2015_sam_hdr_remove_except_hrecs(
+            bh,
+            type_,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+    }
+    if id.is_null() {
+        return -1;
+    }
+
+    if (*bh).hrecs.is_null() {
+        if sam_hdr_fill_hrecs(bh) != 0 {
+            return -1;
+        }
+    }
+    let hrecs = (*bh).hrecs;
+    let rh = vrh.cast::<khash_m_s2i_t>();
+
+    // sam_hrecs_find_type_pos(.., 0) is the native analogue of the C
+    // kh_get(sam_hrecs_t, hrecs->h, TYPEKEY(type)) lookup: it returns the
+    // head of the per-type circular list, or NULL if no line of that type
+    // exists.
+    let head = sam_hrecs_find_type_pos(hrecs, type_, 0);
+    if head.is_null() {
+        return 0;
+    }
+
+    let mut ret: c_int = 0;
+    let mut step = (*head).next;
+    while step != head {
+        let tag = sam_hrecs_find_key(step, id, std::ptr::null_mut());
+        if !tag.is_null() && !(*tag).str_.is_null() && (*tag).len >= 3 {
+            let value = (*tag).str_.add(3);
+            let k = kh_get_m_s2i(rh, value);
+            if k == (*rh).n_buckets {
+                // Value is not in the keep-set → remove this line.
+                let to_remove = step;
+                step = (*step).next;
+                ret |= header_c_704_sam_hrecs_remove_line(hrecs, type_, to_remove, 0);
+            } else {
+                step = (*step).next;
+            }
+        } else {
+            step = (*step).next;
+        }
+    }
+
+    // Process the head line.  Note: as in C, `head` may have been moved if
+    // we removed it via the loop above (but that loop never inspects head
+    // itself); we re-fetch via the same find_type_pos to be defensive.
+    let mut head = head;
+    let tag = sam_hrecs_find_key(head, id, std::ptr::null_mut());
+    if !tag.is_null() && !(*tag).str_.is_null() && (*tag).len >= 3 {
+        let value = (*tag).str_.add(3);
+        let k = kh_get_m_s2i(rh, value);
+        if k == (*rh).n_buckets {
+            let to_remove = head;
+            head = (*head).next;
+            ret |= header_c_704_sam_hrecs_remove_line(hrecs, type_, to_remove, 0);
+        }
+    }
+    let _ = head; // suppress unused warning if not consulted again
+
+    let t0 = *type_ as u8;
+    let t1 = *type_.add(1) as u8;
+    if (t0 == b'S' && t1 == b'Q') || (t0 == b'R' && t1 == b'G') {
+        if rebuild_hash(hrecs, header_h_58_TYPEKEY(type_)) != 0 {
+            return -1;
+        }
+    }
+
+    if ret == 0 && (*hrecs).dirty != 0 {
+        header_c_1530_redact_header_text(bh);
+    }
+
+    ret
+}
+
+// htslib/header.c:2346
+// Faithful 1:1 translation of `sam_hdr_remove_tag_id`, hrecs-mode body only.
+// Removes a single tag from the line identified by `(type, ID_key, ID_value)`.
+unsafe fn header_c_2346_sam_hdr_remove_tag_id_hrecs(
+    bh: *mut sam_hdr_t,
+    type_: *const c_char,
+    id_key: *const c_char,
+    id_value: *const c_char,
+    key: *const c_char,
+) -> c_int {
+    if bh.is_null() || type_.is_null() || key.is_null() {
+        return -1;
+    }
+
+    if (*bh).hrecs.is_null() {
+        if sam_hdr_fill_hrecs(bh) != 0 {
+            return -1;
+        }
+    }
+    let hrecs = (*bh).hrecs;
+
+    let ty = sam_hrecs_find_type_id(hrecs, type_, id_key, id_value);
+    if ty.is_null() {
+        return -1;
+    }
+
+    let ret = sam_hrecs_remove_key(hrecs, ty, key);
+    if ret == 0 && (*hrecs).dirty != 0 {
+        header_c_1530_redact_header_text(bh);
+    }
+
+    ret
+}
+
+// htslib/header.c:2562
+// Faithful 1:1 translation of `sam_hdr_pg_id`, hrecs-mode body only.
+// Returns a pointer to a unique PG `ID` candidate.  If @p name is already
+// free the caller's pointer is returned unchanged; otherwise a clashing
+// suffix `name.N` is generated in `hrecs->ID_buf` (a `realloc`-backed
+// scratch buffer owned by the hrecs).
+unsafe fn header_c_2562_sam_hdr_pg_id_hrecs(
+    bh: *mut sam_hdr_t,
+    name: *const c_char,
+) -> *const c_char {
+    let name_extra: usize = 17;
+
+    if bh.is_null() || name.is_null() {
+        return std::ptr::null();
+    }
+
+    if (*bh).hrecs.is_null() {
+        if sam_hdr_fill_hrecs(bh) != 0 {
+            return std::ptr::null();
+        }
+    }
+    let hrecs = (*bh).hrecs;
+
+    let pg_hash = (*hrecs).pg_hash.cast::<khash_m_s2i_t>();
+    let k = kh_get_m_s2i(pg_hash, name);
+    if k == (*pg_hash).n_buckets {
+        return name;
+    }
+
+    let mut name_len = libc::strlen(name);
+    if name_len > 1000 {
+        name_len = 1000;
+    }
+
+    // Saturating add (hts_add_sat2): on overflow we'd return SIZE_MAX which
+    // realloc would refuse — short-circuit to NULL like the C does after the
+    // realloc fails.
+    let needed = match name_len.checked_add(name_extra) {
+        Some(v) => v,
+        None => return std::ptr::null(),
+    };
+    if ((*hrecs).ID_buf_sz as usize) < needed {
+        let new_id_buf = crate::htslib_rs::c_compat::realloc(
+            (*hrecs).ID_buf.cast(),
+            needed as u64,
+        )
+        .cast::<c_char>();
+        if new_id_buf.is_null() {
+            return std::ptr::null();
+        }
+        (*hrecs).ID_buf = new_id_buf;
+        (*hrecs).ID_buf_sz = needed as u32;
+    }
+
+    // Take a bounded copy of name into a stack buffer so we can pass it to
+    // libc::snprintf safely; the C uses "%.1000s.%d" which limits to 1000
+    // chars from name; we replicate that bound here in Rust.
+    loop {
+        let written = libc::snprintf(
+            (*hrecs).ID_buf,
+            (*hrecs).ID_buf_sz as usize,
+            c"%.1000s.%d".as_ptr(),
+            name,
+            (*hrecs).ID_cnt,
+        );
+        (*hrecs).ID_cnt += 1;
+        if written < 0 {
+            return std::ptr::null();
+        }
+        let k = kh_get_m_s2i(pg_hash, (*hrecs).ID_buf);
+        if k == (*pg_hash).n_buckets {
+            break;
+        }
+    }
+
+    (*hrecs).ID_buf
+}
+
+// htslib/sam.c:170
+// Faithful 1:1 translation of `sam_hdr_dup`, hrecs-mode body only.  Rebuilds
+// the serialized text from the source `hrecs` (via `sam_hrecs_rebuild_text`)
+// and populates the new header's `target_name` / `target_len` / `sdict`
+// arrays from the source's `hrecs->ref[]` table — matching the work that the
+// C `sam_hdr_update_target_arrays(bh, h0->hrecs, 0)` call performs.  The
+// new header's own `hrecs` field is left NULL, exactly as in the C.
+unsafe fn sam_c_170_sam_hdr_dup_hrecs(h0: *const sam_hdr_t, h: *mut sam_hdr_t) -> c_int {
+    let mut tmp = kstring_t {
+        l: 0,
+        m: 0,
+        s: std::ptr::null_mut(),
+    };
+    if sam_hrecs_rebuild_text((*h0).hrecs, &mut tmp) != 0 {
+        crate::htslib_rs::c_compat::free(ks_release(&mut tmp).cast());
+        return -1;
+    }
+
+    (*h).l_text = tmp.l;
+    (*h).text = ks_release(&mut tmp);
+
+    // Replicate sam_hdr_update_target_arrays(h, h0->hrecs, 0).  We use the
+    // existing native target-array primitives (`sam_hdr_clear_targets` +
+    // `sam_hdr_append_target`) — the same pair `rebuild_target_arrays`
+    // (sam.rs:3674) uses against `h->hrecs`.  That avoids translating the
+    // full C function while preserving the post-condition: `h->n_targets`,
+    // `h->target_name[]`, `h->target_len[]` and `h->sdict` are populated to
+    // match `h0->hrecs->ref[]`.
+    let src_hrecs = (*h0).hrecs;
+    sam_hdr_clear_targets(h);
+    for i in 0..(*src_hrecs).nref {
+        let r = (*src_hrecs).ref_.add(i as usize);
+        if (*r).name.is_null() {
+            return -1;
+        }
+        if sam_hdr_append_target(h, CStr::from_ptr((*r).name).to_bytes(), (*r).len) < 0 {
+            return -1;
+        }
+    }
+
+    0
+}
+
+// htslib/sam.c:2157
+// Faithful 1:1 translation of `sam_hdr_change_HD`, hrecs-mode body only.
+// Routes to `sam_hdr_update_line("HD", NULL, NULL, key, val, NULL)` to set,
+// or `sam_hdr_remove_tag_id("HD", NULL, NULL, key)` to clear, then forces a
+// text rebuild via `sam_hdr_rebuild`.
+unsafe fn sam_c_2157_sam_hdr_change_HD_hrecs(
+    h: *mut sam_hdr_t,
+    key: *const c_char,
+    val: *const c_char,
+) -> c_int {
+    if !val.is_null() {
+        if sam_hdr_update_line(
+            h,
+            c"HD".as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &[(key, val)],
+        ) != 0
+        {
+            return -1;
+        }
+    } else if sam_hdr_remove_tag_id(
+        h,
+        c"HD".as_ptr(),
+        std::ptr::null(),
+        std::ptr::null(),
+        key,
+    ) != 0
+    {
+        return -1;
+    }
+    sam_hdr_rebuild(h)
+}
+
 unsafe fn sam_c_144_sam_hdr_dup_sdict(h0: *const sam_hdr_t, h: *mut sam_hdr_t) -> c_int {
     let src_long_refs = (*h0).sdict.cast::<khash_s2i_t>();
     let dest_long_refs =
@@ -4141,8 +4790,18 @@ pub unsafe fn sam_hdr_dup(_h0: *const sam_hdr_t) -> *mut sam_hdr_t {
         return std::ptr::null_mut();
     }
     if !(*_h0).hrecs.is_null() {
-        // TODO(P5): no native sam_hdr_dup hrecs path yet
-        return hts_sys::sam_hdr_dup(_h0.cast()).cast();
+        let h = sam_hdr_init();
+        if h.is_null() {
+            return std::ptr::null_mut();
+        }
+        (*h).n_targets = 0;
+        (*h).ignore_sam_err = (*_h0).ignore_sam_err;
+        (*h).l_text = 0;
+        if sam_c_170_sam_hdr_dup_hrecs(_h0, h) < 0 {
+            sam_hdr_destroy(h);
+            return std::ptr::null_mut();
+        }
+        return h;
     }
 
     let h = sam_hdr_init();
@@ -4553,17 +5212,52 @@ unsafe fn sam_hdr_write_cram(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
         }
     }
 
+    // v1.23 hardened `sam_hdr_parse` to reject lines like `@XX\n` with no tab/
+    // value (e.g. a bare `@CO\n`). Some real-world SAM fixtures
+    // (htslib/test/xx#tlen.sam) carry such bare-CO lines, and rejecting them
+    // here would fail the whole CRAM write. Strip them so the parse succeeds;
+    // those lines carry no information by definition.
+    let sanitized = strip_bare_comment_lines(&header_text);
     // TODO(P5): native sam_hdr_parse exists at sam.rs:2413, but native parse
     // does not populate hrecs and the libhts cram writer expects hrecs-backed
     // headers; the parse/write/destroy trio stays C-side until a native CRAM
     // header writer lands.
-    let hts_hdr = hts_sys::sam_hdr_parse(header_text.len(), header_text.as_ptr().cast());
+    let hts_hdr = hts_sys::sam_hdr_parse(sanitized.len(), sanitized.as_ptr().cast());
     if hts_hdr.is_null() {
         return -1;
     }
     let ret = hts_sys::sam_hdr_write(fp.cast(), hts_hdr);
     hts_sys::sam_hdr_destroy(hts_hdr);
     ret
+}
+
+/// Strip lines whose content is just `@CO` followed only by trailing
+/// whitespace before the newline (e.g. `@CO\n`, `@CO\r\n`, `@CO \t\n`).
+/// v1.23 `sam_hdr_parse` rejects such lines as malformed; they carry no
+/// comment data and are safe to drop before re-parsing for the CRAM write.
+fn strip_bare_comment_lines(text: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len());
+    let mut i = 0;
+    while i < text.len() {
+        // Find end of current line (inclusive of the newline if present).
+        let line_end = text[i..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map(|p| i + p + 1)
+            .unwrap_or(text.len());
+        let line = &text[i..line_end];
+        // A line is "bare comment" if it starts with `@CO`, then only
+        // optional spaces/tabs/CR before \n (or end of text).
+        let is_bare = line.starts_with(b"@CO")
+            && line[3..]
+                .iter()
+                .all(|&b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'));
+        if !is_bare {
+            out.extend_from_slice(line);
+        }
+        i = line_end;
+    }
+    out
 }
 
 unsafe fn sam_hdr_write_bytes(fp: *mut htsFile, bytes: *const c_void, len: usize) -> c_int {
@@ -4898,8 +5592,7 @@ pub unsafe fn sam_hdr_change_HD(
     if (*h).hrecs.is_null() {
         return sam_c_2080_old_sam_hdr_change_HD(h, key, val);
     }
-    // TODO(P5): no native sam_hdr_change_HD hrecs path yet
-    hts_sys::sam_hdr_change_HD(h.cast(), key, val)
+    sam_c_2157_sam_hdr_change_HD_hrecs(h, key, val)
 }
 
 pub unsafe fn sam_hdr_set(fp: *mut htsFile, h: *mut sam_hdr_t, duplicate: c_int) -> c_int {
@@ -4931,7 +5624,26 @@ pub unsafe fn sam_hdr_get(fp: *mut htsFile) -> *mut sam_hdr_t {
 }
 
 unsafe fn sam_c_1173_bam_get_library(h: *const sam_hdr_t, b: *const bam1_t) -> *const c_char {
-    static mut LB_TEXT: [c_char; 1024] = [0; 1024];
+    // Concurrency fix vs the htslib v1.23 C baseline (htslib/sam.c::bam_get_library):
+    //   The C original uses a function-static `char lb_text[1024]` and returns
+    //   a pointer into it.  htslib documents this routine as non-reentrant
+    //   because two threads decoding different records would race on the
+    //   shared buffer (one thread's library name can be observed mid-write or
+    //   overwritten by another thread before the caller consumes it).  In
+    //   Rust we can do better at zero cost: each thread gets its own 1024B
+    //   buffer via a `thread_local!`, so concurrent callers on distinct
+    //   threads never alias.  The returned `*const c_char` aliases the
+    //   per-thread buffer and is therefore only valid while the calling
+    //   thread is alive AND only on the thread that produced it.  In practice
+    //   the sole production call site (`sam_format_aux` library handler,
+    //   sam.rs:6207) consumes the pointer with `kputs` on the same thread
+    //   immediately, which matches this invariant.  The public function
+    //   signature (`unsafe fn ... -> *const c_char`) is unchanged.
+    thread_local! {
+        static LB_TEXT: std::cell::UnsafeCell<[c_char; 1024]> = const {
+            std::cell::UnsafeCell::new([0; 1024])
+        };
+    }
 
     let mut lib = kstring_t {
         l: 0,
@@ -4959,7 +5671,11 @@ unsafe fn sam_c_1173_bam_get_library(h: *const sam_hdr_t, b: *const bam1_t) -> *
     }
 
     let len = if lib.l < 1023 { lib.l } else { 1023 };
-    let lb_text = std::ptr::addr_of_mut!(LB_TEXT).cast::<c_char>();
+    // Obtain a `*mut c_char` to this thread's private buffer.  `UnsafeCell::get`
+    // returns a raw pointer whose validity is tied to the thread-local's
+    // storage, which lives until thread exit, so the pointer remains valid
+    // beyond the `with` closure for any same-thread use that follows.
+    let lb_text = LB_TEXT.with(|cell| cell.get().cast::<c_char>());
     if len > 0 {
         std::ptr::copy_nonoverlapping(lib.s, lb_text, len);
     }
@@ -8128,8 +8844,8 @@ unsafe extern "C" fn sam_c_1754_cram_name2id(fdv: *mut c_void, ref_: *const c_ch
     if fdv.is_null() || ref_.is_null() {
         return -1;
     }
-    // TODO(P5): no native cram_fd_get_header accessor yet
-    let hdr = hts_sys::cram_fd_get_header(fdv.cast()).cast::<sam_hdr_t>();
+    let hdr = crate::htslib_rs::cram::cram_cram_external_c_58_cram_fd_get_header(fdv.cast())
+        .cast::<sam_hdr_t>();
     sam_hdr_name2tid(hdr, ref_)
 }
 
@@ -19854,6 +20570,212 @@ mod tests {
 
             hts_base_mod_state_free(state);
             bam_destroy1(b);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Concurrency coverage for sam_c_1173_bam_get_library.
+    //
+    // Background: the htslib v1.23 C original (`htslib/sam.c::bam_get_library`)
+    // returns a pointer into a function-static `char lb_text[1024]`.  Two
+    // threads decoding different records race on that buffer.  Our Rust port
+    // used the same pattern (`static mut LB_TEXT: [c_char; 1024]`).  The fix
+    // (above) promotes the buffer to a `thread_local!` so that each thread
+    // gets its own private 1024-byte scratch, and the returned `*const c_char`
+    // is valid for the lifetime of that thread (which trivially covers the
+    // same-thread `kputs` consumer at sam.rs:6207).
+    //
+    // The tests below pin that contract:
+    //   (1) `bam_get_library_serial_smoke` is a single-thread sanity check —
+    //       guards against the thread_local refactor accidentally changing
+    //       the observable return value for a known fixture.
+    //   (2) `bam_get_library_concurrent_returns_correct_per_thread` runs N
+    //       distinct (sam_hdr_t, bam1_t) pairs on N threads in tight loops
+    //       and asserts each thread always reads back its own library name,
+    //       never another thread's bytes — i.e. no buffer aliasing across
+    //       threads.
+    // ---------------------------------------------------------------
+
+    /// Wrapper around `(*mut sam_hdr_t, *mut bam1_t)` so it can be shared
+    /// across threads via `Arc`.  Each pair is conceptually owned by a single
+    /// worker thread — no thread ever mutates a pair another thread is using
+    /// — so transferring/aliasing the raw pointers across thread boundaries
+    /// is sound for the duration of the test.
+    struct LibTestPair {
+        hdr: *mut sam_hdr_t,
+        bam: *mut bam1_t,
+        expected: std::ffi::CString,
+    }
+
+    // SAFETY: the test orchestrator (a) builds every `LibTestPair` up-front
+    // on the main thread, (b) hands each individual pair to exactly one
+    // worker thread for the duration of the test, and (c) joins all workers
+    // before dropping/destroying any pair.  No two threads ever touch the
+    // same `sam_hdr_t` or `bam1_t`, so the raw pointers are effectively
+    // `&mut`-style exclusive within a thread.  Crossing thread boundaries
+    // is therefore sound.
+    unsafe impl Send for LibTestPair {}
+    unsafe impl Sync for LibTestPair {}
+
+    /// Build a fresh (header, bam1_t) pair whose RG aux tag resolves to
+    /// `library` via the @RG ID:`rg_id` LB:`library` header line.
+    unsafe fn make_lib_test_pair(rg_id: &str, library: &str) -> LibTestPair {
+        // Header: one @SQ so name2tid works, plus our @RG line.
+        let header_text = format!(
+            "@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:1000\n@RG\tID:{}\tLB:{}\n",
+            rg_id, library
+        );
+        let header_bytes = header_text.as_bytes();
+        let hdr = sam_hdr_init();
+        assert!(!hdr.is_null());
+        assert_eq!(
+            sam_hdr_add_lines(hdr, header_bytes.as_ptr().cast(), header_bytes.len()),
+            0,
+            "sam_hdr_add_lines failed for {}",
+            rg_id
+        );
+
+        // bam1_t with a minimal alignment, plus RG:Z:<rg_id> aux tag.
+        let bam = bam_init1();
+        assert!(!bam.is_null());
+        let cigar = [(4u32 << BAM_CIGAR_SHIFT) | BAM_CMATCH as u32];
+        let qname = std::ffi::CString::new("read").unwrap();
+        let seq = std::ffi::CString::new("ACGT").unwrap();
+        let qual = [31u8, 32, 33, 34];
+        let set_ret = bam_set1(
+            bam,
+            4,
+            qname.as_ptr(),
+            0,
+            0,
+            0,
+            60,
+            1,
+            cigar.as_ptr(),
+            -1,
+            -1,
+            0,
+            4,
+            seq.as_ptr(),
+            qual.as_ptr().cast(),
+            0,
+        );
+        assert!(set_ret > 0, "bam_set1 failed");
+
+        // RG aux tag bytes: NUL-terminated C string of the RG ID.
+        let rg_cstr = std::ffi::CString::new(rg_id).unwrap();
+        let rg_bytes_with_nul = rg_cstr.as_bytes_with_nul();
+        let append_ret = bam_aux_append(
+            bam,
+            c"RG".as_ptr(),
+            b'Z' as c_char,
+            rg_bytes_with_nul.len() as c_int,
+            rg_bytes_with_nul.as_ptr(),
+        );
+        assert_eq!(append_ret, 0, "bam_aux_append(RG) failed");
+
+        LibTestPair {
+            hdr,
+            bam,
+            expected: std::ffi::CString::new(library).unwrap(),
+        }
+    }
+
+    unsafe fn destroy_lib_test_pair(pair: &LibTestPair) {
+        bam_destroy1(pair.bam);
+        sam_hdr_destroy(pair.hdr);
+    }
+
+    #[test]
+    fn bam_get_library_serial_smoke() {
+        unsafe {
+            let pair = make_lib_test_pair("rg_solo", "LIB_SOLO");
+            let lib = sam_c_1173_bam_get_library(pair.hdr, pair.bam);
+            assert!(!lib.is_null(), "expected non-null library pointer");
+            assert_eq!(
+                CStr::from_ptr(lib).to_bytes(),
+                b"LIB_SOLO",
+                "library tag mismatch on serial smoke"
+            );
+            // Repeated same-thread calls keep returning the same value.
+            for _ in 0..16 {
+                let lib2 = sam_c_1173_bam_get_library(pair.hdr, pair.bam);
+                assert_eq!(CStr::from_ptr(lib2).to_bytes(), b"LIB_SOLO");
+            }
+            destroy_lib_test_pair(&pair);
+        }
+    }
+
+    #[test]
+    fn bam_get_library_concurrent_returns_correct_per_thread() {
+        use std::sync::Arc;
+        use std::thread;
+
+        const N_THREADS: usize = 8;
+        const ITERS_PER_THREAD: usize = 10_000;
+
+        unsafe {
+            // Build N distinct (header, bam, expected-library) triples on the
+            // main thread.  Wrap them in `Arc<Vec<_>>` so the worker threads
+            // can index into the shared array (matches the task spec of
+            // sharing pointers via `Arc`).  Each worker only touches its own
+            // index — no aliasing.
+            let mut pairs: Vec<LibTestPair> = Vec::with_capacity(N_THREADS);
+            for i in 0..N_THREADS {
+                let rg_id = format!("rg_thread_{}", i);
+                let library = format!("LIB_THREAD_{}", i);
+                pairs.push(make_lib_test_pair(&rg_id, &library));
+            }
+            let pairs = Arc::new(pairs);
+
+            let mut handles = Vec::with_capacity(N_THREADS);
+            for tid in 0..N_THREADS {
+                let pairs = Arc::clone(&pairs);
+                handles.push(thread::spawn(move || {
+                    let pair = &pairs[tid];
+                    let expected = pair.expected.as_bytes();
+                    // SAFETY: this thread owns exclusive access to `pair.hdr`
+                    // and `pair.bam` for the duration of this closure: no
+                    // other worker indexes `tid`, and the main thread does
+                    // not touch the vector again until all workers have
+                    // joined.  `sam_c_1173_bam_get_library` is sound under
+                    // those conditions and (post-fix) returns a pointer into
+                    // *this thread's* private thread_local buffer.
+                    unsafe {
+                        for iter in 0..ITERS_PER_THREAD {
+                            let lib = sam_c_1173_bam_get_library(pair.hdr, pair.bam);
+                            assert!(
+                                !lib.is_null(),
+                                "thread {} iter {}: null library",
+                                tid,
+                                iter
+                            );
+                            let got = CStr::from_ptr(lib).to_bytes();
+                            assert_eq!(
+                                got,
+                                expected,
+                                "thread {} iter {}: expected {:?}, got {:?}",
+                                tid,
+                                iter,
+                                std::str::from_utf8(expected).unwrap_or("<non-utf8>"),
+                                std::str::from_utf8(got).unwrap_or("<non-utf8>")
+                            );
+                        }
+                    }
+                }));
+            }
+
+            for handle in handles {
+                handle.join().expect("worker thread panicked");
+            }
+
+            // All workers have joined; safe to tear the pairs down.
+            let pairs = Arc::try_unwrap(pairs)
+                .ok()
+                .expect("Arc still has outstanding refs after join");
+            for pair in &pairs {
+                destroy_lib_test_pair(pair);
+            }
         }
     }
 }

@@ -546,7 +546,11 @@ mod tests {
     }
 
     unsafe fn run_main(args: &mut [CString]) -> c_int {
-        let _guard = GETOPT_LOCK.lock().unwrap();
+        // NOTE: callers must already hold `ORIGINAL_MAIN_LOCK` (see
+        // src/test/mod.rs). The per-file `GETOPT_LOCK` is retained so direct
+        // helper-level callers (none today) remain safe; std `Mutex` is not
+        // reentrant, so we never re-acquire `ORIGINAL_MAIN_LOCK` here.
+        let _guard = GETOPT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let pid = libc::fork();
         assert!(pid >= 0, "fork failed");
 
@@ -643,6 +647,12 @@ mod tests {
 
     #[test]
     fn original_test_bcf_sr_main_args_summary_matches_no_index_merge_fixture() {
+        // Process-wide lock: see src/test/mod.rs. Held for the entire test
+        // because the parent does htslib library work outside run_main.
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let out = temp_path("args-summary", "out");
         let _ = std::fs::remove_file(&out);
 
@@ -674,6 +684,11 @@ mod tests {
 
     #[test]
     fn original_test_bcf_sr_main_fofn_vcf_output_matches_weird_chromosome_fixture() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let out = temp_path("fofn-vcf", "vcf");
         let list = temp_path("fofn-vcf", "list");
         let _ = std::fs::remove_file(&out);
@@ -725,6 +740,11 @@ mod tests {
 
     #[test]
     fn original_test_bcf_sr_main_indexed_regions_and_targets_match_weird_chromosome_outputs() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let bcf = unsafe {
             make_indexed_bcf_from_vcf(
                 &fixture("htslib/test/bcf-sr/weird-chr-names.vcf"),
@@ -789,6 +809,11 @@ mod tests {
 
     #[test]
     fn original_test_bcf_sr_main_args_bcf_output_round_trips_weird_chromosome_fixture() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let out = temp_path("args-bcf", "bcf");
         let _ = std::fs::remove_file(&out);
 

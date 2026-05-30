@@ -2975,7 +2975,11 @@ mod tests {
 
     #[test]
     fn original_sam_c_header_helpers_cover_pg_updates_removal_altnames_and_big_refs() {
-        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_SAM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             TEST_SAM_STATUS = libc::EXIT_SUCCESS;
             test_sam_c_921_test_header_pg_lines();
@@ -2992,7 +2996,11 @@ mod tests {
 
     #[test]
     fn original_sam_c_non_header_helpers_cover_aux_qname_parse_bam_set1_and_cigar_paths() {
-        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_SAM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             TEST_SAM_STATUS = libc::EXIT_SUCCESS;
 
@@ -3046,7 +3054,11 @@ mod tests {
 
     #[test]
     fn original_sam_c_aux_fields1_formats_full_updated_records() {
-        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_SAM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             TEST_SAM_STATUS = libc::EXIT_SUCCESS;
             assert_eq!(test_sam_c_248_aux_fields1(), 1);
@@ -3057,7 +3069,11 @@ mod tests {
 
     #[test]
     fn original_sam_c_executable_edges_cover_iterators_and_enum_tables() {
-        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_SAM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             TEST_SAM_STATUS = libc::EXIT_SUCCESS;
             test_sam_c_604_iterators1();
@@ -3070,7 +3086,11 @@ mod tests {
 
     #[test]
     fn original_sam_c_copy_check_alignment_roundtrips_fixture_formats() {
-        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_SAM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmpdir = sam_test_temp_path("copy_check_alignment");
         fs::create_dir_all(&tmpdir).unwrap();
 
@@ -3135,7 +3155,11 @@ klmno\t0\tCHROMOSOME_II\t500\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
 
     #[test]
     fn original_sam_c_empty_and_text_file_paths_cover_fixture_read_counts() {
-        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_SAM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmpdir = sam_test_temp_path("empty_text");
         fs::create_dir_all(&tmpdir).unwrap();
 
@@ -3179,7 +3203,11 @@ klmno\t0\tCHROMOSOME_II\t500\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
 
     #[test]
     fn original_sam_c_mempolicy_runs_sam_to_bam_to_cram_block_io() {
-        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_SAM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmpdir = sam_test_temp_path("mempolicy");
         fs::create_dir_all(tmpdir.join("test")).unwrap();
 
@@ -3205,7 +3233,11 @@ klmno\t0\tCHROMOSOME_II\t500\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
 
     #[test]
     fn original_sam_c_main_argv_files_cover_faidx_counts() {
-        let _guard = TEST_SAM_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_SAM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmpdir = sam_test_temp_path("faidx_argv");
         fs::create_dir_all(&tmpdir).unwrap();
 

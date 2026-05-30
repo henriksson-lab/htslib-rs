@@ -46,7 +46,21 @@ const Z_DEFAULT_STRATEGY: c_int = 0;
 const EOF_BLOCK: [u8; 28] = [
     31, 139, 8, 4, 0, 0, 0, 0, 0, 255, 6, 0, 66, 67, 2, 0, 27, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
-static mut BGZF_ZERR_BUFFER: [c_char; 32] = [0; 32];
+// Per-thread scratch buffer for `bgzf_zerr` to format unknown zlib error codes.
+//
+// The v1.23 C `htslib/bgzf.c::bgzf_zerr` (around line 281) uses a single
+// `static char buffer[32]`, so two threads hitting the default arm
+// concurrently race on that shared buffer. Translating that to a
+// `static mut` here reproduces the same data race (UB in Rust). Instead
+// each thread gets its own 32-byte buffer that lives for the thread's
+// lifetime, so a `*const c_char` returned from inside `.with(...)`
+// remains valid until the calling thread exits — and that's all
+// `bgzf_zerr`'s callers ever assume (they print/copy synchronously, and
+// any subsequent call from the same thread overwrites it).
+thread_local! {
+    static BGZF_ZERR_BUFFER: std::cell::UnsafeCell<[c_char; 32]> =
+        const { std::cell::UnsafeCell::new([0; 32]) };
+}
 
 #[repr(C)]
 struct z_stream {
@@ -583,7 +597,13 @@ pub unsafe fn bgzf_zerr(errnum: c_int, zs: *mut z_stream_s) -> *const c_char {
         Z_VERSION_ERROR => c"zlib version mismatch".as_ptr().cast(),
         Z_NEED_DICT => c"data was compressed using a dictionary".as_ptr().cast(),
         Z_OK | _ => {
-            let buffer = std::ptr::addr_of_mut!(BGZF_ZERR_BUFFER).cast::<c_char>();
+            // Pointer into the *current thread's* BGZF_ZERR_BUFFER. The TLS
+            // slot lives for the thread's lifetime, so the pointer remains
+            // valid for the rest of this thread's existence; htslib callers
+            // consume the message synchronously before doing any further
+            // bgzf work, so a later same-thread `bgzf_zerr` is the only
+            // thing that may overwrite it.
+            let buffer = BGZF_ZERR_BUFFER.with(|cell| cell.get().cast::<c_char>());
             libc::snprintf(buffer, 32, c"[%d] unknown".as_ptr(), errnum);
             buffer.cast()
         }
@@ -2939,19 +2959,24 @@ pub unsafe fn bgzf_useek(fp: *mut BGZF, uoffset: i64, where_: c_int) -> c_int {
         }
     }
 
-    let entry = (*idx).offs.add(lo);
-    if target < (*entry).uaddr {
+    // Do NOT cache `(*idx).offs.add(lo)` across `bgzf_read_block` — that call
+    // may grow the on-the-fly index via realloc, invalidating the pointer.
+    // Read uaddr/caddr by index each time, like the v1.23 C `bgzf_useek`
+    // (htslib/bgzf.c:2547 uses `fp->idx->offs[i].uaddr` after the read).
+    let entry_uaddr = (*(*idx).offs.add(lo)).uaddr;
+    let entry_caddr = (*(*idx).offs.add(lo)).caddr;
+    if target < entry_uaddr {
         add_errcode(fp, BGZF_ERR_IO);
         return -1;
     }
-    if bgzf_c_2175_bgzf_seek_common(fp, (*entry).caddr as i64, 0) < 0 {
+    if bgzf_c_2175_bgzf_seek_common(fp, entry_caddr as i64, 0) < 0 {
         return -1;
     }
     if bgzf_read_block(fp) < 0 {
         add_errcode(fp, BGZF_ERR_IO);
         return -1;
     }
-    let block_offset = target - (*entry).uaddr;
+    let block_offset = target - entry_uaddr;
     if block_offset > (*fp).block_length as u64 {
         add_errcode(fp, BGZF_ERR_IO);
         return -1;
@@ -6218,5 +6243,262 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(path);
+    }
+
+    // ------------------------------------------------------------------
+    // Concurrency stress tests
+    // ------------------------------------------------------------------
+
+    // Regression test for the data race on `BGZF_ZERR_BUFFER`. Before the
+    // fix this slot was a single `static mut [c_char; 32]`; two threads
+    // hitting the default arm of `bgzf_zerr` concurrently could each
+    // write into the same buffer and observe a torn/corrupted message.
+    // The v1.23 C `htslib/bgzf.c::bgzf_zerr` (~line 281) has the same
+    // race; our thread-local makes the native version safer.
+    //
+    // The assertion is intentionally weak: zlib error strings vary
+    // across releases and across the `Z_OK | _` default arm
+    // (`"[%d] unknown"`). We only check that the result is a
+    // well-formed C string (NUL-terminated, no embedded NUL surprises)
+    // whose body is printable ASCII — that's enough to catch a buffer
+    // mid-write being read by a different thread.
+    #[test]
+    fn bgzf_zerr_buffer_does_not_corrupt_under_concurrent_zlib_errors() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+        use std::thread;
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut handles = Vec::new();
+        // N=8 threads; ~1000 iterations each.
+        for tid in 0..8usize {
+            let stop = Arc::clone(&stop);
+            handles.push(thread::spawn(move || {
+                // Mix error codes so different threads hit different arms.
+                // The codes that matter for the race are the ones that fall
+                // through to the default `Z_OK | _` formatter (any code we
+                // pass that isn't one of the explicit Z_* constants).
+                let probes: [c_int; 6] = [
+                    7777 + tid as c_int,
+                    Z_MEM_ERROR,
+                    Z_DATA_ERROR,
+                    9999,
+                    Z_BUF_ERROR,
+                    1234567 + tid as c_int,
+                ];
+                for iter in 0..1000usize {
+                    let code = probes[iter % probes.len()];
+                    // SAFETY: `bgzf_zerr` with a null `zs` returns either
+                    // a pointer to a static string literal or a pointer
+                    // into the current thread's TLS scratch buffer.
+                    // Both are valid until this thread next calls
+                    // `bgzf_zerr` — we read the bytes immediately.
+                    let msg_ptr = unsafe { bgzf_zerr(code, ptr::null_mut()) };
+                    assert!(!msg_ptr.is_null(), "bgzf_zerr returned null");
+                    let cstr = unsafe { CStr::from_ptr(msg_ptr) };
+                    let bytes = cstr.to_bytes();
+                    // The formatted "[%d] unknown" path writes into the
+                    // TLS scratch buffer with snprintf(buffer, 32, ...),
+                    // so its result is bounded by 31 bytes. Static
+                    // string-literal arms (Z_MEM_ERROR etc.) can be
+                    // longer — accept those without the bound. We
+                    // recognise the formatted arm by the leading '['.
+                    if bytes.first() == Some(&b'[') {
+                        assert!(
+                            bytes.len() < 32,
+                            "zerr scratch buffer overflow: {} bytes — buffer corrupted",
+                            bytes.len(),
+                        );
+                    }
+                    // Must be valid UTF-8 (the static literals are ASCII;
+                    // the formatted "[%d] unknown" path is ASCII too).
+                    let s = std::str::from_utf8(bytes)
+                        .expect("zerr msg not valid UTF-8 — buffer probably corrupted");
+                    // No interior NULs (CStr already guarantees this, but
+                    // assert printability to catch torn writes leaking
+                    // arbitrary bytes from another thread's snprintf).
+                    // Allow common punctuation that appears in zlib's
+                    // static error strings (slashes, parens, commas).
+                    for &b in s.as_bytes() {
+                        assert!(
+                            b == b' ' || (b'!'..=b'~').contains(&b),
+                            "non-printable byte 0x{b:02x} in zerr msg {s:?} — buffer corrupted",
+                        );
+                    }
+                    if stop.load(AtomicOrdering::Relaxed) {
+                        break;
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            // Propagate panics so a corruption observation fails the test.
+            h.join().expect("worker thread panicked — zerr buffer corruption");
+        }
+        stop.store(true, AtomicOrdering::Relaxed);
+    }
+
+    // Regression for the use-after-free fix in `bgzf_useek`: each thread
+    // has its OWN `*mut BGZF`, builds an on-the-fly index, and performs
+    // useek + small reads. The per-fp state must remain consistent across
+    // realloc growth of the OTF index (no cross-thread aliasing of the
+    // shared file's BGZF state — each fp owns its own buffers and index).
+    #[test]
+    fn bgzf_useek_concurrent_otf_index_reads() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let path = std::env::temp_dir().join(format!(
+            "cellsnp-lite-bgzf-otf-concurrent-{}.gz",
+            std::process::id()
+        ));
+        // Multi-block payload so OTF index grows (and reallocs) during reads.
+        let payload: Vec<u8> = (0..(BGZF_BLOCK_SIZE * 6 + 7777))
+            .map(|i| (i as u32).wrapping_mul(0x9E3779B1) as u8)
+            .collect();
+        {
+            let file = File::create(&path).unwrap();
+            let mut writer = noodles::bgzf::io::Writer::new(file);
+            writer.write_all(&payload).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let payload = Arc::new(payload);
+        let path_arc = Arc::new(path.clone());
+        let mut handles = Vec::new();
+        for tid in 0..4usize {
+            let payload = Arc::clone(&payload);
+            let path_arc = Arc::clone(&path_arc);
+            handles.push(thread::spawn(move || {
+                let path_c =
+                    CString::new(super::super::path_bytes(&*path_arc).as_ref()).unwrap();
+                // SAFETY: each thread opens its OWN bgzf fp; there is no
+                // cross-thread sharing of the BGZF pointer or its
+                // internal buffers/index. The path bytes are immutable.
+                unsafe {
+                    let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+                    assert!(!fp.is_null(), "thread {tid}: bgzf_open failed");
+                    assert_eq!(
+                        bgzf_index_build_init(fp),
+                        0,
+                        "thread {tid}: index_build_init",
+                    );
+
+                    // Walk forward through several blocks to populate the
+                    // OTF index, then perform a useek + small read.
+                    let chunk = BGZF_BLOCK_SIZE + 333;
+                    let mut buf = vec![0u8; chunk];
+                    let mut total = 0usize;
+                    while total < BGZF_BLOCK_SIZE * 4 + 500 {
+                        let got = bgzf_read(fp, buf.as_mut_ptr().cast(), chunk);
+                        assert!(got > 0, "thread {tid}: native read returned {got}");
+                        assert_eq!(
+                            &buf[..got as usize],
+                            &payload[total..total + got as usize],
+                            "thread {tid}: native-read content mismatch at {total}",
+                        );
+                        total += got as usize;
+                    }
+
+                    // Several useek+read iterations; each one may grow
+                    // the OTF index across the bgzf_read_block call.
+                    // Mix targets in different blocks so each thread
+                    // exercises the binary-search + read-block path.
+                    let targets: [i64; 6] = [
+                        (BGZF_BLOCK_SIZE / 2) as i64 + tid as i64 * 11,
+                        (BGZF_BLOCK_SIZE * 2 + 100) as i64,
+                        (BGZF_BLOCK_SIZE / 4) as i64,
+                        (BGZF_BLOCK_SIZE * 3 + 500) as i64,
+                        (BGZF_BLOCK_SIZE * 4 + 50) as i64,
+                        17,
+                    ];
+                    for &t in &targets {
+                        assert_eq!(
+                            bgzf_useek(fp, t, SEEK_SET),
+                            0,
+                            "thread {tid}: useek to {t} failed",
+                        );
+                        let mut back = vec![0u8; 1024];
+                        let got = bgzf_read(fp, back.as_mut_ptr().cast(), back.len());
+                        assert_eq!(
+                            got,
+                            back.len() as isize,
+                            "thread {tid}: short read after useek to {t}",
+                        );
+                        assert_eq!(
+                            &back[..],
+                            &payload[t as usize..t as usize + back.len()],
+                            "thread {tid}: content mismatch after useek to {t}",
+                        );
+                    }
+
+                    assert_eq!(bgzf_close(fp), 0, "thread {tid}: bgzf_close");
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("worker thread panicked in useek/OTF test");
+        }
+        let _ = std::fs::remove_file(&*path_arc);
+    }
+
+    // Smoke test: many threads, each with its own bgzf fp, read a moderate
+    // file to EOF. All bytes must round-trip. This guards against any
+    // shared mutable state we haven't found yet (e.g. another `static mut`).
+    #[test]
+    fn bgzf_read_block_in_two_threads_each_with_own_fp() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let path = std::env::temp_dir().join(format!(
+            "cellsnp-lite-bgzf-smoke-{}.gz",
+            std::process::id()
+        ));
+        // Spanning a couple of blocks so workers don't all finish in
+        // one inflate() call.
+        let payload: Vec<u8> = (0..(BGZF_BLOCK_SIZE * 3 + 4321))
+            .map(|i| ((i.wrapping_mul(2654435761)) as u8))
+            .collect();
+        {
+            let file = File::create(&path).unwrap();
+            let mut writer = noodles::bgzf::io::Writer::new(file);
+            writer.write_all(&payload).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let payload = Arc::new(payload);
+        let path_arc = Arc::new(path.clone());
+        let mut handles = Vec::new();
+        for tid in 0..8usize {
+            let payload = Arc::clone(&payload);
+            let path_arc = Arc::clone(&path_arc);
+            handles.push(thread::spawn(move || {
+                let path_c =
+                    CString::new(super::super::path_bytes(&*path_arc).as_ref()).unwrap();
+                // SAFETY: each thread owns its bgzf fp; no shared BGZF state.
+                unsafe {
+                    let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+                    assert!(!fp.is_null(), "thread {tid}: bgzf_open failed");
+                    let mut buf = vec![0u8; payload.len()];
+                    let got = bgzf_read(fp, buf.as_mut_ptr().cast(), buf.len());
+                    assert_eq!(
+                        got,
+                        payload.len() as isize,
+                        "thread {tid}: short read ({got} vs {})",
+                        payload.len(),
+                    );
+                    assert_eq!(
+                        &buf[..],
+                        &payload[..],
+                        "thread {tid}: payload mismatch — possible shared-state corruption",
+                    );
+                    assert_eq!(bgzf_close(fp), 0, "thread {tid}: bgzf_close");
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("worker thread panicked in smoke test");
+        }
+        let _ = std::fs::remove_file(&*path_arc);
     }
 }

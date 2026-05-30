@@ -35,6 +35,23 @@ use crate::htslib_rs::md5::{
 };
 use std::ffi::{c_char, c_int, c_long, c_uchar, c_uint, c_void};
 
+// Concurrency note (audit 2026-05):
+//
+// The entire `ref_cache` subsystem (this file, `ref_files.rs`, `transaction.rs`,
+// `http_parser.rs`, etc.) is the back-end of the `ref-cache` daemon binary.
+// The daemon's process model is fork-based (see `main.rs` and `server.rs`):
+// each worker process runs a single-threaded epoll loop and is the sole
+// owner of these globals. No `pthread_create` / `std::thread::spawn` is
+// reachable anywhere in `src/ref_cache/`; verify with
+// `grep -rn 'pthread_create\|thread::spawn' src/ref_cache/`.
+//
+// `CURL_VERSION_NUM` is written exactly once at the top of
+// `run_upstream_handler` and is currently unread (preserved verbatim from
+// the C original so future libcurl version-gated paths land cleanly). It
+// is single-threaded by design.
+//
+// SAFETY: single-threaded daemon worker; do not introduce additional
+// threads in this module without revisiting every `static mut` here.
 static mut CURL_VERSION_NUM: c_uint = 0;
 
 const MD5_LEN: usize = 32;

@@ -303,6 +303,11 @@ mod tests {
 
     #[test]
     fn original_test_mod_main_matches_base_mod_fixture_outputs() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         assert_main_output(
             "chebi-default",
             vec![

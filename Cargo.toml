@@ -18,7 +18,7 @@ path = "src/lib.rs"
 # signal is `cargo build --no-default-features` (no hts_sys) compiling cleanly.
 # See docs/HTS_SYS_CUTOVER.md.
 [features]
-default = ["parity"]
+default = ["parity", "cram-mirror"]
 parity = ["dep:hts-sys"]
 cram-mirror = ["dep:c2rust-bitfields"]
 gcs = ["libcurl"]

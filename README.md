@@ -7,7 +7,10 @@ But causual developers should first see if the noodles (https://docs.rs/noodles/
 while this crate merely aims to provide an unfiltered path into the original C htslib. But because the original htslib is in C and our translations are 1-1 for auditability,
 this crate makes little attempt to prevent to prevent the user from doing something harmful. Thus, be careful when using this crate.
 
-* 2026-05-14: Minimal testing performed. **This translation is incomplete, features are still missing**
+
+**This translation is incomplete, features are still missing**
+* 2026-05-29: Translation still ongoing
+* 2026-05-14: Minimal testing performed 
 
 
 ## This is an LLM-mediated faithful (hopefully) translation, not the original code! 

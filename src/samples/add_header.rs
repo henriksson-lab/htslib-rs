@@ -56,35 +56,31 @@ pub unsafe fn samples_add_header_c_49_main(argc: c_int, argv: *mut *mut c_char) 
 
     if sam::sam_hdr_add_lines(in_samhdr, sq.as_ptr(), 0) != 0 {
         libc::printf(c"Failed to add SQ lines\n".as_ptr());
-    } else if hts_sys::sam_hdr_add_line(
-        in_samhdr.cast(),
+    } else if sam::sam_hdr_add_line(
+        in_samhdr,
         c"RG".as_ptr(),
-        c"ID".as_ptr(),
-        c"RG1".as_ptr(),
-        c"LB".as_ptr(),
-        c"Test".as_ptr(),
-        c"SM".as_ptr(),
-        c"S1".as_ptr(),
-        std::ptr::null::<c_char>(),
+        &[
+            (c"ID".as_ptr(), c"RG1".as_ptr()),
+            (c"LB".as_ptr(), c"Test".as_ptr()),
+            (c"SM".as_ptr(), c"S1".as_ptr()),
+        ],
     ) != 0
     {
         libc::printf(c"Failed to add RG line\n".as_ptr());
-    } else if hts_sys::sam_hdr_add_pg(
-        in_samhdr.cast(),
+    } else if sam::sam_hdr_add_pg(
+        in_samhdr,
         c"add_header".as_ptr(),
-        c"VN".as_ptr(),
-        c"Test".as_ptr(),
-        c"CL".as_ptr(),
-        data.s,
-        std::ptr::null::<c_char>(),
+        &[
+            (c"VN".as_ptr(), c"Test".as_ptr()),
+            (c"CL".as_ptr(), data.s),
+        ],
     ) != 0
     {
         libc::printf(c"Failed to add PG line\n".as_ptr());
-    } else if hts_sys::sam_hdr_add_line(
-        in_samhdr.cast(),
+    } else if sam::sam_hdr_add_line(
+        in_samhdr,
         c"CO".as_ptr(),
-        c"Test data".as_ptr(),
-        std::ptr::null::<c_char>(),
+        &[(c"Test data".as_ptr(), std::ptr::null::<c_char>())],
     ) != 0
     {
         libc::printf(c"Failed to add PG line\n".as_ptr());

@@ -1157,7 +1157,10 @@ mod tests {
     static GETOPT_LOCK: Mutex<()> = Mutex::new(());
 
     unsafe fn run_main(args: &[CString]) -> c_int {
-        let _guard = GETOPT_LOCK.lock().unwrap();
+        // NOTE: callers must already hold `ORIGINAL_MAIN_LOCK` (see
+        // src/test/mod.rs). `GETOPT_LOCK` is retained for backward-compat
+        // but is now effectively a no-op while the global lock is held.
+        let _guard = GETOPT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         optarg = ptr::null_mut();
         // optind = 0 forces glibc getopt full reinit (shared-process tests).
         optind = 0;
@@ -1171,6 +1174,11 @@ mod tests {
 
     #[test]
     fn original_test_regidx_main_runs_full_harness_with_fixed_seed() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let args = vec![c"test-regidx".into(), c"-s".into(), c"17".into()];
 
         unsafe {
@@ -1180,6 +1188,11 @@ mod tests {
 
     #[test]
     fn original_test_regidx_create_line_helpers_match_expected_formats() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unsafe {
             let mut line = [0 as c_char; 64];
             let chr = CString::new("chrA").unwrap();

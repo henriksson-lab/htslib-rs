@@ -419,6 +419,11 @@ mod tests {
 
     #[test]
     fn test_parse_reg_main_parses_fixture_regions_and_options() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unsafe {
             assert_eq!(
                 run_main(&[

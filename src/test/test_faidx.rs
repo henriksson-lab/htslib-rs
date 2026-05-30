@@ -726,7 +726,10 @@ mod tests {
     }
 
     unsafe fn run_main(args: &[CString]) -> c_int {
-        let _guard = GETOPT_LOCK.lock().unwrap();
+        // NOTE: callers must already hold `ORIGINAL_MAIN_LOCK` (see
+        // src/test/mod.rs). `GETOPT_LOCK` is retained for backward-compat
+        // but is now effectively a no-op while the global lock is held.
+        let _guard = GETOPT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         optarg = std::ptr::null_mut();
         // optind = 0 forces glibc getopt full reinit (shared-process tests).
         optind = 0;
@@ -739,6 +742,11 @@ mod tests {
 
     #[test]
     fn original_test_faidx_main_fastq_retrieval_compares_expected_output() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let out_path = temp_path("fastq-retrieval").with_extension("fq");
         let out = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
         let args = vec![

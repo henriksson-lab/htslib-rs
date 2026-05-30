@@ -1010,6 +1010,8 @@ mod tests {
     use std::fs;
 
     unsafe fn run_main(args: &[CString]) -> c_int {
+        // NOTE: callers must already hold `ORIGINAL_MAIN_LOCK` (see
+        // src/test/mod.rs) — this manipulates the libc getopt globals.
         let mut argv = args
             .iter()
             .map(|arg| arg.as_ptr().cast_mut())
@@ -1020,6 +1022,11 @@ mod tests {
 
     #[test]
     fn original_test_khash_main_runs_minimal_str2int_path() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unsafe {
             let argv = [
                 CString::new("test_khash").unwrap(),
@@ -1036,6 +1043,11 @@ mod tests {
 
     #[test]
     fn original_test_khash_main_rejects_invalid_item_count() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unsafe {
             let argv = [
                 CString::new("test_khash").unwrap(),
@@ -1050,6 +1062,11 @@ mod tests {
 
     #[test]
     fn original_test_khash_str2int_delete_reinsert_path_is_bounded() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unsafe {
             assert_eq!(test_test_khash_c_137_test_str2int(128, 37, 0), 0);
         }
@@ -1057,6 +1074,11 @@ mod tests {
 
     #[test]
     fn original_test_khash_benchmark_path_accepts_file_backed_keys() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let path = std::env::temp_dir().join(format!(
             "htslib_rs_test_khash_keys_{}.txt",
             std::process::id()

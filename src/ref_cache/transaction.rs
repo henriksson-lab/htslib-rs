@@ -87,6 +87,20 @@ struct TransactionPrefixLayout {
     http_vers: c_int,
 }
 
+// Concurrency note (audit 2026-05):
+//
+// Both statics belong to the `ref-cache` daemon server worker, which is
+// single-threaded by construction (fork-based process model, epoll event
+// loop — see `src/ref_cache/main.rs` and `src/ref_cache/server.rs`). The
+// transaction pool is lazily created on the first call to
+// `ref_cache_transaction_c_136_new_transaction`; because that call runs on
+// the daemon's single owning thread, no synchronization is required.
+// `REF_CACHE_TRANSACTIONS` is a fixed-size hash bucket array indexed by
+// `id & REF_CACHE_TRANSACT_MASK` and is also touched only from that thread.
+// `grep -rn 'pthread_create\|thread::spawn' src/ref_cache/` returns no
+// matches; do not add additional threads here without revisiting this.
+//
+// SAFETY: single-threaded daemon worker.
 static mut REF_CACHE_TRANSACTION_POOL: *mut cram::pool_alloc_t = std::ptr::null_mut();
 static mut REF_CACHE_TRANSACTIONS: [*mut Transaction; 0x400] = [std::ptr::null_mut(); 0x400];
 

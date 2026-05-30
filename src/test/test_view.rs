@@ -894,6 +894,11 @@ mod tests {
 
     #[test]
     fn original_test_view_main_writes_limited_bam_as_sam() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unsafe {
             let out = temp_path("limited-bam");
             let mut args = vec![

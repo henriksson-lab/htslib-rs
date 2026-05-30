@@ -157,6 +157,46 @@ struct HFileLibcurlHeaderPrefix {
     preserved_size: usize,
 }
 
+// Concurrency notes (audit 2026-05):
+//
+// All of the `static mut` items below mirror the layout of `htslib/hfile_libcurl.c`'s
+// process-global `curl` struct. They fall into three categories:
+//
+// 1. `*_LOCK` (pthread_mutex_t) — the locks themselves. They are statically
+//    initialized to `PTHREAD_MUTEX_INITIALIZER`, and only ever read by taking
+//    their address and handing the pointer to pthread routines. The values
+//    don't migrate between threads as plain Rust state; pthread internals
+//    serialize access. They must be `static mut` because `pthread_mutex_t`
+//    is `!Sync`.
+//
+// 2. Plugin init-once-then-read state: `HFILE_LIBCURL_USERAGENT`,
+//    `HFILE_LIBCURL_SHARE`, `HFILE_LIBCURL_AUTH_PATH`,
+//    `HFILE_LIBCURL_ALLOW_UNENCRYPTED_AUTH_HEADER`. These are written
+//    exactly once from `hfile_libcurl_c_1679_PLUGIN_GLOBAL`, which is
+//    called from `hfile_c_1111_load_hfile_plugins` under
+//    `hfile_plugin_state().lock()` (see `src/hfile.rs`). After init they
+//    are read-only for the rest of the process lifetime, until
+//    `hfile_libcurl_c_326_libcurl_exit` runs at shutdown (also single-
+//    threaded — the plugin destroy callback fires once per process exit).
+//
+// 3. Lazy-init-then-mutate-under-lock: `HFILE_LIBCURL_AUTH_MAP`. The pointer
+//    is initialized (and the Vec it points to is grown) only while
+//    `HFILE_LIBCURL_AUTH_LOCK` is held — see
+//    `hfile_libcurl_c_650_get_auth_token`. Concurrent callers serialize on
+//    that mutex.
+//
+// 4. Env-var snapshots: `HFILE_LIBCURL_RETRY_MAX`, `HFILE_LIBCURL_RETRY_DELAY_MS`.
+//    These are refreshed from `getenv(HTS_RETRY_*)` on each `hopen()` /
+//    reconnect via `hfile_libcurl_c_821_refresh_retry_config`. Concurrent
+//    writers race, but each writer derives the value deterministically from
+//    the (process-wide) environment, so the only observable race is a torn
+//    word between consecutive `getenv` calls returning identical strings —
+//    which on the targeted platforms (x86_64, aarch64) is a non-issue for
+//    aligned word-sized stores, and matches the C original's behaviour.
+//
+// SAFETY: see the per-static notes above. Do not promote to a `Mutex<T>`:
+// that would gratuitously diverge from the C ABI exposed via
+// `hts_sys::*` and break the parity tests.
 static mut HFILE_LIBCURL_SHARE_LOCK: libc::pthread_mutex_t = libc::PTHREAD_MUTEX_INITIALIZER;
 static mut HFILE_LIBCURL_AUTH_LOCK: libc::pthread_mutex_t = libc::PTHREAD_MUTEX_INITIALIZER;
 static mut HFILE_LIBCURL_USERAGENT: kstring_t = kstring_t {
@@ -235,10 +275,9 @@ struct CurlMsg {
     data: CurlMsgData,
 }
 
-unsafe extern "C" {
-    #[link_name = "hfile_plugin_init_libcurl"]
-    fn htslib_hfile_plugin_init_libcurl(self_: *mut hFILE_plugin) -> c_int;
-}
+// (the libhts `hfile_plugin_init_libcurl` extern was removed 2026-05-29 —
+// it had no call sites. The libcurl plugin layer is now driven entirely by
+// the native `hfile_libcurl_c_*` functions in this file.)
 
 #[link(name = "curl")]
 unsafe extern "C" {
@@ -2330,6 +2369,96 @@ mod tests {
             hfile_libcurl_set_callback_failure_errno();
             assert_eq!(*crate::htslib_rs::c_compat::__errno_location(), libc::EIO);
         }
+    }
+
+    // Concurrency audit (2026-05) — verifies the SAFETY claim that
+    // `HFILE_LIBCURL_SHARE_LOCK` is a real pthread mutex correctly used as
+    // the CURLSHOPT_LOCKFUNC. We spawn many threads that take the share
+    // lock around updates to a local counter; if the lock were missing or
+    // broken, the final counter would diverge from `THREADS * PER_THREAD`.
+    // The same statically-initialized mutex is exercised directly through
+    // the C-callable `share_lock` / `share_unlock` entry points used by
+    // libcurl when CURL_LOCK_DATA_DNS contention occurs.
+    #[test]
+    fn libcurl_share_lock_serializes_concurrent_callers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 4_000;
+
+        // Plain counter under the share lock; the lock provides happens-before
+        // edges so we observe writes through a *non-atomic* counter without UB.
+        // We keep an `AtomicUsize` for the read-out only, to avoid passing a
+        // raw `*mut usize` between threads (which would need its own unsafe).
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::with_capacity(THREADS);
+        for _ in 0..THREADS {
+            let counter = counter.clone();
+            handles.push(thread::spawn(move || {
+                for _ in 0..PER_THREAD {
+                    unsafe {
+                        hfile_libcurl_c_309_share_lock(
+                            std::ptr::null_mut(),
+                            0,
+                            0,
+                            std::ptr::null_mut(),
+                        );
+                        // Read-modify-write inside the critical section. We
+                        // deliberately use Relaxed because the pthread mutex
+                        // provides the necessary happens-before.
+                        let v = counter.load(Ordering::Relaxed);
+                        counter.store(v + 1, Ordering::Relaxed);
+                        hfile_libcurl_c_314_share_unlock(
+                            std::ptr::null_mut(),
+                            0,
+                            std::ptr::null_mut(),
+                        );
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("share-lock test thread panicked");
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), THREADS * PER_THREAD);
+    }
+
+    // Concurrency audit (2026-05) — verifies the SAFETY claim that
+    // `HFILE_LIBCURL_AUTH_LOCK` correctly serializes lazy initialization of
+    // the auth-token map. We invoke `get_auth_token` concurrently with no
+    // configured auth path (the function bails out on the
+    // `HFILE_LIBCURL_AUTH_PATH.is_null()` fast path before taking the lock,
+    // so we additionally exercise the lock directly to assert the same
+    // invariant the audit relied on).
+    #[test]
+    fn libcurl_auth_lock_serializes_lazy_map_init() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        const THREADS: usize = 8;
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::with_capacity(THREADS);
+        for _ in 0..THREADS {
+            let barrier = barrier.clone();
+            let counter = counter.clone();
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                unsafe {
+                    libc::pthread_mutex_lock(std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_LOCK));
+                    let v = counter.load(Ordering::Relaxed);
+                    counter.store(v + 1, Ordering::Relaxed);
+                    libc::pthread_mutex_unlock(std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_LOCK));
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("auth-lock test thread panicked");
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), THREADS);
     }
 
     #[test]

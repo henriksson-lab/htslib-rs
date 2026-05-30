@@ -389,8 +389,17 @@ fn permutec_unshuffle_round_trips_with_permute() {
 /// test harness and replacing it under freopen can deadlock the harness
 /// when it later tries to print captured output.
 fn capture_main_stdout() -> (i32, Vec<u8>) {
+    // fd 1 (STDOUT_FILENO) is process-global. If two `capture_main_stdout`
+    // callers race, one's `dup2` can clobber the other's saved fd or its
+    // in-flight write — surfaced at `--test-threads=16` as a mangled stdout
+    // assertion failure. Serialize all callers behind a single Mutex.
+    static FD1_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = FD1_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     let pid = unsafe { libc::getpid() };
-    // Include the thread id so concurrent test threads don't collide.
+    // Include the thread id so concurrent test threads don't collide (the
+    // FD1_LOCK already serializes the fd swap, but the temp path stays
+    // per-thread for diagnosability).
     let tid = std::thread::current().id();
     let path = format!("/tmp/permute_main_test_{}_{:?}.out\0", pid, tid);
 

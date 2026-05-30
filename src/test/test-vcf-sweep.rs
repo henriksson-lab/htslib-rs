@@ -185,6 +185,11 @@ mod tests {
 
     #[test]
     fn original_test_vcf_sweep_main_matches_fixture_output() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let input = temp_vcf("input");
         std::fs::write(
             &input,

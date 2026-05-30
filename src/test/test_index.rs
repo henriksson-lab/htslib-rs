@@ -118,7 +118,10 @@ mod tests {
     }
 
     unsafe fn run_main(args: &[CString]) -> c_int {
-        let _guard = GETOPT_LOCK.lock().unwrap();
+        // NOTE: callers must already hold `ORIGINAL_MAIN_LOCK` (see
+        // src/test/mod.rs). `GETOPT_LOCK` is retained for backward-compat
+        // but is now effectively a no-op while the global lock is held.
+        let _guard = GETOPT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         optarg = ptr::null_mut();
         // optind = 0 (not 1) forces glibc getopt to fully reinitialize its
         // internal scan state; these C-`main()` tests share one process, so a
@@ -173,6 +176,11 @@ mod tests {
 
     #[test]
     fn original_test_index_main_builds_bam_bai_and_loads_region() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unsafe {
             let bam = copy_range_bam_without_indexes("bai");
             let bam_c = c_path(&bam);
@@ -194,6 +202,11 @@ mod tests {
 
     #[test]
     fn original_test_index_main_builds_bam_csi_with_min_shift_option() {
+        // Process-wide lock for cross-file isolation (see src/test/mod.rs).
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unsafe {
             let bam = copy_range_bam_without_indexes("csi");
             let bam_c = c_path(&bam);

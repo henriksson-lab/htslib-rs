@@ -78,6 +78,22 @@ static REF_CACHE_TOKEN_CHARS: [c_uchar; 256] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
+// Concurrency note (audit 2026-05):
+//
+// `REF_CACHE_HTTP_LINE` is a scratch buffer used to assemble a single line
+// of an HTTP request while the parser is reassembling a wrapped header
+// across ring-buffer boundaries (see
+// `ref_cache_http_parser_c_158_parser_get_line`). The buffer is owned by
+// the `ref-cache` daemon's single epoll worker thread (fork-based process
+// model — see `src/ref_cache/main.rs` and `src/ref_cache/server.rs`); no
+// threading primitives exist anywhere in the `ref_cache` subsystem, so the
+// buffer is touched by exactly one thread at a time.
+//
+// SAFETY: single-threaded daemon worker; the function reads the parser
+// state, decides if a contiguous line is available, and either returns an
+// inline pointer into `(*parser).buffer` or copies into this static. The
+// returned pointer is consumed before the next call, so there is also no
+// re-entrancy hazard within the single thread.
 static mut REF_CACHE_HTTP_LINE: [c_char; REF_CACHE_BUF_SZ as usize + 1] =
     [0; REF_CACHE_BUF_SZ as usize + 1];
 

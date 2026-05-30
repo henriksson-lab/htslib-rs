@@ -35,6 +35,17 @@ pub struct RefFiles {
     id: c_uint,
 }
 
+// Concurrency note (audit 2026-05):
+//
+// `REFS` is the in-memory hash table of MD5 -> RefFile entries owned by the
+// `ref-cache` daemon server worker. The daemon is single-threaded (fork-based
+// process model, epoll event loop — see `src/ref_cache/main.rs` and
+// `src/ref_cache/server.rs`). No threading primitives are used in the
+// `ref_cache` subsystem; confirm via
+// `grep -rn 'pthread_create\|thread::spawn' src/ref_cache/`.
+//
+// SAFETY: single-threaded daemon worker; all mutation here happens on the
+// epoll loop's owning thread, so no synchronization is required.
 static mut REFS: RefFiles = RefFiles {
     by_md5: [std::ptr::null_mut(); HASH_SZ],
     id: 0,

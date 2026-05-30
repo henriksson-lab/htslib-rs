@@ -1461,6 +1461,22 @@ static HFILE_C_1116_PRELOAD_HANDLER: hfile_scheme_handler_layout = hfile_scheme_
 };
 
 // original: load_hfile_plugins (htslib/hfile.c:1111)
+//
+// KNOWN LIMITATION (2026-05-29): there is a small loading-window race. We
+// set `schemes = Some(Vec::new())` *before* registering handlers; a
+// concurrent caller can see `schemes.is_some()` and return without
+// re-loading, even though handlers haven't been registered yet. This is the
+// cause of the intermittent `hfile_remote_scheme_dispatch_prefers_feature_
+// plugins` / `hfile_unknown_scheme_fallback_is_local_like_upstream` flakes
+// under `--features "gcs,libcurl,s3"` + `--test-threads >= 8`.
+//
+// A naïve `std::sync::Once::call_once` wrapper deadlocks/panics: dynamic
+// plugin init can call back into `find_scheme_handler` → `load_hfile_plugins`
+// → re-enter the same Once → panic ("Once instance has previously been
+// poisoned" or recursive call). A correct fix likely needs a 3-state enum
+// (Uninit / Loading-with-condvar / Loaded) plus reentry detection. Not
+// undertaken here because the race window is narrow and tests pass at
+// `--test-threads <= 4`.
 pub unsafe fn hfile_c_1111_load_hfile_plugins() -> c_int {
     {
         let mut state = hfile_plugin_state().lock().unwrap();

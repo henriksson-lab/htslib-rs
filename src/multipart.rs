@@ -138,6 +138,7 @@ pub unsafe extern "C" fn multipart_c_73_multipart_read(
         if (*fp).currentfp.is_null() {
             if (*fp).current < (*fp).nparts {
                 let p = (*fp).parts.add((*fp).current);
+                // TODO(P5): no native hts_log yet (variadic, libhts-only)
                 hts_sys::hts_log(
                     hts_sys::htsLogLevel_HTS_LOG_DEBUG,
                     c"multipart".as_ptr(),
@@ -360,6 +361,7 @@ pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
                 return t.type_;
             }
 
+            // TODO(P5): no native hts_log yet (variadic, libhts-only)
             hts_sys::hts_log(
                 hts_sys::htsLogLevel_HTS_LOG_DEBUG,
                 c"multipart".as_ptr(),

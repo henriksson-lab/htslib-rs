@@ -2244,7 +2244,11 @@ mod tests {
 
     #[test]
     fn original_test_vcf_api_quiet_helpers_cover_format_end_and_rlen() {
-        let _guard = TEST_VCF_API_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_VCF_API_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let bcf_path = temp_bcf_path("format-values");
         let _ = std::fs::remove_file(&bcf_path);
         let bcf_path_c = CString::new(bcf_path.to_string_lossy().as_bytes()).unwrap();
@@ -2261,7 +2265,11 @@ mod tests {
 
     #[test]
     fn original_test_vcf_api_vl_header_types_cover_local_number_codes() {
-        let _guard = TEST_VCF_API_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_VCF_API_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         unsafe {
             test_test_vcf_api_c_807_test_vl_types();
@@ -2270,7 +2278,11 @@ mod tests {
 
     #[test]
     fn original_test_vcf_api_allele_removal_matches_expected_records() {
-        let _guard = TEST_VCF_API_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_VCF_API_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         unsafe {
             test_test_vcf_api_c_933_test_bcf_remove_allele_set();
@@ -2279,7 +2291,11 @@ mod tests {
 
     #[test]
     fn original_test_vcf_api_iterator_query_reads_indexed_record() {
-        let _guard = TEST_VCF_API_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_VCF_API_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let bcf_path = temp_path("iterator", "bcf");
         cleanup_generated_bcf(&bcf_path);
         let bcf_path_c = c_path(&bcf_path);
@@ -2327,7 +2343,11 @@ mod tests {
 
     #[test]
     fn original_test_vcf_api_bcf_to_vcf_writes_gzip_vcf_without_crashing() {
-        let _guard = TEST_VCF_API_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_VCF_API_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let bcf_path = temp_path("bcf-to-vcf", "bcf");
         let out_path = temp_path("bcf-to-vcf-stdout", "out");
         cleanup_generated_bcf(&bcf_path);
@@ -2353,7 +2373,11 @@ mod tests {
 
     #[test]
     fn original_test_vcf_api_main_writes_expected_stdout_vcf() {
-        let _guard = TEST_VCF_API_LOCK.lock().unwrap();
+        let _global = crate::htslib_rs::test::ORIGINAL_MAIN_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::htslib_rs::test::CwdGuard::new();
+        let _guard = TEST_VCF_API_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let bcf_path = temp_path("main", "bcf");
         let out_path = temp_path("main-stdout", "out");
         cleanup_generated_bcf(&bcf_path);

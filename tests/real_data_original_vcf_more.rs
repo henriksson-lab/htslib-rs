@@ -270,12 +270,18 @@ fn test_vcf_api_out_keeps_haploid_and_missing_genotype_sentinel_layout() {
         assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec)), c"20");
         assert_eq!((*rec).pos, 1_110_695);
         assert_alleles(rec, &[c"A", c"G", c"T"]);
+        // NOTE (2026-05-29): htslib v1.23 made haploid genotypes implicitly
+        // phased even for VCF < 4.4 (test fixture is VCFv4.2). v1.19.1 returned
+        // [6, EOV, 4, EOV, 0, 0] (no phase bit); v1.23 sets the phase bit on
+        // the haploid allele → [7, EOV, 5, EOV, 0, 0]. Our native parser
+        // faithfully matches v1.23 — confirmed by `vcf_parse_native_matches_hts_sys`
+        // (native and the linked C produce identical byte output).
         assert_eq!(
             get_format_i32(hdr, rec, c"GT"),
             vec![
-                6,
+                7,
                 hts_sys::bcf_int32_vector_end,
-                4,
+                5,
                 hts_sys::bcf_int32_vector_end,
                 0,
                 0,

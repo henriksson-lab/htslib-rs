@@ -17,7 +17,25 @@ unsafe extern "C" {
 const EI: f64 = 0.25;
 const EM: f64 = 0.33333333333;
 
-static mut G_QUAL2PROB: [f32; 256] = [0.0; 256];
+/// Quality (Phred) → probability lookup table.
+///
+/// Lazy-initialized via `LazyLock` for thread-safe one-time computation; a
+/// previous `static mut G_QUAL2PROB: [f32; 256] = [0.0; 256];` with an
+/// in-band `if G_QUAL2PROB[0] == 0.0 { …populate… }` guard had a classic
+/// lazy-init data race — thread B could observe the partially-populated table
+/// (low indices set, high indices still 0.0) while thread A was still in the
+/// init loop, producing 0.0 instead of `10.0^(-q/10)` for high-quality reads
+/// and corrupting BAQ output. Surfaced by `realn01_baq_apply/extend_*` at
+/// `--test-threads=8`.
+static G_QUAL2PROB: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(|| {
+    let mut t = [0.0f32; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        t[i] = 10.0_f64.powf(-(i as f64) / 10.0) as f32;
+        i += 1;
+    }
+    t
+});
 
 pub unsafe fn probaln_glocal(
     ref_: *const u8,
@@ -114,13 +132,7 @@ pub unsafe fn probaln_glocal(
     }
     qual.resize(l_query as usize, 0.0_f32);
 
-    if G_QUAL2PROB[0] == 0.0 {
-        i = 0;
-        while i < 256 {
-            G_QUAL2PROB[i as usize] = 10.0_f64.powf(-(i as f64) / 10.0) as f32;
-            i += 1;
-        }
-    }
+    // Table is lazy-initialized exactly once across all threads — see G_QUAL2PROB.
     qual[0] = 0.0;
     i = 0;
     while i < l_query {
