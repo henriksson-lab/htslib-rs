@@ -34,12 +34,11 @@ pub unsafe fn kstring_c_142_kvsprintf(
         (*s).l = 0;
     }
 
-    // TODO(P5): no native vsnprintf yet (variadic C runtime symbol)
-    let mut l = hts_sys::vsnprintf(
+    let mut l = crate::htslib_rs::c_compat::vsnprintf(
         (*s).s.add((*s).l),
         ((*s).m - (*s).l) as u64,
         fmt,
-        (&mut args as *mut crate::htslib_rs::c_compat::__va_list_tag).cast(),
+        &mut args,
     );
     if l + 1 > ((*s).m - (*s).l) as c_int {
         if ks_resize(s, (*s).l + l as usize + 2) < 0 {
@@ -48,12 +47,11 @@ pub unsafe fn kstring_c_142_kvsprintf(
         let mut args = std::mem::MaybeUninit::<crate::htslib_rs::c_compat::__va_list_tag>::uninit();
         std::ptr::copy_nonoverlapping(ap, args.as_mut_ptr(), 1);
         let mut args = args.assume_init();
-        // TODO(P5): no native vsnprintf yet (variadic C runtime symbol)
-        l = hts_sys::vsnprintf(
+        l = crate::htslib_rs::c_compat::vsnprintf(
             (*s).s.add((*s).l),
             ((*s).m - (*s).l) as u64,
             fmt,
-            (&mut args as *mut crate::htslib_rs::c_compat::__va_list_tag).cast(),
+            &mut args,
         );
     }
     (*s).l += l as usize;

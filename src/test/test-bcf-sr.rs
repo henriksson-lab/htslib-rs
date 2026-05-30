@@ -187,17 +187,17 @@ pub unsafe fn test_test_bcf_sr_c_107_write_vcf_bcf_format(
     }
 }
 
-const BCF_SR_PAIR_SNPS: c_int = hts_sys::BCF_SR_PAIR_SNPS as c_int;
-const BCF_SR_PAIR_INDELS: c_int = hts_sys::BCF_SR_PAIR_INDELS as c_int;
-const BCF_SR_PAIR_ANY: c_int = hts_sys::BCF_SR_PAIR_ANY as c_int;
-const BCF_SR_PAIR_SOME: c_int = hts_sys::BCF_SR_PAIR_SOME as c_int;
-const BCF_SR_PAIR_SNP_REF: c_int = hts_sys::BCF_SR_PAIR_SNP_REF as c_int;
-const BCF_SR_PAIR_INDEL_REF: c_int = hts_sys::BCF_SR_PAIR_INDEL_REF as c_int;
-const BCF_SR_PAIR_EXACT: c_int = hts_sys::BCF_SR_PAIR_EXACT as c_int;
+const BCF_SR_PAIR_SNPS: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_SNPS as c_int;
+const BCF_SR_PAIR_INDELS: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_INDELS as c_int;
+const BCF_SR_PAIR_ANY: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_ANY as c_int;
+const BCF_SR_PAIR_SOME: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_SOME as c_int;
+const BCF_SR_PAIR_SNP_REF: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_SNP_REF as c_int;
+const BCF_SR_PAIR_INDEL_REF: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_INDEL_REF as c_int;
+const BCF_SR_PAIR_EXACT: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_EXACT as c_int;
 const BCF_SR_PAIR_BOTH: c_int = BCF_SR_PAIR_SNPS | BCF_SR_PAIR_INDELS;
 const BCF_SR_PAIR_BOTH_REF: c_int =
     BCF_SR_PAIR_SNPS | BCF_SR_PAIR_INDELS | BCF_SR_PAIR_SNP_REF | BCF_SR_PAIR_INDEL_REF;
-const BCF_SR_ALLOW_NO_IDX: hts_sys::bcf_sr_opt_t = 2;
+const BCF_SR_ALLOW_NO_IDX: crate::htslib_rs::vcf::bcf_sr_opt_t = 2;
 // original: main (htslib/test/test-bcf-sr.c:126)
 pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     static mut LOPTIONS: [libc::option; 9] = [
@@ -262,7 +262,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
     let mut use_index = 1;
     let mut use_fofn = 1;
     let mut usefptr = 0;
-    let mut out_fmt: htsExactFormat = hts_sys::htsExactFormat_text_format;
+    let mut out_fmt: htsExactFormat = crate::htslib_rs::hts::HTS_FORMAT_TEXT_FORMAT;
     let mut out_fn: *const c_char = std::ptr::null();
     let mut regions: *const c_char = std::ptr::null();
     let mut targets: *const c_char = std::ptr::null();
@@ -284,11 +284,11 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
             }
             x if x == b'O' as c_int => {
                 if libc::strcasecmp(optarg, c"vcf".as_ptr()) == 0 {
-                    out_fmt = hts_sys::htsExactFormat_vcf;
+                    out_fmt = crate::htslib_rs::hts::HTS_FORMAT_VCF;
                 } else if libc::strcasecmp(optarg, c"bcf".as_ptr()) == 0 {
-                    out_fmt = hts_sys::htsExactFormat_bcf;
+                    out_fmt = crate::htslib_rs::hts::HTS_FORMAT_BCF;
                 } else if libc::strcasecmp(optarg, c"summary".as_ptr()) == 0 {
-                    out_fmt = hts_sys::htsExactFormat_text_format;
+                    out_fmt = crate::htslib_rs::hts::HTS_FORMAT_TEXT_FORMAT;
                 } else {
                     error!(c"Unknown output format \"%s\"\n", optarg);
                 }
@@ -366,11 +366,11 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
     if sr.is_null() {
         error!(c"bcf_sr_init() failed\n");
     }
-    hts_sys::bcf_sr_set_opt(sr, hts_sys::bcf_sr_opt_t_BCF_SR_PAIR_LOGIC, pair);
+    crate::htslib_rs::vcf::bcf_sr_set_opt(sr, crate::htslib_rs::vcf::BCF_SR_PAIR_LOGIC, pair);
     if use_index != 0 {
-        hts_sys::bcf_sr_set_opt(sr, hts_sys::bcf_sr_opt_t_BCF_SR_REQUIRE_IDX);
+        crate::htslib_rs::vcf::bcf_sr_set_opt(sr, crate::htslib_rs::vcf::BCF_SR_REQUIRE_IDX, 0);
     } else {
-        hts_sys::bcf_sr_set_opt(sr, BCF_SR_ALLOW_NO_IDX);
+        crate::htslib_rs::vcf::bcf_sr_set_opt(sr, BCF_SR_ALLOW_NO_IDX, 0);
     }
 
     if !regions.is_null() && crate::htslib_rs::vcf::bcf_sr_set_regions(sr, regions, 0) != 0 {
@@ -418,10 +418,10 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
             */
             let mut idxname = libc::strstr(
                 *vcfs.add(i as usize),
-                hts_sys::HTS_IDX_DELIM.as_ptr().cast(),
+                crate::htslib_rs::hts::HTS_IDX_DELIM.as_ptr().cast(),
             );
             if !idxname.is_null() {
-                idxname = idxname.add(libc::strlen(hts_sys::HTS_IDX_DELIM.as_ptr().cast()));
+                idxname = idxname.add(libc::strlen(crate::htslib_rs::hts::HTS_IDX_DELIM.as_ptr().cast()));
             }
             if crate::htslib_rs::vcf::bcf_sr_add_hreader(sr, *htsfp.add(i as usize), 1, idxname)
                 == 0
@@ -440,7 +440,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
         error!(c"No readers set, even though one was added\n");
     }
 
-    if out_fmt == hts_sys::htsExactFormat_text_format {
+    if out_fmt == crate::htslib_rs::hts::HTS_FORMAT_TEXT_FORMAT {
         let mut out = crate::htslib_rs::c_compat::stdout.cast::<libc::FILE>();
         if !out_fn.is_null() {
             out = libc::fopen(out_fn, c"w".as_ptr());
@@ -461,7 +461,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
             );
         }
     } else {
-        let fmt_type = if out_fmt == hts_sys::htsExactFormat_vcf {
+        let fmt_type = if out_fmt == crate::htslib_rs::hts::HTS_FORMAT_VCF {
             c"VCF".as_ptr()
         } else {
             c"BCF".as_ptr()
@@ -477,7 +477,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
         }
         let vcf_out = crate::htslib_rs::hts::hts_open(
             out_fn,
-            if out_fmt == hts_sys::htsExactFormat_vcf {
+            if out_fmt == crate::htslib_rs::hts::HTS_FORMAT_VCF {
                 c"w".as_ptr()
             } else {
                 c"wb".as_ptr()
@@ -584,7 +584,7 @@ mod tests {
         let mut sites = Vec::new();
         while crate::htslib_rs::vcf::bcf_read(fp, hdr, rec) >= 0 {
             assert_eq!(
-                crate::htslib_rs::vcf::bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int),
+                crate::htslib_rs::vcf::bcf_unpack(rec, crate::htslib_rs::vcf::BCF_UN_STR as c_int),
                 0
             );
             let chrom = CStr::from_ptr(crate::htslib_rs::vcf::bcf_seqname(hdr, rec))

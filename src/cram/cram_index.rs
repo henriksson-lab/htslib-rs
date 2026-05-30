@@ -71,17 +71,17 @@ use std::ptr;
 const CRAM_DS_END: usize = 47;
 
 #[repr(C)]
-struct cram_range {
-    refid: c_int,
-    start: hts_pos_t,
-    end: hts_pos_t,
+pub struct cram_range {
+    pub refid: c_int,
+    pub start: hts_pos_t,
+    pub end: hts_pos_t,
 }
 
 #[repr(C)]
 struct cram_block_layout {
     method: c_int,
     orig_method: c_int,
-    content_type: hts_sys::cram_content_type,
+    content_type: c_int,
 }
 
 #[repr(C)]
@@ -90,7 +90,7 @@ struct cram_fd_layout {
     mode: c_int,
     version: c_int,
     file_def: *mut c_void,
-    header: *mut hts_sys::sam_hdr_t,
+    header: *mut c_void,
     prefix: *mut c_char,
     record_counter: i64,
     err: c_int,
@@ -98,7 +98,7 @@ struct cram_fd_layout {
     ctr_mt: *mut cram_container,
     first_base: c_int,
     last_base: c_int,
-    refs: *mut hts_sys::refs_t,
+    refs: *mut c_void,
     ref_: *mut c_char,
     ref_free: *mut c_char,
     ref_id: c_int,
@@ -106,7 +106,7 @@ struct cram_fd_layout {
     ref_end: i64,
     ref_fn: *mut c_char,
     level: c_int,
-    m: [*mut hts_sys::cram_metrics; CRAM_DS_END],
+    m: [*mut c_void; CRAM_DS_END],
     tags_used: *mut c_void,
     decode_md: c_int,
     seqs_per_slice: c_int,
@@ -168,16 +168,16 @@ unsafe extern "C" {
     #[link_name = "cram_decode_slice"]
     fn htslib_cram_decode_slice(
         fd: *mut cram_fd,
-        c: *mut hts_sys::cram_container,
-        s: *mut hts_sys::cram_slice,
-        hdr: *mut hts_sys::sam_hdr_t,
+        c: *mut c_void,
+        s: *mut c_void,
+        hdr: *mut c_void,
     ) -> c_int;
     #[link_name = "cram_read_slice"]
-    fn htslib_cram_read_slice(fd: *mut cram_fd) -> *mut hts_sys::cram_slice;
+    fn htslib_cram_read_slice(fd: *mut cram_fd) -> *mut c_void;
     #[link_name = "cram_free_slice"]
-    fn htslib_cram_free_slice(s: *mut hts_sys::cram_slice);
+    fn htslib_cram_free_slice(s: *mut c_void);
     #[link_name = "cram_set_option"]
-    fn htslib_cram_set_option(fd: *mut cram_fd, opt: hts_sys::hts_fmt_option, ...) -> c_int;
+    fn htslib_cram_set_option(fd: *mut cram_fd, opt: c_uint, ...) -> c_int;
 }
 
 // original: dump_index_ (htslib/cram/cram_index.c:72)

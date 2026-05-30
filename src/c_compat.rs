@@ -94,6 +94,19 @@ extern "C" {
     pub static mut stdin: *mut libc::FILE;
 }
 
+// libc `vsnprintf` declared directly so we don't reach into hts_sys for a
+// symbol that lives in the system C runtime anyway. The Rust `libc` crate
+// doesn't re-export this one; bindgen otherwise synthesises a binding inside
+// hts-sys.
+extern "C" {
+    pub fn vsnprintf(
+        s: *mut c_char,
+        maxlen: u64,
+        format: *const c_char,
+        arg: *mut __va_list_tag,
+    ) -> c_int;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

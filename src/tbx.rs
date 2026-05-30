@@ -15,13 +15,28 @@ const HTS_FMT_TBI: c_int = 2;
 // htsCompression::bgzf == 2 (htslib/htslib/hts.h).
 const HTS_COMPRESSION_BGZF: c_int = 2;
 
-// NOTE: tbx_conf_t / tbx_t remain hts_sys type aliases. Converting them to native
-// #[repr(C)] structs is inconsistent: vcf.rs's reader struct (from hts_sys) holds
-// tbx_idx: *mut hts_sys::tbx_t and passes it to tbx_destroy, which would require
-// editing vcf.rs (out of scope). The structs are #[repr(C)] and byte-identical, so
-// the aliases interoperate freely with the native hts_idx_* code via .cast().
-pub type tbx_conf_t = hts_sys::tbx_conf_t;
-pub type tbx_t = hts_sys::tbx_t;
+// Native equivalents of htslib's `tbx_conf_t` / `tbx_t` (htslib/tbx.h). Both
+// are `#[repr(C)]` with the exact same field order and types as the hts_sys
+// bindings, so callers that hold a `*mut hts_sys::tbx_t` (e.g. vcf.rs's
+// bcf_sr_t reader fields imported from bindgen) can cast freely between
+// these and the hts_sys types.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct tbx_conf_t {
+    pub preset: i32,
+    pub sc: i32,
+    pub bc: i32,
+    pub ec: i32,
+    pub meta_char: i32,
+    pub line_skip: i32,
+}
+
+#[repr(C)]
+pub struct tbx_t {
+    pub conf: tbx_conf_t,
+    pub idx: *mut crate::htslib_rs::hts::hts_idx_t,
+    pub dict: *mut c_void,
+}
 
 const TBX_GENERIC: c_int = 0;
 const TBX_SAM: c_int = 1;

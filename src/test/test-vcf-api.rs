@@ -76,19 +76,19 @@ unsafe fn bcf_float_set(ptr: *mut f32, value: u32) {
 }
 
 unsafe fn bcf_float_set_missing(ptr: *mut f32) {
-    bcf_float_set(ptr, hts_sys::bcf_float_missing);
+    bcf_float_set(ptr, crate::htslib_rs::vcf::bcf_float_missing);
 }
 
 unsafe fn bcf_float_set_vector_end(ptr: *mut f32) {
-    bcf_float_set(ptr, hts_sys::bcf_float_vector_end);
+    bcf_float_set(ptr, crate::htslib_rs::vcf::bcf_float_vector_end);
 }
 
 unsafe fn bcf_float_is_missing(f: f32) -> c_int {
-    (f.to_bits() == hts_sys::bcf_float_missing) as c_int
+    (f.to_bits() == crate::htslib_rs::vcf::bcf_float_missing) as c_int
 }
 
 unsafe fn bcf_float_is_vector_end(f: f32) -> c_int {
-    (f.to_bits() == hts_sys::bcf_float_vector_end) as c_int
+    (f.to_bits() == crate::htslib_rs::vcf::bcf_float_vector_end) as c_int
 }
 
 unsafe fn fail_open(fname: *const c_char) -> ! {
@@ -112,13 +112,13 @@ unsafe fn fail_errno(label: *const c_char) -> ! {
 }
 
 unsafe fn bcf_hdr_id2length(hdr: *mut vcf::bcf_hdr_t, type_: c_int, int_id: c_int) -> c_int {
-    (((*(*(*hdr).id[hts_sys::BCF_DT_ID as usize].add(int_id as usize)).val).info[type_ as usize]
+    (((*(*(*hdr).id[crate::htslib_rs::vcf::BCF_DT_ID as usize].add(int_id as usize)).val).info[type_ as usize]
         >> 8)
         & 0xf) as c_int
 }
 
 unsafe fn bcf_hdr_id2number(hdr: *mut vcf::bcf_hdr_t, type_: c_int, int_id: c_int) -> c_int {
-    ((*(*(*hdr).id[hts_sys::BCF_DT_ID as usize].add(int_id as usize)).val).info[type_ as usize]
+    ((*(*(*hdr).id[crate::htslib_rs::vcf::BCF_DT_ID as usize].add(int_id as usize)).val).info[type_ as usize]
         >> 12) as c_int
 }
 
@@ -146,7 +146,7 @@ pub unsafe fn test_test_vcf_api_c_51_check_alleles(
         );
         return -1;
     }
-    if vcf::bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int) != 0 {
+    if vcf::bcf_unpack(rec, crate::htslib_rs::vcf::BCF_UN_STR as c_int) != 0 {
         return -1;
     }
     for i in 0..num {
@@ -364,22 +364,22 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
     ));
 
     // Try a few header modifications
-    vcf::bcf_hdr_remove(hdr, hts_sys::BCF_HL_CTG as c_int, c"Unused".as_ptr());
+    vcf::bcf_hdr_remove(hdr, crate::htslib_rs::vcf::BCF_HL_CTG as c_int, c"Unused".as_ptr());
     check0!(vcf::bcf_hdr_append(
         hdr,
         c"##contig=<ID=Unused,length=62435964>".as_ptr()
     ));
-    vcf::bcf_hdr_remove(hdr, hts_sys::BCF_HL_FMT as c_int, c"TS".as_ptr());
+    vcf::bcf_hdr_remove(hdr, crate::htslib_rs::vcf::BCF_HL_FMT as c_int, c"TS".as_ptr());
     check0!(vcf::bcf_hdr_append(
         hdr,
         c"##FORMAT=<ID=TS,Number=1,Type=String,Description=\"Test String\">".as_ptr()
     ));
-    vcf::bcf_hdr_remove(hdr, hts_sys::BCF_HL_INFO as c_int, c"NEG".as_ptr());
+    vcf::bcf_hdr_remove(hdr, crate::htslib_rs::vcf::BCF_HL_INFO as c_int, c"NEG".as_ptr());
     check0!(vcf::bcf_hdr_append(
         hdr,
         c"##INFO=<ID=NEG,Number=.,Type=Integer,Description=\"Test Negative Numbers\">".as_ptr()
     ));
-    vcf::bcf_hdr_remove(hdr, hts_sys::BCF_HL_FLT as c_int, c"s50".as_ptr());
+    vcf::bcf_hdr_remove(hdr, crate::htslib_rs::vcf::BCF_HL_FLT as c_int, c"s50".as_ptr());
     check0!(vcf::bcf_hdr_append(
         hdr,
         c"##FILTER=<ID=s50,Description=\"Less than 50% of samples have data\">".as_ptr()
@@ -418,7 +418,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
     // .. QUAL
     (*rec).qual = 29.0;
     // .. FILTER
-    let mut tmpi = vcf::bcf_hdr_id2int(hdr, hts_sys::BCF_DT_ID as c_int, c"PASS".as_ptr());
+    let mut tmpi = vcf::bcf_hdr_id2int(hdr, crate::htslib_rs::vcf::BCF_DT_ID as c_int, c"PASS".as_ptr());
     check0!(vcf::bcf_update_filter(hdr, rec, &mut tmpi, 1));
     // .. INFO
     tmpi = 3;
@@ -428,7 +428,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"NS".as_ptr(),
         (&tmpi as *const c_int).cast(),
         1,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     tmpi = 500;
     check0!(vcf::bcf_update_info(
@@ -437,7 +437,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"DP".as_ptr(),
         (&tmpi as *const c_int).cast(),
         1,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     tmpi = 100000;
     check0!(vcf::bcf_update_info(
@@ -446,7 +446,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"DP".as_ptr(),
         (&tmpi as *const c_int).cast(),
         1,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     tmpi = 14;
     check0!(vcf::bcf_update_info(
@@ -455,7 +455,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"DP".as_ptr(),
         (&tmpi as *const c_int).cast(),
         1,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     tmpi = -127;
     check0!(vcf::bcf_update_info(
@@ -464,7 +464,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"NEG".as_ptr(),
         (&tmpi as *const c_int).cast(),
         1,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     let tmpf: f32 = 0.5;
     check0!(vcf::bcf_update_info(
@@ -473,7 +473,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"AF".as_ptr(),
         (&tmpf as *const f32).cast(),
         1,
-        hts_sys::BCF_HT_REAL as c_int
+        crate::htslib_rs::vcf::BCF_HT_REAL as c_int
     ));
     check0!(vcf::bcf_update_info(
         hdr,
@@ -481,7 +481,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"DB".as_ptr(),
         ptr::null(),
         1,
-        hts_sys::BCF_HT_FLAG as c_int
+        crate::htslib_rs::vcf::BCF_HT_FLAG as c_int
     ));
     check0!(vcf::bcf_update_info(
         hdr,
@@ -489,10 +489,10 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"H2".as_ptr(),
         ptr::null(),
         1,
-        hts_sys::BCF_HT_FLAG as c_int
+        crate::htslib_rs::vcf::BCF_HT_FLAG as c_int
     ));
     // .. FORMAT
-    let nsamples = (*hdr).n[hts_sys::BCF_DT_SAMPLE as usize] as c_int;
+    let nsamples = (*hdr).n[crate::htslib_rs::vcf::BCF_DT_SAMPLE as usize] as c_int;
     let tmpia = libc::malloc((nsamples * 2) as usize * std::mem::size_of::<i32>()).cast::<i32>();
     *tmpia.add(0) = bcf_gt_phased(0);
     *tmpia.add(1) = bcf_gt_phased(0);
@@ -506,7 +506,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"GT".as_ptr(),
         tmpia.cast(),
         nsamples * 2,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     *tmpia.add(0) = 48;
     *tmpia.add(1) = 48;
@@ -517,7 +517,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"GQ".as_ptr(),
         tmpia.cast(),
         nsamples,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     *tmpia.add(0) = 0;
     *tmpia.add(1) = 0;
@@ -528,7 +528,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"DP".as_ptr(),
         tmpia.cast(),
         nsamples,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     *tmpia.add(0) = 1;
     *tmpia.add(1) = 100000;
@@ -539,7 +539,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"DP".as_ptr(),
         tmpia.cast(),
         nsamples,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     *tmpia.add(0) = 1;
     *tmpia.add(1) = 8;
@@ -550,21 +550,21 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"DP".as_ptr(),
         tmpia.cast(),
         nsamples,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     *tmpia.add(0) = 51;
     *tmpia.add(1) = 51;
     *tmpia.add(2) = 51;
     *tmpia.add(3) = 51;
-    *tmpia.add(4) = hts_sys::bcf_int32_missing;
-    *tmpia.add(5) = hts_sys::bcf_int32_missing;
+    *tmpia.add(4) = crate::htslib_rs::vcf::bcf_int32_missing;
+    *tmpia.add(5) = crate::htslib_rs::vcf::bcf_int32_missing;
     check0!(vcf::bcf_update_format(
         hdr,
         rec,
         c"HQ".as_ptr(),
         tmpia.cast(),
         nsamples * 2,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     let mut tmp_str = [
         c"String1".as_ptr(),
@@ -616,7 +616,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"NS".as_ptr(),
         (&tmpi as *const c_int).cast(),
         1,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     tmpi = 10;
     check0!(vcf::bcf_update_info(
@@ -625,7 +625,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"DP".as_ptr(),
         (&tmpi as *const c_int).cast(),
         1,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     tmpi = -128;
     check0!(vcf::bcf_update_info(
@@ -634,7 +634,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"NEG".as_ptr(),
         (&tmpi as *const c_int).cast(),
         1,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     let tmpfa = libc::malloc(2 * std::mem::size_of::<f32>()).cast::<f32>();
     *tmpfa.add(0) = 0.333;
@@ -645,7 +645,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"AF".as_ptr(),
         tmpfa.cast(),
         2,
-        hts_sys::BCF_HT_REAL as c_int
+        crate::htslib_rs::vcf::BCF_HT_REAL as c_int
     ));
     check0!(vcf::bcf_update_info(
         hdr,
@@ -653,7 +653,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"AA".as_ptr(),
         c"SHORT".as_ptr().cast(),
         1,
-        hts_sys::BCF_HT_STR as c_int
+        crate::htslib_rs::vcf::BCF_HT_STR as c_int
     ));
     check0!(vcf::bcf_update_info(
         hdr,
@@ -661,7 +661,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"AA".as_ptr(),
         c"LONGSTRING".as_ptr().cast(),
         1,
-        hts_sys::BCF_HT_STR as c_int
+        crate::htslib_rs::vcf::BCF_HT_STR as c_int
     ));
     check0!(vcf::bcf_update_info(
         hdr,
@@ -669,7 +669,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"AA".as_ptr(),
         c"T".as_ptr().cast(),
         1,
-        hts_sys::BCF_HT_STR as c_int
+        crate::htslib_rs::vcf::BCF_HT_STR as c_int
     ));
     check0!(vcf::bcf_update_info(
         hdr,
@@ -677,12 +677,12 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"DB".as_ptr(),
         ptr::null(),
         1,
-        hts_sys::BCF_HT_FLAG as c_int
+        crate::htslib_rs::vcf::BCF_HT_FLAG as c_int
     ));
     *tmpia.add(0) = bcf_gt_phased(2);
-    *tmpia.add(1) = hts_sys::bcf_int32_vector_end;
+    *tmpia.add(1) = crate::htslib_rs::vcf::bcf_int32_vector_end;
     *tmpia.add(2) = bcf_gt_phased(1);
-    *tmpia.add(3) = hts_sys::bcf_int32_vector_end;
+    *tmpia.add(3) = crate::htslib_rs::vcf::bcf_int32_vector_end;
     *tmpia.add(4) = 0;
     *tmpia.add(5) = 0;
     check0!(vcf::bcf_update_format(
@@ -691,7 +691,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
         c"GT".as_ptr(),
         tmpia.cast(),
         nsamples * 2,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     if vcf::bcf_write(fp, hdr, rec) != 0 {
         libc::fprintf(
@@ -755,7 +755,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     let hdr_out = vcf::bcf_hdr_dup(hdr);
     if vcf::bcf_hdr_get_hrec(
         hdr_out,
-        hts_sys::BCF_HL_STR as c_int,
+        crate::htslib_rs::vcf::BCF_HL_STR as c_int,
         c"ID".as_ptr(),
         c"BB".as_ptr(),
         c"unused".as_ptr(),
@@ -764,10 +764,10 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     {
         test_test_vcf_api_c_38_error(c"Missing header ##unused=<ID=BB, ...>".as_ptr());
     }
-    vcf::bcf_hdr_remove(hdr_out, hts_sys::BCF_HL_STR as c_int, c"BB".as_ptr());
+    vcf::bcf_hdr_remove(hdr_out, crate::htslib_rs::vcf::BCF_HL_STR as c_int, c"BB".as_ptr());
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
-        hts_sys::BCF_HL_STR as c_int,
+        crate::htslib_rs::vcf::BCF_HL_STR as c_int,
         c"ID".as_ptr(),
         c"BB".as_ptr(),
         c"unused".as_ptr(),
@@ -781,7 +781,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
 
     if vcf::bcf_hdr_get_hrec(
         hdr_out,
-        hts_sys::BCF_HL_GEN as c_int,
+        crate::htslib_rs::vcf::BCF_HL_GEN as c_int,
         c"unused".as_ptr(),
         c"unformatted text 1".as_ptr(),
         ptr::null(),
@@ -790,10 +790,10 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     {
         test_test_vcf_api_c_38_error(c"Missing header ##unused=unformatted text 1".as_ptr());
     }
-    vcf::bcf_hdr_remove(hdr_out, hts_sys::BCF_HL_GEN as c_int, c"unused".as_ptr());
+    vcf::bcf_hdr_remove(hdr_out, crate::htslib_rs::vcf::BCF_HL_GEN as c_int, c"unused".as_ptr());
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
-        hts_sys::BCF_HL_GEN as c_int,
+        crate::htslib_rs::vcf::BCF_HL_GEN as c_int,
         c"unused".as_ptr(),
         c"unformatted text 1".as_ptr(),
         ptr::null(),
@@ -807,7 +807,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
 
     if vcf::bcf_hdr_get_hrec(
         hdr_out,
-        hts_sys::BCF_HL_FLT as c_int,
+        crate::htslib_rs::vcf::BCF_HL_FLT as c_int,
         c"ID".as_ptr(),
         c"Flt".as_ptr(),
         ptr::null(),
@@ -816,10 +816,10 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     {
         test_test_vcf_api_c_38_error(c"Missing header ##FILTER=<ID=Flt, ...>".as_ptr());
     }
-    vcf::bcf_hdr_remove(hdr_out, hts_sys::BCF_HL_FLT as c_int, c"Flt".as_ptr());
+    vcf::bcf_hdr_remove(hdr_out, crate::htslib_rs::vcf::BCF_HL_FLT as c_int, c"Flt".as_ptr());
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
-        hts_sys::BCF_HL_FLT as c_int,
+        crate::htslib_rs::vcf::BCF_HL_FLT as c_int,
         c"ID".as_ptr(),
         c"Flt".as_ptr(),
         ptr::null(),
@@ -833,7 +833,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
 
     if vcf::bcf_hdr_get_hrec(
         hdr_out,
-        hts_sys::BCF_HL_INFO as c_int,
+        crate::htslib_rs::vcf::BCF_HL_INFO as c_int,
         c"ID".as_ptr(),
         c"UI".as_ptr(),
         ptr::null(),
@@ -842,10 +842,10 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     {
         test_test_vcf_api_c_38_error(c"Missing header ##INFO=<ID=UI, ...>".as_ptr());
     }
-    vcf::bcf_hdr_remove(hdr_out, hts_sys::BCF_HL_INFO as c_int, c"UI".as_ptr());
+    vcf::bcf_hdr_remove(hdr_out, crate::htslib_rs::vcf::BCF_HL_INFO as c_int, c"UI".as_ptr());
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
-        hts_sys::BCF_HL_INFO as c_int,
+        crate::htslib_rs::vcf::BCF_HL_INFO as c_int,
         c"ID".as_ptr(),
         c"UI".as_ptr(),
         ptr::null(),
@@ -857,7 +857,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
 
     if vcf::bcf_hdr_get_hrec(
         hdr_out,
-        hts_sys::BCF_HL_FMT as c_int,
+        crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
         c"ID".as_ptr(),
         c"UF".as_ptr(),
         ptr::null(),
@@ -866,10 +866,10 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     {
         test_test_vcf_api_c_38_error(c"Missing header ##INFO=<ID=UF, ...>".as_ptr());
     }
-    vcf::bcf_hdr_remove(hdr_out, hts_sys::BCF_HL_FMT as c_int, c"UF".as_ptr());
+    vcf::bcf_hdr_remove(hdr_out, crate::htslib_rs::vcf::BCF_HL_FMT as c_int, c"UF".as_ptr());
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
-        hts_sys::BCF_HL_FMT as c_int,
+        crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
         c"ID".as_ptr(),
         c"UF".as_ptr(),
         ptr::null(),
@@ -881,7 +881,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
 
     if vcf::bcf_hdr_get_hrec(
         hdr_out,
-        hts_sys::BCF_HL_CTG as c_int,
+        crate::htslib_rs::vcf::BCF_HL_CTG as c_int,
         c"ID".as_ptr(),
         c"Unused".as_ptr(),
         ptr::null(),
@@ -890,10 +890,10 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     {
         test_test_vcf_api_c_38_error(c"Missing header ##contig=<ID=Unused,length=1>".as_ptr());
     }
-    vcf::bcf_hdr_remove(hdr_out, hts_sys::BCF_HL_CTG as c_int, c"Unused".as_ptr());
+    vcf::bcf_hdr_remove(hdr_out, crate::htslib_rs::vcf::BCF_HL_CTG as c_int, c"Unused".as_ptr());
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
-        hts_sys::BCF_HL_FMT as c_int,
+        crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
         c"ID".as_ptr(),
         c"Unused".as_ptr(),
         ptr::null(),
@@ -931,7 +931,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
         // Test problems caused by bcf1_sync: the data block
         // may be realloced, also the unpacked structures must
         // get updated.
-        check0!(vcf::bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int));
+        check0!(vcf::bcf_unpack(rec, crate::htslib_rs::vcf::BCF_UN_STR as c_int));
         check0!(vcf::bcf_update_id(hdr, rec, ptr::null()));
         check0!(vcf::bcf_update_format(
             hdr,
@@ -939,7 +939,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
             c"GQ".as_ptr(),
             ptr::null(),
             0,
-            hts_sys::BCF_HT_INT as c_int
+            crate::htslib_rs::vcf::BCF_HT_INT as c_int
         ));
 
         let dup = vcf::bcf_dup(rec); // force bcf1_sync call
@@ -961,7 +961,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
             c"DP".as_ptr(),
             (&tmpi as *const i32).cast(),
             1,
-            hts_sys::BCF_HT_INT as c_int
+            crate::htslib_rs::vcf::BCF_HT_INT as c_int
         ));
         let tmpia = [9i32, 9, 9];
         check0!(vcf::bcf_update_format(
@@ -970,7 +970,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
             c"DP".as_ptr(),
             tmpia.as_ptr().cast(),
             3,
-            hts_sys::BCF_HT_INT as c_int
+            crate::htslib_rs::vcf::BCF_HT_INT as c_int
         ));
 
         if vcf::bcf_write(out, hdr_out, rec) != 0 {
@@ -1108,7 +1108,7 @@ pub unsafe fn test_test_vcf_api_c_434_test_get_info_values(fname: *const c_char)
             c"AF".as_ptr(),
             (&mut afs as *mut *mut f32).cast(),
             &mut count,
-            hts_sys::BCF_HT_REAL as c_int,
+            crate::htslib_rs::vcf::BCF_HT_REAL as c_int,
         );
 
         if (*line).pos == 14369 {
@@ -1137,7 +1137,7 @@ pub unsafe fn test_test_vcf_api_c_434_test_get_info_values(fname: *const c_char)
             c"NEG".as_ptr(),
             (&mut negs as *mut *mut i32).cast(),
             &mut count,
-            hts_sys::BCF_HT_INT as c_int,
+            crate::htslib_rs::vcf::BCF_HT_INT as c_int,
         );
         if ret != 1 || *negs.add(0) != expected {
             if ret < 0 {
@@ -1221,7 +1221,7 @@ pub unsafe fn test_test_vcf_api_c_491_write_format_values(fname: *const c_char) 
         c"TF".as_ptr(),
         test.as_ptr().cast(),
         4,
-        hts_sys::BCF_HT_REAL as c_int
+        crate::htslib_rs::vcf::BCF_HT_REAL as c_int
     ));
     if vcf::bcf_write(fp, hdr, rec) != 0 {
         libc::fprintf(
@@ -1261,7 +1261,7 @@ pub unsafe fn test_test_vcf_api_c_528_check_format_values(fname: *const c_char) 
             c"TF".as_ptr(),
             (&mut values as *mut *mut f32).cast(),
             &mut count,
-            hts_sys::BCF_HT_REAL as c_int,
+            crate::htslib_rs::vcf::BCF_HT_REAL as c_int,
         );
 
         // NOTE the return value from bcf_get_format_float is different from
@@ -1353,7 +1353,7 @@ X	86470038	rs59780433b	T	TGGTT,T	.	.	END=86470047
         c"END".as_ptr(),
         (&tmpi as *const i32).cast(),
         1,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
 
     if (*rec).rlen != 1 {
@@ -1614,7 +1614,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
         c"END".as_ptr(),
         (&tmpi as *const i32).cast(),
         1,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     if (*rec).rlen != 14 {
         libc::fprintf(
@@ -1632,7 +1632,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
         c"LEN".as_ptr(),
         val.as_ptr().cast(),
         2,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     if (*rec).rlen != 15 {
         libc::fprintf(
@@ -1650,7 +1650,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
         c"END".as_ptr(),
         (&tmpi as *const i32).cast(),
         0,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     if (*rec).rlen != 15 {
         libc::fprintf(
@@ -1668,7 +1668,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
         c"LEN".as_ptr(),
         (&tmpi as *const i32).cast(),
         0,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     if (*rec).rlen != 1 {
         libc::fprintf(
@@ -1699,7 +1699,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
         c"SVLEN".as_ptr(),
         val.as_ptr().cast(),
         2,
-        hts_sys::BCF_HT_INT as c_int
+        crate::htslib_rs::vcf::BCF_HT_INT as c_int
     ));
     if (*rec).rlen != 6 {
         libc::fprintf(
@@ -1767,103 +1767,103 @@ pub unsafe fn test_test_vcf_api_c_807_test_vl_types() {
     let expected = [
         ExpectedTypes {
             id: c"FIXED_1_INFO".as_ptr(),
-            type_: hts_sys::BCF_HL_INFO as c_int,
-            expected_vl_code: hts_sys::BCF_VL_FIXED as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_INFO as c_int,
+            expected_vl_code: crate::htslib_rs::vcf::BCF_VL_FIXED as c_int,
             expected_number: 1,
         },
         ExpectedTypes {
             id: c"FIXED_4_INFO".as_ptr(),
-            type_: hts_sys::BCF_HL_INFO as c_int,
-            expected_vl_code: hts_sys::BCF_VL_FIXED as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_INFO as c_int,
+            expected_vl_code: crate::htslib_rs::vcf::BCF_VL_FIXED as c_int,
             expected_number: 4,
         },
         ExpectedTypes {
             id: c"VL_DOT_INFO".as_ptr(),
-            type_: hts_sys::BCF_HL_INFO as c_int,
-            expected_vl_code: hts_sys::BCF_VL_VAR as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_INFO as c_int,
+            expected_vl_code: crate::htslib_rs::vcf::BCF_VL_VAR as c_int,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
             id: c"VL_A_INFO".as_ptr(),
-            type_: hts_sys::BCF_HL_INFO as c_int,
-            expected_vl_code: hts_sys::BCF_VL_A as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_INFO as c_int,
+            expected_vl_code: crate::htslib_rs::vcf::BCF_VL_A as c_int,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
             id: c"VL_G_INFO".as_ptr(),
-            type_: hts_sys::BCF_HL_INFO as c_int,
-            expected_vl_code: hts_sys::BCF_VL_G as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_INFO as c_int,
+            expected_vl_code: crate::htslib_rs::vcf::BCF_VL_G as c_int,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
             id: c"VL_R_INFO".as_ptr(),
-            type_: hts_sys::BCF_HL_INFO as c_int,
-            expected_vl_code: hts_sys::BCF_VL_R as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_INFO as c_int,
+            expected_vl_code: crate::htslib_rs::vcf::BCF_VL_R as c_int,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
             id: c"FIXED_1_FMT".as_ptr(),
-            type_: hts_sys::BCF_HL_FMT as c_int,
-            expected_vl_code: hts_sys::BCF_VL_FIXED as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
+            expected_vl_code: crate::htslib_rs::vcf::BCF_VL_FIXED as c_int,
             expected_number: 1,
         },
         ExpectedTypes {
             id: c"FIXED_4_FMT".as_ptr(),
-            type_: hts_sys::BCF_HL_FMT as c_int,
-            expected_vl_code: hts_sys::BCF_VL_FIXED as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
+            expected_vl_code: crate::htslib_rs::vcf::BCF_VL_FIXED as c_int,
             expected_number: 4,
         },
         ExpectedTypes {
             id: c"VL_DOT_FMT".as_ptr(),
-            type_: hts_sys::BCF_HL_FMT as c_int,
-            expected_vl_code: hts_sys::BCF_VL_VAR as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
+            expected_vl_code: crate::htslib_rs::vcf::BCF_VL_VAR as c_int,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
             id: c"VL_A_FMT".as_ptr(),
-            type_: hts_sys::BCF_HL_FMT as c_int,
-            expected_vl_code: hts_sys::BCF_VL_A as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
+            expected_vl_code: crate::htslib_rs::vcf::BCF_VL_A as c_int,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
             id: c"VL_G_FMT".as_ptr(),
-            type_: hts_sys::BCF_HL_FMT as c_int,
-            expected_vl_code: hts_sys::BCF_VL_G as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
+            expected_vl_code: crate::htslib_rs::vcf::BCF_VL_G as c_int,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
             id: c"VL_R_FMT".as_ptr(),
-            type_: hts_sys::BCF_HL_FMT as c_int,
-            expected_vl_code: hts_sys::BCF_VL_R as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
+            expected_vl_code: crate::htslib_rs::vcf::BCF_VL_R as c_int,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
             id: c"VL_P_FMT".as_ptr(),
-            type_: hts_sys::BCF_HL_FMT as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
             expected_vl_code: BCF_VL_P,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
             id: c"VL_LA_FMT".as_ptr(),
-            type_: hts_sys::BCF_HL_FMT as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
             expected_vl_code: BCF_VL_LA,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
             id: c"VL_LG_FMT".as_ptr(),
-            type_: hts_sys::BCF_HL_FMT as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
             expected_vl_code: BCF_VL_LG,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
             id: c"VL_LR_FMT".as_ptr(),
-            type_: hts_sys::BCF_HL_FMT as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
             expected_vl_code: BCF_VL_LR,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
             id: c"VL_M_FMT".as_ptr(),
-            type_: hts_sys::BCF_HL_FMT as c_int,
+            type_: crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
             expected_vl_code: BCF_VL_M,
             expected_number: 0xfffff,
         },
@@ -1878,7 +1878,7 @@ pub unsafe fn test_test_vcf_api_c_807_test_vl_types() {
         test_test_vcf_api_c_38_error(c"Failed to read BCF header".as_ptr());
     }
     for exp in &expected {
-        let id_num = vcf::bcf_hdr_id2int(hdr, hts_sys::BCF_DT_ID as c_int, exp.id);
+        let id_num = vcf::bcf_hdr_id2int(hdr, crate::htslib_rs::vcf::BCF_DT_ID as c_int, exp.id);
         if id_num < 0 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
@@ -2088,7 +2088,7 @@ pub unsafe fn test_test_vcf_api_c_933_test_bcf_remove_allele_set() {
         check0!(vcf::bcf_remove_allele_set(
             hdr,
             rec,
-            rm_set.cast::<hts_sys::kbitset_t>()
+            rm_set.cast::<crate::htslib_rs::hts::kbitset_t>().cast_const()
         ));
         check0!(vcf::vcf_format(hdr, rec, ks_clear(&mut kstr)));
         test_test_vcf_api_c_924_chomp(&mut kstr);

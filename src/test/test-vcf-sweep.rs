@@ -48,22 +48,22 @@ pub unsafe fn test_test_vcf_sweep_c_31_main(argc: c_int, argv: *mut *mut c_char)
             c"PL".as_ptr(),
             (&mut pls as *mut *mut i32).cast::<*mut c_void>(),
             &mut m_pls,
-            hts_sys::BCF_HT_INT as c_int,
+            crate::htslib_rs::vcf::BCF_HT_INT as c_int,
         );
         if n_pls <= 0 {
             continue;
         }
 
-        let nsamples = (*hdr).n[hts_sys::BCF_DT_SAMPLE as usize];
+        let nsamples = (*hdr).n[crate::htslib_rs::vcf::BCF_DT_SAMPLE as usize];
         let nvals = n_pls / nsamples;
         let mut ptr = pls;
         for _ in 0..nsamples {
             for j in 0..nvals {
                 let val = *ptr.add(j as usize);
-                if val == hts_sys::bcf_int32_vector_end {
+                if val == crate::htslib_rs::vcf::bcf_int32_vector_end {
                     break;
                 }
-                if val == hts_sys::bcf_int32_missing {
+                if val == crate::htslib_rs::vcf::bcf_int32_missing {
                     continue;
                 }
                 chksum += val;
@@ -86,22 +86,22 @@ pub unsafe fn test_test_vcf_sweep_c_31_main(argc: c_int, argv: *mut *mut c_char)
             c"PL".as_ptr(),
             (&mut pls as *mut *mut i32).cast::<*mut c_void>(),
             &mut m_pls,
-            hts_sys::BCF_HT_INT as c_int,
+            crate::htslib_rs::vcf::BCF_HT_INT as c_int,
         );
         if n_pls <= 0 {
             continue;
         }
 
-        let nsamples = (*hdr).n[hts_sys::BCF_DT_SAMPLE as usize];
+        let nsamples = (*hdr).n[crate::htslib_rs::vcf::BCF_DT_SAMPLE as usize];
         let nvals = n_pls / nsamples;
         let mut ptr = pls;
         for _ in 0..nsamples {
             for j in 0..nvals {
                 let val = *ptr.add(j as usize);
-                if val == hts_sys::bcf_int32_vector_end {
+                if val == crate::htslib_rs::vcf::bcf_int32_vector_end {
                     break;
                 }
-                if val == hts_sys::bcf_int32_missing {
+                if val == crate::htslib_rs::vcf::bcf_int32_missing {
                     continue;
                 }
                 chksum += val;

@@ -1,4 +1,4 @@
-use std::ffi::{c_char, c_int, c_void, CStr};
+use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
 use std::mem::size_of;
 
 use crate::htslib_rs::c_compat;
@@ -112,11 +112,49 @@ pub const bcf_float_vector_end: u32 = 0x7F80_0002;
 
 pub const VCF_INS: u32 = 1 << 6;
 pub const VCF_DEL: u32 = 1 << 7;
-pub const BCF_SR_REQUIRE_IDX: hts_sys::bcf_sr_opt_t = 0;
-pub const BCF_SR_PAIR_LOGIC: hts_sys::bcf_sr_opt_t = 1;
-pub const BCF_SR_ALLOW_NO_IDX: hts_sys::bcf_sr_opt_t = 2;
-pub const BCF_SR_REGIONS_OVERLAP: hts_sys::bcf_sr_opt_t = 3;
-pub const BCF_SR_TARGETS_OVERLAP: hts_sys::bcf_sr_opt_t = 4;
+// `bcf_sr_opt_t` is just a `u32` in htslib (see hts-sys bindings); the
+// hts-sys-typed aliases above can move to native now that we've established
+// the type identity. Keeping the named type around for caller signatures.
+pub type bcf_sr_opt_t = u32;
+
+pub const BCF_SR_REQUIRE_IDX: bcf_sr_opt_t = 0;
+pub const BCF_SR_PAIR_LOGIC: bcf_sr_opt_t = 1;
+pub const BCF_SR_ALLOW_NO_IDX: bcf_sr_opt_t = 2;
+pub const BCF_SR_REGIONS_OVERLAP: bcf_sr_opt_t = 3;
+pub const BCF_SR_TARGETS_OVERLAP: bcf_sr_opt_t = 4;
+
+// Pair-logic flags passed to bcf_sr_set_opt(BCF_SR_PAIR_LOGIC, ...) — values
+// from htslib/synced_bcf_reader.h.
+pub const BCF_SR_PAIR_SNPS: u32 = 1;
+pub const BCF_SR_PAIR_INDELS: u32 = 2;
+pub const BCF_SR_PAIR_ANY: u32 = 4;
+pub const BCF_SR_PAIR_SOME: u32 = 8;
+pub const BCF_SR_PAIR_SNP_REF: u32 = 16;
+pub const BCF_SR_PAIR_INDEL_REF: u32 = 32;
+pub const BCF_SR_PAIR_EXACT: u32 = 64;
+
+// Synced-reader error codes (`bcf_sr_error` enum in
+// htslib/synced_bcf_reader.h). Underlying type is `c_uint` per bindgen.
+pub type bcf_sr_error = c_uint;
+pub const bcf_sr_error_open_failed: bcf_sr_error = 0;
+pub const bcf_sr_error_not_bgzf: bcf_sr_error = 1;
+pub const bcf_sr_error_idx_load_failed: bcf_sr_error = 2;
+pub const bcf_sr_error_file_type_error: bcf_sr_error = 3;
+pub const bcf_sr_error_api_usage_error: bcf_sr_error = 4;
+pub const bcf_sr_error_header_error: bcf_sr_error = 5;
+pub const bcf_sr_error_no_eof: bcf_sr_error = 6;
+pub const bcf_sr_error_no_memory: bcf_sr_error = 7;
+pub const bcf_sr_error_vcf_parse_error: bcf_sr_error = 8;
+pub const bcf_sr_error_bcf_read_error: bcf_sr_error = 9;
+
+// Genotype encodings from htslib/vcfutils.h (return of bcf_gt_type).
+pub const GT_HOM_RR: u32 = 0;
+pub const GT_HOM_AA: u32 = 1;
+pub const GT_HET_RA: u32 = 2;
+pub const GT_HET_AA: u32 = 3;
+pub const GT_HAPL_R: u32 = 4;
+pub const GT_HAPL_A: u32 = 5;
+pub const GT_UNKN: u32 = 6;
 const BCF_IS_64BIT: c_int = 1 << 30;
 const BCF_HT_LONG: c_int = BCF_HT_INT as c_int | 0x100;
 const BCF_MIN_BT_INT32: i64 = -2_147_483_640;
@@ -1106,7 +1144,7 @@ unsafe fn bcf_sr_regions_destroy_translated(reg: *mut bcf_sr_regions_t) {
             super::hts::hts_itr_destroy((*reg).itr.cast());
         }
         if !(*reg).tbx.is_null() {
-            super::tbx::tbx_destroy((*reg).tbx);
+            super::tbx::tbx_destroy((*reg).tbx.cast());
         }
         if !(*reg).file.is_null() {
             let _ = hts_close((*reg).file.cast());
@@ -2180,7 +2218,7 @@ pub unsafe fn bcf_sr_add_hreader(
             return 0;
         }
         if file_ptr.is_null() {
-            (*readers).errnum = hts_sys::bcf_sr_error_api_usage_error;
+            (*readers).errnum = bcf_sr_error_api_usage_error;
             *libc::__errno_location() = libc::EINVAL;
             return 0;
         }
@@ -2197,7 +2235,7 @@ unsafe fn bcf_sr_add_hreader_impl(
 ) -> c_int {
     unsafe {
         if file_ptr.is_null() {
-            (*files).errnum = hts_sys::bcf_sr_error_open_failed;
+            (*files).errnum = bcf_sr_error_open_failed;
             return 0;
         }
 
@@ -2225,7 +2263,7 @@ unsafe fn bcf_sr_add_hreader_impl(
         if (*rfile).format.compression == HTS_COMPRESSION_BGZF {
             let bgzf = hts_get_bgzfp(rfile);
             if !bgzf.is_null() && super::bgzf::bgzf_check_EOF(bgzf) == 0 {
-                (*files).errnum = hts_sys::bcf_sr_error_no_eof;
+                (*files).errnum = bcf_sr_error_no_eof;
             }
             if !(*files).p.is_null() {
                 let p = (*files).p.cast::<super::hts::htsThreadPool>();
@@ -2236,29 +2274,29 @@ unsafe fn bcf_sr_add_hreader_impl(
         if (*files).require_index == REQUIRE_IDX_ {
             if (*rfile).format.format == HTS_FORMAT_VCF {
                 if (*rfile).format.compression != HTS_COMPRESSION_BGZF {
-                    (*files).errnum = hts_sys::bcf_sr_error_not_bgzf;
+                    (*files).errnum = bcf_sr_error_not_bgzf;
                     return 0;
                 }
                 (*reader).tbx_idx =
-                    super::tbx::tbx_index_load2((*file_ptr).fn_, idxname);
+                    super::tbx::tbx_index_load2((*file_ptr).fn_, idxname).cast();
                 if (*reader).tbx_idx.is_null() {
-                    (*files).errnum = hts_sys::bcf_sr_error_idx_load_failed;
+                    (*files).errnum = bcf_sr_error_idx_load_failed;
                     return 0;
                 }
                 (*reader).header = bcf_hdr_read(rfile);
             } else if (*rfile).format.format == HTS_FORMAT_BCF {
                 if (*rfile).format.compression != HTS_COMPRESSION_BGZF {
-                    (*files).errnum = hts_sys::bcf_sr_error_not_bgzf;
+                    (*files).errnum = bcf_sr_error_not_bgzf;
                     return 0;
                 }
                 (*reader).header = bcf_hdr_read(rfile);
                 (*reader).bcf_idx = bcf_index_load2((*file_ptr).fn_, idxname).cast();
                 if (*reader).bcf_idx.is_null() {
-                    (*files).errnum = hts_sys::bcf_sr_error_idx_load_failed;
+                    (*files).errnum = bcf_sr_error_idx_load_failed;
                     return 0;
                 }
             } else {
-                (*files).errnum = hts_sys::bcf_sr_error_file_type_error;
+                (*files).errnum = bcf_sr_error_file_type_error;
                 return 0;
             }
         } else {
@@ -2267,7 +2305,7 @@ unsafe fn bcf_sr_add_hreader_impl(
             {
                 (*reader).header = bcf_hdr_read(rfile);
             } else {
-                (*files).errnum = hts_sys::bcf_sr_error_file_type_error;
+                (*files).errnum = bcf_sr_error_file_type_error;
                 return 0;
             }
             (*files).streaming = 1;
@@ -2282,16 +2320,16 @@ unsafe fn bcf_sr_add_hreader_impl(
                     );
                 }
             } else {
-                (*files).errnum = hts_sys::bcf_sr_error_api_usage_error;
+                (*files).errnum = bcf_sr_error_api_usage_error;
                 return 0;
             }
         }
         if (*files).streaming != 0 && !(*files).regions.is_null() {
-            (*files).errnum = hts_sys::bcf_sr_error_api_usage_error;
+            (*files).errnum = bcf_sr_error_api_usage_error;
             return 0;
         }
         if (*reader).header.is_null() {
-            (*files).errnum = hts_sys::bcf_sr_error_header_error;
+            (*files).errnum = bcf_sr_error_header_error;
             return 0;
         }
 
@@ -2314,7 +2352,7 @@ unsafe fn bcf_sr_add_hreader_impl(
             }
             let mut n = 0;
             let names = if !(*reader).tbx_idx.is_null() {
-                super::tbx::tbx_seqnames((*reader).tbx_idx, &mut n)
+                super::tbx::tbx_seqnames((*reader).tbx_idx.cast(), &mut n)
             } else {
                 bcf_hdr_seqnames((*reader).header, &mut n)
             };
@@ -12795,7 +12833,7 @@ pub unsafe fn vcfutils_c_407_mark_for_removal(info: *mut bcf_info_t) -> c_int {
 pub unsafe fn vcfutils_c_423_trim_int_cnv_tr_int_tags(
     info: *mut bcf_info_t,
     header: *const bcf_hdr_t,
-    rm_set: *const hts_sys::kbitset_t,
+    rm_set: *const crate::htslib_rs::hts::kbitset_t,
     id: *const c_char,
     rn: *const bcf_info_t,
     ruc: *const bcf_info_t,
@@ -12880,7 +12918,7 @@ pub unsafe fn vcfutils_c_423_trim_int_cnv_tr_int_tags(
 pub unsafe fn vcfutils_c_498_trim_int_cnv_tr_str_tags(
     info: *mut bcf_info_t,
     header: *const bcf_hdr_t,
-    rm_set: *const hts_sys::kbitset_t,
+    rm_set: *const crate::htslib_rs::hts::kbitset_t,
     rn: *const bcf_info_t,
     num_alt_orig: usize,
     _orig_total: usize,
@@ -12957,7 +12995,7 @@ pub unsafe fn vcfutils_c_561_fixup_cnv_tr_info_tags(
     header: *const bcf_hdr_t,
     line: *mut bcf1_t,
     num_alt_orig: usize,
-    rm_set: *const hts_sys::kbitset_t,
+    rm_set: *const crate::htslib_rs::hts::kbitset_t,
 ) -> c_int {
     let rn = bcf_get_info(header, line, c"RN".as_ptr());
     let ruc = bcf_get_info(header, line, c"RUC".as_ptr());
@@ -13179,7 +13217,7 @@ pub unsafe fn vcfutils_c_241_bcf_remove_alleles(
 pub unsafe fn bcf_remove_allele_set(
     header: *const bcf_hdr_t,
     line: *mut bcf1_t,
-    rm_set: *const hts_sys::kbitset_t,
+    rm_set: *const super::hts::kbitset_t,
 ) -> c_int {
     super::vcfutils::vcfutils_c_659_bcf_remove_allele_set(header, line, rm_set.cast())
 }
@@ -13363,7 +13401,7 @@ pub unsafe fn vcfutils_c_134_bcf_gt_type(
             _ => libc::exit(1),
         };
         if val >> 1 == 0 {
-            return hts_sys::GT_UNKN as c_int;
+            return GT_UNKN as c_int;
         }
         let tmp = val >> 1;
         if tmp > 1 {
@@ -13392,26 +13430,26 @@ pub unsafe fn vcfutils_c_134_bcf_gt_type(
         *jal_out = if jal > 0 { jal - 1 } else { jal };
     }
     if nals == 0 {
-        return hts_sys::GT_UNKN as c_int;
+        return GT_UNKN as c_int;
     }
     if nals == 1 {
         return if has_ref != 0 {
-            hts_sys::GT_HAPL_R
+            GT_HAPL_R
         } else {
-            hts_sys::GT_HAPL_A
+            GT_HAPL_A
         } as c_int;
     }
     if has_ref == 0 {
         return if has_alt == 1 {
-            hts_sys::GT_HOM_AA
+            GT_HOM_AA
         } else {
-            hts_sys::GT_HET_AA
+            GT_HET_AA
         } as c_int;
     }
     if has_alt == 0 {
-        return hts_sys::GT_HOM_RR as c_int;
+        return GT_HOM_RR as c_int;
     }
-    hts_sys::GT_HET_RA as c_int
+    GT_HET_RA as c_int
 }
 
 // Native translation of the BCF/tabix iterator macros used by the synced
@@ -13519,11 +13557,11 @@ unsafe fn sr_reader_seek(
         }
         (*reader).nbuffer = 0;
         if !(*reader).tbx_idx.is_null() {
-            let tid = super::tbx::tbx_name2id((*reader).tbx_idx, seq);
+            let tid = super::tbx::tbx_name2id((*reader).tbx_idx.cast(), seq);
             if tid == -1 {
                 return -1;
             }
-            (*reader).itr = sr_tbx_itr_queryi((*reader).tbx_idx, tid, start, end + 1).cast();
+            (*reader).itr = sr_tbx_itr_queryi((*reader).tbx_idx.cast(), tid, start, end + 1).cast();
         } else {
             let tid = bcf_hdr_name2id((*reader).header, seq);
             if tid == -1 {
@@ -13645,20 +13683,20 @@ unsafe fn sr_reader_fill_buffer(files: *mut bcf_srs_t, reader: *mut bcf_sr_t) ->
                 if (*rfile).format.format == HTS_FORMAT_VCF {
                     ret = hts_getline(rfile, KS_SEP_LINE as c_int, tmps_ptr);
                     if ret < -1 {
-                        (*files).errnum = hts_sys::bcf_sr_error_bcf_read_error;
+                        (*files).errnum = bcf_sr_error_bcf_read_error;
                     }
                     if ret < 0 {
                         break;
                     }
                     ret = vcf_parse(tmps_ptr, (*reader).header, *(*reader).buffer.add(slot));
                     if ret < 0 {
-                        (*files).errnum = hts_sys::bcf_sr_error_vcf_parse_error;
+                        (*files).errnum = bcf_sr_error_vcf_parse_error;
                         break;
                     }
                 } else if (*rfile).format.format == HTS_FORMAT_BCF {
                     ret = bcf_read1(rfile, (*reader).header, *(*reader).buffer.add(slot));
                     if ret < -1 {
-                        (*files).errnum = hts_sys::bcf_sr_error_bcf_read_error;
+                        (*files).errnum = bcf_sr_error_bcf_read_error;
                     }
                     if ret < 0 {
                         break;
@@ -13669,25 +13707,25 @@ unsafe fn sr_reader_fill_buffer(files: *mut bcf_srs_t, reader: *mut bcf_sr_t) ->
             } else if !(*reader).tbx_idx.is_null() {
                 ret = sr_tbx_itr_next(
                     rfile,
-                    (*reader).tbx_idx,
+                    (*reader).tbx_idx.cast(),
                     (*reader).itr.cast(),
                     tmps_ptr,
                 );
                 if ret < -1 {
-                    (*files).errnum = hts_sys::bcf_sr_error_bcf_read_error;
+                    (*files).errnum = bcf_sr_error_bcf_read_error;
                 }
                 if ret < 0 {
                     break;
                 }
                 ret = vcf_parse(tmps_ptr, (*reader).header, *(*reader).buffer.add(slot));
                 if ret < 0 {
-                    (*files).errnum = hts_sys::bcf_sr_error_vcf_parse_error;
+                    (*files).errnum = bcf_sr_error_vcf_parse_error;
                     break;
                 }
             } else {
                 ret = sr_bcf_itr_next(rfile, (*reader).itr.cast(), *(*reader).buffer.add(slot));
                 if ret < -1 {
-                    (*files).errnum = hts_sys::bcf_sr_error_bcf_read_error;
+                    (*files).errnum = bcf_sr_error_bcf_read_error;
                 }
                 if ret < 0 {
                     break;
@@ -13924,7 +13962,7 @@ unsafe fn bcf_sr_destroy1(reader: *mut bcf_sr_t, closefile: c_int) {
         }
         libc::free((*reader).fname.cast());
         if !(*reader).tbx_idx.is_null() {
-            super::tbx::tbx_destroy((*reader).tbx_idx);
+            super::tbx::tbx_destroy((*reader).tbx_idx.cast());
         }
         if !(*reader).bcf_idx.is_null() {
             super::hts::hts_idx_destroy((*reader).bcf_idx.cast());
@@ -13986,34 +14024,34 @@ const BCF_SR_ERROR_NOIDX_ERROR: c_int = 10;
 
 pub unsafe fn bcf_sr_strerror(errnum: c_int) -> *mut c_char {
     match errnum {
-        x if x == hts_sys::bcf_sr_error_open_failed as c_int => unsafe {
+        x if x == bcf_sr_error_open_failed as c_int => unsafe {
             libc::strerror(*libc::__errno_location())
         },
-        x if x == hts_sys::bcf_sr_error_not_bgzf as c_int => {
+        x if x == bcf_sr_error_not_bgzf as c_int => {
             c"not compressed with bgzip".as_ptr().cast_mut()
         }
-        x if x == hts_sys::bcf_sr_error_idx_load_failed as c_int => {
+        x if x == bcf_sr_error_idx_load_failed as c_int => {
             c"could not load index".as_ptr().cast_mut()
         }
-        x if x == hts_sys::bcf_sr_error_file_type_error as c_int => {
+        x if x == bcf_sr_error_file_type_error as c_int => {
             c"unknown file type".as_ptr().cast_mut()
         }
-        x if x == hts_sys::bcf_sr_error_api_usage_error as c_int => {
+        x if x == bcf_sr_error_api_usage_error as c_int => {
             c"API usage error".as_ptr().cast_mut()
         }
-        x if x == hts_sys::bcf_sr_error_header_error as c_int => {
+        x if x == bcf_sr_error_header_error as c_int => {
             c"could not parse header".as_ptr().cast_mut()
         }
-        x if x == hts_sys::bcf_sr_error_no_eof as c_int => {
+        x if x == bcf_sr_error_no_eof as c_int => {
             c"no BGZF EOF marker; file may be truncated"
                 .as_ptr()
                 .cast_mut()
         }
-        x if x == hts_sys::bcf_sr_error_no_memory as c_int => c"Out of memory".as_ptr().cast_mut(),
-        x if x == hts_sys::bcf_sr_error_vcf_parse_error as c_int => {
+        x if x == bcf_sr_error_no_memory as c_int => c"Out of memory".as_ptr().cast_mut(),
+        x if x == bcf_sr_error_vcf_parse_error as c_int => {
             c"VCF parse error".as_ptr().cast_mut()
         }
-        x if x == hts_sys::bcf_sr_error_bcf_read_error as c_int => {
+        x if x == bcf_sr_error_bcf_read_error as c_int => {
             c"BCF read error".as_ptr().cast_mut()
         }
         BCF_SR_ERROR_NOIDX_ERROR => c"merge of unindexed files failed".as_ptr().cast_mut(),
@@ -14031,7 +14069,7 @@ pub unsafe fn bcf_sr_set_threads(files: *mut bcf_srs_t, n_threads: c_int) -> c_i
         let p = libc::calloc(1, size_of::<super::hts::htsThreadPool>())
             .cast::<super::hts::htsThreadPool>();
         if p.is_null() {
-            (*files).errnum = hts_sys::bcf_sr_error_no_memory;
+            (*files).errnum = bcf_sr_error_no_memory;
             return -1;
         }
         (*files).p = p.cast();
@@ -14086,7 +14124,7 @@ pub unsafe fn bcf_sr_set_opt_targets_overlap(readers: *mut bcf_srs_t, overlap: c
 
 pub unsafe fn bcf_sr_set_opt(
     readers: *mut bcf_srs_t,
-    opt: hts_sys::bcf_sr_opt_t,
+    opt: bcf_sr_opt_t,
     value: c_int,
 ) -> c_int {
     match opt {
@@ -14120,7 +14158,7 @@ pub unsafe fn bcf_sr_add_reader(files: *mut bcf_srs_t, fname: *const c_char) -> 
         vcf_open_mode(fmode.as_mut_ptr().add(1), fname, std::ptr::null());
         let file_ptr = hts_open(fname, fmode.as_ptr());
         if file_ptr.is_null() {
-            (*files).errnum = hts_sys::bcf_sr_error_open_failed;
+            (*files).errnum = bcf_sr_error_open_failed;
             return 0;
         }
         // get idx name and pass to add_hreader
@@ -14569,7 +14607,8 @@ pub unsafe fn bcf_sr_regions_init(
             regions,
             std::ptr::null(),
             super::hts::HTS_IDX_SAVE_REMOTE | super::hts::HTS_IDX_SILENT_FAIL,
-        );
+        )
+        .cast();
         if (*reg).tbx.is_null() {
             let len = libc::strlen(regions) as isize;
             let mut is_bed = if libc::strcasecmp(regions.offset(len - 4), c".bed".as_ptr()) != 0 {
@@ -14650,7 +14689,7 @@ pub unsafe fn bcf_sr_regions_init(
             return reg;
         }
 
-        (*reg).seq_names = super::tbx::tbx_seqnames((*reg).tbx, &mut (*reg).nseqs).cast::<*mut c_char>();
+        (*reg).seq_names = super::tbx::tbx_seqnames((*reg).tbx.cast(), &mut (*reg).nseqs).cast::<*mut c_char>();
         if (*reg).seq_hash.is_null() {
             (*reg).seq_hash = super::sam::khash_str2int_init();
         }
@@ -14694,7 +14733,7 @@ pub unsafe fn bcf_sr_regions_seek(reg: *mut bcf_sr_regions_t, seq: *const c_char
         if !(*reg).itr.is_null() {
             super::hts::hts_itr_destroy((*reg).itr.cast());
         }
-        (*reg).itr = super::tbx::tbx_itr_querys1((*reg).tbx, seq).cast();
+        (*reg).itr = super::tbx::tbx_itr_querys1((*reg).tbx.cast(), seq).cast();
         if !(*reg).itr.is_null() {
             return 0;
         }
@@ -14762,7 +14801,7 @@ pub unsafe fn bcf_sr_regions_next(reg: *mut bcf_sr_regions_t) -> c_int {
             if !(*reg).itr.is_null() {
                 ret = sr_tbx_itr_next(
                     (*reg).file.cast(),
-                    (*reg).tbx,
+                    (*reg).tbx.cast(),
                     (*reg).itr.cast(),
                     line_ptr,
                 );
@@ -15991,13 +16030,13 @@ mod tests {
             let mut jal = -1;
             assert_eq!(
                 vcfutils_c_134_bcf_gt_type(fmt, 0, &mut ial, &mut jal),
-                hts_sys::GT_HET_RA as c_int
+                GT_HET_RA as c_int
             );
             assert_eq!(ial, 1);
             assert_eq!(jal, 0);
             assert_eq!(
                 vcfutils_c_134_bcf_gt_type(fmt, 1, &mut ial, &mut jal),
-                hts_sys::GT_HOM_AA as c_int
+                GT_HOM_AA as c_int
             );
             assert_eq!(ial, 2);
 
@@ -17006,12 +17045,12 @@ mod tests {
     fn synced_bcf_reader_strerror_matches_htslib_messages() {
         unsafe {
             assert_eq!(
-                CStr::from_ptr(bcf_sr_strerror(hts_sys::bcf_sr_error_not_bgzf as c_int)).to_bytes(),
+                CStr::from_ptr(bcf_sr_strerror(bcf_sr_error_not_bgzf as c_int)).to_bytes(),
                 b"not compressed with bgzip"
             );
             assert_eq!(
                 CStr::from_ptr(bcf_sr_strerror(
-                    hts_sys::bcf_sr_error_idx_load_failed as c_int
+                    bcf_sr_error_idx_load_failed as c_int
                 ))
                 .to_bytes(),
                 b"could not load index"
@@ -17031,7 +17070,7 @@ mod tests {
             let saved_errno = *errno;
             *errno = libc::ENOENT;
             assert_eq!(
-                CStr::from_ptr(bcf_sr_strerror(hts_sys::bcf_sr_error_open_failed as c_int))
+                CStr::from_ptr(bcf_sr_strerror(bcf_sr_error_open_failed as c_int))
                     .to_bytes(),
                 CStr::from_ptr(libc::strerror(libc::ENOENT)).to_bytes()
             );
@@ -17454,7 +17493,7 @@ mod tests {
 
             let readers = bcf_sr_init();
             assert!(!readers.is_null());
-            (*readers).errnum = hts_sys::bcf_sr_error_open_failed;
+            (*readers).errnum = bcf_sr_error_open_failed;
 
             *errno = 0;
             assert_eq!(
@@ -17462,7 +17501,7 @@ mod tests {
                 0
             );
             assert_eq!(*errno, libc::EINVAL);
-            assert_eq!((*readers).errnum, hts_sys::bcf_sr_error_api_usage_error);
+            assert_eq!((*readers).errnum, bcf_sr_error_api_usage_error);
 
             bcf_sr_destroy(readers);
             *errno = saved_errno;

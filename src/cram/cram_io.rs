@@ -39,21 +39,6 @@ use std::io::{Read, Write};
 unsafe extern "C" {
     #[link_name = "cram_write_SAM_hdr"]
     fn htslib_cram_write_sam_hdr(fd: *mut hts_sys::cram_fd, hdr: *mut hts_sys::sam_hdr_t) -> c_int;
-
-    #[link_name = "cram_free_slice"]
-    fn htslib_cram_free_slice(s: *mut hts_sys::cram_slice);
-
-    #[link_name = "cram_free_slice_header"]
-    fn htslib_cram_free_slice_header(hdr: *mut hts_sys::cram_block_slice_hdr);
-
-    #[link_name = "cram_new_slice"]
-    fn htslib_cram_new_slice(
-        type_: hts_sys::cram_content_type,
-        nrecs: c_int,
-    ) -> *mut hts_sys::cram_slice;
-
-    #[link_name = "cram_read_slice"]
-    fn htslib_cram_read_slice(fd: *mut hts_sys::cram_fd) -> *mut hts_sys::cram_slice;
 }
 
 unsafe fn copy_vec_to_malloc(mut out: Vec<u8>, out_size: *mut usize) -> *mut c_char {
@@ -317,33 +302,33 @@ pub unsafe fn cram_cram_io_c_4273_cram_flush_container_mt(
     crate::cram_flush_bridge::cram_cram_io_c_4275_cram_flush_container_mt(fd.cast(), c)
 }
 
-// original: cram_free_slice_header (htslib/cram/cram_io.c:4407)
-// TODO(P5): no native cram_free_slice_header yet
+// original: cram_free_slice_header (htslib/cram/cram_io.c:4409)
+// Native body lives in src/cram.rs as cram_cram_io_c_4409_cram_free_slice_header.
 pub unsafe fn cram_cram_io_c_4407_cram_free_slice_header(hdr: *mut hts_sys::cram_block_slice_hdr) {
-    htslib_cram_free_slice_header(hdr)
+    crate::htslib_rs::cram::cram_cram_io_c_4409_cram_free_slice_header(hdr)
 }
 
-// original: cram_free_slice (htslib/cram/cram_io.c:4419)
-// TODO(P5): no native cram_free_slice yet
+// original: cram_free_slice (htslib/cram/cram_io.c:4421)
+// Native body lives in src/cram.rs as cram_cram_io_c_4421_cram_free_slice.
 pub unsafe fn cram_cram_io_c_4419_cram_free_slice(s: *mut hts_sys::cram_slice) {
-    htslib_cram_free_slice(s)
+    crate::htslib_rs::cram::cram_cram_io_c_4421_cram_free_slice(s)
 }
 
-// original: cram_new_slice (htslib/cram/cram_io.c:4504)
-// TODO(P5): no native cram_new_slice yet
+// original: cram_new_slice (htslib/cram/cram_io.c:4506)
+// Native body lives in src/cram.rs as cram_cram_io_c_4506_cram_new_slice.
 pub unsafe fn cram_cram_io_c_4504_cram_new_slice(
     type_: hts_sys::cram_content_type,
     nrecs: c_int,
 ) -> *mut hts_sys::cram_slice {
-    htslib_cram_new_slice(type_, nrecs)
+    crate::htslib_rs::cram::cram_cram_io_c_4506_cram_new_slice(type_, nrecs)
 }
 
-// original: cram_read_slice (htslib/cram/cram_io.c:4566)
-// TODO(P5): no native cram_read_slice yet
+// original: cram_read_slice (htslib/cram/cram_io.c:4568)
+// Native body lives in src/cram.rs as cram_cram_io_c_4568_cram_read_slice.
 pub unsafe fn cram_cram_io_c_4566_cram_read_slice(
     fd: *mut hts_sys::cram_fd,
 ) -> *mut hts_sys::cram_slice {
-    htslib_cram_read_slice(fd)
+    crate::htslib_rs::cram::cram_cram_io_c_4568_cram_read_slice(fd)
 }
 
 // original: cram_read_SAM_hdr (htslib/cram/cram_io.c:4715)

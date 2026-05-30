@@ -1463,6 +1463,22 @@ pub unsafe fn cram_eof(fd: *mut cram_fd) -> c_int {
     cram_cram_io_c_5662_cram_eof(fd.cast())
 }
 
+// Mirrors the tail of C `cram_set_voption(CRAM_OPT_RANGE, ...)`: after
+// cram_seek_to_refpos has updated fd->range, OR SAM_POS into required_fields
+// unless the special "refid == -2" sentinel is set (set by HTS_IDX_START/REST).
+// Used by sam_cram_itr_query to complete the native CRAM iterator setup.
+pub unsafe fn cram_set_required_fields_pos(fd: *mut cram_fd) {
+    if fd.is_null() {
+        return;
+    }
+    let fdl = fd.cast::<cram_fd_layout>();
+    libc::pthread_mutex_lock(&mut (*fdl).range_lock);
+    if (*fdl).range.refid != -2 {
+        (*fdl).required_fields |= crate::htslib_rs::cram::SAM_POS;
+    }
+    libc::pthread_mutex_unlock(&mut (*fdl).range_lock);
+}
+
 pub unsafe fn cram_set_voption(
     fd: *mut cram_fd,
     opt: hts_fmt_option,

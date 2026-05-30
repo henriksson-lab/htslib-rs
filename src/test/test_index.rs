@@ -61,9 +61,9 @@ pub unsafe fn test_test_index_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
     }
 
     let ret = match (*in_).format.format {
-        x if x == hts_sys::htsExactFormat_sam
-            || x == hts_sys::htsExactFormat_bam
-            || x == hts_sys::htsExactFormat_cram =>
+        x if x == crate::htslib_rs::hts::HTS_FORMAT_SAM
+            || x == crate::htslib_rs::hts::HTS_FORMAT_BAM
+            || x == crate::htslib_rs::hts::HTS_FORMAT_CRAM =>
         {
             sam::sam_index_build(fname, min_shift)
         }

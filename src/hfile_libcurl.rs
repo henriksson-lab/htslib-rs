@@ -411,13 +411,14 @@ pub unsafe fn hfile_libcurl_c_153_easy_errno(easy: *mut c_void, err: c_int) -> c
         CURLE_REMOTE_DISK_FULL => libc::ENOSPC,
         CURLE_REMOTE_FILE_EXISTS => libc::EEXIST,
         _ => {
-            // TODO(P5): no native hts_log yet (variadic, libhts-only)
-            hts_sys::hts_log(
-                hts_sys::htsLogLevel_HTS_LOG_ERROR,
+            let detail = std::ffi::CStr::from_ptr(curl_easy_strerror(err)).to_string_lossy();
+            let msg =
+                std::ffi::CString::new(format!("Libcurl reported error {} ({})", err, detail))
+                    .unwrap_or_default();
+            crate::htslib_rs::hts::hts_log_cstr(
+                crate::htslib_rs::hts::HTS_LOG_ERROR,
                 c"easy_errno".as_ptr(),
-                c"Libcurl reported error %d (%s)".as_ptr(),
-                err,
-                curl_easy_strerror(err),
+                msg.as_ptr(),
             );
             libc::EIO
         }
@@ -471,13 +472,14 @@ pub unsafe fn hfile_libcurl_c_270_multi_errno(errm: c_int) -> c_int {
         1 | 2 | 5 => libc::EBADF,
         3 => libc::ENOMEM,
         _ => {
-            // TODO(P5): no native hts_log yet (variadic, libhts-only)
-            hts_sys::hts_log(
-                hts_sys::htsLogLevel_HTS_LOG_ERROR,
+            let detail = std::ffi::CStr::from_ptr(curl_multi_strerror(errm)).to_string_lossy();
+            let msg =
+                std::ffi::CString::new(format!("Libcurl reported error {} ({})", errm, detail))
+                    .unwrap_or_default();
+            crate::htslib_rs::hts::hts_log_cstr(
+                crate::htslib_rs::hts::HTS_LOG_ERROR,
                 c"multi_errno".as_ptr(),
-                c"Libcurl reported error %d (%s)".as_ptr(),
-                errm,
-                curl_multi_strerror(errm),
+                msg.as_ptr(),
             );
             libc::EIO
         }
@@ -2144,12 +2146,13 @@ pub unsafe fn hfile_libcurl_c_1679_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> c_
     let info = curl_version_info(CURLVERSION_NOW);
     let version = crate::htslib_rs::hts::hts_version();
     if !info.is_null() {
-        // TODO(P5): no native ksprintf yet (variadic, libhts-only)
-        hts_sys::ksprintf(
+        crate::htslib_rs::kstring::kstring_c_177_ksprintf(
             std::ptr::addr_of_mut!(HFILE_LIBCURL_USERAGENT).cast(),
             c"htslib/%s libcurl/%s".as_ptr(),
-            version,
-            (*info).version,
+            &[
+                crate::htslib_rs::kstring::KsPrintfArg::Str(version),
+                crate::htslib_rs::kstring::KsPrintfArg::Str((*info).version),
+            ],
         );
     }
 

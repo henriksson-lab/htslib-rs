@@ -56,9 +56,9 @@ unsafe fn bcf_itr_querys1(
 
 unsafe fn bcf_itr_next(htsfp: *mut htsFile, itr: *mut hts_itr_t, r: *mut vcf::bcf1_t) -> c_int {
     if ((*htsfp).bitfields & (1 << 4)) != 0 {
-        return hts_sys::hts_itr_next(
-            (*htsfp).fp.bgzf.cast(),
-            itr.cast(),
+        return crate::htslib_rs::hts::hts_itr_next(
+            (*htsfp).fp.bgzf,
+            itr,
             r.cast(),
             std::ptr::null_mut(),
         );

@@ -8835,8 +8835,31 @@ unsafe fn sam_c_1649_index_load(
 ) -> *mut hts_idx_t {
     match (*fp).format.format {
         HTS_FORMAT_BAM | HTS_FORMAT_SAM => hts_idx_load3(fn_, fnidx, HTS_FMT_BAI, flags),
-        // TODO(P5): no native CRAM index loader yet
-        HTS_FORMAT_CRAM => hts_sys::sam_index_load3(fp.cast(), fn_, fnidx, flags).cast(),
+        HTS_FORMAT_CRAM => {
+            // Native CRAM index loader. Mirrors C:
+            //   if (cram_index_load(fp->fp.cram, fn, fnidx) < 0) return NULL;
+            //   hts_cram_idx_t *idx = malloc(sizeof(hts_cram_idx_t));
+            //   idx->fmt = HTS_FMT_CRAI; idx->cram = fp->fp.cram;
+            //   return (hts_idx_t *) idx;
+            let _ = flags;
+            let cram_fd = (*fp).fp.cram;
+            if crate::htslib_rs::hts::cram_index::cram_cram_index_c_176_cram_index_load(
+                cram_fd, fn_, fnidx,
+            ) < 0
+            {
+                return std::ptr::null_mut();
+            }
+            let idx = crate::htslib_rs::c_compat::malloc(
+                std::mem::size_of::<crate::htslib_rs::hts::hts_cram_idx_t>() as u64,
+            )
+            .cast::<crate::htslib_rs::hts::hts_cram_idx_t>();
+            if idx.is_null() {
+                return std::ptr::null_mut();
+            }
+            (*idx).fmt = HTS_FMT_CRAI;
+            (*idx).cram = cram_fd;
+            idx.cast()
+        }
         _ => std::ptr::null_mut(),
     }
 }
@@ -8872,10 +8895,104 @@ pub unsafe fn sam_itr_queryi(
         return hts_itr_query(_idx, _tid, _beg, _end, Some(sam_readrec_rest));
     }
     if (*_idx).fmt == HTS_FMT_CRAI {
-        // TODO(P5): no native CRAM iterator yet
-        return hts_sys::sam_itr_queryi(_idx.cast(), _tid, _beg, _end).cast();
+        return sam_cram_itr_query(_idx, _tid, _beg, _end, Some(sam_readrec));
     }
     hts_itr_query(_idx, _tid, _beg, _end, Some(sam_readrec))
+}
+
+// Native equivalent of C `cram_itr_query` (htslib/sam.c:1687).
+//
+// Builds a dummy iterator suitable for hts_itr_next() which simply invokes the
+// readrec function. For tid>=0 or HTS_IDX_NOCOOR/HTS_IDX_START it sets the CRAM
+// reference range via cram_seek_to_refpos (mirroring cram_set_option(CRAM_OPT_RANGE)).
+unsafe fn sam_cram_itr_query(
+    idx: *const hts_idx_t,
+    tid: c_int,
+    beg: hts_pos_t,
+    end: hts_pos_t,
+    readrec: crate::htslib_rs::hts::hts_readrec_func,
+) -> *mut hts_itr_t {
+    use crate::htslib_rs::hts::{
+        hts_cram_idx_t, HTS_IDX_NONE, HTS_IDX_REST,
+    };
+    let cidx = idx.cast::<hts_cram_idx_t>();
+    let iter = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<hts_itr_t>() as u64)
+        .cast::<hts_itr_t>();
+    if iter.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    // bitfields layout (matches hts.c definition):
+    //   bit 0 = read_rest, bit 1 = finished, bit 2 = is_cram, bit 3 = nocoor.
+    (*iter).bitfields |= (1 << 2) | 1; // is_cram | read_rest
+    (*iter).off = std::ptr::null_mut();
+    (*iter).bins.a = std::ptr::null_mut();
+    (*iter).readrec = readrec;
+
+    if tid >= 0 || tid == HTS_IDX_NOCOOR || tid == HTS_IDX_START {
+        let mut r = crate::htslib_rs::hts::cram_index::cram_range {
+            refid: tid,
+            start: beg + 1,
+            end,
+        };
+        // Replicates C cram_set_option(CRAM_OPT_RANGE, &r): call
+        // cram_seek_to_refpos, then OR SAM_POS into required_fields if not
+        // the special "-2" case set by HTS_IDX_START/HTS_IDX_REST.
+        let cram_fd = (*cidx).cram;
+        let ret = crate::htslib_rs::hts::cram_index::cram_cram_index_c_572_cram_seek_to_refpos(
+            cram_fd, &mut r,
+        );
+        // After cram_seek_to_refpos, propagate required_fields |= SAM_POS like
+        // cram_set_voption does. We touch the layout-mirrored field directly.
+        cram_set_required_pos_if_needed(cram_fd);
+
+        (*iter).curr_off = 0;
+        (*iter).tid = tid;
+        (*iter).beg = beg;
+        (*iter).end = end;
+
+        match ret {
+            0 => {}
+            -2 => {
+                // No data vs this ref; mark iterator finished (same as HTS_IDX_NONE).
+                (*iter).bitfields |= 1 << 1;
+            }
+            _ => {
+                crate::htslib_rs::c_compat::free(iter.cast());
+                return std::ptr::null_mut();
+            }
+        }
+    } else {
+        match tid {
+            HTS_IDX_REST => {
+                (*iter).curr_off = 0;
+            }
+            HTS_IDX_NONE => {
+                (*iter).curr_off = 0;
+                (*iter).bitfields |= 1 << 1; // finished
+            }
+            _ => {
+                crate::htslib_rs::hts::hts_log_cstr(
+                    crate::htslib_rs::hts::HTS_LOG_ERROR,
+                    c"cram_itr_query".as_ptr(),
+                    c"Query with this tid not implemented for CRAM files".as_ptr(),
+                );
+                crate::htslib_rs::c_compat::free(iter.cast());
+                return std::ptr::null_mut();
+            }
+        }
+    }
+
+    iter
+}
+
+// Mirrors the post-cram_seek_to_refpos work done inside C's
+// cram_set_voption(CRAM_OPT_RANGE): OR SAM_POS into required_fields unless the
+// special "refid == -2" sentinel is set (which happens for HTS_IDX_START/REST).
+// The cram_fd_layout struct is private to cram.rs, so we route through a
+// dedicated setter there.
+unsafe fn cram_set_required_pos_if_needed(fd: *mut crate::htslib_rs::hts::cram_fd) {
+    crate::htslib_rs::cram::cram_set_required_fields_pos(fd);
 }
 
 pub unsafe fn sam_itr_querys(
@@ -8886,10 +9003,9 @@ pub unsafe fn sam_itr_querys(
     if idx.is_null() || hdr.is_null() || region.is_null() {
         return std::ptr::null_mut();
     }
-    if (*idx).fmt == HTS_FMT_CRAI {
-        // TODO(P5): no native CRAM region-string iterator yet
-        return hts_sys::sam_itr_querys(idx.cast(), hdr.cast(), region).cast();
-    }
+    // Mirrors C `sam_itr_querys` (htslib/sam.c:1761): parses the region string
+    // and routes to the appropriate itr_query implementation. The
+    // sam_itr_queryi() dispatch below handles BAM/SAM and CRAM uniformly.
     if libc::strcmp(region, c".".as_ptr()) == 0 {
         return sam_itr_queryi(idx, HTS_IDX_START, 0, 0);
     }
@@ -9082,21 +9198,29 @@ pub unsafe fn sam_index_build3(
         return -2;
     }
 
-    // CRAM indexing is owned by another module and remains delegated to the
-    // C implementation; close our probe handle and hand off the whole call.
-    if (*fp).format.format == HTS_FORMAT_CRAM {
-        crate::htslib_rs::hts::hts_close(fp);
-        // TODO(P5): no native CRAM index builder yet
-        return hts_sys::sam_index_build3(fn_, fnidx, min_shift, nthreads);
+    // For non-CRAM formats apply threading early (matches C order). CRAM uses
+    // a single-pass reader for index build, so we skip thread setup there to
+    // avoid wiring nthreads through hts_sys (the native cram_index_build does
+    // not benefit from threads).
+    if (*fp).format.format != HTS_FORMAT_CRAM && nthreads != 0 {
+        crate::htslib_rs::hts::hts_set_threads(fp, nthreads);
     }
 
-    if nthreads != 0 {
-        crate::htslib_rs::hts::hts_set_threads(fp, nthreads);
+    if (*fp).format.format == HTS_FORMAT_CRAM {
+        // Native CRAM index builder. Mirrors C:
+        //     ret = cram_index_build(fp->fp.cram, fn, fnidx);
+        let ret = crate::htslib_rs::hts::cram_index::cram_cram_index_c_779_cram_index_build(
+            (*fp).fp.cram,
+            fn_,
+            fnidx,
+        );
+        crate::htslib_rs::hts::hts_close(fp);
+        return ret;
     }
 
     let ret = match (*fp).format.format {
         HTS_FORMAT_BAM | HTS_FORMAT_SAM => {
-            if (*fp).format.compression != hts_sys::htsCompression_bgzf {
+            if (*fp).format.compression != crate::htslib_rs::hts::HTS_COMPRESSION_BGZF {
                 crate::htslib_rs::hts::hts_log_cstr(
                     crate::htslib_rs::hts::HTS_LOG_ERROR,
                     c"sam_index_build3".as_ptr(),

@@ -138,19 +138,22 @@ pub unsafe extern "C" fn multipart_c_73_multipart_read(
         if (*fp).currentfp.is_null() {
             if (*fp).current < (*fp).nparts {
                 let p = (*fp).parts.add((*fp).current);
-                // TODO(P5): no native hts_log yet (variadic, libhts-only)
-                hts_sys::hts_log(
-                    hts_sys::htsLogLevel_HTS_LOG_DEBUG,
-                    c"multipart".as_ptr(),
-                    c"Opening part #%zu of %zu: \"%.120s%s\"".as_ptr(),
+                let url_cstr = std::ffi::CStr::from_ptr((*p).url).to_bytes();
+                let truncate = url_cstr.len() > 120;
+                let shown = std::str::from_utf8(if truncate { &url_cstr[..120] } else { url_cstr })
+                    .unwrap_or("");
+                let msg = std::ffi::CString::new(format!(
+                    "Opening part #{} of {}: \"{}{}\"",
                     (*fp).current + 1,
                     (*fp).nparts,
-                    (*p).url,
-                    if libc::strlen((*p).url) > 120 {
-                        c"...".as_ptr()
-                    } else {
-                        c"".as_ptr()
-                    },
+                    shown,
+                    if truncate { "..." } else { "" },
+                ))
+                .unwrap_or_default();
+                crate::htslib_rs::hts::hts_log_cstr(
+                    crate::htslib_rs::hts::HTS_LOG_DEBUG,
+                    c"multipart".as_ptr(),
+                    msg.as_ptr(),
                 );
 
                 (*fp).currentfp = if !(*p).headers.is_null() {
@@ -361,12 +364,16 @@ pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
                 return t.type_;
             }
 
-            // TODO(P5): no native hts_log yet (variadic, libhts-only)
-            hts_sys::hts_log(
-                hts_sys::htsLogLevel_HTS_LOG_DEBUG,
+            let format_name = std::ffi::CStr::from_ptr(t.str_).to_string_lossy();
+            let msg = std::ffi::CString::new(format!(
+                "GA4GH JSON redirection to multipart {} data",
+                format_name,
+            ))
+            .unwrap_or_default();
+            crate::htslib_rs::hts::hts_log_cstr(
+                crate::htslib_rs::hts::HTS_LOG_DEBUG,
                 c"multipart".as_ptr(),
-                c"GA4GH JSON redirection to multipart %s data".as_ptr(),
-                t.str_,
+                msg.as_ptr(),
             );
         } else if crate::htslib_rs::hts::hts_json_fskip_value(json, 0) != b'v' as c_char {
             return b'?' as c_char;

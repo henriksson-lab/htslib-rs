@@ -18,7 +18,7 @@ use super::{path_bytes, path_from_bytes};
 
 #[allow(unused_assignments, unused_mut, private_interfaces)]
 #[path = "cram/cram_index.rs"]
-mod cram_index;
+pub mod cram_index;
 #[path = "cram/cram_structs.rs"]
 mod cram_structs;
 
@@ -48,7 +48,23 @@ pub struct htsThreadPool {
     pub pool: *mut crate::htslib_rs::thread_pool::hts_tpool,
     pub qsize: c_int,
 }
-pub type hts_opt = hts_sys::hts_opt;
+// Native equivalent of htslib's `hts_opt` (htslib/hts.h:204). Byte-identical
+// to the hts_sys binding (same layout: arg/opt/val/next, val is a union of an
+// int and a char* with 8-byte alignment). Defining locally retires the
+// hts_sys type alias.
+#[repr(C)]
+pub union hts_opt_val {
+    pub i: c_int,
+    pub s: *mut c_char,
+}
+
+#[repr(C)]
+pub struct hts_opt {
+    pub arg: *mut c_char,
+    pub opt: u32,
+    pub val: hts_opt_val,
+    pub next: *mut hts_opt,
+}
 pub const HTS_FORMAT_UNKNOWN_FORMAT: htsExactFormat = 0;
 pub const HTS_FORMAT_BINARY_FORMAT: htsExactFormat = 1;
 pub const HTS_FORMAT_TEXT_FORMAT: htsExactFormat = 2;
@@ -85,6 +101,9 @@ pub const HTS_FMT_CRAI: c_int = 3;
 pub const HTS_FMT_FAI: c_int = 4;
 pub const HTS_IDX_SAVE_REMOTE: c_int = 1;
 pub const HTS_IDX_SILENT_FAIL: c_int = 2;
+// Path delimiter inserted between a file URL and an inline index path
+// (see htslib/hts.h: "##idx##").
+pub const HTS_IDX_DELIM: &[u8; 8] = b"##idx##\0";
 pub const HTS_COMPRESSION_RAZF: htsCompression = 5;
 pub const HTS_COMPRESSION_XZ: htsCompression = 6;
 pub const HTS_COMPRESSION_ZSTD: htsCompression = 7;
