@@ -13,7 +13,12 @@ pub unsafe fn samples_add_header_c_37_print_usage(fp: *mut libc::FILE) {
 // original: main (htslib/samples/add_header.c:49)
 pub unsafe fn samples_add_header_c_49_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     let mut ret = libc::EXIT_FAILURE;
-    let sq = c"@SQ\tSN:TR1\tLN:100\n@SQ\tSN:TR2\tLN:50";
+    // Trailing `\n` matters: native `sam_hdr_add_lines` appends raw text
+    // without going through hrecs+redact_header_text normalisation (which the
+    // C `sam_hdr_add_lines` does implicitly). Without the terminator, the
+    // subsequent `sam_hdr_add_line` calls would concatenate onto the last
+    // unterminated `@SQ` line (`@SQ ... LN:50@RG ...`).
+    let sq = c"@SQ\tSN:TR1\tLN:100\n@SQ\tSN:TR2\tLN:50\n";
     let mut data = kstring_t {
         l: 0,
         m: 0,

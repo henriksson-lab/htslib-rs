@@ -448,9 +448,30 @@ pub fn dump_params(_gp: &fqz_gparams) {}
 
 /// `static int fqz_create_models(fqz_model *m, fqz_gparams *gp)`
 // fqzcomp_qual.c:320
+///
+/// Safety note (vs. C and vs. the rANS TLS-reuse hazard):
+///
+/// In the C source, `m->qual` is backed by `htscodecs_tls_alloc`, a per-thread
+/// pool that returns the same buffer to successive callers and only `calloc`s
+/// on first use.  The C path then unconditionally walks every slot calling
+/// `SIMPLE_MODEL(QMAX,_init)`, so any stale bytes from a prior decode are
+/// overwritten before use.
+///
+/// The Rust port replaces the TLS allocation with an owned `Vec<SimpleModel>`
+/// that is freshly constructed (`vec![SymFreqs::default(); nsym + 3]` inside
+/// `SimpleModel::new`, which zero-fills) on every call and dropped on exit
+/// via `fqz_destroy_models`.  Every `SimpleModel` is then re-initialised
+/// here.  There is therefore no cross-call stale-state hazard analogous to
+/// the one fixed in `rans_static_32x16pr` / `rans_static_4x16pr`; the
+/// decoder cannot read leftovers from a previous decode of a different
+/// (possibly larger) parameter set.
 pub fn fqz_create_models(m: &mut fqz_model, gp: &fqz_gparams) -> i32 {
     // m->qual = htscodecs_tls_alloc(sizeof(*m->qual) * CTX_SIZE)
-    // Modelled with a Rust Vec of CTX_SIZE QMAX-symbol models.
+    // Modelled with a Rust Vec of CTX_SIZE QMAX-symbol models.  Vec::push
+    // of fresh SimpleModel values zero-initialises all SymFreqs before the
+    // explicit SIMPLE_MODEL_init loop below runs, so even slots that the
+    // init loop's `nsym`-bounded inner loop touches start from a known
+    // state.
     m.qual = Vec::with_capacity(CTX_SIZE as usize);
     for _ in 0..CTX_SIZE {
         m.qual.push(SimpleModel::new(QMAX as usize));
@@ -1889,7 +1910,24 @@ pub fn uncompress_block_fqz2f(
             last = state.ctx;
         }
 
-        // Decode and update context
+        // Decode and update context.
+        //
+        // Bounds analysis (rANS-style stale-table hazard does NOT apply here):
+        //   * `last` is `state.ctx`, which is either 0 (initial / new-read
+        //     reset) or the return value of `fqz_update_ctx`, which is
+        //     masked with `CTX_SIZE - 1` (= 0xFFFF).  `model.qual` is
+        //     allocated with `CTX_SIZE` (65536) freshly-zeroed entries
+        //     above, so `model.qual[last]` is always in range.
+        //   * `q` is the symbol returned by `SIMPLE_MODEL_decodeSymbol` on a
+        //     QMAX-symbol model.  `SimpleModel::new(QMAX=256)` zero-fills
+        //     the symbol-frequency table and `SIMPLE_MODEL_init` writes
+        //     `f[1+i].symbol = i` for `i in 0..nsym=256`, so the maximum
+        //     symbol value reachable through any (corrupt-stream-driven)
+        //     traversal is 255.  `pm.qmap` is `[u32; 256]`, so `qmap[q]`
+        //     is in range without an extra runtime check.
+        //   * `pm.qtab[q]`, `pm.ptab[...]`, `pm.dtab[...]` indices in
+        //     `fqz_update_ctx` are similarly bounded (q<256, p/delta
+        //     clamped to 1023/255).
         loop {
             let q = SIMPLE_MODEL_decodeSymbol(&mut model.qual[last as usize], &mut rc);
             last = fqz_update_ctx(pm, &mut state, q as i32);

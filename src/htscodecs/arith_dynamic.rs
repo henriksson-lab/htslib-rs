@@ -14,6 +14,19 @@
 //! and return `*mut u8` exactly like C (with an `out` that may be NULL ->
 //! malloc'd, or a caller-provided buffer), and the public `arith_compress*` /
 //! `arith_uncompress*` wrappers expose a Rust-friendly surface on top.
+//!
+//! TLS-reuse hazard audit: unlike `rans_static_32x16pr` / `rans_static_4x16pr`,
+//! this module performs NO `htscodecs_tls_alloc` allocations.  Every decode call
+//! constructs its `SimpleModel` (or `Vec<SimpleModel>`) freshly via
+//! `SimpleModel::new(nsym)`, which zero-initialises the underlying
+//! `Vec<SymFreqs>` (length `nsym + 3`).  `SIMPLE_MODEL_init` then writes every
+//! slot `f[0..=nsym+2]` before any decode read.  Consequently there is no stale
+//! symbol-table data across calls and no need for the value-range validation
+//! pattern applied to the rANS decoders.  The `SIMPLE_MODEL_decodeSymbol`
+//! routine itself already guards against corrupt-input out-of-range cumulative
+//! lookups (`freq > MAX_FREQ` and `(si - 1) > NSYM` early-returns at
+//! `c_simple_model.rs:155,169`), so even on adversarial input the model state
+//! cannot be corrupted into producing arithmetic overflow on subsequent reads.
 
 #![allow(unused_imports)]
 

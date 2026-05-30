@@ -1055,6 +1055,9 @@ pub unsafe fn sam_hdr_add_line(
         if !(*h).hrecs.is_null() {
             return sam_hdr_add_line_hrecs(h, type_, tags);
         }
+        // `@CO\t<comment>\n` — the tab between the type and comment is required
+        // per the SAM spec (and required for the parser to tokenize the line).
+        line.push(b'\t');
         line.extend_from_slice(comment);
         line.push(b'\n');
         return sam_hdr_add_lines(h, line.as_ptr().cast(), line.len());
@@ -19236,8 +19239,13 @@ mod tests {
                 0
             );
 
+            // The SAM spec writes @CO lines as `@CO\t<text>\n` (tab between
+            // type and free-text). htslib's C `sam_hdr_add_line` emits the
+            // same shape; this test was previously asserting `@COcomment...`
+            // (no tab), which silently matched a bug in our native CO branch
+            // that has now been fixed to insert the spec-mandated tab.
             let expected =
-                b"@SQ\tSN:chr1\tLN:10\n@RG\tID:run1\tSM:sample1\n@COcomment without tabs\n";
+                b"@SQ\tSN:chr1\tLN:10\n@RG\tID:run1\tSM:sample1\n@CO\tcomment without tabs\n";
             assert_eq!(sam_hdr_length(hdr), expected.len());
             assert_eq!(
                 std::slice::from_raw_parts(sam_hdr_str(hdr).cast::<u8>(), expected.len()),
