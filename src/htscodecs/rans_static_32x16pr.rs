@@ -194,6 +194,12 @@ pub fn rans_uncompress_O0_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     let cp_end = cp_end_total - NX * 2; // worst case for renorm bytes
 
     let mut i = 0usize;
+    // O0 fast/slow loops: `s3` is a fresh local Vec, populated entirely by
+    // `rans_F_to_s3` which validates `F[j] <= (1<<shift) - x` and rejects on
+    // shortfall (we already checked its return). Every `s3[m]` (with
+    // `m = r & mask`, mask < TOTFREQ) is therefore well-formed; the multiply
+    // `f * (r >> TF_SHIFT) + b` is bounded by `TOTFREQ * (2^20 - 1) + (TOTFREQ - 1)
+    // < 2^32` and cannot overflow. No corruption-time validation needed here.
     // Unsafe loop
     while i < out_end && cp < cp_end {
         let mut z = 0usize;
@@ -502,8 +508,18 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                 }
                 for k in 0..4 {
                     let fbk = unsafe { &*fb_base.add(l[z + k]) };
-                    r[z + k] = (fbk[c[k]].f as u32) * (r[z + k] >> TF_SHIFT_O1);
-                    r[z + k] += mm[k] - fbk[c[k]].b as u32;
+                    let f = fbk[c[k]].f as u32;
+                    let b = fbk[c[k]].b as u32;
+                    // Same hazard class as the fast path: corrupted input may
+                    // leave `c[k]` pointing into a `fb_t` slot that was never
+                    // populated by `decode_freq1`, leaving stale TLS bytes.
+                    // Validate (f, b) and the (mm - b) subtraction.
+                    if f == 0 || f > TOTFREQ_O1 || b > TOTFREQ_O1 - f || b > mm[k] {
+                        htscodecs_tls_free(sfb_ptr);
+                        return std::ptr::null_mut();
+                    }
+                    r[z + k] = f * (r[z + k] >> TF_SHIFT_O1);
+                    r[z + k] += mm[k] - b;
                     out_slice[i4[z + k]] = c[k] as u8;
                     i4[z + k] += 1;
                     l[z + k] = c[k];
@@ -526,7 +542,13 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
             let c = unsafe { *row.add(m as usize) } as usize;
             out_slice[i4[NX - 1]] = c as u8;
             let fbk = unsafe { &*fb_base.add(l[NX - 1]) };
-            r[NX - 1] = (fbk[c].f as u32) * (r[NX - 1] >> TF_SHIFT_O1) + m - fbk[c].b as u32;
+            let f = fbk[c].f as u32;
+            let b = fbk[c].b as u32;
+            if f == 0 || f > TOTFREQ_O1 || b > TOTFREQ_O1 - f || b > m {
+                htscodecs_tls_free(sfb_ptr);
+                return std::ptr::null_mut();
+            }
+            r[NX - 1] = f * (r[NX - 1] >> TF_SHIFT_O1) + m - b;
             RansDecRenormSafe(&mut r[NX - 1], input, &mut ptr, ptr_end + 2 * NX);
             l[NX - 1] = c;
             i4[NX - 1] += 1;
@@ -549,6 +571,17 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                 for k in 0..4 {
                     let f = s[k] >> (TF_SHIFT_O1_FAST + 8);
                     let b = (s[k] >> 8) & mask;
+                    // Validate freq-table-derived values before the multiply.
+                    // On corrupted input the state index can land in a stale
+                    // TLS-allocated slot where (f, b) are garbage and would
+                    // overflow u32 in `f * (r >> shift) + b`. In the s3 fast
+                    // path, b is the per-symbol offset `y` with y < F[j], so
+                    // valid encoder outputs satisfy 1 <= f <= TOTFREQ_O1_FAST
+                    // and b < f.
+                    if f == 0 || f > TOTFREQ_O1_FAST || b >= f {
+                        htscodecs_tls_free(sfb_ptr);
+                        return std::ptr::null_mut();
+                    }
                     r[z + k] = f * (r[z + k] >> TF_SHIFT_O1_FAST) + b;
                 }
                 if !low_ent && ptr < ptr_end {
@@ -568,8 +601,13 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
             let s = unsafe { *row.add((r[NX - 1] & ((1u32 << TF_SHIFT_O1_FAST) - 1)) as usize) };
             out_slice[i4[NX - 1]] = s as u8;
             l[NX - 1] = s as u8 as usize;
-            r[NX - 1] = (s >> (TF_SHIFT_O1_FAST + 8)) * (r[NX - 1] >> TF_SHIFT_O1_FAST)
-                + ((s >> 8) & ((1u32 << TF_SHIFT_O1_FAST) - 1));
+            let f = s >> (TF_SHIFT_O1_FAST + 8);
+            let b = (s >> 8) & ((1u32 << TF_SHIFT_O1_FAST) - 1);
+            if f == 0 || f > TOTFREQ_O1_FAST || b >= f {
+                htscodecs_tls_free(sfb_ptr);
+                return std::ptr::null_mut();
+            }
+            r[NX - 1] = f * (r[NX - 1] >> TF_SHIFT_O1_FAST) + b;
             RansDecRenormSafe(&mut r[NX - 1], input, &mut ptr, ptr_end + 2 * NX);
             i4[NX - 1] += 1;
         }

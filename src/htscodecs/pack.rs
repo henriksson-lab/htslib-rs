@@ -779,4 +779,122 @@ mod tests {
             }
         }
     }
+
+    // ------------------------------------------------------------------
+    // Randomized + adversarial pack/unpack tests.
+    // ------------------------------------------------------------------
+
+    /// 20+ seeds × varied (distinct, len) shapes — each round-trips exactly.
+    #[test]
+    fn random_roundtrip_many_seeds() {
+        let lens: &[usize] = &[1, 2, 4, 8, 16, 100, 1024, 9999];
+        let mut total = 0usize;
+        for seed in 0..24u64 {
+            let mut rng = Rng::new(0xBABE_CAFE ^ seed);
+            for &len in lens {
+                // pick a valid distinct count in 1..=16.
+                let distinct = 1 + (rng.next_u32() as usize) % 16;
+                let data = make(distinct, len, seed.wrapping_mul(7919));
+                let (meta, packed) =
+                    native_pack(&data).expect("pack on valid (≤16 distinct) input failed");
+                let dec = native_unpack(&meta, &packed, data.len() as u64);
+                assert_eq!(dec, data, "round-trip seed {seed} len {len} d {distinct}");
+                total += 1;
+            }
+        }
+        assert!(total >= 20);
+    }
+
+    /// Adversarial inputs: empty / single byte / max-length / many-distinct
+    /// boundary at 16/17, all-same.  Each must either round-trip OR decline
+    /// cleanly (return None) — never panic.
+    #[test]
+    fn adversarial_inputs() {
+        // empty
+        let (m, p) = native_pack(&[]).expect("pack empty");
+        let dec = native_unpack(&m, &p, 0);
+        assert!(dec.is_empty());
+
+        // single byte
+        let (m, p) = native_pack(&[42]).expect("pack one");
+        let dec = native_unpack(&m, &p, 1);
+        assert_eq!(dec, vec![42]);
+
+        // all-same large
+        let big = vec![7u8; 200_000];
+        let (m, p) = native_pack(&big).expect("pack all-same large");
+        let dec = native_unpack(&m, &p, big.len() as u64);
+        assert_eq!(dec, big);
+
+        // exactly 16 distinct symbols — boundary, must succeed.
+        let d16: Vec<u8> = (0..16u8).cycle().take(2048).collect();
+        let (m, p) = native_pack(&d16).expect("pack 16-distinct");
+        let dec = native_unpack(&m, &p, d16.len() as u64);
+        assert_eq!(dec, d16);
+
+        // 17 distinct symbols — must decline (return None) cleanly.
+        let d17: Vec<u8> = (0..17u8).cycle().take(2048).collect();
+        assert!(native_pack(&d17).is_none(), "pack must decline >16 distinct");
+
+        // 256 distinct symbols, dense — must decline.
+        let d256: Vec<u8> = (0..256u32).map(|x| x as u8).collect();
+        assert!(native_pack(&d256).is_none());
+    }
+
+    /// Corrupted packed buffer / meta: feed flipped bytes to unpack — must
+    /// not panic in release mode (no UB).  We use the safe slice-bounded
+    /// `hts_unpack` so out-of-bounds is impossible; this guards against
+    /// runtime panics from arithmetic on bad nibble counts etc.
+    #[test]
+    fn corrupt_decode_no_panic() {
+        let data: Vec<u8> = (0..4000u32).map(|x| ((x * 11 + 3) & 0x0f) as u8).collect();
+        let (meta, packed) = native_pack(&data).expect("pack");
+
+        let mut rng = Rng::new(0x1234_5678_9ABC_DEF0);
+
+        // Corrupt packed bytes.
+        for _ in 0..30 {
+            if packed.is_empty() {
+                break;
+            }
+            let mut bad = packed.clone();
+            let i = (rng.next_u32() as usize) % bad.len();
+            bad[i] ^= 1 << (rng.next_u32() & 7);
+            let mut map = [0u8; 256];
+            let mut nsym: i32 = 0;
+            let _ = hts_unpack_meta(&meta, meta.len() as u32, data.len() as u64, &mut map, &mut nsym);
+            let mut out = vec![0u8; data.len()];
+            let _ = hts_unpack(&bad, bad.len() as i64, &mut out, data.len() as u64, nsym, &map);
+        }
+
+        // Corrupt meta header.
+        for _ in 0..20 {
+            let mut bad_meta = meta.clone();
+            if bad_meta.is_empty() {
+                break;
+            }
+            let i = (rng.next_u32() as usize) % bad_meta.len();
+            bad_meta[i] ^= 1 << (rng.next_u32() & 7);
+            let mut map = [0u8; 256];
+            let mut nsym: i32 = 0;
+            // unpack_meta may return 0 (consumed) on bad input — accept.
+            let _ = hts_unpack_meta(
+                &bad_meta,
+                bad_meta.len() as u32,
+                data.len() as u64,
+                &mut map,
+                &mut nsym,
+            );
+        }
+
+        // Truncated packed buffer.
+        for cut in 1..packed.len().min(32) {
+            let trunc = &packed[..packed.len() - cut];
+            let mut map = [0u8; 256];
+            let mut nsym: i32 = 0;
+            let _ = hts_unpack_meta(&meta, meta.len() as u32, data.len() as u64, &mut map, &mut nsym);
+            let mut out = vec![0u8; data.len()];
+            let _ = hts_unpack(trunc, trunc.len() as i64, &mut out, data.len() as u64, nsym, &map);
+        }
+    }
 }

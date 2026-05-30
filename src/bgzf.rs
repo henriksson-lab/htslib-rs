@@ -6501,4 +6501,297 @@ mod tests {
         }
         let _ = std::fs::remove_file(&*path_arc);
     }
+
+    // ----------------------------------------------------------------------
+    // Stream A2 — randomized round-trip / embed-EOF / random useek targets.
+    // Deterministic inline PRNG (xorshift64*) so failures reproduce.
+    // ----------------------------------------------------------------------
+
+    struct A2Rng(u64);
+    impl A2Rng {
+        fn new(seed: u64) -> Self {
+            A2Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+        }
+        fn next_u64(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn fill(&mut self, buf: &mut [u8]) {
+            for chunk in buf.chunks_mut(8) {
+                let v = self.next_u64();
+                let bytes = v.to_le_bytes();
+                chunk.copy_from_slice(&bytes[..chunk.len()]);
+            }
+        }
+    }
+
+    /// Round-trip many random payloads through native bgzf_write / bgzf_read.
+    /// Sizes span 0 .. several blocks .. ~1 MiB; many seeds.
+    #[test]
+    fn bgzf_random_roundtrip_varied_sizes_native_only() {
+        let lens: &[usize] = &[
+            0,
+            1,
+            16,
+            255,
+            BGZF_BLOCK_SIZE / 2,
+            BGZF_BLOCK_SIZE - 1,
+            BGZF_BLOCK_SIZE,
+            BGZF_BLOCK_SIZE + 1,
+            BGZF_BLOCK_SIZE * 2 + 123,
+            BGZF_BLOCK_SIZE * 5 + 9999,
+            1 << 20,
+        ];
+        let mut rng = A2Rng::new(0xA2_DEAD_BEEF);
+        for (i, &len) in lens.iter().enumerate() {
+            let mut payload = vec![0u8; len];
+            rng.fill(&mut payload);
+
+            let path = std::env::temp_dir().join(format!(
+                "htslib-rs-bgzf-rt-{}-{}.gz",
+                std::process::id(),
+                i
+            ));
+            let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
+
+            unsafe {
+                let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+                assert!(!fp.is_null(), "bgzf_open w failed len {len}");
+                if len > 0 {
+                    let mut written = 0usize;
+                    // Write in random-sized chunks to exercise the buffer
+                    // boundary logic, not in one big call.
+                    while written < len {
+                        let chunk = ((rng.next_u64() % 4096) + 1) as usize;
+                        let chunk = chunk.min(len - written);
+                        assert_eq!(
+                            bgzf_write(fp, payload.as_ptr().add(written).cast(), chunk),
+                            chunk as isize,
+                            "short write at {written}/{len}"
+                        );
+                        written += chunk;
+                    }
+                }
+                assert_eq!(bgzf_close(fp), 0, "close w failed len {len}");
+
+                let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+                assert!(!fp.is_null(), "bgzf_open r failed len {len}");
+                let mut got = vec![0u8; len];
+                let mut pos = 0usize;
+                while pos < len {
+                    let want = (len - pos).min(13337);
+                    let n = bgzf_read(fp, got.as_mut_ptr().add(pos).cast(), want);
+                    assert!(n > 0, "bgzf_read returned {n} at pos {pos}/{len}");
+                    pos += n as usize;
+                }
+                // Confirm EOF — read should return 0 now.
+                let mut probe = [0u8; 1];
+                assert_eq!(
+                    bgzf_read(fp, probe.as_mut_ptr().cast(), 1),
+                    0,
+                    "expected EOF after exact read len {len}"
+                );
+                assert_eq!(bgzf_close(fp), 0);
+                assert_eq!(got, payload, "payload mismatch len {len}");
+            }
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// Embed-EOF stress: write payload A, close, append payload B (which
+    /// triggers an embedded EOF marker between them), close, read everything
+    /// back as A+B.  Repeat at 6 seeds and varied sizes.  This regresses the
+    /// embed-EOF read-across-marker fix.
+    #[test]
+    fn bgzf_embedded_eof_random_payloads_round_trip() {
+        let mut rng = A2Rng::new(0x52_BBCC_DDEE);
+        let sizes: &[(usize, usize)] = &[
+            (1024, 2048),
+            (BGZF_BLOCK_SIZE - 100, BGZF_BLOCK_SIZE + 100),
+            (BGZF_BLOCK_SIZE * 2 + 7, BGZF_BLOCK_SIZE + 17),
+            (1, 1),
+            (BGZF_BLOCK_SIZE * 3, BGZF_BLOCK_SIZE * 2 + 1234),
+            (50_000, 70_000),
+        ];
+        for (i, &(la, lb)) in sizes.iter().enumerate() {
+            let mut a = vec![0u8; la];
+            let mut b = vec![0u8; lb];
+            rng.fill(&mut a);
+            rng.fill(&mut b);
+
+            let path = std::env::temp_dir().join(format!(
+                "htslib-rs-bgzf-eof-{}-{}.gz",
+                std::process::id(),
+                i
+            ));
+            let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
+
+            unsafe {
+                // Write A (with EOF marker via close).
+                let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+                assert!(!fp.is_null());
+                if la > 0 {
+                    assert_eq!(bgzf_write(fp, a.as_ptr().cast(), la), la as isize);
+                }
+                assert_eq!(bgzf_close(fp), 0);
+
+                // Append B in a second open (this writes B *after* the EOF block).
+                let fp = bgzf_open(path_c.as_ptr(), c"a".as_ptr());
+                assert!(!fp.is_null());
+                if lb > 0 {
+                    assert_eq!(bgzf_write(fp, b.as_ptr().cast(), lb), lb as isize);
+                }
+                assert_eq!(bgzf_close(fp), 0);
+
+                // Read everything back; must yield la+lb bytes equal to a||b.
+                let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+                assert!(!fp.is_null());
+                let total = la + lb;
+                let mut got = vec![0u8; total];
+                let mut pos = 0usize;
+                while pos < total {
+                    let want = (total - pos).min(8192);
+                    let n = bgzf_read(fp, got.as_mut_ptr().add(pos).cast(), want);
+                    assert!(
+                        n > 0,
+                        "embed-EOF short read at pos {pos}/{total} (la={la} lb={lb})"
+                    );
+                    pos += n as usize;
+                }
+                assert_eq!(bgzf_close(fp), 0);
+
+                assert_eq!(&got[..la], &a[..], "A part mismatch (i={i})");
+                assert_eq!(&got[la..], &b[..], "B part mismatch (i={i})");
+            }
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// Random useek targets after OTF index build: exercise many distinct
+    /// virtual offsets across recorded blocks.  Regression for the
+    /// use-after-free fix in `bgzf_useek` when the OTF index reallocs.
+    #[test]
+    fn bgzf_useek_random_targets_after_otf_index() {
+        let payload_len = BGZF_BLOCK_SIZE * 7 + 9876;
+        let payload: Vec<u8> = (0..payload_len as u32)
+            .map(|i| i.wrapping_mul(2654435761) as u8)
+            .collect();
+
+        let path = std::env::temp_dir().join(format!(
+            "htslib-rs-bgzf-useek-rand-{}.gz",
+            std::process::id()
+        ));
+        let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
+
+        unsafe {
+            // Write via native bgzf_write.
+            let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+            assert!(!fp.is_null());
+            assert_eq!(
+                bgzf_write(fp, payload.as_ptr().cast(), payload.len()),
+                payload.len() as isize
+            );
+            assert_eq!(bgzf_close(fp), 0);
+
+            // Open for reading, build OTF index.
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+            assert!(!fp.is_null());
+            assert_eq!(bgzf_index_build_init(fp), 0);
+
+            // Read through everything so the OTF index gets populated.
+            let mut sink = vec![0u8; 4096];
+            let mut read_total = 0usize;
+            while read_total < payload.len() {
+                let n = bgzf_read(fp, sink.as_mut_ptr().cast(), sink.len());
+                assert!(n > 0);
+                read_total += n as usize;
+            }
+
+            // Now pseudorandomly seek to 50 different uoffsets and verify.
+            let mut rng = A2Rng::new(0xC0FFEE);
+            for trial in 0..50 {
+                let max_target = (payload.len() as u64 - 64).max(1);
+                let target = (rng.next_u64() % max_target) as i64;
+                let rc = bgzf_useek(fp, target, SEEK_SET);
+                assert_eq!(rc, 0, "useek to {target} (trial {trial}) failed");
+                let read_len = 32usize.min(payload.len() - target as usize);
+                let mut buf = vec![0u8; read_len];
+                let n = bgzf_read(fp, buf.as_mut_ptr().cast(), buf.len());
+                assert_eq!(n, read_len as isize, "short read after seek to {target}");
+                assert_eq!(
+                    &buf[..],
+                    &payload[target as usize..target as usize + read_len],
+                    "data mismatch after useek to {target} (trial {trial})"
+                );
+            }
+
+            assert_eq!(bgzf_close(fp), 0);
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Concurrent: N threads, each with its own bgzf fp, write then read a
+    /// distinct random payload — the bytes round-trip exactly per thread.
+    /// Each thread uses its own file so there is no shared BGZF state.
+    #[test]
+    fn bgzf_concurrent_random_roundtrip_per_thread() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let workers = 6usize;
+        let mut handles = Vec::new();
+        let base_seed = 0x8888_AAAA_BBBB_CCCCu64;
+        for tid in 0..workers {
+            let seed = base_seed.wrapping_add(tid as u64);
+            handles.push(thread::spawn(move || {
+                let mut rng = A2Rng::new(seed);
+                // Each thread picks its own size to ensure they're distinct.
+                let len = (1024 + (rng.next_u64() % (BGZF_BLOCK_SIZE as u64 * 3))) as usize;
+                let mut payload = vec![0u8; len];
+                rng.fill(&mut payload);
+
+                let path = std::env::temp_dir().join(format!(
+                    "htslib-rs-bgzf-conc-rt-{}-{tid}.gz",
+                    std::process::id()
+                ));
+                let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
+
+                unsafe {
+                    let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+                    assert!(!fp.is_null(), "tid {tid}: open w");
+                    assert_eq!(
+                        bgzf_write(fp, payload.as_ptr().cast(), len),
+                        len as isize,
+                        "tid {tid}: write"
+                    );
+                    assert_eq!(bgzf_close(fp), 0, "tid {tid}: close w");
+
+                    let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+                    assert!(!fp.is_null(), "tid {tid}: open r");
+                    let mut got = vec![0u8; len];
+                    let mut pos = 0usize;
+                    while pos < len {
+                        let n = bgzf_read(
+                            fp,
+                            got.as_mut_ptr().add(pos).cast(),
+                            (len - pos).min(4096),
+                        );
+                        assert!(n > 0, "tid {tid}: short read at {pos}");
+                        pos += n as usize;
+                    }
+                    assert_eq!(bgzf_close(fp), 0, "tid {tid}: close r");
+                    assert_eq!(got, payload, "tid {tid}: payload mismatch");
+                }
+                let _ = std::fs::remove_file(&path);
+            }));
+            let _ = Arc::new(()); // ensure `Arc` import is used in this scope
+        }
+        for h in handles {
+            h.join().expect("worker thread panicked");
+        }
+    }
 }

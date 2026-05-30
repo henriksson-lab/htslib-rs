@@ -513,4 +513,168 @@ mod tests {
             assert_eq!(got, v);
         }
     }
+
+    // ------------------------------------------------------------------
+    // Randomized property tests (Stream A1).
+    //
+    // Use a small deterministic xorshift64* PRNG, multiple seeds.  Each test
+    // exercises hundreds of values across the full range of varint sizes.
+    // ------------------------------------------------------------------
+
+    struct Rng(u64);
+    impl Rng {
+        fn new(seed: u64) -> Self {
+            // Avoid the all-zero state.
+            Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+        }
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+    }
+
+    /// For each seed in a 20-seed sweep, generate 200 random u64s spanning
+    /// every byte-length bucket and verify put/get is byte-perfect.
+    #[test]
+    fn random_roundtrip_u64_many_seeds() {
+        for seed in 0..20u64 {
+            let mut rng = Rng::new(0xDEAD_BEEF ^ seed);
+            for _ in 0..200 {
+                // pick a "size class" 1..=10 and mask the rng accordingly to
+                // exercise every encoded-byte-count bucket.
+                let bits = 1 + (rng.next() % 64) as u32;
+                let mask = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
+                let v = rng.next() & mask;
+                let mut buf = [0u8; 16];
+                let n = var_put_u64(&mut buf, None, v);
+                assert!((1..=10).contains(&n), "n out of range: {n}");
+                let mut got = 0u64;
+                let m = var_get_u64(&buf, None, &mut got);
+                assert_eq!(n, m, "u64 byte count mismatch for v={v}");
+                assert_eq!(got, v, "u64 value mismatch for v={v}");
+                assert_eq!(var_size_u64(v), n, "size_u64 mismatch for v={v}");
+            }
+        }
+    }
+
+    /// Same sweep for u32.
+    #[test]
+    fn random_roundtrip_u32_many_seeds() {
+        for seed in 0..20u64 {
+            let mut rng = Rng::new(0xCAFEF00D ^ seed);
+            for _ in 0..200 {
+                let bits = 1 + (rng.next() % 32) as u32;
+                let mask = if bits >= 32 { u32::MAX } else { (1u32 << bits) - 1 };
+                let v = (rng.next() as u32) & mask;
+                let mut buf = [0u8; 16];
+                let n = var_put_u32(&mut buf, None, v);
+                assert!((1..=5).contains(&n), "n out of range: {n}");
+                let mut got = 0u32;
+                let m = var_get_u32(&buf, None, &mut got);
+                assert_eq!(n, m, "u32 byte count mismatch for v={v}");
+                assert_eq!(got, v, "u32 value mismatch for v={v}");
+            }
+        }
+    }
+
+    /// Random signed s32/s64: cover both polarities including near-extremes.
+    #[test]
+    fn random_roundtrip_signed_many_seeds() {
+        for seed in 0..20u64 {
+            let mut rng = Rng::new(0xFACE_FEED ^ seed);
+            for _ in 0..200 {
+                let raw = rng.next() as i64;
+                let v32 = raw as i32;
+                let mut buf = [0u8; 16];
+                let n = var_put_s32(&mut buf, None, v32);
+                let mut got = 0i32;
+                let m = var_get_s32(&buf, None, &mut got);
+                assert_eq!(n, m);
+                assert_eq!(got, v32);
+
+                let mut buf = [0u8; 16];
+                let n = var_put_s64(&mut buf, None, raw);
+                let mut got = 0i64;
+                let m = var_get_s64(&buf, None, &mut got);
+                assert_eq!(n, m);
+                assert_eq!(got, raw);
+            }
+        }
+    }
+
+    /// safe vs fast path produce identical bytes for random values.
+    #[test]
+    fn random_safe_matches_fast() {
+        let mut rng = Rng::new(0xA5A5_5A5A);
+        for _ in 0..500 {
+            let v = rng.next();
+            let mut a = [0u8; 16];
+            let mut b = [0u8; 16];
+            let na = var_put_u64(&mut a, None, v);
+            let nb = var_put_u64_safe(&mut b, None, v);
+            assert_eq!(na, nb, "u64 safe/fast n mismatch for {v}");
+            assert_eq!(a[..na as usize], b[..nb as usize], "u64 safe/fast bytes mismatch");
+
+            let v32 = v as u32;
+            let mut a = [0u8; 16];
+            let mut b = [0u8; 16];
+            let na = var_put_u32(&mut a, None, v32);
+            let nb = var_put_u32_safe(&mut b, None, v32);
+            assert_eq!(na, nb, "u32 safe/fast n mismatch for {v32}");
+            assert_eq!(a[..na as usize], b[..nb as usize], "u32 safe/fast bytes mismatch");
+        }
+    }
+
+    /// Adversarial: tight buffers via the `endp` parameter must never overflow
+    /// or panic.  We can encode into a buffer too small (returns 0) and never
+    /// produce out-of-bounds writes.
+    #[test]
+    fn tight_buffer_refuses_cleanly() {
+        // value 0x4000_0000 needs >=5 bytes; encoding into a 1-byte buffer
+        // with endp=1 must return 0 (decline).
+        let v = 0x4000_0000u32;
+        let mut buf = [0u8; 1];
+        let n = var_put_u32_safe(&mut buf, Some(1), v);
+        assert_eq!(n, 0, "expected decline when buffer too small");
+
+        // u64 max needs 10 bytes; endp=9 must refuse.
+        let mut buf = [0u8; 9];
+        let n = var_put_u64_safe(&mut buf, Some(9), u64::MAX);
+        assert_eq!(n, 0, "expected decline for u64::MAX into 9-byte buffer");
+
+        // value 0 fits in one byte even with endp=1
+        let mut buf = [0u8; 1];
+        let n = var_put_u64_safe(&mut buf, Some(1), 0);
+        assert_eq!(n, 1);
+        assert_eq!(buf[0], 0);
+    }
+
+    /// Truncation of an encoded varint stream: var_get_* must not read past
+    /// the supplied buffer (the safe-buffer-bounds is implicit since slices
+    /// know their length; we just confirm get on a truncated buffer either
+    /// returns a partial result that round-trips for the consumed prefix, or
+    /// fails cleanly without panic).
+    #[test]
+    fn truncated_decode_no_panic() {
+        let big = u64::MAX;
+        let mut buf = [0u8; 16];
+        let n = var_put_u64(&mut buf, None, big);
+        assert_eq!(n, 10);
+        // Truncate at every offset 1..n-1 and confirm var_get doesn't panic.
+        // (var_get follows continuation bits; with a short buffer it walks
+        // into the trailing zeros, which is well-defined.)
+        for t in 1..(n as usize) {
+            let truncated = &buf[..t];
+            let mut got = 0u64;
+            // Bound the read explicitly with endp so we exercise the bounded
+            // path: it should refuse or read at most t bytes.
+            let _ = var_get_u64(truncated, Some(t), &mut got);
+            // No panic = success.  Don't assert the value; bounded reads can
+            // legitimately return 0 (decline) here.
+        }
+    }
 }

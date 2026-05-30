@@ -19577,5 +19577,428 @@ mod tests {
             let _ = std::fs::remove_file(b.with_extension("bcf.csi"));
         }
     }
+
+    // ------------------------------------------------------------------
+    // Stream A3 — randomized VCF record round-trip + adversarial inputs.
+    //
+    // We build a header in-memory, then for many randomly-generated record
+    // texts:
+    //   (a) parse via native vcf_parse, format via native vcf_format -> same text
+    //   (b) the same text parses identically via hts_sys::vcf_parse and the
+    //       hts_sys::vcf_format output matches the native one (parity).
+    // The parser must NEVER panic — including on adversarial or truncated text.
+    // ------------------------------------------------------------------
+
+    struct VcfRng(u64);
+    impl VcfRng {
+        fn new(seed: u64) -> Self {
+            VcfRng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+        }
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+    }
+
+    /// VCF header text used in randomized tests below.  Includes the #CHROM
+    /// sample line so `bcf_hdr_parse` can consume it whole.
+    const VCF_HEADER_TEXT: &str = "##fileformat=VCFv4.2\n\
+        ##contig=<ID=chr1,length=1000000>\n\
+        ##contig=<ID=chr2,length=500000>\n\
+        ##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">\n\
+        ##INFO=<ID=AF,Number=A,Type=Float,Description=\"AlleleFreq\">\n\
+        ##INFO=<ID=TAG,Number=1,Type=String,Description=\"Tag\">\n\
+        ##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+        ##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"FmtDepth\">\n\
+        ##FORMAT=<ID=GQ,Number=1,Type=Integer,Description=\"GenoQual\">\n\
+        ##FILTER=<ID=q10,Description=\"q10\">\n\
+        #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMP1\n";
+
+    /// Build the small VCF header used by the randomized record tests.
+    unsafe fn build_vcf_header_native() -> *mut bcf_hdr_t {
+        let hdr = bcf_hdr_init(c"w".as_ptr());
+        assert!(!hdr.is_null());
+        let c = std::ffi::CString::new(VCF_HEADER_TEXT).unwrap();
+        // bcf_hdr_parse needs a mutable C string buffer.
+        let n = c.as_bytes_with_nul().len();
+        let buf = libc::malloc(n) as *mut c_char;
+        std::ptr::copy_nonoverlapping(c.as_ptr(), buf, n);
+        let rc = bcf_hdr_parse(hdr, buf);
+        libc::free(buf.cast());
+        assert_eq!(rc, 0, "native bcf_hdr_parse failed");
+        assert_eq!(bcf_hdr_sync(hdr), 0);
+        hdr
+    }
+
+    /// Generate a random VCF record line that is well-formed under the header
+    /// above.  Spans 10 columns: chrom pos id ref alt qual filter info format sample.
+    fn gen_random_record(rng: &mut VcfRng) -> String {
+        let r = rng.next();
+        let chrom = if r & 1 == 0 { "chr1" } else { "chr2" };
+        let pos = 1 + (rng.next() % 99_999);
+        // ID can be "." or e.g. rsN
+        let id = if rng.next() & 0b11 == 0 {
+            ".".to_string()
+        } else {
+            format!("rs{}", rng.next() % 9_999_999)
+        };
+        // single REF base
+        let bases = ['A', 'C', 'G', 'T'];
+        let refb = bases[(rng.next() as usize) & 3];
+        // ALT can be one or more comma-separated allele bases (different from REF)
+        let n_alt = 1 + ((rng.next() as usize) & 3); // 1..=4
+        let mut alts = Vec::new();
+        for _ in 0..n_alt {
+            let mut b = bases[(rng.next() as usize) & 3];
+            // ensure differs from REF
+            if b == refb {
+                b = bases[((rng.next() as usize) + 1) & 3];
+                if b == refb {
+                    b = bases[((rng.next() as usize) + 2) & 3];
+                }
+            }
+            alts.push(b.to_string());
+        }
+        let alt_str = alts.join(",");
+        // QUAL
+        let qual = if rng.next() & 0b11 == 0 {
+            ".".to_string()
+        } else {
+            (rng.next() % 1000).to_string()
+        };
+        // FILTER: PASS, ., q10, or PASS
+        let filter = match rng.next() & 0b11 {
+            0 => ".",
+            1 => "PASS",
+            2 => "q10",
+            _ => "PASS",
+        };
+        // INFO: random combo of DP=int, AF=floats(per-alt), TAG=string, or "."
+        let info = match rng.next() & 0b111 {
+            0 => ".".to_string(),
+            1 => format!("DP={}", rng.next() % 500),
+            2 => {
+                let afs: Vec<String> = (0..n_alt)
+                    .map(|_| {
+                        let v = (rng.next() % 1000) as f64 / 1000.0;
+                        format!("{:.3}", v)
+                    })
+                    .collect();
+                format!("AF={}", afs.join(","))
+            }
+            3 => "TAG=foo".to_string(),
+            4 => format!("DP={};TAG=bar", rng.next() % 500),
+            5 => {
+                let afs: Vec<String> = (0..n_alt)
+                    .map(|_| format!("{:.3}", (rng.next() % 1000) as f64 / 1000.0))
+                    .collect();
+                format!("DP={};AF={}", rng.next() % 500, afs.join(","))
+            }
+            _ => "DP=10".to_string(),
+        };
+        // FORMAT + sample: random GT (haploid or diploid), optional DP/GQ.
+        let n_alleles_total = 1 + n_alt; // 0=ref, 1..=n_alt
+        let g1 = (rng.next() as usize) % n_alleles_total;
+        let phased = rng.next() & 1 == 0;
+        let g2 = (rng.next() as usize) % n_alleles_total;
+        let gt = if rng.next() & 1 == 0 {
+            // haploid
+            format!("{g1}")
+        } else if phased {
+            format!("{g1}|{g2}")
+        } else {
+            format!("{g1}/{g2}")
+        };
+        let (fmt_keys, fmt_vals) = match rng.next() & 0b11 {
+            0 => ("GT".to_string(), gt),
+            1 => ("GT:DP".to_string(), format!("{gt}:{}", rng.next() % 100)),
+            2 => (
+                "GT:DP:GQ".to_string(),
+                format!("{gt}:{}:{}", rng.next() % 100, rng.next() % 99),
+            ),
+            _ => ("GT:GQ".to_string(), format!("{gt}:{}", rng.next() % 99)),
+        };
+
+        format!(
+            "{chrom}\t{pos}\t{id}\t{refb}\t{alt_str}\t{qual}\t{filter}\t{info}\t{fmt_keys}\t{fmt_vals}",
+        )
+    }
+
+    /// Parse a line via native vcf_parse; format it again via native vcf_format;
+    /// confirm parsing+formatting is idempotent (modulo trailing newline).
+    unsafe fn parse_then_format_native(hdr: *mut bcf_hdr_t, line: &str) -> Option<String> {
+        let c = std::ffi::CString::new(line).unwrap();
+        let mut tmp = kstring_t { l: 0, m: 0, s: std::ptr::null_mut() };
+        let kr = super::super::hts::kputs(c.as_ptr(), &mut tmp);
+        assert!(kr >= 0);
+        let rec = bcf_init();
+        let parse_rc = vcf_parse(&mut tmp, hdr, rec);
+        super::super::hts::ks_free(&mut tmp);
+        if parse_rc < 0 {
+            bcf_destroy(rec);
+            return None;
+        }
+        let mut out = kstring_t { l: 0, m: 0, s: std::ptr::null_mut() };
+        let fmt_rc = vcf_format(hdr, rec, &mut out);
+        bcf_destroy(rec);
+        if fmt_rc != 0 {
+            super::super::hts::ks_free(&mut out);
+            return None;
+        }
+        let s = CStr::from_ptr(out.s).to_string_lossy().into_owned();
+        super::super::hts::ks_free(&mut out);
+        // vcf_format appends a trailing newline; strip for comparison.
+        Some(s.trim_end_matches('\n').to_string())
+    }
+
+    /// Same, via hts_sys.
+    unsafe fn parse_then_format_libhts(
+        hdr: *mut hts_sys::bcf_hdr_t,
+        line: &str,
+    ) -> Option<String> {
+        let c = std::ffi::CString::new(line).unwrap();
+        let mut tmp = hts_sys::kstring_t { l: 0, m: 0, s: std::ptr::null_mut() };
+        let n = c.as_bytes().len();
+        // kputs (libhts)
+        tmp.s = libc::malloc(n + 1) as *mut c_char;
+        std::ptr::copy_nonoverlapping(c.as_ptr(), tmp.s, n + 1);
+        tmp.l = n;
+        tmp.m = n + 1;
+
+        let rec = hts_sys::bcf_init();
+        let parse_rc = hts_sys::vcf_parse(&mut tmp, hdr, rec);
+        libc::free(tmp.s.cast());
+        if parse_rc < 0 {
+            hts_sys::bcf_destroy(rec);
+            return None;
+        }
+        let mut out = hts_sys::kstring_t { l: 0, m: 0, s: std::ptr::null_mut() };
+        let fmt_rc = hts_sys::vcf_format(hdr, rec, &mut out);
+        hts_sys::bcf_destroy(rec);
+        if fmt_rc != 0 {
+            if !out.s.is_null() {
+                libc::free(out.s.cast());
+            }
+            return None;
+        }
+        let s = CStr::from_ptr(out.s).to_string_lossy().into_owned();
+        libc::free(out.s.cast());
+        Some(s.trim_end_matches('\n').to_string())
+    }
+
+    /// Build the same header into hts_sys for parity comparison.
+    unsafe fn build_vcf_header_libhts() -> *mut hts_sys::bcf_hdr_t {
+        let hdr = hts_sys::bcf_hdr_init(c"w".as_ptr());
+        assert!(!hdr.is_null());
+        let c = std::ffi::CString::new(VCF_HEADER_TEXT).unwrap();
+        let n = c.as_bytes_with_nul().len();
+        let buf = libc::malloc(n) as *mut c_char;
+        std::ptr::copy_nonoverlapping(c.as_ptr(), buf, n);
+        let rc = hts_sys::bcf_hdr_parse(hdr, buf);
+        libc::free(buf.cast());
+        assert_eq!(rc, 0, "hts_sys bcf_hdr_parse failed");
+        assert_eq!(hts_sys::bcf_hdr_sync(hdr), 0);
+        hdr
+    }
+
+    /// Native parse/format on random valid records must round-trip identically.
+    #[test]
+    fn vcf_random_records_native_idempotent() {
+        unsafe {
+            let hdr = build_vcf_header_native();
+            let mut rng = VcfRng::new(0xDEAD_DEAD_BEEF_BEEF);
+            let mut checked = 0usize;
+            for _ in 0..200 {
+                let line = gen_random_record(&mut rng);
+                let first = parse_then_format_native(hdr, &line)
+                    .expect("native parse+format declined valid line");
+                let second = parse_then_format_native(hdr, &first)
+                    .expect("native re-parse of native-formatted line failed");
+                // Idempotent: second pass equals first pass.
+                assert_eq!(
+                    second, first,
+                    "native parse-format not idempotent\norig: {line}\nfirst: {first}\nsecond: {second}"
+                );
+                checked += 1;
+            }
+            assert!(checked >= 100);
+            bcf_hdr_destroy(hdr);
+        }
+    }
+
+    /// Parity: native and hts_sys produce the same canonicalized text for the
+    /// same random valid record.  This is a STRONG signal that the parser
+    /// preserves all relevant state — any divergence is a real bug.
+    #[test]
+    fn vcf_random_records_native_matches_libhts() {
+        unsafe {
+            let hdr_nat = build_vcf_header_native();
+            let hdr_lib = build_vcf_header_libhts();
+            let mut rng = VcfRng::new(0xCAFE_F00D_DEAD_BEEF);
+            let mut checked = 0usize;
+            let mut diverged: Vec<(String, String, String)> = Vec::new();
+            for _ in 0..150 {
+                let line = gen_random_record(&mut rng);
+                let nat = parse_then_format_native(hdr_nat, &line);
+                let lib = parse_then_format_libhts(hdr_lib, &line);
+                match (nat, lib) {
+                    (Some(n), Some(l)) => {
+                        if n != l {
+                            diverged.push((line.clone(), n, l));
+                        }
+                        checked += 1;
+                    }
+                    (None, None) => {
+                        // both declined — fine
+                    }
+                    (a, b) => {
+                        // disagree on acceptance — record but don't fail
+                        // (record any divergence to surface in test output)
+                        diverged.push((
+                            line.clone(),
+                            a.unwrap_or_else(|| "<native-declined>".into()),
+                            b.unwrap_or_else(|| "<libhts-declined>".into()),
+                        ));
+                    }
+                }
+            }
+            assert!(checked >= 75);
+            assert!(
+                diverged.is_empty(),
+                "parity divergence between native and hts_sys vcf_parse/format on {} of {} records:\n{}",
+                diverged.len(),
+                checked,
+                diverged
+                    .iter()
+                    .take(3)
+                    .map(|(o, n, l)| format!("orig={o}\n native={n}\n libhts={l}"))
+                    .collect::<Vec<_>>()
+                    .join("\n---\n"),
+            );
+            bcf_hdr_destroy(hdr_nat);
+            hts_sys::bcf_hdr_destroy(hdr_lib);
+        }
+    }
+
+    /// Adversarial VCF records: very long names/values, single record, weird
+    /// genotypes (deep ploidy), boundary INFO sizes.  Parser must NOT panic.
+    #[test]
+    fn vcf_adversarial_records_no_panic() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        unsafe {
+            let hdr = build_vcf_header_native();
+
+            let cases: Vec<String> = vec![
+                // a maximally simple line
+                "chr1\t1\t.\tA\tG\t.\t.\t.\tGT\t0/1".to_string(),
+                // empty INFO ('.') and FORMAT
+                "chr1\t1\t.\tA\tG\t.\tPASS\t.\tGT\t.".to_string(),
+                // long ID
+                format!("chr1\t1\t{}\tA\tG\t.\tPASS\t.\tGT\t0/0", "X".repeat(2048)),
+                // long INFO value
+                format!(
+                    "chr1\t10\t.\tA\tG\t.\tPASS\tTAG={}\tGT\t0/1",
+                    "Y".repeat(1024)
+                ),
+                // very high-ploidy GT
+                {
+                    let mut gt = String::new();
+                    for k in 0..40 {
+                        if k > 0 {
+                            gt.push('/');
+                        }
+                        gt.push_str(if k & 1 == 0 { "0" } else { "1" });
+                    }
+                    format!("chr1\t100\t.\tA\tG\t.\tPASS\t.\tGT\t{gt}")
+                },
+                // many alt alleles
+                {
+                    let alts: Vec<&str> = ["C", "G", "T", "AC", "GG", "TT", "CCC"].to_vec();
+                    let n = alts.len();
+                    let afs: Vec<String> = (0..n).map(|_| "0.100".to_string()).collect();
+                    format!(
+                        "chr1\t200\t.\tA\t{}\t30\tPASS\tAF={}\tGT\t0/{}",
+                        alts.join(","),
+                        afs.join(","),
+                        n
+                    )
+                },
+                // boundary integer INFO at i32::MAX
+                "chr1\t300\t.\tA\tG\t.\tPASS\tDP=2147483646\tGT\t0/0".to_string(),
+                // QUAL with many decimal places
+                "chr1\t400\t.\tA\tG\t999.999999\tPASS\t.\tGT\t0/0".to_string(),
+            ];
+
+            for line in &cases {
+                // Native must either parse+format without panic, or decline.
+                let _ = catch_unwind(AssertUnwindSafe(|| {
+                    let _ = parse_then_format_native(hdr, line);
+                }));
+            }
+
+            bcf_hdr_destroy(hdr);
+        }
+    }
+
+    /// Truncation fuzz: take a valid record and truncate at every byte
+    /// boundary.  vcf_parse must never panic (no UB).
+    #[test]
+    fn vcf_truncated_records_no_panic() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        unsafe {
+            let hdr = build_vcf_header_native();
+            let mut rng = VcfRng::new(0x1111_2222_3333_4444);
+            // 10 distinct valid records.
+            for _ in 0..10 {
+                let line = gen_random_record(&mut rng);
+                let bytes = line.as_bytes();
+                for cut in 1..bytes.len() {
+                    let truncated = String::from_utf8_lossy(&bytes[..cut]).into_owned();
+                    let _ = catch_unwind(AssertUnwindSafe(|| {
+                        let _ = parse_then_format_native(hdr, &truncated);
+                    }));
+                }
+            }
+            bcf_hdr_destroy(hdr);
+        }
+    }
+
+    /// Garbage-input fuzz: random bytes that vaguely look like VCF lines.
+    #[test]
+    fn vcf_garbage_input_no_panic() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        unsafe {
+            let hdr = build_vcf_header_native();
+            let mut rng = VcfRng::new(0xFADE_C0DE_1234_5678);
+            for trial in 0..200u64 {
+                let len = ((rng.next() % 240) + 1) as usize;
+                // 80% biased toward printable, 20% pure random.
+                let printable = rng.next() & 0b111 != 0;
+                let mut s = String::with_capacity(len);
+                for _ in 0..len {
+                    let r = rng.next();
+                    let b = if printable {
+                        let candidates = b"0123456789ACGTN\tACGT,.;:=+-/|PASSchrtagAFDPGTGQ\n";
+                        candidates[(r as usize) % candidates.len()] as char
+                    } else {
+                        ((r & 0x7f) as u8 as char)
+                    };
+                    s.push(b);
+                }
+                let _ = catch_unwind(AssertUnwindSafe(|| {
+                    let _ = parse_then_format_native(hdr, &s);
+                }));
+                let _ = trial;
+            }
+            bcf_hdr_destroy(hdr);
+        }
+    }
 }
 

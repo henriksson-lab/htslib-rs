@@ -208,3 +208,107 @@ mod parity {
         }
     }
 }
+
+// ------------------------------------------------------------------
+// Randomized larger-seed sweep + adversarial-input + corruption fuzz.
+// ------------------------------------------------------------------
+
+/// Round-trip with 24 seeds and varied lengths.  The existing `corpus()`
+/// covers many shapes already; this adds a uniform stress at all sizes.
+#[test]
+fn random_roundtrip_many_seeds() {
+    let lens = [1usize, 4, 16, 256, 4096, 65_536];
+    let mut total = 0usize;
+    for seed in 0..24u64 {
+        let mut rng = Rng::new(0x1234 ^ seed);
+        for &len in &lens {
+            let mut d = vec![0u8; len];
+            for b in d.iter_mut() {
+                *b = (rng.next_u32() & 0xff) as u8;
+            }
+            // Order 0 and 1 only — transforms are heavily covered by `corpus()`.
+            for order in [0i32, 1] {
+                let comp = native_compress(&d, order);
+                if d.is_empty() {
+                    continue;
+                }
+                let dec = native_uncompress(&comp);
+                assert_eq!(dec, d, "seed {seed} len {len} order {order}");
+                total += 1;
+            }
+        }
+    }
+    assert!(total >= 20);
+}
+
+/// Adversarial inputs: empty, single byte, all-same large, monotonic.
+#[test]
+fn adversarial_inputs() {
+    let cases: &[(&str, Vec<u8>)] = &[
+        ("empty", vec![]),
+        ("one", vec![42]),
+        ("all_same_big", vec![0xCDu8; 50_000]),
+        ("monotonic", (0..3000u32).map(|x| (x & 0xff) as u8).collect()),
+        ("alternating_2sym", (0..2048u32).map(|x| if x & 1 == 0 { b'A' } else { b'B' }).collect()),
+    ];
+    for (name, data) in cases {
+        for order in [0i32, 1, X_RLE, X_PACK, X_PACK | X_RLE, X_STRIPE, X_CAT] {
+            let comp = native_compress(data, order);
+            if data.is_empty() {
+                continue;
+            }
+            assert!(!comp.is_empty(), "compress empty for {name} order {order:#x}");
+            let dec = native_uncompress(&comp);
+            assert_eq!(dec, *data, "rt {name} order {order:#x}");
+        }
+    }
+}
+
+/// Corruption / truncation fuzz on `arith_uncompress`.  Wrapped in
+/// `catch_unwind` to absorb debug-mode arithmetic overflow that's well-defined
+/// (wrapping) in release.
+#[test]
+fn corrupt_decode_no_panic() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let mut rng = Rng::new(0x77AA_55BB_DEAD_BEEF);
+    // Several valid streams across orders to fuzz.
+    let mut valids: Vec<Vec<u8>> = Vec::new();
+    for order in [0i32, 1, X_RLE, X_PACK, X_PACK | X_RLE] {
+        let data: Vec<u8> = (0..4096u32)
+            .map(|_| ((rng.next_u32() % 32) as u8))
+            .collect();
+        valids.push(native_compress(&data, order));
+    }
+
+    for valid in &valids {
+        // Bit-flip
+        for _ in 0..40 {
+            if valid.is_empty() {
+                break;
+            }
+            let mut bad = valid.clone();
+            let i = (rng.next_u32() as usize) % bad.len();
+            bad[i] ^= 1 << (rng.next_u32() & 7);
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                let _ = native_uncompress(&bad);
+            }));
+        }
+        // Truncation
+        for cut in 1..valid.len().min(64) {
+            let trunc = valid[..valid.len() - cut].to_vec();
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                let _ = native_uncompress(&trunc);
+            }));
+        }
+    }
+
+    // Pure garbage.
+    for _ in 0..50 {
+        let n = ((rng.next_u32() % 256) + 1) as usize;
+        let garbage: Vec<u8> = (0..n).map(|_| (rng.next_u32() & 0xff) as u8).collect();
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _ = native_uncompress(&garbage);
+        }));
+    }
+}

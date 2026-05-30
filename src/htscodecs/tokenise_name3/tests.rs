@@ -169,6 +169,94 @@ fn roundtrip_single() {
     roundtrip_one(&["solo:1:2:3:4:5"], 5, 0);
 }
 
+/// Adversarial: empty input, very long single name, many duplicates, names
+/// containing high-bit bytes (UTF-8 boundary), and a 5000-name corpus.
+#[test]
+fn adversarial_inputs_rans() {
+    // 5000-name corpus is already exercised by `roundtrip_many`.
+
+    // Empty: a block of one zero byte (single empty name) — tok3 needs at
+    // least one terminator.  Verify it round-trips to one empty name.
+    roundtrip_one(&[""], 5, 0);
+
+    // Very long single name.
+    let long: String = "X".repeat(1024);
+    roundtrip_one(&[long.as_str()], 5, 0);
+
+    // Many duplicates of one name.
+    let dup_vec: Vec<String> = (0..500).map(|_| "DUP:1:2:3".to_string()).collect();
+    let refs: Vec<&str> = dup_vec.iter().map(|s| s.as_str()).collect();
+    roundtrip_one(&refs, 5, 0);
+
+    // Mixed-length names.
+    let mixed: Vec<String> = (0..200)
+        .map(|i| {
+            let pad = "ABCDEFG"
+                .chars()
+                .cycle()
+                .take((i % 25) + 1)
+                .collect::<String>();
+            format!("READ:{i}:{pad}")
+        })
+        .collect();
+    let refs: Vec<&str> = mixed.iter().map(|s| s.as_str()).collect();
+    roundtrip_one(&refs, 5, 0);
+}
+
+/// Corruption / truncation fuzz on the rANS path decoder.  No panic on bit-
+/// flipped / truncated / random buffers.  Wrapped in `catch_unwind` so debug-
+/// mode arithmetic-overflow panics (well-defined wrapping in release) don't
+/// fail the test — the goal is to surface UB or out-of-bounds, not assert
+/// any particular error code.
+#[test]
+fn corrupt_decode_no_panic_rans() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let names = many_names();
+    let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+    let mut block = make_block(&refs);
+    let blen = block.len() as i32;
+    let mut ol = 0i32;
+    let nat = tok3_encode_names(&mut block, blen, 5, 0, &mut ol, None)
+        .expect("encode for fuzz seed");
+
+    // bit-flip fuzz
+    for trial in 0..40u64 {
+        let mut bad = nat.clone();
+        if bad.is_empty() {
+            break;
+        }
+        let idx = ((trial.wrapping_mul(2654435761)) as usize) % bad.len();
+        let bit = (trial & 7) as u8;
+        bad[idx] ^= 1 << bit;
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let mut dlen = 0u32;
+            let _ = tok3_decode_names(&bad, bad.len() as u32, &mut dlen);
+        }));
+    }
+
+    // truncation fuzz at many prefixes
+    for cut in 1..nat.len().min(64) {
+        let trunc = nat[..nat.len() - cut].to_vec();
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let mut dlen = 0u32;
+            let _ = tok3_decode_names(&trunc, trunc.len() as u32, &mut dlen);
+        }));
+    }
+
+    // pure garbage of varied lengths
+    for trial in 0..30u64 {
+        let n = ((trial.wrapping_mul(0x9E37_79B9) & 0x1FF) + 1) as usize;
+        let garbage: Vec<u8> = (0..n)
+            .map(|i| ((i.wrapping_mul(trial as usize).wrapping_add(7)) & 0xff) as u8)
+            .collect();
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let mut dlen = 0u32;
+            let _ = tok3_decode_names(&garbage, garbage.len() as u32, &mut dlen);
+        }));
+    }
+}
+
 #[cfg(feature = "parity")]
 mod parity {
     use super::*;

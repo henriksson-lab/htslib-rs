@@ -528,4 +528,196 @@ mod tests {
             }
         }
     }
+
+    // ------------------------------------------------------------------
+    // Randomized round-trip stress + adversarial-input safety.
+    //
+    // Small inline xorshift64* PRNG: deterministic, no extra deps.
+    // ------------------------------------------------------------------
+
+    struct Rng(u64);
+    impl Rng {
+        fn new(seed: u64) -> Self {
+            Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+        }
+        fn next_u32(&mut self) -> u32 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 32) as u32
+        }
+        fn byte(&mut self) -> u8 {
+            (self.next_u32() & 0xff) as u8
+        }
+    }
+
+    /// Random input round-trip across 20+ seeds and several sizes.  Inputs are
+    /// drawn from a mix of distributions: uniform, biased two-symbol, and a
+    /// long-run alphabet of three symbols.  Each must encode then decode to
+    /// the exact original.
+    #[test]
+    fn random_roundtrip_many_seeds() {
+        let lens: &[usize] = &[1, 16, 256, 1024, 4096, 32_768];
+        let mut total = 0usize;
+        for seed in 0..24u64 {
+            let mut rng = Rng::new(0xABCD_1234 ^ seed);
+            for &len in lens {
+                // Choose a distribution per (seed, len) pair.
+                let mode = rng.next_u32() % 3;
+                let data: Vec<u8> = match mode {
+                    0 => (0..len).map(|_| rng.byte()).collect(),
+                    1 => (0..len)
+                        .map(|_| if rng.next_u32() & 1 == 0 { 5 } else { 200 })
+                        .collect(),
+                    _ => {
+                        // long runs of three symbols
+                        let mut v = Vec::with_capacity(len);
+                        let syms = [b'A', b'B', b'C'];
+                        let mut s = 0;
+                        while v.len() < len {
+                            let run = ((rng.next_u32() % 50) + 1) as usize;
+                            for _ in 0..run.min(len - v.len()) {
+                                v.push(syms[s]);
+                            }
+                            s = (s + 1) % 3;
+                        }
+                        v
+                    }
+                };
+                roundtrip(&data);
+                total += 1;
+            }
+        }
+        assert!(total >= 20);
+    }
+
+    /// Adversarial inputs: empty, single byte, all-same-byte at max size,
+    /// monotonic increasing, pathological alternating two-symbol.  Each must
+    /// round-trip cleanly (encode then decode = input).
+    #[test]
+    fn adversarial_inputs_roundtrip() {
+        // Empty
+        roundtrip(&[]);
+        // Single byte
+        roundtrip(&[42]);
+        // 64KiB all-same
+        roundtrip(&vec![0xFFu8; 65_536]);
+        // Monotonic ascending (no runs)
+        let mono: Vec<u8> = (0..1000u32).map(|x| (x & 0xff) as u8).collect();
+        roundtrip(&mono);
+        // Alternating two symbol — runs of length 1 only, encoder must not
+        // emit a degenerate "run" code.
+        let alt: Vec<u8> = (0..2048u32).map(|x| if x & 1 == 0 { b'X' } else { b'Y' }).collect();
+        roundtrip(&alt);
+    }
+
+    /// Corrupted input fuzz: feed garbage / bit-flipped buffers to the
+    /// decoder.  We do NOT assert any particular error code; we only assert
+    /// no panic and no out-of-bounds (the slice length bounds protect us).
+    #[test]
+    fn corrupt_decode_no_panic() {
+        // Build a valid encoded form first, then fuzz it.
+        let data: Vec<u8> = (0..2048u32)
+            .map(|x| if x % 7 == 0 { 0u8 } else { (x % 251) as u8 })
+            .collect();
+        let mut run = vec![0u8; data.len().max(1)];
+        let mut run_len: u64 = 0;
+        let mut rle_syms = [0u8; 256];
+        let mut rle_nsyms: i32 = 0;
+        let mut out_len: u64 = 0;
+        let lit = hts_rle_encode(
+            &data,
+            data.len() as u64,
+            &mut run,
+            &mut run_len,
+            &mut rle_syms,
+            &mut rle_nsyms,
+            None,
+            &mut out_len,
+        )
+        .expect("encode");
+
+        let mut rng = Rng::new(0xFEED_0CAFE);
+        for trial in 0..40u32 {
+            // Flip 1..4 random bits in the literal stream.
+            let mut bad_lit = lit.clone();
+            let flips = 1 + (trial % 4);
+            for _ in 0..flips {
+                if bad_lit.is_empty() {
+                    break;
+                }
+                let i = (rng.next_u32() as usize) % bad_lit.len();
+                bad_lit[i] ^= 1 << (rng.next_u32() & 7);
+            }
+            let mut out = vec![0u8; data.len() + 16];
+            let mut dlen: u64 = out.len() as u64;
+            let _ = hts_rle_decode(
+                &bad_lit,
+                out_len,
+                &run[..run_len as usize],
+                run_len,
+                &rle_syms[..rle_nsyms as usize],
+                rle_nsyms,
+                &mut out,
+                &mut dlen,
+            );
+            // No assertion on result: we accept any non-panicking outcome.
+        }
+
+        // Truncated literal stream.
+        for cut in 1..(lit.len().min(32)) {
+            let truncated = &lit[..lit.len() - cut];
+            let mut out = vec![0u8; data.len() + 16];
+            let mut dlen: u64 = out.len() as u64;
+            let _ = hts_rle_decode(
+                truncated,
+                truncated.len() as u64,
+                &run[..run_len as usize],
+                run_len,
+                &rle_syms[..rle_nsyms as usize],
+                rle_nsyms,
+                &mut out,
+                &mut dlen,
+            );
+            // No panic = success.
+        }
+
+        // Corrupted run buffer.
+        for trial in 0..20u32 {
+            let mut bad_run = run[..run_len as usize].to_vec();
+            if !bad_run.is_empty() {
+                let i = (rng.next_u32() as usize) % bad_run.len();
+                bad_run[i] = bad_run[i].wrapping_add(trial as u8 + 1);
+            }
+            let mut out = vec![0u8; data.len() + 16];
+            let mut dlen: u64 = out.len() as u64;
+            let _ = hts_rle_decode(
+                &lit,
+                out_len,
+                &bad_run,
+                bad_run.len() as u64,
+                &rle_syms[..rle_nsyms as usize],
+                rle_nsyms,
+                &mut out,
+                &mut dlen,
+            );
+        }
+
+        // Garbage rle_syms (out-of-range nsyms).
+        let mut out = vec![0u8; data.len() + 16];
+        let mut dlen: u64 = out.len() as u64;
+        let garbage_syms = vec![0u8; 0];
+        let _ = hts_rle_decode(
+            &lit,
+            out_len,
+            &run[..run_len as usize],
+            run_len,
+            &garbage_syms,
+            0,
+            &mut out,
+            &mut dlen,
+        );
+    }
 }

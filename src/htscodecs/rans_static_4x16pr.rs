@@ -788,7 +788,16 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                 let m = r[q] & mask;
                 let row = unsafe { sfb_base.add(l[q] * stride) };
                 let c = unsafe { *row.add(m as usize) } as usize;
-                r[q] = (fb[l[q]][c].f as u32) * (r[q] >> TF_SHIFT_O1) + m - fb[l[q]][c].b as u32;
+                // Same TLS-reuse hazard as 32x16 O1: corrupted input may index
+                // into an `fb[l][c]` slot that `decode_freq1` never populated
+                // for this stream, leaving stale (f, b). Validate before use.
+                let f = fb[l[q]][c].f as u32;
+                let b = fb[l[q]][c].b as u32;
+                if f == 0 || f > TOTFREQ_O1 || b > TOTFREQ_O1 - f || b > m {
+                    out_free_err(sfb_ptr, fb_ptr);
+                    return std::ptr::null_mut();
+                }
+                r[q] = f * (r[q] >> TF_SHIFT_O1) + m - b;
                 out_slice[i4[q]] = c as u8;
                 l[q] = c;
             }
@@ -810,7 +819,13 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
             let row = unsafe { sfb_base.add(l[3] * stride) };
             let c3 = unsafe { *row.add(m3 as usize) } as usize;
             out_slice[i4[3]] = c3 as u8;
-            r[3] = (fb[l[3]][c3].f as u32) * (r[3] >> TF_SHIFT_O1) + m3 - fb[l[3]][c3].b as u32;
+            let f = fb[l[3]][c3].f as u32;
+            let b = fb[l[3]][c3].b as u32;
+            if f == 0 || f > TOTFREQ_O1 || b > TOTFREQ_O1 - f || b > m3 {
+                out_free_err(sfb_ptr, fb_ptr);
+                return std::ptr::null_mut();
+            }
+            r[3] = f * (r[3] >> TF_SHIFT_O1) + m3 - b;
             crate::htscodecs::rans_word::RansDecRenormSafe(&mut r[3], input, &mut ptr, ptr_end + 8);
             l[3] = c3;
             i4[3] += 1;
@@ -822,7 +837,13 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                 let m = r[q] & mask;
                 let row = unsafe { sfb_base.add(l[q] * stride) };
                 let c = unsafe { *row.add(m as usize) } as usize;
-                r[q] = (fb[l[q]][c].f as u32) * (r[q] >> TF_SHIFT_O1_FAST) + m - fb[l[q]][c].b as u32;
+                let f = fb[l[q]][c].f as u32;
+                let b = fb[l[q]][c].b as u32;
+                if f == 0 || f > TOTFREQ_O1_FAST || b > TOTFREQ_O1_FAST - f || b > m {
+                    out_free_err(sfb_ptr, fb_ptr);
+                    return std::ptr::null_mut();
+                }
+                r[q] = f * (r[q] >> TF_SHIFT_O1_FAST) + m - b;
                 out_slice[i4[q]] = c as u8;
                 l[q] = c;
             }
@@ -844,7 +865,13 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
             let row = unsafe { sfb_base.add(l[3] * stride) };
             let c3 = unsafe { *row.add(m3 as usize) } as usize;
             out_slice[i4[3]] = c3 as u8;
-            r[3] = (fb[l[3]][c3].f as u32) * (r[3] >> TF_SHIFT_O1_FAST) + m3 - fb[l[3]][c3].b as u32;
+            let f = fb[l[3]][c3].f as u32;
+            let b = fb[l[3]][c3].b as u32;
+            if f == 0 || f > TOTFREQ_O1_FAST || b > TOTFREQ_O1_FAST - f || b > m3 {
+                out_free_err(sfb_ptr, fb_ptr);
+                return std::ptr::null_mut();
+            }
+            r[3] = f * (r[3] >> TF_SHIFT_O1_FAST) + m3 - b;
             crate::htscodecs::rans_word::RansDecRenormSafe(&mut r[3], input, &mut ptr, ptr_end + 8);
             l[3] = c3;
             i4[3] += 1;
@@ -860,9 +887,17 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                 out_slice[i4[q]] = s[q] as u8;
             }
             for q in 0..4 {
-                let f = (s[q] >> (TF_SHIFT_O1_FAST + 8)) as u16;
-                let b = ((s[q] >> 8) & mask) as u16;
-                r[q] = (f as u32) * (r[q] >> TF_SHIFT_O1_FAST) + b as u32;
+                let f = s[q] >> (TF_SHIFT_O1_FAST + 8);
+                let b = (s[q] >> 8) & mask;
+                // TLS-reuse hazard: stale `s3_base` entries can yield (f, b)
+                // outside the valid range, overflowing `f * (r >> shift) + b`.
+                // In the s3 fast path b is per-symbol offset y < f, so the
+                // valid encoder constraint is 1 <= f <= TOTFREQ_O1_FAST, b < f.
+                if f == 0 || f > TOTFREQ_O1_FAST || b >= f {
+                    out_free_err(sfb_ptr, fb_ptr);
+                    return std::ptr::null_mut();
+                }
+                r[q] = f * (r[q] >> TF_SHIFT_O1_FAST) + b;
             }
             if ptr < ptr_end {
                 for q in 0..4 {
@@ -882,8 +917,13 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
             let s = unsafe { *row.add((r[3] & ((1u32 << TF_SHIFT_O1_FAST) - 1)) as usize) };
             l[3] = s as u8 as usize;
             out_slice[i4[3]] = s as u8;
-            r[3] = (s >> (TF_SHIFT_O1_FAST + 8)) * (r[3] >> TF_SHIFT_O1_FAST)
-                + ((s >> 8) & ((1u32 << TF_SHIFT_O1_FAST) - 1));
+            let f = s >> (TF_SHIFT_O1_FAST + 8);
+            let b = (s >> 8) & ((1u32 << TF_SHIFT_O1_FAST) - 1);
+            if f == 0 || f > TOTFREQ_O1_FAST || b >= f {
+                out_free_err(sfb_ptr, fb_ptr);
+                return std::ptr::null_mut();
+            }
+            r[3] = f * (r[3] >> TF_SHIFT_O1_FAST) + b;
             crate::htscodecs::rans_word::RansDecRenormSafe(&mut r[3], input, &mut ptr, ptr_end + 8);
             i4[3] += 1;
         }

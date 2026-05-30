@@ -63,6 +63,8 @@ pub unsafe fn samples_update_header_c_49_main(argc: c_int, argv: *mut *mut c_cha
         return ret;
     }
 
+    // TODO(P5): native sam_hdr_update_line uses a slice signature, the variadic
+    // C entry-point is libhts-only
     if hts_sys::sam_hdr_update_line(
         in_samhdr.cast(),
         header,

@@ -17,7 +17,12 @@ pub mod cram_mirror;
 #[path = "cram_flush_bridge.rs"]
 pub mod cram_flush_bridge;
 
-#[cfg(feature = "cram-mirror")]
+// Not gated on `cram-mirror`: this bridge only uses production native
+// `cram_cram_io_c_5692_cram_set_voption` (which lives in `src/cram.rs`), not
+// anything from the dormant `src/cram/` mirror tree. Keeping it unconditional
+// makes the 7 hts.rs rewires (CRAM_OPT_* / hts_set_opt / hts_set_threads /
+// hts_set_thread_pool / hts_set_fai_filename) visible to the
+// `cargo check --no-default-features` gate.
 #[path = "cram_options_bridge.rs"]
 pub mod cram_options_bridge;
 

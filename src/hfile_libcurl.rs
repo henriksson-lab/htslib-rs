@@ -411,6 +411,7 @@ pub unsafe fn hfile_libcurl_c_153_easy_errno(easy: *mut c_void, err: c_int) -> c
         CURLE_REMOTE_DISK_FULL => libc::ENOSPC,
         CURLE_REMOTE_FILE_EXISTS => libc::EEXIST,
         _ => {
+            // TODO(P5): no native hts_log yet (variadic, libhts-only)
             hts_sys::hts_log(
                 hts_sys::htsLogLevel_HTS_LOG_ERROR,
                 c"easy_errno".as_ptr(),
@@ -470,6 +471,7 @@ pub unsafe fn hfile_libcurl_c_270_multi_errno(errm: c_int) -> c_int {
         1 | 2 | 5 => libc::EBADF,
         3 => libc::ENOMEM,
         _ => {
+            // TODO(P5): no native hts_log yet (variadic, libhts-only)
             hts_sys::hts_log(
                 hts_sys::htsLogLevel_HTS_LOG_ERROR,
                 c"multi_errno".as_ptr(),
@@ -2142,6 +2144,7 @@ pub unsafe fn hfile_libcurl_c_1679_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> c_
     let info = curl_version_info(CURLVERSION_NOW);
     let version = crate::htslib_rs::hts::hts_version();
     if !info.is_null() {
+        // TODO(P5): no native ksprintf yet (variadic, libhts-only)
         hts_sys::ksprintf(
             std::ptr::addr_of_mut!(HFILE_LIBCURL_USERAGENT).cast(),
             c"htslib/%s libcurl/%s".as_ptr(),

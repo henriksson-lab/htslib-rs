@@ -34,10 +34,10 @@ pub unsafe fn samples_flags_htsopt_field_c_50_main(argc: c_int, argv: *mut *mut 
         sam::bam_destroy1(bamdata);
         return ret;
     }
-    if hts_sys::hts_set_opt(
-        infile.cast(),
-        hts_sys::hts_fmt_option_CRAM_OPT_REQUIRED_FIELDS,
-        hts_sys::sam_fields_SAM_FLAG,
+    if hts::hts_set_opt_int(
+        infile,
+        hts::CRAM_OPT_REQUIRED_FIELDS,
+        crate::htslib_rs::cram::decode_pipeline::SAM_FLAG,
     ) < 0
     {
         libc::printf(c"Failed to set htsoption\n".as_ptr());

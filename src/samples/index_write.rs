@@ -148,7 +148,7 @@ pub unsafe fn samples_index_write_c_50_main(argc: c_int, argv: *mut *mut c_char)
         libc::free(outname.cast());
     }
     if !outfile.is_null() {
-        hts_sys::hts_close(outfile.cast());
+        hts::hts_close(outfile);
     }
     ret
 }

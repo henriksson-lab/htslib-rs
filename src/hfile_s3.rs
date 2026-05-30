@@ -3005,6 +3005,7 @@ pub unsafe fn hfile_s3_c_2436_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> c_int {
     (*self_.cast::<hFILE_plugin_layout>()).name = c"Amazon S3".as_ptr();
     (*self_.cast::<hFILE_plugin_layout>()).destroy = hfile_s3_c_2426_s3_exit as *const c_void;
     hfile_s3_c_2426_s3_exit();
+    // TODO(P5): no native ksprintf yet (variadic, libhts-only)
     hts_sys::ksprintf(
         std::ptr::addr_of_mut!(HFILE_S3_USERAGENT).cast(),
         c"htslib/%s".as_ptr(),

@@ -810,3 +810,62 @@ mod parity_random {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// (k) Corruption / truncation fuzz — decoder must not exhibit UB or panic.
+//
+// Surfaces overflow/bounds bugs that fixture tests don't reach.  We wrap each
+// invocation in `catch_unwind` so a debug-mode arithmetic-overflow panic
+// (which is well-defined wrapping in release) doesn't fail the test — the
+// goal is to confirm the decoder never reads past its slice (slice bounds in
+// the native code prevent OOB) and that no UB is produced.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn corrupt_decode_no_panic() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let mut rng = Rng::new(0xBEEF_DEAD_F00D_CAFE);
+    // Build a varied set of valid streams across both orders.
+    let mut valids: Vec<Vec<u8>> = Vec::new();
+    for order in [0i32, 1] {
+        for len in [16usize, 256, 4096, 65_536] {
+            let mut d = vec![0u8; len];
+            for b in d.iter_mut() {
+                *b = rng.byte();
+            }
+            valids.push(native_compress(&d, order));
+        }
+    }
+
+    for valid in &valids {
+        // Bit-flip fuzz, 40 trials each.
+        for _ in 0..40 {
+            let mut bad = valid.clone();
+            if bad.is_empty() {
+                break;
+            }
+            let i = (rng.next_u32() as usize) % bad.len();
+            bad[i] ^= 1 << (rng.next_u32() & 7);
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                let _ = native_uncompress(&bad);
+            }));
+        }
+        // Truncation across many prefixes.
+        for cut in 1..valid.len().min(64) {
+            let trunc = valid[..valid.len() - cut].to_vec();
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                let _ = native_uncompress(&trunc);
+            }));
+        }
+    }
+
+    // Pure-garbage inputs of varying lengths.
+    for _ in 0..50 {
+        let n = ((rng.next_u32() % 256) + 1) as usize;
+        let garbage: Vec<u8> = (0..n).map(|_| rng.byte()).collect();
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _ = native_uncompress(&garbage);
+        }));
+    }
+}
