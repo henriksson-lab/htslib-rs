@@ -27,7 +27,7 @@ pub struct cram_cid2ds_t {
 type VarintGet32Fn = unsafe extern "C" fn(*mut *mut c_char, *const c_char, *mut c_int) -> i64;
 
 #[inline]
-fn mirror_cram_fd(fd: *mut hts_sys::cram_fd) -> *mut crate::htslib_rs::hts::cram_fd {
+fn mirror_cram_fd(fd: *mut c_void) -> *mut crate::htslib_rs::hts::cram_fd {
     fd.cast()
 }
 
@@ -61,11 +61,11 @@ struct cram_range_layout {
 
 #[repr(C)]
 struct cram_fd_layout {
-    fp: *mut hts_sys::hFILE,
+    fp: *mut c_void,
     mode: c_int,
     version: c_int,
     file_def: *mut c_void,
-    header: *mut hts_sys::sam_hdr_t,
+    header: *mut c_void,
     prefix: *mut c_char,
     record_counter: i64,
     err: c_int,
@@ -73,7 +73,7 @@ struct cram_fd_layout {
     ctr_mt: *mut cram_container_layout,
     first_base: c_int,
     last_base: c_int,
-    refs: *mut hts_sys::refs_t,
+    refs: *mut c_void,
     ref_: *mut c_char,
     ref_free: *mut c_char,
     ref_id: c_int,
@@ -81,7 +81,7 @@ struct cram_fd_layout {
     ref_end: i64,
     ref_fn: *mut c_char,
     level: c_int,
-    m: [*mut hts_sys::cram_metrics; DS_END],
+    m: [*mut c_void; DS_END],
     tags_used: *mut c_void,
     decode_md: c_int,
     seqs_per_slice: c_int,
@@ -132,7 +132,7 @@ struct cram_fd_layout {
     lossy_read_names: c_int,
     tlen_approx: c_int,
     tlen_zero: c_int,
-    idxfp: *mut hts_sys::BGZF,
+    idxfp: *mut c_void,
     vv: varint_vec_layout,
     ap_delta: c_int,
 }
@@ -151,7 +151,7 @@ struct cram_container_layout {
     landmark: *mut i32,
     offset: usize,
     comp_hdr: *mut cram_block_compression_hdr_layout,
-    comp_hdr_block: *mut hts_sys::cram_block,
+    comp_hdr_block: *mut c_void,
     slice: *mut cram_slice_layout,
     curr_slice: c_int,
     max_slice: c_int,
@@ -161,7 +161,7 @@ struct cram_container_layout {
 struct cram_block_layout {
     method: c_int,
     orig_method: c_int,
-    content_type: hts_sys::cram_content_type,
+    content_type: c_int,
     content_id: i32,
     comp_size: i32,
     uncomp_size: i32,
@@ -171,14 +171,14 @@ struct cram_block_layout {
     alloc: usize,
     byte: usize,
     bit: c_int,
-    m: *mut hts_sys::cram_metrics,
+    m: *mut c_void,
     crc32_checked: c_int,
     crc_part: u32,
 }
 
 #[repr(C)]
 struct cram_block_slice_hdr_layout {
-    content_type: hts_sys::cram_content_type,
+    content_type: c_int,
     ref_seq_id: i32,
     ref_seq_start: i64,
     ref_seq_span: i64,
@@ -226,9 +226,9 @@ struct cram_record_layout {
 #[repr(C)]
 struct cram_slice_layout {
     hdr: *mut cram_block_slice_hdr_layout,
-    hdr_block: *mut hts_sys::cram_block,
-    block: *mut *mut hts_sys::cram_block,
-    block_by_id: *mut *mut hts_sys::cram_block,
+    hdr_block: *mut c_void,
+    block: *mut *mut c_void,
+    block_by_id: *mut *mut c_void,
     last_apos: i64,
     max_apos: i64,
     crecs: *mut cram_record_layout,
@@ -241,12 +241,12 @@ struct cram_slice_layout {
     tn: *mut u32,
     ntn: c_int,
     atn: c_int,
-    name_blk: *mut hts_sys::cram_block,
-    seqs_blk: *mut hts_sys::cram_block,
-    qual_blk: *mut hts_sys::cram_block,
-    base_blk: *mut hts_sys::cram_block,
-    soft_blk: *mut hts_sys::cram_block,
-    aux_blk: *mut hts_sys::cram_block,
+    name_blk: *mut c_void,
+    seqs_blk: *mut c_void,
+    qual_blk: *mut c_void,
+    base_blk: *mut c_void,
+    soft_blk: *mut c_void,
+    aux_blk: *mut c_void,
     pair_keys: *mut c_void,
     pair: [*mut c_void; 2],
     ref_: *mut c_char,
@@ -254,7 +254,7 @@ struct cram_slice_layout {
     ref_end: i64,
     ref_id: c_int,
     naux_block: c_int,
-    aux_block: *mut *mut hts_sys::cram_block,
+    aux_block: *mut *mut c_void,
     data_series: c_uint,
     decode_md: c_int,
     max_rec: c_int,
@@ -275,7 +275,7 @@ struct cram_block_compression_hdr_layout {
     substitution_matrix: [[c_char; 4]; 5],
     no_ref: i32,
     qs_seq_orient: i32,
-    td_blk: *mut hts_sys::cram_block,
+    td_blk: *mut c_void,
     ntl: i32,
     tl: *mut *mut u8,
     td_hash: *mut c_void,
@@ -308,7 +308,7 @@ struct cram_huffman_decoder_layout {
 #[repr(C)]
 struct cram_codec_huffman_layout {
     codec: c_int,
-    out: *mut hts_sys::cram_block,
+    out: *mut c_void,
     vv: *mut varint_vec_layout,
     codec_id: c_int,
     free: *mut c_void,
@@ -331,7 +331,7 @@ struct cram_beta_decoder_layout {
 #[repr(C)]
 struct cram_codec_beta_layout {
     codec: c_int,
-    out: *mut hts_sys::cram_block,
+    out: *mut c_void,
     vv: *mut varint_vec_layout,
     codec_id: c_int,
     free: *mut c_void,
@@ -347,24 +347,24 @@ struct cram_codec_beta_layout {
 
 unsafe extern "C" {
     fn cram_next_slice(
-        fd: *mut hts_sys::cram_fd,
-        cp: *mut *mut hts_sys::cram_container,
-    ) -> *mut hts_sys::cram_slice;
+        fd: *mut c_void,
+        cp: *mut *mut c_void,
+    ) -> *mut c_void;
     fn cram_to_bam(
-        h: *mut hts_sys::sam_hdr_t,
-        fd: *mut hts_sys::cram_fd,
-        s: *mut hts_sys::cram_slice,
+        h: *mut c_void,
+        fd: *mut c_void,
+        s: *mut c_void,
         cr: *mut c_void,
         recno: c_int,
-        b: *mut *mut hts_sys::bam1_t,
+        b: *mut *mut c_void,
     ) -> c_int;
-    fn cram_put_bam_seq(fd: *mut hts_sys::cram_fd, b: *mut hts_sys::bam1_t) -> c_int;
+    fn cram_put_bam_seq(fd: *mut c_void, b: *mut c_void) -> c_int;
     fn cram_encode_compression_header(
-        fd: *mut hts_sys::cram_fd,
-        c: *mut hts_sys::cram_container,
-        h: *mut hts_sys::cram_block_compression_hdr,
+        fd: *mut c_void,
+        c: *mut c_void,
+        h: *mut c_void,
         embed_ref: c_int,
-    ) -> *mut hts_sys::cram_block;
+    ) -> *mut c_void;
 }
 
 // original: cram_block_compression_hdr_set_DS (htslib/cram/cram_external.c:152)
@@ -409,7 +409,7 @@ unsafe fn cram_block_compression_hdr_set_rg(
 
 // original: cram_block_compression_hdr_decoder2encoder (htslib/cram/cram_external.c:189)
 unsafe fn cram_block_compression_hdr_decoder2encoder(
-    fd: *mut hts_sys::cram_fd,
+    fd: *mut c_void,
     ch: *mut cram_block_compression_hdr_layout,
 ) -> c_int {
     if ch.is_null() {
@@ -429,34 +429,34 @@ unsafe fn cram_block_compression_hdr_decoder2encoder(
     0
 }
 
-unsafe fn cram_slice_hdr_get_num_blocks(h: *mut hts_sys::cram_block_slice_hdr) -> i32 {
+unsafe fn cram_slice_hdr_get_num_blocks(h: *mut c_void) -> i32 {
     (*h.cast::<cram_block_slice_hdr_layout>()).num_blocks
 }
 
-unsafe fn cram_block_get_data(b: *mut hts_sys::cram_block) -> *mut c_char {
+unsafe fn cram_block_get_data(b: *mut c_void) -> *mut c_char {
     (*b.cast::<cram_block_layout>()).data.cast()
 }
 
-unsafe fn cram_block_get_size(b: *mut hts_sys::cram_block) -> i32 {
+unsafe fn cram_block_get_size(b: *mut c_void) -> i32 {
     (*b.cast::<cram_block_layout>()).byte as i32
 }
 
-unsafe fn cram_block_get_uncomp_size(b: *mut hts_sys::cram_block) -> i32 {
+unsafe fn cram_block_get_uncomp_size(b: *mut c_void) -> i32 {
     (*b.cast::<cram_block_layout>()).uncomp_size
 }
 
-unsafe fn cram_block_set_size(b: *mut hts_sys::cram_block, size: i32) {
+unsafe fn cram_block_set_size(b: *mut c_void, size: i32) {
     (*b.cast::<cram_block_layout>()).byte = size as usize;
 }
 
-unsafe fn cram_block_update_size(b: *mut hts_sys::cram_block) {
+unsafe fn cram_block_update_size(b: *mut c_void) {
     let b = b.cast::<cram_block_layout>();
     (*b).comp_size = (*b).byte as i32;
     (*b).uncomp_size = (*b).byte as i32;
 }
 
 unsafe fn cram_container_get_landmarks(
-    c: *mut hts_sys::cram_container,
+    c: *mut c_void,
     num_landmarks: *mut i32,
 ) -> *mut i32 {
     let c = c.cast::<cram_container_layout>();
@@ -464,18 +464,18 @@ unsafe fn cram_container_get_landmarks(
     (*c).landmark
 }
 
-unsafe fn cram_container_get_length(c: *mut hts_sys::cram_container) -> i32 {
+unsafe fn cram_container_get_length(c: *mut c_void) -> i32 {
     (*c.cast::<cram_container_layout>()).length
 }
 
-unsafe fn cram_container_set_length(c: *mut hts_sys::cram_container, length: i32) {
+unsafe fn cram_container_set_length(c: *mut c_void, length: i32) {
     (*c.cast::<cram_container_layout>()).length = length;
 }
 
 // original: cram_copy_slice (htslib/cram/cram_external.c:683)
 unsafe fn cram_copy_slice(
-    in_: *mut hts_sys::cram_fd,
-    out: *mut hts_sys::cram_fd,
+    in_: *mut c_void,
+    out: *mut c_void,
     num_slice: i32,
 ) -> c_int {
     for _ in 0..num_slice {
@@ -496,7 +496,7 @@ unsafe fn cram_copy_slice(
         }
         cram_api::cram_cram_io_c_1565_cram_free_block(blk);
 
-        let num_blocks = cram_slice_hdr_get_num_blocks(hdr);
+        let num_blocks = cram_slice_hdr_get_num_blocks(hdr.cast());
         for _ in 0..num_blocks {
             blk = cram_api::cram_read_block(mirror_cram_fd(in_));
             if blk.is_null() || cram_api::cram_write_block(mirror_cram_fd(out), blk) != 0 {
@@ -515,8 +515,8 @@ unsafe fn cram_copy_slice(
 
 // original: cram_skip_container (htslib/cram/cram_external.c:725)
 unsafe fn cram_skip_container(
-    in_: *mut hts_sys::cram_fd,
-    c: *mut hts_sys::cram_container,
+    in_: *mut c_void,
+    c: *mut c_void,
 ) -> c_int {
     let mut blk = cram_api::cram_read_block(mirror_cram_fd(in_));
     if blk.is_null() {
@@ -537,7 +537,7 @@ unsafe fn cram_skip_container(
         }
         cram_api::cram_cram_io_c_1565_cram_free_block(blk);
 
-        let num_blocks = cram_slice_hdr_get_num_blocks(hdr);
+        let num_blocks = cram_slice_hdr_get_num_blocks(hdr.cast());
         for _ in 0..num_blocks {
             blk = cram_api::cram_read_block(mirror_cram_fd(in_));
             if blk.is_null() {
@@ -554,9 +554,9 @@ unsafe fn cram_skip_container(
 
 // original: cram_filter_container (htslib/cram/cram_external.c:776)
 pub unsafe fn cram_cram_external_c_776_cram_filter_container(
-    in_: *mut hts_sys::cram_fd,
-    out: *mut hts_sys::cram_fd,
-    c: *mut hts_sys::cram_container,
+    in_: *mut c_void,
+    out: *mut c_void,
+    c: *mut c_void,
     ref_id: *mut c_int,
 ) -> c_int {
     let in_fd = in_.cast::<cram_fd_layout>();
@@ -602,7 +602,7 @@ pub unsafe fn cram_cram_external_c_776_cram_filter_container(
             if !ref_id.is_null() {
                 *ref_id = rid;
             }
-            err |= (cram_api::cram_write_container(mirror_cram_fd(out), c) < 0) as c_int;
+            err |= (cram_api::cram_write_container(mirror_cram_fd(out), c.cast()) < 0) as c_int;
             err |= cram_api::cram_write_block(mirror_cram_fd(out), blk);
             return cram_copy_slice(in_, out, (*c_layout).num_landmarks) | -err;
         }
@@ -693,9 +693,9 @@ pub unsafe fn cram_cram_external_c_776_cram_filter_container(
 
 // original: cram_transcode_rg (htslib/cram/cram_external.c:934)
 pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
-    in_: *mut hts_sys::cram_fd,
-    out: *mut hts_sys::cram_fd,
-    c: *mut hts_sys::cram_container,
+    in_: *mut c_void,
+    out: *mut c_void,
+    c: *mut c_void,
     nrg: c_int,
     _in_rg: *mut c_int,
     out_rg: *mut c_int,
@@ -721,12 +721,12 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     if cram_block_compression_hdr_decoder2encoder(in_, ch.cast()) != 0 {
         return -1;
     }
-    let n_blk = cram_encode_compression_header(in_, c, ch, (*in_fd).embed_ref);
+    let n_blk = cram_encode_compression_header(in_, c, ch.cast(), (*in_fd).embed_ref);
     cram_api::cram_free_compression_header(ch);
 
-    let mut cp = cram_block_get_data(o_blk);
+    let mut cp = cram_block_get_data(o_blk.cast());
     let mut op = cp;
-    let endp = cp.add(cram_block_get_uncomp_size(o_blk) as usize);
+    let endp = cp.add(cram_block_get_uncomp_size(o_blk.cast()) as usize);
     let mut err = 0;
     let varint_get32 = (*in_fd)
         .vv
@@ -745,10 +745,10 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     }
 
     cram_block_set_size(n_blk, cram_block_get_size(n_blk) - 2);
-    cram_api::cram_cram_external_c_544_cram_block_append(n_blk, op.cast(), i32_);
+    cram_api::cram_cram_external_c_544_cram_block_append(n_blk.cast(), op.cast(), i32_);
     cram_block_update_size(n_blk);
 
-    let new_size = cram_api::cram_block_size(n_blk) as c_int;
+    let new_size = cram_api::cram_block_size(n_blk.cast()) as c_int;
 
     let mut num_landmarks = 0;
     let landmarks = cram_container_get_landmarks(c, &mut num_landmarks);
@@ -762,13 +762,13 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
         cram_container_set_length(c, cram_container_get_length(c) + diff);
     }
 
-    if cram_api::cram_write_container(mirror_cram_fd(out), c) != 0 {
+    if cram_api::cram_write_container(mirror_cram_fd(out), c.cast()) != 0 {
         return -2;
     }
 
-    cram_api::cram_write_block(mirror_cram_fd(out), n_blk);
+    cram_api::cram_write_block(mirror_cram_fd(out), n_blk.cast());
     cram_api::cram_cram_io_c_1565_cram_free_block(o_blk);
-    cram_api::cram_cram_io_c_1565_cram_free_block(n_blk);
+    cram_api::cram_cram_io_c_1565_cram_free_block(n_blk.cast());
 
     cram_copy_slice(in_, out, num_landmarks)
 }

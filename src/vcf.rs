@@ -21,18 +21,377 @@ use super::hts::{
     KS_SEP_LINE,
 };
 
-pub type bcf_hdr_t = hts_sys::bcf_hdr_t;
-pub type bcf1_t = hts_sys::bcf1_t;
-pub type bcf_fmt_t = hts_sys::bcf_fmt_t;
-pub type bcf_info_t = hts_sys::bcf_info_t;
-pub type bcf_hrec_t = hts_sys::bcf_hrec_t;
-pub type bcf_idinfo_t = hts_sys::bcf_idinfo_t;
-pub type bcf_idpair_t = hts_sys::bcf_idpair_t;
-pub type bcf_sr_t = hts_sys::bcf_sr_t;
-pub type bcf_sr_regions_t = hts_sys::bcf_sr_regions_t;
-pub type bcf_srs_t = hts_sys::bcf_srs_t;
-// HTSlib v1.23 renamed the internal `variant_t` struct to `bcf_variant_t`.
-pub type bcf_variant_t = hts_sys::bcf_variant_t;
+// Native BCF/VCF struct definitions. Byte-identical to the hts-sys bindgen
+// layouts (verified against bindgen_test_layout_* assertions in
+// target/debug/build/hts-sys-*/out/bindings.rs). Replaces the previous
+// `pub type bcf_*_t = hts_sys::bcf_*_t;` aliases.
+//
+// `__BcfBitfieldUnit<[u8; N]>` mirrors bindgen's `__BindgenBitfieldUnit`
+// helper used by `bcf1_t`, `bcf_fmt_t`, and `bcf_info_t`. We re-implement
+// it locally so the public field types stay byte-for-byte identical
+// without pulling in the hts-sys helper.
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct __BcfBitfieldUnit<Storage> {
+    storage: Storage,
+}
+impl<Storage> __BcfBitfieldUnit<Storage> {
+    #[inline]
+    pub const fn new(storage: Storage) -> Self {
+        Self { storage }
+    }
+}
+impl<Storage> __BcfBitfieldUnit<Storage>
+where
+    Storage: AsRef<[u8]> + AsMut<[u8]>,
+{
+    #[inline]
+    fn get_bit(&self, index: usize) -> bool {
+        let byte_index = index / 8;
+        let byte = self.storage.as_ref()[byte_index];
+        let bit_index = if cfg!(target_endian = "big") {
+            7 - (index % 8)
+        } else {
+            index % 8
+        };
+        let mask = 1u8 << bit_index;
+        byte & mask == mask
+    }
+    #[inline]
+    fn set_bit(&mut self, index: usize, val: bool) {
+        let byte_index = index / 8;
+        let byte = &mut self.storage.as_mut()[byte_index];
+        let bit_index = if cfg!(target_endian = "big") {
+            7 - (index % 8)
+        } else {
+            index % 8
+        };
+        let mask = 1u8 << bit_index;
+        if val {
+            *byte |= mask;
+        } else {
+            *byte &= !mask;
+        }
+    }
+    #[inline]
+    pub fn get(&self, bit_offset: usize, bit_width: u8) -> u64 {
+        let mut val: u64 = 0;
+        for i in 0..(bit_width as usize) {
+            if self.get_bit(i + bit_offset) {
+                let index = if cfg!(target_endian = "big") {
+                    bit_width as usize - 1 - i
+                } else {
+                    i
+                };
+                val |= 1u64 << index;
+            }
+        }
+        val
+    }
+    #[inline]
+    pub fn set(&mut self, bit_offset: usize, bit_width: u8, val: u64) {
+        for i in 0..(bit_width as usize) {
+            let mask = 1u64 << i;
+            let val_bit_is_set = val & mask == mask;
+            let index = if cfg!(target_endian = "big") {
+                bit_width as usize - 1 - i
+            } else {
+                i
+            };
+            self.set_bit(index + bit_offset, val_bit_is_set);
+        }
+    }
+}
+
+// original: bcf_hrec_t (htslib/vcf.h) — variant record header line.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct bcf_hrec_t {
+    pub type_: c_int,
+    pub key: *mut c_char,
+    pub value: *mut c_char,
+    pub nkeys: c_int,
+    pub keys: *mut *mut c_char,
+    pub vals: *mut *mut c_char,
+}
+
+// original: bcf_idinfo_t (htslib/vcf.h)
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct bcf_idinfo_t {
+    pub info: [u64; 3usize],
+    pub hrec: [*mut bcf_hrec_t; 3usize],
+    pub id: c_int,
+}
+
+// original: bcf_idpair_t (htslib/vcf.h)
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct bcf_idpair_t {
+    pub key: *const c_char,
+    pub val: *const bcf_idinfo_t,
+}
+
+// original: bcf_hdr_t (htslib/vcf.h)
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct bcf_hdr_t {
+    pub n: [i32; 3usize],
+    pub id: [*mut bcf_idpair_t; 3usize],
+    pub dict: [*mut c_void; 3usize],
+    pub samples: *mut *mut c_char,
+    pub hrec: *mut *mut bcf_hrec_t,
+    pub nhrec: c_int,
+    pub dirty: c_int,
+    pub ntransl: c_int,
+    pub transl: [*mut c_int; 2usize],
+    pub nsamples_ori: c_int,
+    pub keep_samples: *mut u8,
+    pub mem: kstring_t,
+    pub m: [i32; 3usize],
+}
+
+// original: variant_t (renamed to bcf_variant_t in HTSlib v1.23).
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct bcf_variant_t {
+    pub type_: c_int,
+    pub n: c_int,
+}
+
+// original: bcf_fmt_t (htslib/vcf.h)
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct bcf_fmt_t {
+    pub id: c_int,
+    pub n: c_int,
+    pub size: c_int,
+    pub type_: c_int,
+    pub p: *mut u8,
+    pub p_len: u32,
+    pub _bitfield_align_1: [u32; 0],
+    pub _bitfield_1: __BcfBitfieldUnit<[u8; 4usize]>,
+}
+impl bcf_fmt_t {
+    #[inline]
+    pub fn p_off(&self) -> u32 {
+        self._bitfield_1.get(0usize, 31u8) as u32
+    }
+    #[inline]
+    pub fn set_p_off(&mut self, val: u32) {
+        self._bitfield_1.set(0usize, 31u8, val as u64)
+    }
+    #[inline]
+    pub fn p_free(&self) -> u32 {
+        self._bitfield_1.get(31usize, 1u8) as u32
+    }
+    #[inline]
+    pub fn set_p_free(&mut self, val: u32) {
+        self._bitfield_1.set(31usize, 1u8, val as u64)
+    }
+}
+
+// original: bcf_info_t (htslib/vcf.h). The v1 field is a union of i64/f32.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub union bcf_info_t__bindgen_ty_1 {
+    pub i: i64,
+    pub f: f32,
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct bcf_info_t {
+    pub key: c_int,
+    pub type_: c_int,
+    pub v1: bcf_info_t__bindgen_ty_1,
+    pub vptr: *mut u8,
+    pub vptr_len: u32,
+    pub _bitfield_align_1: [u32; 0],
+    pub _bitfield_1: __BcfBitfieldUnit<[u8; 4usize]>,
+    pub len: c_int,
+}
+impl bcf_info_t {
+    #[inline]
+    pub fn vptr_off(&self) -> u32 {
+        self._bitfield_1.get(0usize, 31u8) as u32
+    }
+    #[inline]
+    pub fn set_vptr_off(&mut self, val: u32) {
+        self._bitfield_1.set(0usize, 31u8, val as u64)
+    }
+    #[inline]
+    pub fn vptr_free(&self) -> u32 {
+        self._bitfield_1.get(31usize, 1u8) as u32
+    }
+    #[inline]
+    pub fn set_vptr_free(&mut self, val: u32) {
+        self._bitfield_1.set(31usize, 1u8, val as u64)
+    }
+}
+
+// original: bcf_dec_t (htslib/vcf.h) — decoded BCF record payload. Used only
+// through `bcf1_t::d`, so doesn't need a `pub type` alias.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct bcf_dec_t {
+    pub m_fmt: c_int,
+    pub m_info: c_int,
+    pub m_id: c_int,
+    pub m_als: c_int,
+    pub m_allele: c_int,
+    pub m_flt: c_int,
+    pub n_flt: c_int,
+    pub flt: *mut c_int,
+    pub id: *mut c_char,
+    pub als: *mut c_char,
+    pub allele: *mut *mut c_char,
+    pub info: *mut bcf_info_t,
+    pub fmt: *mut bcf_fmt_t,
+    pub var: *mut bcf_variant_t,
+    pub n_var: c_int,
+    pub var_type: c_int,
+    pub shared_dirty: c_int,
+    pub indiv_dirty: c_int,
+}
+
+// original: bcf1_t (htslib/vcf.h) — one BCF record. Bitfield layout:
+// n_info:16, n_allele:16, n_fmt:8, n_sample:24 — total 64 bits.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct bcf1_t {
+    pub pos: crate::htslib_rs::hts::hts_pos_t,
+    pub rlen: crate::htslib_rs::hts::hts_pos_t,
+    pub rid: i32,
+    pub qual: f32,
+    pub _bitfield_align_1: [u32; 0],
+    pub _bitfield_1: __BcfBitfieldUnit<[u8; 8usize]>,
+    pub shared: kstring_t,
+    pub indiv: kstring_t,
+    pub d: bcf_dec_t,
+    pub max_unpack: c_int,
+    pub unpacked: c_int,
+    pub unpack_size: [c_int; 3usize],
+    pub errcode: c_int,
+}
+impl bcf1_t {
+    #[inline]
+    pub fn n_info(&self) -> u32 {
+        self._bitfield_1.get(0usize, 16u8) as u32
+    }
+    #[inline]
+    pub fn set_n_info(&mut self, val: u32) {
+        self._bitfield_1.set(0usize, 16u8, val as u64)
+    }
+    #[inline]
+    pub fn n_allele(&self) -> u32 {
+        self._bitfield_1.get(16usize, 16u8) as u32
+    }
+    #[inline]
+    pub fn set_n_allele(&mut self, val: u32) {
+        self._bitfield_1.set(16usize, 16u8, val as u64)
+    }
+    #[inline]
+    pub fn n_fmt(&self) -> u32 {
+        self._bitfield_1.get(32usize, 8u8) as u32
+    }
+    #[inline]
+    pub fn set_n_fmt(&mut self, val: u32) {
+        self._bitfield_1.set(32usize, 8u8, val as u64)
+    }
+    #[inline]
+    pub fn n_sample(&self) -> u32 {
+        self._bitfield_1.get(40usize, 24u8) as u32
+    }
+    #[inline]
+    pub fn set_n_sample(&mut self, val: u32) {
+        self._bitfield_1.set(40usize, 24u8, val as u64)
+    }
+}
+
+// original: bcf_sr_region_t (htslib/synced_bcf_reader.h) — opaque.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct bcf_sr_region_t {
+    _unused: [u8; 0],
+}
+
+// original: bcf_sr_regions_t (htslib/synced_bcf_reader.h)
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct bcf_sr_regions_t {
+    pub tbx: *mut crate::htslib_rs::tbx::tbx_t,
+    pub itr: *mut hts_itr_t,
+    pub line: kstring_t,
+    pub file: *mut htsFile,
+    pub fname: *mut c_char,
+    pub is_bin: c_int,
+    pub als: *mut *mut c_char,
+    pub als_str: kstring_t,
+    pub nals: c_int,
+    pub mals: c_int,
+    pub als_type: c_int,
+    pub missed_reg_handler:
+        Option<unsafe extern "C" fn(arg1: *mut bcf_sr_regions_t, arg2: *mut c_void)>,
+    pub missed_reg_data: *mut c_void,
+    pub regs: *mut bcf_sr_region_t,
+    pub seq_hash: *mut c_void,
+    pub seq_names: *mut *mut c_char,
+    pub nseqs: c_int,
+    pub iseq: c_int,
+    pub start: crate::htslib_rs::hts::hts_pos_t,
+    pub end: crate::htslib_rs::hts::hts_pos_t,
+    pub prev_seq: c_int,
+    pub prev_start: crate::htslib_rs::hts::hts_pos_t,
+    pub prev_end: crate::htslib_rs::hts::hts_pos_t,
+    pub overlap: c_int,
+}
+
+// original: bcf_sr_t (htslib/synced_bcf_reader.h) — one synced reader.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct bcf_sr_t {
+    pub file: *mut htsFile,
+    pub tbx_idx: *mut crate::htslib_rs::tbx::tbx_t,
+    pub bcf_idx: *mut hts_idx_t,
+    pub header: *mut bcf_hdr_t,
+    pub itr: *mut hts_itr_t,
+    pub fname: *mut c_char,
+    pub buffer: *mut *mut bcf1_t,
+    pub nbuffer: c_int,
+    pub mbuffer: c_int,
+    pub nfilter_ids: c_int,
+    pub filter_ids: *mut c_int,
+    pub samples: *mut c_int,
+    pub n_smpl: c_int,
+}
+
+// original: bcf_srs_t (htslib/synced_bcf_reader.h) — collection of synced
+// readers. (`bcf_sr_error` is defined further down in this file.)
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct bcf_srs_t {
+    pub collapse: c_int,
+    pub apply_filters: *mut c_char,
+    pub require_index: c_int,
+    pub max_unpack: c_int,
+    pub has_line: *mut c_int,
+    pub errnum: bcf_sr_error,
+    pub readers: *mut bcf_sr_t,
+    pub nreaders: c_int,
+    pub streaming: c_int,
+    pub explicit_regs: c_int,
+    pub samples: *mut *mut c_char,
+    pub regions: *mut bcf_sr_regions_t,
+    pub targets: *mut bcf_sr_regions_t,
+    pub targets_als: c_int,
+    pub targets_exclude: c_int,
+    pub tmps: kstring_t,
+    pub n_smpl: c_int,
+    pub n_threads: c_int,
+    pub p: *mut crate::htslib_rs::hts::htsThreadPool,
+    pub aux: *mut c_void,
+}
 pub type bcf_variant_match = c_int;
 
 // Native BCF/VCF enum constants and sentinel values (values from the C headers /
@@ -15240,9 +15599,9 @@ mod tests {
         unsafe {
             let hdr = hts_sys::bcf_hdr_init(c"w".as_ptr());
             assert!(!hdr.is_null());
-            let dup = bcf_hdr_dup(hdr);
+            let dup = bcf_hdr_dup(hdr.cast());
             assert!(!dup.is_null());
-            hts_sys::bcf_hdr_destroy(dup);
+            hts_sys::bcf_hdr_destroy(dup.cast());
             hts_sys::bcf_hdr_destroy(hdr);
         }
     }
@@ -15337,7 +15696,7 @@ mod tests {
                     let p = f.as_ptr() as *mut c_char;
                     assert_eq!(
                         bcf_has_filter(hdr, rec, p),
-                        hts_sys::bcf_has_filter(hdr, rec, p),
+                        hts_sys::bcf_has_filter(hdr.cast(), rec.cast(), p),
                         "{label} parity for {f:?}"
                     );
                 }
@@ -18473,8 +18832,8 @@ mod tests {
             );
             assert_eq!(
                 hts_sys::bcf_update_info(
-                    hdr,
-                    b,
+                    hdr.cast(),
+                    b.cast(),
                     c"DP".as_ptr(),
                     dp.as_ptr().cast(),
                     1,
@@ -18490,8 +18849,8 @@ mod tests {
             );
             assert_eq!(
                 hts_sys::bcf_update_info(
-                    hdr,
-                    b,
+                    hdr.cast(),
+                    b.cast(),
                     c"AF".as_ptr(),
                     af.as_ptr().cast(),
                     2,
@@ -18507,8 +18866,8 @@ mod tests {
             );
             assert_eq!(
                 hts_sys::bcf_update_info(
-                    hdr,
-                    b,
+                    hdr.cast(),
+                    b.cast(),
                     c"ST".as_ptr(),
                     st.as_ptr().cast(),
                     5,
@@ -18523,8 +18882,8 @@ mod tests {
             );
             assert_eq!(
                 hts_sys::bcf_update_info(
-                    hdr,
-                    b,
+                    hdr.cast(),
+                    b.cast(),
                     c"FL".as_ptr(),
                     std::ptr::null(),
                     1,
@@ -18543,8 +18902,8 @@ mod tests {
             );
             assert_eq!(
                 hts_sys::bcf_update_info(
-                    hdr,
-                    b,
+                    hdr.cast(),
+                    b.cast(),
                     c"DP".as_ptr(),
                     dp2.as_ptr().cast(),
                     1,
@@ -18558,8 +18917,8 @@ mod tests {
             );
             assert_eq!(
                 hts_sys::bcf_update_info(
-                    hdr,
-                    b,
+                    hdr.cast(),
+                    b.cast(),
                     c"ST".as_ptr(),
                     std::ptr::null(),
                     0,
@@ -18589,8 +18948,8 @@ mod tests {
             );
             assert_eq!(
                 hts_sys::bcf_update_format(
-                    hdr,
-                    b,
+                    hdr.cast(),
+                    b.cast(),
                     c"GQ".as_ptr(),
                     gq.as_ptr().cast(),
                     2,
@@ -18606,8 +18965,8 @@ mod tests {
             );
             assert_eq!(
                 hts_sys::bcf_update_format(
-                    hdr,
-                    b,
+                    hdr.cast(),
+                    b.cast(),
                     c"DS".as_ptr(),
                     ds.as_ptr().cast(),
                     2,
@@ -18624,8 +18983,8 @@ mod tests {
             );
             assert_eq!(
                 hts_sys::bcf_update_format_string(
-                    hdr,
-                    b,
+                    hdr.cast(),
+                    b.cast(),
                     c"GT".as_ptr(),
                     gts.as_ptr().cast_mut(),
                     2
@@ -18643,8 +19002,8 @@ mod tests {
             );
             assert_eq!(
                 hts_sys::bcf_update_format(
-                    hdr,
-                    b,
+                    hdr.cast(),
+                    b.cast(),
                     c"GQ".as_ptr(),
                     gq2.as_ptr().cast(),
                     2,
@@ -18658,8 +19017,8 @@ mod tests {
             );
             assert_eq!(
                 hts_sys::bcf_update_format(
-                    hdr,
-                    b,
+                    hdr.cast(),
+                    b.cast(),
                     c"DS".as_ptr(),
                     std::ptr::null(),
                     0,
@@ -18685,27 +19044,27 @@ mod tests {
             let q10 = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"q10".as_ptr());
             let s50 = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"s50".as_ptr());
 
-            assert_eq!(bcf_add_filter(hdr, a, q10), hts_sys::bcf_add_filter(hdr, b, q10));
-            assert_eq!(bcf_add_filter(hdr, a, s50), hts_sys::bcf_add_filter(hdr, b, s50));
+            assert_eq!(bcf_add_filter(hdr, a, q10), hts_sys::bcf_add_filter(hdr.cast(), b.cast(), q10));
+            assert_eq!(bcf_add_filter(hdr, a, s50), hts_sys::bcf_add_filter(hdr.cast(), b.cast(), s50));
             // adding an already-present filter
-            assert_eq!(bcf_add_filter(hdr, a, q10), hts_sys::bcf_add_filter(hdr, b, q10));
+            assert_eq!(bcf_add_filter(hdr, a, q10), hts_sys::bcf_add_filter(hdr.cast(), b.cast(), q10));
             assert_eq!(
                 bcf_remove_filter(hdr, a, q10, 0),
-                hts_sys::bcf_remove_filter(hdr, b, q10, 0)
+                hts_sys::bcf_remove_filter(hdr.cast(), b.cast(), q10, 0)
             );
             // remove last, request PASS
             assert_eq!(
                 bcf_remove_filter(hdr, a, s50, 1),
-                hts_sys::bcf_remove_filter(hdr, b, s50, 1)
+                hts_sys::bcf_remove_filter(hdr.cast(), b.cast(), s50, 1)
             );
 
             assert_eq!(bcf_update_id(hdr, a, c"rs123".as_ptr()), 0);
-            assert_eq!(hts_sys::bcf_update_id(hdr, b, c"rs123".as_ptr()), 0);
+            assert_eq!(hts_sys::bcf_update_id(hdr.cast(), b.cast(), c"rs123".as_ptr()), 0);
 
             let flt = [q10, s50];
             assert_eq!(
                 bcf_update_filter(hdr, a, flt.as_ptr().cast_mut(), 2),
-                hts_sys::bcf_update_filter(hdr, b, flt.as_ptr().cast_mut(), 2)
+                hts_sys::bcf_update_filter(hdr.cast(), b.cast(), flt.as_ptr().cast_mut(), 2)
             );
 
             assert_records_equal(a, b);
@@ -18733,16 +19092,16 @@ mod tests {
             );
 
             let native = bcf_dup(src);
-            let csys = hts_sys::bcf_dup(src);
-            assert_records_equal(native, csys);
+            let csys = hts_sys::bcf_dup(src.cast());
+            assert_records_equal(native, csys.cast());
 
             // bcf_copy into an existing record
             let dst = bcf_init();
             bcf_copy(dst, src);
-            assert_records_equal(dst, csys);
+            assert_records_equal(dst, csys.cast());
 
             bcf_destroy(native);
-            bcf_destroy(csys);
+            bcf_destroy(csys.cast());
             bcf_destroy(dst);
             bcf_destroy(src);
             bcf_hdr_destroy(hdr);
@@ -18790,7 +19149,7 @@ mod tests {
             (*b).unpacked = 0;
 
             assert_eq!(bcf_unpack(a, BCF_UN_ALL as c_int), 0);
-            assert_eq!(hts_sys::bcf_unpack(b, BCF_UN_ALL as c_int), 0);
+            assert_eq!(hts_sys::bcf_unpack(b.cast(), BCF_UN_ALL as c_int), 0);
 
             assert_eq!((*a).unpacked, (*b).unpacked, "unpacked flags differ");
             assert_eq!((*a).unpack_size, (*b).unpack_size, "unpack_size differ");
@@ -18859,7 +19218,7 @@ mod tests {
             let mut na = 0;
             let mut nb = 0;
             let names_a = bcf_hdr_seqnames(hdr, &mut na);
-            let names_b = hts_sys::bcf_hdr_seqnames(hdr, &mut nb);
+            let names_b = hts_sys::bcf_hdr_seqnames(hdr.cast(), &mut nb);
             assert_eq!(na, nb, "seqnames count differs");
             for i in 0..na as usize {
                 assert_eq!(
@@ -18873,7 +19232,7 @@ mod tests {
 
             assert_eq!(
                 CStr::from_ptr(bcf_hdr_get_version(hdr)),
-                CStr::from_ptr(hts_sys::bcf_hdr_get_version(hdr)),
+                CStr::from_ptr(hts_sys::bcf_hdr_get_version(hdr.cast())),
                 "version differs"
             );
 
@@ -18907,7 +19266,7 @@ mod tests {
             let mut imap = [1i32];
             assert_eq!(bcf_subset(hdr, a, 1, imap.as_mut_ptr()), 0);
             assert_eq!(
-                hts_sys::bcf_subset(hdr, b, 1, imap.as_mut_ptr()),
+                hts_sys::bcf_subset(hdr.cast(), b.cast(), 1, imap.as_mut_ptr()),
                 0
             );
             assert_records_equal(a, b);
@@ -19225,7 +19584,7 @@ mod tests {
             assert_eq!(hts_sys::bcf_hdr_append(h, line.as_ptr()), 0);
         }
         assert_eq!(hts_sys::bcf_hdr_sync(h), 0);
-        h
+        h.cast()
     }
 
     #[test]
@@ -19255,7 +19614,7 @@ mod tests {
             }
 
             bcf_hdr_destroy(nat);
-            hts_sys::bcf_hdr_destroy(cref);
+            hts_sys::bcf_hdr_destroy(cref.cast());
         }
     }
 
@@ -19275,7 +19634,7 @@ mod tests {
                 (c"chrMT", BCF_DT_CTG),
             ] {
                 let native_id = bcf_hdr_id2int(nat, t as c_int, id_name.as_ptr());
-                let c_id = hts_sys::bcf_hdr_id2int(nat, t as c_int, id_name.as_ptr());
+                let c_id = hts_sys::bcf_hdr_id2int(nat.cast(), t as c_int, id_name.as_ptr());
                 assert!(native_id >= 0, "native lookup failed for {id_name:?}");
                 assert_eq!(
                     native_id, c_id,
@@ -19306,7 +19665,7 @@ mod tests {
                 std::ptr::null(),
             );
             let c_ff = hts_sys::bcf_hdr_get_hrec(
-                cref,
+                cref.cast(),
                 BCF_HL_GEN as c_int,
                 c"fileformat".as_ptr(),
                 std::ptr::null(),
@@ -19332,7 +19691,7 @@ mod tests {
                     std::ptr::null(),
                 );
                 let ch = hts_sys::bcf_hdr_get_hrec(
-                    cref,
+                    cref.cast(),
                     t as c_int,
                     c"ID".as_ptr(),
                     id.as_ptr(),
@@ -19352,7 +19711,7 @@ mod tests {
                 c"ALT".as_ptr(),
             );
             let cs = hts_sys::bcf_hdr_get_hrec(
-                cref,
+                cref.cast(),
                 BCF_HL_STR as c_int,
                 c"ID".as_ptr(),
                 c"NON_REF".as_ptr(),
@@ -19361,7 +19720,7 @@ mod tests {
             assert!(!ns.is_null() && !cs.is_null());
 
             bcf_hdr_destroy(nat);
-            hts_sys::bcf_hdr_destroy(cref);
+            hts_sys::bcf_hdr_destroy(cref.cast());
         }
     }
 
@@ -19435,7 +19794,7 @@ mod tests {
                 let r_native = vcf_parse_native(&mut s_native, hdr_native, v_native);
                 let r_csys = hts_sys::vcf_parse(
                     (&mut s_csys as *mut kstring_t).cast(),
-                    hdr_csys,
+                    hdr_csys.cast(),
                     v_csys.cast(),
                 );
 

@@ -1366,7 +1366,7 @@ pub unsafe fn cram_filter_container(
         cram_external::cram_cram_external_c_776_cram_filter_container(
             in_.cast(),
             out.cast(),
-            c,
+            c.cast(),
             ref_id,
         )
     }
@@ -1836,7 +1836,7 @@ pub unsafe fn cram_transcode_rg(
         cram_external::cram_cram_external_c_934_cram_transcode_rg(
             in_.cast(),
             out.cast(),
-            c,
+            c.cast(),
             nrg,
             in_rg,
             out_rg,
