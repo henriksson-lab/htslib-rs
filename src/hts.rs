@@ -4743,6 +4743,62 @@ unsafe fn hts_idx_close_otf_fp(idx: *mut hts_idx_t) -> c_int {
     }
 }
 
+// original: hts_open_tmpfile (htslib/hts.c:1980)
+//
+// Creates a temp file alongside `fname` (suffix `.tmp_<pid>_<n>_<rnd>`) using
+// `hopen(.., mode)` and writes the chosen name into `tmpname`. Tries up to
+// 100 times with O_EXCL semantics (mode "wx") to avoid clobbering an
+// existing file. Returns NULL if all attempts fail.
+pub unsafe fn hts_open_tmpfile(
+    fname: *const c_char,
+    mode: *const c_char,
+    tmpname: *mut kstring_t,
+) -> *mut hFILE {
+    let pid = libc::getpid() as c_int;
+    let ptr_seed = tmpname as usize as u32;
+    let mut n: c_int = 0;
+    let mut fp: *mut hFILE = std::ptr::null_mut();
+
+    loop {
+        let now = libc::time(std::ptr::null_mut()) as u32;
+        let mut ts: libc::timespec = std::mem::zeroed();
+        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+        let nanos = ts.tv_nsec as u32;
+        let t: u32 = now ^ nanos ^ ptr_seed;
+        n += 1;
+
+        ks_clear(tmpname);
+        // ksprintf(tmpname, "%s.tmp_%d_%d_%u", fname, pid, n, t)
+        // Our portable ksprintf supports %s/%d; %u is the same shape, format
+        // as int via the same Int variant since values fit.
+        let fmt = c"%s.tmp_%d_%d_%d".as_ptr();
+        let r = crate::htslib_rs::kstring::kstring_c_177_ksprintf(
+            tmpname,
+            fmt,
+            &[
+                crate::htslib_rs::kstring::KsPrintfArg::Str(fname),
+                crate::htslib_rs::kstring::KsPrintfArg::Int(pid),
+                crate::htslib_rs::kstring::KsPrintfArg::Int(n),
+                crate::htslib_rs::kstring::KsPrintfArg::Int(t as c_int),
+            ],
+        );
+        if r < 0 {
+            break;
+        }
+
+        fp = crate::htslib_rs::hfile::hopen((*tmpname).s, mode);
+        if !fp.is_null() {
+            break;
+        }
+        let errno = *libc::__errno_location();
+        if errno != libc::EEXIST || n >= 100 {
+            break;
+        }
+    }
+
+    fp
+}
+
 pub unsafe fn hts_open_format(
     fn_: *const c_char,
     mode: *const c_char,

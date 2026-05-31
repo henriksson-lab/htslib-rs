@@ -214,6 +214,40 @@ fn finish(ptr: *mut u8, len: i64) -> Vec<u8> {
     unsafe { Vec::from_raw_parts(ptr, cap, cap) }
 }
 
+/// C-style raw-pointer wrapper around `hts_pack`. The C API takes `*mut u8`
+/// for `out_meta` with no explicit length; callers supply a buffer at least
+/// `nsyms + 1` bytes (worst case 17). We treat it as a 256-byte slice for
+/// safety. The malloc'd output buffer is returned as a raw pointer; the
+/// caller owns it and must `free()` (libc) it.
+pub unsafe fn hts_pack_raw(
+    data: *mut u8,
+    len: i64,
+    out_meta: *mut u8,
+    out_meta_len: *mut std::ffi::c_int,
+    out_len: *mut u64,
+) -> *mut u8 {
+    let data_slice = std::slice::from_raw_parts(data, len as usize);
+    let out_meta_slice = std::slice::from_raw_parts_mut(out_meta, 256);
+    let mut meta_len_val: i32 = 0;
+    let mut out_len_val: u64 = 0;
+    match hts_pack(
+        data_slice,
+        len,
+        out_meta_slice,
+        &mut meta_len_val,
+        &mut out_len_val,
+    ) {
+        Some(vec) => {
+            *out_meta_len = meta_len_val;
+            *out_len = out_len_val;
+            let ptr = vec.as_ptr() as *mut u8;
+            std::mem::forget(vec);
+            ptr
+        }
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// ```c
 /// uint8_t hts_unpack_meta(uint8_t *data, uint32_t data_len,
 ///                         uint64_t udata_len, uint8_t *map, int *nsym);

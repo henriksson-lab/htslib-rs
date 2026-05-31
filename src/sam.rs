@@ -3848,7 +3848,7 @@ pub unsafe fn sam_hdr_rebuild(bh: *mut sam_hdr_t) -> c_int {
 }
 
 // original: sam_hdr_fill_hrecs (htslib/header.c:1623)
-unsafe fn sam_hdr_fill_hrecs(bh: *mut sam_hdr_t) -> c_int {
+pub unsafe fn sam_hdr_fill_hrecs(bh: *mut sam_hdr_t) -> c_int {
     if bh.is_null() {
         return -1;
     }
@@ -5227,68 +5227,31 @@ pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
 }
 
 unsafe fn sam_hdr_write_cram(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
-    // Rust-built hrecs is the source of truth — sync text from it. Production
-    // never has unmarked hrecs (cram_dopen's C-pool header is dup'd into a
-    // hrecs-null copy inside sam_hdr_read); a caller that somehow gets one
-    // falls through using (*h).text directly.
+    // Rust-built hrecs is the source of truth — sync text from it so the
+    // CRAM writer's text consumers see the up-to-date header.
     if !(*h).hrecs.is_null()
         && sam_hdr_has_rust_hrecs(h.cast_mut())
         && sam_hdr_rebuild(h.cast_mut()) < 0
     {
         return -1;
     }
-    if (*h).text.is_null() {
-        return 0;
-    }
 
-    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text);
-    let mut no_sq = true;
-    let mut start = 0usize;
-    while let Some(pos) = text[start..].windows(4).position(|w| w == b"@SQ\t") {
-        let abs = start + pos;
-        if abs == 0 || text[abs - 1] == b'\n' {
-            no_sq = false;
-            break;
-        }
-        start = abs + 4;
-    }
-
-    let mut header_text = text.to_vec();
-    if no_sq {
-        for i in 0..(*h).n_targets {
-            let name = *(*h).target_name.add(i as usize);
-            if name.is_null() {
-                continue;
-            }
-            header_text.extend_from_slice(b"@SQ\tSN:");
-            header_text.extend_from_slice(CStr::from_ptr(name).to_bytes());
-            header_text.extend_from_slice(b"\tLN:");
-            header_text
-                .extend_from_slice((*(*h).target_len.add(i as usize)).to_string().as_bytes());
-            header_text.push(b'\n');
-        }
-    }
-
-    // v1.23 hardened `sam_hdr_parse` to reject lines like `@XX\n` with no tab/
-    // value (e.g. a bare `@CO\n`). Some real-world SAM fixtures
-    // (htslib/test/xx#tlen.sam) carry such bare-CO lines, and rejecting them
-    // here would fail the whole CRAM write. Strip them so the parse succeeds;
-    // those lines carry no information by definition.
-    let sanitized = strip_bare_comment_lines(&header_text);
-    // TODO(P5): native sam_hdr_parse exists at sam.rs:2413 and now fills
-    // hrecs via the always-fill-hrecs invariant; the obvious swap (native
-    // parse + native write + native destroy) crashes the CRAM writer
-    // because libhts' CRAM-write path re-derefs hrecs internally with C
-    // pool-allocated layouts — Rust-allocated hrecs is incompatible there.
-    // The trio stays C-side until a native CRAM header writer
-    // (`cram_write_SAM_hdr`, Agent A's pending blocker) lands.
-    let hts_hdr = hts_sys::sam_hdr_parse(sanitized.len(), sanitized.as_ptr().cast());
-    if hts_hdr.is_null() {
+    // Mirror libhts' sam_hdr_write CRAM wrapper sequence:
+    //   cram_set_header2(fd, h) — dup the header and run refs_from_header
+    //   cram_load_reference(fd, fd->ref_fn) — load any pending reference
+    //   cram_write_SAM_hdr(fd, fd->header) — write into a CRAM container
+    let cram_fd = (*fp).fp.cram;
+    if crate::htslib_rs::cram::cram_cram_io_c_2866_cram_set_header(cram_fd, h.cast_mut()) != 0 {
         return -1;
     }
-    let ret = hts_sys::sam_hdr_write(fp.cast(), hts_hdr);
-    hts_sys::sam_hdr_destroy(hts_hdr);
-    ret
+    let ref_fn = crate::htslib_rs::cram::cram_fd_ref_fn(cram_fd);
+    if !ref_fn.is_null()
+        && crate::htslib_rs::cram::cram_cram_io_c_3597_cram_load_reference(cram_fd, ref_fn) != 0
+    {
+        return -1;
+    }
+    let hdr_native = crate::htslib_rs::cram::cram_fd_header_ptr(cram_fd).cast::<sam_hdr_t>();
+    crate::htslib_rs::cram::cram_cram_io_c_4889_cram_write_SAM_hdr(cram_fd, hdr_native)
 }
 
 /// Strip lines whose content is just `@CO` followed only by trailing
@@ -11887,18 +11850,20 @@ pub unsafe fn sam_c_4553_sam_write1(
             sam_c_933_bam_write_idx1(fp, h, b)
         }
         HTS_FORMAT_BAM => sam_c_933_bam_write_idx1(fp, h, b),
-        // TODO(P5): no native CRAM record writer yet
-        HTS_FORMAT_CRAM => hts_sys::sam_write1(fp.cast(), h.cast(), b.cast()),
+        HTS_FORMAT_CRAM => crate::htslib_rs::cram::cram_cram_encode_c_4049_cram_put_bam_seq(
+            (*fp).fp.cram,
+            b.cast_mut(),
+        ),
         HTS_FORMAT_TEXT_FORMAT => {
             (*fp).format.category = HTS_FORMAT_SEQUENCE_DATA;
             (*fp).format.format = HTS_FORMAT_SAM;
             sam_c_4553_sam_write1(fp, h, b)
         }
         HTS_FORMAT_SAM => {
-            if !(*fp).state.is_null() || !(*fp).idx.is_null() {
-                // TODO(P5): no native SAM threaded-encoder / on-the-fly-index writer yet
-                return hts_sys::sam_write1(fp.cast(), h.cast(), b.cast());
-            }
+            // fp.state stays null for SAM (sam_c_3746_sam_set_threads is a
+            // native noop — see comment there). fp.idx is set by
+            // sam_idx_init when the caller wants an on-the-fly index — we
+            // update it natively below after writing the record.
             if sam_format1(h, b, &mut (*fp).line) < 0 {
                 return -1;
             }
@@ -11918,6 +11883,40 @@ pub unsafe fn sam_c_4553_sam_write1(
                     (*fp).line.s.cast(),
                     (*fp).line.l,
                 ) != (*fp).line.l as libc::ssize_t
+                {
+                    return -1;
+                }
+            }
+            // On-the-fly index update (htslib/sam.c:4665) when sam_idx_init
+            // set up fp.idx. BGZF-SAM uses bgzf_idx_push; plain SAM uses
+            // hts_idx_push with the raw offset.
+            if !(*fp).idx.is_null() {
+                let core = &(*b).core;
+                let not_unmapped = ((core.flag as c_int) & BAM_FUNMAP) == 0;
+                let bgzf = (*fp).fp.bgzf;
+                let pos = (((*bgzf).block_address as u64) << 16)
+                    | ((*bgzf).block_offset as u64 & 0xFFFF);
+                if (*fp).format.compression == crate::htslib_rs::hts::HTS_COMPRESSION_BGZF {
+                    if crate::htslib_rs::bgzf::bgzf_c_189_bgzf_idx_push(
+                        bgzf,
+                        (*fp).idx.cast(),
+                        core.tid,
+                        core.pos,
+                        bam_endpos(b),
+                        pos,
+                        not_unmapped as c_int,
+                    ) < 0
+                    {
+                        return -1;
+                    }
+                } else if hts_idx_push(
+                    (*fp).idx.cast(),
+                    core.tid,
+                    core.pos,
+                    bam_endpos(b),
+                    pos,
+                    not_unmapped as c_int,
+                ) < 0
                 {
                     return -1;
                 }

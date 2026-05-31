@@ -241,6 +241,102 @@ pub fn hts_rle_decode<'a>(
     Some(&mut out[..outp])
 }
 
+/// C-style raw-pointer wrapper around `hts_rle_encode`. When `out` is NULL
+/// the encoder allocates a `data_len * 2` byte buffer (libc malloc) and
+/// returns ownership to the caller. Otherwise the caller's buffer is filled.
+pub unsafe fn hts_rle_encode_raw(
+    data: *mut u8,
+    data_len: u64,
+    run: *mut u8,
+    run_len: *mut u64,
+    rle_syms: *mut u8,
+    rle_nsyms: *mut std::ffi::c_int,
+    out: *mut u8,
+    out_len: *mut u64,
+) -> *mut u8 {
+    let data_slice = std::slice::from_raw_parts(data, data_len as usize);
+    let run_slice = std::slice::from_raw_parts_mut(run, data_len as usize + 1);
+    let rle_syms_slice = std::slice::from_raw_parts_mut(rle_syms, 256);
+    let mut nsyms_val: i32 = *rle_nsyms;
+    let mut run_len_val: u64 = 0;
+    let mut out_len_val: u64 = 0;
+    let alloc_caller_buf = !out.is_null();
+    let out_opt = if alloc_caller_buf {
+        Some(std::slice::from_raw_parts_mut(
+            out,
+            data_len.wrapping_mul(2) as usize,
+        ))
+    } else {
+        None
+    };
+    let result = hts_rle_encode(
+        data_slice,
+        data_len,
+        run_slice,
+        &mut run_len_val,
+        rle_syms_slice,
+        &mut nsyms_val,
+        out_opt,
+        &mut out_len_val,
+    );
+    *rle_nsyms = nsyms_val;
+    *run_len = run_len_val;
+    *out_len = out_len_val;
+    match result {
+        Some(vec) => {
+            if alloc_caller_buf {
+                // safe API copied into our slice via `Some(o)`. The
+                // returned Vec is a clone we don't need.
+                drop(vec);
+                out
+            } else {
+                let p = c_compat::malloc(out_len_val.max(1)) as *mut u8;
+                if p.is_null() {
+                    return std::ptr::null_mut();
+                }
+                std::ptr::copy_nonoverlapping(vec.as_ptr(), p, out_len_val as usize);
+                p
+            }
+        }
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// C-style raw-pointer wrapper around `hts_rle_decode`. The caller-supplied
+/// `out` buffer's allocated size is passed in via `*out_len`; on success the
+/// used size is written back. Returns `out` on success, NULL on failure.
+pub unsafe fn hts_rle_decode_raw(
+    lit: *mut u8,
+    lit_len: u64,
+    run: *mut u8,
+    run_len: u64,
+    rle_syms: *mut u8,
+    rle_nsyms: std::ffi::c_int,
+    out: *mut u8,
+    out_len: *mut u64,
+) -> *mut u8 {
+    let lit_slice = std::slice::from_raw_parts(lit, lit_len as usize);
+    let run_slice = std::slice::from_raw_parts(run, run_len as usize);
+    let rle_syms_slice = std::slice::from_raw_parts(rle_syms, rle_nsyms.max(0) as usize);
+    let out_slice = std::slice::from_raw_parts_mut(out, *out_len as usize);
+    let mut out_len_val: u64 = *out_len;
+    let r = hts_rle_decode(
+        lit_slice,
+        lit_len,
+        run_slice,
+        run_len,
+        rle_syms_slice,
+        rle_nsyms,
+        out_slice,
+        &mut out_len_val,
+    );
+    *out_len = out_len_val;
+    match r {
+        Some(_) => out,
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// ```c
 /// uint8_t *rle_encode(uint8_t *data, uint64_t data_len,
 ///                     uint8_t *run,  uint64_t *run_len,
