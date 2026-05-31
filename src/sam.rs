@@ -2369,17 +2369,21 @@ pub unsafe fn sam_hdr_str(_h: *mut sam_hdr_t) -> *const c_char {
         return std::ptr::null();
     }
     if !(*_h).hrecs.is_null() {
-        // Rust-built hrecs: rebuild from our own walkers. C-built (test
-        // helpers that mutate via hts_sys): delegate so libhts walks its own
-        // string pool. See sam_hdr_rust_hrecs_registry for context.
-        if sam_hdr_has_rust_hrecs(_h) {
-            return if sam_hdr_rebuild(_h) == 0 {
+        // Production-built hrecs is always Rust-marked (sam_hdr_fill_hrecs
+        // marks it; cram_dopen's libhts-built header is dup'd in sam_hdr_read
+        // via sam_hdr_dup which rebuilds text-only, leaving hrecs null on
+        // the returned copy). If a caller somehow constructed a header with
+        // unmarked hrecs, fall back to returning the cached text — better
+        // than calling libhts on an opaque hrecs we don't own.
+        return if sam_hdr_has_rust_hrecs(_h) {
+            if sam_hdr_rebuild(_h) == 0 {
                 (*_h).text
             } else {
                 std::ptr::null()
-            };
-        }
-        return hts_sys::sam_hdr_str(_h.cast());
+            }
+        } else {
+            (*_h).text
+        };
     }
     (*_h).text
 }
@@ -5068,19 +5072,13 @@ pub unsafe fn bam_hdr_write(fp: *mut BGZF, h: *const sam_hdr_t) -> c_int {
     if h.is_null() {
         return -1;
     }
-    // If hrecs was built by Rust (via sam_hdr_fill_hrecs), it's the source of
-    // truth — sync the cached text via sam_hdr_rebuild and fall through to
-    // the native text-emitting code. If hrecs is non-null but was built by
-    // hts_sys (e.g. a test helper invoked the variadic C add_pg), our walkers
-    // can't interpret its pool-allocated records — delegate the whole write.
-    if !(*h).hrecs.is_null() {
-        if sam_hdr_has_rust_hrecs(h.cast_mut()) {
-            if sam_hdr_rebuild(h.cast_mut()) < 0 {
-                return -1;
-            }
-        } else {
-            return hts_sys::bam_hdr_write(fp.cast(), h.cast());
-        }
+    // Rust-built hrecs is the source of truth — sync cached text and fall
+    // through to the native BAM writer. Production never produces unmarked
+    // hrecs (cram_dopen's C-pool header is dup'd in sam_hdr_read into a
+    // hrecs-null copy); a caller that somehow gets one falls through using
+    // the existing (*h).text.
+    if !(*h).hrecs.is_null() && sam_hdr_has_rust_hrecs(h.cast_mut()) && sam_hdr_rebuild(h.cast_mut()) < 0 {
+        return -1;
     }
     if (*h).l_text > u32::MAX as usize {
         return -1;
@@ -5166,17 +5164,15 @@ pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
             if (*h).hrecs.is_null() && (*h).text.is_null() {
                 return 0;
             }
-            // Rust-built hrecs: rebuild cached text and fall through. C-built
-            // hrecs (e.g. populated by hts_sys helpers in test::sam): delegate
-            // to libhts so it walks its own pool-allocated records.
-            if !(*h).hrecs.is_null() {
-                if sam_hdr_has_rust_hrecs(h.cast_mut()) {
-                    if sam_hdr_rebuild(h.cast_mut()) < 0 {
-                        return -1;
-                    }
-                } else {
-                    return hts_sys::sam_hdr_write(fp.cast(), h.cast());
-                }
+            // Rust-built hrecs is the source of truth — sync text and fall
+            // through. Production never has unmarked hrecs (sam_hdr_dup on
+            // a C-pool source rebuilds into a hrecs-null header); a caller
+            // that somehow gets one falls through using (*h).text directly.
+            if !(*h).hrecs.is_null()
+                && sam_hdr_has_rust_hrecs(h.cast_mut())
+                && sam_hdr_rebuild(h.cast_mut()) < 0
+            {
+                return -1;
             }
             if !(*h).text.is_null() {
                 let text = (*h).text;
@@ -5231,16 +5227,15 @@ pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
 }
 
 unsafe fn sam_hdr_write_cram(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
-    // Rust-built hrecs: rebuild text. C-built hrecs: let libhts handle the
-    // whole write (same dispatch rule as sam_hdr_write/bam_hdr_write).
-    if !(*h).hrecs.is_null() {
-        if sam_hdr_has_rust_hrecs(h.cast_mut()) {
-            if sam_hdr_rebuild(h.cast_mut()) < 0 {
-                return -1;
-            }
-        } else {
-            return hts_sys::sam_hdr_write(fp.cast(), h.cast());
-        }
+    // Rust-built hrecs is the source of truth — sync text from it. Production
+    // never has unmarked hrecs (cram_dopen's C-pool header is dup'd into a
+    // hrecs-null copy inside sam_hdr_read); a caller that somehow gets one
+    // falls through using (*h).text directly.
+    if !(*h).hrecs.is_null()
+        && sam_hdr_has_rust_hrecs(h.cast_mut())
+        && sam_hdr_rebuild(h.cast_mut()) < 0
+    {
+        return -1;
     }
     if (*h).text.is_null() {
         return 0;
@@ -5492,19 +5487,19 @@ pub unsafe fn sam_hdr_read(_fp: *mut htsFile) -> *mut sam_hdr_t {
             //   h = sam_hdr_sanitise(sam_hdr_dup(fp->fp.cram->header));
             // `cram_dopen` already consumed and parsed the CRAM SAM header
             // into fd->header during hts_open — re-reading would
-            // double-consume bytes off the file. The earlier "swap to a
-            // fresh native read" attempt failed for exactly this reason;
-            // duplicating the cached header matches libhts.
+            // double-consume bytes off the file. We duplicate the cached
+            // header instead.
             //
-            // sam_hdr_dup falls back to hts_sys::sam_hdr_dup when hrecs is
-            // populated (always the case here, since cram_dopen built it
-            // C-side), so the result is C-pool-allocated — keep the
-            // c_owned marker for the destroy path.
+            // Native sam_hdr_dup walks the source hrecs and rebuilds text
+            // + target arrays into a freshly sam_hdr_init()'d header — the
+            // result is fully Rust-allocated (libc::malloc'd text/target
+            // arrays, hrecs=null), so the c_owned marker isn't needed and
+            // sam_hdr_destroy goes through the regular Rust teardown path.
+            // The original cram_fd->header (C-pool-allocated by cram_dopen)
+            // is freed by cram_close when the cram_fd is destroyed.
             let src = crate::htslib_rs::cram::cram_fd_header_ptr((*_fp).fp.cram)
                 .cast::<sam_hdr_t>();
-            let ch = sam_hdr_sanitise(sam_hdr_dup(src));
-            sam_hdr_mark_c_owned(ch);
-            ch
+            sam_hdr_sanitise(sam_hdr_dup(src))
         }
         _ => {
             *crate::htslib_rs::c_compat::__errno_location() =
@@ -5524,25 +5519,12 @@ pub unsafe fn sam_hdr_destroy(_h: *mut sam_hdr_t) {
     if _h.is_null() {
         return;
     }
-    // Headers produced by the C library (e.g. CRAM headers read via
-    // `hts_sys::sam_hdr_read`) own all of their memory through the C
-    // allocator: their `hrecs` tags/strings live in C string pools and
-    // their target arrays, text and sdict are C-allocated. Releasing those
-    // with our own `free()` frees pool-interior pointers and aborts with
-    // `munmap_chunk(): invalid pointer`. Delegate the whole destroy to the
-    // C library for such headers; it also manages `ref_count` itself.
-    if sam_hdr_is_c_owned(_h) {
-        if (*_h).ref_count == 0 {
-            sam_hdr_forget_c_owned(_h);
-            if let Ok(mut scratch) = sam_hdr_text_scratch().lock() {
-                scratch.remove(&(_h as usize));
-            }
-        }
-        // TODO(P5): C-owned headers (e.g. from CRAM reader) must be released via
-        // the libhts allocator; remove once a native CRAM header reader lands.
-        hts_sys::sam_hdr_destroy(_h.cast());
-        return;
-    }
+    // The c_owned tracker (sam_hdr_c_owned_registry) is no longer populated:
+    // the CRAM-read flow now returns a Rust-allocated dup of the cached
+    // cram_fd->header (sam_hdr_dup → sam_c_170_sam_hdr_dup_hrecs walks the
+    // source hrecs and rebuilds text/targets into a freshly sam_hdr_init()'d
+    // header). All sam_hdr_t pointers exposed to production code own only
+    // Rust-allocated memory and follow the standard teardown path below.
     if (*_h).ref_count > 0 {
         (*_h).ref_count -= 1;
         return;
