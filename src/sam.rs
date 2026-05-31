@@ -15,8 +15,10 @@ use crate::htslib_rs::hts::{
     find_file_extension, float_to_le, htsFile, htsLogLevel, hts_bin_maxpos, hts_expr_val_t,
     hts_filter_eval2, hts_filter_t, hts_getline, hts_idx_destroy, hts_idx_finish, hts_idx_init,
     hts_idx_load3, hts_idx_push, hts_idx_save_as, hts_idx_t,
-    hts_itr_multi_bam, hts_itr_multi_next, hts_itr_next, hts_itr_query, hts_itr_regions, hts_itr_t,
-    hts_parse_region, hts_pos_t, hts_reg2bin, hts_reglist_create, hts_reglist_free, hts_reglist_t,
+    hts_itr_multi_bam, hts_itr_multi_cram, hts_itr_multi_next, hts_itr_multi_query_func,
+    hts_itr_next, hts_itr_query, hts_itr_regions, hts_itr_t, hts_name2id_f,
+    hts_parse_region, hts_pos_t, hts_readrec_func, hts_reg2bin, hts_reglist_create,
+    hts_reglist_free, hts_reglist_t, hts_seek_func, hts_tell_func,
     hts_str2int, hts_str2uint, i16_to_le, i32_to_le, isalnum_c, isalpha_c, isdigit_c, islower_c,
     isspace_c, isupper_c, kputc, kputc_, kputll, kputs, kputsn, kputsn_, kputuw, kputw, ks_clear,
     ks_expand, ks_free, ks_release, ks_resize, kstring_t, toupper_c, u16_to_le, u32_to_le,
@@ -5486,12 +5488,21 @@ pub unsafe fn sam_hdr_read(_fp: *mut htsFile) -> *mut sam_hdr_t {
         }
         HTS_FORMAT_SAM => sam_c_1907_sam_hdr_create(_fp),
         HTS_FORMAT_CRAM => {
-            // TODO(P5): native cram_cram_io_c_4717_cram_read_SAM_hdr exists
-            // but tests fail end-to-end when wired in directly (likely a
-            // subtle delta vs the libhts read path that surfaces only when
-            // CRAM containers are decoded downstream). Stay on hts_sys until
-            // the differential is found and fixed.
-            let ch: *mut sam_hdr_t = hts_sys::sam_hdr_read(_fp.cast()).cast();
+            // Mirrors libhts' sam_hdr_read CRAM branch (htslib/sam.c:1939):
+            //   h = sam_hdr_sanitise(sam_hdr_dup(fp->fp.cram->header));
+            // `cram_dopen` already consumed and parsed the CRAM SAM header
+            // into fd->header during hts_open — re-reading would
+            // double-consume bytes off the file. The earlier "swap to a
+            // fresh native read" attempt failed for exactly this reason;
+            // duplicating the cached header matches libhts.
+            //
+            // sam_hdr_dup falls back to hts_sys::sam_hdr_dup when hrecs is
+            // populated (always the case here, since cram_dopen built it
+            // C-side), so the result is C-pool-allocated — keep the
+            // c_owned marker for the destroy path.
+            let src = crate::htslib_rs::cram::cram_fd_header_ptr((*_fp).fp.cram)
+                .cast::<sam_hdr_t>();
+            let ch = sam_hdr_sanitise(sam_hdr_dup(src));
             sam_hdr_mark_c_owned(ch);
             ch
         }
@@ -8834,6 +8845,87 @@ unsafe extern "C" fn sam_c_1638_bam_ptell(fp: *mut c_void) -> i64 {
     ((*fd).block_address << 16) | ((*fd).block_offset as i64 & 0xffff)
 }
 
+// Native equivalent of C `cram_pseek` (htslib/sam.c:1582). The body lives in
+// cram.rs (it touches the private cram_fd_layout struct); this is the thin
+// extern "C" trampoline that matches the hts_seek_func signature plumbed
+// through the iterator.
+unsafe extern "C" fn sam_c_1582_cram_pseek(fp: *mut c_void, offset: i64, whence: c_int) -> c_int {
+    crate::htslib_rs::cram::cram_sam_c_1582_cram_pseek(fp, offset, whence)
+}
+
+// Native equivalent of C `cram_ptell` (htslib/sam.c:1612). Body in cram.rs.
+unsafe extern "C" fn sam_c_1612_cram_ptell(fp: *mut c_void) -> i64 {
+    crate::htslib_rs::cram::cram_sam_c_1612_cram_ptell(fp)
+}
+
+// Native equivalent of C `cram_readrec` (htslib/sam.c:1552):
+//
+//     static int cram_readrec(BGZF *ignored, void *fpv, void *bv,
+//                             int *tid, hts_pos_t *beg, hts_pos_t *end)
+//     {
+//         do {
+//             ret = cram_get_bam_seq(fp->fp.cram, &b);
+//             if (ret < 0) return cram_eof(fp->fp.cram) ? -1 : -2;
+//             if (bam_tag2cigar(b, 1, 1) < 0) return -2;
+//             *tid = b->core.tid; *beg = b->core.pos; *end = bam_endpos(b);
+//             if (fp->filter)
+//                 pass_filter = sam_passes_filter(fp->bam_header, b, fp->filter);
+//             else pass_filter = 1;
+//         } while (pass_filter == 0);
+//         return ret;
+//     }
+//
+// Used as the per-record callback by the CRAM multi-region iterator. Drives
+// the native CRAM decode pipeline (`cram_get_bam_seq_native`), matches C's
+// eof-vs-error disambiguation, applies the CG-overflow CIGAR fixup, and
+// honours the htsFile-level filter expression.
+unsafe extern "C" fn sam_c_1552_cram_readrec(
+    _ignored: *mut crate::htslib_rs::hts::BGZF,
+    fpv: *mut c_void,
+    bv: *mut c_void,
+    tid: *mut c_int,
+    beg: *mut hts_pos_t,
+    end: *mut hts_pos_t,
+) -> c_int {
+    let fp = fpv.cast::<htsFile>();
+    let b = bv.cast::<bam1_t>();
+    let cram_fd = (*fp).fp.cram;
+
+    loop {
+        let ret = crate::htslib_rs::cram::cram_get_bam_seq_native(cram_fd, b);
+        if ret < 0 {
+            return if crate::htslib_rs::cram::cram_cram_io_c_5662_cram_eof(cram_fd) != 0 {
+                -1
+            } else {
+                -2
+            };
+        }
+        if bam_tag2cigar(b, 1, 1) < 0 {
+            return -2;
+        }
+
+        *tid = (*b).core.tid;
+        *beg = (*b).core.pos;
+        *end = bam_endpos(b);
+
+        if !(*fp).filter.is_null() {
+            let pass = sam_c_1535_sam_passes_filter(
+                (*fp).bam_header.cast::<sam_hdr_t>(),
+                b,
+                (*fp).filter,
+            );
+            if pass < 0 {
+                return -2;
+            }
+            if pass == 0 {
+                continue;
+            }
+        }
+
+        return ret;
+    }
+}
+
 unsafe fn sam_c_1649_index_load(
     fp: *mut htsFile,
     fn_: *const c_char,
@@ -9056,18 +9148,48 @@ pub unsafe fn sam_c_1768_sam_itr_regarray(
     if idx.is_null() || hdr.is_null() {
         return std::ptr::null_mut();
     }
-    if (*idx).fmt == HTS_FMT_CRAI {
-        // TODO(P5): no native CRAM region-array iterator yet
-        return hts_sys::sam_itr_regarray(idx.cast(), hdr.cast(), regarray, regcount).cast();
-    }
+
+    let is_cram = (*idx).fmt == HTS_FMT_CRAI;
+    let getid: hts_name2id_f = if is_cram {
+        Some(sam_c_1754_cram_name2id)
+    } else {
+        Some(sam_c_418_bam_name2id_wrapper)
+    };
+    let hdr_arg: *mut c_void = if is_cram {
+        (*idx.cast::<crate::htslib_rs::hts::hts_cram_idx_t>())
+            .cram
+            .cast()
+    } else {
+        hdr.cast()
+    };
+    let multi_query: hts_itr_multi_query_func = if is_cram {
+        Some(hts_itr_multi_cram)
+    } else {
+        Some(hts_itr_multi_bam)
+    };
+    let readrec: hts_readrec_func = if is_cram {
+        Some(sam_c_1552_cram_readrec)
+    } else {
+        Some(sam_readrec)
+    };
+    let seek: hts_seek_func = if is_cram {
+        Some(sam_c_1582_cram_pseek)
+    } else {
+        Some(sam_c_1631_bam_pseek)
+    };
+    let tell: hts_tell_func = if is_cram {
+        Some(sam_c_1612_cram_ptell)
+    } else {
+        Some(sam_c_1638_bam_ptell)
+    };
 
     let mut reg_count = 0;
     let reglist = hts_reglist_create(
         regarray,
         regcount as c_int,
         &mut reg_count,
-        hdr.cast(),
-        Some(sam_c_418_bam_name2id_wrapper),
+        hdr_arg,
+        getid,
     );
     if reglist.is_null() {
         return std::ptr::null_mut();
@@ -9076,12 +9198,12 @@ pub unsafe fn sam_c_1768_sam_itr_regarray(
         idx,
         reglist,
         reg_count,
-        Some(sam_c_418_bam_name2id_wrapper),
-        hdr.cast(),
-        Some(hts_itr_multi_bam),
-        Some(sam_readrec),
-        Some(sam_c_1631_bam_pseek),
-        Some(sam_c_1638_bam_ptell),
+        getid,
+        hdr_arg,
+        multi_query,
+        readrec,
+        seek,
+        tell,
     );
     if itr.is_null() {
         hts_reglist_free(reglist, reg_count);
@@ -9098,21 +9220,51 @@ pub unsafe fn sam_c_1798_sam_itr_regions(
     if idx.is_null() || hdr.is_null() || reglist.is_null() {
         return std::ptr::null_mut();
     }
-    if (*idx).fmt == HTS_FMT_CRAI {
-        // TODO(P5): native cram readrec/pseek/ptell/itr_multi_cram not yet
-        // available; CRAI iterator still delegates to libhts.
-        return hts_sys::sam_itr_regions(idx.cast(), hdr.cast(), reglist.cast(), regcount).cast();
-    }
+
+    let is_cram = (*idx).fmt == HTS_FMT_CRAI;
+    let getid: hts_name2id_f = if is_cram {
+        Some(sam_c_1754_cram_name2id)
+    } else {
+        Some(sam_c_418_bam_name2id_wrapper)
+    };
+    let hdr_arg: *mut c_void = if is_cram {
+        (*idx.cast::<crate::htslib_rs::hts::hts_cram_idx_t>())
+            .cram
+            .cast()
+    } else {
+        hdr.cast()
+    };
+    let multi_query: hts_itr_multi_query_func = if is_cram {
+        Some(hts_itr_multi_cram)
+    } else {
+        Some(hts_itr_multi_bam)
+    };
+    let readrec: hts_readrec_func = if is_cram {
+        Some(sam_c_1552_cram_readrec)
+    } else {
+        Some(sam_readrec)
+    };
+    let seek: hts_seek_func = if is_cram {
+        Some(sam_c_1582_cram_pseek)
+    } else {
+        Some(sam_c_1631_bam_pseek)
+    };
+    let tell: hts_tell_func = if is_cram {
+        Some(sam_c_1612_cram_ptell)
+    } else {
+        Some(sam_c_1638_bam_ptell)
+    };
+
     hts_itr_regions(
         idx,
         reglist,
         regcount as c_int,
-        Some(sam_c_418_bam_name2id_wrapper),
-        hdr.cast(),
-        Some(hts_itr_multi_bam),
-        Some(sam_readrec),
-        Some(sam_c_1631_bam_pseek),
-        Some(sam_c_1638_bam_ptell),
+        getid,
+        hdr_arg,
+        multi_query,
+        readrec,
+        seek,
+        tell,
     )
 }
 

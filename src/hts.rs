@@ -8671,7 +8671,7 @@ pub unsafe fn hts_c_3602_hts_itr_multi_bam(idx: *const hts_idx_t, iter: *mut hts
     0
 }
 
-pub unsafe fn hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut hts_itr_t) -> c_int {
+pub unsafe extern "C" fn hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut hts_itr_t) -> c_int {
     hts_c_3748_hts_itr_multi_cram(idx, iter)
 }
 
@@ -10083,10 +10083,6 @@ pub unsafe fn hts_itr_multi_next(fd: *mut htsFile, iter: *mut hts_itr_t, r: *mut
     let mut end = 0;
     if iter.is_null() || itr_finished(iter) {
         return -1;
-    }
-    if itr_is_cram(iter) && !itr_read_rest(iter) {
-        // TODO(P5): foundational; needs broader cutover
-        return hts_sys::hts_itr_multi_next(fd.cast(), iter.cast(), r);
     }
     let fp = if itr_is_cram(iter) {
         (*fd).fp.cram.cast::<c_void>()
