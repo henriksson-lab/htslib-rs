@@ -1284,15 +1284,11 @@ pub unsafe fn cram_cram_io_c_5446_cram_flush(fd: *mut cram_fd) -> c_int {
     if (*fdl).mode == b'w' as c_int && !(*fdl).ctr.is_null() {
         let ctr = (*fdl).ctr;
         if !(*ctr).slice.is_null() {
-            // cram_update_curr_slice lives in the mirror.
-            crate::cram_mirror::cram_encode::cram_update_curr_slice(
-                ctr.cast(),
-                (*fdl).version,
-            );
+            cram_update_curr_slice_native(ctr, (*fdl).version);
         }
 
         if -1
-            == crate::cram_flush_bridge::cram_cram_io_c_4275_cram_flush_container_mt(
+            == cram_cram_io_c_4275_cram_flush_container_mt(
                 fd,
                 ctr.cast(),
             )
@@ -1324,7 +1320,7 @@ pub unsafe fn cram_flush_container(fd: *mut cram_fd, c: *mut cram_container) -> 
 }
 
 pub unsafe fn cram_flush_container_mt(fd: *mut cram_fd, c: *mut cram_container) -> c_int {
-    crate::cram_flush_bridge::cram_cram_io_c_4275_cram_flush_container_mt(fd, c)
+    cram_cram_io_c_4275_cram_flush_container_mt(fd, c)
 }
 
 pub unsafe fn cram_write_eof_block(fd: *mut cram_fd) -> c_int {
@@ -1559,10 +1555,7 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
                 //   pthread_mutex_unlock(&fd->range_lock);
                 //   return r;
                 let range_ptr = cram_voption_va_arg_ptr::<cram_range_layout>(args);
-                let r = crate::cram_flush_bridge::cram_cram_index_c_573_cram_seek_to_refpos(
-                    fd,
-                    range_ptr.cast(),
-                );
+                let r = cram_cram_index_c_573_cram_seek_to_refpos(fd, range_ptr);
                 libc::pthread_mutex_lock(&mut (*fdl).range_lock);
                 if (*fdl).range.refid != -2 {
                     (*fdl).required_fields |= crate::htslib_rs::cram::SAM_POS;
@@ -1962,10 +1955,10 @@ const CRAM_DS_END: usize = 47;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct cram_range_layout {
-    refid: c_int,
-    start: i64,
-    end: i64,
+pub struct cram_range_layout {
+    pub refid: c_int,
+    pub start: i64,
+    pub end: i64,
 }
 
 #[repr(C)]
@@ -3529,7 +3522,7 @@ unsafe fn cram_flush_result_native(fd_in: *mut cram_fd) -> c_int {
         let fdl = current_fd.cast::<cram_fd_layout>();
 
         if (*fdl).mode == b'w' as c_int
-            && crate::cram_flush_bridge::cram_cram_io_c_4089_cram_flush_container2(
+            && cram_cram_io_c_4089_cram_flush_container2(
                 current_fd,
                 c.cast(),
             ) != 0
@@ -9926,13 +9919,10 @@ pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
     if (*fdl).mode == b'w' as c_int && !(*fdl).ctr.is_null() {
         let ctr_w = (*fdl).ctr;
         if !(*ctr_w).slice.is_null() {
-            crate::cram_mirror::cram_encode::cram_update_curr_slice(
-                ctr_w.cast(),
-                (*fdl).version,
-            );
+            cram_update_curr_slice_native(ctr_w, (*fdl).version);
         }
         if -1
-            == crate::cram_flush_bridge::cram_cram_io_c_4275_cram_flush_container_mt(
+            == cram_cram_io_c_4275_cram_flush_container_mt(
                 fd,
                 ctr_w.cast(),
             )
@@ -9995,7 +9985,7 @@ pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
     while !bl.is_null() {
         let max_rec = (*fdl).seqs_per_slice * (*fdl).slices_per_container;
         let next = (*bl).next;
-        crate::cram_flush_bridge::cram_cram_io_c_3697_free_bam_list((*bl).bams, max_rec);
+        cram_cram_io_c_3697_free_bam_list((*bl).bams, max_rec);
         free(bl.cast());
         bl = next;
     }
@@ -10068,7 +10058,7 @@ pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
 
     // C (cram_io.c:5646-5647): if (fd->index) cram_index_free(fd);
     if !(*fdl).index.is_null() {
-        crate::cram_flush_bridge::cram_cram_index_c_374_cram_index_free(fd);
+        cram_cram_index_c_374_cram_index_free(fd);
     }
 
     // idxfp: only set when a CRAI index was loaded; we don't load one in the
@@ -10168,7 +10158,7 @@ unsafe fn cram_next_container_native(
         // built here. Matches behavior; doesn't affect correctness.)
 
         if -1
-            == crate::cram_flush_bridge::cram_cram_io_c_4275_cram_flush_container_mt(
+            == cram_cram_io_c_4275_cram_flush_container_mt(
                 fd,
                 c.cast(),
             )
@@ -10731,6 +10721,487 @@ pub unsafe fn cram_cram_io_c_3639_cram_new_container(
     (*c).ref_free = 0;
 
     c.cast()
+}
+
+// original: cram_index (htslib/cram/cram_structs.h:720)
+//
+// Byte-faithful Rust mirror of the libhts `cram_index` struct. Lives in
+// production so the native cram_index_free / cram_index_query / etc. can
+// walk the tree without going through the cram-mirror tree.
+#[repr(C)]
+pub struct cram_index_layout {
+    pub nslice: c_int,
+    pub nalloc: c_int,
+    pub e: *mut cram_index_layout,
+    pub refid: c_int,
+    pub start: c_int,
+    pub end: c_int,
+    pub nseq: c_int,
+    pub slice: c_int,
+    pub len: c_int,
+    pub offset: i64,
+    pub e_next: *mut cram_index_layout,
+}
+
+// original: cram_seek_to_refpos (htslib/cram/cram_index.c:573)
+//
+// Walks the CRAI for (refid, pos), seeks the underlying file to the container
+// containing it, and snapshots the new range on the fd. Returns:
+//   0  on success
+//  -1  on a general failure (seek failed)
+//  -2  when no overlapping slice exists (most commonly: empty chromosome)
+pub unsafe fn cram_cram_index_c_573_cram_seek_to_refpos(
+    fd: *mut cram_fd,
+    r: *mut cram_range_layout,
+) -> c_int {
+    use crate::htslib_rs::hts::{HTS_IDX_NOCOOR, HTS_IDX_NONE, HTS_IDX_REST, HTS_IDX_START};
+    let fdl = fd.cast::<cram_fd_layout>();
+    let mut ret: c_int = 0;
+
+    if (*r).refid == HTS_IDX_NONE {
+        ret = -2;
+    } else {
+        let e = cram_cram_index_c_404_cram_index_query(fd, (*r).refid, (*r).start, std::ptr::null_mut());
+        if !e.is_null() {
+            if 0 != cram_seek(fd, (*e).offset as libc::off_t, libc::SEEK_SET) {
+                ret = -1;
+            }
+        } else {
+            ret = -2;
+        }
+    }
+
+    if ret != 0 {
+        libc::pthread_mutex_lock(&mut (*fdl).range_lock);
+        (*fdl).range = *r;
+        libc::pthread_mutex_unlock(&mut (*fdl).range_lock);
+        return ret;
+    }
+
+    libc::pthread_mutex_lock(&mut (*fdl).range_lock);
+    (*fdl).range = *r;
+    if (*r).refid == HTS_IDX_NOCOOR {
+        (*fdl).range.refid = -1;
+        (*fdl).range.start = 0;
+    } else if (*r).refid == HTS_IDX_START || (*r).refid == HTS_IDX_REST {
+        (*fdl).range.refid = -2;
+    }
+    libc::pthread_mutex_unlock(&mut (*fdl).range_lock);
+
+    if !(*fdl).ctr.is_null() {
+        cram_cram_io_c_3705_cram_free_container((*fdl).ctr.cast());
+        if !(*fdl).ctr_mt.is_null() && (*fdl).ctr_mt != (*fdl).ctr {
+            cram_cram_io_c_3705_cram_free_container((*fdl).ctr_mt.cast());
+        }
+        (*fdl).ctr = std::ptr::null_mut();
+        (*fdl).ctr_mt = std::ptr::null_mut();
+        (*fdl).ooc = 0;
+        (*fdl).eof = 0;
+    }
+
+    0
+}
+
+// original: cram_flush_container2 (htslib/cram/cram_io.c:4089)
+//
+// Writes the container header, the compression-header block, and every slice
+// block to disk. If the fd has an attached CRAI index file, drives
+// `cram_index_slice` for each slice. Byte-faithful 1:1 translation.
+pub unsafe fn cram_cram_io_c_4089_cram_flush_container2(
+    fd: *mut cram_fd,
+    c: *mut cram_container,
+) -> c_int {
+    let fdl = fd.cast::<cram_fd_layout>();
+    let cl = c.cast::<cram_container_layout>();
+    let fp = (*fdl).fp;
+
+    if (*cl).curr_slice > 0 && (*cl).slices.is_null() {
+        return -1;
+    }
+
+    let c_offset = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fp);
+
+    if 0 != cram_write_container(fd, c) {
+        return -1;
+    }
+
+    let hdr_size = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fp) - c_offset;
+
+    if 0 != cram_write_block(fd, (*cl).comp_hdr_block.cast()) {
+        return -1;
+    }
+
+    let mut file_offset = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fp);
+
+    let mut i: c_int = 0;
+    while i < (*cl).curr_slice {
+        let s = *(*cl).slices.offset(i as isize);
+        let spos = file_offset - c_offset - hdr_size;
+
+        if 0 != cram_write_block(fd, (*s).hdr_block.cast()) {
+            return -1;
+        }
+
+        let num_blocks = (*(*s).hdr).num_blocks;
+        let mut j: c_int = 0;
+        while j < num_blocks {
+            let blk = *(*s).block.offset(j as isize);
+            if 0 != cram_write_block(fd, blk.cast()) {
+                return -1;
+            }
+            j += 1;
+        }
+
+        file_offset = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fp);
+        let sz = file_offset - c_offset - hdr_size - spos;
+
+        let idxfp = cram_fd_idxfp_get(fd);
+        if !idxfp.is_null() {
+            let rc = cram_cram_index_c_695_cram_index_slice(
+                fd,
+                c,
+                s.cast(),
+                idxfp,
+                c_offset,
+                spos,
+                sz,
+            );
+            if rc < 0 {
+                return -1;
+            }
+        }
+
+        i += 1;
+    }
+
+    0
+}
+
+// original: cram_flush_container_mt (htslib/cram/cram_io.c:4275)
+//
+// Single-threaded path only — the MT pool path is forfeited (see
+// cram_flush_bridge for the rationale; semantically equivalent on-disk).
+pub unsafe fn cram_cram_io_c_4275_cram_flush_container_mt(
+    fd: *mut cram_fd,
+    c: *mut cram_container,
+) -> c_int {
+    // The metrics_lock / reset_metrics block (cram_io.c:4288-4294) only
+    // matters across MT job boundaries; we skip it.
+    crate::cram_flush_bridge::cram_cram_io_c_4143_cram_flush_container(fd, c)
+}
+
+// original: cram_index_build_multiref (htslib/cram/cram_index.c:632)
+//
+// Used in write mode only by `cram_index_slice` below (we never call this on
+// the read side from production). The C source's read-side path calls
+// `cram_decode_slice` to populate (*s).crecs first; in write mode the slice
+// already has its crecs filled by the encoder, so the decode is skipped.
+//
+// Emits one CRAI line per ref/pos run within the multiref slice.
+pub unsafe fn cram_cram_index_c_632_cram_index_build_multiref(
+    _fd: *mut cram_fd,
+    _c: *mut cram_container,
+    s: *mut cram_slice,
+    fp: *mut crate::htslib_rs::hts::BGZF,
+    cpos: libc::off_t,
+    landmark: i32,
+    sz: c_int,
+) -> c_int {
+    let sl = s.cast::<cram_slice_layout>();
+    let mut ref_: i32 = -2;
+    let mut ref_start: i64 = 0;
+    let mut ref_end: i64 = c_int::MIN as i64;
+    let mut buf = [0 as c_char; 1024];
+
+    let mut last_ref: i32 = -9;
+    let mut last_pos: i64 = -9;
+    let num_records = (*(*sl).hdr).num_records;
+    let mut i: i32 = 0;
+    while i < num_records {
+        let rec = (*sl).crecs.add(i as usize);
+        if (*rec).ref_id == last_ref && (*rec).apos < last_pos {
+            libc::fprintf(
+                crate::htslib_rs::c_compat::stderr.cast(),
+                c"CRAM file is not sorted by chromosome / position\n".as_ptr(),
+            );
+            return -2;
+        }
+        last_ref = (*rec).ref_id;
+        last_pos = (*rec).apos;
+
+        if (*rec).ref_id == ref_ {
+            if ref_end < (*rec).aend {
+                ref_end = (*rec).aend;
+            }
+            i += 1;
+            continue;
+        }
+
+        if ref_ != -2 {
+            libc::snprintf(
+                buf.as_mut_ptr(),
+                buf.len(),
+                c"%d\t%ld\t%ld\t%ld\t%d\t%d\n".as_ptr(),
+                ref_,
+                ref_start,
+                ref_end - ref_start + 1,
+                cpos as i64,
+                landmark,
+                sz,
+            );
+            if crate::htslib_rs::bgzf::bgzf_write(
+                fp,
+                buf.as_ptr().cast(),
+                libc::strlen(buf.as_ptr()),
+            ) < 0
+            {
+                return -4;
+            }
+        }
+
+        ref_ = (*rec).ref_id;
+        ref_start = (*rec).apos;
+        ref_end = (*rec).aend;
+        i += 1;
+    }
+
+    if ref_ != -2 {
+        libc::snprintf(
+            buf.as_mut_ptr(),
+            buf.len(),
+            c"%d\t%ld\t%ld\t%ld\t%d\t%d\n".as_ptr(),
+            ref_,
+            ref_start,
+            ref_end - ref_start + 1,
+            cpos as i64,
+            landmark,
+            sz,
+        );
+        if crate::htslib_rs::bgzf::bgzf_write(fp, buf.as_ptr().cast(), libc::strlen(buf.as_ptr()))
+            < 0
+        {
+            return -4;
+        }
+    }
+
+    0
+}
+
+// original: cram_index_slice (htslib/cram/cram_index.c:695)
+//
+// Emits one or more CRAI lines for a slice. Simple case (single-ref): one
+// line. Multi-ref slice (ref_seq_id == -2): one line per ref/pos run via
+// cram_index_build_multiref above.
+pub unsafe fn cram_cram_index_c_695_cram_index_slice(
+    fd: *mut cram_fd,
+    c: *mut cram_container,
+    s: *mut cram_slice,
+    fp: *mut crate::htslib_rs::hts::BGZF,
+    cpos: libc::off_t,
+    spos: libc::off_t,
+    sz: libc::off_t,
+) -> c_int {
+    let mut buf = [0 as c_char; 1024];
+
+    if sz > c_int::MAX as libc::off_t {
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"CRAM slice is too big (%ld bytes)\n".as_ptr(),
+            sz as i64,
+        );
+        return -1;
+    }
+
+    let sl = s.cast::<cram_slice_layout>();
+    if (*(*sl).hdr).ref_seq_id == -2 {
+        cram_cram_index_c_632_cram_index_build_multiref(fd, c, s, fp, cpos, spos as i32, sz as i32)
+    } else {
+        libc::snprintf(
+            buf.as_mut_ptr(),
+            buf.len(),
+            c"%d\t%ld\t%ld\t%ld\t%d\t%d\n".as_ptr(),
+            (*(*sl).hdr).ref_seq_id,
+            (*(*sl).hdr).ref_seq_start,
+            (*(*sl).hdr).ref_seq_span,
+            cpos as i64,
+            spos as c_int,
+            sz as c_int,
+        );
+        if crate::htslib_rs::bgzf::bgzf_write(fp, buf.as_ptr().cast(), libc::strlen(buf.as_ptr()))
+            >= 0
+        {
+            0
+        } else {
+            -4
+        }
+    }
+}
+
+// original: cram_index_query (htslib/cram/cram_index.c:404)
+//
+// Walks the loaded CRAI to find the first slice index entry overlapping
+// (refid, pos). When `from` is non-null this is a continuation search down
+// the e_next linked list. Returns NULL when the position is unindexed or
+// outside the data; otherwise the matching `cram_index_layout *`.
+pub unsafe fn cram_cram_index_c_404_cram_index_query(
+    fd: *mut cram_fd,
+    mut refid: c_int,
+    mut pos: crate::htslib_rs::hts::hts_pos_t,
+    mut from: *mut cram_index_layout,
+) -> *mut cram_index_layout {
+    use crate::htslib_rs::hts::{HTS_IDX_NOCOOR, HTS_IDX_NONE, HTS_IDX_REST, HTS_IDX_START};
+    let fdl = fd.cast::<cram_fd_layout>();
+    let index = (*fdl).index.cast::<cram_index_layout>();
+
+    if !from.is_null() {
+        // Continuation search down the e_next linked list.
+        if refid == HTS_IDX_NOCOOR {
+            refid = -1;
+        }
+        let e = (*from).e_next;
+        if !e.is_null()
+            && (*e).refid == refid
+            && ((*e).start as crate::htslib_rs::hts::hts_pos_t) <= pos
+        {
+            return e;
+        }
+        return std::ptr::null_mut();
+    }
+
+    match refid {
+        HTS_IDX_NONE | HTS_IDX_REST => return std::ptr::null_mut(),
+        v if v == -1 || v == HTS_IDX_NOCOOR => {
+            refid = -1;
+            pos = 0;
+        }
+        HTS_IDX_START => {
+            // Find the ref-bucket with the smallest first-entry offset.
+            let mut min_idx = i64::MAX;
+            let mut i: c_int = 0;
+            let mut j: c_int = -1;
+            while i < (*fdl).index_sz {
+                let bucket = index.add(i as usize);
+                if !(*bucket).e.is_null() && (*(*bucket).e).offset < min_idx {
+                    min_idx = (*(*bucket).e).offset;
+                    j = i;
+                }
+                i += 1;
+            }
+            if j < 0 {
+                return std::ptr::null_mut();
+            }
+            return (*index.add(j as usize)).e;
+        }
+        _ => {
+            if refid < HTS_IDX_NONE || refid + 1 >= (*fdl).index_sz {
+                return std::ptr::null_mut();
+            }
+        }
+    }
+
+    from = index.add((refid + 1) as usize);
+
+    if (*from).e.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    // Binary search to find an overlapping bin.
+    let mut i: c_int = 0;
+    let mut j: c_int = (*index.add((refid + 1) as usize)).nslice - 1;
+    let mut k: c_int = j / 2;
+    while k != i {
+        if (*(*from).e.add(k as usize)).refid > refid {
+            j = k;
+            k = (j - i) / 2 + i;
+            continue;
+        }
+        if (*(*from).e.add(k as usize)).refid < refid {
+            i = k;
+            k = (j - i) / 2 + i;
+            continue;
+        }
+        if ((*(*from).e.add(k as usize)).start as crate::htslib_rs::hts::hts_pos_t) >= pos {
+            j = k;
+            k = (j - i) / 2 + i;
+            continue;
+        }
+        if ((*(*from).e.add(k as usize)).start as crate::htslib_rs::hts::hts_pos_t) < pos {
+            i = k;
+            k = (j - i) / 2 + i;
+            continue;
+        }
+        k = (j - i) / 2 + i;
+    }
+    if j >= 0
+        && ((*(*from).e.add(j as usize)).start as crate::htslib_rs::hts::hts_pos_t) < pos
+        && (*(*from).e.add(j as usize)).refid == refid
+    {
+        i = j;
+    }
+
+    // Move backward to the first overlapping bin.
+    while i > 0
+        && ((*(*from).e.add((i - 1) as usize)).end as crate::htslib_rs::hts::hts_pos_t) >= pos
+    {
+        i -= 1;
+    }
+
+    // And forward if our candidate doesn't cover pos.
+    while i + 1 < (*from).nslice
+        && ((*(*from).e.add(i as usize)).refid < refid
+            || ((*(*from).e.add(i as usize)).end as crate::htslib_rs::hts::hts_pos_t) < pos)
+    {
+        i += 1;
+    }
+
+    (*from).e.add(i as usize)
+}
+
+// original: cram_index_free_recurse (htslib/cram/cram_index.c:364)
+pub unsafe fn cram_cram_index_c_364_cram_index_free_recurse(e: *mut cram_index_layout) {
+    if !(*e).e.is_null() {
+        let mut i: c_int = 0;
+        while i < (*e).nslice {
+            cram_cram_index_c_364_cram_index_free_recurse((*e).e.offset(i as isize));
+            i += 1;
+        }
+        free((*e).e.cast());
+    }
+}
+
+// original: cram_index_free (htslib/cram/cram_index.c:374)
+//
+// Walks the top-level CRAI tree (one entry per reference) and recursively
+// frees each subtree, then releases the index array and clears the fd field.
+pub unsafe fn cram_cram_index_c_374_cram_index_free(fd: *mut cram_fd) {
+    let fdl = fd.cast::<cram_fd_layout>();
+    if (*fdl).index.is_null() {
+        return;
+    }
+    let index = (*fdl).index.cast::<cram_index_layout>();
+    let mut i: c_int = 0;
+    while i < (*fdl).index_sz {
+        cram_cram_index_c_364_cram_index_free_recurse(index.offset(i as isize));
+        i += 1;
+    }
+    free(index.cast());
+    (*fdl).index = std::ptr::null_mut();
+}
+
+// original: free_bam_list (htslib/cram/cram_io.c:3697)
+//
+// Frees each `bam1_t *` slot in `bams[0..max_rec]`, then frees the array
+// itself. Byte-for-byte equivalent to the C original.
+pub unsafe fn cram_cram_io_c_3697_free_bam_list(
+    bams: *mut *mut crate::htslib_rs::sam::bam1_t,
+    max_rec: c_int,
+) {
+    let mut i: c_int = 0;
+    while i < max_rec {
+        crate::htslib_rs::sam::bam_destroy1(*bams.offset(i as isize));
+        i += 1;
+    }
+    free(bams.cast());
 }
 
 /// original: cram_free_container (htslib/cram/cram_io.c:3705)

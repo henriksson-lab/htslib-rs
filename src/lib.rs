@@ -13,18 +13,16 @@ pub mod htslib_rs;
 #[path = "cram/mod.rs"]
 pub mod cram_mirror;
 
-// The cram-mirror tree is c2rust-transpiled htslib internals: it contains
-// extern decls (cram_set_option, kh_*_s2i, zlibVersion, hts_md5_*, ...) that
-// the linker resolves out of libhts.a. That archive ships with `hts_sys`.
-// When production Rust code stops referencing `hts_sys::*` symbols entirely,
-// rustc drops the `hts_sys` rlib from the link graph and `libhts.a` along
-// with it — leaving the cram-mirror externs undefined.
+// The cram-mirror tree has extern decls into libhts (kh_*_s2i, hts_md5_*,
+// cram_set_option, zlibVersion, ...) plus transitive deps on curl/openssl/
+// bzip2/lzma when curl-built libhts is loaded. The cleanest way to keep
+// libhts.a AND its transitive deps on the link line — even when no Rust code
+// references `hts_sys::*` — is to keep `hts_sys` in rustc's rlib graph. This
+// single-byte sizeof reference accomplishes that without runtime cost.
 //
-// This pin keeps `hts_sys` in the dependency graph whenever `cram-mirror`
-// is enabled. It is gated by `cfg(feature = "cram-mirror")`, so the
-// `cargo check --no-default-features` gate (which sets neither parity nor
-// cram-mirror) never sees this reference and the `hts_sys::` count remains
-// at zero in that build.
+// Gated by `cfg(feature = "cram-mirror")` so the
+// `cargo check --no-default-features` gate (neither parity nor cram-mirror)
+// never sees the `hts_sys::` reference.
 #[cfg(feature = "cram-mirror")]
 #[allow(dead_code)]
 const _LIBHTS_LINK_PIN: usize = std::mem::size_of::<hts_sys::sam_hdr_t>();

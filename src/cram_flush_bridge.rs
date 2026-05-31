@@ -95,96 +95,13 @@ unsafe fn htell_offset(fp: *mut HfileLayoutForTell) -> libc::off_t {
     (*fp).offset + (*fp).begin.offset_from((*fp).buffer) as libc::off_t
 }
 
-// original: cram_flush_container2 (htslib/cram/cram_io.c:4089)
-//
-// Common component shared by cram_flush_container{,_mt}: writes the
-// container header, the compression header block, and every slice block; if
-// idxfp is set, also drives cram_index_slice for each slice. Byte-faithful
-// 1:1 translation.
+// cram_flush_container2 moved into production `src/cram.rs`; this shim
+// delegates so callers still routed through the bridge land on the native.
 pub unsafe fn cram_cram_io_c_4089_cram_flush_container2(
     fd: *mut cram_fd,
     c: *mut cram_container,
 ) -> c_int {
-    let mut i: c_int;
-    let mut j: c_int;
-
-    let fd_prefix = fd.cast::<CramFdPrefix>();
-    let fp = (*fd_prefix).fp;
-
-    // C: if (c->curr_slice > 0 && !c->slices) return -1;
-    let cm = c.cast::<mirror_cram_container>();
-    if (*cm).curr_slice > 0 && (*cm).slices.is_null() {
-        return -1;
-    }
-
-    // off_t c_offset = htell(fd->fp);
-    let c_offset = htell_offset(fp);
-
-    // if (0 != cram_write_container(fd, c)) return -1;
-    if 0 != cram_write_container(fd, c) {
-        return -1;
-    }
-
-    // off_t hdr_size = htell(fd->fp) - c_offset;
-    let hdr_size = htell_offset(fp) - c_offset;
-
-    // if (0 != cram_write_block(fd, c->comp_hdr_block)) return -1;
-    if 0 != cram_write_block(fd, (*cm).comp_hdr_block.cast::<cram_block>()) {
-        return -1;
-    }
-
-    // off_t file_offset = htell(fd->fp);
-    let mut file_offset = htell_offset(fp);
-
-    // for (i = 0; i < c->curr_slice; i++)
-    i = 0;
-    while i < (*cm).curr_slice {
-        let s = *(*cm).slices.offset(i as isize);
-        let spos = file_offset - c_offset - hdr_size;
-
-        // if (0 != cram_write_block(fd, s->hdr_block)) return -1;
-        if 0 != cram_write_block(fd, (*s).hdr_block.cast::<cram_block>()) {
-            return -1;
-        }
-
-        // for (j = 0; j < s->hdr->num_blocks; j++)
-        let s_hdr = (*s).hdr;
-        let num_blocks = (*s_hdr).num_blocks;
-        j = 0;
-        while j < num_blocks {
-            let blk = *(*s).block.offset(j as isize);
-            if 0 != cram_write_block(fd, blk.cast::<cram_block>()) {
-                return -1;
-            }
-            j += 1;
-        }
-
-        file_offset = htell_offset(fp);
-        let sz = file_offset - c_offset - hdr_size - spos;
-
-        // if (fd->idxfp) { cram_index_slice(...) }
-        let idxfp = crate::htslib_rs::cram::cram_fd_idxfp_get(fd);
-        if !idxfp.is_null() {
-            // cram_index_slice signature in mirror takes the mirror types,
-            // but they're #[repr(C)] and ABI-identical to the production ones.
-            let rc = cram_cram_index_c_695_cram_index_slice(
-                fd.cast(),
-                c.cast(),
-                s.cast(),
-                idxfp.cast(),
-                c_offset,
-                spos,
-                sz,
-            );
-            if rc < 0 {
-                return -1;
-            }
-        }
-
-        i += 1;
-    }
-
-    0
+    crate::htslib_rs::cram::cram_cram_io_c_4089_cram_flush_container2(fd, c)
 }
 
 // original: cram_flush_container (htslib/cram/cram_io.c:4143)
@@ -202,38 +119,13 @@ pub unsafe fn cram_cram_io_c_4143_cram_flush_container(
     cram_cram_io_c_4089_cram_flush_container2(fd, c)
 }
 
-// original: cram_flush_container_mt (htslib/cram/cram_io.c:4275)
-//
-// Multi-threaded flush dispatcher. The single-threaded branch (the common
-// case when no thread pool was attached via CRAM_OPT_NTHREADS /
-// CRAM_OPT_THREAD_POOL) is translated verbatim:
-//
-//     if (!fd->pool) return cram_flush_container(fd, c);
-//
-// The multi-threaded branch (hts_tpool_dispatch2 → cram_flush_thread →
-// cram_flush_result) depends on several still-unported helpers in C:
-//   * cram_flush_thread / cram_flush_result (cram_io.c:4156, 4168) which own
-//     the `cram_job` work-item plumbing and the container reference-counted
-//     teardown
-//   * reset_metrics (cram_io.c:4238) which inspects fd->m[] and unlocks
-//     metrics_lock while flushing the rqueue
-// These are out of scope for this step. Even when fd->pool is set we run
-// the single-threaded path: this is a faithful semantic equivalent (same
-// on-disk output, same return code) at the cost of forfeiting concurrency
-// for the duration of the flush. The MT-pool TODO is tracked in the
-// production cram_close fallback (which still routes to hts_sys::cram_close
-// when pool/rqueue are set so the existing job queue can be drained
-// safely); cram_flush itself takes the native ST path unconditionally.
+// cram_flush_container_mt moved into production `src/cram.rs`; this shim
+// delegates.
 pub unsafe fn cram_cram_io_c_4275_cram_flush_container_mt(
     fd: *mut cram_fd,
     c: *mut cram_container,
 ) -> c_int {
-    // The metrics_lock / reset_metrics block (cram_io.c:4288-4294) only
-    // matters across MT job boundaries; the ST fallback never crosses
-    // them, so we skip it. fd->last_mapped is set by reset_metrics but
-    // also recomputed for each container; the ST path's snapshot is what
-    // the encoder reads next.
-    cram_cram_io_c_4143_cram_flush_container(fd, c)
+    crate::htslib_rs::cram::cram_cram_io_c_4275_cram_flush_container_mt(fd, c)
 }
 
 // original: cram_write_eof_block (htslib/cram/cram_io.c:5474)
@@ -451,49 +343,15 @@ struct CramFdLayoutForSeek {
     // the production cram_fd_layout in src/cram.rs.
 }
 
-// original: free_bam_list (htslib/cram/cram_io.c:3697)
-//
-// Frees each `bam1_t *` slot in `bams[0..max_rec]`, then frees the array
-// itself. Byte-for-byte equivalent to the C original.
+// free_bam_list / cram_index_free / cram_index_free_recurse moved into
+// production `src/cram.rs`. These shims delegate so anything still calling
+// the bridge path lands on the canonical native.
 pub unsafe fn cram_cram_io_c_3697_free_bam_list(bams: *mut *mut bam1_t, max_rec: c_int) {
-    let mut i: c_int = 0;
-    while i < max_rec {
-        bam_destroy1(*bams.offset(i as isize));
-        i += 1;
-    }
-    free(bams.cast());
+    crate::htslib_rs::cram::cram_cram_io_c_3697_free_bam_list(bams, max_rec);
 }
 
-// original: cram_index_free_recurse (htslib/cram/cram_index.c:364)
-//
-// Recursively frees the per-node `e` child array of a CRAI tree node.
-unsafe fn cram_cram_index_c_364_cram_index_free_recurse(e: *mut CramIndexLayout) {
-    if !(*e).e.is_null() {
-        let mut i: c_int = 0;
-        while i < (*e).nslice {
-            cram_cram_index_c_364_cram_index_free_recurse((*e).e.offset(i as isize));
-            i += 1;
-        }
-        free((*e).e.cast());
-    }
-}
-
-// original: cram_index_free (htslib/cram/cram_index.c:374)
-//
-// Walks the top-level CRAI tree (one entry per reference) and recursively
-// frees each subtree, then releases the index array and clears the fd field.
 pub unsafe fn cram_cram_index_c_374_cram_index_free(fd: *mut cram_fd) {
-    let fdl = fd.cast::<CramFdLayoutForSeek>();
-    if (*fdl).index.is_null() {
-        return;
-    }
-    let mut i: c_int = 0;
-    while i < (*fdl).index_sz {
-        cram_cram_index_c_364_cram_index_free_recurse((*fdl).index.offset(i as isize));
-        i += 1;
-    }
-    free((*fdl).index.cast());
-    (*fdl).index = std::ptr::null_mut();
+    crate::htslib_rs::cram::cram_cram_index_c_374_cram_index_free(fd);
 }
 
 // original: cram_seek_to_refpos (htslib/cram/cram_index.c:573)
@@ -506,66 +364,11 @@ pub unsafe fn cram_cram_index_c_374_cram_index_free(fd: *mut cram_fd) {
 // Byte-faithful 1:1 translation; on err the fd->range snapshot is still
 // updated to match the input range (matching the C source's deliberate
 // "identical behaviour to the previous code" comment at cram_index.c:614).
+// cram_seek_to_refpos moved into production `src/cram.rs`. This shim
+// delegates so anything still calling the bridge path lands on the native.
 pub unsafe fn cram_cram_index_c_573_cram_seek_to_refpos(
     fd: *mut cram_fd,
     r: *mut CramRangeLayout,
 ) -> c_int {
-    let fdl = fd.cast::<CramFdLayoutForSeek>();
-    let mut ret: c_int = 0;
-
-    // C: if (r->refid == HTS_IDX_NONE) { ret = -2; goto err; }
-    if (*r).refid == HTS_IDX_NONE {
-        ret = -2;
-    } else {
-        // Ideally use an index, so see if we have one.
-        let e = crate::cram_mirror::cram_index::cram_cram_index_c_404_cram_index_query(
-            fd.cast(),
-            (*r).refid,
-            (*r).start,
-            std::ptr::null_mut(),
-        );
-        if !e.is_null() {
-            // C: if (0 != cram_seek(fd, e->offset, SEEK_SET)) { ret = -1; goto err; }
-            let e_layout = e.cast::<CramIndexLayout>();
-            if 0 != cram_seek(fd, (*e_layout).offset as libc::off_t, libc::SEEK_SET) {
-                ret = -1;
-            }
-        } else {
-            // Absent from index, but this most likely means it simply has no data.
-            ret = -2;
-        }
-    }
-
-    if ret != 0 {
-        // err: branch. fd->range is still updated to match the input range,
-        // matching the C source exactly.
-        libc::pthread_mutex_lock(&mut (*fdl).range_lock);
-        (*fdl).range = *r;
-        libc::pthread_mutex_unlock(&mut (*fdl).range_lock);
-        return ret;
-    }
-
-    // Success path.
-    libc::pthread_mutex_lock(&mut (*fdl).range_lock);
-    (*fdl).range = *r;
-    if (*r).refid == HTS_IDX_NOCOOR {
-        (*fdl).range.refid = -1;
-        (*fdl).range.start = 0;
-    } else if (*r).refid == HTS_IDX_START || (*r).refid == HTS_IDX_REST {
-        (*fdl).range.refid = -2; // special case in cram_next_slice
-    }
-    libc::pthread_mutex_unlock(&mut (*fdl).range_lock);
-
-    if !(*fdl).ctr.is_null() {
-        cram_free_container((*fdl).ctr);
-        if !(*fdl).ctr_mt.is_null() && (*fdl).ctr_mt != (*fdl).ctr {
-            cram_free_container((*fdl).ctr_mt);
-        }
-        (*fdl).ctr = std::ptr::null_mut();
-        (*fdl).ctr_mt = std::ptr::null_mut();
-        (*fdl).ooc = 0;
-        (*fdl).eof = 0;
-    }
-
-    0
+    crate::htslib_rs::cram::cram_cram_index_c_573_cram_seek_to_refpos(fd, r.cast())
 }
