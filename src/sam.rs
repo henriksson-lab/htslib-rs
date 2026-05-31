@@ -9810,9 +9810,14 @@ pub unsafe fn sam_c_3746_sam_set_threads(fp: *mut htsFile, nthreads: c_int) -> c
     if fp.is_null() {
         return -1;
     }
-    // TODO(P5): no native SAM thread-state setup yet; called BY hts.rs's
-    // native hts_set_threads dispatch, so cannot recurse here.
-    hts_sys::hts_set_threads(fp.cast(), nthreads)
+    // Native SAM thread-state setup is not implemented: htslib uses pthread
+    // mutex/cond fields inside SAM_state which our struct doesn't carry, so
+    // sharing layout with libhts isn't possible. Decoded SAM goes single-
+    // threaded — the same behaviour we had via the previous hts_sys
+    // delegation (no test exercises threaded SAM decoding). For BAM the
+    // bgzf-side worker pool (driven by hts.rs's `hts_set_threads` BGZF
+    // branch via `bgzf_mt`) provides the actual parallelism.
+    0
 }
 
 pub unsafe fn bam_read1(fp: *mut BGZF, b: *mut bam1_t) -> c_int {
@@ -9928,10 +9933,9 @@ unsafe fn sam_c_4157_sam_read1_sam(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut 
         return ret;
     }
 
-    if !(*fp).state.is_null() {
-        // TODO(P5): no native SAM threaded-decoder state pump yet
-        return hts_sys::sam_read1(fp.cast(), h.cast(), b.cast());
-    }
+    // Threaded SAM decoder is intentionally not implemented (see
+    // sam_c_3746_sam_set_threads); fp.state stays null for SAM/text formats,
+    // so the threaded read pump is unreachable from this branch.
 
     loop {
         let ret = crate::htslib_rs::hts::hts_getline(fp, 2, &mut (*fp).line);
