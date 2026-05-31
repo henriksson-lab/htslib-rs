@@ -5278,10 +5278,13 @@ unsafe fn sam_hdr_write_cram(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
     // here would fail the whole CRAM write. Strip them so the parse succeeds;
     // those lines carry no information by definition.
     let sanitized = strip_bare_comment_lines(&header_text);
-    // TODO(P5): native sam_hdr_parse exists at sam.rs:2413, but native parse
-    // does not populate hrecs and the libhts cram writer expects hrecs-backed
-    // headers; the parse/write/destroy trio stays C-side until a native CRAM
-    // header writer lands.
+    // TODO(P5): native sam_hdr_parse exists at sam.rs:2413 and now fills
+    // hrecs via the always-fill-hrecs invariant; the obvious swap (native
+    // parse + native write + native destroy) crashes the CRAM writer
+    // because libhts' CRAM-write path re-derefs hrecs internally with C
+    // pool-allocated layouts — Rust-allocated hrecs is incompatible there.
+    // The trio stays C-side until a native CRAM header writer
+    // (`cram_write_SAM_hdr`, Agent A's pending blocker) lands.
     let hts_hdr = hts_sys::sam_hdr_parse(sanitized.len(), sanitized.as_ptr().cast());
     if hts_hdr.is_null() {
         return -1;
@@ -5483,7 +5486,11 @@ pub unsafe fn sam_hdr_read(_fp: *mut htsFile) -> *mut sam_hdr_t {
         }
         HTS_FORMAT_SAM => sam_c_1907_sam_hdr_create(_fp),
         HTS_FORMAT_CRAM => {
-            // TODO(P5): no native CRAM header reader yet
+            // TODO(P5): native cram_cram_io_c_4717_cram_read_SAM_hdr exists
+            // but tests fail end-to-end when wired in directly (likely a
+            // subtle delta vs the libhts read path that surfaces only when
+            // CRAM containers are decoded downstream). Stay on hts_sys until
+            // the differential is found and fixed.
             let ch: *mut sam_hdr_t = hts_sys::sam_hdr_read(_fp.cast()).cast();
             sam_hdr_mark_c_owned(ch);
             ch

@@ -6867,8 +6867,12 @@ pub unsafe fn hts_idx_destroy(idx: *mut hts_idx_t) {
         return;
     }
     if (*idx).fmt == HTS_FMT_CRAI {
-        // TODO(P5): foundational; needs broader cutover
-        hts_sys::hts_idx_destroy(idx.cast());
+        // CRAI: idx is actually an `hts_cram_idx_t` (sam.c:1649). Free the
+        // CRAI b-tree owned by the cram_fd, then the wrapper allocation
+        // itself. Matches htslib/hts.c:2696.
+        let cidx = idx.cast::<hts_cram_idx_t>();
+        crate::cram_flush_bridge::cram_cram_index_c_374_cram_index_free((*cidx).cram);
+        crate::htslib_rs::c_compat::free(cidx.cast());
         return;
     }
     for i in 0..(*idx).m {
@@ -8335,16 +8339,20 @@ pub unsafe fn hts_idx_load3(
     fmt: c_int,
     flags: c_int,
 ) -> *mut hts_idx_t {
-    if fmt == HTS_FMT_BAI
-        || fmt == HTS_FMT_CSI
-        || fmt == HTS_FMT_TBI as c_int
-        || (fmt == 0 && !fnidx.is_null())
-    {
-        if let Some(idx) = hts_idx_load3_local_index(fn_, fnidx, fmt) {
-            return idx;
-        }
+    // Mirrors htslib/hts.c:4989 sam_hdr_load3. When fnidx is null we have
+    // to resolve a sidecar index path (or `fn##idx##path` inline form);
+    // delegate to idx_find_and_load. With fnidx, the file is read directly
+    // via idx_read after an optional remote-fetch (handled by
+    // hts_idx_load3_local_index when the path is on local disk).
+    if fnidx.is_null() {
+        return hts_c_4925_idx_find_and_load(fn_, fmt, flags);
     }
-    hts_sys::hts_idx_load3(fn_, fnidx, fmt, flags).cast()
+    if let Some(idx) = hts_idx_load3_local_index(fn_, fnidx, fmt) {
+        return idx;
+    }
+    // Path exists check failed (e.g. remote fnidx not yet cached); fall
+    // through to the find_and_load resolver which handles remote-fetch.
+    hts_c_4925_idx_find_and_load(fn_, fmt, flags)
 }
 
 pub unsafe fn hts_idx_load(fn_: *const c_char, fmt: c_int) -> *mut hts_idx_t {
