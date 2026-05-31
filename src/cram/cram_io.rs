@@ -29,7 +29,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 use crate::htslib_rs::c_compat::malloc;
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::{c_char, c_int, c_uint, c_void};
 use std::io::{Read, Write};
 
 // Stubs without a native equivalent yet still delegate to libhts via these
@@ -38,7 +38,7 @@ use std::io::{Read, Write};
 // took over.
 unsafe extern "C" {
     #[link_name = "cram_write_SAM_hdr"]
-    fn htslib_cram_write_sam_hdr(fd: *mut hts_sys::cram_fd, hdr: *mut hts_sys::sam_hdr_t) -> c_int;
+    fn htslib_cram_write_sam_hdr(fd: *mut crate::htslib_rs::hts::cram_fd, hdr: *mut crate::htslib_rs::sam::sam_hdr_t) -> c_int;
 }
 
 unsafe fn copy_vec_to_malloc(mut out: Vec<u8>, out_size: *mut usize) -> *mut c_char {
@@ -123,7 +123,7 @@ pub unsafe fn cram_cram_io_c_1313_lzma_mem_inflate(
 
 // original: cram_compress_by_method (htslib/cram/cram_io.c:1756)
 pub unsafe fn cram_cram_io_c_1756_cram_compress_by_method(
-    _s: *mut hts_sys::cram_slice,
+    _s: *mut crate::htslib_rs::cram::cram_slice,
     in_: *mut c_char,
     in_size: usize,
     _content_id: c_int,
@@ -145,10 +145,10 @@ pub unsafe fn cram_cram_io_c_1756_cram_compress_by_method(
 
 // original: cram_compress_block3 (htslib/cram/cram_io.c:1912)
 pub unsafe fn cram_cram_io_c_1912_cram_compress_block3(
-    fd: *mut hts_sys::cram_fd,
-    _s: *mut hts_sys::cram_slice,
-    b: *mut hts_sys::cram_block,
-    metrics: *mut hts_sys::cram_metrics,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    _s: *mut crate::htslib_rs::cram::cram_slice,
+    b: *mut crate::htslib_rs::cram::cram_block,
+    metrics: *mut crate::htslib_rs::cram::cram_metrics,
     method: c_int,
     level: c_int,
     _recurse: c_int,
@@ -166,10 +166,10 @@ pub unsafe fn cram_cram_io_c_1912_cram_compress_block3(
 
 // original: cram_compress_block2 (htslib/cram/cram_io.c:2316)
 pub unsafe fn cram_cram_io_c_2316_cram_compress_block2(
-    fd: *mut hts_sys::cram_fd,
-    s: *mut hts_sys::cram_slice,
-    b: *mut hts_sys::cram_block,
-    metrics: *mut hts_sys::cram_metrics,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    s: *mut crate::htslib_rs::cram::cram_slice,
+    b: *mut crate::htslib_rs::cram::cram_block,
+    metrics: *mut crate::htslib_rs::cram::cram_metrics,
     method: c_int,
     level: c_int,
 ) -> c_int {
@@ -185,9 +185,9 @@ pub unsafe fn cram_cram_io_c_2316_cram_compress_block2(
 
 // original: cram_compress_block (htslib/cram/cram_io.c:2322)
 pub unsafe fn cram_cram_io_c_2322_cram_compress_block(
-    fd: *mut hts_sys::cram_fd,
-    b: *mut hts_sys::cram_block,
-    metrics: *mut hts_sys::cram_metrics,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    b: *mut crate::htslib_rs::cram::cram_block,
+    metrics: *mut crate::htslib_rs::cram::cram_metrics,
     method: c_int,
     level: c_int,
 ) -> c_int {
@@ -202,7 +202,7 @@ pub unsafe fn cram_cram_io_c_2322_cram_compress_block(
 
 // original: cram_populate_ref (htslib/cram/cram_io.c:2977)
 pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
-    fd: *mut hts_sys::cram_fd,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
     id: c_int,
     r: *mut c_void,
 ) -> c_int {
@@ -211,10 +211,10 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
 
 // original: cram_get_ref (htslib/cram/cram_io.c:3409)
 pub unsafe fn cram_cram_io_c_3409_cram_get_ref(
-    fd: *mut hts_sys::cram_fd,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
     id: c_int,
-    start: hts_sys::hts_pos_t,
-    end: hts_sys::hts_pos_t,
+    start: crate::htslib_rs::hts::hts_pos_t,
+    end: crate::htslib_rs::hts::hts_pos_t,
 ) -> *mut c_char {
     crate::htslib_rs::cram::cram_cram_io_c_3409_cram_get_ref(fd.cast(), id, start, end)
 }
@@ -223,31 +223,31 @@ pub unsafe fn cram_cram_io_c_3409_cram_get_ref(
 pub unsafe fn cram_cram_io_c_3637_cram_new_container(
     nrec: c_int,
     nslice: c_int,
-) -> *mut hts_sys::cram_container {
+) -> *mut crate::htslib_rs::cram::cram_container {
     crate::htslib_rs::cram::cram_cram_io_c_3639_cram_new_container(nrec, nslice)
 }
 
 // original: cram_free_container (htslib/cram/cram_io.c:3703)
-pub unsafe fn cram_cram_io_c_3703_cram_free_container(c: *mut hts_sys::cram_container) {
+pub unsafe fn cram_cram_io_c_3703_cram_free_container(c: *mut crate::htslib_rs::cram::cram_container) {
     crate::htslib_rs::cram::cram_cram_io_c_3705_cram_free_container(c)
 }
 
 // original: cram_read_container (htslib/cram/cram_io.c:3786)
 pub unsafe fn cram_cram_io_c_3786_cram_read_container(
-    fd: *mut hts_sys::cram_fd,
-) -> *mut hts_sys::cram_container {
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+) -> *mut crate::htslib_rs::cram::cram_container {
     crate::htslib_rs::cram::cram_cram_io_c_3788_cram_read_container(fd)
 }
 
 // original: cram_container_size (htslib/cram/cram_io.c:3945)
-pub unsafe fn cram_cram_io_c_3945_cram_container_size(c: *mut hts_sys::cram_container) -> c_int {
+pub unsafe fn cram_cram_io_c_3945_cram_container_size(c: *mut crate::htslib_rs::cram::cram_container) -> c_int {
     crate::htslib_rs::cram::cram_cram_io_c_3947_cram_container_size(c)
 }
 
 // original: cram_store_container (htslib/cram/cram_io.c:3958)
 pub unsafe fn cram_cram_io_c_3958_cram_store_container(
-    fd: *mut hts_sys::cram_fd,
-    c: *mut hts_sys::cram_container,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    c: *mut crate::htslib_rs::cram::cram_container,
     dat: *mut c_char,
     size: *mut c_int,
 ) -> c_int {
@@ -256,32 +256,32 @@ pub unsafe fn cram_cram_io_c_3958_cram_store_container(
 
 // original: cram_write_container (htslib/cram/cram_io.c:4021)
 pub unsafe fn cram_cram_io_c_4021_cram_write_container(
-    fd: *mut hts_sys::cram_fd,
-    h: *mut hts_sys::cram_container,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    h: *mut crate::htslib_rs::cram::cram_container,
 ) -> c_int {
     crate::htslib_rs::cram::cram_write_container(fd.cast(), h)
 }
 
 // original: cram_flush_container2 (htslib/cram/cram_io.c:4087)
 pub unsafe fn cram_cram_io_c_4087_cram_flush_container2(
-    fd: *mut hts_sys::cram_fd,
-    c: *mut hts_sys::cram_container,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    c: *mut crate::htslib_rs::cram::cram_container,
 ) -> c_int {
     crate::cram_flush_bridge::cram_cram_io_c_4089_cram_flush_container2(fd.cast(), c)
 }
 
 // original: cram_flush_container (htslib/cram/cram_io.c:4141)
 pub unsafe fn cram_cram_io_c_4141_cram_flush_container(
-    fd: *mut hts_sys::cram_fd,
-    c: *mut hts_sys::cram_container,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    c: *mut crate::htslib_rs::cram::cram_container,
 ) -> c_int {
     crate::cram_flush_bridge::cram_cram_io_c_4143_cram_flush_container(fd.cast(), c)
 }
 
 #[repr(C)]
 pub struct cram_job {
-    pub fd: *mut hts_sys::cram_fd,
-    pub c: *mut hts_sys::cram_container,
+    pub fd: *mut crate::htslib_rs::hts::cram_fd,
+    pub c: *mut crate::htslib_rs::cram::cram_container,
 }
 
 // original: cram_flush_thread (htslib/cram/cram_io.c:4154)
@@ -290,59 +290,59 @@ pub unsafe extern "C" fn cram_cram_io_c_4154_cram_flush_thread(arg: *mut c_void)
 }
 
 // original: cram_flush_result (htslib/cram/cram_io.c:4166)
-pub unsafe fn cram_cram_io_c_4166_cram_flush_result(_fd: *mut hts_sys::cram_fd) -> c_int {
+pub unsafe fn cram_cram_io_c_4166_cram_flush_result(_fd: *mut crate::htslib_rs::hts::cram_fd) -> c_int {
     0
 }
 
 // original: cram_flush_container_mt (htslib/cram/cram_io.c:4273)
 pub unsafe fn cram_cram_io_c_4273_cram_flush_container_mt(
-    fd: *mut hts_sys::cram_fd,
-    c: *mut hts_sys::cram_container,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    c: *mut crate::htslib_rs::cram::cram_container,
 ) -> c_int {
     crate::cram_flush_bridge::cram_cram_io_c_4275_cram_flush_container_mt(fd.cast(), c)
 }
 
 // original: cram_free_slice_header (htslib/cram/cram_io.c:4409)
 // Native body lives in src/cram.rs as cram_cram_io_c_4409_cram_free_slice_header.
-pub unsafe fn cram_cram_io_c_4407_cram_free_slice_header(hdr: *mut hts_sys::cram_block_slice_hdr) {
+pub unsafe fn cram_cram_io_c_4407_cram_free_slice_header(hdr: *mut crate::htslib_rs::cram::cram_block_slice_hdr) {
     crate::htslib_rs::cram::cram_cram_io_c_4409_cram_free_slice_header(hdr)
 }
 
 // original: cram_free_slice (htslib/cram/cram_io.c:4421)
 // Native body lives in src/cram.rs as cram_cram_io_c_4421_cram_free_slice.
-pub unsafe fn cram_cram_io_c_4419_cram_free_slice(s: *mut hts_sys::cram_slice) {
+pub unsafe fn cram_cram_io_c_4419_cram_free_slice(s: *mut crate::htslib_rs::cram::cram_slice) {
     crate::htslib_rs::cram::cram_cram_io_c_4421_cram_free_slice(s)
 }
 
 // original: cram_new_slice (htslib/cram/cram_io.c:4506)
 // Native body lives in src/cram.rs as cram_cram_io_c_4506_cram_new_slice.
 pub unsafe fn cram_cram_io_c_4504_cram_new_slice(
-    type_: hts_sys::cram_content_type,
+    type_: crate::htslib_rs::cram::cram_content_type,
     nrecs: c_int,
-) -> *mut hts_sys::cram_slice {
+) -> *mut crate::htslib_rs::cram::cram_slice {
     crate::htslib_rs::cram::cram_cram_io_c_4506_cram_new_slice(type_, nrecs)
 }
 
 // original: cram_read_slice (htslib/cram/cram_io.c:4568)
 // Native body lives in src/cram.rs as cram_cram_io_c_4568_cram_read_slice.
 pub unsafe fn cram_cram_io_c_4566_cram_read_slice(
-    fd: *mut hts_sys::cram_fd,
-) -> *mut hts_sys::cram_slice {
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+) -> *mut crate::htslib_rs::cram::cram_slice {
     crate::htslib_rs::cram::cram_cram_io_c_4568_cram_read_slice(fd)
 }
 
 // original: cram_read_SAM_hdr (htslib/cram/cram_io.c:4715)
 pub unsafe fn cram_cram_io_c_4715_cram_read_SAM_hdr(
-    fd: *mut hts_sys::cram_fd,
-) -> *mut hts_sys::sam_hdr_t {
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+) -> *mut crate::htslib_rs::sam::sam_hdr_t {
     crate::htslib_rs::cram::cram_cram_io_c_4717_cram_read_SAM_hdr(fd.cast()).cast()
 }
 
 // original: cram_write_SAM_hdr (htslib/cram/cram_io.c:4889)
 // TODO(P5): no native cram_write_SAM_hdr yet
 pub unsafe fn cram_cram_io_c_4889_cram_write_SAM_hdr(
-    fd: *mut hts_sys::cram_fd,
-    hdr: *mut hts_sys::sam_hdr_t,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    hdr: *mut crate::htslib_rs::sam::sam_hdr_t,
 ) -> c_int {
     htslib_cram_write_sam_hdr(fd, hdr)
 }
@@ -351,22 +351,22 @@ pub unsafe fn cram_cram_io_c_4889_cram_write_SAM_hdr(
 pub unsafe fn cram_cram_io_c_5262_cram_open(
     filename: *const c_char,
     mode: *const c_char,
-) -> *mut hts_sys::cram_fd {
+) -> *mut crate::htslib_rs::hts::cram_fd {
     crate::htslib_rs::cram::cram_cram_io_c_5264_cram_open(filename, mode).cast()
 }
 
 // original: cram_dopen (htslib/cram/cram_io.c:5287)
 pub unsafe fn cram_cram_io_c_5287_cram_dopen(
-    fp: *mut hts_sys::hFILE,
+    fp: *mut crate::htslib_rs::hts::hFILE,
     filename: *const c_char,
     mode: *const c_char,
-) -> *mut hts_sys::cram_fd {
+) -> *mut crate::htslib_rs::hts::cram_fd {
     crate::htslib_rs::cram::cram_cram_io_c_5289_cram_dopen(fp.cast(), filename, mode).cast()
 }
 
 // original: cram_seek (htslib/cram/cram_io.c:5429)
 pub unsafe fn cram_cram_io_c_5429_cram_seek(
-    fd: *mut hts_sys::cram_fd,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
     offset: libc::off_t,
     whence: c_int,
 ) -> c_int {
@@ -374,17 +374,17 @@ pub unsafe fn cram_cram_io_c_5429_cram_seek(
 }
 
 // original: cram_flush (htslib/cram/cram_io.c:5444)
-pub unsafe fn cram_cram_io_c_5444_cram_flush(fd: *mut hts_sys::cram_fd) -> c_int {
+pub unsafe fn cram_cram_io_c_5444_cram_flush(fd: *mut crate::htslib_rs::hts::cram_fd) -> c_int {
     crate::htslib_rs::cram::cram_cram_io_c_5446_cram_flush(fd.cast())
 }
 
 // original: cram_write_eof_block (htslib/cram/cram_io.c:5472)
-pub unsafe fn cram_cram_io_c_5472_cram_write_eof_block(fd: *mut hts_sys::cram_fd) -> c_int {
+pub unsafe fn cram_cram_io_c_5472_cram_write_eof_block(fd: *mut crate::htslib_rs::hts::cram_fd) -> c_int {
     crate::cram_flush_bridge::cram_cram_io_c_5474_cram_write_eof_block(fd.cast())
 }
 
 // original: cram_close (htslib/cram/cram_io.c:5556)
-pub unsafe fn cram_cram_io_c_5556_cram_close(fd: *mut hts_sys::cram_fd) -> c_int {
+pub unsafe fn cram_cram_io_c_5556_cram_close(fd: *mut crate::htslib_rs::hts::cram_fd) -> c_int {
     crate::htslib_rs::cram::cram_cram_io_c_5558_cram_close(fd.cast())
 }
 
@@ -394,14 +394,14 @@ pub unsafe fn cram_cram_io_c_5556_cram_close(fd: *mut hts_sys::cram_fd) -> c_int
 
 // original: cram_set_voption (htslib/cram/cram_io.c:5692)
 pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
-    fd: *mut hts_sys::cram_fd,
-    opt: hts_sys::hts_fmt_option,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    opt: c_uint,
     args: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> c_int {
     crate::htslib_rs::cram::cram_cram_io_c_5692_cram_set_voption(fd.cast(), opt, args)
 }
 
 // original: cram_check_EOF (htslib/cram/cram_io.c:5958)
-pub unsafe fn cram_cram_io_c_5958_cram_check_EOF(fd: *mut hts_sys::cram_fd) -> c_int {
+pub unsafe fn cram_cram_io_c_5958_cram_check_EOF(fd: *mut crate::htslib_rs::hts::cram_fd) -> c_int {
     crate::htslib_rs::cram::cram_cram_io_c_5960_cram_check_eof(fd.cast())
 }

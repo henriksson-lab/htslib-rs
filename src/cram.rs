@@ -35,14 +35,31 @@ use crate::htslib_rs::thread_pool::{
 #[path = "cram/cram_external.rs"]
 mod cram_external;
 
-pub type cram_block = hts_sys::cram_block;
-pub type cram_container = hts_sys::cram_container;
-pub type cram_block_compression_hdr = hts_sys::cram_block_compression_hdr;
-pub type cram_block_slice_hdr = hts_sys::cram_block_slice_hdr;
-pub type cram_metrics = hts_sys::cram_metrics;
-pub type refs_t = hts_sys::refs_t;
-pub type cram_content_type = hts_sys::cram_content_type;
-pub type cram_block_method = hts_sys::cram_block_method;
+// Native opaque CRAM types. Byte layouts are unchanged from hts_sys's
+// bindgen-emitted versions; we only use these as raw `*mut` pointer types
+// in this file (every dereference goes through one of the layout-mirror
+// structs further down — `cram_block_layout`, `cram_container_layout`,
+// `cram_slice_layout`, `cram_fd_layout`, `cram_metrics_layout`). Defining
+// them locally retires ~270 `hts_sys::cram_*` references throughout cram.rs.
+#[repr(C)]
+pub struct cram_block { _private: [u8; 0] }
+#[repr(C)]
+pub struct cram_container { _private: [u8; 0] }
+#[repr(C)]
+pub struct cram_block_compression_hdr { _private: [u8; 0] }
+#[repr(C)]
+pub struct cram_block_slice_hdr { _private: [u8; 0] }
+#[repr(C)]
+pub struct cram_metrics { _private: [u8; 0] }
+#[repr(C)]
+pub struct cram_slice { _private: [u8; 0] }
+#[repr(C)]
+pub struct refs_t { _private: [u8; 0] }
+
+// Value-type aliases — `cram_content_type` and `cram_block_method` are
+// `c_int` enums in hts-sys bindings.
+pub type cram_content_type = c_int;
+pub type cram_block_method = c_int;
 
 // Native cram_block_method enum values (cram/cram_structs.h).
 pub const CRAM_BLOCK_METHOD_RAW: cram_block_method = 0;
@@ -265,7 +282,7 @@ pub unsafe fn cram_read_block(fd: *mut cram_fd) -> *mut cram_block {
 }
 
 pub unsafe fn int32_put_blk(b: *mut cram_block, val: i32) -> c_int {
-    hts_sys::int32_put_blk(b, val)
+    crate::htslib_rs::cram::cram_cram_io_c_1045_int32_put_blk(b, val)
 }
 
 pub unsafe fn int32_get_blk(b: *mut cram_block, val: *mut i32) -> c_int {
@@ -1735,7 +1752,7 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
                 }
             }
             x if x == crate::htslib_rs::cram::CRAM_OPT_THREAD_POOL => {
-                let p = cram_voption_va_arg_ptr::<hts_sys::htsThreadPool>(args);
+                let p = cram_voption_va_arg_ptr::<crate::htslib_rs::hts::htsThreadPool>(args);
                 if !(*fdl).pool.is_null() {
                     return -2;
                 }
@@ -1906,7 +1923,7 @@ pub struct pool_alloc_t {
 struct cram_block_layout {
     method: c_int,
     orig_method: c_int,
-    content_type: hts_sys::cram_content_type,
+    content_type: cram_content_type,
     content_id: i32,
     comp_size: i32,
     uncomp_size: i32,
@@ -1981,7 +1998,7 @@ struct cram_container_layout {
 
 #[repr(C)]
 struct cram_block_slice_hdr_layout {
-    content_type: hts_sys::cram_content_type,
+    content_type: cram_content_type,
     ref_seq_id: i32,
     ref_seq_start: i64,
     ref_seq_span: i64,
@@ -2110,7 +2127,7 @@ struct cram_fd_layout {
     mode: c_int,
     version: c_int,
     file_def: *mut c_void,
-    header: *mut hts_sys::sam_hdr_t,
+    header: *mut crate::htslib_rs::sam::sam_hdr_t,
     prefix: *mut c_char,
     record_counter: i64,
     err: c_int,
@@ -2698,25 +2715,25 @@ type VarintGet32Fn = unsafe extern "C" fn(*mut *mut c_char, *const c_char, *mut 
 type VarintGet64Fn = unsafe extern "C" fn(*mut *mut c_char, *const c_char, *mut c_int) -> i64;
 type VarintPut32Fn = unsafe extern "C" fn(*mut c_char, *mut c_char, i32) -> c_int;
 type VarintPut64Fn = unsafe extern "C" fn(*mut c_char, *mut c_char, i64) -> c_int;
-type VarintPut32BlkFn = unsafe extern "C" fn(*mut hts_sys::cram_block, i32) -> c_int;
-type VarintPut64BlkFn = unsafe extern "C" fn(*mut hts_sys::cram_block, i64) -> c_int;
+type VarintPut32BlkFn = unsafe extern "C" fn(*mut cram_block, i32) -> c_int;
+type VarintPut64BlkFn = unsafe extern "C" fn(*mut cram_block, i64) -> c_int;
 type VarintSizeFn = unsafe extern "C" fn(i64) -> c_int;
 type CramCodecDecodeFn = unsafe extern "C" fn(
-    *mut hts_sys::cram_slice,
+    *mut cram_slice,
     *mut c_void,
-    *mut hts_sys::cram_block,
+    *mut cram_block,
     *mut c_char,
     *mut c_int,
 ) -> c_int;
 type CramCodecEncodeFn =
-    unsafe extern "C" fn(*mut hts_sys::cram_slice, *mut c_void, *mut c_char, c_int) -> c_int;
+    unsafe extern "C" fn(*mut cram_slice, *mut c_void, *mut c_char, c_int) -> c_int;
 type CramCodecFlushFn = unsafe extern "C" fn(*mut c_void) -> c_int;
 type CramCodecStoreFn =
-    unsafe extern "C" fn(*mut c_void, *mut hts_sys::cram_block, *mut c_char, c_int) -> c_int;
+    unsafe extern "C" fn(*mut c_void, *mut cram_block, *mut c_char, c_int) -> c_int;
 type CramCodecDescribeFn = unsafe extern "C" fn(*mut c_void, *mut kstring_t) -> c_int;
-type CramCodecSizeFn = unsafe extern "C" fn(*mut hts_sys::cram_slice, *mut c_void) -> c_int;
+type CramCodecSizeFn = unsafe extern "C" fn(*mut cram_slice, *mut c_void) -> c_int;
 type CramCodecGetBlockFn =
-    unsafe extern "C" fn(*mut hts_sys::cram_slice, *mut c_void) -> *mut hts_sys::cram_block;
+    unsafe extern "C" fn(*mut cram_slice, *mut c_void) -> *mut cram_block;
 type CramCodecDecodeInitFn =
     unsafe fn(*mut c_void, *mut c_char, c_int, c_int, c_int, c_int, *mut c_void) -> *mut c_void;
 type CramCodecEncodeInitFn =
@@ -3343,19 +3360,19 @@ pub unsafe fn cram_cram_encode_c_1476_next_cigar_op(
 }
 
 pub unsafe fn cram_cram_external_c_500_cram_slice_hdr_get_num_blocks(
-    hdr: *mut hts_sys::cram_block_slice_hdr,
+    hdr: *mut cram_block_slice_hdr,
 ) -> i32 {
     (*(hdr.cast::<cram_block_slice_hdr_layout>())).num_blocks
 }
 
 pub unsafe fn cram_cram_external_c_504_cram_slice_hdr_get_embed_ref_id(
-    h: *mut hts_sys::cram_block_slice_hdr,
+    h: *mut cram_block_slice_hdr,
 ) -> c_int {
     (*(h.cast::<cram_block_slice_hdr_layout>())).ref_base_id
 }
 
 pub unsafe fn cram_cram_external_c_508_cram_slice_hdr_get_coords(
-    h: *mut hts_sys::cram_block_slice_hdr,
+    h: *mut cram_block_slice_hdr,
     refid: *mut c_int,
     start: *mut crate::htslib_rs::hts::hts_pos_t,
     span: *mut crate::htslib_rs::hts::hts_pos_t,
@@ -3372,24 +3389,24 @@ pub unsafe fn cram_cram_external_c_508_cram_slice_hdr_get_coords(
     }
 }
 
-pub unsafe fn cram_cram_external_c_529_cram_block_get_size(b: *mut hts_sys::cram_block) -> i32 {
+pub unsafe fn cram_cram_external_c_529_cram_block_get_size(b: *mut cram_block) -> i32 {
     (*(b.cast::<cram_block_layout>())).byte as i32
 }
 
 pub unsafe fn cram_cram_external_c_530_cram_block_get_method(
-    b: *mut hts_sys::cram_block,
-) -> hts_sys::cram_block_method {
+    b: *mut cram_block,
+) -> cram_block_method {
     (*(b.cast::<cram_block_layout>())).orig_method
 }
 
-pub unsafe fn cram_cram_external_c_542_cram_block_set_size(b: *mut hts_sys::cram_block, size: i32) {
+pub unsafe fn cram_cram_external_c_542_cram_block_set_size(b: *mut cram_block, size: i32) {
     (*(b.cast::<cram_block_layout>())).byte = size as usize;
 }
 
 pub unsafe fn cram_cram_io_h_183_cram_get_block_by_id(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     id: c_int,
-) -> *mut hts_sys::cram_block {
+) -> *mut cram_block {
     let slice = slice.cast::<cram_slice_layout>();
     let mut v = id as u32;
     if !(*slice).block_by_id.is_null() && v < 256 {
@@ -3420,7 +3437,7 @@ pub unsafe fn cram_cram_io_h_183_cram_get_block_by_id(
 }
 
 pub unsafe fn cram_cram_io_h_216_block_resize_exact(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     len: usize,
 ) -> c_int {
     let b = b.cast::<cram_block_layout>();
@@ -3433,7 +3450,7 @@ pub unsafe fn cram_cram_io_h_216_block_resize_exact(
     0
 }
 
-pub unsafe fn cram_cram_io_h_226_block_resize(b: *mut hts_sys::cram_block, len: usize) -> c_int {
+pub unsafe fn cram_cram_io_h_226_block_resize(b: *mut cram_block, len: usize) -> c_int {
     let block = b.cast::<cram_block_layout>();
     if (*block).alloc > len {
         return 0;
@@ -3444,13 +3461,13 @@ pub unsafe fn cram_cram_io_h_226_block_resize(b: *mut hts_sys::cram_block, len: 
     cram_cram_io_h_216_block_resize_exact(b, alloc)
 }
 
-pub unsafe fn cram_cram_io_h_243_block_grow(b: *mut hts_sys::cram_block, len: usize) -> c_int {
+pub unsafe fn cram_cram_io_h_243_block_grow(b: *mut cram_block, len: usize) -> c_int {
     let block = b.cast::<cram_block_layout>();
     cram_cram_io_h_226_block_resize(b, (*block).byte + len)
 }
 
 pub unsafe fn cram_cram_io_h_248_block_append(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     s: *const c_void,
     len: usize,
 ) -> c_int {
@@ -3468,7 +3485,7 @@ pub unsafe fn cram_cram_io_h_248_block_append(
 }
 
 pub unsafe fn cram_cram_io_h_261_block_append_char(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     c: c_char,
 ) -> c_int {
     if cram_cram_io_h_243_block_grow(b, 1) < 0 {
@@ -3482,7 +3499,7 @@ pub unsafe fn cram_cram_io_h_261_block_append_char(
 }
 
 pub unsafe fn cram_cram_io_h_271_block_append_uint(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     i: libc::c_uint,
 ) -> c_int {
     if cram_cram_io_h_243_block_grow(b, 11) < 0 {
@@ -3542,7 +3559,7 @@ pub unsafe fn cram_cram_io_h_340_append_uint64(mut cp: *mut u8, i: u64) -> *mut 
     cram_cram_io_h_326_append_sub32(cp, (i % 1_000_000_000) as u32)
 }
 
-pub unsafe fn cram_cram_io_h_646_cram_hfile(fd: *mut hts_sys::cram_fd) -> *mut hts_sys::hFILE {
+pub unsafe fn cram_cram_io_h_646_cram_hfile(fd: *mut crate::htslib_rs::hts::cram_fd) -> *mut crate::htslib_rs::hts::hFILE {
     (*(fd.cast::<cram_fd_layout>())).fp.cast()
 }
 
@@ -3555,6 +3572,12 @@ pub unsafe fn cram_cram_io_c_5662_cram_eof(fd: *mut cram_fd) -> c_int {
 // outside this module.
 pub unsafe fn cram_fd_idxfp_get(fd: *mut cram_fd) -> *mut BGZF {
     (*fd.cast::<cram_fd_layout>()).idxfp
+}
+
+// Setter for `cram_fd::idxfp`. Used by `sam_idx_init` when opening a CRAM
+// index sidecar (so sam.rs doesn't need the private `cram_fd_layout` shape).
+pub unsafe fn cram_fd_idxfp_set(fd: *mut cram_fd, idxfp: *mut BGZF) {
+    (*fd.cast::<cram_fd_layout>()).idxfp = idxfp;
 }
 
 /// `cram_seek` (htslib/cram/cram_io.c:5431).
@@ -3655,7 +3678,7 @@ pub unsafe fn cram_cram_io_c_5960_cram_check_eof(fd: *mut cram_fd) -> c_int {
     }
 }
 
-pub unsafe fn cram_cram_codecs_c_73_get_bit_MSB(block: *mut hts_sys::cram_block) -> c_int {
+pub unsafe fn cram_cram_codecs_c_73_get_bit_MSB(block: *mut cram_block) -> c_int {
     let block = block.cast::<cram_block_layout>();
     if (*block).byte > (*block).alloc {
         return -1;
@@ -3671,7 +3694,7 @@ pub unsafe fn cram_cram_codecs_c_73_get_bit_MSB(block: *mut hts_sys::cram_block)
     (val & 1) as c_int
 }
 
-pub unsafe fn cram_cram_codecs_c_95_get_one_bits_MSB(block: *mut hts_sys::cram_block) -> c_int {
+pub unsafe fn cram_cram_codecs_c_95_get_one_bits_MSB(block: *mut cram_block) -> c_int {
     let block = block.cast::<cram_block_layout>();
     let mut n = 0;
     if (*block).byte >= (*block).uncomp_size as usize {
@@ -3697,7 +3720,7 @@ pub unsafe fn cram_cram_codecs_c_95_get_one_bits_MSB(block: *mut hts_sys::cram_b
     n - 1
 }
 
-pub unsafe fn cram_cram_codecs_c_113_get_zero_bits_MSB(block: *mut hts_sys::cram_block) -> c_int {
+pub unsafe fn cram_cram_codecs_c_113_get_zero_bits_MSB(block: *mut cram_block) -> c_int {
     let block = block.cast::<cram_block_layout>();
     let mut n = 0;
     if (*block).byte >= (*block).uncomp_size as usize {
@@ -3724,7 +3747,7 @@ pub unsafe fn cram_cram_codecs_c_113_get_zero_bits_MSB(block: *mut hts_sys::cram
 }
 
 pub unsafe fn cram_cram_codecs_c_133_store_bit_MSB(
-    block: *mut hts_sys::cram_block,
+    block: *mut cram_block,
     bit: libc::c_uint,
 ) {
     let block = block.cast::<cram_block_layout>();
@@ -3750,7 +3773,7 @@ pub unsafe fn cram_cram_codecs_c_133_store_bit_MSB(
 }
 
 pub unsafe fn cram_cram_codecs_c_152_store_bytes_MSB(
-    block: *mut hts_sys::cram_block,
+    block: *mut cram_block,
     bytes: *mut c_char,
     len: c_int,
 ) {
@@ -3778,7 +3801,7 @@ pub unsafe fn cram_cram_codecs_c_152_store_bytes_MSB(
 }
 
 pub unsafe fn cram_cram_codecs_c_169_get_bits_MSB(
-    block: *mut hts_sys::cram_block,
+    block: *mut cram_block,
     mut nbits: c_int,
 ) -> i64 {
     let block = block.cast::<cram_block_layout>();
@@ -3810,7 +3833,7 @@ pub unsafe fn cram_cram_codecs_c_169_get_bits_MSB(
 }
 
 pub unsafe fn cram_cram_codecs_c_259_store_bits_MSB(
-    block: *mut hts_sys::cram_block,
+    block: *mut cram_block,
     val: u64,
     mut nbits: c_int,
 ) -> c_int {
@@ -3871,7 +3894,7 @@ pub unsafe fn cram_cram_codecs_c_259_store_bits_MSB(
 }
 
 pub unsafe fn cram_cram_codecs_c_319_cram_extract_block(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     size: c_int,
 ) -> *mut c_char {
     let b = b.cast::<cram_block_layout>();
@@ -3885,9 +3908,9 @@ pub unsafe fn cram_cram_codecs_c_319_cram_extract_block(
 }
 
 pub unsafe fn cram_cram_codecs_c_350_cram_external_decode_int(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -3917,9 +3940,9 @@ pub unsafe fn cram_cram_codecs_c_350_cram_external_decode_int(
 }
 
 pub unsafe fn cram_cram_codecs_c_370_cram_external_decode_long(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -3949,9 +3972,9 @@ pub unsafe fn cram_cram_codecs_c_370_cram_external_decode_long(
 }
 
 pub unsafe fn cram_cram_codecs_c_390_cram_external_decode_char(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -3973,9 +3996,9 @@ pub unsafe fn cram_cram_codecs_c_390_cram_external_decode_char(
 }
 
 pub unsafe fn cram_cram_codecs_c_410_cram_external_decode_block(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out_: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -4000,7 +4023,7 @@ pub unsafe fn cram_cram_codecs_c_433_cram_external_decode_free(c: *mut c_void) {
 }
 
 pub unsafe fn cram_cram_codecs_c_439_cram_external_decode_size(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
 ) -> c_int {
     let c = c.cast::<cram_codec_external_layout>();
@@ -4013,9 +4036,9 @@ pub unsafe fn cram_cram_codecs_c_439_cram_external_decode_size(
 }
 
 pub unsafe fn cram_cram_codecs_c_450_cram_external_get_block(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-) -> *mut hts_sys::cram_block {
+) -> *mut cram_block {
     let c = c.cast::<cram_codec_external_layout>();
     cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).external.content_id)
 }
@@ -4102,7 +4125,7 @@ pub unsafe fn cram_cram_codecs_c_459_cram_external_decode_init(
 }
 
 pub unsafe fn cram_cram_codecs_c_523_cram_external_encode_int(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     _in_size: c_int,
@@ -4117,7 +4140,7 @@ pub unsafe fn cram_cram_codecs_c_523_cram_external_encode_int(
 }
 
 pub unsafe fn cram_cram_codecs_c_529_cram_external_encode_sint(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     _in_size: c_int,
@@ -4132,7 +4155,7 @@ pub unsafe fn cram_cram_codecs_c_529_cram_external_encode_sint(
 }
 
 pub unsafe fn cram_cram_codecs_c_535_cram_external_encode_long(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     _in_size: c_int,
@@ -4147,7 +4170,7 @@ pub unsafe fn cram_cram_codecs_c_535_cram_external_encode_long(
 }
 
 pub unsafe fn cram_cram_codecs_c_541_cram_external_encode_slong(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     _in_size: c_int,
@@ -4162,7 +4185,7 @@ pub unsafe fn cram_cram_codecs_c_541_cram_external_encode_slong(
 }
 
 pub unsafe fn cram_cram_codecs_c_547_cram_external_encode_char(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     in_size: c_int,
@@ -4179,7 +4202,7 @@ pub unsafe fn cram_cram_codecs_c_556_cram_external_encode_free(c: *mut c_void) {
 
 pub unsafe fn cram_cram_codecs_c_562_cram_external_encode_store(
     c: *mut c_void,
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     prefix: *mut c_char,
     _version: c_int,
 ) -> c_int {
@@ -4263,9 +4286,9 @@ pub unsafe fn cram_cram_codecs_c_586_cram_external_encode_init(
 }
 
 pub unsafe fn cram_cram_codecs_c_644_cram_varint_decode_int(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -4293,9 +4316,9 @@ pub unsafe fn cram_cram_codecs_c_644_cram_varint_decode_int(
 }
 
 pub unsafe fn cram_cram_codecs_c_666_cram_varint_decode_sint(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -4323,9 +4346,9 @@ pub unsafe fn cram_cram_codecs_c_666_cram_varint_decode_sint(
 }
 
 pub unsafe fn cram_cram_codecs_c_688_cram_varint_decode_long(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -4353,9 +4376,9 @@ pub unsafe fn cram_cram_codecs_c_688_cram_varint_decode_long(
 }
 
 pub unsafe fn cram_cram_codecs_c_710_cram_varint_decode_slong(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -4389,7 +4412,7 @@ pub unsafe fn cram_cram_codecs_c_732_cram_varint_decode_free(c: *mut c_void) {
 }
 
 pub unsafe fn cram_cram_codecs_c_737_cram_varint_decode_size(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
 ) -> c_int {
     let c = c.cast::<cram_codec_varint_layout>();
@@ -4401,9 +4424,9 @@ pub unsafe fn cram_cram_codecs_c_737_cram_varint_decode_size(
 }
 
 pub unsafe fn cram_cram_codecs_c_748_cram_varint_get_block(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-) -> *mut hts_sys::cram_block {
+) -> *mut cram_block {
     let c = c.cast::<cram_codec_varint_layout>();
     cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).varint.content_id)
 }
@@ -4495,7 +4518,7 @@ pub unsafe fn cram_cram_codecs_c_760_cram_varint_decode_init(
 }
 
 pub unsafe fn cram_cram_codecs_c_820_cram_varint_encode_int(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     _in_size: c_int,
@@ -4510,7 +4533,7 @@ pub unsafe fn cram_cram_codecs_c_820_cram_varint_encode_int(
 }
 
 pub unsafe fn cram_cram_codecs_c_827_cram_varint_encode_sint(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     _in_size: c_int,
@@ -4525,7 +4548,7 @@ pub unsafe fn cram_cram_codecs_c_827_cram_varint_encode_sint(
 }
 
 pub unsafe fn cram_cram_codecs_c_834_cram_varint_encode_long(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     _in_size: c_int,
@@ -4540,7 +4563,7 @@ pub unsafe fn cram_cram_codecs_c_834_cram_varint_encode_long(
 }
 
 pub unsafe fn cram_cram_codecs_c_841_cram_varint_encode_slong(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     _in_size: c_int,
@@ -4562,7 +4585,7 @@ pub unsafe fn cram_cram_codecs_c_848_cram_varint_encode_free(c: *mut c_void) {
 
 pub unsafe fn cram_cram_codecs_c_854_cram_varint_encode_store(
     c: *mut c_void,
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     prefix: *mut c_char,
     _version: c_int,
 ) -> c_int {
@@ -4657,9 +4680,9 @@ pub unsafe fn cram_cram_codecs_c_878_cram_varint_encode_init(
 }
 
 pub unsafe fn cram_cram_io_c_1388_cram_new_block(
-    content_type: hts_sys::cram_content_type,
+    content_type: cram_content_type,
     content_id: c_int,
-) -> *mut hts_sys::cram_block {
+) -> *mut cram_block {
     let b = malloc(std::mem::size_of::<cram_block_layout>() as u64).cast::<cram_block_layout>();
     if b.is_null() {
         return std::ptr::null_mut();
@@ -5282,7 +5305,7 @@ pub unsafe fn cram_cram_io_c_501_ltf8_decode_crc(
 }
 
 pub unsafe extern "C" fn cram_cram_io_c_620_itf8_put_blk(
-    blk: *mut hts_sys::cram_block,
+    blk: *mut cram_block,
     val: i32,
 ) -> c_int {
     let mut buf = [0u8; 5];
@@ -5294,7 +5317,7 @@ pub unsafe extern "C" fn cram_cram_io_c_620_itf8_put_blk(
 }
 
 pub unsafe extern "C" fn cram_cram_io_c_632_ltf8_put_blk(
-    blk: *mut hts_sys::cram_block,
+    blk: *mut cram_block,
     val: i64,
 ) -> c_int {
     let mut buf = [0u8; 9];
@@ -5640,7 +5663,7 @@ pub unsafe extern "C" fn cram_cram_io_c_816_sint7_put_64(
 }
 
 pub unsafe extern "C" fn cram_cram_io_c_821_uint7_put_blk_32(
-    blk: *mut hts_sys::cram_block,
+    blk: *mut cram_block,
     v: i32,
 ) -> c_int {
     let mut buf = [0u8; 10];
@@ -5656,7 +5679,7 @@ pub unsafe extern "C" fn cram_cram_io_c_821_uint7_put_blk_32(
 }
 
 pub unsafe extern "C" fn cram_cram_io_c_831_sint7_put_blk_32(
-    blk: *mut hts_sys::cram_block,
+    blk: *mut cram_block,
     v: i32,
 ) -> c_int {
     let mut buf = [0u8; 10];
@@ -5672,7 +5695,7 @@ pub unsafe extern "C" fn cram_cram_io_c_831_sint7_put_blk_32(
 }
 
 pub unsafe extern "C" fn cram_cram_io_c_841_uint7_put_blk_64(
-    blk: *mut hts_sys::cram_block,
+    blk: *mut cram_block,
     v: i64,
 ) -> c_int {
     let mut buf = [0u8; 10];
@@ -5688,7 +5711,7 @@ pub unsafe extern "C" fn cram_cram_io_c_841_uint7_put_blk_64(
 }
 
 pub unsafe extern "C" fn cram_cram_io_c_851_sint7_put_blk_64(
-    blk: *mut hts_sys::cram_block,
+    blk: *mut cram_block,
     v: i64,
 ) -> c_int {
     let mut buf = [0u8; 10];
@@ -5704,7 +5727,7 @@ pub unsafe extern "C" fn cram_cram_io_c_851_sint7_put_blk_64(
 }
 
 pub unsafe fn cram_cram_io_c_862_uint7_decode_crc32(
-    fd: *mut hts_sys::cram_fd,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
     val_p: *mut i32,
     crc: *mut u32,
 ) -> c_int {
@@ -5739,7 +5762,7 @@ pub unsafe fn cram_cram_io_c_862_uint7_decode_crc32(
 }
 
 pub unsafe fn cram_cram_io_c_907_sint7_decode_crc32(
-    fd: *mut hts_sys::cram_fd,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
     val_p: *mut i32,
     crc: *mut u32,
 ) -> c_int {
@@ -5774,7 +5797,7 @@ pub unsafe fn cram_cram_io_c_907_sint7_decode_crc32(
 }
 
 pub unsafe fn cram_cram_io_c_953_uint7_decode_crc64(
-    fd: *mut hts_sys::cram_fd,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
     val_p: *mut i64,
     crc: *mut u32,
 ) -> c_int {
@@ -5808,7 +5831,7 @@ pub unsafe fn cram_cram_io_c_953_uint7_decode_crc64(
     i as c_int
 }
 
-pub unsafe fn cram_cram_io_c_1005_int32_decode(fd: *mut hts_sys::cram_fd, val: *mut i32) -> c_int {
+pub unsafe fn cram_cram_io_c_1005_int32_decode(fd: *mut crate::htslib_rs::hts::cram_fd, val: *mut i32) -> c_int {
     let fp = (*fd.cast::<cram_fd_layout>()).fp;
     let layout = fp.cast::<hfile_layout>();
     let mut i = 0i32;
@@ -5833,7 +5856,7 @@ pub unsafe fn cram_cram_io_c_1005_int32_decode(fd: *mut hts_sys::cram_fd, val: *
     4
 }
 
-pub unsafe fn cram_cram_io_c_1020_int32_encode(fd: *mut hts_sys::cram_fd, val: i32) -> c_int {
+pub unsafe fn cram_cram_io_c_1020_int32_encode(fd: *mut crate::htslib_rs::hts::cram_fd, val: i32) -> c_int {
     let fp = (*fd.cast::<cram_fd_layout>()).fp;
     let layout = fp.cast::<hfile_layout>();
     let v = val.to_le();
@@ -5874,7 +5897,7 @@ pub unsafe fn cram_cram_io_c_1020_int32_encode(fd: *mut hts_sys::cram_fd, val: i
 }
 
 pub unsafe fn cram_cram_io_c_1029_int32_get_blk(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     val: *mut i32,
 ) -> c_int {
     let block = b.cast::<cram_block_layout>();
@@ -5893,7 +5916,7 @@ pub unsafe fn cram_cram_io_c_1029_int32_get_blk(
     4
 }
 
-pub unsafe fn cram_cram_io_c_1045_int32_put_blk(b: *mut hts_sys::cram_block, val: i32) -> c_int {
+pub unsafe fn cram_cram_io_c_1045_int32_put_blk(b: *mut cram_block, val: i32) -> c_int {
     let v = val as u32;
     let cp = [
         (v & 0xff) as u8,
@@ -5908,8 +5931,8 @@ pub unsafe fn cram_cram_io_c_1045_int32_put_blk(b: *mut hts_sys::cram_block, val
 }
 
 pub unsafe fn cram_cram_io_c_1414_cram_read_block(
-    fd: *mut hts_sys::cram_fd,
-) -> *mut hts_sys::cram_block {
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+) -> *mut cram_block {
     let fd_layout = fd.cast::<cram_fd_layout>();
     let fp = (*fd_layout).fp;
     let hfile = fp.cast::<hfile_layout>();
@@ -6071,8 +6094,8 @@ pub unsafe fn cram_cram_io_c_1414_cram_read_block(
 }
 
 pub unsafe fn cram_cram_io_c_1511_cram_write_block(
-    fd: *mut hts_sys::cram_fd,
-    b: *mut hts_sys::cram_block,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    b: *mut cram_block,
 ) -> c_int {
     let fd_layout = fd.cast::<cram_fd_layout>();
     let fp = (*fd_layout).fp;
@@ -6218,7 +6241,7 @@ unsafe fn cram_dup_to_malloc(src: &[u8]) -> *mut u8 {
     p
 }
 
-pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut hts_sys::cram_block) -> c_int {
+pub unsafe fn cram_cram_io_c_1576_cram_uncompress_block(b: *mut cram_block) -> c_int {
     let b = b.cast::<cram_block_layout>();
 
     if (*b).crc32_checked == 0 {
@@ -7154,7 +7177,7 @@ pub unsafe fn cram_cram_io_c_2323_cram_compress_block(
     cram_cram_io_c_2317_cram_compress_block2(fd, std::ptr::null_mut(), b, metrics, method, level)
 }
 
-pub unsafe fn cram_cram_io_c_2327_cram_new_metrics() -> *mut hts_sys::cram_metrics {
+pub unsafe fn cram_cram_io_c_2327_cram_new_metrics() -> *mut cram_metrics {
     let m =
         calloc(1, std::mem::size_of::<cram_metrics_layout>() as u64).cast::<cram_metrics_layout>();
     if m.is_null() {
@@ -8761,7 +8784,7 @@ pub unsafe fn cram_cram_io_c_3597_cram_load_reference(
     ret
 }
 
-pub unsafe fn cram_cram_io_c_1490_cram_block_size(b: *mut hts_sys::cram_block) -> u32 {
+pub unsafe fn cram_cram_io_c_1490_cram_block_size(b: *mut cram_block) -> u32 {
     let b = b.cast::<cram_block_layout>();
     let itf8_len = |v: i64| -> u32 {
         if (v & !0x7f) == 0 {
@@ -8791,7 +8814,7 @@ pub unsafe fn cram_cram_io_c_1490_cram_block_size(b: *mut hts_sys::cram_block) -
 }
 
 pub unsafe fn cram_cram_io_c_4330_cram_new_compression_header(
-) -> *mut hts_sys::cram_block_compression_hdr {
+) -> *mut cram_block_compression_hdr {
     let hdr = calloc(
         1,
         std::mem::size_of::<cram_block_compression_hdr_layout>() as u64,
@@ -8830,7 +8853,7 @@ pub unsafe fn cram_cram_io_c_4330_cram_new_compression_header(
 }
 
 pub unsafe fn cram_cram_io_c_4356_cram_free_compression_header(
-    hdr: *mut hts_sys::cram_block_compression_hdr,
+    hdr: *mut cram_block_compression_hdr,
 ) {
     let hdr = hdr.cast::<cram_block_compression_hdr_layout>();
     if hdr.is_null() {
@@ -9549,7 +9572,7 @@ pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
     ret
 }
 
-pub unsafe fn cram_cram_io_c_1565_cram_free_block(b: *mut hts_sys::cram_block) {
+pub unsafe fn cram_cram_io_c_1565_cram_free_block(b: *mut cram_block) {
     if b.is_null() {
         return;
     }
@@ -9563,28 +9586,28 @@ pub unsafe fn cram_cram_io_c_1565_cram_free_block(b: *mut hts_sys::cram_block) {
 // Function-pointer types for the varint decoders stored in cram_fd::vv.
 // 32-bit signed/unsigned share one shape; 64-bit another. They are kept in the
 // `vv` table as *mut c_void and are transmuted back here for invocation.
-type CramVarintDecode32 = unsafe fn(*mut hts_sys::cram_fd, *mut i32, *mut u32) -> c_int;
-type CramVarintDecode64 = unsafe fn(*mut hts_sys::cram_fd, *mut i64, *mut u32) -> c_int;
+type CramVarintDecode32 = unsafe fn(*mut crate::htslib_rs::hts::cram_fd, *mut i32, *mut u32) -> c_int;
+type CramVarintDecode64 = unsafe fn(*mut crate::htslib_rs::hts::cram_fd, *mut i64, *mut u32) -> c_int;
 
 #[inline]
-unsafe fn vv_decode32(vv: &varint_vec_layout, fd: *mut hts_sys::cram_fd, val: *mut i32, crc: *mut u32) -> c_int {
+unsafe fn vv_decode32(vv: &varint_vec_layout, fd: *mut crate::htslib_rs::hts::cram_fd, val: *mut i32, crc: *mut u32) -> c_int {
     let f: CramVarintDecode32 = std::mem::transmute(vv.varint_decode32_crc);
     f(fd, val, crc)
 }
 #[inline]
-unsafe fn vv_decode32s(vv: &varint_vec_layout, fd: *mut hts_sys::cram_fd, val: *mut i32, crc: *mut u32) -> c_int {
+unsafe fn vv_decode32s(vv: &varint_vec_layout, fd: *mut crate::htslib_rs::hts::cram_fd, val: *mut i32, crc: *mut u32) -> c_int {
     let f: CramVarintDecode32 = std::mem::transmute(vv.varint_decode32s_crc);
     f(fd, val, crc)
 }
 #[inline]
-unsafe fn vv_decode64(vv: &varint_vec_layout, fd: *mut hts_sys::cram_fd, val: *mut i64, crc: *mut u32) -> c_int {
+unsafe fn vv_decode64(vv: &varint_vec_layout, fd: *mut crate::htslib_rs::hts::cram_fd, val: *mut i64, crc: *mut u32) -> c_int {
     let f: CramVarintDecode64 = std::mem::transmute(vv.varint_decode64_crc);
     f(fd, val, crc)
 }
 
 /// original: cram_container_size (htslib/cram/cram_io.c:3947)
 /// MAXIMUM storage size needed for the container.
-pub unsafe fn cram_cram_io_c_3947_cram_container_size(c: *mut hts_sys::cram_container) -> c_int {
+pub unsafe fn cram_cram_io_c_3947_cram_container_size(c: *mut cram_container) -> c_int {
     let c = c.cast::<cram_container_layout>();
     55 + 5 * (*c).num_landmarks
 }
@@ -9777,7 +9800,7 @@ unsafe fn cram_cram_io_c_4023_cram_write_container(
 pub unsafe fn cram_cram_io_c_3639_cram_new_container(
     nrec: c_int,
     nslice: c_int,
-) -> *mut hts_sys::cram_container {
+) -> *mut cram_container {
     let c = calloc(1, std::mem::size_of::<cram_container_layout>() as u64)
         .cast::<cram_container_layout>();
     if c.is_null() {
@@ -9846,7 +9869,7 @@ pub unsafe fn cram_cram_io_c_3639_cram_new_container(
 }
 
 /// original: cram_free_container (htslib/cram/cram_io.c:3705)
-pub unsafe fn cram_cram_io_c_3705_cram_free_container(c: *mut hts_sys::cram_container) {
+pub unsafe fn cram_cram_io_c_3705_cram_free_container(c: *mut cram_container) {
     if c.is_null() {
         return;
     }
@@ -9927,8 +9950,8 @@ pub unsafe fn cram_cram_io_c_3705_cram_free_container(c: *mut hts_sys::cram_cont
 /// Reads a container header. Returns the container on success, NULL on failure
 /// or when no container is left (fd->err == 0).
 pub unsafe fn cram_cram_io_c_3788_cram_read_container(
-    fd: *mut hts_sys::cram_fd,
-) -> *mut hts_sys::cram_container {
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+) -> *mut cram_container {
     let fdl = fd.cast::<cram_fd_layout>();
     let major = (*fdl).version >> 8;
     let minor = (*fdl).version & 0xff;
@@ -10132,7 +10155,7 @@ pub unsafe fn cram_cram_io_c_3788_cram_read_container(
 }
 
 /// original: cram_free_slice (htslib/cram/cram_io.c:4421)
-pub unsafe fn cram_cram_io_c_4421_cram_free_slice(s: *mut hts_sys::cram_slice) {
+pub unsafe fn cram_cram_io_c_4421_cram_free_slice(s: *mut cram_slice) {
     if s.is_null() {
         return;
     }
@@ -10230,9 +10253,9 @@ pub unsafe fn cram_cram_io_c_4421_cram_free_slice(s: *mut hts_sys::cram_slice) {
 /// original: cram_new_slice (htslib/cram/cram_io.c:4506)
 /// Creates a new empty in-memory slice (write path).
 pub unsafe fn cram_cram_io_c_4506_cram_new_slice(
-    type_: hts_sys::cram_content_type,
+    type_: cram_content_type,
     nrecs: c_int,
-) -> *mut hts_sys::cram_slice {
+) -> *mut cram_slice {
     let s = calloc(1, std::mem::size_of::<cram_slice_layout>() as u64)
         .cast::<cram_slice_layout>();
     if s.is_null() {
@@ -10319,8 +10342,8 @@ pub unsafe fn cram_cram_io_c_4506_cram_new_slice(
 /// original: cram_read_slice (htslib/cram/cram_io.c:4568)
 /// Loads an entire slice (read path).
 pub unsafe fn cram_cram_io_c_4568_cram_read_slice(
-    fd: *mut hts_sys::cram_fd,
-) -> *mut hts_sys::cram_slice {
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+) -> *mut cram_slice {
     let fdl = fd.cast::<cram_fd_layout>();
     let b = cram_cram_io_c_1414_cram_read_block(fd);
     let s = calloc(1, std::mem::size_of::<cram_slice_layout>() as u64)
@@ -10453,7 +10476,7 @@ pub unsafe fn cram_cram_io_c_4568_cram_read_slice(
 }
 
 /// original: cram_free_slice_header (htslib/cram/cram_io.c:4409)
-pub unsafe fn cram_cram_io_c_4409_cram_free_slice_header(hdr: *mut hts_sys::cram_block_slice_hdr) {
+pub unsafe fn cram_cram_io_c_4409_cram_free_slice_header(hdr: *mut cram_block_slice_hdr) {
     if hdr.is_null() {
         return;
     }
@@ -10465,9 +10488,9 @@ pub unsafe fn cram_cram_io_c_4409_cram_free_slice_header(hdr: *mut hts_sys::cram
 }
 
 pub unsafe fn cram_cram_codecs_c_932_cram_const_decode_byte(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -10482,9 +10505,9 @@ pub unsafe fn cram_cram_codecs_c_932_cram_const_decode_byte(
 }
 
 pub unsafe fn cram_cram_codecs_c_945_cram_const_decode_int(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -10497,9 +10520,9 @@ pub unsafe fn cram_cram_codecs_c_945_cram_const_decode_int(
 }
 
 pub unsafe fn cram_cram_codecs_c_956_cram_const_decode_long(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -10518,7 +10541,7 @@ pub unsafe fn cram_cram_codecs_c_967_cram_const_decode_free(c: *mut c_void) {
 }
 
 pub fn cram_cram_codecs_c_972_cram_const_decode_size(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
 ) -> c_int {
     0
@@ -10588,7 +10611,7 @@ pub unsafe fn cram_cram_codecs_c_981_cram_const_decode_init(
 }
 
 pub fn cram_cram_codecs_c_1020_cram_const_encode(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
     _in: *mut c_char,
     _in_size: c_int,
@@ -10598,7 +10621,7 @@ pub fn cram_cram_codecs_c_1020_cram_const_encode(
 
 pub unsafe fn cram_cram_codecs_c_1025_cram_const_encode_store(
     c: *mut c_void,
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     prefix: *mut c_char,
     _version: c_int,
 ) -> c_int {
@@ -10657,7 +10680,7 @@ pub unsafe fn cram_cram_codecs_c_1048_cram_const_encode_init(
 }
 
 pub unsafe fn cram_cram_codecs_h_230_cram_not_enough_bits(
-    blk: *mut hts_sys::cram_block,
+    blk: *mut cram_block,
     nbits: c_int,
 ) -> c_int {
     let blk = blk.cast::<cram_block_layout>();
@@ -10682,9 +10705,9 @@ pub unsafe fn cram_cram_codecs_h_230_cram_not_enough_bits(
 }
 
 pub unsafe fn cram_cram_codecs_c_1072_cram_beta_decode_long(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    in_: *mut hts_sys::cram_block,
+    in_: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -10708,9 +10731,9 @@ pub unsafe fn cram_cram_codecs_c_1072_cram_beta_decode_long(
 }
 
 pub unsafe fn cram_cram_codecs_c_1090_cram_beta_decode_int(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    in_: *mut hts_sys::cram_block,
+    in_: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -10734,9 +10757,9 @@ pub unsafe fn cram_cram_codecs_c_1090_cram_beta_decode_int(
 }
 
 pub unsafe fn cram_cram_codecs_c_1108_cram_beta_decode_char(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    in_: *mut hts_sys::cram_block,
+    in_: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -10843,7 +10866,7 @@ pub unsafe fn cram_cram_codecs_c_1142_cram_beta_decode_init(
 
 pub unsafe fn cram_cram_codecs_c_1183_cram_beta_encode_store(
     c: *mut c_void,
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     prefix: *mut c_char,
     _version: c_int,
 ) -> c_int {
@@ -10882,7 +10905,7 @@ pub unsafe fn cram_cram_codecs_c_1183_cram_beta_encode_store(
 }
 
 pub unsafe fn cram_cram_codecs_c_1207_cram_beta_encode_long(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     in_size: c_int,
@@ -10901,7 +10924,7 @@ pub unsafe fn cram_cram_codecs_c_1207_cram_beta_encode_long(
 }
 
 pub unsafe fn cram_cram_codecs_c_1219_cram_beta_encode_int(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     in_size: c_int,
@@ -10920,7 +10943,7 @@ pub unsafe fn cram_cram_codecs_c_1219_cram_beta_encode_int(
 }
 
 pub unsafe fn cram_cram_codecs_c_1231_cram_beta_encode_char(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     in_size: c_int,
@@ -11044,9 +11067,9 @@ pub unsafe fn cram_cram_codecs_c_1247_cram_beta_encode_init(
 }
 
 pub unsafe fn cram_cram_codecs_c_1344_cram_xpack_decode_long(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    in_: *mut hts_sys::cram_block,
+    in_: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -11067,9 +11090,9 @@ pub unsafe fn cram_cram_codecs_c_1344_cram_xpack_decode_long(
 }
 
 pub unsafe fn cram_cram_codecs_c_1359_cram_xpack_decode_int(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    in_: *mut hts_sys::cram_block,
+    in_: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -11093,7 +11116,7 @@ pub unsafe fn cram_cram_codecs_c_1359_cram_xpack_decode_int(
 }
 
 pub unsafe fn cram_cram_codecs_c_1377_cram_xpack_decode_expand_char(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
 ) -> c_int {
     let slice_layout = slice.cast::<cram_slice_layout>();
@@ -11174,9 +11197,9 @@ pub unsafe fn cram_cram_codecs_c_1377_cram_xpack_decode_expand_char(
 }
 
 pub unsafe fn cram_cram_codecs_c_1408_cram_xpack_decode_char(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -11222,7 +11245,7 @@ pub unsafe fn cram_cram_codecs_c_1431_cram_xpack_decode_free(c: *mut c_void) {
 }
 
 pub unsafe fn cram_cram_codecs_c_1443_cram_xpack_decode_size(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
 ) -> c_int {
     cram_cram_codecs_c_1377_cram_xpack_decode_expand_char(slice, c);
@@ -11235,9 +11258,9 @@ pub unsafe fn cram_cram_codecs_c_1443_cram_xpack_decode_size(
 }
 
 pub unsafe fn cram_cram_codecs_c_1448_cram_xpack_get_block(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-) -> *mut hts_sys::cram_block {
+) -> *mut cram_block {
     cram_cram_codecs_c_1377_cram_xpack_decode_expand_char(slice, c);
     let c_xpack = c.cast::<cram_codec_xpack_layout>();
     let slice_layout = slice.cast::<cram_slice_layout>();
@@ -11336,7 +11359,7 @@ pub unsafe fn cram_cram_codecs_c_1453_cram_xpack_decode_init(
 }
 
 pub unsafe fn cram_cram_codecs_c_1581_cram_xpack_encode_long(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     in_size: c_int,
@@ -11355,7 +11378,7 @@ pub unsafe fn cram_cram_codecs_c_1581_cram_xpack_encode_long(
 }
 
 pub unsafe fn cram_cram_codecs_c_1592_cram_xpack_encode_int(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     in_size: c_int,
@@ -11374,7 +11397,7 @@ pub unsafe fn cram_cram_codecs_c_1592_cram_xpack_encode_int(
 }
 
 pub unsafe fn cram_cram_codecs_c_1603_cram_xpack_encode_char(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     in_size: c_int,
@@ -11441,7 +11464,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_1515_cram_xpack_encode_flush(c: *mut
 
 pub unsafe fn cram_cram_codecs_c_1537_cram_xpack_encode_store(
     c: *mut c_void,
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     prefix: *mut c_char,
     version: c_int,
 ) -> c_int {
@@ -11597,9 +11620,9 @@ pub fn cram_cram_codecs_c_1682_unzigzag32(x: u32) -> i32 {
 }
 
 pub fn cram_cram_codecs_c_1684_cram_xdelta_decode_long(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     _out: *mut c_char,
     _out_size: *mut c_int,
 ) -> c_int {
@@ -11607,9 +11630,9 @@ pub fn cram_cram_codecs_c_1684_cram_xdelta_decode_long(
 }
 
 pub unsafe fn cram_cram_codecs_c_1688_cram_xdelta_decode_int(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    in_: *mut hts_sys::cram_block,
+    in_: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -11632,16 +11655,16 @@ pub unsafe fn cram_cram_codecs_c_1688_cram_xdelta_decode_int(
 }
 
 pub fn cram_cram_codecs_c_1705_cram_xdelta_decode_expand_char(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
 ) -> c_int {
     -1
 }
 
 pub fn cram_cram_codecs_c_1709_cram_xdelta_decode_char(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     _out: *mut c_char,
     _out_size: *mut c_int,
 ) -> c_int {
@@ -11653,14 +11676,14 @@ pub fn cram_cram_codecs_c_1713_le_int2(i: i16) -> i16 {
 }
 
 pub unsafe fn cram_cram_codecs_c_1719_cram_xdelta_decode_block(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out_: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
     let c = c.cast::<cram_codec_xdelta_layout>();
-    let out = out_.cast::<hts_sys::cram_block>();
+    let out = out_.cast::<cram_block>();
     let sub = (*c).xdelta.sub_codec;
     let sub_codec = sub.cast::<cram_codec_xdelta_layout>();
     let get_block_fn: CramCodecGetBlockFn = std::mem::transmute((*sub_codec).get_block);
@@ -11726,7 +11749,7 @@ pub unsafe fn cram_cram_codecs_c_1762_cram_xdelta_decode_free(c: *mut c_void) {
 }
 
 pub unsafe fn cram_cram_codecs_c_1771_cram_xdelta_decode_size(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
 ) -> c_int {
     cram_cram_codecs_c_1705_cram_xdelta_decode_expand_char(slice, c);
@@ -11737,9 +11760,9 @@ pub unsafe fn cram_cram_codecs_c_1771_cram_xdelta_decode_size(
 }
 
 pub unsafe fn cram_cram_codecs_c_1776_cram_xdelta_get_block(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-) -> *mut hts_sys::cram_block {
+) -> *mut cram_block {
     cram_cram_codecs_c_1705_cram_xdelta_decode_expand_char(slice, c);
     let slice = slice.cast::<cram_slice_layout>();
     let c = c.cast::<cram_codec_xdelta_layout>();
@@ -11903,7 +11926,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_1835_cram_xdelta_encode_flush(c: *mu
 
 pub unsafe fn cram_cram_codecs_c_1930_cram_xdelta_encode_store(
     c: *mut c_void,
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     prefix: *mut c_char,
     version: c_int,
 ) -> c_int {
@@ -11955,7 +11978,7 @@ pub unsafe fn cram_cram_codecs_c_1930_cram_xdelta_encode_store(
 }
 
 pub fn cram_cram_codecs_c_1966_cram_xdelta_encode_long(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
     _in: *mut c_char,
     _in_size: c_int,
@@ -11964,7 +11987,7 @@ pub fn cram_cram_codecs_c_1966_cram_xdelta_encode_long(
 }
 
 pub fn cram_cram_codecs_c_1971_cram_xdelta_encode_int(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
     _in: *mut c_char,
     _in_size: c_int,
@@ -11973,7 +11996,7 @@ pub fn cram_cram_codecs_c_1971_cram_xdelta_encode_int(
 }
 
 pub unsafe fn cram_cram_codecs_c_1976_cram_xdelta_encode_char(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     in_size: c_int,
@@ -12090,9 +12113,9 @@ pub unsafe fn cram_cram_codecs_c_2022_cram_xdelta_encode_init(
 }
 
 pub fn cram_cram_codecs_c_2063_cram_xrle_decode_long(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     _out: *mut c_char,
     _out_size: *mut c_int,
 ) -> c_int {
@@ -12100,9 +12123,9 @@ pub fn cram_cram_codecs_c_2063_cram_xrle_decode_long(
 }
 
 pub fn cram_cram_codecs_c_2068_cram_xrle_decode_int(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     _out: *mut c_char,
     _out_size: *mut c_int,
 ) -> c_int {
@@ -12110,7 +12133,7 @@ pub fn cram_cram_codecs_c_2068_cram_xrle_decode_int(
 }
 
 pub unsafe fn cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
 ) -> c_int {
     let slice_layout = slice.cast::<cram_slice_layout>();
@@ -12199,7 +12222,7 @@ pub unsafe fn cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(
 }
 
 pub unsafe extern "C" fn cram_cram_codecs_c_2115_cram_xrle_decode_size(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
 ) -> c_int {
     cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(slice, c);
@@ -12212,9 +12235,9 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2115_cram_xrle_decode_size(
 }
 
 pub unsafe extern "C" fn cram_cram_codecs_c_2120_cram_xrle_get_block(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-) -> *mut hts_sys::cram_block {
+) -> *mut cram_block {
     cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(slice, c);
     let slice_layout = slice.cast::<cram_slice_layout>();
     let c_xrle = c.cast::<cram_codec_xrle_layout>();
@@ -12225,9 +12248,9 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2120_cram_xrle_get_block(
 }
 
 pub unsafe extern "C" fn cram_cram_codecs_c_2125_cram_xrle_decode_char(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -12460,7 +12483,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2257_cram_xrle_encode_flush(c: *mut 
 
 pub unsafe extern "C" fn cram_cram_codecs_c_2303_cram_xrle_encode_store(
     c: *mut c_void,
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     prefix: *mut c_char,
     version: c_int,
 ) -> c_int {
@@ -12558,7 +12581,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2303_cram_xrle_encode_store(
 }
 
 pub fn cram_cram_codecs_c_2359_cram_xrle_encode_long(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
     _in: *mut c_char,
     _in_size: c_int,
@@ -12567,7 +12590,7 @@ pub fn cram_cram_codecs_c_2359_cram_xrle_encode_long(
 }
 
 pub fn cram_cram_codecs_c_2365_cram_xrle_encode_int(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
     _in: *mut c_char,
     _in_size: c_int,
@@ -12576,7 +12599,7 @@ pub fn cram_cram_codecs_c_2365_cram_xrle_encode_int(
 }
 
 pub unsafe fn cram_cram_codecs_c_2371_cram_xrle_encode_char(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     in_size: c_int,
@@ -12699,9 +12722,9 @@ pub unsafe fn cram_cram_codecs_c_2409_cram_xrle_encode_init(
 }
 
 pub unsafe fn cram_cram_codecs_c_2452_cram_subexp_decode(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    in_: *mut hts_sys::cram_block,
+    in_: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -12803,9 +12826,9 @@ pub unsafe fn cram_cram_codecs_c_2508_cram_subexp_decode_init(
 }
 
 pub unsafe fn cram_cram_codecs_c_2546_cram_gamma_decode(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    in_: *mut hts_sys::cram_block,
+    in_: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -13113,9 +13136,9 @@ pub unsafe fn cram_cram_codecs_c_2814_cram_huffman_decode_init(
 }
 
 pub fn cram_cram_codecs_c_2641_cram_huffman_decode_null(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     _out: *mut c_char,
     _out_size: *mut c_int,
 ) -> c_int {
@@ -13123,9 +13146,9 @@ pub fn cram_cram_codecs_c_2641_cram_huffman_decode_null(
 }
 
 pub unsafe fn cram_cram_codecs_c_2646_cram_huffman_decode_char0(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -13141,9 +13164,9 @@ pub unsafe fn cram_cram_codecs_c_2646_cram_huffman_decode_char0(
 }
 
 pub unsafe fn cram_cram_codecs_c_2660_cram_huffman_decode_char(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    in_: *mut hts_sys::cram_block,
+    in_: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -13185,9 +13208,9 @@ pub unsafe fn cram_cram_codecs_c_2660_cram_huffman_decode_char(
 }
 
 pub unsafe fn cram_cram_codecs_c_2695_cram_huffman_decode_int0(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -13201,9 +13224,9 @@ pub unsafe fn cram_cram_codecs_c_2695_cram_huffman_decode_int0(
 }
 
 pub unsafe fn cram_cram_codecs_c_2708_cram_huffman_decode_int(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    in_: *mut hts_sys::cram_block,
+    in_: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -13244,9 +13267,9 @@ pub unsafe fn cram_cram_codecs_c_2708_cram_huffman_decode_int(
 }
 
 pub unsafe fn cram_cram_codecs_c_2745_cram_huffman_decode_long0(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -13260,9 +13283,9 @@ pub unsafe fn cram_cram_codecs_c_2745_cram_huffman_decode_long0(
 }
 
 pub unsafe fn cram_cram_codecs_c_2758_cram_huffman_decode_long(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
-    in_: *mut hts_sys::cram_block,
+    in_: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -13303,7 +13326,7 @@ pub unsafe fn cram_cram_codecs_c_2758_cram_huffman_decode_long(
 }
 
 pub fn cram_cram_codecs_c_2989_cram_huffman_encode_char0(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
     _in: *mut c_char,
     _in_size: c_int,
@@ -13312,7 +13335,7 @@ pub fn cram_cram_codecs_c_2989_cram_huffman_encode_char0(
 }
 
 pub unsafe fn cram_cram_codecs_c_2994_cram_huffman_encode_char(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     mut in_size: c_int,
@@ -13347,7 +13370,7 @@ pub unsafe fn cram_cram_codecs_c_2994_cram_huffman_encode_char(
 }
 
 pub fn cram_cram_codecs_c_3025_cram_huffman_encode_int0(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
     _in: *mut c_char,
     _in_size: c_int,
@@ -13356,7 +13379,7 @@ pub fn cram_cram_codecs_c_3025_cram_huffman_encode_int0(
 }
 
 pub unsafe fn cram_cram_codecs_c_3030_cram_huffman_encode_int(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     mut in_size: c_int,
@@ -13391,7 +13414,7 @@ pub unsafe fn cram_cram_codecs_c_3030_cram_huffman_encode_int(
 }
 
 pub fn cram_cram_codecs_c_3062_cram_huffman_encode_long0(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     _c: *mut c_void,
     _in: *mut c_char,
     _in_size: c_int,
@@ -13400,7 +13423,7 @@ pub fn cram_cram_codecs_c_3062_cram_huffman_encode_long0(
 }
 
 pub unsafe fn cram_cram_codecs_c_3067_cram_huffman_encode_long(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     mut in_size: c_int,
@@ -13447,7 +13470,7 @@ pub unsafe fn cram_cram_codecs_c_3099_cram_huffman_encode_free(c: *mut c_void) {
 
 pub unsafe fn cram_cram_codecs_c_3112_cram_huffman_encode_store(
     c: *mut c_void,
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     prefix: *mut c_char,
     _version: c_int,
 ) -> c_int {
@@ -13822,9 +13845,9 @@ pub unsafe fn cram_cram_codecs_c_3176_cram_huffman_encode_init(
 }
 
 pub unsafe fn cram_cram_codecs_c_3371_cram_byte_array_len_decode(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    in_: *mut hts_sys::cram_block,
+    in_: *mut cram_block,
     out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -14001,7 +14024,7 @@ pub unsafe fn cram_cram_codecs_c_3428_cram_byte_array_len_decode_init(
 }
 
 pub unsafe fn cram_cram_codecs_c_3479_cram_byte_array_len_encode(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     in_size: c_int,
@@ -14026,7 +14049,7 @@ pub unsafe fn cram_cram_codecs_c_3493_cram_byte_array_len_encode_free(c: *mut c_
 
 pub unsafe fn cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
     c: *mut c_void,
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     prefix: *mut c_char,
     version: c_int,
 ) -> c_int {
@@ -14153,9 +14176,9 @@ pub unsafe fn cram_cram_codecs_c_3547_cram_byte_array_len_encode_init(
 }
 
 pub unsafe fn cram_cram_codecs_c_3586_cram_byte_array_stop_decode_char(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     mut out: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -14202,9 +14225,9 @@ pub unsafe fn cram_cram_codecs_c_3586_cram_byte_array_stop_decode_char(
 }
 
 pub unsafe fn cram_cram_codecs_c_3626_cram_byte_array_stop_decode_block(
-    slice: *mut hts_sys::cram_slice,
+    slice: *mut cram_slice,
     c: *mut c_void,
-    _in: *mut hts_sys::cram_block,
+    _in: *mut cram_block,
     out_: *mut c_char,
     out_size: *mut c_int,
 ) -> c_int {
@@ -14336,7 +14359,7 @@ pub unsafe fn cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
 }
 
 pub unsafe fn cram_cram_codecs_c_3733_cram_byte_array_stop_encode(
-    _slice: *mut hts_sys::cram_slice,
+    _slice: *mut cram_slice,
     c: *mut c_void,
     in_: *mut c_char,
     in_size: c_int,
@@ -14356,7 +14379,7 @@ pub unsafe fn cram_cram_codecs_c_3743_cram_byte_array_stop_encode_free(c: *mut c
 
 pub unsafe fn cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store(
     c: *mut c_void,
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     prefix: *mut c_char,
     version: c_int,
 ) -> c_int {
@@ -14833,7 +14856,7 @@ pub fn cram_cram_io_c_2341_cram_block_method2str(m: c_int) -> *mut c_char {
     s.as_ptr().cast::<c_char>().cast_mut()
 }
 
-pub fn cram_cram_io_c_2378_cram_content_type2str(t: hts_sys::cram_content_type) -> *mut c_char {
+pub fn cram_cram_io_c_2378_cram_content_type2str(t: cram_content_type) -> *mut c_char {
     let s: &'static [u8] = match t {
         0 => b"FILE_HEADER\0",
         1 => b"COMPRESSION_HEADER\0",
@@ -16144,89 +16167,89 @@ pub unsafe fn cram_pooled_alloc_c_167_main() -> c_int {
 }
 
 pub unsafe fn cram_cram_external_c_58_cram_fd_get_header(
-    fd: *mut hts_sys::cram_fd,
-) -> *mut hts_sys::sam_hdr_t {
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+) -> *mut crate::htslib_rs::sam::sam_hdr_t {
     (*fd.cast::<cram_fd_layout>()).header
 }
 
 pub unsafe fn cram_cram_external_c_59_cram_fd_set_header(
-    fd: *mut hts_sys::cram_fd,
-    hdr: *mut hts_sys::sam_hdr_t,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    hdr: *mut crate::htslib_rs::sam::sam_hdr_t,
 ) {
     (*fd.cast::<cram_fd_layout>()).header = hdr;
 }
 
-pub unsafe fn cram_cram_external_c_61_cram_fd_get_version(fd: *mut hts_sys::cram_fd) -> c_int {
+pub unsafe fn cram_cram_external_c_61_cram_fd_get_version(fd: *mut crate::htslib_rs::hts::cram_fd) -> c_int {
     (*fd.cast::<cram_fd_layout>()).version
 }
 
-pub unsafe fn cram_cram_external_c_62_cram_fd_set_version(fd: *mut hts_sys::cram_fd, vers: c_int) {
+pub unsafe fn cram_cram_external_c_62_cram_fd_set_version(fd: *mut crate::htslib_rs::hts::cram_fd, vers: c_int) {
     (*fd.cast::<cram_fd_layout>()).version = vers;
 }
 
-pub unsafe fn cram_cram_external_c_64_cram_major_vers(fd: *mut hts_sys::cram_fd) -> c_int {
+pub unsafe fn cram_cram_external_c_64_cram_major_vers(fd: *mut crate::htslib_rs::hts::cram_fd) -> c_int {
     // CRAM_MAJOR_VERS(v) = (v) >> 8
     (*fd.cast::<cram_fd_layout>()).version >> 8
 }
 
-pub unsafe fn cram_cram_external_c_65_cram_minor_vers(fd: *mut hts_sys::cram_fd) -> c_int {
+pub unsafe fn cram_cram_external_c_65_cram_minor_vers(fd: *mut crate::htslib_rs::hts::cram_fd) -> c_int {
     // CRAM_MINOR_VERS(v) = (v) & 0xff
     (*fd.cast::<cram_fd_layout>()).version & 0xff
 }
 
 pub unsafe fn cram_cram_external_c_67_cram_fd_get_fp(
-    fd: *mut hts_sys::cram_fd,
-) -> *mut hts_sys::hFILE {
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+) -> *mut crate::htslib_rs::hts::hFILE {
     (*fd.cast::<cram_fd_layout>()).fp.cast()
 }
 
 pub unsafe fn cram_cram_external_c_68_cram_fd_set_fp(
-    fd: *mut hts_sys::cram_fd,
-    fp: *mut hts_sys::hFILE,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    fp: *mut crate::htslib_rs::hts::hFILE,
 ) {
     (*fd.cast::<cram_fd_layout>()).fp = fp.cast();
 }
 
 pub unsafe fn cram_cram_external_c_75_cram_container_get_length(
-    c: *mut hts_sys::cram_container,
+    c: *mut cram_container,
 ) -> i32 {
     (*c.cast::<cram_container_layout>()).length
 }
 
 pub unsafe fn cram_cram_external_c_79_cram_container_set_length(
-    c: *mut hts_sys::cram_container,
+    c: *mut cram_container,
     length: i32,
 ) {
     (*c.cast::<cram_container_layout>()).length = length;
 }
 
 pub unsafe fn cram_cram_external_c_84_cram_container_get_num_blocks(
-    c: *mut hts_sys::cram_container,
+    c: *mut cram_container,
 ) -> i32 {
     (*c.cast::<cram_container_layout>()).num_blocks
 }
 
 pub unsafe fn cram_cram_external_c_88_cram_container_set_num_blocks(
-    c: *mut hts_sys::cram_container,
+    c: *mut cram_container,
     num_blocks: i32,
 ) {
     (*c.cast::<cram_container_layout>()).num_blocks = num_blocks;
 }
 
 pub unsafe fn cram_cram_external_c_92_cram_container_get_num_records(
-    c: *mut hts_sys::cram_container,
+    c: *mut cram_container,
 ) -> i32 {
     (*c.cast::<cram_container_layout>()).num_records
 }
 
 pub unsafe fn cram_cram_external_c_96_cram_container_get_num_bases(
-    c: *mut hts_sys::cram_container,
+    c: *mut cram_container,
 ) -> i64 {
     (*c.cast::<cram_container_layout>()).num_bases
 }
 
 pub unsafe fn cram_cram_external_c_104_cram_container_get_landmarks(
-    c: *mut hts_sys::cram_container,
+    c: *mut cram_container,
     num_landmarks: *mut i32,
 ) -> *mut i32 {
     let c = c.cast::<cram_container_layout>();
@@ -16235,7 +16258,7 @@ pub unsafe fn cram_cram_external_c_104_cram_container_get_landmarks(
 }
 
 pub unsafe fn cram_cram_external_c_112_cram_container_set_landmarks(
-    c: *mut hts_sys::cram_container,
+    c: *mut cram_container,
     num_landmarks: i32,
     landmarks: *mut i32,
 ) {
@@ -16244,12 +16267,12 @@ pub unsafe fn cram_cram_external_c_112_cram_container_set_landmarks(
     (*c).landmark = landmarks;
 }
 
-pub unsafe fn cram_cram_external_c_120_cram_container_is_empty(fd: *mut hts_sys::cram_fd) -> c_int {
+pub unsafe fn cram_cram_external_c_120_cram_container_is_empty(fd: *mut crate::htslib_rs::hts::cram_fd) -> c_int {
     (*fd.cast::<cram_fd_layout>()).empty_container
 }
 
 pub unsafe fn cram_cram_external_c_124_cram_container_get_coords(
-    c: *mut hts_sys::cram_container,
+    c: *mut cram_container,
     refid: *mut c_int,
     start: *mut i64,
     span: *mut i64,
@@ -16532,7 +16555,7 @@ pub unsafe fn cram_cram_external_c_443_cram_cid2ds_query(
 }
 
 pub unsafe fn cram_cram_external_c_476_cram_describe_encodings(
-    hdr: *mut hts_sys::cram_block_compression_hdr,
+    hdr: *mut cram_block_compression_hdr,
     ks: *mut kstring_t,
 ) -> c_int {
     let mut citer = cram_codec_iter_layout {
@@ -16583,7 +16606,7 @@ pub unsafe fn cram_cram_external_c_476_cram_describe_encodings(
 }
 
 pub unsafe fn cram_cram_external_c_522_cram_block_get_content_id(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
 ) -> i32 {
     let b = b.cast::<cram_block_layout>();
     if (*b).content_type == crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE {
@@ -16594,85 +16617,85 @@ pub unsafe fn cram_cram_external_c_522_cram_block_get_content_id(
 }
 
 pub unsafe fn cram_cram_external_c_525_cram_block_get_comp_size(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
 ) -> i32 {
     (*b.cast::<cram_block_layout>()).comp_size
 }
 
 pub unsafe fn cram_cram_external_c_526_cram_block_get_uncomp_size(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
 ) -> i32 {
     (*b.cast::<cram_block_layout>()).uncomp_size
 }
 
-pub unsafe fn cram_cram_external_c_527_cram_block_get_crc32(b: *mut hts_sys::cram_block) -> i32 {
+pub unsafe fn cram_cram_external_c_527_cram_block_get_crc32(b: *mut cram_block) -> i32 {
     (*b.cast::<cram_block_layout>()).crc32 as i32
 }
 
 pub unsafe fn cram_cram_external_c_528_cram_block_get_data(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
 ) -> *mut c_void {
     (*b.cast::<cram_block_layout>()).data.cast()
 }
 
 pub unsafe fn cram_cram_external_c_533_cram_block_get_content_type(
-    b: *mut hts_sys::cram_block,
-) -> hts_sys::cram_content_type {
+    b: *mut cram_block,
+) -> cram_content_type {
     (*b.cast::<cram_block_layout>()).content_type
 }
 
 pub unsafe fn cram_cram_external_c_537_cram_block_set_content_id(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     id: i32,
 ) {
     (*b.cast::<cram_block_layout>()).content_id = id;
 }
 
 pub unsafe fn cram_cram_external_c_538_cram_block_set_comp_size(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     size: i32,
 ) {
     (*b.cast::<cram_block_layout>()).comp_size = size;
 }
 
 pub unsafe fn cram_cram_external_c_539_cram_block_set_uncomp_size(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     size: i32,
 ) {
     (*b.cast::<cram_block_layout>()).uncomp_size = size;
 }
 
-pub unsafe fn cram_cram_external_c_540_cram_block_set_crc32(b: *mut hts_sys::cram_block, crc: i32) {
+pub unsafe fn cram_cram_external_c_540_cram_block_set_crc32(b: *mut cram_block, crc: i32) {
     (*b.cast::<cram_block_layout>()).crc32 = crc as u32;
 }
 
 pub unsafe fn cram_cram_external_c_541_cram_block_set_data(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     data: *mut c_void,
 ) {
     (*b.cast::<cram_block_layout>()).data = data.cast();
 }
 
 pub unsafe fn cram_cram_external_c_544_cram_block_append(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     data: *const c_void,
     size: c_int,
 ) -> c_int {
     cram_cram_io_h_248_block_append(b, data, size as usize)
 }
 
-pub unsafe fn cram_cram_external_c_551_cram_block_update_size(b: *mut hts_sys::cram_block) {
+pub unsafe fn cram_cram_external_c_551_cram_block_update_size(b: *mut cram_block) {
     let b = b.cast::<cram_block_layout>();
     (*b).comp_size = (*b).byte as i32;
     (*b).uncomp_size = (*b).byte as i32;
 }
 
-pub unsafe fn cram_cram_external_c_554_cram_block_get_offset(b: *mut hts_sys::cram_block) -> u64 {
+pub unsafe fn cram_cram_external_c_554_cram_block_get_offset(b: *mut cram_block) -> u64 {
     (*b.cast::<cram_block_layout>()).byte as u64
 }
 
 pub unsafe fn cram_cram_external_c_555_cram_block_set_offset(
-    b: *mut hts_sys::cram_block,
+    b: *mut cram_block,
     offset: u64,
 ) {
     (*b.cast::<cram_block_layout>()).byte = offset as usize;
@@ -16681,16 +16704,16 @@ pub unsafe fn cram_cram_external_c_555_cram_block_set_offset(
 pub unsafe fn cram_cram_external_c_568_cram_expand_method(
     data: *mut u8,
     size: i32,
-    mut comp: hts_sys::cram_block_method,
+    mut comp: cram_block_method,
 ) -> *mut cram_method_details {
-    const CRAM_COMP_UNKNOWN: hts_sys::cram_block_method = -1;
-    const CRAM_COMP_GZIP: hts_sys::cram_block_method = 1;
-    const CRAM_COMP_BZIP2: hts_sys::cram_block_method = 2;
-    const CRAM_COMP_LZMA: hts_sys::cram_block_method = 3;
-    const CRAM_COMP_RANS4X8: hts_sys::cram_block_method = 4;
-    const CRAM_COMP_RANSNX16: hts_sys::cram_block_method = 5;
-    const CRAM_COMP_ARITH: hts_sys::cram_block_method = 6;
-    const CRAM_COMP_TOK3: hts_sys::cram_block_method = 8;
+    const CRAM_COMP_UNKNOWN: cram_block_method = -1;
+    const CRAM_COMP_GZIP: cram_block_method = 1;
+    const CRAM_COMP_BZIP2: cram_block_method = 2;
+    const CRAM_COMP_LZMA: cram_block_method = 3;
+    const CRAM_COMP_RANS4X8: cram_block_method = 4;
+    const CRAM_COMP_RANSNX16: cram_block_method = 5;
+    const CRAM_COMP_ARITH: cram_block_method = 6;
+    const CRAM_COMP_TOK3: cram_block_method = 8;
     const RANS_ORDER_X32: u8 = 0x04;
     const RANS_ORDER_STRIPE: u8 = 0x08;
     const RANS_ORDER_NOSZ: u8 = 0x10;
@@ -21826,11 +21849,11 @@ mod tests {
                 content_id: 888,
                 ..direct
             };
-            let direct_ptr = (&mut direct as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+            let direct_ptr = (&mut direct as *mut cram_block_layout).cast::<cram_block>();
             let collision_ptr =
-                (&mut collision as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+                (&mut collision as *mut cram_block_layout).cast::<cram_block>();
             let ignored_ptr =
-                (&mut ignored_core as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+                (&mut ignored_core as *mut cram_block_layout).cast::<cram_block>();
 
             let mut by_id = vec![std::ptr::null_mut(); 512];
             by_id[42] = direct_ptr;
@@ -24180,7 +24203,7 @@ mod tests {
             };
             assert_eq!(
                 cram_cram_io_h_646_cram_hfile((&mut fd as *mut cram_fd_layout).cast()),
-                0x1234usize as *mut hts_sys::hFILE
+                0x1234usize as *mut crate::htslib_rs::hts::hFILE
             );
         }
     }
@@ -25205,7 +25228,7 @@ mod tests {
                 crc32_checked: 0,
                 crc_part: 0,
             };
-            let block_ptr = (&mut block as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+            let block_ptr = (&mut block as *mut cram_block_layout).cast::<cram_block>();
             let mut by_id = [std::ptr::null_mut(); 513];
             by_id[512] = block_ptr;
             let mut slice = cram_slice_layout {
@@ -26847,7 +26870,7 @@ mod tests {
                 crc_part: 0,
             };
             let input_ptr =
-                (&mut input_block as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+                (&mut input_block as *mut cram_block_layout).cast::<cram_block>();
             let mut by_id = [input_ptr];
             let mut slice = cram_slice_layout {
                 hdr: std::ptr::null_mut(),
@@ -27387,9 +27410,9 @@ mod tests {
             assert!(!const_dec.is_null());
             assert!(!(*const_dec).decode.is_null());
             let decode: unsafe fn(
-                *mut hts_sys::cram_slice,
+                *mut cram_slice,
                 *mut c_void,
-                *mut hts_sys::cram_block,
+                *mut cram_block,
                 *mut c_char,
                 *mut c_int,
             ) -> c_int = std::mem::transmute((*const_dec).decode);
@@ -27776,9 +27799,9 @@ mod tests {
     }
 
     unsafe extern "C" fn test_byte_array_len_decode_len(
-        _slice: *mut hts_sys::cram_slice,
+        _slice: *mut cram_slice,
         c: *mut c_void,
-        _in: *mut hts_sys::cram_block,
+        _in: *mut cram_block,
         out: *mut c_char,
         _out_size: *mut c_int,
     ) -> c_int {
@@ -27787,9 +27810,9 @@ mod tests {
     }
 
     unsafe extern "C" fn test_byte_array_len_decode_val(
-        _slice: *mut hts_sys::cram_slice,
+        _slice: *mut cram_slice,
         _c: *mut c_void,
-        _in: *mut hts_sys::cram_block,
+        _in: *mut cram_block,
         out: *mut c_char,
         out_size: *mut c_int,
     ) -> c_int {
@@ -27798,7 +27821,7 @@ mod tests {
     }
 
     unsafe extern "C" fn test_byte_array_len_encode_len(
-        _slice: *mut hts_sys::cram_slice,
+        _slice: *mut cram_slice,
         c: *mut c_void,
         in_: *mut c_char,
         _in_size: c_int,
@@ -27809,7 +27832,7 @@ mod tests {
     }
 
     unsafe extern "C" fn test_byte_array_len_encode_val(
-        _slice: *mut hts_sys::cram_slice,
+        _slice: *mut cram_slice,
         c: *mut c_void,
         in_: *mut c_char,
         in_size: c_int,
@@ -27819,9 +27842,9 @@ mod tests {
     }
 
     unsafe extern "C" fn test_xdelta_decode_u32(
-        _slice: *mut hts_sys::cram_slice,
+        _slice: *mut cram_slice,
         _c: *mut c_void,
-        in_: *mut hts_sys::cram_block,
+        in_: *mut cram_block,
         out: *mut c_char,
         _out_size: *mut c_int,
     ) -> c_int {
@@ -27834,7 +27857,7 @@ mod tests {
 
     unsafe extern "C" fn test_byte_array_len_store_len(
         _c: *mut c_void,
-        b: *mut hts_sys::cram_block,
+        b: *mut cram_block,
         _prefix: *mut c_char,
         _version: c_int,
     ) -> c_int {
@@ -27845,7 +27868,7 @@ mod tests {
 
     unsafe extern "C" fn test_byte_array_len_store_val(
         _c: *mut c_void,
-        b: *mut hts_sys::cram_block,
+        b: *mut cram_block,
         _prefix: *mut c_char,
         _version: c_int,
     ) -> c_int {
@@ -27855,20 +27878,20 @@ mod tests {
     }
 
     unsafe extern "C" fn test_xdelta_get_block(
-        _slice: *mut hts_sys::cram_slice,
+        _slice: *mut cram_slice,
         c: *mut c_void,
-    ) -> *mut hts_sys::cram_block {
+    ) -> *mut cram_block {
         (*(c.cast::<cram_codec_xdelta_layout>())).out.cast()
     }
 
     unsafe extern "C" fn test_xrle_get_block(
-        _slice: *mut hts_sys::cram_slice,
+        _slice: *mut cram_slice,
         c: *mut c_void,
-    ) -> *mut hts_sys::cram_block {
+    ) -> *mut cram_block {
         (*(c.cast::<cram_codec_xrle_layout>())).out.cast()
     }
 
-    unsafe extern "C" fn test_xrle_size(_slice: *mut hts_sys::cram_slice, c: *mut c_void) -> c_int {
+    unsafe extern "C" fn test_xrle_size(_slice: *mut cram_slice, c: *mut c_void) -> c_int {
         let b = (*(c.cast::<cram_codec_xrle_layout>()))
             .out
             .cast::<cram_block_layout>();
@@ -27926,7 +27949,7 @@ mod tests {
         1
     }
 
-    unsafe extern "C" fn test_varint_put32_blk(blk: *mut hts_sys::cram_block, val: i32) -> c_int {
+    unsafe extern "C" fn test_varint_put32_blk(blk: *mut cram_block, val: i32) -> c_int {
         unsafe {
             let b = blk.cast::<cram_block_layout>();
             (*b).idx = val;
@@ -27935,7 +27958,7 @@ mod tests {
     }
 
     unsafe extern "C" fn test_varint_put32_blk_append(
-        blk: *mut hts_sys::cram_block,
+        blk: *mut cram_block,
         val: i32,
     ) -> c_int {
         let mut byte = val as u8;
@@ -27947,7 +27970,7 @@ mod tests {
         1
     }
 
-    unsafe extern "C" fn test_varint_put32s_blk(blk: *mut hts_sys::cram_block, val: i32) -> c_int {
+    unsafe extern "C" fn test_varint_put32s_blk(blk: *mut cram_block, val: i32) -> c_int {
         unsafe {
             let b = blk.cast::<cram_block_layout>();
             (*b).idx = -val;
@@ -27955,7 +27978,7 @@ mod tests {
         1
     }
 
-    unsafe extern "C" fn test_varint_put64_blk(blk: *mut hts_sys::cram_block, val: i64) -> c_int {
+    unsafe extern "C" fn test_varint_put64_blk(blk: *mut cram_block, val: i64) -> c_int {
         unsafe {
             let b = blk.cast::<cram_block_layout>();
             (*b).idx = val as i32;
@@ -27963,7 +27986,7 @@ mod tests {
         1
     }
 
-    unsafe extern "C" fn test_varint_put64s_blk(blk: *mut hts_sys::cram_block, val: i64) -> c_int {
+    unsafe extern "C" fn test_varint_put64s_blk(blk: *mut cram_block, val: i64) -> c_int {
         unsafe {
             let b = blk.cast::<cram_block_layout>();
             (*b).idx = (-val) as i32;
@@ -28211,7 +28234,7 @@ mod tests {
                 crc32_checked: 0,
                 crc_part: 0,
             };
-            let ext_ptr = (&mut ext_block as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+            let ext_ptr = (&mut ext_block as *mut cram_block_layout).cast::<cram_block>();
             let mut blocks = [ext_ptr];
             let mut hdr = cram_block_slice_hdr_layout {
                 content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_MAPPED_SLICE,
@@ -28429,13 +28452,13 @@ mod tests {
                 ..direct
             };
 
-            let direct_ptr = (&mut direct as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+            let direct_ptr = (&mut direct as *mut cram_block_layout).cast::<cram_block>();
             let wrong_hash_ptr =
-                (&mut wrong_hash as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+                (&mut wrong_hash as *mut cram_block_layout).cast::<cram_block>();
             let colliding_ptr =
-                (&mut colliding as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+                (&mut colliding as *mut cram_block_layout).cast::<cram_block>();
             let non_external_ptr =
-                (&mut non_external as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+                (&mut non_external as *mut cram_block_layout).cast::<cram_block>();
             let mut block_by_id = [std::ptr::null_mut(); 768];
             block_by_id[17] = direct_ptr;
             block_by_id[256 + 502 % 251] = wrong_hash_ptr;
@@ -28616,7 +28639,7 @@ mod tests {
                 crc32_checked: 0,
                 crc_part: 0,
             };
-            let var_ptr = (&mut var_block as *mut cram_block_layout).cast::<hts_sys::cram_block>();
+            let var_ptr = (&mut var_block as *mut cram_block_layout).cast::<cram_block>();
             let mut blocks = [var_ptr];
             let mut hdr = cram_block_slice_hdr_layout {
                 content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_MAPPED_SLICE,

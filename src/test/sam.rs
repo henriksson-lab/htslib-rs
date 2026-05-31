@@ -561,10 +561,10 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
         out
     };
     if !outref.is_null()
-        && hts_sys::hts_set_opt(
-            ref_target.cast(),
-            hts_sys::hts_fmt_option_CRAM_OPT_REFERENCE,
-            outref,
+        && crate::htslib_rs::hts::hts_set_opt_ptr(
+            ref_target,
+            crate::htslib_rs::hts::CRAM_OPT_REFERENCE,
+            outref.cast_mut().cast(),
         ) < 0
     {
         libc::fprintf(
@@ -758,40 +758,33 @@ pub unsafe fn test_sam_c_705_use_header_api() {
         std::ptr::null(),
         std::ptr::null(),
         c"GO".as_ptr(),
-    ) != 1
-        || hts_sys::sam_hdr_update_line(
-            header.cast(),
+    ) != 0
+        || sam::sam_hdr_update_line(
+            header,
             c"HD".as_ptr(),
-            std::ptr::null::<c_char>(),
-            std::ptr::null::<c_char>(),
-            c"VN".as_ptr(),
-            c"1.5".as_ptr(),
-            std::ptr::null::<c_char>(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &[(c"VN".as_ptr(), c"1.5".as_ptr())],
         ) != 0
-        || hts_sys::sam_hdr_add_line(
-            header.cast(),
+        || sam::sam_hdr_add_line(
+            header,
             c"SQ".as_ptr(),
-            c"SN".as_ptr(),
-            c"ref3".as_ptr(),
-            c"LN".as_ptr(),
-            c"5003".as_ptr(),
-            std::ptr::null::<c_char>(),
+            &[
+                (c"SN".as_ptr(), c"ref3".as_ptr()),
+                (c"LN".as_ptr(), c"5003".as_ptr()),
+            ],
         ) < 0
-        || hts_sys::sam_hdr_update_line(
-            header.cast(),
+        || sam::sam_hdr_update_line(
+            header,
             c"SQ".as_ptr(),
             c"SN".as_ptr(),
             c"ref1".as_ptr(),
-            c"M5".as_ptr(),
-            c"kja8u34a2q3".as_ptr(),
-            std::ptr::null::<c_char>(),
+            &[(c"M5".as_ptr(), c"kja8u34a2q3".as_ptr())],
         ) != 0
-        || hts_sys::sam_hdr_add_pg(
-            header.cast(),
+        || sam::sam_hdr_add_pg(
+            header,
             c"samtools".as_ptr(),
-            c"VN".as_ptr(),
-            c"1.9".as_ptr(),
-            std::ptr::null::<c_char>(),
+            &[(c"VN".as_ptr(), c"1.9".as_ptr())],
         ) != 0
     {
         test_sam_bam_set1_fail(c"use_header_api".as_ptr(), c"header edit failed".as_ptr());
@@ -800,26 +793,20 @@ pub unsafe fn test_sam_c_705_use_header_api() {
     }
     let rg_line = b"@RG\tID:run1";
     if sam::sam_hdr_add_lines(header, rg_line.as_ptr().cast(), rg_line.len()) != 0
-        || hts_sys::sam_hdr_add_line(
-            header.cast(),
+        || sam::sam_hdr_add_line(
+            header,
             c"RG".as_ptr(),
-            c"ID".as_ptr(),
-            c"run2".as_ptr(),
-            std::ptr::null::<c_char>(),
+            &[(c"ID".as_ptr(), c"run2".as_ptr())],
         ) < 0
-        || hts_sys::sam_hdr_add_line(
-            header.cast(),
+        || sam::sam_hdr_add_line(
+            header,
             c"RG".as_ptr(),
-            c"ID".as_ptr(),
-            c"run3".as_ptr(),
-            std::ptr::null::<c_char>(),
+            &[(c"ID".as_ptr(), c"run3".as_ptr())],
         ) < 0
-        || hts_sys::sam_hdr_add_line(
-            header.cast(),
+        || sam::sam_hdr_add_line(
+            header,
             c"RG".as_ptr(),
-            c"ID".as_ptr(),
-            c"run4".as_ptr(),
-            std::ptr::null::<c_char>(),
+            &[(c"ID".as_ptr(), c"run4".as_ptr())],
         ) < 0
         || sam::sam_hdr_line_index(header, c"RG".as_ptr(), c"run4".as_ptr()) != 3
         || sam::sam_hdr_line_index(header, c"RG".as_ptr(), c"run5".as_ptr()) != -1
@@ -834,14 +821,12 @@ pub unsafe fn test_sam_c_705_use_header_api() {
             std::ptr::null(),
             c"SS".as_ptr(),
         ) < 0
-        || hts_sys::sam_hdr_update_line(
-            header.cast(),
+        || sam::sam_hdr_update_line(
+            header,
             c"HD".as_ptr(),
-            std::ptr::null::<c_char>(),
-            std::ptr::null::<c_char>(),
-            c"SO".as_ptr(),
-            c"coordinate".as_ptr(),
-            std::ptr::null::<c_char>(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &[(c"SO".as_ptr(), c"coordinate".as_ptr())],
         ) < 0
         || test_sam_c_669_check_target_names(
             header,
@@ -925,35 +910,29 @@ pub unsafe fn test_sam_c_921_test_header_pg_lines() {
         return;
     }
     let old_log_level = crate::htslib_rs::hts::hts_get_log_level();
-    if hts_sys::sam_hdr_add_pg(header.cast(), c"prog3".as_ptr(), std::ptr::null::<c_char>()) != 0
-        || hts_sys::sam_hdr_add_pg(
-            header.cast(),
+    if sam::sam_hdr_add_pg(header, c"prog3".as_ptr(), &[]) != 0
+        || sam::sam_hdr_add_pg(
+            header,
             c"prog4".as_ptr(),
-            c"PP".as_ptr(),
-            c"prog1".as_ptr(),
-            std::ptr::null::<c_char>(),
+            &[(c"PP".as_ptr(), c"prog1".as_ptr())],
         ) != 0
-        || hts_sys::sam_hdr_add_line(
-            header.cast(),
+        || sam::sam_hdr_add_line(
+            header,
             c"PG".as_ptr(),
-            c"ID".as_ptr(),
-            c"prog5".as_ptr(),
-            c"PN".as_ptr(),
-            c"prog5".as_ptr(),
-            c"PP".as_ptr(),
-            c"prog2".as_ptr(),
-            std::ptr::null::<c_char>(),
+            &[
+                (c"ID".as_ptr(), c"prog5".as_ptr()),
+                (c"PN".as_ptr(), c"prog5".as_ptr()),
+                (c"PP".as_ptr(), c"prog2".as_ptr()),
+            ],
         ) != 0
-        || hts_sys::sam_hdr_add_pg(header.cast(), c"prog6".as_ptr(), std::ptr::null::<c_char>())
-            != 0
-        || hts_sys::sam_hdr_add_pg(
-            header.cast(),
+        || sam::sam_hdr_add_pg(header, c"prog6".as_ptr(), &[]) != 0
+        || sam::sam_hdr_add_pg(
+            header,
             c"prog7".as_ptr(),
-            c"ID".as_ptr(),
-            c"my_id".as_ptr(),
-            c"PP".as_ptr(),
-            c"prog6".as_ptr(),
-            std::ptr::null::<c_char>(),
+            &[
+                (c"ID".as_ptr(), c"my_id".as_ptr()),
+                (c"PP".as_ptr(), c"prog6".as_ptr()),
+            ],
         ) != 0
     {
         test_sam_bam_set1_fail(
@@ -962,19 +941,15 @@ pub unsafe fn test_sam_c_921_test_header_pg_lines() {
         );
     }
     crate::htslib_rs::hts::hts_set_log_level(crate::htslib_rs::hts::HTS_LOG_OFF);
-    if hts_sys::sam_hdr_add_pg(
-        header.cast(),
+    if sam::sam_hdr_add_pg(
+        header,
         c"prog8".as_ptr(),
-        c"ID".as_ptr(),
-        c"my_id".as_ptr(),
-        std::ptr::null::<c_char>(),
+        &[(c"ID".as_ptr(), c"my_id".as_ptr())],
     ) == 0
-        || hts_sys::sam_hdr_add_pg(
-            header.cast(),
+        || sam::sam_hdr_add_pg(
+            header,
             c"prog9".as_ptr(),
-            c"PP".as_ptr(),
-            c"non-existent".as_ptr(),
-            std::ptr::null::<c_char>(),
+            &[(c"PP".as_ptr(), c"non-existent".as_ptr())],
         ) == 0
     {
         test_sam_bam_set1_fail(
@@ -1013,13 +988,7 @@ pub unsafe fn test_sam_c_1008_test_header_pg_loops() {
         } else {
             sam::sam_hdr_read(in_)
         };
-        if header.is_null()
-            || hts_sys::sam_hdr_add_pg(
-                header.cast(),
-                c"new_prog".as_ptr(),
-                std::ptr::null::<c_char>(),
-            ) != 0
-        {
+        if header.is_null() || sam::sam_hdr_add_pg(header, c"new_prog".as_ptr(), &[]) != 0 {
             test_sam_bam_set1_fail(
                 c"test_header_pg_loops".as_ptr(),
                 c"PG loop setup failed".as_ptr(),
@@ -1055,41 +1024,33 @@ pub unsafe fn test_sam_c_1087_test_header_updates() {
         );
         return;
     }
-    if hts_sys::sam_hdr_update_line(
-        header.cast(),
+    if sam::sam_hdr_update_line(
+        header,
         c"SQ".as_ptr(),
         c"SN".as_ptr(),
         c"chr2".as_ptr(),
-        c"LN".as_ptr(),
-        c"2000".as_ptr(),
-        std::ptr::null::<c_char>(),
+        &[(c"LN".as_ptr(), c"2000".as_ptr())],
     ) != 0
-        || hts_sys::sam_hdr_update_line(
-            header.cast(),
+        || sam::sam_hdr_update_line(
+            header,
             c"SQ".as_ptr(),
             c"SN".as_ptr(),
             c"chr1".as_ptr(),
-            c"SN".as_ptr(),
-            c"1".as_ptr(),
-            std::ptr::null::<c_char>(),
+            &[(c"SN".as_ptr(), c"1".as_ptr())],
         ) != 0
-        || hts_sys::sam_hdr_update_line(
-            header.cast(),
+        || sam::sam_hdr_update_line(
+            header,
             c"RG".as_ptr(),
             c"ID".as_ptr(),
             c"run1".as_ptr(),
-            c"DS".as_ptr(),
-            c"hello".as_ptr(),
-            std::ptr::null::<c_char>(),
+            &[(c"DS".as_ptr(), c"hello".as_ptr())],
         ) != 0
-        || hts_sys::sam_hdr_update_line(
-            header.cast(),
+        || sam::sam_hdr_update_line(
+            header,
             c"RG".as_ptr(),
             c"ID".as_ptr(),
             c"run2".as_ptr(),
-            c"ID".as_ptr(),
-            c"aliquot2".as_ptr(),
-            std::ptr::null::<c_char>(),
+            &[(c"ID".as_ptr(), c"aliquot2".as_ptr())],
         ) != 0
         || test_sam_c_669_check_target_names(
             header,
@@ -1206,16 +1167,14 @@ pub unsafe fn test_sam_c_1258_test_header_ref_altnames() {
             );
         }
     }
-    if hts_sys::sam_hdr_add_line(
-        header.cast(),
+    if sam::sam_hdr_add_line(
+        header,
         c"SQ".as_ptr(),
-        c"AN".as_ptr(),
-        c"fred".as_ptr(),
-        c"LN".as_ptr(),
-        c"500".as_ptr(),
-        c"SN".as_ptr(),
-        c"barney".as_ptr(),
-        std::ptr::null::<c_char>(),
+        &[
+            (c"AN".as_ptr(), c"fred".as_ptr()),
+            (c"LN".as_ptr(), c"500".as_ptr()),
+            (c"SN".as_ptr(), c"barney".as_ptr()),
+        ],
     ) < 0
     {
         test_sam_bam_set1_fail(
@@ -1580,27 +1539,27 @@ pub unsafe fn test_sam_c_1641_test_text_file(filename: *const c_char, nexp: c_in
 
 // original: check_enum1 (htslib/test/sam.c:1661)
 pub unsafe fn test_sam_c_1661_check_enum1() {
-    if hts_sys::htsCompression_no_compression != 0 {
+    if crate::htslib_rs::hts::HTS_COMPRESSION_NO_COMPRESSION != 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: no_compression is %d\n".as_ptr(),
-            hts_sys::htsCompression_no_compression,
+            crate::htslib_rs::hts::HTS_COMPRESSION_NO_COMPRESSION,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
-    if hts_sys::htsCompression_gzip != 1 {
+    if crate::htslib_rs::hts::HTS_COMPRESSION_GZIP != 1 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: gzip is %d\n".as_ptr(),
-            hts_sys::htsCompression_gzip,
+            crate::htslib_rs::hts::HTS_COMPRESSION_GZIP,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
-    if hts_sys::htsCompression_bgzf != 2 {
+    if crate::htslib_rs::hts::HTS_COMPRESSION_BGZF != 2 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"Failed: bgzf is %d\n".as_ptr(),
-            hts_sys::htsCompression_bgzf,
+            crate::htslib_rs::hts::HTS_COMPRESSION_BGZF,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }

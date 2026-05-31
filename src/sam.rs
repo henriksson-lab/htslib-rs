@@ -9273,19 +9273,109 @@ pub unsafe fn bam_index_build(fn_: *const c_char, min_shift: c_int) -> c_int {
     sam_index_build2(fn_, std::ptr::null(), min_shift)
 }
 
+// original: sam_idx_init (htslib/sam.c:1096)
+//
+// Native equivalent of htslib's sam_idx_init. For BAM / BCF / BGZF-SAM,
+// allocates a hts_idx_t sized for the header's refs (CSI if min_shift>0,
+// else BAI with min_shift=14, n_lvls=5). For CRAM, opens the index sidecar
+// as a bgzip-output stream into the cram_fd's `idxfp`. Other formats are
+// unindexable here and return -1.
 pub unsafe fn sam_idx_init(
     fp: *mut htsFile,
     h: *mut sam_hdr_t,
     min_shift: c_int,
     fnidx: *const c_char,
 ) -> c_int {
-    // TODO(P5): no native sam_idx_init yet
-    hts_sys::sam_idx_init(fp.cast(), h.cast(), min_shift, fnidx)
+    (*fp).fnidx = fnidx;
+    let fmt_kind = (*fp).format.format;
+    if fmt_kind == HTS_FORMAT_BAM
+        || fmt_kind == crate::htslib_rs::hts::HTS_FORMAT_BCF
+        || (fmt_kind == HTS_FORMAT_SAM
+            && (*fp).format.compression == crate::htslib_rs::hts::HTS_COMPRESSION_BGZF)
+    {
+        let mut fmt = HTS_FMT_CSI;
+        let mut min_shift = min_shift;
+        let n_lvls;
+        if min_shift > 0 {
+            let mut max_len: i64 = 0;
+            for i in 0..(*h).n_targets {
+                let len = *(*h).target_len.add(i as usize) as i64;
+                if max_len < len {
+                    max_len = len;
+                }
+            }
+            let mut nl: c_int = 0;
+            crate::htslib_rs::hts::hts_c_2372_hts_adjust_csi_settings(
+                max_len,
+                &mut min_shift,
+                &mut nl,
+            );
+            n_lvls = nl;
+        } else {
+            min_shift = 14;
+            n_lvls = 5;
+            fmt = HTS_FMT_BAI;
+        }
+        // bgzf_tell macro: ((block_address << 16) | (block_offset & 0xFFFF))
+        let bgzf = (*fp).fp.bgzf;
+        let offset0 =
+            (((*bgzf).block_address as u64) << 16) | ((*bgzf).block_offset as u64 & 0xFFFF);
+        (*fp).idx =
+            crate::htslib_rs::hts::hts_idx_init((*h).n_targets, fmt, offset0, min_shift, n_lvls)
+                .cast();
+        return if (*fp).idx.is_null() { -1 } else { 0 };
+    }
+
+    if fmt_kind == HTS_FORMAT_CRAM {
+        let cram_fp = (*fp).fp.cram;
+        let idxfp =
+            crate::htslib_rs::bgzf::bgzf_open(fnidx, c"wg".as_ptr());
+        crate::htslib_rs::cram::cram_fd_idxfp_set(cram_fp, idxfp);
+        return if idxfp.is_null() { -1 } else { 0 };
+    }
+
+    -1
 }
 
+// original: sam_idx_save (htslib/sam.c:1124)
+//
+// For SAM/BAM/VCF/BCF: drain the writer state, flush the underlying BGZF
+// stream, finalize the index and write it to `fp->fnidx`. For CRAM the
+// index is flushed/closed by `cram_close`, so this is a no-op (returns 0).
 pub unsafe fn sam_idx_save(fp: *mut htsFile) -> c_int {
-    // TODO(P5): no native sam_idx_save yet
-    hts_sys::sam_idx_save(fp.cast())
+    let fmt_kind = (*fp).format.format;
+    if fmt_kind == HTS_FORMAT_BAM
+        || fmt_kind == crate::htslib_rs::hts::HTS_FORMAT_BCF
+        || fmt_kind == crate::htslib_rs::hts::HTS_FORMAT_VCF
+        || fmt_kind == HTS_FORMAT_SAM
+    {
+        let ret = sam_state_destroy(fp);
+        if ret < 0 {
+            *crate::htslib_rs::c_compat::__errno_location() = -ret;
+            return -1;
+        }
+        // htsFile.is_bgzf is the `is_bgzf` bit in bitfields (bit 4); see the
+        // htsFile struct layout in src/hts.rs.
+        let is_bgzf = ((*fp).bitfields & (1 << 4)) != 0;
+        let bgzf = (*fp).fp.bgzf;
+        if !is_bgzf || crate::htslib_rs::bgzf::bgzf_flush(bgzf) < 0 {
+            return -1;
+        }
+        // bgzf_tell macro: ((block_address << 16) | (block_offset & 0xFFFF))
+        let pos = (((*bgzf).block_address as u64) << 16)
+            | ((*bgzf).block_offset as u64 & 0xFFFF);
+        crate::htslib_rs::hts::hts_c_2682_hts_idx_amend_last((*fp).idx.cast(), pos);
+        if crate::htslib_rs::hts::hts_idx_finish((*fp).idx.cast(), pos) < 0 {
+            return -1;
+        }
+        return crate::htslib_rs::hts::hts_c_2894_hts_idx_save_but_not_close(
+            (*fp).idx.cast(),
+            (*fp).fnidx,
+            crate::htslib_rs::hts::hts_idx_fmt((*fp).idx.cast()),
+        );
+    }
+    // CRAM index flush is handled by cram_close.
+    0
 }
 
 pub unsafe fn sam_itr_next(_htsfp: *mut htsFile, _itr: *mut hts_itr_t, _r: *mut bam1_t) -> c_int {
