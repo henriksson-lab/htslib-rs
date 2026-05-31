@@ -3604,18 +3604,195 @@ pub unsafe fn cram_cram_io_c_5431_cram_seek(
     let fdl = fd.cast::<cram_fd_layout>();
     (*fdl).ooc = 0;
 
-    // cram_drain_rqueue: an early `if (!fd->pool || !fd->rqueue) return;`.
-    // When either is null we are in single-threaded read mode, the common
-    // case for our consumers; no work to do. The multi-threaded drain has
-    // not yet been ported, so fall back to the C path in that case.
-    if !(*fdl).pool.is_null() && !(*fdl).rqueue.is_null() {
-        return hts_sys::cram_seek(fd.cast(), offset, whence);
-    }
+    // Drain any in-flight decode jobs natively (matches htslib's
+    // cram_drain_rqueue path before the hseek).
+    cram_drain_rqueue_native(fdl);
 
     if crate::htslib_rs::hfile::hseek((*fdl).fp, offset, whence) >= 0 {
         0
     } else {
         -1
+    }
+}
+
+// Layout-mirror for the per-decode-job state held in the rqueue. Mirrors
+// `cram_decode_job` (htslib/cram/cram_decode.c:3032): a tuple of pointers
+// plus an exit code. We touch only the (c, s) fields here.
+#[repr(C)]
+struct cram_decode_job_layout {
+    _fd: *mut cram_fd,
+    c: *mut cram_container_layout,
+    s: *mut cram_slice_layout,
+    _h: *mut sam_hdr_t,
+    _exit_code: c_int,
+}
+
+// Layout-mirror for the per-encode-job state in the rqueue. Mirrors
+// `cram_job` (htslib/cram/cram_io.c:4151): { fd, c }. Used by
+// `cram_flush_result` (WRITE-mode result-queue drain).
+#[repr(C)]
+struct cram_job_layout {
+    fd: *mut cram_fd,
+    c: *mut cram_container_layout,
+}
+
+// Native equivalent of htslib/cram/cram_io.c:4168 `cram_flush_result`.
+// Drains the WRITE-mode encoder result queue: for each completed job, run
+// `cram_flush_container2` (write the encoded container to disk) and free the
+// per-container slices + container. Returns 0 on success, -1 on error.
+unsafe fn cram_flush_result_native(fd_in: *mut cram_fd) -> c_int {
+    let mut ret: c_int = 0;
+    let mut lc: *mut cram_container_layout = std::ptr::null_mut();
+    let fdl_in = fd_in.cast::<cram_fd_layout>();
+    let rqueue = (*fdl_in)
+        .rqueue
+        .cast::<crate::htslib_rs::thread_pool::hts_tpool_process>();
+
+    let mut current_fd = fd_in;
+    loop {
+        let r = crate::htslib_rs::thread_pool::hts_tpool_next_result(rqueue);
+        if r.is_null() {
+            break;
+        }
+        let j = crate::htslib_rs::thread_pool::hts_tpool_result_data(r)
+            .cast::<cram_job_layout>();
+        if j.is_null() {
+            crate::htslib_rs::thread_pool::hts_tpool_delete_result(r, 0);
+            return -1;
+        }
+        current_fd = (*j).fd;
+        let c = (*j).c;
+        let fdl = current_fd.cast::<cram_fd_layout>();
+
+        if (*fdl).mode == b'w' as c_int
+            && crate::cram_flush_bridge::cram_cram_io_c_4089_cram_flush_container2(
+                current_fd,
+                c.cast(),
+            ) != 0
+        {
+            return -1;
+        }
+
+        // Free per-container slices (filled by encoder).
+        if !(*c).slices.is_null() {
+            for i in 0..(*c).max_slice {
+                let s = *(*c).slices.add(i as usize);
+                if !s.is_null() {
+                    cram_cram_io_c_4421_cram_free_slice(s.cast());
+                }
+                if s == (*c).slice {
+                    (*c).slice = std::ptr::null_mut();
+                }
+                *(*c).slices.add(i as usize) = std::ptr::null_mut();
+            }
+        }
+
+        // Free the current slice (set by encoder & decoder).
+        if !(*c).slice.is_null() {
+            cram_cram_io_c_4421_cram_free_slice((*c).slice.cast());
+            (*c).slice = std::ptr::null_mut();
+        }
+        (*c).curr_slice = 0;
+
+        // Free the previous container once we switch to a new one.
+        if c != lc {
+            if !lc.is_null() {
+                if (*fdl).ctr == lc {
+                    (*fdl).ctr = std::ptr::null_mut();
+                }
+                if (*fdl).ctr_mt == lc {
+                    (*fdl).ctr_mt = std::ptr::null_mut();
+                }
+                cram_cram_io_c_3705_cram_free_container(lc.cast());
+            }
+            lc = c;
+        }
+
+        crate::htslib_rs::thread_pool::hts_tpool_delete_result(r, 1);
+    }
+
+    if !lc.is_null() {
+        let fdl = current_fd.cast::<cram_fd_layout>();
+        if (*fdl).ctr == lc {
+            (*fdl).ctr = std::ptr::null_mut();
+        }
+        if (*fdl).ctr_mt == lc {
+            (*fdl).ctr_mt = std::ptr::null_mut();
+        }
+        cram_cram_io_c_3705_cram_free_container(lc.cast());
+    }
+
+    ret
+}
+
+// Native equivalent of htslib/cram/cram_decode.c:3632 `cram_drain_rqueue`.
+// Called by cram_seek/cram_close in MT mode to flush in-flight decode jobs
+// and the optional pending-job slot. Uses native `hts_tpool_*` helpers and
+// `cram_free_container`/`cram_free_slice`.
+unsafe fn cram_drain_rqueue_native(fdl: *mut cram_fd_layout) {
+    if (*fdl).pool.is_null() || (*fdl).rqueue.is_null() {
+        return;
+    }
+    let mut lc: *mut cram_container_layout = std::ptr::null_mut();
+    let rqueue =
+        (*fdl).rqueue.cast::<crate::htslib_rs::thread_pool::hts_tpool_process>();
+
+    while crate::htslib_rs::thread_pool::hts_tpool_process_empty(rqueue) == 0 {
+        let r = crate::htslib_rs::thread_pool::hts_tpool_next_result_wait(rqueue);
+        if r.is_null() {
+            break;
+        }
+        let j = crate::htslib_rs::thread_pool::hts_tpool_result_data(r)
+            .cast::<cram_decode_job_layout>();
+        if (*(*j).c).slice == (*j).s {
+            (*(*j).c).slice = std::ptr::null_mut();
+        }
+        if (*j).c != lc {
+            if !lc.is_null() {
+                if (*fdl).ctr == lc {
+                    (*fdl).ctr = std::ptr::null_mut();
+                }
+                if (*fdl).ctr_mt == lc {
+                    (*fdl).ctr_mt = std::ptr::null_mut();
+                }
+                cram_cram_io_c_3705_cram_free_container(lc.cast());
+            }
+            lc = (*j).c;
+        }
+        cram_cram_io_c_4421_cram_free_slice((*j).s.cast());
+        crate::htslib_rs::thread_pool::hts_tpool_delete_result(r, 1);
+    }
+
+    if !(*fdl).job_pending.is_null() {
+        let j = (*fdl).job_pending.cast::<cram_decode_job_layout>();
+        if (*(*j).c).slice == (*j).s {
+            (*(*j).c).slice = std::ptr::null_mut();
+        }
+        if (*j).c != lc {
+            if !lc.is_null() {
+                if (*fdl).ctr == lc {
+                    (*fdl).ctr = std::ptr::null_mut();
+                }
+                if (*fdl).ctr_mt == lc {
+                    (*fdl).ctr_mt = std::ptr::null_mut();
+                }
+                cram_cram_io_c_3705_cram_free_container(lc.cast());
+            }
+            lc = (*j).c;
+        }
+        cram_cram_io_c_4421_cram_free_slice((*j).s.cast());
+        crate::htslib_rs::c_compat::free(j.cast());
+        (*fdl).job_pending = std::ptr::null_mut();
+    }
+
+    if !lc.is_null() {
+        if (*fdl).ctr == lc {
+            (*fdl).ctr = std::ptr::null_mut();
+        }
+        if (*fdl).ctr_mt == lc {
+            (*fdl).ctr_mt = std::ptr::null_mut();
+        }
+        cram_cram_io_c_3705_cram_free_container(lc.cast());
     }
 }
 
@@ -9503,11 +9680,6 @@ pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
     // now handled natively below via the cram_flush_bridge translations of
     // `free_bam_list` (htslib/cram/cram_io.c:3697) and `cram_index_free`
     // (htslib/cram/cram_index.c:374).
-    let needs_c_close = !(*fdl).pool.is_null() || !(*fdl).rqueue.is_null();
-    if needs_c_close {
-        return hts_sys::cram_close(fd.cast());
-    }
-
     let mut ret: c_int = 0;
 
     // C: if (fd->mode == 'w' && fd->ctr) { ... flush ... }
@@ -9529,7 +9701,27 @@ pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
         }
     }
 
-    // cram_drain_rqueue / hts_tpool_process_flush: pool/rqueue NULL ⇒ no-op.
+    // C (cram_io.c:5572-5589): MT-pool cleanup. Drain in-flight decode jobs
+    // (READ mode), flush the encoder result queue (WRITE mode), then destroy
+    // the pool's result queue. Single-threaded (pool/rqueue null) is a no-op.
+    if (*fdl).mode != b'w' as c_int {
+        cram_drain_rqueue_native(fdl);
+    }
+    if !(*fdl).pool.is_null() && (*fdl).eof >= 0 && !(*fdl).rqueue.is_null() {
+        let rq = (*fdl)
+            .rqueue
+            .cast::<crate::htslib_rs::thread_pool::hts_tpool_process>();
+        crate::htslib_rs::thread_pool::hts_tpool_process_flush(rq);
+        if cram_flush_result_native(fd) != 0 {
+            ret = -1;
+        }
+        if (*fdl).mode == b'w' as c_int {
+            // prevent double-freeing: cram_flush_result freed lc, which was the ctr
+            (*fdl).ctr = std::ptr::null_mut();
+        }
+        crate::htslib_rs::thread_pool::hts_tpool_process_destroy(rq);
+        (*fdl).rqueue = std::ptr::null_mut();
+    }
 
     // C: if (ret == 0 && fd->mode == 'w') cram_write_eof_block(fd)
     if ret == 0 && (*fdl).mode == b'w' as c_int {
@@ -9537,9 +9729,6 @@ pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
             ret = -1;
         }
     }
-
-    // cram_drain_rqueue: early `if (!fd->pool || !fd->rqueue) return;`
-    // → single-threaded read mode, no-op.
 
     libc::pthread_mutex_destroy(&mut (*fdl).metrics_lock);
     libc::pthread_mutex_destroy(&mut (*fdl).ref_lock);
