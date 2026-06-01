@@ -36,6 +36,12 @@ But:
 
 This blurb might be out of date. Go to [this page](https://github.com/henriksson-lab/rustification) for the latest information and further information about how we approach translation
 
+## Source layout
+
+Rust files mirror the htslib C source 1:1 by canonical mapping (lowercased filename, hyphens → underscores). For example `htslib/annot-tsv.c` → `src/annot_tsv.rs`, `htslib/cram/cram_io.c` → `src/cram/cram_io.rs`, `htslib/htscodecs/htscodecs/rANS_static.c` → `src/htscodecs/rans_static.rs`.
+
+SIMD variants (`rANS_static32x16pr_avx2.c`, `_avx512.c`, `_neon.c`, `_sse4.c`) are intentionally not mapped — Rust uses LLVM auto-vectorization.
+
 ## Real-data performance comparisons
 
 `tools/compare-real-data-performance.sh` compares translated release binaries with the checked-out original htslib binaries on larger local real-data workloads. It writes timing CSVs and per-run output hashes under `/tmp/htslib-rs-real-data-perf` by default, avoiding large outputs in the repository.
