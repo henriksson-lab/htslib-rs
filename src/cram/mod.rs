@@ -3427,7 +3427,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
     }
 
     let orig_method = method;
-    let mut comp: *mut c_char;
+    let comp: *mut c_char;
     let mut comp_size: usize = 0;
     let strat: c_int;
 

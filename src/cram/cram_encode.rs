@@ -3021,7 +3021,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
         if r != 0 {
             *(*tagmap).vals.offset(k as isize) = std::ptr::null_mut();
         }
-        let mut k_global: u32;
+        let k_global: u32;
         if r == 1 {
             libc::pthread_mutex_lock(&raw mut (*fdl).metrics_lock);
             let metrics_h = (*fdl).tags_used.cast::<kh_m_metrics_layout>();
@@ -3726,7 +3726,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
         .add((*b).core.l_qname as usize)
         .add(((*b).core.l_qseq + 1 >> 1) as usize) as *mut c_char;
 
-    let mut fake_qual: c_int;
+    let fake_qual: c_int;
     let mut NM: c_int = 0;
 
     // Mapped vs unmapped split
