@@ -5,7 +5,6 @@
 pub mod annot_tsv;
 pub mod bgzf;
 pub mod bgzip;
-#[path = "cram.rs"]
 pub mod cram;
 pub mod errmod;
 pub mod faidx;
