@@ -1164,7 +1164,7 @@ unsafe fn arith_uncompress_to_raw(
         *out_size = osz;
     }
 
-    let mut c_meta_size: u32;
+    let c_meta_size: u32;
     let mut tmp1_size: u32 = *out_size;
     let tmp2_size: u32;
     let mut tmp1: *mut u8;

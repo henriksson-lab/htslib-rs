@@ -462,7 +462,7 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     cp += nfsz as usize;
 
     // Switch cp back into input
-    let mut cp_in = match tab_end {
+    let cp_in = match tab_end {
         Some(t) => t,
         None => cp,
     };

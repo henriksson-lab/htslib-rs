@@ -354,7 +354,7 @@ pub fn read_array(r#in: &[u8], array: &mut [u32], size: i32) -> i32 {
     let mut R = [0u8; 1024];
     let mut last: i32 = -1;
 
-    let mut size = min_i32(1024, size);
+    let size = min_i32(1024, size);
 
     // Remove level one of run-len encoding
     let mut i: usize = 0;
@@ -1813,7 +1813,7 @@ pub fn uncompress_block_fqz2f(
     if pr < 0 {
         return Vec::new();
     }
-    let mut in_idx = in_idx0 + pr as usize;
+    let in_idx = in_idx0 + pr as usize;
 
     // Optimisations to remove shifts from main loop
     {

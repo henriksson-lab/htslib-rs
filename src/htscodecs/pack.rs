@@ -500,7 +500,7 @@ pub fn hts_unpack_<'a>(
     nsym: i32,
     p: &[u8],
 ) -> Option<&'a mut [u8]> {
-    let mut c: u8;
+    let c: u8;
     let mut i: i64;
     let mut j: i64;
     let olen: i64;

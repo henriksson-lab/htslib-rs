@@ -1,6 +1,6 @@
 // Functions translated from htslib/vcfutils.c.
 
-use std::ffi::{c_char, c_int, c_uint, c_void};
+use std::ffi::{c_char, c_int, c_void};
 use std::mem::size_of;
 
 use crate::htslib_rs::hts::{

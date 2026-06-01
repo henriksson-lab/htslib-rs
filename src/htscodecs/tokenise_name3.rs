@@ -269,12 +269,10 @@ pub fn create_context(mut max_names: i32) -> *mut name_context {
     }
 
     max_names += 1;
-    let ctx = unsafe {
-        htscodecs_tls_alloc(
-            std::mem::size_of::<name_context>()
-                + (max_names as usize) * std::mem::size_of::<last_context>(),
-        )
-    } as *mut name_context;
+    let ctx = htscodecs_tls_alloc(
+        std::mem::size_of::<name_context>()
+            + (max_names as usize) * std::mem::size_of::<last_context>(),
+    ) as *mut name_context;
     if ctx.is_null() {
         return std::ptr::null_mut();
     }
@@ -857,6 +855,7 @@ pub fn search_trie(
 
 /// `static int encode_name(name_context *ctx, char *name, int len, int mode)`
 // tokenise_name3.c:695
+#[allow(unused_unsafe)]
 pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: i32) -> i32 {
     let name_ptr = name.as_mut_ptr();
     let mut is_fixed = 0i32;
@@ -1075,7 +1074,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
             // digits starting 1-9; encode value
             let mut s = i as u32;
             let mut v: u32 = 0;
-            let mut d: i32;
+            let d: i32;
             let lenu = len as u32;
             while s < lenu && isdigit(nb(s as usize)) && s - i as u32 <= 8 {
                 v = v.wrapping_mul(10).wrapping_add((nb(s as usize) - b'0' as i32) as u32);
@@ -1131,7 +1130,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
             // Digits starting with zero; encode length + value
             let mut s = i as u32;
             let mut v: u32 = 0;
-            let mut d: i32;
+            let d: i32;
             let lenu = len as u32;
             while s < lenu && isdigit(nb(s as usize)) && s - i as u32 <= 8 {
                 v = v.wrapping_mul(10).wrapping_add((nb(s as usize) - b'0' as i32) as u32);
@@ -1240,6 +1239,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
 
 /// `static int decode_name(name_context *ctx, char *name, int name_len)`
 // tokenise_name3.c:1021
+#[allow(unused_unsafe)]
 pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -> i32 {
     let name_ptr = name.as_mut_ptr();
     let t0v = decode_token_type(ctx, 0) as i32;

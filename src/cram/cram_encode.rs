@@ -1,7 +1,7 @@
 // Functions translated from htslib/cram/cram_encode.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_int, c_uchar, c_uint, c_ulong, c_void, CStr};
+use std::ffi::{c_char, c_int, c_uchar, c_uint, c_void};
 
 use super::*;
 
@@ -1040,6 +1040,9 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
 /// `cram_compress_slice` (htslib/cram/cram_encode.c:804). Choose a set of
 /// compression methods per data series and compress every block of the slice.
 /// Returns 0 on success, -1 on failure.
+// `method_f` is assigned in branches that are later unconditionally overwritten;
+// retained for literal parity with the C source.
+#[allow(unused_assignments)]
 pub unsafe fn cram_cram_encode_c_804_cram_compress_slice(
     fd: *mut cram_fd,
     c: *mut cram_container,
@@ -2304,7 +2307,7 @@ pub unsafe fn cram_cram_encode_c_1437_add_read_names(
 /// slice's feature vector (grows `features` via realloc, doubling `afeatures`
 /// from 0 to 1024 on first insert) and updates the per-record FP delta and
 /// FC code stats. Returns 0 on success, -1 on realloc failure.
-pub unsafe fn cram_cram_encode_c_2578_cram_add_feature(
+pub(crate) unsafe fn cram_cram_encode_c_2578_cram_add_feature(
     c: *mut cram_container,
     s: *mut cram_slice,
     r: *mut cram_record_layout,
@@ -2364,7 +2367,7 @@ pub unsafe fn cram_cram_encode_c_2578_cram_add_feature(
 /// `cram_add_substitution` (htslib/cram/cram_encode.c:2605). Records either an
 /// 'X' substitution (when both read base and ref base are known A/C/G/T(/N))
 /// or a 'B' (base+qual) feature, then appends it via `cram_add_feature`.
-pub unsafe fn cram_cram_encode_c_2605_cram_add_substitution(
+pub(crate) unsafe fn cram_cram_encode_c_2605_cram_add_substitution(
     fd: *mut cram_fd,
     c: *mut cram_container,
     s: *mut cram_slice,
@@ -2419,7 +2422,7 @@ pub unsafe fn cram_cram_encode_c_2605_cram_add_substitution(
 
 /// `cram_add_bases` (htslib/cram/cram_encode.c:2632). Builds a 'b' feature
 /// referencing a span of `seqs_blk` and appends it.
-pub unsafe fn cram_cram_encode_c_2632_cram_add_bases(
+pub(crate) unsafe fn cram_cram_encode_c_2632_cram_add_bases(
     _fd: *mut cram_fd,
     c: *mut cram_container,
     s: *mut cram_slice,
@@ -2441,7 +2444,7 @@ pub unsafe fn cram_cram_encode_c_2632_cram_add_bases(
 
 /// `cram_add_base` (htslib/cram/cram_encode.c:2645). Records a single 'B'
 /// base+qual feature, updating DS_BA/DS_QS stats and qual_blk.
-pub unsafe fn cram_cram_encode_c_2645_cram_add_base(
+pub(crate) unsafe fn cram_cram_encode_c_2645_cram_add_base(
     _fd: *mut cram_fd,
     c: *mut cram_container,
     s: *mut cram_slice,
@@ -2474,7 +2477,7 @@ pub unsafe fn cram_cram_encode_c_2645_cram_add_base(
 
 /// `cram_add_quality` (htslib/cram/cram_encode.c:2662). Records a 'Q' quality
 /// feature and appends the qual byte to `qual_blk`.
-pub unsafe fn cram_cram_encode_c_2662_cram_add_quality(
+pub(crate) unsafe fn cram_cram_encode_c_2662_cram_add_quality(
     _fd: *mut cram_fd,
     c: *mut cram_container,
     s: *mut cram_slice,
@@ -2501,7 +2504,7 @@ pub unsafe fn cram_cram_encode_c_2662_cram_add_quality(
 
 /// `cram_add_deletion` (htslib/cram/cram_encode.c:2677). Records a 'D'
 /// deletion feature and updates DS_DL.
-pub unsafe fn cram_cram_encode_c_2677_cram_add_deletion(
+pub(crate) unsafe fn cram_cram_encode_c_2677_cram_add_deletion(
     c: *mut cram_container,
     s: *mut cram_slice,
     r: *mut cram_record_layout,
@@ -2525,7 +2528,7 @@ pub unsafe fn cram_cram_encode_c_2677_cram_add_deletion(
 /// `cram_add_softclip` (htslib/cram/cram_encode.c:2687). Records an 'S'
 /// soft-clip feature; v1 stores bases in `base_blk` with a NUL terminator,
 /// v2+ stores them in `soft_blk` (or 'N' fill if `base` is null).
-pub unsafe fn cram_cram_encode_c_2687_cram_add_softclip(
+pub(crate) unsafe fn cram_cram_encode_c_2687_cram_add_softclip(
     c: *mut cram_container,
     s: *mut cram_slice,
     r: *mut cram_record_layout,
@@ -2611,7 +2614,7 @@ pub unsafe fn cram_cram_encode_c_2687_cram_add_softclip(
 
 /// `cram_add_hardclip` (htslib/cram/cram_encode.c:2723). Records an 'H'
 /// hard-clip feature (uses S-shape layout: pos/code/len) and updates DS_HC.
-pub unsafe fn cram_cram_encode_c_2723_cram_add_hardclip(
+pub(crate) unsafe fn cram_cram_encode_c_2723_cram_add_hardclip(
     c: *mut cram_container,
     s: *mut cram_slice,
     r: *mut cram_record_layout,
@@ -2634,7 +2637,7 @@ pub unsafe fn cram_cram_encode_c_2723_cram_add_hardclip(
 
 /// `cram_add_skip` (htslib/cram/cram_encode.c:2733). Records an 'N' ref-skip
 /// feature (uses S-shape layout: pos/code/len) and updates DS_RS.
-pub unsafe fn cram_cram_encode_c_2733_cram_add_skip(
+pub(crate) unsafe fn cram_cram_encode_c_2733_cram_add_skip(
     c: *mut cram_container,
     s: *mut cram_slice,
     r: *mut cram_record_layout,
@@ -2657,7 +2660,7 @@ pub unsafe fn cram_cram_encode_c_2733_cram_add_skip(
 
 /// `cram_add_pad` (htslib/cram/cram_encode.c:2743). Records a 'P' padding
 /// feature (uses S-shape layout: pos/code/len) and updates DS_PD.
-pub unsafe fn cram_cram_encode_c_2743_cram_add_pad(
+pub(crate) unsafe fn cram_cram_encode_c_2743_cram_add_pad(
     c: *mut cram_container,
     s: *mut cram_slice,
     r: *mut cram_record_layout,
@@ -2682,7 +2685,7 @@ pub unsafe fn cram_cram_encode_c_2743_cram_add_pad(
 /// an 'i' single-base insert (DS_BA stats updated). Longer inserts produce
 /// an 'I' feature whose bases are appended to `base_blk` (with a NUL
 /// terminator), or 'N' fill if `base` is null.
-pub unsafe fn cram_cram_encode_c_2753_cram_add_insertion(
+pub(crate) unsafe fn cram_cram_encode_c_2753_cram_add_insertion(
     c: *mut cram_container,
     s: *mut cram_slice,
     r: *mut cram_record_layout,
@@ -3018,7 +3021,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
         if r != 0 {
             *(*tagmap).vals.offset(k as isize) = std::ptr::null_mut();
         }
-        let mut k_global: u32 = 0;
+        let mut k_global: u32;
         if r == 1 {
             libc::pthread_mutex_lock(&raw mut (*fdl).metrics_lock);
             let metrics_h = (*fdl).tags_used.cast::<kh_m_metrics_layout>();
@@ -3049,7 +3052,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                     break;
                 }
                 *(*tagmap).vals.offset(k as isize) = m;
-                let mut c_0: *mut cram_codec = std::ptr::null_mut();
+                let c_0: *mut cram_codec;
                 match *aux.offset(2) as c_int {
                     90 | 72 => {
                         c_0 = cram_cram_codecs_c_3928_cram_encoder_init(
@@ -3409,7 +3412,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                     | ((*(aux as *mut c_uchar).offset(5) as u64) << 8)
                     | ((*(aux as *mut c_uchar).offset(6) as u64) << 16)
                     | ((*(aux as *mut c_uchar).offset(7) as u64) << 24);
-                let mut blen: u64 = 0;
+                let mut blen: u64;
                 if (*tm).blk.is_null() {
                     (*tm).blk = cram_cram_io_c_1388_cram_new_block(
                         CRAM_CONTENT_TYPE_EXTERNAL,
@@ -3723,7 +3726,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
         .add((*b).core.l_qname as usize)
         .add(((*b).core.l_qseq + 1 >> 1) as usize) as *mut c_char;
 
-    let mut fake_qual: c_int = -1;
+    let mut fake_qual: c_int;
     let mut NM: c_int = 0;
 
     // Mapped vs unmapped split
@@ -4211,7 +4214,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
     // Now we know apos and aend both — update mate-pair information.
     {
         let mut new_: c_int;
-        let mut k: u32;
+        let k: u32;
         let sec: usize = if (*crl).flags & BAM_FSECONDARY != 0 { 1 } else { 0 };
         let mut goto_detached = false;
 

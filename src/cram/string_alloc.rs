@@ -1,7 +1,7 @@
 // Functions translated from htslib/cram/string_alloc.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::c_char;
 
 use super::*;
 

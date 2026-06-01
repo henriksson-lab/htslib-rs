@@ -1,7 +1,7 @@
 // Functions translated from htslib/sam_mods.c (base-modification API).
 // Extracted from src/sam.rs.
 
-use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
+use std::ffi::{c_char, c_int};
 
 use crate::htslib_rs::sam::*;
 use crate::htslib_rs::hts::hts_str2uint;

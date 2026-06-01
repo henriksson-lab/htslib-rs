@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    ffi::{c_char, c_int, c_uchar, c_uint, c_void, CStr},
+    ffi::{c_char, c_int, c_uint, c_void, CStr},
     io::Read,
 };
 
@@ -143,7 +143,7 @@ pub const SAM_POS: c_uint = 8;
 pub const SAM_CIGAR: c_uint = 32;
 
 // Native HTS_IDX_DELIM separator (htslib/hts.h).
-pub const HTS_IDX_DELIM: &[u8; 8] = b"##idx##\0";
+pub(crate) const HTS_IDX_DELIM: &[u8; 8] = b"##idx##\0";
 
 #[derive(Clone, Copy)]
 struct cram_ds_list {
@@ -898,7 +898,7 @@ struct cram_block_slice_hdr_layout {
 // only stores a `*mut cram_feature_layout`. The union is the widest member.
 #[repr(C)]
 #[derive(Clone, Copy)]
-union cram_feature_layout {
+pub(crate) union cram_feature_layout {
     fields: [c_int; 4],
 }
 
@@ -908,7 +908,7 @@ union cram_feature_layout {
 // (hts_sys type in signature space; layout-identical to C `struct cram_slice *`).
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct cram_record_layout {
+pub(crate) struct cram_record_layout {
     s: *mut cram_slice_layout,
     ref_id: i32,
     flags: i32,
@@ -1221,7 +1221,7 @@ struct kh_m_i2i_layout {
 
 
 #[repr(C)]
-struct cram_block_compression_hdr_layout {
+pub(crate) struct cram_block_compression_hdr_layout {
     ref_seq_id: i32,
     ref_seq_start: i64,
     ref_seq_span: i64,
@@ -2835,7 +2835,7 @@ struct cram_job_layout {
 // `cram_flush_container2` (write the encoded container to disk) and free the
 // per-container slices + container. Returns 0 on success, -1 on error.
 unsafe fn cram_flush_result_native(fd_in: *mut cram_fd) -> c_int {
-    let mut ret: c_int = 0;
+    let ret: c_int = 0;
     let mut lc: *mut cram_container_layout = std::ptr::null_mut();
     let fdl_in = fd_in.cast::<cram_fd_layout>();
     let rqueue = (*fdl_in)
@@ -3427,9 +3427,9 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
     }
 
     let orig_method = method;
-    let mut comp: *mut c_char = std::ptr::null_mut();
+    let mut comp: *mut c_char;
     let mut comp_size: usize = 0;
-    let mut strat: c_int;
+    let strat: c_int;
 
     // methmap (cram_io.c:1929): maps internal enum to the "external" enum
     // for the on-wire b->method field.
@@ -13587,16 +13587,20 @@ mod tests {
     #[test]
     fn cram_read_container_and_slice_header_byte_parity_with_c() {
         // Candidate fixtures, all CRAM v3.0; first existing one is used.
-        let candidates = [
-            "htslib/test/ce#5b_java.cram",
-            "htslib/test/auxf#values_java.cram",
-            "htslib/test/range.cram",
-            "htslib/test/xx#large_aux_java.cram",
+        // Anchor on CARGO_MANIFEST_DIR so the lookup is cwd-independent: other
+        // tests (e.g. original_sam_c_mempolicy_runs_sam_to_bam_to_cram_block_io)
+        // chdir into a tmpdir and would race a relative-path fixture lookup.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let candidates: [String; 4] = [
+            format!("{manifest_dir}/htslib/test/ce#5b_java.cram"),
+            format!("{manifest_dir}/htslib/test/auxf#values_java.cram"),
+            format!("{manifest_dir}/htslib/test/range.cram"),
+            format!("{manifest_dir}/htslib/test/xx#large_aux_java.cram"),
         ];
         let path = candidates
             .iter()
-            .copied()
             .find(|p| std::path::Path::new(p).exists())
+            .map(String::as_str)
             .expect("no CRAM fixture found under htslib/test/");
         eprintln!("[parity] using fixture: {path}");
 
@@ -13815,11 +13819,15 @@ mod tests {
     #[cfg(feature = "parity")]
     #[test]
     fn cram_decode_compression_header_byte_parity_with_c() {
-        let candidates = [
-            "htslib/test/ce#5b_java.cram",
-            "htslib/test/auxf#values_java.cram",
-            "htslib/test/range.cram",
-            "htslib/test/xx#large_aux_java.cram",
+        // Anchor on CARGO_MANIFEST_DIR so the lookup is cwd-independent: other
+        // tests (e.g. original_sam_c_mempolicy_runs_sam_to_bam_to_cram_block_io)
+        // chdir into a tmpdir and would race a relative-path fixture lookup.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let candidates: [String; 4] = [
+            format!("{manifest_dir}/htslib/test/ce#5b_java.cram"),
+            format!("{manifest_dir}/htslib/test/auxf#values_java.cram"),
+            format!("{manifest_dir}/htslib/test/range.cram"),
+            format!("{manifest_dir}/htslib/test/xx#large_aux_java.cram"),
         ];
 
         unsafe extern "C" {
@@ -13831,7 +13839,7 @@ mod tests {
         }
 
         let mut tested = 0usize;
-        for path in candidates {
+        for path in candidates.iter().map(String::as_str) {
             if !std::path::Path::new(path).exists() {
                 continue;
             }
@@ -13983,13 +13991,29 @@ mod tests {
         use crate::htslib_rs::sam::{bam1_t, bam_destroy1, bam_init1};
 
         // (cram fixture, reference fasta or None for no-ref/unmapped).
-        let fixtures: &[(&str, Option<&str>)] = &[
-            ("htslib/test/ce#5b_java.cram", Some("htslib/test/ce.fa")),
-            ("htslib/test/auxf#values_java.cram", Some("htslib/test/auxf.fa")),
-            ("htslib/test/xx#large_aux_java.cram", Some("htslib/test/xx.fa")),
+        // Anchor on CARGO_MANIFEST_DIR so the lookup is cwd-independent: other
+        // tests (e.g. original_sam_c_mempolicy_runs_sam_to_bam_to_cram_block_io)
+        // chdir into a tmpdir and would race a relative-path fixture lookup.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let fixtures: Vec<(String, Option<String>)> = vec![
+            (
+                format!("{manifest_dir}/htslib/test/ce#5b_java.cram"),
+                Some(format!("{manifest_dir}/htslib/test/ce.fa")),
+            ),
+            (
+                format!("{manifest_dir}/htslib/test/auxf#values_java.cram"),
+                Some(format!("{manifest_dir}/htslib/test/auxf.fa")),
+            ),
+            (
+                format!("{manifest_dir}/htslib/test/xx#large_aux_java.cram"),
+                Some(format!("{manifest_dir}/htslib/test/xx.fa")),
+            ),
             // range.cram exercises multi-container pumping; its @SQ refs are
             // the CHROMOSOME_* sequences from ce.fa.
-            ("htslib/test/range.cram", Some("htslib/test/ce.fa")),
+            (
+                format!("{manifest_dir}/htslib/test/range.cram"),
+                Some(format!("{manifest_dir}/htslib/test/ce.fa")),
+            ),
         ];
 
         // Test-only externs for the C decode-pipeline oracle. Production no
@@ -14001,7 +14025,9 @@ mod tests {
         }
 
         let mut tested = 0usize;
-        for (cram, reff) in fixtures.iter().copied() {
+        for (cram, reff) in fixtures.iter() {
+            let cram: &str = cram.as_str();
+            let reff: Option<&str> = reff.as_deref();
             if !std::path::Path::new(cram).exists() {
                 continue;
             }

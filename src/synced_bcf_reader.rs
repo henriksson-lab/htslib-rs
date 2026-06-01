@@ -1,11 +1,11 @@
 // Functions translated from htslib/synced_bcf_reader.c.
 // Extracted from src/vcf.rs.
 
-use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void};
 
 use crate::htslib_rs::vcf::*;
 use crate::htslib_rs::hts::{
-    htsFile, hts_close, hts_open, hts_pos_t, kbs_destroy, kstring_t, HTS_FORMAT_VCF,
+    htsFile, hts_close, hts_open, hts_pos_t, kstring_t, HTS_FORMAT_VCF,
     KS_SEP_LINE,
 };
 

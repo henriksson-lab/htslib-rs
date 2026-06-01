@@ -5,7 +5,7 @@ use crate::htslib_rs::c_compat;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::bgzf::{
-    bgzf_c_189_bgzf_idx_push, bgzf_flush, bgzf_index_build_init,
+    bgzf_c_189_bgzf_idx_push, bgzf_flush,
     bgzf_internal_h_51_bgzf_set_private_data, bgzf_internal_h_67_bgzf_get_private_data, bgzf_read,
     bgzf_useek, bgzf_utell, bgzf_write, BgzfPrivateDataCleanupFunc,
 };
@@ -13,8 +13,8 @@ use super::hfile::{hseek, htslib_hfile_h_155_htell as htell};
 use super::hts::{
     htsFile, hts_close, hts_get_bgzfp, hts_getline, hts_idx_t, hts_itr_t, hts_open, hts_pos_t,
     hts_str2dbl, HTS_POS_MAX,
-    hts_str2int, hts_str2uint, i16_to_le, i32_to_le, i64_to_le, kbitset_t, kbs_destroy, kbs_exists,
-    kbs_init, kbs_insert, kputc, kputc_, kputd, kputs, kputsn, kputw, ks_resize, kstrtok, kstring_t,
+    hts_str2int, hts_str2uint, i16_to_le, i32_to_le, i64_to_le, kbitset_t,
+    kputc, kputc_, kputd, kputs, kputsn, kputw, ks_resize, kstrtok, kstring_t,
     le_to_float, le_to_i16, le_to_i32, le_to_i64, le_to_i8, le_to_u16, le_to_u32, size_t, toupper_c,
     BGZF, HTS_COMPRESSION_BGZF, HTS_COMPRESSION_NO_COMPRESSION, HTS_FORMAT_BCF,
     HTS_FORMAT_BINARY_FORMAT, HTS_FORMAT_TEXT_FORMAT, HTS_FORMAT_VARIANT_DATA, HTS_FORMAT_VCF,
@@ -2764,7 +2764,7 @@ unsafe fn vcf_parse_format_max3(
 ) -> c_int {
     let mut n_sample_ori: c_int = -1;
     let mut r = q.add(1); // r: position in the format string
-    let mut l: u32 = 0;
+    let mut l: u32;
     let mut m: u32 = 1;
     let mut g: u32 = 1;
     (*v).set_n_sample(0);
@@ -2821,7 +2821,6 @@ unsafe fn vcf_parse_format_max3(
                     if (*f).is_gt && (*f).max_g < g {
                         (*f).max_g = g;
                     }
-                    l = 0;
                     m = 1;
                     g = 1;
                     if *r == b':' as c_char {
@@ -3430,7 +3429,7 @@ unsafe fn fix_chromosome(h: *const bcf_hdr_t, d: *mut kh_vdict_t, p: *const c_ch
     let tmp = std::ffi::CString::new(format!("##contig=<ID={}>", name)).unwrap_or_default();
     let mut l: c_int = 0;
     let hrec = bcf_hdr_parse_line(h, tmp.as_ptr(), &mut l);
-    let mut res = if !hrec.is_null() {
+    let res = if !hrec.is_null() {
         bcf_hdr_add_hrec(h.cast_mut(), hrec)
     } else {
         -1
@@ -9599,7 +9598,7 @@ unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c
     bcf_hrec_set_type(hrec);
 
     if (*hrec).type_ as u32 == BCF_HL_CTG {
-        let mut len: hts_pos_t = 0;
+        let len: hts_pos_t;
         let mut i = bcf_hrec_find_key(hrec, c"length".as_ptr());
         if i < 0 {
             len = 0;
@@ -9768,7 +9767,7 @@ unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c
     if id.is_null() {
         return 0;
     }
-    let mut str_ = cc_strdup(id);
+    let str_ = cc_strdup(id);
     if str_.is_null() {
         return -1;
     }
@@ -9873,7 +9872,7 @@ pub unsafe fn bcf_hdr_add_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c_
         }
     }
 
-    let mut i: c_int;
+    let i: c_int;
     if (*hrec).type_ as u32 == BCF_HL_STR && {
         i = bcf_hrec_find_key(hrec, c"ID".as_ptr());
         i >= 0
@@ -11358,7 +11357,7 @@ pub unsafe fn bcf_get_info_values(
     let info_type = (*info).type_;
     let vptr = (*info).vptr;
     let is_long = type_ == BCF_HT_LONG as c_int;
-    let mut ret: c_int;
+    let ret: c_int;
 
     macro_rules! branch_int {
         ($read:expr, $sz:expr, $missing:expr, $vend:expr) => {{

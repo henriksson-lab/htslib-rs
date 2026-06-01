@@ -1,7 +1,7 @@
 // Functions translated from htslib/cram/cram_index.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_int, c_void, CStr};
+use std::ffi::{c_char, c_int};
 
 use super::*;
 
@@ -502,7 +502,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
     let mut buf = [0 as c_char; 65536];
     let mut kstr: kstring_t = std::mem::zeroed();
     let mut idx: *mut cram_index_layout;
-    let mut idx_stack: *mut *mut cram_index_layout = std::ptr::null_mut();
+    let mut idx_stack: *mut *mut cram_index_layout;
     let mut idx_stack_alloc: c_int = 0;
     let mut idx_stack_ptr: c_int = 0;
     let mut pos: usize = 0;

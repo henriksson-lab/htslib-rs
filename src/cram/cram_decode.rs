@@ -1,7 +1,7 @@
 // Functions translated from htslib/cram/cram_decode.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_int, c_uchar, c_uint, c_ulong, c_void, CStr};
+use std::ffi::{c_char, c_int, c_void};
 
 use super::*;
 
@@ -12,7 +12,7 @@ use super::*;
 /// tag-list) and stores both into the compression header. Ownership matches C:
 /// `tl` is calloc'd and `td_blk` is the new block; both are freed by
 /// `cram_free_compression_header`. Returns bytes consumed, or -1 on error.
-pub unsafe fn cram_cram_decode_c_71_cram_decode_TD(
+pub(crate) unsafe fn cram_cram_decode_c_71_cram_decode_TD(
     fd: *mut cram_fd,
     mut cp: *mut c_char,
     endp: *const c_char,
@@ -830,7 +830,7 @@ pub(crate) mod decode_pipeline {
         let mut i = 0;
         while i < DS_END {
             let c_0: *mut cram_codec = (*hdr).codecs[i as usize];
-            let mut bnum1: c_int = 0;
+            let bnum1: c_int;
             let mut bnum2: c_int = 0;
             if !c_0.is_null() {
                 bnum1 = cram_codec_to_id(c_0, &raw mut bnum2);
@@ -1427,7 +1427,7 @@ pub(crate) mod decode_pipeline {
         }
         let mut i = 0;
         while i < (*cr).ntags {
-            let mut id: int32_t;
+            let id: int32_t;
             let mut out_sz_0: int32_t = 1;
             let mut tag_data: [c_uchar; 7] = [0; 7];
             if *TN.offset(0) as c_int == 'M' as i32
@@ -1729,7 +1729,7 @@ pub(crate) mod decode_pipeline {
         cf: c_int,
         seq: *mut c_char,
         qual: *mut c_char,
-        mut has_MD: c_int,
+        has_MD: c_int,
         mut has_NM: c_int,
     ) -> c_int {
         let mut current_block: u64;
@@ -2768,9 +2768,9 @@ pub(crate) mod decode_pipeline {
         let mut seq: *mut c_char = std::ptr::null_mut();
         let mut qual: *mut c_char = std::ptr::null_mut();
         let mut unknown_rg: c_int = -1;
-        let mut embed_ref: c_int;
+        let embed_ref: c_int;
         let mut refs: *mut *mut c_char = std::ptr::null_mut();
-        let mut ds: uint32_t;
+        let ds: uint32_t;
         let bfd: *mut sam_hrecs_t = (*sh).hrecs;
         let comp = (*c).comp_hdr;
         macro_rules! codec {
@@ -2913,9 +2913,9 @@ pub(crate) mod decode_pipeline {
             ) != 0
         {
             let mut digest: [c_uchar; 16] = [0; 16];
-            let mut md5: *mut hts_md5_context = std::ptr::null_mut();
+            let md5: *mut hts_md5_context;
             if !(*s).ref_0.is_null() && (*(*s).hdr).ref_seq_id >= 0 {
-                let mut start: c_int;
+                let start: c_int;
                 let mut len: c_int;
                 if (*(*s).hdr).ref_seq_start >= (*s).ref_start {
                     start = ((*(*s).hdr).ref_seq_start - (*s).ref_start) as c_int;
@@ -3592,9 +3592,9 @@ pub(crate) mod decode_pipeline {
         let rg_len: c_int;
         let mut name_a: [c_char; 1024] = [0; 1024];
         let mut name: *mut c_char;
-        let mut name_len: c_int = 0;
+        let mut name_len: c_int;
         let mut aux: *mut c_char;
-        let mut seq: *mut c_char;
+        let seq: *mut c_char;
         let qual: *mut c_char;
         let bfd: *mut sam_hrecs_t = (*sh).hrecs;
         if (*fd).required_fields & SAM_QNAME as c_uint != 0 {
@@ -3873,7 +3873,6 @@ pub(crate) mod decode_pipeline {
                             {
                                 let skip_length = (*c_next).length as off_t;
                                 cram_free_container(c_next);
-                                c_next = std::ptr::null_mut();
                                 (*fd).ooc = 0;
                                 if hseek((*fd).fp, skip_length, SEEK_CUR) < 0 {
                                     return std::ptr::null_mut();
@@ -4278,7 +4277,8 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
         const K_TD: c_int = (b'T' as c_int) << 8 | b'D' as c_int;
         match key2 {
             K_MI | K_UI | K_PI => {
-                hd.i = *cp as c_int;
+                // C writes hd.i but never reads it back for these keys.
+                let _ = *cp as c_int;
                 cp = cp.add(1);
             }
             K_RN => {
@@ -4482,7 +4482,7 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
                 size,
                 type_,
                 (*fdl).version,
-                (&raw const (*fdl).vv as *mut c_void),
+                &raw const (*fdl).vv as *mut c_void,
             );
             if (*hdr).codecs[ds_id as usize].is_null() {
                 cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
@@ -4545,7 +4545,7 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
                 size,
                 E_BYTE_ARRAY_BLOCK,
                 (*fdl).version,
-                (&raw const (*fdl).vv as *mut c_void),
+                &raw const (*fdl).vv as *mut c_void,
             )
         };
         (*m).codec = codec;

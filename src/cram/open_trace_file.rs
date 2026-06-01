@@ -1,7 +1,7 @@
 // Functions translated from htslib/cram/open_trace_file.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_int, c_void, CStr};
+use std::ffi::{c_char, c_int};
 
 use super::*;
 

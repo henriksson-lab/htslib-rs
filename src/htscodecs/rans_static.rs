@@ -978,19 +978,19 @@ fn rans_uncompress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
     if cp + 16 > ptr_end {
         cleanup!();
     }
-    let mut rans0 = rans_dec_init(input, &mut ptr);
+    let rans0 = rans_dec_init(input, &mut ptr);
     if rans0 < RANS_BYTE_L {
         cleanup!();
     }
-    let mut rans1 = rans_dec_init(input, &mut ptr);
+    let rans1 = rans_dec_init(input, &mut ptr);
     if rans1 < RANS_BYTE_L {
         cleanup!();
     }
-    let mut rans2 = rans_dec_init(input, &mut ptr);
+    let rans2 = rans_dec_init(input, &mut ptr);
     if rans2 < RANS_BYTE_L {
         cleanup!();
     }
-    let mut rans3 = rans_dec_init(input, &mut ptr);
+    let rans3 = rans_dec_init(input, &mut ptr);
     if rans3 < RANS_BYTE_L {
         cleanup!();
     }

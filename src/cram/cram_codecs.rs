@@ -1,7 +1,7 @@
 // Functions translated from htslib/cram/cram_codecs.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_int, c_uchar, c_uint, c_ulong, c_void, CStr};
+use std::ffi::{c_char, c_int, c_void};
 
 use super::*;
 

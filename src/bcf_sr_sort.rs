@@ -1,7 +1,7 @@
 // Functions translated from htslib/bcf_sr_sort.c.
 // Extracted from src/vcf.rs.
 
-use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
+use std::ffi::{c_char, c_int};
 
 use crate::htslib_rs::vcf::*;
 use crate::htslib_rs::hts::{hts_pos_t, kbs_destroy};

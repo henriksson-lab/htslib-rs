@@ -642,7 +642,7 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         (TOTFREQ_O1_FAST + MAGIC2) as usize
     };
 
-    let mut out_free_err = |sfb_p: *mut std::ffi::c_void, fb_p: *mut std::ffi::c_void| {
+    let out_free_err = |sfb_p: *mut std::ffi::c_void, fb_p: *mut std::ffi::c_void| {
         htscodecs_tls_free(fb_p);
         htscodecs_tls_free(sfb_p);
     };
@@ -751,7 +751,7 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     }
 
     // Switch cp back into `input` after the header.
-    let mut cp_in: usize = match tab_end {
+    let cp_in: usize = match tab_end {
         Some(t) => t,
         None => {
             // cp was an offset into input (no compressed header).
@@ -986,7 +986,7 @@ fn rans_uncompress_O1_32x16_fn(input: &[u8], out: *mut u8, out_sz: u32) -> *mut 
 /// Writes into `out` (caller-provided, capacity `*out_size`) or mallocs. Returns
 /// the produced bytes as an owned Vec (empty Vec on failure).
 fn rans_compress_to_4x16_into(input: &[u8], out: *mut u8, out_cap: u32, out_size: &mut u32, mut order: i32) -> *mut u8 {
-    let mut in_ptr = input.as_ptr();
+    let in_ptr = input.as_ptr();
     let mut in_size = input.len() as u32;
 
     if in_size > i32::MAX as u32 {
@@ -1359,7 +1359,7 @@ fn rans_uncompress_to_4x16_into(input: &[u8], out: *mut u8, out_cap_in: Option<u
     let do_simd = order_byte & RANS_ORDER_X32;
     let order = order_byte & 1;
 
-    let mut osz: u32;
+    let osz: u32;
     if no_size == 0 {
         let mut v = 0u32;
         let sz = var_get_u32(&input[in_off..], Some(in_end - in_off), &mut v);
@@ -1449,7 +1449,7 @@ fn rans_uncompress_to_4x16_into(input: &[u8], out: *mut u8, out_cap_in: Option<u
             cleanup_out(out_ptr);
             return std::ptr::null_mut();
         }
-        let mut c_meta_size;
+        let c_meta_size;
         if u_meta_size & 1 != 0 {
             meta_off = in_off + sz as usize;
             meta_from_input = true;

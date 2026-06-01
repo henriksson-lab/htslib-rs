@@ -1,7 +1,7 @@
 // Functions translated from htslib/cram/cram_external.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_int, c_uchar, c_uint, c_ulong, c_void, CStr};
+use std::ffi::{c_char, c_int, c_void};
 
 use super::*;
 
@@ -950,7 +950,7 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     cram_free_compression_header(ch);
 
     let mut cp = cram_cram_external_c_528_cram_block_get_data(o_blk).cast::<c_char>();
-    let mut op = cp;
+    let mut op: *mut c_char;
     let endp = cp.add(cram_cram_external_c_526_cram_block_get_uncomp_size(o_blk) as usize);
     let mut err = 0;
     let varint_get32 = (*in_fd)

@@ -1,17 +1,12 @@
 // Functions translated from htslib/header.c.
 // Extracted from src/sam.rs.
 
-use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CStr};
 
 use crate::htslib_rs::sam::*;
 use crate::htslib_rs::hts::{
-    htsFile, hts_pos_t, hts_str2uint, kputc, kputs, kputsn, kputw, ks_free, ks_release, kstring_t,
-    HTS_FORMAT_BAM, HTS_FORMAT_BINARY_FORMAT, HTS_FORMAT_CRAM, HTS_FORMAT_EMPTY_FORMAT,
-    HTS_FORMAT_FASTA_FORMAT, HTS_FORMAT_FASTQ_FORMAT, HTS_FORMAT_SAM, HTS_FORMAT_SEQUENCE_DATA,
-    HTS_FORMAT_TEXT_FORMAT,
+    hts_pos_t, kputc, kputsn, ks_free, ks_release, kstring_t,
 };
-use crate::htslib_rs::bgzf::bgzf_flush;
-use crate::htslib_rs::hfile::hflush;
 
 // original: sam_hdr_add_lines (htslib/header.c:1658)
 //
