@@ -3,7 +3,19 @@
 
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
 
-use super::*;
+use crate::htslib_rs::sam::*;
+use crate::htslib_rs::hts::hts_str2uint;
+
+pub unsafe fn seq_freq(b: *const bam1_t, freq: *mut c_int) {
+    libc::memset(freq.cast(), 0, 16 * std::mem::size_of::<c_int>());
+    let seq = bam_get_seq(b);
+    let mut i = 0;
+    while i < (*b).core.l_qseq {
+        *freq.add(bam_seqi(seq, i as usize) as usize) += 1;
+        i += 1;
+    }
+    *freq.add(15) = (*b).core.l_qseq;
+}
 
 pub unsafe fn hts_base_mod_state_alloc() -> *mut hts_base_mod_state {
     crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<hts_base_mod_state>() as u64).cast()

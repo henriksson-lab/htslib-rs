@@ -15,7 +15,7 @@
 //! malloc'd, or a caller-provided buffer), and the public `arith_compress*` /
 //! `arith_uncompress*` wrappers expose a Rust-friendly surface on top.
 //!
-//! TLS-reuse hazard audit: unlike `rans_static_32x16pr` / `rans_static_4x16pr`,
+//! TLS-reuse hazard audit: unlike `rans_static32x16pr` / `rans_static4x16pr`,
 //! this module performs NO `htscodecs_tls_alloc` allocations.  Every decode call
 //! constructs its `SimpleModel` (or `Vec<SimpleModel>`) freshly via
 //! `SimpleModel::new(nsym)`, which zero-initialises the underlying

@@ -18,10 +18,10 @@
 //! deviation from the C semantics would surface as a corpus failure.
 //!
 //! This file deliberately overcovers: Phase 2 of the htscodecs rework
-//! refactors `rans_4x8.rs` to delegate to these primitives instead of its
+//! refactors `rans_static.rs` to delegate to these primitives instead of its
 //! inlined duplicates, so the tests below are written to catch any byte-
 //! level drift across the full grid of frequency-table shapes, scale_bits
-//! values, and renorm-cursor configurations that `rans_4x8.rs` exercises.
+//! values, and renorm-cursor configurations that `rans_static.rs` exercises.
 
 use super::*;
 
@@ -330,7 +330,7 @@ fn check_roundtrip_generic(data: &[u16], freqs: &[u32], scale_bits: u32) {
 
 // ===========================================================================
 // 1. Original round-trip tests (kept verbatim — they pin down the SCALE_BITS=12,
-//    256-symbol shape that the rans_4x8 refactor will continue to exercise).
+//    256-symbol shape that the rans_static refactor will continue to exercise).
 // ===========================================================================
 
 #[test]
@@ -1092,12 +1092,12 @@ fn encoder_flush_writes_state_le_at_tail() {
 }
 
 // ===========================================================================
-// 7. Multi-stream (4-way interleave) sanity — precursor to rans_4x8 refactor.
+// 7. Multi-stream (4-way interleave) sanity — precursor to rans_static refactor.
 // ===========================================================================
 
 #[test]
 fn four_way_interleave_roundtrip() {
-    // Mimic the rans_4x8 4-way interleave at the primitive level.
+    // Mimic the rans_static 4-way interleave at the primitive level.
     // Encode 4 streams in parallel into the same buffer, in reverse,
     // four-at-a-time. Flush each. Decode in forward order.
 
@@ -1138,7 +1138,7 @@ fn four_way_interleave_roundtrip() {
             RansEncPutSymbol(&mut r0, &mut pptr, &enc[data[i + 0] as usize]);
         }
         // Flush in reverse: state 3 first so the decoder reads state 0
-        // first. (Order matches what rans_4x8.c does.)
+        // first. (Order matches what rans_static.c does.)
         RansEncFlush(&mut r3, &mut pptr);
         RansEncFlush(&mut r2, &mut pptr);
         RansEncFlush(&mut r1, &mut pptr);
@@ -1294,7 +1294,7 @@ fn golden_single_symbol_uniform_4() {
     // 4-symbol uniform: each freq = 1024 (M/4). Lock in the byte stream
     // for a single-symbol stream `[k]` for k in 0..4. These are the
     // values produced by the current implementation and serve as a
-    // regression guard against any future drift (refactor of rans_4x8
+    // regression guard against any future drift (refactor of rans_static
     // delegating into these primitives must keep producing them).
     let mut freqs = [0u32; 256];
     for s in 0..4 {

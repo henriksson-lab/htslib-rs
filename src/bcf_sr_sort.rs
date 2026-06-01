@@ -3,7 +3,8 @@
 
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
 
-use super::*;
+use crate::htslib_rs::vcf::*;
+use crate::htslib_rs::hts::{hts_pos_t, kbs_destroy};
 
 pub unsafe fn bcf_sr_sort_c_324_bcf_sr_sort_set_active(srt: *mut BcfSrSort, idx: c_int) -> c_int {
     unsafe {

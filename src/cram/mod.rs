@@ -32,28 +32,31 @@ use crate::htslib_rs::thread_pool::{
 };
 
 // Submodule split (2026-06-01): functions per htslib C source file.
-pub mod cram_sam;
-pub mod codecs;
-pub mod decode;
-pub mod encode;
-pub mod external;
-pub mod index;
-pub mod io;
+// File names mirror htslib's source layout: htslib/cram/cram_io.c ->
+// src/cram/cram_io.rs, etc.
+pub mod cram_codecs;
+pub mod cram_decode;
+pub mod cram_encode;
+pub mod cram_external;
+pub mod cram_index;
+pub mod cram_io;
+#[path = "mFILE.rs"]
+pub mod mfile;
 pub mod open_trace_file;
 pub mod pooled_alloc;
-pub mod stats;
+pub mod cram_stats;
 pub mod string_alloc;
 
-pub use cram_sam::*;
-pub use codecs::*;
-pub use decode::*;
-pub use encode::*;
-pub use external::*;
-pub use index::*;
-pub use io::*;
+pub use cram_codecs::*;
+pub use cram_decode::*;
+pub use cram_encode::*;
+pub use cram_external::*;
+pub use cram_index::*;
+pub use cram_io::*;
+pub use mfile::*;
 pub use open_trace_file::*;
 pub use pooled_alloc::*;
-pub use stats::*;
+pub use cram_stats::*;
 pub use string_alloc::*;
 
 // Native opaque CRAM types. Byte layouts are unchanged from hts_sys's
@@ -210,20 +213,7 @@ pub unsafe fn int32_put_blk(b: *mut cram_block, val: i32) -> c_int {
 }
 
 pub unsafe fn int32_get_blk(b: *mut cram_block, val: *mut i32) -> c_int {
-    let block = b.cast::<cram_block_layout>();
-    if (*block).uncomp_size < 0 || ((*block).uncomp_size as usize).saturating_sub((*block).byte) < 4
-    {
-        return -1;
-    }
-
-    let data = (*block).data.add((*block).byte);
-    let v = (*data as u32)
-        | ((*data.add(1) as u32) << 8)
-        | ((*data.add(2) as u32) << 16)
-        | ((*data.add(3) as u32) << 24);
-    *val = v as i32;
-    (*block).byte += 4;
-    4
+    crate::htslib_rs::cram::cram_cram_io_c_1029_int32_get_blk(b, val)
 }
 
 pub unsafe fn cram_block_size(b: *mut cram_block) -> u32 {
@@ -272,7 +262,7 @@ pub unsafe fn cram_decode_compression_header(
     fd: *mut cram_fd,
     b: *mut cram_block,
 ) -> *mut cram_block_compression_hdr {
-    cram_cram_io_c_145_cram_decode_compression_header(fd, b)
+    cram_cram_decode_c_145_cram_decode_compression_header(fd, b)
 }
 
 /// khash STR (`KHASH_MAP_INIT_STR(map, pmap_t)`) hash function:
@@ -485,7 +475,7 @@ pub unsafe fn cram_decode_slice_header(
     fd: *mut cram_fd,
     b: *mut cram_block,
 ) -> *mut cram_block_slice_hdr {
-    unsafe { cram_cram_io_c_955_cram_decode_slice_header(fd, b) }
+    unsafe { cram_cram_decode_c_955_cram_decode_slice_header(fd, b) }
 }
 
 pub unsafe fn cram_container_get_num_records(c: *mut cram_container) -> i32 {
@@ -786,9 +776,6 @@ pub struct mFILE {
     pub flush_pos: usize,
 }
 
-static mut M_CHANNEL: [*mut mFILE; 3] = [std::ptr::null_mut(); 3];
-static mut DONE_STDIN: c_int = 0;
-
 pub const MF_READ: c_int = 1;
 pub const MF_WRITE: c_int = 2;
 pub const MF_APPEND: c_int = 4;
@@ -840,8 +827,8 @@ struct cram_block_layout {
 // `calloc(1, sizeof(*c))` allocates the right size and the write-path fields
 // (stats, tags_used, slices, ...) live at the C-correct offsets.
 #[repr(C)]
-struct cram_container_layout {
-    length: i32,
+pub(crate) struct cram_container_layout {
+    pub(crate) length: i32,
     ref_seq_id: i32,
     ref_seq_start: i64,
     ref_seq_span: i64,
@@ -851,11 +838,11 @@ struct cram_container_layout {
     num_blocks: i32,
     num_landmarks: i32,
     landmark: *mut i32,
-    offset: usize,
+    pub(crate) offset: usize,
     comp_hdr: *mut cram_block_compression_hdr_layout,
     comp_hdr_block: *mut cram_block_layout,
-    max_slice: c_int,
-    curr_slice: c_int,
+    pub(crate) max_slice: c_int,
+    pub(crate) curr_slice: c_int,
     curr_slice_mt: c_int,
     max_rec: c_int,
     curr_rec: c_int,
@@ -865,7 +852,7 @@ struct cram_container_layout {
     curr_ref: c_int,
     last_pos: i64,
     slices: *mut *mut cram_slice_layout,
-    slice: *mut cram_slice_layout,
+    pub(crate) slice: *mut cram_slice_layout,
     pos_sorted: c_int,
     max_apos: i64,
     last_slice: c_int,
@@ -959,7 +946,7 @@ struct cram_record_layout {
 // hts_sys / native layout types they reference, matching the existing
 // layout-struct convention; the byte layout equals the C struct.
 #[repr(C)]
-struct cram_slice_layout {
+pub(crate) struct cram_slice_layout {
     hdr: *mut cram_block_slice_hdr_layout,
     hdr_block: *mut cram_block_layout,
     block: *mut *mut cram_block_layout,
@@ -993,8 +980,8 @@ struct cram_slice_layout {
     aux_block: *mut *mut cram_block_layout,
     data_series: c_uint,
     decode_md: c_int,
-    max_rec: c_int,
-    curr_rec: c_int,
+    pub(crate) max_rec: c_int,
+    pub(crate) curr_rec: c_int,
     slice_num: c_int,
 }
 
@@ -1017,7 +1004,7 @@ pub struct cram_file_def_layout {
 }
 
 #[repr(C)]
-struct cram_fd_layout {
+pub(crate) struct cram_fd_layout {
     fp: *mut hFILE,
     mode: c_int,
     version: c_int,
@@ -1026,8 +1013,8 @@ struct cram_fd_layout {
     prefix: *mut c_char,
     record_counter: i64,
     err: c_int,
-    ctr: *mut cram_container_layout,
-    ctr_mt: *mut cram_container_layout,
+    pub(crate) ctr: *mut cram_container_layout,
+    pub(crate) ctr_mt: *mut cram_container_layout,
     first_base: c_int,
     last_base: c_int,
     refs: *mut refs_t_layout,
@@ -1066,8 +1053,8 @@ struct cram_fd_layout {
     cram_sub_matrix: [[c_char; 32]; 32],
     index_sz: c_int,
     index: *mut c_void,
-    first_container: libc::off_t,
-    curr_position: libc::off_t,
+    pub(crate) first_container: libc::off_t,
+    pub(crate) curr_position: libc::off_t,
     eof: c_int,
     last_slice: c_int,
     last_ri_count: c_int,
@@ -1085,7 +1072,7 @@ struct cram_fd_layout {
     bl: *mut c_void,
     bam_list_lock: libc::pthread_mutex_t,
     job_pending: *mut c_void,
-    ooc: c_int,
+    pub(crate) ooc: c_int,
     lossy_read_names: c_int,
     tlen_approx: c_int,
     tlen_zero: c_int,
@@ -3298,7 +3285,7 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
         CBMI_RANS0 | CBMI_RANS1 => {
             let mut out_size_u: c_uint = 0;
             let order: c_int = if method == CBMI_RANS0 { 0 } else { 1 };
-            let cp = crate::htslib_rs::htscodecs::rans_4x8::rans_compress(
+            let cp = crate::htslib_rs::htscodecs::rans_static::rans_compress(
                 in_.cast::<u8>(),
                 in_size as c_uint,
                 &mut out_size_u,
@@ -3327,7 +3314,7 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
             const RANS_ORDER_SIMD_AUTO: c_int = 0x800;
             let mut out_size_u: u32 = 0;
             let input = std::slice::from_raw_parts(in_.cast::<u8>(), in_size);
-            let v = crate::htslib_rs::htscodecs::rans_static_4x16pr::rans_compress_4x16(
+            let v = crate::htslib_rs::htscodecs::rans_static4x16pr::rans_compress_4x16(
                 input,
                 &mut out_size_u,
                 m_order | RANS_ORDER_SIMD_AUTO,
@@ -4497,586 +4484,6 @@ pub unsafe fn cram_cram_codecs_h_230_cram_not_enough_bits(
 
 
 
-pub unsafe fn cram_mFILE_c_75_mfload(
-    fp: *mut libc::FILE,
-    mut fn_: *const c_char,
-    size: *mut usize,
-    _binary: c_int,
-) -> *mut c_char {
-    let mut sb = std::mem::MaybeUninit::<libc::stat>::uninit();
-    let mut data = std::ptr::null_mut::<c_char>();
-    let mut allocated = 0usize;
-    let mut used = 0usize;
-    let mut bufsize = 8192usize;
-
-    if !fn_.is_null() && libc::stat(fn_, sb.as_mut_ptr()) != -1 {
-        let sb = sb.assume_init();
-        allocated = sb.st_size as usize;
-        data = malloc(allocated as u64).cast::<c_char>();
-        if data.is_null() {
-            return std::ptr::null_mut();
-        }
-        bufsize = sb.st_size as usize;
-
-        loop {
-            if used + bufsize > allocated {
-                allocated += bufsize;
-                let datan = realloc(data.cast(), allocated as u64).cast::<c_char>();
-                if datan.is_null() {
-                    free(data.cast());
-                    return std::ptr::null_mut();
-                }
-                data = datan;
-            }
-            let len = libc::fread(data.add(used).cast(), 1, allocated - used, fp);
-            if len > 0 {
-                used += len;
-            }
-            if libc::feof(fp) != 0 || used >= sb.st_size as usize {
-                break;
-            }
-        }
-    } else {
-        fn_ = std::ptr::null();
-        loop {
-            if used + bufsize > allocated {
-                allocated += bufsize;
-                let datan = realloc(data.cast(), allocated as u64).cast::<c_char>();
-                if datan.is_null() {
-                    free(data.cast());
-                    return std::ptr::null_mut();
-                }
-                data = datan;
-            }
-            let len = libc::fread(data.add(used).cast(), 1, allocated - used, fp);
-            if len > 0 {
-                used += len;
-            }
-            if libc::feof(fp) != 0 || !fn_.is_null() {
-                break;
-            }
-        }
-    }
-
-    *size = used;
-    data
-}
-
-pub unsafe fn cram_mFILE_c_127_mfmmap(
-    mf: *mut mFILE,
-    fp: *mut libc::FILE,
-    fn_: *const c_char,
-) -> c_int {
-    let mut sb = std::mem::MaybeUninit::<libc::stat>::uninit();
-    if libc::stat(fn_, sb.as_mut_ptr()) != 0 {
-        return -1;
-    }
-    let sb = sb.assume_init();
-    (*mf).size = sb.st_size as usize;
-    let data = libc::mmap(
-        std::ptr::null_mut(),
-        (*mf).size,
-        libc::PROT_READ,
-        libc::MAP_SHARED,
-        libc::fileno(fp),
-        0,
-    );
-    if data.is_null() || data == libc::MAP_FAILED {
-        return -1;
-    }
-
-    (*mf).data = data.cast::<c_char>();
-    (*mf).alloced = 0;
-    0
-}
-
-pub unsafe fn cram_mFILE_c_151_mstdin() -> *mut mFILE {
-    if !M_CHANNEL[0].is_null() {
-        return M_CHANNEL[0];
-    }
-
-    M_CHANNEL[0] = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
-    if M_CHANNEL[0].is_null() {
-        return std::ptr::null_mut();
-    }
-    (*M_CHANNEL[0]).fp = HTSLIB_STDIN;
-    M_CHANNEL[0]
-}
-
-pub unsafe fn cram_mFILE_c_161_init_mstdin() {
-    if DONE_STDIN != 0 {
-        return;
-    }
-
-    (*M_CHANNEL[0]).data =
-        cram_mFILE_c_75_mfload(HTSLIB_STDIN, std::ptr::null(), &mut (*M_CHANNEL[0]).size, 1);
-    (*M_CHANNEL[0]).mode = MF_READ;
-    DONE_STDIN = 1;
-}
-
-pub unsafe fn cram_mFILE_c_176_mstdout() -> *mut mFILE {
-    if !M_CHANNEL[1].is_null() {
-        return M_CHANNEL[1];
-    }
-
-    M_CHANNEL[1] = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
-    if M_CHANNEL[1].is_null() {
-        return std::ptr::null_mut();
-    }
-    (*M_CHANNEL[1]).fp = HTSLIB_STDOUT;
-    (*M_CHANNEL[1]).mode = MF_WRITE;
-    M_CHANNEL[1]
-}
-
-pub unsafe fn cram_mFILE_c_192_mstderr() -> *mut mFILE {
-    if !M_CHANNEL[2].is_null() {
-        return M_CHANNEL[2];
-    }
-
-    M_CHANNEL[2] = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
-    if M_CHANNEL[2].is_null() {
-        return std::ptr::null_mut();
-    }
-    (*M_CHANNEL[2]).fp = HTSLIB_STDERR;
-    (*M_CHANNEL[2]).mode = MF_WRITE;
-    M_CHANNEL[2]
-}
-
-pub unsafe fn cram_mFILE_c_207_mfcreate(data: *mut c_char, size: c_int) -> *mut mFILE {
-    let mf = malloc(std::mem::size_of::<mFILE>() as u64).cast::<mFILE>();
-    if mf.is_null() {
-        return std::ptr::null_mut();
-    }
-    (*mf).fp = std::ptr::null_mut();
-    (*mf).data = data;
-    (*mf).alloced = size as usize;
-    (*mf).size = size as usize;
-    (*mf).eof = 0;
-    (*mf).offset = 0;
-    (*mf).flush_pos = 0;
-    (*mf).mode = MF_READ | MF_WRITE;
-    mf
-}
-
-pub unsafe fn cram_mFILE_c_225_mfrecreate(mf: *mut mFILE, data: *mut c_char, size: c_int) {
-    if !(*mf).data.is_null() {
-        free((*mf).data.cast());
-    }
-    (*mf).data = data;
-    (*mf).size = size as usize;
-    (*mf).alloced = size as usize;
-    (*mf).eof = 0;
-    (*mf).offset = 0;
-    (*mf).flush_pos = 0;
-}
-
-pub unsafe fn cram_mFILE_c_246_mfcreate_from(
-    path: *const c_char,
-    mode_str: *const c_char,
-    fp: *mut libc::FILE,
-) -> *mut mFILE {
-    let mf = cram_mFILE_c_264_mfreopen(path, mode_str, fp);
-    if mf.is_null() {
-        return std::ptr::null_mut();
-    }
-    (*mf).fp = std::ptr::null_mut();
-    mf
-}
-
-pub unsafe fn cram_mFILE_c_264_mfreopen(
-    path: *const c_char,
-    mode_str: *const c_char,
-    fp: *mut libc::FILE,
-) -> *mut mFILE {
-    let mut r = 0;
-    let mut w = 0;
-    let mut a = 0;
-    let mut b = 0;
-    let mut x = 0;
-    let mut mode = 0;
-
-    if !libc::strchr(mode_str, b'r' as c_int).is_null() {
-        r = 1;
-        mode |= MF_READ;
-    }
-    if !libc::strchr(mode_str, b'w' as c_int).is_null() {
-        w = 1;
-        mode |= MF_WRITE | MF_TRUNC;
-    }
-    if !libc::strchr(mode_str, b'a' as c_int).is_null() {
-        w = 1;
-        a = 1;
-        mode |= MF_WRITE | MF_APPEND;
-    }
-    if !libc::strchr(mode_str, b'b' as c_int).is_null() {
-        b = 1;
-        mode |= MF_BINARY;
-    }
-    if !libc::strchr(mode_str, b'x' as c_int).is_null() {
-        x = 1;
-    }
-    if !libc::strchr(mode_str, b'+' as c_int).is_null() {
-        w = 1;
-        mode |= MF_READ | MF_WRITE;
-        if a != 0 {
-            r = 1;
-        }
-    }
-    if !libc::strchr(mode_str, b'm' as c_int).is_null() && w == 0 {
-        mode |= MF_MMAP;
-    }
-
-    let mf;
-    if r != 0 {
-        mf = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
-        if mf.is_null() {
-            return std::ptr::null_mut();
-        }
-        if (mode & MF_TRUNC) == 0 {
-            if (mode & MF_MMAP) != 0 && cram_mFILE_c_127_mfmmap(mf, fp, path) == -1 {
-                (*mf).data = std::ptr::null_mut();
-                mode &= !MF_MMAP;
-            }
-            if (*mf).data.is_null() {
-                (*mf).data = cram_mFILE_c_75_mfload(fp, path, &mut (*mf).size, b);
-                if (*mf).data.is_null() {
-                    free(mf.cast());
-                    return std::ptr::null_mut();
-                }
-                (*mf).alloced = (*mf).size;
-                if a == 0 {
-                    libc::fseek(fp, 0, libc::SEEK_SET);
-                }
-            }
-        }
-    } else if w != 0 {
-        mf = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
-        if mf.is_null() {
-            return std::ptr::null_mut();
-        }
-    } else {
-        return std::ptr::null_mut();
-    }
-
-    (*mf).fp = fp;
-    (*mf).mode = mode;
-    if x != 0 {
-        (*mf).mode |= MF_MODEX;
-    }
-    if a != 0 {
-        (*mf).flush_pos = (*mf).size;
-        libc::fseek(fp, 0, libc::SEEK_END);
-    }
-
-    mf
-}
-
-pub unsafe fn cram_mFILE_c_347_mfopen(path: *const c_char, mode: *const c_char) -> *mut mFILE {
-    let fp = libc::fopen(path, mode);
-    if fp.is_null() {
-        return std::ptr::null_mut();
-    }
-    cram_mFILE_c_264_mfreopen(path, mode, fp)
-}
-
-pub unsafe fn cram_mFILE_c_361_mfclose(mf: *mut mFILE) -> c_int {
-    if mf.is_null() {
-        return -1;
-    }
-    cram_mFILE_c_607_mfflush(mf);
-    if ((*mf).mode & MF_MMAP) != 0 && !(*mf).data.is_null() {
-        libc::munmap((*mf).data.cast(), (*mf).size);
-        (*mf).data = std::ptr::null_mut();
-    }
-    if !(*mf).fp.is_null() {
-        libc::fclose((*mf).fp);
-    }
-    cram_mFILE_c_408_mfdestroy(mf);
-    0
-}
-
-pub unsafe fn cram_mFILE_c_389_mfdetach(mf: *mut mFILE) -> c_int {
-    if mf.is_null() {
-        return -1;
-    }
-    if cram_mFILE_c_607_mfflush(mf) != 0 {
-        return -1;
-    }
-    if ((*mf).mode & MF_MMAP) != 0 {
-        return -1;
-    }
-    if !(*mf).fp.is_null() {
-        libc::fclose((*mf).fp);
-        (*mf).fp = std::ptr::null_mut();
-    }
-    0
-}
-
-pub unsafe fn cram_mFILE_c_408_mfdestroy(mf: *mut mFILE) -> c_int {
-    if mf.is_null() {
-        return -1;
-    }
-    if !(*mf).data.is_null() {
-        free((*mf).data.cast());
-    }
-    free(mf.cast());
-    0
-}
-
-pub unsafe fn cram_mFILE_c_428_mfsteal(mf: *mut mFILE, size_out: *mut usize) -> *mut c_void {
-    if mf.is_null() {
-        return std::ptr::null_mut();
-    }
-    let data = (*mf).data;
-    if !size_out.is_null() {
-        *size_out = (*mf).size;
-    }
-    if cram_mFILE_c_389_mfdetach(mf) != 0 {
-        return std::ptr::null_mut();
-    }
-    (*mf).data = std::ptr::null_mut();
-    cram_mFILE_c_408_mfdestroy(mf);
-    data.cast()
-}
-
-pub unsafe fn cram_mFILE_c_451_mfseek(
-    mf: *mut mFILE,
-    offset: libc::c_long,
-    whence: c_int,
-) -> c_int {
-    match whence {
-        libc::SEEK_SET => {
-            (*mf).offset = offset as usize;
-        }
-        libc::SEEK_CUR => {
-            (*mf).offset = (*mf).offset.wrapping_add(offset as usize);
-        }
-        libc::SEEK_END => {
-            (*mf).offset = (*mf).size.wrapping_add(offset as usize);
-        }
-        _ => {
-            *__errno_location() = EINVAL;
-            return -1;
-        }
-    }
-
-    (*mf).eof = 0;
-    0
-}
-
-pub unsafe fn cram_mFILE_c_471_mftell(mf: *mut mFILE) -> libc::c_long {
-    (*mf).offset as libc::c_long
-}
-
-pub unsafe fn cram_mFILE_c_475_mrewind(mf: *mut mFILE) {
-    (*mf).offset = 0;
-    (*mf).eof = 0;
-}
-
-pub unsafe fn cram_mFILE_c_488_mftruncate(mf: *mut mFILE, offset: libc::c_long) {
-    (*mf).size = if offset != -1 {
-        offset as usize
-    } else {
-        (*mf).offset
-    };
-    if (*mf).offset > (*mf).size {
-        (*mf).offset = (*mf).size;
-    }
-}
-
-pub unsafe fn cram_mFILE_c_494_mfeof(mf: *mut mFILE) -> c_int {
-    (*mf).eof
-}
-
-pub unsafe fn cram_mFILE_c_502_mfread(
-    ptr: *mut c_void,
-    size: usize,
-    nmemb: usize,
-    mf: *mut mFILE,
-) -> usize {
-    if (*mf).size <= (*mf).offset {
-        return 0;
-    }
-
-    let wanted = size.wrapping_mul(nmemb);
-    let available = (*mf).size - (*mf).offset;
-    let len = if wanted <= available {
-        wanted
-    } else {
-        available
-    };
-    if size == 0 {
-        return 0;
-    }
-
-    memcpy(
-        ptr,
-        (*mf).data.add((*mf).offset).cast::<c_void>(),
-        len as u64,
-    );
-    (*mf).offset += len;
-
-    if len != wanted {
-        (*mf).eof = 1;
-    }
-
-    len / size
-}
-
-pub unsafe fn cram_mFILE_c_527_mfwrite(
-    ptr: *mut c_void,
-    size: usize,
-    nmemb: usize,
-    mf: *mut mFILE,
-) -> usize {
-    if ((*mf).mode & MF_WRITE) == 0 {
-        return 0;
-    }
-
-    if ((*mf).mode & MF_APPEND) != 0 {
-        (*mf).offset = (*mf).size;
-    }
-
-    let wanted = size.wrapping_mul(nmemb);
-    while wanted + (*mf).offset > (*mf).alloced {
-        let new_alloced = if (*mf).alloced != 0 {
-            (*mf).alloced * 2
-        } else {
-            1024
-        };
-        let new_data = realloc((*mf).data.cast(), new_alloced as u64).cast::<c_char>();
-        if new_data.is_null() {
-            return 0;
-        }
-        (*mf).alloced = new_alloced;
-        (*mf).data = new_data;
-    }
-
-    if (*mf).offset < (*mf).flush_pos {
-        (*mf).flush_pos = (*mf).offset;
-    }
-
-    memcpy(
-        (*mf).data.add((*mf).offset).cast::<c_void>(),
-        ptr,
-        wanted as u64,
-    );
-    (*mf).offset += wanted;
-    if (*mf).size < (*mf).offset {
-        (*mf).size = (*mf).offset;
-    }
-
-    nmemb
-}
-
-pub unsafe fn cram_mFILE_c_557_mfgetc(mf: *mut mFILE) -> c_int {
-    if (*mf).offset < (*mf).size {
-        let c = *(*mf).data.add((*mf).offset) as u8;
-        (*mf).offset += 1;
-        return c as c_int;
-    }
-
-    (*mf).eof = 1;
-    -1
-}
-
-pub unsafe fn cram_mFILE_c_567_mungetc(c: c_int, mf: *mut mFILE) -> c_int {
-    if (*mf).offset > 0 {
-        (*mf).offset -= 1;
-        *(*mf).data.add((*mf).offset) = c as c_char;
-        return c;
-    }
-
-    (*mf).eof = 1;
-    -1
-}
-
-pub unsafe fn cram_mFILE_c_577_mfgets(s: *mut c_char, size: c_int, mf: *mut mFILE) -> *mut c_char {
-    let mut i = 0;
-
-    *s = 0;
-    while i < size - 1 {
-        if (*mf).offset < (*mf).size {
-            *s.add(i as usize) = *(*mf).data.add((*mf).offset);
-            (*mf).offset += 1;
-            i += 1;
-            if *s.add((i - 1) as usize) == b'\n' as c_char {
-                break;
-            }
-        } else {
-            (*mf).eof = 1;
-            break;
-        }
-    }
-
-    *s.add(i as usize) = 0;
-    if i != 0 {
-        s
-    } else {
-        std::ptr::null_mut()
-    }
-}
-
-pub unsafe fn cram_mFILE_c_607_mfflush(mf: *mut mFILE) -> c_int {
-    if (*mf).fp.is_null() {
-        return 0;
-    }
-
-    if mf == M_CHANNEL[1] || mf == M_CHANNEL[2] {
-        if (*mf).flush_pos < (*mf).size {
-            let bytes = (*mf).size - (*mf).flush_pos;
-            if libc::fwrite((*mf).data.add((*mf).flush_pos).cast(), 1, bytes, (*mf).fp) < bytes {
-                return -1;
-            }
-            if libc::fflush((*mf).fp) != 0 {
-                return -1;
-            }
-        }
-        (*mf).offset = 0;
-        (*mf).size = 0;
-        (*mf).flush_pos = 0;
-    }
-
-    if ((*mf).mode & MF_WRITE) != 0 {
-        if (*mf).flush_pos < (*mf).size {
-            let bytes = (*mf).size - (*mf).flush_pos;
-            if ((*mf).mode & MF_MODEX) == 0 {
-                libc::fseek((*mf).fp, (*mf).flush_pos as libc::c_long, libc::SEEK_SET);
-            }
-            if libc::fwrite((*mf).data.add((*mf).flush_pos).cast(), 1, bytes, (*mf).fp) < bytes {
-                return -1;
-            }
-            if libc::fflush((*mf).fp) != 0 {
-                return -1;
-            }
-        }
-        let pos = libc::ftell((*mf).fp);
-        if pos != -1 && libc::ftruncate(libc::fileno((*mf).fp), pos) == -1 {
-            return -1;
-        }
-        (*mf).flush_pos = (*mf).size;
-    }
-
-    0
-}
-
-pub unsafe fn cram_mFILE_c_656_mfascii(mf: *mut mFILE) {
-    let mut p1 = 1usize;
-    let mut p2 = 1usize;
-
-    while p1 < (*mf).size {
-        if *(*mf).data.add(p1) == b'\n' as c_char && *(*mf).data.add(p1 - 1) == b'\r' as c_char {
-            p2 -= 1;
-        }
-        *(*mf).data.add(p2) = *(*mf).data.add(p1);
-        p1 += 1;
-        p2 += 1;
-    }
-    (*mf).size = p2;
-
-    (*mf).offset = 0;
-    (*mf).flush_pos = 0;
-}
 
 
 
@@ -14305,7 +13712,7 @@ mod tests {
                 ) -> *mut cram_block_slice_hdr;
             }
             let hc = htslib_cram_decode_slice_header(fd_c, sb_c.cast());
-            let hn = cram_cram_io_c_955_cram_decode_slice_header(fd_n, sb_n.cast());
+            let hn = cram_cram_decode_c_955_cram_decode_slice_header(fd_n, sb_n.cast());
             assert!(!hc.is_null() && !hn.is_null(), "cram_decode_slice_header failed");
             let hc = hc.cast::<cram_block_slice_hdr_layout>();
             let hn = hn.cast::<cram_block_slice_hdr_layout>();
@@ -14445,7 +13852,7 @@ mod tests {
                 assert!(!comp_c.is_null() && !comp_n.is_null(), "comp-hdr read failed");
 
                 let hc = htslib_cram_decode_compression_header(fd_c, comp_c.cast());
-                let hn = cram_cram_io_c_145_cram_decode_compression_header(fd_n, comp_n.cast());
+                let hn = cram_cram_decode_c_145_cram_decode_compression_header(fd_n, comp_n.cast());
                 assert!(!hc.is_null(), "C cram_decode_compression_header returned NULL");
                 assert!(!hn.is_null(), "native cram_decode_compression_header returned NULL");
                 let hc = hc.cast::<cram_block_compression_hdr_layout>();

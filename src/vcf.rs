@@ -21,14 +21,16 @@ use super::hts::{
     KS_SEP_LINE,
 };
 
-// Submodule split (2026-06-01): functions per htslib C source file.
-pub mod bcf_sr_sort;
-pub mod synced_bcf_reader;
-pub mod vcfutils;
-
-pub use bcf_sr_sort::*;
-pub use synced_bcf_reader::*;
-pub use vcfutils::*;
+// Re-exports of items extracted into sibling files at the crate root.
+// The Rust file layout mirrors htslib: htslib/synced_bcf_reader.c ->
+// src/synced_bcf_reader.rs, htslib/bcf_sr_sort.c -> src/bcf_sr_sort.rs,
+// htslib/vcfutils.c -> src/vcfutils.rs. These re-exports preserve the
+// public surface so `crate::htslib_rs::vcf::*` still resolves the same
+// way it did when these files lived in src/vcf/.
+pub use crate::htslib_rs::bcf_sr_sort::*;
+pub use crate::htslib_rs::synced_bcf_reader::*;
+pub use crate::htslib_rs::vcf_sweep::*;
+pub use crate::htslib_rs::vcfutils::*;
 
 // Native BCF/VCF struct definitions. Byte-identical to the hts-sys bindgen
 // layouts (verified against bindgen_test_layout_* assertions in
@@ -527,9 +529,9 @@ const BCF_IS_64BIT: c_int = 1 << 30;
 const BCF_HT_LONG: c_int = BCF_HT_INT as c_int | 0x100;
 const BCF_MIN_BT_INT32: i64 = -2_147_483_640;
 const BCF_MIN_BT_INT64: i64 = -9_223_372_036_854_775_800;
-const REQUIRE_IDX_: c_int = 1;
-const ALLOW_NO_IDX_: c_int = 2;
-const MAX_CSI_COOR: hts_pos_t = (1_i64 << 44) - 1;
+pub(crate) const REQUIRE_IDX_: c_int = 1;
+pub(crate) const ALLOW_NO_IDX_: c_int = 2;
+pub(crate) const MAX_CSI_COOR: hts_pos_t = (1_i64 << 44) - 1;
 const BCF_VL_P: c_int = 5;
 const BCF_VL_LA: c_int = 6;
 const BCF_VL_LG: c_int = 7;
@@ -543,106 +545,106 @@ const BCF_TYPE_SHIFT: [usize; 16] = [0, 0, 1, 2, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 #[repr(C)]
 pub struct BcfSrSort {
-    score: [u8; 256],
-    nvar: c_int,
-    mvar: c_int,
-    var: *mut c_void,
-    nvset: c_int,
-    mvset: c_int,
-    mpmat: c_int,
-    pmat: *mut c_int,
-    ngrp: c_int,
-    mgrp: c_int,
-    mcnt: c_int,
-    cnt: *mut c_int,
-    grp: *mut c_void,
-    vset: *mut c_void,
-    vcf_buf: *mut c_void,
-    sr: *mut bcf_srs_t,
-    grp_str2int: *mut c_void,
-    var_str2int: *mut c_void,
-    str_: kstring_t,
-    moff: c_int,
-    noff: c_int,
-    off: *mut c_int,
-    mcharp: c_int,
-    charp: *mut *mut c_char,
-    chr: *const c_char,
-    pos: hts_pos_t,
-    nsr: c_int,
-    msr: c_int,
-    pair: c_int,
-    nactive: c_int,
-    mactive: c_int,
-    active: *mut c_int,
+    pub(crate) score: [u8; 256],
+    pub(crate) nvar: c_int,
+    pub(crate) mvar: c_int,
+    pub(crate) var: *mut c_void,
+    pub(crate) nvset: c_int,
+    pub(crate) mvset: c_int,
+    pub(crate) mpmat: c_int,
+    pub(crate) pmat: *mut c_int,
+    pub(crate) ngrp: c_int,
+    pub(crate) mgrp: c_int,
+    pub(crate) mcnt: c_int,
+    pub(crate) cnt: *mut c_int,
+    pub(crate) grp: *mut c_void,
+    pub(crate) vset: *mut c_void,
+    pub(crate) vcf_buf: *mut c_void,
+    pub(crate) sr: *mut bcf_srs_t,
+    pub(crate) grp_str2int: *mut c_void,
+    pub(crate) var_str2int: *mut c_void,
+    pub(crate) str_: kstring_t,
+    pub(crate) moff: c_int,
+    pub(crate) noff: c_int,
+    pub(crate) off: *mut c_int,
+    pub(crate) mcharp: c_int,
+    pub(crate) charp: *mut *mut c_char,
+    pub(crate) chr: *const c_char,
+    pub(crate) pos: hts_pos_t,
+    pub(crate) nsr: c_int,
+    pub(crate) msr: c_int,
+    pub(crate) pair: c_int,
+    pub(crate) nactive: c_int,
+    pub(crate) mactive: c_int,
+    pub(crate) active: *mut c_int,
 }
 
 #[repr(C)]
-struct BcfSrSortVcfBuf {
-    nrec: c_int,
-    mrec: c_int,
-    rec: *mut *mut bcf1_t,
+pub(crate) struct BcfSrSortVcfBuf {
+    pub(crate) nrec: c_int,
+    pub(crate) mrec: c_int,
+    pub(crate) rec: *mut *mut bcf1_t,
 }
 
 #[repr(C)]
-struct BcfSrSortVar {
-    str_: *mut c_char,
-    type_: c_int,
-    nalt: c_int,
-    nvcf: c_int,
-    mvcf: c_int,
-    vcf: *mut c_int,
-    rec: *mut *mut bcf1_t,
-    mask: *mut kbitset_t,
+pub(crate) struct BcfSrSortVar {
+    pub(crate) str_: *mut c_char,
+    pub(crate) type_: c_int,
+    pub(crate) nalt: c_int,
+    pub(crate) nvcf: c_int,
+    pub(crate) mvcf: c_int,
+    pub(crate) vcf: *mut c_int,
+    pub(crate) rec: *mut *mut bcf1_t,
+    pub(crate) mask: *mut kbitset_t,
 }
 
 #[repr(C)]
-struct BcfSrSortGrp {
-    key: *mut c_char,
-    nvar: c_int,
-    mvar: c_int,
-    var: *mut c_int,
-    nvcf: c_int,
+pub(crate) struct BcfSrSortGrp {
+    pub(crate) key: *mut c_char,
+    pub(crate) nvar: c_int,
+    pub(crate) mvar: c_int,
+    pub(crate) var: *mut c_int,
+    pub(crate) nvcf: c_int,
 }
 
 #[repr(C)]
-struct BcfSrSortVarSet {
-    nvar: c_int,
-    mvar: c_int,
-    var: *mut c_int,
-    cnt: c_int,
-    mask: *mut kbitset_t,
+pub(crate) struct BcfSrSortVarSet {
+    pub(crate) nvar: c_int,
+    pub(crate) mvar: c_int,
+    pub(crate) var: *mut c_int,
+    pub(crate) cnt: c_int,
+    pub(crate) mask: *mut kbitset_t,
 }
 
 #[repr(C)]
-struct BcfSrAux {
-    sort: BcfSrSort,
-    regions_overlap: c_int,
-    targets_overlap: c_int,
-    closefile: *mut c_int,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct BcfSrRegion1 {
-    start: hts_pos_t,
-    end: hts_pos_t,
+pub(crate) struct BcfSrAux {
+    pub(crate) sort: BcfSrSort,
+    pub(crate) regions_overlap: c_int,
+    pub(crate) targets_overlap: c_int,
+    pub(crate) closefile: *mut c_int,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct BcfSrRegion {
-    regs: *mut BcfSrRegion1,
-    nregs: c_int,
-    mregs: c_int,
-    creg: c_int,
+pub(crate) struct BcfSrRegion1 {
+    pub(crate) start: hts_pos_t,
+    pub(crate) end: hts_pos_t,
 }
 
-unsafe fn bcf_sr_aux_mut(readers: *mut bcf_srs_t) -> *mut BcfSrAux {
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct BcfSrRegion {
+    pub(crate) regs: *mut BcfSrRegion1,
+    pub(crate) nregs: c_int,
+    pub(crate) mregs: c_int,
+    pub(crate) creg: c_int,
+}
+
+pub(crate) unsafe fn bcf_sr_aux_mut(readers: *mut bcf_srs_t) -> *mut BcfSrAux {
     unsafe { (*readers).aux.cast::<BcfSrAux>() }
 }
 
-unsafe fn bcf_sr_sort_reserve_active(srt: *mut BcfSrSort, need: c_int) -> c_int {
+pub(crate) unsafe fn bcf_sr_sort_reserve_active(srt: *mut BcfSrSort, need: c_int) -> c_int {
     unsafe {
         if srt.is_null() {
             return -1;
@@ -664,7 +666,7 @@ unsafe fn bcf_sr_sort_reserve_active(srt: *mut BcfSrSort, need: c_int) -> c_int 
 
 
 
-unsafe fn bcf_sr_sort_reserve_vcf_buf(readers: *mut bcf_srs_t, srt: *mut BcfSrSort) -> c_int {
+pub(crate) unsafe fn bcf_sr_sort_reserve_vcf_buf(readers: *mut bcf_srs_t, srt: *mut BcfSrSort) -> c_int {
     unsafe {
         if readers.is_null() || srt.is_null() || (*readers).nreaders < 0 {
             return -1;
@@ -697,7 +699,7 @@ unsafe fn bcf_sr_sort_reserve_vcf_buf(readers: *mut bcf_srs_t, srt: *mut BcfSrSo
     }
 }
 
-unsafe fn bcf_sr_sort_shift_reader_buffer(reader: *mut bcf_sr_t, j: c_int) -> c_int {
+pub(crate) unsafe fn bcf_sr_sort_shift_reader_buffer(reader: *mut bcf_sr_t, j: c_int) -> c_int {
     unsafe {
         if reader.is_null() || (*reader).buffer.is_null() || j < 1 || j > (*reader).nbuffer {
             return -1;
@@ -734,7 +736,7 @@ unsafe fn bcf_sr_sort_reserve_row(buf: *mut BcfSrSortVcfBuf, need: c_int) -> c_i
     }
 }
 
-unsafe fn bcf_sr_sort_append_empty_row(vcf_buf: *mut BcfSrSortVcfBuf, nreaders: c_int) -> c_int {
+pub(crate) unsafe fn bcf_sr_sort_append_empty_row(vcf_buf: *mut BcfSrSortVcfBuf, nreaders: c_int) -> c_int {
     unsafe {
         if vcf_buf.is_null() || nreaders <= 0 {
             return -1;
@@ -753,7 +755,7 @@ unsafe fn bcf_sr_sort_append_empty_row(vcf_buf: *mut BcfSrSortVcfBuf, nreaders: 
     }
 }
 
-unsafe fn bcf_sr_sort_record_key(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> Option<Vec<u8>> {
+pub(crate) unsafe fn bcf_sr_sort_record_key(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> Option<Vec<u8>> {
     unsafe {
         if rec.is_null() || bcf_unpack(rec, BCF_UN_STR as c_int) < 0 {
             return None;
@@ -807,7 +809,7 @@ unsafe fn bcf_sr_sort_record_key(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> Opt
     }
 }
 
-fn bcf_sr_sort_disambiguate_duplicate_key(
+pub(crate) fn bcf_sr_sort_disambiguate_duplicate_key(
     key: &mut Vec<u8>,
     seen: &[(Vec<u8>, c_int, *mut bcf1_t)],
     reader_idx: c_int,
@@ -842,13 +844,13 @@ unsafe fn bcf_sr_regions_overlap_ptr(regions: *mut bcf_sr_regions_t) -> *mut c_i
     }
 }
 
-unsafe fn bcf_sr_regions_set_overlap(regions: *mut bcf_sr_regions_t, overlap: c_int) {
+pub(crate) unsafe fn bcf_sr_regions_set_overlap(regions: *mut bcf_sr_regions_t, overlap: c_int) {
     unsafe {
         *bcf_sr_regions_overlap_ptr(regions) = overlap;
     }
 }
 
-unsafe fn bcf_sr_regions_alloc() -> *mut bcf_sr_regions_t {
+pub(crate) unsafe fn bcf_sr_regions_alloc() -> *mut bcf_sr_regions_t {
     unsafe {
         let size = size_of::<bcf_sr_regions_t>() + size_of::<hts_pos_t>();
         let reg = libc::calloc(1, size).cast::<bcf_sr_regions_t>();
@@ -864,7 +866,7 @@ unsafe fn bcf_sr_regions_alloc() -> *mut bcf_sr_regions_t {
     }
 }
 
-unsafe fn bcf_sr_regions_add(
+pub(crate) unsafe fn bcf_sr_regions_add(
     reg: *mut bcf_sr_regions_t,
     chr: *const c_char,
     mut start: hts_pos_t,
@@ -960,7 +962,7 @@ unsafe fn bcf_sr_regions_add(
     }
 }
 
-unsafe fn regions_merge(reg: *mut BcfSrRegion) {
+pub(crate) unsafe fn regions_merge(reg: *mut BcfSrRegion) {
     unsafe {
         if reg.is_null() {
             return;
@@ -984,7 +986,7 @@ unsafe fn regions_merge(reg: *mut BcfSrRegion) {
     }
 }
 
-unsafe fn advance_creg(reg: *mut BcfSrRegion) -> c_int {
+pub(crate) unsafe fn advance_creg(reg: *mut BcfSrRegion) -> c_int {
     unsafe {
         if reg.is_null() {
             return -1;
@@ -1184,7 +1186,7 @@ pub unsafe fn vcf_c_1026_bcf_hdr_unregister_hrec(hdr: *mut bcf_hdr_t, hrec: *mut
     }
 }
 
-unsafe fn regions_sort_and_merge(reg: *mut bcf_sr_regions_t) {
+pub(crate) unsafe fn regions_sort_and_merge(reg: *mut bcf_sr_regions_t) {
     unsafe {
         if reg.is_null() {
             return;
@@ -1204,7 +1206,7 @@ unsafe fn regions_sort_and_merge(reg: *mut bcf_sr_regions_t) {
 }
 
 
-unsafe fn bcf_sr_regions_destroy_translated(reg: *mut bcf_sr_regions_t) {
+pub(crate) unsafe fn bcf_sr_regions_destroy_translated(reg: *mut bcf_sr_regions_t) {
     unsafe {
         if reg.is_null() {
             return;
@@ -1238,7 +1240,7 @@ unsafe fn bcf_sr_regions_destroy_translated(reg: *mut bcf_sr_regions_t) {
     }
 }
 
-unsafe fn regions_init_string(str_: *const c_char) -> *mut bcf_sr_regions_t {
+pub(crate) unsafe fn regions_init_string(str_: *const c_char) -> *mut bcf_sr_regions_t {
     unsafe {
         if str_.is_null() {
             return std::ptr::null_mut();
@@ -1350,7 +1352,7 @@ unsafe fn regions_init_string(str_: *const c_char) -> *mut bcf_sr_regions_t {
     }
 }
 
-unsafe fn regions_parse_line(
+pub(crate) unsafe fn regions_parse_line(
     line: *mut c_char,
     ichr: c_int,
     ifrom: c_int,
@@ -1524,7 +1526,7 @@ unsafe fn init_filters(
     }
 }
 
-unsafe fn bcf_sr_seek_start(readers: *mut bcf_srs_t) {
+pub(crate) unsafe fn bcf_sr_seek_start(readers: *mut bcf_srs_t) {
     unsafe {
         let reg = (*readers).regions;
         let regs = (*reg).regs.cast::<BcfSrRegion>();
@@ -1548,32 +1550,32 @@ unsafe fn bcf_sr_regions_get_overlap(regions: *mut bcf_sr_regions_t) -> c_int {
 // Native translation of htslib/vcf_sweep.c struct bcf_sweep_t (kept repr(C) and
 // field-for-field identical to the C definition so the public opaque pointer
 // semantics are preserved).
-const SW_FWD: c_int = 0;
-const SW_BWD: c_int = 1;
+pub(crate) const SW_FWD: c_int = 0;
+pub(crate) const SW_BWD: c_int = 1;
 
 #[repr(C)]
 pub struct bcf_sweep_t {
-    file: *mut htsFile,
-    hdr: *mut bcf_hdr_t,
-    fp: *mut BGZF,
+    pub(crate) file: *mut htsFile,
+    pub(crate) hdr: *mut bcf_hdr_t,
+    pub(crate) fp: *mut BGZF,
 
-    direction: c_int,  // to tell if the direction has changed
-    block_size: c_int, // the size of uncompressed data to hold in memory
-    rec: *mut bcf1_t,  // bcf buffer
-    nrec: c_int,
-    mrec: c_int, // number of used records; total size of the buffer
-    lrid: c_int,
-    lpos: c_int,
-    lnals: c_int,
-    lals_len: c_int,
-    mlals: c_int, // to check uniqueness of a record
-    lals: *mut c_char,
+    pub(crate) direction: c_int,  // to tell if the direction has changed
+    pub(crate) block_size: c_int, // the size of uncompressed data to hold in memory
+    pub(crate) rec: *mut bcf1_t,  // bcf buffer
+    pub(crate) nrec: c_int,
+    pub(crate) mrec: c_int, // number of used records; total size of the buffer
+    pub(crate) lrid: c_int,
+    pub(crate) lpos: c_int,
+    pub(crate) lnals: c_int,
+    pub(crate) lals_len: c_int,
+    pub(crate) mlals: c_int, // to check uniqueness of a record
+    pub(crate) lals: *mut c_char,
 
-    idx: *mut u64, // uncompressed offsets of VCF/BCF records
-    iidx: c_int,
-    nidx: c_int,
-    midx: c_int,    // i: current offset; n: used; m: allocated
-    idx_done: c_int, // the index is built during the first pass
+    pub(crate) idx: *mut u64, // uncompressed offsets of VCF/BCF records
+    pub(crate) iidx: c_int,
+    pub(crate) nidx: c_int,
+    pub(crate) midx: c_int,    // i: current offset; n: used; m: allocated
+    pub(crate) idx_done: c_int, // the index is built during the first pass
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_init().
@@ -1797,7 +1799,7 @@ unsafe fn sw_useek(fp: *mut htsFile, uoffset: i64, where_: c_int) -> c_int {
 }
 
 // Native translation of htslib/hts.c hts_utell(): report the uncompressed offset.
-unsafe fn sw_utell(fp: *mut htsFile) -> i64 {
+pub(crate) unsafe fn sw_utell(fp: *mut htsFile) -> i64 {
     if ((*fp).bitfields & (1 << 4)) != 0 {
         bgzf_utell((*fp).fp.bgzf)
     } else {
@@ -1807,13 +1809,13 @@ unsafe fn sw_utell(fp: *mut htsFile) -> i64 {
 
 // htslib/htslib/vcf.h: #define bcf_read1(fp,h,v) bcf_read((fp),(h),(v))
 #[inline]
-unsafe fn bcf_read1(fp: *mut htsFile, h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int {
+pub(crate) unsafe fn bcf_read1(fp: *mut htsFile, h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int {
     bcf_read(fp, h, v)
 }
 
 // htslib/htslib/vcf.h: #define bcf_empty1(v) bcf_empty(v)
 #[inline]
-unsafe fn bcf_empty1(v: *mut bcf1_t) {
+pub(crate) unsafe fn bcf_empty1(v: *mut bcf1_t) {
     bcf_empty(v)
 }
 
@@ -1871,7 +1873,7 @@ unsafe fn sw_rec_save(sw: *mut bcf_sweep_t, rec: *mut bcf1_t) -> c_int {
 }
 
 // Native translation of htslib/vcf_sweep.c sw_fill_buffer().
-unsafe fn sw_fill_buffer(sw: *mut bcf_sweep_t) -> c_int {
+pub(crate) unsafe fn sw_fill_buffer(sw: *mut bcf_sweep_t) -> c_int {
     if (*sw).iidx == 0 {
         return 0;
     }
@@ -1906,7 +1908,7 @@ unsafe fn sw_fill_buffer(sw: *mut bcf_sweep_t) -> c_int {
 
 
 // Native translation of htslib/vcf_sweep.c sw_seek().
-unsafe fn sw_seek(sw: *mut bcf_sweep_t, direction: c_int) {
+pub(crate) unsafe fn sw_seek(sw: *mut bcf_sweep_t, direction: c_int) {
     (*sw).direction = direction;
     if direction == SW_FWD {
         sw_useek((*sw).file, *(*sw).idx as i64, 0);
@@ -1931,7 +1933,7 @@ unsafe fn hts_expand_char(n: c_int, m: *mut c_int, ptr: *mut *mut c_char) {
 }
 
 // Native translation of htslib's hts_expand() macro for uint64_t arrays.
-unsafe fn hts_expand_u64(n: c_int, m: *mut c_int, ptr: *mut *mut u64) {
+pub(crate) unsafe fn hts_expand_u64(n: c_int, m: *mut c_int, ptr: *mut *mut u64) {
     if n > *m {
         let mut new_m = n;
         kroundup32(&mut new_m);
@@ -2202,7 +2204,7 @@ pub unsafe fn bcf_hdr_set_samples(
 
 
 // original: bcf_sr_add_hreader (htslib/synced_bcf_reader.c:275)
-unsafe fn bcf_sr_add_hreader_impl(
+pub(crate) unsafe fn bcf_sr_add_hreader_impl(
     files: *mut bcf_srs_t,
     file_ptr: *mut htsFile,
     autoclose: c_int,
@@ -2514,7 +2516,7 @@ pub unsafe fn bcf_hdr_write(hfp: *mut htsFile, h: *mut bcf_hdr_t) -> c_int {
 const MAX_N_FMT: usize = 255; // Limited by size of bcf1_t n_fmt field
 
 #[inline]
-unsafe fn bcf_hdr_nsamples_native(h: *const bcf_hdr_t) -> c_int {
+pub(crate) unsafe fn bcf_hdr_nsamples_native(h: *const bcf_hdr_t) -> c_int {
     (*h).n[BCF_DT_SAMPLE as usize]
 }
 
@@ -4848,7 +4850,7 @@ pub unsafe fn bcf_read(fp: *mut htsFile, mut h: *const bcf_hdr_t, v: *mut bcf1_t
 // htslib/hts_internal.h HTS_MAX_EXT_LEN
 const HTS_MAX_EXT_LEN: usize = 9;
 // htslib/htslib/hts.h HTS_IDX_DELIM
-const HTS_IDX_DELIM: &[u8] = b"##idx##";
+pub(crate) const HTS_IDX_DELIM: &[u8] = b"##idx##";
 
 // Native translation of htslib/hts_internal.h find_file_extension().
 unsafe fn find_file_extension(fn_: *const c_char, ext_out: *mut c_char) -> c_int {
@@ -10072,7 +10074,7 @@ pub unsafe fn bcf_hdr_get_hrec(
 
 // realloc(ptr, size*n) with overflow check, matching htslib hts_realloc_p.
 #[inline]
-unsafe fn hts_realloc_p_cc(ptr: *mut c_void, size: usize, n: usize) -> *mut c_void {
+pub(crate) unsafe fn hts_realloc_p_cc(ptr: *mut c_void, size: usize, n: usize) -> *mut c_void {
     if n != 0 && size > usize::MAX / n {
         *c_compat::__errno_location() = c_compat::ENOMEM;
         return std::ptr::null_mut();
@@ -12631,48 +12633,6 @@ pub unsafe fn bcf_idx_save(fp: *mut htsFile) -> c_int {
 
 
 
-pub unsafe fn bcf_trim_alleles(header: *const bcf_hdr_t, line: *mut bcf1_t) -> c_int {
-    vcfutils_c_186_bcf_trim_alleles(header, line)
-}
-
-
-pub unsafe fn bcf_remove_alleles(
-    header: *const bcf_hdr_t,
-    line: *mut bcf1_t,
-    mask: c_int,
-) -> c_int {
-    vcfutils_c_241_bcf_remove_alleles(header, line, mask)
-}
-
-
-pub unsafe fn bcf_remove_allele_set(
-    header: *const bcf_hdr_t,
-    line: *mut bcf1_t,
-    rm_set: *const super::hts::kbitset_t,
-) -> c_int {
-    super::vcfutils::vcfutils_c_659_bcf_remove_allele_set(header, line, rm_set.cast())
-}
-
-pub unsafe fn bcf_calc_ac(
-    header: *const bcf_hdr_t,
-    line: *mut bcf1_t,
-    ac: *mut c_int,
-    which: c_int,
-) -> c_int {
-    vcfutils_c_32_bcf_calc_ac(header, line, ac, which)
-}
-
-
-pub unsafe fn bcf_gt_type(
-    fmt_ptr: *mut bcf_fmt_t,
-    isample: c_int,
-    ial: *mut c_int,
-    jal: *mut c_int,
-) -> c_int {
-    vcfutils_c_134_bcf_gt_type(fmt_ptr, isample, ial, jal)
-}
-
-
 // Native translation of the BCF/tabix iterator macros used by the synced
 // reader: bcf_itr_queryi/tbx_itr_queryi (hts_itr_query with the proper readrec
 // callback) and bcf_itr_next/tbx_itr_next (hts_itr_next).
@@ -12728,7 +12688,7 @@ unsafe fn sr_bcf_itr_next(
     }
 }
 
-unsafe fn sr_tbx_itr_next(
+pub(crate) unsafe fn sr_tbx_itr_next(
     fp: *mut htsFile,
     tbx: *mut super::tbx::tbx_t,
     itr: *mut hts_itr_t,
@@ -12762,7 +12722,7 @@ unsafe fn sr_has_filter(reader: *mut bcf_sr_t, line: *mut bcf1_t) -> c_int {
 }
 
 // original: _reader_seek (htslib/synced_bcf_reader.c:563)
-unsafe fn sr_reader_seek(
+pub(crate) unsafe fn sr_reader_seek(
     reader: *mut bcf_sr_t,
     seq: *const c_char,
     start: hts_pos_t,
@@ -13039,7 +12999,7 @@ unsafe fn sr_reader_shift_buffer(reader: *mut bcf_sr_t) {
 }
 
 // original: next_line (htslib/synced_bcf_reader.c:782)
-unsafe fn sr_next_line(files: *mut bcf_srs_t) -> c_int {
+pub(crate) unsafe fn sr_next_line(files: *mut bcf_srs_t) -> c_int {
     unsafe {
         let mut chr: *const c_char = std::ptr::null();
         let mut min_pos = HTS_POS_MAX;
@@ -13156,7 +13116,7 @@ unsafe fn sr_next_line(files: *mut bcf_srs_t) -> c_int {
 }
 
 
-unsafe fn bcf_sr_destroy1(reader: *mut bcf_sr_t, closefile: c_int) {
+pub(crate) unsafe fn bcf_sr_destroy1(reader: *mut bcf_sr_t, closefile: c_int) {
     unsafe {
         if reader.is_null() {
             return;
@@ -13190,7 +13150,7 @@ unsafe fn bcf_sr_destroy1(reader: *mut bcf_sr_t, closefile: c_int) {
 
 
 
-const BCF_SR_ERROR_NOIDX_ERROR: c_int = 10;
+pub(crate) const BCF_SR_ERROR_NOIDX_ERROR: c_int = 10;
 
 
 
@@ -13204,7 +13164,7 @@ const BCF_SR_ERROR_NOIDX_ERROR: c_int = 10;
 
 
 // original: _regions_match_alleles (htslib/synced_bcf_reader.c:1471)
-unsafe fn sr_regions_match_alleles(
+pub(crate) unsafe fn sr_regions_match_alleles(
     reg: *mut bcf_sr_regions_t,
     als_idx: c_int,
     rec: *mut bcf1_t,
@@ -13315,7 +13275,7 @@ unsafe fn sr_regions_match_alleles(
 
 
 
-unsafe fn bcf_sr_regions_overlap_inner(
+pub(crate) unsafe fn bcf_sr_regions_overlap_inner(
     reg: *mut bcf_sr_regions_t,
     seq: *const c_char,
     start: hts_pos_t,

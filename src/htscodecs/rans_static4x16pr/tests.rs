@@ -287,7 +287,7 @@ fn adversarial_inputs() {
 ///
 /// LATENT FINDING (surfaced 2026-05, not fixed here): bit-flipping a valid
 /// O1-Pack-RLE stream can trigger a `multiply with overflow` debug-mode
-/// panic at `src/htscodecs/rans_static_32x16pr.rs:552`
+/// panic at `src/htscodecs/rans_static32x16pr.rs:552`
 /// (`r[z+k] = f * (r[z+k] >> TF_SHIFT_O1_FAST) + b`).  In release mode
 /// this wraps and is not UB, but it indicates the decoder trusts table
 /// values that come from the (corrupted) input stream.  Filed as a

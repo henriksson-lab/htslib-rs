@@ -10,7 +10,7 @@ use crate::htscodecs::rans_static16_int::{
     decode_freq, decode_freq1, encode_freq, encode_freq1, fb_t, normalise_freq,
     normalise_freq_shift, rans_F_to_s3, round2,
 };
-use crate::htscodecs::rans_static_4x16pr::{rans_compress_bound_4x16, rans_uncompress_O0_4x16};
+use crate::htscodecs::rans_static4x16pr::{rans_compress_bound_4x16, rans_uncompress_O0_4x16};
 use crate::htscodecs::rans_word::{
     RansDecInit, RansDecRenorm, RansDecRenormSafe, RansEncFlush, RansEncInit, RansEncPutSymbol,
     RansEncPutSymbol_branched, RansEncSymbol, RansEncSymbolInit, RANS_BYTE_L,
@@ -134,7 +134,7 @@ pub fn rans_uncompress_O0_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     // C convention (rANS_static32x16pr.c:275): when called with `out == NULL`,
     // the decoder ALLOCATES `out_sz` bytes via `malloc` and tracks the buffer
     // in `out_free` so it can be freed on the error path. The 4x16 layer at
-    // src/htscodecs/rans_static_4x16pr.rs:1424 relies on this — it probes the
+    // src/htscodecs/rans_static4x16pr.rs:1424 relies on this — it probes the
     // meta-buffer decode with a null `out` expecting an allocated result back.
     // We replicate it with a Drop-guard that frees only if we early-return.
     let mut owned: *mut u8 = std::ptr::null_mut();

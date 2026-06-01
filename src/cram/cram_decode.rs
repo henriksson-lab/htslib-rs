@@ -101,7 +101,7 @@ pub unsafe fn cram_cram_decode_c_71_cram_decode_TD(
 
 pub(crate) mod decode_pipeline {
     use super::{
-        cram_cram_codecs_c_3968_cram_codec_to_id, cram_cram_io_c_145_cram_decode_compression_header,
+        cram_cram_codecs_c_3968_cram_codec_to_id, cram_cram_decode_c_145_cram_decode_compression_header,
         cram_cram_io_c_1565_cram_free_block, cram_cram_io_c_3213_cram_ref_decr,
         cram_cram_io_c_3409_cram_get_ref, cram_cram_io_c_3705_cram_free_container,
         cram_cram_io_c_3788_cram_read_container, cram_cram_io_c_4421_cram_free_slice,
@@ -799,7 +799,7 @@ pub(crate) mod decode_pipeline {
         fd: *mut cram_fd,
         b: *mut cram_block,
     ) -> *mut cram_block_compression_hdr {
-        cram_cram_io_c_145_cram_decode_compression_header(fd.cast(), b.cast()).cast()
+        cram_cram_decode_c_145_cram_decode_compression_header(fd.cast(), b.cast()).cast()
     }
 
     // ---- thread-pool shims (pool path; unexercised when fd.pool is null) ----
@@ -4104,4 +4104,606 @@ pub(crate) mod decode_pipeline {
         let s = (*c).slice;
         cram_to_bam((*fd).header, fd, s, cr, (*s).curr_rec - 1, bam_0)
     }
+}
+
+/// original: cram_decode_compression_header (htslib/cram/cram_decode.c:145)
+/// Native port. Decodes a CRAM container's compression-header block into a
+/// freshly calloc'd `cram_block_compression_hdr`. Faithfully reproduces the C
+/// control flow: optional in-place block decompression; the CRAM v1-only
+/// landmark/ref-seq prelude; the preservation map (RN/AP/RR/QO/SM/TD plus the
+/// V1.0 MI/UI/PI single-byte keys) into the string-keyed `preservation_map`
+/// khash with the public preservation flags mirrored; the data-series encoding
+/// map (per 2-char key -> DS_ID + external type, building each codec via the
+/// native `cram_decoder_init`, with the CRAM-v4 SLONG/LONG type selection for
+/// AP/NP/TS); and the tag encoding map (3-char keys -> BYTE_ARRAY_BLOCK codecs).
+/// Map-size mismatches and decoder-init failures free everything and return
+/// NULL. Ownership matches C exactly (see `cram_free_compression_header`).
+pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
+    fd: *mut cram_fd,
+    b: *mut cram_block,
+) -> *mut cram_block_compression_hdr {
+    // cram_DS_ID values (htslib/cram/cram_structs.h:143). Local copy because the
+    // production module only exports a subset as module consts.
+    const DS_CORE: c_int = 0;
+    const DS_BF: c_int = 15;
+    const DS_CF: c_int = 16;
+    const DS_AP: c_int = 17;
+    const DS_RG: c_int = 18;
+    const DS_MQ: c_int = 19;
+    const DS_NS: c_int = 20;
+    const DS_MF: c_int = 21;
+    const DS_TS: c_int = 22;
+    const DS_NP: c_int = 23;
+    const DS_NF: c_int = 24;
+    const DS_RL: c_int = 25;
+    const DS_FN: c_int = 26;
+    const DS_FC: c_int = 27;
+    const DS_FP: c_int = 28;
+    const DS_DL: c_int = 29;
+    const DS_BA: c_int = 30;
+    const DS_BS: c_int = 31;
+    const DS_TL: c_int = 32;
+    const DS_RI: c_int = 33;
+    const DS_RS: c_int = 34;
+    const DS_PD: c_int = 35;
+    const DS_HC: c_int = 36;
+    const DS_BB: c_int = 37;
+    const DS_QQ: c_int = 38;
+    const DS_TC: c_int = 44;
+    // cram_DS_ID values shared with the module-level consts: DS_RN=11, DS_QS=12,
+    // DS_IN=13, DS_SC=14, DS_TN=39 (already defined).
+
+    // cram_encoding / cram_external_type values.
+    const E_NULL: i32 = 0;
+    const E_INT: c_int = 1;
+    const E_LONG: c_int = 2;
+    const E_BYTE: c_int = 3;
+    const E_BYTE_ARRAY: c_int = 4;
+    const E_BYTE_ARRAY_BLOCK: c_int = 5;
+    const E_SLONG: c_int = 7;
+    const CRAM_MAP_HASH: c_int = 32;
+
+    let bl = b.cast::<cram_block_layout>();
+    let hdr = calloc(
+        1,
+        std::mem::size_of::<cram_block_compression_hdr_layout>() as u64,
+    )
+    .cast::<cram_block_compression_hdr_layout>();
+    if hdr.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    if (*bl).method != CRAM_BLOCK_METHOD_RAW
+        && cram_cram_io_c_1576_cram_uncompress_block(b.cast()) != 0
+    {
+        free(hdr.cast());
+        return std::ptr::null_mut();
+    }
+
+    let mut cp: *mut c_char = (*bl).data.cast::<c_char>();
+    let endp: *const c_char = cp.add((*bl).uncomp_size as usize).cast_const();
+
+    let fdl = fd.cast::<cram_fd_layout>();
+    let major = (*fdl).version >> 8;
+    let vv = &(*fdl).vv;
+    let mut err: c_int = 0;
+
+    macro_rules! get32 {
+        () => {
+            (vv.varint_get32.unwrap())(&mut cp, endp, &mut err)
+        };
+    }
+    macro_rules! get64 {
+        () => {
+            (vv.varint_get64.unwrap())(&mut cp, endp, &mut err)
+        };
+    }
+
+    if major == 1 {
+        (*hdr).ref_seq_id = get32!() as i32;
+        if major >= 4 {
+            (*hdr).ref_seq_start = get64!();
+            (*hdr).ref_seq_span = get64!();
+        } else {
+            (*hdr).ref_seq_start = get32!();
+            (*hdr).ref_seq_span = get32!();
+        }
+        (*hdr).num_records = get32!() as i32;
+        (*hdr).num_landmarks = get32!() as i32;
+        if (*hdr).num_landmarks < 0
+            || (*hdr).num_landmarks as usize
+                >= usize::MAX / std::mem::size_of::<i32>()
+            || (endp.offset_from(cp) as i64) < (*hdr).num_landmarks as i64
+        {
+            free(hdr.cast());
+            return std::ptr::null_mut();
+        }
+        (*hdr).landmark =
+            malloc((*hdr).num_landmarks as u64 * std::mem::size_of::<i32>() as u64).cast::<i32>();
+        if (*hdr).landmark.is_null() {
+            free(hdr.cast());
+            return std::ptr::null_mut();
+        }
+        let mut i = 0;
+        while i < (*hdr).num_landmarks {
+            *(*hdr).landmark.add(i as usize) = get32!() as i32;
+            i += 1;
+        }
+    }
+
+    // hdr->preservation_map = kh_init(map): calloc(1, sizeof(kh_map_t)).
+    (*hdr).preservation_map =
+        calloc(1, std::mem::size_of::<kh_generic_layout>() as u64).cast::<c_void>();
+    // rec/tag_encoding_map were zeroed by calloc already (memset to 0 in C).
+    if (*hdr).preservation_map.is_null() {
+        cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+        return std::ptr::null_mut();
+    }
+    let pmap = (*hdr).preservation_map.cast::<kh_generic_layout>();
+
+    // Preservation-map defaults.
+    (*hdr).read_names_included = 0;
+    (*hdr).ap_delta = 1;
+    (*hdr).qs_seq_orient = 1;
+    memcpy(
+        (&raw mut (*hdr).substitution_matrix).cast(),
+        c"CGTNAGTNACTNACGNACGT".as_ptr().cast(),
+        20,
+    );
+
+    // --- Preservation map ---
+    let mut map_size = get32!() as i32;
+    let mut cp_copy = cp;
+    let mut map_count = get32!() as i32;
+    let mut i = 0;
+    while i < map_count {
+        if (endp.offset_from(cp) as i64) < 3 {
+            cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+            return std::ptr::null_mut();
+        }
+        cp = cp.add(2);
+        // CRAM_KEY(a,b) = ((uc)a << 8) | (uc)b
+        let key2 = ((*cp.offset(-2) as u8 as c_int) << 8) | (*cp.offset(-1) as u8 as c_int);
+        let mut hd = pmap_val { i: 0 };
+        let mut r: c_int = 0;
+        // CRAM_KEY constants
+        const K_MI: c_int = (b'M' as c_int) << 8 | b'I' as c_int;
+        const K_UI: c_int = (b'U' as c_int) << 8 | b'I' as c_int;
+        const K_PI: c_int = (b'P' as c_int) << 8 | b'I' as c_int;
+        const K_RN: c_int = (b'R' as c_int) << 8 | b'N' as c_int;
+        const K_AP: c_int = (b'A' as c_int) << 8 | b'P' as c_int;
+        const K_RR: c_int = (b'R' as c_int) << 8 | b'R' as c_int;
+        const K_QO: c_int = (b'Q' as c_int) << 8 | b'O' as c_int;
+        const K_SM: c_int = (b'S' as c_int) << 8 | b'M' as c_int;
+        const K_TD: c_int = (b'T' as c_int) << 8 | b'D' as c_int;
+        match key2 {
+            K_MI | K_UI | K_PI => {
+                hd.i = *cp as c_int;
+                cp = cp.add(1);
+            }
+            K_RN => {
+                hd.i = *cp as c_int;
+                cp = cp.add(1);
+                let k = kh_put_map(pmap, c"RN".as_ptr(), &mut r);
+                if r == -1 {
+                    cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+                    return std::ptr::null_mut();
+                }
+                *(*pmap).vals.cast::<pmap_val>().add(k as usize) = hd;
+                (*hdr).read_names_included = hd.i;
+            }
+            K_AP => {
+                hd.i = *cp as c_int;
+                cp = cp.add(1);
+                let k = kh_put_map(pmap, c"AP".as_ptr(), &mut r);
+                if r == -1 {
+                    cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+                    return std::ptr::null_mut();
+                }
+                *(*pmap).vals.cast::<pmap_val>().add(k as usize) = hd;
+                (*hdr).ap_delta = hd.i;
+            }
+            K_RR => {
+                hd.i = *cp as c_int;
+                cp = cp.add(1);
+                let k = kh_put_map(pmap, c"RR".as_ptr(), &mut r);
+                if r == -1 {
+                    cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+                    return std::ptr::null_mut();
+                }
+                *(*pmap).vals.cast::<pmap_val>().add(k as usize) = hd;
+                (*hdr).no_ref = (hd.i == 0) as c_int;
+            }
+            K_QO => {
+                hd.i = *cp as c_int;
+                cp = cp.add(1);
+                let k = kh_put_map(pmap, c"QO".as_ptr(), &mut r);
+                if r == -1 {
+                    cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+                    return std::ptr::null_mut();
+                }
+                *(*pmap).vals.cast::<pmap_val>().add(k as usize) = hd;
+                (*hdr).qs_seq_orient = hd.i;
+            }
+            K_SM => {
+                if (endp.offset_from(cp) as i64) < 5 {
+                    cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+                    return std::ptr::null_mut();
+                }
+                let sm = &mut (*hdr).substitution_matrix;
+                let cb = |o: isize| -> c_int { *cp.offset(o) as c_int };
+                sm[0][((cb(0) >> 6) & 3) as usize] = b'C' as c_char;
+                sm[0][((cb(0) >> 4) & 3) as usize] = b'G' as c_char;
+                sm[0][((cb(0) >> 2) & 3) as usize] = b'T' as c_char;
+                sm[0][((cb(0) >> 0) & 3) as usize] = b'N' as c_char;
+                sm[1][((cb(1) >> 6) & 3) as usize] = b'A' as c_char;
+                sm[1][((cb(1) >> 4) & 3) as usize] = b'G' as c_char;
+                sm[1][((cb(1) >> 2) & 3) as usize] = b'T' as c_char;
+                sm[1][((cb(1) >> 0) & 3) as usize] = b'N' as c_char;
+                sm[2][((cb(2) >> 6) & 3) as usize] = b'A' as c_char;
+                sm[2][((cb(2) >> 4) & 3) as usize] = b'C' as c_char;
+                sm[2][((cb(2) >> 2) & 3) as usize] = b'T' as c_char;
+                sm[2][((cb(2) >> 0) & 3) as usize] = b'N' as c_char;
+                sm[3][((cb(3) >> 6) & 3) as usize] = b'A' as c_char;
+                sm[3][((cb(3) >> 4) & 3) as usize] = b'C' as c_char;
+                sm[3][((cb(3) >> 2) & 3) as usize] = b'G' as c_char;
+                sm[3][((cb(3) >> 0) & 3) as usize] = b'N' as c_char;
+                sm[4][((cb(4) >> 6) & 3) as usize] = b'A' as c_char;
+                sm[4][((cb(4) >> 4) & 3) as usize] = b'C' as c_char;
+                sm[4][((cb(4) >> 2) & 3) as usize] = b'G' as c_char;
+                sm[4][((cb(4) >> 0) & 3) as usize] = b'T' as c_char;
+                hd.p = cp;
+                cp = cp.add(5);
+                let k = kh_put_map(pmap, c"SM".as_ptr(), &mut r);
+                if r == -1 {
+                    cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+                    return std::ptr::null_mut();
+                }
+                *(*pmap).vals.cast::<pmap_val>().add(k as usize) = hd;
+            }
+            K_TD => {
+                let sz = cram_cram_decode_c_71_cram_decode_TD(fd, cp, endp, hdr);
+                if sz < 0 {
+                    cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+                    return std::ptr::null_mut();
+                }
+                hd.p = cp;
+                cp = cp.add(sz as usize);
+                let k = kh_put_map(pmap, c"TD".as_ptr(), &mut r);
+                if r == -1 {
+                    cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+                    return std::ptr::null_mut();
+                }
+                *(*pmap).vals.cast::<pmap_val>().add(k as usize) = hd;
+            }
+            _ => {
+                hts_log_cstr(
+                    HTS_LOG_WARNING,
+                    c"cram_decode_compression_header".as_ptr(),
+                    c"Unrecognised preservation map key".as_ptr(),
+                );
+                cp = cp.add(1);
+            }
+        }
+        i += 1;
+    }
+    if cp.offset_from(cp_copy) as i64 != map_size as i64 {
+        cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+        return std::ptr::null_mut();
+    }
+
+    // --- Record (data-series) encoding map ---
+    map_size = get32!() as i32;
+    cp_copy = cp;
+    map_count = get32!() as i32;
+    let is_v4 = if major >= 4 { 1 } else { 0 };
+    i = 0;
+    while i < map_count {
+        let key = cp;
+        if (endp.offset_from(cp) as i64) < 4 {
+            cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+            return std::ptr::null_mut();
+        }
+        cp = cp.add(2);
+        let encoding = get32!() as i32;
+        let size = get32!() as i32;
+        let offset = cp.offset_from((*bl).data.cast::<c_char>()) as c_int;
+
+        if encoding == E_NULL {
+            i += 1;
+            continue;
+        }
+        if size < 0 || (endp.offset_from(cp) as i64) < size as i64 {
+            cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+            return std::ptr::null_mut();
+        }
+
+        let k0 = *key as u8;
+        let k1 = *key.add(1) as u8;
+        let mut ds_id = DS_CORE;
+        let mut type_: c_int = 0;
+        match (k0, k1) {
+            (b'B', b'F') => { ds_id = DS_BF; type_ = E_INT; }
+            (b'C', b'F') => { ds_id = DS_CF; type_ = E_INT; }
+            (b'R', b'I') => { ds_id = DS_RI; type_ = E_INT; }
+            (b'R', b'L') => { ds_id = DS_RL; type_ = E_INT; }
+            (b'A', b'P') => { ds_id = DS_AP; type_ = if is_v4 != 0 { E_SLONG } else { E_INT }; }
+            (b'R', b'G') => { ds_id = DS_RG; type_ = E_INT; }
+            (b'M', b'F') => { ds_id = DS_MF; type_ = E_INT; }
+            (b'N', b'S') => { ds_id = DS_NS; type_ = E_INT; }
+            (b'N', b'P') => { ds_id = DS_NP; type_ = if is_v4 != 0 { E_LONG } else { E_INT }; }
+            (b'T', b'S') => { ds_id = DS_TS; type_ = if is_v4 != 0 { E_SLONG } else { E_INT }; }
+            (b'N', b'F') => { ds_id = DS_NF; type_ = E_INT; }
+            (b'T', b'C') => { ds_id = DS_TC; type_ = E_BYTE; }
+            (b'T', b'N') => { ds_id = DS_TN; type_ = E_INT; }
+            (b'F', b'N') => { ds_id = DS_FN; type_ = E_INT; }
+            (b'F', b'C') => { ds_id = DS_FC; type_ = E_BYTE; }
+            (b'F', b'P') => { ds_id = DS_FP; type_ = E_INT; }
+            (b'B', b'S') => { ds_id = DS_BS; type_ = E_BYTE; }
+            (b'I', b'N') => { ds_id = DS_IN; type_ = E_BYTE_ARRAY; }
+            (b'S', b'C') => { ds_id = DS_SC; type_ = E_BYTE_ARRAY; }
+            (b'D', b'L') => { ds_id = DS_DL; type_ = E_INT; }
+            (b'B', b'A') => { ds_id = DS_BA; type_ = E_BYTE; }
+            (b'B', b'B') => { ds_id = DS_BB; type_ = E_BYTE_ARRAY; }
+            (b'R', b'S') => { ds_id = DS_RS; type_ = E_INT; }
+            (b'P', b'D') => { ds_id = DS_PD; type_ = E_INT; }
+            (b'H', b'C') => { ds_id = DS_HC; type_ = E_INT; }
+            (b'M', b'Q') => { ds_id = DS_MQ; type_ = E_INT; }
+            (b'R', b'N') => { ds_id = DS_RN; type_ = E_BYTE_ARRAY_BLOCK; }
+            (b'Q', b'S') => { ds_id = DS_QS; type_ = E_BYTE; }
+            (b'Q', b'Q') => { ds_id = DS_QQ; type_ = E_BYTE_ARRAY; }
+            (b'T', b'L') => { ds_id = DS_TL; type_ = E_INT; }
+            (b'T', b'M') | (b'T', b'V') => {}
+            _ => {
+                hts_log_cstr(
+                    HTS_LOG_WARNING,
+                    c"cram_decode_compression_header".as_ptr(),
+                    c"Unrecognised key".as_ptr(),
+                );
+            }
+        }
+
+        if ds_id != DS_CORE {
+            if !(*hdr).codecs[ds_id as usize].is_null() {
+                hts_log_cstr(
+                    HTS_LOG_WARNING,
+                    c"cram_decode_compression_header".as_ptr(),
+                    c"Codec for key defined more than once".as_ptr(),
+                );
+                let c = (*hdr).codecs[ds_id as usize].cast::<cram_codec_base_layout>();
+                if let Some(free_fn) = (*c).free {
+                    free_fn(c);
+                }
+            }
+            (*hdr).codecs[ds_id as usize] = cram_cram_codecs_c_3872_cram_decoder_init(
+                hdr.cast(),
+                encoding,
+                cp,
+                size,
+                type_,
+                (*fdl).version,
+                (&raw const (*fdl).vv as *mut c_void),
+            );
+            if (*hdr).codecs[ds_id as usize].is_null() {
+                cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+                return std::ptr::null_mut();
+            }
+        }
+
+        cp = cp.add(size as usize);
+
+        // Fill out cram_map purely for cram_dump.
+        let m = malloc(std::mem::size_of::<cram_map_layout>() as u64).cast::<cram_map_layout>();
+        if m.is_null() {
+            cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+            return std::ptr::null_mut();
+        }
+        (*m).key = ((k0 as c_int) << 8) | k1 as c_int;
+        (*m).encoding = encoding;
+        (*m).size = size;
+        (*m).offset = offset;
+        (*m).codec = std::ptr::null_mut();
+        let slot = ((k0 as c_int * 3 + k1 as c_int) & (CRAM_MAP_HASH - 1)) as usize;
+        (*m).next = (*hdr).rec_encoding_map[slot].cast();
+        (*hdr).rec_encoding_map[slot] = m.cast();
+
+        i += 1;
+    }
+    if cp.offset_from(cp_copy) as i64 != map_size as i64 {
+        cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+        return std::ptr::null_mut();
+    }
+
+    // --- Tag encoding map ---
+    map_size = get32!() as i32;
+    cp_copy = cp;
+    map_count = get32!() as i32;
+    i = 0;
+    while i < map_count {
+        let m = malloc(std::mem::size_of::<cram_map_layout>() as u64).cast::<cram_map_layout>();
+        if m.is_null() || (endp.offset_from(cp) as i64) < 6 {
+            free(m.cast());
+            cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+            return std::ptr::null_mut();
+        }
+        (*m).key = get32!() as c_int;
+        let k0 = ((*m).key >> 16) as u8;
+        let k1 = ((*m).key >> 8) as u8;
+        let encoding = get32!() as i32;
+        let size = get32!() as i32;
+        (*m).encoding = encoding;
+        (*m).size = size;
+        (*m).offset = cp.offset_from((*bl).data.cast::<c_char>()) as c_int;
+
+        let codec = if size < 0 || (endp.offset_from(cp) as i64) < size as i64 {
+            std::ptr::null_mut()
+        } else {
+            cram_cram_codecs_c_3872_cram_decoder_init(
+                hdr.cast(),
+                encoding,
+                cp,
+                size,
+                E_BYTE_ARRAY_BLOCK,
+                (*fdl).version,
+                (&raw const (*fdl).vv as *mut c_void),
+            )
+        };
+        (*m).codec = codec;
+        if size < 0 || (endp.offset_from(cp) as i64) < size as i64 || codec.is_null() {
+            cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+            free(m.cast());
+            return std::ptr::null_mut();
+        }
+
+        cp = cp.add(size as usize);
+        let slot = ((k0 as c_int * 3 + k1 as c_int) & (CRAM_MAP_HASH - 1)) as usize;
+        (*m).next = (*hdr).tag_encoding_map[slot].cast();
+        (*hdr).tag_encoding_map[slot] = m.cast();
+
+        i += 1;
+    }
+    if err != 0 || cp.offset_from(cp_copy) as i64 != map_size as i64 {
+        cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
+        return std::ptr::null_mut();
+    }
+
+    hdr.cast()
+}
+/// original: cram_decode_slice_header (htslib/cram/cram_decode.c:955)
+/// Native port. Decodes a slice-header block into a freshly calloc'd
+/// `cram_block_slice_hdr`. Mirrors the C control flow exactly, including the
+/// version-dependent itf8 vs ltf8 selection (via the fd's `vv` varint vector)
+/// and the CRAM-version gating of the `record_counter` and `md5` fields.
+/// Ownership matches C: block_content_ids is malloc'd; on error everything is
+/// freed and NULL returned.
+pub unsafe fn cram_cram_decode_c_955_cram_decode_slice_header(
+    fd: *mut cram_fd,
+    b: *mut cram_block,
+) -> *mut cram_block_slice_hdr {
+    let bl = b.cast::<cram_block_layout>();
+
+    // Uncompress in place if the block is not stored RAW.
+    if (*bl).method != CRAM_BLOCK_METHOD_RAW {
+        if cram_cram_io_c_1576_cram_uncompress_block(b.cast()) < 0 {
+            return std::ptr::null_mut();
+        }
+    }
+
+    let mut cp: *mut c_char = (*bl).data.cast::<c_char>();
+    let cp_end: *const c_char = cp.add((*bl).uncomp_size as usize).cast_const();
+
+    if (*bl).content_type != CRAM_CONTENT_TYPE_MAPPED_SLICE
+        && (*bl).content_type != CRAM_CONTENT_TYPE_UNMAPPED_SLICE
+    {
+        return std::ptr::null_mut();
+    }
+
+    let hdr = calloc(1, std::mem::size_of::<cram_block_slice_hdr_layout>() as u64)
+        .cast::<cram_block_slice_hdr_layout>();
+    if hdr.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let fdl = fd.cast::<cram_fd_layout>();
+    let major = (*fdl).version >> 8;
+    let vv = &(*fdl).vv;
+    let mut err: c_int = 0;
+
+    macro_rules! get32 {
+        () => {
+            (vv.varint_get32.unwrap())(&mut cp, cp_end, &mut err)
+        };
+    }
+    macro_rules! get32s {
+        () => {
+            (vv.varint_get32s.unwrap())(&mut cp, cp_end, &mut err)
+        };
+    }
+    macro_rules! get64 {
+        () => {
+            (vv.varint_get64.unwrap())(&mut cp, cp_end, &mut err)
+        };
+    }
+
+    (*hdr).content_type = (*bl).content_type;
+
+    if (*bl).content_type == CRAM_CONTENT_TYPE_MAPPED_SLICE {
+        (*hdr).ref_seq_id = get32s!() as i32;
+        if major >= 4 {
+            (*hdr).ref_seq_start = get64!();
+            (*hdr).ref_seq_span = get64!();
+        } else {
+            (*hdr).ref_seq_start = get32!();
+            (*hdr).ref_seq_span = get32!();
+        }
+        if (*hdr).ref_seq_start < 0 || (*hdr).ref_seq_span < 0 {
+            free(hdr.cast());
+            hts_log_cstr(
+                HTS_LOG_ERROR,
+                c"cram_decode_slice_header".as_ptr(),
+                c"Negative values not permitted for header sequence start or span fields"
+                    .as_ptr(),
+            );
+            return std::ptr::null_mut();
+        }
+    }
+
+    (*hdr).num_records = get32!() as i32;
+    (*hdr).record_counter = 0;
+    if major == 2 {
+        (*hdr).record_counter = get32!();
+    } else if major >= 3 {
+        (*hdr).record_counter = get64!();
+    }
+
+    (*hdr).num_blocks = get32!() as i32;
+    (*hdr).num_content_ids = get32!() as i32;
+    if (*hdr).num_content_ids < 1 || (*hdr).num_content_ids >= 10000 {
+        free(hdr.cast());
+        return std::ptr::null_mut();
+    }
+
+    (*hdr).block_content_ids =
+        malloc((*hdr).num_content_ids as u64 * std::mem::size_of::<i32>() as u64).cast::<i32>();
+    if (*hdr).block_content_ids.is_null() {
+        free(hdr.cast());
+        return std::ptr::null_mut();
+    }
+
+    let mut i = 0;
+    while i < (*hdr).num_content_ids {
+        *(*hdr).block_content_ids.add(i as usize) = get32!() as i32;
+        i += 1;
+    }
+    if err != 0 {
+        free((*hdr).block_content_ids.cast());
+        free(hdr.cast());
+        return std::ptr::null_mut();
+    }
+
+    if (*bl).content_type == CRAM_CONTENT_TYPE_MAPPED_SLICE {
+        (*hdr).ref_base_id = get32!() as i32;
+    }
+
+    if major != 1 {
+        if (cp_end as isize - cp as isize) < 16 {
+            free((*hdr).block_content_ids.cast());
+            free(hdr.cast());
+            return std::ptr::null_mut();
+        }
+        memcpy(
+            (&raw mut (*hdr).md5).cast(),
+            cp.cast_const().cast(),
+            16,
+        );
+    } else {
+        (*hdr).md5 = [0u8; 16];
+    }
+
+    if err == 0 {
+        return hdr.cast();
+    }
+    free((*hdr).block_content_ids.cast());
+    free(hdr.cast());
+    std::ptr::null_mut()
 }

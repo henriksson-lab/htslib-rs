@@ -1,7 +1,7 @@
 //! Native translation of `tokenise_name3.c` + `tokenise_name3.h` (htscodecs).
 //!
 //! Read-name tokeniser. It generates a series of byte streams (per token) and
-//! compresses these either using static rANS (`rans_static_4x16pr`) or dynamic
+//! compresses these either using static rANS (`rans_static4x16pr`) or dynamic
 //! arithmetic coding (`arith_dynamic`). It uses the pooled allocator
 //! (`pooled_alloc`) for the encoder trie nodes.
 //!
@@ -21,7 +21,7 @@ use crate::c_compat;
 use super::pooled_alloc::{pool_alloc_t, pool_alloc, pool_create, pool_destroy};
 use super::varint::{var_get_u32, var_put_u32};
 use super::arith_dynamic::{arith_compress_bound, arith_compress_to, arith_uncompress_to};
-use super::rans_static_4x16pr::{rans_compress_4x16, rans_uncompress_4x16};
+use super::rans_static4x16pr::{rans_compress_4x16, rans_uncompress_4x16};
 use super::utils::{htscodecs_tls_alloc, htscodecs_tls_free};
 
 //-----------------------------------------------------------------------------

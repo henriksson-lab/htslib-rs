@@ -13,7 +13,7 @@
 //!   by shrinking the slice by one byte from the front.
 //!
 //! This matches the `uint8_t**` semantics one-to-one (no raw pointers) while
-//! retaining bounds checking. Sibling rANS modules (`rans_4x8`, `rans_word`)
+//! retaining bounds checking. Sibling rANS modules (`rans_static`, `rans_word`)
 //! use the alternative `(buf, ptr: &mut usize)` pair; either representation is
 //! equivalent — we keep the stub-declared signatures here.
 #![allow(non_snake_case, non_camel_case_types, unused_variables, dead_code, clippy::too_many_arguments)]

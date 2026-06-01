@@ -16,6 +16,7 @@ pub mod hfile_libcurl;
 #[cfg(feature = "s3")]
 pub mod hfile_s3;
 pub mod hts;
+pub mod hts_expr;
 pub mod hts_os;
 pub mod htscodecs;
 pub mod htsfile;
@@ -32,6 +33,8 @@ pub mod ref_cache;
 pub mod regidx;
 pub mod region;
 pub mod sam;
+pub mod header;
+pub mod sam_mods;
 pub mod samples;
 pub mod simd;
 pub mod tabix;
@@ -40,6 +43,9 @@ pub mod test;
 pub mod textutils;
 pub mod thread_pool;
 pub mod vcf;
+pub mod vcf_sweep;
+pub mod bcf_sr_sort;
+pub mod synced_bcf_reader;
 pub mod vcfutils;
 
 pub(crate) mod c_compat;

@@ -8,7 +8,7 @@
 #![allow(non_snake_case, non_camel_case_types, unused_variables, dead_code, clippy::too_many_arguments)]
 
 use crate::htscodecs::rans_word::{RansEncSymbol, RansEncSymbolInit};
-use crate::htscodecs::rans_static_4x16pr::{rans_compress_O0_4x16, rans_compute_shift};
+use crate::htscodecs::rans_static4x16pr::{rans_compress_O0_4x16, rans_compute_shift};
 use crate::htscodecs::utils::{hist1_4, htscodecs_tls_calloc, htscodecs_tls_free, MAGIC};
 use crate::htscodecs::varint::{var_get_u32, var_put_u32};
 

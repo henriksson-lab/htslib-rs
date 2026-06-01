@@ -16,7 +16,7 @@ use crate::htscodecs::rans_static16_int::{
     decode_alphabet, decode_freq, decode_freq_d, encode_freq, encode_freq1, normalise_freq,
     normalise_freq_shift, round2,
 };
-use crate::htscodecs::rans_static_32x16pr::{
+use crate::htscodecs::rans_static32x16pr::{
     rans_compress_O0_32x16, rans_compress_O1_32x16, rans_uncompress_O0_32x16,
     rans_uncompress_O1_32x16,
 };

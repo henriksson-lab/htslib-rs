@@ -25,7 +25,7 @@ const RANS_BYTE_L: u32 = 1 << 23; // 8388608
 // rANS_byte.h primitives — delegated to `rans_byte` (the canonical module).
 // The struct types are re-exports of `rans_byte`'s, so layouts/field names
 // match exactly. The thin wrappers below only adapt cursor representation:
-// rans_4x8 uses `(buf: &mut [u8], ptr: &mut usize)` while rans_byte uses
+// rans_static uses `(buf: &mut [u8], ptr: &mut usize)` while rans_byte uses
 // `pptr: &mut &mut [u8]` (encode) / `pptr: &mut &[u8]` (decode).
 // -----------------------------------------------------------------------------
 
@@ -104,7 +104,7 @@ fn rans_dec_renorm(r: &mut u32, input: &[u8], ptr: &mut usize) {
 
 /// `RansDecRenormSafe`: renormalize, but never read past `ptr_end`.
 ///
-/// In rans_4x8's call sites `ptr_end == input.len()`, so we pass the whole
+/// In rans_static's call sites `ptr_end == input.len()`, so we pass the whole
 /// remaining tail slice; the `pptr.len() == 0` check inside rans_byte's
 /// [`RansDecRenormSafe`] catches the boundary. We pass `usize::MAX` as the
 /// raw-address sentinel so the address-based bound never triggers spuriously.

@@ -6,8 +6,8 @@ use crate::htslib_rs::{
     probaln::{probaln_glocal, probaln_par_t},
     sam::{
         bam1_t, bam_aux_append, bam_aux_del, bam_aux_get, bam_cigar_op, bam_get_cigar,
-        bam_get_qual, bam_get_seq, bam_seqi, BAM_CDEL, BAM_CDIFF, BAM_CEQUAL, BAM_CINS, BAM_CMATCH,
-        BAM_CREF_SKIP, BAM_CSOFT_CLIP, BAM_FUNMAP, SEQ_NT16_TABLE,
+        bam_get_qual, bam_get_seq, bam_seqi, BAM_CDEL, BAM_CDIFF, BAM_CEQUAL, BAM_CHARD_CLIP,
+        BAM_CINS, BAM_CMATCH, BAM_CREF_SKIP, BAM_CSOFT_CLIP, BAM_FUNMAP, SEQ_NT16_TABLE,
     },
 };
 
@@ -439,4 +439,103 @@ pub unsafe fn realn_c_106_sam_prob_realn(
     }
 
     0
+}
+
+pub unsafe fn sam_cap_mapq(
+    b: *mut bam1_t,
+    ref_: *const c_char,
+    ref_len: hts_pos_t,
+    mut thres: c_int,
+) -> c_int {
+    let seq = bam_get_seq(b);
+    let qual = bam_get_qual(b);
+    let cigar = bam_get_cigar(b);
+    let c = std::ptr::addr_of_mut!((*b).core);
+    let mut mm = 0;
+    let mut q = 0;
+    let mut len = 0;
+    let mut clip_l = 0;
+    let mut clip_q = 0;
+
+    if thres < 0 {
+        thres = 40;
+    }
+
+    let mut y = 0;
+    let mut x = (*c).pos;
+    for i in 0..(*c).n_cigar {
+        let cigar_i = *cigar.add(i as usize);
+        let l = (cigar_i >> 4) as c_int;
+        let op = (cigar_i & 0x0f) as c_int;
+        if op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF {
+            let mut j = 0;
+            while j < l {
+                let z = y + j;
+                if x + j as hts_pos_t >= ref_len || *ref_.add((x + j as hts_pos_t) as usize) == 0 {
+                    break;
+                }
+                let c1 = bam_seqi(seq, z as usize) as c_int;
+                let c2 = SEQ_NT16_TABLE[*ref_.add((x + j as hts_pos_t) as usize) as u8 as usize]
+                    as c_int;
+                if c2 != 15 && c1 != 15 && *qual.add(z as usize) >= 13 {
+                    len += 1;
+                    if c1 != 0 && c1 != c2 && *qual.add(z as usize) >= 13 {
+                        mm += 1;
+                        q += if *qual.add(z as usize) > 33 {
+                            33
+                        } else {
+                            *qual.add(z as usize) as c_int
+                        };
+                    }
+                }
+                j += 1;
+            }
+            if j < l {
+                break;
+            }
+            x += l as hts_pos_t;
+            y += l;
+            len += l;
+        } else if op == BAM_CDEL {
+            let mut j = 0;
+            while j < l {
+                if x + j as hts_pos_t >= ref_len || *ref_.add((x + j as hts_pos_t) as usize) == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j < l {
+                break;
+            }
+            x += l as hts_pos_t;
+        } else if op == BAM_CSOFT_CLIP {
+            for j in 0..l {
+                clip_q += *qual.add((y + j) as usize) as c_int;
+            }
+            clip_l += l;
+            y += l;
+        } else if op == BAM_CHARD_CLIP {
+            clip_q += 13 * l;
+            clip_l += l;
+        } else if op == BAM_CINS {
+            y += l;
+        } else if op == BAM_CREF_SKIP {
+            x += l as hts_pos_t;
+        }
+    }
+
+    let mut t = 1.0f64;
+    for i in 0..mm {
+        t *= len as f64 / (i + 1) as f64;
+    }
+    let _ = clip_l;
+    t = q as f64 - 4.343 * t.ln() + clip_q as f64 / 5.0;
+    if t > thres as f64 {
+        return -1;
+    }
+    if t < 0.0 {
+        t = 0.0;
+    }
+    t = ((thres as f64 - t) / thres as f64).sqrt() * thres as f64;
+    (t + 0.499) as c_int
 }

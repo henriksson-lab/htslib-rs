@@ -13,7 +13,7 @@
 //!
 //! **All stubs filled AND wired** (2026-05-29):
 //! - `rans_byte` (18 fns) is now the canonical implementation of the rANS byte
-//!   primitives — `rans_4x8` delegates to it via thin cursor-adapter wrappers
+//!   primitives — `rans_static` delegates to it via thin cursor-adapter wrappers
 //!   (eliminated ~150 lines of duplicated math; existing C-parity tests confirm
 //!   byte output is unchanged).
 //! - `permute` statics are now populated at compile time via `const fn`
@@ -30,7 +30,7 @@
 //! Test surface as of 2026-05-29: ~130 htscodecs tests (round-trip stress,
 //! Alverson reciprocal byte parity, encoder cursor invariants, 4-way interleave
 //! pin, permute golden rows + inverse invariant, const-fn-static cross-check,
-//! C-parity for rans_4x8/4x16/arith/fqz/tok3).
+//! C-parity for rans_static/4x16/arith/fqz/tok3).
 //!
 //! bz2 caveat: the tok3/arith external-codec (`X_EXT`) method needs libbz2;
 //! native builds without it (treat bz2 like zlib if it arises).
@@ -44,12 +44,12 @@
 // C signature + `// <path>:<line>` in a doc comment.
 
 // rANS family
-pub mod rans_4x8; // rANS_static.c (4x8) — IMPLEMENTED (byte-exact, tested)
+pub mod rans_static; // rANS_static.c (4x8) — IMPLEMENTED (byte-exact, tested)
 pub mod rans_byte; // rANS_byte.h
 pub mod rans_word; // rANS_word.h
 pub mod rans_static16_int; // rANS_static16_int.h
-pub mod rans_static_4x16pr; // rANS_static4x16.h + rANS_static4x16pr.c
-pub mod rans_static_32x16pr; // rANS_static32x16pr.{h,c} (scalar)
+pub mod rans_static4x16pr; // rANS_static4x16.h + rANS_static4x16pr.c
+pub mod rans_static32x16pr; // rANS_static32x16pr.{h,c} (scalar)
 // arithmetic coder + fqzcomp
 pub mod c_range_coder; // c_range_coder.h
 pub mod c_simple_model; // c_simple_model.h
@@ -62,7 +62,7 @@ pub mod tokenise_name3; // tokenise_name3.{h,c}
 pub mod pack; // pack.{h,c}
 pub mod rle; // rle.{h,c}
 pub mod utils; // utils.{h,c}
-pub mod htscodecs_lib; // htscodecs.{h,c}
+pub mod htscodecs; // htscodecs.{h,c}
 pub mod varint; // varint.h
 // `varint2.h` (TurboPFor vbenc) is intentionally OUT OF SCOPE for this crate.
 // Upstream gates it `#ifdef VARINT2` and never selects it as the on-disk
@@ -71,8 +71,8 @@ pub mod permute; // permute.h
 pub mod htscodecs_endian; // htscodecs_endian.h
 pub mod version; // version.h
 
-pub use rans_4x8::{rans_compress, rans_compress_bound, rans_uncompress};
+pub use rans_static::{rans_compress, rans_compress_bound, rans_uncompress};
 
 // Public re-exports — make the now-wired leaves available at the crate root.
-pub use htscodecs_lib::{htscodecs_version, HTSCODECS_VERSION};
+pub use htscodecs::{htscodecs_version, HTSCODECS_VERSION};
 pub use permute::{permute as permute_table, permutec as permutec_table, UNDERSCORE};

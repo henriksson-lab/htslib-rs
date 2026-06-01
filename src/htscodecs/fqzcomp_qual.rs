@@ -462,7 +462,7 @@ pub fn dump_params(_gp: &fqz_gparams) {}
 /// `SimpleModel::new`, which zero-fills) on every call and dropped on exit
 /// via `fqz_destroy_models`.  Every `SimpleModel` is then re-initialised
 /// here.  There is therefore no cross-call stale-state hazard analogous to
-/// the one fixed in `rans_static_32x16pr` / `rans_static_4x16pr`; the
+/// the one fixed in `rans_static32x16pr` / `rans_static4x16pr`; the
 /// decoder cannot read leftovers from a previous decode of a different
 /// (possibly larger) parameter set.
 pub fn fqz_create_models(m: &mut fqz_model, gp: &fqz_gparams) -> i32 {

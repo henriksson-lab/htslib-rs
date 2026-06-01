@@ -31,12 +31,13 @@ use crate::htslib_rs::hts::{
 
 use crate::htslib_rs::hfile::hpeek;
 
-// Submodule split (2026-06-01): functions per htslib C source file.
-pub mod header;
-pub mod sam_mods;
-
-pub use header::*;
-pub use sam_mods::*;
+// Re-exports of items extracted into sibling files at the crate root.
+// The Rust file layout mirrors htslib: htslib/header.c -> src/header.rs,
+// htslib/sam_mods.c -> src/sam_mods.rs. These re-exports preserve the
+// public surface so `crate::htslib_rs::sam::sam_hdr_destroy` etc. still
+// resolves the same way it did when these files lived in src/sam/.
+pub use crate::htslib_rs::header::*;
+pub use crate::htslib_rs::sam_mods::*;
 
 pub const BAM_CMATCH: c_int = 0;
 pub const BAM_CINS: c_int = 1;
@@ -116,8 +117,8 @@ pub const ORDER_GO_NONE: c_int = 0;
 pub const ORDER_GO_QUERY: c_int = 1;
 pub const ORDER_GO_REFERENCE: c_int = 2;
 
-const SEQI_RC: [c_int; 16] = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15];
-const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
+pub(crate) const SEQI_RC: [c_int; 16] = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15];
+pub(crate) const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
 
 fn set_pileup_is_del(p: *mut bam_pileup1_t, value: bool) {
     unsafe {
@@ -809,12 +810,12 @@ unsafe fn sam_hdr_clear_targets(h: *mut sam_hdr_t) {
     (*h).n_targets = 0;
 }
 
-unsafe fn sam_hdr_rebuild_targets_from_text(h: *mut sam_hdr_t) -> c_int {
+pub(crate) unsafe fn sam_hdr_rebuild_targets_from_text(h: *mut sam_hdr_t) -> c_int {
     sam_hdr_clear_targets(h);
     sam_hdr_fill_targets_from_text(h)
 }
 
-fn sam_hdr_text_scratch() -> &'static Mutex<HashMap<usize, Vec<u8>>> {
+pub(crate) fn sam_hdr_text_scratch() -> &'static Mutex<HashMap<usize, Vec<u8>>> {
     static SCRATCH: OnceLock<Mutex<HashMap<usize, Vec<u8>>>> = OnceLock::new();
     SCRATCH.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -858,7 +859,7 @@ fn sam_hdr_rust_hrecs_registry() -> &'static Mutex<HashSet<usize>> {
     RUST_HRECS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-unsafe fn sam_hdr_mark_rust_hrecs(h: *mut sam_hdr_t) {
+pub(crate) unsafe fn sam_hdr_mark_rust_hrecs(h: *mut sam_hdr_t) {
     if h.is_null() {
         return;
     }
@@ -867,7 +868,7 @@ unsafe fn sam_hdr_mark_rust_hrecs(h: *mut sam_hdr_t) {
     }
 }
 
-unsafe fn sam_hdr_has_rust_hrecs(h: *mut sam_hdr_t) -> bool {
+pub(crate) unsafe fn sam_hdr_has_rust_hrecs(h: *mut sam_hdr_t) -> bool {
     if h.is_null() {
         return false;
     }
@@ -877,7 +878,7 @@ unsafe fn sam_hdr_has_rust_hrecs(h: *mut sam_hdr_t) -> bool {
     }
 }
 
-unsafe fn sam_hdr_forget_rust_hrecs(h: *mut sam_hdr_t) {
+pub(crate) unsafe fn sam_hdr_forget_rust_hrecs(h: *mut sam_hdr_t) {
     if let Ok(mut set) = sam_hdr_rust_hrecs_registry().lock() {
         set.remove(&(h as usize));
     }
@@ -899,7 +900,7 @@ unsafe fn sam_hdr_restore_text_len(h: *mut sam_hdr_t, old_len: usize) {
     }
 }
 
-unsafe fn sam_hdr_fill_targets_from_text(h: *mut sam_hdr_t) -> c_int {
+pub(crate) unsafe fn sam_hdr_fill_targets_from_text(h: *mut sam_hdr_t) -> c_int {
     if (*h).text.is_null() || (*h).l_text == 0 {
         return 0;
     }
@@ -963,7 +964,7 @@ unsafe fn sam_hdr_append_text_raw(h: *mut sam_hdr_t, src: *const c_char, len: us
 
 // hrecs-backed path for sam_hdr_add_line (mirrors htslib/header.c:1693, which
 // always fills and mutates hrecs). Inputs are pre-validated by the caller.
-unsafe fn sam_hdr_add_line_hrecs(
+pub(crate) unsafe fn sam_hdr_add_line_hrecs(
     h: *mut sam_hdr_t,
     type_: *const c_char,
     tags: &[(*const c_char, *const c_char)],
@@ -996,7 +997,7 @@ unsafe fn sam_hdr_add_line_hrecs(
 
 
 
-unsafe fn sam_hdr_text_remove_line(
+pub(crate) unsafe fn sam_hdr_text_remove_line(
     h: *mut sam_hdr_t,
     type0: u8,
     type1: u8,
@@ -1053,7 +1054,7 @@ unsafe fn sam_hdr_text_remove_line(
     0
 }
 
-unsafe fn sam_hdr_text_remove_tag_id(
+pub(crate) unsafe fn sam_hdr_text_remove_tag_id(
     h: *mut sam_hdr_t,
     type0: u8,
     type1: u8,
@@ -1156,7 +1157,7 @@ fn sam_hdr_text_line_without_tag(line: &[u8], key: &[u8]) -> Option<Vec<u8>> {
     removed.then_some(out)
 }
 
-unsafe fn sam_hdr_text_find_line_pos<'a>(
+pub(crate) unsafe fn sam_hdr_text_find_line_pos<'a>(
     h: *const sam_hdr_t,
     type_: *const c_char,
     pos: c_int,
@@ -1190,7 +1191,7 @@ unsafe fn sam_hdr_text_find_line_pos<'a>(
     None
 }
 
-unsafe fn sam_hdr_text_find_line_id<'a>(
+pub(crate) unsafe fn sam_hdr_text_find_line_id<'a>(
     h: *const sam_hdr_t,
     type_: *const c_char,
     id_key: &[u8],
@@ -1223,7 +1224,7 @@ unsafe fn sam_hdr_text_find_line_id<'a>(
     None
 }
 
-fn sam_hdr_text_line_has_type(line: &[u8], type0: u8, type1: u8) -> bool {
+pub(crate) fn sam_hdr_text_line_has_type(line: &[u8], type0: u8, type1: u8) -> bool {
     line.len() >= 3
         && line[0] == b'@'
         && line[1] == type0
@@ -1231,7 +1232,7 @@ fn sam_hdr_text_line_has_type(line: &[u8], type0: u8, type1: u8) -> bool {
         && (line.len() == 3 || line[3] == b'\t')
 }
 
-fn sam_hdr_text_find_tag_value<'a>(line: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
+pub(crate) fn sam_hdr_text_find_tag_value<'a>(line: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
     if key.is_empty() || line.len() <= 3 {
         return None;
     }
@@ -1244,7 +1245,7 @@ fn sam_hdr_text_find_tag_value<'a>(line: &'a [u8], key: &[u8]) -> Option<&'a [u8
     None
 }
 
-unsafe fn sam_hdr_text_pg_id_exists(h: *const sam_hdr_t, id: &[u8]) -> bool {
+pub(crate) unsafe fn sam_hdr_text_pg_id_exists(h: *const sam_hdr_t, id: &[u8]) -> bool {
     if h.is_null() || (*h).text.is_null() {
         return false;
     }
@@ -1456,7 +1457,7 @@ unsafe fn sam_hrecs_pg_add_one(
 // hrecs-backed path for sam_hdr_add_pg (mirrors htslib/header.c:2614, which
 // always operates on hrecs). Generates a suitable ID when unspecified, chains
 // new records onto each existing @PG leaf, and validates ID/PP references.
-unsafe fn sam_hdr_add_pg_hrecs(
+pub(crate) unsafe fn sam_hdr_add_pg_hrecs(
     h: *mut sam_hdr_t,
     name: *const c_char,
     tags: &[(*const c_char, *const c_char)],
@@ -1565,7 +1566,7 @@ fn sam_hdr_text_an_contains(value: &[u8], needle: &[u8]) -> bool {
     value.split(|&b| b == b',').any(|part| part == needle)
 }
 
-unsafe fn sam_hdr_text_name_key_for_type(type_: *const c_char) -> Option<&'static [u8]> {
+pub(crate) unsafe fn sam_hdr_text_name_key_for_type(type_: *const c_char) -> Option<&'static [u8]> {
     if type_.is_null() {
         return None;
     }
@@ -1576,7 +1577,7 @@ unsafe fn sam_hdr_text_name_key_for_type(type_: *const c_char) -> Option<&'stati
     }
 }
 
-unsafe fn sam_hdr_text_name2tid(h: *const sam_hdr_t, ref_: *const c_char) -> c_int {
+pub(crate) unsafe fn sam_hdr_text_name2tid(h: *const sam_hdr_t, ref_: *const c_char) -> c_int {
     if h.is_null() || ref_.is_null() || (*h).text.is_null() {
         return -1;
     }
@@ -1614,7 +1615,7 @@ unsafe fn sam_hdr_text_name2tid(h: *const sam_hdr_t, ref_: *const c_char) -> c_i
 
 
 // original: sam_hdr_link_pg (htslib/header.c:2468)
-unsafe fn sam_hdr_link_pg(h: *mut sam_hdr_t) -> c_int {
+pub(crate) unsafe fn sam_hdr_link_pg(h: *mut sam_hdr_t) -> c_int {
     if h.is_null() {
         return -1;
     }
@@ -1700,7 +1701,7 @@ pub unsafe fn header_h_58_TYPEKEY(type_: *const c_char) -> c_uint {
     (u0 << 8) | u1
 }
 
-unsafe fn sam_hrecs_walk_global(
+pub(crate) unsafe fn sam_hrecs_walk_global(
     hrecs: *mut sam_hrecs_t,
     mut visit: impl FnMut(*mut sam_hrec_type_t) -> bool,
 ) {
@@ -1722,7 +1723,7 @@ unsafe fn sam_hrecs_walk_global(
     }
 }
 
-unsafe fn sam_hrecs_find_first_type(hrecs: *mut sam_hrecs_t, type_: u32) -> *mut sam_hrec_type_t {
+pub(crate) unsafe fn sam_hrecs_find_first_type(hrecs: *mut sam_hrecs_t, type_: u32) -> *mut sam_hrec_type_t {
     if hrecs.is_null() {
         return std::ptr::null_mut();
     }
@@ -1738,7 +1739,7 @@ unsafe fn sam_hrecs_find_first_type(hrecs: *mut sam_hrecs_t, type_: u32) -> *mut
     found
 }
 
-unsafe fn sam_hrec_find_tag_value<'a>(
+pub(crate) unsafe fn sam_hrec_find_tag_value<'a>(
     line: *mut sam_hrec_type_t,
     key0: u8,
     key1: u8,
@@ -1759,7 +1760,7 @@ unsafe fn sam_hrec_find_tag_value<'a>(
     None
 }
 
-unsafe fn sam_hrec_tag_matches_key(tag: *mut sam_hrec_tag_t, key: *const c_char) -> bool {
+pub(crate) unsafe fn sam_hrec_tag_matches_key(tag: *mut sam_hrec_tag_t, key: *const c_char) -> bool {
     !tag.is_null()
         && !key.is_null()
         && !(*tag).str_.is_null()
@@ -1919,7 +1920,7 @@ unsafe fn sam_hrecs_type_list_add(hrecs: *mut sam_hrecs_t, line: *mut sam_hrec_t
 }
 
 // original: sam_hrecs_remove_line (htslib/header.c:250)
-unsafe fn sam_hrecs_remove_line(hrecs: *mut sam_hrecs_t, line: *mut sam_hrec_type_t) -> c_int {
+pub(crate) unsafe fn sam_hrecs_remove_line(hrecs: *mut sam_hrecs_t, line: *mut sam_hrec_type_t) -> c_int {
     if hrecs.is_null() || line.is_null() || (*hrecs).first_line.is_null() {
         return -1;
     }
@@ -1939,7 +1940,7 @@ unsafe fn sam_hrecs_remove_line(hrecs: *mut sam_hrecs_t, line: *mut sam_hrec_typ
 }
 
 // original: sam_hrecs_init_type_order (htslib/header.c:69)
-unsafe fn sam_hrecs_init_type_order(hrecs: *mut sam_hrecs_t, type_list: *mut c_char) -> c_int {
+pub(crate) unsafe fn sam_hrecs_init_type_order(hrecs: *mut sam_hrecs_t, type_list: *mut c_char) -> c_int {
     if hrecs.is_null() {
         return -1;
     }
@@ -2044,7 +2045,7 @@ unsafe fn sam_hrecs_ref_name_ptr(hrecs: *const sam_hrecs_t, key: *const c_char) 
     false
 }
 
-unsafe fn sam_hrecs_free_ref_altname_hash_keys(hrecs: *mut sam_hrecs_t) {
+pub(crate) unsafe fn sam_hrecs_free_ref_altname_hash_keys(hrecs: *mut sam_hrecs_t) {
     let _ = hrecs;
     // ref_hash mixes borrowed SN tag pointers with allocated AN token keys.
     // Without an ownership bit per khash entry, freeing only aliases is not
@@ -2089,7 +2090,7 @@ unsafe fn sam_hrecs_add_ref_altnames(
 }
 
 // original: sam_hrecs_remove_ref_altnames (htslib/header.c:115)
-unsafe fn sam_hrecs_remove_ref_altnames(
+pub(crate) unsafe fn sam_hrecs_remove_ref_altnames(
     hrecs: *mut sam_hrecs_t,
     expected: c_int,
     list: *const c_char,
@@ -2274,7 +2275,7 @@ unsafe fn sam_hrecs_vadd(
     0
 }
 
-unsafe fn sam_hrecs_update_pairs(
+pub(crate) unsafe fn sam_hrecs_update_pairs(
     hrecs: *mut sam_hrecs_t,
     type_: *mut sam_hrec_type_t,
     tags: &[(*const c_char, *const c_char)],
@@ -2302,14 +2303,14 @@ unsafe fn sam_hrecs_update_pairs(
     0
 }
 
-enum SamHrecNameUpdate {
+pub(crate) enum SamHrecNameUpdate {
     Unchanged,
     Changed,
     Clash,
 }
 
 // original: check_for_name_update (htslib/header.c:1866)
-unsafe fn check_for_name_update(
+pub(crate) unsafe fn check_for_name_update(
     hrecs: *mut sam_hrecs_t,
     rec: *mut sam_hrec_type_t,
     tags: &[(*const c_char, *const c_char)],
@@ -2461,7 +2462,7 @@ unsafe fn sam_hrecs_parse_single_line(hrecs: *mut sam_hrecs_t, line: &[u8]) -> c
 }
 
 // original: sam_hrecs_parse_lines (htslib/header.c:1188)
-unsafe fn sam_hrecs_parse_lines(hrecs: *mut sam_hrecs_t, text: *const c_char, len: usize) -> c_int {
+pub(crate) unsafe fn sam_hrecs_parse_lines(hrecs: *mut sam_hrecs_t, text: *const c_char, len: usize) -> c_int {
     if hrecs.is_null() || text.is_null() {
         return -1;
     }
@@ -2602,7 +2603,7 @@ unsafe fn rebuild_hash(hrecs: *mut sam_hrecs_t, type_: u32) -> c_int {
     0
 }
 
-unsafe fn build_header_line(ty: *const sam_hrec_type_t, ks: *mut kstring_t) -> c_int {
+pub(crate) unsafe fn build_header_line(ty: *const sam_hrec_type_t, ks: *mut kstring_t) -> c_int {
     let c = [((*ty).type_ >> 8) as c_char, ((*ty).type_ & 0xff) as c_char];
     if kputc_(b'@' as c_int, ks) < 0 || kputsn(c.as_ptr(), 2, ks) < 0 {
         return -1;
@@ -2629,7 +2630,7 @@ unsafe fn build_header_line(ty: *const sam_hrec_type_t, ks: *mut kstring_t) -> c
 }
 
 // original: sam_hrecs_update_hashes (htslib/header.c:1285)
-unsafe fn sam_hrecs_update_hashes(hrecs: *mut sam_hrecs_t) -> c_int {
+pub(crate) unsafe fn sam_hrecs_update_hashes(hrecs: *mut sam_hrecs_t) -> c_int {
     if hrecs.is_null() {
         return -1;
     }
@@ -2773,7 +2774,7 @@ unsafe fn sam_hrecs_update_hashes(hrecs: *mut sam_hrecs_t) -> c_int {
 }
 
 // original: rebuild_target_arrays (htslib/header.c:1398)
-unsafe fn rebuild_target_arrays(h: *mut sam_hdr_t) -> c_int {
+pub(crate) unsafe fn rebuild_target_arrays(h: *mut sam_hdr_t) -> c_int {
     if h.is_null() || (*h).hrecs.is_null() {
         return -1;
     }
@@ -2829,7 +2830,7 @@ unsafe fn sam_hrecs_refs_from_targets_array(h: *mut sam_hdr_t) -> c_int {
 }
 
 // original: add_stub_ref_sq_lines (htslib/header.c:1777)
-unsafe fn add_stub_ref_sq_lines(h: *mut sam_hdr_t) -> c_int {
+pub(crate) unsafe fn add_stub_ref_sq_lines(h: *mut sam_hdr_t) -> c_int {
     sam_hrecs_refs_from_targets_array(h)
 }
 
@@ -3083,7 +3084,7 @@ unsafe fn header_c_704_sam_hrecs_remove_line(
 // Looks up a header line by `(type, ID_key, ID_value)` and removes it,
 // rebuilding the target arrays if a SQ removal changed `refs_changed` and
 // invalidating the cached text if the header is now dirty.
-unsafe fn header_c_1784_sam_hdr_remove_line_id_hrecs(
+pub(crate) unsafe fn header_c_1784_sam_hdr_remove_line_id_hrecs(
     bh: *mut sam_hdr_t,
     type_: *const c_char,
     id_key: *const c_char,
@@ -3127,7 +3128,7 @@ unsafe fn header_c_1784_sam_hdr_remove_line_id_hrecs(
 // Faithful 1:1 translation of `sam_hdr_remove_line_pos`, hrecs-mode body
 // only.  Identical to `sam_hdr_remove_line_id` but selects the victim by
 // position within the type group.
-unsafe fn header_c_1823_sam_hdr_remove_line_pos_hrecs(
+pub(crate) unsafe fn header_c_1823_sam_hdr_remove_line_pos_hrecs(
     bh: *mut sam_hdr_t,
     type_: *const c_char,
     position: c_int,
@@ -3171,7 +3172,7 @@ unsafe fn header_c_1823_sam_hdr_remove_line_pos_hrecs(
 // Removes every line of @p type except the one identified by
 // `(ID_key, ID_value)`.  If `ID_key` is NULL all lines are removed.  PG and
 // CO are rejected.
-unsafe fn header_c_2015_sam_hdr_remove_except_hrecs(
+pub(crate) unsafe fn header_c_2015_sam_hdr_remove_except_hrecs(
     bh: *mut sam_hdr_t,
     type_: *const c_char,
     id_key: *const c_char,
@@ -3252,7 +3253,7 @@ unsafe fn header_c_2015_sam_hdr_remove_except_hrecs(
 // The native call sites pass a hash created with `khash_str2int_init`, which
 // is layout-compatible with `rmhash_t` for the purposes of a key lookup
 // (both share the `khash_m_s2i_t` head: `n_buckets`, `flags`, `keys`, …).
-unsafe fn header_c_2071_sam_hdr_remove_lines_hrecs(
+pub(crate) unsafe fn header_c_2071_sam_hdr_remove_lines_hrecs(
     bh: *mut sam_hdr_t,
     type_: *const c_char,
     id: *const c_char,
@@ -3344,7 +3345,7 @@ unsafe fn header_c_2071_sam_hdr_remove_lines_hrecs(
 // htslib/header.c:2346
 // Faithful 1:1 translation of `sam_hdr_remove_tag_id`, hrecs-mode body only.
 // Removes a single tag from the line identified by `(type, ID_key, ID_value)`.
-unsafe fn header_c_2346_sam_hdr_remove_tag_id_hrecs(
+pub(crate) unsafe fn header_c_2346_sam_hdr_remove_tag_id_hrecs(
     bh: *mut sam_hdr_t,
     type_: *const c_char,
     id_key: *const c_char,
@@ -3381,7 +3382,7 @@ unsafe fn header_c_2346_sam_hdr_remove_tag_id_hrecs(
 // free the caller's pointer is returned unchanged; otherwise a clashing
 // suffix `name.N` is generated in `hrecs->ID_buf` (a `realloc`-backed
 // scratch buffer owned by the hrecs).
-unsafe fn header_c_2562_sam_hdr_pg_id_hrecs(
+pub(crate) unsafe fn header_c_2562_sam_hdr_pg_id_hrecs(
     bh: *mut sam_hdr_t,
     name: *const c_char,
 ) -> *const c_char {
@@ -3460,7 +3461,7 @@ unsafe fn header_c_2562_sam_hdr_pg_id_hrecs(
 // arrays from the source's `hrecs->ref[]` table — matching the work that the
 // C `sam_hdr_update_target_arrays(bh, h0->hrecs, 0)` call performs.  The
 // new header's own `hrecs` field is left NULL, exactly as in the C.
-unsafe fn sam_c_170_sam_hdr_dup_hrecs(h0: *const sam_hdr_t, h: *mut sam_hdr_t) -> c_int {
+pub(crate) unsafe fn sam_c_170_sam_hdr_dup_hrecs(h0: *const sam_hdr_t, h: *mut sam_hdr_t) -> c_int {
     let mut tmp = kstring_t {
         l: 0,
         m: 0,
@@ -3501,7 +3502,7 @@ unsafe fn sam_c_170_sam_hdr_dup_hrecs(h0: *const sam_hdr_t, h: *mut sam_hdr_t) -
 // Routes to `sam_hdr_update_line("HD", NULL, NULL, key, val, NULL)` to set,
 // or `sam_hdr_remove_tag_id("HD", NULL, NULL, key)` to clear, then forces a
 // text rebuild via `sam_hdr_rebuild`.
-unsafe fn sam_c_2157_sam_hdr_change_HD_hrecs(
+pub(crate) unsafe fn sam_c_2157_sam_hdr_change_HD_hrecs(
     h: *mut sam_hdr_t,
     key: *const c_char,
     val: *const c_char,
@@ -3553,7 +3554,7 @@ unsafe fn sam_c_2157_sam_hdr_change_HD_hrecs(
     sam_hdr_rebuild(h)
 }
 
-unsafe fn sam_c_144_sam_hdr_dup_sdict(h0: *const sam_hdr_t, h: *mut sam_hdr_t) -> c_int {
+pub(crate) unsafe fn sam_c_144_sam_hdr_dup_sdict(h0: *const sam_hdr_t, h: *mut sam_hdr_t) -> c_int {
     let src_long_refs = (*h0).sdict.cast::<khash_s2i_t>();
     let dest_long_refs =
         crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<khash_s2i_t>() as u64)
@@ -3855,7 +3856,7 @@ pub unsafe fn bam_hdr_write(fp: *mut BGZF, h: *const sam_hdr_t) -> c_int {
 }
 
 
-unsafe fn sam_hdr_write_cram(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
+pub(crate) unsafe fn sam_hdr_write_cram(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
     // Rust-built hrecs is the source of truth — sync text from it so the
     // CRAM writer's text consumers see the up-to-date header.
     if !(*h).hrecs.is_null()
@@ -3912,7 +3913,7 @@ fn strip_bare_comment_lines(text: &[u8]) -> Vec<u8> {
     out
 }
 
-unsafe fn sam_hdr_write_bytes(fp: *mut htsFile, bytes: *const c_void, len: usize) -> c_int {
+pub(crate) unsafe fn sam_hdr_write_bytes(fp: *mut htsFile, bytes: *const c_void, len: usize) -> c_int {
     if len == 0 {
         return 0;
     }
@@ -3931,7 +3932,7 @@ unsafe fn sam_hdr_write_bytes(fp: *mut htsFile, bytes: *const c_void, len: usize
     }
 }
 
-unsafe fn sam_hdr_write_store_copy(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
+pub(crate) unsafe fn sam_hdr_write_store_copy(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
     let tmp = (*fp).bam_header.cast::<sam_hdr_t>();
     (*fp).bam_header = sam_hdr_dup(h).cast();
     sam_hdr_destroy(tmp);
@@ -3942,7 +3943,7 @@ unsafe fn sam_hdr_write_store_copy(fp: *mut htsFile, h: *const sam_hdr_t) -> c_i
     }
 }
 
-unsafe fn sam_hdr_sanitise(_h: *mut sam_hdr_t) -> *mut sam_hdr_t {
+pub(crate) unsafe fn sam_hdr_sanitise(_h: *mut sam_hdr_t) -> *mut sam_hdr_t {
     if _h.is_null() {
         return std::ptr::null_mut();
     }
@@ -3991,7 +3992,7 @@ unsafe fn sam_hdr_sanitise(_h: *mut sam_hdr_t) -> *mut sam_hdr_t {
     _h
 }
 
-unsafe fn sam_c_1907_sam_hdr_create(fp: *mut htsFile) -> *mut sam_hdr_t {
+pub(crate) unsafe fn sam_c_1907_sam_hdr_create(fp: *mut htsFile) -> *mut sam_hdr_t {
     let h = sam_hdr_init();
     if h.is_null() {
         return std::ptr::null_mut();
@@ -4063,7 +4064,7 @@ unsafe fn sam_c_1907_sam_hdr_create(fp: *mut htsFile) -> *mut sam_hdr_t {
 
 
 
-unsafe fn sam_c_2080_old_sam_hdr_change_HD(
+pub(crate) unsafe fn sam_c_2080_old_sam_hdr_change_HD(
     h: *mut sam_hdr_t,
     key: *const c_char,
     val: *const c_char,
@@ -6884,7 +6885,7 @@ unsafe fn overlap_remove(iter: bam_plp_t, b: *const bam1_t) {
     overlaps.remove(key);
 }
 
-unsafe fn kh_get_m_s2i(h: *const khash_m_s2i_t, key: *const c_char) -> u32 {
+pub(crate) unsafe fn kh_get_m_s2i(h: *const khash_m_s2i_t, key: *const c_char) -> u32 {
     if (*h).n_buckets == 0 {
         return 0;
     }
@@ -6908,7 +6909,7 @@ unsafe fn kh_get_m_s2i(h: *const khash_m_s2i_t, key: *const c_char) -> u32 {
     }
 }
 
-unsafe fn kh_get_s2i(h: *const khash_s2i_t, key: *const c_char) -> u32 {
+pub(crate) unsafe fn kh_get_s2i(h: *const khash_s2i_t, key: *const c_char) -> u32 {
     if (*h).n_buckets == 0 {
         return 0;
     }
@@ -6932,7 +6933,7 @@ unsafe fn kh_get_s2i(h: *const khash_s2i_t, key: *const c_char) -> u32 {
     }
 }
 
-unsafe fn kh_destroy_s2i(h: *mut khash_s2i_t) {
+pub(crate) unsafe fn kh_destroy_s2i(h: *mut khash_s2i_t) {
     if h.is_null() {
         return;
     }
@@ -7173,7 +7174,7 @@ pub unsafe fn khash_str2int_size(_hash: *mut c_void) -> c_int {
     (*_hash.cast::<khash_m_s2i_t>()).size as c_int
 }
 
-unsafe fn cstr_eq(a: *const c_char, b: *const c_char) -> bool {
+pub(crate) unsafe fn cstr_eq(a: *const c_char, b: *const c_char) -> bool {
     !a.is_null() && !b.is_null() && CStr::from_ptr(a) == CStr::from_ptr(b)
 }
 
@@ -7202,17 +7203,86 @@ unsafe extern "C" fn sam_c_1638_bam_ptell(fp: *mut c_void) -> i64 {
     ((*fd).block_address << 16) | ((*fd).block_offset as i64 & 0xffff)
 }
 
-// Native equivalent of C `cram_pseek` (htslib/sam.c:1582). The body lives in
-// cram.rs (it touches the private cram_fd_layout struct); this is the thin
-// extern "C" trampoline that matches the hts_seek_func signature plumbed
-// through the iterator.
-unsafe extern "C" fn sam_c_1582_cram_pseek(fp: *mut c_void, offset: i64, whence: c_int) -> c_int {
-    crate::htslib_rs::cram::cram_sam_c_1582_cram_pseek(fp, offset, whence)
+// original: cram_pseek (htslib/sam.c:1582)
+//
+// Pseudo-seek used by hts_itr_multi_next on CRAM streams. Mirrors C exactly:
+//   - try cram_seek(fd, offset, SEEK_SET)
+//   - on failure, retry with `offset - fd->first_container` and SEEK_CUR
+//     (handles the case where the iterator hands an absolute file offset and
+//     the container chain has already been advanced past it)
+//   - on success, stash `offset` into curr_position and tear down the
+//     current container so the next decode call starts fresh
+//
+// Returns 0 on success, -1 on failure. Touches `cram_fd_layout` fields
+// directly (curr_position / ctr / ctr_mt / ooc).
+//
+// `extern "C"` because this is plumbed through hts_itr_multi_next as a
+// function pointer matching the `hts_seek_func` C signature.
+unsafe extern "C" fn sam_c_1582_cram_pseek(fp: *mut c_void, offset: i64, _whence: c_int) -> c_int {
+    use crate::htslib_rs::cram::{
+        cram_cram_io_c_3705_cram_free_container, cram_cram_io_c_5431_cram_seek, cram_fd_layout,
+    };
+    use crate::htslib_rs::hts::cram_fd;
+    let fd = fp.cast::<cram_fd>();
+    if fd.is_null() {
+        return -1;
+    }
+    let fdl = fd.cast::<cram_fd_layout>();
+
+    if cram_cram_io_c_5431_cram_seek(fd, offset as libc::off_t, libc::SEEK_SET) != 0
+        && cram_cram_io_c_5431_cram_seek(
+            fd,
+            (offset - (*fdl).first_container as i64) as libc::off_t,
+            libc::SEEK_CUR,
+        ) != 0
+    {
+        return -1;
+    }
+
+    (*fdl).curr_position = offset as libc::off_t;
+
+    if !(*fdl).ctr.is_null() {
+        cram_cram_io_c_3705_cram_free_container((*fdl).ctr.cast());
+        if !(*fdl).ctr_mt.is_null() && (*fdl).ctr_mt != (*fdl).ctr {
+            cram_cram_io_c_3705_cram_free_container((*fdl).ctr_mt.cast());
+        }
+        (*fdl).ctr = std::ptr::null_mut();
+        (*fdl).ctr_mt = std::ptr::null_mut();
+        (*fdl).ooc = 0;
+    }
+
+    0
 }
 
-// Native equivalent of C `cram_ptell` (htslib/sam.c:1612). Body in cram.rs.
+// original: cram_ptell (htslib/sam.c:1612)
+//
+// Pseudo-tell paired with cram_pseek. The CRAM disk cursor is only meaningful
+// immediately after a fresh seek; otherwise reads consume records from the
+// already-fetched container in memory. So we report fd->curr_position, but
+// first nudge it forward if the current slice has been fully consumed.
+//
+// Touches cram_fd_layout / cram_container_layout / cram_slice_layout fields.
+//
+// `extern "C"` because this is plumbed through hts_itr_multi_next as a
+// function pointer matching the `hts_tell_func` C signature.
 unsafe extern "C" fn sam_c_1612_cram_ptell(fp: *mut c_void) -> i64 {
-    crate::htslib_rs::cram::cram_sam_c_1612_cram_ptell(fp)
+    use crate::htslib_rs::cram::cram_fd_layout;
+    use crate::htslib_rs::hts::cram_fd;
+    let fd = fp.cast::<cram_fd>();
+    if fd.is_null() {
+        return -1;
+    }
+    let fdl = fd.cast::<cram_fd_layout>();
+    let c = (*fdl).ctr;
+    if !c.is_null() {
+        let s = (*c).slice;
+        if !s.is_null() && (*s).max_rec != 0 {
+            if ((*c).curr_slice + (*s).curr_rec / (*s).max_rec) >= ((*c).max_slice + 1) {
+                (*fdl).curr_position += (*c).offset as libc::off_t + (*c).length as libc::off_t;
+            }
+        }
+    }
+    (*fdl).curr_position as i64
 }
 
 // Native equivalent of C `cram_readrec` (htslib/sam.c:1552):
@@ -9472,105 +9542,6 @@ unsafe fn bam_set1_fastq_unmapped(
     data_len as c_int
 }
 
-pub unsafe fn sam_cap_mapq(
-    b: *mut bam1_t,
-    ref_: *const c_char,
-    ref_len: hts_pos_t,
-    mut thres: c_int,
-) -> c_int {
-    let seq = bam_get_seq(b);
-    let qual = bam_get_qual(b);
-    let cigar = bam_get_cigar(b);
-    let c = std::ptr::addr_of_mut!((*b).core);
-    let mut mm = 0;
-    let mut q = 0;
-    let mut len = 0;
-    let mut clip_l = 0;
-    let mut clip_q = 0;
-
-    if thres < 0 {
-        thres = 40;
-    }
-
-    let mut y = 0;
-    let mut x = (*c).pos;
-    for i in 0..(*c).n_cigar {
-        let cigar_i = *cigar.add(i as usize);
-        let l = (cigar_i >> 4) as c_int;
-        let op = (cigar_i & 0x0f) as c_int;
-        if op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF {
-            let mut j = 0;
-            while j < l {
-                let z = y + j;
-                if x + j as hts_pos_t >= ref_len || *ref_.add((x + j as hts_pos_t) as usize) == 0 {
-                    break;
-                }
-                let c1 = bam_seqi(seq, z as usize) as c_int;
-                let c2 = SEQ_NT16_TABLE[*ref_.add((x + j as hts_pos_t) as usize) as u8 as usize]
-                    as c_int;
-                if c2 != 15 && c1 != 15 && *qual.add(z as usize) >= 13 {
-                    len += 1;
-                    if c1 != 0 && c1 != c2 && *qual.add(z as usize) >= 13 {
-                        mm += 1;
-                        q += if *qual.add(z as usize) > 33 {
-                            33
-                        } else {
-                            *qual.add(z as usize) as c_int
-                        };
-                    }
-                }
-                j += 1;
-            }
-            if j < l {
-                break;
-            }
-            x += l as hts_pos_t;
-            y += l;
-            len += l;
-        } else if op == BAM_CDEL {
-            let mut j = 0;
-            while j < l {
-                if x + j as hts_pos_t >= ref_len || *ref_.add((x + j as hts_pos_t) as usize) == 0 {
-                    break;
-                }
-                j += 1;
-            }
-            if j < l {
-                break;
-            }
-            x += l as hts_pos_t;
-        } else if op == BAM_CSOFT_CLIP {
-            for j in 0..l {
-                clip_q += *qual.add((y + j) as usize) as c_int;
-            }
-            clip_l += l;
-            y += l;
-        } else if op == BAM_CHARD_CLIP {
-            clip_q += 13 * l;
-            clip_l += l;
-        } else if op == BAM_CINS {
-            y += l;
-        } else if op == BAM_CREF_SKIP {
-            x += l as hts_pos_t;
-        }
-    }
-
-    let mut t = 1.0f64;
-    for i in 0..mm {
-        t *= len as f64 / (i + 1) as f64;
-    }
-    let _ = clip_l;
-    t = q as f64 - 4.343 * t.ln() + clip_q as f64 / 5.0;
-    if t > thres as f64 {
-        return -1;
-    }
-    if t < 0.0 {
-        t = 0.0;
-    }
-    t = ((thres as f64 - t) / thres as f64).sqrt() * thres as f64;
-    (t + 0.499) as c_int
-}
-
 pub unsafe fn sam_prob_realn(
     b: *mut bam1_t,
     ref_: *const c_char,
@@ -11406,16 +11377,6 @@ pub unsafe fn bam_set_seqi(s: *mut u8, i: usize, b: u8) {
 
 
 
-pub unsafe fn seq_freq(b: *const bam1_t, freq: *mut c_int) {
-    libc::memset(freq.cast(), 0, 16 * std::mem::size_of::<c_int>());
-    let seq = bam_get_seq(b);
-    let mut i = 0;
-    while i < (*b).core.l_qseq {
-        *freq.add(bam_seqi(seq, i as usize) as usize) += 1;
-        i += 1;
-    }
-    *freq.add(15) = (*b).core.l_qseq;
-}
 
 
 
@@ -11693,6 +11654,346 @@ pub unsafe fn bam_flag2str(flag: c_int) -> *mut c_char {
         kputsn(b"\0".as_ptr().cast(), 0, &mut str_);
     }
     str_.s
+}
+
+// Functions translated from htslib/sam.c. Although the function names start
+// with `sam_hdr_*`, htslib's source places them in sam.c (not header.c),
+// so they live here.
+
+pub unsafe fn sam_hdr_init() -> *mut sam_hdr_t {
+    let h = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sam_hdr_t>() as u64)
+        .cast::<sam_hdr_t>();
+    if h.is_null() {
+        return std::ptr::null_mut();
+    }
+    (*h).cigar_tab = BAM_CIGAR_TABLE.as_ptr();
+    h
+}
+
+pub unsafe fn sam_hdr_parse(_l_text: usize, _text: *const c_char) -> *mut sam_hdr_t {
+    let h = sam_hdr_init();
+    if h.is_null() {
+        return std::ptr::null_mut();
+    }
+    if sam_hdr_add_lines(h, _text, _l_text) != 0 {
+        sam_hdr_destroy(h);
+        return std::ptr::null_mut();
+    }
+    h
+}
+
+pub unsafe fn sam_hdr_parse_(hdr: *const c_char, len: usize) -> *mut sam_hdr_t {
+    sam_hdr_parse(len, hdr)
+}
+
+pub unsafe fn sam_hdr_dup(_h0: *const sam_hdr_t) -> *mut sam_hdr_t {
+    if _h0.is_null() {
+        return std::ptr::null_mut();
+    }
+    if !(*_h0).hrecs.is_null() {
+        let h = sam_hdr_init();
+        if h.is_null() {
+            return std::ptr::null_mut();
+        }
+        (*h).n_targets = 0;
+        (*h).ignore_sam_err = (*_h0).ignore_sam_err;
+        (*h).l_text = 0;
+        if sam_c_170_sam_hdr_dup_hrecs(_h0, h) < 0 {
+            sam_hdr_destroy(h);
+            return std::ptr::null_mut();
+        }
+        return h;
+    }
+
+    let h = sam_hdr_init();
+    if h.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    (*h).n_targets = 0;
+    (*h).ignore_sam_err = (*_h0).ignore_sam_err;
+    (*h).l_text = 0;
+
+    if (*_h0).n_targets > 0 {
+        (*h).target_len = crate::htslib_rs::c_compat::calloc(
+            (*_h0).n_targets as u64,
+            std::mem::size_of::<u32>() as u64,
+        )
+        .cast();
+        if (*h).target_len.is_null() {
+            sam_hdr_destroy(h);
+            return std::ptr::null_mut();
+        }
+        (*h).target_name = crate::htslib_rs::c_compat::calloc(
+            (*_h0).n_targets as u64,
+            std::mem::size_of::<*mut c_char>() as u64,
+        )
+        .cast();
+        if (*h).target_name.is_null() {
+            sam_hdr_destroy(h);
+            return std::ptr::null_mut();
+        }
+
+        let mut i = 0;
+        while i < (*_h0).n_targets {
+            *(*h).target_len.add(i as usize) = *(*_h0).target_len.add(i as usize);
+            *(*h).target_name.add(i as usize) =
+                crate::htslib_rs::c_compat::strdup(*(*_h0).target_name.add(i as usize));
+            if (*(*h).target_name.add(i as usize)).is_null() {
+                break;
+            }
+            i += 1;
+        }
+        (*h).n_targets = i;
+        if i < (*_h0).n_targets {
+            sam_hdr_destroy(h);
+            return std::ptr::null_mut();
+        }
+    }
+
+    (*h).l_text = if !(*_h0).text.is_null() {
+        (*_h0).l_text
+    } else {
+        0
+    };
+    (*h).text = crate::htslib_rs::c_compat::malloc((*h).l_text as u64 + 1).cast();
+    if (*h).text.is_null() {
+        sam_hdr_destroy(h);
+        return std::ptr::null_mut();
+    }
+    if !(*_h0).text.is_null() {
+        crate::htslib_rs::c_compat::memcpy(
+            (*h).text.cast(),
+            (*_h0).text.cast(),
+            (*h).l_text as u64,
+        );
+    }
+    *(*h).text.add((*h).l_text as usize) = 0;
+
+    if !(*_h0).sdict.is_null() && sam_c_144_sam_hdr_dup_sdict(_h0, h) < 0 {
+        sam_hdr_destroy(h);
+        return std::ptr::null_mut();
+    }
+
+    h
+}
+
+pub unsafe fn sam_hdr_write(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
+    if fp.is_null() || h.is_null() {
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
+        return -1;
+    }
+
+    match (*fp).format.format {
+        HTS_FORMAT_BINARY_FORMAT => {
+            (*fp).format.category = HTS_FORMAT_SEQUENCE_DATA;
+            (*fp).format.format = HTS_FORMAT_BAM;
+            if bam_hdr_write((*fp).fp.bgzf, h) < 0 {
+                return -1;
+            }
+        }
+        HTS_FORMAT_BAM => {
+            if bam_hdr_write((*fp).fp.bgzf, h) < 0 {
+                return -1;
+            }
+        }
+        HTS_FORMAT_CRAM => return sam_hdr_write_cram(fp, h),
+        HTS_FORMAT_TEXT_FORMAT => {
+            (*fp).format.category = HTS_FORMAT_SEQUENCE_DATA;
+            (*fp).format.format = HTS_FORMAT_SAM;
+            return sam_hdr_write(fp, h);
+        }
+        HTS_FORMAT_SAM => {
+            if (*h).hrecs.is_null() && (*h).text.is_null() {
+                return 0;
+            }
+            // Rust-built hrecs is the source of truth — sync text and fall
+            // through. Production never has unmarked hrecs (sam_hdr_dup on
+            // a C-pool source rebuilds into a hrecs-null header); a caller
+            // that somehow gets one falls through using (*h).text directly.
+            if !(*h).hrecs.is_null()
+                && sam_hdr_has_rust_hrecs(h.cast_mut())
+                && sam_hdr_rebuild(h.cast_mut()) < 0
+            {
+                return -1;
+            }
+            if !(*h).text.is_null() {
+                let text = (*h).text;
+                let l_text = (*h).l_text;
+                let mut q = text;
+                let p = loop {
+                    let p = libc::strstr(q, c"@SQ\t".as_ptr());
+                    if p.is_null() || p == text || *p.sub(1) == b'\n' as c_char {
+                        break p;
+                    }
+                    q = p.add(4);
+                };
+                let no_sq = p.is_null();
+                if sam_hdr_write_bytes(fp, text.cast(), l_text) < 0 {
+                    return -1;
+                }
+
+                if no_sq {
+                    for i in 0..(*h).n_targets {
+                        (*fp).line.l = 0;
+                        if kputsn(c"@SQ\tSN:".as_ptr(), 7, &mut (*fp).line) < 0
+                            || kputs(*(*h).target_name.add(i as usize), &mut (*fp).line) < 0
+                            || kputsn(c"\tLN:".as_ptr(), 4, &mut (*fp).line) < 0
+                            || kputw(*(*h).target_len.add(i as usize) as c_int, &mut (*fp).line) < 0
+                            || kputc(b'\n' as c_int, &mut (*fp).line) < 0
+                        {
+                            return -1;
+                        }
+                        if sam_hdr_write_bytes(fp, (*fp).line.s.cast(), (*fp).line.l) < 0 {
+                            return -1;
+                        }
+                    }
+                }
+            }
+
+            if ((*fp).bitfields & (1 << 4)) != 0 {
+                if bgzf_flush((*fp).fp.bgzf) != 0 {
+                    return -1;
+                }
+            } else if hflush((*fp).fp.hfile) != 0 {
+                return -1;
+            }
+        }
+        HTS_FORMAT_FASTQ_FORMAT | HTS_FORMAT_FASTA_FORMAT => return 0,
+        _ => {
+            *crate::htslib_rs::c_compat::__errno_location() = libc::EBADF as c_int;
+            return -1;
+        }
+    }
+
+    sam_hdr_write_store_copy(fp, h)
+}
+
+pub unsafe fn sam_hdr_read(_fp: *mut htsFile) -> *mut sam_hdr_t {
+    if _fp.is_null() {
+        *crate::htslib_rs::c_compat::__errno_location() =
+            crate::htslib_rs::c_compat::EINVAL as c_int;
+        return std::ptr::null_mut();
+    }
+    let h = match (*_fp).format.format {
+        HTS_FORMAT_BAM => sam_hdr_sanitise(bam_hdr_read((*_fp).fp.bgzf)),
+        HTS_FORMAT_FASTQ_FORMAT | HTS_FORMAT_FASTA_FORMAT => sam_hdr_init(),
+        HTS_FORMAT_EMPTY_FORMAT => {
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::EPIPE as c_int;
+            return std::ptr::null_mut();
+        }
+        HTS_FORMAT_SAM => sam_c_1907_sam_hdr_create(_fp),
+        HTS_FORMAT_CRAM => {
+            // Mirrors libhts' sam_hdr_read CRAM branch (htslib/sam.c:1939):
+            //   h = sam_hdr_sanitise(sam_hdr_dup(fp->fp.cram->header));
+            // `cram_dopen` already consumed and parsed the CRAM SAM header
+            // into fd->header during hts_open — re-reading would
+            // double-consume bytes off the file. We duplicate the cached
+            // header instead.
+            //
+            // Native sam_hdr_dup walks the source hrecs and rebuilds text
+            // + target arrays into a freshly sam_hdr_init()'d header — the
+            // result is fully Rust-allocated (libc::malloc'd text/target
+            // arrays, hrecs=null), so the c_owned marker isn't needed and
+            // sam_hdr_destroy goes through the regular Rust teardown path.
+            // The original cram_fd->header (C-pool-allocated by cram_dopen)
+            // is freed by cram_close when the cram_fd is destroyed.
+            let src = crate::htslib_rs::cram::cram_fd_header_ptr((*_fp).fp.cram)
+                .cast::<sam_hdr_t>();
+            sam_hdr_sanitise(sam_hdr_dup(src))
+        }
+        _ => {
+            *crate::htslib_rs::c_compat::__errno_location() =
+                crate::htslib_rs::c_compat::ENOEXEC as c_int;
+            return std::ptr::null_mut();
+        }
+    };
+
+    if !h.is_null() && (*_fp).bam_header.is_null() {
+        (*_fp).bam_header = h.cast();
+        sam_hdr_incr_ref(h);
+    }
+    h
+}
+
+pub unsafe fn sam_hdr_destroy(_h: *mut sam_hdr_t) {
+    if _h.is_null() {
+        return;
+    }
+    // The c_owned tracker (sam_hdr_c_owned_registry) is no longer populated:
+    // the CRAM-read flow now returns a Rust-allocated dup of the cached
+    // cram_fd->header (sam_hdr_dup → sam_c_170_sam_hdr_dup_hrecs walks the
+    // source hrecs and rebuilds text/targets into a freshly sam_hdr_init()'d
+    // header). All sam_hdr_t pointers exposed to production code own only
+    // Rust-allocated memory and follow the standard teardown path below.
+    if (*_h).ref_count > 0 {
+        (*_h).ref_count -= 1;
+        return;
+    }
+    if let Ok(mut scratch) = sam_hdr_text_scratch().lock() {
+        scratch.remove(&(_h as usize));
+    }
+    sam_hdr_forget_rust_hrecs(_h);
+    if !(*_h).target_name.is_null() {
+        for i in 0..(*_h).n_targets {
+            crate::htslib_rs::c_compat::free(
+                *(*_h).target_name.add(i as usize).cast::<*mut c_void>(),
+            );
+        }
+        crate::htslib_rs::c_compat::free((*_h).target_name.cast());
+        crate::htslib_rs::c_compat::free((*_h).target_len.cast());
+    }
+    crate::htslib_rs::c_compat::free((*_h).text.cast());
+    kh_destroy_s2i((*_h).sdict.cast());
+    crate::htslib_rs::c_compat::free(_h.cast());
+}
+
+pub unsafe fn sam_hdr_free(hdr: *mut sam_hdr_t) {
+    sam_hdr_destroy(hdr);
+}
+
+pub unsafe fn sam_hdr_change_HD(
+    h: *mut sam_hdr_t,
+    key: *const c_char,
+    val: *const c_char,
+) -> c_int {
+    if h.is_null() || key.is_null() {
+        return -1;
+    }
+    if (*h).hrecs.is_null() {
+        return sam_c_2080_old_sam_hdr_change_HD(h, key, val);
+    }
+    sam_c_2157_sam_hdr_change_HD_hrecs(h, key, val)
+}
+
+pub unsafe fn sam_hdr_set(fp: *mut htsFile, h: *mut sam_hdr_t, duplicate: c_int) -> c_int {
+    if fp.is_null() {
+        return -1;
+    }
+
+    if duplicate != 0 {
+        let tmp = (*fp).bam_header;
+        (*fp).bam_header = sam_hdr_dup(h).cast();
+        sam_hdr_destroy(tmp.cast());
+        if (*fp).bam_header.is_null() && !h.is_null() {
+            return -1;
+        }
+    } else if (*fp).bam_header != h.cast() {
+        sam_hdr_destroy((*fp).bam_header.cast());
+        (*fp).bam_header = h.cast();
+        sam_hdr_incr_ref((*fp).bam_header.cast());
+    }
+
+    0
+}
+
+pub unsafe fn sam_hdr_get(fp: *mut htsFile) -> *mut sam_hdr_t {
+    if fp.is_null() {
+        return std::ptr::null_mut();
+    }
+    (*fp).bam_header.cast()
 }
 
 #[cfg(test)]
@@ -13458,6 +13759,7 @@ mod tests {
         };
 
         unsafe {
+            use crate::htslib_rs::realn::sam_cap_mapq;
             let ref_match = CString::new("ACGT").unwrap();
             assert_eq!(sam_cap_mapq(&mut b, ref_match.as_ptr(), 4, -1), 40);
 

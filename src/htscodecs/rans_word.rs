@@ -5,7 +5,7 @@
 //! *backwards* through the output buffer during encoding and *forwards* during
 //! decoding) is modelled as an explicit `(buf, ptr)` pair where `ptr: usize` is
 //! an index into `buf`. This matches the convention already used by the sibling
-//! `rans_4x8` module and lets us stay byte-for-byte faithful to the C code.
+//! `rans_static` module and lets us stay byte-for-byte faithful to the C code.
 #![allow(non_snake_case, non_camel_case_types, unused_variables, dead_code, clippy::too_many_arguments)]
 
 // rANS_word.h:64
