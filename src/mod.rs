@@ -7,10 +7,6 @@ pub mod bgzf;
 pub mod bgzip;
 #[path = "cram.rs"]
 pub mod cram;
-#[rustfmt::skip]
-#[cfg(any())]
-#[path = "cram/mod.rs"]
-pub mod cram_mirror;
 pub mod errmod;
 pub mod faidx;
 pub mod hfile;

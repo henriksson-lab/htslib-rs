@@ -10,31 +10,32 @@ readme = "README.md"
 name = "htslib_rs"
 path = "src/lib.rs"
 
-# `parity` enables the hts-sys (C HTSlib) dependency. The goal is to remove
-# hts_sys from production code entirely; it is retained only for (a) parity
-# tests that compare native output against the C library and (b) transitional
-# delegation while subsystems are still being translated. `parity` is in
-# `default` so the crate builds today; the authoritative "are we done"
-# signal is `cargo build --no-default-features` (no hts_sys) compiling cleanly.
-# See docs/HTS_SYS_CUTOVER.md.
+# `parity` enables hts-sys in tests for byte-identical comparison against
+# C HTSlib. Production code does not depend on hts-sys at all (cut-over
+# completed 2026-06-01); the feature gates only test-side parity helpers.
 [features]
-default = ["parity", "cram-mirror"]
-parity = ["dep:hts-sys"]
-cram-mirror = ["dep:c2rust-bitfields"]
+default = ["parity"]
+parity = []
 gcs = ["libcurl"]
 libcurl = []
 s3 = ["libcurl"]
 
 [dependencies]
-c2rust-bitfields = { version = "0.22.1", optional = true }
 flate2 = "1"
-hts-sys = { version = "2.2.0", optional = true }
+# Direct libz-sys dep: production `src/bgzf.rs` has `#[link_name]` externs
+# for zlib (deflateInit2_, inflate, crc32, ...). libz-sys's build script
+# emits `cargo:rustc-link-lib=static=z`; the `use libz_sys as _` line in
+# src/lib.rs keeps its rlib in rustc's dep graph so that directive lands
+# on the link line.
+libz-sys = { version = "1.1", features = ["static"] }
 libc = "0.2"
 tracehash-rs = "0.2.0"
 xz2 = "0.1"
 
 [dev-dependencies]
 noodles = { version = "0.109.0", features = ["bgzf"] }
+# hts-sys is used ONLY by parity-comparison tests now; not a runtime dep.
+hts-sys = "2.2.0"
 
 # Redirect hts-sys to the locally vendored crate, which links the in-tree v1.23
 # HTSlib source (HTS_VERSION 102390) and regenerates bindgen bindings against it.

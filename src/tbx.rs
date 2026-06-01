@@ -56,12 +56,73 @@ pub struct kh_s2i_t {
     pub vals: *mut i64,
 }
 
-unsafe extern "C" {
-    fn kh_init_s2i() -> *mut kh_s2i_t;
-    fn kh_destroy_s2i(h: *mut kh_s2i_t);
-    fn kh_get_s2i(h: *const kh_s2i_t, key: *const c_char) -> u32;
-    fn kh_put_s2i(h: *mut kh_s2i_t, key: *const c_char, ret: *mut c_int) -> u32;
-    fn kh_del_s2i(h: *mut kh_s2i_t, x: u32);
+// Native implementations of htslib's KHASH_MAP_INIT_STR(s2i, int64_t)
+// (htslib/htslib/khash.h:614). `kh_s2i_t` is byte-compatible with the
+// generic khash layout used by `crate::htslib_rs::cram::kh_generic_layout`
+// (same prefix: 4 u32 counters + flags pointer + keys + vals); the
+// value-type difference (`*mut i64` vs `*mut c_void`) is harmless because
+// both are 8 bytes and the layout machinery never reads/writes values.
+
+unsafe fn kh_init_s2i() -> *mut kh_s2i_t {
+    libc::calloc(1, std::mem::size_of::<kh_s2i_t>()).cast()
+}
+
+unsafe fn kh_destroy_s2i(h: *mut kh_s2i_t) {
+    if h.is_null() {
+        return;
+    }
+    if !(*h).flags.is_null() {
+        libc::free((*h).flags.cast());
+    }
+    if !(*h).keys.is_null() {
+        libc::free((*h).keys.cast());
+    }
+    if !(*h).vals.is_null() {
+        libc::free((*h).vals.cast());
+    }
+    libc::free(h.cast());
+}
+
+unsafe fn kh_get_s2i(h: *const kh_s2i_t, key: *const c_char) -> u32 {
+    if (*h).n_buckets == 0 {
+        return 0;
+    }
+    let mask = (*h).n_buckets - 1;
+    let k = crate::htslib_rs::cram::kh_str_x31_hash(key);
+    let mut i = k & mask;
+    let last = i;
+    let mut step: u32 = 0;
+    loop {
+        let flag = *(*h).flags.add((i >> 4) as usize);
+        let is_empty = (flag >> ((i & 0xf) << 1)) & 2;
+        let is_del = (flag >> ((i & 0xf) << 1)) & 1;
+        if is_empty != 0 {
+            return (*h).n_buckets;
+        }
+        if is_del == 0 && libc::strcmp(*(*h).keys.add(i as usize), key) == 0 {
+            return i;
+        }
+        step += 1;
+        i = (i + step) & mask;
+        if i == last {
+            return (*h).n_buckets;
+        }
+    }
+}
+
+unsafe fn kh_put_s2i(h: *mut kh_s2i_t, key: *const c_char, ret: *mut c_int) -> u32 {
+    crate::htslib_rs::cram::kh_put_map(h.cast(), key, ret)
+}
+
+unsafe fn kh_del_s2i(h: *mut kh_s2i_t, x: u32) {
+    if x == (*h).n_buckets {
+        return;
+    }
+    let flag = *(*h).flags.add((x >> 4) as usize);
+    if (flag >> ((x & 0xf) << 1)) & 3 == 0 {
+        *(*h).flags.add((x >> 4) as usize) |= 1 << ((x & 0xf) << 1);
+        (*h).size -= 1;
+    }
 }
 
 #[repr(C)]

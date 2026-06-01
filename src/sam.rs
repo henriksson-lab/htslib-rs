@@ -29,9 +29,7 @@ use crate::htslib_rs::hts::{
     HTS_POS_MAX,
 };
 
-extern "C" {
-    fn hpeek(fp: *mut crate::htslib_rs::hts::hFILE, buffer: *mut c_void, nbytes: usize) -> isize;
-}
+use crate::htslib_rs::hfile::hpeek;
 
 pub const BAM_CMATCH: c_int = 0;
 pub const BAM_CINS: c_int = 1;
@@ -3937,7 +3935,7 @@ unsafe fn sam_hrecs_dup(src: *const sam_hrecs_t) -> *mut sam_hrecs_t {
 }
 
 // original: sam_hrecs_find_rg (htslib/header.c:2899)
-unsafe fn sam_hrecs_find_rg(hrecs: *mut sam_hrecs_t, id: *const c_char) -> *mut sam_hrec_rg_t {
+pub unsafe fn sam_hrecs_find_rg(hrecs: *mut sam_hrecs_t, id: *const c_char) -> *mut sam_hrec_rg_t {
     if hrecs.is_null() || id.is_null() || (*hrecs).rg_hash.is_null() {
         return std::ptr::null_mut();
     }
@@ -8887,7 +8885,7 @@ unsafe fn sam_c_1649_index_load(
             //   return (hts_idx_t *) idx;
             let _ = flags;
             let cram_fd = (*fp).fp.cram;
-            if crate::htslib_rs::hts::cram_index::cram_cram_index_c_176_cram_index_load(
+            if crate::htslib_rs::cram::cram_cram_index_c_176_cram_index_load(
                 cram_fd, fn_, fnidx,
             ) < 0
             {
@@ -8974,7 +8972,7 @@ unsafe fn sam_cram_itr_query(
     (*iter).readrec = readrec;
 
     if tid >= 0 || tid == HTS_IDX_NOCOOR || tid == HTS_IDX_START {
-        let mut r = crate::htslib_rs::hts::cram_index::cram_range {
+        let mut r = crate::htslib_rs::cram::cram_range_layout {
             refid: tid,
             start: beg + 1,
             end,
@@ -8983,7 +8981,7 @@ unsafe fn sam_cram_itr_query(
         // cram_seek_to_refpos, then OR SAM_POS into required_fields if not
         // the special "-2" case set by HTS_IDX_START/HTS_IDX_REST.
         let cram_fd = (*cidx).cram;
-        let ret = crate::htslib_rs::hts::cram_index::cram_cram_index_c_572_cram_seek_to_refpos(
+        let ret = crate::htslib_rs::cram::cram_cram_index_c_573_cram_seek_to_refpos(
             cram_fd, &mut r,
         );
         // After cram_seek_to_refpos, propagate required_fields |= SAM_POS like
@@ -9313,7 +9311,7 @@ pub unsafe fn sam_index_build3(
     if (*fp).format.format == HTS_FORMAT_CRAM {
         // Native CRAM index builder. Mirrors C:
         //     ret = cram_index_build(fp->fp.cram, fn, fnidx);
-        let ret = crate::htslib_rs::hts::cram_index::cram_cram_index_c_779_cram_index_build(
+        let ret = crate::htslib_rs::cram::cram_cram_index_c_779_cram_index_build(
             (*fp).fp.cram,
             fn_,
             fnidx,

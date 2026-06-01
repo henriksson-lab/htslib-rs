@@ -16,13 +16,7 @@ use super::hfile::{
 };
 use super::{path_bytes, path_from_bytes};
 
-#[allow(unused_assignments, unused_mut, private_interfaces)]
-#[path = "cram/cram_index.rs"]
-pub mod cram_index;
-#[path = "cram/cram_structs.rs"]
-mod cram_structs;
-
-use cram_index::{
+use crate::htslib_rs::cram::{
     cram_cram_index_c_404_cram_index_query, cram_cram_index_c_503_cram_index_last,
     cram_cram_index_c_531_cram_index_query_last,
 };
@@ -4707,8 +4701,9 @@ pub struct htsFile {
     pub filter: *mut c_void,
 }
 
+use crate::htslib_rs::hfile::hclose;
+
 extern "C" {
-    fn hclose(fp: *mut hFILE) -> c_int;
     fn clock() -> libc::clock_t;
 }
 
@@ -6927,7 +6922,7 @@ pub unsafe fn hts_idx_destroy(idx: *mut hts_idx_t) {
         // CRAI b-tree owned by the cram_fd, then the wrapper allocation
         // itself. Matches htslib/hts.c:2696.
         let cidx = idx.cast::<hts_cram_idx_t>();
-        crate::cram_flush_bridge::cram_cram_index_c_374_cram_index_free((*cidx).cram);
+        crate::htslib_rs::cram::cram_cram_index_c_374_cram_index_free((*cidx).cram);
         crate::htslib_rs::c_compat::free(cidx.cast());
         return;
     }
