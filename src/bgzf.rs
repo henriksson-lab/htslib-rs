@@ -6555,7 +6555,7 @@ mod tests {
         // Spanning a couple of blocks so workers don't all finish in
         // one inflate() call.
         let payload: Vec<u8> = (0..(BGZF_BLOCK_SIZE * 3 + 4321))
-            .map(|i| ((i.wrapping_mul(2654435761)) as u8))
+            .map(|i| (i.wrapping_mul(2654435761)) as u8)
             .collect();
         {
             let file = File::create(&path).unwrap();

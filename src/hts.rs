@@ -5105,7 +5105,7 @@ pub unsafe fn hts_c_2558_hts_idx_push(
     }
     if tid >= 0 {
         if (*(*idx).bidx.add(tid as usize)).is_null() {
-            let Some(bidx) = alloc_bidx((*idx).n_bins as u32 + 2) else {
+            let Some(bidx) = alloc_bidx(0) else {
                 return -1;
             };
             *(*idx).bidx.add(tid as usize) = bidx;
@@ -7423,26 +7423,146 @@ unsafe fn alloc_bidx(n_bin: u32) -> Option<*mut hts_idx_bidx_t> {
     Some(bidx)
 }
 
+unsafe fn kh_resize_bin(bidx: *mut hts_idx_bidx_t, mut new_n_buckets: u32) -> Option<()> {
+    if new_n_buckets == 0 {
+        new_n_buckets = 1;
+    }
+    new_n_buckets = new_n_buckets.next_power_of_two().max(4);
+    if (*bidx).size >= ((new_n_buckets as f64 * 0.77) + 0.5) as u32 {
+        return None;
+    }
+
+    let n_flags = if new_n_buckets < 16 {
+        1
+    } else {
+        new_n_buckets >> 4
+    };
+    let new_flags =
+        crate::htslib_rs::c_compat::malloc(n_flags as u64 * std::mem::size_of::<u32>() as u64)
+            .cast::<u32>();
+    if new_flags.is_null() {
+        return None;
+    }
+    for i in 0..n_flags {
+        *new_flags.add(i as usize) = 0xaaaa_aaaa;
+    }
+
+    if (*bidx).n_buckets < new_n_buckets {
+        let new_keys = crate::htslib_rs::c_compat::realloc(
+            (*bidx).keys.cast(),
+            new_n_buckets as u64 * std::mem::size_of::<u32>() as u64,
+        )
+        .cast::<u32>();
+        if new_keys.is_null() {
+            crate::htslib_rs::c_compat::free(new_flags.cast());
+            return None;
+        }
+        (*bidx).keys = new_keys;
+
+        let new_vals = crate::htslib_rs::c_compat::realloc(
+            (*bidx).vals.cast(),
+            new_n_buckets as u64 * std::mem::size_of::<hts_idx_bins_t>() as u64,
+        )
+        .cast::<hts_idx_bins_t>();
+        if new_vals.is_null() {
+            crate::htslib_rs::c_compat::free(new_flags.cast());
+            return None;
+        }
+        (*bidx).vals = new_vals;
+    }
+
+    for j in 0..(*bidx).n_buckets {
+        if kh_exist((*bidx).flags, j) {
+            let mut key = *(*bidx).keys.add(j as usize);
+            let mut val = std::ptr::read((*bidx).vals.add(j as usize));
+            let new_mask = new_n_buckets - 1;
+            kh_set_isdel_true((*bidx).flags, j);
+            loop {
+                let mut i = key & new_mask;
+                let mut step = 0;
+                while !kh_isempty(new_flags, i) {
+                    step += 1;
+                    i = (i + step) & new_mask;
+                }
+                kh_set_isempty_false(new_flags, i);
+                if i < (*bidx).n_buckets && kh_iseither((*bidx).flags, i) == 0 {
+                    std::mem::swap(&mut key, &mut *(*bidx).keys.add(i as usize));
+                    std::mem::swap(&mut val, &mut *(*bidx).vals.add(i as usize));
+                    kh_set_isdel_true((*bidx).flags, i);
+                } else {
+                    *(*bidx).keys.add(i as usize) = key;
+                    std::ptr::write((*bidx).vals.add(i as usize), val);
+                    break;
+                }
+            }
+        }
+    }
+
+    crate::htslib_rs::c_compat::free((*bidx).flags.cast());
+    (*bidx).flags = new_flags;
+    (*bidx).n_buckets = new_n_buckets;
+    (*bidx).n_occupied = (*bidx).size;
+    (*bidx).upper_bound = ((*bidx).n_buckets as f64 * 0.77 + 0.5) as u32;
+    Some(())
+}
+
 unsafe fn insert_bidx_bin(bidx: *mut hts_idx_bidx_t, bin: u32) -> Option<u32> {
+    if (*bidx).n_occupied >= (*bidx).upper_bound {
+        let new_n_buckets = if (*bidx).n_buckets > ((*bidx).size << 1) {
+            (*bidx).n_buckets - 1
+        } else {
+            (*bidx).n_buckets + 1
+        };
+        kh_resize_bin(bidx, new_n_buckets)?;
+    }
     if (*bidx).n_buckets == 0 {
         return None;
     }
     let mask = (*bidx).n_buckets - 1;
+    let mut x = (*bidx).n_buckets;
+    let mut site = (*bidx).n_buckets;
     let mut k = bin & mask;
     let mut step = 0;
-    while kh_exist((*bidx).flags, k) {
-        if *(*bidx).keys.add(k as usize) == bin {
-            return None;
+    if kh_isempty((*bidx).flags, k) {
+        x = k;
+    } else {
+        let last = k;
+        while !kh_isempty((*bidx).flags, k)
+            && (kh_isdel((*bidx).flags, k) || *(*bidx).keys.add(k as usize) != bin)
+        {
+            if kh_isdel((*bidx).flags, k) {
+                site = k;
+            }
+            step += 1;
+            k = (k + step) & mask;
+            if k == last {
+                x = site;
+                break;
+            }
         }
-        step += 1;
-        k = (k + step) & mask;
+        if x == (*bidx).n_buckets {
+            if kh_isempty((*bidx).flags, k) && site != (*bidx).n_buckets {
+                x = site;
+            } else {
+                x = k;
+            }
+        }
     }
-    *(*bidx).keys.add(k as usize) = bin;
-    let flag = (*bidx).flags.add((k >> 4) as usize);
-    *flag &= !(3 << ((k & 0x0f) << 1));
-    (*bidx).size += 1;
-    (*bidx).n_occupied += 1;
-    Some(k)
+
+    if kh_isempty((*bidx).flags, x) {
+        *(*bidx).keys.add(x as usize) = bin;
+        kh_set_isboth_false((*bidx).flags, x);
+        (*bidx).size += 1;
+        (*bidx).n_occupied += 1;
+        Some(x)
+    } else if kh_isdel((*bidx).flags, x) {
+        *(*bidx).keys.add(x as usize) = bin;
+        kh_set_isboth_false((*bidx).flags, x);
+        (*bidx).size += 1;
+        Some(x)
+    } else {
+        None
+    }
 }
 
 unsafe fn kh_del_bin(h: *mut hts_idx_bidx_t, k: u32) {
@@ -7483,18 +7603,56 @@ unsafe fn kh_exist(flags: *const u32, i: u32) -> bool {
     ((*flags.add((i >> 4) as usize) >> ((i & 0x0f) << 1)) & 3) == 0
 }
 
+unsafe fn kh_set_isdel_true(flags: *mut u32, i: u32) {
+    *flags.add((i >> 4) as usize) |= 1u32 << ((i & 0x0f) << 1);
+}
+
+unsafe fn kh_set_isempty_false(flags: *mut u32, i: u32) {
+    *flags.add((i >> 4) as usize) &= !(2u32 << ((i & 0x0f) << 1));
+}
+
+unsafe fn kh_set_isboth_false(flags: *mut u32, i: u32) {
+    *flags.add((i >> 4) as usize) &= !(3u32 << ((i & 0x0f) << 1));
+}
+
+unsafe fn kh_isempty(flags: *const u32, i: u32) -> bool {
+    ((*flags.add((i >> 4) as usize) >> ((i & 0x0f) << 1)) & 2) != 0
+}
+
+unsafe fn kh_isdel(flags: *const u32, i: u32) -> bool {
+    ((*flags.add((i >> 4) as usize) >> ((i & 0x0f) << 1)) & 1) != 0
+}
+
+unsafe fn kh_iseither(flags: *const u32, i: u32) -> u32 {
+    (*flags.add((i >> 4) as usize) >> ((i & 0x0f) << 1)) & 3
+}
+
 unsafe fn kh_get_bin(h: *const hts_idx_bidx_t, key: u32) -> u32 {
     if h.is_null() {
         return 0;
     }
-    let mut k = 0;
-    while k < (*h).n_buckets {
-        if kh_exist((*h).flags, k) && *(*h).keys.add(k as usize) == key {
-            return k;
+    if (*h).n_buckets != 0 {
+        let mask = (*h).n_buckets - 1;
+        let mut i = key & mask;
+        let last = i;
+        let mut step = 0;
+        while !kh_isempty((*h).flags, i)
+            && (kh_isdel((*h).flags, i) || *(*h).keys.add(i as usize) != key)
+        {
+            step += 1;
+            i = (i + step) & mask;
+            if i == last {
+                return (*h).n_buckets;
+            }
         }
-        k += 1;
+        if kh_iseither((*h).flags, i) != 0 {
+            (*h).n_buckets
+        } else {
+            i
+        }
+    } else {
+        0
     }
-    (*h).n_buckets
 }
 
 fn meta_bin(idx: *const hts_idx_t) -> u32 {

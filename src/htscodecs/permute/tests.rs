@@ -26,8 +26,6 @@
 //!   The `permutec` print loop in `permute.h:54` iterates `j = b-8; j < b`
 //!   and emits `_` whenever `j < 0`, producing the right-aligned layout.
 
-use super::*;
-
 /// Sentinel value used by the C `#define _ 9` macro to mark skipped lanes.
 const UNDERSCORE_LOCAL: u32 = 9;
 

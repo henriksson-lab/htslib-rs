@@ -9,6 +9,7 @@ this crate makes little attempt to prevent to prevent the user from doing someth
 
 
 **This translation is incomplete, features are still missing**
+* 2026-06-02: Possibly feature complete; speed on par
 * 2026-05-29: Translation still ongoing
 * 2026-05-14: Minimal testing performed 
 

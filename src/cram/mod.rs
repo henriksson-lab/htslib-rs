@@ -3212,14 +3212,12 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
             } else {
                 METHMAP[(method - CBMI_RANS_PR1) as usize]
             };
-            // RANS_ORDER_SIMD_AUTO = 0x800 (htscodecs/rANS_static4x16.h).
-            const RANS_ORDER_SIMD_AUTO: c_int = 0x800;
             let mut out_size_u: u32 = 0;
             let input = std::slice::from_raw_parts(in_.cast::<u8>(), in_size);
             let v = crate::htslib_rs::htscodecs::rans_static4x16pr::rans_compress_4x16(
                 input,
                 &mut out_size_u,
-                m_order | RANS_ORDER_SIMD_AUTO,
+                m_order | crate::htslib_rs::htscodecs::rans_static4x16pr::RANS_ORDER_SIMD_AUTO,
             );
             *out_size = v.len();
             if v.is_empty() {
@@ -4720,7 +4718,7 @@ mod tests {
                 offset: 0,
                 comp_hdr: std::ptr::null_mut(),
                 comp_hdr_block: std::ptr::null_mut(),
-                ..unsafe { std::mem::zeroed() }
+                ..std::mem::zeroed()
             };
             let c = (&mut container as *mut cram_container_layout).cast();
 
@@ -5165,7 +5163,7 @@ mod tests {
                 hdr_block: std::ptr::null_mut(),
                 block: blocks.as_mut_ptr().cast(),
                 block_by_id: by_id.as_mut_ptr().cast(),
-                ..unsafe { std::mem::zeroed() }
+                ..std::mem::zeroed()
             };
 
             assert_eq!(
@@ -8315,7 +8313,7 @@ mod tests {
                 hdr_block: std::ptr::null_mut(),
                 block: std::ptr::null_mut(),
                 block_by_id: by_id.as_mut_ptr(),
-                ..unsafe { std::mem::zeroed() }
+                ..std::mem::zeroed()
             };
             assert_eq!(
                 cram_cram_codecs_c_1377_cram_xpack_decode_expand_char(
@@ -8610,7 +8608,7 @@ mod tests {
                 hdr_block: std::ptr::null_mut(),
                 block: std::ptr::null_mut(),
                 block_by_id: by_id.as_mut_ptr().cast(),
-                ..unsafe { std::mem::zeroed() }
+                ..std::mem::zeroed()
             };
             let mut codec = cram_codec_xdelta_layout {
                 codec: 0,
@@ -9113,7 +9111,7 @@ mod tests {
                 hdr_block: std::ptr::null_mut(),
                 block: std::ptr::null_mut(),
                 block_by_id: by_id.as_mut_ptr(),
-                ..unsafe { std::mem::zeroed() }
+                ..std::mem::zeroed()
             };
             let s = (&mut slice as *mut cram_slice_layout).cast();
             let x = (&mut xrle as *mut cram_codec_xrle_layout).cast();
@@ -10271,7 +10269,7 @@ mod tests {
                 hdr_block: std::ptr::null_mut(),
                 block: std::ptr::null_mut(),
                 block_by_id: by_id.as_mut_ptr().cast(),
-                ..unsafe { std::mem::zeroed() }
+                ..std::mem::zeroed()
             };
             let mut codec = cram_codec_byte_array_stop_layout {
                 codec: 0,
@@ -11462,7 +11460,7 @@ mod tests {
                 hdr_block: std::ptr::null_mut(),
                 block: std::ptr::null_mut(),
                 block_by_id: std::ptr::null_mut(),
-                ..unsafe { std::mem::zeroed() }
+                ..std::mem::zeroed()
             };
             let out_block = cram_cram_io_c_1388_cram_new_block(
                 crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
@@ -11663,7 +11661,7 @@ mod tests {
                 hdr_block: std::ptr::null_mut(),
                 block: blocks.as_mut_ptr().cast(),
                 block_by_id: std::ptr::null_mut(),
-                ..unsafe { std::mem::zeroed() }
+                ..std::mem::zeroed()
             };
             let mut vv = varint_vec_layout {
                 varint_decode32_crc: std::ptr::null_mut(),
@@ -11888,7 +11886,7 @@ mod tests {
                 hdr_block: std::ptr::null_mut(),
                 block: blocks.as_mut_ptr().cast(),
                 block_by_id: block_by_id.as_mut_ptr().cast(),
-                ..unsafe { std::mem::zeroed() }
+                ..std::mem::zeroed()
             };
             let s = (&mut slice as *mut cram_slice_layout).cast();
 
@@ -12066,7 +12064,7 @@ mod tests {
                 hdr_block: std::ptr::null_mut(),
                 block: blocks.as_mut_ptr().cast(),
                 block_by_id: std::ptr::null_mut(),
-                ..unsafe { std::mem::zeroed() }
+                ..std::mem::zeroed()
             };
             let mut vv = varint_vec_layout {
                 varint_decode32_crc: std::ptr::null_mut(),

@@ -354,10 +354,7 @@ mod tests {
                         let mut out = Vec::with_capacity(PER_THREAD);
                         barrier.wait();
                         for _ in 0..PER_THREAD {
-                            // SAFETY: `hts_drand48` is internally synchronized
-                            // by `RAND48`; the `unsafe` marker is only kept to
-                            // preserve the C-API surface.
-                            let v = unsafe { hts_drand48() };
+                            let v = hts_drand48();
                             out.push(v);
                         }
                         out
@@ -412,8 +409,7 @@ mod tests {
             let writer = thread::spawn(move || {
                 let mut n: c_long = 0;
                 while !stop_writer.load(Ordering::Relaxed) {
-                    // SAFETY: internally synchronized.
-                    unsafe { hts_srand48(n.wrapping_mul(0x9E37_79B9) ^ 42) };
+                    hts_srand48(n.wrapping_mul(0x9E37_79B9) ^ 42);
                     n = n.wrapping_add(1);
                 }
                 n
@@ -423,8 +419,7 @@ mod tests {
                 .map(|_| {
                     thread::spawn(|| {
                         for _ in 0..ITERS {
-                            // SAFETY: internally synchronized.
-                            let v = unsafe { hts_drand48() };
+                            let v = hts_drand48();
                             assert!(v.is_finite());
                             assert!((0.0..1.0).contains(&v));
                         }

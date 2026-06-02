@@ -160,14 +160,7 @@ unsafe fn bcf_itr_querys1(
 }
 
 unsafe fn tbx_itr_querys1(tbx_: *mut tbx::tbx_t, region: *const c_char) -> *mut hts_itr_t {
-    hts::hts_itr_querys(
-        (*tbx_).idx.cast(),
-        region,
-        Some(tbx_name2id_adapter),
-        tbx_.cast(),
-        Some(hts_itr_query_adapter),
-        Some(tbx_readrec_adapter),
-    )
+    tbx::tbx_itr_querys1(tbx_, region)
 }
 
 unsafe fn bcf_itr_next(htsfp: *mut htsFile, itr: *mut hts_itr_t, r: *mut vcf::bcf1_t) -> c_int {

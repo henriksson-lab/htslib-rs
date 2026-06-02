@@ -88,7 +88,7 @@ unsafe fn kh_get_s2i(h: *const kh_s2i_t, key: *const c_char) -> u32 {
         return 0;
     }
     let mask = (*h).n_buckets - 1;
-    let k = crate::htslib_rs::cram::kh_str_x31_hash(key);
+    let k = crate::htslib_rs::cram::kh_str_fnv1a_hash(key);
     let mut i = k & mask;
     let last = i;
     let mut step: u32 = 0;

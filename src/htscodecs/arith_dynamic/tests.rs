@@ -276,7 +276,7 @@ fn corrupt_decode_no_panic() {
     let mut valids: Vec<Vec<u8>> = Vec::new();
     for order in [0i32, 1, X_RLE, X_PACK, X_PACK | X_RLE] {
         let data: Vec<u8> = (0..4096u32)
-            .map(|_| ((rng.next_u32() % 32) as u8))
+            .map(|_| (rng.next_u32() % 32) as u8)
             .collect();
         valids.push(native_compress(&data, order));
     }

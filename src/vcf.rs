@@ -18538,7 +18538,7 @@ mod tests {
                         let candidates = b"0123456789ACGTN\tACGT,.;:=+-/|PASSchrtagAFDPGTGQ\n";
                         candidates[(r as usize) % candidates.len()] as char
                     } else {
-                        ((r & 0x7f) as u8 as char)
+                        (r & 0x7f) as u8 as char
                     };
                     s.push(b);
                 }

@@ -261,7 +261,7 @@ fn bimodal_freqs(n: usize, scale_bits: u32) -> Vec<u32> {
     assert!(n >= 2 && (n as u32) <= m);
     let big = m / 2;
     let rest = m - big;
-    let mut v = uniform_freqs(n - 1, scale_bits);
+    let v = uniform_freqs(n - 1, scale_bits);
     // Rescale the rest array so it sums to `rest`.
     let total: u32 = v.iter().sum();
     // Crude renormalization: take each freq * rest / total, then patch slack.
@@ -1508,7 +1508,7 @@ fn dec_advance_step_does_not_renorm() {
     // Verify by comparing the cursor before/after.
     let buf = [0u8; 8];
     let mut state: RansState = 0x1000_0000;
-    let mut p: &[u8] = &buf;
+    let p: &[u8] = &buf;
     let before = p.len();
     RansDecAdvanceStep(&mut state, 0, 1024, 12);
     assert_eq!(p.len(), before, "AdvanceStep must not consume bytes");

@@ -19138,26 +19138,24 @@ mod tests {
                     // joined.  `sam_c_1173_bam_get_library` is sound under
                     // those conditions and (post-fix) returns a pointer into
                     // *this thread's* private thread_local buffer.
-                    unsafe {
-                        for iter in 0..ITERS_PER_THREAD {
-                            let lib = sam_c_1173_bam_get_library(pair.hdr, pair.bam);
-                            assert!(
-                                !lib.is_null(),
-                                "thread {} iter {}: null library",
-                                tid,
-                                iter
-                            );
-                            let got = CStr::from_ptr(lib).to_bytes();
-                            assert_eq!(
-                                got,
-                                expected,
-                                "thread {} iter {}: expected {:?}, got {:?}",
-                                tid,
-                                iter,
-                                std::str::from_utf8(expected).unwrap_or("<non-utf8>"),
-                                std::str::from_utf8(got).unwrap_or("<non-utf8>")
-                            );
-                        }
+                    for iter in 0..ITERS_PER_THREAD {
+                        let lib = sam_c_1173_bam_get_library(pair.hdr, pair.bam);
+                        assert!(
+                            !lib.is_null(),
+                            "thread {} iter {}: null library",
+                            tid,
+                            iter
+                        );
+                        let got = CStr::from_ptr(lib).to_bytes();
+                        assert_eq!(
+                            got,
+                            expected,
+                            "thread {} iter {}: expected {:?}, got {:?}",
+                            tid,
+                            iter,
+                            std::str::from_utf8(expected).unwrap_or("<non-utf8>"),
+                            std::str::from_utf8(got).unwrap_or("<non-utf8>")
+                        );
                     }
                 }));
             }
