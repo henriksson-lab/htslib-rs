@@ -63,24 +63,24 @@ thread_local! {
 }
 
 #[repr(C)]
-struct z_stream {
-    next_in: *mut u8,
-    avail_in: c_uint,
-    total_in: c_ulong,
-    next_out: *mut u8,
-    avail_out: c_uint,
-    total_out: c_ulong,
-    msg: *mut c_char,
-    state: *mut c_void,
-    zalloc: Option<unsafe extern "C" fn(*mut c_void, c_uint, c_uint) -> *mut c_void>,
-    zfree: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
-    opaque: *mut c_void,
-    data_type: c_int,
-    adler: c_ulong,
-    reserved: c_ulong,
+pub(crate) struct z_stream {
+    pub(crate) next_in: *mut u8,
+    pub(crate) avail_in: c_uint,
+    pub(crate) total_in: c_ulong,
+    pub(crate) next_out: *mut u8,
+    pub(crate) avail_out: c_uint,
+    pub(crate) total_out: c_ulong,
+    pub(crate) msg: *mut c_char,
+    pub(crate) state: *mut c_void,
+    pub(crate) zalloc: Option<unsafe extern "C" fn(*mut c_void, c_uint, c_uint) -> *mut c_void>,
+    pub(crate) zfree: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
+    pub(crate) opaque: *mut c_void,
+    pub(crate) data_type: c_int,
+    pub(crate) adler: c_ulong,
+    pub(crate) reserved: c_ulong,
 }
 
-type DeflateInit2Fn = unsafe extern "C" fn(
+pub(crate) type DeflateInit2Fn = unsafe extern "C" fn(
     strm: *mut z_stream,
     level: c_int,
     method: c_int,
@@ -90,19 +90,20 @@ type DeflateInit2Fn = unsafe extern "C" fn(
     version: *const c_char,
     stream_size: c_int,
 ) -> c_int;
-type DeflateFn = unsafe extern "C" fn(strm: *mut z_stream, flush: c_int) -> c_int;
-type DeflateEndFn = unsafe extern "C" fn(strm: *mut z_stream) -> c_int;
-type InflateInit2Fn = unsafe extern "C" fn(
+pub(crate) type DeflateFn = unsafe extern "C" fn(strm: *mut z_stream, flush: c_int) -> c_int;
+pub(crate) type DeflateEndFn = unsafe extern "C" fn(strm: *mut z_stream) -> c_int;
+pub(crate) type InflateInit2Fn = unsafe extern "C" fn(
     strm: *mut z_stream,
     window_bits: c_int,
     version: *const c_char,
     stream_size: c_int,
 ) -> c_int;
-type InflateFn = unsafe extern "C" fn(strm: *mut z_stream, flush: c_int) -> c_int;
-type InflateResetFn = unsafe extern "C" fn(strm: *mut z_stream) -> c_int;
-type InflateEndFn = unsafe extern "C" fn(strm: *mut z_stream) -> c_int;
-type Crc32Fn = unsafe extern "C" fn(crc: c_ulong, buf: *const u8, len: c_uint) -> c_ulong;
-type ZlibVersionFn = unsafe extern "C" fn() -> *const c_char;
+pub(crate) type InflateFn = unsafe extern "C" fn(strm: *mut z_stream, flush: c_int) -> c_int;
+pub(crate) type InflateResetFn = unsafe extern "C" fn(strm: *mut z_stream) -> c_int;
+pub(crate) type InflateEndFn = unsafe extern "C" fn(strm: *mut z_stream) -> c_int;
+pub(crate) type Crc32Fn =
+    unsafe extern "C" fn(crc: c_ulong, buf: *const u8, len: c_uint) -> c_ulong;
+pub(crate) type ZlibVersionFn = unsafe extern "C" fn() -> *const c_char;
 
 unsafe extern "C" {
     #[link_name = "deflateInit2_"]
@@ -139,16 +140,16 @@ unsafe extern "C" {
     fn linked_zlib_version() -> *const c_char;
 }
 
-struct ZlibFns {
-    deflate_init2: DeflateInit2Fn,
-    deflate: DeflateFn,
-    deflate_end: DeflateEndFn,
-    inflate_init2: InflateInit2Fn,
-    inflate: InflateFn,
-    inflate_reset: InflateResetFn,
-    inflate_end: InflateEndFn,
-    crc32: Crc32Fn,
-    zlib_version: ZlibVersionFn,
+pub(crate) struct ZlibFns {
+    pub(crate) deflate_init2: DeflateInit2Fn,
+    pub(crate) deflate: DeflateFn,
+    pub(crate) deflate_end: DeflateEndFn,
+    pub(crate) inflate_init2: InflateInit2Fn,
+    pub(crate) inflate: InflateFn,
+    pub(crate) inflate_reset: InflateResetFn,
+    pub(crate) inflate_end: InflateEndFn,
+    pub(crate) crc32: Crc32Fn,
+    pub(crate) zlib_version: ZlibVersionFn,
 }
 
 #[repr(C)]
@@ -156,7 +157,7 @@ struct GzipStream {
     zs: z_stream,
 }
 
-unsafe fn system_zlib() -> Option<&'static ZlibFns> {
+pub(crate) unsafe fn system_zlib() -> Option<&'static ZlibFns> {
     static ZLIB: OnceLock<Option<ZlibFns>> = OnceLock::new();
     ZLIB.get_or_init(|| unsafe {
         // Prefer a dlopen()-loaded libz.so.1 (the real system zlib) over the
@@ -173,10 +174,7 @@ unsafe fn system_zlib() -> Option<&'static ZlibFns> {
             b"libz.1.dylib\0",
         ];
         for name in dlopen_handles.iter() {
-            let handle = libc::dlopen(
-                name.as_ptr().cast(),
-                libc::RTLD_LAZY | libc::RTLD_LOCAL,
-            );
+            let handle = libc::dlopen(name.as_ptr().cast(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
             if handle.is_null() {
                 continue;
             }
@@ -206,8 +204,8 @@ unsafe fn system_zlib() -> Option<&'static ZlibFns> {
                 // Reject zlib-ng even if it is what dlopen happens to find
                 // first (e.g. via LD_LIBRARY_PATH). We want stock zlib's
                 // deflate output for byte-exact reconstruction tests.
-                let is_ng = !raw_ver.is_null()
-                    && !libc::strstr(raw_ver, c"zlib-ng".as_ptr()).is_null();
+                let is_ng =
+                    !raw_ver.is_null() && !libc::strstr(raw_ver, c"zlib-ng".as_ptr()).is_null();
                 if !is_ng {
                     return Some(ZlibFns {
                         deflate_init2: std::mem::transmute::<*mut c_void, DeflateInit2Fn>(
@@ -1963,7 +1961,14 @@ unsafe fn bgzf_mt_dispatch(
     {
         return -1;
     }
+    // jobs_pending is decremented by the writer thread under job_pool_m and
+    // polled by mt_flush_queue under job_pool_m. The increment must hold the
+    // same mutex; otherwise a concurrent main-thread ++ and a writer-thread
+    // -- can race and drop the writer's decrement, pinning jobs_pending above
+    // zero forever and deadlocking mt_flush_queue.
+    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     (*mt).jobs_pending += 1;
+    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
     0
 }
 
@@ -1973,20 +1978,78 @@ pub extern "C" fn bgzf_c_1398_bgzf_mt_writer(arg: *mut c_void) -> *mut c_void {
 }
 
 unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
+    // C bgzf_mt_writer (htslib/bgzf.c:1398): drain the worker result queue,
+    // writing each compressed block to the underlying hFILE in serial-id
+    // order. Exits cleanly when next_result_wait returns NULL (which happens
+    // once main calls hts_tpool_process_destroy from mt_destroy and the queue
+    // signals shutdown). Keep draining on errors (sticky-err pattern) so that
+    // jobs_pending always reaches 0 — otherwise mt_flush_queue spins forever.
     let fp = arg.cast::<BGZF>();
     if fp.is_null() || (*fp).mt.is_null() {
         return ptr::null_mut();
     }
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
+    let one: *mut c_void = 1usize as *mut c_void;
 
-    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
-    while (*mt).command != mtaux_cmd::CLOSE {
-        libc::pthread_cond_wait(
-            ptr::addr_of_mut!((*mt).command_c),
-            ptr::addr_of_mut!((*mt).command_m),
-        );
+    let mut hflush_counter: u32 = 0;
+    let mut sticky_err: c_int = 0;
+
+    loop {
+        let result = super::thread_pool::hts_tpool_next_result_wait((*mt).out_queue.cast());
+        if result.is_null() {
+            break;
+        }
+        let job = super::thread_pool::hts_tpool_result_data(result).cast::<bgzf_job>();
+
+        if job.is_null() || (*job).errcode != 0 {
+            if sticky_err == 0 {
+                sticky_err = if job.is_null() {
+                    BGZF_ERR_IO as c_int
+                } else {
+                    (*job).errcode
+                };
+            }
+        } else if sticky_err == 0 {
+            if (*fp).idx_build_otf != 0
+                && bgzf_c_228_bgzf_idx_flush(fp, (*job).uncomp_len, (*job).comp_len) < 0
+            {
+                sticky_err = BGZF_ERR_IO as c_int;
+            } else {
+                let written =
+                    bgzf_hwrite_ptr((*fp).fp, (*job).comp_data.as_ptr().cast(), (*job).comp_len);
+                if written != (*job).comp_len as isize {
+                    sticky_err = BGZF_ERR_IO as c_int;
+                } else {
+                    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).idx_m));
+                    (*mt).block_address += (*job).comp_len as u64;
+                    (*fp).block_address = (*mt).block_address as i64;
+                    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).idx_m));
+
+                    hflush_counter = hflush_counter.wrapping_add(1);
+                    if hflush_counter.is_multiple_of(512) && bgzf_hflush_ptr((*fp).fp) != 0 {
+                        sticky_err = BGZF_ERR_IO as c_int;
+                    }
+                }
+            }
+        }
+
+        super::thread_pool::hts_tpool_delete_result(result, 0);
+        if !job.is_null() {
+            libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+            super::cram::cram_pooled_alloc_c_144_pool_free((*mt).job_pool.cast(), job.cast());
+            (*mt).jobs_pending -= 1;
+            libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+        }
     }
-    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
+
+    if sticky_err != 0 {
+        add_errcode(fp, sticky_err as u32);
+        (*mt).errcode = sticky_err;
+        super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
+        return one;
+    }
+
+    super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
     ptr::null_mut()
 }
 
@@ -2293,55 +2356,36 @@ pub unsafe fn bgzf_c_1897_mt_flush_queue(fp: *mut BGZF) -> c_int {
         return -1;
     }
 
+    // Wait for the worker pool to finish executing every dispatched job
+    // (n_input == 0 && n_processing == 0). Workers move results to the
+    // out_queue; the writer thread drains them and decrements jobs_pending.
     if super::thread_pool::hts_tpool_process_flush((*mt).out_queue.cast()) != 0 {
         add_errcode(fp, BGZF_ERR_IO);
         (*mt).errcode = BGZF_ERR_IO as c_int;
         return -1;
     }
 
-    while (*mt).jobs_pending > 0 {
-        let result = super::thread_pool::hts_tpool_next_result_wait((*mt).out_queue.cast());
-        if result.is_null() {
+    // Spin (with a short sleep) until the writer thread has drained the
+    // out_queue and acknowledged every block. We MUST NOT pop results off
+    // the queue ourselves here: that would race with the writer thread and
+    // either drop a block on the floor or reorder writes. Mirrors the
+    // jobs_pending loop in C mt_flush_queue (htslib/bgzf.c:1907).
+    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    while (*mt).jobs_pending != 0 {
+        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+        if super::thread_pool::hts_tpool_process_is_shutdown((*mt).out_queue.cast()) != 0 {
             add_errcode(fp, BGZF_ERR_IO);
             (*mt).errcode = BGZF_ERR_IO as c_int;
             return -1;
         }
-        let job = super::thread_pool::hts_tpool_result_data(result).cast::<bgzf_job>();
-        super::thread_pool::hts_tpool_delete_result(result, 0);
-        (*mt).jobs_pending -= 1;
+        libc::usleep(10_000);
+        libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    }
+    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
 
-        if job.is_null() || (*job).errcode != 0 {
-            let err = if job.is_null() {
-                BGZF_ERR_IO as c_int
-            } else {
-                (*job).errcode
-            };
-            if !job.is_null() {
-                bgzf_mt_free_job(fp, job);
-            }
-            add_errcode(fp, err as u32);
-            (*mt).errcode = err;
-            return -1;
-        }
-
-        let written = bgzf_hwrite_ptr((*fp).fp, (*job).comp_data.as_ptr().cast(), (*job).comp_len);
-        if written != (*job).comp_len as isize {
-            bgzf_mt_free_job(fp, job);
-            add_errcode(fp, BGZF_ERR_IO);
-            (*mt).errcode = BGZF_ERR_IO as c_int;
-            return -1;
-        }
-        if (*fp).idx_build_otf != 0
-            && bgzf_c_228_bgzf_idx_flush(fp, (*job).uncomp_len, (*job).comp_len) < 0
-        {
-            bgzf_mt_free_job(fp, job);
-            add_errcode(fp, BGZF_ERR_IO);
-            (*mt).errcode = BGZF_ERR_IO as c_int;
-            return -1;
-        }
-        (*mt).block_address += (*job).comp_len as u64;
-        (*fp).block_address = (*mt).block_address as i64;
-        bgzf_mt_free_job(fp, job);
+    if (*mt).errcode != 0 {
+        add_errcode(fp, (*mt).errcode as u32);
+        return -1;
     }
     0
 }
@@ -2727,7 +2771,7 @@ pub unsafe fn bgzf_write(fp: *mut BGZF, data: *const c_void, length: usize) -> i
         );
         (*fp).block_offset += copy_length as c_int;
         written += copy_length;
-        if (*fp).block_offset as usize == BGZF_BLOCK_SIZE && bgzf_flush(fp) != 0 {
+        if (*fp).block_offset as usize == BGZF_BLOCK_SIZE && lazy_flush(fp) != 0 {
             return -1;
         }
     }
@@ -2744,12 +2788,20 @@ pub unsafe fn bgzf_raw_write(fp: *mut BGZF, data: *const c_void, length: usize) 
 
 pub unsafe fn bgzf_flush_try(fp: *mut BGZF, size: isize) -> c_int {
     if (*fp).block_offset as isize + size > BGZF_BLOCK_SIZE as isize {
-        return bgzf_flush(fp);
+        return lazy_flush(fp);
     }
     0
 }
 
 pub unsafe fn bgzf_c_1942_lazy_flush(fp: *mut BGZF) -> c_int {
+    // C lazy_flush (htslib/bgzf.c:1927): in MT mode, enqueue the current
+    // block for the worker pool but do NOT block the caller draining the
+    // result queue -- the bgzf_mt_writer thread takes care of that. Falling
+    // through to a full bgzf_flush() would serialise compression on top of
+    // the worker pool and undo any parallelism.
+    if !(*fp).mt.is_null() && flag(fp, 17) && flag(fp, 30) && !flag(fp, 31) {
+        return bgzf_c_1852_mt_queue(fp);
+    }
     bgzf_flush(fp)
 }
 
@@ -2826,6 +2878,46 @@ pub unsafe fn bgzf_write_direct_block(fp: *mut BGZF, data: *const c_void, length
     if !flag(fp, 30) {
         return bgzf_write(fp, data, length);
     }
+
+    // MT branch: dispatch to the worker pool instead of compressing on the
+    // main thread. Without this, the bgzip CLI's textual flush-boundary fast
+    // path serialises compression and `bgzip -@ N -c` doesn't scale (-@ 4 was
+    // ~27 s vs C's ~8 s on a 253 MB FASTA before this change). C's bgzip CLI
+    // doesn't have this fast path at all (htslib/bgzip.c:480 always calls
+    // bgzf_write) so the MT-aware branch only exists here, in the function
+    // itself. Mirrors what mt_queue does for an already-full buffered block.
+    if !(*fp).mt.is_null() && !flag(fp, 31) {
+        let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
+        let job = bgzf_mt_alloc_job(fp);
+        if job.is_null() {
+            add_errcode(fp, BGZF_ERR_IO);
+            (*mt).errcode = BGZF_ERR_IO as c_int;
+            return -1;
+        }
+        if (*fp).idx_build_otf != 0 {
+            bgzf_index_add_block(fp);
+            (*(*fp).idx.cast::<bgzidx_t>()).ublock_addr += length as u64;
+        }
+        (*job).uncomp_len = length;
+        (*job).block_address = (*mt).block_number as i64;
+        ptr::copy_nonoverlapping(data.cast::<u8>(), (*job).uncomp_data.as_mut_ptr(), length);
+        let worker: super::thread_pool::hts_tpool_worker = if compress_level(fp) == 0 {
+            Some(bgzf_encode_level0_func)
+        } else {
+            Some(bgzf_encode_func)
+        };
+        if bgzf_mt_dispatch(fp, job, worker) != 0 {
+            bgzf_mt_free_job(fp, job);
+            add_errcode(fp, BGZF_ERR_IO);
+            (*mt).errcode = BGZF_ERR_IO as c_int;
+            return -1;
+        }
+        (*mt).block_number += 1;
+        // The writer thread updates (*fp).block_address after each block
+        // is hwritten; do not bump it synchronously here (would race).
+        return length as isize;
+    }
+
     if (*fp).idx_build_otf != 0 {
         bgzf_index_add_block(fp);
         (*(*fp).idx.cast::<bgzidx_t>()).ublock_addr += length as u64;
@@ -3264,6 +3356,15 @@ unsafe fn bgzf_mt_init(
     } else {
         bgzf_c_1598_bgzf_mt_reader
     };
+
+    // The writer thread also calls hts_tpool_process_destroy at exit (to
+    // signal a clean drain). Without bumping the ref_count here, main's
+    // mt_destroy → process_destroy would decrement ref_count to 0 and free
+    // the queue out from under the writer.
+    if flag(fp, 17) {
+        super::thread_pool::hts_tpool_process_ref_incr((*mt).out_queue.cast());
+    }
+
     if libc::pthread_create(
         ptr::addr_of_mut!((*mt).io_task),
         ptr::null(),
@@ -3271,6 +3372,9 @@ unsafe fn bgzf_mt_init(
         fp.cast(),
     ) != 0
     {
+        if flag(fp, 17) {
+            super::thread_pool::hts_tpool_process_ref_decr((*mt).out_queue.cast());
+        }
         (*fp).mt = ptr::null_mut();
         libc::pthread_cond_destroy(ptr::addr_of_mut!((*mt).command_c));
         libc::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).idx_m));
@@ -3870,11 +3974,7 @@ mod tests {
                 }
                 let mut got = 0usize;
                 while got < payload.len() {
-                    let n = bgzf_read(
-                        fp,
-                        tmp.as_mut_ptr().add(got).cast(),
-                        payload.len() - got,
-                    );
+                    let n = bgzf_read(fp, tmp.as_mut_ptr().add(got).cast(), payload.len() - got);
                     assert!(n > 0, "short read in pre-warm");
                     got += n as usize;
                 }
@@ -3884,10 +3984,7 @@ mod tests {
             // Finally: embed_eof sequence (single-thread).
             let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
             assert!(!fp.is_null());
-            assert_eq!(
-                bgzf_write(fp, payload.as_ptr().cast(), half),
-                half as isize,
-            );
+            assert_eq!(bgzf_write(fp, payload.as_ptr().cast(), half), half as isize,);
             assert_eq!(bgzf_close(fp), 0);
             let fp = bgzf_open(path_c.as_ptr(), b"a\0".as_ptr().cast());
             assert!(!fp.is_null());
@@ -3911,7 +4008,11 @@ mod tests {
                 out[pos..pos + n as usize].copy_from_slice(&buf[..n as usize]);
                 pos += n as usize;
             }
-            assert_eq!(pos, payload.len(), "embedded EOF caused short read after repeated MT sequence");
+            assert_eq!(
+                pos,
+                payload.len(),
+                "embedded EOF caused short read after repeated MT sequence"
+            );
             assert_eq!(out, payload);
             assert_eq!(bgzf_close(fp), 0);
         }
@@ -3954,10 +4055,7 @@ mod tests {
             // ===== mimic test_embed_eof(nthreads=0) =====
             let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
             assert!(!fp.is_null());
-            assert_eq!(
-                bgzf_write(fp, payload.as_ptr().cast(), half),
-                half as isize,
-            );
+            assert_eq!(bgzf_write(fp, payload.as_ptr().cast(), half), half as isize,);
             assert_eq!(bgzf_close(fp), 0);
             let fp = bgzf_open(path_c.as_ptr(), b"a\0".as_ptr().cast());
             assert!(!fp.is_null());
@@ -3981,7 +4079,11 @@ mod tests {
                 out[pos..pos + got as usize].copy_from_slice(&buf[..got as usize]);
                 pos += got as usize;
             }
-            assert_eq!(pos, payload.len(), "embedded EOF caused short read after MT sequence");
+            assert_eq!(
+                pos,
+                payload.len(),
+                "embedded EOF caused short read after MT sequence"
+            );
             assert_eq!(out, payload);
             assert_eq!(bgzf_close(fp), 0);
         }
@@ -4038,10 +4140,7 @@ mod tests {
             // ===== mimic test_embed_eof =====
             let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
             assert!(!fp.is_null());
-            assert_eq!(
-                bgzf_write(fp, payload.as_ptr().cast(), half),
-                half as isize,
-            );
+            assert_eq!(bgzf_write(fp, payload.as_ptr().cast(), half), half as isize,);
             assert_eq!(bgzf_close(fp), 0);
             let fp = bgzf_open(path_c.as_ptr(), b"a\0".as_ptr().cast());
             assert!(!fp.is_null());
@@ -4065,7 +4164,11 @@ mod tests {
                 out[pos..pos + got as usize].copy_from_slice(&buf[..got as usize]);
                 pos += got as usize;
             }
-            assert_eq!(pos, payload.len(), "embedded EOF caused short read after sequence");
+            assert_eq!(
+                pos,
+                payload.len(),
+                "embedded EOF caused short read after sequence"
+            );
             assert_eq!(out, payload);
             assert_eq!(bgzf_close(fp), 0);
         }
@@ -4090,10 +4193,7 @@ mod tests {
             // Write first half in "w" mode (terminates with empty EOF block).
             let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
             assert!(!fp.is_null());
-            assert_eq!(
-                bgzf_write(fp, payload.as_ptr().cast(), half),
-                half as isize,
-            );
+            assert_eq!(bgzf_write(fp, payload.as_ptr().cast(), half), half as isize,);
             assert_eq!(bgzf_close(fp), 0);
 
             // Append remainder in "a" mode (writes more blocks then another EOF).
@@ -6264,8 +6364,8 @@ mod tests {
     // mid-write being read by a different thread.
     #[test]
     fn bgzf_zerr_buffer_does_not_corrupt_under_concurrent_zlib_errors() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+        use std::sync::Arc;
         use std::thread;
 
         let stop = Arc::new(AtomicBool::new(false));
@@ -6333,7 +6433,8 @@ mod tests {
         }
         for h in handles {
             // Propagate panics so a corruption observation fails the test.
-            h.join().expect("worker thread panicked — zerr buffer corruption");
+            h.join()
+                .expect("worker thread panicked — zerr buffer corruption");
         }
         stop.store(true, AtomicOrdering::Relaxed);
     }
@@ -6370,8 +6471,7 @@ mod tests {
             let payload = Arc::clone(&payload);
             let path_arc = Arc::clone(&path_arc);
             handles.push(thread::spawn(move || {
-                let path_c =
-                    CString::new(super::super::path_bytes(&*path_arc).as_ref()).unwrap();
+                let path_c = CString::new(super::super::path_bytes(&*path_arc).as_ref()).unwrap();
                 // SAFETY: each thread opens its OWN bgzf fp; there is no
                 // cross-thread sharing of the BGZF pointer or its
                 // internal buffers/index. The path bytes are immutable.
@@ -6450,10 +6550,8 @@ mod tests {
         use std::sync::Arc;
         use std::thread;
 
-        let path = std::env::temp_dir().join(format!(
-            "cellsnp-lite-bgzf-smoke-{}.gz",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("cellsnp-lite-bgzf-smoke-{}.gz", std::process::id()));
         // Spanning a couple of blocks so workers don't all finish in
         // one inflate() call.
         let payload: Vec<u8> = (0..(BGZF_BLOCK_SIZE * 3 + 4321))
@@ -6473,8 +6571,7 @@ mod tests {
             let payload = Arc::clone(&payload);
             let path_arc = Arc::clone(&path_arc);
             handles.push(thread::spawn(move || {
-                let path_c =
-                    CString::new(super::super::path_bytes(&*path_arc).as_ref()).unwrap();
+                let path_c = CString::new(super::super::path_bytes(&*path_arc).as_ref()).unwrap();
                 // SAFETY: each thread owns its bgzf fp; no shared BGZF state.
                 unsafe {
                     let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
@@ -6775,11 +6872,8 @@ mod tests {
                     let mut got = vec![0u8; len];
                     let mut pos = 0usize;
                     while pos < len {
-                        let n = bgzf_read(
-                            fp,
-                            got.as_mut_ptr().add(pos).cast(),
-                            (len - pos).min(4096),
-                        );
+                        let n =
+                            bgzf_read(fp, got.as_mut_ptr().add(pos).cast(), (len - pos).min(4096));
                         assert!(n > 0, "tid {tid}: short read at {pos}");
                         pos += n as usize;
                     }

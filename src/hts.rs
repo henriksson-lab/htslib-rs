@@ -602,25 +602,41 @@ unsafe fn fscan_string(fp: *mut hFILE, d: *mut kstring_t) -> c_int {
                     b't' => e |= (kputc(b'\t' as c_int, d) < 0) as u32,
                     b'u' => {
                         let c1 = super::hfile::htslib_hfile_h_163_hgetc(fp);
-                        let d1 = if c1 != libc::EOF { dehex(c1 as c_char) } else { -1 };
+                        let d1 = if c1 != libc::EOF {
+                            dehex(c1 as c_char)
+                        } else {
+                            -1
+                        };
                         let c2 = if c1 != libc::EOF && d1 >= 0 {
                             super::hfile::htslib_hfile_h_163_hgetc(fp)
                         } else {
                             libc::EOF
                         };
-                        let d2 = if c2 != libc::EOF { dehex(c2 as c_char) } else { -1 };
+                        let d2 = if c2 != libc::EOF {
+                            dehex(c2 as c_char)
+                        } else {
+                            -1
+                        };
                         let c3 = if c2 != libc::EOF && d2 >= 0 {
                             super::hfile::htslib_hfile_h_163_hgetc(fp)
                         } else {
                             libc::EOF
                         };
-                        let d3 = if c3 != libc::EOF { dehex(c3 as c_char) } else { -1 };
+                        let d3 = if c3 != libc::EOF {
+                            dehex(c3 as c_char)
+                        } else {
+                            -1
+                        };
                         let c4 = if c3 != libc::EOF && d3 >= 0 {
                             super::hfile::htslib_hfile_h_163_hgetc(fp)
                         } else {
                             libc::EOF
                         };
-                        let d4 = if c4 != libc::EOF { dehex(c4 as c_char) } else { -1 };
+                        let d4 = if c4 != libc::EOF {
+                            dehex(c4 as c_char)
+                        } else {
+                            -1
+                        };
                         if d1 >= 0 && d2 >= 0 && d3 >= 0 && d4 >= 0 {
                             let mut buf = [0 as c_char; 8];
                             let lim = encode_utf8(
@@ -638,7 +654,11 @@ unsafe fn fscan_string(fp: *mut hFILE, d: *mut kstring_t) -> c_int {
             _ => e |= (kputc(c, d) < 0) as u32,
         }
     }
-    if e == 0 { 0 } else { -1 }
+    if e == 0 {
+        0
+    } else {
+        -1
+    }
 }
 
 pub unsafe fn hts_json_fnext(
@@ -1872,50 +1892,33 @@ pub unsafe fn le_to_u8(buf: *const u8) -> u8 {
 }
 
 pub unsafe fn le_to_u16(buf: *const u8) -> u16 {
-    u16::from_le_bytes([*buf.add(0), *buf.add(1)])
+    u16::from_le(std::ptr::read_unaligned(buf.cast::<u16>()))
 }
 
 pub unsafe fn le_to_u32(buf: *const u8) -> u32 {
-    u32::from_le_bytes([*buf.add(0), *buf.add(1), *buf.add(2), *buf.add(3)])
+    u32::from_le(std::ptr::read_unaligned(buf.cast::<u32>()))
 }
 
 pub unsafe fn le_to_u64(buf: *const u8) -> u64 {
-    u64::from_le_bytes([
-        *buf.add(0),
-        *buf.add(1),
-        *buf.add(2),
-        *buf.add(3),
-        *buf.add(4),
-        *buf.add(5),
-        *buf.add(6),
-        *buf.add(7),
-    ])
+    u64::from_le(std::ptr::read_unaligned(buf.cast::<u64>()))
 }
 
 pub unsafe fn u16_to_le(val: u16, buf: *mut u8) {
-    let bytes = val.to_le_bytes();
-    *buf.add(0) = bytes[0];
-    *buf.add(1) = bytes[1];
+    // C `memcpy(buf, &val_le, sizeof val_le)` — a single unaligned store.
+    // The byte-by-byte form below is what we used to write, but LLVM didn't
+    // always fold those 2/4/8 stores into one when the function was crossed
+    // from another translation unit. bcf_enc_vint emits these per integer
+    // value (millions of calls per multi-sample VCF), so the store-coalesce
+    // matters.
+    std::ptr::write_unaligned(buf.cast::<u16>(), val.to_le());
 }
 
 pub unsafe fn u32_to_le(val: u32, buf: *mut u8) {
-    let bytes = val.to_le_bytes();
-    *buf.add(0) = bytes[0];
-    *buf.add(1) = bytes[1];
-    *buf.add(2) = bytes[2];
-    *buf.add(3) = bytes[3];
+    std::ptr::write_unaligned(buf.cast::<u32>(), val.to_le());
 }
 
 pub unsafe fn u64_to_le(val: u64, buf: *mut u8) {
-    let bytes = val.to_le_bytes();
-    *buf.add(0) = bytes[0];
-    *buf.add(1) = bytes[1];
-    *buf.add(2) = bytes[2];
-    *buf.add(3) = bytes[3];
-    *buf.add(4) = bytes[4];
-    *buf.add(5) = bytes[5];
-    *buf.add(6) = bytes[6];
-    *buf.add(7) = bytes[7];
+    std::ptr::write_unaligned(buf.cast::<u64>(), val.to_le());
 }
 
 pub unsafe fn le_to_i8(buf: *const u8) -> i8 {
@@ -2516,12 +2519,10 @@ pub fn __ac_Wang_hash(mut key: u32) -> u32 {
     key
 }
 
-pub use crate::htslib_rs::kstring::{
-    fgets_wrapper, kfgetline, kgetline, kgetline2, kstrtok,
-};
+pub use crate::htslib_rs::kstring::{fgets_wrapper, kfgetline, kgetline, kgetline2, kstrtok};
 
 pub use crate::htslib_rs::kstring::{
-    boyer_moore, fast_exp, karp_rabin, ksBM_prep, kmemmem, kstrnstr, kstrstr,
+    boyer_moore, fast_exp, karp_rabin, kmemmem, ksBM_prep, kstrnstr, kstrstr,
 };
 
 pub unsafe fn kinsert_char(c: c_char, pos: size_t, s: *mut kstring_t) -> c_int {
@@ -2579,9 +2580,8 @@ pub unsafe fn ws(mut str_: *mut c_char) -> *mut c_char {
 
 pub use crate::htslib_rs::hts_expr::{
     and_expr, bitand_expr, bitor_expr, bitxor_expr, cmp_expr, eq_expr, expression, func_expr,
-    hts_expr_c_849_hts_filter_init, hts_expr_c_863_hts_filter_free,
-    hts_expr_c_903_hts_filter_eval, hts_expr_c_920_hts_filter_eval2, hts_filter_eval_, mul_expr,
-    simple_expr, unary_expr,
+    hts_expr_c_849_hts_filter_init, hts_expr_c_863_hts_filter_free, hts_expr_c_903_hts_filter_eval,
+    hts_expr_c_920_hts_filter_eval2, hts_filter_eval_, mul_expr, simple_expr, unary_expr,
 };
 
 pub use crate::htslib_rs::kstring::kputd;
@@ -3926,12 +3926,8 @@ pub unsafe fn hts_set_opt_int(fp: *mut htsFile, opt: hts_fmt_option, val: c_int)
 
 pub unsafe fn hts_set_opt_ptr(fp: *mut htsFile, opt: hts_fmt_option, val: *mut c_void) -> c_int {
     match opt {
-        x if x == HTS_OPT_THREAD_POOL => {
-            hts_set_thread_pool(fp, val.cast::<htsThreadPool>())
-        }
-        x if x == CRAM_OPT_REFERENCE => {
-            hts_set_fai_filename(fp, val.cast::<c_char>())
-        }
+        x if x == HTS_OPT_THREAD_POOL => hts_set_thread_pool(fp, val.cast::<htsThreadPool>()),
+        x if x == CRAM_OPT_REFERENCE => hts_set_fai_filename(fp, val.cast::<c_char>()),
         x if x == HTS_OPT_FILTER => hts_set_filter_expression(fp, val.cast::<c_char>()),
         x if x == crate::htslib_rs::sam::FASTQ_OPT_AUX as hts_fmt_option
             || x == crate::htslib_rs::sam::FASTQ_OPT_BARCODE as hts_fmt_option
@@ -4462,10 +4458,8 @@ pub unsafe fn hts_c_2065_hts_readlist(
                 } else {
                     std::ffi::CStr::from_ptr(string).to_string_lossy()
                 };
-                let msg = std::ffi::CString::new(format!(
-                    "'{s}' appears to be encoded as UTF-16"
-                ))
-                .unwrap_or_default();
+                let msg = std::ffi::CString::new(format!("'{s}' appears to be encoded as UTF-16"))
+                    .unwrap_or_default();
                 hts_log_cstr(HTS_LOG_WARNING, c"hts_readlist".as_ptr(), msg.as_ptr());
             }
             if hts_resize_array_(
@@ -4594,10 +4588,8 @@ pub unsafe fn hts_c_2130_hts_readlines(fn_: *const c_char, n_out: *mut c_int) ->
                 } else {
                     std::ffi::CStr::from_ptr(fn_).to_string_lossy()
                 };
-                let msg = std::ffi::CString::new(format!(
-                    "'{s}' appears to be encoded as UTF-16"
-                ))
-                .unwrap_or_default();
+                let msg = std::ffi::CString::new(format!("'{s}' appears to be encoded as UTF-16"))
+                    .unwrap_or_default();
                 hts_log_cstr(HTS_LOG_WARNING, c"hts_readlines".as_ptr(), msg.as_ptr());
             }
             if hts_resize_array_(
@@ -4812,8 +4804,8 @@ pub unsafe fn hts_close(fp: *mut htsFile) -> c_int {
             if ((*fp).bitfields & (1 << 1)) == 0 {
                 let _ = crate::htslib_rs::cram::cram_eof((*fp).fp.cram);
             }
-            let ret = crate::htslib_rs::cram::cram_close((*fp).fp.cram)
-                | hts_idx_close_otf_fp((*fp).idx);
+            let ret =
+                crate::htslib_rs::cram::cram_close((*fp).fp.cram) | hts_idx_close_otf_fp((*fp).idx);
             super::sam::sam_hdr_destroy((*fp).bam_header.cast());
             hts_idx_destroy((*fp).idx);
             crate::htslib_rs::c_compat::free((*fp).fn_.cast());
@@ -9891,10 +9883,7 @@ mod tests {
             assert_eq!(hts_c_2748_need_idx_ugly_delay_hack(&idx), 0);
 
             idx.fmt = HTS_FMT_TBI as c_int;
-            assert_eq!(
-                hts_c_2714_hts_idx_fmt(&mut idx),
-                HTS_FMT_TBI as c_int
-            );
+            assert_eq!(hts_c_2714_hts_idx_fmt(&mut idx), HTS_FMT_TBI as c_int);
 
             let meta_len = 28u32;
             idx.meta = c_compat::calloc(1, meta_len as u64).cast::<u8>();
@@ -11564,10 +11553,7 @@ mod tests {
                 hts_c_1021_hts_opt_add(&mut opts, c"reference=ref.fa".as_ptr()),
                 0
             );
-            assert_eq!(
-                (*(*opts).next).opt,
-                CRAM_OPT_REFERENCE
-            );
+            assert_eq!((*(*opts).next).opt, CRAM_OPT_REFERENCE);
             assert_eq!(CStr::from_ptr((*(*opts).next).val.s).to_bytes(), b"ref.fa");
 
             let mut apply_fp: htsFile = std::mem::zeroed();
@@ -11582,10 +11568,7 @@ mod tests {
                 hts_c_1021_hts_opt_add(&mut uppercase_opts, c"CACHE_SIZE=2K".as_ptr()),
                 0
             );
-            assert_eq!(
-                (*uppercase_opts).opt,
-                HTS_OPT_CACHE_SIZE
-            );
+            assert_eq!((*uppercase_opts).opt, HTS_OPT_CACHE_SIZE);
             assert_eq!((*uppercase_opts).val.i, 2048);
             hts_c_1279_hts_opt_free(uppercase_opts);
 
@@ -11613,10 +11596,7 @@ mod tests {
             assert_eq!(parsed.compression, HTS_COMPRESSION_BGZF);
             assert!(!parsed.specific.is_null());
             let parsed_opt = parsed.specific.cast::<hts_opt>();
-            assert_eq!(
-                (*parsed_opt).opt,
-                HTS_OPT_COMPRESSION_LEVEL
-            );
+            assert_eq!((*parsed_opt).opt, HTS_OPT_COMPRESSION_LEVEL);
             assert_eq!((*parsed_opt).val.i, 7);
             assert_eq!(
                 (*(*parsed_opt).next).opt,

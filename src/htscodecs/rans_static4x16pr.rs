@@ -8,7 +8,13 @@
 //! `*mut u8` + capacity and operate on it directly, exactly mirroring the C
 //! pointer arithmetic.  The public wrappers return an owned `Vec<u8>` holding
 //! the produced bytes (or an empty `Vec` on failure).
-#![allow(non_snake_case, non_camel_case_types, unused_variables, dead_code, clippy::too_many_arguments)]
+#![allow(
+    non_snake_case,
+    non_camel_case_types,
+    unused_variables,
+    dead_code,
+    clippy::too_many_arguments
+)]
 
 use crate::c_compat;
 use crate::htscodecs::pack::{hts_pack, hts_unpack, hts_unpack_meta};
@@ -25,7 +31,9 @@ use crate::htscodecs::rans_word::{
     RANS_BYTE_L,
 };
 use crate::htscodecs::rle::{hts_rle_decode, hts_rle_encode};
-use crate::htscodecs::utils::{fast_log, hist8, htscodecs_tls_alloc, htscodecs_tls_free, unstripe, MAGIC};
+use crate::htscodecs::utils::{
+    fast_log, hist8, htscodecs_tls_alloc, htscodecs_tls_free, unstripe, MAGIC,
+};
 use crate::htscodecs::varint::{var_get_u32, var_put_u32};
 
 // rANS_static4x16.h: "Order" byte options (stored in the file format)
@@ -69,10 +77,22 @@ pub fn rans_compress_bound_4x16(size: u32, order: i32) -> u32 {
     } else {
         (1.05 * size as f64) as u32 + 257 * 257 * 3 + 4 + 257 * 3 + 4
     }) + (if (order & RANS_ORDER_PACK) != 0 { 1 } else { 0 })
-        + (if (order & RANS_ORDER_RLE) != 0 { 1 + 257 * 3 + 4 } else { 0 })
+        + (if (order & RANS_ORDER_RLE) != 0 {
+            1 + 257 * 3 + 4
+        } else {
+            0
+        })
         + 20
-        + (if (order & RANS_ORDER_X32) != 0 { (32 - 4) * 4 } else { 0 })
-        + (if (order & RANS_ORDER_STRIPE) != 0 { 7 + 5 * n as u32 } else { 0 });
+        + (if (order & RANS_ORDER_X32) != 0 {
+            (32 - 4) * 4
+        } else {
+            0
+        })
+        + (if (order & RANS_ORDER_STRIPE) != 0 {
+            7 + 5 * n as u32
+        } else {
+            0
+        });
     sz + (sz & 1) + 2
 }
 
@@ -119,7 +139,12 @@ pub fn rans_compress_O0_4x16(input: &[u8], out: Option<&mut [u8]>, out_size: &mu
 
 // Core O0 encoder operating on a raw output buffer of capacity `out_cap` (the
 // already-decremented bound). Mirrors the C body after the malloc decision.
-fn rans_compress_O0_4x16_into(input: &[u8], out: *mut u8, mut bound: u32, out_size: &mut u32) -> *mut u8 {
+fn rans_compress_O0_4x16_into(
+    input: &[u8],
+    out: *mut u8,
+    mut bound: u32,
+    out_size: &mut u32,
+) -> *mut u8 {
     let in_size = input.len() as u32;
     let out_slice = unsafe { std::slice::from_raw_parts_mut(out, bound as usize) };
 
@@ -187,16 +212,46 @@ fn rans_compress_O0_4x16_into(input: &[u8], out: *mut u8, mut bound: u32, out_si
     let i = (in_size & 3) as i32;
     match i {
         3 => {
-            RansEncPutSymbol(&mut rans2, out_slice, &mut ptr, &syms[input[isz - (i as usize - 2)] as usize]);
-            RansEncPutSymbol(&mut rans1, out_slice, &mut ptr, &syms[input[isz - (i as usize - 1)] as usize]);
-            RansEncPutSymbol(&mut rans0, out_slice, &mut ptr, &syms[input[isz - (i as usize)] as usize]);
+            RansEncPutSymbol(
+                &mut rans2,
+                out_slice,
+                &mut ptr,
+                &syms[input[isz - (i as usize - 2)] as usize],
+            );
+            RansEncPutSymbol(
+                &mut rans1,
+                out_slice,
+                &mut ptr,
+                &syms[input[isz - (i as usize - 1)] as usize],
+            );
+            RansEncPutSymbol(
+                &mut rans0,
+                out_slice,
+                &mut ptr,
+                &syms[input[isz - (i as usize)] as usize],
+            );
         }
         2 => {
-            RansEncPutSymbol(&mut rans1, out_slice, &mut ptr, &syms[input[isz - (i as usize - 1)] as usize]);
-            RansEncPutSymbol(&mut rans0, out_slice, &mut ptr, &syms[input[isz - (i as usize)] as usize]);
+            RansEncPutSymbol(
+                &mut rans1,
+                out_slice,
+                &mut ptr,
+                &syms[input[isz - (i as usize - 1)] as usize],
+            );
+            RansEncPutSymbol(
+                &mut rans0,
+                out_slice,
+                &mut ptr,
+                &syms[input[isz - (i as usize)] as usize],
+            );
         }
         1 => {
-            RansEncPutSymbol(&mut rans0, out_slice, &mut ptr, &syms[input[isz - (i as usize)] as usize]);
+            RansEncPutSymbol(
+                &mut rans0,
+                out_slice,
+                &mut ptr,
+                &syms[input[isz - (i as usize)] as usize],
+            );
         }
         _ => {}
     }
@@ -226,7 +281,12 @@ fn rans_compress_O0_4x16_into(input: &[u8], out: *mut u8, mut bound: u32, out_si
 }
 
 // Wrapper matching RansEncFn signature.
-fn rans_compress_O0_4x16_fn(input: &[u8], out: *mut u8, out_cap: u32, out_size: &mut u32) -> *mut u8 {
+fn rans_compress_O0_4x16_fn(
+    input: &[u8],
+    out: *mut u8,
+    out_cap: u32,
+    out_size: &mut u32,
+) -> *mut u8 {
     let bound = rans_compress_bound_4x16(input.len() as u32, 0) - 20;
     if bound > out_cap {
         return std::ptr::null_mut();
@@ -271,6 +331,20 @@ fn rans_uncompress_O0_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     if out_sz >= i32::MAX as u32 {
         return std::ptr::null_mut();
     }
+
+    // C rANS_static4x16pr.c:235 — `if (!out) out = malloc(out_sz);`. Callers
+    // such as the inline pack-metadata decode at rans_static4x16pr.rs:1464 pass
+    // NULL here; without the malloc, from_raw_parts_mut below is UB on a null
+    // pointer and we read zeros (corrupting CRAM output without erroring).
+    let out = if out.is_null() {
+        let p = unsafe { c_compat::malloc(out_sz.max(1) as u64) } as *mut u8;
+        if p.is_null() {
+            return std::ptr::null_mut();
+        }
+        p
+    } else {
+        out
+    };
 
     let cp_end = (in_size - 8) as usize; // within 8 => be extra safe
     let mut cp = 0usize;
@@ -463,7 +537,12 @@ pub fn rans_compress_O1_4x16(input: &[u8], out: Option<&mut [u8]>, out_size: &mu
     }
 }
 
-fn rans_compress_O1_4x16_into(input: &[u8], out: *mut u8, mut bound: u32, out_size: &mut u32) -> *mut u8 {
+fn rans_compress_O1_4x16_into(
+    input: &[u8],
+    out: *mut u8,
+    mut bound: u32,
+    out_size: &mut u32,
+) -> *mut u8 {
     let in_size = input.len() as u32;
     let out_slice = unsafe { std::slice::from_raw_parts_mut(out, bound as usize) };
 
@@ -517,7 +596,12 @@ fn rans_compress_O1_4x16_into(input: &[u8], out: *mut u8, mut bound: u32, out_si
     let mut i3: i32 = in_size as i32 - 2;
     while i3 > 4 * isz4 - 2 {
         let c3 = input[i3 as usize];
-        RansEncPutSymbol(&mut rans3, out_slice, &mut ptr, &syms[c3 as usize][l3 as usize]);
+        RansEncPutSymbol(
+            &mut rans3,
+            out_slice,
+            &mut ptr,
+            &syms[c3 as usize][l3 as usize],
+        );
         l3 = c3;
         i3 -= 1;
     }
@@ -564,7 +648,12 @@ fn rans_compress_O1_4x16_into(input: &[u8], out: *mut u8, mut bound: u32, out_si
     out
 }
 
-fn rans_compress_O1_4x16_fn(input: &[u8], out: *mut u8, out_cap: u32, out_size: &mut u32) -> *mut u8 {
+fn rans_compress_O1_4x16_fn(
+    input: &[u8],
+    out: *mut u8,
+    out_cap: u32,
+    out_size: &mut u32,
+) -> *mut u8 {
     let bound = rans_compress_bound_4x16(input.len() as u32, 1) - 20;
     if bound > out_cap {
         return std::ptr::null_mut();
@@ -606,6 +695,17 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     if in_size < 16 {
         return std::ptr::null_mut();
     }
+    // C rANS_static4x16pr.c (O1 path mirrors the O0 fix) — handle the
+    // null-out callers (rans_static4x16pr.rs:1464) by allocating here.
+    let out = if out.is_null() {
+        let p = unsafe { c_compat::malloc(out_sz.max(1) as u64) } as *mut u8;
+        if p.is_null() {
+            return std::ptr::null_mut();
+        }
+        p
+    } else {
+        out
+    };
     if out_sz >= i32::MAX as u32 {
         return std::ptr::null_mut();
     }
@@ -626,13 +726,16 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     let s3_base = sfb_ptr as *mut u32;
 
     // fb = tls_alloc(256 * sizeof(*fb))  (fb_t[256][256])
-    let fb_ptr = htscodecs_tls_alloc(256 * 256 * core::mem::size_of::<crate::htscodecs::rans_static16_int::fb_t>());
+    let fb_ptr = htscodecs_tls_alloc(
+        256 * 256 * core::mem::size_of::<crate::htscodecs::rans_static16_int::fb_t>(),
+    );
     if fb_ptr.is_null() {
         htscodecs_tls_free(sfb_ptr);
         return std::ptr::null_mut();
     }
     use crate::htscodecs::rans_static16_int::fb_t;
-    let fb: &mut [[fb_t; 256]] = unsafe { core::slice::from_raw_parts_mut(fb_ptr as *mut [fb_t; 256], 256) };
+    let fb: &mut [[fb_t; 256]] =
+        unsafe { core::slice::from_raw_parts_mut(fb_ptr as *mut [fb_t; 256], 256) };
 
     // sfb[256]: offsets into sfb_base
     let shift_hdr = (input[cp] >> 4) as u32;
@@ -807,7 +910,12 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                 }
             } else {
                 for q in 0..4 {
-                    crate::htscodecs::rans_word::RansDecRenormSafe(&mut r[q], input, &mut ptr, ptr_end + 8);
+                    crate::htscodecs::rans_word::RansDecRenormSafe(
+                        &mut r[q],
+                        input,
+                        &mut ptr,
+                        ptr_end + 8,
+                    );
                 }
             }
             for q in 0..4 {
@@ -853,7 +961,12 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                 }
             } else {
                 for q in 0..4 {
-                    crate::htscodecs::rans_word::RansDecRenormSafe(&mut r[q], input, &mut ptr, ptr_end + 8);
+                    crate::htscodecs::rans_word::RansDecRenormSafe(
+                        &mut r[q],
+                        input,
+                        &mut ptr,
+                        ptr_end + 8,
+                    );
                 }
             }
             for q in 0..4 {
@@ -905,7 +1018,12 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                 }
             } else {
                 for q in 0..4 {
-                    crate::htscodecs::rans_word::RansDecRenormSafe(&mut r[q], input, &mut ptr, ptr_end + 8);
+                    crate::htscodecs::rans_word::RansDecRenormSafe(
+                        &mut r[q],
+                        input,
+                        &mut ptr,
+                        ptr_end + 8,
+                    );
                 }
             }
             for q in 0..4 {
@@ -968,10 +1086,20 @@ pub fn rans_dec_func(do_simd: i32, order: i32) -> RansDecFn {
 }
 
 // Thin wrappers giving the 32x16 scalar entry points the RansEncFn/RansDecFn ABI.
-fn rans_compress_O0_32x16_fn(input: &[u8], out: *mut u8, out_cap: u32, out_size: &mut u32) -> *mut u8 {
+fn rans_compress_O0_32x16_fn(
+    input: &[u8],
+    out: *mut u8,
+    out_cap: u32,
+    out_size: &mut u32,
+) -> *mut u8 {
     rans_compress_O0_32x16(input, out, out_cap, out_size)
 }
-fn rans_compress_O1_32x16_fn(input: &[u8], out: *mut u8, out_cap: u32, out_size: &mut u32) -> *mut u8 {
+fn rans_compress_O1_32x16_fn(
+    input: &[u8],
+    out: *mut u8,
+    out_cap: u32,
+    out_size: &mut u32,
+) -> *mut u8 {
     rans_compress_O1_32x16(input, out, out_cap, out_size)
 }
 fn rans_uncompress_O0_32x16_fn(input: &[u8], out: *mut u8, out_sz: u32) -> *mut u8 {
@@ -985,7 +1113,13 @@ fn rans_uncompress_O1_32x16_fn(input: &[u8], out: *mut u8, out_sz: u32) -> *mut 
 /// `unsigned char *rans_compress_to_4x16(...)`
 /// Writes into `out` (caller-provided, capacity `*out_size`) or mallocs. Returns
 /// the produced bytes as an owned Vec (empty Vec on failure).
-fn rans_compress_to_4x16_into(input: &[u8], out: *mut u8, out_cap: u32, out_size: &mut u32, mut order: i32) -> *mut u8 {
+fn rans_compress_to_4x16_into(
+    input: &[u8],
+    out: *mut u8,
+    out_cap: u32,
+    out_size: &mut u32,
+    mut order: i32,
+) -> *mut u8 {
     let in_ptr = input.as_ptr();
     let mut in_size = input.len() as u32;
 
@@ -1054,7 +1188,13 @@ fn rans_compress_to_4x16_into(input: &[u8], out: *mut u8, out_cap: u32, out_size
         }
         let mut pmeta_len = 0i32;
         let mut packed_len = 0u64;
-        let packed = hts_pack(&cur, in_size as i64, &mut out_slice[c_meta_len..], &mut pmeta_len, &mut packed_len);
+        let packed = hts_pack(
+            &cur,
+            in_size as i64,
+            &mut out_slice[c_meta_len..],
+            &mut pmeta_len,
+            &mut packed_len,
+        );
         match packed {
             None => {
                 out_slice[0] &= !(RANS_ORDER_PACK as u8);
@@ -1070,7 +1210,11 @@ fn rans_compress_to_4x16_into(input: &[u8], out: *mut u8, out_cap: u32, out_size
                 packed_owned = Some(cur.clone());
                 in_size = packed_len as u32;
                 c_meta_len += pmeta_len as usize;
-                let sz = var_put_u32(&mut out_slice[c_meta_len..], Some(out_end - c_meta_len), in_size);
+                let sz = var_put_u32(
+                    &mut out_slice[c_meta_len..],
+                    Some(out_end - c_meta_len),
+                    in_size,
+                );
                 c_meta_len += sz as usize;
                 out_avail -= sz as u32;
                 if do_simd != 0 && in_size < 32 {
@@ -1090,7 +1234,16 @@ fn rans_compress_to_4x16_into(input: &[u8], out: *mut u8, out_cap: u32, out_size
         let mut rle_nsyms = 0i32;
         let mut rmeta_len64 = 0u64;
         let mut rle_len = 0u64;
-        let rle_res = hts_rle_encode(&cur, in_size as u64, &mut meta, &mut rmeta_len64, &mut rle_syms, &mut rle_nsyms, None, &mut rle_len);
+        let rle_res = hts_rle_encode(
+            &cur,
+            in_size as u64,
+            &mut meta,
+            &mut rmeta_len64,
+            &mut rle_syms,
+            &mut rle_nsyms,
+            None,
+            &mut rle_len,
+        );
         // memmove(meta+1+rle_nsyms, meta, rmeta_len64); meta[0]=nsyms; memcpy(meta+1,syms,nsyms)
         meta.copy_within(0..rmeta_len64 as usize, 1 + rle_nsyms as usize);
         meta[0] = rle_nsyms as u8;
@@ -1108,8 +1261,16 @@ fn rans_compress_to_4x16_into(input: &[u8], out: *mut u8, out_cap: u32, out_size
         } else {
             let rle = rle_res.unwrap();
             // Compress lengths
-            let mut sz = var_put_u32(&mut out_slice[c_meta_len..], Some(out_end - c_meta_len), (rmeta_len * 2) as u32);
-            sz += var_put_u32(&mut out_slice[c_meta_len + sz as usize..], Some(out_end - (c_meta_len + sz as usize)), rle_len as u32);
+            let mut sz = var_put_u32(
+                &mut out_slice[c_meta_len..],
+                Some(out_end - c_meta_len),
+                (rmeta_len * 2) as u32,
+            );
+            sz += var_put_u32(
+                &mut out_slice[c_meta_len + sz as usize..],
+                Some(out_end - (c_meta_len + sz as usize)),
+                rle_len as u32,
+            );
             if c_meta_len + sz as usize + 5 > out_total {
                 *out_size = 0;
                 return std::ptr::null_mut();
@@ -1120,23 +1281,38 @@ fn rans_compress_to_4x16_into(input: &[u8], out: *mut u8, out_cap: u32, out_size
                 out_slice[0] &= !(RANS_ORDER_X32 as u8);
             }
             let dst = unsafe { out.add(c_meta_len + sz as usize + 5) };
-            let r = rans_enc_func(do_simd, 0)(&meta[..rmeta_len], dst, c_rmeta_len, &mut c_rmeta_len);
+            let r =
+                rans_enc_func(do_simd, 0)(&meta[..rmeta_len], dst, c_rmeta_len, &mut c_rmeta_len);
             if r.is_null() {
                 *out_size = 0;
                 return std::ptr::null_mut();
             }
             let sz2;
             if c_rmeta_len < rmeta_len as u32 {
-                sz2 = var_put_u32(&mut out_slice[c_meta_len + sz as usize..], Some(out_end - (c_meta_len + sz as usize)), c_rmeta_len);
+                sz2 = var_put_u32(
+                    &mut out_slice[c_meta_len + sz as usize..],
+                    Some(out_end - (c_meta_len + sz as usize)),
+                    c_rmeta_len,
+                );
                 out_slice.copy_within(
-                    c_meta_len + sz as usize + 5..c_meta_len + sz as usize + 5 + c_rmeta_len as usize,
+                    c_meta_len + sz as usize + 5
+                        ..c_meta_len + sz as usize + 5 + c_rmeta_len as usize,
                     c_meta_len + sz as usize + sz2 as usize,
                 );
             } else {
                 // Uncompressed RLE meta-data as too small
-                sz = var_put_u32(&mut out_slice[c_meta_len..], Some(out_end - c_meta_len), (rmeta_len * 2 + 1) as u32);
-                sz2 = var_put_u32(&mut out_slice[c_meta_len + sz as usize..], Some(out_end - (c_meta_len + sz as usize)), rle_len as u32);
-                out_slice[c_meta_len + sz as usize + sz2 as usize..c_meta_len + sz as usize + sz2 as usize + rmeta_len]
+                sz = var_put_u32(
+                    &mut out_slice[c_meta_len..],
+                    Some(out_end - c_meta_len),
+                    (rmeta_len * 2 + 1) as u32,
+                );
+                sz2 = var_put_u32(
+                    &mut out_slice[c_meta_len + sz as usize..],
+                    Some(out_end - (c_meta_len + sz as usize)),
+                    rle_len as u32,
+                );
+                out_slice[c_meta_len + sz as usize + sz2 as usize
+                    ..c_meta_len + sz as usize + sz2 as usize + rmeta_len]
                     .copy_from_slice(&meta[..rmeta_len]);
                 c_rmeta_len = rmeta_len as u32;
             }
@@ -1181,7 +1357,8 @@ fn rans_compress_to_4x16_into(input: &[u8], out: *mut u8, out_cap: u32, out_size
             return std::ptr::null_mut();
         }
         if in_size != 0 {
-            out_slice[c_meta_len..c_meta_len + in_size as usize].copy_from_slice(&cur[..in_size as usize]);
+            out_slice[c_meta_len..c_meta_len + in_size as usize]
+                .copy_from_slice(&cur[..in_size as usize]);
         }
         data_size = in_size;
     }
@@ -1195,7 +1372,13 @@ fn rans_compress_to_4x16_into(input: &[u8], out: *mut u8, out_cap: u32, out_size
 const X_32_LOCAL: i32 = RANS_ORDER_X32;
 
 // STRIPE compressor (rANS_static4x16pr.c:1245-1372).
-fn rans_compress_stripe(input: &[u8], out: *mut u8, out_total: usize, out_size: &mut u32, order: i32) -> *mut u8 {
+fn rans_compress_stripe(
+    input: &[u8],
+    out: *mut u8,
+    out_total: usize,
+    out_size: &mut u32,
+    order: i32,
+) -> *mut u8 {
     let in_size = input.len() as u32;
     let mut n = ((order >> 8) & 0xff) as u32;
     if n == 0 {
@@ -1214,7 +1397,11 @@ fn rans_compress_stripe(input: &[u8], out: *mut u8, out_total: usize, out_size: 
     let mut idx = [0u32; 256];
     for i in 0..n {
         part_len[i] = in_size / n as u32 + (((in_size % n as u32) as usize > i) as u32);
-        idx[i] = if i != 0 { idx[i - 1] + part_len[i - 1] } else { 0 };
+        idx[i] = if i != 0 {
+            idx[i - 1] + part_len[i - 1]
+        } else {
+            0
+        };
     }
 
     const KN: usize = 8;
@@ -1250,7 +1437,11 @@ fn rans_compress_stripe(input: &[u8], out: *mut u8, out_total: usize, out_size: 
 
     let mut c_meta_len = 1usize;
     out_slice[0] = (order & !RANS_ORDER_NOSZ) as u8;
-    c_meta_len += var_put_u32(&mut out_slice[c_meta_len..], Some(out_end - c_meta_len), in_size) as usize;
+    c_meta_len += var_put_u32(
+        &mut out_slice[c_meta_len..],
+        Some(out_end - c_meta_len),
+        in_size,
+    ) as usize;
     if c_meta_len >= out_total {
         *out_size = 0;
         return std::ptr::null_mut();
@@ -1291,7 +1482,8 @@ fn rans_compress_stripe(input: &[u8], out: *mut u8, out_total: usize, out_size: 
             );
             if !r.is_null() && olen2 != 0 && best_sz > olen2 as i32 {
                 best_sz = olen2 as i32;
-                best_buf = unsafe { std::slice::from_raw_parts(out.add(out2), olen2 as usize).to_vec() };
+                best_buf =
+                    unsafe { std::slice::from_raw_parts(out.add(out2), olen2 as usize).to_vec() };
             }
         }
         if best_sz == i32::MAX {
@@ -1302,7 +1494,11 @@ fn rans_compress_stripe(input: &[u8], out: *mut u8, out_total: usize, out_size: 
         out_slice[out2..out2 + best_sz as usize].copy_from_slice(&best_buf);
         let olen2 = best_sz as usize;
         out2 += olen2;
-        c_meta_len += var_put_u32(&mut out_slice[c_meta_len..], Some(out_end - c_meta_len), olen2 as u32) as usize;
+        c_meta_len += var_put_u32(
+            &mut out_slice[c_meta_len..],
+            Some(out_end - c_meta_len),
+            olen2 as u32,
+        ) as usize;
     }
 
     out_slice.copy_within(out2_start..out2, c_meta_len);
@@ -1336,7 +1532,12 @@ pub fn rans_compress_4x16(input: &[u8], out_size: &mut u32, order: i32) -> Vec<u
 
 // rANS_static4x16pr.c:1586
 /// `unsigned char *rans_uncompress_to_4x16(...)`
-fn rans_uncompress_to_4x16_into(input: &[u8], out: *mut u8, out_cap_in: Option<u32>, out_size: &mut u32) -> *mut u8 {
+fn rans_uncompress_to_4x16_into(
+    input: &[u8],
+    out: *mut u8,
+    out_cap_in: Option<u32>,
+    out_size: &mut u32,
+) -> *mut u8 {
     let in_end = input.len(); // offset of in+in_size
     let mut in_off = 0usize;
     let mut in_size = input.len() as u32;
@@ -1404,7 +1605,11 @@ fn rans_uncompress_to_4x16_into(input: &[u8], out: *mut u8, out_cap_in: Option<u
 
     // tmp buffer of same size as output
     let need_tmp = do_pack != 0 || do_rle != 0;
-    let tmp_buf: Option<Vec<u8>> = if need_tmp { Some(vec![0u8; *out_size as usize]) } else { None };
+    let tmp_buf: Option<Vec<u8>> = if need_tmp {
+        Some(vec![0u8; *out_size as usize])
+    } else {
+        None
+    };
 
     // We model tmp1/tmp2/tmp3 as separate owned buffers, then copy the final to
     // `out_ptr`. (The C reuses out/tmp in place; the byte result is identical.)
@@ -1415,7 +1620,13 @@ fn rans_uncompress_to_4x16_into(input: &[u8], out: *mut u8, out_cap_in: Option<u
     let mut npacked_sym = 0i32;
     let mut unpacked_sz = 0u64;
     if do_pack != 0 {
-        let c_meta_size = hts_unpack_meta(&input[in_off..], in_size, *out_size as u64, &mut map, &mut npacked_sym);
+        let c_meta_size = hts_unpack_meta(
+            &input[in_off..],
+            in_size,
+            *out_size as u64,
+            &mut map,
+            &mut npacked_sym,
+        );
         if c_meta_size == 0 {
             cleanup_out(out_ptr);
             return std::ptr::null_mut();
@@ -1443,7 +1654,11 @@ fn rans_uncompress_to_4x16_into(input: &[u8], out: *mut u8, out_cap_in: Option<u
         let mut um = 0u32;
         let mut rle_len = 0u32;
         let mut sz = var_get_u32(&input[in_off..], Some(in_end - in_off), &mut um);
-        sz += var_get_u32(&input[in_off + sz as usize..], Some(in_end - (in_off + sz as usize)), &mut rle_len);
+        sz += var_get_u32(
+            &input[in_off + sz as usize..],
+            Some(in_end - (in_off + sz as usize)),
+            &mut rle_len,
+        );
         u_meta_size = um;
         if rle_len > tmp1_size {
             cleanup_out(out_ptr);
@@ -1454,14 +1669,26 @@ fn rans_uncompress_to_4x16_into(input: &[u8], out: *mut u8, out_cap_in: Option<u
             meta_off = in_off + sz as usize;
             meta_from_input = true;
             let avail = in_end - meta_off;
-            u_meta_size = if (u_meta_size / 2) as usize > avail { avail as u32 } else { u_meta_size / 2 };
+            u_meta_size = if (u_meta_size / 2) as usize > avail {
+                avail as u32
+            } else {
+                u_meta_size / 2
+            };
             c_meta_size = u_meta_size;
         } else {
             let mut cms = 0u32;
-            sz += var_get_u32(&input[in_off + sz as usize..], Some(in_end - (in_off + sz as usize)), &mut cms);
+            sz += var_get_u32(
+                &input[in_off + sz as usize..],
+                Some(in_end - (in_off + sz as usize)),
+                &mut cms,
+            );
             c_meta_size = cms;
             u_meta_size /= 2;
-            let v = rans_dec_func(do_simd, 0)(&input[in_off + sz as usize..in_off + in_size as usize], std::ptr::null_mut(), u_meta_size);
+            let v = rans_dec_func(do_simd, 0)(
+                &input[in_off + sz as usize..in_off + in_size as usize],
+                std::ptr::null_mut(),
+                u_meta_size,
+            );
             if v.is_null() {
                 cleanup_out(out_ptr);
                 return std::ptr::null_mut();
@@ -1490,7 +1717,11 @@ fn rans_uncompress_to_4x16_into(input: &[u8], out: *mut u8, out_cap_in: Option<u
             }
             tmp1[..tmp1_size as usize].copy_from_slice(&input[in_off..in_off + tmp1_size as usize]);
         } else {
-            let v = rans_dec_func(do_simd, order)(&input[in_off..in_off + in_size as usize], tmp1.as_mut_ptr(), tmp1_size);
+            let v = rans_dec_func(do_simd, order)(
+                &input[in_off..in_off + in_size as usize],
+                tmp1.as_mut_ptr(),
+                tmp1_size,
+            );
             if v.is_null() {
                 cleanup_out(out_ptr);
                 return std::ptr::null_mut();
@@ -1510,7 +1741,11 @@ fn rans_uncompress_to_4x16_into(input: &[u8], out: *mut u8, out_cap_in: Option<u
             cleanup_out(out_ptr);
             return std::ptr::null_mut();
         }
-        let meta: &[u8] = if meta_from_input { &input[meta_off..] } else { &meta_buf[meta_off..] };
+        let meta: &[u8] = if meta_from_input {
+            &input[meta_off..]
+        } else {
+            &meta_buf[meta_off..]
+        };
         let rle_nsyms = if meta[0] != 0 { meta[0] as i32 } else { 256 };
         if (u_meta_size as i32) < 1 + rle_nsyms {
             cleanup_out(out_ptr);
@@ -1545,7 +1780,14 @@ fn rans_uncompress_to_4x16_into(input: &[u8], out: *mut u8, out_cap_in: Option<u
             unpacked_sz = tmp2_size as u64;
         }
         let mut tmp3_new = vec![0u8; (*out_size as usize).max(unpacked_sz as usize)];
-        let res = hts_unpack(&tmp3[..tmp2_size as usize], tmp2_size as i64, &mut tmp3_new, unpacked_sz, npacked_sym, &map);
+        let res = hts_unpack(
+            &tmp3[..tmp2_size as usize],
+            tmp2_size as i64,
+            &mut tmp3_new,
+            unpacked_sz,
+            npacked_sym,
+            &map,
+        );
         if res.is_none() {
             cleanup_out(out_ptr);
             return std::ptr::null_mut();
@@ -1570,7 +1812,12 @@ fn out_size_from_cap(out_cap_in: Option<u32>, out_size: &mut u32) -> u32 {
 }
 
 // STRIPE decompressor (rANS_static4x16pr.c:1594-1673).
-fn rans_uncompress_stripe(input: &[u8], out: *mut u8, out_cap_in: Option<u32>, out_size: &mut u32) -> *mut u8 {
+fn rans_uncompress_stripe(
+    input: &[u8],
+    out: *mut u8,
+    out_cap_in: Option<u32>,
+    out_size: &mut u32,
+) -> *mut u8 {
     let in_end = input.len();
     let in_size = input.len() as u32;
     let mut c_meta_len = 1usize;
@@ -1615,8 +1862,16 @@ fn rans_uncompress_stripe(input: &[u8], out: *mut u8, out_cap_in: Option<u32>, o
     let mut clen_tot = 0u64;
     for i in 0..n {
         ulen_n[i] = ulen / n as u32 + (((ulen % n as u32) as usize > i) as u32);
-        idx_n[i] = if i != 0 { idx_n[i - 1] + ulen_n[i - 1] } else { 0 };
-        c_meta_len += var_get_u32(&input[c_meta_len..], Some(in_end - c_meta_len), &mut clen_n[i]) as usize;
+        idx_n[i] = if i != 0 {
+            idx_n[i - 1] + ulen_n[i - 1]
+        } else {
+            0
+        };
+        c_meta_len += var_get_u32(
+            &input[c_meta_len..],
+            Some(in_end - c_meta_len),
+            &mut clen_n[i],
+        ) as usize;
         clen_tot += clen_n[i] as u64;
         if c_meta_len > in_size as usize || clen_n[i] > in_size || clen_n[i] < 1 {
             cleanup(out_ptr);

@@ -52,6 +52,33 @@ The default workloads cover ordinary gzip FASTQ viewing, BAM viewing, BAM record
 RUNS=3 tools/compare-real-data-performance.sh
 ```
 
+## Known issues
+
+### `bam_to_cram` byte parity vs C
+
+Encoding BAM → CRAM in Rust produces a different byte stream than C, even though every record round-trips identically (Rust BAM → Rust CRAM → Rust BAM gives the original 5 000 000 records; Rust decoding a C-produced CRAM is byte-identical to C decoding it). The CRAM file is also ~177 KB smaller in Rust on the gex_chr22_5m.bam test (145.66 MB vs C 145.84 MB), so this is encoder-behaviour divergence, not a correctness bug.
+
+What's known:
+
+- Bytes 0 – 2 711 are byte-identical to C (CRAM file def + first container header + gzipped SAM-header block).
+- First diff is at byte 2 712 — the **length field of container 2** (the first data container). Rust's length is 516 bytes smaller. The container header itself then matches for ~16 bytes before the compression-header block content diverges.
+- The CRC32 of the compression-header block differs (`79 c7 73 9e` Rust vs `04 55 16 26` C). That CRC just reflects the differing block content.
+- The preservation_map (`RN`, `SM`, `TD`, `AP`, `RR`) IS correctly populated and iterated in the same hash-bucket order as C — verified via probe. So the divergence is **not** in preservation-map content.
+
+Suspected cause (not yet confirmed):
+
+1. **`td_blk` (tag dictionary) content** differs — the byte layout for the same input tags is slightly different.
+2. **Codec choices differ** for one or more data series (`BF`/`CF`/`RL`/...). The compression metrics in `cram_compress_block` pick a codec per data series; if Rust's metrics pick e.g. `RANS_PR128` where C picks `RANS_PR0` for the same series, the encoded codec descriptor bytes (and downstream block sizes) shift.
+
+Confirming which requires dumping the uncompressed compression-header block from both files and diffing the codec map entry-by-entry. Then chase whichever data series is different up through `cram_encode_compression_header` (`src/cram/cram_encode.rs:28`) and the per-block codec selection (`cram_cram_io_c_1913_cram_compress_block3` in `src/cram/mod.rs`).
+
+Working pieces (already correct, **don't revert**):
+
+- `src/cram/mod.rs:cram_cram_io_c_1222_zlib_mem_deflate` uses system zlib directly with `deflateInit2_(level, Z_DEFLATED, 15|16, 9, strat)` to match C's gzip output bit-for-bit. This is what got us from divergence at byte 12 to byte 2712.
+- `bgzf::system_zlib` / `bgzf::z_stream` / `bgzf::ZlibFns` are `pub(crate)` so the cram path can share them.
+
+Doesn't need fixing right now — it's cosmetic. A future pass can audit it.
+
 ## License
 
 * Files outside `htslib/cram/` are under the MIT/Expat license

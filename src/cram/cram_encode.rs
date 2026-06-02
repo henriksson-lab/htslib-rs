@@ -199,49 +199,8 @@ pub unsafe fn cram_cram_encode_c_2810_cram_encode_compression_header(
                     }
                 }
                 21325 => {
-                    let mut smat: [c_char; 5] = [0; 5];
-                    let mut mp: *mut c_char = smat.as_mut_ptr();
-                    let row0 = (*hl).substitution_matrix[0].as_ptr() as *mut c_char;
-                    let row1 = (*hl).substitution_matrix[1].as_ptr() as *mut c_char;
-                    let row2 = (*hl).substitution_matrix[2].as_ptr() as *mut c_char;
-                    let row3 = (*hl).substitution_matrix[3].as_ptr() as *mut c_char;
-                    let row4 = (*hl).substitution_matrix[4].as_ptr() as *mut c_char;
-                    let fresh124 = mp;
-                    mp = mp.offset(1);
-                    *fresh124 = ((cram_cram_encode_c_70_sub_idx(row0, b'C' as c_char) << 6)
-                        | (cram_cram_encode_c_70_sub_idx(row0, b'G' as c_char) << 4)
-                        | (cram_cram_encode_c_70_sub_idx(row0, b'T' as c_char) << 2)
-                        | (cram_cram_encode_c_70_sub_idx(row0, b'N' as c_char) << 0))
-                        as c_char;
-                    let fresh125 = mp;
-                    mp = mp.offset(1);
-                    *fresh125 = ((cram_cram_encode_c_70_sub_idx(row1, b'A' as c_char) << 6)
-                        | (cram_cram_encode_c_70_sub_idx(row1, b'G' as c_char) << 4)
-                        | (cram_cram_encode_c_70_sub_idx(row1, b'T' as c_char) << 2)
-                        | (cram_cram_encode_c_70_sub_idx(row1, b'N' as c_char) << 0))
-                        as c_char;
-                    let fresh126 = mp;
-                    mp = mp.offset(1);
-                    *fresh126 = ((cram_cram_encode_c_70_sub_idx(row2, b'A' as c_char) << 6)
-                        | (cram_cram_encode_c_70_sub_idx(row2, b'C' as c_char) << 4)
-                        | (cram_cram_encode_c_70_sub_idx(row2, b'T' as c_char) << 2)
-                        | (cram_cram_encode_c_70_sub_idx(row2, b'N' as c_char) << 0))
-                        as c_char;
-                    let fresh127 = mp;
-                    mp = mp.offset(1);
-                    *fresh127 = ((cram_cram_encode_c_70_sub_idx(row3, b'A' as c_char) << 6)
-                        | (cram_cram_encode_c_70_sub_idx(row3, b'C' as c_char) << 4)
-                        | (cram_cram_encode_c_70_sub_idx(row3, b'G' as c_char) << 2)
-                        | (cram_cram_encode_c_70_sub_idx(row3, b'N' as c_char) << 0))
-                        as c_char;
-                    let fresh128 = mp;
-                    mp = mp.offset(1);
-                    *fresh128 = ((cram_cram_encode_c_70_sub_idx(row4, b'A' as c_char) << 6)
-                        | (cram_cram_encode_c_70_sub_idx(row4, b'C' as c_char) << 4)
-                        | (cram_cram_encode_c_70_sub_idx(row4, b'G' as c_char) << 2)
-                        | (cram_cram_encode_c_70_sub_idx(row4, b'T' as c_char) << 0))
-                        as c_char;
-                    let _ = fresh128;
+                    let smat: [c_char; 5] =
+                        [0x1b, 0x87u8 as c_char, 0x4b, 0x93u8 as c_char, 0x1b];
                     if cram_cram_io_h_248_block_append(map, smat.as_ptr().cast(), 5) < 0 {
                         early_fail = true;
                         break;

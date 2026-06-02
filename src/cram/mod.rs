@@ -18,8 +18,7 @@ use crate::htslib_rs::hts::{
     kstring_t, toupper_c, BGZF, CRAM_OPT_POS_DELTA, CRAM_OPT_RANGE_NOSEEK, CRAM_OPT_USE_ARITH,
     CRAM_OPT_USE_FQZ, CRAM_OPT_USE_TOK, HTS_FORMAT_CRAM, HTS_IDX_NOCOOR, HTS_IDX_REST,
     HTS_IDX_START, HTS_LOG_ERROR, HTS_LOG_INFO, HTS_LOG_WARNING, HTS_OPT_PROFILE,
-    HTS_PROFILE_ARCHIVE,
-    HTS_PROFILE_FAST, HTS_PROFILE_NORMAL, HTS_PROFILE_SMALL,
+    HTS_PROFILE_ARCHIVE, HTS_PROFILE_FAST, HTS_PROFILE_NORMAL, HTS_PROFILE_SMALL,
 };
 use crate::htslib_rs::sam::{
     bam1_t, bam_aux_get, bam_cigar_type, bam_destroy1, sam_hdr_destroy, sam_hdr_dup, sam_hdr_t,
@@ -40,11 +39,11 @@ pub mod cram_encode;
 pub mod cram_external;
 pub mod cram_index;
 pub mod cram_io;
+pub mod cram_stats;
 #[path = "mFILE.rs"]
 pub mod mfile;
 pub mod open_trace_file;
 pub mod pooled_alloc;
-pub mod cram_stats;
 pub mod string_alloc;
 
 pub use cram_codecs::*;
@@ -53,10 +52,10 @@ pub use cram_encode::*;
 pub use cram_external::*;
 pub use cram_index::*;
 pub use cram_io::*;
+pub use cram_stats::*;
 pub use mfile::*;
 pub use open_trace_file::*;
 pub use pooled_alloc::*;
-pub use cram_stats::*;
 pub use string_alloc::*;
 
 // Native opaque CRAM types. Byte layouts are unchanged from hts_sys's
@@ -66,21 +65,37 @@ pub use string_alloc::*;
 // `cram_slice_layout`, `cram_fd_layout`, `cram_metrics_layout`). Defining
 // them locally retires ~270 `hts_sys::cram_*` references throughout cram.rs.
 #[repr(C)]
-pub struct cram_block { _private: [u8; 0] }
+pub struct cram_block {
+    _private: [u8; 0],
+}
 #[repr(C)]
-pub struct cram_container { _private: [u8; 0] }
+pub struct cram_container {
+    _private: [u8; 0],
+}
 #[repr(C)]
-pub struct cram_block_compression_hdr { _private: [u8; 0] }
+pub struct cram_block_compression_hdr {
+    _private: [u8; 0],
+}
 #[repr(C)]
-pub struct cram_block_slice_hdr { _private: [u8; 0] }
+pub struct cram_block_slice_hdr {
+    _private: [u8; 0],
+}
 #[repr(C)]
-pub struct cram_metrics { _private: [u8; 0] }
+pub struct cram_metrics {
+    _private: [u8; 0],
+}
 #[repr(C)]
-pub struct cram_slice { _private: [u8; 0] }
+pub struct cram_slice {
+    _private: [u8; 0],
+}
 #[repr(C)]
-pub struct cram_record { _private: [u8; 0] }
+pub struct cram_record {
+    _private: [u8; 0],
+}
 #[repr(C)]
-pub struct refs_t { _private: [u8; 0] }
+pub struct refs_t {
+    _private: [u8; 0],
+}
 
 // Value-type aliases — `cram_content_type` and `cram_block_method` are
 // `c_int` enums in hts-sys bindings.
@@ -266,7 +281,20 @@ pub unsafe fn cram_decode_compression_header(
 }
 
 /// khash STR (`KHASH_MAP_INIT_STR(map, pmap_t)`) hash function:
-/// `__ac_X31_hash_string` over a NUL-terminated C string.
+/// `__ac_FNV1a_hash_string` over a NUL-terminated C string.
+pub unsafe fn kh_str_fnv1a_hash(mut s: *const c_char) -> u32 {
+    let offset_basis: u32 = 2_166_136_261;
+    let fnv_prime: u32 = 16_777_619;
+    let mut h: u32 = offset_basis;
+    while *s != 0 {
+        h = (h ^ *s as u8 as u32).wrapping_mul(fnv_prime);
+        s = s.add(1);
+    }
+    h
+}
+
+/// Legacy X31 hash helper used by non-CRAM khash translations that still map
+/// to htslib tables built with `__ac_X31_hash_string`.
 pub unsafe fn kh_str_x31_hash(mut s: *const c_char) -> u32 {
     let mut h: u32 = *s as u8 as u32;
     if h != 0 {
@@ -350,7 +378,7 @@ pub unsafe fn kh_resize_map(h: *mut kh_generic_layout, mut new_n_buckets: u32) -
                 // __ac_set_isdel_true on old flags[jj]
                 *(*h).flags.add((jj >> 4) as usize) |= 1 << ((jj & 0xf) << 1);
                 loop {
-                    let k = kh_str_x31_hash(key);
+                    let k = kh_str_fnv1a_hash(key);
                     let mut i = k & new_mask;
                     let mut step: u32 = 0;
                     while ((*new_flags.add((i >> 4) as usize) >> ((i & 0xf) << 1)) & 2) == 0 {
@@ -413,7 +441,7 @@ pub unsafe fn kh_put_map(h: *mut kh_generic_layout, key: *const c_char, ret: *mu
     let mut step: u32 = 0;
     let mut x = (*h).n_buckets;
     let mut site = (*h).n_buckets;
-    let k = kh_str_x31_hash(key);
+    let k = kh_str_fnv1a_hash(key);
     let mut i = k & mask;
     if ((*(*h).flags.add((i >> 4) as usize) >> ((i & 0xf) << 1)) & 2) != 0 {
         x = i; // empty -> fast path
@@ -423,10 +451,7 @@ pub unsafe fn kh_put_map(h: *mut kh_generic_layout, key: *const c_char, ret: *mu
             let flag = *(*h).flags.add((i >> 4) as usize);
             let is_empty = (flag >> ((i & 0xf) << 1)) & 2;
             let is_del = (flag >> ((i & 0xf) << 1)) & 1;
-            if is_empty != 0
-                || !(is_del != 0
-                    || libc::strcmp(*keys.add(i as usize), key) != 0)
-            {
+            if is_empty != 0 || !(is_del != 0 || libc::strcmp(*keys.add(i as usize), key) != 0) {
                 break;
             }
             if is_del != 0 {
@@ -467,9 +492,6 @@ pub unsafe fn kh_put_map(h: *mut kh_generic_layout, key: *const c_char, ret: *mu
     }
     x
 }
-
-
-
 
 pub unsafe fn cram_decode_slice_header(
     fd: *mut cram_fd,
@@ -574,7 +596,6 @@ pub unsafe fn cram_flush(fd: *mut cram_fd) -> c_int {
     cram_cram_io_c_5446_cram_flush(fd)
 }
 
-
 pub unsafe fn cram_close(fd: *mut cram_fd) -> c_int {
     cram_cram_io_c_5558_cram_close(fd)
 }
@@ -648,7 +669,9 @@ unsafe fn cram_voption_va_arg_int(args: *mut crate::htslib_rs::c_compat::__va_li
     unsafe { cram_voption_va_arg_word(args) as c_int }
 }
 
-unsafe fn cram_voption_va_arg_ptr<T>(args: *mut crate::htslib_rs::c_compat::__va_list_tag) -> *mut T {
+unsafe fn cram_voption_va_arg_ptr<T>(
+    args: *mut crate::htslib_rs::c_compat::__va_list_tag,
+) -> *mut T {
     unsafe { cram_voption_va_arg_word(args) as *mut T }
 }
 
@@ -724,7 +747,6 @@ unsafe fn cram_voption_set_range_noseek(fd: *mut cram_fd, r: *const cram_range_l
     }
 }
 
-
 pub unsafe fn cram_check_EOF(fd: *mut cram_fd) -> c_int {
     cram_cram_io_c_5960_cram_check_eof(fd)
 }
@@ -741,9 +763,7 @@ pub unsafe fn cram_transcode_rg(
     in_rg: *mut c_int,
     out_rg: *mut c_int,
 ) -> c_int {
-    unsafe {
-        cram_cram_external_c_934_cram_transcode_rg(in_, out, c, nrg, in_rg, out_rg)
-    }
+    unsafe { cram_cram_external_c_934_cram_transcode_rg(in_, out, c, nrg, in_rg, out_rg) }
 }
 
 pub unsafe fn cram_get_refs(fd: *mut htsFile) -> *mut refs_t {
@@ -1214,12 +1234,6 @@ struct kh_m_i2i_layout {
     vals: *mut c_int,
 }
 
-
-
-
-
-
-
 #[repr(C)]
 pub(crate) struct cram_block_compression_hdr_layout {
     ref_seq_id: i32,
@@ -1287,8 +1301,7 @@ type CramCodecStoreFn =
     unsafe extern "C" fn(*mut c_void, *mut cram_block, *mut c_char, c_int) -> c_int;
 type CramCodecDescribeFn = unsafe extern "C" fn(*mut c_void, *mut kstring_t) -> c_int;
 type CramCodecSizeFn = unsafe extern "C" fn(*mut cram_slice, *mut c_void) -> c_int;
-type CramCodecGetBlockFn =
-    unsafe extern "C" fn(*mut cram_slice, *mut c_void) -> *mut cram_block;
+type CramCodecGetBlockFn = unsafe extern "C" fn(*mut cram_slice, *mut c_void) -> *mut cram_block;
 type CramCodecDecodeInitFn =
     unsafe fn(*mut c_void, *mut c_char, c_int, c_int, c_int, c_int, *mut c_void) -> *mut c_void;
 type CramCodecEncodeInitFn =
@@ -1665,14 +1678,6 @@ struct cram_codec_byte_array_stop_layout {
     byte_array_stop: cram_byte_array_stop_decoder_layout,
 }
 
-
-
-
-
-
-
-
-
 // =======================================================================
 // Helpers for the cram_encode_slice family (lifted from cram-mirror tree).
 // =======================================================================
@@ -1799,8 +1804,6 @@ struct cram_feature_Q_layout {
     qual: c_int,
 }
 
-
-
 /// Invoke a codec's `encode` function pointer. The codec base is opaque to
 /// production; cast to `cram_codec_external_layout` (variants share the
 /// 12-field prefix through `describe`) and transmute the void pointer.
@@ -1824,9 +1827,6 @@ unsafe fn cram_codec_flush(codec: *mut c_void) -> c_int {
     flush(codec)
 }
 
-
-
-
 // ============================================================================
 // Reference-building helpers (used by cram_encode_container).
 // `extend_ref`/`cram_add_to_ref_MD`/`cram_add_to_ref`/`cram_generate_reference`
@@ -1834,13 +1834,6 @@ unsafe fn cram_codec_flush(codec: *mut c_void) -> c_int {
 // external reference is supplied (`embed_ref=2`). Faithful translations of
 // htslib/cram/cram_encode.c:1508/1557/1663/1737.
 // ============================================================================
-
-
-
-
-
-
-
 
 // DS_ index constants shared by the cram_add_* feature-builder helpers below
 // (mirror of the local constants used inside cram_encode_compression_header).
@@ -1853,17 +1846,6 @@ const DS_BS_ENC: c_int = 31;
 const DS_RS_ENC: c_int = 34;
 const DS_PD_ENC: c_int = 35;
 const DS_HC_ENC: c_int = 36;
-
-
-
-
-
-
-
-
-
-
-
 
 // cram_tag_map: cram/cram_structs.h:386. 4 ptrs: codec, blk, blk2, m.
 #[repr(C)]
@@ -1971,13 +1953,15 @@ unsafe fn kh_resize_int_ptr<T>(
             *new_flags.add(i as usize) = 0xaaaa_aaaa;
         }
         if *n_buckets_field < new_n_buckets {
-            let new_keys = realloc((*keys_field).cast(), new_n_buckets as u64 * key_sz).cast::<u32>();
+            let new_keys =
+                realloc((*keys_field).cast(), new_n_buckets as u64 * key_sz).cast::<u32>();
             if new_keys.is_null() {
                 free(new_flags.cast());
                 return -1;
             }
             *keys_field = new_keys;
-            let new_vals = realloc((*vals_field).cast(), new_n_buckets as u64 * val_sz).cast::<*mut T>();
+            let new_vals =
+                realloc((*vals_field).cast(), new_n_buckets as u64 * val_sz).cast::<*mut T>();
             if new_vals.is_null() {
                 free(new_flags.cast());
                 return -1;
@@ -2146,11 +2130,7 @@ unsafe fn kh_del_int_ptr<T>(
 }
 
 #[inline]
-unsafe fn kh_put_m_tagmap(
-    h: *mut kh_m_tagmap_layout,
-    key: u32,
-    ret: *mut c_int,
-) -> u32 {
+unsafe fn kh_put_m_tagmap(h: *mut kh_m_tagmap_layout, key: u32, ret: *mut c_int) -> u32 {
     kh_put_int_ptr::<cram_tag_map_layout>(
         &raw mut (*h).n_buckets,
         &raw mut (*h).size,
@@ -2165,11 +2145,7 @@ unsafe fn kh_put_m_tagmap(
 }
 
 #[inline]
-unsafe fn kh_put_m_metrics(
-    h: *mut kh_m_metrics_layout,
-    key: u32,
-    ret: *mut c_int,
-) -> u32 {
+unsafe fn kh_put_m_metrics(h: *mut kh_m_metrics_layout, key: u32, ret: *mut c_int) -> u32 {
     kh_put_int_ptr::<cram_metrics_layout>(
         &raw mut (*h).n_buckets,
         &raw mut (*h).size,
@@ -2294,11 +2270,7 @@ unsafe fn kh_resize_m_s2i(h: *mut kh_m_s2i_layout, mut new_n_buckets: u32) -> c_
     0
 }
 
-unsafe fn kh_put_m_s2i(
-    h: *mut kh_m_s2i_layout,
-    key: *const c_char,
-    ret: *mut c_int,
-) -> u32 {
+unsafe fn kh_put_m_s2i(h: *mut kh_m_s2i_layout, key: *const c_char, ret: *mut c_int) -> u32 {
     if (*h).n_occupied >= (*h).upper_bound {
         if (*h).n_buckets > ((*h).size << 1) {
             if kh_resize_m_s2i(h, (*h).n_buckets - 1) < 0 {
@@ -2366,9 +2338,6 @@ unsafe fn kh_put_m_s2i(
     }
     x
 }
-
-
-
 
 // kh_m_s2u64: khash STR -> uint64 (FNV1a-hashed). Used by lossy_read_names.
 // Layout-identical to khash_m_s2u64_t from htslib/cram/khash.h.
@@ -2495,11 +2464,7 @@ unsafe fn kh_resize_m_s2u64(h: *mut kh_m_s2u64_layout, mut new_n_buckets: u32) -
     0
 }
 
-unsafe fn kh_put_m_s2u64(
-    h: *mut kh_m_s2u64_layout,
-    key: *const c_char,
-    ret: *mut c_int,
-) -> u32 {
+unsafe fn kh_put_m_s2u64(h: *mut kh_m_s2u64_layout, key: *const c_char, ret: *mut c_int) -> u32 {
     if (*h).n_occupied >= (*h).upper_bound {
         if (*h).n_buckets > ((*h).size << 1) {
             if kh_resize_m_s2u64(h, (*h).n_buckets - 1) < 0 {
@@ -2604,16 +2569,6 @@ unsafe fn kh_destroy_m_s2u64(h: *mut kh_m_s2u64_layout) {
     free(h.cast());
 }
 
-
-
-
-
-
-
-
-
-
-
 pub unsafe fn cram_cram_io_h_183_cram_get_block_by_id(
     slice: *mut cram_slice,
     id: c_int,
@@ -2647,10 +2602,7 @@ pub unsafe fn cram_cram_io_h_183_cram_get_block_by_id(
     std::ptr::null_mut()
 }
 
-pub unsafe fn cram_cram_io_h_216_block_resize_exact(
-    b: *mut cram_block,
-    len: usize,
-) -> c_int {
+pub unsafe fn cram_cram_io_h_216_block_resize_exact(b: *mut cram_block, len: usize) -> c_int {
     let b = b.cast::<cram_block_layout>();
     let tmp = realloc((*b).data.cast(), len as u64).cast::<u8>();
     if tmp.is_null() {
@@ -2695,10 +2647,7 @@ pub unsafe fn cram_cram_io_h_248_block_append(
     0
 }
 
-pub unsafe fn cram_cram_io_h_261_block_append_char(
-    b: *mut cram_block,
-    c: c_char,
-) -> c_int {
+pub unsafe fn cram_cram_io_h_261_block_append_char(b: *mut cram_block, c: c_char) -> c_int {
     if cram_cram_io_h_243_block_grow(b, 1) < 0 {
         return -1;
     }
@@ -2709,10 +2658,7 @@ pub unsafe fn cram_cram_io_h_261_block_append_char(
     0
 }
 
-pub unsafe fn cram_cram_io_h_271_block_append_uint(
-    b: *mut cram_block,
-    i: libc::c_uint,
-) -> c_int {
+pub unsafe fn cram_cram_io_h_271_block_append_uint(b: *mut cram_block, i: libc::c_uint) -> c_int {
     if cram_cram_io_h_243_block_grow(b, 11) < 0 {
         return -1;
     }
@@ -2770,10 +2716,11 @@ pub unsafe fn cram_cram_io_h_340_append_uint64(mut cp: *mut u8, i: u64) -> *mut 
     cram_cram_io_h_326_append_sub32(cp, (i % 1_000_000_000) as u32)
 }
 
-pub unsafe fn cram_cram_io_h_646_cram_hfile(fd: *mut crate::htslib_rs::hts::cram_fd) -> *mut crate::htslib_rs::hts::hFILE {
+pub unsafe fn cram_cram_io_h_646_cram_hfile(
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+) -> *mut crate::htslib_rs::hts::hFILE {
     (*(fd.cast::<cram_fd_layout>())).fp.cast()
 }
-
 
 // Accessor used by `cram_flush_bridge` to peek at the cram_fd's `idxfp`
 // field without re-declaring the (large, private) `cram_fd_layout` struct
@@ -2807,7 +2754,6 @@ pub unsafe fn cram_fd_ref_fn(fd: *mut cram_fd) -> *mut c_char {
     }
     (*fd.cast::<cram_fd_layout>()).ref_fn
 }
-
 
 // Layout-mirror for the per-decode-job state held in the rqueue. Mirrors
 // `cram_decode_job` (htslib/cram/cram_decode.c:3032): a tuple of pointers
@@ -2848,8 +2794,7 @@ unsafe fn cram_flush_result_native(fd_in: *mut cram_fd) -> c_int {
         if r.is_null() {
             break;
         }
-        let j = crate::htslib_rs::thread_pool::hts_tpool_result_data(r)
-            .cast::<cram_job_layout>();
+        let j = crate::htslib_rs::thread_pool::hts_tpool_result_data(r).cast::<cram_job_layout>();
         if j.is_null() {
             crate::htslib_rs::thread_pool::hts_tpool_delete_result(r, 0);
             return -1;
@@ -2859,10 +2804,7 @@ unsafe fn cram_flush_result_native(fd_in: *mut cram_fd) -> c_int {
         let fdl = current_fd.cast::<cram_fd_layout>();
 
         if (*fdl).mode == b'w' as c_int
-            && cram_cram_io_c_4089_cram_flush_container2(
-                current_fd,
-                c.cast(),
-            ) != 0
+            && cram_cram_io_c_4089_cram_flush_container2(current_fd, c.cast()) != 0
         {
             return -1;
         }
@@ -2928,8 +2870,9 @@ unsafe fn cram_drain_rqueue_native(fdl: *mut cram_fd_layout) {
         return;
     }
     let mut lc: *mut cram_container_layout = std::ptr::null_mut();
-    let rqueue =
-        (*fdl).rqueue.cast::<crate::htslib_rs::thread_pool::hts_tpool_process>();
+    let rqueue = (*fdl)
+        .rqueue
+        .cast::<crate::htslib_rs::thread_pool::hts_tpool_process>();
 
     while crate::htslib_rs::thread_pool::hts_tpool_process_empty(rqueue) == 0 {
         let r = crate::htslib_rs::thread_pool::hts_tpool_next_result_wait(rqueue);
@@ -2990,92 +2933,6 @@ unsafe fn cram_drain_rqueue_native(fdl: *mut cram_fd_layout) {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /// Copy a Rust-owned buffer into a libc-`malloc`'d block so the surrounding
 /// C-style cram code can `free()` it. Empty input is treated as decoder
 /// failure (returns null) — the dispatch short-circuits genuine zero-length
@@ -3090,7 +2947,6 @@ unsafe fn cram_dup_to_malloc(src: &[u8]) -> *mut u8 {
     }
     p
 }
-
 
 // CRAM compression-method enum tags (cram_block_method_int, cram_structs.h:215).
 // Externally-visible values share names with the public CRAM_BLOCK_METHOD_*
@@ -3136,45 +2992,95 @@ const Z_RLE: c_int = 3;
 
 const DS_RN_LOCAL: c_int = 11;
 
-/// `zlib_mem_deflate` (htslib/cram/cram_io.c:1222).  GZIP wrapper deflate
+/// `zlib_mem_deflate` (htslib/cram/cram_io.c:1222). GZIP wrapper deflate
 /// for `[data, data+size)` at the given level/strategy. Returns a libc
 /// malloc-owned buffer of size `*cdata_size`, or null on failure.
 ///
-/// Note: `strat` is currently ignored — flate2 does not expose deflate
-/// strategy directly. The C code defaults strategy to `Z_FILTERED` for the
-/// common GZIP method (best for cram-style bit-packed data) but this only
-/// affects the encoder's choice of optimization heuristics, not the on-wire
-/// format. The output is still a valid gzip stream.
+/// Calls system zlib directly with `deflateInit2(level, Z_DEFLATED, 15|16,
+/// 9, strat)` — windowBits=15|16 selects gzip wrapping, memLevel=9 matches
+/// htslib's `cram_io.c:1248`. Going through `flate2::write::GzEncoder`
+/// (the previous implementation) hardcoded `Z_DEFAULT_STRATEGY` and OS=0xff
+/// and produced bytes that differed from C's CRAM output even on identical
+/// input. Matching C exactly here is what makes bam_to_cram byte-identical.
 unsafe fn cram_cram_io_c_1222_zlib_mem_deflate(
     data: *mut c_char,
     size: usize,
     cdata_size: *mut usize,
     level: c_int,
-    _strat: c_int,
+    strat: c_int,
 ) -> *mut c_char {
+    use crate::htslib_rs::bgzf;
+    // zlib return codes / flush modes / methods.
+    const Z_OK: c_int = 0;
+    const Z_STREAM_END: c_int = 1;
+    const Z_NO_FLUSH: c_int = 0;
+    const Z_FINISH: c_int = 4;
+    const Z_DEFLATED: c_int = 8;
+
     *cdata_size = 0;
-    let input = std::slice::from_raw_parts(data.cast::<u8>(), size);
-    let compression = flate2::Compression::new(level.clamp(0, 9) as u32);
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), compression);
-    if std::io::Write::write_all(&mut encoder, input).is_err() {
+
+    let Some(zlib) = bgzf::system_zlib() else {
+        return std::ptr::null_mut();
+    };
+
+    // C uses size*1.05 + 100 as initial allocation (cram_io.c:1231).
+    let cdata_alloc = ((size as f64) * 1.05 + 100.0) as usize;
+    let cdata = malloc(cdata_alloc.max(1) as u64).cast::<c_char>();
+    if cdata.is_null() {
         return std::ptr::null_mut();
     }
-    match encoder.finish() {
-        Ok(out) => {
-            *cdata_size = out.len();
-            let alloc = out.len().max(1);
-            let p = malloc(alloc as u64).cast::<c_char>();
-            if p.is_null() {
-                *cdata_size = 0;
-                return std::ptr::null_mut();
-            }
-            if !out.is_empty() {
-                memcpy(p.cast(), out.as_ptr().cast(), out.len() as u64);
-            }
-            p
-        }
-        Err(_) => std::ptr::null_mut(),
+
+    let mut zs: bgzf::z_stream = std::mem::zeroed();
+    zs.next_in = data.cast::<u8>();
+    zs.avail_in = size as c_uint;
+    zs.next_out = cdata.cast::<u8>();
+    zs.avail_out = cdata_alloc as c_uint;
+    // Z_BINARY = 0 (default after zeroed()).
+
+    let ret = (zlib.deflate_init2)(
+        &mut zs,
+        level,
+        Z_DEFLATED,
+        15 | 16, // gzip wrapping
+        9,       // memLevel
+        strat,
+        (zlib.zlib_version)(),
+        std::mem::size_of::<bgzf::z_stream>() as c_int,
+    );
+    if ret != Z_OK {
+        free(cdata.cast());
+        return std::ptr::null_mut();
     }
+
+    // Loop with Z_NO_FLUSH while we still have input; then Z_FINISH to flush.
+    let mut cdata_pos: usize = 0;
+    while zs.avail_in != 0 {
+        zs.next_out = cdata.cast::<u8>().add(cdata_pos);
+        zs.avail_out = (cdata_alloc - cdata_pos) as c_uint;
+        if cdata_alloc <= cdata_pos {
+            (zlib.deflate_end)(&mut zs);
+            free(cdata.cast());
+            return std::ptr::null_mut();
+        }
+        let r = (zlib.deflate)(&mut zs, Z_NO_FLUSH);
+        cdata_pos = cdata_alloc - zs.avail_out as usize;
+        if r != Z_OK {
+            break;
+        }
+    }
+    let fin = (zlib.deflate)(&mut zs, Z_FINISH);
+    if fin != Z_STREAM_END {
+        (zlib.deflate_end)(&mut zs);
+        free(cdata.cast());
+        return std::ptr::null_mut();
+    }
+    let total = zs.total_out as usize;
+    if (zlib.deflate_end)(&mut zs) != Z_OK {
+        free(cdata.cast());
+        return std::ptr::null_mut();
+    }
+    *cdata_size = total;
+    cdata
 }
 
 /// `cram_compress_by_method` (htslib/cram/cram_io.c:1757).
@@ -3219,14 +3125,16 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
             // sizeof(fqz_slice) + 2*num_records*sizeof(uint32_t).
             let f_sz = std::mem::size_of::<crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_slice>()
                 + 2 * (num_records as usize) * std::mem::size_of::<u32>();
-            let f = malloc(f_sz as u64)
-                .cast::<crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_slice>();
+            let f =
+                malloc(f_sz as u64).cast::<crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_slice>();
             if f.is_null() {
                 return std::ptr::null_mut();
             }
             (*f).num_records = num_records;
             let len_ptr = (f as *mut u8)
-                .add(std::mem::size_of::<crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_slice>())
+                .add(std::mem::size_of::<
+                    crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_slice,
+                >())
                 .cast::<u32>();
             let flags_ptr = len_ptr.add(num_records as usize);
             (*f).len = len_ptr;
@@ -3295,14 +3203,8 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
             cp.cast::<c_char>()
         }
 
-        CBMI_RANS_PR0
-        | CBMI_RANS_PR1
-        | CBMI_RANS_PR64
-        | CBMI_RANS_PR9
-        | CBMI_RANS_PR128
-        | CBMI_RANS_PR129
-        | CBMI_RANS_PR192
-        | CBMI_RANS_PR193 => {
+        CBMI_RANS_PR0 | CBMI_RANS_PR1 | CBMI_RANS_PR64 | CBMI_RANS_PR9 | CBMI_RANS_PR128
+        | CBMI_RANS_PR129 | CBMI_RANS_PR192 | CBMI_RANS_PR193 => {
             // methmap maps RANS_PR1..RANS_PR193 to order bit-fields.
             const METHMAP: [c_int; 7] = [1, 64, 9, 128, 129, 192, 193];
             let m_order = if method == CBMI_RANS_PR0 {
@@ -3332,14 +3234,8 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
             p
         }
 
-        CBMI_ARITH_PR0
-        | CBMI_ARITH_PR1
-        | CBMI_ARITH_PR64
-        | CBMI_ARITH_PR9
-        | CBMI_ARITH_PR128
-        | CBMI_ARITH_PR129
-        | CBMI_ARITH_PR192
-        | CBMI_ARITH_PR193 => {
+        CBMI_ARITH_PR0 | CBMI_ARITH_PR1 | CBMI_ARITH_PR64 | CBMI_ARITH_PR9 | CBMI_ARITH_PR128
+        | CBMI_ARITH_PR129 | CBMI_ARITH_PR192 | CBMI_ARITH_PR193 => {
             const METHMAP: [c_int; 7] = [1, 64, 9, 128, 129, 192, 193];
             let order = if method == CBMI_ARITH_PR0 {
                 0
@@ -3434,14 +3330,14 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
     // methmap (cram_io.c:1929): maps internal enum to the "external" enum
     // for the on-wire b->method field.
     const METHMAP: [c_int; 32] = [
-        0, 1, 2, 3, 4, 5, 6, 7, 8,   // RAW..TOK3
-        0, 0,                        // reserved
-        1, 1,                        // GZIP_RLE, GZIP_1 -> GZIP
-        7, 7, 7,                     // FQZ_b, FQZ_c, FQZ_d -> FQZ
-        4,                           // RANS1 -> RANS
-        5, 5, 5, 5, 5, 5, 5,         // RANS_PR1..RANS_PR193 -> RANSPR
-        8,                           // TOKA -> TOK3
-        6, 6, 6, 6, 6, 6, 6,         // ARITH_PR1..ARITH_PR193 -> ARITH
+        0, 1, 2, 3, 4, 5, 6, 7, 8, // RAW..TOK3
+        0, 0, // reserved
+        1, 1, // GZIP_RLE, GZIP_1 -> GZIP
+        7, 7, 7, // FQZ_b, FQZ_c, FQZ_d -> FQZ
+        4, // RANS1 -> RANS
+        5, 5, 5, 5, 5, 5, 5, // RANS_PR1..RANS_PR193 -> RANSPR
+        8, // TOKA -> TOK3
+        6, 6, 6, 6, 6, 6, 6, // ARITH_PR1..ARITH_PR193 -> ARITH
     ];
 
     let fdl = fd.cast::<cram_fd_layout>();
@@ -3485,8 +3381,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
         if (*metrics).input_avg_sz != 0
             && ((*b).uncomp_size / 4 - 750 > (*metrics).input_avg_sz
                 || (*b).uncomp_size < (*metrics).input_avg_sz / 4 - 750)
-            && abs_i32((*b).uncomp_size - (*metrics).input_avg_sz) / 10
-                > (*metrics).input_avg_delta
+            && abs_i32((*b).uncomp_size - (*metrics).input_avg_sz) / 10 > (*metrics).input_avg_delta
         {
             (*metrics).next_trial = 0;
         }
@@ -3527,16 +3422,13 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
             // Unpackable: avoid bit-pack methods on data with too many symbols.
             if unpackable != 0 && ((*fdl).version >> 8) > 3 {
                 if (method & (1 << CBMI_RANS_PR128)) != 0 {
-                    method =
-                        (method | (1 << CBMI_RANS_PR0)) & !(1 << CBMI_RANS_PR128);
+                    method = (method | (1 << CBMI_RANS_PR0)) & !(1 << CBMI_RANS_PR128);
                 }
                 if (method & (1 << CBMI_RANS_PR129)) != 0 {
-                    method =
-                        (method | (1 << CBMI_RANS_PR1)) & !(1 << CBMI_RANS_PR129);
+                    method = (method | (1 << CBMI_RANS_PR1)) & !(1 << CBMI_RANS_PR129);
                 }
                 if (method & (1 << CBMI_RANS_PR192)) != 0 {
-                    method =
-                        (method | (1 << CBMI_RANS_PR64)) & !(1 << CBMI_RANS_PR192);
+                    method = (method | (1 << CBMI_RANS_PR64)) & !(1 << CBMI_RANS_PR192);
                 }
                 if (method & (1 << CBMI_RANS_PR193)) != 0 {
                     method = (method | (1 << CBMI_RANS_PR64) | (1 << CBMI_RANS_PR1))
@@ -3544,21 +3436,16 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                 }
 
                 if (method & (1 << CBMI_ARITH_PR128)) != 0 {
-                    method =
-                        (method | (1 << CBMI_ARITH_PR0)) & !(1 << CBMI_ARITH_PR128);
+                    method = (method | (1 << CBMI_ARITH_PR0)) & !(1 << CBMI_ARITH_PR128);
                 }
                 if (method & (1 << CBMI_ARITH_PR129)) != 0 {
-                    method =
-                        (method | (1 << CBMI_ARITH_PR1)) & !(1 << CBMI_ARITH_PR129);
+                    method = (method | (1 << CBMI_ARITH_PR1)) & !(1 << CBMI_ARITH_PR129);
                 }
                 if (method & (1 << CBMI_ARITH_PR192)) != 0 {
-                    method =
-                        (method | (1 << CBMI_ARITH_PR64)) & !(1 << CBMI_ARITH_PR192);
+                    method = (method | (1 << CBMI_ARITH_PR64)) & !(1 << CBMI_ARITH_PR192);
                 }
                 if (method & (1u32 << CBMI_ARITH_PR193) as c_int) != 0 {
-                    method = (method
-                        | (1 << CBMI_ARITH_PR64)
-                        | (1 << CBMI_ARITH_PR1))
+                    method = (method | (1 << CBMI_ARITH_PR64) | (1 << CBMI_ARITH_PR1))
                         & !((1u32 << CBMI_ARITH_PR193) as c_int);
                 }
             }
@@ -3622,7 +3509,8 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
             // Accumulate stats for all methods tried.
             libc::pthread_mutex_lock(&mut (*fdl).metrics_lock);
             for m in 0..CRAM_MAX_METHOD {
-                (*metrics).sz[m] = ((*metrics).sz[m] as usize).saturating_add(sz[m] + 2000) as c_int;
+                (*metrics).sz[m] =
+                    ((*metrics).sz[m] as usize).saturating_add(sz[m] + 2000) as c_int;
             }
 
             // When enough trials performed, find the best on average.
@@ -3633,18 +3521,17 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
 
                 // Relative costs of methods. See cram_io.c:2117.
                 let mut meth_cost: [f64; 32] = [
-                    1.00, 1.04, 1.07, 1.08, 1.00, 1.00, 1.04, 1.05, 1.05, 1.00, 1.00,
-                    1.01, 1.01, 1.05, 1.05, 1.05, 1.01, 1.01, 1.00, 1.03, 1.00, 1.01,
-                    1.00, 1.01, 1.07, 1.04, 1.04, 1.04, 1.03, 1.04, 1.04, 1.04,
+                    1.00, 1.04, 1.07, 1.08, 1.00, 1.00, 1.04, 1.05, 1.05, 1.00, 1.00, 1.01, 1.01,
+                    1.05, 1.05, 1.05, 1.01, 1.01, 1.00, 1.03, 1.00, 1.01, 1.00, 1.01, 1.07, 1.04,
+                    1.04, 1.04, 1.03, 1.04, 1.04, 1.04,
                 ];
                 let _ = &mut meth_cost; // suppress unused-mut
 
                 let fd_level = (*fdl).level;
                 if fd_level <= 1 {
                     for m in 0..CRAM_MAX_METHOD {
-                        (*metrics).sz[m] = ((*metrics).sz[m] as f64
-                            * (1.0 + (meth_cost[m] - 1.0) * 4.0))
-                            as c_int;
+                        (*metrics).sz[m] =
+                            ((*metrics).sz[m] as f64 * (1.0 + (meth_cost[m] - 1.0) * 4.0)) as c_int;
                     }
                 } else if fd_level <= 3 {
                     for m in 0..CRAM_MAX_METHOD {
@@ -3653,15 +3540,13 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                     }
                 } else if fd_level <= 6 {
                     for m in 0..CRAM_MAX_METHOD {
-                        (*metrics).sz[m] = ((*metrics).sz[m] as f64
-                            * (1.0 + (meth_cost[m] - 1.0) / 2.0))
-                            as c_int;
+                        (*metrics).sz[m] =
+                            ((*metrics).sz[m] as f64 * (1.0 + (meth_cost[m] - 1.0) / 2.0)) as c_int;
                     }
                 } else if fd_level <= 7 {
                     for m in 0..CRAM_MAX_METHOD {
-                        (*metrics).sz[m] = ((*metrics).sz[m] as f64
-                            * (1.0 + (meth_cost[m] - 1.0) / 3.0))
-                            as c_int;
+                        (*metrics).sz[m] =
+                            ((*metrics).sz[m] as f64 * (1.0 + (meth_cost[m] - 1.0) / 3.0)) as c_int;
                     }
                 }
 
@@ -3670,9 +3555,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                 (*metrics).sz[10] = c_int::MAX;
 
                 for m in 0..CRAM_MAX_METHOD as c_int {
-                    if (*metrics).sz[m as usize] == 0
-                        || (method & (1u32 << m) as c_int) == 0
-                    {
+                    if (*metrics).sz[m as usize] == 0 || (method & (1u32 << m) as c_int) == 0 {
                         continue;
                     }
                     if best_sz > (*metrics).sz[m as usize] {
@@ -3685,8 +3568,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                     (*metrics).consistency = 0;
                 } else {
                     let factor = 2.0f64.min(1.0 + (*metrics).consistency as f64 / 4.0);
-                    (*metrics).next_trial =
-                        ((*metrics).next_trial as f64 * factor) as c_int;
+                    (*metrics).next_trial = ((*metrics).next_trial as f64 * factor) as c_int;
                     (*metrics).consistency += 1;
                 }
 
@@ -3713,8 +3595,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                         (*metrics).cnt[m as usize] = 0;
                         (*metrics).extra[m as usize] = 0.0;
                     } else if best_sz < (*metrics).sz[m as usize] {
-                        let r =
-                            (*metrics).sz[m as usize] as f64 / best_sz as f64 - 1.0;
+                        let r = (*metrics).sz[m as usize] as f64 / best_sz as f64 - 1.0;
                         let mul = 1 + (if (*fdl).level >= 7 { 1 } else { 0 });
                         (*metrics).cnt[m as usize] += 1;
                         if (*metrics).cnt[m as usize] >= MAXFAILS * mul {
@@ -3725,11 +3606,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                         }
 
                         // Special case for fqzcomp.
-                        if m == CBMI_FQZ
-                            || m == CBMI_FQZ_B
-                            || m == CBMI_FQZ_C
-                            || m == CBMI_FQZ_D
-                        {
+                        if m == CBMI_FQZ || m == CBMI_FQZ_B || m == CBMI_FQZ_C || m == CBMI_FQZ_D {
                             if (*metrics).sz[m as usize] > best_sz {
                                 method &= !(1u32 << m) as c_int;
                             }
@@ -3760,7 +3637,11 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                 (*b).content_id,
                 &mut comp_size,
                 cached_method,
-                if cached_method == CBMI_GZIP_1 { 1 } else { level },
+                if cached_method == CBMI_GZIP_1 {
+                    1
+                } else {
+                    level
+                },
                 strat,
             );
             if comp.is_null() {
@@ -3829,40 +3710,9 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
     0
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // Default CRAM version numbers (htslib/cram/cram_io.c:5254).
 const CRAM_OPEN_DEFAULT_MAJOR: c_int = 3;
 const CRAM_OPEN_DEFAULT_MINOR: c_int = 1;
-
 
 // Internal helper: free up a partially-built cram_fd from the C `err:` label
 // of cram_dopen (htslib/cram/cram_io.c:5418). Mirrors the cascading free path
@@ -3906,8 +3756,6 @@ unsafe fn cram_cram_io_c_5560_cram_dopen_cleanup_err(fd: *mut cram_fd_layout) {
     }
     free(fd.cast());
 }
-
-
 
 // Native equivalents of the CRAM record encoder entry points
 // (htslib/cram/cram_encode.c). This is the last libhts-side delegation in
@@ -3985,19 +3833,12 @@ unsafe fn cram_next_container_native(
     }
 
     // Flush container when full or ref changes (single-seq mode).
-    if (*c).curr_slice == (*c).max_slice
-        || (bref != (*c).curr_ref && (*c).multi_seq == 0)
-    {
+    if (*c).curr_slice == (*c).max_slice || (bref != (*c).curr_ref && (*c).multi_seq == 0) {
         (*c).ref_seq_span = (*fdl).last_base as i64 - (*c).ref_seq_start + 1;
         // (Optional info log omitted; native hts_log_cstr would need a CString
         // built here. Matches behavior; doesn't affect correctness.)
 
-        if -1
-            == cram_cram_io_c_4275_cram_flush_container_mt(
-                fd,
-                c.cast(),
-            )
-        {
+        if -1 == cram_cram_io_c_4275_cram_flush_container_mt(fd, c.cast()) {
             return std::ptr::null_mut();
         }
         if (*fdl).pool.is_null() {
@@ -4065,30 +3906,44 @@ unsafe fn cram_next_container_native(
     c
 }
 
-
-
 // Function-pointer types for the varint decoders stored in cram_fd::vv.
 // 32-bit signed/unsigned share one shape; 64-bit another. They are kept in the
 // `vv` table as *mut c_void and are transmuted back here for invocation.
-type CramVarintDecode32 = unsafe fn(*mut crate::htslib_rs::hts::cram_fd, *mut i32, *mut u32) -> c_int;
-type CramVarintDecode64 = unsafe fn(*mut crate::htslib_rs::hts::cram_fd, *mut i64, *mut u32) -> c_int;
+type CramVarintDecode32 =
+    unsafe fn(*mut crate::htslib_rs::hts::cram_fd, *mut i32, *mut u32) -> c_int;
+type CramVarintDecode64 =
+    unsafe fn(*mut crate::htslib_rs::hts::cram_fd, *mut i64, *mut u32) -> c_int;
 
 #[inline]
-unsafe fn vv_decode32(vv: &varint_vec_layout, fd: *mut crate::htslib_rs::hts::cram_fd, val: *mut i32, crc: *mut u32) -> c_int {
+unsafe fn vv_decode32(
+    vv: &varint_vec_layout,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    val: *mut i32,
+    crc: *mut u32,
+) -> c_int {
     let f: CramVarintDecode32 = std::mem::transmute(vv.varint_decode32_crc);
     f(fd, val, crc)
 }
 #[inline]
-unsafe fn vv_decode32s(vv: &varint_vec_layout, fd: *mut crate::htslib_rs::hts::cram_fd, val: *mut i32, crc: *mut u32) -> c_int {
+unsafe fn vv_decode32s(
+    vv: &varint_vec_layout,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    val: *mut i32,
+    crc: *mut u32,
+) -> c_int {
     let f: CramVarintDecode32 = std::mem::transmute(vv.varint_decode32s_crc);
     f(fd, val, crc)
 }
 #[inline]
-unsafe fn vv_decode64(vv: &varint_vec_layout, fd: *mut crate::htslib_rs::hts::cram_fd, val: *mut i64, crc: *mut u32) -> c_int {
+unsafe fn vv_decode64(
+    vv: &varint_vec_layout,
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    val: *mut i64,
+    crc: *mut u32,
+) -> c_int {
     let f: CramVarintDecode64 = std::mem::transmute(vv.varint_decode64_crc);
     f(fd, val, crc)
 }
-
 
 /// original: cram_store_container (htslib/cram/cram_io.c:3960)
 ///
@@ -4139,18 +3994,27 @@ unsafe fn cram_cram_io_c_3960_cram_store_container(
     } else {
         cp = cp.add(((*fdl).vv.varint_put32s.unwrap())(cp, null_end, (*cl).ref_seq_id) as usize);
         if major >= 4 {
-            cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_start) as usize);
-            cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_span) as usize);
+            cp = cp
+                .add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_start) as usize);
+            cp = cp
+                .add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_span) as usize);
         } else {
-            cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_start as i32) as usize);
-            cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_span as i32) as usize);
+            cp = cp.add(
+                ((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_start as i32)
+                    as usize,
+            );
+            cp = cp.add(
+                ((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_span as i32) as usize,
+            );
         }
     }
     cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_records) as usize);
     if major == 2 {
         cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).record_counter) as usize);
     } else if major >= 3 {
-        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).record_counter as i32) as usize);
+        cp = cp.add(
+            ((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).record_counter as i32) as usize,
+        );
     }
     cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).num_bases) as usize);
     cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_blocks) as usize);
@@ -4225,18 +4089,27 @@ unsafe fn cram_cram_io_c_4023_cram_write_container(
     } else {
         cp = cp.add(((*fdl).vv.varint_put32s.unwrap())(cp, null_end, (*cl).ref_seq_id) as usize);
         if major >= 4 {
-            cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_start) as usize);
-            cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_span) as usize);
+            cp = cp
+                .add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_start) as usize);
+            cp = cp
+                .add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_span) as usize);
         } else {
-            cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_start as i32) as usize);
-            cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_span as i32) as usize);
+            cp = cp.add(
+                ((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_start as i32)
+                    as usize,
+            );
+            cp = cp.add(
+                ((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_span as i32) as usize,
+            );
         }
     }
     cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_records) as usize);
     if major >= 3 {
         cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).record_counter) as usize);
     } else {
-        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).record_counter as i32) as usize);
+        cp = cp.add(
+            ((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).record_counter as i32) as usize,
+        );
     }
     cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).num_bases) as usize);
     cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_blocks) as usize);
@@ -4273,7 +4146,6 @@ unsafe fn cram_cram_io_c_4023_cram_write_container(
     0
 }
 
-
 // original: cram_index (htslib/cram/cram_structs.h:720)
 //
 // Byte-faithful Rust mirror of the libhts `cram_index` struct. Lives in
@@ -4293,42 +4165,6 @@ pub struct cram_index_layout {
     pub offset: i64,
     pub e_next: *mut cram_index_layout,
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 pub unsafe fn cram_cram_codecs_h_230_cram_not_enough_bits(
     blk: *mut cram_block,
@@ -4355,201 +4191,12 @@ pub unsafe fn cram_cram_codecs_h_230_cram_not_enough_bits(
     0
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[repr(C)]
 struct pooled_alloc_test_xyz {
     x: c_int,
     y: c_int,
     z: c_int,
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 pub fn cram_os_h_155_le_int4(x: u32) -> u32 {
     u32::from_le(x)
@@ -5191,7 +4838,10 @@ mod tests {
             );
 
             block.content_type = crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE;
-            assert_eq!(block.content_type, crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE);
+            assert_eq!(
+                block.content_type,
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE
+            );
             assert_eq!(cram_cram_external_c_522_cram_block_get_content_id(b), -1);
         }
     }
@@ -5289,7 +4939,10 @@ mod tests {
                 cram: (&mut cram_fd as *mut cram_fd_layout).cast(),
             };
             fp.format.format = HTS_FORMAT_CRAM;
-            assert_eq!(cram_cram_external_c_1029_cram_get_refs(&mut fp), refs.cast());
+            assert_eq!(
+                cram_cram_external_c_1029_cram_get_refs(&mut fp),
+                refs.cast()
+            );
 
             fp.format.format = crate::htslib_rs::hts::HTS_FORMAT_BAM;
             assert!(cram_cram_external_c_1029_cram_get_refs(&mut fp).is_null());
@@ -5500,10 +5153,8 @@ mod tests {
                 ..direct
             };
             let direct_ptr = (&mut direct as *mut cram_block_layout).cast::<cram_block>();
-            let collision_ptr =
-                (&mut collision as *mut cram_block_layout).cast::<cram_block>();
-            let ignored_ptr =
-                (&mut ignored_core as *mut cram_block_layout).cast::<cram_block>();
+            let collision_ptr = (&mut collision as *mut cram_block_layout).cast::<cram_block>();
+            let ignored_ptr = (&mut ignored_core as *mut cram_block_layout).cast::<cram_block>();
 
             let mut by_id = vec![std::ptr::null_mut(); 512];
             by_id[42] = direct_ptr;
@@ -5542,7 +5193,10 @@ mod tests {
     #[test]
     fn cram_io_append_integer_helpers_cover_zero_and_wide_values() {
         unsafe {
-            let block = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 3);
+            let block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                3,
+            );
             assert!(!block.is_null());
 
             assert_eq!(cram_cram_io_h_271_block_append_uint(block, 0), 0);
@@ -5797,7 +5451,10 @@ mod tests {
             assert_eq!(cram_cram_io_c_755_itf8_size(0x0fff_ffff), 4);
             assert_eq!(cram_cram_io_c_755_itf8_size(0x1000_0000), 5);
 
-            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let b = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             assert!(!b.is_null());
             assert_eq!(cram_cram_io_c_620_itf8_put_blk(b, 0x4000), 3);
             assert_eq!(cram_cram_io_c_632_ltf8_put_blk(b, 0x80), 2);
@@ -6058,7 +5715,10 @@ mod tests {
             assert_eq!(err, 0);
             assert_eq!(cp, truncated.as_mut_ptr().add(1).cast::<c_char>());
 
-            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let b = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             assert!(!b.is_null());
             assert_eq!(cram_cram_io_c_821_uint7_put_blk_32(b, 0x80), 2);
             assert_eq!(cram_cram_io_c_831_sint7_put_blk_32(b, -1), 1);
@@ -6167,7 +5827,10 @@ mod tests {
             assert_eq!(&out[..4], &[0xfe, 0xff, 0xff, 0xff]);
             assert_eq!(hfile.begin, out.as_mut_ptr().add(4).cast());
 
-            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let b = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             assert!(!b.is_null());
             assert_eq!(cram_cram_io_c_1045_int32_put_blk(b, -2), 0);
             let block = b.cast::<cram_block_layout>();
@@ -6190,7 +5853,10 @@ mod tests {
     #[test]
     fn public_int32_get_blk_uses_block_size_cursor() {
         unsafe {
-            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let b = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             assert!(!b.is_null());
             let block = b.cast::<cram_block_layout>();
             let mut bytes = [1u8, 2, 3, 4, 5, 6, 7, 8];
@@ -6562,7 +6228,10 @@ mod tests {
             fd.fp = (&mut hfile as *mut hfile_layout).cast();
             fd.version = 4 << 8;
 
-            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 7);
+            let b = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                7,
+            );
             assert!(!b.is_null());
             let block = b.cast::<cram_block_layout>();
             (*block).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
@@ -6592,8 +6261,14 @@ mod tests {
             let rb = cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
             assert!(!rb.is_null());
             let read_block = rb.cast::<cram_block_layout>();
-            assert_eq!((*read_block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
-            assert_eq!((*read_block).orig_method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
+            assert_eq!(
+                (*read_block).method,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW
+            );
+            assert_eq!(
+                (*read_block).orig_method,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW
+            );
             assert_eq!(
                 (*read_block).content_type,
                 crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL
@@ -6698,7 +6373,10 @@ mod tests {
             assert_eq!((*block).crc32, 0);
             assert_eq!((*block).crc32_checked, 1);
             assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), 0);
-            assert_eq!((*block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
+            assert_eq!(
+                (*block).method,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW
+            );
 
             cram_cram_io_c_1565_cram_free_block(b);
         }
@@ -6776,7 +6454,10 @@ mod tests {
                 fd.fp = (&mut hfile as *mut hfile_layout).cast();
                 fd.version = version << 8;
 
-                let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+                let b = cram_cram_io_c_1388_cram_new_block(
+                    crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                    0,
+                );
                 assert!(!b.is_null());
                 let block = b.cast::<cram_block_layout>();
                 (*block).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
@@ -6814,7 +6495,10 @@ mod tests {
                     cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
                 assert!(!rb.is_null());
                 let read_block = rb.cast::<cram_block_layout>();
-                assert_eq!((*read_block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
+                assert_eq!(
+                    (*read_block).method,
+                    crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW
+                );
                 assert_eq!(
                     (*read_block).content_type,
                     crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL
@@ -6865,7 +6549,10 @@ mod tests {
             let b = cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
             assert!(!b.is_null());
             let block = b.cast::<cram_block_layout>();
-            assert_eq!((*block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
+            assert_eq!(
+                (*block).method,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW
+            );
             assert_eq!((*block).content_id, 7);
             assert_eq!((*block).comp_size, 3);
             assert_eq!((*block).uncomp_size, 3);
@@ -6961,7 +6648,10 @@ mod tests {
     #[test]
     fn cram_io_uncompress_block_matches_crc_and_method_rules() {
         unsafe {
-            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let b = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             assert!(!b.is_null());
             let block = b.cast::<cram_block_layout>();
             assert_eq!(
@@ -6980,7 +6670,10 @@ mod tests {
             (*block).crc32 = crate::htslib_rs::bgzf::hts_crc32(0, (*block).data.cast(), 3);
             (*block).crc32_checked = 0;
             assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), 0);
-            assert_eq!((*block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
+            assert_eq!(
+                (*block).method,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW
+            );
             assert_eq!(
                 std::slice::from_raw_parts((*block).data, (*block).alloc),
                 b"abc"
@@ -6990,7 +6683,10 @@ mod tests {
             (*block).uncomp_size = 0;
             (*block).crc32_checked = 1;
             assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), 0);
-            assert_eq!((*block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
+            assert_eq!(
+                (*block).method,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW
+            );
 
             (*block).method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_BZIP2;
             (*block).uncomp_size = 3;
@@ -7004,7 +6700,10 @@ mod tests {
             std::io::Write::write_all(&mut encoder, b"translated gzip payload").unwrap();
             let compressed = encoder.finish().unwrap();
 
-            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let b = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             assert!(!b.is_null());
             let block = b.cast::<cram_block_layout>();
             assert_eq!(
@@ -7016,7 +6715,10 @@ mod tests {
             (*block).uncomp_size = b"translated gzip payload".len() as i32;
             (*block).crc32_checked = 1;
             assert_eq!(cram_cram_io_c_1576_cram_uncompress_block(b), 0);
-            assert_eq!((*block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
+            assert_eq!(
+                (*block).method,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW
+            );
             assert_eq!((*block).alloc, b"translated gzip payload".len());
             assert_eq!(
                 std::slice::from_raw_parts((*block).data, (*block).alloc),
@@ -7035,7 +6737,10 @@ mod tests {
             assert_eq!((*metrics).trial, 2);
             assert_eq!((*metrics).next_trial, 35);
             assert_eq!((*metrics).consistency, 0);
-            assert_eq!((*metrics).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
+            assert_eq!(
+                (*metrics).method,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW
+            );
             assert_eq!((*metrics).strat, 0);
             assert_eq!((*metrics).revised_method, 0);
             assert_eq!((*metrics).unpackable, 0);
@@ -7063,7 +6768,10 @@ mod tests {
             assert!((*layout).codecs.iter().all(|p| p.is_null()));
 
             let block = (*layout).td_blk.cast::<cram_block_layout>();
-            assert_eq!((*block).content_type, crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE);
+            assert_eq!(
+                (*block).content_type,
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE
+            );
             assert_eq!((*block).content_id, 0);
             let pool = (*layout).td_keys.cast::<cram_string_alloc_t>();
             assert_eq!((*pool).max_length, 8192);
@@ -8539,8 +8247,10 @@ mod tests {
             codec.codec = 51;
             codec.vv = &mut vv as *mut varint_vec_layout;
             codec.xpack.sub_codec = (&mut sub_codec as *mut cram_codec_xpack_layout).cast();
-            let store_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let store_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_1537_cram_xpack_encode_store(
@@ -8558,8 +8268,10 @@ mod tests {
             );
             cram_cram_io_c_1565_cram_free_block(store_block);
 
-            let sub_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 9);
+            let sub_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                9,
+            );
             let mut packed = [0b01_10_11_00u8];
             assert_eq!(
                 cram_cram_io_h_248_block_append(
@@ -8766,12 +8478,24 @@ mod tests {
     #[test]
     fn cram_io_new_and_free_block_initialise_c_fields() {
         unsafe {
-            let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 99);
+            let b = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                99,
+            );
             assert!(!b.is_null());
             let block = b.cast::<cram_block_layout>();
-            assert_eq!((*block).method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
-            assert_eq!((*block).orig_method, crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW);
-            assert_eq!((*block).content_type, crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL);
+            assert_eq!(
+                (*block).method,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW
+            );
+            assert_eq!(
+                (*block).orig_method,
+                crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW
+            );
+            assert_eq!(
+                (*block).content_type,
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL
+            );
             assert_eq!((*block).content_id, 99);
             assert_eq!((*block).byte, 0);
             assert_eq!((*block).bit, 7);
@@ -9037,8 +8761,10 @@ mod tests {
             };
             codec.vv = &mut vv;
             codec.xdelta.last = 99;
-            let out_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let out_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             out_size = 4;
             assert_eq!(
                 cram_cram_codecs_c_1719_cram_xdelta_decode_block(
@@ -9104,8 +8830,10 @@ mod tests {
             );
             cram_cram_codecs_c_1762_cram_xdelta_decode_free(dec.cast());
 
-            let sub_out =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let sub_out = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             let mut sub_enc = cram_codec_xdelta_layout {
                 codec: 0,
                 out: sub_out.cast(),
@@ -9147,8 +8875,10 @@ mod tests {
                 &[2, 4]
             );
 
-            let store_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let store_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_1930_cram_xdelta_encode_store(
@@ -9431,10 +9161,14 @@ mod tests {
                 varint_put64s_blk: Some(test_varint_put64s_blk),
                 varint_size: Some(test_varint_size),
             };
-            let len_out =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
-            let lit_out =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let len_out = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
+            let lit_out = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             let mut len_enc = cram_codec_byte_array_len_layout {
                 out: len_out.cast(),
                 encode: test_byte_array_len_encode_val as usize as *mut c_void,
@@ -9487,8 +9221,10 @@ mod tests {
                 b"abc"
             );
 
-            let store_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let store_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_2303_cram_xrle_encode_store(
@@ -10066,7 +9802,10 @@ mod tests {
             let mut val2code = [0i32; 129];
             val2code[(b'A' + 1) as usize] = 0;
             val2code[(b'B' + 1) as usize] = 1;
-            let out = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let out = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             let mut codec = cram_codec_huffman_encoder_layout {
                 codec: 0,
                 out: out.cast(),
@@ -10189,8 +9928,10 @@ mod tests {
             codec.vv = &mut vv as *mut varint_vec_layout;
             codec.codec = 3;
             codec.huffman.option = 3;
-            let store_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let store_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_3112_cram_huffman_encode_store(
@@ -10276,8 +10017,10 @@ mod tests {
                     val_codec: std::ptr::null_mut(),
                 },
             };
-            let out_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let out_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             len_codec.out = out_block.cast();
             let mut val_codec = cram_codec_byte_array_len_layout {
                 codec: 0,
@@ -10393,8 +10136,10 @@ mod tests {
             };
             codec.vv = &mut vv as *mut varint_vec_layout;
             assert!(!codec.vv.is_null());
-            let store_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let store_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
@@ -10519,8 +10264,7 @@ mod tests {
                 crc32_checked: 0,
                 crc_part: 0,
             };
-            let input_ptr =
-                (&mut input_block as *mut cram_block_layout).cast::<cram_block>();
+            let input_ptr = (&mut input_block as *mut cram_block_layout).cast::<cram_block>();
             let mut by_id = [input_ptr];
             let mut slice = cram_slice_layout {
                 hdr: std::ptr::null_mut(),
@@ -10584,8 +10328,10 @@ mod tests {
 
             input_block.idx = 0;
             assert_eq!(input_block.idx, 0);
-            let out_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let out_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             out_size = 8;
             assert_eq!(
                 cram_cram_codecs_c_3626_cram_byte_array_stop_decode_block(
@@ -10605,8 +10351,10 @@ mod tests {
             );
             cram_cram_io_c_1565_cram_free_block(out_block);
 
-            let enc_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let enc_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             codec.out = enc_block.cast();
             let mut payload = *b"xy";
             assert_eq!(
@@ -10785,8 +10533,10 @@ mod tests {
                 cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store as usize as *mut c_void
             );
             (*enc).vv = &mut vv as *mut varint_vec_layout;
-            let store_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let store_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store(
@@ -10895,8 +10645,10 @@ mod tests {
             .cast::<cram_codec_external_layout>();
             assert!(!ext_enc.is_null());
             (*ext_enc).vv = &mut vv;
-            let store_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let store_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_562_cram_external_encode_store(
@@ -10971,8 +10723,10 @@ mod tests {
             );
             cram_cram_codecs_c_732_cram_varint_decode_free(var_dec.cast());
 
-            let store_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let store_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_854_cram_varint_encode_store(
@@ -11081,8 +10835,10 @@ mod tests {
             assert_eq!(decoded, [(*const_dec).xconst.val as i32; 2]);
             cram_cram_codecs_c_967_cram_const_decode_free(const_dec.cast());
 
-            let store_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let store_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_1025_cram_const_encode_store(
@@ -11174,8 +10930,10 @@ mod tests {
             );
             cram_cram_codecs_c_1131_cram_beta_decode_free(beta_dec.cast());
 
-            let store_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let store_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             let mut prefix = *b"P\0";
             assert_eq!(
                 cram_cram_codecs_c_1183_cram_beta_encode_store(
@@ -11607,10 +11365,7 @@ mod tests {
         1
     }
 
-    unsafe extern "C" fn test_varint_put32_blk_append(
-        blk: *mut cram_block,
-        val: i32,
-    ) -> c_int {
+    unsafe extern "C" fn test_varint_put32_blk_append(blk: *mut cram_block, val: i32) -> c_int {
         let mut byte = val as u8;
         cram_cram_io_h_248_block_append(blk, (&mut byte as *mut u8).cast(), 1);
         1
@@ -11709,8 +11464,10 @@ mod tests {
                 block_by_id: std::ptr::null_mut(),
                 ..unsafe { std::mem::zeroed() }
             };
-            let out_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let out_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             assert!(!out_block.is_null());
             let mut out_size = 0;
             assert_eq!(
@@ -11840,8 +11597,10 @@ mod tests {
             .cast::<cram_codec_byte_array_stop_layout>();
             assert!(!enc.is_null());
             (*enc).vv = &mut vv as *mut varint_vec_layout;
-            let store_block =
-                cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL, 0);
+            let store_block = cram_cram_io_c_1388_cram_new_block(
+                crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
+                0,
+            );
             assert!(!store_block.is_null());
             let mut prefix = *b"P\0";
             assert_eq!(
@@ -12103,10 +11862,8 @@ mod tests {
             };
 
             let direct_ptr = (&mut direct as *mut cram_block_layout).cast::<cram_block>();
-            let wrong_hash_ptr =
-                (&mut wrong_hash as *mut cram_block_layout).cast::<cram_block>();
-            let colliding_ptr =
-                (&mut colliding as *mut cram_block_layout).cast::<cram_block>();
+            let wrong_hash_ptr = (&mut wrong_hash as *mut cram_block_layout).cast::<cram_block>();
+            let colliding_ptr = (&mut colliding as *mut cram_block_layout).cast::<cram_block>();
             let non_external_ptr =
                 (&mut non_external as *mut cram_block_layout).cast::<cram_block>();
             let mut block_by_id = [std::ptr::null_mut(); 768];
@@ -13627,7 +13384,11 @@ mod tests {
                     assert_eq!(
                         (*cc).$field,
                         (*cn).$field,
-                        concat!("container field `", stringify!($field), "` differs (C vs native)")
+                        concat!(
+                            "container field `",
+                            stringify!($field),
+                            "` differs (C vs native)"
+                        )
                     );
                 };
             }
@@ -13677,11 +13438,18 @@ mod tests {
             // --- compression header block (read + skip on both fds) ---
             let comp_c = hts_sys::cram_read_block(fd_c.cast());
             let comp_n = cram_cram_io_c_1414_cram_read_block(fd_n.cast());
-            assert!(!comp_c.is_null() && !comp_n.is_null(), "comp-hdr block read failed");
+            assert!(
+                !comp_c.is_null() && !comp_n.is_null(),
+                "comp-hdr block read failed"
+            );
             {
                 let bc = comp_c.cast::<cram_block_layout>();
                 let bn = comp_n.cast::<cram_block_layout>();
-                assert_eq!((*bc).content_type, (*bn).content_type, "comp-hdr content_type");
+                assert_eq!(
+                    (*bc).content_type,
+                    (*bn).content_type,
+                    "comp-hdr content_type"
+                );
                 assert_eq!((*bc).content_id, (*bn).content_id, "comp-hdr content_id");
                 assert_eq!((*bc).comp_size, (*bn).comp_size, "comp-hdr comp_size");
                 assert_eq!((*bc).uncomp_size, (*bn).uncomp_size, "comp-hdr uncomp_size");
@@ -13691,13 +13459,24 @@ mod tests {
             // --- first slice header block + decoded slice header ---
             let sb_c = hts_sys::cram_read_block(fd_c.cast());
             let sb_n = cram_cram_io_c_1414_cram_read_block(fd_n.cast());
-            assert!(!sb_c.is_null() && !sb_n.is_null(), "slice-hdr block read failed");
+            assert!(
+                !sb_c.is_null() && !sb_n.is_null(),
+                "slice-hdr block read failed"
+            );
             {
                 let bc = sb_c.cast::<cram_block_layout>();
                 let bn = sb_n.cast::<cram_block_layout>();
-                assert_eq!((*bc).content_type, (*bn).content_type, "slice-hdr content_type");
+                assert_eq!(
+                    (*bc).content_type,
+                    (*bn).content_type,
+                    "slice-hdr content_type"
+                );
                 assert_eq!((*bc).comp_size, (*bn).comp_size, "slice-hdr comp_size");
-                assert_eq!((*bc).uncomp_size, (*bn).uncomp_size, "slice-hdr uncomp_size");
+                assert_eq!(
+                    (*bc).uncomp_size,
+                    (*bn).uncomp_size,
+                    "slice-hdr uncomp_size"
+                );
                 assert_eq!((*bc).crc32, (*bn).crc32, "slice-hdr crc32");
             }
 
@@ -13717,7 +13496,10 @@ mod tests {
             }
             let hc = htslib_cram_decode_slice_header(fd_c, sb_c.cast());
             let hn = cram_cram_decode_c_955_cram_decode_slice_header(fd_n, sb_n.cast());
-            assert!(!hc.is_null() && !hn.is_null(), "cram_decode_slice_header failed");
+            assert!(
+                !hc.is_null() && !hn.is_null(),
+                "cram_decode_slice_header failed"
+            );
             let hc = hc.cast::<cram_block_slice_hdr_layout>();
             let hn = hn.cast::<cram_block_slice_hdr_layout>();
 
@@ -13726,7 +13508,11 @@ mod tests {
                     assert_eq!(
                         (*hc).$field,
                         (*hn).$field,
-                        concat!("slice-hdr field `", stringify!($field), "` differs (C vs native)")
+                        concat!(
+                            "slice-hdr field `",
+                            stringify!($field),
+                            "` differs (C vs native)"
+                        )
                     );
                 };
             }
@@ -13857,22 +13643,36 @@ mod tests {
 
                 let comp_c = hts_sys::cram_read_block(fd_c.cast());
                 let comp_n = cram_cram_io_c_1414_cram_read_block(fd_n.cast());
-                assert!(!comp_c.is_null() && !comp_n.is_null(), "comp-hdr read failed");
+                assert!(
+                    !comp_c.is_null() && !comp_n.is_null(),
+                    "comp-hdr read failed"
+                );
 
                 let hc = htslib_cram_decode_compression_header(fd_c, comp_c.cast());
                 let hn = cram_cram_decode_c_145_cram_decode_compression_header(fd_n, comp_n.cast());
-                assert!(!hc.is_null(), "C cram_decode_compression_header returned NULL");
-                assert!(!hn.is_null(), "native cram_decode_compression_header returned NULL");
+                assert!(
+                    !hc.is_null(),
+                    "C cram_decode_compression_header returned NULL"
+                );
+                assert!(
+                    !hn.is_null(),
+                    "native cram_decode_compression_header returned NULL"
+                );
                 let hc = hc.cast::<cram_block_compression_hdr_layout>();
                 let hn = hn.cast::<cram_block_compression_hdr_layout>();
 
                 // --- preservation flags ---
-                assert_eq!((*hc).read_names_included, (*hn).read_names_included, "read_names_included");
+                assert_eq!(
+                    (*hc).read_names_included,
+                    (*hn).read_names_included,
+                    "read_names_included"
+                );
                 assert_eq!((*hc).ap_delta, (*hn).ap_delta, "ap_delta");
                 assert_eq!((*hc).no_ref, (*hn).no_ref, "no_ref");
                 assert_eq!((*hc).qs_seq_orient, (*hn).qs_seq_orient, "qs_seq_orient");
                 assert_eq!(
-                    (*hc).substitution_matrix, (*hn).substitution_matrix,
+                    (*hc).substitution_matrix,
+                    (*hn).substitution_matrix,
                     "substitution_matrix"
                 );
 
@@ -13895,7 +13695,8 @@ mod tests {
                     let cc_ = (*hc).codecs[ds].cast::<cram_codec_base_layout>();
                     let cn_ = (*hn).codecs[ds].cast::<cram_codec_base_layout>();
                     assert_eq!(
-                        cc_.is_null(), cn_.is_null(),
+                        cc_.is_null(),
+                        cn_.is_null(),
                         "codecs[{ds}] presence differs"
                     );
                     if !cc_.is_null() {
@@ -13937,10 +13738,18 @@ mod tests {
                         assert_eq!((*mc).size, (*mn).size, "tag_map[{slot}] size");
                         let cdc = (*mc).codec.cast::<cram_codec_base_layout>();
                         let cdn = (*mn).codec.cast::<cram_codec_base_layout>();
-                        assert_eq!(cdc.is_null(), cdn.is_null(), "tag_map[{slot}] codec presence");
+                        assert_eq!(
+                            cdc.is_null(),
+                            cdn.is_null(),
+                            "tag_map[{slot}] codec presence"
+                        );
                         if !cdc.is_null() {
                             assert_eq!((*cdc).codec, (*cdn).codec, "tag_map[{slot}] codec enum");
-                            assert_eq!((*cdc).codec_id, (*cdn).codec_id, "tag_map[{slot}] codec_id");
+                            assert_eq!(
+                                (*cdc).codec_id,
+                                (*cdn).codec_id,
+                                "tag_map[{slot}] codec_id"
+                            );
                         }
                         mc = (*mc).next;
                         mn = (*mn).next;
@@ -14036,7 +13845,10 @@ mod tests {
                 let mode = CString::new("rb").unwrap();
                 let fd_c = cram_open(c_path.as_ptr(), mode.as_ptr());
                 let fd_n = cram_open(c_path.as_ptr(), mode.as_ptr());
-                assert!(!fd_c.is_null() && !fd_n.is_null(), "cram_open failed for {cram}");
+                assert!(
+                    !fd_c.is_null() && !fd_n.is_null(),
+                    "cram_open failed for {cram}"
+                );
 
                 // Saved so we can restore + free the C-owned refs before
                 // cram_close (the native refs_load_fai result uses the native
@@ -14095,16 +13907,22 @@ mod tests {
                         );
                         break;
                     }
-                    assert!(!bam_c.is_null() && !bam_n.is_null(), "{cram}: null bam at {nrec}");
+                    assert!(
+                        !bam_c.is_null() && !bam_n.is_null(),
+                        "{cram}: null bam at {nrec}"
+                    );
 
                     let cc = &(*bam_c).core;
                     let cn = &(*bam_n).core;
                     macro_rules! feq {
                         ($f:ident) => {
                             assert_eq!(
-                                cc.$f, cn.$f,
+                                cc.$f,
+                                cn.$f,
                                 "{}: record {} core.{} differs (C vs native)",
-                                cram, nrec, stringify!($f)
+                                cram,
+                                nrec,
+                                stringify!($f)
                             );
                         };
                     }
@@ -14121,7 +13939,10 @@ mod tests {
 
                     let lc = (*bam_c).l_data;
                     let ln = (*bam_n).l_data;
-                    assert_eq!(lc, ln, "{cram}: record {nrec} l_data differs (C={lc} native={ln})");
+                    assert_eq!(
+                        lc, ln,
+                        "{cram}: record {nrec} l_data differs (C={lc} native={ln})"
+                    );
                     let dc = std::slice::from_raw_parts((*bam_c).data, lc as usize);
                     let dn = std::slice::from_raw_parts((*bam_n).data, ln as usize);
                     assert_eq!(
