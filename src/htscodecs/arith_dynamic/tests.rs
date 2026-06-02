@@ -28,7 +28,9 @@ fn corpus() -> Vec<(String, Vec<u8>)> {
     v.push(("seq".into(), (0..256u32).map(|x| x as u8).collect()));
     v.push((
         "biased".into(),
-        (0..4000u32).map(|x| if x % 5 == 0 { (x % 7) as u8 } else { b'A' }).collect(),
+        (0..4000u32)
+            .map(|x| if x % 5 == 0 { (x % 7) as u8 } else { b'A' })
+            .collect(),
     ));
     v.push(("text".into(), {
         let s = b"The quick brown fox jumps over the lazy dog. ";
@@ -42,8 +44,12 @@ fn corpus() -> Vec<(String, Vec<u8>)> {
     for &distinct in &[2usize, 4, 16, 64, 256] {
         for &len in &[1usize, 7, 8, 9, 100, 1000, 9000] {
             let mut rng = Rng::new((distinct * 131 + len) as u64);
-            let syms: Vec<u8> = (0..distinct).map(|k| ((k * 37 + 11) & 0xff) as u8).collect();
-            let d: Vec<u8> = (0..len).map(|_| syms[(rng.next_u32() as usize) % distinct]).collect();
+            let syms: Vec<u8> = (0..distinct)
+                .map(|k| ((k * 37 + 11) & 0xff) as u8)
+                .collect();
+            let d: Vec<u8> = (0..len)
+                .map(|_| syms[(rng.next_u32() as usize) % distinct])
+                .collect();
             v.push((format!("rnd_d{distinct}_l{len}"), d));
         }
     }
@@ -98,12 +104,8 @@ mod parity {
 
     extern "C" {
         #[link_name = "arith_compress"]
-        fn c_arith_compress(
-            r#in: *mut u8,
-            in_size: u32,
-            out_size: *mut u32,
-            order: i32,
-        ) -> *mut u8;
+        fn c_arith_compress(r#in: *mut u8, in_size: u32, out_size: *mut u32, order: i32)
+            -> *mut u8;
         #[link_name = "arith_uncompress"]
         fn c_arith_uncompress(r#in: *mut u8, in_size: u32, out_size: *mut u32) -> *mut u8;
     }
@@ -158,7 +160,8 @@ mod parity {
                 match c {
                     Some(c) => {
                         assert_eq!(
-                            native, c,
+                            native,
+                            c,
                             "byte mismatch {name} order {order:#x} (native {} vs C {} bytes)",
                             native.len(),
                             c.len()
@@ -185,7 +188,10 @@ mod parity {
             for order in orders() {
                 if let Some(c) = c_compress(&data, order) {
                     let dec = native_uncompress(&c);
-                    assert_eq!(dec, data, "native decode of C mismatch {name} order {order:#x}");
+                    assert_eq!(
+                        dec, data,
+                        "native decode of C mismatch {name} order {order:#x}"
+                    );
                 }
             }
         }
@@ -203,7 +209,10 @@ mod parity {
                     continue;
                 }
                 let dec = c_uncompress(&native).expect("C decode of native null");
-                assert_eq!(dec, data, "C decode of native mismatch {name} order {order:#x}");
+                assert_eq!(
+                    dec, data,
+                    "C decode of native mismatch {name} order {order:#x}"
+                );
             }
         }
     }
@@ -248,8 +257,16 @@ fn adversarial_inputs() {
         ("empty", vec![]),
         ("one", vec![42]),
         ("all_same_big", vec![0xCDu8; 50_000]),
-        ("monotonic", (0..3000u32).map(|x| (x & 0xff) as u8).collect()),
-        ("alternating_2sym", (0..2048u32).map(|x| if x & 1 == 0 { b'A' } else { b'B' }).collect()),
+        (
+            "monotonic",
+            (0..3000u32).map(|x| (x & 0xff) as u8).collect(),
+        ),
+        (
+            "alternating_2sym",
+            (0..2048u32)
+                .map(|x| if x & 1 == 0 { b'A' } else { b'B' })
+                .collect(),
+        ),
     ];
     for (name, data) in cases {
         for order in [0i32, 1, X_RLE, X_PACK, X_PACK | X_RLE, X_STRIPE, X_CAT] {
@@ -257,7 +274,10 @@ fn adversarial_inputs() {
             if data.is_empty() {
                 continue;
             }
-            assert!(!comp.is_empty(), "compress empty for {name} order {order:#x}");
+            assert!(
+                !comp.is_empty(),
+                "compress empty for {name} order {order:#x}"
+            );
             let dec = native_uncompress(&comp);
             assert_eq!(dec, *data, "rt {name} order {order:#x}");
         }
@@ -275,9 +295,7 @@ fn corrupt_decode_no_panic() {
     // Several valid streams across orders to fuzz.
     let mut valids: Vec<Vec<u8>> = Vec::new();
     for order in [0i32, 1, X_RLE, X_PACK, X_PACK | X_RLE] {
-        let data: Vec<u8> = (0..4096u32)
-            .map(|_| (rng.next_u32() % 32) as u8)
-            .collect();
+        let data: Vec<u8> = (0..4096u32).map(|_| (rng.next_u32() % 32) as u8).collect();
         valids.push(native_compress(&data, order));
     }
 

@@ -439,10 +439,7 @@ mod tests {
             // corrupted by the contention.
             hts_srand48(42);
             let expected = reference_next([RAND48_SEED_0, 42, 0]);
-            assert_eq!(
-                hts_drand48().to_bits(),
-                reference_erand(expected).to_bits()
-            );
+            assert_eq!(hts_drand48().to_bits(), reference_erand(expected).to_bits());
         }
     }
 

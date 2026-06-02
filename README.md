@@ -45,40 +45,30 @@ SIMD variants (`rANS_static32x16pr_avx2.c`, `_avx512.c`, `_neon.c`, `_sse4.c`) a
 
 ## Real-data performance comparisons
 
-`tools/compare-real-data-performance.sh` compares translated release binaries with the checked-out original htslib binaries on larger local real-data workloads. It writes timing CSVs and per-run output hashes under `/tmp/htslib-rs-real-data-perf` by default, avoiding large outputs in the repository.
+These benchmarks compare translated release binaries with the checked-out original htslib binaries on local real-data workloads. Outputs are hashed and considered matching only when the Rust and C SHA-256 hashes are identical. Timings are wall-clock seconds from `/usr/bin/time`; RSS is max resident set size.
 
-The default workloads cover ordinary gzip FASTQ viewing, BAM viewing, BAM record counting, bgzip decompression of a large BGZF-compressed reference, and bgzip compression of a large FASTA. Override `FASTQ_GZ`, `BAM`, `BAM_REGION`, `REF_GZ`, `FASTA`, `OUT_DIR`, or `RUNS` to use different data:
+| Workload | Parity | Rust real / RSS | C real / RSS |
+|---|---|---:|---:|
+| htsfile full HiFi FASTQ.gz | MATCH | 3.78s / 3.8 MB | 3.65s / 9.0 MB |
+| htsfile 5M BAM view | MATCH | 24.76s / 3.2 MB | 24.59s / 9.0 MB |
+| htsfile large SAM header | MATCH | 0.01s / 2.9 MB | 0.02s / 8.3 MB |
+| count BAM chr22:1-1M | MATCH | 0.01s / 3.8 MB | 0.06s / 9.0 MB |
+| count BAM chr22:1-10M | MATCH | 0.01s / 3.5 MB | 0.02s / 9.0 MB |
+| bgzip decompress HiFi FASTQ.gz | MATCH | 2.42s / 3.2 MB | 2.62s / 8.3 MB |
+| bgzip decompress CHM13.fa.gz | MATCH | 18.80s / 3.2 MB | 20.23s / 8.3 MB |
+| bgzip compress chr22.fa | MATCH | 5.36s / 3.2 MB | 5.16s / 8.6 MB |
+| tabix large BED chr1 query | MATCH | 0.06s / 7.4 MB | 0.06s / 12.0 MB |
+| tabix VCF header query | MATCH | 0.01s / 3.5 MB | 0.02s / 8.6 MB |
+| faidx FASTQ single | MATCH | 0.23s / 40.3 MB | 0.23s / 42.6 MB |
+| faidx FASTQ multi | MATCH | 0.23s / 40.3 MB | 0.23s / 42.6 MB |
+| bam_to_cram 5M BAM | MATCH | 50.49s / 43.0 MB | 49.19s / 42.8 MB |
+| cram_to_bam from C CRAM | MATCH | 58.01s / 22.8 MB | 57.55s / 37.0 MB |
+
+The latest run wrote its CSV to `/tmp/htslib-rs-additional-compare3-1780412626/results.csv`. `tools/compare-real-data-performance.sh` can be used for the smaller default benchmark set and writes timing CSVs and per-run output hashes under `/tmp/htslib-rs-real-data-perf` by default. Override `FASTQ_GZ`, `BAM`, `BAM_REGION`, `REF_GZ`, `FASTA`, `OUT_DIR`, or `RUNS` to use different data:
 
 ```bash
 RUNS=3 tools/compare-real-data-performance.sh
 ```
-
-## Known issues
-
-### `bam_to_cram` byte parity vs C
-
-Encoding BAM → CRAM in Rust produces a different byte stream than C, even though every record round-trips identically (Rust BAM → Rust CRAM → Rust BAM gives the original 5 000 000 records; Rust decoding a C-produced CRAM is byte-identical to C decoding it). The CRAM file is also ~177 KB smaller in Rust on the gex_chr22_5m.bam test (145.66 MB vs C 145.84 MB), so this is encoder-behaviour divergence, not a correctness bug.
-
-What's known:
-
-- Bytes 0 – 2 711 are byte-identical to C (CRAM file def + first container header + gzipped SAM-header block).
-- First diff is at byte 2 712 — the **length field of container 2** (the first data container). Rust's length is 516 bytes smaller. The container header itself then matches for ~16 bytes before the compression-header block content diverges.
-- The CRC32 of the compression-header block differs (`79 c7 73 9e` Rust vs `04 55 16 26` C). That CRC just reflects the differing block content.
-- The preservation_map (`RN`, `SM`, `TD`, `AP`, `RR`) IS correctly populated and iterated in the same hash-bucket order as C — verified via probe. So the divergence is **not** in preservation-map content.
-
-Suspected cause (not yet confirmed):
-
-1. **`td_blk` (tag dictionary) content** differs — the byte layout for the same input tags is slightly different.
-2. **Codec choices differ** for one or more data series (`BF`/`CF`/`RL`/...). The compression metrics in `cram_compress_block` pick a codec per data series; if Rust's metrics pick e.g. `RANS_PR128` where C picks `RANS_PR0` for the same series, the encoded codec descriptor bytes (and downstream block sizes) shift.
-
-Confirming which requires dumping the uncompressed compression-header block from both files and diffing the codec map entry-by-entry. Then chase whichever data series is different up through `cram_encode_compression_header` (`src/cram/cram_encode.rs:28`) and the per-block codec selection (`cram_cram_io_c_1913_cram_compress_block3` in `src/cram/mod.rs`).
-
-Working pieces (already correct, **don't revert**):
-
-- `src/cram/mod.rs:cram_cram_io_c_1222_zlib_mem_deflate` uses system zlib directly with `deflateInit2_(level, Z_DEFLATED, 15|16, 9, strat)` to match C's gzip output bit-for-bit. This is what got us from divergence at byte 12 to byte 2712.
-- `bgzf::system_zlib` / `bgzf::z_stream` / `bgzf::ZlibFns` are `pub(crate)` so the cram path can share them.
-
-Doesn't need fixing right now — it's cosmetic. A future pass can audit it.
 
 ## License
 

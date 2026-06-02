@@ -14,19 +14,17 @@ use crate::htslib_rs::hts::{
     __ac_FNV1a_hash_string, __ac_Wang_hash, __ac_X31_hash_string, double_to_le, ed_swap_4p,
     find_file_extension, float_to_le, htsFile, htsLogLevel, hts_bin_maxpos, hts_expr_val_t,
     hts_filter_eval2, hts_filter_t, hts_getline, hts_idx_destroy, hts_idx_finish, hts_idx_init,
-    hts_idx_load3, hts_idx_push, hts_idx_save_as, hts_idx_t,
-    hts_itr_multi_bam, hts_itr_multi_cram, hts_itr_multi_next, hts_itr_multi_query_func,
-    hts_itr_next, hts_itr_query, hts_itr_regions, hts_itr_t, hts_name2id_f,
-    hts_parse_region, hts_pos_t, hts_readrec_func, hts_reg2bin, hts_reglist_create,
-    hts_reglist_free, hts_reglist_t, hts_seek_func, hts_tell_func,
-    hts_str2int, hts_str2uint, i16_to_le, i32_to_le, isalnum_c, isalpha_c, isdigit_c, islower_c,
-    isspace_c, isupper_c, kputc, kputc_, kputll, kputs, kputsn, kputsn_, kputuw, kputw, ks_clear,
-    ks_expand, ks_free, ks_release, ks_resize, kstring_t, toupper_c, u16_to_le, u32_to_le,
-    u64_to_le, BGZF, HTS_FMT_BAI, HTS_FMT_CRAI, HTS_FMT_CSI, HTS_FORMAT_BAM,
-    HTS_FORMAT_BINARY_FORMAT, HTS_FORMAT_CRAM, HTS_FORMAT_EMPTY_FORMAT, HTS_FORMAT_FASTA_FORMAT,
-    HTS_FORMAT_FASTQ_FORMAT, HTS_FORMAT_SAM, HTS_FORMAT_SEQUENCE_DATA, HTS_FORMAT_TEXT_FORMAT,
-    HTS_IDX_NOCOOR, HTS_IDX_SAVE_REMOTE, HTS_IDX_START, HTS_MAX_EXT_LEN, HTS_PARSE_THOUSANDS_SEP,
-    HTS_POS_MAX,
+    hts_idx_load3, hts_idx_push, hts_idx_save_as, hts_idx_t, hts_itr_multi_bam, hts_itr_multi_cram,
+    hts_itr_multi_next, hts_itr_multi_query_func, hts_itr_next, hts_itr_query, hts_itr_regions,
+    hts_itr_t, hts_name2id_f, hts_parse_region, hts_pos_t, hts_readrec_func, hts_reg2bin,
+    hts_reglist_create, hts_reglist_free, hts_reglist_t, hts_seek_func, hts_str2int, hts_str2uint,
+    hts_tell_func, i16_to_le, i32_to_le, isalnum_c, isalpha_c, isdigit_c, islower_c, isspace_c,
+    isupper_c, kputc, kputc_, kputll, kputs, kputsn, kputsn_, kputuw, kputw, ks_clear, ks_expand,
+    ks_free, ks_release, ks_resize, kstring_t, toupper_c, u16_to_le, u32_to_le, u64_to_le, BGZF,
+    HTS_FMT_BAI, HTS_FMT_CRAI, HTS_FMT_CSI, HTS_FORMAT_BAM, HTS_FORMAT_BINARY_FORMAT,
+    HTS_FORMAT_CRAM, HTS_FORMAT_EMPTY_FORMAT, HTS_FORMAT_FASTA_FORMAT, HTS_FORMAT_FASTQ_FORMAT,
+    HTS_FORMAT_SAM, HTS_FORMAT_SEQUENCE_DATA, HTS_FORMAT_TEXT_FORMAT, HTS_IDX_NOCOOR,
+    HTS_IDX_SAVE_REMOTE, HTS_IDX_START, HTS_MAX_EXT_LEN, HTS_PARSE_THOUSANDS_SEP, HTS_POS_MAX,
 };
 
 use crate::htslib_rs::hfile::hpeek;
@@ -501,7 +499,6 @@ pub struct bam_mplp_s {
     pub plp: *mut *const bam_pileup1_t,
 }
 
-
 unsafe fn parse_sq_target(line: &[u8]) -> Option<(&[u8], hts_pos_t)> {
     if !line.starts_with(b"@SQ\t") {
         return None;
@@ -944,23 +941,17 @@ unsafe fn sam_hdr_append_text_raw(h: *mut sam_hdr_t, src: *const c_char, len: us
             return -1;
         }
     };
-    let text = crate::htslib_rs::c_compat::realloc((*h).text.cast(), new_len as u64 + 1)
-        .cast::<c_char>();
+    let text =
+        crate::htslib_rs::c_compat::realloc((*h).text.cast(), new_len as u64 + 1).cast::<c_char>();
     if text.is_null() {
         return -1;
     }
     (*h).text = text;
-    crate::htslib_rs::c_compat::memcpy(
-        (*h).text.add(old_len).cast(),
-        src.cast(),
-        len as u64,
-    );
+    crate::htslib_rs::c_compat::memcpy((*h).text.add(old_len).cast(), src.cast(), len as u64);
     (*h).l_text = new_len;
     *(*h).text.add(new_len) = 0;
     0
 }
-
-
 
 // hrecs-backed path for sam_hdr_add_line (mirrors htslib/header.c:1693, which
 // always fills and mutates hrecs). Inputs are pre-validated by the caller.
@@ -976,10 +967,7 @@ pub(crate) unsafe fn sam_hdr_add_line_hrecs(
     }
     // An added @SQ line changes the reference set; rebuild the target arrays so
     // n_targets/target_name stay in sync (matches sam_hdr_update_line).
-    if *type_ == b'S' as c_char
-        && *type_.add(1) == b'Q' as c_char
-        && rebuild_target_arrays(h) < 0
-    {
+    if *type_ == b'S' as c_char && *type_.add(1) == b'Q' as c_char && rebuild_target_arrays(h) < 0 {
         return -1;
     }
     // sam_hrecs_vadd sets dirty; clear the cached text so the next read/write
@@ -988,14 +976,6 @@ pub(crate) unsafe fn sam_hdr_add_line_hrecs(
     header_c_1530_redact_header_text(h);
     0
 }
-
-
-
-
-
-
-
-
 
 pub(crate) unsafe fn sam_hdr_text_remove_line(
     h: *mut sam_hdr_t,
@@ -1383,7 +1363,6 @@ unsafe fn sam_hdr_text_add_pg_line(
     sam_hdr_text_append_bytes(h, &line)
 }
 
-
 // Generates a unique @PG ID against the hrecs pg_hash, mirroring
 // htslib/header.c:sam_hdr_pg_id. Returns a NUL-terminated byte vector. The
 // suffix counter hrecs->ID_cnt persists across calls (so the first generated
@@ -1531,14 +1510,7 @@ pub(crate) unsafe fn sam_hdr_add_pg_hrecs(
             let Some(id) = sam_hdr_pg_gen_id(hrecs, name, specified_id) else {
                 return -1;
             };
-            if sam_hrecs_pg_add_one(
-                hrecs,
-                id.as_ptr().cast(),
-                pn,
-                leaf.as_ptr().cast(),
-                tags,
-            ) < 0
-            {
+            if sam_hrecs_pg_add_one(hrecs, id.as_ptr().cast(), pn, leaf.as_ptr().cast(), tags) < 0 {
                 return -1;
             }
         }
@@ -1607,12 +1579,6 @@ pub(crate) unsafe fn sam_hdr_text_name2tid(h: *const sam_hdr_t, ref_: *const c_c
     }
     -1
 }
-
-
-
-
-
-
 
 // original: sam_hdr_link_pg (htslib/header.c:2468)
 pub(crate) unsafe fn sam_hdr_link_pg(h: *mut sam_hdr_t) -> c_int {
@@ -1686,11 +1652,6 @@ pub(crate) unsafe fn sam_hdr_link_pg(h: *mut sam_hdr_t) -> c_int {
     0
 }
 
-
-
-
-
-
 // original: KHASH_DECLARE (htslib/header.c:44)
 // Translated by the concrete khash_s2i_t declarations and helpers in this file.
 
@@ -1723,7 +1684,10 @@ pub(crate) unsafe fn sam_hrecs_walk_global(
     }
 }
 
-pub(crate) unsafe fn sam_hrecs_find_first_type(hrecs: *mut sam_hrecs_t, type_: u32) -> *mut sam_hrec_type_t {
+pub(crate) unsafe fn sam_hrecs_find_first_type(
+    hrecs: *mut sam_hrecs_t,
+    type_: u32,
+) -> *mut sam_hrec_type_t {
     if hrecs.is_null() {
         return std::ptr::null_mut();
     }
@@ -1760,7 +1724,10 @@ pub(crate) unsafe fn sam_hrec_find_tag_value<'a>(
     None
 }
 
-pub(crate) unsafe fn sam_hrec_tag_matches_key(tag: *mut sam_hrec_tag_t, key: *const c_char) -> bool {
+pub(crate) unsafe fn sam_hrec_tag_matches_key(
+    tag: *mut sam_hrec_tag_t,
+    key: *const c_char,
+) -> bool {
     !tag.is_null()
         && !key.is_null()
         && !(*tag).str_.is_null()
@@ -1897,10 +1864,7 @@ unsafe fn sam_hrecs_type_rank(hrecs: *mut sam_hrecs_t, type_: u32) -> c_int {
 // Locate the last line of `type_` in the global list (or null if none). Used
 // to mimic C's per-type-ring "h_type->prev" insertion anchor inside
 // sam_hrecs_vadd.
-unsafe fn sam_hrecs_find_last_of_type(
-    hrecs: *mut sam_hrecs_t,
-    type_: u32,
-) -> *mut sam_hrec_type_t {
+unsafe fn sam_hrecs_find_last_of_type(hrecs: *mut sam_hrecs_t, type_: u32) -> *mut sam_hrec_type_t {
     let mut found: *mut sam_hrec_type_t = std::ptr::null_mut();
     sam_hrecs_walk_global(hrecs, |cur| {
         if (*cur).type_ == type_ {
@@ -1920,7 +1884,10 @@ unsafe fn sam_hrecs_type_list_add(hrecs: *mut sam_hrecs_t, line: *mut sam_hrec_t
 }
 
 // original: sam_hrecs_remove_line (htslib/header.c:250)
-pub(crate) unsafe fn sam_hrecs_remove_line(hrecs: *mut sam_hrecs_t, line: *mut sam_hrec_type_t) -> c_int {
+pub(crate) unsafe fn sam_hrecs_remove_line(
+    hrecs: *mut sam_hrecs_t,
+    line: *mut sam_hrec_type_t,
+) -> c_int {
     if hrecs.is_null() || line.is_null() || (*hrecs).first_line.is_null() {
         return -1;
     }
@@ -1940,7 +1907,10 @@ pub(crate) unsafe fn sam_hrecs_remove_line(hrecs: *mut sam_hrecs_t, line: *mut s
 }
 
 // original: sam_hrecs_init_type_order (htslib/header.c:69)
-pub(crate) unsafe fn sam_hrecs_init_type_order(hrecs: *mut sam_hrecs_t, type_list: *mut c_char) -> c_int {
+pub(crate) unsafe fn sam_hrecs_init_type_order(
+    hrecs: *mut sam_hrecs_t,
+    type_list: *mut c_char,
+) -> c_int {
     if hrecs.is_null() {
         return -1;
     }
@@ -1962,10 +1932,6 @@ pub(crate) unsafe fn sam_hrecs_init_type_order(hrecs: *mut sam_hrecs_t, type_lis
     (*hrecs).type_order = type_order;
     0
 }
-
-
-
-
 
 // original: sam_hrecs_find_type_pos (htslib/header.c:1546)
 unsafe fn sam_hrecs_find_type_pos(
@@ -2018,7 +1984,6 @@ unsafe fn sam_hrecs_find_type_pos(
     });
     found
 }
-
 
 unsafe fn sam_hrecs_hash_value(hash: *mut c_void, key: *const c_char) -> Option<c_int> {
     let hash = hash.cast::<khash_m_s2i_t>();
@@ -2462,7 +2427,11 @@ unsafe fn sam_hrecs_parse_single_line(hrecs: *mut sam_hrecs_t, line: &[u8]) -> c
 }
 
 // original: sam_hrecs_parse_lines (htslib/header.c:1188)
-pub(crate) unsafe fn sam_hrecs_parse_lines(hrecs: *mut sam_hrecs_t, text: *const c_char, len: usize) -> c_int {
+pub(crate) unsafe fn sam_hrecs_parse_lines(
+    hrecs: *mut sam_hrecs_t,
+    text: *const c_char,
+    len: usize,
+) -> c_int {
     if hrecs.is_null() || text.is_null() {
         return -1;
     }
@@ -2834,13 +2803,10 @@ pub(crate) unsafe fn add_stub_ref_sq_lines(h: *mut sam_hdr_t) -> c_int {
     sam_hrecs_refs_from_targets_array(h)
 }
 
-
 // original: sam_hrecs_rebuild_lines (htslib/header.c:758)
 unsafe fn sam_hrecs_rebuild_lines(hrecs: *const sam_hrecs_t, ks: *mut kstring_t) -> c_int {
     sam_hrecs_rebuild_text(hrecs, ks)
 }
-
-
 
 // original: sam_hdr_build_from_sam_file (htslib/header.c:2711)
 unsafe fn sam_hdr_build_from_sam_file(h: *mut sam_hdr_t) -> c_int {
@@ -2885,13 +2851,6 @@ unsafe fn sam_hrecs_dup(src: *const sam_hrecs_t) -> *mut sam_hrecs_t {
     (*dst).dirty = (*src).dirty;
     dst
 }
-
-
-
-
-
-
-
 
 // htslib/header.c:414
 // Faithful 1:1 translation of static `sam_hrecs_remove_hash_entry(hrecs, type, h_type)`.
@@ -2959,9 +2918,7 @@ unsafe fn header_c_414_sam_hrecs_remove_hash_entry(
                     (*hrecs).refs_changed = idx;
                 }
                 for kk in 0..(*hash).n_buckets {
-                    if !kh_iseither((*hash).flags, kk)
-                        && *(*hash).vals.add(kk as usize) > idx
-                    {
+                    if !kh_iseither((*hash).flags, kk) && *(*hash).vals.add(kk as usize) > idx {
                         *(*hash).vals.add(kk as usize) -= 1;
                     }
                 }
@@ -2994,9 +2951,7 @@ unsafe fn header_c_414_sam_hrecs_remove_hash_entry(
                     (*hash).size = (*hash).size.saturating_sub(1);
                     (*hrecs).nrg -= 1;
                     for kk in 0..(*hash).n_buckets {
-                        if !kh_iseither((*hash).flags, kk)
-                            && *(*hash).vals.add(kk as usize) > idx
-                        {
+                        if !kh_iseither((*hash).flags, kk) && *(*hash).vals.add(kk as usize) > idx {
                             *(*hash).vals.add(kk as usize) -= 1;
                         }
                     }
@@ -3418,11 +3373,8 @@ pub(crate) unsafe fn header_c_2562_sam_hdr_pg_id_hrecs(
         None => return std::ptr::null(),
     };
     if ((*hrecs).ID_buf_sz as usize) < needed {
-        let new_id_buf = crate::htslib_rs::c_compat::realloc(
-            (*hrecs).ID_buf.cast(),
-            needed as u64,
-        )
-        .cast::<c_char>();
+        let new_id_buf = crate::htslib_rs::c_compat::realloc((*hrecs).ID_buf.cast(), needed as u64)
+            .cast::<c_char>();
         if new_id_buf.is_null() {
             return std::ptr::null();
         }
@@ -3513,12 +3465,7 @@ pub(crate) unsafe fn sam_c_2157_sam_hdr_change_HD_hrecs(
         // missing HD record returns -1 in the hrecs path; without this branch
         // callers would see a regression vs the text-mode entry-point.
         let hrecs = (*h).hrecs;
-        let hd = sam_hrecs_find_type_id(
-            hrecs,
-            c"HD".as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-        );
+        let hd = sam_hrecs_find_type_id(hrecs, c"HD".as_ptr(), std::ptr::null(), std::ptr::null());
         if hd.is_null() {
             if sam_hdr_add_line(
                 h,
@@ -3538,13 +3485,7 @@ pub(crate) unsafe fn sam_c_2157_sam_hdr_change_HD_hrecs(
         {
             return -1;
         }
-    } else if sam_hdr_remove_tag_id(
-        h,
-        c"HD".as_ptr(),
-        std::ptr::null(),
-        std::ptr::null(),
-        key,
-    ) < 0
+    } else if sam_hdr_remove_tag_id(h, c"HD".as_ptr(), std::ptr::null(), std::ptr::null(), key) < 0
     {
         // sam_hdr_remove_tag_id returns 1 on actual removal and 0 on no-op
         // (mirroring htslib); both are success. Only -1 (find_type_id failed
@@ -3637,7 +3578,6 @@ pub(crate) unsafe fn sam_c_144_sam_hdr_dup_sdict(h0: *const sam_hdr_t, h: *mut s
     (*h).sdict = dest_long_refs.cast();
     0
 }
-
 
 pub unsafe fn bam_hdr_init() -> *mut sam_hdr_t {
     sam_hdr_init()
@@ -3798,7 +3738,10 @@ pub unsafe fn bam_hdr_write(fp: *mut BGZF, h: *const sam_hdr_t) -> c_int {
     // hrecs (cram_dopen's C-pool header is dup'd in sam_hdr_read into a
     // hrecs-null copy); a caller that somehow gets one falls through using
     // the existing (*h).text.
-    if !(*h).hrecs.is_null() && sam_hdr_has_rust_hrecs(h.cast_mut()) && sam_hdr_rebuild(h.cast_mut()) < 0 {
+    if !(*h).hrecs.is_null()
+        && sam_hdr_has_rust_hrecs(h.cast_mut())
+        && sam_hdr_rebuild(h.cast_mut()) < 0
+    {
         return -1;
     }
     if (*h).l_text > u32::MAX as usize {
@@ -3854,7 +3797,6 @@ pub unsafe fn bam_hdr_write(fp: *mut BGZF, h: *const sam_hdr_t) -> c_int {
     }
     0
 }
-
 
 pub(crate) unsafe fn sam_hdr_write_cram(fp: *mut htsFile, h: *const sam_hdr_t) -> c_int {
     // Rust-built hrecs is the source of truth — sync text from it so the
@@ -3913,7 +3855,11 @@ fn strip_bare_comment_lines(text: &[u8]) -> Vec<u8> {
     out
 }
 
-pub(crate) unsafe fn sam_hdr_write_bytes(fp: *mut htsFile, bytes: *const c_void, len: usize) -> c_int {
+pub(crate) unsafe fn sam_hdr_write_bytes(
+    fp: *mut htsFile,
+    bytes: *const c_void,
+    len: usize,
+) -> c_int {
     if len == 0 {
         return 0;
     }
@@ -4060,10 +4006,6 @@ pub(crate) unsafe fn sam_c_1907_sam_hdr_create(fp: *mut htsFile) -> *mut sam_hdr
     (*fp).bam_header.cast()
 }
 
-
-
-
-
 pub(crate) unsafe fn sam_c_2080_old_sam_hdr_change_HD(
     h: *mut sam_hdr_t,
     key: *const c_char,
@@ -4161,9 +4103,6 @@ pub(crate) unsafe fn sam_c_2080_old_sam_hdr_change_HD(
     (*h).l_text = new_text.len();
     0
 }
-
-
-
 
 unsafe fn sam_c_1173_bam_get_library(h: *const sam_hdr_t, b: *const bam1_t) -> *const c_char {
     // Concurrency fix vs the htslib v1.23 C baseline (htslib/sam.c::bam_get_library):
@@ -5253,7 +5192,6 @@ pub unsafe fn sam_state_destroy(fp: *mut htsFile) -> c_int {
     ret
 }
 
-
 pub unsafe fn bam_name2id(_h: *mut sam_hdr_t, _ref_: *const c_char) -> c_int {
     sam_hdr_name2tid(_h, _ref_)
 }
@@ -6258,8 +6196,6 @@ unsafe fn sam_c_4413_fastq_format1(
         (*str_).l as c_int
     }
 }
-
-
 
 pub unsafe fn bam_set_mempolicy(b: *mut bam1_t, policy: u32) {
     (*b).mempolicy_and_reserved = policy;
@@ -7336,11 +7272,8 @@ unsafe extern "C" fn sam_c_1552_cram_readrec(
         *end = bam_endpos(b);
 
         if !(*fp).filter.is_null() {
-            let pass = sam_c_1535_sam_passes_filter(
-                (*fp).bam_header.cast::<sam_hdr_t>(),
-                b,
-                (*fp).filter,
-            );
+            let pass =
+                sam_c_1535_sam_passes_filter((*fp).bam_header.cast::<sam_hdr_t>(), b, (*fp).filter);
             if pass < 0 {
                 return -2;
             }
@@ -7369,15 +7302,14 @@ unsafe fn sam_c_1649_index_load(
             //   return (hts_idx_t *) idx;
             let _ = flags;
             let cram_fd = (*fp).fp.cram;
-            if crate::htslib_rs::cram::cram_cram_index_c_176_cram_index_load(
-                cram_fd, fn_, fnidx,
-            ) < 0
+            if crate::htslib_rs::cram::cram_cram_index_c_176_cram_index_load(cram_fd, fn_, fnidx)
+                < 0
             {
                 return std::ptr::null_mut();
             }
-            let idx = crate::htslib_rs::c_compat::malloc(
-                std::mem::size_of::<crate::htslib_rs::hts::hts_cram_idx_t>() as u64,
-            )
+            let idx = crate::htslib_rs::c_compat::malloc(std::mem::size_of::<
+                crate::htslib_rs::hts::hts_cram_idx_t,
+            >() as u64)
             .cast::<crate::htslib_rs::hts::hts_cram_idx_t>();
             if idx.is_null() {
                 return std::ptr::null_mut();
@@ -7438,9 +7370,7 @@ unsafe fn sam_cram_itr_query(
     end: hts_pos_t,
     readrec: crate::htslib_rs::hts::hts_readrec_func,
 ) -> *mut hts_itr_t {
-    use crate::htslib_rs::hts::{
-        hts_cram_idx_t, HTS_IDX_NONE, HTS_IDX_REST,
-    };
+    use crate::htslib_rs::hts::{hts_cram_idx_t, HTS_IDX_NONE, HTS_IDX_REST};
     let cidx = idx.cast::<hts_cram_idx_t>();
     let iter = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<hts_itr_t>() as u64)
         .cast::<hts_itr_t>();
@@ -7465,9 +7395,8 @@ unsafe fn sam_cram_itr_query(
         // cram_seek_to_refpos, then OR SAM_POS into required_fields if not
         // the special "-2" case set by HTS_IDX_START/HTS_IDX_REST.
         let cram_fd = (*cidx).cram;
-        let ret = crate::htslib_rs::cram::cram_cram_index_c_573_cram_seek_to_refpos(
-            cram_fd, &mut r,
-        );
+        let ret =
+            crate::htslib_rs::cram::cram_cram_index_c_573_cram_seek_to_refpos(cram_fd, &mut r);
         // After cram_seek_to_refpos, propagate required_fields |= SAM_POS like
         // cram_set_voption does. We touch the layout-mirrored field directly.
         cram_set_required_pos_if_needed(cram_fd);
@@ -7611,13 +7540,7 @@ pub unsafe fn sam_c_1768_sam_itr_regarray(
     };
 
     let mut reg_count = 0;
-    let reglist = hts_reglist_create(
-        regarray,
-        regcount as c_int,
-        &mut reg_count,
-        hdr_arg,
-        getid,
-    );
+    let reglist = hts_reglist_create(regarray, regcount as c_int, &mut reg_count, hdr_arg, getid);
     if reglist.is_null() {
         return std::ptr::null_mut();
     }
@@ -7764,10 +7687,7 @@ unsafe fn sam_c_994_sam_index(fp: *mut htsFile, mut min_shift: c_int) -> *mut ht
         return std::ptr::null_mut();
     }
 
-    hts_idx_finish(
-        idx,
-        sam_c_1638_bam_ptell((*fp).fp.bgzf.cast()) as u64,
-    );
+    hts_idx_finish(idx, sam_c_1638_bam_ptell((*fp).fp.bgzf.cast()) as u64);
     sam_hdr_destroy(h);
     bam_destroy1(b);
     idx
@@ -7826,7 +7746,11 @@ pub unsafe fn sam_index_build3(
                         idx,
                         fn_,
                         fnidx,
-                        if min_shift > 0 { HTS_FMT_CSI } else { HTS_FMT_BAI },
+                        if min_shift > 0 {
+                            HTS_FMT_CSI
+                        } else {
+                            HTS_FMT_BAI
+                        },
                     );
                     if ret < 0 {
                         ret = -4;
@@ -7914,8 +7838,7 @@ pub unsafe fn sam_idx_init(
 
     if fmt_kind == HTS_FORMAT_CRAM {
         let cram_fp = (*fp).fp.cram;
-        let idxfp =
-            crate::htslib_rs::bgzf::bgzf_open(fnidx, c"wg".as_ptr());
+        let idxfp = crate::htslib_rs::bgzf::bgzf_open(fnidx, c"wg".as_ptr());
         crate::htslib_rs::cram::cram_fd_idxfp_set(cram_fp, idxfp);
         return if idxfp.is_null() { -1 } else { 0 };
     }
@@ -7948,8 +7871,7 @@ pub unsafe fn sam_idx_save(fp: *mut htsFile) -> c_int {
             return -1;
         }
         // bgzf_tell macro: ((block_address << 16) | (block_offset & 0xFFFF))
-        let pos = (((*bgzf).block_address as u64) << 16)
-            | ((*bgzf).block_offset as u64 & 0xFFFF);
+        let pos = (((*bgzf).block_address as u64) << 16) | ((*bgzf).block_offset as u64 & 0xFFFF);
         crate::htslib_rs::hts::hts_c_2682_hts_idx_amend_last((*fp).idx.cast(), pos);
         if crate::htslib_rs::hts::hts_idx_finish((*fp).idx.cast(), pos) < 0 {
             return -1;
@@ -8016,7 +7938,11 @@ unsafe fn sam_read1_bam(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut bam1_t) -> 
 // this layer — the cram_fd carries its own header copy and the native
 // pipeline reads tid/mtid from the cram_fd's header / cram_slice metadata
 // (see decode_pipeline::cram_to_bam), exactly mirroring the C behaviour.
-unsafe fn sam_read1_cram_native_decode(fp: *mut htsFile, _h: *mut sam_hdr_t, b: *mut bam1_t) -> c_int {
+unsafe fn sam_read1_cram_native_decode(
+    fp: *mut htsFile,
+    _h: *mut sam_hdr_t,
+    b: *mut bam1_t,
+) -> c_int {
     let cram_fd = (*fp).fp.cram;
     let ret = crate::htslib_rs::cram::cram_get_bam_seq_native(cram_fd, b);
     if ret < 0 {
@@ -10277,8 +10203,8 @@ pub unsafe fn sam_c_4553_sam_write1(
                 let core = &(*b).core;
                 let not_unmapped = ((core.flag as c_int) & BAM_FUNMAP) == 0;
                 let bgzf = (*fp).fp.bgzf;
-                let pos = (((*bgzf).block_address as u64) << 16)
-                    | ((*bgzf).block_offset as u64 & 0xFFFF);
+                let pos =
+                    (((*bgzf).block_address as u64) << 16) | ((*bgzf).block_offset as u64 & 0xFFFF);
                 if (*fp).format.compression == crate::htslib_rs::hts::HTS_COMPRESSION_BGZF {
                     if crate::htslib_rs::bgzf::bgzf_c_189_bgzf_idx_push(
                         bgzf,
@@ -11375,17 +11301,6 @@ pub unsafe fn bam_set_seqi(s: *mut u8, i: usize, b: u8) {
     *s.add(i >> 1) = (*s.add(i >> 1) & (0xf0 >> shift)) | (b << shift);
 }
 
-
-
-
-
-
-
-
-
-
-
-
 pub unsafe fn nibble2base_default(nib: *mut u8, seq: *mut c_char, len: c_int) {
     static CODE2BASE: &[u8; 512] = b"===A=C=M=G=R=S=V=T=W=Y=H=K=D=B=N\
 A=AAACAMAGARASAVATAWAYAHAKADABAN\
@@ -11900,8 +11815,8 @@ pub unsafe fn sam_hdr_read(_fp: *mut htsFile) -> *mut sam_hdr_t {
             // sam_hdr_destroy goes through the regular Rust teardown path.
             // The original cram_fd->header (C-pool-allocated by cram_dopen)
             // is freed by cram_close when the cram_fd is destroyed.
-            let src = crate::htslib_rs::cram::cram_fd_header_ptr((*_fp).fp.cram)
-                .cast::<sam_hdr_t>();
+            let src =
+                crate::htslib_rs::cram::cram_fd_header_ptr((*_fp).fp.cram).cast::<sam_hdr_t>();
             sam_hdr_sanitise(sam_hdr_dup(src))
         }
         _ => {
@@ -12823,7 +12738,11 @@ mod tests {
 
             assert_eq!(sam_hdr_add_pg(hdr, c"prog3".as_ptr(), &[]), 0);
             assert_eq!(
-                sam_hdr_add_pg(hdr, c"prog4".as_ptr(), &[(c"PP".as_ptr(), c"prog1".as_ptr())]),
+                sam_hdr_add_pg(
+                    hdr,
+                    c"prog4".as_ptr(),
+                    &[(c"PP".as_ptr(), c"prog1".as_ptr())]
+                ),
                 0
             );
             assert_eq!(sam_hdr_add_pg(hdr, c"prog6".as_ptr(), &[]), 0);
@@ -12839,11 +12758,19 @@ mod tests {
                 0
             );
             assert_eq!(
-                sam_hdr_add_pg(hdr, c"prog8".as_ptr(), &[(c"ID".as_ptr(), c"my_id".as_ptr())]),
+                sam_hdr_add_pg(
+                    hdr,
+                    c"prog8".as_ptr(),
+                    &[(c"ID".as_ptr(), c"my_id".as_ptr())]
+                ),
                 -1
             );
             assert_eq!(
-                sam_hdr_add_pg(hdr, c"prog9".as_ptr(), &[(c"PP".as_ptr(), c"missing".as_ptr())]),
+                sam_hdr_add_pg(
+                    hdr,
+                    c"prog9".as_ptr(),
+                    &[(c"PP".as_ptr(), c"missing".as_ptr())]
+                ),
                 -1
             );
 
@@ -12873,7 +12800,10 @@ mod tests {
                 sam_hdr_add_line(
                     hdr,
                     c"SQ".as_ptr(),
-                    &[(c"SN".as_ptr(), c"chr2".as_ptr()), (c"LN".as_ptr(), c"200".as_ptr())]
+                    &[
+                        (c"SN".as_ptr(), c"chr2".as_ptr()),
+                        (c"LN".as_ptr(), c"200".as_ptr())
+                    ]
                 ),
                 0
             );
@@ -12881,17 +12811,28 @@ mod tests {
                 sam_hdr_add_line(
                     hdr,
                     c"RG".as_ptr(),
-                    &[(c"ID".as_ptr(), c"run1".as_ptr()), (c"SM".as_ptr(), c"s1".as_ptr())]
+                    &[
+                        (c"ID".as_ptr(), c"run1".as_ptr()),
+                        (c"SM".as_ptr(), c"s1".as_ptr())
+                    ]
                 ),
                 0
             );
             assert_eq!(
-                sam_hdr_add_line(hdr, c"CO".as_ptr(), &[(c"a comment".as_ptr(), std::ptr::null())]),
+                sam_hdr_add_line(
+                    hdr,
+                    c"CO".as_ptr(),
+                    &[(c"a comment".as_ptr(), std::ptr::null())]
+                ),
                 0
             );
             // @HD already exists: this updates the existing line in place.
             assert_eq!(
-                sam_hdr_add_line(hdr, c"HD".as_ptr(), &[(c"SO".as_ptr(), c"coordinate".as_ptr())]),
+                sam_hdr_add_line(
+                    hdr,
+                    c"HD".as_ptr(),
+                    &[(c"SO".as_ptr(), c"coordinate".as_ptr())]
+                ),
                 0
             );
 
@@ -12903,10 +12844,7 @@ mod tests {
             // Targets reflect both @SQ lines.
             assert_eq!(sam_hdr_nref(hdr), 2);
             assert_eq!(sam_hdr_tid2len(hdr, 1), 200);
-            assert_eq!(
-                CStr::from_ptr(sam_hdr_tid2name(hdr, 1)).to_bytes(),
-                b"chr2"
-            );
+            assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 1)).to_bytes(), b"chr2");
 
             sam_hdr_destroy(hdr);
         }
@@ -17956,10 +17894,6 @@ mod tests {
         }
     }
 
-
-
-
-
     #[test]
     fn sam_hdr_name2tid_fills_simple_target_arrays_from_text() {
         let text = b"@HD\tVN:1.6\n@SQ\tSN:chrA\tLN:11\n";
@@ -18554,7 +18488,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn header_sq_target_parsing_accepts_crlf_and_u32_max_len_edges() {
         unsafe {
@@ -18588,7 +18521,6 @@ mod tests {
             sam_hdr_destroy(hdr);
         }
     }
-
 
     #[test]
     fn sam_hdr_parse_rejects_null_text_without_leaking_header() {
@@ -19140,12 +19072,7 @@ mod tests {
                     // *this thread's* private thread_local buffer.
                     for iter in 0..ITERS_PER_THREAD {
                         let lib = sam_c_1173_bam_get_library(pair.hdr, pair.bam);
-                        assert!(
-                            !lib.is_null(),
-                            "thread {} iter {}: null library",
-                            tid,
-                            iter
-                        );
+                        assert!(!lib.is_null(), "thread {} iter {}: null library", tid, iter);
                         let got = CStr::from_ptr(lib).to_bytes();
                         assert_eq!(
                             got,

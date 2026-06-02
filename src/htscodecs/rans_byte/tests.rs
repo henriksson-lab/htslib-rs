@@ -31,7 +31,12 @@ const M: u32 = 1u32 << SCALE_BITS;
 /// Build cumulative frequencies and per-symbol tables from a histogram.
 fn build_tables(
     freqs: &[u32; 256],
-) -> ([u32; 257], [RansEncSymbol; 256], [RansDecSymbol; 256], [u8; M as usize]) {
+) -> (
+    [u32; 257],
+    [RansEncSymbol; 256],
+    [RansDecSymbol; 256],
+    [u8; M as usize],
+) {
     // Cumulative frequencies; cum[256] must equal M.
     let mut cum = [0u32; 257];
     for i in 0..256 {
@@ -86,8 +91,8 @@ fn roundtrip(data: &[u8], freqs: &[u32; 256]) -> Vec<u8> {
         }
         RansEncFlush(&mut state, &mut pptr);
         let written_start = pptr.len(); // bytes left untouched at front
-        // The compressed payload is buf[written_start..total_len].
-        // Drop pptr borrow.
+                                        // The compressed payload is buf[written_start..total_len].
+                                        // Drop pptr borrow.
         let _ = written_start;
     }
 
@@ -175,10 +180,7 @@ fn build_tables_generic(
 /// Encode the data (returns the compressed payload bytes) under arbitrary
 /// scale_bits / alphabet. Symbol indices in `data` are u16 to allow
 /// alphabets > 256.
-fn encode_generic(
-    data: &[u16],
-    enc: &[RansEncSymbol],
-) -> Vec<u8> {
+fn encode_generic(data: &[u16], enc: &[RansEncSymbol]) -> Vec<u8> {
     let cap = data.len() * 3 + 64;
     let mut buf = vec![0u8; cap];
     let mut state: RansState = 0;
@@ -491,9 +493,12 @@ fn enc_symbol_init_reciprocal_sanity() {
 
         // rcp_shift was pre-bumped by 32 in init; undo for the formula.
         let shift = sym.rcp_shift;
-        for &x in
-            &[RANS_BYTE_L, RANS_BYTE_L + 1, RANS_BYTE_L * 2, RANS_BYTE_L * 17 + 3]
-        {
+        for &x in &[
+            RANS_BYTE_L,
+            RANS_BYTE_L + 1,
+            RANS_BYTE_L * 2,
+            RANS_BYTE_L * 17 + 3,
+        ] {
             let q = (((x as u64).wrapping_mul(sym.rcp_freq as u64)) >> shift) as u32;
             assert_eq!(
                 q,
@@ -918,7 +923,11 @@ fn dec_renorm_safe_stops_at_short_buffer() {
     RansDecRenormSafe(&mut s, &mut p, end);
     // Should have read exactly one byte and stopped (still < L, but ptr is
     // now at end so the second-byte branch bails).
-    assert_eq!(p.len(), buf.len() - 1, "should have consumed exactly 1 byte");
+    assert_eq!(
+        p.len(),
+        buf.len() - 1,
+        "should have consumed exactly 1 byte"
+    );
     // Final state: ((0x1234 << 8) | 0x55) = 0x123455 (still < L; harmless).
     assert_eq!(s, (0x1234u32 << 8) | 0x55);
 
@@ -988,13 +997,21 @@ fn dec_symbol_init16_vs_init32_grid() {
         let raw = lcg(&mut seed) as u32;
         let start = raw % m;
         let freq_raw = lcg(&mut seed) as u32;
-        let freq = if m == start { 0 } else { freq_raw % (m - start) };
+        let freq = if m == start {
+            0
+        } else {
+            freq_raw % (m - start)
+        };
 
         let mut s16 = RansDecSymbol::default();
         let mut s32 = RansDecSymbol32::default();
         RansDecSymbolInit(&mut s16, start, freq);
         RansDecSymbolInit32(&mut s32, start, freq);
-        assert_eq!(s16.start as u32, s32.start, "start mismatch (start={})", start);
+        assert_eq!(
+            s16.start as u32, s32.start,
+            "start mismatch (start={})",
+            start
+        );
         assert_eq!(s16.freq as u32, s32.freq, "freq mismatch (freq={})", freq);
     }
 }
@@ -1194,9 +1211,7 @@ fn four_way_interleave_matches_single_state_pairs() {
     let (_c, enc, _dec, _cs) = build_tables_generic(&freqs, 12);
 
     // Each stream encodes a different symbol pattern of length 4.
-    let data: [u16; 16] = [
-        0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3,
-    ];
+    let data: [u16; 16] = [0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3];
 
     // 4-way encode using PutSymbol4.
     let mut buf4 = vec![0u8; 256];
@@ -1214,7 +1229,10 @@ fn four_way_interleave_matches_single_state_pairs() {
         while i >= 4 {
             i -= 4;
             RansEncPutSymbol4(
-                &mut r0, &mut r1, &mut r2, &mut r3,
+                &mut r0,
+                &mut r1,
+                &mut r2,
+                &mut r3,
                 &mut pptr,
                 &enc[data[i] as usize],
                 &enc[data[i + 1] as usize],
@@ -1447,8 +1465,7 @@ fn dec_advance_matches_advance_symbol() {
     // and sym.freq. Verify directly across a few symbol shapes that
     // both paths produce identical state + cursor evolution.
     let buf = [0x12u8, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0];
-    let cases: &[(u32, u32)] =
-        &[(0, 1), (0, 1024), (100, 200), (0xFFFE, 1), (10, 4086)];
+    let cases: &[(u32, u32)] = &[(0, 1), (0, 1024), (100, 200), (0xFFFE, 1), (10, 4086)];
     for &(start, freq) in cases {
         for &init_state in &[
             0x0080_0000u32, // exactly L.
@@ -1478,8 +1495,7 @@ fn dec_advance_symbol32_matches_advance_symbol() {
     // RansDecAdvanceSymbol32 takes a RansDecSymbol32 (32-bit fields).
     // For values that fit in u16 the two paths must agree.
     let buf = [0xa5u8, 0x5a, 0x33, 0xcc, 0x11, 0x22, 0x44, 0x88];
-    let cases: &[(u32, u32)] =
-        &[(0, 1024), (256, 2048), (1000, 100), (0, 4095)];
+    let cases: &[(u32, u32)] = &[(0, 1024), (256, 2048), (1000, 100), (0, 4095)];
     for &(start, freq) in cases {
         for &init_state in &[0x0080_0000u32, 0x1234_5678u32] {
             let mut s16 = RansDecSymbol::default();

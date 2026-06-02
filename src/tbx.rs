@@ -5,8 +5,8 @@ use super::hts::{
     hts_c_2372_hts_adjust_csi_settings, hts_c_2405_hts_idx_init, hts_c_2515_hts_idx_finish,
     hts_c_2558_hts_idx_push, hts_c_2869_hts_idx_save_as, hts_c_3062_hts_idx_set_meta,
     hts_c_3084_hts_idx_get_meta, hts_idx_destroy, hts_idx_load3, hts_is_utf16_text, hts_itr_query,
-    hts_itr_t, hts_log_cstr, hts_parse_region, hts_pos_t, i32_to_le, kstring_t,
-    le_to_i32, le_to_u32, svlen_on_ref_for_vcf_alt, toupper_c, BGZF, HTS_FMT_CSI, HTS_IDX_NOCOOR,
+    hts_itr_t, hts_log_cstr, hts_parse_region, hts_pos_t, i32_to_le, kstring_t, le_to_i32,
+    le_to_u32, svlen_on_ref_for_vcf_alt, toupper_c, BGZF, HTS_FMT_CSI, HTS_IDX_NOCOOR,
     HTS_IDX_START, HTS_LOG_ERROR, HTS_PARSE_THOUSANDS_SEP,
 };
 

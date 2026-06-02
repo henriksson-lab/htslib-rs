@@ -117,8 +117,11 @@ fn permute_row_shape_matches_popcount() {
             );
         }
         // Live entries must be a permutation of 0..pop (no duplicates).
-        let mut live_vals: Vec<u32> =
-            p[i].iter().copied().filter(|&x| x != UNDERSCORE_LOCAL).collect();
+        let mut live_vals: Vec<u32> = p[i]
+            .iter()
+            .copied()
+            .filter(|&x| x != UNDERSCORE_LOCAL)
+            .collect();
         live_vals.sort_unstable();
         let expected: Vec<u32> = (0..pop).collect();
         assert_eq!(
@@ -133,10 +136,7 @@ fn permutec_row_shape_matches_popcount() {
     let pc = build_permutec();
     for i in 0..256usize {
         let pop = (i as u8).count_ones();
-        let live = pc[i]
-            .iter()
-            .filter(|&&x| x != UNDERSCORE_LOCAL)
-            .count() as u32;
+        let live = pc[i].iter().filter(|&&x| x != UNDERSCORE_LOCAL).count() as u32;
         assert_eq!(
             live, pop,
             "permutec[{i}] has {live} live entries, expected popcount={pop}"
@@ -258,7 +258,8 @@ fn permutec_is_right_aligned_inverse_of_permute() {
                     "permute[{i}][{j}]={k} should be in 0..popcount({pop})"
                 );
                 assert_eq!(
-                    pc[i][offset + k], j as u32,
+                    pc[i][offset + k],
+                    j as u32,
                     "inverse mismatch: permute[{i}][{j}]={k} but \
                      permutec[{i}][{}]={} (expected {j})",
                     offset + k,
@@ -311,12 +312,7 @@ fn apply_permute(p: &[[u32; 8]; 256], i: usize, input: &[u8; 8]) -> Vec<u8> {
 /// Apply the encode permutec table to "unshuffle": given the packed output
 /// (length popcount(i), conceptually right-aligned into 8 lanes), return
 /// the 8-byte slot-positioned vector with cleared slots filled with `fill`.
-fn apply_permutec(
-    pc: &[[u32; 8]; 256],
-    i: usize,
-    packed: &[u8],
-    fill: u8,
-) -> [u8; 8] {
+fn apply_permutec(pc: &[[u32; 8]; 256], i: usize, packed: &[u8], fill: u8) -> [u8; 8] {
     let pop = (i as u8).count_ones() as usize;
     assert_eq!(packed.len(), pop, "packed length must equal popcount");
     let offset = 8 - pop;
@@ -430,10 +426,7 @@ fn capture_main_stdout() -> (i32, Vec<u8>) {
 
         // Read the captured bytes back from the temp file.
         buf = vec![0u8; len];
-        let rd_fd = libc::open(
-            path.as_ptr() as *const libc::c_char,
-            libc::O_RDONLY,
-        );
+        let rd_fd = libc::open(path.as_ptr() as *const libc::c_char, libc::O_RDONLY);
         assert!(rd_fd >= 0, "open(temp read) failed");
         let mut off = 0usize;
         while off < len {
@@ -474,10 +467,7 @@ fn permute_main_emits_expected_markers() {
     // `__FILE__`-derived path snippets via the source-echo prelude, which
     // are fragile across checkouts. Just pin the key C-source markers
     // emitted by the printer in `permute.rs`.
-    assert!(
-        s.contains("#define _ 9\n"),
-        "missing `#define _ 9` marker"
-    );
+    assert!(s.contains("#define _ 9\n"), "missing `#define _ 9` marker");
     assert!(
         s.contains("static uint32_t permute[256][8]"),
         "missing decode-table header"

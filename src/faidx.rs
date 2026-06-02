@@ -263,75 +263,27 @@ unsafe fn fai_read(
     fnfai: *const c_char,
     format: c_int,
 ) -> Option<*mut faidx_t> {
-    let fai_path = resolved_index_path(fn_, fnfai, b".fai")?;
-    let text = fs::read(&fai_path).ok()?;
-    let mut rows = Vec::new();
-    for line in text.split(|&b| b == b'\n') {
-        if line.is_empty() {
-            continue;
-        }
-        let line = if line.last() == Some(&b'\r') {
-            &line[..line.len() - 1]
-        } else {
-            line
-        };
-        let name_end = line
-            .iter()
-            .position(|&b| is_fai_index_space(b))
-            .unwrap_or(line.len());
-        let name = &line[..name_end];
-        let fields: Vec<&[u8]> = line[name_end..]
-            .split(|&b| is_fai_index_space(b))
-            .filter(|s| !s.is_empty())
-            .collect();
-        let needed = if format == FAI_FASTA as c_int { 5 } else { 6 };
-        if fields.len() + 1 < needed {
-            return None;
-        }
-        let parse_u64 = |b: &[u8]| std::str::from_utf8(b).ok()?.parse::<u64>().ok();
-        let parse_u32 = |b: &[u8]| std::str::from_utf8(b).ok()?.parse::<u32>().ok();
-        let parse_u64_prefix = |b: &[u8]| {
-            let end = b
-                .iter()
-                .position(|c| !c.is_ascii_digit())
-                .unwrap_or(b.len());
-            if end == 0 {
-                None
-            } else {
-                std::str::from_utf8(&b[..end]).ok()?.parse::<u64>().ok()
-            }
-        };
-        let parse_u32_prefix = |b: &[u8]| parse_u64_prefix(b).and_then(|v| u32::try_from(v).ok());
-        let len = parse_u64(fields[0])?;
-        let seq_offset = parse_u64(fields[1])?;
-        let line_blen = parse_u32(fields[2])?;
-        let line_len = if format == FAI_FASTA as c_int {
-            parse_u32_prefix(fields[3])?
-        } else {
-            parse_u32(fields[3])?
-        };
-        let qual_offset = if format == FAI_FASTA as c_int {
-            0
-        } else {
-            parse_u64_prefix(fields[4])?
-        };
-        rows.push((
-            name.to_vec(),
-            faidx1_t {
-                id: rows.len() as c_int,
-                line_len,
-                line_blen,
-                len,
-                seq_offset,
-                qual_offset,
-            },
-        ));
-    }
-    if rows.is_empty() {
+    let fai_name = owned_index_cstring(fn_, fnfai, b".fai")?;
+    let fp = hopen(fai_name.as_ptr(), c"rb".as_ptr());
+    if fp.is_null() {
         return None;
     }
-    let fai = fai_from_rows(fn_, rows, format)?;
-    (*fai).format = FAI_NONE as c_int;
+
+    let fai = faidx_c_380_fai_read(fp, fai_name.as_ptr(), format);
+    if fai.is_null() {
+        hclose_abruptly(fp);
+        return None;
+    }
+    if hclose(fp) < 0 {
+        fai_destroy(fai);
+        return None;
+    }
+
+    (*fai).bgzf = bgzf_open(fn_, c"rb".as_ptr());
+    if (*fai).bgzf.is_null() {
+        fai_destroy(fai);
+        return None;
+    }
     Some(fai)
 }
 

@@ -85,7 +85,10 @@ unsafe fn error_errno_message(message: Option<String>) -> ! {
         if message.is_some() {
             libc::fputs(c": ".as_ptr(), crate::htslib_rs::c_compat::stderr.cast());
         }
-        libc::fputs(libc::strerror(eno), crate::htslib_rs::c_compat::stderr.cast());
+        libc::fputs(
+            libc::strerror(eno),
+            crate::htslib_rs::c_compat::stderr.cast(),
+        );
         libc::fputc(b'\n' as c_int, crate::htslib_rs::c_compat::stderr.cast());
     } else {
         libc::fputc(b'\n' as c_int, crate::htslib_rs::c_compat::stderr.cast());
@@ -775,7 +778,8 @@ pub unsafe fn tabix_c_437_reheader_file(
                 if *buffer.add(skip_until as usize) == b'\n' as c_char {
                     skip_until += 1;
                     if skip_until >= (*fp).block_length {
-                        if bgzf::bgzf_c_1485_bgzf_mt_read_block(fp) != 0 || (*fp).block_length == 0 {
+                        if bgzf::bgzf_c_1485_bgzf_mt_read_block(fp) != 0 || (*fp).block_length == 0
+                        {
                             release_tpool(tpool);
                             error_message(format!(
                                 "FIXME: No body in the file: {}\n",
@@ -1297,7 +1301,12 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 );
                 return libc::EXIT_SUCCESS;
             }
-            2 => return tabix_c_580_usage(crate::htslib_rs::c_compat::stdout.cast(), libc::EXIT_SUCCESS),
+            2 => {
+                return tabix_c_580_usage(
+                    crate::htslib_rs::c_compat::stdout.cast(),
+                    libc::EXIT_SUCCESS,
+                )
+            }
             3 => {
                 let mut v = libc::atoi(optarg);
                 if v < 0 {
@@ -1315,7 +1324,12 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
             }
             5 => args.separate_regs = 1,
             x if x == b'@' as c_int => args.threads = libc::atoi(optarg),
-            _ => return tabix_c_580_usage(crate::htslib_rs::c_compat::stderr.cast(), libc::EXIT_FAILURE),
+            _ => {
+                return tabix_c_580_usage(
+                    crate::htslib_rs::c_compat::stderr.cast(),
+                    libc::EXIT_FAILURE,
+                )
+            }
         }
     }
 
@@ -1324,7 +1338,10 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     }
 
     if optind == argc {
-        return tabix_c_580_usage(crate::htslib_rs::c_compat::stderr.cast(), libc::EXIT_FAILURE);
+        return tabix_c_580_usage(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            libc::EXIT_FAILURE,
+        );
     }
 
     if list_chroms != 0 {
