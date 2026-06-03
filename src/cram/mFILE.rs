@@ -742,7 +742,8 @@ mod tests {
         unsafe {
             assert!(MmapRegion::from_raw(std::ptr::null_mut(), 4).is_none());
             assert!(MmapRegion::from_raw(libc::MAP_FAILED, 4).is_none());
-            assert!(MmapRegion::from_raw(std::ptr::dangling_mut(), 0).is_none());
+            let mut zero_len_marker = 0u8;
+            assert!(MmapRegion::from_raw((&mut zero_len_marker as *mut u8).cast(), 0).is_none());
 
             let ptr = libc::mmap(
                 std::ptr::null_mut(),

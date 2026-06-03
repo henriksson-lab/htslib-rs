@@ -2516,8 +2516,8 @@ mod tests {
         unsafe {
             let job_cleanups = AtomicUsize::new(0);
             let result_cleanups = AtomicUsize::new(0);
-            let job_counter = ptr::addr_of!(job_cleanups) as *mut c_void;
-            let result_counter = ptr::addr_of!(result_cleanups) as *mut c_void;
+            let job_counter = ptr::addr_of!(job_cleanups).cast::<c_void>().cast_mut();
+            let result_counter = ptr::addr_of!(result_cleanups).cast::<c_void>().cast_mut();
 
             let mut pool: HtsTpool = mem::zeroed();
             init_test_mutex(ptr::addr_of_mut!(pool.pool_m));

@@ -167,11 +167,31 @@ impl EncodedFdHFile {
     }
 }
 
-const BGZF_THREAD_ERROR_SENTINEL: *mut c_void = std::ptr::dangling_mut::<c_void>();
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BgzfIoTarget {
+    EncodedFd(c_int),
+    HFile(*mut super::hts::hFILE),
+}
+
+impl BgzfIoTarget {
+    fn from_ptr(ptr: *mut super::hts::hFILE) -> Self {
+        match EncodedFdHFile::from_ptr(ptr) {
+            Some(fd) => Self::EncodedFd(fd.fd()),
+            None => Self::HFile(ptr),
+        }
+    }
+
+    fn is_encoded_fd(self) -> bool {
+        matches!(self, Self::EncodedFd(_))
+    }
+}
 
 #[cfg(test)]
 fn bgzf_test_non_null_mt_marker() -> *mut c_void {
-    std::ptr::dangling_mut::<c_void>()
+    static BGZF_TEST_MT_MARKER: u8 = 0;
+    std::ptr::from_ref(&BGZF_TEST_MT_MARKER)
+        .cast::<c_void>()
+        .cast_mut()
 }
 
 pub(crate) struct ZlibFns {
@@ -189,6 +209,60 @@ pub(crate) struct ZlibFns {
 #[repr(C)]
 struct GzipStream {
     zs: z_stream,
+}
+
+unsafe fn gzip_stream_new_deflate_raw(level: c_int) -> Option<*mut c_void> {
+    let mut stream = Box::new(GzipStream {
+        zs: std::mem::zeroed(),
+    });
+    if gzip_deflate_stream_init(&mut stream.zs, level) != Z_OK {
+        None
+    } else {
+        Some(Box::into_raw(stream).cast())
+    }
+}
+
+unsafe fn gzip_stream_new_inflate_raw() -> Option<*mut c_void> {
+    let mut stream = Box::new(GzipStream {
+        zs: std::mem::zeroed(),
+    });
+    if gzip_stream_init(&mut stream.zs) != Z_OK {
+        None
+    } else {
+        Some(Box::into_raw(stream).cast())
+    }
+}
+
+unsafe fn gzip_stream_new_raw_inflate_raw() -> Option<*mut c_void> {
+    let mut stream = Box::new(GzipStream {
+        zs: std::mem::zeroed(),
+    });
+    if raw_inflate_stream_init(&mut stream.zs) != Z_OK {
+        None
+    } else {
+        Some(Box::into_raw(stream).cast())
+    }
+}
+
+unsafe fn gzip_stream_mut(ptr: *mut c_void) -> Option<&'static mut GzipStream> {
+    if ptr.is_null() {
+        None
+    } else {
+        Some(&mut *ptr.cast::<GzipStream>())
+    }
+}
+
+unsafe fn gzip_stream_free_raw(ptr: *mut c_void, is_deflate: bool) {
+    if ptr.is_null() {
+        return;
+    }
+    let stream = ptr.cast::<GzipStream>();
+    if is_deflate {
+        gzip_deflate_stream_end(stream);
+    } else {
+        gzip_stream_end(stream);
+    }
+    drop(Box::from_raw(stream));
 }
 
 pub(crate) unsafe fn system_zlib() -> Option<&'static ZlibFns> {
@@ -340,6 +414,28 @@ struct BgzfCachedBlock {
 struct BgzfBlockCache {
     blocks: HashMap<i64, BgzfCachedBlock>,
     order: Vec<i64>,
+}
+
+fn bgzf_block_cache_new_raw() -> *mut c_void {
+    Box::into_raw(Box::new(BgzfBlockCache {
+        blocks: HashMap::new(),
+        order: Vec::new(),
+    }))
+    .cast()
+}
+
+unsafe fn bgzf_block_cache_mut_raw(ptr: *mut c_void) -> Option<&'static mut BgzfBlockCache> {
+    if ptr.is_null() {
+        None
+    } else {
+        Some(&mut *ptr.cast::<BgzfBlockCache>())
+    }
+}
+
+unsafe fn bgzf_block_cache_free_raw(ptr: *mut c_void) {
+    if !ptr.is_null() {
+        drop(Box::from_raw(ptr.cast::<BgzfBlockCache>()));
+    }
 }
 
 // original: bgzf_idx_push (htslib/bgzf.c:189)
@@ -831,12 +927,6 @@ fn fd_to_ptr(fd: c_int) -> *mut super::hts::hFILE {
     EncodedFdHFile::from_fd(fd).as_ptr()
 }
 
-fn ptr_to_fd(ptr: *mut super::hts::hFILE) -> c_int {
-    EncodedFdHFile::from_ptr(ptr)
-        .expect("BGZF encoded fd pointer")
-        .fd()
-}
-
 fn mode_has(mode: &[u8], needle: u8) -> bool {
     mode.contains(&needle)
 }
@@ -857,15 +947,10 @@ unsafe fn fd_tell(fd: c_int) -> i64 {
     fd_seek(fd, 0, libc::SEEK_CUR)
 }
 
-fn ptr_is_encoded_fd(ptr: *mut super::hts::hFILE) -> bool {
-    EncodedFdHFile::from_ptr(ptr).is_some()
-}
-
 unsafe fn bgzf_hread_ptr(fp: *mut super::hts::hFILE, buffer: *mut c_void, nbytes: usize) -> isize {
-    if ptr_is_encoded_fd(fp) {
-        fd_read(ptr_to_fd(fp), buffer, nbytes)
-    } else {
-        super::hfile::htslib_hfile_h_247_hread(fp, buffer, nbytes)
+    match BgzfIoTarget::from_ptr(fp) {
+        BgzfIoTarget::EncodedFd(fd) => fd_read(fd, buffer, nbytes),
+        BgzfIoTarget::HFile(hfile) => super::hfile::htslib_hfile_h_247_hread(hfile, buffer, nbytes),
     }
 }
 
@@ -874,18 +959,20 @@ unsafe fn bgzf_hwrite_ptr(
     buffer: *const c_void,
     nbytes: usize,
 ) -> isize {
-    if ptr_is_encoded_fd(fp) {
-        fd_write(ptr_to_fd(fp), buffer, nbytes)
-    } else {
-        super::hfile::htslib_hfile_h_292_hwrite(fp, buffer, nbytes)
+    match BgzfIoTarget::from_ptr(fp) {
+        BgzfIoTarget::EncodedFd(fd) => fd_write(fd, buffer, nbytes),
+        BgzfIoTarget::HFile(hfile) => {
+            super::hfile::htslib_hfile_h_292_hwrite(hfile, buffer, nbytes)
+        }
     }
 }
 
 unsafe fn bgzf_hseek_ptr(fp: *mut super::hts::hFILE, offset: i64, whence: c_int) -> i64 {
-    if ptr_is_encoded_fd(fp) {
-        fd_seek(ptr_to_fd(fp), offset, whence)
-    } else {
-        super::hfile::hseek(fp, offset as libc::off_t, whence) as i64
+    match BgzfIoTarget::from_ptr(fp) {
+        BgzfIoTarget::EncodedFd(fd) => fd_seek(fd, offset, whence),
+        BgzfIoTarget::HFile(hfile) => {
+            super::hfile::hseek(hfile, offset as libc::off_t, whence) as i64
+        }
     }
 }
 
@@ -894,32 +981,29 @@ unsafe fn bgzf_htell_ptr(fp: *mut super::hts::hFILE) -> i64 {
 }
 
 unsafe fn bgzf_hclose_ptr(fp: *mut super::hts::hFILE) -> c_int {
-    if ptr_is_encoded_fd(fp) {
-        libc::close(ptr_to_fd(fp))
-    } else {
-        super::hfile::hclose(fp)
+    match BgzfIoTarget::from_ptr(fp) {
+        BgzfIoTarget::EncodedFd(fd) => libc::close(fd),
+        BgzfIoTarget::HFile(hfile) => super::hfile::hclose(hfile),
     }
 }
 
 unsafe fn bgzf_hflush_ptr(fp: *mut super::hts::hFILE) -> c_int {
-    if ptr_is_encoded_fd(fp) {
-        0
-    } else {
-        super::hfile::hflush(fp)
+    match BgzfIoTarget::from_ptr(fp) {
+        BgzfIoTarget::EncodedFd(_) => 0,
+        BgzfIoTarget::HFile(hfile) => super::hfile::hflush(hfile),
     }
 }
 
 unsafe fn bgzf_hclearerr_ptr(fp: *mut super::hts::hFILE) {
-    if !ptr_is_encoded_fd(fp) {
-        super::hfile::htslib_hfile_h_140_hclearerr(fp);
+    if let BgzfIoTarget::HFile(hfile) = BgzfIoTarget::from_ptr(fp) {
+        super::hfile::htslib_hfile_h_140_hclearerr(hfile);
     }
 }
 
 unsafe fn bgzf_hpeek_ptr(fp: *mut super::hts::hFILE, buffer: *mut c_void, nbytes: usize) -> isize {
-    if ptr_is_encoded_fd(fp) {
-        0
-    } else {
-        super::hfile::hpeek(fp, buffer, nbytes)
+    match BgzfIoTarget::from_ptr(fp) {
+        BgzfIoTarget::EncodedFd(_) => 0,
+        BgzfIoTarget::HFile(hfile) => super::hfile::hpeek(hfile, buffer, nbytes),
     }
 }
 
@@ -953,7 +1037,7 @@ unsafe fn bgzf_free_cache(fp: *mut BGZF) {
     bgzf_internal_h_58_bgzf_clear_private_data(fp);
     let cache = (*fp).cache.cast::<bgzf_cache_t>();
     if !(*cache).h.is_null() {
-        drop(Box::from_raw((*cache).h.cast::<BgzfBlockCache>()));
+        bgzf_block_cache_free_raw((*cache).h);
         (*cache).h = ptr::null_mut();
     }
     c_compat::free((*fp).cache);
@@ -971,13 +1055,9 @@ unsafe fn bgzf_block_cache(fp: *mut BGZF) -> Option<&'static mut BgzfBlockCache>
     }
     let cache = (*fp).cache.cast::<bgzf_cache_t>();
     if (*cache).h.is_null() {
-        let h = Box::new(BgzfBlockCache {
-            blocks: HashMap::new(),
-            order: Vec::new(),
-        });
-        (*cache).h = Box::into_raw(h).cast();
+        (*cache).h = bgzf_block_cache_new_raw();
     }
-    Some(&mut *(*cache).h.cast::<BgzfBlockCache>())
+    bgzf_block_cache_mut_raw((*cache).h)
 }
 
 // original: load_block_from_cache (htslib/bgzf.c:903)
@@ -990,7 +1070,9 @@ unsafe fn load_block_from_cache(fp: *mut BGZF, block_address: i64) -> c_int {
         return 0;
     }
 
-    let h = &mut *(*cache).h.cast::<BgzfBlockCache>();
+    let Some(h) = bgzf_block_cache_mut_raw((*cache).h) else {
+        return 0;
+    };
     let Some(entry) = h.blocks.get(&block_address) else {
         return 0;
     };
@@ -1083,17 +1165,14 @@ pub unsafe fn bgzf_c_686_bgzf_gzip_compress(
         return -1;
     };
     if (*fp).gz_stream.is_null() {
-        let mut stream = Box::new(GzipStream {
-            zs: std::mem::zeroed(),
-        });
-        if gzip_deflate_stream_init(&mut stream.zs, compress_level(fp)) != Z_OK {
+        let Some(stream) = gzip_stream_new_deflate_raw(compress_level(fp)) else {
             add_errcode(fp, BGZF_ERR_ZLIB);
             return -1;
-        }
-        (*fp).gz_stream = Box::into_raw(stream).cast();
+        };
+        (*fp).gz_stream = stream;
     }
 
-    let stream = &mut *(*fp).gz_stream.cast::<GzipStream>();
+    let stream = gzip_stream_mut((*fp).gz_stream).expect("BGZF gzip stream is initialized");
     let original_len = *dlen;
     stream.zs.next_in = src.cast::<u8>().cast_mut();
     stream.zs.avail_in = slen as c_uint;
@@ -1188,7 +1267,7 @@ unsafe fn gzip_deflate_stream_end(stream: *mut GzipStream) {
 
 unsafe fn bgzf_read_init_hfile(hfp: *mut super::hts::hFILE) -> *mut BGZF {
     let mut magic = [0u8; BLOCK_HEADER_LENGTH];
-    let preloads_probe = ptr_is_encoded_fd(hfp);
+    let preloads_probe = BgzfIoTarget::from_ptr(hfp).is_encoded_fd();
     let n = if preloads_probe {
         bgzf_hread_ptr(hfp, magic.as_mut_ptr().cast(), magic.len())
     } else {
@@ -1294,17 +1373,13 @@ unsafe fn bgzf_write_init_hfile(hfp: *mut super::hts::hFILE, mode: &[u8]) -> *mu
         },
     );
     if mode_has(mode, b'g') {
-        let mut stream = Box::new(GzipStream {
-            zs: std::mem::zeroed(),
-        });
-        if gzip_deflate_stream_init(&mut stream.zs, compress_level(fp)) != Z_OK {
-            drop(stream);
+        let Some(stream) = gzip_stream_new_deflate_raw(compress_level(fp)) else {
             c_compat::free((*fp).uncompressed_block);
             c_compat::free((*fp).cache);
             c_compat::free(fp.cast());
             return ptr::null_mut();
-        }
-        (*fp).gz_stream = Box::into_raw(stream).cast();
+        };
+        (*fp).gz_stream = stream;
     }
     fp
 }
@@ -1320,13 +1395,7 @@ unsafe fn bgzf_free_without_hclose(fp: *mut BGZF) {
     bgzf_index_destroy(fp);
     bgzf_free_cache(fp);
     if !(*fp).gz_stream.is_null() {
-        let stream = (*fp).gz_stream.cast::<GzipStream>();
-        if flag(fp, 17) && flag(fp, 31) {
-            gzip_deflate_stream_end(stream);
-        } else {
-            gzip_stream_end(stream);
-        }
-        drop(Box::from_raw(stream));
+        gzip_stream_free_raw((*fp).gz_stream, flag(fp, 17) && flag(fp, 31));
         (*fp).gz_stream = ptr::null_mut();
     }
     c_compat::free((*fp).uncompressed_block);
@@ -1403,17 +1472,14 @@ unsafe fn bgzf_gzip_flush(fp: *mut BGZF, flush: c_int) -> c_int {
         return -1;
     };
     if (*fp).gz_stream.is_null() {
-        let mut stream = Box::new(GzipStream {
-            zs: std::mem::zeroed(),
-        });
-        if gzip_deflate_stream_init(&mut stream.zs, compress_level(fp)) != Z_OK {
+        let Some(stream) = gzip_stream_new_deflate_raw(compress_level(fp)) else {
             add_errcode(fp, BGZF_ERR_ZLIB);
             return -1;
-        }
-        (*fp).gz_stream = Box::into_raw(stream).cast();
+        };
+        (*fp).gz_stream = stream;
     }
 
-    let stream = &mut *(*fp).gz_stream.cast::<GzipStream>();
+    let stream = gzip_stream_mut((*fp).gz_stream).expect("BGZF gzip stream is initialized");
     stream.zs.next_in = (*fp).uncompressed_block.cast();
     stream.zs.avail_in = (*fp).block_offset as c_uint;
 
@@ -1536,20 +1602,22 @@ unsafe fn inflate_block(fp: *mut BGZF, block_length: usize) -> c_int {
     };
 
     if (*fp).gz_stream.is_null() {
-        let mut stream = Box::new(GzipStream {
-            zs: std::mem::zeroed(),
-        });
-        if raw_inflate_stream_init(&mut stream.zs) != Z_OK {
+        let Some(stream) = gzip_stream_new_raw_inflate_raw() else {
             add_errcode(fp, BGZF_ERR_ZLIB);
             return -1;
-        }
-        (*fp).gz_stream = Box::into_raw(stream).cast();
-    } else if (zlib.inflate_reset)(&mut (*(*fp).gz_stream.cast::<GzipStream>()).zs) != Z_OK {
+        };
+        (*fp).gz_stream = stream;
+    } else if (zlib.inflate_reset)(
+        &mut gzip_stream_mut((*fp).gz_stream)
+            .expect("BGZF gzip stream is initialized")
+            .zs,
+    ) != Z_OK
+    {
         add_errcode(fp, BGZF_ERR_ZLIB);
         return -1;
     }
 
-    let stream = &mut *(*fp).gz_stream.cast::<GzipStream>();
+    let stream = gzip_stream_mut((*fp).gz_stream).expect("BGZF gzip stream is initialized");
     stream.zs.next_in = (*fp).compressed_block.cast::<u8>().add(BLOCK_HEADER_LENGTH);
     stream.zs.avail_in = (block_length - BLOCK_HEADER_LENGTH) as c_uint;
     stream.zs.next_out = (*fp).uncompressed_block.cast();
@@ -1570,21 +1638,18 @@ unsafe fn inflate_block(fp: *mut BGZF, block_length: usize) -> c_int {
 
 unsafe fn inflate_gzip_block(fp: *mut BGZF) -> c_int {
     if (*fp).gz_stream.is_null() {
-        let mut stream = Box::new(GzipStream {
-            zs: std::mem::zeroed(),
-        });
-        if gzip_stream_init(&mut stream.zs) != Z_OK {
+        let Some(stream) = gzip_stream_new_inflate_raw() else {
             add_errcode(fp, BGZF_ERR_ZLIB);
             return -1;
-        }
-        (*fp).gz_stream = Box::into_raw(stream).cast();
+        };
+        (*fp).gz_stream = stream;
     }
 
     let Some(zlib) = system_zlib() else {
         add_errcode(fp, BGZF_ERR_ZLIB);
         return -1;
     };
-    let stream = &mut *(*fp).gz_stream.cast::<GzipStream>();
+    let stream = gzip_stream_mut((*fp).gz_stream).expect("BGZF gzip stream is initialized");
     let mut input_eof = false;
     stream.zs.next_out = (*fp)
         .uncompressed_block
@@ -2021,7 +2086,7 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
         add_errcode(fp, sticky_err as u32);
         (*mt).errcode = sticky_err;
         super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
-        return BGZF_THREAD_ERROR_SENTINEL;
+        return ptr::null_mut();
     }
 
     super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
@@ -2243,7 +2308,7 @@ pub unsafe fn bgzf_c_1805_mt_destroy(mt: *mut bgzf_mtaux_t) -> c_int {
 
     let mut retval: *mut c_void = ptr::null_mut();
     crate::htslib_rs::c_compat::pthread_join((*mt).io_task, ptr::addr_of_mut!(retval));
-    if !retval.is_null() {
+    if !retval.is_null() || (*mt).errcode != 0 {
         ret = -1;
     }
 
@@ -2550,13 +2615,7 @@ pub unsafe fn bgzf_close(fp: *mut BGZF) -> c_int {
     bgzf_index_destroy(fp);
     bgzf_free_cache(fp);
     if !(*fp).gz_stream.is_null() {
-        let stream = (*fp).gz_stream.cast::<GzipStream>();
-        if flag(fp, 17) && flag(fp, 31) {
-            gzip_deflate_stream_end(stream);
-        } else {
-            gzip_stream_end(stream);
-        }
-        drop(Box::from_raw(stream));
+        gzip_stream_free_raw((*fp).gz_stream, flag(fp, 17) && flag(fp, 31));
         (*fp).gz_stream = ptr::null_mut();
     }
     c_compat::free((*fp).uncompressed_block);
@@ -3693,12 +3752,14 @@ mod tests {
     #[test]
     fn bgzf_encoded_fd_hfile_round_trips_without_raw_pointer_arithmetic() {
         let ptr = fd_to_ptr(7);
-        assert!(ptr_is_encoded_fd(ptr));
-        assert_eq!(ptr_to_fd(ptr), 7);
+        assert_eq!(BgzfIoTarget::from_ptr(ptr), BgzfIoTarget::EncodedFd(7));
 
         let mut marker = 0u8;
         let realish = (&mut marker as *mut u8).cast::<super::super::hts::hFILE>();
-        assert!(!ptr_is_encoded_fd(realish));
+        assert_eq!(
+            BgzfIoTarget::from_ptr(realish),
+            BgzfIoTarget::HFile(realish)
+        );
     }
 
     #[test]
@@ -3803,7 +3864,7 @@ mod tests {
 
             let cache = (*fp).cache.cast::<bgzf_cache_t>();
             assert!(!(*cache).h.is_null());
-            let h = &*(*cache).h.cast::<BgzfBlockCache>();
+            let h = bgzf_block_cache_mut_raw((*cache).h).expect("BGZF block cache");
             assert_eq!(h.blocks.len(), 1);
             let end_offset = h.blocks.get(&0).unwrap().end_offset;
 
@@ -3883,9 +3944,7 @@ mod tests {
                 .unwrap();
             assert_eq!(decoded, payload);
 
-            let stream = fp.gz_stream.cast::<GzipStream>();
-            gzip_deflate_stream_end(stream);
-            drop(Box::from_raw(stream));
+            gzip_stream_free_raw(fp.gz_stream, true);
         }
     }
 
@@ -4769,6 +4828,68 @@ mod tests {
     }
 
     #[test]
+    fn bgzf_mt_destroy_reports_recorded_io_thread_error_without_return_sentinel() {
+        unsafe {
+            let mt = c_compat::calloc(1, std::mem::size_of::<bgzf_mtaux_t>() as u64)
+                .cast::<bgzf_mtaux_t>();
+            assert!(!mt.is_null());
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_mutex_init(
+                    ptr::addr_of_mut!((*mt).job_pool_m),
+                    ptr::null()
+                ),
+                0
+            );
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_mutex_init(
+                    ptr::addr_of_mut!((*mt).command_m),
+                    ptr::null()
+                ),
+                0
+            );
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_mutex_init(
+                    ptr::addr_of_mut!((*mt).idx_m),
+                    ptr::null()
+                ),
+                0
+            );
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_cond_init(
+                    ptr::addr_of_mut!((*mt).command_c),
+                    ptr::null()
+                ),
+                0
+            );
+
+            (*mt).job_pool = super::super::cram::cram_pooled_alloc_c_64_pool_create(
+                std::mem::size_of::<bgzf_job>(),
+            )
+            .cast();
+            assert!(!(*mt).job_pool.is_null());
+            (*mt).pool = super::super::thread_pool::hts_tpool_init(1).cast();
+            assert!(!(*mt).pool.is_null());
+            (*mt).out_queue =
+                super::super::thread_pool::hts_tpool_process_init((*mt).pool.cast(), 2, 0).cast();
+            assert!(!(*mt).out_queue.is_null());
+            (*mt).own_pool = 1;
+            (*mt).errcode = BGZF_ERR_IO as c_int;
+
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_create(
+                    ptr::addr_of_mut!((*mt).io_task),
+                    ptr::null(),
+                    mt_destroy_test_io_thread,
+                    mt.cast(),
+                ),
+                0
+            );
+
+            assert_eq!(bgzf_c_1805_mt_destroy(mt), -1);
+        }
+    }
+
+    #[test]
     fn bgzf_dopen_preserves_plain_pipe_probe_bytes() {
         unsafe {
             let payload = b"plain uncompressed payload through a non-seekable fd";
@@ -5160,6 +5281,8 @@ mod tests {
             };
             assert_eq!(bgzf_zerr(Z_DATA_ERROR, &mut zs), zs.msg.cast());
 
+            let mut hfile_marker = std::mem::MaybeUninit::<crate::htslib_rs::hts::hFILE>::uninit();
+            let hfile_ptr = hfile_marker.as_mut_ptr();
             let mut fp = BGZF {
                 bitfields: 0,
                 cache_size: 0,
@@ -5171,7 +5294,7 @@ mod tests {
                 uncompressed_block: ptr::null_mut(),
                 compressed_block: ptr::null_mut(),
                 cache: ptr::null_mut(),
-                fp: 0x123usize as *mut _,
+                fp: hfile_ptr,
                 mt: ptr::null_mut(),
                 idx: ptr::null_mut(),
                 idx_build_otf: 0,
@@ -5183,7 +5306,7 @@ mod tests {
             assert_eq!(bgzf_compression(&mut fp), 2);
             set_flag(&mut fp, 31, true);
             assert_eq!(bgzf_compression(&mut fp), 1);
-            assert_eq!(bgzf_hfile(&mut fp), 0x123usize as *mut _);
+            assert_eq!(bgzf_hfile(&mut fp), hfile_ptr);
 
             let mut cache_marker = 0u8;
             fp.mt = ptr::null_mut();

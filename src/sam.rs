@@ -456,6 +456,24 @@ pub struct olap_hash_t {
 
 type OlapHash = HashMap<Vec<u8>, *mut lbnode_t>;
 
+fn olap_hash_new_raw() -> *mut olap_hash_t {
+    Box::into_raw(Box::new(OlapHash::new())).cast::<olap_hash_t>()
+}
+
+unsafe fn olap_hash_mut(ptr: *mut olap_hash_t) -> Option<&'static mut OlapHash> {
+    if ptr.is_null() {
+        None
+    } else {
+        Some(&mut *ptr.cast::<OlapHash>())
+    }
+}
+
+unsafe fn olap_hash_free(ptr: *mut olap_hash_t) {
+    if !ptr.is_null() {
+        drop(Box::from_raw(ptr.cast::<OlapHash>()));
+    }
+}
+
 pub type bam_plp_t = *mut bam_plp_s;
 pub type bam_plp_auto_f = Option<unsafe extern "C" fn(*mut c_void, *mut bam1_t) -> c_int>;
 pub type bam_plp_constructor_f =
@@ -6779,7 +6797,9 @@ unsafe fn overlap_push(iter: bam_plp_t, node: *mut lbnode_t) -> c_int {
         return 0;
     }
 
-    let overlaps = &mut *((*iter).overlaps.cast::<OlapHash>());
+    let Some(overlaps) = olap_hash_mut((*iter).overlaps) else {
+        return 0;
+    };
     let key = CStr::from_ptr(bam_get_qname(&(*node).b))
         .to_bytes()
         .to_vec();
@@ -6801,7 +6821,9 @@ unsafe fn overlap_remove(iter: bam_plp_t, b: *const bam1_t) {
     if (*iter).overlaps.is_null() {
         return;
     }
-    let overlaps = &mut *((*iter).overlaps.cast::<OlapHash>());
+    let Some(overlaps) = olap_hash_mut((*iter).overlaps) else {
+        return;
+    };
     if b.is_null() {
         overlaps.clear();
         return;
@@ -8428,7 +8450,7 @@ pub unsafe fn bam_plp_init(_func: bam_plp_auto_f, _data: *mut c_void) -> bam_plp
 }
 
 pub unsafe fn bam_plp_init_overlaps(_iter: bam_plp_t) -> c_int {
-    (*_iter).overlaps = Box::into_raw(Box::new(OlapHash::new())).cast::<olap_hash_t>();
+    (*_iter).overlaps = olap_hash_new_raw();
     if (*_iter).overlaps.is_null() {
         -1
     } else {
@@ -8440,9 +8462,8 @@ pub unsafe fn bam_plp_destroy(_iter: bam_plp_t) {
     if _iter.is_null() {
         return;
     }
-    if !(*_iter).overlaps.is_null() {
-        drop(Box::from_raw((*_iter).overlaps.cast::<OlapHash>()));
-    }
+    olap_hash_free((*_iter).overlaps);
+    (*_iter).overlaps = std::ptr::null_mut();
     let mut p = (*_iter).head;
     while !p.is_null() {
         if (*_iter).plp_destruct.is_some() && p != (*_iter).tail {
