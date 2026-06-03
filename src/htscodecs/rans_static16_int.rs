@@ -5,10 +5,16 @@
 //! Byte cursors (`uint8_t *cp`) are modelled as `&mut [u8]`/`&[u8]` with the
 //! function returning the number of bytes consumed/produced (the C `cp - op`
 //! idiom), exactly as in the C source.
-#![allow(non_snake_case, non_camel_case_types, unused_variables, dead_code, clippy::too_many_arguments)]
+#![allow(
+    non_snake_case,
+    non_camel_case_types,
+    unused_variables,
+    dead_code,
+    clippy::too_many_arguments
+)]
 
-use crate::htscodecs::rans_word::{RansEncSymbol, RansEncSymbolInit};
 use crate::htscodecs::rans_static4x16pr::{rans_compress_O0_4x16, rans_compute_shift};
+use crate::htscodecs::rans_word::{RansEncSymbol, RansEncSymbolInit};
 use crate::htscodecs::utils::{hist1_4, htscodecs_tls_calloc, htscodecs_tls_free, MAGIC};
 use crate::htscodecs::varint::{var_get_u32, var_put_u32};
 
@@ -135,8 +141,8 @@ pub fn normalise_freq_shift(F: &mut [u32], mut size: u32, max_tot: u32) {
         size *= 2;
         shift += 1;
     }
-    for i in 0..256 {
-        F[i] <<= shift;
+    for f in F.iter_mut().take(256) {
+        *f <<= shift;
     }
 }
 
@@ -262,9 +268,9 @@ fn decode_alphabet_carefully(
 /// `static inline int encode_freq(uint8_t *cp, uint32_t *F)`
 pub fn encode_freq(cp: &mut [u8], F: &[u32]) -> i32 {
     let mut o = encode_alphabet(cp, F) as usize;
-    for j in 0..256 {
-        if F[j] != 0 {
-            o += var_put_u32(&mut cp[o..], None, F[j]) as usize;
+    for &f in F.iter().take(256) {
+        if f != 0 {
+            o += var_put_u32(&mut cp[o..], None, f) as usize;
         }
     }
     o as i32
@@ -278,11 +284,11 @@ pub fn decode_freq(cp: &[u8], cp_end: usize, F: &mut [u32], fsum: &mut u32) -> i
     }
     let mut p = decode_alphabet(cp, cp_end, F) as usize;
     let mut tot = 0u32;
-    for j in 0..256 {
-        if F[j] != 0 {
+    for f in F.iter_mut().take(256) {
+        if *f != 0 {
             let mut v = 0u32;
             p += var_get_u32(&cp[p..], Some(cp_end - p), &mut v) as usize;
-            F[j] = v;
+            *f = v;
             tot = tot.wrapping_add(v);
         }
     }
@@ -297,16 +303,16 @@ pub fn encode_freq_d(cp: &mut [u8], F0: &[u32], F: &[u32]) -> i32 {
     // collapse a run of zero bytes (the `cp -= dz-1` step).
     let mut o = 0i32;
     let mut dz = 0i32;
-    for j in 0..256 {
-        if F0[j] != 0 {
-            if F[j] != 0 {
+    for (&f0, &f) in F0.iter().zip(F.iter()).take(256) {
+        if f0 != 0 {
+            if f != 0 {
                 if dz != 0 {
                     o -= dz - 1;
                     cp[o as usize] = (dz - 1) as u8;
                     o += 1;
                 }
                 dz = 0;
-                o += var_put_u32(&mut cp[o as usize..], None, F[j]);
+                o += var_put_u32(&mut cp[o as usize..], None, f);
             } else {
                 dz += 1;
                 cp[o as usize] = 0;
@@ -375,11 +381,11 @@ pub fn encode_freq1(
     // rans_compute_shift(T, F, T, S): F0 and T are the same array (read-only).
     let shift = rans_compute_shift(&T[..256], F, &T[..256], &mut S);
 
-    for i in 0..256 {
+    for (i, &s) in S.iter().enumerate().take(256) {
         if T[i] == 0 {
             continue;
         }
-        let mut max_val = S[i];
+        let mut max_val = s;
         if shift == TF_SHIFT_O1_FAST as i32 && max_val > TOTFREQ_O1_FAST {
             max_val = TOTFREQ_O1_FAST;
         }
@@ -397,9 +403,9 @@ pub fn encode_freq1(
 
         // Initialise Rans Symbol struct too.
         let mut x = 0u32;
-        for j in 0..256 {
-            RansEncSymbolInit(&mut syms[i][j], x, F[i][j], shift as u32);
-            x += F[i][j];
+        for (j, &f) in F[i].iter().enumerate().take(256) {
+            RansEncSymbolInit(&mut syms[i][j], x, f, shift as u32);
+            x += f;
         }
     }
 
@@ -506,8 +512,8 @@ pub fn decode_freq1(
     let mut sfb = sfb;
     let mut fb = fb;
 
-    for i in 0..256 {
-        if F0[i] == 0 {
+    for (i, &f0) in F0.iter().enumerate().take(256) {
+        if f0 == 0 {
             continue;
         }
         let mut F = [0u32; 256];
@@ -525,33 +531,32 @@ pub fn decode_freq1(
         normalise_freq_shift(&mut F, T, 1 << shift);
 
         let mut x = 0u32;
-        for j in 0..256 {
-            if F[j] != 0 {
-                if F[j] > (1u32 << shift) - x {
+        for (j, &f) in F.iter().enumerate().take(256) {
+            if f != 0 {
+                if f > (1u32 << shift) - x {
                     return 0;
                 }
-                if sfb.is_some() && shift == TF_SHIFT_O1 as i32 {
-                    let sfb_r = sfb.as_mut().unwrap();
-                    let fb_r = fb.as_mut().unwrap();
-                    for k in 0..F[j] as usize {
-                        sfb_r[i][x as usize + k] = j as u8;
+                if shift == TF_SHIFT_O1 as i32 {
+                    if let Some(sfb_r) = sfb.as_mut() {
+                        let fb_r = fb.as_mut().unwrap();
+                        for k in 0..f as usize {
+                            sfb_r[i][x as usize + k] = j as u8;
+                        }
+                        fb_r[i][j].f = f as u16;
+                        fb_r[i][j].b = x as u16;
+                    } else if let Some(s3_r) = s3.as_mut() {
+                        for y in 0..f {
+                            s3_r[i][(y + x) as usize] = (f << (shift + 8)) | (y << 8) | j as u32;
+                        }
                     }
-                    fb_r[i][j].f = F[j] as u16;
-                    fb_r[i][j].b = x as u16;
-                } else if s3.is_some() && shift == TF_SHIFT_O1 as i32 {
-                    let s3_r = s3.as_mut().unwrap();
-                    for y in 0..F[j] {
-                        s3_r[i][(y + x) as usize] =
-                            ((F[j]) << (shift + 8)) | (y << 8) | j as u32;
-                    }
-                } else if s3F.is_some() && shift == TF_SHIFT_O1_FAST as i32 {
-                    let s3f_r = s3F.as_mut().unwrap();
-                    for y in 0..F[j] {
-                        s3f_r[i][(y + x) as usize] =
-                            ((F[j]) << (shift + 8)) | (y << 8) | j as u32;
+                } else if shift == TF_SHIFT_O1_FAST as i32 {
+                    if let Some(s3f_r) = s3F.as_mut() {
+                        for y in 0..f {
+                            s3f_r[i][(y + x) as usize] = (f << (shift + 8)) | (y << 8) | j as u32;
+                        }
                     }
                 }
-                x += F[j];
+                x += f;
             }
         }
         if x != (1u32 << shift) {
@@ -566,11 +571,11 @@ pub fn decode_freq1(
 /// `static inline int rans_F_to_s3(const uint32_t *F, int shift, uint32_t *s3)`
 pub fn rans_F_to_s3(F: &[u32], shift: i32, s3: &mut [u32]) -> i32 {
     let mut x = 0u32;
-    for j in 0..256 {
-        if F[j] != 0 && F[j] <= (1u32 << shift) - x {
-            let base = ((F[j]) << (shift + 8)) | j as u32;
+    for (j, &f) in F.iter().enumerate().take(256) {
+        if f != 0 && f <= (1u32 << shift) - x {
+            let base = (f << (shift + 8)) | j as u32;
             let mut y = 0u32;
-            while y < F[j] {
+            while y < f {
                 s3[x as usize] = base + (y << 8);
                 y += 1;
                 x += 1;

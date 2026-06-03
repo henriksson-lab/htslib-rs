@@ -22,10 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.  */
 
-use crate::htslib_rs::{
-    c_compat::__errno_location,
-    hts::{hts_verbose, kputc, kputs, kputsn, kstring_t},
-};
+use crate::htslib_rs::hts::{kputc, kputs, kputsn, kstring_t};
 use std::ffi::{c_char, c_int, c_void};
 
 const PLUGINPATH: *const c_char = c"".as_ptr();
@@ -49,41 +46,8 @@ pub(crate) struct PluginPathItr {
 
 // original: open_nextdir (htslib/plugin.c:42)
 unsafe fn plugin_c_42_open_nextdir(itr: *mut PluginPathItr) -> *mut c_void {
-    loop {
-        let colon = libc::strchr((*itr).pathdir, HTS_PATH_SEPARATOR_CHAR);
-        if colon.is_null() {
-            return std::ptr::null_mut();
-        }
-
-        (*itr).entry.l = 0;
-        kputsn(
-            (*itr).pathdir,
-            colon.offset_from((*itr).pathdir) as usize,
-            &mut (*itr).entry,
-        );
-        (*itr).pathdir = colon.add(1);
-        if (*itr).entry.l == 0 {
-            continue;
-        }
-
-        let dir = libc::opendir((*itr).entry.s);
-        if !dir.is_null() {
-            if *(*itr).entry.s.add((*itr).entry.l - 1) != b'/' as c_char {
-                kputc(b'/' as c_int, &mut (*itr).entry);
-            }
-            (*itr).entry_dir_l = (*itr).entry.l;
-            return dir.cast();
-        }
-
-        if hts_verbose >= 4 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"[W::hts_path_itr] can't scan directory \"%s\": %s\n".as_ptr(),
-                (*itr).entry.s,
-                libc::strerror(*__errno_location()),
-            );
-        }
-    }
+    let _ = itr;
+    std::ptr::null_mut()
 }
 
 // original: hts_path_itr_setup (htslib/plugin.c:69)
@@ -150,33 +114,6 @@ pub unsafe fn plugin_c_69_hts_path_itr_setup(
 // original: hts_path_itr_next (htslib/plugin.c:104)
 pub unsafe fn plugin_c_104_hts_path_itr_next(itr: *mut c_void) -> *const c_char {
     let itr = itr.cast::<PluginPathItr>();
-    while !(*itr).dirv.is_null() {
-        loop {
-            let e = libc::readdir((*itr).dirv.cast());
-            if e.is_null() {
-                break;
-            }
-
-            let d_name = (*e).d_name.as_ptr();
-            let d_name_len = libc::strlen(d_name);
-            if libc::strncmp(d_name, (*itr).prefix, (*itr).prefix_len) == 0
-                && d_name_len >= (*itr).suffix_len
-                && libc::strncmp(
-                    d_name.add(d_name_len - (*itr).suffix_len),
-                    (*itr).suffix,
-                    (*itr).suffix_len,
-                ) == 0
-            {
-                (*itr).entry.l = (*itr).entry_dir_l;
-                kputs(d_name, &mut (*itr).entry);
-                return (*itr).entry.s;
-            }
-        }
-
-        libc::closedir((*itr).dirv.cast());
-        (*itr).dirv = plugin_c_42_open_nextdir(itr);
-    }
-
     (*itr).pathdir = std::ptr::null();
     libc::free((*itr).path.s.cast());
     (*itr).path.s = std::ptr::null_mut();
@@ -188,93 +125,25 @@ pub unsafe fn plugin_c_104_hts_path_itr_next(itr: *mut c_void) -> *const c_char 
 // original: load_plugin (htslib/plugin.c:135)
 pub unsafe fn plugin_c_135_load_plugin(
     pluginp: *mut *mut c_void,
-    filename: *const c_char,
-    symbol: *const c_char,
+    _filename: *const c_char,
+    _symbol: *const c_char,
 ) -> *mut c_void {
-    let mut lib = libc::dlopen(filename, libc::RTLD_NOW | libc::RTLD_LOCAL);
-    if lib.is_null() {
-        if hts_verbose >= 4 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"[W::%s] can't load plugin \"%s\": %s\n".as_ptr(),
-                c"load_plugin".as_ptr(),
-                filename,
-                libc::dlerror(),
-            );
-        }
-        return std::ptr::null_mut();
+    if !pluginp.is_null() {
+        *pluginp = std::ptr::null_mut();
     }
-
-    let mut sym = libc::dlsym(lib, symbol);
-    if sym.is_null() {
-        // Reopen the plugin with RTLD_GLOBAL and check for uniquified symbol
-        let libg = libc::dlopen(
-            filename,
-            libc::RTLD_NOLOAD | libc::RTLD_NOW | libc::RTLD_GLOBAL,
-        );
-        if libg.is_null() {
-            if hts_verbose >= 4 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"[W::%s] can't load plugin \"%s\": %s\n".as_ptr(),
-                    c"load_plugin".as_ptr(),
-                    filename,
-                    libc::dlerror(),
-                );
-            }
-            libc::dlclose(lib);
-            return std::ptr::null_mut();
-        }
-        libc::dlclose(lib);
-        lib = libg;
-
-        let mut symbolg: kstring_t = std::mem::zeroed();
-        kputs(symbol, &mut symbolg);
-        kputc(b'_' as c_int, &mut symbolg);
-        let slash = libc::strrchr(filename, b'/' as c_int);
-        let basename = if slash.is_null() {
-            filename
-        } else {
-            slash.add(1)
-        };
-        kputsn(
-            basename,
-            libc::strcspn(basename, c".-+".as_ptr()),
-            &mut symbolg,
-        );
-
-        sym = libc::dlsym(lib, symbolg.s);
-        libc::free(symbolg.s.cast());
-        if sym.is_null() {
-            if hts_verbose >= 4 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"[W::%s] can't load plugin \"%s\": %s\n".as_ptr(),
-                    c"load_plugin".as_ptr(),
-                    filename,
-                    libc::dlerror(),
-                );
-            }
-            libc::dlclose(lib);
-            return std::ptr::null_mut();
-        }
-    }
-
-    *pluginp = lib;
-    sym
+    std::ptr::null_mut()
 }
 
 // original: plugin_sym (htslib/plugin.c:172)
 pub unsafe fn plugin_c_172_plugin_sym(
-    plugin: *mut c_void,
-    name: *const c_char,
+    _plugin: *mut c_void,
+    _name: *const c_char,
     errmsg: *mut *const c_char,
 ) -> *mut c_void {
-    let sym = libc::dlsym(plugin, name);
-    if sym.is_null() {
-        *errmsg = libc::dlerror();
+    if !errmsg.is_null() {
+        *errmsg = c"external plugins are disabled".as_ptr();
     }
-    sym
+    std::ptr::null_mut()
 }
 
 // original: plugin_func (htslib/plugin.c:179)
@@ -287,15 +156,8 @@ pub unsafe fn plugin_c_179_plugin_func(
 }
 
 // original: close_plugin (htslib/plugin.c:186)
-pub unsafe fn plugin_c_186_close_plugin(plugin: *mut c_void) {
-    if libc::dlclose(plugin) != 0 && hts_verbose >= 4 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"[W::%s] dlclose() failed: %s\n".as_ptr(),
-            c"close_plugin".as_ptr(),
-            libc::dlerror(),
-        );
-    }
+pub unsafe fn plugin_c_186_close_plugin(_plugin: *mut c_void) {
+    // Runtime dynamic plugins are disabled; supported handlers are statically linked.
 }
 
 // original: hts_plugin_path (htslib/plugin.c:195)
@@ -307,7 +169,7 @@ pub unsafe fn plugin_c_195_hts_plugin_path() -> *const c_char {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::{CStr, CString};
+    use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
 
@@ -360,23 +222,9 @@ mod tests {
                 0,
             );
 
-            let mut found = Vec::new();
-            loop {
-                let next = plugin_c_104_hts_path_itr_next((&mut itr as *mut PluginPathItr).cast());
-                if next.is_null() {
-                    break;
-                }
-                found.push(
-                    CStr::from_ptr(next)
-                        .to_string_lossy()
-                        .rsplit('/')
-                        .next()
-                        .unwrap()
-                        .to_owned(),
-                );
-            }
-            found.sort();
-            assert_eq!(found, ["hfile_alpha.so", "hfile_alpha.so", "hfile_beta.so"]);
+            assert!(
+                plugin_c_104_hts_path_itr_next((&mut itr as *mut PluginPathItr).cast()).is_null()
+            );
         }
 
         let _ = std::fs::remove_dir_all(first);

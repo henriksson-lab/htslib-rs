@@ -214,18 +214,8 @@ pub unsafe fn regidx_c_151_regidx_push(
     mut end: hts_pos_t,
     payload: *mut c_void,
 ) -> c_int {
-    if beg < 0 {
-        beg = 0;
-    }
-    if end < 0 {
-        end = 0;
-    }
-    if beg > MAX_COOR_0 {
-        beg = MAX_COOR_0;
-    }
-    if end > MAX_COOR_0 {
-        end = MAX_COOR_0;
-    }
+    beg = beg.clamp(0, MAX_COOR_0);
+    end = end.clamp(0, MAX_COOR_0);
 
     let mut rid = 0;
     if kputsn(
@@ -653,15 +643,8 @@ pub unsafe fn regidx_c_401_regidx_overlap(
     if !itr.is_null() {
         (*itr).seq = std::ptr::null_mut();
     }
-    if beg < 0 {
-        beg = 0;
-    }
-    if end > MAX_COOR_0 {
-        end = MAX_COOR_0;
-    }
-    if end < 0 {
-        end = 0;
-    }
+    beg = beg.max(0);
+    end = end.clamp(0, MAX_COOR_0);
 
     let mut iseq = 0;
     if khash_str2int_get((*idx).seq2regs, chr, &mut iseq) != 0 {

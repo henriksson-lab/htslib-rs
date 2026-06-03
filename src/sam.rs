@@ -279,7 +279,7 @@ pub struct fastq_state {
     pub tags: *mut c_void,
     pub nprefix: c_char,
     pub sra_names: c_int,
-    pub regex: libc::regex_t,
+    pub regex: crate::htslib_rs::c_compat::regex_t,
 }
 
 #[repr(C)]
@@ -724,7 +724,7 @@ unsafe fn sam_hdr_set_long_target_len(
     if ret < 0 {
         return -1;
     }
-    *(*long_refs).vals.add(k as usize) = len as i64;
+    *(*long_refs).vals.add(k as usize) = len;
     0
 }
 
@@ -984,7 +984,7 @@ pub(crate) unsafe fn sam_hdr_text_remove_line(
     unchanged_ret: c_int,
     mut should_remove: impl FnMut(&[u8], c_int) -> bool,
 ) -> c_int {
-    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text as usize);
+    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text);
     let mut out = Vec::with_capacity(text.len());
     let mut changed = false;
     let mut seen = 0;
@@ -1045,7 +1045,7 @@ pub(crate) unsafe fn sam_hdr_text_remove_tag_id(
         return -1;
     }
 
-    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text as usize);
+    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text);
     let mut out = Vec::with_capacity(text.len());
     let mut changed = false;
     let mut matched_line = false;
@@ -1148,7 +1148,7 @@ pub(crate) unsafe fn sam_hdr_text_find_line_pos<'a>(
 
     let type0 = *type_ as u8;
     let type1 = *type_.add(1) as u8;
-    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text as usize);
+    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text);
     let mut seen = 0;
     let mut start = 0usize;
     while start < text.len() {
@@ -1183,7 +1183,7 @@ pub(crate) unsafe fn sam_hdr_text_find_line_id<'a>(
 
     let type0 = *type_ as u8;
     let type1 = *type_.add(1) as u8;
-    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text as usize);
+    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text);
     let mut start = 0usize;
     while start < text.len() {
         let rel_end = text[start..]
@@ -1230,7 +1230,7 @@ pub(crate) unsafe fn sam_hdr_text_pg_id_exists(h: *const sam_hdr_t, id: &[u8]) -
         return false;
     }
 
-    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text as usize);
+    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text);
     let mut start = 0usize;
     while start < text.len() {
         let rel_end = text[start..]
@@ -1257,7 +1257,7 @@ unsafe fn sam_hdr_text_pg_rows(h: *const sam_hdr_t) -> Vec<(Vec<u8>, Option<Vec<
         return rows;
     }
 
-    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text as usize);
+    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text);
     let mut start = 0usize;
     while start < text.len() {
         let rel_end = text[start..]
@@ -1554,7 +1554,7 @@ pub(crate) unsafe fn sam_hdr_text_name2tid(h: *const sam_hdr_t, ref_: *const c_c
         return -1;
     }
     let needle = CStr::from_ptr(ref_).to_bytes();
-    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text as usize);
+    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text);
     let mut tid = 0;
     let mut start = 0usize;
     while start < text.len() {
@@ -3049,10 +3049,8 @@ pub(crate) unsafe fn header_c_1784_sam_hdr_remove_line_id_hrecs(
         return -1;
     }
 
-    if (*bh).hrecs.is_null() {
-        if sam_hdr_fill_hrecs(bh) != 0 {
-            return -1;
-        }
+    if (*bh).hrecs.is_null() && sam_hdr_fill_hrecs(bh) != 0 {
+        return -1;
     }
     let hrecs = (*bh).hrecs;
 
@@ -3092,10 +3090,8 @@ pub(crate) unsafe fn header_c_1823_sam_hdr_remove_line_pos_hrecs(
         return -1;
     }
 
-    if (*bh).hrecs.is_null() {
-        if sam_hdr_fill_hrecs(bh) != 0 {
-            return -1;
-        }
+    if (*bh).hrecs.is_null() && sam_hdr_fill_hrecs(bh) != 0 {
+        return -1;
     }
     let hrecs = (*bh).hrecs;
 
@@ -3137,10 +3133,8 @@ pub(crate) unsafe fn header_c_2015_sam_hdr_remove_except_hrecs(
         return -1;
     }
 
-    if (*bh).hrecs.is_null() {
-        if sam_hdr_fill_hrecs(bh) != 0 {
-            return -1;
-        }
+    if (*bh).hrecs.is_null() && sam_hdr_fill_hrecs(bh) != 0 {
+        return -1;
     }
     let hrecs = (*bh).hrecs;
 
@@ -3184,10 +3178,10 @@ pub(crate) unsafe fn header_c_2015_sam_hdr_remove_except_hrecs(
     // by calling sam_hrecs_update_hashes — without it, a subsequent
     // sam_hrecs_find_type_pos would dereference a stale pointer into a
     // freed record (the rg[] array indexes into removed records).
-    if (t0 == b'S' && t1 == b'Q') || (t0 == b'R' && t1 == b'G') {
-        if rebuild_hash(hrecs, header_h_58_TYPEKEY(type_)) != 0 {
-            return -1;
-        }
+    if ((t0 == b'S' && t1 == b'Q') || (t0 == b'R' && t1 == b'G'))
+        && rebuild_hash(hrecs, header_h_58_TYPEKEY(type_)) != 0
+    {
+        return -1;
     }
     if sam_hrecs_update_hashes(hrecs) < 0 {
         return -1;
@@ -3229,10 +3223,8 @@ pub(crate) unsafe fn header_c_2071_sam_hdr_remove_lines_hrecs(
         return -1;
     }
 
-    if (*bh).hrecs.is_null() {
-        if sam_hdr_fill_hrecs(bh) != 0 {
-            return -1;
-        }
+    if (*bh).hrecs.is_null() && sam_hdr_fill_hrecs(bh) != 0 {
+        return -1;
     }
     let hrecs = (*bh).hrecs;
     let rh = vrh.cast::<khash_m_s2i_t>();
@@ -3284,10 +3276,10 @@ pub(crate) unsafe fn header_c_2071_sam_hdr_remove_lines_hrecs(
 
     let t0 = *type_ as u8;
     let t1 = *type_.add(1) as u8;
-    if (t0 == b'S' && t1 == b'Q') || (t0 == b'R' && t1 == b'G') {
-        if rebuild_hash(hrecs, header_h_58_TYPEKEY(type_)) != 0 {
-            return -1;
-        }
+    if ((t0 == b'S' && t1 == b'Q') || (t0 == b'R' && t1 == b'G'))
+        && rebuild_hash(hrecs, header_h_58_TYPEKEY(type_)) != 0
+    {
+        return -1;
     }
 
     if ret == 0 && (*hrecs).dirty != 0 {
@@ -3311,10 +3303,8 @@ pub(crate) unsafe fn header_c_2346_sam_hdr_remove_tag_id_hrecs(
         return -1;
     }
 
-    if (*bh).hrecs.is_null() {
-        if sam_hdr_fill_hrecs(bh) != 0 {
-            return -1;
-        }
+    if (*bh).hrecs.is_null() && sam_hdr_fill_hrecs(bh) != 0 {
+        return -1;
     }
     let hrecs = (*bh).hrecs;
 
@@ -3347,10 +3337,8 @@ pub(crate) unsafe fn header_c_2562_sam_hdr_pg_id_hrecs(
         return std::ptr::null();
     }
 
-    if (*bh).hrecs.is_null() {
-        if sam_hdr_fill_hrecs(bh) != 0 {
-            return std::ptr::null();
-        }
+    if (*bh).hrecs.is_null() && sam_hdr_fill_hrecs(bh) != 0 {
+        return std::ptr::null();
     }
     let hrecs = (*bh).hrecs;
 
@@ -4189,7 +4177,7 @@ unsafe fn sam_c_2244_sam_parse_Bc_vals(
 ) -> *mut c_char {
     while *q == b',' as c_char {
         *nused += 1;
-        if *nused - 1 >= *nalloc && sam_c_2221_grow_B_array(b, nalloc, 1) < 0 {
+        if *nused > *nalloc && sam_c_2221_grow_B_array(b, nalloc, 1) < 0 {
             return std::ptr::null_mut();
         }
         *(*b).data.add((*b).l_data as usize) = hts_str2int(q.add(1), &mut q, 8, overflow) as u8;
@@ -4207,7 +4195,7 @@ unsafe fn sam_c_2258_sam_parse_BC_vals(
 ) -> *mut c_char {
     while *q == b',' as c_char {
         *nused += 1;
-        if *nused - 1 >= *nalloc && sam_c_2221_grow_B_array(b, nalloc, 1) < 0 {
+        if *nused > *nalloc && sam_c_2221_grow_B_array(b, nalloc, 1) < 0 {
             return std::ptr::null_mut();
         }
         if *q.add(1) != b'-' as c_char {
@@ -4234,7 +4222,7 @@ unsafe fn sam_c_2278_sam_parse_Bs_vals(
 ) -> *mut c_char {
     while *q == b',' as c_char {
         *nused += 1;
-        if *nused - 1 >= *nalloc && sam_c_2221_grow_B_array(b, nalloc, 2) < 0 {
+        if *nused > *nalloc && sam_c_2221_grow_B_array(b, nalloc, 2) < 0 {
             return std::ptr::null_mut();
         }
         i16_to_le(
@@ -4255,7 +4243,7 @@ unsafe fn sam_c_2293_sam_parse_BS_vals(
 ) -> *mut c_char {
     while *q == b',' as c_char {
         *nused += 1;
-        if *nused - 1 >= *nalloc && sam_c_2221_grow_B_array(b, nalloc, 2) < 0 {
+        if *nused > *nalloc && sam_c_2221_grow_B_array(b, nalloc, 2) < 0 {
             return std::ptr::null_mut();
         }
         if *q.add(1) != b'-' as c_char {
@@ -4284,7 +4272,7 @@ unsafe fn sam_c_2314_sam_parse_Bi_vals(
 ) -> *mut c_char {
     while *q == b',' as c_char {
         *nused += 1;
-        if *nused - 1 >= *nalloc && sam_c_2221_grow_B_array(b, nalloc, 4) < 0 {
+        if *nused > *nalloc && sam_c_2221_grow_B_array(b, nalloc, 4) < 0 {
             return std::ptr::null_mut();
         }
         i32_to_le(
@@ -4305,7 +4293,7 @@ unsafe fn sam_c_2329_sam_parse_BI_vals(
 ) -> *mut c_char {
     while *q == b',' as c_char {
         *nused += 1;
-        if *nused - 1 >= *nalloc && sam_c_2221_grow_B_array(b, nalloc, 4) < 0 {
+        if *nused > *nalloc && sam_c_2221_grow_B_array(b, nalloc, 4) < 0 {
             return std::ptr::null_mut();
         }
         if *q.add(1) != b'-' as c_char {
@@ -4334,7 +4322,7 @@ unsafe fn sam_c_2350_sam_parse_Bf_vals(
 ) -> *mut c_char {
     while *q == b',' as c_char {
         *nused += 1;
-        if *nused - 1 >= *nalloc && sam_c_2221_grow_B_array(b, nalloc, 4) < 0 {
+        if *nused > *nalloc && sam_c_2221_grow_B_array(b, nalloc, 4) < 0 {
             return std::ptr::null_mut();
         }
         let mut end: *mut c_char = std::ptr::null_mut();
@@ -5536,10 +5524,10 @@ unsafe fn sam_c_3786_fastq_state_init(name_char: c_int) -> *mut fastq_state {
     (*x).BC[2] = 0;
     (*x).nprefix = name_char as c_char;
 
-    if libc::regcomp(
+    if crate::htslib_rs::c_compat::regcomp(
         &mut (*x).regex,
         c"^[^:]+:[^:]+:[^:]+:[^:]+:[^:]+:[^:]+:[^:]+:([^:#/]+)".as_ptr(),
-        libc::REG_EXTENDED,
+        crate::htslib_rs::c_compat::REG_EXTENDED,
     ) != 0
     {
         crate::htslib_rs::c_compat::free(x.cast());
@@ -5561,7 +5549,7 @@ pub unsafe fn sam_c_3802_fastq_state_destroy(fp: *mut htsFile) {
             crate::htslib_rs::c_compat::free((*tags).keys.cast());
             crate::htslib_rs::c_compat::free(tags.cast());
         }
-        libc::regfree(&mut (*x).regex);
+        crate::htslib_rs::c_compat::regfree(&mut (*x).regex);
         crate::htslib_rs::c_compat::free((*fp).state);
         (*fp).state = std::ptr::null_mut();
     }
@@ -5711,8 +5699,13 @@ pub unsafe fn sam_c_3815_fastq_state_set(
         }
         FASTQ_OPT_UMI_REGEX => {
             if !arg.is_null() {
-                libc::regfree(&mut (*x).regex);
-                if libc::regcomp(&mut (*x).regex, arg, libc::REG_EXTENDED) != 0 {
+                crate::htslib_rs::c_compat::regfree(&mut (*x).regex);
+                if crate::htslib_rs::c_compat::regcomp(
+                    &mut (*x).regex,
+                    arg,
+                    crate::htslib_rs::c_compat::REG_EXTENDED,
+                ) != 0
+                {
                     return -1;
                 }
             }
@@ -5859,8 +5852,9 @@ unsafe fn sam_c_3927_fastq_parse1(fp: *mut htsFile, b: *mut bam1_t) -> c_int {
     let mut umi_seq = [0 as c_char; 256];
     let mut umi_len = 0usize;
     if (*x).UMI[0][0] != 0 {
-        let mut mat: [libc::regmatch_t; 3] = std::mem::zeroed();
-        if libc::regexec(&mut (*x).regex, (*x).name.s, 2, mat.as_mut_ptr(), 0) == 0
+        let mut mat: [crate::htslib_rs::c_compat::regmatch_t; 3] = std::mem::zeroed();
+        if crate::htslib_rs::c_compat::regexec(&(*x).regex, (*x).name.s, 2, mat.as_mut_ptr(), 0)
+            == 0
             && mat[0].rm_so >= 0
             && mat[1].rm_so >= 0
         {
@@ -5868,9 +5862,9 @@ unsafe fn sam_c_3927_fastq_parse1(fp: *mut htsFile, b: *mut bam1_t) -> c_int {
             if umi_len > 255 {
                 return -2;
             }
-            for j in 0..umi_len {
+            for (j, dst) in umi_seq.iter_mut().enumerate().take(umi_len) {
                 let c = *(*x).name.s.add(j + mat[1].rm_so as usize);
-                umi_seq[j] = if isalpha_c(c) != 0 { c } else { b'-' as c_char };
+                *dst = if isalpha_c(c) != 0 { c } else { b'-' as c_char };
             }
             if umi_len != 0 {
                 umi_seq[umi_len] = 0;
@@ -7168,7 +7162,16 @@ unsafe extern "C" fn sam_c_1582_cram_pseek(fp: *mut c_void, offset: i64, _whence
     if cram_cram_io_c_5431_cram_seek(fd, offset as libc::off_t, libc::SEEK_SET) != 0
         && cram_cram_io_c_5431_cram_seek(
             fd,
-            (offset - (*fdl).first_container as i64) as libc::off_t,
+            {
+                #[cfg(windows)]
+                {
+                    (offset - i64::from((*fdl).first_container)) as libc::off_t
+                }
+                #[cfg(not(windows))]
+                {
+                    (offset - (*fdl).first_container) as libc::off_t
+                }
+            },
             libc::SEEK_CUR,
         ) != 0
     {
@@ -7212,13 +7215,21 @@ unsafe extern "C" fn sam_c_1612_cram_ptell(fp: *mut c_void) -> i64 {
     let c = (*fdl).ctr;
     if !c.is_null() {
         let s = (*c).slice;
-        if !s.is_null() && (*s).max_rec != 0 {
-            if ((*c).curr_slice + (*s).curr_rec / (*s).max_rec) >= ((*c).max_slice + 1) {
-                (*fdl).curr_position += (*c).offset as libc::off_t + (*c).length as libc::off_t;
-            }
+        if !s.is_null()
+            && (*s).max_rec != 0
+            && ((*c).curr_slice + (*s).curr_rec / (*s).max_rec) >= ((*c).max_slice + 1)
+        {
+            (*fdl).curr_position += (*c).offset as libc::off_t + (*c).length as libc::off_t;
         }
     }
-    (*fdl).curr_position as i64
+    #[cfg(windows)]
+    {
+        i64::from((*fdl).curr_position)
+    }
+    #[cfg(not(windows))]
+    {
+        (*fdl).curr_position
+    }
 }
 
 // Native equivalent of C `cram_readrec` (htslib/sam.c:1552):
@@ -8014,8 +8025,10 @@ unsafe fn sam_c_4145_sam_read1_cram(fp: *mut htsFile, h: *mut sam_hdr_t, b: *mut
     ret
 }
 
-fn sam_cram_pending() -> &'static Mutex<HashMap<usize, VecDeque<(usize, c_int)>>> {
-    static PENDING: OnceLock<Mutex<HashMap<usize, VecDeque<(usize, c_int)>>>> = OnceLock::new();
+type SamCramPendingMap = HashMap<usize, VecDeque<(usize, c_int)>>;
+
+fn sam_cram_pending() -> &'static Mutex<SamCramPendingMap> {
+    static PENDING: OnceLock<Mutex<SamCramPendingMap>> = OnceLock::new();
     PENDING.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -8211,7 +8224,7 @@ pub unsafe fn bam_read1(fp: *mut BGZF, b: *mut bam1_t) -> c_int {
     c.bin = (x2 >> 16) as u16;
     c.qual = ((x2 >> 8) & 0xff) as u8;
     c.l_qname = (x2 & 0xff) as u16;
-    c.l_extranul = if c.l_qname % 4 != 0 {
+    c.l_extranul = if !c.l_qname.is_multiple_of(4) {
         (4 - c.l_qname % 4) as u8
     } else {
         0
@@ -9250,6 +9263,7 @@ pub unsafe fn subtract_check_underflow(length: usize, limit: *mut usize) -> c_in
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn bam_set1(
     bam: *mut bam1_t,
     mut l_qname: usize,
@@ -9932,7 +9946,7 @@ unsafe fn bam_tag2cigar(b: *mut bam1_t, recal_bin: c_int, _give_warning: c_int) 
         return 0;
     }
 
-    let cg = bam_aux_get(b, b"CG\0".as_ptr().cast());
+    let cg = bam_aux_get(b, c"CG".as_ptr());
     let saved_errno = *crate::htslib_rs::c_compat::__errno_location();
     if cg.is_null() {
         if *crate::htslib_rs::c_compat::__errno_location()
@@ -10186,15 +10200,13 @@ pub unsafe fn sam_c_4553_sam_write1(
                 {
                     return -1;
                 }
-            } else {
-                if crate::htslib_rs::hfile::htslib_hfile_h_292_hwrite(
-                    (*fp).fp.hfile,
-                    (*fp).line.s.cast(),
-                    (*fp).line.l,
-                ) != (*fp).line.l as libc::ssize_t
-                {
-                    return -1;
-                }
+            } else if crate::htslib_rs::hfile::htslib_hfile_h_292_hwrite(
+                (*fp).fp.hfile,
+                (*fp).line.s.cast(),
+                (*fp).line.l,
+            ) != (*fp).line.l as libc::ssize_t
+            {
+                return -1;
             }
             // On-the-fly index update (htslib/sam.c:4665) when sam_idx_init
             // set up fp.idx. BGZF-SAM uses bgzf_idx_push; plain SAM uses
@@ -10258,15 +10270,13 @@ pub unsafe fn sam_c_4553_sam_write1(
                 {
                     return -1;
                 }
-            } else {
-                if crate::htslib_rs::hfile::htslib_hfile_h_292_hwrite(
-                    (*fp).fp.hfile,
-                    (*fp).line.s.cast(),
-                    (*fp).line.l,
-                ) != (*fp).line.l as libc::ssize_t
-                {
-                    return -1;
-                }
+            } else if crate::htslib_rs::hfile::htslib_hfile_h_292_hwrite(
+                (*fp).fp.hfile,
+                (*fp).line.s.cast(),
+                (*fp).line.l,
+            ) != (*fp).line.l as libc::ssize_t
+            {
+                return -1;
             }
             (*fp).line.l as c_int
         }
@@ -10287,10 +10297,14 @@ pub unsafe fn bam_set_qname(rec: *mut bam1_t, qname: *const c_char) -> c_int {
 
     let old_len = (*rec).core.l_qname as usize;
     let new_len = libc::strlen(qname) + 1;
-    if new_len < 1 || new_len > 255 {
+    if !(1..=255).contains(&new_len) {
         return -1;
     }
-    let extranul = if new_len % 4 != 0 { 4 - new_len % 4 } else { 0 };
+    let extranul = if !new_len.is_multiple_of(4) {
+        4 - new_len % 4
+    } else {
+        0
+    };
     let new_data_len = (*rec).l_data as usize - old_len + new_len + extranul;
     if realloc_bam_data(rec, new_data_len) < 0 {
         return -1;
@@ -11560,13 +11574,13 @@ pub unsafe fn bam_flag2str(flag: c_int) -> *mut c_char {
     for (bit, name) in flags {
         if (flag & bit) != 0 {
             if str_.l != 0 {
-                kputsn(b",\0".as_ptr().cast(), 1, &mut str_);
+                kputsn(c",".as_ptr(), 1, &mut str_);
             }
             kputsn(name.as_ptr().cast(), name.len(), &mut str_);
         }
     }
     if str_.l == 0 {
-        kputsn(b"\0".as_ptr().cast(), 0, &mut str_);
+        kputsn(c"".as_ptr(), 0, &mut str_);
     }
     str_.s
 }
@@ -12165,15 +12179,15 @@ mod tests {
 
             assert!(std::ptr::eq(
                 sam_hrecs_find_type_id(hrecs, c"SQ".as_ptr(), c"SN".as_ptr(), c"chr1".as_ptr()),
-                &mut sq
+                &sq
             ));
             assert!(std::ptr::eq(
                 sam_hrecs_find_type_id(hrecs, c"RG".as_ptr(), c"ID".as_ptr(), c"rg1".as_ptr()),
-                &mut rg
+                &rg
             ));
             assert!(std::ptr::eq(
                 sam_hrecs_find_type_pos(hrecs, c"RG".as_ptr(), 0),
-                &mut rg
+                &rg
             ));
             assert_eq!(
                 sam_hrecs_find_type_id(hrecs, c"RG".as_ptr(), c"ID".as_ptr(), c"missing".as_ptr()),
@@ -12183,9 +12197,9 @@ mod tests {
             let mut prev = std::ptr::null_mut();
             assert!(std::ptr::eq(
                 sam_hrecs_find_key(&mut sq, c"LN".as_ptr(), &mut prev),
-                &mut sq_len
+                &sq_len
             ));
-            assert!(std::ptr::eq(prev, &mut sq_sn));
+            assert!(std::ptr::eq(prev, &sq_sn));
             (*hrecs).ref_ = std::ptr::null_mut();
             (*hrecs).rg = std::ptr::null_mut();
             (*hrecs).first_line = std::ptr::null_mut();
@@ -13503,7 +13517,7 @@ mod tests {
 
             let mut mm = Vec::with_capacity(5 + MAX_BASE_MOD + 1);
             mm.extend_from_slice(b"C+");
-            mm.extend(std::iter::repeat(b'm').take(MAX_BASE_MOD));
+            mm.extend(std::iter::repeat_n(b'm', MAX_BASE_MOD));
             mm.extend_from_slice(b",0;\0");
             assert_eq!(
                 bam_aux_append(
@@ -13822,7 +13836,7 @@ mod tests {
         let seq_offset = cigar_offset + 8;
         let qual_offset = seq_offset + 3;
         let aux_offset = qual_offset + 5;
-        data[cigar_offset..cigar_offset + 4].copy_from_slice(&((10u32 << 4) | 0).to_ne_bytes());
+        data[cigar_offset..cigar_offset + 4].copy_from_slice(&(10u32 << 4).to_ne_bytes());
         data[cigar_offset + 4..cigar_offset + 8].copy_from_slice(&((1u32 << 4) | 2).to_ne_bytes());
         data[seq_offset..seq_offset + 3].copy_from_slice(&[0x12, 0x48, 0xf0]);
         data[qual_offset..qual_offset + 5].copy_from_slice(&[30, 31, 32, 33, 34]);
@@ -13882,7 +13896,7 @@ mod tests {
                 *crate::htslib_rs::c_compat::__errno_location(),
                 crate::htslib_rs::c_compat::EINVAL as c_int
             );
-            assert_eq!(*bam_get_cigar(&b), (10u32 << 4) | 0);
+            assert_eq!(*bam_get_cigar(&b), 10u32 << 4);
             assert_eq!(*bam_get_cigar(&b).add(1), (1u32 << 4) | 2);
             assert_eq!(bam_seqi(bam_get_seq(&b), 0), 1);
             assert_eq!(bam_seqi(bam_get_seq(&b), 1), 2);
@@ -13985,7 +13999,7 @@ mod tests {
                 std::ptr::null(),
                 0,
             );
-            assert_eq!(ret, 1 + 3 + 0 + 2 + 3);
+            assert_eq!(ret, 9);
             assert_eq!(std::slice::from_raw_parts((*b).data, 4), b"*\0\0\0");
             assert_eq!(std::slice::from_raw_parts(bam_get_qual(b), 3), &[0xff; 3]);
 
@@ -14181,7 +14195,13 @@ mod tests {
             );
             assert_eq!(ret, 18);
             assert_eq!(
-                bam_aux_append(b, c"CB".as_ptr(), b'Z' as c_char, 6, b"cell\0".as_ptr()),
+                bam_aux_append(
+                    b,
+                    c"CB".as_ptr(),
+                    b'Z' as c_char,
+                    6,
+                    c"cell".as_ptr().cast()
+                ),
                 0
             );
 
@@ -14269,7 +14289,13 @@ mod tests {
                 18
             );
             assert_eq!(
-                bam_aux_append(b, c"CB".as_ptr(), b'Z' as c_char, 6, b"cell\0".as_ptr()),
+                bam_aux_append(
+                    b,
+                    c"CB".as_ptr(),
+                    b'Z' as c_char,
+                    6,
+                    c"cell".as_ptr().cast()
+                ),
                 0
             );
             let mut ks = kstring_t {
@@ -14341,7 +14367,13 @@ mod tests {
                 0
             );
             assert_eq!(
-                bam_aux_append(b, c"CB".as_ptr(), b'Z' as c_char, 5, b"cell\0".as_ptr()),
+                bam_aux_append(
+                    b,
+                    c"CB".as_ptr(),
+                    b'Z' as c_char,
+                    5,
+                    c"cell".as_ptr().cast()
+                ),
                 0
             );
 
@@ -14529,10 +14561,10 @@ mod tests {
             assert!((*x).seq.s.is_null());
             assert!((*x).qual.s.is_null());
 
-            let mut match_ = libc::regmatch_t { rm_so: 0, rm_eo: 0 };
+            let mut match_ = crate::htslib_rs::c_compat::regmatch_t { rm_so: 0, rm_eo: 0 };
             let name = c"INST:RUN:FLOW:1:1101:1000:1000:ACGT";
             assert_eq!(
-                libc::regexec(&mut (*x).regex, name.as_ptr(), 1, &mut match_, 0,),
+                crate::htslib_rs::c_compat::regexec(&(*x).regex, name.as_ptr(), 1, &mut match_, 0,),
                 0
             );
 
@@ -14612,9 +14644,9 @@ mod tests {
                 ),
                 0
             );
-            let mut matches: [libc::regmatch_t; 3] = std::mem::zeroed();
+            let mut matches: [crate::htslib_rs::c_compat::regmatch_t; 3] = std::mem::zeroed();
             assert_eq!(
-                libc::regexec(
+                crate::htslib_rs::c_compat::regexec(
                     &(*x).regex,
                     c"READ:ACGT".as_ptr(),
                     matches.len(),
@@ -15454,7 +15486,7 @@ mod tests {
             assert_eq!(CStr::from_ptr(bam_aux2Z(cb)).to_bytes(), b"abc");
 
             assert_eq!(
-                bam_aux_update_str(b, b"CB".as_ptr().cast(), -1, b"xy\0".as_ptr().cast()),
+                bam_aux_update_str(b, b"CB".as_ptr().cast(), -1, c"xy".as_ptr().cast()),
                 0
             );
             let cb = bam_aux_get(b, b"CB".as_ptr().cast());
@@ -15604,7 +15636,7 @@ mod tests {
                     b"ZZ".as_ptr().cast(),
                     b'Z' as c_char,
                     5,
-                    b"tail\0".as_ptr(),
+                    c"tail".as_ptr().cast(),
                 ),
                 0
             );
@@ -16230,17 +16262,20 @@ mod tests {
                 ),
                 -1
             );
+            let mut pool_marker =
+                std::mem::MaybeUninit::<crate::htslib_rs::thread_pool::HtsTpool>::uninit();
             assert_eq!(
                 sam_c_3719_sam_set_thread_pool(
                     &mut fp,
                     (&mut crate::htslib_rs::hts::htsThreadPool {
-                        pool: std::ptr::dangling_mut(),
+                        pool: pool_marker.as_mut_ptr(),
                         qsize: 0,
                     }) as *mut crate::htslib_rs::hts::htsThreadPool,
                 ),
                 0
             );
-            fp.state = std::ptr::dangling_mut();
+            let mut state_marker = 0u8;
+            fp.state = (&mut state_marker as *mut u8).cast();
             assert_eq!(
                 sam_c_3719_sam_set_thread_pool(
                     &mut fp,
@@ -16285,7 +16320,7 @@ mod tests {
             assert_eq!(sam_hdr_tid2len(&hdr, 0), 100);
             assert_eq!(sam_hdr_tid2len(&hdr, 1), 200);
             assert_eq!(sam_hdr_tid2len(&hdr, 2), 0);
-            assert_eq!(sam_hdr_name2tid(&mut hdr, b"missing\0".as_ptr().cast()), -1);
+            assert_eq!(sam_hdr_name2tid(&mut hdr, c"missing".as_ptr()), -1);
 
             let mut tid = -1;
             let mut beg = -1;
@@ -16429,8 +16464,8 @@ mod tests {
             assert!(!(*hdr).target_len.is_null());
             assert!(!(*hdr).text.is_null());
             assert!(!name.is_null());
-            std::ptr::copy_nonoverlapping(b"chr1\0".as_ptr().cast::<c_char>(), name, 5);
-            std::ptr::copy_nonoverlapping(b"@HD\n\0".as_ptr().cast::<c_char>(), (*hdr).text, 5);
+            std::ptr::copy_nonoverlapping(c"chr1".as_ptr(), name, 5);
+            std::ptr::copy_nonoverlapping(c"@HD\n".as_ptr(), (*hdr).text, 5);
             *(*hdr).target_name = name;
             *(*hdr).target_len = 100;
 
@@ -16461,7 +16496,7 @@ mod tests {
                 vals: src_vals.as_mut_ptr(),
             };
 
-            let mut h0 = sam_hdr_t {
+            let h0 = sam_hdr_t {
                 n_targets: 0,
                 ignore_sam_err: 0,
                 l_text: 0,
@@ -16492,7 +16527,7 @@ mod tests {
                 ref_count: 0,
             };
 
-            assert_eq!(sam_c_144_sam_hdr_dup_sdict(&mut h0, &mut h), 0);
+            assert_eq!(sam_c_144_sam_hdr_dup_sdict(&h0, &mut h), 0);
             let dest = h.sdict.cast::<khash_s2i_t>();
             assert!(!dest.is_null());
             assert_eq!((*dest).size, 1);
@@ -16528,7 +16563,7 @@ mod tests {
                 keys: keys.as_mut_ptr(),
                 vals: vals.as_mut_ptr(),
             };
-            let mut h0 = sam_hdr_t {
+            let h0 = sam_hdr_t {
                 n_targets: 2,
                 ignore_sam_err: 0,
                 l_text: 0,
@@ -16541,7 +16576,7 @@ mod tests {
                 ref_count: 0,
             };
 
-            let dup = sam_hdr_dup(&mut h0);
+            let dup = sam_hdr_dup(&h0);
             assert!(!dup.is_null());
             assert_ne!((*dup).target_name, h0.target_name);
             assert_ne!(*(*dup).target_name, *h0.target_name);
@@ -16705,7 +16740,7 @@ mod tests {
                 18
             );
             assert_eq!(
-                bam_aux_append(b, c"RG".as_ptr(), b'Z' as c_char, 4, b"rg1\0".as_ptr()),
+                bam_aux_append(b, c"RG".as_ptr(), b'Z' as c_char, 4, c"rg1".as_ptr().cast()),
                 0
             );
 
@@ -17195,7 +17230,7 @@ mod tests {
     #[test]
     fn sam_format1_formats_unmapped_empty_sequence_like_htslib() {
         unsafe {
-            let mut hdr = sam_hdr_t {
+            let hdr = sam_hdr_t {
                 n_targets: 0,
                 ignore_sam_err: 0,
                 l_text: 0,
@@ -17236,7 +17271,7 @@ mod tests {
                 m: 0,
                 s: std::ptr::null_mut(),
             };
-            assert!(sam_format1(&mut hdr, b, &mut out) > 0);
+            assert!(sam_format1(&hdr, b, &mut out) > 0);
             assert_eq!(
                 CStr::from_ptr(out.s).to_bytes(),
                 b"r\t4\t*\t0\t0\t*\t*\t0\t0\t*\t*"
@@ -17258,7 +17293,13 @@ mod tests {
                 0
             );
             assert_eq!(
-                bam_aux_append(b, c"HX".as_ptr(), b'H' as c_char, 5, b"0A0b\0".as_ptr(),),
+                bam_aux_append(
+                    b,
+                    c"HX".as_ptr(),
+                    b'H' as c_char,
+                    5,
+                    c"0A0b".as_ptr().cast(),
+                ),
                 0
             );
             let array = [b'A', 2, 0, 0, 0, b'X', b'Y'];
@@ -17356,7 +17397,7 @@ mod tests {
                 crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<u32>() as u64).cast();
             let name = crate::htslib_rs::c_compat::malloc(5).cast::<c_char>();
             assert!(!name.is_null());
-            std::ptr::copy_nonoverlapping(b"chr1\0".as_ptr().cast::<c_char>(), name, 5);
+            std::ptr::copy_nonoverlapping(c"chr1".as_ptr(), name, 5);
             *(*hdr).target_name = name;
             *(*hdr).target_len = u32::MAX;
 
@@ -17534,11 +17575,11 @@ mod tests {
 
         let path_c = CString::new(path.to_str().unwrap()).unwrap();
         unsafe {
-            let fp = crate::htslib_rs::hts::hts_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = crate::htslib_rs::hts::hts_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             let hdr = sam_hdr_read(fp);
             assert!(!hdr.is_null());
-            assert_eq!(sam_hdr_name2tid(hdr, b"chr1\0".as_ptr().cast()), 0);
+            assert_eq!(sam_hdr_name2tid(hdr, c"chr1".as_ptr()), 0);
             assert_eq!(sam_hdr_tid2len(hdr, 0), 20);
 
             let b = bam_init1();
@@ -17604,8 +17645,8 @@ mod tests {
 
         let bam_c = CString::new(bam_path.to_str().unwrap()).unwrap();
         unsafe {
-            let fp_rust = crate::htslib_rs::hts::hts_open(bam_c.as_ptr(), b"r\0".as_ptr().cast());
-            let fp_c = hts_sys::hts_open(bam_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp_rust = crate::htslib_rs::hts::hts_open(bam_c.as_ptr(), c"r".as_ptr());
+            let fp_c = hts_sys::hts_open(bam_c.as_ptr(), c"r".as_ptr());
             assert!(!fp_rust.is_null());
             assert!(!fp_c.is_null());
             let hdr_rust = sam_hdr_read(fp_rust);
@@ -17641,7 +17682,7 @@ mod tests {
             assert_eq!(crate::htslib_rs::hts::hts_close(fp_rust), 0);
             assert_eq!(hts_sys::hts_close(fp_c), 0);
 
-            let fp_query = crate::htslib_rs::hts::hts_open(bam_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp_query = crate::htslib_rs::hts::hts_open(bam_c.as_ptr(), c"r".as_ptr());
             assert!(!fp_query.is_null());
             let hdr_query = sam_hdr_read(fp_query);
             assert!(!hdr_query.is_null());
@@ -17915,7 +17956,7 @@ mod tests {
             assert_eq!(sam_hdr_name2tid(hdr, chr.as_ptr().cast()), 0);
             assert_eq!((*hdr).n_targets, 1);
             assert_eq!(sam_hdr_tid2len(hdr, 0), 11);
-            assert_eq!(sam_hdr_name2tid(hdr, b"missing\0".as_ptr().cast()), -1);
+            assert_eq!(sam_hdr_name2tid(hdr, c"missing".as_ptr()), -1);
             sam_hdr_destroy(hdr);
         }
     }
@@ -18201,6 +18242,7 @@ mod tests {
     #[test]
     fn bam_mplp_reset_restores_iterator_sentinels() {
         let mut user_data = [std::ptr::null_mut::<c_void>(), std::ptr::null_mut()];
+        let pileup_marker = std::mem::MaybeUninit::<bam_pileup1_t>::uninit();
         unsafe {
             let mplp = bam_mplp_init(2, None, user_data.as_mut_ptr());
             assert!(!mplp.is_null());
@@ -18211,7 +18253,7 @@ mod tests {
                 *(*mplp).pos.add(idx) = i as hts_pos_t;
                 *(*mplp).tid.add(idx) = i;
                 *(*mplp).n_plp.add(idx) = 9;
-                *(*mplp).plp.add(idx) = std::ptr::dangling();
+                *(*mplp).plp.add(idx) = pileup_marker.as_ptr();
                 (*(*(*mplp).iter.add(idx))).tid = 7;
                 (*(*(*mplp).iter.add(idx))).pos = 8;
                 (*(*(*mplp).iter.add(idx))).is_eof = 1;

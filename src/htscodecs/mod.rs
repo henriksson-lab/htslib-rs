@@ -44,31 +44,32 @@
 // C signature + `// <path>:<line>` in a doc comment.
 
 // rANS family
-pub mod rans_static; // rANS_static.c (4x8) — IMPLEMENTED (byte-exact, tested)
 pub mod rans_byte; // rANS_byte.h
-pub mod rans_word; // rANS_word.h
+pub mod rans_static; // rANS_static.c (4x8) — IMPLEMENTED (byte-exact, tested)
 pub mod rans_static16_int; // rANS_static16_int.h
+pub mod rans_static32x16pr;
 pub mod rans_static4x16pr; // rANS_static4x16.h + rANS_static4x16pr.c
-pub mod rans_static32x16pr; // rANS_static32x16pr.{h,c} (scalar)
-// arithmetic coder + fqzcomp
+pub mod rans_word; // rANS_word.h // rANS_static32x16pr.{h,c} (scalar)
+                   // arithmetic coder + fqzcomp
+pub mod arith_dynamic; // arith_dynamic.{h,c}
 pub mod c_range_coder; // c_range_coder.h
 pub mod c_simple_model; // c_simple_model.h
-pub mod arith_dynamic; // arith_dynamic.{h,c}
 pub mod fqzcomp_qual; // fqzcomp_qual.{h,c}
-// read-name tokeniser
+                      // read-name tokeniser
 pub mod pooled_alloc; // pooled_alloc.h
 pub mod tokenise_name3; // tokenise_name3.{h,c}
-// packing / rle / utils / version
+                        // packing / rle / utils / version
+#[allow(clippy::module_inception)]
+pub mod htscodecs; // htscodecs.{h,c}
 pub mod pack; // pack.{h,c}
 pub mod rle; // rle.{h,c}
 pub mod utils; // utils.{h,c}
-pub mod htscodecs; // htscodecs.{h,c}
 pub mod varint; // varint.h
-// `varint2.h` (TurboPFor vbenc) is intentionally OUT OF SCOPE for this crate.
-// Upstream gates it `#ifdef VARINT2` and never selects it as the on-disk
-// codec format; translating it would only sit dormant. Removed 2026-05-29.
-pub mod permute; // permute.h
+                // `varint2.h` (TurboPFor vbenc) is intentionally OUT OF SCOPE for this crate.
+                // Upstream gates it `#ifdef VARINT2` and never selects it as the on-disk
+                // codec format; translating it would only sit dormant. Removed 2026-05-29.
 pub mod htscodecs_endian; // htscodecs_endian.h
+pub mod permute; // permute.h
 pub mod version; // version.h
 
 pub use rans_static::{rans_compress, rans_compress_bound, rans_uncompress};

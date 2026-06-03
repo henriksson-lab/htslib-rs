@@ -19,7 +19,7 @@
 
 #![cfg(feature = "parity")]
 
-use htslib_rs::{kstring_t, ks_tokaux_t};
+use htslib_rs::{ks_tokaux_t, kstring_t};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
 // ---------------------------------------------------------------------------
@@ -84,7 +84,8 @@ fn parity_kputd_various_values() {
             let (n_bytes, n_ret) = kputd_native(d);
             let (c_bytes, c_ret) = kputd_c(d);
             assert_eq!(
-                n_bytes, c_bytes,
+                n_bytes,
+                c_bytes,
                 "kputd({d}) byte mismatch: native={:?} c={:?}",
                 String::from_utf8_lossy(&n_bytes),
                 String::from_utf8_lossy(&c_bytes),
@@ -167,7 +168,10 @@ fn parity_ksplit_core_various_inputs() {
             let (n_n, buf_n, off_n) = ksplit_core_native(input, *delim);
             let (n_c, buf_c, off_c) = ksplit_core_c(input, *delim);
             assert_eq!(n_n, n_c, "ksplit_core n mismatch for {input:?}/{delim}");
-            assert_eq!(off_n, off_c, "ksplit_core offsets mismatch for {input:?}/{delim}");
+            assert_eq!(
+                off_n, off_c,
+                "ksplit_core offsets mismatch for {input:?}/{delim}"
+            );
             // The buffer must be byte-identical (both sides should have written
             // the same NUL terminators in the same places).
             assert_eq!(
@@ -304,8 +308,7 @@ fn parity_kstrstr_substring_search() {
         for (haystack, needle) in cases {
             let mut prep_n: *mut c_int = std::ptr::null_mut();
             let mut prep_c: *mut c_int = std::ptr::null_mut();
-            let nptr =
-                htslib_rs::kstring::kstrstr(haystack.as_ptr(), needle.as_ptr(), &mut prep_n);
+            let nptr = htslib_rs::kstring::kstrstr(haystack.as_ptr(), needle.as_ptr(), &mut prep_n);
             let cptr = hts_sys::kstrstr(haystack.as_ptr(), needle.as_ptr(), &mut prep_c);
             let n_off = if nptr.is_null() {
                 -1
@@ -344,19 +347,15 @@ fn parity_kstrnstr_bounded_search() {
         (c"hello world", c"hello", 4), // pat longer than n
         (c"abcabcabc", c"abc", 9),
         (c"abcabcabc", c"abc", 2),
-        (c"foo", c"", 3), // empty pattern -> haystack
+        (c"foo", c"", 3),    // empty pattern -> haystack
         (c"foo", c"bar", 0), // n<=0
     ];
     unsafe {
         for (haystack, needle, n) in cases {
             let mut prep_n: *mut c_int = std::ptr::null_mut();
             let mut prep_c: *mut c_int = std::ptr::null_mut();
-            let nptr = htslib_rs::kstring::kstrnstr(
-                haystack.as_ptr(),
-                needle.as_ptr(),
-                *n,
-                &mut prep_n,
-            );
+            let nptr =
+                htslib_rs::kstring::kstrnstr(haystack.as_ptr(), needle.as_ptr(), *n, &mut prep_n);
             let cptr = hts_sys::kstrnstr(haystack.as_ptr(), needle.as_ptr(), *n, &mut prep_c);
             let n_off = if nptr.is_null() {
                 -1
@@ -427,7 +426,8 @@ fn parity_kmemmem_binary_search() {
                 (cptr as *const u8).offset_from(haystack.as_ptr())
             };
             assert_eq!(
-                n_off, c_off,
+                n_off,
+                c_off,
                 "kmemmem offset mismatch for haystack_len={} needle={:?}",
                 haystack.len(),
                 needle
@@ -497,11 +497,7 @@ unsafe fn read_all_with_kgetline_c(file_path: &std::path::Path) -> Vec<Vec<u8>> 
 
     // Bridge: hts_sys's kgetline wants a kgets_func (extern "C" fn(*mut c_char, c_int, *mut c_void) -> *mut c_char).
     // libc::fgets has that signature too — match types.
-    unsafe extern "C" fn fgets_bridge(
-        buf: *mut c_char,
-        n: c_int,
-        fp: *mut c_void,
-    ) -> *mut c_char {
+    unsafe extern "C" fn fgets_bridge(buf: *mut c_char, n: c_int, fp: *mut c_void) -> *mut c_char {
         libc::fgets(buf, n, fp.cast::<libc::FILE>())
     }
 
@@ -569,11 +565,7 @@ unsafe extern "C" fn fgetln_bridge_native(
 }
 
 // hts_sys's regenerated bindings use Rust native usize/isize for kgets_func2.
-unsafe extern "C" fn fgetln_bridge_c(
-    buf: *mut c_char,
-    sz: usize,
-    fp: *mut c_void,
-) -> isize {
+unsafe extern "C" fn fgetln_bridge_c(buf: *mut c_char, sz: usize, fp: *mut c_void) -> isize {
     let fp = fp.cast::<libc::FILE>();
     let mut n: isize = 0;
     while (n as usize) + 1 < sz {
@@ -677,7 +669,10 @@ fn native_kfgetline_smoke() {
             libc::free(s.s.cast());
         }
         libc::fclose(fp);
-        assert_eq!(lines, vec![b"one".to_vec(), b"two".to_vec(), b"three".to_vec()]);
+        assert_eq!(
+            lines,
+            vec![b"one".to_vec(), b"two".to_vec(), b"three".to_vec()]
+        );
     }
     let _ = std::fs::remove_file(path);
 }

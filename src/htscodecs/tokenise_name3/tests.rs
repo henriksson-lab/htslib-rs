@@ -46,35 +46,41 @@ fn corpora() -> Vec<(&'static str, Vec<&'static str>)> {
         (
             "numeric_suffix",
             vec![
-                "read000001", "read000002", "read000003", "read000010", "read000099",
+                "read000001",
+                "read000002",
+                "read000003",
+                "read000010",
+                "read000099",
                 "read001000",
             ],
         ),
         (
             "varied_delims",
             vec![
-                "a.b-c_d:1", "a.b-c_d:2", "x/y/z#7", "x/y/z#8", "foo=bar+baz",
+                "a.b-c_d:1",
+                "a.b-c_d:2",
+                "x/y/z#7",
+                "x/y/z#8",
+                "foo=bar+baz",
             ],
         ),
         ("single", vec!["JustOneName:1:2:3"]),
-        (
-            "many",
-            {
-                // generated below in the test; placeholder small set here
-                vec!["m1", "m2", "m3"]
-            },
-        ),
+        ("many", {
+            // generated below in the test; placeholder small set here
+            vec!["m1", "m2", "m3"]
+        }),
         (
             "dups",
             vec![
-                "DUPNAME:1:2:3", "DUPNAME:1:2:3", "OTHER:4:5:6", "DUPNAME:1:2:3",
+                "DUPNAME:1:2:3",
+                "DUPNAME:1:2:3",
+                "OTHER:4:5:6",
+                "DUPNAME:1:2:3",
             ],
         ),
         (
             "leading_zeros",
-            vec![
-                "x:0001:0500", "x:0002:0501", "x:0010:0999", "x:0100:1000",
-            ],
+            vec!["x:0001:0500", "x:0002:0501", "x:0010:0999", "x:0100:1000"],
         ),
         (
             "ont_uuid",
@@ -88,7 +94,15 @@ fn corpora() -> Vec<(&'static str, Vec<&'static str>)> {
 
 fn many_names() -> Vec<String> {
     (0..5000)
-        .map(|i| format!("INST:7:FC:{}:{}:{}:{}", 1 + (i % 2), 1100 + (i % 8), 1000 + i * 3, 2000 + i))
+        .map(|i| {
+            format!(
+                "INST:7:FC:{}:{}:{}:{}",
+                1 + (i % 2),
+                1100 + (i % 8),
+                1000 + i * 3,
+                2000 + i
+            )
+        })
         .collect()
 }
 
@@ -105,7 +119,10 @@ fn roundtrip_one(names: &[&str], level: i32, use_arith: i32) {
     assert_eq!(dec.len(), dlen as usize);
     let got = split_block(&dec);
     let expect: Vec<String> = names.iter().map(|s| s.to_string()).collect();
-    assert_eq!(got, expect, "roundtrip names mismatch level={level} arith={use_arith}");
+    assert_eq!(
+        got, expect,
+        "roundtrip names mismatch level={level} arith={use_arith}"
+    );
 }
 
 // NOTE on the arithmetic-coding (use_arith=1) path:
@@ -217,8 +234,8 @@ fn corrupt_decode_no_panic_rans() {
     let mut block = make_block(&refs);
     let blen = block.len() as i32;
     let mut ol = 0i32;
-    let nat = tok3_encode_names(&mut block, blen, 5, 0, &mut ol, None)
-        .expect("encode for fuzz seed");
+    let nat =
+        tok3_encode_names(&mut block, blen, 5, 0, &mut ol, None).expect("encode for fuzz seed");
 
     // bit-flip fuzz
     for trial in 0..40u64 {

@@ -19,13 +19,15 @@
 //!
 //! We mirror this exactly with a single flat `Vec<SymFreqs> f` laid out as
 //! `[sentinel, F[0..=NSYM], terminal]`, i.e. length `NSYM + 3`.  Index mapping:
-//!   - `sentinel`  -> `f[0]`
-//!   - `F[k]`      -> `f[1 + k]`   (k in 0..=NSYM)
-//!   - `terminal`  -> `f[NSYM + 2]`
+//!
+//! - `sentinel`  -> `f[0]`
+//! - `F[k]`      -> `f[1 + k]`   (k in 0..=NSYM)
+//! - `terminal`  -> `f[NSYM + 2]`
+//!
 //! The `s` pointer of the C code is therefore an index `si` into `f` that
 //! starts at 1 (== `&F[0]`); `s[-1]` == `f[si-1]`.
 
-use crate::htscodecs::c_range_coder::{RangeCoder, RC_Decode, RC_Encode, RC_GetFreq};
+use crate::htscodecs::c_range_coder::{RC_Decode, RC_Encode, RC_GetFreq, RangeCoder};
 
 // #define MAX_FREQ (1<<16)-17               // c_simple_model.h:63
 pub const MAX_FREQ: u32 = (1 << 16) - 17;
@@ -97,7 +99,8 @@ pub fn SIMPLE_MODEL_init(m: &mut SimpleModel, max_sym: i32) {
     m.tot_freq = max_sym as u32;
     // sentinel == f[0]
     m.f[0].symbol = 0;
-    m.f[0].freq = MAX_FREQ as u16; // Always first; simplifies sorting.
+    // Always first; simplifies sorting.
+    m.f[0].freq = MAX_FREQ as u16;
     // terminal == f[nsym + 2]
     m.f[nsym + 2].symbol = 0;
     m.f[nsym + 2].freq = MAX_FREQ as u16;

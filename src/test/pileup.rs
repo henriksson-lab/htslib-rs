@@ -303,7 +303,7 @@ pub unsafe fn test_pileup_c_225_main(argc: c_int, argv: *mut *mut c_char) -> c_i
             crate::htslib_rs::c_compat::stderr.cast(),
             c"Couldn't open \"%s\" : %s".as_ptr(),
             g.fname,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return libc::EXIT_FAILURE;
     }
@@ -313,7 +313,7 @@ pub unsafe fn test_pileup_c_225_main(argc: c_int, argv: *mut *mut c_char) -> c_i
             crate::htslib_rs::c_compat::stderr.cast(),
             c"Couldn't read header from \"%s\" : %s".as_ptr(),
             g.fname,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         hts_close(g.fp);
         return libc::EXIT_FAILURE;

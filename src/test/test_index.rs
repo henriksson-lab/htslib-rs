@@ -40,7 +40,9 @@ pub unsafe fn test_test_index_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
             c if c == b't' as c_int || c == b'b' as c_int => min_shift = 0,
             c if c == b'c' as c_int => min_shift = 14,
             c if c == b'm' as c_int => min_shift = libc::atoi(optarg),
-            c if c == b'h' as c_int => test_test_index_c_32_usage(crate::htslib_rs::c_compat::stdout.cast()),
+            c if c == b'h' as c_int => {
+                test_test_index_c_32_usage(crate::htslib_rs::c_compat::stdout.cast())
+            }
             _ => test_test_index_c_32_usage(crate::htslib_rs::c_compat::stderr.cast()),
         }
     }

@@ -32,19 +32,19 @@ const UNDERSCORE_LOCAL: u32 = 9;
 /// Reproduces the C decode-table builder from `permute.h:24-40`.
 ///
 /// For each `i` in `0..256` and each input-bit position `j` in `0..8`:
-///   * if bit `j` of `i` is set, the byte at input position `j` is kept,
-///     and the table records the 0-based output lane `k` it lands in
-///     (`k = (number of set bits with index <= j) - 1`).
-///   * if bit `j` of `i` is cleared, the slot holds the sentinel `9`.
+/// * if bit `j` of `i` is set, the byte at input position `j` is kept,
+///   and the table records the 0-based output lane `k` it lands in
+///   (`k = (number of set bits with index <= j) - 1`).
+/// * if bit `j` of `i` is cleared, the slot holds the sentinel `9`.
 fn build_permute() -> [[u32; 8]; 256] {
     let mut out = [[UNDERSCORE_LOCAL; 8]; 256];
-    for i in 0..256usize {
+    for (i, row) in out.iter_mut().enumerate() {
         let mut b: u32 = 0;
-        for j in 0..8 {
+        for (j, slot) in row.iter_mut().enumerate() {
             if (i & (1 << j)) != 0 {
                 // The C does `v[j] = ++b` then prints `v[j]-1`, i.e. the
                 // 0-based output lane index.
-                out[i][j] = b;
+                *slot = b;
                 b += 1;
             }
         }
@@ -60,7 +60,7 @@ fn build_permute() -> [[u32; 8]; 256] {
 /// of the `k`-th set bit of `i`.
 fn build_permutec() -> [[u32; 8]; 256] {
     let mut out = [[UNDERSCORE_LOCAL; 8]; 256];
-    for i in 0..256usize {
+    for (i, row) in out.iter_mut().enumerate() {
         // Collect the 1-based bit positions of the set bits, in order.
         let mut v = [0i32; 9];
         let mut b: i32 = 0;
@@ -76,7 +76,7 @@ fn build_permutec() -> [[u32; 8]; 256] {
         let mut j = b - 8;
         while j < b {
             if j >= 0 && v[j as usize] != 0 {
-                out[i][slot] = (v[j as usize] - 1) as u32;
+                row[slot] = (v[j as usize] - 1) as u32;
             }
             slot += 1;
             j += 1;
@@ -92,20 +92,16 @@ fn build_permutec() -> [[u32; 8]; 256] {
 #[test]
 fn permute_row_shape_matches_popcount() {
     let p = build_permute();
-    for i in 0..256usize {
+    for (i, row) in p.iter().enumerate() {
         let pop = (i as u8).count_ones();
-        let live = p[i].iter().filter(|&&x| x != UNDERSCORE_LOCAL).count() as u32;
+        let live = row.iter().filter(|&&x| x != UNDERSCORE_LOCAL).count() as u32;
         assert_eq!(
             live, pop,
             "permute[{i}] has {live} live entries, expected popcount={pop}"
         );
         // All live entries must be in 0..popcount (the C prints v[j]-1, so
         // the output lane indices are 0-based and unique within the row).
-        let max_live = p[i]
-            .iter()
-            .copied()
-            .filter(|&x| x != UNDERSCORE_LOCAL)
-            .max();
+        let max_live = row.iter().copied().filter(|&x| x != UNDERSCORE_LOCAL).max();
         if pop == 0 {
             assert!(max_live.is_none(), "permute[{i}] should be all sentinels");
         } else {
@@ -117,7 +113,7 @@ fn permute_row_shape_matches_popcount() {
             );
         }
         // Live entries must be a permutation of 0..pop (no duplicates).
-        let mut live_vals: Vec<u32> = p[i]
+        let mut live_vals: Vec<u32> = row
             .iter()
             .copied()
             .filter(|&x| x != UNDERSCORE_LOCAL)
@@ -134,26 +130,25 @@ fn permute_row_shape_matches_popcount() {
 #[test]
 fn permutec_row_shape_matches_popcount() {
     let pc = build_permutec();
-    for i in 0..256usize {
+    for (i, row) in pc.iter().enumerate() {
         let pop = (i as u8).count_ones();
-        let live = pc[i].iter().filter(|&&x| x != UNDERSCORE_LOCAL).count() as u32;
+        let live = row.iter().filter(|&&x| x != UNDERSCORE_LOCAL).count() as u32;
         assert_eq!(
             live, pop,
             "permutec[{i}] has {live} live entries, expected popcount={pop}"
         );
         // permutec is right-aligned: the first 8-pop slots are sentinels.
         let leading_sentinels = (8 - pop) as usize;
-        for slot in 0..leading_sentinels {
+        for (slot, &value) in row.iter().enumerate().take(leading_sentinels) {
             assert_eq!(
-                pc[i][slot], UNDERSCORE_LOCAL,
+                value, UNDERSCORE_LOCAL,
                 "permutec[{i}][{slot}] should be sentinel (right-aligned)"
             );
         }
         // The trailing slots are 0-based input bit positions; all must
         // be in 0..8 and strictly increasing (set-bit indices in order).
         let mut prev: i32 = -1;
-        for slot in leading_sentinels..8 {
-            let v = pc[i][slot];
+        for (slot, &v) in row.iter().enumerate().skip(leading_sentinels) {
             assert!(v < 8, "permutec[{i}][{slot}]={v} out of range");
             assert!(
                 (v as i32) > prev,
@@ -247,41 +242,41 @@ fn permutec_is_right_aligned_inverse_of_permute() {
     //     permutec[i][ 8 - popcount(i) + k ] == j
     let p = build_permute();
     let pc = build_permutec();
-    for i in 0..256usize {
+    for (i, (p_row, pc_row)) in p.iter().zip(pc.iter()).enumerate() {
         let pop = (i as u8).count_ones() as usize;
         let offset = 8 - pop;
-        for j in 0..8usize {
+        for (j, &lane) in p_row.iter().enumerate() {
             if (i & (1 << j)) != 0 {
-                let k = p[i][j] as usize;
+                let k = lane as usize;
                 assert!(
                     k < pop,
                     "permute[{i}][{j}]={k} should be in 0..popcount({pop})"
                 );
                 assert_eq!(
-                    pc[i][offset + k],
+                    pc_row[offset + k],
                     j as u32,
                     "inverse mismatch: permute[{i}][{j}]={k} but \
                      permutec[{i}][{}]={} (expected {j})",
                     offset + k,
-                    pc[i][offset + k]
+                    pc_row[offset + k]
                 );
             } else {
                 // Bit j is clear -> permute slot is the sentinel.
                 assert_eq!(
-                    p[i][j], UNDERSCORE_LOCAL,
+                    lane, UNDERSCORE_LOCAL,
                     "permute[{i}][{j}] should be sentinel for cleared bit"
                 );
             }
         }
         // Every live slot of permutec corresponds to some set bit of i.
-        for slot in offset..8 {
-            let bit = pc[i][slot] as usize;
+        for (slot, &value) in pc_row.iter().enumerate().skip(offset) {
+            let bit = value as usize;
             assert!(
                 bit < 8 && (i & (1 << bit)) != 0,
                 "permutec[{i}][{slot}]={bit} should reference a set bit of {i}"
             );
             // And the round-trip back through permute must land at this slot.
-            let k = p[i][bit] as usize;
+            let k = p_row[bit] as usize;
             assert_eq!(
                 offset + k,
                 slot,

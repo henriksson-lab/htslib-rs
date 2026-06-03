@@ -215,7 +215,7 @@ const TESTS_FLOAT: [TestFloat; 7] = [
     TestFloat {
         u8: [0xd0, 0x0f, 0x49, 0x40],
         u8_unaligned: [0x00, 0xd0, 0x0f, 0x49, 0x40],
-        f: 3.14159,
+        f: f32::from_bits(0x4049_0fd0),
     },
     TestFloat {
         u8: [0xa8, 0x0a, 0xff, 0x66],
@@ -794,7 +794,11 @@ pub unsafe fn test_hts_endian_c_496_main(argc: c_int, argv: *mut *mut c_char) ->
     errors += test_hts_endian_c_451_t_double(verbose);
 
     if errors != 0 {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"%d errors\n".as_ptr(), errors);
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"%d errors\n".as_ptr(),
+            errors,
+        );
         return libc::EXIT_FAILURE;
     }
 

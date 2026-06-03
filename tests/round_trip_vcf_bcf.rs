@@ -40,7 +40,11 @@ unsafe fn render_variant_file(path: &Path) -> Vec<String> {
     assert!(!fp.is_null(), "failed to open {}", path.display());
 
     let hdr = vcf_hdr_read(fp);
-    assert!(!hdr.is_null(), "failed to read header from {}", path.display());
+    assert!(
+        !hdr.is_null(),
+        "failed to read header from {}",
+        path.display()
+    );
 
     let rec = bcf_init();
     assert!(!rec.is_null());
@@ -86,7 +90,11 @@ unsafe fn copy_variants(input: &Path, output: &Path, out_mode: &CStr) {
     let in_fp = hts_open(in_c.as_ptr(), c"r".as_ptr());
     assert!(!in_fp.is_null(), "failed to open {}", input.display());
     let hdr = vcf_hdr_read(in_fp);
-    assert!(!hdr.is_null(), "failed to read header from {}", input.display());
+    assert!(
+        !hdr.is_null(),
+        "failed to read header from {}",
+        input.display()
+    );
 
     let out_fp = hts_open(out_c.as_ptr(), out_mode.as_ptr());
     assert!(!out_fp.is_null(), "failed to create {}", output.display());

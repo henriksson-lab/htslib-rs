@@ -1,5 +1,7 @@
+#[cfg(unix)]
 use std::ffi::CString;
 
+#[cfg(unix)]
 fn main() {
     let mut args = std::env::args()
         .map(|arg| CString::new(arg).unwrap())
@@ -12,3 +14,6 @@ fn main() {
         unsafe { htslib_rs::htsfile::htsfile_c_227_main(argv.len() as i32, argv.as_mut_ptr()) };
     std::process::exit(status);
 }
+
+#[cfg(not(unix))]
+fn main() {}

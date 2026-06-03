@@ -149,8 +149,12 @@ pub unsafe fn samples_dump_aux_c_114_main(argc: c_int, argv: *mut *mut c_char) -
                     b'i' as c_int
                 },
             );
-            if samples_dump_aux_c_51_printauxdata(crate::htslib_rs::c_compat::stdout.cast(), type_, -1, data)
-                == libc::EXIT_FAILURE
+            if samples_dump_aux_c_51_printauxdata(
+                crate::htslib_rs::c_compat::stdout.cast(),
+                type_,
+                -1,
+                data,
+            ) == libc::EXIT_FAILURE
             {
                 libc::printf(c"Failed to dump aux data\n".as_ptr());
                 sam::sam_hdr_destroy(in_samhdr);

@@ -7,11 +7,11 @@ type hts_json_nextfn =
 // original: dehex (htslib/textutils.c:37)
 unsafe fn dehex(c: c_char) -> c_int {
     let c = c as u8;
-    if c >= b'a' && c <= b'f' {
+    if (b'a'..=b'f').contains(&c) {
         (c - b'a' + 10) as c_int
-    } else if c >= b'A' && c <= b'F' {
+    } else if (b'A'..=b'F').contains(&c) {
         (c - b'A' + 10) as c_int
-    } else if c >= b'0' && c <= b'9' {
+    } else if c.is_ascii_digit() {
         (c - b'0') as c_int
     } else {
         -1

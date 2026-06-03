@@ -85,7 +85,7 @@ impl Drop for TlsCell {
 }
 
 thread_local! {
-    static RANS_TLS: RefCell<TlsCell> = RefCell::new(TlsCell(tls_pool::new()));
+    static RANS_TLS: RefCell<TlsCell> = const { RefCell::new(TlsCell(tls_pool::new())) };
 }
 
 /// ```c
@@ -311,20 +311,20 @@ pub fn unstripe(out: &mut [u8], outN: &[u8], ulen: u32, N: u32, idxN: &mut [u32;
                 if ulen >= 4 * LLN {
                     while j < ulen - 4 * LLN {
                         for l in 0..LLN {
-                            for k in 0..4usize {
-                                out[j + k + l * 4] = outN[idxN[k] as usize + l];
+                            for (k, idx) in idxN.iter().take(4).enumerate() {
+                                out[j + k + l * 4] = outN[*idx as usize + l];
                             }
                         }
-                        for k in 0..4usize {
-                            idxN[k] += LLN as u32;
+                        for idx in idxN.iter_mut().take(4) {
+                            *idx += LLN as u32;
                         }
                         j += 4 * LLN;
                     }
                 }
                 while j < ulen - 4 {
-                    for k in 0..4usize {
-                        out[j] = outN[idxN[k] as usize];
-                        idxN[k] += 1;
+                    for idx in idxN.iter_mut().take(4) {
+                        out[j] = outN[*idx as usize];
+                        *idx += 1;
                         j += 1;
                     }
                 }
@@ -335,21 +335,21 @@ pub fn unstripe(out: &mut [u8], outN: &[u8], ulen: u32, N: u32, idxN: &mut [u32;
                     while j < ulen - 2 * LLN {
                         let mut l: usize = 0;
                         while l < LLN {
-                            for k in 0..2usize {
-                                out[j] = outN[idxN[k] as usize + l];
+                            for idx in idxN.iter().take(2) {
+                                out[j] = outN[*idx as usize + l];
                                 j += 1;
                             }
                             l += 1;
                         }
-                        for k in 0..2usize {
-                            idxN[k] += l as u32;
+                        for idx in idxN.iter_mut().take(2) {
+                            *idx += l as u32;
                         }
                     }
                 }
                 while j < ulen - 2 {
-                    for k in 0..2usize {
-                        out[j] = outN[idxN[k] as usize];
-                        idxN[k] += 1;
+                    for idx in idxN.iter_mut().take(2) {
+                        out[j] = outN[*idx as usize];
+                        *idx += 1;
                         j += 1;
                     }
                 }
@@ -625,9 +625,9 @@ pub fn hist1_4(r#in: &[u8], in_size: u32, F0: &mut [[u32; 256]; 256], T0: &mut [
 
         for i in 0..256usize {
             let mut tt: i32 = 0;
-            for j in 0..256usize {
-                F0[i][j] += *f1!(i, j);
-                tt += F0[i][j] as i32;
+            for (j, val) in F0[i].iter_mut().enumerate() {
+                *val += *f1!(i, j);
+                tt += *val as i32;
             }
             T0[i] += tt as u32;
         }
@@ -668,8 +668,8 @@ pub fn hist1_4(r#in: &[u8], in_size: u32, F0: &mut [[u32; 256]; 256], T0: &mut [
 
         for i in 0..256usize {
             let mut tt: i32 = 0;
-            for j in 0..256usize {
-                tt += F0[i][j] as i32;
+            for val in F0[i].iter() {
+                tt += *val as i32;
             }
             T0[i] += tt as u32;
         }

@@ -1120,8 +1120,6 @@ pub unsafe fn ref_cache_server_c_721_run_poll_loop(
 ) -> c_int {
     let opts_l = opts.cast::<RefCacheOptionsLayout>();
     let mut clients: RefCacheClientsLayout = std::mem::zeroed();
-    let polled_upstream: *mut Pw_item;
-    let polled_log: *mut Pw_item;
     let mut events = [std::mem::zeroed::<libc::epoll_event>(); REF_CACHE_MAX_EVENTS as usize];
     let mut log_buf: RefCacheLogBufferLayout = std::mem::zeroed();
     let mut log_can_write = 0;
@@ -1153,7 +1151,7 @@ pub unsafe fn ref_cache_server_c_721_run_poll_loop(
     }
 
     if upstream != -1 {
-        polled_upstream = ref_cache_poll_wrap_epoll_c_78_pw_register(
+        let polled_upstream = ref_cache_poll_wrap_epoll_c_78_pw_register(
             pw,
             upstream,
             REF_CACHE_SV_UPSTREAM,
@@ -1166,7 +1164,7 @@ pub unsafe fn ref_cache_server_c_721_run_poll_loop(
         }
     }
 
-    polled_log = ref_cache_poll_wrap_epoll_c_78_pw_register(
+    let polled_log = ref_cache_poll_wrap_epoll_c_78_pw_register(
         pw,
         log_fd,
         REF_CACHE_SV_LOG,

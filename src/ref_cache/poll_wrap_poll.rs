@@ -89,8 +89,6 @@ pub unsafe fn ref_cache_poll_wrap_poll_c_95_pw_register(
     init_events: u32,
     userp: *mut c_void,
 ) -> *mut Pw_item {
-    let item;
-
     if (*pw).debug != 0 {
         libc::fprintf(
             crate::htslib_rs::ref_cache::compat::stderr(),
@@ -120,13 +118,12 @@ pub unsafe fn ref_cache_poll_wrap_poll_c_95_pw_register(
             new_sz as usize * std::mem::size_of::<c_uint>(),
         )
         .cast::<c_uint>();
-        let new_items;
         if new_index.is_null() {
             return std::ptr::null_mut();
         }
         (*pw).fd_index = new_index;
 
-        new_items = libc::realloc(
+        let new_items = libc::realloc(
             (*pw).item_index.cast(),
             new_sz as usize * std::mem::size_of::<*mut Pw_item>(),
         )
@@ -156,7 +153,7 @@ pub unsafe fn ref_cache_poll_wrap_poll_c_95_pw_register(
         (*pw).polled_sz = new_sz;
     }
 
-    item = cram::cram_pooled_alloc_c_115_pool_alloc((*pw).pool).cast::<Pw_item>();
+    let item = cram::cram_pooled_alloc_c_115_pool_alloc((*pw).pool).cast::<Pw_item>();
     if item.is_null() {
         return std::ptr::null_mut();
     }
@@ -214,9 +211,7 @@ pub unsafe fn ref_cache_poll_wrap_poll_c_173_pw_wait(
     timeout: c_int,
 ) -> c_int {
     let mut j;
-    let end;
     let mut out = 0;
-    let res;
 
     if (*pw).need_compact != 0 {
         j = 0;
@@ -243,7 +238,7 @@ pub unsafe fn ref_cache_poll_wrap_poll_c_173_pw_wait(
         (*pw).npolled = j;
     }
 
-    res = libc::poll(
+    let res = libc::poll(
         (*pw).polled,
         (*pw).npolled as libc::nfds_t,
         if out == 0 { timeout } else { 0 },
@@ -252,7 +247,7 @@ pub unsafe fn ref_cache_poll_wrap_poll_c_173_pw_wait(
         return res;
     }
 
-    end = (*pw).last_out;
+    let end = (*pw).last_out;
     while (*pw).last_out < (*pw).npolled && out < max_events {
         if (*(*pw).polled.add((*pw).last_out as usize)).revents == 0 {
             (*pw).last_out += 1;

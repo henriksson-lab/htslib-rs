@@ -45,7 +45,11 @@ unsafe fn collect_formatted_records(path: &Path, reference: Option<&str>) -> Vec
     }
 
     let hdr = sam_hdr_read(fp);
-    assert!(!hdr.is_null(), "failed to read header from {}", path.display());
+    assert!(
+        !hdr.is_null(),
+        "failed to read header from {}",
+        path.display()
+    );
     let rec = bam_init1();
     assert!(!rec.is_null());
 
@@ -99,7 +103,11 @@ unsafe fn copy_alignments(
         assert_eq!(hts_set_fai_filename(in_fp, reference.as_ptr()), 0);
     }
     let hdr = sam_hdr_read(in_fp);
-    assert!(!hdr.is_null(), "failed to read header from {}", input.display());
+    assert!(
+        !hdr.is_null(),
+        "failed to read header from {}",
+        input.display()
+    );
 
     let out_fp = hts_open(out_path.as_ptr(), out_mode.as_ptr());
     assert!(!out_fp.is_null(), "failed to create {}", output.display());
@@ -111,7 +119,11 @@ unsafe fn copy_alignments(
         let mut opts: *mut htslib_rs::hts_opt = std::ptr::null_mut();
         for opt in out_opts {
             let opt_c = CString::new(*opt).unwrap();
-            assert_eq!(hts_opt_add(&mut opts, opt_c.as_ptr()), 0, "bad option {opt}");
+            assert_eq!(
+                hts_opt_add(&mut opts, opt_c.as_ptr()),
+                0,
+                "bad option {opt}"
+            );
         }
         assert_eq!(hts_opt_apply(out_fp, opts), 0);
         hts_opt_free(opts);
@@ -210,14 +222,21 @@ fn round_trip_bam_to_cram_preserves_formatted_records() {
 
         let round_tripped = collect_formatted_records(&bam, None);
 
-        let original_canon: Vec<String> = original.iter().map(|l| canonical_cram_record(l)).collect();
-        let round_canon: Vec<String> = round_tripped.iter().map(|l| canonical_cram_record(l)).collect();
+        let original_canon: Vec<String> =
+            original.iter().map(|l| canonical_cram_record(l)).collect();
+        let round_canon: Vec<String> = round_tripped
+            .iter()
+            .map(|l| canonical_cram_record(l))
+            .collect();
         assert_eq!(
             round_canon.len(),
             original_canon.len(),
             "BAM->CRAM->BAM record count parity",
         );
-        assert_eq!(round_canon, original_canon, "BAM->CRAM->BAM record parity (MD/NM stripped)");
+        assert_eq!(
+            round_canon, original_canon,
+            "BAM->CRAM->BAM record parity (MD/NM stripped)"
+        );
 
         cleanup(&cram);
         cleanup(&bam);
@@ -250,10 +269,17 @@ fn round_trip_sam_to_cram_preserves_formatted_records() {
 
         let round_tripped = collect_formatted_records(&sam, None);
 
-        let original_canon: Vec<String> = original.iter().map(|l| canonical_cram_record(l)).collect();
-        let round_canon: Vec<String> = round_tripped.iter().map(|l| canonical_cram_record(l)).collect();
+        let original_canon: Vec<String> =
+            original.iter().map(|l| canonical_cram_record(l)).collect();
+        let round_canon: Vec<String> = round_tripped
+            .iter()
+            .map(|l| canonical_cram_record(l))
+            .collect();
         assert_eq!(round_canon.len(), original_canon.len());
-        assert_eq!(round_canon, original_canon, "SAM->CRAM->SAM record parity (MD/NM stripped)");
+        assert_eq!(
+            round_canon, original_canon,
+            "SAM->CRAM->SAM record parity (MD/NM stripped)"
+        );
 
         cleanup(&cram);
         cleanup(&sam);

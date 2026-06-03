@@ -15,7 +15,7 @@ pub unsafe fn samples_rem_header_c_37_print_usage(fp: *mut libc::FILE) {
 pub unsafe fn samples_rem_header_c_49_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     let mut ret = libc::EXIT_FAILURE;
 
-    if argc < 3 || argc > 4 {
+    if !(3..=4).contains(&argc) {
         samples_rem_header_c_37_print_usage(crate::htslib_rs::c_compat::stderr.cast());
         return ret;
     }
@@ -31,9 +31,9 @@ pub unsafe fn samples_rem_header_c_49_main(argc: c_int, argv: *mut *mut c_char) 
         std::ptr::null()
     } else if *header == b'S' as c_char && *header.add(1) == b'Q' as c_char {
         c"SN".as_ptr()
-    } else if *header == b'R' as c_char && *header.add(1) == b'G' as c_char {
-        c"ID".as_ptr()
-    } else if *header == b'P' as c_char && *header.add(1) == b'G' as c_char {
+    } else if (*header == b'R' as c_char || *header == b'P' as c_char)
+        && *header.add(1) == b'G' as c_char
+    {
         c"ID".as_ptr()
     } else if *header == b'C' as c_char && *header.add(1) == b'O' as c_char {
         c"".as_ptr()

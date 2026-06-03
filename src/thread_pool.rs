@@ -48,8 +48,8 @@ pub struct HtsTpoolResult {
 struct HtsTpoolWorker {
     p: *mut HtsTpool,
     idx: c_int,
-    tid: libc::pthread_t,
-    pending_c: libc::pthread_cond_t,
+    tid: crate::htslib_rs::c_compat::pthread_t,
+    pending_c: crate::htslib_rs::c_compat::pthread_cond_t,
 }
 
 // original: hts_tpool_process (htslib/thread_pool_internal.h:100)
@@ -71,10 +71,10 @@ pub struct HtsTpoolProcess {
     in_only: c_int,
     wake_dispatch: c_int,
     ref_count: c_int,
-    output_avail_c: libc::pthread_cond_t,
-    input_not_full_c: libc::pthread_cond_t,
-    input_empty_c: libc::pthread_cond_t,
-    none_processing_c: libc::pthread_cond_t,
+    output_avail_c: crate::htslib_rs::c_compat::pthread_cond_t,
+    input_not_full_c: crate::htslib_rs::c_compat::pthread_cond_t,
+    input_empty_c: crate::htslib_rs::c_compat::pthread_cond_t,
+    none_processing_c: crate::htslib_rs::c_compat::pthread_cond_t,
     next: *mut HtsTpoolProcess,
     prev: *mut HtsTpoolProcess,
 }
@@ -90,7 +90,7 @@ pub struct HtsTpool {
     t: *mut HtsTpoolWorker,
     t_stack: *mut c_int,
     t_stack_top: c_int,
-    pool_m: libc::pthread_mutex_t,
+    pool_m: crate::htslib_rs::c_compat::pthread_mutex_t,
     n_count: c_int,
     n_running: c_int,
     total_time: i64,
@@ -135,9 +135,11 @@ pub unsafe fn hts_tpool_worker_id(p: *mut hts_tpool) -> c_int {
         return -1;
     }
     let p = unsafe { pool(p) };
-    let s = unsafe { libc::pthread_self() };
+    let s = unsafe { crate::htslib_rs::c_compat::pthread_self() };
     for i in 0..unsafe { (*p).tsize } {
-        if unsafe { libc::pthread_equal(s, (*(*p).t.add(i as usize)).tid) } != 0 {
+        if unsafe { crate::htslib_rs::c_compat::pthread_equal(s, (*(*p).t.add(i as usize)).tid) }
+            != 0
+        {
             return i;
         }
     }
@@ -147,23 +149,27 @@ pub unsafe fn hts_tpool_worker_id(p: *mut hts_tpool) -> c_int {
 // original: hts_tpool_add_result (htslib/thread_pool.c:95)
 unsafe fn hts_tpool_add_result(j: *mut HtsTpoolJob, data: *mut c_void) -> c_int {
     let q = unsafe { (*j).q };
-    unsafe { libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
 
     unsafe {
         (*q).n_processing -= 1;
         if (*q).n_processing == 0 {
-            libc::pthread_cond_signal(ptr::addr_of_mut!((*q).none_processing_c));
+            crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!(
+                (*q).none_processing_c
+            ));
         }
 
         if (*q).in_only != 0 {
-            libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
             return 0;
         }
     }
 
     let r = unsafe { xmalloc::<HtsTpoolResult>() };
     if r.is_null() {
-        unsafe { libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+        unsafe {
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m))
+        };
         unsafe { hts_tpool_process_shutdown(q.cast()) };
         return -1;
     }
@@ -185,10 +191,12 @@ unsafe fn hts_tpool_add_result(j: *mut HtsTpoolJob, data: *mut c_void) -> c_int 
 
         assert!((*r).serial >= (*q).next_serial || (*q).next_serial == c_int::MAX as u64);
         if (*r).serial == (*q).next_serial {
-            libc::pthread_cond_broadcast(ptr::addr_of_mut!((*q).output_avail_c));
+            crate::htslib_rs::c_compat::pthread_cond_broadcast(ptr::addr_of_mut!(
+                (*q).output_avail_c
+            ));
         }
 
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
     }
 
     0
@@ -231,7 +239,9 @@ unsafe fn hts_tpool_next_result_locked(q: *mut HtsTpoolProcess) -> *mut HtsTpool
 
             if (*q).qsize != 0 && (*q).n_output < (*q).qsize {
                 if (*q).n_input < (*q).qsize {
-                    libc::pthread_cond_signal(ptr::addr_of_mut!((*q).input_not_full_c));
+                    crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!(
+                        (*q).input_not_full_c
+                    ));
                 }
                 if (*q).shutdown == 0 {
                     wake_next_worker(q, 1);
@@ -246,42 +256,50 @@ unsafe fn hts_tpool_next_result_locked(q: *mut HtsTpoolProcess) -> *mut HtsTpool
 // original: hts_tpool_next_result (htslib/thread_pool.c:200)
 pub unsafe fn hts_tpool_next_result(q: *mut hts_tpool_process) -> *mut hts_tpool_result {
     let q = unsafe { process(q) };
-    unsafe { libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
     let r = unsafe { hts_tpool_next_result_locked(q) };
-    unsafe { libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    unsafe {
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m))
+    };
     r.cast()
 }
 
 // original: hts_tpool_next_result_wait (htslib/thread_pool.c:224)
 pub unsafe fn hts_tpool_next_result_wait(q: *mut hts_tpool_process) -> *mut hts_tpool_result {
     let q = unsafe { process(q) };
-    unsafe { libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
 
     loop {
         let r = unsafe { hts_tpool_next_result_locked(q) };
         if !r.is_null() {
-            unsafe { libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+            unsafe {
+                crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(
+                    (*(*q).p).pool_m
+                ))
+            };
             return r.cast();
         }
 
         let mut now: libc::timeval = unsafe { mem::zeroed() };
         let mut timeout: libc::timespec = unsafe { mem::zeroed() };
         unsafe {
-            libc::gettimeofday(&mut now, ptr::null_mut());
-            timeout.tv_sec = now.tv_sec + 10;
-            timeout.tv_nsec = now.tv_usec * 1000;
+            crate::htslib_rs::c_compat::gettimeofday(&mut now, ptr::null_mut());
+            timeout.tv_sec = (now.tv_sec + 10) as _;
+            timeout.tv_nsec = (now.tv_usec * 1000) as _;
 
             (*q).ref_count += 1;
             if (*q).shutdown != 0 {
                 (*q).ref_count -= 1;
                 let rc = (*q).ref_count;
-                libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+                crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(
+                    (*(*q).p).pool_m
+                ));
                 if rc == 0 {
                     hts_tpool_process_destroy(q.cast());
                 }
                 return ptr::null_mut();
             }
-            libc::pthread_cond_timedwait(
+            crate::htslib_rs::c_compat::pthread_cond_timedwait(
                 ptr::addr_of_mut!((*q).output_avail_c),
                 ptr::addr_of_mut!((*(*q).p).pool_m),
                 &timeout,
@@ -294,10 +312,12 @@ pub unsafe fn hts_tpool_next_result_wait(q: *mut hts_tpool_process) -> *mut hts_
 // original: hts_tpool_process_empty (htslib/thread_pool.c:258)
 pub unsafe fn hts_tpool_process_empty(q: *mut hts_tpool_process) -> c_int {
     let q = unsafe { process(q) };
-    unsafe { libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
     let empty =
         unsafe { ((*q).n_input == 0 && (*q).n_processing == 0 && (*q).n_output == 0) as c_int };
-    unsafe { libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    unsafe {
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m))
+    };
     empty
 }
 
@@ -305,9 +325,9 @@ pub unsafe fn hts_tpool_process_empty(q: *mut hts_tpool_process) -> c_int {
 pub unsafe fn hts_tpool_process_ref_incr(q: *mut hts_tpool_process) {
     let q = unsafe { process(q) };
     unsafe {
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
         (*q).ref_count += 1;
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
     }
 }
 
@@ -315,32 +335,36 @@ pub unsafe fn hts_tpool_process_ref_incr(q: *mut hts_tpool_process) {
 pub unsafe fn hts_tpool_process_ref_decr(q: *mut hts_tpool_process) {
     let q = unsafe { process(q) };
     unsafe {
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
         (*q).ref_count -= 1;
         if (*q).ref_count <= 0 {
-            libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
             hts_tpool_process_destroy(q.cast());
             return;
         }
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
     }
 }
 
 // original: hts_tpool_process_len (htslib/thread_pool.c:289)
 pub unsafe fn hts_tpool_process_len(q: *mut hts_tpool_process) -> c_int {
     let q = unsafe { process(q) };
-    unsafe { libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
     let len = unsafe { (*q).n_output };
-    unsafe { libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    unsafe {
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m))
+    };
     len
 }
 
 // original: hts_tpool_process_sz (htslib/thread_pool.c:303)
 pub unsafe fn hts_tpool_process_sz(q: *mut hts_tpool_process) -> c_int {
     let q = unsafe { process(q) };
-    unsafe { libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
     let len = unsafe { (*q).n_output + (*q).n_input + (*q).n_processing };
-    unsafe { libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    unsafe {
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m))
+    };
     len
 }
 
@@ -348,10 +372,14 @@ pub unsafe fn hts_tpool_process_sz(q: *mut hts_tpool_process) -> c_int {
 unsafe fn hts_tpool_process_shutdown_locked(q: *mut HtsTpoolProcess) {
     unsafe {
         (*q).shutdown = 1;
-        libc::pthread_cond_broadcast(ptr::addr_of_mut!((*q).output_avail_c));
-        libc::pthread_cond_broadcast(ptr::addr_of_mut!((*q).input_not_full_c));
-        libc::pthread_cond_broadcast(ptr::addr_of_mut!((*q).input_empty_c));
-        libc::pthread_cond_broadcast(ptr::addr_of_mut!((*q).none_processing_c));
+        crate::htslib_rs::c_compat::pthread_cond_broadcast(ptr::addr_of_mut!((*q).output_avail_c));
+        crate::htslib_rs::c_compat::pthread_cond_broadcast(ptr::addr_of_mut!(
+            (*q).input_not_full_c
+        ));
+        crate::htslib_rs::c_compat::pthread_cond_broadcast(ptr::addr_of_mut!((*q).input_empty_c));
+        crate::htslib_rs::c_compat::pthread_cond_broadcast(ptr::addr_of_mut!(
+            (*q).none_processing_c
+        ));
     }
 }
 
@@ -359,18 +387,20 @@ unsafe fn hts_tpool_process_shutdown_locked(q: *mut HtsTpoolProcess) {
 pub unsafe fn hts_tpool_process_shutdown(q: *mut hts_tpool_process) {
     let q = unsafe { process(q) };
     unsafe {
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
         hts_tpool_process_shutdown_locked(q);
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
     }
 }
 
 // original: hts_tpool_process_is_shutdown (htslib/thread_pool.c:333)
 pub unsafe fn hts_tpool_process_is_shutdown(q: *mut hts_tpool_process) -> c_int {
     let q = unsafe { process(q) };
-    unsafe { libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
     let r = unsafe { (*q).shutdown };
-    unsafe { libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    unsafe {
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m))
+    };
     r
 }
 
@@ -406,10 +436,22 @@ pub unsafe fn hts_tpool_process_init(
 
     unsafe {
         ptr::write_bytes(q, 0, 1);
-        libc::pthread_cond_init(ptr::addr_of_mut!((*q).output_avail_c), ptr::null());
-        libc::pthread_cond_init(ptr::addr_of_mut!((*q).input_not_full_c), ptr::null());
-        libc::pthread_cond_init(ptr::addr_of_mut!((*q).input_empty_c), ptr::null());
-        libc::pthread_cond_init(ptr::addr_of_mut!((*q).none_processing_c), ptr::null());
+        crate::htslib_rs::c_compat::pthread_cond_init(
+            ptr::addr_of_mut!((*q).output_avail_c),
+            ptr::null(),
+        );
+        crate::htslib_rs::c_compat::pthread_cond_init(
+            ptr::addr_of_mut!((*q).input_not_full_c),
+            ptr::null(),
+        );
+        crate::htslib_rs::c_compat::pthread_cond_init(
+            ptr::addr_of_mut!((*q).input_empty_c),
+            ptr::null(),
+        );
+        crate::htslib_rs::c_compat::pthread_cond_init(
+            ptr::addr_of_mut!((*q).none_processing_c),
+            ptr::null(),
+        );
 
         (*q).p = pool(p);
         (*q).qsize = qsize;
@@ -430,27 +472,27 @@ pub unsafe fn hts_tpool_process_destroy(q: *mut hts_tpool_process) {
     let q = unsafe { process(q) };
 
     unsafe {
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
         (*q).no_more_input = 1;
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
 
         hts_tpool_process_reset(q.cast(), 0);
 
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
         hts_tpool_process_detach_locked((*q).p, q);
         hts_tpool_process_shutdown_locked(q);
 
         (*q).ref_count -= 1;
         if (*q).ref_count > 0 {
-            libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
             return;
         }
 
-        libc::pthread_cond_destroy(ptr::addr_of_mut!((*q).output_avail_c));
-        libc::pthread_cond_destroy(ptr::addr_of_mut!((*q).input_not_full_c));
-        libc::pthread_cond_destroy(ptr::addr_of_mut!((*q).input_empty_c));
-        libc::pthread_cond_destroy(ptr::addr_of_mut!((*q).none_processing_c));
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!((*q).output_avail_c));
+        crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!((*q).input_not_full_c));
+        crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!((*q).input_empty_c));
+        crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!((*q).none_processing_c));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
         libc::free(q.cast());
     }
 }
@@ -460,7 +502,7 @@ pub unsafe fn hts_tpool_process_attach(p: *mut hts_tpool, q: *mut hts_tpool_proc
     let p = unsafe { pool(p) };
     let q = unsafe { process(q) };
     unsafe {
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
         if !(*p).q_head.is_null() {
             (*q).next = (*p).q_head;
             (*q).prev = (*(*p).q_head).prev;
@@ -476,7 +518,7 @@ pub unsafe fn hts_tpool_process_attach(p: *mut hts_tpool, q: *mut hts_tpool_proc
                 && !(*(*p).q_head).prev.is_null()
                 && !(*(*p).q_head).next.is_null()
         );
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
     }
 }
 
@@ -516,9 +558,9 @@ pub unsafe fn hts_tpool_process_detach(p: *mut hts_tpool, q: *mut hts_tpool_proc
     let p = unsafe { pool(p) };
     let q = unsafe { process(q) };
     unsafe {
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
         hts_tpool_process_detach_locked(p, q);
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
     }
 }
 
@@ -527,7 +569,7 @@ extern "C" fn tpool_worker(arg: *mut c_void) -> *mut c_void {
     let w = arg.cast::<HtsTpoolWorker>();
     let p = unsafe { (*w).p };
 
-    unsafe { libc::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m)) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m)) };
     while unsafe { (*p).shutdown == 0 } {
         assert!(unsafe {
             (*p).q_head.is_null()
@@ -562,7 +604,7 @@ extern "C" fn tpool_worker(arg: *mut c_void) -> *mut c_void {
                     (*p).t_stack_top = (*w).idx;
                 }
                 *(*p).t_stack.add((*w).idx as usize) = 1;
-                libc::pthread_cond_wait(
+                crate::htslib_rs::c_compat::pthread_cond_wait(
                     ptr::addr_of_mut!((*w).pending_c),
                     ptr::addr_of_mut!((*p).pool_m),
                 );
@@ -585,7 +627,9 @@ extern "C" fn tpool_worker(arg: *mut c_void) -> *mut c_void {
             (*q).ref_count += 1;
             while !(*q).input_head.is_null() && (*q).qsize - (*q).n_output > (*q).n_processing {
                 if (*p).shutdown != 0 {
-                    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+                    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(
+                        (*p).pool_m
+                    ));
                     return ptr::null_mut();
                 }
 
@@ -605,20 +649,24 @@ extern "C" fn tpool_worker(arg: *mut c_void) -> *mut c_void {
                 let old_n_input = (*q).n_input;
                 (*q).n_input -= 1;
                 if old_n_input >= (*q).qsize {
-                    libc::pthread_cond_broadcast(ptr::addr_of_mut!((*q).input_not_full_c));
+                    crate::htslib_rs::c_compat::pthread_cond_broadcast(ptr::addr_of_mut!(
+                        (*q).input_not_full_c
+                    ));
                 }
 
                 if (*q).n_input == 0 {
-                    libc::pthread_cond_signal(ptr::addr_of_mut!((*q).input_empty_c));
+                    crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!(
+                        (*q).input_empty_c
+                    ));
                 }
 
                 (*p).njobs -= 1;
 
-                libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+                crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
 
                 let data = (*j).func.unwrap_unchecked()((*j).arg);
                 if hts_tpool_add_result(j, data) < 0 {
-                    libc::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
+                    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
                     let first = (*p).q_head;
                     let mut q = first;
                     if !q.is_null() {
@@ -631,12 +679,14 @@ extern "C" fn tpool_worker(arg: *mut c_void) -> *mut c_void {
                             }
                         }
                     }
-                    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+                    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(
+                        (*p).pool_m
+                    ));
                     return ptr::null_mut();
                 }
                 libc::free(j.cast());
 
-                libc::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
+                crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
             }
 
             (*q).ref_count -= 1;
@@ -648,7 +698,7 @@ extern "C" fn tpool_worker(arg: *mut c_void) -> *mut c_void {
         }
     }
 
-    unsafe { libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m)) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m)) };
     ptr::null_mut()
 }
 
@@ -660,7 +710,7 @@ unsafe fn wake_next_worker(q: *mut HtsTpoolProcess, locked: c_int) {
     let p = unsafe { (*q).p };
     unsafe {
         if locked == 0 {
-            libc::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
+            crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
         }
 
         assert!(!(*q).prev.is_null() && !(*q).next.is_null());
@@ -673,13 +723,13 @@ unsafe fn wake_next_worker(q: *mut HtsTpoolProcess, locked: c_int) {
             && (*q).n_processing < (*q).qsize - (*q).n_output;
 
         if sig {
-            libc::pthread_cond_signal(ptr::addr_of_mut!(
+            crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!(
                 (*(*p).t.add((*p).t_stack_top as usize)).pending_c
             ));
         }
 
         if locked == 0 {
-            libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
         }
     }
 }
@@ -688,7 +738,7 @@ unsafe fn wake_next_worker(q: *mut HtsTpoolProcess, locked: c_int) {
 pub unsafe fn hts_tpool_init(n: c_int) -> *mut hts_tpool {
     let mut t_idx = 0;
     let mut stack_size: usize = 0;
-    let mut pattr: libc::pthread_attr_t = unsafe { mem::zeroed() };
+    let mut pattr: crate::htslib_rs::c_compat::pthread_attr_t = unsafe { mem::zeroed() };
     let mut pattr_init_done = 0;
     let p = unsafe { xmalloc::<HtsTpool>() };
     if p.is_null() {
@@ -711,25 +761,31 @@ pub unsafe fn hts_tpool_init(n: c_int) -> *mut hts_tpool {
             return ptr::null_mut();
         }
 
-        let mut attr: libc::pthread_mutexattr_t = mem::zeroed();
-        libc::pthread_mutexattr_init(&mut attr);
-        libc::pthread_mutexattr_settype(&mut attr, libc::PTHREAD_MUTEX_RECURSIVE);
-        libc::pthread_mutex_init(ptr::addr_of_mut!((*p).pool_m), &attr);
-        libc::pthread_mutexattr_destroy(&mut attr);
+        let mut attr: crate::htslib_rs::c_compat::pthread_mutexattr_t = mem::zeroed();
+        crate::htslib_rs::c_compat::pthread_mutexattr_init(&mut attr);
+        crate::htslib_rs::c_compat::pthread_mutexattr_settype(
+            &mut attr,
+            crate::htslib_rs::c_compat::PTHREAD_MUTEX_RECURSIVE,
+        );
+        crate::htslib_rs::c_compat::pthread_mutex_init(ptr::addr_of_mut!((*p).pool_m), &attr);
+        crate::htslib_rs::c_compat::pthread_mutexattr_destroy(&mut attr);
 
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
 
-        if libc::pthread_attr_init(&mut pattr) != 0 {
+        if crate::htslib_rs::c_compat::pthread_attr_init(&mut pattr) != 0 {
             goto_cleanup(p, t_idx, &mut pattr, pattr_init_done);
             return ptr::null_mut();
         }
         pattr_init_done = 1;
-        if libc::pthread_attr_getstacksize(&pattr, &mut stack_size) != 0 {
+        if crate::htslib_rs::c_compat::pthread_attr_getstacksize(&pattr, &mut stack_size) != 0 {
             goto_cleanup(p, t_idx, &mut pattr, pattr_init_done);
             return ptr::null_mut();
         }
         if stack_size < HTS_MIN_THREAD_STACK
-            && libc::pthread_attr_setstacksize(&mut pattr, HTS_MIN_THREAD_STACK) != 0
+            && crate::htslib_rs::c_compat::pthread_attr_setstacksize(
+                &mut pattr,
+                HTS_MIN_THREAD_STACK,
+            ) != 0
         {
             goto_cleanup(p, t_idx, &mut pattr, pattr_init_done);
             return ptr::null_mut();
@@ -741,9 +797,16 @@ pub unsafe fn hts_tpool_init(n: c_int) -> *mut hts_tpool {
             *(*p).t_stack.add(t_idx as usize) = 0;
             (*w).p = p;
             (*w).idx = t_idx;
-            libc::pthread_cond_init(ptr::addr_of_mut!((*w).pending_c), ptr::null());
-            if libc::pthread_create(ptr::addr_of_mut!((*w).tid), &pattr, tpool_worker, w.cast())
-                != 0
+            crate::htslib_rs::c_compat::pthread_cond_init(
+                ptr::addr_of_mut!((*w).pending_c),
+                ptr::null(),
+            );
+            if crate::htslib_rs::c_compat::pthread_create(
+                ptr::addr_of_mut!((*w).tid),
+                &pattr,
+                tpool_worker,
+                w.cast(),
+            ) != 0
             {
                 goto_cleanup(p, t_idx, &mut pattr, pattr_init_done);
                 return ptr::null_mut();
@@ -751,8 +814,8 @@ pub unsafe fn hts_tpool_init(n: c_int) -> *mut hts_tpool {
             t_idx += 1;
         }
 
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
-        libc::pthread_attr_destroy(&mut pattr);
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_attr_destroy(&mut pattr);
     }
 
     p.cast()
@@ -761,20 +824,25 @@ pub unsafe fn hts_tpool_init(n: c_int) -> *mut hts_tpool {
 unsafe fn goto_cleanup(
     p: *mut HtsTpool,
     t_idx: c_int,
-    pattr: *mut libc::pthread_attr_t,
+    pattr: *mut crate::htslib_rs::c_compat::pthread_attr_t,
     pattr_init_done: c_int,
 ) {
     let save_errno = unsafe { *c_compat::__errno_location() };
     unsafe {
         (*p).shutdown = 1;
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
         for j in 0..t_idx {
-            libc::pthread_join((*(*p).t.add(j as usize)).tid, ptr::null_mut());
-            libc::pthread_cond_destroy(ptr::addr_of_mut!((*(*p).t.add(j as usize)).pending_c));
+            crate::htslib_rs::c_compat::pthread_join(
+                (*(*p).t.add(j as usize)).tid,
+                ptr::null_mut(),
+            );
+            crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(
+                (*(*p).t.add(j as usize)).pending_c
+            ));
         }
-        libc::pthread_mutex_destroy(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*p).pool_m));
         if pattr_init_done != 0 {
-            libc::pthread_attr_destroy(pattr);
+            crate::htslib_rs::c_compat::pthread_attr_destroy(pattr);
         }
         libc::free((*p).t_stack.cast());
         libc::free((*p).t.cast());
@@ -822,17 +890,17 @@ pub unsafe fn hts_tpool_dispatch3(
     let p = unsafe { pool(p) };
     let q = unsafe { process(q) };
     unsafe {
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
 
         if ((*q).no_more_input != 0 || (*q).n_input >= (*q).qsize) && nonblock == 1 {
-            libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
             *c_compat::__errno_location() = libc::EAGAIN;
             return -1;
         }
 
         let j = xmalloc::<HtsTpoolJob>();
         if j.is_null() {
-            libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
             return -1;
         }
 
@@ -851,14 +919,14 @@ pub unsafe fn hts_tpool_dispatch3(
                 && (*q).shutdown == 0
                 && (*q).wake_dispatch == 0
             {
-                libc::pthread_cond_wait(
+                crate::htslib_rs::c_compat::pthread_cond_wait(
                     ptr::addr_of_mut!((*q).input_not_full_c),
                     ptr::addr_of_mut!((*(*q).p).pool_m),
                 );
             }
             if (*q).no_more_input != 0 || (*q).shutdown != 0 {
                 libc::free(j.cast());
-                libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+                crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
                 return -1;
             }
             if (*q).wake_dispatch != 0 {
@@ -881,7 +949,7 @@ pub unsafe fn hts_tpool_dispatch3(
             wake_next_worker(q, 1);
         }
 
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
     }
     0
 }
@@ -890,10 +958,10 @@ pub unsafe fn hts_tpool_dispatch3(
 pub unsafe fn hts_tpool_wake_dispatch(q: *mut hts_tpool_process) {
     let q = unsafe { process(q) };
     unsafe {
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
         (*q).wake_dispatch = 1;
-        libc::pthread_cond_signal(ptr::addr_of_mut!((*q).input_not_full_c));
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*q).input_not_full_c));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
     }
 }
 
@@ -902,11 +970,13 @@ pub unsafe fn hts_tpool_process_flush(q: *mut hts_tpool_process) -> c_int {
     let q = unsafe { process(q) };
     let p = unsafe { (*q).p };
     unsafe {
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
 
         for i in 0..(*p).tsize {
             if *(*p).t_stack.add(i as usize) != 0 {
-                libc::pthread_cond_signal(ptr::addr_of_mut!((*(*p).t.add(i as usize)).pending_c));
+                crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!(
+                    (*(*p).t.add(i as usize)).pending_c
+                ));
             }
         }
 
@@ -916,7 +986,7 @@ pub unsafe fn hts_tpool_process_flush(q: *mut hts_tpool_process) -> c_int {
 
         if (*q).shutdown != 0 {
             while (*q).n_processing != 0 {
-                libc::pthread_cond_wait(
+                crate::htslib_rs::c_compat::pthread_cond_wait(
                     ptr::addr_of_mut!((*q).none_processing_c),
                     ptr::addr_of_mut!((*p).pool_m),
                 );
@@ -928,10 +998,10 @@ pub unsafe fn hts_tpool_process_flush(q: *mut hts_tpool_process) -> c_int {
             let mut timeout: libc::timespec = mem::zeroed();
 
             while (*q).n_input != 0 && (*q).shutdown == 0 {
-                libc::gettimeofday(&mut now, ptr::null_mut());
-                timeout.tv_sec = now.tv_sec + 1;
-                timeout.tv_nsec = now.tv_usec * 1000;
-                libc::pthread_cond_timedwait(
+                crate::htslib_rs::c_compat::gettimeofday(&mut now, ptr::null_mut());
+                timeout.tv_sec = (now.tv_sec + 1) as _;
+                timeout.tv_nsec = (now.tv_usec * 1000) as _;
+                crate::htslib_rs::c_compat::pthread_cond_timedwait(
                     ptr::addr_of_mut!((*q).input_empty_c),
                     ptr::addr_of_mut!((*p).pool_m),
                     &timeout,
@@ -939,10 +1009,10 @@ pub unsafe fn hts_tpool_process_flush(q: *mut hts_tpool_process) -> c_int {
             }
 
             while (*q).n_processing != 0 {
-                libc::gettimeofday(&mut now, ptr::null_mut());
-                timeout.tv_sec = now.tv_sec + 1;
-                timeout.tv_nsec = now.tv_usec * 1000;
-                libc::pthread_cond_timedwait(
+                crate::htslib_rs::c_compat::gettimeofday(&mut now, ptr::null_mut());
+                timeout.tv_sec = (now.tv_sec + 1) as _;
+                timeout.tv_nsec = (now.tv_usec * 1000) as _;
+                crate::htslib_rs::c_compat::pthread_cond_timedwait(
                     ptr::addr_of_mut!((*q).none_processing_c),
                     ptr::addr_of_mut!((*p).pool_m),
                     &timeout,
@@ -953,7 +1023,7 @@ pub unsafe fn hts_tpool_process_flush(q: *mut hts_tpool_process) -> c_int {
             }
         }
 
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
     }
     0
 }
@@ -962,7 +1032,7 @@ pub unsafe fn hts_tpool_process_flush(q: *mut hts_tpool_process) -> c_int {
 pub unsafe fn hts_tpool_process_reset(q: *mut hts_tpool_process, free_results: c_int) -> c_int {
     let q = unsafe { process(q) };
     unsafe {
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
         (*q).next_serial = c_int::MAX as u64;
 
         let mut j = (*q).input_head;
@@ -974,7 +1044,7 @@ pub unsafe fn hts_tpool_process_reset(q: *mut hts_tpool_process, free_results: c
         (*q).output_head = ptr::null_mut();
         (*q).output_tail = ptr::null_mut();
         (*q).n_output = 0;
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
 
         while !j.is_null() {
             let jn = (*j).next;
@@ -999,15 +1069,15 @@ pub unsafe fn hts_tpool_process_reset(q: *mut hts_tpool_process, free_results: c
             return -1;
         }
 
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
         r = (*q).output_head;
         (*q).output_head = ptr::null_mut();
         (*q).output_tail = ptr::null_mut();
         (*q).n_output = 0;
         (*q).next_serial = 0;
         (*q).curr_serial = 0;
-        libc::pthread_cond_signal(ptr::addr_of_mut!((*q).input_not_full_c));
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*q).input_not_full_c));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
 
         while !r.is_null() {
             let rn = (*r).next;
@@ -1031,22 +1101,29 @@ pub unsafe fn hts_tpool_process_qsize(q: *mut hts_tpool_process) -> c_int {
 pub unsafe fn hts_tpool_destroy(p: *mut hts_tpool) {
     let p = unsafe { pool(p) };
     unsafe {
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
         (*p).shutdown = 1;
 
         for i in 0..(*p).tsize {
-            libc::pthread_cond_signal(ptr::addr_of_mut!((*(*p).t.add(i as usize)).pending_c));
+            crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!(
+                (*(*p).t.add(i as usize)).pending_c
+            ));
         }
 
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
 
         for i in 0..(*p).tsize {
-            libc::pthread_join((*(*p).t.add(i as usize)).tid, ptr::null_mut());
+            crate::htslib_rs::c_compat::pthread_join(
+                (*(*p).t.add(i as usize)).tid,
+                ptr::null_mut(),
+            );
         }
 
-        libc::pthread_mutex_destroy(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*p).pool_m));
         for i in 0..(*p).tsize {
-            libc::pthread_cond_destroy(ptr::addr_of_mut!((*(*p).t.add(i as usize)).pending_c));
+            crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(
+                (*(*p).t.add(i as usize)).pending_c
+            ));
         }
 
         if !(*p).t_stack.is_null() {
@@ -1062,12 +1139,14 @@ pub unsafe fn hts_tpool_kill(p: *mut hts_tpool) {
     let p = unsafe { pool(p) };
     unsafe {
         for i in 0..(*p).tsize {
-            libc::pthread_kill((*(*p).t.add(i as usize)).tid, libc::SIGINT);
+            crate::htslib_rs::c_compat::pthread_kill((*(*p).t.add(i as usize)).tid, libc::SIGINT);
         }
 
-        libc::pthread_mutex_destroy(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*p).pool_m));
         for i in 0..(*p).tsize {
-            libc::pthread_cond_destroy(ptr::addr_of_mut!((*(*p).t.add(i as usize)).pending_c));
+            crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(
+                (*(*p).t.add(i as usize)).pending_c
+            ));
         }
 
         if !(*p).t_stack.is_null() {
@@ -1088,6 +1167,14 @@ mod tests {
     static SQUAREB_DISPATCH_FAILURES: AtomicUsize = AtomicUsize::new(0);
     static UNORDERED_SQUARE_JOBS: AtomicUsize = AtomicUsize::new(0);
     static WORKER_ID_FAILURES: AtomicUsize = AtomicUsize::new(0);
+
+    fn test_failure_return() -> *mut c_void {
+        ptr::dangling_mut::<c_void>()
+    }
+
+    fn test_marker_ptr(value: usize) -> *mut c_void {
+        value as *mut c_void
+    }
 
     #[repr(C)]
     struct SquareBOpt {
@@ -1147,35 +1234,59 @@ mod tests {
         }
     }
 
-    unsafe fn init_test_mutex(mutex: *mut libc::pthread_mutex_t) {
-        let mut attr: libc::pthread_mutexattr_t = unsafe { mem::zeroed() };
+    unsafe fn init_test_mutex(mutex: *mut crate::htslib_rs::c_compat::pthread_mutex_t) {
+        let mut attr: crate::htslib_rs::c_compat::pthread_mutexattr_t = unsafe { mem::zeroed() };
         unsafe {
-            assert_eq!(libc::pthread_mutexattr_init(&mut attr), 0);
             assert_eq!(
-                libc::pthread_mutexattr_settype(&mut attr, libc::PTHREAD_MUTEX_RECURSIVE),
+                crate::htslib_rs::c_compat::pthread_mutexattr_init(&mut attr),
                 0
             );
-            assert_eq!(libc::pthread_mutex_init(mutex, &attr), 0);
-            assert_eq!(libc::pthread_mutexattr_destroy(&mut attr), 0);
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_mutexattr_settype(
+                    &mut attr,
+                    crate::htslib_rs::c_compat::PTHREAD_MUTEX_RECURSIVE
+                ),
+                0
+            );
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_mutex_init(mutex, &attr),
+                0
+            );
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_mutexattr_destroy(&mut attr),
+                0
+            );
         }
     }
 
     unsafe fn init_test_process_conds(queue: *mut HtsTpoolProcess) {
         unsafe {
             assert_eq!(
-                libc::pthread_cond_init(ptr::addr_of_mut!((*queue).output_avail_c), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_cond_init(
+                    ptr::addr_of_mut!((*queue).output_avail_c),
+                    ptr::null()
+                ),
                 0
             );
             assert_eq!(
-                libc::pthread_cond_init(ptr::addr_of_mut!((*queue).input_not_full_c), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_cond_init(
+                    ptr::addr_of_mut!((*queue).input_not_full_c),
+                    ptr::null()
+                ),
                 0
             );
             assert_eq!(
-                libc::pthread_cond_init(ptr::addr_of_mut!((*queue).input_empty_c), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_cond_init(
+                    ptr::addr_of_mut!((*queue).input_empty_c),
+                    ptr::null()
+                ),
                 0
             );
             assert_eq!(
-                libc::pthread_cond_init(ptr::addr_of_mut!((*queue).none_processing_c), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_cond_init(
+                    ptr::addr_of_mut!((*queue).none_processing_c),
+                    ptr::null()
+                ),
                 0
             );
         }
@@ -1184,19 +1295,27 @@ mod tests {
     unsafe fn destroy_test_process_conds(queue: *mut HtsTpoolProcess) {
         unsafe {
             assert_eq!(
-                libc::pthread_cond_destroy(ptr::addr_of_mut!((*queue).output_avail_c)),
+                crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(
+                    (*queue).output_avail_c
+                )),
                 0
             );
             assert_eq!(
-                libc::pthread_cond_destroy(ptr::addr_of_mut!((*queue).input_not_full_c)),
+                crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(
+                    (*queue).input_not_full_c
+                )),
                 0
             );
             assert_eq!(
-                libc::pthread_cond_destroy(ptr::addr_of_mut!((*queue).input_empty_c)),
+                crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(
+                    (*queue).input_empty_c
+                )),
                 0
             );
             assert_eq!(
-                libc::pthread_cond_destroy(ptr::addr_of_mut!((*queue).none_processing_c)),
+                crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(
+                    (*queue).none_processing_c
+                )),
                 0
             );
         }
@@ -1226,7 +1345,7 @@ mod tests {
             WORKER_ID_FAILURES.fetch_add(1, Ordering::SeqCst);
         }
         if delay_us != 0 {
-            unsafe { libc::usleep(delay_us) };
+            unsafe { crate::htslib_rs::c_compat::usleep(delay_us) };
         }
 
         let result = unsafe { libc::malloc(mem::size_of::<c_int>()).cast::<c_int>() };
@@ -1252,7 +1371,7 @@ mod tests {
     unsafe extern "C" fn ordered_square_with_slow_serial(arg: *mut c_void) -> *mut c_void {
         let value = unsafe { *(arg.cast::<c_int>()) };
         if value & 31 == 31 {
-            unsafe { libc::usleep(50_000) };
+            unsafe { crate::htslib_rs::c_compat::usleep(50_000) };
         }
 
         let result = unsafe { libc::malloc(mem::size_of::<c_int>()).cast::<c_int>() };
@@ -1326,7 +1445,7 @@ mod tests {
             let job = unsafe { libc::malloc(mem::size_of::<PipeJob>()).cast::<PipeJob>() };
             if job.is_null() {
                 unsafe { (*opt).failures.fetch_add(1, Ordering::SeqCst) };
-                return 1usize as *mut c_void;
+                return test_failure_return();
             }
 
             unsafe {
@@ -1342,7 +1461,7 @@ mod tests {
                 if hts_tpool_dispatch((*opt).pool, (*opt).q1, Some(pipe_stage1), job.cast()) != 0 {
                     libc::free(job.cast());
                     (*opt).failures.fetch_add(1, Ordering::SeqCst);
-                    return 1usize as *mut c_void;
+                    return test_failure_return();
                 }
             }
         }
@@ -1354,7 +1473,7 @@ mod tests {
         let job = arg.cast::<PipeJob>();
         unsafe {
             (*job).x <<= 8;
-            libc::usleep(((*job).x & 3) * 1_000);
+            crate::htslib_rs::c_compat::usleep(((*job).x & 3) * 1_000);
         }
         arg
     }
@@ -1376,7 +1495,7 @@ mod tests {
                 {
                     libc::free(job.cast());
                     (*opt).failures.fetch_add(1, Ordering::SeqCst);
-                    return 1usize as *mut c_void;
+                    return test_failure_return();
                 }
                 if (*job).eof != 0 {
                     return ptr::null_mut();
@@ -1389,7 +1508,7 @@ mod tests {
         let job = arg.cast::<PipeJob>();
         unsafe {
             (*job).x <<= 8;
-            libc::usleep(((*job).x & 7) * 1_000);
+            crate::htslib_rs::c_compat::usleep(((*job).x & 7) * 1_000);
         }
         arg
     }
@@ -1411,7 +1530,7 @@ mod tests {
                 {
                     libc::free(job.cast());
                     (*opt).failures.fetch_add(1, Ordering::SeqCst);
-                    return 1usize as *mut c_void;
+                    return test_failure_return();
                 }
                 if (*job).eof != 0 {
                     return ptr::null_mut();
@@ -1423,7 +1542,7 @@ mod tests {
     unsafe extern "C" fn pipe_stage3(arg: *mut c_void) -> *mut c_void {
         let job = arg.cast::<PipeJob>();
         unsafe {
-            libc::usleep(((*job).x & 3) * 1_000);
+            crate::htslib_rs::c_compat::usleep(((*job).x & 3) * 1_000);
             (*job).x <<= 8;
         }
         arg
@@ -1496,14 +1615,14 @@ mod tests {
                     next: ptr::null_mut(),
                     result_cleanup: Some(count_result_cleanup),
                     serial: 0,
-                    data: 0x1234usize as *mut c_void,
+                    data: test_marker_ptr(0x1234),
                 },
             );
 
             RESULT_CLEANUPS.store(0, Ordering::SeqCst);
             assert_eq!(
                 hts_tpool_result_data(result.cast()),
-                0x1234usize as *mut c_void
+                test_marker_ptr(0x1234)
             );
             hts_tpool_delete_result(result.cast(), 0);
             assert_eq!(RESULT_CLEANUPS.load(Ordering::SeqCst), 0);
@@ -1545,7 +1664,10 @@ mod tests {
             ptr::write_bytes(pool, 0, 1);
             (*pool).t_stack_top = -1;
             assert_eq!(
-                libc::pthread_mutex_init(ptr::addr_of_mut!((*pool).pool_m), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_mutex_init(
+                    ptr::addr_of_mut!((*pool).pool_m),
+                    ptr::null()
+                ),
                 0
             );
 
@@ -1630,7 +1752,7 @@ mod tests {
                     }
                     assert_eq!(dispatch_rc, -1);
                     assert_eq!(*c_compat::__errno_location(), libc::EAGAIN);
-                    libc::usleep(1_000);
+                    crate::htslib_rs::c_compat::usleep(1_000);
                 }
             }
 
@@ -1706,9 +1828,9 @@ mod tests {
                 queue,
                 n: TASK_SIZE,
             };
-            let mut tid: libc::pthread_t = mem::zeroed();
+            let mut tid: crate::htslib_rs::c_compat::pthread_t = mem::zeroed();
             assert_eq!(
-                libc::pthread_create(
+                crate::htslib_rs::c_compat::pthread_create(
                     ptr::addr_of_mut!(tid),
                     ptr::null(),
                     test_squareb_dispatcher,
@@ -1738,7 +1860,10 @@ mod tests {
 
             hts_tpool_process_destroy(queue);
             hts_tpool_destroy(pool);
-            assert_eq!(libc::pthread_join(tid, ptr::null_mut()), 0);
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_join(tid, ptr::null_mut()),
+                0
+            );
             assert_eq!(SQUAREB_DISPATCH_FAILURES.load(Ordering::SeqCst), 0);
         }
     }
@@ -1769,12 +1894,12 @@ mod tests {
                 output_checksum: AtomicUsize::new(0),
             };
 
-            let mut input_tid: libc::pthread_t = mem::zeroed();
-            let mut stage1_tid: libc::pthread_t = mem::zeroed();
-            let mut stage2_tid: libc::pthread_t = mem::zeroed();
-            let mut output_tid: libc::pthread_t = mem::zeroed();
+            let mut input_tid: crate::htslib_rs::c_compat::pthread_t = mem::zeroed();
+            let mut stage1_tid: crate::htslib_rs::c_compat::pthread_t = mem::zeroed();
+            let mut stage2_tid: crate::htslib_rs::c_compat::pthread_t = mem::zeroed();
+            let mut output_tid: crate::htslib_rs::c_compat::pthread_t = mem::zeroed();
             assert_eq!(
-                libc::pthread_create(
+                crate::htslib_rs::c_compat::pthread_create(
                     ptr::addr_of_mut!(input_tid),
                     ptr::null(),
                     pipe_input_thread,
@@ -1783,7 +1908,7 @@ mod tests {
                 0
             );
             assert_eq!(
-                libc::pthread_create(
+                crate::htslib_rs::c_compat::pthread_create(
                     ptr::addr_of_mut!(stage1_tid),
                     ptr::null(),
                     pipe_stage1to2,
@@ -1792,7 +1917,7 @@ mod tests {
                 0
             );
             assert_eq!(
-                libc::pthread_create(
+                crate::htslib_rs::c_compat::pthread_create(
                     ptr::addr_of_mut!(stage2_tid),
                     ptr::null(),
                     pipe_stage2to3,
@@ -1801,7 +1926,7 @@ mod tests {
                 0
             );
             assert_eq!(
-                libc::pthread_create(
+                crate::htslib_rs::c_compat::pthread_create(
                     ptr::addr_of_mut!(output_tid),
                     ptr::null(),
                     pipe_output_thread,
@@ -1811,13 +1936,25 @@ mod tests {
             );
 
             let mut retv: *mut c_void = ptr::null_mut();
-            assert_eq!(libc::pthread_join(input_tid, ptr::addr_of_mut!(retv)), 0);
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_join(input_tid, ptr::addr_of_mut!(retv)),
+                0
+            );
             assert!(retv.is_null());
-            assert_eq!(libc::pthread_join(stage1_tid, ptr::addr_of_mut!(retv)), 0);
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_join(stage1_tid, ptr::addr_of_mut!(retv)),
+                0
+            );
             assert!(retv.is_null());
-            assert_eq!(libc::pthread_join(stage2_tid, ptr::addr_of_mut!(retv)), 0);
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_join(stage2_tid, ptr::addr_of_mut!(retv)),
+                0
+            );
             assert!(retv.is_null());
-            assert_eq!(libc::pthread_join(output_tid, ptr::addr_of_mut!(retv)), 0);
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_join(output_tid, ptr::addr_of_mut!(retv)),
+                0
+            );
             assert!(retv.is_null());
 
             assert_eq!(opt.failures.load(Ordering::SeqCst), 0);
@@ -1902,7 +2039,7 @@ mod tests {
             assert_eq!(hts_tpool_process_sz(ptr::addr_of_mut!(queue).cast()), 0);
 
             assert_eq!(
-                libc::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
+                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
                 0
             );
         }
@@ -1950,7 +2087,7 @@ mod tests {
             assert!(second.prev.is_null());
 
             assert_eq!(
-                libc::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
+                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
                 0
             );
         }
@@ -1993,7 +2130,7 @@ mod tests {
 
             destroy_test_process_conds(first_ptr);
             assert_eq!(
-                libc::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
+                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
                 0
             );
         }
@@ -2014,13 +2151,13 @@ mod tests {
                 next: ptr::null_mut(),
                 result_cleanup: None,
                 serial: 1,
-                data: 0x11usize as *mut c_void,
+                data: test_marker_ptr(0x11),
             };
             let mut first = HtsTpoolResult {
                 next: ptr::addr_of_mut!(later),
                 result_cleanup: None,
                 serial: 0,
-                data: 0x22usize as *mut c_void,
+                data: test_marker_ptr(0x22),
             };
             queue.output_head = ptr::addr_of_mut!(first);
             queue.output_tail = ptr::addr_of_mut!(later);
@@ -2089,19 +2226,19 @@ mod tests {
                 next: ptr::null_mut(),
                 result_cleanup: None,
                 serial: 2,
-                data: 0x22usize as *mut c_void,
+                data: test_marker_ptr(0x22),
             };
             let mut middle = HtsTpoolResult {
                 next: ptr::addr_of_mut!(tail),
                 result_cleanup: None,
                 serial: 1,
-                data: 0x11usize as *mut c_void,
+                data: test_marker_ptr(0x11),
             };
             let mut head = HtsTpoolResult {
                 next: ptr::addr_of_mut!(middle),
                 result_cleanup: None,
                 serial: 0,
-                data: 0x00usize as *mut c_void,
+                data: ptr::null_mut(),
             };
             queue.output_head = ptr::addr_of_mut!(head);
             queue.output_tail = ptr::addr_of_mut!(tail);
@@ -2134,7 +2271,7 @@ mod tests {
                 next: ptr::null_mut(),
                 result_cleanup: None,
                 serial: 0,
-                data: 0x55usize as *mut c_void,
+                data: test_marker_ptr(0x55),
             };
             queue.output_head = ptr::addr_of_mut!(result);
             queue.output_tail = ptr::addr_of_mut!(result);
@@ -2152,7 +2289,7 @@ mod tests {
 
             destroy_test_process_conds(ptr::addr_of_mut!(queue));
             assert_eq!(
-                libc::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
+                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
                 0
             );
         }
@@ -2185,7 +2322,7 @@ mod tests {
 
             RESULT_CLEANUPS.store(0, Ordering::SeqCst);
             assert_eq!(
-                hts_tpool_add_result(ptr::addr_of_mut!(job), 0x77usize as *mut c_void),
+                hts_tpool_add_result(ptr::addr_of_mut!(job), test_marker_ptr(0x77)),
                 0
             );
             assert_eq!(queue.n_processing, 0);
@@ -2196,7 +2333,7 @@ mod tests {
 
             destroy_test_process_conds(ptr::addr_of_mut!(queue));
             assert_eq!(
-                libc::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
+                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
                 0
             );
         }
@@ -2235,7 +2372,7 @@ mod tests {
             assert_eq!(pool.njobs, 0);
 
             assert_eq!(
-                libc::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
+                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
                 0
             );
         }
@@ -2266,7 +2403,7 @@ mod tests {
                 first_job,
                 HtsTpoolJob {
                     func: None,
-                    arg: 0x01usize as *mut c_void,
+                    arg: test_marker_ptr(0x01),
                     job_cleanup: None,
                     result_cleanup: None,
                     next: ptr::null_mut(),
@@ -2283,7 +2420,7 @@ mod tests {
                     ptr::addr_of_mut!(pool).cast(),
                     ptr::addr_of_mut!(queue).cast(),
                     None,
-                    0x02usize as *mut c_void,
+                    test_marker_ptr(0x02),
                     None,
                     Some(count_result_cleanup),
                     0,
@@ -2305,7 +2442,7 @@ mod tests {
             );
             destroy_test_process_conds(ptr::addr_of_mut!(queue));
             assert_eq!(
-                libc::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
+                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
                 0
             );
         }
@@ -2331,7 +2468,7 @@ mod tests {
                 ptr::addr_of_mut!(pool).cast(),
                 ptr::addr_of_mut!(queue).cast(),
                 None,
-                0x55usize as *mut c_void,
+                test_marker_ptr(0x55),
                 Some(count_job_cleanup),
                 Some(count_result_cleanup),
                 0,
@@ -2347,7 +2484,7 @@ mod tests {
             assert_eq!(RESULT_CLEANUPS.load(Ordering::SeqCst), 0);
 
             assert_eq!(
-                libc::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
+                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
                 0
             );
         }
@@ -2439,7 +2576,7 @@ mod tests {
 
             destroy_test_process_conds(ptr::addr_of_mut!(queue));
             assert_eq!(
-                libc::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
+                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
                 0
             );
         }

@@ -2,6 +2,7 @@
 // Extracted from src/cram/mod.rs (cut-over completed 2026-06-01).
 
 use std::ffi::{c_char, c_int, c_void};
+use std::ptr::NonNull;
 
 use crate::htslib_rs::c_compat::{__errno_location, free, malloc, memcpy, realloc, EINVAL};
 
@@ -9,6 +10,95 @@ use super::*;
 
 pub(super) static mut M_CHANNEL: [*mut mFILE; 3] = [std::ptr::null_mut(); 3];
 pub(super) static mut DONE_STDIN: c_int = 0;
+
+pub struct OwnedFILE {
+    fp: NonNull<libc::FILE>,
+}
+
+impl OwnedFILE {
+    pub unsafe fn from_raw(fp: *mut libc::FILE) -> Option<Self> {
+        NonNull::new(fp).map(|fp| Self { fp })
+    }
+
+    pub fn as_ptr(&self) -> *mut libc::FILE {
+        self.fp.as_ptr()
+    }
+
+    pub fn into_raw(self) -> *mut libc::FILE {
+        let fp = self.fp.as_ptr();
+        std::mem::forget(self);
+        fp
+    }
+
+    pub fn close(self) -> c_int {
+        let fp = self.into_raw();
+        unsafe { libc::fclose(fp) }
+    }
+}
+
+impl Drop for OwnedFILE {
+    fn drop(&mut self) {
+        unsafe {
+            libc::fclose(self.fp.as_ptr());
+        }
+    }
+}
+
+pub struct MmapRegion {
+    ptr: NonNull<c_void>,
+    len: usize,
+}
+
+impl MmapRegion {
+    pub unsafe fn from_raw(ptr: *mut c_void, len: usize) -> Option<Self> {
+        if len == 0 || ptr.is_null() || {
+            #[cfg(not(windows))]
+            {
+                ptr == libc::MAP_FAILED
+            }
+            #[cfg(windows)]
+            {
+                false
+            }
+        } {
+            return None;
+        }
+        NonNull::new(ptr).map(|ptr| Self { ptr, len })
+    }
+
+    pub fn as_ptr(&self) -> *mut c_void {
+        self.ptr.as_ptr()
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn into_raw(self) -> (*mut c_void, usize) {
+        let parts = (self.ptr.as_ptr(), self.len);
+        std::mem::forget(self);
+        parts
+    }
+}
+
+impl Drop for MmapRegion {
+    fn drop(&mut self) {
+        unsafe {
+            #[cfg(not(windows))]
+            {
+                libc::munmap(self.ptr.as_ptr(), self.len);
+            }
+            #[cfg(windows)]
+            {
+                free(self.ptr.as_ptr());
+            }
+        }
+    }
+}
 
 pub unsafe fn cram_mFILE_c_75_mfload(
     fp: *mut libc::FILE,
@@ -80,27 +170,41 @@ pub unsafe fn cram_mFILE_c_127_mfmmap(
     fp: *mut libc::FILE,
     fn_: *const c_char,
 ) -> c_int {
-    let mut sb = std::mem::MaybeUninit::<libc::stat>::uninit();
-    if libc::stat(fn_, sb.as_mut_ptr()) != 0 {
-        return -1;
-    }
-    let sb = sb.assume_init();
-    (*mf).size = sb.st_size as usize;
-    let data = libc::mmap(
-        std::ptr::null_mut(),
-        (*mf).size,
-        libc::PROT_READ,
-        libc::MAP_SHARED,
-        libc::fileno(fp),
-        0,
-    );
-    if data.is_null() || data == libc::MAP_FAILED {
-        return -1;
+    #[cfg(windows)]
+    {
+        (*mf).data = cram_mFILE_c_75_mfload(fp, fn_, &mut (*mf).size, 1);
+        if (*mf).data.is_null() {
+            return -1;
+        }
+        (*mf).alloced = (*mf).size;
+        (*mf).mode &= !MF_MMAP;
+        return 0;
     }
 
-    (*mf).data = data.cast::<c_char>();
-    (*mf).alloced = 0;
-    0
+    #[cfg(not(windows))]
+    {
+        let mut sb = std::mem::MaybeUninit::<libc::stat>::uninit();
+        if libc::stat(fn_, sb.as_mut_ptr()) != 0 {
+            return -1;
+        }
+        let sb = sb.assume_init();
+        (*mf).size = sb.st_size as usize;
+        let data = libc::mmap(
+            std::ptr::null_mut(),
+            (*mf).size,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            libc::fileno(fp),
+            0,
+        );
+        if data.is_null() || data == libc::MAP_FAILED {
+            return -1;
+        }
+
+        (*mf).data = data.cast::<c_char>();
+        (*mf).alloced = 0;
+        0
+    }
 }
 
 pub unsafe fn cram_mFILE_c_151_mstdin() -> *mut mFILE {
@@ -298,7 +402,10 @@ pub unsafe fn cram_mFILE_c_361_mfclose(mf: *mut mFILE) -> c_int {
     }
     cram_mFILE_c_607_mfflush(mf);
     if ((*mf).mode & MF_MMAP) != 0 && !(*mf).data.is_null() {
+        #[cfg(not(windows))]
         libc::munmap((*mf).data.cast(), (*mf).size);
+        #[cfg(windows)]
+        free((*mf).data.cast());
         (*mf).data = std::ptr::null_mut();
     }
     if !(*mf).fp.is_null() {
@@ -564,7 +671,7 @@ pub unsafe fn cram_mFILE_c_607_mfflush(mf: *mut mFILE) -> c_int {
             }
         }
         let pos = libc::ftell((*mf).fp);
-        if pos != -1 && libc::ftruncate(libc::fileno((*mf).fp), pos) == -1 {
+        if pos != -1 && crate::htslib_rs::c_compat::ftruncate(libc::fileno((*mf).fp), pos) == -1 {
             return -1;
         }
         (*mf).flush_pos = (*mf).size;
@@ -589,4 +696,81 @@ pub unsafe fn cram_mFILE_c_656_mfascii(mf: *mut mFILE) {
 
     (*mf).offset = 0;
     (*mf).flush_pos = 0;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+
+    #[test]
+    fn owned_file_closes_or_releases_raw_file_pointer() {
+        unsafe {
+            assert!(OwnedFILE::from_raw(std::ptr::null_mut()).is_none());
+
+            let path = std::env::temp_dir()
+                .join(format!("htslib-rs-owned-file-{}-a.tmp", std::process::id()));
+            let c_path = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+            let fp = libc::fopen(c_path.as_ptr(), c"w+b".as_ptr());
+            assert!(!fp.is_null());
+            let owned = OwnedFILE::from_raw(fp).expect("non-null FILE");
+            assert_eq!(owned.as_ptr(), fp);
+            assert_eq!(
+                libc::fwrite(c"abc".as_ptr().cast(), 1, 3, owned.as_ptr()),
+                3
+            );
+            assert_eq!(owned.close(), 0);
+            assert_eq!(std::fs::read(&path).unwrap(), b"abc");
+            std::fs::remove_file(&path).unwrap();
+
+            let path = std::env::temp_dir()
+                .join(format!("htslib-rs-owned-file-{}-b.tmp", std::process::id()));
+            let c_path = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+            let fp = libc::fopen(c_path.as_ptr(), c"w+b".as_ptr());
+            assert!(!fp.is_null());
+            let owned = OwnedFILE::from_raw(fp).expect("non-null FILE");
+            let raw = owned.into_raw();
+            assert_eq!(raw, fp);
+            assert_eq!(libc::fclose(raw), 0);
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn mmap_region_releases_or_returns_raw_mapping() {
+        unsafe {
+            assert!(MmapRegion::from_raw(std::ptr::null_mut(), 4).is_none());
+            assert!(MmapRegion::from_raw(libc::MAP_FAILED, 4).is_none());
+            assert!(MmapRegion::from_raw(std::ptr::dangling_mut(), 0).is_none());
+
+            let ptr = libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1,
+                0,
+            );
+            assert_ne!(ptr, libc::MAP_FAILED);
+            let region = MmapRegion::from_raw(ptr, 4096).expect("anonymous mmap");
+            assert_eq!(region.as_ptr(), ptr);
+            assert_eq!(region.len(), 4096);
+            assert!(!region.is_empty());
+            let (raw, len) = region.into_raw();
+            assert_eq!((raw, len), (ptr, 4096));
+            assert_eq!(libc::munmap(raw, len), 0);
+
+            let ptr = libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1,
+                0,
+            );
+            assert_ne!(ptr, libc::MAP_FAILED);
+            let _region = MmapRegion::from_raw(ptr, 4096).expect("anonymous mmap");
+        }
+    }
 }

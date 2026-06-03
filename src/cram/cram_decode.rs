@@ -101,15 +101,15 @@ pub(crate) unsafe fn cram_cram_decode_c_71_cram_decode_TD(
 
 pub(crate) mod decode_pipeline {
     use super::{
-        cram_cram_codecs_c_3968_cram_codec_to_id, cram_cram_decode_c_145_cram_decode_compression_header,
-        cram_cram_io_c_1565_cram_free_block, cram_cram_io_c_3213_cram_ref_decr,
+        cram_cram_codecs_c_3968_cram_codec_to_id,
+        cram_cram_decode_c_145_cram_decode_compression_header, cram_cram_io_c_1565_cram_free_block,
+        cram_cram_io_c_1576_cram_uncompress_block, cram_cram_io_c_3213_cram_ref_decr,
         cram_cram_io_c_3409_cram_get_ref, cram_cram_io_c_3705_cram_free_container,
         cram_cram_io_c_3788_cram_read_container, cram_cram_io_c_4421_cram_free_slice,
-        cram_cram_io_c_4568_cram_read_slice, cram_cram_io_c_1576_cram_uncompress_block,
-        cram_cram_io_h_183_cram_get_block_by_id, cram_cram_io_h_216_block_resize_exact,
-        cram_cram_io_h_226_block_resize, cram_cram_io_h_248_block_append,
-        cram_cram_io_h_261_block_append_char, cram_cram_io_h_271_block_append_uint,
-        cram_cram_io_h_340_append_uint64,
+        cram_cram_io_c_4568_cram_read_slice, cram_cram_io_h_183_cram_get_block_by_id,
+        cram_cram_io_h_216_block_resize_exact, cram_cram_io_h_226_block_resize,
+        cram_cram_io_h_248_block_append, cram_cram_io_h_261_block_append_char,
+        cram_cram_io_h_271_block_append_uint, cram_cram_io_h_340_append_uint64,
     };
     use crate::htslib_rs::c_compat::{calloc, free, malloc, realloc};
     use crate::htslib_rs::hts::{hFILE, kstring_t, BGZF};
@@ -142,11 +142,11 @@ pub(crate) mod decode_pipeline {
     unsafe fn strcmp(a: *const c_char, b: *const c_char) -> c_int {
         libc::strcmp(a, b)
     }
-    unsafe fn pthread_mutex_lock(m: *mut libc::pthread_mutex_t) {
-        libc::pthread_mutex_lock(m);
+    unsafe fn pthread_mutex_lock(m: *mut crate::htslib_rs::c_compat::pthread_mutex_t) {
+        crate::htslib_rs::c_compat::pthread_mutex_lock(m);
     }
-    unsafe fn pthread_mutex_unlock(m: *mut libc::pthread_mutex_t) {
-        libc::pthread_mutex_unlock(m);
+    unsafe fn pthread_mutex_unlock(m: *mut crate::htslib_rs::c_compat::pthread_mutex_t) {
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(m);
     }
     unsafe fn hseek(fp: *mut hFILE, off: libc::off_t, whence: c_int) -> libc::off_t {
         crate::htslib_rs::hfile::hseek(fp, off, whence)
@@ -587,7 +587,7 @@ pub(crate) mod decode_pipeline {
         pub fn_0: *mut c_char,
         pub fp: *mut BGZF,
         pub count: c_int,
-        pub lock: libc::pthread_mutex_t,
+        pub lock: crate::htslib_rs::c_compat::pthread_mutex_t,
         pub last: *mut ref_entry,
         pub last_id: c_int,
     }
@@ -663,11 +663,11 @@ pub(crate) mod decode_pipeline {
         pub own_pool: c_int,
         pub pool: *mut c_void,
         pub rqueue: *mut c_void,
-        pub metrics_lock: libc::pthread_mutex_t,
-        pub ref_lock: libc::pthread_mutex_t,
-        pub range_lock: libc::pthread_mutex_t,
+        pub metrics_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
+        pub ref_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
+        pub range_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
         pub bl: *mut c_void,
-        pub bam_list_lock: libc::pthread_mutex_t,
+        pub bam_list_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
         pub job_pending: *mut c_void,
         pub ooc: c_int,
         pub lossy_read_names: c_int,
@@ -689,7 +689,9 @@ pub(crate) mod decode_pipeline {
         assert!(
             std::mem::size_of::<cram_slice>() == std::mem::size_of::<super::cram_slice_layout>()
         );
-        assert!(std::mem::size_of::<cram_block>() == std::mem::size_of::<super::cram_block_layout>());
+        assert!(
+            std::mem::size_of::<cram_block>() == std::mem::size_of::<super::cram_block_layout>()
+        );
         assert!(
             std::mem::size_of::<cram_container>()
                 == std::mem::size_of::<super::cram_container_layout>()
@@ -702,13 +704,12 @@ pub(crate) mod decode_pipeline {
             std::mem::size_of::<cram_block_slice_hdr>()
                 == std::mem::size_of::<super::cram_block_slice_hdr_layout>()
         );
-        assert!(
-            std::mem::size_of::<ref_entry>() == std::mem::size_of::<super::ref_entry_layout>()
-        );
+        assert!(std::mem::size_of::<ref_entry>() == std::mem::size_of::<super::ref_entry_layout>());
         assert!(std::mem::size_of::<refs_t>() == std::mem::size_of::<super::refs_t_layout>());
         // Field-offset cross-checks for the fields the pipeline reads via casts.
         assert!(
-            std::mem::offset_of!(cram_fd, refs) == std::mem::offset_of!(super::cram_fd_layout, refs)
+            std::mem::offset_of!(cram_fd, refs)
+                == std::mem::offset_of!(super::cram_fd_layout, refs)
         );
         assert!(
             std::mem::offset_of!(cram_fd, version)
@@ -718,7 +719,9 @@ pub(crate) mod decode_pipeline {
             std::mem::offset_of!(cram_fd, required_fields)
                 == std::mem::offset_of!(super::cram_fd_layout, required_fields)
         );
-        assert!(std::mem::offset_of!(cram_fd, L1) == std::mem::offset_of!(super::cram_fd_layout, l1));
+        assert!(
+            std::mem::offset_of!(cram_fd, L1) == std::mem::offset_of!(super::cram_fd_layout, l1)
+        );
         assert!(
             std::mem::offset_of!(cram_fd, ref_lock)
                 == std::mem::offset_of!(super::cram_fd_layout, ref_lock)
@@ -768,7 +771,12 @@ pub(crate) mod decode_pipeline {
     unsafe fn cram_codec_to_id(c: *mut cram_codec, id2: *mut c_int) -> c_int {
         cram_cram_codecs_c_3968_cram_codec_to_id(c.cast(), id2)
     }
-    unsafe fn cram_get_ref(fd: *mut cram_fd, id: c_int, start: hts_pos_t, end: hts_pos_t) -> *mut c_char {
+    unsafe fn cram_get_ref(
+        fd: *mut cram_fd,
+        id: c_int,
+        start: hts_pos_t,
+        end: hts_pos_t,
+    ) -> *mut c_char {
         cram_cram_io_c_3409_cram_get_ref(fd.cast(), id, start, end)
     }
     unsafe fn cram_ref_decr(r: *mut refs_t, id: c_int) {
@@ -803,12 +811,12 @@ pub(crate) mod decode_pipeline {
     }
 
     // ---- thread-pool shims (pool path; unexercised when fd.pool is null) ----
+    use crate::htslib_rs::c_compat::__errno_location;
     use crate::htslib_rs::thread_pool::{
         hts_tpool_delete_result, hts_tpool_dispatch2, hts_tpool_next_result_wait,
         hts_tpool_process_empty, hts_tpool_process_len, hts_tpool_process_qsize,
         hts_tpool_process_sz, hts_tpool_result_data,
     };
-    use crate::htslib_rs::c_compat::__errno_location;
     const EAGAIN: c_int = libc::EAGAIN;
     pub enum hts_tpool {}
     pub enum hts_tpool_process {}
@@ -824,7 +832,11 @@ pub(crate) mod decode_pipeline {
     }
 
     // original: cram_ds_unique (htslib/cram/cram_decode.c:876)
-    unsafe fn cram_ds_unique(hdr: *mut cram_block_compression_hdr, c: *mut cram_codec, id: c_int) -> c_int {
+    unsafe fn cram_ds_unique(
+        hdr: *mut cram_block_compression_hdr,
+        c: *mut cram_codec,
+        id: c_int,
+    ) -> c_int {
         let mut n_id: c_int = 0;
         let mut e_type: cram_encoding = E_NULL;
         let mut i = 0;
@@ -849,7 +861,11 @@ pub(crate) mod decode_pipeline {
             }
             i += 1;
         }
-        if n_id == 1 { e_type as c_int } else { 0 }
+        if n_id == 1 {
+            e_type as c_int
+        } else {
+            0
+        }
     }
 
     // original: cram_decode_estimate_sizes (htslib/cram/cram_decode.c:912)
@@ -926,8 +942,17 @@ pub(crate) mod decode_pipeline {
                 (*s).data_series |= CRAM_MQ as c_uint;
             }
             if (*fd).required_fields & SAM_CIGAR as c_uint != 0 {
-                (*s).data_series |= (CRAM_FN | CRAM_FP | CRAM_FC | CRAM_DL | CRAM_IN | CRAM_SC
-                    | CRAM_HC | CRAM_PD | CRAM_RS | CRAM_RL | CRAM_BF) as c_uint;
+                (*s).data_series |= (CRAM_FN
+                    | CRAM_FP
+                    | CRAM_FC
+                    | CRAM_DL
+                    | CRAM_IN
+                    | CRAM_SC
+                    | CRAM_HC
+                    | CRAM_PD
+                    | CRAM_RS
+                    | CRAM_RL
+                    | CRAM_BF) as c_uint;
             }
             if (*fd).required_fields & SAM_RNEXT as c_uint != 0 {
                 (*s).data_series |= (CRAM_CF | CRAM_NF | CRAM_RI | CRAM_NS | CRAM_BF) as c_uint;
@@ -936,22 +961,61 @@ pub(crate) mod decode_pipeline {
                 (*s).data_series |= (CRAM_CF | CRAM_NF | CRAM_AP | CRAM_NP | CRAM_BF) as c_uint;
             }
             if (*fd).required_fields & SAM_TLEN as c_uint != 0 {
-                (*s).data_series |= (CRAM_CF | CRAM_NF | CRAM_AP | CRAM_TS | CRAM_BF | CRAM_MF
+                (*s).data_series |= (CRAM_CF
+                    | CRAM_NF
+                    | CRAM_AP
+                    | CRAM_TS
+                    | CRAM_BF
+                    | CRAM_MF
                     | CRAM_RI
-                    | (CRAM_FN | CRAM_FP | CRAM_FC | CRAM_DL | CRAM_IN | CRAM_SC | CRAM_HC
-                        | CRAM_PD | CRAM_RS | CRAM_RL | CRAM_BF)) as c_uint;
+                    | (CRAM_FN
+                        | CRAM_FP
+                        | CRAM_FC
+                        | CRAM_DL
+                        | CRAM_IN
+                        | CRAM_SC
+                        | CRAM_HC
+                        | CRAM_PD
+                        | CRAM_RS
+                        | CRAM_RL
+                        | CRAM_BF)) as c_uint;
             }
             if (*fd).required_fields & SAM_SEQ as c_uint != 0 {
-                (*s).data_series |= (CRAM_FN | CRAM_FP | CRAM_FC | CRAM_DL | CRAM_IN | CRAM_SC
-                    | CRAM_HC | CRAM_PD | CRAM_RS | CRAM_RL | CRAM_BF | CRAM_BA | CRAM_BS | CRAM_RL
-                    | CRAM_AP | CRAM_BB) as c_uint;
+                (*s).data_series |= (CRAM_FN
+                    | CRAM_FP
+                    | CRAM_FC
+                    | CRAM_DL
+                    | CRAM_IN
+                    | CRAM_SC
+                    | CRAM_HC
+                    | CRAM_PD
+                    | CRAM_RS
+                    | CRAM_RL
+                    | CRAM_BF
+                    | CRAM_BA
+                    | CRAM_BS
+                    | CRAM_RL
+                    | CRAM_AP
+                    | CRAM_BB) as c_uint;
             }
             if (*fd).required_fields & SAM_AUX as c_uint == 0 {
                 (*s).decode_md = 0;
             }
             if (*fd).required_fields & SAM_QUAL as c_uint != 0 {
-                (*s).data_series |= (CRAM_FN | CRAM_FP | CRAM_FC | CRAM_DL | CRAM_IN | CRAM_SC
-                    | CRAM_HC | CRAM_PD | CRAM_RS | CRAM_RL | CRAM_BF | CRAM_RL | CRAM_AP | CRAM_QS
+                (*s).data_series |= (CRAM_FN
+                    | CRAM_FP
+                    | CRAM_FC
+                    | CRAM_DL
+                    | CRAM_IN
+                    | CRAM_SC
+                    | CRAM_HC
+                    | CRAM_PD
+                    | CRAM_RS
+                    | CRAM_RL
+                    | CRAM_BF
+                    | CRAM_RL
+                    | CRAM_AP
+                    | CRAM_QS
                     | CRAM_QQ) as c_uint;
             }
             if (*fd).required_fields & SAM_AUX as c_uint != 0 {
@@ -974,9 +1038,11 @@ pub(crate) mod decode_pipeline {
             }
             return 0;
         }
-        let block_used =
-            calloc(((*(*s).hdr).num_blocks + 1) as u64, std::mem::size_of::<c_int>() as u64)
-                .cast::<c_int>();
+        let block_used = calloc(
+            ((*(*s).hdr).num_blocks + 1) as u64,
+            std::mem::size_of::<c_int>() as u64,
+        )
+        .cast::<c_int>();
         if block_used.is_null() {
             return -1;
         }
@@ -1015,10 +1081,33 @@ pub(crate) mod decode_pipeline {
                 (*s).data_series |= (CRAM_FC | CRAM_FP) as c_uint;
             }
             if (*s).data_series
-                & (CRAM_FN | CRAM_FP | CRAM_FC | CRAM_DL | CRAM_IN | CRAM_SC | CRAM_HC | CRAM_PD
-                    | CRAM_RS | CRAM_RL | CRAM_BF | CRAM_BA | CRAM_BS | CRAM_RL | CRAM_AP | CRAM_BB
-                    | (CRAM_FN | CRAM_FP | CRAM_FC | CRAM_DL | CRAM_IN | CRAM_SC | CRAM_HC | CRAM_PD
-                        | CRAM_RS | CRAM_RL | CRAM_BF)) as c_uint
+                & (CRAM_FN
+                    | CRAM_FP
+                    | CRAM_FC
+                    | CRAM_DL
+                    | CRAM_IN
+                    | CRAM_SC
+                    | CRAM_HC
+                    | CRAM_PD
+                    | CRAM_RS
+                    | CRAM_RL
+                    | CRAM_BF
+                    | CRAM_BA
+                    | CRAM_BS
+                    | CRAM_RL
+                    | CRAM_AP
+                    | CRAM_BB
+                    | (CRAM_FN
+                        | CRAM_FP
+                        | CRAM_FC
+                        | CRAM_DL
+                        | CRAM_IN
+                        | CRAM_SC
+                        | CRAM_HC
+                        | CRAM_PD
+                        | CRAM_RS
+                        | CRAM_RL
+                        | CRAM_BF)) as c_uint
                 != 0
             {
                 (*s).data_series |= CRAM_RL as c_uint;
@@ -1072,7 +1161,8 @@ pub(crate) mod decode_pipeline {
                                         && (**(*s).block.offset(j as isize)).content_id == bnum1
                                     {
                                         *block_used.offset(j as isize) = 1;
-                                        if cram_uncompress_block(*(*s).block.offset(j as isize)) != 0
+                                        if cram_uncompress_block(*(*s).block.offset(j as isize))
+                                            != 0
                                         {
                                             free(block_used.cast());
                                             return -1;
@@ -1111,7 +1201,8 @@ pub(crate) mod decode_pipeline {
                                 _ => {
                                     let mut j = 0;
                                     while j < (*(*s).hdr).num_blocks {
-                                        if (**(*s).block.offset(j as isize)).content_type == EXTERNAL
+                                        if (**(*s).block.offset(j as isize)).content_type
+                                            == EXTERNAL
                                             && (**(*s).block.offset(j as isize)).content_id == bnum1
                                         {
                                             *block_used.offset(j as isize) = 1;
@@ -1239,7 +1330,8 @@ pub(crate) mod decode_pipeline {
     // original: map_find (htslib/cram/cram_decode.c:1926)
     unsafe fn map_find(map: *mut *mut cram_map, key: *mut c_uchar, id: c_int) -> *mut cram_map {
         let mut m: *mut cram_map = *map.offset(
-            ((*key.offset(0) as c_int * 3 + *key.offset(1) as c_int) & (CRAM_MAP_HASH - 1)) as isize,
+            ((*key.offset(0) as c_int * 3 + *key.offset(1) as c_int) & (CRAM_MAP_HASH - 1))
+                as isize,
         );
         while !m.is_null() && (*m).key != id {
             m = (*m).next;
@@ -1289,7 +1381,9 @@ pub(crate) mod decode_pipeline {
         }
         if (*fd).version >> 8 < 4 {
             let mut i32: int32_t = 0;
-            r |= (*(*(*c).comp_hdr).codecs[DS_TS as usize]).decode.expect("decode")(
+            r |= (*(*(*c).comp_hdr).codecs[DS_TS as usize])
+                .decode
+                .expect("decode")(
                 s,
                 (*(*c).comp_hdr).codecs[DS_TS as usize],
                 blk,
@@ -1298,7 +1392,9 @@ pub(crate) mod decode_pipeline {
             );
             *tlen = i32 as int64_t;
         } else {
-            r |= (*(*(*c).comp_hdr).codecs[DS_TS as usize]).decode.expect("decode")(
+            r |= (*(*(*c).comp_hdr).codecs[DS_TS as usize])
+                .decode
+                .expect("decode")(
                 s,
                 (*(*c).comp_hdr).codecs[DS_TS as usize],
                 blk,
@@ -1322,7 +1418,9 @@ pub(crate) mod decode_pipeline {
         if (*(*c).comp_hdr).codecs[DS_TC as usize].is_null() {
             return -1;
         }
-        r |= (*(*(*c).comp_hdr).codecs[DS_TC as usize]).decode.expect("decode")(
+        r |= (*(*(*c).comp_hdr).codecs[DS_TC as usize])
+            .decode
+            .expect("decode")(
             s,
             (*(*c).comp_hdr).codecs[DS_TC as usize],
             blk,
@@ -1340,7 +1438,9 @@ pub(crate) mod decode_pipeline {
             if (*(*c).comp_hdr).codecs[DS_TN as usize].is_null() {
                 return -1;
             }
-            r |= (*(*(*c).comp_hdr).codecs[DS_TN as usize]).decode.expect("decode")(
+            r |= (*(*(*c).comp_hdr).codecs[DS_TN as usize])
+                .decode
+                .expect("decode")(
                 s,
                 (*(*c).comp_hdr).codecs[DS_TN as usize],
                 blk,
@@ -1366,7 +1466,11 @@ pub(crate) mod decode_pipeline {
             if m.is_null() {
                 return -1;
             }
-            if block_append((*s).aux_blk, &raw mut tag_data as *mut c_uchar as *const c_void, 3) < 0
+            if block_append(
+                (*s).aux_blk,
+                &raw mut tag_data as *mut c_uchar as *const c_void,
+                3,
+            ) < 0
             {
                 return -1;
             }
@@ -1408,7 +1512,9 @@ pub(crate) mod decode_pipeline {
         if (*(*c).comp_hdr).codecs[DS_TL as usize].is_null() {
             return -1;
         }
-        r |= (*(*(*c).comp_hdr).codecs[DS_TL as usize]).decode.expect("decode")(
+        r |= (*(*(*c).comp_hdr).codecs[DS_TL as usize])
+            .decode
+            .expect("decode")(
             s,
             (*(*c).comp_hdr).codecs[DS_TL as usize],
             blk,
@@ -1427,7 +1533,6 @@ pub(crate) mod decode_pipeline {
         }
         let mut i = 0;
         while i < (*cr).ntags {
-            let id: int32_t;
             let mut out_sz_0: int32_t = 1;
             let mut tag_data: [c_uchar; 7] = [0; 7];
             if *TN.offset(0) as c_int == 'M' as i32
@@ -1435,7 +1540,11 @@ pub(crate) mod decode_pipeline {
                 && !has_MD.is_null()
             {
                 *has_MD = (*(*s).aux_blk).byte.wrapping_add(3).wrapping_mul(
-                    (if *TN.offset(2) as c_int == '*' as i32 { -1i32 } else { 1 }) as size_t,
+                    (if *TN.offset(2) as c_int == '*' as i32 {
+                        -1i32
+                    } else {
+                        1
+                    }) as size_t,
                 ) as c_int;
             }
             if *TN.offset(0) as c_int == 'N' as i32
@@ -1443,14 +1552,19 @@ pub(crate) mod decode_pipeline {
                 && !has_NM.is_null()
             {
                 *has_NM = (*(*s).aux_blk).byte.wrapping_add(3).wrapping_mul(
-                    (if *TN.offset(2) as c_int == '*' as i32 { -1i32 } else { 1 }) as size_t,
+                    (if *TN.offset(2) as c_int == '*' as i32 {
+                        -1i32
+                    } else {
+                        1
+                    }) as size_t,
                 ) as c_int;
             }
             tag_data[0] = *TN.offset(0);
             tag_data[1] = *TN.offset(1);
             tag_data[2] = *TN.offset(2);
-            id = ((tag_data[0] as c_int) << 16 | (tag_data[1] as c_int) << 8 | tag_data[2] as c_int)
-                as int32_t;
+            let id = ((tag_data[0] as c_int) << 16
+                | (tag_data[1] as c_int) << 8
+                | tag_data[2] as c_int) as int32_t;
             if (*fd).version >> 8 >= 4 && *TN.offset(2) as c_int == '*' as i32 {
                 let mut tag_data_size: c_int = 0;
                 let mut handled = false;
@@ -1487,8 +1601,7 @@ pub(crate) mod decode_pipeline {
                         if block_append_char((*s).aux_blk, 0) < 0 {
                             return -1;
                         }
-                        (*cr).aux_size =
-                            (*cr).aux_size.wrapping_add((3 + rg_len + 1) as c_uint);
+                        (*cr).aux_size = (*cr).aux_size.wrapping_add((3 + rg_len + 1) as c_uint);
                         (*cr).rg = -1;
                     }
                     handled = true;
@@ -1529,9 +1642,10 @@ pub(crate) mod decode_pipeline {
                 if (*m).codec.is_null() {
                     return -1;
                 }
-                if (*(*m).codec).codec == E_BYTE_ARRAY_LEN || (*(*m).codec).codec == E_BYTE_ARRAY_STOP
+                if (*(*m).codec).codec == E_BYTE_ARRAY_LEN
+                    || (*(*m).codec).codec == E_BYTE_ARRAY_STOP
                 {
-                    out_sz_0 = out_sz_0 * aux_ele_size(*TN.offset(-1) as uint8_t);
+                    out_sz_0 *= aux_ele_size(*TN.offset(-1) as uint8_t);
                 }
                 r |= (*(*m).codec).decode.expect("decode")(
                     s,
@@ -1549,9 +1663,9 @@ pub(crate) mod decode_pipeline {
                     && *TN.offset(-1) as c_int == 'C' as i32
                     && out_sz_0 == 1
                 {
-                    let cF: uint8_t =
-                        *((*(*s).aux_blk).data.offset((*(*s).aux_blk).byte as isize)).offset(-1);
-                    (*(*s).aux_blk).byte = (*(*s).aux_blk).byte.wrapping_sub((out_sz_0 + 3) as size_t);
+                    let cF: uint8_t = *((*(*s).aux_blk).data.add((*(*s).aux_blk).byte)).offset(-1);
+                    (*(*s).aux_blk).byte =
+                        (*(*s).aux_blk).byte.wrapping_sub((out_sz_0 + 3) as size_t);
                     (*cr).aux_size = (*cr).aux_size.wrapping_sub((out_sz_0 + 3) as c_uint);
                     if cF as c_int & 1 != 0 && !has_MD.is_null() && *has_MD == 0 {
                         *has_MD = 1;
@@ -1637,7 +1751,8 @@ pub(crate) mod decode_pipeline {
                             tlen = aright - aleft + 1;
                             id2 = rec;
                             if (*(*s).crecs.offset(id2 as isize)).apos == aleft
-                                && ((*(*s).crecs.offset(id2 as isize)).aend < aright || left_cnt <= 1)
+                                && ((*(*s).crecs.offset(id2 as isize)).aend < aright
+                                    || left_cnt <= 1)
                             {
                                 (*(*s).crecs.offset(id2 as isize)).tlen = tlen;
                                 tlen = -tlen;
@@ -1719,6 +1834,7 @@ pub(crate) mod decode_pipeline {
 
     // original: cram_decode_seq (htslib/cram/cram_decode.c:1096)
     // Faithful translation of the C2Rust `current_block` goto state machine.
+    #[allow(clippy::too_many_arguments)]
     unsafe fn cram_decode_seq(
         fd: *mut cram_fd,
         c: *mut cram_container,
@@ -1756,10 +1872,12 @@ pub(crate) mod decode_pipeline {
         };
         let mut decode_md: c_int = (!(*s).ref_0.is_null()
             && (*cr).ref_id >= 0
-            && (do_md != 0 && has_MD == 0 || has_MD < 0)) as c_int;
+            && (do_md != 0 && has_MD == 0 || has_MD < 0))
+            as c_int;
         let mut decode_nm: c_int = (!(*s).ref_0.is_null()
             && (*cr).ref_id >= 0
-            && (do_md != 0 && has_NM == 0 || has_NM < 0)) as c_int;
+            && (do_md != 0 && has_NM == 0 || has_NM < 0))
+            as c_int;
         let ds: uint32_t = (*s).data_series;
         let bfd: *mut sam_hrecs_t = (*sh).hrecs;
         let comp = (*c).comp_hdr;
@@ -1824,7 +1942,11 @@ pub(crate) mod decode_pipeline {
                 let mut pos: int32_t = 0;
                 let mut op: c_char = 0;
                 if ncigar.wrapping_add(2) >= cigar_alloc {
-                    cigar_alloc = if cigar_alloc != 0 { cigar_alloc.wrapping_mul(2) } else { 1024 };
+                    cigar_alloc = if cigar_alloc != 0 {
+                        cigar_alloc.wrapping_mul(2)
+                    } else {
+                        1024
+                    };
                     cigar = realloc(
                         (*s).cigar as *mut c_void,
                         cigar_alloc as u64 * std::mem::size_of::<uint32_t>() as u64,
@@ -1851,7 +1973,8 @@ pub(crate) mod decode_pipeline {
                         hts_log!(
                             HTS_LOG_ERROR,
                             b"cram_decode_seq\0" as *const u8 as *const c_char,
-                            b"Feature position before start of read\0" as *const u8 as *const c_char
+                            b"Feature position before start of read\0" as *const u8
+                                as *const c_char
                         );
                         return -1;
                     }
@@ -1890,7 +2013,8 @@ pub(crate) mod decode_pipeline {
                                     if (*cr).len != 0 {
                                         memcpy(
                                             seq.offset((seq_pos - 1) as isize) as *mut c_void,
-                                            (*s).ref_0.offset((ref_pos - (*s).ref_start + 1) as isize)
+                                            (*s).ref_0
+                                                .offset((ref_pos - (*s).ref_start + 1) as isize)
                                                 as *const c_void,
                                             rlen as size_t,
                                         );
@@ -1918,18 +2042,30 @@ pub(crate) mod decode_pipeline {
                                     cigar_extends_error = true;
                                     break;
                                 }
-                                let refp: *const c_char =
-                                    (*s).ref_0.offset(ref_pos as isize).offset(-((*s).ref_start as isize)).offset(1);
+                                let refp: *const c_char = (*s)
+                                    .ref_0
+                                    .offset(ref_pos as isize)
+                                    .offset(-((*s).ref_start as isize))
+                                    .offset(1);
                                 let frag_len = pos - seq_pos;
                                 if decode_md != 0 || decode_nm != 0 {
-                                    let n = memchr(refp as *const c_void, 'N' as i32, frag_len as size_t)
-                                        as *mut c_char;
+                                    let n = memchr(
+                                        refp as *const c_void,
+                                        'N' as i32,
+                                        frag_len as size_t,
+                                    ) as *mut c_char;
                                     if !n.is_null() {
                                         let mut i = 0;
                                         while i < frag_len {
                                             let base = *refp.offset(i as isize);
                                             if base as c_int == 'N' as i32 {
-                                                if add_md_char(s, decode_md, 'N' as i32 as c_char, &raw mut md_dist) < 0 {
+                                                if add_md_char(
+                                                    s,
+                                                    decode_md,
+                                                    'N' as i32 as c_char,
+                                                    &raw mut md_dist,
+                                                ) < 0
+                                                {
                                                     return -1;
                                                 }
                                                 nm = nm.wrapping_add(1);
@@ -1970,8 +2106,11 @@ pub(crate) mod decode_pipeline {
                     match op as c_int {
                         83 => {
                             // 'S'
-                            let mut out_sz2: int32_t =
-                                if (*cr).len != 0 { (*cr).len - (pos - 1) } else { 1 };
+                            let mut out_sz2: int32_t = if (*cr).len != 0 {
+                                (*cr).len - (pos - 1)
+                            } else {
+                                1
+                            };
                             let mut have_sc = 0;
                             if cig_len != 0 {
                                 let t = ncigar;
@@ -2036,7 +2175,8 @@ pub(crate) mod decode_pipeline {
                                 if codec!(DS_BS).is_null() {
                                     return -1;
                                 }
-                                r |= decode!(DS_BS, &raw mut base_0 as *mut c_char, &raw mut out_sz);
+                                r |=
+                                    decode!(DS_BS, &raw mut base_0 as *mut c_char, &raw mut out_sz);
                                 if r != 0 {
                                     return -1;
                                 }
@@ -2045,12 +2185,17 @@ pub(crate) mod decode_pipeline {
                                     || (*s).ref_0.is_null()
                                 {
                                     if pos - 1 < (*cr).len {
-                                        *seq.offset((pos - 1) as isize) = (*comp).substitution_matrix
+                                        *seq.offset((pos - 1) as isize) = (*comp)
+                                            .substitution_matrix
                                             [(*fd).L1['N' as i32 as usize] as usize]
                                             [base_0 as usize];
                                     }
                                     if decode_md != 0 || decode_nm != 0 {
-                                        if md_dist >= 0 && decode_md != 0 && block_append_uint((*s).aux_blk, md_dist as c_uint) < 0 {
+                                        if md_dist >= 0
+                                            && decode_md != 0
+                                            && block_append_uint((*s).aux_blk, md_dist as c_uint)
+                                                < 0
+                                        {
                                             return -1;
                                         }
                                         md_dist = -1;
@@ -2062,13 +2207,21 @@ pub(crate) mod decode_pipeline {
                                             as uc as c_int
                                     } else {
                                         'N' as i32
-                                    }) as c_uchar;
+                                    })
+                                        as c_uchar;
                                     let ref_base = (*fd).L1[ref_call as usize] as c_int;
                                     if pos - 1 < (*cr).len {
                                         *seq.offset((pos - 1) as isize) =
-                                            (*comp).substitution_matrix[ref_base as usize][base_0 as usize];
+                                            (*comp).substitution_matrix[ref_base as usize]
+                                                [base_0 as usize];
                                     }
-                                    if add_md_char(s, decode_md, ref_call as c_char, &raw mut md_dist) < 0 {
+                                    if add_md_char(
+                                        s,
+                                        decode_md,
+                                        ref_call as c_char,
+                                        &raw mut md_dist,
+                                    ) < 0
+                                    {
                                         return -1;
                                     }
                                 }
@@ -2105,19 +2258,25 @@ pub(crate) mod decode_pipeline {
                                         cigar_extends_error = true;
                                         break;
                                     }
-                                    if md_dist >= 0 && decode_md != 0 && block_append_uint((*s).aux_blk, md_dist as c_uint) < 0 {
+                                    if md_dist >= 0
+                                        && decode_md != 0
+                                        && block_append_uint((*s).aux_blk, md_dist as c_uint) < 0
+                                    {
                                         return -1;
                                     }
                                     if ref_pos + i32 as int64_t
                                         <= (*(*bfd).ref_.offset((*cr).ref_id as isize)).len
                                     {
                                         if decode_md != 0 {
-                                            if block_append_char((*s).aux_blk, '^' as i32 as c_char) < 0 {
+                                            if block_append_char((*s).aux_blk, '^' as i32 as c_char)
+                                                < 0
+                                            {
                                                 return -1;
                                             }
                                             if block_append(
                                                 (*s).aux_blk,
-                                                (*s).ref_0.offset((ref_pos - (*s).ref_start + 1) as isize)
+                                                (*s).ref_0
+                                                    .offset((ref_pos - (*s).ref_start + 1) as isize)
                                                     as *const c_void,
                                                 i32 as size_t,
                                             ) < 0
@@ -2128,16 +2287,26 @@ pub(crate) mod decode_pipeline {
                                         }
                                         nm = nm.wrapping_add(i32 as c_uint);
                                     } else {
-                                        if (*(*bfd).ref_.offset((*cr).ref_id as isize)).len >= ref_pos {
+                                        if (*(*bfd).ref_.offset((*cr).ref_id as isize)).len
+                                            >= ref_pos
+                                        {
                                             if decode_md != 0 {
-                                                if block_append_char((*s).aux_blk, '^' as i32 as c_char) < 0 {
+                                                if block_append_char(
+                                                    (*s).aux_blk,
+                                                    '^' as i32 as c_char,
+                                                ) < 0
+                                                {
                                                     return -1;
                                                 }
                                                 if block_append(
                                                     (*s).aux_blk,
-                                                    (*s).ref_0.offset((ref_pos - (*s).ref_start + 1) as isize)
+                                                    (*s).ref_0.offset(
+                                                        (ref_pos - (*s).ref_start + 1) as isize,
+                                                    )
                                                         as *const c_void,
-                                                    ((*(*bfd).ref_.offset((*cr).ref_id as isize)).len - ref_pos)
+                                                    ((*(*bfd).ref_.offset((*cr).ref_id as isize))
+                                                        .len
+                                                        - ref_pos)
                                                         as size_t,
                                                 ) < 0
                                                 {
@@ -2148,9 +2317,12 @@ pub(crate) mod decode_pipeline {
                                                 }
                                             }
                                             let dlen = (i32 as int64_t
-                                                - ((*(*bfd).ref_.offset((*cr).ref_id as isize)).len - ref_pos))
+                                                - ((*(*bfd).ref_.offset((*cr).ref_id as isize))
+                                                    .len
+                                                    - ref_pos))
                                                 as uint32_t;
-                                            nm = nm.wrapping_add((i32 as uint32_t).wrapping_sub(dlen));
+                                            nm = nm
+                                                .wrapping_add((i32 as uint32_t).wrapping_sub(dlen));
                                         }
                                         md_dist = -1;
                                     }
@@ -2162,8 +2334,11 @@ pub(crate) mod decode_pipeline {
                         }
                         73 => {
                             // 'I'
-                            let mut out_sz2_0: int32_t =
-                                if (*cr).len != 0 { (*cr).len - (pos - 1) } else { 1 };
+                            let mut out_sz2_0: int32_t = if (*cr).len != 0 {
+                                (*cr).len - (pos - 1)
+                            } else {
+                                1
+                            };
                             if cig_len != 0 && cig_op != BAM_CINS {
                                 let t = ncigar;
                                 ncigar = ncigar.wrapping_add(1);
@@ -2220,7 +2395,11 @@ pub(crate) mod decode_pipeline {
                         }
                         98 => {
                             // 'b'
-                            let mut len: int32_t = if (*cr).len != 0 { (*cr).len - (pos - 1) } else { 1 };
+                            let mut len: int32_t = if (*cr).len != 0 {
+                                (*cr).len - (pos - 1)
+                            } else {
+                                1
+                            };
                             if cig_len != 0 && cig_op != BAM_CMATCH {
                                 let t = ncigar;
                                 ncigar = ncigar.wrapping_add(1);
@@ -2243,11 +2422,17 @@ pub(crate) mod decode_pipeline {
                                 }
                                 if decode_md != 0 || decode_nm != 0 {
                                     let mut x = 0;
-                                    if md_dist >= 0 && decode_md != 0 && block_append_uint((*s).aux_blk, md_dist as c_uint) < 0 {
+                                    if md_dist >= 0
+                                        && decode_md != 0
+                                        && block_append_uint((*s).aux_blk, md_dist as c_uint) < 0
+                                    {
                                         return -1;
                                     }
                                     while x < len {
-                                        if x != 0 && decode_md != 0 && block_append_uint((*s).aux_blk, 0) < 0 {
+                                        if x != 0
+                                            && decode_md != 0
+                                            && block_append_uint((*s).aux_blk, 0) < 0
+                                        {
                                             return -1;
                                         }
                                         if ref_pos + x as int64_t
@@ -2263,7 +2448,8 @@ pub(crate) mod decode_pipeline {
                                                     break;
                                                 }
                                                 let r_0 = *(*s).ref_0.offset(
-                                                    (ref_pos + x as int64_t - (*s).ref_start + 1) as isize,
+                                                    (ref_pos + x as int64_t - (*s).ref_start + 1)
+                                                        as isize,
                                                 );
                                                 if block_append_char((*s).aux_blk, r_0) < 0 {
                                                     return -1;
@@ -2286,7 +2472,11 @@ pub(crate) mod decode_pipeline {
                         }
                         113 => {
                             // 'q'
-                            let mut len_0: int32_t = if (*cr).len != 0 { (*cr).len - (pos - 1) } else { 1 };
+                            let mut len_0: int32_t = if (*cr).len != 0 {
+                                (*cr).len - (pos - 1)
+                            } else {
+                                1
+                            };
                             if cig_len != 0 && cig_op != BAM_CMATCH {
                                 let t = ncigar;
                                 ncigar = ncigar.wrapping_add(1);
@@ -2337,7 +2527,10 @@ pub(crate) mod decode_pipeline {
                                 };
                                 r |= decode!(DS_BA, outp, &raw mut out_sz);
                                 if decode_md != 0 || decode_nm != 0 {
-                                    if md_dist >= 0 && decode_md != 0 && block_append_uint((*s).aux_blk, md_dist as c_uint) < 0 {
+                                    if md_dist >= 0
+                                        && decode_md != 0
+                                        && block_append_uint((*s).aux_blk, md_dist as c_uint) < 0
+                                    {
                                         return -1;
                                     }
                                     if ref_pos >= (*(*bfd).ref_.offset((*cr).ref_id as isize)).len
@@ -2352,7 +2545,9 @@ pub(crate) mod decode_pipeline {
                                             }
                                             if block_append_char(
                                                 (*s).aux_blk,
-                                                *(*s).ref_0.offset((ref_pos - (*s).ref_start + 1) as isize),
+                                                *(*s).ref_0.offset(
+                                                    (ref_pos - (*s).ref_start + 1) as isize,
+                                                ),
                                             ) < 0
                                             {
                                                 return -1;
@@ -2511,7 +2706,8 @@ pub(crate) mod decode_pipeline {
                     if ref_pos + (*cr).len as int64_t - seq_pos as int64_t + 1
                         > (*(*bfd).ref_.offset((*cr).ref_id as isize)).len
                     {
-                        let rlen_0 = ((*(*bfd).ref_.offset((*cr).ref_id as isize)).len - ref_pos) as c_int;
+                        let rlen_0 =
+                            ((*(*bfd).ref_.offset((*cr).ref_id as isize)).len - ref_pos) as c_int;
                         if rlen_0 > 0 {
                             if ref_pos + rlen_0 as int64_t > (*s).ref_end {
                                 cigar_extends_error = true;
@@ -2532,23 +2728,21 @@ pub(crate) mod decode_pipeline {
                                     );
                                 }
                             }
-                        } else {
-                            if (*cr).len - seq_pos + 1 > 0 {
-                                memset(
-                                    seq.offset((seq_pos - 1) as isize) as *mut c_void,
-                                    'N' as i32,
-                                    ((*cr).len - seq_pos + 1) as size_t,
-                                );
-                            }
+                        } else if (*cr).len - seq_pos + 1 > 0 {
+                            memset(
+                                seq.offset((seq_pos - 1) as isize) as *mut c_void,
+                                'N' as i32,
+                                ((*cr).len - seq_pos + 1) as size_t,
+                            );
                         }
-                        if !cigar_extends_error {
-                            if md_dist >= 0 {
-                                md_dist += (*cr).len - seq_pos + 1;
-                            }
+                        if !cigar_extends_error && md_dist >= 0 {
+                            md_dist += (*cr).len - seq_pos + 1;
                         }
                     } else {
                         if (*cr).len - seq_pos + 1 > 0 {
-                            if ref_pos + (*cr).len as int64_t - seq_pos as int64_t + 1 > (*s).ref_end {
+                            if ref_pos + (*cr).len as int64_t - seq_pos as int64_t + 1
+                                > (*s).ref_end
+                            {
                                 cigar_extends_error = true;
                             } else {
                                 let remainder = (*cr).len - (seq_pos - 1);
@@ -2562,18 +2756,27 @@ pub(crate) mod decode_pipeline {
                                     if n_0.is_null() {
                                         md_dist += (*cr).len - (seq_pos - 1);
                                     } else {
-                                        let refp_0 = (*s).ref_0.offset((j - (seq_pos - 1)) as isize);
+                                        let refp_0 =
+                                            (*s).ref_0.offset((j - (seq_pos - 1)) as isize);
                                         md_dist = (md_dist as int64_t
-                                            + n_0.offset_from((*s).ref_0.offset(j as isize)) as int64_t)
+                                            + n_0.offset_from((*s).ref_0.offset(j as isize))
+                                                as int64_t)
                                             as int32_t;
                                         let i_start = ((seq_pos - 1) as int64_t
-                                            + n_0.offset_from((*s).ref_0.offset(j as isize)) as int64_t)
+                                            + n_0.offset_from((*s).ref_0.offset(j as isize))
+                                                as int64_t)
                                             as c_int;
                                         let mut i_0 = i_start;
                                         while i_0 < (*cr).len {
                                             let base_1 = *refp_0.offset(i_0 as isize);
                                             if base_1 as c_int == 'N' as i32 {
-                                                if add_md_char(s, decode_md, 'N' as i32 as c_char, &raw mut md_dist) < 0 {
+                                                if add_md_char(
+                                                    s,
+                                                    decode_md,
+                                                    'N' as i32 as c_char,
+                                                    &raw mut md_dist,
+                                                ) < 0
+                                                {
                                                     return -1;
                                                 }
                                                 nm = nm.wrapping_add(1);
@@ -2595,10 +2798,8 @@ pub(crate) mod decode_pipeline {
                             ref_pos += ((*cr).len - seq_pos + 1) as int64_t;
                         }
                     }
-                } else {
-                    if (*cr).ref_id >= 0 {
-                        ref_pos += ((*cr).len - seq_pos + 1) as int64_t;
-                    }
+                } else if (*cr).ref_id >= 0 {
+                    ref_pos += ((*cr).len - seq_pos + 1) as int64_t;
                 }
                 if cigar_extends_error {
                     hts_log!(
@@ -2610,7 +2811,11 @@ pub(crate) mod decode_pipeline {
                     return -1;
                 }
                 if ncigar.wrapping_add(1) >= cigar_alloc {
-                    cigar_alloc = if cigar_alloc != 0 { cigar_alloc.wrapping_mul(2) } else { 1024 };
+                    cigar_alloc = if cigar_alloc != 0 {
+                        cigar_alloc.wrapping_mul(2)
+                    } else {
+                        1024
+                    };
                     cigar = realloc(
                         (*s).cigar as *mut c_void,
                         cigar_alloc as u64 * std::mem::size_of::<uint32_t>() as u64,
@@ -2631,15 +2836,21 @@ pub(crate) mod decode_pipeline {
                 cig_len += (*cr).len - seq_pos + 1;
             }
         } // 'feature_done
-        // -- after feature processing --
-        if ds & CRAM_FN as c_uint != 0 && decode_md != 0 && md_dist >= 0 {
-            if block_append_uint((*s).aux_blk, md_dist as c_uint) < 0 {
-                return -1;
-            }
+          // -- after feature processing --
+        if ds & CRAM_FN as c_uint != 0
+            && decode_md != 0
+            && md_dist >= 0
+            && block_append_uint((*s).aux_blk, md_dist as c_uint) < 0
+        {
+            return -1;
         }
         if cig_len != 0 {
             if ncigar >= cigar_alloc {
-                cigar_alloc = if cigar_alloc != 0 { cigar_alloc.wrapping_mul(2) } else { 1024 };
+                cigar_alloc = if cigar_alloc != 0 {
+                    cigar_alloc.wrapping_mul(2)
+                } else {
+                    1024
+                };
                 cigar = realloc(
                     (*s).cigar as *mut c_void,
                     cigar_alloc as u64 * std::mem::size_of::<uint32_t>() as u64,
@@ -2655,7 +2866,11 @@ pub(crate) mod decode_pipeline {
             *cigar.offset(t as isize) = ((cig_len << 4) as c_uint).wrapping_add(cig_op);
         }
         (*cr).ncigar = ncigar.wrapping_sub((*cr).cigar) as int32_t;
-        (*cr).aend = if ref_pos > (*cr).apos { ref_pos } else { (*cr).apos };
+        (*cr).aend = if ref_pos > (*cr).apos {
+            ref_pos
+        } else {
+            (*cr).apos
+        };
         if ds & CRAM_MQ as c_uint != 0 {
             if codec!(DS_MQ).is_null() {
                 return -1;
@@ -2694,7 +2909,7 @@ pub(crate) mod decode_pipeline {
                 }
                 memcpy(tmp_MD as *mut c_void, orig_aux_p as *const c_void, sz);
                 memmove(
-                    ((*(*s).aux_blk).data.offset(-has_MD as isize)).offset(sz as isize) as *mut c_void,
+                    ((*(*s).aux_blk).data.offset(-has_MD as isize)).add(sz) as *mut c_void,
                     (*(*s).aux_blk).data.offset(-has_MD as isize) as *const c_void,
                     orig_aux_p.offset_from((*(*s).aux_blk).data.offset(-has_MD as isize)) as size_t,
                 );
@@ -2735,7 +2950,12 @@ pub(crate) mod decode_pipeline {
                     buf[5] = (nm >> 16 & 0xff) as c_char;
                     buf[6] = (nm >> 24 & 0xff) as c_char;
                 }
-                if block_append((*s).aux_blk, &raw mut buf as *mut c_char as *const c_void, buf_size) < 0 {
+                if block_append(
+                    (*s).aux_blk,
+                    &raw mut buf as *mut c_char as *const c_void,
+                    buf_size,
+                ) < 0
+                {
                     return -1;
                 }
                 (*cr).aux_size = (*cr).aux_size.wrapping_add(buf_size as uint32_t);
@@ -2760,7 +2980,7 @@ pub(crate) mod decode_pipeline {
         let mut last_ref_id: c_int;
         let blk: *mut cram_block = *(*s).block.offset(0);
         let mut bf: int32_t = 0;
-        let ref_id: int32_t;
+        let ref_id: int32_t = (*(*s).hdr).ref_seq_id;
         let mut cf: c_uchar = 0;
         let mut out_sz: c_int;
         let mut r: c_int = 0;
@@ -2768,9 +2988,12 @@ pub(crate) mod decode_pipeline {
         let mut seq: *mut c_char = std::ptr::null_mut();
         let mut qual: *mut c_char = std::ptr::null_mut();
         let mut unknown_rg: c_int = -1;
-        let embed_ref: c_int;
+        let embed_ref: c_int = if (*fd).version >> 8 < 4 {
+            ((*(*s).hdr).ref_base_id >= 0) as c_int
+        } else {
+            ((*(*s).hdr).ref_base_id > 0) as c_int
+        };
         let mut refs: *mut *mut c_char = std::ptr::null_mut();
-        let ds: uint32_t;
         let bfd: *mut sam_hrecs_t = (*sh).hrecs;
         let comp = (*c).comp_hdr;
         macro_rules! codec {
@@ -2787,25 +3010,43 @@ pub(crate) mod decode_pipeline {
         if cram_dependent_data_series(fd, comp, s) != 0 {
             return -1;
         }
-        ds = (*s).data_series;
+        let ds: uint32_t = (*s).data_series;
         (*blk).bit = 7;
         let mut qsize: c_int = 0;
         let mut nsize: c_int = 0;
         let mut q_id: c_int = 0;
         cram_decode_estimate_sizes(comp, s, &raw mut qsize, &raw mut nsize, &raw mut q_id);
-        if qsize != 0 && ds & CRAM_RL as c_uint != 0 && block_resize_exact((*s).seqs_blk, (qsize + 1) as size_t) < 0 {
+        if qsize != 0
+            && ds & CRAM_RL as c_uint != 0
+            && block_resize_exact((*s).seqs_blk, (qsize + 1) as size_t) < 0
+        {
             return -1;
         }
-        if qsize != 0 && ds & CRAM_RL as c_uint != 0 && block_resize_exact((*s).qual_blk, (qsize + 1) as size_t) < 0 {
+        if qsize != 0
+            && ds & CRAM_RL as c_uint != 0
+            && block_resize_exact((*s).qual_blk, (qsize + 1) as size_t) < 0
+        {
             return -1;
         }
-        if nsize != 0 && ds & CRAM_NS as c_uint != 0 && block_resize_exact((*s).name_blk, (nsize + 1) as size_t) < 0 {
+        if nsize != 0
+            && ds & CRAM_NS as c_uint != 0
+            && block_resize_exact((*s).name_blk, (nsize + 1) as size_t) < 0
+        {
             return -1;
         }
         if (*bfd).nrg > 0
-            && !(*(*bfd).rg.cast::<sam_hrec_rg_t>().offset(((*bfd).nrg - 1) as isize)).name.is_null()
+            && !(*(*bfd)
+                .rg
+                .cast::<sam_hrec_rg_t>()
+                .offset(((*bfd).nrg - 1) as isize))
+            .name
+            .is_null()
             && strcmp(
-                (*(*bfd).rg.cast::<sam_hrec_rg_t>().offset(((*bfd).nrg - 1) as isize)).name,
+                (*(*bfd)
+                    .rg
+                    .cast::<sam_hrec_rg_t>()
+                    .offset(((*bfd).nrg - 1) as isize))
+                .name,
                 b"UNKNOWN\0" as *const u8 as *const c_char,
             ) == 0
         {
@@ -2823,12 +3064,6 @@ pub(crate) mod decode_pipeline {
         if (*s).crecs.is_null() {
             return -1;
         }
-        ref_id = (*(*s).hdr).ref_seq_id;
-        embed_ref = if (*fd).version >> 8 < 4 {
-            ((*(*s).hdr).ref_base_id >= 0) as c_int
-        } else {
-            ((*(*s).hdr).ref_base_id > 0) as c_int
-        };
         if ref_id >= 0 {
             if embed_ref != 0 {
                 if (*(*s).hdr).ref_base_id < 0 {
@@ -2908,25 +3143,25 @@ pub(crate) mod decode_pipeline {
             && (*fd).ignore_md5 == 0
             && memcmp(
                 &raw mut (*(*s).hdr).md5 as *mut c_uchar as *const c_void,
-                b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0" as *const u8 as *const c_char as *const c_void,
+                b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0" as *const u8 as *const c_char
+                    as *const c_void,
                 16,
             ) != 0
         {
             let mut digest: [c_uchar; 16] = [0; 16];
             let md5: *mut hts_md5_context;
             if !(*s).ref_0.is_null() && (*(*s).hdr).ref_seq_id >= 0 {
-                let start: c_int;
                 let mut len: c_int;
-                if (*(*s).hdr).ref_seq_start >= (*s).ref_start {
-                    start = ((*(*s).hdr).ref_seq_start - (*s).ref_start) as c_int;
+                let start: c_int = if (*(*s).hdr).ref_seq_start >= (*s).ref_start {
+                    ((*(*s).hdr).ref_seq_start - (*s).ref_start) as c_int
                 } else {
                     hts_log!(
                         HTS_LOG_WARNING,
                         b"cram_decode_slice\0" as *const u8 as *const c_char,
                         b"Slice starts before base 1\0" as *const u8 as *const c_char
                     );
-                    start = 0;
-                }
+                    0
+                };
                 if (*(*s).hdr).ref_seq_span <= (*s).ref_end - (*s).ref_start + 1 {
                     len = (*(*s).hdr).ref_seq_span as c_int;
                 } else {
@@ -2945,7 +3180,11 @@ pub(crate) mod decode_pipeline {
                     len = ((*s).ref_end - (*s).ref_start + 1 - start as hts_pos_t) as c_int;
                 }
                 if len >= 0 {
-                    hts_md5_update(md5, (*s).ref_0.offset(start as isize) as *const c_void, len as u64);
+                    hts_md5_update(
+                        md5,
+                        (*s).ref_0.offset(start as isize) as *const c_void,
+                        len as u64,
+                    );
                 }
                 hts_md5_final(&raw mut digest as *mut c_uchar, md5);
                 hts_md5_destroy(md5);
@@ -2979,9 +3218,19 @@ pub(crate) mod decode_pipeline {
                     b"cram_decode_slice\0" as *const u8 as *const c_char,
                     b"MD5 checksum reference mismatch\0" as *const u8 as *const c_char
                 );
-                let _ = md5_print(&raw mut (*(*s).hdr).md5 as *mut c_uchar, &raw mut m_arr as *mut c_char);
-                let _ = md5_print(&raw mut digest as *mut c_uchar, &raw mut m_arr as *mut c_char);
-                let mut ks: kstring_t = kstring_t { l: 0, m: 0, s: std::ptr::null_mut() };
+                let _ = md5_print(
+                    &raw mut (*(*s).hdr).md5 as *mut c_uchar,
+                    &raw mut m_arr as *mut c_char,
+                );
+                let _ = md5_print(
+                    &raw mut digest as *mut c_uchar,
+                    &raw mut m_arr as *mut c_char,
+                );
+                let mut ks: kstring_t = kstring_t {
+                    l: 0,
+                    m: 0,
+                    s: std::ptr::null_mut(),
+                };
                 let _ = sam_hdr_find_tag_id(
                     sh,
                     b"SQ\0" as *const u8 as *const c_char,
@@ -2997,8 +3246,11 @@ pub(crate) mod decode_pipeline {
         if ref_id == -2 {
             pthread_mutex_lock(&raw mut (*fd).ref_lock);
             pthread_mutex_lock(&raw mut (*(*fd).refs).lock);
-            refs = calloc((*(*fd).refs).nref as u64, std::mem::size_of::<*mut c_char>() as u64)
-                .cast::<*mut c_char>();
+            refs = calloc(
+                (*(*fd).refs).nref as u64,
+                std::mem::size_of::<*mut c_char>() as u64,
+            )
+            .cast::<*mut c_char>();
             pthread_mutex_unlock(&raw mut (*(*fd).refs).lock);
             pthread_mutex_unlock(&raw mut (*fd).ref_lock);
             if refs.is_null() {
@@ -3047,7 +3299,11 @@ pub(crate) mod decode_pipeline {
                         decode_error = true;
                         break;
                     }
-                    r |= decode!(DS_CF, &raw mut (*cr).cram_flags as *mut c_char, &raw mut out_sz);
+                    r |= decode!(
+                        DS_CF,
+                        &raw mut (*cr).cram_flags as *mut c_char,
+                        &raw mut out_sz
+                    );
                     if r != 0 {
                         decode_error = true;
                         break;
@@ -3084,7 +3340,8 @@ pub(crate) mod decode_pipeline {
                         if (*comp).no_ref == 0 {
                             pthread_mutex_lock(&raw mut (*fd).range_lock);
                             let need_ref = ((*fd).range.refid == -2
-                                || (*cr).ref_id == (*fd).range.refid) as c_int;
+                                || (*cr).ref_id == (*fd).range.refid)
+                                as c_int;
                             pthread_mutex_unlock(&raw mut (*fd).range_lock);
                             if need_ref != 0 {
                                 if (*refs.offset((*cr).ref_id as isize)).is_null() {
@@ -3248,7 +3505,11 @@ pub(crate) mod decode_pipeline {
                             decode_error = true;
                             break;
                         }
-                        r |= decode!(DS_MF, &raw mut (*cr).mate_flags as *mut c_char, &raw mut out_sz);
+                        r |= decode!(
+                            DS_MF,
+                            &raw mut (*cr).mate_flags as *mut c_char,
+                            &raw mut out_sz
+                        );
                         if r != 0 {
                             decode_error = true;
                             break;
@@ -3278,7 +3539,11 @@ pub(crate) mod decode_pipeline {
                         decode_error = true;
                         break;
                     }
-                    r |= decode!(DS_NS, &raw mut (*cr).mate_ref_id as *mut c_char, &raw mut out_sz);
+                    r |= decode!(
+                        DS_NS,
+                        &raw mut (*cr).mate_ref_id as *mut c_char,
+                        &raw mut out_sz
+                    );
                     if r != 0 {
                         decode_error = true;
                         break;
@@ -3303,7 +3568,11 @@ pub(crate) mod decode_pipeline {
                         r |= decode!(DS_NP, &raw mut i32_0 as *mut c_char, &raw mut out_sz);
                         (*cr).mate_pos = i32_0 as int64_t;
                     } else {
-                        r |= decode!(DS_NP, &raw mut (*cr).mate_pos as *mut c_char, &raw mut out_sz);
+                        r |= decode!(
+                            DS_NP,
+                            &raw mut (*cr).mate_pos as *mut c_char,
+                            &raw mut out_sz
+                        );
                     }
                     if r != 0 {
                         decode_error = true;
@@ -3329,7 +3598,11 @@ pub(crate) mod decode_pipeline {
                         decode_error = true;
                         break;
                     }
-                    r |= decode!(DS_NF, &raw mut (*cr).mate_line as *mut c_char, &raw mut out_sz);
+                    r |= decode!(
+                        DS_NF,
+                        &raw mut (*cr).mate_line as *mut c_char,
+                        &raw mut out_sz
+                    );
                     if r != 0 {
                         decode_error = true;
                         break;
@@ -3380,22 +3653,30 @@ pub(crate) mod decode_pipeline {
             }
             if ds & CRAM_RL as c_uint != 0 {
                 (*cr).seq = (*(*s).seqs_blk).byte as uint32_t;
-                if block_resize((*s).seqs_blk, (*cr).seq.wrapping_add((*cr).len as uint32_t) as size_t) < 0 {
+                if block_resize(
+                    (*s).seqs_blk,
+                    (*cr).seq.wrapping_add((*cr).len as uint32_t) as size_t,
+                ) < 0
+                {
                     decode_error = true;
                     break;
                 }
-                seq = (*(*s).seqs_blk).data.offset((*(*s).seqs_blk).byte as isize) as *mut c_char;
+                seq = (*(*s).seqs_blk).data.add((*(*s).seqs_blk).byte) as *mut c_char;
                 (*(*s).seqs_blk).byte = (*(*s).seqs_blk).byte.wrapping_add((*cr).len as size_t);
                 if seq.is_null() {
                     decode_error = true;
                     break;
                 }
                 (*cr).qual = (*(*s).qual_blk).byte as uint32_t;
-                if block_resize((*s).qual_blk, (*cr).qual.wrapping_add((*cr).len as uint32_t) as size_t) < 0 {
+                if block_resize(
+                    (*s).qual_blk,
+                    (*cr).qual.wrapping_add((*cr).len as uint32_t) as size_t,
+                ) < 0
+                {
                     decode_error = true;
                     break;
                 }
-                qual = (*(*s).qual_blk).data.offset((*(*s).qual_blk).byte as isize) as *mut c_char;
+                qual = (*(*s).qual_blk).data.add((*(*s).qual_blk).byte) as *mut c_char;
                 (*(*s).qual_blk).byte = (*(*s).qual_blk).byte.wrapping_add((*cr).len as size_t);
                 if (*s).ref_0.is_null() {
                     memset(seq as *mut c_void, '=' as i32, (*cr).len as size_t);
@@ -3412,12 +3693,38 @@ pub(crate) mod decode_pipeline {
                     decode_error = true;
                     break;
                 } else if ds
-                    & (CRAM_FN | CRAM_FP | CRAM_FC | CRAM_DL | CRAM_IN | CRAM_SC | CRAM_HC | CRAM_PD
-                        | CRAM_RS | CRAM_RL | CRAM_BF | CRAM_BA | CRAM_BS | CRAM_RL | CRAM_AP
-                        | CRAM_BB | CRAM_MQ) as c_uint
+                    & (CRAM_FN
+                        | CRAM_FP
+                        | CRAM_FC
+                        | CRAM_DL
+                        | CRAM_IN
+                        | CRAM_SC
+                        | CRAM_HC
+                        | CRAM_PD
+                        | CRAM_RS
+                        | CRAM_RL
+                        | CRAM_BF
+                        | CRAM_BA
+                        | CRAM_BS
+                        | CRAM_RL
+                        | CRAM_AP
+                        | CRAM_BB
+                        | CRAM_MQ) as c_uint
                     != 0
                 {
-                    r |= cram_decode_seq(fd, c, s, blk, cr, sh, cf as c_int, seq, qual, has_MD, has_NM);
+                    r |= cram_decode_seq(
+                        fd,
+                        c,
+                        s,
+                        blk,
+                        cr,
+                        sh,
+                        cf as c_int,
+                        seq,
+                        qual,
+                        has_MD,
+                        has_NM,
+                    );
                     if r != 0 {
                         decode_error = true;
                         break;
@@ -3445,7 +3752,8 @@ pub(crate) mod decode_pipeline {
                         break;
                     }
                 }
-                if ds & CRAM_CF as c_uint != 0 && cf as c_int & CRAM_FLAG_PRESERVE_QUAL_SCORES != 0 {
+                if ds & CRAM_CF as c_uint != 0 && cf as c_int & CRAM_FLAG_PRESERVE_QUAL_SCORES != 0
+                {
                     out_sz2_1 = (*cr).len;
                     if ds & CRAM_QS as c_uint != 0 && (*cr).len >= 0 {
                         if codec!(DS_QS).is_null() {
@@ -3556,7 +3864,11 @@ pub(crate) mod decode_pipeline {
         (*j).c = c;
         (*j).s = s;
         (*j).h = bfd;
-        let nonblock = if hts_tpool_process_sz((*fd).rqueue.cast()) != 0 { 1 } else { 0 };
+        let nonblock = if hts_tpool_process_sz((*fd).rqueue.cast()) != 0 {
+            1
+        } else {
+            0
+        };
         let saved_errno = *__errno_location();
         *__errno_location() = 0;
         if -1
@@ -3588,14 +3900,10 @@ pub(crate) mod decode_pipeline {
         rec: c_int,
         bam_0: *mut *mut bam_seq_t,
     ) -> c_int {
-        let ret: c_int;
-        let rg_len: c_int;
         let mut name_a: [c_char; 1024] = [0; 1024];
         let mut name: *mut c_char;
         let mut name_len: c_int;
         let mut aux: *mut c_char;
-        let seq: *mut c_char;
-        let qual: *mut c_char;
         let bfd: *mut sam_hrecs_t = (*sh).hrecs;
         if (*fd).required_fields & SAM_QNAME as c_uint != 0 {
             if (*cr).name_len != 0 {
@@ -3619,7 +3927,11 @@ pub(crate) mod decode_pipeline {
                         .offset((*(*s).crecs.offset((*cr).mate_line as isize)).name_len as isize);
                 } else {
                     name_len = strlen((*fd).prefix) as c_int;
-                    memcpy(name as *mut c_void, (*fd).prefix as *const c_void, name_len as size_t);
+                    memcpy(
+                        name as *mut c_void,
+                        (*fd).prefix as *const c_void,
+                        name_len as size_t,
+                    );
                     name = name.offset(name_len as isize);
                     let t = name;
                     name = name.offset(1);
@@ -3627,7 +3939,8 @@ pub(crate) mod decode_pipeline {
                     if (*cr).mate_line >= 0 && (*cr).mate_line < rec {
                         name = append_uint64(
                             name as *mut c_uchar,
-                            ((*(*s).hdr).record_counter + (*cr).mate_line as int64_t + 1) as uint64_t,
+                            ((*(*s).hdr).record_counter + (*cr).mate_line as int64_t + 1)
+                                as uint64_t,
                         ) as *mut c_char;
                     } else {
                         name = append_uint64(
@@ -3646,29 +3959,29 @@ pub(crate) mod decode_pipeline {
         if (*cr).rg < -1 || (*cr).rg >= (*bfd).nrg {
             return -1;
         }
-        rg_len = if (*cr).rg != -1 {
+        let rg_len: c_int = if (*cr).rg != -1 {
             (*(*bfd).rg.cast::<sam_hrec_rg_t>().offset((*cr).rg as isize)).name_len + 4
         } else {
             0
         };
-        if (*fd).required_fields & (SAM_SEQ | SAM_QUAL) as c_uint != 0 {
+        let seq: *mut c_char = if (*fd).required_fields & (SAM_SEQ | SAM_QUAL) as c_uint != 0 {
             if (*(*s).seqs_blk).data.is_null() {
                 return -1;
             }
-            seq = ((*(*s).seqs_blk).data as *mut c_char).offset((*cr).seq as isize);
+            ((*(*s).seqs_blk).data as *mut c_char).offset((*cr).seq as isize)
         } else {
-            seq = b"*\0" as *const u8 as *const c_char as *mut c_char;
             (*cr).len = 0;
-        }
-        if (*fd).required_fields & SAM_QUAL as c_uint != 0 {
+            b"*\0" as *const u8 as *const c_char as *mut c_char
+        };
+        let qual: *mut c_char = if (*fd).required_fields & SAM_QUAL as c_uint != 0 {
             if (*(*s).qual_blk).data.is_null() {
                 return -1;
             }
-            qual = ((*(*s).qual_blk).data as *mut c_char).offset((*cr).qual as isize);
+            ((*(*s).qual_blk).data as *mut c_char).offset((*cr).qual as isize)
         } else {
-            qual = std::ptr::null_mut();
-        }
-        ret = bam_set1(
+            std::ptr::null_mut()
+        };
+        let ret: c_int = bam_set1(
             (*bam_0).cast(),
             name_len as size_t,
             name,
@@ -3694,7 +4007,7 @@ pub(crate) mod decode_pipeline {
             .data
             .offset(((*b).core.n_cigar << 2) as isize)
             .offset((*b).core.l_qname as c_int as isize)
-            .offset(((*b).core.l_qseq + 1 >> 1) as isize)
+            .offset((((*b).core.l_qseq + 1) >> 1) as isize)
             .offset((*b).core.l_qseq as isize) as *mut c_char;
         if (*cr).aux_size != 0 {
             memcpy(
@@ -3718,7 +4031,8 @@ pub(crate) mod decode_pipeline {
             let len = (*(*bfd).rg.cast::<sam_hrec_rg_t>().offset((*cr).rg as isize)).name_len;
             memcpy(
                 aux as *mut c_void,
-                (*(*bfd).rg.cast::<sam_hrec_rg_t>().offset((*cr).rg as isize)).name as *const c_void,
+                (*(*bfd).rg.cast::<sam_hrec_rg_t>().offset((*cr).rg as isize)).name
+                    as *const c_void,
                 len as size_t,
             );
             aux = aux.offset(len as isize);
@@ -3795,7 +4109,10 @@ pub(crate) mod decode_pipeline {
     }
 
     // original: cram_next_slice (htslib/cram/cram_decode.c:3268)
-    pub(crate) unsafe fn cram_next_slice(fd: *mut cram_fd, cp: *mut *mut cram_container) -> *mut cram_slice {
+    pub(crate) unsafe fn cram_next_slice(
+        fd: *mut cram_fd,
+        cp: *mut *mut cram_container,
+    ) -> *mut cram_slice {
         let mut c_curr: *mut cram_container = (*fd).ctr;
         let mut s_curr: *mut cram_slice;
         if c_curr.is_null() {
@@ -3858,18 +4175,17 @@ pub(crate) mod decode_pipeline {
                             break 'outer;
                         }
                         if (*fd).range.refid != -2 && (*c_next).ref_seq_id != -2 {
-                            if (*c_next).ref_seq_id != (*fd).range.refid {
-                                cram_free_container(c_next);
-                                (*fd).ctr_mt = std::ptr::null_mut();
-                                (*fd).ooc = 1;
-                                break 'outer;
-                            } else if (*fd).range.refid != -1 && (*c_next).ref_seq_start > (*fd).range.end {
+                            if (*c_next).ref_seq_id != (*fd).range.refid
+                                || ((*fd).range.refid != -1
+                                    && (*c_next).ref_seq_start > (*fd).range.end)
+                            {
                                 cram_free_container(c_next);
                                 (*fd).ctr_mt = std::ptr::null_mut();
                                 (*fd).ooc = 1;
                                 break 'outer;
                             } else if (*fd).range.refid != -1
-                                && ((*c_next).ref_seq_start + (*c_next).ref_seq_span - 1) < (*fd).range.start
+                                && ((*c_next).ref_seq_start + (*c_next).ref_seq_span - 1)
+                                    < (*fd).range.start
                             {
                                 let skip_length = (*c_next).length as off_t;
                                 cram_free_container(c_next);
@@ -3888,7 +4204,8 @@ pub(crate) mod decode_pipeline {
                         if (*(*c_next).comp_hdr_block).content_type != COMPRESSION_HEADER {
                             return std::ptr::null_mut();
                         }
-                        (*c_next).comp_hdr = cram_decode_compression_header(fd, (*c_next).comp_hdr_block);
+                        (*c_next).comp_hdr =
+                            cram_decode_compression_header(fd, (*c_next).comp_hdr_block);
                         if (*c_next).comp_hdr.is_null() {
                             return std::ptr::null_mut();
                         }
@@ -3925,14 +4242,9 @@ pub(crate) mod decode_pipeline {
                         (*s_next).last_apos = (*(*s_next).hdr).ref_seq_start;
                         if (*fd).range.refid != -2 && (*(*s_next).hdr).ref_seq_id != -2 {
                             // range filter on the slice
-                            if (*(*s_next).hdr).ref_seq_id != (*fd).range.refid {
-                                (*fd).ooc = 1;
-                                cram_free_slice(s_next);
-                                s_next = std::ptr::null_mut();
-                                (*c_next).slice = s_next;
-                                break;
-                            } else if (*fd).range.refid != -1
-                                && (*(*s_next).hdr).ref_seq_start > (*fd).range.end
+                            if (*(*s_next).hdr).ref_seq_id != (*fd).range.refid
+                                || ((*fd).range.refid != -1
+                                    && (*(*s_next).hdr).ref_seq_start > (*fd).range.end)
                             {
                                 (*fd).ooc = 1;
                                 cram_free_slice(s_next);
@@ -3940,7 +4252,8 @@ pub(crate) mod decode_pipeline {
                                 (*c_next).slice = s_next;
                                 break;
                             } else if (*fd).range.refid != -1
-                                && ((*(*s_next).hdr).ref_seq_start + (*(*s_next).hdr).ref_seq_span - 1)
+                                && ((*(*s_next).hdr).ref_seq_start + (*(*s_next).hdr).ref_seq_span
+                                    - 1)
                                     < (*fd).range.start
                             {
                                 cram_free_slice(s_next);
@@ -4049,12 +4362,8 @@ pub(crate) mod decode_pipeline {
                 if (*fd).range.refid == -2 {
                     break;
                 }
-                if (*fd).range.refid == -1
-                    && (*(*s).crecs.offset((*s).curr_rec as isize)).ref_id != -1
-                {
-                    (*s).curr_rec += 1;
-                } else if (*(*s).crecs.offset((*s).curr_rec as isize)).ref_id < (*fd).range.refid
-                    && (*(*s).crecs.offset((*s).curr_rec as isize)).ref_id != -1
+                let curr_ref_id = (*(*s).crecs.offset((*s).curr_rec as isize)).ref_id;
+                if ((*fd).range.refid == -1 || curr_ref_id < (*fd).range.refid) && curr_ref_id != -1
                 {
                     (*s).curr_rec += 1;
                 } else {
@@ -4210,8 +4519,7 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
         (*hdr).num_records = get32!() as i32;
         (*hdr).num_landmarks = get32!() as i32;
         if (*hdr).num_landmarks < 0
-            || (*hdr).num_landmarks as usize
-                >= usize::MAX / std::mem::size_of::<i32>()
+            || (*hdr).num_landmarks as usize >= usize::MAX / std::mem::size_of::<i32>()
             || (endp.offset_from(cp) as i64) < (*hdr).num_landmarks as i64
         {
             free(hdr.cast());
@@ -4335,23 +4643,23 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
                 sm[0][((cb(0) >> 6) & 3) as usize] = b'C' as c_char;
                 sm[0][((cb(0) >> 4) & 3) as usize] = b'G' as c_char;
                 sm[0][((cb(0) >> 2) & 3) as usize] = b'T' as c_char;
-                sm[0][((cb(0) >> 0) & 3) as usize] = b'N' as c_char;
+                sm[0][(cb(0) & 3) as usize] = b'N' as c_char;
                 sm[1][((cb(1) >> 6) & 3) as usize] = b'A' as c_char;
                 sm[1][((cb(1) >> 4) & 3) as usize] = b'G' as c_char;
                 sm[1][((cb(1) >> 2) & 3) as usize] = b'T' as c_char;
-                sm[1][((cb(1) >> 0) & 3) as usize] = b'N' as c_char;
+                sm[1][(cb(1) & 3) as usize] = b'N' as c_char;
                 sm[2][((cb(2) >> 6) & 3) as usize] = b'A' as c_char;
                 sm[2][((cb(2) >> 4) & 3) as usize] = b'C' as c_char;
                 sm[2][((cb(2) >> 2) & 3) as usize] = b'T' as c_char;
-                sm[2][((cb(2) >> 0) & 3) as usize] = b'N' as c_char;
+                sm[2][(cb(2) & 3) as usize] = b'N' as c_char;
                 sm[3][((cb(3) >> 6) & 3) as usize] = b'A' as c_char;
                 sm[3][((cb(3) >> 4) & 3) as usize] = b'C' as c_char;
                 sm[3][((cb(3) >> 2) & 3) as usize] = b'G' as c_char;
-                sm[3][((cb(3) >> 0) & 3) as usize] = b'N' as c_char;
+                sm[3][(cb(3) & 3) as usize] = b'N' as c_char;
                 sm[4][((cb(4) >> 6) & 3) as usize] = b'A' as c_char;
                 sm[4][((cb(4) >> 4) & 3) as usize] = b'C' as c_char;
                 sm[4][((cb(4) >> 2) & 3) as usize] = b'G' as c_char;
-                sm[4][((cb(4) >> 0) & 3) as usize] = b'T' as c_char;
+                sm[4][(cb(4) & 3) as usize] = b'T' as c_char;
                 hd.p = cp;
                 cp = cp.add(5);
                 let k = kh_put_map(pmap, c"SM".as_ptr(), &mut r);
@@ -4423,36 +4731,126 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
         let mut ds_id = DS_CORE;
         let mut type_: c_int = 0;
         match (k0, k1) {
-            (b'B', b'F') => { ds_id = DS_BF; type_ = E_INT; }
-            (b'C', b'F') => { ds_id = DS_CF; type_ = E_INT; }
-            (b'R', b'I') => { ds_id = DS_RI; type_ = E_INT; }
-            (b'R', b'L') => { ds_id = DS_RL; type_ = E_INT; }
-            (b'A', b'P') => { ds_id = DS_AP; type_ = if is_v4 != 0 { E_SLONG } else { E_INT }; }
-            (b'R', b'G') => { ds_id = DS_RG; type_ = E_INT; }
-            (b'M', b'F') => { ds_id = DS_MF; type_ = E_INT; }
-            (b'N', b'S') => { ds_id = DS_NS; type_ = E_INT; }
-            (b'N', b'P') => { ds_id = DS_NP; type_ = if is_v4 != 0 { E_LONG } else { E_INT }; }
-            (b'T', b'S') => { ds_id = DS_TS; type_ = if is_v4 != 0 { E_SLONG } else { E_INT }; }
-            (b'N', b'F') => { ds_id = DS_NF; type_ = E_INT; }
-            (b'T', b'C') => { ds_id = DS_TC; type_ = E_BYTE; }
-            (b'T', b'N') => { ds_id = DS_TN; type_ = E_INT; }
-            (b'F', b'N') => { ds_id = DS_FN; type_ = E_INT; }
-            (b'F', b'C') => { ds_id = DS_FC; type_ = E_BYTE; }
-            (b'F', b'P') => { ds_id = DS_FP; type_ = E_INT; }
-            (b'B', b'S') => { ds_id = DS_BS; type_ = E_BYTE; }
-            (b'I', b'N') => { ds_id = DS_IN; type_ = E_BYTE_ARRAY; }
-            (b'S', b'C') => { ds_id = DS_SC; type_ = E_BYTE_ARRAY; }
-            (b'D', b'L') => { ds_id = DS_DL; type_ = E_INT; }
-            (b'B', b'A') => { ds_id = DS_BA; type_ = E_BYTE; }
-            (b'B', b'B') => { ds_id = DS_BB; type_ = E_BYTE_ARRAY; }
-            (b'R', b'S') => { ds_id = DS_RS; type_ = E_INT; }
-            (b'P', b'D') => { ds_id = DS_PD; type_ = E_INT; }
-            (b'H', b'C') => { ds_id = DS_HC; type_ = E_INT; }
-            (b'M', b'Q') => { ds_id = DS_MQ; type_ = E_INT; }
-            (b'R', b'N') => { ds_id = DS_RN; type_ = E_BYTE_ARRAY_BLOCK; }
-            (b'Q', b'S') => { ds_id = DS_QS; type_ = E_BYTE; }
-            (b'Q', b'Q') => { ds_id = DS_QQ; type_ = E_BYTE_ARRAY; }
-            (b'T', b'L') => { ds_id = DS_TL; type_ = E_INT; }
+            (b'B', b'F') => {
+                ds_id = DS_BF;
+                type_ = E_INT;
+            }
+            (b'C', b'F') => {
+                ds_id = DS_CF;
+                type_ = E_INT;
+            }
+            (b'R', b'I') => {
+                ds_id = DS_RI;
+                type_ = E_INT;
+            }
+            (b'R', b'L') => {
+                ds_id = DS_RL;
+                type_ = E_INT;
+            }
+            (b'A', b'P') => {
+                ds_id = DS_AP;
+                type_ = if is_v4 != 0 { E_SLONG } else { E_INT };
+            }
+            (b'R', b'G') => {
+                ds_id = DS_RG;
+                type_ = E_INT;
+            }
+            (b'M', b'F') => {
+                ds_id = DS_MF;
+                type_ = E_INT;
+            }
+            (b'N', b'S') => {
+                ds_id = DS_NS;
+                type_ = E_INT;
+            }
+            (b'N', b'P') => {
+                ds_id = DS_NP;
+                type_ = if is_v4 != 0 { E_LONG } else { E_INT };
+            }
+            (b'T', b'S') => {
+                ds_id = DS_TS;
+                type_ = if is_v4 != 0 { E_SLONG } else { E_INT };
+            }
+            (b'N', b'F') => {
+                ds_id = DS_NF;
+                type_ = E_INT;
+            }
+            (b'T', b'C') => {
+                ds_id = DS_TC;
+                type_ = E_BYTE;
+            }
+            (b'T', b'N') => {
+                ds_id = DS_TN;
+                type_ = E_INT;
+            }
+            (b'F', b'N') => {
+                ds_id = DS_FN;
+                type_ = E_INT;
+            }
+            (b'F', b'C') => {
+                ds_id = DS_FC;
+                type_ = E_BYTE;
+            }
+            (b'F', b'P') => {
+                ds_id = DS_FP;
+                type_ = E_INT;
+            }
+            (b'B', b'S') => {
+                ds_id = DS_BS;
+                type_ = E_BYTE;
+            }
+            (b'I', b'N') => {
+                ds_id = DS_IN;
+                type_ = E_BYTE_ARRAY;
+            }
+            (b'S', b'C') => {
+                ds_id = DS_SC;
+                type_ = E_BYTE_ARRAY;
+            }
+            (b'D', b'L') => {
+                ds_id = DS_DL;
+                type_ = E_INT;
+            }
+            (b'B', b'A') => {
+                ds_id = DS_BA;
+                type_ = E_BYTE;
+            }
+            (b'B', b'B') => {
+                ds_id = DS_BB;
+                type_ = E_BYTE_ARRAY;
+            }
+            (b'R', b'S') => {
+                ds_id = DS_RS;
+                type_ = E_INT;
+            }
+            (b'P', b'D') => {
+                ds_id = DS_PD;
+                type_ = E_INT;
+            }
+            (b'H', b'C') => {
+                ds_id = DS_HC;
+                type_ = E_INT;
+            }
+            (b'M', b'Q') => {
+                ds_id = DS_MQ;
+                type_ = E_INT;
+            }
+            (b'R', b'N') => {
+                ds_id = DS_RN;
+                type_ = E_BYTE_ARRAY_BLOCK;
+            }
+            (b'Q', b'S') => {
+                ds_id = DS_QS;
+                type_ = E_BYTE;
+            }
+            (b'Q', b'Q') => {
+                ds_id = DS_QQ;
+                type_ = E_BYTE_ARRAY;
+            }
+            (b'T', b'L') => {
+                ds_id = DS_TL;
+                type_ = E_INT;
+            }
             (b'T', b'M') | (b'T', b'V') => {}
             _ => {
                 hts_log_cstr(
@@ -4583,10 +4981,10 @@ pub unsafe fn cram_cram_decode_c_955_cram_decode_slice_header(
     let bl = b.cast::<cram_block_layout>();
 
     // Uncompress in place if the block is not stored RAW.
-    if (*bl).method != CRAM_BLOCK_METHOD_RAW {
-        if cram_cram_io_c_1576_cram_uncompress_block(b.cast()) < 0 {
-            return std::ptr::null_mut();
-        }
+    if (*bl).method != CRAM_BLOCK_METHOD_RAW
+        && cram_cram_io_c_1576_cram_uncompress_block(b.cast()) < 0
+    {
+        return std::ptr::null_mut();
     }
 
     let mut cp: *mut c_char = (*bl).data.cast::<c_char>();
@@ -4641,8 +5039,7 @@ pub unsafe fn cram_cram_decode_c_955_cram_decode_slice_header(
             hts_log_cstr(
                 HTS_LOG_ERROR,
                 c"cram_decode_slice_header".as_ptr(),
-                c"Negative values not permitted for header sequence start or span fields"
-                    .as_ptr(),
+                c"Negative values not permitted for header sequence start or span fields".as_ptr(),
             );
             return std::ptr::null_mut();
         }
@@ -4691,11 +5088,7 @@ pub unsafe fn cram_cram_decode_c_955_cram_decode_slice_header(
             free(hdr.cast());
             return std::ptr::null_mut();
         }
-        memcpy(
-            (&raw mut (*hdr).md5).cast(),
-            cp.cast_const().cast(),
-            16,
-        );
+        memcpy((&raw mut (*hdr).md5).cast(), cp.cast_const().cast(), 16);
     } else {
         (*hdr).md5 = [0u8; 16];
     }

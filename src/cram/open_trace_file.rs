@@ -11,7 +11,7 @@ pub unsafe fn cram_open_trace_file_c_90_is_file(fn_: *mut c_char) -> c_int {
         return 0;
     }
     let buf = buf.assume_init();
-    ((buf.st_mode & libc::S_IFMT) == libc::S_IFREG) as c_int
+    crate::htslib_rs::c_compat::stat_mode_matches(buf.st_mode, libc::S_IFMT, libc::S_IFREG) as c_int
 }
 
 pub unsafe fn cram_open_trace_file_c_108_tokenise_search_path(
@@ -355,7 +355,7 @@ pub unsafe fn cram_open_trace_file_c_352_open_path_mfile(
     free(newsearch.cast());
 
     if !relative_to.is_null() {
-        let mut relative_path = [0 as c_char; libc::PATH_MAX as usize + 1];
+        let mut relative_path = [0 as c_char; crate::htslib_rs::c_compat::PATH_MAX as usize + 1];
         libc::strcpy(relative_path.as_mut_ptr(), relative_to);
         let cp = libc::strrchr(relative_path.as_mut_ptr(), b'/' as c_int);
         if !cp.is_null() {

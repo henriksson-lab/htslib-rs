@@ -92,7 +92,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"Couldn't open %s : %s\n".as_ptr(),
                 in_name,
-                libc::strerror(*libc::__errno_location()),
+                libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
             );
             break 'run;
         }
@@ -113,7 +113,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"Couldn't open %s : %s\n".as_ptr(),
                 out_name,
-                libc::strerror(*libc::__errno_location()),
+                libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
             );
             break 'run;
         }
@@ -123,7 +123,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"Couldn't write header to %s : %s\n".as_ptr(),
                 out_name,
-                libc::strerror(*libc::__errno_location()),
+                libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
             );
             break 'run;
         }
@@ -166,7 +166,7 @@ pub unsafe fn test_test_realn_c_42_main(argc: c_int, argv: *mut *mut c_char) -> 
                     libc::fprintf(
                         crate::htslib_rs::c_compat::stderr.cast(),
                         c"Error running sam_prob_realn : %s\n".as_ptr(),
-                        libc::strerror(*libc::__errno_location()),
+                        libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
                     );
                     break 'run;
                 }

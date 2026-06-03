@@ -192,10 +192,10 @@ fn rans_compress_O0_4x16_into(
     }
 
     let mut x = 0u32;
-    for j in 0..256 {
-        if f[j] != 0 {
-            RansEncSymbolInit(&mut syms[j], x, f[j], TF_SHIFT);
-            x += f[j];
+    for (j, &freq) in f.iter().take(256).enumerate() {
+        if freq != 0 {
+            RansEncSymbolInit(&mut syms[j], x, freq, TF_SHIFT);
+            x += freq;
         }
     }
 
@@ -366,17 +366,17 @@ fn rans_uncompress_O0_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     normalise_freq_shift(&mut f, fsum, TOTFREQ);
 
     let mut x = 0u32;
-    for j in 0..256 {
-        if f[j] != 0 {
-            if f[j] > TOTFREQ - x {
+    for (j, &freq) in f.iter().enumerate() {
+        if freq != 0 {
+            if freq > TOTFREQ - x {
                 return std::ptr::null_mut();
             }
-            for y in 0..f[j] {
+            for y in 0..freq {
                 ssym[(y + x) as usize] = j as u8;
-                sfreq[(y + x) as usize] = f[j] as u16;
+                sfreq[(y + x) as usize] = freq as u16;
                 sbase[(y + x) as usize] = y as u16;
             }
-            x += f[j];
+            x += freq;
         }
     }
     if x != TOTFREQ {
@@ -388,9 +388,9 @@ fn rans_uncompress_O0_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     }
 
     let mut r = [0u32; 4];
-    for k in 0..4 {
-        crate::htscodecs::rans_word::RansDecInit(&mut r[k], input, &mut cp);
-        if r[k] < RANS_BYTE_L {
+    for rk in &mut r {
+        crate::htscodecs::rans_word::RansDecInit(rk, input, &mut cp);
+        if *rk < RANS_BYTE_L {
             return std::ptr::null_mut();
         }
     }
@@ -445,20 +445,21 @@ pub fn rans_compute_shift(F0: &[u32], F: &[[u32; 256]], T: &[u32], S: &mut [u32]
     let mut e10 = 0.0f64;
     let mut e12 = 0.0f64;
     let mut max_tot = 0i32;
-    for i in 0..256 {
-        if F0[i] == 0 {
+    for (i, &f0) in F0.iter().take(256).enumerate() {
+        if f0 == 0 {
             continue;
         }
         let mut max_val = round2(T[i]);
         let mut ns = 0i32;
+        let row = &F[i];
 
         let mut sm10 = 0i32;
         let mut sm12 = 0i32;
-        for j in 0..256 {
-            if F[i][j] != 0 && max_val / F[i][j] > TOTFREQ_O1_FAST {
+        for &freq in row.iter() {
+            if freq != 0 && max_val / freq > TOTFREQ_O1_FAST {
                 sm10 += 1;
             }
-            if F[i][j] != 0 && max_val / F[i][j] > TOTFREQ_O1 {
+            if freq != 0 && max_val / freq > TOTFREQ_O1 {
                 sm12 += 1;
             }
         }
@@ -468,13 +469,13 @@ pub fn rans_compute_shift(F0: &[u32], F: &[[u32; 256]], T: &[u32], S: &mut [u32]
         let t_slow = TOTFREQ_O1 as f64 / T[i] as f64;
         let t_fast = TOTFREQ_O1_FAST as f64 / T[i] as f64;
 
-        for j in 0..256 {
-            if F[i][j] != 0 {
+        for &freq in row.iter() {
+            if freq != 0 {
                 ns += 1;
-                let mx_fast = (F[i][j] as f64 * t_fast).max(1.0);
-                let mx_slow = (F[i][j] as f64 * t_slow).max(1.0);
-                e10 -= F[i][j] as f64 * (fast_log(mx_fast) - l10);
-                e12 -= F[i][j] as f64 * (fast_log(mx_slow) - l12);
+                let mx_fast = (freq as f64 * t_fast).max(1.0);
+                let mx_slow = (freq as f64 * t_slow).max(1.0);
+                e10 -= freq as f64 * (fast_log(mx_fast) - l10);
+                e12 -= freq as f64 * (fast_log(mx_slow) - l12);
                 e10 += 1.3;
                 e12 += 4.7;
             }
@@ -579,7 +580,7 @@ fn rans_compress_O1_4x16_into(
     let mut ptr = out_end;
 
     let isz4 = (in_size >> 2) as i32;
-    let mut i0 = 1 * isz4 - 2;
+    let mut i0 = isz4 - 2;
     let mut i1 = 2 * isz4 - 2;
     let mut i2 = 3 * isz4 - 2;
 
@@ -799,8 +800,8 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
 
     let s3_fast_on = in_size >= 100000;
 
-    for i in 0..256 {
-        if f0[i] == 0 {
+    for (i, &f0_freq) in f0.iter().enumerate() {
+        if f0_freq == 0 {
             continue;
         }
         let mut f = [0u32; 256];
@@ -819,32 +820,32 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         normalise_freq_shift(&mut f, t, 1 << shift);
 
         let mut x = 0u32;
-        for j in 0..256 {
-            if f[j] != 0 {
-                if f[j] > (1u32 << shift) - x {
+        for (j, &freq) in f.iter().enumerate() {
+            if freq != 0 {
+                if freq > (1u32 << shift) - x {
                     out_free_err(sfb_ptr, fb_ptr);
                     return std::ptr::null_mut();
                 }
                 if shift == TF_SHIFT_O1_FAST && s3_fast_on {
                     // s3[i][y+x] = (F[j]<<(shift+8)) | (y<<8) | j
                     let row = unsafe { s3_base.add(i * TOTFREQ_O1_FAST as usize) };
-                    for y in 0..f[j] {
+                    for y in 0..freq {
                         unsafe {
                             *row.add((y + x) as usize) =
-                                (f[j] << (shift + 8)) | (y << 8) | j as u32;
+                                (freq << (shift + 8)) | (y << 8) | j as u32;
                         }
                     }
                 } else {
                     let row = unsafe { sfb_base.add(i * stride) };
-                    for k in 0..f[j] as usize {
+                    for k in 0..freq as usize {
                         unsafe {
                             *row.add(x as usize + k) = j as u8;
                         }
                     }
-                    fb[i][j].f = f[j] as u16;
+                    fb[i][j].f = freq as u16;
                     fb[i][j].b = x as u16;
                 }
-                x += f[j];
+                x += freq;
             }
         }
         if x != (1u32 << shift) {
@@ -872,9 +873,9 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     let mut r = [0u32; 4];
     let mut ptr = cp_in;
     let ptr_end = (in_size - 8) as usize;
-    for k in 0..4 {
-        crate::htscodecs::rans_word::RansDecInit(&mut r[k], input, &mut ptr);
-        if r[k] < RANS_BYTE_L {
+    for rk in &mut r {
+        crate::htscodecs::rans_word::RansDecInit(rk, input, &mut ptr);
+        if *rk < RANS_BYTE_L {
             out_free_err(sfb_ptr, fb_ptr);
             return std::ptr::null_mut();
         }
@@ -887,8 +888,8 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     if shift == TF_SHIFT_O1 {
         let mask = (1u32 << TF_SHIFT_O1) - 1;
         while i4[0] < isz4 {
-            for q in 0..4 {
-                let m = r[q] & mask;
+            for (q, rq) in r.iter_mut().enumerate() {
+                let m = *rq & mask;
                 let row = unsafe { sfb_base.add(l[q] * stride) };
                 let c = unsafe { *row.add(m as usize) } as usize;
                 // Same TLS-reuse hazard as 32x16 O1: corrupted input may index
@@ -900,26 +901,26 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                     out_free_err(sfb_ptr, fb_ptr);
                     return std::ptr::null_mut();
                 }
-                r[q] = f * (r[q] >> TF_SHIFT_O1) + m - b;
+                *rq = f * (*rq >> TF_SHIFT_O1) + m - b;
                 out_slice[i4[q]] = c as u8;
                 l[q] = c;
             }
             if ptr < ptr_end {
-                for q in 0..4 {
-                    crate::htscodecs::rans_word::RansDecRenorm(&mut r[q], input, &mut ptr);
+                for rq in &mut r {
+                    crate::htscodecs::rans_word::RansDecRenorm(rq, input, &mut ptr);
                 }
             } else {
-                for q in 0..4 {
+                for rq in &mut r {
                     crate::htscodecs::rans_word::RansDecRenormSafe(
-                        &mut r[q],
+                        rq,
                         input,
                         &mut ptr,
                         ptr_end + 8,
                     );
                 }
             }
-            for q in 0..4 {
-                i4[q] += 1;
+            for iq in &mut i4 {
+                *iq += 1;
             }
         }
         while i4[3] < out_sz as usize {
@@ -941,8 +942,8 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     } else if !s3_fast_on {
         let mask = (1u32 << TF_SHIFT_O1_FAST) - 1;
         while i4[0] < isz4 {
-            for q in 0..4 {
-                let m = r[q] & mask;
+            for (q, rq) in r.iter_mut().enumerate() {
+                let m = *rq & mask;
                 let row = unsafe { sfb_base.add(l[q] * stride) };
                 let c = unsafe { *row.add(m as usize) } as usize;
                 let f = fb[l[q]][c].f as u32;
@@ -951,26 +952,26 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                     out_free_err(sfb_ptr, fb_ptr);
                     return std::ptr::null_mut();
                 }
-                r[q] = f * (r[q] >> TF_SHIFT_O1_FAST) + m - b;
+                *rq = f * (*rq >> TF_SHIFT_O1_FAST) + m - b;
                 out_slice[i4[q]] = c as u8;
                 l[q] = c;
             }
             if ptr < ptr_end {
-                for q in 0..4 {
-                    crate::htscodecs::rans_word::RansDecRenorm(&mut r[q], input, &mut ptr);
+                for rq in &mut r {
+                    crate::htscodecs::rans_word::RansDecRenorm(rq, input, &mut ptr);
                 }
             } else {
-                for q in 0..4 {
+                for rq in &mut r {
                     crate::htscodecs::rans_word::RansDecRenormSafe(
-                        &mut r[q],
+                        rq,
                         input,
                         &mut ptr,
                         ptr_end + 8,
                     );
                 }
             }
-            for q in 0..4 {
-                i4[q] += 1;
+            for iq in &mut i4 {
+                *iq += 1;
             }
         }
         while i4[3] < out_sz as usize {
@@ -993,15 +994,15 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         let mask = (1u32 << TF_SHIFT_O1_FAST) - 1;
         while i4[0] < isz4 {
             let mut s = [0u32; 4];
-            for q in 0..4 {
+            for (q, rq) in r.iter().enumerate() {
                 let row = unsafe { s3_base.add(l[q] * TOTFREQ_O1_FAST as usize) };
-                s[q] = unsafe { *row.add((r[q] & mask) as usize) };
+                s[q] = unsafe { *row.add((*rq & mask) as usize) };
                 l[q] = s[q] as u8 as usize;
                 out_slice[i4[q]] = s[q] as u8;
             }
-            for q in 0..4 {
-                let f = s[q] >> (TF_SHIFT_O1_FAST + 8);
-                let b = (s[q] >> 8) & mask;
+            for (&sq, rq) in s.iter().zip(r.iter_mut()) {
+                let f = sq >> (TF_SHIFT_O1_FAST + 8);
+                let b = (sq >> 8) & mask;
                 // TLS-reuse hazard: stale `s3_base` entries can yield (f, b)
                 // outside the valid range, overflowing `f * (r >> shift) + b`.
                 // In the s3 fast path b is per-symbol offset y < f, so the
@@ -1010,24 +1011,24 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                     out_free_err(sfb_ptr, fb_ptr);
                     return std::ptr::null_mut();
                 }
-                r[q] = f * (r[q] >> TF_SHIFT_O1_FAST) + b;
+                *rq = f * (*rq >> TF_SHIFT_O1_FAST) + b;
             }
             if ptr < ptr_end {
-                for q in 0..4 {
-                    crate::htscodecs::rans_word::RansDecRenorm(&mut r[q], input, &mut ptr);
+                for rq in &mut r {
+                    crate::htscodecs::rans_word::RansDecRenorm(rq, input, &mut ptr);
                 }
             } else {
-                for q in 0..4 {
+                for rq in &mut r {
                     crate::htscodecs::rans_word::RansDecRenormSafe(
-                        &mut r[q],
+                        rq,
                         input,
                         &mut ptr,
                         ptr_end + 8,
                     );
                 }
             }
-            for q in 0..4 {
-                i4[q] += 1;
+            for iq in &mut i4 {
+                *iq += 1;
             }
         }
         while i4[3] < out_sz as usize {
@@ -1250,76 +1251,82 @@ fn rans_compress_to_4x16_into(
         meta[1..1 + rle_nsyms as usize].copy_from_slice(&rle_syms[..rle_nsyms as usize]);
         let rmeta_len = rmeta_len64 as usize + rle_nsyms as usize + 1;
 
-        if rle_res.is_none() || (rle_len + rmeta_len as u64) as f64 >= 0.99 * in_size as f64 {
-            out_slice[0] &= !(RANS_ORDER_RLE as u8);
-            // Matches C state-hygiene `do_rle = 0;` even though this local is
-            // not read again in this scope.
-            #[allow(unused_assignments)]
-            {
-                do_rle = 0;
-            }
-        } else {
-            let rle = rle_res.unwrap();
-            // Compress lengths
-            let mut sz = var_put_u32(
-                &mut out_slice[c_meta_len..],
-                Some(out_end - c_meta_len),
-                (rmeta_len * 2) as u32,
-            );
-            sz += var_put_u32(
-                &mut out_slice[c_meta_len + sz as usize..],
-                Some(out_end - (c_meta_len + sz as usize)),
-                rle_len as u32,
-            );
-            if c_meta_len + sz as usize + 5 > out_total {
-                *out_size = 0;
-                return std::ptr::null_mut();
-            }
-            let mut c_rmeta_len = (out_total - (c_meta_len + sz as usize + 5)) as u32;
-            if do_simd != 0 && (rmeta_len < 32 || rle_len < 32) {
-                do_simd = 0;
-                out_slice[0] &= !(RANS_ORDER_X32 as u8);
-            }
-            let dst = unsafe { out.add(c_meta_len + sz as usize + 5) };
-            let r =
-                rans_enc_func(do_simd, 0)(&meta[..rmeta_len], dst, c_rmeta_len, &mut c_rmeta_len);
-            if r.is_null() {
-                *out_size = 0;
-                return std::ptr::null_mut();
-            }
-            let sz2;
-            if c_rmeta_len < rmeta_len as u32 {
-                sz2 = var_put_u32(
-                    &mut out_slice[c_meta_len + sz as usize..],
-                    Some(out_end - (c_meta_len + sz as usize)),
-                    c_rmeta_len,
-                );
-                out_slice.copy_within(
-                    c_meta_len + sz as usize + 5
-                        ..c_meta_len + sz as usize + 5 + c_rmeta_len as usize,
-                    c_meta_len + sz as usize + sz2 as usize,
-                );
-            } else {
-                // Uncompressed RLE meta-data as too small
-                sz = var_put_u32(
+        match rle_res {
+            Some(rle) if ((rle_len + rmeta_len as u64) as f64) < 0.99 * in_size as f64 => {
+                // Compress lengths
+                let mut sz = var_put_u32(
                     &mut out_slice[c_meta_len..],
                     Some(out_end - c_meta_len),
-                    (rmeta_len * 2 + 1) as u32,
+                    (rmeta_len * 2) as u32,
                 );
-                sz2 = var_put_u32(
+                sz += var_put_u32(
                     &mut out_slice[c_meta_len + sz as usize..],
                     Some(out_end - (c_meta_len + sz as usize)),
                     rle_len as u32,
                 );
-                out_slice[c_meta_len + sz as usize + sz2 as usize
-                    ..c_meta_len + sz as usize + sz2 as usize + rmeta_len]
-                    .copy_from_slice(&meta[..rmeta_len]);
-                c_rmeta_len = rmeta_len as u32;
+                if c_meta_len + sz as usize + 5 > out_total {
+                    *out_size = 0;
+                    return std::ptr::null_mut();
+                }
+                let mut c_rmeta_len = (out_total - (c_meta_len + sz as usize + 5)) as u32;
+                if do_simd != 0 && (rmeta_len < 32 || rle_len < 32) {
+                    do_simd = 0;
+                    out_slice[0] &= !(RANS_ORDER_X32 as u8);
+                }
+                let dst = unsafe { out.add(c_meta_len + sz as usize + 5) };
+                let r = rans_enc_func(do_simd, 0)(
+                    &meta[..rmeta_len],
+                    dst,
+                    c_rmeta_len,
+                    &mut c_rmeta_len,
+                );
+                if r.is_null() {
+                    *out_size = 0;
+                    return std::ptr::null_mut();
+                }
+                let sz2;
+                if c_rmeta_len < rmeta_len as u32 {
+                    sz2 = var_put_u32(
+                        &mut out_slice[c_meta_len + sz as usize..],
+                        Some(out_end - (c_meta_len + sz as usize)),
+                        c_rmeta_len,
+                    );
+                    out_slice.copy_within(
+                        c_meta_len + sz as usize + 5
+                            ..c_meta_len + sz as usize + 5 + c_rmeta_len as usize,
+                        c_meta_len + sz as usize + sz2 as usize,
+                    );
+                } else {
+                    // Uncompressed RLE meta-data as too small
+                    sz = var_put_u32(
+                        &mut out_slice[c_meta_len..],
+                        Some(out_end - c_meta_len),
+                        (rmeta_len * 2 + 1) as u32,
+                    );
+                    sz2 = var_put_u32(
+                        &mut out_slice[c_meta_len + sz as usize..],
+                        Some(out_end - (c_meta_len + sz as usize)),
+                        rle_len as u32,
+                    );
+                    out_slice[c_meta_len + sz as usize + sz2 as usize
+                        ..c_meta_len + sz as usize + sz2 as usize + rmeta_len]
+                        .copy_from_slice(&meta[..rmeta_len]);
+                    c_rmeta_len = rmeta_len as u32;
+                }
+                c_meta_len += sz as usize + sz2 as usize + c_rmeta_len as usize;
+                cur = rle[..rle_len as usize].to_vec();
+                rle_owned = Some(cur.clone());
+                in_size = rle_len as u32;
             }
-            c_meta_len += sz as usize + sz2 as usize + c_rmeta_len as usize;
-            cur = rle[..rle_len as usize].to_vec();
-            rle_owned = Some(cur.clone());
-            in_size = rle_len as u32;
+            _ => {
+                out_slice[0] &= !(RANS_ORDER_RLE as u8);
+                // Matches C state-hygiene `do_rle = 0;` even though this local is
+                // not read again in this scope.
+                #[allow(unused_assignments)]
+                {
+                    do_rle = 0;
+                }
+            }
         }
     } else if do_rle != 0 {
         out_slice[0] &= !(RANS_ORDER_RLE as u8);
@@ -1461,11 +1468,11 @@ fn rans_compress_stripe(
         // by buffer (`best_buf`) and check `best_sz == i32::MAX` below — the
         // index is not needed.
         let mut best_buf: Vec<u8> = Vec::new();
-        for j in 0..m.len() {
-            if (order & m[j]) != m[j] {
+        for &mode in &m {
+            if (order & mode) != mode {
                 continue;
             }
-            if (order & RANS_ORDER_STRIPE_NO0) != 0 && (m[j] & 1) == 0 {
+            if (order & RANS_ORDER_STRIPE_NO0) != 0 && (mode & 1) == 0 {
                 continue;
             }
             if out2 > out_total {
@@ -1478,7 +1485,7 @@ fn rans_compress_stripe(
                 dst,
                 olen2,
                 &mut olen2,
-                m[j] | RANS_ORDER_NOSZ | (order & RANS_ORDER_X32),
+                mode | RANS_ORDER_NOSZ | (order & RANS_ORDER_X32),
             );
             if !r.is_null() && olen2 != 0 && best_sz > olen2 as i32 {
                 best_sz = olen2 as i32;

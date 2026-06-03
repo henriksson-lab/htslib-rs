@@ -3,8 +3,8 @@
 
 use std::ffi::{c_char, c_int};
 
-use crate::htslib_rs::vcf::*;
 use crate::htslib_rs::hts::{hts_pos_t, kbs_destroy};
+use crate::htslib_rs::vcf::*;
 
 pub unsafe fn bcf_sr_sort_c_324_bcf_sr_sort_set_active(srt: *mut BcfSrSort, idx: c_int) -> c_int {
     unsafe {
@@ -173,10 +173,10 @@ pub unsafe fn bcf_sr_sort_c_593_bcf_sr_sort_next(
             return 1;
         }
 
-        if (*srt).chr.is_null() || (*srt).pos != min_pos || libc::strcmp((*srt).chr, chr) != 0 {
-            if bcf_sr_sort_c_338_bcf_sr_sort_set(readers, srt, chr, min_pos) < 0 {
-                return -1;
-            }
+        if ((*srt).chr.is_null() || (*srt).pos != min_pos || libc::strcmp((*srt).chr, chr) != 0)
+            && bcf_sr_sort_c_338_bcf_sr_sort_set(readers, srt, chr, min_pos) < 0
+        {
+            return -1;
         }
 
         let vcf_buf = (*srt).vcf_buf.cast::<BcfSrSortVcfBuf>();

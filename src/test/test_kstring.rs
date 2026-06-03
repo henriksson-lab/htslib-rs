@@ -609,7 +609,10 @@ pub unsafe fn test_test_kstring_c_458_test_kinsertchar() -> c_int {
                 crate::htslib_rs::hts::ks_free(&mut s);
                 continue;
             }
-            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"kinsert_char failed\n".as_ptr());
+            libc::fprintf(
+                crate::htslib_rs::c_compat::stderr.cast(),
+                c"kinsert_char failed\n".as_ptr(),
+            );
             crate::htslib_rs::hts::ks_free(&mut s);
             return -1;
         }
@@ -695,7 +698,10 @@ pub unsafe fn test_test_kstring_c_514_test_kinsertstr() -> c_int {
                 crate::htslib_rs::hts::ks_free(&mut s);
                 continue;
             }
-            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"kinsert_str failed\n".as_ptr());
+            libc::fprintf(
+                crate::htslib_rs::c_compat::stderr.cast(),
+                c"kinsert_str failed\n".as_ptr(),
+            );
             crate::htslib_rs::hts::ks_free(&mut s);
             return -1;
         }
@@ -754,19 +760,17 @@ pub unsafe fn test_test_kstring_c_514_test_kinsertstr() -> c_int {
     }
 
     crate::htslib_rs::hts::ks_free(&mut t);
-    if crate::htslib_rs::hts::kinsert_str(c"".as_ptr(), 1, &mut t) != 0 {
-        if crate::htslib_rs::hts::kinsert_str(c"".as_ptr(), 0, &mut t) != 0 || t.l != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"kinsert_str empty insertion failed\n".as_ptr(),
-            );
-            crate::htslib_rs::hts::ks_free(&mut res);
-            return -1;
-        }
-    } else {
+    if crate::htslib_rs::hts::kinsert_str(c"".as_ptr(), 1, &mut t) == 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"kinsert_str empty ins to invalid pos succeeded\n".as_ptr(),
+        );
+        crate::htslib_rs::hts::ks_free(&mut res);
+        return -1;
+    } else if crate::htslib_rs::hts::kinsert_str(c"".as_ptr(), 0, &mut t) != 0 || t.l != 0 {
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"kinsert_str empty insertion failed\n".as_ptr(),
         );
         crate::htslib_rs::hts::ks_free(&mut res);
         return -1;
@@ -793,7 +797,9 @@ pub struct test_test_kstring_c_517_data {
 
 // original: test_kmemmem (htslib/test/test_kstring.c:586)
 pub unsafe fn test_test_kstring_c_586_test_kmemmem() -> c_int {
-    let tests: &[(&[u8], c_int, &[u8], c_int, isize)] = &[
+    type KmemmemTest<'a> = (&'a [u8], c_int, &'a [u8], c_int, isize);
+
+    let tests: &[KmemmemTest<'_>] = &[
         (b"f\0\0f\0\0f\0\0bar\0\0f\0\0f", 18, b"f\0\0", 3, 0),
         (b"f\0\0f\0\0f\0\0bar\0\0f\0\0f", 18, b"\0\0f", 3, 1),
         (b"\0\0f\0\0f\0\0fbar\0\0f\0\0f", 18, b"\0\0f", 3, 0),
@@ -901,6 +907,10 @@ pub unsafe fn test_test_kstring_c_638_test_kstrstr() -> c_int {
 
 // original: test_kstrnstr (htslib/test/test_kstring.c:673)
 pub unsafe fn test_test_kstring_c_673_test_kstrnstr() -> c_int {
+    const STR_WITH_EMBEDDED_NUL: [u8; 19] = [
+        b'f', b'o', b'o', b'f', b'o', b'o', b'f', 0, b'o', b'b', b'a', b'r', b'o', b'o', b'f',
+        b'o', b'o', b'f', 0,
+    ];
     let tests = [
         (c"foofoofoobaroofoof".as_ptr(), c"bar".as_ptr(), 18, 9isize),
         (c"foofoofoobazoofoof".as_ptr(), c"bar".as_ptr(), 18, -1),
@@ -908,7 +918,7 @@ pub unsafe fn test_test_kstring_c_673_test_kstrnstr() -> c_int {
         (c"foofoofoobaroofoof".as_ptr(), c"".as_ptr(), 18, 0),
         (c"bar".as_ptr(), c"foofoofoobaroofoof".as_ptr(), 18, -1),
         (
-            b"foofoof\0obaroofoof\0".as_ptr().cast(),
+            STR_WITH_EMBEDDED_NUL.as_ptr().cast(),
             c"bar".as_ptr(),
             18,
             -1,
@@ -971,65 +981,65 @@ pub unsafe fn test_test_kstring_c_709_main(argc: c_int, argv: *mut *mut c_char) 
         }
     }
 
-    if test.is_null() || libc::strcmp(test, c"kroundup_size_t".as_ptr()) == 0 {
-        if test_test_kstring_c_45_test_kroundup_size_t(verbose) != 0 {
-            res = libc::EXIT_FAILURE;
-        }
+    if (test.is_null() || libc::strcmp(test, c"kroundup_size_t".as_ptr()) == 0)
+        && test_test_kstring_c_45_test_kroundup_size_t(verbose) != 0
+    {
+        res = libc::EXIT_FAILURE;
     }
-    if test.is_null() || libc::strcmp(test, c"kroundup_signed".as_ptr()) == 0 {
-        if test_test_kstring_c_91_test_kroundup_signed(verbose) != 0 {
-            res = libc::EXIT_FAILURE;
-        }
+    if (test.is_null() || libc::strcmp(test, c"kroundup_signed".as_ptr()) == 0)
+        && test_test_kstring_c_91_test_kroundup_signed(verbose) != 0
+    {
+        res = libc::EXIT_FAILURE;
     }
-    if test.is_null() || libc::strcmp(test, c"kputuw".as_ptr()) == 0 {
-        if test_test_kstring_c_153_test_kputuw(start, end) != 0 {
-            res = libc::EXIT_FAILURE;
-        }
+    if (test.is_null() || libc::strcmp(test, c"kputuw".as_ptr()) == 0)
+        && test_test_kstring_c_153_test_kputuw(start, end) != 0
+    {
+        res = libc::EXIT_FAILURE;
     }
-    if test.is_null() || libc::strcmp(test, c"kputw".as_ptr()) == 0 {
-        if test_test_kstring_c_219_test_kputw(start, end) != 0 {
-            res = libc::EXIT_FAILURE;
-        }
+    if (test.is_null() || libc::strcmp(test, c"kputw".as_ptr()) == 0)
+        && test_test_kstring_c_219_test_kputw(start, end) != 0
+    {
+        res = libc::EXIT_FAILURE;
     }
-    if test.is_null() || libc::strcmp(test, c"kputll".as_ptr()) == 0 {
-        if test_test_kstring_c_294_test_kputll(start, end) != 0 {
-            res = libc::EXIT_FAILURE;
-        }
+    if (test.is_null() || libc::strcmp(test, c"kputll".as_ptr()) == 0)
+        && test_test_kstring_c_294_test_kputll(start, end) != 0
+    {
+        res = libc::EXIT_FAILURE;
     }
-    if test.is_null() || libc::strcmp(test, c"kgetline".as_ptr()) == 0 {
-        if test_test_kstring_c_375_test_kgetline() != 0 {
-            res = libc::EXIT_FAILURE;
-        }
+    if (test.is_null() || libc::strcmp(test, c"kgetline".as_ptr()) == 0)
+        && test_test_kstring_c_375_test_kgetline() != 0
+    {
+        res = libc::EXIT_FAILURE;
     }
-    if test.is_null() || libc::strcmp(test, c"kgetline2".as_ptr()) == 0 {
-        if test_test_kstring_c_431_test_kgetline2() != 0 {
-            res = libc::EXIT_FAILURE;
-        }
+    if (test.is_null() || libc::strcmp(test, c"kgetline2".as_ptr()) == 0)
+        && test_test_kstring_c_431_test_kgetline2() != 0
+    {
+        res = libc::EXIT_FAILURE;
     }
-    if test.is_null() || libc::strcmp(test, c"kinsertchar".as_ptr()) == 0 {
-        if test_test_kstring_c_458_test_kinsertchar() != 0 {
-            res = libc::EXIT_FAILURE;
-        }
+    if (test.is_null() || libc::strcmp(test, c"kinsertchar".as_ptr()) == 0)
+        && test_test_kstring_c_458_test_kinsertchar() != 0
+    {
+        res = libc::EXIT_FAILURE;
     }
-    if test.is_null() || libc::strcmp(test, c"kinsertstr".as_ptr()) == 0 {
-        if test_test_kstring_c_514_test_kinsertstr() != 0 {
-            res = libc::EXIT_FAILURE;
-        }
+    if (test.is_null() || libc::strcmp(test, c"kinsertstr".as_ptr()) == 0)
+        && test_test_kstring_c_514_test_kinsertstr() != 0
+    {
+        res = libc::EXIT_FAILURE;
     }
-    if test.is_null() || libc::strcmp(test, c"kmemmem".as_ptr()) == 0 {
-        if test_test_kstring_c_586_test_kmemmem() != 0 {
-            res = libc::EXIT_FAILURE;
-        }
+    if (test.is_null() || libc::strcmp(test, c"kmemmem".as_ptr()) == 0)
+        && test_test_kstring_c_586_test_kmemmem() != 0
+    {
+        res = libc::EXIT_FAILURE;
     }
-    if test.is_null() || libc::strcmp(test, c"kstrstr".as_ptr()) == 0 {
-        if test_test_kstring_c_638_test_kstrstr() != 0 {
-            res = libc::EXIT_FAILURE;
-        }
+    if (test.is_null() || libc::strcmp(test, c"kstrstr".as_ptr()) == 0)
+        && test_test_kstring_c_638_test_kstrstr() != 0
+    {
+        res = libc::EXIT_FAILURE;
     }
-    if test.is_null() || libc::strcmp(test, c"kstrnstr".as_ptr()) == 0 {
-        if test_test_kstring_c_673_test_kstrnstr() != 0 {
-            res = libc::EXIT_FAILURE;
-        }
+    if (test.is_null() || libc::strcmp(test, c"kstrnstr".as_ptr()) == 0)
+        && test_test_kstring_c_673_test_kstrnstr() != 0
+    {
+        res = libc::EXIT_FAILURE;
     }
 
     res

@@ -36,23 +36,22 @@ pub unsafe fn ref_cache_log_files_c_69_rotate_logs(
     opts: *const Options,
 ) -> c_int {
     let mut name = [0 as c_char; LOG_NAME_LEN];
-    let mut now = libc::time(std::ptr::null_mut());
-    let gmt = libc::gmtime(&mut now);
+    let now = libc::time(std::ptr::null_mut());
+    let (year, month, day, hour, minute, second, _) =
+        crate::htslib_rs::c_compat::unix_time_utc_parts(now);
     let mut log_fd = -1;
 
     for i in 0..99u32 {
         libc::snprintf(
             name.as_mut_ptr(),
             LOG_NAME_LEN,
-            b"ref_cache_%04d%02d%02d%02d%02d%02d_%02u.log\0"
-                .as_ptr()
-                .cast(),
-            (*gmt).tm_year + 1900,
-            (*gmt).tm_mon + 1,
-            (*gmt).tm_mday,
-            (*gmt).tm_hour,
-            (*gmt).tm_min,
-            (*gmt).tm_sec,
+            c"ref_cache_%04d%02d%02d%02d%02d%02d_%02u.log".as_ptr(),
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
             i,
         );
 
@@ -63,14 +62,14 @@ pub unsafe fn ref_cache_log_files_c_69_rotate_logs(
                 libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
                 0o644,
             );
-            if !(log_fd < 0 && *libc::__errno_location() == libc::EINTR) {
+            if !(log_fd < 0 && *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR) {
                 break;
             }
         }
         if log_fd >= 0 {
             break;
         }
-        if *libc::__errno_location() != libc::EEXIST {
+        if *crate::htslib_rs::c_compat::__errno_location() != libc::EEXIST {
             break;
         }
     }
@@ -78,22 +77,22 @@ pub unsafe fn ref_cache_log_files_c_69_rotate_logs(
     if log_fd < 0 {
         libc::fprintf(
             crate::htslib_rs::ref_cache::compat::stderr(),
-            b"Couldn't open %s/%s for writing: %s\n\0".as_ptr().cast(),
+            c"Couldn't open %s/%s for writing: %s\n".as_ptr(),
             (*opts).log_dir,
             name.as_ptr(),
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return -1;
     }
 
-    let file = libc::fdopen(log_fd, b"w\0".as_ptr().cast());
+    let file = libc::fdopen(log_fd, c"w".as_ptr());
     if file.is_null() {
         libc::fprintf(
             crate::htslib_rs::ref_cache::compat::stderr(),
-            b"Couldn't fdopen %s/%s : %s\n\0".as_ptr().cast(),
+            c"Couldn't fdopen %s/%s : %s\n".as_ptr(),
             (*opts).log_dir,
             name.as_ptr(),
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         libc::close(log_fd);
         libc::unlinkat((*logfiles).log_dir_fd, name.as_ptr(), 0);
@@ -112,12 +111,10 @@ pub unsafe fn ref_cache_log_files_c_69_rotate_logs(
         {
             libc::fprintf(
                 crate::htslib_rs::ref_cache::compat::stderr(),
-                b"Warning: Couldn't remove old log file %s/%s: %s\n\0"
-                    .as_ptr()
-                    .cast(),
+                c"Warning: Couldn't remove old log file %s/%s: %s\n".as_ptr(),
                 (*opts).log_dir,
                 (*(*logfiles).logs.add(i)).name.as_ptr(),
-                libc::strerror(*libc::__errno_location()),
+                libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
             );
         }
         i += 1;
@@ -175,7 +172,7 @@ pub unsafe fn ref_cache_log_files_c_148_open_logs(opts: *const Options) -> *mut 
     let logfiles = libc::calloc(1, std::mem::size_of::<Logfiles>()).cast::<Logfiles>();
 
     if logfiles.is_null() {
-        libc::perror(b"Allocating logfiles\0".as_ptr().cast());
+        libc::perror(c"Allocating logfiles".as_ptr());
         return std::ptr::null_mut();
     }
 
@@ -195,9 +192,9 @@ pub unsafe fn ref_cache_log_files_c_148_open_logs(opts: *const Options) -> *mut 
     if (*logfiles).dir_handle.is_null() {
         libc::fprintf(
             crate::htslib_rs::ref_cache::compat::stderr(),
-            b"Couldn't open directory %s: %s\n\0".as_ptr().cast(),
+            c"Couldn't open directory %s: %s\n".as_ptr(),
             (*opts).log_dir,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         ref_cache_log_files_c_134_close_logs(logfiles);
         return std::ptr::null_mut();
@@ -216,15 +213,15 @@ pub unsafe fn ref_cache_log_files_c_148_open_logs(opts: *const Options) -> *mut 
     if (*logfiles).log_dir_fd < 0 {
         libc::fprintf(
             crate::htslib_rs::ref_cache::compat::stderr(),
-            b"Couldn't get descriptor for %s : %s\0".as_ptr().cast(),
+            c"Couldn't get descriptor for %s : %s".as_ptr(),
             (*opts).log_dir,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         ref_cache_log_files_c_134_close_logs(logfiles);
         return std::ptr::null_mut();
     }
 
-    *libc::__errno_location() = 0;
+    *crate::htslib_rs::c_compat::__errno_location() = 0;
     loop {
         let ent = libc::readdir((*logfiles).dir_handle);
         if ent.is_null() {
@@ -237,13 +234,13 @@ pub unsafe fn ref_cache_log_files_c_148_open_logs(opts: *const Options) -> *mut 
 
         if libc::sscanf(
             (*ent).d_name.as_ptr(),
-            b"ref_cache_%14[0-9]_%u.%7s\0".as_ptr().cast(),
+            c"ref_cache_%14[0-9]_%u.%7s".as_ptr(),
             dt.as_mut_ptr(),
             &mut idx as *mut u32,
             suff.as_mut_ptr(),
         ) != 0
-            && (libc::strcmp(suff.as_ptr(), b"log\0".as_ptr().cast()) == 0
-                || libc::strcmp(suff.as_ptr(), b"log.gz\0".as_ptr().cast()) == 0)
+            && (libc::strcmp(suff.as_ptr(), c"log".as_ptr()) == 0
+                || libc::strcmp(suff.as_ptr(), c"log.gz".as_ptr()) == 0)
         {
             if (*logfiles).nlogs == (*logfiles).sz {
                 let new_sz = (*logfiles).sz * 2;
@@ -269,7 +266,7 @@ pub unsafe fn ref_cache_log_files_c_148_open_logs(opts: *const Options) -> *mut 
             let l = libc::snprintf(
                 (*(*logfiles).logs.add((*logfiles).nlogs)).name.as_mut_ptr(),
                 LOG_NAME_LEN,
-                b"%s\0".as_ptr().cast(),
+                c"%s".as_ptr(),
                 (*ent).d_name.as_ptr(),
             );
             if l >= LOG_NAME_LEN as c_int {
@@ -284,10 +281,10 @@ pub unsafe fn ref_cache_log_files_c_148_open_logs(opts: *const Options) -> *mut 
             {
                 libc::fprintf(
                     crate::htslib_rs::ref_cache::compat::stderr(),
-                    b"Warning: Couldn't stat %s/%s : %s\n\0".as_ptr().cast(),
+                    c"Warning: Couldn't stat %s/%s : %s\n".as_ptr(),
                     (*opts).log_dir,
                     (*ent).d_name.as_ptr(),
-                    libc::strerror(*libc::__errno_location()),
+                    libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
                 );
                 continue;
             }
@@ -358,12 +355,12 @@ pub unsafe fn ref_cache_log_files_c_266_write_to_log(
         }
         if ok < len && NEEDS_ESCAPE[*msg.add(ok) as u8 as usize] != 0 {
             if *msg.add(ok) as u8 == b'\\' {
-                if libc::fprintf((*logfiles).curr_log, b"\\\\\0".as_ptr().cast()) < 0 {
+                if libc::fprintf((*logfiles).curr_log, c"\\\\".as_ptr()) < 0 {
                     break;
                 }
             } else if libc::fprintf(
                 (*logfiles).curr_log,
-                b"\\x%02x\0".as_ptr().cast(),
+                c"\\x%02x".as_ptr(),
                 *msg.add(ok) as u8 as c_int,
             ) < 0
             {
@@ -378,26 +375,26 @@ pub unsafe fn ref_cache_log_files_c_266_write_to_log(
         if !(*opts).log_dir.is_null() {
             libc::fprintf(
                 crate::htslib_rs::ref_cache::compat::stderr(),
-                b"Error writing to %s/%s : %s\n\0".as_ptr().cast(),
+                c"Error writing to %s/%s : %s\n".as_ptr(),
                 (*opts).log_dir,
                 (*(*logfiles).logs).name.as_ptr(),
-                libc::strerror(*libc::__errno_location()),
+                libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
             );
         } else {
             libc::fprintf(
                 crate::htslib_rs::ref_cache::compat::stderr(),
-                b"Error writing to stdout: %s\n\0".as_ptr().cast(),
-                libc::strerror(*libc::__errno_location()),
+                c"Error writing to stdout: %s\n".as_ptr(),
+                libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
             );
         }
         return -1;
     }
     if !(*opts).log_dir.is_null() {
         (*(*logfiles).logs).size += written as libc::off_t;
-        if (*(*logfiles).logs).size > (*opts).max_log_sz {
-            if ref_cache_log_files_c_69_rotate_logs(logfiles, opts) != 0 {
-                return -1;
-            }
+        if (*(*logfiles).logs).size > (*opts).max_log_sz
+            && ref_cache_log_files_c_69_rotate_logs(logfiles, opts) != 0
+        {
+            return -1;
         }
     }
     0

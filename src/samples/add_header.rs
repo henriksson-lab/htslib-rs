@@ -67,27 +67,28 @@ pub unsafe fn samples_add_header_c_49_main(argc: c_int, argv: *mut *mut c_char) 
     ) != 0
     {
         libc::printf(c"Failed to add RG line\n".as_ptr());
-    } else if sam::sam_hdr_add_pg(
-        in_samhdr,
-        c"add_header".as_ptr(),
-        &[
-            (c"VN".as_ptr(), c"Test".as_ptr()),
-            (c"CL".as_ptr(), data.s),
-        ],
-    ) != 0
-    {
-        libc::printf(c"Failed to add PG line\n".as_ptr());
-    } else if sam::sam_hdr_add_line(
-        in_samhdr,
-        c"CO".as_ptr(),
-        &[(c"Test data".as_ptr(), std::ptr::null::<c_char>())],
-    ) != 0
-    {
-        libc::printf(c"Failed to add PG line\n".as_ptr());
-    } else if sam::sam_hdr_write(outfile, in_samhdr) < 0 {
-        libc::printf(c"Failed to write output\n".as_ptr());
     } else {
-        ret = libc::EXIT_SUCCESS;
+        let add_pg_ret = sam::sam_hdr_add_pg(
+            in_samhdr,
+            c"add_header".as_ptr(),
+            &[(c"VN".as_ptr(), c"Test".as_ptr()), (c"CL".as_ptr(), data.s)],
+        );
+        let add_co_ret = if add_pg_ret == 0 {
+            sam::sam_hdr_add_line(
+                in_samhdr,
+                c"CO".as_ptr(),
+                &[(c"Test data".as_ptr(), std::ptr::null::<c_char>())],
+            )
+        } else {
+            0
+        };
+        if add_pg_ret != 0 || add_co_ret != 0 {
+            libc::printf(c"Failed to add PG line\n".as_ptr());
+        } else if sam::sam_hdr_write(outfile, in_samhdr) < 0 {
+            libc::printf(c"Failed to write output\n".as_ptr());
+        } else {
+            ret = libc::EXIT_SUCCESS;
+        }
     }
 
     sam::sam_hdr_destroy(in_samhdr);

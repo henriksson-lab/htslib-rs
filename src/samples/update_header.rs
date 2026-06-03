@@ -30,9 +30,9 @@ pub unsafe fn samples_update_header_c_49_main(argc: c_int, argv: *mut *mut c_cha
         std::ptr::null()
     } else if *header == b'S' as c_char && *header.add(1) == b'Q' as c_char {
         c"SN".as_ptr()
-    } else if *header == b'R' as c_char && *header.add(1) == b'G' as c_char {
-        c"ID".as_ptr()
-    } else if *header == b'P' as c_char && *header.add(1) == b'G' as c_char {
+    } else if (*header == b'R' as c_char || *header == b'P' as c_char)
+        && *header.add(1) == b'G' as c_char
+    {
         c"ID".as_ptr()
     } else if *header == b'C' as c_char && *header.add(1) == b'O' as c_char {
         tag = std::ptr::null_mut();

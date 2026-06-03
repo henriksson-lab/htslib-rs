@@ -3,8 +3,8 @@
 
 use std::ffi::{c_char, c_int};
 
-use crate::htslib_rs::sam::*;
 use crate::htslib_rs::hts::hts_str2uint;
+use crate::htslib_rs::sam::*;
 
 pub unsafe fn seq_freq(b: *const bam1_t, freq: *mut c_int) {
     libc::memset(freq.cast(), 0, 16 * std::mem::size_of::<c_int>());
@@ -508,7 +508,10 @@ pub unsafe fn bam_mods_at_qpos(
     n_mods: c_int,
 ) -> c_int {
     let mut r = 0;
-    while (*state).seq_pos <= qpos {
+    loop {
+        if (*state).seq_pos > qpos {
+            break;
+        }
         r = bam_mods_at_next_pos(b, state, mods, n_mods);
         if r < 0 {
             break;

@@ -2,7 +2,7 @@
 //!
 //! - `hist8` / `present8` / `hist1_4` are verified against straightforward
 //!   reference counts computed in-test, over varied byte inputs (including the
-//!   >500000 byte large-input path).  `hist8`/`hist1_4`/`present8` are
+//!   more-than-500000-byte large-input path). `hist8`/`hist1_4`/`present8` are
 //!   `static inline` in C so cannot be linked for symbol parity; the reference
 //!   count *is* the parity check.
 //! - `htscodecs_tls_alloc` / `calloc` / `free` exercise an alloc/reuse/realloc/
@@ -48,8 +48,8 @@ fn ref_present8(input: &[u8]) -> [u32; 256] {
         i += 1;
     }
     let mut f = [0u32; 256];
-    for s in 0..256 {
-        f[s] = lanes[s].count_ones();
+    for (slot, &lane_mask) in f.iter_mut().zip(lanes.iter()) {
+        *slot = lane_mask.count_ones();
     }
     f
 }
@@ -75,10 +75,10 @@ fn ref_hist1_4(input: &[u8]) -> (Vec<[u32; 256]>, [u32; 256]) {
     // trailing T0[l]++
     t0[l as usize] += 1;
     // T0[i] += sum_j F0[i][j]
-    for i in 0..256 {
+    for (i, row) in f0.iter().enumerate() {
         let mut tt: u64 = 0;
-        for j in 0..256 {
-            tt += f0[i][j] as u64;
+        for &count in row {
+            tt += count as u64;
         }
         t0[i] += tt as u32;
     }
@@ -90,13 +90,14 @@ fn ref_hist1_4(input: &[u8]) -> (Vec<[u32; 256]>, [u32; 256]) {
 // ---------------------------------------------------------------------------
 
 fn varied_inputs() -> Vec<Vec<u8>> {
-    let mut v = Vec::new();
-    v.push(Vec::new());
-    v.push(vec![0u8]);
-    v.push(vec![42u8; 1]);
-    v.push((0u8..=255).collect());
-    v.push((0..1000u32).map(|i| (i * 7 % 256) as u8).collect());
-    v.push((0..1023u32).map(|i| (i % 13) as u8).collect());
+    let mut v = vec![
+        Vec::new(),
+        vec![0u8],
+        vec![42u8; 1],
+        (0u8..=255).collect(),
+        (0..1000u32).map(|i| (i * 7 % 256) as u8).collect(),
+        (0..1023u32).map(|i| (i % 13) as u8).collect(),
+    ];
     // Lengths around the 8-byte unroll boundary.
     for n in 0..40usize {
         v.push((0..n).map(|i| (i * 3 + 1) as u8).collect());
@@ -120,7 +121,12 @@ fn hist8_matches_reference_over_varied_inputs() {
         let mut f = [0u32; 256];
         let rc = hist8(&input, input.len() as u32, &mut f);
         assert_eq!(rc, 0);
-        assert_eq!(f, ref_hist8(&input), "hist8 mismatch for len {}", input.len());
+        assert_eq!(
+            f,
+            ref_hist8(&input),
+            "hist8 mismatch for len {}",
+            input.len()
+        );
     }
 }
 
@@ -171,8 +177,14 @@ fn hist1_4_matches_reference_over_varied_inputs() {
         assert_eq!(rc, 0);
 
         let (rf0, rt0) = ref_hist1_4(&input);
-        for i in 0..256 {
-            assert_eq!(f0[i], rf0[i], "F0 row {} mismatch len {}", i, input.len());
+        for (i, (actual, expected)) in f0.iter().zip(rf0.iter()).enumerate() {
+            assert_eq!(
+                actual,
+                expected,
+                "F0 row {} mismatch len {}",
+                i,
+                input.len()
+            );
         }
         assert_eq!(t0, rt0, "T0 mismatch len {}", input.len());
     }
@@ -197,8 +209,8 @@ fn hist1_4_large_input_path() {
     assert_eq!(rc, 0);
 
     let (rf0, rt0) = ref_hist1_4(&input);
-    for i in 0..256 {
-        assert_eq!(f0[i], rf0[i], "F0 row {} mismatch (large)", i);
+    for (i, (actual, expected)) in f0.iter().zip(rf0.iter()).enumerate() {
+        assert_eq!(actual, expected, "F0 row {} mismatch (large)", i);
     }
     assert_eq!(t0, rt0, "T0 mismatch (large)");
 }
@@ -298,7 +310,11 @@ fn fast_log_approximates_log2() {
     // Best accuracy near 1.0: the error around a in [1.0, 1.1] is small, and is
     // markedly worse at the doubling/halving points.
     let err = |a: f64| (fast_log(a) - a.log2()).abs();
-    assert!(err(1.05) < 0.02, "fast_log should be tight near 1.0: {}", err(1.05));
+    assert!(
+        err(1.05) < 0.02,
+        "fast_log should be tight near 1.0: {}",
+        err(1.05)
+    );
     assert!(err(2.0) > err(1.05), "error should grow away from 1.0");
     assert!(err(0.5) > err(1.05), "error should grow away from 1.0");
 }

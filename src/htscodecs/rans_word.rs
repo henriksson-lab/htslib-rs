@@ -6,7 +6,13 @@
 //! decoding) is modelled as an explicit `(buf, ptr)` pair where `ptr: usize` is
 //! an index into `buf`. This matches the convention already used by the sibling
 //! `rans_static` module and lets us stay byte-for-byte faithful to the C code.
-#![allow(non_snake_case, non_camel_case_types, unused_variables, dead_code, clippy::too_many_arguments)]
+#![allow(
+    non_snake_case,
+    non_camel_case_types,
+    unused_variables,
+    dead_code,
+    clippy::too_many_arguments
+)]
 
 // rANS_word.h:64
 /// `#define RANS_BYTE_L (1u << 15)` — lower bound of normalization interval.
@@ -62,7 +68,9 @@ pub fn RansEncRenorm(
     freq: u32,
     scale_bits: u32,
 ) -> RansState {
-    let x_max = ((RANS_BYTE_L >> scale_bits) << 16).wrapping_mul(freq).wrapping_sub(1);
+    let x_max = ((RANS_BYTE_L >> scale_bits) << 16)
+        .wrapping_mul(freq)
+        .wrapping_sub(1);
     if x > x_max {
         *pptr -= 2;
         out[*pptr] = (x & 0xff) as u8;
@@ -151,7 +159,9 @@ pub fn RansDecAdvance(
 /// `static inline void RansEncSymbolInit(RansEncSymbol* s, uint32_t start, uint32_t freq, uint32_t scale_bits)`
 #[inline]
 pub fn RansEncSymbolInit(s: &mut RansEncSymbol, start: u32, freq: u32, scale_bits: u32) {
-    s.x_max = ((RANS_BYTE_L >> scale_bits) << 16).wrapping_mul(freq).wrapping_sub(1);
+    s.x_max = ((RANS_BYTE_L >> scale_bits) << 16)
+        .wrapping_mul(freq)
+        .wrapping_sub(1);
     s.cmpl_freq = ((1u32 << scale_bits).wrapping_sub(freq)) as u16;
     if freq < 2 {
         s.rcp_freq = !0u32;
@@ -162,7 +172,7 @@ pub fn RansEncSymbolInit(s: &mut RansEncSymbol, start: u32, freq: u32, scale_bit
         while freq > (1u32 << shift) {
             shift += 1;
         }
-        s.rcp_freq = (((1u64 << (shift + 31)) + freq as u64 - 1) / freq as u64) as u32;
+        s.rcp_freq = (1u64 << (shift + 31)).div_ceil(freq as u64) as u32;
         s.rcp_shift = (shift - 1) as u16;
         s.bias = start;
     }
@@ -233,7 +243,14 @@ pub fn RansDecAdvanceSymbol(
     sym: &RansDecSymbol,
     scale_bits: u32,
 ) {
-    RansDecAdvance(r, input, pptr, sym.start as u32, sym.freq as u32, scale_bits);
+    RansDecAdvance(
+        r,
+        input,
+        pptr,
+        sym.start as u32,
+        sym.freq as u32,
+        scale_bits,
+    );
 }
 
 // rANS_word.h:392

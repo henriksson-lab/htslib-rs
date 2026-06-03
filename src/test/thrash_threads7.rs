@@ -34,7 +34,7 @@ pub unsafe fn test_thrash_threads7_c_49_main(_argc: c_int, _argv: *mut *mut c_ch
         }
     }
 
-    if libc::gettimeofday(&mut end, std::ptr::null_mut()) != 0 {
+    if crate::htslib_rs::c_compat::gettimeofday(&mut end, std::ptr::null_mut()) != 0 {
         libc::perror(c"gettimeofday".as_ptr());
         libc::exit(libc::EXIT_FAILURE);
     }
@@ -50,7 +50,11 @@ pub unsafe fn test_thrash_threads7_c_49_main(_argc: c_int, _argv: *mut *mut c_ch
 
         count += 1;
         if (count & 15) == 1 {
-            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"\r%d ".as_ptr(), count);
+            libc::fprintf(
+                crate::htslib_rs::c_compat::stderr.cast(),
+                c"\r%d ".as_ptr(),
+                count,
+            );
             libc::alarm(10);
         }
 
@@ -77,7 +81,7 @@ pub unsafe fn test_thrash_threads7_c_49_main(_argc: c_int, _argv: *mut *mut c_ch
             libc::exit(libc::EXIT_FAILURE);
         }
 
-        if libc::gettimeofday(&mut now, std::ptr::null_mut()) != 0 {
+        if crate::htslib_rs::c_compat::gettimeofday(&mut now, std::ptr::null_mut()) != 0 {
             libc::perror(c"gettimeofday".as_ptr());
             libc::exit(libc::EXIT_FAILURE);
         }

@@ -140,6 +140,40 @@ unsafe extern "C" {
     fn linked_zlib_version() -> *const c_char;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EncodedFdHFile(c_int);
+
+impl EncodedFdHFile {
+    const LOW_POINTER_LIMIT: usize = 4096;
+
+    fn from_fd(fd: c_int) -> Self {
+        Self(fd)
+    }
+
+    fn from_ptr(ptr: *mut super::hts::hFILE) -> Option<Self> {
+        if (ptr as usize) < Self::LOW_POINTER_LIMIT {
+            Some(Self((ptr as usize as isize - 1) as c_int))
+        } else {
+            None
+        }
+    }
+
+    fn as_ptr(self) -> *mut super::hts::hFILE {
+        (self.0 as isize + 1) as usize as *mut super::hts::hFILE
+    }
+
+    fn fd(self) -> c_int {
+        self.0
+    }
+}
+
+const BGZF_THREAD_ERROR_SENTINEL: *mut c_void = std::ptr::dangling_mut::<c_void>();
+
+#[cfg(test)]
+fn bgzf_test_non_null_mt_marker() -> *mut c_void {
+    std::ptr::dangling_mut::<c_void>()
+}
+
 pub(crate) struct ZlibFns {
     pub(crate) deflate_init2: DeflateInit2Fn,
     pub(crate) deflate: DeflateFn,
@@ -160,76 +194,9 @@ struct GzipStream {
 pub(crate) unsafe fn system_zlib() -> Option<&'static ZlibFns> {
     static ZLIB: OnceLock<Option<ZlibFns>> = OnceLock::new();
     ZLIB.get_or_init(|| unsafe {
-        // Prefer a dlopen()-loaded libz.so.1 (the real system zlib) over the
-        // statically-linked zlib provider that libz-sys may have bundled into
-        // the binary. Some libz-sys builds pull in zlib-ng, whose deflate
-        // output is not byte-identical to vanilla zlib for short inputs; using
-        // vanilla zlib here keeps the bgzip rebuild path bit-exact against
-        // fixtures produced with stock zlib (htslib's bgzip), which is what
-        // the rebgzip parity tests assert.
-        let dlopen_handles: [&[u8]; 4] = [
-            b"libz.so.1\0",
-            b"libz.so\0",
-            b"libz.dylib\0",
-            b"libz.1.dylib\0",
-        ];
-        for name in dlopen_handles.iter() {
-            let handle = libc::dlopen(name.as_ptr().cast(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
-            if handle.is_null() {
-                continue;
-            }
-            let deflate_init2 = libc::dlsym(handle, c"deflateInit2_".as_ptr());
-            let deflate = libc::dlsym(handle, c"deflate".as_ptr());
-            let deflate_end = libc::dlsym(handle, c"deflateEnd".as_ptr());
-            let inflate_init2 = libc::dlsym(handle, c"inflateInit2_".as_ptr());
-            let inflate = libc::dlsym(handle, c"inflate".as_ptr());
-            let inflate_reset = libc::dlsym(handle, c"inflateReset".as_ptr());
-            let inflate_end = libc::dlsym(handle, c"inflateEnd".as_ptr());
-            let crc32 = libc::dlsym(handle, c"crc32".as_ptr());
-            let zlib_version = libc::dlsym(handle, c"zlibVersion".as_ptr());
-
-            if !deflate_init2.is_null()
-                && !deflate.is_null()
-                && !deflate_end.is_null()
-                && !inflate_init2.is_null()
-                && !inflate.is_null()
-                && !inflate_reset.is_null()
-                && !inflate_end.is_null()
-                && !crc32.is_null()
-                && !zlib_version.is_null()
-            {
-                let version_fn: ZlibVersionFn =
-                    std::mem::transmute::<*mut c_void, ZlibVersionFn>(zlib_version);
-                let raw_ver = version_fn();
-                // Reject zlib-ng even if it is what dlopen happens to find
-                // first (e.g. via LD_LIBRARY_PATH). We want stock zlib's
-                // deflate output for byte-exact reconstruction tests.
-                let is_ng =
-                    !raw_ver.is_null() && !libc::strstr(raw_ver, c"zlib-ng".as_ptr()).is_null();
-                if !is_ng {
-                    return Some(ZlibFns {
-                        deflate_init2: std::mem::transmute::<*mut c_void, DeflateInit2Fn>(
-                            deflate_init2,
-                        ),
-                        deflate: std::mem::transmute::<*mut c_void, DeflateFn>(deflate),
-                        deflate_end: std::mem::transmute::<*mut c_void, DeflateEndFn>(deflate_end),
-                        inflate_init2: std::mem::transmute::<*mut c_void, InflateInit2Fn>(
-                            inflate_init2,
-                        ),
-                        inflate: std::mem::transmute::<*mut c_void, InflateFn>(inflate),
-                        inflate_reset: std::mem::transmute::<*mut c_void, InflateResetFn>(
-                            inflate_reset,
-                        ),
-                        inflate_end: std::mem::transmute::<*mut c_void, InflateEndFn>(inflate_end),
-                        crc32: std::mem::transmute::<*mut c_void, Crc32Fn>(crc32),
-                        zlib_version: version_fn,
-                    });
-                }
-            }
-            libc::dlclose(handle);
-        }
-
-        // Fall back to whatever's statically linked into the binary.
+        // This translation uses the statically linked zlib provider from
+        // libz-sys. Avoid runtime dlopen()/dlsym() probing so portability
+        // depends on Cargo linkage rather than platform dynamic-loader APIs.
         if !linked_zlib_version().is_null() {
             return Some(ZlibFns {
                 deflate_init2: linked_deflate_init2,
@@ -334,8 +301,8 @@ pub struct bgzf_mtaux_t {
     pub own_pool: c_int,
     pub pool: *mut super::thread_pool::hts_tpool,
     pub out_queue: *mut c_void,
-    pub io_task: libc::pthread_t,
-    pub job_pool_m: libc::pthread_mutex_t,
+    pub io_task: crate::htslib_rs::c_compat::pthread_t,
+    pub job_pool_m: crate::htslib_rs::c_compat::pthread_mutex_t,
     pub jobs_pending: c_int,
     pub flush_pending: c_int,
     pub free_block: *mut c_void,
@@ -343,10 +310,10 @@ pub struct bgzf_mtaux_t {
     pub errcode: c_int,
     pub block_address: u64,
     pub eof: c_int,
-    pub command_m: libc::pthread_mutex_t,
-    pub command_c: libc::pthread_cond_t,
+    pub command_m: crate::htslib_rs::c_compat::pthread_mutex_t,
+    pub command_c: crate::htslib_rs::c_compat::pthread_cond_t,
     pub command: mtaux_cmd,
-    pub idx_m: libc::pthread_mutex_t,
+    pub idx_m: crate::htslib_rs::c_compat::pthread_mutex_t,
     pub hts_idx: *mut hts_idx_t,
     pub block_number: u64,
     pub block_written: u64,
@@ -395,7 +362,7 @@ pub unsafe fn bgzf_c_189_bgzf_idx_push(
         return -1;
     }
 
-    libc::pthread_mutex_lock(&mut (*mt).idx_m);
+    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*mt).idx_m);
 
     (*mt).hts_idx = hidx;
     let ic = &mut (*mt).idx_cache as *mut hts_idx_cache_t;
@@ -412,7 +379,7 @@ pub unsafe fn bgzf_c_189_bgzf_idx_push(
         )
         .cast::<hts_idx_cache_entry>();
         if e.is_null() {
-            libc::pthread_mutex_unlock(&mut (*mt).idx_m);
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
             return -1;
         }
         (*ic).e = e;
@@ -428,7 +395,7 @@ pub unsafe fn bgzf_c_189_bgzf_idx_push(
     (*e).offset = offset & 0xffff;
     (*e).block_number = (*mt).block_number;
 
-    libc::pthread_mutex_unlock(&mut (*mt).idx_m);
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
 
     0
 }
@@ -446,7 +413,7 @@ pub unsafe fn bgzf_c_228_bgzf_idx_flush(
         return 0;
     }
 
-    libc::pthread_mutex_lock(&mut (*mt).idx_m);
+    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*mt).idx_m);
 
     let e = (*mt).idx_cache.e;
     let mut i = 0;
@@ -463,7 +430,7 @@ pub unsafe fn bgzf_c_228_bgzf_idx_flush(
                 (*entry).is_mapped,
             ) < 0
             {
-                libc::pthread_mutex_unlock(&mut (*mt).idx_m);
+                crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
                 return -1;
             }
             i += 1;
@@ -479,7 +446,7 @@ pub unsafe fn bgzf_c_228_bgzf_idx_flush(
             (*entry).is_mapped,
         ) < 0
         {
-            libc::pthread_mutex_unlock(&mut (*mt).idx_m);
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
             return -1;
         }
         i += 1;
@@ -493,7 +460,7 @@ pub unsafe fn bgzf_c_228_bgzf_idx_flush(
     (*mt).idx_cache.nentries -= i;
     (*mt).block_written += 1;
 
-    libc::pthread_mutex_unlock(&mut (*mt).idx_m);
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
 
     0
 }
@@ -577,6 +544,16 @@ pub unsafe fn packInt32(buffer: *mut u8, value: u32) {
     *buffer.add(3) = (value >> 24) as u8;
 }
 
+unsafe fn bgzf_zerr_unknown(errnum: c_int) -> *const c_char {
+    // Pointer into the *current thread's* BGZF_ZERR_BUFFER. The TLS slot lives
+    // for the thread's lifetime, so the pointer remains valid for the rest of
+    // this thread's existence; a later same-thread `bgzf_zerr` is the only
+    // thing that may overwrite it.
+    let buffer = BGZF_ZERR_BUFFER.with(|cell| cell.get().cast::<c_char>());
+    libc::snprintf(buffer, 32, c"[%d] unknown".as_ptr(), errnum);
+    buffer.cast()
+}
+
 pub unsafe fn bgzf_zerr(errnum: c_int, zs: *mut z_stream_s) -> *const c_char {
     if !zs.is_null() && !(*zs).msg.is_null() {
         return (*zs).msg;
@@ -594,17 +571,8 @@ pub unsafe fn bgzf_zerr(errnum: c_int, zs: *mut z_stream_s) -> *const c_char {
             .cast(),
         Z_VERSION_ERROR => c"zlib version mismatch".as_ptr().cast(),
         Z_NEED_DICT => c"data was compressed using a dictionary".as_ptr().cast(),
-        Z_OK | _ => {
-            // Pointer into the *current thread's* BGZF_ZERR_BUFFER. The TLS
-            // slot lives for the thread's lifetime, so the pointer remains
-            // valid for the rest of this thread's existence; htslib callers
-            // consume the message synchronously before doing any further
-            // bgzf work, so a later same-thread `bgzf_zerr` is the only
-            // thing that may overwrite it.
-            let buffer = BGZF_ZERR_BUFFER.with(|cell| cell.get().cast::<c_char>());
-            libc::snprintf(buffer, 32, c"[%d] unknown".as_ptr(), errnum);
-            buffer.cast()
-        }
+        Z_OK => bgzf_zerr_unknown(errnum),
+        _ => bgzf_zerr_unknown(errnum),
     }
 }
 
@@ -860,11 +828,13 @@ pub unsafe fn bgzf_c_762_bgzf_uncompress(
 }
 
 fn fd_to_ptr(fd: c_int) -> *mut super::hts::hFILE {
-    (fd as isize + 1) as usize as *mut super::hts::hFILE
+    EncodedFdHFile::from_fd(fd).as_ptr()
 }
 
 fn ptr_to_fd(ptr: *mut super::hts::hFILE) -> c_int {
-    (ptr as usize as isize - 1) as c_int
+    EncodedFdHFile::from_ptr(ptr)
+        .expect("BGZF encoded fd pointer")
+        .fd()
 }
 
 fn mode_has(mode: &[u8], needle: u8) -> bool {
@@ -872,11 +842,11 @@ fn mode_has(mode: &[u8], needle: u8) -> bool {
 }
 
 unsafe fn fd_read(fd: c_int, buffer: *mut c_void, nbytes: usize) -> isize {
-    libc::read(fd, buffer, nbytes)
+    crate::htslib_rs::c_compat::fd_read(fd, buffer, nbytes) as isize
 }
 
 unsafe fn fd_write(fd: c_int, buffer: *const c_void, nbytes: usize) -> isize {
-    libc::write(fd, buffer, nbytes)
+    crate::htslib_rs::c_compat::fd_write(fd, buffer, nbytes) as isize
 }
 
 unsafe fn fd_seek(fd: c_int, offset: i64, whence: c_int) -> i64 {
@@ -888,7 +858,7 @@ unsafe fn fd_tell(fd: c_int) -> i64 {
 }
 
 fn ptr_is_encoded_fd(ptr: *mut super::hts::hFILE) -> bool {
-    (ptr as usize) < 4096
+    EncodedFdHFile::from_ptr(ptr).is_some()
 }
 
 unsafe fn bgzf_hread_ptr(fp: *mut super::hts::hFILE, buffer: *mut c_void, nbytes: usize) -> isize {
@@ -915,7 +885,7 @@ unsafe fn bgzf_hseek_ptr(fp: *mut super::hts::hFILE, offset: i64, whence: c_int)
     if ptr_is_encoded_fd(fp) {
         fd_seek(ptr_to_fd(fp), offset, whence)
     } else {
-        super::hfile::hseek(fp, offset, whence)
+        super::hfile::hseek(fp, offset as libc::off_t, whence) as i64
     }
 }
 
@@ -1286,13 +1256,13 @@ unsafe fn bgzf_read_init(fd: c_int) -> *mut BGZF {
     bgzf_read_init_hfile(fd_to_ptr(fd))
 }
 
-unsafe fn bgzf_write_init(fd: c_int, mode: &[u8]) -> *mut BGZF {
+unsafe fn bgzf_write_init_hfile(hfp: *mut super::hts::hFILE, mode: &[u8]) -> *mut BGZF {
     let fp = c_compat::calloc(1, std::mem::size_of::<BGZF>() as u64).cast::<BGZF>();
     if fp.is_null() {
         return ptr::null_mut();
     }
     set_flag(fp, 17, true);
-    (*fp).fp = fd_to_ptr(fd);
+    (*fp).fp = hfp;
     let cache = bgzf_alloc_cache();
     if cache.is_null() {
         c_compat::free(fp.cast());
@@ -1317,7 +1287,7 @@ unsafe fn bgzf_write_init(fd: c_int, mode: &[u8]) -> *mut BGZF {
     set_flag(fp, 30, true);
     set_compress_level(
         fp,
-        if level < 0 || level > 9 {
+        if !(0..=9).contains(&level) {
             Z_DEFAULT_COMPRESSION
         } else {
             level
@@ -1337,6 +1307,10 @@ unsafe fn bgzf_write_init(fd: c_int, mode: &[u8]) -> *mut BGZF {
         (*fp).gz_stream = Box::into_raw(stream).cast();
     }
     fp
+}
+
+unsafe fn bgzf_write_init(fd: c_int, mode: &[u8]) -> *mut BGZF {
+    bgzf_write_init_hfile(fd_to_ptr(fd), mode)
 }
 
 unsafe fn bgzf_free_without_hclose(fp: *mut BGZF) {
@@ -1827,9 +1801,9 @@ pub unsafe extern "C" fn bgzf_c_1322_job_cleanup(arg: *mut c_void) {
     let job = arg.cast::<bgzf_job>();
     let mt = (*(*job).fp).mt.cast::<bgzf_mtaux_t>();
 
-    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     super::cram::cram_pooled_alloc_c_144_pool_free((*mt).job_pool.cast(), job.cast());
-    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
 }
 
 unsafe fn bgzf_encode_job(job: *mut bgzf_job, level: c_int) -> *mut c_void {
@@ -1919,10 +1893,10 @@ unsafe fn bgzf_mt_alloc_job(fp: *mut BGZF) -> *mut bgzf_job {
         return ptr::null_mut();
     }
 
-    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     let job =
         super::cram::cram_pooled_alloc_c_115_pool_alloc((*mt).job_pool.cast()).cast::<bgzf_job>();
-    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
     if !job.is_null() {
         ptr::write_bytes(job, 0, 1);
         (*job).fp = fp;
@@ -1938,9 +1912,9 @@ unsafe fn bgzf_mt_free_job(fp: *mut BGZF, job: *mut bgzf_job) {
     if mt.is_null() || (*mt).job_pool.is_null() {
         return;
     }
-    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     super::cram::cram_pooled_alloc_c_144_pool_free((*mt).job_pool.cast(), job.cast());
-    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
 }
 
 unsafe fn bgzf_mt_dispatch(
@@ -1966,14 +1940,14 @@ unsafe fn bgzf_mt_dispatch(
     // same mutex; otherwise a concurrent main-thread ++ and a writer-thread
     // -- can race and drop the writer's decrement, pinning jobs_pending above
     // zero forever and deadlocking mt_flush_queue.
-    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     (*mt).jobs_pending += 1;
-    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
     0
 }
 
 // original: bgzf_mt_writer (htslib/bgzf.c:1398)
-pub extern "C" fn bgzf_c_1398_bgzf_mt_writer(arg: *mut c_void) -> *mut c_void {
+extern "C" fn bgzf_c_1398_bgzf_mt_writer(arg: *mut c_void) -> *mut c_void {
     unsafe { bgzf_mt_writer_impl(arg) }
 }
 
@@ -1989,7 +1963,6 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
         return ptr::null_mut();
     }
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
-    let one: *mut c_void = 1usize as *mut c_void;
 
     let mut hflush_counter: u32 = 0;
     let mut sticky_err: c_int = 0;
@@ -2020,10 +1993,12 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
                 if written != (*job).comp_len as isize {
                     sticky_err = BGZF_ERR_IO as c_int;
                 } else {
-                    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).idx_m));
+                    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).idx_m));
                     (*mt).block_address += (*job).comp_len as u64;
                     (*fp).block_address = (*mt).block_address as i64;
-                    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).idx_m));
+                    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(
+                        (*mt).idx_m
+                    ));
 
                     hflush_counter = hflush_counter.wrapping_add(1);
                     if hflush_counter.is_multiple_of(512) && bgzf_hflush_ptr((*fp).fp) != 0 {
@@ -2035,10 +2010,10 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
 
         super::thread_pool::hts_tpool_delete_result(result, 0);
         if !job.is_null() {
-            libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+            crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
             super::cram::cram_pooled_alloc_c_144_pool_free((*mt).job_pool.cast(), job.cast());
             (*mt).jobs_pending -= 1;
-            libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
         }
     }
 
@@ -2046,7 +2021,7 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
         add_errcode(fp, sticky_err as u32);
         (*mt).errcode = sticky_err;
         super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
-        return one;
+        return BGZF_THREAD_ERROR_SENTINEL;
     }
 
     super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
@@ -2211,7 +2186,7 @@ pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
 }
 
 // original: bgzf_mt_reader (htslib/bgzf.c:1598)
-pub extern "C" fn bgzf_c_1598_bgzf_mt_reader(arg: *mut c_void) -> *mut c_void {
+extern "C" fn bgzf_c_1598_bgzf_mt_reader(arg: *mut c_void) -> *mut c_void {
     unsafe { bgzf_mt_reader_impl(arg) }
 }
 
@@ -2223,26 +2198,28 @@ unsafe fn bgzf_mt_reader_impl(arg: *mut c_void) -> *mut c_void {
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
 
     loop {
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
         while (*mt).command == mtaux_cmd::NONE {
-            libc::pthread_cond_wait(
+            crate::htslib_rs::c_compat::pthread_cond_wait(
                 ptr::addr_of_mut!((*mt).command_c),
                 ptr::addr_of_mut!((*mt).command_m),
             );
         }
         let command = (*mt).command;
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
 
         match command {
             mtaux_cmd::SEEK => bgzf_c_1583_bgzf_mt_seek(fp),
             mtaux_cmd::HAS_EOF => bgzf_c_1566_bgzf_mt_eof(fp),
             mtaux_cmd::CLOSE => break,
             mtaux_cmd::SEEK_DONE | mtaux_cmd::HAS_EOF_DONE | mtaux_cmd::NONE => {
-                libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
+                crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
                 if (*mt).command == command {
                     (*mt).command = mtaux_cmd::NONE;
                 }
-                libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
+                crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(
+                    (*mt).command_m
+                ));
             }
         }
     }
@@ -2254,26 +2231,26 @@ unsafe fn bgzf_mt_reader_impl(arg: *mut c_void) -> *mut c_void {
 pub unsafe fn bgzf_c_1805_mt_destroy(mt: *mut bgzf_mtaux_t) -> c_int {
     let mut ret: c_int;
 
-    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
+    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
     (*mt).command = mtaux_cmd::CLOSE;
-    libc::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
+    crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
     super::thread_pool::hts_tpool_wake_dispatch((*mt).out_queue.cast());
-    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
 
     ret =
         -((super::thread_pool::hts_tpool_process_is_shutdown((*mt).out_queue.cast()) > 1) as c_int);
     super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
 
     let mut retval: *mut c_void = ptr::null_mut();
-    libc::pthread_join((*mt).io_task, ptr::addr_of_mut!(retval));
+    crate::htslib_rs::c_compat::pthread_join((*mt).io_task, ptr::addr_of_mut!(retval));
     if !retval.is_null() {
         ret = -1;
     }
 
-    libc::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).job_pool_m));
-    libc::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).command_m));
-    libc::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).idx_m));
-    libc::pthread_cond_destroy(ptr::addr_of_mut!((*mt).command_c));
+    crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).command_m));
+    crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).idx_m));
+    crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!((*mt).command_c));
 
     if !(*mt).curr_job.is_null() {
         super::cram::cram_pooled_alloc_c_144_pool_free(
@@ -2370,18 +2347,18 @@ pub unsafe fn bgzf_c_1897_mt_flush_queue(fp: *mut BGZF) -> c_int {
     // the queue ourselves here: that would race with the writer thread and
     // either drop a block on the floor or reorder writes. Mirrors the
     // jobs_pending loop in C mt_flush_queue (htslib/bgzf.c:1907).
-    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     while (*mt).jobs_pending != 0 {
-        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
         if super::thread_pool::hts_tpool_process_is_shutdown((*mt).out_queue.cast()) != 0 {
             add_errcode(fp, BGZF_ERR_IO);
             (*mt).errcode = BGZF_ERR_IO as c_int;
             return -1;
         }
-        libc::usleep(10_000);
-        libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+        crate::htslib_rs::c_compat::usleep(10_000);
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     }
-    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
 
     if (*mt).errcode != 0 {
         add_errcode(fp, (*mt).errcode as u32);
@@ -2438,7 +2415,7 @@ pub unsafe fn bgzf_open(path: *const c_char, mode: *const c_char) -> *mut BGZF {
         if hfp.is_null() {
             return ptr::null_mut();
         }
-        let fp = bgzf_write_init(ptr_to_fd(hfp), mode_bytes);
+        let fp = bgzf_write_init_hfile(hfp, mode_bytes);
         if fp.is_null() {
             super::hfile::hclose(hfp);
             return ptr::null_mut();
@@ -2476,7 +2453,7 @@ pub unsafe fn bgzf_dopen(fd: c_int, mode: *const c_char) -> *mut BGZF {
         if hfp.is_null() {
             return ptr::null_mut();
         }
-        let fp = bgzf_write_init(ptr_to_fd(hfp), mode_bytes);
+        let fp = bgzf_write_init_hfile(hfp, mode_bytes);
         if fp.is_null() {
             super::hfile::hclose(hfp);
             return ptr::null_mut();
@@ -2505,7 +2482,7 @@ pub unsafe fn bgzf_hopen(hfp: *mut super::hts::hFILE, mode: *const c_char) -> *m
         set_flag(fp, 19, ed_is_big() != 0);
         fp
     } else if mode_has(mode_bytes, b'w') || mode_has(mode_bytes, b'a') {
-        let fp = bgzf_write_init(ptr_to_fd(hfp), mode_bytes);
+        let fp = bgzf_write_init_hfile(hfp, mode_bytes);
         if fp.is_null() {
             return ptr::null_mut();
         }
@@ -3125,11 +3102,11 @@ pub unsafe fn bgzf_c_1542_bgzf_check_EOF_common(fp: *mut BGZF) -> c_int {
 pub unsafe fn bgzf_c_1566_bgzf_mt_eof(fp: *mut BGZF) {
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
 
-    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     (*mt).eof = bgzf_c_1542_bgzf_check_EOF_common(fp);
-    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
     (*mt).command = mtaux_cmd::HAS_EOF_DONE;
-    libc::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
+    crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
 }
 
 // original: bgzf_mt_seek (htslib/bgzf.c:1583)
@@ -3137,16 +3114,16 @@ pub unsafe fn bgzf_c_1583_bgzf_mt_seek(fp: *mut BGZF) {
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
 
     super::thread_pool::hts_tpool_process_reset((*mt).out_queue.cast(), 0);
-    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     (*mt).errcode = 0;
 
     if bgzf_hseek_ptr((*fp).fp, (*mt).block_address as i64, SEEK_SET) < 0 {
         (*mt).errcode = *c_compat::__errno_location();
     }
 
-    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
     (*mt).command = mtaux_cmd::SEEK_DONE;
-    libc::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
+    crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
 }
 
 pub unsafe fn bgzf_is_bgzf(fn_: *const c_char) -> c_int {
@@ -3334,10 +3311,22 @@ unsafe fn bgzf_mt_init(
         return -1;
     }
 
-    if libc::pthread_mutex_init(ptr::addr_of_mut!((*mt).job_pool_m), ptr::null()) != 0
-        || libc::pthread_mutex_init(ptr::addr_of_mut!((*mt).command_m), ptr::null()) != 0
-        || libc::pthread_mutex_init(ptr::addr_of_mut!((*mt).idx_m), ptr::null()) != 0
-        || libc::pthread_cond_init(ptr::addr_of_mut!((*mt).command_c), ptr::null()) != 0
+    if crate::htslib_rs::c_compat::pthread_mutex_init(
+        ptr::addr_of_mut!((*mt).job_pool_m),
+        ptr::null(),
+    ) != 0
+        || crate::htslib_rs::c_compat::pthread_mutex_init(
+            ptr::addr_of_mut!((*mt).command_m),
+            ptr::null(),
+        ) != 0
+        || crate::htslib_rs::c_compat::pthread_mutex_init(
+            ptr::addr_of_mut!((*mt).idx_m),
+            ptr::null(),
+        ) != 0
+        || crate::htslib_rs::c_compat::pthread_cond_init(
+            ptr::addr_of_mut!((*mt).command_c),
+            ptr::null(),
+        ) != 0
     {
         super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
         super::cram::cram_pooled_alloc_c_84_pool_destroy((*mt).job_pool.cast());
@@ -3365,7 +3354,7 @@ unsafe fn bgzf_mt_init(
         super::thread_pool::hts_tpool_process_ref_incr((*mt).out_queue.cast());
     }
 
-    if libc::pthread_create(
+    if crate::htslib_rs::c_compat::pthread_create(
         ptr::addr_of_mut!((*mt).io_task),
         ptr::null(),
         start,
@@ -3376,10 +3365,10 @@ unsafe fn bgzf_mt_init(
             super::thread_pool::hts_tpool_process_ref_decr((*mt).out_queue.cast());
         }
         (*fp).mt = ptr::null_mut();
-        libc::pthread_cond_destroy(ptr::addr_of_mut!((*mt).command_c));
-        libc::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).idx_m));
-        libc::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).command_m));
-        libc::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).job_pool_m));
+        crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!((*mt).command_c));
+        crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).idx_m));
+        crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).command_m));
+        crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).job_pool_m));
         super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
         super::cram::cram_pooled_alloc_c_84_pool_destroy((*mt).job_pool.cast());
         if own_pool != 0 {
@@ -3702,6 +3691,17 @@ mod tests {
     };
 
     #[test]
+    fn bgzf_encoded_fd_hfile_round_trips_without_raw_pointer_arithmetic() {
+        let ptr = fd_to_ptr(7);
+        assert!(ptr_is_encoded_fd(ptr));
+        assert_eq!(ptr_to_fd(ptr), 7);
+
+        let mut marker = 0u8;
+        let realish = (&mut marker as *mut u8).cast::<super::super::hts::hFILE>();
+        assert!(!ptr_is_encoded_fd(realish));
+    }
+
+    #[test]
     fn translated_bgzf_reads_and_seeks_noodles_bgzf_file() {
         let path = std::env::temp_dir().join(format!(
             "cellsnp-lite-bgzf-{}-{}.gz",
@@ -3718,7 +3718,7 @@ mod tests {
 
         let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
         unsafe {
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
 
             let mut buf = vec![0u8; payload.len()];
@@ -3967,7 +3967,7 @@ mod tests {
                 );
                 assert_eq!(bgzf_close(fp), 0);
 
-                let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+                let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
                 assert!(!fp.is_null());
                 if *nthreads > 0 {
                     assert_eq!(bgzf_mt(fp, *nthreads, 64), 0);
@@ -3982,11 +3982,11 @@ mod tests {
             }
 
             // Finally: embed_eof sequence (single-thread).
-            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(bgzf_write(fp, payload.as_ptr().cast(), half), half as isize,);
             assert_eq!(bgzf_close(fp), 0);
-            let fp = bgzf_open(path_c.as_ptr(), b"a\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"a".as_ptr());
             assert!(!fp.is_null());
             let rest = payload.len() - half;
             assert_eq!(
@@ -3994,7 +3994,7 @@ mod tests {
                 rest as isize,
             );
             assert_eq!(bgzf_close(fp), 0);
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             let mut out = vec![0u8; payload.len()];
             let mut pos = 0usize;
@@ -4034,7 +4034,7 @@ mod tests {
 
         unsafe {
             // ===== mimic test_write_read("w", nthreads=2) =====
-            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(bgzf_mt(fp, 2, 64), 0);
             assert_eq!(
@@ -4042,7 +4042,7 @@ mod tests {
                 payload.len() as isize,
             );
             assert_eq!(bgzf_close(fp), 0);
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(bgzf_mt(fp, 2, 64), 0);
             let mut tmp = vec![0u8; payload.len()];
@@ -4053,11 +4053,11 @@ mod tests {
             assert_eq!(bgzf_close(fp), 0);
 
             // ===== mimic test_embed_eof(nthreads=0) =====
-            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(bgzf_write(fp, payload.as_ptr().cast(), half), half as isize,);
             assert_eq!(bgzf_close(fp), 0);
-            let fp = bgzf_open(path_c.as_ptr(), b"a\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"a".as_ptr());
             assert!(!fp.is_null());
             let rest = payload.len() - half;
             assert_eq!(
@@ -4065,7 +4065,7 @@ mod tests {
                 rest as isize,
             );
             assert_eq!(bgzf_close(fp), 0);
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             let mut out = vec![0u8; payload.len()];
             let mut pos = 0usize;
@@ -4105,14 +4105,14 @@ mod tests {
 
         unsafe {
             // ===== mimic test_write_read("w") =====
-            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(
                 bgzf_write(fp, payload.as_ptr().cast(), payload.len()),
                 payload.len() as isize,
             );
             assert_eq!(bgzf_close(fp), 0);
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             let mut tmp = vec![0u8; payload.len()];
             assert_eq!(
@@ -4122,14 +4122,14 @@ mod tests {
             assert_eq!(bgzf_close(fp), 0);
 
             // ===== mimic test_write_read("wu") =====
-            let fp = bgzf_open(path_c.as_ptr(), b"wu\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"wu".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(
                 bgzf_write(fp, payload.as_ptr().cast(), payload.len()),
                 payload.len() as isize,
             );
             assert_eq!(bgzf_close(fp), 0);
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(
                 bgzf_read(fp, tmp.as_mut_ptr().cast(), tmp.len()),
@@ -4138,11 +4138,11 @@ mod tests {
             assert_eq!(bgzf_close(fp), 0);
 
             // ===== mimic test_embed_eof =====
-            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(bgzf_write(fp, payload.as_ptr().cast(), half), half as isize,);
             assert_eq!(bgzf_close(fp), 0);
-            let fp = bgzf_open(path_c.as_ptr(), b"a\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"a".as_ptr());
             assert!(!fp.is_null());
             let rest = payload.len() - half;
             assert_eq!(
@@ -4150,7 +4150,7 @@ mod tests {
                 rest as isize,
             );
             assert_eq!(bgzf_close(fp), 0);
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             let mut out = vec![0u8; payload.len()];
             let mut pos = 0usize;
@@ -4191,13 +4191,13 @@ mod tests {
 
         unsafe {
             // Write first half in "w" mode (terminates with empty EOF block).
-            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(bgzf_write(fp, payload.as_ptr().cast(), half), half as isize,);
             assert_eq!(bgzf_close(fp), 0);
 
             // Append remainder in "a" mode (writes more blocks then another EOF).
-            let fp = bgzf_open(path_c.as_ptr(), b"a\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"a".as_ptr());
             assert!(!fp.is_null());
             let rest = payload.len() - half;
             assert_eq!(
@@ -4207,7 +4207,7 @@ mod tests {
             assert_eq!(bgzf_close(fp), 0);
 
             // Read back: every byte must come through, despite the embedded EOF block.
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             let mut out = vec![0u8; payload.len()];
             let mut pos = 0usize;
@@ -4240,7 +4240,7 @@ mod tests {
         let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
 
         unsafe {
-            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(
                 bgzf_write(fp, payload.as_ptr().cast(), payload.len()),
@@ -4271,7 +4271,7 @@ mod tests {
         let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
 
         unsafe {
-            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(
                 bgzf_write(fp, payload.as_ptr().cast(), payload.len()),
@@ -4279,7 +4279,7 @@ mod tests {
             );
             assert_eq!(bgzf_close(fp), 0);
 
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
 
             let mut first_block = vec![0u8; BGZF_BLOCK_SIZE];
@@ -4319,7 +4319,7 @@ mod tests {
         let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
 
         unsafe {
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(bgzf_hseek_ptr((*fp).fp, 3, libc::SEEK_SET), 3);
             (*fp).seeked = 123;
@@ -4539,11 +4539,17 @@ mod tests {
 
             let mut mt: bgzf_mtaux_t = std::mem::zeroed();
             assert_eq!(
-                libc::pthread_mutex_init(ptr::addr_of_mut!(mt.job_pool_m), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_mutex_init(
+                    ptr::addr_of_mut!(mt.job_pool_m),
+                    ptr::null()
+                ),
                 0
             );
             assert_eq!(
-                libc::pthread_cond_init(ptr::addr_of_mut!(mt.command_c), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_cond_init(
+                    ptr::addr_of_mut!(mt.command_c),
+                    ptr::null()
+                ),
                 0
             );
             mt.command = mtaux_cmd::HAS_EOF;
@@ -4557,11 +4563,11 @@ mod tests {
 
             (*fp).mt = ptr::null_mut();
             assert_eq!(
-                libc::pthread_cond_destroy(ptr::addr_of_mut!(mt.command_c)),
+                crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(mt.command_c)),
                 0
             );
             assert_eq!(
-                libc::pthread_mutex_destroy(ptr::addr_of_mut!(mt.job_pool_m)),
+                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(mt.job_pool_m)),
                 0
             );
             assert_eq!(bgzf_close(fp), 0);
@@ -4597,11 +4603,17 @@ mod tests {
 
             let mut mt: bgzf_mtaux_t = std::mem::zeroed();
             assert_eq!(
-                libc::pthread_mutex_init(ptr::addr_of_mut!(mt.job_pool_m), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_mutex_init(
+                    ptr::addr_of_mut!(mt.job_pool_m),
+                    ptr::null()
+                ),
                 0
             );
             assert_eq!(
-                libc::pthread_cond_init(ptr::addr_of_mut!(mt.command_c), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_cond_init(
+                    ptr::addr_of_mut!(mt.command_c),
+                    ptr::null()
+                ),
                 0
             );
             mt.out_queue = queue.cast();
@@ -4618,11 +4630,11 @@ mod tests {
 
             (*fp).mt = ptr::null_mut();
             assert_eq!(
-                libc::pthread_cond_destroy(ptr::addr_of_mut!(mt.command_c)),
+                crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(mt.command_c)),
                 0
             );
             assert_eq!(
-                libc::pthread_mutex_destroy(ptr::addr_of_mut!(mt.job_pool_m)),
+                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(mt.job_pool_m)),
                 0
             );
             assert_eq!(bgzf_close(fp), 0);
@@ -4644,7 +4656,10 @@ mod tests {
             let mut fp: BGZF = std::mem::zeroed();
             let mut mt: bgzf_mtaux_t = std::mem::zeroed();
             assert_eq!(
-                libc::pthread_mutex_init(ptr::addr_of_mut!(mt.job_pool_m), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_mutex_init(
+                    ptr::addr_of_mut!(mt.job_pool_m),
+                    ptr::null()
+                ),
                 0
             );
             mt.job_pool = pool.cast();
@@ -4662,7 +4677,7 @@ mod tests {
             assert_eq!(reused, job);
 
             assert_eq!(
-                libc::pthread_mutex_destroy(ptr::addr_of_mut!(mt.job_pool_m)),
+                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(mt.job_pool_m)),
                 0
             );
             super::super::cram::cram_pooled_alloc_c_84_pool_destroy(pool);
@@ -4672,14 +4687,14 @@ mod tests {
     extern "C" fn mt_destroy_test_io_thread(arg: *mut c_void) -> *mut c_void {
         unsafe {
             let mt = arg.cast::<bgzf_mtaux_t>();
-            libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
+            crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
             while (*mt).command != mtaux_cmd::CLOSE {
-                libc::pthread_cond_wait(
+                crate::htslib_rs::c_compat::pthread_cond_wait(
                     ptr::addr_of_mut!((*mt).command_c),
                     ptr::addr_of_mut!((*mt).command_m),
                 );
             }
-            libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
         }
         ptr::null_mut()
     }
@@ -4691,19 +4706,31 @@ mod tests {
                 .cast::<bgzf_mtaux_t>();
             assert!(!mt.is_null());
             assert_eq!(
-                libc::pthread_mutex_init(ptr::addr_of_mut!((*mt).job_pool_m), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_mutex_init(
+                    ptr::addr_of_mut!((*mt).job_pool_m),
+                    ptr::null()
+                ),
                 0
             );
             assert_eq!(
-                libc::pthread_mutex_init(ptr::addr_of_mut!((*mt).command_m), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_mutex_init(
+                    ptr::addr_of_mut!((*mt).command_m),
+                    ptr::null()
+                ),
                 0
             );
             assert_eq!(
-                libc::pthread_mutex_init(ptr::addr_of_mut!((*mt).idx_m), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_mutex_init(
+                    ptr::addr_of_mut!((*mt).idx_m),
+                    ptr::null()
+                ),
                 0
             );
             assert_eq!(
-                libc::pthread_cond_init(ptr::addr_of_mut!((*mt).command_c), ptr::null()),
+                crate::htslib_rs::c_compat::pthread_cond_init(
+                    ptr::addr_of_mut!((*mt).command_c),
+                    ptr::null()
+                ),
                 0
             );
 
@@ -4728,7 +4755,7 @@ mod tests {
             (*mt).own_pool = 1;
 
             assert_eq!(
-                libc::pthread_create(
+                crate::htslib_rs::c_compat::pthread_create(
                     ptr::addr_of_mut!((*mt).io_task),
                     ptr::null(),
                     mt_destroy_test_io_thread,
@@ -4989,7 +5016,7 @@ mod tests {
             packInt16(block.as_mut_ptr().add(16), (BLOCK_HEADER_LENGTH as u16) - 2);
             std::fs::write(&path, &block[..block_len]).unwrap();
 
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             let mut buf = [0u8; 8];
             assert_eq!(bgzf_read(fp, buf.as_mut_ptr().cast(), buf.len()), -1);
@@ -5163,7 +5190,7 @@ mod tests {
             fp.cache = (&mut cache_marker as *mut u8).cast();
             bgzf_set_cache_size(&mut fp, 8192);
             assert_eq!(fp.cache_size, 8192);
-            fp.mt = 1usize as *mut c_void;
+            fp.mt = bgzf_test_non_null_mt_marker();
             bgzf_set_cache_size(&mut fp, 16384);
             assert_eq!(fp.cache_size, 8192);
 
@@ -5184,13 +5211,13 @@ mod tests {
         let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
 
         unsafe {
-            let fp = bgzf_open(path_c.as_ptr(), b"wu\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"wu".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(bgzf_raw_write(fp, b"raw".as_ptr().cast(), 3), 3);
             assert_eq!(bgzf_flush_try(fp, BGZF_BLOCK_SIZE as isize), 0);
             assert_eq!(bgzf_close(fp), 0);
 
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             let mut buf = [0u8; 3];
             assert_eq!(bgzf_raw_read(fp, buf.as_mut_ptr().cast(), buf.len()), 3);
@@ -5207,7 +5234,7 @@ mod tests {
             assert_eq!(x, 0x0123_4567_89ab_cdef);
             assert_eq!(libc::close(fd), 0);
 
-            let fp = bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(bgzf_index_build_init(fp), 0);
             assert_eq!(bgzf_block_write(fp, b"block".as_ptr().cast(), 5), 5);
@@ -5242,7 +5269,7 @@ mod tests {
             assert_eq!(bgzf_is_bgzf(path_c.as_ptr()), 1);
             assert_eq!(bgzf_is_bgzf(plain_c.as_ptr()), 0);
 
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(bgzf_utell(fp), 0);
             assert_eq!(bgzf_getc(fp), b'a' as c_int);
@@ -5385,7 +5412,7 @@ mod tests {
             assert!(block_len > EOF_BLOCK.len());
             std::fs::write(&path, &block[..block_len]).unwrap();
 
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(bgzf_hseek_ptr((*fp).fp, 7, libc::SEEK_SET), 7);
             assert_eq!(bgzf_check_EOF(fp), 0);
@@ -5458,7 +5485,7 @@ mod tests {
 
         let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
         unsafe {
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
 
             let mut buf = [0u8; 64];
@@ -5493,7 +5520,7 @@ mod tests {
 
         let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
         unsafe {
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             let mut line = kstring_t {
                 l: 0,
@@ -5572,7 +5599,10 @@ mod tests {
             assert!(!hidx.is_null());
 
             let mut mt: bgzf_mtaux_t = std::mem::zeroed();
-            assert_eq!(libc::pthread_mutex_init(&mut mt.idx_m, ptr::null()), 0);
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_mutex_init(&mut mt.idx_m, ptr::null()),
+                0
+            );
             mt.hts_idx = hidx;
             mt.block_address = 7;
             mt.block_written = 3;
@@ -5642,7 +5672,7 @@ mod tests {
 
             c_compat::free(mt.idx_cache.e.cast());
             c_compat::free(fp_idx);
-            libc::pthread_mutex_destroy(&mut mt.idx_m);
+            crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut mt.idx_m);
             super::super::hts::hts_idx_destroy(hidx);
         }
     }
@@ -5654,7 +5684,10 @@ mod tests {
             assert!(!hidx.is_null());
 
             let mut mt: bgzf_mtaux_t = std::mem::zeroed();
-            assert_eq!(libc::pthread_mutex_init(&mut mt.idx_m, ptr::null()), 0);
+            assert_eq!(
+                crate::htslib_rs::c_compat::pthread_mutex_init(&mut mt.idx_m, ptr::null()),
+                0
+            );
             mt.block_number = 12;
             mt.block_written = 12;
             mt.block_address = 40;
@@ -5725,7 +5758,7 @@ mod tests {
             assert_eq!((*hidx).z.n_unmapped, 1);
 
             c_compat::free(mt.idx_cache.e.cast());
-            libc::pthread_mutex_destroy(&mut mt.idx_m);
+            crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut mt.idx_m);
             super::super::hts::hts_idx_destroy(hidx);
         }
     }
@@ -5918,7 +5951,7 @@ mod tests {
             block[block_len - 8] ^= 1;
             std::fs::write(&path, &block[..block_len]).unwrap();
 
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             let mut buf = [0u8; 8];
             assert_eq!(bgzf_read(fp, buf.as_mut_ptr().cast(), buf.len()), -1);
@@ -5950,7 +5983,7 @@ mod tests {
 
         let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
         unsafe {
-            let fp = bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
 
             let mut head = [0u8; 6];
@@ -5984,7 +6017,7 @@ mod tests {
             .collect();
 
         unsafe {
-            let fp = bgzf_open(path_c.as_ptr(), b"wu\0".as_ptr().cast());
+            let fp = bgzf_open(path_c.as_ptr(), c"wu".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(bgzf_compression(fp), 0);
             assert_eq!(
@@ -6471,7 +6504,7 @@ mod tests {
             let payload = Arc::clone(&payload);
             let path_arc = Arc::clone(&path_arc);
             handles.push(thread::spawn(move || {
-                let path_c = CString::new(super::super::path_bytes(&*path_arc).as_ref()).unwrap();
+                let path_c = CString::new(super::super::path_bytes(&path_arc).as_ref()).unwrap();
                 // SAFETY: each thread opens its OWN bgzf fp; there is no
                 // cross-thread sharing of the BGZF pointer or its
                 // internal buffers/index. The path bytes are immutable.
@@ -6571,7 +6604,7 @@ mod tests {
             let payload = Arc::clone(&payload);
             let path_arc = Arc::clone(&path_arc);
             handles.push(thread::spawn(move || {
-                let path_c = CString::new(super::super::path_bytes(&*path_arc).as_ref()).unwrap();
+                let path_c = CString::new(super::super::path_bytes(&path_arc).as_ref()).unwrap();
                 // SAFETY: each thread owns its bgzf fp; no shared BGZF state.
                 unsafe {
                     let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());

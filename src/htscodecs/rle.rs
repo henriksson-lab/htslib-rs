@@ -24,7 +24,6 @@ pub fn rle_find_syms(
     rle_nsyms: &mut i32,
 ) {
     let mut last: i32 = -1;
-    let n: i32;
     let mut i: u64;
 
     if data_len > 256 {
@@ -55,8 +54,8 @@ pub fn rle_find_syms(
             last = data[idx] as i32;
             i += 1;
         }
-        for i in 0..256usize {
-            saved[i] += saved2[i] + saved3[i] + saved4[i];
+        for (i, val) in saved.iter_mut().take(256).enumerate() {
+            *val += saved2[i] + saved3[i] + saved4[i];
         }
     } else {
         // 163/391
@@ -75,14 +74,13 @@ pub fn rle_find_syms(
 
     // Map back to a list
     let mut nn: i32 = 0;
-    for i in 0..256usize {
-        if saved[i] > 0 {
+    for (i, val) in saved.iter().take(256).enumerate() {
+        if *val > 0 {
             rle_syms[nn as usize] = i as u8;
             nn += 1;
         }
     }
-    n = nn;
-    *rle_nsyms = n;
+    *rle_nsyms = nn;
 }
 
 /// ```c
@@ -94,6 +92,7 @@ pub fn rle_find_syms(
 /// `out` may be NULL, in which case it is malloc'd (returned as a `Vec<u8>`)
 /// and is the caller's to free; otherwise the supplied buffer is written to.
 // rle.c:100 (also rle.h:69)
+#[allow(clippy::too_many_arguments)]
 pub fn hts_rle_encode(
     data: &[u8],
     data_len: u64,
@@ -180,6 +179,7 @@ pub fn hts_rle_encode(
 /// ```
 /// On input `*out_len` holds the allocated size of `out`; on output the used size.
 // rle.c:142 (also rle.h:84)
+#[allow(clippy::too_many_arguments)]
 pub fn hts_rle_decode<'a>(
     lit: &[u8],
     lit_len: u64,
@@ -244,6 +244,7 @@ pub fn hts_rle_decode<'a>(
 /// C-style raw-pointer wrapper around `hts_rle_encode`. When `out` is NULL
 /// the encoder allocates a `data_len * 2` byte buffer (libc malloc) and
 /// returns ownership to the caller. Otherwise the caller's buffer is filled.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn hts_rle_encode_raw(
     data: *mut u8,
     data_len: u64,
@@ -305,6 +306,7 @@ pub unsafe fn hts_rle_encode_raw(
 /// C-style raw-pointer wrapper around `hts_rle_decode`. The caller-supplied
 /// `out` buffer's allocated size is passed in via `*out_len`; on success the
 /// used size is written back. Returns `out` on success, NULL on failure.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn hts_rle_decode_raw(
     lit: *mut u8,
     lit_len: u64,
@@ -345,6 +347,7 @@ pub unsafe fn hts_rle_decode_raw(
 /// ```
 /// Deprecated interface; forwards to `hts_rle_encode`.
 // rle.c:192
+#[allow(clippy::too_many_arguments)]
 pub fn rle_encode(
     data: &[u8],
     data_len: u64,
@@ -368,6 +371,7 @@ pub fn rle_encode(
 /// ```
 /// Deprecated interface; forwards to `hts_rle_decode`.
 // rle.c:201
+#[allow(clippy::too_many_arguments)]
 pub fn rle_decode<'a>(
     lit: &[u8],
     lit_len: u64,
@@ -378,7 +382,9 @@ pub fn rle_decode<'a>(
     out: &'a mut [u8],
     out_len: &mut u64,
 ) -> Option<&'a mut [u8]> {
-    hts_rle_decode(lit, lit_len, run, run_len, rle_syms, rle_nsyms, out, out_len)
+    hts_rle_decode(
+        lit, lit_len, run, run_len, rle_syms, rle_nsyms, out, out_len,
+    )
 }
 
 #[cfg(test)]
@@ -705,7 +711,9 @@ mod tests {
         roundtrip(&mono);
         // Alternating two symbol — runs of length 1 only, encoder must not
         // emit a degenerate "run" code.
-        let alt: Vec<u8> = (0..2048u32).map(|x| if x & 1 == 0 { b'X' } else { b'Y' }).collect();
+        let alt: Vec<u8> = (0..2048u32)
+            .map(|x| if x & 1 == 0 { b'X' } else { b'Y' })
+            .collect();
         roundtrip(&alt);
     }
 

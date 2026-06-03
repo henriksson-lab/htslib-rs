@@ -13,49 +13,78 @@ pub unsafe fn kstring_c_142_kvsprintf(
     std::ptr::copy_nonoverlapping(ap, args.as_mut_ptr(), 1);
     let mut args = args.assume_init();
 
-    if *fmt == b'%' as c_char && *fmt.add(1) == b'g' as c_char && *fmt.add(2) == 0 {
-        let d = if args.fp_offset <= 160 {
-            let p = args.reg_save_area.cast::<u8>().add(args.fp_offset as usize);
-            std::ptr::read_unaligned(p.cast::<f64>())
-        } else {
-            let p = args.overflow_arg_area.cast::<u8>();
-            std::ptr::read_unaligned(p.cast::<f64>())
-        };
-        return kputd(d, s);
-    }
-
-    if (*s).s.is_null() {
-        let sz = 64usize;
-        (*s).s = libc::malloc(sz).cast::<c_char>();
-        if (*s).s.is_null() {
+    let fmt = CStr::from_ptr(fmt).to_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < fmt.len() {
+        if fmt[i] != b'%' {
+            out.push(fmt[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if i >= fmt.len() {
             return -1;
         }
-        (*s).m = sz;
-        (*s).l = 0;
+        match fmt[i] {
+            b'%' => out.push(b'%'),
+            b'd' => out.extend_from_slice(kstring_va_arg_int(&mut args).to_string().as_bytes()),
+            b's' => {
+                let p = kstring_va_arg_word(&mut args) as *const c_char;
+                if p.is_null() {
+                    return -1;
+                }
+                out.extend_from_slice(CStr::from_ptr(p).to_bytes());
+            }
+            b'g' => {
+                let d = kstring_va_arg_f64(&mut args);
+                let mut tmp: kstring_t = std::mem::zeroed();
+                if kputd(d, &mut tmp) < 0 {
+                    return -1;
+                }
+                if !tmp.s.is_null() {
+                    out.extend_from_slice(CStr::from_ptr(tmp.s).to_bytes());
+                    libc::free(tmp.s.cast());
+                }
+            }
+            _ => return -1,
+        }
+        i += 1;
     }
 
-    let mut l = crate::htslib_rs::c_compat::vsnprintf(
-        (*s).s.add((*s).l),
-        ((*s).m - (*s).l) as u64,
-        fmt,
-        &mut args,
-    );
-    if l + 1 > ((*s).m - (*s).l) as c_int {
-        if ks_resize(s, (*s).l + l as usize + 2) < 0 {
-            return -1;
-        }
-        let mut args = std::mem::MaybeUninit::<crate::htslib_rs::c_compat::__va_list_tag>::uninit();
-        std::ptr::copy_nonoverlapping(ap, args.as_mut_ptr(), 1);
-        let mut args = args.assume_init();
-        l = crate::htslib_rs::c_compat::vsnprintf(
-            (*s).s.add((*s).l),
-            ((*s).m - (*s).l) as u64,
-            fmt,
-            &mut args,
-        );
+    if kputsn(out.as_ptr().cast(), out.len(), s) < 0 {
+        -1
+    } else {
+        out.len() as c_int
     }
-    (*s).l += l as usize;
-    l
+}
+
+unsafe fn kstring_va_arg_word(args: &mut crate::htslib_rs::c_compat::__va_list_tag) -> usize {
+    if args.gp_offset <= 40 {
+        let p = args.reg_save_area.cast::<u8>().add(args.gp_offset as usize);
+        args.gp_offset += 8;
+        std::ptr::read_unaligned(p.cast::<usize>())
+    } else {
+        let p = args.overflow_arg_area.cast::<u8>();
+        args.overflow_arg_area = p.add(8).cast();
+        std::ptr::read_unaligned(p.cast::<usize>())
+    }
+}
+
+unsafe fn kstring_va_arg_int(args: &mut crate::htslib_rs::c_compat::__va_list_tag) -> c_int {
+    kstring_va_arg_word(args) as u32 as c_int
+}
+
+unsafe fn kstring_va_arg_f64(args: &mut crate::htslib_rs::c_compat::__va_list_tag) -> f64 {
+    if args.fp_offset <= 160 {
+        let p = args.reg_save_area.cast::<u8>().add(args.fp_offset as usize);
+        args.fp_offset += 16;
+        std::ptr::read_unaligned(p.cast::<f64>())
+    } else {
+        let p = args.overflow_arg_area.cast::<u8>();
+        args.overflow_arg_area = p.add(8).cast();
+        std::ptr::read_unaligned(p.cast::<f64>())
+    }
 }
 
 pub enum KsPrintfArg {
@@ -262,10 +291,8 @@ pub unsafe fn ksplit(s: *mut kstring_t, delimiter: c_int, n: *mut c_int) -> *mut
 pub unsafe fn kgetline(s: *mut kstring_t, fgets_fn: kgets_func, fp: *mut c_void) -> c_int {
     let l0 = (*s).l;
     while (*s).l == l0 || *(*s).s.add((*s).l - 1) != b'\n' as c_char {
-        if (*s).m - (*s).l < 200 {
-            if ks_resize(s, (*s).m + 200) < 0 {
-                return libc::EOF;
-            }
+        if (*s).m - (*s).l < 200 && ks_resize(s, (*s).m + 200) < 0 {
+            return libc::EOF;
         }
         let ret = fgets_fn.unwrap_unchecked()((*s).s.add((*s).l), ((*s).m - (*s).l) as c_int, fp);
         if ret.is_null() {
@@ -306,11 +333,9 @@ pub unsafe fn kfgetline(s: *mut kstring_t, fp: *mut libc::FILE) -> c_int {
 pub unsafe fn kgetline2(s: *mut kstring_t, fgets_fn: kgets_func2, fp: *mut c_void) -> c_int {
     let l0 = (*s).l;
     while (*s).l == l0 || *(*s).s.add((*s).l - 1) != b'\n' as c_char {
-        if (*s).m - (*s).l < 200 {
-            if ks_resize(s, (*s).m + 200) < 0 {
-                fgets_fn.unwrap_unchecked()((*s).s.add((*s).l), 0, fp);
-                return libc::EOF;
-            }
+        if (*s).m - (*s).l < 200 && ks_resize(s, (*s).m + 200) < 0 {
+            fgets_fn.unwrap_unchecked()((*s).s.add((*s).l), 0, fp);
+            return libc::EOF;
         }
         let len = fgets_fn.unwrap_unchecked()((*s).s.add((*s).l), (*s).m - (*s).l, fp);
         if len <= 0 {
@@ -670,10 +695,8 @@ pub unsafe fn kstrnstr(
 
 pub unsafe fn kputd(d: f64, s: *mut kstring_t) -> c_int {
     if d == 0.0 {
-        if d.is_sign_negative() {
-            return kputsn(b"-0\0".as_ptr().cast(), 2, s);
-        }
-        return kputsn(b"0\0".as_ptr().cast(), 1, s);
+        let text = if d.is_sign_negative() { c"-0" } else { c"0" };
+        return kputsn(text.as_ptr(), text.to_bytes().len(), s);
     }
 
     let mut d = d;
@@ -694,7 +717,7 @@ pub unsafe fn kputd(d: f64, s: *mut kstring_t) -> c_int {
         let s2 = libc::snprintf(
             (*s).s.add((*s).l),
             ((*s).m - (*s).l) as libc::size_t,
-            b"%g\0".as_ptr().cast(),
+            c"%g".as_ptr(),
             d,
         );
         len += s2;
@@ -759,6 +782,33 @@ mod tests {
             );
             assert_eq!(s.l, 12);
             assert_eq!(CStr::from_ptr(s.s).to_bytes(), b"sample-42:ok");
+
+            libc::free(s.s.cast());
+        }
+    }
+
+    #[test]
+    fn kvsprintf_formats_synthetic_va_list_without_c_vsnprintf() {
+        unsafe {
+            let mut s: kstring_t = std::mem::zeroed();
+            let mut reg_save = [0usize; 24];
+            reg_save[0] = 7;
+            reg_save[1] = c"abc".as_ptr() as usize;
+            let float_slot = reg_save.as_mut_ptr().cast::<u8>().add(48);
+            std::ptr::write_unaligned(float_slot.cast::<f64>(), 3.5);
+            let mut overflow = [0usize; 1];
+            let mut args = crate::htslib_rs::c_compat::__va_list_tag {
+                gp_offset: 0,
+                fp_offset: 48,
+                overflow_arg_area: overflow.as_mut_ptr().cast(),
+                reg_save_area: reg_save.as_mut_ptr().cast(),
+            };
+
+            assert_eq!(
+                kstring_c_142_kvsprintf(&mut s, c"%d:%s:%g:%%".as_ptr(), &mut args),
+                11
+            );
+            assert_eq!(CStr::from_ptr(s.s).to_bytes(), b"7:abc:3.5:%");
 
             libc::free(s.s.cast());
         }

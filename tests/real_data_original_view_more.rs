@@ -336,7 +336,7 @@ unsafe fn rewrite_header_text_reference_lengths(hdr: *mut htslib_rs::sam_hdr_t) 
 
 fn compare_sam_record_key(line: &str) -> Vec<String> {
     let mut fields = line
-        .trim_end_matches(&['\r', '\n'])
+        .trim_end_matches(['\r', '\n'])
         .split('\t')
         .collect::<Vec<_>>();
     assert!(fields.len() >= 11, "malformed SAM record: {line}");

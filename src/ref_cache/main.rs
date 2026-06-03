@@ -1235,6 +1235,7 @@ pub unsafe fn ref_cache_main_c_913_main(argc: c_int, argv: *mut *mut c_char) -> 
     let ip_ranges_localhost = c"127.0.0.0/8,::1/128".as_ptr();
     let ip_ranges_default = c"10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7,fe80::/10".as_ptr();
 
+    #[allow(clippy::never_loop)]
     'main_body: loop {
         /* Copy argv[0] for change_name() */
         argv0 = *argv.add(0);
@@ -1400,10 +1401,10 @@ pub unsafe fn ref_cache_main_c_913_main(argc: c_int, argv: *mut *mut c_char) -> 
             break 'main_body;
         }
 
-        if opts.match_addrs.is_null() {
-            if ref_cache_main_c_677_add_match_addr(&mut opts, ip_ranges_default) != 0 {
-                break 'main_body;
-            }
+        if opts.match_addrs.is_null()
+            && ref_cache_main_c_677_add_match_addr(&mut opts, ip_ranges_default) != 0
+        {
+            break 'main_body;
         }
         if ref_cache_main_c_677_add_match_addr(&mut opts, ip_ranges_localhost) != 0 {
             break 'main_body;
@@ -1519,23 +1520,22 @@ pub unsafe fn ref_cache_main_c_913_main(argc: c_int, argv: *mut *mut c_char) -> 
             }
             libc::close(daemon_pipe[1]);
             daemon_pipe[1] = -1;
-        } else if !opts.error_log_file.is_null() {
-            if libc::freopen(
+        } else if !opts.error_log_file.is_null()
+            && libc::freopen(
                 opts.error_log_file,
                 c"a".as_ptr(),
                 crate::htslib_rs::ref_cache::compat::stderr(),
             )
             .is_null()
-            {
-                /* Does it still exist? */
-                libc::fprintf(
-                    crate::htslib_rs::ref_cache::compat::stderr(),
-                    c"Couldn't redirect stderr to %s: %s\n".as_ptr(),
-                    opts.error_log_file,
-                    libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
-                );
-                break 'main_body;
-            }
+        {
+            /* Does it still exist? */
+            libc::fprintf(
+                crate::htslib_rs::ref_cache::compat::stderr(),
+                c"Couldn't redirect stderr to %s: %s\n".as_ptr(),
+                opts.error_log_file,
+                libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            );
+            break 'main_body;
         }
 
         /* Run the servers */

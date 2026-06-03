@@ -59,7 +59,10 @@ pub unsafe fn ref_cache_sendfile_wrap_c_73_sendfile_wrap(
     }
 
     res = libc::sendfile(in_fd, out_fd, *offset, &mut len, std::ptr::null_mut(), 0);
-    if res == 0 || *libc::__error() == libc::EINTR || *libc::__error() == libc::EAGAIN {
+    if res == 0
+        || *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR
+        || *crate::htslib_rs::c_compat::__errno_location() == libc::EAGAIN
+    {
         *offset += len;
     }
     if res < 0 {

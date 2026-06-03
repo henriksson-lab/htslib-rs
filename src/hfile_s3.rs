@@ -23,6 +23,42 @@ const HASH_LENGTH_SHA256: usize = SHA256_DIGEST_BUFSIZE * 2 + 1;
 const MINIMUM_S3_WRITE_SIZE: c_int = 5_242_880;
 const EXPAND_ON: c_int = 1112;
 const S3_MOVED_PERMANENTLY: libc::c_long = 301;
+
+fn write_s3_date_header(buf: &mut [c_char], now: libc::time_t) {
+    const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (year, month, day, hour, minute, second, weekday) =
+        crate::htslib_rs::c_compat::unix_time_utc_parts(now);
+    let text = format!(
+        "Date: {}, {:02} {} {:04} {:02}:{:02}:{:02} GMT",
+        WEEKDAYS[weekday],
+        day,
+        MONTHS[(month - 1) as usize],
+        year,
+        hour,
+        minute,
+        second
+    );
+    crate::htslib_rs::c_compat::write_c_str(buf, &text);
+}
+
+fn write_s3_v4_dates(
+    date_long: &mut [c_char],
+    date_short: &mut [c_char],
+    now: libc::time_t,
+) -> bool {
+    let (year, month, day, hour, minute, second, _) =
+        crate::htslib_rs::c_compat::unix_time_utc_parts(now);
+    let long = format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
+        year, month, day, hour, minute, second
+    );
+    let short = format!("{:04}{:02}{:02}", year, month, day);
+    crate::htslib_rs::c_compat::write_c_str(date_long, &long) == 16
+        && crate::htslib_rs::c_compat::write_c_str(date_short, &short) == 8
+}
 const S3_TEMPORARY_REDIRECT: libc::c_long = 307;
 const S3_BAD_REQUEST: libc::c_long = 400;
 const HTS_LOG_INFO: c_int = 4;
@@ -53,8 +89,11 @@ type HFileFlushFn = unsafe extern "C" fn(*mut hFILE) -> c_int;
 type HFileCloseFn = unsafe extern "C" fn(*mut hFILE) -> c_int;
 type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> c_int;
-type HFileVOpenFn =
-    unsafe extern "C" fn(*const c_char, *const c_char, *mut crate::htslib_rs::c_compat::__va_list_tag) -> *mut hFILE;
+type HFileVOpenFn = unsafe extern "C" fn(
+    *const c_char,
+    *const c_char,
+    *mut crate::htslib_rs::c_compat::__va_list_tag,
+) -> *mut hFILE;
 
 #[repr(C)]
 struct hFILE_backend {
@@ -1129,7 +1168,6 @@ pub unsafe extern "C" fn hfile_s3_c_774_v2_authorisation(
 ) -> c_int {
     let ad = ctx.cast::<S3AuthDataLayout>();
     let now = libc::time(std::ptr::null_mut());
-    let tm = libc::gmtime(&now);
     let mut message: kstring_t = std::mem::zeroed();
     let mut digest = [0u8; DIGEST_BUFSIZ];
 
@@ -1144,12 +1182,7 @@ pub unsafe extern "C" fn hfile_s3_c_774_v2_authorisation(
         return 0;
     }
 
-    libc::strftime(
-        (*ad).date.as_mut_ptr(),
-        (*ad).date.len(),
-        c"Date: %a, %d %b %Y %H:%M:%S GMT".as_ptr(),
-        tm,
-    );
+    write_s3_date_header(&mut (*ad).date, now);
     if (*ad).id.l == 0 || (*ad).secret.l == 0 {
         (*ad).auth_time = now;
         return hfile_s3_copy_auth_headers(ad, hdrs);
@@ -1213,12 +1246,12 @@ pub unsafe fn hfile_s3_c_836_hash_string(
 ) {
     let mut hashed = [0u8; SHA256_DIGEST_BUFSIZE];
     hfile_s3_c_152_s3_sha256(in_.cast(), length, hashed.as_mut_ptr());
-    for i in 0..SHA256_DIGEST_BUFSIZE {
+    for (i, byte) in hashed.iter().enumerate() {
         libc::snprintf(
             out.add(i * 2),
             out_len - i * 2,
             c"%02x".as_ptr(),
-            hashed[i] as c_int,
+            *byte as c_int,
         );
     }
 }
@@ -1287,12 +1320,12 @@ pub unsafe fn hfile_s3_c_848_make_signature(
         signature.as_mut_ptr(),
         &mut len,
     );
-    for i in 0..len as usize {
+    for (i, byte) in signature.iter().take(len as usize).enumerate() {
         libc::snprintf(
             signature_string.add(i * 2),
             sig_string_len - i * 2,
             c"%02x".as_ptr(),
-            signature[i] as c_int,
+            *byte as c_int,
         );
     }
     crate::htslib_rs::hts::ks_free(&mut secret_access_key);
@@ -1428,22 +1461,11 @@ pub unsafe fn hfile_s3_c_968_update_time(ad: *mut s3_auth_data, now: libc::time_
     const AUTH_LIFETIME: libc::time_t = 60;
     let ad = ad.cast::<S3AuthDataLayout>();
     let mut ret = -1;
-    let tm = libc::gmtime(&now);
 
     if now - (*ad).auth_time > AUTH_LIFETIME {
         (*ad).auth_time = now;
 
-        if libc::strftime(
-            (*ad).date_long.as_mut_ptr(),
-            17,
-            c"%Y%m%dT%H%M%SZ".as_ptr(),
-            tm,
-        ) != 16
-        {
-            return -1;
-        }
-
-        if libc::strftime((*ad).date_short.as_mut_ptr(), 9, c"%Y%m%d".as_ptr(), tm) != 8 {
+        if !write_s3_v4_dates(&mut (*ad).date_long, &mut (*ad).date_short, now) {
             return -1;
         }
 
@@ -1712,7 +1734,7 @@ pub unsafe fn hfile_s3_c_1176_stristr(
         let mut h = haystack;
         let mut n = needle;
 
-        while (*h as u8).to_ascii_uppercase() == (*n as u8).to_ascii_uppercase() {
+        while (*h as u8).eq_ignore_ascii_case(&(*n as u8)) {
             h = h.add(1);
             n = n.add(1);
             if *h == 0 || *n == 0 {
@@ -1800,7 +1822,11 @@ pub unsafe fn hfile_s3_c_1218_report_s3_error(
     }
 
     if entry.l != 0 {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"%s\n".as_ptr(), entry.s);
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"%s\n".as_ptr(),
+            entry.s,
+        );
     }
 
     libc::free(entry.s.cast());
@@ -2624,7 +2650,16 @@ pub unsafe extern "C" fn hfile_s3_c_2015_s3_seek(
         }
     };
 
-    let Some(pos_i64) = origin.checked_add(offset as i64) else {
+    let Some(pos_i64) = origin.checked_add({
+        #[cfg(windows)]
+        {
+            i64::from(offset)
+        }
+        #[cfg(not(windows))]
+        {
+            offset
+        }
+    }) else {
         *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
         return -1;
     };
@@ -3714,5 +3749,29 @@ mod tests {
             hfile_s3_c_2426_s3_exit();
             assert!(std::ptr::addr_of!(HFILE_S3_USERAGENT.s).read().is_null());
         }
+    }
+
+    #[test]
+    fn s3_utc_date_formatters_match_expected_wire_formats() {
+        let now: libc::time_t = 1_748_868_896;
+        let mut date = [0 as c_char; 40];
+        let mut date_long = [0 as c_char; 17];
+        let mut date_short = [0 as c_char; 9];
+
+        write_s3_date_header(&mut date, now);
+        assert_eq!(
+            unsafe { CStr::from_ptr(date.as_ptr()) }.to_bytes(),
+            b"Date: Mon, 02 Jun 2025 12:54:56 GMT"
+        );
+
+        assert!(write_s3_v4_dates(&mut date_long, &mut date_short, now));
+        assert_eq!(
+            unsafe { CStr::from_ptr(date_long.as_ptr()) }.to_bytes(),
+            b"20250602T125456Z"
+        );
+        assert_eq!(
+            unsafe { CStr::from_ptr(date_short.as_ptr()) }.to_bytes(),
+            b"20250602"
+        );
     }
 }

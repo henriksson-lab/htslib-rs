@@ -24,15 +24,14 @@ pub struct hts_filter_t {
     pub parsed: c_int,
     pub curr_regex: c_int,
     pub max_regex: c_int,
-    pub preg: [libc::regex_t; MAX_REGEX],
+    pub preg: [crate::htslib_rs::c_compat::regex_t; MAX_REGEX],
 }
 
 const MAX_REGEX: usize = 10;
 
 pub unsafe fn hts_expr_val_exists(v: *mut hts_expr_val_t) -> c_int {
-    (!v.is_null()
-        && !((*v).is_str == 1 && (*v).s.s.is_null())
-        && !((*v).is_str == 0 && (*v).d.is_nan())) as c_int
+    !(v.is_null() || (*v).is_str == 1 && (*v).s.s.is_null() || (*v).is_str == 0 && (*v).d.is_nan())
+        as c_int
 }
 
 pub unsafe fn hts_expr_val_existsT(v: *mut hts_expr_val_t) -> c_int {
@@ -414,7 +413,7 @@ pub unsafe fn unary_expr(
             (*res).d = (*res).s.s.is_null() as c_int as f64;
             (*res).is_true = c_bool((*res).d != 0.0);
         } else {
-            (*res).d = (!((*res).d as i64 != 0)) as c_int as f64;
+            (*res).d = ((*res).d as i64 == 0) as c_int as f64;
             (*res).is_true = c_bool((*res).d != 0.0);
         }
         (*res).is_str = 0;
@@ -532,6 +531,7 @@ pub unsafe fn add_expr(
     0
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn bit_expr(
     next: unsafe fn(
         *mut hts_filter_t,
@@ -770,7 +770,7 @@ pub unsafe fn eq_expr(
             return -1;
         }
         if !val.s.s.is_null() && !(*res).s.s.is_null() && val.is_true >= 0 && (*res).is_true >= 0 {
-            let mut preg_tmp: libc::regex_t = std::mem::zeroed();
+            let mut preg_tmp: crate::htslib_rs::c_compat::regex_t = std::mem::zeroed();
             let mut compile_regex = false;
             let preg_tmp_ptr = std::ptr::addr_of_mut!(preg_tmp);
             let preg = if (*filt).curr_regex >= (*filt).max_regex {
@@ -787,10 +787,20 @@ pub unsafe fn eq_expr(
                 std::ptr::addr_of_mut!((*filt).preg[(*filt).curr_regex as usize])
             };
             if compile_regex {
-                let ec = libc::regcomp(preg, val.s.s, libc::REG_EXTENDED | libc::REG_NOSUB);
+                let ec = crate::htslib_rs::c_compat::regcomp(
+                    preg,
+                    val.s.s,
+                    crate::htslib_rs::c_compat::REG_EXTENDED
+                        | crate::htslib_rs::c_compat::REG_NOSUB,
+                );
                 if ec != 0 {
                     let mut errbuf = [0 as c_char; 1024];
-                    libc::regerror(ec, preg, errbuf.as_mut_ptr(), errbuf.len());
+                    crate::htslib_rs::c_compat::regerror(
+                        ec,
+                        preg,
+                        errbuf.as_mut_ptr(),
+                        errbuf.len(),
+                    );
                     libc::fprintf(
                         crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
                         c"Failed regex: %.1024s\n".as_ptr(),
@@ -800,7 +810,9 @@ pub unsafe fn eq_expr(
                     return -1;
                 }
             }
-            let matched = libc::regexec(preg, (*res).s.s, 0, std::ptr::null_mut(), 0) == 0;
+            let matched =
+                crate::htslib_rs::c_compat::regexec(preg, (*res).s.s, 0, std::ptr::null_mut(), 0)
+                    == 0;
             let r = if matched {
                 *str_ == b'=' as c_char
             } else {
@@ -809,7 +821,7 @@ pub unsafe fn eq_expr(
             (*res).is_true = c_bool(r);
             (*res).d = r as c_int as f64;
             if preg == preg_tmp_ptr {
-                libc::regfree(preg);
+                crate::htslib_rs::c_compat::regfree(preg);
             }
             (*filt).curr_regex += 1;
         } else {
@@ -864,13 +876,10 @@ pub unsafe fn and_expr(
             if eq_expr(filt, data, sym_func, str_.add(2), end, &mut val) != 0 {
                 return -1;
             }
-            if hts_expr_val_existsT(res) == 0 && hts_expr_val_existsT(&mut val) == 0 {
-                hts_expr_val_undef(res);
-                (*res).d = 0.0;
-            } else if hts_expr_val_existsT(res) == 0 && !expr_truth(&mut val) {
-                hts_expr_val_undef(res);
-                (*res).d = 0.0;
-            } else if hts_expr_val_existsT(&mut val) == 0 && !expr_truth(res) {
+            if (hts_expr_val_existsT(res) == 0
+                && (hts_expr_val_existsT(&mut val) == 0 || !expr_truth(&mut val)))
+                || (hts_expr_val_existsT(&mut val) == 0 && !expr_truth(res))
+            {
                 hts_expr_val_undef(res);
                 (*res).d = 0.0;
             } else {
@@ -921,7 +930,7 @@ pub unsafe fn hts_expr_c_863_hts_filter_free(filt: *mut hts_filter_t) {
         return;
     }
     for i in 0..(*filt).max_regex {
-        libc::regfree(&mut (*filt).preg[i as usize]);
+        crate::htslib_rs::c_compat::regfree(&mut (*filt).preg[i as usize]);
     }
     c_compat::free((*filt).str_.cast());
     c_compat::free(filt.cast());

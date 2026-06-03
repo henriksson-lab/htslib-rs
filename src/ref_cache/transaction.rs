@@ -565,45 +565,39 @@ pub unsafe fn ref_cache_transaction_c_556_transaction_send_data(
 ) -> c_int {
     let transact = transact.cast::<TransactionPrefixLayout>();
 
-    match (*transact).state {
-        TRANSACT_GOT_TEXT => {
-            (*transact).state = TRANSACT_SENDING_TEXT;
-        }
-        _ => {}
+    if (*transact).state == TRANSACT_GOT_TEXT {
+        (*transact).state = TRANSACT_SENDING_TEXT;
     }
 
-    match (*transact).state {
-        TRANSACT_SENDING_TEXT => {
-            assert!(!(*transact).text.is_null());
-            let bytes = libc::write(
-                fd,
-                (*transact).text.cast(),
-                (*transact).sz - (*transact).out,
-            );
-            if bytes < 0 {
-                let errno = *crate::htslib_rs::c_compat::__errno_location();
-                if errno != libc::EAGAIN || errno != libc::EWOULDBLOCK || errno != libc::EINTR {
-                    libc::fprintf(
-                        crate::htslib_rs::ref_cache::compat::stderr(),
-                        c"Error from fd #%d : %s\n".as_ptr(),
-                        fd,
-                        libc::strerror(errno),
-                    );
-                    return REF_CACHE_WRITE_ERROR;
-                }
-                return REF_CACHE_WRITE_BLOCKED;
+    if (*transact).state == TRANSACT_SENDING_TEXT {
+        assert!(!(*transact).text.is_null());
+        let bytes = libc::write(
+            fd,
+            (*transact).text.cast(),
+            (*transact).sz - (*transact).out,
+        );
+        if bytes < 0 {
+            let errno = *crate::htslib_rs::c_compat::__errno_location();
+            if errno != libc::EAGAIN || errno != libc::EWOULDBLOCK || errno != libc::EINTR {
+                libc::fprintf(
+                    crate::htslib_rs::ref_cache::compat::stderr(),
+                    c"Error from fd #%d : %s\n".as_ptr(),
+                    fd,
+                    libc::strerror(errno),
+                );
+                return REF_CACHE_WRITE_ERROR;
             }
-            (*transact).out += bytes as usize;
-            if (*transact).out < (*transact).sz {
-                return REF_CACHE_WRITE_BLOCKED;
-            }
-            if (*transact).ref_.is_null() {
-                (*transact).state = TRANSACT_FINISHED;
-                return REF_CACHE_WRITE_COMPLETE;
-            }
-            (*transact).state = TRANSACT_SENDING_FILE;
+            return REF_CACHE_WRITE_BLOCKED;
         }
-        _ => {}
+        (*transact).out += bytes as usize;
+        if (*transact).out < (*transact).sz {
+            return REF_CACHE_WRITE_BLOCKED;
+        }
+        if (*transact).ref_.is_null() {
+            (*transact).state = TRANSACT_FINISHED;
+            return REF_CACHE_WRITE_COMPLETE;
+        }
+        (*transact).state = TRANSACT_SENDING_FILE;
     }
 
     match (*transact).state {
@@ -839,7 +833,7 @@ pub unsafe fn ref_cache_transaction_c_730_got_download_result(
     val: i64,
     write_stack: *mut *mut Client,
 ) {
-    assert!(val >= 0 && val < 1000);
+    assert!((0..1000).contains(&val));
 
     let mut transact = ref_cache_transaction_c_270_transaction_by_id(id, std::ptr::null_mut());
     if transact.is_null() {
@@ -868,9 +862,7 @@ pub unsafe fn ref_cache_transaction_c_730_got_download_result(
 
     while !transact.is_null() {
         let t = transact.cast::<TransactionPrefixLayout>();
-        if no_initial_content_length != 0 {
-            (*t).fd_sz = available;
-        } else if (*t).fd_sz > available {
+        if no_initial_content_length != 0 || (*t).fd_sz > available {
             (*t).fd_sz = available;
         }
         if (*t).fd_sent >= (*t).fd_sz {
@@ -892,12 +884,21 @@ pub unsafe fn ref_cache_transaction_c_769_make_log_message(
     let transact = transact.cast::<TransactionPrefixLayout>();
     let mut timestamp = [0 as c_char; 32];
     let t = libc::time(std::ptr::null_mut());
-    libc::strftime(
-        timestamp.as_mut_ptr(),
-        timestamp.len(),
-        c"%d/%b/%Y:%H:%M:%S +0000".as_ptr(),
-        libc::gmtime(&t),
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (year, month, day, hour, minute, second, _) =
+        crate::htslib_rs::c_compat::unix_time_utc_parts(t);
+    let timestamp_text = format!(
+        "{:02}/{}/{:04}:{:02}:{:02}:{:02} +0000",
+        day,
+        MONTHS[(month - 1) as usize],
+        year,
+        hour,
+        minute,
+        second
     );
+    crate::htslib_rs::c_compat::write_c_str(&mut timestamp, &timestamp_text);
     let bytes = libc::snprintf(
         buffer,
         size,

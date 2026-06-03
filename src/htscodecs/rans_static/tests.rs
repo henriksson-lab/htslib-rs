@@ -58,20 +58,18 @@ impl Rng {
 
 /// Build a varied corpus of test inputs.
 fn corpus() -> Vec<(&'static str, Vec<u8>)> {
-    let mut v: Vec<(&'static str, Vec<u8>)> = Vec::new();
-
-    v.push(("empty", vec![]));
-    v.push(("one", vec![42]));
-    v.push(("two", vec![1, 2]));
-    v.push(("three", vec![1, 2, 3]));
-    v.push(("four", vec![1, 2, 3, 4]));
-    v.push(("five", vec![9, 8, 7, 6, 5]));
-    v.push(("ascii", b"Hello, world! The quick brown fox.".to_vec()));
-
-    // repetitive / low entropy
-    v.push(("all_zero", vec![0u8; 1000]));
-    v.push(("all_ff", vec![0xffu8; 1000]));
-    v.push(("single_sym", vec![7u8; 4096]));
+    let mut v: Vec<(&'static str, Vec<u8>)> = vec![
+        ("empty", vec![]),
+        ("one", vec![42]),
+        ("two", vec![1, 2]),
+        ("three", vec![1, 2, 3]),
+        ("four", vec![1, 2, 3, 4]),
+        ("five", vec![9, 8, 7, 6, 5]),
+        ("ascii", b"Hello, world! The quick brown fox.".to_vec()),
+        ("all_zero", vec![0u8; 1000]),
+        ("all_ff", vec![0xffu8; 1000]),
+        ("single_sym", vec![7u8; 4096]),
+    ];
     {
         let mut d = Vec::new();
         for i in 0..5000 {
@@ -238,9 +236,13 @@ mod parity {
         for (name, data) in corpus() {
             for order in [0, 1] {
                 let c = c_compress(&data, order);
-                let dec = native_uncompress(&c)
-                    .unwrap_or_else(|| panic!("native failed to decode C output {name} ord {order}"));
-                assert_eq!(dec, data, "native-decode-of-C mismatch {name} order {order}");
+                let dec = native_uncompress(&c).unwrap_or_else(|| {
+                    panic!("native failed to decode C output {name} ord {order}")
+                });
+                assert_eq!(
+                    dec, data,
+                    "native-decode-of-C mismatch {name} order {order}"
+                );
             }
         }
     }
@@ -251,9 +253,13 @@ mod parity {
         for (name, data) in corpus() {
             for order in [0, 1] {
                 let native = native_compress(&data, order);
-                let dec = c_uncompress(&native)
-                    .unwrap_or_else(|| panic!("C failed to decode native output {name} ord {order}"));
-                assert_eq!(dec, data, "C-decode-of-native mismatch {name} order {order}");
+                let dec = c_uncompress(&native).unwrap_or_else(|| {
+                    panic!("C failed to decode native output {name} ord {order}")
+                });
+                assert_eq!(
+                    dec, data,
+                    "C-decode-of-native mismatch {name} order {order}"
+                );
             }
         }
     }
@@ -653,7 +659,7 @@ fn determinism_order1() {
 
 #[test]
 fn compress_bound_holds_order0() {
-    let mut rng = Rng::new(0xB0A_BAB_E);
+    let mut rng = Rng::new(0xB0A_BABE);
     for &len in &[0u32, 1, 16, 256, 4096, 65536] {
         let mut d = vec![0u8; len as usize];
         fill_uniform(&mut rng, &mut d);
@@ -773,7 +779,8 @@ mod parity_random {
                 let native = native_compress(data, order);
                 let c = c_compress(data, order);
                 assert_eq!(
-                    native, c,
+                    native,
+                    c,
                     "random parity mismatch {name} order {order}: native {} vs C {}",
                     native.len(),
                     c.len()

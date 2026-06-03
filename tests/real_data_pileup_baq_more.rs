@@ -203,6 +203,7 @@ unsafe fn assert_realigned_records_match_expected(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn assert_realigned_records_match_expected_with(
     fasta_path: &str,
     fai_path: &str,

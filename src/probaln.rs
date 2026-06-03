@@ -37,6 +37,7 @@ static G_QUAL2PROB: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(|
     t
 });
 
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn probaln_glocal(
     ref_: *const u8,
     l_ref: c_int,
@@ -48,13 +49,8 @@ pub unsafe fn probaln_glocal(
     q: *mut u8,
 ) -> c_int {
     let mut m = [0.0_f64; 9];
-    let sI: f64;
-    let sM: f64;
-    let bI: f64;
-    let bM: f64;
     let mut i: c_int;
     let mut k: c_int;
-    let is_backward: bool;
     let Pr: c_int;
 
     macro_rules! set_u {
@@ -65,7 +61,7 @@ pub unsafe fn probaln_glocal(
         }};
     }
 
-    if l_ref < 0 || l_query < 0 || l_query >= c_int::MAX - 2 {
+    if l_ref < 0 || !(0..c_int::MAX - 2).contains(&l_query) {
         *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
         return c_int::MIN;
     }
@@ -73,7 +69,7 @@ pub unsafe fn probaln_glocal(
         return 0;
     }
 
-    is_backward = !state.is_null() && !q.is_null();
+    let is_backward = !state.is_null() && !q.is_null();
     let mut bw = if l_ref > l_query { l_ref } else { l_query };
     if bw > (*c).bw {
         bw = (*c).bw;
@@ -145,19 +141,19 @@ pub unsafe fn probaln_glocal(
         i += 1;
     }
 
-    sM = 1.0 / (2 * l_query + 2) as f64;
-    sI = sM;
-    m[0 * 3 + 0] = (1.0 - (*c).d as f64 - (*c).d as f64) * (1.0 - sM);
-    m[0 * 3 + 1] = (*c).d as f64 * (1.0 - sM);
-    m[0 * 3 + 2] = m[0 * 3 + 1];
-    m[1 * 3 + 0] = (1.0 - (*c).e as f64) * (1.0 - sI);
-    m[1 * 3 + 1] = (*c).e as f64 * (1.0 - sI);
-    m[1 * 3 + 2] = 0.0;
-    m[2 * 3 + 0] = 1.0 - (*c).e as f64;
+    let sM = 1.0 / (2 * l_query + 2) as f64;
+    let sI = sM;
+    m[0] = (1.0 - (*c).d as f64 - (*c).d as f64) * (1.0 - sM);
+    m[1] = (*c).d as f64 * (1.0 - sM);
+    m[2] = m[1];
+    m[3] = (1.0 - (*c).e as f64) * (1.0 - sI);
+    m[4] = (*c).e as f64 * (1.0 - sI);
+    m[5] = 0.0;
+    m[6] = 1.0 - (*c).e as f64;
     m[2 * 3 + 1] = 0.0;
     m[2 * 3 + 2] = (*c).e as f64;
-    bM = (1.0 - (*c).d as f64) / l_ref as f64;
-    bI = (*c).d as f64 / l_ref as f64;
+    let bM = (1.0 - (*c).d as f64) / l_ref as f64;
+    let bI = (*c).d as f64 / l_ref as f64;
 
     k = set_u!(bw, 0, 0);
     f[k as usize] = 1.0;
@@ -170,7 +166,6 @@ pub unsafe fn probaln_glocal(
         let mut sum = 0.0;
         k = beg;
         while k <= end {
-            let u;
             let e = if *ref_.add((k - 1) as usize) > 3 || *query > 3 {
                 1.0
             } else if *ref_.add((k - 1) as usize) == *query {
@@ -178,7 +173,7 @@ pub unsafe fn probaln_glocal(
             } else {
                 qual[0] as f64 * EM
             };
-            u = set_u!(bw, 1, k);
+            let u = set_u!(bw, 1, k);
             f[fi_off + u as usize] = e * bM;
             f[fi_off + u as usize + 1] = EI * bI;
             sum += f[fi_off + u as usize] + f[fi_off + u as usize + 1];
@@ -278,9 +273,8 @@ pub unsafe fn probaln_glocal(
 
     k = 1;
     while k <= l_ref {
-        let u;
         let bi = l_query as usize * i_dim;
-        u = set_u!(bw, l_query, k);
+        let u = set_u!(bw, l_query, k);
         if !(u < 3 || u as usize >= i_dim) {
             b[bi + u as usize] = sM / s[l_query as usize] / s[l_query as usize + 1];
             b[bi + u as usize + 1] = sI / s[l_query as usize] / s[l_query as usize + 1];
@@ -346,7 +340,6 @@ pub unsafe fn probaln_glocal(
         let mut sum = 0.0;
         k = end;
         while k >= beg {
-            let u;
             let e = if *ref_.add((k - 1) as usize) > 3 || *query > 3 {
                 1.0
             } else if *ref_.add((k - 1) as usize) == *query {
@@ -354,7 +347,7 @@ pub unsafe fn probaln_glocal(
             } else {
                 qual[0] as f64 * EM
             };
-            u = set_u!(bw, 1, k);
+            let u = set_u!(bw, 1, k);
             if !(u < 3 || u as usize >= i_dim) {
                 sum += e * b[i_dim + u as usize] * bM + EI * b[i_dim + u as usize + 1] * bI;
             }
@@ -421,6 +414,8 @@ pub unsafe fn probaln_glocal(
 mod tests {
     use super::*;
 
+    type ProbalnCase<'a> = (&'a [u8], &'a [u8], &'a [u8], c_int);
+
     fn encode_bases(seq: &[u8]) -> Vec<u8> {
         seq.iter()
             .map(|b| match *b {
@@ -445,7 +440,7 @@ mod tests {
     #[test]
     fn probaln_glocal_matches_htslib_likelihood_only() {
         unsafe {
-            let cases: &[(&[u8], &[u8], &[u8], c_int)] = &[
+            let cases: &[ProbalnCase<'_>] = &[
                 (b"ACTTC", b"ATTC", &[30, 30, 30, 30], 10),
                 (b"ACGTACGTNNACGT", b"ACGTCGTNACGT", &[20; 12], 7),
                 (
@@ -970,6 +965,7 @@ mod tests {
 }
 
 // original: probaln_glocal (htslib/probaln.c:77)
+#[allow(clippy::items_after_test_module, clippy::too_many_arguments)]
 pub unsafe fn probaln_c_77_probaln_glocal(
     ref_: *const u8,
     l_ref: c_int,
@@ -984,6 +980,7 @@ pub unsafe fn probaln_c_77_probaln_glocal(
 }
 
 // original: main (htslib/probaln.c:438)
+#[cfg(unix)]
 pub unsafe fn probaln_c_438_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     let mut conv = [4u8; 256];
     let mut par = probaln_par_t {
@@ -1053,7 +1050,11 @@ pub unsafe fn probaln_c_438_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
         std::ptr::null_mut(),
         std::ptr::null_mut(),
     );
-    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"%d\n".as_ptr(), p);
+    libc::fprintf(
+        crate::htslib_rs::c_compat::stderr.cast(),
+        c"%d\n".as_ptr(),
+        p,
+    );
     libc::free(iqual.cast());
     0
 }

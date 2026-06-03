@@ -45,7 +45,7 @@ static mut STATUS: c_int = libc::EXIT_SUCCESS;
 // original: error (htslib/htsfile.c:47)
 macro_rules! error {
     ($format:expr $(, $arg:expr)* $(,)?) => {{
-        let err = *libc::__errno_location();
+        let err = *crate::htslib_rs::c_compat::__errno_location();
         libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
         libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"htsfile: ".as_ptr());
         libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), $format.as_ptr() $(, $arg)*);
@@ -60,6 +60,7 @@ macro_rules! error {
 }
 
 // original: view_sam (htslib/htsfile.c:64)
+#[allow(clippy::never_loop)]
 pub unsafe fn htsfile_c_64_view_sam(in_: *mut hts::htsFile, filename: *const c_char) {
     let mut b: *mut sam::bam1_t = ptr::null_mut();
     let hdr: *mut sam::sam_hdr_t;
@@ -68,7 +69,7 @@ pub unsafe fn htsfile_c_64_view_sam(in_: *mut hts::htsFile, filename: *const c_c
     'clean: loop {
         hdr = sam::sam_hdr_read(in_);
         if hdr.is_null() {
-            *libc::__errno_location() = 0;
+            *crate::htslib_rs::c_compat::__errno_location() = 0;
             error!(c"reading headers from \"%s\" failed", filename);
             break 'clean;
         }
@@ -121,6 +122,7 @@ pub unsafe fn htsfile_c_64_view_sam(in_: *mut hts::htsFile, filename: *const c_c
 }
 
 // original: view_vcf (htslib/htsfile.c:108)
+#[allow(clippy::never_loop)]
 pub unsafe fn htsfile_c_108_view_vcf(in_: *mut hts::htsFile, filename: *const c_char) {
     let mut rec: *mut vcf::bcf1_t = ptr::null_mut();
     let hdr: *mut vcf::bcf_hdr_t;
@@ -129,7 +131,7 @@ pub unsafe fn htsfile_c_108_view_vcf(in_: *mut hts::htsFile, filename: *const c_
     'clean: loop {
         hdr = vcf::bcf_hdr_read(in_);
         if hdr.is_null() {
-            *libc::__errno_location() = 0;
+            *crate::htslib_rs::c_compat::__errno_location() = 0;
             error!(c"reading headers from \"%s\" failed", filename);
             break 'clean;
         }
@@ -210,7 +212,7 @@ pub unsafe fn htsfile_c_152_view_raw(fp: *mut hts::hFILE, filename: *const c_cha
     }
 
     if hfile::htslib_hfile_h_134_herrno(fp) != 0 {
-        *libc::__errno_location() = hfile::htslib_hfile_h_134_herrno(fp);
+        *crate::htslib_rs::c_compat::__errno_location() = hfile::htslib_hfile_h_134_herrno(fp);
         error!(c"reading \"%s\" failed", filename);
     }
 }
@@ -364,18 +366,30 @@ pub unsafe fn htsfile_c_227_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 );
                 libc::exit(libc::EXIT_SUCCESS);
             }
-            2 => htsfile_c_213_usage(crate::htslib_rs::c_compat::stdout.cast(), libc::EXIT_SUCCESS),
-            _ => htsfile_c_213_usage(crate::htslib_rs::c_compat::stderr.cast(), libc::EXIT_FAILURE),
+            2 => htsfile_c_213_usage(
+                crate::htslib_rs::c_compat::stdout.cast(),
+                libc::EXIT_SUCCESS,
+            ),
+            _ => htsfile_c_213_usage(
+                crate::htslib_rs::c_compat::stderr.cast(),
+                libc::EXIT_FAILURE,
+            ),
         }
     }
 
     if optind == argc {
-        htsfile_c_213_usage(crate::htslib_rs::c_compat::stderr.cast(), libc::EXIT_FAILURE);
+        htsfile_c_213_usage(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            libc::EXIT_FAILURE,
+        );
     }
 
     if MODE == COPY {
         if optind + 2 != argc {
-            htsfile_c_213_usage(crate::htslib_rs::c_compat::stderr.cast(), libc::EXIT_FAILURE);
+            htsfile_c_213_usage(
+                crate::htslib_rs::c_compat::stderr.cast(),
+                libc::EXIT_FAILURE,
+            );
         }
         htsfile_c_169_copy_raw(*argv.add(optind as usize), *argv.add(optind as usize + 1));
         return STATUS;
@@ -416,7 +430,7 @@ pub unsafe fn htsfile_c_227_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                         if VERBOSE != 0 {
                             htsfile_c_152_view_raw(fp, *argv.add(i as usize));
                         } else {
-                            *libc::__errno_location() = 0;
+                            *crate::htslib_rs::c_compat::__errno_location() = 0;
                             error!(c"can't view \"%s\": unknown format", *argv.add(i as usize));
                         }
                     }
@@ -426,8 +440,8 @@ pub unsafe fn htsfile_c_227_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                     error!(c"closing \"%s\" failed", *argv.add(i as usize));
                 }
                 fp = ptr::null_mut();
-            } else if (*libc::__errno_location() == EFTYPE
-                || *libc::__errno_location() == libc::ENOEXEC)
+            } else if (*crate::htslib_rs::c_compat::__errno_location() == EFTYPE
+                || *crate::htslib_rs::c_compat::__errno_location() == libc::ENOEXEC)
                 && VERBOSE != 0
             {
                 htsfile_c_152_view_raw(fp, *argv.add(i as usize));
@@ -442,7 +456,9 @@ pub unsafe fn htsfile_c_227_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
         i += 1;
     }
 
-    if libc::fclose(crate::htslib_rs::c_compat::stdout.cast()) != 0 && *libc::__errno_location() != libc::EBADF {
+    if libc::fclose(crate::htslib_rs::c_compat::stdout.cast()) != 0
+        && *crate::htslib_rs::c_compat::__errno_location() != libc::EBADF
+    {
         error!(c"closing standard output failed");
     }
 

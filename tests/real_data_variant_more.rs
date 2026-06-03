@@ -641,51 +641,24 @@ fn synced_bcf_reader_disambiguates_braced_weird_chromosome_regions() {
     unsafe {
         let bcf = make_indexed_bcf_from_vcf("htslib/test/bcf-sr/weird-chr-names.vcf", "weird");
         let cases = [
-            (c"1".as_ref(), "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (c"1", "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (c"1:1-2", "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (c"1:1,1:2", "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (c"1:1-1", "htslib/test/bcf-sr/weird-chr-names.2.out"),
+            (c"{1:1}", "htslib/test/bcf-sr/weird-chr-names.3.out"),
+            (c"{1:1}:1-2", "htslib/test/bcf-sr/weird-chr-names.3.out"),
             (
-                c"1:1-2".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.1.out",
-            ),
-            (
-                c"1:1,1:2".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.1.out",
-            ),
-            (
-                c"1:1-1".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.2.out",
-            ),
-            (
-                c"{1:1}".as_ref(),
+                c"{1:1}:1,{1:1}:2",
                 "htslib/test/bcf-sr/weird-chr-names.3.out",
             ),
+            (c"{1:1}:1-1", "htslib/test/bcf-sr/weird-chr-names.4.out"),
+            (c"{1:1-1}", "htslib/test/bcf-sr/weird-chr-names.5.out"),
+            (c"{1:1-1}:1-2", "htslib/test/bcf-sr/weird-chr-names.5.out"),
             (
-                c"{1:1}:1-2".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.3.out",
-            ),
-            (
-                c"{1:1}:1,{1:1}:2".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.3.out",
-            ),
-            (
-                c"{1:1}:1-1".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.4.out",
-            ),
-            (
-                c"{1:1-1}".as_ref(),
+                c"{1:1-1}:1,{1:1-1}:2",
                 "htslib/test/bcf-sr/weird-chr-names.5.out",
             ),
-            (
-                c"{1:1-1}:1-2".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.5.out",
-            ),
-            (
-                c"{1:1-1}:1,{1:1-1}:2".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.5.out",
-            ),
-            (
-                c"{1:1-1}:1-1".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.6.out",
-            ),
+            (c"{1:1-1}:1-1", "htslib/test/bcf-sr/weird-chr-names.6.out"),
         ];
 
         for (idx, (region, expected_path)) in cases.iter().enumerate() {
@@ -716,51 +689,24 @@ fn synced_bcf_reader_disambiguates_braced_weird_chromosome_targets() {
         let bcf =
             make_indexed_bcf_from_vcf("htslib/test/bcf-sr/weird-chr-names.vcf", "weird-target");
         let cases = [
-            (c"1".as_ref(), "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (c"1", "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (c"1:1-2", "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (c"1:1,1:2", "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (c"1:1-1", "htslib/test/bcf-sr/weird-chr-names.2.out"),
+            (c"{1:1}", "htslib/test/bcf-sr/weird-chr-names.3.out"),
+            (c"{1:1}:1-2", "htslib/test/bcf-sr/weird-chr-names.3.out"),
             (
-                c"1:1-2".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.1.out",
-            ),
-            (
-                c"1:1,1:2".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.1.out",
-            ),
-            (
-                c"1:1-1".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.2.out",
-            ),
-            (
-                c"{1:1}".as_ref(),
+                c"{1:1}:1,{1:1}:2",
                 "htslib/test/bcf-sr/weird-chr-names.3.out",
             ),
+            (c"{1:1}:1-1", "htslib/test/bcf-sr/weird-chr-names.4.out"),
+            (c"{1:1-1}", "htslib/test/bcf-sr/weird-chr-names.5.out"),
+            (c"{1:1-1}:1-2", "htslib/test/bcf-sr/weird-chr-names.5.out"),
             (
-                c"{1:1}:1-2".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.3.out",
-            ),
-            (
-                c"{1:1}:1,{1:1}:2".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.3.out",
-            ),
-            (
-                c"{1:1}:1-1".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.4.out",
-            ),
-            (
-                c"{1:1-1}".as_ref(),
+                c"{1:1-1}:1,{1:1-1}:2",
                 "htslib/test/bcf-sr/weird-chr-names.5.out",
             ),
-            (
-                c"{1:1-1}:1-2".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.5.out",
-            ),
-            (
-                c"{1:1-1}:1,{1:1-1}:2".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.5.out",
-            ),
-            (
-                c"{1:1-1}:1-1".as_ref(),
-                "htslib/test/bcf-sr/weird-chr-names.6.out",
-            ),
+            (c"{1:1-1}:1-1", "htslib/test/bcf-sr/weird-chr-names.6.out"),
         ];
 
         for (idx, (target, expected_path)) in cases.iter().enumerate() {

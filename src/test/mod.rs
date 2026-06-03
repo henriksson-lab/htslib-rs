@@ -246,6 +246,7 @@ pub mod hfile;
 pub mod hts_endian;
 pub mod pileup;
 pub mod pileup_mod;
+#[cfg(any())]
 #[path = "plugins-dlhts.rs"]
 pub mod plugins_dlhts;
 pub mod sam;

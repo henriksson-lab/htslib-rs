@@ -255,28 +255,22 @@ pub unsafe fn test_test_str2int_c_169_check_strprint(v: c_int) -> c_int {
         test_test_str2int_c_158_check_strprint1(v, c"tab\twxyz".as_ptr(), 8, c"tab\\...".as_ptr());
     res |= test_test_str2int_c_158_check_strprint1(v, c"tab\twxyz".as_ptr(), 7, c"tab...".as_ptr());
     res |= test_test_str2int_c_158_check_strprint1(v, c"tab\twxyz".as_ptr(), 6, c"ta...".as_ptr());
-    res |=
-        test_test_str2int_c_158_check_strprint1(v, b"\xab\0".as_ptr().cast(), 5, c"\\xAB".as_ptr());
-    res |=
-        test_test_str2int_c_158_check_strprint1(v, b"\xab\0".as_ptr().cast(), 4, c"...".as_ptr());
+    res |= test_test_str2int_c_158_check_strprint1(v, c"\xAB".as_ptr(), 5, c"\\xAB".as_ptr());
+    res |= test_test_str2int_c_158_check_strprint1(v, c"\xAB".as_ptr(), 4, c"...".as_ptr());
     res |= test_test_str2int_c_158_check_strprint1(
         v,
-        b"hello\xff\0".as_ptr().cast(),
+        c"hello\xFF".as_ptr(),
         40,
         c"hello\\xFF".as_ptr(),
     );
     res |= test_test_str2int_c_158_check_strprint1(
         v,
-        b"hello\xff\0".as_ptr().cast(),
+        c"hello\xFF".as_ptr(),
         10,
         c"hello\\xFF".as_ptr(),
     );
-    res |= test_test_str2int_c_158_check_strprint1(
-        v,
-        b"hello\xff\0".as_ptr().cast(),
-        9,
-        c"hello...".as_ptr(),
-    );
+    res |=
+        test_test_str2int_c_158_check_strprint1(v, c"hello\xFF".as_ptr(), 9, c"hello...".as_ptr());
     res |=
         test_test_str2int_c_158_check_strprint1(v, c"hello\t".as_ptr(), 40, c"hello\\t".as_ptr());
     res |= test_test_str2int_c_158_check_strprint1(v, c"hello\t".as_ptr(), 8, c"hello\\t".as_ptr());
@@ -382,7 +376,11 @@ pub unsafe fn test_test_str2int_c_208_main(argc: c_int, argv: *mut *mut c_char) 
         match opt as u8 {
             b'v' => verbose = 1,
             _ => {
-                libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Usage: %s [-v]\n".as_ptr(), *argv);
+                libc::fprintf(
+                    crate::htslib_rs::c_compat::stderr.cast(),
+                    c"Usage: %s [-v]\n".as_ptr(),
+                    *argv,
+                );
                 return libc::EXIT_FAILURE;
             }
         }

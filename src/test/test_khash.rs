@@ -125,8 +125,8 @@ unsafe fn kh_resize_str2int(h: *mut kh_str2int_t, mut new_n_buckets: khint_t) ->
                 }
                 kh_set_isboth_false(new_flags, i);
                 if i < old_n_buckets && !kh_iseither(old_flags, i) {
-                    std::mem::swap(&mut *(*h).keys.add(i as usize), &mut key);
-                    std::mem::swap(&mut *(*h).vals.add(i as usize), &mut val);
+                    std::ptr::swap((*h).keys.add(i as usize), &mut key);
+                    std::ptr::swap((*h).vals.add(i as usize), &mut val);
                     kh_set_isdel_true(old_flags, i);
                 } else {
                     *(*h).keys.add(i as usize) = key;
@@ -175,7 +175,6 @@ unsafe fn kh_resize_str2int(h: *mut kh_str2int_t, mut new_n_buckets: khint_t) ->
 }
 
 unsafe fn kh_put_str2int(h: *mut kh_str2int_t, key: *mut c_char, ret: *mut c_int) -> khint_t {
-    let x;
     if (*h).n_occupied >= (*h).upper_bound {
         if (*h).n_buckets > (*h).size << 1 {
             if kh_resize_str2int(h, (*h).n_buckets - 1) < 0 {
@@ -191,7 +190,7 @@ unsafe fn kh_put_str2int(h: *mut kh_str2int_t, key: *mut c_char, ret: *mut c_int
     let mask = (*h).n_buckets - 1;
     let mut i = kh_str_hash_func(key) & mask;
     let mut site = (*h).n_buckets;
-    x = if kh_isempty((*h).flags, i) {
+    let x = if kh_isempty((*h).flags, i) {
         i
     } else {
         let last = i;
@@ -418,16 +417,15 @@ pub unsafe fn test_test_khash_c_98_check_str2int_entry(
 ) -> c_int {
     let k = kh_get_str2int(h, key);
     if is_deleted != 0 {
-        if k < (*h).n_buckets {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Found deleted entry %s in hash table\n".as_ptr(),
-                key,
-            );
-            return -1;
-        } else {
+        if k >= (*h).n_buckets {
             return 0;
         }
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"Found deleted entry %s in hash table\n".as_ptr(),
+            key,
+        );
+        return -1;
     }
 
     if k >= (*h).n_buckets {
@@ -643,10 +641,8 @@ pub unsafe fn test_test_khash_c_236_read_keys(
     }
 
     // Slurp entire file
-    if libc::fstat(libc::fileno(in_), &mut fileinfo) < 0 {
-        if fileinfo.st_size as usize > keys_size {
-            keys_size = fileinfo.st_size as usize;
-        }
+    if libc::fstat(libc::fileno(in_), &mut fileinfo) < 0 && fileinfo.st_size as usize > keys_size {
+        keys_size = fileinfo.st_size as usize;
     }
 
     let mut keys = libc::malloc(keys_size + 1).cast::<c_char>();
@@ -744,7 +740,7 @@ pub unsafe fn test_test_khash_c_236_read_keys(
 // original: get_time (htslib/test/test_khash.c:312)
 pub unsafe fn test_test_khash_c_312_get_time() -> i64 {
     let mut tv: libc::timeval = std::mem::zeroed();
-    if libc::gettimeofday(&mut tv, std::ptr::null_mut()) < 0 {
+    if crate::htslib_rs::c_compat::gettimeofday(&mut tv, std::ptr::null_mut()) < 0 {
         libc::perror(c"gettimeofday".as_ptr());
         return -1;
     }
@@ -949,7 +945,7 @@ pub unsafe fn test_test_khash_c_448_main(argc: c_int, argv: *mut *mut c_char) ->
             c if c == b'd' as c_int => show_stats = 1,
             c if c == b'f' as c_int => {
                 del_frac = libc::strtod(optarg, std::ptr::null_mut());
-                if del_frac < 0.0 || del_frac > 1.0 {
+                if !(0.0..=1.0).contains(&del_frac) {
                     libc::fprintf(
                         crate::htslib_rs::c_compat::stderr.cast(),
                         c"Error: -d must be between 0.0 and 1.0\n".as_ptr(),
@@ -964,7 +960,7 @@ pub unsafe fn test_test_khash_c_448_main(argc: c_int, argv: *mut *mut c_char) ->
             c if c == b'i' as c_int => input_file = optarg,
             c if c == b'n' as c_int => {
                 max = libc::strtoul(optarg, std::ptr::null_mut(), 0) as usize;
-                if max == 0 || max > 99_999_999 {
+                if !(1..=MAX_ENTRIES).contains(&max) {
                     libc::fprintf(
                         crate::htslib_rs::c_compat::stderr.cast(),
                         c"Error: -n must be between 1 and %u\n".as_ptr(),
@@ -981,18 +977,18 @@ pub unsafe fn test_test_khash_c_448_main(argc: c_int, argv: *mut *mut c_char) ->
         }
     }
 
-    if test.is_null() || libc::strcmp(test, c"str2int".as_ptr()) == 0 {
-        if test_test_khash_c_137_test_str2int(max, (max as f64 * del_frac) as usize, show_stats)
+    if (test.is_null() || libc::strcmp(test, c"str2int".as_ptr()) == 0)
+        && test_test_khash_c_137_test_str2int(max, (max as f64 * del_frac) as usize, show_stats)
             != 0
-        {
-            res = libc::EXIT_FAILURE;
-        }
+    {
+        res = libc::EXIT_FAILURE;
     }
 
-    if !test.is_null() && libc::strcmp(test, c"benchmark".as_ptr()) == 0 {
-        if test_test_khash_c_344_benchmark(input_file) != 0 {
-            res = libc::EXIT_FAILURE;
-        }
+    if !test.is_null()
+        && libc::strcmp(test, c"benchmark".as_ptr()) == 0
+        && test_test_khash_c_344_benchmark(input_file) != 0
+    {
+        res = libc::EXIT_FAILURE;
     }
 
     res

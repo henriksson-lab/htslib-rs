@@ -8,8 +8,17 @@ pub unsafe fn test_test_time_funcs_c_36_test_normalised(
 ) -> c_int {
     let mut i = start;
     while i < end {
-        let utc = libc::gmtime(&i as *const libc::time_t);
-        let j = crate::htslib_rs::hts::hts_time_gm(utc);
+        let (year, month, day, hour, min, sec, wday) =
+            crate::htslib_rs::c_compat::unix_time_utc_parts(i);
+        let mut utc: libc::tm = std::mem::zeroed();
+        utc.tm_sec = sec as c_int;
+        utc.tm_min = min as c_int;
+        utc.tm_hour = hour as c_int;
+        utc.tm_mday = day as c_int;
+        utc.tm_mon = month as c_int - 1;
+        utc.tm_year = year - 1900;
+        utc.tm_wday = wday as c_int;
+        let j = crate::htslib_rs::hts::hts_time_gm(&mut utc);
         if i != j {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
@@ -73,15 +82,14 @@ pub unsafe fn test_test_time_funcs_c_68_main(_argc: c_int, _argv: *mut *mut c_ch
     if test_test_time_funcs_c_36_test_normalised(0, int_max - 1000, 1000) != 0 {
         return libc::EXIT_FAILURE;
     }
-    if std::mem::size_of::<libc::time_t>() >= 8 {
-        if test_test_time_funcs_c_36_test_normalised(
+    if std::mem::size_of::<libc::time_t>() >= 8
+        && test_test_time_funcs_c_36_test_normalised(
             int_max - 1000,
             ((c_int::MAX as i64) * 2) as libc::time_t,
             1000,
         ) != 0
-        {
-            return libc::EXIT_FAILURE;
-        }
+    {
+        return libc::EXIT_FAILURE;
     }
 
     // 2022-06-14 12:32:10

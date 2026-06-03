@@ -12,12 +12,12 @@
 //! real on-disk headers.
 
 use htslib_rs::{
-    hts_close, hts_open, htsFile, ks_free, kstring_t, sam_hdr_add_line, sam_hdr_add_lines,
+    htsFile, hts_close, hts_open, ks_free, kstring_t, sam_hdr_add_line, sam_hdr_add_lines,
     sam_hdr_add_pg, sam_hdr_count_lines, sam_hdr_destroy, sam_hdr_find_line_id,
     sam_hdr_find_line_pos, sam_hdr_find_tag_id, sam_hdr_find_tag_pos, sam_hdr_line_index,
     sam_hdr_line_name, sam_hdr_name2tid, sam_hdr_nref, sam_hdr_pg_id, sam_hdr_read,
-    sam_hdr_remove_line_id, sam_hdr_remove_line_pos, sam_hdr_remove_tag_id, sam_hdr_str,
-    sam_hdr_t, sam_hdr_tid2len, sam_hdr_tid2name, sam_hdr_update_line,
+    sam_hdr_remove_line_id, sam_hdr_remove_line_pos, sam_hdr_remove_tag_id, sam_hdr_str, sam_hdr_t,
+    sam_hdr_tid2len, sam_hdr_tid2name, sam_hdr_update_line,
 };
 use std::ffi::{CStr, CString};
 use std::os::raw::c_int;
@@ -209,13 +209,7 @@ fn find_line_id_returns_full_rg_line_text() {
 
         let mut ks: kstring_t = std::mem::zeroed();
         assert_eq!(
-            sam_hdr_find_line_id(
-                hdr,
-                c"RG".as_ptr(),
-                c"ID".as_ptr(),
-                c"x2".as_ptr(),
-                &mut ks,
-            ),
+            sam_hdr_find_line_id(hdr, c"RG".as_ptr(), c"ID".as_ptr(), c"x2".as_ptr(), &mut ks,),
             0
         );
         let line = kstring_bytes(&ks);
@@ -364,11 +358,7 @@ fn add_line_appends_co_comment_and_count_lines_reflects_it() {
         // value pointer must be null.
         let comment = CString::new("Added by integration test").unwrap();
         assert_eq!(
-            sam_hdr_add_line(
-                hdr,
-                c"CO".as_ptr(),
-                &[(comment.as_ptr(), std::ptr::null())],
-            ),
+            sam_hdr_add_line(hdr, c"CO".as_ptr(), &[(comment.as_ptr(), std::ptr::null())],),
             0
         );
         assert_eq!(sam_hdr_count_lines(hdr, c"CO".as_ptr()), 3);
@@ -391,10 +381,7 @@ fn add_lines_parses_multiple_co_records_and_count_lines_increments() {
 
         let extra = CString::new("@CO\textra one\n@CO\textra two\n").unwrap();
         let bytes = extra.as_bytes();
-        assert_eq!(
-            sam_hdr_add_lines(hdr, extra.as_ptr(), bytes.len()),
-            0
-        );
+        assert_eq!(sam_hdr_add_lines(hdr, extra.as_ptr(), bytes.len()), 0);
         let after = sam_hdr_count_lines(hdr, c"CO".as_ptr());
         assert_eq!(after, before + 2);
 
@@ -411,11 +398,7 @@ fn add_line_rejects_invalid_inputs() {
         let bad = CString::new("text").unwrap();
         let val = CString::new("v").unwrap();
         assert_eq!(
-            sam_hdr_add_line(
-                hdr,
-                c"CO".as_ptr(),
-                &[(bad.as_ptr(), val.as_ptr())],
-            ),
+            sam_hdr_add_line(hdr, c"CO".as_ptr(), &[(bad.as_ptr(), val.as_ptr())],),
             -1
         );
 
@@ -423,11 +406,7 @@ fn add_line_rejects_invalid_inputs() {
         let k = CString::new("KK").unwrap();
         let v = CString::new("v").unwrap();
         assert_eq!(
-            sam_hdr_add_line(
-                hdr,
-                c"XX".as_ptr(),
-                &[(k.as_ptr(), v.as_ptr())],
-            ),
+            sam_hdr_add_line(hdr, c"XX".as_ptr(), &[(k.as_ptr(), v.as_ptr())],),
             -1
         );
 
@@ -504,12 +483,7 @@ fn remove_line_id_drops_rg_and_count_decreases() {
         assert_eq!(sam_hdr_count_lines(hdr, c"RG".as_ptr()), 2);
 
         assert_eq!(
-            sam_hdr_remove_line_id(
-                hdr,
-                c"RG".as_ptr(),
-                c"ID".as_ptr(),
-                c"x2".as_ptr(),
-            ),
+            sam_hdr_remove_line_id(hdr, c"RG".as_ptr(), c"ID".as_ptr(), c"x2".as_ptr(),),
             0
         );
         assert_eq!(sam_hdr_count_lines(hdr, c"RG".as_ptr()), 1);
@@ -518,10 +492,7 @@ fn remove_line_id_drops_rg_and_count_decreases() {
         let name = sam_hdr_line_name(hdr, c"RG".as_ptr(), 0);
         assert!(!name.is_null());
         assert_eq!(CStr::from_ptr(name).to_bytes(), b"x1");
-        assert_eq!(
-            sam_hdr_line_index(hdr, c"RG".as_ptr(), c"x2".as_ptr()),
-            -1
-        );
+        assert_eq!(sam_hdr_line_index(hdr, c"RG".as_ptr(), c"x2".as_ptr()), -1);
 
         close_header(fp, hdr);
     }
@@ -643,7 +614,11 @@ fn add_pg_appends_new_pg_and_pg_id_uniquifies_clashing_name() {
         assert!(!unique.is_null());
         let unique_bytes = CStr::from_ptr(unique).to_bytes();
         assert_ne!(unique_bytes, b"emacs");
-        assert!(unique_bytes.starts_with(b"emacs."), "got: {:?}", unique_bytes);
+        assert!(
+            unique_bytes.starts_with(b"emacs."),
+            "got: {:?}",
+            unique_bytes
+        );
 
         close_header(fp, hdr);
     }
@@ -661,20 +636,11 @@ fn header_text_reflects_added_co_and_removed_rg() {
         // Mutate: add a CO and remove an RG.
         let comment = CString::new("tag-from-test").unwrap();
         assert_eq!(
-            sam_hdr_add_line(
-                hdr,
-                c"CO".as_ptr(),
-                &[(comment.as_ptr(), std::ptr::null())],
-            ),
+            sam_hdr_add_line(hdr, c"CO".as_ptr(), &[(comment.as_ptr(), std::ptr::null())],),
             0
         );
         assert_eq!(
-            sam_hdr_remove_line_id(
-                hdr,
-                c"RG".as_ptr(),
-                c"ID".as_ptr(),
-                c"x1".as_ptr(),
-            ),
+            sam_hdr_remove_line_id(hdr, c"RG".as_ptr(), c"ID".as_ptr(), c"x1".as_ptr(),),
             0
         );
 

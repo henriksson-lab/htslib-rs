@@ -27,7 +27,7 @@
 #![cfg(feature = "parity")]
 
 use htslib_rs::{hts_json_token, kstring_t};
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CStr};
 
 // ---------------------------------------------------------------------------
 // Manual externs into libhts for symbols not in hts-sys's bindgen output.
@@ -35,34 +35,18 @@ use std::ffi::{c_char, c_int, c_void, CStr, CString};
 // ---------------------------------------------------------------------------
 
 extern "C" {
-    fn hts_decode_percent(
-        dest: *mut c_char,
-        destlen: *mut usize,
-        s: *const c_char,
-    ) -> c_int;
+    fn hts_decode_percent(dest: *mut c_char, destlen: *mut usize, s: *const c_char) -> c_int;
 
     fn hts_base64_decoded_length(len: usize) -> usize;
 
-    fn hts_decode_base64(
-        dest: *mut c_char,
-        destlen: *mut usize,
-        s: *const c_char,
-    ) -> c_int;
+    fn hts_decode_base64(dest: *mut c_char, destlen: *mut usize, s: *const c_char) -> c_int;
 
     fn hts_json_alloc_token() -> *mut c_void;
     fn hts_json_free_token(t: *mut c_void);
     fn hts_json_token_type(t: *mut c_void) -> c_char;
     fn hts_json_token_str(t: *mut c_void) -> *mut c_char;
-    fn hts_json_snext(
-        str_: *mut c_char,
-        state: *mut usize,
-        token: *mut c_void,
-    ) -> c_char;
-    fn hts_json_sskip_value(
-        str_: *mut c_char,
-        state: *mut usize,
-        type_: c_char,
-    ) -> c_char;
+    fn hts_json_snext(str_: *mut c_char, state: *mut usize, token: *mut c_void) -> c_char;
+    fn hts_json_sskip_value(str_: *mut c_char, state: *mut usize, type_: c_char) -> c_char;
 
     fn hts_strprint(
         buf: *mut c_char,
@@ -80,8 +64,7 @@ extern "C" {
 unsafe fn decode_percent_native(input: &CStr) -> (Vec<u8>, usize) {
     let mut buf = vec![0i8; input.to_bytes().len() + 1];
     let mut len: usize = 0;
-    let ret =
-        htslib_rs::textutils::hts_decode_percent(buf.as_mut_ptr(), &mut len, input.as_ptr());
+    let ret = htslib_rs::textutils::hts_decode_percent(buf.as_mut_ptr(), &mut len, input.as_ptr());
     assert_eq!(ret, 0);
     let bytes = std::slice::from_raw_parts(buf.as_ptr() as *const u8, len).to_vec();
     (bytes, len)
@@ -92,8 +75,8 @@ unsafe fn decode_percent_c(input: &CStr) -> (Vec<u8>, usize) {
     let mut len: usize = 0;
     let ret = hts_decode_percent(buf.as_mut_ptr(), &mut len, input.as_ptr());
     assert_eq!(ret, 0);
-    let bytes = std::slice::from_raw_parts(buf.as_ptr() as *const u8, len as usize).to_vec();
-    (bytes, len as usize)
+    let bytes = std::slice::from_raw_parts(buf.as_ptr() as *const u8, len).to_vec();
+    (bytes, len)
 }
 
 #[test]
@@ -105,9 +88,9 @@ fn parity_hts_decode_percent() {
         c"",
         c"%41%42%43", // ABC
         c"mixed%20stuff%21here",
-        c"%XYbad",   // invalid escape — should be left as %XY
-        c"%2",       // truncated escape
-        c"a%00b",    // %00 produces an embedded NUL
+        c"%XYbad", // invalid escape — should be left as %XY
+        c"%2",     // truncated escape
+        c"a%00b",  // %00 produces an embedded NUL
     ];
     unsafe {
         for input in cases {
@@ -129,8 +112,8 @@ fn parity_hts_base64_decoded_length() {
     unsafe {
         for &len in lens {
             let n = htslib_rs::textutils::hts_base64_decoded_length(len);
-            let c = hts_base64_decoded_length(len as usize);
-            assert_eq!(n, c as usize, "base64_decoded_length mismatch for {len}");
+            let c = hts_base64_decoded_length(len);
+            assert_eq!(n, c, "base64_decoded_length mismatch for {len}");
         }
     }
 }
@@ -152,20 +135,20 @@ fn parity_hts_decode_base64() {
             let cap_n = htslib_rs::textutils::hts_base64_decoded_length(input.to_bytes().len()) + 8;
             let mut buf_n = vec![0i8; cap_n];
             let mut len_n: usize = 0;
-            htslib_rs::textutils::hts_decode_base64(
-                buf_n.as_mut_ptr(),
-                &mut len_n,
-                input.as_ptr(),
-            );
+            htslib_rs::textutils::hts_decode_base64(buf_n.as_mut_ptr(), &mut len_n, input.as_ptr());
 
-            let cap_c = hts_base64_decoded_length(input.to_bytes().len() as usize) + 8;
-            let mut buf_c = vec![0i8; cap_c as usize];
+            let cap_c = hts_base64_decoded_length(input.to_bytes().len()) + 8;
+            let mut buf_c = vec![0i8; cap_c];
             let mut len_c: usize = 0;
             hts_decode_base64(buf_c.as_mut_ptr(), &mut len_c, input.as_ptr());
 
-            assert_eq!(len_n, len_c as usize, "base64 decoded length mismatch for {:?}", input);
+            assert_eq!(
+                len_n, len_c,
+                "base64 decoded length mismatch for {:?}",
+                input
+            );
             let nb = std::slice::from_raw_parts(buf_n.as_ptr() as *const u8, len_n);
-            let cb = std::slice::from_raw_parts(buf_c.as_ptr() as *const u8, len_c as usize);
+            let cb = std::slice::from_raw_parts(buf_c.as_ptr() as *const u8, len_c);
             assert_eq!(nb, cb, "base64 bytes mismatch for {:?}", input);
             if !expected.is_empty() {
                 assert_eq!(nb, *expected, "base64 wrong decode for {:?}", input);
@@ -284,13 +267,13 @@ fn parity_hts_json_sskip_value() {
             let tok_n = htslib_rs::textutils::hts_json_alloc_token();
             let mut state_n: usize = 0;
             // advance to the first token to set up a type
-            let t0_n = htslib_rs::textutils::hts_json_snext(
+            let t0_n =
+                htslib_rs::textutils::hts_json_snext(a.as_mut_ptr().cast(), &mut state_n, tok_n);
+            let after_n = htslib_rs::textutils::hts_json_sskip_value(
                 a.as_mut_ptr().cast(),
                 &mut state_n,
-                tok_n,
+                t0_n,
             );
-            let after_n =
-                htslib_rs::textutils::hts_json_sskip_value(a.as_mut_ptr().cast(), &mut state_n, t0_n);
             htslib_rs::textutils::hts_json_free_token(tok_n);
 
             // C
@@ -302,7 +285,11 @@ fn parity_hts_json_sskip_value() {
 
             assert_eq!(t0_n, t0_c, "initial token type mismatch for {:?}", snippet);
             assert_eq!(after_n, after_c, "sskip_value mismatch for {:?}", snippet);
-            assert_eq!(state_n, state_c, "post-skip state mismatch for {:?}", snippet);
+            assert_eq!(
+                state_n, state_c,
+                "post-skip state mismatch for {:?}",
+                snippet
+            );
         }
     }
 }
@@ -366,13 +353,7 @@ unsafe fn strprint_native(quote: c_char, s: &CStr, len: usize, buflen: usize) ->
 
 unsafe fn strprint_c(quote: c_char, s: &CStr, len: usize, buflen: usize) -> Vec<u8> {
     let mut buf = vec![0i8; buflen];
-    hts_strprint(
-        buf.as_mut_ptr(),
-        buflen as usize,
-        quote,
-        s.as_ptr(),
-        len as usize,
-    );
+    hts_strprint(buf.as_mut_ptr(), buflen, quote, s.as_ptr(), len);
     let s = CStr::from_ptr(buf.as_ptr()).to_bytes().to_vec();
     s
 }
@@ -387,7 +368,12 @@ fn parity_hts_strprint() {
         (b'"' as c_char, c"backslash\\here", usize::MAX, 64),
         (b'"' as c_char, c"non-printable \x01 char", usize::MAX, 64),
         (b'"' as c_char, c"unterminated and then some", 5, 64), // explicit len
-        (b'"' as c_char, c"tiny buf needs ellipsis maybe", usize::MAX, 8),
+        (
+            b'"' as c_char,
+            c"tiny buf needs ellipsis maybe",
+            usize::MAX,
+            8,
+        ),
         (0, c"", usize::MAX, 16),
     ];
     unsafe {

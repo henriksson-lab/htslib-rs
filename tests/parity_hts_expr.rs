@@ -145,7 +145,10 @@ unsafe extern "C" fn lookup_c(
 fn run_native(expr: &CStr) -> (c_int, c_int, c_int, f64, Vec<u8>) {
     unsafe {
         let filt = htslib_rs::hts_expr::hts_filter_init(expr.as_ptr());
-        assert!(!filt.is_null(), "native hts_filter_init returned NULL for {expr:?}");
+        assert!(
+            !filt.is_null(),
+            "native hts_filter_init returned NULL for {expr:?}"
+        );
         let mut res = htslib_rs::hts_expr::hts_expr_val_t {
             is_str: 0,
             is_true: 0,
@@ -156,14 +159,24 @@ fn run_native(expr: &CStr) -> (c_int, c_int, c_int, f64, Vec<u8>) {
             },
             d: 0.0,
         };
-        let rc =
-            htslib_rs::hts_expr::hts_filter_eval2(filt, std::ptr::null_mut(), Some(lookup_native), &mut res);
+        let rc = htslib_rs::hts_expr::hts_filter_eval2(
+            filt,
+            std::ptr::null_mut(),
+            Some(lookup_native),
+            &mut res,
+        );
         let s_bytes = if res.s.s.is_null() {
             Vec::new()
         } else {
             std::slice::from_raw_parts(res.s.s as *const u8, res.s.l).to_vec()
         };
-        let out = (rc, res.is_str as c_int, res.is_true as c_int, res.d, s_bytes);
+        let out = (
+            rc,
+            res.is_str as c_int,
+            res.is_true as c_int,
+            res.d,
+            s_bytes,
+        );
         htslib_rs::hts_expr::hts_expr_val_free(&mut res);
         htslib_rs::hts_expr::hts_filter_free(filt);
         out
@@ -173,7 +186,10 @@ fn run_native(expr: &CStr) -> (c_int, c_int, c_int, f64, Vec<u8>) {
 fn run_c(expr: &CStr) -> (c_int, c_int, c_int, f64, Vec<u8>) {
     unsafe {
         let filt = hts_filter_init(expr.as_ptr());
-        assert!(!filt.is_null(), "C hts_filter_init returned NULL for {expr:?}");
+        assert!(
+            !filt.is_null(),
+            "C hts_filter_init returned NULL for {expr:?}"
+        );
         let mut res = CHtsExprVal {
             is_str: 0,
             is_true: 0,
@@ -184,9 +200,15 @@ fn run_c(expr: &CStr) -> (c_int, c_int, c_int, f64, Vec<u8>) {
         let s_bytes = if res.s.s.is_null() {
             Vec::new()
         } else {
-            std::slice::from_raw_parts(res.s.s as *const u8, res.s.l as usize).to_vec()
+            std::slice::from_raw_parts(res.s.s as *const u8, res.s.l).to_vec()
         };
-        let out = (rc, res.is_str as c_int, res.is_true as c_int, res.d, s_bytes);
+        let out = (
+            rc,
+            res.is_str as c_int,
+            res.is_true as c_int,
+            res.d,
+            s_bytes,
+        );
         // free res.s
         if !res.s.s.is_null() {
             libc::free(res.s.s.cast());
@@ -377,8 +399,14 @@ struct RecordCtx {
     pos: i64,
 }
 
-unsafe fn resolve_field(str_: *mut c_char, end: *mut *mut c_char, ctx: *const RecordCtx) -> Option<f64> {
-    let known: &[(&[u8], fn(&RecordCtx) -> f64)] = &[
+type FieldGetter = fn(&RecordCtx) -> f64;
+
+unsafe fn resolve_field(
+    str_: *mut c_char,
+    end: *mut *mut c_char,
+    ctx: *const RecordCtx,
+) -> Option<f64> {
+    let known: &[(&[u8], FieldGetter)] = &[
         (b"FLAG", |c| c.flag as f64),
         (b"MAPQ", |c| c.qual as f64),
         (b"POS", |c| c.pos as f64),

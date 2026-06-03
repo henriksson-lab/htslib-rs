@@ -391,8 +391,8 @@ pub unsafe fn kh_resize_map(h: *mut kh_generic_layout, mut new_n_buckets: u32) -
                         && ((*(*h).flags.add((i >> 4) as usize) >> ((i & 0xf) << 1)) & 3) == 0
                     {
                         // kick out existing element
-                        std::mem::swap(&mut key, &mut *keys.add(i as usize));
-                        std::mem::swap(&mut val, &mut *vals.add(i as usize));
+                        std::ptr::swap(&mut key, keys.add(i as usize));
+                        std::ptr::swap(&mut val, vals.add(i as usize));
                         *(*h).flags.add((i >> 4) as usize) |= 1 << ((i & 0xf) << 1);
                     } else {
                         *keys.add(i as usize) = key;
@@ -630,11 +630,11 @@ pub unsafe fn cram_set_required_fields_pos(fd: *mut cram_fd) {
         return;
     }
     let fdl = fd.cast::<cram_fd_layout>();
-    libc::pthread_mutex_lock(&mut (*fdl).range_lock);
+    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).range_lock);
     if (*fdl).range.refid != -2 {
         (*fdl).required_fields |= crate::htslib_rs::cram::SAM_POS;
     }
-    libc::pthread_mutex_unlock(&mut (*fdl).range_lock);
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).range_lock);
 }
 
 pub unsafe fn cram_set_voption(
@@ -729,7 +729,7 @@ unsafe fn cram_voption_set_range_noseek(fd: *mut cram_fd, r: *const cram_range_l
         }
 
         let fd = fd.cast::<cram_fd_layout>();
-        libc::pthread_mutex_lock(&mut (*fd).range_lock);
+        crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fd).range_lock);
         (*fd).range = *r;
         if (*r).refid == HTS_IDX_NOCOOR {
             (*fd).range.refid = -1;
@@ -742,7 +742,7 @@ unsafe fn cram_voption_set_range_noseek(fd: *mut cram_fd, r: *const cram_range_l
         }
         (*fd).ooc = 0;
         (*fd).eof = 0;
-        libc::pthread_mutex_unlock(&mut (*fd).range_lock);
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fd).range_lock);
         0
     }
 }
@@ -1086,11 +1086,11 @@ pub(crate) struct cram_fd_layout {
     own_pool: c_int,
     pool: *mut c_void,
     rqueue: *mut c_void,
-    metrics_lock: libc::pthread_mutex_t,
-    ref_lock: libc::pthread_mutex_t,
-    range_lock: libc::pthread_mutex_t,
+    metrics_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
+    ref_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
+    range_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
     bl: *mut c_void,
-    bam_list_lock: libc::pthread_mutex_t,
+    bam_list_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
     job_pending: *mut c_void,
     pub(crate) ooc: c_int,
     lossy_read_names: c_int,
@@ -1200,7 +1200,7 @@ struct refs_t_layout {
     fn_: *mut c_char,
     fp: *mut BGZF,
     count: c_int,
-    lock: libc::pthread_mutex_t,
+    lock: crate::htslib_rs::c_compat::pthread_mutex_t,
     last: *mut ref_entry_layout,
     last_id: c_int,
 }
@@ -1908,6 +1908,7 @@ fn kh_int_hash(key: u32) -> u32 {
 
 // kh_resize for an INT-keyed khash with `*mut T` values. Identical structure
 // to the kh_m_s2u64 resize but with u32 keys and pointer-sized vals.
+#[allow(clippy::too_many_arguments)]
 unsafe fn kh_resize_int_ptr<T>(
     n_buckets_field: *mut u32,
     size_field: *mut u32,
@@ -1992,8 +1993,8 @@ unsafe fn kh_resize_int_ptr<T>(
                     if i < old_n
                         && ((*(*flags_field).add((i >> 4) as usize) >> ((i & 0xf) << 1)) & 3) == 0
                     {
-                        std::mem::swap(&mut key, &mut *(*keys_field).add(i as usize));
-                        std::mem::swap(&mut val, &mut *(*vals_field).add(i as usize));
+                        std::ptr::swap(&mut key, (*keys_field).add(i as usize));
+                        std::ptr::swap(&mut val, (*vals_field).add(i as usize));
                         *(*flags_field).add((i >> 4) as usize) |= 1 << ((i & 0xf) << 1);
                     } else {
                         *(*keys_field).add(i as usize) = key;
@@ -2017,6 +2018,7 @@ unsafe fn kh_resize_int_ptr<T>(
     0
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn kh_put_int_ptr<T>(
     n_buckets_field: *mut u32,
     size_field: *mut u32,
@@ -2115,7 +2117,7 @@ unsafe fn kh_put_int_ptr<T>(
     x
 }
 
-unsafe fn kh_del_int_ptr<T>(
+unsafe fn kh_del_int_ptr(
     n_buckets_field: *mut u32,
     size_field: *mut u32,
     flags_field: *mut *mut u32,
@@ -2161,7 +2163,7 @@ unsafe fn kh_put_m_metrics(h: *mut kh_m_metrics_layout, key: u32, ret: *mut c_in
 
 #[inline]
 unsafe fn kh_del_m_metrics(h: *mut kh_m_metrics_layout, x: u32) {
-    kh_del_int_ptr::<cram_metrics_layout>(
+    kh_del_int_ptr(
         &raw mut (*h).n_buckets,
         &raw mut (*h).size,
         &raw mut (*h).flags,
@@ -2245,8 +2247,8 @@ unsafe fn kh_resize_m_s2i(h: *mut kh_m_s2i_layout, mut new_n_buckets: u32) -> c_
                     if i < old_n
                         && ((*(*h).flags.add((i >> 4) as usize) >> ((i & 0xf) << 1)) & 3) == 0
                     {
-                        std::mem::swap(&mut key, &mut *(*h).keys.add(i as usize));
-                        std::mem::swap(&mut val, &mut *(*h).vals.add(i as usize));
+                        std::ptr::swap(&mut key, (*h).keys.add(i as usize));
+                        std::ptr::swap(&mut val, (*h).vals.add(i as usize));
                         *(*h).flags.add((i >> 4) as usize) |= 1 << ((i & 0xf) << 1);
                     } else {
                         *(*h).keys.add(i as usize) = key;
@@ -2439,8 +2441,8 @@ unsafe fn kh_resize_m_s2u64(h: *mut kh_m_s2u64_layout, mut new_n_buckets: u32) -
                     if i < old_n
                         && ((*(*h).flags.add((i >> 4) as usize) >> ((i & 0xf) << 1)) & 3) == 0
                     {
-                        std::mem::swap(&mut key, &mut *(*h).keys.add(i as usize));
-                        std::mem::swap(&mut val, &mut *(*h).vals.add(i as usize));
+                        std::ptr::swap(&mut key, (*h).keys.add(i as usize));
+                        std::ptr::swap(&mut val, (*h).vals.add(i as usize));
                         *(*h).flags.add((i >> 4) as usize) |= 1 << ((i & 0xf) << 1);
                     } else {
                         *(*h).keys.add(i as usize) = key;
@@ -3091,6 +3093,7 @@ unsafe fn cram_cram_io_c_1222_zlib_mem_deflate(
 ///
 /// `s` is the cram_slice (needed by FQZ to walk per-record lengths/flags);
 /// may be null for non-FQZ methods.
+#[allow(clippy::too_many_arguments)]
 unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
     s: *mut cram_slice_layout,
     in_: *mut c_char,
@@ -3374,7 +3377,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
     }
 
     if !metrics.is_null() {
-        libc::pthread_mutex_lock(&mut (*fdl).metrics_lock);
+        crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).metrics_lock);
         // Sudden changes in size trigger a retrial.
         if (*metrics).input_avg_sz != 0
             && ((*b).uncomp_size / 4 - 750 > (*metrics).input_avg_sz
@@ -3448,7 +3451,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                 }
             }
 
-            libc::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
 
             for m in 0..CRAM_MAX_METHOD as c_int {
                 if (method & (1u32 << m) as c_int) != 0 {
@@ -3505,10 +3508,14 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
             }
 
             // Accumulate stats for all methods tried.
-            libc::pthread_mutex_lock(&mut (*fdl).metrics_lock);
-            for m in 0..CRAM_MAX_METHOD {
-                (*metrics).sz[m] =
-                    ((*metrics).sz[m] as usize).saturating_add(sz[m] + 2000) as c_int;
+            crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).metrics_lock);
+            for (metric_sz, &method_sz) in (*metrics)
+                .sz
+                .iter_mut()
+                .zip(sz.iter())
+                .take(CRAM_MAX_METHOD)
+            {
+                *metric_sz = (*metric_sz as usize).saturating_add(method_sz + 2000) as c_int;
             }
 
             // When enough trials performed, find the best on average.
@@ -3527,24 +3534,40 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
 
                 let fd_level = (*fdl).level;
                 if fd_level <= 1 {
-                    for m in 0..CRAM_MAX_METHOD {
-                        (*metrics).sz[m] =
-                            ((*metrics).sz[m] as f64 * (1.0 + (meth_cost[m] - 1.0) * 4.0)) as c_int;
+                    for (metric_sz, &cost) in (*metrics)
+                        .sz
+                        .iter_mut()
+                        .zip(meth_cost.iter())
+                        .take(CRAM_MAX_METHOD)
+                    {
+                        *metric_sz = (*metric_sz as f64 * (1.0 + (cost - 1.0) * 4.0)) as c_int;
                     }
                 } else if fd_level <= 3 {
-                    for m in 0..CRAM_MAX_METHOD {
-                        (*metrics).sz[m] =
-                            ((*metrics).sz[m] as f64 * (1.0 + (meth_cost[m] - 1.0))) as c_int;
+                    for (metric_sz, &cost) in (*metrics)
+                        .sz
+                        .iter_mut()
+                        .zip(meth_cost.iter())
+                        .take(CRAM_MAX_METHOD)
+                    {
+                        *metric_sz = (*metric_sz as f64 * (1.0 + (cost - 1.0))) as c_int;
                     }
                 } else if fd_level <= 6 {
-                    for m in 0..CRAM_MAX_METHOD {
-                        (*metrics).sz[m] =
-                            ((*metrics).sz[m] as f64 * (1.0 + (meth_cost[m] - 1.0) / 2.0)) as c_int;
+                    for (metric_sz, &cost) in (*metrics)
+                        .sz
+                        .iter_mut()
+                        .zip(meth_cost.iter())
+                        .take(CRAM_MAX_METHOD)
+                    {
+                        *metric_sz = (*metric_sz as f64 * (1.0 + (cost - 1.0) / 2.0)) as c_int;
                     }
                 } else if fd_level <= 7 {
-                    for m in 0..CRAM_MAX_METHOD {
-                        (*metrics).sz[m] =
-                            ((*metrics).sz[m] as f64 * (1.0 + (meth_cost[m] - 1.0) / 3.0)) as c_int;
+                    for (metric_sz, &cost) in (*metrics)
+                        .sz
+                        .iter_mut()
+                        .zip(meth_cost.iter())
+                        .take(CRAM_MAX_METHOD)
+                    {
+                        *metric_sz = (*metric_sz as f64 * (1.0 + (cost - 1.0) / 3.0)) as c_int;
                     }
                 }
 
@@ -3604,17 +3627,17 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                         }
 
                         // Special case for fqzcomp.
-                        if m == CBMI_FQZ || m == CBMI_FQZ_B || m == CBMI_FQZ_C || m == CBMI_FQZ_D {
-                            if (*metrics).sz[m as usize] > best_sz {
-                                method &= !(1u32 << m) as c_int;
-                            }
+                        if (m == CBMI_FQZ || m == CBMI_FQZ_B || m == CBMI_FQZ_C || m == CBMI_FQZ_D)
+                            && (*metrics).sz[m as usize] > best_sz
+                        {
+                            method &= !(1u32 << m) as c_int;
                         }
                     }
                 }
 
                 (*metrics).revised_method = method;
             }
-            libc::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
         } else {
             (*metrics).input_avg_delta = (0.9
                 * ((*metrics).input_avg_delta as f64
@@ -3627,7 +3650,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
             strat = (*metrics).strat;
             let cached_method = (*metrics).method;
 
-            libc::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
             comp = cram_cram_io_c_1757_cram_compress_by_method(
                 s,
                 (*b).data.cast::<c_char>(),
@@ -3649,11 +3672,11 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                         c"cram_compress_block".as_ptr(),
                         c"Compressed block method failed, redoing trial".as_ptr(),
                     );
-                    libc::pthread_mutex_lock(&mut (*fdl).metrics_lock);
+                    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).metrics_lock);
                     (*metrics).trial = NTRIALS;
                     (*metrics).next_trial = TRIAL_SPAN;
                     (*metrics).revised_method = orig_method;
-                    libc::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
+                    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
                     return cram_cram_io_c_1913_cram_compress_block3(
                         fd, s, b, metrics, method, level, 1,
                     );
@@ -3736,10 +3759,10 @@ unsafe fn cram_cram_io_c_5560_cram_dopen_cleanup_err(fd: *mut cram_fd_layout) {
         }
         free(h.cast());
     }
-    libc::pthread_mutex_destroy(&mut (*fd).metrics_lock);
-    libc::pthread_mutex_destroy(&mut (*fd).ref_lock);
-    libc::pthread_mutex_destroy(&mut (*fd).range_lock);
-    libc::pthread_mutex_destroy(&mut (*fd).bam_list_lock);
+    crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut (*fd).metrics_lock);
+    crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut (*fd).ref_lock);
+    crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut (*fd).range_lock);
+    crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut (*fd).bam_list_lock);
     if !(*fd).refs.is_null() {
         cram_cram_io_c_2427_refs_free((*fd).refs.cast());
     }
@@ -3862,11 +3885,11 @@ unsafe fn cram_next_container_native(
         (*fdl).ctr = new_ctr.cast();
         c = (*fdl).ctr;
 
-        libc::pthread_mutex_lock(&mut (*fdl).ref_lock);
+        crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).ref_lock);
         (*c).no_ref = (*fdl).no_ref;
         (*c).embed_ref = (*fdl).embed_ref;
         (*c).record_counter = (*fdl).record_counter;
-        libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).ref_lock);
         (*c).curr_ref = bref;
     }
 
@@ -6827,7 +6850,7 @@ mod tests {
         unsafe {
             let seq = malloc(4).cast::<c_char>();
             assert!(!seq.is_null());
-            std::ptr::copy_nonoverlapping(b"ACG\0".as_ptr().cast::<c_char>(), seq, 4);
+            std::ptr::copy_nonoverlapping(c"ACG".as_ptr(), seq, 4);
             let mut heap_entry = ref_entry_layout {
                 name: std::ptr::null_mut(),
                 fn_: std::ptr::null_mut(),
@@ -6850,7 +6873,7 @@ mod tests {
 
             let mf_data = malloc(4).cast::<c_char>();
             assert!(!mf_data.is_null());
-            std::ptr::copy_nonoverlapping(b"TGA\0".as_ptr().cast::<c_char>(), mf_data, 4);
+            std::ptr::copy_nonoverlapping(c"TGA".as_ptr(), mf_data, 4);
             let mf = cram_mFILE_c_207_mfcreate(mf_data, 4);
             assert!(!mf.is_null());
             let mut mfile_entry = ref_entry_layout {
@@ -6922,7 +6945,7 @@ mod tests {
             assert!(!entry.is_null());
             (*entry).seq = malloc(4).cast::<c_char>();
             assert!(!(*entry).seq.is_null());
-            std::ptr::copy_nonoverlapping(b"NNN\0".as_ptr().cast::<c_char>(), (*entry).seq, 4);
+            std::ptr::copy_nonoverlapping(c"NNN".as_ptr(), (*entry).seq, 4);
             *(*h).vals = entry;
 
             (*refs).ref_id = malloc(std::mem::size_of::<*mut ref_entry_layout>() as u64)
@@ -11866,7 +11889,7 @@ mod tests {
                 (&mut non_external as *mut cram_block_layout).cast::<cram_block>();
             let mut block_by_id = [std::ptr::null_mut(); 768];
             block_by_id[17] = direct_ptr;
-            block_by_id[256 + 502 % 251] = wrong_hash_ptr;
+            block_by_id[256] = wrong_hash_ptr;
             let mut blocks = [non_external_ptr, colliding_ptr];
             let mut hdr = cram_block_slice_hdr_layout {
                 content_type: crate::htslib_rs::cram::CRAM_CONTENT_TYPE_MAPPED_SLICE,
@@ -12756,7 +12779,7 @@ mod tests {
     #[test]
     fn cram_io_expand_cache_path_replaces_percent_patterns_like_c() {
         unsafe {
-            let mut path = vec![0 as c_char; libc::PATH_MAX as usize];
+            let mut path = vec![0 as c_char; crate::htslib_rs::c_compat::PATH_MAX as usize];
             let mut dir = CString::new("/cache/%2s/%s").unwrap().into_bytes_with_nul();
             let file = CString::new("abcdef").unwrap();
             assert_eq!(
@@ -12836,7 +12859,7 @@ mod tests {
     #[test]
     fn cram_io_full_path_preserves_absolute_and_expands_local_paths() {
         unsafe {
-            let mut out = vec![0 as c_char; libc::PATH_MAX as usize];
+            let mut out = vec![0 as c_char; crate::htslib_rs::c_compat::PATH_MAX as usize];
 
             let abs = CString::new("/tmp/reference.fa").unwrap();
             cram_cram_io_c_4850_full_path(out.as_mut_ptr(), abs.as_ptr().cast_mut());
@@ -13021,7 +13044,7 @@ mod tests {
             assert_eq!((*mf).eof, 1);
 
             let repl = malloc(4).cast::<c_char>();
-            std::ptr::copy_nonoverlapping(b"abc\0".as_ptr().cast::<c_char>(), repl, 4);
+            std::ptr::copy_nonoverlapping(c"abc".as_ptr(), repl, 4);
             cram_mFILE_c_225_mfrecreate(mf, repl, 4);
             assert_eq!((*mf).size, 4);
             assert_eq!((*mf).offset, 0);
@@ -13140,12 +13163,9 @@ mod tests {
     #[test]
     fn cram_mfile_character_line_ascii_and_steal_behaviour_matches_c() {
         unsafe {
+            let line_bytes = *b"a\r\nbc\nz\0\0\0\0";
             let data = malloc(12).cast::<c_char>();
-            std::ptr::copy_nonoverlapping(
-                b"a\r\nbc\nz\0\0\0\0".as_ptr().cast::<c_char>(),
-                data,
-                11,
-            );
+            std::ptr::copy_nonoverlapping(line_bytes.as_ptr().cast::<c_char>(), data, 11);
             let mf = cram_mFILE_c_207_mfcreate(data, 7);
             assert!(!mf.is_null());
 

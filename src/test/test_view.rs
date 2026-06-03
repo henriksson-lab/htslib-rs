@@ -102,11 +102,10 @@ pub unsafe fn test_test_view_c_65_sam_loop(
     out: *mut htsFile,
 ) -> c_int {
     let mut r = 0;
-    let h: *mut sam::sam_hdr_t;
     let mut idx: *mut hts_idx_t = std::ptr::null_mut();
     let mut b: *mut sam::bam1_t = std::ptr::null_mut();
 
-    h = sam::sam_hdr_read(in_);
+    let h: *mut sam::sam_hdr_t = sam::sam_hdr_read(in_);
     if h.is_null() {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
@@ -201,31 +200,30 @@ pub unsafe fn test_test_view_c_65_sam_loop(
         return 1;
     }
 
-    if !(*opts).index.is_null() {
-        if sam::sam_idx_init(out, h, (*opts).min_shift, (*opts).index) < 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed to initialise index\n".as_ptr(),
-            );
-            if !b.is_null() {
-                sam::bam_destroy1(b);
-            }
-            if !h.is_null() {
-                sam::sam_hdr_destroy(h);
-            }
-            if !idx.is_null() {
-                hts::hts_idx_destroy(idx);
-            }
-            return 1;
+    if !(*opts).index.is_null() && sam::sam_idx_init(out, h, (*opts).min_shift, (*opts).index) < 0 {
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"Failed to initialise index\n".as_ptr(),
+        );
+        if !b.is_null() {
+            sam::bam_destroy1(b);
         }
+        if !h.is_null() {
+            sam::sam_hdr_destroy(h);
+        }
+        if !idx.is_null() {
+            hts::hts_idx_destroy(idx);
+        }
+        return 1;
     }
 
     if local_optind + 1 < argc && ((*opts).flag & READ_COMPRESSED) == 0 {
         // BAM input and has a region
-        if {
+        let index_missing = {
             idx = sam::sam_index_load(in_, *argv.add(local_optind as usize));
             idx.is_null()
-        } {
+        };
+        if index_missing {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"[E::%s] fail to load the BAM index\n".as_ptr(),
@@ -266,7 +264,10 @@ pub unsafe fn test_test_view_c_65_sam_loop(
                 r >= 0
             } {
                 if (*opts).benchmark == 0 && sam::sam_c_4553_sam_write1(out, h, b) < 0 {
-                    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error writing output.\n".as_ptr());
+                    libc::fprintf(
+                        crate::htslib_rs::c_compat::stderr.cast(),
+                        c"Error writing output.\n".as_ptr(),
+                    );
                     hts::hts_itr_destroy(iter);
                     if !b.is_null() {
                         sam::bam_destroy1(b);
@@ -288,7 +289,10 @@ pub unsafe fn test_test_view_c_65_sam_loop(
             }
             hts::hts_itr_destroy(iter);
             if r < -1 {
-                libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error reading input.\n".as_ptr());
+                libc::fprintf(
+                    crate::htslib_rs::c_compat::stderr.cast(),
+                    c"Error reading input.\n".as_ptr(),
+                );
                 if !b.is_null() {
                     sam::bam_destroy1(b);
                 }
@@ -327,7 +331,10 @@ pub unsafe fn test_test_view_c_65_sam_loop(
                     r >= 0
                 } {
                     if (*opts).benchmark == 0 && sam::sam_c_4553_sam_write1(out, h, b) < 0 {
-                        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error writing output.\n".as_ptr());
+                        libc::fprintf(
+                            crate::htslib_rs::c_compat::stderr.cast(),
+                            c"Error writing output.\n".as_ptr(),
+                        );
                         hts::hts_itr_destroy(iter);
                         if !b.is_null() {
                             sam::bam_destroy1(b);
@@ -349,7 +356,10 @@ pub unsafe fn test_test_view_c_65_sam_loop(
                 }
                 hts::hts_itr_destroy(iter);
                 if r < -1 {
-                    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error reading input.\n".as_ptr());
+                    libc::fprintf(
+                        crate::htslib_rs::c_compat::stderr.cast(),
+                        c"Error reading input.\n".as_ptr(),
+                    );
                     if !b.is_null() {
                         sam::bam_destroy1(b);
                     }
@@ -372,7 +382,10 @@ pub unsafe fn test_test_view_c_65_sam_loop(
             r >= 0
         } {
             if (*opts).benchmark == 0 && sam::sam_c_4553_sam_write1(out, h, b) < 0 {
-                libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error writing output.\n".as_ptr());
+                libc::fprintf(
+                    crate::htslib_rs::c_compat::stderr.cast(),
+                    c"Error writing output.\n".as_ptr(),
+                );
                 if !b.is_null() {
                     sam::bam_destroy1(b);
                 }
@@ -394,7 +407,10 @@ pub unsafe fn test_test_view_c_65_sam_loop(
     }
 
     if r < -1 {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error parsing input.\n".as_ptr());
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"Error parsing input.\n".as_ptr(),
+        );
         if !b.is_null() {
             sam::bam_destroy1(b);
         }
@@ -407,20 +423,21 @@ pub unsafe fn test_test_view_c_65_sam_loop(
         return 1;
     }
 
-    if !(*opts).index.is_null() {
-        if sam::sam_idx_save(out) < 0 {
-            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error saving index\n".as_ptr());
-            if !b.is_null() {
-                sam::bam_destroy1(b);
-            }
-            if !h.is_null() {
-                sam::sam_hdr_destroy(h);
-            }
-            if !idx.is_null() {
-                hts::hts_idx_destroy(idx);
-            }
-            return 1;
+    if !(*opts).index.is_null() && sam::sam_idx_save(out) < 0 {
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"Error saving index\n".as_ptr(),
+        );
+        if !b.is_null() {
+            sam::bam_destroy1(b);
         }
+        if !h.is_null() {
+            sam::sam_hdr_destroy(h);
+        }
+        if !idx.is_null() {
+            hts::hts_idx_destroy(idx);
+        }
+        return 1;
     }
 
     sam::bam_destroy1(b);
@@ -455,14 +472,12 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
         return 1;
     }
 
-    if !(*opts).index.is_null() {
-        if vcf::bcf_idx_init(out, h, (*opts).min_shift, (*opts).index) < 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed to initialise index\n".as_ptr(),
-            );
-            return 1;
-        }
+    if !(*opts).index.is_null() && vcf::bcf_idx_init(out, h, (*opts).min_shift, (*opts).index) < 0 {
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"Failed to initialise index\n".as_ptr(),
+        );
+        return 1;
     }
 
     if local_optind + 1 < argc {
@@ -495,7 +510,10 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
                 r >= 0
             } {
                 if (*opts).benchmark == 0 && vcf::bcf_write(out, h, b) < 0 {
-                    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error writing output.\n".as_ptr());
+                    libc::fprintf(
+                        crate::htslib_rs::c_compat::stderr.cast(),
+                        c"Error writing output.\n".as_ptr(),
+                    );
                     exit_code = 1;
                     break;
                 }
@@ -507,7 +525,10 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
                 }
             }
             if r < -1 {
-                libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error reading input.\n".as_ptr());
+                libc::fprintf(
+                    crate::htslib_rs::c_compat::stderr.cast(),
+                    c"Error reading input.\n".as_ptr(),
+                );
                 exit_code = 1;
             }
             hts::hts_itr_destroy(iter);
@@ -525,7 +546,10 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
             r >= 0
         } {
             if (*opts).benchmark == 0 && vcf::bcf_write(out, h, b) < 0 {
-                libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error writing output.\n".as_ptr());
+                libc::fprintf(
+                    crate::htslib_rs::c_compat::stderr.cast(),
+                    c"Error writing output.\n".as_ptr(),
+                );
                 exit_code = 1;
                 break;
             }
@@ -537,16 +561,20 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
             }
         }
         if r < -1 {
-            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error reading input.\n".as_ptr());
+            libc::fprintf(
+                crate::htslib_rs::c_compat::stderr.cast(),
+                c"Error reading input.\n".as_ptr(),
+            );
             exit_code = 1;
         }
     }
 
-    if exit_code == 0 && !(*opts).index.is_null() {
-        if vcf::bcf_idx_save(out) < 0 {
-            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error saving index\n".as_ptr());
-            exit_code = 1;
-        }
+    if exit_code == 0 && !(*opts).index.is_null() && vcf::bcf_idx_save(out) < 0 {
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"Error saving index\n".as_ptr(),
+        );
+        exit_code = 1;
     }
 
     vcf::bcf_destroy(b);
@@ -556,8 +584,6 @@ pub unsafe fn test_test_view_c_196_vcf_loop(
 
 // original: main (htslib/test/test_view.c:279)
 pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
-    let in_: *mut htsFile;
-    let out: *mut htsFile;
     let mut moder = [0 as c_char; 8];
     let mut modew = [0 as c_char; 800];
     let mut c: c_int;
@@ -704,7 +730,10 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
             crate::htslib_rs::c_compat::stderr.cast(),
             c"-p out_fn: output to out_fn instead of stdout\n".as_ptr(),
         );
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"-v: increase verbosity\n".as_ptr());
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"-v: increase verbosity\n".as_ptr(),
+        );
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"The region list entries should be specified as 'reg:beg-end', with intervals of a region being disjunct and sorted by the starting coordinate.\n".as_ptr(),
@@ -718,7 +747,7 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
         libc::strcat(moder.as_mut_ptr(), c"b".as_ptr());
     }
 
-    in_ = hts::hts_open(*argv.add(local_optind as usize), moder.as_ptr());
+    let in_: *mut htsFile = hts::hts_open(*argv.add(local_optind as usize), moder.as_ptr());
     if in_.is_null() {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
@@ -751,7 +780,7 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
     } else if (opts.flag & WRITE_FASTA) != 0 {
         libc::strcat(modew.as_mut_ptr(), c"F".as_ptr());
     }
-    out = hts::hts_open(out_fn, modew.as_ptr());
+    let out: *mut htsFile = hts::hts_open(out_fn, modew.as_ptr());
     if out.is_null() {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
@@ -785,17 +814,15 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
                 c"Error creating thread pool\n".as_ptr(),
             );
             exit_code = 1;
-        } else {
-            if hts::hts_set_thread_pool(in_, &mut p) < 0
-                || hts::hts_set_thread_pool(out, &mut p) < 0
-            {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Threaded BGZF is not yet supported in this translation\n".as_ptr(),
-                );
-                exit_code = 1;
-                thread_pool_failed = 1;
-            }
+        } else if hts::hts_set_thread_pool(in_, &mut p) < 0
+            || hts::hts_set_thread_pool(out, &mut p) < 0
+        {
+            libc::fprintf(
+                crate::htslib_rs::c_compat::stderr.cast(),
+                c"Threaded BGZF is not yet supported in this translation\n".as_ptr(),
+            );
+            exit_code = 1;
+            thread_pool_failed = 1;
         }
     }
 
@@ -826,12 +853,18 @@ pub unsafe fn test_test_view_c_279_main(argc: c_int, argv: *mut *mut c_char) -> 
 
     ret = hts::hts_close(out);
     if ret < 0 {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error closing output.\n".as_ptr());
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"Error closing output.\n".as_ptr(),
+        );
         exit_code = libc::EXIT_FAILURE;
     }
     ret = hts::hts_close(in_);
     if ret < 0 {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Error closing input.\n".as_ptr());
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"Error closing input.\n".as_ptr(),
+        );
         exit_code = libc::EXIT_FAILURE;
     }
 

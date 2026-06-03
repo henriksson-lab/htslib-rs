@@ -132,7 +132,6 @@ pub unsafe fn ref_cache_poll_wrap_epoll_c_126_pw_remove(
     do_close: c_int,
 ) -> c_int {
     let mut dummy: libc::epoll_event = std::mem::zeroed();
-    let res;
 
     if (*pw).debug != 0 {
         libc::fprintf(
@@ -148,11 +147,11 @@ pub unsafe fn ref_cache_poll_wrap_epoll_c_126_pw_remove(
         );
     }
 
-    if do_close != 0 {
-        res = libc::close((*item).fd);
+    let res = if do_close != 0 {
+        libc::close((*item).fd)
     } else {
-        res = libc::epoll_ctl((*pw).epfd, libc::EPOLL_CTL_DEL, (*item).fd, &mut dummy);
-    }
+        libc::epoll_ctl((*pw).epfd, libc::EPOLL_CTL_DEL, (*item).fd, &mut dummy)
+    };
     cram::cram_pooled_alloc_c_144_pool_free((*pw).pool, item.cast());
     res
 }

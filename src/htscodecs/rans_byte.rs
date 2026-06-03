@@ -16,7 +16,13 @@
 //! retaining bounds checking. Sibling rANS modules (`rans_static`, `rans_word`)
 //! use the alternative `(buf, ptr: &mut usize)` pair; either representation is
 //! equivalent — we keep the stub-declared signatures here.
-#![allow(non_snake_case, non_camel_case_types, unused_variables, dead_code, clippy::too_many_arguments)]
+#![allow(
+    non_snake_case,
+    non_camel_case_types,
+    unused_variables,
+    dead_code,
+    clippy::too_many_arguments
+)]
 
 // rANS_byte.h:64
 /// `#define RANS_BYTE_L (1u << 23)` — lower bound of normalization interval.
@@ -131,10 +137,7 @@ pub fn RansEncFlush(r: &mut RansState, pptr: &mut &mut [u8]) {
 #[inline]
 pub fn RansDecInit(r: &mut RansState, pptr: &mut &[u8]) {
     let s = *pptr;
-    let x = (s[0] as u32)
-        | ((s[1] as u32) << 8)
-        | ((s[2] as u32) << 16)
-        | ((s[3] as u32) << 24);
+    let x = (s[0] as u32) | ((s[1] as u32) << 8) | ((s[2] as u32) << 16) | ((s[3] as u32) << 24);
     *pptr = &s[4..];
     *r = x;
 }
@@ -150,13 +153,7 @@ pub fn RansDecGet(r: &mut RansState, scale_bits: u32) -> u32 {
 // rANS_byte.h:149
 /// `static inline void RansDecAdvance(RansState* r, uint8_t** pptr, uint32_t start, uint32_t freq, uint32_t scale_bits)`
 #[inline]
-pub fn RansDecAdvance(
-    r: &mut RansState,
-    pptr: &mut &[u8],
-    start: u32,
-    freq: u32,
-    scale_bits: u32,
-) {
+pub fn RansDecAdvance(r: &mut RansState, pptr: &mut &[u8], start: u32, freq: u32, scale_bits: u32) {
     let mask = (1u32 << scale_bits) - 1;
 
     // s, x = D(x)
@@ -203,8 +200,7 @@ pub fn RansEncSymbolInit(s: &mut RansEncSymbol, start: u32, freq: u32, scale_bit
             shift += 1;
         }
 
-        s.rcp_freq =
-            (((1u64 << (shift + 31)) + freq as u64 - 1) / freq as u64) as u32;
+        s.rcp_freq = (1u64 << (shift + 31)).div_ceil(freq as u64) as u32;
         s.rcp_shift = (shift - 1) as u16;
 
         // With these values, 'q' is the correct quotient, so we have
@@ -256,8 +252,7 @@ pub fn RansEncPutSymbol(r: &mut RansState, pptr: &mut &mut [u8], sym: &RansEncSy
 
     // The extra >>32 has already been baked into rcp_shift in
     // RansEncSymbolInit.
-    let q =
-        (((x as u64).wrapping_mul(sym.rcp_freq as u64)) >> sym.rcp_shift) as u32;
+    let q = (((x as u64).wrapping_mul(sym.rcp_freq as u64)) >> sym.rcp_shift) as u32;
     *r = q
         .wrapping_mul(sym.cmpl_freq as u32)
         .wrapping_add(x)
@@ -343,21 +338,17 @@ pub fn RansEncPutSymbol4(
     }
 
     // x = C(s,x)
-    let qa = (((x0 as u64).wrapping_mul(sym0.rcp_freq as u64)) >> sym0.rcp_shift)
-        as u32;
+    let qa = (((x0 as u64).wrapping_mul(sym0.rcp_freq as u64)) >> sym0.rcp_shift) as u32;
     let big_x0 = qa.wrapping_mul(sym0.cmpl_freq as u32);
-    let qb = (((x1 as u64).wrapping_mul(sym1.rcp_freq as u64)) >> sym1.rcp_shift)
-        as u32;
+    let qb = (((x1 as u64).wrapping_mul(sym1.rcp_freq as u64)) >> sym1.rcp_shift) as u32;
     let big_x1 = qb.wrapping_mul(sym1.cmpl_freq as u32);
 
     *r0 = big_x0.wrapping_add(x0).wrapping_add(sym0.bias);
     *r1 = big_x1.wrapping_add(x1).wrapping_add(sym1.bias);
 
-    let qa = (((x2 as u64).wrapping_mul(sym2.rcp_freq as u64)) >> sym2.rcp_shift)
-        as u32;
+    let qa = (((x2 as u64).wrapping_mul(sym2.rcp_freq as u64)) >> sym2.rcp_shift) as u32;
     let big_x2 = qa.wrapping_mul(sym2.cmpl_freq as u32);
-    let qb = (((x3 as u64).wrapping_mul(sym3.rcp_freq as u64)) >> sym3.rcp_shift)
-        as u32;
+    let qb = (((x3 as u64).wrapping_mul(sym3.rcp_freq as u64)) >> sym3.rcp_shift) as u32;
     let big_x3 = qb.wrapping_mul(sym3.cmpl_freq as u32);
 
     *r2 = big_x2.wrapping_add(x2).wrapping_add(sym2.bias);
@@ -440,7 +431,7 @@ pub fn RansDecRenorm2(r1: &mut RansState, r2: &mut RansState, pptr: &mut &[u8]) 
 #[inline]
 pub fn RansDecRenormSafe(r: &mut RansState, pptr: &mut &[u8], ptr_end: usize) {
     let mut x = *r;
-    if x >= RANS_BYTE_L || pptr.len() == 0 || pptr.as_ptr() as usize >= ptr_end {
+    if x >= RANS_BYTE_L || pptr.is_empty() || pptr.as_ptr() as usize >= ptr_end {
         // First condition matches `x >= RANS_BYTE_L`; the latter two match
         // `ptr >= ptr_end` (either because we already exhausted the slice,
         // or the caller-supplied end pointer says so).

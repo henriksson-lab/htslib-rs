@@ -26,9 +26,9 @@ use std::ffi::{c_char, c_int};
 
 use crate::htslib_rs::{
     hfile::{
-        haddextension, hclose, hfile_c_878_hopenv_mem, hfile_mem_get_buffer, hfile_mem_steal_buffer,
-        hflush, hgets, hopen,
-        hpeek, hseek, htslib_hfile_h_134_herrno as herrno, htslib_hfile_h_155_htell as htell,
+        haddextension, hclose, hfile_c_878_hopenv_mem, hfile_mem_get_buffer,
+        hfile_mem_steal_buffer, hflush, hgets, hopen, hpeek, hseek,
+        htslib_hfile_h_134_herrno as herrno, htslib_hfile_h_155_htell as htell,
         htslib_hfile_h_163_hgetc as hgetc, htslib_hfile_h_247_hread as hread,
         htslib_hfile_h_263_hputc as hputc, htslib_hfile_h_275_hputs as hputs,
         htslib_hfile_h_292_hwrite as hwrite,
@@ -293,14 +293,13 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
 
     let original = test_hfile_c_62_slurp(c"vcf.c".as_ptr());
     for i in 1..=6 {
-        let text: *mut c_char;
         libc::snprintf(
             buffer.as_mut_ptr(),
             buffer.len(),
             c"test/hfile%d.tmp".as_ptr(),
             i,
         );
-        text = test_hfile_c_62_slurp(buffer.as_ptr());
+        let text: *mut c_char = test_hfile_c_62_slurp(buffer.as_ptr());
         if libc::strcmp(original, text) != 0 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
@@ -411,7 +410,8 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
     }
 
     test_string = libc::strdup(c"Test string".as_ptr());
-    TEST_HFILE_FIN = hfile_c_878_hopenv_mem(c"mem:".as_ptr(), c"wr:".as_ptr(), test_string, 12usize);
+    TEST_HFILE_FIN =
+        hfile_c_878_hopenv_mem(c"mem:".as_ptr(), c"wr:".as_ptr(), test_string, 12usize);
     if TEST_HFILE_FIN.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"mem:\", \"w:\", ...)".as_ptr());
     }

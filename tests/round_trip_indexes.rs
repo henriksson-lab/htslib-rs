@@ -16,9 +16,8 @@ use htslib_rs::{
     bcf_write, hts_close, hts_get_bgzfp, hts_idx_destroy, hts_itr_destroy, hts_itr_next,
     hts_itr_query, hts_open, hts_pos_t, hts_set_fai_filename, ks_free, kstring_t,
     sam_c_4553_sam_write1, sam_hdr_destroy, sam_hdr_read, sam_hdr_write, sam_index_build,
-    sam_index_load, sam_itr_next, sam_itr_querys, sam_read1,
-    tbx_conf_vcf, tbx_destroy, tbx_index_build2, tbx_index_load2, tbx_itr_querys1, vcf_hdr_read,
-    vcf_read, vcf_write, BGZF,
+    sam_index_load, sam_itr_next, sam_itr_querys, sam_read1, tbx_conf_vcf, tbx_destroy,
+    tbx_index_build2, tbx_index_load2, tbx_itr_querys1, vcf_hdr_read, vcf_read, vcf_write, BGZF,
 };
 use std::ffi::{c_int, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
@@ -149,7 +148,11 @@ unsafe fn bam_region_qnames(bam_path: &Path, region: &CStr) -> Vec<String> {
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
     let idx = sam_index_load(fp, path_c.as_ptr());
-    assert!(!idx.is_null(), "failed to load index for {}", bam_path.display());
+    assert!(
+        !idx.is_null(),
+        "failed to load index for {}",
+        bam_path.display()
+    );
     let itr = sam_itr_querys(idx, hdr, region.as_ptr());
     assert!(!itr.is_null(), "failed to build iterator for {:?}", region);
 
@@ -353,12 +356,7 @@ fn round_trip_bam_bai_region_query_matches_linear_scan() {
         // 1-based inclusive in the region string.
         let region = c"CHROMOSOME_I:999900-1000100";
         let query = bam_region_qnames(&bam, region);
-        let scan = bam_linear_scan_qnames_in_region(
-            &bam,
-            "CHROMOSOME_I",
-            999_900 - 1,
-            1_000_100,
-        );
+        let scan = bam_linear_scan_qnames_in_region(&bam, "CHROMOSOME_I", 999_900 - 1, 1_000_100);
 
         let mut query_sorted = query.clone();
         let mut scan_sorted = scan.clone();
@@ -473,13 +471,8 @@ fn round_trip_cram_crai_region_query_matches_linear_scan() {
         let indexed = collect_cram_region_qnames(&cram_c, &ref_c, region);
         assert!(!indexed.is_empty(), "shipped CRAI returned no records");
 
-        let scan = cram_linear_scan_qnames_in_region(
-            &cram_c,
-            &ref_c,
-            "CHROMOSOME_II",
-            2_976 - 1,
-            3_070,
-        );
+        let scan =
+            cram_linear_scan_qnames_in_region(&cram_c, &ref_c, "CHROMOSOME_II", 2_976 - 1, 3_070);
 
         let mut indexed_sorted = indexed.clone();
         let mut scan_sorted = scan.clone();
@@ -492,11 +485,7 @@ fn round_trip_cram_crai_region_query_matches_linear_scan() {
     }
 }
 
-unsafe fn collect_cram_region_qnames(
-    cram_c: &CStr,
-    ref_c: &CStr,
-    region: &CStr,
-) -> Vec<String> {
+unsafe fn collect_cram_region_qnames(cram_c: &CStr, ref_c: &CStr, region: &CStr) -> Vec<String> {
     let fp = hts_open(cram_c.as_ptr(), c"r".as_ptr());
     assert!(!fp.is_null());
     assert_eq!(hts_set_fai_filename(fp, ref_c.as_ptr()), 0);

@@ -112,13 +112,15 @@ unsafe fn fail_errno(label: *const c_char) -> ! {
 }
 
 unsafe fn bcf_hdr_id2length(hdr: *mut vcf::bcf_hdr_t, type_: c_int, int_id: c_int) -> c_int {
-    (((*(*(*hdr).id[crate::htslib_rs::vcf::BCF_DT_ID as usize].add(int_id as usize)).val).info[type_ as usize]
+    (((*(*(*hdr).id[crate::htslib_rs::vcf::BCF_DT_ID as usize].add(int_id as usize)).val).info
+        [type_ as usize]
         >> 8)
         & 0xf) as c_int
 }
 
 unsafe fn bcf_hdr_id2number(hdr: *mut vcf::bcf_hdr_t, type_: c_int, int_id: c_int) -> c_int {
-    ((*(*(*hdr).id[crate::htslib_rs::vcf::BCF_DT_ID as usize].add(int_id as usize)).val).info[type_ as usize]
+    ((*(*(*hdr).id[crate::htslib_rs::vcf::BCF_DT_ID as usize].add(int_id as usize)).val).info
+        [type_ as usize]
         >> 12) as c_int
 }
 
@@ -364,22 +366,38 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
     ));
 
     // Try a few header modifications
-    vcf::bcf_hdr_remove(hdr, crate::htslib_rs::vcf::BCF_HL_CTG as c_int, c"Unused".as_ptr());
+    vcf::bcf_hdr_remove(
+        hdr,
+        crate::htslib_rs::vcf::BCF_HL_CTG as c_int,
+        c"Unused".as_ptr(),
+    );
     check0!(vcf::bcf_hdr_append(
         hdr,
         c"##contig=<ID=Unused,length=62435964>".as_ptr()
     ));
-    vcf::bcf_hdr_remove(hdr, crate::htslib_rs::vcf::BCF_HL_FMT as c_int, c"TS".as_ptr());
+    vcf::bcf_hdr_remove(
+        hdr,
+        crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
+        c"TS".as_ptr(),
+    );
     check0!(vcf::bcf_hdr_append(
         hdr,
         c"##FORMAT=<ID=TS,Number=1,Type=String,Description=\"Test String\">".as_ptr()
     ));
-    vcf::bcf_hdr_remove(hdr, crate::htslib_rs::vcf::BCF_HL_INFO as c_int, c"NEG".as_ptr());
+    vcf::bcf_hdr_remove(
+        hdr,
+        crate::htslib_rs::vcf::BCF_HL_INFO as c_int,
+        c"NEG".as_ptr(),
+    );
     check0!(vcf::bcf_hdr_append(
         hdr,
         c"##INFO=<ID=NEG,Number=.,Type=Integer,Description=\"Test Negative Numbers\">".as_ptr()
     ));
-    vcf::bcf_hdr_remove(hdr, crate::htslib_rs::vcf::BCF_HL_FLT as c_int, c"s50".as_ptr());
+    vcf::bcf_hdr_remove(
+        hdr,
+        crate::htslib_rs::vcf::BCF_HL_FLT as c_int,
+        c"s50".as_ptr(),
+    );
     check0!(vcf::bcf_hdr_append(
         hdr,
         c"##FILTER=<ID=s50,Description=\"Less than 50% of samples have data\">".as_ptr()
@@ -418,7 +436,11 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
     // .. QUAL
     (*rec).qual = 29.0;
     // .. FILTER
-    let mut tmpi = vcf::bcf_hdr_id2int(hdr, crate::htslib_rs::vcf::BCF_DT_ID as c_int, c"PASS".as_ptr());
+    let mut tmpi = vcf::bcf_hdr_id2int(
+        hdr,
+        crate::htslib_rs::vcf::BCF_DT_ID as c_int,
+        c"PASS".as_ptr(),
+    );
     check0!(vcf::bcf_update_filter(hdr, rec, &mut tmpi, 1));
     // .. INFO
     tmpi = 3;
@@ -764,7 +786,11 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     {
         test_test_vcf_api_c_38_error(c"Missing header ##unused=<ID=BB, ...>".as_ptr());
     }
-    vcf::bcf_hdr_remove(hdr_out, crate::htslib_rs::vcf::BCF_HL_STR as c_int, c"BB".as_ptr());
+    vcf::bcf_hdr_remove(
+        hdr_out,
+        crate::htslib_rs::vcf::BCF_HL_STR as c_int,
+        c"BB".as_ptr(),
+    );
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_STR as c_int,
@@ -790,7 +816,11 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     {
         test_test_vcf_api_c_38_error(c"Missing header ##unused=unformatted text 1".as_ptr());
     }
-    vcf::bcf_hdr_remove(hdr_out, crate::htslib_rs::vcf::BCF_HL_GEN as c_int, c"unused".as_ptr());
+    vcf::bcf_hdr_remove(
+        hdr_out,
+        crate::htslib_rs::vcf::BCF_HL_GEN as c_int,
+        c"unused".as_ptr(),
+    );
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_GEN as c_int,
@@ -816,7 +846,11 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     {
         test_test_vcf_api_c_38_error(c"Missing header ##FILTER=<ID=Flt, ...>".as_ptr());
     }
-    vcf::bcf_hdr_remove(hdr_out, crate::htslib_rs::vcf::BCF_HL_FLT as c_int, c"Flt".as_ptr());
+    vcf::bcf_hdr_remove(
+        hdr_out,
+        crate::htslib_rs::vcf::BCF_HL_FLT as c_int,
+        c"Flt".as_ptr(),
+    );
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_FLT as c_int,
@@ -842,7 +876,11 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     {
         test_test_vcf_api_c_38_error(c"Missing header ##INFO=<ID=UI, ...>".as_ptr());
     }
-    vcf::bcf_hdr_remove(hdr_out, crate::htslib_rs::vcf::BCF_HL_INFO as c_int, c"UI".as_ptr());
+    vcf::bcf_hdr_remove(
+        hdr_out,
+        crate::htslib_rs::vcf::BCF_HL_INFO as c_int,
+        c"UI".as_ptr(),
+    );
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_INFO as c_int,
@@ -866,7 +904,11 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     {
         test_test_vcf_api_c_38_error(c"Missing header ##INFO=<ID=UF, ...>".as_ptr());
     }
-    vcf::bcf_hdr_remove(hdr_out, crate::htslib_rs::vcf::BCF_HL_FMT as c_int, c"UF".as_ptr());
+    vcf::bcf_hdr_remove(
+        hdr_out,
+        crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
+        c"UF".as_ptr(),
+    );
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
@@ -890,7 +932,11 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     {
         test_test_vcf_api_c_38_error(c"Missing header ##contig=<ID=Unused,length=1>".as_ptr());
     }
-    vcf::bcf_hdr_remove(hdr_out, crate::htslib_rs::vcf::BCF_HL_CTG as c_int, c"Unused".as_ptr());
+    vcf::bcf_hdr_remove(
+        hdr_out,
+        crate::htslib_rs::vcf::BCF_HL_CTG as c_int,
+        c"Unused".as_ptr(),
+    );
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_FMT as c_int,
@@ -931,7 +977,10 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
         // Test problems caused by bcf1_sync: the data block
         // may be realloced, also the unpacked structures must
         // get updated.
-        check0!(vcf::bcf_unpack(rec, crate::htslib_rs::vcf::BCF_UN_STR as c_int));
+        check0!(vcf::bcf_unpack(
+            rec,
+            crate::htslib_rs::vcf::BCF_UN_STR as c_int
+        ));
         check0!(vcf::bcf_update_id(hdr, rec, ptr::null()));
         check0!(vcf::bcf_update_format(
             hdr,
@@ -1028,7 +1077,12 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
     };
     while hts_getline(gz_in, KS_SEP_LINE, &mut line) > 0 {
         kputc(b'\n' as c_int, &mut line);
-        libc::fwrite(line.s.cast(), 1, line.l, crate::htslib_rs::c_compat::stdout.cast());
+        libc::fwrite(
+            line.s.cast(),
+            1,
+            line.l,
+            crate::htslib_rs::c_compat::stdout.cast(),
+        );
     }
 
     ret = hts_close(gz_in);
@@ -1526,8 +1580,8 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
         fail_errno(c"Failed to allocate BCF record".as_ptr());
     }
     //calculating rlen with different vcf versions
-    for i in 0..3 {
-        let fp = hts_open(darr[i], c"r".as_ptr());
+    for (i, (&data, &expected_lens)) in darr.iter().zip(rarr.iter()).enumerate() {
+        let fp = hts_open(data, c"r".as_ptr());
         if fp.is_null() {
             fail_errno(c"Failed to open vcf data".as_ptr());
         }
@@ -1536,15 +1590,15 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
         if hdr.is_null() {
             fail_errno(c"Failed to read BCF header".as_ptr());
         }
-        for j in 0..rlen.len() {
+        for (j, &expected_rlen) in expected_lens.iter().enumerate() {
             check0!(vcf::bcf_read(fp, hdr, rec));
-            if (*rec).rlen != rarr[i][j] {
+            if (*rec).rlen != expected_rlen {
                 libc::fprintf(
                     crate::htslib_rs::c_compat::stderr.cast(),
                     c"Incorrect rlen @ vcf %d on test %d - expected %d got %ld\n".as_ptr(),
                     j as c_int + 1,
                     i as c_int + 1,
-                    rarr[i][j],
+                    expected_rlen,
                     (*rec).rlen,
                 );
                 libc::exit(-1);
@@ -1953,12 +2007,11 @@ pub unsafe fn test_test_vcf_api_c_909_read_vcf_line(
     rec: *mut vcf::bcf1_t,
     kstr: *mut kstring_t,
 ) -> c_int {
-    let ret;
     if kputsn(line, libc::strlen(line), ks_clear(kstr)) < 0 {
         return -1;
     }
 
-    ret = vcf::vcf_parse(kstr, hdr, rec);
+    let ret = vcf::vcf_parse(kstr, hdr, rec);
     if ret != 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
@@ -2072,9 +2125,9 @@ pub unsafe fn test_test_vcf_api_c_933_test_bcf_remove_allele_set() {
 
     check0!(ks_resize(&mut kstr, 1000));
     check0!(vcf::bcf_hdr_parse(hdr, header.as_ptr().cast_mut()));
-    for i in 0..inputs.len() {
+    for (i, &input) in inputs.iter().enumerate() {
         check0!(test_test_vcf_api_c_909_read_vcf_line(
-            inputs[i], hdr, rec, &mut kstr
+            input, hdr, rec, &mut kstr
         ));
         kbs_clear(rm_set);
         if (*rec).pos == 113000 - 1 {
@@ -2088,7 +2141,9 @@ pub unsafe fn test_test_vcf_api_c_933_test_bcf_remove_allele_set() {
         check0!(vcf::bcf_remove_allele_set(
             hdr,
             rec,
-            rm_set.cast::<crate::htslib_rs::hts::kbitset_t>().cast_const()
+            rm_set
+                .cast::<crate::htslib_rs::hts::kbitset_t>()
+                .cast_const()
         ));
         check0!(vcf::vcf_format(hdr, rec, ks_clear(&mut kstr)));
         test_test_vcf_api_c_924_chomp(&mut kstr);

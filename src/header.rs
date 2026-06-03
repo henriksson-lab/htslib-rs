@@ -3,10 +3,8 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr};
 
+use crate::htslib_rs::hts::{hts_pos_t, kputc, kputsn, ks_free, ks_release, kstring_t};
 use crate::htslib_rs::sam::*;
-use crate::htslib_rs::hts::{
-    hts_pos_t, kputc, kputsn, ks_free, ks_release, kstring_t,
-};
 
 // original: sam_hdr_add_lines (htslib/header.c:1658)
 //
@@ -321,7 +319,7 @@ pub unsafe fn sam_hdr_remove_lines(
     } else {
         Some(CStr::from_ptr(id).to_bytes())
     };
-    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text as usize);
+    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text);
     let mut out = Vec::with_capacity(text.len());
     let mut changed = false;
     let mut start = 0usize;
@@ -394,7 +392,7 @@ pub unsafe fn sam_hdr_count_lines(h: *mut sam_hdr_t, type_: *const c_char) -> c_
 
     let type0 = *type_ as u8;
     let type1 = *type_.add(1) as u8;
-    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text as usize);
+    let text = std::slice::from_raw_parts((*h).text.cast::<u8>(), (*h).l_text);
     let mut count = 0;
     let mut start = 0usize;
     while start < text.len() {
@@ -469,7 +467,7 @@ pub unsafe fn sam_hdr_line_index(
     let needle = CStr::from_ptr(key).to_bytes();
     let type0 = *type_ as u8;
     let type1 = *type_.add(1) as u8;
-    let text = std::slice::from_raw_parts((*bh).text.cast::<u8>(), (*bh).l_text as usize);
+    let text = std::slice::from_raw_parts((*bh).text.cast::<u8>(), (*bh).l_text);
     let mut seen = 0;
     let mut start = 0usize;
     while start < text.len() {
@@ -676,12 +674,12 @@ pub unsafe fn sam_hdr_length(_h: *mut sam_hdr_t) -> usize {
     }
     if !(*_h).hrecs.is_null() {
         return if sam_hdr_rebuild(_h) == 0 {
-            (*_h).l_text as usize
+            (*_h).l_text
         } else {
             usize::MAX
         };
     }
-    (*_h).l_text as usize
+    (*_h).l_text
 }
 
 pub unsafe fn sam_hdr_str(_h: *mut sam_hdr_t) -> *const c_char {
@@ -1314,4 +1312,3 @@ pub unsafe fn sam_hdr_tid2name(_h: *const sam_hdr_t, _tid: c_int) -> *const c_ch
     }
     std::ptr::null()
 }
-

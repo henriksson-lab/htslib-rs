@@ -39,17 +39,17 @@ fn build_tables(
 ) {
     // Cumulative frequencies; cum[256] must equal M.
     let mut cum = [0u32; 257];
-    for i in 0..256 {
-        cum[i + 1] = cum[i] + freqs[i];
+    for (i, &freq) in freqs.iter().enumerate() {
+        cum[i + 1] = cum[i] + freq;
     }
     assert_eq!(cum[256], M, "frequencies must sum to 1 << scale_bits");
 
     let mut enc = [RansEncSymbol::default(); 256];
     let mut dec = [RansDecSymbol::default(); 256];
-    for s in 0..256 {
-        if freqs[s] > 0 {
-            RansEncSymbolInit(&mut enc[s], cum[s], freqs[s], SCALE_BITS);
-            RansDecSymbolInit(&mut dec[s], cum[s], freqs[s]);
+    for (s, &freq) in freqs.iter().enumerate() {
+        if freq > 0 {
+            RansEncSymbolInit(&mut enc[s], cum[s], freq, SCALE_BITS);
+            RansDecSymbolInit(&mut dec[s], cum[s], freq);
         }
     }
 
@@ -154,17 +154,17 @@ fn build_tables_generic(
     let m = 1u32 << scale_bits;
     let n = freqs.len();
     let mut cum = vec![0u32; n + 1];
-    for i in 0..n {
-        cum[i + 1] = cum[i] + freqs[i];
+    for (i, &freq) in freqs.iter().enumerate() {
+        cum[i + 1] = cum[i] + freq;
     }
     assert_eq!(cum[n], m, "frequencies must sum to 1 << scale_bits");
 
     let mut enc = vec![RansEncSymbol::default(); n];
     let mut dec = vec![RansDecSymbol::default(); n];
-    for s in 0..n {
-        if freqs[s] > 0 {
-            RansEncSymbolInit(&mut enc[s], cum[s], freqs[s], scale_bits);
-            RansDecSymbolInit(&mut dec[s], cum[s], freqs[s]);
+    for (s, &freq) in freqs.iter().enumerate() {
+        if freq > 0 {
+            RansEncSymbolInit(&mut enc[s], cum[s], freq, scale_bits);
+            RansDecSymbolInit(&mut dec[s], cum[s], freq);
         }
     }
 
@@ -225,8 +225,8 @@ fn uniform_freqs(n: usize, scale_bits: u32) -> Vec<u32> {
     let base = m / n as u32;
     let rem = m - base * n as u32;
     let mut v = vec![base; n];
-    for i in 0..rem as usize {
-        v[i] += 1;
+    for freq in v.iter_mut().take(rem as usize) {
+        *freq += 1;
     }
     v
 }
@@ -240,10 +240,10 @@ fn zipf_freqs(n: usize, scale_bits: u32) -> Vec<u32> {
     let s: f64 = weights.iter().sum();
     let mut v = vec![0u32; n];
     let mut used = 0u32;
-    for i in 0..n {
-        let f = ((weights[i] / s) * (m as f64)).floor() as u32;
-        v[i] = f.max(1);
-        used = used.saturating_add(v[i]);
+    for (freq, &weight) in v.iter_mut().zip(weights.iter()) {
+        let f = ((weight / s) * (m as f64)).floor() as u32;
+        *freq = f.max(1);
+        used = used.saturating_add(*freq);
     }
     // Rebalance into bin 0 to land exactly at m.
     if used < m {
@@ -269,10 +269,10 @@ fn bimodal_freqs(n: usize, scale_bits: u32) -> Vec<u32> {
     // Crude renormalization: take each freq * rest / total, then patch slack.
     let mut scaled = vec![0u32; n - 1];
     let mut used = 0u32;
-    for i in 0..n - 1 {
-        scaled[i] = ((v[i] as u64 * rest as u64) / total as u64) as u32;
-        scaled[i] = scaled[i].max(1);
-        used += scaled[i];
+    for (dst, &freq) in scaled.iter_mut().zip(v.iter()) {
+        *dst = ((freq as u64 * rest as u64) / total as u64) as u32;
+        *dst = (*dst).max(1);
+        used += *dst;
     }
     if used < rest {
         scaled[0] += rest - used;
@@ -281,9 +281,7 @@ fn bimodal_freqs(n: usize, scale_bits: u32) -> Vec<u32> {
     }
     let mut out = vec![0u32; n];
     out[0] = big;
-    for i in 1..n {
-        out[i] = scaled[i - 1];
-    }
+    out[1..n].copy_from_slice(&scaled[..n - 1]);
     debug_assert_eq!(out.iter().copied().sum::<u32>(), m);
     out
 }
@@ -302,8 +300,8 @@ fn sample_from_freqs(freqs: &[u32], len: usize, seed: u64, scale_bits: u32) -> V
     let m = 1u32 << scale_bits;
     let n = freqs.len();
     let mut cdf = vec![0u32; n + 1];
-    for i in 0..n {
-        cdf[i + 1] = cdf[i] + freqs[i];
+    for (i, &freq) in freqs.iter().enumerate() {
+        cdf[i + 1] = cdf[i] + freq;
     }
     let mut s = seed;
     let mut out = Vec::with_capacity(len);
@@ -311,8 +309,8 @@ fn sample_from_freqs(freqs: &[u32], len: usize, seed: u64, scale_bits: u32) -> V
         let r = lcg(&mut s) % m;
         // Linear scan (n is small in the test grid).
         let mut sym = 0u16;
-        for i in 0..n {
-            if r >= cdf[i] && r < cdf[i + 1] {
+        for (i, window) in cdf.windows(2).enumerate() {
+            if r >= window[0] && r < window[1] {
                 sym = i as u16;
                 break;
             }
@@ -339,8 +337,8 @@ fn check_roundtrip_generic(data: &[u16], freqs: &[u32], scale_bits: u32) {
 fn roundtrip_uniform_alphabet_of_4() {
     // 4 symbols, uniform.
     let mut freqs = [0u32; 256];
-    for s in 0..4 {
-        freqs[s] = M / 4;
+    for freq in freqs.iter_mut().take(4) {
+        *freq = M / 4;
     }
     let mut data = vec![0u8; 1024];
     let mut seed = 0xdead_beef_cafe_babeu64;
@@ -358,8 +356,8 @@ fn roundtrip_biased_alphabet_of_8() {
     freqs[0] = M / 2;
     let rest = (M - freqs[0]) / 7;
     let mut used = freqs[0];
-    for s in 1..7 {
-        freqs[s] = rest;
+    for freq in freqs.iter_mut().take(7).skip(1) {
+        *freq = rest;
         used += rest;
     }
     freqs[7] = M - used; // soak up rounding into the last bucket.
@@ -369,14 +367,14 @@ fn roundtrip_biased_alphabet_of_8() {
     let mut seed = 0x1234_5678_9abc_def0u64;
     // Sample by inverse-CDF.
     let mut cdf = [0u32; 9];
-    for i in 0..8 {
-        cdf[i + 1] = cdf[i] + freqs[i];
+    for (i, &freq) in freqs.iter().take(8).enumerate() {
+        cdf[i + 1] = cdf[i] + freq;
     }
     for b in data.iter_mut() {
         let r = lcg(&mut seed) % M;
         let mut sym = 0u8;
-        for s in 0..8 {
-            if r >= cdf[s] && r < cdf[s + 1] {
+        for (s, window) in cdf.windows(2).enumerate() {
+            if r >= window[0] && r < window[1] {
                 sym = s as u8;
                 break;
             }
@@ -517,8 +515,8 @@ fn freq_one_path_roundtrip() {
     // reciprocal table (rcp_freq = ~0u, bias = start+M-1).
     let mut freqs = [0u32; 256];
     // 4096-bucket model with several freq=1 symbols.
-    for s in 0..16 {
-        freqs[s] = 1;
+    for freq in freqs.iter_mut().take(16) {
+        *freq = 1;
     }
     freqs[16] = M - 16; // dominant carrier symbol.
 
@@ -526,7 +524,7 @@ fn freq_one_path_roundtrip() {
     let mut seed = 0x55aau64;
     for _ in 0..1024 {
         // 1-in-32 chance to emit one of the rare symbols.
-        if lcg(&mut seed) % 32 == 0 {
+        if lcg(&mut seed).is_multiple_of(32) {
             data.push((lcg(&mut seed) % 16) as u8);
         } else {
             data.push(16u8);
@@ -665,7 +663,7 @@ fn stress_seeded_random_runs() {
         let d = dist_fns[(run / (ns.len() * sbs.len())) % dist_fns.len()];
         let len = lens[run % lens.len()];
         let freqs = d(n, sb);
-        seed = seed.wrapping_add(0xb5d1_ce3_a5a5_5a5au64);
+        seed = seed.wrapping_add(0xb5d_1ce3_a5a5_5a5au64);
         let data = sample_from_freqs(&freqs, len, seed, sb);
         check_roundtrip_generic(&data, &freqs, sb);
     }
@@ -874,7 +872,7 @@ fn dec_renorm_safe_matches_unsafe_in_bounds() {
     // Tail-bytes used to drive the renorm — but we want a state that
     // requires renormalization. Easiest: contrive `state` < RANS_BYTE_L
     // and drive both routines on the same byte source.
-    let drive_bytes = vec![0xa5u8, 0x5au8, 0xc3u8, 0x3c, 0xff, 0x00];
+    let drive_bytes = [0xa5u8, 0x5au8, 0xc3u8, 0x3c, 0xff, 0x00];
     for prefix_len in 2..=drive_bytes.len() {
         for &init_state in &[1u32, 0x1234u32, RANS_BYTE_L - 1, 0x00ff_ffffu32] {
             // Unsafe path.
@@ -994,9 +992,9 @@ fn dec_symbol_init16_vs_init32_grid() {
     let mut seed = 0x4242_4242_4242_4242u64;
     for _ in 0..256 {
         let m = 1u32 << 16;
-        let raw = lcg(&mut seed) as u32;
+        let raw = lcg(&mut seed);
         let start = raw % m;
-        let freq_raw = lcg(&mut seed) as u32;
+        let freq_raw = lcg(&mut seed);
         let freq = if m == start {
             0
         } else {
@@ -1123,7 +1121,7 @@ fn four_way_interleave_roundtrip() {
 
     // Length must be a multiple of 4 for a clean interleave.
     let data = sample_from_freqs(&freqs, 1024, 0x4444_8888_cccc_0000u64, 12);
-    assert_eq!(data.len() % 4, 0);
+    assert!(data.len().is_multiple_of(4));
 
     // Encode.
     let cap = data.len() * 3 + 64;
@@ -1152,7 +1150,7 @@ fn four_way_interleave_roundtrip() {
             RansEncPutSymbol(&mut r3, &mut pptr, &enc[data[i + 3] as usize]);
             RansEncPutSymbol(&mut r2, &mut pptr, &enc[data[i + 2] as usize]);
             RansEncPutSymbol(&mut r1, &mut pptr, &enc[data[i + 1] as usize]);
-            RansEncPutSymbol(&mut r0, &mut pptr, &enc[data[i + 0] as usize]);
+            RansEncPutSymbol(&mut r0, &mut pptr, &enc[data[i] as usize]);
         }
         // Flush in reverse: state 3 first so the decoder reads state 0
         // first. (Order matches what rans_static.c does.)
@@ -1287,8 +1285,8 @@ fn four_way_interleave_matches_single_state_pairs() {
 /// stream consisting of `[k]` under the given freqs at SCALE_BITS=12.
 fn encode_single_byte_payload(k: u8, freqs: &[u32; 256]) -> Vec<u8> {
     let mut cum = [0u32; 257];
-    for i in 0..256 {
-        cum[i + 1] = cum[i] + freqs[i];
+    for (i, &freq) in freqs.iter().enumerate() {
+        cum[i + 1] = cum[i] + freq;
     }
     let mut sym = RansEncSymbol::default();
     RansEncSymbolInit(&mut sym, cum[k as usize], freqs[k as usize], 12);
@@ -1315,8 +1313,8 @@ fn golden_single_symbol_uniform_4() {
     // regression guard against any future drift (refactor of rans_static
     // delegating into these primitives must keep producing them).
     let mut freqs = [0u32; 256];
-    for s in 0..4 {
-        freqs[s] = M / 4;
+    for freq in freqs.iter_mut().take(4) {
+        *freq = M / 4;
     }
     // Computed once and locked in. After flush the state has the form
     // RANS_BYTE_L + 1024*k + r where r is the renorm residue; the
@@ -1371,8 +1369,8 @@ fn golden_single_symbol_two_symbol_extreme() {
 
     // Direct oracle.
     let mut cum = [0u32; 257];
-    for i in 0..256 {
-        cum[i + 1] = cum[i] + freqs[i];
+    for (i, &freq) in freqs.iter().enumerate() {
+        cum[i + 1] = cum[i] + freq;
     }
     let mut buf = vec![0u8; 16];
     let total = buf.len();

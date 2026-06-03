@@ -191,6 +191,7 @@ pub unsafe fn test_sam_c_136_test_update_int(
 }
 
 // original: test_update_array (htslib/test/sam.c:192)
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn test_sam_c_192_test_update_array(
     aln: *mut sam::bam1_t,
     target_id: *const c_char,
@@ -328,18 +329,18 @@ pub unsafe fn test_sam_c_248_aux_fields1() -> c_int {
             test_sam_bam_set1_fail(c"aux_fields1".as_ptr(), c"Xi field mismatch".as_ptr());
         }
         p = test_sam_c_78_check_bam_aux_get(aln, c"Xf".as_ptr(), b'f' as c_char);
-        if !p.is_null() && (sam::bam_aux2f(p) - 3.141592653589793).abs() > 1e-6 {
+        if !p.is_null() && (sam::bam_aux2f(p) - std::f64::consts::PI).abs() > 1e-6 {
             test_sam_bam_set1_fail(c"aux_fields1".as_ptr(), c"Xf field mismatch".as_ptr());
         }
         p = test_sam_c_78_check_bam_aux_get(aln, c"Xd".as_ptr(), b'd' as c_char);
-        if !p.is_null() && (sam::bam_aux2f(p) - 2.718281828459045).abs() > 1e-6 {
+        if !p.is_null() && (sam::bam_aux2f(p) - std::f64::consts::E).abs() > 1e-6 {
             test_sam_bam_set1_fail(c"aux_fields1".as_ptr(), c"Xd field mismatch".as_ptr());
         }
 
         sam::bam_aux_update_str(
             aln,
             c"XZ".as_ptr(),
-            libc::strlen(c"Yo, dude".as_ptr()) as c_int + 1,
+            (c"Yo, dude".to_bytes().len() + 1) as c_int,
             c"Yo, dude".as_ptr(),
         );
         sam::bam_aux_update_float(aln, c"F2".as_ptr(), 9.8765);
@@ -369,7 +370,7 @@ pub unsafe fn test_sam_c_248_aux_fields1() -> c_int {
             b'S',
             n4v7.len() as u32,
             n4v7.as_mut_ptr().cast(),
-            b"\0\0".as_ptr().cast(),
+            c"".as_ptr(),
             0,
             0,
         );
@@ -377,13 +378,13 @@ pub unsafe fn test_sam_c_248_aux_fields1() -> c_int {
         sam::bam_aux_update_str(
             aln,
             c"Za".as_ptr(),
-            libc::strlen(c"Hello, world!".as_ptr()) as c_int,
+            c"Hello, world!".to_bytes().len() as c_int,
             c"Hello, world!".as_ptr(),
         );
         sam::bam_aux_update_str(
             aln,
             c"Zb".as_ptr(),
-            libc::strlen(c"Bonjour, tout le monde".as_ptr()) as c_int + 1,
+            (c"Bonjour, tout le monde".to_bytes().len() + 1) as c_int,
             c"Bonjour, tout le monde".as_ptr(),
         );
 
@@ -859,7 +860,7 @@ pub unsafe fn test_sam_c_705_use_header_api() {
     } else {
         libc::fread(buffer.as_mut_ptr().cast(), 1, buffer.len(), inf)
     };
-    if bytes != libc::strlen(expected.as_ptr())
+    if bytes != expected.to_bytes().len()
         || libc::memcmp(buffer.as_ptr().cast(), expected.as_ptr().cast(), bytes) != 0
     {
         test_sam_bam_set1_fail(
@@ -1016,7 +1017,7 @@ pub unsafe fn test_sam_c_1087_test_header_updates() {
     let expected = c"@HD\tVN:1.4\n@SQ\tSN:1\tLN:100\n@SQ\tSN:chr2\tLN:2000\n@SQ\tSN:chr3\tLN:300\n@RG\tID:run1\tDS:hello\n@RG\tID:aliquot2\n@RG\tID:run3\n@PG\tID:prog1\tPN:prog1\n";
     let expected_targets = [c"1".as_ptr(), c"chr2".as_ptr(), c"chr3".as_ptr()];
     let expected_lengths = [100, 2000, 300];
-    let header = sam::sam_hdr_parse(libc::strlen(header_text.as_ptr()), header_text.as_ptr());
+    let header = sam::sam_hdr_parse(header_text.to_bytes().len(), header_text.as_ptr());
     if header.is_null() {
         test_sam_bam_set1_fail(
             c"test_header_updates".as_ptr(),
@@ -1087,7 +1088,7 @@ pub unsafe fn test_sam_c_1182_test_header_remove_lines() {
     let header_text = c"@HD\tVN:1.4\n@SQ\tSN:chr1\tLN:100\n@SQ\tSN:chr2\tLN:200\n@SQ\tSN:chr3\tLN:300\n@RG\tID:run1\n@RG\tID:run2\n@RG\tID:run3\n@PG\tID:prog1\tPN:prog1\n";
     let expected =
         c"@HD\tVN:1.4\n@SQ\tSN:chr1\tLN:100\n@SQ\tSN:chr3\tLN:300\n@PG\tID:prog1\tPN:prog1\n";
-    let header = sam::sam_hdr_parse(libc::strlen(header_text.as_ptr()), header_text.as_ptr());
+    let header = sam::sam_hdr_parse(header_text.to_bytes().len(), header_text.as_ptr());
     let rh = sam::khash_str2int_init();
     if header.is_null() || rh.is_null() {
         test_sam_bam_set1_fail(
@@ -1293,13 +1294,13 @@ pub unsafe fn test_sam_c_1405_check_big_ref_parse(parse_header: c_int) {
     let expected_mtid = [-1, -1, -1, 2, 2, -1];
     let expected_positions: [hts_pos_t; 6] = [
         4999999000 - 1,
-        1 - 1,
+        0,
         4611686018427387000 - 1,
-        1 - 1,
+        0,
         4611686018427387895 - 1,
         2 - 1,
     ];
-    let expected_mpos: [hts_pos_t; 6] = [-1, -1, -1, 4611686018427387895 - 1, 1 - 1, -1];
+    let expected_mpos: [hts_pos_t; 6] = [-1, -1, -1, 4611686018427387895 - 1, 0, -1];
     let in_ = crate::htslib_rs::hts::hts_open(sam_text.as_ptr(), c"r".as_ptr());
     let header = if in_.is_null() {
         std::ptr::null_mut()
@@ -1676,6 +1677,7 @@ pub unsafe fn test_sam_c_1688_generator(name: *const c_char) -> c_int {
 }
 
 // original: read_data_block (htslib/test/sam.c:1735)
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn test_sam_c_1735_read_data_block(
     in_name: *const c_char,
     fp_in: *mut htsFile,
@@ -1947,7 +1949,7 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
         if sam::bam_aux_update_str(
             recs.add(i),
             c"ZZ".as_ptr(),
-            libc::strlen(tag_text.as_ptr()) as c_int,
+            tag_text.to_bytes().len() as c_int,
             tag_text.as_ptr(),
         ) < 0
         {
@@ -1993,7 +1995,7 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
         );
         return;
     }
-    cram_fp = crate::htslib_rs::hts::hts_open_format(cram_name, c"wc".as_ptr(), &mut cram_fmt);
+    cram_fp = crate::htslib_rs::hts::hts_open_format(cram_name, c"wc".as_ptr(), &cram_fmt);
     header = if bam_fp.is_null() {
         std::ptr::null_mut()
     } else {
@@ -2035,6 +2037,7 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn goto_test_mempolicy_cleanup(
     recs: *mut sam::bam1_t,
     buffer: *mut u8,
@@ -2120,13 +2123,16 @@ pub unsafe fn test_sam_c_2000_test_bam_set1_minimal() {
 
 // original: test_bam_set1_full (htslib/test/sam.c:2031)
 pub unsafe fn test_sam_c_2031_test_bam_set1_full() {
-    let qname = c"!??AAA~~~~".as_ptr();
+    let qname_c = c"!??AAA~~~~";
+    let qname = qname_c.as_ptr();
     let cigar = [
         (6u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CMATCH as u32,
         (2u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CINS as u32,
         (2u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CMATCH as u32,
     ];
-    let seq = c"TGGACTACGA".as_ptr();
+    let seq_c = c"TGGACTACGA";
+    let seq = seq_c.as_ptr();
+    let seq_len = seq_c.to_bytes().len();
     let qual = c"DBBBB+=7=0".as_ptr();
     let bam = sam::bam_init1();
     if bam.is_null() {
@@ -2139,7 +2145,7 @@ pub unsafe fn test_sam_c_2031_test_bam_set1_full() {
 
     let r = sam::bam_set1(
         bam,
-        libc::strlen(qname),
+        qname_c.to_bytes().len(),
         qname,
         sam::BAM_FREVERSE as u16,
         1,
@@ -2150,7 +2156,7 @@ pub unsafe fn test_sam_c_2031_test_bam_set1_full() {
         2,
         2000,
         3000,
-        libc::strlen(seq),
+        seq_len,
         seq,
         qual,
         64,
@@ -2166,12 +2172,8 @@ pub unsafe fn test_sam_c_2031_test_bam_set1_full() {
             cigar.as_ptr().cast(),
             std::mem::size_of_val(&cigar),
         ) == 0
-        && (*bam).core.l_qseq as usize == libc::strlen(seq)
-        && libc::memcmp(
-            sam::bam_get_qual(bam).cast(),
-            qual.cast(),
-            libc::strlen(seq),
-        ) == 0
+        && (*bam).core.l_qseq as usize == seq_len
+        && libc::memcmp(sam::bam_get_qual(bam).cast(), qual.cast(), seq_len) == 0
         && (*bam).core.pos == 1000
         && (*bam).core.tid == 1
         && (*bam).core.bin as c_int == crate::htslib_rs::hts::hts_reg2bin(1000, 1010, 14, 5)
@@ -2182,7 +2184,7 @@ pub unsafe fn test_sam_c_2031_test_bam_set1_full() {
         && (*bam).core.isize == 3000
         && sam::bam_get_l_aux(bam) == 0
         && (*bam).m_data as i64 - (*bam).l_data as i64 >= 64;
-    for i in 0..libc::strlen(seq) {
+    for i in 0..seq_len {
         ok &= sam::bam_seqi(sam::bam_get_seq(bam), i)
             == sam::SEQ_NT16_TABLE[*seq.add(i) as u8 as usize];
     }
@@ -2205,7 +2207,9 @@ pub unsafe fn test_sam_c_2078_test_bam_set1_even_and_odd_seq_len() {
         );
         return;
     }
-    for seq in [c"TGGACTACGA".as_ptr(), c"TGGACTACGAC".as_ptr()] {
+    for seq_c in [c"TGGACTACGA", c"TGGACTACGAC"] {
+        let seq = seq_c.as_ptr();
+        let seq_len = seq_c.to_bytes().len();
         let r = sam::bam_set1(
             bam,
             0,
@@ -2219,13 +2223,13 @@ pub unsafe fn test_sam_c_2078_test_bam_set1_even_and_odd_seq_len() {
             0,
             0,
             0,
-            libc::strlen(seq),
+            seq_len,
             seq,
             std::ptr::null(),
             0,
         );
-        let mut ok = r >= 0 && (*bam).core.l_qseq as usize == libc::strlen(seq);
-        for i in 0..libc::strlen(seq) {
+        let mut ok = r >= 0 && (*bam).core.l_qseq as usize == seq_len;
+        for i in 0..seq_len {
             ok &= sam::bam_seqi(sam::bam_get_seq(bam), i)
                 == sam::SEQ_NT16_TABLE[*seq.add(i) as u8 as usize];
         }
@@ -2242,7 +2246,9 @@ pub unsafe fn test_sam_c_2078_test_bam_set1_even_and_odd_seq_len() {
 
 // original: test_bam_set1_with_seq_but_no_qual (htslib/test/sam.c:2108)
 pub unsafe fn test_sam_c_2108_test_bam_set1_with_seq_but_no_qual() {
-    let seq = c"TGGACTACGA".as_ptr();
+    let seq_c = c"TGGACTACGA";
+    let seq = seq_c.as_ptr();
+    let seq_len = seq_c.to_bytes().len();
     let bam = sam::bam_init1();
     if bam.is_null() {
         test_sam_bam_set1_fail(
@@ -2264,13 +2270,13 @@ pub unsafe fn test_sam_c_2108_test_bam_set1_with_seq_but_no_qual() {
         0,
         0,
         0,
-        libc::strlen(seq),
+        seq_len,
         seq,
         std::ptr::null(),
         0,
     );
-    let mut ok = r >= 0 && (*bam).core.l_qseq as usize == libc::strlen(seq);
-    for i in 0..libc::strlen(seq) {
+    let mut ok = r >= 0 && (*bam).core.l_qseq as usize == seq_len;
+    for i in 0..seq_len {
         ok &= sam::bam_seqi(sam::bam_get_seq(bam), i)
             == sam::SEQ_NT16_TABLE[*seq.add(i) as u8 as usize]
             && *sam::bam_get_qual(bam).add(i) == 0xff;
@@ -2313,7 +2319,7 @@ pub unsafe fn test_sam_c_2132_test_bam_set1_validate_qname() {
         std::ptr::null(),
         0,
     );
-    if r >= 0 || *libc::__errno_location() != libc::EINVAL {
+    if r >= 0 || *crate::htslib_rs::c_compat::__errno_location() != libc::EINVAL {
         test_sam_bam_set1_fail(
             c"test_bam_set1_validate_qname".as_ptr(),
             c"qname validation failed.".as_ptr(),
@@ -2351,7 +2357,7 @@ pub unsafe fn test_sam_c_2149_test_bam_set1_validate_seq() {
         std::ptr::null(),
         0,
     );
-    if r >= 0 || *libc::__errno_location() != libc::EINVAL {
+    if r >= 0 || *crate::htslib_rs::c_compat::__errno_location() != libc::EINVAL {
         test_sam_bam_set1_fail(
             c"test_bam_set1_validate_seq".as_ptr(),
             c"sequence validation failed.".as_ptr(),
@@ -2363,7 +2369,9 @@ pub unsafe fn test_sam_c_2149_test_bam_set1_validate_seq() {
 // original: test_bam_set1_validate_cigar (htslib/test/sam.c:2166)
 pub unsafe fn test_sam_c_2166_test_bam_set1_validate_cigar() {
     let cigar = [(20u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CMATCH as u32];
-    let seq = c"TGGACTACGA".as_ptr();
+    let seq_c = c"TGGACTACGA";
+    let seq = seq_c.as_ptr();
+    let seq_len = seq_c.to_bytes().len();
     let bam = sam::bam_init1();
     if bam.is_null() {
         test_sam_bam_set1_fail(
@@ -2386,12 +2394,12 @@ pub unsafe fn test_sam_c_2166_test_bam_set1_validate_cigar() {
         -1,
         0,
         0,
-        libc::strlen(seq),
+        seq_len,
         seq,
         std::ptr::null(),
         0,
     );
-    let e1 = *libc::__errno_location();
+    let e1 = *crate::htslib_rs::c_compat::__errno_location();
     let r2 = sam::bam_set1(
         bam,
         0,
@@ -2410,7 +2418,7 @@ pub unsafe fn test_sam_c_2166_test_bam_set1_validate_cigar() {
         std::ptr::null(),
         0,
     );
-    let e2 = *libc::__errno_location();
+    let e2 = *crate::htslib_rs::c_compat::__errno_location();
     let r3 = sam::bam_set1(
         bam,
         0,
@@ -2424,12 +2432,12 @@ pub unsafe fn test_sam_c_2166_test_bam_set1_validate_cigar() {
         -1,
         0,
         0,
-        libc::strlen(seq),
+        seq_len,
         seq,
         std::ptr::null(),
         0,
     );
-    let e3 = *libc::__errno_location();
+    let e3 = *crate::htslib_rs::c_compat::__errno_location();
     if r1 >= 0
         || e1 != libc::EINVAL
         || r2 >= 0
@@ -2475,7 +2483,7 @@ pub unsafe fn test_sam_c_2195_test_bam_set1_validate_size_limits() {
         std::ptr::null(),
         0,
     );
-    let e1 = *libc::__errno_location();
+    let e1 = *crate::htslib_rs::c_compat::__errno_location();
     let r2 = sam::bam_set1(
         bam,
         0,
@@ -2494,7 +2502,7 @@ pub unsafe fn test_sam_c_2195_test_bam_set1_validate_size_limits() {
         std::ptr::null(),
         0,
     );
-    let e2 = *libc::__errno_location();
+    let e2 = *crate::htslib_rs::c_compat::__errno_location();
     let r3 = sam::bam_set1(
         bam,
         0,
@@ -2513,7 +2521,7 @@ pub unsafe fn test_sam_c_2195_test_bam_set1_validate_size_limits() {
         std::ptr::null(),
         i32::MAX as usize,
     );
-    let e3 = *libc::__errno_location();
+    let e3 = *crate::htslib_rs::c_compat::__errno_location();
     if r1 >= 0
         || e1 != libc::EINVAL
         || r2 >= 0
@@ -2541,13 +2549,16 @@ unsafe fn test_sam_bam_set1_fail(func: *const c_char, message: *const c_char) {
 
 // original: test_bam_set1_write_and_read_back (htslib/test/sam.c:2227)
 pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
-    let qname = c"q1".as_ptr();
+    let qname_c = c"q1";
+    let qname = qname_c.as_ptr();
     let cigar = [
         (6u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CMATCH as u32,
         (2u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CINS as u32,
         (2u32 << sam::BAM_CIGAR_SHIFT) | sam::BAM_CMATCH as u32,
     ];
-    let seq = c"TGGACTACGA".as_ptr();
+    let seq_c = c"TGGACTACGA";
+    let seq = seq_c.as_ptr();
+    let seq_len = seq_c.to_bytes().len();
     let qual = c"DBBBB+=7=0".as_ptr();
     let path = std::env::temp_dir().join(format!(
         "htslib_rs-test-bam-set1-write-read-{}.bam",
@@ -2586,12 +2597,9 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
     }
 
     w_header = sam::bam_hdr_init();
+    let header_line = c"@SQ\tSN:t1\tLN:5000\n";
     if w_header.is_null()
-        || sam::sam_hdr_add_lines(
-            w_header,
-            c"@SQ\tSN:t1\tLN:5000\n".as_ptr(),
-            libc::strlen(c"@SQ\tSN:t1\tLN:5000\n".as_ptr()),
-        ) != 0
+        || sam::sam_hdr_add_lines(w_header, header_line.as_ptr(), header_line.to_bytes().len()) != 0
         || sam::sam_hdr_write(writer, w_header) != 0
     {
         test_sam_bam_set1_fail(
@@ -2631,7 +2639,7 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
     }
     let mut r = sam::bam_set1(
         w_bam,
-        libc::strlen(qname),
+        qname_c.to_bytes().len(),
         qname,
         (sam::BAM_FPAIRED | sam::BAM_FREVERSE) as u16,
         0,
@@ -2642,7 +2650,7 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
         0,
         2000,
         3000,
-        libc::strlen(seq),
+        seq_len,
         seq,
         qual,
         64,
@@ -2749,7 +2757,7 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
             cigar.as_ptr().cast(),
             std::mem::size_of_val(&cigar),
         ) != 0
-        || (*r_bam).core.l_qseq as usize != libc::strlen(seq)
+        || (*r_bam).core.l_qseq as usize != seq_len
         || sam::sam_read1(reader, r_header, r_bam) >= 0
     {
         test_sam_bam_set1_fail(
@@ -2770,6 +2778,7 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn goto_test_bam_set1_write_read_cleanup(
     temp_fname: *const c_char,
     writer: *mut htsFile,
@@ -2995,7 +3004,7 @@ mod tests {
                     c"Xi".as_ptr(),
                     -129,
                     b's' as c_char,
-                    b"\0\0".as_ptr().cast(),
+                    c"".as_ptr(),
                     0,
                     0,
                 ),

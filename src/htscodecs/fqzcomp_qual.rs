@@ -21,11 +21,19 @@ const INT_MAX_U32: u32 = i32::MAX as u32;
 
 #[inline]
 fn min_i32(a: i32, b: i32) -> i32 {
-    if a < b { a } else { b }
+    if a < b {
+        a
+    } else {
+        b
+    }
 }
 #[inline]
 fn max_i32(a: i32, b: i32) -> i32 {
-    if a > b { a } else { b }
+    if a > b {
+        a
+    } else {
+        b
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -315,7 +323,10 @@ pub fn store_array(out: &mut [u8], array: &[u32], size: i32) -> i32 {
     // here but C immediately reuses `j` as the RLE loop counter so this last
     // increment is dead. Rust renames the second counter to `jj`, leaving
     // this `j` increment as a faithful but dead artifact.
-    while i < size {
+    loop {
+        if i >= size {
+            break;
+        }
         tmp[k as usize] = 0;
         k += 1;
         #[allow(unused_assignments)]
@@ -579,9 +590,7 @@ pub fn fqz_qual_stats(
     rec = 0;
     i = 0;
     while i < in_size {
-        if one_param >= 0
-            && rec < num_records as usize
-            && (s_flags[rec] >> 16) as i32 != one_param
+        if one_param >= 0 && rec < num_records as usize && (s_flags[rec] >> 16) as i32 != one_param
         {
             avg_qual[rec] = 0;
             i += s_len[rec] as usize;
@@ -590,7 +599,11 @@ pub fn fqz_qual_stats(
         }
         if rec < num_records as usize {
             j = s_len[rec] as usize;
-            dir = if s_flags[rec] & FQZ_FREAD2 as u32 != 0 { 1 } else { 0 };
+            dir = if s_flags[rec] & FQZ_FREAD2 as u32 != 0 {
+                1
+            } else {
+                0
+            };
             if i > 0
                 && j == last_len as usize
                 && r#in[i - last_len as usize..i - last_len as usize + j] == r#in[i..i + j]
@@ -750,8 +763,7 @@ pub fn fqz_qual_stats(
         for j in 0..NP as usize {
             for i in 0..256usize {
                 if qbin1[j][i] != 0 {
-                    e1 += qbin1[j][i] as f64
-                        * fast_log(qbin1[j][i] as f64 / qcnt1[j] as f64);
+                    e1 += qbin1[j][i] as f64 * fast_log(qbin1[j][i] as f64 / qcnt1[j] as f64);
                 }
                 if qbin2[0][j][i] != 0 {
                     e2 += qbin2[0][j][i] as f64
@@ -793,9 +805,7 @@ pub fn fqz_qual_stats(
             }
             pm.do_sel = 1;
             max_sel = 3;
-        } else if (pm.do_qa == -1 || pm.do_qa >= 2)
-            && e2 + num_records as f64 / 8.0 < e1 * qm
-        {
+        } else if (pm.do_qa == -1 || pm.do_qa >= 2) && e2 + num_records as f64 / 8.0 < e1 * qm {
             for i in 0..num_records as usize {
                 s_flags[i] |= (avg[min_i32(2559, avg_qual[i]) as usize] >> 1) << 16;
             }
@@ -839,8 +849,7 @@ pub fn fqz_qual_stats(
                 if qhistb[j][i] == 0 {
                     continue;
                 }
-                e1 -= qhistb[j][i] as f64
-                    * (qhistb[j][i] as f64 / (t1[j] + t2[j]) as f64).ln();
+                e1 -= qhistb[j][i] as f64 * (qhistb[j][i] as f64 / (t1[j] + t2[j]) as f64).ln();
                 if qhist1[j][i] != 0 {
                     e2 -= qhist1[j][i] as f64 * (qhist1[j][i] as f64 / t1[j] as f64).ln();
                 }
@@ -863,7 +872,7 @@ pub fn fqz_qual_stats(
                     | if s_flags[rec] & FQZ_FREAD2 as u32 != 0 {
                         (((sel * 2) + 1) as u32) << 16
                     } else {
-                        (((sel * 2) + 0) as u32) << 16
+                        ((sel * 2) as u32) << 16
                     };
                 if max_sel < (s_flags[rec] >> 16) as i32 {
                     max_sel = (s_flags[rec] >> 16) as i32;
@@ -1139,8 +1148,8 @@ pub fn fqz_pick_parameters(
 
     if pm.dbits != 0 {
         for i in 0..256usize {
-            pm.dtab[i] = dsqr[min_i32(dsqr.len() as i32 - 1, (i >> pm.dshift) as i32) as usize]
-                as u32;
+            pm.dtab[i] =
+                dsqr[min_i32(dsqr.len() as i32 - 1, (i >> pm.dshift) as i32) as usize] as u32;
         }
     }
 
@@ -1153,7 +1162,11 @@ pub fn fqz_pick_parameters(
         | (if pm.do_sel != 0 { PFLAG_DO_SEL } else { 0 } as u32)
         | (if pm.fixed_len != 0 { PFLAG_DO_LEN } else { 0 } as u32)
         | (if pm.do_dedup != 0 { PFLAG_DO_DEDUP } else { 0 } as u32)
-        | (if pm.store_qmap != 0 { PFLAG_HAVE_QMAP } else { 0 } as u32);
+        | (if pm.store_qmap != 0 {
+            PFLAG_HAVE_QMAP
+        } else {
+            0
+        } as u32);
 
     gp.max_sel = 0;
     if pm.do_sel != 0 {
@@ -1224,7 +1237,7 @@ pub fn compress_new_read(
 
     let len = s_len[rec as usize];
     if pm.fixed_len == 0 || state.first_len != 0 {
-        SIMPLE_MODEL_encodeSymbol(&mut model.len[0], rc, ((len >> 0) & 0xff) as u16);
+        SIMPLE_MODEL_encodeSymbol(&mut model.len[0], rc, (len & 0xff) as u16);
         SIMPLE_MODEL_encodeSymbol(&mut model.len[1], rc, ((len >> 8) & 0xff) as u16);
         SIMPLE_MODEL_encodeSymbol(&mut model.len[2], rc, ((len >> 16) & 0xff) as u16);
         SIMPLE_MODEL_encodeSymbol(&mut model.len[3], rc, ((len >> 24) & 0xff) as u16);
@@ -1321,8 +1334,7 @@ pub fn compress_block_fqz2f(
     let gp_p0_fixed_len = unsafe { (*gp.p).fixed_len };
     let mut len_sz: f64 = if gp_p0_fixed_len != 0 { 0.25 } else { 4.25 };
     len_sz += sel_bits as f64 / 8.0;
-    let comp_sz: usize =
-        ((s.num_records as f64 * len_sz + in_size as f64) * 1.1) as usize + 10000;
+    let comp_sz: usize = ((s.num_records as f64 * len_sz + in_size as f64) * 1.1) as usize + 10000;
 
     // malloc(comp_sz) modelled with a zeroed Vec of that capacity/length.
     let mut comp: Vec<u8> = vec![0u8; comp_sz];
@@ -1396,15 +1408,22 @@ pub fn compress_block_fqz2f(
     let mut errored = false;
     while i < in_size {
         if state.p == 0 {
-            if state.rec >= num_records as isize
-                || s_len[state.rec as usize] == 0
-            {
+            if state.rec >= num_records as isize || s_len[state.rec as usize] == 0 {
                 errored = true;
                 break;
             }
 
-            if compress_new_read(s, &mut state, gp, unsafe { &*gp.p }, &mut model, &mut rc,
-                                 r#in, &mut i, &mut last) != 0
+            if compress_new_read(
+                s,
+                &mut state,
+                gp,
+                unsafe { &*gp.p },
+                &mut model,
+                &mut rc,
+                r#in,
+                &mut i,
+                &mut last,
+            ) != 0
             {
                 i += 1;
                 continue;
@@ -1843,11 +1862,7 @@ pub fn uncompress_block_fqz2f(
     // pointer to the input bytes for the duration of decoding.
     let in_ptr = r#in.as_ptr() as *mut u8;
     unsafe {
-        RC_SetInput(
-            &mut rc,
-            in_ptr.add(in_idx),
-            in_ptr.add(in_size),
-        );
+        RC_SetInput(&mut rc, in_ptr.add(in_idx), in_ptr.add(in_size));
     }
     RC_StartDecode(&mut rc);
 

@@ -13,7 +13,7 @@ pub unsafe fn cram_cram_stats_c_52_cram_stats_add(st: *mut c_void, val: c_int) {
     let st = st.cast::<cram_stats_layout>();
     (*st).nsamp += 1;
 
-    if val >= 0 && val < 1024 {
+    if (0..1024).contains(&val) {
         (*st).freqs[val as usize] += 1;
         return;
     }
@@ -186,7 +186,7 @@ pub unsafe fn cram_cram_stats_c_80_cram_stats_del(st: *mut c_void, val: c_int) {
     let st = st.cast::<cram_stats_layout>();
     (*st).nsamp -= 1;
 
-    if val >= 0 && val < 1024 {
+    if (0..1024).contains(&val) {
         (*st).freqs[val as usize] -= 1;
         debug_assert!((*st).freqs[val as usize] >= 0);
         return;
@@ -230,7 +230,10 @@ pub unsafe fn cram_cram_stats_c_80_cram_stats_del(st: *mut c_void, val: c_int) {
 
 pub unsafe fn cram_cram_stats_c_105_cram_stats_dump(st: *mut c_void) {
     let st = st.cast::<cram_stats_layout>();
-    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"cram_stats:\n".as_ptr());
+    libc::fprintf(
+        crate::htslib_rs::c_compat::stderr.cast(),
+        c"cram_stats:\n".as_ptr(),
+    );
 
     for i in 0..1024usize {
         let freq = (*st).freqs[i];

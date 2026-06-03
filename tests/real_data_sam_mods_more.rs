@@ -135,7 +135,10 @@ fn mods_recorded_reports_chebi_numeric_code_as_negative_int() {
         // Three mod entries: C+m (109), C+76792 (CHEBI numeric, encoded as
         // -76792), N+n (110). After sort the negative number is first.
         assert_eq!(codes.len(), 3);
-        assert_eq!(codes[0], -76792, "ChEBI numeric code should be -76792 (negative)");
+        assert_eq!(
+            codes[0], -76792,
+            "ChEBI numeric code should be -76792 (negative)"
+        );
         assert!(codes.contains(&(b'm' as i32)));
         assert!(codes.contains(&(b'n' as i32)));
 

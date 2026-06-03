@@ -54,9 +54,7 @@ pub fn main() -> i32 {
 
         // Decode table; distributes N adjacent values across lanes
         libc::printf(c"#define _ 9\n".as_ptr());
-        libc::printf(
-            c"static uint32_t permute[256][8] = { // reverse binary bit order\n".as_ptr(),
-        );
+        libc::printf(c"static uint32_t permute[256][8] = { // reverse binary bit order\n".as_ptr());
         let mut i: libc::c_int = 0;
         while i < 256 {
             let mut b: libc::c_int = 0;

@@ -68,11 +68,12 @@ pub unsafe fn fai_path(fa: *const c_char) -> *mut c_char {
     }
 
     let mut fai = std::ptr::null_mut();
-    if hts_c_4756_hts_idx_check_local(fa, HTS_FMT_FAI, &mut fai) == 0 && !fai.is_null() {
-        if fai_build3(fa, fai, std::ptr::null()) == -1 {
-            free(fai.cast());
-            return std::ptr::null_mut();
-        }
+    if hts_c_4756_hts_idx_check_local(fa, HTS_FMT_FAI, &mut fai) == 0
+        && !fai.is_null()
+        && fai_build3(fa, fai, std::ptr::null()) == -1
+    {
+        free(fai.cast());
+        return std::ptr::null_mut();
     }
     fai
 }
@@ -108,6 +109,8 @@ pub struct faidx_t {
     pub hash: *mut faidx_hash_t,
     pub format: c_int,
 }
+
+type FaidxRows = Vec<(Vec<u8>, faidx1_t)>;
 
 pub unsafe fn fai_load3(
     fn_: *const c_char,
@@ -168,7 +171,7 @@ unsafe fn fai_load3_core(
     }
     let mut build_index = !fai_path.as_ref().unwrap().exists();
     if !build_index {
-        let bgzf = bgzf_open(fn_, b"r\0".as_ptr().cast());
+        let bgzf = bgzf_open(fn_, c"r".as_ptr());
         if bgzf.is_null() {
             return ptr::null_mut();
         }
@@ -177,10 +180,8 @@ unsafe fn fai_load3_core(
         }
         bgzf_close(bgzf);
     }
-    if build_index {
-        if (flags & FAI_CREATE) == 0 || fai_build3_core(fn_, fnfai, fngzi) != 0 {
-            return ptr::null_mut();
-        }
+    if build_index && ((flags & FAI_CREATE) == 0 || fai_build3_core(fn_, fnfai, fngzi) != 0) {
+        return ptr::null_mut();
     }
     let Some(fai) = fai_read(fn_, fnfai, format) else {
         return ptr::null_mut();
@@ -200,7 +201,7 @@ unsafe fn fai_build3_core(fn_: *const c_char, fnfai: *const c_char, fngzi: *cons
     if fn_.is_null() {
         return -1;
     }
-    let bgzf = bgzf_open(fn_, b"r\0".as_ptr().cast());
+    let bgzf = bgzf_open(fn_, c"r".as_ptr());
     if bgzf.is_null() {
         return -1;
     }
@@ -357,7 +358,7 @@ unsafe fn read_all_bgzf(bgzf: *mut BGZF) -> Option<Vec<u8>> {
 }
 
 unsafe fn fai_insert_index(
-    rows: &mut Vec<(Vec<u8>, faidx1_t)>,
+    rows: &mut FaidxRows,
     name: Vec<u8>,
     len: u64,
     line_len: u32,
@@ -382,7 +383,7 @@ unsafe fn fai_insert_index(
     0
 }
 
-fn parse_fasta_fastq_index_rows(data: &[u8]) -> Option<(Vec<(Vec<u8>, faidx1_t)>, c_int)> {
+fn parse_fasta_fastq_index_rows(data: &[u8]) -> Option<(FaidxRows, c_int)> {
     let mut rows = Vec::new();
     let mut seen = HashSet::new();
     let mut i = 0usize;
@@ -588,7 +589,7 @@ unsafe fn fai_load_existing(fn_: *const c_char, fnfai: *const c_char) -> Option<
 
 unsafe fn fai_from_rows(
     fn_: *const c_char,
-    rows: Vec<(Vec<u8>, faidx1_t)>,
+    rows: FaidxRows,
     format: c_int,
 ) -> Option<*mut faidx_t> {
     let fai = malloc(std::mem::size_of::<faidx_t>()).cast::<faidx_t>();
@@ -600,7 +601,7 @@ unsafe fn fai_from_rows(
     (*fai).m = rows.len() as c_int;
     (*fai).format = format;
     if !fn_.is_null() {
-        (*fai).bgzf = bgzf_open(fn_, b"r\0".as_ptr().cast());
+        (*fai).bgzf = bgzf_open(fn_, c"r".as_ptr());
         if (*fai).bgzf.is_null() {
             free(fai.cast());
             return None;
@@ -688,7 +689,7 @@ unsafe fn fai_build_plain_fasta(fn_: *const c_char, fnfai: *const c_char) -> Opt
     };
 
     let data = fs::read(&fasta_path).ok()?;
-    let mut rows: Vec<(Vec<u8>, faidx1_t)> = Vec::new();
+    let mut rows: FaidxRows = Vec::new();
     let mut i = 0usize;
     while i < data.len() {
         let c = data[i];
@@ -1373,6 +1374,7 @@ unsafe fn kh_iseither(flags: *const u32, i: u32) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use std::{
         ffi::{c_void, CString},
@@ -1473,7 +1475,7 @@ mod tests {
             assert!(!name_array.is_null());
             let chr_name = crate::htslib_rs::c_compat::malloc(5).cast::<c_char>();
             assert!(!chr_name.is_null());
-            ptr::copy_nonoverlapping(b"chr1\0".as_ptr().cast::<c_char>(), chr_name, 5);
+            ptr::copy_nonoverlapping(c"chr1".as_ptr(), chr_name, 5);
             *name_array = chr_name;
 
             let hash = crate::htslib_rs::c_compat::malloc(size_of::<faidx_hash_t>() as u64)

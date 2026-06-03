@@ -54,7 +54,10 @@ pub unsafe fn test_test_bcf_sr_c_54_usage(exit_code: c_int) -> ! {
         crate::htslib_rs::c_compat::stderr.cast(),
         c"       test-bcf-sr [OPTIONS] --args file1.bcf [...]\n".as_ptr(),
     );
-    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Options:\n".as_ptr());
+    libc::fprintf(
+        crate::htslib_rs::c_compat::stderr.cast(),
+        c"Options:\n".as_ptr(),
+    );
     libc::fprintf(
         crate::htslib_rs::c_compat::stderr.cast(),
         c"       --args                   pass filenames directly in argument list\n".as_ptr(),
@@ -296,23 +299,23 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
             x if x == b'p' as c_int => {
                 if libc::strcmp(optarg, c"snps".as_ptr()) == 0 {
                     pair |= BCF_SR_PAIR_SNPS;
-                } else if libc::strcmp(optarg, c"snp+ref".as_ptr()) == 0 {
-                    pair |= BCF_SR_PAIR_SNPS | BCF_SR_PAIR_SNP_REF;
-                } else if libc::strcmp(optarg, c"snps+ref".as_ptr()) == 0 {
+                } else if libc::strcmp(optarg, c"snp+ref".as_ptr()) == 0
+                    || libc::strcmp(optarg, c"snps+ref".as_ptr()) == 0
+                {
                     pair |= BCF_SR_PAIR_SNPS | BCF_SR_PAIR_SNP_REF;
                 } else if libc::strcmp(optarg, c"indels".as_ptr()) == 0 {
                     pair |= BCF_SR_PAIR_INDELS;
-                } else if libc::strcmp(optarg, c"indel+ref".as_ptr()) == 0 {
-                    pair |= BCF_SR_PAIR_INDELS | BCF_SR_PAIR_INDEL_REF;
-                } else if libc::strcmp(optarg, c"indels+ref".as_ptr()) == 0 {
+                } else if libc::strcmp(optarg, c"indel+ref".as_ptr()) == 0
+                    || libc::strcmp(optarg, c"indels+ref".as_ptr()) == 0
+                {
                     pair |= BCF_SR_PAIR_INDELS | BCF_SR_PAIR_INDEL_REF;
                 } else if libc::strcmp(optarg, c"both".as_ptr()) == 0 {
                     pair |= BCF_SR_PAIR_BOTH;
                 } else if libc::strcmp(optarg, c"both+ref".as_ptr()) == 0 {
                     pair |= BCF_SR_PAIR_BOTH_REF;
-                } else if libc::strcmp(optarg, c"any".as_ptr()) == 0 {
-                    pair |= BCF_SR_PAIR_ANY;
-                } else if libc::strcmp(optarg, c"all".as_ptr()) == 0 {
+                } else if libc::strcmp(optarg, c"any".as_ptr()) == 0
+                    || libc::strcmp(optarg, c"all".as_ptr()) == 0
+                {
                     pair |= BCF_SR_PAIR_ANY;
                 } else if libc::strcmp(optarg, c"some".as_ptr()) == 0 {
                     pair |= BCF_SR_PAIR_SOME;
@@ -421,7 +424,9 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
                 crate::htslib_rs::hts::HTS_IDX_DELIM.as_ptr().cast(),
             );
             if !idxname.is_null() {
-                idxname = idxname.add(libc::strlen(crate::htslib_rs::hts::HTS_IDX_DELIM.as_ptr().cast()));
+                idxname = idxname.add(libc::strlen(
+                    crate::htslib_rs::hts::HTS_IDX_DELIM.as_ptr().cast(),
+                ));
             }
             if crate::htslib_rs::vcf::bcf_sr_add_hreader(sr, *htsfp.add(i as usize), 1, idxname)
                 == 0
@@ -448,7 +453,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
                 error!(
                     c"Couldn't open \"%s\" for writing: %s\n",
                     out_fn,
-                    libc::strerror(*libc::__errno_location())
+                    libc::strerror(*crate::htslib_rs::c_compat::__errno_location())
                 );
             }
         }
@@ -457,7 +462,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
             error!(
                 c"Error on closing %s : %s\n",
                 out_fn,
-                libc::strerror(*libc::__errno_location())
+                libc::strerror(*crate::htslib_rs::c_compat::__errno_location())
             );
         }
     } else {
@@ -487,7 +492,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
             error!(
                 c"Couldn't open \"%s\" for writing: %s\n",
                 out_fn,
-                libc::strerror(*libc::__errno_location())
+                libc::strerror(*crate::htslib_rs::c_compat::__errno_location())
             );
         }
         test_test_bcf_sr_c_107_write_vcf_bcf_format(sr, hdr, vcf_out, fmt_type);

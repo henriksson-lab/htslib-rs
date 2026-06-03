@@ -73,10 +73,7 @@ pub unsafe fn cram_cram_codecs_c_113_get_zero_bits_MSB(block: *mut cram_block) -
     n - 1
 }
 
-pub unsafe fn cram_cram_codecs_c_133_store_bit_MSB(
-    block: *mut cram_block,
-    bit: libc::c_uint,
-) {
+pub unsafe fn cram_cram_codecs_c_133_store_bit_MSB(block: *mut cram_block, bit: libc::c_uint) {
     let block = block.cast::<cram_block_layout>();
     if (*block).byte >= (*block).alloc {
         (*block).alloc = if (*block).alloc != 0 {
@@ -127,10 +124,7 @@ pub unsafe fn cram_cram_codecs_c_152_store_bytes_MSB(
     (*block).byte += len as usize;
 }
 
-pub unsafe fn cram_cram_codecs_c_169_get_bits_MSB(
-    block: *mut cram_block,
-    mut nbits: c_int,
-) -> i64 {
+pub unsafe fn cram_cram_codecs_c_169_get_bits_MSB(block: *mut cram_block, mut nbits: c_int) -> i64 {
     let block = block.cast::<cram_block_layout>();
     let mut val = 0u64;
 
@@ -1613,7 +1607,10 @@ pub unsafe fn cram_cram_codecs_c_1377_cram_xpack_decode_expand_char(
         return -1;
     }
 
-    let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER, 0);
+    let b = cram_cram_io_c_1388_cram_new_block(
+        crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER,
+        0,
+    );
     if b.is_null() {
         return -1;
     }
@@ -1910,20 +1907,22 @@ pub unsafe extern "C" fn cram_cram_codecs_c_1515_cram_xpack_encode_flush(c: *mut
     let mut meta_len = 0;
     let mut out_len = 0u64;
     let mut out_meta = [0u8; 1024];
-    let out = crate::htslib_rs::htscodecs::pack::hts_pack_raw(
-        (*out_block).data,
+    let Some(mut out) = crate::htslib_rs::htscodecs::pack::hts_pack(
+        std::slice::from_raw_parts((*out_block).data, (*out_block).byte),
         (*out_block).byte as i64,
-        out_meta.as_mut_ptr(),
+        &mut out_meta,
         &mut meta_len,
         &mut out_len,
-    );
+    ) else {
+        return -1;
+    };
     let sub_codec = (*c_xpack).xpack.sub_codec;
     let sub_layout = sub_codec.cast::<cram_codec_xpack_layout>();
     let encode: CramCodecEncodeFn = std::mem::transmute((*sub_layout).encode);
     if encode(
         std::ptr::null_mut(),
         sub_codec,
-        out.cast(),
+        out.as_mut_ptr().cast(),
         out_len as c_int,
     ) != 0
     {
@@ -1936,7 +1935,6 @@ pub unsafe extern "C" fn cram_cram_codecs_c_1515_cram_xpack_encode_flush(c: *mut
         r = flush(sub_codec);
     }
 
-    free(out.cast());
     r
 }
 
@@ -1959,7 +1957,10 @@ pub unsafe fn cram_cram_codecs_c_1537_cram_xpack_encode_store(
     }
 
     let tc = (*c).xpack.sub_codec;
-    let tb = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER, 0);
+    let tb = cram_cram_io_c_1388_cram_new_block(
+        crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER,
+        0,
+    );
     if tb.is_null() {
         return -1;
     }
@@ -2138,7 +2139,7 @@ pub unsafe fn cram_cram_codecs_c_1719_cram_xdelta_decode_block(
         match w {
             2 => {
                 let d = cram_cram_codecs_c_1681_unzigzag16(v) as i64;
-                (*c).xdelta.last = d + (*c).xdelta.last;
+                (*c).xdelta.last += d;
                 let z = cram_cram_codecs_c_1713_le_int2((*c).xdelta.last as i16);
                 if cram_cram_io_h_248_block_append(
                     out,
@@ -2268,7 +2269,10 @@ pub unsafe fn cram_cram_codecs_c_1781_cram_xdelta_decode_init(
 
 pub unsafe extern "C" fn cram_cram_codecs_c_1835_cram_xdelta_encode_flush(c: *mut c_void) -> c_int {
     let c = c.cast::<cram_codec_xdelta_layout>();
-    let b = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER, 0);
+    let b = cram_cram_io_c_1388_cram_new_block(
+        crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER,
+        0,
+    );
     if b.is_null() {
         return -1;
     }
@@ -2369,7 +2373,10 @@ pub unsafe fn cram_cram_codecs_c_1930_cram_xdelta_encode_store(
     }
 
     let tc = (*c).xdelta.sub_codec;
-    let tb = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER, 0);
+    let tb = cram_cram_io_c_1388_cram_new_block(
+        crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER,
+        0,
+    );
     if tb.is_null() {
         return -1;
     }
@@ -3698,7 +3705,7 @@ pub unsafe fn cram_cram_codecs_c_2994_cram_huffman_encode_char(
     while in_size != 0 {
         let sym = *syms as c_int;
         syms = syms.add(1);
-        let i = if sym >= -1 && sym < 128 {
+        let i = if (-1..128).contains(&sym) {
             (*c).huffman.val2code[(sym + 1) as usize]
         } else {
             let mut i = 0;
@@ -3733,7 +3740,7 @@ pub unsafe fn cram_cram_codecs_c_3030_cram_huffman_encode_int(
     while in_size != 0 {
         let sym = *syms;
         syms = syms.add(1);
-        let i = if sym >= -1 && sym < 128 {
+        let i = if (-1..128).contains(&sym) {
             (*c).huffman.val2code[(sym + 1) as usize]
         } else {
             let mut i = 0;
@@ -3768,7 +3775,7 @@ pub unsafe fn cram_cram_codecs_c_3067_cram_huffman_encode_long(
     while in_size != 0 {
         let sym64 = *syms;
         syms = syms.add(1);
-        let i = if sym64 >= -1 && sym64 < 128 {
+        let i = if (-1..128).contains(&sym64) {
             (*c).huffman.val2code[(sym64 + 1) as usize]
         } else {
             let mut i = 0;
@@ -4138,7 +4145,7 @@ pub unsafe fn cram_cram_codecs_c_3176_cram_huffman_encode_init(
         code += 1;
 
         let symbol = (*codes.add(i)).symbol;
-        if symbol >= -1 && symbol < 128 {
+        if (-1..128).contains(&symbol) {
             (*c).huffman.val2code[(symbol + 1) as usize] = i as c_int;
         }
     }
@@ -4399,7 +4406,10 @@ pub unsafe fn cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
     }
 
     let tc = (*c).byte_array_len.len_codec;
-    let b_len = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER, 0);
+    let b_len = cram_cram_io_c_1388_cram_new_block(
+        crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER,
+        0,
+    );
     if b_len.is_null() {
         return -1;
     }
@@ -4412,7 +4422,10 @@ pub unsafe fn cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
     }
 
     let tc = (*c).byte_array_len.val_codec;
-    let b_val = cram_cram_io_c_1388_cram_new_block(crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER, 0);
+    let b_val = cram_cram_io_c_1388_cram_new_block(
+        crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER,
+        0,
+    );
     if b_val.is_null() {
         cram_cram_io_c_1565_cram_free_block(b_len);
         return -1;
@@ -4737,7 +4750,7 @@ pub unsafe fn cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store(
         cp = cp.add(((*vv).varint_put32.unwrap())(cp, endp, 5) as usize);
         *cp = (*c).byte_array_stop.stop as c_char;
         cp = cp.add(1);
-        *cp = ((*c).byte_array_stop.content_id >> 0) as c_char;
+        *cp = (*c).byte_array_stop.content_id as c_char;
         cp = cp.add(1);
         *cp = ((*c).byte_array_stop.content_id >> 8) as c_char;
         cp = cp.add(1);
@@ -5310,4 +5323,3 @@ pub fn cram_cram_codecs_c_3811_cram_encoding2str(t: c_int) -> *mut c_char {
     };
     s.as_ptr().cast::<c_char>().cast_mut()
 }
-

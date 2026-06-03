@@ -68,7 +68,11 @@ unsafe fn run_thrash_threads5(
 
     let close_ret = crate::htslib_rs::bgzf::bgzf_close(fpin) as c_int;
     if verbose {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"close=%d\n".as_ptr(), close_ret);
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"close=%d\n".as_ptr(),
+            close_ret,
+        );
     }
     if !p.is_null() {
         crate::htslib_rs::thread_pool::hts_tpool_destroy(p);

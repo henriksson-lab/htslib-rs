@@ -14,7 +14,7 @@ struct QTaskUnorderedData {
 
 #[repr(C)]
 struct QTaskUnorderedDataCache {
-    lock: libc::pthread_mutex_t,
+    lock: crate::htslib_rs::c_compat::pthread_mutex_t,
     list: *mut QTaskUnorderedData,
 }
 
@@ -36,7 +36,7 @@ pub unsafe extern "C" fn samples_qtask_unordered_c_76_getbamstorage(
     if bamcache.is_null() || bases.is_null() {
         return std::ptr::null_mut();
     }
-    if libc::pthread_mutex_lock(&mut (*bamcache).lock) != 0 {
+    if crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*bamcache).lock) != 0 {
         return std::ptr::null_mut();
     }
 
@@ -70,7 +70,7 @@ pub unsafe extern "C" fn samples_qtask_unordered_c_76_getbamstorage(
         }
     }
 
-    libc::pthread_mutex_unlock(&mut (*bamcache).lock);
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*bamcache).lock);
     bamdata.cast()
 }
 
@@ -104,14 +104,14 @@ pub unsafe extern "C" fn samples_qtask_unordered_c_148_thread_unordered_proc(
         }
     }
 
-    libc::pthread_mutex_lock(&mut (*(*bamdata).cache).lock);
+    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*(*bamdata).cache).lock);
     let bases = (*bamdata).bases.cast::<u64>();
-    for i in 0..16 {
-        *bases.add(i) += counts[i];
+    for (i, count) in counts.iter().enumerate() {
+        *bases.add(i) += *count;
     }
     (*bamdata).next = (*(*bamdata).cache).list;
     (*(*bamdata).cache).list = bamdata;
-    libc::pthread_mutex_unlock(&mut (*(*bamdata).cache).lock);
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*(*bamdata).cache).lock);
 
     std::ptr::null_mut()
 }
@@ -131,7 +131,7 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: c_int, argv: *mut *mut c_
     let mut bamdata: *mut QTaskUnorderedData = std::ptr::null_mut();
     let mut gccount = [0_u64; 16];
     let mut bamcache: QTaskUnorderedDataCache = std::mem::zeroed();
-    libc::pthread_mutex_init(&mut bamcache.lock, std::ptr::null());
+    crate::htslib_rs::c_compat::pthread_mutex_init(&mut bamcache.lock, std::ptr::null());
 
     if argc != 3 && argc != 4 {
         samples_qtask_unordered_c_62_print_usage(crate::htslib_rs::c_compat::stdout.cast());
@@ -160,7 +160,10 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: c_int, argv: *mut *mut c_
             tpool.pool = pool;
             queue = thread_pool::hts_tpool_process_init(pool, cnt * 2, 1);
             if queue.is_null() {
-                libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Failed to create queue\n".as_ptr());
+                libc::fprintf(
+                    crate::htslib_rs::c_compat::stderr.cast(),
+                    c"Failed to create queue\n".as_ptr(),
+                );
             } else {
                 infile = hts::hts_open(inname, c"r".as_ptr());
                 if infile.is_null() {
@@ -251,12 +254,12 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: c_int, argv: *mut *mut c_
                                         / (gccount[1] + gccount[8] + gccount[2] + gccount[4])
                                             as f64,
                                 );
-                                for i in 0..16 {
+                                for (i, count) in gccount.iter().enumerate() {
                                     libc::fprintf(
                                         crate::htslib_rs::c_compat::stdout.cast(),
                                         c"%c: %llu\n".as_ptr(),
                                         SEQ_NT16_STR[i] as c_int,
-                                        gccount[i] as libc::c_ulonglong,
+                                        *count as libc::c_ulonglong,
                                     );
                                 }
                                 ret = libc::EXIT_SUCCESS;
@@ -281,14 +284,14 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: c_int, argv: *mut *mut c_
         samples_qtask_unordered_c_128_cleanup_bamstorage(bamdata.cast());
     }
 
-    libc::pthread_mutex_lock(&mut bamcache.lock);
+    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut bamcache.lock);
     while !bamcache.list.is_null() {
         let tmp = bamcache.list;
         bamcache.list = (*bamcache.list).next;
         samples_qtask_unordered_c_128_cleanup_bamstorage(tmp.cast());
     }
-    libc::pthread_mutex_unlock(&mut bamcache.lock);
-    libc::pthread_mutex_destroy(&mut bamcache.lock);
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut bamcache.lock);
+    crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut bamcache.lock);
 
     if !pool.is_null() {
         thread_pool::hts_tpool_destroy(pool);

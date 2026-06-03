@@ -30,8 +30,11 @@ use std::ffi::{c_char, c_int, c_uint, c_void};
 
 type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> c_int;
-type HFileVOpenFn =
-    unsafe extern "C" fn(*const c_char, *const c_char, *mut crate::htslib_rs::c_compat::__va_list_tag) -> *mut hFILE;
+type HFileVOpenFn = unsafe extern "C" fn(
+    *const c_char,
+    *const c_char,
+    *mut crate::htslib_rs::c_compat::__va_list_tag,
+) -> *mut hFILE;
 
 #[repr(C)]
 struct hFILE_scheme_handler_layout {

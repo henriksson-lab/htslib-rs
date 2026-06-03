@@ -240,7 +240,7 @@ pub fn var_get_u64(cp: &[u8], endp: Option<usize>, i: &mut u64) -> i32 {
     let mut j: u64 = 0;
 
     // if (!endp || endp - cp >= 11)
-    if endp.map_or(true, |e| e >= 11) {
+    if endp.is_none_or(|e| e >= 11) {
         let mut n: i32 = 10;
         loop {
             c = cp[p];
@@ -288,7 +288,7 @@ pub fn var_get_u32(cp: &[u8], endp: Option<usize>, i: &mut u32) -> i32 {
     let mut j: u32 = 0;
 
     // if (!endp || endp - cp >= 6)
-    if endp.map_or(true, |e| e >= 6) {
+    if endp.is_none_or(|e| e >= 6) {
         let mut n: i32 = 5;
         loop {
             c = cp[p];
@@ -547,7 +547,11 @@ mod tests {
                 // pick a "size class" 1..=10 and mask the rng accordingly to
                 // exercise every encoded-byte-count bucket.
                 let bits = 1 + (rng.next() % 64) as u32;
-                let mask = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
+                let mask = if bits >= 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << bits) - 1
+                };
                 let v = rng.next() & mask;
                 let mut buf = [0u8; 16];
                 let n = var_put_u64(&mut buf, None, v);
@@ -568,7 +572,11 @@ mod tests {
             let mut rng = Rng::new(0xCAFEF00D ^ seed);
             for _ in 0..200 {
                 let bits = 1 + (rng.next() % 32) as u32;
-                let mask = if bits >= 32 { u32::MAX } else { (1u32 << bits) - 1 };
+                let mask = if bits >= 32 {
+                    u32::MAX
+                } else {
+                    (1u32 << bits) - 1
+                };
                 let v = (rng.next() as u32) & mask;
                 let mut buf = [0u8; 16];
                 let n = var_put_u32(&mut buf, None, v);
@@ -617,7 +625,11 @@ mod tests {
             let na = var_put_u64(&mut a, None, v);
             let nb = var_put_u64_safe(&mut b, None, v);
             assert_eq!(na, nb, "u64 safe/fast n mismatch for {v}");
-            assert_eq!(a[..na as usize], b[..nb as usize], "u64 safe/fast bytes mismatch");
+            assert_eq!(
+                a[..na as usize],
+                b[..nb as usize],
+                "u64 safe/fast bytes mismatch"
+            );
 
             let v32 = v as u32;
             let mut a = [0u8; 16];
@@ -625,7 +637,11 @@ mod tests {
             let na = var_put_u32(&mut a, None, v32);
             let nb = var_put_u32_safe(&mut b, None, v32);
             assert_eq!(na, nb, "u32 safe/fast n mismatch for {v32}");
-            assert_eq!(a[..na as usize], b[..nb as usize], "u32 safe/fast bytes mismatch");
+            assert_eq!(
+                a[..na as usize],
+                b[..nb as usize],
+                "u32 safe/fast bytes mismatch"
+            );
         }
     }
 

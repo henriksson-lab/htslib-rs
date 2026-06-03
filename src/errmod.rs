@@ -259,12 +259,7 @@ mod tests {
             assert!(!(*em).lhet.is_null());
             assert_eq!((*em).depcorr, 0.1);
 
-            let mut bases = [
-                (30u16 << 5) | 0,
-                (25u16 << 5) | 0,
-                (20u16 << 5) | 1,
-                (35u16 << 5) | 17,
-            ];
+            let mut bases = [30u16 << 5, 25u16 << 5, (20u16 << 5) | 1, (35u16 << 5) | 17];
             let mut q = [0.0f32; 16];
             assert_eq!(
                 errmod_cal(
@@ -278,12 +273,7 @@ mod tests {
             );
             assert_eq!(
                 bases,
-                [
-                    (20u16 << 5) | 1,
-                    (25u16 << 5) | 0,
-                    (30u16 << 5) | 0,
-                    (35u16 << 5) | 17,
-                ]
+                [(20u16 << 5) | 1, 25u16 << 5, 30u16 << 5, (35u16 << 5) | 17,]
             );
             assert!(q.iter().all(|v| *v >= 0.0));
             assert!(q.iter().any(|v| *v > 0.0));
@@ -297,7 +287,7 @@ mod tests {
         unsafe {
             let table = logbinomial_table(256);
             assert!(!table.is_null());
-            assert_eq!(*table.add((1 << 8) | 0), 0.0);
+            assert_eq!(*table.add(1 << 8), 0.0);
             assert_eq!(*table.add((1 << 8) | 1), 0.0);
             assert_eq!(*table.add((7 << 8) | 7), 0.0);
             assert!((*table.add((7 << 8) | 3) - lbinom(7, 3)).abs() < 1e-12);
@@ -335,7 +325,7 @@ mod tests {
             assert_eq!(bases, [(30u16 << 5) | 2]);
             assert_eq!(q[2 * 4 + 2], 0.0);
             assert!(q[0] > 0.0);
-            assert!(q[1 * 4 + 1] > 0.0);
+            assert!(q[5] > 0.0);
             assert!(q[3 * 4 + 3] > 0.0);
 
             errmod_destroy(em);
@@ -348,8 +338,8 @@ mod tests {
             let em = errmod_init(0.0);
             assert!(!em.is_null());
 
-            let mut low_clamped = [(0u16 << 5) | 0, (20u16 << 5) | 1, (30u16 << 5) | 2];
-            let mut low_boundary = [(4u16 << 5) | 0, (20u16 << 5) | 1, (30u16 << 5) | 2];
+            let mut low_clamped = [0, (20u16 << 5) | 1, (30u16 << 5) | 2];
+            let mut low_boundary = [4u16 << 5, (20u16 << 5) | 1, (30u16 << 5) | 2];
             let mut q_low_clamped = [0.0f32; 16];
             let mut q_low_boundary = [0.0f32; 16];
             assert_eq!(
@@ -374,8 +364,8 @@ mod tests {
             );
             assert_eq!(q_low_clamped, q_low_boundary);
 
-            let mut high_clamped = [(63u16 << 5) | 0, (80u16 << 5) | 1, (30u16 << 5) | 2];
-            let mut high_boundary = [(63u16 << 5) | 0, (63u16 << 5) | 1, (30u16 << 5) | 2];
+            let mut high_clamped = [63u16 << 5, (80u16 << 5) | 1, (30u16 << 5) | 2];
+            let mut high_boundary = [63u16 << 5, (63u16 << 5) | 1, (30u16 << 5) | 2];
             let mut q_high_clamped = [0.0f32; 16];
             let mut q_high_boundary = [0.0f32; 16];
             assert_eq!(
@@ -424,7 +414,7 @@ mod tests {
             );
 
             assert_eq!(bases, [(30u16 << 5) | 1, (30u16 << 5) | 17]);
-            assert_eq!(q[1 * 4 + 1], 0.0);
+            assert_eq!(q[5], 0.0);
             assert!(q[0] > 0.0);
             assert!(q[2 * 4 + 2] > 0.0);
             assert!(q[3 * 4 + 3] > 0.0);
@@ -439,7 +429,7 @@ mod tests {
             let em = errmod_init(0.0);
             assert!(!em.is_null());
 
-            let mut bases = [(30u16 << 5) | 0, (30u16 << 5) | 1];
+            let mut bases = [30u16 << 5, (30u16 << 5) | 1];
             let mut q = [7.0f32; 9];
             assert_eq!(errmod_cal(em, 2, 2, bases.as_mut_ptr(), q.as_mut_ptr()), 0);
 
@@ -455,18 +445,13 @@ mod tests {
     fn errmod_cal_matches_htslib_outputs_bitwise_for_fixed_inputs() {
         unsafe {
             let cases: &[&[u16]] = &[
+                &[30u16 << 5, 25u16 << 5, (20u16 << 5) | 1, (35u16 << 5) | 17],
                 &[
-                    (30u16 << 5) | 0,
-                    (25u16 << 5) | 0,
-                    (20u16 << 5) | 1,
-                    (35u16 << 5) | 17,
-                ],
-                &[
-                    (0u16 << 5) | 2,
+                    2,
                     (4u16 << 5) | 18,
                     (63u16 << 5) | 3,
                     (80u16 << 5) | 19,
-                    (41u16 << 5) | 0,
+                    41u16 << 5,
                 ],
             ];
 
@@ -563,7 +548,7 @@ mod tests {
             assert!((*(*em).fk.add(1) - 0.7575).abs() < 1e-12);
             assert!((*(*em).fk.add(2) - 0.575625).abs() < 1e-12);
             assert_eq!(*(*em).lhet.add(0), 0.0);
-            assert_eq!(*(*em).lhet.add((1 << 8) | 0), -std::f64::consts::LN_2);
+            assert_eq!(*(*em).lhet.add(1 << 8), -std::f64::consts::LN_2);
             assert_eq!(*(*em).lhet.add((1 << 8) | 1), -std::f64::consts::LN_2);
             assert_eq!(*(*em).beta.add((4 << 16) | (1 << 8) | 1), f64::INFINITY);
 

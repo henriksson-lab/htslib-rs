@@ -17,12 +17,12 @@
 use std::os::raw::c_char;
 use std::os::raw::c_void;
 
-use crate::c_compat;
-use super::pooled_alloc::{pool_alloc_t, pool_alloc, pool_create, pool_destroy};
-use super::varint::{var_get_u32, var_put_u32};
 use super::arith_dynamic::{arith_compress_bound, arith_compress_to, arith_uncompress_to};
+use super::pooled_alloc::{pool_alloc, pool_alloc_t, pool_create, pool_destroy};
 use super::rans_static4x16pr::{rans_compress_4x16, rans_uncompress_4x16};
 use super::utils::{htscodecs_tls_alloc, htscodecs_tls_free};
+use super::varint::{var_get_u32, var_put_u32};
+use crate::c_compat;
 
 //-----------------------------------------------------------------------------
 // #define constants (tokenise_name3.c)
@@ -234,9 +234,7 @@ fn isdigit(c: i32) -> bool {
 }
 #[inline]
 fn isxdigit(c: i32) -> bool {
-    isdigit(c)
-        || (c >= 'a' as i32 && c <= 'f' as i32)
-        || (c >= 'A' as i32 && c <= 'F' as i32)
+    isdigit(c) || (c >= 'a' as i32 && c <= 'f' as i32) || (c >= 'A' as i32 && c <= 'F' as i32)
 }
 #[inline]
 fn isspace(c: i32) -> bool {
@@ -303,7 +301,7 @@ pub fn create_context(mut max_names: i32) -> *mut name_context {
 
 /// `static void free_context(name_context *ctx)`
 // tokenise_name3.c:211
-pub fn free_context(ctx: *mut name_context) {
+fn free_context(ctx: *mut name_context) {
     if ctx.is_null() {
         return;
     }
@@ -734,7 +732,7 @@ pub fn search_trie(
     let db = |k: usize| -> i32 { data[d_off + k] as u8 as i32 };
 
     if l > 70
-        && db(f + 0) == b'm' as i32
+        && db(f) == b'm' as i32
         && data[7] as u8 == b'_'
         && db(f + 14) == b'_' as i32
         && db(f + 61) == b'/' as i32
@@ -750,7 +748,7 @@ pub fn search_trie(
         && db(f + 13) == b'-' as i32
         && db(f + 18) == b'-' as i32
         && db(f + 23) == b'-' as i32
-        && isxdigit(db(f + 0))
+        && isxdigit(db(f))
         && isxdigit(db(f + 7))
         && isxdigit(db(f + 9))
         && isxdigit(db(f + 12))
@@ -863,7 +861,15 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
     let mut exact = 0i32;
     let cnum = ctx.counter;
     ctx.counter += 1;
-    let mut pnum = search_trie(ctx, name, len as usize, cnum, &mut exact, &mut is_fixed, &mut fixed_len);
+    let mut pnum = search_trie(
+        ctx,
+        name,
+        len as usize,
+        cnum,
+        &mut exact,
+        &mut is_fixed,
+        &mut fixed_len,
+    );
     if pnum < 0 {
         pnum = if cnum != 0 { cnum - 1 } else { 0 };
     }
@@ -911,7 +917,8 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
         return 0;
     }
 
-    lc!(cnum).last = unsafe { c_compat::malloc((MAX_TOKENS * tok_size) as u64) } as *mut last_context_tok;
+    lc!(cnum).last =
+        unsafe { c_compat::malloc((MAX_TOKENS * tok_size) as u64) } as *mut last_context_tok;
     if lc!(cnum).last.is_null() {
         return -1;
     }
@@ -1048,13 +1055,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
                         if encode_token_match(ctx, ntok) < 0 {
                             return -1;
                         }
-                    } else if encode_token_alpha(
-                        ctx,
-                        ntok,
-                        &name[i as usize..],
-                        s - i,
-                    ) < 0
-                    {
+                    } else if encode_token_alpha(ctx, ntok, &name[i as usize..], s - i) < 0 {
                         return -1;
                     }
                 } else if encode_token_alpha(ctx, ntok, &name[i as usize..], s - i) < 0 {
@@ -1077,7 +1078,9 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
             let d: i32;
             let lenu = len as u32;
             while s < lenu && isdigit(nb(s as usize)) && s - i as u32 <= 8 {
-                v = v.wrapping_mul(10).wrapping_add((nb(s as usize) - b'0' as i32) as u32);
+                v = v
+                    .wrapping_mul(10)
+                    .wrapping_add((nb(s as usize) - b'0' as i32) as u32);
                 s += 1;
             }
 
@@ -1098,8 +1101,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
                             return -1;
                         }
                     } else if mode == 1
-                        && d < 256
-                        && d >= 0
+                        && (0..256).contains(&d)
                         && (5 + ctx.token_dcount[ntok as usize]) > ctx.token_icount[ntok as usize]
                     {
                         if encode_token_int1(ctx, ntok, N_DDELTA, d as u32) < 0 {
@@ -1133,7 +1135,9 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
             let d: i32;
             let lenu = len as u32;
             while s < lenu && isdigit(nb(s as usize)) && s - i as u32 <= 8 {
-                v = v.wrapping_mul(10).wrapping_add((nb(s as usize) - b'0' as i32) as u32);
+                v = v
+                    .wrapping_mul(10)
+                    .wrapping_add((nb(s as usize) - b'0' as i32) as u32);
                 s += 1;
             }
 
@@ -1147,7 +1151,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
                     if encode_token_match(ctx, ntok) < 0 {
                         return -1;
                     }
-                } else if mode == 1 && d < 256 && d >= 0 && pstr as u32 == s - i as u32 {
+                } else if mode == 1 && (0..256).contains(&d) && pstr as u32 == s - i as u32 {
                     if encode_token_int1(ctx, ntok, N_DDELTA0, d as u32) < 0 {
                         return -1;
                     }
@@ -1222,7 +1226,10 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
     cl.last_name = name_ptr;
     cl.last_ntok = ntok;
     let shrunk = unsafe {
-        c_compat::realloc(cl.last as *mut c_void, ((ntok + 1) as usize * tok_size) as u64)
+        c_compat::realloc(
+            cl.last as *mut c_void,
+            ((ntok + 1) as usize * tok_size) as u64,
+        )
     } as *mut last_context_tok;
     if !shrunk.is_null() {
         cl.last = shrunk;
@@ -1311,13 +1318,16 @@ pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -
         *name_ptr = 0;
     }
     let mut len = 0i32;
-    lc!(cnum).last = unsafe { c_compat::malloc((MAX_TOKENS * tok_size) as u64) } as *mut last_context_tok;
+    lc!(cnum).last =
+        unsafe { c_compat::malloc((MAX_TOKENS * tok_size) as u64) } as *mut last_context_tok;
     if lc!(cnum).last.is_null() {
         return -1;
     }
 
     let nslice = |off: i32| -> &mut [c_char] {
-        unsafe { std::slice::from_raw_parts_mut(name_ptr.add(off as usize), (name_len - off) as usize) }
+        unsafe {
+            std::slice::from_raw_parts_mut(name_ptr.add(off as usize), (name_len - off) as usize)
+        }
     };
 
     let mut ntok = 1i32;
@@ -1474,7 +1484,11 @@ pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -
                         if len + pl.token_str >= name_len {
                             return -1;
                         }
-                        len += append_uint32_fixed(nslice(len), pl.token_int as u32, pl.token_str as u8);
+                        len += append_uint32_fixed(
+                            nslice(len),
+                            pl.token_int as u32,
+                            pl.token_str as u8,
+                        );
                         let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
                         lct.token_type = N_DIGITS0;
                         lct.token_int = pl.token_int;
@@ -1501,7 +1515,10 @@ pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -
                 cl.last_name = name_ptr;
                 cl.last_ntok = ntok;
                 let shrunk = unsafe {
-                    c_compat::realloc(cl.last as *mut c_void, ((ntok + 1) as usize * tok_size) as u64)
+                    c_compat::realloc(
+                        cl.last as *mut c_void,
+                        ((ntok + 1) as usize * tok_size) as u64,
+                    )
                 } as *mut last_context_tok;
                 if !shrunk.is_null() {
                     cl.last = shrunk;
@@ -1638,12 +1655,7 @@ pub fn compress(
     let mut ret = -1;
 
     level = (level - 1) / 2;
-    if level < 0 {
-        level = 0;
-    }
-    if level > 4 {
-        level = 4;
-    }
+    level = level.clamp(0, 4);
 
     // R[5][N_ALL][7]
     let mut r_tab: [[[i32; 7]; N_ALL as usize]; 5] = [
@@ -1740,7 +1752,7 @@ pub fn compress(
         if use_arith == 0 && (meth[m] & 4) != 0 {
             meth[m] &= !4;
         }
-        if in_len % 4 != 0 && (meth[m] & 8) != 0 {
+        if !in_len.is_multiple_of(4) && (meth[m] & 8) != 0 {
             m += 1;
             continue;
         }
@@ -1864,9 +1876,8 @@ pub fn tok3_encode_names(
                 break;
             }
             last_start = i + 1;
-            let slice = unsafe {
-                std::slice::from_raw_parts(blk_ptr.add(j as usize), (len - j) as usize)
-            };
+            let slice =
+                unsafe { std::slice::from_raw_parts(blk_ptr.add(j as usize), (len - j) as usize) };
             if build_trie(ctx, slice, (i - j) as usize, ctr) < 0 {
                 free_context(ctx);
                 return None;
@@ -1885,7 +1896,7 @@ pub fn tok3_encode_names(
         let mut i = 0i32;
         let mut j = 0i32;
         while i < len {
-            while i < len && (unsafe { *blk_ptr.add(i as usize) } as i8 as i32) >= b' ' as i32 {
+            while i < len && (unsafe { *blk_ptr.add(i as usize) } as i32) >= b' ' as i32 {
                 i += 1;
             }
             if i >= len {
@@ -2041,11 +2052,11 @@ pub fn tok3_encode_names(
             cp += 1;
         }};
     }
-    putb!(((last_start >> 0) & 0xff) as u8);
+    putb!((last_start & 0xff) as u8);
     putb!(((last_start >> 8) & 0xff) as u8);
     putb!(((last_start >> 16) & 0xff) as u8);
     putb!(((last_start >> 24) & 0xff) as u8);
-    putb!(((nreads >> 0) & 0xff) as u8);
+    putb!((nreads & 0xff) as u8);
     putb!(((nreads >> 8) & 0xff) as u8);
     putb!(((nreads >> 16) & 0xff) as u8);
     putb!(((nreads >> 24) & 0xff) as u8);
@@ -2249,9 +2260,7 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
         }
 
         // Load compressed block
-        let in_sub = unsafe {
-            std::slice::from_raw_parts(in_ptr.add(o), sz - o)
-        };
+        let in_sub = unsafe { std::slice::from_raw_parts(in_ptr.add(o), sz - o) };
         let ulen_blk = uncompressed_size(in_sub, (sz - o) as u64) as i64;
         if ulen_blk < 0 || ulen_blk >= i32::MAX as i64 {
             return err(ctx);
@@ -2274,9 +2283,8 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
         }
         ctx.desc[i].buf_a = ulen_blk as usize;
         let mut usz: u64 = ctx.desc[i].buf_a as u64;
-        let out_slice = unsafe {
-            std::slice::from_raw_parts_mut(ctx.desc[i].buf, ctx.desc[i].buf_a)
-        };
+        let out_slice =
+            unsafe { std::slice::from_raw_parts_mut(ctx.desc[i].buf, ctx.desc[i].buf_a) };
         let clen = uncompress(use_arith, in_sub, (sz - o) as u64, out_slice, &mut usz);
         ctx.desc[i].buf_a = usz as usize;
         if clen < 0 || ctx.desc[i].buf_a as i64 != ulen_blk {

@@ -12,7 +12,7 @@ struct QTaskOrderedData {
 
 #[repr(C)]
 struct QTaskOrderedDataCache {
-    lock: libc::pthread_mutex_t,
+    lock: crate::htslib_rs::c_compat::pthread_mutex_t,
     list: *mut QTaskOrderedData,
 }
 
@@ -42,7 +42,7 @@ pub unsafe extern "C" fn samples_qtask_ordered_c_75_getbamstorage(
     if bamcache.is_null() {
         return std::ptr::null_mut();
     }
-    if libc::pthread_mutex_lock(&mut (*bamcache).lock) != 0 {
+    if crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*bamcache).lock) != 0 {
         return std::ptr::null_mut();
     }
 
@@ -71,7 +71,7 @@ pub unsafe extern "C" fn samples_qtask_ordered_c_75_getbamstorage(
         }
     }
 
-    libc::pthread_mutex_unlock(&mut (*bamcache).lock);
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*bamcache).lock);
     bamdata.cast()
 }
 
@@ -120,7 +120,7 @@ pub unsafe extern "C" fn samples_qtask_ordered_c_143_thread_ordered_proc(
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed to add aux tag xr, errno: %d\n".as_ptr(),
-                *libc::__errno_location(),
+                *crate::htslib_rs::c_compat::__errno_location(),
             );
             break;
         }
@@ -164,10 +164,10 @@ pub extern "C" fn samples_qtask_ordered_c_176_threadfn_orderedwrite(
             }
             thread_pool::hts_tpool_delete_result(r, 0);
 
-            libc::pthread_mutex_lock(&mut (*(*tdata).cache).lock);
+            crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*(*tdata).cache).lock);
             (*bamdata).next = (*(*tdata).cache).list;
             (*(*tdata).cache).list = bamdata;
-            libc::pthread_mutex_unlock(&mut (*(*tdata).cache).lock);
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*(*tdata).cache).lock);
         }
 
         thread_pool::hts_tpool_process_shutdown((*tdata).queue);
@@ -191,9 +191,9 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
     };
     let mut bamdata: *mut QTaskOrderedData = std::ptr::null_mut();
     let mut bamcache: QTaskOrderedDataCache = std::mem::zeroed();
-    let mut thread: libc::pthread_t = std::mem::zeroed();
+    let mut thread: crate::htslib_rs::c_compat::pthread_t = std::mem::zeroed();
     let mut twritedata: QTaskOrderedWrite = std::mem::zeroed();
-    libc::pthread_mutex_init(&mut bamcache.lock, std::ptr::null());
+    crate::htslib_rs::c_compat::pthread_mutex_init(&mut bamcache.lock, std::ptr::null());
 
     if argc != 4 && argc != 5 {
         samples_qtask_ordered_c_61_print_usage(crate::htslib_rs::c_compat::stdout.cast());
@@ -232,7 +232,10 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
                 tpool.pool = pool;
                 queue = thread_pool::hts_tpool_process_init(pool, cnt * 2, 0);
                 if queue.is_null() {
-                    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Failed to create queue\n".as_ptr());
+                    libc::fprintf(
+                        crate::htslib_rs::c_compat::stderr.cast(),
+                        c"Failed to create queue\n".as_ptr(),
+                    );
                 } else {
                     infile = hts::hts_open(inname, c"r".as_ptr());
                     if infile.is_null() {
@@ -273,7 +276,7 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
                                 twritedata.result = 0;
                                 twritedata.queue = queue;
                                 twritedata.cache = &mut bamcache;
-                                if libc::pthread_create(
+                                if crate::htslib_rs::c_compat::pthread_create(
                                     &mut thread,
                                     std::ptr::null(),
                                     samples_qtask_ordered_c_176_threadfn_orderedwrite,
@@ -381,7 +384,7 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
     }
 
     if started_thread != 0 {
-        libc::pthread_join(thread, std::ptr::null_mut());
+        crate::htslib_rs::c_compat::pthread_join(thread, std::ptr::null_mut());
         if twritedata.result != 0 {
             ret = libc::EXIT_FAILURE;
         }
@@ -403,14 +406,14 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
         samples_qtask_ordered_c_121_cleanup_bamstorage(bamdata.cast());
     }
 
-    libc::pthread_mutex_lock(&mut bamcache.lock);
+    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut bamcache.lock);
     while !bamcache.list.is_null() {
         let tmp = bamcache.list;
         bamcache.list = (*bamcache.list).next;
         samples_qtask_ordered_c_121_cleanup_bamstorage(tmp.cast());
     }
-    libc::pthread_mutex_unlock(&mut bamcache.lock);
-    libc::pthread_mutex_destroy(&mut bamcache.lock);
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut bamcache.lock);
+    crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut bamcache.lock);
 
     if !pool.is_null() {
         thread_pool::hts_tpool_destroy(pool);

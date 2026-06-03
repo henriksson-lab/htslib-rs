@@ -4,7 +4,13 @@
 //!
 //! These functions take a raw `*mut u8` output buffer + capacity (matching the
 //! way the 4x16 dispatcher invokes them), mirroring the C pointer arithmetic.
-#![allow(non_snake_case, non_camel_case_types, unused_variables, dead_code, clippy::too_many_arguments)]
+#![allow(
+    non_snake_case,
+    non_camel_case_types,
+    unused_variables,
+    dead_code,
+    clippy::too_many_arguments
+)]
 
 use crate::htscodecs::rans_static16_int::{
     decode_freq, decode_freq1, encode_freq, encode_freq1, fb_t, normalise_freq,
@@ -33,7 +39,12 @@ pub const MAGIC2: u32 = 179;
 
 // rANS_static32x16pr.c:67
 /// `unsigned char *rans_compress_O0_32x16(...)`
-pub fn rans_compress_O0_32x16(input: &[u8], out: *mut u8, out_cap: u32, out_size: &mut u32) -> *mut u8 {
+pub(crate) fn rans_compress_O0_32x16(
+    input: &[u8],
+    out: *mut u8,
+    out_cap: u32,
+    out_size: &mut u32,
+) -> *mut u8 {
     let in_size = input.len() as u32;
     let mut bound = rans_compress_bound_4x16(in_size, 0) - 20;
     if bound > out_cap {
@@ -78,16 +89,16 @@ pub fn rans_compress_O0_32x16(input: &[u8], out: *mut u8, out_cap: u32, out_size
     }
 
     let mut x = 0u32;
-    for j in 0..256 {
-        if f[j] != 0 {
-            RansEncSymbolInit(&mut syms[j], x, f[j], TF_SHIFT);
-            x += f[j];
+    for (j, &fj) in f.iter().take(256).enumerate() {
+        if fj != 0 {
+            RansEncSymbolInit(&mut syms[j], x, fj, TF_SHIFT);
+            x += fj;
         }
     }
 
     let mut ransN = [0u32; NX];
-    for z in 0..NX {
-        RansEncInit(&mut ransN[z]);
+    for rans in &mut ransN {
+        RansEncInit(rans);
     }
 
     let isz = in_size as usize;
@@ -96,7 +107,12 @@ pub fn rans_compress_O0_32x16(input: &[u8], out: *mut u8, out_cap: u32, out_size
     let mut z = i_rem;
     while z > 0 {
         z -= 1;
-        RansEncPutSymbol(&mut ransN[z], out_slice, &mut ptr, &syms[input[isz - (i_rem - z)] as usize]);
+        RansEncPutSymbol(
+            &mut ransN[z],
+            out_slice,
+            &mut ptr,
+            &syms[input[isz - (i_rem - z)] as usize],
+        );
     }
 
     // Both branches (low_ent and the branchless rewrite) produce identical
@@ -112,8 +128,8 @@ pub fn rans_compress_O0_32x16(input: &[u8], out: *mut u8, out_cap: u32, out_size
         i -= NX;
     }
 
-    for z in (0..NX).rev() {
-        RansEncFlush(&mut ransN[z], out_slice, &mut ptr);
+    for rans in ransN.iter_mut().rev() {
+        RansEncFlush(rans, out_slice, &mut ptr);
     }
 
     *out_size = (out_end - ptr) as u32 + tab_size as u32;
@@ -182,9 +198,9 @@ pub fn rans_uncompress_O0_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     }
 
     let mut r = [0u32; NX];
-    for z in 0..NX {
-        RansDecInit(&mut r[z], input, &mut cp);
-        if r[z] < RANS_BYTE_L {
+    for rz in &mut r {
+        RansDecInit(rz, input, &mut cp);
+        if *rz < RANS_BYTE_L {
             return std::ptr::null_mut();
         }
     }
@@ -205,15 +221,15 @@ pub fn rans_uncompress_O0_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         let mut z = 0usize;
         while z < NX {
             let mut s = [0u32; 4];
-            for k in 0..4 {
-                s[k] = s3[(r[z + k] & mask) as usize];
+            for (k, sk) in s.iter_mut().enumerate() {
+                *sk = s3[(r[z + k] & mask) as usize];
             }
-            for k in 0..4 {
-                r[z + k] = (s[k] >> (TF_SHIFT + 8)) * (r[z + k] >> TF_SHIFT) + ((s[k] >> 8) & mask);
-                out_slice[i + z + k] = s[k] as u8;
+            for (k, &sk) in s.iter().enumerate() {
+                r[z + k] = (sk >> (TF_SHIFT + 8)) * (r[z + k] >> TF_SHIFT) + ((sk >> 8) & mask);
+                out_slice[i + z + k] = sk as u8;
             }
-            for k in 0..4 {
-                RansDecRenorm(&mut r[z + k], input, &mut cp);
+            for rz in &mut r[z..z + 4] {
+                RansDecRenorm(rz, input, &mut cp);
             }
             z += 4;
         }
@@ -225,15 +241,15 @@ pub fn rans_uncompress_O0_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         let mut z = 0usize;
         while z < NX {
             let mut s = [0u32; 4];
-            for k in 0..4 {
-                s[k] = s3[(r[z + k] & mask) as usize];
+            for (k, sk) in s.iter_mut().enumerate() {
+                *sk = s3[(r[z + k] & mask) as usize];
             }
-            for k in 0..4 {
-                r[z + k] = (s[k] >> (TF_SHIFT + 8)) * (r[z + k] >> TF_SHIFT) + ((s[k] >> 8) & mask);
-                out_slice[i + z + k] = s[k] as u8;
+            for (k, &sk) in s.iter().enumerate() {
+                r[z + k] = (sk >> (TF_SHIFT + 8)) * (r[z + k] >> TF_SHIFT) + ((sk >> 8) & mask);
+                out_slice[i + z + k] = sk as u8;
             }
-            for k in 0..4 {
-                RansDecRenormSafe(&mut r[z + k], input, &mut cp, cp_end + NX * 2);
+            for rz in &mut r[z..z + 4] {
+                RansDecRenormSafe(rz, input, &mut cp, cp_end + NX * 2);
             }
             z += 4;
         }
@@ -253,7 +269,12 @@ pub fn rans_uncompress_O0_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
 
 // rANS_static32x16pr.c:412
 /// `unsigned char *rans_compress_O1_32x16(...)`
-pub fn rans_compress_O1_32x16(input: &[u8], out: *mut u8, out_cap: u32, out_size: &mut u32) -> *mut u8 {
+pub(crate) fn rans_compress_O1_32x16(
+    input: &[u8],
+    out: *mut u8,
+    out_cap: u32,
+    out_size: &mut u32,
+) -> *mut u8 {
     let in_size = input.len() as u32;
     let mut bound = rans_compress_bound_4x16(in_size, 1) - 20;
 
@@ -286,20 +307,20 @@ pub fn rans_compress_O1_32x16(input: &[u8], out: *mut u8, out_cap: u32, out_size
     let tab_size = cp;
 
     let mut ransN = [0u32; NX];
-    for z in 0..NX {
-        RansEncInit(&mut ransN[z]);
+    for rans in &mut ransN {
+        RansEncInit(rans);
     }
 
     let mut ptr = out_end;
 
     let isz4 = (in_size / NX as u32) as i32;
     let mut iN = [0i32; NX];
-    for z in 0..NX {
-        iN[z] = (z as i32 + 1) * isz4 - 2;
+    for (z, iNz) in iN.iter_mut().enumerate() {
+        *iNz = (z as i32 + 1) * isz4 - 2;
     }
     let mut lN = [0u8; NX];
-    for z in 0..NX {
-        lN[z] = input[(iN[z] + 1) as usize];
+    for (iNz, lNz) in iN.iter().zip(lN.iter_mut()) {
+        *lNz = input[(*iNz + 1) as usize];
     }
 
     // Remainder
@@ -308,22 +329,24 @@ pub fn rans_compress_O1_32x16(input: &[u8], out: *mut u8, out_cap: u32, out_size
     iN[z] = in_size as i32 - 2;
     while iN[z] > NX as i32 * isz4 - 2 {
         let c = input[iN[z] as usize];
-        RansEncPutSymbol(&mut ransN[z], out_slice, &mut ptr, &syms[c as usize][lN[z] as usize]);
+        RansEncPutSymbol(
+            &mut ransN[z],
+            out_slice,
+            &mut ptr,
+            &syms[c as usize][lN[z] as usize],
+        );
         lN[z] = c;
         iN[z] -= 1;
     }
 
     // i32[i] = &in[iN[i]]  -> here track integer offsets.
     let mut i32o = [0i32; NX];
-    for i in 0..NX {
-        i32o[i] = iN[i];
-    }
+    i32o[..NX].copy_from_slice(&iN[..NX]);
 
     while i32o[0] >= 0 {
         let mut z = NX as i32 - 1;
         while z >= 0 {
-            for k in 0..4 {
-                let zz = (z - k) as usize;
+            for zz in ((z as usize - 3)..=z as usize).rev() {
                 let c = input[i32o[zz] as usize];
                 let sym = syms[c as usize][lN[zz] as usize];
                 lN[zz] = c;
@@ -334,13 +357,13 @@ pub fn rans_compress_O1_32x16(input: &[u8], out: *mut u8, out_cap: u32, out_size
         }
     }
 
-    for z in (0..NX).rev() {
-        let sym = syms[0][lN[z] as usize];
-        RansEncPutSymbol(&mut ransN[z], out_slice, &mut ptr, &sym);
+    for (rans, &last) in ransN.iter_mut().zip(lN.iter()).rev() {
+        let sym = syms[0][last as usize];
+        RansEncPutSymbol(rans, out_slice, &mut ptr, &sym);
     }
 
-    for z in (0..NX).rev() {
-        RansEncFlush(&mut ransN[z], out_slice, &mut ptr);
+    for rans in ransN.iter_mut().rev() {
+        RansEncFlush(rans, out_slice, &mut ptr);
     }
 
     *out_size = (out_end - ptr) as u32 + tab_size as u32;
@@ -450,13 +473,30 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
             rest = tail;
         }
         let fb_slice: &mut [[fb_t; 256]] = unsafe { core::slice::from_raw_parts_mut(fb_base, 256) };
-        let s3_slice: &mut [[u32; TOTFREQ_O1_FAST as usize]] =
-            unsafe { core::slice::from_raw_parts_mut(s3_base as *mut [u32; TOTFREQ_O1_FAST as usize], 256) };
+        let s3_slice: &mut [[u32; TOTFREQ_O1_FAST as usize]] = unsafe {
+            core::slice::from_raw_parts_mut(s3_base as *mut [u32; TOTFREQ_O1_FAST as usize], 256)
+        };
 
         if shift == TF_SHIFT_O1 {
-            decode_freq1(&freq_src[cp..], c_freq_end - cp, shift as i32, None, None, Some(&mut sfb_rows), Some(fb_slice))
+            decode_freq1(
+                &freq_src[cp..],
+                c_freq_end - cp,
+                shift as i32,
+                None,
+                None,
+                Some(&mut sfb_rows),
+                Some(fb_slice),
+            )
         } else {
-            decode_freq1(&freq_src[cp..], c_freq_end - cp, shift as i32, None, Some(s3_slice), None, None)
+            decode_freq1(
+                &freq_src[cp..],
+                c_freq_end - cp,
+                shift as i32,
+                None,
+                Some(s3_slice),
+                None,
+                None,
+            )
         }
     };
     cp += nfsz as usize;
@@ -476,9 +516,9 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     let mut r = [0u32; NX];
     let mut ptr = cp_in;
     let ptr_end = (in_size as usize) - 2 * NX;
-    for z in 0..NX {
-        RansDecInit(&mut r[z], input, &mut ptr);
-        if r[z] < RANS_BYTE_L {
+    for rz in &mut r {
+        RansDecInit(rz, input, &mut ptr);
+        if *rz < RANS_BYTE_L {
             htscodecs_tls_free(sfb_ptr);
             return std::ptr::null_mut();
         }
@@ -487,8 +527,8 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     let isz4 = (out_sz as usize) / NX;
     let mut l = [0usize; NX];
     let mut i4 = [0usize; NX];
-    for z in 0..NX {
-        i4[z] = z * isz4;
+    for (z, i4z) in i4.iter_mut().enumerate() {
+        *i4z = z * isz4;
     }
 
     let low_ent = (in_size as f64) < 0.2 * out_sz as f64;
@@ -500,37 +540,42 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
             while z < NX {
                 let mut mm = [0u32; 4];
                 let mut c = [0usize; 4];
-                for k in 0..4 {
+                for (k, (mmk, ck)) in mm.iter_mut().zip(c.iter_mut()).enumerate() {
                     let m = r[z + k] & mask;
-                    mm[k] = m;
+                    *mmk = m;
                     let row = unsafe { sfb_base.add(l[z + k] * stride) };
-                    c[k] = unsafe { *row.add(m as usize) } as usize;
+                    *ck = unsafe { *row.add(m as usize) } as usize;
                 }
-                for k in 0..4 {
-                    let fbk = unsafe { &*fb_base.add(l[z + k]) };
-                    let f = fbk[c[k]].f as u32;
-                    let b = fbk[c[k]].b as u32;
+                for (k, ((i4zk, lzk), (&mmk, &ck))) in i4[z..z + 4]
+                    .iter_mut()
+                    .zip(l[z..z + 4].iter_mut())
+                    .zip(mm.iter().zip(c.iter()))
+                    .enumerate()
+                {
+                    let fbk = unsafe { &*fb_base.add(*lzk) };
+                    let f = fbk[ck].f as u32;
+                    let b = fbk[ck].b as u32;
                     // Same hazard class as the fast path: corrupted input may
                     // leave `c[k]` pointing into a `fb_t` slot that was never
                     // populated by `decode_freq1`, leaving stale TLS bytes.
                     // Validate (f, b) and the (mm - b) subtraction.
-                    if f == 0 || f > TOTFREQ_O1 || b > TOTFREQ_O1 - f || b > mm[k] {
+                    if f == 0 || f > TOTFREQ_O1 || b > TOTFREQ_O1 - f || b > mmk {
                         htscodecs_tls_free(sfb_ptr);
                         return std::ptr::null_mut();
                     }
                     r[z + k] = f * (r[z + k] >> TF_SHIFT_O1);
-                    r[z + k] += mm[k] - b;
-                    out_slice[i4[z + k]] = c[k] as u8;
-                    i4[z + k] += 1;
-                    l[z + k] = c[k];
+                    r[z + k] += mmk - b;
+                    out_slice[*i4zk] = ck as u8;
+                    *i4zk += 1;
+                    *lzk = ck;
                 }
                 if !low_ent && ptr < ptr_end {
-                    for k in 0..4 {
-                        RansDecRenorm(&mut r[z + k], input, &mut ptr);
+                    for rz in &mut r[z..z + 4] {
+                        RansDecRenorm(rz, input, &mut ptr);
                     }
                 } else {
-                    for k in 0..4 {
-                        RansDecRenormSafe(&mut r[z + k], input, &mut ptr, ptr_end + 2 * NX);
+                    for rz in &mut r[z..z + 4] {
+                        RansDecRenormSafe(rz, input, &mut ptr, ptr_end + 2 * NX);
                     }
                 }
                 z += 4;
@@ -559,18 +604,22 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
             let mut z = 0usize;
             while z < NX {
                 let mut s = [0u32; 4];
-                for k in 0..4 {
+                for (k, sk) in s.iter_mut().enumerate() {
                     let row = unsafe { s3_base.add(l[z + k] * TOTFREQ_O1_FAST as usize) };
-                    s[k] = unsafe { *row.add((r[z + k] & mask) as usize) };
+                    *sk = unsafe { *row.add((r[z + k] & mask) as usize) };
                 }
-                for k in 0..4 {
-                    l[z + k] = s[k] as u8 as usize;
-                    out_slice[i4[z + k]] = s[k] as u8;
-                    i4[z + k] += 1;
+                for ((i4zk, lzk), &sk) in i4[z..z + 4]
+                    .iter_mut()
+                    .zip(l[z..z + 4].iter_mut())
+                    .zip(s.iter())
+                {
+                    *lzk = sk as u8 as usize;
+                    out_slice[*i4zk] = sk as u8;
+                    *i4zk += 1;
                 }
-                for k in 0..4 {
-                    let f = s[k] >> (TF_SHIFT_O1_FAST + 8);
-                    let b = (s[k] >> 8) & mask;
+                for (k, &sk) in s.iter().enumerate() {
+                    let f = sk >> (TF_SHIFT_O1_FAST + 8);
+                    let b = (sk >> 8) & mask;
                     // Validate freq-table-derived values before the multiply.
                     // On corrupted input the state index can land in a stale
                     // TLS-allocated slot where (f, b) are garbage and would
@@ -585,12 +634,12 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                     r[z + k] = f * (r[z + k] >> TF_SHIFT_O1_FAST) + b;
                 }
                 if !low_ent && ptr < ptr_end {
-                    for k in 0..4 {
-                        RansDecRenorm(&mut r[z + k], input, &mut ptr);
+                    for rz in &mut r[z..z + 4] {
+                        RansDecRenorm(rz, input, &mut ptr);
                     }
                 } else {
-                    for k in 0..4 {
-                        RansDecRenormSafe(&mut r[z + k], input, &mut ptr, ptr_end + 2 * NX);
+                    for rz in &mut r[z..z + 4] {
+                        RansDecRenormSafe(rz, input, &mut ptr, ptr_end + 2 * NX);
                     }
                 }
                 z += 4;

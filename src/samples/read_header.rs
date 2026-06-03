@@ -19,7 +19,7 @@ pub unsafe fn samples_read_header_c_49_main(argc: c_int, argv: *mut *mut c_char)
         s: std::ptr::null_mut(),
     };
 
-    if argc < 3 || argc > 6 {
+    if !(3..=6).contains(&argc) {
         samples_read_header_c_37_print_usage(crate::htslib_rs::c_compat::stderr.cast());
         return ret;
     }
@@ -36,9 +36,9 @@ pub unsafe fn samples_read_header_c_49_main(argc: c_int, argv: *mut *mut c_char)
             id = std::ptr::null_mut();
         } else if *header == b'S' as c_char && *header.add(1) == b'Q' as c_char {
             id = c"SN".as_ptr().cast_mut();
-        } else if *header == b'R' as c_char && *header.add(1) == b'G' as c_char {
-            id = c"ID".as_ptr().cast_mut();
-        } else if *header == b'P' as c_char && *header.add(1) == b'G' as c_char {
+        } else if (*header == b'R' as c_char || *header == b'P' as c_char)
+            && *header.add(1) == b'G' as c_char
+        {
             id = c"ID".as_ptr().cast_mut();
         } else if *header == b'C' as c_char && *header.add(1) == b'O' as c_char {
             id = c"".as_ptr().cast_mut();

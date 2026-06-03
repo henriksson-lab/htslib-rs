@@ -28,7 +28,12 @@ struct Case {
 }
 
 fn case(name: &str, data: Vec<u8>, lens: Vec<u32>, flags: Vec<u32>) -> Case {
-    Case { name: name.into(), data, lens, flags }
+    Case {
+        name: name.into(),
+        data,
+        lens,
+        flags,
+    }
 }
 
 /// Build a corpus of varied quality streams + record layouts.
@@ -239,7 +244,11 @@ fn roundtrip_native() {
     for c in corpus() {
         for strat in 0..3i32 {
             let (comp, _sz) = native_compress(&c, vers, strat);
-            assert!(!comp.is_empty(), "compress empty for {} strat {strat}", c.name);
+            assert!(
+                !comp.is_empty(),
+                "compress empty for {} strat {strat}",
+                c.name
+            );
             let dec = native_decompress(&comp);
             assert_eq!(dec, c.data, "roundtrip mismatch {} strat {strat}", c.name);
         }
@@ -334,7 +343,8 @@ mod parity {
                 let native = native_compress(&c, vers, strat).0;
                 let cc = c_compress(&c, vers, strat);
                 assert_eq!(
-                    native, cc,
+                    native,
+                    cc,
                     "byte mismatch {} strat {strat}: native {} C {} bytes",
                     c.name,
                     native.len(),
@@ -356,12 +366,20 @@ mod parity {
                 // native compress -> C decompress
                 let native = native_compress(&c, vers, strat).0;
                 let dec_c = c_decompress(&native);
-                assert_eq!(dec_c, c.data, "native->C decode mismatch {} strat {strat}", c.name);
+                assert_eq!(
+                    dec_c, c.data,
+                    "native->C decode mismatch {} strat {strat}",
+                    c.name
+                );
 
                 // C compress -> native decompress
                 let cc = c_compress(&c, vers, strat);
                 let dec_n = native_decompress(&cc);
-                assert_eq!(dec_n, c.data, "C->native decode mismatch {} strat {strat}", c.name);
+                assert_eq!(
+                    dec_n, c.data,
+                    "C->native decode mismatch {} strat {strat}",
+                    c.name
+                );
 
                 checked += 1;
             }
@@ -406,7 +424,11 @@ fn adversarial_inputs() {
     for c in &cases {
         for strat in 0..3i32 {
             let (comp, _sz) = native_compress(c, vers, strat);
-            assert!(!comp.is_empty(), "compress empty for {} strat {strat}", c.name);
+            assert!(
+                !comp.is_empty(),
+                "compress empty for {} strat {strat}",
+                c.name
+            );
             let dec = native_decompress(&comp);
             assert_eq!(dec, c.data, "adversarial rt {} strat {strat}", c.name);
         }

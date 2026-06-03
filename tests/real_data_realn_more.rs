@@ -113,7 +113,11 @@ fn sam_prob_realn_writes_zq_tag_with_baq_apply_flag() {
         // With BAQ_APPLY (flag bit 1) set, sam_prob_realn modifies qual in
         // place AND appends a ZQ tag (so the change is reversible). The
         // BQ tag is only written when the apply bit is not set.
-        let ref_seq = RefSeq::load("htslib/test/realn02.fa", "htslib/test/realn02.fa.fai", c"17");
+        let ref_seq = RefSeq::load(
+            "htslib/test/realn02.fa",
+            "htslib/test/realn02.fa.fai",
+            c"17",
+        );
         assert_eq!(ref_seq.len, 4_200);
 
         let (records, hdr) = read_records("htslib/test/realn02.sam");
@@ -128,8 +132,7 @@ fn sam_prob_realn_writes_zq_tag_with_baq_apply_flag() {
             0,
             "BAQ-apply call should succeed"
         );
-        let zq = aux_z_string(rec, c"ZQ".as_ptr())
-            .expect("BAQ-apply should add a ZQ tag");
+        let zq = aux_z_string(rec, c"ZQ".as_ptr()).expect("BAQ-apply should add a ZQ tag");
         assert_eq!(
             zq.len(),
             l_qseq,
@@ -169,7 +172,11 @@ fn sam_prob_realn_writes_bq_tag_without_baq_apply_flag() {
         // With flag = 0 (no apply, no extend, no redo) and no pre-existing
         // BQ/ZQ tag, sam_prob_realn writes a BQ tag and leaves qual
         // untouched.
-        let ref_seq = RefSeq::load("htslib/test/realn02.fa", "htslib/test/realn02.fa.fai", c"17");
+        let ref_seq = RefSeq::load(
+            "htslib/test/realn02.fa",
+            "htslib/test/realn02.fa.fai",
+            c"17",
+        );
         let (records, hdr) = read_records("htslib/test/realn02.sam");
         let rec = records[0];
         assert_eq!((*rec).core.flag as c_int & BAM_FUNMAP, 0);
@@ -180,8 +187,7 @@ fn sam_prob_realn_writes_bq_tag_without_baq_apply_flag() {
 
         assert_eq!(sam_prob_realn(rec, ref_seq.seq, ref_seq.len.into(), 0), 0);
 
-        let bq = aux_z_string(rec, c"BQ".as_ptr())
-            .expect("flag=0 path should add a BQ tag");
+        let bq = aux_z_string(rec, c"BQ".as_ptr()).expect("flag=0 path should add a BQ tag");
         assert_eq!(bq.len(), l_qseq, "BQ tag length must match l_qseq");
         // The qual array must be untouched (only BQ tracks the delta).
         let new_qual = std::slice::from_raw_parts(bam_get_qual(rec), l_qseq);
@@ -197,7 +203,11 @@ fn sam_prob_realn_translated_path_writes_same_zq_tag_as_re_exported() {
         // The realn-module entrypoint (realn_c_106_sam_prob_realn) and the
         // sam.rs copy (sam_prob_realn) should produce the same ZQ tag for
         // the same input and apply flags.
-        let ref_seq = RefSeq::load("htslib/test/realn02.fa", "htslib/test/realn02.fa.fai", c"17");
+        let ref_seq = RefSeq::load(
+            "htslib/test/realn02.fa",
+            "htslib/test/realn02.fa.fai",
+            c"17",
+        );
 
         let (records_a, hdr_a) = read_records("htslib/test/realn02.sam");
         let (records_b, hdr_b) = read_records("htslib/test/realn02.sam");
@@ -229,7 +239,11 @@ fn sam_prob_realn_translated_path_writes_same_zq_tag_as_re_exported() {
 #[test]
 fn sam_prob_realn_redo_flag_replaces_existing_bq_tag() {
     unsafe {
-        let ref_seq = RefSeq::load("htslib/test/realn02.fa", "htslib/test/realn02.fa.fai", c"17");
+        let ref_seq = RefSeq::load(
+            "htslib/test/realn02.fa",
+            "htslib/test/realn02.fa.fai",
+            c"17",
+        );
         let (records, hdr) = read_records("htslib/test/realn02.sam");
         let rec = records[0];
         let l_qseq = (*rec).core.l_qseq as usize;
@@ -261,11 +275,14 @@ fn sam_prob_realn_redo_flag_replaces_existing_bq_tag() {
             0,
             "BAQ_REDO call should succeed"
         );
-        let new_bq = aux_z_string(rec, c"BQ".as_ptr())
-            .expect("BAQ_REDO should re-add a BQ tag");
+        let new_bq = aux_z_string(rec, c"BQ".as_ptr()).expect("BAQ_REDO should re-add a BQ tag");
         assert_eq!(new_bq.len(), l_qseq);
         // Vanishingly unlikely the recomputed tag is all '!'.
-        assert_ne!(new_bq, "!".repeat(l_qseq), "BAQ_REDO did not replace the sentinel BQ");
+        assert_ne!(
+            new_bq,
+            "!".repeat(l_qseq),
+            "BAQ_REDO did not replace the sentinel BQ"
+        );
 
         destroy_records(records, hdr);
     }
@@ -278,7 +295,11 @@ fn sam_prob_realn_redo_flag_replaces_existing_bq_tag() {
 #[test]
 fn sam_prob_realn_rejects_zq_tag_with_wrong_length() {
     unsafe {
-        let ref_seq = RefSeq::load("htslib/test/realn02.fa", "htslib/test/realn02.fa.fai", c"17");
+        let ref_seq = RefSeq::load(
+            "htslib/test/realn02.fa",
+            "htslib/test/realn02.fa.fai",
+            c"17",
+        );
         let (records, hdr) = read_records("htslib/test/realn02.sam");
         let rec = records[0];
 
@@ -308,7 +329,11 @@ fn sam_prob_realn_rejects_zq_tag_with_wrong_length() {
 #[test]
 fn sam_cap_mapq_caps_mapq_on_realn02_records_with_real_reference() {
     unsafe {
-        let ref_seq = RefSeq::load("htslib/test/realn02.fa", "htslib/test/realn02.fa.fai", c"17");
+        let ref_seq = RefSeq::load(
+            "htslib/test/realn02.fa",
+            "htslib/test/realn02.fa.fai",
+            c"17",
+        );
         let (records, hdr) = read_records("htslib/test/realn02.sam");
 
         // Walk the mapped records. For each, call sam_cap_mapq with a high
@@ -354,7 +379,11 @@ fn sam_cap_mapq_default_threshold_negative_uses_40() {
     unsafe {
         // Passing thres = -1 selects the default 40 cap. For a high-quality
         // record this should still hit the "do not cap" branch (returns -1).
-        let ref_seq = RefSeq::load("htslib/test/realn02.fa", "htslib/test/realn02.fa.fai", c"17");
+        let ref_seq = RefSeq::load(
+            "htslib/test/realn02.fa",
+            "htslib/test/realn02.fa.fai",
+            c"17",
+        );
         let (records, hdr) = read_records("htslib/test/realn02.sam");
 
         // The first mapped record in realn02.sam is a high-quality match.
@@ -381,7 +410,11 @@ fn sam_cap_mapq_after_sam_prob_realn_remains_consistent_on_real_record() {
         // originals, and sam_cap_mapq's score grows with quality (more q
         // raises t, which only delays the cap). We verify both calls
         // succeed without error rather than fixing an exact value.
-        let ref_seq = RefSeq::load("htslib/test/realn02.fa", "htslib/test/realn02.fa.fai", c"17");
+        let ref_seq = RefSeq::load(
+            "htslib/test/realn02.fa",
+            "htslib/test/realn02.fa.fai",
+            c"17",
+        );
         let (records, hdr) = read_records("htslib/test/realn02.sam");
         let rec = records[0];
         let l_qseq = (*rec).core.l_qseq as usize;

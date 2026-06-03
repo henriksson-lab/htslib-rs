@@ -72,7 +72,11 @@ const EPROTONOSUPPORT: c_int = libc::ENOSYS;
 #[cfg(not(target_os = "windows"))]
 macro_rules! pass {
     ($name:expr) => {{
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"  PASS: %s\n".as_ptr(), $name);
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"  PASS: %s\n".as_ptr(),
+            $name,
+        );
     }};
 }
 
@@ -96,8 +100,8 @@ pub unsafe fn test_test_hfile_libcurl_c_65_start_server(
     let mut pipefd = [0 as c_int; 2];
     let mut fail_count_str = [0 as c_char; 32];
     let mut port_buf = [0 as c_char; 32];
-    let mut n: isize;
-    let mut i: c_int;
+    let mut n: isize = 0;
+    let mut i: c_int = 0;
 
     if libc::pipe(pipefd.as_mut_ptr()) < 0 {
         libc::perror(c"pipe".as_ptr());
@@ -143,8 +147,6 @@ pub unsafe fn test_test_hfile_libcurl_c_65_start_server(
 
     libc::close(pipefd[1]);
 
-    n = 0;
-    i = 0;
     while i < 50 && n == 0 {
         n = libc::read(pipefd[0], port_buf.as_mut_ptr().cast(), port_buf.len() - 1);
         if n <= 0 {
@@ -186,14 +188,13 @@ pub unsafe fn test_test_hfile_libcurl_c_65_start_server(
 // original: stop_server (htslib/test/test_hfile_libcurl.c:139)
 pub unsafe fn test_test_hfile_libcurl_c_139_stop_server(pid: libc::pid_t) {
     let mut status = 0;
-    let ret: libc::pid_t;
 
     if pid <= 0 {
         return;
     }
 
     libc::kill(pid, libc::SIGKILL);
-    ret = libc::waitpid(pid, &mut status, 0);
+    let ret = libc::waitpid(pid, &mut status, 0);
     if ret < 0 {
         libc::perror(c"waitpid".as_ptr());
     }
@@ -646,7 +647,10 @@ pub unsafe fn test_test_hfile_libcurl_c_464_main() -> c_int {
 
     test_test_hfile_libcurl_c_154_generate_test_data();
 
-    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"test_hfile_libcurl:\n".as_ptr());
+    libc::fprintf(
+        crate::htslib_rs::c_compat::stderr.cast(),
+        c"test_hfile_libcurl:\n".as_ptr(),
+    );
 
     test_test_hfile_libcurl_c_233_test_normal_transfer();
     test_test_hfile_libcurl_c_265_test_503_retry();
@@ -667,7 +671,10 @@ pub unsafe fn test_test_hfile_libcurl_c_464_main() -> c_int {
         return libc::EXIT_FAILURE;
     }
 
-    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"All tests passed.\n".as_ptr());
+    libc::fprintf(
+        crate::htslib_rs::c_compat::stderr.cast(),
+        c"All tests passed.\n".as_ptr(),
+    );
     libc::EXIT_SUCCESS
 }
 

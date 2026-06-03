@@ -439,7 +439,7 @@ pub unsafe extern "C" fn annot_tsv_c_276_parse_tab_with_payload(
     *end -= (*dat).coor_base[1] as hts_pos_t - 1;
 
     if *end < *beg {
-        std::mem::swap(&mut *beg, &mut *end);
+        core::ptr::swap(beg, end);
     }
 
     0
@@ -699,9 +699,9 @@ pub unsafe fn annot_tsv_c_495_parse_coor_base(
         } else {
             libc::abort();
         }
-    } else if len >= 4 && libc::strcasecmp(c".bed".as_ptr(), (*dat).fname.add(len - 4)) == 0 {
-        beg = 0;
-    } else if len >= 7 && libc::strcasecmp(c".bed.gz".as_ptr(), (*dat).fname.add(len - 7)) == 0 {
+    } else if (len >= 4 && libc::strcasecmp(c".bed".as_ptr(), (*dat).fname.add(len - 4)) == 0)
+        || (len >= 7 && libc::strcasecmp(c".bed.gz".as_ptr(), (*dat).fname.add(len - 7)) == 0)
+    {
         beg = 0;
     }
     (*dat).coor_base[0] = beg;

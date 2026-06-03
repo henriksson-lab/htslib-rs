@@ -69,7 +69,7 @@ type CURLcode = c_int;
 type CURLMcode = c_int;
 type CURLoption = c_int;
 type CURLMoption = c_int;
-type CURLINFO = c_int;
+type Curlinfo = c_int;
 type CURLversion = c_int;
 type curl_off_t = i64;
 type curl_socket_t = c_int;
@@ -132,9 +132,9 @@ const CURLMOPT_SOCKETDATA: CURLMoption = 10002;
 const CURLMOPT_TIMERFUNCTION: CURLMoption = 20004;
 const CURLMOPT_TIMERDATA: CURLMoption = 10005;
 
-const CURLINFO_RESPONSE_CODE: CURLINFO = 0x200000 + 2;
-const CURLINFO_CONTENT_LENGTH_DOWNLOAD_T: CURLINFO = 0x600000 + 15;
-const CURLINFO_PRIVATE: CURLINFO = 0x100000 + 21;
+const CURLINFO_RESPONSE_CODE: Curlinfo = 0x200000 + 2;
+const CURLINFO_CONTENT_LENGTH_DOWNLOAD_T: Curlinfo = 0x600000 + 15;
+const CURLINFO_PRIVATE: Curlinfo = 0x100000 + 21;
 
 type WriteCallback = unsafe extern "C" fn(
     buffer: *mut c_void,
@@ -214,12 +214,12 @@ extern "C" {
         parameter: Option<ProgressCallback>,
     ) -> CURLcode;
     #[link_name = "curl_easy_getinfo"]
-    fn curl_easy_getinfo_long(curl: *mut CURL, info: CURLINFO, value: *mut c_long) -> CURLcode;
+    fn curl_easy_getinfo_long(curl: *mut CURL, info: Curlinfo, value: *mut c_long) -> CURLcode;
     #[link_name = "curl_easy_getinfo"]
-    fn curl_easy_getinfo_off_t(curl: *mut CURL, info: CURLINFO, value: *mut curl_off_t)
+    fn curl_easy_getinfo_off_t(curl: *mut CURL, info: Curlinfo, value: *mut curl_off_t)
         -> CURLcode;
     #[link_name = "curl_easy_getinfo"]
-    fn curl_easy_getinfo_ptr(curl: *mut CURL, info: CURLINFO, value: *mut *mut c_void) -> CURLcode;
+    fn curl_easy_getinfo_ptr(curl: *mut CURL, info: Curlinfo, value: *mut *mut c_void) -> CURLcode;
     #[link_name = "curl_multi_init"]
     fn curl_multi_init() -> *mut CURLM;
     #[link_name = "curl_multi_cleanup"]
@@ -1574,10 +1574,10 @@ unsafe fn ref_cache_upstream_c_916_finish_download(
     }
 
     hts_md5_final(md5.as_mut_ptr(), (*download).md5_ctx);
-    for i in 0..16 {
+    for (i, md5_byte) in md5.iter().enumerate() {
         let byte = (ref_cache_misc_h_38_hexval((*download).hexmd5[i * 2]) << 4)
             | ref_cache_misc_h_38_hexval((*download).hexmd5[i * 2 + 1]);
-        if byte != md5[i] as c_int {
+        if byte != *md5_byte as c_int {
             libc::fprintf(
                 crate::htslib_rs::ref_cache::compat::stderr(),
                 c"Downloading %.32s : MD5 checksum didn't match.\n".as_ptr(),

@@ -62,20 +62,29 @@ pub unsafe fn cram_cram_external_c_59_cram_fd_set_header(
     (*fd.cast::<cram_fd_layout>()).header = hdr;
 }
 
-pub unsafe fn cram_cram_external_c_61_cram_fd_get_version(fd: *mut crate::htslib_rs::hts::cram_fd) -> c_int {
+pub unsafe fn cram_cram_external_c_61_cram_fd_get_version(
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+) -> c_int {
     (*fd.cast::<cram_fd_layout>()).version
 }
 
-pub unsafe fn cram_cram_external_c_62_cram_fd_set_version(fd: *mut crate::htslib_rs::hts::cram_fd, vers: c_int) {
+pub unsafe fn cram_cram_external_c_62_cram_fd_set_version(
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+    vers: c_int,
+) {
     (*fd.cast::<cram_fd_layout>()).version = vers;
 }
 
-pub unsafe fn cram_cram_external_c_64_cram_major_vers(fd: *mut crate::htslib_rs::hts::cram_fd) -> c_int {
+pub unsafe fn cram_cram_external_c_64_cram_major_vers(
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+) -> c_int {
     // CRAM_MAJOR_VERS(v) = (v) >> 8
     (*fd.cast::<cram_fd_layout>()).version >> 8
 }
 
-pub unsafe fn cram_cram_external_c_65_cram_minor_vers(fd: *mut crate::htslib_rs::hts::cram_fd) -> c_int {
+pub unsafe fn cram_cram_external_c_65_cram_minor_vers(
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+) -> c_int {
     // CRAM_MINOR_VERS(v) = (v) & 0xff
     (*fd.cast::<cram_fd_layout>()).version & 0xff
 }
@@ -93,9 +102,7 @@ pub unsafe fn cram_cram_external_c_68_cram_fd_set_fp(
     (*fd.cast::<cram_fd_layout>()).fp = fp.cast();
 }
 
-pub unsafe fn cram_cram_external_c_75_cram_container_get_length(
-    c: *mut cram_container,
-) -> i32 {
+pub unsafe fn cram_cram_external_c_75_cram_container_get_length(c: *mut cram_container) -> i32 {
     (*c.cast::<cram_container_layout>()).length
 }
 
@@ -106,9 +113,7 @@ pub unsafe fn cram_cram_external_c_79_cram_container_set_length(
     (*c.cast::<cram_container_layout>()).length = length;
 }
 
-pub unsafe fn cram_cram_external_c_84_cram_container_get_num_blocks(
-    c: *mut cram_container,
-) -> i32 {
+pub unsafe fn cram_cram_external_c_84_cram_container_get_num_blocks(c: *mut cram_container) -> i32 {
     (*c.cast::<cram_container_layout>()).num_blocks
 }
 
@@ -125,9 +130,7 @@ pub unsafe fn cram_cram_external_c_92_cram_container_get_num_records(
     (*c.cast::<cram_container_layout>()).num_records
 }
 
-pub unsafe fn cram_cram_external_c_96_cram_container_get_num_bases(
-    c: *mut cram_container,
-) -> i64 {
+pub unsafe fn cram_cram_external_c_96_cram_container_get_num_bases(c: *mut cram_container) -> i64 {
     (*c.cast::<cram_container_layout>()).num_bases
 }
 
@@ -150,7 +153,9 @@ pub unsafe fn cram_cram_external_c_112_cram_container_set_landmarks(
     (*c).landmark = landmarks;
 }
 
-pub unsafe fn cram_cram_external_c_120_cram_container_is_empty(fd: *mut crate::htslib_rs::hts::cram_fd) -> c_int {
+pub unsafe fn cram_cram_external_c_120_cram_container_is_empty(
+    fd: *mut crate::htslib_rs::hts::cram_fd,
+) -> c_int {
     (*fd.cast::<cram_fd_layout>()).empty_container
 }
 
@@ -488,9 +493,7 @@ pub unsafe fn cram_cram_external_c_476_cram_describe_encodings(
     }
 }
 
-pub unsafe fn cram_cram_external_c_522_cram_block_get_content_id(
-    b: *mut cram_block,
-) -> i32 {
+pub unsafe fn cram_cram_external_c_522_cram_block_get_content_id(b: *mut cram_block) -> i32 {
     let b = b.cast::<cram_block_layout>();
     if (*b).content_type == crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE {
         -1
@@ -499,15 +502,11 @@ pub unsafe fn cram_cram_external_c_522_cram_block_get_content_id(
     }
 }
 
-pub unsafe fn cram_cram_external_c_525_cram_block_get_comp_size(
-    b: *mut cram_block,
-) -> i32 {
+pub unsafe fn cram_cram_external_c_525_cram_block_get_comp_size(b: *mut cram_block) -> i32 {
     (*b.cast::<cram_block_layout>()).comp_size
 }
 
-pub unsafe fn cram_cram_external_c_526_cram_block_get_uncomp_size(
-    b: *mut cram_block,
-) -> i32 {
+pub unsafe fn cram_cram_external_c_526_cram_block_get_uncomp_size(b: *mut cram_block) -> i32 {
     (*b.cast::<cram_block_layout>()).uncomp_size
 }
 
@@ -515,9 +514,7 @@ pub unsafe fn cram_cram_external_c_527_cram_block_get_crc32(b: *mut cram_block) 
     (*b.cast::<cram_block_layout>()).crc32 as i32
 }
 
-pub unsafe fn cram_cram_external_c_528_cram_block_get_data(
-    b: *mut cram_block,
-) -> *mut c_void {
+pub unsafe fn cram_cram_external_c_528_cram_block_get_data(b: *mut cram_block) -> *mut c_void {
     (*b.cast::<cram_block_layout>()).data.cast()
 }
 
@@ -527,24 +524,15 @@ pub unsafe fn cram_cram_external_c_533_cram_block_get_content_type(
     (*b.cast::<cram_block_layout>()).content_type
 }
 
-pub unsafe fn cram_cram_external_c_537_cram_block_set_content_id(
-    b: *mut cram_block,
-    id: i32,
-) {
+pub unsafe fn cram_cram_external_c_537_cram_block_set_content_id(b: *mut cram_block, id: i32) {
     (*b.cast::<cram_block_layout>()).content_id = id;
 }
 
-pub unsafe fn cram_cram_external_c_538_cram_block_set_comp_size(
-    b: *mut cram_block,
-    size: i32,
-) {
+pub unsafe fn cram_cram_external_c_538_cram_block_set_comp_size(b: *mut cram_block, size: i32) {
     (*b.cast::<cram_block_layout>()).comp_size = size;
 }
 
-pub unsafe fn cram_cram_external_c_539_cram_block_set_uncomp_size(
-    b: *mut cram_block,
-    size: i32,
-) {
+pub unsafe fn cram_cram_external_c_539_cram_block_set_uncomp_size(b: *mut cram_block, size: i32) {
     (*b.cast::<cram_block_layout>()).uncomp_size = size;
 }
 
@@ -552,10 +540,7 @@ pub unsafe fn cram_cram_external_c_540_cram_block_set_crc32(b: *mut cram_block, 
     (*b.cast::<cram_block_layout>()).crc32 = crc as u32;
 }
 
-pub unsafe fn cram_cram_external_c_541_cram_block_set_data(
-    b: *mut cram_block,
-    data: *mut c_void,
-) {
+pub unsafe fn cram_cram_external_c_541_cram_block_set_data(b: *mut cram_block, data: *mut c_void) {
     (*b.cast::<cram_block_layout>()).data = data.cast();
 }
 
@@ -577,10 +562,7 @@ pub unsafe fn cram_cram_external_c_554_cram_block_get_offset(b: *mut cram_block)
     (*b.cast::<cram_block_layout>()).byte as u64
 }
 
-pub unsafe fn cram_cram_external_c_555_cram_block_set_offset(
-    b: *mut cram_block,
-    offset: u64,
-) {
+pub unsafe fn cram_cram_external_c_555_cram_block_set_offset(b: *mut cram_block, offset: u64) {
     (*b.cast::<cram_block_layout>()).byte = offset as usize;
 }
 
@@ -806,8 +788,7 @@ pub unsafe fn cram_cram_external_c_776_cram_filter_container(
     if blk.is_null() {
         return -1;
     }
-    (*c_layout).comp_hdr =
-        cram_decode_compression_header(in_, blk).cast();
+    (*c_layout).comp_hdr = cram_decode_compression_header(in_, blk).cast();
     (*in_fd).ctr = c_layout;
 
     if (*c_layout).ref_seq_id == -2 {
@@ -825,7 +806,8 @@ pub unsafe fn cram_cram_external_c_776_cram_filter_container(
             }
             err |= (cram_write_container(out, c) < 0) as c_int;
             err |= cram_write_block(out, blk);
-            return cram_cram_external_c_683_cram_copy_slice(in_, out, (*c_layout).num_landmarks) | -err;
+            return cram_cram_external_c_683_cram_copy_slice(in_, out, (*c_layout).num_landmarks)
+                | -err;
         }
     }
 
@@ -943,14 +925,16 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     if cram_cram_external_c_177_cram_block_compression_hdr_set_rg(ch.cast(), new_rg) != 0 {
         return -1;
     }
-    if cram_cram_external_c_189_cram_block_compression_hdr_decoder2encoder(in_.cast(), ch.cast()) != 0 {
+    if cram_cram_external_c_189_cram_block_compression_hdr_decoder2encoder(in_.cast(), ch.cast())
+        != 0
+    {
         return -1;
     }
-    let n_blk = cram_cram_encode_c_2810_cram_encode_compression_header(in_, c, ch, (*in_fd).embed_ref);
+    let n_blk =
+        cram_cram_encode_c_2810_cram_encode_compression_header(in_, c, ch, (*in_fd).embed_ref);
     cram_free_compression_header(ch);
 
     let mut cp = cram_cram_external_c_528_cram_block_get_data(o_blk).cast::<c_char>();
-    let op: *mut c_char;
     let endp = cp.add(cram_cram_external_c_526_cram_block_get_uncomp_size(o_blk) as usize);
     let mut err = 0;
     let varint_get32 = (*in_fd)
@@ -962,14 +946,17 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     cp = cp.add(i32_ as usize);
     i32_ = varint_get32(&mut cp, endp, &mut err) as i32;
     cp = cp.add(i32_ as usize);
-    op = cp;
+    let op = cp;
     i32_ = varint_get32(&mut cp, endp, &mut err) as i32;
     i32_ += cp.offset_from(op) as i32;
     if err != 0 {
         return -2;
     }
 
-    cram_cram_external_c_542_cram_block_set_size(n_blk, cram_cram_external_c_529_cram_block_get_size(n_blk) - 2);
+    cram_cram_external_c_542_cram_block_set_size(
+        n_blk,
+        cram_cram_external_c_529_cram_block_get_size(n_blk) - 2,
+    );
     cram_cram_external_c_544_cram_block_append(n_blk, op.cast(), i32_);
     cram_cram_external_c_551_cram_block_update_size(n_blk);
 
@@ -1008,4 +995,3 @@ pub unsafe fn cram_cram_external_c_1029_cram_get_refs(fd: *mut htsFile) -> *mut 
         std::ptr::null_mut()
     }
 }
-

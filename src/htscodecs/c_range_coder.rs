@@ -183,7 +183,7 @@ pub fn RC_ShiftLowCheck(rc: &mut RangeCoder) {
         // Low is FFxx xxxx.  Bump FF count and shift in as before
         rc.ff_num += 1;
     }
-    rc.low = rc.low << 8;
+    rc.low <<= 8;
 }
 
 /// `static inline void RC_ShiftLow(RangeCoder *rc)`
@@ -209,7 +209,7 @@ pub fn RC_ShiftLow(rc: &mut RangeCoder) {
         // Low is FFxx xxxx.  Bump FF count and shift in as before
         rc.ff_num += 1;
     }
-    rc.low = rc.low << 8;
+    rc.low <<= 8;
 }
 
 /// `static inline int RC_FinishEncode(RangeCoder *rc)`

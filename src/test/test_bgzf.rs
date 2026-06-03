@@ -51,7 +51,7 @@ pub unsafe fn test_test_bgzf_c_68_try_fopen(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"Couldn't open %s : %s\n".as_ptr(),
             name,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return ptr::null_mut();
     }
@@ -72,7 +72,7 @@ pub unsafe fn test_test_bgzf_c_77_try_fclose(
             c"%s : Error on closing %s : %s\n".as_ptr(),
             func,
             name,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return -1;
     }
@@ -95,7 +95,7 @@ pub unsafe fn test_test_bgzf_c_89_try_fread(
             c"%s : Error reading from %s : %s\n".as_ptr(),
             func,
             fname,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return -1;
     }
@@ -114,7 +114,7 @@ pub unsafe fn test_test_bgzf_c_100_try_fseek_start(
             c"%s : Couldn't seek on %s : %s\n".as_ptr(),
             func,
             name,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return -1;
     }
@@ -135,7 +135,7 @@ pub unsafe fn test_test_bgzf_c_109_try_bgzf_open(
             func,
             name,
             mode,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return ptr::null_mut();
     }
@@ -156,7 +156,7 @@ pub unsafe fn test_test_bgzf_c_120_try_bgzf_dopen(
             func,
             name,
             mode,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return ptr::null_mut();
     }
@@ -169,7 +169,7 @@ pub unsafe fn test_test_bgzf_c_120_try_bgzf_dopen(
             func,
             name,
             mode,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         libc::close(fd);
         return ptr::null_mut();
@@ -192,7 +192,7 @@ pub unsafe fn test_test_bgzf_c_141_try_bgzf_hopen(
             func,
             name,
             mode,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return ptr::null_mut();
     }
@@ -205,7 +205,7 @@ pub unsafe fn test_test_bgzf_c_141_try_bgzf_hopen(
             func,
             name,
             mode,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         hclose_abruptly(hfp);
         return ptr::null_mut();
@@ -225,7 +225,7 @@ pub unsafe fn test_test_bgzf_c_163_try_bgzf_close(
     *bgz = ptr::null_mut();
     if bgzf_close(to_close) != 0 {
         if expected_fail == 0 {
-            let errno = *libc::__errno_location();
+            let errno = *crate::htslib_rs::c_compat::__errno_location();
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s : bgzf_close failed on %s%s%s\n".as_ptr(),
@@ -270,7 +270,7 @@ pub unsafe fn test_test_bgzf_c_180_try_bgzf_read(
             c"%s : Error from bgzf_read %s : %s\n".as_ptr(),
             func,
             name,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
     }
     got as libc::ssize_t
@@ -296,7 +296,7 @@ pub unsafe fn test_test_bgzf_c_190_try_bgzf_write(
                 c"Short write on".as_ptr()
             },
             name,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return -1;
     }
@@ -337,7 +337,7 @@ pub unsafe fn test_test_bgzf_c_216_try_bgzf_mt(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Error from bgzf_mt : %s\n".as_ptr(),
             func,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return -1;
     }
@@ -356,7 +356,7 @@ pub unsafe fn test_test_bgzf_c_225_try_bgzf_index_build_init(
             c"%s : Error from bgzf_index_build_init on %s : %s\n".as_ptr(),
             func,
             name,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return -1;
     }
@@ -381,7 +381,7 @@ pub unsafe fn test_test_bgzf_c_235_try_bgzf_index_load(
             } else {
                 suffix
             },
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return -1;
     }
@@ -406,7 +406,7 @@ pub unsafe fn test_test_bgzf_c_245_try_bgzf_index_dump(
             } else {
                 suffix
             },
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return -1;
     }
@@ -427,7 +427,7 @@ pub unsafe fn test_test_bgzf_c_255_try_bgzf_tell(
             func,
             c"Error telling in".as_ptr(),
             name,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return -1;
     }
@@ -472,7 +472,7 @@ pub unsafe fn test_test_bgzf_c_278_try_bgzf_seek(
             name,
             pos as libc::c_long,
             whence,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return -1;
     }
@@ -487,7 +487,7 @@ pub unsafe fn test_test_bgzf_c_288_try_bgzf_useek(
     name: *const c_char,
     func: *const c_char,
 ) -> c_int {
-    if bgzf_useek(fp, uoffset as i64, where_) < 0 {
+    if bgzf_useek(fp, uoffset, where_) < 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"%s : Error from bgzf_useek(%s, %ld, %d) : %s\n".as_ptr(),
@@ -495,7 +495,7 @@ pub unsafe fn test_test_bgzf_c_288_try_bgzf_useek(
             name,
             uoffset,
             where_,
-            libc::strerror(*libc::__errno_location()),
+            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
         return -1;
     }
@@ -687,7 +687,7 @@ pub unsafe fn test_test_bgzf_c_403_test_read(f: *mut Files) -> c_int {
     let mut bg_buf = [0u8; BUFSZ];
     let mut f_buf = [0u8; BUFSZ];
 
-    *libc::__errno_location() = 0;
+    *crate::htslib_rs::c_compat::__errno_location() = 0;
     let mut bgz =
         test_test_bgzf_c_109_try_bgzf_open((*f).src_bgzf, c"r".as_ptr(), c"test_read".as_ptr());
     if bgz.is_null() {
@@ -1410,14 +1410,14 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
     if bgz.is_null() {
         return -1;
     }
-    for i in 0..num_points {
-        point_vos[i] =
+    for (i, (point, point_vo)) in points.iter_mut().zip(point_vos.iter_mut()).enumerate() {
+        *point_vo =
             test_test_bgzf_c_255_try_bgzf_tell(bgz, (*f).tmp_bgzf, c"test_tell_seek_getc".as_ptr());
-        if point_vos[i] < 0 {
+        if *point_vo < 0 {
             bgzf_close(bgz);
             return -1;
         }
-        points[i] = i * iskip;
+        *point = i * iskip;
         if test_test_bgzf_c_190_try_bgzf_write(
             bgz,
             (*f).text.add(i * iskip).cast(),
@@ -1633,10 +1633,10 @@ pub unsafe fn test_test_bgzf_c_831_test_tell_read(f: *mut Files, mode: *const c_
         return -1;
     }
 
-    for i in 0..num_points {
-        point_vos[i] =
+    for (i, point_vo) in point_vos.iter_mut().enumerate() {
+        *point_vo =
             test_test_bgzf_c_255_try_bgzf_tell(bgz, (*f).tmp_bgzf, c"test_tell_read".as_ptr());
-        if point_vos[i] < 0
+        if *point_vo < 0
             || test_test_bgzf_c_190_try_bgzf_write(
                 bgz,
                 (*f).text.add(i * iskip).cast(),
@@ -1885,7 +1885,7 @@ pub unsafe fn test_test_bgzf_c_924_test_bgzf_getline(
                 },
                 (*f).tmp_bgzf,
                 if res < -1 {
-                    libc::strerror(*libc::__errno_location())
+                    libc::strerror(*crate::htslib_rs::c_compat::__errno_location())
                 } else {
                     c"EOF".as_ptr()
                 },

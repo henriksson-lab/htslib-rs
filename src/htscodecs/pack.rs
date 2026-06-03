@@ -2,8 +2,6 @@
 //!
 //! Packs multiple symbols into a single byte when the alphabet used is <= 16.
 
-use crate::c_compat;
-
 // pack.h:34
 // #define HTS_PACK_H  (header include guard)
 
@@ -11,7 +9,7 @@ use crate::c_compat;
 /// uint8_t *hts_pack(uint8_t *data, int64_t len,
 ///                   uint8_t *out_meta, int *out_meta_len, uint64_t *out_len);
 /// ```
-/// Returns a malloc'd packed buffer (length in `out_len`) on success, NULL on failure.
+/// Returns a Rust-owned packed buffer (length in `out_len`) on success.
 // pack.c:56 (also pack.h:52)
 pub fn hts_pack(
     data: &[u8],
@@ -34,9 +32,9 @@ pub fn hts_pack(
 
     {
         let mut nn = 0i32;
-        for i in 0..256usize {
-            if p[i] != 0 {
-                p[i] = nn; // p[i] is now the code number
+        for (i, pi) in p.iter_mut().enumerate() {
+            if *pi != 0 {
+                *pi = nn; // p[i] is now the code number
                 nn += 1;
                 out_meta[nn as usize] = i as u8;
             }
@@ -51,11 +49,7 @@ pub fn hts_pack(
         return None;
     }
 
-    let out_ptr = unsafe { c_compat::malloc((len + 1) as u64) } as *mut u8;
-    if out_ptr.is_null() {
-        return None;
-    }
-    let out = unsafe { std::slice::from_raw_parts_mut(out_ptr, (len + 1) as usize) };
+    let mut out = vec![0u8; (len + 1) as usize];
 
     // Work out how many values per byte to encode.
     let val_per_byte: i32 = if n > 4 {
@@ -75,27 +69,23 @@ pub fn hts_pack(
         2 => {
             let mut i: i64 = 0;
             while i < (len & !1) {
-                out[j as usize] = ((p[data[i as usize] as usize]) << 0)
-                    as u8
+                out[j as usize] = (p[data[i as usize] as usize]) as u8
                     | ((p[data[(i + 1) as usize] as usize]) << 4) as u8;
                 j += 1;
                 i += 2;
             }
-            match len - i {
-                1 => {
-                    out[j as usize] = p[data[i as usize] as usize] as u8;
-                    j += 1;
-                }
-                _ => {}
+            if len - i == 1 {
+                out[j as usize] = p[data[i as usize] as usize] as u8;
+                j += 1;
             }
             *out_len = j;
-            Some(finish(out_ptr, len))
+            Some(out)
         }
 
         4 => {
             let mut i: i64 = 0;
             while i < (len & !3) {
-                out[j as usize] = ((p[data[i as usize] as usize]) << 0) as u8
+                out[j as usize] = (p[data[i as usize] as usize]) as u8
                     | ((p[data[(i + 1) as usize] as usize]) << 2) as u8
                     | ((p[data[(i + 2) as usize] as usize]) << 4) as u8
                     | ((p[data[(i + 3) as usize] as usize]) << 6) as u8;
@@ -127,13 +117,13 @@ pub fn hts_pack(
                 j += 1;
             }
             *out_len = j;
-            Some(finish(out_ptr, len))
+            Some(out)
         }
 
         8 => {
             let mut i: i64 = 0;
             while i < (len & !7) {
-                out[j as usize] = ((p[data[(i + 0) as usize] as usize]) << 0) as u8
+                out[j as usize] = (p[data[i as usize] as usize]) as u8
                     | ((p[data[(i + 1) as usize] as usize]) << 1) as u8
                     | ((p[data[(i + 2) as usize] as usize]) << 2) as u8
                     | ((p[data[(i + 3) as usize] as usize]) << 3) as u8
@@ -189,62 +179,15 @@ pub fn hts_pack(
                 j += 1;
             }
             *out_len = j;
-            Some(finish(out_ptr, len))
+            Some(out)
         }
 
         0 => {
             *out_len = j;
-            Some(finish(out_ptr, len))
+            Some(out)
         }
 
-        _ => {
-            unsafe { c_compat::free(out_ptr as *mut std::ffi::c_void) };
-            None
-        }
-    }
-}
-
-// Helper to wrap the malloc'd C buffer into an owned `Vec` of the full
-// allocation size (len+1) without copying, matching C `malloc(len+1)`
-// ownership.  NOTE: this is not a translation of a C function; it merely
-// adapts the libc allocation to a Rust `Vec` for the public Rust API.  The
-// meaningful length is reported separately through `out_len`.
-fn finish(ptr: *mut u8, len: i64) -> Vec<u8> {
-    let cap = (len + 1) as usize;
-    unsafe { Vec::from_raw_parts(ptr, cap, cap) }
-}
-
-/// C-style raw-pointer wrapper around `hts_pack`. The C API takes `*mut u8`
-/// for `out_meta` with no explicit length; callers supply a buffer at least
-/// `nsyms + 1` bytes (worst case 17). We treat it as a 256-byte slice for
-/// safety. The malloc'd output buffer is returned as a raw pointer; the
-/// caller owns it and must `free()` (libc) it.
-pub unsafe fn hts_pack_raw(
-    data: *mut u8,
-    len: i64,
-    out_meta: *mut u8,
-    out_meta_len: *mut std::ffi::c_int,
-    out_len: *mut u64,
-) -> *mut u8 {
-    let data_slice = std::slice::from_raw_parts(data, len as usize);
-    let out_meta_slice = std::slice::from_raw_parts_mut(out_meta, 256);
-    let mut meta_len_val: i32 = 0;
-    let mut out_len_val: u64 = 0;
-    match hts_pack(
-        data_slice,
-        len,
-        out_meta_slice,
-        &mut meta_len_val,
-        &mut out_len_val,
-    ) {
-        Some(vec) => {
-            *out_meta_len = meta_len_val;
-            *out_len = out_len_val;
-            let ptr = vec.as_ptr() as *mut u8;
-            std::mem::forget(vec);
-            ptr
-        }
-        None => std::ptr::null_mut(),
+        _ => None,
     }
 }
 
@@ -335,7 +278,7 @@ pub fn hts_unpack<'a>(
             // union { uint64_t w; uint8_t c[8]; } map[256];
             let mut map = [[0u8; 8]; 256];
             for x in 0..256usize {
-                map[x][0] = p[(x >> 0) & 1];
+                map[x][0] = p[x & 1];
                 map[x][1] = p[(x >> 1) & 1];
                 map[x][2] = p[(x >> 2) & 1];
                 map[x][3] = p[(x >> 3) & 1];
@@ -344,7 +287,7 @@ pub fn hts_unpack<'a>(
                 map[x][6] = p[(x >> 6) & 1];
                 map[x][7] = p[(x >> 7) & 1];
             }
-            if (out_len + 7) / 8 > len as u64 {
+            if out_len.div_ceil(8) > len as u64 {
                 return None;
             }
             olen = (out_len & !7) as i64;
@@ -389,7 +332,7 @@ pub fn hts_unpack<'a>(
                 }
             }
 
-            if (out_len + 3) / 4 > len as u64 {
+            if out_len.div_ceil(4) > len as u64 {
                 return None;
             }
             olen = (out_len & !3) as i64;
@@ -398,7 +341,7 @@ pub fn hts_unpack<'a>(
             // for (i = 0; i < olen-12; i+=16)  (signed comparison)
             while i < olen - 12 {
                 // write four 4-byte words
-                let w0 = map[data[(j + 0) as usize] as usize];
+                let w0 = map[data[j as usize] as usize];
                 let w1 = map[data[(j + 1) as usize] as usize];
                 let w2 = map[data[(j + 2) as usize] as usize];
                 let w3 = map[data[(j + 3) as usize] as usize];
@@ -441,7 +384,7 @@ pub fn hts_unpack<'a>(
                 }
             }
 
-            if (out_len + 1) / 2 > len as u64 {
+            if out_len.div_ceil(2) > len as u64 {
                 return None;
             }
             olen = (out_len & !1) as i64;
@@ -450,7 +393,7 @@ pub fn hts_unpack<'a>(
             j = 0;
             // for (i = j = 0; i+2 < olen; i+=4)
             while i + 2 < olen {
-                let w0 = map[data[(j + 0) as usize] as usize];
+                let w0 = map[data[j as usize] as usize];
                 let w1 = map[data[(j + 1) as usize] as usize];
                 out[i as usize..i as usize + 2].copy_from_slice(&w0);
                 out[i as usize + 2..i as usize + 4].copy_from_slice(&w1);
@@ -471,13 +414,13 @@ pub fn hts_unpack<'a>(
                 {
                     j += 1;
                 }
-                out[(i + 0) as usize] = p[(c & 15) as usize];
+                out[i as usize] = p[(c & 15) as usize];
             }
         }
 
         0 => {
-            for k in 0..out_len as usize {
-                out[k] = p[0];
+            for out_k in out.iter_mut().take(out_len as usize) {
+                *out_k = p[0];
             }
         }
 
@@ -521,7 +464,7 @@ pub fn hts_unpack_<'a>(
                 }
             }
 
-            if (out_len + 1) / 2 > len as u64 {
+            if out_len.div_ceil(2) > len as u64 {
                 return None;
             }
             olen = (out_len & !1) as i64;
@@ -554,7 +497,7 @@ pub fn hts_unpack_<'a>(
                 {
                     j += 1;
                 }
-                out[(i + 0) as usize] = p[(c & 15) as usize];
+                out[i as usize] = p[(c & 15) as usize];
             }
         }
 
@@ -610,7 +553,10 @@ mod tests {
         // distinct symbol counts exercise the 0/8/4/2 nibble modes and tails
         for &distinct in &[1usize, 2, 3, 4, 5, 8, 16] {
             for &len in &[1usize, 2, 3, 4, 7, 8, 9, 15, 16, 17, 100, 1000, 4097] {
-                v.push((format!("d{distinct}_l{len}"), make(distinct, len, (distinct * 131 + len) as u64)));
+                v.push((
+                    format!("d{distinct}_l{len}"),
+                    make(distinct, len, (distinct * 131 + len) as u64),
+                ));
             }
         }
         // > 16 distinct => pack must fail (returns None)
@@ -650,14 +596,7 @@ mod tests {
         let consumed = hts_unpack_meta(meta, meta.len() as u32, udata_len, &mut map, &mut nsym);
         assert!(consumed != 0 || udata_len == 0, "unpack_meta failed");
         let mut out = vec![0u8; udata_len as usize];
-        let r = hts_unpack(
-            packed,
-            packed.len() as i64,
-            &mut out,
-            udata_len,
-            nsym,
-            &map,
-        );
+        let r = hts_unpack(packed, packed.len() as i64, &mut out, udata_len, nsym, &map);
         assert!(r.is_some(), "hts_unpack returned None");
         out
     }
@@ -786,7 +725,10 @@ mod tests {
                         assert_eq!(np, cp, "packed mismatch for {name}");
                     }
                     (None, None) => {}
-                    (a, _) => panic!("pack success disagreement for {name}: native={}", a.is_some()),
+                    (a, _) => panic!(
+                        "pack success disagreement for {name}: native={}",
+                        a.is_some()
+                    ),
                 }
             }
         }
@@ -868,7 +810,10 @@ mod tests {
 
         // 17 distinct symbols — must decline (return None) cleanly.
         let d17: Vec<u8> = (0..17u8).cycle().take(2048).collect();
-        assert!(native_pack(&d17).is_none(), "pack must decline >16 distinct");
+        assert!(
+            native_pack(&d17).is_none(),
+            "pack must decline >16 distinct"
+        );
 
         // 256 distinct symbols, dense — must decline.
         let d256: Vec<u8> = (0..256u32).map(|x| x as u8).collect();
@@ -896,9 +841,22 @@ mod tests {
             bad[i] ^= 1 << (rng.next_u32() & 7);
             let mut map = [0u8; 256];
             let mut nsym: i32 = 0;
-            let _ = hts_unpack_meta(&meta, meta.len() as u32, data.len() as u64, &mut map, &mut nsym);
+            let _ = hts_unpack_meta(
+                &meta,
+                meta.len() as u32,
+                data.len() as u64,
+                &mut map,
+                &mut nsym,
+            );
             let mut out = vec![0u8; data.len()];
-            let _ = hts_unpack(&bad, bad.len() as i64, &mut out, data.len() as u64, nsym, &map);
+            let _ = hts_unpack(
+                &bad,
+                bad.len() as i64,
+                &mut out,
+                data.len() as u64,
+                nsym,
+                &map,
+            );
         }
 
         // Corrupt meta header.
@@ -926,9 +884,22 @@ mod tests {
             let trunc = &packed[..packed.len() - cut];
             let mut map = [0u8; 256];
             let mut nsym: i32 = 0;
-            let _ = hts_unpack_meta(&meta, meta.len() as u32, data.len() as u64, &mut map, &mut nsym);
+            let _ = hts_unpack_meta(
+                &meta,
+                meta.len() as u32,
+                data.len() as u64,
+                &mut map,
+                &mut nsym,
+            );
             let mut out = vec![0u8; data.len()];
-            let _ = hts_unpack(trunc, trunc.len() as i64, &mut out, data.len() as u64, nsym, &map);
+            let _ = hts_unpack(
+                trunc,
+                trunc.len() as i64,
+                &mut out,
+                data.len() as u64,
+                nsym,
+                &map,
+            );
         }
     }
 }

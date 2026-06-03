@@ -1,6 +1,6 @@
 use std::{
     ffi::{c_char, c_int, c_short, c_void, CStr},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use super::bgzf::{
@@ -830,7 +830,7 @@ pub unsafe fn hts_usleep(usec: i64) -> c_int {
         tv_sec: (usec / 1_000_000) as libc::time_t,
         tv_nsec: ((usec % 1_000_000) * 1000) as libc::c_long,
     };
-    libc::nanosleep(&req, std::ptr::null_mut())
+    crate::htslib_rs::c_compat::nanosleep(&req, std::ptr::null_mut())
 }
 
 pub unsafe fn svlen_on_ref_for_vcf_alt(alt: *const c_char, size: i32) -> c_int {
@@ -1116,7 +1116,7 @@ pub unsafe fn hts_c_458_is_fastaq(u: *const u8, ulim: *const u8) -> c_int {
     let mut p = eol.add(1);
     while p < ulim
         && (crate::htslib_rs::sam::SEQ_NT16_TABLE[*p as usize] != 15
-            || (*p as u8).to_ascii_uppercase() == b'N')
+            || (*p as u8).eq_ignore_ascii_case(&b'N'))
     {
         if *p == b'=' {
             return 0;
@@ -2069,7 +2069,7 @@ pub fn kbs_last_mask(ni: size_t) -> libc::c_ulong {
 }
 
 pub unsafe fn kbs_init2(ni: size_t, fill: c_int) -> *mut kbitset_t {
-    let n = (ni + KBS_ELTBITS - 1) / KBS_ELTBITS;
+    let n = ni.div_ceil(KBS_ELTBITS);
     let size = std::mem::size_of::<kbitset_t>() + n * std::mem::size_of::<libc::c_ulong>();
     let bs = crate::htslib_rs::c_compat::malloc(size as u64).cast::<kbitset_t>();
     if bs.is_null() {
@@ -2098,7 +2098,7 @@ pub unsafe fn kbs_init(ni: size_t) -> *mut kbitset_t {
 pub unsafe fn kbs_resize2(bsp: *mut *mut kbitset_t, ni_new: size_t, fill: c_int) -> c_int {
     let mut bs = *bsp;
     let n = if bs.is_null() { 0 } else { (*bs).n };
-    let n_new = (ni_new + KBS_ELTBITS - 1) / KBS_ELTBITS;
+    let n_new = ni_new.div_ceil(KBS_ELTBITS);
     if bs.is_null() || n_new > (*bs).n_max {
         let size = std::mem::size_of::<kbitset_t>() + n_new * std::mem::size_of::<libc::c_ulong>();
         bs = crate::htslib_rs::c_compat::realloc(bs.cast(), size as u64).cast::<kbitset_t>();
@@ -2827,7 +2827,7 @@ pub unsafe fn hts_open_tmpfile(
     loop {
         let now = libc::time(std::ptr::null_mut()) as u32;
         let mut ts: libc::timespec = std::mem::zeroed();
-        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+        crate::htslib_rs::c_compat::monotonic_timespec(&mut ts);
         let nanos = ts.tv_nsec as u32;
         let t: u32 = now ^ nanos ^ ptr_seed;
         n += 1;
@@ -2855,7 +2855,7 @@ pub unsafe fn hts_open_tmpfile(
         if !fp.is_null() {
             break;
         }
-        let errno = *libc::__errno_location();
+        let errno = *crate::htslib_rs::c_compat::__errno_location();
         if errno != libc::EEXIST || n >= 100 {
             break;
         }
@@ -3971,12 +3971,11 @@ pub unsafe fn hts_parse_format(opt: *mut htsFormat, str_: *const c_char) -> c_in
 
 pub unsafe fn hts_c_1300_hts_parse_opt_list(fmt: *mut htsFormat, mut str_: *const c_char) -> c_int {
     while !str_.is_null() && *str_ != 0 {
-        let str_start: *const c_char;
         let mut arg = [0 as c_char; 8001];
         while *str_ != 0 && *str_ == b',' as c_char {
             str_ = str_.add(1);
         }
-        str_start = str_;
+        let str_start = str_;
         while *str_ != 0 && *str_ != b',' as c_char {
             str_ = str_.add(1);
         }
@@ -4087,7 +4086,7 @@ pub unsafe fn hts_c_1430_hts_crypt4gh_redirect(
     let mut fn_buf = [0 as c_char; 512];
     let mut mode2 = [0 as c_char; 102];
     let prefix = c"crypt4gh:";
-    let fn2_len = libc::strlen(prefix.as_ptr()) + libc::strlen(fn_) + 1;
+    let fn2_len = prefix.to_bytes().len() + libc::strlen(fn_) + 1;
     let mut fn2 = fn_buf.as_mut_ptr();
     let mut ret = -1;
 
@@ -5131,16 +5130,15 @@ pub unsafe fn hts_c_2558_hts_idx_push(
     }
     let bin = hts_reg2bin(beg, end, (*idx).min_shift, (*idx).n_lvls);
     if (*idx).z.last_bin as c_int != bin {
-        if (*idx).z.save_bin != 0xffff_ffff {
-            if hts_c_2320_insert_to_b(
+        if (*idx).z.save_bin != 0xffff_ffff
+            && hts_c_2320_insert_to_b(
                 *(*idx).bidx.add((*idx).z.save_tid as usize),
                 (*idx).z.save_bin as c_int,
                 (*idx).z.save_off,
                 (*idx).z.last_off,
             ) < 0
-            {
-                return -1;
-            }
+        {
+            return -1;
         }
         if (*idx).z.last_bin == 0xffff_ffffu32 && (*idx).z.save_bin != 0xffff_ffffu32 {
             (*idx).z.off_end = (*idx).z.last_off;
@@ -6127,7 +6125,7 @@ pub unsafe fn hts_c_4623_idx_test_and_fetch(
             c_compat::free(s.s.cast());
             return -2;
         }
-        if libc::access(s.s, libc::R_OK) == 0 {
+        if crate::htslib_rs::c_compat::access(s.s, crate::htslib_rs::c_compat::R_OK) == 0 {
             c_compat::free(s.s.cast());
             *local_fn = p;
             *local_len = e.offset_from(p) as c_int;
@@ -6762,7 +6760,7 @@ pub unsafe fn hts_c_3602_hts_itr_multi_bam(idx: *const hts_idx_t, iter: *mut hts
                 tid,
                 beg,
                 end,
-                j as u32,
+                j,
                 min_off,
                 max_off,
                 (*idx).min_shift,
@@ -6993,6 +6991,7 @@ pub unsafe fn hts_itr_querys(
     itr_query.map_or(std::ptr::null_mut(), |f| f(idx, tid, beg, end, readrec))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn hts_itr_regions(
     idx: *const hts_idx_t,
     reglist: *mut hts_reglist_t,
@@ -7087,7 +7086,7 @@ unsafe fn hts_idx_load3_local_index(
 ) -> Option<*mut hts_idx_t> {
     let idx_path = local_index_path(fn_, fnidx, fmt)?;
     let idx_c = std::ffi::CString::new(path_bytes(&idx_path).as_ref()).ok()?;
-    let fp = bgzf_open(idx_c.as_ptr(), b"r\0".as_ptr().cast());
+    let fp = bgzf_open(idx_c.as_ptr(), c"r".as_ptr());
     if fp.is_null() {
         return None;
     }
@@ -7132,7 +7131,7 @@ unsafe fn local_index_path(
     index_path_with_ext(&data_path, b".bai")
 }
 
-fn index_path_with_ext(data_path: &PathBuf, ext: &[u8]) -> Option<PathBuf> {
+fn index_path_with_ext(data_path: &Path, ext: &[u8]) -> Option<PathBuf> {
     let mut bytes = path_bytes(data_path).into_owned();
     bytes.extend_from_slice(ext);
     let path = path_from_bytes(&bytes);
@@ -7486,8 +7485,8 @@ unsafe fn kh_resize_bin(bidx: *mut hts_idx_bidx_t, mut new_n_buckets: u32) -> Op
                 }
                 kh_set_isempty_false(new_flags, i);
                 if i < (*bidx).n_buckets && kh_iseither((*bidx).flags, i) == 0 {
-                    std::mem::swap(&mut key, &mut *(*bidx).keys.add(i as usize));
-                    std::mem::swap(&mut val, &mut *(*bidx).vals.add(i as usize));
+                    std::ptr::swap(&mut key, (*bidx).keys.add(i as usize));
+                    std::ptr::swap(&mut val, (*bidx).vals.add(i as usize));
                     kh_set_isdel_true((*bidx).flags, i);
                 } else {
                     *(*bidx).keys.add(i as usize) = key;
@@ -7808,6 +7807,7 @@ pub unsafe fn hts_c_3221_add_to_interval(
     0
 }
 
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn hts_c_3252_reg2intervals_narrow(
     iter: *mut hts_itr_t,
     bidx: *const hts_idx_bidx_t,
@@ -7844,6 +7844,7 @@ pub unsafe fn hts_c_3252_reg2intervals_narrow(
     0
 }
 
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn hts_c_3276_reg2intervals_wide(
     iter: *mut hts_itr_t,
     bidx: *const hts_idx_bidx_t,
@@ -7885,6 +7886,7 @@ pub unsafe fn hts_c_3276_reg2intervals_wide(
     0
 }
 
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn hts_c_3304_reg2intervals(
     iter: *mut hts_itr_t,
     idx: *const hts_idx_t,
@@ -8671,10 +8673,11 @@ mod tests {
                 max_end: 0,
             };
             let mut iter: hts_itr_t = std::mem::zeroed();
+            let mut offset_marker = std::mem::MaybeUninit::<hts_pair64_max_t>::uninit();
             iter.bitfields = (1 << 4) | 1;
             iter.n_reg = 1;
             iter.reg_list = &mut reg;
-            iter.off = 1usize as *mut hts_pair64_max_t;
+            iter.off = offset_marker.as_mut_ptr();
             iter.n_off = 7;
             iter.curr_off = 123;
             iter.i = 9;
@@ -8728,6 +8731,7 @@ mod tests {
                 compression_level: -1,
                 specific: std::ptr::null_mut(),
             };
+            let mut hfile_marker = std::mem::MaybeUninit::<hFILE>::uninit();
             assert_eq!(
                 CStr::from_ptr(hts_format_file_extension(&format)).to_bytes(),
                 b"bam"
@@ -8759,7 +8763,7 @@ mod tests {
                 fn_: std::ptr::null_mut(),
                 fn_aux: std::ptr::null_mut(),
                 fp: htsFilePtr {
-                    hfile: 0x123usize as *mut hFILE,
+                    hfile: hfile_marker.as_mut_ptr(),
                 },
                 state: std::ptr::null_mut(),
                 format,
@@ -8772,7 +8776,7 @@ mod tests {
             assert_eq!(hts_get_format(&mut fp), std::ptr::addr_of!(fp.format));
             fp.format.format = HTS_FORMAT_SAM;
             fp.format.compression = HTS_COMPRESSION_NO_COMPRESSION;
-            assert_eq!(hts_hfile(&mut fp), 0x123usize as *mut hFILE);
+            assert_eq!(hts_hfile(&mut fp), hfile_marker.as_mut_ptr());
             assert!(hts_get_bgzfp(&mut fp).is_null());
             assert_eq!(hts_flush(std::ptr::null_mut()), 0);
             assert_eq!(hts_flush(&mut fp), 0);
@@ -8797,7 +8801,7 @@ mod tests {
             };
             fp.bitfields = 1 << 4;
             fp.fp.bgzf = &mut bgzf;
-            assert!(std::ptr::eq(hts_get_bgzfp(&mut fp), &mut bgzf));
+            assert!(std::ptr::eq(hts_get_bgzfp(&mut fp), &bgzf));
             assert_eq!(hts_utell(&mut fp), 10);
             assert_eq!(hts_useek(&mut fp, 12, 0), 0);
             assert_eq!(bgzf.uncompressed_address, 12);
@@ -10845,16 +10849,26 @@ mod tests {
 
             let bidx = crate::htslib_rs::c_compat::calloc(1, size_of::<hts_idx_bidx_t>() as u64)
                 .cast::<hts_idx_bidx_t>();
-            (*bidx).n_buckets = 2;
+            (*bidx).n_buckets = 8;
             (*bidx).size = 1;
             (*bidx).n_occupied = 1;
             (*bidx).flags = crate::htslib_rs::c_compat::calloc(1, size_of::<u32>() as u64).cast();
-            *(*bidx).flags = 2 << 2;
-            (*bidx).keys = crate::htslib_rs::c_compat::calloc(2, size_of::<u32>() as u64).cast();
-            *(*bidx).keys = hts_bin_first(5) as u32;
-            (*bidx).vals =
-                crate::htslib_rs::c_compat::calloc(2, size_of::<hts_idx_bins_t>() as u64).cast();
-            let bin = (*bidx).vals;
+            let query_bin = hts_reg2bin(10, 20, (*idx).min_shift, (*idx).n_lvls) as u32;
+            let bucket = query_bin & ((*bidx).n_buckets - 1);
+            *(*bidx).flags = 0xaaaa;
+            kh_set_isboth_false((*bidx).flags, bucket);
+            (*bidx).keys = crate::htslib_rs::c_compat::calloc(
+                (*bidx).n_buckets as u64,
+                size_of::<u32>() as u64,
+            )
+            .cast();
+            *(*bidx).keys.add(bucket as usize) = query_bin;
+            (*bidx).vals = crate::htslib_rs::c_compat::calloc(
+                (*bidx).n_buckets as u64,
+                size_of::<hts_idx_bins_t>() as u64,
+            )
+            .cast();
+            let bin = (*bidx).vals.add(bucket as usize);
             (*bin).n = 1;
             (*bin).m = 1;
             (*bin).loff = 90;
@@ -11310,7 +11324,7 @@ mod tests {
             let with_nul = b"abc\0needle\0";
             assert!(kstrnstr(
                 with_nul.as_ptr().cast(),
-                b"needle\0".as_ptr().cast(),
+                c"needle".as_ptr(),
                 with_nul.len() as c_int,
                 std::ptr::null_mut()
             )
@@ -11320,7 +11334,7 @@ mod tests {
             let mem_found = kmemmem(
                 mem.as_ptr().cast(),
                 mem.len() as c_int,
-                b"456\0".as_ptr().cast(),
+                c"456".as_ptr().cast(),
                 3,
                 std::ptr::null_mut(),
             );
@@ -11571,12 +11585,12 @@ mod tests {
                 1
             );
 
-            let mut ks = kstring_t {
+            let ks = kstring_t {
                 l: utf16le.len(),
                 m: utf16le.len(),
                 s: utf16le.as_ptr() as *mut c_char,
             };
-            assert_eq!(hts_is_utf16_text(&mut ks), 2);
+            assert_eq!(hts_is_utf16_text(&ks), 2);
 
             assert_eq!(hts_c_2186_hts_file_type(c"-".as_ptr()), 8);
             assert_eq!(hts_c_2186_hts_file_type(c"sample.vcf".as_ptr()), 2);

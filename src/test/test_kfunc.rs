@@ -34,6 +34,7 @@ pub unsafe fn test_test_kfunc_c_40_fail(
 }
 
 // original: test_fisher (htslib/test/test_kfunc.c:48)
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn test_test_kfunc_c_48_test_fisher(
     n11: c_int,
     n12: c_int,

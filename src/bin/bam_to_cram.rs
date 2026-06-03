@@ -41,7 +41,7 @@ fn main() {
                 panic!("sam_write1 at record {}", n);
             }
             n += 1;
-            if n % 1_000_000 == 0 {
+            if n.is_multiple_of(1_000_000) {
                 eprintln!("  wrote {n}");
             }
         }

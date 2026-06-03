@@ -973,7 +973,7 @@ pub unsafe fn tbx_c_552_index_load(
             hts_log_cstr(
                 HTS_LOG_ERROR,
                 c"index_load".as_ptr(),
-                libc::strerror(*libc::__errno_location()),
+                libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
             );
             tbx_c_512_tbx_destroy(tbx);
             return std::ptr::null_mut();
@@ -1123,7 +1123,7 @@ mod tests {
             assert_eq!(intv.beg, 99);
             assert_eq!(intv.end, 111);
             assert_eq!(
-                std::ffi::CStr::from_bytes_with_nul_unchecked(b"chr1\0").to_bytes(),
+                c"chr1".to_bytes(),
                 std::slice::from_raw_parts(
                     intv.ss.cast::<u8>(),
                     intv.se.offset_from(intv.ss) as usize

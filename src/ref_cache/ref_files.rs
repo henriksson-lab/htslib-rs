@@ -53,10 +53,10 @@ static mut REFS: RefFiles = RefFiles {
 
 // original: get_ref_placeholder (htslib/ref_cache/ref_files.c:62)
 unsafe fn ref_cache_ref_files_c_62_get_ref_placeholder(md5: *const c_char) -> *mut RefFile {
-    let m5hash = ((ref_cache_misc_h_38_hexval(*md5.add(0)) << 12)
+    let m5hash = ((ref_cache_misc_h_38_hexval(*md5) << 12)
         | (ref_cache_misc_h_38_hexval(*md5.add(1)) << 8)
         | (ref_cache_misc_h_38_hexval(*md5.add(2)) << 4)
-        | (ref_cache_misc_h_38_hexval(*md5.add(3)) << 0))
+        | ref_cache_misc_h_38_hexval(*md5.add(3)))
         & HASH_MASK;
 
     let mut r = REFS.by_md5[m5hash as usize];
@@ -232,7 +232,7 @@ pub unsafe fn ref_cache_ref_files_c_193_release_ref_file(ref_: *mut RefFile) -> 
         let m5hash = ((ref_cache_misc_h_38_hexval((*ref_).hexmd5[0]) << 12)
             | (ref_cache_misc_h_38_hexval((*ref_).hexmd5[1]) << 8)
             | (ref_cache_misc_h_38_hexval((*ref_).hexmd5[2]) << 4)
-            | (ref_cache_misc_h_38_hexval((*ref_).hexmd5[3]) << 0))
+            | ref_cache_misc_h_38_hexval((*ref_).hexmd5[3]))
             & HASH_MASK;
         REFS.by_md5[m5hash as usize] = (*ref_).next_md5;
     } else {

@@ -3,11 +3,13 @@
 #![allow(clippy::missing_safety_doc)]
 
 pub mod annot_tsv;
+pub mod bcf_sr_sort;
 pub mod bgzf;
 pub mod bgzip;
 pub mod cram;
 pub mod errmod;
 pub mod faidx;
+pub mod header;
 pub mod hfile;
 #[cfg(feature = "gcs")]
 pub mod hfile_gcs;
@@ -19,6 +21,7 @@ pub mod hts;
 pub mod hts_expr;
 pub mod hts_os;
 pub mod htscodecs;
+#[cfg(unix)]
 pub mod htsfile;
 pub mod htslib;
 pub mod kfunc;
@@ -29,26 +32,26 @@ pub mod os_rand;
 pub mod plugin;
 pub mod probaln;
 pub mod realn;
+#[cfg(unix)]
 pub mod ref_cache;
 pub mod regidx;
 pub mod region;
 pub mod sam;
-pub mod header;
 pub mod sam_mods;
 pub mod samples;
 pub mod simd;
+pub mod synced_bcf_reader;
 pub mod tabix;
 pub mod tbx;
+#[cfg(unix)]
 pub mod test;
 pub mod textutils;
 pub mod thread_pool;
 pub mod vcf;
 pub mod vcf_sweep;
-pub mod bcf_sr_sort;
-pub mod synced_bcf_reader;
 pub mod vcfutils;
 
-pub(crate) mod c_compat;
+pub mod c_compat;
 
 use std::path::{Path, PathBuf};
 
@@ -85,8 +88,8 @@ pub use hts::{
     CRAM_OPT_LOSSY_NAMES, CRAM_OPT_MULTI_SEQ_PER_SLICE, CRAM_OPT_NO_REF, CRAM_OPT_NTHREADS,
     CRAM_OPT_PREFIX, CRAM_OPT_REFERENCE, CRAM_OPT_REQUIRED_FIELDS, CRAM_OPT_SEQS_PER_SLICE,
     CRAM_OPT_SLICES_PER_CONTAINER, CRAM_OPT_STORE_MD, CRAM_OPT_STORE_NM, CRAM_OPT_THREAD_POOL,
-    CRAM_OPT_USE_BZIP2, CRAM_OPT_USE_LZMA, CRAM_OPT_USE_RANS, CRAM_OPT_VERBOSITY,
-    CRAM_OPT_VERSION, HTS_OPT_COMPRESSION_LEVEL,
+    CRAM_OPT_USE_BZIP2, CRAM_OPT_USE_LZMA, CRAM_OPT_USE_RANS, CRAM_OPT_VERBOSITY, CRAM_OPT_VERSION,
+    HTS_OPT_COMPRESSION_LEVEL,
 };
 
 pub use cram::*;

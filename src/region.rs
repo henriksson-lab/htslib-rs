@@ -196,8 +196,8 @@ fn region_khash_int_order(entries: &[region_c_31_reglist]) -> Vec<usize> {
             }
         }
 
-        for i in 0..new_n {
-            if !new_exists[i] {
+        for (i, exists) in new_exists.iter().enumerate() {
+            if !exists {
                 keys[i] = None;
             }
         }
@@ -236,11 +236,10 @@ fn region_khash_int_order(entries: &[region_c_31_reglist]) -> Vec<usize> {
     }
 
     let mut table: Vec<Option<c_int>> = Vec::new();
-    let mut size = 0usize;
     let mut occupied = 0usize;
     let mut upper = 0usize;
 
-    for entry in entries {
+    for (size, entry) in entries.iter().enumerate() {
         if occupied >= upper {
             let new_n = rounded_bucket_count(table.len() + 1);
             table = khash_resize_slots(&table, new_n);
@@ -248,7 +247,6 @@ fn region_khash_int_order(entries: &[region_c_31_reglist]) -> Vec<usize> {
             upper = upper_bound(new_n);
         }
         insert_slot(&mut table, entry.tid);
-        size += 1;
         occupied += 1;
     }
 

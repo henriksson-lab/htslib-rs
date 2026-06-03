@@ -23,7 +23,12 @@ pub unsafe fn cram_cram_index_c_573_cram_seek_to_refpos(
     if (*r).refid == HTS_IDX_NONE {
         ret = -2;
     } else {
-        let e = cram_cram_index_c_404_cram_index_query(fd, (*r).refid, (*r).start, std::ptr::null_mut());
+        let e = cram_cram_index_c_404_cram_index_query(
+            fd,
+            (*r).refid,
+            (*r).start,
+            std::ptr::null_mut(),
+        );
         if !e.is_null() {
             if 0 != cram_seek(fd, (*e).offset as libc::off_t, libc::SEEK_SET) {
                 ret = -1;
@@ -34,13 +39,13 @@ pub unsafe fn cram_cram_index_c_573_cram_seek_to_refpos(
     }
 
     if ret != 0 {
-        libc::pthread_mutex_lock(&mut (*fdl).range_lock);
+        crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).range_lock);
         (*fdl).range = *r;
-        libc::pthread_mutex_unlock(&mut (*fdl).range_lock);
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).range_lock);
         return ret;
     }
 
-    libc::pthread_mutex_lock(&mut (*fdl).range_lock);
+    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).range_lock);
     (*fdl).range = *r;
     if (*r).refid == HTS_IDX_NOCOOR {
         (*fdl).range.refid = -1;
@@ -48,7 +53,7 @@ pub unsafe fn cram_cram_index_c_573_cram_seek_to_refpos(
     } else if (*r).refid == HTS_IDX_START || (*r).refid == HTS_IDX_REST {
         (*fdl).range.refid = -2;
     }
-    libc::pthread_mutex_unlock(&mut (*fdl).range_lock);
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).range_lock);
 
     if !(*fdl).ctr.is_null() {
         cram_cram_io_c_3705_cram_free_container((*fdl).ctr.cast());
@@ -119,7 +124,7 @@ pub unsafe fn cram_cram_index_c_632_cram_index_build_multiref(
                 ref_,
                 ref_start,
                 ref_end - ref_start + 1,
-                cpos as i64,
+                cpos,
                 landmark,
                 sz,
             );
@@ -147,7 +152,7 @@ pub unsafe fn cram_cram_index_c_632_cram_index_build_multiref(
             ref_,
             ref_start,
             ref_end - ref_start + 1,
-            cpos as i64,
+            cpos,
             landmark,
             sz,
         );
@@ -181,7 +186,7 @@ pub unsafe fn cram_cram_index_c_695_cram_index_slice(
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"CRAM slice is too big (%ld bytes)\n".as_ptr(),
-            sz as i64,
+            sz,
         );
         return -1;
     }
@@ -197,7 +202,7 @@ pub unsafe fn cram_cram_index_c_695_cram_index_slice(
             (*(*sl).hdr).ref_seq_id,
             (*(*sl).hdr).ref_seq_start,
             (*(*sl).hdr).ref_seq_span,
-            cpos as i64,
+            cpos,
             spos as c_int,
             sz as c_int,
         );
@@ -647,8 +652,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
         if e.refid != (*idx).refid {
             if (*fdl).index_sz < e.refid + 2 {
                 let new_sz = e.refid + 2;
-                let index_end =
-                    (*fdl).index_sz as usize * std::mem::size_of::<cram_index_layout>();
+                let index_end = (*fdl).index_sz as usize * std::mem::size_of::<cram_index_layout>();
                 let new_idx = realloc(
                     (*fdl).index.cast(),
                     (new_sz as usize * std::mem::size_of::<cram_index_layout>()) as u64,
@@ -663,8 +667,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
                 libc::memset(
                     (new_idx.cast::<c_char>()).add(index_end).cast(),
                     0,
-                    (*fdl).index_sz as usize * std::mem::size_of::<cram_index_layout>()
-                        - index_end,
+                    (*fdl).index_sz as usize * std::mem::size_of::<cram_index_layout>() - index_end,
                 );
             }
             idx = (*fdl)
@@ -957,12 +960,9 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
         if (*cl).comp_hdr_block.is_null() {
             return -1;
         }
-        assert!(
-            (*(*cl).comp_hdr_block).content_type == CRAM_CONTENT_TYPE_COMPRESSION_HEADER
-        );
+        assert!((*(*cl).comp_hdr_block).content_type == CRAM_CONTENT_TYPE_COMPRESSION_HEADER);
 
-        (*cl).comp_hdr =
-            cram_decode_compression_header(fd, (*cl).comp_hdr_block.cast()).cast();
+        (*cl).comp_hdr = cram_decode_compression_header(fd, (*cl).comp_hdr_block.cast()).cast();
         if (*cl).comp_hdr.is_null() {
             return -1;
         }

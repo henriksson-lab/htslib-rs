@@ -8,6 +8,7 @@ unsafe fn bgzf_tell(fp: *const BGZF) -> i64 {
     (((*fp).block_address as u64) << 16 | ((*fp).block_offset as u64 & 0xffff)) as i64
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn run_thrash_threads6(
     input: *const c_char,
     pre_reads: usize,
@@ -116,11 +117,9 @@ unsafe fn run_thrash_threads6(
                     crate::htslib_rs::hts::hts_usleep(sleep_usecs);
                 }
                 6 => {
-                    if mt == 0 {
-                        if crate::htslib_rs::bgzf::bgzf_mt(fpin, n_threads, 256) != 0 {
-                            crate::htslib_rs::bgzf::bgzf_close(fpin);
-                            return libc::EXIT_FAILURE;
-                        }
+                    if mt == 0 && crate::htslib_rs::bgzf::bgzf_mt(fpin, n_threads, 256) != 0 {
+                        crate::htslib_rs::bgzf::bgzf_close(fpin);
+                        return libc::EXIT_FAILURE;
                     }
                     mt = 1;
                 }

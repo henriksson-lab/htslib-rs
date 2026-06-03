@@ -192,10 +192,10 @@ fn hist1_4(input: &[u8], f0: &mut [[u32; 256]], t0: &mut [u32; 256]) {
     }
     t0[l as usize] += 1;
 
-    for i in 0..256 {
+    for (i, row) in f0.iter().enumerate().take(256) {
         let mut tt: u32 = 0;
-        for j in 0..256 {
-            tt = tt.wrapping_add(f0[i][j]);
+        for &count in row.iter().take(256) {
+            tt = tt.wrapping_add(count);
         }
         t0[i] = t0[i].wrapping_add(tt);
     }
@@ -247,19 +247,19 @@ fn rans_compress_o0(input: &[u8], out_size: &mut u32) -> *mut u8 {
         fsum = 0;
         m = 0;
         big_m = 0;
-        for j in 0..256 {
-            if f[j] == 0 {
+        for (j, fj) in f.iter_mut().enumerate() {
+            if *fj == 0 {
                 continue;
             }
-            if m < f[j] as i32 {
-                m = f[j] as i32;
+            if m < *fj as i32 {
+                m = *fj as i32;
                 big_m = j;
             }
-            f[j] = ((f[j] as u64 * tr) >> 31) as u32;
-            if f[j] == 0 {
-                f[j] = 1;
+            *fj = ((*fj as u64 * tr) >> 31) as u32;
+            if *fj == 0 {
+                *fj = 1;
             }
-            fsum += f[j] as i32;
+            fsum += *fj as i32;
         }
         fsum += 1;
         if fsum < TOTFREQ as i32 {
@@ -502,7 +502,7 @@ fn rans_uncompress_o0(input: &[u8], out_size: &mut u32) -> *mut u8 {
         }
     }
 
-    if x < TOTFREQ - 1 || x > TOTFREQ {
+    if !(TOTFREQ - 1..=TOTFREQ).contains(&x) {
         return cleanup();
     }
     if x != TOTFREQ {
@@ -619,9 +619,9 @@ fn rans_compress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
         let mut f0: Vec<[u32; 256]> = vec![[0u32; 256]; 256];
         let mut t0 = [0u32; 256];
         hist1_4(input, &mut f0, &mut t0);
-        for i in 0..256 {
-            for j in 0..256 {
-                f[i][j] = f0[i][j] as i32;
+        for (i, row0) in f0.iter().enumerate() {
+            for (j, &value) in row0.iter().enumerate() {
+                f[i][j] = value as i32;
             }
             t[i] = t0[i] as i32;
         }
@@ -634,7 +634,7 @@ fn rans_compress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
 
     // Normalise so T[i] == TOTFREQ
     let mut rle_i: i32 = 0;
-    for i in 0..256 {
+    for (i, row) in f.iter_mut().enumerate() {
         if t[i] == 0 {
             continue;
         }
@@ -645,29 +645,29 @@ fn rans_compress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
             t2 = 0;
             m = 0;
             big_m = 0;
-            for j in 0..256 {
-                if f[i][j] == 0 {
+            for (j, fij) in row.iter_mut().enumerate() {
+                if *fij == 0 {
                     continue;
                 }
-                if m < f[i][j] {
-                    m = f[i][j];
+                if m < *fij {
+                    m = *fij;
                     big_m = j;
                 }
                 // F[i][j] *= p  (double multiply, truncate to int)
-                f[i][j] = (f[i][j] as f64 * p) as i32;
-                if f[i][j] == 0 {
-                    f[i][j] = 1;
+                *fij = (*fij as f64 * p) as i32;
+                if *fij == 0 {
+                    *fij = 1;
                 }
-                t2 += f[i][j];
+                t2 += *fij;
             }
             t2 += 1;
             if t2 < TOTFREQ as i32 {
-                f[i][big_m] += TOTFREQ as i32 - t2;
-            } else if t2 - TOTFREQ as i32 >= f[i][big_m] / 2 {
+                row[big_m] += TOTFREQ as i32 - t2;
+            } else if t2 - TOTFREQ as i32 >= row[big_m] / 2 {
                 p = 0.98;
                 continue;
             } else {
-                f[i][big_m] -= t2 - TOTFREQ as i32;
+                row[big_m] -= t2 - TOTFREQ as i32;
             }
             break;
         }
@@ -691,17 +691,17 @@ fn rans_compress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
 
         let mut x: u32 = 0;
         let mut rle_j: i32 = 0;
-        for j in 0..256 {
-            if f[i][j] != 0 {
+        for (j, &freq) in row.iter().enumerate() {
+            if freq != 0 {
                 // j
                 if rle_j != 0 {
                     rle_j -= 1;
                 } else {
                     out[cp] = j as u8;
                     cp += 1;
-                    if rle_j == 0 && j != 0 && f[i][j - 1] != 0 {
+                    if rle_j == 0 && j != 0 && row[j - 1] != 0 {
                         let mut r = j + 1;
-                        while r < 256 && f[i][r] != 0 {
+                        while r < 256 && row[r] != 0 {
                             r += 1;
                         }
                         rle_j = (r - (j + 1)) as i32;
@@ -710,17 +710,17 @@ fn rans_compress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
                     }
                 }
                 // F[i][j]
-                if f[i][j] < 128 {
-                    out[cp] = f[i][j] as u8;
+                if freq < 128 {
+                    out[cp] = freq as u8;
                     cp += 1;
                 } else {
-                    out[cp] = (128 | (f[i][j] >> 8)) as u8;
+                    out[cp] = (128 | (freq >> 8)) as u8;
                     cp += 1;
-                    out[cp] = (f[i][j] & 0xff) as u8;
+                    out[cp] = (freq & 0xff) as u8;
                     cp += 1;
                 }
-                rans_enc_symbol_init(&mut syms[i][j], x, f[i][j] as u32, TF_SHIFT);
-                x += f[i][j] as u32;
+                rans_enc_symbol_init(&mut syms[i][j], x, freq as u32, TF_SHIFT);
+                x += freq as u32;
             }
         }
         out[cp] = 0;
@@ -933,7 +933,7 @@ fn rans_uncompress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
             }
         }
 
-        if x < TOTFREQ - 1 || x > TOTFREQ {
+        if !(TOTFREQ - 1..=TOTFREQ).contains(&x) {
             cleanup!();
         }
         if x < TOTFREQ {
@@ -968,9 +968,9 @@ fn rans_uncompress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
     // fixup uses the raw context `i`.  (For the common dense case map[i]==i so
     // these coincide; we keep both as the C does to stay bit-exact.)
 
-    for i in 0..256 {
-        if map[i] == -1 {
-            map[i] = 0;
+    for map_entry in &mut map {
+        if *map_entry == -1 {
+            *map_entry = 0;
         }
     }
 

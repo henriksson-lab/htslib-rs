@@ -112,7 +112,7 @@ pub unsafe fn samples_mod_bam_c_50_main(argc: c_int, argv: *mut *mut c_char) -> 
                                         libc::memcpy(
                                             sam::bam_get_seq(newbam).cast_mut().cast(),
                                             sam::bam_get_seq(bamdata).cast(),
-                                            ((*bamdata).core.l_qseq as usize + 1) / 2,
+                                            ((*bamdata).core.l_qseq as usize).div_ceil(2),
                                         );
                                         libc::memcpy(
                                             sam::bam_get_aux(newbam).cast_mut().cast(),

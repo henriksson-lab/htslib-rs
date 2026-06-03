@@ -105,6 +105,7 @@ pub unsafe fn test_test_faidx_c_87_load_index(
 }
 
 // original: do_retrieval (htslib/test/test_faidx.c:99)
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn test_test_faidx_c_99_do_retrieval(
     fn_: *const c_char,
     fnfai: *const c_char,

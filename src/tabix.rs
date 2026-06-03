@@ -74,7 +74,7 @@ unsafe fn error_message(message: String) -> ! {
 }
 
 unsafe fn error_errno_message(message: Option<String>) -> ! {
-    let eno = *libc::__errno_location();
+    let eno = *crate::htslib_rs::c_compat::__errno_location();
     libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
     if let Some(message) = message.as_ref() {
         let message =
@@ -175,7 +175,7 @@ unsafe fn bcf_itr_next(htsfp: *mut htsFile, itr: *mut hts_itr_t, r: *mut vcf::bc
             ptr::null_mut(),
         );
     }
-    *libc::__errno_location() = libc::EINVAL;
+    *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
     -2
 }
 
@@ -227,7 +227,7 @@ pub unsafe fn tabix_c_102_file_type(fname: *const c_char) -> c_int {
 
     let fp = hts::hts_open(fname, c"r".as_ptr());
     if fp.is_null() {
-        if *libc::__errno_location() == libc::ENOEXEC {
+        if *crate::htslib_rs::c_compat::__errno_location() == libc::ENOEXEC {
             error_message(format!(
                 "Couldn't understand format of \"{}\"\n",
                 cstr_to_string(fname)
@@ -384,13 +384,11 @@ pub unsafe fn tabix_c_206_query_regions(
     //set threads if needed, errors are logged and ignored
     if (*args).threads >= 1 {
         tpool.pool = thread_pool::hts_tpool_init((*args).threads);
-        if !tpool.pool.is_null() {
-            if hts::hts_set_thread_pool(fp, &mut tpool) < 0 {
-                release_tpool(tpool.pool.cast());
-                error_errno_message(Some(
-                    "Threaded BGZF is not yet supported in this translation".to_string(),
-                ));
-            }
+        if !tpool.pool.is_null() && hts::hts_set_thread_pool(fp, &mut tpool) < 0 {
+            release_tpool(tpool.pool.cast());
+            error_errno_message(Some(
+                "Threaded BGZF is not yet supported in this translation".to_string(),
+            ));
         }
     }
 
@@ -814,7 +812,9 @@ pub unsafe fn tabix_c_437_reheader_file(
             error_message(format!(
                 "{}: {}",
                 cstr_to_string(header),
-                cstr_to_string(libc::strerror(*libc::__errno_location()))
+                cstr_to_string(libc::strerror(
+                    *crate::htslib_rs::c_compat::__errno_location()
+                ))
             ));
         }
         let page_size = 32768usize;
@@ -825,7 +825,9 @@ pub unsafe fn tabix_c_437_reheader_file(
             release_tpool(tpool);
             error_message(format!(
                 "{}\n",
-                cstr_to_string(libc::strerror(*libc::__errno_location()))
+                cstr_to_string(libc::strerror(
+                    *crate::htslib_rs::c_compat::__errno_location()
+                ))
             ));
         }
         if bgzf_out.is_null() {
@@ -1262,9 +1264,9 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                     conf = tbx::tbx_conf_vcf();
                 } else if libc::strcmp(optarg, c"gaf".as_ptr()) == 0 {
                     conf = tbx_conf_gaf();
-                } else if libc::strcmp(optarg, c"bcf".as_ptr()) == 0 {
-                    detect = 1;
-                } else if libc::strcmp(optarg, c"bam".as_ptr()) == 0 {
+                } else if libc::strcmp(optarg, c"bcf".as_ptr()) == 0
+                    || libc::strcmp(optarg, c"bam".as_ptr()) == 0
+                {
                     detect = 1;
                 } else {
                     error_message(format!(
@@ -1416,7 +1418,9 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     if idx_fname.is_null() {
         error_message(format!(
             "{}\n",
-            cstr_to_string(libc::strerror(*libc::__errno_location()))
+            cstr_to_string(libc::strerror(
+                *crate::htslib_rs::c_compat::__errno_location()
+            ))
         ));
     }
     libc::strcat(libc::strcpy(idx_fname, fname), suffix);
@@ -1444,7 +1448,7 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 cstr_to_string(fname)
             ));
         }
-        return 0;
+        0
     } else if do_csi != 0 {
         if ftype == IS_BCF {
             if vcf::bcf_index_build3(fname, ptr::null(), min_shift, args.threads) != 0 {
@@ -1467,7 +1471,7 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
 
         ret = tbx::tbx_index_build3(fname, ptr::null(), min_shift, args.threads, &conf);
         match ret {
-            0 => return 0,
+            0 => 0,
             -2 => error_message(format!(
                 "[tabix] the compression of '{}' is not BGZF\n",
                 cstr_to_string(fname)
@@ -1480,7 +1484,7 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     } else {
         ret = tbx::tbx_index_build3(fname, ptr::null(), min_shift, args.threads, &conf);
         match ret {
-            0 => return 0,
+            0 => 0,
             -2 => error_message(format!(
                 "[tabix] the compression of '{}' is not BGZF\n",
                 cstr_to_string(fname)

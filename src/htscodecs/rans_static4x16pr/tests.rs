@@ -6,7 +6,9 @@ use super::*;
 
 // Deterministic small PRNG so test inputs are reproducible without extra deps.
 fn lcg(seed: &mut u64) -> u32 {
-    *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *seed = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*seed >> 33) as u32
 }
 
@@ -21,7 +23,7 @@ fn gen_low_entropy(n: usize, seed: u64) -> Vec<u8> {
     (0..n)
         .map(|_| {
             let v = lcg(&mut s);
-            if v % 16 == 0 {
+            if v.is_multiple_of(16) {
                 (v & 0xff) as u8
             } else {
                 (v % 4) as u8
@@ -90,10 +92,17 @@ fn roundtrip_pack_rle() {
         for (name, input) in test_inputs() {
             let mut csize = 0u32;
             let comp = rans_compress_4x16(&input, &mut csize, order);
-            assert!(!comp.is_empty() || input.is_empty(), "compress {name} order {order:#x}");
+            assert!(
+                !comp.is_empty() || input.is_empty(),
+                "compress {name} order {order:#x}"
+            );
             let mut usize_out = 0u32;
             let dec = rans_uncompress_4x16(&comp[..csize as usize], &mut usize_out);
-            assert_eq!(&dec[..usize_out as usize], &input[..], "rt {name} order {order:#x}");
+            assert_eq!(
+                &dec[..usize_out as usize],
+                &input[..],
+                "rt {name} order {order:#x}"
+            );
         }
     }
 }
@@ -110,7 +119,11 @@ fn roundtrip_stripe() {
             assert!(!comp.is_empty(), "compress {name} order {order:#x}");
             let mut usize_out = 0u32;
             let dec = rans_uncompress_4x16(&comp[..csize as usize], &mut usize_out);
-            assert_eq!(&dec[..usize_out as usize], &input[..], "rt {name} order {order:#x}");
+            assert_eq!(
+                &dec[..usize_out as usize],
+                &input[..],
+                "rt {name} order {order:#x}"
+            );
         }
     }
 }
@@ -173,7 +186,11 @@ mod parity {
             // 2. native uncompress decodes C output
             let mut us = 0u32;
             let nd = rans_uncompress_4x16(&ccomp, &mut us);
-            assert_eq!(&nd[..us as usize], &input[..], "native decode of C {name} order {order}");
+            assert_eq!(
+                &nd[..us as usize],
+                &input[..],
+                "native decode of C {name} order {order}"
+            );
 
             // 3. C uncompress decodes native output
             let cd = c_uncompress(&ncomp);
@@ -264,10 +281,24 @@ fn adversarial_inputs() {
         ("empty", vec![]),
         ("one", vec![42]),
         ("all_same_big", vec![0xAB; 100_000]),
-        ("monotonic_full", (0..2048u32).map(|x| (x & 0xff) as u8).collect()),
-        ("alternating_2sym", (0..4096u32).map(|x| if x & 1 == 0 { b'A' } else { b'B' }).collect()),
+        (
+            "monotonic_full",
+            (0..2048u32).map(|x| (x & 0xff) as u8).collect(),
+        ),
+        (
+            "alternating_2sym",
+            (0..4096u32)
+                .map(|x| if x & 1 == 0 { b'A' } else { b'B' })
+                .collect(),
+        ),
     ];
-    let orders: &[i32] = &[0, 1, RANS_ORDER_PACK, RANS_ORDER_RLE, RANS_ORDER_PACK | RANS_ORDER_RLE];
+    let orders: &[i32] = &[
+        0,
+        1,
+        RANS_ORDER_PACK,
+        RANS_ORDER_RLE,
+        RANS_ORDER_PACK | RANS_ORDER_RLE,
+    ];
     for (name, data) in cases {
         for &order in orders {
             let mut csize = 0u32;
@@ -342,4 +373,3 @@ fn corrupt_decode_no_panic() {
         }
     }
 }
-

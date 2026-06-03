@@ -106,7 +106,6 @@ pub unsafe fn ref_cache_request_handler_c_49_is_hexmd5(str_: *mut c_char) -> c_i
 pub unsafe fn ref_cache_request_handler_c_56_decode_uri(parser: *mut Http_Parser) -> *mut c_char {
     let parser = parser.cast::<HttpParserLayout>();
     let mut uri = (*parser).uri;
-    let querypart: *mut c_char;
     let mut out: *mut c_char;
     let mut last: c_char;
     let mut in_: *const c_char;
@@ -132,7 +131,7 @@ pub unsafe fn ref_cache_request_handler_c_56_decode_uri(parser: *mut Http_Parser
     }
 
     /* Hack off query part */
-    querypart = libc::strchr(uri, b'?' as c_int);
+    let querypart = libc::strchr(uri, b'?' as c_int);
     if !querypart.is_null() {
         *querypart = b'\0' as c_char;
     }
@@ -192,22 +191,20 @@ pub unsafe fn ref_cache_request_handler_c_99_handle_md5(
     // int have_range = 0;
     let parser = parser.cast::<HttpParserLayout>();
     let ref_file = ref_cache_ref_files_c_94_get_ref_file(opts, md5, (*parser).upstream);
-    let status: c_int;
-    let size: libc::off_t;
 
     if ref_file.is_null() {
         ref_cache_transaction_c_277_set_error_response(transact, REF_CACHE_ERR_INTERNAL as c_uint);
         return;
     }
 
-    status = ref_cache_ref_files_c_141_get_ref_status(ref_file);
+    let status = ref_cache_ref_files_c_141_get_ref_status(ref_file);
     if status == REF_NOT_FOUND {
         ref_cache_transaction_c_277_set_error_response(transact, REF_CACHE_ERR_NOT_FOUND as c_uint);
         ref_cache_ref_files_c_193_release_ref_file(ref_file);
         return;
     }
 
-    size = ref_cache_ref_files_c_145_get_ref_size(ref_file);
+    let size = ref_cache_ref_files_c_145_get_ref_size(ref_file);
 
     ref_cache_transaction_c_218_transaction_set_ref(transact, ref_file);
 

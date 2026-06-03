@@ -82,7 +82,11 @@ pub fn arith_compress_bound(size: u32, order: i32) -> u32 {
     (base as u32)
         + 5
         + (if order & X_PACK != 0 { 1 } else { 0 })
-        + (if order & X_RLE != 0 { 1 + 257 * 3 + 4 } else { 0 })
+        + (if order & X_RLE != 0 {
+            1 + 257 * 3 + 4
+        } else {
+            0
+        })
         + (if order & X_STRIPE != 0 {
             (7 + 5 * n) as u32
         } else {
@@ -115,9 +119,9 @@ unsafe fn arith_compress_O0(
 
     let in_slice = unsafe { slice_at(r#in, in_size as usize) };
     let mut m: u32 = 0;
-    for i in 0..in_size as usize {
-        if m < in_slice[i] as u32 {
-            m = in_slice[i] as u32;
+    for &sym in in_slice {
+        if m < sym as u32 {
+            m = sym as u32;
         }
     }
     m += 1;
@@ -131,8 +135,8 @@ unsafe fn arith_compress_O0(
     RC_SetOutputEnd(&mut rc, unsafe { out.add(*out_size as usize) });
     RC_StartEncode(&mut rc);
 
-    for i in 0..in_size as usize {
-        SIMPLE_MODEL_encodeSymbol(&mut byte_model, &mut rc, in_slice[i] as u16);
+    for &sym in in_slice {
+        SIMPLE_MODEL_encodeSymbol(&mut byte_model, &mut rc, sym as u16);
     }
 
     if RC_FinishEncode(&mut rc) < 0 {
@@ -179,8 +183,8 @@ unsafe fn arith_uncompress_O0(
     RC_StartDecode(&mut rc);
 
     let out_slice = unsafe { slice_at_mut(out, out_sz as usize) };
-    for i in 0..out_sz as usize {
-        out_slice[i] = SIMPLE_MODEL_decodeSymbol(&mut byte_model, &mut rc) as u8;
+    for slot in out_slice.iter_mut() {
+        *slot = SIMPLE_MODEL_decodeSymbol(&mut byte_model, &mut rc) as u8;
     }
 
     if RC_FinishDecode(&mut rc) < 0 {
@@ -219,15 +223,15 @@ unsafe fn arith_compress_O1(
 
     let in_slice = unsafe { slice_at(r#in, in_size as usize) };
     let mut m: u32 = 0;
-    for i in 0..in_size as usize {
-        if m < in_slice[i] as u32 {
-            m = in_slice[i] as u32;
+    for &sym in in_slice {
+        if m < sym as u32 {
+            m = sym as u32;
         }
     }
     m += 1;
     unsafe { *out = m as u8 };
-    for i in 0..256usize {
-        SIMPLE_MODEL_init(&mut byte_model[i], m as i32);
+    for model in byte_model.iter_mut() {
+        SIMPLE_MODEL_init(model, m as i32);
     }
 
     let mut rc = RangeCoder::new();
@@ -236,9 +240,9 @@ unsafe fn arith_compress_O1(
     RC_StartEncode(&mut rc);
 
     let mut last: u8 = 0;
-    for i in 0..in_size as usize {
-        SIMPLE_MODEL_encodeSymbol(&mut byte_model[last as usize], &mut rc, in_slice[i] as u16);
-        last = in_slice[i];
+    for &sym in in_slice {
+        SIMPLE_MODEL_encodeSymbol(&mut byte_model[last as usize], &mut rc, sym as u16);
+        last = sym;
     }
 
     if RC_FinishEncode(&mut rc) < 0 {
@@ -277,8 +281,8 @@ unsafe fn arith_uncompress_O1(
 
     let in0 = unsafe { *r#in };
     let m: u32 = if in0 != 0 { in0 as u32 } else { 256 };
-    for i in 0..256usize {
-        SIMPLE_MODEL_init(&mut byte_model[i], m as i32);
+    for model in byte_model.iter_mut() {
+        SIMPLE_MODEL_init(model, m as i32);
     }
 
     RC_SetInput(&mut rc, unsafe { r#in.add(1) }, unsafe {
@@ -288,9 +292,9 @@ unsafe fn arith_uncompress_O1(
 
     let out_slice = unsafe { slice_at_mut(out, out_sz as usize) };
     let mut last: u8 = 0;
-    for i in 0..out_sz as usize {
-        out_slice[i] = SIMPLE_MODEL_decodeSymbol(&mut byte_model[last as usize], &mut rc) as u8;
-        last = out_slice[i];
+    for slot in out_slice.iter_mut() {
+        *slot = SIMPLE_MODEL_decodeSymbol(&mut byte_model[last as usize], &mut rc) as u8;
+        last = *slot;
     }
 
     if RC_FinishDecode(&mut rc) < 0 {
@@ -321,12 +325,7 @@ unsafe fn arith_compress_O2(
 /// `unsigned char *arith_uncompress_O2(...)` (DISABLED: inside `#if 0`)
 // arith_dynamic.c:395
 #[allow(dead_code)]
-unsafe fn arith_uncompress_O2(
-    _in: *mut u8,
-    _in_size: u32,
-    _out: *mut u8,
-    _out_sz: u32,
-) -> *mut u8 {
+unsafe fn arith_uncompress_O2(_in: *mut u8, _in_size: u32, _out: *mut u8, _out_sz: u32) -> *mut u8 {
     unimplemented!("O2 path is disabled via #if 0 in the C source")
 }
 
@@ -355,9 +354,9 @@ unsafe fn arith_compress_O0_RLE(
 
     let in_slice = unsafe { slice_at(r#in, in_size as usize) };
     let mut m: u32 = 0;
-    for i in 0..in_size as usize {
-        if m < in_slice[i] as u32 {
-            m = in_slice[i] as u32;
+    for &sym in in_slice {
+        if m < sym as u32 {
+            m = sym as u32;
         }
     }
     m += 1;
@@ -367,8 +366,8 @@ unsafe fn arith_compress_O0_RLE(
     SIMPLE_MODEL_init(&mut byte_model, m as i32);
 
     let mut run_model: Vec<SimpleModel> = (0..NSYM).map(|_| SimpleModel::new(NSYM)).collect();
-    for i in 0..NSYM {
-        SIMPLE_MODEL_init(&mut run_model[i], MAX_RUN);
+    for model in run_model.iter_mut() {
+        SIMPLE_MODEL_init(model, MAX_RUN);
     }
 
     let mut rc = RangeCoder::new();
@@ -444,8 +443,8 @@ unsafe fn arith_uncompress_O0_RLE(
     SIMPLE_MODEL_init(&mut byte_model, m as i32);
 
     let mut run_model: Vec<SimpleModel> = (0..NSYM).map(|_| SimpleModel::new(NSYM)).collect();
-    for i in 0..NSYM {
-        SIMPLE_MODEL_init(&mut run_model[i], MAX_RUN);
+    for model in run_model.iter_mut() {
+        SIMPLE_MODEL_init(model, MAX_RUN);
     }
 
     RC_SetInput(&mut rc, unsafe { r#in.add(1) }, unsafe {
@@ -513,22 +512,22 @@ unsafe fn arith_compress_O1_RLE(
 
     let in_slice = unsafe { slice_at(r#in, in_size as usize) };
     let mut m: u32 = 0;
-    for i in 0..in_size as usize {
-        if m < in_slice[i] as u32 {
-            m = in_slice[i] as u32;
+    for &sym in in_slice {
+        if m < sym as u32 {
+            m = sym as u32;
         }
     }
     m += 1;
     unsafe { *out = m as u8 };
 
     let mut byte_model: Vec<SimpleModel> = (0..256).map(|_| SimpleModel::new(256)).collect();
-    for i in 0..256usize {
-        SIMPLE_MODEL_init(&mut byte_model[i], m as i32);
+    for model in byte_model.iter_mut() {
+        SIMPLE_MODEL_init(model, m as i32);
     }
 
     let mut run_model: Vec<SimpleModel> = (0..NSYM).map(|_| SimpleModel::new(NSYM)).collect();
-    for i in 0..NSYM {
-        SIMPLE_MODEL_init(&mut run_model[i], MAX_RUN);
+    for model in run_model.iter_mut() {
+        SIMPLE_MODEL_init(model, MAX_RUN);
     }
 
     let mut rc = RangeCoder::new();
@@ -601,13 +600,13 @@ unsafe fn arith_uncompress_O1_RLE(
     }
 
     let mut byte_model: Vec<SimpleModel> = (0..256).map(|_| SimpleModel::new(256)).collect();
-    for i in 0..256usize {
-        SIMPLE_MODEL_init(&mut byte_model[i], m as i32);
+    for model in byte_model.iter_mut() {
+        SIMPLE_MODEL_init(model, m as i32);
     }
 
     let mut run_model: Vec<SimpleModel> = (0..NSYM).map(|_| SimpleModel::new(NSYM)).collect();
-    for i in 0..NSYM {
-        SIMPLE_MODEL_init(&mut run_model[i], MAX_RUN);
+    for model in run_model.iter_mut() {
+        SIMPLE_MODEL_init(model, MAX_RUN);
     }
 
     RC_SetInput(&mut rc, unsafe { r#in.add(1) }, unsafe {
@@ -689,7 +688,8 @@ unsafe fn arith_compress_to_raw(
     if order & X_CAT != 0 {
         unsafe { *out = X_CAT as u8 };
         let out1 = unsafe { slice_at_mut(out.add(1), (out_end as usize) - (out as usize) - 1) };
-        c_meta_len = 1 + var_put_u32(out1, Some(out_end as usize - out as usize - 1), in_size) as u32;
+        c_meta_len =
+            1 + var_put_u32(out1, Some(out_end as usize - out as usize - 1), in_size) as u32;
         if c_meta_len + in_size > *out_size {
             *out_size = 0;
             return std::ptr::null_mut();
@@ -867,10 +867,9 @@ unsafe fn arith_compress_to_raw(
     c_meta_len = 1;
 
     if no_size == 0 {
-        let outm = unsafe {
-            slice_at_mut(out.add(1), (out_end as usize) - (out as usize) - 1)
-        };
-        c_meta_len += var_put_u32(outm, Some((out_end as usize) - (out as usize) - 1), in_size) as u32;
+        let outm = unsafe { slice_at_mut(out.add(1), (out_end as usize) - (out as usize) - 1) };
+        c_meta_len +=
+            var_put_u32(outm, Some((out_end as usize) - (out as usize) - 1), in_size) as u32;
     }
 
     order &= 0x3;
@@ -885,9 +884,19 @@ unsafe fn arith_compress_to_raw(
         }
         let in_slice = unsafe { slice_at(r#in, in_size as usize) };
         // out+c_meta_len has at least 256 bytes for meta.
-        let out_meta =
-            unsafe { slice_at_mut(out.add(c_meta_len as usize), (out_end as usize) - (out as usize) - c_meta_len as usize) };
-        let packed_vec = hts_pack(in_slice, in_size as i64, out_meta, &mut pmeta_len, &mut packed_len);
+        let out_meta = unsafe {
+            slice_at_mut(
+                out.add(c_meta_len as usize),
+                (out_end as usize) - (out as usize) - c_meta_len as usize,
+            )
+        };
+        let packed_vec = hts_pack(
+            in_slice,
+            in_size as i64,
+            out_meta,
+            &mut pmeta_len,
+            &mut packed_len,
+        );
         match packed_vec {
             None => {
                 unsafe { *out &= !X_PACK as u8 };
@@ -973,7 +982,8 @@ unsafe fn arith_compress_to_raw(
             *out &= !(3 | X_EXT) as u8; // no entropy encoding, but keep e.g. PACK
             *out |= (X_CAT | no_size) as u8;
         }
-        if (unsafe { out.add(c_meta_len as usize + in_size as usize) } as usize) > out_end as usize {
+        if (unsafe { out.add(c_meta_len as usize + in_size as usize) } as usize) > out_end as usize
+        {
             if !packed.is_null() {
                 unsafe { c_compat::free(packed as *mut c_void) };
             }
@@ -1017,8 +1027,17 @@ unsafe fn arith_uncompress_to_raw(
         let mut c_meta_len: u32 = 1;
         let mut clen_tot: u64 = 0;
 
-        let inm = unsafe { slice_at(r#in.add(c_meta_len as usize), (in_end as usize) - (r#in as usize) - c_meta_len as usize) };
-        c_meta_len += var_get_u32(inm, Some((in_end as usize) - (r#in as usize) - c_meta_len as usize), &mut ulen) as u32;
+        let inm = unsafe {
+            slice_at(
+                r#in.add(c_meta_len as usize),
+                (in_end as usize) - (r#in as usize) - c_meta_len as usize,
+            )
+        };
+        c_meta_len += var_get_u32(
+            inm,
+            Some((in_end as usize) - (r#in as usize) - c_meta_len as usize),
+            &mut ulen,
+        ) as u32;
         if c_meta_len >= in_size {
             return std::ptr::null_mut();
         }
@@ -1050,7 +1069,11 @@ unsafe fn arith_uncompress_to_raw(
 
         for i in 0..n as usize {
             ulen_n[i] = ulen / n + ((ulen % n) > i as u32) as u32;
-            idx_n[i] = if i != 0 { idx_n[i - 1] + ulen_n[i - 1] } else { 0 };
+            idx_n[i] = if i != 0 {
+                idx_n[i - 1] + ulen_n[i - 1]
+            } else {
+                0
+            };
             let inm = unsafe {
                 slice_at(
                     r#in.add(c_meta_len as usize),
@@ -1196,7 +1219,8 @@ unsafe fn arith_uncompress_to_raw(
     let mut unpacked_sz: u64 = 0;
     if do_pack != 0 {
         let inm = unsafe { slice_at(r#in, in_size as usize) };
-        c_meta_size = hts_unpack_meta(inm, in_size, *out_size as u64, &mut map, &mut npacked_sym) as u32;
+        c_meta_size =
+            hts_unpack_meta(inm, in_size, *out_size as u64, &mut map, &mut npacked_sym) as u32;
         if c_meta_size == 0 {
             if !tmp_free.is_null() {
                 unsafe { c_compat::free(tmp_free as *mut c_void) };
@@ -1335,7 +1359,13 @@ pub fn arith_compress_to(
     };
     let mut local_sz = if out_ptr.is_null() { 0 } else { out_cap };
     let r = unsafe {
-        arith_compress_to_raw(r#in.as_ptr(), r#in.len() as u32, out_ptr, &mut local_sz, order)
+        arith_compress_to_raw(
+            r#in.as_ptr(),
+            r#in.len() as u32,
+            out_ptr,
+            &mut local_sz,
+            order,
+        )
     };
     *out_size = local_sz;
     finalize_output(r, local_sz, out_ptr)
@@ -1363,7 +1393,12 @@ pub fn arith_uncompress_to(r#in: &[u8], out: Option<&mut [u8]>, out_size: &mut u
     };
     let mut local_sz = if out_ptr.is_null() { 0 } else { out_cap };
     let r = unsafe {
-        arith_uncompress_to_raw(in_buf.as_mut_ptr(), in_buf.len() as u32, out_ptr, &mut local_sz)
+        arith_uncompress_to_raw(
+            in_buf.as_mut_ptr(),
+            in_buf.len() as u32,
+            out_ptr,
+            &mut local_sz,
+        )
     };
     *out_size = local_sz;
     finalize_output(r, local_sz, out_ptr)

@@ -63,7 +63,7 @@ struct HFileLibcurlAuthToken {
     token: *mut c_char,
     expiry: libc::time_t,
     failed: c_int,
-    lock: libc::pthread_mutex_t,
+    lock: crate::htslib_rs::c_compat::pthread_mutex_t,
 }
 
 #[repr(C)]
@@ -103,8 +103,11 @@ type HFileLibcurlRedirectCallback =
     unsafe extern "C" fn(*mut c_void, libc::c_long, *mut kstring_t, *mut kstring_t) -> c_int;
 type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> c_int;
-type HFileVOpenFn =
-    unsafe extern "C" fn(*const c_char, *const c_char, *mut crate::htslib_rs::c_compat::__va_list_tag) -> *mut hFILE;
+type HFileVOpenFn = unsafe extern "C" fn(
+    *const c_char,
+    *const c_char,
+    *mut crate::htslib_rs::c_compat::__va_list_tag,
+) -> *mut hFILE;
 
 #[repr(C)]
 struct HFileSchemeHandlerLayout {
@@ -197,8 +200,10 @@ struct HFileLibcurlHeaderPrefix {
 // SAFETY: see the per-static notes above. Do not promote to a `Mutex<T>`:
 // that would gratuitously diverge from the C ABI exposed via
 // `hts_sys::*` and break the parity tests.
-static mut HFILE_LIBCURL_SHARE_LOCK: libc::pthread_mutex_t = libc::PTHREAD_MUTEX_INITIALIZER;
-static mut HFILE_LIBCURL_AUTH_LOCK: libc::pthread_mutex_t = libc::PTHREAD_MUTEX_INITIALIZER;
+static mut HFILE_LIBCURL_SHARE_LOCK: crate::htslib_rs::c_compat::pthread_mutex_t =
+    crate::htslib_rs::c_compat::PTHREAD_MUTEX_INITIALIZER;
+static mut HFILE_LIBCURL_AUTH_LOCK: crate::htslib_rs::c_compat::pthread_mutex_t =
+    crate::htslib_rs::c_compat::PTHREAD_MUTEX_INITIALIZER;
 static mut HFILE_LIBCURL_USERAGENT: kstring_t = kstring_t {
     l: 0,
     m: 0,
@@ -500,7 +505,9 @@ pub unsafe extern "C" fn hfile_libcurl_c_309_share_lock(
     _access: c_int,
     _userptr: *mut c_void,
 ) {
-    libc::pthread_mutex_lock(std::ptr::addr_of_mut!(HFILE_LIBCURL_SHARE_LOCK));
+    crate::htslib_rs::c_compat::pthread_mutex_lock(std::ptr::addr_of_mut!(
+        HFILE_LIBCURL_SHARE_LOCK
+    ));
 }
 
 // original: share_unlock (htslib/hfile_libcurl.c:314)
@@ -509,7 +516,9 @@ pub unsafe extern "C" fn hfile_libcurl_c_314_share_unlock(
     _data: c_int,
     _userptr: *mut c_void,
 ) {
-    libc::pthread_mutex_unlock(std::ptr::addr_of_mut!(HFILE_LIBCURL_SHARE_LOCK));
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(std::ptr::addr_of_mut!(
+        HFILE_LIBCURL_SHARE_LOCK
+    ));
 }
 
 // original: free_auth (htslib/hfile_libcurl.c:318)
@@ -518,7 +527,7 @@ pub unsafe fn hfile_libcurl_c_318_free_auth(tok: *mut c_void) {
     if tok.is_null() {
         return;
     }
-    if libc::pthread_mutex_destroy(&mut (*tok).lock) != 0 {
+    if crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut (*tok).lock) != 0 {
         libc::abort();
     }
     libc::free((*tok).path.cast());
@@ -766,7 +775,7 @@ pub unsafe fn hfile_libcurl_c_454_read_auth_json(tok: *mut c_void, auth_fp: *mut
             if exp < 0 {
                 exp = 0;
             }
-            (*tok).expiry = libc::time(std::ptr::null_mut()) + exp;
+            (*tok).expiry = libc::time(std::ptr::null_mut()) + exp as libc::time_t;
         } else {
             (*tok).expiry = 0;
         }
@@ -817,14 +826,14 @@ pub unsafe fn hfile_libcurl_c_515_read_auth_plain(tok: *mut c_void, auth_fp: *mu
         end = end.add(1);
     }
 
-    if end > start {
-        if crate::htslib_rs::hts::kputs(c"Authorization: Bearer ".as_ptr(), &mut token) < 0
-            || crate::htslib_rs::hts::kputsn(start, end.offset_from(start) as usize, &mut token) < 0
-        {
-            libc::free(line.s.cast());
-            libc::free(token.s.cast());
-            return -1;
-        }
+    if end > start
+        && (crate::htslib_rs::hts::kputs(c"Authorization: Bearer ".as_ptr(), &mut token) < 0
+            || crate::htslib_rs::hts::kputsn(start, end.offset_from(start) as usize, &mut token)
+                < 0)
+    {
+        libc::free(line.s.cast());
+        libc::free(token.s.cast());
+        return -1;
     }
 
     libc::free((*tok).token.cast());
@@ -896,14 +905,14 @@ pub unsafe fn hfile_libcurl_c_587_add_auth_header(fp: *mut c_void) -> c_int {
         return 0;
     }
 
-    libc::pthread_mutex_lock(&mut (*(*fp).headers.auth).lock);
+    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*(*fp).headers.auth).lock);
     if hfile_libcurl_c_543_renew_auth_token((*fp).headers.auth.cast(), &mut changed) < 0 {
-        libc::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
         return -1;
     }
 
     if changed == 0 && (*fp).headers.auth_hdr_num > 0 {
-        libc::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
         return 0;
     }
 
@@ -916,7 +925,7 @@ pub unsafe fn hfile_libcurl_c_587_add_auth_header(fp: *mut c_void) -> c_int {
         };
         let idx = ((*fp).headers.auth_hdr_num - 1) as usize;
         if !header.is_null() && header_copy.is_null() {
-            libc::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
             return -1;
         }
 
@@ -955,13 +964,13 @@ pub unsafe fn hfile_libcurl_c_587_add_auth_header(fp: *mut c_void) -> c_int {
             1,
         ) < 0
         {
-            libc::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
             return -1;
         }
         (*fp).headers.auth_hdr_num = (*fp).headers.extra.num as c_int;
     }
 
-    libc::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
     0
 }
 
@@ -1012,7 +1021,7 @@ pub unsafe fn hfile_libcurl_c_650_get_auth_token(fp: *mut c_void, url: *const c_
         return -1;
     }
 
-    libc::pthread_mutex_lock(std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_LOCK));
+    crate::htslib_rs::c_compat::pthread_mutex_lock(std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_LOCK));
     if HFILE_LIBCURL_AUTH_MAP.is_null() {
         HFILE_LIBCURL_AUTH_MAP = Box::into_raw(Box::new(Vec::new()));
     }
@@ -1028,7 +1037,10 @@ pub unsafe fn hfile_libcurl_c_650_get_auth_token(fp: *mut c_void, url: *const c_
     if tok.is_null() {
         tok = libc::calloc(1, std::mem::size_of::<HFileLibcurlAuthToken>())
             .cast::<HFileLibcurlAuthToken>();
-        if !tok.is_null() && libc::pthread_mutex_init(&mut (*tok).lock, std::ptr::null()) != 0 {
+        if !tok.is_null()
+            && crate::htslib_rs::c_compat::pthread_mutex_init(&mut (*tok).lock, std::ptr::null())
+                != 0
+        {
             libc::free(tok.cast());
             tok = std::ptr::null_mut();
         }
@@ -1038,7 +1050,9 @@ pub unsafe fn hfile_libcurl_c_650_get_auth_token(fp: *mut c_void, url: *const c_
             map.push(tok as usize);
         }
     }
-    libc::pthread_mutex_unlock(std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_LOCK));
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(std::ptr::addr_of_mut!(
+        HFILE_LIBCURL_AUTH_LOCK
+    ));
 
     (*fp).headers.auth = tok;
     libc::free(name.s.cast());
@@ -1169,10 +1183,10 @@ pub unsafe fn hfile_libcurl_c_821_refresh_retry_config() {
 // original: retry_sleep (htslib/hfile_libcurl.c:836)
 pub unsafe fn hfile_libcurl_c_836_retry_sleep(delay_ms: libc::c_long) {
     let ts = libc::timespec {
-        tv_sec: delay_ms / 1000,
-        tv_nsec: (delay_ms % 1000) * 1_000_000,
+        tv_sec: (delay_ms / 1000) as _,
+        tv_nsec: ((delay_ms % 1000) * 1_000_000) as _,
     };
-    libc::nanosleep(&ts, std::ptr::null_mut());
+    crate::htslib_rs::c_compat::nanosleep(&ts, std::ptr::null_mut());
 }
 
 // original: retry_reconnect (htslib/hfile_libcurl.c:848)
@@ -1249,9 +1263,12 @@ pub unsafe extern "C" fn hfile_libcurl_c_876_libcurl_read(
             }
         }
 
-        while ((*fp).flags & HFILE_LIBCURL_PAUSED) == 0
-            && ((*fp).flags & HFILE_LIBCURL_FINISHED) == 0
-        {
+        loop {
+            if !(((*fp).flags & HFILE_LIBCURL_PAUSED) == 0
+                && ((*fp).flags & HFILE_LIBCURL_FINISHED) == 0)
+            {
+                break;
+            }
             if hfile_libcurl_c_736_wait_perform(fp.cast()) < 0 {
                 return -1;
             }
@@ -1347,7 +1364,12 @@ pub unsafe extern "C" fn hfile_libcurl_c_1024_libcurl_write(
             hfile_libcurl_c_153_easy_errno((*fp).easy, err);
         return -1;
     }
-    while ((*fp).flags & HFILE_LIBCURL_PAUSED) == 0 && ((*fp).flags & HFILE_LIBCURL_FINISHED) == 0 {
+    loop {
+        if !(((*fp).flags & HFILE_LIBCURL_PAUSED) == 0
+            && ((*fp).flags & HFILE_LIBCURL_FINISHED) == 0)
+        {
+            break;
+        }
         if hfile_libcurl_c_736_wait_perform(fp.cast()) < 0 {
             return -1;
         }
@@ -1831,7 +1853,7 @@ unsafe fn hfile_libcurl_open_once(
         return std::ptr::null_mut();
     }
     if !(*fp).headers.redirect.is_null() {
-        if response >= 300 && response < 400 {
+        if (300..400).contains(&response) {
             let mut new_url: kstring_t = std::mem::zeroed();
             let redirect: HFileLibcurlRedirectCallback =
                 std::mem::transmute((*fp).headers.redirect);
@@ -2037,7 +2059,8 @@ pub unsafe fn hfile_libcurl_c_1554_parse_va_list(
         } else if libc::strcmp(argtype, c"httphdr_callback_data".as_ptr()) == 0 {
             (*headers).callback_data = hfile_libcurl_va_arg_word(args) as *mut c_void;
         } else if libc::strcmp(argtype, c"va_list".as_ptr()) == 0 {
-            let args2 = hfile_libcurl_va_arg_word(args) as *mut crate::htslib_rs::c_compat::__va_list_tag;
+            let args2 =
+                hfile_libcurl_va_arg_word(args) as *mut crate::htslib_rs::c_compat::__va_list_tag;
             if !args2.is_null() && hfile_libcurl_c_1554_parse_va_list(headers, args2) < 0 {
                 return -1;
             }
@@ -2230,7 +2253,8 @@ mod tests {
         unsafe {
             let mut headers: HFileLibcurlHeaders = std::mem::zeroed();
             let response = 0 as libc::c_long;
-            let callback_data = 0x1234usize as *mut c_void;
+            let mut callback_data_marker = ();
+            let callback_data = (&mut callback_data_marker as *mut ()).cast::<c_void>();
             let words = [
                 c"httphdr".as_ptr() as usize,
                 c"Authorization: Bearer token".as_ptr() as usize,
@@ -2454,10 +2478,14 @@ mod tests {
             handles.push(thread::spawn(move || {
                 barrier.wait();
                 unsafe {
-                    libc::pthread_mutex_lock(std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_LOCK));
+                    crate::htslib_rs::c_compat::pthread_mutex_lock(std::ptr::addr_of_mut!(
+                        HFILE_LIBCURL_AUTH_LOCK
+                    ));
                     let v = counter.load(Ordering::Relaxed);
                     counter.store(v + 1, Ordering::Relaxed);
-                    libc::pthread_mutex_unlock(std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_LOCK));
+                    crate::htslib_rs::c_compat::pthread_mutex_unlock(std::ptr::addr_of_mut!(
+                        HFILE_LIBCURL_AUTH_LOCK
+                    ));
                 }
             }));
         }

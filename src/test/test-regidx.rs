@@ -85,7 +85,10 @@ pub unsafe fn test_test_regidx_c_106_test_sequential_access() {
         ptr::null_mut(),
     );
     if idx.is_null() {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"init failed\n".as_ptr());
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"init failed\n".as_ptr(),
+        );
         libc::exit(-1);
     }
 
@@ -174,7 +177,10 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
         ptr::null_mut(),
     );
     if idx.is_null() {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"init failed\n".as_ptr());
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"init failed\n".as_ptr(),
+        );
         libc::exit(-1);
     }
 
@@ -369,7 +375,10 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
         ptr::null_mut(),
     );
     if idx.is_null() {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"init failed\n".as_ptr());
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"init failed\n".as_ptr(),
+        );
         libc::exit(-1);
     }
 
@@ -518,7 +527,11 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
         str_.l = 0;
         kputsn(beg_p, end_p.offset_from(beg_p) as usize, &mut str_);
         if VERBOSE >= 2 {
-            libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"insert: %s\n".as_ptr(), str_.s);
+            libc::fprintf(
+                crate::htslib_rs::c_compat::stderr.cast(),
+                c"insert: %s\n".as_ptr(),
+                str_.s,
+            );
         }
         if regidx_c_198_regidx_insert(idx, str_.s) != 0 {
             libc::fprintf(
@@ -657,7 +670,10 @@ type set_line_f = unsafe fn(*mut c_char, usize, *mut c_char, c_int, c_int);
 pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_parse_f) {
     let idx = regidx_c_246_regidx_init(ptr::null(), parse, None, 0, ptr::null_mut());
     if idx.is_null() {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"init failed\n".as_ptr());
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"init failed\n".as_ptr(),
+        );
         libc::exit(-1);
     }
 
@@ -1017,7 +1033,10 @@ pub unsafe fn test_test_regidx_c_415_usage() -> ! {
         crate::htslib_rs::c_compat::stderr.cast(),
         c"Usage: test-regidx [OPTIONS]\n".as_ptr(),
     );
-    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Options:\n".as_ptr());
+    libc::fprintf(
+        crate::htslib_rs::c_compat::stderr.cast(),
+        c"Options:\n".as_ptr(),
+    );
     libc::fprintf(
         crate::htslib_rs::c_compat::stderr.cast(),
         c"   -h, --help          this help message\n".as_ptr(),
@@ -1089,7 +1108,10 @@ pub unsafe fn test_test_regidx_c_426_main(argc: c_int, argv: *mut *mut c_char) -
     test_test_regidx_c_106_test_sequential_access();
 
     if VERBOSE >= 1 {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Testing TAB\n".as_ptr());
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"Testing TAB\n".as_ptr(),
+        );
     }
     test_test_regidx_c_322_test(
         test_test_regidx_c_311_create_line_tab,
@@ -1097,7 +1119,10 @@ pub unsafe fn test_test_regidx_c_426_main(argc: c_int, argv: *mut *mut c_char) -
     );
 
     if VERBOSE >= 1 {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Testing REG\n".as_ptr());
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"Testing REG\n".as_ptr(),
+        );
     }
     test_test_regidx_c_322_test(
         test_test_regidx_c_315_create_line_reg,
@@ -1105,7 +1130,10 @@ pub unsafe fn test_test_regidx_c_426_main(argc: c_int, argv: *mut *mut c_char) -
     );
 
     if VERBOSE >= 1 {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Testing BED\n".as_ptr());
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"Testing BED\n".as_ptr(),
+        );
     }
     test_test_regidx_c_322_test(
         test_test_regidx_c_307_create_line_bed,
@@ -1113,7 +1141,10 @@ pub unsafe fn test_test_regidx_c_426_main(argc: c_int, argv: *mut *mut c_char) -
     );
 
     if VERBOSE >= 1 {
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"Testing custom payload\n".as_ptr());
+        libc::fprintf(
+            crate::htslib_rs::c_compat::stderr.cast(),
+            c"Testing custom payload\n".as_ptr(),
+        );
     }
     test_test_regidx_c_143_test_custom_payload();
 

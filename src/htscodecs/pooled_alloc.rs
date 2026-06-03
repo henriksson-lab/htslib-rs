@@ -108,7 +108,7 @@ pub fn new_pool(p: &mut pool_alloc_t) -> *mut pool_t {
 
 /// `static void pool_destroy(pool_alloc_t *p)`
 // pooled_alloc.h:101
-pub fn pool_destroy(p: *mut pool_alloc_t) {
+pub(crate) fn pool_destroy(p: *mut pool_alloc_t) {
     if p.is_null() {
         return;
     }
