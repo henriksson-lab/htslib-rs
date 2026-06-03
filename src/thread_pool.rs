@@ -1167,13 +1167,34 @@ mod tests {
     static SQUAREB_DISPATCH_FAILURES: AtomicUsize = AtomicUsize::new(0);
     static UNORDERED_SQUARE_JOBS: AtomicUsize = AtomicUsize::new(0);
     static WORKER_ID_FAILURES: AtomicUsize = AtomicUsize::new(0);
+    static TEST_FAILURE_MARKER: u8 = 0;
+    static TEST_MARKER_01: u8 = 0;
+    static TEST_MARKER_02: u8 = 0;
+    static TEST_MARKER_11: u8 = 0;
+    static TEST_MARKER_22: u8 = 0;
+    static TEST_MARKER_55: u8 = 0;
+    static TEST_MARKER_77: u8 = 0;
+    static TEST_MARKER_1234: u8 = 0;
+
+    fn static_marker_ptr(marker: &'static u8) -> *mut c_void {
+        std::ptr::from_ref(marker).cast::<c_void>().cast_mut()
+    }
 
     fn test_failure_return() -> *mut c_void {
-        ptr::dangling_mut::<c_void>()
+        static_marker_ptr(&TEST_FAILURE_MARKER)
     }
 
     fn test_marker_ptr(value: usize) -> *mut c_void {
-        value as *mut c_void
+        match value {
+            0x01 => static_marker_ptr(&TEST_MARKER_01),
+            0x02 => static_marker_ptr(&TEST_MARKER_02),
+            0x11 => static_marker_ptr(&TEST_MARKER_11),
+            0x22 => static_marker_ptr(&TEST_MARKER_22),
+            0x55 => static_marker_ptr(&TEST_MARKER_55),
+            0x77 => static_marker_ptr(&TEST_MARKER_77),
+            0x1234 => static_marker_ptr(&TEST_MARKER_1234),
+            _ => panic!("unknown test marker {value:#x}"),
+        }
     }
 
     #[repr(C)]

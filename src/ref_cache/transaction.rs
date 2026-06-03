@@ -11,7 +11,7 @@ use super::ref_files::{
     ref_cache_ref_files_c_185_set_ref_complete, ref_cache_ref_files_c_193_release_ref_file,
     RefFile,
 };
-use super::sendfile_wrap::ref_cache_sendfile_wrap_c_55_sendfile_wrap;
+use super::sendfile_wrap::ref_cache_sendfile_wrap;
 use super::server::{
     ref_cache_server_c_395_queue_transaction_write, ref_cache_server_c_840_client_host, Client,
 };
@@ -36,6 +36,14 @@ const REF_CACHE_WRITE_BLOCKED: c_int = 0;
 const REF_CACHE_WRITE_BLOCKED_UPSTREAM: c_int = 1;
 const REF_CACHE_WRITE_COMPLETE: c_int = 3;
 const REF_CACHE_WRITE_ERROR: c_int = 5;
+
+fn ref_cache_errno_is_would_block(errno: c_int) -> bool {
+    errno == libc::EAGAIN || (libc::EWOULDBLOCK != libc::EAGAIN && errno == libc::EWOULDBLOCK)
+}
+
+fn ref_cache_errno_is_transient_write(errno: c_int) -> bool {
+    ref_cache_errno_is_would_block(errno) || errno == libc::EINTR
+}
 
 #[repr(C)]
 struct HttpParserLayout {
@@ -550,7 +558,7 @@ pub unsafe fn ref_cache_transaction_c_460_send_file(
 ) -> libc::ssize_t {
     let transact = transact.cast::<TransactionPrefixLayout>();
     assert!(end >= (*transact).fd_sent);
-    ref_cache_sendfile_wrap_c_55_sendfile_wrap(
+    ref_cache_sendfile_wrap(
         out_fd,
         in_fd,
         &mut (*transact).fd_sent,
@@ -578,7 +586,7 @@ pub unsafe fn ref_cache_transaction_c_556_transaction_send_data(
         );
         if bytes < 0 {
             let errno = *crate::htslib_rs::c_compat::__errno_location();
-            if errno != libc::EAGAIN || errno != libc::EWOULDBLOCK || errno != libc::EINTR {
+            if !ref_cache_errno_is_transient_write(errno) {
                 libc::fprintf(
                     crate::htslib_rs::ref_cache::compat::stderr(),
                     c"Error from fd #%d : %s\n".as_ptr(),
@@ -622,7 +630,7 @@ pub unsafe fn ref_cache_transaction_c_556_transaction_send_data(
             let sent = ref_cache_transaction_c_460_send_file(transact.cast(), fd, ref_fd, end);
             if sent < 0 {
                 let errno = *crate::htslib_rs::c_compat::__errno_location();
-                if errno != libc::EAGAIN || errno != libc::EWOULDBLOCK {
+                if !ref_cache_errno_is_would_block(errno) {
                     libc::fprintf(
                         crate::htslib_rs::ref_cache::compat::stderr(),
                         c"sendfile fd #%d : %s\n".as_ptr(),
@@ -924,4 +932,20 @@ pub unsafe fn ref_cache_transaction_c_769_make_log_message(
         },
     );
     bytes as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn errno_predicates_treat_nonblocking_aliases_as_transient() {
+        assert!(ref_cache_errno_is_would_block(libc::EAGAIN));
+        assert!(ref_cache_errno_is_would_block(libc::EWOULDBLOCK));
+        assert!(ref_cache_errno_is_transient_write(libc::EAGAIN));
+        assert!(ref_cache_errno_is_transient_write(libc::EWOULDBLOCK));
+        assert!(ref_cache_errno_is_transient_write(libc::EINTR));
+        assert!(!ref_cache_errno_is_would_block(libc::EBADF));
+        assert!(!ref_cache_errno_is_transient_write(libc::EBADF));
+    }
 }

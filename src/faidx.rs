@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     ffi::{c_char, c_int, c_void, CStr},
     fs,
-    io::Write,
+    io::{BufWriter, Write},
     ptr,
 };
 
@@ -293,7 +293,12 @@ fn is_fai_index_space(b: u8) -> bool {
 }
 
 unsafe fn fai_save(fai: *const faidx_t, path: &std::path::Path) -> c_int {
-    let mut out = Vec::new();
+    let file = match fs::File::create(path) {
+        Ok(file) => file,
+        Err(_) => return -1,
+    };
+    let mut out = BufWriter::new(file);
+
     for i in 0..(*fai).n {
         let name = *(*fai).name.add(i as usize);
         let k = kh_get_s((*fai).hash, name);
@@ -301,60 +306,36 @@ unsafe fn fai_save(fai: *const faidx_t, path: &std::path::Path) -> c_int {
             return -1;
         }
         let val = *(*(*fai).hash).vals.add(k as usize);
-        out.extend_from_slice(CStr::from_ptr(name).to_bytes());
+
+        if out.write_all(CStr::from_ptr(name).to_bytes()).is_err() {
+            return -1;
+        }
         if (*fai).format == FAI_FASTQ as c_int {
-            out.extend_from_slice(
-                format!(
-                    "\t{}\t{}\t{}\t{}\t{}\n",
-                    val.len, val.seq_offset, val.line_blen, val.line_len, val.qual_offset
-                )
-                .as_bytes(),
-            );
-        } else {
-            out.extend_from_slice(
-                format!(
-                    "\t{}\t{}\t{}\t{}\n",
-                    val.len, val.seq_offset, val.line_blen, val.line_len
-                )
-                .as_bytes(),
-            );
+            if writeln!(
+                out,
+                "\t{}\t{}\t{}\t{}\t{}",
+                val.len, val.seq_offset, val.line_blen, val.line_len, val.qual_offset
+            )
+            .is_err()
+            {
+                return -1;
+            }
+        } else if writeln!(
+            out,
+            "\t{}\t{}\t{}\t{}",
+            val.len, val.seq_offset, val.line_blen, val.line_len
+        )
+        .is_err()
+        {
+            return -1;
         }
     }
-    fs::write(path, out).map(|_| 0).unwrap_or(-1)
+
+    out.flush().map(|_| 0).unwrap_or(-1)
 }
 
 unsafe fn fai_build_core(bgzf: *mut BGZF) -> *mut faidx_t {
-    let pathless = ptr::null();
-    let _ = bgzf_utell(bgzf);
-    let data = read_all_bgzf(bgzf);
-    let Some(data) = data else {
-        return ptr::null_mut();
-    };
-    let Some((rows, format)) = parse_fasta_fastq_index_rows(&data) else {
-        return ptr::null_mut();
-    };
-    match fai_from_rows(pathless, rows, format) {
-        Some(fai) => {
-            (*fai).bgzf = ptr::null_mut();
-            fai
-        }
-        None => ptr::null_mut(),
-    }
-}
-
-unsafe fn read_all_bgzf(bgzf: *mut BGZF) -> Option<Vec<u8>> {
-    let mut data = Vec::new();
-    loop {
-        let c = bgzf_getc(bgzf);
-        if c == -1 {
-            break;
-        }
-        if c < 0 {
-            return None;
-        }
-        data.push(c as u8);
-    }
-    Some(data)
+    faidx_c_132_fai_build_core(bgzf)
 }
 
 unsafe fn fai_insert_index(
@@ -688,121 +669,32 @@ unsafe fn fai_build_plain_fasta(fn_: *const c_char, fnfai: *const c_char) -> Opt
         path_from_bytes(CStr::from_ptr(fnfai).to_bytes())
     };
 
-    let data = fs::read(&fasta_path).ok()?;
-    let mut rows: FaidxRows = Vec::new();
-    let mut i = 0usize;
-    while i < data.len() {
-        let c = data[i];
-        if c == b'\n' || c == b'\r' {
-            i += 1;
-            continue;
-        }
-        if c != b'>' {
-            return None;
-        }
-        i += 1;
-        while i < data.len() && data[i].is_ascii_whitespace() && data[i] != b'\n' {
-            i += 1;
-        }
-        let name_start = i;
-        while i < data.len() && !data[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        let name = data[name_start..i].to_vec();
-        while i < data.len() && data[i] != b'\n' {
-            i += 1;
-        }
-        if i < data.len() {
-            i += 1;
-        }
-        if i >= data.len() {
-            return None;
-        }
-        let seq_offset = i as u64;
-        let mut seq_len = 0u64;
-        let mut line_len = 0u32;
-        let mut line_blen = 0u32;
-        let mut final_short_line = false;
-
-        while i < data.len() {
-            if data[i] == b'>' {
-                break;
-            }
-            if data[i] == b'\n' || data[i] == b'\r' {
-                i += 1;
-                continue;
-            }
-            if final_short_line {
-                return None;
-            }
-
-            let line_start = i;
-            let mut ll = 0u32;
-            let mut bl = 0u32;
-            while i < data.len() && data[i] != b'\n' {
-                ll += 1;
-                if !data[i].is_ascii_whitespace() {
-                    bl += 1;
-                }
-                i += 1;
-            }
-            if i < data.len() && data[i] == b'\n' {
-                ll += 1;
-                i += 1;
-            }
-            if bl == 0 {
-                if seq_len == 0 {
-                    return None;
-                }
-                break;
-            }
-            seq_len += bl as u64;
-            if line_len == 0 {
-                line_len = ll;
-                line_blen = bl;
-            } else if line_len < ll {
-                return None;
-            } else if line_len > ll {
-                final_short_line = true;
-            }
-            if line_start == i {
-                return None;
-            }
-        }
-
-        if seq_len == 0 || line_len == 0 || line_blen == 0 {
-            return None;
-        }
-        rows.push((
-            name,
-            faidx1_t {
-                id: rows.len() as c_int,
-                line_len,
-                line_blen,
-                len: seq_len,
-                seq_offset,
-                qual_offset: 0,
-            },
-        ));
-    }
-
-    if rows.is_empty() {
+    let bgzf = bgzf_open(fn_, c"r".as_ptr());
+    if bgzf.is_null() {
         return None;
     }
 
-    let mut out = Vec::new();
-    for (name, val) in &rows {
-        out.extend_from_slice(name);
-        writeln!(
-            &mut out,
-            "\t{}\t{}\t{}\t{}",
-            val.len, val.seq_offset, val.line_blen, val.line_len
-        )
-        .ok()?;
+    let fai = fai_build_core(bgzf);
+    if fai.is_null() {
+        bgzf_close(bgzf);
+        return None;
     }
-    fs::write(&fai_path, out).ok()?;
+    if bgzf_close(bgzf) < 0 {
+        fai_destroy(fai);
+        return None;
+    }
+    if fai_save(fai, &fai_path) != 0 {
+        fai_destroy(fai);
+        return None;
+    }
 
-    fai_from_rows(fn_, rows, FAI_FASTA as c_int)
+    (*fai).bgzf = bgzf_open(fn_, c"r".as_ptr());
+    if (*fai).bgzf.is_null() {
+        fai_destroy(fai);
+        return None;
+    }
+
+    Some(fai)
 }
 
 pub unsafe fn fai_destroy(_fai: *mut faidx_t) {

@@ -204,24 +204,28 @@ unsafe fn tbx_conf_gaf() -> tbx::tbx_conf_t {
     }
 }
 
+unsafe fn cstr_ascii_ends_with(s: *const c_char, suffix: &[u8]) -> bool {
+    let bytes = CStr::from_ptr(s).to_bytes();
+    bytes.len() >= suffix.len() && bytes[bytes.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+}
+
 // original: file_type (htslib/tabix.c:102)
 pub unsafe fn tabix_c_102_file_type(fname: *const c_char) -> c_int {
-    let l = libc::strlen(fname);
-    if l >= 7 && libc::strcasecmp(fname.add(l - 7), c".gff.gz".as_ptr()) == 0 {
+    if cstr_ascii_ends_with(fname, b".gff.gz") {
         return IS_GFF;
-    } else if l >= 7 && libc::strcasecmp(fname.add(l - 7), c".bed.gz".as_ptr()) == 0 {
+    } else if cstr_ascii_ends_with(fname, b".bed.gz") {
         return IS_BED;
-    } else if l >= 7 && libc::strcasecmp(fname.add(l - 7), c".sam.gz".as_ptr()) == 0 {
+    } else if cstr_ascii_ends_with(fname, b".sam.gz") {
         return IS_SAM;
-    } else if l >= 7 && libc::strcasecmp(fname.add(l - 7), c".vcf.gz".as_ptr()) == 0 {
+    } else if cstr_ascii_ends_with(fname, b".vcf.gz") {
         return IS_VCF;
-    } else if l >= 4 && libc::strcasecmp(fname.add(l - 4), c".bcf".as_ptr()) == 0 {
+    } else if cstr_ascii_ends_with(fname, b".bcf") {
         return IS_BCF;
-    } else if l >= 4 && libc::strcasecmp(fname.add(l - 4), c".bam".as_ptr()) == 0 {
+    } else if cstr_ascii_ends_with(fname, b".bam") {
         return IS_BAM;
-    } else if l >= 5 && libc::strcasecmp(fname.add(l - 5), c".cram".as_ptr()) == 0 {
+    } else if cstr_ascii_ends_with(fname, b".cram") {
         return IS_CRAM;
-    } else if l >= 7 && libc::strcasecmp(fname.add(l - 7), c".gaf.gz".as_ptr()) == 0 {
+    } else if cstr_ascii_ends_with(fname, b".gaf.gz") {
         return IS_GAF;
     }
 
@@ -1493,6 +1497,35 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 "tbx_index_build3 failed: {}\n",
                 cstr_to_string(fname)
             )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cstr_ascii_suffix_match_preserves_strcasecmp_behavior() {
+        unsafe {
+            assert!(cstr_ascii_ends_with(c"sample.VCF.GZ".as_ptr(), b".vcf.gz"));
+            assert!(cstr_ascii_ends_with(c"sample.BAM".as_ptr(), b".bam"));
+            assert!(!cstr_ascii_ends_with(c"sample.bam".as_ptr(), b".bcf"));
+            assert!(!cstr_ascii_ends_with(c".gz".as_ptr(), b".vcf.gz"));
+        }
+    }
+
+    #[test]
+    fn file_type_uses_ascii_suffixes_before_format_sniffing() {
+        unsafe {
+            assert_eq!(tabix_c_102_file_type(c"sample.GFF.GZ".as_ptr()), IS_GFF);
+            assert_eq!(tabix_c_102_file_type(c"sample.BED.GZ".as_ptr()), IS_BED);
+            assert_eq!(tabix_c_102_file_type(c"sample.SAM.GZ".as_ptr()), IS_SAM);
+            assert_eq!(tabix_c_102_file_type(c"sample.VCF.GZ".as_ptr()), IS_VCF);
+            assert_eq!(tabix_c_102_file_type(c"sample.BCF".as_ptr()), IS_BCF);
+            assert_eq!(tabix_c_102_file_type(c"sample.BAM".as_ptr()), IS_BAM);
+            assert_eq!(tabix_c_102_file_type(c"sample.CRAM".as_ptr()), IS_CRAM);
+            assert_eq!(tabix_c_102_file_type(c"sample.GAF.GZ".as_ptr()), IS_GAF);
         }
     }
 }

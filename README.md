@@ -43,6 +43,12 @@ Rust files mirror the htslib C source 1:1 by canonical mapping (lowercased filen
 
 SIMD variants (`rANS_static32x16pr_avx2.c`, `_avx512.c`, `_neon.c`, `_sse4.c`) are intentionally not mapped — Rust uses LLVM auto-vectorization.
 
+## Migration notes
+
+Runtime plugin directory scanning and dynamic handler loading are intentionally not supported. The supported handlers are statically linked into the crate.
+
+The hfile plugin-loading state-machine cleanup is postponed for later discussion; current portability work should not add plugin scanning on any platform.
+
 ## Real-data performance comparisons
 
 These benchmarks compare translated release binaries with the checked-out original htslib binaries on local real-data workloads. Outputs are hashed and considered matching only when the Rust and C SHA-256 hashes are identical. Timings are wall-clock seconds from `/usr/bin/time`; RSS is max resident set size.
