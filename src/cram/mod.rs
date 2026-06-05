@@ -191,6 +191,22 @@ pub struct cram_codec {
     _private: [u8; 0],
 }
 
+#[inline]
+pub(crate) const fn cram_fn_ptr(addr: usize) -> *mut c_void {
+    addr as *mut c_void
+}
+
+#[inline]
+pub(crate) const fn cram_data_series_id_ptr(id: usize) -> *mut c_void {
+    id as *mut c_void
+}
+
+#[inline]
+pub(crate) unsafe fn cram_fn<T: Copy>(ptr: *mut c_void) -> T {
+    debug_assert!(!ptr.is_null());
+    std::mem::transmute_copy(&ptr)
+}
+
 unsafe extern "C" {
     // rans_uncompress / fqz_decompress / rans_uncompress_4x16 / arith_uncompress_to /
     // tok3_decode_names are now served by the native `htscodecs` modules (see
@@ -1815,7 +1831,7 @@ unsafe fn cram_codec_encode(
     in_size: c_int,
 ) -> c_int {
     let cv = codec.cast::<cram_codec_external_layout>();
-    let encode: CramCodecEncodeFn = std::mem::transmute((*cv).encode);
+    let encode: CramCodecEncodeFn = cram_fn((*cv).encode);
     encode(s, codec, inp, in_size)
 }
 
@@ -1823,7 +1839,7 @@ unsafe fn cram_codec_encode(
 #[inline]
 unsafe fn cram_codec_flush(codec: *mut c_void) -> c_int {
     let cv = codec.cast::<cram_codec_external_layout>();
-    let flush: CramCodecFlushFn = std::mem::transmute((*cv).flush);
+    let flush: CramCodecFlushFn = cram_fn((*cv).flush);
     flush(codec)
 }
 
@@ -3942,7 +3958,7 @@ unsafe fn vv_decode32(
     val: *mut i32,
     crc: *mut u32,
 ) -> c_int {
-    let f: CramVarintDecode32 = std::mem::transmute(vv.varint_decode32_crc);
+    let f: CramVarintDecode32 = cram_fn(vv.varint_decode32_crc);
     f(fd, val, crc)
 }
 #[inline]
@@ -3952,7 +3968,7 @@ unsafe fn vv_decode32s(
     val: *mut i32,
     crc: *mut u32,
 ) -> c_int {
-    let f: CramVarintDecode32 = std::mem::transmute(vv.varint_decode32s_crc);
+    let f: CramVarintDecode32 = cram_fn(vv.varint_decode32s_crc);
     f(fd, val, crc)
 }
 #[inline]
@@ -3962,7 +3978,7 @@ unsafe fn vv_decode64(
     val: *mut i64,
     crc: *mut u32,
 ) -> c_int {
-    let f: CramVarintDecode64 = std::mem::transmute(vv.varint_decode64_crc);
+    let f: CramVarintDecode64 = cram_fn(vv.varint_decode64_crc);
     f(fd, val, crc)
 }
 
@@ -4286,6 +4302,22 @@ mod tests {
         bam1_core_t, BAM_CDEL, BAM_CINS, BAM_CMATCH, BAM_CSOFT_CLIP, BAM_FPAIRED,
     };
     use std::ffi::{CStr, CString};
+
+    fn test_refs_marker() -> *mut refs_t_layout {
+        static REFS_MARKER: u8 = 0;
+        std::ptr::from_ref(&REFS_MARKER)
+            .cast::<refs_t_layout>()
+            .cast_mut()
+    }
+
+    fn test_hfile_marker() -> *mut hFILE {
+        static HFILE_MARKER: u8 = 0;
+        std::ptr::from_ref(&HFILE_MARKER).cast::<hFILE>().cast_mut()
+    }
+
+    fn test_void_token(value: usize) -> *mut c_void {
+        cram_data_series_id_ptr(value)
+    }
 
     unsafe fn call_cram_voption_words(
         fd: *mut cram_fd,
@@ -4950,7 +4982,7 @@ mod tests {
     #[test]
     fn cram_external_get_refs_returns_only_for_cram_htsfile() {
         unsafe {
-            let refs = 0x1234usize as *mut refs_t_layout;
+            let refs = test_refs_marker();
             let mut cram_fd = cram_fd_layout {
                 refs,
                 ..std::mem::zeroed()
@@ -7575,14 +7607,14 @@ mod tests {
     fn cram_io_cram_hfile_returns_first_fd_field() {
         unsafe {
             let mut fd = cram_fd_layout {
-                fp: 0x1234usize as *mut hFILE,
+                fp: test_hfile_marker(),
                 mode: 0,
                 version: 0,
                 ..std::mem::zeroed()
             };
             assert_eq!(
                 cram_cram_io_h_646_cram_hfile((&mut fd as *mut cram_fd_layout).cast()),
-                0x1234usize as *mut crate::htslib_rs::hts::hFILE
+                test_hfile_marker()
             );
         }
     }
@@ -8036,11 +8068,11 @@ mod tests {
             assert_eq!((*enc).beta.nbits, 3);
             assert_eq!(
                 (*enc).encode,
-                cram_cram_codecs_c_1219_cram_beta_encode_int as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1219_cram_beta_encode_int as usize)
             );
             assert_eq!(
                 (*enc).store,
-                cram_cram_codecs_c_1183_cram_beta_encode_store as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1183_cram_beta_encode_store as usize)
             );
             cram_cram_codecs_c_1243_cram_beta_encode_free(enc.cast());
 
@@ -8250,7 +8282,7 @@ mod tests {
                 free: std::ptr::null_mut(),
                 decode: std::ptr::null_mut(),
                 encode: std::ptr::null_mut(),
-                store: test_byte_array_len_store_val as usize as *mut c_void,
+                store: cram_fn_ptr(test_byte_array_len_store_val as usize),
                 size: std::ptr::null_mut(),
                 flush: std::ptr::null_mut(),
                 get_block: std::ptr::null_mut(),
@@ -8316,7 +8348,7 @@ mod tests {
                 store: std::ptr::null_mut(),
                 size: std::ptr::null_mut(),
                 flush: std::ptr::null_mut(),
-                get_block: test_xdelta_get_block as usize as *mut c_void,
+                get_block: cram_fn_ptr(test_xdelta_get_block as usize),
                 describe: std::ptr::null_mut(),
                 xpack: cram_xpack_decoder_layout {
                     nbits: 0,
@@ -8402,7 +8434,7 @@ mod tests {
             assert_eq!((*xpack_dec).codec_id, 1);
             assert_eq!(
                 (*xpack_dec).decode,
-                cram_cram_codecs_c_1408_cram_xpack_decode_char as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1408_cram_xpack_decode_char as usize)
             );
             assert_eq!((*xpack_dec).xpack.rmap[3], 40);
             assert_eq!(
@@ -8419,7 +8451,7 @@ mod tests {
             let mut xpack_dat = cram_xpack_decoder_layout {
                 nbits: 2,
                 sub_encoding: 1,
-                sub_codec_dat: 9usize as *mut c_void,
+                sub_codec_dat: test_void_token(9),
                 sub_codec: std::ptr::null_mut(),
                 nval: 4,
                 rmap: [0; 256],
@@ -8442,11 +8474,11 @@ mod tests {
             assert_eq!((*xpack_enc).codec, 51);
             assert_eq!(
                 (*xpack_enc).encode,
-                cram_cram_codecs_c_1592_cram_xpack_encode_int as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1592_cram_xpack_encode_int as usize)
             );
             assert_eq!(
                 (*xpack_enc).flush,
-                cram_cram_codecs_c_1515_cram_xpack_encode_flush as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1515_cram_xpack_encode_flush as usize)
             );
             assert_eq!((*xpack_enc).xpack.rmap[0], 10);
             assert_eq!((*xpack_enc).xpack.rmap[3], 40);
@@ -8691,7 +8723,7 @@ mod tests {
                 vv: std::ptr::null_mut(),
                 codec_id: 0,
                 free: std::ptr::null_mut(),
-                decode: test_xdelta_decode_u32 as usize as *mut c_void,
+                decode: cram_fn_ptr(test_xdelta_decode_u32 as usize),
                 encode: std::ptr::null_mut(),
                 store: std::ptr::null_mut(),
                 size: std::ptr::null_mut(),
@@ -8760,7 +8792,7 @@ mod tests {
                 crc_part: 0,
             };
             sub_codec.out = (&mut varint_block as *mut cram_block_layout).cast();
-            sub_codec.get_block = test_xdelta_get_block as usize as *mut c_void;
+            sub_codec.get_block = cram_fn_ptr(test_xdelta_get_block as usize);
             codec.xdelta.sub_codec = (&mut sub_codec as *mut cram_codec_xdelta_layout).cast();
             let mut vv = varint_vec_layout {
                 varint_decode32_crc: std::ptr::null_mut(),
@@ -8841,7 +8873,7 @@ mod tests {
             assert_eq!((*dec).xdelta.word_size, 2);
             assert_eq!(
                 (*dec).decode,
-                cram_cram_codecs_c_1719_cram_xdelta_decode_block as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1719_cram_xdelta_decode_block as usize)
             );
             assert_eq!(
                 (*(*dec).xdelta.sub_codec.cast::<cram_codec_external_layout>())
@@ -8862,8 +8894,8 @@ mod tests {
                 codec_id: 0,
                 free: std::ptr::null_mut(),
                 decode: std::ptr::null_mut(),
-                encode: test_byte_array_len_encode_val as usize as *mut c_void,
-                store: test_byte_array_len_store_val as usize as *mut c_void,
+                encode: cram_fn_ptr(test_byte_array_len_encode_val as usize),
+                store: cram_fn_ptr(test_byte_array_len_store_val as usize),
                 size: std::ptr::null_mut(),
                 flush: std::ptr::null_mut(),
                 get_block: std::ptr::null_mut(),
@@ -8921,7 +8953,7 @@ mod tests {
                 last: 0,
                 word_size: 2,
                 sub_encoding: 1,
-                sub_codec_dat: 9usize as *mut c_void,
+                sub_codec_dat: test_void_token(9),
                 sub_codec: std::ptr::null_mut(),
             };
             let enc = cram_cram_codecs_c_3928_cram_encoder_init(
@@ -8937,15 +8969,15 @@ mod tests {
             assert_eq!((*enc).codec, 53);
             assert_eq!(
                 (*enc).encode,
-                cram_cram_codecs_c_1976_cram_xdelta_encode_char as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1976_cram_xdelta_encode_char as usize)
             );
             assert_eq!(
                 (*enc).store,
-                cram_cram_codecs_c_1930_cram_xdelta_encode_store as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1930_cram_xdelta_encode_store as usize)
             );
             assert_eq!(
                 (*enc).flush,
-                cram_cram_codecs_c_1835_cram_xdelta_encode_flush as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1835_cram_xdelta_encode_flush as usize)
             );
             assert_eq!(
                 (*(*enc).xdelta.sub_codec.cast::<cram_codec_external_layout>())
@@ -9103,13 +9135,13 @@ mod tests {
                 ..len_block
             };
             let mut len_codec = cram_codec_xrle_layout {
-                get_block: test_xrle_get_block as usize as *mut c_void,
-                size: test_xrle_size as usize as *mut c_void,
+                get_block: cram_fn_ptr(test_xrle_get_block as usize),
+                size: cram_fn_ptr(test_xrle_size as usize),
                 out: (&mut len_block as *mut cram_block_layout).cast(),
                 ..codec
             };
             let mut lit_codec = cram_codec_xrle_layout {
-                get_block: test_xrle_get_block as usize as *mut c_void,
+                get_block: cram_fn_ptr(test_xrle_get_block as usize),
                 out: (&mut lit_block as *mut cram_block_layout).cast(),
                 ..codec
             };
@@ -9192,14 +9224,14 @@ mod tests {
             );
             let mut len_enc = cram_codec_byte_array_len_layout {
                 out: len_out.cast(),
-                encode: test_byte_array_len_encode_val as usize as *mut c_void,
-                store: test_byte_array_len_store_len as usize as *mut c_void,
+                encode: cram_fn_ptr(test_byte_array_len_encode_val as usize),
+                store: cram_fn_ptr(test_byte_array_len_store_len as usize),
                 ..std::mem::zeroed()
             };
             let mut lit_enc = cram_codec_byte_array_len_layout {
                 out: lit_out.cast(),
-                encode: test_byte_array_len_encode_val as usize as *mut c_void,
-                store: test_byte_array_len_store_val as usize as *mut c_void,
+                encode: cram_fn_ptr(test_byte_array_len_encode_val as usize),
+                store: cram_fn_ptr(test_byte_array_len_store_val as usize),
                 ..std::mem::zeroed()
             };
             let mut flush_input = *b"aaabbc";
@@ -9308,7 +9340,7 @@ mod tests {
             assert_eq!((*dec).xrle.rep_score[b'b' as usize], 1);
             assert_eq!(
                 (*dec).decode,
-                cram_cram_codecs_c_2125_cram_xrle_decode_char as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_2125_cram_xrle_decode_char as usize)
             );
             assert_eq!(
                 (*(*dec).xrle.len_codec.cast::<cram_codec_external_layout>())
@@ -9327,8 +9359,8 @@ mod tests {
             let mut enc_dat = cram_xrle_decoder_layout {
                 len_encoding: 1,
                 lit_encoding: 1,
-                len_dat: 7usize as *mut c_void,
-                lit_dat: 9usize as *mut c_void,
+                len_dat: test_void_token(7),
+                lit_dat: test_void_token(9),
                 rep_score: {
                     let mut s = [0; 256];
                     s[b'a' as usize] = 1;
@@ -9349,11 +9381,11 @@ mod tests {
             assert_eq!((*enc).codec, 52);
             assert_eq!(
                 (*enc).encode,
-                cram_cram_codecs_c_2371_cram_xrle_encode_char as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_2371_cram_xrle_encode_char as usize)
             );
             assert_eq!(
                 (*enc).flush,
-                cram_cram_codecs_c_2257_cram_xrle_encode_flush as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_2257_cram_xrle_encode_flush as usize)
             );
             assert_eq!((*enc).xrle.rep_score[b'a' as usize], 1);
             assert_eq!(
@@ -9474,7 +9506,7 @@ mod tests {
             assert_eq!((*subexp_init).subexp.k, 2);
             assert_eq!(
                 (*subexp_init).decode,
-                cram_cram_codecs_c_2452_cram_subexp_decode as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_2452_cram_subexp_decode as usize)
             );
             cram_cram_codecs_c_2496_cram_subexp_decode_free(subexp_init.cast());
 
@@ -9558,7 +9590,7 @@ mod tests {
             assert_eq!((*gamma_init).gamma.offset, 3);
             assert_eq!(
                 (*gamma_init).decode,
-                cram_cram_codecs_c_2546_cram_gamma_decode as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_2546_cram_gamma_decode as usize)
             );
             cram_cram_codecs_c_2570_cram_gamma_decode_free(gamma_init.cast());
         }
@@ -9787,7 +9819,7 @@ mod tests {
             assert_eq!((*huff_init).huffman.ncodes, 2);
             assert_eq!(
                 (*huff_init).decode,
-                cram_cram_codecs_c_2660_cram_huffman_decode_char as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_2660_cram_huffman_decode_char as usize)
             );
             assert_eq!((*(*huff_init).huffman.codes.add(0)).symbol, b'A' as i64);
             assert_eq!((*(*huff_init).huffman.codes.add(0)).code, 0);
@@ -9995,11 +10027,11 @@ mod tests {
             assert_eq!((*init).huffman.nvals, 3);
             assert_eq!(
                 (*init).encode,
-                cram_cram_codecs_c_3030_cram_huffman_encode_int as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3030_cram_huffman_encode_int as usize)
             );
             assert_eq!(
                 (*init).store,
-                cram_cram_codecs_c_3112_cram_huffman_encode_store as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3112_cram_huffman_encode_store as usize)
             );
             assert_eq!((*(*init).huffman.codes.add(0)).symbol, b'A' as i64);
             assert_eq!((*(*init).huffman.codes.add(0)).len, 1);
@@ -10026,8 +10058,8 @@ mod tests {
                 vv: std::ptr::null_mut(),
                 codec_id: 3,
                 free: std::ptr::null_mut(),
-                decode: test_byte_array_len_decode_len as usize as *mut c_void,
-                encode: test_byte_array_len_encode_len as usize as *mut c_void,
+                decode: cram_fn_ptr(test_byte_array_len_decode_len as usize),
+                encode: cram_fn_ptr(test_byte_array_len_encode_len as usize),
                 store: std::ptr::null_mut(),
                 size: std::ptr::null_mut(),
                 flush: std::ptr::null_mut(),
@@ -10049,8 +10081,8 @@ mod tests {
                 vv: std::ptr::null_mut(),
                 codec_id: 0,
                 free: std::ptr::null_mut(),
-                decode: test_byte_array_len_decode_val as usize as *mut c_void,
-                encode: test_byte_array_len_encode_val as usize as *mut c_void,
+                decode: cram_fn_ptr(test_byte_array_len_decode_val as usize),
+                encode: cram_fn_ptr(test_byte_array_len_encode_val as usize),
                 store: std::ptr::null_mut(),
                 size: std::ptr::null_mut(),
                 flush: std::ptr::null_mut(),
@@ -10131,8 +10163,8 @@ mod tests {
                 b"\x04rust"
             );
 
-            len_codec.store = test_byte_array_len_store_len as usize as *mut c_void;
-            val_codec.store = test_byte_array_len_store_val as usize as *mut c_void;
+            len_codec.store = cram_fn_ptr(test_byte_array_len_store_len as usize);
+            val_codec.store = cram_fn_ptr(test_byte_array_len_store_val as usize);
             codec.codec = 4;
             assert!(!len_codec.store.is_null());
             assert!(!val_codec.store.is_null());
@@ -10196,7 +10228,7 @@ mod tests {
             assert_eq!((*dec).codec, 4);
             assert_eq!(
                 (*dec).decode,
-                cram_cram_codecs_c_3371_cram_byte_array_len_decode as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3371_cram_byte_array_len_decode as usize)
             );
             let dec_len = (*dec)
                 .byte_array_len
@@ -10223,8 +10255,8 @@ mod tests {
             let mut enc_dat = cram_byte_array_len_encoder_dat_layout {
                 len_encoding: 1,
                 val_encoding: 1,
-                len_dat: 7usize as *mut c_void,
-                val_dat: 8usize as *mut c_void,
+                len_dat: test_void_token(7),
+                val_dat: test_void_token(8),
                 len_codec: std::ptr::null_mut(),
                 val_codec: std::ptr::null_mut(),
             };
@@ -10241,11 +10273,11 @@ mod tests {
             assert_eq!((*enc).codec, 4);
             assert_eq!(
                 (*enc).encode,
-                cram_cram_codecs_c_3479_cram_byte_array_len_encode as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3479_cram_byte_array_len_encode as usize)
             );
             assert_eq!(
                 (*enc).store,
-                cram_cram_codecs_c_3506_cram_byte_array_len_encode_store as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3506_cram_byte_array_len_encode_store as usize)
             );
             let enc_len = (*enc)
                 .byte_array_len
@@ -10420,14 +10452,14 @@ mod tests {
                 size: std::ptr::null_mut(),
                 flush: std::ptr::null_mut(),
                 get_block: std::ptr::null_mut(),
-                describe: test_codec_describe_len as usize as *mut c_void,
+                describe: cram_fn_ptr(test_codec_describe_len as usize),
                 byte_array_len: cram_byte_array_len_decoder_layout {
                     len_codec: std::ptr::null_mut(),
                     val_codec: std::ptr::null_mut(),
                 },
             };
             let mut val_codec = cram_codec_byte_array_len_layout {
-                describe: test_codec_describe_val as usize as *mut c_void,
+                describe: cram_fn_ptr(test_codec_describe_val as usize),
                 ..len_codec
             };
             let mut bal_codec = cram_codec_byte_array_len_layout {
@@ -10527,7 +10559,7 @@ mod tests {
             assert_eq!((*dec).byte_array_stop.content_id, 0x1234);
             assert_eq!(
                 (*dec).decode,
-                cram_cram_codecs_c_3586_cram_byte_array_stop_decode_char as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3586_cram_byte_array_stop_decode_char as usize)
             );
             cram_cram_codecs_c_3669_cram_byte_array_stop_decode_free(dec.cast());
 
@@ -10547,11 +10579,11 @@ mod tests {
             assert_eq!((*enc).byte_array_stop.content_id, 77);
             assert_eq!(
                 (*enc).encode,
-                cram_cram_codecs_c_3733_cram_byte_array_stop_encode as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3733_cram_byte_array_stop_encode as usize)
             );
             assert_eq!(
                 (*enc).store,
-                cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store as usize)
             );
             (*enc).vv = &mut vv as *mut varint_vec_layout;
             let store_block = cram_cram_io_c_1388_cram_new_block(
@@ -10651,7 +10683,7 @@ mod tests {
             assert_eq!((*ext_dec).external.content_id, 0x1234);
             assert_eq!(
                 (*ext_dec).decode,
-                cram_cram_codecs_c_390_cram_external_decode_char as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_390_cram_external_decode_char as usize)
             );
             cram_cram_codecs_c_433_cram_external_decode_free(ext_dec.cast());
 
@@ -10659,7 +10691,7 @@ mod tests {
                 std::ptr::null_mut(),
                 1,
                 1,
-                7usize as *mut c_void,
+                test_void_token(7),
                 3 << 8,
                 std::ptr::null_mut(),
             )
@@ -10740,7 +10772,7 @@ mod tests {
             assert_eq!((*var_dec).varint.content_id, 0x1234);
             assert_eq!(
                 (*var_dec).decode,
-                cram_cram_codecs_c_710_cram_varint_decode_slong as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_710_cram_varint_decode_slong as usize)
             );
             cram_cram_codecs_c_732_cram_varint_decode_free(var_dec.cast());
 
@@ -10777,7 +10809,7 @@ mod tests {
                 (&mut st as *mut cram_stats_layout).cast(),
                 42,
                 1,
-                11usize as *mut c_void,
+                test_void_token(11),
                 4 << 8,
                 std::ptr::null_mut(),
             )
@@ -10840,7 +10872,7 @@ mod tests {
                 *mut cram_block,
                 *mut c_char,
                 *mut c_int,
-            ) -> c_int = std::mem::transmute((*const_dec).decode);
+            ) -> c_int = cram_fn((*const_dec).decode);
             let mut decoded = [0i32; 2];
             let mut decoded_len = decoded.len() as c_int;
             assert_eq!(
@@ -10947,7 +10979,7 @@ mod tests {
             assert_eq!((*beta_dec).beta.nbits, 5);
             assert_eq!(
                 (*beta_dec).decode,
-                cram_cram_codecs_c_1090_cram_beta_decode_int as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1090_cram_beta_decode_int as usize)
             );
             cram_cram_codecs_c_1131_cram_beta_decode_free(beta_dec.cast());
 
@@ -11092,8 +11124,7 @@ mod tests {
             );
             assert_eq!(ids, [17, 23]);
 
-            external.describe =
-                cram_cram_codecs_c_454_cram_external_describe as usize as *mut c_void;
+            external.describe = cram_fn_ptr(cram_cram_codecs_c_454_cram_external_describe as usize);
             let mut ks = kstring_t {
                 l: 0,
                 m: 0,
@@ -11121,7 +11152,7 @@ mod tests {
             free(ks.s.cast());
 
             external.decode =
-                cram_cram_codecs_c_390_cram_external_decode_char as usize as *mut c_void;
+                cram_fn_ptr(cram_cram_codecs_c_390_cram_external_decode_char as usize);
             assert_eq!(
                 cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
                     std::ptr::null_mut(),
@@ -11131,14 +11162,14 @@ mod tests {
             );
             assert_eq!(
                 external.encode,
-                cram_cram_codecs_c_547_cram_external_encode_char as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_547_cram_external_encode_char as usize)
             );
             assert_eq!(
                 external.store,
-                cram_cram_codecs_c_562_cram_external_encode_store as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_562_cram_external_encode_store as usize)
             );
 
-            varint.decode = cram_cram_codecs_c_710_cram_varint_decode_slong as usize as *mut c_void;
+            varint.decode = cram_fn_ptr(cram_cram_codecs_c_710_cram_varint_decode_slong as usize);
             assert_eq!(
                 cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
                     std::ptr::null_mut(),
@@ -11148,9 +11179,9 @@ mod tests {
             );
             assert_eq!(
                 varint.encode,
-                cram_cram_codecs_c_841_cram_varint_encode_slong as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_841_cram_varint_encode_slong as usize)
             );
-            beta.decode = cram_cram_codecs_c_1108_cram_beta_decode_char as usize as *mut c_void;
+            beta.decode = cram_fn_ptr(cram_cram_codecs_c_1108_cram_beta_decode_char as usize);
             assert_eq!(
                 cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
                     std::ptr::null_mut(),
@@ -11160,7 +11191,7 @@ mod tests {
             );
             assert_eq!(
                 beta.encode,
-                cram_cram_codecs_c_1231_cram_beta_encode_char as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1231_cram_beta_encode_char as usize)
             );
             stop_codec.codec = 5;
             assert_eq!(
@@ -11172,7 +11203,7 @@ mod tests {
             );
             assert_eq!(
                 stop_codec.encode,
-                cram_cram_codecs_c_3733_cram_byte_array_stop_encode as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3733_cram_byte_array_stop_encode as usize)
             );
             let huff_conv = calloc(
                 1,
@@ -11196,7 +11227,7 @@ mod tests {
             (*huff_conv).codec = 3;
             (*huff_conv).vv = &mut vv;
             (*huff_conv).decode =
-                cram_cram_codecs_c_2708_cram_huffman_decode_int as usize as *mut c_void;
+                cram_fn_ptr(cram_cram_codecs_c_2708_cram_huffman_decode_int as usize);
             (*huff_conv).huffman.ncodes = huff_codes.len() as c_int;
             (*huff_conv).huffman.codes = huff_codes.as_mut_ptr();
             (*huff_conv).huffman.option = 1;
@@ -11210,7 +11241,7 @@ mod tests {
             let huff_enc = huff_conv.cast::<cram_codec_huffman_encoder_layout>();
             assert_eq!(
                 (*huff_enc).encode,
-                cram_cram_codecs_c_3030_cram_huffman_encode_int as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3030_cram_huffman_encode_int as usize)
             );
             assert_eq!((*huff_enc).huffman.nvals, 2);
             assert_eq!((*huff_enc).huffman.val2code[6], 0);
@@ -11462,7 +11493,7 @@ mod tests {
             assert_eq!((*dec).external.content_id, 9);
             assert_eq!(
                 (*dec).decode,
-                cram_cram_codecs_c_410_cram_external_decode_block as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_410_cram_external_decode_block as usize)
             );
 
             let mut hdr = cram_block_slice_hdr_layout {

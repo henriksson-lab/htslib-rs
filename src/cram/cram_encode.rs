@@ -262,7 +262,7 @@ pub unsafe fn cram_cram_encode_c_2810_cram_encode_compression_header(
         ($ds:expr, $name:expr) => {{
             let cd = (*hl).codecs[$ds].cast::<cram_codec_external_layout>();
             if !cd.is_null() {
-                let store: CramCodecStoreFn = std::mem::transmute((*cd).store);
+                let store: CramCodecStoreFn = cram_fn((*cd).store);
                 if -1
                     == store(
                         cd.cast::<c_void>(),
@@ -355,7 +355,7 @@ pub unsafe fn cram_cram_encode_c_2810_cram_encode_compression_header(
                 .varint_put32_blk
                 .expect("non-null function pointer")(map, key_0)
                 <= 0) as c_int;
-            let store: CramCodecStoreFn = std::mem::transmute((*cd).store);
+            let store: CramCodecStoreFn = cram_fn((*cd).store);
             if -1
                 == store(
                     cd.cast::<c_void>(),
@@ -3344,7 +3344,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                     current_block = 9865445363914956224;
                     break;
                 } else {
-                    let encode: CramCodecEncodeFn = std::mem::transmute(
+                    let encode: CramCodecEncodeFn = cram_fn(
                         (*(codec
                             .cast::<cram_codec_base_layout>()
                             .cast::<cram_codec_external_layout>()))
@@ -3433,7 +3433,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                     break;
                 }
                 let encode: CramCodecEncodeFn =
-                    std::mem::transmute((*(codec.cast::<cram_codec_external_layout>())).encode);
+                    cram_fn((*(codec.cast::<cram_codec_external_layout>())).encode);
                 if encode(s, codec.cast(), aux, blen as c_int) < 0 {
                     current_block = 9865445363914956224;
                     break;
@@ -5239,8 +5239,8 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                     E_EXTERNAL
                 },
                 val_encoding: E_EXTERNAL,
-                len_dat: DS_BB_len as *mut c_void,
-                val_dat: DS_BB as *mut c_void,
+                len_dat: cram_data_series_id_ptr(DS_BB_len),
+                val_dat: cram_data_series_id_ptr(DS_BB),
                 len_codec: std::ptr::null_mut(),
                 val_codec: std::ptr::null_mut(),
             };
@@ -5412,7 +5412,7 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
             E_EXTERNAL,
             std::ptr::null_mut(),
             E_BYTE,
-            DS_QS as *mut c_void,
+            cram_data_series_id_ptr(DS_QS),
             version,
             vv_ptr,
         );

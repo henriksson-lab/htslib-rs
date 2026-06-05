@@ -712,9 +712,9 @@ pub unsafe fn cram_cram_io_c_5127_cram_init_varint(vv: *mut c_void, version: c_i
         (*vv).varint_put64_blk = Some(cram_cram_io_c_841_uint7_put_blk_64);
         (*vv).varint_put64s_blk = Some(cram_cram_io_c_851_sint7_put_blk_64);
         (*vv).varint_size = Some(cram_cram_io_c_768_uint7_size);
-        (*vv).varint_decode32_crc = cram_cram_io_c_862_uint7_decode_crc32 as usize as *mut c_void;
-        (*vv).varint_decode32s_crc = cram_cram_io_c_907_sint7_decode_crc32 as usize as *mut c_void;
-        (*vv).varint_decode64_crc = cram_cram_io_c_953_uint7_decode_crc64 as usize as *mut c_void;
+        (*vv).varint_decode32_crc = cram_fn_ptr(cram_cram_io_c_862_uint7_decode_crc32 as usize);
+        (*vv).varint_decode32s_crc = cram_fn_ptr(cram_cram_io_c_907_sint7_decode_crc32 as usize);
+        (*vv).varint_decode64_crc = cram_fn_ptr(cram_cram_io_c_953_uint7_decode_crc64 as usize);
     } else {
         (*vv).varint_get32 = Some(cram_cram_io_c_644_safe_itf8_get);
         (*vv).varint_get32s = Some(cram_cram_io_c_644_safe_itf8_get);
@@ -729,9 +729,9 @@ pub unsafe fn cram_cram_io_c_5127_cram_init_varint(vv: *mut c_void, version: c_i
         (*vv).varint_put64_blk = Some(cram_cram_io_c_632_ltf8_put_blk);
         (*vv).varint_put64s_blk = Some(cram_cram_io_c_632_ltf8_put_blk);
         (*vv).varint_size = Some(cram_cram_io_c_755_itf8_size);
-        (*vv).varint_decode32_crc = cram_cram_io_c_196_itf8_decode_crc as usize as *mut c_void;
-        (*vv).varint_decode32s_crc = cram_cram_io_c_196_itf8_decode_crc as usize as *mut c_void;
-        (*vv).varint_decode64_crc = cram_cram_io_c_501_ltf8_decode_crc as usize as *mut c_void;
+        (*vv).varint_decode32_crc = cram_fn_ptr(cram_cram_io_c_196_itf8_decode_crc as usize);
+        (*vv).varint_decode32s_crc = cram_fn_ptr(cram_cram_io_c_196_itf8_decode_crc as usize);
+        (*vv).varint_decode64_crc = cram_fn_ptr(cram_cram_io_c_501_ltf8_decode_crc as usize);
     }
 }
 pub unsafe fn cram_cram_io_c_5170_cram_init_tables(fd: *mut cram_fd) {

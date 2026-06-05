@@ -25,6 +25,24 @@ pub struct region_c_38_reghash_t {
     entries: Vec<region_c_31_reglist>,
 }
 
+fn reghash_new_raw() -> *mut region_c_38_reghash_t {
+    Box::into_raw(Box::new(region_c_38_reghash_t {
+        entries: Vec::new(),
+    }))
+}
+
+unsafe fn reghash_free_raw(h: *mut region_c_38_reghash_t) {
+    if h.is_null() {
+        return;
+    }
+
+    let mut h_box = Box::from_raw(h);
+    for entry in h_box.entries.iter_mut() {
+        c_compat::free(entry.a.cast());
+        entry.a = ptr::null_mut();
+    }
+}
+
 // original: compare_hts_pair_pos_t (htslib/region.c:41)
 pub unsafe extern "C" fn region_c_41_compare_hts_pair_pos_t(
     av: *const c_void,
@@ -259,15 +277,7 @@ fn region_khash_int_order(entries: &[region_c_31_reglist]) -> Vec<usize> {
 
 // original: reg_destroy (htslib/region.c:159)
 pub unsafe fn region_c_159_reg_destroy(h: *mut region_c_38_reghash_t) {
-    if h.is_null() {
-        return;
-    }
-
-    let mut h_box = Box::from_raw(h);
-    for entry in h_box.entries.iter_mut() {
-        c_compat::free(entry.a.cast());
-        entry.a = ptr::null_mut();
-    }
+    reghash_free_raw(h);
 }
 
 // original: hts_reglist_create (htslib/region.c:177)
@@ -282,9 +292,7 @@ pub unsafe fn region_c_177_hts_reglist_create(
         return ptr::null_mut();
     }
 
-    let h = Box::into_raw(Box::new(region_c_38_reghash_t {
-        entries: Vec::new(),
-    }));
+    let h = reghash_new_raw();
     if h.is_null() {
         return ptr::null_mut();
     }
@@ -495,49 +503,47 @@ mod tests {
     #[test]
     fn reg_compact_sorts_and_merges_adjacent_intervals_like_c() {
         unsafe {
-            let mut h = Box::new(region_c_38_reghash_t {
-                entries: Vec::new(),
-            });
-            assert_eq!(region_c_123_reg_insert(&mut *h, 0, 30, 40), 0);
-            assert_eq!(region_c_123_reg_insert(&mut *h, 0, 10, 20), 0);
-            assert_eq!(region_c_123_reg_insert(&mut *h, 0, 20, 30), 0);
-            assert_eq!(region_c_123_reg_insert(&mut *h, 0, 45, 50), 0);
+            let h = reghash_new_raw();
+            assert_eq!(region_c_123_reg_insert(h, 0, 30, 40), 0);
+            assert_eq!(region_c_123_reg_insert(h, 0, 10, 20), 0);
+            assert_eq!(region_c_123_reg_insert(h, 0, 20, 30), 0);
+            assert_eq!(region_c_123_reg_insert(h, 0, 45, 50), 0);
 
-            assert_eq!(region_c_87_reg_compact(&mut *h), 1);
-            let entry = &h.entries[0];
+            assert_eq!(region_c_87_reg_compact(h), 1);
+            let entries = &(*h).entries;
+            let entry = &entries[0];
             assert_eq!(entry.n, 2);
             let intervals = std::slice::from_raw_parts(entry.a, entry.n as usize);
             assert_eq!((intervals[0].beg, intervals[0].end), (10, 40));
             assert_eq!((intervals[1].beg, intervals[1].end), (45, 50));
 
-            region_c_159_reg_destroy(Box::into_raw(h));
+            region_c_159_reg_destroy(h);
         }
     }
 
     #[test]
     fn reg_compact_merges_duplicate_nested_and_per_tid_intervals() {
         unsafe {
-            let mut h = Box::new(region_c_38_reghash_t {
-                entries: Vec::new(),
-            });
-            assert_eq!(region_c_123_reg_insert(&mut *h, 1, 30, 40), 0);
-            assert_eq!(region_c_123_reg_insert(&mut *h, 0, 10, 50), 0);
-            assert_eq!(region_c_123_reg_insert(&mut *h, 0, 15, 20), 0);
-            assert_eq!(region_c_123_reg_insert(&mut *h, 0, 10, 50), 0);
-            assert_eq!(region_c_123_reg_insert(&mut *h, 1, 35, 45), 0);
+            let h = reghash_new_raw();
+            assert_eq!(region_c_123_reg_insert(h, 1, 30, 40), 0);
+            assert_eq!(region_c_123_reg_insert(h, 0, 10, 50), 0);
+            assert_eq!(region_c_123_reg_insert(h, 0, 15, 20), 0);
+            assert_eq!(region_c_123_reg_insert(h, 0, 10, 50), 0);
+            assert_eq!(region_c_123_reg_insert(h, 1, 35, 45), 0);
 
-            assert_eq!(region_c_87_reg_compact(&mut *h), 2);
-            let entry0 = h.entries.iter().find(|entry| entry.tid == 0).unwrap();
+            assert_eq!(region_c_87_reg_compact(h), 2);
+            let entries = &(*h).entries;
+            let entry0 = entries.iter().find(|entry| entry.tid == 0).unwrap();
             let intervals0 = std::slice::from_raw_parts(entry0.a, entry0.n as usize);
             assert_eq!(entry0.n, 1);
             assert_eq!((intervals0[0].beg, intervals0[0].end), (10, 50));
 
-            let entry1 = h.entries.iter().find(|entry| entry.tid == 1).unwrap();
+            let entry1 = entries.iter().find(|entry| entry.tid == 1).unwrap();
             let intervals1 = std::slice::from_raw_parts(entry1.a, entry1.n as usize);
             assert_eq!(entry1.n, 1);
             assert_eq!((intervals1[0].beg, intervals1[0].end), (30, 45));
 
-            region_c_159_reg_destroy(Box::into_raw(h));
+            region_c_159_reg_destroy(h);
         }
     }
 

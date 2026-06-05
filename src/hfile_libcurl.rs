@@ -101,6 +101,12 @@ type HFileLibcurlHttpHeaderCallback =
     unsafe extern "C" fn(*mut c_void, *mut *mut *mut c_char) -> c_int;
 type HFileLibcurlRedirectCallback =
     unsafe extern "C" fn(*mut c_void, libc::c_long, *mut kstring_t, *mut kstring_t) -> c_int;
+
+unsafe fn libcurl_redirect_callback(ptr: *mut c_void) -> HFileLibcurlRedirectCallback {
+    debug_assert!(!ptr.is_null());
+    std::mem::transmute_copy(&ptr)
+}
+
 type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> c_int;
 type HFileVOpenFn = unsafe extern "C" fn(
@@ -215,6 +221,27 @@ static mut HFILE_LIBCURL_AUTH_MAP: *mut Vec<usize> = std::ptr::null_mut();
 static mut HFILE_LIBCURL_ALLOW_UNENCRYPTED_AUTH_HEADER: c_int = 0;
 static mut HFILE_LIBCURL_RETRY_MAX: c_int = 0;
 static mut HFILE_LIBCURL_RETRY_DELAY_MS: libc::c_long = 1000;
+
+fn auth_map_new_raw() -> *mut Vec<usize> {
+    Box::into_raw(Box::new(Vec::new()))
+}
+
+unsafe fn auth_map_mut_raw(ptr: *mut Vec<usize>) -> Option<&'static mut Vec<usize>> {
+    if ptr.is_null() {
+        None
+    } else {
+        Some(&mut *ptr)
+    }
+}
+
+unsafe fn auth_map_free_tokens_raw(ptr: *mut Vec<usize>) {
+    if !ptr.is_null() {
+        let mut map = Box::from_raw(ptr);
+        for tok in map.drain(..) {
+            hfile_libcurl_c_318_free_auth(tok as *mut c_void);
+        }
+    }
+}
 
 const CURLE_OK: c_int = 0;
 const CURLE_HTTP_RETURNED_ERROR: c_int = 22;
@@ -550,10 +577,7 @@ pub unsafe extern "C" fn hfile_libcurl_c_326_libcurl_exit() {
     HFILE_LIBCURL_AUTH_PATH = std::ptr::null_mut();
 
     if !HFILE_LIBCURL_AUTH_MAP.is_null() {
-        let mut map = Box::from_raw(HFILE_LIBCURL_AUTH_MAP);
-        for tok in map.drain(..) {
-            hfile_libcurl_c_318_free_auth(tok as *mut c_void);
-        }
+        auth_map_free_tokens_raw(HFILE_LIBCURL_AUTH_MAP);
         HFILE_LIBCURL_AUTH_MAP = std::ptr::null_mut();
     }
     curl_global_cleanup();
@@ -1023,9 +1047,9 @@ pub unsafe fn hfile_libcurl_c_650_get_auth_token(fp: *mut c_void, url: *const c_
 
     crate::htslib_rs::c_compat::pthread_mutex_lock(std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_LOCK));
     if HFILE_LIBCURL_AUTH_MAP.is_null() {
-        HFILE_LIBCURL_AUTH_MAP = Box::into_raw(Box::new(Vec::new()));
+        HFILE_LIBCURL_AUTH_MAP = auth_map_new_raw();
     }
-    let map = &mut *HFILE_LIBCURL_AUTH_MAP;
+    let map = auth_map_mut_raw(HFILE_LIBCURL_AUTH_MAP).expect("libcurl auth map initialized");
     let mut tok: *mut HFileLibcurlAuthToken = std::ptr::null_mut();
     for entry in map.iter().copied() {
         let candidate = entry as *mut HFileLibcurlAuthToken;
@@ -1855,8 +1879,7 @@ unsafe fn hfile_libcurl_open_once(
     if !(*fp).headers.redirect.is_null() {
         if (300..400).contains(&response) {
             let mut new_url: kstring_t = std::mem::zeroed();
-            let redirect: HFileLibcurlRedirectCallback =
-                std::mem::transmute((*fp).headers.redirect);
+            let redirect = libcurl_redirect_callback((*fp).headers.redirect);
             if redirect(
                 (*fp).headers.redirect_data,
                 response,
@@ -2154,7 +2177,7 @@ pub unsafe fn hfile_libcurl_c_1679_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> c_
     let auth = libc::getenv(c"HTS_AUTH_LOCATION".as_ptr());
     if !auth.is_null() {
         HFILE_LIBCURL_AUTH_PATH = libc::strdup(auth);
-        HFILE_LIBCURL_AUTH_MAP = Box::into_raw(Box::new(Vec::new()));
+        HFILE_LIBCURL_AUTH_MAP = auth_map_new_raw();
         if HFILE_LIBCURL_AUTH_PATH.is_null() {
             hfile_libcurl_c_326_libcurl_exit();
             *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;

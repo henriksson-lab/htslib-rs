@@ -94,6 +94,12 @@ type HFileVOpenFn = unsafe extern "C" fn(
     *const c_char,
     *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE;
+type HFilePluginDestroyFn = unsafe extern "C" fn();
+
+unsafe fn hfile_plugin_destroy_fn(ptr: *const c_void) -> HFilePluginDestroyFn {
+    debug_assert!(!ptr.is_null());
+    std::mem::transmute_copy(&ptr)
+}
 
 #[repr(C)]
 struct hFILE_backend {
@@ -3740,7 +3746,7 @@ mod tests {
             assert!(!useragent.is_null());
             assert!(CStr::from_ptr(useragent).to_bytes().starts_with(b"htslib/"));
 
-            let destroy: unsafe extern "C" fn() = std::mem::transmute(plugin.destroy);
+            let destroy = hfile_plugin_destroy_fn(plugin.destroy);
             destroy();
             assert_eq!(std::ptr::addr_of!(HFILE_S3_USERAGENT.l).read(), 0);
             assert_eq!(std::ptr::addr_of!(HFILE_S3_USERAGENT.m).read(), 0);

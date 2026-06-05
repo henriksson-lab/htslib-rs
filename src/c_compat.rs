@@ -556,6 +556,27 @@ pub struct regex_t {
     nosub: c_int,
 }
 
+#[cfg(windows)]
+fn regex_new_raw(regex: regex::bytes::Regex) -> *mut c_void {
+    Box::into_raw(Box::new(regex)).cast()
+}
+
+#[cfg(windows)]
+unsafe fn regex_ref_raw(ptr: *mut c_void) -> Option<&'static regex::bytes::Regex> {
+    if ptr.is_null() {
+        None
+    } else {
+        Some(&*ptr.cast::<regex::bytes::Regex>())
+    }
+}
+
+#[cfg(windows)]
+unsafe fn regex_free_raw(ptr: *mut c_void) {
+    if !ptr.is_null() {
+        drop(Box::from_raw(ptr.cast::<regex::bytes::Regex>()));
+    }
+}
+
 pub unsafe fn regcomp(preg: *mut regex_t, pattern: *const c_char, flags: c_int) -> c_int {
     #[cfg(not(windows))]
     {
@@ -569,7 +590,7 @@ pub unsafe fn regcomp(preg: *mut regex_t, pattern: *const c_char, flags: c_int) 
         let pattern = CStr::from_ptr(pattern).to_string_lossy();
         match regex::bytes::Regex::new(&pattern) {
             Ok(regex) => {
-                (*preg).inner = Box::into_raw(Box::new(regex)).cast();
+                (*preg).inner = regex_new_raw(regex);
                 (*preg).nosub = ((flags & REG_NOSUB) != 0) as c_int;
                 0
             }
@@ -595,7 +616,9 @@ pub unsafe fn regexec(
         if preg.is_null() || string.is_null() || (*preg).inner.is_null() {
             return EINVAL;
         }
-        let regex = &*((*preg).inner.cast::<regex::bytes::Regex>());
+        let Some(regex) = regex_ref_raw((*preg).inner) else {
+            return EINVAL;
+        };
         let haystack = CStr::from_ptr(string).to_bytes();
         let Some(captures) = regex.captures(haystack) else {
             return 1;
@@ -624,7 +647,7 @@ pub unsafe fn regfree(preg: *mut regex_t) {
     #[cfg(windows)]
     {
         if !preg.is_null() && !(*preg).inner.is_null() {
-            drop(Box::from_raw((*preg).inner.cast::<regex::bytes::Regex>()));
+            regex_free_raw((*preg).inner);
             (*preg).inner = std::ptr::null_mut();
         }
     }

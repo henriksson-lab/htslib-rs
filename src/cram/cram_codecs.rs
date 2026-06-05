@@ -408,29 +408,29 @@ pub unsafe fn cram_cram_codecs_c_459_cram_external_decode_init(
             return std::ptr::null_mut();
         }
         (*c).decode = if option == 5 {
-            cram_cram_codecs_c_410_cram_external_decode_block as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_410_cram_external_decode_block as usize)
         } else if option == 3 || option == 4 {
-            cram_cram_codecs_c_390_cram_external_decode_char as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_390_cram_external_decode_char as usize)
         } else {
             free(c.cast());
             return std::ptr::null_mut();
         };
     } else if option == 1 {
-        (*c).decode = cram_cram_codecs_c_350_cram_external_decode_int as usize as *mut c_void;
+        (*c).decode = cram_fn_ptr(cram_cram_codecs_c_350_cram_external_decode_int as usize);
     } else if option == 2 {
-        (*c).decode = cram_cram_codecs_c_370_cram_external_decode_long as usize as *mut c_void;
+        (*c).decode = cram_fn_ptr(cram_cram_codecs_c_370_cram_external_decode_long as usize);
     } else if option == 4 || option == 3 {
-        (*c).decode = cram_cram_codecs_c_390_cram_external_decode_char as usize as *mut c_void;
+        (*c).decode = cram_fn_ptr(cram_cram_codecs_c_390_cram_external_decode_char as usize);
     } else {
-        (*c).decode = cram_cram_codecs_c_410_cram_external_decode_block as usize as *mut c_void;
+        (*c).decode = cram_fn_ptr(cram_cram_codecs_c_410_cram_external_decode_block as usize);
     }
-    (*c).free = cram_cram_codecs_c_433_cram_external_decode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_433_cram_external_decode_free as usize);
     (*c).encode = std::ptr::null_mut();
     (*c).store = std::ptr::null_mut();
-    (*c).size = cram_cram_codecs_c_439_cram_external_decode_size as usize as *mut c_void;
+    (*c).size = cram_fn_ptr(cram_cram_codecs_c_439_cram_external_decode_size as usize);
     (*c).flush = std::ptr::null_mut();
-    (*c).get_block = cram_cram_codecs_c_450_cram_external_get_block as usize as *mut c_void;
-    (*c).describe = cram_cram_codecs_c_454_cram_external_describe as usize as *mut c_void;
+    (*c).get_block = cram_fn_ptr(cram_cram_codecs_c_450_cram_external_get_block as usize);
+    (*c).describe = cram_fn_ptr(cram_cram_codecs_c_454_cram_external_describe as usize);
 
     let vv = vv.cast::<varint_vec_layout>();
     let mut cp = data;
@@ -579,24 +579,24 @@ pub unsafe fn cram_cram_codecs_c_586_cram_external_encode_init(
     (*c).out = std::ptr::null_mut();
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
-    (*c).free = cram_cram_codecs_c_556_cram_external_encode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_556_cram_external_encode_free as usize);
     if (version >> 8) >= 4 {
         if codec != 1 || (option != 3 && option != 4) {
             free(c.cast());
             return std::ptr::null_mut();
         }
-        (*c).encode = cram_cram_codecs_c_547_cram_external_encode_char as usize as *mut c_void;
+        (*c).encode = cram_fn_ptr(cram_cram_codecs_c_547_cram_external_encode_char as usize);
     } else if option == 1 {
-        (*c).encode = cram_cram_codecs_c_523_cram_external_encode_int as usize as *mut c_void;
+        (*c).encode = cram_fn_ptr(cram_cram_codecs_c_523_cram_external_encode_int as usize);
     } else if option == 2 {
-        (*c).encode = cram_cram_codecs_c_535_cram_external_encode_long as usize as *mut c_void;
+        (*c).encode = cram_fn_ptr(cram_cram_codecs_c_535_cram_external_encode_long as usize);
     } else if option == 4 || option == 3 {
-        (*c).encode = cram_cram_codecs_c_547_cram_external_encode_char as usize as *mut c_void;
+        (*c).encode = cram_fn_ptr(cram_cram_codecs_c_547_cram_external_encode_char as usize);
     } else {
         libc::abort();
     }
     (*c).decode = std::ptr::null_mut();
-    (*c).store = cram_cram_codecs_c_562_cram_external_encode_store as usize as *mut c_void;
+    (*c).store = cram_fn_ptr(cram_cram_codecs_c_562_cram_external_encode_store as usize);
     (*c).size = std::ptr::null_mut();
     (*c).flush = std::ptr::null_mut();
     (*c).get_block = std::ptr::null_mut();
@@ -792,9 +792,9 @@ pub unsafe fn cram_cram_codecs_c_760_cram_varint_decode_init(
     (*c).decode = match codec {
         41 => {
             if option == 1 || option == 6 {
-                cram_cram_codecs_c_644_cram_varint_decode_int as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_644_cram_varint_decode_int as usize)
             } else if option == 2 || option == 7 {
-                cram_cram_codecs_c_688_cram_varint_decode_long as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_688_cram_varint_decode_long as usize)
             } else {
                 free(c.cast());
                 return std::ptr::null_mut();
@@ -802,9 +802,9 @@ pub unsafe fn cram_cram_codecs_c_760_cram_varint_decode_init(
         }
         42 => {
             if option == 1 || option == 6 {
-                cram_cram_codecs_c_666_cram_varint_decode_sint as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_666_cram_varint_decode_sint as usize)
             } else if option == 2 || option == 7 {
-                cram_cram_codecs_c_710_cram_varint_decode_slong as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_710_cram_varint_decode_slong as usize)
             } else {
                 free(c.cast());
                 return std::ptr::null_mut();
@@ -815,13 +815,13 @@ pub unsafe fn cram_cram_codecs_c_760_cram_varint_decode_init(
             return std::ptr::null_mut();
         }
     };
-    (*c).free = cram_cram_codecs_c_732_cram_varint_decode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_732_cram_varint_decode_free as usize);
     (*c).encode = std::ptr::null_mut();
     (*c).store = std::ptr::null_mut();
-    (*c).size = cram_cram_codecs_c_737_cram_varint_decode_size as usize as *mut c_void;
+    (*c).size = cram_fn_ptr(cram_cram_codecs_c_737_cram_varint_decode_size as usize);
     (*c).flush = std::ptr::null_mut();
-    (*c).get_block = cram_cram_codecs_c_748_cram_varint_get_block as usize as *mut c_void;
-    (*c).describe = cram_cram_codecs_c_752_cram_varint_describe as usize as *mut c_void;
+    (*c).get_block = cram_fn_ptr(cram_cram_codecs_c_748_cram_varint_get_block as usize);
+    (*c).describe = cram_fn_ptr(cram_cram_codecs_c_752_cram_varint_describe as usize);
 
     let vv = vv.cast::<varint_vec_layout>();
     let mut cp = data;
@@ -968,20 +968,20 @@ pub unsafe fn cram_cram_codecs_c_878_cram_varint_encode_init(
     (*c).out = std::ptr::null_mut();
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
-    (*c).free = cram_cram_codecs_c_848_cram_varint_encode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_848_cram_varint_encode_free as usize);
     (*c).encode = match codec {
         41 => {
             if option == 1 {
-                cram_cram_codecs_c_820_cram_varint_encode_int as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_820_cram_varint_encode_int as usize)
             } else {
-                cram_cram_codecs_c_834_cram_varint_encode_long as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_834_cram_varint_encode_long as usize)
             }
         }
         42 => {
             if option == 1 {
-                cram_cram_codecs_c_827_cram_varint_encode_sint as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_827_cram_varint_encode_sint as usize)
             } else {
-                cram_cram_codecs_c_841_cram_varint_encode_slong as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_841_cram_varint_encode_slong as usize)
             }
         }
         _ => {
@@ -990,7 +990,7 @@ pub unsafe fn cram_cram_codecs_c_878_cram_varint_encode_init(
         }
     };
     (*c).decode = std::ptr::null_mut();
-    (*c).store = cram_cram_codecs_c_854_cram_varint_encode_store as usize as *mut c_void;
+    (*c).store = cram_fn_ptr(cram_cram_codecs_c_854_cram_varint_encode_store as usize);
     (*c).size = std::ptr::null_mut();
     (*c).flush = std::ptr::null_mut();
     (*c).get_block = std::ptr::null_mut();
@@ -1087,22 +1087,22 @@ pub unsafe fn cram_cram_codecs_c_981_cram_const_decode_init(
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
     (*c).decode = if codec == 43 && option == 3 {
-        cram_cram_codecs_c_932_cram_const_decode_byte as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_932_cram_const_decode_byte as usize)
     } else if codec == 44 && (option == 1 || option == 6) {
-        cram_cram_codecs_c_945_cram_const_decode_int as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_945_cram_const_decode_int as usize)
     } else if codec == 44 && (option == 2 || option == 7) {
-        cram_cram_codecs_c_956_cram_const_decode_long as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_956_cram_const_decode_long as usize)
     } else {
         free(c.cast());
         return std::ptr::null_mut();
     };
-    (*c).free = cram_cram_codecs_c_967_cram_const_decode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_967_cram_const_decode_free as usize);
     (*c).encode = std::ptr::null_mut();
     (*c).store = std::ptr::null_mut();
-    (*c).size = cram_cram_codecs_c_972_cram_const_decode_size as usize as *mut c_void;
+    (*c).size = cram_fn_ptr(cram_cram_codecs_c_972_cram_const_decode_size as usize);
     (*c).flush = std::ptr::null_mut();
     (*c).get_block = std::ptr::null_mut();
-    (*c).describe = cram_cram_codecs_c_976_cram_const_describe as usize as *mut c_void;
+    (*c).describe = cram_fn_ptr(cram_cram_codecs_c_976_cram_const_describe as usize);
 
     let vv = vv.cast::<varint_vec_layout>();
     let mut cp = data;
@@ -1164,10 +1164,10 @@ pub unsafe fn cram_cram_codecs_c_1048_cram_const_encode_init(
     (*c).out = std::ptr::null_mut();
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
-    (*c).free = cram_cram_codecs_c_967_cram_const_decode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_967_cram_const_decode_free as usize);
     (*c).decode = std::ptr::null_mut();
-    (*c).encode = cram_cram_codecs_c_1020_cram_const_encode as usize as *mut c_void;
-    (*c).store = cram_cram_codecs_c_1025_cram_const_encode_store as usize as *mut c_void;
+    (*c).encode = cram_fn_ptr(cram_cram_codecs_c_1020_cram_const_encode as usize);
+    (*c).store = cram_fn_ptr(cram_cram_codecs_c_1025_cram_const_encode_store as usize);
     (*c).size = std::ptr::null_mut();
     (*c).flush = std::ptr::null_mut();
     (*c).get_block = std::ptr::null_mut();
@@ -1302,22 +1302,22 @@ pub unsafe fn cram_cram_codecs_c_1142_cram_beta_decode_init(
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
     (*c).decode = if option == 1 || option == 6 {
-        cram_cram_codecs_c_1090_cram_beta_decode_int as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1090_cram_beta_decode_int as usize)
     } else if option == 2 || option == 7 {
-        cram_cram_codecs_c_1072_cram_beta_decode_long as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1072_cram_beta_decode_long as usize)
     } else if option == 4 || option == 3 {
-        cram_cram_codecs_c_1108_cram_beta_decode_char as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1108_cram_beta_decode_char as usize)
     } else {
         free(c.cast());
         return std::ptr::null_mut();
     };
-    (*c).free = cram_cram_codecs_c_1131_cram_beta_decode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_1131_cram_beta_decode_free as usize);
     (*c).encode = std::ptr::null_mut();
     (*c).store = std::ptr::null_mut();
     (*c).size = std::ptr::null_mut();
     (*c).flush = std::ptr::null_mut();
     (*c).get_block = std::ptr::null_mut();
-    (*c).describe = cram_cram_codecs_c_1136_cram_beta_describe as usize as *mut c_void;
+    (*c).describe = cram_fn_ptr(cram_cram_codecs_c_1136_cram_beta_describe as usize);
 
     let vv = vv.cast::<varint_vec_layout>();
     let mut cp = data;
@@ -1456,15 +1456,15 @@ pub unsafe fn cram_cram_codecs_c_1247_cram_beta_encode_init(
     (*c).out = std::ptr::null_mut();
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
-    (*c).free = cram_cram_codecs_c_1243_cram_beta_encode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_1243_cram_beta_encode_free as usize);
     (*c).encode = if option == 1 || option == 6 {
-        cram_cram_codecs_c_1219_cram_beta_encode_int as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1219_cram_beta_encode_int as usize)
     } else if option == 2 || option == 7 {
-        cram_cram_codecs_c_1207_cram_beta_encode_long as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1207_cram_beta_encode_long as usize)
     } else {
-        cram_cram_codecs_c_1231_cram_beta_encode_char as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1231_cram_beta_encode_char as usize)
     };
-    (*c).store = cram_cram_codecs_c_1183_cram_beta_encode_store as usize as *mut c_void;
+    (*c).store = cram_fn_ptr(cram_cram_codecs_c_1183_cram_beta_encode_store as usize);
     (*c).size = std::ptr::null_mut();
     (*c).flush = std::ptr::null_mut();
     (*c).get_block = std::ptr::null_mut();
@@ -1601,7 +1601,7 @@ pub unsafe fn cram_cram_codecs_c_1377_cram_xpack_decode_expand_char(
 
     let sub_codec = (*c_xpack).xpack.sub_codec;
     let sub_layout = sub_codec.cast::<cram_codec_xpack_layout>();
-    let get_block: CramCodecGetBlockFn = std::mem::transmute((*sub_layout).get_block);
+    let get_block: CramCodecGetBlockFn = cram_fn((*sub_layout).get_block);
     let sub_b = get_block(slice, sub_codec);
     if sub_b.is_null() || (*c_xpack).xpack.nbits == 0 {
         return -1;
@@ -1712,7 +1712,7 @@ pub unsafe fn cram_cram_codecs_c_1431_cram_xpack_decode_free(c: *mut c_void) {
     if !(*c_xpack).xpack.sub_codec.is_null() {
         let sub = (*c_xpack).xpack.sub_codec.cast::<cram_codec_xpack_layout>();
         if !(*sub).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = std::mem::transmute((*sub).free);
+            let free_fn: unsafe fn(*mut c_void) = cram_fn((*sub).free);
             free_fn((*c_xpack).xpack.sub_codec);
         }
     }
@@ -1762,21 +1762,21 @@ pub unsafe fn cram_cram_codecs_c_1453_cram_xpack_decode_init(
 
     (*c).codec = 51;
     (*c).decode = if option == 2 {
-        cram_cram_codecs_c_1344_cram_xpack_decode_long as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1344_cram_xpack_decode_long as usize)
     } else if option == 1 {
-        cram_cram_codecs_c_1359_cram_xpack_decode_int as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1359_cram_xpack_decode_int as usize)
     } else if option == 4 || option == 3 {
-        cram_cram_codecs_c_1408_cram_xpack_decode_char as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1408_cram_xpack_decode_char as usize)
     } else {
         cram_cram_codecs_c_1431_cram_xpack_decode_free(c.cast());
         return std::ptr::null_mut();
     };
-    (*c).free = cram_cram_codecs_c_1431_cram_xpack_decode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_1431_cram_xpack_decode_free as usize);
     (*c).encode = std::ptr::null_mut();
     (*c).store = std::ptr::null_mut();
-    (*c).size = cram_cram_codecs_c_1443_cram_xpack_decode_size as usize as *mut c_void;
+    (*c).size = cram_fn_ptr(cram_cram_codecs_c_1443_cram_xpack_decode_size as usize);
     (*c).flush = std::ptr::null_mut();
-    (*c).get_block = cram_cram_codecs_c_1448_cram_xpack_get_block as usize as *mut c_void;
+    (*c).get_block = cram_fn_ptr(cram_cram_codecs_c_1448_cram_xpack_get_block as usize);
     (*c).describe = std::ptr::null_mut();
 
     let vv_layout = vv.cast::<varint_vec_layout>();
@@ -1893,7 +1893,7 @@ pub unsafe fn cram_cram_codecs_c_1612_cram_xpack_encode_free(c: *mut c_void) {
     if !(*c_xpack).xpack.sub_codec.is_null() {
         let sub = (*c_xpack).xpack.sub_codec.cast::<cram_codec_xpack_layout>();
         if !(*sub).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = std::mem::transmute((*sub).free);
+            let free_fn: unsafe fn(*mut c_void) = cram_fn((*sub).free);
             free_fn((*c_xpack).xpack.sub_codec);
         }
     }
@@ -1918,7 +1918,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_1515_cram_xpack_encode_flush(c: *mut
     };
     let sub_codec = (*c_xpack).xpack.sub_codec;
     let sub_layout = sub_codec.cast::<cram_codec_xpack_layout>();
-    let encode: CramCodecEncodeFn = std::mem::transmute((*sub_layout).encode);
+    let encode: CramCodecEncodeFn = cram_fn((*sub_layout).encode);
     if encode(
         std::ptr::null_mut(),
         sub_codec,
@@ -1931,7 +1931,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_1515_cram_xpack_encode_flush(c: *mut
 
     let mut r = 0;
     if !(*sub_layout).flush.is_null() {
-        let flush: CramCodecFlushFn = std::mem::transmute((*sub_layout).flush);
+        let flush: CramCodecFlushFn = cram_fn((*sub_layout).flush);
         r = flush(sub_codec);
     }
 
@@ -1964,8 +1964,7 @@ pub unsafe fn cram_cram_codecs_c_1537_cram_xpack_encode_store(
     if tb.is_null() {
         return -1;
     }
-    let store: CramCodecStoreFn =
-        std::mem::transmute((*(tc.cast::<cram_codec_xpack_layout>())).store);
+    let store: CramCodecStoreFn = cram_fn((*(tc.cast::<cram_codec_xpack_layout>())).store);
     let len2 = store(tc, tb, std::ptr::null_mut(), version);
 
     let n = ((*(*c).vv).varint_put32_blk.unwrap())(b, (*c).codec);
@@ -2033,18 +2032,18 @@ pub unsafe fn cram_cram_codecs_c_1623_cram_xpack_encode_init(
     (*c).out = std::ptr::null_mut();
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
-    (*c).free = cram_cram_codecs_c_1612_cram_xpack_encode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_1612_cram_xpack_encode_free as usize);
     (*c).decode = std::ptr::null_mut();
     (*c).encode = if option == 2 {
-        cram_cram_codecs_c_1581_cram_xpack_encode_long as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1581_cram_xpack_encode_long as usize)
     } else if option == 1 {
-        cram_cram_codecs_c_1592_cram_xpack_encode_int as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1592_cram_xpack_encode_int as usize)
     } else {
-        cram_cram_codecs_c_1603_cram_xpack_encode_char as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1603_cram_xpack_encode_char as usize)
     };
-    (*c).store = cram_cram_codecs_c_1537_cram_xpack_encode_store as usize as *mut c_void;
+    (*c).store = cram_fn_ptr(cram_cram_codecs_c_1537_cram_xpack_encode_store as usize);
     (*c).size = std::ptr::null_mut();
-    (*c).flush = cram_cram_codecs_c_1515_cram_xpack_encode_flush as usize as *mut c_void;
+    (*c).flush = cram_fn_ptr(cram_cram_codecs_c_1515_cram_xpack_encode_flush as usize);
     (*c).get_block = std::ptr::null_mut();
     (*c).describe = std::ptr::null_mut();
 
@@ -2092,7 +2091,7 @@ pub unsafe fn cram_cram_codecs_c_1688_cram_xdelta_decode_int(
         let mut one = 1;
         let sub = (*c).xdelta.sub_codec;
         let sub_codec = sub.cast::<cram_codec_xdelta_layout>();
-        let decode_fn: CramCodecDecodeFn = std::mem::transmute((*sub_codec).decode);
+        let decode_fn: CramCodecDecodeFn = cram_fn((*sub_codec).decode);
         if decode_fn(slice, sub, in_, (&mut v as *mut u32).cast(), &mut one) < 0 {
             return -1;
         }
@@ -2114,7 +2113,7 @@ pub unsafe fn cram_cram_codecs_c_1719_cram_xdelta_decode_block(
     let out = out_.cast::<cram_block>();
     let sub = (*c).xdelta.sub_codec;
     let sub_codec = sub.cast::<cram_codec_xdelta_layout>();
-    let get_block_fn: CramCodecGetBlockFn = std::mem::transmute((*sub_codec).get_block);
+    let get_block_fn: CramCodecGetBlockFn = cram_fn((*sub_codec).get_block);
     let b = get_block_fn(slice, sub);
     let w = (*c).xdelta.word_size as c_int;
     let mut npad = (w - *out_size % w) % w;
@@ -2169,7 +2168,7 @@ pub unsafe fn cram_cram_codecs_c_1762_cram_xdelta_decode_free(c: *mut c_void) {
             .sub_codec
             .cast::<cram_codec_xdelta_layout>();
         if !(*sub).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = std::mem::transmute((*sub).free);
+            let free_fn: unsafe fn(*mut c_void) = cram_fn((*sub).free);
             free_fn((*c_xdelta).xdelta.sub_codec);
         }
     }
@@ -2213,24 +2212,24 @@ pub unsafe fn cram_cram_codecs_c_1781_cram_xdelta_decode_init(
     }
     (*c).codec = 53;
     (*c).decode = if option == 2 {
-        cram_cram_codecs_c_1684_cram_xdelta_decode_long as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1684_cram_xdelta_decode_long as usize)
     } else if option == 1 {
-        cram_cram_codecs_c_1688_cram_xdelta_decode_int as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1688_cram_xdelta_decode_int as usize)
     } else if option == 4 || option == 3 {
-        cram_cram_codecs_c_1709_cram_xdelta_decode_char as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1709_cram_xdelta_decode_char as usize)
     } else if option == 5 {
         option = 4;
-        cram_cram_codecs_c_1719_cram_xdelta_decode_block as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1719_cram_xdelta_decode_block as usize)
     } else {
         free(c.cast());
         return std::ptr::null_mut();
     };
-    (*c).free = cram_cram_codecs_c_1762_cram_xdelta_decode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_1762_cram_xdelta_decode_free as usize);
     (*c).encode = std::ptr::null_mut();
     (*c).store = std::ptr::null_mut();
-    (*c).size = cram_cram_codecs_c_1771_cram_xdelta_decode_size as usize as *mut c_void;
+    (*c).size = cram_fn_ptr(cram_cram_codecs_c_1771_cram_xdelta_decode_size as usize);
     (*c).flush = std::ptr::null_mut();
-    (*c).get_block = cram_cram_codecs_c_1776_cram_xdelta_get_block as usize as *mut c_void;
+    (*c).get_block = cram_fn_ptr(cram_cram_codecs_c_1776_cram_xdelta_get_block as usize);
     (*c).describe = std::ptr::null_mut();
 
     let vv_layout = vv.cast::<varint_vec_layout>();
@@ -2339,7 +2338,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_1835_cram_xdelta_encode_flush(c: *mu
 
     let sub_codec = (*c).xdelta.sub_codec;
     let sub_layout = sub_codec.cast::<cram_codec_xdelta_layout>();
-    let encode: CramCodecEncodeFn = std::mem::transmute((*sub_layout).encode);
+    let encode: CramCodecEncodeFn = cram_fn((*sub_layout).encode);
     let b_layout = b.cast::<cram_block_layout>();
     if encode(
         std::ptr::null_mut(),
@@ -2380,8 +2379,7 @@ pub unsafe fn cram_cram_codecs_c_1930_cram_xdelta_encode_store(
     if tb.is_null() {
         return -1;
     }
-    let store: CramCodecStoreFn =
-        std::mem::transmute((*(tc.cast::<cram_codec_xdelta_layout>())).store);
+    let store: CramCodecStoreFn = cram_fn((*(tc.cast::<cram_codec_xdelta_layout>())).store);
     let len2 = store(tc, tb, std::ptr::null_mut(), version);
 
     let n = ((*(*c).vv).varint_put32_blk.unwrap())(b, (*c).codec);
@@ -2452,7 +2450,7 @@ pub unsafe fn cram_cram_codecs_c_1976_cram_xdelta_encode_char(
 
     let sub_codec = (*c).xdelta.sub_codec;
     let sub_layout = sub_codec.cast::<cram_codec_xdelta_layout>();
-    let encode: CramCodecEncodeFn = std::mem::transmute((*sub_layout).encode);
+    let encode: CramCodecEncodeFn = cram_fn((*sub_layout).encode);
     if encode(slice, sub_codec, dat, cp.offset_from(dat) as c_int) != 0 {
         free(dat.cast());
         return -1;
@@ -2473,7 +2471,7 @@ pub unsafe fn cram_cram_codecs_c_2011_cram_xdelta_encode_free(c: *mut c_void) {
             .sub_codec
             .cast::<cram_codec_xdelta_layout>();
         if !(*sub).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = std::mem::transmute((*sub).free);
+            let free_fn: unsafe fn(*mut c_void) = cram_fn((*sub).free);
             free_fn((*c_xdelta).xdelta.sub_codec);
         }
     }
@@ -2498,18 +2496,18 @@ pub unsafe fn cram_cram_codecs_c_2022_cram_xdelta_encode_init(
     (*c).out = std::ptr::null_mut();
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
-    (*c).free = cram_cram_codecs_c_2011_cram_xdelta_encode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_2011_cram_xdelta_encode_free as usize);
     (*c).decode = std::ptr::null_mut();
     (*c).encode = if option == 2 {
-        cram_cram_codecs_c_1966_cram_xdelta_encode_long as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1966_cram_xdelta_encode_long as usize)
     } else if option == 1 {
-        cram_cram_codecs_c_1971_cram_xdelta_encode_int as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1971_cram_xdelta_encode_int as usize)
     } else {
-        cram_cram_codecs_c_1976_cram_xdelta_encode_char as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_1976_cram_xdelta_encode_char as usize)
     };
-    (*c).store = cram_cram_codecs_c_1930_cram_xdelta_encode_store as usize as *mut c_void;
+    (*c).store = cram_fn_ptr(cram_cram_codecs_c_1930_cram_xdelta_encode_store as usize);
     (*c).size = std::ptr::null_mut();
-    (*c).flush = cram_cram_codecs_c_1835_cram_xdelta_encode_flush as usize as *mut c_void;
+    (*c).flush = cram_fn_ptr(cram_cram_codecs_c_1835_cram_xdelta_encode_flush as usize);
     (*c).get_block = std::ptr::null_mut();
     (*c).describe = std::ptr::null_mut();
 
@@ -2548,7 +2546,7 @@ pub unsafe fn cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(
 
     let lit_codec = (*c_xrle).xrle.lit_codec;
     let lit_get_block: CramCodecGetBlockFn =
-        std::mem::transmute((*(lit_codec.cast::<cram_codec_xrle_layout>())).get_block);
+        cram_fn((*(lit_codec.cast::<cram_codec_xrle_layout>())).get_block);
     let lit_b = lit_get_block(slice, lit_codec);
     if lit_b.is_null() {
         return -1;
@@ -2559,10 +2557,10 @@ pub unsafe fn cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(
 
     let len_codec = (*c_xrle).xrle.len_codec;
     let len_size_fn: CramCodecSizeFn =
-        std::mem::transmute((*(len_codec.cast::<cram_codec_xrle_layout>())).size);
+        cram_fn((*(len_codec.cast::<cram_codec_xrle_layout>())).size);
     let len_sz = len_size_fn(slice, len_codec) as usize;
     let len_get_block: CramCodecGetBlockFn =
-        std::mem::transmute((*(len_codec.cast::<cram_codec_xrle_layout>())).get_block);
+        cram_fn((*(len_codec.cast::<cram_codec_xrle_layout>())).get_block);
     let len_b = len_get_block(slice, len_codec);
     if len_b.is_null() {
         return -1;
@@ -2677,14 +2675,14 @@ pub unsafe fn cram_cram_codecs_c_2172_cram_xrle_decode_free(c: *mut c_void) {
     if !(*c_xrle).xrle.len_codec.is_null() {
         let len = (*c_xrle).xrle.len_codec.cast::<cram_codec_xrle_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = std::mem::transmute((*len).free);
+            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
             free_fn((*c_xrle).xrle.len_codec);
         }
     }
     if !(*c_xrle).xrle.lit_codec.is_null() {
         let lit = (*c_xrle).xrle.lit_codec.cast::<cram_codec_xrle_layout>();
         if !(*lit).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = std::mem::transmute((*lit).free);
+            let free_fn: unsafe fn(*mut c_void) = cram_fn((*lit).free);
             free_fn((*c_xrle).xrle.lit_codec);
         }
     }
@@ -2708,21 +2706,21 @@ pub unsafe fn cram_cram_codecs_c_2184_cram_xrle_decode_init(
 
     (*c).codec = 52;
     (*c).decode = if option == 2 {
-        cram_cram_codecs_c_2063_cram_xrle_decode_long as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_2063_cram_xrle_decode_long as usize)
     } else if option == 1 {
-        cram_cram_codecs_c_2068_cram_xrle_decode_int as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_2068_cram_xrle_decode_int as usize)
     } else if option == 4 || option == 3 {
-        cram_cram_codecs_c_2125_cram_xrle_decode_char as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_2125_cram_xrle_decode_char as usize)
     } else {
         free(c.cast());
         return std::ptr::null_mut();
     };
-    (*c).free = cram_cram_codecs_c_2172_cram_xrle_decode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_2172_cram_xrle_decode_free as usize);
     (*c).encode = std::ptr::null_mut();
     (*c).store = std::ptr::null_mut();
-    (*c).size = cram_cram_codecs_c_2115_cram_xrle_decode_size as usize as *mut c_void;
+    (*c).size = cram_fn_ptr(cram_cram_codecs_c_2115_cram_xrle_decode_size as usize);
     (*c).flush = std::ptr::null_mut();
-    (*c).get_block = cram_cram_codecs_c_2120_cram_xrle_get_block as usize as *mut c_void;
+    (*c).get_block = cram_fn_ptr(cram_cram_codecs_c_2120_cram_xrle_get_block as usize);
     (*c).describe = std::ptr::null_mut();
     (*c).xrle.cur_len = 0;
     (*c).xrle.cur_lit = -1;
@@ -2844,7 +2842,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2257_cram_xrle_encode_flush(c: *mut 
 
     let len_codec = (*c_xrle).xrle.len_codec;
     let len_encode: CramCodecEncodeFn =
-        std::mem::transmute((*(len_codec.cast::<cram_codec_xrle_layout>())).encode);
+        cram_fn((*(len_codec.cast::<cram_codec_xrle_layout>())).encode);
     if len_encode(
         std::ptr::null_mut(),
         len_codec,
@@ -2859,7 +2857,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2257_cram_xrle_encode_flush(c: *mut 
 
     let lit_codec = (*c_xrle).xrle.lit_codec;
     let lit_encode: CramCodecEncodeFn =
-        std::mem::transmute((*(lit_codec.cast::<cram_codec_xrle_layout>())).encode);
+        cram_fn((*(lit_codec.cast::<cram_codec_xrle_layout>())).encode);
     if lit_encode(
         std::ptr::null_mut(),
         lit_codec,
@@ -2915,8 +2913,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2303_cram_xrle_encode_store(
         cram_cram_io_c_1565_cram_free_block(b_rle);
         return -1;
     }
-    let store: CramCodecStoreFn =
-        std::mem::transmute((*(tc.cast::<cram_codec_xrle_layout>())).store);
+    let store: CramCodecStoreFn = cram_fn((*(tc.cast::<cram_codec_xrle_layout>())).store);
     let len2 = store(tc, b_len, std::ptr::null_mut(), version);
 
     let tc = (*c_xrle).xrle.lit_codec;
@@ -2926,8 +2923,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2303_cram_xrle_encode_store(
         cram_cram_io_c_1565_cram_free_block(b_len);
         return -1;
     }
-    let store: CramCodecStoreFn =
-        std::mem::transmute((*(tc.cast::<cram_codec_xrle_layout>())).store);
+    let store: CramCodecStoreFn = cram_fn((*(tc.cast::<cram_codec_xrle_layout>())).store);
     let len3 = store(tc, b_lit, std::ptr::null_mut(), version);
 
     let n = ((*(*c_xrle).vv).varint_put32_blk.unwrap())(b, (*c_xrle).codec);
@@ -3022,14 +3018,14 @@ pub unsafe fn cram_cram_codecs_c_2396_cram_xrle_encode_free(c: *mut c_void) {
     if !(*c_xrle).xrle.len_codec.is_null() {
         let len = (*c_xrle).xrle.len_codec.cast::<cram_codec_xrle_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = std::mem::transmute((*len).free);
+            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
             free_fn((*c_xrle).xrle.len_codec);
         }
     }
     if !(*c_xrle).xrle.lit_codec.is_null() {
         let lit = (*c_xrle).xrle.lit_codec.cast::<cram_codec_xrle_layout>();
         if !(*lit).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = std::mem::transmute((*lit).free);
+            let free_fn: unsafe fn(*mut c_void) = cram_fn((*lit).free);
             free_fn((*c_xrle).xrle.lit_codec);
         }
     }
@@ -3054,18 +3050,18 @@ pub unsafe fn cram_cram_codecs_c_2409_cram_xrle_encode_init(
     (*c).out = std::ptr::null_mut();
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
-    (*c).free = cram_cram_codecs_c_2396_cram_xrle_encode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_2396_cram_xrle_encode_free as usize);
     (*c).decode = std::ptr::null_mut();
     (*c).encode = if option == 2 {
-        cram_cram_codecs_c_2359_cram_xrle_encode_long as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_2359_cram_xrle_encode_long as usize)
     } else if option == 1 {
-        cram_cram_codecs_c_2365_cram_xrle_encode_int as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_2365_cram_xrle_encode_int as usize)
     } else {
-        cram_cram_codecs_c_2371_cram_xrle_encode_char as usize as *mut c_void
+        cram_fn_ptr(cram_cram_codecs_c_2371_cram_xrle_encode_char as usize)
     };
-    (*c).store = cram_cram_codecs_c_2303_cram_xrle_encode_store as usize as *mut c_void;
+    (*c).store = cram_fn_ptr(cram_cram_codecs_c_2303_cram_xrle_encode_store as usize);
     (*c).size = std::ptr::null_mut();
-    (*c).flush = cram_cram_codecs_c_2257_cram_xrle_encode_flush as usize as *mut c_void;
+    (*c).flush = cram_fn_ptr(cram_cram_codecs_c_2257_cram_xrle_encode_flush as usize);
     (*c).get_block = std::ptr::null_mut();
     (*c).describe = std::ptr::null_mut();
 
@@ -3179,14 +3175,14 @@ pub unsafe fn cram_cram_codecs_c_2508_cram_subexp_decode_init(
     (*c).out = std::ptr::null_mut();
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
-    (*c).free = cram_cram_codecs_c_2496_cram_subexp_decode_free as usize as *mut c_void;
-    (*c).decode = cram_cram_codecs_c_2452_cram_subexp_decode as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_2496_cram_subexp_decode_free as usize);
+    (*c).decode = cram_fn_ptr(cram_cram_codecs_c_2452_cram_subexp_decode as usize);
     (*c).encode = std::ptr::null_mut();
     (*c).store = std::ptr::null_mut();
     (*c).size = std::ptr::null_mut();
     (*c).flush = std::ptr::null_mut();
     (*c).get_block = std::ptr::null_mut();
-    (*c).describe = cram_cram_codecs_c_2501_cram_subexp_describe as usize as *mut c_void;
+    (*c).describe = cram_fn_ptr(cram_cram_codecs_c_2501_cram_subexp_describe as usize);
     (*c).subexp.k = -1;
 
     let vv = vv.cast::<varint_vec_layout>();
@@ -3270,14 +3266,14 @@ pub unsafe fn cram_cram_codecs_c_2580_cram_gamma_decode_init(
     (*c).out = std::ptr::null_mut();
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
-    (*c).free = cram_cram_codecs_c_2570_cram_gamma_decode_free as usize as *mut c_void;
-    (*c).decode = cram_cram_codecs_c_2546_cram_gamma_decode as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_2570_cram_gamma_decode_free as usize);
+    (*c).decode = cram_fn_ptr(cram_cram_codecs_c_2546_cram_gamma_decode as usize);
     (*c).encode = std::ptr::null_mut();
     (*c).store = std::ptr::null_mut();
     (*c).size = std::ptr::null_mut();
     (*c).flush = std::ptr::null_mut();
     (*c).get_block = std::ptr::null_mut();
-    (*c).describe = cram_cram_codecs_c_2575_cram_gamma_describe as usize as *mut c_void;
+    (*c).describe = cram_fn_ptr(cram_cram_codecs_c_2575_cram_gamma_describe as usize);
 
     let vv = vv.cast::<varint_vec_layout>();
     let mut cp = data;
@@ -3376,7 +3372,7 @@ pub unsafe fn cram_cram_codecs_c_2814_cram_huffman_decode_init(
         return std::ptr::null_mut();
     }
     (*h).codec = 3;
-    (*h).free = cram_cram_codecs_c_2632_cram_huffman_decode_free as usize as *mut c_void;
+    (*h).free = cram_fn_ptr(cram_cram_codecs_c_2632_cram_huffman_decode_free as usize);
     (*h).huffman.ncodes = ncodes;
     (*h).huffman.option = option;
 
@@ -3422,7 +3418,7 @@ pub unsafe fn cram_cram_codecs_c_2814_cram_huffman_decode_init(
     }
 
     if ncodes == 0 {
-        (*h).decode = cram_cram_codecs_c_2641_cram_huffman_decode_null as usize as *mut c_void;
+        (*h).decode = cram_fn_ptr(cram_cram_codecs_c_2641_cram_huffman_decode_null as usize);
         return h.cast();
     }
 
@@ -3489,26 +3485,26 @@ pub unsafe fn cram_cram_codecs_c_2814_cram_huffman_decode_init(
 
     if option == 3 || option == 4 {
         (*h).decode = if (*(*h).huffman.codes).len == 0 {
-            cram_cram_codecs_c_2646_cram_huffman_decode_char0 as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_2646_cram_huffman_decode_char0 as usize)
         } else {
-            cram_cram_codecs_c_2660_cram_huffman_decode_char as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_2660_cram_huffman_decode_char as usize)
         };
     } else if option == 2 || option == 7 {
         (*h).decode = if (*(*h).huffman.codes).len == 0 {
-            cram_cram_codecs_c_2745_cram_huffman_decode_long0 as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_2745_cram_huffman_decode_long0 as usize)
         } else {
-            cram_cram_codecs_c_2758_cram_huffman_decode_long as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_2758_cram_huffman_decode_long as usize)
         };
     } else if option == 1 || option == 6 || option == 3 {
         (*h).decode = if (*(*h).huffman.codes).len == 0 {
-            cram_cram_codecs_c_2695_cram_huffman_decode_int0 as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_2695_cram_huffman_decode_int0 as usize)
         } else {
-            cram_cram_codecs_c_2708_cram_huffman_decode_int as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_2708_cram_huffman_decode_int as usize)
         };
     } else {
         return std::ptr::null_mut();
     }
-    (*h).describe = cram_cram_codecs_c_2795_cram_huffman_describe as usize as *mut c_void;
+    (*h).describe = cram_fn_ptr(cram_cram_codecs_c_2795_cram_huffman_describe as usize);
 
     h.cast()
 }
@@ -4157,29 +4153,29 @@ pub unsafe fn cram_cram_codecs_c_3176_cram_huffman_encode_init(
     (*c).huffman.codes = codes;
     (*c).huffman.nvals = nvals as c_int;
     (*c).huffman.option = option;
-    (*c).free = cram_cram_codecs_c_3099_cram_huffman_encode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_3099_cram_huffman_encode_free as usize);
     (*c).encode = if option == 3 || option == 4 {
         if (*(*c).huffman.codes).len == 0 {
-            cram_cram_codecs_c_2989_cram_huffman_encode_char0 as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_2989_cram_huffman_encode_char0 as usize)
         } else {
-            cram_cram_codecs_c_2994_cram_huffman_encode_char as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_2994_cram_huffman_encode_char as usize)
         }
     } else if option == 1 || option == 6 {
         if (*(*c).huffman.codes).len == 0 {
-            cram_cram_codecs_c_3025_cram_huffman_encode_int0 as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_3025_cram_huffman_encode_int0 as usize)
         } else {
-            cram_cram_codecs_c_3030_cram_huffman_encode_int as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_3030_cram_huffman_encode_int as usize)
         }
     } else if option == 2 || option == 7 {
         if (*(*c).huffman.codes).len == 0 {
-            cram_cram_codecs_c_3062_cram_huffman_encode_long0 as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_3062_cram_huffman_encode_long0 as usize)
         } else {
-            cram_cram_codecs_c_3067_cram_huffman_encode_long as usize as *mut c_void
+            cram_fn_ptr(cram_cram_codecs_c_3067_cram_huffman_encode_long as usize)
         }
     } else {
         return std::ptr::null_mut();
     };
-    (*c).store = cram_cram_codecs_c_3112_cram_huffman_encode_store as usize as *mut c_void;
+    (*c).store = cram_fn_ptr(cram_cram_codecs_c_3112_cram_huffman_encode_store as usize);
 
     let _ = (max_val, min_val);
     c.cast()
@@ -4198,7 +4194,7 @@ pub unsafe fn cram_cram_codecs_c_3371_cram_byte_array_len_decode(
     let len_codec = (*c).byte_array_len.len_codec;
     let val_codec = (*c).byte_array_len.val_codec;
     let len_decode: CramCodecDecodeFn =
-        std::mem::transmute((*(len_codec.cast::<cram_codec_byte_array_len_layout>())).decode);
+        cram_fn((*(len_codec.cast::<cram_codec_byte_array_len_layout>())).decode);
     let mut r = len_decode(
         slice,
         len_codec,
@@ -4216,7 +4212,7 @@ pub unsafe fn cram_cram_codecs_c_3371_cram_byte_array_len_decode(
 
     if r == 0 && !val_codec.is_null() {
         let val_decode: CramCodecDecodeFn =
-            std::mem::transmute((*(val_codec.cast::<cram_codec_byte_array_len_layout>())).decode);
+            cram_fn((*(val_codec.cast::<cram_codec_byte_array_len_layout>())).decode);
         r = val_decode(slice, val_codec, in_, out, &mut len);
     } else {
         return -1;
@@ -4236,7 +4232,7 @@ pub unsafe fn cram_cram_codecs_c_3400_cram_byte_array_len_decode_free(c: *mut c_
             .len_codec
             .cast::<cram_codec_byte_array_len_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = std::mem::transmute((*len).free);
+            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
             free_fn((*c_ba).byte_array_len.len_codec);
         }
     }
@@ -4246,7 +4242,7 @@ pub unsafe fn cram_cram_codecs_c_3400_cram_byte_array_len_decode_free(c: *mut c_
             .val_codec
             .cast::<cram_codec_byte_array_len_layout>();
         if !(*val).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = std::mem::transmute((*val).free);
+            let free_fn: unsafe fn(*mut c_void) = cram_fn((*val).free);
             free_fn((*c_ba).byte_array_len.val_codec);
         }
     }
@@ -4266,7 +4262,7 @@ pub unsafe fn cram_cram_codecs_c_3412_cram_byte_array_len_describe(
         .is_null()
     {
         let describe: CramCodecDescribeFn =
-            std::mem::transmute((*(len_codec.cast::<cram_codec_byte_array_len_layout>())).describe);
+            cram_fn((*(len_codec.cast::<cram_codec_byte_array_len_layout>())).describe);
         r |= describe(len_codec, ks);
     } else {
         r |= (kputsn(c"?".as_ptr(), 1, ks) < 0) as c_int;
@@ -4278,7 +4274,7 @@ pub unsafe fn cram_cram_codecs_c_3412_cram_byte_array_len_describe(
         .is_null()
     {
         let describe: CramCodecDescribeFn =
-            std::mem::transmute((*(val_codec.cast::<cram_codec_byte_array_len_layout>())).describe);
+            cram_fn((*(val_codec.cast::<cram_codec_byte_array_len_layout>())).describe);
         r |= describe(val_codec, ks);
     } else {
         r |= (kputsn(c"?".as_ptr(), 1, ks) < 0) as c_int;
@@ -4305,14 +4301,14 @@ pub unsafe fn cram_cram_codecs_c_3428_cram_byte_array_len_decode_init(
     (*c).out = std::ptr::null_mut();
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
-    (*c).decode = cram_cram_codecs_c_3371_cram_byte_array_len_decode as usize as *mut c_void;
-    (*c).free = cram_cram_codecs_c_3400_cram_byte_array_len_decode_free as usize as *mut c_void;
+    (*c).decode = cram_fn_ptr(cram_cram_codecs_c_3371_cram_byte_array_len_decode as usize);
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_3400_cram_byte_array_len_decode_free as usize);
     (*c).encode = std::ptr::null_mut();
     (*c).store = std::ptr::null_mut();
     (*c).size = std::ptr::null_mut();
     (*c).flush = std::ptr::null_mut();
     (*c).get_block = std::ptr::null_mut();
-    (*c).describe = cram_cram_codecs_c_3412_cram_byte_array_len_describe as usize as *mut c_void;
+    (*c).describe = cram_fn_ptr(cram_cram_codecs_c_3412_cram_byte_array_len_describe as usize);
     (*c).byte_array_len.len_codec = std::ptr::null_mut();
     (*c).byte_array_len.val_codec = std::ptr::null_mut();
 
@@ -4375,9 +4371,9 @@ pub unsafe fn cram_cram_codecs_c_3479_cram_byte_array_len_encode(
     let len_codec = (*c).byte_array_len.len_codec;
     let val_codec = (*c).byte_array_len.val_codec;
     let len_encode: CramCodecEncodeFn =
-        std::mem::transmute((*(len_codec.cast::<cram_codec_byte_array_len_layout>())).encode);
+        cram_fn((*(len_codec.cast::<cram_codec_byte_array_len_layout>())).encode);
     let val_encode: CramCodecEncodeFn =
-        std::mem::transmute((*(val_codec.cast::<cram_codec_byte_array_len_layout>())).encode);
+        cram_fn((*(val_codec.cast::<cram_codec_byte_array_len_layout>())).encode);
     let mut r = 0;
     r |= len_encode(slice, len_codec, (&mut i32_ as *mut i32).cast(), 1);
     r |= val_encode(slice, val_codec, in_, in_size);
@@ -4413,8 +4409,7 @@ pub unsafe fn cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
     if b_len.is_null() {
         return -1;
     }
-    let store: CramCodecStoreFn =
-        std::mem::transmute((*(tc.cast::<cram_codec_byte_array_len_layout>())).store);
+    let store: CramCodecStoreFn = cram_fn((*(tc.cast::<cram_codec_byte_array_len_layout>())).store);
     let len2 = store(tc, b_len, std::ptr::null_mut(), version);
     if len2 < 0 {
         cram_cram_io_c_1565_cram_free_block(b_len);
@@ -4430,8 +4425,7 @@ pub unsafe fn cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
         cram_cram_io_c_1565_cram_free_block(b_len);
         return -1;
     }
-    let store: CramCodecStoreFn =
-        std::mem::transmute((*(tc.cast::<cram_codec_byte_array_len_layout>())).store);
+    let store: CramCodecStoreFn = cram_fn((*(tc.cast::<cram_codec_byte_array_len_layout>())).store);
     let len3 = store(tc, b_val, std::ptr::null_mut(), version);
     if len3 < 0 {
         cram_cram_io_c_1565_cram_free_block(b_len);
@@ -4489,10 +4483,10 @@ pub unsafe fn cram_cram_codecs_c_3547_cram_byte_array_len_encode_init(
     (*c).out = std::ptr::null_mut();
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
-    (*c).free = cram_cram_codecs_c_3493_cram_byte_array_len_encode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_3493_cram_byte_array_len_encode_free as usize);
     (*c).decode = std::ptr::null_mut();
-    (*c).encode = cram_cram_codecs_c_3479_cram_byte_array_len_encode as usize as *mut c_void;
-    (*c).store = cram_cram_codecs_c_3506_cram_byte_array_len_encode_store as usize as *mut c_void;
+    (*c).encode = cram_fn_ptr(cram_cram_codecs_c_3479_cram_byte_array_len_encode as usize);
+    (*c).store = cram_fn_ptr(cram_cram_codecs_c_3506_cram_byte_array_len_encode_store as usize);
     (*c).size = std::ptr::null_mut();
     (*c).flush = std::ptr::null_mut();
     (*c).get_block = std::ptr::null_mut();
@@ -4660,10 +4654,10 @@ pub unsafe fn cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
     (*c).out = std::ptr::null_mut();
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
-    (*c).free = cram_cram_codecs_c_3669_cram_byte_array_stop_decode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_3669_cram_byte_array_stop_decode_free as usize);
     (*c).decode = match option {
-        5 => cram_cram_codecs_c_3626_cram_byte_array_stop_decode_block as usize as *mut c_void,
-        4 => cram_cram_codecs_c_3586_cram_byte_array_stop_decode_char as usize as *mut c_void,
+        5 => cram_fn_ptr(cram_cram_codecs_c_3626_cram_byte_array_stop_decode_block as usize),
+        4 => cram_fn_ptr(cram_cram_codecs_c_3586_cram_byte_array_stop_decode_char as usize),
         _ => {
             free(c.cast());
             return std::ptr::null_mut();
@@ -4674,7 +4668,7 @@ pub unsafe fn cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
     (*c).size = std::ptr::null_mut();
     (*c).flush = std::ptr::null_mut();
     (*c).get_block = std::ptr::null_mut();
-    (*c).describe = cram_cram_codecs_c_3675_cram_byte_array_stop_describe as usize as *mut c_void;
+    (*c).describe = cram_fn_ptr(cram_cram_codecs_c_3675_cram_byte_array_stop_describe as usize);
 
     (*c).byte_array_stop.stop = *cp;
     cp = cp.add(1);
@@ -4794,10 +4788,10 @@ pub unsafe fn cram_cram_codecs_c_3785_cram_byte_array_stop_encode_init(
     (*c).out = std::ptr::null_mut();
     (*c).vv = std::ptr::null_mut();
     (*c).codec_id = 0;
-    (*c).free = cram_cram_codecs_c_3743_cram_byte_array_stop_encode_free as usize as *mut c_void;
+    (*c).free = cram_fn_ptr(cram_cram_codecs_c_3743_cram_byte_array_stop_encode_free as usize);
     (*c).decode = std::ptr::null_mut();
-    (*c).encode = cram_cram_codecs_c_3733_cram_byte_array_stop_encode as usize as *mut c_void;
-    (*c).store = cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store as usize as *mut c_void;
+    (*c).encode = cram_fn_ptr(cram_cram_codecs_c_3733_cram_byte_array_stop_encode as usize);
+    (*c).store = cram_fn_ptr(cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store as usize);
     (*c).size = std::ptr::null_mut();
     (*c).flush = std::ptr::null_mut();
     (*c).get_block = std::ptr::null_mut();
@@ -4941,71 +4935,70 @@ pub unsafe fn cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
     let base = c.cast::<cram_codec_external_layout>();
     match (*base).codec {
         43 | 44 => {
-            (*base).store = cram_cram_codecs_c_1025_cram_const_encode_store as usize as *mut c_void;
+            (*base).store = cram_fn_ptr(cram_cram_codecs_c_1025_cram_const_encode_store as usize);
             0
         }
         1 => {
-            (*base).free = cram_cram_codecs_c_556_cram_external_encode_free as usize as *mut c_void;
-            (*base).store =
-                cram_cram_codecs_c_562_cram_external_encode_store as usize as *mut c_void;
+            (*base).free = cram_fn_ptr(cram_cram_codecs_c_556_cram_external_encode_free as usize);
+            (*base).store = cram_fn_ptr(cram_cram_codecs_c_562_cram_external_encode_store as usize);
             (*base).encode = if (*base).decode
-                == cram_cram_codecs_c_350_cram_external_decode_int as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_350_cram_external_decode_int as usize)
             {
-                cram_cram_codecs_c_523_cram_external_encode_int as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_523_cram_external_encode_int as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_370_cram_external_decode_long as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_370_cram_external_decode_long as usize)
             {
-                cram_cram_codecs_c_535_cram_external_encode_long as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_535_cram_external_encode_long as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_390_cram_external_decode_char as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_390_cram_external_decode_char as usize)
                 || (*base).decode
-                    == cram_cram_codecs_c_410_cram_external_decode_block as usize as *mut c_void
+                    == cram_fn_ptr(cram_cram_codecs_c_410_cram_external_decode_block as usize)
             {
-                cram_cram_codecs_c_547_cram_external_encode_char as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_547_cram_external_encode_char as usize)
             } else {
                 return -1;
             };
             0
         }
         41 | 42 => {
-            (*base).free = cram_cram_codecs_c_848_cram_varint_encode_free as usize as *mut c_void;
-            (*base).store = cram_cram_codecs_c_854_cram_varint_encode_store as usize as *mut c_void;
+            (*base).free = cram_fn_ptr(cram_cram_codecs_c_848_cram_varint_encode_free as usize);
+            (*base).store = cram_fn_ptr(cram_cram_codecs_c_854_cram_varint_encode_store as usize);
             (*base).encode = if (*base).decode
-                == cram_cram_codecs_c_644_cram_varint_decode_int as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_644_cram_varint_decode_int as usize)
             {
-                cram_cram_codecs_c_820_cram_varint_encode_int as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_820_cram_varint_encode_int as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_666_cram_varint_decode_sint as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_666_cram_varint_decode_sint as usize)
             {
-                cram_cram_codecs_c_827_cram_varint_encode_sint as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_827_cram_varint_encode_sint as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_688_cram_varint_decode_long as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_688_cram_varint_decode_long as usize)
             {
-                cram_cram_codecs_c_834_cram_varint_encode_long as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_834_cram_varint_encode_long as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_710_cram_varint_decode_slong as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_710_cram_varint_decode_slong as usize)
             {
-                cram_cram_codecs_c_841_cram_varint_encode_slong as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_841_cram_varint_encode_slong as usize)
             } else {
                 return -1;
             };
             0
         }
         6 => {
-            (*base).free = cram_cram_codecs_c_1243_cram_beta_encode_free as usize as *mut c_void;
-            (*base).store = cram_cram_codecs_c_1183_cram_beta_encode_store as usize as *mut c_void;
+            (*base).free = cram_fn_ptr(cram_cram_codecs_c_1243_cram_beta_encode_free as usize);
+            (*base).store = cram_fn_ptr(cram_cram_codecs_c_1183_cram_beta_encode_store as usize);
             (*base).encode = if (*base).decode
-                == cram_cram_codecs_c_1090_cram_beta_decode_int as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_1090_cram_beta_decode_int as usize)
             {
-                cram_cram_codecs_c_1219_cram_beta_encode_int as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1219_cram_beta_encode_int as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_1072_cram_beta_decode_long as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_1072_cram_beta_decode_long as usize)
             {
-                cram_cram_codecs_c_1207_cram_beta_encode_long as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1207_cram_beta_encode_long as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_1108_cram_beta_decode_char as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_1108_cram_beta_decode_char as usize)
             {
-                cram_cram_codecs_c_1231_cram_beta_encode_char as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1231_cram_beta_encode_char as usize)
             } else {
                 return -1;
             };
@@ -5018,9 +5011,8 @@ pub unsafe fn cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
             (*enc).vv = (*dec).vv;
             (*enc).out = (*dec).out;
             (*enc).codec_id = (*dec).codec_id;
-            (*enc).free = cram_cram_codecs_c_3099_cram_huffman_encode_free as usize as *mut c_void;
-            (*enc).store =
-                cram_cram_codecs_c_3112_cram_huffman_encode_store as usize as *mut c_void;
+            (*enc).free = cram_fn_ptr(cram_cram_codecs_c_3099_cram_huffman_encode_free as usize);
+            (*enc).store = cram_fn_ptr(cram_cram_codecs_c_3112_cram_huffman_encode_store as usize);
             let codes = (*dec).huffman.codes;
             let nvals = (*dec).huffman.ncodes;
             let option = (*dec).huffman.option;
@@ -5035,49 +5027,49 @@ pub unsafe fn cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
                 }
             }
             (*enc).encode = if (*base).decode
-                == cram_cram_codecs_c_2646_cram_huffman_decode_char0 as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_2646_cram_huffman_decode_char0 as usize)
             {
-                cram_cram_codecs_c_2989_cram_huffman_encode_char0 as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_2989_cram_huffman_encode_char0 as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_2660_cram_huffman_decode_char as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_2660_cram_huffman_decode_char as usize)
             {
-                cram_cram_codecs_c_2994_cram_huffman_encode_char as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_2994_cram_huffman_encode_char as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_2695_cram_huffman_decode_int0 as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_2695_cram_huffman_decode_int0 as usize)
             {
-                cram_cram_codecs_c_3025_cram_huffman_encode_int0 as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3025_cram_huffman_encode_int0 as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_2708_cram_huffman_decode_int as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_2708_cram_huffman_decode_int as usize)
             {
-                cram_cram_codecs_c_3030_cram_huffman_encode_int as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3030_cram_huffman_encode_int as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_2745_cram_huffman_decode_long0 as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_2745_cram_huffman_decode_long0 as usize)
             {
-                cram_cram_codecs_c_3062_cram_huffman_encode_long0 as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3062_cram_huffman_encode_long0 as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_2758_cram_huffman_decode_long as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_2758_cram_huffman_decode_long as usize)
             {
-                cram_cram_codecs_c_3067_cram_huffman_encode_long as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_3067_cram_huffman_encode_long as usize)
             } else {
                 return -1;
             };
             0
         }
         51 => {
-            (*base).free = cram_cram_codecs_c_1612_cram_xpack_encode_free as usize as *mut c_void;
-            (*base).store = cram_cram_codecs_c_1537_cram_xpack_encode_store as usize as *mut c_void;
+            (*base).free = cram_fn_ptr(cram_cram_codecs_c_1612_cram_xpack_encode_free as usize);
+            (*base).store = cram_fn_ptr(cram_cram_codecs_c_1537_cram_xpack_encode_store as usize);
             (*base).encode = if (*base).decode
-                == cram_cram_codecs_c_1344_cram_xpack_decode_long as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_1344_cram_xpack_decode_long as usize)
             {
-                cram_cram_codecs_c_1581_cram_xpack_encode_long as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1581_cram_xpack_encode_long as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_1359_cram_xpack_decode_int as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_1359_cram_xpack_decode_int as usize)
             {
-                cram_cram_codecs_c_1592_cram_xpack_encode_int as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1592_cram_xpack_encode_int as usize)
             } else if (*base).decode
-                == cram_cram_codecs_c_1408_cram_xpack_decode_char as usize as *mut c_void
+                == cram_fn_ptr(cram_cram_codecs_c_1408_cram_xpack_decode_char as usize)
             {
-                cram_cram_codecs_c_1603_cram_xpack_encode_char as usize as *mut c_void
+                cram_fn_ptr(cram_cram_codecs_c_1603_cram_xpack_encode_char as usize)
             } else {
                 return -1;
             };
@@ -5093,11 +5085,11 @@ pub unsafe fn cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
         }
         4 => {
             (*base).free =
-                cram_cram_codecs_c_3493_cram_byte_array_len_encode_free as usize as *mut c_void;
+                cram_fn_ptr(cram_cram_codecs_c_3493_cram_byte_array_len_encode_free as usize);
             (*base).store =
-                cram_cram_codecs_c_3506_cram_byte_array_len_encode_store as usize as *mut c_void;
+                cram_fn_ptr(cram_cram_codecs_c_3506_cram_byte_array_len_encode_store as usize);
             (*base).encode =
-                cram_cram_codecs_c_3479_cram_byte_array_len_encode as usize as *mut c_void;
+                cram_fn_ptr(cram_cram_codecs_c_3479_cram_byte_array_len_encode as usize);
             let bal = c.cast::<cram_codec_byte_array_len_layout>();
             if cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
                 std::ptr::null_mut(),
@@ -5114,11 +5106,11 @@ pub unsafe fn cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
         }
         5 => {
             (*base).free =
-                cram_cram_codecs_c_3743_cram_byte_array_stop_encode_free as usize as *mut c_void;
+                cram_fn_ptr(cram_cram_codecs_c_3743_cram_byte_array_stop_encode_free as usize);
             (*base).store =
-                cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store as usize as *mut c_void;
+                cram_fn_ptr(cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store as usize);
             (*base).encode =
-                cram_cram_codecs_c_3733_cram_byte_array_stop_encode as usize as *mut c_void;
+                cram_fn_ptr(cram_cram_codecs_c_3733_cram_byte_array_stop_encode as usize);
             0
         }
         _ => -1,
@@ -5135,7 +5127,7 @@ pub unsafe fn cram_cram_codecs_c_4185_cram_codec_describe(
             .is_null()
     {
         let describe: CramCodecDescribeFn =
-            std::mem::transmute((*(c.cast::<cram_codec_external_layout>())).describe);
+            cram_fn((*(c.cast::<cram_codec_external_layout>())).describe);
         describe(c, ks)
     } else if kputsn(c"?".as_ptr(), 1, ks) < 0 {
         -1

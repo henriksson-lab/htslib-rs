@@ -3827,7 +3827,7 @@ mod tests {
             bgzf_set_cache_size(fp, 8192);
             assert_eq!((*fp).cache_size, 8192);
 
-            let data = Box::into_raw(Box::new(23usize)).cast::<c_void>();
+            let data = test_private_data_payload_new_raw(23);
             bgzf_internal_h_51_bgzf_set_private_data(fp, data, Some(count_private_data_cleanup));
             assert_eq!(bgzf_internal_h_67_bgzf_get_private_data(fp), data);
             assert_eq!(bgzf_close(fp), 0);
@@ -6364,9 +6364,22 @@ mod tests {
 
     static PRIVATE_DATA_CLEANUPS: AtomicUsize = AtomicUsize::new(0);
 
+    struct TestPrivateDataPayload(usize);
+
+    fn test_private_data_payload_new_raw(value: usize) -> *mut c_void {
+        Box::into_raw(Box::new(TestPrivateDataPayload(value))).cast()
+    }
+
+    unsafe fn test_private_data_payload_free_raw(data: *mut c_void) {
+        if !data.is_null() {
+            let payload = Box::from_raw(data.cast::<TestPrivateDataPayload>());
+            assert_ne!(payload.0, 0);
+        }
+    }
+
     unsafe extern "C" fn count_private_data_cleanup(data: *mut c_void) {
         PRIVATE_DATA_CLEANUPS.fetch_add(1, Ordering::SeqCst);
-        drop(Box::from_raw(data.cast::<usize>()));
+        test_private_data_payload_free_raw(data);
     }
 
     #[test]
@@ -6397,7 +6410,7 @@ mod tests {
                 gz_stream: ptr::null_mut(),
                 seeked: 0,
             };
-            let data = Box::into_raw(Box::new(17usize)).cast::<c_void>();
+            let data = test_private_data_payload_new_raw(17);
 
             bgzf_internal_h_51_bgzf_set_private_data(
                 &mut fp,

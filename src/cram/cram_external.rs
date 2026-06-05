@@ -5,6 +5,20 @@ use std::ffi::{c_char, c_int, c_void};
 
 use super::*;
 
+fn cid2ds_new_raw() -> *mut cram_cid2ds_t {
+    Box::into_raw(Box::new(cram_cid2ds_t {
+        ds: Vec::new(),
+        hash: HashMap::new(),
+        ds_a: Vec::new(),
+    }))
+}
+
+unsafe fn cid2ds_free_raw(cid2ds: *mut cram_cid2ds_t) {
+    if !cid2ds.is_null() {
+        drop(Box::from_raw(cid2ds));
+    }
+}
+
 pub unsafe fn cram_cram_external_c_500_cram_slice_hdr_get_num_blocks(
     hdr: *mut cram_block_slice_hdr,
 ) -> i32 {
@@ -336,9 +350,7 @@ pub unsafe fn cram_cram_external_c_264_cram_codec_iter_next(
 }
 
 pub unsafe fn cram_cram_external_c_320_cram_cid2ds_free(cid2ds: *mut cram_cid2ds_t) {
-    if !cid2ds.is_null() {
-        drop(Box::from_raw(cid2ds));
-    }
+    cid2ds_free_raw(cid2ds);
 }
 
 pub unsafe fn cram_cram_external_c_342_cram_update_cid2ds_map(
@@ -346,11 +358,7 @@ pub unsafe fn cram_cram_external_c_342_cram_update_cid2ds_map(
     cid2ds: *mut cram_cid2ds_t,
 ) -> *mut cram_cid2ds_t {
     let c2d = if cid2ds.is_null() {
-        Box::into_raw(Box::new(cram_cid2ds_t {
-            ds: Vec::new(),
-            hash: HashMap::new(),
-            ds_a: Vec::new(),
-        }))
+        cid2ds_new_raw()
     } else {
         cid2ds
     };

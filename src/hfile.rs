@@ -54,6 +54,12 @@ type HFileVOpenFn = unsafe extern "C" fn(
     *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE;
 type HFilePluginInitFn = unsafe extern "C" fn(*mut hFILE_plugin) -> c_int;
+type HFilePluginDestroyFn = unsafe extern "C" fn();
+
+unsafe fn hfile_plugin_destroy_fn(ptr: *const c_void) -> HFilePluginDestroyFn {
+    debug_assert!(!ptr.is_null());
+    std::mem::transmute_copy(&ptr)
+}
 
 #[repr(C)]
 struct hfile_scheme_handler_layout {
@@ -1685,7 +1691,7 @@ pub unsafe fn hfile_c_983_hfile_shutdown(do_close_plugin: c_int) {
     while let Some(p) = state.plugins.pop() {
         let p = p as *mut hFILE_plugin_list;
         if !(*p).plugin.destroy.is_null() {
-            let destroy: unsafe extern "C" fn() = std::mem::transmute((*p).plugin.destroy);
+            let destroy = hfile_plugin_destroy_fn((*p).plugin.destroy);
             destroy();
         }
         let _ = do_close_plugin;
