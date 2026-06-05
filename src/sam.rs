@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::{c_char, c_int, c_uint, c_void, CStr},
     mem,
+    ptr::NonNull,
     sync::{Mutex, OnceLock},
 };
 
@@ -224,24 +225,24 @@ pub struct hts_base_mod_state {
 
 #[repr(C)]
 pub struct sp_bams {
-    pub next: *mut sp_bams,
+    pub next: Option<NonNull<sp_bams>>,
     pub serial: c_int,
     pub bams: *mut bam1_t,
     pub nbams: c_int,
     pub abams: c_int,
     pub bam_mem: usize,
-    pub fd: *mut SAM_state,
+    pub fd: Option<NonNull<SAM_state>>,
 }
 
 #[repr(C)]
 pub struct sp_lines {
-    pub next: *mut sp_lines,
+    pub next: Option<NonNull<sp_lines>>,
     pub serial: c_int,
     pub data: *mut c_char,
     pub data_size: c_int,
     pub alloc: c_int,
-    pub fd: *mut SAM_state,
-    pub bams: *mut sp_bams,
+    pub fd: Option<NonNull<SAM_state>>,
+    pub bams: Option<NonNull<sp_bams>>,
 }
 
 #[repr(C)]
@@ -249,9 +250,9 @@ pub struct SAM_state {
     pub h: *mut sam_hdr_t,
     pub p: *mut c_void,
     pub own_pool: c_int,
-    pub lines: *mut sp_lines,
-    pub bams: *mut sp_bams,
-    pub curr_bam: *mut sp_bams,
+    pub lines: Option<NonNull<sp_lines>>,
+    pub bams: Option<NonNull<sp_bams>>,
+    pub curr_bam: Option<NonNull<sp_bams>>,
     pub curr_idx: c_int,
     pub serial: c_int,
     pub command: c_int,
@@ -434,7 +435,7 @@ pub struct lbnode_t {
     pub beg: hts_pos_t,
     pub end: hts_pos_t,
     pub s: cstate_t,
-    pub next: *mut lbnode_t,
+    pub next: Option<NonNull<lbnode_t>>,
     pub cd: bam_pileup_cd,
 }
 
@@ -446,7 +447,7 @@ pub struct mempool_t {
     pub n: c_int,
     pub max: c_int,
     pub padding_0: c_int,
-    pub buf: *mut *mut lbnode_t,
+    pub buf: *mut Option<NonNull<lbnode_t>>,
 }
 
 #[repr(C)]
@@ -454,7 +455,7 @@ pub struct olap_hash_t {
     _private: [u8; 0],
 }
 
-type OlapHash = HashMap<Vec<u8>, *mut lbnode_t>;
+type OlapHash = HashMap<Vec<u8>, NonNull<lbnode_t>>;
 
 fn olap_hash_new_raw() -> *mut olap_hash_t {
     Box::into_raw(Box::new(OlapHash::new())).cast::<olap_hash_t>()
@@ -482,9 +483,9 @@ pub type bam_plp_constructor_f =
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct bam_plp_s {
-    pub mp: *mut mempool_t,
-    pub head: *mut lbnode_t,
-    pub tail: *mut lbnode_t,
+    pub mp: Option<NonNull<mempool_t>>,
+    pub head: Option<NonNull<lbnode_t>>,
+    pub tail: Option<NonNull<lbnode_t>>,
     pub tid: i32,
     pub max_tid: i32,
     pub pos: hts_pos_t,
@@ -498,7 +499,7 @@ pub struct bam_plp_s {
     pub b: *mut bam1_t,
     pub func: bam_plp_auto_f,
     pub data: *mut c_void,
-    pub overlaps: *mut olap_hash_t,
+    pub overlaps: Option<NonNull<olap_hash_t>>,
     pub plp_construct: bam_plp_constructor_f,
     pub plp_destruct: bam_plp_constructor_f,
 }
@@ -4978,10 +4979,12 @@ unsafe extern "C" fn sam_c_3200_cleanup_sp_lines(arg: *mut c_void) {
         return;
     }
 
-    assert!((*gl).next.is_null());
+    assert!((*gl).next.is_none());
 
     crate::htslib_rs::c_compat::free((*gl).data.cast());
-    sam_c_3076_sam_free_sp_bams((*gl).bams);
+    if let Some(bams) = (*gl).bams {
+        sam_c_3076_sam_free_sp_bams(bams.as_ptr());
+    }
     crate::htslib_rs::c_compat::free(gl.cast());
 }
 
@@ -4997,11 +5000,16 @@ unsafe extern "C" fn sam_c_3215_sam_parse_worker(arg: *mut c_void) -> *mut c_voi
     let gl = arg.cast::<sp_lines>();
     let mut gb = std::ptr::null_mut::<sp_bams>();
     let lines = (*gl).data;
-    let fd = (*gl).fd;
+    let fd = (*gl)
+        .fd
+        .map(|fd| fd.as_ptr())
+        .unwrap_or(std::ptr::null_mut());
 
-    if !fd.is_null() && !(*fd).bams.is_null() {
-        gb = (*fd).bams;
-        (*fd).bams = (*gb).next;
+    if !fd.is_null() {
+        if let Some(cached) = (*fd).bams {
+            gb = cached.as_ptr();
+            (*fd).bams = (*gb).next;
+        }
     }
 
     if gb.is_null() {
@@ -5025,7 +5033,7 @@ unsafe extern "C" fn sam_c_3215_sam_parse_worker(arg: *mut c_void) -> *mut c_voi
         (*gb).bam_mem = 0;
     }
     (*gb).serial = (*gl).serial;
-    (*gb).next = std::ptr::null_mut();
+    (*gb).next = None;
 
     let mut b = (*gb).bams;
     if b.is_null() {
@@ -5097,19 +5105,22 @@ unsafe extern "C" fn sam_c_3215_sam_parse_worker(arg: *mut c_void) -> *mut c_voi
 
     if !fd.is_null() {
         (*gl).next = (*fd).lines;
-        (*fd).lines = gl;
+        (*fd).lines = NonNull::new(gl);
     }
     gb.cast()
 }
 
 unsafe extern "C" fn sam_c_3652_sam_format_worker(arg: *mut c_void) -> *mut c_void {
     let gb = arg.cast::<sp_bams>();
-    let fd = (*gb).fd;
+    let fd = (*gb)
+        .fd
+        .expect("sp_bams formatting worker requires SAM_state")
+        .as_ptr();
     let fp = (*fd).fp;
     let mut gl = std::ptr::null_mut::<sp_lines>();
 
-    if !(*fd).lines.is_null() {
-        gl = (*fd).lines;
+    if let Some(cached) = (*fd).lines {
+        gl = cached.as_ptr();
         (*fd).lines = (*gl).next;
     }
 
@@ -5125,7 +5136,7 @@ unsafe extern "C" fn sam_c_3652_sam_format_worker(arg: *mut c_void) -> *mut c_vo
         (*gl).data = std::ptr::null_mut();
     }
     (*gl).serial = (*gb).serial;
-    (*gl).next = std::ptr::null_mut();
+    (*gl).next = None;
 
     let mut ks = kstring_t {
         l: 0,
@@ -5155,11 +5166,11 @@ unsafe extern "C" fn sam_c_3652_sam_format_worker(arg: *mut c_void) -> *mut c_vo
     (*gl).data = ks.s;
 
     if !fp.is_null() && !(*fp).idx.is_null() {
-        (*gl).bams = gb;
+        (*gl).bams = NonNull::new(gb);
     } else {
         (*gb).next = (*fd).bams;
-        (*fd).bams = gb;
-        (*gl).bams = std::ptr::null_mut();
+        (*fd).bams = NonNull::new(gb);
+        (*gl).bams = None;
     }
 
     gl.cast()
@@ -5173,24 +5184,26 @@ pub unsafe fn sam_state_destroy(fp: *mut htsFile) -> c_int {
     let ret = -(*fd).errcode;
 
     let mut l = (*fd).lines;
-    while !l.is_null() {
-        let n = (*l).next;
-        crate::htslib_rs::c_compat::free((*l).data.cast());
-        crate::htslib_rs::c_compat::free(l.cast());
+    while let Some(line) = l {
+        let line = line.as_ptr();
+        let n = (*line).next;
+        crate::htslib_rs::c_compat::free((*line).data.cast());
+        crate::htslib_rs::c_compat::free(line.cast());
         l = n;
     }
 
     let mut b = (*fd).bams;
-    while !b.is_null() {
-        if (*fd).curr_bam == b {
-            (*fd).curr_bam = std::ptr::null_mut();
+    while let Some(bams) = b {
+        let bams = bams.as_ptr();
+        if (*fd).curr_bam == NonNull::new(bams) {
+            (*fd).curr_bam = None;
         }
-        let n = (*b).next;
-        sam_c_3076_sam_free_sp_bams(b);
+        let n = (*bams).next;
+        sam_c_3076_sam_free_sp_bams(bams);
         b = n;
     }
-    if !(*fd).curr_bam.is_null() {
-        sam_c_3076_sam_free_sp_bams((*fd).curr_bam);
+    if let Some(curr_bam) = (*fd).curr_bam {
+        sam_c_3076_sam_free_sp_bams(curr_bam.as_ptr());
     }
     sam_hdr_destroy((*fd).h);
     crate::htslib_rs::c_compat::free((*fp).state);
@@ -6329,7 +6342,9 @@ pub unsafe fn mp_init() -> *mut mempool_t {
 
 pub unsafe fn mp_destroy(mp: *mut mempool_t) {
     for k in 0..(*mp).n {
-        let node = *(*mp).buf.add(k as usize);
+        let node = (*(*mp).buf.add(k as usize))
+            .expect("mempool free-list entries are non-null")
+            .as_ptr();
         crate::htslib_rs::c_compat::free((*node).b.data.cast());
         crate::htslib_rs::c_compat::free(node.cast());
     }
@@ -6343,22 +6358,24 @@ pub unsafe fn mp_alloc(mp: *mut mempool_t) -> *mut lbnode_t {
         crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<lbnode_t>() as u64).cast()
     } else {
         (*mp).n -= 1;
-        *(*mp).buf.add((*mp).n as usize)
+        (*(*mp).buf.add((*mp).n as usize))
+            .expect("mempool free-list entries are non-null")
+            .as_ptr()
     }
 }
 
 pub unsafe fn mp_free(mp: *mut mempool_t, p: *mut lbnode_t) {
     (*mp).cnt -= 1;
-    (*p).next = std::ptr::null_mut();
+    (*p).next = None;
     if (*mp).n == (*mp).max {
         (*mp).max = if (*mp).max != 0 { (*mp).max << 1 } else { 256 };
         (*mp).buf = crate::htslib_rs::c_compat::realloc(
             (*mp).buf.cast(),
-            (std::mem::size_of::<*mut lbnode_t>() * (*mp).max as usize) as u64,
+            (std::mem::size_of::<Option<NonNull<lbnode_t>>>() * (*mp).max as usize) as u64,
         )
         .cast();
     }
-    *(*mp).buf.add((*mp).n as usize) = p;
+    *(*mp).buf.add((*mp).n as usize) = NonNull::new(p);
     (*mp).n += 1;
 }
 
@@ -6782,7 +6799,7 @@ unsafe fn tweak_overlap_quality(a: *mut bam1_t, b: *mut bam1_t) -> c_int {
 }
 
 unsafe fn overlap_push(iter: bam_plp_t, node: *mut lbnode_t) -> c_int {
-    if (*iter).overlaps.is_null() {
+    if (*iter).overlaps.is_none() {
         return 0;
     }
     if (((*node).b.core.flag as c_int) & BAM_FMUNMAP) != 0
@@ -6797,13 +6814,14 @@ unsafe fn overlap_push(iter: bam_plp_t, node: *mut lbnode_t) -> c_int {
         return 0;
     }
 
-    let Some(overlaps) = olap_hash_mut((*iter).overlaps) else {
+    let Some(overlaps) = olap_hash_mut((*iter).overlaps.unwrap().as_ptr()) else {
         return 0;
     };
     let key = CStr::from_ptr(bam_get_qname(&(*node).b))
         .to_bytes()
         .to_vec();
     if let Some(a) = overlaps.remove(&key) {
+        let a = a.as_ptr();
         let err = tweak_overlap_quality(&mut (*a).b, &mut (*node).b);
         debug_assert_eq!((*a).end - 1, (*a).s.end);
         err
@@ -6811,17 +6829,19 @@ unsafe fn overlap_push(iter: bam_plp_t, node: *mut lbnode_t) -> c_int {
         if (*node).b.core.mpos >= (*node).b.core.pos
             || (((*node).b.core.flag as c_int) & BAM_FPAIRED) != 0 && (*node).b.core.mpos == -1
         {
-            overlaps.insert(key, node);
+            if let Some(node) = NonNull::new(node) {
+                overlaps.insert(key, node);
+            }
         }
         0
     }
 }
 
 unsafe fn overlap_remove(iter: bam_plp_t, b: *const bam1_t) {
-    if (*iter).overlaps.is_null() {
+    if (*iter).overlaps.is_none() {
         return;
     }
-    let Some(overlaps) = olap_hash_mut((*iter).overlaps) else {
+    let Some(overlaps) = olap_hash_mut((*iter).overlaps.unwrap().as_ptr()) else {
         return;
     };
     if b.is_null() {
@@ -8435,8 +8455,9 @@ unsafe extern "C" fn sam_readrec_rest(
 pub unsafe fn bam_plp_init(_func: bam_plp_auto_f, _data: *mut c_void) -> bam_plp_t {
     let iter = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<bam_plp_s>() as u64)
         .cast::<bam_plp_s>();
-    (*iter).mp = mp_init();
-    (*iter).head = mp_alloc((*iter).mp);
+    let mp = mp_init();
+    (*iter).mp = NonNull::new(mp);
+    (*iter).head = NonNull::new(mp_alloc(mp));
     (*iter).tail = (*iter).head;
     (*iter).max_tid = -1;
     (*iter).max_pos = -1;
@@ -8450,8 +8471,8 @@ pub unsafe fn bam_plp_init(_func: bam_plp_auto_f, _data: *mut c_void) -> bam_plp
 }
 
 pub unsafe fn bam_plp_init_overlaps(_iter: bam_plp_t) -> c_int {
-    (*_iter).overlaps = olap_hash_new_raw();
-    if (*_iter).overlaps.is_null() {
+    (*_iter).overlaps = NonNull::new(olap_hash_new_raw());
+    if (*_iter).overlaps.is_none() {
         -1
     } else {
         0
@@ -8462,18 +8483,23 @@ pub unsafe fn bam_plp_destroy(_iter: bam_plp_t) {
     if _iter.is_null() {
         return;
     }
-    olap_hash_free((*_iter).overlaps);
-    (*_iter).overlaps = std::ptr::null_mut();
+    if let Some(overlaps) = (*_iter).overlaps {
+        olap_hash_free(overlaps.as_ptr());
+    }
+    (*_iter).overlaps = None;
     let mut p = (*_iter).head;
-    while !p.is_null() {
-        if (*_iter).plp_destruct.is_some() && p != (*_iter).tail {
-            (*_iter).plp_destruct.unwrap()((*_iter).data, &(*p).b, &mut (*p).cd);
+    while let Some(node) = p {
+        let node_ptr = node.as_ptr();
+        if (*_iter).plp_destruct.is_some() && Some(node) != (*_iter).tail {
+            (*_iter).plp_destruct.unwrap()((*_iter).data, &(*node_ptr).b, &mut (*node_ptr).cd);
         }
-        let pnext = (*p).next;
-        mp_free((*_iter).mp, p);
+        let pnext = (*node_ptr).next;
+        mp_free((*_iter).mp.unwrap().as_ptr(), node_ptr);
         p = pnext;
     }
-    mp_destroy((*_iter).mp);
+    if let Some(mp) = (*_iter).mp {
+        mp_destroy(mp.as_ptr());
+    }
     if !(*_iter).b.is_null() {
         bam_destroy1((*_iter).b);
     }
@@ -8578,9 +8604,11 @@ pub unsafe fn bam_plp64_next(
         || ((*_iter).max_tid == (*_iter).tid && (*_iter).max_pos > (*_iter).pos)
     {
         let mut n_plp = 0;
-        let mut pptr: *mut *mut lbnode_t = &mut (*_iter).head;
+        let mut pptr: *mut Option<NonNull<lbnode_t>> = &mut (*_iter).head;
         while *pptr != (*_iter).tail {
-            let p = *pptr;
+            let p = (*pptr)
+                .expect("pileup list links are non-null before the tail")
+                .as_ptr();
             if (*p).b.core.tid < (*_iter).tid
                 || ((*p).b.core.tid == (*_iter).tid && (*p).end <= (*_iter).pos)
             {
@@ -8589,7 +8617,7 @@ pub unsafe fn bam_plp64_next(
                     (*_iter).plp_destruct.unwrap()((*_iter).data, &(*p).b, &mut (*p).cd);
                 }
                 *pptr = (*p).next;
-                mp_free((*_iter).mp, p);
+                mp_free((*_iter).mp.unwrap().as_ptr(), p);
             } else {
                 if (*p).b.core.tid == (*_iter).tid && (*p).beg <= (*_iter).pos {
                     if n_plp == (*_iter).max_plp {
@@ -8612,22 +8640,25 @@ pub unsafe fn bam_plp64_next(
                         n_plp += 1;
                     }
                 }
-                pptr = &mut (**pptr).next;
+                pptr = &mut (*p).next;
             }
         }
         *_n_plp = n_plp;
         *_tid = (*_iter).tid;
         *_pos = (*_iter).pos;
-        if (*_iter).head != (*_iter).tail && (*_iter).tid > (*(*_iter).head).b.core.tid {
+        if (*_iter).head != (*_iter).tail
+            && (*_iter).tid > (*(*_iter).head.unwrap().as_ptr()).b.core.tid
+        {
             (*_iter).error = 1;
             *_n_plp = -1;
             return std::ptr::null();
         }
-        if (*_iter).tid < (*(*_iter).head).b.core.tid {
-            (*_iter).tid = (*(*_iter).head).b.core.tid;
-            (*_iter).pos = (*(*_iter).head).beg;
-        } else if (*_iter).pos < (*(*_iter).head).beg {
-            (*_iter).pos = (*(*_iter).head).beg;
+        let head = (*_iter).head.unwrap().as_ptr();
+        if (*_iter).tid < (*head).b.core.tid {
+            (*_iter).tid = (*head).b.core.tid;
+            (*_iter).pos = (*head).beg;
+        } else if (*_iter).pos < (*head).beg {
+            (*_iter).pos = (*head).beg;
         } else {
             (*_iter).pos += 1;
         }
@@ -8675,55 +8706,55 @@ pub unsafe fn bam_plp_push(_iter: bam_plp_t, b: *const bam1_t) -> c_int {
         }
         if (*_iter).tid == (*b).core.tid
             && (*_iter).pos == (*b).core.pos
-            && (*(*_iter).mp).cnt > (*_iter).maxcnt
+            && (*(*_iter).mp.unwrap().as_ptr()).cnt > (*_iter).maxcnt
         {
             overlap_remove(_iter, b);
             return 0;
         }
-        if bam_copy1(&mut (*(*_iter).tail).b, b).is_null() {
+        let tail = (*_iter)
+            .tail
+            .expect("pileup tail sentinel is initialized")
+            .as_ptr();
+        if bam_copy1(&mut (*tail).b, b).is_null() {
             return -1;
         }
-        (*(*_iter).tail).b.id = (*_iter).id;
+        (*tail).b.id = (*_iter).id;
         (*_iter).id += 1;
-        (*(*_iter).tail).beg = (*b).core.pos;
-        (*(*_iter).tail).end =
-            (*b).core.pos + bam_cigar2rlen((*b).core.n_cigar as c_int, bam_get_cigar(b));
-        (*(*_iter).tail).s = G_CSTATE_NULL;
-        (*(*_iter).tail).s.end = (*(*_iter).tail).end - 1;
+        (*tail).beg = (*b).core.pos;
+        (*tail).end = (*b).core.pos + bam_cigar2rlen((*b).core.n_cigar as c_int, bam_get_cigar(b));
+        (*tail).s = G_CSTATE_NULL;
+        (*tail).s.end = (*tail).end - 1;
         if (*b).core.tid < (*_iter).max_tid {
             (*_iter).error = 1;
             return -1;
         }
-        if (*b).core.tid == (*_iter).max_tid && (*(*_iter).tail).beg < (*_iter).max_pos {
+        if (*b).core.tid == (*_iter).max_tid && (*tail).beg < (*_iter).max_pos {
             (*_iter).error = 1;
             return -1;
         }
         (*_iter).max_tid = (*b).core.tid;
-        (*_iter).max_pos = (*(*_iter).tail).beg;
-        if (*(*_iter).tail).end > (*_iter).pos || (*(*_iter).tail).b.core.tid > (*_iter).tid {
-            let next = mp_alloc((*_iter).mp);
+        (*_iter).max_pos = (*tail).beg;
+        if (*tail).end > (*_iter).pos || (*tail).b.core.tid > (*_iter).tid {
+            let mp = (*_iter).mp.unwrap().as_ptr();
+            let next = mp_alloc(mp);
             if next.is_null() {
                 (*_iter).error = 1;
                 return -1;
             }
             if (*_iter).plp_construct.is_some()
-                && (*_iter).plp_construct.unwrap()(
-                    (*_iter).data,
-                    &(*(*_iter).tail).b,
-                    &mut (*(*_iter).tail).cd,
-                ) < 0
+                && (*_iter).plp_construct.unwrap()((*_iter).data, &(*tail).b, &mut (*tail).cd) < 0
             {
-                mp_free((*_iter).mp, next);
+                mp_free(mp, next);
                 (*_iter).error = 1;
                 return -1;
             }
-            if overlap_push(_iter, (*_iter).tail) < 0 {
-                mp_free((*_iter).mp, next);
+            if overlap_push(_iter, tail) < 0 {
+                mp_free(mp, next);
                 (*_iter).error = 1;
                 return -1;
             }
-            (*(*_iter).tail).next = next;
-            (*_iter).tail = (*(*_iter).tail).next;
+            (*tail).next = NonNull::new(next);
+            (*_iter).tail = (*tail).next;
         }
     } else {
         (*_iter).is_eof = 1;
@@ -8739,9 +8770,12 @@ pub unsafe fn bam_plp_reset(_iter: bam_plp_t) {
     (*_iter).pos = 0;
     (*_iter).is_eof = 0;
     while (*_iter).head != (*_iter).tail {
-        let p = (*_iter).head;
+        let p = (*_iter)
+            .head
+            .expect("pileup head is non-null until it reaches tail")
+            .as_ptr();
         (*_iter).head = (*p).next;
-        mp_free((*_iter).mp, p);
+        mp_free((*_iter).mp.unwrap().as_ptr(), p);
     }
 }
 
@@ -15247,7 +15281,7 @@ mod tests {
                     .cast::<sp_lines>();
             assert!(!lines.is_null());
             (*lines).data = crate::htslib_rs::c_compat::malloc(8).cast();
-            (*fd).lines = lines;
+            (*fd).lines = NonNull::new(lines);
 
             let curr = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sp_bams>() as u64)
                 .cast::<sp_bams>();
@@ -15258,7 +15292,7 @@ mod tests {
                     .cast::<bam1_t>();
             assert!(!(*curr).bams.is_null());
             (*(*curr).bams).data = crate::htslib_rs::c_compat::malloc(4).cast();
-            (*fd).curr_bam = curr;
+            (*fd).curr_bam = NonNull::new(curr);
 
             assert_eq!(sam_state_destroy(&mut fp), -5);
             assert!(fp.state.is_null());
@@ -15292,7 +15326,7 @@ mod tests {
             assert!(!(*nested).bams.is_null());
             (*(*nested).bams).data = crate::htslib_rs::c_compat::malloc(8).cast();
             assert!(!(*(*nested).bams).data.is_null());
-            (*lines).bams = nested;
+            (*lines).bams = NonNull::new(nested);
 
             sam_c_3200_cleanup_sp_lines(lines.cast());
             sam_c_3200_cleanup_sp_lines(std::ptr::null_mut());
@@ -15348,14 +15382,14 @@ mod tests {
                 text.as_ptr().cast(),
                 text.len() as u64,
             );
-            (*gl).fd = &mut fd;
+            (*gl).fd = NonNull::new(&mut fd);
             (*gl).serial = 17;
 
             let gb = sam_c_3215_sam_parse_worker(gl.cast()).cast::<sp_bams>();
             assert!(!gb.is_null());
             assert_eq!((*gb).serial, 17);
             assert_eq!((*gb).nbams, 2);
-            assert!(!fd.lines.is_null());
+            assert!(fd.lines.is_some());
             assert_eq!(
                 CStr::from_ptr(bam_get_qname((*gb).bams)).to_bytes(),
                 b"read1"
@@ -15365,7 +15399,7 @@ mod tests {
                 b"read2"
             );
 
-            (*gb).fd = &mut fd;
+            (*gb).fd = NonNull::new(&mut fd);
             let out = sam_c_3652_sam_format_worker(gb.cast()).cast::<sp_lines>();
             assert!(!out.is_null());
             assert_eq!((*out).serial, 17);
@@ -15373,10 +15407,10 @@ mod tests {
                 std::slice::from_raw_parts((*out).data.cast::<u8>(), (*out).data_size as usize);
             assert!(formatted.starts_with(b"read1\t0\tchr1\t1\t60\t4M"));
             assert!(formatted.ends_with(b"ZZ:Z:tag\n"));
-            assert!(!fd.bams.is_null());
+            assert!(fd.bams.is_some());
 
             sam_c_3200_cleanup_sp_lines(out.cast());
-            sam_c_3076_sam_free_sp_bams(fd.bams);
+            sam_c_3076_sam_free_sp_bams(fd.bams.unwrap().as_ptr());
         }
     }
 
@@ -15921,7 +15955,7 @@ mod tests {
             assert_eq!((*node).b.l_data, 0);
             assert_eq!((*node).beg, 0);
             assert_eq!((*node).s.k, 0);
-            (*node).next = node;
+            (*node).next = NonNull::new(node);
             (*node).b.data = crate::htslib_rs::c_compat::malloc(4).cast();
             (*node).b.m_data = 4;
 
@@ -15929,7 +15963,7 @@ mod tests {
             assert_eq!((*mp).cnt, 0);
             assert_eq!((*mp).n, 1);
             assert_eq!((*mp).max, 256);
-            assert!((*node).next.is_null());
+            assert!((*node).next.is_none());
 
             let reused = mp_alloc(mp);
             assert_eq!(reused, node);
@@ -15950,10 +15984,10 @@ mod tests {
         unsafe {
             let iter = bam_plp_init(None, std::ptr::null_mut());
             assert!(!iter.is_null());
-            assert!(!(*iter).mp.is_null());
+            assert!((*iter).mp.is_some());
             assert_eq!((*iter).head, (*iter).tail);
-            assert!(!(*iter).head.is_null());
-            assert_eq!((*(*iter).mp).cnt, 1);
+            assert!((*iter).head.is_some());
+            assert_eq!((*(*iter).mp.unwrap().as_ptr()).cnt, 1);
             assert_eq!((*iter).max_tid, -1);
             assert_eq!((*iter).max_pos, -1);
             assert_eq!((*iter).maxcnt, 8000);
@@ -16094,10 +16128,8 @@ mod tests {
             assert_eq!(bam_plp_push(iter, &left), 0);
             assert_eq!(bam_plp_push(iter, &right), 0);
 
-            let left_node = (*iter).head;
-            let right_node = (*left_node).next;
-            assert!(!left_node.is_null());
-            assert!(!right_node.is_null());
+            let left_node = (*iter).head.unwrap().as_ptr();
+            let right_node = (*left_node).next.unwrap().as_ptr();
             let left_qual = bam_get_qual(&(*left_node).b);
             let right_qual = bam_get_qual(&(*right_node).b);
             for i in 0..4 {
@@ -18120,9 +18152,9 @@ mod tests {
     #[test]
     fn pileup_maxcnt_setters_match_htslib_field_assignment() {
         let mut plp0 = bam_plp_s {
-            mp: std::ptr::null_mut(),
-            head: std::ptr::null_mut(),
-            tail: std::ptr::null_mut(),
+            mp: None,
+            head: None,
+            tail: None,
             tid: 0,
             max_tid: 0,
             pos: 0,
@@ -18136,7 +18168,7 @@ mod tests {
             b: std::ptr::null_mut(),
             func: None,
             data: std::ptr::null_mut(),
-            overlaps: std::ptr::null_mut(),
+            overlaps: None,
             plp_construct: None,
             plp_destruct: None,
         };
@@ -18178,9 +18210,9 @@ mod tests {
     #[test]
     fn pileup_constructor_destructor_setters_match_htslib_field_assignment() {
         let mut plp0 = bam_plp_s {
-            mp: std::ptr::null_mut(),
-            head: std::ptr::null_mut(),
-            tail: std::ptr::null_mut(),
+            mp: None,
+            head: None,
+            tail: None,
             tid: 0,
             max_tid: 0,
             pos: 0,
@@ -18194,7 +18226,7 @@ mod tests {
             b: std::ptr::null_mut(),
             func: None,
             data: std::ptr::null_mut(),
-            overlaps: std::ptr::null_mut(),
+            overlaps: None,
             plp_construct: None,
             plp_destruct: None,
         };

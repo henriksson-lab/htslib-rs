@@ -1,6 +1,7 @@
 use std::{
     ffi::{c_char, c_int, c_short, c_void, CStr},
     path::{Path, PathBuf},
+    ptr::NonNull,
 };
 
 use super::bgzf::{
@@ -2822,7 +2823,7 @@ pub unsafe fn hts_open_tmpfile(
     let pid = libc::getpid() as c_int;
     let ptr_seed = tmpname as usize as u32;
     let mut n: c_int = 0;
-    let mut fp: *mut hFILE = std::ptr::null_mut();
+    let mut fp: Option<NonNull<hFILE>> = None;
 
     loop {
         let now = libc::time(std::ptr::null_mut()) as u32;
@@ -2851,8 +2852,8 @@ pub unsafe fn hts_open_tmpfile(
             break;
         }
 
-        fp = crate::htslib_rs::hfile::hopen((*tmpname).s, mode);
-        if !fp.is_null() {
+        fp = NonNull::new(crate::htslib_rs::hfile::hopen((*tmpname).s, mode));
+        if fp.is_some() {
             break;
         }
         let errno = *crate::htslib_rs::c_compat::__errno_location();
@@ -2861,7 +2862,7 @@ pub unsafe fn hts_open_tmpfile(
         }
     }
 
-    fp
+    fp.map_or(std::ptr::null_mut(), NonNull::as_ptr)
 }
 
 pub unsafe fn hts_open_format(
@@ -2872,7 +2873,7 @@ pub unsafe fn hts_open_format(
     let mut smode = [0 as c_char; 101];
     let mut fmt_code = 0 as c_char;
     let mut uncomp: *mut c_char = std::ptr::null_mut();
-    let mut hfile: *mut hFILE = std::ptr::null_mut();
+    let mut hfile: Option<NonNull<hFILE>> = None;
     let format_to_mode = b"\0g\0\0b\0c\0\0b\0g\0\0\0\0\0Ff\0\0";
 
     libc::strncpy(smode.as_mut_ptr(), mode, 99);
@@ -2929,26 +2930,26 @@ pub unsafe fn hts_open_format(
     }
 
     let idx_delim = c"##idx##";
-    let mut rmme: *mut c_char = std::ptr::null_mut();
+    let mut rmme: Option<NonNull<c_char>> = None;
     let fnidx = libc::strstr(fn_, idx_delim.as_ptr());
     let mut fn_open = fn_;
     if !fnidx.is_null() {
-        rmme = c_compat::strdup(fn_);
-        if rmme.is_null() {
+        rmme = NonNull::new(c_compat::strdup(fn_));
+        let Some(rmme_ptr) = rmme else {
             goto_hts_open_format_error(fn_open, rmme, hfile);
             return std::ptr::null_mut();
-        }
-        *rmme.add(fnidx.offset_from(fn_) as usize) = 0;
-        fn_open = rmme;
+        };
+        *rmme_ptr.as_ptr().add(fnidx.offset_from(fn_) as usize) = 0;
+        fn_open = rmme_ptr.as_ptr();
     }
 
-    hfile = hopen(fn_open, smode.as_ptr());
-    if hfile.is_null() {
+    hfile = NonNull::new(hopen(fn_open, smode.as_ptr()));
+    let Some(hfile_ptr) = hfile else {
         goto_hts_open_format_error(fn_open, rmme, hfile);
         return std::ptr::null_mut();
-    }
+    };
 
-    let fp = hts_hopen(hfile, fn_open, smode.as_ptr());
+    let fp = hts_hopen(hfile_ptr.as_ptr(), fn_open, smode.as_ptr());
     if fp.is_null() {
         goto_hts_open_format_error(fn_open, rmme, hfile);
         return std::ptr::null_mut();
@@ -2987,23 +2988,27 @@ pub unsafe fn hts_open_format(
         return std::ptr::null_mut();
     }
 
-    if !rmme.is_null() {
-        c_compat::free(rmme.cast());
+    if let Some(rmme) = rmme {
+        c_compat::free(rmme.as_ptr().cast());
     }
     fp
 }
 
-unsafe fn goto_hts_open_format_error(fn_: *const c_char, rmme: *mut c_char, hfile: *mut hFILE) {
+unsafe fn goto_hts_open_format_error(
+    fn_: *const c_char,
+    rmme: Option<NonNull<c_char>>,
+    hfile: Option<NonNull<hFILE>>,
+) {
     libc::fprintf(
         crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
         c"[E::hts_open_format] Failed to open file \"%s\"\n".as_ptr(),
         fn_,
     );
-    if !rmme.is_null() {
-        c_compat::free(rmme.cast());
+    if let Some(rmme) = rmme {
+        c_compat::free(rmme.as_ptr().cast());
     }
-    if !hfile.is_null() {
-        hclose_abruptly(hfile);
+    if let Some(hfile) = hfile {
+        hclose_abruptly(hfile.as_ptr());
     }
 }
 
@@ -5306,10 +5311,12 @@ pub unsafe fn hts_c_2405_hts_idx_init(
     min_shift: c_int,
     n_lvls: c_int,
 ) -> *mut hts_idx_t {
-    let idx = c_compat::calloc(1, std::mem::size_of::<hts_idx_t>() as u64).cast::<hts_idx_t>();
-    if idx.is_null() {
+    let Some(idx_ptr) = NonNull::new(
+        c_compat::calloc(1, std::mem::size_of::<hts_idx_t>() as u64).cast::<hts_idx_t>(),
+    ) else {
         return std::ptr::null_mut();
-    }
+    };
+    let idx = idx_ptr.as_ptr();
     (*idx).fmt = fmt;
     (*idx).min_shift = min_shift;
     (*idx).n_lvls = n_lvls;
@@ -5326,19 +5333,23 @@ pub unsafe fn hts_c_2405_hts_idx_init(
     if n != 0 {
         (*idx).n = n;
         (*idx).m = n;
-        (*idx).bidx = c_compat::calloc(n as u64, std::mem::size_of::<*mut hts_idx_bidx_t>() as u64)
-            .cast::<*mut hts_idx_bidx_t>();
-        if (*idx).bidx.is_null() {
+        let Some(bidx) = NonNull::new(
+            c_compat::calloc(n as u64, std::mem::size_of::<*mut hts_idx_bidx_t>() as u64)
+                .cast::<*mut hts_idx_bidx_t>(),
+        ) else {
             c_compat::free(idx.cast());
             return std::ptr::null_mut();
-        }
-        (*idx).lidx = c_compat::calloc(n as u64, std::mem::size_of::<hts_idx_lidx_t>() as u64)
-            .cast::<hts_idx_lidx_t>();
-        if (*idx).lidx.is_null() {
+        };
+        (*idx).bidx = bidx.as_ptr();
+        let Some(lidx) = NonNull::new(
+            c_compat::calloc(n as u64, std::mem::size_of::<hts_idx_lidx_t>() as u64)
+                .cast::<hts_idx_lidx_t>(),
+        ) else {
             c_compat::free((*idx).bidx.cast());
             c_compat::free(idx.cast());
             return std::ptr::null_mut();
-        }
+        };
+        (*idx).lidx = lidx.as_ptr();
     }
     (*idx).tbi_n = -1;
     (*idx).last_tbi_tid = -1;
@@ -5960,45 +5971,44 @@ pub unsafe fn hts_c_2925_idx_read_core(idx: *mut hts_idx_t, fp: *mut BGZF, fmt: 
 }
 
 pub unsafe fn hts_c_2990_idx_read(fn_: *const c_char) -> *mut hts_idx_t {
-    let mut idx: *mut hts_idx_t = std::ptr::null_mut();
-    let mut meta: *mut u8 = std::ptr::null_mut();
-    let fp = bgzf_open(fn_, c"r".as_ptr());
-    if fp.is_null() {
+    let mut idx: Option<NonNull<hts_idx_t>> = None;
+    let mut meta: Option<NonNull<u8>> = None;
+    let Some(fp) = NonNull::new(bgzf_open(fn_, c"r".as_ptr())) else {
         return std::ptr::null_mut();
-    }
+    };
 
     let mut magic = [0u8; 4];
-    if !bgzf_read_exact(fp, magic.as_mut_ptr().cast(), 4) {
+    if !bgzf_read_exact(fp.as_ptr(), magic.as_mut_ptr().cast(), 4) {
         goto_idx_read_fail(fp, idx, meta);
         return std::ptr::null_mut();
     }
 
     if &magic == b"CSI\x01" {
-        let Some(min_shift) = bgzf_read_u32(fp) else {
+        let Some(min_shift) = bgzf_read_u32(fp.as_ptr()) else {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         };
-        let Some(n_lvls) = bgzf_read_u32(fp) else {
+        let Some(n_lvls) = bgzf_read_u32(fp.as_ptr()) else {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         };
-        let Some(l_meta) = bgzf_read_u32(fp) else {
+        let Some(l_meta) = bgzf_read_u32(fp.as_ptr()) else {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         };
         if l_meta != 0 {
-            meta = c_compat::malloc(l_meta as u64 + 1).cast::<u8>();
-            if meta.is_null() {
+            meta = NonNull::new(c_compat::malloc(l_meta as u64 + 1).cast::<u8>());
+            let Some(meta_ptr) = meta else {
+                goto_idx_read_fail(fp, idx, meta);
+                return std::ptr::null_mut();
+            };
+            if !bgzf_read_exact(fp.as_ptr(), meta_ptr.as_ptr().cast(), l_meta as usize) {
                 goto_idx_read_fail(fp, idx, meta);
                 return std::ptr::null_mut();
             }
-            if !bgzf_read_exact(fp, meta.cast(), l_meta as usize) {
-                goto_idx_read_fail(fp, idx, meta);
-                return std::ptr::null_mut();
-            }
-            *meta.add(l_meta as usize) = 0;
+            *meta_ptr.as_ptr().add(l_meta as usize) = 0;
         }
-        let Some(n) = bgzf_read_u32(fp) else {
+        let Some(n) = bgzf_read_u32(fp.as_ptr()) else {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         };
@@ -6006,27 +6016,27 @@ pub unsafe fn hts_c_2990_idx_read(fn_: *const c_char) -> *mut hts_idx_t {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         }
-        idx = hts_c_2405_hts_idx_init(
+        idx = NonNull::new(hts_c_2405_hts_idx_init(
             n as c_int,
             HTS_FMT_CSI,
             0,
             min_shift as c_int,
             n_lvls as c_int,
-        );
-        if idx.is_null() {
+        ));
+        let Some(idx_ptr) = idx else {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
-        }
-        (*idx).l_meta = l_meta;
-        (*idx).meta = meta;
-        meta = std::ptr::null_mut();
-        if hts_c_2925_idx_read_core(idx, fp, HTS_FMT_CSI) < 0 {
+        };
+        (*idx_ptr.as_ptr()).l_meta = l_meta;
+        (*idx_ptr.as_ptr()).meta = meta.map_or(std::ptr::null_mut(), NonNull::as_ptr);
+        meta = None;
+        if hts_c_2925_idx_read_core(idx_ptr.as_ptr(), fp.as_ptr(), HTS_FMT_CSI) < 0 {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         }
     } else if &magic == b"TBI\x01" {
         let mut x = [0u8; 8 * 4];
-        if !bgzf_read_exact(fp, x.as_mut_ptr().cast(), x.len()) {
+        if !bgzf_read_exact(fp.as_ptr(), x.as_mut_ptr().cast(), x.len()) {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         }
@@ -6035,34 +6045,46 @@ pub unsafe fn hts_c_2990_idx_read(fn_: *const c_char) -> *mut hts_idx_t {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         }
-        idx = hts_c_2405_hts_idx_init(n as c_int, HTS_FMT_TBI as c_int, 0, 14, 5);
-        if idx.is_null() {
+        idx = NonNull::new(hts_c_2405_hts_idx_init(
+            n as c_int,
+            HTS_FMT_TBI as c_int,
+            0,
+            14,
+            5,
+        ));
+        let Some(idx_ptr) = idx else {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
-        }
+        };
         let name_len = u32::from_le_bytes([x[28], x[29], x[30], x[31]]);
         if name_len > u32::MAX - 29 {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         }
-        (*idx).l_meta = 28 + name_len;
-        (*idx).meta = c_compat::malloc((*idx).l_meta as u64 + 1).cast::<u8>();
-        if (*idx).meta.is_null() {
+        (*idx_ptr.as_ptr()).l_meta = 28 + name_len;
+        let tbi_meta =
+            NonNull::new(c_compat::malloc((*idx_ptr.as_ptr()).l_meta as u64 + 1).cast::<u8>());
+        let Some(tbi_meta) = tbi_meta else {
+            goto_idx_read_fail(fp, idx, meta);
+            return std::ptr::null_mut();
+        };
+        (*idx_ptr.as_ptr()).meta = tbi_meta.as_ptr();
+        c_compat::memcpy(tbi_meta.as_ptr().cast(), x.as_ptr().add(4).cast(), 28);
+        if !bgzf_read_exact(
+            fp.as_ptr(),
+            tbi_meta.as_ptr().add(28).cast(),
+            name_len as usize,
+        ) {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         }
-        c_compat::memcpy((*idx).meta.cast(), x.as_ptr().add(4).cast(), 28);
-        if !bgzf_read_exact(fp, (*idx).meta.add(28).cast(), name_len as usize) {
-            goto_idx_read_fail(fp, idx, meta);
-            return std::ptr::null_mut();
-        }
-        *(*idx).meta.add((*idx).l_meta as usize) = 0;
-        if hts_c_2925_idx_read_core(idx, fp, HTS_FMT_TBI as c_int) < 0 {
+        *tbi_meta.as_ptr().add((*idx_ptr.as_ptr()).l_meta as usize) = 0;
+        if hts_c_2925_idx_read_core(idx_ptr.as_ptr(), fp.as_ptr(), HTS_FMT_TBI as c_int) < 0 {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         }
     } else if &magic == b"BAI\x01" {
-        let Some(n) = bgzf_read_u32(fp) else {
+        let Some(n) = bgzf_read_u32(fp.as_ptr()) else {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         };
@@ -6070,12 +6092,12 @@ pub unsafe fn hts_c_2990_idx_read(fn_: *const c_char) -> *mut hts_idx_t {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         }
-        idx = hts_c_2405_hts_idx_init(n as c_int, HTS_FMT_BAI, 0, 14, 5);
-        if idx.is_null() {
+        idx = NonNull::new(hts_c_2405_hts_idx_init(n as c_int, HTS_FMT_BAI, 0, 14, 5));
+        let Some(idx_ptr) = idx else {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
-        }
-        if hts_c_2925_idx_read_core(idx, fp, HTS_FMT_BAI) < 0 {
+        };
+        if hts_c_2925_idx_read_core(idx_ptr.as_ptr(), fp.as_ptr(), HTS_FMT_BAI) < 0 {
             goto_idx_read_fail(fp, idx, meta);
             return std::ptr::null_mut();
         }
@@ -6085,8 +6107,8 @@ pub unsafe fn hts_c_2990_idx_read(fn_: *const c_char) -> *mut hts_idx_t {
         return std::ptr::null_mut();
     }
 
-    bgzf_close(fp);
-    idx
+    bgzf_close(fp.as_ptr());
+    idx.map_or(std::ptr::null_mut(), NonNull::as_ptr)
 }
 
 pub unsafe fn hts_c_4623_idx_test_and_fetch(
@@ -6438,10 +6460,18 @@ pub unsafe fn hts_c_4925_idx_find_and_load(
     idx
 }
 
-unsafe fn goto_idx_read_fail(fp: *mut BGZF, idx: *mut hts_idx_t, meta: *mut u8) {
-    bgzf_close(fp);
-    hts_idx_destroy(idx);
-    c_compat::free(meta.cast());
+unsafe fn goto_idx_read_fail(
+    fp: NonNull<BGZF>,
+    idx: Option<NonNull<hts_idx_t>>,
+    meta: Option<NonNull<u8>>,
+) {
+    bgzf_close(fp.as_ptr());
+    if let Some(idx) = idx {
+        hts_idx_destroy(idx.as_ptr());
+    }
+    if let Some(meta) = meta {
+        c_compat::free(meta.as_ptr().cast());
+    }
 }
 
 pub unsafe fn hts_idx_load3(
@@ -6799,7 +6829,7 @@ pub unsafe fn hts_c_3748_hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut ht
     (*iter).curr_off = 0;
     (*iter).i = -1;
 
-    let mut off: *mut hts_pair64_max_t = std::ptr::null_mut();
+    let mut off: Option<NonNull<hts_pair64_max_t>> = None;
     let mut n_off = 0usize;
 
     for i in 0..(*iter).n_reg {
@@ -6819,11 +6849,17 @@ pub unsafe fn hts_c_3748_hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut ht
                 Some(bytes) => bytes,
                 None => return hts_itr_multi_cram_err(off),
             };
-            let tmp = c_compat::realloc(off.cast(), bytes as u64).cast::<hts_pair64_max_t>();
-            if tmp.is_null() {
+            let Some(tmp) = NonNull::new(
+                c_compat::realloc(
+                    off.map_or(std::ptr::null_mut(), NonNull::as_ptr).cast(),
+                    bytes as u64,
+                )
+                .cast::<hts_pair64_max_t>(),
+            ) else {
                 return hts_itr_multi_cram_err(off);
-            }
-            off = tmp;
+            };
+            off = Some(tmp);
+            let off_ptr = tmp.as_ptr();
 
             for j in 0..(*curr_reg).count {
                 let curr_intv = (*curr_reg).intervals.add(j as usize);
@@ -6843,8 +6879,8 @@ pub unsafe fn hts_c_3748_hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut ht
                     continue;
                 }
 
-                (*off.add(n_off)).u = (*e).offset as u64;
-                (*off.add(n_off)).max = ((tid as u64) << 32) | j as u64;
+                (*off_ptr.add(n_off)).u = (*e).offset as u64;
+                (*off_ptr.add(n_off)).max = ((tid as u64) << 32) | j as u64;
 
                 e = if end >= HTS_POS_MAX {
                     cram_cram_index_c_503_cram_index_last((*cidx).cram, tid, std::ptr::null_mut())
@@ -6853,8 +6889,9 @@ pub unsafe fn hts_c_3748_hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut ht
                 };
 
                 if !e.is_null() {
-                    (*off.add(n_off)).v = if !(*e).e_next.is_null() {
-                        (*(*e).e_next).offset as u64
+                    let e_next = (*e).e_next;
+                    (*off_ptr.add(n_off)).v = if !e_next.is_null() {
+                        (*e_next).offset as u64
                     } else {
                         ((*e).offset + (*e).slice as i64 + (*e).len as i64) as u64
                     };
@@ -6896,18 +6933,19 @@ pub unsafe fn hts_c_3748_hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut ht
                     );
                     if !e.is_null() {
                         (*iter).bitfields |= 1;
-                        let tmp = c_compat::realloc(
-                            off.cast(),
-                            std::mem::size_of::<hts_pair64_max_t>() as u64,
-                        )
-                        .cast::<hts_pair64_max_t>();
-                        if tmp.is_null() {
+                        let Some(tmp) = NonNull::new(
+                            c_compat::realloc(
+                                off.map_or(std::ptr::null_mut(), NonNull::as_ptr).cast(),
+                                std::mem::size_of::<hts_pair64_max_t>() as u64,
+                            )
+                            .cast::<hts_pair64_max_t>(),
+                        ) else {
                             return hts_itr_multi_cram_err(off);
-                        }
-                        off = tmp;
-                        (*off).u = (*e).offset as u64;
-                        (*off).v = 0;
-                        (*off).max = 0;
+                        };
+                        off = Some(tmp);
+                        (*tmp.as_ptr()).u = (*e).offset as u64;
+                        (*tmp.as_ptr()).v = 0;
+                        (*tmp.as_ptr()).max = 0;
                         n_off = 1;
                     } else {
                         hts_log_cstr(
@@ -6932,13 +6970,13 @@ pub unsafe fn hts_c_3748_hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut ht
         }
     }
 
-    if n_off != 0 {
-        let off_slice = std::slice::from_raw_parts_mut(off, n_off);
+    if let Some(off_ptr) = off.filter(|_| n_off != 0) {
+        let off_slice = std::slice::from_raw_parts_mut(off_ptr.as_ptr(), n_off);
         off_slice.sort_by(|a, b| a.u.cmp(&b.u).then_with(|| a.max.cmp(&b.max)));
         (*iter).n_off = n_off as c_int;
-        (*iter).off = off;
-    } else {
-        c_compat::free(off.cast());
+        (*iter).off = off_ptr.as_ptr();
+    } else if let Some(off) = off {
+        c_compat::free(off.as_ptr().cast());
     }
 
     if n_off == 0 && !itr_nocoor(iter) {
@@ -6947,8 +6985,10 @@ pub unsafe fn hts_c_3748_hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut ht
     0
 }
 
-unsafe fn hts_itr_multi_cram_err(off: *mut hts_pair64_max_t) -> c_int {
-    c_compat::free(off.cast());
+unsafe fn hts_itr_multi_cram_err(off: Option<NonNull<hts_pair64_max_t>>) -> c_int {
+    if let Some(off) = off {
+        c_compat::free(off.as_ptr().cast());
+    }
     -1
 }
 
@@ -7086,12 +7126,9 @@ unsafe fn hts_idx_load3_local_index(
 ) -> Option<*mut hts_idx_t> {
     let idx_path = local_index_path(fn_, fnidx, fmt)?;
     let idx_c = std::ffi::CString::new(path_bytes(&idx_path).as_ref()).ok()?;
-    let fp = bgzf_open(idx_c.as_ptr(), c"r".as_ptr());
-    if fp.is_null() {
-        return None;
-    }
-    let idx = read_local_index(fp);
-    bgzf_close(fp.cast());
+    let fp = NonNull::new(bgzf_open(idx_c.as_ptr(), c"r".as_ptr()))?;
+    let idx = read_local_index(fp.as_ptr());
+    bgzf_close(fp.as_ptr());
     idx
 }
 
@@ -7238,26 +7275,26 @@ unsafe fn read_csi_index(fp: *mut BGZF) -> Option<*mut hts_idx_t> {
     let min_shift = bgzf_read_u32(fp)?;
     let n_lvls = bgzf_read_u32(fp)?;
     let l_meta = bgzf_read_u32(fp)?;
-    let mut meta = std::ptr::null_mut();
+    let mut meta: Option<NonNull<u8>> = None;
     if l_meta > 0 {
-        meta = crate::htslib_rs::c_compat::malloc(l_meta as u64 + 1).cast::<u8>();
-        if meta.is_null() {
+        meta = NonNull::new(crate::htslib_rs::c_compat::malloc(l_meta as u64 + 1).cast::<u8>());
+        let meta_ptr = meta?;
+        if !bgzf_read_exact(fp, meta_ptr.as_ptr().cast(), l_meta as usize) {
+            crate::htslib_rs::c_compat::free(meta_ptr.as_ptr().cast());
             return None;
         }
-        if !bgzf_read_exact(fp, meta.cast(), l_meta as usize) {
-            crate::htslib_rs::c_compat::free(meta.cast());
-            return None;
-        }
-        *meta.add(l_meta as usize) = 0;
+        *meta_ptr.as_ptr().add(l_meta as usize) = 0;
     }
     let n = bgzf_read_u32(fp)?;
     if n > c_int::MAX as u32 || min_shift > c_int::MAX as u32 || n_lvls > c_int::MAX as u32 {
-        crate::htslib_rs::c_compat::free(meta.cast());
+        if let Some(meta) = meta {
+            crate::htslib_rs::c_compat::free(meta.as_ptr().cast());
+        }
         return None;
     }
     let idx = hts_idx_init_local(n as c_int, HTS_FMT_CSI, min_shift as c_int, n_lvls as c_int)?;
     (*idx).l_meta = l_meta;
-    (*idx).meta = meta;
+    (*idx).meta = meta.map_or(std::ptr::null_mut(), NonNull::as_ptr);
     for tid in 0..n as c_int {
         if read_index_reference(fp, idx, tid).is_none() {
             hts_idx_destroy(idx);
@@ -7274,11 +7311,11 @@ unsafe fn hts_idx_init_local(
     min_shift: c_int,
     n_lvls: c_int,
 ) -> Option<*mut hts_idx_t> {
-    let idx = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<hts_idx_t>() as u64)
-        .cast::<hts_idx_t>();
-    if idx.is_null() {
-        return None;
-    }
+    let idx_ptr = NonNull::new(
+        crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<hts_idx_t>() as u64)
+            .cast::<hts_idx_t>(),
+    )?;
+    let idx = idx_ptr.as_ptr();
     (*idx).fmt = fmt;
     (*idx).min_shift = min_shift;
     (*idx).n_lvls = n_lvls;
@@ -7293,20 +7330,28 @@ unsafe fn hts_idx_init_local(
     (*idx).z.last_bin = u32::MAX;
     (*idx).z.last_coor = u32::MAX as hts_pos_t;
     if n > 0 {
-        (*idx).bidx = crate::htslib_rs::c_compat::calloc(
-            n as u64,
-            std::mem::size_of::<*mut hts_idx_bidx_t>() as u64,
-        )
-        .cast();
-        (*idx).lidx = crate::htslib_rs::c_compat::calloc(
-            n as u64,
-            std::mem::size_of::<hts_idx_lidx_t>() as u64,
-        )
-        .cast();
-        if (*idx).bidx.is_null() || (*idx).lidx.is_null() {
+        let Some(bidx) = NonNull::new(
+            crate::htslib_rs::c_compat::calloc(
+                n as u64,
+                std::mem::size_of::<*mut hts_idx_bidx_t>() as u64,
+            )
+            .cast(),
+        ) else {
             hts_idx_destroy(idx);
             return None;
-        }
+        };
+        (*idx).bidx = bidx.as_ptr();
+        let Some(lidx) = NonNull::new(
+            crate::htslib_rs::c_compat::calloc(
+                n as u64,
+                std::mem::size_of::<hts_idx_lidx_t>() as u64,
+            )
+            .cast(),
+        ) else {
+            hts_idx_destroy(idx);
+            return None;
+        };
+        (*idx).lidx = lidx.as_ptr();
     }
     Some(idx)
 }
@@ -7381,11 +7426,11 @@ unsafe fn alloc_bidx(n_bin: u32) -> Option<*mut hts_idx_bidx_t> {
     if n_bin > c_int::MAX as u32 {
         return None;
     }
-    let bidx = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<hts_idx_bidx_t>() as u64)
-        .cast::<hts_idx_bidx_t>();
-    if bidx.is_null() {
-        return None;
-    }
+    let bidx_ptr = NonNull::new(
+        crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<hts_idx_bidx_t>() as u64)
+            .cast::<hts_idx_bidx_t>(),
+    )?;
+    let bidx = bidx_ptr.as_ptr();
     if n_bin == 0 {
         return Some(bidx);
     }
@@ -7398,24 +7443,37 @@ unsafe fn alloc_bidx(n_bin: u32) -> Option<*mut hts_idx_bidx_t> {
     (*bidx).n_occupied = 0;
     (*bidx).upper_bound = (n_buckets as f64 * 0.77) as u32;
     let n_flags = if n_buckets < 16 { 1 } else { n_buckets >> 4 };
-    (*bidx).flags =
+    let flags = NonNull::new(
         crate::htslib_rs::c_compat::malloc(n_flags as u64 * std::mem::size_of::<u32>() as u64)
-            .cast();
-    (*bidx).keys =
+            .cast::<u32>(),
+    );
+    let keys = NonNull::new(
         crate::htslib_rs::c_compat::malloc(n_buckets as u64 * std::mem::size_of::<u32>() as u64)
-            .cast();
-    (*bidx).vals = crate::htslib_rs::c_compat::calloc(
-        n_buckets as u64,
-        std::mem::size_of::<hts_idx_bins_t>() as u64,
-    )
-    .cast();
-    if (*bidx).flags.is_null() || (*bidx).keys.is_null() || (*bidx).vals.is_null() {
-        crate::htslib_rs::c_compat::free((*bidx).flags.cast());
-        crate::htslib_rs::c_compat::free((*bidx).keys.cast());
-        crate::htslib_rs::c_compat::free((*bidx).vals.cast());
+            .cast::<u32>(),
+    );
+    let vals = NonNull::new(
+        crate::htslib_rs::c_compat::calloc(
+            n_buckets as u64,
+            std::mem::size_of::<hts_idx_bins_t>() as u64,
+        )
+        .cast::<hts_idx_bins_t>(),
+    );
+    let (Some(flags), Some(keys), Some(vals)) = (flags, keys, vals) else {
+        if let Some(flags) = flags {
+            crate::htslib_rs::c_compat::free(flags.as_ptr().cast());
+        }
+        if let Some(keys) = keys {
+            crate::htslib_rs::c_compat::free(keys.as_ptr().cast());
+        }
+        if let Some(vals) = vals {
+            crate::htslib_rs::c_compat::free(vals.as_ptr().cast());
+        }
         crate::htslib_rs::c_compat::free(bidx.cast());
         return None;
-    }
+    };
+    (*bidx).flags = flags.as_ptr();
+    (*bidx).keys = keys.as_ptr();
+    (*bidx).vals = vals.as_ptr();
     for i in 0..n_flags {
         *(*bidx).flags.add(i as usize) = 0xaaaa_aaaa;
     }
