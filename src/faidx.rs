@@ -2233,7 +2233,7 @@ mod tests {
             mt: std::ptr::null_mut(),
             idx: std::ptr::null_mut(),
             idx_build_otf: 0,
-            gz_stream: std::ptr::null_mut(),
+            gz_stream: None,
             seeked: 0,
         };
         unsafe {
@@ -2298,7 +2298,7 @@ mod tests {
             mt: std::ptr::null_mut(),
             idx: std::ptr::null_mut(),
             idx_build_otf: 0,
-            gz_stream: std::ptr::null_mut(),
+            gz_stream: None,
             seeked: 0,
         };
         let mut fai = faidx_t {

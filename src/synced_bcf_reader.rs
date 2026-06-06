@@ -45,7 +45,7 @@ pub unsafe fn bcf_sr_init() -> *mut bcf_srs_t {
     unsafe {
         let mut files = Box::new(std::mem::zeroed::<bcf_srs_t>());
         let aux = Box::new(std::mem::zeroed::<BcfSrAux>());
-        files.aux = Box::into_raw(aux).cast::<c_void>();
+        files.aux = Box::into_raw(aux);
         let files = Box::into_raw(files);
         bcf_sr_sort_c_675_bcf_sr_sort_init(&mut (*bcf_sr_aux_mut(files)).sort);
         bcf_sr_set_opt(files, BCF_SR_REGIONS_OVERLAP, 1);
@@ -111,7 +111,7 @@ pub unsafe fn bcf_sr_destroy(files: *mut bcf_srs_t) {
         }
         libc::free(autoclose.cast());
         if !(*files).aux.is_null() {
-            drop(Box::from_raw((*files).aux.cast::<BcfSrAux>()));
+            drop(Box::from_raw((*files).aux));
         }
         drop(Box::from_raw(files));
     }

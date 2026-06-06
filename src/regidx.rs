@@ -8,7 +8,10 @@ use crate::htslib_rs::{
         hts_close, hts_getline, hts_open, hts_parse_decimal, hts_pos_t, isspace_c, kputsn,
         ks_clear, ks_free, kstring_t,
     },
-    sam::{khash_str2int_destroy, khash_str2int_get, khash_str2int_inc, khash_str2int_init},
+    sam::{
+        khash_s2i_t, khash_str2int_destroy, khash_str2int_get, khash_str2int_inc,
+        khash_str2int_init,
+    },
 };
 
 pub const REGIDX_MAX: hts_pos_t = 1_i64 << 35;
@@ -60,7 +63,7 @@ pub struct reglist_t {
 // original: regidx_t (htslib/regidx.c:77)
 pub struct regidx_t {
     seq: Vec<reglist_t>,
-    seq2regs: Option<NonNull<c_void>>,
+    seq2regs: Option<NonNull<khash_s2i_t>>,
     seq_names: Vec<CString>,
     seq_name_ptrs: Vec<*mut c_char>,
     free: regidx_free_f,
@@ -115,7 +118,7 @@ impl regidx_t {
 
     fn seq2regs_ptr(&self) -> *mut c_void {
         self.seq2regs
-            .map_or(std::ptr::null_mut(), |ptr| ptr.as_ptr())
+            .map_or(std::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
     }
 
     fn payload_ptr(&mut self) -> *mut c_void {
@@ -343,7 +346,7 @@ pub unsafe fn regidx_c_209_regidx_init_string(
         regidx_c_498_regidx_parse_tab as unsafe extern "C" fn(_, _, _, _, _, _, _) -> _,
     ));
     let idx = Box::into_raw(Box::new(regidx_t::new(parse, freef, payload_size, usr)));
-    (*idx).seq2regs = NonNull::new(khash_str2int_init());
+    (*idx).seq2regs = NonNull::new(khash_str2int_init().cast::<khash_s2i_t>());
     if (*idx).seq2regs.is_none() {
         regidx_c_311_regidx_destroy(idx);
         return std::ptr::null_mut();
@@ -410,7 +413,7 @@ pub unsafe fn regidx_c_246_regidx_init(
         s: std::ptr::null_mut(),
     };
     let idx = Box::into_raw(Box::new(regidx_t::new(parsef, freef, payload_size, usr)));
-    (*idx).seq2regs = NonNull::new(khash_str2int_init());
+    (*idx).seq2regs = NonNull::new(khash_str2int_init().cast::<khash_s2i_t>());
     if (*idx).seq2regs.is_none() {
         regidx_c_311_regidx_destroy(idx);
         return std::ptr::null_mut();
@@ -472,7 +475,7 @@ pub unsafe fn regidx_c_311_regidx_destroy(idx: *mut regidx_t) {
     }
     libc::free(idx_box.str.s.cast());
     if let Some(seq2regs) = idx_box.seq2regs.take() {
-        khash_str2int_destroy(seq2regs.as_ptr());
+        khash_str2int_destroy(seq2regs.as_ptr().cast());
     }
 }
 

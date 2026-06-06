@@ -444,7 +444,7 @@ pub struct bcf_srs_t {
     pub n_smpl: c_int,
     pub n_threads: c_int,
     pub p: *mut crate::htslib_rs::hts::htsThreadPool,
-    pub aux: *mut c_void,
+    pub aux: *mut BcfSrAux,
 }
 pub type bcf_variant_match = c_int;
 
@@ -660,7 +660,7 @@ pub(crate) struct BcfSrSortVarSet {
 }
 
 #[repr(C)]
-pub(crate) struct BcfSrAux {
+pub struct BcfSrAux {
     pub(crate) sort: BcfSrSort,
     pub(crate) regions_overlap: c_int,
     pub(crate) targets_overlap: c_int,
@@ -684,7 +684,7 @@ pub(crate) struct BcfSrRegion {
 }
 
 pub(crate) unsafe fn bcf_sr_aux_mut(readers: *mut bcf_srs_t) -> *mut BcfSrAux {
-    unsafe { (*readers).aux.cast::<BcfSrAux>() }
+    unsafe { (*readers).aux }
 }
 
 pub(crate) unsafe fn bcf_sr_sort_reserve_active(srt: *mut BcfSrSort, need: c_int) -> c_int {
