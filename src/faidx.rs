@@ -1,9 +1,10 @@
 use std::{
     collections::HashSet,
-    ffi::{c_char, c_int, c_void, CStr},
+    ffi::{c_char, c_int, c_void, CStr, CString},
     fs,
     io::{BufWriter, Write},
     ptr,
+    ptr::NonNull,
 };
 
 use super::bgzf::{
@@ -32,7 +33,6 @@ const HTS_PARSE_LIST: c_int = 4;
 extern "C" {
     fn free(ptr: *mut c_void);
     fn malloc(size: usize) -> *mut c_void;
-    fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void;
 }
 
 pub fn isgraph_(c: u8) -> c_int {
@@ -89,28 +89,76 @@ pub struct faidx1_t {
     pub qual_offset: u64,
 }
 
-#[repr(C)]
 pub struct faidx_hash_t {
     pub n_buckets: u32,
     pub size: u32,
     pub n_occupied: u32,
     pub upper_bound: u32,
-    pub flags: *mut u32,
-    pub keys: *mut *mut c_char,
-    pub vals: *mut faidx1_t,
+    buckets: Vec<Option<faidx_hash_bucket_t>>,
 }
 
-#[repr(C)]
+#[derive(Clone, Copy)]
+struct faidx_hash_bucket_t {
+    name_id: usize,
+    val: faidx1_t,
+}
+
 pub struct faidx_t {
-    pub bgzf: *mut BGZF,
+    pub bgzf: Option<NonNull<BGZF>>,
     pub n: c_int,
     pub m: c_int,
-    pub name: *mut *mut c_char,
-    pub hash: *mut faidx_hash_t,
+    pub name: Vec<CString>,
+    pub hash: Box<faidx_hash_t>,
     pub format: c_int,
 }
 
 type FaidxRows = Vec<(Vec<u8>, faidx1_t)>;
+
+impl faidx_hash_t {
+    fn with_capacity(min_buckets: usize) -> Self {
+        let mut n_buckets = 4usize;
+        while n_buckets < min_buckets {
+            n_buckets <<= 1;
+        }
+        Self {
+            n_buckets: n_buckets as u32,
+            size: 0,
+            n_occupied: 0,
+            upper_bound: (n_buckets as f64 * 0.77) as u32,
+            buckets: vec![None; n_buckets],
+        }
+    }
+
+    fn clear_with_capacity(&mut self, min_buckets: usize) {
+        *self = Self::with_capacity(min_buckets);
+    }
+}
+
+impl faidx_t {
+    fn new(format: c_int) -> Self {
+        Self {
+            bgzf: None,
+            n: 0,
+            m: 0,
+            name: Vec::new(),
+            hash: Box::new(faidx_hash_t::with_capacity(32)),
+            format,
+        }
+    }
+
+    fn bgzf_ptr(&self) -> *mut BGZF {
+        self.bgzf.map_or(ptr::null_mut(), NonNull::as_ptr)
+    }
+
+    unsafe fn set_bgzf(&mut self, bgzf: *mut BGZF) -> bool {
+        self.bgzf = NonNull::new(bgzf);
+        self.bgzf.is_some()
+    }
+
+    fn name_ptr(&self, i: usize) -> *const c_char {
+        self.name[i].as_ptr()
+    }
+}
 
 pub unsafe fn fai_load3(
     fn_: *const c_char,
@@ -186,10 +234,10 @@ unsafe fn fai_load3_core(
     let Some(fai) = fai_read(fn_, fnfai, format) else {
         return ptr::null_mut();
     };
-    if bgzf_compression((*fai).bgzf) == 2 {
+    if bgzf_compression((*fai).bgzf_ptr()) == 2 {
         let mut gzi_bytes = path_bytes(fngzi_path.as_ref().unwrap()).into_owned();
         gzi_bytes.push(0);
-        if bgzf_index_load((*fai).bgzf, gzi_bytes.as_ptr().cast(), ptr::null()) < 0 {
+        if bgzf_index_load((*fai).bgzf_ptr(), gzi_bytes.as_ptr().cast(), ptr::null()) < 0 {
             fai_destroy(fai);
             return ptr::null_mut();
         }
@@ -280,8 +328,7 @@ unsafe fn fai_read(
         return None;
     }
 
-    (*fai).bgzf = bgzf_open(fn_, c"rb".as_ptr());
-    if (*fai).bgzf.is_null() {
+    if !(*fai).set_bgzf(bgzf_open(fn_, c"rb".as_ptr())) {
         fai_destroy(fai);
         return None;
     }
@@ -300,12 +347,12 @@ unsafe fn fai_save(fai: *const faidx_t, path: &std::path::Path) -> c_int {
     let mut out = BufWriter::new(file);
 
     for i in 0..(*fai).n {
-        let name = *(*fai).name.add(i as usize);
-        let k = kh_get_s((*fai).hash, name);
-        if k == (*(*fai).hash).n_buckets {
+        let name = (*fai).name_ptr(i as usize);
+        let k = kh_get_s(fai, name);
+        if k == (*fai).hash.n_buckets {
             return -1;
         }
-        let val = *(*(*fai).hash).vals.add(k as usize);
+        let val = (&(*fai).hash.buckets)[k as usize].unwrap().val;
 
         if out.write_all(CStr::from_ptr(name).to_bytes()).is_err() {
             return -1;
@@ -573,84 +620,30 @@ unsafe fn fai_from_rows(
     rows: FaidxRows,
     format: c_int,
 ) -> Option<*mut faidx_t> {
-    let fai = malloc(std::mem::size_of::<faidx_t>()).cast::<faidx_t>();
-    if fai.is_null() {
+    let fai = Box::into_raw(Box::new(faidx_t::new(format)));
+    (*fai).name.reserve(rows.len());
+    (*fai).m = (*fai).name.capacity() as c_int;
+    (*fai).hash.clear_with_capacity((rows.len() * 2).max(4));
+    if !fn_.is_null() && !(*fai).set_bgzf(bgzf_open(fn_, c"r".as_ptr())) {
+        drop(Box::from_raw(fai));
         return None;
     }
-    std::ptr::write_bytes(fai, 0, 1);
-    (*fai).n = 0;
-    (*fai).m = rows.len() as c_int;
-    (*fai).format = format;
-    if !fn_.is_null() {
-        (*fai).bgzf = bgzf_open(fn_, c"r".as_ptr());
-        if (*fai).bgzf.is_null() {
-            free(fai.cast());
-            return None;
-        }
-    }
-    (*fai).name = malloc(rows.len() * std::mem::size_of::<*mut c_char>()).cast::<*mut c_char>();
-    if (*fai).name.is_null() {
-        fai_destroy(fai);
-        return None;
-    }
-
-    let mut n_buckets = 2usize;
-    while n_buckets < rows.len() * 2 {
-        n_buckets <<= 1;
-    }
-    let hash = malloc(std::mem::size_of::<faidx_hash_t>()).cast::<faidx_hash_t>();
-    if hash.is_null() {
-        fai_destroy(fai);
-        return None;
-    }
-    std::ptr::write_bytes(hash, 0, 1);
-    (*hash).n_buckets = n_buckets as u32;
-    (*hash).size = 0;
-    (*hash).n_occupied = 0;
-    (*hash).upper_bound = (n_buckets as f64 * 0.77) as u32;
-    let n_flags = if n_buckets < 16 { 1 } else { n_buckets >> 4 };
-    (*hash).flags = malloc(n_flags * std::mem::size_of::<u32>()).cast::<u32>();
-    (*hash).keys = malloc(n_buckets * std::mem::size_of::<*mut c_char>()).cast::<*mut c_char>();
-    (*hash).vals = malloc(n_buckets * std::mem::size_of::<faidx1_t>()).cast::<faidx1_t>();
-    if (*hash).flags.is_null() || (*hash).keys.is_null() || (*hash).vals.is_null() {
-        (*fai).hash = hash;
-        fai_destroy(fai);
-        return None;
-    }
-    for i in 0..n_flags {
-        *(*hash).flags.add(i) = 0xaaaa_aaaa;
-    }
-    (*fai).hash = hash;
 
     for (name, mut val) in rows.into_iter() {
-        let name_ptr = malloc(name.len() + 1).cast::<c_char>();
-        if name_ptr.is_null() {
+        let name = match CString::new(name) {
+            Ok(name) => name,
+            Err(_) => {
+                fai_destroy(fai);
+                return None;
+            }
+        };
+        if kh_get_s(fai, name.as_ptr()) != (*fai).hash.n_buckets {
+            continue;
+        }
+        if faidx_insert_owned_name(fai, name, &mut val) != 0 {
             fai_destroy(fai);
             return None;
         }
-        std::ptr::copy_nonoverlapping(name.as_ptr().cast::<c_char>(), name_ptr, name.len());
-        *name_ptr.add(name.len()) = 0;
-        if kh_get_s(hash, name_ptr) != (*hash).n_buckets {
-            free(name_ptr.cast());
-            continue;
-        }
-        *(*fai).name.add((*fai).n as usize) = name_ptr;
-        val.id = (*fai).n;
-        (*fai).n += 1;
-        (*hash).size += 1;
-        (*hash).n_occupied += 1;
-
-        let mask = (*hash).n_buckets - 1;
-        let mut k = kh_str_hash_string(name_ptr) & mask;
-        let mut step = 0;
-        while !kh_isempty((*hash).flags, k) {
-            step += 1;
-            k = (k + step) & mask;
-        }
-        *(*hash).keys.add(k as usize) = name_ptr;
-        *(*hash).vals.add(k as usize) = val;
-        let flag = (*hash).flags.add((k >> 4) as usize);
-        *flag &= !(3 << ((k & 0x0f) << 1));
     }
 
     Some(fai)
@@ -688,8 +681,7 @@ unsafe fn fai_build_plain_fasta(fn_: *const c_char, fnfai: *const c_char) -> Opt
         return None;
     }
 
-    (*fai).bgzf = bgzf_open(fn_, c"r".as_ptr());
-    if (*fai).bgzf.is_null() {
+    if !(*fai).set_bgzf(bgzf_open(fn_, c"r".as_ptr())) {
         fai_destroy(fai);
         return None;
     }
@@ -701,23 +693,17 @@ pub unsafe fn fai_destroy(_fai: *mut faidx_t) {
     if _fai.is_null() {
         return;
     }
-    for i in 0..(*_fai).n {
-        free(*(*_fai).name.add(i as usize).cast::<*mut c_void>());
+    let mut fai = Box::from_raw(_fai);
+    if let Some(bgzf) = fai.bgzf.take() {
+        bgzf_close(bgzf.as_ptr());
     }
-    free((*_fai).name.cast());
-    kh_destroy_s((*_fai).hash);
-    if !(*_fai).bgzf.is_null() {
-        bgzf_close((*_fai).bgzf);
-    }
-    free(_fai.cast());
 }
 
 pub unsafe fn faidx_has_seq(_fai: *const faidx_t, _seq: *const c_char) -> c_int {
     if _fai.is_null() || _seq.is_null() {
         return 0;
     }
-    let h = (*_fai).hash;
-    if h.is_null() || kh_get_s(h, _seq) == (*h).n_buckets {
+    if kh_get_s(_fai, _seq) == (*_fai).hash.n_buckets {
         0
     } else {
         1
@@ -733,15 +719,15 @@ pub unsafe fn faidx_nseq(_fai: *const faidx_t) -> c_int {
 }
 
 pub unsafe fn faidx_iseq(_fai: *const faidx_t, _i: c_int) -> *const c_char {
-    *(*_fai).name.add(_i as usize)
+    (*_fai).name_ptr(_i as usize)
 }
 
 pub unsafe fn faidx_seq_len64(_fai: *const faidx_t, _seq: *const c_char) -> hts_pos_t {
-    let k = kh_get_s((*_fai).hash, _seq);
-    if k == (*(*_fai).hash).n_buckets {
+    let k = kh_get_s(_fai, _seq);
+    if k == (*_fai).hash.n_buckets {
         -1
     } else {
-        (*(*(*_fai).hash).vals.add(k as usize)).len as hts_pos_t
+        (&(*_fai).hash.buckets)[k as usize].unwrap().val.len as hts_pos_t
     }
 }
 
@@ -770,7 +756,7 @@ pub unsafe fn fai_adjust_region(
         _fai,
         0,
         std::ptr::null_mut(),
-        *(*_fai).name.add(_tid as usize),
+        (*_fai).name_ptr(_tid as usize),
         _beg,
         _end,
         std::ptr::null_mut(),
@@ -835,11 +821,11 @@ pub unsafe fn faidx_fetch_seq(
 
 unsafe extern "C" fn fai_name2id(v: *mut c_void, ref_: *const c_char) -> c_int {
     let fai = v.cast::<faidx_t>();
-    let k = kh_get_s((*fai).hash, ref_);
-    if k == (*(*fai).hash).n_buckets {
+    let k = kh_get_s(fai, ref_);
+    if k == (*fai).hash.n_buckets {
         -1
     } else {
-        (*(*(*fai).hash).vals.add(k as usize)).id
+        (&(*fai).hash.buckets)[k as usize].unwrap().val.id
     }
 }
 
@@ -893,11 +879,11 @@ pub unsafe fn fai_parse_region(
 }
 
 pub unsafe fn fai_set_cache_size(fai: *mut faidx_t, cache_size: c_int) {
-    bgzf_set_cache_size((*fai).bgzf, cache_size);
+    bgzf_set_cache_size((*fai).bgzf_ptr(), cache_size);
 }
 
 pub unsafe fn fai_thread_pool(fai: *mut faidx_t, pool: *mut hts_tpool, qsize: c_int) -> c_int {
-    bgzf_thread_pool((*fai).bgzf, pool, qsize)
+    bgzf_thread_pool((*fai).bgzf_ptr(), pool, qsize)
 }
 
 unsafe fn fai_get_val(
@@ -917,11 +903,11 @@ unsafe fn fai_get_val(
         return 1;
     }
 
-    let iter = kh_get_s((*fai).hash, faidx_iseq(fai, id));
-    if iter >= (*(*fai).hash).n_buckets {
+    let iter = kh_get_s(fai, faidx_iseq(fai, id));
+    if iter >= (*fai).hash.n_buckets {
         std::process::abort();
     }
-    *val = *(*(*fai).hash).vals.add(iter as usize);
+    *val = (&(*fai).hash.buckets)[iter as usize].unwrap().val;
 
     if beg >= (*val).len as hts_pos_t {
         beg = (*val).len as hts_pos_t;
@@ -1073,29 +1059,27 @@ pub unsafe fn faidx_fetch_qual(
     ret
 }
 
-unsafe fn kh_get_s(h: *const faidx_hash_t, key: *const c_char) -> u32 {
-    if (*h).n_buckets == 0 {
+unsafe fn kh_get_s(fai: *const faidx_t, key: *const c_char) -> u32 {
+    if fai.is_null() || key.is_null() || (*fai).hash.n_buckets == 0 {
         return 0;
     }
-    let mask = (*h).n_buckets - 1;
+    let h = &(*fai).hash;
+    let mask = h.n_buckets - 1;
     let k = kh_str_hash_string(key);
     let mut i = k & mask;
     let last = i;
     let mut step = 0;
-    while !kh_isempty((*h).flags, i)
-        && (kh_isdel((*h).flags, i) || !cstr_eq(*(*h).keys.add(i as usize), key))
-    {
+    while let Some(bucket) = h.buckets[i as usize] {
+        if cstr_eq((*fai).name_ptr(bucket.name_id), key) {
+            return i;
+        }
         step += 1;
         i = (i + step) & mask;
         if i == last {
-            return (*h).n_buckets;
+            return h.n_buckets;
         }
     }
-    if kh_iseither((*h).flags, i) {
-        (*h).n_buckets
-    } else {
-        i
-    }
+    h.n_buckets
 }
 
 unsafe fn faidx_adjust_position(
@@ -1107,17 +1091,17 @@ unsafe fn faidx_adjust_position(
     p_end_i: *mut hts_pos_t,
     len: *mut hts_pos_t,
 ) -> c_int {
-    let iter = kh_get_s((*fai).hash, c_name);
-    if iter == (*(*fai).hash).n_buckets {
+    let iter = kh_get_s(fai, c_name);
+    if iter == (*fai).hash.n_buckets {
         if !len.is_null() {
             *len = -2;
         }
         return 1;
     }
 
-    let val = (*(*fai).hash).vals.add(iter as usize);
+    let val_ref = &(&(*fai).hash.buckets)[iter as usize].unwrap().val;
     if !val_out.is_null() {
-        *val_out = *val;
+        *val_out = *val_ref;
     }
 
     if *p_end_i < *p_beg_i {
@@ -1126,14 +1110,14 @@ unsafe fn faidx_adjust_position(
 
     if *p_beg_i < 0 {
         *p_beg_i = 0;
-    } else if (*val).len as hts_pos_t <= *p_beg_i {
-        *p_beg_i = (*val).len as hts_pos_t;
+    } else if val_ref.len as hts_pos_t <= *p_beg_i {
+        *p_beg_i = val_ref.len as hts_pos_t;
     }
 
     if *p_end_i < 0 {
         *p_end_i = 0;
-    } else if (*val).len as hts_pos_t <= *p_end_i {
-        *p_end_i = (*val).len as hts_pos_t - end_adjust as hts_pos_t;
+    } else if val_ref.len as hts_pos_t <= *p_end_i {
+        *p_end_i = val_ref.len as hts_pos_t - end_adjust as hts_pos_t;
     }
 
     0
@@ -1158,7 +1142,7 @@ unsafe fn fai_retrieve(
     }
 
     let ret = bgzf_useek(
-        (*fai).bgzf,
+        (*fai).bgzf_ptr(),
         (offset
             + (beg as u64 / (*val).line_blen as u64) * (*val).line_len as u64
             + beg as u64 % (*val).line_blen as u64) as i64,
@@ -1181,7 +1165,7 @@ unsafe fn fai_retrieve(
     let firstline_blen = (*val).line_blen as isize - (beg % (*val).line_blen as hts_pos_t) as isize;
 
     if remaining <= firstline_blen {
-        let nread = bgzf_read((*fai).bgzf, buffer.cast(), remaining as usize);
+        let nread = bgzf_read((*fai).bgzf_ptr(), buffer.cast(), remaining as usize);
         if nread < remaining {
             free(buffer.cast());
             *len = -1;
@@ -1193,7 +1177,7 @@ unsafe fn fai_retrieve(
 
     let mut s = buffer;
     let firstline_len = (*val).line_len as isize - (beg % (*val).line_blen as hts_pos_t) as isize;
-    let mut nread = bgzf_read((*fai).bgzf, s.cast(), firstline_len as usize);
+    let mut nread = bgzf_read((*fai).bgzf_ptr(), s.cast(), firstline_len as usize);
     if nread < firstline_len {
         free(buffer.cast());
         *len = -1;
@@ -1203,7 +1187,7 @@ unsafe fn fai_retrieve(
     remaining -= firstline_blen;
 
     while remaining > (*val).line_blen as isize {
-        nread = bgzf_read((*fai).bgzf, s.cast(), (*val).line_len as usize);
+        nread = bgzf_read((*fai).bgzf_ptr(), s.cast(), (*val).line_len as usize);
         if nread < (*val).line_len as isize {
             free(buffer.cast());
             *len = -1;
@@ -1214,7 +1198,7 @@ unsafe fn fai_retrieve(
     }
 
     if remaining > 0 {
-        nread = bgzf_read((*fai).bgzf, s.cast(), remaining as usize);
+        nread = bgzf_read((*fai).bgzf_ptr(), s.cast(), remaining as usize);
         if nread < remaining {
             free(buffer.cast());
             *len = -1;
@@ -1225,16 +1209,6 @@ unsafe fn fai_retrieve(
 
     *s = 0;
     buffer
-}
-
-unsafe fn kh_destroy_s(h: *mut faidx_hash_t) {
-    if h.is_null() {
-        return;
-    }
-    free((*h).flags.cast());
-    free((*h).keys.cast());
-    free((*h).vals.cast());
-    free(h.cast());
 }
 
 unsafe fn kh_str_hash_string(s: *const c_char) -> u32 {
@@ -1253,23 +1227,11 @@ unsafe fn cstr_eq(a: *const c_char, b: *const c_char) -> bool {
     !a.is_null() && !b.is_null() && CStr::from_ptr(a) == CStr::from_ptr(b)
 }
 
-unsafe fn kh_isempty(flags: *const u32, i: u32) -> bool {
-    ((*flags.add((i >> 4) as usize) >> ((i & 0x0f) << 1)) & 2) != 0
-}
-
-unsafe fn kh_isdel(flags: *const u32, i: u32) -> bool {
-    ((*flags.add((i >> 4) as usize) >> ((i & 0x0f) << 1)) & 1) != 0
-}
-
-unsafe fn kh_iseither(flags: *const u32, i: u32) -> bool {
-    ((*flags.add((i >> 4) as usize) >> ((i & 0x0f) << 1)) & 3) != 0
-}
-
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use std::{
-        ffi::{c_void, CString},
+        ffi::CString,
         fs,
         mem::{align_of, size_of},
         ptr,
@@ -1279,55 +1241,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn public_faidx_struct_layout_matches_htslib_abi_shape() {
+    fn faidx_record_layout_keeps_htslib_value_shape() {
         assert_eq!(size_of::<faidx1_t>(), 40);
         assert_eq!(align_of::<faidx1_t>(), 8);
-        assert_eq!(size_of::<faidx_hash_t>(), 40);
-        assert_eq!(align_of::<faidx_hash_t>(), 8);
-        assert_eq!(size_of::<faidx_t>(), 40);
-        assert_eq!(align_of::<faidx_t>(), 8);
-        assert_eq!(std::mem::offset_of!(faidx_t, bgzf), 0);
-        assert_eq!(std::mem::offset_of!(faidx_t, n), 8);
-        assert_eq!(std::mem::offset_of!(faidx_t, m), 12);
-        assert_eq!(std::mem::offset_of!(faidx_t, name), 16);
-        assert_eq!(std::mem::offset_of!(faidx_t, hash), 24);
-        assert_eq!(std::mem::offset_of!(faidx_t, format), 32);
     }
 
     #[test]
     fn faidx_has_seq_matches_khash_string_lookup_rules() {
-        let present = CString::new("chr1").unwrap();
         let absent = CString::new("chr2").unwrap();
-        let mut names = vec![present.as_ptr() as *mut c_char];
-        let mut keys = vec![present.as_ptr() as *mut c_char];
-        let mut vals = vec![faidx1_t {
-            id: 0,
-            line_len: 80,
-            line_blen: 81,
-            len: 100,
-            seq_offset: 10,
-            qual_offset: 0,
-        }];
-        let mut flags = vec![0u32];
-        let mut hash = faidx_hash_t {
-            n_buckets: 1,
-            size: 1,
-            n_occupied: 1,
-            upper_bound: 1,
-            flags: flags.as_mut_ptr(),
-            keys: keys.as_mut_ptr(),
-            vals: vals.as_mut_ptr(),
-        };
-        let fai = faidx_t {
-            bgzf: std::ptr::null_mut(),
-            n: 1,
-            m: 1,
-            name: names.as_mut_ptr(),
-            hash: &mut hash,
-            format: 0,
-        };
+        let mut fai = faidx_t::new(FAI_FASTA as c_int);
+        let present = CString::new("chr1").unwrap();
 
         unsafe {
+            assert_eq!(
+                faidx_c_93_fai_insert_index(&mut fai, present.as_ptr(), 100, 80, 81, 10, 0),
+                0
+            );
             assert_eq!(faidx_has_seq(&fai, present.as_ptr()), 1);
             assert_eq!(faidx_has_seq(&fai, absent.as_ptr()), 0);
             assert_eq!(faidx_has_seq(std::ptr::null(), present.as_ptr()), 0);
@@ -1357,50 +1286,11 @@ mod tests {
     }
 
     #[test]
-    fn fai_destroy_frees_c_allocated_index_shape() {
+    fn fai_destroy_accepts_box_allocated_index_shape() {
         unsafe {
-            let fai =
-                crate::htslib_rs::c_compat::malloc(size_of::<faidx_t>() as u64).cast::<faidx_t>();
-            assert!(!fai.is_null());
-            let name_array = crate::htslib_rs::c_compat::malloc(size_of::<*mut c_char>() as u64)
-                .cast::<*mut c_char>();
-            assert!(!name_array.is_null());
-            let chr_name = crate::htslib_rs::c_compat::malloc(5).cast::<c_char>();
-            assert!(!chr_name.is_null());
-            ptr::copy_nonoverlapping(c"chr1".as_ptr(), chr_name, 5);
-            *name_array = chr_name;
-
-            let hash = crate::htslib_rs::c_compat::malloc(size_of::<faidx_hash_t>() as u64)
-                .cast::<faidx_hash_t>();
-            assert!(!hash.is_null());
-            ptr::write(
-                hash,
-                faidx_hash_t {
-                    n_buckets: 0,
-                    size: 0,
-                    n_occupied: 0,
-                    upper_bound: 0,
-                    flags: ptr::null_mut(),
-                    keys: ptr::null_mut(),
-                    vals: ptr::null_mut(),
-                },
-            );
-
-            ptr::write(
-                fai,
-                faidx_t {
-                    bgzf: ptr::null_mut(),
-                    n: 1,
-                    m: 1,
-                    name: name_array,
-                    hash,
-                    format: 0,
-                },
-            );
-
+            let fai = Box::into_raw(Box::new(faidx_t::new(FAI_FASTA as c_int)));
             fai_destroy(fai);
             fai_destroy(ptr::null_mut());
-            free(ptr::null_mut::<c_void>());
         }
     }
 
@@ -2412,11 +2302,11 @@ mod tests {
             seeked: 0,
         };
         let mut fai = faidx_t {
-            bgzf: &mut bgzf,
+            bgzf: NonNull::new((&mut bgzf) as *mut BGZF),
             n: 0,
             m: 0,
-            name: std::ptr::null_mut(),
-            hash: std::ptr::null_mut(),
+            name: Vec::new(),
+            hash: Box::new(faidx_hash_t::with_capacity(4)),
             format: 0,
         };
         unsafe {
@@ -2504,48 +2394,23 @@ pub unsafe fn faidx_c_93_fai_insert_index(
         return -1;
     }
 
-    let name_key = libc::strdup(name);
-    if name_key.is_null() {
-        return -1;
-    }
-
-    let mut absent = 0;
-    let k = kh_put_s((*idx).hash, name_key, &mut absent);
-    if k == u32::MAX {
-        free(name_key.cast());
-        return -1;
-    }
-
-    if absent == 0 {
-        free(name_key.cast());
+    if kh_get_s(idx, name) != (*idx).hash.n_buckets {
         return 0;
     }
 
-    if (*idx).n == (*idx).m {
-        let new_m = if (*idx).m != 0 { (*idx).m << 1 } else { 16 };
-        let tmp = realloc(
-            (*idx).name.cast(),
-            new_m as usize * std::mem::size_of::<*mut c_char>(),
-        )
-        .cast::<*mut c_char>();
-        if tmp.is_null() {
-            return -1;
-        }
-        (*idx).m = new_m;
-        (*idx).name = tmp;
-    }
-
-    let v = (*(*idx).hash).vals.add(k as usize);
-    (*v).id = (*idx).n;
-    *(*idx).name.add((*idx).n as usize) = name_key;
-    (*idx).n += 1;
-    (*v).len = len;
-    (*v).line_len = line_len;
-    (*v).line_blen = line_blen;
-    (*v).seq_offset = seq_offset;
-    (*v).qual_offset = qual_offset;
-
-    0
+    let name_key = match CString::new(CStr::from_ptr(name).to_bytes()) {
+        Ok(name_key) => name_key,
+        Err(_) => return -1,
+    };
+    let mut val = faidx1_t {
+        id: 0,
+        line_len,
+        line_blen,
+        len,
+        seq_offset,
+        qual_offset,
+    };
+    faidx_insert_owned_name(idx, name_key, &mut val)
 }
 
 // original: fai_build_core (htslib/faidx.c:132)
@@ -2561,11 +2426,6 @@ pub unsafe fn faidx_c_132_fai_build_core(bgzf: *mut BGZF) -> *mut faidx_t {
 
     let idx = calloc_faidx();
     if idx.is_null() {
-        return ptr::null_mut();
-    }
-    (*idx).hash = kh_init_s();
-    if (*idx).hash.is_null() {
-        fai_destroy(idx);
         return ptr::null_mut();
     }
     (*idx).format = FAI_NONE as c_int;
@@ -2826,11 +2686,12 @@ pub unsafe fn faidx_c_132_fai_build_core(bgzf: *mut BGZF) -> *mut faidx_t {
 // original: fai_save (htslib/faidx.c:352)
 pub unsafe fn faidx_c_352_fai_save(fai: *const faidx_t, fp: *mut hFILE) -> c_int {
     for i in 0..(*fai).n {
-        let k = kh_get_s((*fai).hash, *(*fai).name.add(i as usize));
-        if k >= (*(*fai).hash).n_buckets {
+        let name = (*fai).name_ptr(i as usize);
+        let k = kh_get_s(fai, name);
+        if k >= (*fai).hash.n_buckets {
             return -1;
         }
-        let x = *(*(*fai).hash).vals.add(k as usize);
+        let x = (&(*fai).hash.buckets)[k as usize].unwrap().val;
         let buf = if (*fai).format == FAI_FASTA as c_int {
             format!(
                 "\t{}\t{}\t{}\t{}\n",
@@ -2843,7 +2704,6 @@ pub unsafe fn faidx_c_352_fai_save(fai: *const faidx_t, fp: *mut hFILE) -> c_int
             )
         };
 
-        let name = *(*fai).name.add(i as usize);
         if hputs2(name, CStr::from_ptr(name).to_bytes().len(), 0, fp) != 0 {
             return -1;
         }
@@ -2862,11 +2722,6 @@ pub unsafe fn faidx_c_380_fai_read(
 ) -> *mut faidx_t {
     let fai = calloc_faidx();
     if fai.is_null() {
-        return ptr::null_mut();
-    }
-    (*fai).hash = kh_init_s();
-    if (*fai).hash.is_null() {
-        fai_destroy(fai);
         return ptr::null_mut();
     }
 
@@ -3107,14 +2962,13 @@ pub unsafe fn faidx_c_567_fai_load3_core(
         return ptr::null_mut();
     }
 
-    (*fai).bgzf = bgzf_open(fn_, c"rb".as_ptr());
-    if (*fai).bgzf.is_null() {
+    if !(*fai).set_bgzf(bgzf_open(fn_, c"rb".as_ptr())) {
         fai_destroy(fai);
         return ptr::null_mut();
     }
 
-    if bgzf_compression((*fai).bgzf) == 2
-        && bgzf_index_load((*fai).bgzf, gzi_name.as_ptr(), ptr::null()) < 0
+    if bgzf_compression((*fai).bgzf_ptr()) == 2
+        && bgzf_index_load((*fai).bgzf_ptr(), gzi_name.as_ptr(), ptr::null()) < 0
     {
         fai_destroy(fai);
         return ptr::null_mut();
@@ -3148,119 +3002,76 @@ pub unsafe fn faidx_c_1033_fai_thread_pool(
     pool: *mut hts_tpool,
     qsize: c_int,
 ) -> c_int {
-    bgzf_thread_pool((*fai).bgzf, pool, qsize)
+    bgzf_thread_pool((*fai).bgzf_ptr(), pool, qsize)
 }
 
 unsafe fn calloc_faidx() -> *mut faidx_t {
-    libc::calloc(1, std::mem::size_of::<faidx_t>()).cast::<faidx_t>()
+    Box::into_raw(Box::new(faidx_t::new(FAI_NONE as c_int)))
 }
 
 unsafe fn goto_fai_build_core_fail(idx: *mut faidx_t) {
     fai_destroy(idx);
 }
 
-unsafe fn kh_init_s() -> *mut faidx_hash_t {
-    let h = libc::calloc(1, std::mem::size_of::<faidx_hash_t>()).cast::<faidx_hash_t>();
-    if h.is_null() {
-        return ptr::null_mut();
-    }
-    if kh_resize_s(h, 32) != 0 {
-        free(h.cast());
-        return ptr::null_mut();
-    }
-    h
-}
-
-unsafe fn kh_put_s(h: *mut faidx_hash_t, key: *const c_char, absent: *mut c_int) -> u32 {
-    if (*h).n_occupied >= (*h).upper_bound {
-        let new_n = if (*h).n_buckets != 0 {
-            (*h).n_buckets << 1
+unsafe fn faidx_insert_owned_name(
+    idx: *mut faidx_t,
+    name_key: CString,
+    val: &mut faidx1_t,
+) -> c_int {
+    if (*idx).hash.n_occupied >= (*idx).hash.upper_bound {
+        let new_n = if (*idx).hash.n_buckets != 0 {
+            (*idx).hash.n_buckets << 1
         } else {
             32
         };
-        if kh_resize_s(h, new_n) != 0 {
-            return u32::MAX;
+        if kh_resize_s(idx, new_n) != 0 {
+            return -1;
         }
     }
 
-    let mask = (*h).n_buckets - 1;
+    let name_id = (*idx).name.len();
+    val.id = name_id as c_int;
+    let k = kh_empty_slot(idx, name_key.as_ptr());
+    if k == u32::MAX {
+        return -1;
+    }
+    (*idx).name.push(name_key);
+    (*idx).n = (*idx).name.len() as c_int;
+    (*idx).m = (*idx).name.capacity() as c_int;
+    (&mut (*idx).hash.buckets)[k as usize] = Some(faidx_hash_bucket_t { name_id, val: *val });
+    (*idx).hash.size += 1;
+    (*idx).hash.n_occupied = (*idx).hash.size;
+    0
+}
+
+unsafe fn kh_empty_slot(idx: *const faidx_t, key: *const c_char) -> u32 {
+    let h = &(*idx).hash;
+    if h.n_buckets == 0 || key.is_null() {
+        return u32::MAX;
+    }
+    let mask = h.n_buckets - 1;
     let mut k = kh_str_hash_string(key) & mask;
     let mut step = 0;
-    while !kh_isempty((*h).flags, k) {
-        if !kh_isdel((*h).flags, k) && cstr_eq(*(*h).keys.add(k as usize), key) {
-            *absent = 0;
-            return k;
-        }
+    while h.buckets[k as usize].is_some() {
         step += 1;
         k = (k + step) & mask;
     }
-
-    *(*h).keys.add(k as usize) = key.cast_mut();
-    let flag = (*h).flags.add((k >> 4) as usize);
-    *flag &= !(3 << ((k & 0x0f) << 1));
-    (*h).size += 1;
-    (*h).n_occupied += 1;
-    *absent = 1;
     k
 }
 
-unsafe fn kh_resize_s(h: *mut faidx_hash_t, new_n_buckets: u32) -> c_int {
-    let mut n_buckets = 4_u32;
-    while n_buckets < new_n_buckets {
-        n_buckets <<= 1;
-    }
-    let n_flags = if n_buckets < 16 {
-        1
-    } else {
-        (n_buckets >> 4) as usize
-    };
-
-    let new_flags = malloc(n_flags * std::mem::size_of::<u32>()).cast::<u32>();
-    let new_keys =
-        malloc(n_buckets as usize * std::mem::size_of::<*mut c_char>()).cast::<*mut c_char>();
-    let new_vals = malloc(n_buckets as usize * std::mem::size_of::<faidx1_t>()).cast::<faidx1_t>();
-    if new_flags.is_null() || new_keys.is_null() || new_vals.is_null() {
-        free(new_flags.cast());
-        free(new_keys.cast());
-        free(new_vals.cast());
-        return -1;
-    }
-    for i in 0..n_flags {
-        *new_flags.add(i) = 0xaaaa_aaaa;
-    }
-
-    if !(*h).keys.is_null() {
-        let old_n = (*h).n_buckets;
-        let old_flags = (*h).flags;
-        let old_keys = (*h).keys;
-        let old_vals = (*h).vals;
-        for i in 0..old_n {
-            if !kh_iseither(old_flags, i) {
-                let key = *old_keys.add(i as usize);
-                let mask = n_buckets - 1;
-                let mut k = kh_str_hash_string(key) & mask;
-                let mut step = 0;
-                while !kh_isempty(new_flags, k) {
-                    step += 1;
-                    k = (k + step) & mask;
-                }
-                *new_keys.add(k as usize) = key;
-                *new_vals.add(k as usize) = *old_vals.add(i as usize);
-                let flag = new_flags.add((k >> 4) as usize);
-                *flag &= !(3 << ((k & 0x0f) << 1));
-            }
+unsafe fn kh_resize_s(idx: *mut faidx_t, new_n_buckets: u32) -> c_int {
+    let old_buckets = std::mem::take(&mut (*idx).hash.buckets);
+    (*idx).hash.clear_with_capacity(new_n_buckets as usize);
+    for bucket in old_buckets.into_iter().flatten() {
+        let key = (*idx).name_ptr(bucket.name_id);
+        let k = kh_empty_slot(idx, key);
+        if k == u32::MAX {
+            return -1;
         }
-        free(old_flags.cast());
-        free(old_keys.cast());
-        free(old_vals.cast());
+        (&mut (*idx).hash.buckets)[k as usize] = Some(bucket);
+        (*idx).hash.size += 1;
     }
-
-    (*h).n_buckets = n_buckets;
-    (*h).n_occupied = (*h).size;
-    (*h).upper_bound = (n_buckets as f64 * 0.77) as u32;
-    (*h).flags = new_flags;
-    (*h).keys = new_keys;
-    (*h).vals = new_vals;
+    (*idx).hash.n_occupied = (*idx).hash.size;
     0
 }
 

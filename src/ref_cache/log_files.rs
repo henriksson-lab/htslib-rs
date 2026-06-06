@@ -1,33 +1,70 @@
 use super::options::Options;
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::{c_char, c_int, CStr, CString};
+use std::ptr::NonNull;
 
 const LOG_NAME_LEN: usize = 80;
 
-#[repr(C)]
 pub struct Logfile {
-    pub name: [c_char; LOG_NAME_LEN],
-    pub size: libc::off_t,
+    name: CString,
+    size: libc::off_t,
+}
+
+struct DirHandle(NonNull<libc::DIR>);
+
+impl DirHandle {
+    unsafe fn open(path: *const c_char) -> Option<Self> {
+        NonNull::new(libc::opendir(path)).map(Self)
+    }
+
+    fn as_ptr(&self) -> *mut libc::DIR {
+        self.0.as_ptr()
+    }
+
+    unsafe fn fd(&self) -> c_int {
+        libc::dirfd(self.as_ptr())
+    }
+}
+
+impl Drop for DirHandle {
+    fn drop(&mut self) {
+        unsafe {
+            libc::closedir(self.as_ptr());
+        }
+    }
+}
+
+enum LogDestination {
+    Unopened,
+    Stdout,
+    File(NonNull<libc::FILE>),
+}
+
+impl LogDestination {
+    fn as_ptr(&self) -> *mut libc::FILE {
+        match self {
+            Self::Unopened => std::ptr::null_mut(),
+            Self::Stdout => unsafe { crate::htslib_rs::ref_cache::compat::stdout() },
+            Self::File(file) => file.as_ptr(),
+        }
+    }
+}
+
+impl Drop for LogDestination {
+    fn drop(&mut self) {
+        if let Self::File(file) = self {
+            unsafe {
+                libc::fclose(file.as_ptr());
+            }
+        }
+    }
 }
 
 // original: Logfiles (htslib/ref_cache/log_files.c:53)
-#[repr(C)]
 pub struct Logfiles {
-    pub dir_handle: *mut libc::DIR,
-    pub curr_log: *mut libc::FILE,
-    pub logs: *mut Logfile,
-    pub nlogs: usize,
-    pub sz: usize,
-    pub log_dir_fd: c_int,
-}
-
-// original: log_compare (htslib/ref_cache/log_files.c:62)
-pub unsafe extern "C" fn ref_cache_log_files_c_62_log_compare(
-    av: *const c_void,
-    bv: *const c_void,
-) -> c_int {
-    let a = av.cast::<Logfile>();
-    let b = bv.cast::<Logfile>();
-    libc::strcmp((*b).name.as_ptr(), (*a).name.as_ptr())
+    dir_handle: Option<DirHandle>,
+    curr_log: LogDestination,
+    logs: Vec<Logfile>,
+    log_dir_fd: c_int,
 }
 
 // original: rotate_logs (htslib/ref_cache/log_files.c:69)
@@ -35,25 +72,18 @@ pub unsafe fn ref_cache_log_files_c_69_rotate_logs(
     logfiles: *mut Logfiles,
     opts: *const Options,
 ) -> c_int {
-    let mut name = [0 as c_char; LOG_NAME_LEN];
     let now = libc::time(std::ptr::null_mut());
     let (year, month, day, hour, minute, second, _) =
         crate::htslib_rs::c_compat::unix_time_utc_parts(now);
     let mut log_fd = -1;
+    let mut name = CString::new("ref_cache.log").unwrap();
 
     for i in 0..99u32 {
-        libc::snprintf(
-            name.as_mut_ptr(),
-            LOG_NAME_LEN,
-            c"ref_cache_%04d%02d%02d%02d%02d%02d_%02u.log".as_ptr(),
-            year,
-            month,
-            day,
-            hour,
-            minute,
-            second,
-            i,
-        );
+        name = CString::new(format!(
+            "ref_cache_{year:04}{month:02}{day:02}{hour:02}{minute:02}{second:02}_{i:02}.log"
+        ))
+        .unwrap();
+        debug_assert!(name.as_bytes_with_nul().len() <= LOG_NAME_LEN);
 
         loop {
             log_fd = libc::openat(
@@ -86,7 +116,7 @@ pub unsafe fn ref_cache_log_files_c_69_rotate_logs(
     }
 
     let file = libc::fdopen(log_fd, c"w".as_ptr());
-    if file.is_null() {
+    let Some(file) = NonNull::new(file) else {
         libc::fprintf(
             crate::htslib_rs::ref_cache::compat::stderr(),
             c"Couldn't fdopen %s/%s : %s\n".as_ptr(),
@@ -97,54 +127,26 @@ pub unsafe fn ref_cache_log_files_c_69_rotate_logs(
         libc::close(log_fd);
         libc::unlinkat((*logfiles).log_dir_fd, name.as_ptr(), 0);
         return -1;
-    }
+    };
 
     debug_assert!((*opts).nlogs > 0);
-    debug_assert!((*logfiles).sz > (*opts).nlogs as usize);
-    let mut i = (*opts).nlogs as usize - 1;
-    while i < (*logfiles).nlogs {
-        if libc::unlinkat(
-            (*logfiles).log_dir_fd,
-            (*(*logfiles).logs.add(i)).name.as_ptr(),
-            0,
-        ) != 0
-        {
+    debug_assert!((*logfiles).logs.capacity() > (*opts).nlogs as usize);
+    let keep = (*opts).nlogs as usize - 1;
+    for old_log in (*logfiles).logs.iter().skip(keep) {
+        if libc::unlinkat((*logfiles).log_dir_fd, old_log.name.as_ptr(), 0) != 0 {
             libc::fprintf(
                 crate::htslib_rs::ref_cache::compat::stderr(),
                 c"Warning: Couldn't remove old log file %s/%s: %s\n".as_ptr(),
                 (*opts).log_dir,
-                (*(*logfiles).logs.add(i)).name.as_ptr(),
+                old_log.name.as_ptr(),
                 libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
             );
         }
-        i += 1;
     }
 
-    if (*logfiles).nlogs > (*opts).nlogs as usize - 1 {
-        (*logfiles).nlogs = (*opts).nlogs as usize - 1;
-    }
-
-    if (*logfiles).nlogs > 0 {
-        libc::memmove(
-            (*logfiles).logs.add(1).cast(),
-            (*logfiles).logs.cast(),
-            (*logfiles).nlogs * std::mem::size_of::<Logfile>(),
-        );
-    }
-    libc::memcpy(
-        (*(*logfiles).logs).name.as_mut_ptr().cast(),
-        name.as_ptr().cast(),
-        LOG_NAME_LEN,
-    );
-    (*(*logfiles).logs).size = 0;
-    (*logfiles).nlogs += 1;
-
-    if !(*logfiles).curr_log.is_null()
-        && (*logfiles).curr_log != crate::htslib_rs::ref_cache::compat::stdout()
-    {
-        libc::fclose((*logfiles).curr_log);
-    }
-    (*logfiles).curr_log = file;
+    (*logfiles).logs.truncate(keep);
+    (*logfiles).logs.insert(0, Logfile { name, size: 0 });
+    (*logfiles).curr_log = LogDestination::File(file);
 
     0
 }
@@ -155,75 +157,52 @@ pub unsafe fn ref_cache_log_files_c_134_close_logs(logfiles: *mut Logfiles) {
         return;
     }
 
-    if !(*logfiles).dir_handle.is_null() {
-        libc::closedir((*logfiles).dir_handle);
-    }
-    if !(*logfiles).curr_log.is_null()
-        && (*logfiles).curr_log != crate::htslib_rs::ref_cache::compat::stdout()
-    {
-        libc::fclose((*logfiles).curr_log);
-    }
-    libc::free((*logfiles).logs.cast());
-    libc::free(logfiles.cast());
+    drop(Box::from_raw(logfiles));
 }
 
 // original: open_logs (htslib/ref_cache/log_files.c:148)
 pub unsafe fn ref_cache_log_files_c_148_open_logs(opts: *const Options) -> *mut Logfiles {
-    let logfiles = libc::calloc(1, std::mem::size_of::<Logfiles>()).cast::<Logfiles>();
-
-    if logfiles.is_null() {
-        libc::perror(c"Allocating logfiles".as_ptr());
-        return std::ptr::null_mut();
-    }
-
-    (*logfiles).logs = std::ptr::null_mut();
+    let mut logfiles = Box::new(Logfiles {
+        dir_handle: None,
+        curr_log: LogDestination::Unopened,
+        logs: Vec::new(),
+        log_dir_fd: -1,
+    });
 
     if (*opts).log_dir.is_null() {
-        (*logfiles).dir_handle = std::ptr::null_mut();
-        (*logfiles).curr_log = crate::htslib_rs::ref_cache::compat::stdout();
-        return logfiles;
+        logfiles.curr_log = LogDestination::Stdout;
+        return Box::into_raw(logfiles);
     }
 
     debug_assert!((*opts).nlogs > 0);
 
-    (*logfiles).curr_log = std::ptr::null_mut();
-    (*logfiles).dir_handle = libc::opendir((*opts).log_dir);
+    logfiles.dir_handle = DirHandle::open((*opts).log_dir);
 
-    if (*logfiles).dir_handle.is_null() {
+    if logfiles.dir_handle.is_none() {
         libc::fprintf(
             crate::htslib_rs::ref_cache::compat::stderr(),
             c"Couldn't open directory %s: %s\n".as_ptr(),
             (*opts).log_dir,
             libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
-        ref_cache_log_files_c_134_close_logs(logfiles);
         return std::ptr::null_mut();
     }
 
-    (*logfiles).sz = (*opts).nlogs as usize + 1;
-    (*logfiles).logs =
-        libc::calloc((*logfiles).sz, std::mem::size_of::<Logfile>()).cast::<Logfile>();
-    if (*logfiles).logs.is_null() {
-        libc::perror(std::ptr::null());
-        ref_cache_log_files_c_134_close_logs(logfiles);
-        return std::ptr::null_mut();
-    }
-
-    (*logfiles).log_dir_fd = libc::dirfd((*logfiles).dir_handle);
-    if (*logfiles).log_dir_fd < 0 {
+    logfiles.logs = Vec::with_capacity((*opts).nlogs as usize + 1);
+    logfiles.log_dir_fd = logfiles.dir_handle.as_ref().unwrap().fd();
+    if logfiles.log_dir_fd < 0 {
         libc::fprintf(
             crate::htslib_rs::ref_cache::compat::stderr(),
             c"Couldn't get descriptor for %s : %s".as_ptr(),
             (*opts).log_dir,
             libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
-        ref_cache_log_files_c_134_close_logs(logfiles);
         return std::ptr::null_mut();
     }
 
     *crate::htslib_rs::c_compat::__errno_location() = 0;
     loop {
-        let ent = libc::readdir((*logfiles).dir_handle);
+        let ent = libc::readdir(logfiles.dir_handle.as_ref().unwrap().as_ptr());
         if ent.is_null() {
             break;
         }
@@ -242,39 +221,13 @@ pub unsafe fn ref_cache_log_files_c_148_open_logs(opts: *const Options) -> *mut 
             && (libc::strcmp(suff.as_ptr(), c"log".as_ptr()) == 0
                 || libc::strcmp(suff.as_ptr(), c"log.gz".as_ptr()) == 0)
         {
-            if (*logfiles).nlogs == (*logfiles).sz {
-                let new_sz = (*logfiles).sz * 2;
-                let new_logs = libc::realloc(
-                    (*logfiles).logs.cast(),
-                    new_sz * std::mem::size_of::<Logfile>(),
-                )
-                .cast::<Logfile>();
-                if new_logs.is_null() {
-                    libc::perror(std::ptr::null());
-                    ref_cache_log_files_c_134_close_logs(logfiles);
-                    return std::ptr::null_mut();
-                }
-                libc::memset(
-                    new_logs.add((*logfiles).nlogs).cast(),
-                    0,
-                    (new_sz - (*logfiles).nlogs) * std::mem::size_of::<Logfile>(),
-                );
-                (*logfiles).logs = new_logs;
-                (*logfiles).sz = new_sz;
-            }
-
-            let l = libc::snprintf(
-                (*(*logfiles).logs.add((*logfiles).nlogs)).name.as_mut_ptr(),
-                LOG_NAME_LEN,
-                c"%s".as_ptr(),
-                (*ent).d_name.as_ptr(),
-            );
-            if l >= LOG_NAME_LEN as c_int {
+            let entry_name = CStr::from_ptr((*ent).d_name.as_ptr());
+            if entry_name.to_bytes_with_nul().len() > LOG_NAME_LEN {
                 libc::abort();
             }
             if libc::fstatat(
-                (*logfiles).log_dir_fd,
-                (*ent).d_name.as_ptr(),
+                logfiles.log_dir_fd,
+                entry_name.as_ptr(),
                 &mut st,
                 libc::AT_SYMLINK_NOFOLLOW,
             ) != 0
@@ -283,27 +236,27 @@ pub unsafe fn ref_cache_log_files_c_148_open_logs(opts: *const Options) -> *mut 
                     crate::htslib_rs::ref_cache::compat::stderr(),
                     c"Warning: Couldn't stat %s/%s : %s\n".as_ptr(),
                     (*opts).log_dir,
-                    (*ent).d_name.as_ptr(),
+                    entry_name.as_ptr(),
                     libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
                 );
                 continue;
             }
             if (st.st_mode & libc::S_IFMT) == libc::S_IFREG {
-                (*(*logfiles).logs.add((*logfiles).nlogs)).size = st.st_size;
-                (*logfiles).nlogs += 1;
+                logfiles.logs.push(Logfile {
+                    name: entry_name.to_owned(),
+                    size: st.st_size,
+                });
             }
         }
     }
 
-    if (*logfiles).nlogs > 0 {
-        libc::qsort(
-            (*logfiles).logs.cast(),
-            (*logfiles).nlogs,
-            std::mem::size_of::<Logfile>(),
-            Some(ref_cache_log_files_c_62_log_compare),
-        );
+    if !logfiles.logs.is_empty() {
+        logfiles
+            .logs
+            .sort_by(|a, b| b.name.as_bytes().cmp(a.name.as_bytes()));
     }
 
+    let logfiles = Box::into_raw(logfiles);
     if ref_cache_log_files_c_69_rotate_logs(logfiles, opts) < 0 {
         ref_cache_log_files_c_134_close_logs(logfiles);
         return std::ptr::null_mut();
@@ -336,6 +289,15 @@ pub unsafe fn ref_cache_log_files_c_266_write_to_log(
     len: usize,
 ) -> c_int {
     let mut written = 0usize;
+    let curr_log = (*logfiles).curr_log.as_ptr();
+    if curr_log.is_null() {
+        libc::fprintf(
+            crate::htslib_rs::ref_cache::compat::stderr(),
+            c"No log file is open\n".as_ptr(),
+        );
+        return -1;
+    }
+
     while written < len {
         let mut ok = written;
         while ok < len && NEEDS_ESCAPE[*msg.add(ok) as u8 as usize] == 0 {
@@ -343,26 +305,17 @@ pub unsafe fn ref_cache_log_files_c_266_write_to_log(
         }
 
         if ok > written {
-            let wrote = libc::fwrite(
-                msg.add(written).cast(),
-                1,
-                ok - written,
-                (*logfiles).curr_log,
-            );
+            let wrote = libc::fwrite(msg.add(written).cast(), 1, ok - written, curr_log);
             if wrote != ok - written {
                 break;
             }
         }
         if ok < len && NEEDS_ESCAPE[*msg.add(ok) as u8 as usize] != 0 {
             if *msg.add(ok) as u8 == b'\\' {
-                if libc::fprintf((*logfiles).curr_log, c"\\\\".as_ptr()) < 0 {
+                if libc::fprintf(curr_log, c"\\\\".as_ptr()) < 0 {
                     break;
                 }
-            } else if libc::fprintf(
-                (*logfiles).curr_log,
-                c"\\x%02x".as_ptr(),
-                *msg.add(ok) as u8 as c_int,
-            ) < 0
+            } else if libc::fprintf(curr_log, c"\\x%02x".as_ptr(), *msg.add(ok) as u8 as c_int) < 0
             {
                 break;
             }
@@ -377,7 +330,10 @@ pub unsafe fn ref_cache_log_files_c_266_write_to_log(
                 crate::htslib_rs::ref_cache::compat::stderr(),
                 c"Error writing to %s/%s : %s\n".as_ptr(),
                 (*opts).log_dir,
-                (*(*logfiles).logs).name.as_ptr(),
+                (*logfiles)
+                    .logs
+                    .first()
+                    .map_or(c"".as_ptr(), |log| log.name.as_ptr()),
                 libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
             );
         } else {
@@ -390,11 +346,13 @@ pub unsafe fn ref_cache_log_files_c_266_write_to_log(
         return -1;
     }
     if !(*opts).log_dir.is_null() {
-        (*(*logfiles).logs).size += written as libc::off_t;
-        if (*(*logfiles).logs).size > (*opts).max_log_sz
-            && ref_cache_log_files_c_69_rotate_logs(logfiles, opts) != 0
-        {
-            return -1;
+        if let Some(current_log) = (*logfiles).logs.first_mut() {
+            current_log.size += written as libc::off_t;
+            if current_log.size > (*opts).max_log_sz
+                && ref_cache_log_files_c_69_rotate_logs(logfiles, opts) != 0
+            {
+                return -1;
+            }
         }
     }
     0

@@ -2,7 +2,6 @@
 //!
 //! Thread-local storage pool helpers and histogram / transpose utilities.
 
-use crate::c_compat;
 use core::ffi::c_void;
 use std::cell::RefCell;
 
@@ -49,19 +48,49 @@ pub const MAX_TLS_BUFS: usize = 10;
 /// } tls_pool;
 /// ```
 // utils.c:70
-#[repr(C)]
 pub struct tls_pool {
-    pub bufs: [*mut c_void; MAX_TLS_BUFS],
-    pub sizes: [usize; MAX_TLS_BUFS],
-    pub used: [i32; MAX_TLS_BUFS],
+    slots: [TlsSlot; MAX_TLS_BUFS],
+}
+
+struct TlsSlot {
+    buf: Option<Vec<u8>>,
+    used: bool,
+}
+
+impl TlsSlot {
+    const fn new() -> Self {
+        Self {
+            buf: None,
+            used: false,
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.buf.as_ref().map_or(0, Vec::len)
+    }
+
+    fn ptr(&self) -> *mut c_void {
+        self.buf
+            .as_ref()
+            .map_or(core::ptr::null_mut(), |buf| buf.as_ptr() as *mut c_void)
+    }
 }
 
 impl tls_pool {
     const fn new() -> Self {
         tls_pool {
-            bufs: [core::ptr::null_mut(); MAX_TLS_BUFS],
-            sizes: [0; MAX_TLS_BUFS],
-            used: [0; MAX_TLS_BUFS],
+            slots: [
+                TlsSlot::new(),
+                TlsSlot::new(),
+                TlsSlot::new(),
+                TlsSlot::new(),
+                TlsSlot::new(),
+                TlsSlot::new(),
+                TlsSlot::new(),
+                TlsSlot::new(),
+                TlsSlot::new(),
+                TlsSlot::new(),
+            ],
         }
     }
 }
@@ -76,11 +105,7 @@ struct TlsCell(tls_pool);
 impl Drop for TlsCell {
     fn drop(&mut self) {
         // utils.c:83 htscodecs_tls_free_all
-        htscodecs_tls_free_all(&mut self.0 as *mut tls_pool as *mut c_void);
-        // Null the released pointers so they can't be seen/freed again.
-        for b in self.0.bufs.iter_mut() {
-            *b = core::ptr::null_mut();
-        }
+        htscodecs_tls_free_pool(&mut self.0);
     }
 }
 
@@ -115,14 +140,17 @@ pub fn htscodecs_tls_free_all(ptr: *mut c_void) {
         return;
     }
     let tls = unsafe { &mut *tls };
+    htscodecs_tls_free_pool(tls);
+}
 
-    for i in 0..MAX_TLS_BUFS {
-        if tls.used[i] != 0 {
+fn htscodecs_tls_free_pool(tls: &mut tls_pool) {
+    for slot in tls.slots.iter_mut() {
+        if slot.used {
             eprintln!("Closing thread while TLS data is in use");
         }
-        unsafe { c_compat::free(tls.bufs[i]) };
+        slot.buf = None;
+        slot.used = false;
     }
-    // (No `free(tls)`: the pool is owned by the thread_local cell.)
 }
 
 /// ```c
@@ -171,41 +199,36 @@ pub fn htscodecs_tls_alloc(size: usize) -> *mut c_void {
         let tls = &mut cell.0;
 
         // Query pool for size
-        let mut avail: i32 = -1;
-        for i in 0..MAX_TLS_BUFS {
-            if tls.used[i] == 0 {
-                if size <= tls.sizes[i] {
-                    tls.used[i] = 1;
-                    return tls.bufs[i];
-                } else if avail == -1 {
-                    avail = i as i32;
+        let mut avail = None;
+        for (i, slot) in tls.slots.iter_mut().enumerate() {
+            if !slot.used {
+                if slot.buf.is_some() && size <= slot.capacity() {
+                    slot.used = true;
+                    return slot.ptr();
+                } else if avail.is_none() {
+                    avail = Some(i);
                 }
             }
         }
 
-        if avail == -1 {
+        let Some(avail) = avail else {
             // Shouldn't happen given our very limited use of this function
             eprintln!("Error: out of rans_tls_alloc slots");
             return core::ptr::null_mut();
-        }
+        };
 
-        let avail = avail as usize;
-        if !tls.bufs[avail].is_null() {
-            unsafe { c_compat::free(tls.bufs[avail]) };
-        }
-        let p = unsafe { c_compat::calloc(1, size as u64) };
-        if p.is_null() {
-            // C leaves tls->bufs[avail] dangling here; we null it so a later
-            // alloc / free_all won't double-free.
-            tls.bufs[avail] = core::ptr::null_mut();
-            tls.sizes[avail] = 0;
+        let slot = &mut tls.slots[avail];
+        let mut buf = Vec::new();
+        if buf.try_reserve_exact(size).is_err() {
+            slot.buf = None;
+            slot.used = false;
             return core::ptr::null_mut();
         }
-        tls.bufs[avail] = p;
-        tls.sizes[avail] = size;
-        tls.used[avail] = 1;
+        buf.resize(size, 0);
+        slot.buf = Some(buf);
+        slot.used = true;
 
-        tls.bufs[avail]
+        slot.ptr()
     })
 }
 
@@ -253,24 +276,17 @@ pub fn htscodecs_tls_free(ptr: *mut c_void) {
         let mut cell = cell.borrow_mut();
         let tls = &mut cell.0;
 
-        let mut i = MAX_TLS_BUFS;
-        for k in 0..MAX_TLS_BUFS {
-            if tls.bufs[k] == ptr {
-                i = k;
-                break;
-            }
-        }
-        if i == MAX_TLS_BUFS {
+        let Some(slot) = tls.slots.iter_mut().find(|slot| slot.ptr() == ptr) else {
             eprintln!(
                 "Attempt to htscodecs_tls_free a buffer not allocated with htscodecs_tls_alloc"
             );
             return;
-        }
-        if tls.used[i] == 0 {
+        };
+        if !slot.used {
             eprintln!("Attempt to htscodecs_tls_free a buffer twice");
             return;
         }
-        tls.used[i] = 0;
+        slot.used = false;
     });
 }
 
@@ -386,15 +402,14 @@ pub fn hist8(r#in: &[u8], in_size: u32, F0: &mut [u32; 256]) -> i32 {
     let in_size = in_size as usize;
 
     if in_size > 500000 {
-        let f0p = htscodecs_tls_calloc((65536 + 37) * 3, core::mem::size_of::<u32>());
-        if f0p.is_null() {
+        let scratch_len = (65536 + 37) * 3;
+        let mut scratch = Vec::new();
+        if scratch.try_reserve_exact(scratch_len).is_err() {
             return -1;
         }
-        // f0 / f1 / f2 are the three contiguous (65536+37)-element regions.
-        let base = f0p as *mut u32;
-        let f0 = unsafe { core::slice::from_raw_parts_mut(base, 65536 + 37) };
-        let f1 = unsafe { core::slice::from_raw_parts_mut(base.add(65536 + 37), 65536 + 37) };
-        let f2 = unsafe { core::slice::from_raw_parts_mut(base.add((65536 + 37) * 2), 65536 + 37) };
+        scratch.resize(scratch_len, 0u32);
+        let (f0, rest) = scratch.split_at_mut(65536 + 37);
+        let (f1, f2) = rest.split_at_mut(65536 + 37);
 
         let i8 = in_size & !15;
         let mut i = 0;
@@ -425,7 +440,6 @@ pub fn hist8(r#in: &[u8], in_size: u32, F0: &mut [u32; 256]) -> i32 {
             F0[i & 0xff] += s;
             F0[i >> 8] += s;
         }
-        htscodecs_tls_free(f0p);
     } else {
         let mut F1 = [0u32; 256 + MAGIC];
         let mut F2 = [0u32; 256 + MAGIC];
@@ -578,17 +592,11 @@ pub fn hist1_4(r#in: &[u8], in_size: u32, F0: &mut [[u32; 256]; 256], T0: &mut [
     if in_size > 500000 {
         // uint32_t (*F1)[259] = calloc(256, sizeof *F1)
         const STRIDE: usize = 259;
-        let f1p = htscodecs_tls_calloc(256, STRIDE * core::mem::size_of::<u32>());
-        if f1p.is_null() {
+        let mut f1 = Vec::new();
+        if f1.try_reserve_exact(256 * STRIDE).is_err() {
             return -1;
         }
-        let f1base = f1p as *mut u32;
-        // F1[a][b] == f1base[a*259 + b]
-        macro_rules! f1 {
-            ($a:expr, $b:expr) => {
-                unsafe { &mut *f1base.add(($a) * STRIDE + ($b)) }
-            };
-        }
+        f1.resize(256 * STRIDE, 0u32);
 
         while pos + 8 < in_size {
             cc[0] = r#in[pos];
@@ -597,9 +605,9 @@ pub fn hist1_4(r#in: &[u8], in_size: u32, F0: &mut [[u32; 256]; 256], T0: &mut [
             cc[3] = r#in[pos + 3];
             pos += 4;
             F0[cc[4] as usize][cc[0] as usize] += 1;
-            *f1!(cc[0] as usize, cc[1] as usize) += 1;
+            f1[cc[0] as usize * STRIDE + cc[1] as usize] += 1;
             F0[cc[1] as usize][cc[2] as usize] += 1;
-            *f1!(cc[2] as usize, cc[3] as usize) += 1;
+            f1[cc[2] as usize * STRIDE + cc[3] as usize] += 1;
             cc[4] = cc[3];
 
             cc[0] = r#in[pos];
@@ -608,9 +616,9 @@ pub fn hist1_4(r#in: &[u8], in_size: u32, F0: &mut [[u32; 256]; 256], T0: &mut [
             cc[3] = r#in[pos + 3];
             pos += 4;
             F0[cc[4] as usize][cc[0] as usize] += 1;
-            *f1!(cc[0] as usize, cc[1] as usize) += 1;
+            f1[cc[0] as usize * STRIDE + cc[1] as usize] += 1;
             F0[cc[1] as usize][cc[2] as usize] += 1;
-            *f1!(cc[2] as usize, cc[3] as usize) += 1;
+            f1[cc[2] as usize * STRIDE + cc[3] as usize] += 1;
             cc[4] = cc[3];
         }
         l = cc[3];
@@ -626,12 +634,11 @@ pub fn hist1_4(r#in: &[u8], in_size: u32, F0: &mut [[u32; 256]; 256], T0: &mut [
         for i in 0..256usize {
             let mut tt: i32 = 0;
             for (j, val) in F0[i].iter_mut().enumerate() {
-                *val += *f1!(i, j);
+                *val += f1[i * STRIDE + j];
                 tt += *val as i32;
             }
             T0[i] += tt as u32;
         }
-        htscodecs_tls_free(f1p);
     } else {
         while pos + 8 < in_size {
             cc[0] = r#in[pos];

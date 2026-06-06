@@ -16,7 +16,8 @@ use crate::htslib_rs::{
         size_t,
     },
 };
-use std::ffi::{c_char, c_int, c_uchar, c_uint, c_void};
+use std::ffi::{c_char, c_int, c_uchar, c_uint, c_void, CStr, CString};
+use std::ptr::NonNull;
 
 const HFILE_LIBCURL_PAUSED: c_uint = 1 << 0;
 const HFILE_LIBCURL_CLOSING: c_uint = 1 << 1;
@@ -57,12 +58,11 @@ struct HFileLayout {
     has_errno: c_int,
 }
 
-#[repr(C)]
 struct HFileLibcurlAuthToken {
-    path: *mut c_char,
-    token: *mut c_char,
+    path: CString,
+    token: Option<CString>,
     expiry: libc::time_t,
-    failed: c_int,
+    failed: bool,
     lock: crate::htslib_rs::c_compat::pthread_mutex_t,
 }
 
@@ -82,7 +82,7 @@ struct HFileLibcurlHdrList {
 
 #[repr(C)]
 struct HFileLibcurlBuffer {
-    ptr: *mut c_char,
+    ptr: Option<NonNull<c_char>>,
     len: usize,
 }
 
@@ -101,11 +101,6 @@ type HFileLibcurlHttpHeaderCallback =
     unsafe extern "C" fn(*mut c_void, *mut *mut *mut c_char) -> c_int;
 type HFileLibcurlRedirectCallback =
     unsafe extern "C" fn(*mut c_void, libc::c_long, *mut kstring_t, *mut kstring_t) -> c_int;
-
-unsafe fn libcurl_redirect_callback(ptr: *mut c_void) -> HFileLibcurlRedirectCallback {
-    debug_assert!(!ptr.is_null());
-    std::mem::transmute_copy(&ptr)
-}
 
 type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> c_int;
@@ -140,11 +135,11 @@ pub struct HFileLibcurlHeaders {
     extra: HFileLibcurlHdrList,
     callback: Option<HFileLibcurlHttpHeaderCallback>,
     callback_data: *mut c_void,
-    auth: *mut HFileLibcurlAuthToken,
+    auth: Option<NonNull<HFileLibcurlAuthToken>>,
     auth_hdr_num: c_int,
-    redirect: *mut c_void,
+    redirect: Option<HFileLibcurlRedirectCallback>,
     redirect_data: *mut c_void,
-    http_response_ptr: *mut libc::c_long,
+    http_response_ptr: Option<NonNull<libc::c_long>>,
     fail_on_error: c_int,
 }
 
@@ -188,9 +183,8 @@ struct HFileLibcurlHeaderPrefix {
 //    `hfile_libcurl_c_326_libcurl_exit` runs at shutdown (also single-
 //    threaded — the plugin destroy callback fires once per process exit).
 //
-// 3. Lazy-init-then-mutate-under-lock: `HFILE_LIBCURL_AUTH_MAP`. The pointer
-//    is initialized (and the Vec it points to is grown) only while
-//    `HFILE_LIBCURL_AUTH_LOCK` is held — see
+// 3. Lazy-init-then-mutate-under-lock: `HFILE_LIBCURL_AUTH_MAP`. The Vec is
+//    initialized (and grown) only while `HFILE_LIBCURL_AUTH_LOCK` is held — see
 //    `hfile_libcurl_c_650_get_auth_token`. Concurrent callers serialize on
 //    that mutex.
 //
@@ -216,30 +210,44 @@ static mut HFILE_LIBCURL_USERAGENT: kstring_t = kstring_t {
     s: std::ptr::null_mut(),
 };
 static mut HFILE_LIBCURL_SHARE: *mut c_void = std::ptr::null_mut();
-static mut HFILE_LIBCURL_AUTH_PATH: *mut c_char = std::ptr::null_mut();
-static mut HFILE_LIBCURL_AUTH_MAP: *mut Vec<usize> = std::ptr::null_mut();
+static mut HFILE_LIBCURL_AUTH_PATH: Option<CString> = None;
+// Header state keeps NonNull pointers to auth tokens; Box keeps token
+// addresses stable even when the Vec grows.
+#[allow(clippy::vec_box)]
+static mut HFILE_LIBCURL_AUTH_MAP: Option<Vec<Box<HFileLibcurlAuthToken>>> = None;
 static mut HFILE_LIBCURL_ALLOW_UNENCRYPTED_AUTH_HEADER: c_int = 0;
 static mut HFILE_LIBCURL_RETRY_MAX: c_int = 0;
 static mut HFILE_LIBCURL_RETRY_DELAY_MS: libc::c_long = 1000;
 
-fn auth_map_new_raw() -> *mut Vec<usize> {
-    Box::into_raw(Box::new(Vec::new()))
-}
-
-unsafe fn auth_map_mut_raw(ptr: *mut Vec<usize>) -> Option<&'static mut Vec<usize>> {
-    if ptr.is_null() {
+unsafe fn hfile_libcurl_new_auth_token(path: CString) -> Option<Box<HFileLibcurlAuthToken>> {
+    let mut tok = Box::new(HFileLibcurlAuthToken {
+        path,
+        token: None,
+        expiry: 1,
+        failed: false,
+        lock: std::mem::zeroed(),
+    });
+    if crate::htslib_rs::c_compat::pthread_mutex_init(&mut tok.lock, std::ptr::null()) != 0 {
         None
     } else {
-        Some(&mut *ptr)
+        Some(tok)
     }
 }
 
-unsafe fn auth_map_free_tokens_raw(ptr: *mut Vec<usize>) {
-    if !ptr.is_null() {
-        let mut map = Box::from_raw(ptr);
-        for tok in map.drain(..) {
-            hfile_libcurl_c_318_free_auth(tok as *mut c_void);
-        }
+#[allow(clippy::boxed_local)]
+unsafe fn hfile_libcurl_free_auth_box(mut tok: Box<HFileLibcurlAuthToken>) {
+    if crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut tok.lock) != 0 {
+        libc::abort();
+    }
+}
+
+unsafe fn hfile_libcurl_take_released_cstring(raw: *mut c_char) -> Option<CString> {
+    if raw.is_null() {
+        None
+    } else {
+        let out = CStr::from_ptr(raw).to_owned();
+        libc::free(raw.cast());
+        Some(out)
     }
 }
 
@@ -554,12 +562,7 @@ pub unsafe fn hfile_libcurl_c_318_free_auth(tok: *mut c_void) {
     if tok.is_null() {
         return;
     }
-    if crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut (*tok).lock) != 0 {
-        libc::abort();
-    }
-    libc::free((*tok).path.cast());
-    libc::free((*tok).token.cast());
-    libc::free(tok.cast());
+    hfile_libcurl_free_auth_box(Box::from_raw(tok));
 }
 
 // original: libcurl_exit (htslib/hfile_libcurl.c:326)
@@ -573,12 +576,13 @@ pub unsafe extern "C" fn hfile_libcurl_c_326_libcurl_exit() {
     HFILE_LIBCURL_USERAGENT.m = 0;
     HFILE_LIBCURL_USERAGENT.s = std::ptr::null_mut();
 
-    libc::free(HFILE_LIBCURL_AUTH_PATH.cast());
-    HFILE_LIBCURL_AUTH_PATH = std::ptr::null_mut();
+    *std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_PATH) = None;
 
-    if !HFILE_LIBCURL_AUTH_MAP.is_null() {
-        auth_map_free_tokens_raw(HFILE_LIBCURL_AUTH_MAP);
-        HFILE_LIBCURL_AUTH_MAP = std::ptr::null_mut();
+    let auth_map_ptr = std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_MAP);
+    if let Some(mut map) = (*auth_map_ptr).take() {
+        for tok in map.drain(..) {
+            hfile_libcurl_free_auth_box(tok);
+        }
     }
     curl_global_cleanup();
 }
@@ -792,8 +796,7 @@ pub unsafe fn hfile_libcurl_c_454_read_auth_json(tok: *mut c_void, auth_fp: *mut
         if kputs(c"Authorization: Bearer ".as_ptr(), &mut str_) < 0 || kputs(token, &mut str_) < 0 {
             return goto_auth_json_error(tok, t, &mut str_, token, type_, expiry, ret);
         }
-        libc::free((*tok).token.cast());
-        (*tok).token = ks_release(&mut str_);
+        (*tok).token = hfile_libcurl_take_released_cstring(ks_release(&mut str_));
         if !expiry.is_null() {
             let mut exp = libc::strtol(expiry, std::ptr::null_mut(), 10);
             if exp < 0 {
@@ -860,8 +863,8 @@ pub unsafe fn hfile_libcurl_c_515_read_auth_plain(tok: *mut c_void, auth_fp: *mu
         return -1;
     }
 
-    libc::free((*tok).token.cast());
-    (*tok).token = crate::htslib_rs::hts::ks_release(&mut token);
+    (*tok).token =
+        hfile_libcurl_take_released_cstring(crate::htslib_rs::hts::ks_release(&mut token));
     (*tok).expiry = 0;
     libc::free(line.s.cast());
     0
@@ -878,26 +881,25 @@ pub unsafe fn hfile_libcurl_c_543_renew_auth_token(tok: *mut c_void, changed: *m
     {
         return 0;
     }
-    if (*tok).failed != 0 {
+    if (*tok).failed {
         return -1;
     }
 
     *changed = 1;
-    let auth_fp = hopen((*tok).path, c"rR".as_ptr());
+    let auth_fp = hopen((*tok).path.as_ptr(), c"rR".as_ptr());
     if auth_fp.is_null() {
         if *crate::htslib_rs::c_compat::__errno_location() != libc::ENOENT {
-            (*tok).failed = 1;
+            (*tok).failed = true;
             return -1;
         }
         (*tok).expiry = 0;
-        libc::free((*tok).token.cast());
-        (*tok).token = std::ptr::null_mut();
+        (*tok).token = None;
         return 0;
     }
 
     let len = hpeek(auth_fp, buffer.as_mut_ptr().cast(), buffer.len());
     if len < 0 {
-        (*tok).failed = 1;
+        (*tok).failed = true;
         hclose_abruptly(auth_fp);
         return -1;
     }
@@ -908,7 +910,7 @@ pub unsafe fn hfile_libcurl_c_543_renew_auth_token(tok: *mut c_void, changed: *m
         hfile_libcurl_c_515_read_auth_plain(tok.cast(), auth_fp) >= 0
     };
     if !ok {
-        (*tok).failed = 1;
+        (*tok).failed = true;
         hclose_abruptly(auth_fp);
         return -1;
     }
@@ -925,31 +927,39 @@ pub unsafe fn hfile_libcurl_c_587_add_auth_header(fp: *mut c_void) -> c_int {
     let fp = fp.cast::<HFileLibcurlHeaderPrefix>();
     let mut changed = 0;
 
-    if (*fp).headers.auth_hdr_num < 0 || (*fp).headers.auth.is_null() {
+    let Some(mut auth) = (*fp).headers.auth else {
+        return 0;
+    };
+    let auth = auth.as_mut();
+    if (*fp).headers.auth_hdr_num < 0 {
         return 0;
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*(*fp).headers.auth).lock);
-    if hfile_libcurl_c_543_renew_auth_token((*fp).headers.auth.cast(), &mut changed) < 0 {
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
+    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut auth.lock);
+    if hfile_libcurl_c_543_renew_auth_token(
+        (auth as *mut HFileLibcurlAuthToken).cast(),
+        &mut changed,
+    ) < 0
+    {
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut auth.lock);
         return -1;
     }
 
     if changed == 0 && (*fp).headers.auth_hdr_num > 0 {
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut auth.lock);
         return 0;
     }
 
     if (*fp).headers.auth_hdr_num > 0 {
-        let header = (*(*fp).headers.auth).token;
-        let header_copy = if !header.is_null() {
-            libc::strdup(header)
+        let header = auth.token.as_ref();
+        let header_copy = if let Some(header) = header {
+            libc::strdup(header.as_ptr())
         } else {
             std::ptr::null_mut()
         };
         let idx = ((*fp).headers.auth_hdr_num - 1) as usize;
-        if !header.is_null() && header_copy.is_null() {
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
+        if header.is_some() && header_copy.is_null() {
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut auth.lock);
             return -1;
         }
 
@@ -981,20 +991,20 @@ pub unsafe fn hfile_libcurl_c_587_add_auth_header(fp: *mut c_void) -> c_int {
             }
             (*fp).headers.auth_hdr_num = 0;
         }
-    } else if !(*(*fp).headers.auth).token.is_null() {
+    } else if let Some(header) = auth.token.as_ref() {
         if hfile_libcurl_c_353_append_header(
             (&mut (*fp).headers.extra as *mut HFileLibcurlHdrList).cast(),
-            (*(*fp).headers.auth).token,
+            header.as_ptr(),
             1,
         ) < 0
         {
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut auth.lock);
             return -1;
         }
         (*fp).headers.auth_hdr_num = (*fp).headers.extra.num as c_int;
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*(*fp).headers.auth).lock);
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut auth.lock);
     0
 }
 
@@ -1003,10 +1013,11 @@ pub unsafe fn hfile_libcurl_c_650_get_auth_token(fp: *mut c_void, url: *const c_
     let fp = fp.cast::<HFileLibcurlHeaderPrefix>();
     let mut name: kstring_t = std::mem::zeroed();
 
-    if HFILE_LIBCURL_AUTH_PATH.is_null()
-        || ((*fp).flags & HFILE_LIBCURL_IS_RECURSIVE) != 0
-        || (*fp).headers.auth_hdr_num != 0
-    {
+    let auth_path_ptr = std::ptr::addr_of!(HFILE_LIBCURL_AUTH_PATH);
+    let Some(auth_path) = (*auth_path_ptr).as_ref() else {
+        return 0;
+    };
+    if ((*fp).flags & HFILE_LIBCURL_IS_RECURSIVE) != 0 || (*fp).headers.auth_hdr_num != 0 {
         return 0;
     }
     if HFILE_LIBCURL_ALLOW_UNENCRYPTED_AUTH_HEADER == 0
@@ -1022,7 +1033,7 @@ pub unsafe fn hfile_libcurl_c_650_get_auth_token(fp: *mut c_void, url: *const c_
         host_len = libc::strcspn(host, c"/".as_ptr());
     }
 
-    let mut p = HFILE_LIBCURL_AUTH_PATH;
+    let mut p = auth_path.as_ptr();
     loop {
         let q = libc::strstr(p, c"%h".as_ptr());
         if q.is_null() {
@@ -1046,32 +1057,27 @@ pub unsafe fn hfile_libcurl_c_650_get_auth_token(fp: *mut c_void, url: *const c_
     }
 
     crate::htslib_rs::c_compat::pthread_mutex_lock(std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_LOCK));
-    if HFILE_LIBCURL_AUTH_MAP.is_null() {
-        HFILE_LIBCURL_AUTH_MAP = auth_map_new_raw();
+    let auth_map_ptr = std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_MAP);
+    if (*auth_map_ptr).is_none() {
+        *auth_map_ptr = Some(Vec::new());
     }
-    let map = auth_map_mut_raw(HFILE_LIBCURL_AUTH_MAP).expect("libcurl auth map initialized");
-    let mut tok: *mut HFileLibcurlAuthToken = std::ptr::null_mut();
-    for entry in map.iter().copied() {
-        let candidate = entry as *mut HFileLibcurlAuthToken;
-        if libc::strcmp((*candidate).path, name.s) == 0 {
-            tok = candidate;
+    let map = (*auth_map_ptr)
+        .as_mut()
+        .expect("libcurl auth map initialized");
+    let mut tok: Option<NonNull<HFileLibcurlAuthToken>> = None;
+    for entry in map.iter_mut() {
+        if libc::strcmp(entry.path.as_ptr(), name.s) == 0 {
+            tok = NonNull::new((&mut **entry) as *mut HFileLibcurlAuthToken);
             break;
         }
     }
-    if tok.is_null() {
-        tok = libc::calloc(1, std::mem::size_of::<HFileLibcurlAuthToken>())
-            .cast::<HFileLibcurlAuthToken>();
-        if !tok.is_null()
-            && crate::htslib_rs::c_compat::pthread_mutex_init(&mut (*tok).lock, std::ptr::null())
-                != 0
-        {
-            libc::free(tok.cast());
-            tok = std::ptr::null_mut();
-        }
-        if !tok.is_null() {
-            (*tok).path = ks_release(&mut name);
-            (*tok).expiry = 1;
-            map.push(tok as usize);
+    if tok.is_none() {
+        let path = hfile_libcurl_take_released_cstring(ks_release(&mut name));
+        if let Some(path) = path {
+            if let Some(mut new_tok) = hfile_libcurl_new_auth_token(path) {
+                tok = NonNull::new((&mut *new_tok) as *mut HFileLibcurlAuthToken);
+                map.push(new_tok);
+            }
         }
     }
     crate::htslib_rs::c_compat::pthread_mutex_unlock(std::ptr::addr_of_mut!(
@@ -1080,7 +1086,7 @@ pub unsafe fn hfile_libcurl_c_650_get_auth_token(fp: *mut c_void, url: *const c_
 
     (*fp).headers.auth = tok;
     libc::free(name.s.cast());
-    if tok.is_null() {
+    if tok.is_none() {
         -1
     } else {
         hfile_libcurl_c_587_add_auth_header(fp.cast())
@@ -1162,8 +1168,13 @@ pub unsafe extern "C" fn hfile_libcurl_c_789_recv_callback(
     } else if n == 0 {
         0
     } else {
-        libc::memcpy((*fp).buffer.ptr.cast(), ptr.cast(), n);
-        (*fp).buffer.ptr = (*fp).buffer.ptr.add(n);
+        let dst = (*fp)
+            .buffer
+            .ptr
+            .expect("libcurl recv buffer set before callback")
+            .as_ptr();
+        libc::memcpy(dst.cast(), ptr.cast(), n);
+        (*fp).buffer.ptr = Some(NonNull::new_unchecked(dst.add(n)));
         (*fp).buffer.len -= n;
         n
     }
@@ -1275,7 +1286,7 @@ pub unsafe extern "C" fn hfile_libcurl_c_876_libcurl_read(
             return filled;
         }
         let chunk_start = buffer.add(filled as usize);
-        (*fp).buffer.ptr = chunk_start;
+        (*fp).buffer.ptr = NonNull::new(chunk_start);
         (*fp).buffer.len = nbytes - filled as usize;
         (*fp).flags &= !HFILE_LIBCURL_PAUSED;
         if ((*fp).flags & HFILE_LIBCURL_FINISHED) == 0 {
@@ -1298,7 +1309,9 @@ pub unsafe extern "C" fn hfile_libcurl_c_876_libcurl_read(
             }
         }
 
-        let mut got = (*fp).buffer.ptr.offset_from(chunk_start) as libc::ssize_t;
+        let mut got = (*fp).buffer.ptr.map_or(0, |ptr| {
+            ptr.as_ptr().offset_from(chunk_start) as libc::ssize_t
+        });
         if to_skip >= 0 {
             if got <= to_skip as libc::ssize_t {
                 to_skip -= got as libc::off_t;
@@ -1316,7 +1329,7 @@ pub unsafe extern "C" fn hfile_libcurl_c_876_libcurl_read(
             }
         }
 
-        (*fp).buffer.ptr = std::ptr::null_mut();
+        (*fp).buffer.ptr = None;
         (*fp).buffer.len = 0;
         filled += got;
 
@@ -1364,8 +1377,13 @@ pub unsafe extern "C" fn hfile_libcurl_c_1006_send_callback(
         if n > (*fp).buffer.len {
             n = (*fp).buffer.len;
         }
-        libc::memcpy(ptr.cast(), (*fp).buffer.ptr.cast(), n);
-        (*fp).buffer.ptr = (*fp).buffer.ptr.add(n);
+        let src = (*fp)
+            .buffer
+            .ptr
+            .expect("libcurl send buffer set before callback")
+            .as_ptr();
+        libc::memcpy(ptr.cast(), src.cast(), n);
+        (*fp).buffer.ptr = Some(NonNull::new_unchecked(src.add(n)));
         (*fp).buffer.len -= n;
         n
     }
@@ -1379,7 +1397,7 @@ pub unsafe extern "C" fn hfile_libcurl_c_1024_libcurl_write(
 ) -> libc::ssize_t {
     let fp = fpv.cast::<HFileLibcurlHeaderPrefix>();
     let buffer = bufferv.cast::<c_char>();
-    (*fp).buffer.ptr = buffer.cast_mut();
+    (*fp).buffer.ptr = NonNull::new(buffer.cast_mut());
     (*fp).buffer.len = nbytes;
     (*fp).flags &= !HFILE_LIBCURL_PAUSED;
     let err = curl_easy_pause((*fp).easy, CURLPAUSE_CONT);
@@ -1398,8 +1416,11 @@ pub unsafe extern "C" fn hfile_libcurl_c_1024_libcurl_write(
             return -1;
         }
     }
-    let done = (*fp).buffer.ptr.offset_from(buffer) as libc::ssize_t;
-    (*fp).buffer.ptr = std::ptr::null_mut();
+    let done = (*fp)
+        .buffer
+        .ptr
+        .map_or(0, |ptr| ptr.as_ptr().offset_from(buffer) as libc::ssize_t);
+    (*fp).buffer.ptr = None;
     (*fp).buffer.len = 0;
     if ((*fp).flags & HFILE_LIBCURL_FINISHED) != 0 && (*fp).final_result != CURLE_OK {
         *crate::htslib_rs::c_compat::__errno_location() =
@@ -1512,7 +1533,7 @@ pub unsafe fn hfile_libcurl_c_1134_restart_from_position(
         }
         update_headers = 1;
     }
-    if (*fp).headers.auth_hdr_num > 0 && !(*fp).headers.auth.is_null() {
+    if (*fp).headers.auth_hdr_num > 0 && (*fp).headers.auth.is_some() {
         if hfile_libcurl_c_587_add_auth_header(fp.cast()) != 0 {
             return -1;
         }
@@ -1531,7 +1552,7 @@ pub unsafe fn hfile_libcurl_c_1134_restart_from_position(
     }
 
     temp_fp.buffer.len = 0;
-    temp_fp.buffer.ptr = std::ptr::null_mut();
+    temp_fp.buffer.ptr = None;
     temp_fp.easy = curl_easy_duphandle((*fp).easy);
     if temp_fp.easy.is_null() {
         (*fp).flags &= !HFILE_LIBCURL_CAN_SEEK;
@@ -1739,7 +1760,7 @@ unsafe fn hfile_libcurl_open_once(
         (*fp).headers.fail_on_error = 1;
     }
     (*fp).file_size = -1;
-    (*fp).buffer.ptr = std::ptr::null_mut();
+    (*fp).buffer.ptr = None;
     (*fp).buffer.len = 0;
     (*fp).final_result = -1;
     (*fp).flags = HFILE_LIBCURL_CAN_SEEK;
@@ -1825,7 +1846,7 @@ unsafe fn hfile_libcurl_open_once(
         err |= curl_easy_setopt((*fp).easy, CURLOPT_VERBOSE, 1 as libc::c_long);
     }
     let mut in_header: kstring_t = std::mem::zeroed();
-    if !(*fp).headers.redirect.is_null() {
+    if (*fp).headers.redirect.is_some() {
         err |= curl_easy_setopt(
             (*fp).easy,
             CURLOPT_HEADERFUNCTION,
@@ -1865,8 +1886,8 @@ unsafe fn hfile_libcurl_open_once(
 
     let mut response: libc::c_long = 0;
     curl_easy_getinfo_long((*fp).easy, CURLINFO_RESPONSE_CODE, &mut response);
-    if !(*fp).headers.http_response_ptr.is_null() {
-        *(*fp).headers.http_response_ptr = response;
+    if let Some(mut response_ptr) = (*fp).headers.http_response_ptr {
+        *response_ptr.as_mut() = response;
     }
     if ((*fp).flags & HFILE_LIBCURL_FINISHED) != 0 && (*fp).final_result != CURLE_OK {
         *crate::htslib_rs::c_compat::__errno_location() =
@@ -1876,10 +1897,9 @@ unsafe fn hfile_libcurl_open_once(
         goto_open_error(fp);
         return std::ptr::null_mut();
     }
-    if !(*fp).headers.redirect.is_null() {
+    if let Some(redirect) = (*fp).headers.redirect {
         if (300..400).contains(&response) {
             let mut new_url: kstring_t = std::mem::zeroed();
-            let redirect = libcurl_redirect_callback((*fp).headers.redirect);
             if redirect(
                 (*fp).headers.redirect_data,
                 response,
@@ -1913,12 +1933,8 @@ unsafe fn hfile_libcurl_open_once(
                 goto_open_error(fp);
                 return std::ptr::null_mut();
             }
-            if !(*fp).headers.http_response_ptr.is_null() {
-                curl_easy_getinfo_long(
-                    (*fp).easy,
-                    CURLINFO_RESPONSE_CODE,
-                    (*fp).headers.http_response_ptr,
-                );
+            if let Some(response_ptr) = (*fp).headers.http_response_ptr {
+                curl_easy_getinfo_long((*fp).easy, CURLINFO_RESPONSE_CODE, response_ptr.as_ptr());
             }
             if ((*fp).flags & HFILE_LIBCURL_FINISHED) != 0 && (*fp).final_result != CURLE_OK {
                 *crate::htslib_rs::c_compat::__errno_location() =
@@ -2093,11 +2109,19 @@ pub unsafe fn hfile_libcurl_c_1554_parse_va_list(
                 (*headers).auth_hdr_num = -3;
             }
         } else if libc::strcmp(argtype, c"redirect_callback".as_ptr()) == 0 {
-            (*headers).redirect = hfile_libcurl_va_arg_word(args) as *mut c_void;
+            let callback = hfile_libcurl_va_arg_word(args);
+            (*headers).redirect = if callback == 0 {
+                None
+            } else {
+                Some(std::mem::transmute::<usize, HFileLibcurlRedirectCallback>(
+                    callback,
+                ))
+            };
         } else if libc::strcmp(argtype, c"redirect_callback_data".as_ptr()) == 0 {
             (*headers).redirect_data = hfile_libcurl_va_arg_word(args) as *mut c_void;
         } else if libc::strcmp(argtype, c"http_response_ptr".as_ptr()) == 0 {
-            (*headers).http_response_ptr = hfile_libcurl_va_arg_word(args) as *mut libc::c_long;
+            (*headers).http_response_ptr =
+                NonNull::new(hfile_libcurl_va_arg_word(args) as *mut libc::c_long);
         } else if libc::strcmp(argtype, c"fail_on_error".as_ptr()) == 0 {
             (*headers).fail_on_error = hfile_libcurl_va_arg_word(args) as c_int;
         } else {
@@ -2176,13 +2200,8 @@ pub unsafe fn hfile_libcurl_c_1679_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> c_
 
     let auth = libc::getenv(c"HTS_AUTH_LOCATION".as_ptr());
     if !auth.is_null() {
-        HFILE_LIBCURL_AUTH_PATH = libc::strdup(auth);
-        HFILE_LIBCURL_AUTH_MAP = auth_map_new_raw();
-        if HFILE_LIBCURL_AUTH_PATH.is_null() {
-            hfile_libcurl_c_326_libcurl_exit();
-            *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
-            return -1;
-        }
+        *std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_PATH) = Some(CStr::from_ptr(auth).to_owned());
+        *std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_MAP) = Some(Vec::new());
     }
     let allow = libc::getenv(c"HTS_ALLOW_UNENCRYPTED_AUTHORIZATION_HEADER".as_ptr());
     if !allow.is_null() && libc::strcmp(allow, c"I understand the risks".as_ptr()) == 0 {
@@ -2315,8 +2334,8 @@ mod tests {
             assert!(headers.callback.is_some());
             assert_eq!(headers.callback_data, callback_data);
             assert_eq!(
-                headers.http_response_ptr,
-                (&response as *const libc::c_long).cast_mut()
+                headers.http_response_ptr.map(NonNull::as_ptr),
+                Some((&response as *const libc::c_long).cast_mut())
             );
             assert_eq!(headers.fail_on_error, 0);
             assert_eq!(headers.auth_hdr_num, -3);
@@ -2532,9 +2551,11 @@ mod tests {
             std::fs::write(&token_path, b"  secret-token  \n").unwrap();
 
             let prefix_c = std::ffi::CString::new(prefix).unwrap();
-            let old_path = HFILE_LIBCURL_AUTH_PATH;
+            let old_path = std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_PATH).replace(None);
+            let old_map = std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_MAP).replace(None);
             let old_allow = HFILE_LIBCURL_ALLOW_UNENCRYPTED_AUTH_HEADER;
-            HFILE_LIBCURL_AUTH_PATH = libc::strdup(prefix_c.as_ptr());
+            *std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_PATH) = Some(prefix_c);
+            *std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_MAP) = Some(Vec::new());
             HFILE_LIBCURL_ALLOW_UNENCRYPTED_AUTH_HEADER = 0;
 
             let mut https_fp: HFileLibcurlHeaderPrefix = std::mem::zeroed();
@@ -2561,14 +2582,18 @@ mod tests {
                 0
             );
             assert_eq!(http_fp.headers.extra.num, 0);
-            assert!(http_fp.headers.auth.is_null());
+            assert!(http_fp.headers.auth.is_none());
 
             hfile_libcurl_c_372_free_headers(
                 (&mut https_fp.headers.extra as *mut HFileLibcurlHdrList).cast(),
                 1,
             );
-            libc::free(HFILE_LIBCURL_AUTH_PATH.cast());
-            HFILE_LIBCURL_AUTH_PATH = old_path;
+            let _ = std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_PATH).replace(old_path);
+            if let Some(mut map) = std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_MAP).replace(old_map) {
+                for tok in map.drain(..) {
+                    hfile_libcurl_free_auth_box(tok);
+                }
+            }
             HFILE_LIBCURL_ALLOW_UNENCRYPTED_AUTH_HEADER = old_allow;
             let _ = std::fs::remove_file(token_path);
         }

@@ -2,8 +2,38 @@
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
 use std::ffi::{c_char, c_int};
+use std::ptr::NonNull;
 
 use super::*;
+
+unsafe fn index_node_children(node: &cram_index_layout) -> Option<&[cram_index_layout]> {
+    if node.e.is_null() || node.nslice <= 0 {
+        None
+    } else {
+        Some(std::slice::from_raw_parts(node.e, node.nslice as usize))
+    }
+}
+
+unsafe fn index_node_children_mut(
+    node: &mut cram_index_layout,
+) -> Option<&mut [cram_index_layout]> {
+    if node.e.is_null() || node.nslice <= 0 {
+        None
+    } else {
+        Some(std::slice::from_raw_parts_mut(node.e, node.nslice as usize))
+    }
+}
+
+unsafe fn index_child_ptr(
+    node: NonNull<cram_index_layout>,
+    index: usize,
+) -> *mut cram_index_layout {
+    node.as_ref().e.add(index)
+}
+
+unsafe fn next_index_node(node: NonNull<cram_index_layout>) -> Option<NonNull<cram_index_layout>> {
+    NonNull::new(node.as_ref().e_next)
+}
 
 // original: cram_seek_to_refpos (htslib/cram/cram_index.c:573)
 //
@@ -226,26 +256,28 @@ pub unsafe fn cram_cram_index_c_404_cram_index_query(
     fd: *mut cram_fd,
     mut refid: c_int,
     mut pos: crate::htslib_rs::hts::hts_pos_t,
-    mut from: *mut cram_index_layout,
+    from: *mut cram_index_layout,
 ) -> *mut cram_index_layout {
     use crate::htslib_rs::hts::{HTS_IDX_NOCOOR, HTS_IDX_NONE, HTS_IDX_REST, HTS_IDX_START};
     let fdl = fd.cast::<cram_fd_layout>();
-    let index = (*fdl).index.cast::<cram_index_layout>();
 
-    if !from.is_null() {
+    if let Some(from) = NonNull::new(from) {
         // Continuation search down the e_next linked list.
         if refid == HTS_IDX_NOCOOR {
             refid = -1;
         }
-        let e = (*from).e_next;
-        if !e.is_null()
-            && (*e).refid == refid
-            && ((*e).start as crate::htslib_rs::hts::hts_pos_t) <= pos
-        {
-            return e;
+        if let Some(e) = next_index_node(from).filter(|e| {
+            let e = e.as_ref();
+            e.refid == refid && (e.start as crate::htslib_rs::hts::hts_pos_t) <= pos
+        }) {
+            return e.as_ptr();
         }
         return std::ptr::null_mut();
     }
+
+    let Some(index) = NonNull::new((*fdl).index.cast::<cram_index_layout>()) else {
+        return std::ptr::null_mut();
+    };
 
     match refid {
         HTS_IDX_NONE | HTS_IDX_REST => return std::ptr::null_mut(),
@@ -255,21 +287,21 @@ pub unsafe fn cram_cram_index_c_404_cram_index_query(
         }
         HTS_IDX_START => {
             // Find the ref-bucket with the smallest first-entry offset.
-            let mut min_idx = i64::MAX;
-            let mut i: c_int = 0;
-            let mut j: c_int = -1;
-            while i < (*fdl).index_sz {
-                let bucket = index.add(i as usize);
-                if !(*bucket).e.is_null() && (*(*bucket).e).offset < min_idx {
-                    min_idx = (*(*bucket).e).offset;
-                    j = i;
+            let buckets =
+                std::slice::from_raw_parts(index.as_ptr(), (*fdl).index_sz.max(0) as usize);
+            let mut best: Option<NonNull<cram_index_layout>> = None;
+            for bucket in buckets {
+                let Some(first) = NonNull::new(bucket.e) else {
+                    continue;
+                };
+                if best
+                    .map(|best| first.as_ref().offset < best.as_ref().offset)
+                    .unwrap_or(true)
+                {
+                    best = Some(first);
                 }
-                i += 1;
             }
-            if j < 0 {
-                return std::ptr::null_mut();
-            }
-            return (*index.add(j as usize)).e;
+            return best.map(NonNull::as_ptr).unwrap_or_else(std::ptr::null_mut);
         }
         _ => {
             if refid < HTS_IDX_NONE || refid + 1 >= (*fdl).index_sz {
@@ -278,73 +310,74 @@ pub unsafe fn cram_cram_index_c_404_cram_index_query(
         }
     }
 
-    from = index.add((refid + 1) as usize);
-
-    if (*from).e.is_null() {
+    let from = NonNull::new(index.as_ptr().add((refid + 1) as usize))
+        .expect("index bucket pointer derived from non-null index");
+    let Some(entries) = index_node_children(from.as_ref()) else {
         return std::ptr::null_mut();
-    }
+    };
 
     // Binary search to find an overlapping bin.
     let mut i: c_int = 0;
-    let mut j: c_int = (*index.add((refid + 1) as usize)).nslice - 1;
+    let mut j: c_int = entries.len() as c_int - 1;
     let mut k: c_int = j / 2;
     while k != i {
-        if (*(*from).e.add(k as usize)).refid > refid {
+        let entry = &entries[k as usize];
+        if entry.refid > refid {
             j = k;
             k = (j - i) / 2 + i;
             continue;
         }
-        if (*(*from).e.add(k as usize)).refid < refid {
+        if entry.refid < refid {
             i = k;
             k = (j - i) / 2 + i;
             continue;
         }
-        if ((*(*from).e.add(k as usize)).start as crate::htslib_rs::hts::hts_pos_t) >= pos {
+        if (entry.start as crate::htslib_rs::hts::hts_pos_t) >= pos {
             j = k;
             k = (j - i) / 2 + i;
             continue;
         }
-        if ((*(*from).e.add(k as usize)).start as crate::htslib_rs::hts::hts_pos_t) < pos {
+        if (entry.start as crate::htslib_rs::hts::hts_pos_t) < pos {
             i = k;
             k = (j - i) / 2 + i;
             continue;
         }
         k = (j - i) / 2 + i;
     }
-    if j >= 0
-        && ((*(*from).e.add(j as usize)).start as crate::htslib_rs::hts::hts_pos_t) < pos
-        && (*(*from).e.add(j as usize)).refid == refid
-    {
-        i = j;
+    if j >= 0 {
+        let entry = &entries[j as usize];
+        if (entry.start as crate::htslib_rs::hts::hts_pos_t) < pos && entry.refid == refid {
+            i = j;
+        }
     }
 
     // Move backward to the first overlapping bin.
-    while i > 0
-        && ((*(*from).e.add((i - 1) as usize)).end as crate::htslib_rs::hts::hts_pos_t) >= pos
-    {
+    while i > 0 && (entries[(i - 1) as usize].end as crate::htslib_rs::hts::hts_pos_t) >= pos {
         i -= 1;
     }
 
     // And forward if our candidate doesn't cover pos.
-    while i + 1 < (*from).nslice
-        && ((*(*from).e.add(i as usize)).refid < refid
-            || ((*(*from).e.add(i as usize)).end as crate::htslib_rs::hts::hts_pos_t) < pos)
+    while i + 1 < entries.len() as c_int
+        && (entries[i as usize].refid < refid
+            || (entries[i as usize].end as crate::htslib_rs::hts::hts_pos_t) < pos)
     {
         i += 1;
     }
 
-    (*from).e.add(i as usize)
+    index_child_ptr(from, i as usize)
 }
 
 // original: cram_index_free_recurse (htslib/cram/cram_index.c:364)
 pub unsafe fn cram_cram_index_c_364_cram_index_free_recurse(e: *mut cram_index_layout) {
-    if !(*e).e.is_null() {
-        let mut i: c_int = 0;
-        while i < (*e).nslice {
-            cram_cram_index_c_364_cram_index_free_recurse((*e).e.offset(i as isize));
-            i += 1;
+    let Some(mut node) = NonNull::new(e) else {
+        return;
+    };
+    let child_array = node.as_ref().e;
+    if let Some(children) = index_node_children_mut(node.as_mut()) {
+        for child in children {
+            cram_cram_index_c_364_cram_index_free_recurse(child);
         }
-        free((*e).e.cast());
+        free(child_array.cast());
     }
 }
 
@@ -354,17 +387,40 @@ pub unsafe fn cram_cram_index_c_364_cram_index_free_recurse(e: *mut cram_index_l
 // frees each subtree, then releases the index array and clears the fd field.
 pub unsafe fn cram_cram_index_c_374_cram_index_free(fd: *mut cram_fd) {
     let fdl = fd.cast::<cram_fd_layout>();
-    if (*fdl).index.is_null() {
+    let Some(index) = NonNull::new((*fdl).index.cast::<cram_index_layout>()) else {
         return;
+    };
+    let buckets = std::slice::from_raw_parts_mut(index.as_ptr(), (*fdl).index_sz.max(0) as usize);
+    for bucket in buckets {
+        cram_cram_index_c_364_cram_index_free_recurse(bucket);
     }
-    let index = (*fdl).index.cast::<cram_index_layout>();
-    let mut i: c_int = 0;
-    while i < (*fdl).index_sz {
-        cram_cram_index_c_364_cram_index_free_recurse(index.offset(i as isize));
-        i += 1;
-    }
-    free(index.cast());
+    free(index.as_ptr().cast());
     (*fdl).index = std::ptr::null_mut();
+}
+
+unsafe fn link_index_node(
+    mut e: NonNull<cram_index_layout>,
+    e_last: Option<NonNull<cram_index_layout>>,
+) -> Option<NonNull<cram_index_layout>> {
+    if let Some(mut e_last) = e_last {
+        e_last.as_mut().e_next = e.as_ptr();
+    }
+
+    // We don't want to link in the top-level cram_index with
+    // offset=0 and start/end = INT_MIN/INT_MAX.
+    let mut e_last = if e.as_ref().offset != 0 {
+        Some(e)
+    } else {
+        e_last
+    };
+
+    if let Some(children) = index_node_children_mut(e.as_mut()) {
+        for child in children {
+            e_last = link_index_node(NonNull::from(child), e_last);
+        }
+    }
+
+    e_last
 }
 
 // original: link_index_ (htslib/cram/cram_index.c:93)
@@ -374,25 +430,14 @@ pub unsafe fn cram_cram_index_c_374_cram_index_free(fd: *mut cram_fd) {
 // skipped so it never becomes a `prev` link. Recursive, byte-faithful.
 pub unsafe fn cram_cram_index_c_92_link_index_(
     e: *mut cram_index_layout,
-    mut e_last: *mut cram_index_layout,
+    e_last: *mut cram_index_layout,
 ) -> *mut cram_index_layout {
-    if !e_last.is_null() {
-        (*e_last).e_next = e;
-    }
-
-    // We don't want to link in the top-level cram_index with
-    // offset=0 and start/end = INT_MIN/INT_MAX.
-    if (*e).offset != 0 {
-        e_last = e;
-    }
-
-    let mut i: c_int = 0;
-    while i < (*e).nslice {
-        e_last = cram_cram_index_c_92_link_index_((*e).e.add(i as usize), e_last);
-        i += 1;
-    }
-
-    e_last
+    let Some(e) = NonNull::new(e) else {
+        return e_last;
+    };
+    link_index_node(e, NonNull::new(e_last))
+        .map(NonNull::as_ptr)
+        .unwrap_or_else(std::ptr::null_mut)
 }
 
 // original: link_index (htslib/cram/cram_index.c:109)
@@ -401,17 +446,18 @@ pub unsafe fn cram_cram_index_c_92_link_index_(
 // in file order without descending the nested tree on each step.
 pub unsafe fn cram_cram_index_c_108_link_index(fd: *mut cram_fd) {
     let fdl = fd.cast::<cram_fd_layout>();
-    let index = (*fdl).index.cast::<cram_index_layout>();
-    let mut e_last: *mut cram_index_layout = std::ptr::null_mut();
+    let Some(index) = NonNull::new((*fdl).index.cast::<cram_index_layout>()) else {
+        return;
+    };
+    let buckets = std::slice::from_raw_parts_mut(index.as_ptr(), (*fdl).index_sz.max(0) as usize);
+    let mut e_last: Option<NonNull<cram_index_layout>> = None;
 
-    let mut i: c_int = 0;
-    while i < (*fdl).index_sz {
-        e_last = cram_cram_index_c_92_link_index_(index.add(i as usize), e_last);
-        i += 1;
+    for bucket in buckets {
+        e_last = link_index_node(NonNull::from(bucket), e_last);
     }
 
-    if !e_last.is_null() {
-        (*e_last).e_next = std::ptr::null_mut();
+    if let Some(mut e_last) = e_last {
+        e_last.as_mut().e_next = std::ptr::null_mut();
     }
 }
 
@@ -503,20 +549,19 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
     mut fn_idx: *const c_char,
 ) -> c_int {
     let fdl = fd.cast::<cram_fd_layout>();
-    let mut tfn_idx: *mut c_char = std::ptr::null_mut();
+    let mut tfn_idx: Option<NonNull<c_char>> = None;
     let mut buf = [0 as c_char; 65536];
     let mut kstr: kstring_t = std::mem::zeroed();
-    let mut idx: *mut cram_index_layout;
-    let mut idx_stack: *mut *mut cram_index_layout;
-    let mut idx_stack_alloc: c_int = 0;
-    let mut idx_stack_ptr: c_int = 0;
+    let mut idx: NonNull<cram_index_layout>;
+    let mut idx_stack: Vec<NonNull<cram_index_layout>> = Vec::new();
     let mut pos: usize = 0;
 
     macro_rules! fail {
         () => {{
             free(kstr.s.cast());
-            free(idx_stack.cast());
-            free(tfn_idx.cast());
+            if let Some(tfn_idx) = tfn_idx {
+                free(tfn_idx.as_ptr().cast());
+            }
             cram_cram_index_c_374_cram_index_free(fd); // Also sets fd->index = NULL
             return -1;
         }};
@@ -533,22 +578,18 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
         return -1;
     }
 
-    idx = (*fdl).index.cast::<cram_index_layout>();
-    (*idx).refid = -1;
-    (*idx).start = c_int::MIN;
-    (*idx).end = c_int::MAX;
+    idx = match NonNull::new((*fdl).index.cast::<cram_index_layout>()) {
+        Some(idx) => idx,
+        None => return -1,
+    };
+    idx.as_mut().refid = -1;
+    idx.as_mut().start = c_int::MIN;
+    idx.as_mut().end = c_int::MAX;
 
-    idx_stack_alloc += 1;
-    idx_stack = calloc(
-        idx_stack_alloc as u64,
-        std::mem::size_of::<*mut cram_index_layout>() as u64,
-    )
-    .cast();
-    if idx_stack.is_null() {
+    if idx_stack.try_reserve(1).is_err() {
         fail!();
     }
-
-    *idx_stack.add(idx_stack_ptr as usize) = idx;
+    idx_stack.push(idx);
 
     // Support pathX.cram##idx##pathY.crai
     let fn_delim = libc::strstr(fn_, HTS_IDX_DELIM.as_ptr().cast());
@@ -557,17 +598,19 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
     }
 
     if fn_idx.is_null() {
+        let mut resolved_idx: *mut c_char = std::ptr::null_mut();
         if crate::htslib_rs::hts::hts_c_4756_hts_idx_check_local(
             fn_,
             crate::htslib_rs::hts::HTS_FMT_CRAI,
-            &mut tfn_idx,
+            &mut resolved_idx,
         ) == 0
             && hisremote(fn_) != 0
         {
-            tfn_idx = crate::htslib_rs::hts::hts_c_4915_hts_idx_getfn(fn_, c".crai".as_ptr());
+            resolved_idx = crate::htslib_rs::hts::hts_c_4915_hts_idx_getfn(fn_, c".crai".as_ptr());
         }
+        tfn_idx = NonNull::new(resolved_idx);
 
-        if tfn_idx.is_null() {
+        if tfn_idx.is_none() {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"Could not retrieve index file for '%s'\n".as_ptr(),
@@ -575,7 +618,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
             );
             fail!();
         }
-        fn_idx = tfn_idx;
+        fn_idx = tfn_idx.unwrap().as_ptr();
     }
 
     let fp = hopen(fn_idx, c"r".as_ptr());
@@ -649,7 +692,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
             fail!();
         }
 
-        if e.refid != (*idx).refid {
+        if e.refid != idx.as_ref().refid {
             if (*fdl).index_sz < e.refid + 2 {
                 let new_sz = e.refid + 2;
                 let index_end = (*fdl).index_sz as usize * std::mem::size_of::<cram_index_layout>();
@@ -670,68 +713,67 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
                     (*fdl).index_sz as usize * std::mem::size_of::<cram_index_layout>() - index_end,
                 );
             }
-            idx = (*fdl)
-                .index
-                .cast::<cram_index_layout>()
-                .add((e.refid + 1) as usize);
-            (*idx).refid = e.refid;
-            (*idx).start = c_int::MIN;
-            (*idx).end = c_int::MAX;
-            (*idx).nslice = 0;
-            (*idx).nalloc = 0;
-            (*idx).e = std::ptr::null_mut();
-            idx_stack_ptr = 0;
-            *idx_stack.add(idx_stack_ptr as usize) = idx;
+            idx = NonNull::new(
+                (*fdl)
+                    .index
+                    .cast::<cram_index_layout>()
+                    .add((e.refid + 1) as usize),
+            )
+            .expect("index bucket pointer derived from non-null index");
+            idx.as_mut().refid = e.refid;
+            idx.as_mut().start = c_int::MIN;
+            idx.as_mut().end = c_int::MAX;
+            idx.as_mut().nslice = 0;
+            idx.as_mut().nalloc = 0;
+            idx.as_mut().e = std::ptr::null_mut();
+            idx_stack.clear();
+            idx_stack.push(idx);
         }
 
-        while !(e.start >= (*idx).start && e.end <= (*idx).end)
-            || ((*idx).start == 0 && (*idx).refid == -1)
+        while !(e.start >= idx.as_ref().start && e.end <= idx.as_ref().end)
+            || (idx.as_ref().start == 0 && idx.as_ref().refid == -1)
         {
-            idx_stack_ptr -= 1;
-            idx = *idx_stack.add(idx_stack_ptr as usize);
+            idx_stack.pop();
+            let Some(parent) = idx_stack.last().copied() else {
+                fail!();
+            };
+            idx = parent;
         }
 
         // Now contains, so append
-        if (*idx).nslice + 1 >= (*idx).nalloc {
-            (*idx).nalloc = if (*idx).nalloc != 0 {
-                (*idx).nalloc * 2
-            } else {
-                16
-            };
+        if idx.as_ref().nslice + 1 >= idx.as_ref().nalloc {
+            let nalloc = idx.as_ref().nalloc;
+            idx.as_mut().nalloc = if nalloc != 0 { nalloc * 2 } else { 16 };
+            let nalloc = idx.as_ref().nalloc;
             let new_e = realloc(
-                (*idx).e.cast(),
-                ((*idx).nalloc as usize * std::mem::size_of::<cram_index_layout>()) as u64,
+                idx.as_ref().e.cast(),
+                (nalloc as usize * std::mem::size_of::<cram_index_layout>()) as u64,
             )
             .cast::<cram_index_layout>();
             if new_e.is_null() {
                 fail!();
             }
 
-            (*idx).e = new_e;
+            idx.as_mut().e = new_e;
         }
 
         e.nalloc = 0;
         e.nslice = 0;
         e.e = std::ptr::null_mut();
-        let ep = (*idx).e.add((*idx).nslice as usize);
-        (*idx).nslice += 1;
-        *ep = e;
+        let ep = {
+            let parent = idx.as_mut();
+            let ep = NonNull::new(parent.e.add(parent.nslice as usize))
+                .expect("child pointer derived from non-null child array");
+            parent.nslice += 1;
+            *ep.as_ptr() = e;
+            ep
+        };
         idx = ep;
 
-        idx_stack_ptr += 1;
-        if idx_stack_ptr >= idx_stack_alloc {
-            idx_stack_alloc *= 2;
-            let new_stack = realloc(
-                idx_stack.cast(),
-                (idx_stack_alloc as usize * std::mem::size_of::<*mut cram_index_layout>()) as u64,
-            )
-            .cast::<*mut cram_index_layout>();
-            if new_stack.is_null() {
-                fail!();
-            }
-            idx_stack = new_stack;
+        if idx_stack.len() == idx_stack.capacity() && idx_stack.try_reserve(1).is_err() {
+            fail!();
         }
-        *idx_stack.add(idx_stack_ptr as usize) = idx;
+        idx_stack.push(idx);
 
         while pos < kstr.l && *kstr.s.add(pos) != b'\n' as c_char {
             pos += 1;
@@ -739,9 +781,10 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
         pos += 1;
     }
 
-    free(idx_stack.cast());
     free(kstr.s.cast());
-    free(tfn_idx.cast());
+    if let Some(tfn_idx) = tfn_idx {
+        free(tfn_idx.as_ptr().cast());
+    }
 
     // Convert NCList to linear linked list
     cram_cram_index_c_108_link_index(fd);
@@ -759,7 +802,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
 pub unsafe fn cram_cram_index_c_503_cram_index_last(
     fd: *mut cram_fd,
     refid: c_int,
-    mut from: *mut cram_index_layout,
+    from: *mut cram_index_layout,
 ) -> *mut cram_index_layout {
     let fdl = fd.cast::<cram_fd_layout>();
 
@@ -767,26 +810,30 @@ pub unsafe fn cram_cram_index_c_503_cram_index_last(
         return std::ptr::null_mut();
     }
 
-    let index = (*fdl).index.cast::<cram_index_layout>();
-    if from.is_null() {
-        from = index.add((refid + 1) as usize);
-    }
+    let Some(index) = NonNull::new((*fdl).index.cast::<cram_index_layout>()) else {
+        return std::ptr::null_mut();
+    };
+    let from = NonNull::new(from).unwrap_or_else(|| {
+        NonNull::new(index.as_ptr().add((refid + 1) as usize))
+            .expect("index bucket pointer derived from non-null index")
+    });
 
     // Ref with nothing aligned against it.
-    if (*from).e.is_null() {
+    let Some(entries) = index_node_children(from.as_ref()) else {
         return std::ptr::null_mut();
-    }
+    };
 
-    let slice = (*index.add((refid + 1) as usize)).nslice - 1;
+    let slice = entries.len() - 1;
 
     // e is the last entry in the nested containment list, but it may
     // contain further slices within it.
-    let mut e = (*from).e.add(slice as usize);
-    while !(*e).e_next.is_null() {
-        e = (*e).e_next;
+    let mut e = NonNull::new(index_child_ptr(from, slice))
+        .expect("child pointer derived from non-null child array");
+    while let Some(next) = next_index_node(e) {
+        e = next;
     }
 
-    e
+    e.as_ptr()
 }
 
 // original: cram_index_query_last (htslib/cram/cram_index.c:532)
@@ -800,20 +847,27 @@ pub unsafe fn cram_cram_index_c_531_cram_index_query_last(
     refid: c_int,
     end: crate::htslib_rs::hts::hts_pos_t,
 ) -> *mut cram_index_layout {
-    let mut e: *mut cram_index_layout = std::ptr::null_mut();
-    let mut prev_e: *mut cram_index_layout;
+    let mut e: Option<NonNull<cram_index_layout>> = None;
+    let mut prev_e: Option<NonNull<cram_index_layout>>;
     loop {
         prev_e = e;
-        e = cram_cram_index_c_404_cram_index_query(fd, refid, end, prev_e);
-        if e.is_null() {
+        e = NonNull::new(cram_cram_index_c_404_cram_index_query(
+            fd,
+            refid,
+            end,
+            prev_e
+                .map(NonNull::as_ptr)
+                .unwrap_or_else(std::ptr::null_mut),
+        ));
+        if e.is_none() {
             break;
         }
     }
 
-    if prev_e.is_null() {
+    let Some(mut prev_e) = prev_e else {
         return std::ptr::null_mut();
-    }
-    e = prev_e;
+    };
+    e = Some(prev_e);
 
     // Note: offset of e and e->e_next may be the same if we're using a
     // multi-ref container where a single container generates multiple
@@ -821,15 +875,17 @@ pub unsafe fn cram_cram_index_c_531_cram_index_query_last(
     //
     // We need to keep iterating until offset differs in order to find
     // the genuine file offset for the end of container.
-    loop {
-        prev_e = e;
-        e = (*e).e_next;
-        if e.is_null() || (*e).offset != (*prev_e).offset {
+    while let Some(current) = e {
+        prev_e = current;
+        e = next_index_node(current);
+        if e.map(|next| next.as_ref().offset != prev_e.as_ref().offset)
+            .unwrap_or(true)
+        {
             break;
         }
     }
 
-    prev_e
+    prev_e.as_ptr()
 }
 
 // original: cram_index_container (htslib/cram/cram_index.c:729)

@@ -22,6 +22,76 @@ const BCF_VL_LA: c_int = 6;
 const BCF_VL_LG: c_int = 7;
 const BCF_VL_LR: c_int = 8;
 
+struct OwnedKString {
+    raw: kstring_t,
+}
+
+impl OwnedKString {
+    fn new() -> Self {
+        Self {
+            raw: kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            },
+        }
+    }
+}
+
+impl std::ops::Deref for OwnedKString {
+    type Target = kstring_t;
+
+    fn deref(&self) -> &Self::Target {
+        &self.raw
+    }
+}
+
+impl std::ops::DerefMut for OwnedKString {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.raw
+    }
+}
+
+impl Drop for OwnedKString {
+    fn drop(&mut self) {
+        unsafe {
+            libc::free(self.raw.s.cast());
+        }
+    }
+}
+
+struct CBuffer<T> {
+    ptr: *mut T,
+}
+
+impl<T> CBuffer<T> {
+    fn new() -> Self {
+        Self {
+            ptr: std::ptr::null_mut(),
+        }
+    }
+
+    fn cast<U>(&self) -> *mut U {
+        self.ptr.cast::<U>()
+    }
+
+    unsafe fn add(&self, count: usize) -> *mut T {
+        self.ptr.add(count)
+    }
+
+    fn as_mut_c_void_dst(&mut self) -> *mut *mut c_void {
+        (&mut self.ptr as *mut *mut T).cast::<*mut c_void>()
+    }
+}
+
+impl<T> Drop for CBuffer<T> {
+    fn drop(&mut self) {
+        unsafe {
+            libc::free(self.ptr.cast());
+        }
+    }
+}
+
 // original: bcf_remove_allele_set (htslib/vcfutils.c:659)
 pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
     header: *const bcf_hdr_t,
@@ -34,40 +104,35 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
     let vl_a_r = (1_u32 << BCF_VL_A) | (1_u32 << BCF_VL_R);
     let vl_la_lr = (1_u32 << BCF_VL_LA) | (1_u32 << BCF_VL_LR);
     let vl_a_r_la_lr = vl_a_r | vl_la_lr;
-    let map = libc::malloc((*line).n_allele() as usize * size_of::<c_int>()).cast::<c_int>();
-    let mut laa: *mut c_int = std::ptr::null_mut();
-    let mut laa_map: *mut c_int = std::ptr::null_mut();
-    let mut lr_orig: *mut c_int = std::ptr::null_mut();
-    let mut dat: *mut u8 = std::ptr::null_mut();
+    let n_allele = (*line).n_allele() as usize;
+    let mut map = Vec::new();
+    if map.try_reserve_exact(n_allele).is_err() {
+        return -1;
+    }
+    map.resize(n_allele, 0);
+    let mut laa = CBuffer::<c_int>::new();
+    let mut laa_map = Vec::new();
+    let mut lr_orig = Vec::new();
+    let mut dat = CBuffer::<u8>::new();
     let mut laa_size = 0;
     let mut laa_map_stride = 0;
     let mut have_cnv_tr = 0;
 
-    if map.is_null() {
-        return -1;
-    }
-
     vcf::bcf_unpack(line, BCF_UN_ALL as c_int);
 
     let n_sample = (*line).n_sample() as c_int;
-    let mut str_: kstring_t = std::mem::zeroed();
+    let mut str_ = OwnedKString::new();
 
     macro_rules! err {
         () => {{
-            libc::free(str_.s.cast());
-            libc::free(map.cast());
-            libc::free(laa_map.cast());
-            libc::free(lr_orig.cast());
-            libc::free(laa.cast());
-            libc::free(dat.cast());
             return -1;
         }};
     }
 
-    kputs(*(*line).d.allele.add(0), &mut str_);
+    kputs(*(*line).d.allele.add(0), &mut *str_);
 
     let mut nrm = 0;
-    *map.add(0) = 0;
+    map[0] = 0;
     let mut j = 1;
     for i in 1..(*line).n_allele() as c_int {
         if libc::strcmp(*(*line).d.allele.add(i as usize), c"<CNV:TR>".as_ptr()) == 0 {
@@ -76,18 +141,16 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
 
         if kbs_exists(rm_set, i) != 0 {
             *(*line).d.allele.add(i as usize) = std::ptr::null_mut();
-            *map.add(i as usize) = -1;
+            map[i as usize] = -1;
             nrm += 1;
             continue;
         }
-        kputc(b',' as c_int, &mut str_);
-        kputs(*(*line).d.allele.add(i as usize), &mut str_);
-        *map.add(i as usize) = j;
+        kputc(b',' as c_int, &mut *str_);
+        kputs(*(*line).d.allele.add(i as usize), &mut *str_);
+        map[i as usize] = j;
         j += 1;
     }
     if nrm == 0 {
-        libc::free(str_.s.cast());
-        libc::free(map.cast());
         return 0;
     }
 
@@ -112,8 +175,6 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
             c"bcf_remove_allele_set".as_ptr(),
             msg.as_ptr(),
         );
-        libc::free(str_.s.cast());
-        libc::free(map.cast());
         return -1;
     }
     let n_a_ori = n_r_ori - 1;
@@ -122,8 +183,6 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
     let mut n_g_new = n_r_new * (n_r_new + 1) / 2;
 
     if vcf::bcf_update_alleles_str(header, line, str_.s) < 0 {
-        libc::free(str_.s.cast());
-        libc::free(map.cast());
         return -1;
     }
 
@@ -135,8 +194,6 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
             c"bcf_remove_allele_set".as_ptr(),
             c"Out of memory".as_ptr(),
         );
-        libc::free(str_.s.cast());
-        libc::free(map.cast());
         return -1;
     }
 
@@ -176,14 +233,8 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         };
 
         let mut mdat = mdat_bytes / size;
-        let mut nret = vcf::bcf_get_info_values(
-            header,
-            line,
-            id,
-            (&mut dat as *mut *mut u8).cast::<*mut c_void>(),
-            &mut mdat,
-            type_,
-        );
+        let mut nret =
+            vcf::bcf_get_info_values(header, line, id, dat.as_mut_c_void_dst(), &mut mdat, type_);
         mdat_bytes = mdat * size;
         if nret < 0 {
             err!();
@@ -222,9 +273,9 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                         continue;
                     }
                     if str_.l != 0 {
-                        kputc(b',' as c_int, &mut str_);
+                        kputc(b',' as c_int, &mut *str_);
                     }
-                    kputsn(ss, se.offset_from(ss) as usize, &mut str_);
+                    kputsn(ss, se.offset_from(ss) as usize, &mut *str_);
                     if *se != 0 {
                         se = se.add(1);
                     }
@@ -256,9 +307,9 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                             continue;
                         }
                         if str_.l != 0 {
-                            kputc(b',' as c_int, &mut str_);
+                            kputc(b',' as c_int, &mut *str_);
                         }
-                        kputsn(ss, se.offset_from(ss) as usize, &mut str_);
+                        kputsn(ss, se.offset_from(ss) as usize, &mut *str_);
                         if *se != 0 {
                             se = se.add(1);
                         }
@@ -369,7 +420,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                 err!();
             }
             ndat = n_g_new;
-            let mut l_ori = -1;
+            let mut l_ori: c_int = -1;
             let mut l_new = 0;
             if type_ == BCF_HT_INT as c_int {
                 let ptr = dat.cast::<i32>();
@@ -417,7 +468,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
 
     let mut i = 1;
     while i < n_r_ori {
-        if *map.add(i as usize) != i {
+        if *map.as_ptr().add(i as usize) != i {
             break;
         }
         i += 1;
@@ -428,7 +479,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
             header,
             line,
             c"GT".as_ptr(),
-            (&mut dat as *mut *mut u8).cast::<*mut c_void>(),
+            dat.as_mut_c_void_dst(),
             &mut mdat,
             BCF_HT_INT as c_int,
         );
@@ -446,13 +497,13 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                         break;
                     }
                     let al = (v >> 1) - 1;
-                    if !(al < n_r_ori && *map.add(al as usize) >= -1) {
+                    if !(al < n_r_ori && *map.as_ptr().add(al as usize) >= -1) {
                         err!();
                     }
-                    *ptr.add(jj as usize) = if *map.add(al as usize) < 0 {
+                    *ptr.add(jj as usize) = if *map.as_ptr().add(al as usize) < 0 {
                         0
                     } else {
-                        ((*map.add(al as usize) + 1) << 1) | (v & 1)
+                        ((*map.as_ptr().add(al as usize) + 1) << 1) | (v & 1)
                     };
                 }
                 ptr = ptr.add(nret as usize);
@@ -475,7 +526,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         header,
         line,
         c"LAA".as_ptr(),
-        (&mut laa as *mut *mut c_int).cast::<*mut c_void>(),
+        laa.as_mut_c_void_dst(),
         &mut laa_size,
         BCF_HT_INT as c_int,
     );
@@ -486,19 +537,21 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         let num_laa_vals = num_laa / n_sample;
         laa_map_stride = num_laa_vals + 1;
         let mut max_k = 0;
-        laa_map = libc::malloc(size_of::<c_int>() * laa_map_stride as usize * n_sample as usize)
-            .cast::<c_int>();
-        if laa_map.is_null() {
+        let Some(laa_map_len) = (laa_map_stride as usize).checked_mul(n_sample as usize) else {
+            err!();
+        };
+        if laa_map.try_reserve_exact(laa_map_len).is_err() {
             err!();
         }
-        lr_orig = libc::malloc(size_of::<c_int>() * n_sample as usize).cast::<c_int>();
-        if lr_orig.is_null() {
+        laa_map.resize(laa_map_len, 0);
+        if lr_orig.try_reserve_exact(n_sample as usize).is_err() {
             err!();
         }
+        lr_orig.resize(n_sample as usize, 0);
         let mut laa_changed = 0;
         for sample in 0..n_sample {
             let sample_laa = laa.add((sample * num_laa_vals) as usize);
-            let sample_laa_map = laa_map.add((sample * laa_map_stride) as usize);
+            let sample_laa_map = laa_map.as_mut_ptr().add((sample * laa_map_stride) as usize);
             *sample_laa_map = 0;
             let mut k = 0;
             let mut jj = 0;
@@ -508,21 +561,21 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     break;
                 }
                 let allele = if val > 0 && val < n_r_ori { val } else { 0 };
-                if allele == 0 || *map.add(allele as usize) < 0 {
+                if allele == 0 || *map.as_ptr().add(allele as usize) < 0 {
                     *sample_laa_map.add(jj as usize + 1) = -1;
                     laa_changed = 1;
                     jj += 1;
                     continue;
                 }
-                if allele != *map.add(allele as usize) {
+                if allele != *map.as_ptr().add(allele as usize) {
                     laa_changed = 1;
                 }
-                *sample_laa.add(k as usize) = *map.add(allele as usize);
+                *sample_laa.add(k as usize) = *map.as_ptr().add(allele as usize);
                 k += 1;
                 *sample_laa_map.add(jj as usize + 1) = k;
                 jj += 1;
             }
-            *lr_orig.add(sample as usize) = jj + 1;
+            lr_orig[sample as usize] = jj + 1;
             if max_k < k {
                 max_k = k;
             }
@@ -597,14 +650,8 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         };
 
         let mut mdat = mdat_bytes / size;
-        let mut nret = vcf::bcf_get_format_values(
-            header,
-            line,
-            id,
-            (&mut dat as *mut *mut u8).cast::<*mut c_void>(),
-            &mut mdat,
-            type_,
-        );
+        let mut nret =
+            vcf::bcf_get_format_values(header, line, id, dat.as_mut_c_void_dst(), &mut mdat, type_);
         mdat_bytes = mdat * size;
         if nret < 0 {
             err!();
@@ -627,12 +674,12 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     x if x == BCF_VL_R as c_int => nexp = n_r_ori,
                     x if x == BCF_VL_LA => {
                         inc = 1;
-                        if laa_map.is_null() {
+                        if laa_map.is_empty() {
                             err!();
                         }
                     }
                     x if x == BCF_VL_LR => {
-                        if laa_map.is_null() {
+                        if laa_map.is_empty() {
                             err!();
                         }
                     }
@@ -646,12 +693,12 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     let mut k_dst = 0;
                     let l0 = str_.l;
                     let sample_map = if is_local != 0 {
-                        laa_map.add((sample * laa_map_stride) as usize)
+                        laa_map.as_mut_ptr().add((sample * laa_map_stride) as usize)
                     } else {
-                        map
+                        map.as_mut_ptr()
                     };
                     if is_local != 0 {
-                        nexp = *lr_orig.add(sample as usize) - inc;
+                        nexp = lr_orig[sample as usize] - inc;
                     }
                     let mut k_src = 0;
                     while k_src < nexp {
@@ -668,9 +715,9 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                             continue;
                         }
                         if k_dst != 0 {
-                            kputc(b',' as c_int, &mut str_);
+                            kputc(b',' as c_int, &mut *str_);
                         }
-                        kputsn(ss, ptr.offset_from(ss) as usize, &mut str_);
+                        kputsn(ss, ptr.offset_from(ss) as usize, &mut *str_);
                         ptr = ptr.add(1);
                         ss = ptr;
                         k_dst += 1;
@@ -681,7 +728,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     }
                     let mut l = str_.l - l0;
                     while l < width as usize {
-                        kputc(if l == 0 { b'.' } else { 0 } as c_int, &mut str_);
+                        kputc(if l == 0 { b'.' } else { 0 } as c_int, &mut *str_);
                         l += 1;
                     }
                 }
@@ -695,7 +742,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     let l0 = str_.l;
                     let mut nexp = 0;
                     let sample_n_r_ori = if is_local != 0 {
-                        *lr_orig.add(sample as usize)
+                        lr_orig[sample as usize]
                     } else {
                         n_r_ori
                     };
@@ -705,9 +752,9 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                         n_g_ori
                     };
                     let sample_map = if is_local != 0 {
-                        laa_map.add((sample * laa_map_stride) as usize)
+                        laa_map.as_mut_ptr().add((sample * laa_map_stride) as usize)
                     } else {
-                        map
+                        map.as_mut_ptr()
                     };
                     while ptr < se {
                         if *ptr == 0 {
@@ -729,7 +776,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     }
                     ptr = ss;
                     if nexp == 1 && s0 == b'.' as c_char {
-                        kputc(b'.' as c_int, &mut str_);
+                        kputc(b'.' as c_int, &mut *str_);
                     } else if nexp == sample_n_g_ori {
                         for ia in 0..sample_n_r_ori {
                             for ib in 0..=ia {
@@ -747,9 +794,9 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                                     continue;
                                 }
                                 if k_dst != 0 {
-                                    kputc(b',' as c_int, &mut str_);
+                                    kputc(b',' as c_int, &mut *str_);
                                 }
-                                kputsn(ss, ptr.offset_from(ss) as usize, &mut str_);
+                                kputsn(ss, ptr.offset_from(ss) as usize, &mut *str_);
                                 ptr = ptr.add(1);
                                 ss = ptr;
                                 k_dst += 1;
@@ -774,9 +821,9 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                                 continue;
                             }
                             if k_dst != 0 {
-                                kputc(b',' as c_int, &mut str_);
+                                kputc(b',' as c_int, &mut *str_);
                             }
-                            kputsn(ss, ptr.offset_from(ss) as usize, &mut str_);
+                            kputsn(ss, ptr.offset_from(ss) as usize, &mut *str_);
                             ptr = ptr.add(1);
                             ss = ptr;
                             k_dst += 1;
@@ -788,7 +835,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     }
                     let mut l = str_.l - l0;
                     while l < width as usize {
-                        kputc(0, &mut str_);
+                        kputc(0, &mut *str_);
                         l += 1;
                     }
                 }
@@ -886,14 +933,14 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                 }
                 x if x == BCF_VL_LA => {
                     inc = 1;
-                    if laa_map.is_null() {
+                    if laa_map.is_empty() {
                         err!();
                     }
                     nnew = nori;
                     ndat = nori * n_sample;
                 }
                 x if x == BCF_VL_LR => {
-                    if laa_map.is_null() {
+                    if laa_map.is_empty() {
                         err!();
                     }
                     nnew = nori;
@@ -910,12 +957,12 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     let ptr_src = dat.cast::<i32>().add((sample * nori) as usize);
                     let ptr_dst = dat.cast::<i32>().add((sample * nnew) as usize);
                     let sample_map = if is_local != 0 {
-                        laa_map.add((sample * laa_map_stride) as usize)
+                        laa_map.as_mut_ptr().add((sample * laa_map_stride) as usize)
                     } else {
-                        map
+                        map.as_mut_ptr()
                     };
                     let sample_nori = if is_local != 0 {
-                        std::cmp::min(*lr_orig.add(sample as usize) - inc, nori)
+                        std::cmp::min(lr_orig[sample as usize] - inc, nori)
                     } else {
                         nori
                     };
@@ -944,12 +991,12 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     let ptr_src = dat.cast::<f32>().add((sample * nori) as usize);
                     let ptr_dst = dat.cast::<f32>().add((sample * nnew) as usize);
                     let sample_map = if is_local != 0 {
-                        laa_map.add((sample * laa_map_stride) as usize)
+                        laa_map.as_mut_ptr().add((sample * laa_map_stride) as usize)
                     } else {
-                        map
+                        map.as_mut_ptr()
                     };
                     let sample_nori = if is_local != 0 {
-                        std::cmp::min(*lr_orig.add(sample as usize) - inc, nori)
+                        std::cmp::min(lr_orig[sample as usize] - inc, nori)
                     } else {
                         nori
                     };
@@ -987,12 +1034,12 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     let ptr_src = dat.cast::<i32>().add((sample * nori) as usize);
                     let ptr_dst = dat.cast::<i32>().add((sample * n_g_new) as usize);
                     let sample_map = if is_local != 0 {
-                        laa_map.add((sample * laa_map_stride) as usize)
+                        laa_map.as_mut_ptr().add((sample * laa_map_stride) as usize)
                     } else {
-                        map
+                        map.as_mut_ptr()
                     };
                     let sample_n_r_ori = if is_local != 0 {
-                        *lr_orig.add(sample as usize)
+                        lr_orig[sample as usize]
                     } else {
                         n_r_ori
                     };
@@ -1018,7 +1065,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                             k_dst += 1;
                         }
                     } else {
-                        let mut k_src = -1;
+                        let mut k_src: c_int = -1;
                         'outer_int: for ia in 0..sample_n_r_ori {
                             for ib in 0..=ia {
                                 k_src += 1;
@@ -1046,12 +1093,12 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                     let ptr_src = dat.cast::<f32>().add((sample * nori) as usize);
                     let ptr_dst = dat.cast::<f32>().add((sample * n_g_new) as usize);
                     let sample_map = if is_local != 0 {
-                        laa_map.add((sample * laa_map_stride) as usize)
+                        laa_map.as_mut_ptr().add((sample * laa_map_stride) as usize)
                     } else {
-                        map
+                        map.as_mut_ptr()
                     };
                     let sample_n_r_ori = if is_local != 0 {
-                        *lr_orig.add(sample as usize)
+                        lr_orig[sample as usize]
                     } else {
                         n_r_ori
                     };
@@ -1077,7 +1124,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
                             k_dst += 1;
                         }
                     } else {
-                        let mut k_src = -1;
+                        let mut k_src: c_int = -1;
                         'outer_real: for ia in 0..sample_n_r_ori {
                             for ib in 0..=ia {
                                 k_src += 1;
@@ -1108,12 +1155,6 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         }
     }
 
-    libc::free(str_.s.cast());
-    libc::free(map.cast());
-    libc::free(laa_map.cast());
-    libc::free(lr_orig.cast());
-    libc::free(laa.cast());
-    libc::free(dat.cast());
     0
 }
 pub unsafe fn vcfutils_c_254_is_special_info_type(name: *const c_char) -> c_int {
@@ -1566,10 +1607,12 @@ pub unsafe fn vcfutils_c_186_bcf_trim_alleles(
         return 0;
     }
 
-    let ac = libc::calloc((*line).n_allele() as usize, size_of::<c_int>()).cast::<c_int>();
-    if ac.is_null() {
+    let n_allele = (*line).n_allele() as usize;
+    let mut ac = Vec::new();
+    if ac.try_reserve_exact(n_allele).is_err() {
         return -1;
     }
+    ac.resize(n_allele, 0);
 
     for i in 0..(*line).n_sample() as usize {
         let p = (*gt).p.add(i * (*gt).size as usize);
@@ -1609,24 +1652,22 @@ pub unsafe fn vcfutils_c_186_bcf_trim_alleles(
                 ret = -1;
                 break;
             }
-            *ac.add(allele as usize) += 1;
+            ac[allele as usize] += 1;
         }
         if ret != 0 {
             break;
         }
     }
     if ret != 0 {
-        libc::free(ac.cast());
         return ret;
     }
 
     let rm_set = kbs_init((*line).n_allele() as usize);
     if rm_set.is_null() {
-        libc::free(ac.cast());
         return -1;
     }
     for i in 1..(*line).n_allele() as c_int {
-        if *ac.add(i as usize) == 0 {
+        if ac[i as usize] == 0 {
             kbs_insert(rm_set, i);
             nrm += 1;
         }
@@ -1636,7 +1677,6 @@ pub unsafe fn vcfutils_c_186_bcf_trim_alleles(
         ret = -2;
     }
 
-    libc::free(ac.cast());
     kbs_destroy(rm_set);
     if ret != 0 {
         ret

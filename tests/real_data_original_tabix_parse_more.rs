@@ -110,12 +110,13 @@ unsafe fn parse_interval(conf: &htslib_rs::tbx_conf_t, line: &str) -> ParsedInte
         "failed to parse tabix data line: {line}"
     );
 
-    let seq = if intv.se.is_null() {
-        CStr::from_ptr(intv.ss).to_string_lossy().into_owned()
-    } else {
-        let len = intv.se.offset_from(intv.ss) as usize;
-        let bytes = std::slice::from_raw_parts(intv.ss.cast::<u8>(), len);
+    let ss = intv.ss.expect("parsed interval sequence start").as_ptr();
+    let seq = if let Some(se) = intv.se {
+        let len = se.as_ptr().offset_from(ss) as usize;
+        let bytes = std::slice::from_raw_parts(ss.cast::<u8>(), len);
         String::from_utf8_lossy(bytes).into_owned()
+    } else {
+        CStr::from_ptr(ss).to_string_lossy().into_owned()
     };
 
     ParsedInterval {

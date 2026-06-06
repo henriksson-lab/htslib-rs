@@ -7,10 +7,8 @@ use super::poll_wrap_epoll::{
 use std::ffi::{c_char, c_int, c_void};
 
 // original: Listeners (htslib/ref_cache/listener.c:46)
-#[repr(C)]
 pub struct Listeners {
-    nsocks: usize,
-    sockets: *mut c_int,
+    sockets: Vec<c_int>,
 }
 
 // original: open_socket (htslib/ref_cache/listener.c:51)
@@ -86,15 +84,10 @@ pub unsafe fn ref_cache_listener_c_51_open_socket(
 
 // original: get_listen_sockets (htslib/ref_cache/listener.c:95)
 pub unsafe fn ref_cache_listener_c_95_get_listen_sockets(port: c_int) -> *mut Listeners {
-    let lsocks = libc::calloc(1, std::mem::size_of::<Listeners>()).cast::<Listeners>();
     let mut hints: libc::addrinfo = std::mem::zeroed();
     let mut addr_list: *mut libc::addrinfo = std::ptr::null_mut();
     let mut pnum = [0 as c_char; 20];
     let mut cause: *const c_char = std::ptr::null();
-
-    if lsocks.is_null() {
-        return std::ptr::null_mut();
-    }
 
     hints.ai_family = libc::AF_UNSPEC;
     hints.ai_socktype = libc::SOCK_STREAM;
@@ -112,7 +105,6 @@ pub unsafe fn ref_cache_listener_c_95_get_listen_sockets(port: c_int) -> *mut Li
             c"getaddrinfo failed: %s\n".as_ptr(),
             libc::gai_strerror(res),
         );
-        libc::free(lsocks.cast());
         return std::ptr::null_mut();
     }
 
@@ -128,44 +120,40 @@ pub unsafe fn ref_cache_listener_c_95_get_listen_sockets(port: c_int) -> *mut Li
             crate::htslib_rs::ref_cache::compat::stderr(),
             c"getaddrinfo returned nothing.\n".as_ptr(),
         );
-        libc::free(lsocks.cast());
         return std::ptr::null_mut();
     }
 
-    (*lsocks).sockets = libc::malloc(count * std::mem::size_of::<c_int>()).cast();
-    if (*lsocks).sockets.is_null() {
-        libc::perror(c"Allocating socket list".as_ptr());
+    let mut lsocks = Box::new(Listeners {
+        sockets: Vec::with_capacity(count),
+    });
+    if lsocks.sockets.capacity() < count {
         libc::freeaddrinfo(addr_list);
-        libc::free(lsocks.cast());
         return std::ptr::null_mut();
     }
 
     addr = addr_list;
     while !addr.is_null() {
-        assert!((*lsocks).nsocks < count);
-        *(*lsocks).sockets.add((*lsocks).nsocks) =
-            ref_cache_listener_c_51_open_socket(addr, &mut cause);
-        if *(*lsocks).sockets.add((*lsocks).nsocks) != -1 {
-            (*lsocks).nsocks += 1;
+        assert!(lsocks.sockets.len() < count);
+        let fd = ref_cache_listener_c_51_open_socket(addr, &mut cause);
+        if fd != -1 {
+            lsocks.sockets.push(fd);
         }
         addr = (*addr).ai_next;
     }
 
     libc::freeaddrinfo(addr_list);
 
-    if (*lsocks).nsocks == 0 {
+    if lsocks.sockets.is_empty() {
         libc::fprintf(
             crate::htslib_rs::ref_cache::compat::stderr(),
             c"Failure in %s while getting socket: %s\n".as_ptr(),
             cause,
             libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
         );
-        libc::free((*lsocks).sockets.cast());
-        libc::free(lsocks.cast());
         return std::ptr::null_mut();
     }
 
-    lsocks
+    Box::into_raw(lsocks)
 }
 
 // original: should_adopt_socket (htslib/ref_cache/listener.c:160)
@@ -239,54 +227,39 @@ pub unsafe fn ref_cache_listener_c_203_adopt_listen_sockets(
     min_sock_fd: c_int,
     num_fds: c_int,
 ) -> *mut Listeners {
-    let lsocks = libc::calloc(1, std::mem::size_of::<Listeners>()).cast::<Listeners>();
-
     assert!(min_sock_fd > 0 && num_fds > 0 && num_fds < c_int::MAX - min_sock_fd);
 
-    if lsocks.is_null() {
-        return std::ptr::null_mut();
-    }
-
-    (*lsocks).sockets =
-        libc::malloc(num_fds as usize * std::mem::size_of::<c_int>()).cast::<c_int>();
-    if (*lsocks).sockets.is_null() {
-        libc::perror(c"Allocating socket list".as_ptr());
-        libc::free(lsocks.cast());
-        return std::ptr::null_mut();
-    }
+    let mut lsocks = Box::new(Listeners {
+        sockets: Vec::with_capacity(num_fds as usize),
+    });
 
     let mut fd = min_sock_fd;
     while fd < min_sock_fd + num_fds {
         if ref_cache_listener_c_160_should_adopt_socket(fd) != 0 {
-            *(*lsocks).sockets.add((*lsocks).nsocks) = fd;
-            (*lsocks).nsocks += 1;
+            lsocks.sockets.push(fd);
         } else {
             libc::close(fd);
         }
         fd += 1;
     }
 
-    if (*lsocks).nsocks == 0 {
+    if lsocks.sockets.is_empty() {
         libc::fprintf(
             crate::htslib_rs::ref_cache::compat::stderr(),
             c"No suitable sockets found\n".as_ptr(),
         );
-        libc::free((*lsocks).sockets.cast());
-        libc::free(lsocks.cast());
         return std::ptr::null_mut();
     }
 
-    lsocks
+    Box::into_raw(lsocks)
 }
 
 // original: close_listen_sockets (htslib/ref_cache/listener.c:235)
 pub unsafe fn ref_cache_listener_c_235_close_listen_sockets(lsocks: *mut Listeners) {
     assert!(!lsocks.is_null());
 
-    let mut i = 0usize;
-    while i < (*lsocks).nsocks {
-        libc::close(*(*lsocks).sockets.add(i));
-        i += 1;
+    for &socket in &(*lsocks).sockets {
+        libc::close(socket);
     }
 }
 
@@ -296,7 +269,8 @@ pub unsafe fn ref_cache_listener_c_242_register_listener_pollers(
     pw: *mut Poll_wrap,
 ) -> *mut *mut Pw_item {
     let polled_listeners =
-        libc::calloc((*lsocks).nsocks, std::mem::size_of::<*mut Pw_item>()).cast::<*mut Pw_item>();
+        libc::calloc((*lsocks).sockets.len(), std::mem::size_of::<*mut Pw_item>())
+            .cast::<*mut Pw_item>();
 
     if polled_listeners.is_null() {
         libc::perror(c"Allocating listener poll structs".as_ptr());
@@ -304,10 +278,10 @@ pub unsafe fn ref_cache_listener_c_242_register_listener_pollers(
     }
 
     let mut i = 0usize;
-    while i < (*lsocks).nsocks {
+    while i < (*lsocks).sockets.len() {
         *polled_listeners.add(i) = ref_cache_poll_wrap_epoll_c_78_pw_register(
             pw,
-            *(*lsocks).sockets.add(i),
+            (&(*lsocks).sockets)[i],
             Pw_fd_type::SV_LISTENER,
             (libc::POLLIN | libc::POLLERR | libc::POLLHUP) as u32,
             std::ptr::null_mut::<c_void>(),

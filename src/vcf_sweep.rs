@@ -7,36 +7,62 @@ use crate::htslib_rs::bgzf::bgzf_index_build_init;
 use crate::htslib_rs::hts::{hts_close, hts_get_bgzfp, hts_open};
 use crate::htslib_rs::vcf::{
     bcf1_t, bcf_empty1, bcf_hdr_destroy, bcf_hdr_read, bcf_hdr_t, bcf_read1, bcf_sweep_t,
-    hts_expand_u64, sw_fill_buffer, sw_seek, sw_utell, SW_BWD, SW_FWD,
+    sw_fill_buffer, sw_seek, sw_utell, SW_BWD, SW_FWD,
 };
 
 pub unsafe fn bcf_sweep_init(fname: *const c_char) -> *mut bcf_sweep_t {
-    // Native translation of htslib/vcf_sweep.c bcf_sweep_init().
-    let sw = libc::calloc(1, size_of::<bcf_sweep_t>()).cast::<bcf_sweep_t>();
-    (*sw).file = hts_open(fname, c"r".as_ptr());
-    (*sw).fp = hts_get_bgzfp((*sw).file);
-    if !(*sw).fp.is_null() {
-        bgzf_index_build_init((*sw).fp);
+    let file = hts_open(fname, c"r".as_ptr());
+    let fp = hts_get_bgzfp(file);
+    if !fp.is_null() {
+        bgzf_index_build_init(fp);
     }
-    (*sw).hdr = bcf_hdr_read((*sw).file);
-    (*sw).mrec = 1;
-    (*sw).rec = libc::calloc((*sw).mrec as usize, size_of::<bcf1_t>()).cast::<bcf1_t>();
-    (*sw).block_size = 1024 * 1024 * 3;
-    (*sw).direction = SW_FWD;
-    sw
+
+    let mrec = 1;
+    let rec = libc::calloc(mrec as usize, size_of::<bcf1_t>()).cast::<bcf1_t>();
+
+    Box::into_raw(Box::new(bcf_sweep_t {
+        file,
+        hdr: bcf_hdr_read(file),
+        fp,
+        direction: SW_FWD,
+        block_size: 1024 * 1024 * 3,
+        rec,
+        nrec: 0,
+        mrec,
+        lrid: 0,
+        lpos: 0,
+        lnals: 0,
+        lals_len: 0,
+        mlals: 0,
+        lals: std::ptr::null_mut(),
+        idx: std::ptr::null_mut(),
+        iidx: 0,
+        nidx: 0,
+        midx: 0,
+        idx_done: 0,
+    }))
 }
 
 pub unsafe fn bcf_sweep_destroy(sw: *mut bcf_sweep_t) {
-    // Native translation of htslib/vcf_sweep.c bcf_sweep_destroy().
-    for i in 0..(*sw).mrec {
-        bcf_empty1((*sw).rec.add(i as usize));
+    if sw.is_null() {
+        return;
     }
-    libc::free((*sw).idx.cast());
-    libc::free((*sw).rec.cast());
-    libc::free((*sw).lals.cast());
-    bcf_hdr_destroy((*sw).hdr);
-    hts_close((*sw).file);
-    libc::free(sw.cast());
+
+    let sw = Box::from_raw(sw);
+    for i in 0..sw.mrec {
+        bcf_empty1(sw.rec.add(i as usize));
+    }
+    if !sw.idx.is_null() {
+        drop(Vec::from_raw_parts(
+            sw.idx,
+            sw.nidx as usize,
+            sw.midx as usize,
+        ));
+    }
+    libc::free(sw.rec.cast());
+    libc::free(sw.lals.cast());
+    bcf_hdr_destroy(sw.hdr);
+    hts_close(sw.file);
 }
 
 pub unsafe fn bcf_sweep_fwd(sw: *mut bcf_sweep_t) -> *mut bcf1_t {
@@ -64,9 +90,16 @@ pub unsafe fn bcf_sweep_fwd(sw: *mut bcf_sweep_t) -> *mut bcf1_t {
         && ((*sw).nidx == 0
             || pos - *(*sw).idx.add((*sw).nidx as usize - 1) as i64 > (*sw).block_size as i64)
     {
-        (*sw).nidx += 1;
-        hts_expand_u64((*sw).nidx, &mut (*sw).midx, &mut (*sw).idx);
-        *(*sw).idx.add((*sw).nidx as usize - 1) = pos as u64;
+        let mut idx = if (*sw).idx.is_null() {
+            Vec::new()
+        } else {
+            Vec::from_raw_parts((*sw).idx, (*sw).nidx as usize, (*sw).midx as usize)
+        };
+        idx.push(pos as u64);
+        (*sw).idx = idx.as_mut_ptr();
+        (*sw).nidx = idx.len() as _;
+        (*sw).midx = idx.capacity() as _;
+        std::mem::forget(idx);
     }
     rec
 }

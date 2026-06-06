@@ -119,6 +119,7 @@ pub(crate) mod decode_pipeline {
         BAM_FREAD1, BAM_FREVERSE, BAM_FUNMAP, ORDER_COORD,
     };
     use std::ffi::{c_char, c_int, c_uchar, c_uint, c_void};
+    use std::ptr::NonNull;
 
     // ---- libc shims (match the mirror's free-standing libc calls) ----
     unsafe fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
@@ -824,10 +825,10 @@ pub(crate) mod decode_pipeline {
 
     #[repr(C)]
     pub struct cram_decode_job {
-        pub fd: *mut cram_fd,
-        pub c: *mut cram_container,
-        pub s: *mut cram_slice,
-        pub h: *mut sam_hdr_t,
+        pub fd: Option<NonNull<cram_fd>>,
+        pub c: Option<NonNull<cram_container>>,
+        pub s: Option<NonNull<cram_slice>>,
+        pub h: Option<NonNull<sam_hdr_t>>,
         pub exit_code: c_int,
     }
 
@@ -3842,7 +3843,11 @@ pub(crate) mod decode_pipeline {
     // original: cram_decode_slice_thread (htslib/cram/cram_decode.c:3036)
     unsafe extern "C" fn cram_decode_slice_thread(arg: *mut c_void) -> *mut c_void {
         let j = arg as *mut cram_decode_job;
-        (*j).exit_code = cram_decode_slice((*j).fd, (*j).c, (*j).s, (*j).h);
+        let (Some(fd), Some(c), Some(s), Some(h)) = ((*j).fd, (*j).c, (*j).s, (*j).h) else {
+            (*j).exit_code = -1;
+            return j as *mut c_void;
+        };
+        (*j).exit_code = cram_decode_slice(fd.as_ptr(), c.as_ptr(), s.as_ptr(), h.as_ptr());
         j as *mut c_void
     }
 
@@ -3860,10 +3865,16 @@ pub(crate) mod decode_pipeline {
         if j.is_null() {
             return -1;
         }
-        (*j).fd = fd;
-        (*j).c = c;
-        (*j).s = s;
-        (*j).h = bfd;
+        std::ptr::write(
+            j,
+            cram_decode_job {
+                fd: NonNull::new(fd),
+                c: NonNull::new(c),
+                s: NonNull::new(s),
+                h: NonNull::new(bfd),
+                exit_code: 0,
+            },
+        );
         let nonblock = if hts_tpool_process_sz((*fd).rqueue.cast()) != 0 {
             1
         } else {
@@ -4146,8 +4157,10 @@ pub(crate) mod decode_pipeline {
             let mut s_next: *mut cram_slice = std::ptr::null_mut();
             if !(*fd).job_pending.is_null() {
                 let j = (*fd).job_pending as *mut cram_decode_job;
-                c_next = (*j).c;
-                s_next = (*j).s;
+                if let (Some(c), Some(s)) = ((*j).c, (*j).s) {
+                    c_next = c.as_ptr();
+                    s_next = s.as_ptr();
+                }
                 free((*fd).job_pending);
                 (*fd).job_pending = std::ptr::null_mut();
             } else if (*fd).ooc == 0 {
@@ -4318,8 +4331,18 @@ pub(crate) mod decode_pipeline {
                 return std::ptr::null_mut();
             }
             let j_0 = hts_tpool_result_data(res) as *mut cram_decode_job;
-            c_curr = (*j_0).c;
-            s_curr = (*j_0).s;
+            let (Some(c), Some(s)) = ((*j_0).c, (*j_0).s) else {
+                hts_log!(
+                    HTS_LOG_ERROR,
+                    b"cram_next_slice\0" as *const u8 as *const c_char,
+                    b"Slice decode failure\0" as *const u8 as *const c_char
+                );
+                (*fd).eof = 0;
+                hts_tpool_delete_result(res, 1);
+                return std::ptr::null_mut();
+            };
+            c_curr = c.as_ptr();
+            s_curr = s.as_ptr();
             if (*j_0).exit_code != 0 {
                 hts_log!(
                     HTS_LOG_ERROR,

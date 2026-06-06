@@ -36,29 +36,20 @@ pub const HTS_FORMAT_REGION_LIST: htsFormatCategory = 4;
 pub type htsExactFormat = u32;
 pub type htsCompression = u32;
 pub type hts_fmt_option = u32;
-// original: htsThreadPool (htslib/htslib/hts.h) — native mirror; `pool` is the
-// native thread pool. Layout matches the C struct (pool pointer + qsize).
-#[repr(C)]
 pub struct htsThreadPool {
     pub pool: *mut crate::htslib_rs::thread_pool::hts_tpool,
     pub qsize: c_int,
 }
-// Native equivalent of htslib's `hts_opt` (htslib/hts.h:204). Byte-identical
-// to the hts_sys binding (same layout: arg/opt/val/next, val is a union of an
-// int and a char* with 8-byte alignment). Defining locally retires the
-// hts_sys type alias.
-#[repr(C)]
 pub union hts_opt_val {
     pub i: c_int,
     pub s: *mut c_char,
 }
 
-#[repr(C)]
 pub struct hts_opt {
-    pub arg: *mut c_char,
+    pub arg: NonNull<c_char>,
     pub opt: u32,
     pub val: hts_opt_val,
-    pub next: *mut hts_opt,
+    pub next: Option<NonNull<hts_opt>>,
 }
 pub const HTS_FORMAT_UNKNOWN_FORMAT: htsExactFormat = 0;
 pub const HTS_FORMAT_BINARY_FORMAT: htsExactFormat = 1;
@@ -3641,17 +3632,17 @@ pub unsafe fn hts_c_1021_hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_ch
         return -1;
     }
 
-    let o = c_compat::malloc(std::mem::size_of::<hts_opt>() as u64).cast::<hts_opt>();
-    if o.is_null() {
+    let Some(arg) = NonNull::new(c_compat::strdup(c_arg)) else {
         return -1;
-    }
-    (*o).arg = c_compat::strdup(c_arg);
-    if (*o).arg.is_null() {
-        c_compat::free(o.cast());
-        return -1;
-    }
+    };
+    let mut o = Box::new(hts_opt {
+        arg,
+        opt: 0,
+        val: hts_opt_val { i: 0 },
+        next: None,
+    });
 
-    let mut val = libc::strchr((*o).arg, b'=' as c_int);
+    let mut val = libc::strchr(o.arg.as_ptr(), b'=' as c_int);
     if val.is_null() {
         val = c"1".as_ptr().cast_mut();
     } else {
@@ -3659,158 +3650,156 @@ pub unsafe fn hts_c_1021_hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_ch
         val = val.add(1);
     }
 
-    let key = CStr::from_ptr((*o).arg).to_bytes();
+    let key = CStr::from_ptr(o.arg.as_ptr()).to_bytes();
     let mut endp: *mut c_char = std::ptr::null_mut();
     if hts_c_1021_opt_key_matches(key, b"decode_md") {
-        (*o).opt = CRAM_OPT_DECODE_MD;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_DECODE_MD;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"verbosity") {
-        (*o).opt = CRAM_OPT_VERBOSITY;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_VERBOSITY;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"seqs_per_slice") {
-        (*o).opt = CRAM_OPT_SEQS_PER_SLICE;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_SEQS_PER_SLICE;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"bases_per_slice") {
-        (*o).opt = CRAM_OPT_BASES_PER_SLICE;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_BASES_PER_SLICE;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"slices_per_container") {
-        (*o).opt = CRAM_OPT_SLICES_PER_CONTAINER;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_SLICES_PER_CONTAINER;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"embed_ref") {
-        (*o).opt = CRAM_OPT_EMBED_REF;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_EMBED_REF;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"no_ref") {
-        (*o).opt = CRAM_OPT_NO_REF;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_NO_REF;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"pos_delta") {
-        (*o).opt = CRAM_OPT_POS_DELTA;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_POS_DELTA;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"ignore_md5") {
-        (*o).opt = CRAM_OPT_IGNORE_MD5;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_IGNORE_MD5;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"use_bzip2") {
-        (*o).opt = CRAM_OPT_USE_BZIP2;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_USE_BZIP2;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"use_rans") {
-        (*o).opt = CRAM_OPT_USE_RANS;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_USE_RANS;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"use_lzma") {
-        (*o).opt = CRAM_OPT_USE_LZMA;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_USE_LZMA;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"use_tok") {
-        (*o).opt = CRAM_OPT_USE_TOK;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_USE_TOK;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"use_fqz") {
-        (*o).opt = CRAM_OPT_USE_FQZ;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_USE_FQZ;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"use_arith") {
-        (*o).opt = CRAM_OPT_USE_ARITH;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_USE_ARITH;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"fast") {
-        (*o).opt = HTS_OPT_PROFILE;
-        (*o).val.i = HTS_PROFILE_FAST;
+        o.opt = HTS_OPT_PROFILE;
+        o.val.i = HTS_PROFILE_FAST;
     } else if hts_c_1021_opt_key_matches(key, b"normal") {
-        (*o).opt = HTS_OPT_PROFILE;
-        (*o).val.i = HTS_PROFILE_NORMAL;
+        o.opt = HTS_OPT_PROFILE;
+        o.val.i = HTS_PROFILE_NORMAL;
     } else if hts_c_1021_opt_key_matches(key, b"small") {
-        (*o).opt = HTS_OPT_PROFILE;
-        (*o).val.i = HTS_PROFILE_SMALL;
+        o.opt = HTS_OPT_PROFILE;
+        o.val.i = HTS_PROFILE_SMALL;
     } else if hts_c_1021_opt_key_matches(key, b"archive") {
-        (*o).opt = HTS_OPT_PROFILE;
-        (*o).val.i = HTS_PROFILE_ARCHIVE;
+        o.opt = HTS_OPT_PROFILE;
+        o.val.i = HTS_PROFILE_ARCHIVE;
     } else if hts_c_1021_opt_key_matches(key, b"reference") {
-        (*o).opt = CRAM_OPT_REFERENCE;
-        (*o).val.s = val;
+        o.opt = CRAM_OPT_REFERENCE;
+        o.val.s = val;
     } else if hts_c_1021_opt_key_matches(key, b"version") {
-        (*o).opt = CRAM_OPT_VERSION;
-        (*o).val.s = val;
+        o.opt = CRAM_OPT_VERSION;
+        o.val.s = val;
     } else if hts_c_1021_opt_key_matches(key, b"multi_seq_per_slice") {
-        (*o).opt = CRAM_OPT_MULTI_SEQ_PER_SLICE;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_MULTI_SEQ_PER_SLICE;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"nthreads") {
-        (*o).opt = HTS_OPT_NTHREADS;
-        (*o).val.i = libc::atoi(val);
+        o.opt = HTS_OPT_NTHREADS;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"cache_size") {
-        (*o).opt = HTS_OPT_CACHE_SIZE;
-        (*o).val.i = libc::strtol(val, &mut endp, 0) as c_int;
+        o.opt = HTS_OPT_CACHE_SIZE;
+        o.val.i = libc::strtol(val, &mut endp, 0) as c_int;
         match *endp {
             x if x == b'g' as c_char || x == b'G' as c_char => {
-                (*o).val.i *= 1024;
-                (*o).val.i *= 1024;
-                (*o).val.i *= 1024;
+                o.val.i *= 1024;
+                o.val.i *= 1024;
+                o.val.i *= 1024;
             }
             x if x == b'm' as c_char || x == b'M' as c_char => {
-                (*o).val.i *= 1024;
-                (*o).val.i *= 1024;
+                o.val.i *= 1024;
+                o.val.i *= 1024;
             }
             x if x == b'k' as c_char || x == b'K' as c_char => {
-                (*o).val.i *= 1024;
+                o.val.i *= 1024;
             }
             0 => {}
             _ => {
-                c_compat::free((*o).arg.cast());
-                c_compat::free(o.cast());
+                c_compat::free(o.arg.as_ptr().cast());
                 return -1;
             }
         }
     } else if hts_c_1021_opt_key_matches(key, b"required_fields") {
-        (*o).opt = CRAM_OPT_REQUIRED_FIELDS;
-        (*o).val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
+        o.opt = CRAM_OPT_REQUIRED_FIELDS;
+        o.val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
     } else if hts_c_1021_opt_key_matches(key, b"lossy_names") {
-        (*o).opt = CRAM_OPT_LOSSY_NAMES;
-        (*o).val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
+        o.opt = CRAM_OPT_LOSSY_NAMES;
+        o.val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
     } else if hts_c_1021_opt_key_matches(key, b"name_prefix") {
-        (*o).opt = CRAM_OPT_PREFIX;
-        (*o).val.s = val;
+        o.opt = CRAM_OPT_PREFIX;
+        o.val.s = val;
     } else if key == b"store_md" {
-        (*o).opt = CRAM_OPT_STORE_MD;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_STORE_MD;
+        o.val.i = libc::atoi(val);
     } else if key == b"store_nm" {
-        (*o).opt = CRAM_OPT_STORE_NM;
-        (*o).val.i = libc::atoi(val);
+        o.opt = CRAM_OPT_STORE_NM;
+        o.val.i = libc::atoi(val);
     } else if hts_c_1021_opt_key_matches(key, b"block_size") {
-        (*o).opt = HTS_OPT_BLOCK_SIZE;
-        (*o).val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
+        o.opt = HTS_OPT_BLOCK_SIZE;
+        o.val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
     } else if hts_c_1021_opt_key_matches(key, b"level") {
-        (*o).opt = HTS_OPT_COMPRESSION_LEVEL;
-        (*o).val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
+        o.opt = HTS_OPT_COMPRESSION_LEVEL;
+        o.val.i = libc::strtol(val, std::ptr::null_mut(), 0) as c_int;
     } else if hts_c_1021_opt_key_matches(key, b"filter") {
-        (*o).opt = HTS_OPT_FILTER;
-        (*o).val.s = val;
+        o.opt = HTS_OPT_FILTER;
+        o.val.s = val;
     } else if hts_c_1021_opt_key_matches(key, b"fastq_aux") {
-        (*o).opt = crate::htslib_rs::sam::FASTQ_OPT_AUX as hts_fmt_option;
-        (*o).val.s = val;
+        o.opt = crate::htslib_rs::sam::FASTQ_OPT_AUX as hts_fmt_option;
+        o.val.s = val;
     } else if hts_c_1021_opt_key_matches(key, b"fastq_barcode") {
-        (*o).opt = crate::htslib_rs::sam::FASTQ_OPT_BARCODE as hts_fmt_option;
-        (*o).val.s = val;
+        o.opt = crate::htslib_rs::sam::FASTQ_OPT_BARCODE as hts_fmt_option;
+        o.val.s = val;
     } else if hts_c_1021_opt_key_matches(key, b"fastq_rnum") {
-        (*o).opt = crate::htslib_rs::sam::FASTQ_OPT_RNUM as hts_fmt_option;
-        (*o).val.i = 1;
+        o.opt = crate::htslib_rs::sam::FASTQ_OPT_RNUM as hts_fmt_option;
+        o.val.i = 1;
     } else if hts_c_1021_opt_key_matches(key, b"fastq_casava") {
-        (*o).opt = crate::htslib_rs::sam::FASTQ_OPT_CASAVA as hts_fmt_option;
-        (*o).val.i = 1;
+        o.opt = crate::htslib_rs::sam::FASTQ_OPT_CASAVA as hts_fmt_option;
+        o.val.i = 1;
     } else if hts_c_1021_opt_key_matches(key, b"fastq_name2") {
-        (*o).opt = crate::htslib_rs::sam::FASTQ_OPT_NAME2 as hts_fmt_option;
-        (*o).val.i = 1;
+        o.opt = crate::htslib_rs::sam::FASTQ_OPT_NAME2 as hts_fmt_option;
+        o.val.i = 1;
     } else if hts_c_1021_opt_key_matches(key, b"fastq_umi") {
-        (*o).opt = crate::htslib_rs::sam::FASTQ_OPT_UMI as hts_fmt_option;
-        (*o).val.s = val;
+        o.opt = crate::htslib_rs::sam::FASTQ_OPT_UMI as hts_fmt_option;
+        o.val.s = val;
     } else if hts_c_1021_opt_key_matches(key, b"fastq_umi_regex") {
-        (*o).opt = crate::htslib_rs::sam::FASTQ_OPT_UMI_REGEX as hts_fmt_option;
-        (*o).val.s = val;
+        o.opt = crate::htslib_rs::sam::FASTQ_OPT_UMI_REGEX as hts_fmt_option;
+        o.val.s = val;
     } else {
-        c_compat::free((*o).arg.cast());
-        c_compat::free(o.cast());
+        c_compat::free(o.arg.as_ptr().cast());
         return -1;
     }
 
-    (*o).next = std::ptr::null_mut();
+    let o = Box::into_raw(o);
     if !(*opts).is_null() {
         let mut t = *opts;
-        while !(*t).next.is_null() {
-            t = (*t).next;
+        while let Some(next) = (*t).next {
+            t = next.as_ptr();
         }
-        (*t).next = o;
+        (*t).next = NonNull::new(o);
     } else {
         *opts = o;
     }
@@ -3851,7 +3840,7 @@ pub unsafe fn hts_c_1247_hts_opt_apply(fp: *mut htsFile, mut opts: *mut hts_opt)
                 }
             }
         }
-        opts = (*opts).next;
+        opts = (*opts).next.map_or(std::ptr::null_mut(), NonNull::as_ptr);
     }
     0
 }
@@ -3964,9 +3953,9 @@ pub unsafe fn hts_opt_free(opts: *mut hts_opt) {
 pub unsafe fn hts_c_1279_hts_opt_free(mut opts: *mut hts_opt) {
     while !opts.is_null() {
         let last = opts;
-        opts = (*opts).next;
-        c_compat::free((*last).arg.cast());
-        c_compat::free(last.cast());
+        opts = (*opts).next.map_or(std::ptr::null_mut(), NonNull::as_ptr);
+        let last = Box::from_raw(last);
+        c_compat::free(last.arg.as_ptr().cast());
     }
 }
 
@@ -11783,12 +11772,13 @@ mod tests {
                 hts_c_1021_hts_opt_add(&mut opts, c"reference=ref.fa".as_ptr()),
                 0
             );
-            assert_eq!((*(*opts).next).opt, CRAM_OPT_REFERENCE);
-            assert_eq!(CStr::from_ptr((*(*opts).next).val.s).to_bytes(), b"ref.fa");
+            let next = (*opts).next.unwrap().as_ptr();
+            assert_eq!((*next).opt, CRAM_OPT_REFERENCE);
+            assert_eq!(CStr::from_ptr((*next).val.s).to_bytes(), b"ref.fa");
 
             let mut apply_fp: htsFile = std::mem::zeroed();
             apply_fp.format.format = HTS_FORMAT_SAM;
-            assert_eq!(hts_c_1247_hts_opt_apply(&mut apply_fp, (*opts).next), 0);
+            assert_eq!(hts_c_1247_hts_opt_apply(&mut apply_fp, next), 0);
             assert_eq!(CStr::from_ptr(apply_fp.fn_aux).to_bytes(), b"ref.fa");
             c_compat::free(apply_fp.fn_aux.cast());
             hts_c_1279_hts_opt_free(opts);
@@ -11828,8 +11818,9 @@ mod tests {
             let parsed_opt = parsed.specific.cast::<hts_opt>();
             assert_eq!((*parsed_opt).opt, HTS_OPT_COMPRESSION_LEVEL);
             assert_eq!((*parsed_opt).val.i, 7);
+            let next = (*parsed_opt).next.unwrap().as_ptr();
             assert_eq!(
-                (*(*parsed_opt).next).opt,
+                (*next).opt,
                 crate::htslib_rs::sam::FASTQ_OPT_RNUM as hts_fmt_option
             );
             hts_c_1279_hts_opt_free(parsed.specific.cast::<hts_opt>());

@@ -13,27 +13,10 @@ pub struct knetFile {
     _private: [u8; 0],
 }
 
-#[repr(C)]
 struct knet_file_layout {
-    type_: c_int,
     fd: c_int,
     offset: i64,
-    host: *mut c_char,
-    port: *mut c_char,
-    ctrl_fd: c_int,
-    pasv_ip: [c_int; 4],
-    pasv_port: c_int,
-    max_response: c_int,
-    no_reconnect: c_int,
-    is_ready: c_int,
-    response: *mut c_char,
-    retr: *mut c_char,
-    size_cmd: *mut c_char,
-    seek_offset: i64,
-    file_size: i64,
-    path: *mut c_char,
-    http_host: *mut c_char,
-    hf: *mut hFILE,
+    hf: OwnedHFile,
 }
 
 #[repr(C)]
@@ -61,6 +44,30 @@ unsafe fn hfile_plugin_destroy_fn(ptr: *const c_void) -> HFilePluginDestroyFn {
     std::mem::transmute_copy(&ptr)
 }
 
+struct ConstNonNull<T> {
+    ptr: NonNull<T>,
+}
+
+impl<T> Clone for ConstNonNull<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for ConstNonNull<T> {}
+
+impl<T> ConstNonNull<T> {
+    unsafe fn new(ptr: *const T) -> Option<Self> {
+        NonNull::new(ptr.cast_mut()).map(|ptr| Self { ptr })
+    }
+
+    fn as_ptr(self) -> *const T {
+        self.ptr.as_ptr()
+    }
+}
+
+unsafe impl<T> Send for ConstNonNull<T> {}
+
 #[repr(C)]
 struct hfile_scheme_handler_layout {
     open: Option<HFileOpenFn>,
@@ -80,12 +87,12 @@ struct hfile_plugin_layout {
     destroy: *const c_void,
 }
 
-// original: hFILE_plugin_list (htslib/hfile.c:975)
-#[repr(C)]
 pub struct hFILE_plugin_list {
     plugin: hfile_plugin_layout,
-    next: *mut hFILE_plugin_list,
+    next: Option<NonNull<hFILE_plugin_list>>,
 }
+
+unsafe impl Send for hFILE_plugin_list {}
 
 #[repr(C)]
 struct hfile_layout {
@@ -1399,12 +1406,15 @@ pub unsafe fn hfile_c_956_hfile_plugin_init_crypt4gh_needed(self_: *mut hFILE_pl
 #[derive(Default)]
 struct HFilePluginState {
     schemes: Option<Vec<HFileSchemeEntry>>,
-    plugins: Vec<usize>,
+    // Plugin list links store NonNull pointers to node contents; Box keeps those
+    // addresses stable even if the Vec reallocates.
+    #[allow(clippy::vec_box)]
+    plugins: Vec<Box<hFILE_plugin_list>>,
 }
 
 struct HFileSchemeEntry {
-    scheme: usize,
-    handler: usize,
+    scheme: ConstNonNull<c_char>,
+    handler: ConstNonNull<hFILE_scheme_handler>,
 }
 
 fn hfile_plugin_state() -> &'static Mutex<HFilePluginState> {
@@ -1421,26 +1431,29 @@ unsafe fn hfile_c_1053_add_scheme_handler_locked(
         Some(schemes) => schemes,
         None => return,
     };
-    let handler_layout = handler.cast::<hfile_scheme_handler_layout>();
+    let Some(scheme) = ConstNonNull::new(scheme) else {
+        return;
+    };
+    let Some(handler) = ConstNonNull::new(handler) else {
+        return;
+    };
+    let handler_layout = handler.as_ptr().cast::<hfile_scheme_handler_layout>();
     if (*handler_layout).open.is_none() || (*handler_layout).isremote.is_none() {
         return;
     }
 
     for entry in schemes.iter_mut() {
-        if libc::strcmp(entry.scheme as *const c_char, scheme) == 0 {
-            if hfile_c_1011_priority(handler)
-                > hfile_c_1011_priority(entry.handler as *const hFILE_scheme_handler)
+        if libc::strcmp(entry.scheme.as_ptr(), scheme.as_ptr()) == 0 {
+            if hfile_c_1011_priority(handler.as_ptr())
+                > hfile_c_1011_priority(entry.handler.as_ptr())
             {
-                entry.handler = handler as usize;
+                entry.handler = handler;
             }
             return;
         }
     }
 
-    schemes.push(HFileSchemeEntry {
-        scheme: scheme as usize,
-        handler: handler as usize,
-    });
+    schemes.push(HFileSchemeEntry { scheme, handler });
 }
 
 // original: hfile_add_scheme_handler (htslib/hfile.c:1053)
@@ -1465,28 +1478,27 @@ unsafe fn hfile_c_1079_init_add_plugin_impl<F>(
 where
     F: FnOnce(*mut hFILE_plugin) -> c_int,
 {
-    let p = crate::htslib_rs::c_compat::malloc(std::mem::size_of::<hFILE_plugin_list>() as u64)
-        .cast::<hFILE_plugin_list>();
-    if p.is_null() {
-        return -1;
-    }
+    let mut p = Box::new(hFILE_plugin_list {
+        plugin: hfile_plugin_layout {
+            api_version: 1,
+            obj,
+            name: std::ptr::null(),
+            destroy: std::ptr::null(),
+        },
+        next: None,
+    });
 
-    (*p).plugin.api_version = 1;
-    (*p).plugin.obj = obj;
-    (*p).plugin.name = std::ptr::null();
-    (*p).plugin.destroy = std::ptr::null();
-    (*p).next = std::ptr::null_mut();
-
-    let ret = init((&mut (*p).plugin as *mut hfile_plugin_layout).cast());
+    let ret = init((&mut p.plugin as *mut hfile_plugin_layout).cast());
     if ret != 0 {
-        crate::htslib_rs::c_compat::free(p.cast());
         return ret;
     }
 
     let mut state = hfile_plugin_state().lock().unwrap();
-    let head = state.plugins.last().copied().unwrap_or(0) as *mut hFILE_plugin_list;
-    (*p).next = head;
-    state.plugins.push(p as usize);
+    p.next = state
+        .plugins
+        .last()
+        .map(|plugin| NonNull::from(plugin.as_ref()));
+    state.plugins.push(p);
     let _ = pluginname;
     0
 }
@@ -1676,8 +1688,8 @@ pub unsafe fn hfile_c_1176_find_scheme_handler(s: *const c_char) -> *const hFILE
     let state = hfile_plugin_state().lock().unwrap();
     if let Some(schemes) = &state.schemes {
         for entry in schemes {
-            if libc::strcmp(entry.scheme as *const c_char, scheme.as_ptr()) == 0 {
-                return entry.handler as *const hFILE_scheme_handler;
+            if libc::strcmp(entry.scheme.as_ptr(), scheme.as_ptr()) == 0 {
+                return entry.handler.as_ptr();
             }
         }
     }
@@ -1689,13 +1701,11 @@ pub unsafe fn hfile_c_983_hfile_shutdown(do_close_plugin: c_int) {
     let mut state = hfile_plugin_state().lock().unwrap();
     state.schemes = None;
     while let Some(p) = state.plugins.pop() {
-        let p = p as *mut hFILE_plugin_list;
-        if !(*p).plugin.destroy.is_null() {
-            let destroy = hfile_plugin_destroy_fn((*p).plugin.destroy);
+        if !p.plugin.destroy.is_null() {
+            let destroy = hfile_plugin_destroy_fn(p.plugin.destroy);
             destroy();
         }
         let _ = do_close_plugin;
-        crate::htslib_rs::c_compat::free(p.cast());
     }
 }
 
@@ -1771,13 +1781,13 @@ pub unsafe fn hfile_c_1218_hfile_list_schemes(
     let mut ns = 0;
     if let Some(schemes) = &state.schemes {
         for entry in schemes {
-            let handler = entry.handler as *const hfile_scheme_handler_layout;
+            let handler = entry.handler.as_ptr().cast::<hfile_scheme_handler_layout>();
             if !plugin.is_null() && libc::strcmp((*handler).provider, plugin) != 0 {
                 continue;
             }
 
             if ns < *nschemes {
-                *sc_list.add(ns as usize) = entry.scheme as *const c_char;
+                *sc_list.add(ns as usize) = entry.scheme.as_ptr();
             }
             ns += 1;
         }
@@ -1809,9 +1819,8 @@ pub unsafe fn hfile_c_1257_hfile_list_plugins(
     np += 1;
 
     for p in state.plugins.iter().rev() {
-        let p = *p as *mut hFILE_plugin_list;
         if np < *nplugins {
-            *plist.add(np as usize) = (*p).plugin.name;
+            *plist.add(np as usize) = p.plugin.name;
         }
         np += 1;
     }
@@ -1833,8 +1842,7 @@ pub unsafe fn hfile_c_1293_hfile_has_plugin(name: *const c_char) -> c_int {
 
     let state = hfile_plugin_state().lock().unwrap();
     for p in state.plugins.iter().rev() {
-        let p = *p as *mut hFILE_plugin_list;
-        if libc::strcmp((*p).plugin.name, name) == 0 {
+        if libc::strcmp(p.plugin.name, name) == 0 {
             return 1;
         }
     }
@@ -1906,13 +1914,7 @@ pub unsafe fn hfile_c_1364_haddextension(
 }
 
 pub unsafe fn hfile_c_1416_knet_open(fn_: *const c_char, mode: *const c_char) -> *mut knetFile {
-    let fp = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<knet_file_layout>() as u64)
-        .cast::<knet_file_layout>();
-    if fp.is_null() {
-        return std::ptr::null_mut();
-    }
-
-    (*fp).hf = if libc::strcmp(fn_, c"-".as_ptr()) == 0 {
+    let hf = if libc::strcmp(fn_, c"-".as_ptr()) == 0 {
         hfile_c_761_hopen_fd_stdinout(mode)
     } else if libc::strncmp(fn_, c"file://".as_ptr(), 7) == 0 {
         hfile_c_747_hopen_fd_fileuri(fn_, mode)
@@ -1921,34 +1923,23 @@ pub unsafe fn hfile_c_1416_knet_open(fn_: *const c_char, mode: *const c_char) ->
     } else {
         hopen(fn_, mode)
     };
-    if (*fp).hf.is_null() {
-        crate::htslib_rs::c_compat::free(fp.cast());
+    let Some(hf) = OwnedHFile::from_raw(hf) else {
         return std::ptr::null_mut();
-    }
+    };
 
-    let hf = (*fp).hf.cast::<hfile_layout>();
-    (*fp).fd = if std::ptr::eq((*hf).backend, &FD_BACKEND) {
-        (*((*fp).hf.cast::<hfile_fd_layout>())).fd
+    let fd = if std::ptr::eq((*(hf.as_ptr().cast::<hfile_layout>())).backend, &FD_BACKEND) {
+        (*(hf.as_ptr().cast::<hfile_fd_layout>())).fd
     } else {
         -1
     };
-    fp.cast()
+    Box::into_raw(Box::new(knet_file_layout { fd, offset: 0, hf })).cast()
 }
 
 pub unsafe fn hfile_c_1433_knet_dopen(fd: c_int, mode: *const c_char) -> *mut knetFile {
-    let fp = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<knet_file_layout>() as u64)
-        .cast::<knet_file_layout>();
-    if fp.is_null() {
+    let Some(hf) = OwnedHFile::from_raw(hdopen(fd, mode)) else {
         return std::ptr::null_mut();
-    }
-
-    (*fp).hf = hdopen(fd, mode);
-    if (*fp).hf.is_null() {
-        crate::htslib_rs::c_compat::free(fp.cast());
-        return std::ptr::null_mut();
-    }
-    (*fp).fd = fd;
-    fp.cast()
+    };
+    Box::into_raw(Box::new(knet_file_layout { fd, offset: 0, hf })).cast()
 }
 
 pub unsafe fn hfile_c_1445_knet_read(
@@ -1957,7 +1948,7 @@ pub unsafe fn hfile_c_1445_knet_read(
     len: size_t,
 ) -> libc::ssize_t {
     let fp = fp.cast::<knet_file_layout>();
-    let r = htslib_hfile_h_247_hread((*fp).hf, buf, len);
+    let r = htslib_hfile_h_247_hread((*fp).hf.as_ptr(), buf, len);
     if r > 0 {
         (*fp).offset += r as i64;
     }
@@ -1970,7 +1961,7 @@ pub unsafe fn hfile_c_1452_knet_seek(
     whence: c_int,
 ) -> libc::off_t {
     let fp = fp.cast::<knet_file_layout>();
-    let r = hseek((*fp).hf, off, whence);
+    let r = hseek((*fp).hf.as_ptr(), off, whence);
     if r >= 0 {
         (*fp).offset = r as i64;
     }
@@ -1978,10 +1969,8 @@ pub unsafe fn hfile_c_1452_knet_seek(
 }
 
 pub unsafe fn hfile_c_1460_knet_close(fp: *mut knetFile) -> c_int {
-    let fp = fp.cast::<knet_file_layout>();
-    let r = hclose((*fp).hf);
-    crate::htslib_rs::c_compat::free(fp.cast());
-    r
+    let fp = *Box::from_raw(fp.cast::<knet_file_layout>());
+    fp.hf.close()
 }
 
 pub unsafe fn hfile_oflags(mode: *const c_char) -> c_int {

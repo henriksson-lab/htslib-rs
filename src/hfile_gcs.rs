@@ -27,6 +27,7 @@ use crate::htslib_rs::{
     hts::{hFILE, hts_verbose, kputc, kputs, kputsn, kstring_t},
 };
 use std::ffi::{c_char, c_int, c_uint, c_void};
+use std::ptr::NonNull;
 
 type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> c_int;
@@ -50,9 +51,9 @@ unsafe impl Sync for hFILE_scheme_handler_layout {}
 #[repr(C)]
 struct hFILE_plugin_layout {
     api_version: c_int,
-    obj: *mut c_void,
+    obj: Option<NonNull<c_void>>,
     name: *const c_char,
-    destroy: *const c_void,
+    destroy: Option<NonNull<c_void>>,
 }
 
 // Synthesize a System V AMD64 __va_list_tag from pointer-sized words so the
@@ -86,15 +87,40 @@ type HFileLibcurlHttpHeaderCallback =
 
 #[repr(C)]
 struct GcsLibcurlCurlSlist {
-    data: *mut c_char,
-    next: *mut GcsLibcurlCurlSlist,
+    data: Option<NonNull<c_char>>,
+    next: Option<NonNull<GcsLibcurlCurlSlist>>,
 }
 
 #[repr(C)]
 struct GcsLibcurlHdrList {
-    list: *mut GcsLibcurlCurlSlist,
+    list: Option<NonNull<GcsLibcurlCurlSlist>>,
     num: c_uint,
     size: c_uint,
+}
+
+impl GcsLibcurlHdrList {
+    fn new() -> Self {
+        Self {
+            list: None,
+            num: 0,
+            size: 0,
+        }
+    }
+
+    unsafe fn append_dup(&mut self, data: *const c_char) -> c_int {
+        crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_353_append_header(
+            (self as *mut Self).cast(),
+            data,
+            1,
+        )
+    }
+
+    unsafe fn free_completely(&mut self) {
+        crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_372_free_headers(
+            (self as *mut Self).cast(),
+            1,
+        );
+    }
 }
 
 #[repr(C)]
@@ -102,21 +128,82 @@ struct GcsLibcurlHeaders {
     fixed: GcsLibcurlHdrList,
     extra: GcsLibcurlHdrList,
     callback: Option<HFileLibcurlHttpHeaderCallback>,
-    callback_data: *mut c_void,
-    auth: *mut c_void,
+    callback_data: Option<NonNull<c_void>>,
+    auth: Option<NonNull<c_void>>,
     auth_hdr_num: c_int,
-    redirect: *mut c_void,
-    redirect_data: *mut c_void,
-    http_response_ptr: *mut libc::c_long,
+    redirect: Option<NonNull<c_void>>,
+    redirect_data: Option<NonNull<c_void>>,
+    http_response_ptr: Option<NonNull<libc::c_long>>,
     fail_on_error: c_int,
+}
+
+impl GcsLibcurlHeaders {
+    fn new_fail_on_error() -> Self {
+        Self {
+            fixed: GcsLibcurlHdrList::new(),
+            extra: GcsLibcurlHdrList::new(),
+            callback: None,
+            callback_data: None,
+            auth: None,
+            auth_hdr_num: 0,
+            redirect: None,
+            redirect_data: None,
+            http_response_ptr: None,
+            fail_on_error: 1,
+        }
+    }
+
+    unsafe fn open(&mut self, url: *const c_char, mode: *const c_char) -> *mut hFILE {
+        crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_1313_libcurl_open(
+            url,
+            mode,
+            (self as *mut Self).cast(),
+        )
+    }
+}
+
+struct GcsKString {
+    raw: kstring_t,
+}
+
+impl GcsKString {
+    fn new() -> Self {
+        Self {
+            raw: kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            },
+        }
+    }
+
+    fn as_mut_kstring(&mut self) -> &mut kstring_t {
+        &mut self.raw
+    }
+
+    fn as_ptr(&self) -> *const c_char {
+        self.raw.s
+    }
+
+    fn len(&self) -> usize {
+        self.raw.l
+    }
+}
+
+impl Drop for GcsKString {
+    fn drop(&mut self) {
+        unsafe {
+            libc::free(self.raw.s.cast());
+        }
+    }
 }
 
 unsafe fn hfile_gcs_c_41_build_rewrite(
     gsurl: *const c_char,
     mode: *const c_char,
-    url: *mut kstring_t,
-    auth_hdr: *mut kstring_t,
-    requester_pays_hdr: *mut kstring_t,
+    url: &mut kstring_t,
+    auth_hdr: &mut kstring_t,
+    requester_pays_hdr: &mut kstring_t,
 ) -> c_int {
     // GCS URL format is gs[+SCHEME]://BUCKET/PATH
 
@@ -164,7 +251,7 @@ unsafe fn hfile_gcs_c_41_build_rewrite(
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"[M::gcs_open] rewrote URL as %s\n".as_ptr(),
-            (*url).s,
+            url.s,
         );
     }
 
@@ -197,49 +284,24 @@ unsafe fn hfile_gcs_c_41_open_translated_libcurl(
     auth_hdr: *const c_char,
     requester_pays_hdr: *const c_char,
 ) -> *mut hFILE {
-    let mut headers: GcsLibcurlHeaders = std::mem::zeroed();
-    headers.fail_on_error = 1;
+    let mut headers = GcsLibcurlHeaders::new_fail_on_error();
 
     if !auth_hdr.is_null() {
-        if crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_353_append_header(
-            (&mut headers.fixed as *mut GcsLibcurlHdrList).cast(),
-            auth_hdr,
-            1,
-        ) < 0
-        {
-            crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_372_free_headers(
-                (&mut headers.fixed as *mut GcsLibcurlHdrList).cast(),
-                1,
-            );
+        if headers.fixed.append_dup(auth_hdr) < 0 {
+            headers.fixed.free_completely();
             return std::ptr::null_mut();
         }
         headers.auth_hdr_num = -2;
     }
 
-    if !requester_pays_hdr.is_null()
-        && crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_353_append_header(
-            (&mut headers.fixed as *mut GcsLibcurlHdrList).cast(),
-            requester_pays_hdr,
-            1,
-        ) < 0
-    {
-        crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_372_free_headers(
-            (&mut headers.fixed as *mut GcsLibcurlHdrList).cast(),
-            1,
-        );
+    if !requester_pays_hdr.is_null() && headers.fixed.append_dup(requester_pays_hdr) < 0 {
+        headers.fixed.free_completely();
         return std::ptr::null_mut();
     }
 
-    let fp = crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_1313_libcurl_open(
-        url,
-        mode,
-        (&mut headers as *mut GcsLibcurlHeaders).cast(),
-    );
+    let fp = headers.open(url, mode);
     if fp.is_null() {
-        crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_372_free_headers(
-            (&mut headers.fixed as *mut GcsLibcurlHdrList).cast(),
-            1,
-        );
+        headers.fixed.free_completely();
     }
     fp
 }
@@ -251,100 +313,75 @@ unsafe fn hfile_gcs_c_41_gcs_rewrite(
     mode_has_colon: c_int,
     argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
-    let mut mode_colon: kstring_t = std::mem::zeroed();
-    let mut url: kstring_t = std::mem::zeroed();
-    let mut auth_hdr: kstring_t = std::mem::zeroed();
-    let mut requester_pays_hdr: kstring_t = std::mem::zeroed();
+    let mut mode_colon = GcsKString::new();
+    let mut url = GcsKString::new();
+    let mut auth_hdr = GcsKString::new();
+    let mut requester_pays_hdr = GcsKString::new();
     let fp: *mut hFILE;
 
     if hfile_gcs_c_41_build_rewrite(
         gsurl,
         mode,
-        &mut url,
-        &mut auth_hdr,
-        &mut requester_pays_hdr,
+        url.as_mut_kstring(),
+        auth_hdr.as_mut_kstring(),
+        requester_pays_hdr.as_mut_kstring(),
     ) < 0
     {
-        fp = std::ptr::null_mut();
-        goto_gcs_rewrite_done(
-            &mut mode_colon,
-            &mut url,
-            &mut auth_hdr,
-            &mut requester_pays_hdr,
-        );
-        return fp;
+        return std::ptr::null_mut();
     }
 
     if !argsp.is_null() || mode_has_colon != 0 {
         if mode_has_colon == 0 {
-            kputs(mode, &mut mode_colon);
-            kputc(b':' as c_int, &mut mode_colon);
-            mode = mode_colon.s;
+            kputs(mode, mode_colon.as_mut_kstring());
+            kputc(b':' as c_int, mode_colon.as_mut_kstring());
+            mode = mode_colon.as_ptr();
         }
 
-        if auth_hdr.l > 0 && requester_pays_hdr.l > 0 {
+        if auth_hdr.len() > 0 && requester_pays_hdr.len() > 0 {
             let words: [usize; 7] = [
                 c"va_list".as_ptr() as usize,
                 argsp as usize,
                 c"httphdr:l".as_ptr() as usize,
-                auth_hdr.s as usize,
-                requester_pays_hdr.s as usize,
+                auth_hdr.as_ptr() as usize,
+                requester_pays_hdr.as_ptr() as usize,
                 std::ptr::null::<c_char>() as usize,
                 std::ptr::null::<c_char>() as usize,
             ];
-            fp = hfile_gcs_hopen_vargs(url.s, mode, &words);
+            fp = hfile_gcs_hopen_vargs(url.as_ptr(), mode, &words);
         } else {
             let words: [usize; 5] = [
                 c"va_list".as_ptr() as usize,
                 argsp as usize,
                 c"httphdr".as_ptr() as usize,
-                if auth_hdr.l > 0 {
-                    auth_hdr.s as usize
+                if auth_hdr.len() > 0 {
+                    auth_hdr.as_ptr() as usize
                 } else {
                     std::ptr::null::<c_char>() as usize
                 },
                 std::ptr::null::<c_char>() as usize,
             ];
-            fp = hfile_gcs_hopen_vargs(url.s, mode, &words);
+            fp = hfile_gcs_hopen_vargs(url.as_ptr(), mode, &words);
         }
-    } else if auth_hdr.l > 0 || requester_pays_hdr.l > 0 {
+    } else if auth_hdr.len() > 0 || requester_pays_hdr.len() > 0 {
         fp = hfile_gcs_c_41_open_translated_libcurl(
-            url.s,
+            url.as_ptr(),
             mode,
-            if auth_hdr.l > 0 {
-                auth_hdr.s
+            if auth_hdr.len() > 0 {
+                auth_hdr.as_ptr()
             } else {
                 std::ptr::null()
             },
-            if requester_pays_hdr.l > 0 {
-                requester_pays_hdr.s
+            if requester_pays_hdr.len() > 0 {
+                requester_pays_hdr.as_ptr()
             } else {
                 std::ptr::null()
             },
         );
     } else {
-        fp = crate::htslib_rs::hfile::hopen(url.s, mode);
+        fp = crate::htslib_rs::hfile::hopen(url.as_ptr(), mode);
     }
 
-    goto_gcs_rewrite_done(
-        &mut mode_colon,
-        &mut url,
-        &mut auth_hdr,
-        &mut requester_pays_hdr,
-    );
     fp
-}
-
-unsafe fn goto_gcs_rewrite_done(
-    mode_colon: *mut kstring_t,
-    url: *mut kstring_t,
-    auth_hdr: *mut kstring_t,
-    requester_pays_hdr: *mut kstring_t,
-) {
-    libc::free((*mode_colon).s.cast());
-    libc::free((*url).s.cast());
-    libc::free((*auth_hdr).s.cast());
-    libc::free((*requester_pays_hdr).s.cast());
 }
 
 // original: gcs_open (htslib/hfile_gcs.c:125)
@@ -410,13 +447,6 @@ mod tests {
         libc::unsetenv(c"GCS_REQUESTER_PAYS_PROJECT".as_ptr());
     }
 
-    unsafe fn free_kstring(s: &mut kstring_t) {
-        libc::free(s.s.cast());
-        s.l = 0;
-        s.m = 0;
-        s.s = std::ptr::null_mut();
-    }
-
     #[test]
     fn gcs_rewrite_builds_explicit_auth_and_requester_pays_headers() {
         let _guard = env_lock();
@@ -429,36 +459,33 @@ mod tests {
                 1,
             );
 
-            let mut url: kstring_t = std::mem::zeroed();
-            let mut auth: kstring_t = std::mem::zeroed();
-            let mut requester: kstring_t = std::mem::zeroed();
+            let mut url = GcsKString::new();
+            let mut auth = GcsKString::new();
+            let mut requester = GcsKString::new();
 
             assert_eq!(
                 hfile_gcs_c_41_build_rewrite(
                     c"gs://bucket-name/path/to.bam?generation=3".as_ptr(),
                     c"r".as_ptr(),
-                    &mut url,
-                    &mut auth,
-                    &mut requester,
+                    url.as_mut_kstring(),
+                    auth.as_mut_kstring(),
+                    requester.as_mut_kstring(),
                 ),
                 0
             );
             assert_eq!(
-                CStr::from_ptr(url.s).to_str().unwrap(),
+                CStr::from_ptr(url.as_ptr()).to_str().unwrap(),
                 "https://bucket-name.storage-download.googleapis.com/path/to.bam?generation=3"
             );
             assert_eq!(
-                CStr::from_ptr(auth.s).to_str().unwrap(),
+                CStr::from_ptr(auth.as_ptr()).to_str().unwrap(),
                 "Authorization: Bearer tok123"
             );
             assert_eq!(
-                CStr::from_ptr(requester.s).to_str().unwrap(),
+                CStr::from_ptr(requester.as_ptr()).to_str().unwrap(),
                 "X-Goog-User-Project: proj-7"
             );
 
-            free_kstring(&mut url);
-            free_kstring(&mut auth);
-            free_kstring(&mut requester);
             clear_env();
         }
     }
@@ -474,33 +501,30 @@ mod tests {
                 1,
             );
 
-            let mut url: kstring_t = std::mem::zeroed();
-            let mut auth: kstring_t = std::mem::zeroed();
-            let mut requester: kstring_t = std::mem::zeroed();
+            let mut url = GcsKString::new();
+            let mut auth = GcsKString::new();
+            let mut requester = GcsKString::new();
 
             assert_eq!(
                 hfile_gcs_c_41_build_rewrite(
                     c"gs+http://bucket/object".as_ptr(),
                     c"w".as_ptr(),
-                    &mut url,
-                    &mut auth,
-                    &mut requester,
+                    url.as_mut_kstring(),
+                    auth.as_mut_kstring(),
+                    requester.as_mut_kstring(),
                 ),
                 0
             );
             assert_eq!(
-                CStr::from_ptr(url.s).to_str().unwrap(),
+                CStr::from_ptr(url.as_ptr()).to_str().unwrap(),
                 "http://bucket.storage-upload.googleapis.com/object"
             );
-            assert!(auth.s.is_null());
+            assert!(auth.as_ptr().is_null());
             assert_eq!(
-                CStr::from_ptr(requester.s).to_str().unwrap(),
+                CStr::from_ptr(requester.as_ptr()).to_str().unwrap(),
                 "X-Goog-User-Project: billing-proj"
             );
 
-            free_kstring(&mut url);
-            free_kstring(&mut auth);
-            free_kstring(&mut requester);
             clear_env();
         }
     }

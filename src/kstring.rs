@@ -146,7 +146,8 @@ pub unsafe fn kstring_c_177_ksprintf(
 
 // original: main (htslib/kstring.c:531)
 pub unsafe fn kstring_c_531_main() -> c_int {
-    let s = libc::calloc(1, std::mem::size_of::<kstring_t>()).cast::<kstring_t>();
+    let mut s: kstring_t = std::mem::zeroed();
+    let s = &mut s as *mut kstring_t;
     let mut n = 0;
     let mut aux: ks_tokaux_t = std::mem::zeroed();
 
@@ -174,7 +175,6 @@ pub unsafe fn kstring_c_531_main() -> c_int {
     libc::printf(c"%s".as_ptr(), (*s).s);
 
     libc::free((*s).s.cast());
-    libc::free(s.cast());
     libc::free(fields.cast());
 
     {
@@ -490,40 +490,59 @@ pub unsafe fn ksBM_prep(pat: *const u8, m: c_int) -> *mut c_int {
     if m < 1 {
         return std::ptr::null_mut();
     }
+    let len = m as usize + 256;
     let prep =
         crate::htslib_rs::c_compat::calloc(m as u64 + 256, std::mem::size_of::<c_int>() as u64)
             .cast::<c_int>();
     if prep.is_null() {
         return std::ptr::null_mut();
     }
-    let bm_gs = prep;
-    let bm_bc = prep.add(m as usize);
-
-    let mut i = 0;
-    while i < 256 {
-        *bm_bc.add(i as usize) = m;
-        i += 1;
-    }
-    i = 0;
-    while i < m - 1 {
-        *bm_bc.add(*pat.add(i as usize) as usize) = m - i - 1;
-        i += 1;
-    }
-
-    let suff = crate::htslib_rs::c_compat::calloc(m as u64, std::mem::size_of::<c_int>() as u64)
-        .cast::<c_int>();
-    if suff.is_null() {
+    let prep_slice = std::slice::from_raw_parts_mut(prep, len);
+    if !ksbm_fill_prep(pat, m, prep_slice) {
         crate::htslib_rs::c_compat::free(prep.cast());
         return std::ptr::null_mut();
     }
 
+    prep
+}
+
+fn zeroed_c_int_vec(len: usize) -> Option<Vec<c_int>> {
+    let mut values = Vec::new();
+    values.try_reserve_exact(len).ok()?;
+    values.resize(len, 0);
+    Some(values)
+}
+
+unsafe fn ksbm_fill_prep(pat: *const u8, m: c_int, prep: &mut [c_int]) -> bool {
+    let m_usize = m as usize;
+    if prep.len() < m_usize + 256 {
+        return false;
+    }
+
+    let (bm_gs, bm_bc) = prep.split_at_mut(m_usize);
+
+    let mut i = 0;
+    while i < 256 {
+        bm_bc[i as usize] = m;
+        i += 1;
+    }
+    i = 0;
+    while i < m - 1 {
+        bm_bc[*pat.add(i as usize) as usize] = m - i - 1;
+        i += 1;
+    }
+
+    let Some(mut suff) = zeroed_c_int_vec(m_usize) else {
+        return false;
+    };
+
     let mut f = 0;
-    *suff.add((m - 1) as usize) = m;
+    suff[(m - 1) as usize] = m;
     let mut g = m - 1;
     i = m - 2;
     while i >= 0 {
-        if i > g && *suff.add((i + m - 1 - f) as usize) < i - g {
-            *suff.add(i as usize) = *suff.add((i + m - 1 - f) as usize);
+        if i > g && suff[(i + m - 1 - f) as usize] < i - g {
+            suff[i as usize] = suff[(i + m - 1 - f) as usize];
         } else {
             if i < g {
                 g = i;
@@ -532,7 +551,7 @@ pub unsafe fn ksBM_prep(pat: *const u8, m: c_int) -> *mut c_int {
             while g >= 0 && *pat.add(g as usize) == *pat.add((g + m - 1 - f) as usize) {
                 g -= 1;
             }
-            *suff.add(i as usize) = f - g;
+            suff[i as usize] = f - g;
         }
         if i == 0 {
             break;
@@ -543,15 +562,15 @@ pub unsafe fn ksBM_prep(pat: *const u8, m: c_int) -> *mut c_int {
     let mut j = 0;
     i = 0;
     while i < m {
-        *bm_gs.add(i as usize) = m;
+        bm_gs[i as usize] = m;
         i += 1;
     }
     i = m - 1;
     while i >= 0 {
-        if *suff.add(i as usize) == i + 1 {
+        if suff[i as usize] == i + 1 {
             while j < m - 1 - i {
-                if *bm_gs.add(j as usize) == m {
-                    *bm_gs.add(j as usize) = m - 1 - i;
+                if bm_gs[j as usize] == m {
+                    bm_gs[j as usize] = m - 1 - i;
                 }
                 j += 1;
             }
@@ -563,12 +582,11 @@ pub unsafe fn ksBM_prep(pat: *const u8, m: c_int) -> *mut c_int {
     }
     i = 0;
     while i <= m - 2 {
-        *bm_gs.add((m - 1 - *suff.add(i as usize)) as usize) = m - 1 - i;
+        bm_gs[(m - 1 - suff[i as usize]) as usize] = m - 1 - i;
         i += 1;
     }
 
-    crate::htslib_rs::c_compat::free(suff.cast());
-    prep
+    true
 }
 
 pub unsafe fn boyer_moore(
@@ -595,9 +613,19 @@ pub unsafe fn boyer_moore(
         return libc::memchr(str_, *pat as c_int, n as libc::size_t);
     }
 
+    let mut owned_prep = None;
     let prep;
     if !stored_prep_ptr.is_null() && !(*stored_prep_ptr).is_null() {
         prep = *stored_prep_ptr;
+    } else if stored_prep_ptr.is_null() {
+        let Some(mut local_prep) = zeroed_c_int_vec(m as usize + 256) else {
+            return karp_rabin(str_, n, pat_, m as usize);
+        };
+        if !ksbm_fill_prep(pat, m, &mut local_prep) {
+            return karp_rabin(str_, n, pat_, m as usize);
+        }
+        prep = local_prep.as_mut_ptr();
+        owned_prep = Some(local_prep);
     } else {
         prep = ksBM_prep(pat, m);
         if prep.is_null() {
@@ -627,16 +655,12 @@ pub unsafe fn boyer_moore(
             }
             j += max as usize;
         } else {
-            if stored_prep_ptr.is_null() {
-                crate::htslib_rs::c_compat::free(prep.cast());
-            }
+            drop(owned_prep);
             return str_ubytes.add(j).cast::<c_void>().cast_mut();
         }
     }
 
-    if stored_prep_ptr.is_null() {
-        crate::htslib_rs::c_compat::free(prep.cast());
-    }
+    drop(owned_prep);
     std::ptr::null_mut()
 }
 

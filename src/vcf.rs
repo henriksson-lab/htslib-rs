@@ -1,5 +1,6 @@
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
 use std::mem::size_of;
+use std::ptr::NonNull;
 
 use crate::htslib_rs::c_compat;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1657,8 +1658,8 @@ pub unsafe fn bcf_hdr_init(mode: *const c_char) -> *mut bcf_hdr_t {
         libc::free(h.cast());
         return std::ptr::null_mut();
     }
-    (*aux).gen = kh_init_hdict();
-    if (*aux).gen.is_null() {
+    (*aux).gen = NonNull::new(kh_init_hdict());
+    if (*aux).gen.is_none() {
         libc::free(aux.cast());
         for j in 0..3usize {
             kh_destroy_vdict((*h).dict[j].cast());
@@ -1666,7 +1667,7 @@ pub unsafe fn bcf_hdr_init(mode: *const c_char) -> *mut bcf_hdr_t {
         libc::free(h.cast());
         return std::ptr::null_mut();
     }
-    (*aux).key_len = std::ptr::null_mut();
+    (*aux).key_len = None;
     // aux->dict = *((vdict_t*)h->dict[0]); — shallow copy of dict[0]'s vdict.
     (*aux).dict = std::ptr::read((*h).dict[0].cast::<kh_vdict_t>());
     (*aux).version = 0;
@@ -1704,22 +1705,22 @@ pub unsafe fn bcf_hdr_destroy(h: *mut bcf_hdr_t) {
             // free all keys
             let mut k: u32 = 0;
             while k != (*d).n_buckets {
-                if !kh_iseither((*d).flags, k) {
-                    libc::free((*(*d).keys.add(k as usize)) as *mut c_void);
+                if !kh_iseither((*d).flags(), k) {
+                    libc::free((*(*d).keys().add(k as usize)) as *mut c_void);
                 }
                 k += 1;
             }
             if i == 0 {
-                let gen = (*aux).gen;
+                let gen = (*aux).gen();
                 let mut k: u32 = 0;
                 while k < (*gen).n_buckets {
-                    if !kh_iseither((*gen).flags, k) {
-                        libc::free((*(*gen).keys.add(k as usize)) as *mut c_void);
+                    if !kh_iseither((*gen).flags(), k) {
+                        libc::free((*(*gen).keys().add(k as usize)) as *mut c_void);
                     }
                     k += 1;
                 }
                 kh_destroy_hdict(gen);
-                libc::free((*aux).key_len.cast()); // may exist for dict[0] only
+                libc::free((*aux).key_len().cast()); // may exist for dict[0] only
             }
             kh_destroy_vdict(d);
         }
@@ -2104,8 +2105,8 @@ pub unsafe fn bcf_hdr_set_samples(
 
         let mut k: u32 = 0;
         while k < (*d).n_buckets {
-            if !kh_iseither((*d).flags, k) {
-                libc::free((*(*d).keys.add(k as usize)) as *mut c_void);
+            if !kh_iseither((*d).flags(), k) {
+                libc::free((*(*d).keys().add(k as usize)) as *mut c_void);
             }
             k += 1;
         }
@@ -2186,7 +2187,7 @@ pub unsafe fn bcf_hdr_set_samples(
                     kh_destroy_vdict(new_dict);
                     return -1;
                 }
-                let valp = (*new_dict).vals.add(k as usize);
+                let valp = (*new_dict).vals().add(k as usize);
                 *valp = bcf_idinfo_def();
                 (*valp).id = idx;
                 idx += 1;
@@ -2205,8 +2206,8 @@ pub unsafe fn bcf_hdr_set_samples(
         // Free everything else
         let mut k: u32 = 0;
         while k < (*d).n_buckets {
-            if !kh_iseither((*d).flags, k) {
-                libc::free((*(*d).keys.add(k as usize)) as *mut c_void);
+            if !kh_iseither((*d).flags(), k) {
+                libc::free((*(*d).keys().add(k as usize)) as *mut c_void);
             }
             k += 1;
         }
@@ -2542,7 +2543,7 @@ pub(crate) unsafe fn bcf_hdr_nsamples_native(h: *const bcf_hdr_t) -> c_int {
 // kh_val(d, k): the bcf_idinfo_t value at bucket index k.
 #[inline]
 unsafe fn vdict_val(d: *const kh_vdict_t, k: u32) -> *const bcf_idinfo_t {
-    (*d).vals.add(k as usize) as *const bcf_idinfo_t
+    (*d).vals().add(k as usize) as *const bcf_idinfo_t
 }
 
 // bit_array_test(a,i): ((a)[(i)/8] & (1 << ((i)%8)))
@@ -4227,14 +4228,15 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
 
     // Cache of key lengths in the header aux struct.
     let aux = get_hdr_aux(h);
-    if (*aux).key_len.is_null() {
-        (*aux).key_len = libc::calloc((*h).n[BCF_DT_ID as usize] as usize + 1, size_of::<usize>())
+    if (*aux).key_len.is_none() {
+        let key_len = libc::calloc((*h).n[BCF_DT_ID as usize] as usize + 1, size_of::<usize>())
             .cast::<usize>();
-        if (*aux).key_len.is_null() {
+        (*aux).key_len = NonNull::new(key_len);
+        if (*aux).key_len.is_none() {
             return -1;
         }
     }
-    let key_len = (*aux).key_len;
+    let key_len = (*aux).key_len();
 
     let idtbl = (*h).id[BCF_DT_ID as usize];
 
@@ -7910,7 +7912,7 @@ unsafe fn bcf_hdr_add_sample_len(h: *mut bcf_hdr_t, s: *const c_char, len: usize
     }
     if ret != 0 {
         // absent
-        let valp = (*d).vals.add(k as usize);
+        let valp = (*d).vals().add(k as usize);
         *valp = bcf_idinfo_def();
         (*valp).id = n as c_int;
     } else {
@@ -8115,7 +8117,7 @@ pub unsafe fn bcf_hdr_set_version(hdr: *mut bcf_hdr_t, version: *const c_char) -
 unsafe fn bcf_hdr_remove_from_hdict(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) {
     let mut str_: kstring_t = std::mem::zeroed();
     let aux = get_hdr_aux(hdr);
-    let gen = (*aux).gen;
+    let gen = (*aux).gen();
 
     match (*hrec).type_ as u32 {
         BCF_HL_GEN => {
@@ -8156,17 +8158,17 @@ unsafe fn bcf_hdr_remove_from_hdict(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) 
         // Couldn't get a string for some reason, so try the hard way...
         let mut kk: u32 = 0;
         while kk < (*gen).n_buckets {
-            if !kh_iseither((*gen).flags, kk) && *(*gen).vals.add(kk as usize) == hrec {
+            if !kh_iseither((*gen).flags(), kk) && *(*gen).vals().add(kk as usize) == hrec {
                 break;
             }
             kk += 1;
         }
         kk
     };
-    if k != (*gen).n_buckets && *(*gen).vals.add(k as usize) == hrec {
-        *(*gen).vals.add(k as usize) = std::ptr::null_mut();
-        libc::free((*(*gen).keys.add(k as usize)) as *mut c_void);
-        *(*gen).keys.add(k as usize) = std::ptr::null();
+    if k != (*gen).n_buckets && *(*gen).vals().add(k as usize) == hrec {
+        *(*gen).vals().add(k as usize) = std::ptr::null_mut();
+        libc::free((*(*gen).keys().add(k as usize)) as *mut c_void);
+        *(*gen).keys().add(k as usize) = std::ptr::null();
         kh_del_hdict(gen, k);
     }
     libc::free(str_.s.cast());
@@ -8230,7 +8232,7 @@ pub unsafe fn bcf_hdr_remove(hdr: *mut bcf_hdr_t, type_: c_int, key: *const c_ch
             } else {
                 type_ as usize
             };
-            (*(*d).vals.add(k as usize)).hrec[slot] = std::ptr::null_mut();
+            (*(*d).vals().add(k as usize)).hrec[slot] = std::ptr::null_mut();
         } else {
             i = 0;
             while i < (*hdr).nhrec {
@@ -8290,10 +8292,10 @@ pub unsafe fn bcf_hdr_seqnames(h: *const bcf_hdr_t, nseqs: *mut c_int) -> *mut *
     }
     if !d.is_null() {
         for k in 0..(*d).n_buckets {
-            if vcf_kh_iseither((*d).flags, k) {
+            if vcf_kh_iseither((*d).flags(), k) {
                 continue;
             }
-            let val = (*d).vals.add(k as usize);
+            let val = (*d).vals().add(k as usize);
             if (*val).hrec[0].is_null() {
                 continue; // removed via bcf_hdr_remove
             }
@@ -8322,7 +8324,7 @@ pub unsafe fn bcf_hdr_seqnames(h: *const bcf_hdr_t, nseqs: *mut c_int) -> *mut *
                 }
                 m = tid + 1;
             }
-            *names.add(tid as usize) = *(*d).keys.add(k as usize);
+            *names.add(tid as usize) = *(*d).keys().add(k as usize);
         }
     }
     // Ensure there are no gaps.
@@ -8457,11 +8459,11 @@ unsafe fn bcf_hdr_sync_native(h: *mut bcf_hdr_t) -> c_int {
         }
         let mut k: u32 = 0;
         while k < (*d).n_buckets {
-            if !kh_iseither((*d).flags, k) {
-                let valp = (*d).vals.add(k as usize);
+            if !kh_iseither((*d).flags(), k) {
+                let valp = (*d).vals().add(k as usize);
                 let id = (*valp).id;
                 let pair = (*h).id[i].add(id as usize);
-                (*pair).key = *(*d).keys.add(k as usize);
+                (*pair).key = *(*d).keys().add(k as usize);
                 (*pair).val = valp;
             }
             k += 1;
@@ -8471,9 +8473,9 @@ unsafe fn bcf_hdr_sync_native(h: *mut bcf_hdr_t) -> c_int {
 
     // Invalidate key length cache
     let aux = get_hdr_aux(h);
-    if !aux.is_null() && !(*aux).key_len.is_null() {
-        libc::free((*aux).key_len.cast());
-        (*aux).key_len = std::ptr::null_mut();
+    if !aux.is_null() && (*aux).key_len.is_some() {
+        libc::free((*aux).key_len().cast());
+        (*aux).key_len = None;
     }
 
     (*h).dirty = 0;
@@ -9642,7 +9644,7 @@ unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c
             // already present
             libc::free(str_.cast());
             str_ = std::ptr::null_mut();
-            if !(*(*d).vals.add(k as usize)).hrec[0].is_null() {
+            if !(*(*d).vals().add(k as usize)).hrec[0].is_null() {
                 return 0; // and not removed
             }
             replacing = 1;
@@ -9669,19 +9671,19 @@ unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c
             }
         }
 
-        let valp = (*d).vals.add(k as usize);
+        let valp = (*d).vals().add(k as usize);
         *valp = bcf_idinfo_def();
         (*valp).id = idx;
         (*valp).info[0] = len as u64;
         (*valp).hrec[0] = hrec;
-        if bcf_hdr_set_idx(hdr, BCF_DT_CTG as c_int, *(*d).keys.add(k as usize), valp) < 0 {
+        if bcf_hdr_set_idx(hdr, BCF_DT_CTG as c_int, *(*d).keys().add(k as usize), valp) < 0 {
             if replacing == 0 {
                 kh_del_vdict(d, k);
                 libc::free(str_.cast());
             }
             return -1;
         }
-        if idx == -1 && hrec_add_idx(hrec, (*(*d).vals.add(k as usize)).id) < 0 {
+        if idx == -1 && hrec_add_idx(hrec, (*(*d).vals().add(k as usize)).id) < 0 {
             return -1;
         }
         return 1;
@@ -9793,7 +9795,7 @@ unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c
     if k != (*d).n_buckets {
         // already present
         libc::free(str_.cast());
-        let valp = (*d).vals.add(k as usize);
+        let valp = (*d).vals().add(k as usize);
         if !(*valp).hrec[(info & 0xf) as usize].is_null() {
             return 0;
         }
@@ -9809,17 +9811,17 @@ unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c
         libc::free(str_.cast());
         return -1;
     }
-    let valp = (*d).vals.add(k as usize);
+    let valp = (*d).vals().add(k as usize);
     *valp = bcf_idinfo_def();
     (*valp).info[(info & 0xf) as usize] = info as u64;
     (*valp).hrec[(info & 0xf) as usize] = hrec;
     (*valp).id = idx;
-    if bcf_hdr_set_idx(hdr, BCF_DT_ID as c_int, *(*d).keys.add(k as usize), valp) < 0 {
+    if bcf_hdr_set_idx(hdr, BCF_DT_ID as c_int, *(*d).keys().add(k as usize), valp) < 0 {
         kh_del_vdict(d, k);
         libc::free(str_.cast());
         return -1;
     }
-    if idx == -1 && hrec_add_idx(hrec, (*(*d).vals.add(k as usize)).id) < 0 {
+    if idx == -1 && hrec_add_idx(hrec, (*(*d).vals().add(k as usize)).id) < 0 {
         return -1;
     }
     1
@@ -9841,7 +9843,7 @@ unsafe fn bcf_hdr_unregister_hrec_native(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hre
         let k = kh_get_vdict(dict, *(*hrec).vals.add(id as usize));
         if k != (*dict).n_buckets {
             let slot = if t == BCF_HL_CTG { 0 } else { t as usize };
-            (*(*dict).vals.add(k as usize)).hrec[slot] = std::ptr::null_mut();
+            (*(*dict).vals().add(k as usize)).hrec[slot] = std::ptr::null_mut();
         }
     }
 }
@@ -9876,8 +9878,9 @@ pub unsafe fn bcf_hdr_add_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c_
             libc::free(str_.s.cast());
             return -1;
         }
-        let k = kh_get_hdict((*aux).gen, str_.s);
-        if k != (*(*aux).gen).n_buckets {
+        let gen = (*aux).gen();
+        let k = kh_get_hdict(gen, str_.s);
+        if k != (*gen).n_buckets {
             // duplicate record
             bcf_hrec_destroy(hrec);
             libc::free(str_.s.cast());
@@ -9907,8 +9910,9 @@ pub unsafe fn bcf_hdr_add_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c_
             libc::free(str_.s.cast());
             return -1;
         }
-        let k = kh_get_hdict((*aux).gen, str_.s);
-        if k != (*(*aux).gen).n_buckets {
+        let gen = (*aux).gen();
+        let k = kh_get_hdict(gen, str_.s);
+        if k != (*gen).n_buckets {
             // duplicate record
             bcf_hrec_destroy(hrec);
             libc::free(str_.s.cast());
@@ -9929,12 +9933,13 @@ pub unsafe fn bcf_hdr_add_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c_
 
     if !str_.s.is_null() {
         let mut res2: c_int = 0;
-        let k = kh_put_hdict((*aux).gen, str_.s, &mut res2);
+        let gen = (*aux).gen();
+        let k = kh_put_hdict(gen, str_.s, &mut res2);
         if res2 < 0 {
             libc::free(str_.s.cast());
             return -1;
         }
-        *(*(*aux).gen).vals.add(k as usize) = hrec;
+        *(*gen).vals().add(k as usize) = hrec;
     }
 
     *(*hdr).hrec.add((*hdr).nhrec as usize) = hrec;
@@ -9957,21 +9962,21 @@ pub unsafe fn bcf_hdr_update_hrec(
     debug_assert!((*hrec).type_ as u32 == BCF_HL_GEN);
     let mut ret: c_int = 0;
     let aux = get_hdr_aux(hdr);
-    let gen = (*aux).gen;
+    let gen = (*aux).gen();
     // Find the bucket whose value is `hrec`.
     let mut k: u32 = 0;
     while k < (*gen).n_buckets {
-        if kh_iseither((*gen).flags, k) {
+        if kh_iseither((*gen).flags(), k) {
             k += 1;
             continue;
         }
-        if hrec == *(*gen).vals.add(k as usize) {
+        if hrec == *(*gen).vals().add(k as usize) {
             break;
         }
         k += 1;
     }
     debug_assert!(k < (*gen).n_buckets); // should never happen
-    libc::free((*(*gen).keys.add(k as usize)) as *mut c_void);
+    libc::free((*(*gen).keys().add(k as usize)) as *mut c_void);
     kh_del_hdict(gen, k);
 
     let mut str_: kstring_t = std::mem::zeroed();
@@ -9993,7 +9998,7 @@ pub unsafe fn bcf_hdr_update_hrec(
     if (*hrec).value.is_null() {
         return -1;
     }
-    *(*gen).vals.add(k as usize) = hrec;
+    *(*gen).vals().add(k as usize) = hrec;
 
     if libc::strcmp((*hrec).key, c"fileformat".as_ptr()) == 0 {
         // update version
@@ -10015,12 +10020,13 @@ pub unsafe fn bcf_hdr_get_hrec(
             let mut str_: kstring_t = std::mem::zeroed();
             let _ = ks_build(&mut str_, &[c"##".as_ptr(), key, c"=".as_ptr(), value]);
             let aux = get_hdr_aux(hdr);
-            let k = kh_get_hdict((*aux).gen, str_.s);
+            let gen = (*aux).gen();
+            let k = kh_get_hdict(gen, str_.s);
             libc::free(str_.s.cast());
-            if k == (*(*aux).gen).n_buckets {
+            if k == (*gen).n_buckets {
                 return std::ptr::null_mut();
             }
-            return *(*(*aux).gen).vals.add(k as usize);
+            return *(*gen).vals().add(k as usize);
         }
         let mut i: c_int = 0;
         while i < (*hdr).nhrec {
@@ -10050,12 +10056,13 @@ pub unsafe fn bcf_hdr_get_hrec(
                 ],
             );
             let aux = get_hdr_aux(hdr);
-            let k = kh_get_hdict((*aux).gen, str_.s);
+            let gen = (*aux).gen();
+            let k = kh_get_hdict(gen, str_.s);
             libc::free(str_.s.cast());
-            if k == (*(*aux).gen).n_buckets {
+            if k == (*gen).n_buckets {
                 return std::ptr::null_mut();
             }
-            return *(*(*aux).gen).vals.add(k as usize);
+            return *(*gen).vals().add(k as usize);
         }
         let mut i: c_int = 0;
         while i < (*hdr).nhrec {
@@ -10084,7 +10091,7 @@ pub unsafe fn bcf_hdr_get_hrec(
     } else {
         type_ as usize
     };
-    (*(*d).vals.add(k as usize)).hrec[slot]
+    (*(*d).vals().add(k as usize)).hrec[slot]
 }
 
 // realloc(ptr, size*n) with overflow check, matching htslib hts_realloc_p.
@@ -11448,16 +11455,33 @@ pub unsafe fn bcf_get_info_int64(
 
 // khash table layout for vcf's `vdict` (KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)).
 // String keys, FNV1a hash + strcmp equality (the htslib default for str maps),
-// values of type bcf_idinfo_t. This is the concrete type behind bcf_hdr_t::dict[].
+// values of type bcf_idinfo_t. This is the native Rust header dictionary shape.
 #[repr(C)]
 struct kh_vdict_t {
     n_buckets: u32,
     size: u32,
     n_occupied: u32,
     upper_bound: u32,
-    flags: *mut u32,
-    keys: *mut *const c_char,
-    vals: *mut bcf_idinfo_t,
+    flags: Option<NonNull<u32>>,
+    keys: Option<NonNull<*const c_char>>,
+    vals: Option<NonNull<bcf_idinfo_t>>,
+}
+
+impl kh_vdict_t {
+    #[inline]
+    fn flags(&self) -> *mut u32 {
+        self.flags.map_or(std::ptr::null_mut(), NonNull::as_ptr)
+    }
+
+    #[inline]
+    fn keys(&self) -> *mut *const c_char {
+        self.keys.map_or(std::ptr::null_mut(), NonNull::as_ptr)
+    }
+
+    #[inline]
+    fn vals(&self) -> *mut bcf_idinfo_t {
+        self.vals.map_or(std::ptr::null_mut(), NonNull::as_ptr)
+    }
 }
 
 #[inline]
@@ -11487,9 +11511,9 @@ unsafe fn kh_get_vdict(h: *const kh_vdict_t, key: *const c_char) -> u32 {
     let mut i = super::hts::__ac_FNV1a_hash_string(key) & mask;
     let last = i;
     let mut step: u32 = 0;
-    while !vcf_kh_isempty((*h).flags, i)
-        && (((*(*h).flags.add((i >> 4) as usize) >> ((i & 0x0f) << 1)) & 1) != 0
-            || !vcf_cstr_eq(*(*h).keys.add(i as usize), key))
+    while !vcf_kh_isempty((*h).flags(), i)
+        && (((*(*h).flags().add((i >> 4) as usize) >> ((i & 0x0f) << 1)) & 1) != 0
+            || !vcf_cstr_eq(*(*h).keys().add(i as usize), key))
     {
         step += 1;
         i = (i + step) & mask;
@@ -11497,7 +11521,7 @@ unsafe fn kh_get_vdict(h: *const kh_vdict_t, key: *const c_char) -> u32 {
             return (*h).n_buckets;
         }
     }
-    if vcf_kh_iseither((*h).flags, i) {
+    if vcf_kh_iseither((*h).flags(), i) {
         (*h).n_buckets
     } else {
         i
@@ -11512,11 +11536,10 @@ unsafe fn kh_get_vdict(h: *const kh_vdict_t, key: *const c_char) -> u32 {
 //   KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)   -> kh_vdict_t (above)
 //   KHASH_MAP_INIT_STR(hdict, bcf_hrec_t*)    -> kh_hdict_t (below)
 // Both use the FNV-1a string hash (kh_str_hash_func == __ac_FNV1a_hash_string
-// as of htslib v1.23, changed from __ac_X31_hash_string) and strcmp equality,
-// matching the hts-sys C library byte-for-byte so the dicts built natively
-// can be read back by either native kh_get_vdict or by C.
-// Memory is allocated with the libc allocator (same as hts-sys, via
-// crate::htslib_rs::c_compat) so the dicts are interchangeable with C.
+// as of htslib v1.23, changed from __ac_X31_hash_string) and strcmp equality.
+// The bucket arrays still use the libc allocator because surrounding header
+// code hands their contents to existing raw-pointer APIs, but the nullable
+// array owners are represented as Option<NonNull<_>> internally.
 // ---------------------------------------------------------------------------
 
 #[repr(C)]
@@ -11525,21 +11548,49 @@ struct kh_hdict_t {
     size: u32,
     n_occupied: u32,
     upper_bound: u32,
-    flags: *mut u32,
-    keys: *mut *const c_char,
-    vals: *mut *mut bcf_hrec_t,
+    flags: Option<NonNull<u32>>,
+    keys: Option<NonNull<*const c_char>>,
+    vals: Option<NonNull<*mut bcf_hrec_t>>,
 }
 
-// Internal opaque struct stored at hdr->dict[0] (bcf_hdr_aux_t in vcf.c).
-// The first member is an *inline* vdict_t (not a pointer): user code and
-// vcf.c both cast (vdict_t*)hdr->dict[0] to reach the BCF_DT_ID dictionary.
+impl kh_hdict_t {
+    #[inline]
+    fn flags(&self) -> *mut u32 {
+        self.flags.map_or(std::ptr::null_mut(), NonNull::as_ptr)
+    }
+
+    #[inline]
+    fn keys(&self) -> *mut *const c_char {
+        self.keys.map_or(std::ptr::null_mut(), NonNull::as_ptr)
+    }
+
+    #[inline]
+    fn vals(&self) -> *mut *mut bcf_hrec_t {
+        self.vals.map_or(std::ptr::null_mut(), NonNull::as_ptr)
+    }
+}
+
+// Internal opaque struct stored at hdr->dict[0].  The first member is an inline
+// vdict so existing native code can cast hdr->dict[0] to kh_vdict_t.
 #[repr(C)]
 struct bcf_hdr_aux_t {
     dict: kh_vdict_t,
-    gen: *mut kh_hdict_t,
-    key_len: *mut usize,
+    gen: Option<NonNull<kh_hdict_t>>,
+    key_len: Option<NonNull<usize>>,
     version: c_int,
     ref_count: u32,
+}
+
+impl bcf_hdr_aux_t {
+    #[inline]
+    fn gen(&self) -> *mut kh_hdict_t {
+        self.gen.map_or(std::ptr::null_mut(), NonNull::as_ptr)
+    }
+
+    #[inline]
+    fn key_len(&self) -> *mut usize {
+        self.key_len.map_or(std::ptr::null_mut(), NonNull::as_ptr)
+    }
 }
 
 #[inline]
@@ -11626,9 +11677,9 @@ unsafe fn kh_init_vdict() -> *mut kh_vdict_t {
 
 unsafe fn kh_destroy_vdict(h: *mut kh_vdict_t) {
     if !h.is_null() {
-        libc::free((*h).keys.cast());
-        libc::free((*h).flags.cast());
-        libc::free((*h).vals.cast());
+        libc::free((*h).keys().cast());
+        libc::free((*h).flags().cast());
+        libc::free((*h).vals().cast());
         libc::free(h.cast());
     }
 }
@@ -11653,7 +11704,7 @@ unsafe fn kh_resize_vdict(h: *mut kh_vdict_t, mut new_n_buckets: u32) -> c_int {
             libc::memset(new_flags.cast(), 0xaa, fsz * 4);
             if (*h).n_buckets < new_n_buckets {
                 let new_keys = libc::realloc(
-                    (*h).keys.cast(),
+                    (*h).keys().cast(),
                     (new_n_buckets as usize) * size_of::<*const c_char>(),
                 )
                 .cast::<*const c_char>();
@@ -11661,9 +11712,9 @@ unsafe fn kh_resize_vdict(h: *mut kh_vdict_t, mut new_n_buckets: u32) -> c_int {
                     libc::free(new_flags.cast());
                     return -1;
                 }
-                (*h).keys = new_keys;
+                (*h).keys = NonNull::new(new_keys);
                 let new_vals = libc::realloc(
-                    (*h).vals.cast(),
+                    (*h).vals().cast(),
                     (new_n_buckets as usize) * size_of::<bcf_idinfo_t>(),
                 )
                 .cast::<bcf_idinfo_t>();
@@ -11671,18 +11722,18 @@ unsafe fn kh_resize_vdict(h: *mut kh_vdict_t, mut new_n_buckets: u32) -> c_int {
                     libc::free(new_flags.cast());
                     return -1;
                 }
-                (*h).vals = new_vals;
+                (*h).vals = NonNull::new(new_vals);
             }
         }
     }
     if j != 0 {
         let mut jj: u32 = 0;
         while jj != (*h).n_buckets {
-            if !kh_iseither((*h).flags, jj) {
-                let mut key = *(*h).keys.add(jj as usize);
-                let mut val = *(*h).vals.add(jj as usize);
+            if !kh_iseither((*h).flags(), jj) {
+                let mut key = *(*h).keys().add(jj as usize);
+                let mut val = *(*h).vals().add(jj as usize);
                 let new_mask = new_n_buckets - 1;
-                kh_set_isdel_true((*h).flags, jj);
+                kh_set_isdel_true((*h).flags(), jj);
                 loop {
                     let k = super::hts::__ac_FNV1a_hash_string(key);
                     let mut i = k & new_mask;
@@ -11692,14 +11743,14 @@ unsafe fn kh_resize_vdict(h: *mut kh_vdict_t, mut new_n_buckets: u32) -> c_int {
                         i = (i + step) & new_mask;
                     }
                     kh_set_isempty_false(new_flags, i);
-                    if i < (*h).n_buckets && !kh_iseither((*h).flags, i) {
+                    if i < (*h).n_buckets && !kh_iseither((*h).flags(), i) {
                         // kick out existing element
-                        std::ptr::swap((*h).keys.add(i as usize), &mut key);
-                        std::ptr::swap((*h).vals.add(i as usize), &mut val);
-                        kh_set_isdel_true((*h).flags, i);
+                        std::ptr::swap((*h).keys().add(i as usize), &mut key);
+                        std::ptr::swap((*h).vals().add(i as usize), &mut val);
+                        kh_set_isdel_true((*h).flags(), i);
                     } else {
-                        *(*h).keys.add(i as usize) = key;
-                        *(*h).vals.add(i as usize) = val;
+                        *(*h).keys().add(i as usize) = key;
+                        *(*h).vals().add(i as usize) = val;
                         break;
                     }
                 }
@@ -11707,19 +11758,23 @@ unsafe fn kh_resize_vdict(h: *mut kh_vdict_t, mut new_n_buckets: u32) -> c_int {
             jj += 1;
         }
         if (*h).n_buckets > new_n_buckets {
-            (*h).keys = libc::realloc(
-                (*h).keys.cast(),
-                (new_n_buckets as usize) * size_of::<*const c_char>(),
-            )
-            .cast();
-            (*h).vals = libc::realloc(
-                (*h).vals.cast(),
-                (new_n_buckets as usize) * size_of::<bcf_idinfo_t>(),
-            )
-            .cast();
+            (*h).keys = NonNull::new(
+                libc::realloc(
+                    (*h).keys().cast(),
+                    (new_n_buckets as usize) * size_of::<*const c_char>(),
+                )
+                .cast(),
+            );
+            (*h).vals = NonNull::new(
+                libc::realloc(
+                    (*h).vals().cast(),
+                    (new_n_buckets as usize) * size_of::<bcf_idinfo_t>(),
+                )
+                .cast(),
+            );
         }
-        libc::free((*h).flags.cast());
-        (*h).flags = new_flags;
+        libc::free((*h).flags().cast());
+        (*h).flags = NonNull::new(new_flags);
         (*h).n_buckets = new_n_buckets;
         (*h).n_occupied = (*h).size;
         (*h).upper_bound = ((*h).n_buckets as f64 * KH_AC_HASH_UPPER + 0.5) as u32;
@@ -11748,15 +11803,15 @@ unsafe fn kh_put_vdict(h: *mut kh_vdict_t, key: *const c_char, ret: *mut c_int) 
         let mut xx = (*h).n_buckets;
         let k = super::hts::__ac_FNV1a_hash_string(key);
         let mut i = k & mask;
-        if kh_isempty((*h).flags, i) {
+        if kh_isempty((*h).flags(), i) {
             xx = i;
         } else {
             let last = i;
             let mut step: u32 = 0;
-            while !kh_isempty((*h).flags, i)
-                && (kh_isdel((*h).flags, i) || !vcf_cstr_eq(*(*h).keys.add(i as usize), key))
+            while !kh_isempty((*h).flags(), i)
+                && (kh_isdel((*h).flags(), i) || !vcf_cstr_eq(*(*h).keys().add(i as usize), key))
             {
-                if kh_isdel((*h).flags, i) {
+                if kh_isdel((*h).flags(), i) {
                     site = i;
                 }
                 step += 1;
@@ -11767,7 +11822,7 @@ unsafe fn kh_put_vdict(h: *mut kh_vdict_t, key: *const c_char, ret: *mut c_int) 
                 }
             }
             if xx == (*h).n_buckets {
-                if kh_isempty((*h).flags, i) && site != (*h).n_buckets {
+                if kh_isempty((*h).flags(), i) && site != (*h).n_buckets {
                     xx = site;
                 } else {
                     xx = i;
@@ -11776,15 +11831,15 @@ unsafe fn kh_put_vdict(h: *mut kh_vdict_t, key: *const c_char, ret: *mut c_int) 
         }
         x = xx;
     }
-    if kh_isempty((*h).flags, x) {
-        *(*h).keys.add(x as usize) = key;
-        kh_set_isboth_false((*h).flags, x);
+    if kh_isempty((*h).flags(), x) {
+        *(*h).keys().add(x as usize) = key;
+        kh_set_isboth_false((*h).flags(), x);
         (*h).size += 1;
         (*h).n_occupied += 1;
         *ret = 1;
-    } else if kh_isdel((*h).flags, x) {
-        *(*h).keys.add(x as usize) = key;
-        kh_set_isboth_false((*h).flags, x);
+    } else if kh_isdel((*h).flags(), x) {
+        *(*h).keys().add(x as usize) = key;
+        kh_set_isboth_false((*h).flags(), x);
         (*h).size += 1;
         *ret = 2;
     } else {
@@ -11795,16 +11850,16 @@ unsafe fn kh_put_vdict(h: *mut kh_vdict_t, key: *const c_char, ret: *mut c_int) 
 
 // kh_del(vdict)
 unsafe fn kh_del_vdict(h: *mut kh_vdict_t, x: u32) {
-    if x != (*h).n_buckets && !kh_iseither((*h).flags, x) {
-        kh_set_isdel_true((*h).flags, x);
+    if x != (*h).n_buckets && !kh_iseither((*h).flags(), x) {
+        kh_set_isdel_true((*h).flags(), x);
         (*h).size -= 1;
     }
 }
 
 // kh_del(hdict)
 unsafe fn kh_del_hdict(h: *mut kh_hdict_t, x: u32) {
-    if x != (*h).n_buckets && !kh_iseither((*h).flags, x) {
-        kh_set_isdel_true((*h).flags, x);
+    if x != (*h).n_buckets && !kh_iseither((*h).flags(), x) {
+        kh_set_isdel_true((*h).flags(), x);
         (*h).size -= 1;
     }
 }
@@ -11817,9 +11872,9 @@ unsafe fn kh_init_hdict() -> *mut kh_hdict_t {
 
 unsafe fn kh_destroy_hdict(h: *mut kh_hdict_t) {
     if !h.is_null() {
-        libc::free((*h).keys.cast());
-        libc::free((*h).flags.cast());
-        libc::free((*h).vals.cast());
+        libc::free((*h).keys().cast());
+        libc::free((*h).flags().cast());
+        libc::free((*h).vals().cast());
         libc::free(h.cast());
     }
 }
@@ -11832,8 +11887,8 @@ unsafe fn kh_get_hdict(h: *const kh_hdict_t, key: *const c_char) -> u32 {
     let mut i = super::hts::__ac_FNV1a_hash_string(key) & mask;
     let last = i;
     let mut step: u32 = 0;
-    while !kh_isempty((*h).flags, i)
-        && (kh_isdel((*h).flags, i) || !vcf_cstr_eq(*(*h).keys.add(i as usize), key))
+    while !kh_isempty((*h).flags(), i)
+        && (kh_isdel((*h).flags(), i) || !vcf_cstr_eq(*(*h).keys().add(i as usize), key))
     {
         step += 1;
         i = (i + step) & mask;
@@ -11841,7 +11896,7 @@ unsafe fn kh_get_hdict(h: *const kh_hdict_t, key: *const c_char) -> u32 {
             return (*h).n_buckets;
         }
     }
-    if kh_iseither((*h).flags, i) {
+    if kh_iseither((*h).flags(), i) {
         (*h).n_buckets
     } else {
         i
@@ -11867,7 +11922,7 @@ unsafe fn kh_resize_hdict(h: *mut kh_hdict_t, mut new_n_buckets: u32) -> c_int {
             libc::memset(new_flags.cast(), 0xaa, fsz * 4);
             if (*h).n_buckets < new_n_buckets {
                 let new_keys = libc::realloc(
-                    (*h).keys.cast(),
+                    (*h).keys().cast(),
                     (new_n_buckets as usize) * size_of::<*const c_char>(),
                 )
                 .cast::<*const c_char>();
@@ -11875,9 +11930,9 @@ unsafe fn kh_resize_hdict(h: *mut kh_hdict_t, mut new_n_buckets: u32) -> c_int {
                     libc::free(new_flags.cast());
                     return -1;
                 }
-                (*h).keys = new_keys;
+                (*h).keys = NonNull::new(new_keys);
                 let new_vals = libc::realloc(
-                    (*h).vals.cast(),
+                    (*h).vals().cast(),
                     (new_n_buckets as usize) * size_of::<*mut bcf_hrec_t>(),
                 )
                 .cast::<*mut bcf_hrec_t>();
@@ -11885,18 +11940,18 @@ unsafe fn kh_resize_hdict(h: *mut kh_hdict_t, mut new_n_buckets: u32) -> c_int {
                     libc::free(new_flags.cast());
                     return -1;
                 }
-                (*h).vals = new_vals;
+                (*h).vals = NonNull::new(new_vals);
             }
         }
     }
     if j != 0 {
         let mut jj: u32 = 0;
         while jj != (*h).n_buckets {
-            if !kh_iseither((*h).flags, jj) {
-                let mut key = *(*h).keys.add(jj as usize);
-                let mut val = *(*h).vals.add(jj as usize);
+            if !kh_iseither((*h).flags(), jj) {
+                let mut key = *(*h).keys().add(jj as usize);
+                let mut val = *(*h).vals().add(jj as usize);
                 let new_mask = new_n_buckets - 1;
-                kh_set_isdel_true((*h).flags, jj);
+                kh_set_isdel_true((*h).flags(), jj);
                 loop {
                     let k = super::hts::__ac_FNV1a_hash_string(key);
                     let mut i = k & new_mask;
@@ -11906,13 +11961,13 @@ unsafe fn kh_resize_hdict(h: *mut kh_hdict_t, mut new_n_buckets: u32) -> c_int {
                         i = (i + step) & new_mask;
                     }
                     kh_set_isempty_false(new_flags, i);
-                    if i < (*h).n_buckets && !kh_iseither((*h).flags, i) {
-                        std::ptr::swap((*h).keys.add(i as usize), &mut key);
-                        std::ptr::swap((*h).vals.add(i as usize), &mut val);
-                        kh_set_isdel_true((*h).flags, i);
+                    if i < (*h).n_buckets && !kh_iseither((*h).flags(), i) {
+                        std::ptr::swap((*h).keys().add(i as usize), &mut key);
+                        std::ptr::swap((*h).vals().add(i as usize), &mut val);
+                        kh_set_isdel_true((*h).flags(), i);
                     } else {
-                        *(*h).keys.add(i as usize) = key;
-                        *(*h).vals.add(i as usize) = val;
+                        *(*h).keys().add(i as usize) = key;
+                        *(*h).vals().add(i as usize) = val;
                         break;
                     }
                 }
@@ -11920,19 +11975,23 @@ unsafe fn kh_resize_hdict(h: *mut kh_hdict_t, mut new_n_buckets: u32) -> c_int {
             jj += 1;
         }
         if (*h).n_buckets > new_n_buckets {
-            (*h).keys = libc::realloc(
-                (*h).keys.cast(),
-                (new_n_buckets as usize) * size_of::<*const c_char>(),
-            )
-            .cast();
-            (*h).vals = libc::realloc(
-                (*h).vals.cast(),
-                (new_n_buckets as usize) * size_of::<*mut bcf_hrec_t>(),
-            )
-            .cast();
+            (*h).keys = NonNull::new(
+                libc::realloc(
+                    (*h).keys().cast(),
+                    (new_n_buckets as usize) * size_of::<*const c_char>(),
+                )
+                .cast(),
+            );
+            (*h).vals = NonNull::new(
+                libc::realloc(
+                    (*h).vals().cast(),
+                    (new_n_buckets as usize) * size_of::<*mut bcf_hrec_t>(),
+                )
+                .cast(),
+            );
         }
-        libc::free((*h).flags.cast());
-        (*h).flags = new_flags;
+        libc::free((*h).flags().cast());
+        (*h).flags = NonNull::new(new_flags);
         (*h).n_buckets = new_n_buckets;
         (*h).n_occupied = (*h).size;
         (*h).upper_bound = ((*h).n_buckets as f64 * KH_AC_HASH_UPPER + 0.5) as u32;
@@ -11959,15 +12018,15 @@ unsafe fn kh_put_hdict(h: *mut kh_hdict_t, key: *const c_char, ret: *mut c_int) 
         let mut xx = (*h).n_buckets;
         let k = super::hts::__ac_FNV1a_hash_string(key);
         let mut i = k & mask;
-        if kh_isempty((*h).flags, i) {
+        if kh_isempty((*h).flags(), i) {
             xx = i;
         } else {
             let last = i;
             let mut step: u32 = 0;
-            while !kh_isempty((*h).flags, i)
-                && (kh_isdel((*h).flags, i) || !vcf_cstr_eq(*(*h).keys.add(i as usize), key))
+            while !kh_isempty((*h).flags(), i)
+                && (kh_isdel((*h).flags(), i) || !vcf_cstr_eq(*(*h).keys().add(i as usize), key))
             {
-                if kh_isdel((*h).flags, i) {
+                if kh_isdel((*h).flags(), i) {
                     site = i;
                 }
                 step += 1;
@@ -11978,7 +12037,7 @@ unsafe fn kh_put_hdict(h: *mut kh_hdict_t, key: *const c_char, ret: *mut c_int) 
                 }
             }
             if xx == (*h).n_buckets {
-                if kh_isempty((*h).flags, i) && site != (*h).n_buckets {
+                if kh_isempty((*h).flags(), i) && site != (*h).n_buckets {
                     xx = site;
                 } else {
                     xx = i;
@@ -11987,15 +12046,15 @@ unsafe fn kh_put_hdict(h: *mut kh_hdict_t, key: *const c_char, ret: *mut c_int) 
         }
         x = xx;
     }
-    if kh_isempty((*h).flags, x) {
-        *(*h).keys.add(x as usize) = key;
-        kh_set_isboth_false((*h).flags, x);
+    if kh_isempty((*h).flags(), x) {
+        *(*h).keys().add(x as usize) = key;
+        kh_set_isboth_false((*h).flags(), x);
         (*h).size += 1;
         (*h).n_occupied += 1;
         *ret = 1;
-    } else if kh_isdel((*h).flags, x) {
-        *(*h).keys.add(x as usize) = key;
-        kh_set_isboth_false((*h).flags, x);
+    } else if kh_isdel((*h).flags(), x) {
+        *(*h).keys().add(x as usize) = key;
+        kh_set_isboth_false((*h).flags(), x);
         (*h).size += 1;
         *ret = 2;
     } else {
@@ -12026,7 +12085,7 @@ pub unsafe fn bcf_hdr_id2int(hdr: *const bcf_hdr_t, type_: c_int, id: *const c_c
     if k == (*d).n_buckets {
         -1
     } else {
-        (*(*d).vals.add(k as usize)).id
+        (*(*d).vals().add(k as usize)).id
     }
 }
 
@@ -12493,7 +12552,7 @@ pub unsafe fn bcf_index_build3(
         let tbx = super::tbx::tbx_index(hts_get_bgzfp(fp), min_shift, &conf);
         if !tbx.is_null() {
             let mut r = crate::htslib_rs::hts::hts_idx_save_as(
-                (*tbx).idx.cast(),
+                (*tbx).idx_ptr().cast(),
                 fn_,
                 fnidx,
                 if min_shift > 0 {
@@ -12670,7 +12729,7 @@ unsafe fn sr_tbx_itr_queryi(
 ) -> *mut hts_itr_t {
     unsafe {
         super::hts::hts_itr_query(
-            (*tbx).idx.cast(),
+            (*tbx).idx_ptr().cast(),
             tid,
             beg,
             end,
@@ -17647,11 +17706,11 @@ mod tests {
         }
         let mut k: u32 = 0;
         while k < (*d).n_buckets {
-            if !vcf_kh_iseither((*d).flags, k) {
-                let key = CStr::from_ptr(*(*d).keys.add(k as usize))
+            if !vcf_kh_iseither((*d).flags(), k) {
+                let key = CStr::from_ptr(*(*d).keys().add(k as usize))
                     .to_string_lossy()
                     .into_owned();
-                let v = &*(*d).vals.add(k as usize);
+                let v = &*(*d).vals().add(k as usize);
                 out.push((key, v.id, v.info));
             }
             k += 1;

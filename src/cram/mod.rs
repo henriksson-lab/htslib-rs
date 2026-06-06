@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     ffi::{c_char, c_int, c_uint, c_void, CStr},
     io::Read,
+    ptr::NonNull,
 };
 
 use crate::htslib_rs::bgzf::{bgzf_close, bgzf_index_load, bgzf_open, bgzf_read, bgzf_useek};
@@ -2774,14 +2775,16 @@ pub unsafe fn cram_fd_ref_fn(fd: *mut cram_fd) -> *mut c_char {
 }
 
 // Layout-mirror for the per-decode-job state held in the rqueue. Mirrors
-// `cram_decode_job` (htslib/cram/cram_decode.c:3032): a tuple of pointers
-// plus an exit code. We touch only the (c, s) fields here.
+// `cram_decode_job` (htslib/cram/cram_decode.c:3032): a tuple of nullable
+// pointers plus an exit code. The native side models the nullable pointers as
+// `Option<NonNull<_>>`; the representation is pointer-sized, while accesses
+// are forced to acknowledge the null case.
 #[repr(C)]
 struct cram_decode_job_layout {
-    _fd: *mut cram_fd,
-    c: *mut cram_container_layout,
-    s: *mut cram_slice_layout,
-    _h: *mut sam_hdr_t,
+    _fd: Option<NonNull<cram_fd>>,
+    c: Option<NonNull<cram_container_layout>>,
+    s: Option<NonNull<cram_slice_layout>>,
+    _h: Option<NonNull<sam_hdr_t>>,
     _exit_code: c_int,
 }
 
@@ -2790,8 +2793,8 @@ struct cram_decode_job_layout {
 // `cram_flush_result` (WRITE-mode result-queue drain).
 #[repr(C)]
 struct cram_job_layout {
-    fd: *mut cram_fd,
-    c: *mut cram_container_layout,
+    fd: Option<NonNull<cram_fd>>,
+    c: Option<NonNull<cram_container_layout>>,
 }
 
 // Native equivalent of htslib/cram/cram_io.c:4168 `cram_flush_result`.
@@ -2817,8 +2820,16 @@ unsafe fn cram_flush_result_native(fd_in: *mut cram_fd) -> c_int {
             crate::htslib_rs::thread_pool::hts_tpool_delete_result(r, 0);
             return -1;
         }
-        current_fd = (*j).fd;
-        let c = (*j).c;
+        let Some(job_fd) = (*j).fd else {
+            crate::htslib_rs::thread_pool::hts_tpool_delete_result(r, 0);
+            return -1;
+        };
+        let Some(job_container) = (*j).c else {
+            crate::htslib_rs::thread_pool::hts_tpool_delete_result(r, 0);
+            return -1;
+        };
+        current_fd = job_fd.as_ptr();
+        let c = job_container.as_ptr();
         let fdl = current_fd.cast::<cram_fd_layout>();
 
         if (*fdl).mode == b'w' as c_int
@@ -2899,10 +2910,20 @@ unsafe fn cram_drain_rqueue_native(fdl: *mut cram_fd_layout) {
         }
         let j = crate::htslib_rs::thread_pool::hts_tpool_result_data(r)
             .cast::<cram_decode_job_layout>();
-        if (*(*j).c).slice == (*j).s {
-            (*(*j).c).slice = std::ptr::null_mut();
+        let Some(job_container) = (*j).c else {
+            crate::htslib_rs::thread_pool::hts_tpool_delete_result(r, 0);
+            break;
+        };
+        let Some(job_slice) = (*j).s else {
+            crate::htslib_rs::thread_pool::hts_tpool_delete_result(r, 0);
+            break;
+        };
+        let c = job_container.as_ptr();
+        let s = job_slice.as_ptr();
+        if (*c).slice == s {
+            (*c).slice = std::ptr::null_mut();
         }
-        if (*j).c != lc {
+        if c != lc {
             if !lc.is_null() {
                 if (*fdl).ctr == lc {
                     (*fdl).ctr = std::ptr::null_mut();
@@ -2912,30 +2933,34 @@ unsafe fn cram_drain_rqueue_native(fdl: *mut cram_fd_layout) {
                 }
                 cram_cram_io_c_3705_cram_free_container(lc.cast());
             }
-            lc = (*j).c;
+            lc = c;
         }
-        cram_cram_io_c_4421_cram_free_slice((*j).s.cast());
+        cram_cram_io_c_4421_cram_free_slice(s.cast());
         crate::htslib_rs::thread_pool::hts_tpool_delete_result(r, 1);
     }
 
     if !(*fdl).job_pending.is_null() {
         let j = (*fdl).job_pending.cast::<cram_decode_job_layout>();
-        if (*(*j).c).slice == (*j).s {
-            (*(*j).c).slice = std::ptr::null_mut();
-        }
-        if (*j).c != lc {
-            if !lc.is_null() {
-                if (*fdl).ctr == lc {
-                    (*fdl).ctr = std::ptr::null_mut();
-                }
-                if (*fdl).ctr_mt == lc {
-                    (*fdl).ctr_mt = std::ptr::null_mut();
-                }
-                cram_cram_io_c_3705_cram_free_container(lc.cast());
+        if let (Some(job_container), Some(job_slice)) = ((*j).c, (*j).s) {
+            let c = job_container.as_ptr();
+            let s = job_slice.as_ptr();
+            if (*c).slice == s {
+                (*c).slice = std::ptr::null_mut();
             }
-            lc = (*j).c;
+            if c != lc {
+                if !lc.is_null() {
+                    if (*fdl).ctr == lc {
+                        (*fdl).ctr = std::ptr::null_mut();
+                    }
+                    if (*fdl).ctr_mt == lc {
+                        (*fdl).ctr_mt = std::ptr::null_mut();
+                    }
+                    cram_cram_io_c_3705_cram_free_container(lc.cast());
+                }
+                lc = c;
+            }
+            cram_cram_io_c_4421_cram_free_slice(s.cast());
         }
-        cram_cram_io_c_4421_cram_free_slice((*j).s.cast());
         crate::htslib_rs::c_compat::free(j.cast());
         (*fdl).job_pending = std::ptr::null_mut();
     }

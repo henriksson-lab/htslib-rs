@@ -22,12 +22,36 @@ const ANNOT_TSV_ANN_CNT: c_int = 4;
 const ANNOT_TSV_PRINT_MATCHING: c_int = 1;
 const ANNOT_TSV_PRINT_NONMATCHING: c_int = 2;
 
-#[repr(C)]
+#[derive(Default)]
+struct AnnotTsvOffsets(Vec<*mut c_char>);
+
+impl AnnotTsvOffsets {
+    fn add(&mut self, i: usize) -> *mut *mut c_char {
+        unsafe { self.0.as_mut_ptr().add(i) }
+    }
+
+    fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    fn push(&mut self, ptr: *mut c_char) {
+        self.0.push(ptr);
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn iter(&self) -> std::slice::Iter<'_, *mut c_char> {
+        self.0.iter()
+    }
+}
+
+#[derive(Default)]
 struct AnnotTsvCols {
     n: c_uint,
-    m: c_uint,
-    off: *mut *mut c_char,
-    rmme: *mut c_char,
+    off: AnnotTsvOffsets,
+    rmme: Option<Box<[c_char]>>,
 }
 
 #[repr(C)]
@@ -64,11 +88,9 @@ struct AnnotTsvDat {
     fp: *mut htsFile,
 }
 
-#[repr(C)]
+#[derive(Default)]
 struct AnnotTsvNbp {
-    n: usize,
-    m: usize,
-    regs: *mut hts_pos_t,
+    regs: Vec<hts_pos_t>,
     beg: hts_pos_t,
     end: hts_pos_t,
 }
@@ -98,7 +120,7 @@ struct AnnotTsvArgs {
     idx: *mut regidx::regidx_t,
     itr: *mut regidx::regitr_t,
     tmp_kstr: kstring_t,
-    tmp_cols: *mut AnnotTsvCols,
+    tmp_cols: *mut Vec<AnnotTsvCols>,
     tmp_hash: *mut *mut c_void,
 }
 
@@ -178,24 +200,21 @@ Examples:
 
 // original: nbp_init (htslib/annot-tsv.c:131)
 unsafe fn nbp_init() -> *mut AnnotTsvNbp {
-    let nbp = libc::calloc(1, std::mem::size_of::<AnnotTsvNbp>()).cast::<AnnotTsvNbp>();
-    if nbp.is_null() {
-        libc::abort();
-    }
-    nbp
+    Box::into_raw(Box::<AnnotTsvNbp>::default())
 }
 
 // original: nbp_destroy (htslib/annot-tsv.c:137)
 pub unsafe fn annot_tsv_c_137_nbp_destroy(nbp: *mut c_void) {
     let nbp = nbp.cast::<AnnotTsvNbp>();
-    libc::free((*nbp).regs.cast());
-    libc::free(nbp.cast());
+    if !nbp.is_null() {
+        drop(Box::from_raw(nbp));
+    }
 }
 
 // original: nbp_reset (htslib/annot-tsv.c:142)
 pub unsafe fn annot_tsv_c_142_nbp_reset(nbp: *mut c_void, beg: hts_pos_t, end: hts_pos_t) {
     let nbp = nbp.cast::<AnnotTsvNbp>();
-    (*nbp).n = 0;
+    (*nbp).regs.clear();
     (*nbp).beg = beg;
     (*nbp).end = end;
 }
@@ -203,20 +222,8 @@ pub unsafe fn annot_tsv_c_142_nbp_reset(nbp: *mut c_void, beg: hts_pos_t, end: h
 // original: nbp_add (htslib/annot-tsv.c:148)
 pub unsafe fn annot_tsv_c_148_nbp_add(nbp: *mut c_void, beg: hts_pos_t, end: hts_pos_t) {
     let nbp = nbp.cast::<AnnotTsvNbp>();
-    (*nbp).n += 2;
-    if (*nbp).n >= (*nbp).m {
-        (*nbp).m += 2;
-        (*nbp).regs = libc::realloc(
-            (*nbp).regs.cast(),
-            (*nbp).m * std::mem::size_of::<hts_pos_t>(),
-        )
-        .cast();
-        if (*nbp).regs.is_null() {
-            libc::abort();
-        }
-    }
-    *(*nbp).regs.add((*nbp).n - 2) = beg << 1;
-    *(*nbp).regs.add((*nbp).n - 1) = (end << 1) + 1;
+    (*nbp).regs.push(beg << 1);
+    (*nbp).regs.push((end << 1) + 1);
 }
 
 // original: compare_hts_pos (htslib/annot-tsv.c:160)
@@ -235,16 +242,15 @@ pub unsafe fn annot_tsv_c_160_compare_hts_pos(aptr: *const c_void, bptr: *const 
 // original: nbp_length (htslib/annot-tsv.c:168)
 pub unsafe fn annot_tsv_c_168_nbp_length(nbp: *mut c_void) -> hts_pos_t {
     let nbp = nbp.cast::<AnnotTsvNbp>();
-    if (*nbp).n == 0 {
+    if (*nbp).regs.is_empty() {
         return 0;
     }
-    let regs = std::slice::from_raw_parts_mut((*nbp).regs, (*nbp).n);
-    regs.sort_unstable();
+    (*nbp).regs.sort_unstable();
 
     let mut nopen = 0;
     let mut beg = 0;
     let mut length = 0;
-    for &reg in regs.iter() {
+    for &reg in (*nbp).regs.iter() {
         if reg & 1 == 0 {
             if nopen == 0 {
                 beg = reg >> 1;
@@ -268,23 +274,23 @@ pub unsafe fn annot_tsv_c_187_cols_split(
     delim: c_char,
 ) -> *mut c_void {
     let cols = if cols.is_null() {
-        libc::calloc(1, std::mem::size_of::<AnnotTsvCols>()).cast::<AnnotTsvCols>()
+        Box::into_raw(Box::<AnnotTsvCols>::default())
     } else {
         cols.cast::<AnnotTsvCols>()
     };
     if cols.is_null() {
         libc::abort();
     }
-    if !(*cols).rmme.is_null() {
-        libc::free((*cols).rmme.cast());
-    }
     (*cols).n = 0;
-    (*cols).rmme = libc::strdup(line);
-    if (*cols).rmme.is_null() {
-        libc::abort();
-    }
+    (*cols).off.clear();
+    let bytes = CStr::from_ptr(line).to_bytes_with_nul();
+    let mut rmme: Box<[c_char]> = bytes
+        .iter()
+        .map(|&byte| byte as c_char)
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
 
-    let mut ss = (*cols).rmme;
+    let mut ss = rmme.as_mut_ptr();
     loop {
         let mut se = ss;
         while *se != 0 && *se != delim {
@@ -292,80 +298,53 @@ pub unsafe fn annot_tsv_c_187_cols_split(
         }
         let tmp = *se;
         *se = 0;
+        (*cols).off.push(ss);
         (*cols).n += 1;
-        if (*cols).n > (*cols).m {
-            (*cols).m += 10;
-            (*cols).off = libc::realloc(
-                (*cols).off.cast(),
-                (*cols).m as usize * std::mem::size_of::<*mut c_char>(),
-            )
-            .cast();
-            if (*cols).off.is_null() {
-                libc::abort();
-            }
-        }
-        *(*cols).off.add(((*cols).n - 1) as usize) = ss;
         if tmp == 0 {
             break;
         }
         ss = se.add(1);
     }
+    (*cols).rmme = Some(rmme);
     cols.cast()
 }
 
 // original: cols_append (htslib/annot-tsv.c:217)
 pub unsafe fn annot_tsv_c_217_cols_append(cols: *mut c_void, str_: *mut c_char) {
     let cols = cols.cast::<AnnotTsvCols>();
-    if !(*cols).rmme.is_null() {
-        let str_len = libc::strlen(str_);
-        let last = *(*cols).off.add(((*cols).n - 1) as usize);
-        let lst_len = libc::strlen(last);
-        let tot_len = 2 + str_len + lst_len + last.offset_from((*cols).rmme) as usize;
-
-        let tmp_cols = libc::calloc(1, std::mem::size_of::<AnnotTsvCols>()).cast::<AnnotTsvCols>();
-        if tmp_cols.is_null() {
-            libc::abort();
+    if (*cols).rmme.is_some() {
+        let mut bytes = Vec::<c_char>::new();
+        for &old in (*cols).off.iter().take((*cols).n as usize) {
+            let old_bytes = CStr::from_ptr(old).to_bytes_with_nul();
+            bytes.extend(old_bytes.iter().map(|&byte| byte as c_char));
         }
-        (*tmp_cols).rmme = libc::calloc(tot_len, 1).cast();
-        (*tmp_cols).off =
-            libc::calloc(((*cols).n + 1) as usize, std::mem::size_of::<*mut c_char>()).cast();
-        if (*tmp_cols).rmme.is_null() || (*tmp_cols).off.is_null() {
-            libc::abort();
-        }
+        let str_bytes = CStr::from_ptr(str_).to_bytes_with_nul();
+        bytes.extend(str_bytes.iter().map(|&byte| byte as c_char));
 
-        let mut ptr = (*tmp_cols).rmme;
-        for i in 0..(*cols).n as usize {
-            let old = *(*cols).off.add(i);
-            let len = libc::strlen(old);
-            libc::memcpy(ptr.cast(), old.cast(), len);
-            *(*tmp_cols).off.add(i) = ptr;
-            ptr = ptr.add(len + 1);
+        let mut rmme = bytes.into_boxed_slice();
+        let mut off = AnnotTsvOffsets(Vec::with_capacity((*cols).off.len() + 1));
+        let mut ptr = rmme.as_mut_ptr();
+        loop {
+            off.push(ptr);
+            while *ptr != 0 {
+                ptr = ptr.add(1);
+            }
+            ptr = ptr.add(1);
+            if ptr >= rmme.as_mut_ptr().add(rmme.len()) {
+                break;
+            }
         }
-        libc::memcpy(ptr.cast(), str_.cast(), str_len);
-        *(*tmp_cols).off.add((*cols).n as usize) = ptr;
-
-        libc::free((*cols).off.cast());
-        libc::free((*cols).rmme.cast());
-        (*cols).rmme = (*tmp_cols).rmme;
-        (*cols).off = (*tmp_cols).off;
+        (*cols).rmme = Some(rmme);
+        (*cols).off = off;
         (*cols).n += 1;
-        (*cols).m = (*cols).n;
-        libc::free(tmp_cols.cast());
         return;
     }
-    (*cols).n += 1;
-    if (*cols).n > (*cols).m {
-        (*cols).m += 1;
-        (*cols).off = libc::realloc(
-            (*cols).off.cast(),
-            (*cols).m as usize * std::mem::size_of::<*mut c_char>(),
-        )
-        .cast();
-        if (*cols).off.is_null() {
-            libc::abort();
-        }
+    if ((*cols).n as usize) < (*cols).off.len() {
+        *(*cols).off.add((*cols).n as usize) = str_;
+    } else {
+        (*cols).off.push(str_);
     }
-    *(*cols).off.add(((*cols).n - 1) as usize) = str_;
+    (*cols).n += 1;
 }
 
 // original: cols_clear (htslib/annot-tsv.c:261)
@@ -374,10 +353,9 @@ pub unsafe fn annot_tsv_c_261_cols_clear(cols: *mut c_void) {
     if cols.is_null() {
         return;
     }
-    libc::free((*cols).rmme.cast());
-    libc::free((*cols).off.cast());
-    (*cols).rmme = std::ptr::null_mut();
-    (*cols).off = std::ptr::null_mut();
+    (*cols).rmme = None;
+    (*cols).n = 0;
+    (*cols).off.clear();
 }
 
 // original: cols_destroy (htslib/annot-tsv.c:269)
@@ -386,8 +364,7 @@ pub unsafe fn annot_tsv_c_269_cols_destroy(cols: *mut c_void) {
     if cols.is_null() {
         return;
     }
-    annot_tsv_c_261_cols_clear(cols.cast());
-    libc::free(cols.cast());
+    drop(Box::from_raw(cols));
 }
 
 // original: parse_tab_with_payload (htslib/annot-tsv.c:276)
@@ -732,14 +709,14 @@ pub unsafe fn annot_tsv_c_515_init_data(args: *mut c_void) {
             annot_tsv_c_187_cols_split((*args).headers_str, std::ptr::null_mut(), b':' as c_char)
                 .cast::<AnnotTsvCols>();
         let mut rmme: *mut c_char = std::ptr::null_mut();
-        isrc = libc::strtol(*(*tmp).off, &mut rmme, 10) as c_int;
-        if *rmme != 0 || *(*tmp).off == rmme {
+        isrc = libc::strtol(*(*tmp).off.add(0), &mut rmme, 10) as c_int;
+        if *rmme != 0 || *(*tmp).off.add(0) == rmme {
             libc::abort();
         }
         let dst_str = if (*tmp).n == 2 {
             *(*tmp).off.add(1)
         } else {
-            *(*tmp).off
+            *(*tmp).off.add(0)
         };
         idst = libc::strtol(dst_str, &mut rmme, 10) as c_int;
         if *rmme != 0 || dst_str == rmme {
@@ -768,12 +745,12 @@ pub unsafe fn annot_tsv_c_515_init_data(args: *mut c_void) {
         annot_tsv_c_187_cols_split((*args).core_str, std::ptr::null_mut(), b':' as c_char)
             .cast::<AnnotTsvCols>();
     (*args).src.core =
-        annot_tsv_c_187_cols_split(*(*tmp).off, std::ptr::null_mut(), b',' as c_char).cast();
+        annot_tsv_c_187_cols_split(*(*tmp).off.add(0), std::ptr::null_mut(), b',' as c_char).cast();
     (*args).dst.core = annot_tsv_c_187_cols_split(
         if (*tmp).n == 2 {
             *(*tmp).off.add(1)
         } else {
-            *(*tmp).off
+            *(*tmp).off.add(0)
         },
         std::ptr::null_mut(),
         b',' as c_char,
@@ -805,7 +782,7 @@ pub unsafe fn annot_tsv_c_515_init_data(args: *mut c_void) {
         .cast::<AnnotTsvCols>();
     annot_tsv_c_495_parse_coor_base(
         args.cast(),
-        *(*tmp).off,
+        *(*tmp).off.add(0),
         (&mut (*args).src as *mut AnnotTsvDat).cast(),
     );
     annot_tsv_c_495_parse_coor_base(
@@ -813,7 +790,7 @@ pub unsafe fn annot_tsv_c_515_init_data(args: *mut c_void) {
         if (*tmp).n == 2 {
             *(*tmp).off.add(1)
         } else {
-            *(*tmp).off
+            *(*tmp).off.add(0)
         },
         (&mut (*args).dst as *mut AnnotTsvDat).cast(),
     );
@@ -823,12 +800,13 @@ pub unsafe fn annot_tsv_c_515_init_data(args: *mut c_void) {
         tmp = annot_tsv_c_187_cols_split((*args).match_str, std::ptr::null_mut(), b':' as c_char)
             .cast::<AnnotTsvCols>();
         (*args).src.match_ =
-            annot_tsv_c_187_cols_split(*(*tmp).off, std::ptr::null_mut(), b',' as c_char).cast();
+            annot_tsv_c_187_cols_split(*(*tmp).off.add(0), std::ptr::null_mut(), b',' as c_char)
+                .cast();
         (*args).dst.match_ = annot_tsv_c_187_cols_split(
             if (*tmp).n == 2 {
                 *(*tmp).off.add(1)
             } else {
-                *(*tmp).off
+                *(*tmp).off.add(0)
             },
             std::ptr::null_mut(),
             b',' as c_char,
@@ -859,12 +837,13 @@ pub unsafe fn annot_tsv_c_515_init_data(args: *mut c_void) {
             annot_tsv_c_187_cols_split((*args).transfer_str, std::ptr::null_mut(), b':' as c_char)
                 .cast::<AnnotTsvCols>();
         (*args).src.transfer =
-            annot_tsv_c_187_cols_split(*(*tmp).off, std::ptr::null_mut(), b',' as c_char).cast();
+            annot_tsv_c_187_cols_split(*(*tmp).off.add(0), std::ptr::null_mut(), b',' as c_char)
+                .cast();
         (*args).dst.transfer = annot_tsv_c_187_cols_split(
             if (*tmp).n == 2 {
                 *(*tmp).off.add(1)
             } else {
-                *(*tmp).off
+                *(*tmp).off.add(0)
             },
             std::ptr::null_mut(),
             b',' as c_char,
@@ -907,17 +886,17 @@ pub unsafe fn annot_tsv_c_515_init_data(args: *mut c_void) {
                 (*args).dst.grow_n += 1;
             }
         }
-        (*args).tmp_cols = libc::calloc(
-            (*(*args).src.transfer).n as usize,
-            std::mem::size_of::<AnnotTsvCols>(),
-        )
-        .cast();
+        (*args).tmp_cols = Box::into_raw(Box::new(
+            (0..(*(*args).src.transfer).n)
+                .map(|_| AnnotTsvCols::default())
+                .collect::<Vec<_>>(),
+        ));
         (*args).tmp_hash = libc::calloc(
             (*(*args).src.transfer).n as usize,
             std::mem::size_of::<*mut c_void>(),
         )
         .cast();
-        if (*args).tmp_cols.is_null() || (*args).tmp_hash.is_null() {
+        if (*args).tmp_hash.is_null() {
             libc::abort();
         }
         for i in 0..(*(*args).src.transfer).n as usize {
@@ -925,10 +904,7 @@ pub unsafe fn annot_tsv_c_515_init_data(args: *mut c_void) {
         }
         annot_tsv_c_269_cols_destroy(tmp.cast());
     } else {
-        (*args).src.transfer = libc::calloc(1, std::mem::size_of::<AnnotTsvCols>()).cast();
-        if (*args).src.transfer.is_null() {
-            libc::abort();
-        }
+        (*args).src.transfer = Box::into_raw(Box::<AnnotTsvCols>::default());
     }
     (*args).src.nannots_added = libc::calloc(
         (*(*args).src.transfer).n as usize,
@@ -943,12 +919,13 @@ pub unsafe fn annot_tsv_c_515_init_data(args: *mut c_void) {
         tmp = annot_tsv_c_187_cols_split((*args).annots_str, std::ptr::null_mut(), b':' as c_char)
             .cast::<AnnotTsvCols>();
         (*args).src.annots =
-            annot_tsv_c_187_cols_split(*(*tmp).off, std::ptr::null_mut(), b',' as c_char).cast();
+            annot_tsv_c_187_cols_split(*(*tmp).off.add(0), std::ptr::null_mut(), b',' as c_char)
+                .cast();
         (*args).dst.annots = annot_tsv_c_187_cols_split(
             if (*tmp).n == 2 {
                 *(*tmp).off.add(1)
             } else {
-                *(*tmp).off
+                *(*tmp).off.add(0)
             },
             std::ptr::null_mut(),
             b',' as c_char,
@@ -1059,10 +1036,12 @@ pub unsafe fn annot_tsv_c_666_destroy_data(args: *mut c_void) {
         sam::khash_str2int_destroy(*(*args).tmp_hash.add(i));
     }
     libc::free((*args).tmp_hash.cast());
-    for i in 0..(*(*args).src.transfer).n as usize {
-        annot_tsv_c_261_cols_clear((*args).tmp_cols.add(i).cast());
+    if !(*args).tmp_cols.is_null() {
+        for col in (*(*args).tmp_cols).iter_mut() {
+            annot_tsv_c_261_cols_clear((col as *mut AnnotTsvCols).cast());
+        }
+        drop(Box::from_raw((*args).tmp_cols));
     }
-    libc::free((*args).tmp_cols.cast());
     annot_tsv_c_269_cols_destroy((*args).src.core.cast());
     annot_tsv_c_269_cols_destroy((*args).dst.core.cast());
     annot_tsv_c_269_cols_destroy((*args).src.match_.cast());
@@ -1143,7 +1122,10 @@ pub unsafe fn annot_tsv_c_709_write_annots(args: *mut c_void) {
                 &mut (*args).tmp_kstr,
             );
         } else if ann == ANNOT_TSV_ANN_CNT {
-            crate::htslib_rs::hts::kputw(((*(*args).nbp).n / 2) as c_int, &mut (*args).tmp_kstr);
+            crate::htslib_rs::hts::kputw(
+                ((*(*args).nbp).regs.len() / 2) as c_int,
+                &mut (*args).tmp_kstr,
+            );
         }
     }
     annot_tsv_c_703_write_string(args.cast(), (*args).tmp_kstr.s, (*args).tmp_kstr.l);
@@ -1187,7 +1169,7 @@ pub unsafe fn annot_tsv_c_737_process_line(args: *mut c_void, line: *mut c_char,
 
     for i in 0..(*(*args).src.transfer).n as usize {
         *(*args).src.nannots_added.add(i) = 0;
-        (*(*args).tmp_cols.add(i)).n = 0;
+        (&mut (*(*args).tmp_cols))[i].n = 0;
         sam::khash_str2int_destroy(*(*args).tmp_hash.add(i));
         *(*args).tmp_hash.add(i) = sam::khash_str2int_init();
     }
@@ -1263,7 +1245,10 @@ pub unsafe fn annot_tsv_c_737_process_line(args: *mut c_void, line: *mut c_char,
                     max_annots_reached = 1;
                 }
             }
-            annot_tsv_c_217_cols_append((*args).tmp_cols.add(i).cast(), str_);
+            annot_tsv_c_217_cols_append(
+                (&mut (&mut (*(*args).tmp_cols))[i] as *mut AnnotTsvCols).cast(),
+                str_,
+            );
             annot_len += libc::strlen(str_);
         }
         if max_annots_reached != 0 {
@@ -1295,7 +1280,7 @@ pub unsafe fn annot_tsv_c_737_process_line(args: *mut c_void, line: *mut c_char,
         *(*dst_cols)
             .off
             .add(*(*args).dst.transfer_idx.add(i) as usize) = off;
-        let ann = (*args).tmp_cols.add(i);
+        let ann = &mut (&mut (*(*args).tmp_cols))[i] as *mut AnnotTsvCols;
         if (*ann).n == 0 {
             *off = b'.' as c_char;
             *off.add(1) = 0;
@@ -1316,7 +1301,7 @@ pub unsafe fn annot_tsv_c_737_process_line(args: *mut c_void, line: *mut c_char,
         *off = 0;
         (*args).tmp_kstr.l += 1;
     }
-    annot_tsv_c_703_write_string(args.cast(), *(*dst_cols).off, 0);
+    annot_tsv_c_703_write_string(args.cast(), *(*dst_cols).off.add(0), 0);
     for i in 1..(*dst_cols).n as usize {
         annot_tsv_c_703_write_string(args.cast(), &mut (*args).dst.delim as *mut c_char, 1);
         annot_tsv_c_703_write_string(args.cast(), *(*dst_cols).off.add(i), 0);

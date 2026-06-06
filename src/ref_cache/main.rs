@@ -30,6 +30,7 @@ use super::{
     ping,
     poll_wrap::{Pw_fd_type, Pw_item, PW_ERR, PW_HUP, PW_IN},
     poll_wrap_epoll as poll_impl,
+    server::ref_cache_server_c_721_run_poll_loop,
 };
 use std::ffi::{c_char, c_int, c_ulong, c_void};
 
@@ -68,12 +69,6 @@ const NI_MAXHOST: usize = 1025;
 const MAX_EVENTS: c_int = 16;
 
 unsafe extern "C" {
-    fn run_poll_loop(
-        opts: *mut Options,
-        lsocks: *mut Listeners,
-        upstream: c_int,
-        log_wr: c_int,
-    ) -> c_int;
     fn run_upstream_handler(opts: *mut Options, upstream: *mut c_int, liveness_fd: c_int) -> c_int;
 }
 
@@ -282,7 +277,7 @@ pub unsafe fn ref_cache_main_c_211_make_new_child(
         if ref_cache_main_c_168_set_up_child(opts, k, 0, pw) != 0 {
             libc::_exit(libc::EXIT_FAILURE);
         }
-        let res = run_poll_loop(opts, lsocks, upstr, log_wr);
+        let res = ref_cache_server_c_721_run_poll_loop(opts, lsocks, upstr, log_wr);
         libc::_exit(if res == 0 {
             libc::EXIT_SUCCESS
         } else {

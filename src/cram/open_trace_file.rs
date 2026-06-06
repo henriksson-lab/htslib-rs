@@ -4,6 +4,7 @@
 use std::ffi::{c_char, c_int};
 
 use super::*;
+use crate::htslib_rs::c_compat::FreeOnDrop;
 
 pub unsafe fn cram_open_trace_file_c_90_is_file(fn_: *mut c_char) -> c_int {
     let mut buf = std::mem::MaybeUninit::<libc::stat>::uninit();
@@ -126,17 +127,16 @@ pub unsafe fn cram_open_trace_file_c_182_find_file_url(
     if path.is_null() {
         return std::ptr::null_mut();
     }
+    let path = FreeOnDrop::from_raw(path);
 
-    let hf = crate::htslib_rs::hfile::hopen(path, c"r".as_ptr());
+    let hf = crate::htslib_rs::hfile::hopen(path.as_ptr(), c"r".as_ptr());
     if hf.is_null() {
-        free(path.cast());
         return std::ptr::null_mut();
     }
 
     let mf = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
     if mf.is_null() {
         crate::htslib_rs::hfile::hclose_abruptly(hf);
-        free(path.cast());
         return std::ptr::null_mut();
     }
 
@@ -146,7 +146,6 @@ pub unsafe fn cram_open_trace_file_c_182_find_file_url(
         if len <= 0 {
             if crate::htslib_rs::hfile::hclose(hf) < 0 || len < 0 {
                 cram_mFILE_c_408_mfdestroy(mf);
-                free(path.cast());
                 return std::ptr::null_mut();
             }
             break;
@@ -154,12 +153,10 @@ pub unsafe fn cram_open_trace_file_c_182_find_file_url(
         if cram_mFILE_c_527_mfwrite(buf.as_mut_ptr().cast(), len as usize, 1, mf) == 0 {
             crate::htslib_rs::hfile::hclose_abruptly(hf);
             cram_mFILE_c_408_mfdestroy(mf);
-            free(path.cast());
             return std::ptr::null_mut();
         }
     }
 
-    free(path.cast());
     cram_mFILE_c_475_mrewind(mf);
     mf
 }
@@ -254,8 +251,9 @@ pub unsafe fn cram_open_trace_file_c_433_find_path(
     if newsearch.is_null() {
         return std::ptr::null_mut();
     }
+    let newsearch = FreeOnDrop::from_raw(newsearch);
 
-    let mut ele = newsearch;
+    let mut ele = newsearch.as_ptr();
     while *ele != 0 {
         let ele2 = if *ele as u8 == b'|' { ele.add(1) } else { ele };
 
@@ -266,7 +264,6 @@ pub unsafe fn cram_open_trace_file_c_433_find_path(
         {
             let outpath = cram_open_trace_file_c_230_expand_path(file, ele2, c_int::MAX);
             if cram_open_trace_file_c_90_is_file(outpath) != 0 {
-                free(newsearch.cast());
                 return outpath;
             }
             free(outpath.cast());
@@ -275,7 +272,6 @@ pub unsafe fn cram_open_trace_file_c_433_find_path(
         ele = ele.add(libc::strlen(ele) + 1);
     }
 
-    free(newsearch.cast());
     std::ptr::null_mut()
 }
 
@@ -287,14 +283,13 @@ pub unsafe fn cram_open_trace_file_c_314_find_file_dir(
     if path.is_null() {
         return std::ptr::null_mut();
     }
+    let path = FreeOnDrop::from_raw(path);
 
-    let mf = if cram_open_trace_file_c_90_is_file(path) != 0 {
-        cram_mFILE_c_347_mfopen(path, c"rbm".as_ptr())
+    if cram_open_trace_file_c_90_is_file(path.as_ptr()) != 0 {
+        cram_mFILE_c_347_mfopen(path.as_ptr(), c"rbm".as_ptr())
     } else {
         std::ptr::null_mut()
-    };
-    free(path.cast());
-    mf
+    }
 }
 
 pub unsafe fn cram_open_trace_file_c_352_open_path_mfile(
@@ -314,8 +309,9 @@ pub unsafe fn cram_open_trace_file_c_352_open_path_mfile(
     if newsearch.is_null() {
         return std::ptr::null_mut();
     }
+    let newsearch = FreeOnDrop::from_raw(newsearch);
 
-    let mut ele = newsearch;
+    let mut ele = newsearch.as_ptr();
     while *ele != 0 {
         let ele2 = if *ele as u8 == b'|' { ele.add(1) } else { ele };
 
@@ -329,7 +325,6 @@ pub unsafe fn cram_open_trace_file_c_352_open_path_mfile(
                         0
                     };
                 }
-                free(newsearch.cast());
                 return fp;
             }
         } else if crate::htslib_rs::hfile::hisremote(ele2) != 0 {
@@ -338,21 +333,17 @@ pub unsafe fn cram_open_trace_file_c_352_open_path_mfile(
                 if !local.is_null() {
                     *local = 0;
                 }
-                free(newsearch.cast());
                 return fp;
             }
         } else {
             let fp = cram_open_trace_file_c_314_find_file_dir(file, ele2);
             if !fp.is_null() {
-                free(newsearch.cast());
                 return fp;
             }
         }
 
         ele = ele.add(libc::strlen(ele) + 1);
     }
-
-    free(newsearch.cast());
 
     if !relative_to.is_null() {
         let mut relative_path = [0 as c_char; crate::htslib_rs::c_compat::PATH_MAX as usize + 1];

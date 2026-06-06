@@ -101,7 +101,7 @@ pub struct fqz_slice {
 /// } fqz_param;
 /// ```
 // fqzcomp_qual.h:90
-#[repr(C)]
+#[derive(Clone)]
 pub struct fqz_param {
     pub context: u16,
     pub pflags: u32,
@@ -149,7 +149,6 @@ pub struct fqz_param {
 /// } fqz_gparams;
 /// ```
 // fqzcomp_qual.h:126
-#[repr(C)]
 pub struct fqz_gparams {
     pub vers: i32,
     pub gflags: u32,
@@ -157,7 +156,7 @@ pub struct fqz_gparams {
     pub max_sel: i32,
     pub stab: [u32; 256],
     pub max_sym: i32,
-    pub p: *mut fqz_param,
+    pub p: Vec<fqz_param>,
 }
 
 impl fqz_gparams {
@@ -170,7 +169,45 @@ impl fqz_gparams {
             max_sel: 0,
             stab: [0u32; 256],
             max_sym: 0,
-            p: std::ptr::null_mut(),
+            p: Vec::new(),
+        }
+    }
+}
+
+impl Default for fqz_param {
+    fn default() -> Self {
+        fqz_param {
+            context: 0,
+            pflags: 0,
+            do_sel: 0,
+            do_dedup: 0,
+            store_qmap: 0,
+            fixed_len: 0,
+            use_qtab: 0,
+            use_dtab: 0,
+            use_ptab: 0,
+            qbits: 0,
+            qloc: 0,
+            pbits: 0,
+            ploc: 0,
+            dbits: 0,
+            dloc: 0,
+            sbits: 0,
+            sloc: 0,
+            max_sym: 0,
+            nsym: 0,
+            max_sel: 0,
+            qmap: [0; 256],
+            qtab: [0; 256],
+            ptab: [0; 1024],
+            dtab: [0; 256],
+            qshift: 0,
+            pshift: 0,
+            dshift: 0,
+            sshift: 0,
+            qmask: 0,
+            do_r2: 0,
+            do_qa: 0,
         }
     }
 }
@@ -957,9 +994,8 @@ pub fn fqz_store_parameters(gp: &fqz_gparams, comp: &mut [u8]) -> i32 {
         comp_idx += store_array(&mut comp[comp_idx..], &gp.stab, 256) as usize;
     }
 
-    let gp_p = unsafe { std::slice::from_raw_parts(gp.p, gp.nparam as usize) };
-    for i in 0..gp.nparam as usize {
-        comp_idx += fqz_store_parameters1(&gp_p[i], &mut comp[comp_idx..]) as usize;
+    for pm in gp.p.iter().take(gp.nparam as usize) {
+        comp_idx += fqz_store_parameters1(pm, &mut comp[comp_idx..]) as usize;
     }
 
     comp_idx as i32
@@ -1000,16 +1036,11 @@ pub fn fqz_pick_parameters(
     gp.max_sel = 0;
     gp.stab = [0u32; 256];
     gp.max_sym = 0;
-    gp.p = std::ptr::null_mut();
+    gp.p.clear();
 
     gp.vers = FQZ_VERS;
 
-    let p_ptr = unsafe { crate::c_compat::calloc(1, std::mem::size_of::<fqz_param>() as u64) }
-        as *mut fqz_param;
-    if p_ptr.is_null() {
-        return -1;
-    }
-    gp.p = p_ptr;
+    gp.p.push(fqz_param::default());
     gp.nparam = 1;
     gp.max_sel = 0;
 
@@ -1017,7 +1048,7 @@ pub fn fqz_pick_parameters(
         gp.gflags |= GFLAG_DO_REV as u32;
     }
 
-    let pm: &mut fqz_param = unsafe { &mut *gp.p };
+    let pm: &mut fqz_param = &mut gp.p[0];
 
     // Programmed strategies.
     pm.qbits = STRAT_OPTS[strat as usize][0] as u32;
@@ -1192,10 +1223,7 @@ pub fn fqz_pick_parameters(
 /// `static void fqz_free_parameters(fqz_gparams *gp)`
 // fqzcomp_qual.c:926
 pub fn fqz_free_parameters(gp: &mut fqz_gparams) {
-    if !gp.p.is_null() {
-        unsafe { crate::c_compat::free(gp.p as *mut std::ffi::c_void) };
-        gp.p = std::ptr::null_mut();
-    }
+    gp.p.clear();
 }
 
 /// `static int compress_new_read(fqz_slice *s, fqz_state *state, fqz_gparams *gp,
@@ -1233,7 +1261,7 @@ pub fn compress_new_read(
     } else {
         state.s
     };
-    let pm: &fqz_param = unsafe { &*gp.p.add(x as usize) };
+    let pm: &fqz_param = &gp.p[x as usize];
 
     let len = s_len[rec as usize];
     if pm.fixed_len == 0 || state.first_len != 0 {
@@ -1331,7 +1359,7 @@ pub fn compress_block_fqz2f(
         sel_bits += 1;
         sel >>= 1;
     }
-    let gp_p0_fixed_len = unsafe { (*gp.p).fixed_len };
+    let gp_p0_fixed_len = gp.p[0].fixed_len;
     let mut len_sz: f64 = if gp_p0_fixed_len != 0 { 0.25 } else { 4.25 };
     len_sz += sel_bits as f64 / 8.0;
     let comp_sz: usize = ((s.num_records as f64 * len_sz + in_size as f64) * 1.1) as usize + 10000;
@@ -1346,9 +1374,7 @@ pub fn compress_block_fqz2f(
 
     // Optimise tables to remove shifts in loop.
     {
-        let gp_p = unsafe { std::slice::from_raw_parts_mut(gp.p, gp.nparam as usize) };
-        for jp in 0..gp.nparam as usize {
-            let pm = &mut gp_p[jp];
+        for pm in gp.p.iter_mut().take(gp.nparam as usize) {
             for i in 0..1024usize {
                 pm.ptab[i] <<= pm.ploc;
             }
@@ -1414,15 +1440,7 @@ pub fn compress_block_fqz2f(
             }
 
             if compress_new_read(
-                s,
-                &mut state,
-                gp,
-                unsafe { &*gp.p },
-                &mut model,
-                &mut rc,
-                r#in,
-                &mut i,
-                &mut last,
+                s, &mut state, gp, &gp.p[0], &mut model, &mut rc, r#in, &mut i, &mut last,
             ) != 0
             {
                 i += 1;
@@ -1430,7 +1448,7 @@ pub fn compress_block_fqz2f(
             }
         }
 
-        let pm: &fqz_param = unsafe { &*gp.p };
+        let pm: &fqz_param = &gp.p[0];
         let mut jrel: isize = -1;
 
         while state.p >= 4 && i as isize + jrel + 4 < in_size as isize {
@@ -1680,17 +1698,11 @@ pub fn fqz_read_parameters(gp: &mut fqz_gparams, r#in: &[u8]) -> i32 {
     }
 
     // Load the individual parameter blocks
-    let p_ptr = unsafe {
-        crate::c_compat::malloc(gp.nparam as u64 * std::mem::size_of::<fqz_param>() as u64)
-    } as *mut fqz_param;
-    if p_ptr.is_null() {
-        return -1;
-    }
-    gp.p = p_ptr;
+    gp.p = vec![fqz_param::default(); gp.nparam as usize];
 
     gp.max_sym = 0;
     for i in 0..gp.nparam as usize {
-        let pm = unsafe { &mut *gp.p.add(i) };
+        let pm = &mut gp.p[i];
         let e = fqz_read_parameters1(pm, &r#in[in_idx..]);
         if e < 0 {
             fqz_free_parameters(gp);
@@ -1752,7 +1764,7 @@ pub fn decompress_new_read(
     if x >= gp.nparam {
         return -1;
     }
-    let pm: &fqz_param = unsafe { &*gp.p.add(x as usize) };
+    let pm: &fqz_param = &gp.p[x as usize];
 
     let mut len = state.last_len;
     if pm.fixed_len == 0 || state.first_len != 0 {
@@ -1836,9 +1848,7 @@ pub fn uncompress_block_fqz2f(
 
     // Optimisations to remove shifts from main loop
     {
-        let gp_p = unsafe { std::slice::from_raw_parts_mut(gp.p, gp.nparam as usize) };
-        for ip in 0..gp.nparam as usize {
-            let pm = &mut gp_p[ip];
+        for pm in gp.p.iter_mut().take(gp.nparam as usize) {
             for j in 0..1024usize {
                 pm.ptab[j] <<= pm.ploc;
             }
@@ -1884,7 +1894,7 @@ pub fn uncompress_block_fqz2f(
 
     let mut rev: i32 = 0;
     let x = 0usize;
-    let pm: &fqz_param = unsafe { &*gp.p.add(x) };
+    let pm: &fqz_param = &gp.p[x];
 
     let mut errored = false;
     let mut i: isize = 0;

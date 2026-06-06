@@ -2,12 +2,11 @@ use std::ffi::c_int;
 
 use crate::htslib_rs::{c_compat, kfunc::lbinom, os_rand::hts_drand48};
 
-#[repr(C)]
 pub struct errmod_t {
     pub depcorr: f64,
-    pub fk: *mut f64,
-    pub beta: *mut f64,
-    pub lhet: *mut f64,
+    pub fk: Vec<f64>,
+    pub beta: Vec<f64>,
+    pub lhet: Vec<f64>,
 }
 
 #[repr(C)]
@@ -35,22 +34,16 @@ pub unsafe fn logbinomial_table(n_size: c_int) -> *mut f64 {
     logbinom
 }
 
-pub unsafe fn cal_coef(em: *mut errmod_t, depcorr: f64, eta: f64) -> c_int {
-    (*em).fk = c_compat::calloc(256, std::mem::size_of::<f64>() as u64).cast::<f64>();
-    if (*em).fk.is_null() {
-        return -1;
-    }
-    *(*em).fk.add(0) = 1.0;
+pub unsafe fn cal_coef(em: &mut errmod_t, depcorr: f64, eta: f64) -> c_int {
+    let mut fk = vec![0.0; 256];
+    fk[0] = 1.0;
     let mut n = 1;
     while n < 256 {
-        *(*em).fk.add(n as usize) = (1.0 - depcorr).powi(n) * (1.0 - eta) + eta;
+        fk[n as usize] = (1.0 - depcorr).powi(n) * (1.0 - eta) + eta;
         n += 1;
     }
 
-    (*em).beta = c_compat::calloc(256 * 256 * 64, std::mem::size_of::<f64>() as u64).cast::<f64>();
-    if (*em).beta.is_null() {
-        return -1;
-    }
+    let mut beta = vec![0.0; 256 * 256 * 64];
 
     let lc = logbinomial_table(256);
     if lc.is_null() {
@@ -64,9 +57,9 @@ pub unsafe fn cal_coef(em: *mut errmod_t, depcorr: f64, eta: f64) -> c_int {
         let le1 = (1.0 - e).ln();
         n = 1;
         while n <= 255 {
-            let beta = (*em).beta.add(((q << 16) | (n << 8)) as usize);
+            let beta_row = ((q << 16) | (n << 8)) as usize;
             let mut sum1 = *lc.add(((n << 8) | n) as usize) + n as f64 * le;
-            *beta.add(n as usize) = f64::INFINITY;
+            beta[beta_row + n as usize] = f64::INFINITY;
             let mut k = n - 1;
             loop {
                 let sum = sum1
@@ -74,7 +67,7 @@ pub unsafe fn cal_coef(em: *mut errmod_t, depcorr: f64, eta: f64) -> c_int {
                         - sum1)
                         .exp()
                         .ln_1p();
-                *beta.add(k as usize) = -10.0 / std::f64::consts::LN_10 * (sum1 - sum);
+                beta[beta_row + k as usize] = -10.0 / std::f64::consts::LN_10 * (sum1 - sum);
                 sum1 = sum;
                 if k == 0 {
                     break;
@@ -86,43 +79,43 @@ pub unsafe fn cal_coef(em: *mut errmod_t, depcorr: f64, eta: f64) -> c_int {
         q += 1;
     }
 
-    (*em).lhet = c_compat::calloc(256 * 256, std::mem::size_of::<f64>() as u64).cast::<f64>();
-    if (*em).lhet.is_null() {
-        c_compat::free(lc.cast());
-        return -1;
-    }
+    let mut lhet = vec![0.0; 256 * 256];
     n = 0;
     while n < 256 {
         let mut k = 0;
         while k < 256 {
-            *(*em).lhet.add(((n << 8) | k) as usize) =
+            lhet[((n << 8) | k) as usize] =
                 *lc.add(((n << 8) | k) as usize) - std::f64::consts::LN_2 * n as f64;
             k += 1;
         }
         n += 1;
     }
     c_compat::free(lc.cast());
+    em.depcorr = depcorr;
+    em.fk = fk;
+    em.beta = beta;
+    em.lhet = lhet;
     0
 }
 
 pub unsafe fn errmod_init(depcorr: f64) -> *mut errmod_t {
-    let em = c_compat::calloc(1, std::mem::size_of::<errmod_t>() as u64).cast::<errmod_t>();
-    if em.is_null() {
+    let mut em = Box::new(errmod_t {
+        depcorr,
+        fk: Vec::new(),
+        beta: Vec::new(),
+        lhet: Vec::new(),
+    });
+    if cal_coef(&mut em, depcorr, 0.03) != 0 {
         return std::ptr::null_mut();
     }
-    (*em).depcorr = depcorr;
-    cal_coef(em, depcorr, 0.03);
-    em
+    Box::into_raw(em)
 }
 
 pub unsafe fn errmod_destroy(em: *mut errmod_t) {
     if em.is_null() {
         return;
     }
-    c_compat::free((*em).lhet.cast());
-    c_compat::free((*em).fk.cast());
-    c_compat::free((*em).beta.cast());
-    c_compat::free(em.cast());
+    drop(Box::from_raw(em));
 }
 
 pub unsafe fn errmod_cal(
@@ -132,6 +125,7 @@ pub unsafe fn errmod_cal(
     bases: *mut u16,
     q: *mut f32,
 ) -> c_int {
+    let em = &*em;
     std::ptr::write_bytes(q, 0, (m * m) as usize);
     if n == 0 {
         return 0;
@@ -167,11 +161,9 @@ pub unsafe fn errmod_cal(
         }
         let basestrand = (b & 0x1f) as usize;
         let base = (b & 0xf) as usize;
-        aux.fsum[base] += *(*em).fk.add(w[basestrand] as usize);
-        aux.bsum[base] += *(*em).fk.add(w[basestrand] as usize)
-            * *(*em)
-                .beta
-                .add(((qual << 16) | (n << 8) | aux.c[base] as c_int) as usize);
+        aux.fsum[base] += em.fk[w[basestrand] as usize];
+        aux.bsum[base] += em.fk[w[basestrand] as usize]
+            * em.beta[((qual << 16) | (n << 8) | aux.c[base] as c_int) as usize];
         aux.c[base] += 1;
         w[basestrand] += 1;
         if j == 0 {
@@ -209,7 +201,7 @@ pub unsafe fn errmod_cal(
                 }
                 i += 1;
             }
-            let val = -4.343f64 * *(*em).lhet.add(((cjk << 8) | aux.c[k as usize]) as usize);
+            let val = -4.343f64 * em.lhet[((cjk << 8) | aux.c[k as usize]) as usize];
             if tmp2 != 0 {
                 let out = (val + tmp1 as f64) as f32;
                 *q.add((j * m + k) as usize) = out;
@@ -254,9 +246,9 @@ mod tests {
         unsafe {
             let em = errmod_init(0.1);
             assert!(!em.is_null());
-            assert!(!(*em).fk.is_null());
-            assert!(!(*em).beta.is_null());
-            assert!(!(*em).lhet.is_null());
+            assert_eq!((*em).fk.len(), 256);
+            assert_eq!((*em).beta.len(), 256 * 256 * 64);
+            assert_eq!((*em).lhet.len(), 256 * 256);
             assert_eq!((*em).depcorr, 0.1);
 
             let mut bases = [30u16 << 5, 25u16 << 5, (20u16 << 5) | 1, (35u16 << 5) | 17];
@@ -540,22 +532,22 @@ mod tests {
     #[test]
     fn cal_coef_sets_dependency_and_heterozygous_boundary_tables() {
         unsafe {
-            let em = c_compat::calloc(1, std::mem::size_of::<errmod_t>() as u64).cast::<errmod_t>();
-            assert!(!em.is_null());
-            assert_eq!(cal_coef(em, 0.25, 0.03), 0);
+            let mut em = errmod_t {
+                depcorr: 0.0,
+                fk: Vec::new(),
+                beta: Vec::new(),
+                lhet: Vec::new(),
+            };
+            assert_eq!(cal_coef(&mut em, 0.25, 0.03), 0);
 
-            assert_eq!(*(*em).fk.add(0), 1.0);
-            assert!((*(*em).fk.add(1) - 0.7575).abs() < 1e-12);
-            assert!((*(*em).fk.add(2) - 0.575625).abs() < 1e-12);
-            assert_eq!(*(*em).lhet.add(0), 0.0);
-            assert_eq!(*(*em).lhet.add(1 << 8), -std::f64::consts::LN_2);
-            assert_eq!(*(*em).lhet.add((1 << 8) | 1), -std::f64::consts::LN_2);
-            assert_eq!(*(*em).beta.add((4 << 16) | (1 << 8) | 1), f64::INFINITY);
-
-            c_compat::free((*em).lhet.cast());
-            c_compat::free((*em).fk.cast());
-            c_compat::free((*em).beta.cast());
-            c_compat::free(em.cast());
+            assert_eq!(em.depcorr, 0.25);
+            assert_eq!(em.fk[0], 1.0);
+            assert!((em.fk[1] - 0.7575).abs() < 1e-12);
+            assert!((em.fk[2] - 0.575625).abs() < 1e-12);
+            assert_eq!(em.lhet[0], 0.0);
+            assert_eq!(em.lhet[1 << 8], -std::f64::consts::LN_2);
+            assert_eq!(em.lhet[(1 << 8) | 1], -std::f64::consts::LN_2);
+            assert_eq!(em.beta[(4 << 16) | (1 << 8) | 1], f64::INFINITY);
         }
     }
 }

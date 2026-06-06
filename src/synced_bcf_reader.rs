@@ -2,6 +2,7 @@
 // Extracted from src/vcf.rs.
 
 use std::ffi::{c_char, c_int, c_void};
+use std::ptr::NonNull;
 
 use crate::htslib_rs::hts::{
     htsFile, hts_close, hts_open, hts_pos_t, kstring_t, HTS_FORMAT_VCF, KS_SEP_LINE,
@@ -42,11 +43,10 @@ pub unsafe fn bcf_sr_add_hreader(
 
 pub unsafe fn bcf_sr_init() -> *mut bcf_srs_t {
     unsafe {
-        let files = libc::calloc(1, size_of::<bcf_srs_t>()).cast::<bcf_srs_t>();
-        if files.is_null() {
-            return std::ptr::null_mut();
-        }
-        (*files).aux = libc::calloc(1, size_of::<BcfSrAux>()).cast::<c_void>();
+        let mut files = Box::new(std::mem::zeroed::<bcf_srs_t>());
+        let aux = Box::new(std::mem::zeroed::<BcfSrAux>());
+        files.aux = Box::into_raw(aux).cast::<c_void>();
+        let files = Box::into_raw(files);
         bcf_sr_sort_c_675_bcf_sr_sort_init(&mut (*bcf_sr_aux_mut(files)).sort);
         bcf_sr_set_opt(files, BCF_SR_REGIONS_OVERLAP, 1);
         bcf_sr_set_opt(files, BCF_SR_TARGETS_OVERLAP, 0);
@@ -60,8 +60,18 @@ pub unsafe fn synced_bcf_reader_c_461_bcf_sr_destroy1(reader: *mut bcf_sr_t, clo
 
 pub unsafe fn bcf_sr_destroy(files: *mut bcf_srs_t) {
     unsafe {
-        let autoclose = (*bcf_sr_aux_mut(files)).closefile;
-        for i in 0..(*files).nreaders as usize {
+        let Some(files_ptr) = NonNull::new(files) else {
+            return;
+        };
+        let files = files_ptr.as_ptr();
+        let aux = bcf_sr_aux_mut(files);
+        let autoclose = if aux.is_null() {
+            std::ptr::null_mut()
+        } else {
+            (*aux).closefile
+        };
+        let nreaders = (*files).nreaders as usize;
+        for i in 0..nreaders {
             let cf = if autoclose.is_null() {
                 0
             } else {
@@ -71,10 +81,19 @@ pub unsafe fn bcf_sr_destroy(files: *mut bcf_srs_t) {
         }
         libc::free((*files).has_line.cast());
         libc::free((*files).readers.cast());
-        for i in 0..(*files).n_smpl as usize {
-            libc::free((*(*files).samples.add(i)).cast());
+        let samples = if (*files).samples.is_null() {
+            None
+        } else {
+            Some(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                (*files).samples,
+                (*files).n_smpl as usize,
+            )))
+        };
+        if let Some(samples) = samples {
+            for sample in samples.iter().copied() {
+                libc::free(sample.cast());
+            }
         }
-        libc::free((*files).samples.cast());
         if !(*files).targets.is_null() {
             bcf_sr_regions_destroy((*files).targets);
         }
@@ -87,10 +106,14 @@ pub unsafe fn bcf_sr_destroy(files: *mut bcf_srs_t) {
         if (*files).n_threads != 0 {
             bcf_sr_destroy_threads(files);
         }
-        bcf_sr_sort_c_685_bcf_sr_sort_destroy(&mut (*bcf_sr_aux_mut(files)).sort);
+        if !aux.is_null() {
+            bcf_sr_sort_c_685_bcf_sr_sort_destroy(&mut (*aux).sort);
+        }
         libc::free(autoclose.cast());
-        libc::free((*files).aux);
-        libc::free(files.cast());
+        if !(*files).aux.is_null() {
+            drop(Box::from_raw((*files).aux.cast::<BcfSrAux>()));
+        }
+        drop(Box::from_raw(files));
     }
 }
 
@@ -128,17 +151,14 @@ pub unsafe fn bcf_sr_set_threads(files: *mut bcf_srs_t, n_threads: c_int) -> c_i
         if n_threads == 0 {
             return 0;
         }
-        let p = libc::calloc(1, size_of::<crate::hts::htsThreadPool>())
-            .cast::<crate::hts::htsThreadPool>();
-        if p.is_null() {
+        let mut thread_pool = Box::new(std::mem::zeroed::<crate::hts::htsThreadPool>());
+        let p = thread_pool.as_mut() as *mut crate::hts::htsThreadPool;
+        (*p).pool = crate::thread_pool::hts_tpool_init(n_threads);
+        if (*p).pool.is_null() {
             (*files).errnum = bcf_sr_error_no_memory;
             return -1;
         }
-        (*files).p = p.cast();
-        (*p).pool = crate::thread_pool::hts_tpool_init(n_threads);
-        if (*p).pool.is_null() {
-            return -1;
-        }
+        (*files).p = Box::into_raw(thread_pool);
         0
     }
 }
@@ -198,14 +218,15 @@ pub unsafe fn bcf_sr_set_opt(readers: *mut bcf_srs_t, opt: bcf_sr_opt_t, value: 
 // original: bcf_sr_destroy_threads (htslib/synced_bcf_reader.c:244)
 pub unsafe fn bcf_sr_destroy_threads(files: *mut bcf_srs_t) {
     unsafe {
-        if (*files).p.is_null() {
+        let Some(p) = NonNull::new((*files).p.cast::<crate::hts::htsThreadPool>()) else {
             return;
-        }
-        let p = (*files).p.cast::<crate::hts::htsThreadPool>();
+        };
+        let p = p.as_ptr();
         if !(*p).pool.is_null() {
             crate::thread_pool::hts_tpool_destroy((*p).pool);
         }
-        libc::free((*files).p.cast());
+        drop(Box::from_raw(p));
+        (*files).p = std::ptr::null_mut();
     }
 }
 
@@ -408,8 +429,7 @@ pub unsafe fn bcf_sr_set_samples(
             nsmpl = bcf_hdr_nsamples_native((*(*files).readers).header);
         }
 
-        (*files).samples = std::ptr::null_mut();
-        (*files).n_smpl = 0;
+        let mut samples = Vec::new();
         for i in 0..nsmpl as usize {
             if !exclude.is_null() && crate::sam::khash_str2int_has_key(exclude, *smpl.add(i)) != 0 {
                 continue;
@@ -429,14 +449,7 @@ pub unsafe fn bcf_sr_set_samples(
             if n_isec != (*files).nreaders {
                 continue;
             }
-            (*files).samples = hts_realloc_p_cc(
-                (*files).samples.cast(),
-                size_of::<*const c_char>(),
-                (*files).n_smpl as usize + 1,
-            )
-            .cast::<*mut c_char>();
-            *(*files).samples.add((*files).n_smpl as usize) = libc::strdup(*smpl.add(i));
-            (*files).n_smpl += 1;
+            samples.push(libc::strdup(*smpl.add(i)));
         }
 
         if !exclude.is_null() {
@@ -449,9 +462,14 @@ pub unsafe fn bcf_sr_set_samples(
             libc::free(smpl.cast());
         }
 
-        if (*files).n_smpl == 0 {
+        if samples.is_empty() {
             return 0;
         }
+        (*files).n_smpl = samples.len() as c_int;
+        let mut samples = samples.into_boxed_slice();
+        (*files).samples = samples.as_mut_ptr();
+        std::mem::forget(samples);
+
         for i in 0..(*files).nreaders as usize {
             let reader = (*files).readers.add(i);
             (*reader).samples =
@@ -542,14 +560,14 @@ pub unsafe fn bcf_sr_regions_init(
             return reg;
         }
 
-        let reg = bcf_sr_regions_alloc();
-        if reg.is_null() {
+        let Some(reg) = NonNull::new(bcf_sr_regions_alloc()) else {
             return std::ptr::null_mut();
-        }
+        };
+        let reg = reg.as_ptr();
 
         (*reg).file = hts_open(regions, c"rb".as_ptr()).cast();
         if (*reg).file.is_null() {
-            libc::free(reg.cast());
+            bcf_sr_regions_destroy(reg);
             return std::ptr::null_mut();
         }
 
@@ -608,9 +626,7 @@ pub unsafe fn bcf_sr_regions_init(
                         );
                     }
                     if ret < 0 {
-                        let _ = hts_close((*reg).file.cast());
-                        (*reg).file = std::ptr::null_mut();
-                        libc::free(reg.cast());
+                        bcf_sr_regions_destroy(reg);
                         return std::ptr::null_mut();
                     }
                     ito = ifrom;
@@ -630,7 +646,7 @@ pub unsafe fn bcf_sr_regions_init(
             let _ = hts_close((*reg).file.cast());
             (*reg).file = std::ptr::null_mut();
             if (*reg).nseqs == 0 {
-                libc::free(reg.cast());
+                bcf_sr_regions_destroy(reg);
                 return std::ptr::null_mut();
             }
             regions_sort_and_merge(reg);

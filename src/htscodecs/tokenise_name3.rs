@@ -7,10 +7,9 @@
 //!
 //! Source: htslib/htscodecs/htscodecs/tokenise_name3.c and tokenise_name3.h
 //!
-//! The C code is intensely pointer-based: the context struct stores raw
-//! pointers into the caller's input block (`last_name`), into malloc'd token
-//! descriptor buffers, and into a pooled trie.  To stay byte-for-byte faithful
-//! we mirror that with raw pointers + libc allocation via `crate::c_compat`.
+//! The original C code is intensely pointer-based.  This Rust translation keeps
+//! raw pointers at the remaining C-style allocation/API boundaries, but owns the
+//! read-name history and descriptor payloads with Rust containers.
 
 #![allow(non_snake_case, non_camel_case_types, unused_assignments)]
 
@@ -20,7 +19,6 @@ use std::os::raw::c_void;
 use super::arith_dynamic::{arith_compress_bound, arith_compress_to, arith_uncompress_to};
 use super::pooled_alloc::{pool_alloc, pool_alloc_t, pool_create, pool_destroy};
 use super::rans_static4x16pr::{rans_compress_4x16, rans_uncompress_4x16};
-use super::utils::{htscodecs_tls_alloc, htscodecs_tls_free};
 use super::varint::{var_get_u32, var_put_u32};
 use crate::c_compat;
 
@@ -146,61 +144,29 @@ pub struct last_context_tok {
     pub token_str: i32,
 }
 
-/// ```c
-/// typedef struct {
-///     char *last_name;
-///     int last_ntok;
-///     last_context_tok *last; // [last_ntok]
-/// } last_context;
-/// ```
-// tokenise_name3.c:137
-#[derive(Debug)]
-#[repr(C)]
+/// Per-name history used for duplicate and token-match encoding.
+#[derive(Debug, Default)]
 pub struct last_context {
-    pub last_name: *mut c_char,
+    pub last_name: Vec<c_char>,
     pub last_ntok: i32,
-    pub last: *mut last_context_tok,
+    pub last: Vec<last_context_tok>,
 }
 
-/// ```c
-/// typedef struct {
-///     uint8_t *buf;
-///     size_t buf_a, buf_l; // alloc and used length.
-///     int tnum, ttype;
-///     int dup_from;
-/// } descriptor;
-/// ```
-// tokenise_name3.c:143
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
+/// Descriptor payload plus cursor/metadata for a token stream.
+#[derive(Debug, Clone, Default)]
 pub struct descriptor {
-    pub buf: *mut u8,
-    /// allocated length
-    pub buf_a: usize,
-    /// used length
+    pub buf: Vec<u8>,
+    /// used length while encoding; read cursor while decoding.
     pub buf_l: usize,
     pub tnum: i32,
     pub ttype: i32,
     pub dup_from: i32,
 }
 
-/// ```c
-/// typedef struct {
-///     last_context *lc;
-///     int counter;
-///     trie_t *t_head;
-///     pool_alloc_t *pool;
-///     descriptor desc[MAX_TBLOCKS];
-///     int token_dcount[MAX_TOKENS];
-///     int token_icount[MAX_TOKENS];
-///     int max_tok;
-///     int max_names;
-/// } name_context;
-/// ```
-// tokenise_name3.c:150
-#[repr(C)]
+/// Tokenisation context.  Most state is Rust-owned; the trie still uses the
+/// translated pooled allocator.
 pub struct name_context {
-    pub lc: *mut last_context,
+    pub lc: Vec<last_context>,
 
     /// For finding entire line dups
     pub counter: i32,
@@ -210,7 +176,7 @@ pub struct name_context {
     pub pool: *mut pool_alloc_t,
 
     /// token blocks
-    pub desc: [descriptor; MAX_TBLOCKS],
+    pub desc: Vec<descriptor>,
 
     /// summary stats per token
     pub token_dcount: [i32; MAX_TOKENS],
@@ -267,36 +233,19 @@ pub fn create_context(mut max_names: i32) -> *mut name_context {
     }
 
     max_names += 1;
-    let ctx = htscodecs_tls_alloc(
-        std::mem::size_of::<name_context>()
-            + (max_names as usize) * std::mem::size_of::<last_context>(),
-    ) as *mut name_context;
-    if ctx.is_null() {
-        return std::ptr::null_mut();
-    }
-    unsafe {
-        (*ctx).max_names = max_names;
-        (*ctx).counter = 0;
-        (*ctx).t_head = std::ptr::null_mut();
+    let ctx = name_context {
+        lc: (0..max_names).map(|_| last_context::default()).collect(),
+        counter: 0,
+        t_head: std::ptr::null_mut(),
+        pool: std::ptr::null_mut(),
+        desc: (0..MAX_TBLOCKS).map(|_| descriptor::default()).collect(),
+        token_dcount: [0; MAX_TOKENS],
+        token_icount: [0; MAX_TOKENS],
+        max_tok: 1,
+        max_names,
+    };
 
-        // ctx->lc = (last_context *)(((char *)ctx) + sizeof(*ctx));
-        (*ctx).lc = (ctx as *mut u8).add(std::mem::size_of::<name_context>()) as *mut last_context;
-        (*ctx).pool = std::ptr::null_mut();
-
-        // memset(&ctx->desc[0], 0, 2*16 * sizeof(ctx->desc[0]));
-        std::ptr::write_bytes((*ctx).desc.as_mut_ptr(), 0, 2 * 16);
-        // memset(&ctx->token_dcount[0], 0, sizeof(int));
-        (*ctx).token_dcount[0] = 0;
-        // memset(&ctx->token_icount[0], 0, sizeof(int));
-        (*ctx).token_icount[0] = 0;
-        // memset(&ctx->lc[0], 0, max_names*sizeof(ctx->lc[0]));
-        std::ptr::write_bytes((*ctx).lc, 0, max_names as usize);
-        (*ctx).max_tok = 1;
-
-        (*(*ctx).lc.add(0)).last_ntok = 0;
-    }
-
-    ctx
+    Box::into_raw(Box::new(ctx))
 }
 
 /// `static void free_context(name_context *ctx)`
@@ -307,22 +256,13 @@ fn free_context(ctx: *mut name_context) {
     }
 
     unsafe {
-        if !(*ctx).t_head.is_null() {
-            c_compat::free((*ctx).t_head as *mut c_void);
+        let ctx = Box::from_raw(ctx);
+        if !ctx.t_head.is_null() {
+            c_compat::free(ctx.t_head as *mut c_void);
         }
-        if !(*ctx).pool.is_null() {
-            pool_destroy((*ctx).pool);
+        if !ctx.pool.is_null() {
+            pool_destroy(ctx.pool);
         }
-
-        for i in 0..((*ctx).max_tok * 16) as usize {
-            c_compat::free((*ctx).desc[i].buf as *mut c_void);
-        }
-
-        for i in 0..(*ctx).max_names as usize {
-            c_compat::free((*(*ctx).lc.add(i)).last as *mut c_void);
-        }
-
-        htscodecs_tls_free(ctx as *mut c_void);
     }
 }
 
@@ -402,14 +342,14 @@ pub fn append_uint32_var(cp: &mut [c_char], i: u32) -> i32 {
 /// `static int descriptor_grow(descriptor *fd, uint32_t sz)`
 // tokenise_name3.c:299
 pub fn descriptor_grow(fd: &mut descriptor, sz: u32) -> i32 {
-    while fd.buf_l + sz as usize > fd.buf_a {
-        let buf_a = if fd.buf_a != 0 { fd.buf_a * 2 } else { 65536 };
-        let buf = unsafe { c_compat::realloc(fd.buf as *mut c_void, buf_a as u64) } as *mut u8;
-        if buf.is_null() {
-            return -1;
-        }
-        fd.buf = buf;
-        fd.buf_a = buf_a;
+    let needed = fd.buf_l.saturating_add(sz as usize);
+    if needed > fd.buf.capacity() {
+        let target = needed.max(if fd.buf.capacity() != 0 {
+            fd.buf.capacity() * 2
+        } else {
+            65536
+        });
+        fd.buf.reserve(target - fd.buf.capacity());
     }
     0
 }
@@ -422,9 +362,7 @@ pub fn encode_token_type(ctx: &mut name_context, ntok: i32, r#type: name_type) -
     if descriptor_grow(&mut ctx.desc[id], 1) < 0 {
         return -1;
     }
-    unsafe {
-        *ctx.desc[id].buf.add(ctx.desc[id].buf_l) = r#type as i32 as u8;
-    }
+    ctx.desc[id].buf.push(r#type as i32 as u8);
     ctx.desc[id].buf_l += 1;
     0
 }
@@ -445,10 +383,10 @@ pub fn encode_token_end(ctx: &mut name_context, ntok: i32) -> i32 {
 // tokenise_name3.c:331
 pub fn decode_token_type(ctx: &mut name_context, ntok: i32) -> name_type {
     let id = (ntok << 4) as usize;
-    if ctx.desc[id].buf_l >= ctx.desc[id].buf_a {
+    if ctx.desc[id].buf_l >= ctx.desc[id].buf.len() {
         return N_ERR;
     }
-    let v = unsafe { *ctx.desc[id].buf.add(ctx.desc[id].buf_l) };
+    let v = ctx.desc[id].buf[ctx.desc[id].buf_l];
     ctx.desc[id].buf_l += 1;
     name_type::from_i32(v as i32)
 }
@@ -465,13 +403,7 @@ pub fn encode_token_int(ctx: &mut name_context, ntok: i32, r#type: name_type, va
         return -1;
     }
 
-    unsafe {
-        let cp = ctx.desc[id].buf.add(ctx.desc[id].buf_l);
-        *cp.add(0) = (val & 0xff) as u8;
-        *cp.add(1) = ((val >> 8) & 0xff) as u8;
-        *cp.add(2) = ((val >> 16) & 0xff) as u8;
-        *cp.add(3) = ((val >> 24) & 0xff) as u8;
-    }
+    ctx.desc[id].buf.extend_from_slice(&val.to_le_bytes());
     ctx.desc[id].buf_l += 4;
     0
 }
@@ -486,16 +418,14 @@ pub fn decode_token_int(
 ) -> i32 {
     let id = ((ntok << 4) | r#type as i32) as usize;
 
-    if ctx.desc[id].buf_l + 4 > ctx.desc[id].buf_a {
+    if ctx.desc[id].buf_l + 4 > ctx.desc[id].buf.len() {
         return -1;
     }
-    unsafe {
-        let cp = ctx.desc[id].buf.add(ctx.desc[id].buf_l);
-        *val = (*cp.add(0) as u32)
-            + ((*cp.add(1) as u32) << 8)
-            + ((*cp.add(2) as u32) << 16)
-            + ((*cp.add(3) as u32) << 24);
-    }
+    *val = u32::from_le_bytes(
+        ctx.desc[id].buf[ctx.desc[id].buf_l..ctx.desc[id].buf_l + 4]
+            .try_into()
+            .unwrap(),
+    );
     ctx.desc[id].buf_l += 4;
     0
 }
@@ -511,9 +441,7 @@ pub fn encode_token_int1(ctx: &mut name_context, ntok: i32, r#type: name_type, v
     if descriptor_grow(&mut ctx.desc[id], 1) < 0 {
         return -1;
     }
-    unsafe {
-        *ctx.desc[id].buf.add(ctx.desc[id].buf_l) = val as u8;
-    }
+    ctx.desc[id].buf.push(val as u8);
     ctx.desc[id].buf_l += 1;
     0
 }
@@ -526,9 +454,7 @@ pub fn encode_token_int1_(ctx: &mut name_context, ntok: i32, r#type: name_type, 
     if descriptor_grow(&mut ctx.desc[id], 1) < 0 {
         return -1;
     }
-    unsafe {
-        *ctx.desc[id].buf.add(ctx.desc[id].buf_l) = val as u8;
-    }
+    ctx.desc[id].buf.push(val as u8);
     ctx.desc[id].buf_l += 1;
     0
 }
@@ -543,12 +469,10 @@ pub fn decode_token_int1(
 ) -> i32 {
     let id = ((ntok << 4) | r#type as i32) as usize;
 
-    if ctx.desc[id].buf_l >= ctx.desc[id].buf_a {
+    if ctx.desc[id].buf_l >= ctx.desc[id].buf.len() {
         return -1;
     }
-    unsafe {
-        *val = *ctx.desc[id].buf.add(ctx.desc[id].buf_l) as u32;
-    }
+    *val = ctx.desc[id].buf[ctx.desc[id].buf_l] as u32;
     ctx.desc[id].buf_l += 1;
     0
 }
@@ -564,11 +488,10 @@ pub fn encode_token_alpha(ctx: &mut name_context, ntok: i32, str: &[c_char], len
     if descriptor_grow(&mut ctx.desc[id], (len + 1) as u32) < 0 {
         return -1;
     }
-    unsafe {
-        let dst = ctx.desc[id].buf.add(ctx.desc[id].buf_l);
-        std::ptr::copy_nonoverlapping(str.as_ptr() as *const u8, dst, len as usize);
-        *dst.add(len as usize) = 0;
-    }
+    ctx.desc[id]
+        .buf
+        .extend(str[..len as usize].iter().map(|&c| c as u8));
+    ctx.desc[id].buf.push(0);
     ctx.desc[id].buf_l += (len + 1) as usize;
     0
 }
@@ -583,16 +506,16 @@ pub fn decode_token_alpha(
 ) -> i32 {
     let id = ((ntok << 4) | N_ALPHA as i32) as usize;
     let mut len = 0i32;
-    if ctx.desc[id].buf_l >= ctx.desc[id].buf_a {
+    if ctx.desc[id].buf_l >= ctx.desc[id].buf.len() {
         return -1;
     }
     let mut c: u8;
     loop {
-        c = unsafe { *ctx.desc[id].buf.add(ctx.desc[id].buf_l) };
+        c = ctx.desc[id].buf[ctx.desc[id].buf_l];
         ctx.desc[id].buf_l += 1;
         str[len as usize] = c as c_char;
         len += 1;
-        if !(c != 0 && len < max_len && ctx.desc[id].buf_l < ctx.desc[id].buf_a) {
+        if !(c != 0 && len < max_len && ctx.desc[id].buf_l < ctx.desc[id].buf.len()) {
             break;
         }
     }
@@ -610,9 +533,7 @@ pub fn encode_token_char(ctx: &mut name_context, ntok: i32, c: c_char) -> i32 {
     if descriptor_grow(&mut ctx.desc[id], 1) < 0 {
         return -1;
     }
-    unsafe {
-        *ctx.desc[id].buf.add(ctx.desc[id].buf_l) = c as u8;
-    }
+    ctx.desc[id].buf.push(c as u8);
     ctx.desc[id].buf_l += 1;
     0
 }
@@ -622,10 +543,10 @@ pub fn encode_token_char(ctx: &mut name_context, ntok: i32, c: c_char) -> i32 {
 pub fn decode_token_char(ctx: &mut name_context, ntok: i32, str: &mut c_char) -> i32 {
     let id = ((ntok << 4) | N_CHAR as i32) as usize;
 
-    if ctx.desc[id].buf_l >= ctx.desc[id].buf_a {
+    if ctx.desc[id].buf_l >= ctx.desc[id].buf.len() {
         return -1;
     }
-    *str = unsafe { *ctx.desc[id].buf.add(ctx.desc[id].buf_l) } as c_char;
+    *str = ctx.desc[id].buf[ctx.desc[id].buf_l] as c_char;
     ctx.desc[id].buf_l += 1;
     1
 }
@@ -640,6 +561,36 @@ pub fn encode_token_dup(ctx: &mut name_context, val: u32) -> i32 {
 // tokenise_name3.c:469
 pub fn encode_token_diff(ctx: &mut name_context, val: u32) -> i32 {
     encode_token_int(ctx, 0, N_DIFF, val)
+}
+
+#[inline]
+fn reset_desc_block(ctx: &mut name_context, token: i32) {
+    for desc in &mut ctx.desc[(token << 4) as usize..((token + 1) << 4) as usize] {
+        *desc = descriptor::default();
+    }
+}
+
+#[inline]
+fn ensure_last_tokens(lc: &mut last_context, len: usize) {
+    if lc.last.len() <= len {
+        lc.last.resize(
+            len + 1,
+            last_context_tok {
+                token_type: N_NOP,
+                token_int: 0,
+                token_str: 0,
+            },
+        );
+    }
+}
+
+fn seed_type_descriptor(desc: &mut descriptor, nreads: i32, ttype: i32) {
+    desc.buf.clear();
+    if nreads > 0 {
+        desc.buf.push((ttype & 15) as u8);
+        desc.buf.resize(nreads as usize, N_MATCH as i32 as u8);
+    }
+    desc.buf_l = 0;
 }
 
 //-----------------------------------------------------------------------------
@@ -855,7 +806,6 @@ pub fn search_trie(
 // tokenise_name3.c:695
 #[allow(unused_unsafe)]
 pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: i32) -> i32 {
-    let name_ptr = name.as_mut_ptr();
     let mut is_fixed = 0i32;
     let mut fixed_len = 0i32;
     let mut exact = 0i32;
@@ -874,59 +824,26 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
         pnum = if cnum != 0 { cnum - 1 } else { 0 };
     }
 
-    let lc = ctx.lc;
-    macro_rules! lc {
-        ($i:expr) => {
-            unsafe { &mut *lc.add($i as usize) }
-        };
-    }
-    let tok_size = std::mem::size_of::<last_context_tok>();
-
     // Return DUP or DIFF switch, plus the distance.
-    let pnum_strlen = {
-        let lp = lc!(pnum);
-        if lp.last_name.is_null() {
-            usize::MAX
-        } else {
-            unsafe { libc::strlen(lp.last_name) }
-        }
-    };
+    let pnum_strlen = ctx.lc[pnum as usize].last_name.len();
     if exact != 0 && len as usize == pnum_strlen {
         encode_token_dup(ctx, (cnum - pnum) as u32);
-        let last_ntok_p = lc!(pnum).last_ntok;
-        let last_p = lc!(pnum).last;
-        let cl = lc!(cnum);
-        cl.last_name = name_ptr;
+        let last_ntok_p = ctx.lc[pnum as usize].last_ntok;
+        let last_p = ctx.lc[pnum as usize].last.clone();
+        let cl = &mut ctx.lc[cnum as usize];
+        cl.last_name = name[..len as usize].to_vec();
         cl.last_ntok = last_ntok_p;
-        let nc = if cl.last_ntok != 0 {
-            cl.last_ntok as usize
-        } else {
-            MAX_TOKENS
-        };
-        cl.last = unsafe { c_compat::malloc((nc * tok_size) as u64) } as *mut last_context_tok;
-        if cl.last.is_null() {
-            return -1;
-        }
-        unsafe {
-            c_compat::memcpy(
-                cl.last as *mut c_void,
-                last_p as *const c_void,
-                (cl.last_ntok as usize * tok_size) as u64,
-            );
-        }
+        cl.last = last_p;
         return 0;
     }
 
-    lc!(cnum).last =
-        unsafe { c_compat::malloc((MAX_TOKENS * tok_size) as u64) } as *mut last_context_tok;
-    if lc!(cnum).last.is_null() {
-        return -1;
-    }
+    ctx.lc[cnum as usize].last.clear();
+    ensure_last_tokens(&mut ctx.lc[cnum as usize], MAX_TOKENS);
     encode_token_diff(ctx, (cnum - pnum) as u32);
     let mut ntok = 1i32;
 
     // closures to read name bytes
-    let nb = |k: usize| -> i32 { unsafe { *name_ptr.add(k) as i32 } };
+    let nb = |k: usize| -> i32 { name[k] as i32 };
 
     // htslib v1.23: dedicated `fixed_len == 36` ONT uuid4 char-block path,
     // then the generic `is_fixed` path, else `i = 0`.
@@ -937,9 +854,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
         if 37 >= ctx.max_tok {
             loop {
                 let mt = ctx.max_tok;
-                unsafe {
-                    std::ptr::write_bytes(ctx.desc.as_mut_ptr().add((mt << 4) as usize), 0, 16);
-                }
+                reset_desc_block(ctx, mt);
                 ctx.token_dcount[mt as usize] = 0;
                 ctx.token_icount[mt as usize] = 0;
                 let old = ctx.max_tok;
@@ -952,7 +867,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
         let mut k = 0i32;
         while k < 36 {
             encode_token_char(ctx, ntok, nb(k as usize) as c_char);
-            let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+            let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
             lct.token_int = nb(k as usize);
             lct.token_type = N_CHAR;
             k += 1;
@@ -963,33 +878,24 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
     } else if is_fixed != 0 {
         if ntok >= ctx.max_tok {
             let mt = ctx.max_tok;
-            unsafe {
-                std::ptr::write_bytes(ctx.desc.as_mut_ptr().add((mt << 4) as usize), 0, 16);
-            }
+            reset_desc_block(ctx, mt);
             ctx.token_dcount[mt as usize] = 0;
             ctx.token_icount[mt as usize] = 0;
             ctx.max_tok = ntok + 1;
         }
         let use_match = if pnum < cnum
-            && ntok < lc!(pnum).last_ntok
-            && unsafe { (*lc!(pnum).last.add(ntok as usize)).token_type } == N_ALPHA
+            && ntok < ctx.lc[pnum as usize].last_ntok
+            && ctx.lc[pnum as usize].last[ntok as usize].token_type == N_ALPHA
         {
-            let pl = unsafe { &*lc!(pnum).last.add(ntok as usize) };
-            let pname = lc!(pnum).last_name;
-            pl.token_int == fixed_len
-                && unsafe {
-                    libc::memcmp(
-                        name_ptr as *const c_void,
-                        pname as *const c_void,
-                        fixed_len as usize,
-                    ) == 0
-                }
+            let pl = ctx.lc[pnum as usize].last[ntok as usize];
+            let pname = &ctx.lc[pnum as usize].last_name;
+            pl.token_int == fixed_len && name[..fixed_len as usize] == pname[..fixed_len as usize]
         } else {
             false
         };
         if pnum < cnum
-            && ntok < lc!(pnum).last_ntok
-            && unsafe { (*lc!(pnum).last.add(ntok as usize)).token_type } == N_ALPHA
+            && ntok < ctx.lc[pnum as usize].last_ntok
+            && ctx.lc[pnum as usize].last[ntok as usize].token_type == N_ALPHA
         {
             if use_match {
                 encode_token_match(ctx, ntok);
@@ -999,7 +905,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
         } else {
             encode_token_alpha(ctx, ntok, name, fixed_len);
         }
-        let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+        let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
         lct.token_int = fixed_len;
         lct.token_str = 0;
         lct.token_type = N_ALPHA;
@@ -1015,9 +921,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
                 return -1;
             }
             let mt = ctx.max_tok;
-            unsafe {
-                std::ptr::write_bytes(ctx.desc.as_mut_ptr().add((mt << 4) as usize), 0, 16);
-            }
+            reset_desc_block(ctx, mt);
             ctx.token_dcount[mt as usize] = 0;
             ctx.token_icount[mt as usize] = 0;
             ctx.max_tok = ntok + 1;
@@ -1038,19 +942,14 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
                 do_char = true;
             } else {
                 let matched = pnum < cnum
-                    && ntok < lc!(pnum).last_ntok
-                    && unsafe { (*lc!(pnum).last.add(ntok as usize)).token_type } == N_ALPHA;
+                    && ntok < ctx.lc[pnum as usize].last_ntok
+                    && ctx.lc[pnum as usize].last[ntok as usize].token_type == N_ALPHA;
                 if matched {
-                    let pl = unsafe { &*lc!(pnum).last.add(ntok as usize) };
-                    let pname = lc!(pnum).last_name;
+                    let pl = ctx.lc[pnum as usize].last[ntok as usize];
+                    let pname = &ctx.lc[pnum as usize].last_name;
                     let is_match = s - i == pl.token_int
-                        && unsafe {
-                            libc::memcmp(
-                                name_ptr.add(i as usize) as *const c_void,
-                                pname.add(pl.token_str as usize) as *const c_void,
-                                (s - i) as usize,
-                            ) == 0
-                        };
+                        && name[i as usize..s as usize]
+                            == pname[pl.token_str as usize..(pl.token_str + pl.token_int) as usize];
                     if is_match {
                         if encode_token_match(ctx, ntok) < 0 {
                             return -1;
@@ -1062,7 +961,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
                     return -1;
                 }
 
-                let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                 lct.token_int = s - i;
                 lct.token_str = i;
                 lct.token_type = N_ALPHA;
@@ -1085,17 +984,17 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
             }
 
             if pnum < cnum
-                && ntok < lc!(pnum).last_ntok
-                && unsafe { (*lc!(pnum).last.add(ntok as usize)).token_type } == N_DIGITS0
-                && unsafe { (*lc!(pnum).last.add(ntok as usize)).token_str } as u32 == s - i as u32
+                && ntok < ctx.lc[pnum as usize].last_ntok
+                && ctx.lc[pnum as usize].last[ntok as usize].token_type == N_DIGITS0
+                && ctx.lc[pnum as usize].last[ntok as usize].token_str as u32 == s - i as u32
             {
                 do_digits0 = true;
             } else {
                 if pnum < cnum
-                    && ntok < lc!(pnum).last_ntok
-                    && unsafe { (*lc!(pnum).last.add(ntok as usize)).token_type } == N_DIGITS
+                    && ntok < ctx.lc[pnum as usize].last_ntok
+                    && ctx.lc[pnum as usize].last[ntok as usize].token_type == N_DIGITS
                 {
-                    d = v as i32 - unsafe { (*lc!(pnum).last.add(ntok as usize)).token_int };
+                    d = v as i32 - ctx.lc[pnum as usize].last[ntok as usize].token_int;
                     if d == 0 {
                         if encode_token_match(ctx, ntok) < 0 {
                             return -1;
@@ -1118,7 +1017,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
                     return -1;
                 }
 
-                let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                 lct.token_int = v as i32;
                 lct.token_type = N_DIGITS;
 
@@ -1142,11 +1041,11 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
             }
 
             if pnum < cnum
-                && ntok < lc!(pnum).last_ntok
-                && unsafe { (*lc!(pnum).last.add(ntok as usize)).token_type } == N_DIGITS0
+                && ntok < ctx.lc[pnum as usize].last_ntok
+                && ctx.lc[pnum as usize].last[ntok as usize].token_type == N_DIGITS0
             {
-                d = v as i32 - unsafe { (*lc!(pnum).last.add(ntok as usize)).token_int };
-                let pstr = unsafe { (*lc!(pnum).last.add(ntok as usize)).token_str };
+                d = v as i32 - ctx.lc[pnum as usize].last[ntok as usize].token_int;
+                let pstr = ctx.lc[pnum as usize].last[ntok as usize].token_str;
                 if d == 0 && pstr as u32 == s - i as u32 {
                     if encode_token_match(ctx, ntok) < 0 {
                         return -1;
@@ -1172,7 +1071,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
                 }
             }
 
-            let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+            let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
             lct.token_str = (s - i as u32) as i32; // length
             lct.token_int = v as i32;
             lct.token_type = N_DIGITS0;
@@ -1183,10 +1082,10 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
         if do_char {
             let ci = nb(i as usize);
             if pnum < cnum
-                && ntok < lc!(pnum).last_ntok
-                && unsafe { (*lc!(pnum).last.add(ntok as usize)).token_type } == N_CHAR
+                && ntok < ctx.lc[pnum as usize].last_ntok
+                && ctx.lc[pnum as usize].last[ntok as usize].token_type == N_CHAR
             {
-                if ci == unsafe { (*lc!(pnum).last.add(ntok as usize)).token_int } {
+                if ci == ctx.lc[pnum as usize].last[ntok as usize].token_int {
                     if encode_token_match(ctx, ntok) < 0 {
                         return -1;
                     }
@@ -1197,7 +1096,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
                 return -1;
             }
 
-            let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+            let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
             lct.token_int = ci;
             lct.token_type = N_CHAR;
         }
@@ -1211,9 +1110,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
             return -1;
         }
         let mt = ctx.max_tok;
-        unsafe {
-            std::ptr::write_bytes(ctx.desc.as_mut_ptr().add((mt << 4) as usize), 0, 16);
-        }
+        reset_desc_block(ctx, mt);
         ctx.token_dcount[mt as usize] = 0;
         ctx.token_icount[mt as usize] = 0;
         ctx.max_tok = ntok + 1;
@@ -1222,21 +1119,10 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
         return -1;
     }
 
-    let cl = lc!(cnum);
-    cl.last_name = name_ptr;
+    let cl = &mut ctx.lc[cnum as usize];
+    cl.last_name = name[..len as usize].to_vec();
     cl.last_ntok = ntok;
-    let shrunk = unsafe {
-        c_compat::realloc(
-            cl.last as *mut c_void,
-            ((ntok + 1) as usize * tok_size) as u64,
-        )
-    } as *mut last_context_tok;
-    if !shrunk.is_null() {
-        cl.last = shrunk;
-    }
-    if cl.last.is_null() {
-        return -1;
-    }
+    cl.last.truncate((ntok + 1) as usize);
 
     0
 }
@@ -1248,7 +1134,6 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
 // tokenise_name3.c:1021
 #[allow(unused_unsafe)]
 pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -> i32 {
-    let name_ptr = name.as_mut_ptr();
     let t0v = decode_token_type(ctx, 0) as i32;
     let mut dist: u32 = 0;
     let cnum = ctx.counter;
@@ -1270,70 +1155,35 @@ pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -
         pnum = 0;
     }
 
-    let lc = ctx.lc;
-    macro_rules! lc {
-        ($i:expr) => {
-            unsafe { &mut *lc.add($i as usize) }
-        };
-    }
-    let tok_size = std::mem::size_of::<last_context_tok>();
-
     if t0 == N_DUP {
         if pnum == cnum {
             return -1;
         }
-        let pname = lc!(pnum).last_name;
-        let plen = unsafe { libc::strlen(pname) };
+        let plen = ctx.lc[pnum as usize].last_name.len();
         if plen + 1 >= name_len as usize {
             return -1;
         }
-        unsafe {
-            libc::strcpy(name_ptr, pname);
-        }
-        let last_ntok = lc!(pnum).last_ntok;
-        let last_p = lc!(pnum).last;
-        let cl = lc!(cnum);
-        cl.last_name = name_ptr;
+        name[..plen].copy_from_slice(&ctx.lc[pnum as usize].last_name);
+        name[plen] = 0;
+        let last_ntok = ctx.lc[pnum as usize].last_ntok;
+        let last_p = ctx.lc[pnum as usize].last.clone();
+        let last_name = ctx.lc[pnum as usize].last_name.clone();
+        let cl = &mut ctx.lc[cnum as usize];
+        cl.last_name = last_name;
         cl.last_ntok = last_ntok;
-        let nc = if cl.last_ntok != 0 {
-            cl.last_ntok as usize
-        } else {
-            MAX_TOKENS
-        };
-        cl.last = unsafe { c_compat::malloc((nc * tok_size) as u64) } as *mut last_context_tok;
-        if cl.last.is_null() {
-            return -1;
-        }
-        unsafe {
-            c_compat::memcpy(
-                cl.last as *mut c_void,
-                last_p as *const c_void,
-                (cl.last_ntok as usize * tok_size) as u64,
-            );
-        }
-        return (unsafe { libc::strlen(name_ptr) } + 1) as i32;
+        cl.last = last_p;
+        return (plen + 1) as i32;
     }
 
-    unsafe {
-        *name_ptr = 0;
-    }
+    name[0] = 0;
     let mut len = 0i32;
-    lc!(cnum).last =
-        unsafe { c_compat::malloc((MAX_TOKENS * tok_size) as u64) } as *mut last_context_tok;
-    if lc!(cnum).last.is_null() {
-        return -1;
-    }
-
-    let nslice = |off: i32| -> &mut [c_char] {
-        unsafe {
-            std::slice::from_raw_parts_mut(name_ptr.add(off as usize), (name_len - off) as usize)
-        }
-    };
+    ctx.lc[cnum as usize].last.clear();
+    ensure_last_tokens(&mut ctx.lc[cnum as usize], MAX_TOKENS);
 
     let mut ntok = 1i32;
     while ntok < MAX_TOKENS as i32 && ntok < ctx.max_tok {
         let tok = decode_token_type(ctx, ntok);
-        lc!(cnum).last_ntok = 0;
+        ctx.lc[cnum as usize].last_ntok = 0;
 
         match tok {
             N_CHAR => {
@@ -1344,20 +1194,18 @@ pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -
                 if decode_token_char(ctx, ntok, &mut c) < 0 {
                     return -1;
                 }
-                unsafe {
-                    *name_ptr.add(len as usize) = c;
-                }
-                let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                name[len as usize] = c;
+                let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                 lct.token_type = N_CHAR;
                 lct.token_int = c as i32;
                 len += 1;
             }
             N_ALPHA => {
-                let len2 = decode_token_alpha(ctx, ntok, nslice(len), name_len - len);
+                let len2 = decode_token_alpha(ctx, ntok, &mut name[len as usize..], name_len - len);
                 if len2 < 0 {
                     return -1;
                 }
-                let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                 lct.token_type = N_ALPHA;
                 lct.token_str = len;
                 lct.token_int = len2;
@@ -1375,27 +1223,27 @@ pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -
                 if len as u32 + 20 + vl >= name_len as u32 {
                     return -1;
                 }
-                len += append_uint32_fixed(nslice(len), v, vl as u8);
-                let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                len += append_uint32_fixed(&mut name[len as usize..], v, vl as u8);
+                let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                 lct.token_type = N_DIGITS0;
                 lct.token_int = v as i32;
                 lct.token_str = vl as i32;
             }
             N_DDELTA0 => {
-                if ntok >= lc!(pnum).last_ntok {
+                if ntok >= ctx.lc[pnum as usize].last_ntok {
                     return -1;
                 }
                 let mut v: u32 = 0;
                 if decode_token_int1(ctx, ntok, N_DDELTA0, &mut v) < 0 {
                     return -1;
                 }
-                let pl = unsafe { *lc!(pnum).last.add(ntok as usize) };
+                let pl = ctx.lc[pnum as usize].last[ntok as usize];
                 v = v.wrapping_add(pl.token_int as u32);
                 if len + pl.token_str + 1 >= name_len {
                     return -1;
                 }
-                len += append_uint32_fixed(nslice(len), v, pl.token_str as u8);
-                let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                len += append_uint32_fixed(&mut name[len as usize..], v, pl.token_str as u8);
+                let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                 lct.token_type = N_DIGITS0;
                 lct.token_int = v as i32;
                 lct.token_str = pl.token_str;
@@ -1408,48 +1256,46 @@ pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -
                 if len + 20 >= name_len {
                     return -1;
                 }
-                len += append_uint32_var(nslice(len), v);
-                let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                len += append_uint32_var(&mut name[len as usize..], v);
+                let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                 lct.token_type = N_DIGITS;
                 lct.token_int = v as i32;
             }
             N_DDELTA => {
-                if ntok >= lc!(pnum).last_ntok {
+                if ntok >= ctx.lc[pnum as usize].last_ntok {
                     return -1;
                 }
                 let mut v: u32 = 0;
                 if decode_token_int1(ctx, ntok, N_DDELTA, &mut v) < 0 {
                     return -1;
                 }
-                let pl = unsafe { *lc!(pnum).last.add(ntok as usize) };
+                let pl = ctx.lc[pnum as usize].last[ntok as usize];
                 v = v.wrapping_add(pl.token_int as u32);
                 if len + 20 >= name_len {
                     return -1;
                 }
-                len += append_uint32_var(nslice(len), v);
-                let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                len += append_uint32_var(&mut name[len as usize..], v);
+                let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                 lct.token_type = N_DIGITS;
                 lct.token_int = v as i32;
             }
             N_NOP => {
-                let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                 lct.token_type = N_NOP;
             }
             N_MATCH => {
-                if ntok >= lc!(pnum).last_ntok {
+                if ntok >= ctx.lc[pnum as usize].last_ntok {
                     return -1;
                 }
-                let pl = unsafe { *lc!(pnum).last.add(ntok as usize) };
+                let pl = ctx.lc[pnum as usize].last[ntok as usize];
                 match pl.token_type {
                     N_CHAR => {
                         if len + 1 >= name_len {
                             return -1;
                         }
-                        unsafe {
-                            *name_ptr.add(len as usize) = pl.token_int as c_char;
-                        }
+                        name[len as usize] = pl.token_int as c_char;
                         len += 1;
-                        let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                        let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                         lct.token_type = N_CHAR;
                         lct.token_int = pl.token_int;
                     }
@@ -1457,15 +1303,11 @@ pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -
                         if pl.token_int < 0 || len + pl.token_int >= name_len {
                             return -1;
                         }
-                        let pname = lc!(pnum).last_name;
-                        unsafe {
-                            c_compat::memcpy(
-                                name_ptr.add(len as usize) as *mut c_void,
-                                pname.add(pl.token_str as usize) as *const c_void,
-                                pl.token_int as u64,
-                            );
-                        }
-                        let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                        let start = pl.token_str as usize;
+                        let end = start + pl.token_int as usize;
+                        name[len as usize..len as usize + pl.token_int as usize]
+                            .copy_from_slice(&ctx.lc[pnum as usize].last_name[start..end]);
+                        let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                         lct.token_type = N_ALPHA;
                         lct.token_str = len;
                         lct.token_int = pl.token_int;
@@ -1475,8 +1317,8 @@ pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -
                         if len + 20 >= name_len {
                             return -1;
                         }
-                        len += append_uint32_var(nslice(len), pl.token_int as u32);
-                        let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                        len += append_uint32_var(&mut name[len as usize..], pl.token_int as u32);
+                        let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                         lct.token_type = N_DIGITS;
                         lct.token_int = pl.token_int;
                     }
@@ -1485,11 +1327,11 @@ pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -
                             return -1;
                         }
                         len += append_uint32_fixed(
-                            nslice(len),
+                            &mut name[len as usize..],
                             pl.token_int as u32,
                             pl.token_str as u8,
                         );
-                        let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                        let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                         lct.token_type = N_DIGITS0;
                         lct.token_int = pl.token_int;
                         lct.token_str = pl.token_str;
@@ -1504,28 +1346,15 @@ pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -
                 if len + 1 >= name_len {
                     return -1;
                 }
-                unsafe {
-                    *name_ptr.add(len as usize) = 0;
-                }
+                name[len as usize] = 0;
                 len += 1;
-                let lct = unsafe { &mut *lc!(cnum).last.add(ntok as usize) };
+                let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                 lct.token_type = N_END;
 
-                let cl = lc!(cnum);
-                cl.last_name = name_ptr;
+                let cl = &mut ctx.lc[cnum as usize];
+                cl.last_name = name[..(len - 1) as usize].to_vec();
                 cl.last_ntok = ntok;
-                let shrunk = unsafe {
-                    c_compat::realloc(
-                        cl.last as *mut c_void,
-                        ((ntok + 1) as usize * tok_size) as u64,
-                    )
-                } as *mut last_context_tok;
-                if !shrunk.is_null() {
-                    cl.last = shrunk;
-                }
-                if cl.last.is_null() {
-                    return -1;
-                }
+                cl.last.truncate((ntok + 1) as usize);
                 return len;
             }
         }
@@ -1562,13 +1391,7 @@ pub fn arith_encode(
 
     let nb = var_put_u32(out, Some(*out_len as usize), olen);
     let nb = nb as usize;
-    unsafe {
-        c_compat::memmove(
-            out.as_mut_ptr().add(nb) as *mut c_void,
-            out.as_ptr().add(6) as *const c_void,
-            olen as u64,
-        );
-    }
+    out.copy_within(6..6 + olen as usize, nb);
     *out_len = (olen as usize + nb) as u64;
     0
 }
@@ -1612,13 +1435,7 @@ pub fn rans_encode(
 
     let nb = var_put_u32(out, Some(*out_len as usize), olen);
     let nb = nb as usize;
-    unsafe {
-        c_compat::memmove(
-            out.as_mut_ptr().add(nb) as *mut c_void,
-            out.as_ptr().add(6) as *const c_void,
-            olen as u64,
-        );
-    }
+    out.copy_within(6..6 + olen as usize, nb);
     *out_len = (olen as usize + nb) as u64;
     0
 }
@@ -1843,14 +1660,12 @@ pub fn tok3_encode_names(
         return None;
     }
 
-    let blk_ptr = blk.as_mut_ptr();
-
     // Count lines
     let mut nreads = 0i32;
     {
         let mut i = 0i32;
         while i < len {
-            if (unsafe { *blk_ptr.add(i as usize) } as u8) <= b'\n' {
+            if (blk[i as usize] as u8) <= b'\n' {
                 nreads += 1;
             }
             i += 1;
@@ -1869,15 +1684,14 @@ pub fn tok3_encode_names(
         let mut i = 0i32;
         let mut j = 0i32;
         while i < len {
-            while i < len && (unsafe { *blk_ptr.add(i as usize) } as u8) > b'\n' {
+            while i < len && (blk[i as usize] as u8) > b'\n' {
                 i += 1;
             }
             if i >= len {
                 break;
             }
             last_start = i + 1;
-            let slice =
-                unsafe { std::slice::from_raw_parts(blk_ptr.add(j as usize), (len - j) as usize) };
+            let slice = &blk[j as usize..len as usize];
             if build_trie(ctx, slice, (i - j) as usize, ctr) < 0 {
                 free_context(ctx);
                 return None;
@@ -1896,23 +1710,19 @@ pub fn tok3_encode_names(
         let mut i = 0i32;
         let mut j = 0i32;
         while i < len {
-            while i < len && (unsafe { *blk_ptr.add(i as usize) } as i32) >= b' ' as i32 {
+            while i < len && (blk[i as usize] as i32) >= b' ' as i32 {
                 i += 1;
             }
             if i >= len {
                 break;
             }
-            let bi = unsafe { *blk_ptr.add(i as usize) } as u8;
+            let bi = blk[i as usize] as u8;
             if bi != 0 && bi != b'\n' {
                 free_context(ctx);
                 return None;
             }
-            unsafe {
-                *blk_ptr.add(i as usize) = 0;
-            }
-            let slice = unsafe {
-                std::slice::from_raw_parts_mut(blk_ptr.add(j as usize), (len - j) as usize)
-            };
+            blk[i as usize] = 0;
+            let slice = &mut blk[j as usize..len as usize];
             if encode_name(ctx, slice, i - j, 1) < 0 {
                 free_context(ctx);
                 return None;
@@ -1929,7 +1739,7 @@ pub fn tok3_encode_names(
             if ctx.desc[i].buf_l != 0 {
                 let mut z = 1usize;
                 while z < ctx.desc[i].buf_l {
-                    if unsafe { *ctx.desc[i].buf.add(z) } != N_MATCH as i32 as u8 {
+                    if ctx.desc[i].buf[z] != N_MATCH as i32 as u8 {
                         break;
                     }
                     z += 1;
@@ -1944,10 +1754,7 @@ pub fn tok3_encode_names(
                     }
                     if k < 16 {
                         ctx.desc[i].buf_l = 0;
-                        unsafe {
-                            c_compat::free(ctx.desc[i].buf as *mut c_void);
-                        }
-                        ctx.desc[i].buf = std::ptr::null_mut();
+                        ctx.desc[i].buf.clear();
                     }
                 }
             }
@@ -1968,34 +1775,25 @@ pub fn tok3_encode_names(
             let ttype = (i & 15) as i32;
 
             let bound = (1.5 * arith_compress_bound(ctx.desc[i].buf_l as u32, 1) as f64) as u64;
-            let out_buf = unsafe { c_compat::malloc(bound) } as *mut u8;
-            if out_buf.is_null() {
-                free_context(ctx);
-                return None;
-            }
+            let mut out_buf = vec![0u8; bound as usize];
             let mut out_len_l: u64 = bound;
 
-            let in_slice =
-                unsafe { std::slice::from_raw_parts(ctx.desc[i].buf, ctx.desc[i].buf_l) };
-            let out_slice = unsafe { std::slice::from_raw_parts_mut(out_buf, bound as usize) };
+            let in_slice = &ctx.desc[i].buf[..ctx.desc[i].buf_l];
             if compress(
                 in_slice,
                 ctx.desc[i].buf_l as u64,
                 name_type::from_i32((i & 0xf) as i32),
                 level,
                 use_arith,
-                out_slice,
+                &mut out_buf,
                 &mut out_len_l,
             ) < 0
             {
                 free_context(ctx);
-                unsafe { c_compat::free(out_buf as *mut c_void) };
                 return None;
             }
 
-            unsafe {
-                c_compat::free(ctx.desc[i].buf as *mut c_void);
-            }
+            out_buf.truncate(out_len_l as usize);
             ctx.desc[i].buf = out_buf;
             ctx.desc[i].buf_l = out_len_l as usize;
             ctx.desc[i].tnum = tnum;
@@ -2004,7 +1802,7 @@ pub fn tok3_encode_names(
             // Find dups
             let mut j = 0usize;
             while j < i {
-                if ctx.desc[j].buf.is_null() {
+                if ctx.desc[j].buf.is_empty() {
                     j += 1;
                     continue;
                 }
@@ -2012,14 +1810,7 @@ pub fn tok3_encode_names(
                     j += 1;
                     continue;
                 }
-                if unsafe {
-                    libc::memcmp(
-                        ctx.desc[i].buf as *const c_void,
-                        ctx.desc[j].buf as *const c_void,
-                        ctx.desc[i].buf_l,
-                    )
-                } == 0
-                {
+                if ctx.desc[i].buf[..ctx.desc[i].buf_l] == ctx.desc[j].buf[..ctx.desc[j].buf_l] {
                     break;
                 }
                 j += 1;
@@ -2036,20 +1827,12 @@ pub fn tok3_encode_names(
     }
 
     // Write
-    let out = unsafe { c_compat::malloc((tot_size + 13) as u64) } as *mut u8;
-    if out.is_null() {
-        free_context(ctx);
-        return None;
-    }
+    let mut out = Vec::with_capacity((tot_size + 13) as usize);
 
-    let mut cp = 0usize;
     *out_len = tot_size as i32;
     macro_rules! putb {
         ($v:expr) => {{
-            unsafe {
-                *out.add(cp) = $v;
-            }
-            cp += 1;
+            out.push($v);
         }};
     }
     putb!((last_start & 0xff) as u8);
@@ -2081,26 +1864,15 @@ pub fn tok3_encode_names(
                 putb!((ctx.desc[i].dup_from & 15) as u8);
             } else {
                 putb!(ttype8);
-                unsafe {
-                    c_compat::memcpy(
-                        out.add(cp) as *mut c_void,
-                        ctx.desc[i].buf as *const c_void,
-                        ctx.desc[i].buf_l as u64,
-                    );
-                }
-                cp += ctx.desc[i].buf_l;
+                out.extend_from_slice(&ctx.desc[i].buf[..ctx.desc[i].buf_l]);
             }
             i += 1;
         }
     }
 
-    let result = unsafe { std::slice::from_raw_parts(out, tot_size as usize).to_vec() };
-    unsafe {
-        c_compat::free(out as *mut c_void);
-    }
     free_context(ctx);
 
-    Some(result)
+    Some(out)
 }
 
 /// `uint8_t *encode_names(char *blk, int len, int level, int use_arith, int *out_len, int *last_start_p)`
@@ -2123,7 +1895,6 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
         return None;
     }
 
-    let in_ptr = r#in.as_ptr();
     let mut o = 9usize;
     let mut ulen: i64 = ((r#in[0] as u32)
         | ((r#in[1] as u32) << 8)
@@ -2171,29 +1942,14 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
                     return err(ctx);
                 }
                 ctx.max_tok = tnum + 1;
-                unsafe {
-                    std::ptr::write_bytes(ctx.desc.as_mut_ptr().add((tnum << 4) as usize), 0, 16);
-                }
+                reset_desc_block(ctx, tnum);
             }
             if (ttype & 15) != 0 && (ttype & 128) != 0 {
                 if tnum < 0 {
                     return err(ctx);
                 }
                 let base = (tnum << 4) as usize;
-                ctx.desc[base].buf = unsafe { c_compat::malloc(nreads as u64) } as *mut u8;
-                if ctx.desc[base].buf.is_null() {
-                    return err(ctx);
-                }
-                ctx.desc[base].buf_l = 0;
-                ctx.desc[base].buf_a = nreads as usize;
-                unsafe {
-                    *ctx.desc[base].buf.add(0) = (ttype & 15) as u8;
-                    std::ptr::write_bytes(
-                        ctx.desc[base].buf.add(1),
-                        N_MATCH as i32 as u8,
-                        (nreads - 1) as usize,
-                    );
-                }
+                seed_type_descriptor(&mut ctx.desc[base], nreads, ttype);
             }
             if tnum < 0 {
                 return err(ctx);
@@ -2202,25 +1958,11 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
             if j as usize >= i {
                 return err(ctx);
             }
-            if ctx.desc[j as usize].buf.is_null() {
+            if ctx.desc[j as usize].buf.is_empty() {
                 return err(ctx);
             }
             ctx.desc[i].buf_l = 0;
-            ctx.desc[i].buf_a = ctx.desc[j as usize].buf_a;
-            if !ctx.desc[i].buf.is_null() {
-                unsafe { c_compat::free(ctx.desc[i].buf as *mut c_void) };
-            }
-            ctx.desc[i].buf = unsafe { c_compat::malloc(ctx.desc[i].buf_a as u64) } as *mut u8;
-            if ctx.desc[i].buf.is_null() {
-                return err(ctx);
-            }
-            unsafe {
-                c_compat::memcpy(
-                    ctx.desc[i].buf as *mut c_void,
-                    ctx.desc[j as usize].buf as *const c_void,
-                    ctx.desc[i].buf_a as u64,
-                );
-            }
+            ctx.desc[i].buf = ctx.desc[j as usize].buf.clone();
             continue;
         }
 
@@ -2230,9 +1972,7 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
                 return err(ctx);
             }
             ctx.max_tok = tnum + 1;
-            unsafe {
-                std::ptr::write_bytes(ctx.desc.as_mut_ptr().add((tnum << 4) as usize), 0, 16);
-            }
+            reset_desc_block(ctx, tnum);
         }
 
         if (ttype & 15) != 0 && (ttype & 128) != 0 {
@@ -2240,27 +1980,11 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
                 return err(ctx);
             }
             let base = (tnum << 4) as usize;
-            if !ctx.desc[base].buf.is_null() {
-                unsafe { c_compat::free(ctx.desc[base].buf as *mut c_void) };
-            }
-            ctx.desc[base].buf = unsafe { c_compat::malloc(nreads as u64) } as *mut u8;
-            if ctx.desc[base].buf.is_null() {
-                return err(ctx);
-            }
-            ctx.desc[base].buf_l = 0;
-            ctx.desc[base].buf_a = nreads as usize;
-            unsafe {
-                *ctx.desc[base].buf.add(0) = (ttype & 15) as u8;
-                std::ptr::write_bytes(
-                    ctx.desc[base].buf.add(1),
-                    N_MATCH as i32 as u8,
-                    (nreads - 1) as usize,
-                );
-            }
+            seed_type_descriptor(&mut ctx.desc[base], nreads, ttype);
         }
 
         // Load compressed block
-        let in_sub = unsafe { std::slice::from_raw_parts(in_ptr.add(o), sz - o) };
+        let in_sub = &r#in[o..sz];
         let ulen_blk = uncompressed_size(in_sub, (sz - o) as u64) as i64;
         if ulen_blk < 0 || ulen_blk >= i32::MAX as i64 {
             return err(ctx);
@@ -2274,20 +1998,12 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
         }
 
         ctx.desc[i].buf_l = 0;
-        if !ctx.desc[i].buf.is_null() {
-            unsafe { c_compat::free(ctx.desc[i].buf as *mut c_void) };
-        }
-        ctx.desc[i].buf = unsafe { c_compat::malloc(ulen_blk as u64) } as *mut u8;
-        if ctx.desc[i].buf.is_null() {
-            return err(ctx);
-        }
-        ctx.desc[i].buf_a = ulen_blk as usize;
-        let mut usz: u64 = ctx.desc[i].buf_a as u64;
-        let out_slice =
-            unsafe { std::slice::from_raw_parts_mut(ctx.desc[i].buf, ctx.desc[i].buf_a) };
+        ctx.desc[i].buf = vec![0u8; ulen_blk as usize];
+        let mut usz: u64 = ctx.desc[i].buf.len() as u64;
+        let out_slice = &mut ctx.desc[i].buf;
         let clen = uncompress(use_arith, in_sub, (sz - o) as u64, out_slice, &mut usz);
-        ctx.desc[i].buf_a = usz as usize;
-        if clen < 0 || ctx.desc[i].buf_a as i64 != ulen_blk {
+        ctx.desc[i].buf.truncate(usz as usize);
+        if clen < 0 || ctx.desc[i].buf.len() as i64 != ulen_blk {
             return err(ctx);
         }
         o += clen as usize;
@@ -2295,17 +2011,12 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
 
     ulen += 1024;
     let mut ulen_rem = ulen;
-    let out = unsafe { c_compat::malloc(ulen as u64) } as *mut u8;
-    if out.is_null() {
-        return err(ctx);
-    }
+    let mut out = vec![0 as c_char; ulen as usize];
 
     let mut out_sz = 0usize;
     let mut ret;
     loop {
-        let name_slice = unsafe {
-            std::slice::from_raw_parts_mut(out.add(out_sz) as *mut c_char, ulen_rem as usize)
-        };
+        let name_slice = &mut out[out_sz..];
         ret = decode_name(ctx, name_slice, ulen_rem as i32);
         if ret > 0 {
             out_sz += ret as usize;
@@ -2315,18 +2026,12 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
         }
     }
 
-    if ret < 0 {
-        unsafe { c_compat::free(out as *mut c_void) };
-    }
-
     let result = if ret == 0 {
-        Some(unsafe { std::slice::from_raw_parts(out, out_sz).to_vec() })
+        out.truncate(out_sz);
+        Some(out.into_iter().map(|c| c as u8).collect())
     } else {
         None
     };
-    if ret == 0 {
-        unsafe { c_compat::free(out as *mut c_void) };
-    }
 
     free_context(ctx);
     *out_len = out_sz as u32;

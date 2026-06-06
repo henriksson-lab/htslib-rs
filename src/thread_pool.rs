@@ -1,6 +1,8 @@
+use std::collections::VecDeque;
 use std::ffi::{c_int, c_void};
 use std::mem;
 use std::ptr;
+use std::ptr::NonNull;
 
 use crate::htslib_rs::c_compat;
 
@@ -22,44 +24,36 @@ pub type hts_tpool_cleanup = Option<unsafe extern "C" fn(arg: *mut c_void)>;
 const HTS_MIN_THREAD_STACK: usize = 3 * 1024 * 1024;
 
 // original: hts_tpool_job (htslib/thread_pool_internal.h:56)
-#[repr(C)]
 struct HtsTpoolJob {
     func: hts_tpool_worker,
     arg: *mut c_void,
     job_cleanup: hts_tpool_cleanup,
     result_cleanup: hts_tpool_cleanup,
-    next: *mut HtsTpoolJob,
-    p: *mut HtsTpool,
-    q: *mut HtsTpoolProcess,
+    p: NonNull<HtsTpool>,
+    q: NonNull<HtsTpoolProcess>,
     serial: u64,
 }
 
 // original: hts_tpool_result (htslib/thread_pool_internal.h:71)
-#[repr(C)]
 pub struct HtsTpoolResult {
-    next: *mut HtsTpoolResult,
     result_cleanup: hts_tpool_cleanup,
     serial: u64,
     data: *mut c_void,
 }
 
 // original: hts_tpool_worker (htslib/thread_pool_internal.h:83)
-#[repr(C)]
 struct HtsTpoolWorker {
-    p: *mut HtsTpool,
+    p: Option<NonNull<HtsTpool>>,
     idx: c_int,
     tid: crate::htslib_rs::c_compat::pthread_t,
     pending_c: crate::htslib_rs::c_compat::pthread_cond_t,
 }
 
 // original: hts_tpool_process (htslib/thread_pool_internal.h:100)
-#[repr(C)]
 pub struct HtsTpoolProcess {
-    p: *mut HtsTpool,
-    input_head: *mut HtsTpoolJob,
-    input_tail: *mut HtsTpoolJob,
-    output_head: *mut HtsTpoolResult,
-    output_tail: *mut HtsTpoolResult,
+    p: Option<NonNull<HtsTpool>>,
+    input: VecDeque<Box<HtsTpoolJob>>,
+    output: VecDeque<Box<HtsTpoolResult>>,
     qsize: c_int,
     next_serial: u64,
     curr_serial: u64,
@@ -75,20 +69,19 @@ pub struct HtsTpoolProcess {
     input_not_full_c: crate::htslib_rs::c_compat::pthread_cond_t,
     input_empty_c: crate::htslib_rs::c_compat::pthread_cond_t,
     none_processing_c: crate::htslib_rs::c_compat::pthread_cond_t,
-    next: *mut HtsTpoolProcess,
-    prev: *mut HtsTpoolProcess,
+    next: Option<NonNull<HtsTpoolProcess>>,
+    prev: Option<NonNull<HtsTpoolProcess>>,
 }
 
 // original: hts_tpool (htslib/thread_pool_internal.h:136)
-#[repr(C)]
 pub struct HtsTpool {
     nwaiting: c_int,
     njobs: c_int,
     shutdown: c_int,
-    q_head: *mut HtsTpoolProcess,
+    q_head: Option<NonNull<HtsTpoolProcess>>,
     tsize: c_int,
-    t: *mut HtsTpoolWorker,
-    t_stack: *mut c_int,
+    t: Vec<HtsTpoolWorker>,
+    t_stack: Vec<c_int>,
     t_stack_top: c_int,
     pool_m: crate::htslib_rs::c_compat::pthread_mutex_t,
     n_count: c_int,
@@ -109,24 +102,8 @@ unsafe fn result(r: *mut hts_tpool_result) -> *mut HtsTpoolResult {
     r.cast()
 }
 
-unsafe fn xmalloc<T>() -> *mut T {
-    unsafe { libc::malloc(mem::size_of::<T>()).cast() }
-}
-
-unsafe fn xmalloc_array<T>(n: c_int) -> *mut T {
-    let Ok(n) = usize::try_from(n) else {
-        unsafe {
-            *c_compat::__errno_location() = libc::ENOMEM;
-        }
-        return ptr::null_mut();
-    };
-    let Some(size) = n.checked_mul(mem::size_of::<T>()) else {
-        unsafe {
-            *c_compat::__errno_location() = libc::ENOMEM;
-        }
-        return ptr::null_mut();
-    };
-    unsafe { libc::malloc(size).cast() }
+fn pool_ptr(p: Option<NonNull<HtsTpool>>) -> *mut HtsTpool {
+    p.map_or(ptr::null_mut(), NonNull::as_ptr)
 }
 
 // original: hts_tpool_worker_id (htslib/thread_pool.c:56)
@@ -136,20 +113,89 @@ pub unsafe fn hts_tpool_worker_id(p: *mut hts_tpool) -> c_int {
     }
     let p = unsafe { pool(p) };
     let s = unsafe { crate::htslib_rs::c_compat::pthread_self() };
-    for i in 0..unsafe { (*p).tsize } {
-        if unsafe { crate::htslib_rs::c_compat::pthread_equal(s, (*(*p).t.add(i as usize)).tid) }
-            != 0
-        {
-            return i;
+    for worker in unsafe { &(*p).t } {
+        if unsafe { crate::htslib_rs::c_compat::pthread_equal(s, worker.tid) } != 0 {
+            return worker.idx;
         }
     }
     -1
 }
 
+unsafe fn make_process(p: *mut HtsTpool, qsize: c_int, in_only: c_int) -> Box<HtsTpoolProcess> {
+    unsafe {
+        Box::new(HtsTpoolProcess {
+            p: NonNull::new(p),
+            input: VecDeque::new(),
+            output: VecDeque::new(),
+            qsize,
+            next_serial: 0,
+            curr_serial: 0,
+            no_more_input: 0,
+            n_input: 0,
+            n_output: 0,
+            n_processing: 0,
+            shutdown: 0,
+            in_only,
+            wake_dispatch: 0,
+            ref_count: 1,
+            output_avail_c: mem::zeroed(),
+            input_not_full_c: mem::zeroed(),
+            input_empty_c: mem::zeroed(),
+            none_processing_c: mem::zeroed(),
+            next: None,
+            prev: None,
+        })
+    }
+}
+
+unsafe fn make_pool(n: c_int) -> Box<HtsTpool> {
+    unsafe {
+        Box::new(HtsTpool {
+            nwaiting: 0,
+            njobs: 0,
+            shutdown: 0,
+            q_head: None,
+            tsize: n,
+            t: Vec::new(),
+            t_stack: Vec::new(),
+            t_stack_top: -1,
+            pool_m: mem::zeroed(),
+            n_count: 0,
+            n_running: 0,
+            total_time: 0,
+            wait_time: 0,
+        })
+    }
+}
+
+unsafe fn make_worker(p: *mut HtsTpool, idx: c_int) -> HtsTpoolWorker {
+    unsafe {
+        HtsTpoolWorker {
+            p: NonNull::new(p),
+            idx,
+            tid: mem::zeroed(),
+            pending_c: mem::zeroed(),
+        }
+    }
+}
+
+unsafe fn box_result_ptr(r: Box<HtsTpoolResult>) -> *mut HtsTpoolResult {
+    Box::into_raw(r)
+}
+
+unsafe fn boxed_result_from_ptr(r: *mut HtsTpoolResult) -> Box<HtsTpoolResult> {
+    Box::from_raw(r)
+}
+
+unsafe fn q_pool(q: *mut HtsTpoolProcess) -> *mut HtsTpool {
+    pool_ptr(unsafe { (*q).p })
+}
+
 // original: hts_tpool_add_result (htslib/thread_pool.c:95)
-unsafe fn hts_tpool_add_result(j: *mut HtsTpoolJob, data: *mut c_void) -> c_int {
-    let q = unsafe { (*j).q };
-    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+unsafe fn hts_tpool_add_result(j: HtsTpoolJob, data: *mut c_void) -> c_int {
+    let q = j.q.as_ptr();
+    let p = unsafe { q_pool(q) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m)) };
 
     unsafe {
         (*q).n_processing -= 1;
@@ -160,43 +206,30 @@ unsafe fn hts_tpool_add_result(j: *mut HtsTpoolJob, data: *mut c_void) -> c_int 
         }
 
         if (*q).in_only != 0 {
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
             return 0;
         }
     }
 
-    let r = unsafe { xmalloc::<HtsTpoolResult>() };
-    if r.is_null() {
-        unsafe {
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m))
-        };
-        unsafe { hts_tpool_process_shutdown(q.cast()) };
-        return -1;
-    }
-
     unsafe {
-        (*r).next = ptr::null_mut();
-        (*r).data = data;
-        (*r).result_cleanup = (*j).result_cleanup;
-        (*r).serial = (*j).serial;
+        let r = Box::new(HtsTpoolResult {
+            data,
+            result_cleanup: j.result_cleanup,
+            serial: j.serial,
+        });
+        let serial = r.serial;
 
         (*q).n_output += 1;
-        if !(*q).output_tail.is_null() {
-            (*(*q).output_tail).next = r;
-            (*q).output_tail = r;
-        } else {
-            (*q).output_head = r;
-            (*q).output_tail = r;
-        }
+        (*q).output.push_back(r);
 
-        assert!((*r).serial >= (*q).next_serial || (*q).next_serial == c_int::MAX as u64);
-        if (*r).serial == (*q).next_serial {
+        assert!(serial >= (*q).next_serial || (*q).next_serial == c_int::MAX as u64);
+        if serial == (*q).next_serial {
             crate::htslib_rs::c_compat::pthread_cond_broadcast(ptr::addr_of_mut!(
                 (*q).output_avail_c
             ));
         }
 
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
     }
 
     0
@@ -208,31 +241,15 @@ unsafe fn hts_tpool_next_result_locked(q: *mut HtsTpoolProcess) -> *mut HtsTpool
         return ptr::null_mut();
     }
 
-    let mut last = ptr::null_mut();
-    let mut r = unsafe { (*q).output_head };
-    while !r.is_null() {
-        if unsafe { (*r).serial == (*q).next_serial } {
-            break;
-        }
-        last = r;
-        r = unsafe { (*r).next };
-    }
+    let result_idx = unsafe {
+        (*q).output
+            .iter()
+            .position(|r| r.serial == (*q).next_serial)
+    };
 
-    if !r.is_null() {
+    if let Some(result_idx) = result_idx {
         unsafe {
-            if (*q).output_head == r {
-                (*q).output_head = (*r).next;
-            } else {
-                (*last).next = (*r).next;
-            }
-
-            if (*q).output_tail == r {
-                (*q).output_tail = last;
-            }
-
-            if (*q).output_head.is_null() {
-                (*q).output_tail = ptr::null_mut();
-            }
+            let r = (*q).output.remove(result_idx).unwrap();
 
             (*q).next_serial += 1;
             (*q).n_output -= 1;
@@ -247,35 +264,34 @@ unsafe fn hts_tpool_next_result_locked(q: *mut HtsTpoolProcess) -> *mut HtsTpool
                     wake_next_worker(q, 1);
                 }
             }
+            return box_result_ptr(r);
         }
     }
 
-    r
+    ptr::null_mut()
 }
 
 // original: hts_tpool_next_result (htslib/thread_pool.c:200)
 pub unsafe fn hts_tpool_next_result(q: *mut hts_tpool_process) -> *mut hts_tpool_result {
     let q = unsafe { process(q) };
-    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    let p = unsafe { q_pool(q) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m)) };
     let r = unsafe { hts_tpool_next_result_locked(q) };
-    unsafe {
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m))
-    };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m)) };
     r.cast()
 }
 
 // original: hts_tpool_next_result_wait (htslib/thread_pool.c:224)
 pub unsafe fn hts_tpool_next_result_wait(q: *mut hts_tpool_process) -> *mut hts_tpool_result {
     let q = unsafe { process(q) };
-    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    let p = unsafe { q_pool(q) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m)) };
 
     loop {
         let r = unsafe { hts_tpool_next_result_locked(q) };
         if !r.is_null() {
             unsafe {
-                crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(
-                    (*(*q).p).pool_m
-                ))
+                crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m))
             };
             return r.cast();
         }
@@ -291,9 +307,7 @@ pub unsafe fn hts_tpool_next_result_wait(q: *mut hts_tpool_process) -> *mut hts_
             if (*q).shutdown != 0 {
                 (*q).ref_count -= 1;
                 let rc = (*q).ref_count;
-                crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(
-                    (*(*q).p).pool_m
-                ));
+                crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
                 if rc == 0 {
                     hts_tpool_process_destroy(q.cast());
                 }
@@ -301,7 +315,7 @@ pub unsafe fn hts_tpool_next_result_wait(q: *mut hts_tpool_process) -> *mut hts_
             }
             crate::htslib_rs::c_compat::pthread_cond_timedwait(
                 ptr::addr_of_mut!((*q).output_avail_c),
-                ptr::addr_of_mut!((*(*q).p).pool_m),
+                ptr::addr_of_mut!((*p).pool_m),
                 &timeout,
             );
             (*q).ref_count -= 1;
@@ -312,59 +326,58 @@ pub unsafe fn hts_tpool_next_result_wait(q: *mut hts_tpool_process) -> *mut hts_
 // original: hts_tpool_process_empty (htslib/thread_pool.c:258)
 pub unsafe fn hts_tpool_process_empty(q: *mut hts_tpool_process) -> c_int {
     let q = unsafe { process(q) };
-    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    let p = unsafe { q_pool(q) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m)) };
     let empty =
         unsafe { ((*q).n_input == 0 && (*q).n_processing == 0 && (*q).n_output == 0) as c_int };
-    unsafe {
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m))
-    };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m)) };
     empty
 }
 
 // original: hts_tpool_process_ref_incr (htslib/thread_pool.c:268)
 pub unsafe fn hts_tpool_process_ref_incr(q: *mut hts_tpool_process) {
     let q = unsafe { process(q) };
+    let p = unsafe { q_pool(q) };
     unsafe {
-        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
         (*q).ref_count += 1;
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
     }
 }
 
 // original: hts_tpool_process_ref_decr (htslib/thread_pool.c:274)
 pub unsafe fn hts_tpool_process_ref_decr(q: *mut hts_tpool_process) {
     let q = unsafe { process(q) };
+    let p = unsafe { q_pool(q) };
     unsafe {
-        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
         (*q).ref_count -= 1;
         if (*q).ref_count <= 0 {
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
             hts_tpool_process_destroy(q.cast());
             return;
         }
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
     }
 }
 
 // original: hts_tpool_process_len (htslib/thread_pool.c:289)
 pub unsafe fn hts_tpool_process_len(q: *mut hts_tpool_process) -> c_int {
     let q = unsafe { process(q) };
-    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    let p = unsafe { q_pool(q) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m)) };
     let len = unsafe { (*q).n_output };
-    unsafe {
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m))
-    };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m)) };
     len
 }
 
 // original: hts_tpool_process_sz (htslib/thread_pool.c:303)
 pub unsafe fn hts_tpool_process_sz(q: *mut hts_tpool_process) -> c_int {
     let q = unsafe { process(q) };
-    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    let p = unsafe { q_pool(q) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m)) };
     let len = unsafe { (*q).n_output + (*q).n_input + (*q).n_processing };
-    unsafe {
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m))
-    };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m)) };
     len
 }
 
@@ -386,21 +399,21 @@ unsafe fn hts_tpool_process_shutdown_locked(q: *mut HtsTpoolProcess) {
 // original: hts_tpool_process_shutdown (htslib/thread_pool.c:327)
 pub unsafe fn hts_tpool_process_shutdown(q: *mut hts_tpool_process) {
     let q = unsafe { process(q) };
+    let p = unsafe { q_pool(q) };
     unsafe {
-        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
         hts_tpool_process_shutdown_locked(q);
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
     }
 }
 
 // original: hts_tpool_process_is_shutdown (htslib/thread_pool.c:333)
 pub unsafe fn hts_tpool_process_is_shutdown(q: *mut hts_tpool_process) -> c_int {
     let q = unsafe { process(q) };
-    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m)) };
+    let p = unsafe { q_pool(q) };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m)) };
     let r = unsafe { (*q).shutdown };
-    unsafe {
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m))
-    };
+    unsafe { crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m)) };
     r
 }
 
@@ -410,11 +423,11 @@ pub unsafe fn hts_tpool_delete_result(r: *mut hts_tpool_result, free_data: c_int
         return;
     }
     let r = unsafe { result(r) };
+    let r = unsafe { boxed_result_from_ptr(r) };
     unsafe {
-        if free_data != 0 && !(*r).data.is_null() {
-            libc::free((*r).data);
+        if free_data != 0 && !r.data.is_null() {
+            libc::free(r.data);
         }
-        libc::free(r.cast());
     }
 }
 
@@ -429,39 +442,31 @@ pub unsafe fn hts_tpool_process_init(
     qsize: c_int,
     in_only: c_int,
 ) -> *mut hts_tpool_process {
-    let q = unsafe { xmalloc::<HtsTpoolProcess>() };
-    if q.is_null() {
-        return ptr::null_mut();
-    }
+    let mut q = unsafe { make_process(pool(p), qsize, in_only) };
+    let q_ptr = ptr::addr_of_mut!(*q);
 
     unsafe {
-        ptr::write_bytes(q, 0, 1);
         crate::htslib_rs::c_compat::pthread_cond_init(
-            ptr::addr_of_mut!((*q).output_avail_c),
+            ptr::addr_of_mut!((*q_ptr).output_avail_c),
             ptr::null(),
         );
         crate::htslib_rs::c_compat::pthread_cond_init(
-            ptr::addr_of_mut!((*q).input_not_full_c),
+            ptr::addr_of_mut!((*q_ptr).input_not_full_c),
             ptr::null(),
         );
         crate::htslib_rs::c_compat::pthread_cond_init(
-            ptr::addr_of_mut!((*q).input_empty_c),
+            ptr::addr_of_mut!((*q_ptr).input_empty_c),
             ptr::null(),
         );
         crate::htslib_rs::c_compat::pthread_cond_init(
-            ptr::addr_of_mut!((*q).none_processing_c),
+            ptr::addr_of_mut!((*q_ptr).none_processing_c),
             ptr::null(),
         );
 
-        (*q).p = pool(p);
-        (*q).qsize = qsize;
-        (*q).in_only = in_only;
-        (*q).ref_count = 1;
-
-        hts_tpool_process_attach(p, q.cast());
+        hts_tpool_process_attach(p, q_ptr.cast());
     }
 
-    q.cast()
+    Box::into_raw(q).cast()
 }
 
 // original: hts_tpool_process_destroy (htslib/thread_pool.c:410)
@@ -470,21 +475,22 @@ pub unsafe fn hts_tpool_process_destroy(q: *mut hts_tpool_process) {
         return;
     }
     let q = unsafe { process(q) };
+    let p = unsafe { q_pool(q) };
 
     unsafe {
-        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
         (*q).no_more_input = 1;
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
 
         hts_tpool_process_reset(q.cast(), 0);
 
-        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
-        hts_tpool_process_detach_locked((*q).p, q);
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
+        hts_tpool_process_detach_locked(p, q);
         hts_tpool_process_shutdown_locked(q);
 
         (*q).ref_count -= 1;
         if (*q).ref_count > 0 {
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
             return;
         }
 
@@ -492,8 +498,8 @@ pub unsafe fn hts_tpool_process_destroy(q: *mut hts_tpool_process) {
         crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!((*q).input_not_full_c));
         crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!((*q).input_empty_c));
         crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!((*q).none_processing_c));
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
-        libc::free(q.cast());
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+        drop(Box::from_raw(q));
     }
 }
 
@@ -501,23 +507,22 @@ pub unsafe fn hts_tpool_process_destroy(q: *mut hts_tpool_process) {
 pub unsafe fn hts_tpool_process_attach(p: *mut hts_tpool, q: *mut hts_tpool_process) {
     let p = unsafe { pool(p) };
     let q = unsafe { process(q) };
+    let q_nn = NonNull::new(q).unwrap();
     unsafe {
         crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
-        if !(*p).q_head.is_null() {
-            (*q).next = (*p).q_head;
-            (*q).prev = (*(*p).q_head).prev;
-            (*(*(*p).q_head).prev).next = q;
-            (*(*p).q_head).prev = q;
+        if let Some(head) = (*p).q_head {
+            (*q).next = Some(head);
+            (*q).prev = (*head.as_ptr()).prev;
+            if let Some(prev) = (*head.as_ptr()).prev {
+                (*prev.as_ptr()).next = Some(q_nn);
+            }
+            (*head.as_ptr()).prev = Some(q_nn);
         } else {
-            (*q).next = q;
-            (*q).prev = q;
+            (*q).next = Some(q_nn);
+            (*q).prev = Some(q_nn);
         }
-        (*p).q_head = q;
-        assert!(
-            !(*p).q_head.is_null()
-                && !(*(*p).q_head).prev.is_null()
-                && !(*(*p).q_head).next.is_null()
-        );
+        (*p).q_head = Some(q_nn);
+        assert!((*p).q_head.is_some() && (*q).prev.is_some() && (*q).next.is_some());
         crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
     }
 }
@@ -525,27 +530,34 @@ pub unsafe fn hts_tpool_process_attach(p: *mut hts_tpool, q: *mut hts_tpool_proc
 // original: hts_tpool_process_detach_locked (htslib/thread_pool.c:472)
 unsafe fn hts_tpool_process_detach_locked(p: *mut HtsTpool, q: *mut HtsTpoolProcess) {
     unsafe {
-        if (*p).q_head.is_null() || (*q).prev.is_null() || (*q).next.is_null() {
+        if (*p).q_head.is_none() || (*q).prev.is_none() || (*q).next.is_none() {
             return;
         }
 
-        let first = (*p).q_head;
+        let first = (*p).q_head.unwrap();
         let mut curr = first;
         loop {
-            if curr == q {
-                (*(*q).next).prev = (*q).prev;
-                (*(*q).prev).next = (*q).next;
+            if curr.as_ptr() == q {
+                if let Some(next) = (*q).next {
+                    (*next.as_ptr()).prev = (*q).prev;
+                }
+                if let Some(prev) = (*q).prev {
+                    (*prev.as_ptr()).next = (*q).next;
+                }
                 (*p).q_head = (*q).next;
-                (*q).next = ptr::null_mut();
-                (*q).prev = ptr::null_mut();
+                (*q).next = None;
+                (*q).prev = None;
 
-                if (*p).q_head == q {
-                    (*p).q_head = ptr::null_mut();
+                if (*p).q_head.is_some_and(|head| head.as_ptr() == q) {
+                    (*p).q_head = None;
                 }
                 break;
             }
 
-            curr = (*curr).next;
+            let Some(next) = (*curr.as_ptr()).next else {
+                break;
+            };
+            curr = next;
             if curr == first {
                 break;
             }
@@ -567,31 +579,34 @@ pub unsafe fn hts_tpool_process_detach(p: *mut hts_tpool, q: *mut hts_tpool_proc
 // original: tpool_worker (htslib/thread_pool.c:518)
 extern "C" fn tpool_worker(arg: *mut c_void) -> *mut c_void {
     let w = arg.cast::<HtsTpoolWorker>();
-    let p = unsafe { (*w).p };
+    let p = unsafe { pool_ptr((*w).p) };
 
     unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m)) };
     while unsafe { (*p).shutdown == 0 } {
         assert!(unsafe {
-            (*p).q_head.is_null()
-                || (!(*(*p).q_head).prev.is_null() && !(*(*p).q_head).next.is_null())
+            (*p).q_head.is_none()
+                || ((*(*p).q_head.unwrap().as_ptr()).prev.is_some()
+                    && (*(*p).q_head.unwrap().as_ptr()).next.is_some())
         });
 
         let mut work_to_do = 0;
         let first = unsafe { (*p).q_head };
         let mut q = first;
-        if !q.is_null() {
+        if let Some(first_q) = q {
+            let _ = first_q;
             loop {
+                let q_ptr = q.unwrap().as_ptr();
                 unsafe {
-                    if !(*q).input_head.is_null()
-                        && (*q).qsize - (*q).n_output > (*q).n_processing
-                        && (*q).shutdown == 0
+                    if !(*q_ptr).input.is_empty()
+                        && (*q_ptr).qsize - (*q_ptr).n_output > (*q_ptr).n_processing
+                        && (*q_ptr).shutdown == 0
                     {
                         work_to_do = 1;
                         break;
                     }
-                    q = (*q).next;
+                    q = (*q_ptr).next;
                 }
-                if q.is_null() || q == first {
+                if q.is_none() || q == first {
                     break;
                 }
             }
@@ -603,16 +618,16 @@ extern "C" fn tpool_worker(arg: *mut c_void) -> *mut c_void {
                 if (*p).t_stack_top == -1 || (*p).t_stack_top > (*w).idx {
                     (*p).t_stack_top = (*w).idx;
                 }
-                *(*p).t_stack.add((*w).idx as usize) = 1;
+                (&mut (*p).t_stack)[(*w).idx as usize] = 1;
                 crate::htslib_rs::c_compat::pthread_cond_wait(
                     ptr::addr_of_mut!((*w).pending_c),
                     ptr::addr_of_mut!((*p).pool_m),
                 );
-                *(*p).t_stack.add((*w).idx as usize) = 0;
+                (&mut (*p).t_stack)[(*w).idx as usize] = 0;
 
                 (*p).t_stack_top = -1;
                 for i in 0..(*p).tsize {
-                    if *(*p).t_stack.add(i as usize) != 0 {
+                    if (&(*p).t_stack)[i as usize] != 0 {
                         (*p).t_stack_top = i;
                         break;
                     }
@@ -624,8 +639,9 @@ extern "C" fn tpool_worker(arg: *mut c_void) -> *mut c_void {
         }
 
         unsafe {
+            let q = q.unwrap().as_ptr();
             (*q).ref_count += 1;
-            while !(*q).input_head.is_null() && (*q).qsize - (*q).n_output > (*q).n_processing {
+            while !(*q).input.is_empty() && (*q).qsize - (*q).n_output > (*q).n_processing {
                 if (*p).shutdown != 0 {
                     crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(
                         (*p).pool_m
@@ -637,13 +653,8 @@ extern "C" fn tpool_worker(arg: *mut c_void) -> *mut c_void {
                     break;
                 }
 
-                let j = (*q).input_head;
-                assert!((*j).p == p);
-
-                (*q).input_head = (*j).next;
-                if (*q).input_head.is_null() {
-                    (*q).input_tail = ptr::null_mut();
-                }
+                let j = (*q).input.pop_front().unwrap();
+                assert!(j.p.as_ptr() == p);
 
                 (*q).n_processing += 1;
                 let old_n_input = (*q).n_input;
@@ -664,16 +675,17 @@ extern "C" fn tpool_worker(arg: *mut c_void) -> *mut c_void {
 
                 crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
 
-                let data = (*j).func.unwrap_unchecked()((*j).arg);
-                if hts_tpool_add_result(j, data) < 0 {
+                let data = j.func.unwrap_unchecked()(j.arg);
+                if hts_tpool_add_result(*j, data) < 0 {
                     crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
                     let first = (*p).q_head;
                     let mut q = first;
-                    if !q.is_null() {
+                    if q.is_some() {
                         loop {
-                            hts_tpool_process_shutdown_locked(q);
-                            (*q).shutdown = 2;
-                            q = (*q).next;
+                            let q_ptr = q.unwrap().as_ptr();
+                            hts_tpool_process_shutdown_locked(q_ptr);
+                            (*q_ptr).shutdown = 2;
+                            q = (*q_ptr).next;
                             if q == first {
                                 break;
                             }
@@ -684,7 +696,6 @@ extern "C" fn tpool_worker(arg: *mut c_void) -> *mut c_void {
                     ));
                     return ptr::null_mut();
                 }
-                libc::free(j.cast());
 
                 crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
             }
@@ -692,8 +703,8 @@ extern "C" fn tpool_worker(arg: *mut c_void) -> *mut c_void {
             (*q).ref_count -= 1;
             if (*q).ref_count == 0 {
                 hts_tpool_process_destroy(q.cast());
-            } else if !(*p).q_head.is_null() {
-                (*p).q_head = (*(*p).q_head).next;
+            } else if let Some(head) = (*p).q_head {
+                (*p).q_head = (*head.as_ptr()).next;
             }
         }
     }
@@ -708,13 +719,14 @@ unsafe fn wake_next_worker(q: *mut HtsTpoolProcess, locked: c_int) {
         return;
     }
     let p = unsafe { (*q).p };
+    let p = pool_ptr(p);
     unsafe {
         if locked == 0 {
             crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
         }
 
-        assert!(!(*q).prev.is_null() && !(*q).next.is_null());
-        (*p).q_head = q;
+        assert!((*q).prev.is_some() && (*q).next.is_some());
+        (*p).q_head = NonNull::new(q);
 
         assert!((*p).njobs >= (*q).n_input);
 
@@ -724,7 +736,7 @@ unsafe fn wake_next_worker(q: *mut HtsTpoolProcess, locked: c_int) {
 
         if sig {
             crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!(
-                (*(*p).t.add((*p).t_stack_top as usize)).pending_c
+                (&mut (*p).t)[(*p).t_stack_top as usize].pending_c
             ));
         }
 
@@ -740,45 +752,36 @@ pub unsafe fn hts_tpool_init(n: c_int) -> *mut hts_tpool {
     let mut stack_size: usize = 0;
     let mut pattr: crate::htslib_rs::c_compat::pthread_attr_t = unsafe { mem::zeroed() };
     let mut pattr_init_done = 0;
-    let p = unsafe { xmalloc::<HtsTpool>() };
-    if p.is_null() {
+    let Ok(n_usize) = usize::try_from(n) else {
+        unsafe {
+            *c_compat::__errno_location() = libc::ENOMEM;
+        }
         return ptr::null_mut();
-    }
+    };
+    let mut p_box = unsafe { make_pool(n) };
+    p_box.t = Vec::with_capacity(n_usize);
+    p_box.t_stack = vec![0; n_usize];
+    let p_ptr = Box::into_raw(p_box);
 
     unsafe {
-        ptr::write_bytes(p, 0, 1);
-        (*p).tsize = n;
-        (*p).t_stack_top = -1;
-        (*p).t = xmalloc_array::<HtsTpoolWorker>(n);
-        if (*p).t.is_null() {
-            libc::free(p.cast());
-            return ptr::null_mut();
-        }
-        (*p).t_stack = xmalloc_array::<c_int>(n);
-        if (*p).t_stack.is_null() {
-            libc::free((*p).t.cast());
-            libc::free(p.cast());
-            return ptr::null_mut();
-        }
-
         let mut attr: crate::htslib_rs::c_compat::pthread_mutexattr_t = mem::zeroed();
         crate::htslib_rs::c_compat::pthread_mutexattr_init(&mut attr);
         crate::htslib_rs::c_compat::pthread_mutexattr_settype(
             &mut attr,
             crate::htslib_rs::c_compat::PTHREAD_MUTEX_RECURSIVE,
         );
-        crate::htslib_rs::c_compat::pthread_mutex_init(ptr::addr_of_mut!((*p).pool_m), &attr);
+        crate::htslib_rs::c_compat::pthread_mutex_init(ptr::addr_of_mut!((*p_ptr).pool_m), &attr);
         crate::htslib_rs::c_compat::pthread_mutexattr_destroy(&mut attr);
 
-        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p_ptr).pool_m));
 
         if crate::htslib_rs::c_compat::pthread_attr_init(&mut pattr) != 0 {
-            goto_cleanup(p, t_idx, &mut pattr, pattr_init_done);
+            goto_cleanup(p_ptr, t_idx, &mut pattr, pattr_init_done);
             return ptr::null_mut();
         }
         pattr_init_done = 1;
         if crate::htslib_rs::c_compat::pthread_attr_getstacksize(&pattr, &mut stack_size) != 0 {
-            goto_cleanup(p, t_idx, &mut pattr, pattr_init_done);
+            goto_cleanup(p_ptr, t_idx, &mut pattr, pattr_init_done);
             return ptr::null_mut();
         }
         if stack_size < HTS_MIN_THREAD_STACK
@@ -787,16 +790,13 @@ pub unsafe fn hts_tpool_init(n: c_int) -> *mut hts_tpool {
                 HTS_MIN_THREAD_STACK,
             ) != 0
         {
-            goto_cleanup(p, t_idx, &mut pattr, pattr_init_done);
+            goto_cleanup(p_ptr, t_idx, &mut pattr, pattr_init_done);
             return ptr::null_mut();
         }
 
         while t_idx < n {
-            let w = (*p).t.add(t_idx as usize);
-            ptr::write_bytes(w, 0, 1);
-            *(*p).t_stack.add(t_idx as usize) = 0;
-            (*w).p = p;
-            (*w).idx = t_idx;
+            (*p_ptr).t.push(make_worker(p_ptr, t_idx));
+            let w = ptr::addr_of_mut!((&mut (*p_ptr).t)[t_idx as usize]);
             crate::htslib_rs::c_compat::pthread_cond_init(
                 ptr::addr_of_mut!((*w).pending_c),
                 ptr::null(),
@@ -808,17 +808,17 @@ pub unsafe fn hts_tpool_init(n: c_int) -> *mut hts_tpool {
                 w.cast(),
             ) != 0
             {
-                goto_cleanup(p, t_idx, &mut pattr, pattr_init_done);
+                goto_cleanup(p_ptr, t_idx, &mut pattr, pattr_init_done);
                 return ptr::null_mut();
             }
             t_idx += 1;
         }
 
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p_ptr).pool_m));
         crate::htslib_rs::c_compat::pthread_attr_destroy(&mut pattr);
     }
 
-    p.cast()
+    p_ptr.cast()
 }
 
 unsafe fn goto_cleanup(
@@ -832,21 +832,16 @@ unsafe fn goto_cleanup(
         (*p).shutdown = 1;
         crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
         for j in 0..t_idx {
-            crate::htslib_rs::c_compat::pthread_join(
-                (*(*p).t.add(j as usize)).tid,
-                ptr::null_mut(),
-            );
+            crate::htslib_rs::c_compat::pthread_join((&(*p).t)[j as usize].tid, ptr::null_mut());
             crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(
-                (*(*p).t.add(j as usize)).pending_c
+                (&mut (*p).t)[j as usize].pending_c
             ));
         }
         crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*p).pool_m));
         if pattr_init_done != 0 {
             crate::htslib_rs::c_compat::pthread_attr_destroy(pattr);
         }
-        libc::free((*p).t_stack.cast());
-        libc::free((*p).t.cast());
-        libc::free(p.cast());
+        drop(Box::from_raw(p));
         *c_compat::__errno_location() = save_errno;
     }
 }
@@ -889,6 +884,8 @@ pub unsafe fn hts_tpool_dispatch3(
 ) -> c_int {
     let p = unsafe { pool(p) };
     let q = unsafe { process(q) };
+    let p_nn = NonNull::new(p).unwrap();
+    let q_nn = NonNull::new(q).unwrap();
     unsafe {
         crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
 
@@ -898,20 +895,15 @@ pub unsafe fn hts_tpool_dispatch3(
             return -1;
         }
 
-        let j = xmalloc::<HtsTpoolJob>();
-        if j.is_null() {
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
-            return -1;
-        }
-
-        (*j).func = exec_func;
-        (*j).arg = arg;
-        (*j).job_cleanup = job_cleanup;
-        (*j).result_cleanup = result_cleanup;
-        (*j).next = ptr::null_mut();
-        (*j).p = p;
-        (*j).q = q;
-        (*j).serial = (*q).curr_serial;
+        let j = Box::new(HtsTpoolJob {
+            func: exec_func,
+            arg,
+            job_cleanup,
+            result_cleanup,
+            p: p_nn,
+            q: q_nn,
+            serial: (*q).curr_serial,
+        });
         (*q).curr_serial += 1;
 
         if nonblock == 0 {
@@ -921,11 +913,10 @@ pub unsafe fn hts_tpool_dispatch3(
             {
                 crate::htslib_rs::c_compat::pthread_cond_wait(
                     ptr::addr_of_mut!((*q).input_not_full_c),
-                    ptr::addr_of_mut!((*(*q).p).pool_m),
+                    ptr::addr_of_mut!((*p).pool_m),
                 );
             }
             if (*q).no_more_input != 0 || (*q).shutdown != 0 {
-                libc::free(j.cast());
                 crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
                 return -1;
             }
@@ -936,14 +927,7 @@ pub unsafe fn hts_tpool_dispatch3(
 
         (*p).njobs += 1;
         (*q).n_input += 1;
-
-        if !(*q).input_tail.is_null() {
-            (*(*q).input_tail).next = j;
-            (*q).input_tail = j;
-        } else {
-            (*q).input_head = j;
-            (*q).input_tail = j;
-        }
+        (*q).input.push_back(j);
 
         if (*q).shutdown == 0 {
             wake_next_worker(q, 1);
@@ -957,25 +941,26 @@ pub unsafe fn hts_tpool_dispatch3(
 // original: hts_tpool_wake_dispatch (htslib/thread_pool.c:923)
 pub unsafe fn hts_tpool_wake_dispatch(q: *mut hts_tpool_process) {
     let q = unsafe { process(q) };
+    let p = unsafe { q_pool(q) };
     unsafe {
-        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
         (*q).wake_dispatch = 1;
         crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*q).input_not_full_c));
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
     }
 }
 
 // original: hts_tpool_process_flush (htslib/thread_pool.c:941)
 pub unsafe fn hts_tpool_process_flush(q: *mut hts_tpool_process) -> c_int {
     let q = unsafe { process(q) };
-    let p = unsafe { (*q).p };
+    let p = unsafe { q_pool(q) };
     unsafe {
         crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
 
         for i in 0..(*p).tsize {
-            if *(*p).t_stack.add(i as usize) != 0 {
+            if (&(*p).t_stack)[i as usize] != 0 {
                 crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!(
-                    (*(*p).t.add(i as usize)).pending_c
+                    (&mut (*p).t)[i as usize].pending_c
                 ));
             }
         }
@@ -1031,62 +1016,54 @@ pub unsafe fn hts_tpool_process_flush(q: *mut hts_tpool_process) -> c_int {
 // original: hts_tpool_process_reset (htslib/thread_pool.c:1013)
 pub unsafe fn hts_tpool_process_reset(q: *mut hts_tpool_process, free_results: c_int) -> c_int {
     let q = unsafe { process(q) };
+    let p = unsafe { q_pool(q) };
     unsafe {
-        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
         (*q).next_serial = c_int::MAX as u64;
 
-        let mut j = (*q).input_head;
-        (*q).input_head = ptr::null_mut();
-        (*q).input_tail = ptr::null_mut();
+        let mut input = mem::take(&mut (*q).input);
         (*q).n_input = 0;
 
-        let mut r = (*q).output_head;
-        (*q).output_head = ptr::null_mut();
-        (*q).output_tail = ptr::null_mut();
+        let mut output = mem::take(&mut (*q).output);
         (*q).n_output = 0;
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
 
-        while !j.is_null() {
-            let jn = (*j).next;
-            if let Some(cleanup) = (*j).job_cleanup {
-                cleanup((*j).arg);
+        while let Some(j) = input.pop_front() {
+            if let Some(cleanup) = j.job_cleanup {
+                cleanup(j.arg);
             }
-            libc::free(j.cast());
-            j = jn;
         }
 
-        while !r.is_null() {
-            let rn = (*r).next;
-            if let Some(cleanup) = (*r).result_cleanup {
-                cleanup((*r).data);
-                (*r).data = ptr::null_mut();
+        while let Some(mut r) = output.pop_front() {
+            if let Some(cleanup) = r.result_cleanup {
+                cleanup(r.data);
+                r.data = ptr::null_mut();
             }
-            hts_tpool_delete_result(r.cast(), free_results);
-            r = rn;
+            if free_results != 0 && !r.data.is_null() {
+                libc::free(r.data);
+            }
         }
 
         if hts_tpool_process_flush(q.cast()) != 0 {
             return -1;
         }
 
-        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*(*q).p).pool_m));
-        r = (*q).output_head;
-        (*q).output_head = ptr::null_mut();
-        (*q).output_tail = ptr::null_mut();
+        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*p).pool_m));
+        output = mem::take(&mut (*q).output);
         (*q).n_output = 0;
         (*q).next_serial = 0;
         (*q).curr_serial = 0;
         crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*q).input_not_full_c));
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*(*q).p).pool_m));
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
 
-        while !r.is_null() {
-            let rn = (*r).next;
-            if let Some(cleanup) = (*r).result_cleanup {
-                cleanup((*r).data);
-                (*r).data = ptr::null_mut();
+        while let Some(mut r) = output.pop_front() {
+            if let Some(cleanup) = r.result_cleanup {
+                cleanup(r.data);
+                r.data = ptr::null_mut();
             }
-            hts_tpool_delete_result(r.cast(), free_results);
-            r = rn;
+            if free_results != 0 && !r.data.is_null() {
+                libc::free(r.data);
+            }
         }
     }
     0
@@ -1106,31 +1083,24 @@ pub unsafe fn hts_tpool_destroy(p: *mut hts_tpool) {
 
         for i in 0..(*p).tsize {
             crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!(
-                (*(*p).t.add(i as usize)).pending_c
+                (&mut (*p).t)[i as usize].pending_c
             ));
         }
 
         crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*p).pool_m));
 
         for i in 0..(*p).tsize {
-            crate::htslib_rs::c_compat::pthread_join(
-                (*(*p).t.add(i as usize)).tid,
-                ptr::null_mut(),
-            );
+            crate::htslib_rs::c_compat::pthread_join((&(*p).t)[i as usize].tid, ptr::null_mut());
         }
 
         crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*p).pool_m));
         for i in 0..(*p).tsize {
             crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(
-                (*(*p).t.add(i as usize)).pending_c
+                (&mut (*p).t)[i as usize].pending_c
             ));
         }
 
-        if !(*p).t_stack.is_null() {
-            libc::free((*p).t_stack.cast());
-        }
-        libc::free((*p).t.cast());
-        libc::free(p.cast());
+        drop(Box::from_raw(p));
     }
 }
 
@@ -1139,21 +1109,17 @@ pub unsafe fn hts_tpool_kill(p: *mut hts_tpool) {
     let p = unsafe { pool(p) };
     unsafe {
         for i in 0..(*p).tsize {
-            crate::htslib_rs::c_compat::pthread_kill((*(*p).t.add(i as usize)).tid, libc::SIGINT);
+            crate::htslib_rs::c_compat::pthread_kill((&(*p).t)[i as usize].tid, libc::SIGINT);
         }
 
         crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*p).pool_m));
         for i in 0..(*p).tsize {
             crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(
-                (*(*p).t.add(i as usize)).pending_c
+                (&mut (*p).t)[i as usize].pending_c
             ));
         }
 
-        if !(*p).t_stack.is_null() {
-            libc::free((*p).t_stack.cast());
-        }
-        libc::free((*p).t.cast());
-        libc::free(p.cast());
+        drop(Box::from_raw(p));
     }
 }
 
@@ -1195,6 +1161,18 @@ mod tests {
             0x1234 => static_marker_ptr(&TEST_MARKER_1234),
             _ => panic!("unknown test marker {value:#x}"),
         }
+    }
+
+    unsafe fn test_pool() -> HtsTpool {
+        *unsafe { make_pool(0) }
+    }
+
+    unsafe fn test_process(pool: *mut HtsTpool, qsize: c_int, in_only: c_int) -> HtsTpoolProcess {
+        *unsafe { make_process(pool, qsize, in_only) }
+    }
+
+    fn opt_ptr<T>(ptr: *mut T) -> Option<NonNull<T>> {
+        NonNull::new(ptr)
     }
 
     #[repr(C)]
@@ -1628,17 +1606,11 @@ mod tests {
     #[test]
     fn result_data_returns_payload_and_delete_ignores_cleanup_callback() {
         unsafe {
-            let result = xmalloc::<HtsTpoolResult>();
-            assert!(!result.is_null());
-            ptr::write(
-                result,
-                HtsTpoolResult {
-                    next: ptr::null_mut(),
-                    result_cleanup: Some(count_result_cleanup),
-                    serial: 0,
-                    data: test_marker_ptr(0x1234),
-                },
-            );
+            let result = Box::into_raw(Box::new(HtsTpoolResult {
+                result_cleanup: Some(count_result_cleanup),
+                serial: 0,
+                data: test_marker_ptr(0x1234),
+            }));
 
             RESULT_CLEANUPS.store(0, Ordering::SeqCst);
             assert_eq!(
@@ -1680,10 +1652,7 @@ mod tests {
     #[test]
     fn tpool_kill_releases_zero_worker_pool_without_signalling_threads() {
         unsafe {
-            let pool = xmalloc::<HtsTpool>();
-            assert!(!pool.is_null());
-            ptr::write_bytes(pool, 0, 1);
-            (*pool).t_stack_top = -1;
+            let pool = Box::into_raw(make_pool(0));
             assert_eq!(
                 crate::htslib_rs::c_compat::pthread_mutex_init(
                     ptr::addr_of_mut!((*pool).pool_m),
@@ -2031,12 +2000,10 @@ mod tests {
     #[test]
     fn process_accounting_wrappers_report_combined_queue_state_and_refcount() {
         unsafe {
-            let mut pool: HtsTpool = mem::zeroed();
+            let mut pool = test_pool();
             init_test_mutex(ptr::addr_of_mut!(pool.pool_m));
-            pool.t_stack_top = -1;
 
-            let mut queue: HtsTpoolProcess = mem::zeroed();
-            queue.p = ptr::addr_of_mut!(pool);
+            let mut queue = test_process(ptr::addr_of_mut!(pool), 7, 0);
             queue.qsize = 7;
             queue.n_input = 2;
             queue.n_processing = 3;
@@ -2069,43 +2036,42 @@ mod tests {
     #[test]
     fn process_attach_and_detach_maintain_circular_queue_ring() {
         unsafe {
-            let mut pool: HtsTpool = mem::zeroed();
+            let mut pool = test_pool();
             init_test_mutex(ptr::addr_of_mut!(pool.pool_m));
-            pool.t_stack_top = -1;
 
-            let mut first: HtsTpoolProcess = mem::zeroed();
-            let mut second: HtsTpoolProcess = mem::zeroed();
+            let mut first = test_process(ptr::addr_of_mut!(pool), 0, 0);
+            let mut second = test_process(ptr::addr_of_mut!(pool), 0, 0);
             let first_ptr = ptr::addr_of_mut!(first);
             let second_ptr = ptr::addr_of_mut!(second);
 
             hts_tpool_process_attach(ptr::addr_of_mut!(pool).cast(), first_ptr.cast());
-            assert_eq!(pool.q_head, first_ptr);
-            assert_eq!(first.next, first_ptr);
-            assert_eq!(first.prev, first_ptr);
+            assert_eq!(pool.q_head, opt_ptr(first_ptr));
+            assert_eq!(first.next, opt_ptr(first_ptr));
+            assert_eq!(first.prev, opt_ptr(first_ptr));
 
             hts_tpool_process_attach(ptr::addr_of_mut!(pool).cast(), second_ptr.cast());
-            assert_eq!(pool.q_head, second_ptr);
-            assert_eq!(second.next, first_ptr);
-            assert_eq!(second.prev, first_ptr);
-            assert_eq!(first.next, second_ptr);
-            assert_eq!(first.prev, second_ptr);
+            assert_eq!(pool.q_head, opt_ptr(second_ptr));
+            assert_eq!(second.next, opt_ptr(first_ptr));
+            assert_eq!(second.prev, opt_ptr(first_ptr));
+            assert_eq!(first.next, opt_ptr(second_ptr));
+            assert_eq!(first.prev, opt_ptr(second_ptr));
 
             hts_tpool_process_detach(ptr::addr_of_mut!(pool).cast(), first_ptr.cast());
-            assert_eq!(pool.q_head, second_ptr);
-            assert_eq!(second.next, second_ptr);
-            assert_eq!(second.prev, second_ptr);
-            assert!(first.next.is_null());
-            assert!(first.prev.is_null());
+            assert_eq!(pool.q_head, opt_ptr(second_ptr));
+            assert_eq!(second.next, opt_ptr(second_ptr));
+            assert_eq!(second.prev, opt_ptr(second_ptr));
+            assert!(first.next.is_none());
+            assert!(first.prev.is_none());
 
             hts_tpool_process_detach(ptr::addr_of_mut!(pool).cast(), first_ptr.cast());
-            assert_eq!(pool.q_head, second_ptr);
-            assert_eq!(second.next, second_ptr);
-            assert_eq!(second.prev, second_ptr);
+            assert_eq!(pool.q_head, opt_ptr(second_ptr));
+            assert_eq!(second.next, opt_ptr(second_ptr));
+            assert_eq!(second.prev, opt_ptr(second_ptr));
 
             hts_tpool_process_detach(ptr::addr_of_mut!(pool).cast(), second_ptr.cast());
-            assert!(pool.q_head.is_null());
-            assert!(second.next.is_null());
-            assert!(second.prev.is_null());
+            assert!(pool.q_head.is_none());
+            assert!(second.next.is_none());
+            assert!(second.prev.is_none());
 
             assert_eq!(
                 crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
@@ -2117,37 +2083,32 @@ mod tests {
     #[test]
     fn process_destroy_detaches_and_shutdowns_queue_with_outstanding_reference() {
         unsafe {
-            let mut pool: HtsTpool = mem::zeroed();
+            let mut pool = test_pool();
             init_test_mutex(ptr::addr_of_mut!(pool.pool_m));
-            pool.t_stack_top = -1;
 
-            let mut first: HtsTpoolProcess = mem::zeroed();
+            let mut first = test_process(ptr::addr_of_mut!(pool), 4, 0);
             init_test_process_conds(ptr::addr_of_mut!(first));
-            first.p = ptr::addr_of_mut!(pool);
-            first.qsize = 4;
             first.ref_count = 2;
 
-            let mut second: HtsTpoolProcess = mem::zeroed();
-            second.p = ptr::addr_of_mut!(pool);
-            second.qsize = 4;
+            let mut second = test_process(ptr::addr_of_mut!(pool), 4, 0);
             second.ref_count = 1;
 
             let first_ptr = ptr::addr_of_mut!(first);
             let second_ptr = ptr::addr_of_mut!(second);
             hts_tpool_process_attach(ptr::addr_of_mut!(pool).cast(), first_ptr.cast());
             hts_tpool_process_attach(ptr::addr_of_mut!(pool).cast(), second_ptr.cast());
-            assert_eq!(pool.q_head, second_ptr);
+            assert_eq!(pool.q_head, opt_ptr(second_ptr));
 
             hts_tpool_process_destroy(first_ptr.cast());
 
             assert_eq!(first.no_more_input, 1);
             assert_eq!(first.shutdown, 1);
             assert_eq!(first.ref_count, 1);
-            assert!(first.next.is_null());
-            assert!(first.prev.is_null());
-            assert_eq!(pool.q_head, second_ptr);
-            assert_eq!(second.next, second_ptr);
-            assert_eq!(second.prev, second_ptr);
+            assert!(first.next.is_none());
+            assert!(first.prev.is_none());
+            assert_eq!(pool.q_head, opt_ptr(second_ptr));
+            assert_eq!(second.next, opt_ptr(second_ptr));
+            assert_eq!(second.prev, opt_ptr(second_ptr));
 
             destroy_test_process_conds(first_ptr);
             assert_eq!(
@@ -2160,70 +2121,65 @@ mod tests {
     #[test]
     fn next_result_locked_returns_results_in_serial_order() {
         unsafe {
-            let mut pool: HtsTpool = mem::zeroed();
-            pool.t_stack_top = -1;
-            let mut queue: HtsTpoolProcess = mem::zeroed();
-            queue.p = ptr::addr_of_mut!(pool);
-            queue.qsize = 0;
+            let mut pool = test_pool();
+            let mut queue = test_process(ptr::addr_of_mut!(pool), 0, 0);
             queue.next_serial = 0;
             queue.n_output = 2;
 
-            let mut later = HtsTpoolResult {
-                next: ptr::null_mut(),
+            let mut later = Box::new(HtsTpoolResult {
                 result_cleanup: None,
                 serial: 1,
                 data: test_marker_ptr(0x11),
-            };
-            let mut first = HtsTpoolResult {
-                next: ptr::addr_of_mut!(later),
+            });
+            let later_ptr = ptr::addr_of_mut!(*later);
+            let mut first = Box::new(HtsTpoolResult {
                 result_cleanup: None,
                 serial: 0,
                 data: test_marker_ptr(0x22),
-            };
-            queue.output_head = ptr::addr_of_mut!(first);
-            queue.output_tail = ptr::addr_of_mut!(later);
+            });
+            let first_ptr = ptr::addr_of_mut!(*first);
+            queue.output.push_back(first);
+            queue.output.push_back(later);
 
             let r0 = hts_tpool_next_result_locked(ptr::addr_of_mut!(queue));
-            assert_eq!(r0, ptr::addr_of_mut!(first));
+            assert_eq!(r0, first_ptr);
             assert_eq!(queue.next_serial, 1);
             assert_eq!(queue.n_output, 1);
-            assert_eq!(queue.output_head, ptr::addr_of_mut!(later));
-            assert_eq!(queue.output_tail, ptr::addr_of_mut!(later));
+            assert_eq!(queue.output.front().map(|r| r.serial), Some(1));
+            hts_tpool_delete_result(r0.cast(), 0);
 
             let r1 = hts_tpool_next_result_locked(ptr::addr_of_mut!(queue));
-            assert_eq!(r1, ptr::addr_of_mut!(later));
+            assert_eq!(r1, later_ptr);
             assert_eq!(queue.next_serial, 2);
             assert_eq!(queue.n_output, 0);
-            assert!(queue.output_head.is_null());
-            assert!(queue.output_tail.is_null());
+            assert!(queue.output.is_empty());
+            hts_tpool_delete_result(r1.cast(), 0);
         }
     }
 
     #[test]
     fn next_result_locked_waits_for_missing_serial_and_honors_shutdown() {
         unsafe {
-            let mut pool: HtsTpool = mem::zeroed();
-            pool.t_stack_top = -1;
-            let mut queue: HtsTpoolProcess = mem::zeroed();
-            queue.p = ptr::addr_of_mut!(pool);
-            queue.qsize = 0;
+            let mut pool = test_pool();
+            let mut queue = test_process(ptr::addr_of_mut!(pool), 0, 0);
             queue.next_serial = 0;
             queue.n_output = 1;
 
-            let mut later = HtsTpoolResult {
-                next: ptr::null_mut(),
+            let later = Box::new(HtsTpoolResult {
                 result_cleanup: None,
                 serial: 1,
                 data: ptr::null_mut(),
-            };
-            queue.output_head = ptr::addr_of_mut!(later);
-            queue.output_tail = ptr::addr_of_mut!(later);
+            });
+            let later_ptr = ptr::from_ref(&*later).cast_mut();
+            queue.output.push_back(later);
 
             assert!(hts_tpool_next_result_locked(ptr::addr_of_mut!(queue)).is_null());
             assert_eq!(queue.next_serial, 0);
             assert_eq!(queue.n_output, 1);
-            assert_eq!(queue.output_head, ptr::addr_of_mut!(later));
-            assert_eq!(queue.output_tail, ptr::addr_of_mut!(later));
+            assert_eq!(
+                queue.output.front().map(|r| ptr::from_ref(&**r).cast_mut()),
+                Some(later_ptr)
+            );
 
             queue.shutdown = 1;
             assert!(hts_tpool_next_result_locked(ptr::addr_of_mut!(queue)).is_null());
@@ -2235,67 +2191,63 @@ mod tests {
     #[test]
     fn next_result_locked_removes_matching_serial_from_middle() {
         unsafe {
-            let mut pool: HtsTpool = mem::zeroed();
-            pool.t_stack_top = -1;
-            let mut queue: HtsTpoolProcess = mem::zeroed();
-            queue.p = ptr::addr_of_mut!(pool);
-            queue.qsize = 0;
+            let mut pool = test_pool();
+            let mut queue = test_process(ptr::addr_of_mut!(pool), 0, 0);
             queue.next_serial = 1;
             queue.n_output = 3;
 
-            let mut tail = HtsTpoolResult {
-                next: ptr::null_mut(),
+            let tail = Box::new(HtsTpoolResult {
                 result_cleanup: None,
                 serial: 2,
                 data: test_marker_ptr(0x22),
-            };
-            let mut middle = HtsTpoolResult {
-                next: ptr::addr_of_mut!(tail),
+            });
+            let tail_ptr = ptr::from_ref(&*tail).cast_mut();
+            let mut middle = Box::new(HtsTpoolResult {
                 result_cleanup: None,
                 serial: 1,
                 data: test_marker_ptr(0x11),
-            };
-            let mut head = HtsTpoolResult {
-                next: ptr::addr_of_mut!(middle),
+            });
+            let middle_ptr = ptr::addr_of_mut!(*middle);
+            let head = Box::new(HtsTpoolResult {
                 result_cleanup: None,
                 serial: 0,
                 data: ptr::null_mut(),
-            };
-            queue.output_head = ptr::addr_of_mut!(head);
-            queue.output_tail = ptr::addr_of_mut!(tail);
+            });
+            queue.output.push_back(head);
+            queue.output.push_back(middle);
+            queue.output.push_back(tail);
 
             let r = hts_tpool_next_result_locked(ptr::addr_of_mut!(queue));
-            assert_eq!(r, ptr::addr_of_mut!(middle));
+            assert_eq!(r, middle_ptr);
             assert_eq!(queue.next_serial, 2);
             assert_eq!(queue.n_output, 2);
-            assert_eq!(queue.output_head, ptr::addr_of_mut!(head));
-            assert_eq!(head.next, ptr::addr_of_mut!(tail));
-            assert_eq!(queue.output_tail, ptr::addr_of_mut!(tail));
+            assert_eq!(queue.output.front().map(|r| r.serial), Some(0));
+            assert_eq!(
+                queue.output.back().map(|r| ptr::from_ref(&**r).cast_mut()),
+                Some(tail_ptr)
+            );
+            hts_tpool_delete_result(r.cast(), 0);
         }
     }
 
     #[test]
     fn process_shutdown_sets_flag_and_blocks_pending_output_delivery() {
         unsafe {
-            let mut pool: HtsTpool = mem::zeroed();
+            let mut pool = test_pool();
             init_test_mutex(ptr::addr_of_mut!(pool.pool_m));
-            pool.t_stack_top = -1;
 
-            let mut queue: HtsTpoolProcess = mem::zeroed();
+            let mut queue = test_process(ptr::addr_of_mut!(pool), 0, 0);
             init_test_process_conds(ptr::addr_of_mut!(queue));
-            queue.p = ptr::addr_of_mut!(pool);
-            queue.qsize = 0;
             queue.next_serial = 0;
             queue.n_output = 1;
 
-            let mut result = HtsTpoolResult {
-                next: ptr::null_mut(),
+            let result = Box::new(HtsTpoolResult {
                 result_cleanup: None,
                 serial: 0,
                 data: test_marker_ptr(0x55),
-            };
-            queue.output_head = ptr::addr_of_mut!(result);
-            queue.output_tail = ptr::addr_of_mut!(result);
+            });
+            let result_ptr = ptr::from_ref(&*result).cast_mut();
+            queue.output.push_back(result);
 
             hts_tpool_process_shutdown(ptr::addr_of_mut!(queue).cast());
             assert_eq!(
@@ -2305,8 +2257,10 @@ mod tests {
             assert!(hts_tpool_next_result(ptr::addr_of_mut!(queue).cast()).is_null());
             assert_eq!(queue.next_serial, 0);
             assert_eq!(queue.n_output, 1);
-            assert_eq!(queue.output_head, ptr::addr_of_mut!(result));
-            assert_eq!(queue.output_tail, ptr::addr_of_mut!(result));
+            assert_eq!(
+                queue.output.front().map(|r| ptr::from_ref(&**r).cast_mut()),
+                Some(result_ptr)
+            );
 
             destroy_test_process_conds(ptr::addr_of_mut!(queue));
             assert_eq!(
@@ -2319,37 +2273,28 @@ mod tests {
     #[test]
     fn add_result_in_only_queue_discards_data_after_finishing_job() {
         unsafe {
-            let mut pool: HtsTpool = mem::zeroed();
+            let mut pool = test_pool();
             init_test_mutex(ptr::addr_of_mut!(pool.pool_m));
-            pool.t_stack_top = -1;
 
-            let mut queue: HtsTpoolProcess = mem::zeroed();
+            let mut queue = test_process(ptr::addr_of_mut!(pool), 1, 1);
             init_test_process_conds(ptr::addr_of_mut!(queue));
-            queue.p = ptr::addr_of_mut!(pool);
-            queue.qsize = 1;
-            queue.in_only = 1;
             queue.n_processing = 1;
 
-            let mut job = HtsTpoolJob {
+            let job = HtsTpoolJob {
                 func: None,
                 arg: ptr::null_mut(),
                 job_cleanup: None,
                 result_cleanup: Some(count_result_cleanup),
-                next: ptr::null_mut(),
-                p: ptr::addr_of_mut!(pool),
-                q: ptr::addr_of_mut!(queue),
+                p: NonNull::new(ptr::addr_of_mut!(pool)).unwrap(),
+                q: NonNull::new(ptr::addr_of_mut!(queue)).unwrap(),
                 serial: 0,
             };
 
             RESULT_CLEANUPS.store(0, Ordering::SeqCst);
-            assert_eq!(
-                hts_tpool_add_result(ptr::addr_of_mut!(job), test_marker_ptr(0x77)),
-                0
-            );
+            assert_eq!(hts_tpool_add_result(job, test_marker_ptr(0x77)), 0);
             assert_eq!(queue.n_processing, 0);
             assert_eq!(queue.n_output, 0);
-            assert!(queue.output_head.is_null());
-            assert!(queue.output_tail.is_null());
+            assert!(queue.output.is_empty());
             assert_eq!(RESULT_CLEANUPS.load(Ordering::SeqCst), 0);
 
             destroy_test_process_conds(ptr::addr_of_mut!(queue));
@@ -2363,13 +2308,10 @@ mod tests {
     #[test]
     fn dispatch3_nonblock_full_queue_sets_eagain_without_state_change() {
         unsafe {
-            let mut pool: HtsTpool = mem::zeroed();
+            let mut pool = test_pool();
             init_test_mutex(ptr::addr_of_mut!(pool.pool_m));
-            pool.t_stack_top = -1;
 
-            let mut queue: HtsTpoolProcess = mem::zeroed();
-            queue.p = ptr::addr_of_mut!(pool);
-            queue.qsize = 1;
+            let mut queue = test_process(ptr::addr_of_mut!(pool), 1, 0);
             queue.n_input = 1;
             queue.curr_serial = 7;
 
@@ -2388,8 +2330,7 @@ mod tests {
             assert_eq!(*c_compat::__errno_location(), libc::EAGAIN);
             assert_eq!(queue.curr_serial, 7);
             assert_eq!(queue.n_input, 1);
-            assert!(queue.input_head.is_null());
-            assert!(queue.input_tail.is_null());
+            assert!(queue.input.is_empty());
             assert_eq!(pool.njobs, 0);
 
             assert_eq!(
@@ -2402,39 +2343,30 @@ mod tests {
     #[test]
     fn dispatch3_wake_dispatch_allows_one_blocking_enqueue_on_full_queue() {
         unsafe {
-            let mut pool: HtsTpool = mem::zeroed();
+            let mut pool = test_pool();
             init_test_mutex(ptr::addr_of_mut!(pool.pool_m));
-            pool.t_stack_top = -1;
 
-            let mut queue: HtsTpoolProcess = mem::zeroed();
+            let mut queue = test_process(ptr::addr_of_mut!(pool), 1, 0);
             init_test_process_conds(ptr::addr_of_mut!(queue));
-            queue.p = ptr::addr_of_mut!(pool);
-            queue.qsize = 1;
             queue.n_input = 1;
             queue.curr_serial = 41;
             queue.wake_dispatch = 1;
-            queue.next = ptr::addr_of_mut!(queue);
-            queue.prev = ptr::addr_of_mut!(queue);
-            pool.q_head = ptr::addr_of_mut!(queue);
+            queue.next = opt_ptr(ptr::addr_of_mut!(queue));
+            queue.prev = opt_ptr(ptr::addr_of_mut!(queue));
+            pool.q_head = opt_ptr(ptr::addr_of_mut!(queue));
             pool.njobs = queue.n_input;
+            let p_nn = NonNull::new(ptr::addr_of_mut!(pool)).unwrap();
+            let q_nn = NonNull::new(ptr::addr_of_mut!(queue)).unwrap();
 
-            let first_job = xmalloc::<HtsTpoolJob>();
-            assert!(!first_job.is_null());
-            ptr::write(
-                first_job,
-                HtsTpoolJob {
-                    func: None,
-                    arg: test_marker_ptr(0x01),
-                    job_cleanup: None,
-                    result_cleanup: None,
-                    next: ptr::null_mut(),
-                    p: ptr::addr_of_mut!(pool),
-                    q: ptr::addr_of_mut!(queue),
-                    serial: 40,
-                },
-            );
-            queue.input_head = first_job;
-            queue.input_tail = first_job;
+            queue.input.push_back(Box::new(HtsTpoolJob {
+                func: None,
+                arg: test_marker_ptr(0x01),
+                job_cleanup: None,
+                result_cleanup: None,
+                p: p_nn,
+                q: q_nn,
+                serial: 40,
+            }));
 
             assert_eq!(
                 hts_tpool_dispatch3(
@@ -2453,9 +2385,9 @@ mod tests {
             assert_eq!(queue.curr_serial, 42);
             assert_eq!(queue.n_input, 2);
             assert_eq!(pool.njobs, 2);
-            assert_eq!((*queue.input_head).serial, 40);
-            assert_eq!((*queue.input_tail).serial, 41);
-            assert!((*queue.input_tail).result_cleanup.is_some());
+            assert_eq!(queue.input.front().unwrap().serial, 40);
+            assert_eq!(queue.input.back().unwrap().serial, 41);
+            assert!(queue.input.back().unwrap().result_cleanup.is_some());
 
             assert_eq!(
                 hts_tpool_process_reset(ptr::addr_of_mut!(queue).cast(), 0),
@@ -2472,13 +2404,10 @@ mod tests {
     #[test]
     fn dispatch3_blocking_shutdown_after_allocation_returns_without_enqueue() {
         unsafe {
-            let mut pool: HtsTpool = mem::zeroed();
+            let mut pool = test_pool();
             init_test_mutex(ptr::addr_of_mut!(pool.pool_m));
-            pool.t_stack_top = -1;
 
-            let mut queue: HtsTpoolProcess = mem::zeroed();
-            queue.p = ptr::addr_of_mut!(pool);
-            queue.qsize = 1;
+            let mut queue = test_process(ptr::addr_of_mut!(pool), 1, 0);
             queue.n_input = 1;
             queue.shutdown = 1;
             queue.curr_serial = 7;
@@ -2498,8 +2427,7 @@ mod tests {
             assert_eq!(ret, -1);
             assert_eq!(queue.curr_serial, 8);
             assert_eq!(queue.n_input, 1);
-            assert!(queue.input_head.is_null());
-            assert!(queue.input_tail.is_null());
+            assert!(queue.input.is_empty());
             assert_eq!(pool.njobs, 0);
             assert_eq!(JOB_CLEANUPS.load(Ordering::SeqCst), 0);
             assert_eq!(RESULT_CLEANUPS.load(Ordering::SeqCst), 0);
@@ -2519,75 +2447,49 @@ mod tests {
             let job_counter = ptr::addr_of!(job_cleanups).cast::<c_void>().cast_mut();
             let result_counter = ptr::addr_of!(result_cleanups).cast::<c_void>().cast_mut();
 
-            let mut pool: HtsTpool = mem::zeroed();
+            let mut pool = test_pool();
             init_test_mutex(ptr::addr_of_mut!(pool.pool_m));
-            pool.t_stack_top = -1;
 
-            let mut queue: HtsTpoolProcess = mem::zeroed();
+            let mut queue = test_process(ptr::addr_of_mut!(pool), 4, 0);
             init_test_process_conds(ptr::addr_of_mut!(queue));
-            queue.p = ptr::addr_of_mut!(pool);
-            queue.qsize = 4;
             queue.next_serial = 12;
             queue.curr_serial = 14;
             queue.n_input = 2;
             queue.n_output = 1;
+            let p_nn = NonNull::new(ptr::addr_of_mut!(pool)).unwrap();
+            let q_nn = NonNull::new(ptr::addr_of_mut!(queue)).unwrap();
 
-            let first_job = xmalloc::<HtsTpoolJob>();
-            let second_job = xmalloc::<HtsTpoolJob>();
-            let result = xmalloc::<HtsTpoolResult>();
-            assert!(!first_job.is_null());
-            assert!(!second_job.is_null());
-            assert!(!result.is_null());
-
-            ptr::write(
-                second_job,
-                HtsTpoolJob {
-                    func: None,
-                    arg: job_counter,
-                    job_cleanup: Some(count_pointed_atomic),
-                    result_cleanup: None,
-                    next: ptr::null_mut(),
-                    p: ptr::addr_of_mut!(pool),
-                    q: ptr::addr_of_mut!(queue),
-                    serial: 13,
-                },
-            );
-            ptr::write(
-                first_job,
-                HtsTpoolJob {
-                    func: None,
-                    arg: job_counter,
-                    job_cleanup: Some(count_pointed_atomic),
-                    result_cleanup: None,
-                    next: second_job,
-                    p: ptr::addr_of_mut!(pool),
-                    q: ptr::addr_of_mut!(queue),
-                    serial: 12,
-                },
-            );
-            ptr::write(
-                result,
-                HtsTpoolResult {
-                    next: ptr::null_mut(),
-                    result_cleanup: Some(count_pointed_atomic),
-                    serial: 11,
-                    data: result_counter,
-                },
-            );
-            queue.input_head = first_job;
-            queue.input_tail = second_job;
-            queue.output_head = result;
-            queue.output_tail = result;
+            queue.input.push_back(Box::new(HtsTpoolJob {
+                func: None,
+                arg: job_counter,
+                job_cleanup: Some(count_pointed_atomic),
+                result_cleanup: None,
+                p: p_nn,
+                q: q_nn,
+                serial: 12,
+            }));
+            queue.input.push_back(Box::new(HtsTpoolJob {
+                func: None,
+                arg: job_counter,
+                job_cleanup: Some(count_pointed_atomic),
+                result_cleanup: None,
+                p: p_nn,
+                q: q_nn,
+                serial: 13,
+            }));
+            queue.output.push_back(Box::new(HtsTpoolResult {
+                result_cleanup: Some(count_pointed_atomic),
+                serial: 11,
+                data: result_counter,
+            }));
 
             assert_eq!(
                 hts_tpool_process_reset(ptr::addr_of_mut!(queue).cast(), 1),
                 0
             );
 
-            assert!(queue.input_head.is_null());
-            assert!(queue.input_tail.is_null());
-            assert!(queue.output_head.is_null());
-            assert!(queue.output_tail.is_null());
+            assert!(queue.input.is_empty());
+            assert!(queue.output.is_empty());
             assert_eq!(queue.n_input, 0);
             assert_eq!(queue.n_output, 0);
             assert_eq!(queue.next_serial, 0);

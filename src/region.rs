@@ -12,12 +12,9 @@ use super::{
 };
 
 // original: reglist (htslib/region.c:31)
-#[repr(C)]
 pub struct region_c_31_reglist {
-    n: u32,
-    m: u32,
-    a: *mut hts_pair_pos_t,
     tid: c_int,
+    intervals: Vec<hts_pair_pos_t>,
 }
 
 // original: reghash_t (htslib/region.c:38)
@@ -36,11 +33,7 @@ unsafe fn reghash_free_raw(h: *mut region_c_38_reghash_t) {
         return;
     }
 
-    let mut h_box = Box::from_raw(h);
-    for entry in h_box.entries.iter_mut() {
-        c_compat::free(entry.a.cast());
-        entry.a = ptr::null_mut();
-    }
+    drop(Box::from_raw(h));
 }
 
 // original: compare_hts_pair_pos_t (htslib/region.c:41)
@@ -74,41 +67,24 @@ pub unsafe fn region_c_87_reg_compact(h: *mut region_c_38_reghash_t) -> c_int {
     }
 
     for p in (*h).entries.iter_mut() {
-        if p.n == 0 {
+        if p.intervals.is_empty() {
             continue;
         }
 
-        libc::qsort(
-            p.a.cast(),
-            p.n as usize,
-            std::mem::size_of::<hts_pair_pos_t>(),
-            Some(region_c_41_compare_hts_pair_pos_t),
-        );
+        p.intervals
+            .sort_by(|a, b| a.beg.cmp(&b.beg).then_with(|| a.end.cmp(&b.end)));
 
-        let mut new_n: u32 = 0;
-        let mut j: u32 = 1;
-        while j < p.n {
-            if (*p.a.add(new_n as usize)).end < (*p.a.add(j as usize)).beg {
-                new_n += 1;
-                (*p.a.add(new_n as usize)).beg = (*p.a.add(j as usize)).beg;
-                (*p.a.add(new_n as usize)).end = (*p.a.add(j as usize)).end;
-            } else if (*p.a.add(new_n as usize)).end < (*p.a.add(j as usize)).end {
-                (*p.a.add(new_n as usize)).end = (*p.a.add(j as usize)).end;
-            }
-            j += 1;
-        }
-        new_n += 1;
-        if p.n > new_n {
-            let new_a = c_compat::realloc(
-                p.a.cast(),
-                (new_n as usize * std::mem::size_of::<hts_pair_pos_t>()) as u64,
-            )
-            .cast::<hts_pair_pos_t>();
-            if !new_a.is_null() {
-                p.a = new_a;
+        let mut compacted = 0usize;
+        for j in 1..p.intervals.len() {
+            if p.intervals[compacted].end < p.intervals[j].beg {
+                compacted += 1;
+                p.intervals[compacted] = p.intervals[j];
+            } else if p.intervals[compacted].end < p.intervals[j].end {
+                p.intervals[compacted].end = p.intervals[j].end;
             }
         }
-        p.n = new_n;
+        p.intervals.truncate(compacted + 1);
+        p.intervals.shrink_to_fit();
         count += 1;
     }
 
@@ -141,10 +117,8 @@ pub unsafe fn region_c_123_reg_insert(
                 return -1;
             }
             (*h).entries.push(region_c_31_reglist {
-                n: 0,
-                m: 0,
-                a: ptr::null_mut(),
                 tid,
+                intervals: Vec::new(),
             });
             (*h).entries.len() - 1
         }
@@ -152,27 +126,34 @@ pub unsafe fn region_c_123_reg_insert(
     let entries = &mut (&mut (*h).entries)[..];
     let p = &mut entries[idx];
 
-    if p.n == p.m {
-        let new_m = if p.m != 0 { p.m.wrapping_shl(1) } else { 4 };
-        if new_m == 0 {
-            return -1;
-        }
-        let Some(bytes) = (new_m as usize).checked_mul(std::mem::size_of::<hts_pair_pos_t>())
-        else {
-            return -1;
-        };
-        let new_a = c_compat::realloc(p.a.cast(), bytes as u64).cast::<hts_pair_pos_t>();
-        if new_a.is_null() {
-            return -1;
-        }
-        p.m = new_m;
-        p.a = new_a;
+    if p.intervals.try_reserve(1).is_err() {
+        return -1;
     }
-    (*p.a.add(p.n as usize)).beg = beg;
-    (*p.a.add(p.n as usize)).end = end;
-    p.n += 1;
+    p.intervals.push(hts_pair_pos_t { beg, end });
 
     0
+}
+
+unsafe fn region_intervals_into_c_alloc(intervals: &[hts_pair_pos_t]) -> *mut hts_pair_pos_t {
+    if intervals.is_empty() {
+        return ptr::null_mut();
+    }
+
+    let Some(bytes) = intervals
+        .len()
+        .checked_mul(std::mem::size_of::<hts_pair_pos_t>())
+    else {
+        return ptr::null_mut();
+    };
+    let Ok(bytes) = u64::try_from(bytes) else {
+        return ptr::null_mut();
+    };
+    let dst = c_compat::malloc(bytes).cast::<hts_pair_pos_t>();
+    if dst.is_null() {
+        return ptr::null_mut();
+    }
+    ptr::copy_nonoverlapping(intervals.as_ptr(), dst, intervals.len());
+    dst
 }
 
 fn region_khash_int_order(entries: &[region_c_31_reglist]) -> Vec<usize> {
@@ -360,26 +341,32 @@ pub unsafe fn region_c_177_hts_reglist_create(
             break;
         }
         let p = &mut (&mut (*h).entries)[entry_idx];
-        if p.n == 0 {
+        if p.intervals.is_empty() {
             continue;
         }
 
-        (*h_reglist.add(l_count as usize)).tid = p.tid;
-        (*h_reglist.add(l_count as usize)).intervals = p.a;
-        (*h_reglist.add(l_count as usize)).count = p.n;
-        p.a = ptr::null_mut();
-
-        if p.n > 0 {
-            (*h_reglist.add(l_count as usize)).min_beg =
-                (*(*h_reglist.add(l_count as usize)).intervals).beg;
-            (*h_reglist.add(l_count as usize)).max_end = (*(*h_reglist.add(l_count as usize))
-                .intervals
-                .add((p.n - 1) as usize))
-            .end;
-        } else {
-            (*h_reglist.add(l_count as usize)).min_beg = 0;
-            (*h_reglist.add(l_count as usize)).max_end = 0;
+        let count = match u32::try_from(p.intervals.len()) {
+            Ok(count) => count,
+            Err(_) => {
+                region_c_266_hts_reglist_free(h_reglist, l_count);
+                region_c_159_reg_destroy(h);
+                return ptr::null_mut();
+            }
+        };
+        let intervals = region_intervals_into_c_alloc(&p.intervals);
+        if intervals.is_null() {
+            region_c_266_hts_reglist_free(h_reglist, l_count);
+            region_c_159_reg_destroy(h);
+            return ptr::null_mut();
         }
+        let min_beg = p.intervals.first().map_or(0, |interval| interval.beg);
+        let max_end = p.intervals.last().map_or(0, |interval| interval.end);
+
+        (*h_reglist.add(l_count as usize)).tid = p.tid;
+        (*h_reglist.add(l_count as usize)).intervals = intervals;
+        (*h_reglist.add(l_count as usize)).count = count;
+        (*h_reglist.add(l_count as usize)).min_beg = min_beg;
+        (*h_reglist.add(l_count as usize)).max_end = max_end;
         l_count += 1;
     }
     region_c_159_reg_destroy(h);
@@ -512,8 +499,8 @@ mod tests {
             assert_eq!(region_c_87_reg_compact(h), 1);
             let entries = &(*h).entries;
             let entry = &entries[0];
-            assert_eq!(entry.n, 2);
-            let intervals = std::slice::from_raw_parts(entry.a, entry.n as usize);
+            assert_eq!(entry.intervals.len(), 2);
+            let intervals = &entry.intervals;
             assert_eq!((intervals[0].beg, intervals[0].end), (10, 40));
             assert_eq!((intervals[1].beg, intervals[1].end), (45, 50));
 
@@ -534,13 +521,13 @@ mod tests {
             assert_eq!(region_c_87_reg_compact(h), 2);
             let entries = &(*h).entries;
             let entry0 = entries.iter().find(|entry| entry.tid == 0).unwrap();
-            let intervals0 = std::slice::from_raw_parts(entry0.a, entry0.n as usize);
-            assert_eq!(entry0.n, 1);
+            let intervals0 = &entry0.intervals;
+            assert_eq!(entry0.intervals.len(), 1);
             assert_eq!((intervals0[0].beg, intervals0[0].end), (10, 50));
 
             let entry1 = entries.iter().find(|entry| entry.tid == 1).unwrap();
-            let intervals1 = std::slice::from_raw_parts(entry1.a, entry1.n as usize);
-            assert_eq!(entry1.n, 1);
+            let intervals1 = &entry1.intervals;
+            assert_eq!(entry1.intervals.len(), 1);
             assert_eq!((intervals1[0].beg, intervals1[0].end), (30, 45));
 
             region_c_159_reg_destroy(h);
@@ -811,10 +798,8 @@ mod tests {
         let entries = [35, -5, 19, 39]
             .into_iter()
             .map(|tid| region_c_31_reglist {
-                n: 1,
-                m: 1,
-                a: std::ptr::null_mut(),
                 tid,
+                intervals: vec![hts_pair_pos_t { beg: 0, end: 1 }],
             })
             .collect::<Vec<_>>();
 

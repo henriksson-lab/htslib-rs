@@ -5,65 +5,94 @@ use std::ffi::c_char;
 
 use super::*;
 
+unsafe fn take_string_table(a_str: &mut cram_string_alloc_t) -> Vec<cram_string_alloc_string_t> {
+    if a_str.strings.is_null() {
+        Vec::new()
+    } else {
+        Vec::from_raw_parts(a_str.strings, a_str.nstrings, a_str.max_strings)
+    }
+}
+
+fn install_string_table(
+    a_str: &mut cram_string_alloc_t,
+    mut strings: Vec<cram_string_alloc_string_t>,
+) {
+    a_str.nstrings = strings.len();
+    a_str.max_strings = strings.capacity();
+    a_str.strings = if strings.capacity() == 0 {
+        std::ptr::null_mut()
+    } else {
+        strings.as_mut_ptr()
+    };
+    std::mem::forget(strings);
+}
+
 pub unsafe fn cram_string_alloc_c_55_string_pool_create(
     mut max_length: usize,
 ) -> *mut cram_string_alloc_t {
-    let a_str =
-        malloc(std::mem::size_of::<cram_string_alloc_t>() as u64) as *mut cram_string_alloc_t;
-    if a_str.is_null() {
-        return std::ptr::null_mut();
-    }
-
     if max_length < CRAM_STRING_ALLOC_MIN_STR_SIZE {
         max_length = CRAM_STRING_ALLOC_MIN_STR_SIZE;
     }
 
-    (*a_str).nstrings = 0;
-    (*a_str).max_strings = 0;
-    (*a_str).max_length = max_length;
-    (*a_str).strings = std::ptr::null_mut();
-
-    a_str
+    Box::into_raw(Box::new(cram_string_alloc_t {
+        max_length,
+        nstrings: 0,
+        max_strings: 0,
+        strings: std::ptr::null_mut(),
+    }))
 }
 
 pub unsafe fn cram_string_alloc_c_75_new_string_pool(
     a_str: *mut cram_string_alloc_t,
 ) -> *mut cram_string_alloc_string_t {
-    if (*a_str).nstrings == (*a_str).max_strings {
-        let new_max = ((*a_str).max_strings | ((*a_str).max_strings >> 2)) + 1;
-        let str_ = realloc(
-            (*a_str).strings.cast(),
-            (new_max * std::mem::size_of::<cram_string_alloc_string_t>()) as u64,
-        ) as *mut cram_string_alloc_string_t;
+    let Some(a_str) = a_str.as_mut() else {
+        return std::ptr::null_mut();
+    };
 
-        if str_.is_null() {
+    let mut strings = take_string_table(a_str);
+
+    if strings.len() == strings.capacity() {
+        let new_max = (strings.capacity() | (strings.capacity() >> 2)) + 1;
+        if strings
+            .try_reserve_exact(new_max.saturating_sub(strings.capacity()))
+            .is_err()
+        {
+            install_string_table(a_str, strings);
             return std::ptr::null_mut();
         }
-
-        (*a_str).strings = str_;
-        (*a_str).max_strings = new_max;
     }
 
-    let str_ = (*a_str).strings.add((*a_str).nstrings);
-    (*str_).str_ = malloc((*a_str).max_length as u64).cast();
-
-    if (*str_).str_.is_null() {
+    let slab = malloc(a_str.max_length as u64).cast::<c_char>();
+    if slab.is_null() {
+        install_string_table(a_str, strings);
         return std::ptr::null_mut();
     }
 
-    (*str_).used = 0;
-    (*a_str).nstrings += 1;
+    strings.push(cram_string_alloc_string_t {
+        str_: slab,
+        used: 0,
+    });
 
+    let str_ = strings.as_mut_ptr().add(strings.len() - 1);
+    install_string_table(a_str, strings);
     str_
 }
 
 pub unsafe fn cram_string_alloc_c_103_string_pool_destroy(a_str: *mut cram_string_alloc_t) {
-    for i in 0..(*a_str).nstrings {
-        free((*(*a_str).strings.add(i)).str_.cast());
+    let Some(a_str) = a_str.as_mut() else {
+        return;
+    };
+
+    let strings = take_string_table(a_str);
+    for str_ in &strings {
+        free(str_.str_.cast());
     }
 
-    free((*a_str).strings.cast());
-    free(a_str.cast());
+    a_str.strings = std::ptr::null_mut();
+    a_str.nstrings = 0;
+    a_str.max_strings = 0;
+    drop(strings);
+    drop(Box::from_raw(a_str));
 }
 
 pub unsafe fn cram_string_alloc_c_117_string_alloc(
@@ -74,18 +103,22 @@ pub unsafe fn cram_string_alloc_c_117_string_alloc(
         return std::ptr::null_mut();
     }
 
-    if (*a_str).nstrings != 0 {
-        let str_ = (*a_str).strings.add((*a_str).nstrings - 1);
+    let Some(a_str_ref) = a_str.as_mut() else {
+        return std::ptr::null_mut();
+    };
 
-        if (*str_).used + length < (*a_str).max_length {
+    if a_str_ref.nstrings != 0 {
+        let str_ = a_str_ref.strings.add(a_str_ref.nstrings - 1);
+
+        if (*str_).used + length < a_str_ref.max_length {
             let ret = (*str_).str_.add((*str_).used);
             (*str_).used += length;
             return ret;
         }
     }
 
-    if length > (*a_str).max_length {
-        (*a_str).max_length = length;
+    if length > a_str_ref.max_length {
+        a_str_ref.max_length = length;
     }
 
     let str_ = cram_string_alloc_c_75_new_string_pool(a_str);

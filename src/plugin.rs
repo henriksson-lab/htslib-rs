@@ -24,6 +24,7 @@ DEALINGS IN THE SOFTWARE.  */
 
 use crate::htslib_rs::hts::{kputc, kputs, kputsn, kstring_t};
 use std::ffi::{c_char, c_int, c_void};
+use std::ptr::NonNull;
 
 const PLUGINPATH: *const c_char = c"".as_ptr();
 const PLUGIN_EXT: *const c_char = c".so".as_ptr();
@@ -35,8 +36,8 @@ const HTS_PATH_SEPARATOR_STR: *const c_char = c":".as_ptr();
 pub(crate) struct PluginPathItr {
     path: kstring_t,
     entry: kstring_t,
-    dirv: *mut c_void,
-    pathdir: *const c_char,
+    dirv: Option<NonNull<c_void>>,
+    pathdir: Option<NonNull<c_char>>,
     prefix: *const c_char,
     suffix: *const c_char,
     prefix_len: usize,
@@ -45,9 +46,9 @@ pub(crate) struct PluginPathItr {
 }
 
 // original: open_nextdir (htslib/plugin.c:42)
-unsafe fn plugin_c_42_open_nextdir(itr: *mut PluginPathItr) -> *mut c_void {
+unsafe fn plugin_c_42_open_nextdir(itr: *mut PluginPathItr) -> Option<NonNull<c_void>> {
     let _ = itr;
-    std::ptr::null_mut()
+    None
 }
 
 // original: hts_path_itr_setup (htslib/plugin.c:69)
@@ -107,14 +108,14 @@ pub unsafe fn plugin_c_69_hts_path_itr_setup(
     }
 
     // Note that ':' now terminates entries rather than separates them
-    (*itr).pathdir = (*itr).path.s;
+    (*itr).pathdir = NonNull::new((*itr).path.s);
     (*itr).dirv = plugin_c_42_open_nextdir(itr);
 }
 
 // original: hts_path_itr_next (htslib/plugin.c:104)
 pub unsafe fn plugin_c_104_hts_path_itr_next(itr: *mut c_void) -> *const c_char {
     let itr = itr.cast::<PluginPathItr>();
-    (*itr).pathdir = std::ptr::null();
+    (*itr).pathdir = None;
     libc::free((*itr).path.s.cast());
     (*itr).path.s = std::ptr::null_mut();
     libc::free((*itr).entry.s.cast());

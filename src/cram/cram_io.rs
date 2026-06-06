@@ -3803,30 +3803,30 @@ pub unsafe fn cram_cram_io_c_4356_cram_free_compression_header(
 pub unsafe fn cram_cram_io_c_4660_cram_read_file_def(
     fd: *mut cram_fd,
 ) -> *mut cram_file_def_layout {
-    let def =
-        malloc(std::mem::size_of::<cram_file_def_layout>() as u64).cast::<cram_file_def_layout>();
-    if def.is_null() {
-        return std::ptr::null_mut();
-    }
+    let mut def = Box::new(cram_file_def_layout {
+        magic: [0; 4],
+        major_version: 0,
+        minor_version: 0,
+        file_id: [0; 20],
+    });
 
     let fd_layout = fd.cast::<cram_fd_layout>();
-    if htslib_hfile_h_247_hread(
-        (*fd_layout).fp,
-        &mut (*def).magic[0] as *mut c_char as *mut c_void,
-        26,
-    ) != 26
+    if htslib_hfile_h_247_hread((*fd_layout).fp, def.magic.as_mut_ptr().cast(), 26) != 26 {
+        return std::ptr::null_mut();
+    }
+
+    if def.magic
+        != [
+            b'C' as c_char,
+            b'R' as c_char,
+            b'A' as c_char,
+            b'M' as c_char,
+        ]
     {
-        free(def.cast());
         return std::ptr::null_mut();
     }
 
-    if libc::memcmp((*def).magic.as_ptr().cast(), c"CRAM".as_ptr().cast(), 4) != 0 {
-        free(def.cast());
-        return std::ptr::null_mut();
-    }
-
-    if (*def).major_version > 4 {
-        free(def.cast());
+    if def.major_version > 4 {
         return std::ptr::null_mut();
     }
 
@@ -3834,7 +3834,7 @@ pub unsafe fn cram_cram_io_c_4660_cram_read_file_def(
     (*fd_layout).curr_position = (*fd_layout).first_container;
     (*fd_layout).last_slice = 0;
 
-    def
+    Box::into_raw(def)
 }
 pub unsafe fn cram_cram_io_c_4694_cram_write_file_def(
     fd: *mut cram_fd,
@@ -3854,7 +3854,7 @@ pub unsafe fn cram_cram_io_c_4694_cram_write_file_def(
 }
 pub unsafe fn cram_cram_io_c_4698_cram_free_file_def(def: *mut cram_file_def_layout) {
     if !def.is_null() {
-        free(def.cast());
+        drop(Box::from_raw(def));
     }
 }
 /// original: cram_write_SAM_hdr (htslib/cram/cram_io.c:4891)
@@ -4404,23 +4404,21 @@ pub unsafe fn cram_cram_io_c_5289_cram_dopen(
         (*fd).header = hdr.cast();
     } else {
         /* Writer */
-        let def = calloc(1, std::mem::size_of::<cram_file_def_layout>() as u64)
-            .cast::<cram_file_def_layout>();
-        if def.is_null() {
-            free(fd.cast());
-            return std::ptr::null_mut();
-        }
+        let mut def = Box::new(cram_file_def_layout {
+            magic: [
+                b'C' as c_char,
+                b'R' as c_char,
+                b'A' as c_char,
+                b'M' as c_char,
+            ],
+            major_version: 0, // Indicator to write file def later.
+            minor_version: 0,
+            file_id: [0; 20],
+        });
+        libc::strncpy(def.file_id.as_mut_ptr(), filename, 20);
+        let def = Box::into_raw(def);
 
         (*fd).file_def = def.cast();
-
-        (*def).magic[0] = b'C' as c_char;
-        (*def).magic[1] = b'R' as c_char;
-        (*def).magic[2] = b'A' as c_char;
-        (*def).magic[3] = b'M' as c_char;
-        (*def).major_version = 0; // Indicator to write file def later.
-        (*def).minor_version = 0;
-        libc::memset((*def).file_id.as_mut_ptr().cast(), 0, 20);
-        libc::strncpy((*def).file_id.as_mut_ptr(), filename, 20);
 
         (*fd).version = CRAM_OPEN_DEFAULT_MAJOR * 256 + CRAM_OPEN_DEFAULT_MINOR;
         cram_cram_io_c_5170_cram_init_tables(fd.cast());

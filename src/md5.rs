@@ -270,10 +270,16 @@ pub unsafe fn md5_c_271_hts_md5_final(result: *mut c_uchar, ctx: *mut hts_md5_co
 }
 
 pub unsafe fn md5_c_323_hts_md5_init() -> *mut hts_md5_context {
-    let ctx = libc::malloc(size_of::<hts_md5_context>()).cast::<hts_md5_context>();
-    if ctx.is_null() {
-        return ptr::null_mut();
-    }
+    let ctx = Box::into_raw(Box::new(hts_md5_context {
+        lo: 0,
+        hi: 0,
+        a: 0,
+        b: 0,
+        c: 0,
+        d: 0,
+        buffer: [0; 64],
+        block: [0; 16],
+    }));
     md5_c_226_hts_md5_reset(ctx);
     ctx
 }
@@ -302,7 +308,7 @@ pub unsafe fn md5_c_372_hts_md5_destroy(ctx: *mut hts_md5_context) {
     if ctx.is_null() {
         return;
     }
-    libc::free(ctx.cast());
+    drop(Box::from_raw(ctx));
 }
 
 pub unsafe fn md5_c_380_hts_md5_hex(hex: *mut c_char, digest: *const c_uchar) {

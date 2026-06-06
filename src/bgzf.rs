@@ -1,7 +1,8 @@
 use std::{
     collections::HashMap,
     ffi::{c_char, c_int, c_uint, c_ulong, c_void, CStr},
-    ptr, slice,
+    ptr::{self, NonNull},
+    slice,
     sync::OnceLock,
 };
 
@@ -323,9 +324,8 @@ pub struct bgzidx_t {
 }
 
 // original: bgzf_job (htslib/bgzf.c:92)
-#[repr(C)]
 pub struct bgzf_job {
-    pub fp: *mut BGZF,
+    pub fp: Option<NonNull<BGZF>>,
     pub comp_data: [u8; BGZF_MAX_BLOCK_SIZE],
     pub comp_len: usize,
     pub uncomp_data: [u8; BGZF_MAX_BLOCK_SIZE],
@@ -359,27 +359,24 @@ pub struct hts_idx_cache_entry {
 }
 
 // original: hts_idx_cache_t (htslib/bgzf.c:121)
-#[repr(C)]
+#[derive(Default)]
 pub struct hts_idx_cache_t {
-    pub nentries: c_int,
-    pub mentries: c_int,
-    pub e: *mut hts_idx_cache_entry,
+    pub entries: Vec<hts_idx_cache_entry>,
 }
 
 // original: bgzf_mtaux_t (htslib/bgzf.c:125)
-#[repr(C)]
 pub struct bgzf_mtaux_t {
-    pub job_pool: *mut c_void,
-    pub curr_job: *mut bgzf_job,
+    pub job_pool: Option<NonNull<super::cram::pool_alloc_t>>,
+    pub curr_job: Option<NonNull<bgzf_job>>,
     pub n_threads: c_int,
     pub own_pool: c_int,
-    pub pool: *mut super::thread_pool::hts_tpool,
-    pub out_queue: *mut c_void,
+    pub pool: Option<NonNull<super::thread_pool::hts_tpool>>,
+    pub out_queue: Option<NonNull<super::thread_pool::hts_tpool_process>>,
     pub io_task: crate::htslib_rs::c_compat::pthread_t,
     pub job_pool_m: crate::htslib_rs::c_compat::pthread_mutex_t,
     pub jobs_pending: c_int,
     pub flush_pending: c_int,
-    pub free_block: *mut c_void,
+    pub free_block: Option<NonNull<c_void>>,
     pub hit_eof: c_int,
     pub errcode: c_int,
     pub block_address: u64,
@@ -388,20 +385,50 @@ pub struct bgzf_mtaux_t {
     pub command_c: crate::htslib_rs::c_compat::pthread_cond_t,
     pub command: mtaux_cmd,
     pub idx_m: crate::htslib_rs::c_compat::pthread_mutex_t,
-    pub hts_idx: *mut hts_idx_t,
+    pub hts_idx: Option<NonNull<hts_idx_t>>,
     pub block_number: u64,
     pub block_written: u64,
     pub idx_cache: hts_idx_cache_t,
 }
 
+impl Default for bgzf_mtaux_t {
+    fn default() -> Self {
+        Self {
+            job_pool: None,
+            curr_job: None,
+            n_threads: 0,
+            own_pool: 0,
+            pool: None,
+            out_queue: None,
+            io_task: unsafe { std::mem::zeroed() },
+            job_pool_m: unsafe { std::mem::zeroed() },
+            jobs_pending: 0,
+            flush_pending: 0,
+            free_block: None,
+            hit_eof: 0,
+            errcode: 0,
+            block_address: 0,
+            eof: 0,
+            command_m: unsafe { std::mem::zeroed() },
+            command_c: unsafe { std::mem::zeroed() },
+            command: mtaux_cmd::NONE,
+            idx_m: unsafe { std::mem::zeroed() },
+            hts_idx: None,
+            block_number: 0,
+            block_written: 0,
+            idx_cache: hts_idx_cache_t::default(),
+        }
+    }
+}
+
 pub type BgzfPrivateDataCleanupFunc = unsafe extern "C" fn(*mut c_void);
 
 // original: bgzf_cache_t (htslib/bgzf_internal.h:41)
-#[repr(C)]
+#[derive(Default)]
 pub struct bgzf_cache_t {
-    pub h: *mut c_void,
+    h: Option<Box<BgzfBlockCache>>,
     pub last_pos: c_uint,
-    pub private_data: *mut c_void,
+    pub private_data: Option<NonNull<c_void>>,
     pub private_data_cleanup: Option<BgzfPrivateDataCleanupFunc>,
 }
 
@@ -414,28 +441,6 @@ struct BgzfCachedBlock {
 struct BgzfBlockCache {
     blocks: HashMap<i64, BgzfCachedBlock>,
     order: Vec<i64>,
-}
-
-fn bgzf_block_cache_new_raw() -> *mut c_void {
-    Box::into_raw(Box::new(BgzfBlockCache {
-        blocks: HashMap::new(),
-        order: Vec::new(),
-    }))
-    .cast()
-}
-
-unsafe fn bgzf_block_cache_mut_raw(ptr: *mut c_void) -> Option<&'static mut BgzfBlockCache> {
-    if ptr.is_null() {
-        None
-    } else {
-        Some(&mut *ptr.cast::<BgzfBlockCache>())
-    }
-}
-
-unsafe fn bgzf_block_cache_free_raw(ptr: *mut c_void) {
-    if !ptr.is_null() {
-        drop(Box::from_raw(ptr.cast::<BgzfBlockCache>()));
-    }
 }
 
 // original: bgzf_idx_push (htslib/bgzf.c:189)
@@ -460,36 +465,19 @@ pub unsafe fn bgzf_c_189_bgzf_idx_push(
 
     crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*mt).idx_m);
 
-    (*mt).hts_idx = hidx;
-    let ic = &mut (*mt).idx_cache as *mut hts_idx_cache_t;
-
-    if (*ic).nentries >= (*ic).mentries {
-        let new_sz = if (*ic).mentries != 0 {
-            (*ic).mentries * 2
-        } else {
-            1024
-        };
-        let e = c_compat::realloc(
-            (*ic).e.cast(),
-            new_sz as u64 * std::mem::size_of::<hts_idx_cache_entry>() as u64,
-        )
-        .cast::<hts_idx_cache_entry>();
-        if e.is_null() {
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
-            return -1;
-        }
-        (*ic).e = e;
-        (*ic).mentries = new_sz;
+    (*mt).hts_idx = NonNull::new(hidx);
+    if (*mt).idx_cache.entries.try_reserve(1).is_err() {
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
+        return -1;
     }
-
-    let e = (*ic).e.add((*ic).nentries as usize);
-    (*ic).nentries += 1;
-    (*e).tid = tid;
-    (*e).beg = beg;
-    (*e).end = end;
-    (*e).is_mapped = is_mapped;
-    (*e).offset = offset & 0xffff;
-    (*e).block_number = (*mt).block_number;
+    (*mt).idx_cache.entries.push(hts_idx_cache_entry {
+        beg,
+        end,
+        tid,
+        is_mapped,
+        offset: offset & 0xffff,
+        block_number: (*mt).block_number,
+    });
 
     crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
 
@@ -504,56 +492,58 @@ pub unsafe fn bgzf_c_228_bgzf_idx_flush(
 ) -> c_int {
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
 
-    if (*mt).idx_cache.e.is_null() {
+    if (*mt).idx_cache.entries.is_empty() {
         (*mt).block_written += 1;
         return 0;
     }
 
     crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*mt).idx_m);
 
-    let e = (*mt).idx_cache.e;
     let mut i = 0;
-    while i < (*mt).idx_cache.nentries && (*e.add(i as usize)).block_number == (*mt).block_written {
-        let entry = e.add(i as usize);
-        if block_uncomp_len > 0 && (*entry).offset == block_uncomp_len as u64 {
-            let next_block_addr = (*mt).block_address + block_comp_len as u64;
+    {
+        let entries = &(*mt).idx_cache.entries;
+        while i < entries.len() as c_int && entries[i as usize].block_number == (*mt).block_written
+        {
+            let entry = &entries[i as usize];
+            let hts_idx = (*mt)
+                .hts_idx
+                .map(NonNull::as_ptr)
+                .unwrap_or(ptr::null_mut());
+            if block_uncomp_len > 0 && entry.offset == block_uncomp_len as u64 {
+                let next_block_addr = (*mt).block_address + block_comp_len as u64;
+                if hts_idx_push(
+                    hts_idx,
+                    entry.tid,
+                    entry.beg,
+                    entry.end,
+                    next_block_addr << 16,
+                    entry.is_mapped,
+                ) < 0
+                {
+                    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
+                    return -1;
+                }
+                i += 1;
+                break;
+            }
+
             if hts_idx_push(
-                (*mt).hts_idx,
-                (*entry).tid,
-                (*entry).beg,
-                (*entry).end,
-                next_block_addr << 16,
-                (*entry).is_mapped,
+                hts_idx,
+                entry.tid,
+                entry.beg,
+                entry.end,
+                ((*mt).block_address << 16) + entry.offset,
+                entry.is_mapped,
             ) < 0
             {
                 crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
                 return -1;
             }
             i += 1;
-            break;
         }
-
-        if hts_idx_push(
-            (*mt).hts_idx,
-            (*entry).tid,
-            (*entry).beg,
-            (*entry).end,
-            ((*mt).block_address << 16) + (*entry).offset,
-            (*entry).is_mapped,
-        ) < 0
-        {
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
-            return -1;
-        }
-        i += 1;
     }
 
-    ptr::copy(
-        e.add(i as usize),
-        e,
-        ((*mt).idx_cache.nentries - i) as usize,
-    );
-    (*mt).idx_cache.nentries -= i;
+    (*mt).idx_cache.entries.drain(..i as usize);
     (*mt).block_written += 1;
 
     crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
@@ -569,7 +559,7 @@ pub unsafe fn bgzf_internal_h_51_bgzf_set_private_data(
 ) {
     assert!(!(*fp).cache.is_null());
     let cache = (*fp).cache.cast::<bgzf_cache_t>();
-    (*cache).private_data = private_data;
+    (*cache).private_data = NonNull::new(private_data);
     (*cache).private_data_cleanup = fn_;
 }
 
@@ -577,18 +567,20 @@ pub unsafe fn bgzf_internal_h_51_bgzf_set_private_data(
 pub unsafe fn bgzf_internal_h_58_bgzf_clear_private_data(fp: *mut BGZF) {
     assert!(!(*fp).cache.is_null());
     let cache = (*fp).cache.cast::<bgzf_cache_t>();
-    if !(*cache).private_data.is_null() {
+    if let Some(private_data) = (*cache).private_data.take() {
         if let Some(cleanup) = (*cache).private_data_cleanup {
-            cleanup((*cache).private_data);
+            cleanup(private_data.as_ptr());
         }
-        (*cache).private_data = ptr::null_mut();
     }
 }
 
 // original: bgzf_get_private_data (htslib/bgzf_internal.h:67)
 pub unsafe fn bgzf_internal_h_67_bgzf_get_private_data(fp: *mut BGZF) -> *mut c_void {
     assert!(!(*fp).cache.is_null());
-    (*((*fp).cache.cast::<bgzf_cache_t>())).private_data
+    (*((*fp).cache.cast::<bgzf_cache_t>()))
+        .private_data
+        .map(NonNull::as_ptr)
+        .unwrap_or(ptr::null_mut())
 }
 
 fn flag(fp: *const BGZF, bit: u32) -> bool {
@@ -1019,15 +1011,7 @@ fn mode2level(mode: &[u8]) -> c_int {
 }
 
 unsafe fn bgzf_alloc_cache() -> *mut bgzf_cache_t {
-    let cache =
-        c_compat::calloc(1, std::mem::size_of::<bgzf_cache_t>() as u64).cast::<bgzf_cache_t>();
-    if !cache.is_null() {
-        (*cache).h = ptr::null_mut();
-        (*cache).last_pos = 0;
-        (*cache).private_data = ptr::null_mut();
-        (*cache).private_data_cleanup = None;
-    }
-    cache
+    Box::into_raw(Box::new(bgzf_cache_t::default()))
 }
 
 unsafe fn bgzf_free_cache(fp: *mut BGZF) {
@@ -1036,11 +1020,7 @@ unsafe fn bgzf_free_cache(fp: *mut BGZF) {
     }
     bgzf_internal_h_58_bgzf_clear_private_data(fp);
     let cache = (*fp).cache.cast::<bgzf_cache_t>();
-    if !(*cache).h.is_null() {
-        bgzf_block_cache_free_raw((*cache).h);
-        (*cache).h = ptr::null_mut();
-    }
-    c_compat::free((*fp).cache);
+    drop(Box::from_raw(cache));
     (*fp).cache = ptr::null_mut();
 }
 
@@ -1054,10 +1034,13 @@ unsafe fn bgzf_block_cache(fp: *mut BGZF) -> Option<&'static mut BgzfBlockCache>
         return None;
     }
     let cache = (*fp).cache.cast::<bgzf_cache_t>();
-    if (*cache).h.is_null() {
-        (*cache).h = bgzf_block_cache_new_raw();
+    if (*cache).h.is_none() {
+        (*cache).h = Some(Box::new(BgzfBlockCache {
+            blocks: HashMap::new(),
+            order: Vec::new(),
+        }));
     }
-    bgzf_block_cache_mut_raw((*cache).h)
+    (*cache).h.as_deref_mut()
 }
 
 // original: load_block_from_cache (htslib/bgzf.c:903)
@@ -1066,11 +1049,11 @@ unsafe fn load_block_from_cache(fp: *mut BGZF, block_address: i64) -> c_int {
         return 0;
     }
     let cache = (*fp).cache.cast::<bgzf_cache_t>();
-    if (*cache).h.is_null() {
+    if (*cache).h.is_none() {
         return 0;
     }
 
-    let Some(h) = bgzf_block_cache_mut_raw((*cache).h) else {
+    let Some(h) = (*cache).h.as_deref_mut() else {
         return 0;
     };
     let Some(entry) = h.blocks.get(&block_address) else {
@@ -1864,10 +1847,19 @@ pub unsafe fn bgzf_c_1390_bgzf_nul_func(arg: *mut c_void) -> *mut c_void {
 // original: job_cleanup (htslib/bgzf.c:1322)
 pub unsafe extern "C" fn bgzf_c_1322_job_cleanup(arg: *mut c_void) {
     let job = arg.cast::<bgzf_job>();
-    let mt = (*(*job).fp).mt.cast::<bgzf_mtaux_t>();
+    let Some(fp) = (*job).fp else {
+        return;
+    };
+    let mt = (*fp.as_ptr()).mt.cast::<bgzf_mtaux_t>();
+    if mt.is_null() {
+        return;
+    }
+    let Some(job_pool) = (*mt).job_pool else {
+        return;
+    };
 
     crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
-    super::cram::cram_pooled_alloc_c_144_pool_free((*mt).job_pool.cast(), job.cast());
+    super::cram::cram_pooled_alloc_c_144_pool_free(job_pool.as_ptr(), job.cast());
     crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
 }
 
@@ -1897,11 +1889,10 @@ pub unsafe extern "C" fn bgzf_encode_func(arg: *mut c_void) -> *mut c_void {
     if job.is_null() {
         return ptr::null_mut();
     }
-    let level = if (*job).fp.is_null() {
-        Z_DEFAULT_COMPRESSION
-    } else {
-        compress_level((*job).fp)
-    };
+    let level = (*job)
+        .fp
+        .map(|fp| compress_level(fp.as_ptr()))
+        .unwrap_or(Z_DEFAULT_COMPRESSION);
     bgzf_encode_job(job, level)
 }
 
@@ -1954,17 +1945,19 @@ pub unsafe extern "C" fn bgzf_decode_func(arg: *mut c_void) -> *mut c_void {
 
 unsafe fn bgzf_mt_alloc_job(fp: *mut BGZF) -> *mut bgzf_job {
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
-    if mt.is_null() || (*mt).job_pool.is_null() {
+    if mt.is_null() {
         return ptr::null_mut();
     }
+    let Some(job_pool) = (*mt).job_pool else {
+        return ptr::null_mut();
+    };
 
     crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
-    let job =
-        super::cram::cram_pooled_alloc_c_115_pool_alloc((*mt).job_pool.cast()).cast::<bgzf_job>();
+    let job = super::cram::cram_pooled_alloc_c_115_pool_alloc(job_pool.as_ptr()).cast::<bgzf_job>();
     crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
     if !job.is_null() {
         ptr::write_bytes(job, 0, 1);
-        (*job).fp = fp;
+        (*job).fp = NonNull::new(fp);
     }
     job
 }
@@ -1974,11 +1967,14 @@ unsafe fn bgzf_mt_free_job(fp: *mut BGZF, job: *mut bgzf_job) {
         return;
     }
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
-    if mt.is_null() || (*mt).job_pool.is_null() {
+    if mt.is_null() {
         return;
     }
+    let Some(job_pool) = (*mt).job_pool else {
+        return;
+    };
     crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
-    super::cram::cram_pooled_alloc_c_144_pool_free((*mt).job_pool.cast(), job.cast());
+    super::cram::cram_pooled_alloc_c_144_pool_free(job_pool.as_ptr(), job.cast());
     crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
 }
 
@@ -1988,15 +1984,17 @@ unsafe fn bgzf_mt_dispatch(
     worker: super::thread_pool::hts_tpool_worker,
 ) -> c_int {
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
-    if mt.is_null() || (*mt).pool.is_null() || (*mt).out_queue.is_null() || job.is_null() {
+    if mt.is_null() {
         return -1;
     }
-    if super::thread_pool::hts_tpool_dispatch(
-        (*mt).pool.cast(),
-        (*mt).out_queue.cast(),
-        worker,
-        job.cast(),
-    ) != 0
+    let (Some(pool), Some(out_queue)) = ((*mt).pool, (*mt).out_queue) else {
+        return -1;
+    };
+    if job.is_null() {
+        return -1;
+    }
+    if super::thread_pool::hts_tpool_dispatch(pool.as_ptr(), out_queue.as_ptr(), worker, job.cast())
+        != 0
     {
         return -1;
     }
@@ -2028,12 +2026,18 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
         return ptr::null_mut();
     }
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
+    let Some(out_queue) = (*mt).out_queue else {
+        return ptr::null_mut();
+    };
+    let Some(job_pool) = (*mt).job_pool else {
+        return ptr::null_mut();
+    };
 
     let mut hflush_counter: u32 = 0;
     let mut sticky_err: c_int = 0;
 
     loop {
-        let result = super::thread_pool::hts_tpool_next_result_wait((*mt).out_queue.cast());
+        let result = super::thread_pool::hts_tpool_next_result_wait(out_queue.as_ptr());
         if result.is_null() {
             break;
         }
@@ -2076,7 +2080,7 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
         super::thread_pool::hts_tpool_delete_result(result, 0);
         if !job.is_null() {
             crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
-            super::cram::cram_pooled_alloc_c_144_pool_free((*mt).job_pool.cast(), job.cast());
+            super::cram::cram_pooled_alloc_c_144_pool_free(job_pool.as_ptr(), job.cast());
             (*mt).jobs_pending -= 1;
             crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
         }
@@ -2085,11 +2089,11 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
     if sticky_err != 0 {
         add_errcode(fp, sticky_err as u32);
         (*mt).errcode = sticky_err;
-        super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
+        super::thread_pool::hts_tpool_process_destroy(out_queue.as_ptr());
         return ptr::null_mut();
     }
 
-    super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
+    super::thread_pool::hts_tpool_process_destroy(out_queue.as_ptr());
     ptr::null_mut()
 }
 
@@ -2110,6 +2114,11 @@ pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
     }
 
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
+    let Some(out_queue) = (*mt).out_queue else {
+        add_errcode(fp, BGZF_ERR_IO);
+        (*mt).errcode = BGZF_ERR_IO as c_int;
+        return -1;
+    };
 
     loop {
         let block_address = if (*fp).block_clength < 0 {
@@ -2189,7 +2198,7 @@ pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
             return -1;
         }
 
-        let result = super::thread_pool::hts_tpool_next_result_wait((*mt).out_queue.cast());
+        let result = super::thread_pool::hts_tpool_next_result_wait(out_queue.as_ptr());
         if result.is_null() {
             (*mt).jobs_pending -= 1;
             add_errcode(fp, BGZF_ERR_IO);
@@ -2295,16 +2304,21 @@ unsafe fn bgzf_mt_reader_impl(arg: *mut c_void) -> *mut c_void {
 // original: mt_destroy (htslib/bgzf.c:1805)
 pub unsafe fn bgzf_c_1805_mt_destroy(mt: *mut bgzf_mtaux_t) -> c_int {
     let mut ret: c_int;
+    let Some(out_queue) = (*mt).out_queue else {
+        return -1;
+    };
+    let Some(job_pool) = (*mt).job_pool else {
+        return -1;
+    };
 
     crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
     (*mt).command = mtaux_cmd::CLOSE;
     crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
-    super::thread_pool::hts_tpool_wake_dispatch((*mt).out_queue.cast());
+    super::thread_pool::hts_tpool_wake_dispatch(out_queue.as_ptr());
     crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
 
-    ret =
-        -((super::thread_pool::hts_tpool_process_is_shutdown((*mt).out_queue.cast()) > 1) as c_int);
-    super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
+    ret = -((super::thread_pool::hts_tpool_process_is_shutdown(out_queue.as_ptr()) > 1) as c_int);
+    super::thread_pool::hts_tpool_process_destroy(out_queue.as_ptr());
 
     let mut retval: *mut c_void = ptr::null_mut();
     crate::htslib_rs::c_compat::pthread_join((*mt).io_task, ptr::addr_of_mut!(retval));
@@ -2317,24 +2331,19 @@ pub unsafe fn bgzf_c_1805_mt_destroy(mt: *mut bgzf_mtaux_t) -> c_int {
     crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).idx_m));
     crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!((*mt).command_c));
 
-    if !(*mt).curr_job.is_null() {
-        super::cram::cram_pooled_alloc_c_144_pool_free(
-            (*mt).job_pool.cast(),
-            (*mt).curr_job.cast(),
-        );
+    if let Some(curr_job) = (*mt).curr_job.take() {
+        super::cram::cram_pooled_alloc_c_144_pool_free(job_pool.as_ptr(), curr_job.as_ptr().cast());
     }
 
     if (*mt).own_pool != 0 {
-        super::thread_pool::hts_tpool_destroy((*mt).pool.cast());
+        if let Some(pool) = (*mt).pool {
+            super::thread_pool::hts_tpool_destroy(pool.as_ptr());
+        }
     }
 
-    super::cram::cram_pooled_alloc_c_84_pool_destroy((*mt).job_pool.cast());
+    super::cram::cram_pooled_alloc_c_84_pool_destroy(job_pool.as_ptr());
 
-    if !(*mt).idx_cache.e.is_null() {
-        c_compat::free((*mt).idx_cache.e.cast());
-    }
-
-    c_compat::free(mt.cast());
+    drop(Box::from_raw(mt));
     // fflush(NULL) flushes all open output streams (incl. stderr) without
     // referencing the C library's stderr global.
     libc::fflush(std::ptr::null_mut());
@@ -2394,14 +2403,14 @@ pub unsafe fn bgzf_c_1897_mt_flush_queue(fp: *mut BGZF) -> c_int {
         return 0;
     }
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
-    if (*mt).out_queue.is_null() {
+    let Some(out_queue) = (*mt).out_queue else {
         return -1;
-    }
+    };
 
     // Wait for the worker pool to finish executing every dispatched job
     // (n_input == 0 && n_processing == 0). Workers move results to the
     // out_queue; the writer thread drains them and decrements jobs_pending.
-    if super::thread_pool::hts_tpool_process_flush((*mt).out_queue.cast()) != 0 {
+    if super::thread_pool::hts_tpool_process_flush(out_queue.as_ptr()) != 0 {
         add_errcode(fp, BGZF_ERR_IO);
         (*mt).errcode = BGZF_ERR_IO as c_int;
         return -1;
@@ -2415,7 +2424,7 @@ pub unsafe fn bgzf_c_1897_mt_flush_queue(fp: *mut BGZF) -> c_int {
     crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     while (*mt).jobs_pending != 0 {
         crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
-        if super::thread_pool::hts_tpool_process_is_shutdown((*mt).out_queue.cast()) != 0 {
+        if super::thread_pool::hts_tpool_process_is_shutdown(out_queue.as_ptr()) != 0 {
             add_errcode(fp, BGZF_ERR_IO);
             (*mt).errcode = BGZF_ERR_IO as c_int;
             return -1;
@@ -2444,7 +2453,7 @@ pub unsafe fn bgzf_c_2071_bgzf_close_mt(fp: *mut BGZF) -> c_int {
         return 0;
     }
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
-    if (*mt).free_block.is_null() {
+    if (*mt).free_block.is_none() {
         (*fp).uncompressed_block = ptr::null_mut();
     }
     let ret = if bgzf_c_1805_mt_destroy(mt) < 0 {
@@ -3172,7 +3181,13 @@ pub unsafe fn bgzf_c_1566_bgzf_mt_eof(fp: *mut BGZF) {
 pub unsafe fn bgzf_c_1583_bgzf_mt_seek(fp: *mut BGZF) {
     let mt = (*fp).mt.cast::<bgzf_mtaux_t>();
 
-    super::thread_pool::hts_tpool_process_reset((*mt).out_queue.cast(), 0);
+    let Some(out_queue) = (*mt).out_queue else {
+        (*mt).errcode = BGZF_ERR_IO as c_int;
+        (*mt).command = mtaux_cmd::SEEK_DONE;
+        crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
+        return;
+    };
+    super::thread_pool::hts_tpool_process_reset(out_queue.as_ptr(), 0);
     crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     (*mt).errcode = 0;
 
@@ -3345,30 +3360,28 @@ unsafe fn bgzf_mt_init(
         return -2;
     }
 
-    let mt = c_compat::calloc(1, std::mem::size_of::<bgzf_mtaux_t>() as u64).cast::<bgzf_mtaux_t>();
-    if mt.is_null() {
-        return -1;
-    }
-    (*mt).pool = pool;
+    let mt = Box::into_raw(Box::new(bgzf_mtaux_t::default()));
+    (*mt).pool = NonNull::new(pool);
     (*mt).own_pool = own_pool;
     (*mt).n_threads = super::thread_pool::hts_tpool_size(pool.cast());
-    (*mt).job_pool =
-        super::cram::cram_pooled_alloc_c_64_pool_create(std::mem::size_of::<bgzf_job>()).cast();
-    if (*mt).job_pool.is_null() {
-        c_compat::free(mt.cast());
+    let job_pool = super::cram::cram_pooled_alloc_c_64_pool_create(std::mem::size_of::<bgzf_job>());
+    let Some(job_pool) = NonNull::new(job_pool) else {
+        drop(Box::from_raw(mt));
         return -1;
-    }
+    };
+    (*mt).job_pool = Some(job_pool);
     let queue_size = if qsize > 0 {
         qsize
     } else {
         ((*mt).n_threads * 2).max(2)
     };
-    (*mt).out_queue = super::thread_pool::hts_tpool_process_init(pool.cast(), queue_size, 0).cast();
-    if (*mt).out_queue.is_null() {
-        super::cram::cram_pooled_alloc_c_84_pool_destroy((*mt).job_pool.cast());
-        c_compat::free(mt.cast());
+    let out_queue = super::thread_pool::hts_tpool_process_init(pool.cast(), queue_size, 0);
+    let Some(out_queue) = NonNull::new(out_queue) else {
+        super::cram::cram_pooled_alloc_c_84_pool_destroy(job_pool.as_ptr());
+        drop(Box::from_raw(mt));
         return -1;
-    }
+    };
+    (*mt).out_queue = Some(out_queue);
 
     if crate::htslib_rs::c_compat::pthread_mutex_init(
         ptr::addr_of_mut!((*mt).job_pool_m),
@@ -3387,12 +3400,12 @@ unsafe fn bgzf_mt_init(
             ptr::null(),
         ) != 0
     {
-        super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
-        super::cram::cram_pooled_alloc_c_84_pool_destroy((*mt).job_pool.cast());
+        super::thread_pool::hts_tpool_process_destroy(out_queue.as_ptr());
+        super::cram::cram_pooled_alloc_c_84_pool_destroy(job_pool.as_ptr());
         if own_pool != 0 {
             super::thread_pool::hts_tpool_destroy(pool.cast());
         }
-        c_compat::free(mt.cast());
+        drop(Box::from_raw(mt));
         return -1;
     }
 
@@ -3410,7 +3423,7 @@ unsafe fn bgzf_mt_init(
     // mt_destroy → process_destroy would decrement ref_count to 0 and free
     // the queue out from under the writer.
     if flag(fp, 17) {
-        super::thread_pool::hts_tpool_process_ref_incr((*mt).out_queue.cast());
+        super::thread_pool::hts_tpool_process_ref_incr(out_queue.as_ptr());
     }
 
     if crate::htslib_rs::c_compat::pthread_create(
@@ -3421,19 +3434,19 @@ unsafe fn bgzf_mt_init(
     ) != 0
     {
         if flag(fp, 17) {
-            super::thread_pool::hts_tpool_process_ref_decr((*mt).out_queue.cast());
+            super::thread_pool::hts_tpool_process_ref_decr(out_queue.as_ptr());
         }
         (*fp).mt = ptr::null_mut();
         crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!((*mt).command_c));
         crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).idx_m));
         crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).command_m));
         crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).job_pool_m));
-        super::thread_pool::hts_tpool_process_destroy((*mt).out_queue.cast());
-        super::cram::cram_pooled_alloc_c_84_pool_destroy((*mt).job_pool.cast());
+        super::thread_pool::hts_tpool_process_destroy(out_queue.as_ptr());
+        super::cram::cram_pooled_alloc_c_84_pool_destroy(job_pool.as_ptr());
         if own_pool != 0 {
             super::thread_pool::hts_tpool_destroy(pool.cast());
         }
-        c_compat::free(mt.cast());
+        drop(Box::from_raw(mt));
         return -1;
     }
 
@@ -3863,8 +3876,7 @@ mod tests {
             assert_eq!(byte[0], payload[0]);
 
             let cache = (*fp).cache.cast::<bgzf_cache_t>();
-            assert!(!(*cache).h.is_null());
-            let h = bgzf_block_cache_mut_raw((*cache).h).expect("BGZF block cache");
+            let h = (*cache).h.as_deref().expect("BGZF block cache");
             assert_eq!(h.blocks.len(), 1);
             let end_offset = h.blocks.get(&0).unwrap().end_offset;
 
@@ -4596,7 +4608,7 @@ mod tests {
             assert!(!fp.is_null());
             assert_eq!(bgzf_hseek_ptr((*fp).fp, 3, SEEK_SET), 3);
 
-            let mut mt: bgzf_mtaux_t = std::mem::zeroed();
+            let mut mt = bgzf_mtaux_t::default();
             assert_eq!(
                 crate::htslib_rs::c_compat::pthread_mutex_init(
                     ptr::addr_of_mut!(mt.job_pool_m),
@@ -4660,7 +4672,7 @@ mod tests {
             assert!(!fp.is_null());
             assert_eq!(bgzf_hseek_ptr((*fp).fp, 11, SEEK_SET), 11);
 
-            let mut mt: bgzf_mtaux_t = std::mem::zeroed();
+            let mut mt = bgzf_mtaux_t::default();
             assert_eq!(
                 crate::htslib_rs::c_compat::pthread_mutex_init(
                     ptr::addr_of_mut!(mt.job_pool_m),
@@ -4675,7 +4687,7 @@ mod tests {
                 ),
                 0
             );
-            mt.out_queue = queue.cast();
+            mt.out_queue = NonNull::new(queue);
             mt.block_address = 0;
             mt.errcode = 99;
             mt.command = mtaux_cmd::SEEK;
@@ -4713,7 +4725,7 @@ mod tests {
             assert!(!pool.is_null());
 
             let mut fp: BGZF = std::mem::zeroed();
-            let mut mt: bgzf_mtaux_t = std::mem::zeroed();
+            let mut mt = bgzf_mtaux_t::default();
             assert_eq!(
                 crate::htslib_rs::c_compat::pthread_mutex_init(
                     ptr::addr_of_mut!(mt.job_pool_m),
@@ -4721,13 +4733,13 @@ mod tests {
                 ),
                 0
             );
-            mt.job_pool = pool.cast();
+            mt.job_pool = NonNull::new(pool);
             fp.mt = ptr::addr_of_mut!(mt).cast();
 
             let job =
                 super::super::cram::cram_pooled_alloc_c_115_pool_alloc(pool).cast::<bgzf_job>();
             assert!(!job.is_null());
-            (*job).fp = ptr::addr_of_mut!(fp);
+            (*job).fp = NonNull::new(ptr::addr_of_mut!(fp));
 
             bgzf_c_1322_job_cleanup(job.cast());
 
@@ -4761,9 +4773,7 @@ mod tests {
     #[test]
     fn bgzf_mt_destroy_closes_io_thread_and_releases_owned_state() {
         unsafe {
-            let mt = c_compat::calloc(1, std::mem::size_of::<bgzf_mtaux_t>() as u64)
-                .cast::<bgzf_mtaux_t>();
-            assert!(!mt.is_null());
+            let mt = Box::into_raw(Box::new(bgzf_mtaux_t::default()));
             assert_eq!(
                 crate::htslib_rs::c_compat::pthread_mutex_init(
                     ptr::addr_of_mut!((*mt).job_pool_m),
@@ -4793,24 +4803,24 @@ mod tests {
                 0
             );
 
-            (*mt).job_pool = super::super::cram::cram_pooled_alloc_c_64_pool_create(
+            let job_pool = super::super::cram::cram_pooled_alloc_c_64_pool_create(
                 std::mem::size_of::<bgzf_job>(),
-            )
-            .cast();
-            assert!(!(*mt).job_pool.is_null());
-            (*mt).curr_job =
-                super::super::cram::cram_pooled_alloc_c_115_pool_alloc((*mt).job_pool.cast())
-                    .cast();
-            assert!(!(*mt).curr_job.is_null());
-            (*mt).idx_cache.e =
-                c_compat::calloc(2, std::mem::size_of::<hts_idx_cache_entry>() as u64).cast();
-            assert!(!(*mt).idx_cache.e.is_null());
+            );
+            (*mt).job_pool = NonNull::new(job_pool);
+            assert!((*mt).job_pool.is_some());
+            (*mt).curr_job = NonNull::new(
+                super::super::cram::cram_pooled_alloc_c_115_pool_alloc(job_pool).cast(),
+            );
+            assert!((*mt).curr_job.is_some());
+            (*mt).idx_cache.entries.reserve(2);
 
-            (*mt).pool = super::super::thread_pool::hts_tpool_init(1).cast();
-            assert!(!(*mt).pool.is_null());
-            (*mt).out_queue =
-                super::super::thread_pool::hts_tpool_process_init((*mt).pool.cast(), 2, 0).cast();
-            assert!(!(*mt).out_queue.is_null());
+            let pool = super::super::thread_pool::hts_tpool_init(1);
+            (*mt).pool = NonNull::new(pool);
+            assert!((*mt).pool.is_some());
+            (*mt).out_queue = NonNull::new(super::super::thread_pool::hts_tpool_process_init(
+                pool, 2, 0,
+            ));
+            assert!((*mt).out_queue.is_some());
             (*mt).own_pool = 1;
 
             assert_eq!(
@@ -4830,9 +4840,7 @@ mod tests {
     #[test]
     fn bgzf_mt_destroy_reports_recorded_io_thread_error_without_return_sentinel() {
         unsafe {
-            let mt = c_compat::calloc(1, std::mem::size_of::<bgzf_mtaux_t>() as u64)
-                .cast::<bgzf_mtaux_t>();
-            assert!(!mt.is_null());
+            let mt = Box::into_raw(Box::new(bgzf_mtaux_t::default()));
             assert_eq!(
                 crate::htslib_rs::c_compat::pthread_mutex_init(
                     ptr::addr_of_mut!((*mt).job_pool_m),
@@ -4862,16 +4870,18 @@ mod tests {
                 0
             );
 
-            (*mt).job_pool = super::super::cram::cram_pooled_alloc_c_64_pool_create(
+            let job_pool = super::super::cram::cram_pooled_alloc_c_64_pool_create(
                 std::mem::size_of::<bgzf_job>(),
-            )
-            .cast();
-            assert!(!(*mt).job_pool.is_null());
-            (*mt).pool = super::super::thread_pool::hts_tpool_init(1).cast();
-            assert!(!(*mt).pool.is_null());
-            (*mt).out_queue =
-                super::super::thread_pool::hts_tpool_process_init((*mt).pool.cast(), 2, 0).cast();
-            assert!(!(*mt).out_queue.is_null());
+            );
+            (*mt).job_pool = NonNull::new(job_pool);
+            assert!((*mt).job_pool.is_some());
+            let pool = super::super::thread_pool::hts_tpool_init(1);
+            (*mt).pool = NonNull::new(pool);
+            assert!((*mt).pool.is_some());
+            (*mt).out_queue = NonNull::new(super::super::thread_pool::hts_tpool_process_init(
+                pool, 2, 0,
+            ));
+            assert!((*mt).out_queue.is_some());
             (*mt).own_pool = 1;
             (*mt).errcode = BGZF_ERR_IO as c_int;
 
@@ -5721,21 +5731,16 @@ mod tests {
             let hidx = super::super::hts::hts_idx_init(1, super::super::hts::HTS_FMT_BAI, 0, 14, 5);
             assert!(!hidx.is_null());
 
-            let mut mt: bgzf_mtaux_t = std::mem::zeroed();
+            let mut mt = bgzf_mtaux_t::default();
             assert_eq!(
                 crate::htslib_rs::c_compat::pthread_mutex_init(&mut mt.idx_m, ptr::null()),
                 0
             );
-            mt.hts_idx = hidx;
+            mt.hts_idx = NonNull::new(hidx);
             mt.block_address = 7;
             mt.block_written = 3;
-            mt.idx_cache.nentries = 3;
-            mt.idx_cache.mentries = 3;
-            mt.idx_cache.e = c_compat::calloc(3, std::mem::size_of::<hts_idx_cache_entry>() as u64)
-                .cast::<hts_idx_cache_entry>();
-            assert!(!mt.idx_cache.e.is_null());
 
-            let entries = [
+            mt.idx_cache.entries = vec![
                 hts_idx_cache_entry {
                     beg: 0,
                     end: 10,
@@ -5761,7 +5766,6 @@ mod tests {
                     block_number: 4,
                 },
             ];
-            ptr::copy_nonoverlapping(entries.as_ptr(), mt.idx_cache.e, entries.len());
 
             let fp_idx = c_compat::calloc(1, std::mem::size_of::<bgzidx_t>() as u64);
             assert!(!fp_idx.is_null());
@@ -5787,13 +5791,12 @@ mod tests {
 
             assert_eq!(bgzf_c_228_bgzf_idx_flush(&mut fp, 100, 11), 0);
             assert_eq!(mt.block_written, 4);
-            assert_eq!(mt.idx_cache.nentries, 1);
-            assert_eq!((*mt.idx_cache.e).block_number, 4);
+            assert_eq!(mt.idx_cache.entries.len(), 1);
+            assert_eq!(mt.idx_cache.entries[0].block_number, 4);
             assert_eq!((*hidx).z.last_off, 18_u64 << 16);
             assert_eq!(fp.block_address, 999);
             assert_eq!((*(fp_idx.cast::<bgzidx_t>())).ublock_addr, 55);
 
-            c_compat::free(mt.idx_cache.e.cast());
             c_compat::free(fp_idx);
             crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut mt.idx_m);
             super::super::hts::hts_idx_destroy(hidx);
@@ -5806,7 +5809,7 @@ mod tests {
             let hidx = super::super::hts::hts_idx_init(1, super::super::hts::HTS_FMT_BAI, 0, 14, 5);
             assert!(!hidx.is_null());
 
-            let mut mt: bgzf_mtaux_t = std::mem::zeroed();
+            let mut mt = bgzf_mtaux_t::default();
             assert_eq!(
                 crate::htslib_rs::c_compat::pthread_mutex_init(&mut mt.idx_m, ptr::null()),
                 0
@@ -5814,10 +5817,7 @@ mod tests {
             mt.block_number = 12;
             mt.block_written = 12;
             mt.block_address = 40;
-            mt.idx_cache.mentries = 1;
-            mt.idx_cache.e = c_compat::calloc(1, std::mem::size_of::<hts_idx_cache_entry>() as u64)
-                .cast::<hts_idx_cache_entry>();
-            assert!(!mt.idx_cache.e.is_null());
+            mt.idx_cache.entries.reserve(1);
 
             let mut fp = BGZF {
                 bitfields: 0,
@@ -5842,15 +5842,15 @@ mod tests {
                 bgzf_c_189_bgzf_idx_push(&mut fp, hidx, 0, 0, 10, (77 << 16) + 3, 1),
                 0
             );
-            assert_eq!(mt.idx_cache.nentries, 1);
-            assert_eq!(mt.idx_cache.mentries, 1);
-            assert_eq!(mt.hts_idx, hidx);
-            assert_eq!((*mt.idx_cache.e).tid, 0);
-            assert_eq!((*mt.idx_cache.e).beg, 0);
-            assert_eq!((*mt.idx_cache.e).end, 10);
-            assert_eq!((*mt.idx_cache.e).is_mapped, 1);
-            assert_eq!((*mt.idx_cache.e).offset, 3);
-            assert_eq!((*mt.idx_cache.e).block_number, 12);
+            assert_eq!(mt.idx_cache.entries.len(), 1);
+            assert!(mt.idx_cache.entries.capacity() >= 1);
+            assert_eq!(mt.hts_idx.map(NonNull::as_ptr), Some(hidx));
+            assert_eq!(mt.idx_cache.entries[0].tid, 0);
+            assert_eq!(mt.idx_cache.entries[0].beg, 0);
+            assert_eq!(mt.idx_cache.entries[0].end, 10);
+            assert_eq!(mt.idx_cache.entries[0].is_mapped, 1);
+            assert_eq!(mt.idx_cache.entries[0].offset, 3);
+            assert_eq!(mt.idx_cache.entries[0].block_number, 12);
             assert_eq!((*hidx).z.last_off, 0);
 
             mt.block_number = 13;
@@ -5858,29 +5858,28 @@ mod tests {
                 bgzf_c_189_bgzf_idx_push(&mut fp, hidx, 0, 20, 30, (88 << 16) + 0x2345, 0),
                 0
             );
-            assert_eq!(mt.idx_cache.nentries, 2);
-            assert!(mt.idx_cache.mentries >= 2);
-            assert_eq!((*mt.idx_cache.e.add(1)).offset, 0x2345);
-            assert_eq!((*mt.idx_cache.e.add(1)).block_number, 13);
+            assert_eq!(mt.idx_cache.entries.len(), 2);
+            assert!(mt.idx_cache.entries.capacity() >= 2);
+            assert_eq!(mt.idx_cache.entries[1].offset, 0x2345);
+            assert_eq!(mt.idx_cache.entries[1].block_number, 13);
             assert_eq!((*hidx).z.last_off, 0);
 
             assert_eq!(bgzf_c_228_bgzf_idx_flush(&mut fp, 100, 5), 0);
             assert_eq!(mt.block_written, 13);
-            assert_eq!(mt.idx_cache.nentries, 1);
-            assert_eq!((*mt.idx_cache.e).beg, 20);
-            assert_eq!((*mt.idx_cache.e).offset, 0x2345);
-            assert_eq!((*mt.idx_cache.e).block_number, 13);
+            assert_eq!(mt.idx_cache.entries.len(), 1);
+            assert_eq!(mt.idx_cache.entries[0].beg, 20);
+            assert_eq!(mt.idx_cache.entries[0].offset, 0x2345);
+            assert_eq!(mt.idx_cache.entries[0].block_number, 13);
             assert_eq!((*hidx).z.last_off, (40 << 16) + 3);
 
             mt.block_address = 45;
             assert_eq!(bgzf_c_228_bgzf_idx_flush(&mut fp, 100, 5), 0);
             assert_eq!(mt.block_written, 14);
-            assert_eq!(mt.idx_cache.nentries, 0);
+            assert_eq!(mt.idx_cache.entries.len(), 0);
             assert_eq!((*hidx).z.last_off, (45 << 16) + 0x2345);
             assert_eq!((*hidx).z.n_mapped, 1);
             assert_eq!((*hidx).z.n_unmapped, 1);
 
-            c_compat::free(mt.idx_cache.e.cast());
             crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut mt.idx_m);
             super::super::hts::hts_idx_destroy(hidx);
         }
@@ -6387,9 +6386,9 @@ mod tests {
         unsafe {
             PRIVATE_DATA_CLEANUPS.store(0, Ordering::SeqCst);
             let mut cache = bgzf_cache_t {
-                h: ptr::null_mut(),
+                h: None,
                 last_pos: 0,
-                private_data: ptr::null_mut(),
+                private_data: None,
                 private_data_cleanup: None,
             };
             let mut fp = BGZF {

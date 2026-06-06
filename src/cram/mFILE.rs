@@ -260,19 +260,16 @@ pub unsafe fn cram_mFILE_c_192_mstderr() -> *mut mFILE {
 }
 
 pub unsafe fn cram_mFILE_c_207_mfcreate(data: *mut c_char, size: c_int) -> *mut mFILE {
-    let mf = malloc(std::mem::size_of::<mFILE>() as u64).cast::<mFILE>();
-    if mf.is_null() {
-        return std::ptr::null_mut();
-    }
-    (*mf).fp = std::ptr::null_mut();
-    (*mf).data = data;
-    (*mf).alloced = size as usize;
-    (*mf).size = size as usize;
-    (*mf).eof = 0;
-    (*mf).offset = 0;
-    (*mf).flush_pos = 0;
-    (*mf).mode = MF_READ | MF_WRITE;
-    mf
+    Box::into_raw(Box::new(mFILE {
+        fp: std::ptr::null_mut(),
+        data,
+        alloced: size as usize,
+        eof: 0,
+        mode: MF_READ | MF_WRITE,
+        size: size as usize,
+        offset: 0,
+        flush_pos: 0,
+    }))
 }
 
 pub unsafe fn cram_mFILE_c_225_mfrecreate(mf: *mut mFILE, data: *mut c_char, size: c_int) {
@@ -357,7 +354,7 @@ pub unsafe fn cram_mFILE_c_264_mfreopen(
             if (*mf).data.is_null() {
                 (*mf).data = cram_mFILE_c_75_mfload(fp, path, &mut (*mf).size, b);
                 if (*mf).data.is_null() {
-                    free(mf.cast());
+                    drop(Box::from_raw(mf));
                     return std::ptr::null_mut();
                 }
                 (*mf).alloced = (*mf).size;
@@ -439,7 +436,7 @@ pub unsafe fn cram_mFILE_c_408_mfdestroy(mf: *mut mFILE) -> c_int {
     if !(*mf).data.is_null() {
         free((*mf).data.cast());
     }
-    free(mf.cast());
+    drop(Box::from_raw(mf));
     0
 }
 

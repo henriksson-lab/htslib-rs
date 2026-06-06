@@ -2,9 +2,128 @@
 // Extracted from src/vcf.rs.
 
 use std::ffi::{c_char, c_int};
+use std::mem::{forget, size_of, zeroed};
+use std::ptr::NonNull;
 
 use crate::htslib_rs::hts::{hts_pos_t, kbs_destroy};
 use crate::htslib_rs::vcf::*;
+
+unsafe fn boxed_slice_from_sort_field<T>(ptr: *mut T, len: c_int) -> Option<Box<[T]>> {
+    if ptr.is_null() || len <= 0 {
+        return None;
+    }
+    Some(unsafe { Vec::from_raw_parts(ptr, len as usize, len as usize).into_boxed_slice() })
+}
+
+unsafe fn drop_boxed_sort_slice<T>(ptr: *mut T, len: c_int) {
+    drop(unsafe { boxed_slice_from_sort_field(ptr, len) });
+}
+
+fn into_sort_field_ptr<T>(mut slice: Box<[T]>) -> *mut T {
+    let ptr = slice.as_mut_ptr();
+    forget(slice);
+    ptr
+}
+
+unsafe fn bcf_sr_sort_reserve_active(srt: *mut BcfSrSort, need: c_int) -> c_int {
+    unsafe {
+        let Some(mut srt) = NonNull::new(srt) else {
+            return -1;
+        };
+        if need < 0 {
+            return -1;
+        }
+        let srt = srt.as_mut();
+        if need <= srt.mactive {
+            return 0;
+        }
+
+        let mut active = boxed_slice_from_sort_field(srt.active, srt.mactive)
+            .map(Vec::from)
+            .unwrap_or_default();
+        active.resize(need as usize, 0);
+        srt.active = into_sort_field_ptr(active.into_boxed_slice());
+        srt.mactive = need;
+        0
+    }
+}
+
+unsafe fn bcf_sr_sort_reserve_row(buf: *mut BcfSrSortVcfBuf, need: c_int) -> c_int {
+    unsafe {
+        let Some(mut buf) = NonNull::new(buf) else {
+            return -1;
+        };
+        if need < 0 {
+            return -1;
+        }
+        let buf = buf.as_mut();
+        if need <= buf.mrec {
+            return 0;
+        }
+
+        let mut rec = boxed_slice_from_sort_field(buf.rec, buf.mrec)
+            .map(Vec::from)
+            .unwrap_or_default();
+        rec.resize(need as usize, std::ptr::null_mut());
+        buf.rec = into_sort_field_ptr(rec.into_boxed_slice());
+        buf.mrec = need;
+        0
+    }
+}
+
+unsafe fn bcf_sr_sort_reserve_vcf_buf(readers: *mut bcf_srs_t, srt: *mut BcfSrSort) -> c_int {
+    unsafe {
+        let (Some(readers), Some(mut srt)) = (NonNull::new(readers), NonNull::new(srt)) else {
+            return -1;
+        };
+        let readers = readers.as_ref();
+        if readers.nreaders < 0 {
+            return -1;
+        }
+        let srt = srt.as_mut();
+        if srt.nsr == readers.nreaders {
+            return 0;
+        }
+
+        srt.sr = readers as *const bcf_srs_t as *mut bcf_srs_t;
+        if srt.nsr < readers.nreaders {
+            let allocated = srt.msr.max(srt.nsr).max(0);
+            let mut vcf_buf =
+                boxed_slice_from_sort_field(srt.vcf_buf.cast::<BcfSrSortVcfBuf>(), allocated)
+                    .map(Vec::from)
+                    .unwrap_or_default();
+            vcf_buf.resize_with(readers.nreaders as usize, || zeroed());
+            srt.vcf_buf = into_sort_field_ptr(vcf_buf.into_boxed_slice()).cast();
+            srt.msr = readers.nreaders;
+        }
+        srt.nsr = readers.nreaders;
+        srt.chr = std::ptr::null();
+        0
+    }
+}
+
+unsafe fn bcf_sr_sort_append_empty_row(vcf_buf: *mut BcfSrSortVcfBuf, nreaders: c_int) -> c_int {
+    unsafe {
+        let Some(vcf_buf) = NonNull::new(vcf_buf) else {
+            return -1;
+        };
+        if nreaders <= 0 {
+            return -1;
+        }
+        let vcf_buf = vcf_buf.as_ptr();
+        let row = (*vcf_buf).nrec + 1;
+        for i in 0..nreaders as usize {
+            if bcf_sr_sort_reserve_row(vcf_buf.add(i), row) < 0 {
+                return -1;
+            }
+            *(*vcf_buf.add(i)).rec.add((row - 1) as usize) = std::ptr::null_mut();
+        }
+        for i in 0..nreaders as usize {
+            (*vcf_buf.add(i)).nrec = row;
+        }
+        0
+    }
+}
 
 pub unsafe fn bcf_sr_sort_c_324_bcf_sr_sort_set_active(srt: *mut BcfSrSort, idx: c_int) -> c_int {
     unsafe {
@@ -228,7 +347,10 @@ pub unsafe fn bcf_sr_sort_c_662_bcf_sr_sort_remove_reader(
         }
 
         let vcf_buf = (*srt).vcf_buf.cast::<BcfSrSortVcfBuf>();
-        libc::free((*vcf_buf.add(i as usize)).rec.cast());
+        drop_boxed_sort_slice(
+            (*vcf_buf.add(i as usize)).rec,
+            (*vcf_buf.add(i as usize)).mrec,
+        );
         if i + 1 < (*srt).nsr {
             std::ptr::copy(
                 vcf_buf.add(i as usize + 1),
@@ -264,15 +386,15 @@ pub unsafe fn bcf_sr_sort_c_685_bcf_sr_sort_destroy(srt: *mut BcfSrSort) {
             return;
         }
 
-        libc::free((*srt).active.cast());
+        drop_boxed_sort_slice((*srt).active, (*srt).mactive);
         crate::sam::khash_str2int_destroy_free((*srt).var_str2int);
         crate::sam::khash_str2int_destroy_free((*srt).grp_str2int);
 
         let vcf_buf = (*srt).vcf_buf.cast::<BcfSrSortVcfBuf>();
-        for i in 0..(*srt).nsr.max(0) as usize {
-            libc::free((*vcf_buf.add(i)).rec.cast());
+        for i in 0..(*srt).msr.max((*srt).nsr).max(0) as usize {
+            drop_boxed_sort_slice((*vcf_buf.add(i)).rec, (*vcf_buf.add(i)).mrec);
         }
-        libc::free((*srt).vcf_buf);
+        drop_boxed_sort_slice(vcf_buf, (*srt).msr.max((*srt).nsr).max(0));
 
         let var = (*srt).var.cast::<BcfSrSortVar>();
         for i in 0..(*srt).mvar.max(0) as usize {

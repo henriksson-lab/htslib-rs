@@ -205,6 +205,20 @@ pub struct bam_pileup1_t {
     pub cigar_ind: i32,
 }
 
+impl Default for bam_pileup1_t {
+    fn default() -> Self {
+        Self {
+            b: std::ptr::null_mut(),
+            qpos: 0,
+            indel: 0,
+            level: 0,
+            bitfields: 0,
+            cd: bam_pileup_cd { i: 0 },
+            cigar_ind: 0,
+        }
+    }
+}
+
 pub const MAX_BASE_MOD: usize = 256;
 
 #[repr(C)]
@@ -447,7 +461,7 @@ pub struct mempool_t {
     pub n: c_int,
     pub max: c_int,
     pub padding_0: c_int,
-    pub buf: *mut Option<NonNull<lbnode_t>>,
+    pub buf: Vec<NonNull<lbnode_t>>,
 }
 
 #[repr(C)]
@@ -481,7 +495,6 @@ pub type bam_plp_constructor_f =
     Option<unsafe extern "C" fn(*mut c_void, *const bam1_t, *mut bam_pileup_cd) -> c_int>;
 
 #[repr(C)]
-#[derive(Clone, Copy)]
 pub struct bam_plp_s {
     pub mp: Option<NonNull<mempool_t>>,
     pub head: Option<NonNull<lbnode_t>>,
@@ -495,8 +508,8 @@ pub struct bam_plp_s {
     pub error: c_int,
     pub maxcnt: c_int,
     pub id: u64,
-    pub plp: *mut bam_pileup1_t,
-    pub b: *mut bam1_t,
+    pub plp: Vec<bam_pileup1_t>,
+    pub b: Option<NonNull<bam1_t>>,
     pub func: bam_plp_auto_f,
     pub data: *mut c_void,
     pub overlaps: Option<NonNull<olap_hash_t>>,
@@ -510,12 +523,12 @@ pub type bam_mplp_t = *mut bam_mplp_s;
 pub struct bam_mplp_s {
     pub n: c_int,
     pub min_tid: i32,
-    pub tid: *mut i32,
+    pub tid: Vec<i32>,
     pub min_pos: hts_pos_t,
-    pub pos: *mut hts_pos_t,
-    pub iter: *mut bam_plp_t,
-    pub n_plp: *mut c_int,
-    pub plp: *mut *const bam_pileup1_t,
+    pub pos: Vec<hts_pos_t>,
+    pub iter: Vec<NonNull<bam_plp_s>>,
+    pub n_plp: Vec<c_int>,
+    pub plp: Vec<*const bam_pileup1_t>,
 }
 
 unsafe fn parse_sq_target(line: &[u8]) -> Option<(&[u8], hts_pos_t)> {
@@ -6337,19 +6350,22 @@ pub unsafe fn bam_dup1(bsrc: *const bam1_t) -> *mut bam1_t {
 }
 
 pub unsafe fn mp_init() -> *mut mempool_t {
-    crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<mempool_t>() as u64).cast()
+    Box::into_raw(Box::new(mempool_t {
+        cnt: 0,
+        n: 0,
+        max: 0,
+        padding_0: 0,
+        buf: Vec::new(),
+    }))
 }
 
 pub unsafe fn mp_destroy(mp: *mut mempool_t) {
-    for k in 0..(*mp).n {
-        let node = (*(*mp).buf.add(k as usize))
-            .expect("mempool free-list entries are non-null")
-            .as_ptr();
+    for node in (*mp).buf.drain(..) {
+        let node = node.as_ptr();
         crate::htslib_rs::c_compat::free((*node).b.data.cast());
         crate::htslib_rs::c_compat::free(node.cast());
     }
-    crate::htslib_rs::c_compat::free((*mp).buf.cast());
-    crate::htslib_rs::c_compat::free(mp.cast());
+    drop(Box::from_raw(mp));
 }
 
 pub unsafe fn mp_alloc(mp: *mut mempool_t) -> *mut lbnode_t {
@@ -6357,10 +6373,12 @@ pub unsafe fn mp_alloc(mp: *mut mempool_t) -> *mut lbnode_t {
     if (*mp).n == 0 {
         crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<lbnode_t>() as u64).cast()
     } else {
-        (*mp).n -= 1;
-        (*(*mp).buf.add((*mp).n as usize))
-            .expect("mempool free-list entries are non-null")
-            .as_ptr()
+        let node = (*mp)
+            .buf
+            .pop()
+            .expect("mempool free-list length tracks buffered nodes");
+        (*mp).n = (*mp).buf.len() as c_int;
+        node.as_ptr()
     }
 }
 
@@ -6369,14 +6387,14 @@ pub unsafe fn mp_free(mp: *mut mempool_t, p: *mut lbnode_t) {
     (*p).next = None;
     if (*mp).n == (*mp).max {
         (*mp).max = if (*mp).max != 0 { (*mp).max << 1 } else { 256 };
-        (*mp).buf = crate::htslib_rs::c_compat::realloc(
-            (*mp).buf.cast(),
-            (std::mem::size_of::<Option<NonNull<lbnode_t>>>() * (*mp).max as usize) as u64,
-        )
-        .cast();
+        if (*mp).buf.capacity() < (*mp).max as usize {
+            (*mp).buf.reserve((*mp).max as usize - (*mp).buf.capacity());
+        }
     }
-    *(*mp).buf.add((*mp).n as usize) = NonNull::new(p);
-    (*mp).n += 1;
+    (*mp)
+        .buf
+        .push(NonNull::new(p).expect("mempool nodes are non-null"));
+    (*mp).n = (*mp).buf.len() as c_int;
 }
 
 pub unsafe fn resolve_cigar2(p: *mut bam_pileup1_t, pos: hts_pos_t, s: *mut cstate_t) -> c_int {
@@ -8453,21 +8471,37 @@ unsafe extern "C" fn sam_readrec_rest(
 }
 
 pub unsafe fn bam_plp_init(_func: bam_plp_auto_f, _data: *mut c_void) -> bam_plp_t {
-    let iter = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<bam_plp_s>() as u64)
-        .cast::<bam_plp_s>();
     let mp = mp_init();
-    (*iter).mp = NonNull::new(mp);
-    (*iter).head = NonNull::new(mp_alloc(mp));
-    (*iter).tail = (*iter).head;
-    (*iter).max_tid = -1;
-    (*iter).max_pos = -1;
-    (*iter).maxcnt = 8000;
-    if _func.is_some() {
-        (*iter).func = _func;
-        (*iter).data = _data;
-        (*iter).b = bam_init1();
-    }
-    iter
+    let head = NonNull::new(mp_alloc(mp));
+    Box::into_raw(Box::new(bam_plp_s {
+        mp: NonNull::new(mp),
+        head,
+        tail: head,
+        tid: 0,
+        max_tid: -1,
+        pos: 0,
+        max_pos: -1,
+        is_eof: 0,
+        max_plp: 0,
+        error: 0,
+        maxcnt: 8000,
+        id: 0,
+        plp: Vec::new(),
+        b: if _func.is_some() {
+            NonNull::new(bam_init1())
+        } else {
+            None
+        },
+        func: _func,
+        data: if _func.is_some() {
+            _data
+        } else {
+            std::ptr::null_mut()
+        },
+        overlaps: None,
+        plp_construct: None,
+        plp_destruct: None,
+    }))
 }
 
 pub unsafe fn bam_plp_init_overlaps(_iter: bam_plp_t) -> c_int {
@@ -8500,11 +8534,10 @@ pub unsafe fn bam_plp_destroy(_iter: bam_plp_t) {
     if let Some(mp) = (*_iter).mp {
         mp_destroy(mp.as_ptr());
     }
-    if !(*_iter).b.is_null() {
-        bam_destroy1((*_iter).b);
+    if let Some(b) = (*_iter).b {
+        bam_destroy1(b.as_ptr());
     }
-    crate::htslib_rs::c_compat::free((*_iter).plp.cast());
-    crate::htslib_rs::c_compat::free(_iter.cast());
+    drop(Box::from_raw(_iter));
 }
 
 pub unsafe fn bam_plp_constructor(_plp: bam_plp_t, _func: bam_plp_constructor_f) {
@@ -8553,7 +8586,11 @@ pub unsafe fn bam_plp64_auto(
         return std::ptr::null();
     }
     loop {
-        let ret = (*_iter).func.unwrap()((*_iter).data, (*_iter).b);
+        let b = (*_iter)
+            .b
+            .expect("automatic pileup iterator owns a callback record")
+            .as_ptr();
+        let ret = (*_iter).func.unwrap()((*_iter).data, b);
         if ret < 0 {
             if ret < -1 {
                 (*_iter).error = ret;
@@ -8570,7 +8607,7 @@ pub unsafe fn bam_plp64_auto(
             }
             return std::ptr::null();
         }
-        if bam_plp_push(_iter, (*_iter).b) < 0 {
+        if bam_plp_push(_iter, b) < 0 {
             *_n_plp = -1;
             return std::ptr::null();
         }
@@ -8620,20 +8657,17 @@ pub unsafe fn bam_plp64_next(
                 mp_free((*_iter).mp.unwrap().as_ptr(), p);
             } else {
                 if (*p).b.core.tid == (*_iter).tid && (*p).beg <= (*_iter).pos {
-                    if n_plp == (*_iter).max_plp {
+                    if n_plp == (*_iter).plp.len() as c_int {
                         (*_iter).max_plp = if (*_iter).max_plp != 0 {
                             (*_iter).max_plp << 1
                         } else {
                             256
                         };
-                        (*_iter).plp = crate::htslib_rs::c_compat::realloc(
-                            (*_iter).plp.cast(),
-                            (std::mem::size_of::<bam_pileup1_t>() * (*_iter).max_plp as usize)
-                                as u64,
-                        )
-                        .cast();
+                        (*_iter)
+                            .plp
+                            .resize_with((*_iter).max_plp as usize, bam_pileup1_t::default);
                     }
-                    let out = (*_iter).plp.add(n_plp as usize);
+                    let out = (*_iter).plp.as_mut_ptr().add(n_plp as usize);
                     (*out).b = &mut (*p).b;
                     (*out).cd = (*p).cd;
                     if resolve_cigar2(out, (*_iter).pos, &mut (*p).s) != 0 {
@@ -8663,7 +8697,7 @@ pub unsafe fn bam_plp64_next(
             (*_iter).pos += 1;
         }
         if n_plp != 0 {
-            return (*_iter).plp;
+            return (*_iter).plp.as_ptr();
         }
         if (*_iter).is_eof != 0 && (*_iter).head == (*_iter).tail {
             break;
@@ -8784,53 +8818,45 @@ pub unsafe fn bam_mplp_init(
     _func: bam_plp_auto_f,
     _data: *mut *mut c_void,
 ) -> bam_mplp_t {
-    let iter = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<bam_mplp_s>() as u64)
-        .cast::<bam_mplp_s>();
-    (*iter).pos =
-        crate::htslib_rs::c_compat::calloc(_n as u64, std::mem::size_of::<hts_pos_t>() as u64)
-            .cast();
-    (*iter).tid =
-        crate::htslib_rs::c_compat::calloc(_n as u64, std::mem::size_of::<i32>() as u64).cast();
-    (*iter).n_plp =
-        crate::htslib_rs::c_compat::calloc(_n as u64, std::mem::size_of::<c_int>() as u64).cast();
-    (*iter).plp = crate::htslib_rs::c_compat::calloc(
-        _n as u64,
-        std::mem::size_of::<*const bam_pileup1_t>() as u64,
-    )
-    .cast();
-    (*iter).iter =
-        crate::htslib_rs::c_compat::calloc(_n as u64, std::mem::size_of::<bam_plp_t>() as u64)
-            .cast();
-    (*iter).n = _n;
-    (*iter).min_pos = HTS_POS_MAX;
-    (*iter).min_tid = u32::MAX as i32;
-    for i in 0.._n {
-        *(*iter).iter.add(i as usize) = bam_plp_init(_func, *_data.add(i as usize));
-        *(*iter).pos.add(i as usize) = (*iter).min_pos;
-        *(*iter).tid.add(i as usize) = (*iter).min_tid;
+    let n = _n.max(0) as usize;
+    let mut iter = Box::new(bam_mplp_s {
+        n: _n,
+        min_tid: u32::MAX as i32,
+        tid: vec![u32::MAX as i32; n],
+        min_pos: HTS_POS_MAX,
+        pos: vec![HTS_POS_MAX; n],
+        iter: Vec::with_capacity(n),
+        n_plp: vec![0; n],
+        plp: vec![std::ptr::null(); n],
+    });
+    for i in 0..n {
+        let data = if _data.is_null() {
+            std::ptr::null_mut()
+        } else {
+            *_data.add(i)
+        };
+        let plp = bam_plp_init(_func, data);
+        if let Some(plp) = NonNull::new(plp) {
+            iter.iter.push(plp);
+        }
     }
-    iter
+    Box::into_raw(iter)
 }
 
 pub unsafe fn bam_mplp_destroy(_iter: bam_mplp_t) {
     if _iter.is_null() {
         return;
     }
-    for i in 0..(*_iter).n {
-        bam_plp_destroy(*(*_iter).iter.add(i as usize));
+    for iter in (*_iter).iter.drain(..) {
+        bam_plp_destroy(iter.as_ptr());
     }
-    crate::htslib_rs::c_compat::free((*_iter).iter.cast());
-    crate::htslib_rs::c_compat::free((*_iter).pos.cast());
-    crate::htslib_rs::c_compat::free((*_iter).tid.cast());
-    crate::htslib_rs::c_compat::free((*_iter).n_plp.cast());
-    crate::htslib_rs::c_compat::free((*_iter).plp.cast());
-    crate::htslib_rs::c_compat::free(_iter.cast());
+    drop(Box::from_raw(_iter));
 }
 
 pub unsafe fn bam_mplp_init_overlaps(_iter: bam_mplp_t) -> c_int {
     let mut r = 0;
-    for i in 0..(*_iter).n {
-        r |= bam_plp_init_overlaps(*(*_iter).iter.add(i as usize));
+    for iter in &(*_iter).iter {
+        r |= bam_plp_init_overlaps(iter.as_ptr());
     }
     if r == 0 {
         0
@@ -8866,54 +8892,54 @@ pub unsafe fn bam_mplp64_auto(
     _n_plp: *mut c_int,
     _plp: *mut *const bam_pileup1_t,
 ) -> c_int {
+    let iter = &mut *_iter;
     let mut ret = 0;
     let mut new_min_pos = HTS_POS_MAX;
     let mut new_min_tid = u32::MAX;
-    for i in 0..(*_iter).n {
-        let idx = i as usize;
-        let tid_ptr = (*_iter).tid.add(idx);
-        let pos_ptr = (*_iter).pos.add(idx);
-        let n_plp_ptr = (*_iter).n_plp.add(idx);
-        let plp_ptr = (*_iter).plp.add(idx);
-        if *pos_ptr == (*_iter).min_pos && *tid_ptr == (*_iter).min_tid {
+    for idx in 0..iter.iter.len() {
+        if iter.pos[idx] == iter.min_pos && iter.tid[idx] == iter.min_tid {
             let mut tid = 0;
             let mut pos = 0;
-            *plp_ptr = bam_plp64_auto(*(*_iter).iter.add(idx), &mut tid, &mut pos, n_plp_ptr);
-            if (*(*(*_iter).iter.add(idx))).error != 0 {
+            iter.plp[idx] = bam_plp64_auto(
+                iter.iter[idx].as_ptr(),
+                &mut tid,
+                &mut pos,
+                &mut iter.n_plp[idx],
+            );
+            if (*iter.iter[idx].as_ptr()).error != 0 {
                 return -1;
             }
-            if !(*plp_ptr).is_null() {
-                *tid_ptr = tid;
-                *pos_ptr = pos;
+            if !iter.plp[idx].is_null() {
+                iter.tid[idx] = tid;
+                iter.pos[idx] = pos;
             } else {
-                *tid_ptr = 0;
-                *pos_ptr = 0;
+                iter.tid[idx] = 0;
+                iter.pos[idx] = 0;
             }
         }
-        if !(*plp_ptr).is_null() {
-            let tid_u = *tid_ptr as u32;
+        if !iter.plp[idx].is_null() {
+            let tid_u = iter.tid[idx] as u32;
             if tid_u < new_min_tid {
                 new_min_tid = tid_u;
-                new_min_pos = *pos_ptr;
-            } else if tid_u == new_min_tid && *pos_ptr < new_min_pos {
-                new_min_pos = *pos_ptr;
+                new_min_pos = iter.pos[idx];
+            } else if tid_u == new_min_tid && iter.pos[idx] < new_min_pos {
+                new_min_pos = iter.pos[idx];
             }
         }
     }
-    (*_iter).min_pos = new_min_pos;
-    (*_iter).min_tid = new_min_tid as i32;
+    iter.min_pos = new_min_pos;
+    iter.min_tid = new_min_tid as i32;
     if new_min_pos == HTS_POS_MAX {
         return 0;
     }
     *_tid = new_min_tid as c_int;
     *_pos = new_min_pos;
-    for i in 0..(*_iter).n {
-        let idx = i as usize;
-        let pos = *(*_iter).pos.add(idx);
-        let tid = *(*_iter).tid.add(idx);
-        if pos == (*_iter).min_pos && tid == (*_iter).min_tid {
-            *_n_plp.add(idx) = *(*_iter).n_plp.add(idx);
-            *_plp.add(idx) = *(*_iter).plp.add(idx);
+    for idx in 0..iter.iter.len() {
+        let pos = iter.pos[idx];
+        let tid = iter.tid[idx];
+        if pos == iter.min_pos && tid == iter.min_tid {
+            *_n_plp.add(idx) = iter.n_plp[idx];
+            *_plp.add(idx) = iter.plp[idx];
             ret += 1;
         } else {
             *_n_plp.add(idx) = 0;
@@ -8924,21 +8950,21 @@ pub unsafe fn bam_mplp64_auto(
 }
 
 pub unsafe fn bam_mplp_set_maxcnt(_iter: bam_mplp_t, _maxcnt: c_int) {
-    for i in 0..(*_iter).n {
-        (*(*(*_iter).iter.add(i as usize))).maxcnt = _maxcnt;
+    for iter in &(*_iter).iter {
+        (*iter.as_ptr()).maxcnt = _maxcnt;
     }
 }
 
 pub unsafe fn bam_mplp_reset(iter: bam_mplp_t) {
-    (*iter).min_pos = HTS_POS_MAX;
-    (*iter).min_tid = u32::MAX as i32;
-    for i in 0..(*iter).n {
-        let idx = i as usize;
-        bam_plp_reset(*(*iter).iter.add(idx));
-        *(*iter).pos.add(idx) = HTS_POS_MAX;
-        *(*iter).tid.add(idx) = u32::MAX as i32;
-        *(*iter).n_plp.add(idx) = 0;
-        *(*iter).plp.add(idx) = std::ptr::null();
+    let iter = &mut *iter;
+    iter.min_pos = HTS_POS_MAX;
+    iter.min_tid = u32::MAX as i32;
+    for idx in 0..iter.iter.len() {
+        bam_plp_reset(iter.iter[idx].as_ptr());
+        iter.pos[idx] = HTS_POS_MAX;
+        iter.tid[idx] = u32::MAX as i32;
+        iter.n_plp[idx] = 0;
+        iter.plp[idx] = std::ptr::null();
     }
 }
 
@@ -9071,14 +9097,14 @@ pub unsafe fn bam_plp_insertion(
 }
 
 pub unsafe fn bam_mplp_constructor(_iter: bam_mplp_t, _func: bam_plp_constructor_f) {
-    for i in 0..(*_iter).n {
-        bam_plp_constructor(*(*_iter).iter.add(i as usize), _func);
+    for iter in &(*_iter).iter {
+        bam_plp_constructor(iter.as_ptr(), _func);
     }
 }
 
 pub unsafe fn bam_mplp_destructor(_iter: bam_mplp_t, _func: bam_plp_constructor_f) {
-    for i in 0..(*_iter).n {
-        bam_plp_destructor(*(*_iter).iter.add(i as usize), _func);
+    for iter in &(*_iter).iter {
+        bam_plp_destructor(iter.as_ptr(), _func);
     }
 }
 
@@ -12013,12 +12039,6 @@ mod tests {
         assert_eq!(align_of::<cstate_t>(), 8);
         assert_eq!(size_of::<lbnode_t>(), 136);
         assert_eq!(align_of::<lbnode_t>(), 8);
-        assert_eq!(size_of::<mempool_t>(), 24);
-        assert_eq!(align_of::<mempool_t>(), 8);
-        assert_eq!(size_of::<bam_plp_s>(), 128);
-        assert_eq!(align_of::<bam_plp_s>(), 8);
-        assert_eq!(size_of::<bam_mplp_s>(), 56);
-        assert_eq!(align_of::<bam_mplp_s>(), 8);
         assert_eq!(std::mem::offset_of!(sam_hdr_t, n_targets), 0);
         assert_eq!(std::mem::offset_of!(sam_hdr_t, ignore_sam_err), 4);
         assert_eq!(std::mem::offset_of!(sam_hdr_t, l_text), 8);
@@ -12057,37 +12077,6 @@ mod tests {
         assert_eq!(std::mem::offset_of!(lbnode_t, s), 96);
         assert_eq!(std::mem::offset_of!(lbnode_t, next), 120);
         assert_eq!(std::mem::offset_of!(lbnode_t, cd), 128);
-        assert_eq!(std::mem::offset_of!(mempool_t, cnt), 0);
-        assert_eq!(std::mem::offset_of!(mempool_t, n), 4);
-        assert_eq!(std::mem::offset_of!(mempool_t, max), 8);
-        assert_eq!(std::mem::offset_of!(mempool_t, buf), 16);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, mp), 0);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, head), 8);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, tail), 16);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, tid), 24);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, max_tid), 28);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, pos), 32);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, max_pos), 40);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, is_eof), 48);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, max_plp), 52);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, error), 56);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, maxcnt), 60);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, id), 64);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, plp), 72);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, b), 80);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, func), 88);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, data), 96);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, overlaps), 104);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, plp_construct), 112);
-        assert_eq!(std::mem::offset_of!(bam_plp_s, plp_destruct), 120);
-        assert_eq!(std::mem::offset_of!(bam_mplp_s, n), 0);
-        assert_eq!(std::mem::offset_of!(bam_mplp_s, min_tid), 4);
-        assert_eq!(std::mem::offset_of!(bam_mplp_s, tid), 8);
-        assert_eq!(std::mem::offset_of!(bam_mplp_s, min_pos), 16);
-        assert_eq!(std::mem::offset_of!(bam_mplp_s, pos), 24);
-        assert_eq!(std::mem::offset_of!(bam_mplp_s, iter), 32);
-        assert_eq!(std::mem::offset_of!(bam_mplp_s, n_plp), 40);
-        assert_eq!(std::mem::offset_of!(bam_mplp_s, plp), 48);
     }
 
     #[test]
@@ -15947,7 +15936,7 @@ mod tests {
             assert_eq!((*mp).cnt, 0);
             assert_eq!((*mp).n, 0);
             assert_eq!((*mp).max, 0);
-            assert!((*mp).buf.is_null());
+            assert!((*mp).buf.is_empty());
 
             let node = mp_alloc(mp);
             assert!(!node.is_null());
@@ -15993,7 +15982,7 @@ mod tests {
             assert_eq!((*iter).maxcnt, 8000);
             assert!((*iter).func.is_none());
             assert!((*iter).data.is_null());
-            assert!((*iter).b.is_null());
+            assert!((*iter).b.is_none());
             bam_plp_destroy(iter);
 
             let mut data = 7u8;
@@ -16006,7 +15995,7 @@ mod tests {
                 Some(test_plp_auto_callback as usize)
             );
             assert_eq!((*iter).data, (&mut data as *mut u8).cast::<c_void>());
-            assert!(!(*iter).b.is_null());
+            assert!((*iter).b.is_some());
             bam_plp_destroy(iter);
         }
     }
@@ -18164,8 +18153,8 @@ mod tests {
             error: 0,
             maxcnt: 8000,
             id: 0,
-            plp: std::ptr::null_mut(),
-            b: std::ptr::null_mut(),
+            plp: Vec::new(),
+            b: None,
             func: None,
             data: std::ptr::null_mut(),
             overlaps: None,
@@ -18173,19 +18162,35 @@ mod tests {
             plp_destruct: None,
         };
         let mut plp1 = bam_plp_s {
+            mp: None,
+            head: None,
+            tail: None,
+            tid: 0,
+            max_tid: 0,
+            pos: 0,
+            max_pos: 0,
+            is_eof: 0,
+            max_plp: 0,
+            error: 0,
             maxcnt: 8000,
-            ..plp0
+            id: 0,
+            plp: Vec::new(),
+            b: None,
+            func: None,
+            data: std::ptr::null_mut(),
+            overlaps: None,
+            plp_construct: None,
+            plp_destruct: None,
         };
-        let mut iters = [&mut plp0 as bam_plp_t, &mut plp1 as bam_plp_t];
         let mut mplp = bam_mplp_s {
             n: 2,
             min_tid: 0,
-            tid: std::ptr::null_mut(),
+            tid: Vec::new(),
             min_pos: 0,
-            pos: std::ptr::null_mut(),
-            iter: iters.as_mut_ptr(),
-            n_plp: std::ptr::null_mut(),
-            plp: std::ptr::null_mut(),
+            pos: Vec::new(),
+            iter: vec![NonNull::from(&mut plp0), NonNull::from(&mut plp1)],
+            n_plp: Vec::new(),
+            plp: Vec::new(),
         };
 
         unsafe {
@@ -18222,8 +18227,8 @@ mod tests {
             error: 0,
             maxcnt: 8000,
             id: 0,
-            plp: std::ptr::null_mut(),
-            b: std::ptr::null_mut(),
+            plp: Vec::new(),
+            b: None,
             func: None,
             data: std::ptr::null_mut(),
             overlaps: None,
@@ -18231,20 +18236,35 @@ mod tests {
             plp_destruct: None,
         };
         let mut plp1 = bam_plp_s {
+            mp: None,
+            head: None,
+            tail: None,
+            tid: 0,
+            max_tid: 0,
+            pos: 0,
+            max_pos: 0,
+            is_eof: 0,
+            max_plp: 0,
+            error: 0,
+            maxcnt: 8000,
+            id: 0,
+            plp: Vec::new(),
+            b: None,
+            func: None,
+            data: std::ptr::null_mut(),
+            overlaps: None,
             plp_construct: None,
             plp_destruct: None,
-            ..plp0
         };
-        let mut iters = [&mut plp0 as bam_plp_t, &mut plp1 as bam_plp_t];
         let mut mplp = bam_mplp_s {
             n: 2,
             min_tid: 0,
-            tid: std::ptr::null_mut(),
+            tid: Vec::new(),
             min_pos: 0,
-            pos: std::ptr::null_mut(),
-            iter: iters.as_mut_ptr(),
-            n_plp: std::ptr::null_mut(),
-            plp: std::ptr::null_mut(),
+            pos: Vec::new(),
+            iter: vec![NonNull::from(&mut plp0), NonNull::from(&mut plp1)],
+            n_plp: Vec::new(),
+            plp: Vec::new(),
         };
 
         unsafe {
@@ -18280,13 +18300,14 @@ mod tests {
             assert_eq!((*mplp).n, 2);
             assert_eq!((*mplp).min_pos, HTS_POS_MAX);
             assert_eq!((*mplp).min_tid, -1);
+            let mplp_ref = &mut *mplp;
+            assert_eq!(mplp_ref.iter.len(), 2);
             for i in 0..2 {
                 let idx = i as usize;
-                assert_eq!(*(*mplp).pos.add(idx), HTS_POS_MAX);
-                assert_eq!(*(*mplp).tid.add(idx), -1);
-                assert_eq!(*(*mplp).n_plp.add(idx), 0);
-                assert!((*(*mplp).plp.add(idx)).is_null());
-                assert!(!(*(*mplp).iter.add(idx)).is_null());
+                assert_eq!(mplp_ref.pos[idx], HTS_POS_MAX);
+                assert_eq!(mplp_ref.tid[idx], -1);
+                assert_eq!(mplp_ref.n_plp[idx], 0);
+                assert!(mplp_ref.plp[idx].is_null());
             }
             bam_mplp_destroy(mplp);
         }
@@ -18301,29 +18322,31 @@ mod tests {
             assert!(!mplp.is_null());
             (*mplp).min_pos = 12;
             (*mplp).min_tid = 3;
+            let mplp_ref = &mut *mplp;
             for i in 0..2 {
                 let idx = i as usize;
-                *(*mplp).pos.add(idx) = i as hts_pos_t;
-                *(*mplp).tid.add(idx) = i;
-                *(*mplp).n_plp.add(idx) = 9;
-                *(*mplp).plp.add(idx) = pileup_marker.as_ptr();
-                (*(*(*mplp).iter.add(idx))).tid = 7;
-                (*(*(*mplp).iter.add(idx))).pos = 8;
-                (*(*(*mplp).iter.add(idx))).is_eof = 1;
+                mplp_ref.pos[idx] = i as hts_pos_t;
+                mplp_ref.tid[idx] = i;
+                mplp_ref.n_plp[idx] = 9;
+                mplp_ref.plp[idx] = pileup_marker.as_ptr();
+                (*mplp_ref.iter[idx].as_ptr()).tid = 7;
+                (*mplp_ref.iter[idx].as_ptr()).pos = 8;
+                (*mplp_ref.iter[idx].as_ptr()).is_eof = 1;
             }
 
             bam_mplp_reset(mplp);
-            assert_eq!((*mplp).min_pos, HTS_POS_MAX);
-            assert_eq!((*mplp).min_tid, -1);
+            let mplp_ref = &mut *mplp;
+            assert_eq!(mplp_ref.min_pos, HTS_POS_MAX);
+            assert_eq!(mplp_ref.min_tid, -1);
             for i in 0..2 {
                 let idx = i as usize;
-                assert_eq!(*(*mplp).pos.add(idx), HTS_POS_MAX);
-                assert_eq!(*(*mplp).tid.add(idx), -1);
-                assert_eq!(*(*mplp).n_plp.add(idx), 0);
-                assert!((*(*mplp).plp.add(idx)).is_null());
-                assert_eq!((*(*(*mplp).iter.add(idx))).tid, 0);
-                assert_eq!((*(*(*mplp).iter.add(idx))).pos, 0);
-                assert_eq!((*(*(*mplp).iter.add(idx))).is_eof, 0);
+                assert_eq!(mplp_ref.pos[idx], HTS_POS_MAX);
+                assert_eq!(mplp_ref.tid[idx], -1);
+                assert_eq!(mplp_ref.n_plp[idx], 0);
+                assert!(mplp_ref.plp[idx].is_null());
+                assert_eq!((*mplp_ref.iter[idx].as_ptr()).tid, 0);
+                assert_eq!((*mplp_ref.iter[idx].as_ptr()).pos, 0);
+                assert_eq!((*mplp_ref.iter[idx].as_ptr()).is_eof, 0);
             }
             bam_mplp_destroy(mplp);
         }
@@ -18407,12 +18430,12 @@ mod tests {
         let mut mplp = bam_mplp_s {
             n: 0,
             min_tid: -1,
-            tid: std::ptr::null_mut(),
+            tid: Vec::new(),
             min_pos: HTS_POS_MAX,
-            pos: std::ptr::null_mut(),
-            iter: std::ptr::null_mut(),
-            n_plp: std::ptr::null_mut(),
-            plp: std::ptr::null_mut(),
+            pos: Vec::new(),
+            iter: Vec::new(),
+            n_plp: Vec::new(),
+            plp: Vec::new(),
         };
         let mut tid = -1;
         let mut pos = -1;

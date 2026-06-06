@@ -1,11 +1,14 @@
-use std::ffi::{c_char, c_int, c_void};
+use std::{
+    ffi::{c_char, c_int, c_void, CString},
+    ptr::NonNull,
+};
 
 use crate::htslib_rs::{
     hts::{
-        hts_close, hts_getline, hts_open, hts_parse_decimal, hts_pos_t, hts_resize_array_,
-        isspace_c, kputsn, ks_clear, ks_free, kstring_t, HTS_RESIZE_CLEAR,
+        hts_close, hts_getline, hts_open, hts_parse_decimal, hts_pos_t, isspace_c, kputsn,
+        ks_clear, ks_free, kstring_t,
     },
-    sam::{khash_str2int_destroy_free, khash_str2int_get, khash_str2int_inc, khash_str2int_init},
+    sam::{khash_str2int_destroy, khash_str2int_get, khash_str2int_inc, khash_str2int_init},
 };
 
 pub const REGIDX_MAX: hts_pos_t = 1_i64 << 35;
@@ -13,36 +16,6 @@ pub const MAX_COOR_0: hts_pos_t = REGIDX_MAX;
 
 fn ibin(x: hts_pos_t) -> c_int {
     (x >> 13) as c_int
-}
-
-unsafe fn hts_resize_i32<T>(num: usize, size: *mut c_int, ptr: *mut *mut T, flags: c_int) -> c_int {
-    if num <= *size as usize {
-        return 0;
-    }
-    hts_resize_array_(
-        std::mem::size_of::<T>(),
-        num,
-        std::mem::size_of::<c_int>(),
-        size.cast(),
-        ptr.cast::<*mut c_void>(),
-        flags,
-        c"regidx".as_ptr(),
-    )
-}
-
-unsafe fn hts_resize_u32<T>(num: usize, size: *mut u32, ptr: *mut *mut T, flags: c_int) -> c_int {
-    if num <= *size as usize {
-        return 0;
-    }
-    hts_resize_array_(
-        std::mem::size_of::<T>(),
-        num,
-        std::mem::size_of::<u32>(),
-        size.cast(),
-        ptr.cast::<*mut c_void>(),
-        flags,
-        c"regidx".as_ptr(),
-    )
 }
 
 #[repr(C)]
@@ -64,43 +37,37 @@ pub struct regitr_t {
 }
 
 // original: itr_t_ (htslib/regidx.c:53)
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct itr_t_ {
     beg: hts_pos_t,
     end: hts_pos_t,
     ireg: u32,
-    ridx: *mut regidx_t,
-    list: *mut reglist_t,
+    ridx: NonNull<regidx_t>,
+    list: Option<NonNull<reglist_t>>,
     active: c_int,
 }
 
 // original: reglist_t (htslib/regidx.c:66)
-#[repr(C)]
+#[derive(Default)]
 pub struct reglist_t {
-    idx: *mut u32,
-    nidx: u32,
-    nreg: u32,
-    mreg: u32,
-    reg: *mut reg_t,
-    dat: *mut u8,
+    idx: Vec<u32>,
+    reg: Vec<reg_t>,
+    dat: Vec<u8>,
     seq: *mut c_char,
     unsorted: c_int,
 }
 
 // original: regidx_t (htslib/regidx.c:77)
-#[repr(C)]
 pub struct regidx_t {
-    nseq: c_int,
-    mseq: c_int,
-    seq: *mut reglist_t,
-    seq2regs: *mut c_void,
-    seq_names: *mut *mut c_char,
+    seq: Vec<reglist_t>,
+    seq2regs: Option<NonNull<c_void>>,
+    seq_names: Vec<CString>,
+    seq_name_ptrs: Vec<*mut c_char>,
     free: regidx_free_f,
     parse: regidx_parse_f,
     usr: *mut c_void,
     payload_size: c_int,
-    payload: *mut c_void,
+    payload: Vec<u8>,
     str: kstring_t,
 }
 
@@ -117,25 +84,81 @@ pub type regidx_parse_f = Option<
 >;
 pub type regidx_free_f = Option<unsafe extern "C" fn(*mut c_void)>;
 
+impl regidx_t {
+    fn new(
+        parse: regidx_parse_f,
+        free: regidx_free_f,
+        payload_size: usize,
+        usr: *mut c_void,
+    ) -> Self {
+        Self {
+            seq: Vec::new(),
+            seq2regs: None,
+            seq_names: Vec::new(),
+            seq_name_ptrs: Vec::new(),
+            free,
+            parse,
+            usr,
+            payload_size: payload_size as c_int,
+            payload: if payload_size == 0 {
+                Vec::new()
+            } else {
+                vec![0; payload_size]
+            },
+            str: kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            },
+        }
+    }
+
+    fn seq2regs_ptr(&self) -> *mut c_void {
+        self.seq2regs
+            .map_or(std::ptr::null_mut(), |ptr| ptr.as_ptr())
+    }
+
+    fn payload_ptr(&mut self) -> *mut c_void {
+        self.payload.as_mut_ptr().cast()
+    }
+}
+
+impl itr_t_ {
+    fn new(regidx: NonNull<regidx_t>) -> Self {
+        Self {
+            beg: 0,
+            end: 0,
+            ireg: 0,
+            ridx: regidx,
+            list: None,
+            active: 0,
+        }
+    }
+
+    fn reset(&mut self, regidx: NonNull<regidx_t>) {
+        *self = Self::new(regidx);
+    }
+}
+
 pub unsafe fn regidx_c_91_regidx_seq_nregs(idx: *mut regidx_t, seq: *const c_char) -> c_int {
     let mut iseq = 0;
-    if khash_str2int_get((*idx).seq2regs, seq, &mut iseq) != 0 {
+    if khash_str2int_get((*idx).seq2regs_ptr(), seq, &mut iseq) != 0 {
         return 0;
     }
-    (*(*idx).seq.add(iseq as usize)).nreg as c_int
+    (&(*idx).seq)[iseq as usize].reg.len() as c_int
 }
 
 pub unsafe fn regidx_c_98_regidx_nregs(idx: *mut regidx_t) -> c_int {
     let mut nreg = 0;
-    for i in 0..(*idx).nseq {
-        nreg += (*(*idx).seq.add(i as usize)).nreg as c_int;
+    for list in &(*idx).seq {
+        nreg += list.reg.len() as c_int;
     }
     nreg
 }
 
 pub unsafe fn regidx_c_105_regidx_seq_names(idx: *mut regidx_t, n: *mut c_int) -> *mut *mut c_char {
-    *n = (*idx).nseq;
-    (*idx).seq_names
+    *n = (*idx).seq.len() as c_int;
+    (*idx).seq_name_ptrs.as_mut_ptr()
 }
 
 pub unsafe fn regidx_c_111_regidx_insert_list(
@@ -206,6 +229,10 @@ pub unsafe extern "C" fn regidx_c_146_cmp_reg_ptrs2(a: *const c_void, b: *const 
     regidx_c_132_cmp_regs(ap, bp)
 }
 
+fn cmp_reg_values(a: reg_t, b: reg_t) -> std::cmp::Ordering {
+    a.beg.cmp(&b.beg).then_with(|| b.end.cmp(&a.end))
+}
+
 pub unsafe fn regidx_c_151_regidx_push(
     idx: *mut regidx_t,
     chr_beg: *mut c_char,
@@ -216,92 +243,59 @@ pub unsafe fn regidx_c_151_regidx_push(
 ) -> c_int {
     beg = beg.clamp(0, MAX_COOR_0);
     end = end.clamp(0, MAX_COOR_0);
+    let idx_ref = &mut *idx;
 
     let mut rid = 0;
     if kputsn(
         chr_beg,
         chr_end.offset_from(chr_beg) as usize + 1,
-        ks_clear(&mut (*idx).str),
+        ks_clear(&mut idx_ref.str),
     ) < 0
     {
         return -1;
     }
-    if khash_str2int_get((*idx).seq2regs, (*idx).str.s, &mut rid) != 0 {
-        let nseq = (*idx).nseq as usize;
-        let mut m_tmp = (*idx).mseq;
-        if hts_resize_i32::<*mut c_char>(
-            nseq + 1,
-            &mut m_tmp,
-            &mut (*idx).seq_names,
-            HTS_RESIZE_CLEAR,
-        ) < 0
-        {
+    if khash_str2int_get(idx_ref.seq2regs_ptr(), idx_ref.str.s, &mut rid) != 0 {
+        let Ok(seq_name) = CString::new(std::ffi::CStr::from_ptr(idx_ref.str.s).to_bytes()) else {
             return -1;
-        }
-        if hts_resize_i32::<reglist_t>(
-            nseq + 1,
-            &mut (*idx).mseq,
-            &mut (*idx).seq,
-            HTS_RESIZE_CLEAR,
-        ) < 0
-        {
-            return -1;
-        }
-        *(*idx).seq_names.add(nseq) = libc::strdup((*idx).str.s);
-        if (*(*idx).seq_names.add(nseq)).is_null() {
-            return -1;
-        }
-        rid = khash_str2int_inc((*idx).seq2regs, *(*idx).seq_names.add(nseq));
+        };
+        idx_ref.seq_names.push(seq_name);
+        let seq_ptr = idx_ref.seq_names.last().unwrap().as_ptr() as *mut c_char;
+        idx_ref.seq_name_ptrs.push(seq_ptr);
+        idx_ref.seq.push(reglist_t {
+            seq: seq_ptr,
+            ..Default::default()
+        });
+        rid = khash_str2int_inc(idx_ref.seq2regs_ptr(), seq_ptr);
         if rid < 0 {
             return -1;
         }
-        (*idx).nseq += 1;
     }
 
-    let list = (*idx).seq.add(rid as usize);
-    (*list).seq = *(*idx).seq_names.add(rid as usize);
-    let mreg = (*list).mreg;
-    if hts_resize_u32::<reg_t>(
-        (*list).nreg as usize + 1,
-        &mut (*list).mreg,
-        &mut (*list).reg,
-        0,
-    ) < 0
-    {
-        return -1;
-    }
-    (*(*list).reg.add((*list).nreg as usize)).beg = beg;
-    (*(*list).reg.add((*list).nreg as usize)).end = end;
-    if (*idx).payload_size != 0 {
-        if mreg != (*list).mreg {
-            let Some(bytes) = ((*idx).payload_size as usize).checked_mul((*list).mreg as usize)
-            else {
-                return -1;
-            };
-            let new_dat = libc::realloc((*list).dat.cast(), bytes).cast::<u8>();
-            if new_dat.is_null() {
-                return -1;
-            }
-            (*list).dat = new_dat;
+    let payload_size = idx_ref.payload_size as usize;
+    let list = &mut idx_ref.seq[rid as usize];
+    list.seq = idx_ref.seq_name_ptrs[rid as usize];
+    let prev = list.reg.last().copied();
+    list.reg.push(reg_t { beg, end });
+    if payload_size != 0 {
+        if payload.is_null() {
+            return -1;
         }
-        libc::memcpy(
-            (*list)
-                .dat
-                .add((*idx).payload_size as usize * (*list).nreg as usize)
-                .cast(),
-            payload,
-            (*idx).payload_size as usize,
+        let old_len = list.dat.len();
+        let Some(new_len) = old_len.checked_add(payload_size) else {
+            return -1;
+        };
+        list.dat.resize(new_len, 0);
+        std::ptr::copy_nonoverlapping(
+            payload.cast::<u8>(),
+            list.dat[old_len..].as_mut_ptr(),
+            payload_size,
         );
     }
-    (*list).nreg += 1;
-    if (*list).unsorted == 0
-        && (*list).nreg > 1
-        && regidx_c_132_cmp_regs(
-            (*list).reg.add((*list).nreg as usize - 2),
-            (*list).reg.add((*list).nreg as usize - 1),
-        ) > 0
+    if list.unsorted == 0
+        && prev.is_some()
+        && cmp_reg_values(prev.unwrap(), *list.reg.last().unwrap()).is_gt()
     {
-        (*list).unsorted = 1;
+        list.unsorted = 1;
     }
     0
 }
@@ -314,13 +308,14 @@ pub unsafe fn regidx_c_198_regidx_insert(idx: *mut regidx_t, line: *mut c_char) 
     let mut chr_to = std::ptr::null_mut();
     let mut beg = 0;
     let mut end = 0;
+    let payload = (*idx).payload_ptr();
     let ret = (*idx).parse.unwrap()(
         line,
         &mut chr_from,
         &mut chr_to,
         &mut beg,
         &mut end,
-        (*idx).payload,
+        payload,
         (*idx).usr,
     );
     if ret == -2 {
@@ -329,7 +324,7 @@ pub unsafe fn regidx_c_198_regidx_insert(idx: *mut regidx_t, line: *mut c_char) 
     if ret == -1 {
         return 0;
     }
-    regidx_c_151_regidx_push(idx, chr_from, chr_to, beg, end, (*idx).payload)
+    regidx_c_151_regidx_push(idx, chr_from, chr_to, beg, end, payload)
 }
 
 pub unsafe fn regidx_c_209_regidx_init_string(
@@ -344,29 +339,14 @@ pub unsafe fn regidx_c_209_regidx_init_string(
         m: 0,
         s: std::ptr::null_mut(),
     };
-    let idx = libc::calloc(1, std::mem::size_of::<regidx_t>()).cast::<regidx_t>();
-    if idx.is_null() {
-        return std::ptr::null_mut();
-    }
-    (*idx).free = freef;
-    (*idx).parse = if parsef.is_some() {
-        parsef
-    } else {
-        Some(regidx_c_498_regidx_parse_tab)
-    };
-    (*idx).usr = usr;
-    (*idx).seq2regs = khash_str2int_init();
-    if (*idx).seq2regs.is_null() {
+    let parse = parsef.or(Some(
+        regidx_c_498_regidx_parse_tab as unsafe extern "C" fn(_, _, _, _, _, _, _) -> _,
+    ));
+    let idx = Box::into_raw(Box::new(regidx_t::new(parse, freef, payload_size, usr)));
+    (*idx).seq2regs = NonNull::new(khash_str2int_init());
+    if (*idx).seq2regs.is_none() {
         regidx_c_311_regidx_destroy(idx);
         return std::ptr::null_mut();
-    }
-    (*idx).payload_size = payload_size as c_int;
-    if payload_size != 0 {
-        (*idx).payload = libc::malloc(payload_size);
-        if (*idx).payload.is_null() {
-            regidx_c_311_regidx_destroy(idx);
-            return std::ptr::null_mut();
-        }
     }
 
     let mut ss = string;
@@ -429,25 +409,11 @@ pub unsafe fn regidx_c_246_regidx_init(
         m: 0,
         s: std::ptr::null_mut(),
     };
-    let idx = libc::calloc(1, std::mem::size_of::<regidx_t>()).cast::<regidx_t>();
-    if idx.is_null() {
-        return std::ptr::null_mut();
-    }
-    (*idx).free = freef;
-    (*idx).parse = parsef;
-    (*idx).usr = usr;
-    (*idx).seq2regs = khash_str2int_init();
-    if (*idx).seq2regs.is_null() {
+    let idx = Box::into_raw(Box::new(regidx_t::new(parsef, freef, payload_size, usr)));
+    (*idx).seq2regs = NonNull::new(khash_str2int_init());
+    if (*idx).seq2regs.is_none() {
         regidx_c_311_regidx_destroy(idx);
         return std::ptr::null_mut();
-    }
-    (*idx).payload_size = payload_size as c_int;
-    if payload_size != 0 {
-        (*idx).payload = libc::malloc(payload_size);
-        if (*idx).payload.is_null() {
-            regidx_c_311_regidx_destroy(idx);
-            return std::ptr::null_mut();
-        }
     }
 
     if fname.is_null() {
@@ -493,28 +459,21 @@ pub unsafe fn regidx_c_311_regidx_destroy(idx: *mut regidx_t) {
     if idx.is_null() {
         return;
     }
-    for i in 0..(*idx).nseq {
-        let list = (*idx).seq.add(i as usize);
-        if let Some(free) = (*idx).free {
-            for j in 0..(*list).nreg {
-                free(
-                    (*list)
-                        .dat
-                        .add((*idx).payload_size as usize * j as usize)
-                        .cast(),
-                );
+    let mut idx_box = Box::from_raw(idx);
+    for list in &mut idx_box.seq {
+        if let Some(free) = idx_box.free {
+            let payload_size = idx_box.payload_size as usize;
+            if payload_size != 0 {
+                for chunk in list.dat.chunks_mut(payload_size) {
+                    free(chunk.as_mut_ptr().cast());
+                }
             }
         }
-        libc::free((*list).dat.cast());
-        libc::free((*list).reg.cast());
-        libc::free((*list).idx.cast());
     }
-    libc::free((*idx).seq_names.cast());
-    libc::free((*idx).seq.cast());
-    libc::free((*idx).str.s.cast());
-    libc::free((*idx).payload);
-    khash_str2int_destroy_free((*idx).seq2regs);
-    libc::free(idx.cast());
+    libc::free(idx_box.str.s.cast());
+    if let Some(seq2regs) = idx_box.seq2regs.take() {
+        khash_str2int_destroy(seq2regs.as_ptr());
+    }
 }
 
 // original: reglist_build_index_ (htslib/regidx.c:335)
@@ -522,109 +481,57 @@ pub unsafe fn regidx_c_335_reglist_build_index_(
     regidx: *mut regidx_t,
     list: *mut reglist_t,
 ) -> c_int {
-    if (*list).unsorted != 0 {
-        if (*regidx).payload_size == 0 {
-            libc::qsort(
-                (*list).reg.cast(),
-                (*list).nreg as usize,
-                std::mem::size_of::<reg_t>(),
-                Some(regidx_c_142_cmp_reg_ptrs),
-            );
+    let regidx_ref = &*regidx;
+    let list_ref = &mut *list;
+    if list_ref.unsorted != 0 {
+        let payload_size = regidx_ref.payload_size as usize;
+        if payload_size == 0 {
+            list_ref.reg.sort_by(|a, b| cmp_reg_values(*a, *b));
         } else {
-            let Some(ptr_bytes) =
-                std::mem::size_of::<*mut reg_t>().checked_mul((*list).nreg as usize)
-            else {
-                return -1;
-            };
-            let ptr = libc::malloc(ptr_bytes).cast::<*mut reg_t>();
-            if ptr.is_null() {
-                return -1;
-            }
-            for i in 0..(*list).nreg as usize {
-                *ptr.add(i) = (*list).reg.add(i);
-            }
-            libc::qsort(
-                ptr.cast(),
-                (*list).nreg as usize,
-                std::mem::size_of::<*mut reg_t>(),
-                Some(regidx_c_146_cmp_reg_ptrs2),
-            );
-
-            let Some(dat_bytes) =
-                ((*regidx).payload_size as usize).checked_mul((*list).nreg as usize)
-            else {
-                libc::free(ptr.cast());
-                return -1;
-            };
-            let tmp_dat = libc::malloc(dat_bytes).cast::<u8>();
-            if tmp_dat.is_null() {
-                libc::free(ptr.cast());
-                return -1;
-            }
-            for i in 0..(*list).nreg as usize {
-                let iori = (*ptr.add(i)).offset_from((*list).reg) as usize;
-                libc::memcpy(
-                    tmp_dat.add(i * (*regidx).payload_size as usize).cast(),
-                    (*list)
+            let mut pairs: Vec<(reg_t, Vec<u8>)> = list_ref
+                .reg
+                .iter()
+                .copied()
+                .zip(
+                    list_ref
                         .dat
-                        .add(iori * (*regidx).payload_size as usize)
-                        .cast(),
-                    (*regidx).payload_size as usize,
-                );
+                        .chunks(payload_size)
+                        .map(|chunk| chunk.to_vec()),
+                )
+                .collect();
+            pairs.sort_by(|a, b| cmp_reg_values(a.0, b.0));
+            list_ref.reg.clear();
+            list_ref.dat.clear();
+            for (reg, mut payload) in pairs {
+                list_ref.reg.push(reg);
+                list_ref.dat.append(&mut payload);
             }
-            libc::free((*list).dat.cast());
-            (*list).dat = tmp_dat;
-
-            let Some(reg_bytes) = std::mem::size_of::<reg_t>().checked_mul((*list).nreg as usize)
-            else {
-                libc::free(ptr.cast());
-                return -1;
-            };
-            let tmp_reg = libc::malloc(reg_bytes).cast::<reg_t>();
-            if tmp_reg.is_null() {
-                libc::free(ptr.cast());
-                return -1;
-            }
-            for i in 0..(*list).nreg as usize {
-                let iori = (*ptr.add(i)).offset_from((*list).reg) as usize;
-                *tmp_reg.add(i) = *(*list).reg.add(iori);
-            }
-            libc::free(ptr.cast());
-            libc::free((*list).reg.cast());
-            (*list).reg = tmp_reg;
-            (*list).mreg = (*list).nreg;
         }
-        (*list).unsorted = 0;
+        list_ref.unsorted = 0;
     }
 
-    (*list).nidx = 0;
     let mut midx: u32 = 0;
-    for j in 0..(*list).nreg as usize {
-        let iend = ibin((*(*list).reg.add(j)).end) as u32;
+    for reg in &list_ref.reg {
+        let iend = ibin(reg.end) as u32;
         if midx <= iend {
             midx = iend;
         }
     }
     midx += 1;
-    let new_idx = libc::calloc(midx as usize, std::mem::size_of::<u32>()).cast::<u32>();
-    if new_idx.is_null() {
-        return -1;
-    }
-    libc::free((*list).idx.cast());
-    (*list).idx = new_idx;
-    (*list).nidx = midx;
+    list_ref.idx.clear();
+    list_ref.idx.resize(midx as usize, 0);
 
-    for j in 0..(*list).nreg {
-        let ibeg = ibin((*(*list).reg.add(j as usize)).beg) as u32;
-        let iend = ibin((*(*list).reg.add(j as usize)).end) as u32;
+    for (j, reg) in list_ref.reg.iter().enumerate() {
+        let ibeg = ibin(reg.beg) as u32;
+        let iend = ibin(reg.end) as u32;
         if ibeg == iend {
-            if *(*list).idx.add(ibeg as usize) == 0 {
-                *(*list).idx.add(ibeg as usize) = j + 1;
+            if list_ref.idx[ibeg as usize] == 0 {
+                list_ref.idx[ibeg as usize] = j as u32 + 1;
             }
         } else {
             for k in ibeg..=iend {
-                if *(*list).idx.add(k as usize) == 0 {
-                    *(*list).idx.add(k as usize) = j + 1;
+                if list_ref.idx[k as usize] == 0 {
+                    list_ref.idx[k as usize] = j as u32 + 1;
                 }
             }
         }
@@ -645,45 +552,47 @@ pub unsafe fn regidx_c_401_regidx_overlap(
     }
     beg = beg.max(0);
     end = end.clamp(0, MAX_COOR_0);
+    let idx_ref = &mut *idx;
 
     let mut iseq = 0;
-    if khash_str2int_get((*idx).seq2regs, chr, &mut iseq) != 0 {
+    if khash_str2int_get(idx_ref.seq2regs_ptr(), chr, &mut iseq) != 0 {
         return 0;
     }
 
-    let list = (*idx).seq.add(iseq as usize);
-    if (*list).nreg == 0 {
+    let list = &mut idx_ref.seq[iseq as usize];
+    if list.reg.is_empty() {
         return 0;
     }
 
     let mut ireg: u32;
-    if (*list).nreg == 1 {
-        if beg > (*(*list).reg).end {
+    if list.reg.len() == 1 {
+        if beg > list.reg[0].end {
             return 0;
         }
-        if end < (*(*list).reg).beg {
+        if end < list.reg[0].beg {
             return 0;
         }
         ireg = 0;
     } else {
-        if (*list).idx.is_null() && regidx_c_335_reglist_build_index_(idx, list) < 0 {
+        let list_ptr = list as *mut reglist_t;
+        if list.idx.is_empty() && regidx_c_335_reglist_build_index_(idx, list_ptr) < 0 {
             return -1;
         }
 
         let ibeg = ibin(beg);
-        if ibeg >= (*list).nidx as c_int {
+        if ibeg >= list.idx.len() as c_int {
             return 0;
         }
 
-        let mut i = *(*list).idx.add(ibeg as usize);
+        let mut i = list.idx[ibeg as usize];
         if i == 0 {
             let mut iend = ibin(end);
-            if iend > (*list).nidx as c_int {
-                iend = (*list).nidx as c_int;
+            if iend > list.idx.len() as c_int {
+                iend = list.idx.len() as c_int;
             }
             let mut k = ibeg;
             while k <= iend {
-                if *(*list).idx.add(k as usize) != 0 {
+                if list.idx[k as usize] != 0 {
                     break;
                 }
                 k += 1;
@@ -691,22 +600,20 @@ pub unsafe fn regidx_c_401_regidx_overlap(
             if k > iend {
                 return 0;
             }
-            i = *(*list).idx.add(k as usize);
+            i = list.idx[k as usize];
         }
         ireg = i - 1;
-        while ireg < (*list).nreg {
-            if (*(*list).reg.add(ireg as usize)).beg > end {
+        while (ireg as usize) < list.reg.len() {
+            if list.reg[ireg as usize].beg > end {
                 return 0;
             }
-            if (*(*list).reg.add(ireg as usize)).end >= beg
-                && (*(*list).reg.add(ireg as usize)).beg <= end
-            {
+            if list.reg[ireg as usize].end >= beg && list.reg[ireg as usize].beg <= end {
                 break;
             }
             ireg += 1;
         }
 
-        if ireg >= (*list).nreg {
+        if (ireg as usize) >= list.reg.len() {
             return 0;
         }
     }
@@ -716,20 +623,21 @@ pub unsafe fn regidx_c_401_regidx_overlap(
     }
 
     let itr_ = (*itr).itr.cast::<itr_t_>();
-    (*itr_).ridx = idx;
-    (*itr_).list = list;
+    (*itr_).ridx = NonNull::new_unchecked(idx);
+    (*itr_).list = Some(NonNull::from(&mut *list));
     (*itr_).beg = beg;
     (*itr_).end = end;
     (*itr_).ireg = ireg;
     (*itr_).active = 0;
 
-    (*itr).seq = (*list).seq;
-    (*itr).beg = (*(*list).reg.add(ireg as usize)).beg;
-    (*itr).end = (*(*list).reg.add(ireg as usize)).end;
-    if (*idx).payload_size != 0 {
-        (*itr).payload = (*list)
+    (*itr).seq = list.seq;
+    (*itr).beg = list.reg[ireg as usize].beg;
+    (*itr).end = list.reg[ireg as usize].end;
+    if idx_ref.payload_size != 0 {
+        (*itr).payload = list
             .dat
-            .add((*idx).payload_size as usize * ireg as usize)
+            .as_mut_ptr()
+            .add(idx_ref.payload_size as usize * ireg as usize)
             .cast();
     }
 
@@ -926,33 +834,38 @@ pub unsafe extern "C" fn regidx_c_545_regidx_parse_reg(
 }
 
 pub unsafe fn regidx_c_584_regitr_init(regidx: *mut regidx_t) -> *mut regitr_t {
-    let regitr = libc::calloc(1, std::mem::size_of::<regitr_t>()).cast::<regitr_t>();
-    if regitr.is_null() {
+    let Some(regidx) = NonNull::new(regidx) else {
         return std::ptr::null_mut();
-    }
-    (*regitr).itr = libc::calloc(1, std::mem::size_of::<itr_t_>());
-    if (*regitr).itr.is_null() {
-        libc::free(regitr.cast());
-        return std::ptr::null_mut();
-    }
-    let itr = (*regitr).itr.cast::<itr_t_>();
-    (*itr).ridx = regidx;
-    (*itr).list = std::ptr::null_mut();
-    regitr
+    };
+    let itr = Box::into_raw(Box::new(itr_t_::new(regidx)));
+    Box::into_raw(Box::new(regitr_t {
+        beg: 0,
+        end: 0,
+        payload: std::ptr::null_mut(),
+        seq: std::ptr::null_mut(),
+        itr: itr.cast(),
+    }))
 }
 
 pub unsafe fn regidx_c_599_regitr_reset(regidx: *mut regidx_t, regitr: *mut regitr_t) {
     let itr = (*regitr).itr.cast::<itr_t_>();
-    libc::memset(itr.cast(), 0, std::mem::size_of::<itr_t_>());
-    (*itr).ridx = regidx;
+    if let Some(regidx) = NonNull::new(regidx) {
+        (*itr).reset(regidx);
+    }
+    (*regitr).beg = 0;
+    (*regitr).end = 0;
+    (*regitr).payload = std::ptr::null_mut();
+    (*regitr).seq = std::ptr::null_mut();
 }
 
 pub unsafe fn regidx_c_606_regitr_destroy(regitr: *mut regitr_t) {
     if regitr.is_null() {
         return;
     }
-    libc::free((*regitr).itr);
-    libc::free(regitr.cast());
+    if !(*regitr).itr.is_null() {
+        drop(Box::from_raw((*regitr).itr.cast::<itr_t_>()));
+    }
+    drop(Box::from_raw(regitr));
 }
 
 pub unsafe fn regidx_c_612_regitr_overlap(regitr: *mut regitr_t) -> c_int {
@@ -967,32 +880,35 @@ pub unsafe fn regidx_c_612_regitr_overlap(regitr: *mut regitr_t) -> c_int {
         return 1;
     }
 
-    let list = (*itr).list;
+    let Some(mut list_ptr) = (*itr).list else {
+        return 0;
+    };
+    let list = list_ptr.as_mut();
     let mut i = (*itr).ireg;
-    while i < (*list).nreg {
-        if (*(*list).reg.add(i as usize)).beg > (*itr).end {
+    while (i as usize) < list.reg.len() {
+        if list.reg[i as usize].beg > (*itr).end {
             return 0;
         }
-        if (*(*list).reg.add(i as usize)).end >= (*itr).beg
-            && (*(*list).reg.add(i as usize)).beg <= (*itr).end
-        {
+        if list.reg[i as usize].end >= (*itr).beg && list.reg[i as usize].beg <= (*itr).end {
             break;
         }
         i += 1;
     }
 
-    if i >= (*list).nreg {
+    if (i as usize) >= list.reg.len() {
         return 0;
     }
 
     (*itr).ireg = i + 1;
-    (*regitr).seq = (*list).seq;
-    (*regitr).beg = (*(*list).reg.add(i as usize)).beg;
-    (*regitr).end = (*(*list).reg.add(i as usize)).end;
-    if (*(*itr).ridx).payload_size != 0 {
-        (*regitr).payload = (*list)
+    (*regitr).seq = list.seq;
+    (*regitr).beg = list.reg[i as usize].beg;
+    (*regitr).end = list.reg[i as usize].end;
+    let regidx = (*itr).ridx.as_ref();
+    if regidx.payload_size != 0 {
+        (*regitr).payload = list
             .dat
-            .add((*(*itr).ridx).payload_size as usize * i as usize)
+            .as_mut_ptr()
+            .add(regidx.payload_size as usize * i as usize)
             .cast();
     }
 
@@ -1005,38 +921,46 @@ pub unsafe fn regidx_c_646_regitr_loop(regitr: *mut regitr_t) -> c_int {
     }
 
     let itr = (*regitr).itr.cast::<itr_t_>();
-    let regidx = (*itr).ridx;
+    let regidx_ptr = (*itr).ridx.as_ptr();
+    let regidx = (*itr).ridx.as_mut();
 
-    if (*regidx).nseq == 0 {
+    if regidx.seq.is_empty() {
         return 0;
     }
 
-    if (*itr).list.is_null() {
-        (*itr).list = (*regidx).seq;
+    if (*itr).list.is_none() {
+        (*itr).list = Some(NonNull::from(&mut regidx.seq[0]));
         (*itr).ireg = 0;
     }
 
-    let mut iseq = (*itr).list.offset_from((*regidx).seq) as usize;
-    if iseq >= (*regidx).nseq as usize {
+    let list_ptr = (*itr).list.unwrap().as_ptr();
+    let mut iseq = regidx
+        .seq
+        .iter()
+        .position(|list| std::ptr::addr_eq(list as *const reglist_t, list_ptr.cast_const()))
+        .unwrap_or(regidx.seq.len());
+    if iseq >= regidx.seq.len() {
         return 0;
     }
 
-    if (*itr).ireg >= (*(*itr).list).nreg {
+    if ((*itr).ireg as usize) >= regidx.seq[iseq].reg.len() {
         iseq += 1;
-        if iseq >= (*regidx).nseq as usize {
+        if iseq >= regidx.seq.len() {
             return 0;
         }
         (*itr).ireg = 0;
-        (*itr).list = (*regidx).seq.add(iseq);
+        (*itr).list = Some(NonNull::from(&mut regidx.seq[iseq]));
     }
 
-    (*regitr).seq = (*(*itr).list).seq;
-    (*regitr).beg = (*(*(*itr).list).reg.add((*itr).ireg as usize)).beg;
-    (*regitr).end = (*(*(*itr).list).reg.add((*itr).ireg as usize)).end;
-    if (*regidx).payload_size != 0 {
-        (*regitr).payload = (*(*itr).list)
+    let list = (*itr).list.unwrap().as_mut();
+    (*regitr).seq = list.seq;
+    (*regitr).beg = list.reg[(*itr).ireg as usize].beg;
+    (*regitr).end = list.reg[(*itr).ireg as usize].end;
+    if (*regidx_ptr).payload_size != 0 {
+        (*regitr).payload = list
             .dat
-            .add((*regidx).payload_size as usize * (*itr).ireg as usize)
+            .as_mut_ptr()
+            .add((*regidx_ptr).payload_size as usize * (*itr).ireg as usize)
             .cast();
     }
     (*itr).ireg += 1;

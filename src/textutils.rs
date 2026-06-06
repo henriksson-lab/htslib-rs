@@ -1,5 +1,5 @@
 use crate::htslib_rs::hts::{hFILE, hts_json_token, isprint_c, kstring_t, size_t};
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::{c_char, c_int, c_void, CStr};
 
 type hts_json_nextfn =
     unsafe fn(arg1: *mut c_void, arg2: *mut c_void, token: *mut hts_json_token) -> c_char;
@@ -270,7 +270,8 @@ pub unsafe fn textutils_c_402_hts_json_fskip_value(fp: *mut hFILE, type_: c_char
         fp.cast(),
         (&mut str_ as *mut kstring_t).cast(),
     );
-    libc::free(str_.s.cast());
+    let str_owner = unsafe { crate::htslib_rs::c_compat::FreeOnDrop::from_raw(str_.s) };
+    drop(str_owner);
     ret
 }
 
@@ -461,7 +462,10 @@ pub unsafe fn sscan_string(mut s: *mut c_char) -> *mut c_char {
 }
 
 pub unsafe fn hts_json_alloc_token() -> *mut hts_json_token {
-    crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<hts_json_token>() as u64).cast()
+    Box::into_raw(Box::new(hts_json_token {
+        type_: 0,
+        str_: std::ptr::null_mut(),
+    }))
 }
 
 pub unsafe fn hts_json_token_type(token: *mut hts_json_token) -> c_char {
@@ -469,7 +473,9 @@ pub unsafe fn hts_json_token_type(token: *mut hts_json_token) -> c_char {
 }
 
 pub unsafe fn hts_json_free_token(token: *mut hts_json_token) {
-    crate::htslib_rs::c_compat::free(token.cast());
+    if !token.is_null() {
+        drop(Box::from_raw(token));
+    }
 }
 
 pub unsafe fn hts_json_token_str(token: *mut hts_json_token) -> *mut c_char {
@@ -545,38 +551,43 @@ pub unsafe fn hts_json_sskip_value(str_: *mut c_char, state: *mut size_t, type_:
 }
 
 pub unsafe fn stringify_argv(argc: c_int, argv: *mut *mut c_char) -> *mut c_char {
-    let mut nbytes = 1usize;
-    for i in 0..argc {
-        if i > 0 {
-            nbytes += 1;
-        }
-        nbytes += libc::strlen(*argv.add(i as usize));
-    }
-    let str_ = crate::htslib_rs::c_compat::malloc(nbytes as u64).cast::<c_char>();
-    if str_.is_null() {
-        return std::ptr::null_mut();
-    }
+    let argc = argc.max(0) as usize;
+    let args = if argc == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(argv, argc)
+    };
+    let mut bytes = Vec::with_capacity(
+        args.iter()
+            .map(|&arg| CStr::from_ptr(arg).to_bytes().len())
+            .sum::<usize>()
+            + argc.saturating_sub(1)
+            + 1,
+    );
 
-    let mut cp = str_;
-    for i in 0..argc {
+    for (i, &arg) in args.iter().enumerate() {
         if i > 0 {
-            *cp = b' ' as c_char;
-            cp = cp.add(1);
+            bytes.push(b' ');
         }
-        let arg = *argv.add(i as usize);
-        let mut j = 0usize;
-        while *arg.add(j) != 0 {
-            if *arg.add(j) == b'\t' as c_char {
-                *cp = b' ' as c_char;
+        bytes.extend(CStr::from_ptr(arg).to_bytes().iter().map(|&byte| {
+            if byte == b'\t' {
+                b' '
             } else {
-                *cp = *arg.add(j);
+                byte
             }
-            cp = cp.add(1);
-            j += 1;
-        }
+        }));
     }
-    *cp = 0;
-    str_
+    bytes.push(0);
+
+    let Some(mut out) = crate::htslib_rs::c_compat::MallocSlice::<c_char>::calloc(bytes.len())
+    else {
+        return std::ptr::null_mut();
+    };
+    for (dst, src) in out.as_mut_slice().iter_mut().zip(bytes) {
+        *dst = src as c_char;
+    }
+    let (ptr, _) = out.into_raw_parts();
+    ptr
 }
 
 pub unsafe fn hts_strprint(
