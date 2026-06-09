@@ -1,5 +1,6 @@
 use crate::htslib_rs::cram;
 use std::ffi::{c_int, c_uint, c_void};
+use std::ptr::NonNull;
 
 use super::poll_wrap::{Pw_events, Pw_fd_type, Pw_item};
 
@@ -7,15 +8,11 @@ const INIT_POLLED_SZ: c_uint = 16;
 const INIT_IDX_SZ: c_uint = 16;
 
 // original: Poll_wrap (htslib/ref_cache/poll_wrap_poll.c:47)
-#[repr(C)]
 pub struct Poll_wrap {
-    pool: *mut cram::pool_alloc_t,
-    polled: *mut libc::pollfd,
-    npolled: c_uint,
-    polled_sz: c_uint,
-    fd_index: *mut c_uint,
-    item_index: *mut *mut Pw_item,
-    idx_sz: c_uint,
+    pool: Option<Box<cram::pool_alloc_t>>,
+    polled: Vec<libc::pollfd>,
+    fd_index: Vec<c_uint>,
+    item_index: Vec<*mut Pw_item>,
     last_out: c_uint,
     need_compact: c_int,
     debug: c_int,
@@ -26,59 +23,48 @@ pub unsafe fn ref_cache_poll_wrap_poll_c_60_pw_close(pw: *mut Poll_wrap) {
     if pw.is_null() {
         return;
     }
-    if !(*pw).pool.is_null() {
-        cram::cram_pooled_alloc_c_84_pool_destroy((*pw).pool);
+    let mut pw = Box::from_raw(pw);
+    if let Some(pool) = pw.pool.take() {
+        cram::pool_destroy_box(pool);
     }
-    if !(*pw).polled.is_null() {
-        libc::free((*pw).polled.cast());
-    }
-    if !(*pw).fd_index.is_null() {
-        libc::free((*pw).fd_index.cast());
-    }
-    if !(*pw).item_index.is_null() {
-        libc::free((*pw).item_index.cast());
-    }
-    libc::free(pw.cast());
 }
 
 // original: pw_init (htslib/ref_cache/poll_wrap_poll.c:69)
 pub unsafe fn ref_cache_poll_wrap_poll_c_69_pw_init(debug: c_int) -> *mut Poll_wrap {
-    let pw = libc::calloc(1, std::mem::size_of::<Poll_wrap>()).cast::<Poll_wrap>();
-    if pw.is_null() {
+    let mut pw = Box::new(Poll_wrap {
+        pool: Some(cram::pool_create(std::mem::size_of::<Pw_item>())),
+        polled: Vec::new(),
+        fd_index: Vec::new(),
+        item_index: Vec::new(),
+        last_out: 0,
+        need_compact: 0,
+        debug,
+    });
+    if pw
+        .polled
+        .try_reserve_exact(INIT_POLLED_SZ as usize)
+        .is_err()
+    {
+        ref_cache_poll_wrap_poll_c_60_pw_close(Box::into_raw(pw));
         return std::ptr::null_mut();
     }
-
-    (*pw).pool = cram::cram_pooled_alloc_c_64_pool_create(std::mem::size_of::<Pw_item>());
-    if (*pw).pool.is_null() {
-        ref_cache_poll_wrap_poll_c_60_pw_close(pw);
+    if pw.fd_index.try_reserve_exact(INIT_IDX_SZ as usize).is_err() {
+        ref_cache_poll_wrap_poll_c_60_pw_close(Box::into_raw(pw));
         return std::ptr::null_mut();
     }
-
-    (*pw).polled_sz = INIT_POLLED_SZ;
-    (*pw).polled =
-        libc::malloc((*pw).polled_sz as usize * std::mem::size_of::<libc::pollfd>()).cast();
-    if (*pw).polled.is_null() {
-        ref_cache_poll_wrap_poll_c_60_pw_close(pw);
+    if pw
+        .item_index
+        .try_reserve_exact(INIT_IDX_SZ as usize)
+        .is_err()
+    {
+        ref_cache_poll_wrap_poll_c_60_pw_close(Box::into_raw(pw));
         return std::ptr::null_mut();
     }
+    pw.fd_index.resize(INIT_IDX_SZ as usize, 0);
+    pw.item_index
+        .resize(INIT_IDX_SZ as usize, std::ptr::null_mut());
 
-    (*pw).idx_sz = INIT_IDX_SZ;
-    (*pw).fd_index = libc::malloc((*pw).idx_sz as usize * std::mem::size_of::<c_uint>()).cast();
-    if (*pw).fd_index.is_null() {
-        ref_cache_poll_wrap_poll_c_60_pw_close(pw);
-        return std::ptr::null_mut();
-    }
-
-    (*pw).item_index =
-        libc::calloc((*pw).idx_sz as usize, std::mem::size_of::<*mut Pw_item>()).cast();
-    if (*pw).item_index.is_null() {
-        ref_cache_poll_wrap_poll_c_60_pw_close(pw);
-        return std::ptr::null_mut();
-    }
-
-    (*pw).debug = debug;
-
-    pw
+    Box::into_raw(pw)
 }
 
 // original: pw_register (htslib/ref_cache/poll_wrap_poll.c:95)
@@ -106,68 +92,54 @@ pub unsafe fn ref_cache_poll_wrap_poll_c_95_pw_register(
         return std::ptr::null_mut();
     }
 
-    if (fd as c_uint) < (*pw).idx_sz && !(*(*pw).item_index.add(fd as usize)).is_null() {
+    let pw_ref = &mut *pw;
+    let fd_idx = fd as usize;
+
+    if fd_idx < pw_ref.item_index.len() && !pw_ref.item_index[fd_idx].is_null() {
         *crate::htslib_rs::c_compat::__errno_location() = libc::EEXIST;
         return std::ptr::null_mut();
     }
 
-    if (*pw).idx_sz <= fd as c_uint {
-        let new_sz = fd as c_uint + 1;
-        let new_index = libc::realloc(
-            (*pw).fd_index.cast(),
-            new_sz as usize * std::mem::size_of::<c_uint>(),
-        )
-        .cast::<c_uint>();
-        if new_index.is_null() {
+    if pw_ref.item_index.len() <= fd_idx {
+        let new_len = fd_idx + 1;
+        let add = new_len - pw_ref.item_index.len();
+        if pw_ref.fd_index.try_reserve_exact(add).is_err()
+            || pw_ref.item_index.try_reserve_exact(add).is_err()
+        {
             return std::ptr::null_mut();
         }
-        (*pw).fd_index = new_index;
-
-        let new_items = libc::realloc(
-            (*pw).item_index.cast(),
-            new_sz as usize * std::mem::size_of::<*mut Pw_item>(),
-        )
-        .cast::<*mut Pw_item>();
-        if new_items.is_null() {
-            return std::ptr::null_mut();
-        }
-        libc::memset(
-            new_items.add((*pw).idx_sz as usize).cast(),
-            0,
-            (new_sz - (*pw).idx_sz) as usize * std::mem::size_of::<*mut Pw_item>(),
-        );
-        (*pw).item_index = new_items;
-        (*pw).idx_sz = new_sz;
+        pw_ref.fd_index.resize(new_len, 0);
+        pw_ref.item_index.resize(new_len, std::ptr::null_mut());
     }
-    if (*pw).npolled == (*pw).polled_sz {
-        let new_sz = (*pw).polled_sz * 2;
-        let new_polled = libc::realloc(
-            (*pw).polled.cast(),
-            new_sz as usize * std::mem::size_of::<libc::pollfd>(),
-        )
-        .cast::<libc::pollfd>();
-        if new_polled.is_null() {
-            return std::ptr::null_mut();
-        }
-        (*pw).polled = new_polled;
-        (*pw).polled_sz = new_sz;
-    }
-
-    let item = cram::cram_pooled_alloc_c_115_pool_alloc((*pw).pool).cast::<Pw_item>();
-    if item.is_null() {
+    if pw_ref.polled.len() == pw_ref.polled.capacity()
+        && pw_ref
+            .polled
+            .try_reserve_exact(pw_ref.polled.capacity().max(1))
+            .is_err()
+    {
         return std::ptr::null_mut();
     }
 
-    (*item).fd = fd;
-    (*item).fd_type = fd_type;
-    (*item).userp = userp;
+    let Some(pool) = pw_ref.pool.as_mut() else {
+        return std::ptr::null_mut();
+    };
+    let Some(mut item) = cram::pool_alloc(pool).map(NonNull::cast::<Pw_item>) else {
+        return std::ptr::null_mut();
+    };
 
-    *(*pw).fd_index.add(fd as usize) = (*pw).npolled;
-    *(*pw).item_index.add(fd as usize) = item;
+    item.as_mut().fd = fd;
+    item.as_mut().fd_type = fd_type;
+    item.as_mut().userp = userp;
+    let item = item.as_ptr();
 
-    (*(*pw).polled.add((*pw).npolled as usize)).fd = fd;
-    (*(*pw).polled.add((*pw).npolled as usize)).events = init_events as libc::c_short;
-    (*pw).npolled += 1;
+    pw_ref.fd_index[fd_idx] = pw_ref.polled.len() as c_uint;
+    pw_ref.item_index[fd_idx] = item;
+
+    pw_ref.polled.push(libc::pollfd {
+        fd,
+        events: init_events as libc::c_short,
+        revents: 0,
+    });
 
     item
 }
@@ -188,18 +160,14 @@ pub unsafe fn ref_cache_poll_wrap_poll_c_157_pw_mod(
         );
     }
 
-    if (*item).fd < 0
-        || (*item).fd as c_uint >= (*pw).idx_sz
-        || (*(*pw).item_index.add((*item).fd as usize)).is_null()
-    {
+    let pw_ref = &mut *pw;
+    let fd_idx = (*item).fd as usize;
+    if (*item).fd < 0 || fd_idx >= pw_ref.item_index.len() || pw_ref.item_index[fd_idx].is_null() {
         *crate::htslib_rs::c_compat::__errno_location() = libc::ENOENT;
         return -1;
     }
 
-    (*(*pw)
-        .polled
-        .add(*(*pw).fd_index.add((*item).fd as usize) as usize))
-    .events = events as libc::c_short;
+    pw_ref.polled[pw_ref.fd_index[fd_idx] as usize].events = events as libc::c_short;
     0
 }
 
@@ -210,68 +178,58 @@ pub unsafe fn ref_cache_poll_wrap_poll_c_173_pw_wait(
     max_events: c_int,
     timeout: c_int,
 ) -> c_int {
-    let mut j;
+    let pw_ref = &mut *pw;
     let mut out = 0;
 
-    if (*pw).need_compact != 0 {
-        j = 0;
-        for i in 0..(*pw).npolled {
-            if i == (*pw).last_out {
-                (*pw).last_out = j;
+    if pw_ref.need_compact != 0 {
+        let mut j = 0usize;
+        for i in 0..pw_ref.polled.len() {
+            if i as c_uint == pw_ref.last_out {
+                pw_ref.last_out = j as c_uint;
             }
-            if (*(*pw)
-                .item_index
-                .add((*(*pw).polled.add(i as usize)).fd as usize))
-            .is_null()
-            {
+            if pw_ref.item_index[pw_ref.polled[i].fd as usize].is_null() {
                 continue;
             }
             if i != j {
-                *(*pw).polled.add(j as usize) = *(*pw).polled.add(i as usize);
-                *(*pw)
-                    .fd_index
-                    .add((*(*pw).polled.add(j as usize)).fd as usize) = j;
+                pw_ref.polled[j] = pw_ref.polled[i];
+                pw_ref.fd_index[pw_ref.polled[j].fd as usize] = j as c_uint;
             }
             j += 1;
         }
-        (*pw).need_compact = 0;
-        (*pw).npolled = j;
+        pw_ref.need_compact = 0;
+        pw_ref.polled.truncate(j);
     }
 
     let res = libc::poll(
-        (*pw).polled,
-        (*pw).npolled as libc::nfds_t,
+        pw_ref.polled.as_mut_ptr(),
+        pw_ref.polled.len() as libc::nfds_t,
         if out == 0 { timeout } else { 0 },
     );
     if res < 0 {
         return res;
     }
 
-    let end = (*pw).last_out;
-    while (*pw).last_out < (*pw).npolled && out < max_events {
-        if (*(*pw).polled.add((*pw).last_out as usize)).revents == 0 {
-            (*pw).last_out += 1;
+    let end = pw_ref.last_out;
+    while (pw_ref.last_out as usize) < pw_ref.polled.len() && out < max_events {
+        if pw_ref.polled[pw_ref.last_out as usize].revents == 0 {
+            pw_ref.last_out += 1;
             continue;
         }
-        (*events.add(out as usize)).events =
-            (*(*pw).polled.add((*pw).last_out as usize)).revents as u32;
-        (*events.add(out as usize)).item = *(*pw)
-            .item_index
-            .add((*(*pw).polled.add((*pw).last_out as usize)).fd as usize);
+        let polled = pw_ref.polled[pw_ref.last_out as usize];
+        (*events.add(out as usize)).events = polled.revents as u32;
+        (*events.add(out as usize)).item = pw_ref.item_index[polled.fd as usize];
         out += 1;
-        (*pw).last_out += 1;
+        pw_ref.last_out += 1;
     }
-    (*pw).last_out = 0;
-    while (*pw).last_out < end && out < max_events {
-        if (*(*pw).polled.add((*pw).last_out as usize)).revents != 0 {
-            (*events.add(out as usize)).events =
-                (*(*pw).polled.add((*pw).last_out as usize)).revents as u32;
-            (*events.add(out as usize)).item = *(*pw)
-                .item_index
-                .add((*(*pw).polled.add((*pw).last_out as usize)).fd as usize);
+    pw_ref.last_out = 0;
+    while pw_ref.last_out < end && out < max_events {
+        let polled = pw_ref.polled[pw_ref.last_out as usize];
+        if polled.revents != 0 {
+            (*events.add(out as usize)).events = polled.revents as u32;
+            (*events.add(out as usize)).item = pw_ref.item_index[polled.fd as usize];
             out += 1;
         }
-        (*pw).last_out += 1;
+        pw_ref.last_out += 1;
     }
 
     out
@@ -299,20 +257,18 @@ pub unsafe fn ref_cache_poll_wrap_poll_c_220_pw_remove(
         );
     }
 
-    if (*item).fd < 0
-        || (*item).fd as c_uint >= (*pw).idx_sz
-        || (*(*pw).item_index.add((*item).fd as usize)).is_null()
-    {
+    let pw_ref = &mut *pw;
+    let fd_idx = (*item).fd as usize;
+    if (*item).fd < 0 || fd_idx >= pw_ref.item_index.len() || pw_ref.item_index[fd_idx].is_null() {
         *crate::htslib_rs::c_compat::__errno_location() = libc::ENOENT;
         return -1;
     }
-    *(*pw).item_index.add((*item).fd as usize) = std::ptr::null_mut();
-    (*(*pw)
-        .polled
-        .add(*(*pw).fd_index.add((*item).fd as usize) as usize))
-    .events = 0;
-    (*pw).need_compact = 1;
-    cram::cram_pooled_alloc_c_144_pool_free((*pw).pool, item.cast());
+    pw_ref.item_index[fd_idx] = std::ptr::null_mut();
+    pw_ref.polled[pw_ref.fd_index[fd_idx] as usize].events = 0;
+    pw_ref.need_compact = 1;
+    if let (Some(pool), Some(item)) = (pw_ref.pool.as_mut(), NonNull::new(item.cast::<u8>())) {
+        cram::pool_free(pool, item);
+    }
     if do_close == 0 {
         return 0;
     }

@@ -303,7 +303,7 @@ unsafe fn stringify_argv_native(args: &[&CStr]) -> Vec<u8> {
     let p = htslib_rs::textutils::stringify_argv(ptrs.len() as c_int, ptrs.as_mut_ptr());
     assert!(!p.is_null());
     let bytes = CStr::from_ptr(p).to_bytes().to_vec();
-    libc::free(p.cast());
+    htslib_rs::textutils::stringify_argv_free(p);
     bytes
 }
 

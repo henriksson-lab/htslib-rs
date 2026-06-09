@@ -119,43 +119,35 @@ pub const ORDER_GO_REFERENCE: c_int = 2;
 pub(crate) const SEQI_RC: [c_int; 16] = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15];
 pub(crate) const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
 
-fn set_pileup_is_del(p: *mut bam_pileup1_t, value: bool) {
-    unsafe {
-        if value {
-            (*p).bitfields |= 1;
-        } else {
-            (*p).bitfields &= !1;
-        }
+fn set_pileup_is_del(p: &mut bam_pileup1_t, value: bool) {
+    if value {
+        p.bitfields |= 1;
+    } else {
+        p.bitfields &= !1;
     }
 }
 
-fn set_pileup_is_head(p: *mut bam_pileup1_t, value: bool) {
-    unsafe {
-        if value {
-            (*p).bitfields |= 1 << 1;
-        } else {
-            (*p).bitfields &= !(1 << 1);
-        }
+fn set_pileup_is_head(p: &mut bam_pileup1_t, value: bool) {
+    if value {
+        p.bitfields |= 1 << 1;
+    } else {
+        p.bitfields &= !(1 << 1);
     }
 }
 
-fn set_pileup_is_tail(p: *mut bam_pileup1_t, value: bool) {
-    unsafe {
-        if value {
-            (*p).bitfields |= 1 << 2;
-        } else {
-            (*p).bitfields &= !(1 << 2);
-        }
+fn set_pileup_is_tail(p: &mut bam_pileup1_t, value: bool) {
+    if value {
+        p.bitfields |= 1 << 2;
+    } else {
+        p.bitfields &= !(1 << 2);
     }
 }
 
-fn set_pileup_is_refskip(p: *mut bam_pileup1_t, value: bool) {
-    unsafe {
-        if value {
-            (*p).bitfields |= 1 << 3;
-        } else {
-            (*p).bitfields &= !(1 << 3);
-        }
+fn set_pileup_is_refskip(p: &mut bam_pileup1_t, value: bool) {
+    if value {
+        p.bitfields |= 1 << 3;
+    } else {
+        p.bitfields &= !(1 << 3);
     }
 }
 
@@ -471,22 +463,16 @@ pub struct olap_hash_t {
 
 type OlapHash = HashMap<Vec<u8>, NonNull<lbnode_t>>;
 
-fn olap_hash_new_raw() -> *mut olap_hash_t {
-    Box::into_raw(Box::new(OlapHash::new())).cast::<olap_hash_t>()
+fn olap_hash_new() -> Box<OlapHash> {
+    Box::new(OlapHash::new())
 }
 
-unsafe fn olap_hash_mut(ptr: *mut olap_hash_t) -> Option<&'static mut OlapHash> {
-    if ptr.is_null() {
-        None
-    } else {
-        Some(&mut *ptr.cast::<OlapHash>())
-    }
+unsafe fn olap_hash_mut(ptr: NonNull<olap_hash_t>) -> &'static mut OlapHash {
+    &mut *ptr.as_ptr().cast::<OlapHash>()
 }
 
-unsafe fn olap_hash_free(ptr: *mut olap_hash_t) {
-    if !ptr.is_null() {
-        drop(Box::from_raw(ptr.cast::<OlapHash>()));
-    }
+unsafe fn olap_hash_free(ptr: NonNull<olap_hash_t>) {
+    drop(Box::from_raw(ptr.as_ptr().cast::<OlapHash>()));
 }
 
 pub type bam_plp_t = *mut bam_plp_s;
@@ -496,7 +482,7 @@ pub type bam_plp_constructor_f =
 
 #[repr(C)]
 pub struct bam_plp_s {
-    pub mp: Option<NonNull<mempool_t>>,
+    pub mp: Option<Box<mempool_t>>,
     pub head: Option<NonNull<lbnode_t>>,
     pub tail: Option<NonNull<lbnode_t>>,
     pub tid: i32,
@@ -5451,7 +5437,10 @@ unsafe extern "C" fn sam_c_1210_bam_sym_lookup(
             if ks_resize(s, (*b).core.l_qseq as usize + 1) < 0 {
                 return -1;
             }
-            nibble2base(bam_get_seq(b).cast_mut(), (*s).s, (*b).core.l_qseq);
+            let seq_len = (*b).core.l_qseq as usize;
+            let packed = std::slice::from_raw_parts(bam_get_seq(b), seq_len.div_ceil(2));
+            let seq = std::slice::from_raw_parts_mut((*s).s, seq_len);
+            nibble2base(packed, seq);
             *(*s).s.add((*b).core.l_qseq as usize) = 0;
             (*s).l = (*b).core.l_qseq as usize;
             (*res).is_str = 1;
@@ -5542,7 +5531,7 @@ pub unsafe fn sam_c_1535_sam_passes_filter(
         d: 0.0,
     };
     if hts_filter_eval2(
-        filt.cast::<hts_filter_t>(),
+        &mut *filt.cast::<hts_filter_t>(),
         (&mut hb as *mut hb_pair).cast(),
         Some(sam_c_1210_bam_sym_lookup),
         &mut res,
@@ -5558,11 +5547,7 @@ pub unsafe fn sam_c_1535_sam_passes_filter(
 }
 
 unsafe fn sam_c_3786_fastq_state_init(name_char: c_int) -> *mut fastq_state {
-    let x = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<fastq_state>() as u64)
-        .cast::<fastq_state>();
-    if x.is_null() {
-        return std::ptr::null_mut();
-    }
+    let x = Box::into_raw(Box::new(mem::zeroed::<fastq_state>()));
     (*x).BC[0] = b'B' as c_char;
     (*x).BC[1] = b'C' as c_char;
     (*x).BC[2] = 0;
@@ -5574,7 +5559,7 @@ unsafe fn sam_c_3786_fastq_state_init(name_char: c_int) -> *mut fastq_state {
         crate::htslib_rs::c_compat::REG_EXTENDED,
     ) != 0
     {
-        crate::htslib_rs::c_compat::free(x.cast());
+        drop(Box::from_raw(x));
         return std::ptr::null_mut();
     }
 
@@ -5594,7 +5579,7 @@ pub unsafe fn sam_c_3802_fastq_state_destroy(fp: *mut htsFile) {
             crate::htslib_rs::c_compat::free(tags.cast());
         }
         crate::htslib_rs::c_compat::regfree(&mut (*x).regex);
-        crate::htslib_rs::c_compat::free((*fp).state);
+        drop(Box::from_raw(x));
         (*fp).state = std::ptr::null_mut();
     }
 }
@@ -6299,7 +6284,7 @@ pub unsafe fn realloc_bam_data(b: *mut bam1_t, desired: usize) -> c_int {
 }
 
 pub unsafe fn bam_init1() -> *mut bam1_t {
-    crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<bam1_t>() as u64).cast()
+    Box::into_raw(Box::new(mem::zeroed::<bam1_t>()))
 }
 
 pub unsafe fn bam_destroy1(b: *mut bam1_t) {
@@ -6315,7 +6300,7 @@ pub unsafe fn bam_destroy1(b: *mut bam1_t) {
         }
     }
     if (bam_get_mempolicy(b) & BAM_USER_OWNS_STRUCT) == 0 {
-        crate::htslib_rs::c_compat::free(b.cast());
+        drop(Box::from_raw(b));
     }
 }
 
@@ -6349,71 +6334,70 @@ pub unsafe fn bam_dup1(bsrc: *const bam1_t) -> *mut bam1_t {
     bdst
 }
 
-pub unsafe fn mp_init() -> *mut mempool_t {
-    Box::into_raw(Box::new(mempool_t {
+pub fn mp_init() -> Box<mempool_t> {
+    Box::new(mempool_t {
         cnt: 0,
         n: 0,
         max: 0,
         padding_0: 0,
         buf: Vec::new(),
-    }))
+    })
 }
 
-pub unsafe fn mp_destroy(mp: *mut mempool_t) {
-    for node in (*mp).buf.drain(..) {
+pub unsafe fn mp_destroy(mut mp: Box<mempool_t>) {
+    for node in mp.buf.drain(..) {
         let node = node.as_ptr();
         crate::htslib_rs::c_compat::free((*node).b.data.cast());
         crate::htslib_rs::c_compat::free(node.cast());
     }
-    drop(Box::from_raw(mp));
 }
 
-pub unsafe fn mp_alloc(mp: *mut mempool_t) -> *mut lbnode_t {
-    (*mp).cnt += 1;
-    if (*mp).n == 0 {
-        crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<lbnode_t>() as u64).cast()
+pub unsafe fn mp_alloc(mp: &mut mempool_t) -> Option<NonNull<lbnode_t>> {
+    mp.cnt += 1;
+    if mp.n == 0 {
+        NonNull::new(
+            crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<lbnode_t>() as u64).cast(),
+        )
     } else {
-        let node = (*mp)
+        let node = mp
             .buf
             .pop()
             .expect("mempool free-list length tracks buffered nodes");
-        (*mp).n = (*mp).buf.len() as c_int;
-        node.as_ptr()
+        mp.n = mp.buf.len() as c_int;
+        Some(node)
     }
 }
 
-pub unsafe fn mp_free(mp: *mut mempool_t, p: *mut lbnode_t) {
-    (*mp).cnt -= 1;
-    (*p).next = None;
-    if (*mp).n == (*mp).max {
-        (*mp).max = if (*mp).max != 0 { (*mp).max << 1 } else { 256 };
-        if (*mp).buf.capacity() < (*mp).max as usize {
-            (*mp).buf.reserve((*mp).max as usize - (*mp).buf.capacity());
+pub unsafe fn mp_free(mp: &mut mempool_t, mut p: NonNull<lbnode_t>) {
+    mp.cnt -= 1;
+    p.as_mut().next = None;
+    if mp.n == mp.max {
+        mp.max = if mp.max != 0 { mp.max << 1 } else { 256 };
+        if mp.buf.capacity() < mp.max as usize {
+            mp.buf.reserve(mp.max as usize - mp.buf.capacity());
         }
     }
-    (*mp)
-        .buf
-        .push(NonNull::new(p).expect("mempool nodes are non-null"));
-    (*mp).n = (*mp).buf.len() as c_int;
+    mp.buf.push(p);
+    mp.n = mp.buf.len() as c_int;
 }
 
-pub unsafe fn resolve_cigar2(p: *mut bam_pileup1_t, pos: hts_pos_t, s: *mut cstate_t) -> c_int {
-    let b = (*p).b;
+pub unsafe fn resolve_cigar2(p: &mut bam_pileup1_t, pos: hts_pos_t, s: &mut cstate_t) -> c_int {
+    let b = p.b;
     let c = &(*b).core;
     let cigar = bam_get_cigar(b);
 
-    if (*s).k == -1 {
-        (*p).qpos = 0;
+    if s.k == -1 {
+        p.qpos = 0;
         if c.n_cigar == 1 {
             let op = bam_cigar_op(*cigar);
             if op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF {
-                (*s).k = 0;
-                (*s).x = c.pos;
-                (*s).y = 0;
+                s.k = 0;
+                s.x = c.pos;
+                s.y = 0;
             }
         } else {
-            (*s).x = c.pos;
-            (*s).y = 0;
+            s.x = c.pos;
+            s.y = 0;
             let mut k = 0;
             while k < c.n_cigar {
                 let cg = *cigar.add(k as usize);
@@ -6427,37 +6411,37 @@ pub unsafe fn resolve_cigar2(p: *mut bam_pileup1_t, pos: hts_pos_t, s: *mut csta
                 {
                     break;
                 } else if op == BAM_CINS || op == BAM_CSOFT_CLIP {
-                    (*s).y += l;
+                    s.y += l;
                 }
                 k += 1;
             }
             assert!(k < c.n_cigar);
-            (*s).k = k as c_int;
+            s.k = k as c_int;
         }
     } else {
-        let mut l = bam_cigar_oplen(*cigar.add((*s).k as usize)) as hts_pos_t;
-        if pos - (*s).x >= l {
-            assert!((*s).k < c.n_cigar as c_int);
-            let op = bam_cigar_op(*cigar.add((*s).k as usize + 1));
+        let mut l = bam_cigar_oplen(*cigar.add(s.k as usize)) as hts_pos_t;
+        if pos - s.x >= l {
+            assert!(s.k < c.n_cigar as c_int);
+            let op = bam_cigar_op(*cigar.add(s.k as usize + 1));
             if op == BAM_CMATCH
                 || op == BAM_CDEL
                 || op == BAM_CREF_SKIP
                 || op == BAM_CEQUAL
                 || op == BAM_CDIFF
             {
-                let cur_op = bam_cigar_op(*cigar.add((*s).k as usize));
+                let cur_op = bam_cigar_op(*cigar.add(s.k as usize));
                 if cur_op == BAM_CMATCH || cur_op == BAM_CEQUAL || cur_op == BAM_CDIFF {
-                    (*s).y += l as c_int;
+                    s.y += l as c_int;
                 }
-                (*s).x += l;
-                (*s).k += 1;
+                s.x += l;
+                s.k += 1;
             } else {
-                let cur_op = bam_cigar_op(*cigar.add((*s).k as usize));
+                let cur_op = bam_cigar_op(*cigar.add(s.k as usize));
                 if cur_op == BAM_CMATCH || cur_op == BAM_CEQUAL || cur_op == BAM_CDIFF {
-                    (*s).y += l as c_int;
+                    s.y += l as c_int;
                 }
-                (*s).x += l;
-                let mut k = (*s).k + 1;
+                s.x += l;
+                let mut k = s.k + 1;
                 while k < c.n_cigar as c_int {
                     let cg = *cigar.add(k as usize);
                     let op = bam_cigar_op(cg);
@@ -6470,53 +6454,53 @@ pub unsafe fn resolve_cigar2(p: *mut bam_pileup1_t, pos: hts_pos_t, s: *mut csta
                     {
                         break;
                     } else if op == BAM_CINS || op == BAM_CSOFT_CLIP {
-                        (*s).y += l as c_int;
+                        s.y += l as c_int;
                     }
                     k += 1;
                 }
-                (*s).k = k;
+                s.k = k;
             }
-            assert!((*s).k < c.n_cigar as c_int);
+            assert!(s.k < c.n_cigar as c_int);
         }
     }
 
-    let op = bam_cigar_op(*cigar.add((*s).k as usize));
-    let l = bam_cigar_oplen(*cigar.add((*s).k as usize)) as hts_pos_t;
+    let op = bam_cigar_op(*cigar.add(s.k as usize));
+    let l = bam_cigar_oplen(*cigar.add(s.k as usize)) as hts_pos_t;
     set_pileup_is_del(p, false);
-    (*p).indel = 0;
+    p.indel = 0;
     set_pileup_is_refskip(p, false);
-    if (*s).x + l - 1 == pos && (*s).k + 1 < c.n_cigar as c_int {
-        let mut op2 = bam_cigar_op(*cigar.add((*s).k as usize + 1));
-        let mut l2 = bam_cigar_oplen(*cigar.add((*s).k as usize + 1)) as c_int;
+    if s.x + l - 1 == pos && s.k + 1 < c.n_cigar as c_int {
+        let mut op2 = bam_cigar_op(*cigar.add(s.k as usize + 1));
+        let mut l2 = bam_cigar_oplen(*cigar.add(s.k as usize + 1)) as c_int;
         if op2 == BAM_CDEL && op != BAM_CDEL {
-            (*p).indel = -l2;
-            let mut k = (*s).k + 2;
+            p.indel = -l2;
+            let mut k = s.k + 2;
             while k < c.n_cigar as c_int {
                 op2 = bam_cigar_op(*cigar.add(k as usize));
                 l2 = bam_cigar_oplen(*cigar.add(k as usize)) as c_int;
                 if op2 == BAM_CDEL {
-                    (*p).indel -= l2;
+                    p.indel -= l2;
                 } else {
                     break;
                 }
                 k += 1;
             }
         } else if op2 == BAM_CINS {
-            (*p).indel = l2;
-            let mut k = (*s).k + 2;
+            p.indel = l2;
+            let mut k = s.k + 2;
             while k < c.n_cigar as c_int {
                 op2 = bam_cigar_op(*cigar.add(k as usize));
                 l2 = bam_cigar_oplen(*cigar.add(k as usize)) as c_int;
                 if op2 == BAM_CINS {
-                    (*p).indel += l2;
+                    p.indel += l2;
                 } else if op2 != BAM_CPAD {
                     break;
                 }
                 k += 1;
             }
-        } else if op2 == BAM_CPAD && (*s).k + 2 < c.n_cigar as c_int {
+        } else if op2 == BAM_CPAD && s.k + 2 < c.n_cigar as c_int {
             let mut l3 = 0;
-            let mut k = (*s).k + 2;
+            let mut k = s.k + 2;
             while k < c.n_cigar as c_int {
                 op2 = bam_cigar_op(*cigar.add(k as usize));
                 l2 = bam_cigar_oplen(*cigar.add(k as usize)) as c_int;
@@ -6533,20 +6517,20 @@ pub unsafe fn resolve_cigar2(p: *mut bam_pileup1_t, pos: hts_pos_t, s: *mut csta
                 k += 1;
             }
             if l3 > 0 {
-                (*p).indel = l3;
+                p.indel = l3;
             }
         }
     }
     if op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF {
-        (*p).qpos = (*s).y + (pos - (*s).x) as c_int;
+        p.qpos = s.y + (pos - s.x) as c_int;
     } else if op == BAM_CDEL || op == BAM_CREF_SKIP {
         set_pileup_is_del(p, true);
-        (*p).qpos = (*s).y;
+        p.qpos = s.y;
         set_pileup_is_refskip(p, op == BAM_CREF_SKIP);
     }
     set_pileup_is_head(p, pos == c.pos);
-    set_pileup_is_tail(p, pos == (*s).end);
-    (*p).cigar_ind = (*s).k;
+    set_pileup_is_tail(p, pos == s.end);
+    p.cigar_ind = s.k;
     1
 }
 
@@ -6665,11 +6649,11 @@ unsafe fn cigar_iref2iseq_next(
     -1
 }
 
-unsafe fn tweak_overlap_quality(a: *mut bam1_t, b: *mut bam1_t) -> c_int {
+unsafe fn tweak_overlap_quality(a: &mut bam1_t, b: &mut bam1_t) -> c_int {
     let mut a_cigar = bam_get_cigar(a);
-    let a_cigar_max = a_cigar.add((*a).core.n_cigar as usize);
+    let a_cigar_max = a_cigar.add(a.core.n_cigar as usize);
     let mut b_cigar = bam_get_cigar(b);
-    let b_cigar_max = b_cigar.add((*b).core.n_cigar as usize);
+    let b_cigar_max = b_cigar.add(b.core.n_cigar as usize);
     let mut a_icig = 0;
     let mut a_iseq = 0;
     let mut b_icig = 0;
@@ -6678,9 +6662,9 @@ unsafe fn tweak_overlap_quality(a: *mut bam1_t, b: *mut bam1_t) -> c_int {
     let b_qual = bam_get_qual(b) as *mut u8;
     let a_seq = bam_get_seq(a);
     let b_seq = bam_get_seq(b);
-    let mut iref = (*b).core.pos;
-    let mut a_iref = iref - (*a).core.pos;
-    let mut b_iref = iref - (*b).core.pos;
+    let mut iref = b.core.pos;
+    let mut a_iref = iref - a.core.pos;
+    let mut b_iref = iref - b.core.pos;
 
     let mut a_ret = cigar_iref2iseq_set(
         &mut a_cigar,
@@ -6710,7 +6694,7 @@ unsafe fn tweak_overlap_quality(a: *mut bam1_t, b: *mut bam1_t) -> c_int {
     };
 
     loop {
-        while a_ret >= 0 && a_iref >= 0 && a_iref < iref - (*a).core.pos {
+        while a_ret >= 0 && a_iref >= 0 && a_iref < iref - a.core.pos {
             a_ret = cigar_iref2iseq_next(
                 &mut a_cigar,
                 a_cigar_max,
@@ -6722,7 +6706,7 @@ unsafe fn tweak_overlap_quality(a: *mut bam1_t, b: *mut bam1_t) -> c_int {
         if a_ret < 0 {
             return if a_ret < -1 { -1 } else { 0 };
         }
-        while b_ret >= 0 && b_iref >= 0 && b_iref < iref - (*b).core.pos {
+        while b_ret >= 0 && b_iref >= 0 && b_iref < iref - b.core.pos {
             b_ret = cigar_iref2iseq_next(
                 &mut b_cigar,
                 b_cigar_max,
@@ -6734,16 +6718,16 @@ unsafe fn tweak_overlap_quality(a: *mut bam1_t, b: *mut bam1_t) -> c_int {
         if b_ret < 0 {
             return if b_ret < -1 { -1 } else { 0 };
         }
-        if iref < a_iref + (*a).core.pos {
-            iref = a_iref + (*a).core.pos;
+        if iref < a_iref + a.core.pos {
+            iref = a_iref + a.core.pos;
         }
-        if iref < b_iref + (*b).core.pos {
-            iref = b_iref + (*b).core.pos;
+        if iref < b_iref + b.core.pos {
+            iref = b_iref + b.core.pos;
         }
         iref += 1;
 
-        if a_iref + (*a).core.pos != b_iref + (*b).core.pos {
-            if a_iref + (*a).core.pos < b_iref + (*b).core.pos
+        if a_iref + a.core.pos != b_iref + b.core.pos {
+            if a_iref + a.core.pos < b_iref + b.core.pos
                 && b_cigar > bam_get_cigar(b)
                 && bam_cigar_op(*b_cigar.sub(1)) == BAM_CDEL
             {
@@ -6763,7 +6747,7 @@ unsafe fn tweak_overlap_quality(a: *mut bam1_t, b: *mut bam1_t) -> c_int {
                     if a_ret < 0 {
                         return if a_ret < -1 { -1 } else { 0 };
                     }
-                    if a_iref + (*a).core.pos >= b_iref + (*b).core.pos {
+                    if a_iref + a.core.pos >= b_iref + b.core.pos {
                         break;
                     }
                 }
@@ -6784,7 +6768,7 @@ unsafe fn tweak_overlap_quality(a: *mut bam1_t, b: *mut bam1_t) -> c_int {
                     if b_ret < 0 {
                         return if b_ret < -1 { -1 } else { 0 };
                     }
-                    if b_iref + (*b).core.pos >= a_iref + (*a).core.pos {
+                    if b_iref + b.core.pos >= a_iref + a.core.pos {
                         break;
                     }
                 }
@@ -6793,7 +6777,7 @@ unsafe fn tweak_overlap_quality(a: *mut bam1_t, b: *mut bam1_t) -> c_int {
             }
         }
 
-        if a_iseq > (*a).core.l_qseq as hts_pos_t || b_iseq > (*b).core.l_qseq as hts_pos_t {
+        if a_iseq > a.core.l_qseq as hts_pos_t || b_iseq > b.core.l_qseq as hts_pos_t {
             return -1;
         }
         let ai = a_iseq as usize;
@@ -6816,59 +6800,52 @@ unsafe fn tweak_overlap_quality(a: *mut bam1_t, b: *mut bam1_t) -> c_int {
     }
 }
 
-unsafe fn overlap_push(iter: bam_plp_t, node: *mut lbnode_t) -> c_int {
-    if (*iter).overlaps.is_none() {
+unsafe fn overlap_push(iter: &mut bam_plp_s, mut node: NonNull<lbnode_t>) -> c_int {
+    if iter.overlaps.is_none() {
         return 0;
     }
-    if (((*node).b.core.flag as c_int) & BAM_FMUNMAP) != 0
-        || (((*node).b.core.flag as c_int) & BAM_FPROPER_PAIR) == 0
+    let node_ref = node.as_mut();
+    if ((node_ref.b.core.flag as c_int) & BAM_FMUNMAP) != 0
+        || ((node_ref.b.core.flag as c_int) & BAM_FPROPER_PAIR) == 0
     {
         return 0;
     }
-    if ((*node).b.core.mtid >= 0 && (*node).b.core.tid != (*node).b.core.mtid)
-        || ((*node).b.core.isize.abs() >= 2 * (*node).b.core.l_qseq as hts_pos_t
-            && (*node).b.core.mpos >= (*node).end)
+    if (node_ref.b.core.mtid >= 0 && node_ref.b.core.tid != node_ref.b.core.mtid)
+        || (node_ref.b.core.isize.abs() >= 2 * node_ref.b.core.l_qseq as hts_pos_t
+            && node_ref.b.core.mpos >= node_ref.end)
     {
         return 0;
     }
 
-    let Some(overlaps) = olap_hash_mut((*iter).overlaps.unwrap().as_ptr()) else {
-        return 0;
-    };
-    let key = CStr::from_ptr(bam_get_qname(&(*node).b))
+    let overlaps = olap_hash_mut(iter.overlaps.unwrap());
+    let key = CStr::from_ptr(bam_get_qname(&node_ref.b))
         .to_bytes()
         .to_vec();
     if let Some(a) = overlaps.remove(&key) {
         let a = a.as_ptr();
-        let err = tweak_overlap_quality(&mut (*a).b, &mut (*node).b);
+        let err = tweak_overlap_quality(&mut (*a).b, &mut node_ref.b);
         debug_assert_eq!((*a).end - 1, (*a).s.end);
         err
     } else {
-        if (*node).b.core.mpos >= (*node).b.core.pos
-            || (((*node).b.core.flag as c_int) & BAM_FPAIRED) != 0 && (*node).b.core.mpos == -1
+        if node_ref.b.core.mpos >= node_ref.b.core.pos
+            || ((node_ref.b.core.flag as c_int) & BAM_FPAIRED) != 0 && node_ref.b.core.mpos == -1
         {
-            if let Some(node) = NonNull::new(node) {
-                overlaps.insert(key, node);
-            }
+            overlaps.insert(key, node);
         }
         0
     }
 }
 
-unsafe fn overlap_remove(iter: bam_plp_t, b: *const bam1_t) {
-    if (*iter).overlaps.is_none() {
+unsafe fn overlap_remove(iter: &mut bam_plp_s, b: Option<&bam1_t>) {
+    if iter.overlaps.is_none() {
         return;
     }
-    let Some(overlaps) = olap_hash_mut((*iter).overlaps.unwrap().as_ptr()) else {
-        return;
-    };
-    if b.is_null() {
+    let overlaps = olap_hash_mut(iter.overlaps.unwrap());
+    let Some(b) = b else {
         overlaps.clear();
         return;
-    }
-    if ((*b).core.flag as c_int & BAM_FUNMAP) != 0
-        || ((*b).core.flag as c_int & BAM_FPROPER_PAIR) == 0
-    {
+    };
+    if (b.core.flag as c_int & BAM_FUNMAP) != 0 || (b.core.flag as c_int & BAM_FPROPER_PAIR) == 0 {
         return;
     }
     let key = CStr::from_ptr(bam_get_qname(b)).to_bytes();
@@ -8471,10 +8448,10 @@ unsafe extern "C" fn sam_readrec_rest(
 }
 
 pub unsafe fn bam_plp_init(_func: bam_plp_auto_f, _data: *mut c_void) -> bam_plp_t {
-    let mp = mp_init();
-    let head = NonNull::new(mp_alloc(mp));
+    let mut mp = mp_init();
+    let head = mp_alloc(&mut mp);
     Box::into_raw(Box::new(bam_plp_s {
-        mp: NonNull::new(mp),
+        mp: Some(mp),
         head,
         tail: head,
         tid: 0,
@@ -8505,7 +8482,7 @@ pub unsafe fn bam_plp_init(_func: bam_plp_auto_f, _data: *mut c_void) -> bam_plp
 }
 
 pub unsafe fn bam_plp_init_overlaps(_iter: bam_plp_t) -> c_int {
-    (*_iter).overlaps = NonNull::new(olap_hash_new_raw());
+    (*_iter).overlaps = NonNull::new(Box::into_raw(olap_hash_new()).cast::<olap_hash_t>());
     if (*_iter).overlaps.is_none() {
         -1
     } else {
@@ -8518,7 +8495,7 @@ pub unsafe fn bam_plp_destroy(_iter: bam_plp_t) {
         return;
     }
     if let Some(overlaps) = (*_iter).overlaps {
-        olap_hash_free(overlaps.as_ptr());
+        olap_hash_free(overlaps);
     }
     (*_iter).overlaps = None;
     let mut p = (*_iter).head;
@@ -8528,11 +8505,15 @@ pub unsafe fn bam_plp_destroy(_iter: bam_plp_t) {
             (*_iter).plp_destruct.unwrap()((*_iter).data, &(*node_ptr).b, &mut (*node_ptr).cd);
         }
         let pnext = (*node_ptr).next;
-        mp_free((*_iter).mp.unwrap().as_ptr(), node_ptr);
+        let mp = (*_iter)
+            .mp
+            .as_mut()
+            .expect("pileup iterator owns a mempool");
+        mp_free(mp, NonNull::new_unchecked(node_ptr));
         p = pnext;
     }
-    if let Some(mp) = (*_iter).mp {
-        mp_destroy(mp.as_ptr());
+    if let Some(mp) = (*_iter).mp.take() {
+        mp_destroy(mp);
     }
     if let Some(b) = (*_iter).b {
         bam_destroy1(b.as_ptr());
@@ -8628,49 +8609,48 @@ pub unsafe fn bam_plp64_next(
     _pos: *mut hts_pos_t,
     _n_plp: *mut c_int,
 ) -> *const bam_pileup1_t {
-    if (*_iter).error != 0 {
+    let iter = &mut *_iter;
+    if iter.error != 0 {
         *_n_plp = -1;
         return std::ptr::null();
     }
     *_n_plp = 0;
-    if (*_iter).is_eof != 0 && (*_iter).head == (*_iter).tail {
+    if iter.is_eof != 0 && iter.head == iter.tail {
         return std::ptr::null();
     }
-    while (*_iter).is_eof != 0
-        || (*_iter).max_tid > (*_iter).tid
-        || ((*_iter).max_tid == (*_iter).tid && (*_iter).max_pos > (*_iter).pos)
+    while iter.is_eof != 0
+        || iter.max_tid > iter.tid
+        || (iter.max_tid == iter.tid && iter.max_pos > iter.pos)
     {
         let mut n_plp = 0;
-        let mut pptr: *mut Option<NonNull<lbnode_t>> = &mut (*_iter).head;
-        while *pptr != (*_iter).tail {
+        let mut pptr: *mut Option<NonNull<lbnode_t>> = &mut iter.head;
+        while *pptr != iter.tail {
             let p = (*pptr)
                 .expect("pileup list links are non-null before the tail")
                 .as_ptr();
-            if (*p).b.core.tid < (*_iter).tid
-                || ((*p).b.core.tid == (*_iter).tid && (*p).end <= (*_iter).pos)
-            {
-                overlap_remove(_iter, &(*p).b);
-                if (*_iter).plp_destruct.is_some() {
-                    (*_iter).plp_destruct.unwrap()((*_iter).data, &(*p).b, &mut (*p).cd);
+            if (*p).b.core.tid < iter.tid || ((*p).b.core.tid == iter.tid && (*p).end <= iter.pos) {
+                overlap_remove(iter, Some(&(*p).b));
+                if iter.plp_destruct.is_some() {
+                    iter.plp_destruct.unwrap()(iter.data, &(*p).b, &mut (*p).cd);
                 }
                 *pptr = (*p).next;
-                mp_free((*_iter).mp.unwrap().as_ptr(), p);
+                let mp = iter.mp.as_mut().expect("pileup iterator owns a mempool");
+                mp_free(mp, NonNull::new_unchecked(p));
             } else {
-                if (*p).b.core.tid == (*_iter).tid && (*p).beg <= (*_iter).pos {
-                    if n_plp == (*_iter).plp.len() as c_int {
-                        (*_iter).max_plp = if (*_iter).max_plp != 0 {
-                            (*_iter).max_plp << 1
+                if (*p).b.core.tid == iter.tid && (*p).beg <= iter.pos {
+                    if n_plp == iter.plp.len() as c_int {
+                        iter.max_plp = if iter.max_plp != 0 {
+                            iter.max_plp << 1
                         } else {
                             256
                         };
-                        (*_iter)
-                            .plp
-                            .resize_with((*_iter).max_plp as usize, bam_pileup1_t::default);
+                        iter.plp
+                            .resize_with(iter.max_plp as usize, bam_pileup1_t::default);
                     }
-                    let out = (*_iter).plp.as_mut_ptr().add(n_plp as usize);
+                    let out = iter.plp.as_mut_ptr().add(n_plp as usize);
                     (*out).b = &mut (*p).b;
                     (*out).cd = (*p).cd;
-                    if resolve_cigar2(out, (*_iter).pos, &mut (*p).s) != 0 {
+                    if resolve_cigar2(&mut *out, iter.pos, &mut (*p).s) != 0 {
                         n_plp += 1;
                     }
                 }
@@ -8678,28 +8658,26 @@ pub unsafe fn bam_plp64_next(
             }
         }
         *_n_plp = n_plp;
-        *_tid = (*_iter).tid;
-        *_pos = (*_iter).pos;
-        if (*_iter).head != (*_iter).tail
-            && (*_iter).tid > (*(*_iter).head.unwrap().as_ptr()).b.core.tid
-        {
-            (*_iter).error = 1;
+        *_tid = iter.tid;
+        *_pos = iter.pos;
+        if iter.head != iter.tail && iter.tid > (*iter.head.unwrap().as_ptr()).b.core.tid {
+            iter.error = 1;
             *_n_plp = -1;
             return std::ptr::null();
         }
-        let head = (*_iter).head.unwrap().as_ptr();
-        if (*_iter).tid < (*head).b.core.tid {
-            (*_iter).tid = (*head).b.core.tid;
-            (*_iter).pos = (*head).beg;
-        } else if (*_iter).pos < (*head).beg {
-            (*_iter).pos = (*head).beg;
+        let head = iter.head.unwrap().as_ptr();
+        if iter.tid < (*head).b.core.tid {
+            iter.tid = (*head).b.core.tid;
+            iter.pos = (*head).beg;
+        } else if iter.pos < (*head).beg {
+            iter.pos = (*head).beg;
         } else {
-            (*_iter).pos += 1;
+            iter.pos += 1;
         }
         if n_plp != 0 {
-            return (*_iter).plp.as_ptr();
+            return iter.plp.as_ptr();
         }
-        if (*_iter).is_eof != 0 && (*_iter).head == (*_iter).tail {
+        if iter.is_eof != 0 && iter.head == iter.tail {
             break;
         }
     }
@@ -8726,90 +8704,99 @@ pub unsafe fn bam_plp_next(
 }
 
 pub unsafe fn bam_plp_push(_iter: bam_plp_t, b: *const bam1_t) -> c_int {
-    if (*_iter).error != 0 {
+    let iter = &mut *_iter;
+    if iter.error != 0 {
         return -1;
     }
     if !b.is_null() {
         if (*b).core.tid < 0 {
-            overlap_remove(_iter, b);
+            overlap_remove(iter, Some(&*b));
             return 0;
         }
         if ((*b).core.flag as c_int & BAM_FUNMAP) != 0 {
-            overlap_remove(_iter, b);
+            overlap_remove(iter, Some(&*b));
             return 0;
         }
-        if (*_iter).tid == (*b).core.tid
-            && (*_iter).pos == (*b).core.pos
-            && (*(*_iter).mp.unwrap().as_ptr()).cnt > (*_iter).maxcnt
+        if iter.tid == (*b).core.tid
+            && iter.pos == (*b).core.pos
+            && iter
+                .mp
+                .as_ref()
+                .expect("pileup iterator owns a mempool")
+                .cnt
+                > iter.maxcnt
         {
-            overlap_remove(_iter, b);
+            overlap_remove(iter, Some(&*b));
             return 0;
         }
-        let tail = (*_iter)
+        let tail = iter
             .tail
             .expect("pileup tail sentinel is initialized")
             .as_ptr();
         if bam_copy1(&mut (*tail).b, b).is_null() {
             return -1;
         }
-        (*tail).b.id = (*_iter).id;
-        (*_iter).id += 1;
+        (*tail).b.id = iter.id;
+        iter.id += 1;
         (*tail).beg = (*b).core.pos;
         (*tail).end = (*b).core.pos + bam_cigar2rlen((*b).core.n_cigar as c_int, bam_get_cigar(b));
         (*tail).s = G_CSTATE_NULL;
         (*tail).s.end = (*tail).end - 1;
-        if (*b).core.tid < (*_iter).max_tid {
-            (*_iter).error = 1;
+        if (*b).core.tid < iter.max_tid {
+            iter.error = 1;
             return -1;
         }
-        if (*b).core.tid == (*_iter).max_tid && (*tail).beg < (*_iter).max_pos {
-            (*_iter).error = 1;
+        if (*b).core.tid == iter.max_tid && (*tail).beg < iter.max_pos {
+            iter.error = 1;
             return -1;
         }
-        (*_iter).max_tid = (*b).core.tid;
-        (*_iter).max_pos = (*tail).beg;
-        if (*tail).end > (*_iter).pos || (*tail).b.core.tid > (*_iter).tid {
-            let mp = (*_iter).mp.unwrap().as_ptr();
-            let next = mp_alloc(mp);
-            if next.is_null() {
-                (*_iter).error = 1;
+        iter.max_tid = (*b).core.tid;
+        iter.max_pos = (*tail).beg;
+        if (*tail).end > iter.pos || (*tail).b.core.tid > iter.tid {
+            let Some(next) = mp_alloc(iter.mp.as_mut().expect("pileup iterator owns a mempool"))
+            else {
+                iter.error = 1;
                 return -1;
-            }
-            if (*_iter).plp_construct.is_some()
-                && (*_iter).plp_construct.unwrap()((*_iter).data, &(*tail).b, &mut (*tail).cd) < 0
+            };
+            if iter.plp_construct.is_some()
+                && iter.plp_construct.unwrap()(iter.data, &(*tail).b, &mut (*tail).cd) < 0
             {
+                let mp = iter.mp.as_mut().expect("pileup iterator owns a mempool");
                 mp_free(mp, next);
-                (*_iter).error = 1;
+                iter.error = 1;
                 return -1;
             }
-            if overlap_push(_iter, tail) < 0 {
+            if overlap_push(iter, NonNull::new_unchecked(tail)) < 0 {
+                let mp = iter.mp.as_mut().expect("pileup iterator owns a mempool");
                 mp_free(mp, next);
-                (*_iter).error = 1;
+                iter.error = 1;
                 return -1;
             }
-            (*tail).next = NonNull::new(next);
-            (*_iter).tail = (*tail).next;
+            (*tail).next = Some(next);
+            iter.tail = Some(next);
         }
     } else {
-        (*_iter).is_eof = 1;
+        iter.is_eof = 1;
     }
     0
 }
 
 pub unsafe fn bam_plp_reset(_iter: bam_plp_t) {
-    overlap_remove(_iter, std::ptr::null());
-    (*_iter).max_tid = -1;
-    (*_iter).max_pos = -1;
-    (*_iter).tid = 0;
-    (*_iter).pos = 0;
-    (*_iter).is_eof = 0;
-    while (*_iter).head != (*_iter).tail {
-        let p = (*_iter)
+    let iter = &mut *_iter;
+    overlap_remove(iter, None);
+    iter.max_tid = -1;
+    iter.max_pos = -1;
+    iter.tid = 0;
+    iter.pos = 0;
+    iter.is_eof = 0;
+    while iter.head != iter.tail {
+        let p = iter
             .head
             .expect("pileup head is non-null until it reaches tail")
             .as_ptr();
-        (*_iter).head = (*p).next;
-        mp_free((*_iter).mp.unwrap().as_ptr(), p);
+        iter.head = (*p).next;
+        let mp = iter.mp.as_mut().expect("pileup iterator owns a mempool");
+        mp_free(mp, NonNull::new_unchecked(p));
     }
 }
 
@@ -9759,16 +9746,16 @@ pub unsafe fn sam_prob_realn(
     }
 
     let mut state_buf = vec![0 as c_int; (*b).core.l_qseq as usize];
-    let state = state_buf.as_mut_ptr();
+    let ref_slice = std::slice::from_raw_parts(tref, (xe - xb) as usize);
+    let query_slice = std::slice::from_raw_parts(tseq, (*b).core.l_qseq as usize);
+    let qual_slice = std::slice::from_raw_parts(qual, (*b).core.l_qseq as usize);
+    let q_slice = std::slice::from_raw_parts_mut(q, (*b).core.l_qseq as usize);
     if crate::htslib_rs::probaln::probaln_glocal(
-        tref,
-        (xe - xb) as c_int,
-        tseq,
-        (*b).core.l_qseq,
-        qual,
+        ref_slice,
+        query_slice,
+        Some(qual_slice),
         &conf,
-        state,
-        q,
+        Some((state_buf.as_mut_slice(), q_slice)),
     ) == c_int::MIN
     {
         return -4;
@@ -9791,8 +9778,8 @@ pub unsafe fn sam_prob_realn(
                 }
                 i = y as hts_pos_t;
                 while i < (y + l) as hts_pos_t {
-                    if (*state.add(i as usize) & 3) != 0
-                        || (*state.add(i as usize) >> 2) != (x - xb + (i - y as hts_pos_t)) as c_int
+                    let state = state_buf[i as usize];
+                    if (state & 3) != 0 || (state >> 2) != (x - xb + (i - y as hts_pos_t)) as c_int
                     {
                         *bq.add(i as usize) = 0;
                     } else {
@@ -9852,8 +9839,9 @@ pub unsafe fn sam_prob_realn(
                 }
                 i = y as hts_pos_t;
                 while i < (y + l) as hts_pos_t {
-                    *bq.add(i as usize) = if (*state.add(i as usize) & 3) != 0
-                        || (*state.add(i as usize) >> 2) != (x - xb + (i - y as hts_pos_t)) as c_int
+                    let state = state_buf[i as usize];
+                    *bq.add(i as usize) = if (state & 3) != 0
+                        || (state >> 2) != (x - xb + (i - y as hts_pos_t)) as c_int
                     {
                         0
                     } else {
@@ -10859,7 +10847,9 @@ unsafe fn sam_c_4324_sam_format1_append(
             return -1;
         }
         let mut cp = (*str_).s.add((*str_).l);
-        nibble2base(bam_get_seq(b).cast_mut(), cp, c.l_qseq);
+        let packed = std::slice::from_raw_parts(bam_get_seq(b), l_qseq.div_ceil(2));
+        let seq = std::slice::from_raw_parts_mut(cp, l_qseq);
+        nibble2base(packed, seq);
         *cp.add(l_qseq) = b'\t' as c_char;
         cp = cp.add(l_qseq + 1);
 
@@ -11396,7 +11386,7 @@ pub unsafe fn bam_set_seqi(s: *mut u8, i: usize, b: u8) {
     *s.add(i >> 1) = (*s.add(i >> 1) & (0xf0 >> shift)) | (b << shift);
 }
 
-pub unsafe fn nibble2base_default(nib: *mut u8, seq: *mut c_char, len: c_int) {
+pub fn nibble2base_default_ref(nib: &[u8], seq: &mut [c_char]) {
     static CODE2BASE: &[u8; 512] = b"===A=C=M=G=R=S=V=T=W=Y=H=K=D=B=N\
 A=AAACAMAGARASAVATAWAYAHAKADABAN\
 C=CACCCMCGCRCSCVCTCWCYCHCKCDCBCN\
@@ -11415,32 +11405,45 @@ B=BABCBMBGBRBSBVBTBWBYBHBKBDBBBN\
 N=NANCNMNGNRNSNVNTNWNYNHNKNDNBNN";
     static SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
 
-    if len <= 0 {
-        *seq = 0;
+    if seq.is_empty() {
         return;
     }
 
-    *seq = 0;
+    let len = seq.len();
     let len2 = len / 2;
-    let mut i = 0;
+    let mut i = 0usize;
     while i < len2 {
-        let idx = *nib.add(i as usize) as usize * 2;
-        std::ptr::copy_nonoverlapping(
-            CODE2BASE.as_ptr().add(idx).cast::<c_char>(),
-            seq.add((i * 2) as usize),
-            2,
-        );
+        let idx = nib[i] as usize * 2;
+        seq[i * 2] = CODE2BASE[idx] as c_char;
+        seq[i * 2 + 1] = CODE2BASE[idx + 1] as c_char;
         i += 1;
     }
 
     i *= 2;
     if i < len {
-        *seq.add(i as usize) = SEQ_NT16_STR[bam_seqi(nib, i as usize) as usize] as c_char;
+        let code = (nib[i / 2] >> (((!i) & 1) << 2)) & 0x0f;
+        seq[i] = SEQ_NT16_STR[code as usize] as c_char;
     }
 }
 
-pub unsafe fn nibble2base(nib: *mut u8, seq: *mut c_char, len: c_int) {
-    nibble2base_default(nib, seq, len);
+pub unsafe fn nibble2base_default(nib: &[u8], seq: &mut [c_char]) {
+    let Some(seq0) = seq.first_mut() else {
+        return;
+    };
+    *seq0 = 0;
+    nibble2base_default_ref(nib, seq);
+}
+
+pub fn nibble2base_ref(nib: &[u8], seq: &mut [c_char]) {
+    nibble2base_default_ref(nib, seq);
+}
+
+pub unsafe fn nibble2base(nib: &[u8], seq: &mut [c_char]) {
+    let Some(seq0) = seq.first_mut() else {
+        return;
+    };
+    *seq0 = 0;
+    unsafe { (crate::htslib_rs::simd::htslib_nibble2base)(nib, seq) };
 }
 
 pub unsafe fn sam_open_mode(mode: *mut c_char, fn_: *const c_char, format: *const c_char) -> c_int {
@@ -13117,19 +13120,19 @@ mod tests {
     #[test]
     fn nibble2base_decodes_packed_bam_sequence() {
         unsafe {
-            let mut packed = [0x12, 0x48, 0xf3, 0x50];
+            let packed = [0x12, 0x48, 0xf3, 0x50];
             let mut seq = [0 as c_char; 9];
 
-            nibble2base_default(packed.as_mut_ptr(), seq.as_mut_ptr(), 7);
+            nibble2base_default_ref(&packed, &mut seq[..7]);
             assert_eq!(CStr::from_ptr(seq.as_ptr()).to_bytes(), b"ACGTNMR");
 
             seq.fill(0);
-            nibble2base(packed.as_mut_ptr(), seq.as_mut_ptr(), 8);
+            nibble2base_ref(&packed, &mut seq[..8]);
             assert_eq!(CStr::from_ptr(seq.as_ptr()).to_bytes(), b"ACGTNMR=");
 
-            seq[0] = b'X' as c_char;
-            nibble2base_default(packed.as_mut_ptr(), seq.as_mut_ptr(), 0);
-            assert_eq!(seq[0], 0);
+            seq.fill(0);
+            nibble2base_default(&packed, &mut seq[..7]);
+            assert_eq!(CStr::from_ptr(seq.as_ptr()).to_bytes(), b"ACGTNMR");
         }
     }
 
@@ -13183,36 +13186,35 @@ mod tests {
     #[test]
     fn base_mod_state_queries_and_seq_freq_match_c_rules() {
         unsafe {
-            let state = hts_base_mod_state_alloc();
-            assert!(!state.is_null());
-            assert_eq!((*state).nmods, 0);
+            let mut state = hts_base_mod_state_new();
+            assert_eq!(state.nmods, 0);
 
-            (*state).nmods = 2;
-            (*state).type_[0] = b'm' as c_int;
-            (*state).type_[1] = -1234;
-            (*state).strand[0] = b'+' as c_char;
-            (*state).strand[1] = b'-' as c_char;
-            (*state).implicit[0] = 1;
-            (*state).implicit[1] = 0;
-            (*state).canonical[0] = 2;
-            (*state).canonical[1] = 15;
+            state.nmods = 2;
+            state.type_[0] = b'm' as c_int;
+            state.type_[1] = -1234;
+            state.strand[0] = b'+' as c_char;
+            state.strand[1] = b'-' as c_char;
+            state.implicit[0] = 1;
+            state.implicit[1] = 0;
+            state.canonical[0] = 2;
+            state.canonical[1] = 15;
 
             let mut ntype = 0;
-            let types = bam_mods_recorded(state, &mut ntype);
+            let types = bam_mods_recorded_ref(&mut state, &mut ntype);
             assert_eq!(ntype, 2);
-            assert_eq!(*types.add(0), b'm' as c_int);
-            assert_eq!(*types.add(1), -1234);
+            assert_eq!(types[0], b'm' as c_int);
+            assert_eq!(types[1], -1234);
 
             let mut strand = 0;
             let mut implicit = 0;
             let mut canonical = 0;
             assert_eq!(
-                bam_mods_query_type(
-                    state,
+                bam_mods_query_type_ref_outputs(
+                    &state,
                     b'm' as c_int,
-                    &mut strand,
-                    &mut implicit,
-                    &mut canonical,
+                    Some(&mut strand),
+                    Some(&mut implicit),
+                    Some(&mut canonical),
                 ),
                 0
             );
@@ -13221,33 +13223,23 @@ mod tests {
             assert_eq!(canonical, b'C' as c_char);
 
             assert_eq!(
-                bam_mods_queryi(state, 1, &mut strand, &mut implicit, &mut canonical,),
+                bam_mods_queryi_ref_outputs(
+                    &state,
+                    1,
+                    Some(&mut strand),
+                    Some(&mut implicit),
+                    Some(&mut canonical),
+                ),
                 0
             );
             assert_eq!(strand, b'-' as c_int);
             assert_eq!(implicit, 0);
             assert_eq!(canonical, b'N' as c_char);
             assert_eq!(
-                bam_mods_query_type(
-                    state,
-                    b'h' as c_int,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                ),
+                bam_mods_query_type_ref_outputs(&state, b'h' as c_int, None, None, None,),
                 -1
             );
-            assert_eq!(
-                bam_mods_queryi(
-                    state,
-                    2,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                ),
-                -1
-            );
-            hts_base_mod_state_free(state);
+            assert_eq!(bam_mods_queryi_ref_outputs(&state, 2, None, None, None), -1);
 
             let b = bam_init1();
             assert!(!b.is_null());
@@ -13274,7 +13266,7 @@ mod tests {
                 20
             );
             let mut freq = [99; 16];
-            seq_freq(b, freq.as_mut_ptr());
+            seq_freq_ref(b.as_ref().unwrap(), &mut freq);
             assert_eq!(freq[1], 1);
             assert_eq!(freq[2], 1);
             assert_eq!(freq[4], 1);
@@ -13311,19 +13303,18 @@ mod tests {
                 ) > 0
             );
 
-            let state = hts_base_mod_state_alloc();
-            assert!(!state.is_null());
+            let mut state = hts_base_mod_state_new();
             let mut mm_end = *b";\0";
             let mut ml = [42u8];
-            (*state).nmods = 1;
-            (*state).type_[0] = b'm' as c_int;
-            (*state).canonical[0] = 1;
-            (*state).strand[0] = 0;
-            (*state).mmcount[0] = 1;
-            (*state).mm[0] = mm_end.as_mut_ptr().cast();
-            (*state).ml[0] = ml.as_mut_ptr();
-            (*state).mlstride[0] = 1;
-            (*state).implicit[0] = 1;
+            state.nmods = 1;
+            state.type_[0] = b'm' as c_int;
+            state.canonical[0] = 1;
+            state.strand[0] = 0;
+            state.mmcount[0] = 1;
+            state.mm[0] = mm_end.as_mut_ptr().cast();
+            state.ml[0] = ml.as_mut_ptr();
+            state.mlstride[0] = 1;
+            state.implicit[0] = 1;
 
             let mut mods = [hts_base_mod {
                 modified_base: 0,
@@ -13333,7 +13324,7 @@ mod tests {
             }];
             let mut pos = -1;
             assert_eq!(
-                bam_next_basemod(b, state, mods.as_mut_ptr(), 1, &mut pos),
+                bam_next_basemod_ref(b.as_ref().unwrap(), &mut state, &mut mods, &mut pos),
                 1
             );
             assert_eq!(pos, 2);
@@ -13342,27 +13333,32 @@ mod tests {
             assert_eq!(mods[0].strand, 0);
             assert_eq!(mods[0].qual, 42);
             assert_eq!(
-                bam_next_basemod(b, state, mods.as_mut_ptr(), 1, &mut pos),
+                bam_next_basemod_ref(b.as_ref().unwrap(), &mut state, &mut mods, &mut pos),
                 0
             );
 
-            (*state).seq_pos = 0;
-            (*state).mmcount[0] = 1;
-            (*state).mm[0] = mm_end.as_mut_ptr().cast();
-            (*state).ml[0] = ml.as_mut_ptr();
-            assert_eq!(bam_mods_at_qpos(b, 2, state, mods.as_mut_ptr(), 1), 1);
+            state.seq_pos = 0;
+            state.mmcount[0] = 1;
+            state.mm[0] = mm_end.as_mut_ptr().cast();
+            state.ml[0] = ml.as_mut_ptr();
+            assert_eq!(
+                bam_mods_at_qpos_ref(b.as_ref().unwrap(), 2, &mut state, &mut mods),
+                1
+            );
             assert_eq!(mods[0].qual, 42);
 
-            (*state).seq_pos = 0;
-            (*state).mmcount[0] = 1;
-            (*state).mm[0] = mm_end.as_mut_ptr().cast();
-            (*state).ml[0] = std::ptr::null_mut();
-            (*state).implicit[0] = 0;
-            (*state).flags = HTS_MOD_REPORT_UNCHECKED;
-            assert_eq!(bam_mods_at_next_pos(b, state, mods.as_mut_ptr(), 1), 1);
+            state.seq_pos = 0;
+            state.mmcount[0] = 1;
+            state.mm[0] = mm_end.as_mut_ptr().cast();
+            state.ml[0] = std::ptr::null_mut();
+            state.implicit[0] = 0;
+            state.flags = HTS_MOD_REPORT_UNCHECKED;
+            assert_eq!(
+                bam_mods_at_next_pos_ref(b.as_ref().unwrap(), &mut state, &mut mods),
+                1
+            );
             assert_eq!(mods[0].qual, HTS_MOD_UNCHECKED);
 
-            hts_base_mod_state_free(state);
             bam_destroy1(b);
         }
     }
@@ -13415,14 +13411,17 @@ mod tests {
                 0
             );
 
-            let state = hts_base_mod_state_alloc();
-            assert_eq!(bam_parse_basemod(b, state), 0);
-            assert_eq!((*state).nmods, 1);
-            assert_eq!((*state).type_[0], b'm' as c_int);
-            assert_eq!((*state).canonical[0], 1);
-            assert_eq!((*state).mmcount[0], 1);
-            assert_eq!((*state).mlstride[0], 1);
-            assert_eq!(*(*state).ml[0], 37);
+            let mut state = hts_base_mod_state_new();
+            assert_eq!(
+                bam_parse_basemod2_ref(b.as_ref().unwrap(), &mut state, 0),
+                0
+            );
+            assert_eq!(state.nmods, 1);
+            assert_eq!(state.type_[0], b'm' as c_int);
+            assert_eq!(state.canonical[0], 1);
+            assert_eq!(state.mmcount[0], 1);
+            assert_eq!(state.mlstride[0], 1);
+            assert_eq!(*state.ml[0], 37);
 
             let mut mods = [hts_base_mod {
                 modified_base: 0,
@@ -13432,14 +13431,13 @@ mod tests {
             }];
             let mut pos = -1;
             assert_eq!(
-                bam_next_basemod(b, state, mods.as_mut_ptr(), 1, &mut pos),
+                bam_next_basemod_ref(b.as_ref().unwrap(), &mut state, &mut mods, &mut pos),
                 1
             );
             assert_eq!(pos, 2);
             assert_eq!(mods[0].modified_base, b'm' as c_int);
             assert_eq!(mods[0].qual, 37);
 
-            hts_base_mod_state_free(state);
             bam_destroy1(b);
 
             let b = bam_init1();
@@ -13463,10 +13461,12 @@ mod tests {
                     0,
                 ) > 0
             );
-            let state = hts_base_mod_state_alloc();
-            assert_eq!(bam_parse_basemod(b, state), 0);
-            assert_eq!((*state).nmods, 0);
-            hts_base_mod_state_free(state);
+            let mut state = hts_base_mod_state_new();
+            assert_eq!(
+                bam_parse_basemod2_ref(b.as_ref().unwrap(), &mut state, 0),
+                0
+            );
+            assert_eq!(state.nmods, 0);
             bam_destroy1(b);
         }
     }
@@ -13509,11 +13509,13 @@ mod tests {
                 0
             );
 
-            let state = hts_base_mod_state_alloc();
-            assert!(!state.is_null());
-            assert_eq!(bam_parse_basemod(b, state), 0);
-            assert_eq!((*state).nmods, 1);
-            assert_eq!((*state).mmcount[0], 1);
+            let mut state = hts_base_mod_state_new();
+            assert_eq!(
+                bam_parse_basemod2_ref(b.as_ref().unwrap(), &mut state, 0),
+                0
+            );
+            assert_eq!(state.nmods, 1);
+            assert_eq!(state.mmcount[0], 1);
 
             let mut mods = [hts_base_mod {
                 modified_base: 0,
@@ -13523,11 +13525,10 @@ mod tests {
             }];
             let mut pos = -1;
             assert_eq!(
-                bam_next_basemod(b, state, mods.as_mut_ptr(), 1, &mut pos),
+                bam_next_basemod_ref(b.as_ref().unwrap(), &mut state, &mut mods, &mut pos),
                 -1
             );
 
-            hts_base_mod_state_free(state);
             bam_destroy1(b);
         }
     }
@@ -13574,11 +13575,12 @@ mod tests {
                 0
             );
 
-            let state = hts_base_mod_state_alloc();
-            assert!(!state.is_null());
-            assert_eq!(bam_parse_basemod(b, state), -1);
+            let mut state = hts_base_mod_state_new();
+            assert_eq!(
+                bam_parse_basemod2_ref(b.as_ref().unwrap(), &mut state, 0),
+                -1
+            );
 
-            hts_base_mod_state_free(state);
             bam_destroy1(b);
         }
     }
@@ -13756,12 +13758,12 @@ mod tests {
 
         unsafe {
             use crate::htslib_rs::realn::sam_cap_mapq;
-            let ref_match = CString::new("ACGT").unwrap();
-            assert_eq!(sam_cap_mapq(&mut b, ref_match.as_ptr(), 4, -1), 40);
+            let ref_match = b"ACGT";
+            assert_eq!(sam_cap_mapq(&mut b, ref_match, -1), 40);
 
-            let ref_mismatch = CString::new("ATGT").unwrap();
-            assert_eq!(sam_cap_mapq(&mut b, ref_mismatch.as_ptr(), 4, 40), 28);
-            assert_eq!(sam_cap_mapq(&mut b, ref_mismatch.as_ptr(), 4, 10), -1);
+            let ref_mismatch = b"ATGT";
+            assert_eq!(sam_cap_mapq(&mut b, ref_mismatch, 40), 28);
+            assert_eq!(sam_cap_mapq(&mut b, ref_mismatch, 10), -1);
 
             let good_tag = b"Zabcd\0";
             assert_eq!(
@@ -15931,35 +15933,33 @@ mod tests {
             assert_eq!(G_CSTATE_NULL.x, 0);
             assert_eq!(G_CSTATE_NULL.end, 0);
 
-            let mp = mp_init();
-            assert!(!mp.is_null());
-            assert_eq!((*mp).cnt, 0);
-            assert_eq!((*mp).n, 0);
-            assert_eq!((*mp).max, 0);
-            assert!((*mp).buf.is_empty());
+            let mut mp = mp_init();
+            assert_eq!(mp.cnt, 0);
+            assert_eq!(mp.n, 0);
+            assert_eq!(mp.max, 0);
+            assert!(mp.buf.is_empty());
 
-            let node = mp_alloc(mp);
-            assert!(!node.is_null());
-            assert_eq!((*mp).cnt, 1);
-            assert_eq!((*node).b.l_data, 0);
-            assert_eq!((*node).beg, 0);
-            assert_eq!((*node).s.k, 0);
-            (*node).next = NonNull::new(node);
-            (*node).b.data = crate::htslib_rs::c_compat::malloc(4).cast();
-            (*node).b.m_data = 4;
+            let mut node = mp_alloc(&mut mp).expect("initial mempool allocation succeeds");
+            assert_eq!(mp.cnt, 1);
+            assert_eq!(node.as_ref().b.l_data, 0);
+            assert_eq!(node.as_ref().beg, 0);
+            assert_eq!(node.as_ref().s.k, 0);
+            node.as_mut().next = Some(node);
+            node.as_mut().b.data = crate::htslib_rs::c_compat::malloc(4).cast();
+            node.as_mut().b.m_data = 4;
 
-            mp_free(mp, node);
-            assert_eq!((*mp).cnt, 0);
-            assert_eq!((*mp).n, 1);
-            assert_eq!((*mp).max, 256);
-            assert!((*node).next.is_none());
+            mp_free(&mut mp, node);
+            assert_eq!(mp.cnt, 0);
+            assert_eq!(mp.n, 1);
+            assert_eq!(mp.max, 256);
+            assert!(node.as_ref().next.is_none());
 
-            let reused = mp_alloc(mp);
+            let reused = mp_alloc(&mut mp).expect("mempool reuses cached node");
             assert_eq!(reused, node);
-            assert_eq!((*mp).cnt, 1);
-            assert_eq!((*mp).n, 0);
+            assert_eq!(mp.cnt, 1);
+            assert_eq!(mp.n, 0);
 
-            mp_free(mp, reused);
+            mp_free(&mut mp, reused);
             mp_destroy(mp);
         }
     }
@@ -15976,7 +15976,7 @@ mod tests {
             assert!((*iter).mp.is_some());
             assert_eq!((*iter).head, (*iter).tail);
             assert!((*iter).head.is_some());
-            assert_eq!((*(*iter).mp.unwrap().as_ptr()).cnt, 1);
+            assert_eq!((*iter).mp.as_ref().unwrap().cnt, 1);
             assert_eq!((*iter).max_tid, -1);
             assert_eq!((*iter).max_pos, -1);
             assert_eq!((*iter).maxcnt, 8000);

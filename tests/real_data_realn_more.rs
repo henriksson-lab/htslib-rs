@@ -49,6 +49,10 @@ impl RefSeq {
         assert!(!seq.is_null(), "faidx_fetch_seq failed for {target:?}");
         Self { fai, seq, len }
     }
+
+    unsafe fn as_slice(&self) -> &[u8] {
+        std::slice::from_raw_parts(self.seq.cast::<u8>(), self.len as usize)
+    }
 }
 
 impl Drop for RefSeq {
@@ -218,7 +222,7 @@ fn sam_prob_realn_translated_path_writes_same_zq_tag_as_re_exported() {
                 continue;
             }
             let ret_a = sam_prob_realn(*rec_a, ref_seq.seq, ref_seq.len.into(), 1);
-            let ret_b = realn_c_106_sam_prob_realn(*rec_b, ref_seq.seq, ref_seq.len.into(), 1);
+            let ret_b = realn_c_106_sam_prob_realn(&mut **rec_b, ref_seq.as_slice(), 1);
             assert_eq!(ret_a, ret_b);
             assert_eq!(
                 aux_z_string(*rec_a, c"ZQ".as_ptr()),
@@ -347,8 +351,8 @@ fn sam_cap_mapq_caps_mapq_on_realn02_records_with_real_reference() {
             if (*rec).core.flag as c_int & BAM_FUNMAP != 0 {
                 continue;
             }
-            let ret_high = sam_cap_mapq(rec, ref_seq.seq, ref_seq.len.into(), 60);
-            let ret_low = sam_cap_mapq(rec, ref_seq.seq, ref_seq.len.into(), 5);
+            let ret_high = sam_cap_mapq(&mut *rec, ref_seq.as_slice(), 60);
+            let ret_low = sam_cap_mapq(&mut *rec, ref_seq.as_slice(), 5);
             // For high threshold (60), all matched records should be ok
             // (-1) or capped at <= 60 -- never negative-other-than-minus-one.
             assert!(ret_high == -1 || (0..=60).contains(&ret_high));
@@ -389,7 +393,7 @@ fn sam_cap_mapq_default_threshold_negative_uses_40() {
         // The first mapped record in realn02.sam is a high-quality match.
         let rec = records[0];
         assert_eq!((*rec).core.flag as c_int & BAM_FUNMAP, 0);
-        let ret = sam_cap_mapq(rec, ref_seq.seq, ref_seq.len.into(), -1);
+        let ret = sam_cap_mapq(&mut *rec, ref_seq.as_slice(), -1);
         // Either uncapped (-1) or capped at most at 40.
         assert!(ret == -1 || (0..=40).contains(&ret), "ret={ret}");
 
@@ -422,9 +426,9 @@ fn sam_cap_mapq_after_sam_prob_realn_remains_consistent_on_real_record() {
         // Capture original qual.
         let orig_qual = std::slice::from_raw_parts(bam_get_qual(rec), l_qseq).to_vec();
 
-        let cap_before = sam_cap_mapq(rec, ref_seq.seq, ref_seq.len.into(), 60);
+        let cap_before = sam_cap_mapq(&mut *rec, ref_seq.as_slice(), 60);
         assert_eq!(sam_prob_realn(rec, ref_seq.seq, ref_seq.len.into(), 1), 0);
-        let cap_after = sam_cap_mapq(rec, ref_seq.seq, ref_seq.len.into(), 60);
+        let cap_after = sam_cap_mapq(&mut *rec, ref_seq.as_slice(), 60);
 
         // BAQ-apply reduces (or keeps equal) the qual values -- never
         // increases them.

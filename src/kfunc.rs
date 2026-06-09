@@ -1,5 +1,3 @@
-use std::ffi::{c_char, c_int};
-
 const KF_GAMMA_EPS: f64 = 1e-14;
 const KF_TINY: f64 = 1e-290;
 
@@ -11,10 +9,10 @@ extern "C" {
 
 #[repr(C)]
 pub struct hgacc_t {
-    pub n11: c_int,
-    pub n1_: c_int,
-    pub n_1: c_int,
-    pub n: c_int,
+    pub n11: i32,
+    pub n1_: i32,
+    pub n_1: i32,
+    pub n: i32,
     pub p: f64,
 }
 
@@ -170,80 +168,87 @@ pub fn kf_betai(a: f64, b: f64, x: f64) -> f64 {
     }
 }
 
-pub unsafe fn kfunc_c_183_main(_argc: c_int, _argv: *mut *mut c_char) -> c_int {
+pub fn kfunc_demo_main() -> i32 {
     let mut x = 5.5;
     let y = 3.0;
 
-    libc::printf(c"erfc(%lg): %lg, %lg\n".as_ptr(), x, erfc(x), kf_erfc(x));
-    libc::printf(
-        c"upper-gamma(%lg,%lg): %lg\n".as_ptr(),
-        x,
-        y,
-        kf_gammaq(y, x) * tgamma(y),
-    );
+    unsafe {
+        libc::printf(c"erfc(%lg): %lg, %lg\n".as_ptr(), x, erfc(x), kf_erfc(x));
+        libc::printf(
+            c"upper-gamma(%lg,%lg): %lg\n".as_ptr(),
+            x,
+            y,
+            kf_gammaq(y, x) * tgamma(y),
+        );
+    }
 
     let a = 2.0;
     let b = 2.0;
     x = 0.5;
-    libc::printf(
-        c"incomplete-beta(%lg,%lg,%lg): %lg\n".as_ptr(),
-        a,
-        b,
-        x,
-        kf_betai(a, b, x) / (kf_lgamma(a + b) - kf_lgamma(a) - kf_lgamma(b)).exp(),
-    );
+    unsafe {
+        libc::printf(
+            c"incomplete-beta(%lg,%lg,%lg): %lg\n".as_ptr(),
+            a,
+            b,
+            x,
+            kf_betai(a, b, x) / (kf_lgamma(a + b) - kf_lgamma(a) - kf_lgamma(b)).exp(),
+        );
+    }
 
     0
 }
 
-pub fn lbinom(n: c_int, k: c_int) -> f64 {
+pub fn kfunc_c_183_main() -> i32 {
+    kfunc_demo_main()
+}
+
+pub fn lbinom(n: i32, k: i32) -> f64 {
     if k == 0 || n == k {
         return 0.0;
     }
     unsafe { lgamma((n + 1) as f64) - lgamma((k + 1) as f64) - lgamma((n - k + 1) as f64) }
 }
 
-pub fn hypergeo(n11: c_int, n1_: c_int, n_1: c_int, n: c_int) -> f64 {
+pub fn hypergeo(n11: i32, n1_: i32, n_1: i32, n: i32) -> f64 {
     (lbinom(n1_, n11) + lbinom(n - n1_, n_1 - n11) - lbinom(n, n_1)).exp()
 }
 
-pub unsafe fn hypergeo_acc(n11: c_int, n1_: c_int, n_1: c_int, n: c_int, aux: *mut hgacc_t) -> f64 {
+pub fn hypergeo_acc(n11: i32, n1_: i32, n_1: i32, n: i32, aux: &mut hgacc_t) -> f64 {
     if n1_ != 0 || n_1 != 0 || n != 0 {
-        (*aux).n11 = n11;
-        (*aux).n1_ = n1_;
-        (*aux).n_1 = n_1;
-        (*aux).n = n;
+        aux.n11 = n11;
+        aux.n1_ = n1_;
+        aux.n_1 = n_1;
+        aux.n = n;
     } else {
-        if n11 % 11 != 0 && n11 + (*aux).n - (*aux).n1_ - (*aux).n_1 != 0 {
-            if n11 == (*aux).n11 + 1 {
-                (*aux).p *= ((*aux).n1_ - (*aux).n11) as f64 / n11 as f64
-                    * ((*aux).n_1 - (*aux).n11) as f64
-                    / (n11 + (*aux).n - (*aux).n1_ - (*aux).n_1) as f64;
-                (*aux).n11 = n11;
-                return (*aux).p;
+        if n11 % 11 != 0 && n11 + aux.n - aux.n1_ - aux.n_1 != 0 {
+            if n11 == aux.n11 + 1 {
+                aux.p *= (aux.n1_ - aux.n11) as f64 / n11 as f64 * (aux.n_1 - aux.n11) as f64
+                    / (n11 + aux.n - aux.n1_ - aux.n_1) as f64;
+                aux.n11 = n11;
+                return aux.p;
             }
-            if n11 == (*aux).n11 - 1 {
-                (*aux).p *= (*aux).n11 as f64 / ((*aux).n1_ - n11) as f64
-                    * ((*aux).n11 + (*aux).n - (*aux).n1_ - (*aux).n_1) as f64
-                    / ((*aux).n_1 - n11) as f64;
-                (*aux).n11 = n11;
-                return (*aux).p;
+            if n11 == aux.n11 - 1 {
+                aux.p *= aux.n11 as f64 / (aux.n1_ - n11) as f64
+                    * (aux.n11 + aux.n - aux.n1_ - aux.n_1) as f64
+                    / (aux.n_1 - n11) as f64;
+                aux.n11 = n11;
+                return aux.p;
             }
         }
-        (*aux).n11 = n11;
+        aux.n11 = n11;
     }
-    (*aux).p = hypergeo((*aux).n11, (*aux).n1_, (*aux).n_1, (*aux).n);
-    (*aux).p
+    aux.p = hypergeo(aux.n11, aux.n1_, aux.n_1, aux.n);
+    aux.p
 }
 
-pub unsafe fn kt_fisher_exact(
-    n11: c_int,
-    n12: c_int,
-    n21: c_int,
-    n22: c_int,
-    _left: *mut f64,
-    _right: *mut f64,
-    two: *mut f64,
+pub fn kt_fisher_exact(
+    n11: i32,
+    n12: i32,
+    n21: i32,
+    n22: i32,
+    left_tail: &mut f64,
+    right_tail: &mut f64,
+    two: &mut f64,
 ) -> f64 {
     let n1_ = n11 + n12;
     let n_1 = n11 + n21;
@@ -254,8 +259,8 @@ pub unsafe fn kt_fisher_exact(
         min = 0;
     }
     *two = 1.0;
-    *_left = 1.0;
-    *_right = 1.0;
+    *left_tail = 1.0;
+    *right_tail = 1.0;
     if min == max {
         return 1.0;
     }
@@ -270,13 +275,13 @@ pub unsafe fn kt_fisher_exact(
     let q = hypergeo_acc(n11, n1_, n_1, n, &mut aux);
     if q == 0.0 {
         if (n11 as i64) * (n as i64 + 2) < (n_1 as i64 + 1) * (n1_ as i64 + 1) {
-            *_left = 0.0;
-            *_right = 1.0;
+            *left_tail = 0.0;
+            *right_tail = 1.0;
             *two = 0.0;
             return 0.0;
         } else {
-            *_left = 1.0;
-            *_right = 0.0;
+            *left_tail = 1.0;
+            *right_tail = 0.0;
             *two = 0.0;
             return 0.0;
         }
@@ -321,8 +326,8 @@ pub unsafe fn kt_fisher_exact(
     } else {
         left = 1.0 - right + q;
     }
-    *_left = left;
-    *_right = right;
+    *left_tail = left;
+    *right_tail = right;
     q
 }
 
@@ -396,16 +401,14 @@ mod tests {
 
     #[test]
     fn fisher_exact_returns_expected_tail_probabilities() {
-        unsafe {
-            let mut left = 0.0;
-            let mut right = 0.0;
-            let mut two = 0.0;
-            let q = kt_fisher_exact(1, 9, 11, 3, &mut left, &mut right, &mut two);
-            assert!((q - 0.001346076187912236).abs() < 1e-15);
-            assert!((left - 0.0013797280926100418).abs() < 1e-15);
-            assert!((right - 0.9999663480953022).abs() < 1e-15);
-            assert!((two - 0.0027594561852200836).abs() < 1e-15);
-        }
+        let mut left = 0.0;
+        let mut right = 0.0;
+        let mut two = 0.0;
+        let q = kt_fisher_exact(1, 9, 11, 3, &mut left, &mut right, &mut two);
+        assert!((q - 0.001346076187912236).abs() < 1e-15);
+        assert!((left - 0.0013797280926100418).abs() < 1e-15);
+        assert!((right - 0.9999663480953022).abs() < 1e-15);
+        assert!((two - 0.0027594561852200836).abs() < 1e-15);
     }
 
     #[test]
@@ -466,101 +469,91 @@ mod tests {
             (10000, 50000, 130000, 10000, 0.0, 1.0, 0.0, 0.0),
         ];
 
-        unsafe {
-            for &(n11, n12, n21, n22, eleft, eright, etwo, eprob) in &cases {
-                let mut left = 0.0;
-                let mut right = 0.0;
-                let mut two = 0.0;
-                let prob = kt_fisher_exact(n11, n12, n21, n22, &mut left, &mut right, &mut two);
+        for &(n11, n12, n21, n22, eleft, eright, etwo, eprob) in &cases {
+            let mut left = 0.0;
+            let mut right = 0.0;
+            let mut two = 0.0;
+            let prob = kt_fisher_exact(n11, n12, n21, n22, &mut left, &mut right, &mut two);
 
-                assert!((left - eleft).abs() <= 1e-8, "{n11} {n12} {n21} {n22} left");
-                assert!(
-                    (right - eright).abs() <= 1e-8,
-                    "{n11} {n12} {n21} {n22} right"
-                );
-                assert!((two - etwo).abs() <= 1e-8, "{n11} {n12} {n21} {n22} two");
-                assert!((prob - eprob).abs() <= 1e-8, "{n11} {n12} {n21} {n22} prob");
-            }
+            assert!((left - eleft).abs() <= 1e-8, "{n11} {n12} {n21} {n22} left");
+            assert!(
+                (right - eright).abs() <= 1e-8,
+                "{n11} {n12} {n21} {n22} right"
+            );
+            assert!((two - etwo).abs() <= 1e-8, "{n11} {n12} {n21} {n22} two");
+            assert!((prob - eprob).abs() <= 1e-8, "{n11} {n12} {n21} {n22} prob");
         }
     }
 
     #[test]
     fn hypergeo_acc_reuses_and_refreshes_cached_state() {
-        unsafe {
-            let mut aux = hgacc_t {
-                n11: 0,
-                n1_: 0,
-                n_1: 0,
-                n: 0,
-                p: 0.0,
-            };
+        let mut aux = hgacc_t {
+            n11: 0,
+            n1_: 0,
+            n_1: 0,
+            n: 0,
+            p: 0.0,
+        };
 
-            let p5 = hypergeo_acc(5, 20, 18, 40, &mut aux);
-            assert!((p5 - hypergeo(5, 20, 18, 40)).abs() < 1e-12);
+        let p5 = hypergeo_acc(5, 20, 18, 40, &mut aux);
+        assert!((p5 - hypergeo(5, 20, 18, 40)).abs() < 1e-12);
 
-            let p6 = hypergeo_acc(6, 0, 0, 0, &mut aux);
-            assert!((p6 - hypergeo(6, 20, 18, 40)).abs() < 1e-12);
-            assert_eq!(aux.n11, 6);
+        let p6 = hypergeo_acc(6, 0, 0, 0, &mut aux);
+        assert!((p6 - hypergeo(6, 20, 18, 40)).abs() < 1e-12);
+        assert_eq!(aux.n11, 6);
 
-            let p11 = hypergeo_acc(11, 0, 0, 0, &mut aux);
-            assert!((p11 - hypergeo(11, 20, 18, 40)).abs() < 1e-12);
-            assert_eq!(aux.n11, 11);
-        }
+        let p11 = hypergeo_acc(11, 0, 0, 0, &mut aux);
+        assert!((p11 - hypergeo(11, 20, 18, 40)).abs() < 1e-12);
+        assert_eq!(aux.n11, 11);
     }
 
     #[test]
     fn hypergeo_acc_reuses_cached_state_when_stepping_down() {
-        unsafe {
-            let mut aux = hgacc_t {
-                n11: 0,
-                n1_: 0,
-                n_1: 0,
-                n: 0,
-                p: 0.0,
-            };
+        let mut aux = hgacc_t {
+            n11: 0,
+            n1_: 0,
+            n_1: 0,
+            n: 0,
+            p: 0.0,
+        };
 
-            let p6 = hypergeo_acc(6, 20, 18, 40, &mut aux);
-            assert!((p6 - hypergeo(6, 20, 18, 40)).abs() < 1e-12);
+        let p6 = hypergeo_acc(6, 20, 18, 40, &mut aux);
+        assert!((p6 - hypergeo(6, 20, 18, 40)).abs() < 1e-12);
 
-            let p5 = hypergeo_acc(5, 0, 0, 0, &mut aux);
-            assert!((p5 - hypergeo(5, 20, 18, 40)).abs() < 1e-12);
-            assert_eq!(aux.n11, 5);
-        }
+        let p5 = hypergeo_acc(5, 0, 0, 0, &mut aux);
+        assert!((p5 - hypergeo(5, 20, 18, 40)).abs() < 1e-12);
+        assert_eq!(aux.n11, 5);
     }
 
     #[test]
     fn hypergeo_acc_supplied_margins_replace_cached_table() {
-        unsafe {
-            let mut aux = hgacc_t {
-                n11: 0,
-                n1_: 0,
-                n_1: 0,
-                n: 0,
-                p: 0.0,
-            };
+        let mut aux = hgacc_t {
+            n11: 0,
+            n1_: 0,
+            n_1: 0,
+            n: 0,
+            p: 0.0,
+        };
 
-            hypergeo_acc(6, 20, 18, 40, &mut aux);
-            let refreshed = hypergeo_acc(2, 7, 9, 16, &mut aux);
+        hypergeo_acc(6, 20, 18, 40, &mut aux);
+        let refreshed = hypergeo_acc(2, 7, 9, 16, &mut aux);
 
-            assert_eq!(aux.n11, 2);
-            assert_eq!(aux.n1_, 7);
-            assert_eq!(aux.n_1, 9);
-            assert_eq!(aux.n, 16);
-            assert_eq!(refreshed, hypergeo(2, 7, 9, 16));
-        }
+        assert_eq!(aux.n11, 2);
+        assert_eq!(aux.n1_, 7);
+        assert_eq!(aux.n_1, 9);
+        assert_eq!(aux.n, 16);
+        assert_eq!(refreshed, hypergeo(2, 7, 9, 16));
     }
 
     #[test]
     fn fisher_exact_single_possible_table_is_certain() {
-        unsafe {
-            let mut left = -1.0;
-            let mut right = -1.0;
-            let mut two = -1.0;
-            let q = kt_fisher_exact(0, 0, 7, 5, &mut left, &mut right, &mut two);
-            assert_eq!(q, 1.0);
-            assert_eq!(left, 1.0);
-            assert_eq!(right, 1.0);
-            assert_eq!(two, 1.0);
-        }
+        let mut left = -1.0;
+        let mut right = -1.0;
+        let mut two = -1.0;
+        let q = kt_fisher_exact(0, 0, 7, 5, &mut left, &mut right, &mut two);
+        assert_eq!(q, 1.0);
+        assert_eq!(left, 1.0);
+        assert_eq!(right, 1.0);
+        assert_eq!(two, 1.0);
     }
 }

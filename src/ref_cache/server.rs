@@ -92,6 +92,12 @@ struct HttpParserLayout {
     out: c_uint,
     pos: c_uint,
     used: c_uint,
+    uri_buf: Vec<u8>,
+    key_buf: Vec<u8>,
+    val_buf: Vec<u8>,
+    buffer_buf: Vec<u8>,
+    user_agent_buf: Vec<u8>,
+    referrer_buf: Vec<u8>,
 }
 
 #[repr(C)]
@@ -1144,9 +1150,7 @@ pub unsafe fn ref_cache_server_c_721_run_poll_loop(
         return -1;
     }
 
-    let polled_listeners =
-        super::listener::ref_cache_listener_c_242_register_listener_pollers(lsocks.cast(), pw);
-    if polled_listeners.is_null() {
+    if super::listener::ref_cache_listener_c_242_register_listener_pollers(lsocks.cast(), pw) != 0 {
         return -1;
     }
 

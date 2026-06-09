@@ -317,30 +317,26 @@ fn test_vcf_sweep_matches_original_fixture_output() {
     std::fs::write(&path, input).unwrap();
 
     unsafe {
-        let c_path = CString::new(path.to_string_lossy().as_bytes()).unwrap();
-        let sw = bcf_sweep_init(c_path.as_ptr());
-        assert!(!sw.is_null());
-        let hdr = bcf_sweep_hdr(sw);
-        assert!(!hdr.is_null());
+        let path_bytes = path.to_string_lossy().into_owned().into_bytes();
+        let mut sw = bcf_sweep_init(&path_bytes).expect("bcf_sweep_init failed");
+        let hdr = bcf_sweep_hdr(sw.as_mut()).expect("bcf_sweep_hdr failed") as *mut _;
 
         let mut out = String::new();
         let mut chksum = 0;
         loop {
-            let rec = bcf_sweep_fwd(sw);
-            if rec.is_null() {
+            let Some(rec) = bcf_sweep_fwd(sw.as_mut()) else {
                 break;
-            }
-            chksum += (*rec).pos + 1;
+            };
+            chksum += rec.pos + 1;
         }
         out.push_str(&format!("fwd position chksum: {chksum}\n"));
 
         chksum = 0;
         loop {
-            let rec = bcf_sweep_bwd(sw);
-            if rec.is_null() {
+            let Some(rec) = bcf_sweep_bwd(sw.as_mut()) else {
                 break;
-            }
-            chksum += (*rec).pos + 1;
+            };
+            chksum += rec.pos + 1;
         }
         out.push_str(&format!("bwd position chksum: {chksum}\n"));
 
@@ -348,18 +344,18 @@ fn test_vcf_sweep_matches_original_fixture_output() {
             chksum = 0;
             loop {
                 let rec = if forward {
-                    bcf_sweep_fwd(sw)
+                    bcf_sweep_fwd(sw.as_mut())
                 } else {
-                    bcf_sweep_bwd(sw)
+                    bcf_sweep_bwd(sw.as_mut())
                 };
-                if rec.is_null() {
+                let Some(rec) = rec else {
                     break;
-                }
+                };
                 let mut pls: *mut c_void = std::ptr::null_mut();
                 let mut m_pls = 0;
                 let n_pls = bcf_get_format_values(
                     hdr,
-                    rec,
+                    rec as *mut _,
                     c"PL".as_ptr(),
                     &mut pls,
                     &mut m_pls,
@@ -385,7 +381,7 @@ fn test_vcf_sweep_matches_original_fixture_output() {
             out.push_str(&format!("{label}: {chksum}\n"));
         }
 
-        bcf_sweep_destroy(sw);
+        bcf_sweep_destroy(Some(sw));
         assert_eq!(
             out,
             std::fs::read_to_string(

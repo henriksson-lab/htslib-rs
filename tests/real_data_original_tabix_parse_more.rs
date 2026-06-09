@@ -72,7 +72,7 @@ unsafe fn query_tabix_rows(
     assert!(!tbx.is_null());
     let fp = hts_open(bgz_c.as_ptr(), c"r".as_ptr());
     assert!(!fp.is_null());
-    let itr = tbx_itr_querys1(tbx, region.as_ptr());
+    let itr = tbx_itr_querys1(&mut *tbx, region.as_ptr());
     assert!(!itr.is_null(), "failed to query region {region:?}");
 
     let mut line: kstring_t = std::mem::zeroed();
@@ -110,13 +110,13 @@ unsafe fn parse_interval(conf: &htslib_rs::tbx_conf_t, line: &str) -> ParsedInte
         "failed to parse tabix data line: {line}"
     );
 
-    let ss = intv.ss.expect("parsed interval sequence start").as_ptr();
+    let ss = intv.ss.expect("parsed interval sequence start");
     let seq = if let Some(se) = intv.se {
-        let len = se.as_ptr().offset_from(ss) as usize;
-        let bytes = std::slice::from_raw_parts(ss.cast::<u8>(), len);
-        String::from_utf8_lossy(bytes).into_owned()
+        String::from_utf8_lossy(&bytes[ss..se]).into_owned()
     } else {
-        CStr::from_ptr(ss).to_string_lossy().into_owned()
+        CStr::from_ptr(bytes.as_ptr().add(ss).cast())
+            .to_string_lossy()
+            .into_owned()
     };
 
     ParsedInterval {

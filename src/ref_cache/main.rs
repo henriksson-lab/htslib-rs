@@ -32,6 +32,7 @@ use super::{
     poll_wrap_epoll as poll_impl,
     server::ref_cache_server_c_721_run_poll_loop,
 };
+use std::cell::UnsafeCell;
 use std::ffi::{c_char, c_int, c_ulong, c_void};
 
 type PollWrap = poll_impl::Poll_wrap;
@@ -45,6 +46,7 @@ pub enum Child_type {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct Child_proc {
     type_: Child_type,
     pid: libc::pid_t,
@@ -54,8 +56,12 @@ pub struct Child_proc {
     upstream: c_int,
 }
 
-static mut upstream: *mut c_int = std::ptr::null_mut();
-static mut kids: *mut Child_proc = std::ptr::null_mut();
+struct ProcessVec<T>(UnsafeCell<Option<Vec<T>>>);
+
+unsafe impl<T> Sync for ProcessVec<T> {}
+
+static UPSTREAM: ProcessVec<c_int> = ProcessVec(UnsafeCell::new(None));
+static KIDS: ProcessVec<Child_proc> = ProcessVec(UnsafeCell::new(None));
 static mut nkids: usize = 0;
 static mut sig_fds: [c_int; 2] = [0; 2];
 pub static mut polled_sig: *mut Pw_item = std::ptr::null_mut();
@@ -86,29 +92,36 @@ pub unsafe fn ref_cache_main_c_99_change_name(name: *mut c_char) {
 
 // original: init_children (htslib/ref_cache/main.c:107)
 pub unsafe fn ref_cache_main_c_107_init_children(opts: *mut Options) -> c_int {
-    upstream = libc::malloc(((*opts).max_kids as usize + 1) * std::mem::size_of::<c_int>()).cast();
-    if upstream.is_null() {
-        return -1;
-    }
+    let max_kids = (*opts).max_kids as usize;
+    *UPSTREAM.0.get() = Some(vec![-1; max_kids + 1]);
+    *KIDS.0.get() = Some(vec![
+        Child_proc {
+            type_: Child_type::CHLD_SERVER,
+            pid: 0,
+            polled_rd: std::ptr::null_mut(),
+            log_rd: -1,
+            log_wr: -1,
+            upstream: -1,
+        };
+        max_kids + 1
+    ]);
 
-    kids = libc::malloc(((*opts).max_kids as usize + 1) * std::mem::size_of::<Child_proc>()).cast();
-    if kids.is_null() {
-        return -1;
-    }
+    let upstream_vec = (*UPSTREAM.0.get()).as_mut().unwrap();
+    let kids_vec = (*KIDS.0.get()).as_mut().unwrap();
 
     let mut k = 0;
     while k <= (*opts).max_kids as c_int {
-        (*kids.add(k as usize)).type_ = Child_type::CHLD_SERVER;
-        (*kids.add(k as usize)).pid = 0;
-        (*kids.add(k as usize)).polled_rd = std::ptr::null_mut();
-        (*kids.add(k as usize)).log_rd = -1;
-        (*kids.add(k as usize)).log_wr = -1;
-        (*kids.add(k as usize)).upstream = -1;
-        *upstream.add(k as usize) = -1;
+        kids_vec[k as usize].type_ = Child_type::CHLD_SERVER;
+        kids_vec[k as usize].pid = 0;
+        kids_vec[k as usize].polled_rd = std::ptr::null_mut();
+        kids_vec[k as usize].log_rd = -1;
+        kids_vec[k as usize].log_wr = -1;
+        kids_vec[k as usize].upstream = -1;
+        upstream_vec[k as usize] = -1;
         k += 1;
     }
 
-    (*kids.add((*opts).max_kids as usize)).type_ = Child_type::CHLD_UPSTREAM;
+    kids_vec[max_kids].type_ = Child_type::CHLD_UPSTREAM;
 
     k = 0;
     while k < (*opts).max_kids as c_int {
@@ -121,8 +134,8 @@ pub unsafe fn ref_cache_main_c_107_init_children(opts: *mut Options) -> c_int {
             break;
         }
 
-        (*kids.add(k as usize)).log_rd = pipefd[0];
-        (*kids.add(k as usize)).log_wr = pipefd[1];
+        kids_vec[k as usize].log_rd = pipefd[0];
+        kids_vec[k as usize].log_wr = pipefd[1];
 
         /* Sockets for upstream */
         if !(*opts).upstream_url.is_null() {
@@ -131,28 +144,30 @@ pub unsafe fn ref_cache_main_c_107_init_children(opts: *mut Options) -> c_int {
                 break;
             }
 
-            (*kids.add(k as usize)).upstream = sv[0];
-            *upstream.add(k as usize) = sv[1];
+            kids_vec[k as usize].upstream = sv[0];
+            upstream_vec[k as usize] = sv[1];
         }
         k += 1;
     }
     if k < (*opts).max_kids as c_int {
         let mut i = 0;
         while i < (*opts).max_kids as c_int {
-            if (*kids.add(i as usize)).log_rd >= 0 {
-                libc::close((*kids.add(i as usize)).log_rd);
+            if kids_vec[i as usize].log_rd >= 0 {
+                libc::close(kids_vec[i as usize].log_rd);
             }
-            if (*kids.add(i as usize)).log_wr >= 0 {
-                libc::close((*kids.add(i as usize)).log_wr);
+            if kids_vec[i as usize].log_wr >= 0 {
+                libc::close(kids_vec[i as usize].log_wr);
             }
-            if (*kids.add(i as usize)).upstream >= 0 {
-                libc::close((*kids.add(i as usize)).upstream);
+            if kids_vec[i as usize].upstream >= 0 {
+                libc::close(kids_vec[i as usize].upstream);
             }
-            if *upstream.add(i as usize) >= 0 {
-                libc::close(*upstream.add(i as usize));
+            if upstream_vec[i as usize] >= 0 {
+                libc::close(upstream_vec[i as usize]);
             }
             i += 1;
         }
+        *KIDS.0.get() = None;
+        *UPSTREAM.0.get() = None;
         return -1;
     }
 
@@ -161,20 +176,22 @@ pub unsafe fn ref_cache_main_c_107_init_children(opts: *mut Options) -> c_int {
         libc::perror(c"pipe".as_ptr());
         let mut i = 0;
         while i < (*opts).max_kids as c_int {
-            if (*kids.add(i as usize)).log_rd >= 0 {
-                libc::close((*kids.add(i as usize)).log_rd);
+            if kids_vec[i as usize].log_rd >= 0 {
+                libc::close(kids_vec[i as usize].log_rd);
             }
-            if (*kids.add(i as usize)).log_wr >= 0 {
-                libc::close((*kids.add(i as usize)).log_wr);
+            if kids_vec[i as usize].log_wr >= 0 {
+                libc::close(kids_vec[i as usize].log_wr);
             }
-            if (*kids.add(i as usize)).upstream >= 0 {
-                libc::close((*kids.add(i as usize)).upstream);
+            if kids_vec[i as usize].upstream >= 0 {
+                libc::close(kids_vec[i as usize].upstream);
             }
-            if *upstream.add(i as usize) >= 0 {
-                libc::close(*upstream.add(i as usize));
+            if upstream_vec[i as usize] >= 0 {
+                libc::close(upstream_vec[i as usize]);
             }
             i += 1;
         }
+        *KIDS.0.get() = None;
+        *UPSTREAM.0.get() = None;
         return -1;
     }
 
@@ -203,22 +220,25 @@ pub unsafe fn ref_cache_main_c_168_set_up_child(
         return -1;
     }
 
-    assert!(!kids.is_null());
+    {
+        let kids_vec = (*KIDS.0.get()).as_mut().unwrap();
+        let upstream_vec = (*UPSTREAM.0.get()).as_mut().unwrap();
 
-    /* Close all the file descriptors we don't need */
-    let mut i = 0;
-    while i < (*opts).max_kids as c_int {
-        libc::close((*kids.add(i as usize)).log_rd);
-        if is_upstream == 0 && *upstream.add(i as usize) >= 0 {
-            libc::close(*upstream.add(i as usize));
-        }
-        if i != k {
-            libc::close((*kids.add(i as usize)).log_wr);
-            if (*kids.add(i as usize)).upstream >= 0 {
-                libc::close((*kids.add(i as usize)).upstream);
+        /* Close all the file descriptors we don't need */
+        let mut i = 0;
+        while i < (*opts).max_kids as c_int {
+            libc::close(kids_vec[i as usize].log_rd);
+            if is_upstream == 0 && upstream_vec[i as usize] >= 0 {
+                libc::close(upstream_vec[i as usize]);
             }
+            if i != k {
+                libc::close(kids_vec[i as usize].log_wr);
+                if kids_vec[i as usize].upstream >= 0 {
+                    libc::close(kids_vec[i as usize].upstream);
+                }
+            }
+            i += 1;
         }
-        i += 1;
     }
     libc::close(sig_fds[0]);
     libc::close(sig_fds[1]);
@@ -231,9 +251,9 @@ pub unsafe fn ref_cache_main_c_168_set_up_child(
         libc::close(libc::fileno((*opts).log));
     }
 
-    libc::free(kids.cast());
+    *KIDS.0.get() = None;
     if is_upstream == 0 {
-        libc::free(upstream.cast());
+        *UPSTREAM.0.get() = None;
     }
 
     ref_cache_main_c_99_change_name(if is_upstream != 0 {
@@ -251,12 +271,12 @@ pub unsafe fn ref_cache_main_c_211_make_new_child(
     lsocks: *mut Listeners,
     pw: *mut PollWrap,
 ) -> c_int {
-    assert!(!kids.is_null());
+    let kids_vec = (*KIDS.0.get()).as_mut().unwrap();
 
     /* Find a free slot */
     let mut k = 0;
     while k < (*opts).max_kids as c_int {
-        if (*kids.add(k as usize)).pid == 0 {
+        if kids_vec[k as usize].pid == 0 {
             break;
         }
         k += 1;
@@ -272,8 +292,8 @@ pub unsafe fn ref_cache_main_c_211_make_new_child(
 
     if pid == 0 {
         /* Copy file descriptors as set_up_child frees kids[] */
-        let upstr = (*kids.add(k as usize)).upstream;
-        let log_wr = (*kids.add(k as usize)).log_wr;
+        let upstr = kids_vec[k as usize].upstream;
+        let log_wr = kids_vec[k as usize].log_wr;
         if ref_cache_main_c_168_set_up_child(opts, k, 0, pw) != 0 {
             libc::_exit(libc::EXIT_FAILURE);
         }
@@ -285,7 +305,8 @@ pub unsafe fn ref_cache_main_c_211_make_new_child(
         });
     }
 
-    (*kids.add(k as usize)).pid = pid;
+    let kids_vec = (*KIDS.0.get()).as_mut().unwrap();
+    kids_vec[k as usize].pid = pid;
     nkids += 1;
     0
 }
@@ -314,7 +335,8 @@ pub unsafe fn ref_cache_main_c_245_start_upstream(opts: *mut Options, pw: *mut P
             libc::_exit(libc::EXIT_FAILURE);
         }
 
-        let res = run_upstream_handler(opts, upstream, liveness_pipe[1]);
+        let upstream_ptr = (*UPSTREAM.0.get()).as_mut().unwrap().as_mut_ptr();
+        let res = run_upstream_handler(opts, upstream_ptr, liveness_pipe[1]);
 
         libc::_exit(if res == 0 {
             libc::EXIT_SUCCESS
@@ -323,12 +345,12 @@ pub unsafe fn ref_cache_main_c_245_start_upstream(opts: *mut Options, pw: *mut P
         });
     }
 
-    assert!(!kids.is_null());
+    let kids_vec = (*KIDS.0.get()).as_mut().unwrap();
 
     libc::close(liveness_pipe[1]);
-    (*kids.add((*opts).max_kids as usize)).pid = upstream_pid;
-    (*kids.add((*opts).max_kids as usize)).type_ = Child_type::CHLD_UPSTREAM;
-    (*kids.add((*opts).max_kids as usize)).log_rd = liveness_pipe[0];
+    kids_vec[(*opts).max_kids as usize].pid = upstream_pid;
+    kids_vec[(*opts).max_kids as usize].type_ = Child_type::CHLD_UPSTREAM;
+    kids_vec[(*opts).max_kids as usize].log_rd = liveness_pipe[0];
 
     0
 }
@@ -408,6 +430,7 @@ pub unsafe fn ref_cache_main_c_306_handle_sigchld(opts: *mut Options, pw: *mut P
         }
 
         if pid > 0 {
+            let mut restart_upstream = false;
             if libc::WIFEXITED(status) {
                 libc::fprintf(
                     crate::htslib_rs::ref_cache::compat::stderr(),
@@ -429,20 +452,24 @@ pub unsafe fn ref_cache_main_c_306_handle_sigchld(opts: *mut Options, pw: *mut P
                     pid,
                 );
             }
-            let mut i = 0;
-            while i < (*opts).max_kids as c_int + 1 {
-                if (*kids.add(i as usize)).pid == pid {
-                    (*kids.add(i as usize)).pid = 0;
-                    if (*kids.add(i as usize)).type_ == Child_type::CHLD_UPSTREAM {
-                        if ref_cache_main_c_245_start_upstream(opts, pw) != 0 {
-                            return -1;
+            {
+                let mut i = 0;
+                let kids_vec = (*KIDS.0.get()).as_mut().unwrap();
+                while i < (*opts).max_kids as c_int + 1 {
+                    if kids_vec[i as usize].pid == pid {
+                        kids_vec[i as usize].pid = 0;
+                        if kids_vec[i as usize].type_ == Child_type::CHLD_UPSTREAM {
+                            restart_upstream = true;
+                        } else {
+                            nkids -= 1;
                         }
-                    } else {
-                        nkids -= 1;
+                        break;
                     }
-                    break;
+                    i += 1;
                 }
-                i += 1;
+            }
+            if restart_upstream && ref_cache_main_c_245_start_upstream(opts, pw) != 0 {
+                return -1;
             }
         }
         if pid <= 0 {
@@ -457,20 +484,22 @@ pub unsafe fn ref_cache_main_c_306_handle_sigchld(opts: *mut Options, pw: *mut P
 pub unsafe fn ref_cache_main_c_362_init_poller(opts: *mut Options) -> *mut PollWrap {
     let pw = poll_impl::ref_cache_poll_wrap_epoll_c_49_pw_init(((*opts).verbosity > 2) as c_int);
     let mut k = 0usize;
+    let kids_vec = (*KIDS.0.get()).as_mut().unwrap();
 
     if pw.is_null() {
         return std::ptr::null_mut();
     }
 
     while k < (*opts).max_kids as usize {
-        (*kids.add(k)).polled_rd = poll_impl::ref_cache_poll_wrap_epoll_c_78_pw_register(
+        let kid = &mut kids_vec[k];
+        kid.polled_rd = poll_impl::ref_cache_poll_wrap_epoll_c_78_pw_register(
             pw,
-            (*kids.add(k)).log_rd,
+            kid.log_rd,
             Pw_fd_type::MAIN_LOG_RD,
             (PW_IN | PW_ERR | PW_HUP) as u32,
-            kids.add(k).cast(),
+            (kid as *mut Child_proc).cast(),
         );
-        if (*kids.add(k)).polled_rd.is_null() {
+        if kid.polled_rd.is_null() {
             libc::perror(c"Registering log pipe with poller".as_ptr());
             break;
         }
@@ -479,12 +508,8 @@ pub unsafe fn ref_cache_main_c_362_init_poller(opts: *mut Options) -> *mut PollW
     if k < (*opts).max_kids as usize {
         let mut j = 0usize;
         while j < nkids {
-            if !(*kids.add(j)).polled_rd.is_null() {
-                poll_impl::ref_cache_poll_wrap_epoll_c_126_pw_remove(
-                    pw,
-                    (*kids.add(j)).polled_rd,
-                    0,
-                );
+            if !kids_vec[j].polled_rd.is_null() {
+                poll_impl::ref_cache_poll_wrap_epoll_c_126_pw_remove(pw, kids_vec[j].polled_rd, 0);
             }
             j += 1;
         }
@@ -502,12 +527,8 @@ pub unsafe fn ref_cache_main_c_362_init_poller(opts: *mut Options) -> *mut PollW
         libc::perror(c"Registering signal pipe with poller".as_ptr());
         let mut j = 0usize;
         while j < nkids {
-            if !(*kids.add(j)).polled_rd.is_null() {
-                poll_impl::ref_cache_poll_wrap_epoll_c_126_pw_remove(
-                    pw,
-                    (*kids.add(j)).polled_rd,
-                    0,
-                );
+            if !kids_vec[j].polled_rd.is_null() {
+                poll_impl::ref_cache_poll_wrap_epoll_c_126_pw_remove(pw, kids_vec[j].polled_rd, 0);
             }
             j += 1;
         }
@@ -1562,9 +1583,10 @@ pub unsafe fn ref_cache_main_c_913_main(argc: c_int, argv: *mut *mut c_char) -> 
     }
     if !lsocks.is_null() {
         listener::ref_cache_listener_c_235_close_listen_sockets(lsocks);
-        libc::free(lsocks.cast());
     }
     log_files::ref_cache_log_files_c_134_close_logs(logfiles);
     libc::free(opts.match_addrs.cast());
+    *KIDS.0.get() = None;
+    *UPSTREAM.0.get() = None;
     retval
 }

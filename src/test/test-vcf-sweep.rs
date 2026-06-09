@@ -1,4 +1,4 @@
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::{c_char, c_int, c_void, CStr};
 
 pub unsafe fn test_test_vcf_sweep_c_31_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     if argc != 2 {
@@ -9,26 +9,26 @@ pub unsafe fn test_test_vcf_sweep_c_31_main(argc: c_int, argv: *mut *mut c_char)
         return 1;
     }
 
-    let sw = crate::htslib_rs::vcf::bcf_sweep_init(*argv.add(1));
-    let hdr = crate::htslib_rs::vcf::bcf_sweep_hdr(sw);
+    let fname = CStr::from_ptr(*argv.add(1)).to_bytes();
+    let mut sw = crate::htslib_rs::vcf::bcf_sweep_init(fname);
+    let Some(sw_ref) = sw.as_mut() else {
+        return 1;
+    };
+    let Some(hdr) = crate::htslib_rs::vcf::bcf_sweep_hdr(sw_ref.as_mut()) else {
+        crate::htslib_rs::vcf::bcf_sweep_destroy(sw);
+        return 1;
+    };
+    let hdr = hdr as *mut crate::htslib_rs::vcf::bcf_hdr_t;
     let mut chksum: c_int = 0;
 
-    loop {
-        let rec = crate::htslib_rs::vcf::bcf_sweep_fwd(sw);
-        if rec.is_null() {
-            break;
-        }
-        chksum += ((*rec).pos + 1) as c_int;
+    while let Some(rec) = crate::htslib_rs::vcf::bcf_sweep_fwd(sw.as_mut().unwrap().as_mut()) {
+        chksum += (rec.pos + 1) as c_int;
     }
     libc::printf(c"fwd position chksum: %d\n".as_ptr(), chksum);
 
     chksum = 0;
-    loop {
-        let rec = crate::htslib_rs::vcf::bcf_sweep_bwd(sw);
-        if rec.is_null() {
-            break;
-        }
-        chksum += ((*rec).pos + 1) as c_int;
+    while let Some(rec) = crate::htslib_rs::vcf::bcf_sweep_bwd(sw.as_mut().unwrap().as_mut()) {
+        chksum += (rec.pos + 1) as c_int;
     }
     libc::printf(c"bwd position chksum: %d\n".as_ptr(), chksum);
 
@@ -36,15 +36,10 @@ pub unsafe fn test_test_vcf_sweep_c_31_main(argc: c_int, argv: *mut *mut c_char)
     let mut n_pls: c_int;
     let mut pls: *mut i32 = std::ptr::null_mut();
     chksum = 0;
-    loop {
-        let rec = crate::htslib_rs::vcf::bcf_sweep_fwd(sw);
-        if rec.is_null() {
-            break;
-        }
-
+    while let Some(rec) = crate::htslib_rs::vcf::bcf_sweep_fwd(sw.as_mut().unwrap().as_mut()) {
         n_pls = crate::htslib_rs::vcf::bcf_get_format_values(
             hdr,
-            rec,
+            rec as *mut crate::htslib_rs::vcf::bcf1_t,
             c"PL".as_ptr(),
             (&mut pls as *mut *mut i32).cast::<*mut c_void>(),
             &mut m_pls,
@@ -74,15 +69,10 @@ pub unsafe fn test_test_vcf_sweep_c_31_main(argc: c_int, argv: *mut *mut c_char)
     libc::printf(c"fwd PL chksum: %d\n".as_ptr(), chksum);
 
     chksum = 0;
-    loop {
-        let rec = crate::htslib_rs::vcf::bcf_sweep_bwd(sw);
-        if rec.is_null() {
-            break;
-        }
-
+    while let Some(rec) = crate::htslib_rs::vcf::bcf_sweep_bwd(sw.as_mut().unwrap().as_mut()) {
         n_pls = crate::htslib_rs::vcf::bcf_get_format_values(
             hdr,
-            rec,
+            rec as *mut crate::htslib_rs::vcf::bcf1_t,
             c"PL".as_ptr(),
             (&mut pls as *mut *mut i32).cast::<*mut c_void>(),
             &mut m_pls,

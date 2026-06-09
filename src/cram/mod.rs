@@ -828,13 +828,13 @@ pub struct pool_t {
     pub used: usize,
 }
 
-#[repr(C)]
 pub struct pool_alloc_t {
     pub dsize: usize,
     pub psize: usize,
     pub npools: usize,
     pub pools: *mut pool_t,
     pub free: *mut c_void,
+    pub(crate) pools_storage: Vec<pool_t>,
 }
 
 #[repr(C)]

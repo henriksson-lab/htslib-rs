@@ -8,6 +8,9 @@ pub unsafe extern "C" fn test_test_expr_c_31_lookup(
     end: *mut *mut c_char,
     res: *mut crate::htslib_rs::hts::hts_expr_val_t,
 ) -> c_int {
+    let Some(res_ref) = res.as_mut() else {
+        return -1;
+    };
     (*res).is_str = 0;
     if libc::strncmp(str_, c"foo".as_ptr(), 3) == 0 {
         *end = str_.add(3);
@@ -43,14 +46,14 @@ pub unsafe extern "C" fn test_test_expr_c_31_lookup(
         (*res).is_true = 1;
     } else if libc::strncmp(str_, c"null-but-true".as_ptr(), 13) == 0 {
         *end = str_.add(13);
-        crate::htslib_rs::hts::hts_expr_val_undef(res);
+        crate::htslib_rs::hts::hts_expr_val_undef(res_ref);
         (*res).is_true = 1;
     } else if libc::strncmp(str_, c"null".as_ptr(), 4) == 0 {
         *end = str_.add(4);
-        crate::htslib_rs::hts::hts_expr_val_undef(res);
+        crate::htslib_rs::hts::hts_expr_val_undef(res_ref);
     } else if libc::strncmp(str_, c"nan".as_ptr(), 3) == 0 {
         *end = str_.add(3);
-        crate::htslib_rs::hts::hts_expr_val_undef(res);
+        crate::htslib_rs::hts::hts_expr_val_undef(res_ref);
     } else {
         return -1;
     }
@@ -1066,7 +1069,7 @@ pub unsafe fn test_test_expr_c_110_test() -> c_int {
             return 1;
         }
         if crate::htslib_rs::hts::hts_filter_eval2(
-            filt,
+            &mut *filt,
             std::ptr::null_mut(),
             Some(test_test_expr_c_31_lookup),
             &mut r,
@@ -1161,7 +1164,7 @@ pub unsafe fn test_test_expr_c_346_main(argc: c_int, argv: *mut *mut c_char) -> 
         };
         let filt = crate::htslib_rs::hts::hts_filter_init(*argv.add(1));
         if crate::htslib_rs::hts::hts_filter_eval2(
-            filt,
+            &mut *filt,
             std::ptr::null_mut(),
             Some(test_test_expr_c_31_lookup),
             &mut v,

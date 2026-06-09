@@ -2129,14 +2129,14 @@ pub unsafe fn test_test_vcf_api_c_933_test_bcf_remove_allele_set() {
         check0!(test_test_vcf_api_c_909_read_vcf_line(
             input, hdr, rec, &mut kstr
         ));
-        kbs_clear(rm_set);
+        kbs_clear(&mut *rm_set);
         if (*rec).pos == 113000 - 1 {
-            kbs_insert(rm_set, 1);
+            kbs_insert(&mut *rm_set, 1);
         } else if (*rec).pos >= 114000 - 1 {
-            kbs_insert(rm_set, 1);
-            kbs_insert(rm_set, 2);
+            kbs_insert(&mut *rm_set, 1);
+            kbs_insert(&mut *rm_set, 2);
         } else {
-            kbs_insert(rm_set, 2);
+            kbs_insert(&mut *rm_set, 2);
         }
         check0!(vcf::bcf_remove_allele_set(
             hdr,

@@ -191,6 +191,15 @@ unsafe fn assert_realigned_records_match_expected(
     expected_path: &str,
     flags: c_int,
 ) {
+    unsafe fn sam_prob_realn_ref(
+        rec: &mut bam1_t,
+        ref_seq: *const i8,
+        ref_len: hts_pos_t,
+        flags: c_int,
+    ) -> c_int {
+        sam_prob_realn(rec, ref_seq, ref_len, flags)
+    }
+
     assert_realigned_records_match_expected_with(
         fasta_path,
         fai_path,
@@ -199,8 +208,18 @@ unsafe fn assert_realigned_records_match_expected(
         input_path,
         expected_path,
         flags,
-        sam_prob_realn,
+        sam_prob_realn_ref,
     );
+}
+
+unsafe fn realn_module_prob_realn_adapter(
+    rec: &mut bam1_t,
+    ref_seq: *const i8,
+    ref_len: hts_pos_t,
+    flags: c_int,
+) -> c_int {
+    let ref_seq = std::slice::from_raw_parts(ref_seq.cast::<u8>(), ref_len as usize);
+    realn_c_106_sam_prob_realn(rec, ref_seq, flags)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -212,7 +231,7 @@ unsafe fn assert_realigned_records_match_expected_with(
     input_path: &str,
     expected_path: &str,
     flags: c_int,
-    realign: unsafe fn(*mut bam1_t, *const i8, hts_pos_t, c_int) -> c_int,
+    realign: unsafe fn(&mut bam1_t, *const i8, hts_pos_t, c_int) -> c_int,
 ) {
     let fasta = c_fixture(fasta_path);
     let fai_path = c_fixture(fai_path);
@@ -239,7 +258,7 @@ unsafe fn assert_realigned_records_match_expected_with(
 
     for (observed, expected) in input_records.iter().zip(expected_records.iter()) {
         if (**observed).core.tid >= 0 {
-            let ret = realign(*observed, ref_seq, ref_len.into(), flags);
+            let ret = realign(&mut **observed, ref_seq, ref_len.into(), flags);
             assert!(ret > -4, "sam_prob_realn returned {ret}");
         }
 
@@ -800,7 +819,7 @@ fn translated_realn_module_trims_reference_window_like_upstream_fixture() {
             "htslib/test/realn03.sam",
             "htslib/test/realn03_exp.sam",
             2,
-            realn_c_106_sam_prob_realn,
+            realn_module_prob_realn_adapter,
         );
     }
 }

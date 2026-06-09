@@ -57,6 +57,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //! `va_arg(args, int)` / `va_arg(args, T*)` consumed per supported option.
 
 use std::ffi::{c_int, c_void};
+use std::ptr::NonNull;
 
 use crate::htslib_rs::c_compat::__va_list_tag;
 use crate::htslib_rs::cram::cram_cram_io_c_5692_cram_set_voption;
@@ -70,7 +71,7 @@ use crate::htslib_rs::hts::{cram_fd, hts_fmt_option};
 //
 // Pattern follows `src/hts.rs:5988-6011` and `src/hfile_s3.rs:2779-2798`.
 #[inline]
-unsafe fn dispatch_voption(fd: *mut cram_fd, opt: hts_fmt_option, words: &[usize]) -> c_int {
+unsafe fn dispatch_voption(fd: &mut cram_fd, opt: hts_fmt_option, words: &[usize]) -> c_int {
     // The SysV AMD64 ABI reserves space for 6 general-purpose register args
     // in `reg_save_area`; anything beyond spills into `overflow_arg_area`.
     let mut reg_save = [0usize; 6];
@@ -88,7 +89,7 @@ unsafe fn dispatch_voption(fd: *mut cram_fd, opt: hts_fmt_option, words: &[usize
         overflow_arg_area: overflow.as_mut_ptr().cast(),
         reg_save_area: reg_save.as_mut_ptr().cast(),
     };
-    cram_cram_io_c_5692_cram_set_voption(fd, opt, &mut va)
+    cram_cram_io_c_5692_cram_set_voption(fd as *mut cram_fd, opt, &mut va)
 }
 
 // htslib/cram/cram_io.c:5674
@@ -105,7 +106,7 @@ unsafe fn dispatch_voption(fd: *mut cram_fd, opt: hts_fmt_option, words: &[usize
 /// `cram_set_voption`. `opt` must name an option whose variadic argument is
 /// an integer, and the native callee must not retain the synthetic va_list
 /// beyond this call.
-pub unsafe fn cram_set_option_int(fd: *mut cram_fd, opt: hts_fmt_option, val: c_int) -> c_int {
+pub unsafe fn cram_set_option_int(fd: &mut cram_fd, opt: hts_fmt_option, val: c_int) -> c_int {
     // `int` widens to `usize` via a zero-extending cast through the unsigned
     // 32-bit value, matching how the SysV ABI promotes int → 8-byte slot in
     // the GP save area (which is what `cram_voption_va_arg_word` reads).
@@ -129,10 +130,10 @@ pub unsafe fn cram_set_option_int(fd: *mut cram_fd, opt: hts_fmt_option, val: c_
 /// requirements, and the native callee must not retain the synthetic va_list
 /// beyond this call.
 pub unsafe fn cram_set_option_ptr(
-    fd: *mut cram_fd,
+    fd: &mut cram_fd,
     opt: hts_fmt_option,
-    val: *mut c_void,
+    val: Option<NonNull<c_void>>,
 ) -> c_int {
-    let word = val as usize;
+    let word = val.map_or(0, |val| val.as_ptr() as usize);
     dispatch_voption(fd, opt, &[word])
 }

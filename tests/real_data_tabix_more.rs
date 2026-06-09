@@ -59,7 +59,7 @@ unsafe fn query_tabix_rows(
     assert!(!tbx.is_null());
     let fp = hts_open(bgz_c.as_ptr(), c"r".as_ptr());
     assert!(!fp.is_null());
-    let itr = tbx_itr_querys1(tbx, region.as_ptr());
+    let itr = tbx_itr_querys1(&mut *tbx, region.as_ptr());
     assert!(!itr.is_null());
 
     let mut line: kstring_t = std::mem::zeroed();
@@ -98,7 +98,7 @@ unsafe fn query_tabix_rows_from_paths(
     assert!(!tbx.is_null());
     let fp = hts_open(bgz_c.as_ptr(), c"r".as_ptr());
     assert!(!fp.is_null());
-    let itr = tbx_itr_querys1(tbx, region.as_ptr());
+    let itr = tbx_itr_querys1(&mut *tbx, region.as_ptr());
     assert!(!itr.is_null());
 
     let mut line: kstring_t = std::mem::zeroed();
@@ -267,13 +267,13 @@ unsafe fn parse_interval(conf: &htslib_rs::tbx_conf_t, line: &str) -> (String, i
         tbx_c_96_tbx_parse1(conf, bytes.len() - 1, bytes.as_mut_ptr().cast(), &mut intv,),
         0
     );
-    let ss = intv.ss.expect("parsed interval sequence start").as_ptr();
+    let ss = intv.ss.expect("parsed interval sequence start");
     let name = if let Some(se) = intv.se {
-        let len = se.as_ptr().offset_from(ss) as usize;
-        let bytes = std::slice::from_raw_parts(ss.cast::<u8>(), len);
-        String::from_utf8_lossy(bytes).into_owned()
+        String::from_utf8_lossy(&bytes[ss..se]).into_owned()
     } else {
-        CStr::from_ptr(ss).to_string_lossy().into_owned()
+        CStr::from_ptr(bytes.as_ptr().add(ss).cast())
+            .to_string_lossy()
+            .into_owned()
     };
     (name, intv.beg, intv.end)
 }
@@ -570,7 +570,7 @@ fn generated_tbi_for_htslib_index_vcf_loads_exact_reference_names() {
         let tbx = tbx_index_load2(bgz_c.as_ptr(), tbi_c.as_ptr());
         assert!(!tbx.is_null());
         let mut n = 0;
-        let names = tbx_seqnames(tbx, &mut n);
+        let names = tbx_seqnames(&*tbx, &mut n);
         assert!(!names.is_null());
         assert_eq!(n, 3);
         let got = (0..n)
@@ -609,7 +609,7 @@ fn custom_idx_decorated_tabix_lookup_matches_htslib_tabix_out_exactly() {
 
         let fp = hts_open(decorated.as_ptr(), c"r".as_ptr());
         assert!(!fp.is_null());
-        let itr = tbx_itr_querys1(tbx, c"1:10000060-10000060".as_ptr());
+        let itr = tbx_itr_querys1(&mut *tbx, c"1:10000060-10000060".as_ptr());
         assert!(!itr.is_null());
 
         let mut line: kstring_t = std::mem::zeroed();

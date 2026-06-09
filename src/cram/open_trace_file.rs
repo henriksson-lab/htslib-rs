@@ -2,361 +2,467 @@
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
 use std::ffi::{c_char, c_int};
+use std::ptr::NonNull;
 
 use super::*;
-use crate::htslib_rs::c_compat::FreeOnDrop;
 
-pub unsafe fn cram_open_trace_file_c_90_is_file(fn_: *mut c_char) -> c_int {
+type MfilePtr = NonNull<mFILE>;
+type HfilePtr = NonNull<crate::htslib_rs::hts::hFILE>;
+
+unsafe fn c_ptr_bytes<'a>(ptr: *const c_char) -> Option<&'a [u8]> {
+    NonNull::new(ptr.cast_mut()).map(|ptr| {
+        let len = libc::strlen(ptr.as_ptr());
+        std::slice::from_raw_parts(ptr.as_ptr().cast::<u8>(), len)
+    })
+}
+
+unsafe fn getenv_bytes(name: &[u8]) -> Option<&'static [u8]> {
+    c_ptr_bytes(libc::getenv(name.as_ptr().cast()))
+}
+
+fn nul_terminated(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len() + 1);
+    out.extend_from_slice(bytes);
+    out.push(0);
+    out
+}
+
+fn open_trace_is_file(fn_: &[u8]) -> c_int {
+    let fn_ = nul_terminated(fn_);
     let mut buf = std::mem::MaybeUninit::<libc::stat>::uninit();
-    if libc::stat(fn_, buf.as_mut_ptr()) != 0 {
+    if unsafe { libc::stat(fn_.as_ptr().cast(), buf.as_mut_ptr()) } != 0 {
         return 0;
     }
-    let buf = buf.assume_init();
+    let buf = unsafe { buf.assume_init() };
     crate::htslib_rs::c_compat::stat_mode_matches(buf.st_mode, libc::S_IFMT, libc::S_IFREG) as c_int
 }
 
-pub unsafe fn cram_open_trace_file_c_108_tokenise_search_path(
-    searchpath: *const c_char,
-) -> *mut c_char {
-    let path_sep = if cfg!(windows) { b';' } else { b':' };
-    let searchpath = if searchpath.is_null() {
-        c"".as_ptr()
-    } else {
-        searchpath
-    };
-    let len = libc::strlen(searchpath);
-    let newsearch = malloc((len + 5) as u64).cast::<c_char>();
-    if newsearch.is_null() {
-        return std::ptr::null_mut();
-    }
+pub unsafe fn cram_open_trace_file_c_90_is_file(fn_: *mut c_char) -> c_int {
+    c_ptr_bytes(fn_).map_or(0, open_trace_is_file)
+}
 
+fn alloc_c_bytes(bytes: &[u8]) -> *mut c_char {
+    unsafe {
+        let out = malloc(bytes.len() as u64).cast::<c_char>();
+        if !out.is_null() {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), out, bytes.len());
+        }
+        out
+    }
+}
+
+fn open_trace_tokenise_search_path(searchpath: Option<&[u8]>) -> Vec<u8> {
+    let path_sep = if cfg!(windows) { b';' } else { b':' };
+    let searchpath = searchpath.unwrap_or(b"");
+    let len = searchpath.len();
+    let mut newsearch = Vec::with_capacity(len + 5);
     let mut i = 0usize;
-    let mut j = 0usize;
     while i < len {
-        let cur = *searchpath.add(i) as u8;
-        if i < len - 1 && cur == b':' && *searchpath.add(i + 1) as u8 == b':' {
-            *newsearch.add(j) = b':' as c_char;
-            j += 1;
+        let cur = searchpath[i];
+        if i + 1 < len && cur == b':' && searchpath[i + 1] == b':' {
+            newsearch.push(b':');
             i += 2;
             continue;
         }
 
         if path_sep == b':'
-            && (i == 0 || *searchpath.add(i - 1) as u8 == b':')
-            && (libc::strncmp(searchpath.add(i), c"http:".as_ptr(), 5) == 0
-                || libc::strncmp(searchpath.add(i), c"https:".as_ptr(), 6) == 0
-                || libc::strncmp(searchpath.add(i), c"ftp:".as_ptr(), 4) == 0
-                || libc::strncmp(searchpath.add(i), c"|http:".as_ptr(), 6) == 0
-                || libc::strncmp(searchpath.add(i), c"|https:".as_ptr(), 7) == 0
-                || libc::strncmp(searchpath.add(i), c"|ftp:".as_ptr(), 5) == 0
-                || libc::strncmp(searchpath.add(i), c"URL=http:".as_ptr(), 9) == 0
-                || libc::strncmp(searchpath.add(i), c"URL=https:".as_ptr(), 10) == 0
-                || libc::strncmp(searchpath.add(i), c"URL=ftp:".as_ptr(), 8) == 0)
+            && (i == 0 || searchpath[i - 1] == b':')
+            && (searchpath[i..].starts_with(b"http:")
+                || searchpath[i..].starts_with(b"https:")
+                || searchpath[i..].starts_with(b"ftp:")
+                || searchpath[i..].starts_with(b"|http:")
+                || searchpath[i..].starts_with(b"|https:")
+                || searchpath[i..].starts_with(b"|ftp:")
+                || searchpath[i..].starts_with(b"URL=http:")
+                || searchpath[i..].starts_with(b"URL=https:")
+                || searchpath[i..].starts_with(b"URL=ftp:"))
         {
-            loop {
-                *newsearch.add(j) = *searchpath.add(i);
-                j += 1;
-                let was_colon = *searchpath.add(i) as u8 == b':';
+            while i < len {
+                let was_colon = searchpath[i] == b':';
+                newsearch.push(searchpath[i]);
                 i += 1;
-                if i >= len || was_colon {
+                if was_colon {
                     break;
                 }
             }
-            if *searchpath.add(i) as u8 == b':' {
+            if i < len && searchpath[i] == b':' {
                 i += 1;
             }
-            if *searchpath.add(i) as u8 == b'/' {
-                *newsearch.add(j) = *searchpath.add(i);
-                j += 1;
+            if i < len && searchpath[i] == b'/' {
+                newsearch.push(searchpath[i]);
                 i += 1;
             }
-            if *searchpath.add(i) as u8 == b'/' {
-                *newsearch.add(j) = *searchpath.add(i);
-                j += 1;
+            if i < len && searchpath[i] == b'/' {
+                newsearch.push(searchpath[i]);
                 i += 1;
             }
-            loop {
-                *newsearch.add(j) = *searchpath.add(i);
-                j += 1;
+            while i < len {
+                newsearch.push(searchpath[i]);
                 i += 1;
-                if i >= len || *searchpath.add(i) as u8 == b':' || *searchpath.add(i) as u8 == b'/'
-                {
+                if i >= len || searchpath[i] == b':' || searchpath[i] == b'/' {
                     break;
                 }
             }
-            *newsearch.add(j) = *searchpath.add(i);
-            j += 1;
+            if i < len {
+                newsearch.push(searchpath[i]);
+                i += 1;
+            }
+            if i < len && searchpath[i] == b':' {
+                i += 1;
+            }
+        }
+
+        if i < len {
+            if searchpath[i] == path_sep {
+                if !newsearch.is_empty() && *newsearch.last().unwrap() != 0 {
+                    newsearch.push(0);
+                }
+            } else {
+                newsearch.push(searchpath[i]);
+            }
             i += 1;
-            if *searchpath.add(i) as u8 == b':' {
-                i += 1;
-            }
         }
-
-        if *searchpath.add(i) as u8 == path_sep {
-            if j != 0 && *newsearch.add(j - 1) != 0 {
-                *newsearch.add(j) = 0;
-                j += 1;
-            }
-        } else {
-            *newsearch.add(j) = *searchpath.add(i);
-            j += 1;
-        }
-        i += 1;
     }
 
-    if j != 0 {
-        *newsearch.add(j) = 0;
-        j += 1;
+    if !newsearch.is_empty() {
+        newsearch.push(0);
     }
-    *newsearch.add(j) = b'.' as c_char;
-    j += 1;
-    *newsearch.add(j) = b'/' as c_char;
-    j += 1;
-    *newsearch.add(j) = 0;
-    j += 1;
-    *newsearch.add(j) = 0;
+    newsearch.extend_from_slice(b"./\0\0");
 
     newsearch
+}
+
+pub unsafe fn cram_open_trace_file_c_108_tokenise_search_path(
+    searchpath: *const c_char,
+) -> *mut c_char {
+    alloc_c_bytes(&open_trace_tokenise_search_path(c_ptr_bytes(searchpath)))
+}
+
+struct HfileHandle(HfilePtr);
+
+impl HfileHandle {
+    unsafe fn open_read(path: &[u8]) -> Option<Self> {
+        let path = nul_terminated(path);
+        NonNull::new(crate::htslib_rs::hfile::hopen(
+            path.as_ptr().cast(),
+            b"r\0".as_ptr().cast(),
+        ))
+        .map(Self)
+    }
+
+    unsafe fn read(&mut self, buf: &mut [u8]) -> libc::ssize_t {
+        crate::htslib_rs::hfile::htslib_hfile_h_247_hread_ref(self.0.as_mut(), buf)
+    }
+
+    unsafe fn close(self) -> c_int {
+        let ptr = self.0.as_ptr();
+        std::mem::forget(self);
+        crate::htslib_rs::hfile::hclose(ptr)
+    }
+
+    unsafe fn close_abruptly(self) {
+        let ptr = self.0.as_ptr();
+        std::mem::forget(self);
+        crate::htslib_rs::hfile::hclose_abruptly(ptr);
+    }
+}
+
+impl Drop for HfileHandle {
+    fn drop(&mut self) {
+        unsafe {
+            crate::htslib_rs::hfile::hclose_abruptly(self.0.as_ptr());
+        }
+    }
+}
+
+struct OwnedMfile(MfilePtr);
+
+impl OwnedMfile {
+    unsafe fn create_empty() -> Option<Self> {
+        NonNull::new(cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0)).map(Self)
+    }
+
+    unsafe fn write_all(&mut self, bytes: &[u8]) -> bool {
+        if bytes.is_empty() {
+            return true;
+        }
+        cram_mFILE_c_527_mfwrite(
+            bytes.as_ptr().cast_mut().cast(),
+            bytes.len(),
+            1,
+            self.0.as_ptr(),
+        ) != 0
+    }
+
+    unsafe fn rewind(&mut self) {
+        cram_mFILE_c_475_mrewind(self.0.as_ptr());
+    }
+
+    fn into_ptr(self) -> MfilePtr {
+        let ptr = self.0;
+        std::mem::forget(self);
+        ptr
+    }
+}
+
+impl Drop for OwnedMfile {
+    fn drop(&mut self) {
+        unsafe {
+            cram_mFILE_c_408_mfdestroy(self.0.as_ptr());
+        }
+    }
+}
+
+unsafe fn open_trace_find_file_url(file: &[u8], url: &[u8]) -> Option<MfilePtr> {
+    let path = open_trace_expand_path(file, url, 1);
+    let mut hf = HfileHandle::open_read(&path)?;
+    let mut mf = OwnedMfile::create_empty()?;
+
+    let mut buf = [0u8; 8192];
+    loop {
+        let len = hf.read(&mut buf);
+        if len <= 0 {
+            if hf.close() < 0 || len < 0 {
+                return None;
+            }
+            break;
+        }
+        if !mf.write_all(&buf[..len as usize]) {
+            hf.close_abruptly();
+            return None;
+        }
+    }
+
+    mf.rewind();
+    Some(mf.into_ptr())
 }
 
 pub unsafe fn cram_open_trace_file_c_182_find_file_url(
     file: *const c_char,
     url: *mut c_char,
 ) -> *mut mFILE {
-    let path = cram_open_trace_file_c_230_expand_path(file, url.cast_const(), 1);
-    if path.is_null() {
+    let (Some(file), Some(url)) = (c_ptr_bytes(file), c_ptr_bytes(url)) else {
         return std::ptr::null_mut();
-    }
-    let path = FreeOnDrop::from_raw(path);
-
-    let hf = crate::htslib_rs::hfile::hopen(path.as_ptr(), c"r".as_ptr());
-    if hf.is_null() {
-        return std::ptr::null_mut();
-    }
-
-    let mf = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
-    if mf.is_null() {
-        crate::htslib_rs::hfile::hclose_abruptly(hf);
-        return std::ptr::null_mut();
-    }
-
-    let mut buf = [0u8; 8192];
-    loop {
-        let len = crate::htslib_rs::hfile::hread2(hf, buf.as_mut_ptr().cast(), buf.len(), 0);
-        if len <= 0 {
-            if crate::htslib_rs::hfile::hclose(hf) < 0 || len < 0 {
-                cram_mFILE_c_408_mfdestroy(mf);
-                return std::ptr::null_mut();
-            }
-            break;
-        }
-        if cram_mFILE_c_527_mfwrite(buf.as_mut_ptr().cast(), len as usize, 1, mf) == 0 {
-            crate::htslib_rs::hfile::hclose_abruptly(hf);
-            cram_mFILE_c_408_mfdestroy(mf);
-            return std::ptr::null_mut();
-        }
-    }
-
-    cram_mFILE_c_475_mrewind(mf);
-    mf
+    };
+    open_trace_find_file_url(file, url).map_or(std::ptr::null_mut(), MfilePtr::as_ptr)
 }
 
-pub unsafe fn cram_open_trace_file_c_230_expand_path(
-    mut file: *const c_char,
-    mut dirname: *const c_char,
-    max_s_digits: c_int,
-) -> *mut c_char {
-    let mut len = libc::strlen(dirname);
-    let mut lenf = libc::strlen(file);
-    let mut end_dirname = dirname.add(len);
-    let path = malloc((len + lenf + 2) as u64).cast::<c_char>();
-    if path.is_null() {
-        return std::ptr::null_mut();
+fn open_trace_expand_path(file: &[u8], dirname: &[u8], max_s_digits: c_int) -> Vec<u8> {
+    let mut file_remaining = file;
+    let mut dirname = dirname;
+    while dirname.len() > 1 && dirname[dirname.len() - 1] == b'/' {
+        dirname = &dirname[..dirname.len() - 1];
     }
 
-    while len > 1 && *dirname.add(len - 1) as u8 == b'/' {
-        len -= 1;
-        end_dirname = end_dirname.sub(1);
-    }
-
-    if *file as u8 == b'/' || (len == 1 && *dirname as u8 == b'.') {
-        memcpy(path.cast(), file.cast(), (lenf + 1) as u64);
+    if file_remaining.first() == Some(&b'/') || dirname == b"." {
+        file.to_vec()
     } else {
-        let mut path_end = path;
-        loop {
-            let cp = libc::strchr(dirname, b'%' as c_int);
-            if cp.is_null() {
-                break;
+        let mut path = Vec::with_capacity(dirname.len() + file_remaining.len() + 2);
+        while let Some(cp) = dirname.iter().position(|&ch| ch == b'%') {
+            let digit_start = cp + 1;
+            let mut digit_end = digit_start;
+            while digit_end < dirname.len() && dirname[digit_end].is_ascii_digit() {
+                digit_end += 1;
             }
-
-            let mut endp: *mut c_char = std::ptr::null_mut();
-            let l = libc::strtol(cp.add(1), &mut endp, 10);
-            if *endp as u8 != b's' || l < 0 || endp.offset_from(cp) - 1 > max_s_digits as isize {
-                let mut e = endp.add(1).cast_const();
-                if e > end_dirname {
-                    e = end_dirname;
-                }
-                let n = e.offset_from(dirname) as usize;
-                memcpy(path_end.cast(), dirname.cast(), n as u64);
-                path_end = path_end.add(n);
-                dirname = e;
+            let digits = &dirname[digit_start..digit_end];
+            let l = std::str::from_utf8(digits)
+                .ok()
+                .and_then(|digits| {
+                    if digits.is_empty() {
+                        Some(0usize)
+                    } else {
+                        digits.parse::<usize>().ok()
+                    }
+                })
+                .unwrap_or(usize::MAX);
+            let valid = digit_end < dirname.len()
+                && dirname[digit_end] == b's'
+                && l != usize::MAX
+                && usize::try_from(max_s_digits)
+                    .is_ok_and(|max_s_digits| digits.len() <= max_s_digits);
+            if !valid {
+                let end = std::cmp::min(digit_end + 1, dirname.len());
+                path.extend_from_slice(&dirname[..end]);
+                dirname = &dirname[end..];
                 continue;
             }
 
-            let n = cp.cast_const().offset_from(dirname) as usize;
-            memcpy(path_end.cast(), dirname.cast(), n as u64);
-            path_end = path_end.add(n);
-
-            let to_copy = if l > 0 {
-                std::cmp::min(lenf, l as usize)
+            path.extend_from_slice(&dirname[..cp]);
+            let to_copy = if l == 0 {
+                file_remaining.len()
             } else {
-                lenf
+                std::cmp::min(file_remaining.len(), l)
             };
-            memcpy(path_end.cast(), file.cast(), to_copy as u64);
-            path_end = path_end.add(to_copy);
-            file = file.add(to_copy);
-            lenf -= to_copy;
-
-            dirname = endp.add(1);
+            path.extend_from_slice(&file_remaining[..to_copy]);
+            file_remaining = &file_remaining[to_copy..];
+            dirname = &dirname[digit_end + 1..];
         }
 
-        if dirname < end_dirname {
-            let n = end_dirname.offset_from(dirname) as usize;
-            memcpy(path_end.cast(), dirname.cast(), n as u64);
-            path_end = path_end.add(n);
-        }
+        path.extend_from_slice(dirname);
 
-        if *file != 0 {
-            if path_end > path && *path_end.sub(1) as u8 != b'/' {
-                *path_end = b'/' as c_char;
-                path_end = path_end.add(1);
+        if !file_remaining.is_empty() {
+            if !path.is_empty() && *path.last().unwrap() != b'/' {
+                path.push(b'/');
             }
-            memcpy(path_end.cast(), file.cast(), lenf as u64);
-            path_end = path_end.add(lenf);
+            path.extend_from_slice(file_remaining);
         }
-        *path_end = 0;
+        path
+    }
+}
+
+pub unsafe fn cram_open_trace_file_c_230_expand_path(
+    file: *const c_char,
+    dirname: *const c_char,
+    max_s_digits: c_int,
+) -> *mut c_char {
+    let (Some(file), Some(dirname)) = (c_ptr_bytes(file), c_ptr_bytes(dirname)) else {
+        return std::ptr::null_mut();
+    };
+    let path = open_trace_expand_path(file, dirname, max_s_digits);
+    alloc_c_bytes(&nul_terminated(&path))
+}
+
+fn open_trace_find_path(file: &[u8], path: Option<&[u8]>) -> Option<Vec<u8>> {
+    let newsearch = open_trace_tokenise_search_path(path);
+
+    for ele in newsearch
+        .split(|&ch| ch == 0)
+        .take_while(|ele| !ele.is_empty())
+    {
+        let ele2 = ele.strip_prefix(b"|").unwrap_or(ele);
+
+        if !ele2.starts_with(b"URL=")
+            && !ele2.starts_with(b"http:")
+            && !ele2.starts_with(b"https:")
+            && !ele2.starts_with(b"ftp:")
+        {
+            let outpath = open_trace_expand_path(file, ele2, c_int::MAX);
+            if open_trace_is_file(&outpath) != 0 {
+                return Some(outpath);
+            }
+        }
     }
 
-    path
+    None
 }
 
 pub unsafe fn cram_open_trace_file_c_433_find_path(
     file: *const c_char,
-    mut path: *const c_char,
+    path: *const c_char,
 ) -> *mut c_char {
-    if path.is_null() {
-        path = libc::getenv(c"RAWDATA".as_ptr());
-    }
-    let newsearch = cram_open_trace_file_c_108_tokenise_search_path(path);
-    if newsearch.is_null() {
+    let Some(file) = c_ptr_bytes(file) else {
         return std::ptr::null_mut();
+    };
+    let path = if path.is_null() {
+        getenv_bytes(b"RAWDATA\0")
+    } else {
+        c_ptr_bytes(path)
+    };
+    open_trace_find_path(file, path)
+        .map(|path| alloc_c_bytes(&nul_terminated(&path)))
+        .unwrap_or(std::ptr::null_mut())
+}
+
+unsafe fn open_trace_find_file_dir(file: &[u8], dirname: &[u8]) -> Option<MfilePtr> {
+    let path = open_trace_expand_path(file, dirname, c_int::MAX);
+    if open_trace_is_file(&path) != 0 {
+        let path = nul_terminated(&path);
+        NonNull::new(cram_mFILE_c_347_mfopen(
+            path.as_ptr().cast(),
+            b"rbm\0".as_ptr().cast(),
+        ))
+    } else {
+        None
     }
-    let newsearch = FreeOnDrop::from_raw(newsearch);
-
-    let mut ele = newsearch.as_ptr();
-    while *ele != 0 {
-        let ele2 = if *ele as u8 == b'|' { ele.add(1) } else { ele };
-
-        if libc::strncmp(ele2, c"URL=".as_ptr(), 4) != 0
-            && libc::strncmp(ele2, c"http:".as_ptr(), 5) != 0
-            && libc::strncmp(ele2, c"https:".as_ptr(), 6) != 0
-            && libc::strncmp(ele2, c"ftp:".as_ptr(), 4) != 0
-        {
-            let outpath = cram_open_trace_file_c_230_expand_path(file, ele2, c_int::MAX);
-            if cram_open_trace_file_c_90_is_file(outpath) != 0 {
-                return outpath;
-            }
-            free(outpath.cast());
-        }
-
-        ele = ele.add(libc::strlen(ele) + 1);
-    }
-
-    std::ptr::null_mut()
 }
 
 pub unsafe fn cram_open_trace_file_c_314_find_file_dir(
     file: *const c_char,
     dirname: *mut c_char,
 ) -> *mut mFILE {
-    let path = cram_open_trace_file_c_230_expand_path(file, dirname.cast_const(), c_int::MAX);
-    if path.is_null() {
+    let (Some(file), Some(dirname)) = (c_ptr_bytes(file), c_ptr_bytes(dirname)) else {
         return std::ptr::null_mut();
-    }
-    let path = FreeOnDrop::from_raw(path);
+    };
+    open_trace_find_file_dir(file, dirname).map_or(std::ptr::null_mut(), MfilePtr::as_ptr)
+}
 
-    if cram_open_trace_file_c_90_is_file(path.as_ptr()) != 0 {
-        cram_mFILE_c_347_mfopen(path.as_ptr(), c"rbm".as_ptr())
-    } else {
-        std::ptr::null_mut()
+struct OpenPathMfile {
+    mf: MfilePtr,
+    local: bool,
+}
+
+unsafe fn open_trace_open_path_mfile(
+    file: &[u8],
+    path: Option<&[u8]>,
+    relative_to: Option<&[u8]>,
+) -> Option<OpenPathMfile> {
+    let newsearch = open_trace_tokenise_search_path(path);
+
+    for ele in newsearch
+        .split(|&ch| ch == 0)
+        .take_while(|ele| !ele.is_empty())
+    {
+        let ele2 = ele.strip_prefix(b"|").unwrap_or(ele);
+
+        if let Some(url) = ele2.strip_prefix(b"URL=") {
+            if let Some(mf) = open_trace_find_file_url(file, url) {
+                return Some(OpenPathMfile {
+                    mf,
+                    local: url.starts_with(b"file:"),
+                });
+            }
+        } else if is_remote_path(ele2) {
+            if let Some(mf) = open_trace_find_file_url(file, ele2) {
+                return Some(OpenPathMfile { mf, local: false });
+            }
+        } else if let Some(mf) = open_trace_find_file_dir(file, ele2) {
+            return Some(OpenPathMfile { mf, local: true });
+        }
     }
+
+    if let Some(relative_to) = relative_to {
+        let relative_path = relative_to
+            .iter()
+            .rposition(|&ch| ch == b'/')
+            .map_or(relative_to, |slash| &relative_to[..slash]);
+        if let Some(mf) = open_trace_find_file_dir(file, relative_path) {
+            return Some(OpenPathMfile { mf, local: true });
+        }
+    }
+
+    None
 }
 
 pub unsafe fn cram_open_trace_file_c_352_open_path_mfile(
     file: *const c_char,
-    mut path: *mut c_char,
+    path: *mut c_char,
     relative_to: *mut c_char,
     local: *mut c_int,
 ) -> *mut mFILE {
-    if !local.is_null() {
-        *local = 1;
-    }
-
-    if path.is_null() {
-        path = libc::getenv(c"RAWDATA".as_ptr());
-    }
-    let newsearch = cram_open_trace_file_c_108_tokenise_search_path(path);
-    if newsearch.is_null() {
+    let Some(file) = c_ptr_bytes(file) else {
         return std::ptr::null_mut();
-    }
-    let newsearch = FreeOnDrop::from_raw(newsearch);
-
-    let mut ele = newsearch.as_ptr();
-    while *ele != 0 {
-        let ele2 = if *ele as u8 == b'|' { ele.add(1) } else { ele };
-
-        if libc::strncmp(ele2, c"URL=".as_ptr(), 4) == 0 {
-            let fp = cram_open_trace_file_c_182_find_file_url(file, ele2.add(4));
-            if !fp.is_null() {
-                if !local.is_null() {
-                    *local = if libc::strncmp(ele2.add(4), c"file:".as_ptr(), 5) == 0 {
-                        1
-                    } else {
-                        0
-                    };
-                }
-                return fp;
-            }
-        } else if crate::htslib_rs::hfile::hisremote(ele2) != 0 {
-            let fp = cram_open_trace_file_c_182_find_file_url(file, ele2);
-            if !fp.is_null() {
-                if !local.is_null() {
-                    *local = 0;
-                }
-                return fp;
-            }
-        } else {
-            let fp = cram_open_trace_file_c_314_find_file_dir(file, ele2);
-            if !fp.is_null() {
-                return fp;
-            }
-        }
-
-        ele = ele.add(libc::strlen(ele) + 1);
+    };
+    let mut local = NonNull::new(local);
+    if let Some(local) = local.as_mut() {
+        *local.as_ptr() = 1;
     }
 
-    if !relative_to.is_null() {
-        let mut relative_path = [0 as c_char; crate::htslib_rs::c_compat::PATH_MAX as usize + 1];
-        libc::strcpy(relative_path.as_mut_ptr(), relative_to);
-        let cp = libc::strrchr(relative_path.as_mut_ptr(), b'/' as c_int);
-        if !cp.is_null() {
-            *cp = 0;
-        }
-        let fp = cram_open_trace_file_c_314_find_file_dir(file, relative_path.as_mut_ptr());
-        if !fp.is_null() {
-            return fp;
-        }
+    let path = if path.is_null() {
+        getenv_bytes(b"RAWDATA\0")
+    } else {
+        c_ptr_bytes(path)
+    };
+    let relative_to = c_ptr_bytes(relative_to);
+    let Some(opened) = open_trace_open_path_mfile(file, path, relative_to) else {
+        return std::ptr::null_mut();
+    };
+    if let Some(local) = local.as_mut() {
+        *local.as_ptr() = opened.local as c_int;
     }
+    opened.mf.as_ptr()
+}
 
-    std::ptr::null_mut()
+fn is_remote_path(path: &[u8]) -> bool {
+    let path = nul_terminated(path);
+    unsafe { crate::htslib_rs::hfile::hisremote(path.as_ptr().cast()) != 0 }
 }

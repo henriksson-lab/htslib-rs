@@ -53,6 +53,12 @@ struct HttpParserLayout {
     out: c_uint,
     pos: c_uint,
     used: c_uint,
+    uri_buf: Vec<u8>,
+    key_buf: Vec<u8>,
+    val_buf: Vec<u8>,
+    buffer_buf: Vec<u8>,
+    user_agent_buf: Vec<u8>,
+    referrer_buf: Vec<u8>,
 }
 
 #[repr(C)]

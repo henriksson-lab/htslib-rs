@@ -1,4 +1,4 @@
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CStr};
 use std::ptr::NonNull;
 
 use super::bgzf::{bgzf_close, bgzf_compression, bgzf_getline, bgzf_mt, bgzf_open};
@@ -6,9 +6,9 @@ use super::hts::{
     hts_c_2372_hts_adjust_csi_settings, hts_c_2405_hts_idx_init, hts_c_2515_hts_idx_finish,
     hts_c_2558_hts_idx_push, hts_c_2869_hts_idx_save_as, hts_c_3062_hts_idx_set_meta,
     hts_c_3084_hts_idx_get_meta, hts_idx_destroy, hts_idx_load3, hts_is_utf16_text, hts_itr_query,
-    hts_itr_t, hts_log_cstr, hts_parse_region, hts_pos_t, i32_to_le, kstring_t, le_to_i32,
-    le_to_u32, svlen_on_ref_for_vcf_alt, toupper_c, BGZF, HTS_FMT_CSI, HTS_IDX_NOCOOR,
-    HTS_IDX_START, HTS_LOG_ERROR, HTS_PARSE_THOUSANDS_SEP,
+    hts_itr_t, hts_log_cstr, hts_parse_region, hts_pos_t, i32_to_le, ks_free, kstring_t, le_to_i32,
+    le_to_u32, svlen_on_ref_for_vcf_alt, BGZF, HTS_FMT_CSI, HTS_IDX_NOCOOR, HTS_IDX_START,
+    HTS_LOG_ERROR, HTS_PARSE_THOUSANDS_SEP,
 };
 
 // HTS_FMT_TBI is 2 (htslib/htslib/hts.h); hts.rs only re-exports CSI/BAI/CRAI/FAI.
@@ -41,7 +41,7 @@ const TBX_UCSC: c_int = 0x10000;
 const TBX_MAX_SHIFT: c_int = 31;
 
 pub struct kh_s2i_t {
-    pub names: Vec<CString>,
+    pub names: Vec<Vec<u8>>,
 }
 
 impl kh_s2i_t {
@@ -49,25 +49,24 @@ impl kh_s2i_t {
         Self { names: Vec::new() }
     }
 
-    unsafe fn get(&self, key: *const c_char) -> Option<c_int> {
-        let key = CStr::from_ptr(key);
+    fn get(&self, key: &[u8]) -> Option<c_int> {
         self.names
             .iter()
-            .position(|name| name.as_c_str() == key)
+            .position(|name| name.strip_suffix(&[0]) == Some(key))
             .map(|tid| tid as c_int)
     }
 
-    unsafe fn get_or_insert(&mut self, key: *const c_char) -> Result<c_int, ()> {
+    fn get_or_insert(&mut self, key: &[u8]) -> Result<c_int, ()> {
         if let Some(tid) = self.get(key) {
             return Ok(tid);
         }
-        let bytes = CStr::from_ptr(key).to_bytes_with_nul();
         let tid = self.names.len();
         self.names.try_reserve(1).map_err(|_| ())?;
         let mut name = Vec::new();
-        name.try_reserve_exact(bytes.len()).map_err(|_| ())?;
-        name.extend_from_slice(bytes);
-        self.names.push(CString::from_vec_with_nul_unchecked(name));
+        name.try_reserve_exact(key.len() + 1).map_err(|_| ())?;
+        name.extend_from_slice(key);
+        name.push(0);
+        self.names.push(name);
         Ok(tid as c_int)
     }
 }
@@ -75,8 +74,8 @@ impl kh_s2i_t {
 pub struct tbx_intv_t {
     pub beg: i64,
     pub end: i64,
-    pub ss: Option<NonNull<c_char>>,
-    pub se: Option<NonNull<c_char>>,
+    pub ss: Option<usize>,
+    pub se: Option<usize>,
     pub tid: c_int,
 }
 
@@ -93,9 +92,46 @@ impl tbx_t {
         self.idx.map_or(std::ptr::null_mut(), |idx| idx.as_ptr())
     }
 
-    unsafe fn set_idx(&mut self, idx: *mut crate::htslib_rs::hts::hts_idx_t) -> bool {
-        self.idx = NonNull::new(idx);
+    fn set_idx(&mut self, idx: Option<NonNull<crate::htslib_rs::hts::hts_idx_t>>) -> bool {
+        self.idx = idx;
         self.idx.is_some()
+    }
+}
+
+impl Drop for tbx_t {
+    fn drop(&mut self) {
+        unsafe {
+            hts_idx_destroy(
+                self.idx
+                    .take()
+                    .map_or(std::ptr::null_mut(), |idx| idx.as_ptr())
+                    .cast(),
+            );
+        }
+    }
+}
+
+struct KStringGuard {
+    raw: kstring_t,
+}
+
+impl KStringGuard {
+    fn new() -> Self {
+        Self {
+            raw: kstring_t {
+                l: 0,
+                m: 0,
+                s: std::ptr::null_mut(),
+            },
+        }
+    }
+}
+
+impl Drop for KStringGuard {
+    fn drop(&mut self) {
+        unsafe {
+            ks_free(&mut self.raw);
+        }
     }
 }
 
@@ -180,39 +216,128 @@ pub unsafe fn tbx_conf_gaf() -> tbx_conf_t {
     }
 }
 
-pub unsafe fn tbx_name2id(tbx: *mut tbx_t, ss: *const c_char) -> c_int {
-    tbx_c_91_tbx_name2id(tbx, ss)
+pub unsafe fn tbx_name2id(tbx: *const tbx_t, ss: *const c_char) -> c_int {
+    let Some(tbx) = tbx.as_ref() else {
+        return -1;
+    };
+    let Some(ss) = (!ss.is_null()).then(|| CStr::from_ptr(ss)) else {
+        return -1;
+    };
+    tbx_c_91_tbx_name2id(tbx, ss.to_bytes())
 }
 
-pub unsafe fn tbx_c_64_get_tid(tbx: *mut tbx_t, ss: *const c_char, is_add: c_int) -> c_int {
-    if ((*tbx).conf.preset & 0xffff) == TBX_GAF {
+pub fn tbx_c_64_get_tid(tbx: &mut tbx_t, ss: &[u8], is_add: c_int) -> c_int {
+    if (tbx.conf.preset & 0xffff) == TBX_GAF {
         return 0;
     }
     if is_add != 0 {
-        (*tbx)
-            .dict
+        tbx.dict
             .get_or_insert_with(kh_s2i_t::new)
             .get_or_insert(ss)
             .unwrap_or(-1)
     } else {
-        (*tbx)
-            .dict
+        tbx.dict
             .as_ref()
             .and_then(|dict| dict.get(ss))
             .unwrap_or(-1)
     }
 }
 
-pub unsafe fn tbx_c_91_tbx_name2id(tbx: *mut tbx_t, ss: *const c_char) -> c_int {
-    tbx_c_64_get_tid(tbx, ss, 0)
+pub fn tbx_c_91_tbx_name2id(tbx: &tbx_t, ss: &[u8]) -> c_int {
+    if (tbx.conf.preset & 0xffff) == TBX_GAF {
+        return 0;
+    }
+    tbx.dict
+        .as_ref()
+        .and_then(|dict| dict.get(ss))
+        .unwrap_or(-1)
 }
 
 pub unsafe fn tbx_c_96_tbx_parse1(
-    conf: *const tbx_conf_t,
+    conf: &tbx_conf_t,
     len: usize,
     line: *mut c_char,
-    intv: *mut tbx_intv_t,
+    intv: &mut tbx_intv_t,
 ) -> c_int {
+    let Some(line) = (!line.is_null()).then(|| std::slice::from_raw_parts(line.cast::<u8>(), len))
+    else {
+        return -1;
+    };
+    tbx_parse1_line(conf, line, intv)
+}
+
+fn parse_i64_prefix(field: &[u8], radix: u32) -> Option<i64> {
+    let mut i = 0usize;
+    while field.get(i).is_some_and(|byte| byte.is_ascii_whitespace()) {
+        i += 1;
+    }
+
+    let sign = match field.get(i) {
+        Some(b'-') => {
+            i += 1;
+            -1i64
+        }
+        Some(b'+') => {
+            i += 1;
+            1i64
+        }
+        _ => 1i64,
+    };
+    let digit_start = i;
+    let mut value = 0i64;
+    while let Some(digit) = field
+        .get(i)
+        .and_then(|byte| char::from(*byte).to_digit(radix))
+    {
+        value = value
+            .saturating_mul(radix as i64)
+            .saturating_add(digit as i64);
+        i += 1;
+    }
+    (i != digit_start).then_some(value.saturating_mul(sign))
+}
+
+fn parse_i64_prefix_c_radix(field: &[u8]) -> Option<i64> {
+    let mut i = 0usize;
+    while field.get(i).is_some_and(|byte| byte.is_ascii_whitespace()) {
+        i += 1;
+    }
+    let sign_len = matches!(field.get(i), Some(b'-' | b'+')) as usize;
+    let digits = &field[i + sign_len..];
+    let sign = if field.get(i) == Some(&b'-') {
+        -1i64
+    } else {
+        1i64
+    };
+    if digits.starts_with(b"0x") || digits.starts_with(b"0X") {
+        parse_i64_prefix(&digits[2..], 16).map(|value| value.saturating_mul(sign))
+    } else if digits.starts_with(b"0") && digits.len() > 1 {
+        parse_i64_prefix(&digits[1..], 8).map(|value| value.saturating_mul(sign))
+    } else {
+        parse_i64_prefix(field, 10)
+    }
+}
+
+fn find_vcf_info_value<'a>(info: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
+    info.split(|&byte| byte == b';').find_map(|entry| {
+        entry
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix(b"="))
+    })
+}
+
+fn nul_terminated_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.contains(&0) {
+        return None;
+    }
+    let mut nul_terminated = Vec::new();
+    nul_terminated.try_reserve_exact(bytes.len() + 1).ok()?;
+    nul_terminated.extend_from_slice(bytes);
+    nul_terminated.push(0);
+    Some(nul_terminated)
+}
+
+fn tbx_parse1_line(conf: &tbx_conf_t, line: &[u8], intv: &mut tbx_intv_t) -> c_int {
     let mut b = 0usize;
     let mut id = 1;
     let mut getlen = 0;
@@ -223,227 +348,185 @@ pub unsafe fn tbx_c_96_tbx_parse1(
     let mut reflen = 0i64;
     let mut svlen = 0i64;
     let mut fmtlen = 0i64;
-    let preset = (*conf).preset & 0xffff;
+    let preset = conf.preset & 0xffff;
 
-    (*intv).ss = None;
-    (*intv).se = None;
-    (*intv).beg = -1;
-    (*intv).end = -1;
+    intv.ss = None;
+    intv.se = None;
+    intv.beg = -1;
+    intv.end = -1;
 
-    for i in 0..=len {
-        let ch = *line.add(i);
-        if ch == b'\t' as c_char || ch == 0 {
-            if id == (*conf).sc {
-                (*intv).ss = NonNull::new(line.add(b));
-                (*intv).se = NonNull::new(line.add(i));
-            } else if id == (*conf).bc {
+    for i in 0..=line.len() {
+        if i == line.len() || line[i] == b'\t' {
+            let field = &line[b..i];
+            if id == conf.sc {
+                intv.ss = Some(b);
+                intv.se = Some(i);
+            } else if id == conf.bc {
                 if preset == TBX_GAF {
-                    let mut s = line.add(b + 1);
-                    while s < line.add(i) {
-                        let mut t: *mut c_char = std::ptr::null_mut();
-                        let nodeid = libc::strtoll(s, &mut t, 0);
-                        if (*intv).beg == -1 {
-                            (*intv).beg = nodeid;
-                            (*intv).end = nodeid;
+                    for segment in field
+                        .get(1..)
+                        .unwrap_or_default()
+                        .split(|&byte| !(byte == b'+' || byte == b'-' || byte.is_ascii_hexdigit()))
+                    {
+                        let Some(nodeid) = parse_i64_prefix_c_radix(segment) else {
+                            continue;
+                        };
+                        if intv.beg == -1 {
+                            intv.beg = nodeid;
+                            intv.end = nodeid;
                         } else {
-                            if nodeid < (*intv).beg {
-                                (*intv).beg = nodeid;
+                            if nodeid < intv.beg {
+                                intv.beg = nodeid;
                             }
-                            if nodeid > (*intv).end {
-                                (*intv).end = nodeid;
+                            if nodeid > intv.end {
+                                intv.end = nodeid;
                             }
                         }
-                        s = t.add(1);
                     }
                 } else {
-                    let mut s: *mut c_char = std::ptr::null_mut();
-                    (*intv).beg = libc::strtoll(line.add(b), &mut s, 0);
-                    if (*conf).bc <= (*conf).ec {
-                        (*intv).end = (*intv).beg;
-                    }
-                    if s == line.add(b) {
+                    let Some(beg) = parse_i64_prefix_c_radix(field) else {
                         return -1;
+                    };
+                    intv.beg = beg;
+                    if conf.bc <= conf.ec {
+                        intv.end = intv.beg;
                     }
-                    if ((*conf).preset & TBX_UCSC) == 0 {
-                        (*intv).beg -= 1;
-                    } else if (*conf).bc <= (*conf).ec {
-                        (*intv).end += 1;
+                    if (conf.preset & TBX_UCSC) == 0 {
+                        intv.beg -= 1;
+                    } else if conf.bc <= conf.ec {
+                        intv.end += 1;
                     }
-                    if (*intv).beg < 0 {
-                        (*intv).beg = 0;
+                    if intv.beg < 0 {
+                        intv.beg = 0;
                     }
-                    if (*intv).end < 1 {
-                        (*intv).end = 1;
+                    if intv.end < 1 {
+                        intv.end = 1;
                     }
                 }
             } else if preset == TBX_GENERIC {
-                if id == (*conf).ec {
-                    let mut s: *mut c_char = std::ptr::null_mut();
-                    (*intv).end = libc::strtoll(line.add(b), &mut s, 0);
-                    if s == line.add(b) {
+                if id == conf.ec {
+                    let Some(end) = parse_i64_prefix_c_radix(field) else {
                         return -1;
-                    }
+                    };
+                    intv.end = end;
                 }
             } else if preset == TBX_SAM {
                 if id == 6 {
                     let mut l = 0i64;
-                    let mut s = line.add(b);
-                    while s < line.add(i) {
-                        let mut t: *mut c_char = std::ptr::null_mut();
-                        let x = libc::strtol(s, &mut t, 10);
-                        let op = toupper_c(*t);
-                        if op == b'M' as c_char || op == b'D' as c_char || op == b'N' as c_char {
-                            l += x as i64;
+                    let mut rest = field;
+                    while !rest.is_empty() {
+                        let Some(x) = parse_i64_prefix(rest, 10) else {
+                            break;
+                        };
+                        let digits = rest.iter().take_while(|byte| byte.is_ascii_digit()).count();
+                        if let Some(op) = rest
+                            .get(digits)
+                            .copied()
+                            .map(|byte| byte.to_ascii_uppercase())
+                        {
+                            if op == b'M' || op == b'D' || op == b'N' {
+                                l += x;
+                            }
+                            rest = rest.get(digits + 1..).unwrap_or_default();
+                        } else {
+                            break;
                         }
-                        s = t.add(1);
                     }
                     if l == 0 {
                         l = 1;
                     }
-                    (*intv).end = (*intv).beg + l;
+                    intv.end = intv.beg + l;
                 }
             } else if preset == TBX_VCF {
                 if id == 4 {
                     if b < i {
-                        (*intv).end = (*intv).beg + (i - b) as i64;
+                        intv.end = intv.beg + (i - b) as i64;
                     }
                     alcnt += 1;
                     reflen = (i - b) as i64;
                 } else if id == 5 {
                     let mut lastbyte = 0usize;
-                    let c = *line.add(i);
                     svlenals[lastbyte] = 0;
-                    *line.add(i) = 0;
-                    let mut s = line.add(b);
-                    loop {
-                        let t = libc::strchr(s, b',' as c_int);
+                    for alt in field.split(|&byte| byte == b',') {
                         if (alcnt >> 3) as usize != lastbyte {
                             lastbyte = (alcnt >> 3) as usize;
                             svlenals[lastbyte] = 0;
                         }
                         alcnt += 1;
-                        if !t.is_null() {
-                            *t = 0;
-                        }
-                        if svlen_on_ref_for_vcf_alt(s, -1) != 0 {
+                        let alt = nul_terminated_bytes(alt);
+                        let alt_ptr = alt.as_ref().map_or(c"".as_ptr(), |alt| alt.as_ptr().cast());
+                        if unsafe { svlen_on_ref_for_vcf_alt(alt_ptr, -1) } != 0 {
                             svlenals[lastbyte] |= 1 << ((alcnt - 1) & 7);
                             use_svlen = 1;
-                        } else if libc::strcmp(c"<*>".as_ptr(), s) == 0
-                            || libc::strcmp(c"<NON_REF>".as_ptr(), s) == 0
+                        } else if alt
+                            .as_deref()
+                            .and_then(|alt| alt.strip_suffix(&[0]))
+                            .is_some_and(|alt| alt == b"<*>" || alt == b"<NON_REF>")
                         {
                             getlen = 1;
                         }
-                        if !t.is_null() {
-                            *t = b',' as c_char;
-                        }
-                        if t.is_null() || alcnt >= 65536 {
+                        if alcnt >= 65536 {
                             break;
                         }
-                        s = t.add(1);
                     }
-                    *line.add(i) = c;
                 } else if id == 8 {
-                    let c = *line.add(i);
                     let mut d = 1;
-                    *line.add(i) = 0;
-                    let mut s = libc::strstr(line.add(b), c"END=".as_ptr());
-                    if s == line.add(b) {
-                        s = s.add(4);
-                    } else if !s.is_null() {
-                        s = libc::strstr(line.add(b), c";END=".as_ptr());
-                        if !s.is_null() {
-                            s = s.add(5);
-                        }
-                    }
-                    if !s.is_null() && *s != b'.' as c_char {
-                        let end = libc::strtoll(s, &mut s, 0);
-                        if end > (*intv).beg {
-                            (*intv).end = end;
-                        }
-                    }
-                    s = libc::strstr(line.add(b), c"SVLEN=".as_ptr());
-                    if s == line.add(b) {
-                        s = s.add(6);
-                    } else if !s.is_null() {
-                        s = libc::strstr(line.add(b), c";SVLEN=".as_ptr());
-                        if !s.is_null() {
-                            s = s.add(7);
-                        }
-                    }
-                    while !s.is_null() && d < alcnt {
-                        let t = libc::strchr(s, b',' as c_int);
-                        let tmp = if use_svlen != 0
-                            && (svlenals[(d >> 3) as usize] & (1 << (d & 7))) != 0
-                        {
-                            let x = libc::atoll(s);
-                            if x < 0 {
-                                x.wrapping_abs()
-                            } else {
-                                x
+                    if let Some(end_field) = find_vcf_info_value(field, b"END") {
+                        if end_field.first() != Some(&b'.') {
+                            if let Some(end) = parse_i64_prefix_c_radix(end_field) {
+                                if end > intv.beg {
+                                    intv.end = end;
+                                }
                             }
-                        } else {
-                            1
-                        };
-                        if svlen < tmp {
-                            svlen = tmp;
                         }
-                        s = if t.is_null() {
-                            std::ptr::null_mut()
-                        } else {
-                            t.add(1)
-                        };
-                        d += 1;
                     }
-                    *line.add(i) = c;
-                } else if getlen != 0 && id == 9 {
-                    let c = *line.add(i);
-                    let mut pos = -1;
-                    *line.add(i) = 0;
-                    let mut s = line.add(b);
-                    while !s.is_null() {
-                        pos += 1;
-                        let t = libc::strchr(s, b':' as c_int);
-                        if t.is_null() {
-                            if libc::strcmp(s, c"LEN".as_ptr()) == 0 {
-                                lenpos = pos;
-                            }
-                            break;
-                        } else {
-                            *t = 0;
-                            if libc::strcmp(s, c"LEN".as_ptr()) == 0 {
-                                lenpos = pos;
-                                *t = b':' as c_char;
+                    if let Some(svlen_field) = find_vcf_info_value(field, b"SVLEN") {
+                        for value in svlen_field.split(|&byte| byte == b',') {
+                            if d >= alcnt {
                                 break;
                             }
-                            *t = b':' as c_char;
-                            s = t.add(1);
+                            let tmp = if use_svlen != 0
+                                && (svlenals[(d >> 3) as usize] & (1 << (d & 7))) != 0
+                            {
+                                let x = parse_i64_prefix(value, 10).unwrap_or(0);
+                                if x < 0 {
+                                    x.wrapping_abs()
+                                } else {
+                                    x
+                                }
+                            } else {
+                                1
+                            };
+                            if svlen < tmp {
+                                svlen = tmp;
+                            }
+                            d += 1;
                         }
                     }
-                    *line.add(i) = c;
+                } else if getlen != 0 && id == 9 {
+                    let mut pos = -1;
+                    for format_key in field.split(|&byte| byte == b':') {
+                        pos += 1;
+                        if format_key == b"LEN" {
+                            lenpos = pos;
+                            break;
+                        }
+                    }
                     if lenpos == -1 {
                         break;
                     }
                 } else if id > 9 && getlen != 0 && lenpos != -1 {
-                    let c = *line.add(i);
-                    *line.add(i) = 0;
-                    let mut tmp = 0i64;
-                    let mut s = line.add(b);
-                    for d in 0..=lenpos {
-                        if d == lenpos {
-                            tmp = libc::atoll(s);
-                            break;
-                        }
-                        let t = libc::strchr(s, b':' as c_int);
-                        if !t.is_null() {
-                            s = t.add(1);
-                        } else {
+                    let mut tmp = None;
+                    for (d, value) in field.split(|&byte| byte == b':').enumerate() {
+                        if d == lenpos as usize {
+                            tmp = Some(parse_i64_prefix(value, 10).unwrap_or(0));
                             break;
                         }
                     }
+                    let tmp = tmp.unwrap_or(0);
                     if fmtlen < tmp {
                         fmtlen = tmp;
                     }
-                    *line.add(i) = c;
                 }
             }
             b = i + 1;
@@ -452,44 +535,41 @@ pub unsafe fn tbx_c_96_tbx_parse1(
     }
 
     if preset == TBX_VCF {
-        let tmp = reflen.max(svlen).max(fmtlen) + (*intv).beg;
-        if (*intv).end < tmp {
-            (*intv).end = tmp;
+        let tmp = reflen.max(svlen).max(fmtlen) + intv.beg;
+        if intv.end < tmp {
+            intv.end = tmp;
         }
     }
-    if (*intv).ss.is_none() || (*intv).se.is_none() || (*intv).beg < 0 || (*intv).end < 0 {
+    if intv.ss.is_none() || intv.se.is_none() || intv.beg < 0 || intv.end < 0 {
         return -1;
     }
     0
 }
 
 pub unsafe fn tbx_c_315_get_intv(
-    tbx: *mut tbx_t,
-    str_: *mut kstring_t,
-    intv: *mut tbx_intv_t,
+    tbx: &mut tbx_t,
+    str_: &mut kstring_t,
+    intv: &mut tbx_intv_t,
     is_add: c_int,
 ) -> c_int {
-    if tbx_c_96_tbx_parse1(&(*tbx).conf, (*str_).l, (*str_).s, intv) == 0 {
-        let ss = (*intv).ss.unwrap().as_ptr();
-        let se = (*intv).se.unwrap().as_ptr();
-        let c = *se;
-        *se = 0;
-        if ((*tbx).conf.preset & 0xffff) == TBX_GAF {
-            (*intv).tid = 0;
+    if tbx_c_96_tbx_parse1(&tbx.conf, str_.l, str_.s, intv) == 0 {
+        let line = std::slice::from_raw_parts(str_.s.cast::<u8>(), str_.l);
+        let ss = &line[intv.ss.unwrap()..intv.se.unwrap()];
+        if (tbx.conf.preset & 0xffff) == TBX_GAF {
+            intv.tid = 0;
         } else {
-            (*intv).tid = tbx_c_64_get_tid(tbx, ss, is_add);
+            intv.tid = tbx_c_64_get_tid(tbx, ss, is_add);
         }
-        *se = c;
-        if (*intv).tid < 0 {
+        if intv.tid < 0 {
             return -2;
         }
-        if (*intv).beg >= 0 && (*intv).end >= 0 {
+        if intv.beg >= 0 && intv.end >= 0 {
             0
         } else {
             -1
         }
     } else {
-        let type_: &str = match (*tbx).conf.preset & 0xffff {
+        let type_: &str = match tbx.conf.preset & 0xffff {
             TBX_SAM => "TBX_SAM",
             TBX_VCF => "TBX_VCF",
             TBX_GAF => "TBX_GAF",
@@ -503,10 +583,10 @@ pub unsafe fn tbx_c_315_get_intv(
             .unwrap();
             hts_log_cstr(HTS_LOG_ERROR, c"get_intv".as_ptr(), msg.as_ptr());
         } else {
-            let line = if (*str_).s.is_null() {
+            let line = if str_.s.is_null() {
                 String::new()
             } else {
-                std::ffi::CStr::from_ptr((*str_).s)
+                std::ffi::CStr::from_ptr(str_.s)
                     .to_string_lossy()
                     .into_owned()
             };
@@ -530,29 +610,45 @@ pub unsafe extern "C" fn tbx_readrec(
     beg: *mut hts_pos_t,
     end: *mut hts_pos_t,
 ) -> c_int {
-    tbx_c_353_tbx_readrec(fp, tbxv, sv, tid, beg, end)
+    let Some(fp) = fp.as_mut() else {
+        return -2;
+    };
+    let Some(tbx) = tbxv.cast::<tbx_t>().as_mut() else {
+        return -2;
+    };
+    let Some(s) = sv.cast::<kstring_t>().as_mut() else {
+        return -2;
+    };
+    let Some(tid) = tid.as_mut() else {
+        return -2;
+    };
+    let Some(beg) = beg.as_mut() else {
+        return -2;
+    };
+    let Some(end) = end.as_mut() else {
+        return -2;
+    };
+    tbx_c_353_tbx_readrec(fp, tbx, s, tid, beg, end)
 }
 
 pub unsafe fn tbx_c_353_tbx_readrec(
-    fp: *mut BGZF,
-    tbxv: *mut c_void,
-    sv: *mut c_void,
-    tid: *mut c_int,
-    beg: *mut hts_pos_t,
-    end: *mut hts_pos_t,
+    fp: &mut BGZF,
+    tbx: &mut tbx_t,
+    s: &mut kstring_t,
+    tid: &mut c_int,
+    beg: &mut hts_pos_t,
+    end: &mut hts_pos_t,
 ) -> c_int {
-    let tbx = tbxv.cast::<tbx_t>();
-    let s = sv.cast::<kstring_t>();
     let mut ret;
     loop {
         ret = bgzf_getline(fp, b'\n' as c_int, s);
-        if !(ret >= 0 && (*s).l != 0 && *(*s).s == (*tbx).conf.meta_char as c_char) {
+        if !(ret >= 0 && s.l != 0 && *s.s == tbx.conf.meta_char as c_char) {
             break;
         }
     }
     if ret >= 0 {
         let mut intv = tbx_intv_empty();
-        if tbx_c_315_get_intv(tbx, s, &mut intv, 0) < 0 {
+        if tbx_c_315_get_intv(&mut *tbx, &mut *s, &mut intv, 0) < 0 {
             return -2;
         }
         *tid = intv.tid;
@@ -562,81 +658,97 @@ pub unsafe fn tbx_c_353_tbx_readrec(
     ret
 }
 
-pub unsafe fn tbx_c_375_tbx_set_meta(tbx: *mut tbx_t) -> c_int {
-    let Some(dict) = (*tbx).dict.as_ref() else {
+pub unsafe fn tbx_c_375_tbx_set_meta(tbx: &mut tbx_t) -> c_int {
+    let Some(dict) = tbx.dict.as_ref() else {
         return -1;
     };
-    let name_len: usize = dict
-        .names
-        .iter()
-        .map(|name| name.as_bytes_with_nul().len())
-        .sum();
+    let name_len: usize = dict.names.iter().map(|name| name.len()).sum();
 
-    let meta = libc::malloc(name_len + 28).cast::<u8>();
-    if meta.is_null() {
+    let mut meta = Vec::<u8>::new();
+    if meta.try_reserve_exact(name_len + 28).is_err() {
         return -1;
     }
-    i32_to_le((*tbx).conf.preset, meta);
-    i32_to_le((*tbx).conf.sc, meta.add(4));
-    i32_to_le((*tbx).conf.bc, meta.add(8));
-    i32_to_le((*tbx).conf.ec, meta.add(12));
-    i32_to_le((*tbx).conf.meta_char, meta.add(16));
-    i32_to_le((*tbx).conf.line_skip, meta.add(20));
-    i32_to_le(name_len as i32, meta.add(24));
+    meta.resize(name_len + 28, 0);
+    i32_to_le(tbx.conf.preset, meta.as_mut_ptr());
+    i32_to_le(tbx.conf.sc, meta.as_mut_ptr().add(4));
+    i32_to_le(tbx.conf.bc, meta.as_mut_ptr().add(8));
+    i32_to_le(tbx.conf.ec, meta.as_mut_ptr().add(12));
+    i32_to_le(tbx.conf.meta_char, meta.as_mut_ptr().add(16));
+    i32_to_le(tbx.conf.line_skip, meta.as_mut_ptr().add(20));
+    i32_to_le(name_len as i32, meta.as_mut_ptr().add(24));
 
     let mut off = 28usize;
     for key in &dict.names {
-        let bytes = key.as_bytes_with_nul();
-        libc::memcpy(meta.add(off).cast(), bytes.as_ptr().cast(), bytes.len());
-        off += bytes.len();
+        meta[off..off + key.len()].copy_from_slice(key);
+        off += key.len();
     }
-    hts_c_3062_hts_idx_set_meta((*tbx).idx_ptr().cast(), off as u32, meta, 0)
+    hts_c_3062_hts_idx_set_meta(tbx.idx_ptr().cast(), off as u32, meta.as_mut_ptr(), 1)
 }
 
-pub unsafe fn tbx_c_412_adjust_max_ref_len_vcf(str_: *const c_char, max_ref_len: *mut i64) {
-    if libc::strncmp(str_, c"##contig".as_ptr(), 8) != 0 {
+pub fn tbx_c_412_adjust_max_ref_len_vcf(line: &[u8], max_ref_len: &mut i64) {
+    if !line.starts_with(b"##contig") {
         return;
     }
-    let mut ptr = libc::strstr(str_.add(8), c"length".as_ptr());
-    if ptr.is_null() {
+    let Some(length_start) = line[8..]
+        .windows(b"length".len())
+        .position(|window| window == b"length")
+        .map(|pos| pos + 8 + b"length".len())
+    else {
         return;
+    };
+    let mut len_field = &line[length_start..];
+    while matches!(len_field.first(), Some(b' ' | b'=')) {
+        len_field = &len_field[1..];
     }
-    ptr = ptr.add(6);
-    while *ptr == b' ' as c_char || *ptr == b'=' as c_char {
-        ptr = ptr.add(1);
-    }
-    let len = libc::strtoll(ptr, std::ptr::null_mut(), 10);
+    let Some(len) = parse_i64_prefix(len_field, 10) else {
+        return;
+    };
     if *max_ref_len < len {
         *max_ref_len = len;
     }
 }
 
-pub unsafe fn tbx_c_425_adjust_max_ref_len_sam(str_: *const c_char, max_ref_len: *mut i64) {
-    if libc::strncmp(str_, c"@SQ".as_ptr(), 3) != 0 {
+pub fn tbx_c_425_adjust_max_ref_len_sam(line: &[u8], max_ref_len: &mut i64) {
+    if !line.starts_with(b"@SQ") {
         return;
     }
-    let mut ptr = libc::strstr(str_.add(3), c"\tLN:".as_ptr());
-    if ptr.is_null() {
+    let Some(length_start) = line[3..]
+        .windows(b"\tLN:".len())
+        .position(|window| window == b"\tLN:")
+        .map(|pos| pos + 3 + b"\tLN:".len())
+    else {
         return;
-    }
-    ptr = ptr.add(4);
-    let len = libc::strtoll(ptr, std::ptr::null_mut(), 10);
+    };
+    let Some(len) = parse_i64_prefix(&line[length_start..], 10) else {
+        return;
+    };
     if *max_ref_len < len {
         *max_ref_len = len;
     }
 }
 
-pub unsafe fn tbx_index(fp: *mut BGZF, min_shift: c_int, conf: *const tbx_conf_t) -> *mut tbx_t {
-    tbx_c_437_tbx_index(fp, min_shift, conf)
+pub unsafe fn tbx_index(fp: *mut BGZF, min_shift: c_int, conf: &tbx_conf_t) -> *mut tbx_t {
+    let Some(fp) = fp.as_mut() else {
+        return std::ptr::null_mut();
+    };
+    tbx_index_owned(fp, min_shift, conf).map_or(std::ptr::null_mut(), Box::into_raw)
 }
 
 pub unsafe fn tbx_c_437_tbx_index(
     fp: *mut BGZF,
-    mut min_shift: c_int,
-    conf: *const tbx_conf_t,
+    min_shift: c_int,
+    conf: &tbx_conf_t,
 ) -> *mut tbx_t {
-    let mut str_: kstring_t = std::mem::zeroed();
-    let tbx = Box::into_raw(Box::new(tbx_t::new(*conf)));
+    tbx_index(fp, min_shift, conf)
+}
+
+unsafe fn tbx_index_owned(
+    fp: &mut BGZF,
+    mut min_shift: c_int,
+    conf: &tbx_conf_t,
+) -> Option<Box<tbx_t>> {
+    let mut str_ = KStringGuard::new();
+    let mut tbx = Box::new(tbx_t::new(*conf));
     let mut n_lvls;
     let fmt;
     if min_shift > 0 {
@@ -654,20 +766,21 @@ pub unsafe fn tbx_c_437_tbx_index(
     let mut max_ref_len = 0i64;
     let mut ret;
     loop {
-        ret = bgzf_getline(fp, b'\n' as c_int, &mut str_);
+        ret = bgzf_getline(fp, b'\n' as c_int, &mut str_.raw);
         if ret < 0 {
             break;
         }
         lineno += 1;
-        if *str_.s == (*tbx).conf.meta_char as c_char && fmt == HTS_FMT_CSI {
-            match (*tbx).conf.preset {
-                TBX_SAM => tbx_c_425_adjust_max_ref_len_sam(str_.s, &mut max_ref_len),
-                TBX_VCF => tbx_c_412_adjust_max_ref_len_vcf(str_.s, &mut max_ref_len),
+        if *str_.raw.s == tbx.conf.meta_char as c_char && fmt == HTS_FMT_CSI {
+            let line = std::slice::from_raw_parts(str_.raw.s.cast::<u8>(), str_.raw.l);
+            match tbx.conf.preset {
+                TBX_SAM => tbx_c_425_adjust_max_ref_len_sam(line, &mut max_ref_len),
+                TBX_VCF => tbx_c_412_adjust_max_ref_len_vcf(line, &mut max_ref_len),
                 _ => {}
             }
         }
-        if lineno <= (*tbx).conf.line_skip as i64 || *str_.s == (*tbx).conf.meta_char as c_char {
-            last_off = tbx_bgzf_tell(fp);
+        if lineno <= tbx.conf.line_skip as i64 || *str_.raw.s == tbx.conf.meta_char as c_char {
+            last_off = tbx_bgzf_tell(&*fp);
             continue;
         }
         if first == 0 {
@@ -685,65 +798,53 @@ pub unsafe fn tbx_c_437_tbx_index(
                     };
                 }
             }
-            if !(*tbx).set_idx(hts_c_2405_hts_idx_init(0, fmt, last_off, min_shift, n_lvls).cast())
-            {
-                libc::free(str_.s.cast());
-                tbx_c_512_tbx_destroy(tbx);
-                return std::ptr::null_mut();
+            if !tbx.set_idx(NonNull::new(
+                hts_c_2405_hts_idx_init(0, fmt, last_off, min_shift, n_lvls).cast(),
+            )) {
+                return None;
             }
             first = 1;
         }
         let mut intv = tbx_intv_empty();
-        ret = tbx_c_315_get_intv(tbx, &mut str_, &mut intv, 1);
+        ret = tbx_c_315_get_intv(&mut tbx, &mut str_.raw, &mut intv, 1);
         if ret < 0
             || hts_c_2558_hts_idx_push(
-                (*tbx).idx_ptr().cast(),
+                tbx.idx_ptr().cast(),
                 intv.tid,
                 intv.beg,
                 intv.end,
-                tbx_bgzf_tell(fp),
+                tbx_bgzf_tell(&*fp),
                 1,
             ) < 0
         {
-            libc::free(str_.s.cast());
-            tbx_c_512_tbx_destroy(tbx);
-            return std::ptr::null_mut();
+            return None;
         }
     }
     if ret < -1 {
-        libc::free(str_.s.cast());
-        tbx_c_512_tbx_destroy(tbx);
-        return std::ptr::null_mut();
+        return None;
     }
-    if (*tbx).idx.is_none() {
-        (*tbx).set_idx(hts_c_2405_hts_idx_init(0, fmt, last_off, min_shift, n_lvls).cast());
+    if tbx.idx.is_none() {
+        tbx.set_idx(NonNull::new(
+            hts_c_2405_hts_idx_init(0, fmt, last_off, min_shift, n_lvls).cast(),
+        ));
     }
-    if (*tbx).idx.is_none() {
-        libc::free(str_.s.cast());
-        tbx_c_512_tbx_destroy(tbx);
-        return std::ptr::null_mut();
+    if tbx.idx.is_none() {
+        return None;
     }
-    (*tbx).dict.get_or_insert_with(kh_s2i_t::new);
-    if hts_c_2515_hts_idx_finish((*tbx).idx_ptr().cast(), tbx_bgzf_tell(fp)) != 0
-        || tbx_c_375_tbx_set_meta(tbx) != 0
+    tbx.dict.get_or_insert_with(kh_s2i_t::new);
+    if hts_c_2515_hts_idx_finish(tbx.idx_ptr().cast(), tbx_bgzf_tell(&*fp)) != 0
+        || tbx_c_375_tbx_set_meta(&mut tbx) != 0
     {
-        libc::free(str_.s.cast());
-        tbx_c_512_tbx_destroy(tbx);
-        return std::ptr::null_mut();
+        return None;
     }
-    libc::free(str_.s.cast());
-    tbx
+    Some(tbx)
 }
 
-unsafe fn tbx_bgzf_tell(fp: *const BGZF) -> u64 {
-    ((*fp).block_address as u64) << 16 | (*fp).block_offset as u64
+fn tbx_bgzf_tell(fp: &BGZF) -> u64 {
+    (fp.block_address as u64) << 16 | fp.block_offset as u64
 }
 
-pub unsafe fn tbx_index_build(
-    fn_: *const c_char,
-    min_shift: c_int,
-    conf: *const tbx_conf_t,
-) -> c_int {
+pub unsafe fn tbx_index_build(fn_: *const c_char, min_shift: c_int, conf: &tbx_conf_t) -> c_int {
     tbx_c_547_tbx_index_build(fn_, min_shift, conf)
 }
 
@@ -751,7 +852,7 @@ pub unsafe fn tbx_index_build2(
     fn_: *const c_char,
     fnidx: *const c_char,
     min_shift: c_int,
-    conf: *const tbx_conf_t,
+    conf: &tbx_conf_t,
 ) -> c_int {
     tbx_c_542_tbx_index_build2(fn_, fnidx, min_shift, conf)
 }
@@ -761,7 +862,7 @@ pub unsafe fn tbx_index_build3(
     fnidx: *const c_char,
     min_shift: c_int,
     n_threads: c_int,
-    conf: *const tbx_conf_t,
+    conf: &tbx_conf_t,
 ) -> c_int {
     tbx_c_526_tbx_index_build3(fn_, fnidx, min_shift, n_threads, conf)
 }
@@ -772,7 +873,7 @@ pub unsafe fn tbx_c_526_tbx_index_build3(
     fnidx: *const c_char,
     min_shift: c_int,
     n_threads: c_int,
-    conf: *const tbx_conf_t,
+    conf: &tbx_conf_t,
 ) -> c_int {
     let fp = bgzf_open(fn_, c"r".as_ptr());
     if fp.is_null() {
@@ -786,13 +887,15 @@ pub unsafe fn tbx_c_526_tbx_index_build3(
         bgzf_close(fp);
         return -2;
     }
-    let tbx = tbx_c_437_tbx_index(fp, min_shift, conf);
+    let tbx = fp
+        .as_mut()
+        .and_then(|fp| tbx_index_owned(fp, min_shift, conf));
     bgzf_close(fp);
-    if tbx.is_null() {
+    let Some(tbx) = tbx else {
         return -1;
-    }
+    };
     let ret = hts_c_2869_hts_idx_save_as(
-        (*tbx).idx_ptr().cast(),
+        tbx.idx_ptr().cast(),
         fn_,
         fnidx,
         if min_shift > 0 {
@@ -801,7 +904,6 @@ pub unsafe fn tbx_c_526_tbx_index_build3(
             HTS_FMT_TBI
         },
     );
-    tbx_c_512_tbx_destroy(tbx);
     ret
 }
 
@@ -810,7 +912,7 @@ pub unsafe fn tbx_c_542_tbx_index_build2(
     fn_: *const c_char,
     fnidx: *const c_char,
     min_shift: c_int,
-    conf: *const tbx_conf_t,
+    conf: &tbx_conf_t,
 ) -> c_int {
     tbx_c_526_tbx_index_build3(fn_, fnidx, min_shift, 0, conf)
 }
@@ -819,7 +921,7 @@ pub unsafe fn tbx_c_542_tbx_index_build2(
 pub unsafe fn tbx_c_547_tbx_index_build(
     fn_: *const c_char,
     min_shift: c_int,
-    conf: *const tbx_conf_t,
+    conf: &tbx_conf_t,
 ) -> c_int {
     tbx_c_526_tbx_index_build3(fn_, std::ptr::null(), min_shift, 0, conf)
 }
@@ -840,12 +942,43 @@ pub unsafe fn tbx_index_load3(
     tbx_c_599_tbx_index_load3(fn_, fnidx, flags)
 }
 
-pub unsafe fn tbx_seqnames(tbx: *mut tbx_t, n: *mut c_int) -> *mut *const c_char {
-    tbx_c_614_tbx_seqnames(tbx, n)
+pub unsafe fn tbx_seqnames(tbx: *const tbx_t, n: *mut c_int) -> *mut *const c_char {
+    let Some(tbx) = tbx.as_ref() else {
+        return std::ptr::null_mut();
+    };
+    let Some(n) = n.as_mut() else {
+        return std::ptr::null_mut();
+    };
+    let names_ref = tbx_c_614_tbx_seqnames(tbx);
+    let names = libc::calloc(names_ref.len().max(1), std::mem::size_of::<*const c_char>())
+        .cast::<*const c_char>();
+    if names.is_null() {
+        *n = 0;
+        return std::ptr::null_mut();
+    }
+    for (i, name) in names_ref.iter().enumerate() {
+        *names.add(i) = name.as_ptr().cast();
+    }
+    *n = names_ref.len() as c_int;
+    names
 }
 
 pub unsafe fn tbx_destroy(tbx: *mut tbx_t) {
     tbx_c_512_tbx_destroy(tbx)
+}
+
+unsafe fn tbx_log_invalid_index_header(target: &[u8]) {
+    let msg = std::ffi::CString::new(format!(
+        "Invalid index header for {}",
+        String::from_utf8_lossy(target)
+    ))
+    .unwrap();
+    hts_log_cstr(HTS_LOG_ERROR, c"index_load".as_ptr(), msg.as_ptr());
+}
+
+fn tbx_index_name_bytes(record: &[u8]) -> Option<&[u8]> {
+    let name = record.strip_suffix(&[0])?;
+    (!name.contains(&0)).then_some(name)
 }
 
 pub unsafe fn tbx_c_552_index_load(
@@ -853,67 +986,68 @@ pub unsafe fn tbx_c_552_index_load(
     fnidx: *const c_char,
     flags: c_int,
 ) -> *mut tbx_t {
-    let tbx = Box::into_raw(Box::new(tbx_t::new(tbx_conf_t {
+    let Some(fn_) = (!fn_.is_null()).then(|| CStr::from_ptr(fn_)) else {
+        return std::ptr::null_mut();
+    };
+    let fnidx = (!fnidx.is_null()).then(|| CStr::from_ptr(fnidx));
+    tbx_index_load_owned(fn_, fnidx, flags).map_or(std::ptr::null_mut(), Box::into_raw)
+}
+
+unsafe fn tbx_index_load_owned(
+    fn_: &CStr,
+    fnidx: Option<&CStr>,
+    flags: c_int,
+) -> Option<Box<tbx_t>> {
+    let mut tbx = Box::new(tbx_t::new(tbx_conf_t {
         preset: 0,
         sc: 0,
         bc: 0,
         ec: 0,
         meta_char: 0,
         line_skip: 0,
-    })));
-    if !(*tbx).set_idx(hts_idx_load3(fn_, fnidx, HTS_FMT_TBI, flags).cast()) {
-        tbx_c_512_tbx_destroy(tbx);
-        return std::ptr::null_mut();
+    }));
+    let fnidx_ptr = fnidx.map_or(std::ptr::null(), CStr::as_ptr);
+    if !tbx.set_idx(NonNull::new(
+        hts_idx_load3(fn_.as_ptr(), fnidx_ptr, HTS_FMT_TBI, flags).cast(),
+    )) {
+        return None;
     }
 
     let mut l_meta = 0u32;
-    let meta = hts_c_3084_hts_idx_get_meta((*tbx).idx_ptr().cast(), &mut l_meta);
+    let meta = hts_c_3084_hts_idx_get_meta(tbx.idx_ptr().cast(), &mut l_meta);
     if meta.is_null() || l_meta < 28 {
-        let target = if !fnidx.is_null() { fnidx } else { fn_ };
-        let msg = std::ffi::CString::new(format!(
-            "Invalid index header for {}",
-            std::ffi::CStr::from_ptr(target).to_string_lossy()
-        ))
-        .unwrap();
-        hts_log_cstr(HTS_LOG_ERROR, c"index_load".as_ptr(), msg.as_ptr());
-        tbx_c_512_tbx_destroy(tbx);
-        return std::ptr::null_mut();
+        tbx_log_invalid_index_header(fnidx.unwrap_or(fn_).to_bytes());
+        return None;
     }
 
-    (*tbx).conf.preset = le_to_i32(meta);
-    (*tbx).conf.sc = le_to_i32(meta.add(4));
-    (*tbx).conf.bc = le_to_i32(meta.add(8));
-    (*tbx).conf.ec = le_to_i32(meta.add(12));
-    (*tbx).conf.meta_char = le_to_i32(meta.add(16));
-    (*tbx).conf.line_skip = le_to_i32(meta.add(20));
+    tbx.conf.preset = le_to_i32(meta);
+    tbx.conf.sc = le_to_i32(meta.add(4));
+    tbx.conf.bc = le_to_i32(meta.add(8));
+    tbx.conf.ec = le_to_i32(meta.add(12));
+    tbx.conf.meta_char = le_to_i32(meta.add(16));
+    tbx.conf.line_skip = le_to_i32(meta.add(20));
     let l_nm = le_to_u32(meta.add(24));
     if l_nm > l_meta - 28 {
-        let target = if !fnidx.is_null() { fnidx } else { fn_ };
-        let msg = std::ffi::CString::new(format!(
-            "Invalid index header for {}",
-            std::ffi::CStr::from_ptr(target).to_string_lossy()
-        ))
-        .unwrap();
-        hts_log_cstr(HTS_LOG_ERROR, c"index_load".as_ptr(), msg.as_ptr());
-        tbx_c_512_tbx_destroy(tbx);
-        return std::ptr::null_mut();
+        tbx_log_invalid_index_header(fnidx.unwrap_or(fn_).to_bytes());
+        return None;
     }
 
-    let nm = meta.add(28).cast::<c_char>();
-    let mut p = nm;
-    while p.offset_from(nm) < l_nm as isize {
-        if tbx_c_64_get_tid(tbx, p, 1) < 0 {
+    let names = std::slice::from_raw_parts(meta.add(28), l_nm as usize);
+    for name in names.split_inclusive(|&byte| byte == 0) {
+        let Some(name) = tbx_index_name_bytes(name) else {
+            tbx_log_invalid_index_header(fnidx.unwrap_or(fn_).to_bytes());
+            return None;
+        };
+        if tbx_c_64_get_tid(&mut tbx, name, 1) < 0 {
             hts_log_cstr(
                 HTS_LOG_ERROR,
                 c"index_load".as_ptr(),
                 libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
             );
-            tbx_c_512_tbx_destroy(tbx);
-            return std::ptr::null_mut();
+            return None;
         }
-        p = p.add(libc::strlen(p) + 1);
     }
-    tbx
+    Some(tbx)
 }
 
 pub unsafe fn tbx_c_599_tbx_index_load3(
@@ -932,52 +1066,50 @@ pub unsafe fn tbx_c_609_tbx_index_load(fn_: *const c_char) -> *mut tbx_t {
     tbx_c_552_index_load(fn_, std::ptr::null(), 1)
 }
 
-pub unsafe fn tbx_c_614_tbx_seqnames(tbx: *mut tbx_t, n: *mut c_int) -> *mut *const c_char {
-    let Some(dict) = (*tbx).dict.as_ref() else {
-        *n = 0;
-        return libc::calloc(1, std::mem::size_of::<*const c_char>()).cast::<*const c_char>();
-    };
-    let names = libc::calloc(dict.names.len(), std::mem::size_of::<*const c_char>())
-        .cast::<*const c_char>();
-    if names.is_null() {
-        *n = 0;
-        return std::ptr::null_mut();
-    }
-    for (i, name) in dict.names.iter().enumerate() {
-        *names.add(i) = name.as_ptr();
-    }
-    *n = dict.names.len() as c_int;
-    names
+pub fn tbx_c_614_tbx_seqnames(tbx: &tbx_t) -> &[Vec<u8>] {
+    tbx.dict
+        .as_ref()
+        .map_or([].as_slice(), |dict| dict.names.as_slice())
 }
 
 pub unsafe extern "C" fn tbx_c_644_tbx_name2id_wrapper(
     vhdr: *mut c_void,
     ref_: *const c_char,
 ) -> c_int {
-    tbx_c_91_tbx_name2id(vhdr.cast::<tbx_t>(), ref_)
+    let Some(tbx) = vhdr.cast::<tbx_t>().as_ref() else {
+        return -1;
+    };
+    let Some(ref_) = (!ref_.is_null()).then(|| CStr::from_ptr(ref_)) else {
+        return -1;
+    };
+    tbx_c_91_tbx_name2id(tbx, ref_.to_bytes())
 }
 
 pub unsafe fn tbx_itr_querys1(tbx: *mut tbx_t, region: *const c_char) -> *mut hts_itr_t {
-    tbx_c_649_tbx_itr_querys1(tbx, region)
+    let Some(tbx) = tbx.as_mut() else {
+        return std::ptr::null_mut();
+    };
+    let Some(region) = (!region.is_null()).then(|| CStr::from_ptr(region)) else {
+        return std::ptr::null_mut();
+    };
+    tbx_c_649_tbx_itr_querys1(tbx, region.to_bytes(), region.as_ptr())
 }
 
 // original: tbx_itr_querys1 (htslib/tbx.c:649)
-pub unsafe fn tbx_c_649_tbx_itr_querys1(tbx: *mut tbx_t, region: *const c_char) -> *mut hts_itr_t {
+pub unsafe fn tbx_c_649_tbx_itr_querys1(
+    tbx: &mut tbx_t,
+    region: &[u8],
+    region_ptr: *const c_char,
+) -> *mut hts_itr_t {
     let mut tid = 0;
     let mut beg = 0;
     let mut end = 0;
 
-    if libc::strcmp(region, c".".as_ptr()) == 0 {
+    if region == b"." {
+        return hts_itr_query(tbx.idx_ptr().cast(), HTS_IDX_START, 0, 0, Some(tbx_readrec));
+    } else if region == b"*" {
         return hts_itr_query(
-            (*tbx).idx_ptr().cast(),
-            HTS_IDX_START,
-            0,
-            0,
-            Some(tbx_readrec),
-        );
-    } else if libc::strcmp(region, c"*".as_ptr()) == 0 {
-        return hts_itr_query(
-            (*tbx).idx_ptr().cast(),
+            tbx.idx_ptr().cast(),
             HTS_IDX_NOCOOR,
             0,
             0,
@@ -986,12 +1118,12 @@ pub unsafe fn tbx_c_649_tbx_itr_querys1(tbx: *mut tbx_t, region: *const c_char) 
     }
 
     if hts_parse_region(
-        region,
+        region_ptr,
         &mut tid,
         &mut beg,
         &mut end,
         Some(tbx_c_644_tbx_name2id_wrapper),
-        tbx.cast(),
+        (tbx as *mut tbx_t).cast(),
         HTS_PARSE_THOUSANDS_SEP,
     )
     .is_null()
@@ -999,20 +1131,14 @@ pub unsafe fn tbx_c_649_tbx_itr_querys1(tbx: *mut tbx_t, region: *const c_char) 
         return std::ptr::null_mut();
     }
 
-    hts_itr_query((*tbx).idx_ptr().cast(), tid, beg, end, Some(tbx_readrec))
+    hts_itr_query(tbx.idx_ptr().cast(), tid, beg, end, Some(tbx_readrec))
 }
 
 pub unsafe fn tbx_c_512_tbx_destroy(tbx: *mut tbx_t) {
     if tbx.is_null() {
         return;
     }
-    let mut tbx = Box::from_raw(tbx);
-    hts_idx_destroy(
-        tbx.idx
-            .take()
-            .map_or(std::ptr::null_mut(), |idx| idx.as_ptr())
-            .cast(),
-    );
+    drop(Box::from_raw(tbx));
 }
 
 #[cfg(test)]
@@ -1062,13 +1188,7 @@ mod tests {
             assert_eq!(intv.end, 111);
             assert_eq!(
                 c"chr1".to_bytes(),
-                std::slice::from_raw_parts(
-                    intv.ss.unwrap().as_ptr().cast::<u8>(),
-                    intv.se
-                        .unwrap()
-                        .as_ptr()
-                        .offset_from(intv.ss.unwrap().as_ptr()) as usize
-                )
+                &line[intv.ss.unwrap()..intv.se.unwrap()]
             );
         }
     }
@@ -1314,16 +1434,7 @@ mod tests {
             );
             assert_eq!(intv.beg, 100);
             assert_eq!(intv.end, 101);
-            assert_eq!(
-                std::slice::from_raw_parts(
-                    intv.ss.unwrap().as_ptr().cast::<u8>(),
-                    intv.se
-                        .unwrap()
-                        .as_ptr()
-                        .offset_from(intv.ss.unwrap().as_ptr()) as usize
-                ),
-                b"chr7"
-            );
+            assert_eq!(&line[intv.ss.unwrap()..intv.se.unwrap()], b"chr7");
         }
     }
 
@@ -1454,16 +1565,7 @@ mod tests {
                 0
             );
             assert_eq!((intv.beg, intv.end), (10, 12));
-            assert_eq!(
-                std::slice::from_raw_parts(
-                    intv.ss.unwrap().as_ptr().cast::<u8>(),
-                    intv.se
-                        .unwrap()
-                        .as_ptr()
-                        .offset_from(intv.ss.unwrap().as_ptr()) as usize
-                ),
-                b"chr7"
-            );
+            assert_eq!(&line[intv.ss.unwrap()..intv.se.unwrap()], b"chr7");
             assert_eq!(line, original);
         }
     }
@@ -1556,20 +1658,12 @@ mod tests {
 
     #[test]
     fn tbx_header_ref_len_scanners_keep_maximum() {
-        unsafe {
-            let mut max_ref_len = 100i64;
-            tbx_c_412_adjust_max_ref_len_vcf(
-                c"##contig=<ID=chr1,length=248956422>".as_ptr(),
-                &mut max_ref_len,
-            );
-            assert_eq!(max_ref_len, 248956422);
+        let mut max_ref_len = 100i64;
+        tbx_c_412_adjust_max_ref_len_vcf(b"##contig=<ID=chr1,length=248956422>", &mut max_ref_len);
+        assert_eq!(max_ref_len, 248956422);
 
-            tbx_c_425_adjust_max_ref_len_sam(
-                c"@SQ\tSN:chr2\tLN:242193529".as_ptr(),
-                &mut max_ref_len,
-            );
-            assert_eq!(max_ref_len, 248956422);
-        }
+        tbx_c_425_adjust_max_ref_len_sam(b"@SQ\tSN:chr2\tLN:242193529", &mut max_ref_len);
+        assert_eq!(max_ref_len, 248956422);
     }
 
     #[test]
@@ -1611,36 +1705,47 @@ mod tests {
 
     #[test]
     fn tbx_gaf_name_lookup_is_single_tid_and_does_not_allocate_dictionary() {
+        let mut tbx = tbx_t {
+            conf: tbx_conf_t {
+                preset: TBX_GAF,
+                sc: 1,
+                bc: 6,
+                ec: 0,
+                meta_char: b'#' as c_int,
+                line_skip: 0,
+            },
+            idx: None,
+            dict: None,
+        };
+
+        assert_eq!(tbx_c_91_tbx_name2id(&tbx, b"any-path"), 0);
+        assert_eq!(tbx_c_64_get_tid(&mut tbx, b"other-path", 1), 0);
+        assert!(tbx.dict.is_none());
+    }
+
+    #[test]
+    fn tbx_seqnames_returns_empty_slice_for_null_dictionary() {
         unsafe {
-            let mut tbx = tbx_t {
-                conf: tbx_conf_t {
-                    preset: TBX_GAF,
-                    sc: 1,
-                    bc: 6,
-                    ec: 0,
-                    meta_char: b'#' as c_int,
-                    line_skip: 0,
-                },
+            let tbx = tbx_t {
+                conf: tbx_conf_vcf(),
                 idx: None,
                 dict: None,
             };
-
-            assert_eq!(tbx_c_91_tbx_name2id(&mut tbx, c"any-path".as_ptr()), 0);
-            assert_eq!(tbx_c_64_get_tid(&mut tbx, c"other-path".as_ptr(), 1), 0);
-            assert!(tbx.dict.is_none());
+            let names = tbx_c_614_tbx_seqnames(&tbx);
+            assert!(names.is_empty());
         }
     }
 
     #[test]
-    fn tbx_seqnames_returns_empty_array_for_null_dictionary() {
+    fn tbx_seqnames_abi_returns_freeable_empty_array_for_null_dictionary() {
         unsafe {
-            let mut tbx = tbx_t {
+            let tbx = tbx_t {
                 conf: tbx_conf_vcf(),
                 idx: None,
                 dict: None,
             };
             let mut n = -1;
-            let names = tbx_c_614_tbx_seqnames(&mut tbx, &mut n);
+            let names = tbx_seqnames(&tbx, &mut n);
             assert!(!names.is_null());
             assert_eq!(n, 0);
             libc::free(names.cast());
@@ -1651,9 +1756,10 @@ mod tests {
     fn tbx_name_lookup_on_empty_dictionary_reports_missing_without_names() {
         unsafe {
             let tbx = Box::into_raw(Box::new(tbx_t::new(tbx_conf_vcf())));
+            let tbx_ref = &*tbx;
 
-            assert_eq!(tbx_name2id(tbx, c"chr1".as_ptr()), -1);
-            assert!((*tbx).dict.is_none());
+            assert_eq!(tbx_name2id(tbx_ref, c"chr1".as_ptr()), -1);
+            assert!(tbx_ref.dict.is_none());
             tbx_c_512_tbx_destroy(tbx);
         }
     }
@@ -1662,19 +1768,17 @@ mod tests {
     fn tbx_get_tid_seqnames_and_destroy_use_s2i_dictionary() {
         unsafe {
             let tbx = Box::into_raw(Box::new(tbx_t::new(tbx_conf_vcf())));
+            let tbx_ref = &mut *tbx;
 
-            assert_eq!(tbx_c_64_get_tid(tbx, c"chr2".as_ptr(), 1), 0);
-            assert_eq!(tbx_c_64_get_tid(tbx, c"chr1".as_ptr(), 1), 1);
-            assert_eq!(tbx_c_91_tbx_name2id(tbx, c"chr2".as_ptr()), 0);
-            assert_eq!(tbx_c_91_tbx_name2id(tbx, c"missing".as_ptr()), -1);
+            assert_eq!(tbx_c_64_get_tid(tbx_ref, b"chr2", 1), 0);
+            assert_eq!(tbx_c_64_get_tid(tbx_ref, b"chr1", 1), 1);
+            assert_eq!(tbx_c_91_tbx_name2id(tbx_ref, b"chr2"), 0);
+            assert_eq!(tbx_c_91_tbx_name2id(tbx_ref, b"missing"), -1);
 
-            let mut n = -1;
-            let names = tbx_c_614_tbx_seqnames(tbx, &mut n);
-            assert!(!names.is_null());
-            assert_eq!(n, 2);
-            assert_eq!(std::ffi::CStr::from_ptr(*names.add(0)), c"chr2");
-            assert_eq!(std::ffi::CStr::from_ptr(*names.add(1)), c"chr1");
-            libc::free(names.cast());
+            let names = tbx_c_614_tbx_seqnames(tbx_ref);
+            assert_eq!(names.len(), 2);
+            assert_eq!(names[0], b"chr2\0");
+            assert_eq!(names[1], b"chr1\0");
 
             tbx_c_512_tbx_destroy(tbx);
         }
@@ -1706,12 +1810,10 @@ mod tests {
             assert!(!tbx.is_null());
             assert_eq!(super::super::bgzf::bgzf_close(fp), 0);
 
-            let mut n = 0;
-            let names = tbx_c_614_tbx_seqnames(tbx, &mut n);
-            assert_eq!(n, 2);
-            assert_eq!(std::ffi::CStr::from_ptr(*names.add(0)), c"chr2");
-            assert_eq!(std::ffi::CStr::from_ptr(*names.add(1)), c"chr1");
-            libc::free(names.cast());
+            let names = tbx_c_614_tbx_seqnames(&*tbx);
+            assert_eq!(names.len(), 2);
+            assert_eq!(names[0], b"chr2\0");
+            assert_eq!(names[1], b"chr1\0");
             tbx_c_512_tbx_destroy(tbx);
             libc::unlink(c_path.as_ptr());
         }

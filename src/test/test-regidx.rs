@@ -133,7 +133,11 @@ pub unsafe fn test_test_regidx_c_106_test_sequential_access() {
         let mut buf = [0 as c_char; 128];
         let len = libc::snprintf(buf.as_mut_ptr(), buf.len(), c"%ld".as_ptr(), (*itr).beg + 1);
         kputsn(buf.as_ptr(), len as usize, &mut str_);
-        let payload = *(*itr).payload.cast::<*mut c_char>();
+        let payload = *(*itr)
+            .payload
+            .expect("regidx payload")
+            .cast::<*mut c_char>()
+            .as_ptr();
         if libc::strcmp(payload, str_.s) != 0 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
@@ -245,7 +249,11 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     }
     if libc::strcmp(
         c"1:10000000-10000000".as_ptr(),
-        *(*itr).payload.cast::<*mut c_char>(),
+        *(*itr)
+            .payload
+            .expect("regidx payload")
+            .cast::<*mut c_char>()
+            .as_ptr(),
     ) != 0
     {
         libc::fprintf(
@@ -253,7 +261,11 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
             c"query failed: 1:%ld-%ld vs %s\n".as_ptr(),
             from,
             to,
-            *(*itr).payload.cast::<*mut c_char>(),
+            *(*itr)
+                .payload
+                .expect("regidx payload")
+                .cast::<*mut c_char>()
+                .as_ptr(),
         );
         libc::exit(-1);
     }
@@ -451,7 +463,11 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
             (*itr).end + 1,
         );
         kputsn(buf.as_ptr(), len as usize, &mut str_);
-        let payload = *(*itr).payload.cast::<*mut c_char>();
+        let payload = *(*itr)
+            .payload
+            .expect("regidx payload")
+            .cast::<*mut c_char>()
+            .as_ptr();
         if libc::strcmp(str_.s, payload) != 0 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),

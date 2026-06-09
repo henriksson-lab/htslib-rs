@@ -1,56 +1,52 @@
 use crate::htslib_rs::hts::{hFILE, hts_json_token, isprint_c, kstring_t, size_t};
-use std::ffi::{c_char, c_int, c_void, CStr};
-
-type hts_json_nextfn =
-    unsafe fn(arg1: *mut c_void, arg2: *mut c_void, token: *mut hts_json_token) -> c_char;
+use std::ffi::{c_void, CString};
+use std::ptr::NonNull;
 
 // original: dehex (htslib/textutils.c:37)
-unsafe fn dehex(c: c_char) -> c_int {
+fn dehex(c: i8) -> i32 {
     let c = c as u8;
     if (b'a'..=b'f').contains(&c) {
-        (c - b'a' + 10) as c_int
+        (c - b'a' + 10) as i32
     } else if (b'A'..=b'F').contains(&c) {
-        (c - b'A' + 10) as c_int
+        (c - b'A' + 10) as i32
     } else if c.is_ascii_digit() {
-        (c - b'0') as c_int
+        (c - b'0') as i32
     } else {
         -1
     }
 }
 
-// original: encode_utf8 (htslib/textutils.c:103)
-unsafe fn encode_utf8(mut s: *mut c_char, x: u32) -> *mut c_char {
+fn encode_utf8_slice(s: &mut [i8], x: u32) -> usize {
     if x >= 0x10000 {
-        *s = (0xf0 | (x >> 18)) as c_char;
-        s = s.add(1);
-        *s = (0x80 | ((x >> 12) & 0x3f)) as c_char;
-        s = s.add(1);
-        *s = (0x80 | ((x >> 6) & 0x3f)) as c_char;
-        s = s.add(1);
-        *s = (0x80 | (x & 0x3f)) as c_char;
-        s = s.add(1);
+        s[0] = (0xf0 | (x >> 18)) as i8;
+        s[1] = (0x80 | ((x >> 12) & 0x3f)) as i8;
+        s[2] = (0x80 | ((x >> 6) & 0x3f)) as i8;
+        s[3] = (0x80 | (x & 0x3f)) as i8;
+        4
     } else if x >= 0x800 {
-        *s = (0xe0 | (x >> 12)) as c_char;
-        s = s.add(1);
-        *s = (0x80 | ((x >> 6) & 0x3f)) as c_char;
-        s = s.add(1);
-        *s = (0x80 | (x & 0x3f)) as c_char;
-        s = s.add(1);
+        s[0] = (0xe0 | (x >> 12)) as i8;
+        s[1] = (0x80 | ((x >> 6) & 0x3f)) as i8;
+        s[2] = (0x80 | (x & 0x3f)) as i8;
+        3
     } else if x >= 0x80 {
-        *s = (0xc0 | (x >> 6)) as c_char;
-        s = s.add(1);
-        *s = (0x80 | (x & 0x3f)) as c_char;
-        s = s.add(1);
+        s[0] = (0xc0 | (x >> 6)) as i8;
+        s[1] = (0x80 | (x & 0x3f)) as i8;
+        2
     } else {
-        *s = x as c_char;
-        s = s.add(1);
+        s[0] = x as i8;
+        1
     }
-
-    s
 }
 
 // original: fscan_string (htslib/textutils.c:164)
-pub unsafe fn textutils_c_164_fscan_string(fp: *mut hFILE, d: *mut kstring_t) -> c_int {
+pub unsafe fn textutils_c_164_fscan_string(fp: *mut hFILE, d: *mut kstring_t) -> i32 {
+    if fp.is_null() || d.is_null() {
+        return -1;
+    }
+    textutils_fscan_string_ref(&mut *fp, &mut *d)
+}
+
+pub unsafe fn textutils_fscan_string_ref(fp: &mut hFILE, d: &mut kstring_t) -> i32 {
     let mut e: u32 = 0;
 
     loop {
@@ -67,31 +63,31 @@ pub unsafe fn textutils_c_164_fscan_string(fp: *mut hFILE, d: *mut kstring_t) ->
                 }
 
                 match c as u8 {
-                    b'b' => e |= (crate::htslib_rs::hts::kputc(b'\x08' as c_int, d) < 0) as u32,
-                    b'f' => e |= (crate::htslib_rs::hts::kputc(b'\x0c' as c_int, d) < 0) as u32,
-                    b'n' => e |= (crate::htslib_rs::hts::kputc(b'\n' as c_int, d) < 0) as u32,
-                    b'r' => e |= (crate::htslib_rs::hts::kputc(b'\r' as c_int, d) < 0) as u32,
-                    b't' => e |= (crate::htslib_rs::hts::kputc(b'\t' as c_int, d) < 0) as u32,
+                    b'b' => e |= (crate::htslib_rs::hts::kputc(b'\x08' as i32, d) < 0) as u32,
+                    b'f' => e |= (crate::htslib_rs::hts::kputc(b'\x0c' as i32, d) < 0) as u32,
+                    b'n' => e |= (crate::htslib_rs::hts::kputc(b'\n' as i32, d) < 0) as u32,
+                    b'r' => e |= (crate::htslib_rs::hts::kputc(b'\r' as i32, d) < 0) as u32,
+                    b't' => e |= (crate::htslib_rs::hts::kputc(b'\t' as i32, d) < 0) as u32,
                     b'u' => {
                         c = crate::htslib_rs::hfile::htslib_hfile_h_163_hgetc(fp);
                         if c != libc::EOF {
-                            let d1 = dehex(c as c_char);
+                            let d1 = dehex(c as i8);
                             if d1 >= 0 {
                                 c = crate::htslib_rs::hfile::htslib_hfile_h_163_hgetc(fp);
                                 if c != libc::EOF {
-                                    let d2 = dehex(c as c_char);
+                                    let d2 = dehex(c as i8);
                                     if d2 >= 0 {
                                         c = crate::htslib_rs::hfile::htslib_hfile_h_163_hgetc(fp);
                                         if c != libc::EOF {
-                                            let d3 = dehex(c as c_char);
+                                            let d3 = dehex(c as i8);
                                             if d3 >= 0 {
                                                 c = crate::htslib_rs::hfile::htslib_hfile_h_163_hgetc(fp);
                                                 if c != libc::EOF {
-                                                    let d4 = dehex(c as c_char);
+                                                    let d4 = dehex(c as i8);
                                                     if d4 >= 0 {
-                                                        let mut buf = [0 as c_char; 8];
-                                                        let lim = encode_utf8(
-                                                            buf.as_mut_ptr(),
+                                                        let mut buf = [0 as i8; 8];
+                                                        let len = encode_utf8_slice(
+                                                            &mut buf,
                                                             ((d1 << 12)
                                                                 | (d2 << 8)
                                                                 | (d3 << 4)
@@ -100,7 +96,7 @@ pub unsafe fn textutils_c_164_fscan_string(fp: *mut hFILE, d: *mut kstring_t) ->
                                                         );
                                                         e |= (crate::htslib_rs::hts::kputsn(
                                                             buf.as_ptr(),
-                                                            lim.offset_from(buf.as_ptr()) as usize,
+                                                            len,
                                                             d,
                                                         ) < 0)
                                                             as u32;
@@ -128,34 +124,36 @@ pub unsafe fn textutils_c_164_fscan_string(fp: *mut hFILE, d: *mut kstring_t) ->
     }
 }
 
-// original: token_type (htslib/textutils.c:202)
-unsafe fn token_type(token: *mut hts_json_token) -> c_char {
-    let s = (*token).str_;
+pub unsafe fn hts_json_token_type_ref(token: &hts_json_token) -> i8 {
+    token.type_
+}
 
-    match *s as u8 {
-        b'f' => {
-            if libc::strcmp(s, c"false".as_ptr()) == 0 {
-                b'b' as c_char
-            } else {
-                b'?' as c_char
-            }
-        }
-        b'n' => {
-            if libc::strcmp(s, c"null".as_ptr()) == 0 {
-                b'.' as c_char
-            } else {
-                b'?' as c_char
-            }
-        }
-        b't' => {
-            if libc::strcmp(s, c"true".as_ptr()) == 0 {
-                b'b' as c_char
-            } else {
-                b'?' as c_char
-            }
-        }
-        b'-' | b'0'..=b'9' => b'n' as c_char,
-        _ => b'?' as c_char,
+unsafe fn c_strlen(s: *const i8) -> usize {
+    let mut len = 0usize;
+    while *s.add(len) != 0 {
+        len += 1;
+    }
+    len
+}
+
+unsafe fn token_bytes(token: &hts_json_token) -> Option<&[u8]> {
+    let s = token.str_;
+    if s.is_null() {
+        return None;
+    }
+    let mut len = 0usize;
+    while *s.add(len) != 0 {
+        len += 1;
+    }
+    Some(std::slice::from_raw_parts(s.cast::<u8>(), len))
+}
+
+unsafe fn token_type_ref(token: &hts_json_token) -> i8 {
+    match token_bytes(token) {
+        Some(b"false") | Some(b"true") => b'b' as i8,
+        Some(b"null") => b'.' as i8,
+        Some([b'-', ..] | [b'0'..=b'9', ..]) => b'n' as i8,
+        _ => b'?' as i8,
     }
 }
 
@@ -164,36 +162,47 @@ pub unsafe fn textutils_c_292_hts_json_fnext(
     fp: *mut hFILE,
     token: *mut hts_json_token,
     kstr: *mut kstring_t,
-) -> c_char {
+) -> i8 {
+    if fp.is_null() || token.is_null() || kstr.is_null() {
+        return 0;
+    }
+    textutils_hts_json_fnext_ref(&mut *fp, &mut *token, &mut *kstr)
+}
+
+pub unsafe fn textutils_hts_json_fnext_ref(
+    fp: &mut hFILE,
+    token: &mut hts_json_token,
+    kstr: &mut kstring_t,
+) -> i8 {
     loop {
         let mut c = crate::htslib_rs::hfile::htslib_hfile_h_163_hgetc(fp);
 
         match c {
             x if matches!(x as u8, b' ' | b'\t' | b'\r' | b'\n' | b',' | b':') => continue,
             x if x == libc::EOF => {
-                (*token).type_ = 0;
-                return (*token).type_;
+                token.type_ = 0;
+                return token.type_;
             }
             x if matches!(x as u8, b'{' | b'[' | b'}' | b']') => {
-                (*token).type_ = x as c_char;
-                return (*token).type_;
+                token.type_ = x as i8;
+                return token.type_;
             }
-            x if x == b'"' as c_int => {
-                (*kstr).l = 0;
-                textutils_c_164_fscan_string(fp, kstr);
-                if (*kstr).l == 0 {
+            x if x == b'"' as i32 => {
+                kstr.l = 0;
+                textutils_fscan_string_ref(fp, kstr);
+                if kstr.l == 0 {
                     crate::htslib_rs::hts::kputsn(c"".as_ptr(), 0, kstr);
                 }
-                (*token).str_ = (*kstr).s;
-                (*token).type_ = b's' as c_char;
-                return (*token).type_;
+                token.str_ = kstr.s;
+                token.type_ = b's' as i8;
+                return token.type_;
             }
             _ => {
-                let mut peek = 0 as c_char;
+                let mut peek = 0 as i8;
 
-                (*kstr).l = 0;
+                kstr.l = 0;
                 crate::htslib_rs::hts::kputc(c, kstr);
-                while crate::htslib_rs::hfile::hpeek(fp, (&mut peek as *mut c_char).cast(), 1) == 1
+                while crate::htslib_rs::hfile::hpeek(fp, (&mut peek as *mut i8).cast(), 1) == 1
                     && !matches!(
                         peek as u8,
                         b' ' | b'\t' | b'\r' | b'\n' | b',' | b']' | b'}'
@@ -205,51 +214,42 @@ pub unsafe fn textutils_c_292_hts_json_fnext(
                     }
                     crate::htslib_rs::hts::kputc(c, kstr);
                 }
-                (*token).str_ = (*kstr).s;
-                (*token).type_ = token_type(token);
-                return (*token).type_;
+                token.str_ = kstr.s;
+                token.type_ = token_type_ref(token);
+                return token.type_;
             }
         }
     }
 }
 
 // original: skip_value (htslib/textutils.c:338)
-unsafe fn skip_value(
-    type_: c_char,
-    next: hts_json_nextfn,
-    arg1: *mut c_void,
-    arg2: *mut c_void,
-) -> c_char {
+unsafe fn skip_value(type_: i8, next: &mut dyn FnMut(&mut hts_json_token) -> i8) -> i8 {
     let mut token = hts_json_token {
         type_: 0,
         str_: std::ptr::null_mut(),
     };
 
-    let first = if type_ != 0 {
-        type_
-    } else {
-        next(arg1, arg2, &mut token)
-    };
+    let first = if type_ != 0 { type_ } else { next(&mut token) };
 
     let mut level;
     match first as u8 {
         0 => return 0,
-        b'?' | b'}' | b']' => return b'?' as c_char,
+        b'?' | b'}' | b']' => return b'?' as i8,
         b'{' | b'[' => level = 1,
-        _ => return b'v' as c_char,
+        _ => return b'v' as i8,
     }
 
     while level > 0 {
-        match next(arg1, arg2, &mut token) as u8 {
+        match next(&mut token) as u8 {
             0 => return 0,
-            b'?' => return b'?' as c_char,
+            b'?' => return b'?' as i8,
             b'{' | b'[' => level += 1,
             b'}' | b']' => level -= 1,
             _ => {}
         }
     }
 
-    b'v' as c_char
+    b'v' as i8
 }
 
 // original: fnext (htslib/textutils.c:397)
@@ -257,19 +257,40 @@ pub unsafe fn textutils_c_397_fnext(
     arg1: *mut c_void,
     arg2: *mut c_void,
     token: *mut hts_json_token,
-) -> c_char {
-    textutils_c_292_hts_json_fnext(arg1.cast(), token, arg2.cast())
+) -> i8 {
+    if token.is_null() {
+        return 0;
+    }
+    let Some(fp) = arg1.cast::<hFILE>().as_mut() else {
+        return 0;
+    };
+    let Some(kstr) = arg2.cast::<kstring_t>().as_mut() else {
+        return 0;
+    };
+    textutils_fnext_ref(fp, kstr, &mut *token)
+}
+
+unsafe fn textutils_fnext_ref(
+    fp: &mut hFILE,
+    kstr: &mut kstring_t,
+    token: &mut hts_json_token,
+) -> i8 {
+    textutils_hts_json_fnext_ref(fp, token, kstr)
 }
 
 // original: hts_json_fskip_value (htslib/textutils.c:402)
-pub unsafe fn textutils_c_402_hts_json_fskip_value(fp: *mut hFILE, type_: c_char) -> c_char {
+pub unsafe fn textutils_c_402_hts_json_fskip_value(fp: *mut hFILE, type_: i8) -> i8 {
+    if fp.is_null() {
+        return 0;
+    }
+    textutils_hts_json_fskip_value_ref(&mut *fp, type_)
+}
+
+pub unsafe fn textutils_hts_json_fskip_value_ref(fp: &mut hFILE, type_: i8) -> i8 {
     let mut str_: kstring_t = std::mem::zeroed();
-    let ret = skip_value(
-        type_,
-        textutils_c_397_fnext,
-        fp.cast(),
-        (&mut str_ as *mut kstring_t).cast(),
-    );
+    let ret = skip_value(type_, &mut |token| {
+        textutils_fnext_ref(fp, &mut str_, token)
+    });
     let str_owner = unsafe { crate::htslib_rs::c_compat::FreeOnDrop::from_raw(str_.s) };
     drop(str_owner);
     ret
@@ -279,47 +300,65 @@ pub unsafe fn textutils_c_402_hts_json_fskip_value(fp: *mut hFILE, type_: c_char
 // Functions translated from htslib/textutils.c (moved from src/hts.rs).
 // ----------------------------------------------------------------------
 
-pub unsafe fn hts_decode_percent(
-    dest: *mut c_char,
-    destlen: *mut size_t,
-    mut s: *const c_char,
-) -> c_int {
-    let mut d = dest;
-    while *s != 0 {
-        let hi;
-        let lo;
-        if *s == b'%' as c_char
-            && {
-                hi = dehex(*s.add(1));
-                hi >= 0
-            }
-            && {
-                lo = dehex(*s.add(2));
-                lo >= 0
-            }
-        {
-            *d = ((hi << 4) | lo) as c_char;
-            d = d.add(1);
-            s = s.add(3);
-        } else {
-            *d = *s;
-            d = d.add(1);
-            s = s.add(1);
-        }
+pub unsafe fn hts_decode_percent(dest: *mut i8, destlen: *mut size_t, s: *const i8) -> i32 {
+    if dest.is_null() || destlen.is_null() || s.is_null() {
+        return -1;
     }
-    *d = 0;
-    *destlen = d.offset_from(dest) as size_t;
-    0
+    let src_len = c_strlen(s);
+    let src = std::slice::from_raw_parts(s.cast::<u8>(), src_len);
+    let needed = src.len().saturating_add(1);
+    hts_decode_percent_ref(
+        std::slice::from_raw_parts_mut(dest, needed),
+        &mut *destlen,
+        src,
+    )
 }
 
-pub unsafe fn debase64(c: c_char) -> c_int {
+pub fn hts_decode_percent_ref(dest: &mut [i8], destlen: &mut size_t, s: &[u8]) -> i32 {
+    if dest.is_empty() {
+        return -1;
+    }
+    hts_decode_percent_slice(dest, destlen, s)
+}
+
+fn hts_decode_percent_slice(dest: &mut [i8], destlen: &mut size_t, src: &[u8]) -> i32 {
+    let mut si = 0usize;
+    let mut di = 0usize;
+    while si < src.len() {
+        if di + 1 >= dest.len() {
+            return -1;
+        }
+        if src[si] == b'%' && si + 2 < src.len() {
+            let hi = dehex(src[si + 1] as i8);
+            let lo = dehex(src[si + 2] as i8);
+            if hi >= 0 && lo >= 0 {
+                dest[di] = ((hi << 4) | lo) as i8;
+                di += 1;
+                si += 3;
+                continue;
+            }
+        }
+        dest[di] = src[si] as i8;
+        di += 1;
+        si += 1;
+    }
+    if di >= dest.len() {
+        -1
+    } else {
+        dest[di] = 0;
+        *destlen = di as size_t;
+        0
+    }
+}
+
+pub fn debase64(c: i8) -> i32 {
     let c = c as u8;
     if c.is_ascii_lowercase() {
-        (c - b'a' + 26) as c_int
+        (c - b'a' + 26) as i32
     } else if c.is_ascii_uppercase() {
-        (c - b'A') as c_int
+        (c - b'A') as i32
     } else if c.is_ascii_digit() {
-        (c - b'0' + 52) as c_int
+        (c - b'0' + 52) as i32
     } else if c == b'/' {
         63
     } else if c == b'+' {
@@ -334,37 +373,55 @@ pub unsafe fn hts_base64_decoded_length(len: size_t) -> size_t {
     3 * nquartets
 }
 
-pub unsafe fn hts_decode_base64(
-    dest: *mut c_char,
-    destlen: *mut size_t,
-    mut s: *const c_char,
-) -> c_int {
-    let mut d = dest;
+pub unsafe fn hts_decode_base64(dest: *mut i8, destlen: *mut size_t, s: *const i8) -> i32 {
+    if dest.is_null() || destlen.is_null() || s.is_null() {
+        return -1;
+    }
+    let src_len = c_strlen(s);
+    let src = std::slice::from_raw_parts(s.cast::<u8>(), src_len);
+    let needed = hts_base64_decoded_length(src.len());
+    hts_decode_base64_ref(
+        std::slice::from_raw_parts_mut(dest, needed),
+        &mut *destlen,
+        src,
+    )
+}
+
+pub fn hts_decode_base64_ref(dest: &mut [i8], destlen: &mut size_t, s: &[u8]) -> i32 {
+    if dest.is_empty() && !s.is_empty() {
+        return -1;
+    }
+    hts_decode_base64_slice(dest, destlen, s)
+}
+
+fn hts_decode_base64_slice(dest: &mut [i8], destlen: &mut size_t, src: &[u8]) -> i32 {
+    let mut si = 0usize;
+    let mut di = 0usize;
     let mut x0;
     let mut x1;
     let mut x2;
     let mut x3;
 
     loop {
-        x0 = debase64(*s);
-        s = s.add(1);
+        x0 = src.get(si).map_or(-1, |&c| debase64(c as i8));
+        si += 1;
         x1 = if x0 >= 0 {
-            let x = debase64(*s);
-            s = s.add(1);
+            let x = src.get(si).map_or(-1, |&c| debase64(c as i8));
+            si += 1;
             x
         } else {
             -1
         };
         x2 = if x1 >= 0 {
-            let x = debase64(*s);
-            s = s.add(1);
+            let x = src.get(si).map_or(-1, |&c| debase64(c as i8));
+            si += 1;
             x
         } else {
             -1
         };
         x3 = if x2 >= 0 {
-            let x = debase64(*s);
-            s = s.add(1);
+            let x = src.get(si).map_or(-1, |&c| debase64(c as i8));
+            si += 1;
             x
         } else {
             -1
@@ -373,103 +430,136 @@ pub unsafe fn hts_decode_base64(
             break;
         }
 
-        *d = ((x0 << 2) | (x1 >> 4)) as c_char;
-        d = d.add(1);
-        *d = ((x1 << 4) | (x2 >> 2)) as c_char;
-        d = d.add(1);
-        *d = ((x2 << 6) | x3) as c_char;
-        d = d.add(1);
+        if di + 3 > dest.len() {
+            return -1;
+        }
+        dest[di] = ((x0 << 2) | (x1 >> 4)) as i8;
+        di += 1;
+        dest[di] = ((x1 << 4) | (x2 >> 2)) as i8;
+        di += 1;
+        dest[di] = ((x2 << 6) | x3) as i8;
+        di += 1;
     }
 
     if x1 >= 0 {
-        *d = ((x0 << 2) | (x1 >> 4)) as c_char;
-        d = d.add(1);
+        if di >= dest.len() {
+            return -1;
+        }
+        dest[di] = ((x0 << 2) | (x1 >> 4)) as i8;
+        di += 1;
     }
     if x2 >= 0 {
-        *d = ((x1 << 4) | (x2 >> 2)) as c_char;
-        d = d.add(1);
+        if di >= dest.len() {
+            return -1;
+        }
+        dest[di] = ((x1 << 4) | (x2 >> 2)) as i8;
+        di += 1;
     }
 
-    *destlen = d.offset_from(dest) as size_t;
+    *destlen = di as size_t;
     0
 }
 
-pub unsafe fn sscan_string(mut s: *mut c_char) -> *mut c_char {
-    let mut d = s;
+pub unsafe fn sscan_string(s: *mut i8) -> *mut i8 {
+    let Some(s) = NonNull::new(s) else {
+        return std::ptr::null_mut();
+    };
+    let len = c_strlen(s.as_ptr()).saturating_add(1);
+    let bytes = std::slice::from_raw_parts_mut(s.as_ptr(), len);
+    sscan_string_ref(bytes).map_or(std::ptr::null_mut(), |offset| s.as_ptr().add(offset))
+}
+
+pub unsafe fn sscan_string_ref(s: &mut [i8]) -> Option<usize> {
+    let mut i = 0usize;
+    let mut d = 0usize;
     loop {
-        match *s as u8 {
-            b'\\' => match *s.add(1) as u8 {
-                0 => {
-                    *d = 0;
-                    return s.add(1);
-                }
-                b'b' => {
-                    *d = b'\x08' as c_char;
-                    d = d.add(1);
-                    s = s.add(2);
-                }
-                b'f' => {
-                    *d = b'\x0c' as c_char;
-                    d = d.add(1);
-                    s = s.add(2);
-                }
-                b'n' => {
-                    *d = b'\n' as c_char;
-                    d = d.add(1);
-                    s = s.add(2);
-                }
-                b'r' => {
-                    *d = b'\r' as c_char;
-                    d = d.add(1);
-                    s = s.add(2);
-                }
-                b't' => {
-                    *d = b'\t' as c_char;
-                    d = d.add(1);
-                    s = s.add(2);
-                }
-                b'u' => {
-                    let d1 = dehex(*s.add(2));
-                    let d2 = dehex(*s.add(3));
-                    let d3 = dehex(*s.add(4));
-                    let d4 = dehex(*s.add(5));
-                    if d1 >= 0 && d2 >= 0 && d3 >= 0 && d4 >= 0 {
-                        d = encode_utf8(d, ((d1 << 12) | (d2 << 8) | (d3 << 4) | d4) as u32);
-                        s = s.add(6);
+        let c = *s.get(i)?;
+        match c as u8 {
+            b'\\' => {
+                let escaped = *s.get(i + 1)?;
+                match escaped as u8 {
+                    0 => {
+                        *s.get_mut(d)? = 0;
+                        return Some(i + 1);
+                    }
+                    b'b' => {
+                        *s.get_mut(d)? = b'\x08' as i8;
+                        d += 1;
+                        i += 2;
+                    }
+                    b'f' => {
+                        *s.get_mut(d)? = b'\x0c' as i8;
+                        d += 1;
+                        i += 2;
+                    }
+                    b'n' => {
+                        *s.get_mut(d)? = b'\n' as i8;
+                        d += 1;
+                        i += 2;
+                    }
+                    b'r' => {
+                        *s.get_mut(d)? = b'\r' as i8;
+                        d += 1;
+                        i += 2;
+                    }
+                    b't' => {
+                        *s.get_mut(d)? = b'\t' as i8;
+                        d += 1;
+                        i += 2;
+                    }
+                    b'u' => {
+                        let d1 = dehex(*s.get(i + 2)?);
+                        let d2 = dehex(*s.get(i + 3)?);
+                        let d3 = dehex(*s.get(i + 4)?);
+                        let d4 = dehex(*s.get(i + 5)?);
+                        if d1 >= 0 && d2 >= 0 && d3 >= 0 && d4 >= 0 {
+                            let len = encode_utf8_slice(
+                                s.get_mut(d..d + 4)?,
+                                ((d1 << 12) | (d2 << 8) | (d3 << 4) | d4) as u32,
+                            );
+                            d += len;
+                            i += 6;
+                        } else {
+                            return None;
+                        }
+                    }
+                    _ => {
+                        *s.get_mut(d)? = escaped;
+                        d += 1;
+                        i += 2;
                     }
                 }
-                _ => {
-                    *d = *s.add(1);
-                    d = d.add(1);
-                    s = s.add(2);
-                }
-            },
+            }
             b'"' => {
-                *d = 0;
-                return s.add(1);
+                *s.get_mut(d)? = 0;
+                return Some(i + 1);
             }
             0 => {
-                *d = 0;
-                return s;
+                *s.get_mut(d)? = 0;
+                return Some(i);
             }
             _ => {
-                *d = *s;
-                d = d.add(1);
-                s = s.add(1);
+                *s.get_mut(d)? = c;
+                d += 1;
+                i += 1;
             }
         }
     }
 }
 
 pub unsafe fn hts_json_alloc_token() -> *mut hts_json_token {
-    Box::into_raw(Box::new(hts_json_token {
-        type_: 0,
-        str_: std::ptr::null_mut(),
-    }))
+    Box::into_raw(hts_json_token_new())
 }
 
-pub unsafe fn hts_json_token_type(token: *mut hts_json_token) -> c_char {
-    (*token).type_
+pub fn hts_json_token_new() -> Box<hts_json_token> {
+    Box::new(hts_json_token {
+        type_: 0,
+        str_: std::ptr::null_mut(),
+    })
+}
+
+pub unsafe fn hts_json_token_type(token: *mut hts_json_token) -> i8 {
+    token.as_ref().map_or(0, |token| token.type_)
 }
 
 pub unsafe fn hts_json_free_token(token: *mut hts_json_token) {
@@ -478,22 +568,47 @@ pub unsafe fn hts_json_free_token(token: *mut hts_json_token) {
     }
 }
 
-pub unsafe fn hts_json_token_str(token: *mut hts_json_token) -> *mut c_char {
-    (*token).str_
+pub unsafe fn hts_json_token_str(token: *mut hts_json_token) -> *mut i8 {
+    token
+        .as_ref()
+        .map_or(std::ptr::null_mut(), hts_json_token_str_ref)
 }
 
-pub unsafe fn hts_json_snext(
-    str_: *mut c_char,
-    state: *mut size_t,
-    token: *mut hts_json_token,
-) -> c_char {
-    let mut s = str_.add(*state >> 2);
+pub fn hts_json_token_str_ref(token: &hts_json_token) -> *mut i8 {
+    token.str_
+}
+
+pub unsafe fn hts_json_snext(str_: *mut i8, state: *mut size_t, token: *mut hts_json_token) -> i8 {
+    if str_.is_null() || state.is_null() || token.is_null() {
+        return 0;
+    }
+    hts_json_snext_ref(str_, &mut *state, &mut *token)
+}
+
+pub unsafe fn hts_json_snext_ref(
+    str_: *mut i8,
+    state: &mut size_t,
+    token: &mut hts_json_token,
+) -> i8 {
+    let Some(str_) = NonNull::new(str_) else {
+        return 0;
+    };
+    hts_json_snext_nonnull(str_, state, token)
+}
+
+unsafe fn hts_json_snext_nonnull(
+    str_: NonNull<i8>,
+    state: &mut size_t,
+    token: &mut hts_json_token,
+) -> i8 {
+    let str_ptr = str_.as_ptr();
+    let mut s = str_ptr.add(*state >> 2);
     let mut hidden = *state & 3;
 
     if hidden != 0 {
         *state &= !3;
-        (*token).type_ = *c"?}]?".as_ptr().add(hidden) as c_char;
-        return (*token).type_;
+        token.type_ = *c"?}]?".as_ptr().add(hidden) as i8;
+        return token.type_;
     }
 
     loop {
@@ -502,30 +617,37 @@ pub unsafe fn hts_json_snext(
                 s = s.add(1);
             }
             0 => {
-                (*token).type_ = 0;
+                token.type_ = 0;
                 return 0;
             }
             b'{' | b'[' | b'}' | b']' => {
-                *state = (s.add(1).offset_from(str_) as size_t) << 2;
-                (*token).type_ = *s;
-                return (*token).type_;
+                *state = (s.add(1).offset_from(str_ptr) as size_t) << 2;
+                token.type_ = *s;
+                return token.type_;
             }
             b'"' => {
-                (*token).str_ = s.add(1);
-                *state = (sscan_string(s.add(1)).offset_from(str_) as size_t) << 2;
-                (*token).type_ = b's' as c_char;
-                return (*token).type_;
+                token.str_ = s.add(1);
+                let scan_start = s.add(1);
+                let scan_len = c_strlen(scan_start).saturating_add(1);
+                let scan_bytes = std::slice::from_raw_parts_mut(scan_start, scan_len);
+                let Some(consumed) = sscan_string_ref(scan_bytes) else {
+                    token.type_ = b'?' as i8;
+                    return token.type_;
+                };
+                *state = (scan_start.add(consumed).offset_from(str_ptr) as size_t) << 2;
+                token.type_ = b's' as i8;
+                return token.type_;
             }
             _ => {
-                (*token).str_ = s;
+                token.str_ = s;
                 while *s != 0
                     && !matches!(*s as u8, b' ' | b'\t' | b'\r' | b'\n' | b',' | b']' | b'}')
                 {
                     s = s.add(1);
                 }
-                hidden = if *s == b'}' as c_char {
+                hidden = if *s == b'}' as i8 {
                     1
-                } else if *s == b']' as c_char {
+                } else if *s == b']' as i8 {
                     2
                 } else {
                     0
@@ -534,154 +656,179 @@ pub unsafe fn hts_json_snext(
                     *s = 0;
                     s = s.add(1);
                 }
-                *state = ((s.offset_from(str_) as size_t) << 2) | hidden;
-                (*token).type_ = crate::htslib_rs::hts::token_type(token);
-                return (*token).type_;
+                *state = ((s.offset_from(str_ptr) as size_t) << 2) | hidden;
+                token.type_ = token_type_ref(token);
+                return token.type_;
             }
         }
     }
 }
 
-pub unsafe fn snext(arg1: *mut c_void, arg2: *mut c_void, token: *mut hts_json_token) -> c_char {
-    hts_json_snext(arg1.cast(), arg2.cast(), token)
-}
-
-pub unsafe fn hts_json_sskip_value(str_: *mut c_char, state: *mut size_t, type_: c_char) -> c_char {
-    crate::htslib_rs::hts::skip_value(type_, Some(snext), str_.cast(), state.cast())
-}
-
-pub unsafe fn stringify_argv(argc: c_int, argv: *mut *mut c_char) -> *mut c_char {
-    let argc = argc.max(0) as usize;
-    let args = if argc == 0 {
-        &[][..]
-    } else {
-        std::slice::from_raw_parts(argv, argc)
+pub unsafe fn snext(arg1: *mut c_void, arg2: *mut c_void, token: *mut hts_json_token) -> i8 {
+    if token.is_null() {
+        return 0;
+    }
+    let Some(state) = arg2.cast::<size_t>().as_mut() else {
+        return 0;
     };
-    let mut bytes = Vec::with_capacity(
-        args.iter()
-            .map(|&arg| CStr::from_ptr(arg).to_bytes().len())
-            .sum::<usize>()
-            + argc.saturating_sub(1)
-            + 1,
+    hts_json_snext_ref(arg1.cast(), state, &mut *token)
+}
+
+pub unsafe fn hts_json_sskip_value(str_: *mut i8, state: *mut size_t, type_: i8) -> i8 {
+    if str_.is_null() || state.is_null() {
+        return 0;
+    }
+    hts_json_sskip_value_ref(str_, &mut *state, type_)
+}
+
+pub unsafe fn hts_json_sskip_value_ref(str_: *mut i8, state: &mut size_t, type_: i8) -> i8 {
+    let Some(str_) = NonNull::new(str_) else {
+        return 0;
+    };
+    skip_value(type_, &mut |token| {
+        hts_json_snext_nonnull(str_, state, token)
+    })
+}
+
+pub unsafe fn stringify_argv(argc: i32, argv: *mut *mut i8) -> *mut i8 {
+    let argc = argc.max(0) as usize;
+    if argc != 0 && argv.is_null() {
+        return std::ptr::null_mut();
+    }
+    let args_raw = std::slice::from_raw_parts(argv, argc);
+    if args_raw.iter().any(|arg| arg.is_null()) {
+        return std::ptr::null_mut();
+    }
+    let args = args_raw
+        .iter()
+        .map(|&arg| {
+            let len = c_strlen(arg);
+            std::slice::from_raw_parts(arg.cast::<u8>(), len)
+        })
+        .collect::<Vec<_>>();
+    stringify_argv_ref(&args).map_or(std::ptr::null_mut(), CString::into_raw)
+}
+
+pub fn stringify_argv_ref(args: &[&[u8]]) -> Option<CString> {
+    let mut bytes = Vec::<u8>::with_capacity(
+        args.iter().map(|arg| arg.len()).sum::<usize>() + args.len().saturating_sub(1) + 1,
     );
 
-    for (i, &arg) in args.iter().enumerate() {
+    for (i, arg) in args.iter().enumerate() {
         if i > 0 {
             bytes.push(b' ');
         }
-        bytes.extend(CStr::from_ptr(arg).to_bytes().iter().map(|&byte| {
-            if byte == b'\t' {
-                b' '
-            } else {
-                byte
-            }
-        }));
+        bytes.extend(
+            arg.iter()
+                .map(|&byte| if byte == b'\t' { b' ' } else { byte }),
+        );
     }
-    bytes.push(0);
+    CString::new(bytes).ok()
+}
 
-    let Some(mut out) = crate::htslib_rs::c_compat::MallocSlice::<c_char>::calloc(bytes.len())
-    else {
-        return std::ptr::null_mut();
-    };
-    for (dst, src) in out.as_mut_slice().iter_mut().zip(bytes) {
-        *dst = src as c_char;
+pub unsafe fn stringify_argv_free(s: *mut i8) {
+    if !s.is_null() {
+        drop(CString::from_raw(s));
     }
-    let (ptr, _) = out.into_raw_parts();
-    ptr
 }
 
 pub unsafe fn hts_strprint(
-    buf: *mut c_char,
+    buf: *mut i8,
     buflen: size_t,
-    quote: c_char,
-    mut s: *const c_char,
+    quote: i8,
+    s: *const i8,
     len: size_t,
-) -> *const c_char {
-    let slim = if len < size_t::MAX {
-        s.add(len)
+) -> *const i8 {
+    if buf.is_null() || s.is_null() {
+        return std::ptr::null();
+    };
+    let source_len = if len < size_t::MAX { len } else { c_strlen(s) };
+    let dest = std::slice::from_raw_parts_mut(buf, buflen);
+    let source = std::slice::from_raw_parts(s.cast::<u8>(), source_len);
+    if hts_strprint_ref(dest, quote, source) {
+        buf.cast_const()
     } else {
         std::ptr::null()
+    }
+}
+
+pub fn hts_strprint_ref(buf: &mut [i8], quote: i8, s: &[u8]) -> bool {
+    let Some(bytes) = hts_strprint_bytes(buf.len(), quote, s) else {
+        return false;
     };
-    let mut t = buf;
-    let qlen = if quote != 0 { 1usize } else { 0usize };
-    if quote != 0 {
-        *t = quote;
-        t = t.add(1);
+    for (dest, src) in buf.iter_mut().zip(bytes) {
+        *dest = src as i8;
+    }
+    true
+}
+
+fn hts_strprint_bytes(buflen: usize, quote: i8, s: &[u8]) -> Option<Vec<u8>> {
+    let quote = (quote != 0).then_some(quote as u8);
+    let full = hts_strprint_full_bytes(quote, s);
+    if full.len() <= buflen {
+        return Some(full);
     }
 
-    while if !slim.is_null() { s < slim } else { *s != 0 } {
-        let c;
-        let clen;
-        match *s as u8 {
-            b'\n' => {
-                c = b'n' as c_char;
-                clen = 2usize;
-            }
-            b'\r' => {
-                c = b'r' as c_char;
-                clen = 2usize;
-            }
-            b'\t' => {
-                c = b't' as c_char;
-                clen = 2usize;
-            }
-            0 => {
-                c = b'0' as c_char;
-                clen = 2usize;
-            }
-            b'\\' => {
-                c = b'\\' as c_char;
-                clen = 2usize;
-            }
-            _ => {
-                c = *s;
-                if c == quote {
-                    clen = 2usize;
-                } else if isprint_c(c) != 0 {
-                    clen = 1usize;
-                } else {
-                    clen = 4usize;
-                }
-            }
-        }
+    let qlen = usize::from(quote.is_some());
+    let suffix_len = qlen + 4;
+    if buflen < suffix_len {
+        return None;
+    }
 
-        if t.offset_from(buf) as usize + clen + qlen >= buflen {
-            while t.offset_from(buf) as usize + 3 + qlen >= buflen {
-                t = t.sub(1);
-            }
-            if quote != 0 {
-                *t = quote;
-                t = t.add(1);
-            }
-            crate::htslib_rs::c_compat::memcpy(t.cast(), c"...".as_ptr().cast(), 4);
-            return buf;
-        }
+    let mut bytes = Vec::with_capacity(buflen);
+    if let Some(quote) = quote {
+        bytes.push(quote);
+    }
 
-        if clen == 4 {
+    for &byte in s {
+        let chunk = hts_strprint_chunk(quote, byte);
+        if bytes.len() + chunk.len() + suffix_len > buflen {
+            break;
+        }
+        bytes.extend(chunk);
+    }
+
+    if let Some(quote) = quote {
+        bytes.push(quote);
+    }
+    bytes.extend_from_slice(b"...\0");
+    Some(bytes)
+}
+
+fn hts_strprint_full_bytes(quote: Option<u8>, s: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(s.len().saturating_add(2));
+    if let Some(quote) = quote {
+        bytes.push(quote);
+    }
+    for &byte in s {
+        bytes.extend(hts_strprint_chunk(quote, byte));
+    }
+    if let Some(quote) = quote {
+        bytes.push(quote);
+    }
+    bytes.push(0);
+    bytes
+}
+
+fn hts_strprint_chunk(quote: Option<u8>, c: u8) -> Vec<u8> {
+    match c {
+        b'\n' => b"\\n".to_vec(),
+        b'\r' => b"\\r".to_vec(),
+        b'\t' => b"\\t".to_vec(),
+        0 => b"\\0".to_vec(),
+        b'\\' => b"\\\\".to_vec(),
+        c if Some(c) == quote => vec![b'\\', c],
+        c if isprint_c(c as i8) != 0 => vec![c],
+        c => {
             const HEX: &[u8; 16] = b"0123456789ABCDEF";
-            let c = c as u8;
-            *t = b'\\' as c_char;
-            *t.add(1) = b'x' as c_char;
-            *t.add(2) = HEX[(c >> 4) as usize] as c_char;
-            *t.add(3) = HEX[(c & 0x0f) as usize] as c_char;
-            t = t.add(4);
-        } else {
-            if clen == 2 {
-                *t = b'\\' as c_char;
-                t = t.add(1);
-            }
-            *t = c;
-            t = t.add(1);
+            vec![
+                b'\\',
+                b'x',
+                HEX[(c >> 4) as usize],
+                HEX[(c & 0x0f) as usize],
+            ]
         }
-        s = s.add(1);
     }
-
-    if quote != 0 {
-        *t = quote;
-        t = t.add(1);
-    }
-    *t = 0;
-    buf
 }
 
 #[cfg(test)]
@@ -693,33 +840,26 @@ mod tests {
         pos: usize,
     }
 
-    unsafe fn next_token(
-        arg1: *mut c_void,
-        _arg2: *mut c_void,
-        token: *mut hts_json_token,
-    ) -> c_char {
-        let stream = &mut *arg1.cast::<TokenStream>();
+    fn next_token(stream: &mut TokenStream, token: &mut hts_json_token) -> i8 {
         if stream.pos == stream.tokens.len() {
-            (*token).type_ = 0;
+            token.type_ = 0;
             return 0;
         }
 
-        let type_ = stream.tokens[stream.pos] as c_char;
+        let type_ = stream.tokens[stream.pos] as i8;
         stream.pos += 1;
-        (*token).type_ = type_;
+        token.type_ = type_;
         type_
     }
 
     #[test]
     fn dehex_accepts_hex_digits_only() {
-        unsafe {
-            assert_eq!(dehex(b'0' as c_char), 0);
-            assert_eq!(dehex(b'9' as c_char), 9);
-            assert_eq!(dehex(b'a' as c_char), 10);
-            assert_eq!(dehex(b'F' as c_char), 15);
-            assert_eq!(dehex(b'g' as c_char), -1);
-            assert_eq!(dehex(b':' as c_char), -1);
-        }
+        assert_eq!(dehex(b'0' as i8), 0);
+        assert_eq!(dehex(b'9' as i8), 9);
+        assert_eq!(dehex(b'a' as i8), 10);
+        assert_eq!(dehex(b'F' as i8), 15);
+        assert_eq!(dehex(b'g' as i8), -1);
+        assert_eq!(dehex(b':' as i8), -1);
     }
 
     #[test]
@@ -733,9 +873,8 @@ mod tests {
             ];
 
             for (codepoint, expected) in cases {
-                let mut buf = [0 as c_char; 8];
-                let end = encode_utf8(buf.as_mut_ptr(), codepoint);
-                let len = end.offset_from(buf.as_ptr()) as usize;
+                let mut buf = [0 as i8; 8];
+                let len = encode_utf8_slice(&mut buf, codepoint);
                 assert_eq!(
                     std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), len),
                     expected
@@ -751,19 +890,19 @@ mod tests {
                 type_: 0,
                 str_: c"false".as_ptr().cast_mut(),
             };
-            assert_eq!(token_type(&mut token), b'b' as c_char);
+            assert_eq!(token_type_ref(&token), b'b' as i8);
 
             token.str_ = c"true".as_ptr().cast_mut();
-            assert_eq!(token_type(&mut token), b'b' as c_char);
+            assert_eq!(token_type_ref(&token), b'b' as i8);
 
             token.str_ = c"null".as_ptr().cast_mut();
-            assert_eq!(token_type(&mut token), b'.' as c_char);
+            assert_eq!(token_type_ref(&token), b'.' as i8);
 
             token.str_ = c"-12.5e3".as_ptr().cast_mut();
-            assert_eq!(token_type(&mut token), b'n' as c_char);
+            assert_eq!(token_type_ref(&token), b'n' as i8);
 
             token.str_ = c"truthy".as_ptr().cast_mut();
-            assert_eq!(token_type(&mut token), b'?' as c_char);
+            assert_eq!(token_type_ref(&token), b'?' as i8);
         }
     }
 
@@ -775,13 +914,8 @@ mod tests {
                 pos: 0,
             };
             assert_eq!(
-                skip_value(
-                    b'{' as c_char,
-                    next_token,
-                    (&mut nested as *mut TokenStream).cast(),
-                    std::ptr::null_mut(),
-                ),
-                b'v' as c_char
+                skip_value(b'{' as i8, &mut |token| next_token(&mut nested, token)),
+                b'v' as i8
             );
             assert_eq!(nested.pos, nested.tokens.len());
 
@@ -790,13 +924,8 @@ mod tests {
                 pos: 0,
             };
             assert_eq!(
-                skip_value(
-                    b'[' as c_char,
-                    next_token,
-                    (&mut bad as *mut TokenStream).cast(),
-                    std::ptr::null_mut(),
-                ),
-                b'?' as c_char
+                skip_value(b'[' as i8, &mut |token| next_token(&mut bad, token)),
+                b'?' as i8
             );
 
             let mut truncated = TokenStream {
@@ -804,12 +933,9 @@ mod tests {
                 pos: 0,
             };
             assert_eq!(
-                skip_value(
-                    b'{' as c_char,
-                    next_token,
-                    (&mut truncated as *mut TokenStream).cast(),
-                    std::ptr::null_mut(),
-                ),
+                skip_value(b'{' as i8, &mut |token| {
+                    next_token(&mut truncated, token)
+                }),
                 0
             );
         }

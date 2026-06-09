@@ -294,8 +294,8 @@ pub struct Download {
     waiting: *mut Download,
     downstream: *mut Downstream,
     cache_dir: *const c_char,
-    file: *mut c_char,
-    url: *mut c_char,
+    file: Vec<u8>,
+    url: Vec<u8>,
     curl: *mut CURL,
     cmd_fd: c_int,
     curlid: c_int,
@@ -317,18 +317,17 @@ pub struct Downstream {
 }
 
 // original: Multi_data (htslib/ref_cache/upstream.c:106)
-#[repr(C)]
 pub struct Multi_data {
     multi: *mut CURLM,
     pw: *mut poll_impl::Poll_wrap,
     timeout: c_long,
-    downloads: *mut *mut Download,
+    downloads: Vec<*mut Download>,
     waiting: *mut Download,
     last_waiting: *mut Download,
     ncurls: c_uint,
     free_curls: c_uint,
     running: c_int,
-    curls: *mut *mut CURL,
+    curls: Vec<*mut CURL>,
 }
 
 // original: upstream_send_cmd (htslib/ref_cache/upstream.c:122)
@@ -433,8 +432,6 @@ unsafe fn ref_cache_upstream_c_172_upstream_send_msg(
     msg.msg_iov = iov.as_mut_ptr();
     msg.msg_iovlen = 1;
 
-    libc::memset(buf.as_mut_ptr().cast(), 0, buf.len());
-
     if (*umsg).code == Upstream_msg_code::US_START
         && ref_cache_cmsg_wrap_c_46_make_scm_rights_cmsg(&mut msg, fd, buf.as_mut_ptr(), buf.len())
             < 0
@@ -506,7 +503,11 @@ pub unsafe fn ref_cache_upstream_c_215_upstream_recv_msg(
     msg.msg_iovlen = 1;
     msg.msg_control = buf.as_mut_ptr().cast();
     msg.msg_controllen = buf.len();
-    libc::memset(umsg.cast(), 0, std::mem::size_of::<Upstream_msg>());
+    *umsg = Upstream_msg {
+        id: 0,
+        code: Upstream_msg_code::US_START,
+        val: 0,
+    };
 
     let mut res;
     loop {
@@ -544,7 +545,7 @@ pub unsafe fn ref_cache_upstream_c_215_upstream_recv_msg(
 unsafe fn ref_cache_upstream_c_252_make_subdir(opts: *mut Options, hexmd5: *mut c_char) -> c_int {
     let mut path = [0 as c_char; 6];
 
-    libc::memcpy(path.as_mut_ptr().cast(), hexmd5.cast(), 2);
+    path[..2].copy_from_slice(std::slice::from_raw_parts(hexmd5, 2));
     path[2] = 0;
     if libc::mkdirat((*opts).cache_fd, path.as_ptr(), 0o1755) != 0
         && *__errno_location() != libc::EEXIST
@@ -560,7 +561,7 @@ unsafe fn ref_cache_upstream_c_252_make_subdir(opts: *mut Options, hexmd5: *mut 
     }
 
     path[2] = b'/' as c_char;
-    libc::memcpy(path.as_mut_ptr().add(3).cast(), hexmd5.add(2).cast(), 2);
+    path[3..5].copy_from_slice(std::slice::from_raw_parts(hexmd5.add(2), 2));
     path[5] = 0;
     if libc::mkdirat((*opts).cache_fd, path.as_ptr(), 0o1755) != 0
         && *__errno_location() != libc::EEXIST
@@ -603,14 +604,13 @@ unsafe fn ref_cache_upstream_c_296_new_downstream(
     cmd_fd: c_int,
     downstream_id: c_uint,
 ) -> *mut Downstream {
-    let downstream = libc::calloc(1, std::mem::size_of::<Downstream>()).cast::<Downstream>();
-    if downstream.is_null() {
-        libc::perror(c"new_downstream".as_ptr());
-        return std::ptr::null_mut();
-    }
-    (*downstream).cmd_fd = cmd_fd;
-    (*downstream).id = downstream_id;
-    downstream
+    Box::into_raw(Box::new(Downstream {
+        download: std::ptr::null_mut(),
+        prev: std::ptr::null_mut(),
+        next: std::ptr::null_mut(),
+        cmd_fd,
+        id: downstream_id,
+    }))
 }
 
 // original: new_download (htslib/ref_cache/upstream.c:306)
@@ -619,22 +619,31 @@ pub unsafe fn ref_cache_upstream_c_306_new_download(
     mdata: *mut Multi_data,
     hexmd5: *mut c_char,
 ) -> *mut Download {
-    let download = libc::calloc(1, std::mem::size_of::<Download>()).cast::<Download>();
-    if download.is_null() {
-        libc::perror(c"new_download".as_ptr());
-        return std::ptr::null_mut();
-    }
+    let mut download = Box::new(Download {
+        hexmd5: [0; MD5_LEN],
+        md5_ctx: std::ptr::null_mut(),
+        mdata,
+        next: std::ptr::null_mut(),
+        waiting: std::ptr::null_mut(),
+        downstream: std::ptr::null_mut(),
+        cache_dir: (*opts).cache_dir,
+        file: Vec::new(),
+        url: Vec::new(),
+        curl: std::ptr::null_mut(),
+        cmd_fd: 0,
+        curlid: -1,
+        flags: 0,
+        cache_fd: (*opts).cache_fd,
+        file_fd: -1,
+        size: 0,
+        received: 0,
+    });
     (*download).mdata = mdata;
     (*download).cache_dir = (*opts).cache_dir;
-    libc::memcpy(
-        (*download).hexmd5.as_mut_ptr().cast(),
-        hexmd5.cast(),
-        MD5_LEN,
-    );
-    (*download).cache_fd = (*opts).cache_fd;
-    (*download).file_fd = -1;
-    (*download).curlid = -1;
-    download
+    (*download)
+        .hexmd5
+        .copy_from_slice(std::slice::from_raw_parts(hexmd5, MD5_LEN));
+    Box::into_raw(download)
 }
 
 // original: remove_downstream (htslib/ref_cache/upstream.c:319)
@@ -651,7 +660,7 @@ unsafe fn ref_cache_upstream_c_319_remove_downstream(
     if !(*downstream).next.is_null() {
         (*(*downstream).next).prev = (*downstream).prev;
     }
-    libc::free(downstream.cast());
+    drop(Box::from_raw(downstream));
 }
 
 // original: free_download (htslib/ref_cache/upstream.c:331)
@@ -666,7 +675,7 @@ unsafe fn ref_cache_upstream_c_331_free_download(download: *mut Download) {
         | (ref_cache_misc_h_38_hexval((*download).hexmd5[2]) << 4)
         | ref_cache_misc_h_38_hexval((*download).hexmd5[3]))
         & ACTIVE_MASK;
-    let slot = (*mdata).downloads.add(hash as usize);
+    let slot = &mut (&mut (*mdata).downloads)[hash as usize];
     if *slot == download {
         *slot = (*download).next;
     } else {
@@ -704,18 +713,16 @@ unsafe fn ref_cache_upstream_c_331_free_download(download: *mut Download) {
     if (*download).file_fd != -1 {
         libc::close((*download).file_fd);
         if ((*download).flags & DL_OK) == 0 {
-            libc::unlinkat((*download).cache_fd, (*download).file, 0);
+            libc::unlinkat((*download).cache_fd, (*download).file.as_ptr().cast(), 0);
         }
     }
-    libc::free((*download).file.cast());
-    libc::free((*download).url.cast());
     if (*download).curlid != -1 {
         ref_cache_upstream_c_290_release_curl(download);
     }
     if !(*download).md5_ctx.is_null() {
         hts_md5_destroy((*download).md5_ctx);
     }
-    libc::free(download.cast());
+    drop(Box::from_raw(download));
 }
 
 // original: start_new_download (htslib/ref_cache/upstream.c:385)
@@ -734,19 +741,23 @@ unsafe fn ref_cache_upstream_c_385_start_new_download(
         return 0;
     }
 
-    (*download).curl = *(*mdata).curls.add((*download).curlid as usize);
+    (*download).curl = (&(*mdata).curls)[(*download).curlid as usize];
     (*mdata).waiting = (*download).waiting;
     if (*mdata).last_waiting == download {
         (*mdata).last_waiting = std::ptr::null_mut();
     }
     (*download).flags &= !DL_WAITING;
 
-    let mut cc = curl_easy_setopt_cstr((*download).curl, CURLOPT_URL, (*download).url);
+    let mut cc = curl_easy_setopt_cstr(
+        (*download).curl,
+        CURLOPT_URL,
+        (*download).url.as_ptr().cast(),
+    );
     if cc != CURLE_OK {
         libc::fprintf(
             crate::htslib_rs::ref_cache::compat::stderr(),
             c"Couldn't set URL %s : %s\n".as_ptr(),
-            (*download).url,
+            (*download).url.as_ptr().cast::<c_char>(),
             curl_easy_strerror(cc),
         );
         ref_cache_upstream_c_331_free_download(download);
@@ -810,7 +821,7 @@ unsafe fn ref_cache_upstream_c_445_get_download(
         | ref_cache_misc_h_38_hexval(*hexmd5.add(3)))
         & ACTIVE_MASK;
 
-    let mut download = *(*mdata).downloads.add(hash as usize);
+    let mut download = (&(*mdata).downloads)[hash as usize];
     while !download.is_null() {
         if libc::memcmp(hexmd5.cast(), (*download).hexmd5.as_ptr().cast(), MD5_LEN) == 0 {
             return download;
@@ -823,15 +834,10 @@ unsafe fn ref_cache_upstream_c_445_get_download(
         return std::ptr::null_mut();
     }
 
-    (*download).file = libc::malloc(MD5_LEN + 16).cast();
-    if (*download).file.is_null() {
-        libc::perror(c"Allocating download->file".as_ptr());
-        libc::free(download.cast());
-        return std::ptr::null_mut();
-    }
+    (*download).file = vec![0; MD5_LEN + 16];
 
     libc::snprintf(
-        (*download).file,
+        (*download).file.as_mut_ptr().cast(),
         MD5_LEN + 16,
         c"%.2s/%.2s/%.28s".as_ptr(),
         (*download).hexmd5.as_ptr(),
@@ -839,7 +845,11 @@ unsafe fn ref_cache_upstream_c_445_get_download(
         (*download).hexmd5.as_ptr().add(4),
     );
 
-    (*download).file_fd = libc::openat((*opts).cache_fd, (*download).file, libc::O_RDONLY);
+    (*download).file_fd = libc::openat(
+        (*opts).cache_fd,
+        (*download).file.as_ptr().cast(),
+        libc::O_RDONLY,
+    );
     if (*download).file_fd >= 0 {
         let mut st: libc::stat = std::mem::zeroed();
         if libc::fstat((*download).file_fd, &mut st) != 0 {
@@ -847,7 +857,7 @@ unsafe fn ref_cache_upstream_c_445_get_download(
                 crate::htslib_rs::ref_cache::compat::stderr(),
                 c"Couldn't stat %s/%s : %s\n".as_ptr(),
                 (*opts).cache_dir,
-                (*download).file,
+                (*download).file.as_ptr(),
                 libc::strerror(*__errno_location()),
             );
             ref_cache_upstream_c_331_free_download(download);
@@ -856,8 +866,8 @@ unsafe fn ref_cache_upstream_c_445_get_download(
         (*download).size = st.st_size;
         (*download).received = st.st_size;
         (*download).flags = DL_OK | DL_CLENGTH;
-        (*download).next = *(*mdata).downloads.add(hash as usize);
-        *(*mdata).downloads.add(hash as usize) = download;
+        (*download).next = (&(*mdata).downloads)[hash as usize];
+        (&mut (*mdata).downloads)[hash as usize] = download;
         return download;
     }
 
@@ -866,7 +876,7 @@ unsafe fn ref_cache_upstream_c_445_get_download(
             crate::htslib_rs::ref_cache::compat::stderr(),
             c"Couldn't open %s/%s : %s\n".as_ptr(),
             (*opts).cache_dir,
-            (*download).file,
+            (*download).file.as_ptr(),
             libc::strerror(*__errno_location()),
         );
         ref_cache_upstream_c_331_free_download(download);
@@ -877,14 +887,9 @@ unsafe fn ref_cache_upstream_c_445_get_download(
     let need_sep = ((*opts).upstream_url_len == 0
         || *(*opts).upstream_url.add((*opts).upstream_url_len - 1) != b'/' as c_char)
         as c_int;
-    (*download).url = libc::malloc(url_len).cast();
-    if (*download).url.is_null() {
-        libc::perror(c"Allocating download->url".as_ptr());
-        ref_cache_upstream_c_331_free_download(download);
-        return std::ptr::null_mut();
-    }
+    (*download).url = vec![0; url_len];
     libc::snprintf(
-        (*download).url,
+        (*download).url.as_mut_ptr().cast(),
         url_len,
         c"%s%s%.32s".as_ptr(),
         (*opts).upstream_url,
@@ -903,7 +908,7 @@ unsafe fn ref_cache_upstream_c_445_get_download(
 
     for count in 0..1000 {
         libc::snprintf(
-            (*download).file,
+            (*download).file.as_mut_ptr().cast(),
             MD5_LEN + 16,
             c"%.2s/%.2s/%.28s.%03d".as_ptr(),
             hexmd5,
@@ -914,7 +919,7 @@ unsafe fn ref_cache_upstream_c_445_get_download(
         loop {
             (*download).file_fd = libc::openat(
                 (*opts).cache_fd,
-                (*download).file,
+                (*download).file.as_ptr().cast(),
                 libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
                 0o644,
             );
@@ -934,7 +939,7 @@ unsafe fn ref_cache_upstream_c_445_get_download(
             crate::htslib_rs::ref_cache::compat::stderr(),
             c"Couldn't open %s/%s for writing: %s\n".as_ptr(),
             (*opts).cache_dir,
-            (*download).file,
+            (*download).file.as_ptr(),
             libc::strerror(*__errno_location()),
         );
         ref_cache_upstream_c_331_free_download(download);
@@ -961,8 +966,8 @@ unsafe fn ref_cache_upstream_c_445_get_download(
         return std::ptr::null_mut();
     }
 
-    (*download).next = *(*mdata).downloads.add(hash as usize);
-    *(*mdata).downloads.add(hash as usize) = download;
+    (*download).next = (&(*mdata).downloads)[hash as usize];
+    (&mut (*mdata).downloads)[hash as usize] = download;
     download
 }
 
@@ -1008,7 +1013,9 @@ unsafe fn ref_cache_upstream_c_563_get_cmd_multi(
                 msg.code = Upstream_msg_code::US_RESULT;
                 msg.val = 500;
                 ref_cache_upstream_c_172_upstream_send_msg(cmd_fd, &mut msg, -1);
-                libc::free(downstream.cast());
+                if !downstream.is_null() {
+                    drop(Box::from_raw(downstream));
+                }
             }
         }
         return res;
@@ -1030,7 +1037,9 @@ unsafe fn ref_cache_upstream_c_563_get_cmd_multi(
                 msg.code = Upstream_msg_code::US_RESULT;
                 msg.val = 500;
                 ref_cache_upstream_c_172_upstream_send_msg(cmd_fd, &mut msg, -1);
-                libc::free(downstream.cast());
+                if !downstream.is_null() {
+                    drop(Box::from_raw(downstream));
+                }
             }
         }
         return res;
@@ -1044,7 +1053,9 @@ unsafe fn ref_cache_upstream_c_563_get_cmd_multi(
                 msg.code = Upstream_msg_code::US_RESULT;
                 msg.val = 500;
                 ref_cache_upstream_c_172_upstream_send_msg(cmd_fd, &mut msg, -1);
-                libc::free(downstream.cast());
+                if !downstream.is_null() {
+                    drop(Box::from_raw(downstream));
+                }
             }
         }
         return res;
@@ -1065,7 +1076,9 @@ unsafe fn ref_cache_upstream_c_563_get_cmd_multi(
                 msg.code = Upstream_msg_code::US_RESULT;
                 msg.val = 500;
                 ref_cache_upstream_c_172_upstream_send_msg(cmd_fd, &mut msg, -1);
-                libc::free(downstream.cast());
+                if !downstream.is_null() {
+                    drop(Box::from_raw(downstream));
+                }
             }
         }
         return res;
@@ -1205,7 +1218,7 @@ unsafe extern "C" fn ref_cache_upstream_c_675_multi_receive_data(
             crate::htslib_rs::ref_cache::compat::stderr(),
             c"Error writing to %s/%s : %s\n".as_ptr(),
             (*download).cache_dir,
-            (*download).file,
+            (*download).file.as_ptr().cast::<c_char>(),
             libc::strerror(*__errno_location()),
         );
         return 0;
@@ -1371,41 +1384,48 @@ unsafe fn ref_cache_upstream_c_838_init_multi_data(
         libc::perror(c"Initalizing poller".as_ptr());
         return -1;
     }
-    (*mdata).downloads = std::ptr::null_mut();
+    (*mdata).downloads.clear();
     (*mdata).waiting = std::ptr::null_mut();
     (*mdata).last_waiting = std::ptr::null_mut();
     (*mdata).timeout = -1;
-    (*mdata).downloads =
-        libc::calloc(ACTIVE_SIZE, std::mem::size_of::<*mut Download>()).cast::<*mut Download>();
-    if (*mdata).downloads.is_null() {
+    if (*mdata)
+        .downloads
+        .try_reserve_exact(ACTIVE_SIZE as usize)
+        .is_err()
+    {
         libc::perror(c"".as_ptr());
         return -1;
     }
+    (*mdata)
+        .downloads
+        .resize(ACTIVE_SIZE as usize, std::ptr::null_mut());
     (*mdata).ncurls = 4;
     (*mdata).free_curls = 0;
     (*mdata).running = 0;
-    (*mdata).curls =
-        libc::calloc((*mdata).ncurls as usize, std::mem::size_of::<*mut CURL>()).cast();
-    if (*mdata).curls.is_null() {
+    if (*mdata)
+        .curls
+        .try_reserve_exact((*mdata).ncurls as usize)
+        .is_err()
+    {
         libc::perror(c"".as_ptr());
-        libc::free((*mdata).downloads.cast());
         return -1;
     }
+    (*mdata)
+        .curls
+        .resize((*mdata).ncurls as usize, std::ptr::null_mut());
 
     for i in 0..(*mdata).ncurls {
-        *(*mdata).curls.add(i as usize) = curl_easy_init();
-        if (*(*mdata).curls.add(i as usize)).is_null() {
+        (&mut (*mdata).curls)[i as usize] = curl_easy_init();
+        if (&(*mdata).curls)[i as usize].is_null() {
             for j in 0..(*mdata).ncurls {
-                if !(*(*mdata).curls.add(j as usize)).is_null() {
-                    curl_easy_cleanup(*(*mdata).curls.add(j as usize));
+                if !(&(*mdata).curls)[j as usize].is_null() {
+                    curl_easy_cleanup((&(*mdata).curls)[j as usize]);
                 }
             }
-            libc::free((*mdata).curls.cast());
-            libc::free((*mdata).downloads.cast());
             return -1;
         }
         let mut cc = curl_easy_setopt_write_callback(
-            *(*mdata).curls.add(i as usize),
+            (&(*mdata).curls)[i as usize],
             CURLOPT_WRITEFUNCTION,
             Some(ref_cache_upstream_c_675_multi_receive_data),
         );
@@ -1416,18 +1436,16 @@ unsafe fn ref_cache_upstream_c_838_init_multi_data(
                 curl_easy_strerror(cc),
             );
             for j in 0..(*mdata).ncurls {
-                if !(*(*mdata).curls.add(j as usize)).is_null() {
-                    curl_easy_cleanup(*(*mdata).curls.add(j as usize));
+                if !(&(*mdata).curls)[j as usize].is_null() {
+                    curl_easy_cleanup((&(*mdata).curls)[j as usize]);
                 }
             }
-            libc::free((*mdata).curls.cast());
-            libc::free((*mdata).downloads.cast());
             return -1;
         }
-        cc = curl_easy_setopt_long(*(*mdata).curls.add(i as usize), CURLOPT_NOPROGRESS, 0);
+        cc = curl_easy_setopt_long((&(*mdata).curls)[i as usize], CURLOPT_NOPROGRESS, 0);
         if cc == CURLE_OK {
             cc = curl_easy_setopt_xfer_callback(
-                *(*mdata).curls.add(i as usize),
+                (&(*mdata).curls)[i as usize],
                 CURLOPT_XFERINFOFUNCTION,
                 Some(ref_cache_upstream_c_656_progress_callback),
             );
@@ -1439,12 +1457,10 @@ unsafe fn ref_cache_upstream_c_838_init_multi_data(
                 curl_easy_strerror(cc),
             );
             for j in 0..(*mdata).ncurls {
-                if !(*(*mdata).curls.add(j as usize)).is_null() {
-                    curl_easy_cleanup(*(*mdata).curls.add(j as usize));
+                if !(&(*mdata).curls)[j as usize].is_null() {
+                    curl_easy_cleanup((&(*mdata).curls)[j as usize]);
                 }
             }
-            libc::free((*mdata).curls.cast());
-            libc::free((*mdata).downloads.cast());
             return -1;
         }
         (*mdata).free_curls |= 1u32 << i;
@@ -1466,7 +1482,7 @@ unsafe fn ref_cache_upstream_c_897_rename_download_file(download: *mut Download)
         );
         if libc::renameat(
             (*download).cache_fd,
-            (*download).file,
+            (*download).file.as_ptr().cast(),
             (*download).cache_fd,
             dest.as_ptr(),
         ) != 0
@@ -1475,7 +1491,7 @@ unsafe fn ref_cache_upstream_c_897_rename_download_file(download: *mut Download)
                 crate::htslib_rs::ref_cache::compat::stderr(),
                 c"Couldn't rename %s/%s to %s/%s: %s\n".as_ptr(),
                 (*download).cache_dir,
-                (*download).file,
+                (*download).file.as_ptr().cast::<c_char>(),
                 (*download).cache_dir,
                 dest.as_ptr(),
                 libc::strerror(*__errno_location()),
@@ -1483,7 +1499,13 @@ unsafe fn ref_cache_upstream_c_897_rename_download_file(download: *mut Download)
             (*download).flags &= !DL_OK;
             return -1;
         }
-        libc::memcpy((*download).file.cast(), dest.as_ptr().cast(), MD5_LEN + 3);
+        (*download).file.clear();
+        (*download)
+            .file
+            .extend_from_slice(std::slice::from_raw_parts(
+                dest.as_ptr().cast::<u8>(),
+                MD5_LEN + 3,
+            ));
     }
     0
 }
@@ -1703,36 +1725,36 @@ unsafe fn ref_cache_upstream_c_1047_run_epoll_loop(
     mdata: *mut Multi_data,
 ) {
     let mut events: [libc::epoll_event; MAX_EVENTS as usize] = std::mem::zeroed();
-    let cmd_pollers = libc::malloc((nfds as usize + 1) * std::mem::size_of::<*mut Pw_item>())
-        .cast::<*mut Pw_item>();
-    if cmd_pollers.is_null() {
+    let mut cmd_pollers = Vec::<*mut Pw_item>::new();
+    if cmd_pollers.try_reserve_exact(nfds as usize + 1).is_err() {
         return;
     }
+    cmd_pollers.resize(nfds as usize + 1, std::ptr::null_mut());
     let mut npolled = 0u32;
     let mut running = 1;
 
     while npolled < nfds {
-        *cmd_pollers.add(npolled as usize) = poll_impl::ref_cache_poll_wrap_epoll_c_78_pw_register(
+        cmd_pollers[npolled as usize] = poll_impl::ref_cache_poll_wrap_epoll_c_78_pw_register(
             (*mdata).pw,
             *cmd_fds.add(npolled as usize),
             Pw_fd_type::US_COMMAND,
             PW_IN as u32,
             std::ptr::null_mut(),
         );
-        if (*cmd_pollers.add(npolled as usize)).is_null() {
+        if cmd_pollers[npolled as usize].is_null() {
             break;
         }
         npolled += 1;
     }
     if npolled == nfds {
-        *cmd_pollers.add(nfds as usize) = poll_impl::ref_cache_poll_wrap_epoll_c_78_pw_register(
+        cmd_pollers[nfds as usize] = poll_impl::ref_cache_poll_wrap_epoll_c_78_pw_register(
             (*mdata).pw,
             liveness_fd,
             Pw_fd_type::US_LIVE,
             (PW_HUP | PW_ERR) as u32,
             std::ptr::null_mut(),
         );
-        if (*cmd_pollers.add(nfds as usize)).is_null() {
+        if cmd_pollers[nfds as usize].is_null() {
             npolled = nfds;
         } else {
             npolled = nfds + 1;
@@ -1833,15 +1855,14 @@ unsafe fn ref_cache_upstream_c_1047_run_epoll_loop(
     }
 
     for i in 0..npolled {
-        if !(*cmd_pollers.add(i as usize)).is_null() {
+        if !cmd_pollers[i as usize].is_null() {
             poll_impl::ref_cache_poll_wrap_epoll_c_126_pw_remove(
                 (*mdata).pw,
-                *cmd_pollers.add(i as usize),
+                cmd_pollers[i as usize],
                 0,
             );
         }
     }
-    libc::free(cmd_pollers.cast());
 }
 
 // original: run_multi_upstream_handler (htslib/ref_cache/upstream.c:1131)
@@ -1851,7 +1872,18 @@ unsafe fn ref_cache_upstream_c_1131_run_multi_upstream_handler(
     liveness_fd: c_int,
 ) -> c_int {
     let res = -1;
-    let mut mdata: Multi_data = std::mem::zeroed();
+    let mut mdata = Multi_data {
+        multi: std::ptr::null_mut(),
+        pw: std::ptr::null_mut(),
+        timeout: -1,
+        downloads: Vec::new(),
+        waiting: std::ptr::null_mut(),
+        last_waiting: std::ptr::null_mut(),
+        ncurls: 0,
+        free_curls: 0,
+        running: 0,
+        curls: Vec::new(),
+    };
     let multi = ref_cache_upstream_c_808_get_multi(&mut mdata);
     if multi.is_null() {
         return -1;
@@ -1872,10 +1904,9 @@ unsafe fn ref_cache_upstream_c_1131_run_multi_upstream_handler(
     );
 
     for i in 0..mdata.ncurls {
-        curl_multi_remove_handle(multi, *mdata.curls.add(i as usize));
-        curl_easy_cleanup(*mdata.curls.add(i as usize));
+        curl_multi_remove_handle(multi, mdata.curls[i as usize]);
+        curl_easy_cleanup(mdata.curls[i as usize]);
     }
-    libc::free(mdata.downloads.cast());
     curl_multi_cleanup(multi);
     res
 }

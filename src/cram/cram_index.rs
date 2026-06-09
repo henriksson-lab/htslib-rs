@@ -1,10 +1,48 @@
 // Functions translated from htslib/cram/cram_index.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_int};
+use std::ffi::{c_char, c_int, CStr};
 use std::ptr::NonNull;
 
 use super::*;
+
+unsafe fn fd_layout<'a>(fd: *mut cram_fd) -> Option<&'a cram_fd_layout> {
+    fd.cast::<cram_fd_layout>().as_ref()
+}
+
+unsafe fn fd_layout_mut<'a>(fd: *mut cram_fd) -> Option<&'a mut cram_fd_layout> {
+    fd.cast::<cram_fd_layout>().as_mut()
+}
+
+unsafe fn slice_layout_mut<'a>(s: *mut cram_slice) -> Option<&'a mut cram_slice_layout> {
+    s.cast::<cram_slice_layout>().as_mut()
+}
+
+unsafe fn container_layout_mut<'a>(
+    c: *mut cram_container,
+) -> Option<&'a mut cram_container_layout> {
+    c.cast::<cram_container_layout>().as_mut()
+}
+
+unsafe fn range_layout_mut<'a>(r: *mut cram_range_layout) -> Option<&'a mut cram_range_layout> {
+    r.as_mut()
+}
+
+fn nul_terminated_len(buf: &[u8]) -> usize {
+    buf.iter().position(|&byte| byte == 0).unwrap_or(buf.len())
+}
+
+fn index_buckets(fd: &cram_fd_layout) -> Option<&[cram_index_layout]> {
+    let index = NonNull::new(fd.index.cast::<cram_index_layout>())?;
+    let len = fd.index_sz.max(0) as usize;
+    Some(unsafe { std::slice::from_raw_parts(index.as_ptr(), len) })
+}
+
+fn index_buckets_mut(fd: &mut cram_fd_layout) -> Option<&mut [cram_index_layout]> {
+    let index = NonNull::new(fd.index.cast::<cram_index_layout>())?;
+    let len = fd.index_sz.max(0) as usize;
+    Some(unsafe { std::slice::from_raw_parts_mut(index.as_ptr(), len) })
+}
 
 unsafe fn index_node_children(node: &cram_index_layout) -> Option<&[cram_index_layout]> {
     if node.e.is_null() || node.nslice <= 0 {
@@ -35,6 +73,122 @@ unsafe fn next_index_node(node: NonNull<cram_index_layout>) -> Option<NonNull<cr
     NonNull::new(node.as_ref().e_next)
 }
 
+fn kstring_bytes(k: &kstring_t) -> Option<&[u8]> {
+    if k.s.is_null() && k.l != 0 {
+        None
+    } else {
+        Some(unsafe { std::slice::from_raw_parts(k.s.cast::<u8>(), k.l) })
+    }
+}
+
+struct KStringParser<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> KStringParser<'a> {
+    fn from_kstring(k: &'a kstring_t) -> Option<Self> {
+        kstring_bytes(k).map(|bytes| Self { bytes })
+    }
+
+    fn from_bytes(bytes: &'a [u8]) -> Self {
+        Self { bytes }
+    }
+
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    fn skip_line_tail(&self, pos: &mut usize) {
+        while *pos < self.bytes.len() && self.bytes[*pos] != b'\n' {
+            *pos += 1;
+        }
+        if *pos < self.bytes.len() {
+            *pos += 1;
+        }
+    }
+
+    fn parse_i32(&self, pos: &mut usize, val_p: &mut i32) -> c_int {
+        let mut out = 0_i64;
+        let ret = self.parse_i64(pos, &mut out);
+        if ret == 0 {
+            *val_p = out as i32;
+        }
+        ret
+    }
+
+    fn parse_i64(&self, pos: &mut usize, val_p: &mut i64) -> c_int {
+        let mut sign: i64 = 1;
+        let mut val: i64 = 0;
+        let mut p = *pos;
+
+        while p < self.bytes.len() && matches!(self.bytes[p], b' ' | b'\t') {
+            p += 1;
+        }
+
+        if p < self.bytes.len() && self.bytes[p] == b'-' {
+            sign = -1;
+            p += 1;
+        }
+
+        if p >= self.bytes.len() || !self.bytes[p].is_ascii_digit() {
+            return -1;
+        }
+
+        while p < self.bytes.len() && self.bytes[p].is_ascii_digit() {
+            let digit = (self.bytes[p] - b'0') as i64;
+            p += 1;
+            val = val * 10 + digit;
+        }
+
+        *pos = p;
+        *val_p = sign * val;
+        0
+    }
+}
+
+unsafe fn take_index_buckets(fd: &mut cram_fd_layout) -> Vec<cram_index_layout> {
+    let len = fd.index_sz.max(0) as usize;
+    let buckets = Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+        fd.index.cast::<cram_index_layout>(),
+        len,
+    ));
+    fd.index = std::ptr::null_mut();
+    fd.index_sz = 0;
+    buckets.into_vec()
+}
+
+fn install_index_buckets(fd: &mut cram_fd_layout, buckets: Vec<cram_index_layout>) {
+    let mut buckets = buckets.into_boxed_slice();
+    fd.index_sz = buckets.len() as c_int;
+    fd.index = buckets.as_mut_ptr().cast();
+    std::mem::forget(buckets);
+}
+
+unsafe fn take_index_children(node: &mut cram_index_layout) -> Vec<cram_index_layout> {
+    let len = node.nslice.max(0) as usize;
+    let cap = node.nalloc.max(0) as usize;
+    if node.e.is_null() {
+        Vec::new()
+    } else {
+        let ptr = node.e;
+        node.e = std::ptr::null_mut();
+        node.nslice = 0;
+        node.nalloc = 0;
+        Vec::from_raw_parts(ptr, len, cap)
+    }
+}
+
+fn install_index_children(node: &mut cram_index_layout, mut children: Vec<cram_index_layout>) {
+    node.nslice = children.len() as c_int;
+    node.nalloc = children.capacity() as c_int;
+    node.e = if children.capacity() == 0 {
+        std::ptr::null_mut()
+    } else {
+        children.as_mut_ptr()
+    };
+    std::mem::forget(children);
+}
+
 // original: cram_seek_to_refpos (htslib/cram/cram_index.c:573)
 //
 // Walks the CRAI for (refid, pos), seeks the underlying file to the container
@@ -46,21 +200,29 @@ pub unsafe fn cram_cram_index_c_573_cram_seek_to_refpos(
     fd: *mut cram_fd,
     r: *mut cram_range_layout,
 ) -> c_int {
+    let Some(fd) = fd_layout_mut(fd) else {
+        return -1;
+    };
+    let Some(r) = range_layout_mut(r) else {
+        return -1;
+    };
+    cram_seek_to_refpos_ref(fd, r)
+}
+
+unsafe fn cram_seek_to_refpos_ref(fd: &mut cram_fd_layout, r: &mut cram_range_layout) -> c_int {
     use crate::htslib_rs::hts::{HTS_IDX_NOCOOR, HTS_IDX_NONE, HTS_IDX_REST, HTS_IDX_START};
-    let fdl = fd.cast::<cram_fd_layout>();
     let mut ret: c_int = 0;
 
-    if (*r).refid == HTS_IDX_NONE {
+    if r.refid == HTS_IDX_NONE {
         ret = -2;
     } else {
-        let e = cram_cram_index_c_404_cram_index_query(
-            fd,
-            (*r).refid,
-            (*r).start,
-            std::ptr::null_mut(),
-        );
-        if !e.is_null() {
-            if 0 != cram_seek(fd, (*e).offset as libc::off_t, libc::SEEK_SET) {
+        let e = cram_index_query_ref(fd, r.refid, r.start, None);
+        if let Some(e) = e {
+            if 0 != cram_seek(
+                (fd as *mut cram_fd_layout).cast(),
+                e.as_ref().offset as libc::off_t,
+                libc::SEEK_SET,
+            ) {
                 ret = -1;
             }
         } else {
@@ -69,31 +231,31 @@ pub unsafe fn cram_cram_index_c_573_cram_seek_to_refpos(
     }
 
     if ret != 0 {
-        crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).range_lock);
-        (*fdl).range = *r;
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).range_lock);
+        crate::htslib_rs::c_compat::pthread_mutex_lock(&mut fd.range_lock);
+        fd.range = *r;
+        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut fd.range_lock);
         return ret;
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).range_lock);
-    (*fdl).range = *r;
-    if (*r).refid == HTS_IDX_NOCOOR {
-        (*fdl).range.refid = -1;
-        (*fdl).range.start = 0;
-    } else if (*r).refid == HTS_IDX_START || (*r).refid == HTS_IDX_REST {
-        (*fdl).range.refid = -2;
+    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut fd.range_lock);
+    fd.range = *r;
+    if r.refid == HTS_IDX_NOCOOR {
+        fd.range.refid = -1;
+        fd.range.start = 0;
+    } else if r.refid == HTS_IDX_START || r.refid == HTS_IDX_REST {
+        fd.range.refid = -2;
     }
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).range_lock);
+    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut fd.range_lock);
 
-    if !(*fdl).ctr.is_null() {
-        cram_cram_io_c_3705_cram_free_container((*fdl).ctr.cast());
-        if !(*fdl).ctr_mt.is_null() && (*fdl).ctr_mt != (*fdl).ctr {
-            cram_cram_io_c_3705_cram_free_container((*fdl).ctr_mt.cast());
+    if !fd.ctr.is_null() {
+        cram_cram_io_c_3705_cram_free_container(fd.ctr.cast());
+        if !fd.ctr_mt.is_null() && fd.ctr_mt != fd.ctr {
+            cram_cram_io_c_3705_cram_free_container(fd.ctr_mt.cast());
         }
-        (*fdl).ctr = std::ptr::null_mut();
-        (*fdl).ctr_mt = std::ptr::null_mut();
-        (*fdl).ooc = 0;
-        (*fdl).eof = 0;
+        fd.ctr = std::ptr::null_mut();
+        fd.ctr_mt = std::ptr::null_mut();
+        fd.ooc = 0;
+        fd.eof = 0;
     }
 
     0
@@ -116,18 +278,33 @@ pub unsafe fn cram_cram_index_c_632_cram_index_build_multiref(
     landmark: i32,
     sz: c_int,
 ) -> c_int {
-    let sl = s.cast::<cram_slice_layout>();
+    let Some(sl) = slice_layout_mut(s) else {
+        return -1;
+    };
+    let Some(fp) = fp.as_mut() else {
+        return -4;
+    };
+    cram_index_build_multiref_ref(sl, fp, cpos, landmark, sz)
+}
+
+unsafe fn cram_index_build_multiref_ref(
+    sl: &mut cram_slice_layout,
+    fp: &mut crate::htslib_rs::hts::BGZF,
+    cpos: libc::off_t,
+    landmark: i32,
+    sz: c_int,
+) -> c_int {
     let mut ref_: i32 = -2;
     let mut ref_start: i64 = 0;
     let mut ref_end: i64 = c_int::MIN as i64;
-    let mut buf = [0 as c_char; 1024];
+    let mut buf = [0_u8; 1024];
 
     let mut last_ref: i32 = -9;
     let mut last_pos: i64 = -9;
-    let num_records = (*(*sl).hdr).num_records;
+    let num_records = (*sl.hdr).num_records;
     let mut i: i32 = 0;
     while i < num_records {
-        let rec = (*sl).crecs.add(i as usize);
+        let rec = sl.crecs.add(i as usize);
         if (*rec).ref_id == last_ref && (*rec).apos < last_pos {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
@@ -148,7 +325,7 @@ pub unsafe fn cram_cram_index_c_632_cram_index_build_multiref(
 
         if ref_ != -2 {
             libc::snprintf(
-                buf.as_mut_ptr(),
+                buf.as_mut_ptr().cast(),
                 buf.len(),
                 c"%d\t%ld\t%ld\t%ld\t%d\t%d\n".as_ptr(),
                 ref_,
@@ -158,11 +335,8 @@ pub unsafe fn cram_cram_index_c_632_cram_index_build_multiref(
                 landmark,
                 sz,
             );
-            if crate::htslib_rs::bgzf::bgzf_write(
-                fp,
-                buf.as_ptr().cast(),
-                libc::strlen(buf.as_ptr()),
-            ) < 0
+            if crate::htslib_rs::bgzf::bgzf_write(fp, buf.as_ptr().cast(), nul_terminated_len(&buf))
+                < 0
             {
                 return -4;
             }
@@ -176,7 +350,7 @@ pub unsafe fn cram_cram_index_c_632_cram_index_build_multiref(
 
     if ref_ != -2 {
         libc::snprintf(
-            buf.as_mut_ptr(),
+            buf.as_mut_ptr().cast(),
             buf.len(),
             c"%d\t%ld\t%ld\t%ld\t%d\t%d\n".as_ptr(),
             ref_,
@@ -186,8 +360,7 @@ pub unsafe fn cram_cram_index_c_632_cram_index_build_multiref(
             landmark,
             sz,
         );
-        if crate::htslib_rs::bgzf::bgzf_write(fp, buf.as_ptr().cast(), libc::strlen(buf.as_ptr()))
-            < 0
+        if crate::htslib_rs::bgzf::bgzf_write(fp, buf.as_ptr().cast(), nul_terminated_len(&buf)) < 0
         {
             return -4;
         }
@@ -210,7 +383,25 @@ pub unsafe fn cram_cram_index_c_695_cram_index_slice(
     spos: libc::off_t,
     sz: libc::off_t,
 ) -> c_int {
-    let mut buf = [0 as c_char; 1024];
+    let Some(sl) = slice_layout_mut(s) else {
+        return -1;
+    };
+    let Some(fp) = fp.as_mut() else {
+        return -4;
+    };
+    cram_index_slice_ref(fd, c, sl, fp, cpos, spos, sz)
+}
+
+unsafe fn cram_index_slice_ref(
+    fd: *mut cram_fd,
+    c: *mut cram_container,
+    sl: &mut cram_slice_layout,
+    fp: &mut crate::htslib_rs::hts::BGZF,
+    cpos: libc::off_t,
+    spos: libc::off_t,
+    sz: libc::off_t,
+) -> c_int {
+    let mut buf = [0_u8; 1024];
 
     if sz > c_int::MAX as libc::off_t {
         libc::fprintf(
@@ -221,22 +412,21 @@ pub unsafe fn cram_cram_index_c_695_cram_index_slice(
         return -1;
     }
 
-    let sl = s.cast::<cram_slice_layout>();
-    if (*(*sl).hdr).ref_seq_id == -2 {
-        cram_cram_index_c_632_cram_index_build_multiref(fd, c, s, fp, cpos, spos as i32, sz as i32)
+    if (*sl.hdr).ref_seq_id == -2 {
+        cram_index_build_multiref_ref(sl, fp, cpos, spos as i32, sz as i32)
     } else {
         libc::snprintf(
-            buf.as_mut_ptr(),
+            buf.as_mut_ptr().cast(),
             buf.len(),
             c"%d\t%ld\t%ld\t%ld\t%d\t%d\n".as_ptr(),
-            (*(*sl).hdr).ref_seq_id,
-            (*(*sl).hdr).ref_seq_start,
-            (*(*sl).hdr).ref_seq_span,
+            (*sl.hdr).ref_seq_id,
+            (*sl.hdr).ref_seq_start,
+            (*sl.hdr).ref_seq_span,
             cpos,
             spos as c_int,
             sz as c_int,
         );
-        if crate::htslib_rs::bgzf::bgzf_write(fp, buf.as_ptr().cast(), libc::strlen(buf.as_ptr()))
+        if crate::htslib_rs::bgzf::bgzf_write(fp, buf.as_ptr().cast(), nul_terminated_len(&buf))
             >= 0
         {
             0
@@ -254,14 +444,27 @@ pub unsafe fn cram_cram_index_c_695_cram_index_slice(
 // outside the data; otherwise the matching `cram_index_layout *`.
 pub unsafe fn cram_cram_index_c_404_cram_index_query(
     fd: *mut cram_fd,
-    mut refid: c_int,
-    mut pos: crate::htslib_rs::hts::hts_pos_t,
+    refid: c_int,
+    pos: crate::htslib_rs::hts::hts_pos_t,
     from: *mut cram_index_layout,
 ) -> *mut cram_index_layout {
-    use crate::htslib_rs::hts::{HTS_IDX_NOCOOR, HTS_IDX_NONE, HTS_IDX_REST, HTS_IDX_START};
-    let fdl = fd.cast::<cram_fd_layout>();
+    let Some(fd) = fd_layout(fd) else {
+        return std::ptr::null_mut();
+    };
+    cram_index_query_ref(fd, refid, pos, NonNull::new(from))
+        .map(NonNull::as_ptr)
+        .unwrap_or_else(std::ptr::null_mut)
+}
 
-    if let Some(from) = NonNull::new(from) {
+unsafe fn cram_index_query_ref(
+    fd: &cram_fd_layout,
+    mut refid: c_int,
+    mut pos: crate::htslib_rs::hts::hts_pos_t,
+    from: Option<NonNull<cram_index_layout>>,
+) -> Option<NonNull<cram_index_layout>> {
+    use crate::htslib_rs::hts::{HTS_IDX_NOCOOR, HTS_IDX_NONE, HTS_IDX_REST, HTS_IDX_START};
+
+    if let Some(from) = from {
         // Continuation search down the e_next linked list.
         if refid == HTS_IDX_NOCOOR {
             refid = -1;
@@ -270,25 +473,26 @@ pub unsafe fn cram_cram_index_c_404_cram_index_query(
             let e = e.as_ref();
             e.refid == refid && (e.start as crate::htslib_rs::hts::hts_pos_t) <= pos
         }) {
-            return e.as_ptr();
+            return Some(e);
         }
-        return std::ptr::null_mut();
+        return None;
     }
 
-    let Some(index) = NonNull::new((*fdl).index.cast::<cram_index_layout>()) else {
-        return std::ptr::null_mut();
+    let Some(index) = NonNull::new(fd.index.cast::<cram_index_layout>()) else {
+        return None;
     };
 
     match refid {
-        HTS_IDX_NONE | HTS_IDX_REST => return std::ptr::null_mut(),
+        HTS_IDX_NONE | HTS_IDX_REST => return None,
         v if v == -1 || v == HTS_IDX_NOCOOR => {
             refid = -1;
             pos = 0;
         }
         HTS_IDX_START => {
             // Find the ref-bucket with the smallest first-entry offset.
-            let buckets =
-                std::slice::from_raw_parts(index.as_ptr(), (*fdl).index_sz.max(0) as usize);
+            let Some(buckets) = index_buckets(fd) else {
+                return None;
+            };
             let mut best: Option<NonNull<cram_index_layout>> = None;
             for bucket in buckets {
                 let Some(first) = NonNull::new(bucket.e) else {
@@ -301,11 +505,11 @@ pub unsafe fn cram_cram_index_c_404_cram_index_query(
                     best = Some(first);
                 }
             }
-            return best.map(NonNull::as_ptr).unwrap_or_else(std::ptr::null_mut);
+            return best;
         }
         _ => {
-            if refid < HTS_IDX_NONE || refid + 1 >= (*fdl).index_sz {
-                return std::ptr::null_mut();
+            if refid < HTS_IDX_NONE || refid + 1 >= fd.index_sz {
+                return None;
             }
         }
     }
@@ -313,7 +517,7 @@ pub unsafe fn cram_cram_index_c_404_cram_index_query(
     let from = NonNull::new(index.as_ptr().add((refid + 1) as usize))
         .expect("index bucket pointer derived from non-null index");
     let Some(entries) = index_node_children(from.as_ref()) else {
-        return std::ptr::null_mut();
+        return None;
     };
 
     // Binary search to find an overlapping bin.
@@ -364,20 +568,28 @@ pub unsafe fn cram_cram_index_c_404_cram_index_query(
         i += 1;
     }
 
-    index_child_ptr(from, i as usize)
+    NonNull::new(index_child_ptr(from, i as usize))
 }
 
 // original: cram_index_free_recurse (htslib/cram/cram_index.c:364)
 pub unsafe fn cram_cram_index_c_364_cram_index_free_recurse(e: *mut cram_index_layout) {
-    let Some(mut node) = NonNull::new(e) else {
+    let Some(e) = e.as_mut() else {
         return;
     };
-    let child_array = node.as_ref().e;
-    if let Some(children) = index_node_children_mut(node.as_mut()) {
+    cram_index_free_recurse_ref(e);
+}
+
+unsafe fn cram_index_free_recurse_ref(node: &mut cram_index_layout) {
+    let child_array = node.e;
+    if let Some(children) = index_node_children_mut(node) {
         for child in children {
-            cram_cram_index_c_364_cram_index_free_recurse(child);
+            cram_index_free_recurse_ref(child);
         }
-        free(child_array.cast());
+        drop(Vec::from_raw_parts(
+            child_array,
+            node.nslice as usize,
+            node.nalloc as usize,
+        ));
     }
 }
 
@@ -386,16 +598,20 @@ pub unsafe fn cram_cram_index_c_364_cram_index_free_recurse(e: *mut cram_index_l
 // Walks the top-level CRAI tree (one entry per reference) and recursively
 // frees each subtree, then releases the index array and clears the fd field.
 pub unsafe fn cram_cram_index_c_374_cram_index_free(fd: *mut cram_fd) {
-    let fdl = fd.cast::<cram_fd_layout>();
-    let Some(index) = NonNull::new((*fdl).index.cast::<cram_index_layout>()) else {
+    let Some(fd) = fd_layout_mut(fd) else {
         return;
     };
-    let buckets = std::slice::from_raw_parts_mut(index.as_ptr(), (*fdl).index_sz.max(0) as usize);
-    for bucket in buckets {
-        cram_cram_index_c_364_cram_index_free_recurse(bucket);
+    cram_index_free_ref(fd);
+}
+
+unsafe fn cram_index_free_ref(fd: &mut cram_fd_layout) {
+    let Some(index) = NonNull::new(fd.index.cast::<cram_index_layout>()) else {
+        return;
+    };
+    let mut buckets = take_index_buckets(fd);
+    for bucket in &mut buckets {
+        cram_index_free_recurse_ref(bucket);
     }
-    free(index.as_ptr().cast());
-    (*fdl).index = std::ptr::null_mut();
 }
 
 unsafe fn link_index_node(
@@ -445,11 +661,16 @@ pub unsafe fn cram_cram_index_c_92_link_index_(
 // Drives `link_index_` across every ref-bucket so the entries can be walked
 // in file order without descending the nested tree on each step.
 pub unsafe fn cram_cram_index_c_108_link_index(fd: *mut cram_fd) {
-    let fdl = fd.cast::<cram_fd_layout>();
-    let Some(index) = NonNull::new((*fdl).index.cast::<cram_index_layout>()) else {
+    let Some(fd) = fd_layout_mut(fd) else {
         return;
     };
-    let buckets = std::slice::from_raw_parts_mut(index.as_ptr(), (*fdl).index_sz.max(0) as usize);
+    link_index_ref(fd);
+}
+
+unsafe fn link_index_ref(fd: &mut cram_fd_layout) {
+    let Some(buckets) = index_buckets_mut(fd) else {
+        return;
+    };
     let mut e_last: Option<NonNull<cram_index_layout>> = None;
 
     for bucket in buckets {
@@ -471,33 +692,26 @@ pub unsafe fn cram_cram_index_c_120_kget_int32(
     pos: *mut usize,
     val_p: *mut i32,
 ) -> c_int {
-    let mut sign: i32 = 1;
-    let mut val: i32 = 0;
-    let mut p = *pos;
-
-    while p < (*k).l && (*(*k).s.add(p) == b' ' as c_char || *(*k).s.add(p) == b'\t' as c_char) {
-        p += 1;
-    }
-
-    if p < (*k).l && *(*k).s.add(p) == b'-' as c_char {
-        sign = -1;
-        p += 1;
-    }
-
-    if p >= (*k).l || !(*(*k).s.add(p) >= b'0' as c_char && *(*k).s.add(p) <= b'9' as c_char) {
+    let Some(k) = k.as_ref() else {
         return -1;
-    }
+    };
+    let Some(pos) = pos.as_mut() else {
+        return -1;
+    };
+    let Some(val_p) = val_p.as_mut() else {
+        return -1;
+    };
+    let Some(parser) = KStringParser::from_kstring(k) else {
+        return -1;
+    };
+    parser.parse_i32(pos, val_p)
+}
 
-    while p < (*k).l && *(*k).s.add(p) >= b'0' as c_char && *(*k).s.add(p) <= b'9' as c_char {
-        let digit = (*(*k).s.add(p) - b'0' as c_char) as i32;
-        p += 1;
-        val = val * 10 + digit;
-    }
-
-    *pos = p;
-    *val_p = sign * val;
-
-    0
+unsafe fn kget_int32_ref(k: &kstring_t, pos: &mut usize, val_p: &mut i32) -> c_int {
+    let Some(parser) = KStringParser::from_kstring(k) else {
+        return -1;
+    };
+    parser.parse_i32(pos, val_p)
 }
 
 // original: kget_int64 (htslib/cram/cram_index.c:146)
@@ -508,33 +722,89 @@ pub unsafe fn cram_cram_index_c_145_kget_int64(
     pos: *mut usize,
     val_p: *mut i64,
 ) -> c_int {
-    let mut sign: i64 = 1;
-    let mut val: i64 = 0;
-    let mut p = *pos;
-
-    while p < (*k).l && (*(*k).s.add(p) == b' ' as c_char || *(*k).s.add(p) == b'\t' as c_char) {
-        p += 1;
-    }
-
-    if p < (*k).l && *(*k).s.add(p) == b'-' as c_char {
-        sign = -1;
-        p += 1;
-    }
-
-    if p >= (*k).l || !(*(*k).s.add(p) >= b'0' as c_char && *(*k).s.add(p) <= b'9' as c_char) {
+    let Some(k) = k.as_ref() else {
         return -1;
+    };
+    let Some(pos) = pos.as_mut() else {
+        return -1;
+    };
+    let Some(val_p) = val_p.as_mut() else {
+        return -1;
+    };
+    let Some(parser) = KStringParser::from_kstring(k) else {
+        return -1;
+    };
+    parser.parse_i64(pos, val_p)
+}
+
+unsafe fn kget_int64_ref(k: &kstring_t, pos: &mut usize, val_p: &mut i64) -> c_int {
+    let Some(parser) = KStringParser::from_kstring(k) else {
+        return -1;
+    };
+    parser.parse_i64(pos, val_p)
+}
+
+struct ResolvedCraiIndexFilename(NonNull<c_char>);
+
+impl ResolvedCraiIndexFilename {
+    fn new(ptr: *mut c_char) -> Option<Self> {
+        NonNull::new(ptr).map(Self)
     }
 
-    while p < (*k).l && *(*k).s.add(p) >= b'0' as c_char && *(*k).s.add(p) <= b'9' as c_char {
-        let digit = (*(*k).s.add(p) - b'0' as c_char) as i64;
-        p += 1;
-        val = val * 10 + digit;
+    fn as_ptr(&self) -> *const c_char {
+        self.0.as_ptr()
+    }
+}
+
+impl Drop for ResolvedCraiIndexFilename {
+    fn drop(&mut self) {
+        unsafe {
+            free(self.0.as_ptr().cast());
+        }
+    }
+}
+
+struct OwnedCraiIndexFilename {
+    bytes: Vec<u8>,
+}
+
+impl OwnedCraiIndexFilename {
+    unsafe fn from_base(fn_base: *const c_char) -> Option<Self> {
+        let fn_base = fn_base.as_ref()?;
+        let fn_base = CStr::from_ptr(fn_base);
+        let mut bytes = Vec::with_capacity(fn_base.to_bytes().len() + b".crai".len() + 1);
+        bytes.extend_from_slice(fn_base.to_bytes());
+        bytes.extend_from_slice(b".crai");
+        bytes.push(0);
+        Some(Self { bytes })
     }
 
-    *pos = p;
-    *val_p = sign * val;
+    fn as_ptr(&self) -> *const c_char {
+        self.bytes.as_ptr().cast()
+    }
+}
 
-    0
+struct MallocOwnedIndexBytes {
+    ptr: NonNull<u8>,
+    len: usize,
+}
+
+impl MallocOwnedIndexBytes {
+    fn new(ptr: *mut c_char, len: usize) -> Option<Self> {
+        NonNull::new(ptr.cast::<u8>()).map(|ptr| Self { ptr, len })
+    }
+
+    unsafe fn as_bytes(&self) -> &[u8] {
+        std::slice::from_raw_parts(self.ptr.as_ptr(), self.len)
+    }
+}
+
+impl Drop for MallocOwnedIndexBytes {
+    fn drop(&mut self) {
+        unsafe {
+            free(self.ptr.as_ptr().cast());
+        }
+    }
 }
 
 // original: cram_index_load (htslib/cram/cram_index.c:177)
@@ -548,37 +818,35 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
     fn_: *const c_char,
     mut fn_idx: *const c_char,
 ) -> c_int {
-    let fdl = fd.cast::<cram_fd_layout>();
-    let mut tfn_idx: Option<NonNull<c_char>> = None;
-    let mut buf = [0 as c_char; 65536];
-    let mut kstr: kstring_t = std::mem::zeroed();
+    let Some(fdl) = fd_layout_mut(fd) else {
+        return -1;
+    };
+    let mut buf = [0_u8; 65536];
+    let mut index_data: Vec<u8> = Vec::new();
     let mut idx: NonNull<cram_index_layout>;
     let mut idx_stack: Vec<NonNull<cram_index_layout>> = Vec::new();
     let mut pos: usize = 0;
 
     macro_rules! fail {
         () => {{
-            free(kstr.s.cast());
-            if let Some(tfn_idx) = tfn_idx {
-                free(tfn_idx.as_ptr().cast());
-            }
-            cram_cram_index_c_374_cram_index_free(fd); // Also sets fd->index = NULL
+            cram_index_free_ref(fdl); // Also sets fd->index = NULL
             return -1;
         }};
     }
 
     /* Check if already loaded */
-    if !(*fdl).index.is_null() {
+    if !fdl.index.is_null() {
         return 0;
     }
 
-    (*fdl).index_sz = 1;
-    (*fdl).index = calloc(1, std::mem::size_of::<cram_index_layout>() as u64).cast();
-    if (*fdl).index.is_null() {
+    let mut index_buckets: Vec<cram_index_layout> = Vec::new();
+    if index_buckets.try_reserve_exact(1).is_err() {
         return -1;
     }
+    index_buckets.resize_with(1, || std::mem::zeroed());
+    install_index_buckets(fdl, index_buckets);
 
-    idx = match NonNull::new((*fdl).index.cast::<cram_index_layout>()) {
+    idx = match NonNull::new(fdl.index.cast::<cram_index_layout>()) {
         Some(idx) => idx,
         None => return -1,
     };
@@ -594,10 +862,10 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
     // Support pathX.cram##idx##pathY.crai
     let fn_delim = libc::strstr(fn_, HTS_IDX_DELIM.as_ptr().cast());
     if !fn_delim.is_null() && fn_idx.is_null() {
-        fn_idx = fn_delim.add(libc::strlen(HTS_IDX_DELIM.as_ptr().cast()));
+        fn_idx = fn_delim.add(HTS_IDX_DELIM.len() - 1);
     }
 
-    if fn_idx.is_null() {
+    let _resolved_idx_filename = if fn_idx.is_null() {
         let mut resolved_idx: *mut c_char = std::ptr::null_mut();
         if crate::htslib_rs::hts::hts_c_4756_hts_idx_check_local(
             fn_,
@@ -608,18 +876,20 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
         {
             resolved_idx = crate::htslib_rs::hts::hts_c_4915_hts_idx_getfn(fn_, c".crai".as_ptr());
         }
-        tfn_idx = NonNull::new(resolved_idx);
 
-        if tfn_idx.is_none() {
+        let Some(resolved_idx_filename) = ResolvedCraiIndexFilename::new(resolved_idx) else {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"Could not retrieve index file for '%s'\n".as_ptr(),
                 fn_,
             );
             fail!();
-        }
-        fn_idx = tfn_idx.unwrap().as_ptr();
-    }
+        };
+        fn_idx = resolved_idx_filename.as_ptr();
+        Some(resolved_idx_filename)
+    } else {
+        None
+    };
 
     let fp = hopen(fn_idx, c"r".as_ptr());
     if fp.is_null() {
@@ -635,14 +905,15 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
     loop {
         let len = htslib_hfile_h_247_hread(fp, buf.as_mut_ptr().cast(), buf.len());
         if len <= 0 {
-            if len < 0 || kstr.l < 2 {
+            if len < 0 || index_data.len() < 2 {
                 fail!();
             }
             break;
         }
-        if kputsn(buf.as_ptr(), len as usize, &mut kstr) < 0 {
+        if index_data.try_reserve(len as usize).is_err() {
             fail!();
         }
+        index_data.extend_from_slice(&buf[..len as usize]);
     }
 
     if hclose(fp) < 0 {
@@ -650,33 +921,41 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
     }
 
     // Uncompress if required
-    if *kstr.s == 31 && *kstr.s.add(1) as u8 == 139 {
+    if index_data[0] == 31 && index_data[1] as u8 == 139 {
         let mut l: usize = 0;
-        let s = cram_cram_io_c_1157_zlib_mem_inflate(kstr.s, kstr.l, &mut l);
+        let s = cram_cram_io_c_1157_zlib_mem_inflate(
+            index_data.as_mut_ptr().cast(),
+            index_data.len(),
+            &mut l,
+        );
         if s.is_null() {
             fail!();
         }
 
-        free(kstr.s.cast());
-        kstr.s = s;
-        kstr.l = l;
-        kstr.m = l; // conservative estimate of the size allocated
-        if kputsn(c"".as_ptr(), 0, &mut kstr) < 0 {
+        let Some(inflated) = MallocOwnedIndexBytes::new(s, l) else {
+            fail!();
+        };
+        let mut inflated_data = Vec::new();
+        if inflated_data.try_reserve_exact(l).is_err() {
             fail!();
         }
+        inflated_data.extend_from_slice(inflated.as_bytes());
+        index_data = inflated_data;
     }
 
+    let parser = KStringParser::from_bytes(&index_data);
+
     // Parse it line at a time
-    while pos < kstr.l {
+    while pos < parser.len() {
         let mut e: cram_index_layout = std::mem::zeroed();
 
         /* 1.1 layout */
-        if cram_cram_index_c_120_kget_int32(&mut kstr, &mut pos, &mut e.refid) == -1
-            || cram_cram_index_c_120_kget_int32(&mut kstr, &mut pos, &mut e.start) == -1
-            || cram_cram_index_c_120_kget_int32(&mut kstr, &mut pos, &mut e.end) == -1
-            || cram_cram_index_c_145_kget_int64(&mut kstr, &mut pos, &mut e.offset) == -1
-            || cram_cram_index_c_120_kget_int32(&mut kstr, &mut pos, &mut e.slice) == -1
-            || cram_cram_index_c_120_kget_int32(&mut kstr, &mut pos, &mut e.len) == -1
+        if parser.parse_i32(&mut pos, &mut e.refid) == -1
+            || parser.parse_i32(&mut pos, &mut e.start) == -1
+            || parser.parse_i32(&mut pos, &mut e.end) == -1
+            || parser.parse_i64(&mut pos, &mut e.offset) == -1
+            || parser.parse_i32(&mut pos, &mut e.slice) == -1
+            || parser.parse_i32(&mut pos, &mut e.len) == -1
         {
             fail!();
         }
@@ -693,29 +972,21 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
         }
 
         if e.refid != idx.as_ref().refid {
-            if (*fdl).index_sz < e.refid + 2 {
+            if fdl.index_sz < e.refid + 2 {
                 let new_sz = e.refid + 2;
-                let index_end = (*fdl).index_sz as usize * std::mem::size_of::<cram_index_layout>();
-                let new_idx = realloc(
-                    (*fdl).index.cast(),
-                    (new_sz as usize * std::mem::size_of::<cram_index_layout>()) as u64,
-                )
-                .cast::<cram_index_layout>();
-                if new_idx.is_null() {
+                let mut buckets = take_index_buckets(fdl);
+                if buckets
+                    .try_reserve_exact((new_sz as usize).saturating_sub(buckets.len()))
+                    .is_err()
+                {
+                    install_index_buckets(fdl, buckets);
                     fail!();
                 }
-
-                (*fdl).index = new_idx.cast();
-                (*fdl).index_sz = new_sz;
-                libc::memset(
-                    (new_idx.cast::<c_char>()).add(index_end).cast(),
-                    0,
-                    (*fdl).index_sz as usize * std::mem::size_of::<cram_index_layout>() - index_end,
-                );
+                buckets.resize_with(new_sz as usize, || std::mem::zeroed());
+                install_index_buckets(fdl, buckets);
             }
             idx = NonNull::new(
-                (*fdl)
-                    .index
+                fdl.index
                     .cast::<cram_index_layout>()
                     .add((e.refid + 1) as usize),
             )
@@ -742,19 +1013,29 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
 
         // Now contains, so append
         if idx.as_ref().nslice + 1 >= idx.as_ref().nalloc {
-            let nalloc = idx.as_ref().nalloc;
-            idx.as_mut().nalloc = if nalloc != 0 { nalloc * 2 } else { 16 };
-            let nalloc = idx.as_ref().nalloc;
-            let new_e = realloc(
-                idx.as_ref().e.cast(),
-                (nalloc as usize * std::mem::size_of::<cram_index_layout>()) as u64,
-            )
-            .cast::<cram_index_layout>();
-            if new_e.is_null() {
+            let old_nalloc = idx.as_ref().nalloc.max(0) as usize;
+            let new_nalloc = if old_nalloc != 0 {
+                let Some(new_nalloc) = old_nalloc.checked_mul(2) else {
+                    fail!();
+                };
+                if new_nalloc > c_int::MAX as usize {
+                    fail!();
+                }
+                new_nalloc
+            } else {
+                16
+            };
+            let mut children = take_index_children(idx.as_mut());
+
+            if children
+                .try_reserve_exact(new_nalloc.saturating_sub(children.capacity()))
+                .is_err()
+            {
+                install_index_children(idx.as_mut(), children);
                 fail!();
             }
 
-            idx.as_mut().e = new_e;
+            install_index_children(idx.as_mut(), children);
         }
 
         e.nalloc = 0;
@@ -775,19 +1056,11 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
         }
         idx_stack.push(idx);
 
-        while pos < kstr.l && *kstr.s.add(pos) != b'\n' as c_char {
-            pos += 1;
-        }
-        pos += 1;
-    }
-
-    free(kstr.s.cast());
-    if let Some(tfn_idx) = tfn_idx {
-        free(tfn_idx.as_ptr().cast());
+        parser.skip_line_tail(&mut pos);
     }
 
     // Convert NCList to linear linked list
-    cram_cram_index_c_108_link_index(fd);
+    link_index_ref(fdl);
 
     //dump_index(fd);
 
@@ -804,23 +1077,34 @@ pub unsafe fn cram_cram_index_c_503_cram_index_last(
     refid: c_int,
     from: *mut cram_index_layout,
 ) -> *mut cram_index_layout {
-    let fdl = fd.cast::<cram_fd_layout>();
-
-    if refid + 1 < 0 || refid + 1 >= (*fdl).index_sz {
-        return std::ptr::null_mut();
-    }
-
-    let Some(index) = NonNull::new((*fdl).index.cast::<cram_index_layout>()) else {
+    let Some(fd) = fd_layout(fd) else {
         return std::ptr::null_mut();
     };
-    let from = NonNull::new(from).unwrap_or_else(|| {
+    cram_index_last_ref(fd, refid, NonNull::new(from))
+        .map(NonNull::as_ptr)
+        .unwrap_or_else(std::ptr::null_mut)
+}
+
+unsafe fn cram_index_last_ref(
+    fd: &cram_fd_layout,
+    refid: c_int,
+    from: Option<NonNull<cram_index_layout>>,
+) -> Option<NonNull<cram_index_layout>> {
+    if refid + 1 < 0 || refid + 1 >= fd.index_sz {
+        return None;
+    }
+
+    let Some(index) = NonNull::new(fd.index.cast::<cram_index_layout>()) else {
+        return None;
+    };
+    let from = from.unwrap_or_else(|| {
         NonNull::new(index.as_ptr().add((refid + 1) as usize))
             .expect("index bucket pointer derived from non-null index")
     });
 
     // Ref with nothing aligned against it.
     let Some(entries) = index_node_children(from.as_ref()) else {
-        return std::ptr::null_mut();
+        return None;
     };
 
     let slice = entries.len() - 1;
@@ -833,7 +1117,7 @@ pub unsafe fn cram_cram_index_c_503_cram_index_last(
         e = next;
     }
 
-    e.as_ptr()
+    Some(e)
 }
 
 // original: cram_index_query_last (htslib/cram/cram_index.c:532)
@@ -847,25 +1131,31 @@ pub unsafe fn cram_cram_index_c_531_cram_index_query_last(
     refid: c_int,
     end: crate::htslib_rs::hts::hts_pos_t,
 ) -> *mut cram_index_layout {
+    let Some(fd) = fd_layout(fd) else {
+        return std::ptr::null_mut();
+    };
+    cram_index_query_last_ref(fd, refid, end)
+        .map(NonNull::as_ptr)
+        .unwrap_or_else(std::ptr::null_mut)
+}
+
+unsafe fn cram_index_query_last_ref(
+    fd: &cram_fd_layout,
+    refid: c_int,
+    end: crate::htslib_rs::hts::hts_pos_t,
+) -> Option<NonNull<cram_index_layout>> {
     let mut e: Option<NonNull<cram_index_layout>> = None;
     let mut prev_e: Option<NonNull<cram_index_layout>>;
     loop {
         prev_e = e;
-        e = NonNull::new(cram_cram_index_c_404_cram_index_query(
-            fd,
-            refid,
-            end,
-            prev_e
-                .map(NonNull::as_ptr)
-                .unwrap_or_else(std::ptr::null_mut),
-        ));
+        e = cram_index_query_ref(fd, refid, end, prev_e);
         if e.is_none() {
             break;
         }
     }
 
     let Some(mut prev_e) = prev_e else {
-        return std::ptr::null_mut();
+        return None;
     };
     e = Some(prev_e);
 
@@ -885,7 +1175,7 @@ pub unsafe fn cram_cram_index_c_531_cram_index_query_last(
         }
     }
 
-    prev_e.as_ptr()
+    Some(prev_e)
 }
 
 // original: cram_index_container (htslib/cram/cram_index.c:729)
@@ -900,42 +1190,60 @@ pub unsafe fn cram_cram_index_c_727_cram_index_container(
     fp: *mut crate::htslib_rs::hts::BGZF,
     cpos: libc::off_t,
 ) -> c_int {
-    let fdl = fd.cast::<cram_fd_layout>();
-    let cl = c.cast::<cram_container_layout>();
+    let Some(fd) = fd_layout_mut(fd) else {
+        return -1;
+    };
+    let Some(c) = container_layout_mut(c) else {
+        return -1;
+    };
+    let Some(fp) = fp.as_mut() else {
+        return -1;
+    };
+    cram_index_container_ref(fd, c, fp, cpos)
+}
+
+unsafe fn cram_index_container_ref(
+    fd: &mut cram_fd_layout,
+    c: &mut cram_container_layout,
+    fp: &mut crate::htslib_rs::hts::BGZF,
+    cpos: libc::off_t,
+) -> c_int {
     let mut j: c_int = 0;
 
     // 2.0 format
-    while j < (*cl).num_landmarks {
-        let spos = crate::htslib_rs::hfile::htslib_hfile_h_155_htell((*fdl).fp);
-        if spos - cpos - (*cl).offset as libc::off_t
-            != *(*cl).landmark.add(j as usize) as libc::off_t
-        {
+    while j < c.num_landmarks {
+        let spos = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fd.fp);
+        if spos - cpos - c.offset as libc::off_t != *c.landmark.add(j as usize) as libc::off_t {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"CRAM slice offset %ld does not match landmark %d in container header (%d)\n"
                     .as_ptr(),
-                (spos - cpos - (*cl).offset as libc::off_t) as i64,
+                (spos - cpos - c.offset as libc::off_t) as i64,
                 j,
-                *(*cl).landmark.add(j as usize),
+                *c.landmark.add(j as usize),
             );
             return -1;
         }
 
-        let s = cram_cram_io_c_4568_cram_read_slice(fd);
+        let s = cram_cram_io_c_4568_cram_read_slice((fd as *mut cram_fd_layout).cast());
         if s.is_null() {
             return -1;
         }
 
-        let sz = crate::htslib_rs::hfile::htslib_hfile_h_155_htell((*fdl).fp) - spos;
-        let ret = cram_cram_index_c_695_cram_index_slice(
-            fd,
-            c,
-            s,
-            fp,
-            cpos,
-            *(*cl).landmark.add(j as usize) as libc::off_t,
-            sz,
-        );
+        let sz = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fd.fp) - spos;
+        let ret = if let Some(s) = s.cast::<cram_slice_layout>().as_mut() {
+            cram_index_slice_ref(
+                (fd as *mut cram_fd_layout).cast(),
+                (c as *mut cram_container_layout).cast(),
+                s,
+                fp,
+                cpos,
+                *c.landmark.add(j as usize) as libc::off_t,
+                sz,
+            )
+        } else {
+            -1
+        };
 
         cram_cram_io_c_4421_cram_free_slice(s);
 
@@ -960,8 +1268,10 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
     fn_base: *const c_char,
     mut fn_idx: *const c_char,
 ) -> c_int {
-    let fdl = fd.cast::<cram_fd_layout>();
-    let mut fn_idx_str: kstring_t = std::mem::zeroed();
+    let Some(fdl) = fd_layout_mut(fd) else {
+        return -1;
+    };
+    let fn_idx_buf: Option<OwnedCraiIndexFilename>;
     let mut last_ref: i64 = -9;
     let mut last_start: i64 = -9;
 
@@ -980,45 +1290,56 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
             overflow_arg_area: overflow.as_ptr() as *mut _,
             reg_save_area: reg_save.as_mut_ptr().cast(),
         };
-        cram_cram_io_c_5692_cram_set_voption(fd, CRAM_OPT_REQUIRED_FIELDS, &mut args);
+        cram_cram_io_c_5692_cram_set_voption(
+            (fdl as *mut cram_fd_layout).cast(),
+            CRAM_OPT_REQUIRED_FIELDS,
+            &mut args,
+        );
     }
 
     if fn_idx.is_null() {
-        crate::htslib_rs::hts::kputs(fn_base, &mut fn_idx_str);
-        crate::htslib_rs::hts::kputs(c".crai".as_ptr(), &mut fn_idx_str);
-        fn_idx = fn_idx_str.s;
+        let Some(buf) = OwnedCraiIndexFilename::from_base(fn_base) else {
+            return -4;
+        };
+        fn_idx = buf.as_ptr();
+        fn_idx_buf = Some(buf);
+    } else {
+        fn_idx_buf = None;
     }
 
     let fp = bgzf_open(fn_idx, c"wg".as_ptr());
     if fp.is_null() {
         libc::perror(fn_idx);
-        free(fn_idx_str.s.cast());
         return -4;
     }
 
-    free(fn_idx_str.s.cast());
+    drop(fn_idx_buf);
 
-    let mut cpos = crate::htslib_rs::hfile::htslib_hfile_h_155_htell((*fdl).fp);
+    let mut cpos = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fdl.fp);
     loop {
-        let c = cram_read_container(fd);
+        let c = cram_read_container((fdl as *mut cram_fd_layout).cast());
         if c.is_null() {
             break;
         }
-        if (*fdl).err != 0 {
+        if fdl.err != 0 {
             libc::perror(c"Cram container read".as_ptr());
             return -1;
         }
 
-        let hpos = crate::htslib_rs::hfile::htslib_hfile_h_155_htell((*fdl).fp);
+        let hpos = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fdl.fp);
 
         let cl = c.cast::<cram_container_layout>();
-        (*cl).comp_hdr_block = cram_read_block(fd).cast();
+        (*cl).comp_hdr_block = cram_read_block((fdl as *mut cram_fd_layout).cast()).cast();
         if (*cl).comp_hdr_block.is_null() {
             return -1;
         }
         assert!((*(*cl).comp_hdr_block).content_type == CRAM_CONTENT_TYPE_COMPRESSION_HEADER);
 
-        (*cl).comp_hdr = cram_decode_compression_header(fd, (*cl).comp_hdr_block.cast()).cast();
+        (*cl).comp_hdr = cram_decode_compression_header(
+            (fdl as *mut cram_fd_layout).cast(),
+            (*cl).comp_hdr_block.cast(),
+        )
+        .cast();
         if (*cl).comp_hdr.is_null() {
             return -1;
         }
@@ -1033,12 +1354,17 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
         last_ref = (*cl).ref_seq_id as i64;
         last_start = (*cl).ref_seq_start;
 
-        if cram_cram_index_c_727_cram_index_container(fd, c, fp, cpos) < 0 {
+        let index_ret = if let (Some(cl), Some(fp)) = (cl.as_mut(), fp.as_mut()) {
+            cram_index_container_ref(fdl, cl, fp, cpos)
+        } else {
+            -1
+        };
+        if index_ret < 0 {
             bgzf_close(fp);
             return -1;
         }
 
-        let next_cpos = crate::htslib_rs::hfile::htslib_hfile_h_155_htell((*fdl).fp);
+        let next_cpos = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fdl.fp);
         if next_cpos != hpos + (*cl).length as libc::off_t {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
@@ -1054,7 +1380,7 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
 
         cram_cram_io_c_3705_cram_free_container(c);
     }
-    if (*fdl).err != 0 {
+    if fdl.err != 0 {
         bgzf_close(fp);
         return -1;
     }

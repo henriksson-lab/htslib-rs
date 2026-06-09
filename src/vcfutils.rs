@@ -1,7 +1,8 @@
 // Functions translated from htslib/vcfutils.c.
 
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::{c_char, c_int, c_void, CStr};
 use std::mem::size_of;
+use std::ptr::NonNull;
 
 use crate::htslib_rs::hts::{
     hts_log_cstr, i32_to_le, kbitset_t, kbs_destroy, kbs_exists, kbs_init, kbs_insert, kputc,
@@ -55,39 +56,47 @@ impl std::ops::DerefMut for OwnedKString {
 impl Drop for OwnedKString {
     fn drop(&mut self) {
         unsafe {
-            libc::free(self.raw.s.cast());
+            crate::htslib_rs::c_compat::free(self.raw.s.cast());
         }
     }
 }
 
 struct CBuffer<T> {
-    ptr: *mut T,
+    ptr: Option<NonNull<T>>,
 }
 
 impl<T> CBuffer<T> {
     fn new() -> Self {
-        Self {
-            ptr: std::ptr::null_mut(),
-        }
+        Self { ptr: None }
+    }
+
+    fn as_ptr(&self) -> *mut T {
+        self.ptr.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 
     fn cast<U>(&self) -> *mut U {
-        self.ptr.cast::<U>()
+        self.as_ptr().cast::<U>()
     }
 
     unsafe fn add(&self, count: usize) -> *mut T {
-        self.ptr.add(count)
+        self.as_ptr().add(count)
     }
 
-    fn as_mut_c_void_dst(&mut self) -> *mut *mut c_void {
-        (&mut self.ptr as *mut *mut T).cast::<*mut c_void>()
+    fn as_c_void_ptr(&self) -> *mut c_void {
+        self.as_ptr().cast()
+    }
+
+    fn set_from_c_void(&mut self, ptr: *mut c_void) {
+        self.ptr = NonNull::new(ptr.cast::<T>());
     }
 }
 
 impl<T> Drop for CBuffer<T> {
     fn drop(&mut self) {
         unsafe {
-            libc::free(self.ptr.cast());
+            if let Some(ptr) = self.ptr {
+                crate::htslib_rs::c_compat::free(ptr.as_ptr().cast());
+            }
         }
     }
 }
@@ -98,13 +107,21 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
     line: *mut bcf1_t,
     rm_set: *const kbitset_t,
 ) -> c_int {
+    vcfutils_bcf_remove_allele_set_rs(&*header, &mut *line, &*rm_set)
+}
+
+unsafe fn vcfutils_bcf_remove_allele_set_rs(
+    header: &bcf_hdr_t,
+    line: &mut bcf1_t,
+    rm_set: &kbitset_t,
+) -> c_int {
     let vl_a_g_r = (1_u32 << BCF_VL_A) | (1_u32 << BCF_VL_G) | (1_u32 << BCF_VL_R);
     let vl_la_lg_lr = (1_u32 << BCF_VL_LA) | (1_u32 << BCF_VL_LG) | (1_u32 << BCF_VL_LR);
     let vl_a_g_r_la_lg_lr = vl_a_g_r | vl_la_lg_lr;
     let vl_a_r = (1_u32 << BCF_VL_A) | (1_u32 << BCF_VL_R);
     let vl_la_lr = (1_u32 << BCF_VL_LA) | (1_u32 << BCF_VL_LR);
     let vl_a_r_la_lr = vl_a_r | vl_la_lr;
-    let n_allele = (*line).n_allele() as usize;
+    let n_allele = line.n_allele() as usize;
     let mut map = Vec::new();
     if map.try_reserve_exact(n_allele).is_err() {
         return -1;
@@ -120,7 +137,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
 
     vcf::bcf_unpack(line, BCF_UN_ALL as c_int);
 
-    let n_sample = (*line).n_sample() as c_int;
+    let n_sample = line.n_sample() as c_int;
     let mut str_ = OwnedKString::new();
 
     macro_rules! err {
@@ -129,24 +146,24 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         }};
     }
 
-    kputs(*(*line).d.allele.add(0), &mut *str_);
+    kputs(*line.d.allele.add(0), &mut *str_);
 
     let mut nrm = 0;
     map[0] = 0;
     let mut j = 1;
-    for i in 1..(*line).n_allele() as c_int {
-        if libc::strcmp(*(*line).d.allele.add(i as usize), c"<CNV:TR>".as_ptr()) == 0 {
+    for i in 1..line.n_allele() as c_int {
+        if libc::strcmp(*line.d.allele.add(i as usize), c"<CNV:TR>".as_ptr()) == 0 {
             have_cnv_tr = 1;
         }
 
         if kbs_exists(rm_set, i) != 0 {
-            *(*line).d.allele.add(i as usize) = std::ptr::null_mut();
+            *line.d.allele.add(i as usize) = std::ptr::null_mut();
             map[i as usize] = -1;
             nrm += 1;
             continue;
         }
         kputc(b',' as c_int, &mut *str_);
-        kputs(*(*line).d.allele.add(i as usize), &mut *str_);
+        kputs(*line.d.allele.add(i as usize), &mut *str_);
         map[i as usize] = j;
         j += 1;
     }
@@ -154,8 +171,8 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         return 0;
     }
 
-    let n_r_ori = (*line).n_allele() as c_int;
-    let n_r_new = (*line).n_allele() as c_int - nrm;
+    let n_r_ori = line.n_allele() as c_int;
+    let n_r_new = line.n_allele() as c_int - nrm;
     if n_r_new <= 0 {
         let seqname = vcf::bcf_seqname_safe(header, line);
         let seqname_str = if seqname.is_null() {
@@ -166,7 +183,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         let msg = std::ffi::CString::new(format!(
             "Cannot remove reference allele at {}:{} [{}]",
             seqname_str,
-            (*line).pos + 1,
+            line.pos + 1,
             n_r_new
         ))
         .unwrap_or_default();
@@ -187,7 +204,7 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
     }
 
     if have_cnv_tr != 0
-        && vcfutils_c_561_fixup_cnv_tr_info_tags(header, line, n_a_ori as usize, rm_set.cast()) < 0
+        && vcfutils_c_561_fixup_cnv_tr_info_tags(header, line, n_a_ori as usize, rm_set) < 0
     {
         hts_log_cstr(
             HTS_LOG_ERROR,
@@ -198,17 +215,16 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
     }
 
     let mut mdat_bytes = 0;
-    for i in 0..(*line).n_info() {
-        let info = (*line).d.info.add(i as usize);
+    for i in 0..line.n_info() {
+        let info = line.d.info.add(i as usize);
         let info_key = (*info).key as usize;
-        let id = (*(*header).id[BCF_DT_ID as usize].add(info_key)).key;
-        let mut vlen = ((*(*(*header).id[BCF_DT_ID as usize].add(info_key)).val).info
-            [BCF_HL_INFO as usize]
-            >> 8
-            & 0xf) as c_int;
+        let id = (*header.id[BCF_DT_ID as usize].add(info_key)).key;
+        let mut vlen =
+            ((*(*header.id[BCF_DT_ID as usize].add(info_key)).val).info[BCF_HL_INFO as usize] >> 8
+                & 0xf) as c_int;
 
         let multiple = if vlen == BCF_VL_VAR as c_int {
-            vcfutils_c_254_is_special_info_type(id)
+            vcfutils_c_254_is_special_info_type(CStr::from_ptr(id))
         } else {
             1
         };
@@ -219,10 +235,9 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         if (vl_a_g_r & (1_u32 << vlen)) == 0 {
             continue;
         }
-        let type_ = ((*(*(*header).id[BCF_DT_ID as usize].add(info_key)).val).info
-            [BCF_HL_INFO as usize]
-            >> 4
-            & 0xf) as c_int;
+        let type_ =
+            ((*(*header.id[BCF_DT_ID as usize].add(info_key)).val).info[BCF_HL_INFO as usize] >> 4
+                & 0xf) as c_int;
         if type_ == BCF_HT_FLAG as c_int {
             continue;
         }
@@ -233,8 +248,9 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         };
 
         let mut mdat = mdat_bytes / size;
-        let mut nret =
-            vcf::bcf_get_info_values(header, line, id, dat.as_mut_c_void_dst(), &mut mdat, type_);
+        let mut dat_ptr = dat.as_c_void_ptr();
+        let mut nret = vcf::bcf_get_info_values(header, line, id, &mut dat_ptr, &mut mdat, type_);
+        dat.set_from_c_void(dat_ptr);
         mdat_bytes = mdat * size;
         if nret < 0 {
             err!();
@@ -475,14 +491,16 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
     }
     if i < n_r_ori {
         let mut mdat = mdat_bytes / 4;
+        let mut dat_ptr = dat.as_c_void_ptr();
         let mut nret = vcf::bcf_get_format_values(
             header,
             line,
             c"GT".as_ptr(),
-            dat.as_mut_c_void_dst(),
+            &mut dat_ptr,
             &mut mdat,
             BCF_HT_INT as c_int,
         );
+        dat.set_from_c_void(dat_ptr);
         mdat_bytes = mdat * 4;
         if nret > 0 {
             nret /= n_sample;
@@ -522,14 +540,16 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         }
     }
 
+    let mut laa_ptr = laa.as_c_void_ptr();
     let num_laa = vcf::bcf_get_format_values(
         header,
         line,
         c"LAA".as_ptr(),
-        laa.as_mut_c_void_dst(),
+        &mut laa_ptr,
         &mut laa_size,
         BCF_HT_INT as c_int,
     );
+    laa.set_from_c_void(laa_ptr);
     if num_laa < -1 && num_laa != -3 {
         err!();
     }
@@ -625,21 +645,21 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         }
     }
 
-    for fmt_i in 0..(*line).n_fmt() {
-        let fmt = (*line).d.fmt.add(fmt_i as usize);
+    for fmt_i in 0..line.n_fmt() {
+        let fmt = line.d.fmt.add(fmt_i as usize);
         let fmt_id = (*fmt).id as usize;
-        let id = (*(*header).id[BCF_DT_ID as usize].add(fmt_id)).key;
-        let vlen =
-            ((*(*(*header).id[BCF_DT_ID as usize].add(fmt_id)).val).info[BCF_HL_FMT as usize] >> 8
-                & 0xf) as c_int;
+        let id = (*header.id[BCF_DT_ID as usize].add(fmt_id)).key;
+        let vlen = ((*(*header.id[BCF_DT_ID as usize].add(fmt_id)).val).info[BCF_HL_FMT as usize]
+            >> 8
+            & 0xf) as c_int;
 
         if (vl_a_g_r_la_lg_lr & (1_u32 << vlen)) == 0 {
             continue;
         }
         let is_local = ((vl_la_lg_lr & (1_u32 << vlen)) != 0) as c_int;
-        let type_ =
-            ((*(*(*header).id[BCF_DT_ID as usize].add(fmt_id)).val).info[BCF_HL_FMT as usize] >> 4
-                & 0xf) as c_int;
+        let type_ = ((*(*header.id[BCF_DT_ID as usize].add(fmt_id)).val).info[BCF_HL_FMT as usize]
+            >> 4
+            & 0xf) as c_int;
         if type_ == BCF_HT_FLAG as c_int {
             continue;
         }
@@ -650,8 +670,9 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
         };
 
         let mut mdat = mdat_bytes / size;
-        let mut nret =
-            vcf::bcf_get_format_values(header, line, id, dat.as_mut_c_void_dst(), &mut mdat, type_);
+        let mut dat_ptr = dat.as_c_void_ptr();
+        let mut nret = vcf::bcf_get_format_values(header, line, id, &mut dat_ptr, &mut mdat, type_);
+        dat.set_from_c_void(dat_ptr);
         mdat_bytes = mdat * size;
         if nret < 0 {
             err!();
@@ -1157,23 +1178,19 @@ pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
 
     0
 }
-pub unsafe fn vcfutils_c_254_is_special_info_type(name: *const c_char) -> c_int {
-    match *name as u8 {
-        b'C' => {
-            if *name.add(1) == b'I' as c_char
-                && (libc::strcmp(name.add(2), c"CN".as_ptr()) == 0
-                    || libc::strcmp(name.add(2), c"END".as_ptr()) == 0
-                    || libc::strcmp(name.add(2), c"LEN".as_ptr()) == 0
-                    || libc::strcmp(name.add(2), c"POS".as_ptr()) == 0)
+pub unsafe fn vcfutils_c_254_is_special_info_type(name: &CStr) -> c_int {
+    let bytes = name.to_bytes();
+    match bytes.first().copied() {
+        Some(b'C') => {
+            if bytes
+                .get(1..)
+                .is_some_and(|suffix| matches!(suffix, b"ICN" | b"IEND" | b"ILEN" | b"IPOS"))
             {
                 return 2;
             }
         }
-        b'M' => {
-            if *name.add(1) == b'E' as c_char
-                && (libc::strcmp(name, c"MEINFO".as_ptr()) == 0
-                    || libc::strcmp(name, c"METRANS".as_ptr()) == 0)
-            {
+        Some(b'M') => {
+            if matches!(bytes, b"MEINFO" | b"METRANS") {
                 return 4;
             }
         }
@@ -1182,19 +1199,15 @@ pub unsafe fn vcfutils_c_254_is_special_info_type(name: *const c_char) -> c_int 
     1
 }
 
-pub unsafe fn vcfutils_c_280_get_int32_info_value(info: *const bcf_info_t, index: usize) -> i32 {
-    let len = if (*info).len > 0 {
-        (*info).len as usize
-    } else {
-        0
-    };
+pub unsafe fn vcfutils_c_280_get_int32_info_value(info: &bcf_info_t, index: usize) -> i32 {
+    let len = if info.len > 0 { info.len as usize } else { 0 };
     if index >= len {
         return bcf_int32_missing;
     }
 
-    match (*info).type_ {
+    match info.type_ {
         x if x == BCF_BT_INT8 as c_int => {
-            let val = le_to_i8((*info).vptr.add(index)) as i32;
+            let val = le_to_i8(info.vptr.add(index)) as i32;
             if val > bcf_int8_vector_end {
                 val
             } else {
@@ -1202,16 +1215,16 @@ pub unsafe fn vcfutils_c_280_get_int32_info_value(info: *const bcf_info_t, index
             }
         }
         x if x == BCF_BT_INT16 as c_int => {
-            let val = le_to_i16((*info).vptr.add(index * size_of::<i16>())) as i32;
+            let val = le_to_i16(info.vptr.add(index * size_of::<i16>())) as i32;
             if val > bcf_int16_vector_end {
                 val
             } else {
                 bcf_int32_vector_end - (bcf_int16_vector_end - val)
             }
         }
-        x if x == BCF_BT_INT32 as c_int => le_to_i32((*info).vptr.add(index * size_of::<i32>())),
+        x if x == BCF_BT_INT32 as c_int => le_to_i32(info.vptr.add(index * size_of::<i32>())),
         x if x == BCF_BT_FLOAT as c_int => {
-            let f = le_to_float((*info).vptr.add(index * size_of::<f32>()));
+            let f = le_to_float(info.vptr.add(index * size_of::<f32>()));
             if f.to_bits() == bcf_float_missing {
                 bcf_int32_missing
             } else if f.to_bits() == bcf_float_vector_end {
@@ -1224,12 +1237,8 @@ pub unsafe fn vcfutils_c_280_get_int32_info_value(info: *const bcf_info_t, index
     }
 }
 
-pub unsafe fn vcfutils_c_315_get_rn_value(rn: *const bcf_info_t, index: usize) -> i32 {
-    let val = if rn.is_null() {
-        1
-    } else {
-        vcfutils_c_280_get_int32_info_value(rn, index)
-    };
+pub unsafe fn vcfutils_c_315_get_rn_value(rn: Option<&bcf_info_t>, index: usize) -> i32 {
+    let val = rn.map_or(1, |rn| vcfutils_c_280_get_int32_info_value(rn, index));
     if val >= 0 {
         val
     } else {
@@ -1237,131 +1246,130 @@ pub unsafe fn vcfutils_c_315_get_rn_value(rn: *const bcf_info_t, index: usize) -
     }
 }
 
-pub unsafe fn vcfutils_c_325_set_info_v1(info: *mut bcf_info_t) {
-    match (*info).type_ {
-        x if x == BCF_BT_INT8 as c_int => (*info).v1.i = le_to_i8((*info).vptr) as i64,
-        x if x == BCF_BT_INT16 as c_int => (*info).v1.i = le_to_i16((*info).vptr) as i64,
-        x if x == BCF_BT_INT32 as c_int => (*info).v1.i = le_to_i32((*info).vptr) as i64,
-        x if x == BCF_BT_INT64 as c_int => (*info).v1.i = le_to_i64((*info).vptr),
-        x if x == BCF_BT_FLOAT as c_int => (*info).v1.f = le_to_float((*info).vptr),
+pub unsafe fn vcfutils_c_325_set_info_v1(info: &mut bcf_info_t) {
+    match info.type_ {
+        x if x == BCF_BT_INT8 as c_int => info.v1.i = le_to_i8(info.vptr) as i64,
+        x if x == BCF_BT_INT16 as c_int => info.v1.i = le_to_i16(info.vptr) as i64,
+        x if x == BCF_BT_INT32 as c_int => info.v1.i = le_to_i32(info.vptr) as i64,
+        x if x == BCF_BT_INT64 as c_int => info.v1.i = le_to_i64(info.vptr),
+        x if x == BCF_BT_FLOAT as c_int => info.v1.f = le_to_float(info.vptr),
         _ => {}
     }
 }
 
-pub unsafe fn vcfutils_c_349_fixup_info_length_code(info: *mut bcf_info_t) -> c_int {
+pub unsafe fn vcfutils_c_349_fixup_info_length_code(info: &mut bcf_info_t) -> c_int {
     const BCF_TYPE_SHIFT: [usize; 16] = [0, 0, 1, 2, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     let mut buf = [0u8; 24];
     let mut ptr = buf.as_mut_ptr();
 
-    let mut type_ = if (*info).key <= 0x7f && (*info).key >= -120 {
+    let mut type_ = if info.key <= 0x7f && info.key >= -120 {
         BCF_BT_INT8 as c_int
-    } else if (*info).key <= 0x7fff && (*info).key >= -32760 {
+    } else if info.key <= 0x7fff && info.key >= -32760 {
         BCF_BT_INT16 as c_int
     } else {
         BCF_BT_INT32 as c_int
     };
     *ptr = ((1 << 4) | type_) as u8;
     ptr = ptr.add(1);
-    i32_to_le((*info).key, ptr);
+    i32_to_le(info.key, ptr);
     ptr = ptr.add(1 << BCF_TYPE_SHIFT[type_ as usize]);
 
-    type_ = if (*info).len <= 0x7f && (*info).len >= -120 {
+    type_ = if info.len <= 0x7f && info.len >= -120 {
         BCF_BT_INT8 as c_int
-    } else if (*info).len <= 0x7fff && (*info).len >= -32760 {
+    } else if info.len <= 0x7fff && info.len >= -32760 {
         BCF_BT_INT16 as c_int
     } else {
         BCF_BT_INT32 as c_int
     };
-    if (*info).len < 15 {
-        *ptr = (((*info).len << 4) | (*info).type_) as u8;
+    if info.len < 15 {
+        *ptr = ((info.len << 4) | info.type_) as u8;
         ptr = ptr.add(1);
     } else {
-        *ptr = (0xf0 | (*info).type_) as u8;
+        *ptr = (0xf0 | info.type_) as u8;
         ptr = ptr.add(1);
         *ptr = ((1 << 4) | type_) as u8;
         ptr = ptr.add(1);
-        i32_to_le((*info).len, ptr);
+        i32_to_le(info.len, ptr);
         ptr = ptr.add(1 << BCF_TYPE_SHIFT[type_ as usize]);
     }
 
     let new_len = ptr.offset_from(buf.as_ptr());
-    let old_len = (*info).vptr_off() as isize;
+    let old_len = info.vptr_off() as isize;
     if new_len == old_len {
         libc::memcpy(
-            (*info).vptr.offset(-old_len).cast(),
+            info.vptr.offset(-old_len).cast(),
             buf.as_ptr().cast(),
             new_len as usize,
         );
     } else if new_len < old_len {
         let adjust = old_len - new_len;
         libc::memcpy(
-            (*info).vptr.offset(-old_len).cast(),
+            info.vptr.offset(-old_len).cast(),
             buf.as_ptr().cast(),
             new_len as usize,
         );
         libc::memmove(
-            (*info).vptr.offset(-adjust).cast(),
-            (*info).vptr.cast(),
-            (*info).vptr_len as usize,
+            info.vptr.offset(-adjust).cast(),
+            info.vptr.cast(),
+            info.vptr_len as usize,
         );
-        (*info).vptr = (*info).vptr.offset(-adjust);
-        (*info).set_vptr_off(((*info).vptr_off() as isize - adjust) as u32);
+        info.vptr = info.vptr.offset(-adjust);
+        info.set_vptr_off((info.vptr_off() as isize - adjust) as u32);
     } else {
-        let new_info = libc::malloc((*info).vptr_len as usize + new_len as usize).cast::<u8>();
+        let new_info = libc::malloc(info.vptr_len as usize + new_len as usize).cast::<u8>();
         if new_info.is_null() {
             return -1;
         }
         libc::memcpy(new_info.cast(), buf.as_ptr().cast(), new_len as usize);
         libc::memcpy(
             new_info.add(new_len as usize).cast(),
-            (*info).vptr.cast(),
-            (*info).vptr_len as usize,
+            info.vptr.cast(),
+            info.vptr_len as usize,
         );
-        if (*info).vptr_free() != 0 {
-            libc::free((*info).vptr.sub((*info).vptr_off() as usize).cast());
+        if info.vptr_free() != 0 {
+            libc::free(info.vptr.sub(info.vptr_off() as usize).cast());
         }
-        (*info).set_vptr_off(new_len as u32);
-        (*info).vptr = new_info.add(new_len as usize);
-        (*info).set_vptr_free(1);
+        info.set_vptr_off(new_len as u32);
+        info.vptr = new_info.add(new_len as usize);
+        info.set_vptr_free(1);
     }
     0
 }
 
-pub unsafe fn vcfutils_c_407_mark_for_removal(info: *mut bcf_info_t) -> c_int {
-    if (*info).vptr_free() != 0 {
-        libc::free((*info).vptr.sub((*info).vptr_off() as usize).cast());
-        (*info).set_vptr_free(0);
+pub unsafe fn vcfutils_c_407_mark_for_removal(info: &mut bcf_info_t) -> c_int {
+    if info.vptr_free() != 0 {
+        libc::free(info.vptr.sub(info.vptr_off() as usize).cast());
+        info.set_vptr_free(0);
     }
-    (*info).vptr = std::ptr::null_mut();
-    (*info).set_vptr_off(0);
-    (*info).vptr_len = 0;
+    info.vptr = std::ptr::null_mut();
+    info.set_vptr_off(0);
+    info.vptr_len = 0;
     0
 }
 
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn vcfutils_c_423_trim_int_cnv_tr_int_tags(
-    info: *mut bcf_info_t,
-    header: *const bcf_hdr_t,
-    rm_set: *const crate::htslib_rs::hts::kbitset_t,
-    id: *const c_char,
-    rn: *const bcf_info_t,
-    ruc: *const bcf_info_t,
+    info: &mut bcf_info_t,
+    header: &bcf_hdr_t,
+    rm_set: &kbitset_t,
+    id: &CStr,
+    rn: Option<&bcf_info_t>,
+    ruc: Option<&bcf_info_t>,
     num_alt_orig: usize,
     orig_total: usize,
 ) -> c_int {
-    let count = if *id == b'C' as c_char {
+    let count = if id.to_bytes().first().copied() == Some(b'C') {
         2usize
     } else {
         1usize
     };
-    let key = (*info).key as usize;
-    let type_ = ((*(*(*header).id[BCF_DT_ID as usize].add(key)).val).info[BCF_HL_INFO as usize]
-        >> 4
+    let key = info.key as usize;
+    let type_ = ((*(*(header.id[BCF_DT_ID as usize].add(key))).val).info[BCF_HL_INFO as usize] >> 4
         & 0xf) as c_int;
-    let vlen = ((*(*(*header).id[BCF_DT_ID as usize].add(key)).val).info[BCF_HL_INFO as usize] >> 8
+    let vlen = ((*(*(header.id[BCF_DT_ID as usize].add(key))).val).info[BCF_HL_INFO as usize] >> 8
         & 0xf) as c_int;
     let element_sizes = [0usize, 1, 2, 4, 0, 4, 0, 0];
-    let element_size = element_sizes[((*info).type_ & 0x7) as usize];
+    let element_size = element_sizes[(info.type_ & 0x7) as usize];
     let mut unit = 0usize;
     let mut orig_pos = 0usize;
     let mut new_pos = 0usize;
@@ -1370,8 +1378,8 @@ pub unsafe fn vcfutils_c_423_trim_int_cnv_tr_int_tags(
     if (type_ != BCF_HT_INT as c_int && type_ != BCF_HT_REAL as c_int)
         || element_size == 0
         || vlen != BCF_VL_VAR as c_int
-        || (*info).len != orig_total as c_int
-        || ((*info).vptr_len as usize)
+        || info.len != orig_total as c_int
+        || (info.vptr_len as usize)
             < orig_total
                 .saturating_mul(element_size)
                 .saturating_mul(count)
@@ -1382,7 +1390,7 @@ pub unsafe fn vcfutils_c_423_trim_int_cnv_tr_int_tags(
     for allele in 0..num_alt_orig {
         let mut n_repeats = vcfutils_c_315_get_rn_value(rn, allele);
         let mut n_items = n_repeats;
-        if !ruc.is_null() {
+        if let Some(ruc) = ruc {
             n_items = 0;
             while n_repeats > 0 {
                 let n_units = vcfutils_c_280_get_int32_info_value(ruc, unit);
@@ -1393,14 +1401,14 @@ pub unsafe fn vcfutils_c_423_trim_int_cnv_tr_int_tags(
         }
 
         let byte_len = (n_items as usize) * element_size * count;
-        if kbs_exists(rm_set.cast::<kbitset_t>(), (allele + 1) as c_int) != 0 {
+        if kbs_exists(rm_set, (allele + 1) as c_int) != 0 {
             orig_pos += byte_len;
             continue;
         }
         if new_pos < orig_pos {
             libc::memmove(
-                (*info).vptr.add(new_pos).cast(),
-                (*info).vptr.add(orig_pos).cast(),
+                info.vptr.add(new_pos).cast(),
+                info.vptr.add(orig_pos).cast(),
                 byte_len,
             );
         }
@@ -1413,33 +1421,32 @@ pub unsafe fn vcfutils_c_423_trim_int_cnv_tr_int_tags(
         return vcfutils_c_407_mark_for_removal(info);
     }
 
-    (*info).vptr_len = new_pos as u32;
-    (*info).len = new_total;
-    if (*info).len == 1 {
+    info.vptr_len = new_pos as u32;
+    info.len = new_total;
+    if info.len == 1 {
         vcfutils_c_325_set_info_v1(info);
     }
     vcfutils_c_349_fixup_info_length_code(info)
 }
 
 pub unsafe fn vcfutils_c_498_trim_int_cnv_tr_str_tags(
-    info: *mut bcf_info_t,
-    header: *const bcf_hdr_t,
-    rm_set: *const crate::htslib_rs::hts::kbitset_t,
-    rn: *const bcf_info_t,
+    info: &mut bcf_info_t,
+    header: &bcf_hdr_t,
+    rm_set: &kbitset_t,
+    rn: Option<&bcf_info_t>,
     num_alt_orig: usize,
     _orig_total: usize,
 ) -> c_int {
-    let key = (*info).key as usize;
-    let type_ = ((*(*(*header).id[BCF_DT_ID as usize].add(key)).val).info[BCF_HL_INFO as usize]
-        >> 4
+    let key = info.key as usize;
+    let type_ = ((*(*(header.id[BCF_DT_ID as usize].add(key))).val).info[BCF_HL_INFO as usize] >> 4
         & 0xf) as c_int;
-    let vlen = ((*(*(*header).id[BCF_DT_ID as usize].add(key)).val).info[BCF_HL_INFO as usize] >> 8
+    let vlen = ((*(*(header.id[BCF_DT_ID as usize].add(key))).val).info[BCF_HL_INFO as usize] >> 8
         & 0xf) as c_int;
     let mut orig_pos = 0usize;
     let mut new_pos = 0usize;
 
     if type_ != BCF_HT_STR as c_int
-        || (*info).type_ != BCF_BT_CHAR as c_int
+        || info.type_ != BCF_BT_CHAR as c_int
         || vlen != BCF_VL_VAR as c_int
     {
         return 1;
@@ -1447,9 +1454,9 @@ pub unsafe fn vcfutils_c_498_trim_int_cnv_tr_str_tags(
 
     for allele in 0..num_alt_orig {
         let mut n_items = vcfutils_c_315_get_rn_value(rn, allele);
-        let start = (*info).vptr.add(orig_pos);
+        let start = info.vptr.add(orig_pos);
         let mut end = start;
-        let lim = (*info).vptr.add((*info).vptr_len as usize);
+        let lim = info.vptr.add(info.vptr_len as usize);
 
         while n_items > 0 {
             while end < lim && *end != 0 && *end != b',' {
@@ -1463,14 +1470,14 @@ pub unsafe fn vcfutils_c_498_trim_int_cnv_tr_str_tags(
         }
 
         let span = end.offset_from(start) as usize;
-        if kbs_exists(rm_set.cast::<kbitset_t>(), (allele + 1) as c_int) != 0 {
+        if kbs_exists(rm_set, (allele + 1) as c_int) != 0 {
             orig_pos += span;
             continue;
         }
         if new_pos < orig_pos {
             libc::memmove(
-                (*info).vptr.add(new_pos).cast(),
-                (*info).vptr.add(orig_pos).cast(),
+                info.vptr.add(new_pos).cast(),
+                info.vptr.add(orig_pos).cast(),
                 span,
             );
         }
@@ -1482,26 +1489,28 @@ pub unsafe fn vcfutils_c_498_trim_int_cnv_tr_str_tags(
         return vcfutils_c_407_mark_for_removal(info);
     }
     if new_pos < orig_pos {
-        *(*info).vptr.add(new_pos) = 0;
-        if new_pos > 0 && *(*info).vptr.add(new_pos - 1) == b',' {
+        *info.vptr.add(new_pos) = 0;
+        if new_pos > 0 && *info.vptr.add(new_pos - 1) == b',' {
             new_pos -= 1;
-            *(*info).vptr.add(new_pos) = 0;
+            *info.vptr.add(new_pos) = 0;
         }
-        (*info).len = new_pos as c_int;
-        (*info).vptr_len = new_pos as u32;
+        info.len = new_pos as c_int;
+        info.vptr_len = new_pos as u32;
         return vcfutils_c_349_fixup_info_length_code(info);
     }
     0
 }
 
 pub unsafe fn vcfutils_c_561_fixup_cnv_tr_info_tags(
-    header: *const bcf_hdr_t,
-    line: *mut bcf1_t,
+    header: &bcf_hdr_t,
+    line: &mut bcf1_t,
     num_alt_orig: usize,
-    rm_set: *const crate::htslib_rs::hts::kbitset_t,
+    rm_set: &kbitset_t,
 ) -> c_int {
-    let rn = bcf_get_info(header, line, c"RN".as_ptr());
-    let ruc = bcf_get_info(header, line, c"RUC".as_ptr());
+    let rn_ptr = NonNull::new(bcf_get_info(header, line, c"RN".as_ptr()));
+    let ruc_ptr = NonNull::new(bcf_get_info(header, line, c"RUC".as_ptr()));
+    let rn = rn_ptr.map(|ptr| ptr.as_ref());
+    let ruc = ruc_ptr.as_ref().map(|ptr| ptr.as_ref());
     let mut orig_total_repeats = 0i64;
     let mut orig_total_units = 0i64;
     let mut unit = 0usize;
@@ -1509,7 +1518,7 @@ pub unsafe fn vcfutils_c_561_fixup_cnv_tr_info_tags(
     for allele in 0..num_alt_orig {
         let mut n_repeats = vcfutils_c_315_get_rn_value(rn, allele);
         orig_total_repeats += n_repeats as i64;
-        if !ruc.is_null() {
+        if let Some(ruc) = ruc {
             while n_repeats > 0 {
                 let n_units = vcfutils_c_280_get_int32_info_value(ruc, unit);
                 orig_total_units += if n_units >= 0 { n_units as i64 } else { 0 };
@@ -1519,33 +1528,30 @@ pub unsafe fn vcfutils_c_561_fixup_cnv_tr_info_tags(
         }
     }
 
-    for i in 0..(*line).n_info() {
-        let info = (*line).d.info.add(i as usize);
-        let id = (*(*header).id[BCF_DT_ID as usize].add((*info).key as usize)).key;
-        let orig_ptr = (*info).vptr.sub((*info).vptr_off() as usize);
+    for i in 0..line.n_info() {
+        let info = &mut *line.d.info.add(i as usize);
+        let id = (*header.id[BCF_DT_ID as usize].add(info.key as usize)).key;
+        let id_str = CStr::from_ptr(id);
+        let orig_ptr = info.vptr.sub(info.vptr_off() as usize);
         if *id != b'C' as c_char && *id != b'R' as c_char {
             continue;
         }
 
-        if libc::strcmp(id, c"RB".as_ptr()) == 0
-            || libc::strcmp(id, c"RUL".as_ptr()) == 0
-            || libc::strcmp(id, c"CIRB".as_ptr()) == 0
-            || libc::strcmp(id, c"CIRUC".as_ptr()) == 0
-        {
+        if matches!(id_str.to_bytes(), b"RB" | b"RUL" | b"CIRB" | b"CIRUC") {
             let res = vcfutils_c_423_trim_int_cnv_tr_int_tags(
                 info,
                 header,
                 rm_set,
-                id,
+                id_str,
                 rn,
-                std::ptr::null(),
+                None,
                 num_alt_orig,
                 orig_total_repeats as usize,
             );
             if res < 0 {
                 return res;
             }
-        } else if libc::strcmp(id, c"RUS".as_ptr()) == 0 {
+        } else if id_str.to_bytes() == b"RUS" {
             let res = vcfutils_c_498_trim_int_cnv_tr_str_tags(
                 info,
                 header,
@@ -1557,12 +1563,12 @@ pub unsafe fn vcfutils_c_561_fixup_cnv_tr_info_tags(
             if res < 0 {
                 return res;
             }
-        } else if !ruc.is_null() && libc::strcmp(id, c"RUB".as_ptr()) == 0 {
+        } else if ruc.is_some() && id_str.to_bytes() == b"RUB" {
             let res = vcfutils_c_423_trim_int_cnv_tr_int_tags(
                 info,
                 header,
                 rm_set,
-                id,
+                id_str,
                 rn,
                 ruc,
                 num_alt_orig,
@@ -1573,19 +1579,19 @@ pub unsafe fn vcfutils_c_561_fixup_cnv_tr_info_tags(
             }
         }
 
-        if (*info).vptr.is_null() || (*info).vptr.sub((*info).vptr_off() as usize) != orig_ptr {
-            (*line).d.shared_dirty |= BCF1_DIRTY_INF as c_int;
+        if info.vptr.is_null() || info.vptr.sub(info.vptr_off() as usize) != orig_ptr {
+            line.d.shared_dirty |= BCF1_DIRTY_INF as c_int;
         }
     }
 
-    if !ruc.is_null() {
+    if let Some(mut ruc) = ruc_ptr {
         let res = vcfutils_c_423_trim_int_cnv_tr_int_tags(
-            ruc,
+            ruc.as_mut(),
             header,
             rm_set,
-            c"RUC".as_ptr(),
+            c"RUC",
             rn,
-            std::ptr::null(),
+            None,
             num_alt_orig,
             orig_total_repeats as usize,
         );
@@ -1600,6 +1606,10 @@ pub unsafe fn vcfutils_c_186_bcf_trim_alleles(
     header: *const bcf_hdr_t,
     line: *mut bcf1_t,
 ) -> c_int {
+    vcfutils_bcf_trim_alleles_rs(&*header, &mut *line)
+}
+
+unsafe fn vcfutils_bcf_trim_alleles_rs(header: &bcf_hdr_t, line: &mut bcf1_t) -> c_int {
     let mut ret = 0;
     let mut nrm = 0;
     let gt = bcf_get_fmt(header, line, c"GT".as_ptr());
@@ -1607,14 +1617,14 @@ pub unsafe fn vcfutils_c_186_bcf_trim_alleles(
         return 0;
     }
 
-    let n_allele = (*line).n_allele() as usize;
+    let n_allele = line.n_allele() as usize;
     let mut ac = Vec::new();
     if ac.try_reserve_exact(n_allele).is_err() {
         return -1;
     }
     ac.resize(n_allele, 0);
 
-    for i in 0..(*line).n_sample() as usize {
+    for i in 0..line.n_sample() as usize {
         let p = (*gt).p.add(i * (*gt).size as usize);
         for ial in 0..(*gt).n as usize {
             let val = match (*gt).type_ {
@@ -1648,7 +1658,7 @@ pub unsafe fn vcfutils_c_186_bcf_trim_alleles(
                 continue;
             }
             let allele = (val >> 1) - 1;
-            if allele >= (*line).n_allele() as c_int {
+            if allele >= line.n_allele() as c_int {
                 ret = -1;
                 break;
             }
@@ -1662,18 +1672,18 @@ pub unsafe fn vcfutils_c_186_bcf_trim_alleles(
         return ret;
     }
 
-    let rm_set = kbs_init((*line).n_allele() as usize);
+    let rm_set = kbs_init(line.n_allele() as usize);
     if rm_set.is_null() {
         return -1;
     }
-    for i in 1..(*line).n_allele() as c_int {
+    for i in 1..line.n_allele() as c_int {
         if ac[i as usize] == 0 {
-            kbs_insert(rm_set, i);
+            kbs_insert(&mut *rm_set, i);
             nrm += 1;
         }
     }
 
-    if nrm != 0 && bcf_remove_allele_set(header, line, rm_set.cast()) != 0 {
+    if nrm != 0 && vcfutils_bcf_remove_allele_set_rs(header, line, &*rm_set) != 0 {
         ret = -2;
     }
 
@@ -1690,28 +1700,45 @@ pub unsafe fn vcfutils_c_241_bcf_remove_alleles(
     line: *mut bcf1_t,
     mask: c_int,
 ) -> c_int {
-    let rm_set = kbs_init((*line).n_allele() as usize);
+    vcfutils_bcf_remove_alleles_rs(&*header, &mut *line, mask)
+}
+
+unsafe fn vcfutils_bcf_remove_alleles_rs(
+    header: &bcf_hdr_t,
+    line: &mut bcf1_t,
+    mask: c_int,
+) -> c_int {
+    let rm_set = kbs_init(line.n_allele() as usize);
     if rm_set.is_null() {
         return -1;
     }
-    for i in 1..(*line).n_allele() as c_int {
+    for i in 1..line.n_allele() as c_int {
         if (mask & (1 << i)) != 0 {
-            kbs_insert(rm_set, i);
+            kbs_insert(&mut *rm_set, i);
         }
     }
-    bcf_remove_allele_set(header, line, rm_set.cast());
+    vcfutils_bcf_remove_allele_set_rs(header, line, &*rm_set);
     kbs_destroy(rm_set);
     0
 }
 
 pub unsafe fn vcfutils_c_32_bcf_calc_ac(
-    header: *const bcf_hdr_t,
-    line: *mut bcf1_t,
-    ac: *mut c_int,
+    header: &bcf_hdr_t,
+    line: &mut bcf1_t,
+    ac: &mut [c_int],
     which: c_int,
 ) -> c_int {
-    for i in 0..(*line).n_allele() as usize {
-        *ac.add(i) = 0;
+    vcfutils_bcf_calc_ac_rs(header, line, ac, which)
+}
+
+unsafe fn vcfutils_bcf_calc_ac_rs(
+    header: &bcf_hdr_t,
+    line: &mut bcf1_t,
+    ac: &mut [c_int],
+    which: c_int,
+) -> c_int {
+    for val in ac.iter_mut().take(line.n_allele() as usize) {
+        *val = 0;
     }
 
     if (which & BCF_UN_INFO as c_int) != 0 {
@@ -1724,8 +1751,8 @@ pub unsafe fn vcfutils_c_32_bcf_calc_ac(
         let mut ac_ptr: *mut u8 = std::ptr::null_mut();
 
         if an_id >= 0 && ac_id >= 0 {
-            for i in 0..(*line).n_info() as usize {
-                let z = (*line).d.info.add(i);
+            for i in 0..line.n_info() as usize {
+                let z = line.d.info.add(i);
                 if (*z).key == an_id {
                     an = (*z).v1.i as c_int;
                 } else if (*z).key == ac_id {
@@ -1737,7 +1764,7 @@ pub unsafe fn vcfutils_c_32_bcf_calc_ac(
         }
 
         if an >= 0 && !ac_ptr.is_null() {
-            if ac_len != (*line).n_allele() as c_int - 1 {
+            if ac_len != line.n_allele() as c_int - 1 {
                 return 0;
             }
             let mut nac = 0;
@@ -1750,13 +1777,13 @@ pub unsafe fn vcfutils_c_32_bcf_calc_ac(
                     x if x == BCF_BT_INT32 as c_int => le_to_i32(ac_ptr.add(i * size_of::<i32>())),
                     _ => libc::exit(1),
                 };
-                *ac.add(i + 1) = val;
+                ac[i + 1] = val;
                 nac += val;
             }
             if an < nac {
                 libc::exit(1);
             }
-            *ac = an - nac;
+            ac[0] = an - nac;
             return 1;
         }
     }
@@ -1769,8 +1796,8 @@ pub unsafe fn vcfutils_c_32_bcf_calc_ac(
         bcf_unpack(line, BCF_UN_FMT as c_int);
 
         let mut fmt_gt: *mut bcf_fmt_t = std::ptr::null_mut();
-        for i in 0..(*line).n_fmt() as usize {
-            let fmt = (*line).d.fmt.add(i);
+        for i in 0..line.n_fmt() as usize {
+            let fmt = line.d.fmt.add(i);
             if (*fmt).id == gt_id {
                 fmt_gt = fmt;
                 break;
@@ -1780,7 +1807,7 @@ pub unsafe fn vcfutils_c_32_bcf_calc_ac(
             return 0;
         }
 
-        for i in 0..(*line).n_sample() as usize {
+        for i in 0..line.n_sample() as usize {
             let p = (*fmt_gt).p.add(i * (*fmt_gt).size as usize);
             for ial in 0..(*fmt_gt).n as usize {
                 let val = match (*fmt_gt).type_ {
@@ -1810,10 +1837,10 @@ pub unsafe fn vcfutils_c_32_bcf_calc_ac(
                 if val >> 1 == 0 {
                     continue;
                 }
-                if val >> 1 > (*line).n_allele() as c_int {
+                if val >> 1 > line.n_allele() as c_int {
                     libc::exit(1);
                 }
-                *ac.add(((val >> 1) - 1) as usize) += 1;
+                ac[((val >> 1) - 1) as usize] += 1;
             }
         }
         return 1;
@@ -1823,22 +1850,38 @@ pub unsafe fn vcfutils_c_32_bcf_calc_ac(
 }
 
 pub unsafe fn vcfutils_c_134_bcf_gt_type(
-    fmt_ptr: *mut bcf_fmt_t,
+    fmt: &bcf_fmt_t,
     isample: c_int,
-    ial_out: *mut c_int,
-    jal_out: *mut c_int,
+    ial_out: Option<&mut c_int>,
+    jal_out: Option<&mut c_int>,
+) -> c_int {
+    let mut ial = 0;
+    let mut jal = 0;
+    let gt_type = vcfutils_bcf_gt_type_rs(fmt, isample, &mut ial, &mut jal);
+    if let Some(ial_out) = ial_out {
+        *ial_out = ial;
+    }
+    if let Some(jal_out) = jal_out {
+        *jal_out = jal;
+    }
+    gt_type
+}
+
+unsafe fn vcfutils_bcf_gt_type_rs(
+    fmt: &bcf_fmt_t,
+    isample: c_int,
+    ial_out: &mut c_int,
+    jal_out: &mut c_int,
 ) -> c_int {
     let mut nals = 0;
     let mut has_ref = 0;
     let mut has_alt = 0;
     let mut ial = 0;
     let mut jal = 0;
-    let p = (*fmt_ptr)
-        .p
-        .add(isample as usize * (*fmt_ptr).size as usize);
+    let p = fmt.p.add(isample as usize * fmt.size as usize);
 
-    for i in 0..(*fmt_ptr).n as usize {
-        let val = match (*fmt_ptr).type_ {
+    for i in 0..fmt.n as usize {
+        let val = match fmt.type_ {
             x if x == BCF_BT_INT8 as c_int => {
                 let v = le_to_i8(p.add(i)) as c_int;
                 if v == bcf_int8_vector_end {
@@ -1885,12 +1928,8 @@ pub unsafe fn vcfutils_c_134_bcf_gt_type(
         nals += 1;
     }
 
-    if !ial_out.is_null() {
-        *ial_out = if ial > 0 { ial - 1 } else { ial };
-    }
-    if !jal_out.is_null() {
-        *jal_out = if jal > 0 { jal - 1 } else { jal };
-    }
+    *ial_out = if ial > 0 { ial - 1 } else { ial };
+    *jal_out = if jal > 0 { jal - 1 } else { jal };
     if nals == 0 {
         return GT_UNKN as c_int;
     }
@@ -1941,19 +1980,19 @@ pub unsafe fn bcf_remove_allele_set(
 }
 
 pub unsafe fn bcf_calc_ac(
-    header: *const bcf_hdr_t,
-    line: *mut bcf1_t,
-    ac: *mut c_int,
+    header: &bcf_hdr_t,
+    line: &mut bcf1_t,
+    ac: &mut [c_int],
     which: c_int,
 ) -> c_int {
     vcfutils_c_32_bcf_calc_ac(header, line, ac, which)
 }
 
 pub unsafe fn bcf_gt_type(
-    fmt_ptr: *mut bcf_fmt_t,
+    fmt: &bcf_fmt_t,
     isample: c_int,
-    ial: *mut c_int,
-    jal: *mut c_int,
+    ial: Option<&mut c_int>,
+    jal: Option<&mut c_int>,
 ) -> c_int {
-    vcfutils_c_134_bcf_gt_type(fmt_ptr, isample, ial, jal)
+    vcfutils_c_134_bcf_gt_type(fmt, isample, ial, jal)
 }

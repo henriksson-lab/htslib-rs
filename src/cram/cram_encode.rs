@@ -541,12 +541,9 @@ pub unsafe fn cram_cram_encode_c_512_cram_encode_slice_header(
     }
     let hdr = (*sl).hdr;
     let buf_sz = (22 + 16 + 5 * (8 + (*hdr).num_blocks)) as usize;
-    let buf = malloc(buf_sz as u64).cast::<c_char>();
-    let mut cp = buf;
-    if buf.is_null() {
-        cram_cram_io_c_1565_cram_free_block(b);
-        return std::ptr::null_mut::<cram_block>();
-    }
+    let mut buf: Vec<c_char> = vec![0; buf_sz];
+    let buf_ptr = buf.as_mut_ptr();
+    let mut cp = buf_ptr;
     cp = cp.offset(
         ((*fdl).vv.varint_put32s.expect("non-null function pointer"))(
             cp,
@@ -577,7 +574,6 @@ pub unsafe fn cram_cram_encode_c_512_cram_encode_slice_header(
                 c"Reference position too large for CRAM 3".as_ptr(),
             );
             cram_cram_io_c_1565_cram_free_block(b);
-            free(buf.cast());
             return std::ptr::null_mut::<cram_block>();
         }
         cp = cp.offset(
@@ -658,10 +654,14 @@ pub unsafe fn cram_cram_encode_c_512_cram_encode_slice_header(
         cp = cp.offset(16);
     }
     // Assert from the C source: written bytes fit within the buf allocation.
-    debug_assert!(cp.offset_from(buf) as i64 <= (22 + 16 + 5 * (8 + (*hdr).num_blocks)) as i64);
+    let written = cp.offset_from(buf_ptr) as usize;
+    debug_assert!(written as i64 <= (22 + 16 + 5 * (8 + (*hdr).num_blocks)) as i64);
     let bl = b.cast::<cram_block_layout>();
-    (*bl).data = buf.cast();
-    (*bl).uncomp_size = cp.offset_from(buf) as i32;
+    if cram_cram_io_h_248_block_append(b, buf.as_ptr().cast(), written) < 0 {
+        cram_cram_io_c_1565_cram_free_block(b);
+        return std::ptr::null_mut::<cram_block>();
+    }
+    (*bl).uncomp_size = written as i32;
     (*bl).comp_size = (*bl).uncomp_size;
     b
 }
@@ -675,7 +675,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
     h: *mut cram_block_compression_hdr,
     s: *mut cram_slice,
     cr: *mut cram_record,
-    last_pos: *mut i64,
+    last_pos: &mut i64,
 ) -> c_int {
     let fdl = fd.cast::<cram_fd_layout>();
     let cl = c.cast::<cram_container_layout>();
@@ -1520,8 +1520,7 @@ pub unsafe fn cram_cram_encode_c_1097_cram_encode_slice(
     let mut rec: c_int = 0;
     while rec < (*(*sll).hdr).num_records {
         let cr = (*sll).crecs.offset(rec as isize).cast::<cram_record>();
-        if cram_cram_encode_c_573_cram_encode_slice_read(fd, c, h, sl, cr, &raw mut last_pos) == -1
-        {
+        if cram_cram_encode_c_573_cram_encode_slice_read(fd, c, h, sl, cr, &mut last_pos) == -1 {
             return -1;
         }
         rec += 1;
@@ -1636,7 +1635,7 @@ pub unsafe fn cram_cram_encode_c_1097_cram_encode_slice(
 /// Returns 0 on success, -1 on alloc failure / pos<ref_start, -2 on overflow.
 pub unsafe fn cram_cram_encode_c_1508_extend_ref(
     ref_0: *mut *mut c_char,
-    hist: *mut *mut [u32; 5],
+    hist: &mut Vec<[u32; 5]>,
     pos: i64,
     ref_start: i64,
     ref_end: *mut i64,
@@ -1672,27 +1671,25 @@ pub unsafe fn cram_cram_encode_c_1508_extend_ref(
         return -1;
     }
     *ref_0 = tmp;
-    let tmp5 = realloc(
-        (*hist).cast::<c_void>(),
-        ((new_end - ref_start) as u64).wrapping_mul(std::mem::size_of::<[u32; 5]>() as u64),
-    )
-    .cast::<[u32; 5]>();
-    if tmp5.is_null() {
-        return -1;
-    }
-    *hist = tmp5;
-    *ref_end_alloc = new_end;
+
     let old_end_off = old_end - ref_start;
     let new_end_off = new_end - ref_start;
+    let Ok(new_hist_len) = usize::try_from(new_end_off) else {
+        return -2;
+    };
+    if hist
+        .try_reserve_exact(new_hist_len.saturating_sub(hist.len()))
+        .is_err()
+    {
+        return -1;
+    }
+    hist.resize(new_hist_len, [0; 5]);
+
+    *ref_end_alloc = new_end;
     libc::memset(
         (*ref_0).offset(old_end_off as isize).cast::<c_void>(),
         0,
         (new_end_off - old_end_off) as usize,
-    );
-    libc::memset(
-        (*hist).offset(old_end_off as isize).cast::<c_void>(),
-        0,
-        ((new_end_off - old_end_off) as usize).wrapping_mul(std::mem::size_of::<[u32; 5]>()),
     );
     if *ref_end < pos {
         *ref_end = pos;
@@ -1707,7 +1704,7 @@ pub unsafe fn cram_cram_encode_c_1508_extend_ref(
 pub unsafe fn cram_cram_encode_c_1557_cram_add_to_ref_MD(
     b: *mut bam1_t,
     ref_0: *mut *mut c_char,
-    hist: *mut *mut [u32; 5],
+    hist: &mut Vec<[u32; 5]>,
     ref_start: i64,
     ref_end: *mut i64,
     ref_end_alloc: *mut i64,
@@ -1722,6 +1719,7 @@ pub unsafe fn cram_cram_encode_c_1557_cram_add_to_ref_MD(
         .add((*b).core.l_qname as usize);
     let cigar: *mut u32 = (*b).data.add((*b).core.l_qname as usize).cast::<u32>();
     let ncigar: u32 = (*b).core.n_cigar;
+    let cigar_slice = std::slice::from_raw_parts(cigar, ncigar as usize);
     let mut cig_op: u32 = 0;
     let mut cig_len: u32 = 0;
     let mut cig_ind: u32 = 0;
@@ -1750,7 +1748,7 @@ pub unsafe fn cram_cram_encode_c_1557_cram_add_to_ref_MD(
     // BAM CIGAR ops to skip when stepping through the seq for MD interp.
     // (M=0,I=1,D=2,N=3,S=4,H=5,P=6,=7,X=8); skip=1 for I/N/S/H/P (consumes seq
     // but not ref, OR consumes neither), 0 for M/D/=/X (consumes ref).
-    let mut cig_skip: [c_int; 16] = [0, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1];
+    let cig_skip: [c_int; 16] = [0, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1];
 
     while (iseq) < (*b).core.l_qseq && *md != 0 {
         // Cast through libc::isdigit
@@ -1775,14 +1773,13 @@ pub unsafe fn cram_cram_encode_c_1557_cram_add_to_ref_MD(
                 return -1;
             }
             while iseq < (*b).core.l_qseq && len != 0 {
-                next_op = cram_cram_encode_c_1476_next_cigar_op(
-                    cigar,
-                    ncigar,
-                    cig_skip.as_mut_ptr(),
-                    &raw mut iseq,
-                    &raw mut cig_ind,
-                    &raw mut cig_op,
-                    &raw mut cig_len,
+                next_op = cram_encode_next_cigar_op(
+                    cigar_slice,
+                    &cig_skip,
+                    &mut iseq,
+                    &mut cig_ind,
+                    &mut cig_op,
+                    &mut cig_len,
                 );
                 if next_op < 0 {
                     return -1;
@@ -1830,14 +1827,13 @@ pub unsafe fn cram_cram_encode_c_1557_cram_add_to_ref_MD(
                 {
                     return -1;
                 }
-                next_op = cram_cram_encode_c_1476_next_cigar_op(
-                    cigar,
-                    ncigar,
-                    cig_skip.as_mut_ptr(),
-                    &raw mut iseq,
-                    &raw mut cig_ind,
-                    &raw mut cig_op,
-                    &raw mut cig_len,
+                next_op = cram_encode_next_cigar_op(
+                    cigar_slice,
+                    &cig_skip,
+                    &mut iseq,
+                    &mut cig_ind,
+                    &mut cig_op,
+                    &mut cig_len,
                 );
                 if next_op < 0 {
                     return -1;
@@ -1868,14 +1864,13 @@ pub unsafe fn cram_cram_encode_c_1557_cram_add_to_ref_MD(
             {
                 return -1;
             }
-            next_op = cram_cram_encode_c_1476_next_cigar_op(
-                cigar,
-                ncigar,
-                cig_skip.as_mut_ptr(),
-                &raw mut iseq,
-                &raw mut cig_ind,
-                &raw mut cig_op,
-                &raw mut cig_len,
+            next_op = cram_encode_next_cigar_op(
+                cigar_slice,
+                &cig_skip,
+                &mut iseq,
+                &mut cig_ind,
+                &mut cig_op,
+                &mut cig_len,
             );
             if next_op < 0 {
                 return -1;
@@ -1906,7 +1901,7 @@ pub unsafe fn cram_cram_encode_c_1557_cram_add_to_ref_MD(
 pub unsafe fn cram_cram_encode_c_1663_cram_add_to_ref(
     b: *mut bam1_t,
     ref_0: *mut *mut c_char,
-    hist: *mut *mut [u32; 5],
+    hist: &mut Vec<[u32; 5]>,
     ref_start: i64,
     ref_end: *mut i64,
     ref_end_alloc: *mut i64,
@@ -1973,7 +1968,7 @@ pub unsafe fn cram_cram_encode_c_1663_cram_add_to_ref(
                     while j < len as u32 {
                         let base_code =
                             *seq.offset((iseq >> 1) as isize) as c_int >> ((!iseq & 1) << 2) & 0xf;
-                        let h = (*(*hist).offset(iref as isize)).as_mut_ptr();
+                        let h = (*hist.as_mut_ptr().offset(iref as isize)).as_mut_ptr();
                         let idx = L16[base_code as usize] as usize;
                         *h.add(idx) = (*h.add(idx)).wrapping_add(1);
                         j = j.wrapping_add(1);
@@ -2007,20 +2002,20 @@ pub unsafe fn cram_cram_encode_c_1737_cram_generate_reference(
     let cl = c.cast::<cram_container_layout>();
     let sl = s.cast::<cram_slice_layout>();
     let mut ref_buf: *mut c_char = std::ptr::null_mut();
-    let mut hist: *mut [u32; 5] = std::ptr::null_mut();
+    let mut hist: Vec<[u32; 5]> = Vec::new();
     let ref_start: i64 = (*(*(*cl).bams.offset(r1 as isize))).core.pos;
     let mut ref_end: i64 = 0;
     let mut ref_end_alloc: i64 = 0;
     if ref_start < 0 {
         return -1;
     }
-    // Pre-extend up to the last BAM's end position so we don't have to
-    // realloc on every record.
+    // Pre-extend up to the last BAM's end position so we don't have to grow on
+    // every record.
     let last_idx = r1 + (*(*sl).hdr).num_records - 1;
     let last_bam = *(*cl).bams.offset(last_idx as isize);
     if cram_cram_encode_c_1508_extend_ref(
         &raw mut ref_buf,
-        &raw mut hist,
+        &mut hist,
         (*last_bam).core.pos + (*last_bam).core.l_qseq as i64,
         ref_start,
         &raw mut ref_end,
@@ -2046,7 +2041,7 @@ pub unsafe fn cram_cram_encode_c_1737_cram_generate_reference(
         if cram_cram_encode_c_1663_cram_add_to_ref(
             *(*cl).bams.offset(r1 as isize),
             &raw mut ref_buf,
-            &raw mut hist,
+            &mut hist,
             ref_start,
             &raw mut ref_end,
             &raw mut ref_end_alloc,
@@ -2060,7 +2055,6 @@ pub unsafe fn cram_cram_encode_c_1737_cram_generate_reference(
     }
     if failed {
         free(ref_buf.cast::<c_void>());
-        free(hist.cast::<c_void>());
         return -1;
     }
     // Resolve unspecified bases by majority-vote in the histogram.
@@ -2071,8 +2065,8 @@ pub unsafe fn cram_cram_encode_c_1737_cram_generate_reference(
             let mut max_j: c_int = 4;
             let mut j: c_int = 0;
             while j < 4 {
-                if (max_v as u32) < (*hist.offset(i as isize))[j as usize] {
-                    max_v = (*hist.offset(i as isize))[j as usize] as c_int;
+                if (max_v as u32) < hist[i as usize][j as usize] {
+                    max_v = hist[i as usize][j as usize] as c_int;
                     max_j = j;
                 }
                 j += 1;
@@ -2081,7 +2075,6 @@ pub unsafe fn cram_cram_encode_c_1737_cram_generate_reference(
         }
         i += 1;
     }
-    free(hist.cast::<c_void>());
     (*cl).ref_ = ref_buf;
     (*cl).ref_start = ref_start + 1;
     (*cl).ref_end = ref_end + 1;
@@ -2311,60 +2304,55 @@ pub unsafe fn cram_cram_encode_c_1437_add_read_names(
     0
 }
 
-/// `cram_add_feature` (htslib/cram/cram_encode.c:2578). Appends `f` to the
-/// slice's feature vector (grows `features` via realloc, doubling `afeatures`
-/// from 0 to 1024 on first insert) and updates the per-record FP delta and
-/// FC code stats. Returns 0 on success, -1 on realloc failure.
-pub(crate) unsafe fn cram_cram_encode_c_2578_cram_add_feature(
-    c: *mut cram_container,
-    s: *mut cram_slice,
-    r: *mut cram_record_layout,
-    f: *mut cram_feature_layout,
+/// Borrowed implementation of `cram_add_feature` (htslib/cram/cram_encode.c:2578).
+/// Appends `f` to the slice's feature vector (grows `features` via realloc,
+/// doubling `afeatures` from 0 to 1024 on first insert) and updates the
+/// per-record FP delta and FC code stats. Returns 0 on success, -1 on realloc
+/// failure.
+unsafe fn cram_encode_add_feature(
+    cl: &mut cram_container_layout,
+    sl: &mut cram_slice_layout,
+    r: &mut cram_record_layout,
+    f: &cram_feature_layout,
 ) -> c_int {
-    let cl = c.cast::<cram_container_layout>();
-    let sl = s.cast::<cram_slice_layout>();
-    if (*sl).nfeatures >= (*sl).afeatures {
-        (*sl).afeatures = if (*sl).afeatures != 0 {
-            (*sl).afeatures.wrapping_mul(2)
+    if sl.nfeatures >= sl.afeatures {
+        sl.afeatures = if sl.afeatures != 0 {
+            sl.afeatures.wrapping_mul(2)
         } else {
             1024
         };
-        (*sl).features = realloc(
-            (*sl).features.cast::<c_void>(),
-            ((*sl).afeatures as u64)
-                .wrapping_mul(std::mem::size_of::<cram_feature_layout>() as u64),
+        sl.features = realloc(
+            sl.features.cast::<c_void>(),
+            (sl.afeatures as u64).wrapping_mul(std::mem::size_of::<cram_feature_layout>() as u64),
         )
         .cast::<cram_feature_layout>();
-        if (*sl).features.is_null() {
+        if sl.features.is_null() {
             return -1;
         }
     }
-    let fx = f.cast::<cram_feature_X_layout>();
-    let fresh163 = (*r).nfeature;
-    (*r).nfeature = (*r).nfeature.wrapping_add(1);
+    let fx = (f as *const cram_feature_layout).cast::<cram_feature_X_layout>();
+    let fresh163 = r.nfeature;
+    r.nfeature = r.nfeature.wrapping_add(1);
     if fresh163 == 0 {
-        (*r).feature = (*sl).nfeatures;
+        r.feature = sl.nfeatures;
         cram_cram_stats_c_52_cram_stats_add(
-            (*cl).stats[DS_FP_ENC as usize].cast::<c_void>(),
+            cl.stats[DS_FP_ENC as usize].cast::<c_void>(),
             (*fx).pos,
         );
     } else {
-        let prev = (*sl)
+        let prev = sl
             .features
-            .offset((*r).feature.wrapping_add((*r).nfeature).wrapping_sub(2) as isize)
+            .offset(r.feature.wrapping_add(r.nfeature).wrapping_sub(2) as isize)
             .cast::<cram_feature_X_layout>();
         cram_cram_stats_c_52_cram_stats_add(
-            (*cl).stats[DS_FP_ENC as usize].cast::<c_void>(),
+            cl.stats[DS_FP_ENC as usize].cast::<c_void>(),
             (*fx).pos - (*prev).pos,
         );
     }
-    cram_cram_stats_c_52_cram_stats_add(
-        (*cl).stats[DS_FC_ENC as usize].cast::<c_void>(),
-        (*fx).code,
-    );
-    let fresh164 = (*sl).nfeatures;
-    (*sl).nfeatures = (*sl).nfeatures.wrapping_add(1);
-    *(*sl).features.offset(fresh164 as isize) = *f;
+    cram_cram_stats_c_52_cram_stats_add(cl.stats[DS_FC_ENC as usize].cast::<c_void>(), (*fx).code);
+    let fresh164 = sl.nfeatures;
+    sl.nfeatures = sl.nfeatures.wrapping_add(1);
+    *sl.features.offset(fresh164 as isize) = *f;
     0
 }
 
@@ -2417,7 +2405,12 @@ pub(crate) unsafe fn cram_cram_encode_c_2605_cram_add_substitution(
             return -1;
         }
     }
-    cram_cram_encode_c_2578_cram_add_feature(c, s, r, &raw mut f)
+    cram_encode_add_feature(
+        &mut *c.cast::<cram_container_layout>(),
+        &mut *s.cast::<cram_slice_layout>(),
+        &mut *r,
+        &f,
+    )
 }
 
 /// `cram_add_bases` (htslib/cram/cram_encode.c:2632). Builds a 'b' feature
@@ -2438,7 +2431,12 @@ pub(crate) unsafe fn cram_cram_encode_c_2632_cram_add_bases(
     (*fbb).code = 'b' as c_int;
     (*fbb).seq_idx = base.offset_from((*(*sl).seqs_blk).data.cast::<c_char>()) as c_int;
     (*fbb).len = len;
-    cram_cram_encode_c_2578_cram_add_feature(c, s, r, &raw mut f)
+    cram_encode_add_feature(
+        &mut *c.cast::<cram_container_layout>(),
+        &mut *s.cast::<cram_slice_layout>(),
+        &mut *r,
+        &f,
+    )
 }
 
 /// `cram_add_base` (htslib/cram/cram_encode.c:2645). Records a single 'B'
@@ -2471,7 +2469,12 @@ pub(crate) unsafe fn cram_cram_encode_c_2645_cram_add_base(
     if cram_cram_io_h_261_block_append_char((*sl).qual_blk.cast::<cram_block>(), qual) < 0 {
         return -1;
     }
-    cram_cram_encode_c_2578_cram_add_feature(c, s, r, &raw mut f)
+    cram_encode_add_feature(
+        &mut *c.cast::<cram_container_layout>(),
+        &mut *s.cast::<cram_slice_layout>(),
+        &mut *r,
+        &f,
+    )
 }
 
 /// `cram_add_quality` (htslib/cram/cram_encode.c:2662). Records a 'Q' quality
@@ -2498,7 +2501,12 @@ pub(crate) unsafe fn cram_cram_encode_c_2662_cram_add_quality(
     if cram_cram_io_h_261_block_append_char((*sl).qual_blk.cast::<cram_block>(), qual) < 0 {
         return -1;
     }
-    cram_cram_encode_c_2578_cram_add_feature(c, s, r, &raw mut f)
+    cram_encode_add_feature(
+        &mut *c.cast::<cram_container_layout>(),
+        &mut *s.cast::<cram_slice_layout>(),
+        &mut *r,
+        &f,
+    )
 }
 
 /// `cram_add_deletion` (htslib/cram/cram_encode.c:2677). Records a 'D'
@@ -2518,7 +2526,12 @@ pub(crate) unsafe fn cram_cram_encode_c_2677_cram_add_deletion(
     (*fd_).code = 'D' as c_int;
     (*fd_).len = len;
     cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_DL_ENC as usize].cast::<c_void>(), len);
-    cram_cram_encode_c_2578_cram_add_feature(c, s, r, &raw mut f)
+    cram_encode_add_feature(
+        &mut *c.cast::<cram_container_layout>(),
+        &mut *s.cast::<cram_slice_layout>(),
+        &mut *r,
+        &f,
+    )
 }
 
 /// `cram_add_softclip` (htslib/cram/cram_encode.c:2687). Records an 'S'
@@ -2580,7 +2593,12 @@ pub(crate) unsafe fn cram_cram_encode_c_2687_cram_add_softclip(
         }
     };
     if ok {
-        cram_cram_encode_c_2578_cram_add_feature(c, s, r, &raw mut f)
+        cram_encode_add_feature(
+            &mut *c.cast::<cram_container_layout>(),
+            &mut *s.cast::<cram_slice_layout>(),
+            &mut *r,
+            &f,
+        )
     } else {
         -1
     }
@@ -2603,7 +2621,12 @@ pub(crate) unsafe fn cram_cram_encode_c_2723_cram_add_hardclip(
     (*fs).code = 'H' as c_int;
     (*fs).len = len;
     cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_HC_ENC as usize].cast::<c_void>(), len);
-    cram_cram_encode_c_2578_cram_add_feature(c, s, r, &raw mut f)
+    cram_encode_add_feature(
+        &mut *c.cast::<cram_container_layout>(),
+        &mut *s.cast::<cram_slice_layout>(),
+        &mut *r,
+        &f,
+    )
 }
 
 /// `cram_add_skip` (htslib/cram/cram_encode.c:2733). Records an 'N' ref-skip
@@ -2623,7 +2646,12 @@ pub(crate) unsafe fn cram_cram_encode_c_2733_cram_add_skip(
     (*fs).code = 'N' as c_int;
     (*fs).len = len;
     cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_RS_ENC as usize].cast::<c_void>(), len);
-    cram_cram_encode_c_2578_cram_add_feature(c, s, r, &raw mut f)
+    cram_encode_add_feature(
+        &mut *c.cast::<cram_container_layout>(),
+        &mut *s.cast::<cram_slice_layout>(),
+        &mut *r,
+        &f,
+    )
 }
 
 /// `cram_add_pad` (htslib/cram/cram_encode.c:2743). Records a 'P' padding
@@ -2643,7 +2671,12 @@ pub(crate) unsafe fn cram_cram_encode_c_2743_cram_add_pad(
     (*fs).code = 'P' as c_int;
     (*fs).len = len;
     cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_PD_ENC as usize].cast::<c_void>(), len);
-    cram_cram_encode_c_2578_cram_add_feature(c, s, r, &raw mut f)
+    cram_encode_add_feature(
+        &mut *c.cast::<cram_container_layout>(),
+        &mut *s.cast::<cram_slice_layout>(),
+        &mut *r,
+        &f,
+    )
 }
 
 /// `cram_add_insertion` (htslib/cram/cram_encode.c:2753). Length 1 produces
@@ -2716,7 +2749,12 @@ pub(crate) unsafe fn cram_cram_encode_c_2753_cram_add_insertion(
             return -1;
         }
     }
-    cram_cram_encode_c_2578_cram_add_feature(c, s, r, &raw mut f)
+    cram_encode_add_feature(
+        &mut *c.cast::<cram_container_layout>(),
+        &mut *s.cast::<cram_slice_layout>(),
+        &mut *r,
+        &f,
+    )
 }
 
 /// `cram_encode_aux` (htslib/cram/cram_encode.c:2788). Encodes the auxiliary
@@ -2761,6 +2799,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
 
     let mut aux: *mut c_char;
     let mut orig: *mut c_char;
+    let mut aux_storage: Vec<c_char> = Vec::new();
     let mut brg: *mut sam_hrec_rg_t = std::ptr::null_mut();
     let mut aux_size: c_int = ((*b).l_data as u32)
         .wrapping_sub((*b).core.n_cigar << 2)
@@ -2778,32 +2817,35 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
         *err = 1;
     }
 
-    aux = (*b)
+    let bam_aux = (*b)
         .data
         .add(((*b).core.n_cigar << 2) as usize)
         .add((*b).core.l_qname as usize)
         .add((((*b).core.l_qseq + 1) >> 1) as usize)
         .add((*b).core.l_qseq as usize) as *mut c_char;
+    aux = bam_aux;
     orig = aux;
 
     if cf_tag != 0 && ((*fdl).version >> 8) < 4 {
-        aux = malloc((aux_size + 4) as u64).cast::<c_char>();
-        if aux.is_null() {
+        let aux_len = match usize::try_from(aux_size) {
+            Ok(aux_len) => aux_len,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        let Some(aux_len_with_cf) = aux_len.checked_add(4) else {
+            return std::ptr::null_mut();
+        };
+        if aux_storage.try_reserve_exact(aux_len_with_cf).is_err() {
             return std::ptr::null_mut();
         }
-        memcpy(aux.cast(), orig.cast(), aux_size as u64);
-        let fresh151 = aux_size;
-        aux_size += 1;
-        *aux.offset(fresh151 as isize) = b'c' as c_char;
-        let fresh152 = aux_size;
-        aux_size += 1;
-        *aux.offset(fresh152 as isize) = b'F' as c_char;
-        let fresh153 = aux_size;
-        aux_size += 1;
-        *aux.offset(fresh153 as isize) = b'C' as c_char;
-        let fresh154 = aux_size;
-        aux_size += 1;
-        *aux.offset(fresh154 as isize) = cf_tag as c_char;
+        aux_storage.extend_from_slice(std::slice::from_raw_parts(orig, aux_len));
+        aux_storage.extend_from_slice(&[
+            b'c' as c_char,
+            b'F' as c_char,
+            b'C' as c_char,
+            cf_tag as c_char,
+        ]);
+        aux_size += 4;
+        aux = aux_storage.as_mut_ptr();
         orig = aux;
         aux_end = aux.add(aux_size as usize);
     }
@@ -3486,32 +3528,12 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                     (*cl).stats[DS_TL_LOCAL as usize].cast(),
                     (*crl).tl,
                 );
-                if orig
-                    != (*b)
-                        .data
-                        .add(((*b).core.n_cigar << 2) as usize)
-                        .add((*b).core.l_qname as usize)
-                        .add((((*b).core.l_qseq + 1) >> 1) as usize)
-                        .add((*b).core.l_qseq as usize) as *mut c_char
-                {
-                    free(orig.cast());
-                }
                 if !err.is_null() {
                     *err = 0;
                 }
                 return brg;
             }
         }
-    }
-    if orig
-        != (*b)
-            .data
-            .add(((*b).core.n_cigar << 2) as usize)
-            .add((*b).core.l_qname as usize)
-            .add((((*b).core.l_qseq + 1) >> 1) as usize)
-            .add((*b).core.l_qseq as usize) as *mut c_char
-    {
-        free(orig.cast());
     }
     std::ptr::null_mut()
 }
@@ -3666,13 +3688,14 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
     // BLOCK_END(seqs_blk) — write decoded bases then advance byte cursor.
     let seq: *mut c_char = (*seqs_blk).data.add((*seqs_blk).byte) as *mut c_char;
     *seq = 0;
-    crate::htslib_rs::sam::nibble2base_default(
-        (*b).data
-            .add(((*b).core.n_cigar << 2) as usize)
-            .add((*b).core.l_qname as usize),
-        seq,
-        (*crl).len,
-    );
+    let seq_len = (*crl).len as usize;
+    let packed_seq = (*b)
+        .data
+        .add(((*b).core.n_cigar << 2) as usize)
+        .add((*b).core.l_qname as usize);
+    let packed_seq = std::slice::from_raw_parts(packed_seq, seq_len.div_ceil(2));
+    let decoded_seq = std::slice::from_raw_parts_mut(seq, seq_len);
+    crate::htslib_rs::sam::nibble2base_default(packed_seq, decoded_seq);
     (*seqs_blk).byte += (*crl).len as usize;
 
     // qual = bam_qual(b)
@@ -4723,11 +4746,25 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                 return -1;
             }
 
+            struct MdKString {
+                inner: kstring_t,
+            }
+
+            impl Drop for MdKString {
+                fn drop(&mut self) {
+                    unsafe {
+                        free(self.inner.s.cast());
+                    }
+                }
+            }
+
             // MD kstring (reused across records, freed per-slice).
-            let mut md_ks: kstring_t = kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
+            let mut md_ks = MdKString {
+                inner: kstring_t {
+                    l: 0,
+                    m: 0,
+                    s: std::ptr::null_mut(),
+                },
             };
 
             // Embed consensus / MD-generated ref.
@@ -4757,7 +4794,6 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                     crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).ref_lock);
                     failed_embed = 1;
                     let _ = failed_embed;
-                    free(md_ks.s.cast());
                     continue_restart = true;
                     break;
                 } else {
@@ -4798,7 +4834,6 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                             c"cram_encode_container".as_ptr(),
                             c"Failed to load reference".as_ptr(),
                         );
-                        free(md_ks.s.cast());
                         return -1;
                     }
                     if cram_cram_encode_c_1798_validate_md5(fd, (*b).core.tid) < 0 {
@@ -4821,12 +4856,11 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                     cr,
                     b,
                     r2,
-                    &raw mut md_ks,
+                    &raw mut md_ks.inner,
                     embed_ref,
                     no_ref,
                 ) != 0
                 {
-                    free(md_ks.s.cast());
                     return -1;
                 }
 
@@ -4840,8 +4874,6 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                 r1 += 1;
                 r2 += 1;
             }
-
-            free(md_ks.s.cast());
 
             // Post-pass: now that all records are processed and any TLEN
             // detached fixups settled, add the read names to the slice.
@@ -5684,19 +5716,43 @@ pub unsafe fn cram_cram_encode_c_1476_next_cigar_op(
     cig_op: *mut u32,
     cig_len: *mut u32,
 ) -> c_int {
+    let cigar = if ncigar == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(cigar, ncigar as usize)
+    };
+    cram_encode_next_cigar_op(
+        cigar,
+        std::slice::from_raw_parts(skip, 16),
+        &mut *spos,
+        &mut *cig_ind,
+        &mut *cig_op,
+        &mut *cig_len,
+    )
+}
+
+fn cram_encode_next_cigar_op(
+    cigar: &[u32],
+    skip: &[c_int],
+    spos: &mut c_int,
+    cig_ind: &mut u32,
+    cig_op: &mut u32,
+    cig_len: &mut u32,
+) -> c_int {
     loop {
         while *cig_len == 0 {
-            if *cig_ind < ncigar {
-                *cig_op = *cigar.add(*cig_ind as usize) & BAM_CIGAR_MASK;
-                *cig_len = *cigar.add(*cig_ind as usize) >> BAM_CIGAR_SHIFT;
+            if (*cig_ind as usize) < cigar.len() {
+                let cigar_word = cigar[*cig_ind as usize];
+                *cig_op = cigar_word & BAM_CIGAR_MASK;
+                *cig_len = cigar_word >> BAM_CIGAR_SHIFT;
                 *cig_ind += 1;
             } else {
                 return -1;
             }
         }
 
-        if *skip.add(*cig_op as usize) != 0 {
-            *spos += (bam_cigar_type(*cig_op as c_int) & 1) * *cig_len as c_int;
+        if skip[*cig_op as usize] != 0 {
+            *spos += (unsafe { bam_cigar_type(*cig_op as c_int) } & 1) * *cig_len as c_int;
             *cig_len = 0;
             continue;
         }

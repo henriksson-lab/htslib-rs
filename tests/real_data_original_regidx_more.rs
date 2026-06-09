@@ -44,7 +44,10 @@ unsafe fn overlaps(
     let ret = regidx_c_401_regidx_overlap(idx, seq.as_ptr(), beg, end, itr);
     let mut out = Vec::new();
     while regidx_c_612_regitr_overlap(itr) != 0 {
-        assert_eq!(CStr::from_ptr((*itr).seq), seq);
+        assert_eq!(
+            CStr::from_ptr((*itr).seq.expect("regidx overlap seq").as_ptr()),
+            seq
+        );
         out.push(((*itr).beg, (*itr).end));
     }
     assert_eq!(ret, if out.is_empty() { 0 } else { 1 });

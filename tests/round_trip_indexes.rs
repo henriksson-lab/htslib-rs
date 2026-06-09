@@ -292,7 +292,7 @@ unsafe fn vcf_tabix_region_count(bgz_path: &Path, tbi_path: &Path, region: &CStr
     let tbx = tbx_index_load2(bgz_c.as_ptr(), tbi_c.as_ptr());
     assert!(!tbx.is_null(), "failed to load TBI {}", tbi_path.display());
 
-    let itr = tbx_itr_querys1(tbx, region.as_ptr());
+    let itr = tbx_itr_querys1(&mut *tbx, region.as_ptr());
     assert!(!itr.is_null(), "tbx_itr_querys1 failed for {:?}", region);
 
     let mut line: kstring_t = std::mem::zeroed();

@@ -22,147 +22,142 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.  */
 
-use crate::htslib_rs::hts::{kputc, kputs, kputsn, kstring_t};
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::OsString;
 use std::ptr::NonNull;
 
-const PLUGINPATH: *const c_char = c"".as_ptr();
-const PLUGIN_EXT: *const c_char = c".so".as_ptr();
-const PLUGIN_EXT_LEN: usize = 3;
-const HTS_PATH_SEPARATOR_CHAR: c_int = b':' as c_int;
-const HTS_PATH_SEPARATOR_STR: *const c_char = c":".as_ptr();
+const PLUGINPATH: &[u8] = b"";
+const PLUGIN_EXT: &[u8] = b".so";
+const HTS_PATH_SEPARATOR: u8 = b':';
+const DISABLED_PLUGINS_MESSAGE: &[u8] = b"external plugins are disabled\0";
 
-#[repr(C)]
-pub(crate) struct PluginPathItr {
-    path: kstring_t,
-    entry: kstring_t,
-    dirv: Option<NonNull<c_void>>,
-    pathdir: Option<NonNull<c_char>>,
-    prefix: *const c_char,
-    suffix: *const c_char,
-    prefix_len: usize,
-    suffix_len: usize,
-    entry_dir_l: usize,
+pub(crate) struct PluginPathItr<'a> {
+    path: Vec<u8>,
+    entry: Vec<u8>,
+    dirv: Option<NonNull<()>>,
+    pathdir: Option<NonNull<u8>>,
+    prefix: &'a [u8],
+    suffix: &'a [u8],
+    entry_dir_len: usize,
+}
+
+impl Default for PluginPathItr<'_> {
+    fn default() -> Self {
+        Self {
+            path: Vec::new(),
+            entry: Vec::new(),
+            dirv: None,
+            pathdir: None,
+            prefix: b"",
+            suffix: PLUGIN_EXT,
+            entry_dir_len: 0,
+        }
+    }
+}
+
+#[cfg(unix)]
+fn os_string_into_bytes(value: OsString) -> Vec<u8> {
+    use std::os::unix::ffi::OsStringExt;
+
+    value.into_vec()
+}
+
+#[cfg(not(unix))]
+fn os_string_into_bytes(value: OsString) -> Vec<u8> {
+    value.to_string_lossy().into_owned().into_bytes()
+}
+
+fn env_path_bytes(name: &str) -> Option<Vec<u8>> {
+    std::env::var_os(name).map(os_string_into_bytes)
 }
 
 // original: open_nextdir (htslib/plugin.c:42)
-unsafe fn plugin_c_42_open_nextdir(itr: *mut PluginPathItr) -> Option<NonNull<c_void>> {
+fn plugin_c_42_open_nextdir(itr: &mut PluginPathItr<'_>) -> Option<NonNull<()>> {
     let _ = itr;
     None
 }
 
 // original: hts_path_itr_setup (htslib/plugin.c:69)
-pub unsafe fn plugin_c_69_hts_path_itr_setup(
-    itr: *mut c_void,
-    mut path: *const c_char,
-    mut builtin_path: *const c_char,
-    prefix: *const c_char,
-    prefix_len: usize,
-    suffix: *const c_char,
-    suffix_len: usize,
+pub(crate) fn plugin_c_69_hts_path_itr_setup<'a>(
+    itr: &mut PluginPathItr<'a>,
+    path: Option<&[u8]>,
+    builtin_path: Option<&[u8]>,
+    prefix: &'a [u8],
+    _prefix_len: usize,
+    suffix: Option<&'a [u8]>,
+    _suffix_len: usize,
 ) {
-    let itr = itr.cast::<PluginPathItr>();
-    (*itr).prefix = prefix;
-    (*itr).prefix_len = prefix_len;
+    itr.prefix = prefix;
+    itr.suffix = suffix.unwrap_or(PLUGIN_EXT);
+    itr.path.clear();
+    itr.entry.clear();
+    itr.entry_dir_len = 0;
 
-    if !suffix.is_null() {
-        (*itr).suffix = suffix;
-        (*itr).suffix_len = suffix_len;
-    } else {
-        (*itr).suffix = PLUGIN_EXT;
-        (*itr).suffix_len = PLUGIN_EXT_LEN;
-    }
+    let env_path = path.is_none().then(|| env_path_bytes("HTS_PATH")).flatten();
+    let path = path.unwrap_or(env_path.as_deref().unwrap_or(b""));
+    let builtin_path = builtin_path.unwrap_or(PLUGINPATH);
 
-    (*itr).path.l = 0;
-    (*itr).path.m = 0;
-    (*itr).path.s = std::ptr::null_mut();
-    (*itr).entry.l = 0;
-    (*itr).entry.m = 0;
-    (*itr).entry.s = std::ptr::null_mut();
-
-    if builtin_path.is_null() {
-        builtin_path = PLUGINPATH;
-    }
-    if path.is_null() {
-        path = libc::getenv(c"HTS_PATH".as_ptr());
-        if path.is_null() {
-            path = c"".as_ptr();
-        }
-    }
-
-    loop {
-        let len = libc::strcspn(path, HTS_PATH_SEPARATOR_STR);
-        if len == 0 {
-            kputs(builtin_path, &mut (*itr).path);
+    for component in path.split(|byte| *byte == HTS_PATH_SEPARATOR) {
+        if component.is_empty() {
+            itr.path.extend_from_slice(builtin_path);
         } else {
-            kputsn(path, len, &mut (*itr).path);
+            itr.path.extend_from_slice(component);
         }
-        kputc(HTS_PATH_SEPARATOR_CHAR, &mut (*itr).path);
-
-        path = path.add(len);
-        if *path == HTS_PATH_SEPARATOR_CHAR as c_char {
-            path = path.add(1);
-        } else {
-            break;
-        }
+        itr.path.push(HTS_PATH_SEPARATOR);
     }
 
     // Note that ':' now terminates entries rather than separates them
-    (*itr).pathdir = NonNull::new((*itr).path.s);
-    (*itr).dirv = plugin_c_42_open_nextdir(itr);
+    itr.pathdir = NonNull::new(itr.path.as_mut_ptr());
+    itr.dirv = plugin_c_42_open_nextdir(itr);
 }
 
 // original: hts_path_itr_next (htslib/plugin.c:104)
-pub unsafe fn plugin_c_104_hts_path_itr_next(itr: *mut c_void) -> *const c_char {
-    let itr = itr.cast::<PluginPathItr>();
-    (*itr).pathdir = None;
-    libc::free((*itr).path.s.cast());
-    (*itr).path.s = std::ptr::null_mut();
-    libc::free((*itr).entry.s.cast());
-    (*itr).entry.s = std::ptr::null_mut();
+pub(crate) fn plugin_c_104_hts_path_itr_next(itr: &mut PluginPathItr<'_>) -> *const i8 {
+    itr.pathdir = None;
+    itr.path.clear();
+    itr.entry.clear();
     std::ptr::null()
 }
 
 // original: load_plugin (htslib/plugin.c:135)
-pub unsafe fn plugin_c_135_load_plugin(
-    pluginp: *mut *mut c_void,
-    _filename: *const c_char,
-    _symbol: *const c_char,
-) -> *mut c_void {
-    if !pluginp.is_null() {
-        *pluginp = std::ptr::null_mut();
+pub fn plugin_c_135_load_plugin(
+    pluginp: Option<&mut Option<NonNull<()>>>,
+    _filename: &[u8],
+    _symbol: &[u8],
+) -> Option<NonNull<()>> {
+    if let Some(pluginp) = pluginp {
+        *pluginp = None;
     }
-    std::ptr::null_mut()
+    None
 }
 
 // original: plugin_sym (htslib/plugin.c:172)
-pub unsafe fn plugin_c_172_plugin_sym(
-    _plugin: *mut c_void,
-    _name: *const c_char,
-    errmsg: *mut *const c_char,
-) -> *mut c_void {
-    if !errmsg.is_null() {
-        *errmsg = c"external plugins are disabled".as_ptr();
+pub fn plugin_c_172_plugin_sym(
+    _plugin: Option<NonNull<()>>,
+    _name: &[u8],
+    errmsg: Option<&mut *const i8>,
+) -> Option<NonNull<()>> {
+    if let Some(errmsg) = errmsg {
+        *errmsg = DISABLED_PLUGINS_MESSAGE.as_ptr().cast();
     }
-    std::ptr::null_mut()
+    None
 }
 
 // original: plugin_func (htslib/plugin.c:179)
-pub unsafe fn plugin_c_179_plugin_func(
-    plugin: *mut c_void,
-    name: *const c_char,
-    errmsg: *mut *const c_char,
-) -> *mut c_void {
+pub fn plugin_c_179_plugin_func(
+    plugin: Option<NonNull<()>>,
+    name: &[u8],
+    errmsg: Option<&mut *const i8>,
+) -> Option<NonNull<()>> {
     plugin_c_172_plugin_sym(plugin, name, errmsg)
 }
 
 // original: close_plugin (htslib/plugin.c:186)
-pub unsafe fn plugin_c_186_close_plugin(_plugin: *mut c_void) {
+pub fn plugin_c_186_close_plugin(_plugin: Option<NonNull<()>>) {
     // Runtime dynamic plugins are disabled; supported handlers are statically linked.
 }
 
 // original: hts_plugin_path (htslib/plugin.c:195)
-pub unsafe fn plugin_c_195_hts_plugin_path() -> *const c_char {
+pub fn plugin_c_195_hts_plugin_path() -> *const i8 {
     // ENABLE_PLUGINS is not defined for this translation build.
     std::ptr::null()
 }
@@ -170,7 +165,6 @@ pub unsafe fn plugin_c_195_hts_plugin_path() -> *const c_char {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
 
@@ -188,8 +182,8 @@ mod tests {
         dir
     }
 
-    fn c_path(path: &Path) -> CString {
-        CString::new(path.as_os_str().as_bytes()).unwrap()
+    fn path_bytes(path: &Path) -> &[u8] {
+        path.as_os_str().as_bytes()
     }
 
     #[test]
@@ -201,32 +195,24 @@ mod tests {
         std::fs::write(second.join("hfile_beta.so"), b"").unwrap();
         std::fs::write(second.join("hfile_gamma.dylib"), b"").unwrap();
 
-        let first_c = c_path(&first);
-        let second_c = c_path(&second);
-        let path = CString::new(format!(
-            ":{}:{}",
-            first_c.to_str().unwrap(),
-            second_c.to_str().unwrap()
-        ))
-        .unwrap();
-        let builtin = c_path(&first);
+        let mut path = Vec::new();
+        path.push(b':');
+        path.extend_from_slice(path_bytes(&first));
+        path.push(b':');
+        path.extend_from_slice(path_bytes(&second));
 
-        unsafe {
-            let mut itr: PluginPathItr = std::mem::zeroed();
-            plugin_c_69_hts_path_itr_setup(
-                (&mut itr as *mut PluginPathItr).cast(),
-                path.as_ptr(),
-                builtin.as_ptr(),
-                c"hfile_".as_ptr(),
-                6,
-                std::ptr::null(),
-                0,
-            );
+        let mut itr = PluginPathItr::default();
+        plugin_c_69_hts_path_itr_setup(
+            &mut itr,
+            Some(&path),
+            Some(path_bytes(&first)),
+            b"hfile_",
+            6,
+            None,
+            0,
+        );
 
-            assert!(
-                plugin_c_104_hts_path_itr_next((&mut itr as *mut PluginPathItr).cast()).is_null()
-            );
-        }
+        assert!(plugin_c_104_hts_path_itr_next(&mut itr).is_null());
 
         let _ = std::fs::remove_dir_all(first);
         let _ = std::fs::remove_dir_all(second);

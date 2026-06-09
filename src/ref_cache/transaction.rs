@@ -1,7 +1,4 @@
-use super::http_parser::{
-    ref_cache_http_parser_c_637_steal_user_agent_from_parser,
-    ref_cache_http_parser_c_643_steal_referrer_from_parser, Http_Parser,
-};
+use super::http_parser::Http_Parser;
 use super::ref_files::{
     ref_cache_ref_files_c_145_get_ref_size, ref_cache_ref_files_c_149_get_ref_available,
     ref_cache_ref_files_c_153_get_ref_id, ref_cache_ref_files_c_157_get_ref_complete,
@@ -17,6 +14,7 @@ use super::server::{
 };
 use crate::htslib_rs::cram;
 use std::ffi::{c_char, c_int, c_uint, c_ulong};
+use std::ptr::NonNull;
 
 const TRANSACT_KEEP_ALIVE: c_uint = 2;
 const TRANSACT_TEXT_CONST: c_uint = 1;
@@ -71,6 +69,12 @@ struct HttpParserLayout {
     out: c_uint,
     pos: c_uint,
     used: c_uint,
+    uri_buf: Vec<u8>,
+    key_buf: Vec<u8>,
+    val_buf: Vec<u8>,
+    buffer_buf: Vec<u8>,
+    user_agent_buf: Vec<u8>,
+    referrer_buf: Vec<u8>,
 }
 
 #[repr(C)]
@@ -93,6 +97,10 @@ struct TransactionPrefixLayout {
     fd_sent: libc::off_t,
     rc: c_uint,
     http_vers: c_int,
+    user_agent_buf: Vec<u8>,
+    referrer_buf: Vec<u8>,
+    req_str_buf: Vec<u8>,
+    text_buf: Vec<u8>,
 }
 
 // Concurrency note (audit 2026-05):
@@ -109,7 +117,7 @@ struct TransactionPrefixLayout {
 // matches; do not add additional threads here without revisiting this.
 //
 // SAFETY: single-threaded daemon worker.
-static mut REF_CACHE_TRANSACTION_POOL: *mut cram::pool_alloc_t = std::ptr::null_mut();
+static mut REF_CACHE_TRANSACTION_POOL: Option<Box<cram::pool_alloc_t>> = None;
 static mut REF_CACHE_TRANSACTIONS: [*mut Transaction; 0x400] = [std::ptr::null_mut(); 0x400];
 
 // original: Transaction (htslib/ref_cache/transaction.c:70)
@@ -118,44 +126,126 @@ pub struct Transaction {
     _private: [u8; 0],
 }
 
+fn raw_ptr_from_vec(buf: &mut Vec<u8>) -> *mut c_char {
+    if buf.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        buf.as_mut_ptr().cast()
+    }
+}
+
+unsafe fn c_bytes<'a>(ptr: *const c_char) -> &'a [u8] {
+    if ptr.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts(ptr.cast::<u8>(), libc::strlen(ptr))
+    }
+}
+
+unsafe fn take_parser_c_buf(buf: &mut Vec<u8>, raw: &mut *mut c_char) -> Vec<u8> {
+    *raw = std::ptr::null_mut();
+    std::mem::take(buf)
+}
+
+unsafe fn clear_owned_text(transact: &mut TransactionPrefixLayout) {
+    transact.text_buf.clear();
+    transact.text = std::ptr::null_mut();
+    transact.sz = 0;
+    transact.out = 0;
+    transact.flags &= !TRANSACT_TEXT_CONST;
+}
+
+unsafe fn set_owned_text(transact: &mut TransactionPrefixLayout, text: Vec<u8>) {
+    transact.text_buf = text;
+    transact.text = raw_ptr_from_vec(&mut transact.text_buf);
+    transact.sz = transact.text_buf.len();
+    transact.out = 0;
+    transact.flags &= !TRANSACT_TEXT_CONST;
+}
+
+unsafe fn set_static_text(transact: &mut TransactionPrefixLayout, text: &'static [u8]) {
+    transact.text_buf.clear();
+    transact.text = text.as_ptr().cast::<c_char>().cast_mut();
+    transact.sz = text.len();
+    transact.out = 0;
+    transact.flags |= TRANSACT_TEXT_CONST;
+}
+
+fn http_vers_bytes(http_vers: c_int) -> Option<&'static [u8]> {
+    match http_vers {
+        HTTP_1_0 => Some(b"HTTP/1.0"),
+        HTTP_1_1 => Some(b"HTTP/1.1"),
+        _ => None,
+    }
+}
+
+unsafe fn ref_cache_transaction_pool() -> Option<&'static mut cram::pool_alloc_t> {
+    let pool_slot = std::ptr::addr_of_mut!(REF_CACHE_TRANSACTION_POOL);
+    if (*pool_slot).is_none() {
+        *pool_slot = Some(cram::pool_create(std::mem::size_of::<
+            TransactionPrefixLayout,
+        >()));
+    }
+    (*pool_slot).as_deref_mut()
+}
+
 // original: new_transaction (htslib/ref_cache/transaction.c:136)
 pub unsafe fn ref_cache_transaction_c_136_new_transaction(
     client: *mut Client,
     parser: *mut Http_Parser,
 ) -> *mut Transaction {
-    if REF_CACHE_TRANSACTION_POOL.is_null() {
-        REF_CACHE_TRANSACTION_POOL = cram::cram_pooled_alloc_c_64_pool_create(std::mem::size_of::<
-            TransactionPrefixLayout,
-        >());
-        if REF_CACHE_TRANSACTION_POOL.is_null() {
-            return std::ptr::null_mut();
-        }
-    }
-
-    let transact = cram::cram_pooled_alloc_c_115_pool_alloc(REF_CACHE_TRANSACTION_POOL)
-        .cast::<TransactionPrefixLayout>();
-    if transact.is_null() {
+    let Some(pool) = ref_cache_transaction_pool() else {
         return std::ptr::null_mut();
-    }
-    libc::memset(
-        transact.cast(),
-        0,
-        std::mem::size_of::<TransactionPrefixLayout>(),
-    );
+    };
+    let Some(transact) = cram::pool_alloc(pool).map(NonNull::<u8>::cast::<TransactionPrefixLayout>)
+    else {
+        return std::ptr::null_mut();
+    };
+    let transact = transact.as_ptr();
 
     let parser_layout = parser.cast::<HttpParserLayout>();
-    (*transact).client = client;
-    (*transact).ref_ = std::ptr::null_mut();
-    (*transact).user_agent = ref_cache_http_parser_c_637_steal_user_agent_from_parser(parser);
-    (*transact).referrer = ref_cache_http_parser_c_643_steal_referrer_from_parser(parser);
-    (*transact).req_str = std::ptr::null_mut();
-    (*transact).range_from = (*parser_layout).range_from;
-    (*transact).range_to = (*parser_layout).range_to;
-    (*transact).flags = (*parser_layout).flags
-        & (TRANSACT_KEEP_ALIVE | TRANSACT_RANGE_FROM | TRANSACT_RANGE_TO | TRANSACT_RANGE_SUFFIX);
-    (*transact).rc = 0;
-    (*transact).next_id = std::ptr::null_mut();
-    (*transact).http_vers = (*parser_layout).http_vers;
+    let mut user_agent_buf = take_parser_c_buf(
+        &mut (*parser_layout).user_agent_buf,
+        &mut (*parser_layout).user_agent,
+    );
+    let mut referrer_buf = take_parser_c_buf(
+        &mut (*parser_layout).referrer_buf,
+        &mut (*parser_layout).referrer,
+    );
+    let user_agent = raw_ptr_from_vec(&mut user_agent_buf);
+    let referrer = raw_ptr_from_vec(&mut referrer_buf);
+
+    std::ptr::write(
+        transact,
+        TransactionPrefixLayout {
+            state: 0,
+            flags: (*parser_layout).flags
+                & (TRANSACT_KEEP_ALIVE
+                    | TRANSACT_RANGE_FROM
+                    | TRANSACT_RANGE_TO
+                    | TRANSACT_RANGE_SUFFIX),
+            next: std::ptr::null_mut(),
+            next_id: std::ptr::null_mut(),
+            client,
+            user_agent,
+            referrer,
+            req_str: std::ptr::null_mut(),
+            text: std::ptr::null_mut(),
+            range_from: (*parser_layout).range_from,
+            range_to: (*parser_layout).range_to,
+            sz: 0,
+            out: 0,
+            ref_: std::ptr::null_mut(),
+            fd_sz: 0,
+            fd_sent: 0,
+            rc: 0,
+            http_vers: (*parser_layout).http_vers,
+            user_agent_buf,
+            referrer_buf,
+            req_str_buf: Vec::new(),
+            text_buf: Vec::new(),
+        },
+    );
 
     transact.cast()
 }
@@ -188,18 +278,14 @@ pub unsafe fn ref_cache_transaction_c_166_transaction_clear_ref(transact: *mut T
 pub unsafe fn ref_cache_transaction_c_181_free_transaction(transact: *mut Transaction) {
     let transact_layout = transact.cast::<TransactionPrefixLayout>();
     ref_cache_transaction_c_166_transaction_clear_ref(transact);
-    if ((*transact_layout).flags & TRANSACT_TEXT_CONST) == 0 && !(*transact_layout).text.is_null() {
-        libc::free((*transact_layout).text.cast());
+    std::ptr::drop_in_place(transact_layout);
+    let pool_slot = std::ptr::addr_of_mut!(REF_CACHE_TRANSACTION_POOL);
+    if let (Some(pool), Some(transact)) = (
+        (*pool_slot).as_deref_mut(),
+        NonNull::new(transact.cast::<u8>()),
+    ) {
+        cram::pool_free(pool, transact);
     }
-    libc::free((*transact_layout).user_agent.cast());
-    libc::free((*transact_layout).referrer.cast());
-    libc::free((*transact_layout).req_str.cast());
-    libc::memset(
-        transact_layout.cast(),
-        0,
-        std::mem::size_of::<TransactionPrefixLayout>(),
-    );
-    cram::cram_pooled_alloc_c_144_pool_free(REF_CACHE_TRANSACTION_POOL, transact.cast());
 }
 
 // original: free_transaction_list (htslib/ref_cache/transaction.c:196)
@@ -294,15 +380,13 @@ pub unsafe fn ref_cache_transaction_c_264_transaction_set_req_str(
     transact: *mut Transaction,
     requested: *const c_char,
 ) {
-    let len = libc::strlen(requested);
-    (*(transact.cast::<TransactionPrefixLayout>())).req_str = libc::strndup(
-        requested,
-        if len < REF_CACHE_MAX_REQUEST_LEN {
-            len
-        } else {
-            REF_CACHE_MAX_REQUEST_LEN
-        },
-    );
+    let transact = &mut *transact.cast::<TransactionPrefixLayout>();
+    let requested = c_bytes(requested);
+    let len = requested.len().min(REF_CACHE_MAX_REQUEST_LEN);
+    transact.req_str_buf.clear();
+    transact.req_str_buf.extend_from_slice(&requested[..len]);
+    transact.req_str_buf.push(0);
+    transact.req_str = raw_ptr_from_vec(&mut transact.req_str_buf);
 }
 
 // original: transaction_by_id (htslib/ref_cache/transaction.c:270)
@@ -337,41 +421,38 @@ pub unsafe fn ref_cache_transaction_c_277_set_error_response(
         return;
     }
 
-    if ((*transact).flags & TRANSACT_TEXT_CONST) == 0 && !(*transact).text.is_null() {
-        libc::free((*transact).text.cast());
-    }
+    clear_owned_text(&mut *transact);
 
     let vers = if (*transact).http_vers == HTTP_1_1 {
         1
     } else {
         0
     };
-    (*transact).text = match (code, vers) {
-            (400, 0) => c"HTTP/1.0 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 17\r\n\r\n400 Bad Request\r\n".as_ptr().cast_mut(),
-            (400, _) => c"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 17\r\n\r\n400 Bad Request\r\n".as_ptr().cast_mut(),
-            (404, 0) => c"HTTP/1.0 404 Not found\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n\r\n404 Not found\r\n".as_ptr().cast_mut(),
-            (404, _) => c"HTTP/1.1 404 Not found\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n\r\n404 Not found\r\n".as_ptr().cast_mut(),
-            (413, 0) => c"HTTP/1.0 413 Request Entity Too Large\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\n413 Request Entity Too Large\r\n".as_ptr().cast_mut(),
-            (413, _) => c"HTTP/1.1 413 Request Entity Too Large\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\n413 Request Entity Too Large\r\n".as_ptr().cast_mut(),
-            (414, 0) => c"HTTP/1.0 414 Request-URI Too Large\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n414 Request-URI Too Large\r\n".as_ptr().cast_mut(),
-            (414, _) => c"HTTP/1.1 414 Request-URI Too Large\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n414 Request-URI Too Large\r\n".as_ptr().cast_mut(),
-            (500, 0) => c"HTTP/1.0 500 Internal Server Error\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n500 Internal Server Error\r\n".as_ptr().cast_mut(),
-            (500, _) => c"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n500 Internal Server Error\r\n".as_ptr().cast_mut(),
-            (501, 0) => c"HTTP/1.0 501 Not Implemented\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 21\r\n\r\n501 Not Implemented\r\n".as_ptr().cast_mut(),
-            (501, _) => c"HTTP/1.1 501 Not Implemented\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 21\r\n\r\n501 Not Implemented\r\n".as_ptr().cast_mut(),
-            (502, 0) => c"HTTP/1.0 502 Bad Gateway\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 17\r\n\r\n502 Bad Gateway\r\n".as_ptr().cast_mut(),
-            (502, _) => c"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 17\r\n\r\n502 Bad Gateway\r\n".as_ptr().cast_mut(),
-            (505, 0) => c"HTTP/1.0 505 HTTP Version not supported\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 32\r\n\r\n505 HTTP Version not supported\r\n".as_ptr().cast_mut(),
-            (505, _) => c"HTTP/1.1 505 HTTP Version not supported\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 32\r\n\r\n505 HTTP Version not supported\r\n".as_ptr().cast_mut(),
-            (_, 0) => c"HTTP/1.0 500 Internal Server Error\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n500 Internal Server Error\r\n".as_ptr().cast_mut(),
-            _ => c"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n500 Internal Server Error\r\n".as_ptr().cast_mut(),
-        };
+    let text = match (code, vers) {
+        (400, 0) => b"HTTP/1.0 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 17\r\n\r\n400 Bad Request\r\n".as_slice(),
+        (400, _) => b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 17\r\n\r\n400 Bad Request\r\n",
+        (404, 0) => b"HTTP/1.0 404 Not found\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n\r\n404 Not found\r\n",
+        (404, _) => b"HTTP/1.1 404 Not found\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n\r\n404 Not found\r\n",
+        (413, 0) => b"HTTP/1.0 413 Request Entity Too Large\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\n413 Request Entity Too Large\r\n",
+        (413, _) => b"HTTP/1.1 413 Request Entity Too Large\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\n413 Request Entity Too Large\r\n",
+        (414, 0) => b"HTTP/1.0 414 Request-URI Too Large\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n414 Request-URI Too Large\r\n",
+        (414, _) => b"HTTP/1.1 414 Request-URI Too Large\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n414 Request-URI Too Large\r\n",
+        (500, 0) => b"HTTP/1.0 500 Internal Server Error\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n500 Internal Server Error\r\n",
+        (500, _) => b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n500 Internal Server Error\r\n",
+        (501, 0) => b"HTTP/1.0 501 Not Implemented\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 21\r\n\r\n501 Not Implemented\r\n",
+        (501, _) => b"HTTP/1.1 501 Not Implemented\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 21\r\n\r\n501 Not Implemented\r\n",
+        (502, 0) => b"HTTP/1.0 502 Bad Gateway\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 17\r\n\r\n502 Bad Gateway\r\n",
+        (502, _) => b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 17\r\n\r\n502 Bad Gateway\r\n",
+        (505, 0) => b"HTTP/1.0 505 HTTP Version not supported\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 32\r\n\r\n505 HTTP Version not supported\r\n",
+        (505, _) => b"HTTP/1.1 505 HTTP Version not supported\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 32\r\n\r\n505 HTTP Version not supported\r\n",
+        (_, 0) => b"HTTP/1.0 500 Internal Server Error\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n500 Internal Server Error\r\n",
+        _ => b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n500 Internal Server Error\r\n",
+    };
+    set_static_text(&mut *transact, text);
 
     (*transact).rc = code;
-    (*transact).sz = libc::strlen((*transact).text);
     ref_cache_transaction_c_166_transaction_clear_ref(transact.cast());
     (*transact).flags &= !TRANSACT_KEEP_ALIVE;
-    (*transact).flags |= TRANSACT_TEXT_CONST;
     (*transact).state = TRANSACT_GOT_TEXT;
 }
 
@@ -394,88 +475,53 @@ pub unsafe fn ref_cache_transaction_c_322_set_ref_file_response(
     range_end: libc::off_t,
 ) -> c_int {
     let transact_layout = transact.cast::<TransactionPrefixLayout>();
-    let mut text_len = 128usize;
-    let vers = ref_cache_transaction_c_313_http_vers_string(transact);
-    let content_type = c"text/plain".as_ptr();
+    let Some(vers) = http_vers_bytes((*transact_layout).http_vers) else {
+        ref_cache_transaction_c_277_set_error_response(transact, 505);
+        return -1;
+    };
     let mut keep_alive = ((*transact_layout).flags & TRANSACT_KEEP_ALIVE) != 0
         && (*transact_layout).http_vers == HTTP_1_1;
     let mut rc = 200u32;
 
     assert!((*transact_layout).state < TRANSACT_SENDING_TEXT);
 
-    if vers.is_null() {
-        ref_cache_transaction_c_277_set_error_response(transact, 505);
-        return -1;
-    }
+    clear_owned_text(&mut *transact_layout);
 
-    if ((*transact_layout).flags & TRANSACT_TEXT_CONST) == 0 && !(*transact_layout).text.is_null() {
-        libc::free((*transact_layout).text.cast());
-        (*transact_layout).text = std::ptr::null_mut();
-    }
-
-    if range_start >= 0 {
-        text_len += 100;
-    }
-
-    let text = libc::malloc(text_len).cast::<c_char>();
-    if text.is_null() {
-        ref_cache_transaction_c_277_set_error_response(transact, 500);
-        return -1;
-    }
-
-    let l = if len != 0 {
+    let text = if len != 0 {
         if range_start >= 0 {
             assert!(range_end > range_start && range_end > 0);
             rc = 206;
-            libc::snprintf(
-                    text,
-                    text_len,
-                    c"%s 206 Partial content\r\nContent-Type: %s\r\nContent-Range: bytes %lld-%lld/%lld\r\nContent-Length: %lld\r\n%s\r\n".as_ptr(),
-                    vers,
-                    content_type,
-                    range_start as libc::c_longlong,
-                    (range_end - 1) as libc::c_longlong,
-                    len as libc::c_longlong,
-                    (range_end - range_start) as libc::c_longlong,
-                    if keep_alive { c"".as_ptr() } else { c"Connection: close\r\n".as_ptr() },
-                )
+            format!(
+                "{} 206 Partial content\r\nContent-Type: text/plain\r\nContent-Range: bytes {}-{}/{}\r\nContent-Length: {}\r\n{}\r\n",
+                std::str::from_utf8_unchecked(vers),
+                range_start,
+                range_end - 1,
+                len,
+                range_end - range_start,
+                if keep_alive { "" } else { "Connection: close\r\n" },
+            )
         } else {
-            libc::snprintf(
-                text,
-                text_len,
-                c"%s 200 OK\r\nContent-Type: %s\r\nContent-Length: %lld\r\n%s\r\n".as_ptr(),
-                vers,
-                content_type,
-                len as libc::c_longlong,
+            format!(
+                "{} 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n{}\r\n",
+                std::str::from_utf8_unchecked(vers),
+                len,
                 if keep_alive {
-                    c"".as_ptr()
+                    ""
                 } else {
-                    c"Connection: close\r\n".as_ptr()
+                    "Connection: close\r\n"
                 },
             )
         }
     } else {
         keep_alive = false;
-        libc::snprintf(
-            text,
-            text_len,
-            c"%s 200 OK\r\nContent-Type: %s\r\nConnection: close\r\n\r\n".as_ptr(),
-            vers,
-            content_type,
+        format!(
+            "{} 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n",
+            std::str::from_utf8_unchecked(vers),
         )
     };
 
-    if l < 0 || l as usize > text_len {
-        libc::free(text.cast());
-        ref_cache_transaction_c_277_set_error_response(transact, 500);
-        return -1;
-    }
-
     (*transact_layout).rc = rc;
-    (*transact_layout).text = text;
-    (*transact_layout).sz = l as usize;
-    (*transact_layout).out = 0;
-    (*transact_layout).flags &= !TRANSACT_TEXT_CONST;
+    set_owned_text(&mut *transact_layout, text.into_bytes());
     (*transact_layout).state = TRANSACT_GOT_TEXT;
 
     if !keep_alive {
@@ -492,56 +538,32 @@ pub unsafe fn ref_cache_transaction_c_408_set_message_response(
     len: usize,
 ) {
     let transact_layout = transact.cast::<TransactionPrefixLayout>();
-    let text_len = 128usize + len;
-    let vers = ref_cache_transaction_c_313_http_vers_string(transact);
+    let Some(vers) = http_vers_bytes((*transact_layout).http_vers) else {
+        ref_cache_transaction_c_277_set_error_response(transact, 505);
+        return;
+    };
     let keep_alive = ((*transact_layout).flags & TRANSACT_KEEP_ALIVE) != 0
         && (*transact_layout).http_vers == HTTP_1_1;
 
     assert!((*transact_layout).state < TRANSACT_SENDING_TEXT);
 
-    if vers.is_null() {
-        ref_cache_transaction_c_277_set_error_response(transact, 505);
-        return;
-    }
-
-    if ((*transact_layout).flags & TRANSACT_TEXT_CONST) == 0 && !(*transact_layout).text.is_null() {
-        libc::free((*transact_layout).text.cast());
-        (*transact_layout).text = std::ptr::null_mut();
-    }
-
-    let text = libc::malloc(text_len).cast::<c_char>();
-    if text.is_null() {
-        ref_cache_transaction_c_277_set_error_response(transact, 500);
-        return;
-    }
-
-    let l = libc::snprintf(
-        text,
-        text_len,
-        c"%s 200 OK\r\nContent-Type: %s\r\nContent-Length: %zu\r\n%s\r\n".as_ptr(),
-        vers,
-        content_type,
+    clear_owned_text(&mut *transact_layout);
+    let mut text = format!(
+        "{} 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}\r\n",
+        std::str::from_utf8_unchecked(vers),
+        std::str::from_utf8_unchecked(c_bytes(content_type)),
         len,
         if keep_alive {
-            c"".as_ptr()
+            ""
         } else {
-            c"Connection: close\r\n".as_ptr()
+            "Connection: close\r\n"
         },
-    );
-
-    if l < 0 || l as usize > text_len || text_len - (l as usize) < len {
-        libc::free(text.cast());
-        ref_cache_transaction_c_277_set_error_response(transact, 500);
-        return;
-    }
-
-    libc::memcpy(text.add(l as usize).cast(), message.cast(), len);
+    )
+    .into_bytes();
+    text.extend_from_slice(std::slice::from_raw_parts(message.cast::<u8>(), len));
 
     (*transact_layout).rc = 200;
-    (*transact_layout).text = text;
-    (*transact_layout).sz = l as usize + len;
-    (*transact_layout).out = 0;
-    (*transact_layout).flags &= !TRANSACT_TEXT_CONST;
+    set_owned_text(&mut *transact_layout, text);
     (*transact_layout).state = TRANSACT_GOT_TEXT;
 
     if !keep_alive {

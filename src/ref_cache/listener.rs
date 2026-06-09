@@ -86,7 +86,7 @@ pub unsafe fn ref_cache_listener_c_51_open_socket(
 pub unsafe fn ref_cache_listener_c_95_get_listen_sockets(port: c_int) -> *mut Listeners {
     let mut hints: libc::addrinfo = std::mem::zeroed();
     let mut addr_list: *mut libc::addrinfo = std::ptr::null_mut();
-    let mut pnum = [0 as c_char; 20];
+    let pnum = format!("{port}\0").into_bytes();
     let mut cause: *const c_char = std::ptr::null();
 
     hints.ai_family = libc::AF_UNSPEC;
@@ -97,8 +97,12 @@ pub unsafe fn ref_cache_listener_c_95_get_listen_sockets(port: c_int) -> *mut Li
         hints.ai_flags |= libc::AI_ADDRCONFIG;
     }
 
-    libc::snprintf(pnum.as_mut_ptr(), pnum.len(), c"%d".as_ptr(), port);
-    let res = libc::getaddrinfo(std::ptr::null(), pnum.as_ptr(), &hints, &mut addr_list);
+    let res = libc::getaddrinfo(
+        std::ptr::null(),
+        pnum.as_ptr().cast::<c_char>(),
+        &hints,
+        &mut addr_list,
+    );
     if res != 0 {
         libc::fprintf(
             crate::htslib_rs::ref_cache::compat::stderr(),
@@ -120,13 +124,15 @@ pub unsafe fn ref_cache_listener_c_95_get_listen_sockets(port: c_int) -> *mut Li
             crate::htslib_rs::ref_cache::compat::stderr(),
             c"getaddrinfo returned nothing.\n".as_ptr(),
         );
+        libc::freeaddrinfo(addr_list);
         return std::ptr::null_mut();
     }
 
     let mut lsocks = Box::new(Listeners {
-        sockets: Vec::with_capacity(count),
+        sockets: Vec::new(),
     });
-    if lsocks.sockets.capacity() < count {
+    if lsocks.sockets.try_reserve_exact(count).is_err() {
+        libc::perror(c"Allocating listener socket list".as_ptr());
         libc::freeaddrinfo(addr_list);
         return std::ptr::null_mut();
     }
@@ -186,11 +192,6 @@ pub unsafe fn ref_cache_listener_c_160_should_adopt_socket(fd: c_int) -> c_int {
         return 0;
     }
 
-    libc::memset(
-        (&mut addr as *mut libc::sockaddr).cast(),
-        0,
-        std::mem::size_of_val(&addr),
-    );
     addrlen = std::mem::size_of_val(&addr) as libc::socklen_t;
     if libc::getsockname(fd, &mut addr, &mut addrlen) < 0
         || addrlen < std::mem::size_of::<libc::sa_family_t>() as libc::socklen_t
@@ -230,8 +231,17 @@ pub unsafe fn ref_cache_listener_c_203_adopt_listen_sockets(
     assert!(min_sock_fd > 0 && num_fds > 0 && num_fds < c_int::MAX - min_sock_fd);
 
     let mut lsocks = Box::new(Listeners {
-        sockets: Vec::with_capacity(num_fds as usize),
+        sockets: Vec::new(),
     });
+    if lsocks.sockets.try_reserve_exact(num_fds as usize).is_err() {
+        libc::perror(c"Allocating listener socket list".as_ptr());
+        let mut fd = min_sock_fd;
+        while fd < min_sock_fd + num_fds {
+            libc::close(fd);
+            fd += 1;
+        }
+        return std::ptr::null_mut();
+    }
 
     let mut fd = min_sock_fd;
     while fd < min_sock_fd + num_fds {
@@ -258,7 +268,8 @@ pub unsafe fn ref_cache_listener_c_203_adopt_listen_sockets(
 pub unsafe fn ref_cache_listener_c_235_close_listen_sockets(lsocks: *mut Listeners) {
     assert!(!lsocks.is_null());
 
-    for &socket in &(*lsocks).sockets {
+    let lsocks = Box::from_raw(lsocks);
+    for &socket in &lsocks.sockets {
         libc::close(socket);
     }
 }
@@ -267,44 +278,37 @@ pub unsafe fn ref_cache_listener_c_235_close_listen_sockets(lsocks: *mut Listene
 pub unsafe fn ref_cache_listener_c_242_register_listener_pollers(
     lsocks: *mut Listeners,
     pw: *mut Poll_wrap,
-) -> *mut *mut Pw_item {
-    let polled_listeners =
-        libc::calloc((*lsocks).sockets.len(), std::mem::size_of::<*mut Pw_item>())
-            .cast::<*mut Pw_item>();
-
-    if polled_listeners.is_null() {
+) -> c_int {
+    let mut polled_items: Vec<*mut Pw_item> = Vec::new();
+    if polled_items
+        .try_reserve_exact((&(*lsocks).sockets).len())
+        .is_err()
+    {
         libc::perror(c"Allocating listener poll structs".as_ptr());
-        return std::ptr::null_mut();
+        return -1;
     }
 
     let mut i = 0usize;
     while i < (*lsocks).sockets.len() {
-        *polled_listeners.add(i) = ref_cache_poll_wrap_epoll_c_78_pw_register(
+        let item = ref_cache_poll_wrap_epoll_c_78_pw_register(
             pw,
             (&(*lsocks).sockets)[i],
             Pw_fd_type::SV_LISTENER,
             (libc::POLLIN | libc::POLLERR | libc::POLLHUP) as u32,
             std::ptr::null_mut::<c_void>(),
         );
-        if (*polled_listeners.add(i)).is_null() {
+        if item.is_null() {
             libc::perror(c"Adding listener socket to poller".as_ptr());
-            assert!((*polled_listeners.add(i)).is_null());
-            if i > 0 {
-                loop {
-                    i -= 1;
-                    if !(*polled_listeners.add(i)).is_null() {
-                        ref_cache_poll_wrap_epoll_c_126_pw_remove(pw, *polled_listeners.add(i), 0);
-                    }
-                    if i == 0 {
-                        break;
-                    }
+            while let Some(item) = polled_items.pop() {
+                if !item.is_null() {
+                    ref_cache_poll_wrap_epoll_c_126_pw_remove(pw, item, 0);
                 }
             }
-            libc::free(polled_listeners.cast());
-            return std::ptr::null_mut();
+            return -1;
         }
+        polled_items.push(item);
         i += 1;
     }
 
-    polled_listeners
+    0
 }

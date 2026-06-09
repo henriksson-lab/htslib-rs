@@ -65,24 +65,12 @@ impl Rand48State {
 // initialization is a true `static` (no `OnceLock`/lazy init required).
 static RAND48: Mutex<Rand48State> = Mutex::new(Rand48State::INITIAL);
 
-// NOTE on the `unsafe fn` signatures: the four public entry points keep
-// their original `unsafe` markings only because we faithfully mirror the C
-// API surface (raw `*mut u16` for `hts_erand48`/`_dorand48`). The internal
-// global-state access is now synchronized via `RAND48`, so concurrent calls
-// from multiple threads are race-free -- a strict improvement over the C
-// v1.23 source, whose `hts_drand48`/`hts_lrand48`/`hts_srand48` are
-// non-reentrant.
-
-pub unsafe fn _dorand48(xseed: *mut u16) {
+pub fn _dorand48(xseed: &mut [u16; 3]) {
     let state = *RAND48.lock().expect("hts_os rand48 mutex poisoned");
-    let mut buf = [*xseed.add(0), *xseed.add(1), *xseed.add(2)];
-    state.step(&mut buf);
-    *xseed.add(0) = buf[0];
-    *xseed.add(1) = buf[1];
-    *xseed.add(2) = buf[2];
+    state.step(xseed);
 }
 
-pub unsafe fn hts_srand48(seed: c_long) {
+pub fn hts_srand48(seed: c_long) {
     let mut guard = RAND48.lock().expect("hts_os rand48 mutex poisoned");
     guard.seed[0] = RAND48_SEED_0;
     guard.seed[1] = seed as u16;
@@ -93,20 +81,21 @@ pub unsafe fn hts_srand48(seed: c_long) {
     guard.add_state = RAND48_ADD;
 }
 
-pub unsafe fn hts_erand48(xseed: *mut u16) -> f64 {
+pub fn hts_erand48(xseed: &mut [u16; 3]) -> f64 {
     // Snapshot the (essentially immutable) multiplier/adder under the lock,
     // then advance the caller's external buffer with no further locking
     // required -- the buffer is owned by the caller, not by us.
     let state = *RAND48.lock().expect("hts_os rand48 mutex poisoned");
-    let mut buf = [*xseed.add(0), *xseed.add(1), *xseed.add(2)];
-    state.step(&mut buf);
-    *xseed.add(0) = buf[0];
-    *xseed.add(1) = buf[1];
-    *xseed.add(2) = buf[2];
-    Rand48State::erand_value(&buf)
+    state.step(xseed);
+    Rand48State::erand_value(xseed)
 }
 
-pub unsafe fn hts_drand48() -> f64 {
+pub fn hts_erand48_slice(xseed: &mut [u16]) -> Option<f64> {
+    let xseed: &mut [u16; 3] = xseed.try_into().ok()?;
+    Some(hts_erand48(xseed))
+}
+
+pub fn hts_drand48() -> f64 {
     let mut guard = RAND48.lock().expect("hts_os rand48 mutex poisoned");
     let snapshot = *guard;
     let mut buf = guard.seed;
@@ -115,7 +104,7 @@ pub unsafe fn hts_drand48() -> f64 {
     Rand48State::erand_value(&buf)
 }
 
-pub unsafe fn hts_lrand48() -> c_long {
+pub fn hts_lrand48() -> c_long {
     let mut guard = RAND48.lock().expect("hts_os rand48 mutex poisoned");
     let snapshot = *guard;
     let mut buf = guard.seed;
@@ -125,22 +114,22 @@ pub unsafe fn hts_lrand48() -> c_long {
 }
 
 // original: hts_srand48 (htslib/hts_os.c:35)
-pub unsafe fn hts_os_c_35_hts_srand48(seed: c_long) {
+pub fn hts_os_c_35_hts_srand48(seed: c_long) {
     hts_srand48(seed);
 }
 
 // original: hts_erand48 (htslib/hts_os.c:45)
-pub unsafe fn hts_os_c_45_hts_erand48(xseed: *mut u16) -> f64 {
+pub fn hts_os_c_45_hts_erand48(xseed: &mut [u16; 3]) -> f64 {
     hts_erand48(xseed)
 }
 
 // original: hts_drand48 (htslib/hts_os.c:48)
-pub unsafe fn hts_os_c_48_hts_drand48() -> f64 {
+pub fn hts_os_c_48_hts_drand48() -> f64 {
     hts_drand48()
 }
 
 // original: hts_lrand48 (htslib/hts_os.c:51)
-pub unsafe fn hts_os_c_51_hts_lrand48() -> c_long {
+pub fn hts_os_c_51_hts_lrand48() -> c_long {
     hts_lrand48()
 }
 
@@ -170,124 +159,123 @@ mod tests {
 
     #[test]
     fn rand48_sequence_matches_known_freebsd_algorithm_values() {
-        unsafe {
-            let _guard = rand48_test_lock();
-            // Reset internal state so this test does not depend on the
-            // multiplier/adder being at their default values.
-            hts_srand48(0);
-            let mut seed = [RAND48_SEED_0, RAND48_SEED_1, RAND48_SEED_2];
-            _dorand48(seed.as_mut_ptr());
-            assert_eq!(seed, [0x5101, 0xb725, 0x657e]);
+        let _guard = rand48_test_lock();
+        // Reset internal state so this test does not depend on the
+        // multiplier/adder being at their default values.
+        hts_srand48(0);
+        let mut seed = [RAND48_SEED_0, RAND48_SEED_1, RAND48_SEED_2];
+        _dorand48(&mut seed);
+        assert_eq!(seed, [0x5101, 0xb725, 0x657e]);
 
-            let mut custom = [0x330e, 0x0000, 0x0000];
-            let x = hts_erand48(custom.as_mut_ptr());
-            assert_eq!(custom, [0x5101, 0x62dc, 0x2bbb]);
-            assert_eq!(x.to_bits(), reference_erand(custom).to_bits());
+        let mut custom = [0x330e, 0x0000, 0x0000];
+        let x = hts_erand48(&mut custom);
+        assert_eq!(custom, [0x5101, 0x62dc, 0x2bbb]);
+        assert_eq!(x.to_bits(), reference_erand(custom).to_bits());
 
-            hts_srand48(1);
-            assert_eq!(hts_lrand48(), 89400484);
-            hts_srand48(1);
-            assert_eq!(
-                hts_drand48().to_bits(),
-                reference_erand(reference_next([RAND48_SEED_0, 0x0001, 0x0000])).to_bits()
-            );
-        }
+        hts_srand48(1);
+        assert_eq!(hts_lrand48(), 89400484);
+        hts_srand48(1);
+        assert_eq!(
+            hts_drand48().to_bits(),
+            reference_erand(reference_next([RAND48_SEED_0, 0x0001, 0x0000])).to_bits()
+        );
     }
 
     #[test]
     fn srand48_initializes_seed_words_and_multiplier_state() {
-        unsafe {
-            let _guard = rand48_test_lock();
-            hts_srand48(0x1234_5678);
+        let _guard = rand48_test_lock();
+        hts_srand48(0x1234_5678);
 
-            // Inspect the locked state directly to verify hts_srand48
-            // reinitialized every field exactly like the C original.
-            let snapshot = *RAND48.lock().expect("hts_os rand48 mutex poisoned");
-            assert_eq!(snapshot.seed[0], RAND48_SEED_0);
-            assert_eq!(snapshot.seed[1], 0x5678);
-            assert_eq!(snapshot.seed[2], 0x1234);
-            assert_eq!(snapshot.mult[0], RAND48_MULT_0);
-            assert_eq!(snapshot.mult[1], RAND48_MULT_1);
-            assert_eq!(snapshot.mult[2], RAND48_MULT_2);
-            assert_eq!(snapshot.add_state, RAND48_ADD);
-        }
+        // Inspect the locked state directly to verify hts_srand48
+        // reinitialized every field exactly like the C original.
+        let snapshot = *RAND48.lock().expect("hts_os rand48 mutex poisoned");
+        assert_eq!(snapshot.seed[0], RAND48_SEED_0);
+        assert_eq!(snapshot.seed[1], 0x5678);
+        assert_eq!(snapshot.seed[2], 0x1234);
+        assert_eq!(snapshot.mult[0], RAND48_MULT_0);
+        assert_eq!(snapshot.mult[1], RAND48_MULT_1);
+        assert_eq!(snapshot.mult[2], RAND48_MULT_2);
+        assert_eq!(snapshot.add_state, RAND48_ADD);
     }
 
     #[test]
     fn erand48_updates_all_seed_words_at_upper_boundary() {
-        unsafe {
-            let _guard = rand48_test_lock();
-            // hts_erand48 takes a caller-owned buffer but uses the global
-            // multiplier/adder -- reset them so the test result is stable
-            // regardless of preceding tests.
-            hts_srand48(0);
-            let mut seed = [0xffff, 0xffff, 0xffff];
-            let value = hts_os_c_45_hts_erand48(seed.as_mut_ptr());
+        let _guard = rand48_test_lock();
+        // hts_erand48 takes a caller-owned buffer but uses the global
+        // multiplier/adder -- reset them so the test result is stable
+        // regardless of preceding tests.
+        hts_srand48(0);
+        let mut seed = [0xffff, 0xffff, 0xffff];
+        let value = hts_erand48(&mut seed);
 
-            assert_eq!(seed, [0x199e, 0x2113, 0xfffa]);
-            assert_eq!(value.to_bits(), reference_erand(seed).to_bits());
-        }
+        assert_eq!(seed, [0x199e, 0x2113, 0xfffa]);
+        assert_eq!(value.to_bits(), reference_erand(seed).to_bits());
+    }
+
+    #[test]
+    fn erand48_translated_entrypoint_accepts_seed_reference() {
+        let _guard = rand48_test_lock();
+        hts_srand48(0);
+        let mut seed = [0xffff, 0xffff, 0xffff];
+        let value = hts_os_c_45_hts_erand48(&mut seed);
+
+        assert_eq!(seed, [0x199e, 0x2113, 0xfffa]);
+        assert_eq!(value.to_bits(), reference_erand(seed).to_bits());
     }
 
     #[test]
     fn rand48_entrypoint_aliases_share_deterministic_state_progression() {
-        unsafe {
-            let _guard = rand48_test_lock();
-            hts_os_c_35_hts_srand48(0x1234_5678);
-            let first_seed = reference_next([RAND48_SEED_0, 0x5678, 0x1234]);
-            let first_value = reference_erand(first_seed);
-            assert_eq!(hts_os_c_51_hts_lrand48(), 0x5c2a01fa);
+        let _guard = rand48_test_lock();
+        hts_os_c_35_hts_srand48(0x1234_5678);
+        let first_seed = reference_next([RAND48_SEED_0, 0x5678, 0x1234]);
+        let first_value = reference_erand(first_seed);
+        assert_eq!(hts_os_c_51_hts_lrand48(), 0x5c2a01fa);
 
-            hts_os_c_35_hts_srand48(0x1234_5678);
-            assert_eq!(hts_os_c_48_hts_drand48().to_bits(), first_value.to_bits());
+        hts_os_c_35_hts_srand48(0x1234_5678);
+        assert_eq!(hts_os_c_48_hts_drand48().to_bits(), first_value.to_bits());
 
-            let second_seed = reference_next(first_seed);
-            let second_value = reference_erand(second_seed);
-            assert_eq!(hts_os_c_48_hts_drand48().to_bits(), second_value.to_bits());
-        }
+        let second_seed = reference_next(first_seed);
+        let second_value = reference_erand(second_seed);
+        assert_eq!(hts_os_c_48_hts_drand48().to_bits(), second_value.to_bits());
     }
 
     #[test]
     fn erand48_uses_caller_seed_without_advancing_global_state() {
-        unsafe {
-            let _guard = rand48_test_lock();
-            hts_srand48(0x0000_0001);
-            let expected_global_seed = reference_next([RAND48_SEED_0, 0x0001, 0x0000]);
-            let expected_global_value = reference_erand(expected_global_seed);
+        let _guard = rand48_test_lock();
+        hts_srand48(0x0000_0001);
+        let expected_global_seed = reference_next([RAND48_SEED_0, 0x0001, 0x0000]);
+        let expected_global_value = reference_erand(expected_global_seed);
 
-            let mut explicit_seed = [0x330e, 0x5678, 0x1234];
-            let expected_explicit_seed = reference_next(explicit_seed);
-            let explicit_value = hts_erand48(explicit_seed.as_mut_ptr());
-            assert_eq!(explicit_seed, expected_explicit_seed);
-            assert_eq!(
-                explicit_value.to_bits(),
-                reference_erand(expected_explicit_seed).to_bits()
-            );
+        let mut explicit_seed = [0x330e, 0x5678, 0x1234];
+        let expected_explicit_seed = reference_next(explicit_seed);
+        let explicit_value = hts_erand48(&mut explicit_seed);
+        assert_eq!(explicit_seed, expected_explicit_seed);
+        assert_eq!(
+            explicit_value.to_bits(),
+            reference_erand(expected_explicit_seed).to_bits()
+        );
 
-            assert_eq!(hts_drand48().to_bits(), expected_global_value.to_bits());
-        }
+        assert_eq!(hts_drand48().to_bits(), expected_global_value.to_bits());
     }
 
     #[test]
     fn srand48_reinitializes_after_alias_state_advancement() {
-        unsafe {
-            let _guard = rand48_test_lock();
-            let first_seed = reference_next([RAND48_SEED_0, 0xffff, 0xffff]);
-            let first_lrand = ((first_seed[2] as c_long) << 15) + ((first_seed[1] as c_long) >> 1);
+        let _guard = rand48_test_lock();
+        let first_seed = reference_next([RAND48_SEED_0, 0xffff, 0xffff]);
+        let first_lrand = ((first_seed[2] as c_long) << 15) + ((first_seed[1] as c_long) >> 1);
 
-            hts_os_c_35_hts_srand48(-1);
-            assert_eq!(hts_os_c_51_hts_lrand48(), first_lrand);
-            assert_ne!(hts_os_c_51_hts_lrand48(), first_lrand);
+        hts_os_c_35_hts_srand48(-1);
+        assert_eq!(hts_os_c_51_hts_lrand48(), first_lrand);
+        assert_ne!(hts_os_c_51_hts_lrand48(), first_lrand);
 
-            hts_srand48(-1);
-            // Inspect the locked state to confirm the seed words were reset
-            // exactly to the documented values.
-            let snapshot = *RAND48.lock().expect("hts_os rand48 mutex poisoned");
-            assert_eq!(snapshot.seed[0], RAND48_SEED_0);
-            assert_eq!(snapshot.seed[1], 0xffff);
-            assert_eq!(snapshot.seed[2], 0xffff);
-            assert_eq!(hts_lrand48(), first_lrand);
-        }
+        hts_srand48(-1);
+        // Inspect the locked state to confirm the seed words were reset
+        // exactly to the documented values.
+        let snapshot = *RAND48.lock().expect("hts_os rand48 mutex poisoned");
+        assert_eq!(snapshot.seed[0], RAND48_SEED_0);
+        assert_eq!(snapshot.seed[1], 0xffff);
+        assert_eq!(snapshot.seed[2], 0xffff);
+        assert_eq!(hts_lrand48(), first_lrand);
     }
 
     // -------- Concurrency tests for the new Mutex-protected state. --------
@@ -331,63 +319,61 @@ mod tests {
         const THREADS: usize = 8;
         const PER_THREAD: usize = 10_000;
 
-        unsafe {
-            let _guard = rand48_test_lock();
-            hts_srand48(0xC0FFEE);
-            let start_seed = {
-                let s = *RAND48.lock().expect("hts_os rand48 mutex poisoned");
-                s.seed
-            };
+        let _guard = rand48_test_lock();
+        hts_srand48(0xC0FFEE);
+        let start_seed = {
+            let s = *RAND48.lock().expect("hts_os rand48 mutex poisoned");
+            s.seed
+        };
 
-            // Build the universe of legal post-step states.
-            let trajectory = forward_states(start_seed, THREADS * PER_THREAD);
-            let legal_bits: HashSet<u64> = trajectory
-                .iter()
-                .map(|s| reference_erand(*s).to_bits())
-                .collect();
+        // Build the universe of legal post-step states.
+        let trajectory = forward_states(start_seed, THREADS * PER_THREAD);
+        let legal_bits: HashSet<u64> = trajectory
+            .iter()
+            .map(|s| reference_erand(*s).to_bits())
+            .collect();
 
-            let barrier = Arc::new(Barrier::new(THREADS));
-            let handles: Vec<_> = (0..THREADS)
-                .map(|_| {
-                    let barrier = barrier.clone();
-                    thread::spawn(move || {
-                        let mut out = Vec::with_capacity(PER_THREAD);
-                        barrier.wait();
-                        for _ in 0..PER_THREAD {
-                            let v = hts_drand48();
-                            out.push(v);
-                        }
-                        out
-                    })
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let barrier = barrier.clone();
+                thread::spawn(move || {
+                    let mut out = Vec::with_capacity(PER_THREAD);
+                    barrier.wait();
+                    for _ in 0..PER_THREAD {
+                        let v = hts_drand48();
+                        out.push(v);
+                    }
+                    out
                 })
-                .collect();
+            })
+            .collect();
 
-            let mut all_values = Vec::with_capacity(THREADS * PER_THREAD);
-            for h in handles {
-                let chunk = h.join().expect("worker thread panicked");
-                all_values.extend(chunk);
-            }
-
-            assert_eq!(all_values.len(), THREADS * PER_THREAD);
-            for v in &all_values {
-                assert!(v.is_finite(), "hts_drand48 returned a non-finite value");
-                assert!(
-                    (0.0..1.0).contains(v),
-                    "hts_drand48 returned out-of-range value {v}"
-                );
-                assert!(
-                    legal_bits.contains(&v.to_bits()),
-                    "hts_drand48 returned an off-trajectory bit pattern {:#x}",
-                    v.to_bits()
-                );
-            }
-
-            // After exactly `THREADS * PER_THREAD` draws the global state
-            // must equal the final reference trajectory state (because the
-            // mutex serializes every draw, the total step count is exact).
-            let final_state = *RAND48.lock().expect("hts_os rand48 mutex poisoned");
-            assert_eq!(final_state.seed, *trajectory.last().unwrap());
+        let mut all_values = Vec::with_capacity(THREADS * PER_THREAD);
+        for h in handles {
+            let chunk = h.join().expect("worker thread panicked");
+            all_values.extend(chunk);
         }
+
+        assert_eq!(all_values.len(), THREADS * PER_THREAD);
+        for v in &all_values {
+            assert!(v.is_finite(), "hts_drand48 returned a non-finite value");
+            assert!(
+                (0.0..1.0).contains(v),
+                "hts_drand48 returned out-of-range value {v}"
+            );
+            assert!(
+                legal_bits.contains(&v.to_bits()),
+                "hts_drand48 returned an off-trajectory bit pattern {:#x}",
+                v.to_bits()
+            );
+        }
+
+        // After exactly `THREADS * PER_THREAD` draws the global state
+        // must equal the final reference trajectory state (because the
+        // mutex serializes every draw, the total step count is exact).
+        let final_state = *RAND48.lock().expect("hts_os rand48 mutex poisoned");
+        assert_eq!(final_state.seed, *trajectory.last().unwrap());
     }
 
     #[test]
@@ -400,47 +386,45 @@ mod tests {
         const READERS: usize = 3;
         const ITERS: usize = 5_000;
 
-        unsafe {
-            let _guard = rand48_test_lock();
-            hts_srand48(42);
+        let _guard = rand48_test_lock();
+        hts_srand48(42);
 
-            let stop = Arc::new(AtomicBool::new(false));
-            let stop_writer = stop.clone();
-            let writer = thread::spawn(move || {
-                let mut n: c_long = 0;
-                while !stop_writer.load(Ordering::Relaxed) {
-                    hts_srand48(n.wrapping_mul(0x9E37_79B9) ^ 42);
-                    n = n.wrapping_add(1);
-                }
-                n
-            });
-
-            let readers: Vec<_> = (0..READERS)
-                .map(|_| {
-                    thread::spawn(|| {
-                        for _ in 0..ITERS {
-                            let v = hts_drand48();
-                            assert!(v.is_finite());
-                            assert!((0.0..1.0).contains(&v));
-                        }
-                    })
-                })
-                .collect();
-
-            for r in readers {
-                r.join().expect("reader thread panicked");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_writer = stop.clone();
+        let writer = thread::spawn(move || {
+            let mut n: c_long = 0;
+            while !stop_writer.load(Ordering::Relaxed) {
+                hts_srand48(n.wrapping_mul(0x9E37_79B9) ^ 42);
+                n = n.wrapping_add(1);
             }
-            stop.store(true, Ordering::Relaxed);
-            let writes = writer.join().expect("writer thread panicked");
-            assert!(writes > 0, "writer made no progress");
+            n
+        });
 
-            // After the storm, hts_srand48(42) should still produce the
-            // documented deterministic sequence -- proving the state is not
-            // corrupted by the contention.
-            hts_srand48(42);
-            let expected = reference_next([RAND48_SEED_0, 42, 0]);
-            assert_eq!(hts_drand48().to_bits(), reference_erand(expected).to_bits());
+        let readers: Vec<_> = (0..READERS)
+            .map(|_| {
+                thread::spawn(|| {
+                    for _ in 0..ITERS {
+                        let v = hts_drand48();
+                        assert!(v.is_finite());
+                        assert!((0.0..1.0).contains(&v));
+                    }
+                })
+            })
+            .collect();
+
+        for r in readers {
+            r.join().expect("reader thread panicked");
         }
+        stop.store(true, Ordering::Relaxed);
+        let writes = writer.join().expect("writer thread panicked");
+        assert!(writes > 0, "writer made no progress");
+
+        // After the storm, hts_srand48(42) should still produce the
+        // documented deterministic sequence -- proving the state is not
+        // corrupted by the contention.
+        hts_srand48(42);
+        let expected = reference_next([RAND48_SEED_0, 42, 0]);
+        assert_eq!(hts_drand48().to_bits(), reference_erand(expected).to_bits());
     }
 
     #[test]
@@ -449,28 +433,26 @@ mod tests {
         // sequence must be bit-identical across two independent reseeds.
         const K: usize = 1024;
 
-        unsafe {
-            let _guard = rand48_test_lock();
+        let _guard = rand48_test_lock();
 
-            hts_srand48(0xDEADBEEF_u32 as c_long);
-            let mut first = Vec::with_capacity(K);
-            for _ in 0..K {
-                first.push(hts_drand48().to_bits());
-            }
-            let first_lrand = hts_lrand48();
-
-            hts_srand48(0xDEADBEEF_u32 as c_long);
-            let mut second = Vec::with_capacity(K);
-            for _ in 0..K {
-                second.push(hts_drand48().to_bits());
-            }
-            let second_lrand = hts_lrand48();
-
-            assert_eq!(first, second, "drand48 not bit-reproducible after reseed");
-            assert_eq!(
-                first_lrand, second_lrand,
-                "lrand48 not bit-reproducible after reseed"
-            );
+        hts_srand48(0xDEADBEEF_u32 as c_long);
+        let mut first = Vec::with_capacity(K);
+        for _ in 0..K {
+            first.push(hts_drand48().to_bits());
         }
+        let first_lrand = hts_lrand48();
+
+        hts_srand48(0xDEADBEEF_u32 as c_long);
+        let mut second = Vec::with_capacity(K);
+        for _ in 0..K {
+            second.push(hts_drand48().to_bits());
+        }
+        let second_lrand = hts_lrand48();
+
+        assert_eq!(first, second, "drand48 not bit-reproducible after reseed");
+        assert_eq!(
+            first_lrand, second_lrand,
+            "lrand48 not bit-reproducible after reseed"
+        );
     }
 }

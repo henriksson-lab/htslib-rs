@@ -1,5 +1,5 @@
 use crate::htslib_rs::hts::{
-    kgets_func, kgets_func2, kputc, kputsn, ks_resize, ks_tokaux_t, kstring_t, size_t,
+    kgets_func, kgets_func2, kputc, kputsn, ks_free, ks_resize, ks_tokaux_t, kstring_t, size_t,
 };
 use std::ffi::{c_char, c_int, c_void, CStr};
 
@@ -9,11 +9,29 @@ pub unsafe fn kstring_c_142_kvsprintf(
     fmt: *const c_char,
     ap: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> c_int {
+    if s.is_null() || fmt.is_null() || ap.is_null() {
+        return -1;
+    }
+    unsafe { kstring_kvsprintf_ref(&mut *s, CStr::from_ptr(fmt), &mut *ap) }
+}
+
+pub unsafe fn kstring_kvsprintf_ref(
+    s: &mut kstring_t,
+    fmt: &CStr,
+    ap: &mut crate::htslib_rs::c_compat::__va_list_tag,
+) -> c_int {
+    kstring_kvsprintf_bytes_ref(s, fmt.to_bytes(), ap)
+}
+
+pub unsafe fn kstring_kvsprintf_bytes_ref(
+    s: &mut kstring_t,
+    fmt: &[u8],
+    ap: &mut crate::htslib_rs::c_compat::__va_list_tag,
+) -> c_int {
     let mut args = std::mem::MaybeUninit::<crate::htslib_rs::c_compat::__va_list_tag>::uninit();
-    std::ptr::copy_nonoverlapping(ap, args.as_mut_ptr(), 1);
+    std::ptr::copy_nonoverlapping(ap as *mut _, args.as_mut_ptr(), 1);
     let mut args = args.assume_init();
 
-    let fmt = CStr::from_ptr(fmt).to_bytes();
     let mut out = Vec::new();
     let mut i = 0usize;
     while i < fmt.len() {
@@ -38,20 +56,19 @@ pub unsafe fn kstring_c_142_kvsprintf(
             }
             b'g' => {
                 let d = kstring_va_arg_f64(&mut args);
-                let mut tmp: kstring_t = std::mem::zeroed();
-                if kputd(d, &mut tmp) < 0 {
+                let Some(tmp) = kputd_bytes(d) else {
                     return -1;
-                }
-                if !tmp.s.is_null() {
-                    out.extend_from_slice(CStr::from_ptr(tmp.s).to_bytes());
-                    libc::free(tmp.s.cast());
-                }
+                };
+                out.extend_from_slice(&tmp);
             }
             _ => return -1,
         }
         i += 1;
     }
 
+    if out.len() > c_int::MAX as usize {
+        return -1;
+    }
     if kputsn(out.as_ptr().cast(), out.len(), s) < 0 {
         -1
     } else {
@@ -99,11 +116,22 @@ pub unsafe fn kstring_c_177_ksprintf(
     fmt: *const c_char,
     args: &[KsPrintfArg],
 ) -> c_int {
-    if fmt.is_null() {
+    if s.is_null() || fmt.is_null() {
         return -1;
     }
 
-    let fmt = CStr::from_ptr(fmt).to_bytes();
+    kstring_ksprintf_ref(&mut *s, CStr::from_ptr(fmt), args)
+}
+
+pub unsafe fn kstring_ksprintf_ref(s: &mut kstring_t, fmt: &CStr, args: &[KsPrintfArg]) -> c_int {
+    kstring_ksprintf_bytes_ref(s, fmt.to_bytes(), args)
+}
+
+pub unsafe fn kstring_ksprintf_bytes_ref(
+    s: &mut kstring_t,
+    fmt: &[u8],
+    args: &[KsPrintfArg],
+) -> c_int {
     let mut out = Vec::new();
     let mut arg_i = 0usize;
     let mut i = 0usize;
@@ -141,56 +169,56 @@ pub unsafe fn kstring_c_177_ksprintf(
         i += 1;
     }
 
+    if out.len() > c_int::MAX as usize {
+        return -1;
+    }
     kputsn(out.as_ptr().cast(), out.len(), s)
 }
 
 // original: main (htslib/kstring.c:531)
 pub unsafe fn kstring_c_531_main() -> c_int {
     let mut s: kstring_t = std::mem::zeroed();
-    let s = &mut s as *mut kstring_t;
-    let mut n = 0;
     let mut aux: ks_tokaux_t = std::mem::zeroed();
 
-    kstring_c_177_ksprintf(s, c" abcdefg:    %d ".as_ptr(), &[KsPrintfArg::Int(100)]);
-    libc::printf(c"'%s'\n".as_ptr(), (*s).s);
+    kstring_ksprintf_ref(&mut s, c" abcdefg:    %d ", &[KsPrintfArg::Int(100)]);
+    libc::printf(c"'%s'\n".as_ptr(), s.s);
 
-    let fields = ksplit(s, 0, &mut n);
+    let fields = ksplit_vec_ref(&mut s, 0).unwrap_or_default();
+    let n = fields.len() as c_int;
     let mut i = 0;
     while i < n {
         libc::printf(
             c"field[%d] = '%s'\n".as_ptr(),
             i,
-            (*s).s.add(*fields.add(i as usize) as usize),
+            s.s.add(fields[i as usize] as usize),
         );
         i += 1;
     }
 
-    (*s).l = 0;
-    let mut p = kstrtok(c"ab:cde:fg/hij::k".as_ptr(), c":/".as_ptr(), &mut aux);
+    s.l = 0;
+    let mut p = kstrtok_ref(Some(c"ab:cde:fg/hij::k"), Some(c":/"), &mut aux);
     while !p.is_null() {
-        kputsn(p, aux.p.offset_from(p) as usize, s);
-        kputc(b'\n' as c_int, s);
-        p = kstrtok(std::ptr::null(), std::ptr::null(), &mut aux);
+        kputsn(p, aux.p.offset_from(p) as usize, &mut s);
+        kputc(b'\n' as c_int, &mut s);
+        p = kstrtok_ref(None, None, &mut aux);
     }
-    libc::printf(c"%s".as_ptr(), (*s).s);
+    libc::printf(c"%s".as_ptr(), s.s);
 
-    libc::free((*s).s.cast());
-    libc::free(fields.cast());
+    ks_free(&mut s);
 
     {
         let str_ = c"abcdefgcdgcagtcakcdcd".as_ptr();
-        let pat = c"cd".as_ptr();
+        let pat = c"cd";
         let mut s = str_;
-        let mut prep: *mut c_int = std::ptr::null_mut();
+        let mut prep = None;
         loop {
-            let ret = kstrstr(s, pat, &mut prep);
+            let ret = kstrstr_boxed_prep_ref(CStr::from_ptr(s), pat, Some(&mut prep));
             if ret.is_null() {
                 break;
             }
             libc::printf(c"match: %s\n".as_ptr(), ret);
-            s = ret.add(*prep as usize);
+            s = ret.add(prep.as_deref().unwrap()[0] as usize);
         }
-        libc::free(prep.cast());
     }
 
     0
@@ -206,112 +234,191 @@ pub unsafe fn ksplit_core(
     _max: *mut c_int,
     _offsets: *mut *mut c_int,
 ) -> c_int {
-    let mut n = 0;
-    let mut max = *_max;
-    let mut offsets = *_offsets;
-    let l = CStr::from_ptr(s).to_bytes().len() as c_int;
-
-    let mut last_char = 0;
-    let mut last_start = 0;
-    let mut i = 0;
-    while i <= l {
-        let ch = *s.add(i as usize);
-        let signed_ch = ch as c_int;
-        let unsigned_ch = (ch as u8) as c_int;
-        if delimiter == 0 {
-            if libc::isspace(unsigned_ch) != 0 || ch == 0 {
-                if libc::isgraph(last_char) != 0 {
-                    if !_offsets.is_null() {
-                        *s.add(i as usize) = 0;
-                        if n == max {
-                            max = if max != 0 { max << 1 } else { 2 };
-                            let tmp = crate::htslib_rs::c_compat::realloc(
-                                offsets.cast(),
-                                std::mem::size_of::<c_int>() as u64 * max as u64,
-                            )
-                            .cast::<c_int>();
-                            if tmp.is_null() {
-                                crate::htslib_rs::c_compat::free(offsets.cast());
-                                *_offsets = std::ptr::null_mut();
-                                return 0;
-                            }
-                            offsets = tmp;
-                        }
-                        *offsets.add(n as usize) = last_start;
-                        n += 1;
-                    } else {
-                        n += 1;
-                    }
-                }
-            } else if libc::isspace(last_char) != 0 || last_char == 0 {
-                last_start = i;
-            }
-        } else if signed_ch == delimiter || ch == 0 {
-            if last_char != 0 && last_char != delimiter {
-                if !_offsets.is_null() {
-                    *s.add(i as usize) = 0;
-                    if n == max {
-                        max = if max != 0 { max << 1 } else { 2 };
-                        let tmp = crate::htslib_rs::c_compat::realloc(
-                            offsets.cast(),
-                            std::mem::size_of::<c_int>() as u64 * max as u64,
-                        )
-                        .cast::<c_int>();
-                        if tmp.is_null() {
-                            crate::htslib_rs::c_compat::free(offsets.cast());
-                            *_offsets = std::ptr::null_mut();
-                            return 0;
-                        }
-                        offsets = tmp;
-                    }
-                    *offsets.add(n as usize) = last_start;
-                    n += 1;
-                } else {
-                    n += 1;
-                }
-            }
-        } else if last_char == delimiter || last_char == 0 {
-            last_start = i;
-        }
-        last_char = unsigned_ch;
-        i += 1;
+    if s.is_null() || _max.is_null() {
+        return 0;
     }
-    *_max = max;
-    *_offsets = offsets;
+    let len = CStr::from_ptr(s).to_bytes().len();
+    ksplit_core_ref(
+        std::slice::from_raw_parts_mut(s.cast::<u8>(), len + 1),
+        delimiter,
+        &mut *_max,
+        _offsets.as_mut(),
+    )
+}
+
+pub fn ksplit_core_ref(
+    buf: &mut [u8],
+    delimiter: c_int,
+    max: &mut c_int,
+    offsets_out: Option<&mut *mut c_int>,
+) -> c_int {
+    let Some(fields) = ksplit_core_slice_ref(buf, delimiter, offsets_out.is_some()) else {
+        return 0;
+    };
+    if fields.len() > c_int::MAX as usize {
+        return 0;
+    }
+    let n = fields.len() as c_int;
+    if let Some(offsets_out) = offsets_out {
+        let offsets = unsafe {
+            let Some(offsets) = copy_offsets_to_libc_buffer(fields, max, *offsets_out) else {
+                crate::htslib_rs::c_compat::free((*offsets_out).cast());
+                *offsets_out = std::ptr::null_mut();
+                return 0;
+            };
+            offsets
+        };
+        *offsets_out = offsets;
+    }
     n
 }
 
 pub unsafe fn ksplit(s: *mut kstring_t, delimiter: c_int, n: *mut c_int) -> *mut c_int {
+    if s.is_null() || n.is_null() {
+        return std::ptr::null_mut();
+    }
+    ksplit_ref(&mut *s, delimiter, &mut *n)
+}
+
+pub unsafe fn ksplit_ref(s: &mut kstring_t, delimiter: c_int, n: &mut c_int) -> *mut c_int {
+    if s.s.is_null() {
+        *n = 0;
+        return std::ptr::null_mut();
+    }
+
+    let Some(fields) = ksplit_vec_ref(s, delimiter) else {
+        *n = 0;
+        return std::ptr::null_mut();
+    };
+    if fields.len() > c_int::MAX as usize {
+        *n = 0;
+        return std::ptr::null_mut();
+    }
+    let count = fields.len() as c_int;
     let mut max = 0;
-    let mut offsets: *mut c_int = std::ptr::null_mut();
-    *n = ksplit_core((*s).s, delimiter, &mut max, &mut offsets);
+    let Some(offsets) = copy_offsets_to_libc_buffer(fields, &mut max, std::ptr::null_mut()) else {
+        *n = 0;
+        return std::ptr::null_mut();
+    };
+    *n = count;
     offsets
 }
 
+pub unsafe fn ksplit_vec_ref(s: &mut kstring_t, delimiter: c_int) -> Option<Vec<c_int>> {
+    if s.s.is_null() {
+        return None;
+    }
+
+    ksplit_core_slice_ref(
+        std::slice::from_raw_parts_mut(s.s.cast::<u8>(), s.l + 1),
+        delimiter,
+        true,
+    )
+}
+
+fn ksplit_core_slice_ref(buf: &mut [u8], delimiter: c_int, write_nuls: bool) -> Option<Vec<c_int>> {
+    let mut offsets = Vec::new();
+    let mut last_char = 0;
+    let mut last_start = 0;
+    for (i, ch) in buf.iter_mut().enumerate() {
+        let signed_ch = *ch as i8 as c_int;
+        let unsigned_ch = *ch as c_int;
+        if delimiter == 0 {
+            if unsafe { libc::isspace(unsigned_ch) } != 0 || *ch == 0 {
+                if unsafe { libc::isgraph(last_char) } != 0 {
+                    offsets.try_reserve(1).ok()?;
+                    if write_nuls {
+                        *ch = 0;
+                        offsets.push(last_start);
+                    } else {
+                        offsets.push(0);
+                    }
+                }
+            } else if unsafe { libc::isspace(last_char) } != 0 || last_char == 0 {
+                last_start = i as c_int;
+            }
+        } else if signed_ch == delimiter || *ch == 0 {
+            if last_char != 0 && last_char != delimiter {
+                offsets.try_reserve(1).ok()?;
+                if write_nuls {
+                    *ch = 0;
+                    offsets.push(last_start);
+                } else {
+                    offsets.push(0);
+                }
+            }
+        } else if last_char == delimiter || last_char == 0 {
+            last_start = i as c_int;
+        }
+        last_char = unsigned_ch;
+    }
+
+    Some(offsets)
+}
+
+unsafe fn copy_offsets_to_libc_buffer(
+    fields: Vec<c_int>,
+    max: &mut c_int,
+    offsets: *mut c_int,
+) -> Option<*mut c_int> {
+    let needed = fields.len();
+    if needed == 0 {
+        return Some(offsets);
+    }
+    let current = (*max).max(0) as usize;
+    let target = if current >= needed {
+        current
+    } else {
+        let mut target = current.max(2);
+        while target < needed {
+            target = target.checked_mul(2)?;
+        }
+        target
+    };
+    if target > c_int::MAX as usize {
+        return None;
+    }
+    let bytes = target.checked_mul(std::mem::size_of::<c_int>())?;
+    let out = crate::htslib_rs::c_compat::realloc(offsets.cast(), bytes as u64).cast::<c_int>();
+    if out.is_null() {
+        return None;
+    }
+    std::ptr::copy_nonoverlapping(fields.as_ptr(), out, needed);
+    *max = target as c_int;
+    Some(out)
+}
+
 pub unsafe fn kgetline(s: *mut kstring_t, fgets_fn: kgets_func, fp: *mut c_void) -> c_int {
-    let l0 = (*s).l;
-    while (*s).l == l0 || *(*s).s.add((*s).l - 1) != b'\n' as c_char {
-        if (*s).m - (*s).l < 200 && ks_resize(s, (*s).m + 200) < 0 {
+    if s.is_null() {
+        return libc::EOF;
+    }
+    kgetline_ref(&mut *s, fgets_fn, fp)
+}
+
+pub unsafe fn kgetline_ref(s: &mut kstring_t, fgets_fn: kgets_func, fp: *mut c_void) -> c_int {
+    let l0 = s.l;
+    while s.l == l0 || *s.s.add(s.l - 1) != b'\n' as c_char {
+        if s.m - s.l < 200 && ks_resize(s, s.m + 200) < 0 {
             return libc::EOF;
         }
-        let ret = fgets_fn.unwrap_unchecked()((*s).s.add((*s).l), ((*s).m - (*s).l) as c_int, fp);
+        let ret = fgets_fn.unwrap_unchecked()(s.s.add(s.l), (s.m - s.l) as c_int, fp);
         if ret.is_null() {
             break;
         }
-        (*s).l += CStr::from_ptr((*s).s.add((*s).l)).to_bytes().len();
+        s.l += CStr::from_ptr(s.s.add(s.l)).to_bytes().len();
     }
 
-    if (*s).l == l0 {
+    if s.l == l0 {
         return libc::EOF;
     }
 
-    if (*s).l > l0 && *(*s).s.add((*s).l - 1) == b'\n' as c_char {
-        (*s).l -= 1;
-        if (*s).l > l0 && *(*s).s.add((*s).l - 1) == b'\r' as c_char {
-            (*s).l -= 1;
+    if s.l > l0 && *s.s.add(s.l - 1) == b'\n' as c_char {
+        s.l -= 1;
+        if s.l > l0 && *s.s.add(s.l - 1) == b'\r' as c_char {
+            s.l -= 1;
         }
     }
-    *(*s).s.add((*s).l) = 0;
+    *s.s.add(s.l) = 0;
     0
 }
 
@@ -327,34 +434,41 @@ pub unsafe fn kfgetline(s: *mut kstring_t, fp: *mut libc::FILE) -> c_int {
     if s.is_null() || fp.is_null() {
         return libc::EOF;
     }
-    kgetline(s, Some(fgets_wrapper), fp.cast())
+    kgetline_ref(&mut *s, Some(fgets_wrapper), fp.cast())
 }
 
 pub unsafe fn kgetline2(s: *mut kstring_t, fgets_fn: kgets_func2, fp: *mut c_void) -> c_int {
-    let l0 = (*s).l;
-    while (*s).l == l0 || *(*s).s.add((*s).l - 1) != b'\n' as c_char {
-        if (*s).m - (*s).l < 200 && ks_resize(s, (*s).m + 200) < 0 {
-            fgets_fn.unwrap_unchecked()((*s).s.add((*s).l), 0, fp);
+    if s.is_null() {
+        return libc::EOF;
+    }
+    kgetline2_ref(&mut *s, fgets_fn, fp)
+}
+
+pub unsafe fn kgetline2_ref(s: &mut kstring_t, fgets_fn: kgets_func2, fp: *mut c_void) -> c_int {
+    let l0 = s.l;
+    while s.l == l0 || *s.s.add(s.l - 1) != b'\n' as c_char {
+        if s.m - s.l < 200 && ks_resize(s, s.m + 200) < 0 {
+            fgets_fn.unwrap_unchecked()(s.s.add(s.l), 0, fp);
             return libc::EOF;
         }
-        let len = fgets_fn.unwrap_unchecked()((*s).s.add((*s).l), (*s).m - (*s).l, fp);
+        let len = fgets_fn.unwrap_unchecked()(s.s.add(s.l), s.m - s.l, fp);
         if len <= 0 {
             break;
         }
-        (*s).l += len as usize;
+        s.l += len as usize;
     }
 
-    if (*s).l == l0 {
+    if s.l == l0 {
         return libc::EOF;
     }
 
-    if (*s).l > l0 && *(*s).s.add((*s).l - 1) == b'\n' as c_char {
-        (*s).l -= 1;
-        if (*s).l > l0 && *(*s).s.add((*s).l - 1) == b'\r' as c_char {
-            (*s).l -= 1;
+    if s.l > l0 && *s.s.add(s.l - 1) == b'\n' as c_char {
+        s.l -= 1;
+        if s.l > l0 && *s.s.add(s.l - 1) == b'\r' as c_char {
+            s.l -= 1;
         }
     }
-    *(*s).s.add((*s).l) = 0;
+    *s.s.add(s.l) = 0;
     0
 }
 
@@ -363,56 +477,98 @@ pub unsafe fn kstrtok(
     sep_in: *const c_char,
     aux: *mut ks_tokaux_t,
 ) -> *mut c_char {
-    let sep = sep_in.cast::<u8>();
-    if !sep.is_null() {
-        if str_.is_null() && (*aux).finished != 0 {
-            return std::ptr::null_mut();
-        }
-        (*aux).finished = 0;
-        if *sep != 0 && *sep.add(1) != 0 {
-            (*aux).sep = -1;
-            (*aux).tab = [0; 4];
-            let mut p = sep;
-            while *p != 0 {
-                (*aux).tab[(*p >> 6) as usize] |= 1u64 << (*p & 0x3f);
-                p = p.add(1);
-            }
-        } else {
-            (*aux).sep = *sep as c_int;
-        }
-    }
-    if (*aux).finished != 0 {
+    if aux.is_null() {
         return std::ptr::null_mut();
     }
-    let start = if !str_.is_null() {
-        (*aux).finished = 0;
-        str_.cast::<u8>()
-    } else {
-        (*aux).p.add(1).cast::<u8>()
-    };
+    kstrtok_ref(
+        (!str_.is_null()).then(|| CStr::from_ptr(str_)),
+        (!sep_in.is_null()).then(|| CStr::from_ptr(sep_in)),
+        &mut *aux,
+    )
+}
 
-    let p = if (*aux).sep < 0 {
+pub unsafe fn kstrtok_ref(
+    str_: Option<&CStr>,
+    sep_in: Option<&CStr>,
+    aux: &mut ks_tokaux_t,
+) -> *mut c_char {
+    kstrtok_bytes_ref(str_.map(CStr::to_bytes), sep_in.map(CStr::to_bytes), aux)
+}
+
+pub unsafe fn kstrtok_bytes_ref(
+    str_: Option<&[u8]>,
+    sep_in: Option<&[u8]>,
+    aux: &mut ks_tokaux_t,
+) -> *mut c_char {
+    if let Some(sep) = sep_in {
+        if str_.is_none() && aux.finished != 0 {
+            return std::ptr::null_mut();
+        }
+        aux.finished = 0;
+        if sep.len() > 1 {
+            aux.sep = -1;
+            aux.tab = [0; 4];
+            for &ch in sep {
+                aux.tab[(ch >> 6) as usize] |= 1u64 << (ch & 0x3f);
+            }
+        } else {
+            aux.sep = sep.first().copied().unwrap_or(0) as c_int;
+        }
+    }
+    if aux.finished != 0 {
+        return std::ptr::null_mut();
+    }
+    let start_and_len = if let Some(str_) = str_ {
+        aux.finished = 0;
+        Some((str_.as_ptr(), str_.len()))
+    } else {
+        None
+    };
+    let start = start_and_len
+        .map(|(start, _)| start)
+        .unwrap_or_else(|| aux.p.add(1).cast::<u8>());
+
+    let p = if let Some((start, len)) = start_and_len {
+        let bytes = std::slice::from_raw_parts(start, len);
+        start.add(kstrtok_find_in_slice(bytes, aux))
+    } else if aux.sep < 0 {
         let mut p = start;
         while *p != 0 {
-            if (((*aux).tab[(*p >> 6) as usize] >> (*p & 0x3f)) & 1) != 0 {
+            if ((aux.tab[(*p >> 6) as usize] >> (*p & 0x3f)) & 1) != 0 {
                 break;
             }
             p = p.add(1);
         }
         p
     } else {
-        let p2 = libc::strchr(start.cast::<c_char>(), (*aux).sep).cast::<u8>();
-        if p2.is_null() {
-            start.add(libc::strlen(start.cast::<c_char>()))
-        } else {
-            p2
+        let mut p = start;
+        while *p != 0 && *p as c_int != aux.sep {
+            p = p.add(1);
         }
+        p
     };
-    (*aux).p = p.cast::<c_char>();
-    if *p == 0 {
-        (*aux).finished = 1;
+    aux.p = p.cast::<c_char>();
+    if start_and_len
+        .map(|(start, len)| p == start.add(len))
+        .unwrap_or_else(|| *p == 0)
+    {
+        aux.finished = 1;
     }
     start.cast::<c_char>().cast_mut()
+}
+
+fn kstrtok_find_in_slice(bytes: &[u8], aux: &ks_tokaux_t) -> usize {
+    if aux.sep < 0 {
+        bytes
+            .iter()
+            .position(|&ch| ((aux.tab[(ch >> 6) as usize] >> (ch & 0x3f)) & 1) != 0)
+            .unwrap_or(bytes.len())
+    } else {
+        bytes
+            .iter()
+            .position(|&ch| ch as c_int == aux.sep)
+            .unwrap_or(bytes.len())
+    }
 }
 
 pub fn fast_exp(mut x: u64, mut n: u64) -> u64 {
@@ -436,74 +592,105 @@ pub unsafe fn karp_rabin(
     pat_: *const c_void,
     m: size_t,
 ) -> *mut c_void {
-    let str_ubytes = str_.cast::<u8>();
-    let pat = pat_.cast::<u8>();
+    if str_.is_null() || pat_.is_null() || m > n {
+        return std::ptr::null_mut();
+    }
+
+    let haystack = std::slice::from_raw_parts(str_.cast::<u8>(), n);
+    let needle = std::slice::from_raw_parts(pat_.cast::<u8>(), m);
+    karp_rabin_ref(haystack, needle)
+        .map(|offset| haystack.as_ptr().add(offset).cast::<c_void>().cast_mut())
+        .unwrap_or_else(std::ptr::null_mut)
+}
+
+fn karp_rabin_ref(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     let b = 31u64;
     let mut hash_pat = 0u64;
     let mut hash_str = 0u64;
+    let m = needle.len();
     let b_to_m = fast_exp(b, m as u64);
     let mut mismatch = 0u8;
 
-    if m > n {
-        return std::ptr::null_mut();
+    if m > haystack.len() {
+        return None;
     }
 
     let mut i = 0usize;
     while i < m {
-        mismatch |= *str_ubytes.add(i) ^ *pat.add(i);
+        mismatch |= haystack[i] ^ needle[i];
         hash_pat = hash_pat
             .wrapping_mul(b)
-            .wrapping_add(*pat.add(i) as u64)
+            .wrapping_add(needle[i] as u64)
             .wrapping_add(1);
         hash_str = hash_str
             .wrapping_mul(b)
-            .wrapping_add(*str_ubytes.add(i) as u64)
+            .wrapping_add(haystack[i] as u64)
             .wrapping_add(1);
         i += 1;
     }
 
     if mismatch == 0 {
-        return str_.cast_mut();
+        return Some(0);
     }
 
-    while i < n {
+    while i < haystack.len() {
         hash_str = hash_str
             .wrapping_mul(b)
-            .wrapping_add(*str_ubytes.add(i) as u64)
+            .wrapping_add(haystack[i] as u64)
             .wrapping_add(1)
-            .wrapping_sub(b_to_m.wrapping_mul((*str_ubytes.add(i - m) as u64).wrapping_add(1)));
-        if hash_str == hash_pat
-            && libc::memcmp(
-                pat.cast(),
-                str_ubytes.add(i + 1 - m).cast(),
-                m as libc::size_t,
-            ) == 0
-        {
-            return str_ubytes.add(i + 1 - m).cast::<c_void>().cast_mut();
+            .wrapping_sub(b_to_m.wrapping_mul((haystack[i - m] as u64).wrapping_add(1)));
+        let start = i + 1 - m;
+        if hash_str == hash_pat && &haystack[start..start + m] == needle {
+            return Some(start);
         }
         i += 1;
     }
-    std::ptr::null_mut()
+    None
 }
 
 pub unsafe fn ksBM_prep(pat: *const u8, m: c_int) -> *mut c_int {
-    if m < 1 {
+    let Ok(m) = usize::try_from(m) else {
         return std::ptr::null_mut();
-    }
-    let len = m as usize + 256;
-    let prep =
-        crate::htslib_rs::c_compat::calloc(m as u64 + 256, std::mem::size_of::<c_int>() as u64)
-            .cast::<c_int>();
+    };
+    let Some(pat) = ptr_len_to_u8_slice(pat, m) else {
+        return std::ptr::null_mut();
+    };
+    let Some(prep_box) = ksbm_prep_box(pat) else {
+        return std::ptr::null_mut();
+    };
+    copy_prep_to_libc_buffer(&prep_box)
+}
+
+fn copy_prep_to_libc_buffer(prep_box: &[c_int]) -> *mut c_int {
+    let len = prep_box.len();
+    let Some(bytes) = len.checked_mul(std::mem::size_of::<c_int>()) else {
+        return std::ptr::null_mut();
+    };
+    let prep = unsafe { crate::htslib_rs::c_compat::malloc(bytes as u64).cast::<c_int>() };
     if prep.is_null() {
         return std::ptr::null_mut();
     }
-    let prep_slice = std::slice::from_raw_parts_mut(prep, len);
-    if !ksbm_fill_prep(pat, m, prep_slice) {
-        crate::htslib_rs::c_compat::free(prep.cast());
-        return std::ptr::null_mut();
+    unsafe {
+        std::ptr::copy_nonoverlapping(prep_box.as_ptr(), prep, len);
     }
 
     prep
+}
+
+fn ksbm_prep_box(pat: &[u8]) -> Option<Box<[c_int]>> {
+    if pat.is_empty() || pat.len() > c_int::MAX as usize {
+        return None;
+    }
+    let len = pat.len() + 256;
+
+    let Some(mut prep_vec) = zeroed_c_int_vec(len) else {
+        return None;
+    };
+    if !ksbm_fill_prep(pat, &mut prep_vec) {
+        return None;
+    }
+
+    Some(prep_vec.into_boxed_slice())
 }
 
 fn zeroed_c_int_vec(len: usize) -> Option<Vec<c_int>> {
@@ -513,13 +700,13 @@ fn zeroed_c_int_vec(len: usize) -> Option<Vec<c_int>> {
     Some(values)
 }
 
-unsafe fn ksbm_fill_prep(pat: *const u8, m: c_int, prep: &mut [c_int]) -> bool {
-    let m_usize = m as usize;
-    if prep.len() < m_usize + 256 {
+fn ksbm_fill_prep(pat: &[u8], prep: &mut [c_int]) -> bool {
+    let m = pat.len() as c_int;
+    if prep.len() < pat.len() + 256 {
         return false;
     }
 
-    let (bm_gs, bm_bc) = prep.split_at_mut(m_usize);
+    let (bm_gs, bm_bc) = prep.split_at_mut(pat.len());
 
     let mut i = 0;
     while i < 256 {
@@ -528,11 +715,11 @@ unsafe fn ksbm_fill_prep(pat: *const u8, m: c_int, prep: &mut [c_int]) -> bool {
     }
     i = 0;
     while i < m - 1 {
-        bm_bc[*pat.add(i as usize) as usize] = m - i - 1;
+        bm_bc[pat[i as usize] as usize] = m - i - 1;
         i += 1;
     }
 
-    let Some(mut suff) = zeroed_c_int_vec(m_usize) else {
+    let Some(mut suff) = zeroed_c_int_vec(pat.len()) else {
         return false;
     };
 
@@ -548,7 +735,7 @@ unsafe fn ksbm_fill_prep(pat: *const u8, m: c_int, prep: &mut [c_int]) -> bool {
                 g = i;
             }
             f = i;
-            while g >= 0 && *pat.add(g as usize) == *pat.add((g + m - 1 - f) as usize) {
+            while g >= 0 && pat[g as usize] == pat[(g + m - 1 - f) as usize] {
                 g -= 1;
             }
             suff[i as usize] = f - g;
@@ -589,6 +776,14 @@ unsafe fn ksbm_fill_prep(pat: *const u8, m: c_int, prep: &mut [c_int]) -> bool {
     true
 }
 
+unsafe fn ptr_len_to_u8_slice<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
+    if ptr.is_null() {
+        None
+    } else {
+        Some(std::slice::from_raw_parts(ptr, len))
+    }
+}
+
 pub unsafe fn boyer_moore(
     str_: *const c_void,
     n: size_t,
@@ -596,52 +791,135 @@ pub unsafe fn boyer_moore(
     m: c_int,
     stored_prep_ptr: *mut *mut c_int,
 ) -> *mut c_void {
-    if str_.is_null() || pat_.is_null() {
-        return str_.cast_mut();
-    }
+    boyer_moore_ref(
+        str_,
+        n,
+        pat_,
+        m,
+        if stored_prep_ptr.is_null() {
+            None
+        } else {
+            Some(&mut *stored_prep_ptr)
+        },
+    )
+}
 
-    let str_ubytes = str_.cast::<u8>();
-    let pat = pat_.cast::<u8>();
-
-    if m <= 0 {
+pub unsafe fn boyer_moore_ref(
+    str_: *const c_void,
+    n: size_t,
+    pat_: *const c_void,
+    m: c_int,
+    stored_prep_ptr: Option<&mut *mut c_int>,
+) -> *mut c_void {
+    let Some(haystack) = ptr_len_to_u8_slice(str_.cast::<u8>(), n) else {
         return str_.cast_mut();
-    }
-    if n < m as usize {
+    };
+    let Ok(m) = usize::try_from(m) else {
         return std::ptr::null_mut();
+    };
+    let Some(needle) = ptr_len_to_u8_slice(pat_.cast::<u8>(), m) else {
+        return str_.cast_mut();
+    };
+    let Some(offset) = boyer_moore_bytes_ref(haystack, needle, stored_prep_ptr) else {
+        return std::ptr::null_mut();
+    };
+    haystack.as_ptr().add(offset).cast::<c_void>().cast_mut()
+}
+
+fn boyer_moore_bytes_ref(
+    haystack: &[u8],
+    needle: &[u8],
+    stored_prep_ptr: Option<&mut *mut c_int>,
+) -> Option<usize> {
+    let Some(prep_len) = ksbm_search_prep_len(haystack, needle) else {
+        return ksbm_search_without_prep_ref(haystack, needle);
+    };
+
+    match stored_prep_ptr {
+        Some(stored_prep) if !(*stored_prep).is_null() => {
+            let prep = unsafe { std::slice::from_raw_parts(*stored_prep, prep_len) };
+            boyer_moore_prepped(haystack, needle, prep)
+        }
+        Some(stored_prep) => {
+            let Some(prep_box) = ksbm_prep_box(needle) else {
+                return karp_rabin_ref(haystack, needle);
+            };
+            let prep = copy_prep_to_libc_buffer(&prep_box);
+            if prep.is_null() {
+                return karp_rabin_ref(haystack, needle);
+            }
+            *stored_prep = prep;
+            boyer_moore_prepped(haystack, needle, &prep_box)
+        }
+        None => {
+            let Some(local_prep) = ksbm_prep_box(needle) else {
+                return karp_rabin_ref(haystack, needle);
+            };
+            boyer_moore_prepped(haystack, needle, &local_prep)
+        }
     }
-    if m == 1 {
-        return libc::memchr(str_, *pat as c_int, n as libc::size_t);
+}
+
+pub fn boyer_moore_boxed_prep_ref(
+    haystack: &[u8],
+    needle: &[u8],
+    mut stored_prep: Option<&mut Option<Box<[c_int]>>>,
+) -> Option<usize> {
+    if ksbm_search_prep_len(haystack, needle).is_none() {
+        return ksbm_search_without_prep_ref(haystack, needle);
     }
 
-    let mut owned_prep = None;
-    let prep;
-    if !stored_prep_ptr.is_null() && !(*stored_prep_ptr).is_null() {
-        prep = *stored_prep_ptr;
-    } else if stored_prep_ptr.is_null() {
-        let Some(mut local_prep) = zeroed_c_int_vec(m as usize + 256) else {
-            return karp_rabin(str_, n, pat_, m as usize);
-        };
-        if !ksbm_fill_prep(pat, m, &mut local_prep) {
-            return karp_rabin(str_, n, pat_, m as usize);
+    if let Some(stored_prep) = stored_prep.as_deref_mut() {
+        if stored_prep.is_none() {
+            let Some(prep) = ksbm_prep_box(needle) else {
+                return karp_rabin_ref(haystack, needle);
+            };
+            *stored_prep = Some(prep);
         }
-        prep = local_prep.as_mut_ptr();
-        owned_prep = Some(local_prep);
+        let prep = stored_prep.as_deref().unwrap();
+        return boyer_moore_prepped(haystack, needle, prep);
+    }
+
+    let Some(local_prep) = ksbm_prep_box(needle) else {
+        return karp_rabin_ref(haystack, needle);
+    };
+    boyer_moore_prepped(haystack, needle, &local_prep)
+}
+
+fn ksbm_search_prep_len(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.len() <= 1 || haystack.len() < needle.len() || needle.len() > c_int::MAX as usize {
+        None
     } else {
-        prep = ksBM_prep(pat, m);
-        if prep.is_null() {
-            return karp_rabin(str_, n, pat_, m as usize);
-        }
-        if !stored_prep_ptr.is_null() {
-            *stored_prep_ptr = prep;
-        }
+        Some(needle.len() + 256)
+    }
+}
+
+fn ksbm_search_without_prep_ref(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    if haystack.len() < needle.len() {
+        return None;
+    }
+    if needle.len() == 1 {
+        return haystack.iter().position(|&ch| ch == needle[0]);
     }
 
-    let bm_gs = prep;
-    let bm_bc = prep.add(m as usize);
+    karp_rabin_ref(haystack, needle)
+}
+
+fn boyer_moore_prepped(haystack: &[u8], needle: &[u8], prep: &[c_int]) -> Option<usize> {
+    if prep.len() < needle.len() + 256 || needle.len() > c_int::MAX as usize {
+        return None;
+    }
+
+    let m = needle.len() as c_int;
+    let (bm_gs, bm_bc) = prep.split_at(needle.len());
+
     let mut j = 0usize;
-    while j <= n - m as usize {
+    while j <= haystack.len() - needle.len() {
         let mut i = m - 1;
-        while i >= 0 && *pat.add(i as usize) == *str_ubytes.add(i as usize + j) {
+        while i >= 0 && needle[i as usize] == haystack[i as usize + j] {
             if i == 0 {
                 i = -1;
                 break;
@@ -649,19 +927,17 @@ pub unsafe fn boyer_moore(
             i -= 1;
         }
         if i >= 0 {
-            let mut max = *bm_bc.add(*str_ubytes.add(i as usize + j) as usize) - m + 1 + i;
-            if max < *bm_gs.add(i as usize) {
-                max = *bm_gs.add(i as usize);
+            let mut max = bm_bc[haystack[i as usize + j] as usize] - m + 1 + i;
+            if max < bm_gs[i as usize] {
+                max = bm_gs[i as usize];
             }
             j += max as usize;
         } else {
-            drop(owned_prep);
-            return str_ubytes.add(j).cast::<c_void>().cast_mut();
+            return Some(j);
         }
     }
 
-    drop(owned_prep);
-    std::ptr::null_mut()
+    None
 }
 
 pub unsafe fn kmemmem(
@@ -671,7 +947,17 @@ pub unsafe fn kmemmem(
     m: c_int,
     prep: *mut *mut c_int,
 ) -> *mut c_void {
-    boyer_moore(str_, if n >= 0 { n as usize } else { 0 }, pat, m, prep)
+    boyer_moore_ref(
+        str_,
+        if n >= 0 { n as usize } else { 0 },
+        pat,
+        m,
+        if prep.is_null() {
+            None
+        } else {
+            Some(&mut *prep)
+        },
+    )
 }
 
 pub unsafe fn kstrstr(
@@ -679,74 +965,173 @@ pub unsafe fn kstrstr(
     pat: *const c_char,
     prep: *mut *mut c_int,
 ) -> *mut c_char {
-    let patlen = libc::strlen(pat);
-    if patlen <= c_int::MAX as usize {
-        boyer_moore(
-            str_.cast(),
-            libc::strlen(str_),
-            pat.cast(),
-            patlen as c_int,
-            prep,
-        )
-        .cast::<c_char>()
+    if str_.is_null() || pat.is_null() {
+        return std::ptr::null_mut();
+    }
+    kstrstr_ref(
+        CStr::from_ptr(str_),
+        CStr::from_ptr(pat),
+        if prep.is_null() {
+            None
+        } else {
+            Some(&mut *prep)
+        },
+    )
+}
+
+pub unsafe fn kstrstr_ref(str_: &CStr, pat: &CStr, prep: Option<&mut *mut c_int>) -> *mut c_char {
+    kstrstr_bytes_raw_prep_ref(str_.to_bytes(), pat.to_bytes(), prep)
+        .map(|offset| str_.as_ptr().add(offset).cast_mut())
+        .unwrap_or_else(std::ptr::null_mut)
+}
+
+pub fn kstrstr_bytes_raw_prep_ref(
+    haystack: &[u8],
+    needle: &[u8],
+    prep: Option<&mut *mut c_int>,
+) -> Option<usize> {
+    if needle.len() <= c_int::MAX as usize {
+        boyer_moore_bytes_ref(haystack, needle, prep)
     } else {
-        karp_rabin(str_.cast(), libc::strlen(str_), pat.cast(), patlen).cast::<c_char>()
+        karp_rabin_ref(haystack, needle)
+    }
+}
+
+pub unsafe fn kstrstr_boxed_prep_ref(
+    str_: &CStr,
+    pat: &CStr,
+    prep: Option<&mut Option<Box<[c_int]>>>,
+) -> *mut c_char {
+    kstrstr_bytes_boxed_prep_ref(str_.to_bytes(), pat.to_bytes(), prep)
+        .map(|offset| str_.as_ptr().add(offset).cast_mut())
+        .unwrap_or_else(std::ptr::null_mut)
+}
+
+pub fn kstrstr_bytes_boxed_prep_ref(
+    haystack: &[u8],
+    needle: &[u8],
+    prep: Option<&mut Option<Box<[c_int]>>>,
+) -> Option<usize> {
+    if needle.len() <= c_int::MAX as usize {
+        boyer_moore_boxed_prep_ref(haystack, needle, prep)
+    } else {
+        karp_rabin_ref(haystack, needle)
     }
 }
 
 pub unsafe fn kstrnstr(
     str_: *const c_char,
     pat: *const c_char,
-    mut n: c_int,
+    n: c_int,
     prep: *mut *mut c_int,
 ) -> *mut c_char {
-    if pat.is_null() || *pat == 0 {
+    if pat.is_null() {
         return str_.cast_mut();
+    }
+    if str_.is_null() {
+        return std::ptr::null_mut();
+    }
+    kstrnstr_ref(
+        CStr::from_ptr(str_),
+        CStr::from_ptr(pat),
+        n,
+        if prep.is_null() {
+            None
+        } else {
+            Some(&mut *prep)
+        },
+    )
+}
+
+pub unsafe fn kstrnstr_ref(
+    str_: &CStr,
+    pat: &CStr,
+    n: c_int,
+    prep: Option<&mut *mut c_int>,
+) -> *mut c_char {
+    let haystack = str_.to_bytes();
+    let needle = pat.to_bytes();
+    if needle.is_empty() {
+        return str_.as_ptr().cast_mut();
     }
     if n <= 0 {
         return std::ptr::null_mut();
     }
-    let endp = libc::memchr(str_.cast(), 0, n as libc::size_t).cast::<c_char>();
-    if !endp.is_null() && endp.offset_from(str_) < n as isize {
-        n = endp.offset_from(str_) as c_int;
+    kstrnstr_bytes_raw_prep_ref(haystack, needle, n as usize, prep)
+        .map(|offset| str_.as_ptr().add(offset).cast_mut())
+        .unwrap_or_else(std::ptr::null_mut)
+}
+
+pub fn kstrnstr_bytes_raw_prep_ref(
+    haystack: &[u8],
+    needle: &[u8],
+    n: usize,
+    prep: Option<&mut *mut c_int>,
+) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
     }
-    let patlen = libc::strlen(pat);
-    if patlen > n as usize {
-        return std::ptr::null_mut();
+    let n = n.min(haystack.len());
+    if needle.len() > n {
+        return None;
     }
-    boyer_moore(str_.cast(), n as usize, pat.cast(), patlen as c_int, prep).cast::<c_char>()
+    boyer_moore_bytes_ref(&haystack[..n], needle, prep)
 }
 
 pub unsafe fn kputd(d: f64, s: *mut kstring_t) -> c_int {
+    if s.is_null() {
+        return -1;
+    }
+    kputd_ref(d, &mut *s)
+}
+
+pub unsafe fn kputd_ref(d: f64, s: &mut kstring_t) -> c_int {
+    let Some(text) = kputd_bytes(d) else {
+        return -1;
+    };
+    if text.len() > c_int::MAX as usize {
+        return -1;
+    }
+    if kputsn(text.as_ptr().cast(), text.len(), s) < 0 {
+        return -1;
+    }
+    text.len() as c_int
+}
+
+fn kputd_bytes(d: f64) -> Option<Vec<u8>> {
     if d == 0.0 {
-        let text = if d.is_sign_negative() { c"-0" } else { c"0" };
-        return kputsn(text.as_ptr(), text.to_bytes().len(), s);
+        return Some(if d.is_sign_negative() {
+            b"-0".to_vec()
+        } else {
+            b"0".to_vec()
+        });
     }
 
     let mut d = d;
-    let mut len = 0;
+    let mut out = Vec::new();
     if d < 0.0 {
-        if kputc(b'-' as c_int, s) < 0 {
-            return -1;
-        }
-        len = 1;
+        out.push(b'-');
         d = -d;
     }
 
     if !(0.0001..=999999.0).contains(&d) {
-        if ks_resize(s, (*s).l + 50) < 0 {
-            return libc::EOF;
+        let mut buf = [0 as c_char; 64];
+        let len = unsafe {
+            // Keep htslib's %g formatting for exponent cases while avoiding
+            // temporary kstring allocation.
+            libc::snprintf(
+                buf.as_mut_ptr(),
+                buf.len() as libc::size_t,
+                c"%g".as_ptr(),
+                d,
+            )
+        };
+        if len < 0 || len as usize >= buf.len() {
+            return None;
         }
-        // We let stdio handle the exponent cases
-        let s2 = libc::snprintf(
-            (*s).s.add((*s).l),
-            ((*s).m - (*s).l) as libc::size_t,
-            c"%g".as_ptr(),
-            d,
-        );
-        len += s2;
-        (*s).l += s2 as size_t;
-        return len;
+        let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), len as usize) };
+        out.extend_from_slice(bytes);
+        return Some(out);
     }
 
     let decimals = if d < 0.001 {
@@ -772,10 +1157,8 @@ pub unsafe fn kputd(d: f64, s: *mut kstring_t) -> c_int {
     };
     let text = format!("{d:.decimals$}");
     let text = text.trim_end_matches('0').trim_end_matches('.');
-    if kputsn(text.as_ptr().cast(), text.len(), s) < 0 {
-        return -1;
-    }
-    len + text.len() as c_int
+    out.extend_from_slice(text.as_bytes());
+    Some(out)
 }
 
 #[cfg(test)]
@@ -807,7 +1190,7 @@ mod tests {
             assert_eq!(s.l, 12);
             assert_eq!(CStr::from_ptr(s.s).to_bytes(), b"sample-42:ok");
 
-            libc::free(s.s.cast());
+            ks_free(&mut s);
         }
     }
 
@@ -834,7 +1217,7 @@ mod tests {
             );
             assert_eq!(CStr::from_ptr(s.s).to_bytes(), b"7:abc:3.5:%");
 
-            libc::free(s.s.cast());
+            ks_free(&mut s);
         }
     }
 }

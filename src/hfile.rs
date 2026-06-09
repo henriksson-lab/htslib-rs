@@ -3,10 +3,7 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::sync::{Mutex, OnceLock};
 
-use super::hts::{
-    hFILE, hts_base64_decoded_length, hts_decode_base64, hts_decode_percent, isalnum_c, kgetline,
-    kputs, kputsn, kstring_t, size_t, tolower_c,
-};
+use super::hts::{hFILE, isalnum_c, kgetline, kputs, kputsn, kstring_t, size_t, tolower_c};
 
 #[repr(C)]
 pub struct knetFile {
@@ -14,7 +11,7 @@ pub struct knetFile {
 }
 
 struct knet_file_layout {
-    fd: c_int,
+    fd: i32,
     offset: i64,
     hf: OwnedHFile,
 }
@@ -73,7 +70,7 @@ struct hfile_scheme_handler_layout {
     open: Option<HFileOpenFn>,
     isremote: Option<HFileIsRemoteFn>,
     provider: *const c_char,
-    priority: c_int,
+    priority: i32,
     vopen: Option<HFileVOpenFn>,
 }
 
@@ -81,7 +78,7 @@ unsafe impl Sync for hfile_scheme_handler_layout {}
 
 #[repr(C)]
 struct hfile_plugin_layout {
-    api_version: c_int,
+    api_version: i32,
     obj: *mut c_void,
     name: *const c_char,
     destroy: *const c_void,
@@ -96,14 +93,15 @@ unsafe impl Send for hFILE_plugin_list {}
 
 #[repr(C)]
 struct hfile_layout {
-    buffer: *mut c_char,
-    begin: *mut c_char,
-    end: *mut c_char,
-    limit: *mut c_char,
+    buffer: *mut u8,
+    begin: *mut u8,
+    end: *mut u8,
+    limit: *mut u8,
     backend: *const hfile_backend_layout,
     offset: libc::off_t,
     flags: c_uint,
-    has_errno: c_int,
+    has_errno: i32,
+    alloc_size: size_t,
 }
 
 type HFileReadFn = unsafe extern "C" fn(*mut hFILE, *mut c_void, size_t) -> libc::ssize_t;
@@ -186,10 +184,38 @@ impl<'a> BorrowedHFile<'a> {
     }
 }
 
+unsafe fn hfile_mut<'a>(fp: *mut hFILE) -> Option<&'a mut hFILE> {
+    fp.as_mut()
+}
+
+fn hfile_raw(fp: &mut hFILE) -> *mut hFILE {
+    fp as *mut hFILE
+}
+
+fn hfile_layout_mut(fp: &mut hFILE) -> &mut hfile_layout {
+    unsafe { &mut *(hfile_raw(fp).cast::<hfile_layout>()) }
+}
+
+fn hfile_layout_ref(fp: &hFILE) -> &hfile_layout {
+    unsafe { &*((fp as *const hFILE).cast::<hfile_layout>()) }
+}
+
+fn hfile_fd_layout_mut(fp: &mut hFILE) -> &mut hfile_fd_layout {
+    unsafe { &mut *(hfile_raw(fp).cast::<hfile_fd_layout>()) }
+}
+
+fn hfile_mode_has(mode: &[u8], byte: u8) -> bool {
+    mode.contains(&byte)
+}
+
+fn hfile_mode_is_readonly(mode: &[u8]) -> bool {
+    hfile_mode_has(mode, b'r') && !hfile_mode_has(mode, b'+')
+}
+
 #[repr(C)]
 struct hfile_fd_layout {
     base: hfile_layout,
-    fd: c_int,
+    fd: i32,
     flags: c_uint,
 }
 
@@ -200,6 +226,9 @@ const HFILE_AT_EOF: c_uint = 1 << 0;
 const HFILE_MOBILE: c_uint = 1 << 1;
 const HFILE_READONLY: c_uint = 1 << 2;
 const HFILE_PRESERVE: c_uint = 1 << 3;
+const HFILE_RUST_BUFFER: c_uint = 1 << 31;
+const HFILE_BUFFER_ALIGN: usize = 256;
+const HFILE_STRUCT_ALIGN: usize = 16;
 
 unsafe extern "C" fn hfile_c_810_mem_seek(
     _fpv: *mut hFILE,
@@ -300,40 +329,66 @@ pub unsafe fn hfile_init(struct_size: size_t, mode: *const c_char, capacity: siz
 pub unsafe fn hfile_c_104_hfile_init(
     struct_size: size_t,
     mode: *const c_char,
+    capacity: size_t,
+) -> *mut hFILE {
+    let Some(mode) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    hfile_c_104_hfile_init_ref(struct_size, mode, capacity)
+}
+
+pub unsafe fn hfile_c_104_hfile_init_ref(
+    struct_size: size_t,
+    mode: &[u8],
     mut capacity: size_t,
 ) -> *mut hFILE {
-    let fp = crate::htslib_rs::c_compat::malloc(struct_size as u64).cast::<hfile_layout>();
+    let struct_layout = match std::alloc::Layout::from_size_align(struct_size, HFILE_STRUCT_ALIGN) {
+        Ok(layout) => layout,
+        Err(_) => {
+            *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+            return std::ptr::null_mut();
+        }
+    };
+    let fp = std::alloc::alloc(struct_layout).cast::<hfile_layout>();
     if fp.is_null() {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
         return std::ptr::null_mut();
     }
+    (*fp).buffer = std::ptr::null_mut();
+    (*fp).alloc_size = struct_size;
 
     let maxcap = 128 * 1024usize;
     if capacity == 0 {
         capacity = maxcap;
     }
-    if !libc::strchr(mode, b'r' as c_int).is_null() && capacity > maxcap {
+    if hfile_mode_has(mode, b'r') && capacity > maxcap {
         capacity = maxcap;
     }
 
-    (*fp).buffer = std::ptr::null_mut();
-    let memalign_ret = crate::htslib_rs::c_compat::posix_memalign(
-        (&mut (*fp).buffer as *mut *mut c_char).cast(),
-        256,
-        capacity,
-    );
-    if memalign_ret != 0 {
-        *crate::htslib_rs::c_compat::__errno_location() = memalign_ret;
+    let layout = match std::alloc::Layout::from_size_align(capacity, HFILE_BUFFER_ALIGN) {
+        Ok(layout) => layout,
+        Err(_) => {
+            *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+            hfile_c_162_hfile_destroy(fp.cast());
+            return std::ptr::null_mut();
+        }
+    };
+    let buffer = std::alloc::alloc(layout);
+    if buffer.is_null() {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
         hfile_c_162_hfile_destroy(fp.cast());
         return std::ptr::null_mut();
     }
 
-    (*fp).begin = (*fp).buffer;
-    (*fp).end = (*fp).buffer;
-    (*fp).limit = (*fp).buffer.add(capacity);
+    (*fp).buffer = buffer;
+    (*fp).begin = buffer;
+    (*fp).end = buffer;
+    (*fp).limit = buffer.add(capacity);
     (*fp).backend = std::ptr::null();
     (*fp).offset = 0;
-    (*fp).flags = HFILE_MOBILE;
-    if !libc::strchr(mode, b'r' as c_int).is_null() && libc::strchr(mode, b'+' as c_int).is_null() {
+    (*fp).flags = HFILE_MOBILE | HFILE_RUST_BUFFER;
+    if hfile_mode_is_readonly(mode) {
         (*fp).flags |= HFILE_READONLY;
     }
     (*fp).has_errno = 0;
@@ -347,11 +402,38 @@ pub unsafe fn hfile_c_141_hfile_init_fixed(
     buf_filled: size_t,
     buf_size: size_t,
 ) -> *mut hFILE {
-    let fp = crate::htslib_rs::c_compat::malloc(struct_size as u64).cast::<hfile_layout>();
+    let Some(mode) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    hfile_c_141_hfile_init_fixed_ref(struct_size, mode, buffer, buf_filled, buf_size)
+}
+
+pub unsafe fn hfile_c_141_hfile_init_fixed_ref(
+    struct_size: size_t,
+    mode: &[u8],
+    buffer: NonNull<u8>,
+    buf_filled: size_t,
+    buf_size: size_t,
+) -> *mut hFILE {
+    let struct_layout = match std::alloc::Layout::from_size_align(struct_size, HFILE_STRUCT_ALIGN) {
+        Ok(layout) => layout,
+        Err(_) => {
+            *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+            return std::ptr::null_mut();
+        }
+    };
+    let fp = std::alloc::alloc(struct_layout).cast::<hfile_layout>();
     if fp.is_null() {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
         return std::ptr::null_mut();
     }
 
+    let buffer = buffer.as_ptr();
     (*fp).buffer = buffer;
     (*fp).begin = buffer;
     (*fp).end = buffer.add(buf_filled);
@@ -359,7 +441,8 @@ pub unsafe fn hfile_c_141_hfile_init_fixed(
     (*fp).backend = std::ptr::null();
     (*fp).offset = 0;
     (*fp).flags = HFILE_AT_EOF;
-    if !libc::strchr(mode, b'r' as c_int).is_null() && libc::strchr(mode, b'+' as c_int).is_null() {
+    (*fp).alloc_size = struct_size;
+    if hfile_mode_is_readonly(mode) {
         (*fp).flags |= HFILE_READONLY;
     }
     (*fp).has_errno = 0;
@@ -373,39 +456,159 @@ pub unsafe fn hfile_destroy(fp: *mut hFILE) {
 pub unsafe fn hfile_c_162_hfile_destroy(fp: *mut hFILE) {
     let save = *crate::htslib_rs::c_compat::__errno_location();
     if !fp.is_null() {
-        crate::htslib_rs::c_compat::free((*(fp.cast::<hfile_layout>())).buffer.cast());
+        let fp_layout = fp.cast::<hfile_layout>();
+        let alloc_size = (*fp_layout).alloc_size;
+        if !(*fp_layout).buffer.is_null() {
+            if ((*fp_layout).flags & HFILE_RUST_BUFFER) != 0 {
+                let capacity = (*fp_layout).limit.offset_from((*fp_layout).buffer) as usize;
+                let layout =
+                    std::alloc::Layout::from_size_align_unchecked(capacity, HFILE_BUFFER_ALIGN);
+                std::alloc::dealloc((*fp_layout).buffer.cast(), layout);
+            } else {
+                crate::htslib_rs::c_compat::free((*fp_layout).buffer.cast());
+            }
+        }
+        let struct_layout =
+            std::alloc::Layout::from_size_align_unchecked(alloc_size, HFILE_STRUCT_ALIGN);
+        std::alloc::dealloc(fp.cast::<u8>(), struct_layout);
     }
-    crate::htslib_rs::c_compat::free(fp.cast());
     *crate::htslib_rs::c_compat::__errno_location() = save;
 }
 
-pub unsafe fn hfile_c_171_writebuffer_is_nonempty(fp: *mut hFILE) -> c_int {
-    let fp = fp.cast::<hfile_layout>();
-    ((*fp).begin > (*fp).end) as c_int
+pub unsafe fn hfile_c_171_writebuffer_is_nonempty_ref(fp: &hFILE) -> c_int {
+    let fp = hfile_layout_ref(fp);
+    (fp.begin > fp.end) as c_int
+}
+
+pub unsafe fn htslib_hfile_h_134_herrno_ref(fp: &hFILE) -> c_int {
+    hfile_layout_ref(fp).has_errno
+}
+
+pub unsafe fn htslib_hfile_h_140_hclearerr_ref(fp: &mut hFILE) {
+    hfile_layout_mut(fp).has_errno = 0;
+}
+
+pub unsafe fn htslib_hfile_h_155_htell_ref(fp: &hFILE) -> libc::off_t {
+    let fp = hfile_layout_ref(fp);
+    fp.offset + fp.begin.offset_from(fp.buffer) as libc::off_t
+}
+
+pub unsafe fn htslib_hfile_h_163_hgetc_ref(fp: &mut hFILE) -> c_int {
+    let layout = hfile_layout_mut(fp);
+    if layout.end > layout.begin {
+        let c = *layout.begin as u8;
+        layout.begin = layout.begin.add(1);
+        c as c_int
+    } else {
+        hfile_c_235_hgetc2_ref(fp)
+    }
+}
+
+pub unsafe fn htslib_hfile_h_195_hgetln_ref(buffer: &mut [u8], fp: &mut hFILE) -> libc::ssize_t {
+    hfile_c_241_hgetdelim_ref(buffer, b'\n' as c_int, fp)
+}
+
+pub unsafe fn htslib_hfile_h_247_hread_ref(fp: &mut hFILE, buffer: &mut [u8]) -> libc::ssize_t {
+    let layout = hfile_layout_mut(fp);
+    let mut n = layout.end.offset_from(layout.begin) as usize;
+    if n > buffer.len() {
+        n = buffer.len();
+    }
+    buffer[..n].copy_from_slice(std::slice::from_raw_parts(layout.begin, n));
+    layout.begin = layout.begin.add(n);
+    if n == buffer.len() || (layout.flags & HFILE_MOBILE) == 0 {
+        n as libc::ssize_t
+    } else {
+        hfile_c_330_hread2_ref(fp, n, buffer)
+    }
+}
+
+pub unsafe fn htslib_hfile_h_263_hputc_ref(c: c_int, fp: &mut hFILE) -> c_int {
+    let layout = hfile_layout_mut(fp);
+    if layout.begin < layout.limit {
+        *layout.begin = c as u8;
+        layout.begin = layout.begin.add(1);
+        c
+    } else {
+        hfile_c_400_hputc2_ref(c, fp)
+    }
+}
+
+pub unsafe fn htslib_hfile_h_275_hputs_ref(text: &[u8], fp: &mut hFILE) -> c_int {
+    let layout = hfile_layout_mut(fp);
+    let mut n = layout.limit.offset_from(layout.begin) as usize;
+    if n > text.len() {
+        n = text.len();
+    }
+    std::slice::from_raw_parts_mut(layout.begin, n).copy_from_slice(&text[..n]);
+    layout.begin = layout.begin.add(n);
+    if n == text.len() {
+        0
+    } else {
+        hfile_c_440_hputs2_ref(text, n, fp)
+    }
+}
+
+pub unsafe fn htslib_hfile_h_292_hwrite_ref(fp: &mut hFILE, buffer: &[u8]) -> libc::ssize_t {
+    if (hfile_layout_ref(fp).flags & HFILE_MOBILE) == 0 {
+        let n = {
+            let layout = hfile_layout_ref(fp);
+            layout.limit.offset_from(layout.begin) as usize
+        };
+        if n < buffer.len() {
+            let new_size = {
+                let layout = hfile_layout_ref(fp);
+                layout.limit.offset_from(layout.buffer) as usize + buffer.len()
+            };
+            hfile_c_212_hfile_set_blksize_ref(fp, new_size);
+            let layout = hfile_layout_mut(fp);
+            layout.end = layout.limit;
+        }
+    }
+
+    let layout = hfile_layout_mut(fp);
+    let mut n = layout.limit.offset_from(layout.begin) as usize;
+    if buffer.len() >= n && layout.begin == layout.buffer {
+        return hfile_c_412_hwrite2_ref(fp, 0, buffer);
+    }
+
+    if n > buffer.len() {
+        n = buffer.len();
+    }
+    std::slice::from_raw_parts_mut(layout.begin, n).copy_from_slice(&buffer[..n]);
+    layout.begin = layout.begin.add(n);
+    if n == buffer.len() {
+        n as libc::ssize_t
+    } else {
+        hfile_c_412_hwrite2_ref(fp, n, buffer)
+    }
 }
 
 pub unsafe fn htslib_hfile_h_134_herrno(fp: *mut hFILE) -> c_int {
-    (*(fp.cast::<hfile_layout>())).has_errno
+    let Some(fp) = fp.as_ref() else {
+        return libc::EINVAL;
+    };
+    htslib_hfile_h_134_herrno_ref(fp)
 }
 
 pub unsafe fn htslib_hfile_h_140_hclearerr(fp: *mut hFILE) {
-    (*(fp.cast::<hfile_layout>())).has_errno = 0;
+    if let Some(fp) = fp.as_mut() {
+        htslib_hfile_h_140_hclearerr_ref(fp);
+    }
 }
 
 pub unsafe fn htslib_hfile_h_155_htell(fp: *mut hFILE) -> libc::off_t {
-    let fp = fp.cast::<hfile_layout>();
-    (*fp).offset + (*fp).begin.offset_from((*fp).buffer) as libc::off_t
+    let Some(fp) = fp.as_ref() else {
+        return -1;
+    };
+    htslib_hfile_h_155_htell_ref(fp)
 }
 
 pub unsafe fn htslib_hfile_h_163_hgetc(fp: *mut hFILE) -> c_int {
-    let layout = fp.cast::<hfile_layout>();
-    if (*layout).end > (*layout).begin {
-        let c = *(*layout).begin as u8;
-        (*layout).begin = (*layout).begin.add(1);
-        c as c_int
-    } else {
-        hgetc2(fp)
-    }
+    let Some(fp) = fp.as_mut() else {
+        return libc::EOF;
+    };
+    htslib_hfile_h_163_hgetc_ref(fp)
 }
 
 pub unsafe fn htslib_hfile_h_195_hgetln(
@@ -413,7 +616,15 @@ pub unsafe fn htslib_hfile_h_195_hgetln(
     size: usize,
     fp: *mut hFILE,
 ) -> libc::ssize_t {
-    hgetdelim(buffer, size, b'\n' as c_int, fp)
+    let Some(fp) = fp.as_mut() else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    htslib_hfile_h_195_hgetln_ref(std::slice::from_raw_parts_mut(buffer.as_ptr(), size), fp)
 }
 
 pub unsafe fn htslib_hfile_h_247_hread(
@@ -421,45 +632,32 @@ pub unsafe fn htslib_hfile_h_247_hread(
     buffer: *mut c_void,
     nbytes: usize,
 ) -> libc::ssize_t {
-    let layout = fp.cast::<hfile_layout>();
-    let mut n = (*layout).end.offset_from((*layout).begin) as usize;
-    if n > nbytes {
-        n = nbytes;
-    }
-    crate::htslib_rs::c_compat::memcpy(buffer, (*layout).begin.cast(), n as u64);
-    (*layout).begin = (*layout).begin.add(n);
-    if n == nbytes || ((*layout).flags & HFILE_MOBILE) == 0 {
-        n as libc::ssize_t
-    } else {
-        hread2(fp, buffer, nbytes, n)
-    }
+    let Some(fp) = fp.as_mut() else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    htslib_hfile_h_247_hread_ref(fp, std::slice::from_raw_parts_mut(buffer.as_ptr(), nbytes))
 }
 
 pub unsafe fn htslib_hfile_h_263_hputc(c: c_int, fp: *mut hFILE) -> c_int {
-    let layout = fp.cast::<hfile_layout>();
-    if (*layout).begin < (*layout).limit {
-        *(*layout).begin = c as c_char;
-        (*layout).begin = (*layout).begin.add(1);
-        c
-    } else {
-        hputc2(c, fp)
-    }
+    let Some(fp) = fp.as_mut() else {
+        return libc::EOF;
+    };
+    htslib_hfile_h_263_hputc_ref(c, fp)
 }
 
 pub unsafe fn htslib_hfile_h_275_hputs(text: *const c_char, fp: *mut hFILE) -> c_int {
-    let layout = fp.cast::<hfile_layout>();
-    let nbytes = std::ffi::CStr::from_ptr(text).to_bytes().len();
-    let mut n = (*layout).limit.offset_from((*layout).begin) as usize;
-    if n > nbytes {
-        n = nbytes;
-    }
-    crate::htslib_rs::c_compat::memcpy((*layout).begin.cast(), text.cast(), n as u64);
-    (*layout).begin = (*layout).begin.add(n);
-    if n == nbytes {
-        0
-    } else {
-        hputs2(text, nbytes, n, fp)
-    }
+    let Some(fp) = fp.as_mut() else {
+        return libc::EOF;
+    };
+    let Some(text) = (!text.is_null()).then(|| CStr::from_ptr(text).to_bytes()) else {
+        return libc::EOF;
+    };
+    htslib_hfile_h_275_hputs_ref(text, fp)
 }
 
 pub unsafe fn htslib_hfile_h_292_hwrite(
@@ -467,85 +665,64 @@ pub unsafe fn htslib_hfile_h_292_hwrite(
     buffer: *const c_void,
     nbytes: usize,
 ) -> libc::ssize_t {
-    let layout = fp.cast::<hfile_layout>();
-    if ((*layout).flags & HFILE_MOBILE) == 0 {
-        let n = (*layout).limit.offset_from((*layout).begin) as usize;
-        if n < nbytes {
-            hfile_set_blksize(
-                fp,
-                (*layout).limit.offset_from((*layout).buffer) as usize + nbytes,
-            );
-            (*layout).end = (*layout).limit;
-        }
-    }
-
-    let mut n = (*layout).limit.offset_from((*layout).begin) as usize;
-    if nbytes >= n && (*layout).begin == (*layout).buffer {
-        return hwrite2(fp, buffer, nbytes, 0);
-    }
-
-    if n > nbytes {
-        n = nbytes;
-    }
-    crate::htslib_rs::c_compat::memcpy((*layout).begin.cast(), buffer, n as u64);
-    (*layout).begin = (*layout).begin.add(n);
-    if n == nbytes {
-        n as libc::ssize_t
-    } else {
-        hwrite2(fp, buffer, nbytes, n)
-    }
+    let Some(fp) = fp.as_mut() else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    let Some(buffer) = NonNull::new(buffer.cast_mut().cast::<u8>()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    htslib_hfile_h_292_hwrite_ref(fp, std::slice::from_raw_parts(buffer.as_ptr(), nbytes))
 }
 
-pub unsafe fn hfile_c_179_refill_buffer(fp: *mut hFILE) -> libc::ssize_t {
-    let fp_layout = fp.cast::<hfile_layout>();
+pub unsafe fn hfile_c_179_refill_buffer_ref(fp: &mut hFILE) -> libc::ssize_t {
+    let fp_raw = hfile_raw(fp);
+    let fp_layout = hfile_layout_mut(fp);
 
-    if ((*fp_layout).flags & HFILE_MOBILE) != 0 && (*fp_layout).begin > (*fp_layout).buffer {
-        let consumed = (*fp_layout).begin.offset_from((*fp_layout).buffer);
-        let unread = (*fp_layout).end.offset_from((*fp_layout).begin);
-        (*fp_layout).offset += consumed as libc::off_t;
+    if (fp_layout.flags & HFILE_MOBILE) != 0 && fp_layout.begin > fp_layout.buffer {
+        let consumed = fp_layout.begin.offset_from(fp_layout.buffer);
+        let unread = fp_layout.end.offset_from(fp_layout.begin);
+        fp_layout.offset += consumed as libc::off_t;
         crate::htslib_rs::c_compat::memmove(
-            (*fp_layout).buffer.cast(),
-            (*fp_layout).begin.cast(),
+            fp_layout.buffer.cast(),
+            fp_layout.begin.cast(),
             unread as u64,
         );
-        (*fp_layout).end = (*fp_layout).buffer.add(unread as usize);
-        (*fp_layout).begin = (*fp_layout).buffer;
+        fp_layout.end = fp_layout.buffer.add(unread as usize);
+        fp_layout.begin = fp_layout.buffer;
     }
 
-    let n = if ((*fp_layout).flags & HFILE_AT_EOF) != 0 || (*fp_layout).end == (*fp_layout).limit {
+    let n = if (fp_layout.flags & HFILE_AT_EOF) != 0 || fp_layout.end == fp_layout.limit {
         0
     } else {
-        let read = (*(*fp_layout).backend).read.expect("hFILE read backend");
+        let read = (*fp_layout.backend).read.expect("hFILE read backend");
         let ret = read(
-            fp,
-            (*fp_layout).end.cast(),
-            (*fp_layout).limit.offset_from((*fp_layout).end) as size_t,
+            fp_raw,
+            fp_layout.end.cast(),
+            fp_layout.limit.offset_from(fp_layout.end) as size_t,
         );
         if ret < 0 {
-            (*fp_layout).has_errno = *crate::htslib_rs::c_compat::__errno_location();
+            fp_layout.has_errno = *crate::htslib_rs::c_compat::__errno_location();
             return ret;
         } else if ret == 0 {
-            (*fp_layout).flags |= HFILE_AT_EOF;
+            fp_layout.flags |= HFILE_AT_EOF;
         }
         ret
     };
 
-    (*fp_layout).end = (*fp_layout).end.add(n as usize);
+    fp_layout.end = fp_layout.end.add(n as usize);
     n
 }
 
-pub unsafe fn hfile_c_212_hfile_set_blksize(fp: *mut hFILE, mut bufsiz: size_t) -> c_int {
-    if fp.is_null() {
-        return -1;
-    }
-
-    let fp_layout = fp.cast::<hfile_layout>();
-    let curr_used = if (*fp_layout).begin > (*fp_layout).end {
-        (*fp_layout).begin
+pub unsafe fn hfile_c_212_hfile_set_blksize_ref(fp: &mut hFILE, mut bufsiz: size_t) -> c_int {
+    let fp_layout = hfile_layout_mut(fp);
+    let curr_used = if fp_layout.begin > fp_layout.end {
+        fp_layout.begin
     } else {
-        (*fp_layout).end
+        fp_layout.end
     }
-    .offset_from((*fp_layout).buffer) as size_t;
+    .offset_from(fp_layout.buffer) as size_t;
 
     if bufsiz == 0 {
         bufsiz = 32768;
@@ -554,107 +731,120 @@ pub unsafe fn hfile_c_212_hfile_set_blksize(fp: *mut hFILE, mut bufsiz: size_t) 
         return -1;
     }
 
-    let begin_off = (*fp_layout).begin.offset_from((*fp_layout).buffer) as usize;
-    let end_off = (*fp_layout).end.offset_from((*fp_layout).buffer) as usize;
-    let buffer = crate::htslib_rs::c_compat::realloc((*fp_layout).buffer.cast(), bufsiz as u64)
-        .cast::<c_char>();
-    if buffer.is_null() {
-        return -1;
-    }
+    let begin_off = fp_layout.begin.offset_from(fp_layout.buffer) as usize;
+    let end_off = fp_layout.end.offset_from(fp_layout.buffer) as usize;
+    let old_capacity = fp_layout.limit.offset_from(fp_layout.buffer) as usize;
+    let buffer = if (fp_layout.flags & HFILE_RUST_BUFFER) != 0 {
+        let new_layout = match std::alloc::Layout::from_size_align(bufsiz, HFILE_BUFFER_ALIGN) {
+            Ok(layout) => layout,
+            Err(_) => {
+                *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+                return -1;
+            }
+        };
+        let new_buffer = std::alloc::alloc(new_layout);
+        if new_buffer.is_null() {
+            *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+            return -1;
+        }
+        std::ptr::copy_nonoverlapping(fp_layout.buffer, new_buffer, curr_used);
+        let old_layout =
+            std::alloc::Layout::from_size_align_unchecked(old_capacity, HFILE_BUFFER_ALIGN);
+        std::alloc::dealloc(fp_layout.buffer.cast(), old_layout);
+        new_buffer
+    } else {
+        let buffer = crate::htslib_rs::c_compat::realloc(fp_layout.buffer.cast(), bufsiz as u64)
+            .cast::<u8>();
+        if buffer.is_null() {
+            return -1;
+        }
+        buffer
+    };
 
-    (*fp_layout).begin = buffer.add(begin_off);
-    (*fp_layout).end = buffer.add(end_off);
-    (*fp_layout).buffer = buffer;
-    (*fp_layout).limit = buffer.add(bufsiz);
+    fp_layout.begin = buffer.add(begin_off);
+    fp_layout.end = buffer.add(end_off);
+    fp_layout.buffer = buffer;
+    fp_layout.limit = buffer.add(bufsiz);
     0
 }
 
-pub unsafe fn hfile_c_235_hgetc2(fp: *mut hFILE) -> c_int {
-    if hfile_c_179_refill_buffer(fp) > 0 {
-        let fp_layout = fp.cast::<hfile_layout>();
-        let c = *(*fp_layout).begin as u8 as c_int;
-        (*fp_layout).begin = (*fp_layout).begin.add(1);
+pub unsafe fn hfile_c_235_hgetc2_ref(fp: &mut hFILE) -> c_int {
+    if hfile_c_179_refill_buffer_ref(fp) > 0 {
+        let fp_layout = hfile_layout_mut(fp);
+        let c = *fp_layout.begin as u8 as c_int;
+        fp_layout.begin = fp_layout.begin.add(1);
         c
     } else {
         libc::EOF
     }
 }
 
-pub unsafe fn hfile_c_241_hgetdelim(
-    buffer: *mut c_char,
-    mut size: size_t,
+pub unsafe fn hfile_c_241_hgetdelim_ref(
+    buffer: &mut [u8],
     delim: c_int,
-    fp: *mut hFILE,
+    fp: &mut hFILE,
 ) -> libc::ssize_t {
-    let fp_layout = fp.cast::<hfile_layout>();
-    if size < 1 || size > libc::ssize_t::MAX as size_t {
-        (*fp_layout).has_errno = libc::EINVAL;
+    if buffer.is_empty() || buffer.len() > libc::ssize_t::MAX as size_t {
+        hfile_layout_mut(fp).has_errno = libc::EINVAL;
         *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
         return -1;
     }
-    if (*fp_layout).begin > (*fp_layout).end {
-        (*fp_layout).has_errno = libc::EBADF;
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EBADF;
-        return -1;
+    {
+        let fp_layout = hfile_layout_ref(fp);
+        if fp_layout.begin > fp_layout.end {
+            hfile_layout_mut(fp).has_errno = libc::EBADF;
+            *crate::htslib_rs::c_compat::__errno_location() = libc::EBADF;
+            return -1;
+        }
     }
 
-    size -= 1;
+    let size = buffer.len() - 1;
     let mut copied = 0usize;
     loop {
-        let mut n = (*fp_layout).end.offset_from((*fp_layout).begin) as size_t;
+        let fp_layout = hfile_layout_mut(fp);
+        let mut n = fp_layout.end.offset_from(fp_layout.begin) as size_t;
         if n > size - copied {
             n = size - copied;
         }
 
-        let found = libc::memchr((*fp_layout).begin.cast(), delim, n);
-        if !found.is_null() {
-            n = found.cast::<c_char>().offset_from((*fp_layout).begin) as size_t + 1;
-            crate::htslib_rs::c_compat::memcpy(
-                buffer.add(copied).cast(),
-                (*fp_layout).begin.cast(),
-                n as u64,
-            );
-            *buffer.add(n + copied) = 0;
-            (*fp_layout).begin = (*fp_layout).begin.add(n);
+        let src = std::slice::from_raw_parts(fp_layout.begin, n);
+        if let Some(pos) = src.iter().position(|&c| c == delim as u8) {
+            n = pos + 1;
+            buffer[copied..copied + n].copy_from_slice(&src[..n]);
+            buffer[n + copied] = 0;
+            fp_layout.begin = fp_layout.begin.add(n);
             return (n + copied) as libc::ssize_t;
         }
 
-        crate::htslib_rs::c_compat::memcpy(
-            buffer.add(copied).cast(),
-            (*fp_layout).begin.cast(),
-            n as u64,
-        );
-        (*fp_layout).begin = (*fp_layout).begin.add(n);
+        buffer[copied..copied + n].copy_from_slice(src);
+        fp_layout.begin = fp_layout.begin.add(n);
         copied += n;
 
         if copied == size {
-            *buffer.add(copied) = 0;
+            buffer[copied] = 0;
             return copied as libc::ssize_t;
         }
 
-        let got = hfile_c_179_refill_buffer(fp);
+        let _ = fp_layout;
+        let got = hfile_c_179_refill_buffer_ref(fp);
         if got <= 0 {
             if got < 0 {
                 return -1;
             }
-            *buffer.add(copied) = 0;
+            buffer[copied] = 0;
             return copied as libc::ssize_t;
         }
     }
 }
 
-pub unsafe fn hfile_c_291_hgets(buffer: *mut c_char, size: c_int, fp: *mut hFILE) -> *mut c_char {
-    let fp_layout = fp.cast::<hfile_layout>();
-    if size < 1 {
-        (*fp_layout).has_errno = libc::EINVAL;
+pub unsafe fn hfile_c_291_hgets_ref(buffer: &mut [u8], fp: &mut hFILE) -> bool {
+    let fp_layout = hfile_layout_mut(fp);
+    if buffer.is_empty() {
+        fp_layout.has_errno = libc::EINVAL;
         *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
-        return std::ptr::null_mut();
+        return false;
     }
-    if hfile_c_241_hgetdelim(buffer, size as size_t, b'\n' as c_int, fp) > 0 {
-        buffer
-    } else {
-        std::ptr::null_mut()
-    }
+    hfile_c_241_hgetdelim_ref(buffer, b'\n' as c_int, fp) > 0
 }
 
 pub unsafe extern "C" fn hfile_c_301_hgets_wrapper(
@@ -662,25 +852,39 @@ pub unsafe extern "C" fn hfile_c_301_hgets_wrapper(
     size: c_int,
     fp: *mut c_void,
 ) -> *mut c_char {
-    hfile_c_291_hgets(buffer, size, fp.cast())
+    let Some(fp) = hfile_mut(fp.cast()) else {
+        return std::ptr::null_mut();
+    };
+    if size < 1 {
+        hfile_layout_mut(fp).has_errno = libc::EINVAL;
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    }
+    if buffer.is_null() {
+        return std::ptr::null_mut();
+    }
+    let out = std::slice::from_raw_parts_mut(buffer.cast::<u8>(), size as usize);
+    if hfile_c_291_hgets_ref(out, fp) {
+        buffer
+    } else {
+        std::ptr::null_mut()
+    }
 }
 
-pub unsafe fn hfile_c_306_khgetline(kstr: *mut kstring_t, fp: *mut hFILE) -> c_int {
-    if kstr.is_null() || fp.is_null() {
+pub unsafe fn hfile_c_306_khgetline_ref(kstr: *mut kstring_t, fp: &mut hFILE) -> c_int {
+    if kstr.is_null() {
         return libc::EOF;
     }
-    kgetline(kstr, Some(hfile_c_301_hgets_wrapper), fp.cast())
+    kgetline(kstr, Some(hfile_c_301_hgets_wrapper), hfile_raw(fp).cast())
 }
 
-pub unsafe fn hfile_c_313_hpeek(
-    fp: *mut hFILE,
-    buffer: *mut c_void,
-    nbytes: size_t,
-) -> libc::ssize_t {
-    let fp_layout = fp.cast::<hfile_layout>();
-    let mut n = (*fp_layout).end.offset_from((*fp_layout).begin) as size_t;
-    while n < nbytes {
-        let ret = hfile_c_179_refill_buffer(fp);
+pub unsafe fn hfile_c_313_hpeek_ref(fp: &mut hFILE, buffer: &mut [u8]) -> libc::ssize_t {
+    let mut n = {
+        let fp_layout = hfile_layout_ref(fp);
+        fp_layout.end.offset_from(fp_layout.begin) as size_t
+    };
+    while n < buffer.len() {
+        let ret = hfile_c_179_refill_buffer_ref(fp);
         if ret < 0 {
             return ret;
         } else if ret == 0 {
@@ -690,62 +894,65 @@ pub unsafe fn hfile_c_313_hpeek(
         }
     }
 
-    if n > nbytes {
-        n = nbytes;
+    if n > buffer.len() {
+        n = buffer.len();
     }
-    crate::htslib_rs::c_compat::memcpy(buffer, (*fp_layout).begin.cast(), n as u64);
+    let fp_layout = hfile_layout_ref(fp);
+    buffer[..n].copy_from_slice(std::slice::from_raw_parts(fp_layout.begin, n));
     n as libc::ssize_t
 }
 
-pub unsafe fn hfile_c_330_hread2(
-    fp: *mut hFILE,
-    destv: *mut c_void,
-    nbytes: size_t,
+pub unsafe fn hfile_c_330_hread2_ref(
+    fp: &mut hFILE,
     nread: size_t,
+    dest: &mut [u8],
 ) -> libc::ssize_t {
-    let fp_layout = fp.cast::<hfile_layout>();
-    let capacity = (*fp_layout).limit.offset_from((*fp_layout).buffer) as size_t;
+    let fp_raw = hfile_raw(fp);
+    let fp_layout = hfile_layout_mut(fp);
+    let capacity = fp_layout.limit.offset_from(fp_layout.buffer) as size_t;
     let mut buffer_invalidated = 0;
-    let mut dest = destv.cast::<c_char>().add(nread);
-    let mut remaining = nbytes - nread;
+    let mut dest_pos = nread;
+    let mut remaining = dest.len() - nread;
     let mut total_read = nread;
 
-    while remaining * 2 >= capacity && ((*fp_layout).flags & HFILE_AT_EOF) == 0 {
-        let read = (*(*fp_layout).backend).read.expect("hFILE read backend");
-        let n = read(fp, dest.cast(), remaining);
+    while remaining * 2 >= capacity && (fp_layout.flags & HFILE_AT_EOF) == 0 {
+        let read = (*fp_layout.backend).read.expect("hFILE read backend");
+        let n = read(fp_raw, dest[dest_pos..].as_mut_ptr().cast(), remaining);
         if n < 0 {
-            (*fp_layout).has_errno = *crate::htslib_rs::c_compat::__errno_location();
+            fp_layout.has_errno = *crate::htslib_rs::c_compat::__errno_location();
             return n;
         } else if n == 0 {
-            (*fp_layout).flags |= HFILE_AT_EOF;
+            fp_layout.flags |= HFILE_AT_EOF;
         } else {
             buffer_invalidated = 1;
         }
-        (*fp_layout).offset += n as libc::off_t;
-        dest = dest.add(n as usize);
+        fp_layout.offset += n as libc::off_t;
+        dest_pos += n as usize;
         remaining -= n as size_t;
         total_read += n as size_t;
     }
 
     if buffer_invalidated != 0 {
-        (*fp_layout).offset += (*fp_layout).begin.offset_from((*fp_layout).buffer) as libc::off_t;
-        (*fp_layout).begin = (*fp_layout).buffer;
-        (*fp_layout).end = (*fp_layout).buffer;
+        fp_layout.offset += fp_layout.begin.offset_from(fp_layout.buffer) as libc::off_t;
+        fp_layout.begin = fp_layout.buffer;
+        fp_layout.end = fp_layout.buffer;
     }
 
-    while remaining > 0 && ((*fp_layout).flags & HFILE_AT_EOF) == 0 {
-        let ret = hfile_c_179_refill_buffer(fp);
+    while remaining > 0 && (hfile_layout_ref(fp).flags & HFILE_AT_EOF) == 0 {
+        let ret = hfile_c_179_refill_buffer_ref(fp);
         if ret < 0 {
             return ret;
         }
 
-        let mut n = (*fp_layout).end.offset_from((*fp_layout).begin) as size_t;
+        let fp_layout = hfile_layout_mut(fp);
+        let mut n = fp_layout.end.offset_from(fp_layout.begin) as size_t;
         if n > remaining {
             n = remaining;
         }
-        crate::htslib_rs::c_compat::memcpy(dest.cast(), (*fp_layout).begin.cast(), n as u64);
-        (*fp_layout).begin = (*fp_layout).begin.add(n);
-        dest = dest.add(n);
+        dest[dest_pos..dest_pos + n]
+            .copy_from_slice(std::slice::from_raw_parts(fp_layout.begin, n));
+        fp_layout.begin = fp_layout.begin.add(n);
+        dest_pos += n;
         remaining -= n;
         total_read += n;
     }
@@ -753,115 +960,120 @@ pub unsafe fn hfile_c_330_hread2(
     total_read as libc::ssize_t
 }
 
-pub unsafe fn hfile_c_376_flush_buffer(fp: *mut hFILE) -> libc::ssize_t {
-    let fp_layout = fp.cast::<hfile_layout>();
-    let mut buffer = (*fp_layout).buffer;
-    while buffer < (*fp_layout).begin {
-        let write = (*(*fp_layout).backend).write.expect("hFILE write backend");
+pub unsafe fn hfile_c_376_flush_buffer_ref(fp: &mut hFILE) -> libc::ssize_t {
+    let fp_raw = hfile_raw(fp);
+    let fp_layout = hfile_layout_mut(fp);
+    let mut buffer = fp_layout.buffer;
+    while buffer < fp_layout.begin {
+        let write = (*fp_layout.backend).write.expect("hFILE write backend");
         let n = write(
-            fp,
+            fp_raw,
             buffer.cast(),
-            (*fp_layout).begin.offset_from(buffer) as size_t,
+            fp_layout.begin.offset_from(buffer) as size_t,
         );
         if n < 0 {
-            (*fp_layout).has_errno = *crate::htslib_rs::c_compat::__errno_location();
+            fp_layout.has_errno = *crate::htslib_rs::c_compat::__errno_location();
             return n;
         }
         buffer = buffer.add(n as usize);
-        (*fp_layout).offset += n as libc::off_t;
+        fp_layout.offset += n as libc::off_t;
     }
 
-    (*fp_layout).begin = (*fp_layout).buffer;
+    fp_layout.begin = fp_layout.buffer;
     0
 }
 
-pub unsafe fn hfile_c_390_hflush(fp: *mut hFILE) -> c_int {
-    if hfile_c_376_flush_buffer(fp) < 0 {
+pub unsafe fn hfile_c_390_hflush_ref(fp: &mut hFILE) -> c_int {
+    if hfile_c_376_flush_buffer_ref(fp) < 0 {
         return libc::EOF;
     }
-    let fp_layout = fp.cast::<hfile_layout>();
-    if let Some(flush) = (*(*fp_layout).backend).flush {
-        if flush(fp) < 0 {
-            (*fp_layout).has_errno = *crate::htslib_rs::c_compat::__errno_location();
+    let fp_raw = hfile_raw(fp);
+    let fp_layout = hfile_layout_mut(fp);
+    if let Some(flush) = (*fp_layout.backend).flush {
+        if flush(fp_raw) < 0 {
+            fp_layout.has_errno = *crate::htslib_rs::c_compat::__errno_location();
             return libc::EOF;
         }
     }
     0
 }
 
-pub unsafe fn hfile_c_400_hputc2(c: c_int, fp: *mut hFILE) -> c_int {
-    let fp_layout = fp.cast::<hfile_layout>();
-    if hfile_c_376_flush_buffer(fp) < 0 {
+pub unsafe fn hfile_c_400_hputc2_ref(c: c_int, fp: &mut hFILE) -> c_int {
+    if hfile_c_376_flush_buffer_ref(fp) < 0 {
         return libc::EOF;
     }
-    *(*fp_layout).begin = c as c_char;
-    (*fp_layout).begin = (*fp_layout).begin.add(1);
+    let fp_layout = hfile_layout_mut(fp);
+    *fp_layout.begin = c as u8;
+    fp_layout.begin = fp_layout.begin.add(1);
     c
 }
 
-pub unsafe fn hfile_c_412_hwrite2(
-    fp: *mut hFILE,
-    srcv: *const c_void,
-    totalbytes: size_t,
+pub unsafe fn hfile_c_412_hwrite2_ref(
+    fp: &mut hFILE,
     ncopied: size_t,
+    src: &[u8],
 ) -> libc::ssize_t {
-    let fp_layout = fp.cast::<hfile_layout>();
-    let mut src = srcv.cast::<c_char>().add(ncopied);
-    let capacity = (*fp_layout).limit.offset_from((*fp_layout).buffer) as size_t;
-    let mut remaining = totalbytes - ncopied;
+    let fp_raw = hfile_raw(fp);
+    let mut src_pos = ncopied;
+    let capacity = {
+        let fp_layout = hfile_layout_ref(fp);
+        fp_layout.limit.offset_from(fp_layout.buffer) as size_t
+    };
+    let mut remaining = src.len() - ncopied;
 
-    let ret = hfile_c_376_flush_buffer(fp);
+    let ret = hfile_c_376_flush_buffer_ref(fp);
     if ret < 0 {
         return ret;
     }
 
     while remaining * 2 >= capacity {
-        let write = (*(*fp_layout).backend).write.expect("hFILE write backend");
-        let n = write(fp, src.cast(), remaining);
+        let fp_layout = hfile_layout_mut(fp);
+        let write = (*fp_layout.backend).write.expect("hFILE write backend");
+        let n = write(fp_raw, src[src_pos..].as_ptr().cast(), remaining);
         if n < 0 {
-            (*fp_layout).has_errno = *crate::htslib_rs::c_compat::__errno_location();
+            fp_layout.has_errno = *crate::htslib_rs::c_compat::__errno_location();
             return n;
         }
-        (*fp_layout).offset += n as libc::off_t;
-        src = src.add(n as usize);
+        fp_layout.offset += n as libc::off_t;
+        src_pos += n as usize;
         remaining -= n as size_t;
     }
 
-    crate::htslib_rs::c_compat::memcpy((*fp_layout).begin.cast(), src.cast(), remaining as u64);
-    (*fp_layout).begin = (*fp_layout).begin.add(remaining);
+    let fp_layout = hfile_layout_mut(fp);
+    std::slice::from_raw_parts_mut(fp_layout.begin, remaining)
+        .copy_from_slice(&src[src_pos..src_pos + remaining]);
+    fp_layout.begin = fp_layout.begin.add(remaining);
 
-    totalbytes as libc::ssize_t
+    src.len() as libc::ssize_t
 }
 
-pub unsafe fn hfile_c_440_hputs2(
-    text: *const c_char,
-    totalbytes: size_t,
-    ncopied: size_t,
-    fp: *mut hFILE,
-) -> c_int {
-    if hfile_c_412_hwrite2(fp, text.cast(), totalbytes, ncopied) >= 0 {
+pub unsafe fn hfile_c_440_hputs2_ref(text: &[u8], ncopied: size_t, fp: &mut hFILE) -> c_int {
+    if hfile_c_412_hwrite2_ref(fp, ncopied, text) >= 0 {
         0
     } else {
         libc::EOF
     }
 }
 
-pub unsafe fn hfile_c_446_hseek(
-    fp: *mut hFILE,
+pub unsafe fn hfile_c_446_hseek_ref(
+    fp: &mut hFILE,
     mut offset: libc::off_t,
     mut whence: c_int,
 ) -> libc::off_t {
-    let fp_layout = fp.cast::<hfile_layout>();
-
-    if (*fp_layout).begin > (*fp_layout).end && ((*fp_layout).flags & HFILE_MOBILE) != 0 {
-        let ret = hfile_c_376_flush_buffer(fp);
+    let fp_raw = hfile_raw(fp);
+    let should_flush = {
+        let fp_layout = hfile_layout_ref(fp);
+        fp_layout.begin > fp_layout.end && (fp_layout.flags & HFILE_MOBILE) != 0
+    };
+    if should_flush {
+        let ret = hfile_c_376_flush_buffer_ref(fp);
         if ret < 0 {
             return ret as libc::off_t;
         }
     }
 
-    let curpos =
-        (*fp_layout).offset + (*fp_layout).begin.offset_from((*fp_layout).buffer) as libc::off_t;
+    let fp_layout = hfile_layout_mut(fp);
+    let curpos = fp_layout.offset + fp_layout.begin.offset_from(fp_layout.buffer) as libc::off_t;
 
     if whence == libc::SEEK_CUR {
         match curpos.checked_add(offset) {
@@ -875,15 +1087,15 @@ pub unsafe fn hfile_c_446_hseek(
                 } else {
                     crate::htslib_rs::c_compat::EOVERFLOW
                 };
-                (*fp_layout).has_errno = err;
+                fp_layout.has_errno = err;
                 *crate::htslib_rs::c_compat::__errno_location() = err;
                 return -1;
             }
         }
-    } else if ((*fp_layout).flags & HFILE_MOBILE) == 0 && whence == libc::SEEK_END {
-        let length = (*fp_layout).end.offset_from((*fp_layout).buffer) as libc::off_t;
+    } else if (fp_layout.flags & HFILE_MOBILE) == 0 && whence == libc::SEEK_END {
+        let length = fp_layout.end.offset_from(fp_layout.buffer) as libc::off_t;
         if offset > 0 || -offset > length {
-            (*fp_layout).has_errno = libc::EINVAL;
+            fp_layout.has_errno = libc::EINVAL;
             *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
             return -1;
         }
@@ -893,44 +1105,43 @@ pub unsafe fn hfile_c_446_hseek(
     }
 
     if whence == libc::SEEK_SET
-        && (((*fp_layout).flags & HFILE_MOBILE) == 0 || ((*fp_layout).flags & HFILE_READONLY) != 0)
-        && offset >= (*fp_layout).offset
-        && offset - (*fp_layout).offset
-            <= (*fp_layout).end.offset_from((*fp_layout).buffer) as libc::off_t
+        && ((fp_layout.flags & HFILE_MOBILE) == 0 || (fp_layout.flags & HFILE_READONLY) != 0)
+        && offset >= fp_layout.offset
+        && offset - fp_layout.offset <= fp_layout.end.offset_from(fp_layout.buffer) as libc::off_t
     {
-        (*fp_layout).begin = (*fp_layout)
-            .buffer
-            .add((offset - (*fp_layout).offset) as usize);
+        fp_layout.begin = fp_layout.buffer.add((offset - fp_layout.offset) as usize);
         return offset;
     }
 
-    let seek = (*(*fp_layout).backend).seek.expect("hFILE seek backend");
-    let pos = seek(fp, offset, whence);
+    let seek = (*fp_layout.backend).seek.expect("hFILE seek backend");
+    let pos = seek(fp_raw, offset, whence);
     if pos < 0 {
-        (*fp_layout).has_errno = *crate::htslib_rs::c_compat::__errno_location();
+        fp_layout.has_errno = *crate::htslib_rs::c_compat::__errno_location();
         return pos;
     }
 
-    (*fp_layout).begin = (*fp_layout).buffer;
-    (*fp_layout).end = (*fp_layout).buffer;
-    (*fp_layout).flags &= !HFILE_AT_EOF;
-    (*fp_layout).offset = pos;
+    fp_layout.begin = fp_layout.buffer;
+    fp_layout.end = fp_layout.buffer;
+    fp_layout.flags &= !HFILE_AT_EOF;
+    fp_layout.offset = pos;
     pos
 }
 
-pub unsafe fn hfile_c_503_hclose(fp: *mut hFILE) -> c_int {
-    let fp_layout = fp.cast::<hfile_layout>();
-    let mut err = (*fp_layout).has_errno;
+pub unsafe fn hfile_c_503_hclose_ref(fp: &mut hFILE) -> c_int {
+    let fp_raw = hfile_raw(fp);
+    let fp_layout = hfile_layout_mut(fp);
+    let mut err = fp_layout.has_errno;
 
-    if (*fp_layout).begin > (*fp_layout).end && hfile_c_390_hflush(fp) < 0 {
-        err = (*fp_layout).has_errno;
+    if fp_layout.begin > fp_layout.end && hfile_c_390_hflush_ref(fp) < 0 {
+        err = hfile_layout_ref(fp).has_errno;
     }
-    if ((*fp_layout).flags & HFILE_PRESERVE) == 0 {
-        let close = (*(*fp_layout).backend).close.expect("hFILE close backend");
-        if close(fp) < 0 {
+    let fp_layout = hfile_layout_ref(fp);
+    if (fp_layout.flags & HFILE_PRESERVE) == 0 {
+        let close = (*fp_layout.backend).close.expect("hFILE close backend");
+        if close(fp_raw) < 0 {
             err = *crate::htslib_rs::c_compat::__errno_location();
         }
-        hfile_destroy(fp);
+        hfile_destroy(fp_raw);
     }
 
     if err != 0 {
@@ -941,15 +1152,16 @@ pub unsafe fn hfile_c_503_hclose(fp: *mut hFILE) -> c_int {
     }
 }
 
-pub unsafe fn hfile_c_520_hclose_abruptly(fp: *mut hFILE) {
+pub unsafe fn hfile_c_520_hclose_abruptly_ref(fp: &mut hFILE) {
     let save = *crate::htslib_rs::c_compat::__errno_location();
-    let fp_layout = fp.cast::<hfile_layout>();
-    if ((*fp_layout).flags & HFILE_PRESERVE) != 0 {
+    let fp_raw = hfile_raw(fp);
+    let fp_layout = hfile_layout_ref(fp);
+    if (fp_layout.flags & HFILE_PRESERVE) != 0 {
         return;
     }
-    let close = (*(*fp_layout).backend).close.expect("hFILE close backend");
-    let _ = close(fp);
-    hfile_destroy(fp);
+    let close = (*fp_layout.backend).close.expect("hFILE close backend");
+    let _ = close(fp_raw);
+    hfile_destroy(fp_raw);
     *crate::htslib_rs::c_compat::__errno_location() = save;
 }
 
@@ -1012,7 +1224,11 @@ pub unsafe fn hfile_c_648_blksize(fd: c_int) -> size_t {
 }
 
 pub unsafe fn hfile_c_664_hopen_fd(filename: *const c_char, mode: *const c_char) -> *mut hFILE {
-    let fd = libc::open(filename, hfile_c_772_hfile_oflags(mode), 0o666);
+    let Some(mode_bytes) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    let fd = libc::open(filename, hfile_c_772_hfile_oflags_ref(mode_bytes), 0o666);
     if fd < 0 {
         return std::ptr::null_mut();
     }
@@ -1036,52 +1252,70 @@ pub unsafe fn hfile_c_664_hopen_fd(filename: *const c_char, mode: *const c_char)
     fp.cast()
 }
 
-pub unsafe fn hfile_c_689_hpreload(fp: *mut hFILE) -> *mut hFILE {
-    let mut buf: *mut c_char = std::ptr::null_mut();
-    let mut buf_sz: libc::off_t = 0;
-    let mut buf_a: libc::off_t = 0;
-    let mut buf_inc: libc::off_t = 8192;
+pub unsafe fn hfile_c_689_hpreload_ref(fp: &mut hFILE) -> *mut hFILE {
+    let fp_raw = hfile_raw(fp);
+    let mut buf = Vec::<u8>::new();
+    let mut buf_inc: usize = 8192;
 
-    let len: libc::off_t = loop {
-        if buf_a - buf_sz < 5000 {
-            buf_a += buf_inc;
-            let t = crate::htslib_rs::c_compat::realloc(buf.cast(), buf_a as u64).cast::<c_char>();
-            if t.is_null() {
-                crate::htslib_rs::c_compat::free(buf.cast());
-                hclose_abruptly(fp);
+    let len: libc::ssize_t = loop {
+        if buf.capacity() - buf.len() < 5000 {
+            if buf.try_reserve_exact(buf_inc).is_err() {
+                *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+                hfile_c_520_hclose_abruptly_ref(fp);
                 return std::ptr::null_mut();
             }
-            buf = t;
             if buf_inc < 1_000_000 {
-                buf_inc = (buf_inc as f64 * 1.3) as libc::off_t;
+                buf_inc = (buf_inc as f64 * 1.3) as usize;
             }
         }
-        let len = htslib_hfile_h_247_hread(
+        let buf_sz = buf.len();
+        let len = htslib_hfile_h_247_hread_ref(
             fp,
-            buf.add(buf_sz as usize).cast(),
-            (buf_a - buf_sz) as size_t,
-        ) as libc::off_t;
+            std::slice::from_raw_parts_mut(buf.as_mut_ptr().add(buf_sz), buf.capacity() - buf_sz),
+        );
         if len > 0 {
-            buf_sz += len;
+            buf.set_len(buf_sz + len as usize);
         } else {
             break len;
         }
     };
 
     if len < 0 {
-        crate::htslib_rs::c_compat::free(buf.cast());
-        hclose_abruptly(fp);
+        hfile_c_520_hclose_abruptly_ref(fp);
         return std::ptr::null_mut();
     }
-    let mem_fp =
-        hfile_c_835_create_hfile_mem(buf, c"r".as_ptr(), buf_sz as size_t, buf_a as size_t);
-    if mem_fp.is_null() {
-        crate::htslib_rs::c_compat::free(buf.cast());
-        hclose_abruptly(fp);
+    let buf_sz = buf.len();
+    let buf_a = buf.capacity();
+    let layout = match std::alloc::Layout::from_size_align(buf_a, HFILE_BUFFER_ALIGN) {
+        Ok(layout) => layout,
+        Err(_) => {
+            *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+            hfile_c_520_hclose_abruptly_ref(fp);
+            return std::ptr::null_mut();
+        }
+    };
+    let buf_ptr = std::alloc::alloc(layout);
+    if buf_ptr.is_null() {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+        hfile_c_520_hclose_abruptly_ref(fp);
         return std::ptr::null_mut();
     }
+    std::ptr::copy_nonoverlapping(buf.as_ptr(), buf_ptr, buf_sz);
 
-    if hclose(fp) < 0 {
+    let mem_fp = hfile_c_835_create_hfile_mem_ref(
+        NonNull::new_unchecked(buf_ptr),
+        b"r",
+        buf_sz as size_t,
+        buf_a as size_t,
+    );
+    if mem_fp.is_null() {
+        std::alloc::dealloc(buf_ptr.cast(), layout);
+        hfile_c_520_hclose_abruptly_ref(fp);
+        return std::ptr::null_mut();
+    }
+    (*(mem_fp.cast::<hfile_layout>())).flags |= HFILE_RUST_BUFFER;
+
+    if hclose(fp_raw) < 0 {
         hclose_abruptly(mem_fp);
         return std::ptr::null_mut();
     }
@@ -1094,16 +1328,20 @@ pub unsafe fn hfile_c_726_is_preload_url_remote(url: *const c_char) -> c_int {
 
 pub unsafe fn hfile_c_730_hopen_preload(url: *const c_char, mode: *const c_char) -> *mut hFILE {
     let fp = hfile_c_1317_hopen(url.add(8), mode);
-    if !fp.is_null() {
-        hfile_c_689_hpreload(fp)
+    if let Some(fp) = hfile_mut(fp) {
+        hfile_c_689_hpreload_ref(fp)
     } else {
         std::ptr::null_mut()
     }
 }
 
 pub unsafe fn hfile_c_735_hdopen(fd: c_int, mode: *const c_char) -> *mut hFILE {
+    let Some(mode_bytes) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
     #[cfg(windows)]
-    if !libc::strchr(mode, b's' as c_int).is_null() {
+    if hfile_mode_has(mode_bytes, b's') {
         *crate::htslib_rs::c_compat::__errno_location() = crate::htslib_rs::c_compat::ENOSYS;
         return std::ptr::null_mut();
     }
@@ -1120,10 +1358,10 @@ pub unsafe fn hfile_c_735_hdopen(fd: c_int, mode: *const c_char) -> *mut hFILE {
 
     (*fp).fd = fd;
     (*fp).flags = 0;
-    if !libc::strchr(mode, b's' as c_int).is_null() {
+    if hfile_mode_has(mode_bytes, b's') {
         (*fp).flags |= HFILE_FD_IS_SOCKET;
     }
-    if !libc::strchr(mode, b'S' as c_int).is_null() {
+    if hfile_mode_has(mode_bytes, b'S') {
         (*fp).flags |= HFILE_FD_IS_SHARED;
     }
     (*fp).base.backend = &FD_BACKEND;
@@ -1147,28 +1385,35 @@ pub unsafe fn hfile_c_747_hopen_fd_fileuri(
 }
 
 pub unsafe fn hfile_c_761_hopen_fd_stdinout(mode: *const c_char) -> *mut hFILE {
-    let fd = if !libc::strchr(mode, b'r' as c_int).is_null() {
+    let Some(mode_bytes) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    let fd = if hfile_mode_has(mode_bytes, b'r') {
         libc::STDIN_FILENO
     } else {
         libc::STDOUT_FILENO
     };
-    let mut mode_shared = [0 as c_char; 101];
-    libc::snprintf(
-        mode_shared.as_mut_ptr(),
-        mode_shared.len(),
-        c"S%s".as_ptr(),
-        mode,
-    );
-    hfile_c_735_hdopen(fd, mode_shared.as_ptr())
+    let mut mode_shared = Vec::with_capacity(mode_bytes.len() + 2);
+    mode_shared.push(b'S');
+    mode_shared.extend_from_slice(mode_bytes);
+    mode_shared.push(0);
+    hfile_c_735_hdopen(fd, mode_shared.as_ptr().cast())
 }
 
 pub unsafe fn hfile_c_772_hfile_oflags(mode: *const c_char) -> c_int {
+    let Some(mode) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
+        return 0;
+    };
+    hfile_c_772_hfile_oflags_ref(mode)
+}
+
+pub fn hfile_c_772_hfile_oflags_ref(mode: &[u8]) -> c_int {
     let mut rdwr = 0;
     let mut flags = 0;
-    let mut s = mode;
 
-    while *s != 0 {
-        match *s as u8 {
+    for &byte in mode {
+        match byte {
             b'r' => rdwr = libc::O_RDONLY,
             b'w' => {
                 rdwr = libc::O_WRONLY;
@@ -1188,7 +1433,6 @@ pub unsafe fn hfile_c_772_hfile_oflags(mode: *const c_char) -> c_int {
             b'x' => flags |= libc::O_EXCL,
             _ => {}
         }
-        s = s.add(1);
     }
 
     #[cfg(target_os = "windows")]
@@ -1210,13 +1454,118 @@ pub unsafe fn hfile_c_826_cmp_prefix(mut key: *const c_char, mut s: *const c_cha
     0
 }
 
+fn hfile_data_metadata_is_base64(metadata: &[u8]) -> bool {
+    metadata.len() >= 7 && metadata[metadata.len() - 7..].eq_ignore_ascii_case(b";base64")
+}
+
+fn hfile_dehex_byte(c: u8) -> i32 {
+    match c {
+        b'0'..=b'9' => (c - b'0') as i32,
+        b'A'..=b'F' => (c - b'A' + 10) as i32,
+        b'a'..=b'f' => (c - b'a' + 10) as i32,
+        _ => -1,
+    }
+}
+
+fn hfile_debase64_byte(c: u8) -> i32 {
+    match c {
+        b'A'..=b'Z' => (c - b'A') as i32,
+        b'a'..=b'z' => (c - b'a' + 26) as i32,
+        b'0'..=b'9' => (c - b'0' + 52) as i32,
+        b'+' => 62,
+        b'/' => 63,
+        _ => -1,
+    }
+}
+
+fn hfile_decode_percent_bytes(data: &[u8]) -> Vec<u8> {
+    let mut decoded = Vec::with_capacity(data.len().saturating_add(1));
+    let mut i = 0usize;
+    while i < data.len() {
+        if data[i] == b'%' && i + 2 < data.len() {
+            let hi = hfile_dehex_byte(data[i + 1]);
+            let lo = hfile_dehex_byte(data[i + 2]);
+            if hi >= 0 && lo >= 0 {
+                decoded.push(((hi << 4) | lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        decoded.push(data[i]);
+        i += 1;
+    }
+    decoded.push(0);
+    decoded
+}
+
+fn hfile_decode_base64_bytes(data: &[u8]) -> Vec<u8> {
+    let mut decoded = Vec::with_capacity(data.len().div_ceil(4) * 3);
+    let mut i = 0usize;
+    loop {
+        let x0 = data.get(i).map_or(-1, |&c| hfile_debase64_byte(c));
+        i += 1;
+        let x1 = if x0 >= 0 {
+            let x = data.get(i).map_or(-1, |&c| hfile_debase64_byte(c));
+            i += 1;
+            x
+        } else {
+            -1
+        };
+        let x2 = if x1 >= 0 {
+            let x = data.get(i).map_or(-1, |&c| hfile_debase64_byte(c));
+            i += 1;
+            x
+        } else {
+            -1
+        };
+        let x3 = if x2 >= 0 {
+            let x = data.get(i).map_or(-1, |&c| hfile_debase64_byte(c));
+            i += 1;
+            x
+        } else {
+            -1
+        };
+        if x3 < 0 {
+            if x1 >= 0 {
+                decoded.push(((x0 << 2) | (x1 >> 4)) as u8);
+            }
+            if x2 >= 0 {
+                decoded.push(((x1 << 4) | (x2 >> 2)) as u8);
+            }
+            break;
+        }
+
+        decoded.push(((x0 << 2) | (x1 >> 4)) as u8);
+        decoded.push(((x1 << 4) | (x2 >> 2)) as u8);
+        decoded.push(((x2 << 6) | x3) as u8);
+    }
+    decoded
+}
+
 pub unsafe fn hfile_c_835_create_hfile_mem(
     buffer: *mut c_char,
     mode: *const c_char,
     buf_filled: size_t,
     buf_size: size_t,
 ) -> *mut hFILE {
-    let fp = hfile_c_141_hfile_init_fixed(
+    let Some(mode) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    hfile_c_835_create_hfile_mem_ref(buffer, mode, buf_filled, buf_size)
+}
+
+pub unsafe fn hfile_c_835_create_hfile_mem_ref(
+    buffer: NonNull<u8>,
+    mode: &[u8],
+    buf_filled: size_t,
+    buf_size: size_t,
+) -> *mut hFILE {
+    let fp = hfile_c_141_hfile_init_fixed_ref(
         std::mem::size_of::<hfile_layout>(),
         mode,
         buffer,
@@ -1236,44 +1585,68 @@ pub unsafe extern "C" fn hfile_c_845_hopen_mem(
     url: *const c_char,
     mode: *const c_char,
 ) -> *mut hFILE {
-    let mut length = 0usize;
-    let comma = libc::strchr(url, b',' as c_int);
-    if comma.is_null() {
+    let Some(url) = (!url.is_null()).then(|| CStr::from_ptr(url).to_bytes()) else {
         *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
-    }
-    let data = comma.add(1);
+    };
+    let Some(mode_bytes) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    let Some(comma) = url.iter().position(|&c| c == b',') else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    let metadata = &url[..comma];
+    let data = &url[comma + 1..];
 
-    if libc::strchr(mode, b'r' as c_int).is_null() {
+    if !hfile_mode_has(mode_bytes, b'r') {
         *crate::htslib_rs::c_compat::__errno_location() = libc::EROFS;
         return std::ptr::null_mut();
     }
 
-    let (size, buffer) = if comma.offset_from(url) >= 7
-        && hfile_c_826_cmp_prefix(c";base64".as_ptr(), comma.sub(7)) == 0
-    {
-        let size = hts_base64_decoded_length(CStr::from_ptr(data).to_bytes().len());
-        let buffer = crate::htslib_rs::c_compat::malloc(size as u64).cast::<c_char>();
-        if buffer.is_null() {
-            return std::ptr::null_mut();
-        }
-        hts_decode_base64(buffer, &mut length, data);
-        (size, buffer)
+    let is_base64 = hfile_data_metadata_is_base64(metadata);
+    let (decoded, length) = if is_base64 {
+        let decoded = hfile_decode_base64_bytes(data);
+        let length = decoded.len();
+        (decoded, length)
     } else {
-        let size = CStr::from_ptr(data).to_bytes().len() + 1;
-        let buffer = crate::htslib_rs::c_compat::malloc(size as u64).cast::<c_char>();
-        if buffer.is_null() {
+        let decoded = hfile_decode_percent_bytes(data);
+        let length = decoded.len().saturating_sub(1);
+        (decoded, length)
+    };
+    let size = if is_base64 {
+        data.len().div_ceil(4) * 3
+    } else {
+        data.len().saturating_add(1)
+    }
+    .max(1);
+    let layout = match std::alloc::Layout::from_size_align(size, HFILE_BUFFER_ALIGN) {
+        Ok(layout) => layout,
+        Err(_) => {
+            *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
             return std::ptr::null_mut();
         }
-        hts_decode_percent(buffer, &mut length, data);
-        (size, buffer)
     };
-
-    let hf = hfile_c_835_create_hfile_mem(buffer, mode, length, size);
-    if hf.is_null() {
-        crate::htslib_rs::c_compat::free(buffer.cast());
+    let buffer_ptr = std::alloc::alloc(layout).cast::<c_char>();
+    if buffer_ptr.is_null() {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
         return std::ptr::null_mut();
     }
+    std::ptr::write_bytes(buffer_ptr, 0, size);
+    std::ptr::copy_nonoverlapping(decoded.as_ptr().cast::<c_char>(), buffer_ptr, decoded.len());
+
+    let hf = hfile_c_835_create_hfile_mem_ref(
+        NonNull::new_unchecked(buffer_ptr.cast::<u8>()),
+        mode_bytes,
+        length,
+        size,
+    );
+    if hf.is_null() {
+        std::alloc::dealloc(buffer_ptr.cast(), layout);
+        return std::ptr::null_mut();
+    }
+    (*(hf.cast::<hfile_layout>())).flags |= HFILE_RUST_BUFFER;
 
     hf
 }
@@ -1320,32 +1693,279 @@ unsafe extern "C" fn hfile_c_878_hopenv_mem_va(
     hfile_c_878_hopenv_mem(filename, mode, buffer, sz)
 }
 
-pub unsafe fn hfile_c_894_hfile_mem_get_buffer(
-    file: *mut hFILE,
-    length: *mut size_t,
+pub unsafe fn hfile_c_894_hfile_mem_get_buffer_ref(
+    file: &mut hFILE,
+    length: Option<&mut size_t>,
 ) -> *mut c_char {
-    let file_layout = file.cast::<hfile_layout>();
-    if (*file_layout).backend != &MEM_BACKEND {
+    let file_layout = hfile_layout_mut(file);
+    if file_layout.backend != &MEM_BACKEND {
         *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     }
 
-    if !length.is_null() {
-        *length = (*file_layout).limit.offset_from((*file_layout).buffer) as size_t;
+    if let Some(length) = length {
+        *length = file_layout.limit.offset_from(file_layout.buffer) as size_t;
     }
 
-    (*file_layout).buffer
+    file_layout.buffer.cast()
+}
+
+pub unsafe fn hfile_c_906_hfile_mem_steal_buffer_ref(
+    file: &mut hFILE,
+    length: Option<&mut size_t>,
+) -> *mut c_char {
+    let buf = hfile_c_894_hfile_mem_get_buffer_ref(file, length);
+    if !buf.is_null() {
+        let file_layout = hfile_layout_mut(file);
+        if (file_layout.flags & HFILE_RUST_BUFFER) != 0 {
+            let capacity = file_layout.limit.offset_from(file_layout.buffer) as size_t;
+            let stolen = crate::htslib_rs::c_compat::malloc(capacity as u64).cast::<c_char>();
+            if stolen.is_null() {
+                *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+                return std::ptr::null_mut();
+            }
+            crate::htslib_rs::c_compat::memcpy(stolen.cast(), buf.cast(), capacity as u64);
+            let layout =
+                std::alloc::Layout::from_size_align_unchecked(capacity, HFILE_BUFFER_ALIGN);
+            std::alloc::dealloc(buf.cast(), layout);
+            file_layout.buffer = std::ptr::null_mut();
+            file_layout.begin = std::ptr::null_mut();
+            file_layout.end = std::ptr::null_mut();
+            file_layout.limit = std::ptr::null_mut();
+            file_layout.flags &= !HFILE_RUST_BUFFER;
+            return stolen;
+        }
+        file_layout.buffer = std::ptr::null_mut();
+    }
+    buf
+}
+
+pub unsafe fn hfile_c_171_writebuffer_is_nonempty(fp: *mut hFILE) -> c_int {
+    let Some(fp) = fp.as_ref() else {
+        return 0;
+    };
+    hfile_c_171_writebuffer_is_nonempty_ref(fp)
+}
+
+pub unsafe fn hfile_c_179_refill_buffer(fp: *mut hFILE) -> libc::ssize_t {
+    let Some(fp) = fp.as_mut() else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    hfile_c_179_refill_buffer_ref(fp)
+}
+
+pub unsafe fn hfile_c_212_hfile_set_blksize(fp: *mut hFILE, bufsiz: size_t) -> c_int {
+    let Some(fp) = fp.as_mut() else {
+        return -1;
+    };
+    hfile_c_212_hfile_set_blksize_ref(fp, bufsiz)
+}
+
+pub unsafe fn hfile_c_235_hgetc2(fp: *mut hFILE) -> c_int {
+    let Some(fp) = fp.as_mut() else {
+        return libc::EOF;
+    };
+    hfile_c_235_hgetc2_ref(fp)
+}
+
+pub unsafe fn hfile_c_241_hgetdelim(
+    buffer: *mut c_char,
+    size: size_t,
+    delim: c_int,
+    fp: *mut hFILE,
+) -> libc::ssize_t {
+    let Some(fp) = fp.as_mut() else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    hfile_c_241_hgetdelim_ref(
+        std::slice::from_raw_parts_mut(buffer.as_ptr(), size),
+        delim,
+        fp,
+    )
+}
+
+pub unsafe fn hfile_c_291_hgets(buffer: *mut c_char, size: c_int, fp: *mut hFILE) -> *mut c_char {
+    let Some(fp) = fp.as_mut() else {
+        return std::ptr::null_mut();
+    };
+    if size < 1 {
+        hfile_layout_mut(fp).has_errno = libc::EINVAL;
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    }
+    if buffer.is_null() {
+        return std::ptr::null_mut();
+    }
+    if hfile_c_291_hgets_ref(
+        std::slice::from_raw_parts_mut(buffer.cast::<u8>(), size as usize),
+        fp,
+    ) {
+        buffer
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+pub unsafe fn hfile_c_306_khgetline(kstr: *mut kstring_t, fp: *mut hFILE) -> c_int {
+    let Some(fp) = fp.as_mut() else {
+        return libc::EOF;
+    };
+    hfile_c_306_khgetline_ref(kstr, fp)
+}
+
+pub unsafe fn hfile_c_313_hpeek(
+    fp: *mut hFILE,
+    buffer: *mut c_void,
+    nbytes: size_t,
+) -> libc::ssize_t {
+    let Some(fp) = fp.as_mut() else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    hfile_c_313_hpeek_ref(fp, std::slice::from_raw_parts_mut(buffer.as_ptr(), nbytes))
+}
+
+pub unsafe fn hfile_c_330_hread2(
+    fp: *mut hFILE,
+    destv: *mut c_void,
+    nbytes: size_t,
+    nread: size_t,
+) -> libc::ssize_t {
+    let Some(fp) = fp.as_mut() else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    let Some(dest) = NonNull::new(destv.cast::<u8>()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    hfile_c_330_hread2_ref(
+        fp,
+        nread,
+        std::slice::from_raw_parts_mut(dest.as_ptr(), nbytes),
+    )
+}
+
+pub unsafe fn hfile_c_376_flush_buffer(fp: *mut hFILE) -> libc::ssize_t {
+    let Some(fp) = fp.as_mut() else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    hfile_c_376_flush_buffer_ref(fp)
+}
+
+pub unsafe fn hfile_c_390_hflush(fp: *mut hFILE) -> c_int {
+    let Some(fp) = fp.as_mut() else {
+        return libc::EOF;
+    };
+    hfile_c_390_hflush_ref(fp)
+}
+
+pub unsafe fn hfile_c_400_hputc2(c: c_int, fp: *mut hFILE) -> c_int {
+    let Some(fp) = fp.as_mut() else {
+        return libc::EOF;
+    };
+    hfile_c_400_hputc2_ref(c, fp)
+}
+
+pub unsafe fn hfile_c_412_hwrite2(
+    fp: *mut hFILE,
+    srcv: *const c_void,
+    totalbytes: size_t,
+    ncopied: size_t,
+) -> libc::ssize_t {
+    let Some(fp) = fp.as_mut() else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    let Some(src) = NonNull::new(srcv.cast_mut().cast::<u8>()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    hfile_c_412_hwrite2_ref(
+        fp,
+        ncopied,
+        std::slice::from_raw_parts(src.as_ptr(), totalbytes),
+    )
+}
+
+pub unsafe fn hfile_c_440_hputs2(
+    text: *const c_char,
+    totalbytes: size_t,
+    ncopied: size_t,
+    fp: *mut hFILE,
+) -> c_int {
+    let Some(fp) = fp.as_mut() else {
+        return libc::EOF;
+    };
+    let Some(text) = NonNull::new(text.cast_mut().cast::<u8>()) else {
+        return libc::EOF;
+    };
+    hfile_c_440_hputs2_ref(
+        std::slice::from_raw_parts(text.as_ptr(), totalbytes),
+        ncopied,
+        fp,
+    )
+}
+
+pub unsafe fn hfile_c_446_hseek(fp: *mut hFILE, offset: libc::off_t, whence: c_int) -> libc::off_t {
+    let Some(fp) = fp.as_mut() else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    hfile_c_446_hseek_ref(fp, offset, whence)
+}
+
+pub unsafe fn hfile_c_503_hclose(fp: *mut hFILE) -> c_int {
+    let Some(fp) = fp.as_mut() else {
+        return 0;
+    };
+    hfile_c_503_hclose_ref(fp)
+}
+
+pub unsafe fn hfile_c_520_hclose_abruptly(fp: *mut hFILE) {
+    if let Some(fp) = fp.as_mut() {
+        hfile_c_520_hclose_abruptly_ref(fp);
+    }
+}
+
+pub unsafe fn hfile_c_689_hpreload(fp: *mut hFILE) -> *mut hFILE {
+    let Some(fp) = fp.as_mut() else {
+        return std::ptr::null_mut();
+    };
+    hfile_c_689_hpreload_ref(fp)
+}
+
+pub unsafe fn hfile_c_894_hfile_mem_get_buffer(
+    file: *mut hFILE,
+    length: *mut size_t,
+) -> *mut c_char {
+    let Some(file) = file.as_mut() else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    hfile_c_894_hfile_mem_get_buffer_ref(file, length.as_mut())
 }
 
 pub unsafe fn hfile_c_906_hfile_mem_steal_buffer(
     file: *mut hFILE,
     length: *mut size_t,
 ) -> *mut c_char {
-    let buf = hfile_c_894_hfile_mem_get_buffer(file, length);
-    if !buf.is_null() {
-        (*(file.cast::<hfile_layout>())).buffer = std::ptr::null_mut();
-    }
-    buf
+    let Some(file) = file.as_mut() else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    hfile_c_906_hfile_mem_steal_buffer_ref(file, length.as_mut())
 }
 
 pub unsafe extern "C" fn hfile_c_915_hopen_not_supported(
@@ -1729,10 +2349,14 @@ pub unsafe fn hfile_c_1317_hopen_vargs(
     mode: *const c_char,
     args: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
+    let Some(mode_bytes) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
     let handler = hfile_c_1176_find_scheme_handler(fname);
     if !handler.is_null() {
         let handler = handler.cast::<hfile_scheme_handler_layout>();
-        if libc::strchr(mode, b':' as c_int).is_null()
+        if !hfile_mode_has(mode_bytes, b':')
             || (*handler).priority < 2000
             || (*handler).vopen.is_none()
         {
@@ -1914,11 +2538,15 @@ pub unsafe fn hfile_c_1364_haddextension(
 }
 
 pub unsafe fn hfile_c_1416_knet_open(fn_: *const c_char, mode: *const c_char) -> *mut knetFile {
-    let hf = if libc::strcmp(fn_, c"-".as_ptr()) == 0 {
+    let Some(filename) = (!fn_.is_null()).then(|| CStr::from_ptr(fn_).to_bytes()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    let hf = if filename == b"-" {
         hfile_c_761_hopen_fd_stdinout(mode)
-    } else if libc::strncmp(fn_, c"file://".as_ptr(), 7) == 0 {
+    } else if filename.starts_with(b"file://") {
         hfile_c_747_hopen_fd_fileuri(fn_, mode)
-    } else if libc::strchr(fn_, b':' as c_int).is_null() {
+    } else if !hfile_mode_has(filename, b':') {
         hfile_c_664_hopen_fd(fn_, mode)
     } else {
         hopen(fn_, mode)
@@ -1995,23 +2623,38 @@ pub unsafe fn haddextension(
 }
 
 pub unsafe fn hclose(fp: *mut hFILE) -> c_int {
-    hfile_c_503_hclose(fp)
+    let Some(fp) = hfile_mut(fp) else {
+        return 0;
+    };
+    hfile_c_503_hclose_ref(fp)
 }
 
 pub unsafe fn hclose_abruptly(fp: *mut hFILE) {
-    hfile_c_520_hclose_abruptly(fp)
+    if let Some(fp) = hfile_mut(fp) {
+        hfile_c_520_hclose_abruptly_ref(fp)
+    }
 }
 
 pub unsafe fn hseek(fp: *mut hFILE, offset: libc::off_t, whence: c_int) -> libc::off_t {
-    hfile_c_446_hseek(fp, offset, whence)
+    let Some(fp) = hfile_mut(fp) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    hfile_c_446_hseek_ref(fp, offset, whence)
 }
 
 pub unsafe fn hfile_set_blksize(fp: *mut hFILE, bufsiz: size_t) -> c_int {
-    hfile_c_212_hfile_set_blksize(fp, bufsiz)
+    let Some(fp) = hfile_mut(fp) else {
+        return -1;
+    };
+    hfile_c_212_hfile_set_blksize_ref(fp, bufsiz)
 }
 
 pub unsafe fn hgetc2(fp: *mut hFILE) -> c_int {
-    hfile_c_235_hgetc2(fp)
+    let Some(fp) = hfile_mut(fp) else {
+        return libc::EOF;
+    };
+    hfile_c_235_hgetc2_ref(fp)
 }
 
 pub unsafe fn hgetdelim(
@@ -2020,19 +2663,60 @@ pub unsafe fn hgetdelim(
     delim: c_int,
     fp: *mut hFILE,
 ) -> libc::ssize_t {
-    hfile_c_241_hgetdelim(buffer, size, delim, fp)
+    let Some(fp) = hfile_mut(fp) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    hfile_c_241_hgetdelim_ref(
+        std::slice::from_raw_parts_mut(buffer.as_ptr(), size),
+        delim,
+        fp,
+    )
 }
 
 pub unsafe fn hgets(buffer: *mut c_char, size: c_int, fp: *mut hFILE) -> *mut c_char {
-    hfile_c_291_hgets(buffer, size, fp)
+    let Some(fp) = hfile_mut(fp) else {
+        return std::ptr::null_mut();
+    };
+    if size < 1 {
+        hfile_layout_mut(fp).has_errno = libc::EINVAL;
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    }
+    if buffer.is_null() {
+        return std::ptr::null_mut();
+    }
+    if hfile_c_291_hgets_ref(
+        std::slice::from_raw_parts_mut(buffer.cast::<u8>(), size as usize),
+        fp,
+    ) {
+        buffer
+    } else {
+        std::ptr::null_mut()
+    }
 }
 
 pub unsafe fn khgetline(kstr: *mut kstring_t, fp: *mut hFILE) -> c_int {
-    hfile_c_306_khgetline(kstr, fp)
+    let Some(fp) = hfile_mut(fp) else {
+        return libc::EOF;
+    };
+    hfile_c_306_khgetline_ref(kstr, fp)
 }
 
 pub unsafe fn hpeek(fp: *mut hFILE, buffer: *mut c_void, nbytes: size_t) -> libc::ssize_t {
-    hfile_c_313_hpeek(fp, buffer, nbytes)
+    let Some(fp) = hfile_mut(fp) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    hfile_c_313_hpeek_ref(fp, std::slice::from_raw_parts_mut(buffer.as_ptr(), nbytes))
 }
 
 pub unsafe fn hread2(
@@ -2041,11 +2725,26 @@ pub unsafe fn hread2(
     nbytes: size_t,
     nread: size_t,
 ) -> libc::ssize_t {
-    hfile_c_330_hread2(fp, destv, nbytes, nread)
+    let Some(fp) = hfile_mut(fp) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    let Some(dest) = NonNull::new(destv.cast::<u8>()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    hfile_c_330_hread2_ref(
+        fp,
+        nread,
+        std::slice::from_raw_parts_mut(dest.as_ptr(), nbytes),
+    )
 }
 
 pub unsafe fn hputc2(c: c_int, fp: *mut hFILE) -> c_int {
-    hfile_c_400_hputc2(c, fp)
+    let Some(fp) = hfile_mut(fp) else {
+        return libc::EOF;
+    };
+    hfile_c_400_hputc2_ref(c, fp)
 }
 
 pub unsafe fn hwrite2(
@@ -2054,7 +2753,19 @@ pub unsafe fn hwrite2(
     totalbytes: size_t,
     ncopied: size_t,
 ) -> libc::ssize_t {
-    hfile_c_412_hwrite2(fp, srcv, totalbytes, ncopied)
+    let Some(fp) = hfile_mut(fp) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    let Some(src) = NonNull::new(srcv.cast_mut().cast::<u8>()) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    hfile_c_412_hwrite2_ref(
+        fp,
+        ncopied,
+        std::slice::from_raw_parts(src.as_ptr(), totalbytes),
+    )
 }
 
 pub unsafe fn hputs2(
@@ -2063,19 +2774,40 @@ pub unsafe fn hputs2(
     ncopied: size_t,
     fp: *mut hFILE,
 ) -> c_int {
-    hfile_c_440_hputs2(text, totalbytes, ncopied, fp)
+    let Some(fp) = hfile_mut(fp) else {
+        return libc::EOF;
+    };
+    let Some(text) = NonNull::new(text.cast_mut().cast::<u8>()) else {
+        return libc::EOF;
+    };
+    hfile_c_440_hputs2_ref(
+        std::slice::from_raw_parts(text.as_ptr(), totalbytes),
+        ncopied,
+        fp,
+    )
 }
 
 pub unsafe fn hflush(fp: *mut hFILE) -> c_int {
-    hfile_c_390_hflush(fp)
+    let Some(fp) = hfile_mut(fp) else {
+        return libc::EOF;
+    };
+    hfile_c_390_hflush_ref(fp)
 }
 
 pub unsafe fn hfile_mem_get_buffer(file: *mut hFILE, length: *mut size_t) -> *mut c_char {
-    hfile_c_894_hfile_mem_get_buffer(file, length)
+    let Some(file) = hfile_mut(file) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    hfile_c_894_hfile_mem_get_buffer_ref(file, length.as_mut())
 }
 
 pub unsafe fn hfile_mem_steal_buffer(file: *mut hFILE, length: *mut size_t) -> *mut c_char {
-    hfile_c_906_hfile_mem_steal_buffer(file, length)
+    let Some(file) = hfile_mut(file) else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return std::ptr::null_mut();
+    };
+    hfile_c_906_hfile_mem_steal_buffer_ref(file, length.as_mut())
 }
 
 pub unsafe fn hfile_list_schemes(
@@ -2128,6 +2860,11 @@ pub unsafe fn knet_close(fp: *mut knetFile) -> c_int {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hfile_plugin_test_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
 
     #[repr(C)]
     struct ReadFile {
@@ -2369,10 +3106,10 @@ mod tests {
             )
             .cast::<hfile_layout>();
             assert!(!fp.is_null());
-            assert_eq!((*fp).buffer, buffer);
-            assert_eq!((*fp).begin, buffer);
-            assert_eq!((*fp).end.offset_from(buffer), 5);
-            assert_eq!((*fp).limit.offset_from(buffer), 8);
+            assert_eq!((*fp).buffer, buffer.cast::<u8>());
+            assert_eq!((*fp).begin, buffer.cast::<u8>());
+            assert_eq!((*fp).end.offset_from(buffer.cast::<u8>()), 5);
+            assert_eq!((*fp).limit.offset_from(buffer.cast::<u8>()), 8);
             assert_eq!((*fp).offset, 0);
             assert_eq!((*fp).flags & HFILE_AT_EOF, HFILE_AT_EOF);
             assert_eq!((*fp).flags & HFILE_MOBILE, 0);
@@ -2480,6 +3217,7 @@ mod tests {
 
     #[test]
     fn hfile_plugin_listing_respects_capacity_without_losing_total_counts() {
+        let _guard = hfile_plugin_test_lock().lock().unwrap();
         unsafe {
             let mut plugins = [std::ptr::null(); 1];
             let mut nplugins = plugins.len() as c_int;
@@ -2513,6 +3251,7 @@ mod tests {
 
     #[test]
     fn hfile_plugin_listing_accepts_zero_output_capacity() {
+        let _guard = hfile_plugin_test_lock().lock().unwrap();
         unsafe {
             let mut nplugins = 0;
             let total = hfile_c_1257_hfile_list_plugins(std::ptr::null_mut(), &mut nplugins);
@@ -2633,14 +3372,15 @@ mod tests {
             let mut stack = [0 as c_char; 4];
             let mut file = ReadFile {
                 base: hfile_layout {
-                    buffer: stack.as_mut_ptr(),
-                    begin: stack.as_mut_ptr(),
-                    end: stack.as_mut_ptr(),
-                    limit: stack.as_mut_ptr().add(stack.len()),
+                    buffer: stack.as_mut_ptr().cast::<u8>(),
+                    begin: stack.as_mut_ptr().cast::<u8>(),
+                    end: stack.as_mut_ptr().cast::<u8>(),
+                    limit: stack.as_mut_ptr().cast::<u8>().add(stack.len()),
                     backend: &READ_BACKEND,
                     offset: 0,
                     flags: HFILE_MOBILE,
                     has_errno: 0,
+                    alloc_size: 0,
                 },
                 source: std::ptr::null(),
                 source_len: 0,
@@ -2665,14 +3405,15 @@ mod tests {
             let source = b"abcdef";
             let mut file = ReadFile {
                 base: hfile_layout {
-                    buffer: buffer.as_mut_ptr(),
-                    begin: buffer.as_mut_ptr(),
-                    end: buffer.as_mut_ptr(),
-                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    buffer: buffer.as_mut_ptr().cast::<u8>(),
+                    begin: buffer.as_mut_ptr().cast::<u8>(),
+                    end: buffer.as_mut_ptr().cast::<u8>(),
+                    limit: buffer.as_mut_ptr().cast::<u8>().add(buffer.len()),
                     backend: &READ_BACKEND,
                     offset: 0,
                     flags: HFILE_MOBILE,
                     has_errno: 0,
+                    alloc_size: 0,
                 },
                 source: source.as_ptr().cast(),
                 source_len: source.len(),
@@ -2763,14 +3504,15 @@ mod tests {
             let mut buffer = [0 as c_char; 4];
             let mut file = ReadFile {
                 base: hfile_layout {
-                    buffer: buffer.as_mut_ptr(),
-                    begin: buffer.as_mut_ptr(),
-                    end: buffer.as_mut_ptr(),
-                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    buffer: buffer.as_mut_ptr().cast::<u8>(),
+                    begin: buffer.as_mut_ptr().cast::<u8>(),
+                    end: buffer.as_mut_ptr().cast::<u8>(),
+                    limit: buffer.as_mut_ptr().cast::<u8>().add(buffer.len()),
                     backend: &READ_ERRNO_BACKEND,
                     offset: 0,
                     flags: HFILE_MOBILE,
                     has_errno: 0,
+                    alloc_size: 0,
                 },
                 source: std::ptr::null(),
                 source_len: 0,
@@ -3150,6 +3892,7 @@ mod tests {
     #[test]
     #[cfg(any(feature = "libcurl", feature = "s3", feature = "gcs"))]
     fn hfile_remote_scheme_dispatch_prefers_feature_plugins() {
+        let _guard = hfile_plugin_test_lock().lock().unwrap();
         unsafe {
             #[cfg(feature = "libcurl")]
             {
@@ -3233,6 +3976,7 @@ mod tests {
 
     #[test]
     fn hfile_plugin_initialisers_set_names_and_error_handler_state() {
+        let _guard = hfile_plugin_test_lock().lock().unwrap();
         unsafe {
             let mut mem_plugin = hfile_plugin_layout {
                 api_version: 1,
@@ -3327,14 +4071,15 @@ mod tests {
             let source = b"abcdefghi";
             let mut file = ReadFile {
                 base: hfile_layout {
-                    buffer: buffer.as_mut_ptr(),
-                    begin: buffer.as_mut_ptr(),
-                    end: buffer.as_mut_ptr(),
-                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    buffer: buffer.as_mut_ptr().cast::<u8>(),
+                    begin: buffer.as_mut_ptr().cast::<u8>(),
+                    end: buffer.as_mut_ptr().cast::<u8>(),
+                    limit: buffer.as_mut_ptr().cast::<u8>().add(buffer.len()),
                     backend: &READ_BACKEND,
                     offset: 0,
                     flags: HFILE_MOBILE,
                     has_errno: 0,
+                    alloc_size: 0,
                 },
                 source: source.as_ptr().cast(),
                 source_len: source.len(),
@@ -3392,14 +4137,15 @@ mod tests {
             let source = b"ab\ncdef\nlast";
             let mut file = ReadFile {
                 base: hfile_layout {
-                    buffer: buffer.as_mut_ptr(),
-                    begin: buffer.as_mut_ptr(),
-                    end: buffer.as_mut_ptr(),
-                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    buffer: buffer.as_mut_ptr().cast::<u8>(),
+                    begin: buffer.as_mut_ptr().cast::<u8>(),
+                    end: buffer.as_mut_ptr().cast::<u8>(),
+                    limit: buffer.as_mut_ptr().cast::<u8>().add(buffer.len()),
                     backend: &READ_BACKEND,
                     offset: 0,
                     flags: HFILE_MOBILE,
                     has_errno: 0,
+                    alloc_size: 0,
                 },
                 source: source.as_ptr().cast(),
                 source_len: source.len(),
@@ -3456,14 +4202,15 @@ mod tests {
             let mut buffer = *b"abcdef\0\0";
             let mut file = ReadFile {
                 base: hfile_layout {
-                    buffer: buffer.as_mut_ptr().cast(),
-                    begin: buffer.as_mut_ptr().cast::<c_char>().add(2),
-                    end: buffer.as_mut_ptr().cast::<c_char>().add(6),
-                    limit: buffer.as_mut_ptr().cast::<c_char>().add(buffer.len()),
+                    buffer: buffer.as_mut_ptr().cast::<u8>().cast(),
+                    begin: buffer.as_mut_ptr().cast::<u8>().add(2),
+                    end: buffer.as_mut_ptr().cast::<u8>().add(6),
+                    limit: buffer.as_mut_ptr().cast::<u8>().add(buffer.len()),
                     backend: &READ_BACKEND,
                     offset: 0,
                     flags: HFILE_READONLY,
                     has_errno: 0,
+                    alloc_size: 0,
                 },
                 source: std::ptr::null(),
                 source_len: 0,
@@ -3500,14 +4247,15 @@ mod tests {
             let source = b"abcdefgh";
             let mut file = ReadFile {
                 base: hfile_layout {
-                    buffer: buffer.as_mut_ptr(),
-                    begin: buffer.as_mut_ptr().add(2),
-                    end: buffer.as_mut_ptr().add(4),
-                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    buffer: buffer.as_mut_ptr().cast::<u8>(),
+                    begin: buffer.as_mut_ptr().cast::<u8>().add(2),
+                    end: buffer.as_mut_ptr().cast::<u8>().add(4),
+                    limit: buffer.as_mut_ptr().cast::<u8>().add(buffer.len()),
                     backend: &SEEKABLE_READ_BACKEND,
                     offset: 0,
                     flags: HFILE_MOBILE | HFILE_AT_EOF,
                     has_errno: 0,
+                    alloc_size: 0,
                 },
                 source: source.as_ptr().cast(),
                 source_len: source.len(),
@@ -3546,14 +4294,15 @@ mod tests {
             let mut buffer = *b"abcd";
             let mut file = ReadFile {
                 base: hfile_layout {
-                    buffer: buffer.as_mut_ptr().cast(),
-                    begin: buffer.as_mut_ptr().cast::<c_char>().add(1),
-                    end: buffer.as_mut_ptr().cast::<c_char>().add(4),
-                    limit: buffer.as_mut_ptr().cast::<c_char>().add(buffer.len()),
+                    buffer: buffer.as_mut_ptr().cast::<u8>().cast(),
+                    begin: buffer.as_mut_ptr().cast::<u8>().add(1),
+                    end: buffer.as_mut_ptr().cast::<u8>().add(4),
+                    limit: buffer.as_mut_ptr().cast::<u8>().add(buffer.len()),
                     backend: &READ_BACKEND,
                     offset: 10,
                     flags: HFILE_MOBILE | HFILE_AT_EOF,
                     has_errno: 0,
+                    alloc_size: 0,
                 },
                 source: std::ptr::null(),
                 source_len: 0,
@@ -3585,14 +4334,15 @@ mod tests {
             );
             let mut file = WriteFile {
                 base: hfile_layout {
-                    buffer: buffer.as_mut_ptr(),
-                    begin: buffer.as_mut_ptr().add(3),
-                    end: buffer.as_mut_ptr(),
-                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    buffer: buffer.as_mut_ptr().cast::<u8>(),
+                    begin: buffer.as_mut_ptr().cast::<u8>().add(3),
+                    end: buffer.as_mut_ptr().cast::<u8>(),
+                    limit: buffer.as_mut_ptr().cast::<u8>().add(buffer.len()),
                     backend: &WRITE_BACKEND,
                     offset: 0,
                     flags: HFILE_MOBILE,
                     has_errno: 0,
+                    alloc_size: 0,
                 },
                 sink: sink.as_mut_ptr(),
                 sink_len: sink.len(),
@@ -3609,7 +4359,7 @@ mod tests {
                 std::slice::from_raw_parts(sink.as_ptr().cast::<u8>(), 3),
                 b"abc"
             );
-            assert_eq!(*file.base.buffer, b'd' as c_char);
+            assert_eq!(*file.base.buffer, b'd');
             assert_eq!(file.base.begin.offset_from(file.base.buffer), 1);
 
             assert_eq!(
@@ -3639,14 +4389,15 @@ mod tests {
             let source = b"abcdefghijkl";
             let mut file = ReadFile {
                 base: hfile_layout {
-                    buffer: buffer.as_mut_ptr(),
-                    begin: buffer.as_mut_ptr(),
-                    end: buffer.as_mut_ptr(),
-                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    buffer: buffer.as_mut_ptr().cast::<u8>(),
+                    begin: buffer.as_mut_ptr().cast::<u8>(),
+                    end: buffer.as_mut_ptr().cast::<u8>(),
+                    limit: buffer.as_mut_ptr().cast::<u8>().add(buffer.len()),
                     backend: &READ_BACKEND,
                     offset: 0,
                     flags: HFILE_MOBILE,
                     has_errno: 0,
+                    alloc_size: 0,
                 },
                 source: source.as_ptr().cast(),
                 source_len: source.len(),
@@ -3702,14 +4453,15 @@ mod tests {
             let mut sink = [0 as c_char; 8];
             let mut file = WriteFile {
                 base: hfile_layout {
-                    buffer: buffer.as_mut_ptr(),
-                    begin: buffer.as_mut_ptr().add(1),
-                    end: buffer.as_mut_ptr(),
-                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    buffer: buffer.as_mut_ptr().cast::<u8>(),
+                    begin: buffer.as_mut_ptr().cast::<u8>().add(1),
+                    end: buffer.as_mut_ptr().cast::<u8>(),
+                    limit: buffer.as_mut_ptr().cast::<u8>().add(buffer.len()),
                     backend: &WRITE_BACKEND,
                     offset: 0,
                     flags: HFILE_MOBILE,
                     has_errno: 0,
+                    alloc_size: 0,
                 },
                 sink: sink.as_mut_ptr(),
                 sink_len: sink.len(),
@@ -3773,6 +4525,7 @@ mod tests {
 
     #[test]
     fn hfile_plugin_registration_keeps_highest_priority_valid_handler() {
+        let _guard = hfile_plugin_test_lock().lock().unwrap();
         unsafe extern "C" fn low_open(_fname: *const c_char, _mode: *const c_char) -> *mut hFILE {
             std::ptr::null_mut()
         }
@@ -3845,6 +4598,7 @@ mod tests {
 
     #[test]
     fn hfile_init_add_plugin_tracks_success_failure_and_shutdown_destroy() {
+        let _guard = hfile_plugin_test_lock().lock().unwrap();
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         static INIT_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -3919,14 +4673,15 @@ mod tests {
             );
             let mut file = WriteFile {
                 base: hfile_layout {
-                    buffer: buffer.as_mut_ptr(),
-                    begin: buffer.as_mut_ptr().add(2),
-                    end: buffer.as_mut_ptr(),
-                    limit: buffer.as_mut_ptr().add(buffer.len()),
+                    buffer: buffer.as_mut_ptr().cast::<u8>(),
+                    begin: buffer.as_mut_ptr().cast::<u8>().add(2),
+                    end: buffer.as_mut_ptr().cast::<u8>(),
+                    limit: buffer.as_mut_ptr().cast::<u8>().add(buffer.len()),
                     backend: &WRITE_BACKEND,
                     offset: 0,
                     flags: HFILE_MOBILE | HFILE_PRESERVE,
                     has_errno: 0,
+                    alloc_size: 0,
                 },
                 sink: sink.as_mut_ptr(),
                 sink_len: sink.len(),
@@ -3940,7 +4695,7 @@ mod tests {
                 std::slice::from_raw_parts(sink.as_ptr().cast::<u8>(), 2),
                 b"xy"
             );
-            assert_eq!(file.base.buffer, buffer.as_mut_ptr());
+            assert_eq!(file.base.buffer, buffer.as_mut_ptr().cast::<u8>());
 
             let fd = libc::dup(libc::STDOUT_FILENO);
             assert!(fd >= 0);

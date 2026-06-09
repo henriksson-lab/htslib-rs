@@ -97,7 +97,10 @@ pub unsafe fn test_test_nibbles_c_78_validate_nibble2base() -> c_int {
             test_test_nibbles_c_69_nibble2base_single(nibble.add(start), defbuf.as_mut_ptr(), len);
 
             libc::memset(buf.cast(), b'\0' as c_int, std::mem::size_of_val(&defbuf));
-            sam::nibble2base(nibble.add(start), buf, len);
+            let seq_len = len as usize;
+            let packed = std::slice::from_raw_parts(nibble.add(start), seq_len.div_ceil(2));
+            let out = std::slice::from_raw_parts_mut(buf, seq_len);
+            sam::nibble2base(packed, out);
 
             total += 1;
             if libc::strcmp(defbuf.as_ptr(), buf) != 0 {
@@ -144,7 +147,10 @@ pub unsafe fn test_test_nibbles_c_109_time_nibble2base(length: c_int, count: c_u
 
     i = 0;
     while i < count {
-        sam::nibble2base(nibble, buf, length);
+        let len = length as usize;
+        let packed = std::slice::from_raw_parts(nibble, len.div_ceil(2));
+        let out = std::slice::from_raw_parts_mut(buf, len);
+        sam::nibble2base(packed, out);
         total = total.wrapping_add(*buf.add((i % length as c_ulong) as usize) as c_ulong);
         i += 1;
     }

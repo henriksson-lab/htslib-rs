@@ -89,41 +89,17 @@ pub fn rle_find_syms(
 ///                         uint8_t *rle_syms, int *rle_nsyms,
 ///                         uint8_t *out, uint64_t *out_len);
 /// ```
-/// `out` may be NULL, in which case it is malloc'd (returned as a `Vec<u8>`)
-/// and is the caller's to free; otherwise the supplied buffer is written to.
-// rle.c:100 (also rle.h:69)
 #[allow(clippy::too_many_arguments)]
-pub fn hts_rle_encode(
+pub fn hts_rle_encode_into<'a>(
     data: &[u8],
     data_len: u64,
     run: &mut [u8],
     run_len: &mut u64,
     rle_syms: &mut [u8],
     rle_nsyms: &mut i32,
-    out: Option<&mut [u8]>,
+    out: &'a mut [u8],
     out_len: &mut u64,
-) -> Option<Vec<u8>> {
-    // if (!out) if (!(out = malloc(data_len*2))) return NULL;
-    //
-    // We model the malloc-on-NULL path by allocating a libc buffer and viewing
-    // it as a slice. When `out` is supplied (Some) we write into it instead.
-    // The result is always returned as an owned Vec (a copy of the used bytes),
-    // matching the byte content of the C output buffer.
-    let alloc_ptr: *mut u8;
-    let out_slice: &mut [u8];
-    if let Some(o) = out {
-        alloc_ptr = std::ptr::null_mut();
-        out_slice = o;
-    } else {
-        let p = unsafe { c_compat::malloc(data_len.wrapping_mul(2)) } as *mut u8;
-        if p.is_null() {
-            return None;
-        }
-        alloc_ptr = p;
-        out_slice =
-            unsafe { std::slice::from_raw_parts_mut(p, (data_len.wrapping_mul(2)) as usize) };
-    }
-
+) -> Option<&'a mut [u8]> {
     // Two pass:  Firstly compute which symbols are worth using RLE on.
     let mut saved = [0i64; 256 + MAGIC];
 
@@ -141,7 +117,7 @@ pub fn hts_rle_encode(
     let mut j: u64 = 0;
     let mut k: u64 = 0;
     while i < data_len {
-        out_slice[k as usize] = data[i as usize];
+        out[k as usize] = data[i as usize];
         k += 1;
         if saved[data[i as usize] as usize] > 0 {
             // int rlen = i;  int last = data[i];
@@ -160,15 +136,51 @@ pub fn hts_rle_encode(
 
     *run_len = j;
     *out_len = k;
+    Some(&mut out[..k as usize])
+}
 
-    // Return an owned copy of the literal buffer (full allocation length, as the
-    // C function returns the buffer pointer; callers use *out_len for the used
-    // portion). We copy [0..out_len) which is the meaningful content.
-    let result = out_slice[..k as usize].to_vec();
-    if !alloc_ptr.is_null() {
-        unsafe { c_compat::free(alloc_ptr as *mut std::ffi::c_void) };
+/// ```c
+/// uint8_t *hts_rle_encode(uint8_t *data, uint64_t data_len,
+///                         uint8_t *run,  uint64_t *run_len,
+///                         uint8_t *rle_syms, int *rle_nsyms,
+///                         uint8_t *out, uint64_t *out_len);
+/// ```
+/// When `out` is `None`, this allocates a Rust-owned literal buffer and returns
+/// it. Otherwise the supplied buffer is written to and the used bytes are copied
+/// into the returned `Vec`.
+// rle.c:100 (also rle.h:69)
+#[allow(clippy::too_many_arguments)]
+pub fn hts_rle_encode(
+    data: &[u8],
+    data_len: u64,
+    run: &mut [u8],
+    run_len: &mut u64,
+    rle_syms: &mut [u8],
+    rle_nsyms: &mut i32,
+    out: Option<&mut [u8]>,
+    out_len: &mut u64,
+) -> Option<Vec<u8>> {
+    match out {
+        Some(out) => hts_rle_encode_into(
+            data, data_len, run, run_len, rle_syms, rle_nsyms, out, out_len,
+        )
+        .map(|lit| lit.to_vec()),
+        None => {
+            let mut owned_out = vec![0u8; data_len.wrapping_mul(2) as usize];
+            hts_rle_encode_into(
+                data,
+                data_len,
+                run,
+                run_len,
+                rle_syms,
+                rle_nsyms,
+                &mut owned_out,
+                out_len,
+            )?;
+            owned_out.truncate(*out_len as usize);
+            Some(owned_out)
+        }
     }
-    Some(result)
 }
 
 /// ```c
@@ -258,26 +270,56 @@ pub unsafe fn hts_rle_encode_raw(
     let data_slice = std::slice::from_raw_parts(data, data_len as usize);
     let run_slice = std::slice::from_raw_parts_mut(run, data_len as usize + 1);
     let rle_syms_slice = std::slice::from_raw_parts_mut(rle_syms, 256);
-    let mut nsyms_val: i32 = *rle_nsyms;
-    let mut run_len_val: u64 = 0;
-    let mut out_len_val: u64 = 0;
-    let alloc_caller_buf = !out.is_null();
-    let out_opt = if alloc_caller_buf {
+    let out_opt = if out.is_null() {
+        None
+    } else {
         Some(std::slice::from_raw_parts_mut(
             out,
             data_len.wrapping_mul(2) as usize,
         ))
-    } else {
-        None
     };
-    let result = hts_rle_encode(
+    hts_rle_encode_raw_slices(
         data_slice,
-        data_len,
         run_slice,
-        &mut run_len_val,
+        &mut *run_len,
         rle_syms_slice,
-        &mut nsyms_val,
+        &mut *rle_nsyms,
         out_opt,
+        &mut *out_len,
+    )
+}
+
+/// Slice/reference adapter for the legacy raw RLE encode ABI.
+///
+/// The only remaining raw ownership handoff is the returned pointer when
+/// `out` is `None`; current translated callers release that buffer with
+/// `c_compat::free`, so this boundary keeps the C allocator for that case.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn hts_rle_encode_raw_slices(
+    data: &[u8],
+    run: &mut [u8],
+    run_len: &mut u64,
+    rle_syms: &mut [u8],
+    rle_nsyms: &mut std::ffi::c_int,
+    out: Option<&mut [u8]>,
+    out_len: &mut u64,
+) -> *mut u8 {
+    let mut nsyms_val: i32 = *rle_nsyms;
+    let mut run_len_val: u64 = 0;
+    let mut out_len_val: u64 = 0;
+    let alloc_caller_buf = out.is_some();
+    let caller_out_ptr = out
+        .as_ref()
+        .map(|buf| buf.as_ptr().cast_mut())
+        .unwrap_or(std::ptr::null_mut());
+    let result = hts_rle_encode(
+        data,
+        data.len() as u64,
+        run,
+        &mut run_len_val,
+        rle_syms,
+        &mut nsyms_val,
+        out,
         &mut out_len_val,
     );
     *rle_nsyms = nsyms_val;
@@ -289,7 +331,7 @@ pub unsafe fn hts_rle_encode_raw(
                 // safe API copied into our slice via `Some(o)`. The
                 // returned Vec is a clone we don't need.
                 drop(vec);
-                out
+                caller_out_ptr
             } else {
                 let p = c_compat::malloc(out_len_val.max(1)) as *mut u8;
                 if p.is_null() {
@@ -321,20 +363,40 @@ pub unsafe fn hts_rle_decode_raw(
     let run_slice = std::slice::from_raw_parts(run, run_len as usize);
     let rle_syms_slice = std::slice::from_raw_parts(rle_syms, rle_nsyms.max(0) as usize);
     let out_slice = std::slice::from_raw_parts_mut(out, *out_len as usize);
-    let mut out_len_val: u64 = *out_len;
-    let r = hts_rle_decode(
+    hts_rle_decode_raw_slices(
         lit_slice,
-        lit_len,
         run_slice,
-        run_len,
         rle_syms_slice,
         rle_nsyms,
         out_slice,
+        &mut *out_len,
+    )
+}
+
+/// Slice/reference adapter for the legacy raw RLE decode ABI.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn hts_rle_decode_raw_slices(
+    lit: &[u8],
+    run: &[u8],
+    rle_syms: &[u8],
+    rle_nsyms: std::ffi::c_int,
+    out: &mut [u8],
+    out_len: &mut u64,
+) -> *mut u8 {
+    let mut out_len_val: u64 = *out_len;
+    let r = hts_rle_decode(
+        lit,
+        lit.len() as u64,
+        run,
+        run.len() as u64,
+        rle_syms,
+        rle_nsyms,
+        out,
         &mut out_len_val,
     );
     *out_len = out_len_val;
     match r {
-        Some(_) => out,
+        Some(_) => out.as_mut_ptr(),
         None => std::ptr::null_mut(),
     }
 }

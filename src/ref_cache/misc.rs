@@ -105,31 +105,76 @@ pub unsafe fn ref_cache_misc_h_72_do_read_all(
     }
 }
 
+pub fn ref_cache_misc_h_91_lim_strdup_bytes(input: &[u8], max_len: usize) -> Option<Vec<u8>> {
+    if input.is_empty() {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(input.len().min(max_len).saturating_add(1));
+    if input.len() < max_len {
+        out.extend_from_slice(input);
+    } else {
+        let prefix_len = max_len.saturating_sub(3);
+        out.extend_from_slice(&input[..prefix_len.min(input.len())]);
+        out.extend(std::iter::repeat_n(b'.', 3.min(max_len)));
+    }
+    out.push(0);
+    Some(out)
+}
+
 // original: lim_strdup (htslib/ref_cache/misc.h:91)
 pub unsafe fn ref_cache_misc_h_91_lim_strdup(
     str_: *const c_char,
     len: usize,
     max_len: usize,
-) -> *mut c_char {
-    let out: *mut c_char;
+) -> Option<Vec<u8>> {
+    if len != 0 && str_.is_null() {
+        return None;
+    }
+    ref_cache_misc_h_91_lim_strdup_bytes(
+        std::slice::from_raw_parts(str_.cast::<u8>(), len),
+        max_len,
+    )
+}
 
-    if len == 0 {
-        return std::ptr::null_mut();
+#[cfg(test)]
+mod tests {
+    use super::{ref_cache_misc_h_91_lim_strdup, ref_cache_misc_h_91_lim_strdup_bytes};
+
+    #[test]
+    fn lim_strdup_bytes_returns_none_for_empty_input() {
+        assert_eq!(ref_cache_misc_h_91_lim_strdup_bytes(b"", 10), None);
     }
-    if len < max_len {
-        out = libc::malloc(len + 1).cast();
-        if out.is_null() {
-            return std::ptr::null_mut();
-        }
-        libc::memcpy(out.cast(), str_.cast(), len);
-        *out.add(len) = 0;
-        return out;
+
+    #[test]
+    fn lim_strdup_bytes_copies_short_input_with_nul_terminator() {
+        assert_eq!(
+            ref_cache_misc_h_91_lim_strdup_bytes(b"abcdef", 10).unwrap(),
+            b"abcdef\0"
+        );
     }
-    out = libc::malloc(max_len + 1).cast();
-    if out.is_null() {
-        return std::ptr::null_mut();
+
+    #[test]
+    fn lim_strdup_bytes_truncates_long_input_with_ellipsis_and_nul() {
+        assert_eq!(
+            ref_cache_misc_h_91_lim_strdup_bytes(b"abcdefgh", 6).unwrap(),
+            b"abc...\0"
+        );
     }
-    libc::memcpy(out.cast(), str_.cast(), max_len - 3);
-    libc::memcpy(out.add(max_len - 3).cast(), c"...".as_ptr().cast(), 4);
-    out
+
+    #[test]
+    fn lim_strdup_bytes_handles_tiny_max_len_without_underflow() {
+        assert_eq!(
+            ref_cache_misc_h_91_lim_strdup_bytes(b"abcdefgh", 2).unwrap(),
+            b"..\0"
+        );
+    }
+
+    #[test]
+    fn lim_strdup_raw_input_adapter_borrows_into_owned_vec() {
+        let input = b"abcdef";
+        let out = unsafe { ref_cache_misc_h_91_lim_strdup(input.as_ptr().cast(), input.len(), 5) }
+            .unwrap();
+        assert_eq!(out, b"ab...\0");
+    }
 }

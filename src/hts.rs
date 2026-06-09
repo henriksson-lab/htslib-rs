@@ -50,6 +50,7 @@ pub struct hts_opt {
     pub opt: u32,
     pub val: hts_opt_val,
     pub next: Option<NonNull<hts_opt>>,
+    _arg_buf: Box<[c_char]>,
 }
 pub const HTS_FORMAT_UNKNOWN_FORMAT: htsExactFormat = 0;
 pub const HTS_FORMAT_BINARY_FORMAT: htsExactFormat = 1;
@@ -1334,19 +1335,20 @@ pub unsafe fn hts_memrchr(s: *const c_void, c: c_int, n: size_t) -> *mut c_void 
     std::ptr::null_mut()
 }
 
-pub unsafe fn hts_parse_region(
-    mut s: *const c_char,
-    tid: *mut c_int,
-    beg: *mut hts_pos_t,
-    end: *mut hts_pos_t,
+unsafe fn hts_parse_region_ref(
+    s: &CStr,
+    tid: &mut c_int,
+    beg: &mut hts_pos_t,
+    end: &mut hts_pos_t,
     getid: hts_name2id_f,
     hdr: *mut c_void,
     mut flags: c_int,
 ) -> *const c_char {
-    if s.is_null() || tid.is_null() || beg.is_null() || end.is_null() || getid.is_none() {
+    if getid.is_none() {
         return std::ptr::null();
     }
 
+    let mut s = s.as_ptr();
     let mut s_len = CStr::from_ptr(s).to_bytes().len();
     let mut ks = kstring_t {
         l: 0,
@@ -1487,6 +1489,29 @@ pub unsafe fn hts_parse_region(
         return std::ptr::null();
     }
     s_end
+}
+
+pub unsafe fn hts_parse_region(
+    s: *const c_char,
+    tid: *mut c_int,
+    beg: *mut hts_pos_t,
+    end: *mut hts_pos_t,
+    getid: hts_name2id_f,
+    hdr: *mut c_void,
+    flags: c_int,
+) -> *const c_char {
+    if s.is_null() || tid.is_null() || beg.is_null() || end.is_null() {
+        return std::ptr::null();
+    }
+    hts_parse_region_ref(
+        CStr::from_ptr(s),
+        &mut *tid,
+        &mut *beg,
+        &mut *end,
+        getid,
+        hdr,
+        flags,
+    )
 }
 
 pub unsafe fn hts_parse_reg64(
@@ -2047,8 +2072,8 @@ fn kbs_mask(i: c_int) -> libc::c_ulong {
     (1 as libc::c_ulong) << (i as usize % KBS_ELTBITS)
 }
 
-unsafe fn kbs_words(bs: *const kbitset_t) -> *mut libc::c_ulong {
-    (*bs).b.as_ptr().cast_mut()
+fn kbs_words(bs: &kbitset_t) -> *mut libc::c_ulong {
+    bs.b.as_ptr().cast_mut()
 }
 
 pub fn kbs_last_mask(ni: size_t) -> libc::c_ulong {
@@ -2069,7 +2094,7 @@ pub unsafe fn kbs_init2(ni: size_t, fill: c_int) -> *mut kbitset_t {
     }
     (*bs).n = n;
     (*bs).n_max = n;
-    let words = kbs_words(bs);
+    let words = kbs_words(&*bs);
     let fill_byte = if fill != 0 { 0xff } else { 0 };
     std::ptr::write_bytes(
         words.cast::<u8>(),
@@ -2102,7 +2127,7 @@ pub unsafe fn kbs_resize2(bsp: *mut *mut kbitset_t, ni_new: size_t, fill: c_int)
     }
 
     (*bs).n = n_new;
-    let words = kbs_words(bs);
+    let words = kbs_words(&*bs);
     if n_new >= n {
         let fill_byte = if fill != 0 { 0xff } else { 0 };
         std::ptr::write_bytes(
@@ -2126,73 +2151,73 @@ pub unsafe fn kbs_destroy(bs: *mut kbitset_t) {
     crate::htslib_rs::c_compat::free(bs.cast());
 }
 
-pub unsafe fn kbs_clear(bs: *mut kbitset_t) {
+pub unsafe fn kbs_clear(bs: &mut kbitset_t) {
     std::ptr::write_bytes(
         kbs_words(bs).cast::<u8>(),
         0,
-        (*bs).n * std::mem::size_of::<libc::c_ulong>(),
+        bs.n * std::mem::size_of::<libc::c_ulong>(),
     );
 }
 
-pub unsafe fn kbs_insert_all(bs: *mut kbitset_t) {
+pub unsafe fn kbs_insert_all(bs: &mut kbitset_t) {
     std::ptr::write_bytes(
         kbs_words(bs).cast::<u8>(),
         0xff,
-        (*bs).n * std::mem::size_of::<libc::c_ulong>(),
+        bs.n * std::mem::size_of::<libc::c_ulong>(),
     );
-    if (*bs).n > 0 {
+    if bs.n > 0 {
         let words = kbs_words(bs);
-        *words.add((*bs).n - 1) &= *words.add((*bs).n);
+        *words.add(bs.n - 1) &= *words.add(bs.n);
     }
 }
 
-pub unsafe fn kbs_insert(bs: *mut kbitset_t, i: c_int) {
+pub unsafe fn kbs_insert(bs: &mut kbitset_t, i: c_int) {
     *kbs_words(bs).add(kbs_elt(i)) |= kbs_mask(i);
 }
 
-pub unsafe fn kbs_delete(bs: *mut kbitset_t, i: c_int) {
+pub unsafe fn kbs_delete(bs: &mut kbitset_t, i: c_int) {
     *kbs_words(bs).add(kbs_elt(i)) &= !kbs_mask(i);
 }
 
-pub unsafe fn kbs_exists(bs: *const kbitset_t, i: c_int) -> c_int {
+pub unsafe fn kbs_exists(bs: &kbitset_t, i: c_int) -> c_int {
     ((*kbs_words(bs).add(kbs_elt(i)) & kbs_mask(i)) != 0) as c_int
 }
 
-pub unsafe fn kbs_start(itr: *mut kbitset_iter_t) {
-    (*itr).mask = 1;
-    (*itr).elt = 0;
-    (*itr).i = 0;
+pub unsafe fn kbs_start(itr: &mut kbitset_iter_t) {
+    itr.mask = 1;
+    itr.elt = 0;
+    itr.i = 0;
 }
 
-pub unsafe fn kbs_next(bs: *const kbitset_t, itr: *mut kbitset_iter_t) -> c_int {
+pub unsafe fn kbs_next(bs: &kbitset_t, itr: &mut kbitset_iter_t) -> c_int {
     let words = kbs_words(bs);
-    let mut b = *words.add((*itr).elt);
+    let mut b = *words.add(itr.elt);
     loop {
-        if (*itr).mask == 0 {
+        if itr.mask == 0 {
             loop {
-                (*itr).elt += 1;
-                b = *words.add((*itr).elt);
+                itr.elt += 1;
+                b = *words.add(itr.elt);
                 if b != 0 {
                     break;
                 }
-                (*itr).i += KBS_ELTBITS as c_int;
+                itr.i += KBS_ELTBITS as c_int;
             }
-            if (*itr).elt == (*bs).n {
+            if itr.elt == bs.n {
                 return -1;
             }
-            (*itr).mask = 1;
+            itr.mask = 1;
         }
 
-        if (b & (*itr).mask) != 0 {
+        if (b & itr.mask) != 0 {
             break;
         }
-        (*itr).i += 1;
-        (*itr).mask <<= 1;
+        itr.i += 1;
+        itr.mask <<= 1;
     }
 
-    (*itr).mask <<= 1;
-    let ret = (*itr).i;
-    (*itr).i += 1;
+    itr.mask <<= 1;
+    let ret = itr.i;
+    itr.i += 1;
     ret
 }
 
@@ -2864,7 +2889,7 @@ pub unsafe fn hts_open_format(
     let mut smode = [0 as c_char; 101];
     let mut fmt_code = 0 as c_char;
     let mut uncomp: *mut c_char = std::ptr::null_mut();
-    let mut hfile: Option<NonNull<hFILE>> = None;
+    let hfile: Option<NonNull<hFILE>>;
     let format_to_mode = b"\0g\0\0b\0c\0\0b\0g\0\0\0\0\0Ff\0\0";
 
     libc::strncpy(smode.as_mut_ptr(), mode, 99);
@@ -2921,28 +2946,29 @@ pub unsafe fn hts_open_format(
     }
 
     let idx_delim = c"##idx##";
-    let mut rmme: Option<NonNull<c_char>> = None;
     let fnidx = libc::strstr(fn_, idx_delim.as_ptr());
-    let mut fn_open = fn_;
-    if !fnidx.is_null() {
-        rmme = NonNull::new(c_compat::strdup(fn_));
-        let Some(rmme_ptr) = rmme else {
-            goto_hts_open_format_error(fn_open, rmme, hfile);
-            return std::ptr::null_mut();
-        };
-        *rmme_ptr.as_ptr().add(fnidx.offset_from(fn_) as usize) = 0;
-        fn_open = rmme_ptr.as_ptr();
-    }
+    let mut stripped_name: Vec<c_char>;
+    let fn_open = if !fnidx.is_null() {
+        stripped_name = CStr::from_ptr(fn_)
+            .to_bytes_with_nul()
+            .iter()
+            .map(|&b| b as c_char)
+            .collect::<Vec<_>>();
+        stripped_name[fnidx.offset_from(fn_) as usize] = 0;
+        stripped_name.as_mut_ptr()
+    } else {
+        fn_
+    };
 
     hfile = NonNull::new(hopen(fn_open, smode.as_ptr()));
     let Some(hfile_ptr) = hfile else {
-        goto_hts_open_format_error(fn_open, rmme, hfile);
+        goto_hts_open_format_error(fn_open, hfile);
         return std::ptr::null_mut();
     };
 
     let fp = hts_hopen(hfile_ptr.as_ptr(), fn_open, smode.as_ptr());
     if fp.is_null() {
-        goto_hts_open_format_error(fn_open, rmme, hfile);
+        goto_hts_open_format_error(fn_open, hfile);
         return std::ptr::null_mut();
     }
 
@@ -2975,29 +3001,19 @@ pub unsafe fn hts_open_format(
         {
             *c_compat::__errno_location() = libc::EINVAL;
         }
-        goto_hts_open_format_error(fn_open, rmme, hfile);
+        goto_hts_open_format_error(fn_open, hfile);
         return std::ptr::null_mut();
     }
 
-    if let Some(rmme) = rmme {
-        c_compat::free(rmme.as_ptr().cast());
-    }
     fp
 }
 
-unsafe fn goto_hts_open_format_error(
-    fn_: *const c_char,
-    rmme: Option<NonNull<c_char>>,
-    hfile: Option<NonNull<hFILE>>,
-) {
+unsafe fn goto_hts_open_format_error(fn_: *const c_char, hfile: Option<NonNull<hFILE>>) {
     libc::fprintf(
         crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
         c"[E::hts_open_format] Failed to open file \"%s\"\n".as_ptr(),
         fn_,
     );
-    if let Some(rmme) = rmme {
-        c_compat::free(rmme.as_ptr().cast());
-    }
     if let Some(hfile) = hfile {
         hclose_abruptly(hfile.as_ptr());
     }
@@ -3117,11 +3133,9 @@ pub unsafe fn hts_hopen(fp: *mut hFILE, fn_: *const c_char, mode: *const c_char)
                 return std::ptr::null_mut();
             }
             if ((*hts_fp).bitfields & (1 << 1)) == 0 {
-                crate::cram_options_bridge::cram_set_option_int(
-                    (*hts_fp).fp.cram,
-                    CRAM_OPT_DECODE_MD,
-                    -1,
-                );
+                if let Some(cram) = (*hts_fp).fp.cram.as_mut() {
+                    crate::cram_options_bridge::cram_set_option_int(cram, CRAM_OPT_DECODE_MD, -1);
+                }
             }
             (*hts_fp).bitfields |= 1 << 3;
         }
@@ -3632,14 +3646,19 @@ pub unsafe fn hts_c_1021_hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_ch
         return -1;
     }
 
-    let Some(arg) = NonNull::new(c_compat::strdup(c_arg)) else {
-        return -1;
-    };
+    let mut arg_buf = CStr::from_ptr(c_arg)
+        .to_bytes_with_nul()
+        .iter()
+        .map(|&b| b as c_char)
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let arg = NonNull::new(arg_buf.as_mut_ptr()).expect("boxed option argument is non-empty");
     let mut o = Box::new(hts_opt {
         arg,
         opt: 0,
         val: hts_opt_val { i: 0 },
         next: None,
+        _arg_buf: arg_buf,
     });
 
     let mut val = libc::strchr(o.arg.as_ptr(), b'=' as c_int);
@@ -3739,7 +3758,6 @@ pub unsafe fn hts_c_1021_hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_ch
             }
             0 => {}
             _ => {
-                c_compat::free(o.arg.as_ptr().cast());
                 return -1;
             }
         }
@@ -3789,7 +3807,6 @@ pub unsafe fn hts_c_1021_hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_ch
         o.opt = crate::htslib_rs::sam::FASTQ_OPT_UMI_REGEX as hts_fmt_option;
         o.val.s = val;
     } else {
-        c_compat::free(o.arg.as_ptr().cast());
         return -1;
     }
 
@@ -3889,7 +3906,9 @@ pub unsafe fn hts_set_opt_int(fp: *mut htsFile, opt: hts_fmt_option, val: c_int)
                 (*(*fp).fp.bgzf).bitfields |= ((val as u32) & 0x1ff) << 20;
                 0
             } else if (*fp).format.format == HTS_FORMAT_CRAM {
-                crate::cram_options_bridge::cram_set_option_int((*fp).fp.cram, opt, val)
+                (*fp).fp.cram.as_mut().map_or(-1, |cram| {
+                    crate::cram_options_bridge::cram_set_option_int(cram, opt, val)
+                })
             } else {
                 0
             }
@@ -3910,7 +3929,9 @@ pub unsafe fn hts_set_opt_int(fp: *mut htsFile, opt: hts_fmt_option, val: c_int)
         }
         _ => {
             if (*fp).format.format == HTS_FORMAT_CRAM {
-                crate::cram_options_bridge::cram_set_option_int((*fp).fp.cram, opt, val)
+                (*fp).fp.cram.as_mut().map_or(-1, |cram| {
+                    crate::cram_options_bridge::cram_set_option_int(cram, opt, val)
+                })
             } else {
                 0
             }
@@ -3938,7 +3959,9 @@ pub unsafe fn hts_set_opt_ptr(fp: *mut htsFile, opt: hts_fmt_option, val: *mut c
         }
         _ => {
             if (*fp).format.format == HTS_FORMAT_CRAM {
-                crate::cram_options_bridge::cram_set_option_ptr((*fp).fp.cram, opt, val)
+                (*fp).fp.cram.as_mut().map_or(-1, |cram| {
+                    crate::cram_options_bridge::cram_set_option_ptr(cram, opt, NonNull::new(val))
+                })
             } else {
                 0
             }
@@ -3954,8 +3977,7 @@ pub unsafe fn hts_c_1279_hts_opt_free(mut opts: *mut hts_opt) {
     while !opts.is_null() {
         let last = opts;
         opts = (*opts).next.map_or(std::ptr::null_mut(), NonNull::as_ptr);
-        let last = Box::from_raw(last);
-        c_compat::free(last.arg.as_ptr().cast());
+        drop(Box::from_raw(last));
     }
 }
 
@@ -4077,24 +4099,23 @@ pub unsafe fn hts_c_1430_hts_crypt4gh_redirect(
     _fp: *mut htsFile,
 ) -> c_int {
     let hfile1 = *hfile_ptr;
-    let mut fn_buf = [0 as c_char; 512];
     let mut mode2 = [0 as c_char; 102];
     let prefix = c"crypt4gh:";
     let fn2_len = prefix.to_bytes().len() + libc::strlen(fn_) + 1;
-    let mut fn2 = fn_buf.as_mut_ptr();
     let mut ret = -1;
 
-    if fn2_len > fn_buf.len() {
-        if fn2_len >= c_int::MAX as usize {
-            return -1;
-        }
-        fn2 = c_compat::malloc(fn2_len as u64).cast::<c_char>();
-        if fn2.is_null() {
-            return -1;
-        }
+    if fn2_len >= c_int::MAX as usize {
+        return -1;
     }
 
-    libc::snprintf(fn2, fn2_len, c"%s%s".as_ptr(), prefix.as_ptr(), fn_);
+    let mut fn2 = vec![0 as c_char; fn2_len];
+    libc::snprintf(
+        fn2.as_mut_ptr(),
+        fn2.len(),
+        c"%s%s".as_ptr(),
+        prefix.as_ptr(),
+        fn_,
+    );
     libc::snprintf(
         mode2.as_mut_ptr(),
         mode2.len(),
@@ -4130,15 +4151,12 @@ pub unsafe fn hts_c_1430_hts_crypt4gh_redirect(
         overflow_arg_area: overflow.as_mut_ptr().cast(),
         reg_save_area: reg_save.as_mut_ptr().cast(),
     };
-    let hfile2 = super::hfile::hfile_c_1317_hopen_vargs(fn2, mode2.as_ptr(), &mut va);
+    let hfile2 = super::hfile::hfile_c_1317_hopen_vargs(fn2.as_mut_ptr(), mode2.as_ptr(), &mut va);
     if !hfile2.is_null() {
         *hfile_ptr = hfile2;
         ret = 0;
     }
 
-    if fn2 != fn_buf.as_mut_ptr() {
-        c_compat::free(fn2.cast());
-    }
     ret
 }
 
@@ -4152,7 +4170,9 @@ pub unsafe fn hts_set_threads(fp: *mut htsFile, n: c_int) -> c_int {
     } else if (*fp).format.compression == HTS_COMPRESSION_BGZF {
         bgzf_mt(hts_get_bgzfp(fp), n, 256)
     } else if (*fp).format.format == HTS_FORMAT_CRAM {
-        crate::cram_options_bridge::cram_set_option_int((*fp).fp.cram, CRAM_OPT_NTHREADS, n)
+        (*fp).fp.cram.as_mut().map_or(-1, |cram| {
+            crate::cram_options_bridge::cram_set_option_int(cram, CRAM_OPT_NTHREADS, n)
+        })
     } else {
         0
     }
@@ -4164,11 +4184,13 @@ pub unsafe fn hts_set_thread_pool(fp: *mut htsFile, p: *mut htsThreadPool) -> c_
     } else if (*fp).format.compression == HTS_COMPRESSION_BGZF {
         bgzf_thread_pool(hts_get_bgzfp(fp), (*p).pool, (*p).qsize)
     } else if (*fp).format.format == HTS_FORMAT_CRAM {
-        crate::cram_options_bridge::cram_set_option_ptr(
-            (*fp).fp.cram,
-            CRAM_OPT_THREAD_POOL,
-            p.cast::<c_void>(),
-        )
+        (*fp).fp.cram.as_mut().map_or(-1, |cram| {
+            crate::cram_options_bridge::cram_set_option_ptr(
+                cram,
+                CRAM_OPT_THREAD_POOL,
+                NonNull::new(p.cast::<c_void>()),
+            )
+        })
     } else {
         0
     }
@@ -4192,11 +4214,13 @@ pub unsafe fn hts_set_fai_filename(fp: *mut htsFile, fn_aux: *const c_char) -> c
     }
 
     if (*fp).format.format == HTS_FORMAT_CRAM
-        && crate::cram_options_bridge::cram_set_option_ptr(
-            (*fp).fp.cram,
-            CRAM_OPT_REFERENCE,
-            (*fp).fn_aux.cast::<c_void>(),
-        ) != 0
+        && (*fp).fp.cram.as_mut().map_or(-1, |cram| {
+            crate::cram_options_bridge::cram_set_option_ptr(
+                cram,
+                CRAM_OPT_REFERENCE,
+                NonNull::new((*fp).fn_aux.cast::<c_void>()),
+            )
+        }) != 0
     {
         return -1;
     }
@@ -4751,11 +4775,37 @@ pub unsafe fn hts_reglist_create(
     hdr: *mut c_void,
     getid: hts_name2id_f,
 ) -> *mut hts_reglist_t {
-    crate::htslib_rs::region::region_c_177_hts_reglist_create(argv, argc, r_count, hdr, getid)
+    if argv.is_null() || r_count.is_null() || argc <= 0 {
+        return std::ptr::null_mut();
+    }
+    let argv_raw = std::slice::from_raw_parts(argv, argc as usize);
+    if argv_raw.iter().any(|arg| arg.is_null()) {
+        return std::ptr::null_mut();
+    }
+    let argv_refs: Vec<&CStr> = argv_raw
+        .iter()
+        .copied()
+        .map(|arg| CStr::from_ptr(arg))
+        .collect();
+    crate::htslib_rs::region::region_c_177_hts_reglist_create(
+        Some(argv_refs.as_slice()),
+        Some(&mut *r_count),
+        std::ptr::NonNull::new(hdr),
+        getid,
+    )
+    .map_or(std::ptr::null_mut(), |reglist| {
+        Box::into_raw(reglist).cast()
+    })
 }
 
 pub unsafe fn hts_reglist_free(reglist: *mut hts_reglist_t, count: c_int) {
-    crate::htslib_rs::region::region_c_266_hts_reglist_free(reglist, count)
+    let reglist = if reglist.is_null() || count <= 0 {
+        None
+    } else {
+        let reglist_slice = std::ptr::slice_from_raw_parts_mut(reglist, count as usize);
+        Some(Box::from_raw(reglist_slice))
+    };
+    crate::htslib_rs::region::region_c_266_hts_reglist_free(reglist)
 }
 
 pub unsafe fn hts_close(fp: *mut htsFile) -> c_int {
@@ -6993,6 +7043,10 @@ pub unsafe fn hts_itr_querys(
     let mut beg = 0;
     let mut end = 0;
 
+    if reg.is_null() {
+        return std::ptr::null_mut();
+    }
+
     if libc::strcmp(reg, c".".as_ptr()) == 0 {
         return itr_query.map_or(std::ptr::null_mut(), |f| {
             f(idx, HTS_IDX_START, 0, 0, readrec)
@@ -7003,8 +7057,8 @@ pub unsafe fn hts_itr_querys(
         });
     }
 
-    if hts_parse_region(
-        reg,
+    if hts_parse_region_ref(
+        CStr::from_ptr(reg),
         &mut tid,
         &mut beg,
         &mut end,
@@ -7020,11 +7074,9 @@ pub unsafe fn hts_itr_querys(
     itr_query.map_or(std::ptr::null_mut(), |f| f(idx, tid, beg, end, readrec))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub unsafe fn hts_itr_regions(
+unsafe fn hts_itr_regions_ref(
     idx: *const hts_idx_t,
-    reglist: *mut hts_reglist_t,
-    count: c_int,
+    regs: &mut [hts_reglist_t],
     getid: hts_name2id_f,
     hdr: *mut c_void,
     itr_specific: hts_itr_multi_query_func,
@@ -7032,36 +7084,31 @@ pub unsafe fn hts_itr_regions(
     seek: hts_seek_func,
     tell: hts_tell_func,
 ) -> *mut hts_itr_t {
-    if reglist.is_null() {
-        return std::ptr::null_mut();
-    }
-
     let itr = c_compat::calloc(1, std::mem::size_of::<hts_itr_t>() as u64).cast::<hts_itr_t>();
     if itr.is_null() {
         return std::ptr::null_mut();
     }
 
-    (*itr).n_reg = count;
+    (*itr).n_reg = regs.len() as c_int;
     (*itr).readrec = readrec;
     (*itr).seek = seek;
     (*itr).tell = tell;
-    (*itr).reg_list = reglist;
+    (*itr).reg_list = regs.as_mut_ptr();
     (*itr).bitfields |= 1 << 4;
 
-    for i in 0..(*itr).n_reg {
-        let curr = (*itr).reg_list.add(i as usize);
-        if !(*curr).reg.is_null() {
-            if libc::strcmp((*curr).reg, c".".as_ptr()) == 0 {
-                (*curr).tid = HTS_IDX_START;
+    for curr in regs.iter_mut() {
+        if !curr.reg.is_null() {
+            if libc::strcmp(curr.reg, c".".as_ptr()) == 0 {
+                curr.tid = HTS_IDX_START;
                 continue;
             }
-            if libc::strcmp((*curr).reg, c"*".as_ptr()) == 0 {
-                (*curr).tid = HTS_IDX_NOCOOR;
+            if libc::strcmp(curr.reg, c"*".as_ptr()) == 0 {
+                curr.tid = HTS_IDX_NOCOOR;
                 continue;
             }
-            (*curr).tid = getid.map_or(-1, |f| f(hdr, (*curr).reg));
-            if (*curr).tid < 0 {
-                if (*curr).tid < -1 {
+            curr.tid = getid.map_or(-1, |f| f(hdr, curr.reg));
+            if curr.tid < 0 {
+                if curr.tid < -1 {
                     hts_log_cstr(
                         HTS_LOG_ERROR,
                         c"hts_itr_regions".as_ptr(),
@@ -7073,15 +7120,14 @@ pub unsafe fn hts_itr_regions(
                     libc::fprintf(
                         crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
                         c"[W::hts_itr_regions] Region '%s' specifies an unknown reference name. Continue anyway\n".as_ptr(),
-                        (*curr).reg,
+                        curr.reg,
                     );
                 }
             }
         }
     }
 
-    if (*itr).n_reg > 1 {
-        let regs = std::slice::from_raw_parts_mut((*itr).reg_list, (*itr).n_reg as usize);
+    if regs.len() > 1 {
         regs.sort_by(|a, b| compare_regions_ref(a, b).cmp(&0));
     }
 
@@ -7096,6 +7142,34 @@ pub unsafe fn hts_itr_regions(
     } else {
         itr
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn hts_itr_regions(
+    idx: *const hts_idx_t,
+    reglist: *mut hts_reglist_t,
+    count: c_int,
+    getid: hts_name2id_f,
+    hdr: *mut c_void,
+    itr_specific: hts_itr_multi_query_func,
+    readrec: hts_readrec_func,
+    seek: hts_seek_func,
+    tell: hts_tell_func,
+) -> *mut hts_itr_t {
+    if reglist.is_null() || count < 0 {
+        return std::ptr::null_mut();
+    }
+
+    hts_itr_regions_ref(
+        idx,
+        std::slice::from_raw_parts_mut(reglist, count as usize),
+        getid,
+        hdr,
+        itr_specific,
+        readrec,
+        seek,
+        tell,
+    )
 }
 
 fn compare_regions_ref(reg1: &hts_reglist_t, reg2: &hts_reglist_t) -> c_int {
@@ -9296,12 +9370,12 @@ mod tests {
             let s = stringify_argv(argv.len() as c_int, argv.as_mut_ptr());
             assert!(!s.is_null());
             assert_eq!(CStr::from_ptr(s).to_bytes(), b"prog one two  last");
-            crate::htslib_rs::c_compat::free(s.cast());
+            crate::htslib_rs::textutils::stringify_argv_free(s);
 
             let s = stringify_argv(0, argv.as_mut_ptr());
             assert!(!s.is_null());
             assert_eq!(CStr::from_ptr(s).to_bytes(), b"");
-            crate::htslib_rs::c_compat::free(s.cast());
+            crate::htslib_rs::textutils::stringify_argv_free(s);
         }
     }
 
@@ -9540,6 +9614,9 @@ mod tests {
         end: *mut *mut c_char,
         res: *mut hts_expr_val_t,
     ) -> c_int {
+        let Some(res_ref) = res.as_mut() else {
+            return -1;
+        };
         if libc::strncmp(str_, c"NUM".as_ptr(), 3) == 0 {
             *end = str_.add(3);
             (*res).is_str = 0;
@@ -9560,7 +9637,7 @@ mod tests {
             0
         } else if libc::strncmp(str_, c"MISSING".as_ptr(), 7) == 0 {
             *end = str_.add(7);
-            hts_expr_val_undef(res);
+            hts_expr_val_undef(res_ref);
             0
         } else {
             -1
@@ -9573,6 +9650,9 @@ mod tests {
         end: *mut *mut c_char,
         res: *mut hts_expr_val_t,
     ) -> c_int {
+        let Some(res_ref) = res.as_mut() else {
+            return -1;
+        };
         if libc::strncmp(str_, c"foo".as_ptr(), 3) == 0 {
             *end = str_.add(3);
             (*res).is_str = 0;
@@ -9617,16 +9697,16 @@ mod tests {
             0
         } else if libc::strncmp(str_, c"null-but-true".as_ptr(), 13) == 0 {
             *end = str_.add(13);
-            hts_expr_val_undef(res);
+            hts_expr_val_undef(res_ref);
             (*res).is_true = 1;
             0
         } else if libc::strncmp(str_, c"null".as_ptr(), 4) == 0 {
             *end = str_.add(4);
-            hts_expr_val_undef(res);
+            hts_expr_val_undef(res_ref);
             0
         } else if libc::strncmp(str_, c"nan".as_ptr(), 3) == 0 {
             *end = str_.add(3);
-            hts_expr_val_undef(res);
+            hts_expr_val_undef(res_ref);
             0
         } else {
             -1
@@ -11328,12 +11408,8 @@ mod tests {
                 m: split_buf.len(),
                 s: split_buf.as_mut_ptr().cast(),
             };
-            let mut n = 0;
-            let offsets = ksplit(&mut ks, 0, &mut n);
-            assert_eq!(n, 3);
-            assert_eq!(*offsets.add(0), 2);
-            assert_eq!(*offsets.add(1), 8);
-            assert_eq!(*offsets.add(2), 13);
+            let offsets = crate::htslib_rs::kstring::ksplit_vec_ref(&mut ks, 0).unwrap();
+            assert_eq!(offsets, [2, 8, 13]);
             assert_eq!(
                 CStr::from_ptr(split_buf.as_ptr().add(2).cast()).to_bytes(),
                 b"alpha"
@@ -11342,7 +11418,6 @@ mod tests {
                 CStr::from_ptr(split_buf.as_ptr().add(8).cast()).to_bytes(),
                 b"beta"
             );
-            crate::htslib_rs::c_compat::free(offsets.cast());
 
             let input = b"ab:cde:fg/hij::k\0";
             let sep = b":/\0";
