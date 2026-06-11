@@ -11,7 +11,7 @@ use crate::htslib_rs::{
     hts::{htsFile, hts_close, hts_getline, hts_open, hts_pos_t, kstring_t, BGZF},
     regidx,
 };
-use std::ffi::{c_void, CStr};
+use std::ffi::CStr;
 
 const ANNOT_TSV_ANN_NBP: i32 = 1;
 const ANNOT_TSV_ANN_FRAC: i32 = 2;
@@ -277,7 +277,7 @@ fn nbp_length(nbp: &mut AnnotTsvNbp) -> hts_pos_t {
 }
 
 // original: nbp_destroy (htslib/annot-tsv.c:137)
-pub unsafe fn annot_tsv_c_137_nbp_destroy(nbp: *mut c_void) {
+pub unsafe fn annot_tsv_c_137_nbp_destroy(nbp: *mut ()) {
     let nbp = nbp.cast::<AnnotTsvNbp>();
     if !nbp.is_null() {
         drop(Box::from_raw(nbp));
@@ -285,19 +285,19 @@ pub unsafe fn annot_tsv_c_137_nbp_destroy(nbp: *mut c_void) {
 }
 
 // original: nbp_reset (htslib/annot-tsv.c:142)
-pub unsafe fn annot_tsv_c_142_nbp_reset(nbp: *mut c_void, beg: hts_pos_t, end: hts_pos_t) {
+pub unsafe fn annot_tsv_c_142_nbp_reset(nbp: *mut (), beg: hts_pos_t, end: hts_pos_t) {
     let nbp = nbp.cast::<AnnotTsvNbp>();
     nbp_reset(&mut *nbp, beg, end);
 }
 
 // original: nbp_add (htslib/annot-tsv.c:148)
-pub unsafe fn annot_tsv_c_148_nbp_add(nbp: *mut c_void, beg: hts_pos_t, end: hts_pos_t) {
+pub unsafe fn annot_tsv_c_148_nbp_add(nbp: *mut (), beg: hts_pos_t, end: hts_pos_t) {
     let nbp = nbp.cast::<AnnotTsvNbp>();
     nbp_add(&mut *nbp, beg, end);
 }
 
 // original: compare_hts_pos (htslib/annot-tsv.c:160)
-pub unsafe fn annot_tsv_c_160_compare_hts_pos(aptr: *const c_void, bptr: *const c_void) -> i32 {
+pub unsafe fn annot_tsv_c_160_compare_hts_pos(aptr: *const (), bptr: *const ()) -> i32 {
     let a = *aptr.cast::<hts_pos_t>();
     let b = *bptr.cast::<hts_pos_t>();
     if a < b {
@@ -310,7 +310,7 @@ pub unsafe fn annot_tsv_c_160_compare_hts_pos(aptr: *const c_void, bptr: *const 
 }
 
 // original: nbp_length (htslib/annot-tsv.c:168)
-pub unsafe fn annot_tsv_c_168_nbp_length(nbp: *mut c_void) -> hts_pos_t {
+pub unsafe fn annot_tsv_c_168_nbp_length(nbp: *mut ()) -> hts_pos_t {
     let nbp = nbp.cast::<AnnotTsvNbp>();
     nbp_length(&mut *nbp)
 }

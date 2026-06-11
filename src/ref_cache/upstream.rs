@@ -410,7 +410,7 @@ pub unsafe fn ref_cache_upstream_c_122_upstream_send_cmd(
             break;
         }
     }
-    if res == (MD5_LEN + std::mem::size_of::<i32>()) as libc::ssize_t {
+    if res == (MD5_LEN + std::mem::size_of::<i32>()) as isize {
         0
     } else {
         -1
@@ -422,7 +422,7 @@ unsafe fn ref_cache_upstream_c_146_recv_cmd_data(
     cmd_fd: i32,
     hexmd5: &mut [u8],
     id: &mut u32,
-) -> libc::ssize_t {
+) -> isize {
     let mut msg: libc::msghdr = std::mem::zeroed();
     let mut iov = [
         libc::iovec {
@@ -454,7 +454,7 @@ unsafe fn ref_cache_upstream_c_146_recv_cmd_data(
     if res == 0 {
         return 0;
     }
-    if res != (MD5_LEN + std::mem::size_of::<u32>()) as libc::ssize_t {
+    if res != (MD5_LEN + std::mem::size_of::<u32>()) as isize {
         return -1;
     }
     res
@@ -497,7 +497,7 @@ unsafe fn ref_cache_upstream_c_172_upstream_send_msg(
         }
     }
 
-    if res == std::mem::size_of::<Upstream_msg>() as libc::ssize_t {
+    if res == std::mem::size_of::<Upstream_msg>() as isize {
         0
     } else {
         -1
@@ -565,7 +565,7 @@ pub unsafe fn ref_cache_upstream_c_215_upstream_recv_msg(
     if res == 0 {
         return 0;
     }
-    if res != std::mem::size_of::<Upstream_msg>() as libc::ssize_t {
+    if res != std::mem::size_of::<Upstream_msg>() as isize {
         return -1;
     }
 

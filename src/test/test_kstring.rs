@@ -442,10 +442,12 @@ pub unsafe fn test_test_kstring_c_375_test_kgetline() -> i32 {
 }
 
 // original: mock_fgets2 (htslib/test/test_kstring.c:403)
+// RECONVERGE: hts.rs `kgets_func2` type alias still declares (*mut c_char, *mut c_void);
+// callback body uses u8/() here. ABI-compatible (u8==c_char width, ()==c_void).
 pub unsafe extern "C" fn test_test_kstring_c_403_mock_fgets2(
-    str_: *mut std::ffi::c_char,
+    str_: *mut u8,
     _num: usize,
-    p: *mut std::ffi::c_void,
+    p: *mut (),
 ) -> isize {
     let mock_state = p.cast::<i32>();
     *mock_state += 1;
@@ -548,7 +550,7 @@ pub unsafe fn test_test_kstring_c_458_test_kinsertchar() -> i32 {
     for i in -1i32..6 {
         let mut s: kstring_t = kstring_t::default();
         crate::htslib_rs::hts::kputs(b"0123", &mut s);
-        if crate::htslib_rs::hts::kinsert_char(b'X' as std::ffi::c_char, i as usize, &mut s) < 0 {
+        if crate::htslib_rs::hts::kinsert_char(b'X' as i8, i as usize, &mut s) < 0 {
             if !(0..=4).contains(&i) {
                 crate::htslib_rs::hts::ks_free(&mut s);
                 continue;
@@ -571,7 +573,7 @@ pub unsafe fn test_test_kstring_c_458_test_kinsertchar() -> i32 {
     for i in 0..7 {
         crate::htslib_rs::hts::kputc(b'A' as i32 + i, &mut res);
         let t_len = t.data.len();
-        if crate::htslib_rs::hts::kinsert_char((b'A' as i32 + i) as std::ffi::c_char, t_len, &mut t) < 0 {
+        if crate::htslib_rs::hts::kinsert_char((b'A' as i32 + i) as i8, t_len, &mut t) < 0 {
             eprint!("kinsert_char failed in realloc\n");
             crate::htslib_rs::hts::ks_free(&mut res);
             crate::htslib_rs::hts::ks_free(&mut t);

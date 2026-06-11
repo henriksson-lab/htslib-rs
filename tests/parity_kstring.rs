@@ -526,9 +526,9 @@ fn parity_kgetline_synthetic_stream() {
 
 // Genuine extern "C" callback boundary for kgets_func2 — keeps the C ABI types.
 unsafe extern "C" fn fgetln_bridge_native(
-    buf: *mut std::ffi::c_char,
+    buf: *mut u8,
     sz: usize,
-    fp: *mut std::ffi::c_void,
+    fp: *mut (),
 ) -> isize {
     let fp = fp.cast::<libc::FILE>();
     let mut n = 0isize;
@@ -537,7 +537,7 @@ unsafe extern "C" fn fgetln_bridge_native(
         if c == libc::EOF {
             break;
         }
-        *buf.offset(n) = c as std::ffi::c_char;
+        *buf.offset(n) = c as u8;
         n += 1;
         if c == b'\n' as std::ffi::c_int {
             break;

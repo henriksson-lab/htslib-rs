@@ -1,4 +1,3 @@
-use std::ffi::c_char;
 use std::io::Write;
 
 use crate::htslib_rs::sam;
@@ -66,7 +65,7 @@ unsafe fn printauxdata(__out: &mut impl Write, type_: u8, idx: i32, data: *const
         }
         b'H' | b'Z' => {
             // bam_aux2Z returns a raw C-string pointer (parallel raw API boundary)
-            let z = std::ffi::CStr::from_ptr(sam::bam_aux2Z(data).cast::<c_char>()).to_bytes();
+            let z = std::ffi::CStr::from_ptr(sam::bam_aux2Z(data).cast()).to_bytes();
             write!(__out, "{}", String::from_utf8_lossy(z)).unwrap();
         }
         b'B' => {
@@ -112,8 +111,8 @@ pub unsafe fn samples_dump_aux_c_114_main(args: &[Vec<u8>]) -> i32 {
         samples_dump_aux_c_37_print_usage();
         return ret;
     }
-    // inname is forwarded to hts_open, a raw-ptr C-ABI API expecting *const c_char
-    let inname = args[1].as_ptr().cast::<c_char>();
+    // inname is forwarded to hts_open, a raw-ptr C-ABI API; cast to *const c_char at the call
+    let inname = args[1].as_ptr();
 
     let bamdata = sam::bam_init1();
     if bamdata.is_null() {
@@ -121,7 +120,7 @@ pub unsafe fn samples_dump_aux_c_114_main(args: &[Vec<u8>]) -> i32 {
         return ret;
     }
 
-    let infile = crate::htslib_rs::hts::hts_open(inname, c"r".as_ptr());
+    let infile = crate::htslib_rs::hts::hts_open(inname.cast(), c"r".as_ptr());
     if infile.is_null() {
         writeln!(
             __out,
@@ -142,7 +141,7 @@ pub unsafe fn samples_dump_aux_c_114_main(args: &[Vec<u8>]) -> i32 {
 
     let mut ret_r = sam::sam_read1(infile, in_samhdr, bamdata);
     while ret_r >= 0 {
-        *crate::htslib_rs::c_compat::__errno_location() = 0;
+        *libc::__errno_location() = 0;
         let mut data = sam::bam_aux_first(bamdata);
         while !data.is_null() {
             let type_ = sam::bam_aux_type(data) as u8;
@@ -168,9 +167,7 @@ pub unsafe fn samples_dump_aux_c_114_main(args: &[Vec<u8>]) -> i32 {
             write!(__out, " ").unwrap();
             data = sam::bam_aux_next(bamdata, data);
         }
-        if *crate::htslib_rs::c_compat::__errno_location()
-            != crate::htslib_rs::c_compat::ENOENT
-        {
+        if *libc::__errno_location() != libc::ENOENT {
             writeln!(__out, "\nFailed to get aux data").unwrap();
             sam::sam_hdr_destroy(in_samhdr);
             crate::htslib_rs::hts::hts_close(infile);

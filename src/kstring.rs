@@ -2,94 +2,6 @@ use crate::htslib_rs::hts::{
     kgets_func, kgets_func2, kputc, kputsn, ks_free, ks_resize, ks_tokaux_t, kstring_t,
 };
 
-// original: kvsprintf (htslib/kstring.c:142)
-pub unsafe fn kvsprintf(
-    s: &mut kstring_t,
-    fmt: &[u8],
-    ap: &mut crate::htslib_rs::c_compat::__va_list_tag,
-) -> i32 {
-    let mut args = std::mem::MaybeUninit::<crate::htslib_rs::c_compat::__va_list_tag>::uninit();
-    std::ptr::copy_nonoverlapping(ap as *mut _, args.as_mut_ptr(), 1);
-    let mut args = args.assume_init();
-
-    let mut out = Vec::new();
-    let mut i = 0usize;
-    while i < fmt.len() {
-        if fmt[i] != b'%' {
-            out.push(fmt[i]);
-            i += 1;
-            continue;
-        }
-        i += 1;
-        if i >= fmt.len() {
-            return -1;
-        }
-        match fmt[i] {
-            b'%' => out.push(b'%'),
-            b'd' => out.extend_from_slice(kstring_va_arg_int(&mut args).to_string().as_bytes()),
-            b's' => {
-                // The variadic argument is a pointer to a C string; read it as a
-                // raw byte pointer (genuine variadic boundary) and copy up to the
-                // terminating NUL.
-                let p = kstring_va_arg_word(&mut args) as *const u8;
-                if p.is_null() {
-                    return -1;
-                }
-                let mut n = 0usize;
-                while *p.add(n) != 0 {
-                    n += 1;
-                }
-                out.extend_from_slice(std::slice::from_raw_parts(p, n));
-            }
-            b'g' => {
-                let d = kstring_va_arg_f64(&mut args);
-                let Some(tmp) = kputd_bytes(d) else {
-                    return -1;
-                };
-                out.extend_from_slice(&tmp);
-            }
-            _ => return -1,
-        }
-        i += 1;
-    }
-
-    if out.len() > i32::MAX as usize {
-        return -1;
-    }
-    if kputsn(&out, out.len(), s) < 0 {
-        -1
-    } else {
-        out.len() as i32
-    }
-}
-
-unsafe fn kstring_va_arg_word(args: &mut crate::htslib_rs::c_compat::__va_list_tag) -> usize {
-    if args.gp_offset <= 40 {
-        let p = args.reg_save_area.cast::<u8>().add(args.gp_offset as usize);
-        args.gp_offset += 8;
-        std::ptr::read_unaligned(p.cast::<usize>())
-    } else {
-        let p = args.overflow_arg_area.cast::<u8>();
-        args.overflow_arg_area = p.add(8).cast();
-        std::ptr::read_unaligned(p.cast::<usize>())
-    }
-}
-
-unsafe fn kstring_va_arg_int(args: &mut crate::htslib_rs::c_compat::__va_list_tag) -> i32 {
-    kstring_va_arg_word(args) as u32 as i32
-}
-
-unsafe fn kstring_va_arg_f64(args: &mut crate::htslib_rs::c_compat::__va_list_tag) -> f64 {
-    if args.fp_offset <= 160 {
-        let p = args.reg_save_area.cast::<u8>().add(args.fp_offset as usize);
-        args.fp_offset += 16;
-        std::ptr::read_unaligned(p.cast::<f64>())
-    } else {
-        let p = args.overflow_arg_area.cast::<u8>();
-        args.overflow_arg_area = p.add(8).cast();
-        std::ptr::read_unaligned(p.cast::<f64>())
-    }
-}
 
 pub enum KsPrintfArg<'a> {
     Int(i32),
@@ -166,7 +78,9 @@ pub unsafe fn kstring_c_531_main() -> i32 {
     s.data.clear();
     let mut p = kstrtok(Some(b"ab:cde:fg/hij::k"), Some(b":/"), &mut aux);
     while !p.is_null() {
-        let len = aux.p.offset_from(p.cast::<std::os::raw::c_char>()) as usize;
+        // Byte distance between the token end (aux.p) and its start (p); compute
+        // via raw addresses so it is independent of aux.p's C-ABI element type.
+        let len = (aux.p as usize).wrapping_sub(p as usize);
         kputsn(std::slice::from_raw_parts(p.cast::<u8>(), len), len, &mut s);
         kputc(b'\n' as i32, &mut s);
         p = kstrtok(None, None, &mut aux);
@@ -835,30 +749,6 @@ mod tests {
             );
             assert_eq!(s.data.len(), 12);
             assert_eq!(s.data.as_slice(), b"sample-42:ok");
-
-            ks_free(&mut s);
-        }
-    }
-
-    #[test]
-    fn kvsprintf_formats_synthetic_va_list_without_c_vsnprintf() {
-        unsafe {
-            let mut s = kstring_t::default();
-            let mut reg_save = [0usize; 24];
-            reg_save[0] = 7;
-            reg_save[1] = c"abc".as_ptr() as usize;
-            let float_slot = reg_save.as_mut_ptr().cast::<u8>().add(48);
-            std::ptr::write_unaligned(float_slot.cast::<f64>(), 3.5);
-            let mut overflow = [0usize; 1];
-            let mut args = crate::htslib_rs::c_compat::__va_list_tag {
-                gp_offset: 0,
-                fp_offset: 48,
-                overflow_arg_area: overflow.as_mut_ptr().cast(),
-                reg_save_area: reg_save.as_mut_ptr().cast(),
-            };
-
-            assert_eq!(kvsprintf(&mut s, b"%d:%s:%g:%%", &mut args), 11);
-            assert_eq!(s.data.as_slice(), b"7:abc:3.5:%");
 
             ks_free(&mut s);
         }

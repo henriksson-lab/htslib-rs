@@ -1,7 +1,6 @@
 // Functions translated from htslib/synced_bcf_reader.c.
 // Extracted from src/vcf.rs.
 
-use std::ffi::c_char;
 use std::mem::size_of;
 use std::ptr::NonNull;
 
@@ -68,8 +67,8 @@ pub(crate) unsafe fn bcf_sr_add_hreader(
         });
         let idx_ptr = idx_c
             .as_ref()
-            .map_or(std::ptr::null(), |v| v.as_ptr().cast::<c_char>());
-        bcf_sr_add_hreader_impl(readers as *mut bcf_srs_t, file, autoclose, idx_ptr.cast())
+            .map_or(std::ptr::null(), |v| v.as_ptr());
+        bcf_sr_add_hreader_impl(readers as *mut bcf_srs_t, file, autoclose, idx_ptr)
     }
 }
 
@@ -357,8 +356,8 @@ pub unsafe fn bcf_sr_add_reader(files: &mut bcf_srs_t, fname: &[u8]) -> i32 {
             std::ptr::null(),
         );
         let file_ptr = hts_open(
-            fname_c.as_ptr().cast::<c_char>(),
-            fmode.as_ptr().cast::<c_char>(),
+            fname_c.as_ptr().cast(),
+            fmode.as_ptr().cast(),
         );
         if file_ptr.is_null() {
             files.errnum = bcf_sr_error_open_failed;
@@ -527,11 +526,11 @@ pub(crate) unsafe fn bcf_sr_seek(
         });
         let seq_ptr = seq_c
             .as_ref()
-            .map_or(std::ptr::null(), |v| v.as_ptr().cast::<c_char>());
+            .map_or(std::ptr::null(), |v| v.as_ptr());
         let mut i = -1;
         if crate::sam::khash_str2int_get(
             (*readers.regions).seq_hash.cast::<()>(),
-            seq_ptr.cast::<u8>(),
+            seq_ptr,
             &mut i,
         ) >= 0
         {
@@ -543,7 +542,7 @@ pub(crate) unsafe fn bcf_sr_seek(
 
         let mut nret = 0;
         for j in 0..readers.nreaders as usize {
-            nret += sr_reader_seek(readers.readers.add(j), seq_ptr.cast(), pos, MAX_CSI_COOR - 1);
+            nret += sr_reader_seek(readers.readers.add(j), seq_ptr, pos, MAX_CSI_COOR - 1);
         }
         nret
     }
@@ -557,7 +556,7 @@ pub(crate) unsafe fn bcf_sr_set_samples(
 ) -> i32 {
     unsafe {
         // `smpl` is hts_readlist's malloc'd array of malloc'd C strings.
-        let mut smpl: *mut *mut c_char = std::ptr::null_mut();
+        let mut smpl: *mut *mut u8 = std::ptr::null_mut();
         let mut nsmpl: i32 = 0;
 
         let exclude: *mut () = if fname.first().copied() == Some(b'^') {
@@ -569,21 +568,21 @@ pub(crate) unsafe fn bcf_sr_set_samples(
         if read_list {
             let mut fname_c = fname.to_vec();
             fname_c.push(0);
-            smpl = crate::hts::hts_readlist(fname_c.as_ptr().cast::<c_char>(), is_file, &mut nsmpl);
+            smpl = crate::hts::hts_readlist(fname_c.as_ptr().cast(), is_file, &mut nsmpl).cast();
             if smpl.is_null() {
                 return 0;
             }
             if !exclude.is_null() {
                 for i in 0..nsmpl as usize {
-                    crate::sam::khash_str2int_inc(exclude, (*smpl.add(i)).cast::<u8>());
+                    crate::sam::khash_str2int_inc(exclude, *smpl.add(i));
                 }
             }
         }
         // The candidate sample names, as NUL-terminated C strings.
-        let names: *mut *mut c_char = if read_list {
+        let names: *mut *mut u8 = if read_list {
             smpl
         } else {
-            (*(*files.readers).header).samples.cast()
+            (*(*files.readers).header).samples
         };
         let nnames: i32 = if read_list {
             nsmpl
@@ -592,11 +591,11 @@ pub(crate) unsafe fn bcf_sr_set_samples(
         };
 
         // Collect the intersecting sample names as a malloc'd C-string array.
-        let mut samples: *mut *mut c_char = std::ptr::null_mut();
+        let mut samples: *mut *mut u8 = std::ptr::null_mut();
         let mut n_smpl: i32 = 0;
         for k in 0..nnames as usize {
             let name = *names.add(k);
-            if !exclude.is_null() && crate::sam::khash_str2int_has_key(exclude, name.cast::<u8>()) != 0
+            if !exclude.is_null() && crate::sam::khash_str2int_has_key(exclude, name) != 0
             {
                 continue;
             }
@@ -605,7 +604,7 @@ pub(crate) unsafe fn bcf_sr_set_samples(
                 if bcf_hdr_id2int(
                     (*files.readers.add(j)).header,
                     BCF_DT_SAMPLE as i32,
-                    name.cast(),
+                    name,
                 ) < 0
                 {
                     break;
@@ -617,10 +616,10 @@ pub(crate) unsafe fn bcf_sr_set_samples(
             }
             samples = libc::realloc(
                 samples.cast(),
-                (n_smpl as usize + 1) * size_of::<*mut c_char>(),
+                (n_smpl as usize + 1) * size_of::<*mut u8>(),
             )
-            .cast::<*mut c_char>();
-            *samples.add(n_smpl as usize) = libc::strdup(name);
+            .cast::<*mut u8>();
+            *samples.add(n_smpl as usize) = libc::strdup(name.cast()).cast();
             n_smpl += 1;
         }
 
@@ -641,7 +640,7 @@ pub(crate) unsafe fn bcf_sr_set_samples(
             return 0;
         }
         files.n_smpl = n_smpl;
-        files.samples = samples.cast();
+        files.samples = samples;
 
         for i in 0..files.nreaders as usize {
             let reader = files.readers.add(i);
@@ -731,10 +730,10 @@ pub(crate) unsafe fn bcf_sr_regions_init(
         // NUL-terminated copy of `regions` for the C-string callees.
         let mut regions_c = regions.to_vec();
         regions_c.push(0);
-        let regions_ptr = regions_c.as_ptr().cast::<c_char>();
+        let regions_ptr = regions_c.as_ptr();
 
         if is_file == 0 {
-            let reg = regions_init_string(regions_ptr.cast());
+            let reg = regions_init_string(regions_ptr);
             if let Some(reg) = reg.as_mut() {
                 regions_sort_and_merge(reg);
             }
@@ -746,7 +745,7 @@ pub(crate) unsafe fn bcf_sr_regions_init(
         };
         let reg = reg.as_ptr();
 
-        (*reg).file = hts_open(regions_ptr, b"rb\0".as_ptr().cast::<c_char>()).cast();
+        (*reg).file = hts_open(regions_ptr.cast(), b"rb\0".as_ptr().cast()).cast();
         if (*reg).file.is_null() {
             bcf_sr_regions_destroy(&mut *reg);
             return None;
@@ -778,8 +777,8 @@ pub(crate) unsafe fn bcf_sr_regions_init(
                 if crate::hts::hts_getline(rfile, KS_SEP_LINE as i32, line_ptr) <= 0 {
                     break;
                 }
-                let mut chr: *mut c_char = std::ptr::null_mut();
-                let mut chr_end: *mut c_char = std::ptr::null_mut();
+                let mut chr: *mut u8 = std::ptr::null_mut();
+                let mut chr_end: *mut u8 = std::ptr::null_mut();
                 let mut from: hts_pos_t = 0;
                 let mut to: hts_pos_t = 0;
                 let mut ret = regions_parse_line(
@@ -787,8 +786,8 @@ pub(crate) unsafe fn bcf_sr_regions_init(
                     ichr,
                     ifrom,
                     ito.abs(),
-                    (&mut chr as *mut *mut c_char).cast(),
-                    (&mut chr_end as *mut *mut c_char).cast(),
+                    &mut chr,
+                    &mut chr_end,
                     &mut from,
                     &mut to,
                 );
@@ -799,8 +798,8 @@ pub(crate) unsafe fn bcf_sr_regions_init(
                             ichr,
                             ifrom,
                             ifrom,
-                            (&mut chr as *mut *mut c_char).cast(),
-                            (&mut chr_end as *mut *mut c_char).cast(),
+                            &mut chr,
+                            &mut chr_end,
                             &mut from,
                             &mut to,
                         );
@@ -820,8 +819,8 @@ pub(crate) unsafe fn bcf_sr_regions_init(
                     from += 1;
                 }
                 *chr_end = 0;
-                bcf_sr_regions_add(reg, chr.cast(), from, to);
-                *chr_end = b'\t' as c_char;
+                bcf_sr_regions_add(reg, chr, from, to);
+                *chr_end = b'\t';
             }
             let _ = hts_close((*reg).file.cast());
             (*reg).file = std::ptr::null_mut();
@@ -837,20 +836,20 @@ pub(crate) unsafe fn bcf_sr_regions_init(
         // struct's malloc'd C-string array (freed by bcf_sr_regions_destroy).
         let names = crate::tbx::tbx_seqnames((*reg).tbx.cast::<crate::tbx::tbx_t>());
         (*reg).nseqs = names.len() as i32;
-        (*reg).seq_names = libc::malloc(names.len() * size_of::<*mut c_char>()).cast::<*mut u8>();
+        (*reg).seq_names = libc::malloc(names.len() * size_of::<*mut u8>()).cast::<*mut u8>();
         if (*reg).seq_hash.is_null() {
             (*reg).seq_hash = crate::sam::khash_str2int_init().cast();
         }
         for (i, name) in names.iter().enumerate() {
             let mut name_c = name.clone();
             name_c.push(0);
-            let dup = libc::strdup(name_c.as_ptr().cast::<c_char>());
-            *(*reg).seq_names.add(i) = dup.cast();
-            crate::sam::khash_str2int_set((*reg).seq_hash.cast::<()>(), dup.cast::<u8>(), i as i32);
+            let dup: *mut u8 = libc::strdup(name_c.as_ptr().cast()).cast();
+            *(*reg).seq_names.add(i) = dup;
+            crate::sam::khash_str2int_set((*reg).seq_hash.cast::<()>(), dup, i as i32);
         }
         let mut fname_c = regions.to_vec();
         fname_c.push(0);
-        (*reg).fname = libc::strdup(fname_c.as_ptr().cast::<c_char>()).cast();
+        (*reg).fname = libc::strdup(fname_c.as_ptr().cast()).cast();
         (*reg).is_bin = 1;
         NonNull::new(reg)
     }
@@ -937,8 +936,8 @@ pub(crate) unsafe fn bcf_sr_regions_next(reg: &mut bcf_sr_regions_t) -> i32 {
 
         // reading from tabix
         const TBX_UCSC: i32 = 0x10000;
-        let mut chr: *mut c_char = std::ptr::null_mut();
-        let mut chr_end: *mut c_char = std::ptr::null_mut();
+        let mut chr: *mut u8 = std::ptr::null_mut();
+        let mut chr_end: *mut u8 = std::ptr::null_mut();
         let mut ichr = 0;
         let mut ifrom = 1;
         let mut ito = 2;
@@ -972,7 +971,7 @@ pub(crate) unsafe fn bcf_sr_regions_next(reg: &mut bcf_sr_regions_t) -> i32 {
                 if reg.is_bin != 0 {
                     // Waited for seek which never came. Reopen in text mode.
                     let _ = hts_close(reg.file.cast());
-                    reg.file = hts_open(reg.fname.cast(), b"r\0".as_ptr().cast::<c_char>()).cast();
+                    reg.file = hts_open(reg.fname.cast(), b"r\0".as_ptr().cast()).cast();
                     if reg.file.is_null() {
                         bcf_sr_regions_destroy(reg);
                         return -1;
@@ -994,8 +993,8 @@ pub(crate) unsafe fn bcf_sr_regions_next(reg: &mut bcf_sr_regions_t) -> i32 {
                 ichr,
                 ifrom,
                 ito,
-                (&mut chr as *mut *mut c_char).cast(),
-                (&mut chr_end as *mut *mut c_char).cast(),
+                &mut chr,
+                &mut chr_end,
                 &mut from,
                 &mut to,
             );
@@ -1009,12 +1008,12 @@ pub(crate) unsafe fn bcf_sr_regions_next(reg: &mut bcf_sr_regions_t) -> i32 {
 
         *chr_end = 0;
         // `chr` is now a NUL-terminated C string (chr_end was set to 0 above).
-        if crate::sam::khash_str2int_get(reg.seq_hash.cast::<()>(), chr.cast::<u8>(), &mut reg.iseq)
+        if crate::sam::khash_str2int_get(reg.seq_hash.cast::<()>(), chr, &mut reg.iseq)
             < 0
         {
             std::process::abort();
         }
-        *chr_end = b'\t' as c_char;
+        *chr_end = b'\t';
 
         reg.start = from - 1;
         reg.end = to - 1;

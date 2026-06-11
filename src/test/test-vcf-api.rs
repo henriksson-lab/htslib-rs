@@ -1726,7 +1726,9 @@ pub unsafe fn test_test_vcf_api_c_807_test_vl_types() {
 ";
 
     struct ExpectedTypes {
-        id: *const std::ffi::c_char,
+        // NUL-terminated id bytes; the trailing 0 is retained because the id is
+        // handed to the still-raw production bcf_hdr_id2int via .as_ptr().cast().
+        id: &'static [u8],
         type_: i32,
         expected_vl_code: i32,
         expected_number: i32,
@@ -1734,103 +1736,103 @@ pub unsafe fn test_test_vcf_api_c_807_test_vl_types() {
 
     let expected = [
         ExpectedTypes {
-            id: c"FIXED_1_INFO".as_ptr(),
+            id: b"FIXED_1_INFO\0",
             type_: crate::htslib_rs::vcf::BCF_HL_INFO as i32,
             expected_vl_code: crate::htslib_rs::vcf::BCF_VL_FIXED as i32,
             expected_number: 1,
         },
         ExpectedTypes {
-            id: c"FIXED_4_INFO".as_ptr(),
+            id: b"FIXED_4_INFO\0",
             type_: crate::htslib_rs::vcf::BCF_HL_INFO as i32,
             expected_vl_code: crate::htslib_rs::vcf::BCF_VL_FIXED as i32,
             expected_number: 4,
         },
         ExpectedTypes {
-            id: c"VL_DOT_INFO".as_ptr(),
+            id: b"VL_DOT_INFO\0",
             type_: crate::htslib_rs::vcf::BCF_HL_INFO as i32,
             expected_vl_code: crate::htslib_rs::vcf::BCF_VL_VAR as i32,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
-            id: c"VL_A_INFO".as_ptr(),
+            id: b"VL_A_INFO\0",
             type_: crate::htslib_rs::vcf::BCF_HL_INFO as i32,
             expected_vl_code: crate::htslib_rs::vcf::BCF_VL_A as i32,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
-            id: c"VL_G_INFO".as_ptr(),
+            id: b"VL_G_INFO\0",
             type_: crate::htslib_rs::vcf::BCF_HL_INFO as i32,
             expected_vl_code: crate::htslib_rs::vcf::BCF_VL_G as i32,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
-            id: c"VL_R_INFO".as_ptr(),
+            id: b"VL_R_INFO\0",
             type_: crate::htslib_rs::vcf::BCF_HL_INFO as i32,
             expected_vl_code: crate::htslib_rs::vcf::BCF_VL_R as i32,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
-            id: c"FIXED_1_FMT".as_ptr(),
+            id: b"FIXED_1_FMT\0",
             type_: crate::htslib_rs::vcf::BCF_HL_FMT as i32,
             expected_vl_code: crate::htslib_rs::vcf::BCF_VL_FIXED as i32,
             expected_number: 1,
         },
         ExpectedTypes {
-            id: c"FIXED_4_FMT".as_ptr(),
+            id: b"FIXED_4_FMT\0",
             type_: crate::htslib_rs::vcf::BCF_HL_FMT as i32,
             expected_vl_code: crate::htslib_rs::vcf::BCF_VL_FIXED as i32,
             expected_number: 4,
         },
         ExpectedTypes {
-            id: c"VL_DOT_FMT".as_ptr(),
+            id: b"VL_DOT_FMT\0",
             type_: crate::htslib_rs::vcf::BCF_HL_FMT as i32,
             expected_vl_code: crate::htslib_rs::vcf::BCF_VL_VAR as i32,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
-            id: c"VL_A_FMT".as_ptr(),
+            id: b"VL_A_FMT\0",
             type_: crate::htslib_rs::vcf::BCF_HL_FMT as i32,
             expected_vl_code: crate::htslib_rs::vcf::BCF_VL_A as i32,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
-            id: c"VL_G_FMT".as_ptr(),
+            id: b"VL_G_FMT\0",
             type_: crate::htslib_rs::vcf::BCF_HL_FMT as i32,
             expected_vl_code: crate::htslib_rs::vcf::BCF_VL_G as i32,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
-            id: c"VL_R_FMT".as_ptr(),
+            id: b"VL_R_FMT\0",
             type_: crate::htslib_rs::vcf::BCF_HL_FMT as i32,
             expected_vl_code: crate::htslib_rs::vcf::BCF_VL_R as i32,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
-            id: c"VL_P_FMT".as_ptr(),
+            id: b"VL_P_FMT\0",
             type_: crate::htslib_rs::vcf::BCF_HL_FMT as i32,
             expected_vl_code: BCF_VL_P,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
-            id: c"VL_LA_FMT".as_ptr(),
+            id: b"VL_LA_FMT\0",
             type_: crate::htslib_rs::vcf::BCF_HL_FMT as i32,
             expected_vl_code: BCF_VL_LA,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
-            id: c"VL_LG_FMT".as_ptr(),
+            id: b"VL_LG_FMT\0",
             type_: crate::htslib_rs::vcf::BCF_HL_FMT as i32,
             expected_vl_code: BCF_VL_LG,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
-            id: c"VL_LR_FMT".as_ptr(),
+            id: b"VL_LR_FMT\0",
             type_: crate::htslib_rs::vcf::BCF_HL_FMT as i32,
             expected_vl_code: BCF_VL_LR,
             expected_number: 0xfffff,
         },
         ExpectedTypes {
-            id: c"VL_M_FMT".as_ptr(),
+            id: b"VL_M_FMT\0",
             type_: crate::htslib_rs::vcf::BCF_HL_FMT as i32,
             expected_vl_code: BCF_VL_M,
             expected_number: 0xfffff,
@@ -1846,9 +1848,9 @@ pub unsafe fn test_test_vcf_api_c_807_test_vl_types() {
         test_test_vcf_api_c_38_error(c"Failed to read BCF header".to_bytes());
     }
     for exp in &expected {
-        let id_num = vcf::bcf_hdr_id2int(hdr, crate::htslib_rs::vcf::BCF_DT_ID as i32, exp.id.cast());
-        let id_str = String::from_utf8_lossy(std::ffi::CStr::from_ptr(exp.id.cast()).to_bytes())
-            .into_owned();
+        let id_num =
+            vcf::bcf_hdr_id2int(hdr, crate::htslib_rs::vcf::BCF_DT_ID as i32, exp.id.as_ptr().cast());
+        let id_str = String::from_utf8_lossy(&exp.id[..exp.id.len() - 1]).into_owned();
         if id_num < 0 {
             eprintln!("Couldn't look up VCF header ID {}", id_str);
             std::process::exit(-1);

@@ -502,7 +502,7 @@ pub unsafe fn ref_cache_transaction_c_460_send_file(
     out_fd: i32,
     in_fd: i32,
     end: libc::off_t,
-) -> libc::ssize_t {
+) -> isize {
     let transact = txn!(transact);
     assert!(end >= transact.fd_sent);
     let count = (end - transact.fd_sent) as usize;

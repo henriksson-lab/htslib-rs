@@ -4,6 +4,13 @@ use std::mem;
 use std::ptr;
 use std::ptr::NonNull;
 
+// RECONVERGE (pthread -> std::sync KEYSTONE): the `libc::pthread_mutex_t`/
+// `pthread_cond_t` fields embedded in the `#[repr(C)]` shared structs
+// (`HtsTpool`/`HtsTpoolWorker`/`HtsTpoolProcess`) cannot be swapped for
+// `std::sync::Mutex`/`Condvar` within this file alone — they are reached across
+// module/FFI boundaries via raw `*mut hts_tpool`/`*mut hts_tpool_process` casts
+// held by callers in other files. This is a cross-file keystone deferred to the
+// global reconverge; for now the pthread calls are routed through `libc::pthread_*`.
 // NOTE on pthread routing: this module's synchronization primitives (`pool_m`,
 // the per-worker `pending_c`, and the four process condition variables) are
 // embedded fields of `HtsTpool`/`HtsTpoolWorker`/`HtsTpoolProcess`. Those

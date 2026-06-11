@@ -23,7 +23,7 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.  */
 
 use crate::htslib_rs::{
-    hfile::{self, HFileBackend},
+    hfile::{self, HFileBackend, HFileOpt},
     hts::{hFILE, hts_json_token, ks_free, kstring_t},
     textutils::{hts_json_fnext, hts_json_fskip_value},
 };
@@ -34,28 +34,11 @@ use std::ptr::NonNull;
 const HFILE_MOBILE: u32 = 1 << 1;
 const HFILE_READONLY: u32 = 1 << 2;
 
-// Synthesize a System V AMD64 __va_list_tag from pointer-sized words so the
-// recursive open can be routed through native hfile_c_1317_hopen_vargs instead
-// of the C variadic hopen. Mirrors the pattern used by hfile_s3 and hts.rs.
-// `url`/`mode` are NUL-terminated byte slices because the variadic hopen
-// boundary still expects C strings.
-unsafe fn multipart_hopen_vargs(url: &[u8], mode: &[u8], words: &[usize]) -> *mut hFILE {
-    let mut reg_save = [0usize; 6];
-    let mut overflow = vec![0usize; words.len().saturating_sub(reg_save.len())];
-    for (i, word) in words.iter().copied().enumerate() {
-        if i < reg_save.len() {
-            reg_save[i] = word;
-        } else {
-            overflow[i - reg_save.len()] = word;
-        }
-    }
-    let mut args = crate::htslib_rs::c_compat::__va_list_tag {
-        gp_offset: 0,
-        fp_offset: 48,
-        overflow_arg_area: overflow.as_mut_ptr().cast(),
-        reg_save_area: reg_save.as_mut_ptr().cast(),
-    };
-    hfile::hfile_c_1317_hopen_vargs(url.as_ptr().cast(), mode.as_ptr().cast(), &mut args)
+// Route the recursive open through the native typed-options hopen_vargs.
+// `url`/`mode` are NUL-terminated byte slices because the hopen boundary
+// still expects C strings.
+unsafe fn multipart_hopen_opts(url: &[u8], mode: &[u8], opts: &[HFileOpt]) -> *mut hFILE {
+    hfile::hfile_c_1317_hopen_vargs(url.as_ptr().cast(), mode.as_ptr().cast(), opts)
 }
 
 // original: hfile_part (htslib/multipart.c:41)
@@ -157,24 +140,16 @@ pub unsafe fn multipart_read(fp: &mut hFILE_multipart, buffer: &mut [u8]) -> isi
 
                 let url_buf = &url.value;
                 let new_currentfp = if !part.headers.is_empty() {
-                    let mut header_ptrs: Vec<*const u8> =
+                    let header_ptrs: Vec<*const u8> =
                         part.headers.iter().map(KStringCString::as_ptr).collect();
-                    header_ptrs.push(std::ptr::null());
-                    let words: [usize; 5] = [
-                        c"httphdr:v".as_ptr() as usize,
-                        header_ptrs.as_mut_ptr() as usize,
-                        c"auth_token_enabled".as_ptr() as usize,
-                        c"false".as_ptr() as usize,
-                        std::ptr::null::<()>() as usize,
+                    let opts = [
+                        HFileOpt::HttpHeaders(&header_ptrs),
+                        HFileOpt::AuthTokenEnabled(false),
                     ];
-                    hfile::OwnedHFile::from_raw(multipart_hopen_vargs(url_buf, b"r:\0", &words))
+                    hfile::OwnedHFile::from_raw(multipart_hopen_opts(url_buf, b"r:\0", &opts))
                 } else {
-                    let words: [usize; 3] = [
-                        c"auth_token_enabled".as_ptr() as usize,
-                        c"false".as_ptr() as usize,
-                        std::ptr::null::<()>() as usize,
-                    ];
-                    hfile::OwnedHFile::from_raw(multipart_hopen_vargs(url_buf, b"r:\0", &words))
+                    let opts = [HFileOpt::AuthTokenEnabled(false)];
+                    hfile::OwnedHFile::from_raw(multipart_hopen_opts(url_buf, b"r:\0", &opts))
                 };
                 fp.currentfp = new_currentfp;
 
@@ -222,7 +197,7 @@ pub unsafe fn multipart_c_114_multipart_write(
     _buffer: *const (),
     _nbytes: usize,
 ) -> isize {
-    *crate::htslib_rs::c_compat::__errno_location() = libc::EROFS;
+    *libc::__errno_location() = libc::EROFS;
     -1
 }
 
@@ -232,14 +207,14 @@ pub unsafe fn multipart_c_120_multipart_seek(
     _offset: i64,
     _whence: i32,
 ) -> i64 {
-    *crate::htslib_rs::c_compat::__errno_location() = libc::ESPIPE;
+    *libc::__errno_location() = libc::ESPIPE;
     -1
 }
 
 // original: multipart_close (htslib/multipart.c:126)
 pub unsafe fn multipart_c_126_multipart_close(fp: &mut hFILE) -> i32 {
     let HFileBackend::Multipart(m) = &mut fp.backend else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     let m: &mut hFILE_multipart = &mut *m;
@@ -256,7 +231,7 @@ pub unsafe fn multipart_c_126_multipart_close(fp: &mut hFILE) -> i32 {
 
 unsafe fn multipart_reserve_parts(fp: &mut hFILE_multipart) -> i32 {
     if fp.parts.try_reserve(1).is_err() {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *libc::__errno_location() = libc::ENOMEM;
         return -1;
     }
     0
@@ -354,7 +329,7 @@ pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
                             crate::htslib_rs::hts::kputs(value, header);
                             let part = fp.part_mut(part_index);
                             if part.headers.try_reserve(1).is_err() {
-                                *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+                                *libc::__errno_location() = libc::ENOMEM;
                                 return b'?' as i8;
                             }
                             if let Some(header) =
@@ -468,7 +443,7 @@ pub unsafe fn multipart_hopen_htsget_redirect(
     ks_free(&mut s2);
     if ret != b'v' as i8 {
         multipart_c_66_free_all_parts(&mut m);
-        *crate::htslib_rs::c_compat::__errno_location() = if ret == b'?' as i8 || ret == 0 {
+        *libc::__errno_location() = if ret == b'?' as i8 || ret == 0 {
             libc::EPROTO
         } else {
             libc::EINVAL

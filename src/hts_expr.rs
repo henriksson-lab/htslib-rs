@@ -20,6 +20,10 @@ pub struct hts_filter_t {
     pub parsed: bool,
     pub curr_regex: usize,
     pub max_regex: usize,
+    // RECONVERGE: POSIX regex is a C-ABI portability boundary. c_compat::regex_t
+    // is `libc::regex_t` on non-Windows but a `regex`-crate-backed emulation on
+    // Windows (libc has no POSIX regex there). Kept as a genuine boundary so the
+    // Windows build still works; routing to libc directly would regress it.
     pub preg: Vec<crate::htslib_rs::c_compat::regex_t>,
 }
 

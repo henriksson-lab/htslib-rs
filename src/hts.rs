@@ -192,7 +192,7 @@ pub type kgets_func = Option<
     unsafe extern "C" fn(buffer: *mut u8, size: i32, stream: *mut ()) -> *mut u8,
 >;
 pub type kgets_func2 =
-    Option<unsafe extern "C" fn(buffer: *mut c_char, size: usize, stream: *mut c_void) -> isize>;
+    Option<unsafe extern "C" fn(buffer: *mut u8, size: usize, stream: *mut ()) -> isize>;
 pub type hts_expr_sym_func = Option<
     unsafe extern "C" fn(
         data: *mut c_void,
@@ -2508,14 +2508,6 @@ pub use crate::htslib_rs::hts_expr::{
 
 pub use crate::htslib_rs::kstring::kputd;
 
-pub unsafe fn kvsprintf(
-    s: &mut kstring_t,
-    fmt: *const c_char,
-    ap: *mut crate::htslib_rs::c_compat::__va_list_tag,
-) -> i32 {
-    crate::htslib_rs::kstring::kvsprintf(s, CStr::from_ptr(fmt).to_bytes(), &mut *ap)
-}
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct htsFormatVersion {
@@ -3923,7 +3915,7 @@ pub unsafe fn hts_set_opt_ptr(fp: *mut htsFile, opt: hts_fmt_option, val: *mut (
         _ => {
             if (*fp).format.format == HTS_FORMAT_CRAM {
                 (*fp).fp.cram.as_mut().map_or(-1, |cram| {
-                    crate::cram_options_bridge::cram_set_option_ptr(cram, opt, val.cast::<c_void>().as_ref())
+                    crate::cram_options_bridge::cram_set_option_ptr(cram, opt, val.cast::<()>().as_ref())
                 })
             } else {
                 0
@@ -4091,30 +4083,12 @@ pub unsafe fn hts_c_1430_hts_crypt4gh_redirect(
         },
     );
 
-    // Native equivalent of hopen(fn2, mode2, "parent", hfile1, NULL).
-    // Build a synthetic va_list carrying the pointer-sized varargs so the
-    // crypt4gh scheme handler's vopen can read the "parent" key/value.
-    let words: [usize; 3] = [
-        c"parent".as_ptr() as usize,
-        hfile1 as usize,
-        std::ptr::null::<c_void>() as usize,
-    ];
-    let mut reg_save = [0usize; 6];
-    let mut overflow = vec![0usize; words.len().saturating_sub(reg_save.len())];
-    for (i, word) in words.iter().copied().enumerate() {
-        if i < reg_save.len() {
-            reg_save[i] = word;
-        } else {
-            overflow[i - reg_save.len()] = word;
-        }
-    }
-    let mut va = crate::htslib_rs::c_compat::__va_list_tag {
-        gp_offset: 0,
-        fp_offset: 48,
-        overflow_arg_area: overflow.as_mut_ptr().cast(),
-        reg_save_area: reg_save.as_mut_ptr().cast(),
-    };
-    let hfile2 = super::hfile::hfile_c_1317_hopen_vargs(fn2.as_mut_ptr().cast(), mode2.as_ptr().cast(), &mut va);
+    // Native equivalent of hopen(fn2, mode2, "parent", hfile1, NULL): pass the
+    // parent hFILE as a typed option so the crypt4gh scheme handler's vopen
+    // could read it. (No backend currently consumes "parent"; vopen handlers
+    // ignore it.)
+    let opts = [super::hfile::HFileOpt::Parent(hfile1)];
+    let hfile2 = super::hfile::hfile_c_1317_hopen_vargs(fn2.as_mut_ptr().cast(), mode2.as_ptr().cast(), &opts);
     if !hfile2.is_null() {
         *hfile_ptr = hfile2;
         ret = 0;
@@ -4151,7 +4125,7 @@ pub unsafe fn hts_set_thread_pool(fp: *mut htsFile, p: *mut htsThreadPool) -> i3
             crate::cram_options_bridge::cram_set_option_ptr(
                 cram,
                 CRAM_OPT_THREAD_POOL,
-                p.cast::<c_void>().as_ref(),
+                p.cast::<()>().as_ref(),
             )
         })
     } else {
@@ -4185,7 +4159,7 @@ pub unsafe fn hts_set_fai_filename(fp: *mut htsFile, fn_aux: *const c_char) -> i
             crate::cram_options_bridge::cram_set_option_ptr(
                 cram,
                 CRAM_OPT_REFERENCE,
-                (*fp).fn_aux.cast::<c_void>().as_ref(),
+                (*fp).fn_aux.cast::<()>().as_ref(),
             )
         }) != 0
     {
@@ -4395,9 +4369,9 @@ pub unsafe fn hts_getline(fp: *mut htsFile, delimiter: i32, str: *mut kstring_t)
 }
 
 pub unsafe extern "C" fn hgetln_wrapper(
-    buf: *mut c_char,
+    buf: *mut u8,
     len: usize,
-    vfp: *mut c_void,
+    vfp: *mut (),
 ) -> isize {
     htslib_hfile_h_195_hgetln(buf.cast(), len, vfp.cast())
 }

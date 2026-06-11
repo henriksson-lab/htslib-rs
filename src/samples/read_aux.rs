@@ -1,4 +1,3 @@
-use std::ffi::c_char;
 use std::io::Write;
 
 use crate::htslib_rs::{hts::kstring_t, sam};
@@ -106,7 +105,7 @@ pub unsafe fn samples_read_aux_c_51_printauxdata(
 }
 
 // original: main (htslib/samples/read_aux.c:114)
-pub unsafe fn samples_read_aux_c_114_main(argc: i32, argv: *mut *mut c_char) -> i32 {
+pub unsafe fn samples_read_aux_c_114_main(argc: i32, argv: *mut *mut u8) -> i32 {
     let mut ret = 1;
     let mut __out = std::io::stdout();
     let mut sdata = kstring_t { data: Vec::new() };
@@ -123,9 +122,9 @@ pub unsafe fn samples_read_aux_c_114_main(argc: i32, argv: *mut *mut c_char) -> 
         writeln!(__out, "Failed to allocate data memory!").unwrap();
         return ret;
     }
-    let infile = crate::htslib_rs::hts::hts_open(inname, c"r".as_ptr());
+    let infile = crate::htslib_rs::hts::hts_open(inname.cast(), c"r".as_ptr());
     if infile.is_null() {
-        let inname_bytes = std::ffi::CStr::from_ptr(inname).to_bytes();
+        let inname_bytes = std::ffi::CStr::from_ptr(inname.cast()).to_bytes();
         writeln!(__out, "Could not open {}", String::from_utf8_lossy(inname_bytes)).unwrap();
         sam::bam_destroy1(bamdata);
         return ret;
@@ -141,17 +140,14 @@ pub unsafe fn samples_read_aux_c_114_main(argc: i32, argv: *mut *mut c_char) -> 
     let mut i = 0;
     let mut ret_r = sam::sam_read1(infile, in_samhdr, bamdata);
     while ret_r >= 0 {
-        *crate::htslib_rs::c_compat::__errno_location() = 0;
+        *libc::__errno_location() = 0;
         i += 1;
         crate::htslib_rs::hts::ks_clear(&mut sdata);
         if i % 2 != 0 {
             let c = sam::bam_aux_get_str(bamdata, tag.cast(), &mut sdata);
             if c == 1 {
                 writeln!(__out, "{}", String::from_utf8_lossy(&sdata.data)).unwrap();
-            } else if c == 0
-                && *crate::htslib_rs::c_compat::__errno_location()
-                    == crate::htslib_rs::c_compat::ENOENT as i32
-            {
+            } else if c == 0 && *libc::__errno_location() == libc::ENOENT {
                 writeln!(__out, "Tag not present").unwrap();
             } else {
                 writeln!(__out, "Failed to get tag").unwrap();
@@ -164,9 +160,7 @@ pub unsafe fn samples_read_aux_c_114_main(argc: i32, argv: *mut *mut c_char) -> 
         } else {
             let data = sam::bam_aux_get(bamdata, tag.cast());
             if data.is_null() {
-                if *crate::htslib_rs::c_compat::__errno_location()
-                    == crate::htslib_rs::c_compat::ENOENT as i32
-                {
+                if *libc::__errno_location() == libc::ENOENT {
                     writeln!(__out, "Tag not present").unwrap();
                 } else {
                     writeln!(__out, "Invalid aux data").unwrap();

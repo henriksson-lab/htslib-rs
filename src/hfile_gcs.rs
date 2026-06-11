@@ -26,22 +26,20 @@ use crate::htslib_rs::{
     hfile::{hFILE_plugin, hFILE_scheme_handler, hfile_add_scheme_handler},
     hts::{hFILE, hts_verbose},
 };
-use std::ffi::c_char;
 use std::ptr::NonNull;
 
-type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
-type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> i32;
-type HFileVOpenFn = unsafe extern "C" fn(
-    *const c_char,
-    *const c_char,
-    *mut crate::htslib_rs::c_compat::__va_list_tag,
-) -> *mut hFILE;
+use crate::htslib_rs::hfile::HFileOpt;
+
+type HFileOpenFn = unsafe extern "C" fn(*const u8, *const u8) -> *mut hFILE;
+type HFileIsRemoteFn = unsafe extern "C" fn(*const u8) -> i32;
+type HFileVOpenFn =
+    for<'a> unsafe fn(*const u8, *const u8, &'a [HFileOpt<'a>]) -> *mut hFILE;
 
 #[repr(C)]
 struct hFILE_scheme_handler_layout {
     open: Option<HFileOpenFn>,
     isremote: Option<HFileIsRemoteFn>,
-    provider: *const c_char,
+    provider: *const u8,
     priority: i32,
     vopen: Option<HFileVOpenFn>,
 }
@@ -52,75 +50,27 @@ unsafe impl Sync for hFILE_scheme_handler_layout {}
 struct hFILE_plugin_layout {
     api_version: i32,
     obj: Option<NonNull<()>>,
-    name: *const c_char,
+    name: *const u8,
     destroy: Option<NonNull<()>>,
 }
 
-// Synthesize a System V AMD64 __va_list_tag from pointer-sized words so the
-// recursive open can be routed through native hfile_c_1317_hopen_vargs instead
-// of the C variadic hopen. Mirrors the pattern used by hfile_s3 and hts.rs.
-unsafe fn hfile_gcs_hopen_vargs(url: &[u8], mode: &[u8], words: &[usize]) -> *mut hFILE {
-    let mut reg_save = [0usize; 6];
-    let mut overflow = vec![0usize; words.len().saturating_sub(reg_save.len())];
-    for (i, word) in words.iter().copied().enumerate() {
-        if i < reg_save.len() {
-            reg_save[i] = word;
-        } else {
-            overflow[i - reg_save.len()] = word;
-        }
-    }
-    let mut args = crate::htslib_rs::c_compat::__va_list_tag {
-        gp_offset: 0,
-        fp_offset: 48,
-        overflow_arg_area: overflow.as_mut_ptr().cast(),
-        reg_save_area: reg_save.as_mut_ptr().cast(),
-    };
+// Route the rewritten open through the native typed-options hopen_vargs.
+// `parent_opts` flattens any options forwarded from the caller's `vopen`
+// (the old nested `va_list`), and `opts` carries this backend's headers.
+unsafe fn hfile_gcs_hopen_opts(
+    url: &[u8],
+    mode: &[u8],
+    parent_opts: &[HFileOpt],
+    opts: &[HFileOpt],
+) -> *mut hFILE {
+    let mut all = Vec::with_capacity(parent_opts.len() + opts.len());
+    all.extend_from_slice(parent_opts);
+    all.extend_from_slice(opts);
     crate::htslib_rs::hfile::hfile_c_1317_hopen_vargs(
         url.as_ptr().cast(),
         mode.as_ptr().cast(),
-        &mut args,
+        &all,
     )
-}
-
-enum GcsOpenArg<'a> {
-    VaList(Option<NonNull<crate::htslib_rs::c_compat::__va_list_tag>>),
-    HttpHeader(Option<&'a [u8]>),
-    HttpHeaderList(&'a [u8], &'a [u8]),
-}
-
-impl GcsOpenArg<'_> {
-    fn push_words(&self, words: &mut Vec<usize>) {
-        match self {
-            Self::VaList(argsp) => {
-                words.push(c"va_list".as_ptr() as usize);
-                words.push(argsp.map_or(std::ptr::null_mut(), NonNull::as_ptr) as usize);
-            }
-            Self::HttpHeader(header) => {
-                words.push(c"httphdr".as_ptr() as usize);
-                words.push(header.map_or(std::ptr::null(), <[u8]>::as_ptr) as usize);
-                words.push(std::ptr::null::<u8>() as usize);
-            }
-            Self::HttpHeaderList(auth_hdr, requester_pays_hdr) => {
-                words.push(c"httphdr:l".as_ptr() as usize);
-                words.push(auth_hdr.as_ptr() as usize);
-                words.push(requester_pays_hdr.as_ptr() as usize);
-                words.push(std::ptr::null::<u8>() as usize);
-                words.push(std::ptr::null::<u8>() as usize);
-            }
-        }
-    }
-}
-
-unsafe fn hfile_gcs_hopen_with_args(
-    url: &[u8],
-    mode: &[u8],
-    first: GcsOpenArg<'_>,
-    second: GcsOpenArg<'_>,
-) -> *mut hFILE {
-    let mut words = Vec::with_capacity(7);
-    first.push_words(&mut words);
-    second.push_words(&mut words);
-    hfile_gcs_hopen_vargs(url, mode, &words)
 }
 
 impl crate::htslib_rs::hfile_libcurl::HFileLibcurlHeaders {
@@ -271,13 +221,13 @@ unsafe fn hfile_gcs_c_41_gcs_rewrite(
     gsurl: &[u8],
     mode: &[u8],
     mode_has_colon: bool,
-    argsp: Option<NonNull<crate::htslib_rs::c_compat::__va_list_tag>>,
+    parent_opts: &[HFileOpt],
 ) -> *mut hFILE {
     let Some(rewrite) = hfile_gcs_c_41_build_rewrite(gsurl, mode) else {
         return std::ptr::null_mut();
     };
 
-    if argsp.is_some() || mode_has_colon {
+    if !parent_opts.is_empty() || mode_has_colon {
         let mode_colon_storage;
         let mode_for_open: &[u8] = if mode_has_colon {
             mode
@@ -294,7 +244,7 @@ unsafe fn hfile_gcs_c_41_gcs_rewrite(
             &mode_colon_storage
         };
 
-        hfile_gcs_c_41_gcs_rewrite_with_mode_colon(&rewrite, mode_for_open, argsp)
+        hfile_gcs_c_41_gcs_rewrite_with_mode_colon(&rewrite, mode_for_open, parent_opts)
     } else if rewrite.auth_hdr.is_some() || rewrite.requester_pays_hdr.is_some() {
         hfile_gcs_c_41_open_translated_libcurl(
             &rewrite.url,
@@ -307,76 +257,69 @@ unsafe fn hfile_gcs_c_41_gcs_rewrite(
     }
 }
 
-// `mode_colon` is a NUL-terminated byte string.
+// `mode_colon` is a NUL-terminated byte string. The header byte slices are
+// NUL-terminated (libcurl's append reads to the NUL).
 unsafe fn hfile_gcs_c_41_gcs_rewrite_with_mode_colon(
     rewrite: &GcsRewrite,
     mode_colon: &[u8],
-    argsp: Option<NonNull<crate::htslib_rs::c_compat::__va_list_tag>>,
+    parent_opts: &[HFileOpt],
 ) -> *mut hFILE {
     let auth_hdr = rewrite.auth_hdr.as_deref();
     match (auth_hdr, rewrite.requester_pays_hdr.as_deref()) {
-        (Some(auth_hdr), Some(requester_pays_hdr)) => hfile_gcs_hopen_with_args(
+        (Some(auth_hdr), Some(requester_pays_hdr)) => {
+            let list = [auth_hdr.as_ptr(), requester_pays_hdr.as_ptr()];
+            hfile_gcs_hopen_opts(
+                &rewrite.url,
+                mode_colon,
+                parent_opts,
+                &[HFileOpt::HttpHeaders(&list)],
+            )
+        }
+        (Some(header), None) | (None, Some(header)) => hfile_gcs_hopen_opts(
             &rewrite.url,
             mode_colon,
-            GcsOpenArg::VaList(argsp),
-            GcsOpenArg::HttpHeaderList(auth_hdr, requester_pays_hdr),
+            parent_opts,
+            &[HFileOpt::HttpHeader(header)],
         ),
-        (Some(header), None) | (None, Some(header)) => hfile_gcs_hopen_with_args(
-            &rewrite.url,
-            mode_colon,
-            GcsOpenArg::VaList(argsp),
-            GcsOpenArg::HttpHeader(Some(header)),
-        ),
-        _ => hfile_gcs_hopen_with_args(
-            &rewrite.url,
-            mode_colon,
-            GcsOpenArg::VaList(argsp),
-            GcsOpenArg::HttpHeader(auth_hdr),
-        ),
+        _ => {
+            // No headers: old code passed `httphdr` with a NULL value (no-op).
+            hfile_gcs_hopen_opts(&rewrite.url, mode_colon, parent_opts, &[])
+        }
     }
 }
 
 // original: gcs_open (htslib/hfile_gcs.c:125)
 unsafe extern "C" fn hfile_gcs_c_125_gcs_open(
-    url: *const c_char,
-    mode: *const c_char,
+    url: *const u8,
+    mode: *const u8,
 ) -> *mut hFILE {
     if url.is_null() || mode.is_null() {
         return std::ptr::null_mut();
     }
 
     hfile_gcs_c_41_gcs_rewrite(
-        std::ffi::CStr::from_ptr(url).to_bytes_with_nul(),
-        std::ffi::CStr::from_ptr(mode).to_bytes_with_nul(),
+        std::ffi::CStr::from_ptr(url.cast()).to_bytes_with_nul(),
+        std::ffi::CStr::from_ptr(mode.cast()).to_bytes_with_nul(),
         false,
-        None,
+        &[],
     )
 }
 
 // original: gcs_vopen (htslib/hfile_gcs.c:130)
-unsafe extern "C" fn hfile_gcs_c_130_gcs_vopen(
-    url: *const c_char,
-    mode_colon: *const c_char,
-    args0: *mut crate::htslib_rs::c_compat::__va_list_tag,
+unsafe fn hfile_gcs_c_130_gcs_vopen(
+    url: *const u8,
+    mode_colon: *const u8,
+    opts: &[HFileOpt],
 ) -> *mut hFILE {
     if url.is_null() || mode_colon.is_null() {
         return std::ptr::null_mut();
     }
 
-    // Need to use va_copy() as we can only take the address of an actual
-    // va_list object, not that of a parameter as its type may have decayed.
-    let mut args = std::mem::MaybeUninit::<crate::htslib_rs::c_compat::__va_list_tag>::uninit();
-    let argsp = if args0.is_null() {
-        None
-    } else {
-        std::ptr::copy_nonoverlapping(args0, args.as_mut_ptr(), 1);
-        NonNull::new(args.as_mut_ptr())
-    };
     hfile_gcs_c_41_gcs_rewrite(
-        std::ffi::CStr::from_ptr(url).to_bytes_with_nul(),
-        std::ffi::CStr::from_ptr(mode_colon).to_bytes_with_nul(),
+        std::ffi::CStr::from_ptr(url.cast()).to_bytes_with_nul(),
+        std::ffi::CStr::from_ptr(mode_colon.cast()).to_bytes_with_nul(),
         true,
-        argsp,
+        opts,
     )
 }
 
@@ -385,22 +328,22 @@ unsafe fn hfile_gcs_plugin_global(plugin: &mut hFILE_plugin_layout) -> i32 {
     static HANDLER: hFILE_scheme_handler_layout = hFILE_scheme_handler_layout {
         open: Some(hfile_gcs_c_125_gcs_open),
         isremote: Some(crate::htslib_rs::hfile::hfile_c_1342_hfile_always_remote),
-        provider: c"Google Cloud Storage".as_ptr(),
+        provider: c"Google Cloud Storage".as_ptr().cast(),
         priority: 2000 + 50,
         vopen: Some(hfile_gcs_c_130_gcs_vopen),
     };
 
-    plugin.name = c"Google Cloud Storage".as_ptr();
+    plugin.name = c"Google Cloud Storage".as_ptr().cast();
     hfile_add_scheme_handler(
-        c"gs".as_ptr(),
+        c"gs".as_ptr().cast(),
         (&HANDLER as *const hFILE_scheme_handler_layout).cast::<hFILE_scheme_handler>(),
     );
     hfile_add_scheme_handler(
-        c"gs+http".as_ptr(),
+        c"gs+http".as_ptr().cast(),
         (&HANDLER as *const hFILE_scheme_handler_layout).cast::<hFILE_scheme_handler>(),
     );
     hfile_add_scheme_handler(
-        c"gs+https".as_ptr(),
+        c"gs+https".as_ptr().cast(),
         (&HANDLER as *const hFILE_scheme_handler_layout).cast::<hFILE_scheme_handler>(),
     );
     0

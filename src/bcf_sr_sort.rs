@@ -3,7 +3,6 @@
 
 use crate::htslib_rs::hts::{hts_pos_t, kbs_destroy};
 use crate::htslib_rs::vcf::*;
-use std::ffi::{c_int, CStr};
 use std::mem::zeroed;
 use std::ptr::NonNull;
 
@@ -16,7 +15,7 @@ unsafe fn readers_slice_mut(readers: &mut bcf_srs_t) -> Option<&mut [bcf_sr_t]> 
 
 unsafe fn reader_and_has_line_slices_mut(
     readers: &mut bcf_srs_t,
-) -> Option<(&mut [bcf_sr_t], &mut [c_int])> {
+) -> Option<(&mut [bcf_sr_t], &mut [i32])> {
     if readers.nreaders < 0 || readers.readers.is_null() || readers.has_line.is_null() {
         return None;
     }
@@ -30,14 +29,14 @@ unsafe fn reader_and_has_line_slices_mut(
     })
 }
 
-unsafe fn active_slice(srt: &BcfSrSort) -> Option<&[c_int]> {
+unsafe fn active_slice(srt: &BcfSrSort) -> Option<&[i32]> {
     if srt.nactive < 0 || srt.active.is_null() {
         return None;
     }
     Some(unsafe { std::slice::from_raw_parts(srt.active, srt.nactive as usize) })
 }
 
-unsafe fn active_slice_mut(srt: &mut BcfSrSort) -> Option<&mut [c_int]> {
+unsafe fn active_slice_mut(srt: &mut BcfSrSort) -> Option<&mut [i32]> {
     if srt.mactive < 0 || srt.active.is_null() {
         return None;
     }
@@ -67,7 +66,7 @@ unsafe fn rec_storage_slice_mut(buf: &mut BcfSrSortVcfBuf) -> Option<&mut [*mut 
     Some(unsafe { std::slice::from_raw_parts_mut(buf.rec, buf.mrec as usize) })
 }
 
-unsafe fn take_active_vec(srt: &mut BcfSrSort) -> Vec<c_int> {
+unsafe fn take_active_vec(srt: &mut BcfSrSort) -> Vec<i32> {
     unsafe {
         let Some(active) = NonNull::new(srt.active) else {
             return Vec::new();
@@ -80,7 +79,7 @@ unsafe fn take_active_vec(srt: &mut BcfSrSort) -> Vec<c_int> {
     }
 }
 
-fn store_active_vec(srt: &mut BcfSrSort, active: Vec<c_int>) {
+fn store_active_vec(srt: &mut BcfSrSort, active: Vec<i32>) {
     if active.is_empty() {
         srt.active = std::ptr::null_mut();
         srt.mactive = 0;
@@ -89,7 +88,7 @@ fn store_active_vec(srt: &mut BcfSrSort, active: Vec<c_int>) {
 
     let mut active = active.into_boxed_slice();
     srt.active = active.as_mut_ptr();
-    srt.mactive = active.len() as c_int;
+    srt.mactive = active.len() as i32;
     std::mem::forget(active);
 }
 
@@ -115,11 +114,11 @@ fn store_rec_vec(buf: &mut BcfSrSortVcfBuf, rec: Vec<*mut bcf1_t>) {
 
     let mut rec = rec.into_boxed_slice();
     buf.rec = rec.as_mut_ptr();
-    buf.mrec = rec.len() as c_int;
+    buf.mrec = rec.len() as i32;
     std::mem::forget(rec);
 }
 
-unsafe fn take_vcf_buf_vec(srt: &mut BcfSrSort, len: c_int) -> Vec<BcfSrSortVcfBuf> {
+unsafe fn take_vcf_buf_vec(srt: &mut BcfSrSort, len: i32) -> Vec<BcfSrSortVcfBuf> {
     unsafe {
         let Some(vcf_buf) = NonNull::new(srt.vcf_buf.cast::<BcfSrSortVcfBuf>()) else {
             return Vec::new();
@@ -144,11 +143,11 @@ fn store_vcf_buf_vec(srt: &mut BcfSrSort, vcf_buf: Vec<BcfSrSortVcfBuf>) {
 
     let mut vcf_buf = vcf_buf.into_boxed_slice();
     srt.vcf_buf = vcf_buf.as_mut_ptr().cast();
-    srt.msr = vcf_buf.len() as c_int;
+    srt.msr = vcf_buf.len() as i32;
     std::mem::forget(vcf_buf);
 }
 
-unsafe fn bcf_sr_sort_reserve_active(srt: &mut BcfSrSort, need: c_int) -> c_int {
+unsafe fn bcf_sr_sort_reserve_active(srt: &mut BcfSrSort, need: i32) -> i32 {
     unsafe {
         if need < 0 {
             return -1;
@@ -164,7 +163,7 @@ unsafe fn bcf_sr_sort_reserve_active(srt: &mut BcfSrSort, need: c_int) -> c_int 
     }
 }
 
-unsafe fn bcf_sr_sort_reserve_row(buf: &mut BcfSrSortVcfBuf, need: c_int) -> c_int {
+unsafe fn bcf_sr_sort_reserve_row(buf: &mut BcfSrSortVcfBuf, need: i32) -> i32 {
     unsafe {
         if need < 0 {
             return -1;
@@ -180,7 +179,7 @@ unsafe fn bcf_sr_sort_reserve_row(buf: &mut BcfSrSortVcfBuf, need: c_int) -> c_i
     }
 }
 
-unsafe fn bcf_sr_sort_reserve_vcf_buf(readers: &mut bcf_srs_t, srt: &mut BcfSrSort) -> c_int {
+unsafe fn bcf_sr_sort_reserve_vcf_buf(readers: &mut bcf_srs_t, srt: &mut BcfSrSort) -> i32 {
     unsafe {
         if readers.nreaders < 0 {
             return -1;
@@ -202,7 +201,7 @@ unsafe fn bcf_sr_sort_reserve_vcf_buf(readers: &mut bcf_srs_t, srt: &mut BcfSrSo
     }
 }
 
-unsafe fn bcf_sr_sort_append_empty_row(vcf_buf: &mut [BcfSrSortVcfBuf]) -> c_int {
+unsafe fn bcf_sr_sort_append_empty_row(vcf_buf: &mut [BcfSrSortVcfBuf]) -> i32 {
     unsafe {
         if vcf_buf.is_empty() {
             return -1;
@@ -224,7 +223,7 @@ unsafe fn bcf_sr_sort_append_empty_row(vcf_buf: &mut [BcfSrSortVcfBuf]) -> c_int
     }
 }
 
-unsafe fn bcf_sr_sort_shift_reader_buffer(reader: &mut bcf_sr_t, j: c_int) -> c_int {
+unsafe fn bcf_sr_sort_shift_reader_buffer(reader: &mut bcf_sr_t, j: i32) -> i32 {
     unsafe {
         if reader.buffer.is_null() || j < 1 || j > reader.nbuffer {
             return -1;
@@ -244,8 +243,8 @@ unsafe fn bcf_sr_sort_shift_reader_buffer(reader: &mut bcf_sr_t, j: c_int) -> c_
 
 fn bcf_sr_sort_disambiguate_duplicate_key_nonnull(
     key: &mut Vec<u8>,
-    seen: &[(Vec<u8>, c_int, NonNull<bcf1_t>)],
-    reader_idx: c_int,
+    seen: &[(Vec<u8>, i32, NonNull<bcf1_t>)],
+    reader_idx: i32,
 ) {
     let base_len = key.len();
     let mut duplicate_idx = 0;
@@ -262,7 +261,7 @@ fn bcf_sr_sort_disambiguate_duplicate_key_nonnull(
     }
 }
 
-pub unsafe fn bcf_sr_sort_set_active(srt: &mut BcfSrSort, idx: c_int) -> c_int {
+pub unsafe fn bcf_sr_sort_set_active(srt: &mut BcfSrSort, idx: i32) -> i32 {
     unsafe {
         let Some(need) = idx.checked_add(1) else {
             return -1;
@@ -281,7 +280,7 @@ pub unsafe fn bcf_sr_sort_set_active(srt: &mut BcfSrSort, idx: c_int) -> c_int {
     }
 }
 
-pub unsafe fn bcf_sr_sort_add_active(srt: &mut BcfSrSort, idx: c_int) -> c_int {
+pub unsafe fn bcf_sr_sort_add_active(srt: &mut BcfSrSort, idx: i32) -> i32 {
     unsafe {
         if idx < 0 {
             return -1;
@@ -308,20 +307,22 @@ pub unsafe fn bcf_sr_sort_add_active(srt: &mut BcfSrSort, idx: c_int) -> c_int {
     }
 }
 
+// RECONVERGE: callers in vcf.rs still pass `&CStr` (e.g. c"chr1"); param is now a
+// NUL-terminated `&[u8]`.
 pub unsafe fn bcf_sr_sort_set(
     readers: &mut bcf_srs_t,
     srt: &mut BcfSrSort,
-    chr: &CStr,
+    chr: &[u8],
     min_pos: hts_pos_t,
-) -> c_int {
+) -> i32 {
     unsafe {
         if bcf_sr_sort_reserve_vcf_buf(readers, srt) < 0 {
             return -1;
         }
-        // srt.chr is a shared (repr(C)) *const c_char field that the still-C-mirror
+        // srt.chr is a shared (repr(C)) *const u8 field that the still-C-mirror
         // grouping code dereferences as a NUL-terminated string, so it must alias the
-        // caller-owned NUL-terminated buffer that `chr` borrows; keep it as a CStr.
-        let chr_ptr = chr.as_ptr().cast::<u8>();
+        // caller-owned NUL-terminated buffer that `chr` borrows.
+        let chr_ptr = chr.as_ptr();
 
         let nsr = srt.nsr;
         let active = match active_slice(srt) {
@@ -341,7 +342,7 @@ pub unsafe fn bcf_sr_sort_set(
             buf.nrec = 0;
         }
 
-        let mut records: Vec<(Vec<u8>, c_int, NonNull<bcf1_t>)> = Vec::new();
+        let mut records: Vec<(Vec<u8>, i32, NonNull<bcf1_t>)> = Vec::new();
         for reader_idx in active {
             if reader_idx < 0 || reader_idx >= reader_count {
                 return -1;
@@ -429,12 +430,14 @@ pub unsafe fn bcf_sr_sort_set(
     }
 }
 
+// RECONVERGE: callers in vcf.rs still pass `&CStr` (e.g. c"chr1"); param is now a
+// NUL-terminated `&[u8]`.
 pub unsafe fn bcf_sr_sort_next(
     readers: &mut bcf_srs_t,
     srt: &mut BcfSrSort,
-    chr: &CStr,
+    chr: &[u8],
     min_pos: hts_pos_t,
-) -> c_int {
+) -> i32 {
     unsafe {
         if srt.nactive <= 0 || srt.active.is_null() {
             return -1;
@@ -474,9 +477,17 @@ pub unsafe fn bcf_sr_sort_next(
             return 1;
         }
 
-        if (srt.chr.is_null()
-            || srt.pos != min_pos
-            || CStr::from_ptr(srt.chr.cast()).to_bytes() != chr.to_bytes())
+        // Compare the NUL-terminated bytes of `srt.chr` against `chr` (also
+        // NUL-terminated).
+        let chr_bytes = chr.split(|&b| b == 0).next().unwrap_or(&[]);
+        let srt_chr_matches = !srt.chr.is_null() && {
+            let mut len = 0usize;
+            while *srt.chr.add(len) != 0 {
+                len += 1;
+            }
+            std::slice::from_raw_parts(srt.chr, len) == chr_bytes
+        };
+        if (srt.chr.is_null() || srt.pos != min_pos || !srt_chr_matches)
             && bcf_sr_sort_set(readers, srt, chr, min_pos) < 0
         {
             return -1;
@@ -510,7 +521,7 @@ pub unsafe fn bcf_sr_sort_next(
                 let Some(pos) = queue.iter().position(|&queued_rec| queued_rec == rec) else {
                     return -1;
                 };
-                let j = (pos + 1) as c_int;
+                let j = (pos + 1) as i32;
                 if bcf_sr_sort_shift_reader_buffer(reader, j) < 0 {
                     return -1;
                 }
@@ -538,7 +549,7 @@ pub unsafe fn bcf_sr_sort_next(
     }
 }
 
-pub unsafe fn bcf_sr_sort_remove_reader(srt: &mut BcfSrSort, i: c_int) {
+pub unsafe fn bcf_sr_sort_remove_reader(srt: &mut BcfSrSort, i: i32) {
     unsafe {
         if srt.vcf_buf.is_null() || i < 0 || i >= srt.nsr {
             return;

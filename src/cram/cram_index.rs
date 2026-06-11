@@ -209,13 +209,13 @@ pub unsafe fn cram_seek_to_refpos(fd: &mut cram_fd_layout, r: &mut cram_range_la
     }
 
     if ret != 0 {
-        crate::htslib_rs::c_compat::pthread_mutex_lock(&mut fd.range_lock);
+        libc::pthread_mutex_lock(&mut fd.range_lock);
         fd.range = *r;
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut fd.range_lock);
+        libc::pthread_mutex_unlock(&mut fd.range_lock);
         return ret;
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut fd.range_lock);
+    libc::pthread_mutex_lock(&mut fd.range_lock);
     fd.range = *r;
     if r.refid == HTS_IDX_NOCOOR {
         fd.range.refid = -1;
@@ -223,7 +223,7 @@ pub unsafe fn cram_seek_to_refpos(fd: &mut cram_fd_layout, r: &mut cram_range_la
     } else if r.refid == HTS_IDX_START || r.refid == HTS_IDX_REST {
         fd.range.refid = -2;
     }
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut fd.range_lock);
+    libc::pthread_mutex_unlock(&mut fd.range_lock);
 
     if !fd.ctr.is_null() {
         cram_cram_io_c_3705_cram_free_container(fd.ctr.cast());

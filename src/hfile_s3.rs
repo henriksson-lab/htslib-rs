@@ -12,6 +12,7 @@ use crate::htslib_rs::{
         hfile_c_1317_hopen_vargs, htslib_hfile_h_247_hread,
     },
     hfile::HFileBackend,
+    hfile::HFileOpt,
     hts::{hFILE, hts_verbose, kstring_t},
 };
 use std::ffi::c_void;
@@ -145,10 +146,10 @@ const CURLOPT_INFILESIZE_LARGE: i32 = 30_115;
 
 type HFileOpenFn = unsafe extern "C" fn(*const u8, *const u8) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const u8) -> i32;
-type HFileVOpenFn = unsafe extern "C" fn(
+type HFileVOpenFn = for<'a> unsafe fn(
     *const u8,
     *const u8,
-    *mut crate::htslib_rs::c_compat::__va_list_tag,
+    &'a [crate::htslib_rs::hfile::HFileOpt<'a>],
 ) -> *mut hFILE;
 type HFilePluginDestroyFn = unsafe extern "C" fn();
 
@@ -171,7 +172,7 @@ unsafe impl Sync for hFILE_scheme_handler_layout {}
 #[repr(C)]
 struct hFILE_plugin_layout {
     api_version: i32,
-    obj: Option<NonNull<c_void>>,
+    obj: Option<NonNull<()>>,
     name: *const u8,
     destroy: Option<HFilePluginDestroyFn>,
 }
@@ -999,7 +1000,8 @@ pub unsafe extern "C" fn hfile_s3_c_488_redirect_endpoint(
             crate::htslib_rs::hts::kputs(&host_bytes, &mut *url);
             // bucket is NUL-terminated owned bytes; append up to the NUL.
             let bucket_len = (*ad).bucket.iter().position(|&b| b == 0).unwrap_or((*ad).bucket.len());
-            crate::htslib_rs::hts::kputsn(&(*ad).bucket[..bucket_len], bucket_len, &mut *url);
+            let bucket = &(*ad).bucket;
+            crate::htslib_rs::hts::kputsn(&bucket[..bucket_len], bucket_len, &mut *url);
             if (*ad).user_query_string.data.len() != 0 {
                 crate::htslib_rs::hts::kputc(b'?' as i32, &mut *url);
                 let uqs = (*ad).user_query_string.data.clone();
@@ -1355,9 +1357,11 @@ pub unsafe extern "C" fn hfile_s3_c_774_v2_authorisation(
     let token_nl = if (*ad).token.data.len() != 0 { "\n" } else { "" };
     // date is a NUL-terminated buffer; the C-string body starts at offset 6.
     let date_nul = (*ad).date.iter().position(|&b| b == 0).unwrap_or((*ad).date.len());
-    let date_body = String::from_utf8_lossy(&(*ad).date[6..date_nul]).into_owned();
+    let date = &(*ad).date;
+    let date_body = String::from_utf8_lossy(&date[6..date_nul]).into_owned();
     let bucket_nul = (*ad).bucket.iter().position(|&b| b == 0).unwrap_or((*ad).bucket.len());
-    let bucket_str = String::from_utf8_lossy(&(*ad).bucket[..bucket_nul]).into_owned();
+    let bucket = &(*ad).bucket;
+    let bucket_str = String::from_utf8_lossy(&bucket[..bucket_nul]).into_owned();
     if kput_cstring(
         &mut message,
         format!(
@@ -2451,7 +2455,9 @@ pub unsafe extern "C" fn hfile_s3_c_1546_upload_callback(
     let read_length = remaining.min(realsize);
     if read_length != 0 {
         // ptr is a libcurl-provided raw buffer; copy bytes into it at the boundary.
-        let src = &(*fp).buffer.data[(*fp).index..(*fp).index + read_length];
+        let index = (*fp).index;
+        let data = &(*fp).buffer.data;
+        let src = &data[index..index + read_length];
         std::ptr::copy_nonoverlapping(src.as_ptr(), ptr.cast::<u8>(), read_length);
         (*fp).index += read_length;
     }
@@ -3034,26 +3040,18 @@ unsafe fn goto_write_open_error(
     drop(Box::from_raw(fp));
 }
 
-unsafe fn hfile_s3_hopen_vargs(
+// Route the rewritten S3 open through the native typed-options hopen_vargs.
+// `parent_opts` flattens any options forwarded from the caller's `vopen` (the
+// old nested `va_list`); `opts` carries this backend's auth/redirect options.
+unsafe fn hfile_s3_hopen_opts(
     url: *const u8,
     mode: *const u8,
-    words: &[usize],
+    parent_opts: &[HFileOpt],
+    opts: &[HFileOpt],
 ) -> *mut hFILE {
-    let mut reg_save = [0usize; 6];
-    let mut overflow = vec![0usize; words.len().saturating_sub(reg_save.len())];
-    for (i, word) in words.iter().copied().enumerate() {
-        if i < reg_save.len() {
-            reg_save[i] = word;
-        } else {
-            overflow[i - reg_save.len()] = word;
-        }
-    }
-    let mut args = crate::htslib_rs::c_compat::__va_list_tag {
-        gp_offset: 0,
-        fp_offset: 48,
-        overflow_arg_area: overflow.as_mut_ptr().cast(),
-        reg_save_area: reg_save.as_mut_ptr().cast(),
-    };
+    let mut all = Vec::with_capacity(parent_opts.len() + opts.len());
+    all.extend_from_slice(parent_opts);
+    all.extend_from_slice(opts);
 
     if !cstr_bytes(mode).contains(&b':') {
         let mut mode_colon = kstring_t::default();
@@ -3065,82 +3063,60 @@ unsafe fn hfile_s3_hopen_vargs(
         // hopen_vargs needs a NUL-terminated mode string; build one here.
         let mut mode_colon_c = mode_colon.data.clone();
         mode_colon_c.push(0);
-        hfile_c_1317_hopen_vargs(url, mode_colon_c.as_ptr(), &mut args)
+        hfile_c_1317_hopen_vargs(url, mode_colon_c.as_ptr(), &all)
     } else {
-        hfile_c_1317_hopen_vargs(url, mode, &mut args)
+        hfile_c_1317_hopen_vargs(url, mode, &all)
     }
 }
 
 unsafe fn hfile_s3_c_2348_hopen_v4_read(
     url: *const u8,
     mode: *const u8,
-    argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
+    parent_opts: &[HFileOpt],
     ad: *mut S3AuthDataLayout,
     http_response: *mut i64,
     fail_on_error: i32,
 ) -> *mut hFILE {
-    let mut words = Vec::with_capacity(if argsp.is_null() { 13 } else { 15 });
-    if !argsp.is_null() {
-        words.push(c"va_list".as_ptr() as usize);
-        words.push(argsp as usize);
-    }
-    words.extend_from_slice(&[
-        c"httphdr_callback".as_ptr() as usize,
-        hfile_s3_c_1055_v4_auth_header_callback as usize,
-        c"httphdr_callback_data".as_ptr() as usize,
-        ad as usize,
-        c"redirect_callback".as_ptr() as usize,
-        hfile_s3_c_488_redirect_endpoint as usize,
-        c"redirect_callback_data".as_ptr() as usize,
-        ad as usize,
-        c"http_response_ptr".as_ptr() as usize,
-        http_response as usize,
-        c"fail_on_error".as_ptr() as usize,
-        fail_on_error as usize,
-        0,
-    ]);
-    hfile_s3_hopen_vargs(url, mode, &words)
+    let opts = [
+        HFileOpt::HttpHeaderCallback(hfile_s3_c_1055_v4_auth_header_callback as usize),
+        HFileOpt::HttpHeaderCallbackData(ad.cast::<()>()),
+        HFileOpt::RedirectCallback(hfile_s3_c_488_redirect_endpoint as usize),
+        HFileOpt::RedirectCallbackData(ad.cast::<()>()),
+        HFileOpt::HttpResponsePtr(http_response),
+        HFileOpt::FailOnError(fail_on_error),
+    ];
+    hfile_s3_hopen_opts(url, mode, parent_opts, &opts)
 }
 
 unsafe fn hfile_s3_c_774_hopen_v2_read(
     url: *const u8,
     mode: *const u8,
-    argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
+    parent_opts: &[HFileOpt],
     ad: *mut s3_auth_data,
 ) -> *mut hFILE {
-    let mut words = Vec::with_capacity(if argsp.is_null() { 9 } else { 11 });
-    if !argsp.is_null() {
-        words.push(c"va_list".as_ptr() as usize);
-        words.push(argsp as usize);
-    }
-    words.extend_from_slice(&[
-        c"httphdr_callback".as_ptr() as usize,
-        hfile_s3_c_774_v2_authorisation as usize,
-        c"httphdr_callback_data".as_ptr() as usize,
-        ad as usize,
-        c"redirect_callback".as_ptr() as usize,
-        hfile_s3_c_488_redirect_endpoint as usize,
-        c"redirect_callback_data".as_ptr() as usize,
-        ad as usize,
-        0,
-    ]);
-    hfile_s3_hopen_vargs(url, mode, &words)
+    let opts = [
+        HFileOpt::HttpHeaderCallback(hfile_s3_c_774_v2_authorisation as usize),
+        HFileOpt::HttpHeaderCallbackData(ad.cast::<()>()),
+        HFileOpt::RedirectCallback(hfile_s3_c_488_redirect_endpoint as usize),
+        HFileOpt::RedirectCallbackData(ad.cast::<()>()),
+    ];
+    hfile_s3_hopen_opts(url, mode, parent_opts, &opts)
 }
 
 unsafe fn hfile_s3_c_2348_hopen_v4_write(
     url: *const u8,
     mode: *const u8,
-    argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
+    parent_opts: &[HFileOpt],
     ad: *mut S3AuthDataLayout,
 ) -> *mut hFILE {
-    let _ = (mode, argsp);
+    let _ = (mode, parent_opts);
     hfile_s3_c_2102_s3_write_open(url, ad.cast())
 }
 
 unsafe fn hfile_s3_c_774_s3_rewrite(
     s3url: *const u8,
     mode: *const u8,
-    argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
+    parent_opts: &[HFileOpt],
 ) -> *mut hFILE {
     let mut url = kstring_t::default();
     let Some(ad) = NonNull::new(hfile_s3_c_545_setup_auth_data(s3url, mode, 2, &mut url)) else {
@@ -3152,7 +3128,7 @@ unsafe fn hfile_s3_c_774_s3_rewrite(
     let fp = NonNull::new(hfile_s3_c_774_hopen_v2_read(
         url_c.as_ptr(),
         mode,
-        argsp,
+        parent_opts,
         ad.as_ptr(),
     ));
     let Some(fp) = fp else {
@@ -3166,7 +3142,7 @@ unsafe fn hfile_s3_c_774_s3_rewrite(
 pub unsafe fn hfile_s3_c_2348_s3_open_v4(
     s3url: *const u8,
     mode: *const u8,
-    argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
+    parent_opts: &[HFileOpt],
 ) -> *mut hFILE {
     let mut url = kstring_t::default();
     let Some(ad_nn) = NonNull::new(
@@ -3184,7 +3160,7 @@ pub unsafe fn hfile_s3_c_2348_s3_open_v4(
         let Some(first_fp) = NonNull::new(hfile_s3_c_2348_hopen_v4_read(
             url_c.as_ptr(),
             mode,
-            argsp,
+            parent_opts,
             ad,
             &mut http_response,
             0,
@@ -3203,7 +3179,7 @@ pub unsafe fn hfile_s3_c_2348_s3_open_v4(
             fp = NonNull::new(hfile_s3_c_2348_hopen_v4_read(
                 url_c.as_ptr(),
                 mode,
-                argsp,
+                parent_opts,
                 ad,
                 std::ptr::null_mut(),
                 1,
@@ -3219,7 +3195,7 @@ pub unsafe fn hfile_s3_c_2348_s3_open_v4(
             fp = Some(first_fp);
         }
     } else {
-        fp = NonNull::new(hfile_s3_c_2348_hopen_v4_write(url_c.as_ptr(), mode, argsp, ad));
+        fp = NonNull::new(hfile_s3_c_2348_hopen_v4_write(url_c.as_ptr(), mode, parent_opts, ad));
     }
 
     let Some(fp) = fp else {
@@ -3233,33 +3209,30 @@ pub unsafe fn hfile_s3_c_2348_s3_open_v4(
 pub unsafe fn hfile_s3_c_2374_s3_open_v2(
     s3url: *const u8,
     mode: *const u8,
-    argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
+    parent_opts: &[HFileOpt],
 ) -> *mut hFILE {
-    hfile_s3_c_774_s3_rewrite(s3url, mode, argsp)
+    hfile_s3_c_774_s3_rewrite(s3url, mode, parent_opts)
 }
 
 // original: hopen_s3 (htslib/hfile_s3.c:2400)
 unsafe extern "C" fn hfile_s3_c_2400_hopen_s3(url: *const u8, mode: *const u8) -> *mut hFILE {
     if libc::getenv(c"HTS_S3_V2".as_ptr()).is_null() {
-        hfile_s3_c_2348_s3_open_v4(url, mode, std::ptr::null_mut())
+        hfile_s3_c_2348_s3_open_v4(url, mode, &[])
     } else {
-        hfile_s3_c_2374_s3_open_v2(url, mode, std::ptr::null_mut())
+        hfile_s3_c_2374_s3_open_v2(url, mode, &[])
     }
 }
 
 // original: vhopen_s3 (htslib/hfile_s3.c:2414)
-unsafe extern "C" fn hfile_s3_c_2414_vhopen_s3(
+unsafe fn hfile_s3_c_2414_vhopen_s3(
     url: *const u8,
     mode_colon: *const u8,
-    args0: *mut crate::htslib_rs::c_compat::__va_list_tag,
+    opts: &[HFileOpt],
 ) -> *mut hFILE {
-    let mut args = std::mem::MaybeUninit::<crate::htslib_rs::c_compat::__va_list_tag>::uninit();
-    std::ptr::copy_nonoverlapping(args0, args.as_mut_ptr(), 1);
-
     if libc::getenv(c"HTS_S3_V2".as_ptr()).is_null() {
-        hfile_s3_c_2348_s3_open_v4(url, mode_colon, args.as_mut_ptr())
+        hfile_s3_c_2348_s3_open_v4(url, mode_colon, opts)
     } else {
-        hfile_s3_c_2374_s3_open_v2(url, mode_colon, args.as_mut_ptr())
+        hfile_s3_c_2374_s3_open_v2(url, mode_colon, opts)
     }
 }
 
@@ -3285,7 +3258,8 @@ pub unsafe fn hfile_s3_c_2436_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> i32 {
         &mut *std::ptr::addr_of_mut!(HFILE_S3_USERAGENT),
         b"htslib/%s",
         &[crate::htslib_rs::kstring::KsPrintfArg::Str(
-            crate::htslib_rs::hts::hts_version(),
+            std::ffi::CStr::from_ptr(crate::htslib_rs::hts::hts_version().cast())
+                .to_bytes(),
         )],
     );
     hfile_add_scheme_handler(
@@ -3997,7 +3971,7 @@ mod tests {
                 ),
                 0
             );
-            assert_eq!(CStr::from_ptr(plugin.name).to_bytes(), b"Amazon S3");
+            assert_eq!(CStr::from_ptr(plugin.name.cast()).to_bytes(), b"Amazon S3");
             assert!(plugin.destroy.is_some());
             assert!(!(*std::ptr::addr_of!(HFILE_S3_USERAGENT.data)).is_empty());
             assert!((*std::ptr::addr_of!(HFILE_S3_USERAGENT.data)).starts_with(b"htslib/"));

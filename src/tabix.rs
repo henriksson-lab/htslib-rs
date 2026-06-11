@@ -390,8 +390,8 @@ unsafe fn tabix_c_206_query_regions(
     };
     let mut fname_c = fname.to_vec();
     fname_c.push(0);
-    let fname_ptr = fname_c.as_ptr().cast::<c_char>();
-    let fp = hts::hts_open(fname_ptr, c"r".as_ptr());
+    let fname_ptr = fname_c.as_ptr();
+    let fp = hts::hts_open(fname_ptr.cast::<c_char>(), c"r".as_ptr());
     if fp.is_null() {
         error_errno_message(Some(format!(
             "Could not open \"{}\"",
@@ -490,9 +490,13 @@ unsafe fn tabix_c_206_query_regions(
                                 (*rec).rid
                             ));
                         }
+                        let mut chr_len = 0usize;
+                        while *chr.add(chr_len) != 0 {
+                            chr_len += 1;
+                        }
                         if regidx::regidx_c_401_regidx_overlap(
                             reg_idx,
-                            std::ffi::CStr::from_ptr(chr.cast()).to_bytes(),
+                            std::slice::from_raw_parts(chr, chr_len),
                             (*rec).pos,
                             (*rec).pos + (*rec).rlen as hts_pos_t - 1,
                             None,
@@ -653,7 +657,7 @@ unsafe fn tabix_c_206_query_regions(
 pub unsafe fn tabix_c_396_query_chroms(fname: &[u8], download: i32) -> i32 {
     let mut fname_c = fname.to_vec();
     fname_c.push(0);
-    let fname_ptr = fname_c.as_ptr().cast::<c_char>();
+    let fname_ptr = fname_c.as_ptr();
     let ftype = tabix_c_102_file_type(fname);
     if (ftype & IS_TXT) != 0 || ftype == 0 {
         let tbx_ = tbx::tbx_index_load3(
@@ -679,7 +683,7 @@ pub unsafe fn tabix_c_396_query_chroms(fname: &[u8], download: i32) -> i32 {
         }
         tbx::tbx_destroy(tbx_);
     } else if ftype == IS_BCF {
-        let fp = hts::hts_open(fname_ptr, c"r".as_ptr());
+        let fp = hts::hts_open(fname_ptr.cast::<c_char>(), c"r".as_ptr());
         if fp.is_null() {
             error_errno_message(Some(format!(
                 "Could not open \"{}\"",
@@ -754,7 +758,7 @@ pub unsafe fn tabix_c_437_reheader_file(
 ) -> i32 {
     let mut fname_c = fname.to_vec();
     fname_c.push(0);
-    let fname_ptr = fname_c.as_ptr().cast::<c_char>();
+    let fname_ptr = fname_c.as_ptr();
     let tpool = if threads >= 1 {
         OwnedThreadPool::new(threads)
     } else {
@@ -1292,7 +1296,7 @@ pub unsafe fn tabix_c_614_main(argc: i32, argv: *mut *mut c_char) -> i32 {
     let fname = std::ffi::CStr::from_ptr(*argv.add(optind as usize)).to_bytes().to_vec();
     let mut fname_c = fname.clone();
     fname_c.push(0);
-    let fname_ptr = fname_c.as_ptr().cast::<c_char>();
+    let fname_ptr = fname_c.as_ptr();
     let ftype = tabix_c_102_file_type(&fname);
     if detect != 0 {
         if ftype == IS_GFF {
@@ -1365,7 +1369,7 @@ pub unsafe fn tabix_c_614_main(argc: i32, argv: *mut *mut c_char) -> i32 {
         // Before complaining about existing index, check if the VCF file isn't
         // newer. This is a common source of errors, people tend not to notice
         // that tabix failed
-        libc::stat(fname_ptr, &mut stat_file);
+        libc::stat(fname_ptr.cast::<c_char>(), &mut stat_file);
         if stat_file.st_mtime <= stat_tbi.st_mtime {
             error_message(
                 "[tabix] the index file exists. Please use '-f' to overwrite.\n".to_string(),

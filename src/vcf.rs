@@ -13351,7 +13351,7 @@ pub(crate) unsafe fn sr_next_line(files: *mut bcf_srs_t) -> i32 {
         bcf_sr_sort_next(
             &mut *files,
             &mut (*bcf_sr_aux_mut(files)).sort,
-            CStr::from_ptr(chr.cast()),
+            CStr::from_ptr(chr.cast()).to_bytes_with_nul(),
             min_pos,
         )
     }
@@ -16226,7 +16226,7 @@ mod tests {
             assert_eq!(bcf_sr_sort_set_active(&mut sort, 0), 0);
 
             assert_eq!(
-                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 41),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".to_bytes_with_nul(), 41),
                 1
             );
             assert_eq!(reader_arr[0].nbuffer, 1);
@@ -16295,7 +16295,7 @@ mod tests {
             *(*vcf_buf.add(1)).rec = rec1;
 
             assert_eq!(
-                bcf_sr_sort_next(&mut readers, &mut sort, c"chr2", 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr2".to_bytes_with_nul(), 9),
                 2
             );
             assert_eq!(reader_arr[0].nbuffer, 0);
@@ -16370,7 +16370,7 @@ mod tests {
             assert_eq!(bcf_sr_sort_set_active(&mut sort, 0), 0);
             assert_eq!(bcf_sr_sort_add_active(&mut sort, 1), 0);
             assert_eq!(
-                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".to_bytes_with_nul(), 9),
                 2
             );
             assert_eq!(has_line, [1, 1]);
@@ -16378,21 +16378,21 @@ mod tests {
             assert_eq!(*reader_arr[1].buffer.add(0), rec1a);
 
             assert_eq!(
-                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".to_bytes_with_nul(), 9),
                 1
             );
             assert_eq!(has_line, [1, 0]);
             assert_eq!(*reader_arr[0].buffer.add(0), rec0b);
 
             assert_eq!(
-                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".to_bytes_with_nul(), 9),
                 1
             );
             assert_eq!(has_line, [0, 1]);
             assert_eq!(*reader_arr[1].buffer.add(0), rec1b);
 
             assert_eq!(
-                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".to_bytes_with_nul(), 9),
                 0
             );
             assert_eq!(reader_arr[0].nbuffer, 0);
@@ -16461,7 +16461,7 @@ mod tests {
             assert_eq!(bcf_sr_sort_add_active(&mut sort, 1), 0);
 
             assert_eq!(
-                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 14),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".to_bytes_with_nul(), 14),
                 2
             );
             assert_eq!(has_line, [1, 1]);
@@ -16469,7 +16469,7 @@ mod tests {
             assert_eq!(*reader_arr[1].buffer.add(0), rec1);
 
             assert_eq!(
-                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 14),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".to_bytes_with_nul(), 14),
                 1
             );
             assert_eq!(has_line, [1, 0]);
@@ -16566,14 +16566,14 @@ mod tests {
             assert_eq!(bcf_sr_sort_add_active(&mut sort, 1), 0);
 
             assert_eq!(
-                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".to_bytes_with_nul(), 9),
                 1
             );
             assert_eq!(has_line, [1, 0]);
             assert_eq!(*reader_arr[0].buffer.add(0), rec0);
 
             assert_eq!(
-                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".to_bytes_with_nul(), 9),
                 1
             );
             assert_eq!(has_line, [0, 1]);

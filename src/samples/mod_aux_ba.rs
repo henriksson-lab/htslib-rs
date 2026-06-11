@@ -66,7 +66,7 @@ pub unsafe fn samples_mod_aux_ba_c_49_main(args: &[Vec<u8>]) -> i32 {
 
     let mut ret_r = sam::sam_read1(infile, in_samhdr, bamdata);
     while ret_r >= 0 {
-        *crate::htslib_rs::c_compat::__errno_location() = 0;
+        *libc::__errno_location() = 0;
         let mut cnt = [0_u32; 5];
         let seq = sam::bam_get_seq(bamdata);
         for i in 0..(*bamdata).core.l_qseq {
@@ -90,7 +90,7 @@ pub unsafe fn samples_mod_aux_ba_c_49_main(args: &[Vec<u8>]) -> i32 {
             write!(
                 __out,
                 "Failed to update base array, errno {}",
-                *crate::htslib_rs::c_compat::__errno_location(),
+                *libc::__errno_location(),
             )
             .unwrap();
             sam::sam_hdr_destroy(in_samhdr);

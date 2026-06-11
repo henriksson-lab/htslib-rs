@@ -906,7 +906,7 @@ pub unsafe fn test_test_khash_c_448_main(argc: i32, argv: *mut *mut u8) -> i32 {
         match opt {
             c if c == b'd' as i32 => show_stats = 1,
             c if c == b'f' as i32 => {
-                del_frac = libc::strtod(optarg, std::ptr::null_mut());
+                del_frac = libc::strtod(optarg.cast(), std::ptr::null_mut());
                 if !(0.0..=1.0).contains(&del_frac) {
                     eprintln!("Error: -d must be between 0.0 and 1.0");
                     return libc::EXIT_FAILURE;
@@ -918,7 +918,7 @@ pub unsafe fn test_test_khash_c_448_main(argc: i32, argv: *mut *mut u8) -> i32 {
             }
             c if c == b'i' as i32 => input_file = optarg.cast(),
             c if c == b'n' as i32 => {
-                max = libc::strtoul(optarg, std::ptr::null_mut(), 0) as usize;
+                max = libc::strtoul(optarg.cast(), std::ptr::null_mut(), 0) as usize;
                 if !(1..=MAX_ENTRIES).contains(&max) {
                     eprintln!("Error: -n must be between 1 and {}", MAX_ENTRIES);
                     return libc::EXIT_FAILURE;
@@ -950,7 +950,7 @@ pub unsafe fn test_test_khash_c_448_main(argc: i32, argv: *mut *mut u8) -> i32 {
 }
 
 unsafe extern "C" {
-    static mut optarg: *mut std::ffi::c_char;
+    static mut optarg: *mut u8;
     static mut optind: i32;
 }
 

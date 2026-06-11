@@ -1,4 +1,3 @@
-use std::ffi::c_long;
 use std::sync::Mutex;
 
 const RAND48_SEED_0: u16 = 0x330e;
@@ -70,7 +69,7 @@ pub fn _dorand48(xseed: &mut [u16; 3]) {
     state.step(xseed);
 }
 
-pub fn hts_srand48(seed: c_long) {
+pub fn hts_srand48(seed: i64) {
     let mut guard = RAND48.lock().expect("hts_os rand48 mutex poisoned");
     guard.seed[0] = RAND48_SEED_0;
     guard.seed[1] = seed as u16;
@@ -104,17 +103,17 @@ pub fn hts_drand48() -> f64 {
     Rand48State::erand_value(&buf)
 }
 
-pub fn hts_lrand48() -> c_long {
+pub fn hts_lrand48() -> i64 {
     let mut guard = RAND48.lock().expect("hts_os rand48 mutex poisoned");
     let snapshot = *guard;
     let mut buf = guard.seed;
     snapshot.step(&mut buf);
     guard.seed = buf;
-    ((buf[2] as c_long) << 15) + ((buf[1] as c_long) >> 1)
+    ((buf[2] as i64) << 15) + ((buf[1] as i64) >> 1)
 }
 
 // original: hts_srand48 (htslib/hts_os.c:35)
-pub fn hts_os_c_35_hts_srand48(seed: c_long) {
+pub fn hts_os_c_35_hts_srand48(seed: i64) {
     hts_srand48(seed);
 }
 
@@ -129,7 +128,7 @@ pub fn hts_os_c_48_hts_drand48() -> f64 {
 }
 
 // original: hts_lrand48 (htslib/hts_os.c:51)
-pub fn hts_os_c_51_hts_lrand48() -> c_long {
+pub fn hts_os_c_51_hts_lrand48() -> i64 {
     hts_lrand48()
 }
 
@@ -262,7 +261,7 @@ mod tests {
     fn srand48_reinitializes_after_alias_state_advancement() {
         let _guard = rand48_test_lock();
         let first_seed = reference_next([RAND48_SEED_0, 0xffff, 0xffff]);
-        let first_lrand = ((first_seed[2] as c_long) << 15) + ((first_seed[1] as c_long) >> 1);
+        let first_lrand = ((first_seed[2] as i64) << 15) + ((first_seed[1] as i64) >> 1);
 
         hts_os_c_35_hts_srand48(-1);
         assert_eq!(hts_os_c_51_hts_lrand48(), first_lrand);
@@ -392,7 +391,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_writer = stop.clone();
         let writer = thread::spawn(move || {
-            let mut n: c_long = 0;
+            let mut n: i64 = 0;
             while !stop_writer.load(Ordering::Relaxed) {
                 hts_srand48(n.wrapping_mul(0x9E37_79B9) ^ 42);
                 n = n.wrapping_add(1);
@@ -435,14 +434,14 @@ mod tests {
 
         let _guard = rand48_test_lock();
 
-        hts_srand48(0xDEADBEEF_u32 as c_long);
+        hts_srand48(0xDEADBEEF_u32 as i64);
         let mut first = Vec::with_capacity(K);
         for _ in 0..K {
             first.push(hts_drand48().to_bits());
         }
         let first_lrand = hts_lrand48();
 
-        hts_srand48(0xDEADBEEF_u32 as c_long);
+        hts_srand48(0xDEADBEEF_u32 as i64);
         let mut second = Vec::with_capacity(K);
         for _ in 0..K {
             second.push(hts_drand48().to_bits());

@@ -26,13 +26,39 @@ pub struct hFILE_plugin {
     _private: [u8; 0],
 }
 
+/// Typed option passed to a remote hFILE backend's `vopen`, replacing the old
+/// synthetic-`va_list` key/value words. Lifetimes borrow the caller's bytes.
+#[derive(Clone, Copy)]
+pub enum HFileOpt<'a> {
+    /// "httphdr": one NUL-terminated header line (C-string bytes incl. NUL).
+    HttpHeader(&'a [u8]),
+    /// "httphdr:v" / "httphdr:l": a slice of NUL-terminated header C-string
+    /// pointers (appended in order; no trailing NULL sentinel).
+    HttpHeaders(&'a [*const u8]),
+    /// "httphdr_callback": raw fn-ptr word (libcurl transmutes it).
+    HttpHeaderCallback(usize),
+    /// "httphdr_callback_data".
+    HttpHeaderCallbackData(*mut ()),
+    /// "auth_token_enabled": false => disable auth header.
+    AuthTokenEnabled(bool),
+    /// "redirect_callback": raw fn-ptr word.
+    RedirectCallback(usize),
+    /// "redirect_callback_data".
+    RedirectCallbackData(*mut ()),
+    /// "http_response_ptr".
+    HttpResponsePtr(*mut i64),
+    /// "fail_on_error".
+    FailOnError(i32),
+    /// mem backend: buffer + size.
+    MemBuffer(*mut u8, usize),
+    /// "parent": a parent hFILE.
+    Parent(*mut hFILE),
+}
+
 type HFileOpenFn = unsafe extern "C" fn(*const u8, *const u8) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const u8) -> i32;
-type HFileVOpenFn = unsafe extern "C" fn(
-    *const u8,
-    *const u8,
-    *mut crate::htslib_rs::c_compat::__va_list_tag,
-) -> *mut hFILE;
+type HFileVOpenFn =
+    for<'a> unsafe fn(*const u8, *const u8, &'a [HFileOpt<'a>]) -> *mut hFILE;
 type HFilePluginInitFn = unsafe extern "C" fn(*mut hFILE_plugin) -> i32;
 type HFilePluginDestroyFn = unsafe extern "C" fn();
 
@@ -173,11 +199,19 @@ impl HFileBackend {
             }
             #[cfg(feature = "libcurl")]
             HFileBackend::Libcurl(_) => {
-                crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_876_libcurl_read(fp, ptr, nbytes)
+                crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_876_libcurl_read(
+                    fp,
+                    ptr.cast(),
+                    nbytes,
+                )
             }
             #[cfg(feature = "gcs")]
             HFileBackend::Gcs(_) => {
-                crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_876_libcurl_read(fp, ptr, nbytes)
+                crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_876_libcurl_read(
+                    fp,
+                    ptr.cast(),
+                    nbytes,
+                )
             }
             HFileBackend::Multipart(_) => {
                 let dest = std::slice::from_raw_parts_mut(ptr.cast::<u8>(), nbytes as usize);
@@ -221,15 +255,23 @@ impl HFileBackend {
             }
             #[cfg(feature = "libcurl")]
             HFileBackend::Libcurl(_) => {
-                crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_1024_libcurl_write(fp, ptr, nbytes)
+                crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_1024_libcurl_write(
+                    fp,
+                    ptr.cast(),
+                    nbytes,
+                )
             }
             #[cfg(feature = "gcs")]
             HFileBackend::Gcs(_) => {
-                crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_1024_libcurl_write(fp, ptr, nbytes)
+                crate::htslib_rs::hfile_libcurl::hfile_libcurl_c_1024_libcurl_write(
+                    fp,
+                    ptr.cast(),
+                    nbytes,
+                )
             }
             #[cfg(feature = "s3")]
             HFileBackend::S3(_) => {
-                crate::htslib_rs::hfile_s3::hfile_s3_c_1625_s3_write(fp, ptr, nbytes)
+                crate::htslib_rs::hfile_s3::hfile_s3_c_1625_s3_write(fp, ptr.cast(), nbytes)
             }
             HFileBackend::Multipart(_) => {
                 crate::htslib_rs::multipart::multipart_c_114_multipart_write(fp, ptr.cast(), nbytes)
@@ -1625,31 +1667,18 @@ pub unsafe fn hfile_c_878_hopenv_mem(
     hf
 }
 
-unsafe fn hfile_c_va_arg_word(args: *mut crate::htslib_rs::c_compat::__va_list_tag) -> usize {
-    let args = &mut *args;
-    if args.gp_offset <= 40 {
-        let p = args.reg_save_area.cast::<u8>().add(args.gp_offset as usize);
-        args.gp_offset += 8;
-        std::ptr::read_unaligned(p.cast::<usize>())
-    } else {
-        let p = args.overflow_arg_area.cast::<u8>();
-        args.overflow_arg_area = p.add(8).cast();
-        std::ptr::read_unaligned(p.cast::<usize>())
-    }
-}
-
-unsafe extern "C" fn hfile_c_878_hopenv_mem_va(
+unsafe fn hfile_c_878_hopenv_mem_va(
     filename: *const u8,
     mode: *const u8,
-    args: *mut crate::htslib_rs::c_compat::__va_list_tag,
+    opts: &[HFileOpt],
 ) -> *mut hFILE {
-    if args.is_null() {
-        *libc::__errno_location() = libc::EINVAL;
-        return std::ptr::null_mut();
+    for opt in opts {
+        if let HFileOpt::MemBuffer(buffer, sz) = *opt {
+            return hfile_c_878_hopenv_mem(filename, mode, buffer, sz);
+        }
     }
-    let buffer = hfile_c_va_arg_word(args) as *mut u8;
-    let sz = hfile_c_va_arg_word(args) as usize;
-    hfile_c_878_hopenv_mem(filename, mode, buffer, sz)
+    *libc::__errno_location() = libc::EINVAL;
+    std::ptr::null_mut()
 }
 
 pub unsafe fn hfile_mem_get_buffer_impl(
@@ -2310,7 +2339,7 @@ pub unsafe fn hfile_c_1168_hopen_unknown_scheme(
 pub unsafe fn hfile_c_1317_hopen_vargs(
     fname: *const u8,
     mode: *const u8,
-    args: *mut crate::htslib_rs::c_compat::__va_list_tag,
+    opts: &[HFileOpt],
 ) -> *mut hFILE {
     let Some(mode_bytes) = (!mode.is_null()).then(|| CStr::from_ptr(mode.cast()).to_bytes()) else {
         *libc::__errno_location() = libc::EINVAL;
@@ -2325,11 +2354,7 @@ pub unsafe fn hfile_c_1317_hopen_vargs(
         {
             return (*handler).open.expect("hFILE open handler")(fname, mode);
         }
-        if args.is_null() {
-            *libc::__errno_location() = libc::EINVAL;
-            return std::ptr::null_mut();
-        }
-        return (*handler).vopen.expect("hFILE vopen handler")(fname, mode, args);
+        return (*handler).vopen.expect("hFILE vopen handler")(fname, mode, opts);
     }
 
     if libc::strcmp(fname.cast(), c"-".as_ptr()) == 0 {
@@ -2340,7 +2365,7 @@ pub unsafe fn hfile_c_1317_hopen_vargs(
 }
 
 pub unsafe fn hfile_c_1317_hopen(fname: *const u8, mode: *const u8) -> *mut hFILE {
-    hfile_c_1317_hopen_vargs(fname, mode, std::ptr::null_mut())
+    hfile_c_1317_hopen_vargs(fname, mode, &[])
 }
 
 pub unsafe extern "C" fn hfile_c_1339_hfile_always_local(_fname: *const u8) -> i32 {
@@ -3492,16 +3517,9 @@ mod tests {
                 payload.len(),
             );
 
-            let mut reg_save = [buffer as usize, payload.len()];
-            let mut overflow = [0usize; 2];
-            let mut args = crate::htslib_rs::c_compat::__va_list_tag {
-                gp_offset: 0,
-                fp_offset: 48,
-                overflow_arg_area: overflow.as_mut_ptr().cast(),
-                reg_save_area: reg_save.as_mut_ptr().cast(),
-            };
+            let opts = [HFileOpt::MemBuffer(buffer, payload.len())];
 
-            let fp = hfile_c_1317_hopen_vargs(c"mem:".as_ptr().cast::<u8>(), c"r:".as_ptr().cast::<u8>(), &mut args);
+            let fp = hfile_c_1317_hopen_vargs(c"mem:".as_ptr().cast::<u8>(), c"r:".as_ptr().cast::<u8>(), &opts);
             assert!(!fp.is_null());
             let mut out = [0u8; 16];
             assert_eq!(

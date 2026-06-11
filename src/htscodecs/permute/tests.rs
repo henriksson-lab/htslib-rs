@@ -26,6 +26,13 @@
 //!   The `permutec` print loop in `permute.h:54` iterates `j = b-8; j < b`
 //!   and emits `_` whenever `j < 0`, producing the right-aligned layout.
 
+// The C `stdout` stream, linked directly from the C runtime (a real
+// `extern FILE *` symbol on glibc/musl/BSD/macOS). Replaces the former
+// `crate::htslib_rs::c_compat::stdout` re-export.
+extern "C" {
+    static mut stdout: *mut libc::FILE;
+}
+
 /// Sentinel value used by the C `#define _ 9` macro to mark skipped lanes.
 const UNDERSCORE_LOCAL: u32 = 9;
 
@@ -395,7 +402,7 @@ fn capture_main_stdout() -> (i32, Vec<u8>) {
     let rc;
     let mut buf;
     unsafe {
-        libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
+        libc::fflush(stdout.cast());
 
         let out_fd = libc::open(
             path.as_ptr() as *const libc::c_char,
@@ -415,7 +422,7 @@ fn capture_main_stdout() -> (i32, Vec<u8>) {
         // `lseek` sees the complete output. FD1_LOCK (held across this whole
         // block) keeps the fd-1 swap serialized between concurrent test threads.
         rc = super::main();
-        libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
+        libc::fflush(stdout.cast());
 
         let len = libc::lseek(libc::STDOUT_FILENO, 0, libc::SEEK_CUR);
         assert!(len >= 0, "lseek failed");

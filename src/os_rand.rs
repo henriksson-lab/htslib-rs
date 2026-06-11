@@ -3,7 +3,6 @@ pub use crate::htslib_rs::hts_os::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::c_long;
 
     fn reference_next(seed: [u16; 3]) -> [u16; 3] {
         let state = seed[0] as u64 | ((seed[1] as u64) << 16) | ((seed[2] as u64) << 32);
@@ -72,7 +71,7 @@ mod tests {
         hts_srand48(0);
         let first_seed = reference_next([0x330e, 0x0000, 0x0000]);
         let second_seed = reference_next(first_seed);
-        let second_lrand = ((second_seed[2] as c_long) << 15) + ((second_seed[1] as c_long) >> 1);
+        let second_lrand = ((second_seed[2] as i64) << 15) + ((second_seed[1] as i64) >> 1);
 
         assert_eq!(
             hts_drand48().to_bits(),
@@ -85,7 +84,7 @@ mod tests {
     fn os_rand_srand48_reinitializes_signed_seed_words() {
         let _guard = crate::htslib_rs::hts_os::rand48_test_lock();
         let first_seed = reference_next([0x330e, 0xffff, 0xffff]);
-        let first_lrand = ((first_seed[2] as c_long) << 15) + ((first_seed[1] as c_long) >> 1);
+        let first_lrand = ((first_seed[2] as i64) << 15) + ((first_seed[1] as i64) >> 1);
 
         hts_os_c_35_hts_srand48(-1);
         assert_eq!(hts_os_c_51_hts_lrand48(), first_lrand);
@@ -101,7 +100,7 @@ mod tests {
         hts_srand48(1);
         let low_seed_lrand = hts_lrand48();
 
-        hts_srand48(0x1_0000_0001 as c_long);
+        hts_srand48(0x1_0000_0001 as i64);
         assert_eq!(hts_lrand48(), low_seed_lrand);
     }
 

@@ -1,7 +1,5 @@
 include!("../bin_alloc_for_bins.rs");
 
-use std::ffi::CString;
-
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     if args.len() != 3 {
@@ -9,11 +7,10 @@ fn main() {
         std::process::exit(2);
     }
     unsafe {
-        let in_path = CString::new(args[1].as_str()).unwrap();
-        let mode_r = CString::new("rb").unwrap();
-        let out_path = CString::new(args[2].as_str()).unwrap();
-        let mode_w = CString::new("wc").unwrap();
-        let in_fp = htslib_rs::hts::hts_open(in_path.as_ptr(), mode_r.as_ptr());
+        // NUL-terminated byte buffers for the raw C-ABI hts_* callees.
+        let in_path: Vec<u8> = args[1].as_bytes().iter().copied().chain(std::iter::once(0)).collect();
+        let out_path: Vec<u8> = args[2].as_bytes().iter().copied().chain(std::iter::once(0)).collect();
+        let in_fp = htslib_rs::hts::hts_open(in_path.as_ptr().cast(), c"rb".as_ptr());
         if in_fp.is_null() {
             panic!("hts_open in");
         }
@@ -22,12 +19,11 @@ fn main() {
             panic!("sam_hdr_read");
         }
         // Open with explicit format options: no_ref (so we don't need a reference)
-        let mut fmt: htslib_rs::hts::htsFormat = std::mem::zeroed();
-        let fmt_str = CString::new("cram,no_ref").unwrap();
-        if htslib_rs::hts::hts_parse_format(&mut fmt, fmt_str.as_ptr()) < 0 {
+        let mut fmt: htslib_rs::hts::htsFormat = htslib_rs::hts::htsFormat::default();
+        if htslib_rs::hts::hts_parse_format(&mut fmt, c"cram,no_ref".as_ptr()) < 0 {
             panic!("parse_format");
         }
-        let out_fp = htslib_rs::hts::hts_open_format(out_path.as_ptr(), mode_w.as_ptr(), &fmt);
+        let out_fp = htslib_rs::hts::hts_open_format(out_path.as_ptr().cast(), c"wc".as_ptr(), &fmt);
         if out_fp.is_null() {
             panic!("open out");
         }

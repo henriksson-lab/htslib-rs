@@ -168,11 +168,11 @@ pub(crate) mod decode_pipeline {
             i += 1;
         }
     }
-    unsafe fn pthread_mutex_lock(m: *mut crate::htslib_rs::c_compat::pthread_mutex_t) {
-        crate::htslib_rs::c_compat::pthread_mutex_lock(m);
+    unsafe fn pthread_mutex_lock(m: *mut libc::pthread_mutex_t) {
+        libc::pthread_mutex_lock(m);
     }
-    unsafe fn pthread_mutex_unlock(m: *mut crate::htslib_rs::c_compat::pthread_mutex_t) {
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(m);
+    unsafe fn pthread_mutex_unlock(m: *mut libc::pthread_mutex_t) {
+        libc::pthread_mutex_unlock(m);
     }
     unsafe fn hseek(fp: *mut hFILE, off: i64, whence: i32) -> i64 {
         crate::htslib_rs::hfile::hseek(fp, off, whence)
@@ -193,8 +193,8 @@ pub(crate) mod decode_pipeline {
             let _ = ($func, $fmt $(, $arg)*);
             super::hts_log_cstr(
                 $sev,
-                std::ffi::CStr::from_ptr(($func) as *const std::os::raw::c_char).to_bytes(),
-                std::ffi::CStr::from_ptr(($fmt) as *const std::os::raw::c_char).to_bytes(),
+                std::ffi::CStr::from_ptr(($func) as *const i8).to_bytes(),
+                std::ffi::CStr::from_ptr(($fmt) as *const i8).to_bytes(),
             );
         }};
     }
@@ -609,11 +609,11 @@ pub(crate) mod decode_pipeline {
         pub own_pool: i32,
         pub pool: *mut (),
         pub rqueue: *mut (),
-        pub metrics_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
-        pub ref_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
-        pub range_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
+        pub metrics_lock: libc::pthread_mutex_t,
+        pub ref_lock: libc::pthread_mutex_t,
+        pub range_lock: libc::pthread_mutex_t,
         pub bl: *mut (),
-        pub bam_list_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
+        pub bam_list_lock: libc::pthread_mutex_t,
         pub job_pending: *mut (),
         pub ooc: i32,
         pub lossy_read_names: i32,
@@ -3148,7 +3148,7 @@ pub(crate) mod decode_pipeline {
                     b"SQ",
                     Some((
                         b"SN",
-                        std::ffi::CStr::from_ptr(rname.cast::<std::os::raw::c_char>()).to_bytes(),
+                        std::ffi::CStr::from_ptr(rname.cast::<i8>()).to_bytes(),
                     )),
                     b"M5",
                     &mut ks,

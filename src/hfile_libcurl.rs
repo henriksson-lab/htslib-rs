@@ -141,10 +141,10 @@ pub(crate) type HFileLibcurlRedirectCallback =
 
 type HFileOpenFn = unsafe extern "C" fn(*const u8, *const u8) -> *mut hFILE;
 type HFileIsRemoteFn = unsafe extern "C" fn(*const u8) -> i32;
-type HFileVOpenFn = unsafe extern "C" fn(
+type HFileVOpenFn = for<'a> unsafe fn(
     *const u8,
     *const u8,
-    *mut crate::htslib_rs::c_compat::__va_list_tag,
+    &'a [crate::htslib_rs::hfile::HFileOpt<'a>],
 ) -> *mut hFILE;
 
 #[repr(C)]
@@ -915,7 +915,7 @@ unsafe fn hfile_libcurl_renew_auth_token(
 
     *changed = 1;
     // `tok.path` is NUL-terminated; pass it straight to hopen at the boundary.
-    let auth_fp = hopen(tok.path.as_ptr().cast(), c"rR".as_ptr());
+    let auth_fp = hopen(tok.path.as_ptr().cast(), c"rR".as_ptr().cast());
     if auth_fp.is_null() {
         if *libc::__errno_location() != libc::ENOENT {
             tok.failed = true;
@@ -965,8 +965,10 @@ unsafe fn hfile_libcurl_add_auth_header(fp: &mut hFILE_libcurl) -> i32 {
     }
 
     // The guard is held for the whole critical section and released by RAII on
-    // every return path below.
-    let _guard = auth.lock.lock().unwrap_or_else(|e| e.into_inner());
+    // every return path below. Lock through a raw pointer to the Mutex so the
+    // guard's lifetime is not tied to the `&mut auth` reborrow used below.
+    let lock_ptr: *const std::sync::Mutex<()> = &auth.lock;
+    let _guard = (*lock_ptr).lock().unwrap_or_else(|e| e.into_inner());
     if hfile_libcurl_renew_auth_token(auth, &mut changed) < 0 {
         return -1;
     }
@@ -2106,132 +2108,98 @@ pub unsafe fn hfile_libcurl_c_1549_hopen_libcurl(
     hfile_libcurl_c_1313_libcurl_open(url, modes, std::ptr::null_mut())
 }
 
-unsafe fn hfile_libcurl_va_arg_word(args: *mut crate::htslib_rs::c_compat::__va_list_tag) -> usize {
-    let args = &mut *args;
-    if args.gp_offset <= 40 {
-        let p = args.reg_save_area.cast::<u8>().add(args.gp_offset as usize);
-        args.gp_offset += 8;
-        std::ptr::read_unaligned(p.cast::<usize>())
-    } else {
-        let p = args.overflow_arg_area.cast::<u8>();
-        args.overflow_arg_area = p.add(8).cast();
-        std::ptr::read_unaligned(p.cast::<usize>())
-    }
-}
-
 // original: parse_va_list (htslib/hfile_libcurl.c:1554)
-pub unsafe fn hfile_libcurl_c_1554_parse_va_list(
+// Applies a typed `&[HFileOpt]` slice to `headers`, 1:1 with the old
+// `argtype_bytes` branches of the synthetic-`va_list` decoder.
+pub unsafe fn hfile_libcurl_c_1554_apply_opts(
     headers: *mut HFileLibcurlHeaders,
-    args: *mut crate::htslib_rs::c_compat::__va_list_tag,
+    opts: &[crate::htslib_rs::hfile::HFileOpt],
 ) -> i32 {
-    if headers.is_null() || args.is_null() {
+    use crate::htslib_rs::hfile::HFileOpt;
+
+    if headers.is_null() {
         *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
 
-    loop {
-        let argtype = hfile_libcurl_va_arg_word(args) as *const u8;
-        if argtype.is_null() {
-            return 0;
+    unsafe fn append_one(headers: *mut HFileLibcurlHeaders, h: *const u8) -> i32 {
+        if hfile_libcurl_c_353_append_header(&mut (*headers).fixed, h, 1) < 0 {
+            return -1;
         }
-        let at_len = (0..).take_while(|&i| *argtype.add(i) != 0).count();
-        let argtype_bytes = std::slice::from_raw_parts(argtype, at_len);
+        let hlen = (0..).take_while(|&i| *h.add(i) != 0).count();
+        if hfile_libcurl_is_authorization(std::slice::from_raw_parts(h, hlen)) {
+            (*headers).auth_hdr_num = -1;
+        }
+        0
+    }
 
-        if argtype_bytes == b"httphdr:v" {
-            let mut hdr = hfile_libcurl_va_arg_word(args) as *mut *const u8;
-            if hdr.is_null() {
-                continue;
-            }
-            while !(*hdr).is_null() {
-                let h = *hdr;
-                if hfile_libcurl_c_353_append_header(&mut (*headers).fixed, h, 1) < 0 {
+    for opt in opts {
+        match *opt {
+            HFileOpt::HttpHeader(h) => {
+                let hdr = h.as_ptr();
+                if !hdr.is_null() && append_one(headers, hdr) < 0 {
                     return -1;
                 }
-                let hlen = (0..).take_while(|&i| *h.add(i) != 0).count();
-                if hfile_libcurl_is_authorization(std::slice::from_raw_parts(h, hlen)) {
-                    (*headers).auth_hdr_num = -1;
-                }
-                hdr = hdr.add(1);
             }
-        } else if argtype_bytes == b"httphdr:l" {
-            loop {
-                let hdr = hfile_libcurl_va_arg_word(args) as *const u8;
-                if hdr.is_null() {
-                    break;
-                }
-                if hfile_libcurl_c_353_append_header(&mut (*headers).fixed, hdr, 1) < 0 {
-                    return -1;
-                }
-                let hlen = (0..).take_while(|&i| *hdr.add(i) != 0).count();
-                if hfile_libcurl_is_authorization(std::slice::from_raw_parts(hdr, hlen)) {
-                    (*headers).auth_hdr_num = -1;
+            HFileOpt::HttpHeaders(hs) => {
+                for &hdr in hs {
+                    if hdr.is_null() {
+                        continue;
+                    }
+                    if append_one(headers, hdr) < 0 {
+                        return -1;
+                    }
                 }
             }
-        } else if argtype_bytes == b"httphdr" {
-            let hdr = hfile_libcurl_va_arg_word(args) as *const u8;
-            if !hdr.is_null() {
-                if hfile_libcurl_c_353_append_header(&mut (*headers).fixed, hdr, 1) < 0 {
-                    return -1;
-                }
-                let hlen = (0..).take_while(|&i| *hdr.add(i) != 0).count();
-                if hfile_libcurl_is_authorization(std::slice::from_raw_parts(hdr, hlen)) {
-                    (*headers).auth_hdr_num = -1;
-                }
+            HFileOpt::HttpHeaderCallback(callback) => {
+                (*headers).callback = if callback == 0 {
+                    None
+                } else {
+                    Some(std::mem::transmute::<usize, HFileLibcurlHttpHeaderCallback>(callback))
+                };
             }
-        } else if argtype_bytes == b"httphdr_callback" {
-            let callback = hfile_libcurl_va_arg_word(args);
-            (*headers).callback = if callback == 0 {
-                None
-            } else {
-                Some(std::mem::transmute::<usize, HFileLibcurlHttpHeaderCallback>(callback))
-            };
-        } else if argtype_bytes == b"httphdr_callback_data" {
-            (*headers).callback_data = hfile_libcurl_va_arg_word(args) as *mut c_void;
-        } else if argtype_bytes == b"va_list" {
-            let args2 =
-                hfile_libcurl_va_arg_word(args) as *mut crate::htslib_rs::c_compat::__va_list_tag;
-            if !args2.is_null() && hfile_libcurl_c_1554_parse_va_list(headers, args2) < 0 {
-                return -1;
+            HFileOpt::HttpHeaderCallbackData(p) => {
+                (*headers).callback_data = p.cast::<c_void>();
             }
-        } else if argtype_bytes == b"auth_token_enabled" {
-            let flag = hfile_libcurl_va_arg_word(args) as *const u8;
-            if !flag.is_null() {
-                let flen = (0..).take_while(|&i| *flag.add(i) != 0).count();
-                if std::slice::from_raw_parts(flag, flen) == b"false" {
+            HFileOpt::AuthTokenEnabled(enabled) => {
+                if !enabled {
                     (*headers).auth_hdr_num = -3;
                 }
             }
-        } else if argtype_bytes == b"redirect_callback" {
-            let callback = hfile_libcurl_va_arg_word(args);
-            (*headers).redirect = if callback == 0 {
-                None
-            } else {
-                Some(std::mem::transmute::<usize, HFileLibcurlRedirectCallback>(
-                    callback,
-                ))
-            };
-        } else if argtype_bytes == b"redirect_callback_data" {
-            (*headers).redirect_data = hfile_libcurl_va_arg_word(args) as *mut c_void;
-        } else if argtype_bytes == b"http_response_ptr" {
-            (*headers).http_response_ptr =
-                NonNull::new(hfile_libcurl_va_arg_word(args) as *mut i64);
-        } else if argtype_bytes == b"fail_on_error" {
-            (*headers).fail_on_error = hfile_libcurl_va_arg_word(args) as i32;
-        } else {
-            *libc::__errno_location() = libc::EINVAL;
-            return -1;
+            HFileOpt::RedirectCallback(callback) => {
+                (*headers).redirect = if callback == 0 {
+                    None
+                } else {
+                    Some(std::mem::transmute::<usize, HFileLibcurlRedirectCallback>(
+                        callback,
+                    ))
+                };
+            }
+            HFileOpt::RedirectCallbackData(p) => {
+                (*headers).redirect_data = p.cast::<c_void>();
+            }
+            HFileOpt::HttpResponsePtr(p) => {
+                (*headers).http_response_ptr = NonNull::new(p);
+            }
+            HFileOpt::FailOnError(v) => {
+                (*headers).fail_on_error = v;
+            }
+            HFileOpt::MemBuffer(..) | HFileOpt::Parent(_) => {
+                // Not consumed by the libcurl backend; ignore.
+            }
         }
     }
+    0
 }
 
 // original: vhopen_libcurl (htslib/hfile_libcurl.c:1664)
-pub unsafe extern "C" fn hfile_libcurl_c_1664_vhopen_libcurl(
+pub unsafe fn hfile_libcurl_c_1664_vhopen_libcurl(
     url: *const u8,
     modes: *const u8,
-    args: *mut crate::htslib_rs::c_compat::__va_list_tag,
+    opts: &[crate::htslib_rs::hfile::HFileOpt],
 ) -> *mut hFILE {
     let mut headers = HFileLibcurlHeaders::default();
-    let fp = if hfile_libcurl_c_1554_parse_va_list(&mut headers, args) == 0 {
+    let fp = if hfile_libcurl_c_1554_apply_opts(&mut headers, opts) == 0 {
         hfile_libcurl_c_1313_libcurl_open(url, modes, &mut headers)
     } else {
         std::ptr::null_mut()
@@ -2359,7 +2327,7 @@ pub unsafe fn hfile_libcurl_c_1679_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> i3
             c"ftps".as_ptr(),
         ] {
             hfile_add_scheme_handler(
-                scheme,
+                scheme.cast(),
                 (&HANDLER as *const HFileSchemeHandlerLayout).cast::<hFILE_scheme_handler>(),
             );
         }
@@ -2385,53 +2353,30 @@ mod tests {
         0
     }
 
-    unsafe fn parse_words(headers: *mut HFileLibcurlHeaders, words: &[usize]) -> i32 {
-        let mut reg_save = [0usize; 6];
-        let mut overflow = vec![0usize; words.len().saturating_sub(reg_save.len())];
-        for (i, word) in words.iter().copied().enumerate() {
-            if i < reg_save.len() {
-                reg_save[i] = word;
-            } else {
-                overflow[i - reg_save.len()] = word;
-            }
-        }
-        let mut args = crate::htslib_rs::c_compat::__va_list_tag {
-            gp_offset: 0,
-            fp_offset: 48,
-            overflow_arg_area: overflow.as_mut_ptr().cast(),
-            reg_save_area: reg_save.as_mut_ptr().cast(),
-        };
-        hfile_libcurl_c_1554_parse_va_list(headers, &mut args)
-    }
-
     #[test]
     fn libcurl_parse_va_list_decodes_headers_and_options() {
+        use crate::htslib_rs::hfile::HFileOpt;
         unsafe {
             let mut headers = HFileLibcurlHeaders::default();
             let response = 0_i64;
             let mut callback_data_marker = ();
             let callback_data = (&mut callback_data_marker as *mut ()).cast::<c_void>();
-            let words = [
-                c"httphdr".as_ptr() as usize,
-                c"Authorization: Bearer token".as_ptr() as usize,
-                c"httphdr:l".as_ptr() as usize,
-                c"X-One: 1".as_ptr() as usize,
-                c"X-Two: 2".as_ptr() as usize,
-                0,
-                c"httphdr_callback".as_ptr() as usize,
-                test_header_callback as usize,
-                c"httphdr_callback_data".as_ptr() as usize,
-                callback_data as usize,
-                c"http_response_ptr".as_ptr() as usize,
-                (&response as *const i64).cast_mut() as usize,
-                c"fail_on_error".as_ptr() as usize,
-                0,
-                c"auth_token_enabled".as_ptr() as usize,
-                c"false".as_ptr() as usize,
-                0,
+            // "httphdr:l" with its NULL terminator collapses to a header slice.
+            let hdr_list = [
+                c"X-One: 1".as_ptr() as *const u8,
+                c"X-Two: 2".as_ptr() as *const u8,
+            ];
+            let opts = [
+                HFileOpt::HttpHeader(c"Authorization: Bearer token".to_bytes_with_nul()),
+                HFileOpt::HttpHeaders(&hdr_list),
+                HFileOpt::HttpHeaderCallback(test_header_callback as usize),
+                HFileOpt::HttpHeaderCallbackData(callback_data.cast::<()>()),
+                HFileOpt::HttpResponsePtr((&response as *const i64).cast_mut()),
+                HFileOpt::FailOnError(0),
+                HFileOpt::AuthTokenEnabled(false),
             ];
 
-            assert_eq!(parse_words(&mut headers, &words), 0);
+            assert_eq!(hfile_libcurl_c_1554_apply_opts(&mut headers, &opts), 0);
             assert_eq!(headers.fixed.len(), 3);
             assert_eq!(
                 &headers.fixed.values[0][..headers.fixed.values[0].len() - 1],
@@ -2460,36 +2405,21 @@ mod tests {
 
     #[test]
     fn libcurl_parse_va_list_decodes_vector_and_nested_lists() {
+        use crate::htslib_rs::hfile::HFileOpt;
         unsafe {
             let mut headers = HFileLibcurlHeaders::default();
+            // The old "httphdr:v" vector (drop the trailing NULL sentinel).
             let vector = [
-                c"X-Vec: 1".as_ptr(),
-                c"Authorization: vector".as_ptr(),
-                std::ptr::null(),
+                c"X-Vec: 1".as_ptr() as *const u8,
+                c"Authorization: vector".as_ptr() as *const u8,
             ];
-            let nested_words = [
-                c"httphdr".as_ptr() as usize,
-                c"X-Nested: 1".as_ptr() as usize,
-                0,
-            ];
-            let mut nested_reg = [0usize; 6];
-            nested_reg[..nested_words.len()].copy_from_slice(&nested_words);
-            let mut nested_overflow = [0usize; 1];
-            let mut nested = crate::htslib_rs::c_compat::__va_list_tag {
-                gp_offset: 0,
-                fp_offset: 48,
-                overflow_arg_area: nested_overflow.as_mut_ptr().cast(),
-                reg_save_area: nested_reg.as_mut_ptr().cast(),
-            };
-            let words = [
-                c"httphdr:v".as_ptr() as usize,
-                vector.as_ptr() as usize,
-                c"va_list".as_ptr() as usize,
-                (&mut nested as *mut crate::htslib_rs::c_compat::__va_list_tag) as usize,
-                0,
+            // The old nested `va_list` flattens into the same opts slice.
+            let opts = [
+                HFileOpt::HttpHeaders(&vector),
+                HFileOpt::HttpHeader(c"X-Nested: 1".to_bytes_with_nul()),
             ];
 
-            assert_eq!(parse_words(&mut headers, &words), 0);
+            assert_eq!(hfile_libcurl_c_1554_apply_opts(&mut headers, &opts), 0);
             assert_eq!(headers.fixed.len(), 3);
             assert_eq!(
                 &headers.fixed.values[0][..headers.fixed.values[0].len() - 1],
@@ -2502,22 +2432,6 @@ mod tests {
             );
 
             hfile_libcurl_c_372_free_headers(&mut headers.fixed, 1);
-        }
-    }
-
-    #[test]
-    fn libcurl_parse_va_list_rejects_unknown_option() {
-        unsafe {
-            let mut headers = HFileLibcurlHeaders::default();
-            *libc::__errno_location() = 0;
-            assert_eq!(
-                parse_words(&mut headers, &[c"unknown".as_ptr() as usize, 0]),
-                -1
-            );
-            assert_eq!(
-                *libc::__errno_location(),
-                libc::EINVAL
-            );
         }
     }
 

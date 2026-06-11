@@ -38,7 +38,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //! `cram_cram_io_c_5692_cram_set_voption`.
 //!
 //! Every production call site of `cram_set_option` in `src/hts.rs` passes
-//! exactly one trailing argument (either a `c_int` or a `*mut`-shaped
+//! exactly one trailing argument (either an `i32` or a `*mut`-shaped
 //! pointer), matching the call-shape used by the C HTSlib code paths that
 //! route here. We therefore provide two thin shims — `cram_set_option_int`
 //! and `cram_set_option_ptr` — each of which synthesises a single-word
@@ -55,8 +55,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //! (`src/cram.rs:1474-1492`), which honours this same layout, so a single
 //! word in `reg_save_area[0]` is exactly what it expects for the single
 //! `va_arg(args, int)` / `va_arg(args, T*)` consumed per supported option.
-
-use std::ffi::{c_int, c_void};
 
 use crate::htslib_rs::cram::__va_list_tag;
 use crate::htslib_rs::cram::cram_cram_io_c_5692_cram_set_voption;
@@ -76,7 +74,7 @@ use crate::htslib_rs::hts::{cram_fd, hts_fmt_option};
 /// `cram_set_voption`. `opt` must name an option whose variadic argument is
 /// an integer, and the native callee must not retain the synthetic va_list
 /// beyond this call.
-pub unsafe fn cram_set_option_int(fd: &mut cram_fd, opt: hts_fmt_option, val: c_int) -> c_int {
+pub unsafe fn cram_set_option_int(fd: &mut cram_fd, opt: hts_fmt_option, val: i32) -> i32 {
     // `int` widens to `usize` via a zero-extending cast through the unsigned
     // 32-bit value, matching how the SysV ABI promotes int → 8-byte slot in
     // the GP save area (which is what `cram_voption_va_arg_word` reads).
@@ -115,12 +113,12 @@ pub unsafe fn cram_set_option_int(fd: &mut cram_fd, opt: hts_fmt_option, val: c_
 pub unsafe fn cram_set_option_ptr(
     fd: &mut cram_fd,
     opt: hts_fmt_option,
-    val: Option<&c_void>,
-) -> c_int {
+    val: Option<&()>,
+) -> i32 {
     // A null payload maps to a zero word; a present reference yields its
     // address. The single pointer-sized arg occupies GP slot 0, mirroring the
     // integer shim: nothing spills, so `overflow_arg_area` is never read.
-    let word = val.map_or(0, |val| val as *const c_void as usize);
+    let word = val.map_or(0, |val| val as *const () as usize);
     let mut reg_save = [word, 0, 0, 0, 0, 0];
     let mut overflow: [usize; 0] = [];
     let mut va = __va_list_tag {

@@ -13,7 +13,8 @@ struct QTaskUnorderedData {
 
 #[repr(C)]
 struct QTaskUnorderedDataCache {
-    lock: crate::htslib_rs::c_compat::pthread_mutex_t,
+    // RECONVERGE: shared with thread pool — pthread mutex kept as libc type
+    lock: libc::pthread_mutex_t,
     list: *mut QTaskUnorderedData,
 }
 
@@ -38,7 +39,8 @@ pub unsafe extern "C" fn samples_qtask_unordered_c_76_getbamstorage(
     if bamcache.is_null() || bases.is_null() {
         return std::ptr::null_mut();
     }
-    if crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*bamcache).lock) != 0 {
+    // RECONVERGE: shared thread-pool mutex — libc pthread call
+    if libc::pthread_mutex_lock(&mut (*bamcache).lock) != 0 {
         return std::ptr::null_mut();
     }
 
@@ -66,7 +68,8 @@ pub unsafe extern "C" fn samples_qtask_unordered_c_76_getbamstorage(
         }
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*bamcache).lock);
+    // RECONVERGE: shared thread-pool mutex — libc pthread call
+    libc::pthread_mutex_unlock(&mut (*bamcache).lock);
     bamdata.cast()
 }
 
@@ -107,14 +110,15 @@ pub unsafe extern "C" fn samples_qtask_unordered_c_148_thread_unordered_proc(
         }
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*(*bamdata).cache).lock);
+    // RECONVERGE: shared thread-pool mutex — libc pthread calls
+    libc::pthread_mutex_lock(&mut (*(*bamdata).cache).lock);
     let bases = (*bamdata).bases.cast::<u64>();
     for (i, count) in counts.iter().enumerate() {
         *bases.add(i) += *count;
     }
     (*bamdata).next = (*(*bamdata).cache).list;
     (*(*bamdata).cache).list = bamdata;
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*(*bamdata).cache).lock);
+    libc::pthread_mutex_unlock(&mut (*(*bamdata).cache).lock);
 
     std::ptr::null_mut()
 }
@@ -135,7 +139,8 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: i32, argv: *mut *mut u8) 
     let mut bamdata: *mut QTaskUnorderedData = std::ptr::null_mut();
     let mut gccount = [0_u64; 16];
     let mut bamcache: QTaskUnorderedDataCache = std::mem::zeroed();
-    crate::htslib_rs::c_compat::pthread_mutex_init(&mut bamcache.lock, std::ptr::null());
+    // RECONVERGE: shared thread-pool mutex — libc pthread call
+    libc::pthread_mutex_init(&mut bamcache.lock, std::ptr::null());
 
     if argc != 3 && argc != 4 {
         samples_qtask_unordered_c_62_print_usage();
@@ -270,14 +275,15 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: i32, argv: *mut *mut u8) 
         samples_qtask_unordered_c_128_cleanup_bamstorage(bamdata.cast());
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut bamcache.lock);
+    // RECONVERGE: shared thread-pool mutex — libc pthread calls
+    libc::pthread_mutex_lock(&mut bamcache.lock);
     while !bamcache.list.is_null() {
         let tmp = bamcache.list;
         bamcache.list = (*bamcache.list).next;
         samples_qtask_unordered_c_128_cleanup_bamstorage(tmp.cast());
     }
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut bamcache.lock);
-    crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut bamcache.lock);
+    libc::pthread_mutex_unlock(&mut bamcache.lock);
+    libc::pthread_mutex_destroy(&mut bamcache.lock);
 
     if !pool.is_null() {
         thread_pool::hts_tpool_destroy(pool);
