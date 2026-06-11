@@ -1,8 +1,6 @@
 // Functions translated from htslib/vcf_sweep.c.
 // Extracted from src/synced_bcf_reader.rs (2026-06-01).
 
-use std::ffi::c_int;
-
 use crate::htslib_rs::bgzf::{bgzf_index_build_init, bgzf_useek};
 use crate::htslib_rs::hfile::hseek;
 use crate::htslib_rs::hts::{hts_close, hts_get_bgzfp, hts_open};
@@ -15,10 +13,10 @@ pub unsafe fn bcf_sweep_init(fname: &[u8]) -> Option<Box<bcf_sweep_t>> {
     if fname.contains(&0) {
         return None;
     }
-    let mut fname = fname.to_vec();
-    fname.push(0);
 
-    let file = hts_open(fname.as_ptr().cast(), c"r".as_ptr());
+    // Re-NUL-terminate at the libhts boundary.
+    let fname_c = std::ffi::CString::new(fname).unwrap();
+    let file = hts_open(fname_c.as_ptr(), c"r".as_ptr());
     if file.is_null() {
         return None;
     }
@@ -40,7 +38,7 @@ pub unsafe fn bcf_sweep_init(fname: &[u8]) -> Option<Box<bcf_sweep_t>> {
         fp,
         direction: SW_FWD,
         block_size: 1024 * 1024 * 3,
-        rec: vec![std::mem::zeroed::<bcf1_t>()],
+        rec: vec![bcf1_t::default()],
         nrec: 0,
         lrid: 0,
         lpos: 0,
@@ -64,7 +62,7 @@ pub unsafe fn bcf_sweep_destroy(sw: Option<Box<bcf_sweep_t>>) {
 unsafe fn sweep_seek(sw: &mut bcf_sweep_t, direction: i32) {
     sw.direction = direction;
     if direction == SW_FWD {
-        if let Some(offset) = index_slice(sw).first().copied() {
+        if let Some(&offset) = sw.idx.first() {
             sweep_useek(sw, offset as i64, 0);
         }
     } else {
@@ -79,28 +77,51 @@ unsafe fn sweep_fill_buffer(sw: &mut bcf_sweep_t) {
     }
     sw.iidx -= 1;
 
-    let ret = sweep_useek(sw, index_slice(sw)[sw.iidx as usize] as i64, 0);
+    let ret = sweep_useek(sw, sw.idx[sw.iidx] as i64, 0);
     assert!(ret == 0);
 
     sw.nrec = 0;
     loop {
-        sweep_grow_records(sw, sw.nrec + 1);
-        let rec = sw.rec.as_mut_ptr().add(sw.nrec);
+        if sw.rec.len() < sw.nrec + 1 {
+            sw.rec.resize_with(sw.nrec + 1, bcf1_t::default);
+        }
+        let rec = &mut sw.rec[sw.nrec];
         if bcf_read1(sw.file, sw.hdr, rec) != 0 {
             break;
         }
         bcf_unpack(rec, BCF_UN_STR as i32);
 
         // if not in the last block, stop at the saved record
-        if sw.iidx + 1 < sw.idx.len() && sweep_rec_equal(sw, &*rec) {
-            break;
+        if sw.iidx + 1 < sw.idx.len() {
+            let rec_snapshot = (
+                sw.rec[sw.nrec].rid,
+                sw.rec[sw.nrec].pos as i32,
+                sw.rec[sw.nrec].n_allele() as i32,
+                sweep_alleles(&sw.rec[sw.nrec]),
+            );
+            if sw.lrid == rec_snapshot.0
+                && sw.lpos == rec_snapshot.1
+                && sw.lnals == rec_snapshot.2
+                && sw.lals.as_slice() == rec_snapshot.3.as_slice()
+            {
+                break;
+            }
         }
 
         sw.nrec += 1;
-        sweep_grow_records(sw, sw.nrec + 1);
+        if sw.rec.len() < sw.nrec + 1 {
+            sw.rec.resize_with(sw.nrec + 1, bcf1_t::default);
+        }
     }
-    let saved = sweep_rec_snapshot(sw.rec.first().expect("sweep record buffer"));
-    sweep_store_saved_rec(sw, saved);
+    let first = sw.rec.first().expect("sweep record buffer");
+    let lrid = first.rid;
+    let lpos = first.pos as i32;
+    let lnals = first.n_allele() as i32;
+    let lals = sweep_alleles(first);
+    sw.lrid = lrid;
+    sw.lpos = lpos;
+    sw.lnals = lnals;
+    sw.lals = lals;
 }
 
 unsafe fn sweep_tell(sw: &mut bcf_sweep_t) -> i64 {
@@ -117,65 +138,21 @@ unsafe fn sweep_useek(sw: &mut bcf_sweep_t, uoffset: i64, where_: i32) -> i32 {
     }
 }
 
-unsafe fn sweep_grow_records(sw: &mut bcf_sweep_t, n: usize) {
-    if n <= sw.rec.len() {
-        return;
+unsafe fn sweep_alleles(rec: &bcf1_t) -> Vec<u8> {
+    // The C original returned a slice of the packed `als` buffer spanning
+    // `allele[0]` through the last byte of `allele[n-1]` (the inter-allele
+    // NUL separators included, the final allele's terminating NUL excluded).
+    // With owned alleles, reconstruct that comparable byte sequence by
+    // joining each allele with a single NUL separator.
+    let mut out = Vec::new();
+    let n = rec.n_allele() as usize;
+    for i in 0..n {
+        if i != 0 {
+            out.push(0);
+        }
+        out.extend_from_slice(&rec.d.allele[i]);
     }
-
-    sw.rec.resize_with(n, || std::mem::zeroed::<bcf1_t>());
-}
-
-unsafe fn sweep_rec_equal(sw: &bcf_sweep_t, rec: &bcf1_t) -> bool {
-    if sw.lrid != rec.rid {
-        return false;
-    }
-    if sw.lpos != rec.pos as i32 {
-        return false;
-    }
-    if sw.lnals != rec.n_allele() as i32 {
-        return false;
-    }
-
-    let alleles = sweep_alleles(rec);
-    if sw.lals.len() != alleles.len() {
-        return false;
-    }
-    sw.lals == alleles
-}
-
-unsafe fn sweep_rec_save(sw: &mut bcf_sweep_t, rec: &bcf1_t) {
-    let saved = sweep_rec_snapshot(rec);
-    sweep_store_saved_rec(sw, saved);
-}
-
-fn sweep_store_saved_rec(sw: &mut bcf_sweep_t, saved: (c_int, c_int, c_int, Vec<u8>)) {
-    let (lrid, lpos, lnals, alleles) = saved;
-    sw.lrid = lrid;
-    sw.lpos = lpos;
-    sw.lnals = lnals;
-    sw.lals.clear();
-    sw.lals.extend_from_slice(&alleles);
-}
-
-unsafe fn sweep_rec_snapshot(rec: &bcf1_t) -> (c_int, c_int, c_int, Vec<u8>) {
-    let alleles = sweep_alleles(rec);
-    (
-        rec.rid,
-        rec.pos as i32,
-        rec.n_allele() as i32,
-        alleles.to_vec(),
-    )
-}
-
-unsafe fn sweep_alleles(rec: &bcf1_t) -> &[u8] {
-    let allele0 = *rec.d.allele;
-    let mut t = *rec.d.allele.add(rec.n_allele() as usize - 1);
-    let mut len = (t as isize - allele0 as isize) as usize + 1;
-    while *t != 0 {
-        t = t.add(1);
-        len += 1;
-    }
-    std::slice::from_raw_parts(allele0.cast::<u8>(), len)
+    out
 }
 
 pub unsafe fn bcf_sweep_fwd(sw: &mut bcf_sweep_t) -> Option<&mut bcf1_t> {
@@ -186,8 +163,7 @@ pub unsafe fn bcf_sweep_fwd(sw: &mut bcf_sweep_t) -> Option<&mut bcf1_t> {
 
     let pos = sweep_tell(sw);
 
-    let rec = sw.rec.as_mut_ptr();
-    let ret = bcf_read1(sw.file, sw.hdr, rec);
+    let ret = bcf_read1(sw.file, sw.hdr, &mut sw.rec[0]);
 
     if ret != 0 {
         // last record, get ready for sweeping backwards
@@ -205,7 +181,7 @@ pub unsafe fn bcf_sweep_fwd(sw: &mut bcf_sweep_t) -> Option<&mut bcf1_t> {
     {
         sw.idx.push(pos as u64);
     }
-    rec.as_mut()
+    Some(&mut sw.rec[0])
 }
 
 pub unsafe fn bcf_sweep_bwd(sw: &mut bcf_sweep_t) -> Option<&mut bcf1_t> {
@@ -220,14 +196,10 @@ pub unsafe fn bcf_sweep_bwd(sw: &mut bcf_sweep_t) -> Option<&mut bcf1_t> {
         return None;
     }
     sw.nrec -= 1;
-    let record_index = sw.nrec as usize;
+    let record_index = sw.nrec;
     sw.rec.get_mut(record_index)
 }
 
 pub unsafe fn bcf_sweep_hdr(sw: &mut bcf_sweep_t) -> Option<&mut bcf_hdr_t> {
     sw.hdr.as_mut()
-}
-
-unsafe fn index_slice(sw: &bcf_sweep_t) -> &[u64] {
-    &sw.idx
 }

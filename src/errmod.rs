@@ -10,7 +10,6 @@ pub struct errmod_t {
     pub lhet: Vec<f64>,
 }
 
-#[repr(C)]
 struct call_aux_t {
     fsum: [f64; 16],
     bsum: [f64; 16],
@@ -227,8 +226,8 @@ mod tests {
         [next as u16, (next >> 16) as u16, (next >> 32) as u16]
     }
 
-    fn rand48_lrand(seed: [u16; 3]) -> libc::c_long {
-        ((seed[2] as libc::c_long) << 15) + ((seed[1] as libc::c_long) >> 1)
+    fn rand48_lrand(seed: [u16; 3]) -> i64 {
+        ((seed[2] as i64) << 15) + ((seed[1] as i64) >> 1)
     }
 
     #[test]

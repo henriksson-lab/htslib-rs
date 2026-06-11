@@ -21,14 +21,26 @@ pub unsafe fn stderr() -> *mut libc::FILE {
     crate::htslib_rs::c_compat::stderr.cast()
 }
 
+/// Wrapper over POSIX `getopt`. `optstring` is taken as a byte slice (no trailing
+/// NUL required); the single C boundary call still wants a NUL-terminated string,
+/// so build one locally just for that call.
 #[inline]
-pub unsafe fn getopt_(argc: c_int, argv: *mut *mut c_char, optstring: *const c_char) -> c_int {
-    getopt(argc, argv, optstring)
+pub unsafe fn getopt_(argc: c_int, argv: *mut *mut c_char, optstring: &[u8]) -> c_int {
+    let mut optstring_c = optstring.to_vec();
+    optstring_c.push(0);
+    getopt(argc, argv, optstring_c.as_ptr().cast())
 }
 
+/// Returns the current `optarg` value as a byte slice (without the trailing NUL),
+/// or `None` when `optarg` is null.
 #[inline]
-pub unsafe fn optarg() -> *const c_char {
-    C_OPTARG
+pub unsafe fn optarg() -> Option<&'static [u8]> {
+    if C_OPTARG.is_null() {
+        None
+    } else {
+        let len = libc::strlen(C_OPTARG);
+        Some(std::slice::from_raw_parts(C_OPTARG.cast::<u8>(), len))
+    }
 }
 
 #[inline]

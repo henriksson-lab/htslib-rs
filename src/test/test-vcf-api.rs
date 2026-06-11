@@ -152,13 +152,18 @@ pub unsafe fn test_test_vcf_api_c_51_check_alleles(
         return -1;
     }
     for i in 0..num {
-        if libc::strcmp(*alleles.add(i as usize), *(*rec).d.allele.add(i as usize)) != 0 {
+        let expected = std::ffi::CStr::from_ptr(*alleles.add(i as usize)).to_bytes();
+        let d = &(*rec).d;
+        if expected != &d.allele[i as usize][..] {
+            // Build NUL-terminated temp of the owned allele bytes for the %s print.
+            let mut got = d.allele[i as usize].clone();
+            got.push(0);
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"Mismatch for allele %d : expected '%s' got '%s'\n".as_ptr(),
                 i,
                 *alleles.add(i as usize),
-                *(*rec).d.allele.add(i as usize),
+                got.as_ptr().cast::<c_char>(),
             );
             return -1;
         }
@@ -209,10 +214,15 @@ pub unsafe fn test_test_vcf_api_c_71_test_update_alleles(
         3
     ));
     // Ensure it works even if one of the alleles points into the
-    // existing structure
-    alleles4[1] = *(*rec).d.allele.add(1);
+    // existing structure. The owned d.allele[1] bytes have no NUL, so build a
+    // NUL-terminated temp that outlives the bcf_update_alleles FFI call.
+    let alias_d = &(*rec).d;
+    let mut alias1 = alias_d.allele[1].clone();
+    alias1.push(0);
+    alleles4[1] = alias1.as_ptr().cast::<c_char>();
     check0!(vcf::bcf_update_alleles(hdr, rec, alleles4.as_mut_ptr(), 3));
     alleles4[1] = alleles3[1]; // Will have been clobbered by the update
+    drop(alias1);
     check0!(test_test_vcf_api_c_51_check_alleles(
         rec,
         alleles4.as_mut_ptr(),
@@ -222,16 +232,33 @@ pub unsafe fn test_test_vcf_api_c_71_test_update_alleles(
     // rec->d.allele is used to define the input array and the
     // order of the entries is changed.  The result of this should
     // be the same as alleles2.
-    let tmp = (*(*rec).d.allele.add(0)).add(libc::strlen(*(*rec).d.allele.add(0)) - 4);
-    *(*rec).d.allele.add(0) =
-        (*(*rec).d.allele.add(2)).add(libc::strlen(*(*rec).d.allele.add(2)) - 1);
-    *(*rec).d.allele.add(2) = tmp;
+    // Original packed-buffer pointer arithmetic:
+    //   tmp       = tail-4 bytes of old allele[0]  (== "CATG")
+    //   allele[0] = tail-1 byte  of old allele[2]  (== "C")
+    //   allele[2] = tmp                            (== "CATG")
+    //   allele[1] unchanged                        (== "TGCA")
+    // The reordered set therefore equals alleles2 = {"C","TGCA","CATG"}.
+    // Reproduce on the owned bytes, then pass through the FFI as NUL temps.
+    let d = &mut (*rec).d;
+    let tmp = d.allele[0][d.allele[0].len() - 4..].to_vec();
+    let new0 = d.allele[2][d.allele[2].len() - 1..].to_vec();
+    d.allele[0] = new0;
+    d.allele[2] = tmp;
+    let mut reordered: Vec<Vec<u8>> = Vec::new();
+    for a in &d.allele {
+        let mut t = a.clone();
+        t.push(0);
+        reordered.push(t);
+    }
+    let mut reordered_ptrs: Vec<*const c_char> =
+        reordered.iter().map(|t| t.as_ptr().cast::<c_char>()).collect();
     check0!(vcf::bcf_update_alleles(
         hdr,
         rec,
-        (*rec).d.allele.cast::<*const c_char>(),
+        reordered_ptrs.as_mut_ptr(),
         3
     ));
+    drop(reordered);
     check0!(test_test_vcf_api_c_51_check_alleles(
         rec,
         alleles2.as_mut_ptr(),
@@ -259,11 +286,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
     check0!(vcf::bcf_update_alleles(hdr, rec, ptr::null_mut(), 0));
 
     // Create VCF header
-    let str_: kstring_t = kstring_t {
-        l: 0,
-        m: 0,
-        s: ptr::null_mut(),
-    };
+    let str_: kstring_t = kstring_t { data: Vec::new() };
     check0!(vcf::bcf_hdr_append(hdr, c"##fileDate=20090805".as_ptr()));
     check0!(vcf::bcf_hdr_append(
         hdr,
@@ -728,7 +751,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut c_char) {
     libc::free(tmpfa.cast());
 
     // Clean
-    libc::free(str_.s.cast());
+    drop(str_);
     vcf::bcf_destroy(rec);
     vcf::bcf_hdr_destroy(hdr);
     let ret = hts_close(fp);
@@ -1070,17 +1093,13 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
         libc::exit(1);
     }
 
-    let mut line = kstring_t {
-        l: 0,
-        m: 0,
-        s: ptr::null_mut(),
-    };
+    let mut line = kstring_t { data: Vec::new() };
     while hts_getline(gz_in, KS_SEP_LINE, &mut line) > 0 {
         kputc(b'\n' as c_int, &mut line);
         libc::fwrite(
-            line.s.cast(),
+            line.data.as_ptr().cast(),
             1,
-            line.l,
+            line.data.len(),
             crate::htslib_rs::c_compat::stdout.cast(),
         );
     }
@@ -1095,7 +1114,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut c_char) {
         );
         libc::exit(ret);
     }
-    libc::free(line.s.cast());
+    drop(line);
     libc::free(gz_fname.cast());
 }
 
@@ -2005,18 +2024,23 @@ pub unsafe fn test_test_vcf_api_c_909_read_vcf_line(
     line: *const c_char,
     hdr: *mut vcf::bcf_hdr_t,
     rec: *mut vcf::bcf1_t,
-    kstr: *mut kstring_t,
+    kstr: &mut kstring_t,
 ) -> c_int {
-    if kputsn(line, libc::strlen(line), ks_clear(kstr)) < 0 {
+    let line_len = libc::strlen(line);
+    let line_slice = std::slice::from_raw_parts(line.cast::<u8>(), line_len);
+    ks_clear(kstr);
+    if kputsn(line_slice, line_len, kstr) < 0 {
         return -1;
     }
 
     let ret = vcf::vcf_parse(kstr, hdr, rec);
     if ret != 0 {
+        let mut kstr_cstr = ks_c_str(kstr).to_vec();
+        kstr_cstr.push(0);
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"vcf_parse(\"%s\", hdr, rec) returned %d\n".as_ptr(),
-            ks_c_str(kstr),
+            kstr_cstr.as_ptr().cast::<c_char>(),
             ret,
         );
     }
@@ -2024,13 +2048,12 @@ pub unsafe fn test_test_vcf_api_c_909_read_vcf_line(
 }
 
 // original: chomp (htslib/test/test-vcf-api.c:924)
-pub unsafe fn test_test_vcf_api_c_924_chomp(kstr: *mut kstring_t) {
-    if (*kstr).l < 1 {
+pub unsafe fn test_test_vcf_api_c_924_chomp(kstr: &mut kstring_t) {
+    if kstr.data.len() < 1 {
         return;
     }
-    if *(*kstr).s.add((*kstr).l - 1) == b'\n' as c_char {
-        (*kstr).l -= 1;
-        *(*kstr).s.add((*kstr).l) = b'\0' as c_char;
+    if kstr.data[kstr.data.len() - 1] == b'\n' {
+        kstr.data.pop();
     }
 }
 
@@ -2101,11 +2124,7 @@ pub unsafe fn test_test_vcf_api_c_933_test_bcf_remove_allele_set() {
         c"5	115000	.	C	.	.	PASS	.".as_ptr(),
     ];
 
-    let mut kstr = kstring_t {
-        l: 0,
-        m: 0,
-        s: ptr::null_mut(),
-    };
+    let mut kstr = kstring_t { data: Vec::new() };
 
     let hdr = vcf::bcf_hdr_init(c"r".as_ptr());
     let rec = vcf::bcf_init();
@@ -2138,21 +2157,18 @@ pub unsafe fn test_test_vcf_api_c_933_test_bcf_remove_allele_set() {
         } else {
             kbs_insert(&mut *rm_set, 2);
         }
-        check0!(vcf::bcf_remove_allele_set(
-            hdr,
-            rec,
-            rm_set
-                .cast::<crate::htslib_rs::hts::kbitset_t>()
-                .cast_const()
-        ));
-        check0!(vcf::vcf_format(hdr, rec, ks_clear(&mut kstr)));
+        check0!(vcf::bcf_remove_allele_set(&*hdr, &mut *rec, &*rm_set));
+        ks_clear(&mut kstr);
+        check0!(vcf::vcf_format(hdr, rec, &mut kstr));
         test_test_vcf_api_c_924_chomp(&mut kstr);
-        if libc::strcmp(expected[i], ks_c_str(&mut kstr)) != 0 {
+        let mut kstr_cstr = ks_c_str(&kstr).to_vec();
+        kstr_cstr.push(0);
+        if libc::strcmp(expected[i], kstr_cstr.as_ptr().cast::<c_char>()) != 0 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"bcf_remove_allele_set() output differs\nExpected:\n%s\nGot:\n%s\n".as_ptr(),
                 expected[i],
-                ks_c_str(&mut kstr),
+                kstr_cstr.as_ptr().cast::<c_char>(),
             );
             libc::exit(-1);
         }

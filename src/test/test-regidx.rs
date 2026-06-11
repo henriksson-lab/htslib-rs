@@ -17,86 +17,80 @@ unsafe extern "C" {
 static mut VERBOSE: c_int = 0;
 
 // original: custom_parse (htslib/test/test-regidx.c:75)
-pub unsafe extern "C" fn test_test_regidx_c_75_custom_parse(
-    line: *const c_char,
-    chr_beg: *mut *mut c_char,
-    chr_end: *mut *mut c_char,
-    beg: *mut hts_pos_t,
-    end: *mut hts_pos_t,
-    payload: *mut std::ffi::c_void,
-    _usr: *mut std::ffi::c_void,
+//
+// In the owned model the payload buffer is a fixed-size byte slice rather than
+// a malloc'd `char*`; we copy the fourth whitespace-separated field directly
+// into it as a NUL-terminated string. Callers size the payload buffer large
+// enough to hold the field.
+pub fn test_test_regidx_c_75_custom_parse(
+    line: &[u8],
+    out: &mut crate::htslib_rs::regidx::ParsedRegion,
+    payload: &mut [u8],
+    usr: Option<&mut Vec<u8>>,
 ) -> c_int {
-    let ret = regidx_c_498_regidx_parse_tab(
-        line,
-        chr_beg,
-        chr_end,
-        beg,
-        end,
-        ptr::null_mut(),
-        ptr::null_mut(),
-    );
+    let ret = regidx_c_498_regidx_parse_tab(line, out, payload, usr);
     if ret != 0 {
         return ret;
     }
 
-    let mut ss = line as *mut c_char;
-    while *ss != 0 && isspace_c(*ss) != 0 {
-        ss = ss.add(1);
+    let mut ss = 0usize;
+    while ss < line.len() && isspace_c(line[ss] as c_char) != 0 {
+        ss += 1;
     }
     for _i in 0..3 {
-        while *ss != 0 && isspace_c(*ss) == 0 {
-            ss = ss.add(1);
+        while ss < line.len() && isspace_c(line[ss] as c_char) == 0 {
+            ss += 1;
         }
-        if *ss == 0 {
+        if ss >= line.len() {
             return -2;
         }
-        while *ss != 0 && isspace_c(*ss) != 0 {
-            ss = ss.add(1);
+        while ss < line.len() && isspace_c(line[ss] as c_char) != 0 {
+            ss += 1;
         }
     }
-    if *ss == 0 {
+    if ss >= line.len() {
         return -2;
     }
 
     let mut se = ss;
-    while *se != 0 && isspace_c(*se) == 0 {
-        se = se.add(1);
+    while se < line.len() && isspace_c(line[se] as c_char) == 0 {
+        se += 1;
     }
-    let dat = payload.cast::<*mut c_char>();
-    *dat = libc::malloc(se.offset_from(ss) as usize + 1).cast::<c_char>();
-    libc::memcpy((*dat).cast(), ss.cast(), se.offset_from(ss) as usize + 1);
-    *(*dat).add(se.offset_from(ss) as usize) = 0;
+    let field = &line[ss..se];
+    payload[..field.len()].copy_from_slice(field);
+    payload[field.len()] = 0;
     0
 }
 
 // original: custom_free (htslib/test/test-regidx.c:100)
-pub unsafe extern "C" fn test_test_regidx_c_100_custom_free(payload: *mut std::ffi::c_void) {
-    let dat = payload.cast::<*mut c_char>();
-    libc::free((*dat).cast());
-}
+//
+// The owned payload buffer is plain bytes with no heap allocation to release,
+// so freeing is a no-op.
+pub fn test_test_regidx_c_100_custom_free(_payload: &mut [u8]) {}
 
 // original: test_sequential_access (htslib/test/test-regidx.c:106)
 pub unsafe fn test_test_regidx_c_106_test_sequential_access() {
     let idx = regidx_c_246_regidx_init(
-        ptr::null(),
-        Some(test_test_regidx_c_75_custom_parse),
-        Some(test_test_regidx_c_100_custom_free),
-        std::mem::size_of::<*mut c_char>(),
-        ptr::null_mut(),
+        None,
+        Some(test_test_regidx_c_75_custom_parse as regidx_parse_f),
+        Some(test_test_regidx_c_100_custom_free as fn(&mut [u8])),
+        64,
+        None,
     );
-    if idx.is_null() {
+    if idx.is_none() {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"init failed\n".as_ptr(),
         );
         libc::exit(-1);
     }
+    let mut idx = idx.unwrap();
 
-    let mut str_: kstring_t = std::mem::zeroed();
+    let mut str_ = kstring_t::default();
     let n = 10;
     for i in 0..n {
         let beg = 10 * (i + 1);
-        str_.l = 0;
+        str_.data.clear();
         let mut buf = [0 as c_char; 128];
         let len = libc::snprintf(
             buf.as_mut_ptr(),
@@ -106,20 +100,26 @@ pub unsafe fn test_test_regidx_c_106_test_sequential_access() {
             beg,
             beg,
         );
-        kputsn(buf.as_ptr(), len as usize, &mut str_);
-        if regidx_c_198_regidx_insert(idx, str_.s) != 0 {
+        kputsn(
+            std::slice::from_raw_parts(buf.as_ptr() as *const u8, len as usize),
+            len as usize,
+            &mut str_,
+        );
+        let mut str_c = str_.data.clone();
+        str_c.push(0);
+        if regidx_c_198_regidx_insert(&mut idx, &str_.data) != 0 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert failed: %s\n".as_ptr(),
-                str_.s,
+                str_c.as_ptr(),
             );
             libc::exit(-1);
         }
     }
 
-    let itr = regidx_c_584_regitr_init(idx);
+    let mut itr = regidx_c_584_regitr_init(&mut idx);
     let mut i = 0;
-    while regidx_c_646_regitr_loop(itr) != 0 {
+    while regidx_c_646_regitr_loop(&mut itr) != 0 {
         if (*itr).beg != (*itr).end || (*itr).beg + 1 != 10 * (i + 1) as hts_pos_t {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
@@ -129,21 +129,29 @@ pub unsafe fn test_test_regidx_c_106_test_sequential_access() {
             );
             libc::exit(-1);
         }
-        str_.l = 0;
+        str_.data.clear();
         let mut buf = [0 as c_char; 128];
         let len = libc::snprintf(buf.as_mut_ptr(), buf.len(), c"%ld".as_ptr(), (*itr).beg + 1);
-        kputsn(buf.as_ptr(), len as usize, &mut str_);
-        let payload = *(*itr)
-            .payload
-            .expect("regidx payload")
-            .cast::<*mut c_char>()
-            .as_ptr();
-        if libc::strcmp(payload, str_.s) != 0 {
+        kputsn(
+            std::slice::from_raw_parts(buf.as_ptr() as *const u8, len as usize),
+            len as usize,
+            &mut str_,
+        );
+        let payload_bytes = &(*itr).payload;
+        let payload_str = &payload_bytes[..payload_bytes
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(payload_bytes.len())];
+        let mut str_c = str_.data.clone();
+        str_c.push(0);
+        if payload_str != str_.data.as_slice() {
+            let mut payload_c = payload_str.to_vec();
+            payload_c.push(0);
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"listing failed, expected payload \"%s\", found \"%s\"\n".as_ptr(),
-                str_.s,
-                payload,
+                str_c.as_ptr(),
+                payload_c.as_ptr(),
             );
             libc::exit(-1);
         }
@@ -168,28 +176,29 @@ pub unsafe fn test_test_regidx_c_106_test_sequential_access() {
 
     regidx_c_606_regitr_destroy(itr);
     regidx_c_311_regidx_destroy(idx);
-    libc::free(str_.s.cast());
+    drop(str_);
 }
 
 // original: test_custom_payload (htslib/test/test-regidx.c:143)
 pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
     let idx = regidx_c_246_regidx_init(
-        ptr::null(),
-        Some(test_test_regidx_c_75_custom_parse),
-        Some(test_test_regidx_c_100_custom_free),
-        std::mem::size_of::<*mut c_char>(),
-        ptr::null_mut(),
+        None,
+        Some(test_test_regidx_c_75_custom_parse as regidx_parse_f),
+        Some(test_test_regidx_c_100_custom_free as fn(&mut [u8])),
+        64,
+        None,
     );
-    if idx.is_null() {
+    if idx.is_none() {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"init failed\n".as_ptr(),
         );
         libc::exit(-1);
     }
+    let mut idx = idx.unwrap();
 
     let mut line = c"1 10000000 10000000 1:10000000-10000000".as_ptr() as *mut c_char;
-    if regidx_c_198_regidx_insert(idx, line) != 0 {
+    if regidx_c_198_regidx_insert(&mut idx, std::ffi::CStr::from_ptr(line).to_bytes()) != 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"insert failed: %s\n".as_ptr(),
@@ -198,7 +207,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
         libc::exit(-1);
     }
     line = c"1 20000000 20000001 1:20000000-20000001".as_ptr() as *mut c_char;
-    if regidx_c_198_regidx_insert(idx, line) != 0 {
+    if regidx_c_198_regidx_insert(&mut idx, std::ffi::CStr::from_ptr(line).to_bytes()) != 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"insert failed: %s\n".as_ptr(),
@@ -207,7 +216,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
         libc::exit(-1);
     }
     line = c"1 20000002 20000002 1:20000002-20000002".as_ptr() as *mut c_char;
-    if regidx_c_198_regidx_insert(idx, line) != 0 {
+    if regidx_c_198_regidx_insert(&mut idx, std::ffi::CStr::from_ptr(line).to_bytes()) != 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"insert failed: %s\n".as_ptr(),
@@ -216,7 +225,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
         libc::exit(-1);
     }
     line = c"1 30000000 30000000 1:30000000-30000000".as_ptr() as *mut c_char;
-    if regidx_c_198_regidx_insert(idx, line) != 0 {
+    if regidx_c_198_regidx_insert(&mut idx, std::ffi::CStr::from_ptr(line).to_bytes()) != 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"insert failed: %s\n".as_ptr(),
@@ -225,7 +234,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
         libc::exit(-1);
     }
     line = c"1 8000000000 8000000000 1:8000000000-8000000000".as_ptr() as *mut c_char;
-    if regidx_c_198_regidx_insert(idx, line) != 0 {
+    if regidx_c_198_regidx_insert(&mut idx, std::ffi::CStr::from_ptr(line).to_bytes()) != 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"insert failed: %s\n".as_ptr(),
@@ -234,11 +243,11 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
         libc::exit(-1);
     }
 
-    let itr = regidx_c_584_regitr_init(idx);
+    let mut itr = regidx_c_584_regitr_init(&mut idx);
     let mut from: hts_pos_t = 10000000;
     let mut to: hts_pos_t = 10000000;
 
-    if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 1, to - 1, itr) == 0 {
+    if regidx_c_401_regidx_overlap(&mut idx, b"1", from - 1, to - 1, Some(&mut itr)) == 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
@@ -247,29 +256,23 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
         );
         libc::exit(-1);
     }
-    if libc::strcmp(
-        c"1:10000000-10000000".as_ptr(),
-        *(*itr)
-            .payload
-            .expect("regidx payload")
-            .cast::<*mut c_char>()
-            .as_ptr(),
-    ) != 0
-    {
+    let payload_str = {
+        let p = &(*itr).payload;
+        p[..p.iter().position(|&b| b == 0).unwrap_or(p.len())].to_vec()
+    };
+    if payload_str.as_slice() != b"1:10000000-10000000" {
+        let mut payload_c = payload_str.clone();
+        payload_c.push(0);
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld vs %s\n".as_ptr(),
             from,
             to,
-            *(*itr)
-                .payload
-                .expect("regidx payload")
-                .cast::<*mut c_char>()
-                .as_ptr(),
+            payload_c.as_ptr(),
         );
         libc::exit(-1);
     }
-    if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 2, to - 1, itr) == 0 {
+    if regidx_c_401_regidx_overlap(&mut idx, b"1", from - 2, to - 1, Some(&mut itr)) == 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
@@ -278,7 +281,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
         );
         libc::exit(-1);
     }
-    if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 2, to + 3, itr) == 0 {
+    if regidx_c_401_regidx_overlap(&mut idx, b"1", from - 2, to + 3, Some(&mut itr)) == 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
@@ -287,7 +290,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
         );
         libc::exit(-1);
     }
-    if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 2, to - 2, itr) != 0 {
+    if regidx_c_401_regidx_overlap(&mut idx, b"1", from - 2, to - 2, Some(&mut itr)) != 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
@@ -299,7 +302,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
 
     from = 20000000;
     to = 20000000;
-    if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 1, to - 1, itr) == 0 {
+    if regidx_c_401_regidx_overlap(&mut idx, b"1", from - 1, to - 1, Some(&mut itr)) == 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
@@ -311,7 +314,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
 
     from = 20000002;
     to = 20000002;
-    if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 1, to - 1, itr) == 0 {
+    if regidx_c_401_regidx_overlap(&mut idx, b"1", from - 1, to - 1, Some(&mut itr)) == 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
@@ -323,7 +326,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
 
     from = 30000000;
     to = 30000000;
-    if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 1, to - 1, itr) == 0 {
+    if regidx_c_401_regidx_overlap(&mut idx, b"1", from - 1, to - 1, Some(&mut itr)) == 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
@@ -335,7 +338,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
 
     from = 8000000000;
     to = 8000000000;
-    if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 1, to - 1, itr) == 0 {
+    if regidx_c_401_regidx_overlap(&mut idx, b"1", from - 1, to - 1, Some(&mut itr)) == 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"query failed: 1:%ld-%ld\n".as_ptr(),
@@ -347,7 +350,7 @@ pub unsafe fn test_test_regidx_c_143_test_custom_payload() {
 
     from &= 0xffffffffu32 as hts_pos_t;
     to &= 0xffffffffu32 as hts_pos_t;
-    if regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), from - 1, to - 1, itr) != 0 {
+    if regidx_c_401_regidx_overlap(&mut idx, b"1", from - 1, to - 1, Some(&mut itr)) != 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"query should not succeed: 1:%ld-%ld\n".as_ptr(),
@@ -380,31 +383,32 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
     max -= 1;
 
     let idx = regidx_c_246_regidx_init(
-        ptr::null(),
-        Some(test_test_regidx_c_75_custom_parse),
-        Some(test_test_regidx_c_100_custom_free),
-        std::mem::size_of::<*mut c_char>(),
-        ptr::null_mut(),
+        None,
+        Some(test_test_regidx_c_75_custom_parse as regidx_parse_f),
+        Some(test_test_regidx_c_100_custom_free as fn(&mut [u8])),
+        64,
+        None,
     );
-    if idx.is_null() {
+    if idx.is_none() {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"init failed\n".as_ptr(),
         );
         libc::exit(-1);
     }
+    let mut idx = idx.unwrap();
 
     let mut beg: u32 = 0;
     let mut end: u32 = 0;
     test_test_regidx_c_190_get_random_region(min, max, &mut beg, &mut end);
 
     let mut nexp = 0;
-    let mut str_: kstring_t = std::mem::zeroed();
+    let mut str_ = kstring_t::default();
     for _i in 0..nregs {
         let mut b: u32 = 0;
         let mut e: u32 = 0;
         test_test_regidx_c_190_get_random_region(min, max, &mut b, &mut e);
-        str_.l = 0;
+        str_.data.clear();
         let mut buf = [0 as c_char; 256];
         let len = libc::snprintf(
             buf.as_mut_ptr(),
@@ -415,12 +419,18 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
             b + 1,
             e + 1,
         );
-        kputsn(buf.as_ptr(), len as usize, &mut str_);
-        if regidx_c_198_regidx_insert(idx, str_.s) != 0 {
+        kputsn(
+            std::slice::from_raw_parts(buf.as_ptr() as *const u8, len as usize),
+            len as usize,
+            &mut str_,
+        );
+        let mut str_c = str_.data.clone();
+        str_c.push(0);
+        if regidx_c_198_regidx_insert(&mut idx, &str_.data) != 0 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert failed: %s\n".as_ptr(),
-                str_.s,
+                str_c.as_ptr(),
             );
             libc::exit(-1);
         }
@@ -429,10 +439,10 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
         }
     }
 
-    let itr = regidx_c_584_regitr_init(idx);
+    let mut itr = regidx_c_584_regitr_init(&mut idx);
     let mut nhit = 0;
     let ret =
-        regidx_c_401_regidx_overlap(idx, c"1".as_ptr(), beg as hts_pos_t, end as hts_pos_t, itr);
+        regidx_c_401_regidx_overlap(&mut idx, b"1", beg as hts_pos_t, end as hts_pos_t, Some(&mut itr));
     if nexp != 0 && ret == 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
@@ -452,8 +462,8 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
         );
         libc::exit(-1);
     }
-    while ret != 0 && regidx_c_612_regitr_overlap(itr) != 0 {
-        str_.l = 0;
+    while ret != 0 && regidx_c_612_regitr_overlap(&mut itr) != 0 {
+        str_.data.clear();
         let mut buf = [0 as c_char; 256];
         let len = libc::snprintf(
             buf.as_mut_ptr(),
@@ -462,18 +472,25 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
             (*itr).beg + 1,
             (*itr).end + 1,
         );
-        kputsn(buf.as_ptr(), len as usize, &mut str_);
-        let payload = *(*itr)
-            .payload
-            .expect("regidx payload")
-            .cast::<*mut c_char>()
-            .as_ptr();
-        if libc::strcmp(str_.s, payload) != 0 {
+        kputsn(
+            std::slice::from_raw_parts(buf.as_ptr() as *const u8, len as usize),
+            len as usize,
+            &mut str_,
+        );
+        let payload_str = {
+            let p = &(*itr).payload;
+            p[..p.iter().position(|&b| b == 0).unwrap_or(p.len())].to_vec()
+        };
+        let mut payload_c = payload_str.clone();
+        payload_c.push(0);
+        let mut str_c = str_.data.clone();
+        str_c.push(0);
+        if str_.data.as_slice() != payload_str.as_slice() {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"query failed, incorrect payload: %s vs %s (%d-%d)\n".as_ptr(),
-                str_.s,
-                payload,
+                str_c.as_ptr(),
+                payload_c.as_ptr(),
                 beg + 1,
                 end + 1,
             );
@@ -487,7 +504,7 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
                 end + 1,
                 (*itr).beg + 1,
                 (*itr).end + 1,
-                payload,
+                payload_c.as_ptr(),
             );
             libc::exit(-1);
         }
@@ -514,7 +531,7 @@ pub unsafe fn test_test_regidx_c_197_test_random(nregs: c_int, mut min: u32, mut
 
     regidx_c_606_regitr_destroy(itr);
     regidx_c_311_regidx_destroy(idx);
-    libc::free(str_.s.cast());
+    drop(str_);
 }
 
 // original: test_explicit (htslib/test/test-regidx.c:246)
@@ -523,37 +540,45 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
     qry: *mut c_char,
     mut exp: *mut c_char,
 ) {
-    let idx = regidx_c_246_regidx_init(
-        ptr::null(),
-        Some(regidx_c_545_regidx_parse_reg),
+    let mut idx = regidx_c_246_regidx_init(
+        None,
+        Some(regidx_c_545_regidx_parse_reg as regidx_parse_f),
         None,
         0,
-        ptr::null_mut(),
-    );
+        None,
+    )
+    .expect("regidx init");
 
     let mut beg_p = tgt;
     let mut end_p: *mut c_char;
     let exp_ori = exp;
-    let mut str_: kstring_t = std::mem::zeroed();
+    let mut str_ = kstring_t::default();
     while *beg_p != 0 {
         end_p = tgt;
         while *end_p != 0 && *end_p != b';' as c_char {
             end_p = end_p.add(1);
         }
-        str_.l = 0;
-        kputsn(beg_p, end_p.offset_from(beg_p) as usize, &mut str_);
+        str_.data.clear();
+        let beg_len = end_p.offset_from(beg_p) as usize;
+        kputsn(
+            std::slice::from_raw_parts(beg_p as *const u8, beg_len),
+            beg_len,
+            &mut str_,
+        );
+        let mut str_c = str_.data.clone();
+        str_c.push(0);
         if VERBOSE >= 2 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert: %s\n".as_ptr(),
-                str_.s,
+                str_c.as_ptr(),
             );
         }
-        if regidx_c_198_regidx_insert(idx, str_.s) != 0 {
+        if regidx_c_198_regidx_insert(&mut idx, &str_.data) != 0 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert failed: %s\n".as_ptr(),
-                str_.s,
+                str_c.as_ptr(),
             );
             libc::exit(-1);
         }
@@ -566,40 +591,42 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
         while *end_p != 0 && *end_p != b';' as c_char {
             end_p = end_p.add(1);
         }
-        str_.l = 0;
-        kputsn(beg_p, end_p.offset_from(beg_p) as usize, &mut str_);
+        str_.data.clear();
+        let qry_len = end_p.offset_from(beg_p) as usize;
+        kputsn(
+            std::slice::from_raw_parts(beg_p as *const u8, qry_len),
+            qry_len,
+            &mut str_,
+        );
         beg_p = if *end_p != 0 { end_p.add(1) } else { end_p };
 
-        let mut chr_beg: *mut c_char = ptr::null_mut();
-        let mut chr_end: *mut c_char = ptr::null_mut();
-        let mut reg_beg: hts_pos_t = 0;
-        let mut reg_end: hts_pos_t = 0;
-        if regidx_c_545_regidx_parse_reg(
-            str_.s,
-            &mut chr_beg,
-            &mut chr_end,
-            &mut reg_beg,
-            &mut reg_end,
-            ptr::null_mut(),
-            ptr::null_mut(),
-        ) != 0
-        {
+        let mut str_c = str_.data.clone();
+        str_c.push(0);
+        let mut out = crate::htslib_rs::regidx::ParsedRegion::default();
+        let mut parse_payload: Vec<u8> = Vec::new();
+        if regidx_c_545_regidx_parse_reg(&str_.data, &mut out, &mut parse_payload, None) != 0 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"could not parse: %s in %s\n".as_ptr(),
-                str_.s,
+                str_c.as_ptr(),
                 qry,
             );
             libc::exit(-1);
         }
-        *chr_end.add(1) = 0;
-        let hit = regidx_c_401_regidx_overlap(idx, chr_beg, reg_beg, reg_end, ptr::null_mut());
+        let reg_beg = out.beg;
+        let reg_end = out.end;
+        // ParsedRegion.chr is an inclusive byte range into the parsed line.
+        let chr_range = out.chr.clone().expect("parsed chromosome");
+        let chr_bytes = str_.data[chr_range].to_vec();
+        let mut chr_c = chr_bytes.clone();
+        chr_c.push(0);
+        let hit = regidx_c_401_regidx_overlap(&mut idx, &chr_bytes, reg_beg, reg_end, None);
         if *exp == b'1' as c_char {
             if hit == 0 {
                 libc::fprintf(
                     crate::htslib_rs::c_compat::stderr.cast(),
                     c"query failed, there should be a hit .. %s:%ld-%ld\n".as_ptr(),
-                    chr_beg,
+                    chr_c.as_ptr(),
                     reg_beg + 1,
                     reg_end + 1,
                 );
@@ -608,7 +635,7 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
                 libc::fprintf(
                     crate::htslib_rs::c_compat::stderr.cast(),
                     c"ok: overlap found for %s:%ld-%ld\n".as_ptr(),
-                    chr_beg,
+                    chr_c.as_ptr(),
                     reg_beg + 1,
                     reg_end + 1,
                 );
@@ -618,7 +645,7 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
                 libc::fprintf(
                     crate::htslib_rs::c_compat::stderr.cast(),
                     c"query failed, there should be no hit .. %s:%ld-%ld\n".as_ptr(),
-                    chr_beg,
+                    chr_c.as_ptr(),
                     reg_beg + 1,
                     reg_end + 1,
                 );
@@ -627,7 +654,7 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
                 libc::fprintf(
                     crate::htslib_rs::c_compat::stderr.cast(),
                     c"ok: no overlap found for %s:%ld-%ld\n".as_ptr(),
-                    chr_beg,
+                    chr_c.as_ptr(),
                     reg_beg + 1,
                     reg_end + 1,
                 );
@@ -643,7 +670,7 @@ pub unsafe fn test_test_regidx_c_246_test_explicit(
         exp = exp.add(1);
     }
 
-    libc::free(str_.s.cast());
+    drop(str_);
     regidx_c_311_regidx_destroy(idx);
 }
 
@@ -684,14 +711,15 @@ type set_line_f = unsafe fn(*mut c_char, usize, *mut c_char, c_int, c_int);
 
 // original: test (htslib/test/test-regidx.c:322)
 pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_parse_f) {
-    let idx = regidx_c_246_regidx_init(ptr::null(), parse, None, 0, ptr::null_mut());
-    if idx.is_null() {
+    let idx = regidx_c_246_regidx_init(None, Some(parse), None, 0, None);
+    if idx.is_none() {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),
             c"init failed\n".as_ptr(),
         );
         libc::exit(-1);
     }
+    let mut idx = idx.unwrap();
 
     let mut line = [0 as c_char; 250];
     let chr = c"1".as_ptr() as *mut c_char;
@@ -707,7 +735,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
                 line.as_ptr(),
             );
         }
-        if regidx_c_198_regidx_insert(idx, line.as_mut_ptr()) != 0 {
+        if regidx_c_198_regidx_insert(&mut idx, std::ffi::CStr::from_ptr(line.as_ptr()).to_bytes()) != 0 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert failed: %s\n".as_ptr(),
@@ -726,7 +754,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
                 line.as_ptr(),
             );
         }
-        if regidx_c_198_regidx_insert(idx, line.as_mut_ptr()) != 0 {
+        if regidx_c_198_regidx_insert(&mut idx, std::ffi::CStr::from_ptr(line.as_ptr()).to_bytes()) != 0 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert failed: %s\n".as_ptr(),
@@ -745,7 +773,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
                 line.as_ptr(),
             );
         }
-        if regidx_c_198_regidx_insert(idx, line.as_mut_ptr()) != 0 {
+        if regidx_c_198_regidx_insert(&mut idx, std::ffi::CStr::from_ptr(line.as_ptr()).to_bytes()) != 0 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"insert failed: %s\n".as_ptr(),
@@ -755,16 +783,16 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         }
     }
 
-    let itr = regidx_c_584_regitr_init(idx);
+    let mut itr = regidx_c_584_regitr_init(&mut idx);
     for i in 1..n {
         let mut start = 10 * i - 1;
         let mut end = start;
         if regidx_c_401_regidx_overlap(
-            idx,
-            chr,
+            &mut idx,
+            b"1",
             (start - 1) as hts_pos_t,
             (end - 1) as hts_pos_t,
-            itr,
+            Some(&mut itr),
         ) != 0
         {
             libc::fprintf(
@@ -789,11 +817,11 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         start = 10 * i;
         end = start;
         if regidx_c_401_regidx_overlap(
-            idx,
-            chr,
+            &mut idx,
+            b"1",
             (start - 1) as hts_pos_t,
             (end - 1) as hts_pos_t,
-            itr,
+            Some(&mut itr),
         ) == 0
         {
             libc::fprintf(
@@ -815,7 +843,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
             );
         }
         let mut nhit = 0;
-        while regidx_c_612_regitr_overlap(itr) != 0 {
+        while regidx_c_612_regitr_overlap(&mut itr) != 0 {
             if (*itr).beg > (end - 1) as hts_pos_t || (*itr).end < (start - 1) as hts_pos_t {
                 libc::fprintf(
                     crate::htslib_rs::c_compat::stderr.cast(),
@@ -852,11 +880,11 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         start = 10 * i + 1;
         end = start;
         if regidx_c_401_regidx_overlap(
-            idx,
-            chr,
+            &mut idx,
+            b"1",
             (start - 1) as hts_pos_t,
             (end - 1) as hts_pos_t,
-            itr,
+            Some(&mut itr),
         ) == 0
         {
             libc::fprintf(
@@ -878,7 +906,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
             );
         }
         nhit = 0;
-        while regidx_c_612_regitr_overlap(itr) != 0 {
+        while regidx_c_612_regitr_overlap(&mut itr) != 0 {
             if (*itr).beg > (end - 1) as hts_pos_t || (*itr).end < (start - 1) as hts_pos_t {
                 libc::fprintf(
                     crate::htslib_rs::c_compat::stderr.cast(),
@@ -915,11 +943,11 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         start = 10 * i;
         end = start + 1;
         if regidx_c_401_regidx_overlap(
-            idx,
-            chr,
+            &mut idx,
+            b"1",
             (start - 1) as hts_pos_t,
             (end - 1) as hts_pos_t,
-            itr,
+            Some(&mut itr),
         ) == 0
         {
             libc::fprintf(
@@ -941,7 +969,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
             );
         }
         nhit = 0;
-        while regidx_c_612_regitr_overlap(itr) != 0 {
+        while regidx_c_612_regitr_overlap(&mut itr) != 0 {
             if (*itr).beg > (end - 1) as hts_pos_t || (*itr).end < (start - 1) as hts_pos_t {
                 libc::fprintf(
                     crate::htslib_rs::c_compat::stderr.cast(),
@@ -979,11 +1007,11 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
         end = 20000 * i + 3000;
         set_line(line.as_mut_ptr(), line.len(), chr, start, end);
         if regidx_c_401_regidx_overlap(
-            idx,
-            chr,
+            &mut idx,
+            b"1",
             (start - 1) as hts_pos_t,
             (end - 1) as hts_pos_t,
-            itr,
+            Some(&mut itr),
         ) == 0
         {
             libc::fprintf(
@@ -1005,7 +1033,7 @@ pub unsafe fn test_test_regidx_c_322_test(set_line: set_line_f, parse: regidx_pa
             );
         }
         nhit = 0;
-        while regidx_c_612_regitr_overlap(itr) != 0 {
+        while regidx_c_612_regitr_overlap(&mut itr) != 0 {
             if (*itr).beg > (end - 1) as hts_pos_t || (*itr).end < (start - 1) as hts_pos_t {
                 libc::fprintf(
                     crate::htslib_rs::c_compat::stderr.cast(),
@@ -1131,7 +1159,7 @@ pub unsafe fn test_test_regidx_c_426_main(argc: c_int, argv: *mut *mut c_char) -
     }
     test_test_regidx_c_322_test(
         test_test_regidx_c_311_create_line_tab,
-        Some(regidx_c_498_regidx_parse_tab),
+        regidx_c_498_regidx_parse_tab as regidx_parse_f,
     );
 
     if VERBOSE >= 1 {
@@ -1142,7 +1170,7 @@ pub unsafe fn test_test_regidx_c_426_main(argc: c_int, argv: *mut *mut c_char) -
     }
     test_test_regidx_c_322_test(
         test_test_regidx_c_315_create_line_reg,
-        Some(regidx_c_545_regidx_parse_reg),
+        regidx_c_545_regidx_parse_reg as regidx_parse_f,
     );
 
     if VERBOSE >= 1 {
@@ -1153,7 +1181,7 @@ pub unsafe fn test_test_regidx_c_426_main(argc: c_int, argv: *mut *mut c_char) -
     }
     test_test_regidx_c_322_test(
         test_test_regidx_c_307_create_line_bed,
-        Some(regidx_c_466_regidx_parse_bed),
+        regidx_c_466_regidx_parse_bed as regidx_parse_f,
     );
 
     if VERBOSE >= 1 {

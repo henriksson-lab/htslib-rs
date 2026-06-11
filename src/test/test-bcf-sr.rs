@@ -136,18 +136,21 @@ pub unsafe fn test_test_bcf_sr_c_71_write_summary_format(sr: *mut bcf_srs_t, out
             if rec.is_null() {
                 error!(c"bcf_sr_get_line() unexpectedly returned NULL\n");
             }
-            libc::fprintf(
-                out,
-                c"%s".as_ptr(),
-                if (*rec).n_allele() > 1 {
-                    *(*rec).d.allele.add(1)
-                } else {
-                    c".".as_ptr().cast_mut()
-                },
-            );
+            let allele1: Vec<u8> = if (*rec).n_allele() > 1 {
+                let d = &(*rec).d;
+                let mut a = d.allele[1].clone();
+                a.push(0);
+                a
+            } else {
+                b".\0".to_vec()
+            };
+            libc::fprintf(out, c"%s".as_ptr(), allele1.as_ptr().cast::<c_char>());
             let mut j = 2;
             while j < (*rec).n_allele() as c_int {
-                libc::fprintf(out, c",%s".as_ptr(), *(*rec).d.allele.add(j as usize));
+                let d = &(*rec).d;
+                let mut a = d.allele[j as usize].clone();
+                a.push(0);
+                libc::fprintf(out, c",%s".as_ptr(), a.as_ptr().cast::<c_char>());
                 j += 1;
             }
             i += 1;
@@ -595,9 +598,11 @@ mod tests {
             let chrom = CStr::from_ptr(crate::htslib_rs::vcf::bcf_seqname(hdr, rec))
                 .to_str()
                 .unwrap();
-            let ref_allele = CStr::from_ptr(*(*rec).d.allele).to_str().unwrap();
+            let d = &(*rec).d;
+            let ref_allele = std::str::from_utf8(&d.allele[0]).unwrap();
             let alt_allele = if (*rec).n_allele() > 1 {
-                CStr::from_ptr(*(*rec).d.allele.add(1)).to_str().unwrap()
+                let d = &(*rec).d;
+                std::str::from_utf8(&d.allele[1]).unwrap()
             } else {
                 "."
             };

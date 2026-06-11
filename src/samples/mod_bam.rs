@@ -53,7 +53,7 @@ pub unsafe fn samples_mod_bam_c_50_main(argc: c_int, argv: *mut *mut c_char) -> 
                                 (*bamdata).core.flag = (libc::atol(val) & 0xffff) as u16;
                             }
                             3 | 7 => {
-                                ret = sam::sam_hdr_name2tid(in_samhdr, val);
+                                ret = sam::sam_hdr_name2tid(&mut *in_samhdr, std::ffi::CStr::from_ptr(val));
                                 if ret < 0 {
                                     libc::printf(c"Invalid reference name\n".as_ptr());
                                     ret = -1;

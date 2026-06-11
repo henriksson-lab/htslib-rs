@@ -28,15 +28,13 @@ pub unsafe extern "C" fn samples_pileup_mod_c_56_plpconstructor(
     if cd.is_null() {
         return 1;
     }
-    (*cd).p = sam::hts_base_mod_state_alloc().cast();
-    if (*cd).p.is_null() {
-        libc::printf(c"Failed to allocate base modification state\n".as_ptr());
-        return 1;
-    }
+    let mut m = sam::hts_base_mod_state_alloc();
 
-    if sam::bam_parse_basemod(b, (*cd).p.cast()) == -1 {
+    if sam::bam_parse_basemod(&*b, &mut m) == -1 {
+        sam::hts_base_mod_state_free(Some(m));
         1
     } else {
+        (*cd).p = Box::into_raw(m).cast();
         0
     }
 }
@@ -48,7 +46,9 @@ pub unsafe extern "C" fn samples_pileup_mod_c_70_plpdestructor(
     cd: *mut sam::bam_pileup_cd,
 ) -> c_int {
     if !cd.is_null() && !(*cd).p.is_null() {
-        sam::hts_base_mod_state_free((*cd).p.cast());
+        sam::hts_base_mod_state_free(Some(Box::from_raw(
+            (*cd).p.cast::<sam::hts_base_mod_state>(),
+        )));
         (*cd).p = std::ptr::null_mut();
     }
     0
@@ -76,11 +76,7 @@ pub unsafe fn samples_pileup_mod_c_98_main(argc: c_int, argv: *mut *mut c_char) 
         infile: std::ptr::null_mut(),
         in_samhdr: std::ptr::null_mut(),
     };
-    let mut insdata = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut insdata = kstring_t { data: Vec::new() };
 
     if argc != 2 {
         samples_pileup_mod_c_38_print_usage(crate::htslib_rs::c_compat::stderr.cast());
@@ -147,11 +143,10 @@ pub unsafe fn samples_pileup_mod_c_98_main(argc: c_int, argv: *mut *mut c_char) 
             }
 
             let modlen = sam::bam_mods_at_qpos(
-                (*p).b,
+                &*(*p).b,
                 (*p).qpos,
-                (*p).cd.p.cast(),
-                mods.as_mut_ptr(),
-                NMODS as c_int,
+                &mut *(*p).cd.p.cast::<sam::hts_base_mod_state>(),
+                &mut mods,
             );
             if modlen == -1 {
                 libc::printf(c"Failed to get modifications\n".as_ptr());
@@ -191,7 +186,13 @@ pub unsafe fn samples_pileup_mod_c_98_main(argc: c_int, argv: *mut *mut c_char) 
                 if modlen > 0 { mods[0].modified_base } else { 0 },
             );
             if (*p).indel > 0 {
-                libc::printf(c"+%d%s".as_ptr(), (*p).indel, insdata.s);
+                let mut insdata_cstr = insdata.data.clone();
+                insdata_cstr.push(0);
+                libc::printf(
+                    c"+%d%s".as_ptr(),
+                    (*p).indel,
+                    insdata_cstr.as_ptr().cast::<c_char>(),
+                );
                 if dellen != 0 {
                     libc::printf(c"-%d".as_ptr(), dellen);
                     for _ in 0..dellen {

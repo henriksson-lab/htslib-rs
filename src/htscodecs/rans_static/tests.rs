@@ -6,34 +6,21 @@
 //! still builds with `--no-default-features`.
 
 use super::*;
+#[cfg(feature = "parity")]
 use std::ffi::c_void;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Native compress -> owned Vec (copies out of the libc buffer and frees it).
+/// Native compress -> owned Vec.
 fn native_compress(data: &[u8], order: i32) -> Vec<u8> {
-    let mut osz: u32 = 0;
-    let mut buf = data.to_vec();
-    let ptr = unsafe { rans_compress(buf.as_mut_ptr(), buf.len() as u32, &mut osz, order) };
-    assert!(!ptr.is_null(), "native rans_compress returned null");
-    let out = unsafe { std::slice::from_raw_parts(ptr, osz as usize) }.to_vec();
-    unsafe { c_compat::free(ptr as *mut c_void) };
-    out
+    rans_compress(data, order).expect("native rans_compress returned null")
 }
 
-/// Native uncompress -> owned Vec.  Returns None if it failed (null).
+/// Native uncompress -> owned Vec.  Returns None if it failed.
 fn native_uncompress(comp: &[u8]) -> Option<Vec<u8>> {
-    let mut osz: u32 = 0;
-    let mut buf = comp.to_vec();
-    let ptr = unsafe { rans_uncompress(buf.as_mut_ptr(), buf.len() as u32, &mut osz) };
-    if ptr.is_null() {
-        return None;
-    }
-    let out = unsafe { std::slice::from_raw_parts(ptr, osz as usize) }.to_vec();
-    unsafe { c_compat::free(ptr as *mut c_void) };
-    Some(out)
+    rans_uncompress(comp)
 }
 
 // A small deterministic PRNG so tests are reproducible without extra deps.

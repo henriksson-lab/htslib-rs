@@ -1,7 +1,7 @@
 use super::misc::ref_cache_misc_h_38_hexval;
 use super::options::Options;
 use super::upstream::ref_cache_upstream_c_122_upstream_send_cmd;
-use std::ffi::{c_char, c_int, c_uint};
+use std::ffi::{c_int, c_uint};
 
 pub const MD5_LEN: usize = 32;
 pub const REF_WAITING_UPSTREAM: c_int = 0;
@@ -15,11 +15,15 @@ const HASH_MASK: c_int = (HASH_SZ as c_int) - 1;
 pub type RefFileStatus = c_int;
 
 // original: RefFile (htslib/ref_cache/ref_files.c:43)
-#[repr(C)]
+//
+// The C version chained entries through an intrusive doubly-linked list using
+// raw `prev_md5`/`next_md5` pointers. Here the entries live in an arena
+// (`RefFiles::slots`) and the links are arena indices (`Option<usize>`), so
+// ownership is fully expressed in owned Rust without aliasing raw pointers.
 pub struct RefFile {
     hexmd5: [u8; MD5_LEN],
-    prev_md5: *mut RefFile,
-    next_md5: *mut RefFile,
+    prev_md5: Option<usize>,
+    next_md5: Option<usize>,
     size: libc::off_t,
     available: libc::off_t,
     ref_count: c_uint,
@@ -32,8 +36,8 @@ impl RefFile {
     fn new(hexmd5: [u8; MD5_LEN], id: c_uint) -> Self {
         Self {
             hexmd5,
-            prev_md5: std::ptr::null_mut(),
-            next_md5: std::ptr::null_mut(),
+            prev_md5: None,
+            next_md5: None,
             size: 0,
             available: 0,
             ref_count: 1,
@@ -45,9 +49,14 @@ impl RefFile {
 }
 
 // original: RefFiles (htslib/ref_cache/ref_files.c:55)
-#[repr(C)]
+//
+// `slots` is the arena owning every `RefFile`; a `RefFile` handle returned to
+// callers is just an index into this vector. `free` tracks reclaimed slots for
+// reuse. `by_md5` holds the head index of each hash chain.
 pub struct RefFiles {
-    by_md5: [*mut RefFile; HASH_SZ],
+    slots: Vec<Option<RefFile>>,
+    free: Vec<usize>,
+    by_md5: Vec<Option<usize>>,
     id: c_uint,
 }
 
@@ -62,23 +71,27 @@ pub struct RefFiles {
 //
 // SAFETY: single-threaded daemon worker; all mutation here happens on the
 // epoll loop's owning thread, so no synchronization is required.
-static mut REFS: RefFiles = RefFiles {
-    by_md5: [std::ptr::null_mut(); HASH_SZ],
-    id: 0,
-};
+static mut REFS: Option<RefFiles> = None;
 
-fn ref_hash(md5: &[u8; MD5_LEN]) -> usize {
-    (((ref_cache_misc_h_38_hexval(md5[0] as c_char) << 12)
-        | (ref_cache_misc_h_38_hexval(md5[1] as c_char) << 8)
-        | (ref_cache_misc_h_38_hexval(md5[2] as c_char) << 4)
-        | ref_cache_misc_h_38_hexval(md5[3] as c_char))
-        & HASH_MASK) as usize
+fn refs() -> &'static mut RefFiles {
+    // SAFETY: see concurrency note above — single-threaded daemon worker.
+    unsafe {
+        let r = &mut *std::ptr::addr_of_mut!(REFS);
+        r.get_or_insert_with(|| RefFiles {
+            slots: Vec::new(),
+            free: Vec::new(),
+            by_md5: vec![None; HASH_SZ],
+            id: 0,
+        })
+    }
 }
 
-unsafe fn md5_from_raw(md5: *const c_char) -> [u8; MD5_LEN] {
-    let mut buf = [0; MD5_LEN];
-    std::ptr::copy_nonoverlapping(md5.cast::<u8>(), buf.as_mut_ptr(), MD5_LEN);
-    buf
+fn ref_hash(md5: &[u8; MD5_LEN]) -> usize {
+    (((ref_cache_misc_h_38_hexval(md5[0]) << 12)
+        | (ref_cache_misc_h_38_hexval(md5[1]) << 8)
+        | (ref_cache_misc_h_38_hexval(md5[2]) << 4)
+        | ref_cache_misc_h_38_hexval(md5[3]))
+        & HASH_MASK) as usize
 }
 
 fn cache_path_from_md5(md5: &[u8; MD5_LEN]) -> Vec<u8> {
@@ -88,129 +101,155 @@ fn cache_path_from_md5(md5: &[u8; MD5_LEN]) -> Vec<u8> {
     fname.extend_from_slice(&md5[2..4]);
     fname.push(b'/');
     fname.extend_from_slice(&md5[4..]);
+    // NUL terminator retained only for the openat() syscall boundary below.
     fname.push(0);
     fname
 }
 
 // original: get_ref_placeholder (htslib/ref_cache/ref_files.c:62)
-unsafe fn ref_cache_ref_files_c_62_get_ref_placeholder(md5: &[u8; MD5_LEN]) -> *mut RefFile {
+//
+// Returns the arena index of the (existing or freshly inserted) entry.
+fn ref_cache_ref_files_c_62_get_ref_placeholder(md5: &[u8; MD5_LEN]) -> usize {
     let m5hash = ref_hash(md5);
+    let refs = refs();
 
-    let mut r = REFS.by_md5[m5hash];
-    while !r.is_null() {
-        if (*r).hexmd5 == *md5 {
-            (*r).ref_count += 1;
-            return r;
+    let mut cur = refs.by_md5[m5hash];
+    while let Some(idx) = cur {
+        let entry = refs.slots[idx].as_mut().unwrap();
+        if entry.hexmd5 == *md5 {
+            entry.ref_count += 1;
+            return idx;
         }
-        r = (*r).next_md5;
+        cur = entry.next_md5;
     }
 
-    REFS.id += 1;
-    r = Box::into_raw(Box::new(RefFile::new(*md5, REFS.id)));
-    (*r).next_md5 = REFS.by_md5[m5hash];
-    if !(*r).next_md5.is_null() {
-        (*(*r).next_md5).prev_md5 = r;
-    }
-    REFS.by_md5[m5hash] = r;
+    refs.id += 1;
+    let mut new_entry = RefFile::new(*md5, refs.id);
+    let head = refs.by_md5[m5hash];
+    new_entry.next_md5 = head;
 
-    r
+    let new_idx = match refs.free.pop() {
+        Some(idx) => {
+            refs.slots[idx] = Some(new_entry);
+            idx
+        }
+        None => {
+            refs.slots.push(Some(new_entry));
+            refs.slots.len() - 1
+        }
+    };
+
+    if let Some(next) = head {
+        refs.slots[next].as_mut().unwrap().prev_md5 = Some(new_idx);
+    }
+    refs.by_md5[m5hash] = Some(new_idx);
+
+    new_idx
 }
 
 // original: get_ref_file (htslib/ref_cache/ref_files.c:94)
-pub unsafe fn ref_cache_ref_files_c_94_get_ref_file(
-    opts: *const Options,
-    md5: *const c_char,
+//
+// Returns the arena index of the entry on success, or `None` on failure.
+pub fn ref_cache_ref_files_c_94_get_ref_file(
+    opts: &Options,
+    md5: &[u8; MD5_LEN],
     upstream_fd: c_int,
-) -> *mut RefFile {
-    let md5_buf = md5_from_raw(md5);
-    let r = ref_cache_ref_files_c_62_get_ref_placeholder(&md5_buf);
-    let mut stat_buf: libc::stat = std::mem::zeroed();
+) -> Option<usize> {
+    let idx = ref_cache_ref_files_c_62_get_ref_placeholder(md5);
 
-    if r.is_null() {
-        return std::ptr::null_mut();
+    if refs().slots[idx].as_ref().unwrap().ref_count > 1 {
+        return Some(idx);
     }
 
-    if (*r).ref_count > 1 {
-        return r;
-    }
+    let fname = cache_path_from_md5(md5);
 
-    let fname = cache_path_from_md5(&md5_buf);
-
-    (*r).fd = libc::openat((*opts).cache_fd, fname.as_ptr().cast(), libc::O_RDONLY);
-    if (*r).fd < 0 {
-        if *crate::htslib_rs::c_compat::__errno_location() == libc::ENOENT {
+    // SAFETY: openat is an OS syscall with no portable std equivalent for the
+    // dir-fd-relative form; buffers around it are owned Rust.
+    let fd = unsafe { libc::openat(opts.cache_fd, fname.as_ptr().cast(), libc::O_RDONLY) };
+    refs().slots[idx].as_mut().unwrap().fd = fd;
+    if fd < 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ENOENT) {
             if upstream_fd >= 0 {
-                if ref_cache_upstream_c_122_upstream_send_cmd(upstream_fd, md5, (*r).id) != 0 {
-                    ref_cache_ref_files_c_193_release_ref_file(r);
-                    return std::ptr::null_mut();
+                let id = refs().slots[idx].as_ref().unwrap().id;
+                // SAFETY: upstream_send_cmd wraps a sendmsg() syscall over the
+                // upstream command socket; the md5 slice and id passed in are
+                // owned Rust and only read for the duration of the call.
+                let sent =
+                    unsafe { ref_cache_upstream_c_122_upstream_send_cmd(upstream_fd, md5, id) };
+                if sent != 0 {
+                    ref_cache_ref_files_c_193_release_ref_file(idx);
+                    return None;
                 }
-                (*r).status = REF_WAITING_UPSTREAM;
+                refs().slots[idx].as_mut().unwrap().status = REF_WAITING_UPSTREAM;
             } else {
-                (*r).status = REF_NOT_FOUND;
+                refs().slots[idx].as_mut().unwrap().status = REF_NOT_FOUND;
             }
-            return r;
+            return Some(idx);
         } else {
-            ref_cache_ref_files_c_193_release_ref_file(r);
-            return std::ptr::null_mut();
+            ref_cache_ref_files_c_193_release_ref_file(idx);
+            return None;
         }
     }
 
-    if libc::fstat((*r).fd, &mut stat_buf) != 0 {
-        libc::fprintf(
-            crate::htslib_rs::ref_cache::compat::stderr(),
-            c"Couldn't get length of %s/%s : %s\n".as_ptr(),
-            (*opts).cache_dir,
-            fname.as_ptr().cast::<c_char>(),
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+    // SAFETY: fstat is an OS syscall; the stat buffer is owned here.
+    let mut stat_buf: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut stat_buf) } != 0 {
+        eprintln!(
+            "Couldn't get length of {}/{} : {}",
+            String::from_utf8_lossy(opts.cache_dir.as_deref().unwrap_or(&[])),
+            String::from_utf8_lossy(&fname[..fname.len() - 1]),
+            std::io::Error::last_os_error(),
         );
-        ref_cache_ref_files_c_193_release_ref_file(r);
-        return std::ptr::null_mut();
+        ref_cache_ref_files_c_193_release_ref_file(idx);
+        return None;
     }
 
-    (*r).size = stat_buf.st_size;
-    (*r).available = stat_buf.st_size;
-    (*r).status = REF_IS_COMPLETE;
+    let entry = refs().slots[idx].as_mut().unwrap();
+    entry.size = stat_buf.st_size;
+    entry.available = stat_buf.st_size;
+    entry.status = REF_IS_COMPLETE;
 
-    r
+    Some(idx)
 }
 
 // original: get_ref_status (htslib/ref_cache/ref_files.c:141)
-pub unsafe fn ref_cache_ref_files_c_141_get_ref_status(ref_: *const RefFile) -> RefFileStatus {
-    (&*ref_).status
+pub fn ref_cache_ref_files_c_141_get_ref_status(ref_: usize) -> RefFileStatus {
+    refs().slots[ref_].as_ref().unwrap().status
 }
 
 // original: get_ref_size (htslib/ref_cache/ref_files.c:145)
-pub unsafe fn ref_cache_ref_files_c_145_get_ref_size(ref_: *const RefFile) -> libc::off_t {
-    (&*ref_).size
+pub fn ref_cache_ref_files_c_145_get_ref_size(ref_: usize) -> libc::off_t {
+    refs().slots[ref_].as_ref().unwrap().size
 }
 
 // original: get_ref_available (htslib/ref_cache/ref_files.c:149)
-pub unsafe fn ref_cache_ref_files_c_149_get_ref_available(ref_: *const RefFile) -> libc::off_t {
-    (&*ref_).available
+pub fn ref_cache_ref_files_c_149_get_ref_available(ref_: usize) -> libc::off_t {
+    refs().slots[ref_].as_ref().unwrap().available
 }
 
 // original: get_ref_id (htslib/ref_cache/ref_files.c:153)
-pub unsafe fn ref_cache_ref_files_c_153_get_ref_id(ref_: *const RefFile) -> c_uint {
-    (&*ref_).id
+pub fn ref_cache_ref_files_c_153_get_ref_id(ref_: usize) -> c_uint {
+    refs().slots[ref_].as_ref().unwrap().id
 }
 
 // original: get_ref_complete (htslib/ref_cache/ref_files.c:157)
-pub unsafe fn ref_cache_ref_files_c_157_get_ref_complete(ref_: *const RefFile) -> c_int {
-    ((&*ref_).status == REF_IS_COMPLETE) as c_int
+pub fn ref_cache_ref_files_c_157_get_ref_complete(ref_: usize) -> c_int {
+    (refs().slots[ref_].as_ref().unwrap().status == REF_IS_COMPLETE) as c_int
 }
 
 // original: get_ref_fd (htslib/ref_cache/ref_files.c:161)
-pub unsafe fn ref_cache_ref_files_c_161_get_ref_fd(ref_: *const RefFile) -> c_int {
-    (&*ref_).fd
+pub fn ref_cache_ref_files_c_161_get_ref_fd(ref_: usize) -> c_int {
+    refs().slots[ref_].as_ref().unwrap().fd
 }
 
 // original: update_ref_download_started (htslib/ref_cache/ref_files.c:165)
-pub unsafe fn ref_cache_ref_files_c_165_update_ref_download_started(
-    ref_: *mut RefFile,
+pub fn ref_cache_ref_files_c_165_update_ref_download_started(
+    ref_: usize,
     fd: c_int,
     size_if_complete: i64,
 ) {
-    let ref_file = &mut *ref_;
+    let ref_file = refs().slots[ref_].as_mut().unwrap();
     ref_file.fd = fd;
     if size_if_complete >= 0 {
         ref_file.status = REF_IS_COMPLETE;
@@ -220,15 +259,15 @@ pub unsafe fn ref_cache_ref_files_c_165_update_ref_download_started(
 }
 
 // original: update_ref_available (htslib/ref_cache/ref_files.c:174)
-pub unsafe fn ref_cache_ref_files_c_174_update_ref_available(ref_: *mut RefFile, available: i64) {
-    let ref_file = &mut *ref_;
+pub fn ref_cache_ref_files_c_174_update_ref_available(ref_: usize, available: i64) {
+    let ref_file = refs().slots[ref_].as_mut().unwrap();
     assert!(ref_file.available <= available as libc::off_t);
     ref_file.available = available as libc::off_t;
 }
 
 // original: update_ref_with_content_len (htslib/ref_cache/ref_files.c:179)
-pub unsafe fn ref_cache_ref_files_c_179_update_ref_with_content_len(ref_: *mut RefFile, size: i64) {
-    let ref_file = &mut *ref_;
+pub fn ref_cache_ref_files_c_179_update_ref_with_content_len(ref_: usize, size: i64) {
+    let ref_file = refs().slots[ref_].as_mut().unwrap();
     ref_file.size = size as libc::off_t;
     if ref_file.status < REF_DOWNLOAD_STARTED {
         ref_file.status = REF_DOWNLOAD_STARTED;
@@ -236,9 +275,8 @@ pub unsafe fn ref_cache_ref_files_c_179_update_ref_with_content_len(ref_: *mut R
 }
 
 // original: set_ref_complete (htslib/ref_cache/ref_files.c:185)
-pub unsafe fn ref_cache_ref_files_c_185_set_ref_complete(ref_: *mut RefFile) -> c_int {
-    assert!(!ref_.is_null());
-    let ref_file = &mut *ref_;
+pub fn ref_cache_ref_files_c_185_set_ref_complete(ref_: usize) -> c_int {
+    let ref_file = refs().slots[ref_].as_mut().unwrap();
     let no_content_length = (ref_file.size == 0) as c_int;
     ref_file.status = REF_IS_COMPLETE;
     ref_file.size = ref_file.available;
@@ -246,31 +284,46 @@ pub unsafe fn ref_cache_ref_files_c_185_set_ref_complete(ref_: *mut RefFile) -> 
 }
 
 // original: release_ref_file (htslib/ref_cache/ref_files.c:193)
-pub unsafe fn ref_cache_ref_files_c_193_release_ref_file(ref_: *mut RefFile) -> c_int {
-    let ref_file = &mut *ref_;
+pub fn ref_cache_ref_files_c_193_release_ref_file(ref_: usize) -> c_int {
+    let refs = refs();
 
-    ref_file.ref_count -= 1;
-    if ref_file.ref_count > 0 {
-        return 0;
+    {
+        let ref_file = refs.slots[ref_].as_mut().unwrap();
+        ref_file.ref_count -= 1;
+        if ref_file.ref_count > 0 {
+            return 0;
+        }
     }
 
-    if ref_file.prev_md5.is_null() {
-        let m5hash = ref_hash(&ref_file.hexmd5);
-        REFS.by_md5[m5hash] = ref_file.next_md5;
-    } else {
-        (*ref_file.prev_md5).next_md5 = ref_file.next_md5;
+    // Unlink from the hash chain.
+    let (prev, next, hexmd5, fd) = {
+        let ref_file = refs.slots[ref_].as_ref().unwrap();
+        (ref_file.prev_md5, ref_file.next_md5, ref_file.hexmd5, ref_file.fd)
+    };
+
+    match prev {
+        None => {
+            let m5hash = ref_hash(&hexmd5);
+            refs.by_md5[m5hash] = next;
+        }
+        Some(p) => {
+            refs.slots[p].as_mut().unwrap().next_md5 = next;
+        }
     }
-    if !ref_file.next_md5.is_null() {
-        (*ref_file.next_md5).prev_md5 = ref_file.prev_md5;
+    if let Some(n) = next {
+        refs.slots[n].as_mut().unwrap().prev_md5 = prev;
     }
 
-    let res = if ref_file.fd >= 0 {
-        libc::close(ref_file.fd)
+    let res = if fd >= 0 {
+        // SAFETY: close is a raw fd syscall with no owned-Rust equivalent here.
+        unsafe { libc::close(fd) }
     } else {
         0
     };
 
-    drop(Box::from_raw(ref_));
+    // Drop the owned entry and reclaim its arena slot.
+    refs.slots[ref_] = None;
+    refs.free.push(ref_);
 
     res
 }

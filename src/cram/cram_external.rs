@@ -18,10 +18,6 @@ fn opt_ptr<T>(ptr: Option<NonNull<T>>) -> *mut T {
     ptr.map_or(std::ptr::null_mut(), NonNull::as_ptr)
 }
 
-fn opt_const_ptr<T>(ptr: Option<NonNull<T>>) -> *const T {
-    ptr.map_or(std::ptr::null(), |ptr| ptr.as_ptr().cast_const())
-}
-
 unsafe fn raw_slice<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
     if len == 0 {
         Some(&[])
@@ -833,24 +829,20 @@ unsafe fn cram_describe_encodings_ref(
     let mut r = 0;
     let mut key = 0;
     while let Some(codec) = unsafe { citer.next(&mut key) } {
-        let mut key_s = [0 as c_char; 4];
-        let mut key_i = 0usize;
+        let mut key_s: Vec<u8> = Vec::with_capacity(3);
         if (key >> 16) != 0 {
-            key_s[key_i] = (key >> 16) as c_char;
-            key_i += 1;
+            key_s.push((key >> 16) as u8);
         }
-        key_s[key_i] = ((key >> 8) & 0xff) as c_char;
-        key_i += 1;
-        key_s[key_i] = (key & 0xff) as c_char;
-        key_i += 1;
+        key_s.push(((key >> 8) & 0xff) as u8);
+        key_s.push((key & 0xff) as u8);
 
-        let ks_ptr = ks as *mut kstring_t;
-        r |= (unsafe { kputc(b'\t' as c_int, ks_ptr) } < 0) as c_int;
-        r |= (unsafe { kputsn(key_s.as_ptr(), key_i, ks_ptr) } < 0) as c_int;
-        r |= (unsafe { kputc(b'\t' as c_int, ks_ptr) } < 0) as c_int;
-        r |= (unsafe { cram_cram_codecs_c_4185_cram_codec_describe(codec.as_ptr(), ks_ptr) } < 0)
-            as c_int;
-        r |= (unsafe { kputc(b'\n' as c_int, ks_ptr) } < 0) as c_int;
+        r |= (kputc(b'\t' as c_int, ks) < 0) as c_int;
+        r |= (kputsn(&key_s, key_s.len(), ks) < 0) as c_int;
+        r |= (kputc(b'\t' as c_int, ks) < 0) as c_int;
+        r |= (unsafe {
+            cram_cram_codecs_c_4185_cram_codec_describe(codec.as_ptr(), ks as *mut kstring_t)
+        } < 0) as c_int;
+        r |= (kputc(b'\n' as c_int, ks) < 0) as c_int;
     }
 
     if r != 0 {
@@ -916,12 +908,7 @@ fn cram_block_get_data_ref(b: &cram_block) -> Option<NonNull<u8>> {
 
 fn cram_block_data_ref(b: &cram_block) -> Option<&[u8]> {
     let b = unsafe { block_layout(b) };
-    unsafe {
-        raw_slice(
-            opt_const_ptr(NonNull::new(b.data.cast::<u8>())),
-            b.uncomp_size.max(0) as usize,
-        )
-    }
+    unsafe { raw_slice(b.data.cast::<u8>().cast_const(), b.uncomp_size.max(0) as usize) }
 }
 
 pub unsafe fn cram_cram_external_c_528_cram_block_get_data(b: *mut cram_block) -> *mut c_void {

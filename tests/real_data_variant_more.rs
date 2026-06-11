@@ -225,14 +225,11 @@ unsafe fn synced_reader_summary_no_index(paths: &[&str]) -> String {
             assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
             let n_allele = (*rec).n_allele();
             if n_allele > 1 {
-                out.push_str(CStr::from_ptr(*(*rec).d.allele.add(1)).to_str().unwrap());
+                let d = &(*rec).d;
+                out.push_str(std::str::from_utf8(&d.allele[1]).unwrap());
                 for j in 2..n_allele {
                     out.push(',');
-                    out.push_str(
-                        CStr::from_ptr(*(*rec).d.allele.add(j as usize))
-                            .to_str()
-                            .unwrap(),
-                    );
+                    out.push_str(std::str::from_utf8(&d.allele[j as usize]).unwrap());
                 }
             } else {
                 out.push('.');
@@ -367,8 +364,9 @@ fn index_vcf_first_record_decodes_real_info_and_format_arrays() {
         assert_eq!((*rec).rlen, 1);
         assert_eq!((*rec).n_sample(), 1);
         assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
-        assert_eq!(CStr::from_ptr(*(*rec).d.allele), c"G");
-        assert_eq!(CStr::from_ptr(*(*rec).d.allele.add(1)), c"<*>");
+        let d = &(*rec).d;
+        assert_eq!(d.allele[0].as_slice(), b"G");
+        assert_eq!(d.allele[1].as_slice(), b"<*>");
 
         let mut dp = std::ptr::null_mut();
         let mut ndp = 0;
@@ -483,11 +481,10 @@ fn tabix_vcf_fixture_variant_type_matrix_matches_htslib_classification() {
                 3_000_150 | 3_062_915 | 3_106_154 | 3_177_144 | 3_199_812
             ) {
                 assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
+                let d = &(*rec).d;
                 seen.push((
                     pos,
-                    CStr::from_ptr(*(*rec).d.allele)
-                        .to_string_lossy()
-                        .into_owned(),
+                    String::from_utf8_lossy(&d.allele[0]).into_owned(),
                     (1..(*rec).n_allele())
                         .map(|i| bcf_get_variant_type(rec, i as c_int))
                         .collect::<Vec<_>>(),
@@ -567,7 +564,8 @@ fn tabix_vcf_fixture_decodes_high_numbered_gt_alleles() {
         assert_eq!((*rec).pos + 1, 3_258_501);
         assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
         assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec)), c"4");
-        assert_eq!(CStr::from_ptr(*(*rec).d.allele), c"C");
+        let d = &(*rec).d;
+        assert_eq!(d.allele[0].as_slice(), b"C");
         assert_eq!((*rec).n_allele(), 306);
         assert_eq!(
             bcf_has_variant_types(rec, hts_sys::VCF_SNP, 1),

@@ -66,45 +66,30 @@ unsafe fn cstr_to_string(s: *const c_char) -> String {
     }
 }
 
-unsafe fn error_message(message: String) -> ! {
-    libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
-    let bytes = message.as_bytes();
-    libc::fwrite(
-        bytes.as_ptr().cast(),
-        1,
-        bytes.len(),
-        crate::htslib_rs::c_compat::stderr.cast(),
-    );
-    libc::fflush(crate::htslib_rs::c_compat::stderr.cast());
-    libc::exit(libc::EXIT_FAILURE);
+fn error_message(message: String) -> ! {
+    let _ = std::io::stdout().flush();
+    eprint!("{message}");
+    let _ = std::io::stderr().flush();
+    std::process::exit(1);
 }
 
-unsafe fn error_errno_message(message: Option<String>) -> ! {
-    let eno = *crate::htslib_rs::c_compat::__errno_location();
-    libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
+fn error_errno_message(message: Option<String>) -> ! {
+    let eno = std::io::Error::last_os_error();
+    let raw = eno.raw_os_error().unwrap_or(0);
+    let _ = std::io::stdout().flush();
     if let Some(message) = message.as_ref() {
-        let bytes = message.as_bytes();
-        libc::fwrite(
-            bytes.as_ptr().cast(),
-            1,
-            bytes.len(),
-            crate::htslib_rs::c_compat::stderr.cast(),
-        );
+        eprint!("{message}");
     }
-    if eno != 0 {
+    if raw != 0 {
         if message.is_some() {
-            libc::fputs(c": ".as_ptr(), crate::htslib_rs::c_compat::stderr.cast());
+            eprint!(": ");
         }
-        libc::fputs(
-            libc::strerror(eno),
-            crate::htslib_rs::c_compat::stderr.cast(),
-        );
-        libc::fputc(b'\n' as c_int, crate::htslib_rs::c_compat::stderr.cast());
+        eprintln!("{eno}");
     } else {
-        libc::fputc(b'\n' as c_int, crate::htslib_rs::c_compat::stderr.cast());
+        eprintln!();
     }
-    libc::fflush(crate::htslib_rs::c_compat::stderr.cast());
-    libc::exit(libc::EXIT_FAILURE);
+    let _ = std::io::stderr().flush();
+    std::process::exit(1);
 }
 
 struct OwnedThreadPool {
@@ -201,24 +186,11 @@ impl RegionBytes {
     }
 }
 
-unsafe fn malloc_c_string_from_bytes(bytes: &[u8]) -> *mut c_char {
-    if bytes.contains(&0) {
-        return ptr::null_mut();
-    }
-    let raw = libc::malloc(bytes.len() + 1).cast::<c_char>();
-    if raw.is_null() {
-        error_errno_message(None);
-    }
-    ptr::copy_nonoverlapping(bytes.as_ptr(), raw.cast(), bytes.len());
-    *raw.add(bytes.len()) = 0;
-    raw
-}
-
 unsafe extern "C" fn tbx_name2id_adapter(data: *mut c_void, name: *const c_char) -> c_int {
     let Some(tbx) = data.cast::<tbx::tbx_t>().as_ref() else {
         return -1;
     };
-    tbx::tbx_name2id(tbx, name)
+    tbx::tbx_name2id(tbx, CStr::from_ptr(name).to_bytes())
 }
 
 unsafe extern "C" fn tbx_readrec_adapter(
@@ -300,12 +272,12 @@ unsafe fn tbx_itr_next(
     fp: *mut htsFile,
     tbx_: *mut tbx::tbx_t,
     itr: *mut hts_itr_t,
-    str_: *mut kstring_t,
+    str_: &mut kstring_t,
 ) -> c_int {
     hts::hts_itr_next(
         (*fp).fp.bgzf.cast(),
         itr,
-        str_.cast(),
+        (str_ as *mut kstring_t).cast(),
         tbx_.cast::<c_void>(),
     )
 }
@@ -380,28 +352,16 @@ pub unsafe fn tabix_c_135_parse_regions(
     regions_fname: *const c_char,
     argv: *mut *mut c_char,
     argc: c_int,
-    nregs: *mut c_int,
-) -> *mut *mut c_char {
-    let Some(nregs) = nregs.as_mut() else {
-        return ptr::null_mut();
-    };
-    let Some(regions) = tabix_parse_regions_owned(regions_fname, argv, argc) else {
-        return ptr::null_mut();
-    };
-    *nregs = regions.len() as c_int;
-    let regs = libc::malloc(regions.len().max(1) * std::mem::size_of::<*mut c_char>())
-        .cast::<*mut c_char>();
-    if regs.is_null() {
-        error_errno_message(None);
-    }
-    for (i, region) in regions.into_iter().enumerate() {
-        let raw = malloc_c_string_from_bytes(&region.bytes);
-        if raw.is_null() {
+) -> Option<Vec<Vec<u8>>> {
+    let regions = tabix_parse_regions_owned(regions_fname, argv, argc)?;
+    let mut out = Vec::with_capacity(regions.len());
+    for region in regions {
+        if region.bytes.contains(&0) {
             error_message("region contains an interior NUL\n".to_string());
         }
-        *regs.add(i) = raw;
+        out.push(region.bytes);
     }
-    regs
+    Some(out)
 }
 
 unsafe fn tabix_parse_regions_owned(
@@ -420,49 +380,43 @@ unsafe fn tabix_parse_regions_owned(
     if !regions_fname.is_null() {
         // improve me: this is a too heavy machinery for parsing regions...
 
-        let idx = regidx::regidx_c_246_regidx_init(
-            regions_fname.cast_mut(),
+        let Some(mut idx) = regidx::regidx_c_246_regidx_init(
+            Some(CStr::from_ptr(regions_fname).to_bytes()),
             None,
             None,
             0,
-            ptr::null_mut(),
-        );
-        if idx.is_null() {
+            None,
+        ) else {
             error_errno_message(Some(format!(
                 "Could not build region list for \"{}\"",
                 cstr_to_string(regions_fname)
             )));
-        }
-        let itr = regidx::regidx_c_584_regitr_init(idx);
-        if itr.is_null() {
-            error_errno_message(Some(format!(
-                "Could not initialize an iterator over \"{}\"",
-                cstr_to_string(regions_fname)
-            )));
-        }
+        };
+        let mut itr = regidx::regidx_c_584_regitr_init(&mut idx);
 
-        let extra = regidx::regidx_c_98_regidx_nregs(idx).max(0) as usize;
+        let extra = regidx::regidx_c_98_regidx_nregs(&idx).max(0) as usize;
         if regs.try_reserve(extra).is_err() {
             error_errno_message(None);
         }
 
-        let mut nseq = 0;
-        let seqs_raw = regidx::regidx_c_105_regidx_seq_names(idx, &mut nseq);
-        if nseq > 0 && seqs_raw.is_null() {
-            error_errno_message(Some("Failed to get region sequence names".to_string()));
-        }
-        let seqs = if nseq > 0 {
-            std::slice::from_raw_parts(seqs_raw, nseq as usize)
-        } else {
-            &[]
-        };
-        for &seq in seqs {
-            if regidx::regidx_c_401_regidx_overlap(idx, seq, 0, HTS_POS_MAX, itr) < 0 {
+        let seqs: Vec<Vec<u8>> = regidx::regidx_c_105_regidx_seq_names(&idx).to_vec();
+        for seq in &seqs {
+            if regidx::regidx_c_401_regidx_overlap(
+                &mut idx,
+                seq,
+                0,
+                HTS_POS_MAX,
+                Some(&mut itr),
+            ) < 0
+            {
                 error_errno_message(Some("Failed to build overlapping regions list".to_string()));
             }
 
-            while regidx::regidx_c_612_regitr_overlap(itr) != 0 {
-                regs.push(RegionBytes::from_interval(seq, (*itr).beg, (*itr).end));
+            while regidx::regidx_c_612_regitr_overlap(&mut itr) != 0 {
+                let mut bytes = Vec::with_capacity(seq.len() + 32);
+                bytes.extend_from_slice(seq);
+                write!(&mut bytes, ":{}-{}", itr.beg + 1, itr.end + 1).unwrap();
+                regs.push(RegionBytes { bytes });
             }
         }
         regidx::regidx_c_606_regitr_destroy(itr);
@@ -524,21 +478,21 @@ unsafe fn tabix_c_206_query_regions(
         }
     }
 
-    let reg_idx = if !args.targets_fname.is_null() {
+    let mut reg_idx = if !args.targets_fname.is_null() {
         let reg_idx = regidx::regidx_c_246_regidx_init(
-            args.targets_fname.cast_mut(),
+            Some(CStr::from_ptr(args.targets_fname).to_bytes()),
             None,
             None,
             0,
-            ptr::null_mut(),
+            None,
         );
-        if reg_idx.is_null() {
+        if reg_idx.is_none() {
             error_errno_message(Some(format!(
                 "Could not build region list for \"{}\"",
                 cstr_to_string(args.targets_fname)
             )));
         }
-        NonNull::new(reg_idx)
+        reg_idx
     } else {
         None
     };
@@ -595,7 +549,7 @@ unsafe fn tabix_c_206_query_regions(
                 }
                 let mut ret = bcf_itr_next(fp, itr, rec);
                 while ret >= 0 {
-                    if let Some(reg_idx) = reg_idx {
+                    if let Some(reg_idx) = reg_idx.as_deref_mut() {
                         let chr = vcf::bcf_seqname(hdr, rec);
                         if chr.is_null() {
                             error_message(format!(
@@ -605,11 +559,11 @@ unsafe fn tabix_c_206_query_regions(
                             ));
                         }
                         if regidx::regidx_c_401_regidx_overlap(
-                            reg_idx.as_ptr(),
-                            chr,
+                            reg_idx,
+                            CStr::from_ptr(chr).to_bytes(),
                             (*rec).pos,
                             (*rec).pos + (*rec).rlen as hts_pos_t - 1,
-                            ptr::null_mut(),
+                            None,
                         ) == 0
                         {
                             ret = bcf_itr_next(fp, itr, rec);
@@ -618,7 +572,10 @@ unsafe fn tabix_c_206_query_regions(
                     }
                     if found == 0 {
                         if args.separate_regs != 0 {
-                            libc::printf(c"%c%s\n".as_ptr(), conf.meta_char, reg_ptr);
+                            let mut line = vec![conf.meta_char as u8];
+                            line.extend_from_slice(&reg.bytes);
+                            line.push(b'\n');
+                            std::io::stdout().write_all(&line).unwrap();
                         }
                         found = 1;
                     }
@@ -666,14 +623,16 @@ unsafe fn tabix_c_206_query_regions(
                 cstr_to_string(fname)
             )));
         }
-        let mut str_: kstring_t = std::mem::zeroed();
+        let mut str_: kstring_t = kstring_t::default();
         if args.print_header != 0 {
             let mut ret = hts::hts_getline(fp, 2, &mut str_);
             while ret >= 0 {
-                if str_.l == 0 || *str_.s != (*tbx_).conf.meta_char as c_char {
+                if str_.data.is_empty() || str_.data[0] != (*tbx_).conf.meta_char as u8 {
                     break;
                 }
-                if libc::puts(str_.s) < 0 {
+                let line = &str_.data[..];
+                let mut out = std::io::stdout();
+                if out.write_all(line).and_then(|()| out.write_all(b"\n")).is_err() {
                     error_errno_message(Some("Error writing to stdout".to_string()));
                 }
                 ret = hts::hts_getline(fp, 2, &mut str_);
@@ -705,14 +664,14 @@ unsafe fn tabix_c_206_query_regions(
                 }
                 let mut ret = tbx_itr_next(fp, tbx_, itr, &mut str_);
                 while ret >= 0 {
-                    if let (Some(reg_idx), Some(seqs)) = (reg_idx, seqs.as_ref()) {
+                    if let (Some(reg_idx), Some(seqs)) = (reg_idx.as_deref_mut(), seqs.as_ref()) {
                         if let Some(&seq) = seqs.as_slice().get((*itr).curr_tid as usize) {
                             if regidx::regidx_c_401_regidx_overlap(
-                                reg_idx.as_ptr(),
-                                seq,
+                                reg_idx,
+                                CStr::from_ptr(seq).to_bytes(),
                                 (*itr).curr_beg,
                                 (*itr).curr_end - 1,
-                                ptr::null_mut(),
+                                None,
                             ) == 0
                             {
                                 ret = tbx_itr_next(fp, tbx_, itr, &mut str_);
@@ -722,11 +681,16 @@ unsafe fn tabix_c_206_query_regions(
                     }
                     if found == 0 {
                         if args.separate_regs != 0 {
-                            libc::printf(c"%c%s\n".as_ptr(), conf.meta_char, reg_ptr);
+                            let mut line = vec![conf.meta_char as u8];
+                            line.extend_from_slice(&reg.bytes);
+                            line.push(b'\n');
+                            std::io::stdout().write_all(&line).unwrap();
                         }
                         found = 1;
                     }
-                    if libc::puts(str_.s) < 0 {
+                    let line = &str_.data[..];
+                    let mut out = std::io::stdout();
+                    if out.write_all(line).and_then(|()| out.write_all(b"\n")).is_err() {
                         error_errno_message(Some("Failed to write to stdout".to_string()));
                     }
                     ret = tbx_itr_next(fp, tbx_, itr, &mut str_);
@@ -740,14 +704,14 @@ unsafe fn tabix_c_206_query_regions(
                 hts::hts_itr_destroy(itr);
             }
         }
-        libc::free(str_.s.cast());
+        drop(str_);
         tbx::tbx_destroy(tbx_);
     } else if format == HTS_FORMAT_BAM {
         error_message("Please use \"samtools view\" for querying BAM files.\n".to_string());
     }
 
     if let Some(reg_idx) = reg_idx {
-        regidx::regidx_c_311_regidx_destroy(reg_idx.as_ptr());
+        regidx::regidx_c_311_regidx_destroy(reg_idx);
     }
     if hts::hts_close(fp) != 0 {
         error_errno_message(Some(format!(
@@ -783,7 +747,9 @@ pub unsafe fn tabix_c_396_query_chroms(fname: *const c_char, download: c_int) ->
             error_errno_message(Some("Couldn't get list of sequence names".to_string()));
         };
         for &seq in seqs.as_slice() {
-            if libc::printf(c"%s\n".as_ptr(), seq) < 0 {
+            let name = CStr::from_ptr(seq).to_bytes();
+            let mut out = std::io::stdout();
+            if out.write_all(name).and_then(|()| out.write_all(b"\n")).is_err() {
                 error_errno_message(Some("Couldn't write to stdout".to_string()));
             }
         }
@@ -829,7 +795,9 @@ pub unsafe fn tabix_c_396_query_chroms(fname: *const c_char, download: c_int) ->
             error_errno_message(Some("Couldn't get list of sequence names".to_string()));
         };
         for &seq in seqs.as_slice() {
-            if libc::printf(c"%s\n".as_ptr(), seq) < 0 {
+            let name = CStr::from_ptr(seq).to_bytes();
+            let mut out = std::io::stdout();
+            if out.write_all(name).and_then(|()| out.write_all(b"\n")).is_err() {
                 error_errno_message(Some("Couldn't write to stdout".to_string()));
             }
         }
@@ -869,14 +837,14 @@ pub unsafe fn tabix_c_437_reheader_file(
             return -1;
         }
 
-        let buffer = (*fp).uncompressed_block.cast::<c_char>();
-        let mut skip_until = 0;
+        let meta = conf.meta_char as u8;
+        let mut skip_until: c_int = 0;
 
         // Skip the header: find out the position of the data block
-        if *buffer == conf.meta_char as c_char {
+        if (&(*fp).uncompressed_block)[0] == meta {
             skip_until = 1;
             loop {
-                if *buffer.add(skip_until as usize) == b'\n' as c_char {
+                if (&(*fp).uncompressed_block)[skip_until as usize] == b'\n' {
                     skip_until += 1;
                     if skip_until >= (*fp).block_length {
                         if bgzf::bgzf_c_1485_bgzf_mt_read_block(fp) != 0 || (*fp).block_length == 0
@@ -889,7 +857,7 @@ pub unsafe fn tabix_c_437_reheader_file(
                         skip_until = 0;
                     }
                     // The header has finished
-                    if *buffer.add(skip_until as usize) != conf.meta_char as c_char {
+                    if (&(*fp).uncompressed_block)[skip_until as usize] != meta {
                         break;
                     }
                 }
@@ -907,16 +875,14 @@ pub unsafe fn tabix_c_437_reheader_file(
         }
 
         // Output the new header
-        let hdr = libc::fopen(header, c"r".as_ptr());
-        if hdr.is_null() {
-            error_message(format!(
-                "{}: {}",
-                cstr_to_string(header),
-                cstr_to_string(libc::strerror(
-                    *crate::htslib_rs::c_compat::__errno_location()
-                ))
-            ));
-        }
+        use std::io::Read as _;
+        use std::os::unix::ffi::OsStrExt as _;
+        let header_path =
+            std::ffi::OsStr::from_bytes(CStr::from_ptr(header).to_bytes()).to_owned();
+        let mut hdr = match std::fs::File::open(&header_path) {
+            Ok(f) => f,
+            Err(e) => error_message(format!("{}: {}", cstr_to_string(header), e)),
+        };
         let page_size = 32768usize;
         let mut buf = vec![0u8; page_size];
         let bgzf_out = bgzf::bgzf_open(c"-".as_ptr(), c"w".as_ptr());
@@ -931,36 +897,32 @@ pub unsafe fn tabix_c_437_reheader_file(
                 return -1;
             }
         }
-        let mut nread = libc::fread(buf.as_mut_ptr().cast(), 1, page_size - 1, hdr) as isize;
-        while nread > 0 {
-            if nread < (page_size - 1) as isize && buf[(nread - 1) as usize] != b'\n' {
-                buf[nread as usize] = b'\n';
+        loop {
+            let mut nread = match hdr.read(&mut buf[..page_size - 1]) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => error_errno_message(Some(format!(
+                    "Failed to read \"{}\"",
+                    cstr_to_string(header)
+                ))),
+            };
+            if nread < page_size - 1 && buf[nread - 1] != b'\n' {
+                buf[nread] = b'\n';
                 nread += 1;
             }
-            if bgzf::bgzf_write(bgzf_out, buf.as_ptr().cast(), nread as usize) < 0 {
+            if bgzf::bgzf_write(bgzf_out, buf.as_ptr().cast(), nread) < 0 {
                 error_errno_message(Some(format!("Write error {}", (*bgzf_out).bitfields >> 16)));
             }
-            nread = libc::fread(buf.as_mut_ptr().cast(), 1, page_size - 1, hdr) as isize;
         }
-        if libc::ferror(hdr) != 0 {
-            error_errno_message(Some(format!(
-                "Failed to read \"{}\"",
-                cstr_to_string(header)
-            )));
-        }
-        if libc::fclose(hdr) != 0 {
-            error_errno_message(Some(format!(
-                "Closing \"{}\" failed",
-                cstr_to_string(header)
-            )));
-        }
+        drop(hdr);
 
         // Output all remaining data read with the header block
-        if (*fp).block_length - skip_until > 0
+        let remaining = (*fp).block_length - skip_until;
+        if remaining > 0
             && bgzf::bgzf_write(
                 bgzf_out,
-                buffer.add(skip_until as usize).cast(),
-                ((*fp).block_length - skip_until) as usize,
+                (&(*fp).uncompressed_block)[skip_until as usize..].as_ptr().cast(),
+                remaining as usize,
             ) < 0
         {
             error_errno_message(Some(format!("Write error {}", (*fp).bitfields >> 16)));
@@ -970,9 +932,12 @@ pub unsafe fn tabix_c_437_reheader_file(
         }
 
         loop {
-            nread = bgzf::bgzf_raw_read(fp, buf.as_mut_ptr().cast(), page_size);
-            if nread <= 0 {
+            let nread = bgzf::bgzf_raw_read(fp, buf.as_mut_ptr().cast(), page_size);
+            if nread == 0 {
                 break;
+            }
+            if nread < 0 {
+                error_errno_message(Some(format!("Error reading \"{}\"", cstr_to_string(fname))));
             }
 
             let count = bgzf::bgzf_raw_write(bgzf_out, buf.as_ptr().cast(), nread as usize);
@@ -982,9 +947,6 @@ pub unsafe fn tabix_c_437_reheader_file(
                     count, nread as c_int
                 )));
             }
-        }
-        if nread < 0 {
-            error_errno_message(Some(format!("Error reading \"{}\"", cstr_to_string(fname))));
         }
         if bgzf::bgzf_close(bgzf_out) < 0 {
             error_errno_message(Some(format!(
@@ -1006,111 +968,44 @@ pub unsafe fn tabix_c_437_reheader_file(
 }
 
 // original: usage (htslib/tabix.c:580)
-pub unsafe fn tabix_c_580_usage(fp: *mut libc::FILE, status: c_int) -> c_int {
-    libc::fprintf(fp, c"\n".as_ptr());
-    libc::fprintf(
-        fp,
-        c"Version: %s\n".as_ptr(),
-        crate::htslib_rs::hts::hts_version(),
+pub unsafe fn tabix_c_580_usage(to_stdout: bool, status: c_int) -> c_int {
+    let version = CStr::from_ptr(crate::htslib_rs::hts::hts_version()).to_string_lossy();
+    let text = format!(
+        "\n\
+Version: {version}\n\
+Usage:   tabix [OPTIONS] [FILE] [REGION [...]]\n\
+\n\
+Indexing Options:\n\
+   -0, --zero-based           coordinates are zero-based\n\
+   -b, --begin INT            column number for region start [4]\n\
+   -c, --comment CHAR         skip comment lines starting with CHAR [null]\n\
+   -C, --csi                  generate CSI index for VCF (default is TBI)\n\
+   -e, --end INT              column number for region end (if no end, set INT to -b) [5]\n\
+   -f, --force                overwrite existing index without asking\n\
+   -m, --min-shift INT        set minimal interval size for CSI indices to 2^INT [14]\n\
+   -p, --preset STR           gff, bed, sam, vcf, gaf\n\
+   -s, --sequence INT         column number for sequence names (suppressed by -p) [1]\n\
+   -S, --skip-lines INT       skip first INT lines [0]\n\
+\n\
+Querying and other options:\n\
+   -h, --print-header         print also the header lines\n\
+   -H, --only-header          print only the header lines\n\
+   -l, --list-chroms          list chromosome names\n\
+   -r, --reheader FILE        replace the header with the content of FILE\n\
+   -R, --regions FILE         restrict to regions listed in the file\n\
+   -T, --targets FILE         similar to -R but streams rather than index-jumps\n\
+   -D                         do not download the index file\n\
+       --cache INT            set cache size to INT megabytes (0 disables) [10]\n\
+       --separate-regions     separate the output by corresponding regions\n\
+       --verbosity INT        set verbosity [3]\n\
+   -@, --threads INT          number of additional threads to use [0]\n\
+\n"
     );
-    libc::fprintf(
-        fp,
-        c"Usage:   tabix [OPTIONS] [FILE] [REGION [...]]\n".as_ptr(),
-    );
-    libc::fprintf(fp, c"\n".as_ptr());
-    libc::fprintf(fp, c"Indexing Options:\n".as_ptr());
-    libc::fprintf(
-        fp,
-        c"   -0, --zero-based           coordinates are zero-based\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -b, --begin INT            column number for region start [4]\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -c, --comment CHAR         skip comment lines starting with CHAR [null]\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -C, --csi                  generate CSI index for VCF (default is TBI)\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -e, --end INT              column number for region end (if no end, set INT to -b) [5]\n"
-            .as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -f, --force                overwrite existing index without asking\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -m, --min-shift INT        set minimal interval size for CSI indices to 2^INT [14]\n"
-            .as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -p, --preset STR           gff, bed, sam, vcf, gaf\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -s, --sequence INT         column number for sequence names (suppressed by -p) [1]\n"
-            .as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -S, --skip-lines INT       skip first INT lines [0]\n".as_ptr(),
-    );
-    libc::fprintf(fp, c"\n".as_ptr());
-    libc::fprintf(fp, c"Querying and other options:\n".as_ptr());
-    libc::fprintf(
-        fp,
-        c"   -h, --print-header         print also the header lines\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -H, --only-header          print only the header lines\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -l, --list-chroms          list chromosome names\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -r, --reheader FILE        replace the header with the content of FILE\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -R, --regions FILE         restrict to regions listed in the file\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -T, --targets FILE         similar to -R but streams rather than index-jumps\n"
-            .as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -D                         do not download the index file\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"       --cache INT            set cache size to INT megabytes (0 disables) [10]\n"
-            .as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"       --separate-regions     separate the output by corresponding regions\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"       --verbosity INT        set verbosity [3]\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -@, --threads INT          number of additional threads to use [0]\n".as_ptr(),
-    );
-    libc::fprintf(fp, c"\n".as_ptr());
+    if to_stdout {
+        print!("{text}");
+    } else {
+        eprint!("{text}");
+    }
     status
 }
 
@@ -1269,7 +1164,6 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
         },
     ];
 
-    let mut tmp: *mut c_char = ptr::null_mut();
     loop {
         let c = getopt_long(
             argc,
@@ -1297,54 +1191,57 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 detect = 0;
             }
             x if x == b'b' as c_int => {
-                conf.bc = libc::strtol(optarg, &mut tmp, 10) as c_int;
-                if *tmp != 0 {
-                    error_message(format!(
+                let s = std::str::from_utf8(CStr::from_ptr(optarg).to_bytes()).unwrap_or("\0");
+                match s.trim_start().parse::<i64>() {
+                    Ok(v) => conf.bc = v as c_int,
+                    Err(_) => error_message(format!(
                         "Could not parse argument: -b {}\n",
                         cstr_to_string(optarg)
-                    ));
+                    )),
                 }
                 detect = 0;
             }
             x if x == b'e' as c_int => {
-                conf.ec = libc::strtol(optarg, &mut tmp, 10) as c_int;
-                if *tmp != 0 {
-                    error_message(format!(
+                let s = std::str::from_utf8(CStr::from_ptr(optarg).to_bytes()).unwrap_or("\0");
+                match s.trim_start().parse::<i64>() {
+                    Ok(v) => conf.ec = v as c_int,
+                    Err(_) => error_message(format!(
                         "Could not parse argument: -e {}\n",
                         cstr_to_string(optarg)
-                    ));
+                    )),
                 }
                 detect = 0;
             }
             x if x == b'c' as c_int => {
-                conf.meta_char = *optarg as c_int;
+                conf.meta_char = CStr::from_ptr(optarg).to_bytes().first().copied().unwrap_or(0)
+                    as c_int;
                 detect = 0;
             }
             x if x == b'f' as c_int => is_force = 1,
             x if x == b'm' as c_int => {
-                min_shift = libc::strtol(optarg, &mut tmp, 10) as c_int;
-                if *tmp != 0 {
-                    error_message(format!(
+                let s = std::str::from_utf8(CStr::from_ptr(optarg).to_bytes()).unwrap_or("\0");
+                match s.trim_start().parse::<i64>() {
+                    Ok(v) => min_shift = v as c_int,
+                    Err(_) => error_message(format!(
                         "Could not parse argument: -m {}\n",
                         cstr_to_string(optarg)
-                    ));
+                    )),
                 }
             }
             x if x == b'p' as c_int => {
                 detect = 0;
-                if libc::strcmp(optarg, c"gff".as_ptr()) == 0 {
+                let preset = CStr::from_ptr(optarg).to_bytes();
+                if preset == b"gff" {
                     conf = tbx::tbx_conf_gff();
-                } else if libc::strcmp(optarg, c"bed".as_ptr()) == 0 {
+                } else if preset == b"bed" {
                     conf = tbx::tbx_conf_bed();
-                } else if libc::strcmp(optarg, c"sam".as_ptr()) == 0 {
+                } else if preset == b"sam" {
                     conf = tbx::tbx_conf_sam();
-                } else if libc::strcmp(optarg, c"vcf".as_ptr()) == 0 {
+                } else if preset == b"vcf" {
                     conf = tbx::tbx_conf_vcf();
-                } else if libc::strcmp(optarg, c"gaf".as_ptr()) == 0 {
+                } else if preset == b"gaf" {
                     conf = tbx_conf_gaf();
-                } else if libc::strcmp(optarg, c"bcf".as_ptr()) == 0
-                    || libc::strcmp(optarg, c"bam".as_ptr()) == 0
-                {
+                } else if preset == b"bcf" || preset == b"bam" {
                     detect = 1;
                 } else {
                     error_message(format!(
@@ -1354,48 +1251,57 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 }
             }
             x if x == b's' as c_int => {
-                conf.sc = libc::strtol(optarg, &mut tmp, 10) as c_int;
-                if *tmp != 0 {
-                    error_message(format!(
+                let s = std::str::from_utf8(CStr::from_ptr(optarg).to_bytes()).unwrap_or("\0");
+                match s.trim_start().parse::<i64>() {
+                    Ok(v) => conf.sc = v as c_int,
+                    Err(_) => error_message(format!(
                         "Could not parse argument: -s {}\n",
                         cstr_to_string(optarg)
-                    ));
+                    )),
                 }
                 detect = 0;
             }
             x if x == b'S' as c_int => {
-                new_line_skip = libc::strtol(optarg, &mut tmp, 10) as c_int;
-                if *tmp != 0 {
-                    error_message(format!(
+                let s = std::str::from_utf8(CStr::from_ptr(optarg).to_bytes()).unwrap_or("\0");
+                match s.trim_start().parse::<i64>() {
+                    Ok(v) => new_line_skip = v as c_int,
+                    Err(_) => error_message(format!(
                         "Could not parse argument: -S {}\n",
                         cstr_to_string(optarg)
-                    ));
+                    )),
                 }
                 detect = 0;
             }
             x if x == b'D' as c_int => args.download_index = 0,
             1 => {
-                libc::printf(
-                    c"tabix (htslib) %s\nCopyright (C) 2025 Genome Research Ltd.\n".as_ptr(),
-                    hts::hts_version(),
-                );
-                return libc::EXIT_SUCCESS;
+                let version = CStr::from_ptr(hts::hts_version()).to_string_lossy();
+                print!("tabix (htslib) {version}\nCopyright (C) 2025 Genome Research Ltd.\n");
+                return 0;
             }
             2 => {
-                return tabix_c_580_usage(
-                    crate::htslib_rs::c_compat::stdout.cast(),
-                    libc::EXIT_SUCCESS,
-                );
+                return tabix_c_580_usage(true, 0);
             }
             3 => {
-                let mut v = libc::atoi(optarg);
+                let bytes = CStr::from_ptr(optarg).to_bytes();
+                let s = std::str::from_utf8(bytes).unwrap_or("");
+                let s = s.trim_start();
+                let end = s
+                    .find(|c: char| !c.is_ascii_digit() && c != '-' && c != '+')
+                    .unwrap_or(s.len());
+                let mut v: c_int = s[..end].parse().unwrap_or(0);
                 if v < 0 {
                     v = 0;
                 }
                 hts::hts_set_log_level(v);
             }
             4 => {
-                args.cache_megs = libc::atoi(optarg);
+                let bytes = CStr::from_ptr(optarg).to_bytes();
+                let s = std::str::from_utf8(bytes).unwrap_or("");
+                let s = s.trim_start();
+                let end = s
+                    .find(|c: char| !c.is_ascii_digit() && c != '-' && c != '+')
+                    .unwrap_or(s.len());
+                args.cache_megs = s[..end].parse().unwrap_or(0);
                 if args.cache_megs < 0 {
                     args.cache_megs = 0;
                 } else if args.cache_megs >= c_int::MAX / 1048576 {
@@ -1403,12 +1309,17 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
                 }
             }
             5 => args.separate_regs = 1,
-            x if x == b'@' as c_int => args.threads = libc::atoi(optarg),
+            x if x == b'@' as c_int => {
+                let bytes = CStr::from_ptr(optarg).to_bytes();
+                let s = std::str::from_utf8(bytes).unwrap_or("");
+                let s = s.trim_start();
+                let end = s
+                    .find(|c: char| !c.is_ascii_digit() && c != '-' && c != '+')
+                    .unwrap_or(s.len());
+                args.threads = s[..end].parse().unwrap_or(0);
+            }
             _ => {
-                return tabix_c_580_usage(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    libc::EXIT_FAILURE,
-                );
+                return tabix_c_580_usage(false, 1);
             }
         }
     }
@@ -1418,10 +1329,7 @@ pub unsafe fn tabix_c_614_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     }
 
     if optind == argc {
-        return tabix_c_580_usage(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            libc::EXIT_FAILURE,
-        );
+        return tabix_c_580_usage(false, 1);
     }
 
     if list_chroms != 0 {

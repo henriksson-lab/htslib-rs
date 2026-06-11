@@ -51,10 +51,7 @@ pub unsafe fn bgzf_getc_(fp: *mut BGZF) -> i32 {
 
 unsafe fn bgzf_getc_ref(fp: &mut BGZF) -> i32 {
     if fp.block_offset + 1 < fp.block_length {
-        let c = *fp
-            .uncompressed_block
-            .cast::<u8>()
-            .add(fp.block_offset as usize);
+        let c = fp.uncompressed_block[fp.block_offset as usize];
         fp.block_offset += 1;
         fp.uncompressed_address += 1;
         return c as i32;
@@ -167,10 +164,6 @@ impl faidx_t {
     fn set_bgzf(&mut self, bgzf: Option<NonNull<BGZF>>) -> bool {
         self.bgzf = bgzf;
         self.bgzf.is_some()
-    }
-
-    fn name_ptr(&self, i: usize) -> *const i8 {
-        self.name[i].as_ptr().cast()
     }
 
     fn name_bytes(&self, i: usize) -> &[u8] {
@@ -2396,7 +2389,6 @@ mod tests {
         assert_eq!(isgraph_(b' '), 0);
         assert_eq!(isgraph_(0x7f), 0);
 
-        let mut data = *b"xyz";
         let mut fp = BGZF {
             bitfields: 0,
             cache_size: 0,
@@ -2405,12 +2397,12 @@ mod tests {
             block_offset: 0,
             block_address: 0,
             uncompressed_address: 0,
-            uncompressed_block: data.as_mut_ptr().cast(),
-            compressed_block: std::ptr::null_mut(),
-            cache: std::ptr::null_mut(),
-            fp: std::ptr::null_mut(),
-            mt: std::ptr::null_mut(),
-            idx: std::ptr::null_mut(),
+            uncompressed_block: b"xyz".to_vec(),
+            compressed_block: Vec::new(),
+            cache: None,
+            fp: crate::htslib_rs::bgzf::BgzfFp::None,
+            mt: None,
+            idx: None,
             idx_build_otf: 0,
             gz_stream: None,
             seeked: 0,
@@ -2461,7 +2453,6 @@ mod tests {
 
     #[test]
     fn fai_set_cache_size_forwards_to_bgzf_when_cache_exists() {
-        let mut cache_marker = 0u8;
         let mut bgzf = BGZF {
             bitfields: 0,
             cache_size: 0,
@@ -2470,12 +2461,12 @@ mod tests {
             block_offset: 0,
             block_address: 0,
             uncompressed_address: 0,
-            uncompressed_block: std::ptr::null_mut(),
-            compressed_block: std::ptr::null_mut(),
-            cache: (&mut cache_marker as *mut u8).cast(),
-            fp: std::ptr::null_mut(),
-            mt: std::ptr::null_mut(),
-            idx: std::ptr::null_mut(),
+            uncompressed_block: Vec::new(),
+            compressed_block: Vec::new(),
+            cache: Some(Box::new(super::super::bgzf::bgzf_cache_t::default())),
+            fp: crate::htslib_rs::bgzf::BgzfFp::None,
+            mt: None,
+            idx: None,
             idx_build_otf: 0,
             gz_stream: None,
             seeked: 0,
@@ -2949,29 +2940,40 @@ fn split_fai_name_and_fields(line: &[u8]) -> Option<(&[u8], &[u8])> {
 }
 
 fn parse_fai_numeric_fields(rest: &[u8], format: i32) -> Option<(u64, u64, u32, u32, u64)> {
-    let mut fields = rest
-        .split(|&b| is_fai_index_space(b))
-        .filter(|field| !field.is_empty());
-    let len = parse_ascii_u64(fields.next()?)?;
-    let seq_offset = parse_ascii_u64(fields.next()?)?;
-    let line_blen = parse_ascii_u64(fields.next()?)?.try_into().ok()?;
-    let line_len = parse_ascii_u64(fields.next()?)?.try_into().ok()?;
+    // Mirror the C `sscanf("%"SCNu64"%"SCNu64"%u%u"...)` behaviour: each conversion
+    // skips leading whitespace then reads digits, leaving the cursor immediately
+    // after the digits. Trailing junk after the final field is tolerated (sscanf has
+    // already matched every required conversion), but junk attached to an earlier
+    // field makes the following conversion start on a non-digit and fail.
+    let mut cur = 0usize;
+    let len = scan_ascii_u64(rest, &mut cur)?;
+    let seq_offset = scan_ascii_u64(rest, &mut cur)?;
+    let line_blen = scan_ascii_u64(rest, &mut cur)?.try_into().ok()?;
+    let line_len = scan_ascii_u64(rest, &mut cur)?.try_into().ok()?;
     let qual_offset = if format == FAI_FASTA {
         0
     } else {
-        parse_ascii_u64(fields.next()?)?
+        scan_ascii_u64(rest, &mut cur)?
     };
     Some((len, seq_offset, line_blen, line_len, qual_offset))
 }
 
-fn parse_ascii_u64(field: &[u8]) -> Option<u64> {
+fn scan_ascii_u64(buf: &[u8], cur: &mut usize) -> Option<u64> {
+    while *cur < buf.len() && is_fai_index_space(buf[*cur]) {
+        *cur += 1;
+    }
+    let start = *cur;
     let mut value = 0_u64;
-    for &b in field {
-        let digit = b.checked_sub(b'0')?;
+    while *cur < buf.len() {
+        let digit = buf[*cur].wrapping_sub(b'0');
         if digit > 9 {
-            return None;
+            break;
         }
         value = value.checked_mul(10)?.checked_add(digit as u64)?;
+        *cur += 1;
+    }
+    if *cur == start {
+        return None;
     }
     Some(value)
 }

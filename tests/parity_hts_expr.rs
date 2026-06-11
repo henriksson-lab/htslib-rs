@@ -152,11 +152,7 @@ fn run_native(expr: &CStr) -> (c_int, c_int, c_int, f64, Vec<u8>) {
         let mut res = htslib_rs::hts_expr::hts_expr_val_t {
             is_str: 0,
             is_true: 0,
-            s: htslib_rs::kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            },
+            s: htslib_rs::kstring_t::default(),
             d: 0.0,
         };
         let rc = htslib_rs::hts_expr::hts_filter_eval2(
@@ -165,11 +161,7 @@ fn run_native(expr: &CStr) -> (c_int, c_int, c_int, f64, Vec<u8>) {
             Some(lookup_native),
             &mut res,
         );
-        let s_bytes = if res.s.s.is_null() {
-            Vec::new()
-        } else {
-            std::slice::from_raw_parts(res.s.s as *const u8, res.s.l).to_vec()
-        };
+        let s_bytes = res.s.data.to_vec();
         let out = (
             rc,
             res.is_str as c_int,
@@ -303,11 +295,7 @@ fn parity_hts_filter_eval_deprecated_path() {
         let mut nres = htslib_rs::hts_expr::hts_expr_val_t {
             is_str: 0,
             is_true: 0,
-            s: htslib_rs::kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            },
+            s: htslib_rs::kstring_t::default(),
             d: 0.0,
         };
         let nrc = htslib_rs::hts_expr::hts_filter_eval(
@@ -502,11 +490,7 @@ fn parity_hts_filter_eval_against_real_bam_records() {
                 let mut nres = htslib_rs::hts_expr::hts_expr_val_t {
                     is_str: 0,
                     is_true: 0,
-                    s: htslib_rs::kstring_t {
-                        l: 0,
-                        m: 0,
-                        s: std::ptr::null_mut(),
-                    },
+                    s: htslib_rs::kstring_t::default(),
                     d: 0.0,
                 };
                 let n_rc = htslib_rs::hts_expr::hts_filter_eval2(

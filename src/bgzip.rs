@@ -11,7 +11,7 @@ use crate::htslib_rs::{
         HTS_FORMAT_FQI_FORMAT, HTS_FORMAT_SAM, HTS_FORMAT_TEXT_FORMAT, HTS_FORMAT_VCF,
     },
 };
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::ptr;
 use std::ptr::NonNull;
 
@@ -44,37 +44,29 @@ unsafe extern "C" {
 // translate the original fatal fprintf + exit behaviour directly.
 
 // original: ask_yn (htslib/bgzip.c:59)
-unsafe fn bgzip_c_59_ask_yn() -> i32 {
-    let mut line = [0u8; 1024];
-    if libc::fgets(
-        line.as_mut_ptr().cast(),
-        line.len() as i32,
-        crate::htslib_rs::c_compat::stdin.cast(),
-    )
-    .is_null()
-    {
+fn bgzip_c_59_ask_yn() -> i32 {
+    use std::io::BufRead;
+    let mut line = String::new();
+    if std::io::stdin().lock().read_line(&mut line).unwrap_or(0) == 0 {
         return 0;
     }
-    (line[0] == b'Y' || line[0] == b'y') as i32
+    let first = line.as_bytes().first().copied().unwrap_or(0);
+    (first == b'Y' || first == b'y') as i32
 }
 
 // original: confirm_overwrite (htslib/bgzip.c:68)
-pub unsafe fn bgzip_c_68_confirm_overwrite(fn_: *const i8) -> i32 {
-    let Some(fn_) = fn_.as_ref().map(|_| CStr::from_ptr(fn_)) else {
-        return 0;
-    };
+pub unsafe fn bgzip_c_68_confirm_overwrite(fn_: &[u8]) -> i32 {
     bgzip_confirm_overwrite(fn_)
 }
 
-unsafe fn bgzip_confirm_overwrite(fn_: &CStr) -> i32 {
+unsafe fn bgzip_confirm_overwrite(fn_: &[u8]) -> i32 {
     let save_errno = *crate::htslib_rs::c_compat::__errno_location();
     let mut ret = 0;
 
     if libc::isatty(libc::STDIN_FILENO) != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"[bgzip] %s already exists; do you wish to overwrite (y or n)? ".as_ptr(),
-            fn_.as_ptr(),
+        eprint!(
+            "[bgzip] {} already exists; do you wish to overwrite (y or n)? ",
+            String::from_utf8_lossy(fn_)
         );
         if bgzip_c_59_ask_yn() != 0 {
             ret = 1;
@@ -86,39 +78,22 @@ unsafe fn bgzip_confirm_overwrite(fn_: &CStr) -> i32 {
 }
 
 // original: known_extension (htslib/bgzip.c:82)
-pub unsafe fn bgzip_c_82_known_extension(ext: *const i8) -> i32 {
-    let Some(ext) = ext.as_ref().map(|_| CStr::from_ptr(ext)) else {
-        return 0;
-    };
+pub fn bgzip_c_82_known_extension(ext: &[u8]) -> i32 {
     bgzip_known_extension(ext)
 }
 
-fn bgzip_known_extension(ext: &CStr) -> i32 {
-    let ext = ext.to_bytes();
+fn bgzip_known_extension(ext: &[u8]) -> i32 {
     (ext.eq_ignore_ascii_case(b"gz")
         || ext.eq_ignore_ascii_case(b"bgz")
         || ext.eq_ignore_ascii_case(b"bgzf")) as i32
 }
 
 // original: confirm_filename (htslib/bgzip.c:95)
-pub unsafe fn bgzip_c_95_confirm_filename(
-    is_forced: *mut i32,
-    name: *const i8,
-    ext: *const i8,
-) -> i32 {
-    let Some(is_forced) = is_forced.as_mut() else {
-        return 0;
-    };
-    let Some(name) = name.as_ref().map(|_| CStr::from_ptr(name)) else {
-        return 0;
-    };
-    let Some(ext) = ext.as_ref().map(|_| CStr::from_ptr(ext)) else {
-        return 0;
-    };
+pub unsafe fn bgzip_c_95_confirm_filename(is_forced: &mut i32, name: &[u8], ext: &[u8]) -> i32 {
     bgzip_confirm_filename(is_forced, name, ext)
 }
 
-unsafe fn bgzip_confirm_filename(is_forced: &mut i32, name: &CStr, ext: &CStr) -> i32 {
+unsafe fn bgzip_confirm_filename(is_forced: &mut i32, name: &[u8], ext: &[u8]) -> i32 {
     if *is_forced != 0 {
         *is_forced -= 1;
         return 1;
@@ -128,54 +103,42 @@ unsafe fn bgzip_confirm_filename(is_forced: &mut i32, name: &CStr, ext: &CStr) -
         return 0;
     }
 
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"[bgzip] .%s is not a known extension; do you wish to decompress to %s (y or n)? "
-            .as_ptr(),
-        ext.as_ptr(),
-        name.as_ptr(),
+    eprint!(
+        "[bgzip] .{} is not a known extension; do you wish to decompress to {} (y or n)? ",
+        String::from_utf8_lossy(ext),
+        String::from_utf8_lossy(name)
     );
     bgzip_c_59_ask_yn()
 }
 
 // original: getfilespec (htslib/bgzip.c:114)
-pub unsafe fn bgzip_c_114_getfilespec(path: *const i8, status: *mut libc::stat) -> i32 {
-    let Some(status) = status.as_mut() else {
-        return -1;
-    };
-    let Some(path) = path.as_ref().map(|_| CStr::from_ptr(path)) else {
-        return -1;
-    };
+pub unsafe fn bgzip_c_114_getfilespec(path: &[u8], status: &mut libc::stat) -> i32 {
     bgzip_getfilespec(path, status)
 }
 
-unsafe fn bgzip_getfilespec(path: &CStr, status: &mut libc::stat) -> i32 {
-    if path.to_bytes() == b"-" {
+unsafe fn bgzip_getfilespec(path: &[u8], status: &mut libc::stat) -> i32 {
+    if path == b"-" {
         return 0;
     }
-    if libc::stat(path.as_ptr(), status) < 0 {
+    let mut path_z = path.to_vec();
+    path_z.push(0);
+    if libc::stat(path_z.as_ptr().cast(), status) < 0 {
         return -1;
     }
     0
 }
 
 // original: setfilespec (htslib/bgzip.c:134)
-pub unsafe fn bgzip_c_134_setfilespec(path: *const i8, status: *const libc::stat) -> i32 {
-    let Some(status) = status.as_ref() else {
-        return -1;
-    };
-    let Some(path) = path.as_ref().map(|_| CStr::from_ptr(path)) else {
-        return -1;
-    };
+pub unsafe fn bgzip_c_134_setfilespec(path: &[u8], status: &libc::stat) -> i32 {
     bgzip_setfilespec(path, status)
 }
 
-unsafe fn bgzip_setfilespec(path: &CStr, status: &libc::stat) -> i32 {
-    if path.to_bytes() == b"-" {
+unsafe fn bgzip_setfilespec(path: &[u8], status: &libc::stat) -> i32 {
+    if path == b"-" {
         return 0;
     }
 
-    let mut tval = [
+    let tval = [
         libc::timeval {
             tv_sec: status.st_atime as _,
             tv_usec: 0,
@@ -185,30 +148,22 @@ unsafe fn bgzip_setfilespec(path: &CStr, status: &libc::stat) -> i32 {
             tv_usec: 0,
         },
     ];
-    if crate::htslib_rs::c_compat::utimes(path.as_ptr(), tval.as_mut_ptr()) < 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"[bgzip] Failed to set file specifications.\n".as_ptr(),
-        );
+    let mut path_z = path.to_vec();
+    path_z.push(0);
+    if crate::htslib_rs::c_compat::utimes(path_z.as_ptr().cast(), tval.as_ptr()) < 0 {
+        eprintln!("[bgzip] Failed to set file specifications.");
         return -1;
     }
     0
 }
 
 // original: check_name_and_extension (htslib/bgzip.c:168)
-pub unsafe fn bgzip_c_168_check_name_and_extension(name: *mut i8, forced: *mut i32) -> i32 {
-    let Some(forced) = forced.as_mut() else {
-        return 1;
-    };
-    if name.is_null() {
-        return 1;
-    }
-    let len = CStr::from_ptr(name).to_bytes().len();
-    let name = std::slice::from_raw_parts_mut(name.cast::<u8>(), len + 1);
+pub unsafe fn bgzip_c_168_check_name_and_extension(name: &mut [u8], forced: &mut i32) -> i32 {
     bgzip_check_name_and_extension(name, forced)
 }
 
 unsafe fn bgzip_check_name_and_extension(name: &mut [u8], forced: &mut i32) -> i32 {
+    // `name` is the byte buffer with a trailing NUL terminator.
     let nul = name.len().saturating_sub(1);
     let stem = &name[..nul];
     let pos = stem
@@ -217,29 +172,31 @@ unsafe fn bgzip_check_name_and_extension(name: &mut [u8], forced: &mut i32) -> i
         .unwrap_or(0);
 
     if pos == 0 || name[pos] != b'.' {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"[bgzip] can't find an extension in %s -- please rename\n".as_ptr(),
-            name.as_ptr(),
+        eprintln!(
+            "[bgzip] can't find an extension in {} -- please rename",
+            String::from_utf8_lossy(stem)
         );
         return 1;
     }
 
-    name[pos] = 0;
-    let name_cstr = CStr::from_ptr(name.as_ptr().cast());
-    let ext_cstr = CStr::from_ptr(name.as_ptr().add(pos + 1).cast());
+    // Split into the decompressed-target name (before the dot) and extension.
+    let name_str = name[..pos].to_vec();
+    let ext_str = name[pos + 1..nul].to_vec();
 
-    if !(bgzip_known_extension(ext_cstr) != 0
-        || bgzip_confirm_filename(forced, name_cstr, ext_cstr) != 0)
+    if !(bgzip_known_extension(&ext_str) != 0
+        || bgzip_confirm_filename(forced, &name_str, &ext_str) != 0)
     {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"[bgzip] unknown extension .%s -- declining to decompress to %s\n".as_ptr(),
-            ext_cstr.as_ptr(),
-            name_cstr.as_ptr(),
+        eprintln!(
+            "[bgzip] unknown extension .{} -- declining to decompress to {}",
+            String::from_utf8_lossy(&ext_str),
+            String::from_utf8_lossy(&name_str)
         );
         return 2;
     }
+
+    // Truncate the target name in-place at the dot, mirroring the original
+    // C in-buffer split that writes a NUL where the extension dot was.
+    name[pos] = 0;
 
     0
 }
@@ -261,74 +218,35 @@ unsafe fn bgzip_close_bgzf(fp: &mut Option<NonNull<BGZF>>) -> (i32, u32) {
 }
 
 // original: bgzip_main_usage (htslib/bgzip.c:192)
-pub unsafe fn bgzip_c_192_bgzip_main_usage(fp: *mut libc::FILE, status: i32) -> i32 {
-    libc::fprintf(fp, c"\n".as_ptr());
-    libc::fprintf(fp, c"Version: %s\n".as_ptr(), hts_version());
-    libc::fprintf(fp, c"Usage:   bgzip [OPTIONS] [FILE] ...\n".as_ptr());
-    libc::fprintf(fp, c"Options:\n".as_ptr());
-    libc::fprintf(
-        fp,
-        c"   -b, --offset INT           decompress at virtual file pointer (0-based uncompressed offset)\n".as_ptr(),
+pub unsafe fn bgzip_c_192_bgzip_main_usage(to_stderr: bool, status: i32) -> i32 {
+    let version = CStr::from_ptr(hts_version()).to_string_lossy().into_owned();
+    let text = format!(
+        "\n\
+         Version: {version}\n\
+         Usage:   bgzip [OPTIONS] [FILE] ...\n\
+         Options:\n\
+            -b, --offset INT           decompress at virtual file pointer (0-based uncompressed offset)\n\
+            -c, --stdout               write on standard output, keep original files unchanged\n\
+            -d, --decompress           decompress\n\
+            -f, --force                overwrite files without asking\n\
+            -g, --rebgzip              use an index file to bgzip a file\n\
+            -h, --help                 give this help\n\
+            -i, --index                compress and create BGZF index\n\
+            -I, --index-name FILE      name of BGZF index file [file.gz.gzi]\n\
+            -k, --keep                 don't delete input files during operation\n\
+            -l, --compress-level INT   Compression level to use when compressing; 0 to 9, or -1 for default [-1]\n\
+            -o, --output FILE          write to file, keep original files unchanged\n\
+            -r, --reindex              (re)index compressed file\n\
+            -s, --size INT             decompress INT bytes (uncompressed size)\n\
+            -t, --test                 test integrity of compressed file\n    \
+                --binary               Don't align blocks with text lines\n\
+            -@, --threads INT          number of compression threads to use [1]\n",
     );
-    libc::fprintf(
-        fp,
-        c"   -c, --stdout               write on standard output, keep original files unchanged\n"
-            .as_ptr(),
-    );
-    libc::fprintf(fp, c"   -d, --decompress           decompress\n".as_ptr());
-    libc::fprintf(
-        fp,
-        c"   -f, --force                overwrite files without asking\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -g, --rebgzip              use an index file to bgzip a file\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -h, --help                 give this help\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -i, --index                compress and create BGZF index\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -I, --index-name FILE      name of BGZF index file [file.gz.gzi]\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -k, --keep                 don't delete input files during operation\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -l, --compress-level INT   Compression level to use when compressing; 0 to 9, or -1 for default [-1]\n"
-            .as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -o, --output FILE          write to file, keep original files unchanged\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -r, --reindex              (re)index compressed file\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -s, --size INT             decompress INT bytes (uncompressed size)\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -t, --test                 test integrity of compressed file\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"       --binary               Don't align blocks with text lines\n".as_ptr(),
-    );
-    libc::fprintf(
-        fp,
-        c"   -@, --threads INT          number of compression threads to use [1]\n".as_ptr(),
-    );
+    if to_stderr {
+        eprint!("{text}");
+    } else {
+        print!("{text}");
+    }
     status
 }
 
@@ -340,11 +258,12 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
     let mut rebgzip = false;
     let mut reindex = false;
     let mut fp: Option<NonNull<BGZF>> = None;
-    let mut start: libc::c_long = 0;
-    let mut end: libc::c_long = -1;
-    let mut size: libc::c_long = -1;
+    let mut start: i64 = 0;
+    let mut end: i64 = -1;
+    let mut size: i64 = -1;
     let mut filestat: libc::stat = std::mem::zeroed();
-    let mut statfilename: Option<NonNull<i8>>;
+    // Owns the output filename bytes (NUL-terminated) when one was generated.
+    let mut statfilename: Option<Vec<u8>>;
     let mut index_fname: Option<&CStr> = None;
     let mut write_fname: Option<&CStr> = None;
     let mut threads: i32 = 1;
@@ -487,24 +406,44 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
             x if x == b'd' as i32 => compress = false,
             x if x == b'c' as i32 => pstdout = true,
             x if x == b'b' as i32 => {
-                start = libc::atol(optarg);
+                start = CStr::from_ptr(optarg)
+                    .to_string_lossy()
+                    .trim()
+                    .parse()
+                    .unwrap_or(0);
                 compress = false;
                 pstdout = true;
             }
             x if x == b's' as i32 => {
-                size = libc::atol(optarg);
+                size = CStr::from_ptr(optarg)
+                    .to_string_lossy()
+                    .trim()
+                    .parse()
+                    .unwrap_or(0);
                 pstdout = true;
             }
             x if x == b'f' as i32 => is_forced += 1,
             x if x == b'i' as i32 => index = true,
             x if x == b'I' as i32 => index_fname = Some(CStr::from_ptr(optarg)),
-            x if x == b'l' as i32 => compress_level = libc::atol(optarg) as i32,
+            x if x == b'l' as i32 => {
+                compress_level = CStr::from_ptr(optarg)
+                    .to_string_lossy()
+                    .trim()
+                    .parse()
+                    .unwrap_or(0);
+            }
             x if x == b'g' as i32 => rebgzip = true,
             x if x == b'r' as i32 => {
                 reindex = true;
                 compress = false;
             }
-            x if x == b'@' as i32 => threads = libc::atoi(optarg),
+            x if x == b'@' as i32 => {
+                threads = CStr::from_ptr(optarg)
+                    .to_string_lossy()
+                    .trim()
+                    .parse()
+                    .unwrap_or(0);
+            }
             x if x == b't' as i32 => {
                 test = true;
                 compress = false;
@@ -513,24 +452,18 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
             x if x == b'k' as i32 => keep = true,
             x if x == b'o' as i32 => write_fname = Some(CStr::from_ptr(optarg)),
             1 => {
-                libc::printf(
-                    c"bgzip (htslib) %s\nCopyright (C) 2025 Genome Research Ltd.\n".as_ptr(),
-                    hts_version(),
+                println!(
+                    "bgzip (htslib) {}\nCopyright (C) 2025 Genome Research Ltd.",
+                    CStr::from_ptr(hts_version()).to_string_lossy()
                 );
-                return libc::EXIT_SUCCESS;
+                return 0;
             }
             2 => binary = true,
             x if x == b'h' as i32 => {
-                return bgzip_c_192_bgzip_main_usage(
-                    crate::htslib_rs::c_compat::stdout.cast(),
-                    libc::EXIT_SUCCESS,
-                );
+                return bgzip_c_192_bgzip_main_usage(false, 0);
             }
             x if x == b'?' as i32 => {
-                return bgzip_c_192_bgzip_main_usage(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    libc::EXIT_FAILURE,
-                );
+                return bgzip_c_192_bgzip_main_usage(true, 1);
             }
             _ => {}
         }
@@ -540,44 +473,30 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
         end = start + size;
     }
     if end >= 0 && end < start {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"[bgzip] Illegal region: [%ld, %ld]\n".as_ptr(),
-            start,
-            end,
-        );
+        eprintln!("[bgzip] Illegal region: [{start}, {end}]");
         return 1;
     }
 
     if (index || reindex) && rebgzip {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"[bgzip] Can't produce a index and rebgzip simultaneously\n".as_ptr(),
-        );
+        eprintln!("[bgzip] Can't produce a index and rebgzip simultaneously");
         return 1;
     }
     if rebgzip && index_fname.is_none() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"[bgzip] Index file name expected with rebgzip.  See -I option.\n".as_ptr(),
-        );
+        eprintln!("[bgzip] Index file name expected with rebgzip.  See -I option.");
         return 1;
     }
     if (index || reindex) && write_fname.is_none() && index_fname.is_some() && argc - optind > 1 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"[bgzip] Cannot specify index filename with multiple data file on index, reindex.\n"
-                .as_ptr(),
+        eprintln!(
+            "[bgzip] Cannot specify index filename with multiple data file on index, reindex."
         );
         return 1;
     }
 
     if let Some(output_name) = write_fname {
         if pstdout {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"[bgzip] Cannot write to %s and stdout at the same time.\n".as_ptr(),
-                output_name.as_ptr(),
+            eprintln!(
+                "[bgzip] Cannot write to {} and stdout at the same time.",
+                output_name.to_string_lossy()
             );
             return 1;
         } else if output_name.to_bytes() == b"-" {
@@ -598,19 +517,13 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
         }
 
         statfilename = None;
-        let mut statfilename_owner: Option<CString> = None;
-        let mut statfilename_buf_owner: Option<Vec<u8>> = None;
 
         if compress {
             let mut out_mode = [b'w', 0, 0];
             let mut out_mode_exclusive = [b'w', b'x', 0, 0];
 
             if !(-1..=9).contains(&compress_level) {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"[bgzip] Invalid compress-level: %d\n".as_ptr(),
-                    compress_level,
-                );
+                eprintln!("[bgzip] Invalid compress-level: {compress_level}");
                 return 1;
             }
             if compress_level >= 0 {
@@ -626,15 +539,17 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                 c"r".as_ptr(),
             );
             if f_src.is_null() {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"[bgzip] %s: %s\n".as_ptr(),
-                    libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
-                    if isstdin {
-                        c"stdin".as_ptr()
-                    } else {
-                        *argv.add(optind as usize)
-                    },
+                let src_name = if isstdin {
+                    "stdin".to_string()
+                } else {
+                    CStr::from_ptr(*argv.add(optind as usize))
+                        .to_string_lossy()
+                        .into_owned()
+                };
+                eprintln!(
+                    "[bgzip] {}: {}",
+                    std::io::Error::last_os_error(),
+                    src_name
                 );
                 return 1;
             }
@@ -643,11 +558,10 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                 if !exp_out_open {
                     fp = bgzip_open_bgzf(output_name, CStr::from_ptr(out_mode.as_ptr().cast()));
                     if fp.is_none() {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"[bgzip] can't create %s: %s\n".as_ptr(),
-                            output_name.as_ptr(),
-                            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+                        eprintln!(
+                            "[bgzip] can't create {}: {}",
+                            output_name.to_string_lossy(),
+                            std::io::Error::last_os_error()
                         );
                         return 1;
                     } else {
@@ -661,14 +575,16 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         CStr::from_ptr(out_mode.as_ptr().cast()),
                     );
                 } else {
-                    let mut name_bytes = CStr::from_ptr(*argv.add(optind as usize))
+                    // Build "<input>.gz" as a NUL-terminated byte buffer.
+                    let mut name_buf = CStr::from_ptr(*argv.add(optind as usize))
                         .to_bytes()
                         .to_vec();
-                    name_bytes.extend_from_slice(b".gz");
-                    let name_owner = CString::new(name_bytes).unwrap();
-                    let name = name_owner.as_ptr().cast_mut();
+                    name_buf.extend_from_slice(b".gz");
+                    let name_display = String::from_utf8_lossy(&name_buf).into_owned();
+                    name_buf.push(0);
+                    let name_cstr = CStr::from_bytes_with_nul(&name_buf).unwrap();
                     fp = bgzip_open_bgzf(
-                        name_owner.as_c_str(),
+                        name_cstr,
                         if is_forced != 0 {
                             CStr::from_ptr(out_mode.as_ptr().cast())
                         } else {
@@ -678,9 +594,9 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     if fp.is_none()
                         && *crate::htslib_rs::c_compat::__errno_location() == libc::EEXIST
                     {
-                        if bgzip_confirm_overwrite(name_owner.as_c_str()) != 0 {
+                        if bgzip_confirm_overwrite(&name_buf[..name_buf.len() - 1]) != 0 {
                             fp = bgzip_open_bgzf(
-                                name_owner.as_c_str(),
+                                name_cstr,
                                 CStr::from_ptr(out_mode.as_ptr().cast()),
                             );
                         } else {
@@ -694,29 +610,21 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         }
                     }
                     if fp.is_none() {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"[bgzip] can't create %s: %s\n".as_ptr(),
-                            name,
-                            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+                        eprintln!(
+                            "[bgzip] can't create {}: {}",
+                            name_display,
+                            std::io::Error::last_os_error()
                         );
                         return 1;
                     }
-                    statfilename_owner = Some(name_owner);
-                    statfilename = NonNull::new(name);
+                    statfilename = Some(name_buf);
                 }
             } else if !pstdout
                 && libc::isatty(libc::fileno(crate::htslib_rs::c_compat::stdout.cast())) != 0
             {
-                return bgzip_c_192_bgzip_main_usage(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    libc::EXIT_FAILURE,
-                );
+                return bgzip_c_192_bgzip_main_usage(true, 1);
             } else if index && index_fname.is_none() {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"[bgzip] Index file name expected when writing to stdout\n".as_ptr(),
-                );
+                eprintln!("[bgzip] Index file name expected when writing to stdout");
                 return 1;
             } else {
                 fp = bgzip_dopen_bgzf(
@@ -730,10 +638,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                 bgzf_index_build_init(fp_ref);
             }
             if threads > 1 && bgzf_mt(fp.as_mut().unwrap().as_mut(), threads, 256) != 0 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"[bgzip] threaded BGZF is not yet supported in this translation\n".as_ptr(),
-                );
+                eprintln!("[bgzip] threaded BGZF is not yet supported in this translation");
                 let _ = bgzip_close_bgzf(&mut fp);
                 hclose_abruptly(f_src);
                 return 1;
@@ -748,21 +653,23 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     ptr::null(),
                 ) < 0
                 {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Could not load index: %s.%s\n".as_ptr(),
-                        if !isstdin {
-                            *argv.add(optind as usize)
-                        } else {
-                            index_fname.map_or(ptr::null(), CStr::as_ptr)
-                        },
-                        if !isstdin {
-                            c"gzi".as_ptr()
-                        } else {
-                            c"".as_ptr()
-                        },
-                    );
-                    libc::exit(libc::EXIT_FAILURE);
+                    let (load_name, load_ext) = if !isstdin {
+                        (
+                            CStr::from_ptr(*argv.add(optind as usize))
+                                .to_string_lossy()
+                                .into_owned(),
+                            "gzi",
+                        )
+                    } else {
+                        (
+                            index_fname.map_or(String::new(), |s| {
+                                s.to_string_lossy().into_owned()
+                            }),
+                            "",
+                        )
+                    };
+                    eprintln!("Could not load index: {load_name}.{load_ext}");
+                    std::process::exit(1);
                 }
 
                 loop {
@@ -772,13 +679,12 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     }
                     let fp_ref = fp.as_mut().unwrap().as_mut();
                     if bgzf_block_write(fp_ref, buffer.cast(), c as usize) < 0 {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"Could not write %d bytes: Error %d\n".as_ptr(),
+                        eprintln!(
+                            "Could not write {} bytes: Error {}",
                             c,
-                            fp_ref.bitfields >> 16,
+                            fp_ref.bitfields >> 16
                         );
-                        libc::exit(libc::EXIT_FAILURE);
+                        std::process::exit(1);
                     }
                 }
             } else {
@@ -809,13 +715,12 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         }
                         let fp_ref = fp.as_mut().unwrap().as_mut();
                         if bgzf_write(fp_ref, buffer.cast(), c as usize) < 0 {
-                            libc::fprintf(
-                                crate::htslib_rs::c_compat::stderr.cast(),
-                                c"Could not write %d bytes: Error %d\n".as_ptr(),
+                            eprintln!(
+                                "Could not write {} bytes: Error {}",
                                 c,
-                                fp_ref.bitfields >> 16,
+                                fp_ref.bitfields >> 16
                             );
-                            libc::exit(libc::EXIT_FAILURE);
+                            std::process::exit(1);
                         }
                     }
                 } else {
@@ -884,35 +789,30 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                             bgzf_write(fp_ref, buffer.cast(), n as usize)
                         };
                         if wrote < 0 {
-                            libc::fprintf(
-                                crate::htslib_rs::c_compat::stderr.cast(),
-                                c"Could not write %d bytes: Error %d\n".as_ptr(),
+                            eprintln!(
+                                "Could not write {} bytes: Error {}",
                                 n,
-                                fp_ref.bitfields >> 16,
+                                fp_ref.bitfields >> 16
                             );
-                            libc::exit(libc::EXIT_FAILURE);
+                            std::process::exit(1);
                         }
                         if flush && fp_ref.block_offset != 0 && bgzf_flush_try(fp_ref, 65536) < 0 {
                             return -1;
                         }
 
-                        libc::memmove(
-                            buffer.cast(),
-                            buffer.add(n as usize).cast(),
-                            (c2 - n) as usize,
-                        );
+                        // Shift the unprocessed tail [n..c2) to the start of the buffer.
+                        buffer_storage.copy_within(n as usize..c2 as usize, 0);
                         n = c2 - n;
                     }
 
                     let fp_ref = fp.as_mut().unwrap().as_mut();
                     if bgzf_write(fp_ref, buffer.cast(), n as usize) < 0 {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"Could not write %d bytes: Error %d\n".as_ptr(),
+                        eprintln!(
+                            "Could not write {} bytes: Error {}",
                             n,
-                            fp_ref.bitfields >> 16,
+                            fp_ref.bitfields >> 16
                         );
-                        libc::exit(libc::EXIT_FAILURE);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -924,12 +824,11 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         ptr::null(),
                     ) < 0
                     {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"Could not write index to '%s'\n".as_ptr(),
-                            index_fname.as_ptr(),
+                        eprintln!(
+                            "Could not write index to '{}'",
+                            index_fname.to_string_lossy()
                         );
-                        libc::exit(libc::EXIT_FAILURE);
+                        std::process::exit(1);
                     }
                 } else if !isstdin {
                     if bgzf_index_dump(
@@ -938,19 +837,17 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         c".gz.gzi".as_ptr(),
                     ) < 0
                     {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"Could not write index to '%s.gz.gzi'\n".as_ptr(),
-                            *argv.add(optind as usize),
+                        eprintln!(
+                            "Could not write index to '{}.gz.gzi'",
+                            CStr::from_ptr(*argv.add(optind as usize)).to_string_lossy()
                         );
-                        libc::exit(libc::EXIT_FAILURE);
+                        std::process::exit(1);
                     }
                 } else {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Can not write index for stdin data without index filename, use -I option to set index file.\n".as_ptr(),
+                    eprintln!(
+                        "Can not write index for stdin data without index filename, use -I option to set index file."
                     );
-                    libc::exit(libc::EXIT_FAILURE);
+                    std::process::exit(1);
                 }
             }
 
@@ -961,41 +858,29 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
             };
             if let Some((close_ret, close_err)) = close_result {
                 if close_ret < 0 {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Output close failed: Error %d\n".as_ptr(),
-                        close_err,
-                    );
-                    libc::exit(libc::EXIT_FAILURE);
+                    eprintln!("Output close failed: Error {close_err}");
+                    std::process::exit(1);
                 }
             }
 
             if hclose(f_src) < 0 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Input close failed\n".as_ptr(),
-                );
-                libc::exit(libc::EXIT_FAILURE);
+                eprintln!("Input close failed");
+                std::process::exit(1);
             }
 
-            if let Some(statfilename) = statfilename {
-                let input_name = CStr::from_ptr(*argv.add(optind as usize));
-                let output_name = CStr::from_ptr(statfilename.as_ptr());
-                if bgzip_getfilespec(input_name, &mut filestat) == 0 {
+            if let Some(statfilename) = &statfilename {
+                let input_name = CStr::from_ptr(*argv.add(optind as usize))
+                    .to_bytes()
+                    .to_vec();
+                // `statfilename` is NUL-terminated; strip the terminator.
+                let output_name = &statfilename[..statfilename.len() - 1];
+                if bgzip_getfilespec(&input_name, &mut filestat) == 0 {
                     if bgzip_setfilespec(output_name, &filestat) < 0 {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"[bgzip] Failed to set file specification.\n".as_ptr(),
-                        );
+                        eprintln!("[bgzip] Failed to set file specification.");
                     }
                 } else {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"[bgzip] Failed to get file specification.\n".as_ptr(),
-                    );
+                    eprintln!("[bgzip] Failed to get file specification.");
                 }
-                drop(statfilename_owner.take());
-                drop(statfilename_buf_owner.take());
             }
 
             if argc > optind && !pstdout && !keep && !isstdin && write_fname.is_none() {
@@ -1005,29 +890,24 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
             if argc > optind && !isstdin {
                 fp = bgzip_open_bgzf(CStr::from_ptr(*argv.add(optind as usize)), c"r");
                 if fp.is_none() {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"[bgzip] Could not open file: %s\n".as_ptr(),
-                        *argv.add(optind as usize),
+                    eprintln!(
+                        "[bgzip] Could not open file: {}",
+                        CStr::from_ptr(*argv.add(optind as usize)).to_string_lossy()
                     );
-                    libc::exit(libc::EXIT_FAILURE);
+                    std::process::exit(1);
                 }
             } else {
                 if index_fname.is_none() {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"[bgzip] Index file name expected when reading from stdin\n".as_ptr(),
-                    );
-                    libc::exit(libc::EXIT_FAILURE);
+                    eprintln!("[bgzip] Index file name expected when reading from stdin");
+                    std::process::exit(1);
                 }
                 fp = bgzip_open_bgzf(c"-", c"r");
                 if fp.is_none() {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"[bgzip] Could not read from stdin: %s\n".as_ptr(),
-                        libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+                    eprintln!(
+                        "[bgzip] Could not read from stdin: {}",
+                        std::io::Error::last_os_error()
                     );
-                    libc::exit(libc::EXIT_FAILURE);
+                    std::process::exit(1);
                 }
             }
 
@@ -1042,12 +922,8 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                 }
             }
             if read_ret < 0 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Is the file gzipped or bgzipped? The latter is required for indexing.\n"
-                        .as_ptr(),
-                );
-                libc::exit(libc::EXIT_FAILURE);
+                eprintln!("Is the file gzipped or bgzipped? The latter is required for indexing.");
+                std::process::exit(1);
             }
 
             if let Some(index_fname) = index_fname {
@@ -1057,12 +933,11 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     ptr::null(),
                 ) < 0
                 {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Could not write index to '%s'\n".as_ptr(),
-                        index_fname.as_ptr(),
+                    eprintln!(
+                        "Could not write index to '{}'",
+                        index_fname.to_string_lossy()
                     );
-                    libc::exit(libc::EXIT_FAILURE);
+                    std::process::exit(1);
                 }
             } else if !isstdin {
                 if bgzf_index_dump(
@@ -1071,29 +946,23 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     c".gzi".as_ptr(),
                 ) < 0
                 {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Could not write index to '%s.gzi'\n".as_ptr(),
-                        *argv.add(optind as usize),
+                    eprintln!(
+                        "Could not write index to '{}.gzi'",
+                        CStr::from_ptr(*argv.add(optind as usize)).to_string_lossy()
                     );
-                    libc::exit(libc::EXIT_FAILURE);
+                    std::process::exit(1);
                 }
             } else {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Can not write index for stdin data without index filename, use -I option to set index file.\n".as_ptr(),
+                eprintln!(
+                    "Can not write index for stdin data without index filename, use -I option to set index file."
                 );
-                libc::exit(libc::EXIT_FAILURE);
+                std::process::exit(1);
             }
 
             let (close_ret, close_err) = bgzip_close_bgzf(&mut fp);
             if close_ret < 0 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Close failed: Error %d\n".as_ptr(),
-                    close_err,
-                );
-                libc::exit(libc::EXIT_FAILURE);
+                eprintln!("Close failed: Error {close_err}");
+                std::process::exit(1);
             }
         } else {
             let mut is_forced_tmp = is_forced;
@@ -1101,21 +970,19 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
             if argc > optind && !isstdin {
                 fp = bgzip_open_bgzf(CStr::from_ptr(*argv.add(optind as usize)), c"r");
                 if fp.is_none() {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"[bgzip] Could not open %s: %s\n".as_ptr(),
-                        *argv.add(optind as usize),
-                        libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+                    eprintln!(
+                        "[bgzip] Could not open {}: {}",
+                        CStr::from_ptr(*argv.add(optind as usize)).to_string_lossy(),
+                        std::io::Error::last_os_error()
                     );
                     return 1;
                 }
                 if bgzf_compression(fp.as_mut().unwrap().as_mut())
                     == HTS_COMPRESSION_NO_COMPRESSION as i32
                 {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"[bgzip] %s: not a compressed file -- ignored\n".as_ptr(),
-                        *argv.add(optind as usize),
+                    eprintln!(
+                        "[bgzip] {}: not a compressed file -- ignored",
+                        CStr::from_ptr(*argv.add(optind as usize)).to_string_lossy()
                     );
                     let _ = bgzip_close_bgzf(&mut fp);
                     return 1;
@@ -1125,15 +992,14 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     f_dst = libc::fileno(crate::htslib_rs::c_compat::stdout.cast());
                 } else {
                     let wrflags = libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC;
-                    let mut name_owner: Vec<u8> = CStr::from_ptr(*argv.add(optind as usize))
+                    // NUL-terminated buffer holding the input filename; gets
+                    // truncated in place at the extension dot below.
+                    let mut name_buf: Vec<u8> = CStr::from_ptr(*argv.add(optind as usize))
                         .to_bytes_with_nul()
                         .to_vec();
-                    let name: *mut i8 = name_owner.as_mut_ptr().cast();
 
-                    let check = bgzip_check_name_and_extension(
-                        name_owner.as_mut_slice(),
-                        &mut is_forced_tmp,
-                    );
+                    let check =
+                        bgzip_check_name_and_extension(name_buf.as_mut_slice(), &mut is_forced_tmp);
                     if check != 0 {
                         let _ = bgzip_close_bgzf(&mut fp);
 
@@ -1149,15 +1015,26 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         }
                     }
 
+                    // Trim the buffer to the truncated name's NUL terminator.
+                    let name_nul = name_buf.iter().position(|&b| b == 0).unwrap_or(name_buf.len());
+                    name_buf.truncate(name_nul + 1);
+
                     if !exp_out_open {
                         if write_fname.is_some() {
                             is_forced_tmp = 1;
                             exp_out_open = true;
                         }
 
-                        let output_name = write_fname.map_or(name.cast_const(), CStr::as_ptr);
+                        // NUL-terminated path for the open() syscall.
+                        let output_name: Vec<u8> = match write_fname {
+                            Some(w) => w.to_bytes_with_nul().to_vec(),
+                            None => name_buf.clone(),
+                        };
+                        let output_display =
+                            String::from_utf8_lossy(&output_name[..output_name.len() - 1])
+                                .into_owned();
                         f_dst = libc::open(
-                            output_name,
+                            output_name.as_ptr().cast(),
                             if is_forced_tmp != 0 {
                                 wrflags
                             } else {
@@ -1169,8 +1046,8 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         if f_dst < 0
                             && *crate::htslib_rs::c_compat::__errno_location() == libc::EEXIST
                         {
-                            if bgzip_confirm_overwrite(CStr::from_ptr(output_name)) != 0 {
-                                f_dst = libc::open(output_name, wrflags, 0o666);
+                            if bgzip_confirm_overwrite(&output_name[..output_name.len() - 1]) != 0 {
+                                f_dst = libc::open(output_name.as_ptr().cast(), wrflags, 0o666);
                             } else {
                                 ret = 2;
                                 let _ = bgzip_close_bgzf(&mut fp);
@@ -1182,44 +1059,35 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                             }
                         }
                         if f_dst < 0 {
-                            libc::fprintf(
-                                crate::htslib_rs::c_compat::stderr.cast(),
-                                c"[bgzip] can't create %s: %s\n".as_ptr(),
-                                output_name,
-                                libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+                            eprintln!(
+                                "[bgzip] can't create {}: {}",
+                                output_display,
+                                std::io::Error::last_os_error()
                             );
                             return 1;
                         }
                     }
 
-                    statfilename_buf_owner = Some(name_owner);
-                    statfilename = NonNull::new(name);
+                    statfilename = Some(name_buf);
                 }
             } else if !pstdout
                 && libc::isatty(libc::fileno(crate::htslib_rs::c_compat::stdin.cast())) != 0
             {
-                return bgzip_c_192_bgzip_main_usage(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    libc::EXIT_FAILURE,
-                );
+                return bgzip_c_192_bgzip_main_usage(true, 1);
             } else {
                 f_dst = libc::fileno(crate::htslib_rs::c_compat::stdout.cast());
                 fp = bgzip_open_bgzf(c"-", c"r");
                 if fp.is_none() {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"[bgzip] Could not read from stdin: %s\n".as_ptr(),
-                        libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+                    eprintln!(
+                        "[bgzip] Could not read from stdin: {}",
+                        std::io::Error::last_os_error()
                     );
                     return 1;
                 }
                 if bgzf_compression(fp.as_mut().unwrap().as_mut())
                     == HTS_COMPRESSION_NO_COMPRESSION as i32
                 {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"[bgzip] stdin is not compressed -- ignored\n".as_ptr(),
-                    );
+                    eprintln!("[bgzip] stdin is not compressed -- ignored");
                     let _ = bgzip_close_bgzf(&mut fp);
                     return 1;
                 }
@@ -1235,11 +1103,10 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         );
 
                         if f_dst < 0 {
-                            libc::fprintf(
-                                crate::htslib_rs::c_compat::stderr.cast(),
-                                c"[bgzip] can't create %s: %s\n".as_ptr(),
-                                output_name.as_ptr(),
-                                libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+                            eprintln!(
+                                "[bgzip] can't create {}: {}",
+                                output_name.to_string_lossy(),
+                                std::io::Error::last_os_error()
                             );
                             return 1;
                         }
@@ -1259,20 +1126,15 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         ptr::null(),
                     ) < 0
                     {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"Could not load index: %s\n".as_ptr(),
-                            index_fname.as_ptr(),
-                        );
-                        libc::exit(libc::EXIT_FAILURE);
+                        eprintln!("Could not load index: {}", index_fname.to_string_lossy());
+                        std::process::exit(1);
                     }
                 } else {
                     if optind >= argc || isstdin {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"The -b option requires -I when reading from stdin (and stdin must be seekable)\n".as_ptr(),
+                        eprintln!(
+                            "The -b option requires -I when reading from stdin (and stdin must be seekable)"
                         );
-                        libc::exit(libc::EXIT_FAILURE);
+                        std::process::exit(1);
                     }
                     if bgzf_index_load(
                         fp.as_mut().unwrap().as_mut(),
@@ -1280,29 +1142,21 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         c".gzi".as_ptr(),
                     ) < 0
                     {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"Could not load index: %s.gzi\n".as_ptr(),
-                            *argv.add(optind as usize),
+                        eprintln!(
+                            "Could not load index: {}.gzi",
+                            CStr::from_ptr(*argv.add(optind as usize)).to_string_lossy()
                         );
-                        libc::exit(libc::EXIT_FAILURE);
+                        std::process::exit(1);
                     }
                 }
                 if bgzf_useek(fp.as_mut().unwrap().as_mut(), start as i64, libc::SEEK_SET) < 0 {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Could not seek to %ld-th (uncompressd) byte\n".as_ptr(),
-                        start,
-                    );
-                    libc::exit(libc::EXIT_FAILURE);
+                    eprintln!("Could not seek to {start}-th (uncompressd) byte");
+                    std::process::exit(1);
                 }
             }
 
             if threads > 1 && bgzf_mt(fp.as_mut().unwrap().as_mut(), threads, 256) != 0 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"[bgzip] threaded BGZF is not yet supported in this translation\n".as_ptr(),
-                );
+                eprintln!("[bgzip] threaded BGZF is not yet supported in this translation");
                 let _ = bgzip_close_bgzf(&mut fp);
                 return 1;
             }
@@ -1318,25 +1172,20 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         break;
                     }
                     if c < 0 {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"Error %d in block starting at offset %ld(%lX)\n".as_ptr(),
+                        eprintln!(
+                            "Error {} in block starting at offset {}({:X})",
                             fp_ref.bitfields >> 16,
                             fp_ref.block_address,
-                            fp_ref.block_address,
+                            fp_ref.block_address
                         );
-                        libc::exit(libc::EXIT_FAILURE);
+                        std::process::exit(1);
                     }
                     if !test
                         && crate::htslib_rs::c_compat::fd_write(f_dst, block_data, c as usize)
                             != c as libc::ssize_t
                     {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"Could not write %d bytes\n".as_ptr(),
-                            c,
-                        );
-                        libc::exit(libc::EXIT_FAILURE);
+                        eprintln!("Could not write {c} bytes");
+                        std::process::exit(1);
                     }
                 }
             } else {
@@ -1344,7 +1193,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     c = bgzf_read(
                         fp.as_mut().unwrap().as_mut(),
                         buffer.cast(),
-                        if end < 0 || end - start > WINDOW_SIZE as libc::c_long {
+                        if end < 0 || end - start > WINDOW_SIZE as i64 {
                             WINDOW_SIZE
                         } else {
                             (end - start) as usize
@@ -1355,26 +1204,21 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     }
                     if c < 0 {
                         let fp_ref = fp.as_mut().unwrap().as_mut();
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"Error %d in block starting at offset %ld(%lX)\n".as_ptr(),
+                        eprintln!(
+                            "Error {} in block starting at offset {}({:X})",
                             fp_ref.bitfields >> 16,
                             fp_ref.block_address,
-                            fp_ref.block_address,
+                            fp_ref.block_address
                         );
-                        libc::exit(libc::EXIT_FAILURE);
+                        std::process::exit(1);
                     }
-                    start += c as libc::c_long;
+                    start += c as i64;
                     if !test
                         && crate::htslib_rs::c_compat::fd_write(f_dst, buffer.cast(), c as usize)
                             != c as libc::ssize_t
                     {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"Could not write %d bytes\n".as_ptr(),
-                            c,
-                        );
-                        libc::exit(libc::EXIT_FAILURE);
+                        eprintln!("Could not write {c} bytes");
+                        std::process::exit(1);
                     }
                     if end >= 0 && start >= end {
                         break;
@@ -1385,35 +1229,25 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
             end = end_reg;
             let (close_ret, close_err) = bgzip_close_bgzf(&mut fp);
             if close_ret < 0 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Close failed: Error %d\n".as_ptr(),
-                    close_err,
-                );
-                libc::exit(libc::EXIT_FAILURE);
+                eprintln!("Close failed: Error {close_err}");
+                std::process::exit(1);
             }
 
-            if let Some(statfilename) = statfilename {
+            if let Some(statfilename) = &statfilename {
                 if write_fname.is_none() {
-                    let input_name = CStr::from_ptr(*argv.add(optind as usize));
-                    let output_name = CStr::from_ptr(statfilename.as_ptr());
-                    if bgzip_getfilespec(input_name, &mut filestat) == 0 {
+                    let input_name = CStr::from_ptr(*argv.add(optind as usize))
+                        .to_bytes()
+                        .to_vec();
+                    // `statfilename` is NUL-terminated; strip the terminator.
+                    let output_name = &statfilename[..statfilename.len() - 1];
+                    if bgzip_getfilespec(&input_name, &mut filestat) == 0 {
                         if bgzip_setfilespec(output_name, &filestat) < 0 {
-                            libc::fprintf(
-                                crate::htslib_rs::c_compat::stderr.cast(),
-                                c"[bgzip] Failed to set file specification.\n".as_ptr(),
-                            );
+                            eprintln!("[bgzip] Failed to set file specification.");
                         }
                     } else {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"[bgzip] Failed to get file specification.\n".as_ptr(),
-                        );
+                        eprintln!("[bgzip] Failed to get file specification.");
                     }
                 }
-
-                drop(statfilename_owner.take());
-                drop(statfilename_buf_owner.take());
             }
 
             if argc > optind && !pstdout && !test && !keep && !isstdin && write_fname.is_none() {
@@ -1434,10 +1268,9 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
         if libc::fclose(crate::htslib_rs::c_compat::stdout.cast()) != 0
             && *crate::htslib_rs::c_compat::__errno_location() != libc::EBADF
         {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"[bgzip] Failed to close stdout, errno %d".as_ptr(),
-                *crate::htslib_rs::c_compat::__errno_location(),
+            eprint!(
+                "[bgzip] Failed to close stdout, errno {}",
+                *crate::htslib_rs::c_compat::__errno_location()
             );
             ret = 1;
         }
@@ -1451,12 +1284,11 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         ptr::null(),
                     ) < 0
                     {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"Could not write index to '%s'\n".as_ptr(),
-                            index_fname.as_ptr(),
+                        eprintln!(
+                            "Could not write index to '{}'",
+                            index_fname.to_string_lossy()
                         );
-                        libc::exit(libc::EXIT_FAILURE);
+                        std::process::exit(1);
                     }
                 } else if bgzf_index_dump(
                     fp.as_mut().unwrap().as_mut(),
@@ -1464,23 +1296,18 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     c".gzi".as_ptr(),
                 ) < 0
                 {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Could not write index to '%s.gzi'\n".as_ptr(),
-                        write_fname.as_ptr(),
+                    eprintln!(
+                        "Could not write index to '{}.gzi'",
+                        write_fname.to_string_lossy()
                     );
-                    libc::exit(libc::EXIT_FAILURE);
+                    std::process::exit(1);
                 }
             }
 
             let (close_ret, close_err) = bgzip_close_bgzf(&mut fp);
             if close_ret < 0 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Output close failed: Error %d\n".as_ptr(),
-                    close_err,
-                );
-                libc::exit(libc::EXIT_FAILURE);
+                eprintln!("Output close failed: Error {close_err}");
+                std::process::exit(1);
             }
         } else {
             libc::close(f_dst);

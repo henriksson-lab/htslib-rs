@@ -57,40 +57,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //! `va_arg(args, int)` / `va_arg(args, T*)` consumed per supported option.
 
 use std::ffi::{c_int, c_void};
-use std::ptr::NonNull;
 
 use crate::htslib_rs::c_compat::__va_list_tag;
 use crate::htslib_rs::cram::cram_cram_io_c_5692_cram_set_voption;
 use crate::htslib_rs::hts::{cram_fd, hts_fmt_option};
-
-/// Build a synthetic SysV-AMD64 `__va_list_tag` carrying `words` as the
-/// successive pointer-sized varargs, then invoke the native
-/// `cram_set_voption`. The buffers backing the va_list must outlive the
-/// callee, so we keep them on the stack here and pass `&mut` to keep them
-/// alive for the duration of the call.
-//
-// Pattern follows `src/hts.rs:5988-6011` and `src/hfile_s3.rs:2779-2798`.
-#[inline]
-unsafe fn dispatch_voption(fd: &mut cram_fd, opt: hts_fmt_option, words: &[usize]) -> c_int {
-    // The SysV AMD64 ABI reserves space for 6 general-purpose register args
-    // in `reg_save_area`; anything beyond spills into `overflow_arg_area`.
-    let mut reg_save = [0usize; 6];
-    let mut overflow = vec![0usize; words.len().saturating_sub(reg_save.len())];
-    for (i, word) in words.iter().copied().enumerate() {
-        if i < reg_save.len() {
-            reg_save[i] = word;
-        } else {
-            overflow[i - reg_save.len()] = word;
-        }
-    }
-    let mut va = __va_list_tag {
-        gp_offset: 0,
-        fp_offset: 48,
-        overflow_arg_area: overflow.as_mut_ptr().cast(),
-        reg_save_area: reg_save.as_mut_ptr().cast(),
-    };
-    cram_cram_io_c_5692_cram_set_voption(fd as *mut cram_fd, opt, &mut va)
-}
 
 // htslib/cram/cram_io.c:5674
 //
@@ -110,8 +80,21 @@ pub unsafe fn cram_set_option_int(fd: &mut cram_fd, opt: hts_fmt_option, val: c_
     // `int` widens to `usize` via a zero-extending cast through the unsigned
     // 32-bit value, matching how the SysV ABI promotes int → 8-byte slot in
     // the GP save area (which is what `cram_voption_va_arg_word` reads).
-    let word = (val as u32) as usize;
-    dispatch_voption(fd, opt, &[word])
+    //
+    // The SysV AMD64 ABI reserves space for 6 general-purpose register args in
+    // `reg_save_area`; a single int fits in slot 0 (`gp_offset = 0`) and
+    // nothing spills, so `overflow_arg_area` is never read. Both buffers are
+    // owned here and live for the duration of the call. Pattern follows
+    // `src/hts.rs:5988-6011` and `src/hfile_s3.rs:2779-2798`.
+    let mut reg_save = [(val as u32) as usize, 0, 0, 0, 0, 0];
+    let mut overflow: [usize; 0] = [];
+    let mut va = __va_list_tag {
+        gp_offset: 0,
+        fp_offset: 48,
+        overflow_arg_area: overflow.as_mut_ptr().cast(),
+        reg_save_area: reg_save.as_mut_ptr().cast(),
+    };
+    cram_cram_io_c_5692_cram_set_voption(fd, opt, &mut va)
 }
 
 // htslib/cram/cram_io.c:5674
@@ -132,8 +115,19 @@ pub unsafe fn cram_set_option_int(fd: &mut cram_fd, opt: hts_fmt_option, val: c_
 pub unsafe fn cram_set_option_ptr(
     fd: &mut cram_fd,
     opt: hts_fmt_option,
-    val: Option<NonNull<c_void>>,
+    val: Option<&c_void>,
 ) -> c_int {
-    let word = val.map_or(0, |val| val.as_ptr() as usize);
-    dispatch_voption(fd, opt, &[word])
+    // A null payload maps to a zero word; a present reference yields its
+    // address. The single pointer-sized arg occupies GP slot 0, mirroring the
+    // integer shim: nothing spills, so `overflow_arg_area` is never read.
+    let word = val.map_or(0, |val| val as *const c_void as usize);
+    let mut reg_save = [word, 0, 0, 0, 0, 0];
+    let mut overflow: [usize; 0] = [];
+    let mut va = __va_list_tag {
+        gp_offset: 0,
+        fp_offset: 48,
+        overflow_arg_area: overflow.as_mut_ptr().cast(),
+        reg_save_area: reg_save.as_mut_ptr().cast(),
+    };
+    cram_cram_io_c_5692_cram_set_voption(fd, opt, &mut va)
 }

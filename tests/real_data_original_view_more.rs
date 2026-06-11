@@ -18,12 +18,12 @@ fn c_fixture(path: &str) -> CString {
 }
 
 unsafe fn sam_header_text(hdr: *mut htslib_rs::sam_hdr_t) -> String {
-    let len = sam_hdr_length(hdr);
+    let len = sam_hdr_length(&mut *hdr);
     if len == 0 {
         return String::new();
     }
-    assert!(!sam_hdr_str(hdr).is_null());
-    String::from_utf8(std::slice::from_raw_parts(sam_hdr_str(hdr).cast::<u8>(), len).to_vec())
+    assert!(!sam_hdr_str(&mut *hdr).is_null());
+    String::from_utf8(std::slice::from_raw_parts(sam_hdr_str(&mut *hdr).cast::<u8>(), len).to_vec())
         .unwrap()
 }
 
@@ -33,9 +33,9 @@ unsafe fn append_formatted_record(
     line: &mut kstring_t,
     out: &mut String,
 ) {
-    line.l = 0;
+    line.data.clear();
     assert!(sam_format1(hdr, rec, line) >= 0);
-    out.push_str(&CStr::from_ptr(line.s).to_string_lossy());
+    out.push_str(&String::from_utf8_lossy(&line.data));
     out.push('\n');
 }
 
@@ -448,7 +448,7 @@ unsafe fn render_alignment_regions(
     assert!(!idx.is_null(), "failed to load index for {path}");
     let rec = bam_init1();
     assert!(!rec.is_null());
-    let mut line: kstring_t = std::mem::zeroed();
+    let mut line: kstring_t = kstring_t::default();
 
     for region in regions {
         let region_c = CString::new(*region).unwrap();
@@ -465,7 +465,6 @@ unsafe fn render_alignment_regions(
         hts_itr_destroy(iter);
     }
 
-    libc::free(line.s.cast());
     bam_destroy1(rec);
     hts_idx_destroy(idx);
     sam_hdr_destroy(hdr);
@@ -550,18 +549,17 @@ unsafe fn render_vcf(path: &str) -> (String, htsExactFormat) {
 
     let rec = bcf_init();
     assert!(!rec.is_null());
-    let mut line: kstring_t = std::mem::zeroed();
+    let mut line: kstring_t = kstring_t::default();
     loop {
         let ret = vcf_read(fp, hdr, rec);
         if ret < 0 {
             break;
         }
-        line.l = 0;
+        line.data.clear();
         assert_eq!(vcf_format(hdr, rec, &mut line), 0);
-        out.push_str(&CStr::from_ptr(line.s).to_string_lossy());
+        out.push_str(&String::from_utf8_lossy(&line.data));
     }
 
-    libc::free(line.s.cast());
     bcf_destroy(rec);
     bcf_hdr_destroy(hdr);
     assert_eq!(hts_close(fp), 0);
@@ -788,7 +786,7 @@ fn original_view_index3_cram_region_matches_expected_container_skipping_output()
         assert!(!idx.is_null(), "failed to load generated index3 CRAI");
         let rec = bam_init1();
         assert!(!rec.is_null());
-        let mut line: kstring_t = std::mem::zeroed();
+        let mut line: kstring_t = kstring_t::default();
         let region = CString::new("CHROMOSOME_I:5000-5100").unwrap();
         let iter = sam_itr_querys(idx, hdr, region.as_ptr());
         assert!(!iter.is_null(), "failed to query generated index3 CRAM");
@@ -802,7 +800,6 @@ fn original_view_index3_cram_region_matches_expected_container_skipping_output()
         }
 
         hts_itr_destroy(iter);
-        libc::free(line.s.cast());
         bam_destroy1(rec);
         hts_idx_destroy(idx);
         sam_hdr_destroy(hdr);
@@ -840,7 +837,7 @@ fn original_view_index3_cram_multiregion_matches_expected_container_skipping_out
         assert!(!idx.is_null(), "failed to load generated index3 CRAI");
         let rec = bam_init1();
         assert!(!rec.is_null());
-        let mut line: kstring_t = std::mem::zeroed();
+        let mut line: kstring_t = kstring_t::default();
         let region = CString::new("CHROMOSOME_I:5000-5100").unwrap();
         let mut regions = [region.as_ptr().cast_mut()];
         let iter = sam_c_1768_sam_itr_regarray(idx, hdr, regions.as_mut_ptr(), 1);
@@ -858,7 +855,6 @@ fn original_view_index3_cram_multiregion_matches_expected_container_skipping_out
         }
 
         hts_itr_destroy(iter);
-        libc::free(line.s.cast());
         bam_destroy1(rec);
         hts_idx_destroy(idx);
         sam_hdr_destroy(hdr);
@@ -897,7 +893,7 @@ fn original_view_index3_cram_eof_and_threaded_decode_match_original_records() {
 
         let rec = bam_init1();
         assert!(!rec.is_null());
-        let mut line: kstring_t = std::mem::zeroed();
+        let mut line: kstring_t = kstring_t::default();
         loop {
             let ret = sam_read1(fp, hdr, rec);
             if ret < 0 {
@@ -907,7 +903,6 @@ fn original_view_index3_cram_eof_and_threaded_decode_match_original_records() {
             append_formatted_record(hdr, rec, &mut line, &mut actual);
         }
 
-        libc::free(line.s.cast());
         bam_destroy1(rec);
         sam_hdr_destroy(hdr);
         assert_eq!(hts_close(fp), 0);

@@ -458,10 +458,10 @@ fn reads_real_sam_header_and_record_metadata() {
 
         let hdr = sam_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(sam_hdr_nref(hdr), 7);
-        assert_eq!(sam_hdr_name2tid(hdr, c"CHROMOSOME_I".as_ptr()), 0);
-        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 0)), c"CHROMOSOME_I");
-        assert_eq!(sam_hdr_tid2len(hdr, 0), 1_009_800);
+        assert_eq!(sam_hdr_nref(&*hdr), 7);
+        assert_eq!(sam_hdr_name2tid(&mut *hdr, c"CHROMOSOME_I"), 0);
+        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(&*hdr, 0)), c"CHROMOSOME_I");
+        assert_eq!(sam_hdr_tid2len(&*hdr, 0), 1_009_800);
 
         let rec = bam_init1();
         assert!(!rec.is_null());

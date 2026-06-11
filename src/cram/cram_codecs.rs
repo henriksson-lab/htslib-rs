@@ -502,9 +502,10 @@ pub unsafe fn cram_cram_codecs_c_454_cram_external_describe(
     ks: *mut kstring_t,
 ) -> c_int {
     let c = c.cast::<cram_codec_external_layout>();
-    if kputsn(c"EXTERNAL(id=".as_ptr(), 12, ks) < 0
+    let ks = &mut *ks;
+    if kputsn(b"EXTERNAL(id=", 12, ks) < 0
         || kputw((*c).external.content_id, ks) < 0
-        || kputsn(c")".as_ptr(), 1, ks) < 0
+        || kputsn(b")", 1, ks) < 0
     {
         -1
     } else {
@@ -902,13 +903,14 @@ pub unsafe fn cram_cram_codecs_c_752_cram_varint_describe(
     ks: *mut kstring_t,
 ) -> c_int {
     let c = c.cast::<cram_codec_varint_layout>();
-    if kputsn(c"VARINT(id=".as_ptr(), 10, ks) < 0
+    let ks = &mut *ks;
+    if kputsn(b"VARINT(id=", 10, ks) < 0
         || kputw((*c).varint.content_id, ks) < 0
-        || kputsn(c",offset=".as_ptr(), 8, ks) < 0
+        || kputsn(b",offset=", 8, ks) < 0
         || kputll((*c).varint.offset, ks) < 0
-        || kputsn(c",type=".as_ptr(), 6, ks) < 0
+        || kputsn(b",type=", 6, ks) < 0
         || kputw((*c).varint.type_, ks) < 0
-        || kputsn(c")".as_ptr(), 1, ks) < 0
+        || kputsn(b")", 1, ks) < 0
     {
         -1
     } else {
@@ -1206,9 +1208,10 @@ pub unsafe fn cram_cram_codecs_c_976_cram_const_describe(
     ks: *mut kstring_t,
 ) -> c_int {
     let c = c.cast::<cram_codec_const_layout>();
-    if kputsn(c"CONST(val=".as_ptr(), 10, ks) < 0
+    let ks = &mut *ks;
+    if kputsn(b"CONST(val=", 10, ks) < 0
         || kputll((*c).xconst.val, ks) < 0
-        || kputsn(c")".as_ptr(), 1, ks) < 0
+        || kputsn(b")", 1, ks) < 0
     {
         -1
     } else {
@@ -1417,11 +1420,12 @@ pub unsafe fn cram_cram_codecs_c_1136_cram_beta_describe(
     ks: *mut kstring_t,
 ) -> c_int {
     let c = c.cast::<cram_codec_beta_layout>();
-    if kputsn(c"BETA(offset=".as_ptr(), 12, ks) < 0
+    let ks = &mut *ks;
+    if kputsn(b"BETA(offset=", 12, ks) < 0
         || kputw((*c).beta.offset, ks) < 0
-        || kputsn(c", nbits=".as_ptr(), 8, ks) < 0
+        || kputsn(b", nbits=", 8, ks) < 0
         || kputw((*c).beta.nbits, ks) < 0
-        || kputsn(c")".as_ptr(), 1, ks) < 0
+        || kputsn(b")", 1, ks) < 0
     {
         -1
     } else {
@@ -1634,14 +1638,13 @@ pub unsafe fn cram_cram_codecs_c_1247_cram_beta_encode_init(
             }
             max_val = i as i64;
         }
-        if !(*st).h.is_null() {
-            let h = (*st).h.cast::<kh_m_i2i_layout>();
-            for k in 0..(*h).n_buckets {
-                let flag = *(*h).flags.add((k >> 4) as usize);
+        if let Some(h) = (*st).h.as_deref() {
+            for k in 0..h.n_buckets {
+                let flag = h.flags[(k >> 4) as usize];
                 if ((flag >> ((k & 0xf) << 1)) & 3) != 0 {
                     continue;
                 }
-                let i = *(*h).keys.add(k as usize);
+                let i = h.keys[k as usize];
                 if min_val > i {
                     min_val = i;
                 }
@@ -2209,7 +2212,7 @@ pub unsafe fn cram_cram_codecs_c_1623_cram_xpack_encode_init(
 
     c.xpack.sub_codec = cram_cram_codecs_c_3928_cram_encoder_init(
         (*e).sub_encoding,
-        std::ptr::null_mut(),
+        None,
         4,
         (*e).sub_codec_dat,
         version,
@@ -2697,7 +2700,7 @@ pub unsafe fn cram_cram_codecs_c_2022_cram_xdelta_encode_init(
     c.xdelta.word_size = (*e).word_size;
     c.xdelta.sub_codec = cram_cram_codecs_c_3928_cram_encoder_init(
         (*e).sub_encoding,
-        std::ptr::null_mut(),
+        None,
         4,
         (*e).sub_codec_dat,
         version,
@@ -2785,14 +2788,12 @@ pub unsafe fn cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(
     if (*b_layout).data.is_null() {
         return -1;
     }
-    crate::htslib_rs::htscodecs::rle::hts_rle_decode_raw(
-        lit_dat,
-        lit_sz,
-        len_dat.add(nb),
-        (len_sz - nb) as u64,
-        rle_syms.as_mut_ptr(),
+    crate::htslib_rs::htscodecs::rle::hts_rle_decode_raw_slices(
+        std::slice::from_raw_parts(lit_dat, lit_sz as usize),
+        std::slice::from_raw_parts(len_dat.add(nb), len_sz - nb),
+        &rle_syms[..rle_nsyms],
         rle_nsyms as c_int,
-        (*b_layout).data,
+        std::slice::from_raw_parts_mut((*b_layout).data, out_sz as usize),
         &mut out_sz,
     );
     (*b_layout).uncomp_size = out_sz as i32;
@@ -3049,16 +3050,26 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2257_cram_xrle_encode_flush(c: *mut 
     let mut out_len_size = 0u64;
     let mut out_lit_size = 0u64;
     let mut rle_nsyms_i = rle_nsyms as c_int;
-    let out_lit = crate::htslib_rs::htscodecs::rle::hts_rle_encode_raw(
-        (*c_xrle).xrle.to_flush.cast(),
-        (*c_xrle).xrle.to_flush_size as u64,
-        out_len_ptr.add(nb),
+    let out_lit_vec = crate::htslib_rs::htscodecs::rle::hts_rle_encode_raw_slices(
+        std::slice::from_raw_parts(
+            (*c_xrle).xrle.to_flush.cast(),
+            (*c_xrle).xrle.to_flush_size,
+        ),
+        std::slice::from_raw_parts_mut(out_len_ptr.add(nb), out_len_cap - nb),
         &mut out_len_size,
-        rle_syms.as_mut_ptr(),
+        &mut rle_syms[..rle_nsyms],
         &mut rle_nsyms_i,
-        std::ptr::null_mut(),
+        None,
         &mut out_lit_size,
     );
+    let out_lit: *mut u8 = match out_lit_vec {
+        Some(mut v) => {
+            let p = v.as_mut_ptr();
+            std::mem::forget(v);
+            p
+        }
+        None => std::ptr::null_mut(),
+    };
     out_len_size += nb as u64;
 
     let len_codec = (*c_xrle).xrle.len_codec;
@@ -3300,7 +3311,7 @@ pub unsafe fn cram_cram_codecs_c_2409_cram_xrle_encode_init(
     c.xrle.lit_dat = (*e).lit_dat;
     c.xrle.len_codec = cram_cram_codecs_c_3928_cram_encoder_init(
         (*e).len_encoding,
-        std::ptr::null_mut(),
+        None,
         3,
         (*e).len_dat,
         version,
@@ -3311,7 +3322,7 @@ pub unsafe fn cram_cram_codecs_c_2409_cram_xrle_encode_init(
     }
     c.xrle.lit_codec = cram_cram_codecs_c_3928_cram_encoder_init(
         (*e).lit_encoding,
-        std::ptr::null_mut(),
+        None,
         3,
         (*e).lit_dat,
         version,
@@ -3378,11 +3389,12 @@ pub unsafe fn cram_cram_codecs_c_2501_cram_subexp_describe(
     ks: *mut kstring_t,
 ) -> c_int {
     let c = c.cast::<cram_codec_subexp_layout>();
-    if kputsn(c"SUBEXP(offset=".as_ptr(), 14, ks) < 0
+    let ks = &mut *ks;
+    if kputsn(b"SUBEXP(offset=", 14, ks) < 0
         || kputw((*c).subexp.offset, ks) < 0
-        || kputsn(c",k=".as_ptr(), 3, ks) < 0
+        || kputsn(b",k=", 3, ks) < 0
         || kputw((*c).subexp.k, ks) < 0
-        || kputsn(c")".as_ptr(), 1, ks) < 0
+        || kputsn(b")", 1, ks) < 0
     {
         -1
     } else {
@@ -3467,9 +3479,10 @@ pub unsafe fn cram_cram_codecs_c_2575_cram_gamma_describe(
     ks: *mut kstring_t,
 ) -> c_int {
     let c = c.cast::<cram_codec_gamma_layout>();
-    if kputsn(c"GAMMA(offset=".as_ptr(), 13, ks) < 0
+    let ks = &mut *ks;
+    if kputsn(b"GAMMA(offset=", 13, ks) < 0
         || kputw((*c).gamma.offset, ks) < 0
-        || kputsn(c")".as_ptr(), 1, ks) < 0
+        || kputsn(b")", 1, ks) < 0
     {
         -1
     } else {
@@ -3547,22 +3560,23 @@ pub unsafe fn cram_cram_codecs_c_2795_cram_huffman_describe(
     ks: *mut kstring_t,
 ) -> c_int {
     let c = c.cast::<cram_codec_huffman_layout>();
+    let ks = &mut *ks;
     let mut r = 0;
-    r |= (kputsn(c"HUFFMAN(codes={".as_ptr(), 15, ks) < 0) as c_int;
+    r |= (kputsn(b"HUFFMAN(codes={", 15, ks) < 0) as c_int;
     for n in 0..(*c).huffman.ncodes {
         if n != 0 {
-            r |= (kputsn(c",".as_ptr(), 1, ks) < 0) as c_int;
+            r |= (kputsn(b",", 1, ks) < 0) as c_int;
         }
         r |= (kputll((*(*c).huffman.codes.add(n as usize)).symbol, ks) < 0) as c_int;
     }
-    r |= (kputsn(c"},lengths={".as_ptr(), 11, ks) < 0) as c_int;
+    r |= (kputsn(b"},lengths={", 11, ks) < 0) as c_int;
     for n in 0..(*c).huffman.ncodes {
         if n != 0 {
-            r |= (kputsn(c",".as_ptr(), 1, ks) < 0) as c_int;
+            r |= (kputsn(b",", 1, ks) < 0) as c_int;
         }
         r |= (kputw((*(*c).huffman.codes.add(n as usize)).len, ks) < 0) as c_int;
     }
-    r |= (kputsn(c"})".as_ptr(), 2, ks) < 0) as c_int;
+    r |= (kputsn(b"})", 2, ks) < 0) as c_int;
     r
 }
 
@@ -4181,19 +4195,18 @@ pub unsafe fn cram_cram_codecs_c_3176_cram_huffman_encode_init(
         }
     }
 
-    if !(*st).h.is_null() {
-        let h = (*st).h.cast::<kh_m_i2i_layout>();
+    if let Some(h) = (*st).h.as_deref() {
         let i_after_stat_loop = 1024i32;
-        for k in 0..(*h).n_buckets {
-            let flag = *(*h).flags.add((k >> 4) as usize);
+        for k in 0..h.n_buckets {
+            let flag = h.flags[(k >> 4) as usize];
             if ((flag >> ((k & 0xf) << 1)) & 3) != 0 {
                 continue;
             }
             if vals.try_reserve_exact(1).is_err() || freqs.try_reserve_exact(1).is_err() {
                 return std::ptr::null_mut();
             }
-            vals.push(*(*h).keys.add(k as usize) as c_int);
-            freqs.push(*(*h).vals.add(k as usize));
+            vals.push(h.keys[k as usize] as c_int);
+            freqs.push(h.vals[k as usize]);
             if max_val < i_after_stat_loop {
                 max_val = i_after_stat_loop;
             }
@@ -4405,7 +4418,7 @@ pub unsafe fn cram_cram_codecs_c_3412_cram_byte_array_len_describe(
 ) -> c_int {
     let c = c.cast::<cram_codec_byte_array_len_layout>();
     let mut r = 0;
-    r |= (kputsn(c"BYTE_ARRAY_LEN(len_codec={".as_ptr(), 26, ks) < 0) as c_int;
+    r |= (kputsn(b"BYTE_ARRAY_LEN(len_codec={", 26, &mut *ks) < 0) as c_int;
     let len_codec = (*c).byte_array_len.len_codec;
     if !(*(len_codec.cast::<cram_codec_byte_array_len_layout>()))
         .describe
@@ -4415,9 +4428,9 @@ pub unsafe fn cram_cram_codecs_c_3412_cram_byte_array_len_describe(
             cram_fn((*(len_codec.cast::<cram_codec_byte_array_len_layout>())).describe);
         r |= describe(len_codec, ks);
     } else {
-        r |= (kputsn(c"?".as_ptr(), 1, ks) < 0) as c_int;
+        r |= (kputsn(b"?", 1, &mut *ks) < 0) as c_int;
     }
-    r |= (kputsn(c"},val_codec={".as_ptr(), 13, ks) < 0) as c_int;
+    r |= (kputsn(b"},val_codec={", 13, &mut *ks) < 0) as c_int;
     let val_codec = (*c).byte_array_len.val_codec;
     if !(*(val_codec.cast::<cram_codec_byte_array_len_layout>()))
         .describe
@@ -4427,9 +4440,9 @@ pub unsafe fn cram_cram_codecs_c_3412_cram_byte_array_len_describe(
             cram_fn((*(val_codec.cast::<cram_codec_byte_array_len_layout>())).describe);
         r |= describe(val_codec, ks);
     } else {
-        r |= (kputsn(c"?".as_ptr(), 1, ks) < 0) as c_int;
+        r |= (kputsn(b"?", 1, &mut *ks) < 0) as c_int;
     }
-    r |= (kputsn(c"}".as_ptr(), 1, ks) < 0) as c_int;
+    r |= (kputsn(b"}", 1, &mut *ks) < 0) as c_int;
     r
 }
 
@@ -4674,7 +4687,7 @@ pub unsafe fn cram_cram_codecs_c_3547_cram_byte_array_len_encode_init(
 
     c.byte_array_len.len_codec = cram_cram_codecs_c_3928_cram_encoder_init(
         (*e).len_encoding,
-        st,
+        st.cast::<cram_stats_layout>().as_mut(),
         1,
         (*e).len_dat,
         version,
@@ -4682,7 +4695,7 @@ pub unsafe fn cram_cram_codecs_c_3547_cram_byte_array_len_encode_init(
     );
     c.byte_array_len.val_codec = cram_cram_codecs_c_3928_cram_encoder_init(
         (*e).val_encoding,
-        std::ptr::null_mut(),
+        None,
         4,
         (*e).val_dat,
         version,
@@ -4807,11 +4820,12 @@ pub unsafe fn cram_cram_codecs_c_3675_cram_byte_array_stop_describe(
     ks: *mut kstring_t,
 ) -> c_int {
     let c = c.cast::<cram_codec_byte_array_stop_layout>();
-    if kputsn(c"BYTE_ARRAY_STOP(stop=".as_ptr(), 21, ks) < 0
+    let ks = &mut *ks;
+    if kputsn(b"BYTE_ARRAY_STOP(stop=", 21, ks) < 0
         || kputw((*c).byte_array_stop.stop as c_int, ks) < 0
-        || kputsn(c",id=".as_ptr(), 4, ks) < 0
+        || kputsn(b",id=", 4, ks) < 0
         || kputw((*c).byte_array_stop.content_id, ks) < 0
-        || kputsn(c")".as_ptr(), 1, ks) < 0
+        || kputsn(b")", 1, ks) < 0
     {
         -1
     } else {
@@ -5029,15 +5043,21 @@ pub unsafe fn cram_cram_codecs_c_3872_cram_decoder_init(
 
 pub unsafe fn cram_cram_codecs_c_3928_cram_encoder_init(
     mut codec: c_int,
-    st: *mut c_void,
+    st: Option<&mut cram_stats_layout>,
     option: c_int,
     dat: *mut c_void,
     version: c_int,
     vv: *mut c_void,
 ) -> *mut c_void {
-    if !st.is_null() && (*(st.cast::<cram_stats_layout>())).nvals == 0 {
-        return std::ptr::null_mut();
-    }
+    let st: *mut c_void = match st {
+        Some(s) => {
+            if s.nvals == 0 {
+                return std::ptr::null_mut();
+            }
+            (s as *mut cram_stats_layout).cast::<c_void>()
+        }
+        None => std::ptr::null_mut(),
+    };
 
     if option == 3 || option == 4 || option == 5 {
         if codec == 41 || codec == 42 {
@@ -5315,7 +5335,7 @@ pub unsafe fn cram_cram_codecs_c_4185_cram_codec_describe(
         let describe: CramCodecDescribeFn =
             cram_fn((*(c.cast::<cram_codec_external_layout>())).describe);
         describe(c, ks)
-    } else if kputsn(c"?".as_ptr(), 1, ks) < 0 {
+    } else if kputsn(b"?", 1, &mut *ks) < 0 {
         -1
     } else {
         0

@@ -1,4 +1,4 @@
-use std::ffi::{c_char, c_int};
+use std::ffi::{c_char, c_int, CStr};
 
 use crate::htslib_rs::{hts::kstring_t, sam};
 
@@ -13,11 +13,7 @@ pub unsafe fn samples_read_header_c_37_print_usage(fp: *mut libc::FILE) {
 // original: main (htslib/samples/read_header.c:49)
 pub unsafe fn samples_read_header_c_49_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     let mut ret = libc::EXIT_FAILURE;
-    let mut data = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut data = kstring_t { data: Vec::new() };
 
     if !(3..=6).contains(&argc) {
         samples_read_header_c_37_print_usage(crate::htslib_rs::c_compat::stderr.cast());
@@ -70,13 +66,28 @@ pub unsafe fn samples_read_header_c_49_main(argc: c_int, argv: *mut *mut c_char)
 
     if !id.is_null() && !idval.is_null() {
         ret = if !tag.is_null() {
-            sam::sam_hdr_find_tag_id(in_samhdr, header, id, idval, tag, &mut data)
+            sam::sam_hdr_find_tag_id(
+                &mut *in_samhdr,
+                CStr::from_ptr(header),
+                id,
+                idval,
+                CStr::from_ptr(tag),
+                &mut data,
+            )
         } else {
-            sam::sam_hdr_find_line_id(in_samhdr, header, id, idval, &mut data)
+            sam::sam_hdr_find_line_id(
+                &mut *in_samhdr,
+                CStr::from_ptr(header),
+                CStr::from_ptr(id),
+                CStr::from_ptr(idval),
+                &mut data,
+            )
         };
 
         if ret == 0 {
-            libc::printf(c"%s\n".as_ptr(), data.s);
+            let mut data_cstr = data.data.clone();
+            data_cstr.push(0);
+            libc::printf(c"%s\n".as_ptr(), data_cstr.as_ptr());
         } else if ret == -1 {
             libc::printf(c"No matching tag found\n".as_ptr());
             ret = libc::EXIT_FAILURE;
@@ -85,20 +96,28 @@ pub unsafe fn samples_read_header_c_49_main(argc: c_int, argv: *mut *mut c_char)
             ret = libc::EXIT_FAILURE;
         }
     } else {
-        let linecnt = sam::sam_hdr_count_lines(in_samhdr, header);
+        let linecnt = sam::sam_hdr_count_lines(&mut *in_samhdr, CStr::from_ptr(header));
         if linecnt == 0 {
             libc::printf(c"No matching line found\n".as_ptr());
         } else {
             let mut ok = true;
             for c in 0..linecnt {
                 ret = if !tag.is_null() {
-                    sam::sam_hdr_find_tag_pos(in_samhdr, header, c, tag, &mut data)
+                    sam::sam_hdr_find_tag_pos(
+                        &mut *in_samhdr,
+                        CStr::from_ptr(header),
+                        c,
+                        CStr::from_ptr(tag),
+                        &mut data,
+                    )
                 } else {
-                    sam::sam_hdr_find_line_pos(in_samhdr, header, c, &mut data)
+                    sam::sam_hdr_find_line_pos(&mut *in_samhdr, CStr::from_ptr(header), c, &mut data)
                 };
 
                 if ret == 0 {
-                    libc::printf(c"%s\n".as_ptr(), data.s);
+                    let mut data_cstr = data.data.clone();
+                    data_cstr.push(0);
+                    libc::printf(c"%s\n".as_ptr(), data_cstr.as_ptr());
                 } else if ret == -1 {
                     libc::printf(c"Tag not present\n".as_ptr());
                 } else {

@@ -110,20 +110,8 @@ unsafe fn result_mut<'a>(r: *mut hts_tpool_result) -> Option<&'a mut HtsTpoolRes
     unsafe { r.cast::<HtsTpoolResult>().as_mut() }
 }
 
-fn pool_ptr(p: Option<NonNull<HtsTpool>>) -> *mut HtsTpool {
-    p.map_or(ptr::null_mut(), NonNull::as_ptr)
-}
-
 unsafe fn q_pool_mut<'a>(q: &HtsTpoolProcess) -> Option<&'a mut HtsTpool> {
-    unsafe { pool_ptr(q.p).as_mut() }
-}
-
-fn result_into_raw(r: Box<HtsTpoolResult>) -> *mut HtsTpoolResult {
-    Box::into_raw(r)
-}
-
-unsafe fn result_from_raw(r: NonNull<HtsTpoolResult>) -> Box<HtsTpoolResult> {
-    unsafe { Box::from_raw(r.as_ptr()) }
+    unsafe { q.p.map(|mut p| p.as_mut()) }
 }
 
 // original: hts_tpool_worker_id (htslib/thread_pool.c:56)
@@ -285,7 +273,7 @@ pub unsafe fn hts_tpool_next_result(q: *mut hts_tpool_process) -> *mut hts_tpool
     unsafe { crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!(p.pool_m)) };
     let r = unsafe { hts_tpool_next_result_locked(q) };
     unsafe { crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(p.pool_m)) };
-    r.map_or(ptr::null_mut(), result_into_raw).cast()
+    r.map_or(ptr::null_mut(), Box::into_raw).cast()
 }
 
 // original: hts_tpool_next_result_wait (htslib/thread_pool.c:224)
@@ -304,7 +292,7 @@ pub unsafe fn hts_tpool_next_result_wait(q: *mut hts_tpool_process) -> *mut hts_
             unsafe {
                 crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(p.pool_m))
             };
-            return result_into_raw(r).cast();
+            return Box::into_raw(r).cast();
         }
 
         let mut now: libc::timeval = unsafe { mem::zeroed() };
@@ -468,7 +456,7 @@ pub unsafe fn hts_tpool_delete_result(r: *mut hts_tpool_result, _free_data: i32)
     let Some(r) = NonNull::new(r.cast::<HtsTpoolResult>()) else {
         return;
     };
-    let _ = unsafe { result_from_raw(r) };
+    let _ = unsafe { Box::from_raw(r.as_ptr()) };
 }
 
 // original: hts_tpool_result_data (htslib/thread_pool.c:358)
@@ -809,7 +797,7 @@ pub unsafe fn hts_tpool_init(n: i32) -> *mut hts_tpool {
     let mut pattr_init_done = false;
     let Ok(n_usize) = usize::try_from(n) else {
         unsafe {
-            *c_compat::__errno_location() = libc::ENOMEM;
+            *c_compat::__errno_location() = c_compat::ENOMEM;
         }
         return ptr::null_mut();
     };
@@ -950,7 +938,7 @@ pub unsafe fn hts_tpool_dispatch3(
 
         if (q.no_more_input || q.n_input >= q.qsize) && nonblock == 1 {
             crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(p.pool_m));
-            *c_compat::__errno_location() = libc::EAGAIN;
+            *c_compat::__errno_location() = c_compat::EAGAIN;
             return -1;
         }
 
@@ -1281,7 +1269,7 @@ mod tests {
     struct TestWorkerArg {
         pool: *mut hts_tpool,
         value: i32,
-        delay_us: libc::useconds_t,
+        delay_us: u32,
     }
 
     #[derive(Debug, Eq, PartialEq)]
@@ -1623,7 +1611,7 @@ mod tests {
     unsafe fn alloc_worker_arg(
         pool: *mut hts_tpool,
         value: i32,
-        delay_us: libc::useconds_t,
+        delay_us: u32,
     ) -> *mut c_void {
         Box::into_raw(Box::new(TestWorkerArg {
             pool,
@@ -1680,7 +1668,7 @@ mod tests {
         unsafe {
             *c_compat::__errno_location() = 0;
             assert!(hts_tpool_init(-1).is_null());
-            assert_eq!(*c_compat::__errno_location(), libc::ENOMEM);
+            assert_eq!(*c_compat::__errno_location(), c_compat::ENOMEM);
         }
     }
 
@@ -1776,7 +1764,7 @@ mod tests {
                         break;
                     }
                     assert_eq!(dispatch_rc, -1);
-                    assert_eq!(*c_compat::__errno_location(), libc::EAGAIN);
+                    assert_eq!(*c_compat::__errno_location(), c_compat::EAGAIN);
                     crate::htslib_rs::c_compat::usleep(1_000);
                 }
             }
@@ -2365,7 +2353,7 @@ mod tests {
             );
 
             assert_eq!(ret, -1);
-            assert_eq!(*c_compat::__errno_location(), libc::EAGAIN);
+            assert_eq!(*c_compat::__errno_location(), c_compat::EAGAIN);
             assert_eq!(queue.curr_serial, 7);
             assert_eq!(queue.n_input, 1);
             assert!(queue.input.is_empty());

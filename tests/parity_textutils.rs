@@ -299,11 +299,8 @@ fn parity_hts_json_sskip_value() {
 // ---------------------------------------------------------------------------
 
 unsafe fn stringify_argv_native(args: &[&CStr]) -> Vec<u8> {
-    let mut ptrs: Vec<*mut c_char> = args.iter().map(|s| s.as_ptr() as *mut c_char).collect();
-    let p = htslib_rs::textutils::stringify_argv(ptrs.len() as c_int, ptrs.as_mut_ptr());
-    assert!(!p.is_null());
-    let bytes = CStr::from_ptr(p).to_bytes().to_vec();
-    htslib_rs::textutils::stringify_argv_free(p);
+    let owned: Vec<&[u8]> = args.iter().map(|s| s.to_bytes()).collect();
+    let bytes = htslib_rs::textutils::stringify_argv(&owned).expect("stringify_argv returned None");
     bytes
 }
 
@@ -391,16 +388,6 @@ fn parity_hts_strprint() {
             );
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// sscan_string: `static` in textutils.c — no external linkage, no parity peer.
-// ---------------------------------------------------------------------------
-
-#[test]
-#[ignore = "sscan_string is static in htslib/textutils.c (no external linkage); no hts_sys / extern \"C\" peer is reachable"]
-fn parity_sscan_string_unavailable() {
-    // Intentionally empty — see attribute reason.
 }
 
 #[test]

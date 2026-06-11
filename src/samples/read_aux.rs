@@ -106,11 +106,7 @@ pub unsafe fn samples_read_aux_c_51_printauxdata(
 // original: main (htslib/samples/read_aux.c:114)
 pub unsafe fn samples_read_aux_c_114_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     let mut ret = libc::EXIT_FAILURE;
-    let mut sdata = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut sdata = kstring_t { data: Vec::new() };
 
     if argc != 3 {
         samples_read_aux_c_37_print_usage(crate::htslib_rs::c_compat::stderr.cast());
@@ -147,7 +143,9 @@ pub unsafe fn samples_read_aux_c_114_main(argc: c_int, argv: *mut *mut c_char) -
         if i % 2 != 0 {
             let c = sam::bam_aux_get_str(bamdata, tag, &mut sdata);
             if c == 1 {
-                libc::printf(c"%s\n".as_ptr(), sdata.s);
+                let mut sdata_cstr = sdata.data.clone();
+                sdata_cstr.push(0);
+                libc::printf(c"%s\n".as_ptr(), sdata_cstr.as_ptr() as *const c_char);
             } else if c == 0
                 && *crate::htslib_rs::c_compat::__errno_location()
                     == crate::htslib_rs::c_compat::ENOENT as c_int

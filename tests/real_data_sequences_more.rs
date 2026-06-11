@@ -364,13 +364,9 @@ fn bgzf_fixture_reads_payload_lines_and_reports_eof_marker() {
         assert!(!fp.is_null());
         assert_eq!(bgzf_compression(fp), hts_sys::htsCompression_bgzf as i32);
 
-        let mut line: kstring_t = std::mem::zeroed();
+        let mut line: kstring_t = kstring_t::default();
         assert_eq!(bgzf_getline(fp, b'\n' as i32, &mut line), 15);
-        assert_eq!(
-            std::slice::from_raw_parts(line.s.cast::<u8>(), line.l),
-            b"122333444455555"
-        );
-        libc::free(line.s.cast());
+        assert_eq!(line.data.as_slice(), b"122333444455555");
 
         let mut tail = [0u8; 1];
         assert_eq!(bgzf_read(fp, tail.as_mut_ptr().cast(), tail.len()), 0);

@@ -1,6 +1,4 @@
-use crate::htslib_rs::cram;
-use std::ffi::{c_char, c_int, c_void};
-use std::ptr::NonNull;
+use std::ffi::c_int;
 
 use super::poll_wrap::{Pw_fd_type, Pw_item};
 
@@ -10,58 +8,68 @@ const INIT_EPOLL_SIZE: c_int = 128;
 pub type Pw_events = libc::epoll_event;
 
 // original: Poll_wrap (htslib/ref_cache/poll_wrap_epoll.c:43)
+//
+// The C version stored each registered `Pw_item` in an intrusive memory pool
+// and stashed the raw item pointer in epoll's opaque `u64` field. Here the
+// items live in an owned arena (`items`); the index into that arena is what we
+// store in epoll's `u64` field and recover on wakeup. `free` holds the indices
+// of slots that have been removed and may be reused.
 pub struct Poll_wrap {
-    pool: Box<cram::pool_alloc_t>,
+    items: Vec<Option<Pw_item>>,
+    free: Vec<usize>,
     epfd: c_int,
-    debug: c_int,
+    debug: bool,
 }
 
 // original: pw_init (htslib/ref_cache/poll_wrap_epoll.c:49)
-pub unsafe fn ref_cache_poll_wrap_epoll_c_49_pw_init(debug: c_int) -> *mut Poll_wrap {
-    let pool = cram::pool_create(std::mem::size_of::<Pw_item>());
-    let epfd = libc::epoll_create(INIT_EPOLL_SIZE);
+pub fn ref_cache_poll_wrap_epoll_c_49_pw_init(debug: bool) -> Option<Box<Poll_wrap>> {
+    let epfd = unsafe { libc::epoll_create(INIT_EPOLL_SIZE) };
     if epfd < 0 {
-        libc::perror(b"epoll_create\0".as_ptr().cast::<c_char>());
-        cram::pool_destroy_box(pool);
-        return std::ptr::null_mut();
+        eprintln!("epoll_create: {}", std::io::Error::last_os_error());
+        return None;
     }
 
-    Box::into_raw(Box::new(Poll_wrap { pool, epfd, debug }))
+    Some(Box::new(Poll_wrap {
+        items: Vec::new(),
+        free: Vec::new(),
+        epfd,
+        debug,
+    }))
 }
 
 // original: pw_close (htslib/ref_cache/poll_wrap_epoll.c:72)
-pub unsafe fn ref_cache_poll_wrap_epoll_c_72_pw_close(pw: *mut Poll_wrap) {
-    let Some(pw) = NonNull::new(pw) else {
+pub fn ref_cache_poll_wrap_epoll_c_72_pw_close(pw: Option<Box<Poll_wrap>>) {
+    let Some(pw) = pw else {
         return;
     };
-    let Poll_wrap { mut pool, epfd, .. } = *Box::from_raw(pw.as_ptr());
-    libc::close(epfd);
-    cram::pool_destroy(&mut pool);
+    unsafe { libc::close(pw.epfd) };
+    // `pw` (and its owned `items` arena) drops here.
+}
+
+impl Poll_wrap {
+    // Read-only access to a registered item by its arena index. The epoll `u64`
+    // field carries this index, so an event source is mapped back to its
+    // `(fd, fd_type, userp)` triple through here.
+    pub fn item_at(&self, idx: usize) -> Option<&Pw_item> {
+        self.items.get(idx).and_then(|i| i.as_ref())
+    }
 }
 
 // original: pw_register (htslib/ref_cache/poll_wrap_epoll.c:78)
-pub unsafe fn ref_cache_poll_wrap_epoll_c_78_pw_register(
-    pw: *mut Poll_wrap,
+//
+// Returns the arena index of the freshly registered item, which callers use as
+// the handle to refer to it later (mod/remove/wait).
+pub fn ref_cache_poll_wrap_epoll_c_78_pw_register(
+    pw: &mut Poll_wrap,
     fd: c_int,
     fd_type: Pw_fd_type,
     init_events: u32,
-    userp: *mut c_void,
-) -> *mut Pw_item {
-    let Some(pw) = pw.as_mut() else {
-        return std::ptr::null_mut();
-    };
-    let mut event: libc::epoll_event = std::mem::zeroed();
-    let Some(item) = cram::pool_alloc(&mut pw.pool).map(NonNull::cast::<Pw_item>) else {
-        return std::ptr::null_mut();
-    };
-
-    if pw.debug != 0 {
-        libc::fprintf(
-            crate::htslib_rs::ref_cache::compat::stderr(),
-            b"pw_register(%p, %d, %d, 0x%04x, %p)\n"
-                .as_ptr()
-                .cast::<c_char>(),
-            (pw as *mut Poll_wrap).cast::<c_void>(),
+    userp: usize,
+) -> Option<usize> {
+    if pw.debug {
+        eprintln!(
+            "pw_register({:p}, {}, {}, 0x{:04x}, {})",
+            pw as *const Poll_wrap,
             fd,
             fd_type as c_int,
             init_events,
@@ -69,101 +77,96 @@ pub unsafe fn ref_cache_poll_wrap_epoll_c_78_pw_register(
         );
     }
 
-    item.as_ptr().write(Pw_item { fd, fd_type, userp });
+    let item = Pw_item { fd, fd_type, userp };
+    let idx = match pw.free.pop() {
+        Some(idx) => {
+            pw.items[idx] = Some(item);
+            idx
+        }
+        None => {
+            pw.items.push(Some(item));
+            pw.items.len() - 1
+        }
+    };
 
+    let mut event: libc::epoll_event = unsafe { std::mem::zeroed() };
     event.events = init_events;
-    event.u64 = item.as_ptr() as u64;
+    event.u64 = idx as u64;
 
-    if libc::epoll_ctl(pw.epfd, libc::EPOLL_CTL_ADD, fd, &mut event) != 0 {
-        libc::perror(b"epoll_ctl\0".as_ptr().cast::<c_char>());
-        cram::pool_free(&mut pw.pool, item.cast());
-        return std::ptr::null_mut();
+    if unsafe { libc::epoll_ctl(pw.epfd, libc::EPOLL_CTL_ADD, fd, &mut event) } != 0 {
+        eprintln!("epoll_ctl: {}", std::io::Error::last_os_error());
+        pw.items[idx] = None;
+        pw.free.push(idx);
+        return None;
     }
 
-    item.as_ptr()
+    Some(idx)
 }
 
 // original: pw_mod (htslib/ref_cache/poll_wrap_epoll.c:106)
-pub unsafe fn ref_cache_poll_wrap_epoll_c_106_pw_mod(
-    pw: *mut Poll_wrap,
-    item: *mut Pw_item,
+pub fn ref_cache_poll_wrap_epoll_c_106_pw_mod(
+    pw: &mut Poll_wrap,
+    item: usize,
     events: u32,
 ) -> c_int {
-    let Some(pw) = pw.as_mut() else {
+    let Some(fd) = pw.items.get(item).and_then(|i| i.as_ref()).map(|i| i.fd) else {
         return -1;
     };
-    let Some(item) = item.as_mut() else {
-        return -1;
-    };
-    let mut event: libc::epoll_event = std::mem::zeroed();
 
-    if pw.debug != 0 {
-        libc::fprintf(
-            crate::htslib_rs::ref_cache::compat::stderr(),
-            b"pw_mod(%p, %d, 0x%04x)\n".as_ptr().cast::<c_char>(),
-            (pw as *mut Poll_wrap).cast::<c_void>(),
-            item.fd,
-            events,
-        );
+    if pw.debug {
+        eprintln!("pw_mod({:p}, {}, 0x{:04x})", pw as *const Poll_wrap, fd, events);
     }
 
+    let mut event: libc::epoll_event = unsafe { std::mem::zeroed() };
     event.events = events;
-    event.u64 = item as *mut Pw_item as u64;
+    event.u64 = item as u64;
 
-    libc::epoll_ctl(pw.epfd, libc::EPOLL_CTL_MOD, item.fd, &mut event)
+    unsafe { libc::epoll_ctl(pw.epfd, libc::EPOLL_CTL_MOD, fd, &mut event) }
 }
 
 // original: pw_wait (htslib/ref_cache/poll_wrap_epoll.c:120)
-pub unsafe fn ref_cache_poll_wrap_epoll_c_120_pw_wait(
-    pw: *mut Poll_wrap,
-    events: *mut Pw_events,
-    max_events: c_int,
+pub fn ref_cache_poll_wrap_epoll_c_120_pw_wait(
+    pw: &mut Poll_wrap,
+    events: &mut [Pw_events],
     timeout: c_int,
 ) -> c_int {
-    let Some(pw) = pw.as_mut() else {
-        return -1;
-    };
-    libc::epoll_wait(pw.epfd, events, max_events, timeout)
+    unsafe {
+        libc::epoll_wait(
+            pw.epfd,
+            events.as_mut_ptr(),
+            events.len() as c_int,
+            timeout,
+        )
+    }
 }
 
 // original: pw_remove (htslib/ref_cache/poll_wrap_epoll.c:126)
-pub unsafe fn ref_cache_poll_wrap_epoll_c_126_pw_remove(
-    pw: *mut Poll_wrap,
-    item: *mut Pw_item,
-    do_close: c_int,
+pub fn ref_cache_poll_wrap_epoll_c_126_pw_remove(
+    pw: &mut Poll_wrap,
+    item: usize,
+    do_close: bool,
 ) -> c_int {
-    let Some(pw) = pw.as_mut() else {
+    let Some(fd) = pw.items.get(item).and_then(|i| i.as_ref()).map(|i| i.fd) else {
         return -1;
     };
-    let Some(item) = item.as_mut() else {
-        return -1;
-    };
-    let mut dummy: libc::epoll_event = std::mem::zeroed();
 
-    if pw.debug != 0 {
-        libc::fprintf(
-            crate::htslib_rs::ref_cache::compat::stderr(),
-            b"pw_remove(%p, %d%s)\n".as_ptr().cast::<c_char>(),
-            (pw as *mut Poll_wrap).cast::<c_void>(),
-            item.fd,
-            if do_close != 0 {
-                b", close\0".as_ptr().cast::<c_char>()
-            } else {
-                b"\0".as_ptr().cast::<c_char>()
-            },
+    if pw.debug {
+        eprintln!(
+            "pw_remove({:p}, {}{})",
+            pw as *const Poll_wrap,
+            fd,
+            if do_close { ", close" } else { "" },
         );
     }
 
-    let res = if do_close != 0 {
-        libc::close(item.fd)
+    let res = if do_close {
+        unsafe { libc::close(fd) }
     } else {
-        libc::epoll_ctl(pw.epfd, libc::EPOLL_CTL_DEL, item.fd, &mut dummy)
+        let mut dummy: libc::epoll_event = unsafe { std::mem::zeroed() };
+        unsafe { libc::epoll_ctl(pw.epfd, libc::EPOLL_CTL_DEL, fd, &mut dummy) }
     };
-    cram::pool_free(
-        &mut pw.pool,
-        NonNull::new(item as *mut Pw_item)
-            .expect("checked non-null pooled epoll item")
-            .cast(),
-    );
+
+    pw.items[item] = None;
+    pw.free.push(item);
     res
 }

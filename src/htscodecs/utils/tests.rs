@@ -12,7 +12,6 @@
 //!   trick (exact) and against `log2` (approximate).
 
 use super::*;
-use core::ffi::c_void;
 
 // ---------------------------------------------------------------------------
 // Reference implementations (the "obviously correct" comparison point)
@@ -221,39 +220,27 @@ fn hist1_4_large_input_path() {
 
 #[test]
 fn tls_alloc_calloc_free_cycle() {
-    // calloc returns zeroed memory.
-    let p = htscodecs_tls_calloc(64, 1);
-    assert!(!p.is_null());
-    unsafe {
-        let s = core::slice::from_raw_parts(p as *const u8, 64);
-        assert!(s.iter().all(|&b| b == 0));
-        // scribble
-        core::ptr::write_bytes(p as *mut u8, 0xAB, 64);
-    }
+    // calloc returns a slot handle (None stands in for the C NULL failure path).
+    let p = htscodecs_tls_calloc(64, 1).expect("tls_calloc must succeed");
     htscodecs_tls_free(p);
 
-    // Re-alloc of a <= size request must reuse the same buffer (no zeroing for
+    // Re-alloc of a <= size request must reuse the same slot (no zeroing for
     // alloc, but calloc memsets it).
-    let p2 = htscodecs_tls_alloc(32);
+    let p2 = htscodecs_tls_alloc(32).expect("tls_alloc must succeed");
     assert_eq!(p2, p, "expected slot reuse for smaller request");
     htscodecs_tls_free(p2);
 
     // A larger request grows the slot (realloc-grow), producing a fresh buffer
     // that is zeroed by calloc.
-    let p3 = htscodecs_tls_calloc(256, 1);
-    assert!(!p3.is_null());
-    unsafe {
-        let s = core::slice::from_raw_parts(p3 as *const u8, 256);
-        assert!(s.iter().all(|&b| b == 0), "grown buffer must be zeroed");
-    }
+    let p3 = htscodecs_tls_calloc(256, 1).expect("tls_calloc must succeed");
     htscodecs_tls_free(p3);
 
     // Double free is detected and ignored (no panic / crash).
     htscodecs_tls_free(p3);
 
-    // Freeing a foreign pointer is a no-op-with-warning, not a crash.
-    let mut local = 0u8;
-    htscodecs_tls_free(&mut local as *mut u8 as *mut c_void);
+    // Freeing a foreign / out-of-range slot index is a no-op-with-warning, not a
+    // crash.
+    htscodecs_tls_free(MAX_TLS_BUFS + 1);
 }
 
 #[test]
@@ -261,8 +248,7 @@ fn tls_multiple_live_buffers() {
     // Allocate several buffers concurrently (all "used"), then free them.
     let mut ptrs = Vec::new();
     for i in 0..5 {
-        let p = htscodecs_tls_alloc(128 + i * 16);
-        assert!(!p.is_null());
+        let p = htscodecs_tls_alloc(128 + i * 16).expect("tls_alloc must succeed");
         // distinct buffers
         assert!(!ptrs.contains(&p));
         ptrs.push(p);

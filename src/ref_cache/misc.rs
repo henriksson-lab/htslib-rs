@@ -1,4 +1,4 @@
-use std::ffi::{c_char, c_int, c_uchar, c_void};
+use std::ffi::c_int;
 
 const fn build_hexvals() -> [i8; 256] {
     let mut vals = [-1; 256];
@@ -20,36 +20,33 @@ const fn build_hexvals() -> [i8; 256] {
 pub const ref_cache_misc_h_36_hexvals: [i8; 256] = build_hexvals();
 
 // original: hexval (htslib/ref_cache/misc.h:38)
-pub fn ref_cache_misc_h_38_hexval(c: c_char) -> c_int {
-    ref_cache_misc_h_36_hexvals[c as c_uchar as usize] as c_int
+pub fn ref_cache_misc_h_38_hexval(c: u8) -> c_int {
+    ref_cache_misc_h_36_hexvals[c as usize] as c_int
 }
 
 // original: setnonblock (htslib/ref_cache/misc.h:40)
 pub unsafe fn ref_cache_misc_h_40_setnonblock(fd: c_int) -> c_int {
     let val = libc::fcntl(fd, libc::F_GETFL);
     if val == -1 {
-        libc::perror(c"Couldn't get file descriptor flags".as_ptr());
+        eprintln!("Couldn't get file descriptor flags");
         return -1;
     }
 
     if libc::fcntl(fd, libc::F_SETFL, val | libc::O_NONBLOCK) != 0 {
-        libc::perror(c"Couldn't set socket to non-blocking mode".as_ptr());
+        eprintln!("Couldn't set socket to non-blocking mode");
         return -1;
     }
     0
 }
 
 // original: do_write_all (htslib/ref_cache/misc.h:55)
-pub unsafe fn ref_cache_misc_h_55_do_write_all(
-    fd: c_int,
-    buf: *const c_void,
-    mut count: usize,
-) -> libc::ssize_t {
+pub unsafe fn ref_cache_misc_h_55_do_write_all(fd: c_int, buf: &[u8]) -> libc::ssize_t {
     let mut res: libc::ssize_t = 0;
-    let mut ucbuf = buf.cast::<c_uchar>();
-    while count > 0 {
+    let mut offset = 0usize;
+    while offset < buf.len() {
+        let count = buf.len() - offset;
         loop {
-            res = libc::write(fd, ucbuf.cast(), count);
+            res = libc::write(fd, buf[offset..].as_ptr().cast(), count);
             if !(res < 0
                 && (*crate::htslib_rs::c_compat::__errno_location() == libc::EINTR
                     || *crate::htslib_rs::c_compat::__errno_location() == libc::EAGAIN
@@ -61,8 +58,7 @@ pub unsafe fn ref_cache_misc_h_55_do_write_all(
         if res < 0 {
             break;
         }
-        count -= res as usize;
-        ucbuf = ucbuf.add(res as usize);
+        offset += res as usize;
     }
     if res >= 0 {
         0
@@ -72,18 +68,14 @@ pub unsafe fn ref_cache_misc_h_55_do_write_all(
 }
 
 // original: do_read_all (htslib/ref_cache/misc.h:72)
-pub unsafe fn ref_cache_misc_h_72_do_read_all(
-    fd: c_int,
-    buf: *mut c_void,
-    count: usize,
-) -> libc::ssize_t {
+pub unsafe fn ref_cache_misc_h_72_do_read_all(fd: c_int, buf: &mut [u8]) -> libc::ssize_t {
     let mut res: libc::ssize_t = 0;
     let mut bytes: libc::ssize_t = 0;
-    let mut ucbuf = buf.cast::<c_uchar>();
+    let count = buf.len();
 
     while (bytes as usize) < count {
         loop {
-            res = libc::read(fd, ucbuf.cast(), count);
+            res = libc::read(fd, buf[bytes as usize..].as_mut_ptr().cast(), count);
             if !(res < 0
                 && (*crate::htslib_rs::c_compat::__errno_location() == libc::EINTR
                     || *crate::htslib_rs::c_compat::__errno_location() == libc::EAGAIN
@@ -96,7 +88,6 @@ pub unsafe fn ref_cache_misc_h_72_do_read_all(
             break;
         }
         bytes += res;
-        ucbuf = ucbuf.add(res as usize);
     }
     if res < 0 {
         res
@@ -123,18 +114,8 @@ pub fn ref_cache_misc_h_91_lim_strdup_bytes(input: &[u8], max_len: usize) -> Opt
 }
 
 // original: lim_strdup (htslib/ref_cache/misc.h:91)
-pub unsafe fn ref_cache_misc_h_91_lim_strdup(
-    str_: *const c_char,
-    len: usize,
-    max_len: usize,
-) -> Option<Vec<u8>> {
-    if len != 0 && str_.is_null() {
-        return None;
-    }
-    ref_cache_misc_h_91_lim_strdup_bytes(
-        std::slice::from_raw_parts(str_.cast::<u8>(), len),
-        max_len,
-    )
+pub fn ref_cache_misc_h_91_lim_strdup(str_: &[u8], max_len: usize) -> Option<Vec<u8>> {
+    ref_cache_misc_h_91_lim_strdup_bytes(str_, max_len)
 }
 
 #[cfg(test)]
@@ -173,8 +154,7 @@ mod tests {
     #[test]
     fn lim_strdup_raw_input_adapter_borrows_into_owned_vec() {
         let input = b"abcdef";
-        let out = unsafe { ref_cache_misc_h_91_lim_strdup(input.as_ptr().cast(), input.len(), 5) }
-            .unwrap();
+        let out = ref_cache_misc_h_91_lim_strdup(input, 5).unwrap();
         assert_eq!(out, b"ab...\0");
     }
 }

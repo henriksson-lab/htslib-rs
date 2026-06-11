@@ -62,12 +62,11 @@ unsafe fn collect_base_mod_calls_with_flags(
     rec: *const bam1_t,
     flags: u32,
 ) -> Vec<(i32, char, Vec<String>)> {
-    let state = hts_base_mod_state_alloc();
-    assert!(!state.is_null());
+    let mut state = hts_base_mod_state_alloc();
     let parse_ret = if flags == 0 {
-        bam_parse_basemod(rec, state)
+        bam_parse_basemod(&*rec, &mut *state)
     } else {
-        bam_parse_basemod2(rec, state, flags)
+        bam_parse_basemod2(&*rec, &mut *state, flags)
     };
     assert_eq!(parse_ret, 0);
 
@@ -80,7 +79,7 @@ unsafe fn collect_base_mod_calls_with_flags(
             qual: 0,
         }; 8];
         let mut pos = -1;
-        let n = bam_next_basemod(rec, state, mods.as_mut_ptr(), mods.len() as i32, &mut pos);
+        let n = bam_next_basemod(&*rec, &mut *state, &mut mods, &mut pos);
         if n <= 0 {
             break;
         }
@@ -106,15 +105,14 @@ unsafe fn collect_base_mod_calls_with_flags(
         calls.push((pos, base_at(rec, pos), rendered));
     }
 
-    hts_base_mod_state_free(state);
+    hts_base_mod_state_free(Some(state));
     calls
 }
 
 unsafe fn parse_base_mod_ret(rec: *const bam1_t) -> i32 {
-    let state = hts_base_mod_state_alloc();
-    assert!(!state.is_null());
-    let ret = bam_parse_basemod(rec, state);
-    hts_base_mod_state_free(state);
+    let mut state = hts_base_mod_state_alloc();
+    let ret = bam_parse_basemod(&*rec, &mut *state);
+    hts_base_mod_state_free(Some(state));
     ret
 }
 
@@ -337,9 +335,8 @@ fn original_base_mod_forward_bounds_fixture_is_rejected() {
         let records = read_records("htslib/test/base_mods/MM-bounds+.sam");
         assert_eq!(records.len(), 1);
 
-        let state = hts_base_mod_state_alloc();
-        assert!(!state.is_null());
-        assert_eq!(bam_parse_basemod(records[0], state), 0);
+        let mut state = hts_base_mod_state_alloc();
+        assert_eq!(bam_parse_basemod(&*records[0], &mut *state), 0);
 
         let mut mods = [hts_base_mod {
             modified_base: 0,
@@ -350,19 +347,13 @@ fn original_base_mod_forward_bounds_fixture_is_rejected() {
         let mut pos = -1;
         let mut ret;
         loop {
-            ret = bam_next_basemod(
-                records[0],
-                state,
-                mods.as_mut_ptr(),
-                mods.len() as i32,
-                &mut pos,
-            );
+            ret = bam_next_basemod(&*records[0], &mut *state, &mut mods, &mut pos);
             if ret <= 0 {
                 break;
             }
         }
         assert_eq!(ret, -1);
-        hts_base_mod_state_free(state);
+        hts_base_mod_state_free(Some(state));
 
         destroy_records(records);
     }

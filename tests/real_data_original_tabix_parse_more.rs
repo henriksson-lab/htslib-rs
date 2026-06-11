@@ -75,7 +75,7 @@ unsafe fn query_tabix_rows(
     let itr = tbx_itr_querys1(&mut *tbx, region.as_ptr());
     assert!(!itr.is_null(), "failed to query region {region:?}");
 
-    let mut line: kstring_t = std::mem::zeroed();
+    let mut line: kstring_t = kstring_t::default();
     let mut out = String::new();
     loop {
         let ret = hts_itr_next(
@@ -87,8 +87,7 @@ unsafe fn query_tabix_rows(
         if ret < 0 {
             break;
         }
-        let bytes = std::slice::from_raw_parts(line.s.cast::<u8>(), line.l);
-        out.push_str(&String::from_utf8_lossy(bytes));
+        out.push_str(&String::from_utf8_lossy(&line.data));
         out.push('\n');
     }
 
@@ -104,8 +103,9 @@ unsafe fn query_tabix_rows(
 unsafe fn parse_interval(conf: &htslib_rs::tbx_conf_t, line: &str) -> ParsedInterval {
     let mut bytes = CString::new(line).unwrap().into_bytes_with_nul();
     let mut intv: tbx_intv_t = std::mem::zeroed();
+    let line_len = bytes.len() - 1;
     assert_eq!(
-        tbx_c_96_tbx_parse1(conf, bytes.len() - 1, bytes.as_mut_ptr().cast(), &mut intv),
+        tbx_c_96_tbx_parse1(conf, &bytes[..line_len], &mut intv),
         0,
         "failed to parse tabix data line: {line}"
     );
@@ -136,29 +136,23 @@ fn tabix_parse_regions_expands_region_file_and_appends_argv_regions() {
             .iter()
             .map(|arg| arg.as_ptr().cast_mut())
             .collect::<Vec<_>>();
-        let mut nregs = 0;
-
         let regs = tabix_c_135_parse_regions(
             regions_c.as_ptr().cast_mut(),
             argv_ptrs.as_mut_ptr(),
             argv_ptrs.len() as libc::c_int,
-            &mut nregs,
         );
-        assert!(!regs.is_null());
-        assert_eq!(nregs, 16);
+        assert!(regs.is_some());
+        let regs = regs.unwrap();
+        assert_eq!(regs.len(), 16);
 
-        let expanded = (0..nregs as usize)
-            .map(|i| CStr::from_ptr(*regs.add(i)).to_string_lossy().into_owned())
+        let expanded = regs
+            .iter()
+            .map(|region| String::from_utf8_lossy(region).into_owned())
             .collect::<Vec<_>>();
         assert_eq!(expanded.first().unwrap(), "X:1001-1100");
         assert_eq!(expanded[5], "Y:100001-100900");
         assert_eq!(expanded[14], "Z:100009-100009");
         assert_eq!(expanded.last().unwrap(), "chr7:10-20");
-
-        for i in 0..nregs as usize {
-            libc::free((*regs.add(i)).cast());
-        }
-        libc::free(regs.cast());
     }
 }
 
@@ -493,8 +487,9 @@ fn vcf_alt_allele_limit_restores_temporary_field_split_like_c() {
         let original = bytes.clone();
         let mut intv: htslib_rs::tbx_intv_t = std::mem::zeroed();
 
+        let line_len = bytes.len() - 1;
         assert_eq!(
-            tbx_c_96_tbx_parse1(&conf, bytes.len() - 1, bytes.as_mut_ptr().cast(), &mut intv),
+            tbx_c_96_tbx_parse1(&conf, &bytes[..line_len], &mut intv),
             0
         );
         assert_eq!(bytes, original);

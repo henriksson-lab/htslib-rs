@@ -2,8 +2,8 @@
 //! — the 32-way unrolled SCALAR rANS Nx16 codec (the `_sse4`/`_avx2`/`_avx512`/
 //! `_neon` translation units are intentionally NOT translated).
 //!
-//! These functions take a raw `*mut u8` output buffer + capacity (matching the
-//! way the 4x16 dispatcher invokes them), mirroring the C pointer arithmetic.
+//! These functions return an owned `Vec<u8>` holding the compressed/decompressed
+//! payload, replacing the C convention of a caller-supplied `*mut u8` buffer.
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -21,7 +21,7 @@ use crate::htscodecs::rans_word::{
     RansDecInit, RansDecRenorm, RansDecRenormSafe, RansEncFlush, RansEncInit, RansEncPutSymbol,
     RansEncPutSymbol_branched, RansEncSymbol, RansEncSymbolInit, RANS_BYTE_L,
 };
-use crate::htscodecs::utils::{hist8e, htscodecs_tls_alloc, htscodecs_tls_free, MAGIC};
+use crate::htscodecs::utils::{hist8e, MAGIC};
 use crate::htscodecs::varint::var_get_u32;
 
 pub const TF_SHIFT: u32 = 12;
@@ -39,30 +39,22 @@ pub const MAGIC2: u32 = 179;
 
 // rANS_static32x16pr.c:67
 /// `unsigned char *rans_compress_O0_32x16(...)`
-pub(crate) fn rans_compress_O0_32x16(
-    input: &[u8],
-    out: *mut u8,
-    out_cap: u32,
-    out_size: &mut u32,
-) -> *mut u8 {
+///
+/// Returns the compressed payload as an owned `Vec<u8>`, or `None` on failure.
+pub(crate) fn rans_compress_O0_32x16(input: &[u8]) -> Option<Vec<u8>> {
     let in_size = input.len() as u32;
-    let mut bound = rans_compress_bound_4x16(in_size, 0) - 20;
-    if bound > out_cap {
-        return std::ptr::null_mut();
-    }
-    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, bound as usize) };
+    let bound = rans_compress_bound_4x16(in_size, 0) - 20;
+    let mut out_slice = vec![0u8; bound as usize];
 
-    if (out as usize) & 1 != 0 {
-        bound -= 1;
-    }
     let out_end = bound as usize;
     let mut ptr = out_end;
     let mut tab_size = 0usize;
 
     if in_size == 0 {
-        *out_size = (out_end - ptr) as u32 + tab_size as u32;
+        let out_size = (out_end - ptr) + tab_size;
         out_slice.copy_within(ptr..out_end, tab_size);
-        return out;
+        out_slice.truncate(out_size);
+        return Some(out_slice);
     }
 
     let mut syms = [RansEncSymbol::default(); 256];
@@ -78,14 +70,14 @@ pub(crate) fn rans_compress_O0_32x16(
         max_val = TOTFREQ;
     }
     if normalise_freq(&mut f, fsum as i32, max_val) < 0 {
-        return std::ptr::null_mut();
+        return None;
     }
     let fsum = max_val;
 
-    tab_size = encode_freq(out_slice, &f) as usize;
+    tab_size = encode_freq(&mut out_slice, &f) as usize;
 
     if normalise_freq(&mut f, fsum as i32, TOTFREQ) < 0 {
-        return std::ptr::null_mut();
+        return None;
     }
 
     let mut x = 0u32;
@@ -109,7 +101,7 @@ pub(crate) fn rans_compress_O0_32x16(
         z -= 1;
         RansEncPutSymbol(
             &mut ransN[z],
-            out_slice,
+            &mut out_slice,
             &mut ptr,
             &syms[input[isz - (i_rem - z)] as usize],
         );
@@ -121,87 +113,67 @@ pub(crate) fn rans_compress_O0_32x16(
     while i > 0 {
         let mut z = NX as i32 - 1;
         while z >= 0 {
-            let s = &syms[input[i - (NX - z as usize)] as usize] as *const RansEncSymbol;
-            RansEncPutSymbol_branched(&mut ransN[z as usize], out_slice, &mut ptr, unsafe { &*s });
+            let sym = syms[input[i - (NX - z as usize)] as usize];
+            RansEncPutSymbol_branched(&mut ransN[z as usize], &mut out_slice, &mut ptr, &sym);
             z -= 1;
         }
         i -= NX;
     }
 
     for rans in ransN.iter_mut().rev() {
-        RansEncFlush(rans, out_slice, &mut ptr);
+        RansEncFlush(rans, &mut out_slice, &mut ptr);
     }
 
-    *out_size = (out_end - ptr) as u32 + tab_size as u32;
+    let out_size = (out_end - ptr) + tab_size;
     out_slice.copy_within(ptr..out_end, tab_size);
-    out
+    out_slice.truncate(out_size);
+    Some(out_slice)
 }
 
 // rANS_static32x16pr.c:254
 /// `unsigned char *rans_uncompress_O0_32x16(...)`
-pub fn rans_uncompress_O0_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut u8 {
+///
+/// Allocates and returns the decompressed payload (`out_sz` bytes) as an owned
+/// `Vec<u8>`, or `None` on failure. (The C `out`/`out_free` auto-allocate dance
+/// collapses to always owning the buffer here.)
+pub fn rans_uncompress_O0_32x16(input: &[u8], out_sz: u32) -> Option<Vec<u8>> {
     let in_size = input.len() as u32;
     if in_size < 16 {
-        return std::ptr::null_mut();
+        return None;
     }
     if out_sz >= i32::MAX as u32 {
-        return std::ptr::null_mut();
+        return None;
     }
-    // C convention (rANS_static32x16pr.c:275): when called with `out == NULL`,
-    // the decoder ALLOCATES `out_sz` bytes via `malloc` and tracks the buffer
-    // in `out_free` so it can be freed on the error path. The 4x16 layer at
-    // src/htscodecs/rans_static4x16pr.rs:1424 relies on this — it probes the
-    // meta-buffer decode with a null `out` expecting an allocated result back.
-    // We replicate it with a Drop-guard that frees only if we early-return.
-    let mut owned: *mut u8 = std::ptr::null_mut();
-    let out = if out.is_null() {
-        owned = unsafe { libc::malloc(out_sz as libc::size_t).cast::<u8>() };
-        if owned.is_null() {
-            return std::ptr::null_mut();
-        }
-        owned
-    } else {
-        out
-    };
-    struct FreeOnError(*mut u8, bool);
-    impl Drop for FreeOnError {
-        fn drop(&mut self) {
-            if !self.1 && !self.0.is_null() {
-                unsafe { libc::free(self.0.cast()) };
-            }
-        }
-    }
-    let mut out_guard = FreeOnError(owned, false);
 
     let cp_end_total = in_size as usize;
     let mut cp = 0usize;
     let mut s3 = vec![0u32; TOTFREQ as usize];
 
-    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, out_sz as usize) };
+    let mut out_slice = vec![0u8; out_sz as usize];
 
     let mut f = [0u32; 256];
     let mut fsum = 0u32;
     let fsz = decode_freq(&input[cp..], cp_end_total - cp, &mut f, &mut fsum);
     if fsz == 0 {
-        return std::ptr::null_mut();
+        return None;
     }
     cp += fsz as usize;
 
     normalise_freq_shift(&mut f, fsum, TOTFREQ);
 
     if rans_F_to_s3(&f, TF_SHIFT as i32, &mut s3) != 0 {
-        return std::ptr::null_mut();
+        return None;
     }
 
     if cp_end_total - cp < NX * 4 {
-        return std::ptr::null_mut();
+        return None;
     }
 
     let mut r = [0u32; NX];
     for rz in &mut r {
         RansDecInit(rz, input, &mut cp);
         if *rz < RANS_BYTE_L {
-            return std::ptr::null_mut();
+            return None;
         }
     }
 
@@ -263,46 +235,32 @@ pub fn rans_uncompress_O0_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         out_slice[out_end + z] = s3[(r[z] & mask) as usize] as u8;
     }
 
-    out_guard.1 = true; // success — do NOT free the auto-allocated buffer
-    out
+    Some(out_slice)
 }
 
 // rANS_static32x16pr.c:412
 /// `unsigned char *rans_compress_O1_32x16(...)`
-pub(crate) fn rans_compress_O1_32x16(
-    input: &[u8],
-    out: *mut u8,
-    out_cap: u32,
-    out_size: &mut u32,
-) -> *mut u8 {
+///
+/// Returns the compressed payload as an owned `Vec<u8>`, or `None` on failure.
+pub(crate) fn rans_compress_O1_32x16(input: &[u8]) -> Option<Vec<u8>> {
     let in_size = input.len() as u32;
-    let mut bound = rans_compress_bound_4x16(in_size, 1) - 20;
+    let bound = rans_compress_bound_4x16(in_size, 1) - 20;
 
     if in_size < NX as u32 {
-        return std::ptr::null_mut();
+        return None;
     }
-    if bound > out_cap {
-        return std::ptr::null_mut();
-    }
-    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, bound as usize) };
+    let mut out_slice = vec![0u8; bound as usize];
 
-    if (out as usize) & 1 != 0 {
-        bound -= 1;
-    }
     let out_end = bound as usize;
 
-    let syms_ptr = htscodecs_tls_alloc(256 * 256 * core::mem::size_of::<RansEncSymbol>());
-    if syms_ptr.is_null() {
-        return std::ptr::null_mut();
-    }
-    let syms: &mut [[RansEncSymbol; 256]] =
-        unsafe { core::slice::from_raw_parts_mut(syms_ptr as *mut [RansEncSymbol; 256], 256) };
+    // C: TLS calloc of (uint32_t (*syms)[256])[256] — an owned, zeroed
+    // 256x256 grid of encoder symbols.
+    let mut syms = vec![[RansEncSymbol::default(); 256]; 256];
 
     let mut cp = 0usize;
-    let shift = encode_freq1(input, in_size, NX as i32, syms, out_slice, &mut cp);
+    let shift = encode_freq1(input, in_size, NX as i32, &mut syms, &mut out_slice, &mut cp);
     if shift < 0 {
-        htscodecs_tls_free(syms_ptr);
-        return std::ptr::null_mut();
+        return None;
     }
     let tab_size = cp;
 
@@ -331,7 +289,7 @@ pub(crate) fn rans_compress_O1_32x16(
         let c = input[iN[z] as usize];
         RansEncPutSymbol(
             &mut ransN[z],
-            out_slice,
+            &mut out_slice,
             &mut ptr,
             &syms[c as usize][lN[z] as usize],
         );
@@ -351,7 +309,7 @@ pub(crate) fn rans_compress_O1_32x16(
                 let sym = syms[c as usize][lN[zz] as usize];
                 lN[zz] = c;
                 i32o[zz] -= 1;
-                RansEncPutSymbol_branched(&mut ransN[zz], out_slice, &mut ptr, &sym);
+                RansEncPutSymbol_branched(&mut ransN[zz], &mut out_slice, &mut ptr, &sym);
             }
             z -= 4;
         }
@@ -359,74 +317,53 @@ pub(crate) fn rans_compress_O1_32x16(
 
     for (rans, &last) in ransN.iter_mut().zip(lN.iter()).rev() {
         let sym = syms[0][last as usize];
-        RansEncPutSymbol(rans, out_slice, &mut ptr, &sym);
+        RansEncPutSymbol(rans, &mut out_slice, &mut ptr, &sym);
     }
 
     for rans in ransN.iter_mut().rev() {
-        RansEncFlush(rans, out_slice, &mut ptr);
+        RansEncFlush(rans, &mut out_slice, &mut ptr);
     }
 
-    *out_size = (out_end - ptr) as u32 + tab_size as u32;
+    let out_size = (out_end - ptr) + tab_size;
     out_slice.copy_within(ptr..out_end, tab_size);
+    out_slice.truncate(out_size);
 
-    htscodecs_tls_free(syms_ptr);
-    out
+    Some(out_slice)
 }
 
 // rANS_static32x16pr.c:527
 /// `unsigned char *rans_uncompress_O1_32x16(...)`
-pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut u8 {
+///
+/// Allocates and returns the decompressed payload (`out_sz` bytes) as an owned
+/// `Vec<u8>`, or `None` on failure. The C TLS-allocated `sfb`/`fb`/`s3` scratch
+/// becomes plain owned buffers (slow path: `sfb` rows + `fb`; fast path: `s3`).
+pub fn rans_uncompress_O1_32x16(input: &[u8], out_sz: u32) -> Option<Vec<u8>> {
     let in_size = input.len() as u32;
     if in_size < NX as u32 * 4 {
-        return std::ptr::null_mut();
+        return None;
     }
     if out_sz >= i32::MAX as u32 {
-        return std::ptr::null_mut();
+        return None;
     }
-    // Same C auto-allocate convention (rANS_static32x16pr.c:574) as the O0
-    // sibling: null `out` triggers a malloc; free on the error path.
-    let mut owned: *mut u8 = std::ptr::null_mut();
-    let out = if out.is_null() {
-        owned = unsafe { libc::malloc(out_sz as libc::size_t).cast::<u8>() };
-        if owned.is_null() {
-            return std::ptr::null_mut();
-        }
-        owned
-    } else {
-        out
-    };
-    struct FreeOnError(*mut u8, bool);
-    impl Drop for FreeOnError {
-        fn drop(&mut self) {
-            if !self.1 && !self.0.is_null() {
-                unsafe { libc::free(self.0.cast()) };
-            }
-        }
-    }
-    let mut out_guard = FreeOnError(owned, false);
 
-    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, out_sz as usize) };
+    let mut out_slice = vec![0u8; out_sz as usize];
     let cp_end_total = in_size as usize;
     let mut cp = 0usize;
 
-    // sfb_ = tls_alloc(256*((TOTFREQ_O1+MAGIC2) + 256*sizeof(fb_t)))
-    let sfb_bytes = 256 * ((TOTFREQ_O1 + MAGIC2) as usize + 256 * core::mem::size_of::<fb_t>());
-    let sfb_ptr = htscodecs_tls_alloc(sfb_bytes);
-    if sfb_ptr.is_null() {
-        return std::ptr::null_mut();
-    }
-    let sfb_base = sfb_ptr as *mut u8;
-    let s3_base = sfb_ptr as *mut u32;
-
     let shift_hdr = (input[cp] >> 4) as u32;
-    let stride = if shift_hdr == TF_SHIFT_O1 {
+    let fast = shift_hdr != TF_SHIFT_O1;
+    let stride = if !fast {
         (TOTFREQ_O1 + MAGIC2) as usize
     } else {
         (TOTFREQ_O1_FAST + MAGIC2) as usize
     };
-    // fb = (fb_t (*)[256]) sfb[256]  -> sfb_base + 256*stride
-    let fb_off = 256 * stride;
-    let fb_base = unsafe { sfb_base.add(fb_off) as *mut [fb_t; 256] };
+
+    // Owned scratch buffers. Slow path (shift == TF_SHIFT_O1) uses `sfb` (256
+    // rows of `stride` bytes) plus `fb` (256 x 256 fb_t). Fast path uses `s3`
+    // (256 x TOTFREQ_O1_FAST u32). Only one set is populated/used per call.
+    let mut sfb: Vec<Vec<u8>> = vec![vec![0u8; stride]; 256];
+    let mut fb: Vec<[fb_t; 256]> = vec![[fb_t::default(); 256]; 256];
+    let mut s3: Vec<[u32; TOTFREQ_O1_FAST as usize]> = vec![[0u32; TOTFREQ_O1_FAST as usize]; 256];
 
     let mut c_freq_buf: Vec<u8> = Vec::new();
     let mut c_freq_active = false;
@@ -442,14 +379,12 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         cp += var_get_u32(&input[cp..], Some(cp_end_total - cp), &mut u_freq_sz) as usize;
         cp += var_get_u32(&input[cp..], Some(cp_end_total - cp), &mut c_freq_sz) as usize;
         if c_freq_sz as usize > cp_end_total - cp {
-            htscodecs_tls_free(sfb_ptr);
-            return std::ptr::null_mut();
+            return None;
         }
         tab_end = Some(cp + c_freq_sz as usize);
         let v = rans_uncompress_O0_4x16(&input[cp..cp + c_freq_sz as usize], None, u_freq_sz);
         if v.is_empty() {
-            htscodecs_tls_free(sfb_ptr);
-            return std::ptr::null_mut();
+            return None;
         }
         c_freq_buf = v;
         c_freq_active = true;
@@ -460,44 +395,29 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     let freq_src: &[u8] = if c_freq_active { &c_freq_buf } else { input };
 
     // decode_freq1(cp, c_freq_end, shift, NULL, s3, sfb, fb)
-    // Build sfb[] row pointers and the s3/sfb/fb views.
-    let nfsz = {
-        // sfb rows are sfb_base + i*stride
-        let mut sfb_rows: Vec<&mut [u8]> = Vec::with_capacity(256);
-        let sfb_total = unsafe { std::slice::from_raw_parts_mut(sfb_base, 256 * stride) };
-        // split into 256 rows of `stride`
-        let mut rest = sfb_total;
-        for _ in 0..256 {
-            let (head, tail) = rest.split_at_mut(stride);
-            sfb_rows.push(head);
-            rest = tail;
-        }
-        let fb_slice: &mut [[fb_t; 256]] = unsafe { core::slice::from_raw_parts_mut(fb_base, 256) };
-        let s3_slice: &mut [[u32; TOTFREQ_O1_FAST as usize]] = unsafe {
-            core::slice::from_raw_parts_mut(s3_base as *mut [u32; TOTFREQ_O1_FAST as usize], 256)
-        };
-
-        if shift == TF_SHIFT_O1 {
-            decode_freq1(
-                &freq_src[cp..],
-                c_freq_end - cp,
-                shift as i32,
-                None,
-                None,
-                Some(&mut sfb_rows),
-                Some(fb_slice),
-            )
-        } else {
-            decode_freq1(
-                &freq_src[cp..],
-                c_freq_end - cp,
-                shift as i32,
-                None,
-                Some(s3_slice),
-                None,
-                None,
-            )
-        }
+    let nfsz = if shift == TF_SHIFT_O1 {
+        // Slow path: hand decode_freq1 mutable views of the owned sfb rows + fb.
+        let mut sfb_rows: Vec<&mut [u8]> = sfb.iter_mut().map(|row| row.as_mut_slice()).collect();
+        decode_freq1(
+            &freq_src[cp..],
+            c_freq_end - cp,
+            shift as i32,
+            None,
+            None,
+            Some(&mut sfb_rows),
+            Some(&mut fb),
+        )
+    } else {
+        // Fast path: populate the owned s3 grid.
+        decode_freq1(
+            &freq_src[cp..],
+            c_freq_end - cp,
+            shift as i32,
+            None,
+            Some(&mut s3),
+            None,
+            None,
+        )
     };
     cp += nfsz as usize;
 
@@ -509,8 +429,7 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     drop(c_freq_buf);
 
     if cp_end_total - cp_in < NX * 4 {
-        htscodecs_tls_free(sfb_ptr);
-        return std::ptr::null_mut();
+        return None;
     }
 
     let mut r = [0u32; NX];
@@ -519,8 +438,7 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     for rz in &mut r {
         RansDecInit(rz, input, &mut ptr);
         if *rz < RANS_BYTE_L {
-            htscodecs_tls_free(sfb_ptr);
-            return std::ptr::null_mut();
+            return None;
         }
     }
 
@@ -543,8 +461,7 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                 for (k, (mmk, ck)) in mm.iter_mut().zip(c.iter_mut()).enumerate() {
                     let m = r[z + k] & mask;
                     *mmk = m;
-                    let row = unsafe { sfb_base.add(l[z + k] * stride) };
-                    *ck = unsafe { *row.add(m as usize) } as usize;
+                    *ck = sfb[l[z + k]][m as usize] as usize;
                 }
                 for (k, ((i4zk, lzk), (&mmk, &ck))) in i4[z..z + 4]
                     .iter_mut()
@@ -552,16 +469,15 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                     .zip(mm.iter().zip(c.iter()))
                     .enumerate()
                 {
-                    let fbk = unsafe { &*fb_base.add(*lzk) };
+                    let fbk = &fb[*lzk];
                     let f = fbk[ck].f as u32;
                     let b = fbk[ck].b as u32;
                     // Same hazard class as the fast path: corrupted input may
                     // leave `c[k]` pointing into a `fb_t` slot that was never
-                    // populated by `decode_freq1`, leaving stale TLS bytes.
+                    // populated by `decode_freq1`, leaving stale scratch bytes.
                     // Validate (f, b) and the (mm - b) subtraction.
                     if f == 0 || f > TOTFREQ_O1 || b > TOTFREQ_O1 - f || b > mmk {
-                        htscodecs_tls_free(sfb_ptr);
-                        return std::ptr::null_mut();
+                        return None;
                     }
                     r[z + k] = f * (r[z + k] >> TF_SHIFT_O1);
                     r[z + k] += mmk - b;
@@ -583,15 +499,13 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         }
         while i4[NX - 1] < out_sz as usize {
             let m = r[NX - 1] & ((1u32 << TF_SHIFT_O1) - 1);
-            let row = unsafe { sfb_base.add(l[NX - 1] * stride) };
-            let c = unsafe { *row.add(m as usize) } as usize;
+            let c = sfb[l[NX - 1]][m as usize] as usize;
             out_slice[i4[NX - 1]] = c as u8;
-            let fbk = unsafe { &*fb_base.add(l[NX - 1]) };
+            let fbk = &fb[l[NX - 1]];
             let f = fbk[c].f as u32;
             let b = fbk[c].b as u32;
             if f == 0 || f > TOTFREQ_O1 || b > TOTFREQ_O1 - f || b > m {
-                htscodecs_tls_free(sfb_ptr);
-                return std::ptr::null_mut();
+                return None;
             }
             r[NX - 1] = f * (r[NX - 1] >> TF_SHIFT_O1) + m - b;
             RansDecRenormSafe(&mut r[NX - 1], input, &mut ptr, ptr_end + 2 * NX);
@@ -605,8 +519,7 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
             while z < NX {
                 let mut s = [0u32; 4];
                 for (k, sk) in s.iter_mut().enumerate() {
-                    let row = unsafe { s3_base.add(l[z + k] * TOTFREQ_O1_FAST as usize) };
-                    *sk = unsafe { *row.add((r[z + k] & mask) as usize) };
+                    *sk = s3[l[z + k]][(r[z + k] & mask) as usize];
                 }
                 for ((i4zk, lzk), &sk) in i4[z..z + 4]
                     .iter_mut()
@@ -622,14 +535,12 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
                     let b = (sk >> 8) & mask;
                     // Validate freq-table-derived values before the multiply.
                     // On corrupted input the state index can land in a stale
-                    // TLS-allocated slot where (f, b) are garbage and would
-                    // overflow u32 in `f * (r >> shift) + b`. In the s3 fast
-                    // path, b is the per-symbol offset `y` with y < F[j], so
-                    // valid encoder outputs satisfy 1 <= f <= TOTFREQ_O1_FAST
-                    // and b < f.
+                    // scratch slot where (f, b) are garbage and would overflow
+                    // u32 in `f * (r >> shift) + b`. In the s3 fast path, b is
+                    // the per-symbol offset `y` with y < F[j], so valid encoder
+                    // outputs satisfy 1 <= f <= TOTFREQ_O1_FAST and b < f.
                     if f == 0 || f > TOTFREQ_O1_FAST || b >= f {
-                        htscodecs_tls_free(sfb_ptr);
-                        return std::ptr::null_mut();
+                        return None;
                     }
                     r[z + k] = f * (r[z + k] >> TF_SHIFT_O1_FAST) + b;
                 }
@@ -646,15 +557,13 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
             }
         }
         while i4[NX - 1] < out_sz as usize {
-            let row = unsafe { s3_base.add(l[NX - 1] * TOTFREQ_O1_FAST as usize) };
-            let s = unsafe { *row.add((r[NX - 1] & ((1u32 << TF_SHIFT_O1_FAST) - 1)) as usize) };
+            let s = s3[l[NX - 1]][(r[NX - 1] & ((1u32 << TF_SHIFT_O1_FAST) - 1)) as usize];
             out_slice[i4[NX - 1]] = s as u8;
             l[NX - 1] = s as u8 as usize;
             let f = s >> (TF_SHIFT_O1_FAST + 8);
             let b = (s >> 8) & ((1u32 << TF_SHIFT_O1_FAST) - 1);
             if f == 0 || f > TOTFREQ_O1_FAST || b >= f {
-                htscodecs_tls_free(sfb_ptr);
-                return std::ptr::null_mut();
+                return None;
             }
             r[NX - 1] = f * (r[NX - 1] >> TF_SHIFT_O1_FAST) + b;
             RansDecRenormSafe(&mut r[NX - 1], input, &mut ptr, ptr_end + 2 * NX);
@@ -662,7 +571,5 @@ pub fn rans_uncompress_O1_32x16(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         }
     }
 
-    htscodecs_tls_free(sfb_ptr);
-    out_guard.1 = true; // success — do NOT free the auto-allocated buffer
-    out
+    Some(out_slice)
 }

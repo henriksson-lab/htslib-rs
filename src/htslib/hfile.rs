@@ -22,145 +22,116 @@ THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.  */
-use std::ffi::{c_char, c_int, c_uint, c_void};
 
-use crate::htslib_rs::{
-    hfile::{hfile_set_blksize, hgetc2, hgetdelim, hputc2, hputs2, hread2, hwrite2},
-    hts::{hFILE, size_t},
+use crate::htslib_rs::hfile::{
+    hfile_c_212_hfile_set_blksize_ref as hfile_set_blksize,
+    hfile_c_235_hgetc2_ref as hgetc2, hfile_c_241_hgetdelim_ref as hgetdelim,
+    hfile_c_330_hread2_ref as hread2, hfile_c_400_hputc2_ref as hputc2,
+    hfile_c_412_hwrite2_ref as hwrite2, hfile_c_440_hputs2_ref as hputs2,
 };
+use crate::htslib_rs::hts::hFILE as hFILE_layout;
 
-// original: hFILE (htslib/htslib/hfile.h:47)
-#[repr(C)]
-struct hFILE_layout {
-    buffer: *mut c_char,
-    begin: *mut c_char,
-    end: *mut c_char,
-    limit: *mut c_char,
-    backend: *const c_void,
-    offset: libc::off_t,
-    flags: c_uint,
-    has_errno: c_int,
-}
-
-const HFILE_MOBILE: c_uint = 1 << 1;
+const HFILE_MOBILE: u32 = 1 << 1;
 
 // original: herrno (htslib/htslib/hfile.h:134)
-pub unsafe fn htslib_hfile_h_134_herrno(fp: *mut hFILE) -> c_int {
-    (*(fp.cast::<hFILE_layout>())).has_errno
+pub fn htslib_hfile_h_134_herrno(fp: &hFILE_layout) -> i32 {
+    fp.has_errno
 }
 
 // original: hclearerr (htslib/htslib/hfile.h:140)
-pub unsafe fn htslib_hfile_h_140_hclearerr(fp: *mut hFILE) {
-    (*(fp.cast::<hFILE_layout>())).has_errno = 0;
+pub fn htslib_hfile_h_140_hclearerr(fp: &mut hFILE_layout) {
+    fp.has_errno = 0;
 }
 
 // original: htell (htslib/htslib/hfile.h:155)
-pub unsafe fn htslib_hfile_h_155_htell(fp: *mut hFILE) -> libc::off_t {
-    let fp = fp.cast::<hFILE_layout>();
-    (*fp).offset + (*fp).begin.offset_from((*fp).buffer) as libc::off_t
+pub fn htslib_hfile_h_155_htell(fp: &hFILE_layout) -> i64 {
+    fp.offset + fp.begin as i64
 }
 
 // original: hgetc (htslib/htslib/hfile.h:163)
-pub unsafe fn htslib_hfile_h_163_hgetc(fp: *mut hFILE) -> c_int {
-    let fp = fp.cast::<hFILE_layout>();
-    if (*fp).end > (*fp).begin {
-        let c = *(*fp).begin as u8;
-        (*fp).begin = (*fp).begin.add(1);
-        c as c_int
+pub fn htslib_hfile_h_163_hgetc(fp: &mut hFILE_layout) -> i32 {
+    if fp.end > fp.begin {
+        let c = fp.buffer[fp.begin];
+        fp.begin += 1;
+        c as i32
     } else {
-        hgetc2(fp.cast())
+        unsafe { hgetc2(fp) }
     }
 }
 
 // original: hgetln (htslib/htslib/hfile.h:195)
-pub unsafe fn htslib_hfile_h_195_hgetln(
-    buffer: *mut c_char,
-    size: size_t,
-    fp: *mut hFILE,
-) -> libc::ssize_t {
-    hgetdelim(buffer, size, b'\n' as c_int, fp)
+pub fn htslib_hfile_h_195_hgetln(buffer: &mut [u8], fp: &mut hFILE_layout) -> isize {
+    unsafe { hgetdelim(buffer, b'\n' as i32, fp) }
 }
 
 // original: hread (htslib/htslib/hfile.h:247)
-pub unsafe fn htslib_hfile_h_247_hread(
-    fp: *mut hFILE,
-    buffer: *mut c_void,
-    nbytes: size_t,
-) -> libc::ssize_t {
-    let fp_layout = fp.cast::<hFILE_layout>();
-    let mut n = (*fp_layout).end.offset_from((*fp_layout).begin) as size_t;
+pub fn htslib_hfile_h_247_hread(fp: &mut hFILE_layout, buffer: &mut [u8]) -> isize {
+    let nbytes = buffer.len();
+    let mut n = fp.end - fp.begin;
     if n > nbytes {
         n = nbytes;
     }
-    libc::memcpy(buffer, (*fp_layout).begin.cast(), n);
-    (*fp_layout).begin = (*fp_layout).begin.add(n);
-    if n == nbytes || ((*fp_layout).flags & HFILE_MOBILE) == 0 {
-        n as libc::ssize_t
+    buffer[..n].copy_from_slice(&fp.buffer[fp.begin..fp.begin + n]);
+    fp.begin += n;
+    if n == nbytes || (fp.flags & HFILE_MOBILE) == 0 {
+        n as isize
     } else {
-        hread2(fp, buffer, nbytes, n)
+        unsafe { hread2(fp, n, buffer) }
     }
 }
 
 // original: hputc (htslib/htslib/hfile.h:263)
-pub unsafe fn htslib_hfile_h_263_hputc(c: c_int, fp: *mut hFILE) -> c_int {
-    let fp_layout = fp.cast::<hFILE_layout>();
-    if (*fp_layout).begin < (*fp_layout).limit {
-        *(*fp_layout).begin = c as c_char;
-        (*fp_layout).begin = (*fp_layout).begin.add(1);
+pub fn htslib_hfile_h_263_hputc(c: i32, fp: &mut hFILE_layout) -> i32 {
+    if fp.begin < fp.limit {
+        fp.buffer[fp.begin] = c as u8;
+        fp.begin += 1;
         c
     } else {
-        hputc2(c, fp)
+        unsafe { hputc2(c, fp) }
     }
 }
 
 // original: hputs (htslib/htslib/hfile.h:275)
-pub unsafe fn htslib_hfile_h_275_hputs(text: *const c_char, fp: *mut hFILE) -> c_int {
-    let fp_layout = fp.cast::<hFILE_layout>();
-    let nbytes = libc::strlen(text);
-    let mut n = (*fp_layout).limit.offset_from((*fp_layout).begin) as size_t;
+pub fn htslib_hfile_h_275_hputs(text: &[u8], fp: &mut hFILE_layout) -> i32 {
+    let nbytes = text.len();
+    let mut n = fp.limit - fp.begin;
     if n > nbytes {
         n = nbytes;
     }
-    libc::memcpy((*fp_layout).begin.cast(), text.cast(), n);
-    (*fp_layout).begin = (*fp_layout).begin.add(n);
+    fp.buffer[fp.begin..fp.begin + n].copy_from_slice(&text[..n]);
+    fp.begin += n;
     if n == nbytes {
         0
     } else {
-        hputs2(text, nbytes, n, fp)
+        unsafe { hputs2(text, n, fp) }
     }
 }
 
 // original: hwrite (htslib/htslib/hfile.h:292)
-pub unsafe fn htslib_hfile_h_292_hwrite(
-    fp: *mut hFILE,
-    buffer: *const c_void,
-    nbytes: size_t,
-) -> libc::ssize_t {
-    let fp_layout = fp.cast::<hFILE_layout>();
-    if ((*fp_layout).flags & HFILE_MOBILE) == 0 {
-        let n = (*fp_layout).limit.offset_from((*fp_layout).begin) as size_t;
+pub fn htslib_hfile_h_292_hwrite(fp: &mut hFILE_layout, buffer: &[u8]) -> isize {
+    let nbytes = buffer.len();
+    if (fp.flags & HFILE_MOBILE) == 0 {
+        let n = fp.limit - fp.begin;
         if n < nbytes {
-            hfile_set_blksize(
-                fp,
-                (*fp_layout).limit.offset_from((*fp_layout).buffer) as size_t + nbytes,
-            );
-            (*fp_layout).end = (*fp_layout).limit;
+            let bufsiz = fp.limit + nbytes;
+            unsafe { hfile_set_blksize(fp, bufsiz) };
+            fp.end = fp.limit;
         }
     }
 
-    let mut n = (*fp_layout).limit.offset_from((*fp_layout).begin) as size_t;
-    if nbytes >= n && (*fp_layout).begin == (*fp_layout).buffer {
-        return hwrite2(fp, buffer, nbytes, 0);
+    let mut n = fp.limit - fp.begin;
+    if nbytes >= n && fp.begin == 0 {
+        return unsafe { hwrite2(fp, 0, buffer) };
     }
 
     if n > nbytes {
         n = nbytes;
     }
-    libc::memcpy((*fp_layout).begin.cast(), buffer, n);
-    (*fp_layout).begin = (*fp_layout).begin.add(n);
+    fp.buffer[fp.begin..fp.begin + n].copy_from_slice(&buffer[..n]);
+    fp.begin += n;
     if n == nbytes {
-        n as libc::ssize_t
+        n as isize
     } else {
-        hwrite2(fp, buffer, nbytes, n)
+        unsafe { hwrite2(fp, n, buffer) }
     }
 }

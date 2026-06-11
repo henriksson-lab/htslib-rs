@@ -45,11 +45,11 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
 
     let b = sam::bam_init1();
     let h = sam::sam_hdr_read(in_);
-    let m = sam::hts_base_mod_state_alloc();
-    if h.is_null() || b.is_null() || m.is_null() {
+    let mut m = sam::hts_base_mod_state_alloc();
+    if h.is_null() || b.is_null() {
         sam::bam_destroy1(b);
         sam::sam_hdr_destroy(h);
-        sam::hts_base_mod_state_free(m);
+        sam::hts_base_mod_state_free(Some(m));
         return if hts::hts_close(in_) != 0 { 1 } else { 2 };
     }
 
@@ -60,14 +60,14 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
             break;
         }
 
-        if sam::bam_parse_basemod2(b, m, flags) < 0 {
+        if sam::bam_parse_basemod2(&*b, &mut m, flags) < 0 {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"Failed to parse MM/ML aux tags\n".as_ptr(),
             );
             sam::bam_destroy1(b);
             sam::sam_hdr_destroy(h);
-            sam::hts_base_mod_state_free(m);
+            sam::hts_base_mod_state_free(Some(m));
             return if hts::hts_close(in_) != 0 { 1 } else { 2 };
         }
 
@@ -80,7 +80,7 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
         let mut i = 0;
         while i < (*b).core.l_qseq {
             let mut sp = b'\t' as c_char;
-            let n = sam::bam_mods_at_next_pos(b, m, mods.as_mut_ptr(), 5);
+            let n = sam::bam_mods_at_next_pos(&*b, &mut m, &mut mods);
             libc::printf(
                 c"%d\t%c".as_ptr(),
                 i,
@@ -102,13 +102,13 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
                 if extended != 0 {
                     let mut m_strand = 0;
                     let mut m_implicit = 0;
-                    let mut m_canonical = 0;
+                    let mut m_canonical: c_char = 0;
                     let ret = sam::bam_mods_query_type(
-                        m,
+                        &m,
                         mods[j as usize].modified_base,
-                        &mut m_strand,
-                        &mut m_implicit,
-                        &mut m_canonical,
+                        Some(&mut m_strand),
+                        Some(&mut m_implicit),
+                        Some(&mut m_canonical),
                     );
                     if ret < 0
                         || m_canonical as c_int != mods[j as usize].canonical_base
@@ -116,7 +116,7 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
                     {
                         sam::bam_destroy1(b);
                         sam::sam_hdr_destroy(h);
-                        sam::hts_base_mod_state_free(m);
+                        sam::hts_base_mod_state_free(Some(m));
                         return if hts::hts_close(in_) != 0 { 1 } else { 2 };
                     }
                     libc::printf(
@@ -147,24 +147,30 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
 
         libc::puts(c"---".as_ptr());
 
-        sam::bam_parse_basemod2(b, m, flags);
+        sam::bam_parse_basemod2(&*b, &mut m, flags);
 
         let mut all_mods_n = 0;
-        let all_mods = sam::bam_mods_recorded(m, &mut all_mods_n);
+        let all_mods = sam::bam_mods_recorded(&mut m, &mut all_mods_n).to_vec();
         libc::printf(c"Present:".as_ptr());
         i = 0;
         while i < all_mods_n {
             let mut m_strand = 0;
             let mut m_implicit = 0;
-            let mut m_canonical = 0;
-            sam::bam_mods_queryi(m, i, &mut m_strand, &mut m_implicit, &mut m_canonical);
+            let mut m_canonical: c_char = 0;
+            sam::bam_mods_queryi(
+                &m,
+                i,
+                Some(&mut m_strand),
+                Some(&mut m_implicit),
+                Some(&mut m_canonical),
+            );
             libc::printf(
-                if *all_mods.add(i as usize) > 0 {
+                if all_mods[i as usize] > 0 {
                     c" %c".as_ptr()
                 } else {
                     c" #%d".as_ptr()
                 },
-                *all_mods.add(i as usize),
+                all_mods[i as usize],
             );
             libc::putchar(*b"?.".as_ptr().add(m_implicit as usize) as c_int);
             i += 1;
@@ -173,12 +179,12 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
 
         let mut pos = 0;
         loop {
-            let n = sam::bam_next_basemod(b, m, mods.as_mut_ptr(), 5, &mut pos);
+            let n = sam::bam_next_basemod(&*b, &mut m, &mut mods, &mut pos);
             if n <= 0 {
                 if n < 0 {
                     sam::bam_destroy1(b);
                     sam::sam_hdr_destroy(h);
-                    sam::hts_base_mod_state_free(m);
+                    sam::hts_base_mod_state_free(Some(m));
                     return if hts::hts_close(in_) != 0 { 1 } else { 2 };
                 }
                 break;
@@ -227,7 +233,7 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
 
     sam::bam_destroy1(b);
     sam::sam_hdr_destroy(h);
-    sam::hts_base_mod_state_free(m);
+    sam::hts_base_mod_state_free(Some(m));
     ret
 }
 

@@ -13,11 +13,7 @@ pub unsafe fn samples_read_refname_c_37_print_usage(fp: *mut libc::FILE) {
 // original: main (htslib/samples/read_refname.c:49)
 pub unsafe fn samples_read_refname_c_49_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     let mut ret = libc::EXIT_FAILURE;
-    let mut data = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut data = kstring_t { data: Vec::new() };
 
     if argc != 3 && argc != 2 {
         samples_read_refname_c_37_print_usage(crate::htslib_rs::c_compat::stdout.cast());
@@ -42,7 +38,7 @@ pub unsafe fn samples_read_refname_c_49_main(argc: c_int, argv: *mut *mut c_char
         return ret;
     }
 
-    let linecnt = sam::sam_hdr_count_lines(in_samhdr, c"SQ".as_ptr());
+    let linecnt = sam::sam_hdr_count_lines(&mut *in_samhdr, c"SQ");
     if linecnt <= 0 {
         if linecnt == 0 {
             libc::printf(c"No reference line present\n".as_ptr());
@@ -57,7 +53,7 @@ pub unsafe fn samples_read_refname_c_49_main(argc: c_int, argv: *mut *mut c_char
     let mut pos = 1;
     for c_idx in 0..linecnt {
         let found =
-            sam::sam_hdr_find_tag_pos(in_samhdr, c"SQ".as_ptr(), c_idx, c"LN".as_ptr(), &mut data);
+            sam::sam_hdr_find_tag_pos(&mut *in_samhdr, c"SQ", c_idx, c"LN", &mut data);
         if found == -2 {
             libc::printf(c"Failed to get length\n".as_ptr());
             sam::sam_hdr_destroy(in_samhdr);
@@ -68,11 +64,13 @@ pub unsafe fn samples_read_refname_c_49_main(argc: c_int, argv: *mut *mut c_char
             continue;
         }
 
-        let size = libc::atoll(data.s);
+        let mut data_cstr = data.data.clone();
+        data_cstr.push(0);
+        let size = libc::atoll(data_cstr.as_ptr().cast());
         if size < minsize {
             continue;
         }
-        let id = sam::sam_hdr_line_name(in_samhdr, c"SQ".as_ptr(), c_idx);
+        let id = sam::sam_hdr_line_name(&mut *in_samhdr, c"SQ", c_idx);
         if id.is_null() {
             libc::printf(c"Failed to get id for reference data\n".as_ptr());
             sam::sam_hdr_destroy(in_samhdr);
@@ -80,7 +78,7 @@ pub unsafe fn samples_read_refname_c_49_main(argc: c_int, argv: *mut *mut c_char
             crate::htslib_rs::hts::ks_free(&mut data);
             return ret;
         }
-        libc::printf(c"%d,%s,%s\n".as_ptr(), pos, id, data.s);
+        libc::printf(c"%d,%s,%s\n".as_ptr(), pos, id, data_cstr.as_ptr().cast::<c_char>());
         pos += 1;
     }
 

@@ -7,11 +7,9 @@
 //! decode the other's output.
 //!
 //! Public entry points (`rans_compress`, `rans_uncompress`, `rans_compress_bound`)
-//! mirror the C ABI: raw `*mut u8` / `u32` with an out-size pointer, returning a
-//! libc-`malloc`'d buffer (via [`crate::htslib_rs::c_compat`]) so ownership
-//! matches C and CRAM can later call these directly.
+//! take an input byte slice and return an owned `Vec<u8>` (or `None` on failure),
+//! so ownership is expressed in idiomatic Rust.
 
-use crate::c_compat;
 use crate::htslib_rs::htscodecs::rans_byte as rb;
 
 // Use 11 for order-1?  (matches the C #define)
@@ -215,15 +213,12 @@ pub fn rans_compress_bound(in_size: u32, _order: i32) -> usize {
 // Order-0 compress / uncompress
 // -----------------------------------------------------------------------------
 
-fn rans_compress_o0(input: &[u8], out_size: &mut u32) -> *mut u8 {
+fn rans_compress_o0(input: &[u8], out_size: &mut u32) -> Option<Vec<u8>> {
     let in_size = input.len() as u32;
     let alloc = (1.05f64 * in_size as f64) as u32 as usize + 257 * 257 * 3 + 9;
 
-    let out_buf = unsafe { c_compat::malloc(alloc as u64) } as *mut u8;
-    if out_buf.is_null() {
-        return std::ptr::null_mut();
-    }
-    let out: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(out_buf, alloc) };
+    let mut out_buf = vec![0u8; alloc];
+    let out: &mut [u8] = &mut out_buf;
 
     let mut syms = [RansEncSymbol::default(); 256];
 
@@ -405,18 +400,19 @@ fn rans_compress_o0(input: &[u8], out_size: &mut u32) -> *mut u8 {
     // memmove(out_buf + tab_size, ptr, out_end - ptr)
     out.copy_within(ptr..out_end, tab_size);
 
-    out_buf
+    out_buf.truncate(osz as usize);
+    Some(out_buf)
 }
 
-fn rans_uncompress_o0(input: &[u8], out_size: &mut u32) -> *mut u8 {
+fn rans_uncompress_o0(input: &[u8], out_size: &mut u32) -> Option<Vec<u8>> {
     let in_size = input.len() as u32;
     let mask = (1u32 << TF_SHIFT) - 1;
 
     if in_size < 26 {
-        return std::ptr::null_mut();
+        return None;
     }
     if input[0] != 0 {
-        return std::ptr::null_mut();
+        return None;
     }
 
     // in_sz / out_sz from header (bytes 1..9, after consuming order byte)
@@ -429,21 +425,14 @@ fn rans_uncompress_o0(input: &[u8], out_size: &mut u32) -> *mut u8 {
         | ((input[7] as u32) << 16)
         | ((input[8] as u32) << 24);
     if in_sz != in_size - 9 {
-        return std::ptr::null_mut();
+        return None;
     }
     if out_sz >= i32::MAX as u32 {
-        return std::ptr::null_mut();
+        return None;
     }
 
-    let out_buf = unsafe { c_compat::malloc(out_sz as u64) } as *mut u8;
-    if out_buf.is_null() {
-        return std::ptr::null_mut();
-    }
-    let cleanup = || {
-        unsafe { c_compat::free(out_buf as *mut std::ffi::c_void) };
-        std::ptr::null_mut::<u8>()
-    };
-    let out: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(out_buf, out_sz as usize) };
+    let mut out_buf = vec![0u8; out_sz as usize];
+    let out: &mut [u8] = &mut out_buf;
 
     // Lookup tables.
     let tf = (TOTFREQ + 32) as usize;
@@ -462,7 +451,7 @@ fn rans_uncompress_o0(input: &[u8], out_size: &mut u32) -> *mut u8 {
     loop {
         // if (cp > cp_end - 16) goto cleanup;
         if cp + 16 > cp_end {
-            return cleanup();
+            return None;
         }
         let mut fv = input[cp] as i32;
         cp += 1;
@@ -473,7 +462,7 @@ fn rans_uncompress_o0(input: &[u8], out_size: &mut u32) -> *mut u8 {
         }
         let c = x;
         if x + fv as u32 > TOTFREQ {
-            return cleanup();
+            return None;
         }
         for y in 0..fv as u32 {
             ssym[(y + c) as usize] = j as u16;
@@ -491,7 +480,7 @@ fn rans_uncompress_o0(input: &[u8], out_size: &mut u32) -> *mut u8 {
             rle -= 1;
             j += 1;
             if j > 255 {
-                return cleanup();
+                return None;
             }
         } else {
             j = input[cp] as i32;
@@ -503,7 +492,7 @@ fn rans_uncompress_o0(input: &[u8], out_size: &mut u32) -> *mut u8 {
     }
 
     if !(TOTFREQ - 1..=TOTFREQ).contains(&x) {
-        return cleanup();
+        return None;
     }
     if x != TOTFREQ {
         ssym[x as usize] = ssym[(x - 1) as usize];
@@ -512,25 +501,25 @@ fn rans_uncompress_o0(input: &[u8], out_size: &mut u32) -> *mut u8 {
     }
 
     if cp + 16 > cp_end {
-        return cleanup();
+        return None;
     }
 
     let mut r = [0u32; 4];
     r[0] = rans_dec_init(input, &mut cp);
     if r[0] < RANS_BYTE_L {
-        return cleanup();
+        return None;
     }
     r[1] = rans_dec_init(input, &mut cp);
     if r[1] < RANS_BYTE_L {
-        return cleanup();
+        return None;
     }
     r[2] = rans_dec_init(input, &mut cp);
     if r[2] < RANS_BYTE_L {
-        return cleanup();
+        return None;
     }
     r[3] = rans_dec_init(input, &mut cp);
     if r[3] < RANS_BYTE_L {
-        return cleanup();
+        return None;
     }
 
     let out_end = (out_sz & !3u32) as usize;
@@ -587,14 +576,14 @@ fn rans_uncompress_o0(input: &[u8], out_size: &mut u32) -> *mut u8 {
     }
 
     *out_size = out_sz;
-    out_buf
+    Some(out_buf)
 }
 
 // -----------------------------------------------------------------------------
 // Order-1 compress / uncompress
 // -----------------------------------------------------------------------------
 
-fn rans_compress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
+fn rans_compress_o1(input: &[u8], out_size: &mut u32) -> Option<Vec<u8>> {
     let in_size = input.len() as u32;
     if in_size < 4 {
         return rans_compress_o0(input, out_size);
@@ -606,11 +595,8 @@ fn rans_compress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
     let mut t = [0i32; 256];
 
     let alloc = (1.05f64 * in_size as f64) as u32 as usize + 257 * 257 * 3 + 9;
-    let out_buf = unsafe { c_compat::malloc(alloc as u64) } as *mut u8;
-    if out_buf.is_null() {
-        return std::ptr::null_mut();
-    }
-    let out: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(out_buf, alloc) };
+    let mut out_buf = vec![0u8; alloc];
+    let out: &mut [u8] = &mut out_buf;
     let out_end = (1.05f64 * in_size as f64) as u32 as usize + 257 * 257 * 3 + 9;
     let mut cp = 9usize;
 
@@ -817,18 +803,19 @@ fn rans_compress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
 
     out.copy_within(ptr..out_end, tab_size);
 
-    out_buf
+    out_buf.truncate(osz as usize);
+    Some(out_buf)
 }
 
 /// A row of the order-1 reverse-lookup table (`ari_decoder`): `R[TOTFREQ]`.
-fn rans_uncompress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
+fn rans_uncompress_o1(input: &[u8], out_size: &mut u32) -> Option<Vec<u8>> {
     let in_size = input.len() as u32;
 
     if in_size < 27 {
-        return std::ptr::null_mut();
+        return None;
     }
     if input[0] != 1 {
-        return std::ptr::null_mut();
+        return None;
     }
 
     let in_sz = (input[1] as u32)
@@ -840,10 +827,10 @@ fn rans_uncompress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
         | ((input[7] as u32) << 16)
         | ((input[8] as u32) << 24);
     if in_sz != in_size - 9 {
-        return std::ptr::null_mut();
+        return None;
     }
     if out_sz >= i32::MAX as u32 {
-        return std::ptr::null_mut();
+        return None;
     }
 
     // D: 256 rows of R[TOTFREQ]; syms[256][256]; calloc'd (zeroed).
@@ -855,16 +842,11 @@ fn rans_uncompress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
     let ptr_end = in_size as usize;
     let mut cp = 9usize;
 
-    // out_buf allocated later (matching C), but we need a sentinel for cleanup.
-    let mut out_buf: *mut u8 = std::ptr::null_mut();
+    // The C goto-cleanup paths are all reached before the output buffer is
+    // allocated, so they simply abort and return failure.
     macro_rules! cleanup {
         () => {{
-            if !out_buf.is_null() {
-                // C frees D, not out_buf, on the goto-cleanup paths reached
-                // before out_buf is allocated; once out_buf is allocated the
-                // remaining code cannot fail.  Mirror: only return out_buf.
-            }
-            return out_buf;
+            return None;
         }};
     }
 
@@ -1005,11 +987,8 @@ fn rans_uncompress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
 
     let mut i4 = [0u32, isz4, 2 * isz4, 3 * isz4];
 
-    out_buf = unsafe { c_compat::malloc(out_sz as u64) } as *mut u8;
-    if out_buf.is_null() {
-        return std::ptr::null_mut();
-    }
-    let out: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(out_buf, out_sz as usize) };
+    let mut out_buf = vec![0u8; out_sz as usize];
+    let out: &mut [u8] = &mut out_buf;
 
     let tfmask = (1u32 << TF_SHIFT) - 1;
 
@@ -1076,54 +1055,39 @@ fn rans_uncompress_o1(input: &[u8], out_size: &mut u32) -> *mut u8 {
     }
 
     *out_size = out_sz;
-    out_buf
+    Some(out_buf)
 }
 
 // -----------------------------------------------------------------------------
-// Public dispatchers (mirror the C ABI)
+// Public dispatchers (idiomatic owned Rust)
 // -----------------------------------------------------------------------------
 
-/// `rans_compress`: compress `in_size` bytes at `input` using order `order`
-/// (0 or non-zero for order-1).  Returns a libc-`malloc`'d buffer and writes the
-/// compressed size to `*out_size`, or null on failure.
-///
-/// # Safety
-/// `input` must point to `in_size` readable bytes and `out_size` must be valid.
-pub unsafe fn rans_compress(
-    input: *mut u8,
-    in_size: u32,
-    out_size: *mut u32,
-    order: i32,
-) -> *mut u8 {
-    if in_size > i32::MAX as u32 {
-        unsafe { *out_size = 0 };
-        return std::ptr::null_mut();
-    }
-    let in_slice = unsafe { std::slice::from_raw_parts(input, in_size as usize) };
-    let out_size = unsafe { &mut *out_size };
-    if order != 0 {
-        rans_compress_o1(in_slice, out_size)
-    } else {
-        rans_compress_o0(in_slice, out_size)
-    }
-}
-
-/// `rans_uncompress`: decompress an rANS 4x8 block.  Returns a libc-`malloc`'d
-/// buffer with the original data and writes its size to `*out_size`, or null on
+/// `rans_compress`: compress `input` using order `order` (0 or non-zero for
+/// order-1).  Returns the compressed bytes as an owned `Vec<u8>`, or `None` on
 /// failure.
-///
-/// # Safety
-/// `input` must point to `in_size` readable bytes and `out_size` must be valid.
-pub unsafe fn rans_uncompress(input: *mut u8, in_size: u32, out_size: *mut u32) -> *mut u8 {
-    if in_size < 9 {
-        return std::ptr::null_mut();
+pub fn rans_compress(input: &[u8], order: i32) -> Option<Vec<u8>> {
+    if input.len() > i32::MAX as usize {
+        return None;
     }
-    let in_slice = unsafe { std::slice::from_raw_parts(input, in_size as usize) };
-    let out_size = unsafe { &mut *out_size };
-    if in_slice[0] != 0 {
-        rans_uncompress_o1(in_slice, out_size)
+    let mut out_size: u32 = 0;
+    if order != 0 {
+        rans_compress_o1(input, &mut out_size)
     } else {
-        rans_uncompress_o0(in_slice, out_size)
+        rans_compress_o0(input, &mut out_size)
+    }
+}
+
+/// `rans_uncompress`: decompress an rANS 4x8 block.  Returns the original bytes
+/// as an owned `Vec<u8>`, or `None` on failure.
+pub fn rans_uncompress(input: &[u8]) -> Option<Vec<u8>> {
+    if input.len() < 9 {
+        return None;
+    }
+    let mut out_size: u32 = 0;
+    if input[0] != 0 {
+        rans_uncompress_o1(input, &mut out_size)
+    } else {
+        rans_uncompress_o0(input, &mut out_size)
     }
 }
 

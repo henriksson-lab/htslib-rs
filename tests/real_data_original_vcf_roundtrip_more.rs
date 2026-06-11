@@ -37,20 +37,16 @@ unsafe fn render_vcf_path(path: &std::path::Path) -> String {
 
     let rec = bcf_init();
     assert!(!rec.is_null());
-    let mut line = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut line = kstring_t::default();
     loop {
         let ret = vcf_read(fp, hdr, rec);
         if ret < 0 {
             break;
         }
         assert_eq!(bcf_subset_format(hdr, rec), 0);
-        line.l = 0;
+        line.data.clear();
         assert_eq!(vcf_format(hdr, rec, &mut line), 0);
-        out.push_str(&CStr::from_ptr(line.s).to_string_lossy());
+        out.push_str(&String::from_utf8_lossy(&line.data));
     }
 
     ks_free(&mut line);

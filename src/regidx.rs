@@ -1,27 +1,16 @@
-use std::{
-    ffi::{c_char, c_int, c_void, CStr, CString},
-    ptr::NonNull,
-};
+use std::collections::HashMap;
 
-use crate::htslib_rs::{
-    hts::{
-        hts_close, hts_getline, hts_open, hts_parse_decimal, hts_pos_t, isspace_c, kputsn,
-        ks_clear, ks_free, kstring_t,
-    },
-    sam::{
-        khash_s2i_t, khash_str2int_destroy, khash_str2int_get, khash_str2int_inc,
-        khash_str2int_init,
-    },
+use crate::htslib_rs::hts::{
+    hts_close, hts_getline, hts_open, hts_parse_decimal, hts_pos_t, isspace_c, ks_free, kstring_t,
 };
 
 pub const REGIDX_MAX: hts_pos_t = 1_i64 << 35;
 pub const MAX_COOR_0: hts_pos_t = REGIDX_MAX;
 
-fn ibin(x: hts_pos_t) -> c_int {
-    (x >> 13) as c_int
+fn ibin(x: hts_pos_t) -> i32 {
+    (x >> 13) as i32
 }
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct regidx_reg_t {
     pub beg: hts_pos_t,
@@ -30,24 +19,33 @@ pub struct regidx_reg_t {
 
 type reg_t = regidx_reg_t;
 
-#[repr(C)]
+/// A parsing callback maps a single line into a chromosome name byte-range
+/// within the line plus a begin/end coordinate and an optional payload.
+/// It returns 0 on success, -1 to skip the line, and -2 on a parse error.
+pub type regidx_parse_f =
+    fn(line: &[u8], out: &mut ParsedRegion, payload: &mut [u8], usr: Option<&mut Vec<u8>>) -> i32;
+
 pub struct regitr_t {
     pub beg: hts_pos_t,
     pub end: hts_pos_t,
-    pub payload: Option<NonNull<c_void>>,
-    pub seq: Option<NonNull<c_char>>,
+    /// A copy of the current region's payload bytes, empty when there is none.
+    pub payload: Vec<u8>,
+    /// The sequence name of the current region, empty when unset.
+    pub seq: Vec<u8>,
     itr: Box<itr_t_>,
 }
 
 // original: itr_t_ (htslib/regidx.c:53)
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct itr_t_ {
     beg: hts_pos_t,
     end: hts_pos_t,
     ireg: u32,
-    ridx: NonNull<regidx_t>,
-    list: Option<NonNull<reglist_t>>,
-    active: c_int,
+    /// Index of the owning regidx; the iterator borrows it at call time.
+    ridx: *mut regidx_t,
+    /// Index into `regidx_t.seq` of the active sequence list, if any.
+    list: Option<usize>,
+    active: bool,
 }
 
 // original: reglist_t (htslib/regidx.c:66)
@@ -56,257 +54,112 @@ pub struct reglist_t {
     idx: Vec<u32>,
     reg: Vec<reg_t>,
     dat: Vec<u8>,
-    seq: Option<NonNull<c_char>>,
-    unsorted: c_int,
+    /// Index into `regidx_t.seq_names` of this list's sequence name.
+    seq: usize,
+    unsorted: bool,
 }
 
 // original: regidx_t (htslib/regidx.c:77)
 pub struct regidx_t {
     seq: Vec<reglist_t>,
-    seq2regs: Option<NonNull<khash_s2i_t>>,
-    seq_names: Vec<CString>,
-    seq_name_ptrs: Vec<NonNull<c_char>>,
-    free: regidx_free_f,
+    /// Maps a sequence name to its index in `seq` / `seq_names`.
+    seq2regs: HashMap<Vec<u8>, usize>,
+    seq_names: Vec<Vec<u8>>,
+    free: Option<fn(&mut [u8])>,
     parse: regidx_parse_f,
-    usr: Option<NonNull<c_void>>,
-    payload_size: c_int,
+    usr: Option<Vec<u8>>,
+    payload_size: usize,
     payload: Vec<u8>,
-    str: kstring_t,
 }
-
-struct OwnedKString {
-    inner: kstring_t,
-}
-
-impl OwnedKString {
-    fn new() -> Self {
-        Self {
-            inner: kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            },
-        }
-    }
-
-    fn as_mut(&mut self) -> &mut kstring_t {
-        &mut self.inner
-    }
-
-    fn s(&self) -> *mut c_char {
-        self.inner.s
-    }
-}
-
-impl Drop for OwnedKString {
-    fn drop(&mut self) {
-        unsafe {
-            ks_free(&mut self.inner);
-        }
-    }
-}
-
-pub type regidx_parse_f = Option<
-    unsafe extern "C" fn(
-        *const c_char,
-        *mut *mut c_char,
-        *mut *mut c_char,
-        *mut hts_pos_t,
-        *mut hts_pos_t,
-        *mut c_void,
-        *mut c_void,
-    ) -> c_int,
->;
-pub type regidx_free_f = Option<unsafe extern "C" fn(*mut c_void)>;
 
 impl regidx_t {
     fn new(
         parse: regidx_parse_f,
-        free: regidx_free_f,
+        free: Option<fn(&mut [u8])>,
         payload_size: usize,
-        usr: Option<NonNull<c_void>>,
+        usr: Option<Vec<u8>>,
     ) -> Self {
         Self {
             seq: Vec::new(),
-            seq2regs: None,
+            seq2regs: HashMap::new(),
             seq_names: Vec::new(),
-            seq_name_ptrs: Vec::new(),
             free,
             parse,
             usr,
-            payload_size: payload_size as c_int,
+            payload_size,
             payload: if payload_size == 0 {
                 Vec::new()
             } else {
                 vec![0; payload_size]
             },
-            str: kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            },
         }
-    }
-
-    fn seq2regs_ptr(&self) -> *mut c_void {
-        self.seq2regs
-            .map_or(std::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
-    }
-
-    fn payload_ptr(&mut self) -> *mut c_void {
-        self.payload.as_mut_ptr().cast()
-    }
-
-    fn payload_nonnull(&mut self) -> Option<NonNull<c_void>> {
-        (self.payload_size != 0)
-            .then(|| NonNull::new(self.payload.as_mut_ptr().cast()))
-            .flatten()
-    }
-
-    fn usr_ptr(&self) -> *mut c_void {
-        self.usr.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 }
 
 #[derive(Default)]
-struct ParsedRegion {
-    chr: Option<std::ops::RangeInclusive<usize>>,
-    beg: hts_pos_t,
-    end: hts_pos_t,
+pub struct ParsedRegion {
+    pub chr: Option<std::ops::RangeInclusive<usize>>,
+    pub beg: hts_pos_t,
+    pub end: hts_pos_t,
 }
 
 impl ParsedRegion {
-    unsafe fn set_chr(&mut self, line: &CStr, beg: *const c_char, end: *const c_char) {
-        let base = line.as_ptr();
-        let chr_beg = beg.offset_from(base) as usize;
-        let chr_end = end.offset_from(base) as usize;
+    fn set_chr(&mut self, chr_beg: usize, chr_end: usize) {
         self.chr = Some(chr_beg..=chr_end);
-    }
-
-    unsafe fn write_to_raw(
-        &self,
-        line: &CStr,
-        chr_beg: *mut *mut c_char,
-        chr_end: *mut *mut c_char,
-        beg: *mut hts_pos_t,
-        end: *mut hts_pos_t,
-    ) {
-        let line = line.as_ptr().cast_mut();
-        if let Some(chr) = &self.chr {
-            *chr_beg = line.add(*chr.start());
-            *chr_end = line.add(*chr.end());
-        } else {
-            *chr_beg = std::ptr::null_mut();
-            *chr_end = std::ptr::null_mut();
-        }
-        *beg = self.beg;
-        *end = self.end;
-    }
-}
-
-impl Drop for regidx_t {
-    fn drop(&mut self) {
-        unsafe {
-            ks_free(&mut self.str);
-            if let Some(seq2regs) = self.seq2regs.take() {
-                khash_str2int_destroy(seq2regs.as_ptr().cast());
-            }
-        }
     }
 }
 
 impl itr_t_ {
-    fn new(regidx: NonNull<regidx_t>) -> Self {
+    fn new(regidx: *mut regidx_t) -> Self {
         Self {
             beg: 0,
             end: 0,
             ireg: 0,
             ridx: regidx,
             list: None,
-            active: 0,
+            active: false,
         }
     }
 
-    fn reset(&mut self, regidx: NonNull<regidx_t>) {
+    fn reset(&mut self, regidx: *mut regidx_t) {
         *self = Self::new(regidx);
     }
 }
 
-unsafe fn regidx_seq_nregs(idx: &regidx_t, seq: &CStr) -> c_int {
-    let mut iseq = 0;
-    if khash_str2int_get(idx.seq2regs_ptr(), seq.as_ptr(), &mut iseq) != 0 {
-        return 0;
+pub fn regidx_c_91_regidx_seq_nregs(idx: &regidx_t, seq: &[u8]) -> i32 {
+    match idx.seq2regs.get(seq) {
+        Some(&iseq) => idx.seq[iseq].reg.len() as i32,
+        None => 0,
     }
-    idx.seq[iseq as usize].reg.len() as c_int
 }
 
-pub unsafe fn regidx_c_91_regidx_seq_nregs(idx: *mut regidx_t, seq: *const c_char) -> c_int {
-    let Some(idx) = idx.as_ref() else {
-        return 0;
-    };
-    if seq.is_null() {
-        return 0;
-    }
-    regidx_seq_nregs(idx, CStr::from_ptr(seq))
+pub fn regidx_c_98_regidx_nregs(idx: &regidx_t) -> i32 {
+    idx.seq.iter().map(|list| list.reg.len() as i32).sum()
 }
 
-fn regidx_nregs(idx: &regidx_t) -> c_int {
-    idx.seq.iter().map(|list| list.reg.len() as c_int).sum()
+pub fn regidx_c_105_regidx_seq_names(idx: &regidx_t) -> &[Vec<u8>] {
+    &idx.seq_names
 }
 
-pub unsafe fn regidx_c_98_regidx_nregs(idx: *mut regidx_t) -> c_int {
-    idx.as_ref().map_or(0, regidx_nregs)
-}
-
-fn regidx_seq_names(idx: &mut regidx_t, n: &mut c_int) -> *mut *mut c_char {
-    *n = idx.seq.len() as c_int;
-    idx.seq_name_ptrs.as_mut_ptr().cast::<*mut c_char>()
-}
-
-pub unsafe fn regidx_c_105_regidx_seq_names(idx: *mut regidx_t, n: *mut c_int) -> *mut *mut c_char {
-    let (Some(idx), Some(n)) = (idx.as_mut(), n.as_mut()) else {
-        return std::ptr::null_mut();
-    };
-    regidx_seq_names(idx, n)
-}
-
-unsafe fn regidx_insert_list(idx: &mut regidx_t, line: NonNull<c_char>, delim: c_char) -> c_int {
-    let mut tmp = OwnedKString::new();
-    let mut ss = line.as_ptr();
-    while *ss != 0 {
+pub fn regidx_c_111_regidx_insert_list(idx: &mut regidx_t, line: &[u8], delim: u8) -> i32 {
+    let mut ss = 0;
+    while ss < line.len() {
         let mut se = ss;
-        while *se != 0 && *se != delim {
-            se = se.add(1);
+        while se < line.len() && line[se] != delim {
+            se += 1;
         }
-        if kputsn(ss, se.offset_from(ss) as usize, ks_clear(tmp.as_mut())) < 0 {
+        if regidx_insert(idx, &line[ss..se]) < 0 {
             return -1;
         }
-        let Some(tmp_line) = NonNull::new(tmp.s()) else {
-            return -1;
-        };
-        if regidx_insert(idx, tmp_line) < 0 {
-            return -1;
-        }
-        if *se == 0 {
+        if se >= line.len() {
             break;
         }
-        ss = se.add(1);
+        ss = se + 1;
     }
     0
 }
 
-pub unsafe fn regidx_c_111_regidx_insert_list(
-    idx: *mut regidx_t,
-    line: *mut c_char,
-    delim: c_char,
-) -> c_int {
-    let (Some(idx), Some(line)) = (idx.as_mut(), NonNull::new(line)) else {
-        return 0;
-    };
-    regidx_insert_list(idx, line, delim)
-}
-
-pub fn regidx_c_132_cmp_regs(a: &mut regidx_reg_t, b: &mut regidx_reg_t) -> c_int {
+pub fn regidx_c_132_cmp_regs(a: &regidx_reg_t, b: &regidx_reg_t) -> i32 {
     if a.beg < b.beg {
         return -1;
     }
@@ -319,8 +172,8 @@ pub fn regidx_c_132_cmp_regs(a: &mut regidx_reg_t, b: &mut regidx_reg_t) -> c_in
     if a.end > b.end {
         return -1;
     }
-    let a_ptr = std::ptr::from_mut(a);
-    let b_ptr = std::ptr::from_mut(b);
+    let a_ptr = std::ptr::from_ref(a);
+    let b_ptr = std::ptr::from_ref(b);
     if a_ptr < b_ptr {
         return -1;
     }
@@ -330,291 +183,214 @@ pub fn regidx_c_132_cmp_regs(a: &mut regidx_reg_t, b: &mut regidx_reg_t) -> c_in
     0
 }
 
-pub unsafe extern "C" fn regidx_c_142_cmp_reg_ptrs(a: *const c_void, b: *const c_void) -> c_int {
-    regidx_c_132_cmp_regs(
-        &mut *(a.cast::<regidx_reg_t>() as *mut regidx_reg_t),
-        &mut *(b.cast::<regidx_reg_t>() as *mut regidx_reg_t),
-    )
+pub fn regidx_c_142_cmp_reg_ptrs(a: &regidx_reg_t, b: &regidx_reg_t) -> i32 {
+    regidx_c_132_cmp_regs(a, b)
 }
 
-pub unsafe extern "C" fn regidx_c_146_cmp_reg_ptrs2(a: *const c_void, b: *const c_void) -> c_int {
-    let ap = *(a.cast::<*mut regidx_reg_t>());
-    let bp = *(b.cast::<*mut regidx_reg_t>());
-    regidx_c_132_cmp_regs(&mut *ap, &mut *bp)
+pub fn regidx_c_146_cmp_reg_ptrs2(a: &regidx_reg_t, b: &regidx_reg_t) -> i32 {
+    regidx_c_132_cmp_regs(a, b)
 }
 
 fn cmp_reg_values(a: reg_t, b: reg_t) -> std::cmp::Ordering {
     a.beg.cmp(&b.beg).then_with(|| b.end.cmp(&a.end))
 }
 
-pub unsafe fn regidx_c_151_regidx_push(
+pub fn regidx_c_151_regidx_push(
     idx: &mut regidx_t,
-    chr_beg: NonNull<c_char>,
-    chr_end: NonNull<c_char>,
+    chr: &[u8],
     mut beg: hts_pos_t,
     mut end: hts_pos_t,
-    payload: Option<NonNull<c_void>>,
-) -> c_int {
+    payload: &[u8],
+) -> i32 {
     beg = beg.clamp(0, MAX_COOR_0);
     end = end.clamp(0, MAX_COOR_0);
 
-    let mut rid = 0;
-    if kputsn(
-        chr_beg.as_ptr(),
-        chr_end.as_ptr().offset_from(chr_beg.as_ptr()) as usize + 1,
-        ks_clear(&mut idx.str),
-    ) < 0
-    {
-        return -1;
-    }
-    if khash_str2int_get(idx.seq2regs_ptr(), idx.str.s, &mut rid) != 0 {
-        let Ok(seq_name) = CString::new(std::ffi::CStr::from_ptr(idx.str.s).to_bytes()) else {
-            return -1;
-        };
-        idx.seq_names.push(seq_name);
-        let seq_ptr = NonNull::new_unchecked(idx.seq_names.last().unwrap().as_ptr() as *mut c_char);
-        idx.seq_name_ptrs.push(seq_ptr);
-        idx.seq.push(reglist_t {
-            seq: Some(seq_ptr),
-            ..Default::default()
-        });
-        rid = khash_str2int_inc(idx.seq2regs_ptr(), seq_ptr.as_ptr());
-        if rid < 0 {
-            return -1;
+    let rid = match idx.seq2regs.get(chr) {
+        Some(&rid) => rid,
+        None => {
+            let rid = idx.seq_names.len();
+            idx.seq_names.push(chr.to_vec());
+            idx.seq.push(reglist_t {
+                seq: rid,
+                ..Default::default()
+            });
+            idx.seq2regs.insert(chr.to_vec(), rid);
+            rid
         }
-    }
+    };
 
-    let payload_size = idx.payload_size as usize;
-    let list = &mut idx.seq[rid as usize];
-    list.seq = Some(idx.seq_name_ptrs[rid as usize]);
+    let payload_size = idx.payload_size;
+    let list = &mut idx.seq[rid];
+    list.seq = rid;
     let prev = list.reg.last().copied();
     list.reg.push(reg_t { beg, end });
     if payload_size != 0 {
-        let Some(payload) = payload else {
+        if payload.len() < payload_size {
             return -1;
-        };
-        let old_len = list.dat.len();
-        let Some(new_len) = old_len.checked_add(payload_size) else {
-            return -1;
-        };
-        list.dat.resize(new_len, 0);
-        std::ptr::copy_nonoverlapping(
-            payload.cast::<u8>().as_ptr(),
-            list.dat[old_len..].as_mut_ptr(),
-            payload_size,
-        );
+        }
+        list.dat.extend_from_slice(&payload[..payload_size]);
     }
-    if list.unsorted == 0
+    if !list.unsorted
         && prev.is_some()
         && cmp_reg_values(prev.unwrap(), *list.reg.last().unwrap()).is_gt()
     {
-        list.unsorted = 1;
+        list.unsorted = true;
     }
     0
 }
 
-unsafe fn regidx_insert(idx: &mut regidx_t, line: NonNull<c_char>) -> c_int {
-    let mut chr_from = std::ptr::null_mut();
-    let mut chr_to = std::ptr::null_mut();
-    let mut beg = 0;
-    let mut end = 0;
-    let payload = idx.payload_ptr();
-    let payload_ref = idx.payload_nonnull();
-    let ret = idx.parse.unwrap()(
-        line.as_ptr(),
-        &mut chr_from,
-        &mut chr_to,
-        &mut beg,
-        &mut end,
-        payload,
-        idx.usr_ptr(),
-    );
+pub fn regidx_insert(idx: &mut regidx_t, line: &[u8]) -> i32 {
+    let mut out = ParsedRegion::default();
+    let mut payload = std::mem::take(&mut idx.payload);
+    let mut usr = idx.usr.take();
+    let ret = (idx.parse)(line, &mut out, &mut payload, usr.as_mut());
+    idx.payload = payload;
+    idx.usr = usr;
     if ret == -2 {
         return -1;
     }
     if ret == -1 {
         return 0;
     }
-    let Some(chr_from) = NonNull::new(chr_from) else {
+    let Some(chr) = out.chr else {
         return -1;
     };
-    let Some(chr_to) = NonNull::new(chr_to) else {
-        return -1;
-    };
-    regidx_c_151_regidx_push(idx, chr_from, chr_to, beg, end, payload_ref)
+    let chr_bytes = line[*chr.start()..=*chr.end()].to_vec();
+    let payload = std::mem::take(&mut idx.payload);
+    let ret = regidx_c_151_regidx_push(idx, &chr_bytes, out.beg, out.end, &payload);
+    idx.payload = payload;
+    ret
 }
 
-pub unsafe fn regidx_c_198_regidx_insert(idx: *mut regidx_t, line: *mut c_char) -> c_int {
-    let (Some(idx), Some(line)) = (idx.as_mut(), NonNull::new(line)) else {
-        return 0;
-    };
+pub fn regidx_c_198_regidx_insert(idx: &mut regidx_t, line: &[u8]) -> i32 {
     regidx_insert(idx, line)
 }
 
-pub unsafe fn regidx_c_209_regidx_init_string(
-    string: *const c_char,
-    parsef: regidx_parse_f,
-    freef: regidx_free_f,
+pub fn regidx_c_209_regidx_init_string(
+    string: &[u8],
+    parsef: Option<regidx_parse_f>,
+    freef: Option<fn(&mut [u8])>,
     payload_size: usize,
-    usr: *mut c_void,
-) -> *mut regidx_t {
-    let mut tmp = OwnedKString::new();
-    let parse = parsef.or(Some(
-        regidx_c_498_regidx_parse_tab as unsafe extern "C" fn(_, _, _, _, _, _, _) -> _,
-    ));
-    let idx = Box::into_raw(Box::new(regidx_t::new(
-        parse,
-        freef,
-        payload_size,
-        NonNull::new(usr),
-    )));
-    (*idx).seq2regs = NonNull::new(khash_str2int_init().cast::<khash_s2i_t>());
-    if (*idx).seq2regs.is_none() {
-        regidx_c_311_regidx_destroy(idx);
-        return std::ptr::null_mut();
-    }
+    usr: Option<Vec<u8>>,
+) -> Option<Box<regidx_t>> {
+    let parse = parsef.unwrap_or(regidx_c_498_regidx_parse_tab as regidx_parse_f);
+    let mut idx = Box::new(regidx_t::new(parse, freef, payload_size, usr));
 
-    let mut ss = string;
-    while *ss != 0 {
-        while *ss != 0 && isspace_c(*ss) != 0 {
-            ss = ss.add(1);
+    let mut ss = 0;
+    while ss < string.len() {
+        while ss < string.len() && isspace_c(string[ss] as i8) != 0 {
+            ss += 1;
         }
         let mut se = ss;
-        while *se != 0 && *se != b'\r' as c_char && *se != b'\n' as c_char {
-            se = se.add(1);
+        while se < string.len() && string[se] != b'\r' && string[se] != b'\n' {
+            se += 1;
         }
-        if kputsn(ss, se.offset_from(ss) as usize, ks_clear(tmp.as_mut())) < 0 {
-            regidx_c_311_regidx_destroy(idx);
-            return std::ptr::null_mut();
+        if regidx_insert(&mut idx, &string[ss..se]) < 0 {
+            return None;
         }
-        let Some(tmp_line) = NonNull::new(tmp.s()) else {
-            regidx_c_311_regidx_destroy(idx);
-            return std::ptr::null_mut();
-        };
-        if regidx_insert(&mut *idx, tmp_line) < 0 {
-            regidx_c_311_regidx_destroy(idx);
-            return std::ptr::null_mut();
-        }
-        while *se != 0 && isspace_c(*se) != 0 {
-            se = se.add(1);
+        while se < string.len() && isspace_c(string[se] as i8) != 0 {
+            se += 1;
         }
         ss = se;
     }
-    idx
+    Some(idx)
 }
 
 pub unsafe fn regidx_c_246_regidx_init(
-    fname: *const c_char,
-    mut parsef: regidx_parse_f,
-    freef: regidx_free_f,
+    fname: Option<&[u8]>,
+    parsef: Option<regidx_parse_f>,
+    freef: Option<fn(&mut [u8])>,
     payload_size: usize,
-    usr: *mut c_void,
-) -> *mut regidx_t {
-    if parsef.is_none() {
-        if fname.is_null() {
-            parsef = Some(regidx_c_498_regidx_parse_tab);
-        } else {
-            let fname = CStr::from_ptr(fname).to_bytes();
-            let is_bed = [
-                b".bed.gz".as_slice(),
-                b".bed.bgz".as_slice(),
-                b".bed".as_slice(),
-            ]
-            .iter()
-            .any(|suffix| {
-                fname.len() >= suffix.len()
-                    && fname[fname.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
-            });
-            let is_vcf = [b".vcf".as_slice(), b".vcf.gz".as_slice()]
+    usr: Option<Vec<u8>>,
+) -> Option<Box<regidx_t>> {
+    let parse = match parsef {
+        Some(p) => p,
+        None => match fname {
+            None => regidx_c_498_regidx_parse_tab as regidx_parse_f,
+            Some(fname) => {
+                let is_bed = [
+                    b".bed.gz".as_slice(),
+                    b".bed.bgz".as_slice(),
+                    b".bed".as_slice(),
+                ]
                 .iter()
                 .any(|suffix| {
                     fname.len() >= suffix.len()
                         && fname[fname.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
                 });
-            if is_bed {
-                parsef = Some(regidx_c_466_regidx_parse_bed);
-            } else if is_vcf {
-                parsef = Some(regidx_c_538_regidx_parse_vcf);
-            } else {
-                parsef = Some(regidx_c_498_regidx_parse_tab);
+                let is_vcf = [b".vcf".as_slice(), b".vcf.gz".as_slice()]
+                    .iter()
+                    .any(|suffix| {
+                        fname.len() >= suffix.len()
+                            && fname[fname.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+                    });
+                if is_bed {
+                    regidx_c_466_regidx_parse_bed as regidx_parse_f
+                } else if is_vcf {
+                    regidx_c_538_regidx_parse_vcf as regidx_parse_f
+                } else {
+                    regidx_c_498_regidx_parse_tab as regidx_parse_f
+                }
             }
-        }
-    }
+        },
+    };
 
-    let mut str_ = OwnedKString::new();
-    let idx = Box::into_raw(Box::new(regidx_t::new(
-        parsef,
-        freef,
-        payload_size,
-        NonNull::new(usr),
-    )));
-    (*idx).seq2regs = NonNull::new(khash_str2int_init().cast::<khash_s2i_t>());
-    if (*idx).seq2regs.is_none() {
-        regidx_c_311_regidx_destroy(idx);
-        return std::ptr::null_mut();
-    }
+    let mut idx = Box::new(regidx_t::new(parse, freef, payload_size, usr));
 
-    if fname.is_null() {
-        return idx;
-    }
+    let Some(fname) = fname else {
+        return Some(idx);
+    };
 
-    let mut fp = hts_open(fname, c"r".as_ptr());
+    // File reading is the genuine I/O boundary; hts_getline fills the kstring_t.
+    let mut str_ = kstring_t::default();
+    let mut fname_c = fname.to_vec();
+    fname_c.push(0);
+    let fp = hts_open(fname_c.as_ptr().cast(), c"r".as_ptr());
     if fp.is_null() {
-        regidx_c_311_regidx_destroy(idx);
-        return std::ptr::null_mut();
+        ks_free(&mut str_);
+        return None;
     }
 
-    let mut ret = hts_getline(fp, b'\n' as c_int, str_.as_mut());
+    let mut ret = hts_getline(fp, b'\n' as i32, &mut str_);
     while ret > 0 {
-        let Some(line) = NonNull::new(str_.s()) else {
+        let line = str_.data.clone();
+        if regidx_insert(&mut idx, &line) != 0 {
             hts_close(fp);
-            regidx_c_311_regidx_destroy(idx);
-            return std::ptr::null_mut();
-        };
-        if regidx_insert(&mut *idx, line) != 0 {
-            hts_close(fp);
-            regidx_c_311_regidx_destroy(idx);
-            return std::ptr::null_mut();
+            ks_free(&mut str_);
+            return None;
         }
-        ret = hts_getline(fp, b'\n' as c_int, str_.as_mut());
+        ret = hts_getline(fp, b'\n' as i32, &mut str_);
     }
+    ks_free(&mut str_);
     if ret < -1 {
         hts_close(fp);
-        regidx_c_311_regidx_destroy(idx);
-        return std::ptr::null_mut();
+        return None;
     }
 
-    ret = hts_close(fp);
-    fp = std::ptr::null_mut();
-    if ret != 0 {
-        let _ = fp;
-        regidx_c_311_regidx_destroy(idx);
-        return std::ptr::null_mut();
+    if hts_close(fp) != 0 {
+        return None;
     }
-    idx
+    Some(idx)
 }
 
-pub unsafe fn regidx_c_311_regidx_destroy(idx: *mut regidx_t) {
-    if idx.is_null() {
-        return;
-    }
-    let mut idx_box = Box::from_raw(idx);
-    for list in &mut idx_box.seq {
-        if let Some(free) = idx_box.free {
-            let payload_size = idx_box.payload_size as usize;
-            if payload_size != 0 {
+pub fn regidx_c_311_regidx_destroy(idx: Box<regidx_t>) {
+    let mut idx = idx;
+    if let Some(free) = idx.free {
+        let payload_size = idx.payload_size;
+        if payload_size != 0 {
+            for list in &mut idx.seq {
                 for chunk in list.dat.chunks_mut(payload_size) {
-                    free(chunk.as_mut_ptr().cast());
+                    free(chunk);
                 }
             }
         }
     }
-    drop(idx_box);
+    drop(idx);
 }
 
 // original: reglist_build_index_ (htslib/regidx.c:335)
-pub fn regidx_c_335_reglist_build_index_(payload_size: usize, list: &mut reglist_t) -> c_int {
-    if list.unsorted != 0 {
+pub fn regidx_c_335_reglist_build_index_(payload_size: usize, list: &mut reglist_t) -> i32 {
+    if list.unsorted {
         if payload_size == 0 {
             list.reg.sort_by(|a, b| cmp_reg_values(*a, *b));
         } else {
@@ -632,7 +408,7 @@ pub fn regidx_c_335_reglist_build_index_(payload_size: usize, list: &mut reglist
                 list.dat.append(&mut payload);
             }
         }
-        list.unsorted = 0;
+        list.unsorted = false;
     }
 
     let mut midx: u32 = 0;
@@ -665,44 +441,45 @@ pub fn regidx_c_335_reglist_build_index_(payload_size: usize, list: &mut reglist
     0
 }
 
-fn regitr_set_region(regitr: &mut regitr_t, list: &mut reglist_t, ireg: u32, payload_size: c_int) {
-    regitr.seq = list.seq;
+fn regitr_set_region(
+    regitr: &mut regitr_t,
+    seq_name: &[u8],
+    list: &reglist_t,
+    ireg: u32,
+    payload_size: usize,
+) {
+    regitr.seq = seq_name.to_vec();
     regitr.beg = list.reg[ireg as usize].beg;
     regitr.end = list.reg[ireg as usize].end;
     regitr.payload = if payload_size != 0 {
-        let payload = unsafe {
-            list.dat
-                .as_mut_ptr()
-                .add(payload_size as usize * ireg as usize)
-                .cast()
-        };
-        NonNull::new(payload)
+        let start = payload_size * ireg as usize;
+        list.dat[start..start + payload_size].to_vec()
     } else {
-        None
+        Vec::new()
     };
 }
 
-unsafe fn regidx_overlap(
+pub fn regidx_c_401_regidx_overlap(
     idx: &mut regidx_t,
-    idx_ptr: NonNull<regidx_t>,
-    chr: &CStr,
+    chr: &[u8],
     mut beg: hts_pos_t,
     mut end: hts_pos_t,
     mut regitr: Option<&mut regitr_t>,
-) -> c_int {
+) -> i32 {
+    let idx_ptr: *mut regidx_t = idx;
     if let Some(regitr) = regitr.as_deref_mut() {
-        regitr.seq = None;
-        regitr.payload = None;
+        regitr.seq = Vec::new();
+        regitr.payload = Vec::new();
     }
     beg = beg.max(0);
     end = end.clamp(0, MAX_COOR_0);
 
-    let mut iseq = 0;
-    if khash_str2int_get(idx.seq2regs_ptr(), chr.as_ptr(), &mut iseq) != 0 {
+    let Some(&iseq) = idx.seq2regs.get(chr) else {
         return 0;
-    }
+    };
 
-    let list = &mut idx.seq[iseq as usize];
+    let payload_size = idx.payload_size;
+    let list = &mut idx.seq[iseq];
     if list.reg.is_empty() {
         return 0;
     }
@@ -717,22 +494,20 @@ unsafe fn regidx_overlap(
         }
         ireg = 0;
     } else {
-        if list.idx.is_empty()
-            && regidx_c_335_reglist_build_index_(idx.payload_size as usize, list) < 0
-        {
+        if list.idx.is_empty() && regidx_c_335_reglist_build_index_(payload_size, list) < 0 {
             return -1;
         }
 
         let ibeg = ibin(beg);
-        if ibeg >= list.idx.len() as c_int {
+        if ibeg >= list.idx.len() as i32 {
             return 0;
         }
 
         let mut i = list.idx[ibeg as usize];
         if i == 0 {
             let mut iend = ibin(end);
-            if iend > list.idx.len() as c_int {
-                iend = list.idx.len() as c_int;
+            if iend > list.idx.len() as i32 {
+                iend = list.idx.len() as i32;
             }
             let mut k = ibeg;
             while k <= iend {
@@ -766,74 +541,71 @@ unsafe fn regidx_overlap(
         return 1;
     };
 
+    let seq_name = idx.seq_names[list.seq].clone();
     let itr = &mut regitr.itr;
     itr.ridx = idx_ptr;
-    itr.list = Some(NonNull::from(&mut *list));
+    itr.list = Some(iseq);
     itr.beg = beg;
     itr.end = end;
     itr.ireg = ireg;
-    itr.active = 0;
-    regitr_set_region(regitr, list, ireg, idx.payload_size);
+    itr.active = false;
+    regitr_set_region(regitr, &seq_name, &idx.seq[iseq], ireg, payload_size);
 
     1
 }
 
-pub unsafe fn regidx_c_401_regidx_overlap(
-    idx: *mut regidx_t,
-    chr: *const c_char,
-    beg: hts_pos_t,
-    end: hts_pos_t,
-    itr: *mut regitr_t,
-) -> c_int {
-    let Some(mut idx_ptr) = NonNull::new(idx) else {
-        return 0;
-    };
-    if chr.is_null() {
-        return 0;
-    }
-    regidx_overlap(
-        idx_ptr.as_mut(),
-        idx_ptr,
-        CStr::from_ptr(chr),
-        beg,
-        end,
-        itr.as_mut(),
-    )
-}
+pub fn regidx_c_466_regidx_parse_bed(
+    line: &[u8],
+    out: &mut ParsedRegion,
+    _payload: &mut [u8],
+    _usr: Option<&mut Vec<u8>>,
+) -> i32 {
+    // hts_parse_decimal walks a NUL-terminated C string; keep a local copy.
+    let mut buf = line.to_vec();
+    buf.push(0);
 
-unsafe fn regidx_parse_bed(line: &CStr, out: &mut ParsedRegion) -> c_int {
-    let mut ss: *mut c_char = line.as_ptr().cast_mut();
-    while *ss != 0 && isspace_c(*ss) != 0 {
-        ss = ss.add(1);
+    let mut ss = 0;
+    while line.get(ss).is_some_and(|&c| isspace_c(c as i8) != 0) {
+        ss += 1;
     }
-    if *ss == 0 {
+    if ss >= line.len() {
         return -1;
     }
-    if *ss == b'#' as c_char {
+    if line[ss] == b'#' {
         return -1;
     }
 
-    let mut se: *mut c_char = ss;
-    while *se != 0 && isspace_c(*se) == 0 {
-        se = se.add(1);
+    let mut se = ss;
+    while se < line.len() && isspace_c(line[se] as i8) == 0 {
+        se += 1;
     }
 
-    out.set_chr(line, ss, se.sub(1));
+    out.set_chr(ss, se - 1);
 
-    if *se == 0 {
+    if se >= line.len() {
         out.beg = 0;
         out.end = MAX_COOR_0;
         return 0;
     }
 
-    ss = se.add(1);
-    out.beg = hts_parse_decimal(ss, &mut se, 0);
+    ss = se + 1;
+    se = unsafe {
+        let mut end = std::ptr::null_mut();
+        let start = buf[ss.min(buf.len() - 1)..].as_ptr().cast();
+        out.beg = hts_parse_decimal(start, &mut end, 0);
+        ss + end.offset_from(start) as usize
+    };
     if ss == se {
         return -2;
     }
 
-    ss = se.add(1);
-    out.end = hts_parse_decimal(ss, &mut se, 0) - 1;
+    ss = se + 1;
+    se = unsafe {
+        let mut end = std::ptr::null_mut();
+        let start = buf[ss.min(buf.len() - 1)..].as_ptr().cast();
+        out.end = hts_parse_decimal(start, &mut end, 0) - 1;
+        ss + end.offset_from(start) as usize
+    };
     if ss == se {
         return -2;
     }
@@ -841,52 +613,47 @@ unsafe fn regidx_parse_bed(line: &CStr, out: &mut ParsedRegion) -> c_int {
     0
 }
 
-pub unsafe extern "C" fn regidx_c_466_regidx_parse_bed(
-    line: *const c_char,
-    chr_beg: *mut *mut c_char,
-    chr_end: *mut *mut c_char,
-    beg: *mut hts_pos_t,
-    end: *mut hts_pos_t,
-    _payload: *mut c_void,
-    _usr: *mut c_void,
-) -> c_int {
-    if line.is_null() {
-        return -2;
-    };
-    let line = CStr::from_ptr(line);
-    let mut out = ParsedRegion::default();
-    let ret = regidx_parse_bed(line, &mut out);
-    out.write_to_raw(line, chr_beg, chr_end, beg, end);
-    ret
-}
+pub fn regidx_c_498_regidx_parse_tab(
+    line: &[u8],
+    out: &mut ParsedRegion,
+    _payload: &mut [u8],
+    _usr: Option<&mut Vec<u8>>,
+) -> i32 {
+    // hts_parse_decimal walks a NUL-terminated C string; keep a local copy.
+    let mut buf = line.to_vec();
+    buf.push(0);
 
-unsafe fn regidx_parse_tab(line: &CStr, out: &mut ParsedRegion) -> c_int {
-    let mut ss: *mut c_char = line.as_ptr().cast_mut();
-    while *ss != 0 && isspace_c(*ss) != 0 {
-        ss = ss.add(1);
+    let mut ss = 0;
+    while line.get(ss).is_some_and(|&c| isspace_c(c as i8) != 0) {
+        ss += 1;
     }
-    if *ss == 0 {
+    if ss >= line.len() {
         return -1;
     }
-    if *ss == b'#' as c_char {
+    if line[ss] == b'#' {
         return -1;
     }
 
-    let mut se: *mut c_char = ss;
-    while *se != 0 && isspace_c(*se) == 0 {
-        se = se.add(1);
+    let mut se = ss;
+    while se < line.len() && isspace_c(line[se] as i8) == 0 {
+        se += 1;
     }
 
-    out.set_chr(line, ss, se.sub(1));
+    out.set_chr(ss, se - 1);
 
-    if *se == 0 {
+    if se >= line.len() {
         out.beg = 0;
         out.end = MAX_COOR_0;
         return 0;
     }
 
-    ss = se.add(1);
-    out.beg = hts_parse_decimal(ss, &mut se, 0);
+    ss = se + 1;
+    se = unsafe {
+        let mut end = std::ptr::null_mut();
+        let start = buf[ss.min(buf.len() - 1)..].as_ptr().cast();
+        out.beg = hts_parse_decimal(start, &mut end, 0);
+        ss + end.offset_from(start) as usize
+    };
     if ss == se {
         return -2;
     }
@@ -895,12 +662,18 @@ unsafe fn regidx_parse_tab(line: &CStr, out: &mut ParsedRegion) -> c_int {
     }
     out.beg -= 1;
 
-    if *se == 0 || *se.add(1) == 0 {
+    // se now indexes into `line`; a delimiter at end-of-line means no end field.
+    if se >= line.len() || se + 1 >= line.len() {
         out.end = out.beg;
     } else {
-        ss = se.add(1);
-        out.end = hts_parse_decimal(ss, &mut se, 0);
-        if ss == se || (*se != 0 && isspace_c(*se) == 0) {
+        ss = se + 1;
+        se = unsafe {
+            let mut end = std::ptr::null_mut();
+            let start = buf[ss.min(buf.len() - 1)..].as_ptr().cast();
+            out.end = hts_parse_decimal(start, &mut end, 0);
+            ss + end.offset_from(start) as usize
+        };
+        if ss == se || (se < line.len() && isspace_c(line[se] as i8) == 0) {
             out.end = out.beg;
         } else if out.end == 0 {
             return -2;
@@ -911,79 +684,60 @@ unsafe fn regidx_parse_tab(line: &CStr, out: &mut ParsedRegion) -> c_int {
     0
 }
 
-pub unsafe extern "C" fn regidx_c_498_regidx_parse_tab(
-    line: *const c_char,
-    chr_beg: *mut *mut c_char,
-    chr_end: *mut *mut c_char,
-    beg: *mut hts_pos_t,
-    end: *mut hts_pos_t,
-    _payload: *mut c_void,
-    _usr: *mut c_void,
-) -> c_int {
-    if line.is_null() {
-        return -2;
-    };
-    let line = CStr::from_ptr(line);
-    let mut out = ParsedRegion::default();
-    let ret = regidx_parse_tab(line, &mut out);
-    out.write_to_raw(line, chr_beg, chr_end, beg, end);
-    ret
-}
-
-unsafe fn regidx_parse_vcf(line: &CStr, out: &mut ParsedRegion) -> c_int {
-    let ret = regidx_parse_tab(line, out);
+pub fn regidx_c_538_regidx_parse_vcf(
+    line: &[u8],
+    out: &mut ParsedRegion,
+    payload: &mut [u8],
+    usr: Option<&mut Vec<u8>>,
+) -> i32 {
+    let ret = regidx_c_498_regidx_parse_tab(line, out, payload, usr);
     if ret == 0 {
         out.end = out.beg;
     }
     ret
 }
 
-pub unsafe extern "C" fn regidx_c_538_regidx_parse_vcf(
-    line: *const c_char,
-    chr_beg: *mut *mut c_char,
-    chr_end: *mut *mut c_char,
-    beg: *mut hts_pos_t,
-    end: *mut hts_pos_t,
-    _payload: *mut c_void,
-    _usr: *mut c_void,
-) -> c_int {
-    if line.is_null() {
-        return -2;
-    };
-    let line = CStr::from_ptr(line);
-    let mut out = ParsedRegion::default();
-    let ret = regidx_parse_vcf(line, &mut out);
-    out.write_to_raw(line, chr_beg, chr_end, beg, end);
-    ret
-}
+pub fn regidx_c_545_regidx_parse_reg(
+    line: &[u8],
+    out: &mut ParsedRegion,
+    _payload: &mut [u8],
+    _usr: Option<&mut Vec<u8>>,
+) -> i32 {
+    // hts_parse_decimal walks a NUL-terminated C string; keep a local copy.
+    let mut buf = line.to_vec();
+    buf.push(0);
 
-unsafe fn regidx_parse_reg(line: &CStr, out: &mut ParsedRegion) -> c_int {
-    let mut ss: *mut c_char = line.as_ptr().cast_mut();
-    while *ss != 0 && isspace_c(*ss) != 0 {
-        ss = ss.add(1);
+    let mut ss = 0;
+    while line.get(ss).is_some_and(|&c| isspace_c(c as i8) != 0) {
+        ss += 1;
     }
-    if *ss == 0 {
+    if ss >= line.len() {
         return -1;
     }
-    if *ss == b'#' as c_char {
+    if line[ss] == b'#' {
         return -1;
     }
 
-    let mut se: *mut c_char = ss;
-    while *se != 0 && *se != b':' as c_char {
-        se = se.add(1);
+    let mut se = ss;
+    while se < line.len() && line[se] != b':' {
+        se += 1;
     }
 
-    out.set_chr(line, ss, se.sub(1));
+    out.set_chr(ss, se - 1);
 
-    if *se == 0 {
+    if se >= line.len() {
         out.beg = 0;
         out.end = MAX_COOR_0;
         return 0;
     }
 
-    ss = se.add(1);
-    out.beg = hts_parse_decimal(ss, &mut se, 0);
+    ss = se + 1;
+    se = unsafe {
+        let mut end = std::ptr::null_mut();
+        let start = buf[ss.min(buf.len() - 1)..].as_ptr().cast();
+        out.beg = hts_parse_decimal(start, &mut end, 0);
+        ss + end.offset_from(start) as usize
+    };
     if ss == se {
         return -2;
     }
@@ -992,15 +746,20 @@ unsafe fn regidx_parse_reg(line: &CStr, out: &mut ParsedRegion) -> c_int {
     }
     out.beg -= 1;
 
-    if *se == 0 || *se.add(1) == 0 {
-        out.end = if *se == b'-' as c_char {
+    if se >= line.len() || se + 1 >= line.len() {
+        out.end = if se < line.len() && line[se] == b'-' {
             MAX_COOR_0
         } else {
             out.beg
         };
     } else {
-        ss = se.add(1);
-        out.end = hts_parse_decimal(ss, &mut se, 0);
+        ss = se + 1;
+        se = unsafe {
+            let mut end = std::ptr::null_mut();
+            let start = buf[ss.min(buf.len() - 1)..].as_ptr().cast();
+            out.end = hts_parse_decimal(start, &mut end, 0);
+            ss + end.offset_from(start) as usize
+        };
         if ss == se {
             out.end = out.beg;
         } else if out.end == 0 {
@@ -1012,83 +771,46 @@ unsafe fn regidx_parse_reg(line: &CStr, out: &mut ParsedRegion) -> c_int {
     0
 }
 
-pub unsafe extern "C" fn regidx_c_545_regidx_parse_reg(
-    line: *const c_char,
-    chr_beg: *mut *mut c_char,
-    chr_end: *mut *mut c_char,
-    beg: *mut hts_pos_t,
-    end: *mut hts_pos_t,
-    _payload: *mut c_void,
-    _usr: *mut c_void,
-) -> c_int {
-    if line.is_null() {
-        return -2;
-    };
-    let line = CStr::from_ptr(line);
-    let mut out = ParsedRegion::default();
-    let ret = regidx_parse_reg(line, &mut out);
-    out.write_to_raw(line, chr_beg, chr_end, beg, end);
-    ret
-}
-
-fn regitr_new(regidx: NonNull<regidx_t>) -> regitr_t {
-    regitr_t {
+pub fn regidx_c_584_regitr_init(regidx: &mut regidx_t) -> Box<regitr_t> {
+    Box::new(regitr_t {
         beg: 0,
         end: 0,
-        payload: None,
-        seq: None,
+        payload: Vec::new(),
+        seq: Vec::new(),
         itr: Box::new(itr_t_::new(regidx)),
-    }
+    })
 }
 
-pub unsafe fn regidx_c_584_regitr_init(regidx: *mut regidx_t) -> *mut regitr_t {
-    let Some(regidx) = NonNull::new(regidx) else {
-        return std::ptr::null_mut();
-    };
-    Box::into_raw(Box::new(regitr_new(regidx)))
-}
-
-fn regitr_reset(regidx: Option<NonNull<regidx_t>>, regitr: &mut regitr_t) {
-    if let Some(regidx) = regidx {
-        regitr.itr.reset(regidx);
-    }
+pub fn regidx_c_599_regitr_reset(regidx: &mut regidx_t, regitr: &mut regitr_t) {
+    regitr.itr.reset(regidx);
     regitr.beg = 0;
     regitr.end = 0;
-    regitr.payload = None;
-    regitr.seq = None;
+    regitr.payload = Vec::new();
+    regitr.seq = Vec::new();
 }
 
-pub unsafe fn regidx_c_599_regitr_reset(regidx: *mut regidx_t, regitr: *mut regitr_t) {
-    let Some(regitr) = regitr.as_mut() else {
-        return;
-    };
-    regitr_reset(NonNull::new(regidx), regitr);
+pub fn regidx_c_606_regitr_destroy(regitr: Box<regitr_t>) {
+    drop(regitr);
 }
 
-pub unsafe fn regidx_c_606_regitr_destroy(regitr: *mut regitr_t) {
-    if regitr.is_null() {
-        return;
-    }
-    drop(Box::from_raw(regitr));
-}
-
-unsafe fn regitr_overlap(regitr: &mut regitr_t) -> c_int {
-    if regitr.seq.is_none() {
+pub fn regidx_c_612_regitr_overlap(regitr: &mut regitr_t) -> i32 {
+    if regitr.seq.is_empty() {
         return 0;
     }
 
-    let (mut list_ptr, i, payload_size) = {
+    let (iseq, i) = {
         let itr = &mut regitr.itr;
-        if itr.active == 0 {
-            itr.active = 1;
+        if !itr.active {
+            itr.active = true;
             itr.ireg += 1;
             return 1;
         }
 
-        let Some(list_ptr) = itr.list else {
+        let Some(iseq) = itr.list else {
             return 0;
         };
-        let list = list_ptr.as_ref();
+        let regidx = unsafe { &*itr.ridx };
+        let list = &regidx.seq[iseq];
         let mut i = itr.ireg;
         while (i as usize) < list.reg.len() {
             if list.reg[i as usize].beg > itr.end {
@@ -1105,43 +827,32 @@ unsafe fn regitr_overlap(regitr: &mut regitr_t) -> c_int {
         }
 
         itr.ireg = i + 1;
-        let regidx = itr.ridx.as_ref();
-        (list_ptr, i, regidx.payload_size)
+        (iseq, i)
     };
 
-    let list = list_ptr.as_mut();
-    regitr_set_region(regitr, list, i, payload_size);
+    let regidx = unsafe { &*regitr.itr.ridx };
+    let payload_size = regidx.payload_size;
+    let seq_name = regidx.seq_names[regidx.seq[iseq].seq].clone();
+    regitr_set_region(regitr, &seq_name, &regidx.seq[iseq], i, payload_size);
 
     1
 }
 
-pub unsafe fn regidx_c_612_regitr_overlap(regitr: *mut regitr_t) -> c_int {
-    let Some(regitr) = regitr.as_mut() else {
-        return 0;
-    };
-    regitr_overlap(regitr)
-}
-
-unsafe fn regitr_loop(regitr: &mut regitr_t) -> c_int {
-    let (mut list_ptr, ireg, payload_size) = {
+pub fn regidx_c_646_regitr_loop(regitr: &mut regitr_t) -> i32 {
+    let (iseq, ireg) = {
         let itr = &mut regitr.itr;
-        let regidx = itr.ridx.as_mut();
+        let regidx = unsafe { &*itr.ridx };
 
         if regidx.seq.is_empty() {
             return 0;
         }
 
         if itr.list.is_none() {
-            itr.list = Some(NonNull::from(&mut regidx.seq[0]));
+            itr.list = Some(0);
             itr.ireg = 0;
         }
 
-        let list_ptr = itr.list.unwrap().as_ptr();
-        let mut iseq = regidx
-            .seq
-            .iter()
-            .position(|list| std::ptr::addr_eq(list as *const reglist_t, list_ptr.cast_const()))
-            .unwrap_or(regidx.seq.len());
+        let mut iseq = itr.list.unwrap();
         if iseq >= regidx.seq.len() {
             return 0;
         }
@@ -1152,1157 +863,574 @@ unsafe fn regitr_loop(regitr: &mut regitr_t) -> c_int {
                 return 0;
             }
             itr.ireg = 0;
-            itr.list = Some(NonNull::from(&mut regidx.seq[iseq]));
+            itr.list = Some(iseq);
         }
 
-        let list_ptr = itr.list.unwrap();
         let ireg = itr.ireg;
         itr.ireg += 1;
-        (list_ptr, ireg, regidx.payload_size)
+        (iseq, ireg)
     };
 
-    let list = list_ptr.as_mut();
-    regitr_set_region(regitr, list, ireg, payload_size);
+    let regidx = unsafe { &*regitr.itr.ridx };
+    let payload_size = regidx.payload_size;
+    let seq_name = regidx.seq_names[regidx.seq[iseq].seq].clone();
+    regitr_set_region(regitr, &seq_name, &regidx.seq[iseq], ireg, payload_size);
 
     1
 }
 
-pub unsafe fn regidx_c_646_regitr_loop(regitr: *mut regitr_t) -> c_int {
-    let Some(regitr) = regitr.as_mut() else {
-        return 0;
-    };
-    regitr_loop(regitr)
-}
-
-fn regitr_copy(dst: &mut regitr_t, src: &regitr_t) {
-    dst.beg = src.beg;
-    dst.end = src.end;
-    dst.payload = src.payload;
-    dst.seq = src.seq;
-    dst.itr = Box::new(*src.itr);
-}
-
-pub unsafe fn regidx_c_681_regitr_copy(dst: *mut regitr_t, src: *mut regitr_t) {
-    if std::ptr::addr_eq(dst, src) {
+pub fn regidx_c_681_regitr_copy(dst: &mut regitr_t, src: &regitr_t) {
+    if std::ptr::eq(dst, src) {
         return;
     }
-    let (Some(dst), Some(src)) = (dst.as_mut(), src.as_ref()) else {
-        return;
-    };
-    regitr_copy(dst, src);
+    dst.beg = src.beg;
+    dst.end = src.end;
+    dst.payload = src.payload.clone();
+    dst.seq = src.seq.clone();
+    dst.itr = Box::new((*src.itr).clone());
 }
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::{CStr, CString};
+
+    fn parse(parser: regidx_parse_f, line: &[u8]) -> (i32, ParsedRegion) {
+        let mut out = ParsedRegion::default();
+        let mut payload = Vec::new();
+        let ret = parser(line, &mut out, &mut payload, None);
+        (ret, out)
+    }
 
     #[test]
     fn regidx_parse_bed_uses_zero_based_right_open_coordinates() {
-        unsafe {
-            let line = CString::new("chr1\t10\t20").unwrap();
-            let mut chr_beg = std::ptr::null_mut();
-            let mut chr_end = std::ptr::null_mut();
-            let mut beg = -1;
-            let mut end = -1;
-            assert_eq!(
-                regidx_c_466_regidx_parse_bed(
-                    line.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                0
-            );
-            assert_eq!(beg, 10);
-            assert_eq!(end, 19);
-            assert_eq!(chr_end.offset_from(chr_beg), 3);
-        }
+        let (ret, out) = parse(regidx_c_466_regidx_parse_bed, b"chr1\t10\t20");
+        assert_eq!(ret, 0);
+        assert_eq!(out.beg, 10);
+        assert_eq!(out.end, 19);
+        let chr = out.chr.unwrap();
+        assert_eq!(chr.end() - chr.start(), 3);
     }
 
     #[test]
     fn regidx_parse_bed_accepts_contig_only_and_rejects_bad_coordinates() {
-        unsafe {
-            let mut chr_beg = std::ptr::null_mut();
-            let mut chr_end = std::ptr::null_mut();
-            let mut beg = -1;
-            let mut end = -1;
+        let (ret, out) = parse(regidx_c_466_regidx_parse_bed, b"chr1");
+        assert_eq!(ret, 0);
+        assert_eq!((out.beg, out.end), (0, MAX_COOR_0));
+        let chr = out.chr.unwrap();
+        assert_eq!(chr.end() - chr.start(), 3);
 
-            let whole_contig = CString::new("chr1").unwrap();
-            assert_eq!(
-                regidx_c_466_regidx_parse_bed(
-                    whole_contig.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                0
-            );
-            assert_eq!((beg, end), (0, MAX_COOR_0));
-            assert_eq!(chr_end.offset_from(chr_beg), 3);
-
-            for line in ["chr1 start 20", "chr1 10 end"] {
-                let line = CString::new(line).unwrap();
-                assert_eq!(
-                    regidx_c_466_regidx_parse_bed(
-                        line.as_ptr(),
-                        &mut chr_beg,
-                        &mut chr_end,
-                        &mut beg,
-                        &mut end,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut()
-                    ),
-                    -2
-                );
-            }
+        for line in [b"chr1 start 20".as_slice(), b"chr1 10 end".as_slice()] {
+            let (ret, _) = parse(regidx_c_466_regidx_parse_bed, line);
+            assert_eq!(ret, -2);
         }
     }
 
     #[test]
     fn regidx_parse_tab_and_vcf_use_one_based_positions() {
-        unsafe {
-            let line = CString::new("chr2 11 14").unwrap();
-            let mut chr_beg = std::ptr::null_mut();
-            let mut chr_end = std::ptr::null_mut();
-            let mut beg = -1;
-            let mut end = -1;
-            assert_eq!(
-                regidx_c_498_regidx_parse_tab(
-                    line.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                0
-            );
-            assert_eq!((beg, end), (10, 13));
+        let (ret, out) = parse(regidx_c_498_regidx_parse_tab, b"chr2 11 14");
+        assert_eq!(ret, 0);
+        assert_eq!((out.beg, out.end), (10, 13));
 
-            assert_eq!(
-                regidx_c_538_regidx_parse_vcf(
-                    line.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                0
-            );
-            assert_eq!((beg, end), (10, 10));
-        }
+        let (ret, out) = parse(regidx_c_538_regidx_parse_vcf, b"chr2 11 14");
+        assert_eq!(ret, 0);
+        assert_eq!((out.beg, out.end), (10, 10));
     }
 
     #[test]
     fn regidx_parse_tab_boundary_cases_match_htslib_fallbacks() {
-        unsafe {
-            let mut chr_beg = std::ptr::null_mut();
-            let mut chr_end = std::ptr::null_mut();
-            let mut beg = -1;
-            let mut end = -1;
+        let (ret, out) = parse(regidx_c_498_regidx_parse_tab, b"  chr1");
+        assert_eq!(ret, 0);
+        assert_eq!((out.beg, out.end), (0, MAX_COOR_0));
+        let chr = out.chr.unwrap();
+        assert_eq!(chr.end() - chr.start(), 3);
 
-            let whole_contig = CString::new("  chr1").unwrap();
-            assert_eq!(
-                regidx_c_498_regidx_parse_tab(
-                    whole_contig.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                0
-            );
-            assert_eq!((beg, end), (0, MAX_COOR_0));
-            assert_eq!(chr_end.offset_from(chr_beg), 3);
+        let (ret, out) = parse(regidx_c_498_regidx_parse_tab, b"chr2 5 -");
+        assert_eq!(ret, 0);
+        assert_eq!((out.beg, out.end), (4, 4));
 
-            let trailing_dash = CString::new("chr2 5 -").unwrap();
-            assert_eq!(
-                regidx_c_498_regidx_parse_tab(
-                    trailing_dash.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                0
-            );
-            assert_eq!((beg, end), (4, 4));
-
-            let junk_after_end = CString::new("chr2 5 9x").unwrap();
-            assert_eq!(
-                regidx_c_498_regidx_parse_tab(
-                    junk_after_end.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                0
-            );
-            assert_eq!((beg, end), (4, 4));
-        }
+        let (ret, out) = parse(regidx_c_498_regidx_parse_tab, b"chr2 5 9x");
+        assert_eq!(ret, 0);
+        assert_eq!((out.beg, out.end), (4, 4));
     }
 
     #[test]
     fn regidx_parse_tab_and_vcf_reject_zero_start_coordinates() {
-        unsafe {
-            let mut chr_beg = std::ptr::null_mut();
-            let mut chr_end = std::ptr::null_mut();
-            let mut beg = -1;
-            let mut end = -1;
+        let (ret, _) = parse(regidx_c_498_regidx_parse_tab, b"chr1 0 10");
+        assert_eq!(ret, -2);
 
-            let line = CString::new("chr1 0 10").unwrap();
-            assert_eq!(
-                regidx_c_498_regidx_parse_tab(
-                    line.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                -2
-            );
-
-            let line = CString::new("chr1 0 .").unwrap();
-            assert_eq!(
-                regidx_c_538_regidx_parse_vcf(
-                    line.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                -2
-            );
-        }
+        let (ret, _) = parse(regidx_c_538_regidx_parse_vcf, b"chr1 0 .");
+        assert_eq!(ret, -2);
     }
 
     #[test]
     fn regidx_parse_and_insert_distinguish_skip_from_malformed_lines() {
-        unsafe {
-            let mut chr_beg = std::ptr::null_mut();
-            let mut chr_end = std::ptr::null_mut();
-            let mut beg = -1;
-            let mut end = -1;
+        let (ret, _) = parse(regidx_c_498_regidx_parse_tab, b"#comment");
+        assert_eq!(ret, -1);
 
-            let comment = CString::new("#comment").unwrap();
-            assert_eq!(
-                regidx_c_498_regidx_parse_tab(
-                    comment.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                -1
-            );
+        let (ret, _) = parse(regidx_c_498_regidx_parse_tab, b"chr1 0");
+        assert_eq!(ret, -2);
 
-            let zero_pos = CString::new("chr1 0").unwrap();
-            assert_eq!(
-                regidx_c_498_regidx_parse_tab(
-                    zero_pos.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                -2
-            );
-
-            let idx = regidx_c_246_regidx_init(
-                std::ptr::null(),
-                Some(regidx_c_498_regidx_parse_tab),
-                None,
-                0,
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
-
-            let mut comment_line = CString::new("#comment").unwrap().into_bytes_with_nul();
-            assert_eq!(
-                regidx_c_198_regidx_insert(idx, comment_line.as_mut_ptr().cast()),
-                0
-            );
-
-            let mut malformed_line = CString::new("chr1 0").unwrap().into_bytes_with_nul();
-            assert_eq!(
-                regidx_c_198_regidx_insert(idx, malformed_line.as_mut_ptr().cast()),
-                -1
-            );
-
-            regidx_c_311_regidx_destroy(idx);
+        let mut idx = unsafe {
+            regidx_c_246_regidx_init(None, Some(regidx_c_498_regidx_parse_tab), None, 0, None)
         }
+        .expect("regidx");
+
+        assert_eq!(regidx_c_198_regidx_insert(&mut idx, b"#comment"), 0);
+        assert_eq!(regidx_c_198_regidx_insert(&mut idx, b"chr1 0"), -1);
+
+        regidx_c_311_regidx_destroy(idx);
     }
 
     #[test]
     fn regidx_parse_reg_handles_open_ended_regions() {
-        unsafe {
-            let line = CString::new("chr3:42-").unwrap();
-            let mut chr_beg = std::ptr::null_mut();
-            let mut chr_end = std::ptr::null_mut();
-            let mut beg = -1;
-            let mut end = -1;
-            assert_eq!(
-                regidx_c_545_regidx_parse_reg(
-                    line.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                0
-            );
-            assert_eq!((beg, end), (41, MAX_COOR_0));
-        }
+        let (ret, out) = parse(regidx_c_545_regidx_parse_reg, b"chr3:42-");
+        assert_eq!(ret, 0);
+        assert_eq!((out.beg, out.end), (41, MAX_COOR_0));
     }
 
     #[test]
     fn regidx_parse_reg_handles_whole_contig_point_and_empty_range_edges() {
-        unsafe {
-            let mut chr_beg = std::ptr::null_mut();
-            let mut chr_end = std::ptr::null_mut();
-            let mut beg = -1;
-            let mut end = -1;
+        let (ret, out) = parse(regidx_c_545_regidx_parse_reg, b"chr1");
+        assert_eq!(ret, 0);
+        let chr = out.chr.unwrap();
+        assert_eq!(&b"chr1"[*chr.start()..=*chr.end()], b"chr1");
+        assert_eq!(chr.end() - chr.start(), 3);
+        assert_eq!((out.beg, out.end), (0, MAX_COOR_0));
 
-            let whole = CString::new("chr1").unwrap();
-            assert_eq!(
-                regidx_c_545_regidx_parse_reg(
-                    whole.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                0
-            );
-            assert_eq!(CStr::from_ptr(chr_beg).to_bytes(), b"chr1");
-            assert_eq!(chr_end.offset_from(chr_beg), 3);
-            assert_eq!((beg, end), (0, MAX_COOR_0));
+        let (ret, out) = parse(regidx_c_545_regidx_parse_reg, b"chr1:7");
+        assert_eq!(ret, 0);
+        assert_eq!((out.beg, out.end), (6, 6));
 
-            let point = CString::new("chr1:7").unwrap();
-            assert_eq!(
-                regidx_c_545_regidx_parse_reg(
-                    point.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                0
-            );
-            assert_eq!((beg, end), (6, 6));
-
-            let empty_range = CString::new("chr1:").unwrap();
-            assert_eq!(
-                regidx_c_545_regidx_parse_reg(
-                    empty_range.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                -2
-            );
-        }
+        let (ret, _) = parse(regidx_c_545_regidx_parse_reg, b"chr1:");
+        assert_eq!(ret, -2);
     }
 
     #[test]
     fn regidx_parse_reg_rejects_zero_start_and_collapses_bad_end_to_point() {
-        unsafe {
-            let mut chr_beg = std::ptr::null_mut();
-            let mut chr_end = std::ptr::null_mut();
-            let mut beg = -1;
-            let mut end = -1;
+        let (ret, _) = parse(regidx_c_545_regidx_parse_reg, b"chr1:0-10");
+        assert_eq!(ret, -2);
 
-            let zero = CString::new("chr1:0-10").unwrap();
-            assert_eq!(
-                regidx_c_545_regidx_parse_reg(
-                    zero.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                -2
-            );
-
-            let bad_end = CString::new("chr1:5-end").unwrap();
-            assert_eq!(
-                regidx_c_545_regidx_parse_reg(
-                    bad_end.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                0
-            );
-            assert_eq!((beg, end), (4, 4));
-        }
+        let (ret, out) = parse(regidx_c_545_regidx_parse_reg, b"chr1:5-end");
+        assert_eq!(ret, 0);
+        assert_eq!((out.beg, out.end), (4, 4));
     }
 
     #[test]
     fn regidx_parse_reg_stops_sequence_name_at_first_colon() {
-        unsafe {
-            let line = CString::new("chr1:alt:5-7").unwrap();
-            let mut chr_beg = std::ptr::null_mut();
-            let mut chr_end = std::ptr::null_mut();
-            let mut beg = -1;
-            let mut end = -1;
-
-            assert_eq!(
-                regidx_c_545_regidx_parse_reg(
-                    line.as_ptr(),
-                    &mut chr_beg,
-                    &mut chr_end,
-                    &mut beg,
-                    &mut end,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                -2
-            );
-            assert_eq!(
-                std::slice::from_raw_parts(
-                    chr_beg.cast::<u8>(),
-                    chr_end.offset_from(chr_beg) as usize + 1,
-                ),
-                b"chr1"
-            );
-        }
+        let line = b"chr1:alt:5-7";
+        let (ret, out) = parse(regidx_c_545_regidx_parse_reg, line);
+        assert_eq!(ret, -2);
+        let chr = out.chr.unwrap();
+        assert_eq!(&line[*chr.start()..=*chr.end()], b"chr1");
     }
 
     #[test]
     fn regidx_comparators_order_by_begin_then_longer_end_then_address() {
-        unsafe {
-            let mut a = regidx_reg_t { beg: 10, end: 20 };
-            let mut b = regidx_reg_t { beg: 10, end: 25 };
-            let mut c = regidx_reg_t { beg: 11, end: 12 };
+        let a = regidx_reg_t { beg: 10, end: 20 };
+        let b = regidx_reg_t { beg: 10, end: 25 };
+        let c = regidx_reg_t { beg: 11, end: 12 };
 
-            assert_eq!(regidx_c_132_cmp_regs(&mut a, &mut b), 1);
-            assert_eq!(regidx_c_132_cmp_regs(&mut c, &mut b), 1);
-            assert_eq!(
-                regidx_c_142_cmp_reg_ptrs(
-                    (&mut b as *mut regidx_reg_t).cast(),
-                    (&mut a as *mut regidx_reg_t).cast()
-                ),
-                -1
-            );
+        assert_eq!(regidx_c_132_cmp_regs(&a, &b), 1);
+        assert_eq!(regidx_c_132_cmp_regs(&c, &b), 1);
+        assert_eq!(regidx_c_142_cmp_reg_ptrs(&b, &a), -1);
+        assert_eq!(regidx_c_146_cmp_reg_ptrs2(&b, &a), -1);
+    }
 
-            let mut ap = &mut a as *mut regidx_reg_t;
-            let mut bp = &mut b as *mut regidx_reg_t;
-            assert_eq!(
-                regidx_c_146_cmp_reg_ptrs2(
-                    (&mut bp as *mut *mut regidx_reg_t).cast(),
-                    (&mut ap as *mut *mut regidx_reg_t).cast()
-                ),
-                -1
-            );
-        }
+    fn push(idx: &mut regidx_t, chr: &[u8], beg: hts_pos_t, end: hts_pos_t, payload: &[u8]) {
+        assert_eq!(regidx_c_151_regidx_push(idx, chr, beg, end, payload), 0);
     }
 
     #[test]
     fn regidx_public_api_builds_queries_and_iterates_regions() {
-        unsafe {
-            let data = CString::new("chr1\t5\t7\nchr1\t9\t10\nchr2\t3\n").unwrap();
-            let idx = regidx_c_209_regidx_init_string(
-                data.as_ptr(),
-                Some(regidx_c_498_regidx_parse_tab),
-                None,
-                0,
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
+        let mut idx = regidx_c_209_regidx_init_string(
+            b"chr1\t5\t7\nchr1\t9\t10\nchr2\t3\n",
+            Some(regidx_c_498_regidx_parse_tab),
+            None,
+            0,
+            None,
+        )
+        .expect("regidx");
 
-            let chr1 = CString::new("chr1").unwrap();
-            let chr3 = CString::new("chr3").unwrap();
-            assert_eq!(regidx_c_91_regidx_seq_nregs(idx, chr1.as_ptr()), 2);
-            assert_eq!(regidx_c_91_regidx_seq_nregs(idx, chr3.as_ptr()), 0);
-            assert_eq!(regidx_c_98_regidx_nregs(idx), 3);
+        assert_eq!(regidx_c_91_regidx_seq_nregs(&idx, b"chr1"), 2);
+        assert_eq!(regidx_c_91_regidx_seq_nregs(&idx, b"chr3"), 0);
+        assert_eq!(regidx_c_98_regidx_nregs(&idx), 3);
 
-            let mut n = 0;
-            let names = regidx_c_105_regidx_seq_names(idx, &mut n);
-            assert_eq!(n, 2);
-            assert!(!names.is_null());
+        assert_eq!(regidx_c_105_regidx_seq_names(&idx).len(), 2);
 
-            let itr = regidx_c_584_regitr_init(idx);
-            assert!(!itr.is_null());
-            assert_eq!(
-                regidx_c_401_regidx_overlap(idx, chr1.as_ptr(), 4, 4, itr),
-                1
-            );
-            assert_eq!((*itr).beg, 4);
-            assert_eq!((*itr).end, 6);
-            assert_eq!(regidx_c_612_regitr_overlap(itr), 1);
-            assert_eq!(regidx_c_612_regitr_overlap(itr), 0);
+        let mut itr = regidx_c_584_regitr_init(&mut idx);
+        assert_eq!(regidx_c_401_regidx_overlap(&mut idx, b"chr1", 4, 4, Some(&mut itr)), 1);
+        assert_eq!(itr.beg, 4);
+        assert_eq!(itr.end, 6);
+        assert_eq!(regidx_c_612_regitr_overlap(&mut itr), 1);
+        assert_eq!(regidx_c_612_regitr_overlap(&mut itr), 0);
 
-            regidx_c_599_regitr_reset(idx, itr);
-            assert_eq!(regidx_c_646_regitr_loop(itr), 1);
-            assert_eq!((*itr).beg, 4);
-            let copy = regidx_c_584_regitr_init(idx);
-            assert!(!copy.is_null());
-            regidx_c_681_regitr_copy(copy, itr);
-            assert_eq!((*copy).beg, (*itr).beg);
+        regidx_c_599_regitr_reset(&mut idx, &mut itr);
+        assert_eq!(regidx_c_646_regitr_loop(&mut itr), 1);
+        assert_eq!(itr.beg, 4);
 
-            regidx_c_606_regitr_destroy(copy);
-            regidx_c_606_regitr_destroy(itr);
-            regidx_c_311_regidx_destroy(idx);
-        }
+        let mut copy = regidx_c_584_regitr_init(&mut idx);
+        regidx_c_681_regitr_copy(&mut copy, &itr);
+        assert_eq!(copy.beg, itr.beg);
+
+        regidx_c_606_regitr_destroy(copy);
+        regidx_c_606_regitr_destroy(itr);
+        regidx_c_311_regidx_destroy(idx);
     }
 
     #[test]
     fn regidx_loop_on_empty_index_returns_no_regions() {
-        unsafe {
-            let idx = regidx_c_246_regidx_init(
-                std::ptr::null(),
-                Some(regidx_c_498_regidx_parse_tab),
-                None,
-                0,
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
-
-            let itr = regidx_c_584_regitr_init(idx);
-            assert!(!itr.is_null());
-            assert_eq!(regidx_c_646_regitr_loop(itr), 0);
-
-            regidx_c_606_regitr_destroy(itr);
-            regidx_c_311_regidx_destroy(idx);
+        let mut idx = unsafe {
+            regidx_c_246_regidx_init(None, Some(regidx_c_498_regidx_parse_tab), None, 0, None)
         }
+        .expect("regidx");
+
+        let mut itr = regidx_c_584_regitr_init(&mut idx);
+        assert_eq!(regidx_c_646_regitr_loop(&mut itr), 0);
+
+        regidx_c_606_regitr_destroy(itr);
+        regidx_c_311_regidx_destroy(idx);
     }
 
     #[test]
     fn regidx_iterator_copy_keeps_independent_overlap_position() {
-        unsafe {
-            let idx = regidx_c_246_regidx_init(
-                std::ptr::null(),
-                Some(regidx_c_498_regidx_parse_tab),
-                None,
-                0,
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
-
-            let mut chr = CString::new("chr1").unwrap().into_bytes_with_nul();
-            let chr_beg = chr.as_mut_ptr().cast::<c_char>();
-            let chr_end = chr_beg.add(3);
-            for (beg, end) in [(0, 0), (5, 5), (10, 10)] {
-                assert_eq!(
-                    regidx_c_151_regidx_push(
-                        &mut *idx,
-                        NonNull::new(chr_beg).unwrap(),
-                        NonNull::new(chr_end).unwrap(),
-                        beg,
-                        end,
-                        None
-                    ),
-                    0
-                );
-            }
-
-            let itr = regidx_c_584_regitr_init(idx);
-            assert!(!itr.is_null());
-            let query_chr = CString::new("chr1").unwrap();
-            assert_eq!(
-                regidx_c_401_regidx_overlap(idx, query_chr.as_ptr(), 0, 10, itr),
-                1
-            );
-            assert_eq!(((*itr).beg, (*itr).end), (0, 0));
-
-            let copy = regidx_c_584_regitr_init(idx);
-            assert!(!copy.is_null());
-            regidx_c_681_regitr_copy(copy, itr);
-
-            assert_eq!(regidx_c_612_regitr_overlap(itr), 1);
-            assert_eq!(((*itr).beg, (*itr).end), (0, 0));
-            assert_eq!(regidx_c_612_regitr_overlap(itr), 1);
-            assert_eq!(((*itr).beg, (*itr).end), (5, 5));
-
-            assert_eq!(regidx_c_612_regitr_overlap(copy), 1);
-            assert_eq!(((*copy).beg, (*copy).end), (0, 0));
-            assert_eq!(regidx_c_612_regitr_overlap(copy), 1);
-            assert_eq!(((*copy).beg, (*copy).end), (5, 5));
-
-            regidx_c_606_regitr_destroy(copy);
-            regidx_c_606_regitr_destroy(itr);
-            regidx_c_311_regidx_destroy(idx);
+        let mut idx = unsafe {
+            regidx_c_246_regidx_init(None, Some(regidx_c_498_regidx_parse_tab), None, 0, None)
         }
+        .expect("regidx");
+
+        for (beg, end) in [(0, 0), (5, 5), (10, 10)] {
+            push(&mut idx, b"chr1", beg, end, &[]);
+        }
+
+        let mut itr = regidx_c_584_regitr_init(&mut idx);
+        assert_eq!(regidx_c_401_regidx_overlap(&mut idx, b"chr1", 0, 10, Some(&mut itr)), 1);
+        assert_eq!((itr.beg, itr.end), (0, 0));
+
+        let mut copy = regidx_c_584_regitr_init(&mut idx);
+        regidx_c_681_regitr_copy(&mut copy, &itr);
+
+        assert_eq!(regidx_c_612_regitr_overlap(&mut itr), 1);
+        assert_eq!((itr.beg, itr.end), (0, 0));
+        assert_eq!(regidx_c_612_regitr_overlap(&mut itr), 1);
+        assert_eq!((itr.beg, itr.end), (5, 5));
+
+        assert_eq!(regidx_c_612_regitr_overlap(&mut copy), 1);
+        assert_eq!((copy.beg, copy.end), (0, 0));
+        assert_eq!(regidx_c_612_regitr_overlap(&mut copy), 1);
+        assert_eq!((copy.beg, copy.end), (5, 5));
+
+        regidx_c_606_regitr_destroy(copy);
+        regidx_c_606_regitr_destroy(itr);
+        regidx_c_311_regidx_destroy(idx);
     }
 
     #[test]
     fn regidx_iterator_self_copy_matches_c_struct_assignment() {
-        unsafe {
-            let idx = regidx_c_246_regidx_init(
-                std::ptr::null(),
-                Some(regidx_c_498_regidx_parse_tab),
-                None,
-                0,
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
-
-            let mut chr = CString::new("chr1").unwrap().into_bytes_with_nul();
-            let chr_beg = chr.as_mut_ptr().cast::<c_char>();
-            let chr_end = chr_beg.add(3);
-            for (beg, end) in [(0, 0), (5, 5)] {
-                assert_eq!(
-                    regidx_c_151_regidx_push(
-                        &mut *idx,
-                        NonNull::new(chr_beg).unwrap(),
-                        NonNull::new(chr_end).unwrap(),
-                        beg,
-                        end,
-                        None
-                    ),
-                    0
-                );
-            }
-
-            let itr = regidx_c_584_regitr_init(idx);
-            assert!(!itr.is_null());
-            let query_chr = CString::new("chr1").unwrap();
-            assert_eq!(
-                regidx_c_401_regidx_overlap(idx, query_chr.as_ptr(), 0, 5, itr),
-                1
-            );
-            regidx_c_681_regitr_copy(itr, itr);
-
-            assert_eq!(regidx_c_612_regitr_overlap(itr), 1);
-            assert_eq!(((*itr).beg, (*itr).end), (0, 0));
-            assert_eq!(regidx_c_612_regitr_overlap(itr), 1);
-            assert_eq!(((*itr).beg, (*itr).end), (5, 5));
-
-            regidx_c_606_regitr_destroy(itr);
-            regidx_c_311_regidx_destroy(idx);
+        let mut idx = unsafe {
+            regidx_c_246_regidx_init(None, Some(regidx_c_498_regidx_parse_tab), None, 0, None)
         }
+        .expect("regidx");
+
+        for (beg, end) in [(0, 0), (5, 5)] {
+            push(&mut idx, b"chr1", beg, end, &[]);
+        }
+
+        let mut itr = regidx_c_584_regitr_init(&mut idx);
+        assert_eq!(regidx_c_401_regidx_overlap(&mut idx, b"chr1", 0, 5, Some(&mut itr)), 1);
+        let itr_ref: *mut regitr_t = &mut *itr;
+        regidx_c_681_regitr_copy(unsafe { &mut *itr_ref }, unsafe { &*itr_ref });
+
+        assert_eq!(regidx_c_612_regitr_overlap(&mut itr), 1);
+        assert_eq!((itr.beg, itr.end), (0, 0));
+        assert_eq!(regidx_c_612_regitr_overlap(&mut itr), 1);
+        assert_eq!((itr.beg, itr.end), (5, 5));
+
+        regidx_c_606_regitr_destroy(itr);
+        regidx_c_311_regidx_destroy(idx);
     }
 
     #[test]
     fn regidx_unsorted_payloads_stay_attached_to_regions_after_index_build() {
-        unsafe {
-            let idx = regidx_c_246_regidx_init(
-                std::ptr::null(),
+        let mut idx = unsafe {
+            regidx_c_246_regidx_init(
+                None,
                 Some(regidx_c_498_regidx_parse_tab),
                 None,
-                std::mem::size_of::<c_int>(),
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
-
-            let mut chr = CString::new("chr1").unwrap().into_bytes_with_nul();
-            let chr_beg = chr.as_mut_ptr().cast::<c_char>();
-            let chr_end = chr_beg.add(3);
-            for (beg, end, mut payload) in [(30, 30, 30), (10, 10, 10), (20, 20, 20)] {
-                assert_eq!(
-                    regidx_c_151_regidx_push(
-                        &mut *idx,
-                        NonNull::new(chr_beg).unwrap(),
-                        NonNull::new(chr_end).unwrap(),
-                        beg,
-                        end,
-                        NonNull::new((&mut payload as *mut c_int).cast())
-                    ),
-                    0
-                );
-            }
-
-            let itr = regidx_c_584_regitr_init(idx);
-            assert!(!itr.is_null());
-
-            let query_chr = CString::new("chr1").unwrap();
-            assert_eq!(
-                regidx_c_401_regidx_overlap(idx, query_chr.as_ptr(), 10, 10, itr),
-                1
-            );
-            assert_eq!(((*itr).beg, (*itr).end), (10, 10));
-            assert_eq!(
-                *((*itr)
-                    .payload
-                    .expect("regidx payload")
-                    .cast::<c_int>()
-                    .as_ptr()),
-                10
-            );
-
-            assert_eq!(
-                regidx_c_401_regidx_overlap(idx, query_chr.as_ptr(), 30, 30, itr),
-                1
-            );
-            assert_eq!(((*itr).beg, (*itr).end), (30, 30));
-            assert_eq!(
-                *((*itr)
-                    .payload
-                    .expect("regidx payload")
-                    .cast::<c_int>()
-                    .as_ptr()),
-                30
-            );
-
-            regidx_c_606_regitr_destroy(itr);
-            regidx_c_311_regidx_destroy(idx);
+                std::mem::size_of::<i32>(),
+                None,
+            )
         }
+        .expect("regidx");
+
+        for (beg, end, payload) in [(30, 30, 30i32), (10, 10, 10), (20, 20, 20)] {
+            push(&mut idx, b"chr1", beg, end, &payload.to_ne_bytes());
+        }
+
+        let mut itr = regidx_c_584_regitr_init(&mut idx);
+
+        assert_eq!(regidx_c_401_regidx_overlap(&mut idx, b"chr1", 10, 10, Some(&mut itr)), 1);
+        assert_eq!((itr.beg, itr.end), (10, 10));
+        assert_eq!(i32::from_ne_bytes(itr.payload[..4].try_into().unwrap()), 10);
+
+        assert_eq!(regidx_c_401_regidx_overlap(&mut idx, b"chr1", 30, 30, Some(&mut itr)), 1);
+        assert_eq!((itr.beg, itr.end), (30, 30));
+        assert_eq!(i32::from_ne_bytes(itr.payload[..4].try_into().unwrap()), 30);
+
+        regidx_c_606_regitr_destroy(itr);
+        regidx_c_311_regidx_destroy(idx);
     }
 
     #[test]
     fn regidx_overlap_iteration_uses_sorted_interval_order_with_payloads() {
-        unsafe {
-            let idx = regidx_c_246_regidx_init(
-                std::ptr::null(),
+        let mut idx = unsafe {
+            regidx_c_246_regidx_init(
+                None,
                 Some(regidx_c_498_regidx_parse_tab),
                 None,
-                std::mem::size_of::<c_int>(),
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
-
-            let mut chr = CString::new("chr1").unwrap().into_bytes_with_nul();
-            let chr_beg = chr.as_mut_ptr().cast::<c_char>();
-            let chr_end = chr_beg.add(3);
-            for (beg, end, mut payload) in [(10, 12, 12), (5, 5, 5), (10, 20, 20)] {
-                assert_eq!(
-                    regidx_c_151_regidx_push(
-                        &mut *idx,
-                        NonNull::new(chr_beg).unwrap(),
-                        NonNull::new(chr_end).unwrap(),
-                        beg,
-                        end,
-                        NonNull::new((&mut payload as *mut c_int).cast())
-                    ),
-                    0
-                );
-            }
-
-            let itr = regidx_c_584_regitr_init(idx);
-            assert!(!itr.is_null());
-            let query_chr = CString::new("chr1").unwrap();
-            assert_eq!(
-                regidx_c_401_regidx_overlap(idx, query_chr.as_ptr(), 0, 30, itr),
-                1
-            );
-
-            let mut seen = Vec::new();
-            while regidx_c_612_regitr_overlap(itr) != 0 {
-                seen.push((
-                    (*itr).beg,
-                    (*itr).end,
-                    *((*itr)
-                        .payload
-                        .expect("regidx payload")
-                        .cast::<c_int>()
-                        .as_ptr()),
-                ));
-            }
-
-            assert_eq!(seen, [(5, 5, 5), (10, 20, 20), (10, 12, 12)]);
-
-            regidx_c_606_regitr_destroy(itr);
-            regidx_c_311_regidx_destroy(idx);
+                std::mem::size_of::<i32>(),
+                None,
+            )
         }
+        .expect("regidx");
+
+        for (beg, end, payload) in [(10, 12, 12i32), (5, 5, 5), (10, 20, 20)] {
+            push(&mut idx, b"chr1", beg, end, &payload.to_ne_bytes());
+        }
+
+        let mut itr = regidx_c_584_regitr_init(&mut idx);
+        assert_eq!(regidx_c_401_regidx_overlap(&mut idx, b"chr1", 0, 30, Some(&mut itr)), 1);
+
+        let mut seen = Vec::new();
+        while regidx_c_612_regitr_overlap(&mut itr) != 0 {
+            seen.push((
+                itr.beg,
+                itr.end,
+                i32::from_ne_bytes(itr.payload[..4].try_into().unwrap()),
+            ));
+        }
+        assert_eq!(seen, [(5, 5, 5), (10, 20, 20), (10, 12, 12)]);
+
+        regidx_c_606_regitr_destroy(itr);
+        regidx_c_311_regidx_destroy(idx);
     }
 
     #[test]
     fn regidx_overlap_iterator_includes_touching_bin_edges_and_clears_misses() {
-        unsafe {
-            let idx = regidx_c_246_regidx_init(
-                std::ptr::null(),
+        let mut idx = unsafe {
+            regidx_c_246_regidx_init(
+                None,
                 Some(regidx_c_498_regidx_parse_tab),
                 None,
-                std::mem::size_of::<c_int>(),
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
-
-            let mut chr = CString::new("chr1").unwrap().into_bytes_with_nul();
-            let chr_beg = chr.as_mut_ptr().cast::<c_char>();
-            let chr_end = chr_beg.add(3);
-            for (beg, end, mut payload) in [(0, 8191, 1), (8192, 8192, 2), (20000, 20010, 3)] {
-                assert_eq!(
-                    regidx_c_151_regidx_push(
-                        &mut *idx,
-                        NonNull::new(chr_beg).unwrap(),
-                        NonNull::new(chr_end).unwrap(),
-                        beg,
-                        end,
-                        NonNull::new((&mut payload as *mut c_int).cast())
-                    ),
-                    0
-                );
-            }
-
-            let itr = regidx_c_584_regitr_init(idx);
-            assert!(!itr.is_null());
-            let query_chr = CString::new("chr1").unwrap();
-            assert_eq!(
-                regidx_c_401_regidx_overlap(idx, query_chr.as_ptr(), 8191, 8192, itr),
-                1
-            );
-
-            let mut seen = Vec::new();
-            while regidx_c_612_regitr_overlap(itr) != 0 {
-                seen.push((
-                    (*itr).beg,
-                    (*itr).end,
-                    *((*itr)
-                        .payload
-                        .expect("regidx payload")
-                        .cast::<c_int>()
-                        .as_ptr()),
-                ));
-            }
-            assert_eq!(seen, [(0, 8191, 1), (8192, 8192, 2)]);
-
-            assert_eq!(
-                regidx_c_401_regidx_overlap(idx, query_chr.as_ptr(), 8193, 19999, itr),
-                0
-            );
-            assert!((*itr).seq.is_none());
-
-            regidx_c_606_regitr_destroy(itr);
-            regidx_c_311_regidx_destroy(idx);
+                std::mem::size_of::<i32>(),
+                None,
+            )
         }
+        .expect("regidx");
+
+        for (beg, end, payload) in [(0, 8191, 1i32), (8192, 8192, 2), (20000, 20010, 3)] {
+            push(&mut idx, b"chr1", beg, end, &payload.to_ne_bytes());
+        }
+
+        let mut itr = regidx_c_584_regitr_init(&mut idx);
+        assert_eq!(regidx_c_401_regidx_overlap(&mut idx, b"chr1", 8191, 8192, Some(&mut itr)), 1);
+
+        let mut seen = Vec::new();
+        while regidx_c_612_regitr_overlap(&mut itr) != 0 {
+            seen.push((
+                itr.beg,
+                itr.end,
+                i32::from_ne_bytes(itr.payload[..4].try_into().unwrap()),
+            ));
+        }
+        assert_eq!(seen, [(0, 8191, 1), (8192, 8192, 2)]);
+
+        assert_eq!(regidx_c_401_regidx_overlap(&mut idx, b"chr1", 8193, 19999, Some(&mut itr)), 0);
+        assert!(itr.seq.is_empty());
+
+        regidx_c_606_regitr_destroy(itr);
+        regidx_c_311_regidx_destroy(idx);
     }
 
     #[test]
     fn regidx_overlap_treats_interval_ends_as_inclusive_points() {
-        unsafe {
-            let idx = regidx_c_246_regidx_init(
-                std::ptr::null(),
-                Some(regidx_c_498_regidx_parse_tab),
-                None,
-                0,
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
-
-            let mut chr = CString::new("chr1").unwrap().into_bytes_with_nul();
-            let chr_beg = chr.as_mut_ptr().cast::<c_char>();
-            let chr_end = chr_beg.add(3);
-            assert_eq!(
-                regidx_c_151_regidx_push(
-                    &mut *idx,
-                    NonNull::new(chr_beg).unwrap(),
-                    NonNull::new(chr_end).unwrap(),
-                    10,
-                    20,
-                    None
-                ),
-                0
-            );
-
-            let itr = regidx_c_584_regitr_init(idx);
-            assert!(!itr.is_null());
-            let query_chr = CString::new("chr1").unwrap();
-            assert_eq!(
-                regidx_c_401_regidx_overlap(idx, query_chr.as_ptr(), 20, 20, itr),
-                1
-            );
-            assert_eq!(((*itr).beg, (*itr).end), (10, 20));
-            assert_eq!(
-                regidx_c_401_regidx_overlap(idx, query_chr.as_ptr(), 21, 21, itr),
-                0
-            );
-            assert!((*itr).seq.is_none());
-
-            regidx_c_606_regitr_destroy(itr);
-            regidx_c_311_regidx_destroy(idx);
+        let mut idx = unsafe {
+            regidx_c_246_regidx_init(None, Some(regidx_c_498_regidx_parse_tab), None, 0, None)
         }
+        .expect("regidx");
+
+        push(&mut idx, b"chr1", 10, 20, &[]);
+
+        let mut itr = regidx_c_584_regitr_init(&mut idx);
+        assert_eq!(regidx_c_401_regidx_overlap(&mut idx, b"chr1", 20, 20, Some(&mut itr)), 1);
+        assert_eq!((itr.beg, itr.end), (10, 20));
+        assert_eq!(regidx_c_401_regidx_overlap(&mut idx, b"chr1", 21, 21, Some(&mut itr)), 0);
+        assert!(itr.seq.is_empty());
+
+        regidx_c_606_regitr_destroy(itr);
+        regidx_c_311_regidx_destroy(idx);
     }
 
     #[test]
     fn regidx_loop_preserves_sequence_and_insertion_order_without_overlap_query() {
-        unsafe {
-            let idx = regidx_c_246_regidx_init(
-                std::ptr::null(),
-                Some(regidx_c_545_regidx_parse_reg),
-                None,
-                0,
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
-
-            let mut list = CString::new("chrB:3,chrA:2-4,chrB:1")
-                .unwrap()
-                .into_bytes_with_nul();
-            assert_eq!(
-                regidx_c_111_regidx_insert_list(idx, list.as_mut_ptr().cast(), b',' as c_char),
-                0
-            );
-
-            let itr = regidx_c_584_regitr_init(idx);
-            assert!(!itr.is_null());
-            let mut seen = Vec::new();
-            while regidx_c_646_regitr_loop(itr) != 0 {
-                seen.push((
-                    CStr::from_ptr((*itr).seq.expect("regidx seq").as_ptr())
-                        .to_bytes()
-                        .to_vec(),
-                    (*itr).beg,
-                    (*itr).end,
-                ));
-            }
-
-            assert_eq!(
-                seen,
-                [
-                    (b"chrB".to_vec(), 2, 2),
-                    (b"chrB".to_vec(), 0, 0),
-                    (b"chrA".to_vec(), 1, 3),
-                ]
-            );
-
-            regidx_c_606_regitr_destroy(itr);
-            regidx_c_311_regidx_destroy(idx);
+        let mut idx = unsafe {
+            regidx_c_246_regidx_init(None, Some(regidx_c_545_regidx_parse_reg), None, 0, None)
         }
+        .expect("regidx");
+
+        assert_eq!(
+            regidx_c_111_regidx_insert_list(&mut idx, b"chrB:3,chrA:2-4,chrB:1", b','),
+            0
+        );
+
+        let mut itr = regidx_c_584_regitr_init(&mut idx);
+        let mut seen = Vec::new();
+        while regidx_c_646_regitr_loop(&mut itr) != 0 {
+            seen.push((itr.seq.clone(), itr.beg, itr.end));
+        }
+
+        assert_eq!(
+            seen,
+            [
+                (b"chrB".to_vec(), 2, 2),
+                (b"chrB".to_vec(), 0, 0),
+                (b"chrA".to_vec(), 1, 3),
+            ]
+        );
+
+        regidx_c_606_regitr_destroy(itr);
+        regidx_c_311_regidx_destroy(idx);
     }
 
     #[test]
     fn regidx_insert_list_skips_empty_items_like_other_ignored_lines() {
-        unsafe {
-            let idx = regidx_c_246_regidx_init(
-                std::ptr::null(),
-                Some(regidx_c_545_regidx_parse_reg),
-                None,
-                0,
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
-
-            let mut list = CString::new("chr1:1,,chr1:3,#comment,chr2")
-                .unwrap()
-                .into_bytes_with_nul();
-            assert_eq!(
-                regidx_c_111_regidx_insert_list(idx, list.as_mut_ptr().cast(), b',' as c_char),
-                0
-            );
-
-            let chr1 = CString::new("chr1").unwrap();
-            let chr2 = CString::new("chr2").unwrap();
-            assert_eq!(regidx_c_91_regidx_seq_nregs(idx, chr1.as_ptr()), 2);
-            assert_eq!(regidx_c_91_regidx_seq_nregs(idx, chr2.as_ptr()), 1);
-            assert_eq!(regidx_c_98_regidx_nregs(idx), 3);
-
-            regidx_c_311_regidx_destroy(idx);
+        let mut idx = unsafe {
+            regidx_c_246_regidx_init(None, Some(regidx_c_545_regidx_parse_reg), None, 0, None)
         }
+        .expect("regidx");
+
+        assert_eq!(
+            regidx_c_111_regidx_insert_list(&mut idx, b"chr1:1,,chr1:3,#comment,chr2", b','),
+            0
+        );
+
+        assert_eq!(regidx_c_91_regidx_seq_nregs(&idx, b"chr1"), 2);
+        assert_eq!(regidx_c_91_regidx_seq_nregs(&idx, b"chr2"), 1);
+        assert_eq!(regidx_c_98_regidx_nregs(&idx), 3);
+
+        regidx_c_311_regidx_destroy(idx);
     }
 
     #[test]
     fn regidx_init_string_skips_comments_and_aborts_on_malformed_records() {
-        unsafe {
-            let good = CString::new("  #comment\n\nchr1\t1\t3\r\nchr2\t5\n").unwrap();
-            let idx = regidx_c_209_regidx_init_string(
-                good.as_ptr(),
-                Some(regidx_c_498_regidx_parse_tab),
-                None,
-                0,
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
+        let idx = regidx_c_209_regidx_init_string(
+            b"  #comment\n\nchr1\t1\t3\r\nchr2\t5\n",
+            Some(regidx_c_498_regidx_parse_tab),
+            None,
+            0,
+            None,
+        )
+        .expect("regidx");
 
-            let chr1 = CString::new("chr1").unwrap();
-            let chr2 = CString::new("chr2").unwrap();
-            assert_eq!(regidx_c_91_regidx_seq_nregs(idx, chr1.as_ptr()), 1);
-            assert_eq!(regidx_c_91_regidx_seq_nregs(idx, chr2.as_ptr()), 1);
-            assert_eq!(regidx_c_98_regidx_nregs(idx), 2);
-            regidx_c_311_regidx_destroy(idx);
+        assert_eq!(regidx_c_91_regidx_seq_nregs(&idx, b"chr1"), 1);
+        assert_eq!(regidx_c_91_regidx_seq_nregs(&idx, b"chr2"), 1);
+        assert_eq!(regidx_c_98_regidx_nregs(&idx), 2);
+        regidx_c_311_regidx_destroy(idx);
 
-            let bad = CString::new("chr1\t1\nchr2\t0\n").unwrap();
-            let idx = regidx_c_209_regidx_init_string(
-                bad.as_ptr(),
-                Some(regidx_c_498_regidx_parse_tab),
-                None,
-                0,
-                std::ptr::null_mut(),
-            );
-            assert!(idx.is_null());
-        }
+        let bad = regidx_c_209_regidx_init_string(
+            b"chr1\t1\nchr2\t0\n",
+            Some(regidx_c_498_regidx_parse_tab),
+            None,
+            0,
+            None,
+        );
+        assert!(bad.is_none());
     }
 
     #[test]
     fn regidx_push_clamps_coordinates_to_htslib_regidx_bounds() {
-        unsafe {
-            let idx = regidx_c_246_regidx_init(
-                std::ptr::null(),
-                Some(regidx_c_545_regidx_parse_reg),
-                None,
-                0,
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
-
-            let mut chr = CString::new("chrC").unwrap().into_bytes_with_nul();
-            let chr_beg = chr.as_mut_ptr().cast::<c_char>();
-            let chr_end = chr_beg.add(3);
-            assert_eq!(
-                regidx_c_151_regidx_push(
-                    &mut *idx,
-                    NonNull::new(chr_beg).unwrap(),
-                    NonNull::new(chr_end).unwrap(),
-                    -10,
-                    MAX_COOR_0 + 99,
-                    None
-                ),
-                0
-            );
-
-            let itr = regidx_c_584_regitr_init(idx);
-            assert!(!itr.is_null());
-            let query_chr = CString::new("chrC").unwrap();
-            assert_eq!(
-                regidx_c_401_regidx_overlap(idx, query_chr.as_ptr(), MAX_COOR_0, MAX_COOR_0, itr),
-                1
-            );
-            assert_eq!(((*itr).beg, (*itr).end), (0, MAX_COOR_0));
-            assert_eq!(
-                regidx_c_401_regidx_overlap(
-                    idx,
-                    query_chr.as_ptr(),
-                    0,
-                    crate::htslib_rs::hts::HTS_POS_MAX,
-                    itr
-                ),
-                1
-            );
-            assert_eq!(regidx_c_612_regitr_overlap(itr), 1);
-            assert_eq!(regidx_c_612_regitr_overlap(itr), 0);
-
-            regidx_c_606_regitr_destroy(itr);
-            regidx_c_311_regidx_destroy(idx);
+        let mut idx = unsafe {
+            regidx_c_246_regidx_init(None, Some(regidx_c_545_regidx_parse_reg), None, 0, None)
         }
+        .expect("regidx");
+
+        push(&mut idx, b"chrC", -10, MAX_COOR_0 + 99, &[]);
+
+        let mut itr = regidx_c_584_regitr_init(&mut idx);
+        assert_eq!(
+            regidx_c_401_regidx_overlap(&mut idx, b"chrC", MAX_COOR_0, MAX_COOR_0, Some(&mut itr)),
+            1
+        );
+        assert_eq!((itr.beg, itr.end), (0, MAX_COOR_0));
+        assert_eq!(
+            regidx_c_401_regidx_overlap(
+                &mut idx,
+                b"chrC",
+                0,
+                crate::htslib_rs::hts::HTS_POS_MAX,
+                Some(&mut itr)
+            ),
+            1
+        );
+        assert_eq!(regidx_c_612_regitr_overlap(&mut itr), 1);
+        assert_eq!(regidx_c_612_regitr_overlap(&mut itr), 0);
+
+        regidx_c_606_regitr_destroy(itr);
+        regidx_c_311_regidx_destroy(idx);
     }
 
     #[test]
     fn regidx_loop_uses_sorted_payload_order_after_overlap_builds_index() {
-        unsafe {
-            let idx = regidx_c_246_regidx_init(
-                std::ptr::null(),
+        let mut idx = unsafe {
+            regidx_c_246_regidx_init(
+                None,
                 Some(regidx_c_498_regidx_parse_tab),
                 None,
-                std::mem::size_of::<c_int>(),
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
-
-            let mut chr = CString::new("chr1").unwrap().into_bytes_with_nul();
-            let chr_beg = chr.as_mut_ptr().cast::<c_char>();
-            let chr_end = chr_beg.add(3);
-            for (beg, end, mut payload) in [(50, 50, 50), (10, 20, 20), (10, 30, 30)] {
-                assert_eq!(
-                    regidx_c_151_regidx_push(
-                        &mut *idx,
-                        NonNull::new(chr_beg).unwrap(),
-                        NonNull::new(chr_end).unwrap(),
-                        beg,
-                        end,
-                        NonNull::new((&mut payload as *mut c_int).cast())
-                    ),
-                    0
-                );
-            }
-
-            let itr = regidx_c_584_regitr_init(idx);
-            assert!(!itr.is_null());
-            let query_chr = CString::new("chr1").unwrap();
-            assert_eq!(
-                regidx_c_401_regidx_overlap(idx, query_chr.as_ptr(), 0, 60, itr),
-                1
-            );
-
-            regidx_c_599_regitr_reset(idx, itr);
-            let mut seen = Vec::new();
-            while regidx_c_646_regitr_loop(itr) != 0 {
-                seen.push((
-                    (*itr).beg,
-                    (*itr).end,
-                    *((*itr)
-                        .payload
-                        .expect("regidx payload")
-                        .cast::<c_int>()
-                        .as_ptr()),
-                ));
-            }
-            assert_eq!(seen, [(10, 30, 30), (10, 20, 20), (50, 50, 50)]);
-
-            regidx_c_606_regitr_destroy(itr);
-            regidx_c_311_regidx_destroy(idx);
+                std::mem::size_of::<i32>(),
+                None,
+            )
         }
+        .expect("regidx");
+
+        for (beg, end, payload) in [(50, 50, 50i32), (10, 20, 20), (10, 30, 30)] {
+            push(&mut idx, b"chr1", beg, end, &payload.to_ne_bytes());
+        }
+
+        let mut itr = regidx_c_584_regitr_init(&mut idx);
+        assert_eq!(regidx_c_401_regidx_overlap(&mut idx, b"chr1", 0, 60, Some(&mut itr)), 1);
+
+        regidx_c_599_regitr_reset(&mut idx, &mut itr);
+        let mut seen = Vec::new();
+        while regidx_c_646_regitr_loop(&mut itr) != 0 {
+            seen.push((
+                itr.beg,
+                itr.end,
+                i32::from_ne_bytes(itr.payload[..4].try_into().unwrap()),
+            ));
+        }
+        assert_eq!(seen, [(10, 30, 30), (10, 20, 20), (50, 50, 50)]);
+
+        regidx_c_606_regitr_destroy(itr);
+        regidx_c_311_regidx_destroy(idx);
     }
 
     #[test]
     fn regidx_init_insert_push_and_insert_list_match_public_api_edges() {
-        unsafe {
-            let idx = regidx_c_246_regidx_init(
-                std::ptr::null(),
-                Some(regidx_c_545_regidx_parse_reg),
-                None,
-                0,
-                std::ptr::null_mut(),
-            );
-            assert!(!idx.is_null());
-
-            let mut line = CString::new("chrX:2-4").unwrap().into_bytes_with_nul();
-            assert_eq!(regidx_c_198_regidx_insert(idx, line.as_mut_ptr().cast()), 0);
-
-            let mut list = CString::new("chrX:8-9,chrY:1")
-                .unwrap()
-                .into_bytes_with_nul();
-            assert_eq!(
-                regidx_c_111_regidx_insert_list(idx, list.as_mut_ptr().cast(), b',' as c_char),
-                0
-            );
-
-            let mut chr = CString::new("chrZ").unwrap().into_bytes_with_nul();
-            let chr_beg = chr.as_mut_ptr().cast::<c_char>();
-            let chr_end = chr_beg.add(3);
-            assert_eq!(
-                regidx_c_151_regidx_push(
-                    &mut *idx,
-                    NonNull::new(chr_beg).unwrap(),
-                    NonNull::new(chr_end).unwrap(),
-                    0,
-                    2,
-                    None
-                ),
-                0
-            );
-
-            assert_eq!(regidx_c_98_regidx_nregs(idx), 4);
-            regidx_c_311_regidx_destroy(idx);
+        let mut idx = unsafe {
+            regidx_c_246_regidx_init(None, Some(regidx_c_545_regidx_parse_reg), None, 0, None)
         }
+        .expect("regidx");
+
+        assert_eq!(regidx_c_198_regidx_insert(&mut idx, b"chrX:2-4"), 0);
+
+        assert_eq!(
+            regidx_c_111_regidx_insert_list(&mut idx, b"chrX:8-9,chrY:1", b','),
+            0
+        );
+
+        push(&mut idx, b"chrZ", 0, 2, &[]);
+
+        assert_eq!(regidx_c_98_regidx_nregs(&idx), 4);
+        regidx_c_311_regidx_destroy(idx);
     }
 }

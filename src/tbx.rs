@@ -6,8 +6,8 @@ use super::hts::{
     hts_c_2372_hts_adjust_csi_settings, hts_c_2405_hts_idx_init, hts_c_2515_hts_idx_finish,
     hts_c_2558_hts_idx_push, hts_c_2869_hts_idx_save_as, hts_c_3062_hts_idx_set_meta,
     hts_c_3084_hts_idx_get_meta, hts_idx_destroy, hts_idx_load3, hts_is_utf16_text, hts_itr_query,
-    hts_itr_t, hts_log_cstr, hts_parse_region, hts_pos_t, i32_to_le, ks_free, kstring_t, le_to_i32,
-    le_to_u32, svlen_on_ref_for_vcf_alt, BGZF, HTS_FMT_CSI, HTS_IDX_NOCOOR, HTS_IDX_START,
+    hts_itr_t, hts_log_cstr, hts_parse_region, hts_pos_t, ks_free, kstring_t,
+    svlen_on_ref_for_vcf_alt, BGZF, HTS_FMT_CSI, HTS_IDX_NOCOOR, HTS_IDX_START,
     HTS_LOG_ERROR, HTS_PARSE_THOUSANDS_SEP,
 };
 
@@ -118,20 +118,14 @@ struct KStringGuard {
 impl KStringGuard {
     fn new() -> Self {
         Self {
-            raw: kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            },
+            raw: kstring_t { data: Vec::new() },
         }
     }
 }
 
 impl Drop for KStringGuard {
     fn drop(&mut self) {
-        unsafe {
-            ks_free(&mut self.raw);
-        }
+        ks_free(&mut self.raw);
     }
 }
 
@@ -216,14 +210,8 @@ pub unsafe fn tbx_conf_gaf() -> tbx_conf_t {
     }
 }
 
-pub unsafe fn tbx_name2id(tbx: *const tbx_t, ss: *const c_char) -> c_int {
-    let Some(tbx) = tbx.as_ref() else {
-        return -1;
-    };
-    let Some(ss) = (!ss.is_null()).then(|| CStr::from_ptr(ss)) else {
-        return -1;
-    };
-    tbx_c_91_tbx_name2id(tbx, ss.to_bytes())
+pub fn tbx_name2id(tbx: &tbx_t, ss: &[u8]) -> c_int {
+    tbx_c_91_tbx_name2id(tbx, ss)
 }
 
 pub fn tbx_c_64_get_tid(tbx: &mut tbx_t, ss: &[u8], is_add: c_int) -> c_int {
@@ -253,16 +241,7 @@ pub fn tbx_c_91_tbx_name2id(tbx: &tbx_t, ss: &[u8]) -> c_int {
         .unwrap_or(-1)
 }
 
-pub unsafe fn tbx_c_96_tbx_parse1(
-    conf: &tbx_conf_t,
-    len: usize,
-    line: *mut c_char,
-    intv: &mut tbx_intv_t,
-) -> c_int {
-    let Some(line) = (!line.is_null()).then(|| std::slice::from_raw_parts(line.cast::<u8>(), len))
-    else {
-        return -1;
-    };
+pub fn tbx_c_96_tbx_parse1(conf: &tbx_conf_t, line: &[u8], intv: &mut tbx_intv_t) -> c_int {
     tbx_parse1_line(conf, line, intv)
 }
 
@@ -552,8 +531,8 @@ pub unsafe fn tbx_c_315_get_intv(
     intv: &mut tbx_intv_t,
     is_add: c_int,
 ) -> c_int {
-    if tbx_c_96_tbx_parse1(&tbx.conf, str_.l, str_.s, intv) == 0 {
-        let line = std::slice::from_raw_parts(str_.s.cast::<u8>(), str_.l);
+    let line = &str_.data[..];
+    if tbx_c_96_tbx_parse1(&tbx.conf, line, intv) == 0 {
         let ss = &line[intv.ss.unwrap()..intv.se.unwrap()];
         if (tbx.conf.preset & 0xffff) == TBX_GAF {
             intv.tid = 0;
@@ -583,13 +562,7 @@ pub unsafe fn tbx_c_315_get_intv(
             .unwrap();
             hts_log_cstr(HTS_LOG_ERROR, c"get_intv".as_ptr(), msg.as_ptr());
         } else {
-            let line = if str_.s.is_null() {
-                String::new()
-            } else {
-                std::ffi::CStr::from_ptr(str_.s)
-                    .to_string_lossy()
-                    .into_owned()
-            };
+            let line = String::from_utf8_lossy(&str_.data);
             let msg = std::ffi::CString::new(format!(
                 "Failed to parse {type_}: was wrong -p [type] used?\nThe offending line was: \"{line}\""
             ))
@@ -642,7 +615,7 @@ pub unsafe fn tbx_c_353_tbx_readrec(
     let mut ret;
     loop {
         ret = bgzf_getline(fp, b'\n' as c_int, s);
-        if !(ret >= 0 && s.l != 0 && *s.s == tbx.conf.meta_char as c_char) {
+        if !(ret >= 0 && !s.data.is_empty() && s.data[0] == tbx.conf.meta_char as u8) {
             break;
         }
     }
@@ -669,13 +642,13 @@ pub unsafe fn tbx_c_375_tbx_set_meta(tbx: &mut tbx_t) -> c_int {
         return -1;
     }
     meta.resize(name_len + 28, 0);
-    i32_to_le(tbx.conf.preset, meta.as_mut_ptr());
-    i32_to_le(tbx.conf.sc, meta.as_mut_ptr().add(4));
-    i32_to_le(tbx.conf.bc, meta.as_mut_ptr().add(8));
-    i32_to_le(tbx.conf.ec, meta.as_mut_ptr().add(12));
-    i32_to_le(tbx.conf.meta_char, meta.as_mut_ptr().add(16));
-    i32_to_le(tbx.conf.line_skip, meta.as_mut_ptr().add(20));
-    i32_to_le(name_len as i32, meta.as_mut_ptr().add(24));
+    meta[0..4].copy_from_slice(&tbx.conf.preset.to_le_bytes());
+    meta[4..8].copy_from_slice(&tbx.conf.sc.to_le_bytes());
+    meta[8..12].copy_from_slice(&tbx.conf.bc.to_le_bytes());
+    meta[12..16].copy_from_slice(&tbx.conf.ec.to_le_bytes());
+    meta[16..20].copy_from_slice(&tbx.conf.meta_char.to_le_bytes());
+    meta[20..24].copy_from_slice(&tbx.conf.line_skip.to_le_bytes());
+    meta[24..28].copy_from_slice(&(name_len as i32).to_le_bytes());
 
     let mut off = 28usize;
     for key in &dict.names {
@@ -771,15 +744,17 @@ unsafe fn tbx_index_owned(
             break;
         }
         lineno += 1;
-        if *str_.raw.s == tbx.conf.meta_char as c_char && fmt == HTS_FMT_CSI {
-            let line = std::slice::from_raw_parts(str_.raw.s.cast::<u8>(), str_.raw.l);
+        if str_.raw.data.first().copied() == Some(tbx.conf.meta_char as u8) && fmt == HTS_FMT_CSI {
+            let line = &str_.raw.data[..];
             match tbx.conf.preset {
                 TBX_SAM => tbx_c_425_adjust_max_ref_len_sam(line, &mut max_ref_len),
                 TBX_VCF => tbx_c_412_adjust_max_ref_len_vcf(line, &mut max_ref_len),
                 _ => {}
             }
         }
-        if lineno <= tbx.conf.line_skip as i64 || *str_.raw.s == tbx.conf.meta_char as c_char {
+        if lineno <= tbx.conf.line_skip as i64
+            || str_.raw.data.first().copied() == Some(tbx.conf.meta_char as u8)
+        {
             last_off = tbx_bgzf_tell(&*fp);
             continue;
         }
@@ -1014,36 +989,35 @@ unsafe fn tbx_index_load_owned(
     }
 
     let mut l_meta = 0u32;
-    let meta = hts_c_3084_hts_idx_get_meta(tbx.idx_ptr().cast(), &mut l_meta);
-    if meta.is_null() || l_meta < 28 {
+    let meta_ptr = hts_c_3084_hts_idx_get_meta(tbx.idx_ptr().cast(), &mut l_meta);
+    if meta_ptr.is_null() || l_meta < 28 {
         tbx_log_invalid_index_header(fnidx.unwrap_or(fn_).to_bytes());
         return None;
     }
+    let meta = std::slice::from_raw_parts(meta_ptr, l_meta as usize);
 
-    tbx.conf.preset = le_to_i32(meta);
-    tbx.conf.sc = le_to_i32(meta.add(4));
-    tbx.conf.bc = le_to_i32(meta.add(8));
-    tbx.conf.ec = le_to_i32(meta.add(12));
-    tbx.conf.meta_char = le_to_i32(meta.add(16));
-    tbx.conf.line_skip = le_to_i32(meta.add(20));
-    let l_nm = le_to_u32(meta.add(24));
+    tbx.conf.preset = i32::from_le_bytes(meta[0..4].try_into().unwrap());
+    tbx.conf.sc = i32::from_le_bytes(meta[4..8].try_into().unwrap());
+    tbx.conf.bc = i32::from_le_bytes(meta[8..12].try_into().unwrap());
+    tbx.conf.ec = i32::from_le_bytes(meta[12..16].try_into().unwrap());
+    tbx.conf.meta_char = i32::from_le_bytes(meta[16..20].try_into().unwrap());
+    tbx.conf.line_skip = i32::from_le_bytes(meta[20..24].try_into().unwrap());
+    let l_nm = u32::from_le_bytes(meta[24..28].try_into().unwrap());
     if l_nm > l_meta - 28 {
         tbx_log_invalid_index_header(fnidx.unwrap_or(fn_).to_bytes());
         return None;
     }
 
-    let names = std::slice::from_raw_parts(meta.add(28), l_nm as usize);
+    let names = &meta[28..28 + l_nm as usize];
     for name in names.split_inclusive(|&byte| byte == 0) {
         let Some(name) = tbx_index_name_bytes(name) else {
             tbx_log_invalid_index_header(fnidx.unwrap_or(fn_).to_bytes());
             return None;
         };
         if tbx_c_64_get_tid(&mut tbx, name, 1) < 0 {
-            hts_log_cstr(
-                HTS_LOG_ERROR,
-                c"index_load".as_ptr(),
-                libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
-            );
+            let msg = std::ffi::CString::new(std::io::Error::last_os_error().to_string())
+                .unwrap_or_else(|_| c"index_load failed".to_owned());
+            hts_log_cstr(HTS_LOG_ERROR, c"index_load".as_ptr(), msg.as_ptr());
             return None;
         }
     }
@@ -1181,7 +1155,7 @@ mod tests {
             };
 
             assert_eq!(
-                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                tbx_c_96_tbx_parse1(&conf, &line[..line.len() - 1], &mut intv),
                 0
             );
             assert_eq!(intv.beg, 99);
@@ -1207,7 +1181,7 @@ mod tests {
             };
 
             assert_eq!(
-                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                tbx_c_96_tbx_parse1(&conf, &line[..line.len() - 1], &mut intv),
                 0
             );
             assert_eq!(intv.beg, 99);
@@ -1231,7 +1205,7 @@ mod tests {
             };
 
             assert_eq!(
-                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                tbx_c_96_tbx_parse1(&conf, &line[..line.len() - 1], &mut intv),
                 0
             );
             assert_eq!((intv.beg, intv.end), (99, 110));
@@ -1254,7 +1228,7 @@ mod tests {
             };
 
             assert_eq!(
-                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                tbx_c_96_tbx_parse1(&conf, &line[..line.len() - 1], &mut intv),
                 0
             );
             assert_eq!((intv.beg, intv.end), (99, 101));
@@ -1276,7 +1250,7 @@ mod tests {
             };
 
             assert_eq!(
-                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                tbx_c_96_tbx_parse1(&conf, &line[..line.len() - 1], &mut intv),
                 0
             );
             assert_eq!(intv.beg, 0);
@@ -1301,8 +1275,7 @@ mod tests {
             assert_eq!(
                 tbx_c_96_tbx_parse1(
                     &conf,
-                    non_key_end.len() - 1,
-                    non_key_end.as_mut_ptr().cast(),
+                    &non_key_end[..non_key_end.len() - 1],
                     &mut intv
                 ),
                 0
@@ -1314,8 +1287,7 @@ mod tests {
             assert_eq!(
                 tbx_c_96_tbx_parse1(
                     &conf,
-                    semicolon_end.len() - 1,
-                    semicolon_end.as_mut_ptr().cast(),
+                    &semicolon_end[..semicolon_end.len() - 1],
                     &mut intv
                 ),
                 0
@@ -1341,8 +1313,7 @@ mod tests {
             assert_eq!(
                 tbx_c_96_tbx_parse1(
                     &conf,
-                    missing_end.len() - 1,
-                    missing_end.as_mut_ptr().cast(),
+                    &missing_end[..missing_end.len() - 1],
                     &mut intv
                 ),
                 0
@@ -1354,8 +1325,7 @@ mod tests {
             assert_eq!(
                 tbx_c_96_tbx_parse1(
                     &conf,
-                    before_beg_end.len() - 1,
-                    before_beg_end.as_mut_ptr().cast(),
+                    &before_beg_end[..before_beg_end.len() - 1],
                     &mut intv
                 ),
                 0
@@ -1378,7 +1348,7 @@ mod tests {
             };
 
             assert_eq!(
-                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                tbx_c_96_tbx_parse1(&conf, &line[..line.len() - 1], &mut intv),
                 0
             );
             assert_eq!(intv.beg, 6);
@@ -1400,7 +1370,7 @@ mod tests {
             };
 
             assert_eq!(
-                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                tbx_c_96_tbx_parse1(&conf, &line[..line.len() - 1], &mut intv),
                 0
             );
             assert_eq!(intv.beg, 6);
@@ -1429,7 +1399,7 @@ mod tests {
             };
 
             assert_eq!(
-                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                tbx_c_96_tbx_parse1(&conf, &line[..line.len() - 1], &mut intv),
                 0
             );
             assert_eq!(intv.beg, 100);
@@ -1461,8 +1431,7 @@ mod tests {
             assert_eq!(
                 tbx_c_96_tbx_parse1(
                     &conf,
-                    no_seq.len() - 1,
-                    no_seq.as_mut_ptr().cast(),
+                    &no_seq[..no_seq.len() - 1],
                     &mut intv
                 ),
                 -1
@@ -1472,8 +1441,7 @@ mod tests {
             assert_eq!(
                 tbx_c_96_tbx_parse1(
                     &conf,
-                    nonnumeric_begin.len() - 1,
-                    nonnumeric_begin.as_mut_ptr().cast(),
+                    &nonnumeric_begin[..nonnumeric_begin.len() - 1],
                     &mut intv
                 ),
                 -1
@@ -1503,7 +1471,7 @@ mod tests {
             };
 
             assert_eq!(
-                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                tbx_c_96_tbx_parse1(&conf, &line[..line.len() - 1], &mut intv),
                 0
             );
             assert_eq!(intv.beg, 9);
@@ -1534,7 +1502,7 @@ mod tests {
             };
 
             assert_eq!(
-                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                tbx_c_96_tbx_parse1(&conf, &line[..line.len() - 1], &mut intv),
                 0
             );
             assert_eq!(intv.beg, 9);
@@ -1561,7 +1529,7 @@ mod tests {
             };
 
             assert_eq!(
-                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                tbx_c_96_tbx_parse1(&conf, &line[..line.len() - 1], &mut intv),
                 0
             );
             assert_eq!((intv.beg, intv.end), (10, 12));
@@ -1587,8 +1555,7 @@ mod tests {
             assert_eq!(
                 tbx_c_96_tbx_parse1(
                     &conf,
-                    non_key_svlen.len() - 1,
-                    non_key_svlen.as_mut_ptr().cast(),
+                    &non_key_svlen[..non_key_svlen.len() - 1],
                     &mut intv
                 ),
                 0
@@ -1600,8 +1567,7 @@ mod tests {
             assert_eq!(
                 tbx_c_96_tbx_parse1(
                     &conf,
-                    semicolon_svlen.len() - 1,
-                    semicolon_svlen.as_mut_ptr().cast(),
+                    &semicolon_svlen[..semicolon_svlen.len() - 1],
                     &mut intv
                 ),
                 0
@@ -1625,7 +1591,7 @@ mod tests {
             };
 
             assert_eq!(
-                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                tbx_c_96_tbx_parse1(&conf, &line[..line.len() - 1], &mut intv),
                 0
             );
             assert_eq!((intv.beg, intv.end), (99, 111));
@@ -1648,7 +1614,7 @@ mod tests {
             };
 
             assert_eq!(
-                tbx_c_96_tbx_parse1(&conf, line.len() - 1, line.as_mut_ptr().cast(), &mut intv),
+                tbx_c_96_tbx_parse1(&conf, &line[..line.len() - 1], &mut intv),
                 0
             );
             assert_eq!((intv.beg, intv.end), (99, 103));
@@ -1681,12 +1647,8 @@ mod tests {
                 idx: None,
                 dict: None,
             };
-            let mut line = b"read1\t10\t0\t10\t+\t>12>3>99\t0\t0\t255\0".to_vec();
-            let mut str_ = kstring_t {
-                l: line.len() - 1,
-                m: line.len(),
-                s: line.as_mut_ptr().cast(),
-            };
+            let line = b"read1\t10\t0\t10\t+\t>12>3>99\t0\t0\t255".to_vec();
+            let mut str_ = kstring_t { data: line };
             let mut intv = tbx_intv_t {
                 beg: 0,
                 end: 0,
@@ -1758,7 +1720,7 @@ mod tests {
             let tbx = Box::into_raw(Box::new(tbx_t::new(tbx_conf_vcf())));
             let tbx_ref = &*tbx;
 
-            assert_eq!(tbx_name2id(tbx_ref, c"chr1".as_ptr()), -1);
+            assert_eq!(tbx_name2id(tbx_ref, b"chr1"), -1);
             assert!(tbx_ref.dict.is_none());
             tbx_c_512_tbx_destroy(tbx);
         }

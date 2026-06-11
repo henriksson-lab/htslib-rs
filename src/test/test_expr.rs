@@ -27,19 +27,19 @@ pub unsafe extern "C" fn test_test_expr_c_31_lookup(
     } else if libc::strncmp(str_, c"magic".as_ptr(), 5) == 0 {
         *end = str_.add(5);
         (*res).is_str = 1;
-        crate::htslib_rs::hts::kputs(
-            c"plugh".as_ptr(),
-            crate::htslib_rs::hts::ks_clear(&mut (*res).s),
-        );
+        crate::htslib_rs::hts::ks_clear(&mut (*res).s);
+        crate::htslib_rs::hts::kputs(b"plugh", &mut (*res).s);
     } else if libc::strncmp(str_, c"empty-but-true".as_ptr(), 14) == 0 {
         *end = str_.add(14);
         (*res).is_true = 1;
         (*res).is_str = 1;
-        crate::htslib_rs::hts::kputs(c"".as_ptr(), crate::htslib_rs::hts::ks_clear(&mut (*res).s));
+        crate::htslib_rs::hts::ks_clear(&mut (*res).s);
+        crate::htslib_rs::hts::kputs(b"", &mut (*res).s);
     } else if libc::strncmp(str_, c"empty".as_ptr(), 5) == 0 {
         *end = str_.add(5);
         (*res).is_str = 1;
-        crate::htslib_rs::hts::kputs(c"".as_ptr(), crate::htslib_rs::hts::ks_clear(&mut (*res).s));
+        crate::htslib_rs::hts::ks_clear(&mut (*res).s);
+        crate::htslib_rs::hts::kputs(b"", &mut (*res).s);
     } else if libc::strncmp(str_, c"zero-but-true".as_ptr(), 13) == 0 {
         *end = str_.add(13);
         (*res).d = 0.0;
@@ -1056,11 +1056,7 @@ pub unsafe fn test_test_expr_c_110_test() -> c_int {
     let mut r = crate::htslib_rs::hts::hts_expr_val_t {
         is_true: 0,
         is_str: 0,
-        s: kstring_t {
-            l: 0,
-            m: 0,
-            s: std::ptr::null_mut(),
-        },
+        s: kstring_t { data: Vec::new() },
         d: 0.0,
     };
     for test in tests.iter() {
@@ -1085,6 +1081,8 @@ pub unsafe fn test_test_expr_c_110_test() -> c_int {
             continue;
         }
 
+        let mut r_s_cstr = r.s.data.clone();
+        r_s_cstr.push(0);
         if crate::htslib_rs::hts::hts_expr_val_exists(&mut r) == 0 {
             if r.is_true as c_int != test.truth_val
                 || test_test_expr_c_105_cmpfloat(r.d, test.dval) == 0
@@ -1099,13 +1097,13 @@ pub unsafe fn test_test_expr_c_110_test() -> c_int {
                     } else {
                         c"false".as_ptr()
                     },
-                    r.s.s,
+                    r_s_cstr.as_ptr().cast::<c_char>(),
                     r.d,
                 );
                 res = 1;
             }
         } else if r.is_str != 0
-            && (test_test_expr_c_97_strcmpnull(r.s.s, test.sval) != 0
+            && (test_test_expr_c_97_strcmpnull(r_s_cstr.as_ptr().cast::<c_char>(), test.sval) != 0
                 || test_test_expr_c_105_cmpfloat(r.d, test.dval) == 0
                 || r.is_true as c_int != test.truth_val)
         {
@@ -1119,7 +1117,7 @@ pub unsafe fn test_test_expr_c_110_test() -> c_int {
                 } else {
                     c"false".as_ptr()
                 },
-                r.s.s,
+                r_s_cstr.as_ptr().cast::<c_char>(),
                 r.d,
             );
             res = 1;
@@ -1155,11 +1153,7 @@ pub unsafe fn test_test_expr_c_346_main(argc: c_int, argv: *mut *mut c_char) -> 
         let mut v = crate::htslib_rs::hts::hts_expr_val_t {
             is_true: 0,
             is_str: 0,
-            s: kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            },
+            s: kstring_t { data: Vec::new() },
             d: 0.0,
         };
         let filt = crate::htslib_rs::hts::hts_filter_init(*argv.add(1));
@@ -1183,7 +1177,9 @@ pub unsafe fn test_test_expr_c_346_main(argc: c_int, argv: *mut *mut c_char) -> 
         );
 
         if v.is_str != 0 {
-            libc::puts(v.s.s);
+            let mut v_s_cstr = v.s.data.clone();
+            v_s_cstr.push(0);
+            libc::puts(v_s_cstr.as_ptr().cast::<c_char>());
         } else {
             libc::printf(c"%g\n".as_ptr(), v.d);
         }

@@ -62,7 +62,7 @@ unsafe fn query_tabix_rows(
     let itr = tbx_itr_querys1(&mut *tbx, region.as_ptr());
     assert!(!itr.is_null());
 
-    let mut line: kstring_t = std::mem::zeroed();
+    let mut line = kstring_t::default();
     let mut rows = Vec::new();
     loop {
         let ret = hts_itr_next(
@@ -74,7 +74,7 @@ unsafe fn query_tabix_rows(
         if ret < 0 {
             break;
         }
-        let bytes = std::slice::from_raw_parts(line.s.cast::<u8>(), line.l);
+        let bytes = &line.data;
         rows.push(String::from_utf8_lossy(bytes).into_owned());
     }
 
@@ -101,7 +101,7 @@ unsafe fn query_tabix_rows_from_paths(
     let itr = tbx_itr_querys1(&mut *tbx, region.as_ptr());
     assert!(!itr.is_null());
 
-    let mut line: kstring_t = std::mem::zeroed();
+    let mut line = kstring_t::default();
     let mut rows = Vec::new();
     loop {
         let ret = hts_itr_next(
@@ -113,7 +113,7 @@ unsafe fn query_tabix_rows_from_paths(
         if ret < 0 {
             break;
         }
-        let bytes = std::slice::from_raw_parts(line.s.cast::<u8>(), line.l);
+        let bytes = &line.data;
         rows.push(String::from_utf8_lossy(bytes).into_owned());
     }
 
@@ -261,12 +261,16 @@ unsafe fn read_bgzf_to_string(path: &std::path::Path) -> String {
 }
 
 unsafe fn parse_interval(conf: &htslib_rs::tbx_conf_t, line: &str) -> (String, i64, i64) {
-    let mut bytes = CString::new(line).unwrap().into_bytes_with_nul();
-    let mut intv: tbx_intv_t = std::mem::zeroed();
-    assert_eq!(
-        tbx_c_96_tbx_parse1(conf, bytes.len() - 1, bytes.as_mut_ptr().cast(), &mut intv,),
-        0
-    );
+    let bytes = CString::new(line).unwrap().into_bytes_with_nul();
+    let mut intv = tbx_intv_t {
+        beg: 0,
+        end: 0,
+        ss: None,
+        se: None,
+        tid: 0,
+    };
+    let line_len = bytes.len() - 1;
+    assert_eq!(tbx_c_96_tbx_parse1(conf, &bytes[..line_len], &mut intv), 0);
     let ss = intv.ss.expect("parsed interval sequence start");
     let name = if let Some(se) = intv.se {
         String::from_utf8_lossy(&bytes[ss..se]).into_owned()
@@ -612,7 +616,7 @@ fn custom_idx_decorated_tabix_lookup_matches_htslib_tabix_out_exactly() {
         let itr = tbx_itr_querys1(&mut *tbx, c"1:10000060-10000060".as_ptr());
         assert!(!itr.is_null());
 
-        let mut line: kstring_t = std::mem::zeroed();
+        let mut line = kstring_t::default();
         let mut rows = Vec::new();
         loop {
             let ret = hts_itr_next(
@@ -624,7 +628,7 @@ fn custom_idx_decorated_tabix_lookup_matches_htslib_tabix_out_exactly() {
             if ret < 0 {
                 break;
             }
-            let bytes = std::slice::from_raw_parts(line.s.cast::<u8>(), line.l);
+            let bytes = &line.data;
             rows.push(String::from_utf8_lossy(bytes).into_owned());
         }
 

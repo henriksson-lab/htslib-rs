@@ -4,10 +4,11 @@
 //!
 //! The C code allocates a single output buffer and shuffles data within it via
 //! `memmove`, recurses into itself (STRIPE / RLE-meta), and returns raw
-//! pointers. To stay byte-for-byte faithful we model the output buffer as a raw
-//! `*mut u8` + capacity and operate on it directly, exactly mirroring the C
-//! pointer arithmetic.  The public wrappers return an owned `Vec<u8>` holding
-//! the produced bytes (or an empty `Vec` on failure).
+//! pointers. Here we model the output buffer as an owned `&mut [u8]` slice and
+//! operate on it directly via slice methods (`copy_within`, indexing). The
+//! internal `_into` helpers take the destination slice and return a `bool`
+//! success flag; the public wrappers own a `Vec<u8>` holding the produced bytes
+//! (or an empty `Vec` on failure).
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -16,7 +17,6 @@
     clippy::too_many_arguments
 )]
 
-use crate::c_compat;
 use crate::htscodecs::pack::{hts_pack, hts_unpack, hts_unpack_meta};
 use crate::htscodecs::rans_static16_int::{
     decode_alphabet, decode_freq, decode_freq_d, encode_freq, encode_freq1, normalise_freq,
@@ -31,9 +31,7 @@ use crate::htscodecs::rans_word::{
     RANS_BYTE_L,
 };
 use crate::htscodecs::rle::{hts_rle_decode, hts_rle_encode};
-use crate::htscodecs::utils::{
-    fast_log, hist8, htscodecs_tls_alloc, htscodecs_tls_free, unstripe, MAGIC,
-};
+use crate::htscodecs::utils::{fast_log, hist8, unstripe, MAGIC};
 use crate::htscodecs::varint::{var_get_u32, var_put_u32};
 
 // rANS_static4x16.h: "Order" byte options (stored in the file format)
@@ -59,10 +57,11 @@ pub const TOTFREQ_O1_FAST: u32 = 1 << TF_SHIFT_O1_FAST;
 pub const MAGIC2: u32 = 179;
 
 // Encoder/decoder function-pointer types for the scalar dispatch.
-// Encoders write into [out..out+out_cap) and set *out_size; return out or null.
-type RansEncFn = fn(input: &[u8], out: *mut u8, out_cap: u32, out_size: &mut u32) -> *mut u8;
-// Decoders write into out (size out_sz); return out or null.
-type RansDecFn = fn(input: &[u8], out: *mut u8, out_sz: u32) -> *mut u8;
+// Encoders write into `out` (capacity out.len()) and set *out_size; return
+// `true` on success.
+type RansEncFn = fn(input: &[u8], out: &mut [u8], out_size: &mut u32) -> bool;
+// Decoders write into out (size out_sz); return `true` on success.
+type RansDecFn = fn(input: &[u8], out: &mut [u8], out_sz: u32) -> bool;
 
 // rANS_static4x16pr.c:93
 /// `unsigned int rans_compress_bound_4x16(unsigned int size, int order)`
@@ -104,72 +103,55 @@ pub fn rans_compress_O0_4x16(input: &[u8], out: Option<&mut [u8]>, out_size: &mu
     let in_size = input.len() as u32;
     let bound0 = rans_compress_bound_4x16(in_size, 0) - 20;
 
-    // Resolve output buffer (malloc on None).
-    let (out_ptr, owned): (*mut u8, bool) = match out {
+    // Resolve output buffer: borrow the caller's, or own a freshly allocated Vec.
+    match out {
         Some(o) => {
             if bound0 > o.len() as u32 {
                 return Vec::new();
             }
-            (o.as_mut_ptr(), false)
+            if rans_compress_O0_4x16_into(input, o, out_size) {
+                Vec::new()
+            } else {
+                Vec::new()
+            }
         }
         None => {
             *out_size = bound0;
-            let p = unsafe { c_compat::malloc(*out_size as u64) } as *mut u8;
-            if p.is_null() {
-                return Vec::new();
+            let mut buf = vec![0u8; bound0 as usize];
+            if rans_compress_O0_4x16_into(input, &mut buf, out_size) {
+                buf.truncate(*out_size as usize);
+                buf
+            } else {
+                Vec::new()
             }
-            (p, true)
         }
-    };
-    let p = rans_compress_O0_4x16_into(input, out_ptr, bound0, out_size);
-    if p.is_null() {
-        if owned {
-            unsafe { c_compat::free(out_ptr as *mut std::ffi::c_void) };
-        }
-        return Vec::new();
-    }
-    if owned {
-        let v = unsafe { std::slice::from_raw_parts(out_ptr, *out_size as usize).to_vec() };
-        unsafe { c_compat::free(out_ptr as *mut std::ffi::c_void) };
-        v
-    } else {
-        Vec::new()
     }
 }
 
-// Core O0 encoder operating on a raw output buffer of capacity `out_cap` (the
-// already-decremented bound). Mirrors the C body after the malloc decision.
-fn rans_compress_O0_4x16_into(
-    input: &[u8],
-    out: *mut u8,
-    mut bound: u32,
-    out_size: &mut u32,
-) -> *mut u8 {
+// Core O0 encoder operating on an owned output slice (capacity `out.len()`,
+// the already-decremented bound). Mirrors the C body after the malloc decision.
+// Returns `true` on success.
+fn rans_compress_O0_4x16_into(input: &[u8], out_slice: &mut [u8], out_size: &mut u32) -> bool {
     let in_size = input.len() as u32;
-    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, bound as usize) };
 
-    // If "out" isn't word aligned, tweak out_end/ptr to ensure it is.
-    if (out as usize) & 1 != 0 {
-        bound -= 1;
-    }
-    let out_end = bound as usize;
+    // The C code tweaks the buffer end to word alignment; an owned slice is
+    // always suitably aligned, so the produced byte layout is identical.
+    let out_end = out_slice.len();
     let mut ptr = out_end;
     let mut tab_size = 0usize;
 
     if in_size == 0 {
         // empty:
         *out_size = (out_end - ptr) as u32 + tab_size as u32;
-        unsafe {
-            std::ptr::copy(out.add(ptr), out.add(tab_size), out_end - ptr);
-        }
-        return out;
+        out_slice.copy_within(ptr..out_end, tab_size);
+        return true;
     }
 
     let mut syms = [RansEncSymbol::default(); 256];
     let mut f = [0u32; 256 + MAGIC];
     let mut f0 = [0u32; 256];
     if hist8(input, in_size, &mut f0) < 0 {
-        return std::ptr::null_mut();
+        return false;
     }
     f[..256].copy_from_slice(&f0);
 
@@ -179,7 +161,7 @@ fn rans_compress_O0_4x16_into(
         max_val = TOTFREQ;
     }
     if normalise_freq(&mut f, fsum as i32, max_val) < 0 {
-        return std::ptr::null_mut();
+        return false;
     }
     let fsum = max_val;
 
@@ -188,7 +170,7 @@ fn rans_compress_O0_4x16_into(
     tab_size = nfreq;
 
     if normalise_freq(&mut f, fsum as i32, TOTFREQ) < 0 {
-        return std::ptr::null_mut();
+        return false;
     }
 
     let mut x = 0u32;
@@ -277,79 +259,52 @@ fn rans_compress_O0_4x16_into(
     // empty:
     *out_size = (out_end - ptr) as u32 + tab_size as u32;
     out_slice.copy_within(ptr..out_end, tab_size);
-    out
+    true
 }
 
 // Wrapper matching RansEncFn signature.
-fn rans_compress_O0_4x16_fn(
-    input: &[u8],
-    out: *mut u8,
-    out_cap: u32,
-    out_size: &mut u32,
-) -> *mut u8 {
+fn rans_compress_O0_4x16_fn(input: &[u8], out: &mut [u8], out_size: &mut u32) -> bool {
     let bound = rans_compress_bound_4x16(input.len() as u32, 0) - 20;
-    if bound > out_cap {
-        return std::ptr::null_mut();
+    if bound > out.len() as u32 {
+        return false;
     }
-    rans_compress_O0_4x16_into(input, out, bound, out_size)
+    rans_compress_O0_4x16_into(input, &mut out[..bound as usize], out_size)
 }
 
 // rANS_static4x16pr.c:213
 /// `unsigned char *rans_uncompress_O0_4x16(unsigned char *in, unsigned int in_size, unsigned char *out, unsigned int out_sz)`
 pub fn rans_uncompress_O0_4x16(input: &[u8], out: Option<&mut [u8]>, out_sz: u32) -> Vec<u8> {
-    let (out_ptr, owned): (*mut u8, bool) = match out {
-        Some(o) => (o.as_mut_ptr(), false),
-        None => {
-            let p = unsafe { c_compat::malloc(out_sz.max(1) as u64) } as *mut u8;
-            if p.is_null() {
-                return Vec::new();
+    match out {
+        Some(o) => {
+            if rans_uncompress_O0_4x16_into(input, o, out_sz) {
+                Vec::new()
+            } else {
+                Vec::new()
             }
-            (p, true)
         }
-    };
-    let p = rans_uncompress_O0_4x16_into(input, out_ptr, out_sz);
-    if p.is_null() {
-        if owned {
-            unsafe { c_compat::free(out_ptr as *mut std::ffi::c_void) };
+        None => {
+            let mut buf = vec![0u8; out_sz.max(1) as usize];
+            if rans_uncompress_O0_4x16_into(input, &mut buf, out_sz) {
+                buf.truncate(out_sz as usize);
+                buf
+            } else {
+                Vec::new()
+            }
         }
-        return Vec::new();
-    }
-    if owned {
-        let v = unsafe { std::slice::from_raw_parts(out_ptr, out_sz as usize).to_vec() };
-        unsafe { c_compat::free(out_ptr as *mut std::ffi::c_void) };
-        v
-    } else {
-        Vec::new()
     }
 }
 
-fn rans_uncompress_O0_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut u8 {
+fn rans_uncompress_O0_4x16_into(input: &[u8], out_slice: &mut [u8], out_sz: u32) -> bool {
     let in_size = input.len() as u32;
     if in_size < 16 {
-        return std::ptr::null_mut();
+        return false;
     }
     if out_sz >= i32::MAX as u32 {
-        return std::ptr::null_mut();
+        return false;
     }
-
-    // C rANS_static4x16pr.c:235 — `if (!out) out = malloc(out_sz);`. Callers
-    // such as the inline pack-metadata decode at rans_static4x16pr.rs:1464 pass
-    // NULL here; without the malloc, from_raw_parts_mut below is UB on a null
-    // pointer and we read zeros (corrupting CRAM output without erroring).
-    let out = if out.is_null() {
-        let p = unsafe { c_compat::malloc(out_sz.max(1) as u64) } as *mut u8;
-        if p.is_null() {
-            return std::ptr::null_mut();
-        }
-        p
-    } else {
-        out
-    };
 
     let cp_end = (in_size - 8) as usize; // within 8 => be extra safe
     let mut cp = 0usize;
-
-    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, out_sz as usize) };
 
     let mut sfreq = vec![0u16; (TOTFREQ + 32) as usize];
     let mut sbase = vec![0u16; (TOTFREQ + 32) as usize];
@@ -359,7 +314,7 @@ fn rans_uncompress_O0_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     let mut fsum = 0u32;
     let fsz = decode_freq(&input[cp..], cp_end - cp, &mut f, &mut fsum);
     if fsz == 0 {
-        return std::ptr::null_mut();
+        return false;
     }
     cp += fsz as usize;
 
@@ -369,7 +324,7 @@ fn rans_uncompress_O0_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     for (j, &freq) in f.iter().enumerate() {
         if freq != 0 {
             if freq > TOTFREQ - x {
-                return std::ptr::null_mut();
+                return false;
             }
             for y in 0..freq {
                 ssym[(y + x) as usize] = j as u8;
@@ -380,18 +335,18 @@ fn rans_uncompress_O0_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         }
     }
     if x != TOTFREQ {
-        return std::ptr::null_mut();
+        return false;
     }
 
     if cp + 16 > cp_end + 8 {
-        return std::ptr::null_mut();
+        return false;
     }
 
     let mut r = [0u32; 4];
     for rk in &mut r {
         crate::htscodecs::rans_word::RansDecInit(rk, input, &mut cp);
         if *rk < RANS_BYTE_L {
-            return std::ptr::null_mut();
+            return false;
         }
     }
 
@@ -431,10 +386,10 @@ fn rans_uncompress_O0_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         i += 1;
     }
 
-    out
+    true
 }
 
-fn rans_uncompress_O0_4x16_fn(input: &[u8], out: *mut u8, out_sz: u32) -> *mut u8 {
+fn rans_uncompress_O0_4x16_fn(input: &[u8], out: &mut [u8], out_sz: u32) -> bool {
     rans_uncompress_O0_4x16_into(input, out, out_sz)
 }
 
@@ -506,65 +461,44 @@ pub fn rans_compute_shift(F0: &[u32], F: &[[u32; 256]], T: &[u32], S: &mut [u32]
 /// `unsigned char *rans_compress_O1_4x16(...)`
 pub fn rans_compress_O1_4x16(input: &[u8], out: Option<&mut [u8]>, out_size: &mut u32) -> Vec<u8> {
     let bound = rans_compress_bound_4x16(input.len() as u32, 1) - 20;
-    let (out_ptr, owned): (*mut u8, bool) = match out {
+    match out {
         Some(o) => {
             if bound > o.len() as u32 {
                 return Vec::new();
             }
-            (o.as_mut_ptr(), false)
+            if rans_compress_O1_4x16_into(input, o, out_size) {
+                Vec::new()
+            } else {
+                Vec::new()
+            }
         }
         None => {
             *out_size = bound;
-            let p = unsafe { c_compat::malloc(*out_size as u64) } as *mut u8;
-            if p.is_null() {
-                return Vec::new();
+            let mut buf = vec![0u8; bound as usize];
+            if rans_compress_O1_4x16_into(input, &mut buf, out_size) {
+                buf.truncate(*out_size as usize);
+                buf
+            } else {
+                Vec::new()
             }
-            (p, true)
         }
-    };
-    let p = rans_compress_O1_4x16_into(input, out_ptr, bound, out_size);
-    if p.is_null() {
-        if owned {
-            unsafe { c_compat::free(out_ptr as *mut std::ffi::c_void) };
-        }
-        return Vec::new();
-    }
-    if owned {
-        let v = unsafe { std::slice::from_raw_parts(out_ptr, *out_size as usize).to_vec() };
-        unsafe { c_compat::free(out_ptr as *mut std::ffi::c_void) };
-        v
-    } else {
-        Vec::new()
     }
 }
 
-fn rans_compress_O1_4x16_into(
-    input: &[u8],
-    out: *mut u8,
-    mut bound: u32,
-    out_size: &mut u32,
-) -> *mut u8 {
+fn rans_compress_O1_4x16_into(input: &[u8], out_slice: &mut [u8], out_size: &mut u32) -> bool {
     let in_size = input.len() as u32;
-    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, bound as usize) };
 
-    if (out as usize) & 1 != 0 {
-        bound -= 1;
-    }
-    let out_end = bound as usize;
+    // An owned slice is always word-aligned, so the C alignment tweak is a no-op.
+    let out_end = out_slice.len();
 
-    // RansEncSymbol (*syms)[256] = tls_alloc(256 * sizeof(*syms))
-    let syms_ptr = htscodecs_tls_alloc(256 * 256 * core::mem::size_of::<RansEncSymbol>());
-    if syms_ptr.is_null() {
-        return std::ptr::null_mut();
-    }
-    let syms: &mut [[RansEncSymbol; 256]] =
-        unsafe { core::slice::from_raw_parts_mut(syms_ptr as *mut [RansEncSymbol; 256], 256) };
+    // RansEncSymbol (*syms)[256] — owned [256][256] scratch table.
+    let mut syms_vec: Vec<[RansEncSymbol; 256]> = vec![[RansEncSymbol::default(); 256]; 256];
+    let syms: &mut [[RansEncSymbol; 256]] = &mut syms_vec;
 
     let mut cp = 0usize;
     let shift = encode_freq1(input, in_size, 4, syms, out_slice, &mut cp);
     if shift < 0 {
-        htscodecs_tls_free(syms_ptr);
-        return std::ptr::null_mut();
+        return false;
     }
     let tab_size = cp;
 
@@ -645,110 +579,70 @@ fn rans_compress_O1_4x16_into(
     *out_size = (out_end - ptr) as u32 + tab_size as u32;
     out_slice.copy_within(ptr..out_end, tab_size);
 
-    htscodecs_tls_free(syms_ptr);
-    out
+    true
 }
 
-fn rans_compress_O1_4x16_fn(
-    input: &[u8],
-    out: *mut u8,
-    out_cap: u32,
-    out_size: &mut u32,
-) -> *mut u8 {
+fn rans_compress_O1_4x16_fn(input: &[u8], out: &mut [u8], out_size: &mut u32) -> bool {
     let bound = rans_compress_bound_4x16(input.len() as u32, 1) - 20;
-    if bound > out_cap {
-        return std::ptr::null_mut();
+    if bound > out.len() as u32 {
+        return false;
     }
-    rans_compress_O1_4x16_into(input, out, bound, out_size)
+    rans_compress_O1_4x16_into(input, &mut out[..bound as usize], out_size)
 }
 
 // rANS_static4x16pr.c:504
 /// `unsigned char *rans_uncompress_O1_4x16(...)`
 pub fn rans_uncompress_O1_4x16(input: &[u8], out: Option<&mut [u8]>, out_sz: u32) -> Vec<u8> {
-    let (out_ptr, owned): (*mut u8, bool) = match out {
-        Some(o) => (o.as_mut_ptr(), false),
-        None => {
-            let p = unsafe { c_compat::malloc(out_sz.max(1) as u64) } as *mut u8;
-            if p.is_null() {
-                return Vec::new();
+    match out {
+        Some(o) => {
+            if rans_uncompress_O1_4x16_into(input, o, out_sz) {
+                Vec::new()
+            } else {
+                Vec::new()
             }
-            (p, true)
         }
-    };
-    let p = rans_uncompress_O1_4x16_into(input, out_ptr, out_sz);
-    if p.is_null() {
-        if owned {
-            unsafe { c_compat::free(out_ptr as *mut std::ffi::c_void) };
+        None => {
+            let mut buf = vec![0u8; out_sz.max(1) as usize];
+            if rans_uncompress_O1_4x16_into(input, &mut buf, out_sz) {
+                buf.truncate(out_sz as usize);
+                buf
+            } else {
+                Vec::new()
+            }
         }
-        return Vec::new();
-    }
-    if owned {
-        let v = unsafe { std::slice::from_raw_parts(out_ptr, out_sz as usize).to_vec() };
-        unsafe { c_compat::free(out_ptr as *mut std::ffi::c_void) };
-        v
-    } else {
-        Vec::new()
     }
 }
 
-fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut u8 {
+fn rans_uncompress_O1_4x16_into(input: &[u8], out_slice: &mut [u8], out_sz: u32) -> bool {
     let in_size = input.len() as u32;
     if in_size < 16 {
-        return std::ptr::null_mut();
+        return false;
     }
-    // C rANS_static4x16pr.c (O1 path mirrors the O0 fix) — handle the
-    // null-out callers (rans_static4x16pr.rs:1464) by allocating here.
-    let out = if out.is_null() {
-        let p = unsafe { c_compat::malloc(out_sz.max(1) as u64) } as *mut u8;
-        if p.is_null() {
-            return std::ptr::null_mut();
-        }
-        p
-    } else {
-        out
-    };
     if out_sz >= i32::MAX as u32 {
-        return std::ptr::null_mut();
+        return false;
     }
-
-    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, out_sz as usize) };
 
     let cp_end_total = in_size as usize; // cp_end = in + in_size
     let mut cp = 0usize;
 
-    // sfb_ = tls_alloc(256*(TOTFREQ_O1+MAGIC2))
-    let sfb_ptr =
-        htscodecs_tls_alloc(256 * (TOTFREQ_O1 + MAGIC2) as usize * core::mem::size_of::<u8>());
-    if sfb_ptr.is_null() {
-        return std::ptr::null_mut();
-    }
-    let sfb_base = sfb_ptr as *mut u8;
-    // s3 reuses sfb_ memory: uint32_t (*s3)[TOTFREQ_O1_FAST]
-    let s3_base = sfb_ptr as *mut u32;
+    // sfb: row-major [256][stride] byte symbol-lookup table (owned scratch).
+    // The C code overlaid an alias `uint32_t (*s3)[TOTFREQ_O1_FAST]` on the same
+    // buffer; since the byte (`sfb`) and the s3-fast (`s3`) views are used in
+    // mutually exclusive decode paths, we model them as two separate owned Vecs.
+    let mut sfb: Vec<u8> = vec![0u8; 256 * (TOTFREQ_O1 + MAGIC2) as usize];
+    // s3[256][TOTFREQ_O1_FAST]: the order-1 fast-path lookup table.
+    let mut s3: Vec<u32> = vec![0u32; 256 * TOTFREQ_O1_FAST as usize];
 
-    // fb = tls_alloc(256 * sizeof(*fb))  (fb_t[256][256])
-    let fb_ptr = htscodecs_tls_alloc(
-        256 * 256 * core::mem::size_of::<crate::htscodecs::rans_static16_int::fb_t>(),
-    );
-    if fb_ptr.is_null() {
-        htscodecs_tls_free(sfb_ptr);
-        return std::ptr::null_mut();
-    }
+    // fb[256][256]: per-context (freq, base) table.
     use crate::htscodecs::rans_static16_int::fb_t;
-    let fb: &mut [[fb_t; 256]] =
-        unsafe { core::slice::from_raw_parts_mut(fb_ptr as *mut [fb_t; 256], 256) };
+    let mut fb: Vec<[fb_t; 256]> = vec![[fb_t::default(); 256]; 256];
 
-    // sfb[256]: offsets into sfb_base
+    // sfb[256]: offsets into sfb (each row is `stride` bytes wide).
     let shift_hdr = (input[cp] >> 4) as u32;
     let stride = if shift_hdr == TF_SHIFT_O1 {
         (TOTFREQ_O1 + MAGIC2) as usize
     } else {
         (TOTFREQ_O1_FAST + MAGIC2) as usize
-    };
-
-    let out_free_err = |sfb_p: *mut std::ffi::c_void, fb_p: *mut std::ffi::c_void| {
-        htscodecs_tls_free(fb_p);
-        htscodecs_tls_free(sfb_p);
     };
 
     // compressed header? If so uncompress it
@@ -766,14 +660,12 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         cp += var_get_u32(&input[cp..], Some(cp_end_total - cp), &mut u_freq_sz) as usize;
         cp += var_get_u32(&input[cp..], Some(cp_end_total - cp), &mut c_freq_sz) as usize;
         if c_freq_sz as usize > cp_end_total - cp {
-            out_free_err(sfb_ptr, fb_ptr);
-            return std::ptr::null_mut();
+            return false;
         }
         tab_end = Some(cp + c_freq_sz as usize);
         let v = rans_uncompress_O0_4x16(&input[cp..cp + c_freq_sz as usize], None, u_freq_sz);
         if v.is_empty() {
-            out_free_err(sfb_ptr, fb_ptr);
-            return std::ptr::null_mut();
+            return false;
         }
         c_freq_buf = v;
         c_freq_active = true;
@@ -788,14 +680,12 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     let mut f0 = [0u32; 256];
     let fsz = decode_alphabet(&freq_src[cp..], c_freq_end - cp, &mut f0);
     if fsz == 0 {
-        out_free_err(sfb_ptr, fb_ptr);
-        return std::ptr::null_mut();
+        return false;
     }
     cp += fsz as usize;
 
     if cp >= c_freq_end {
-        out_free_err(sfb_ptr, fb_ptr);
-        return std::ptr::null_mut();
+        return false;
     }
 
     let s3_fast_on = in_size >= 100000;
@@ -808,8 +698,7 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         let mut t = 0u32;
         let fsz = decode_freq_d(&freq_src[cp..], c_freq_end - cp, &f0, &mut f, Some(&mut t));
         if fsz == 0 {
-            out_free_err(sfb_ptr, fb_ptr);
-            return std::ptr::null_mut();
+            return false;
         }
         cp += fsz as usize;
 
@@ -823,24 +712,18 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         for (j, &freq) in f.iter().enumerate() {
             if freq != 0 {
                 if freq > (1u32 << shift) - x {
-                    out_free_err(sfb_ptr, fb_ptr);
-                    return std::ptr::null_mut();
+                    return false;
                 }
                 if shift == TF_SHIFT_O1_FAST && s3_fast_on {
                     // s3[i][y+x] = (F[j]<<(shift+8)) | (y<<8) | j
-                    let row = unsafe { s3_base.add(i * TOTFREQ_O1_FAST as usize) };
+                    let row = i * TOTFREQ_O1_FAST as usize;
                     for y in 0..freq {
-                        unsafe {
-                            *row.add((y + x) as usize) =
-                                (freq << (shift + 8)) | (y << 8) | j as u32;
-                        }
+                        s3[row + (y + x) as usize] = (freq << (shift + 8)) | (y << 8) | j as u32;
                     }
                 } else {
-                    let row = unsafe { sfb_base.add(i * stride) };
+                    let row = i * stride;
                     for k in 0..freq as usize {
-                        unsafe {
-                            *row.add(x as usize + k) = j as u8;
-                        }
+                        sfb[row + x as usize + k] = j as u8;
                     }
                     fb[i][j].f = freq as u16;
                     fb[i][j].b = x as u16;
@@ -849,8 +732,7 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
             }
         }
         if x != (1u32 << shift) {
-            out_free_err(sfb_ptr, fb_ptr);
-            return std::ptr::null_mut();
+            return false;
         }
     }
 
@@ -866,8 +748,7 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     drop(c_freq_buf);
 
     if cp_in + 16 > cp_end_total {
-        out_free_err(sfb_ptr, fb_ptr);
-        return std::ptr::null_mut();
+        return false;
     }
 
     let mut r = [0u32; 4];
@@ -876,8 +757,7 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
     for rk in &mut r {
         crate::htscodecs::rans_word::RansDecInit(rk, input, &mut ptr);
         if *rk < RANS_BYTE_L {
-            out_free_err(sfb_ptr, fb_ptr);
-            return std::ptr::null_mut();
+            return false;
         }
     }
 
@@ -890,16 +770,14 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         while i4[0] < isz4 {
             for (q, rq) in r.iter_mut().enumerate() {
                 let m = *rq & mask;
-                let row = unsafe { sfb_base.add(l[q] * stride) };
-                let c = unsafe { *row.add(m as usize) } as usize;
-                // Same TLS-reuse hazard as 32x16 O1: corrupted input may index
+                let c = sfb[l[q] * stride + m as usize] as usize;
+                // Same stale-entry hazard as 32x16 O1: corrupted input may index
                 // into an `fb[l][c]` slot that `decode_freq1` never populated
                 // for this stream, leaving stale (f, b). Validate before use.
                 let f = fb[l[q]][c].f as u32;
                 let b = fb[l[q]][c].b as u32;
                 if f == 0 || f > TOTFREQ_O1 || b > TOTFREQ_O1 - f || b > m {
-                    out_free_err(sfb_ptr, fb_ptr);
-                    return std::ptr::null_mut();
+                    return false;
                 }
                 *rq = f * (*rq >> TF_SHIFT_O1) + m - b;
                 out_slice[i4[q]] = c as u8;
@@ -925,14 +803,12 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         }
         while i4[3] < out_sz as usize {
             let m3 = r[3] & ((1u32 << TF_SHIFT_O1) - 1);
-            let row = unsafe { sfb_base.add(l[3] * stride) };
-            let c3 = unsafe { *row.add(m3 as usize) } as usize;
+            let c3 = sfb[l[3] * stride + m3 as usize] as usize;
             out_slice[i4[3]] = c3 as u8;
             let f = fb[l[3]][c3].f as u32;
             let b = fb[l[3]][c3].b as u32;
             if f == 0 || f > TOTFREQ_O1 || b > TOTFREQ_O1 - f || b > m3 {
-                out_free_err(sfb_ptr, fb_ptr);
-                return std::ptr::null_mut();
+                return false;
             }
             r[3] = f * (r[3] >> TF_SHIFT_O1) + m3 - b;
             crate::htscodecs::rans_word::RansDecRenormSafe(&mut r[3], input, &mut ptr, ptr_end + 8);
@@ -944,13 +820,11 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         while i4[0] < isz4 {
             for (q, rq) in r.iter_mut().enumerate() {
                 let m = *rq & mask;
-                let row = unsafe { sfb_base.add(l[q] * stride) };
-                let c = unsafe { *row.add(m as usize) } as usize;
+                let c = sfb[l[q] * stride + m as usize] as usize;
                 let f = fb[l[q]][c].f as u32;
                 let b = fb[l[q]][c].b as u32;
                 if f == 0 || f > TOTFREQ_O1_FAST || b > TOTFREQ_O1_FAST - f || b > m {
-                    out_free_err(sfb_ptr, fb_ptr);
-                    return std::ptr::null_mut();
+                    return false;
                 }
                 *rq = f * (*rq >> TF_SHIFT_O1_FAST) + m - b;
                 out_slice[i4[q]] = c as u8;
@@ -976,14 +850,12 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         }
         while i4[3] < out_sz as usize {
             let m3 = r[3] & ((1u32 << TF_SHIFT_O1_FAST) - 1);
-            let row = unsafe { sfb_base.add(l[3] * stride) };
-            let c3 = unsafe { *row.add(m3 as usize) } as usize;
+            let c3 = sfb[l[3] * stride + m3 as usize] as usize;
             out_slice[i4[3]] = c3 as u8;
             let f = fb[l[3]][c3].f as u32;
             let b = fb[l[3]][c3].b as u32;
             if f == 0 || f > TOTFREQ_O1_FAST || b > TOTFREQ_O1_FAST - f || b > m3 {
-                out_free_err(sfb_ptr, fb_ptr);
-                return std::ptr::null_mut();
+                return false;
             }
             r[3] = f * (r[3] >> TF_SHIFT_O1_FAST) + m3 - b;
             crate::htscodecs::rans_word::RansDecRenormSafe(&mut r[3], input, &mut ptr, ptr_end + 8);
@@ -995,21 +867,19 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         while i4[0] < isz4 {
             let mut s = [0u32; 4];
             for (q, rq) in r.iter().enumerate() {
-                let row = unsafe { s3_base.add(l[q] * TOTFREQ_O1_FAST as usize) };
-                s[q] = unsafe { *row.add((*rq & mask) as usize) };
+                s[q] = s3[l[q] * TOTFREQ_O1_FAST as usize + (*rq & mask) as usize];
                 l[q] = s[q] as u8 as usize;
                 out_slice[i4[q]] = s[q] as u8;
             }
             for (&sq, rq) in s.iter().zip(r.iter_mut()) {
                 let f = sq >> (TF_SHIFT_O1_FAST + 8);
                 let b = (sq >> 8) & mask;
-                // TLS-reuse hazard: stale `s3_base` entries can yield (f, b)
+                // Stale-entry hazard: leftover `s3` entries can yield (f, b)
                 // outside the valid range, overflowing `f * (r >> shift) + b`.
                 // In the s3 fast path b is per-symbol offset y < f, so the
                 // valid encoder constraint is 1 <= f <= TOTFREQ_O1_FAST, b < f.
                 if f == 0 || f > TOTFREQ_O1_FAST || b >= f {
-                    out_free_err(sfb_ptr, fb_ptr);
-                    return std::ptr::null_mut();
+                    return false;
                 }
                 *rq = f * (*rq >> TF_SHIFT_O1_FAST) + b;
             }
@@ -1032,15 +902,14 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
             }
         }
         while i4[3] < out_sz as usize {
-            let row = unsafe { s3_base.add(l[3] * TOTFREQ_O1_FAST as usize) };
-            let s = unsafe { *row.add((r[3] & ((1u32 << TF_SHIFT_O1_FAST) - 1)) as usize) };
+            let s = s3
+                [l[3] * TOTFREQ_O1_FAST as usize + (r[3] & ((1u32 << TF_SHIFT_O1_FAST) - 1)) as usize];
             l[3] = s as u8 as usize;
             out_slice[i4[3]] = s as u8;
             let f = s >> (TF_SHIFT_O1_FAST + 8);
             let b = (s >> 8) & ((1u32 << TF_SHIFT_O1_FAST) - 1);
             if f == 0 || f > TOTFREQ_O1_FAST || b >= f {
-                out_free_err(sfb_ptr, fb_ptr);
-                return std::ptr::null_mut();
+                return false;
             }
             r[3] = f * (r[3] >> TF_SHIFT_O1_FAST) + b;
             crate::htscodecs::rans_word::RansDecRenormSafe(&mut r[3], input, &mut ptr, ptr_end + 8);
@@ -1048,12 +917,10 @@ fn rans_uncompress_O1_4x16_into(input: &[u8], out: *mut u8, out_sz: u32) -> *mut
         }
     }
 
-    htscodecs_tls_free(fb_ptr);
-    htscodecs_tls_free(sfb_ptr);
-    out
+    true
 }
 
-fn rans_uncompress_O1_4x16_fn(input: &[u8], out: *mut u8, out_sz: u32) -> *mut u8 {
+fn rans_uncompress_O1_4x16_fn(input: &[u8], out: &mut [u8], out_sz: u32) -> bool {
     rans_uncompress_O1_4x16_into(input, out, out_sz)
 }
 
@@ -1087,27 +954,45 @@ pub fn rans_dec_func(do_simd: i32, order: i32) -> RansDecFn {
 }
 
 // Thin wrappers giving the 32x16 scalar entry points the RansEncFn/RansDecFn ABI.
-fn rans_compress_O0_32x16_fn(
-    input: &[u8],
-    out: *mut u8,
-    out_cap: u32,
-    out_size: &mut u32,
-) -> *mut u8 {
-    rans_compress_O0_32x16(input, out, out_cap, out_size)
+// The 32x16 encoders/decoders return owned `Vec<u8>`; we copy that into the
+// caller's output slice, record its length in `*out_size`, and report success.
+fn rans_compress_O0_32x16_fn(input: &[u8], out: &mut [u8], out_size: &mut u32) -> bool {
+    match rans_compress_O0_32x16(input) {
+        Some(v) if v.len() <= out.len() => {
+            out[..v.len()].copy_from_slice(&v);
+            *out_size = v.len() as u32;
+            true
+        }
+        _ => false,
+    }
 }
-fn rans_compress_O1_32x16_fn(
-    input: &[u8],
-    out: *mut u8,
-    out_cap: u32,
-    out_size: &mut u32,
-) -> *mut u8 {
-    rans_compress_O1_32x16(input, out, out_cap, out_size)
+fn rans_compress_O1_32x16_fn(input: &[u8], out: &mut [u8], out_size: &mut u32) -> bool {
+    match rans_compress_O1_32x16(input) {
+        Some(v) if v.len() <= out.len() => {
+            out[..v.len()].copy_from_slice(&v);
+            *out_size = v.len() as u32;
+            true
+        }
+        _ => false,
+    }
 }
-fn rans_uncompress_O0_32x16_fn(input: &[u8], out: *mut u8, out_sz: u32) -> *mut u8 {
-    rans_uncompress_O0_32x16(input, out, out_sz)
+fn rans_uncompress_O0_32x16_fn(input: &[u8], out: &mut [u8], out_sz: u32) -> bool {
+    match rans_uncompress_O0_32x16(input, out_sz) {
+        Some(v) if v.len() <= out.len() => {
+            out[..v.len()].copy_from_slice(&v);
+            true
+        }
+        _ => false,
+    }
 }
-fn rans_uncompress_O1_32x16_fn(input: &[u8], out: *mut u8, out_sz: u32) -> *mut u8 {
-    rans_uncompress_O1_32x16(input, out, out_sz)
+fn rans_uncompress_O1_32x16_fn(input: &[u8], out: &mut [u8], out_sz: u32) -> bool {
+    match rans_uncompress_O1_32x16(input, out_sz) {
+        Some(v) if v.len() <= out.len() => {
+            out[..v.len()].copy_from_slice(&v);
+            true
+        }
+        _ => false,
+    }
 }
 
 // rANS_static4x16pr.c:1203
@@ -1116,21 +1001,19 @@ fn rans_uncompress_O1_32x16_fn(input: &[u8], out: *mut u8, out_sz: u32) -> *mut 
 /// the produced bytes as an owned Vec (empty Vec on failure).
 fn rans_compress_to_4x16_into(
     input: &[u8],
-    out: *mut u8,
-    out_cap: u32,
+    out_slice: &mut [u8],
     out_size: &mut u32,
     mut order: i32,
-) -> *mut u8 {
-    let in_ptr = input.as_ptr();
+) -> bool {
     let mut in_size = input.len() as u32;
 
     if in_size > i32::MAX as u32 {
         *out_size = 0;
-        return std::ptr::null_mut();
+        return false;
     }
 
-    let out_total = out_cap as usize;
-    let mut out_avail = out_cap; // *out_size, tracks remaining capacity passed to enc
+    let out_total = out_slice.len();
+    let mut out_avail = out_total as u32; // *out_size, tracks remaining capacity passed to enc
 
     // SIMD auto
     if (order & RANS_ORDER_SIMD_AUTO) != 0 && in_size >= 50000 && (order & RANS_ORDER_STRIPE) == 0 {
@@ -1143,11 +1026,10 @@ fn rans_compress_to_4x16_into(
         order &= !RANS_ORDER_X32;
     }
 
-    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, out_total) };
     let out_end = out_total; // offset of out+*out_size
 
     if (order & RANS_ORDER_STRIPE) != 0 {
-        return rans_compress_stripe(input, out, out_total, out_size, order);
+        return rans_compress_stripe(input, out_slice, out_size, order);
     }
 
     if (order & RANS_ORDER_CAT) != 0 {
@@ -1156,13 +1038,13 @@ fn rans_compress_to_4x16_into(
         c_meta_len += var_put_u32(&mut out_slice[1..], Some(out_end - 1), in_size) as usize;
         if c_meta_len + in_size as usize > out_total {
             *out_size = 0;
-            return std::ptr::null_mut();
+            return false;
         }
         if in_size != 0 {
             out_slice[c_meta_len..c_meta_len + in_size as usize].copy_from_slice(input);
         }
         *out_size = c_meta_len as u32 + in_size;
-        return out;
+        return true;
     }
 
     let mut do_pack = order & RANS_ORDER_PACK;
@@ -1185,7 +1067,7 @@ fn rans_compress_to_4x16_into(
     if do_pack != 0 && in_size != 0 {
         if c_meta_len + 256 > out_total {
             *out_size = 0;
-            return std::ptr::null_mut();
+            return false;
         }
         let mut pmeta_len = 0i32;
         let mut packed_len = 0u64;
@@ -1266,23 +1148,22 @@ fn rans_compress_to_4x16_into(
                 );
                 if c_meta_len + sz as usize + 5 > out_total {
                     *out_size = 0;
-                    return std::ptr::null_mut();
+                    return false;
                 }
                 let mut c_rmeta_len = (out_total - (c_meta_len + sz as usize + 5)) as u32;
                 if do_simd != 0 && (rmeta_len < 32 || rle_len < 32) {
                     do_simd = 0;
                     out_slice[0] &= !(RANS_ORDER_X32 as u8);
                 }
-                let dst = unsafe { out.add(c_meta_len + sz as usize + 5) };
-                let r = rans_enc_func(do_simd, 0)(
+                let dst_off = c_meta_len + sz as usize + 5;
+                let ok = rans_enc_func(do_simd, 0)(
                     &meta[..rmeta_len],
-                    dst,
-                    c_rmeta_len,
+                    &mut out_slice[dst_off..],
                     &mut c_rmeta_len,
                 );
-                if r.is_null() {
+                if !ok {
                     *out_size = 0;
-                    return std::ptr::null_mut();
+                    return false;
                 }
                 let sz2;
                 if c_rmeta_len < rmeta_len as u32 {
@@ -1334,7 +1215,7 @@ fn rans_compress_to_4x16_into(
 
     if c_meta_len > out_total {
         *out_size = 0;
-        return std::ptr::null_mut();
+        return false;
     }
 
     // Match C `*out_size -= c_meta_len;` — running decrement, NOT a reset to
@@ -1349,11 +1230,17 @@ fn rans_compress_to_4x16_into(
     }
 
     let mut data_size = out_avail;
-    let dst = unsafe { out.add(c_meta_len) };
-    let r = rans_enc_func(do_simd, order)(&cur[..in_size as usize], dst, out_avail, &mut data_size);
-    if r.is_null() {
+    // The encoder writes the rANS payload after the metadata; pass it the tail
+    // slice limited to the running capacity budget (`out_avail`).
+    let enc_end = c_meta_len + out_avail as usize;
+    let ok = rans_enc_func(do_simd, order)(
+        &cur[..in_size as usize],
+        &mut out_slice[c_meta_len..enc_end],
+        &mut data_size,
+    );
+    if !ok {
         *out_size = 0;
-        return std::ptr::null_mut();
+        return false;
     }
 
     if data_size >= in_size {
@@ -1361,7 +1248,7 @@ fn rans_compress_to_4x16_into(
         out_slice[0] |= (RANS_ORDER_CAT | no_size) as u8;
         if c_meta_len + in_size as usize > out_end {
             *out_size = 0;
-            return std::ptr::null_mut();
+            return false;
         }
         if in_size != 0 {
             out_slice[c_meta_len..c_meta_len + in_size as usize]
@@ -1372,7 +1259,7 @@ fn rans_compress_to_4x16_into(
 
     *out_size = data_size + c_meta_len as u32;
     let _ = (packed_owned, rle_owned);
-    out
+    true
 }
 
 // X_32 flag value (0x04) — local alias to avoid name clash with RANS_ORDER_X32.
@@ -1381,11 +1268,10 @@ const X_32_LOCAL: i32 = RANS_ORDER_X32;
 // STRIPE compressor (rANS_static4x16pr.c:1245-1372).
 fn rans_compress_stripe(
     input: &[u8],
-    out: *mut u8,
-    out_total: usize,
+    out_slice: &mut [u8],
     out_size: &mut u32,
     order: i32,
-) -> *mut u8 {
+) -> bool {
     let in_size = input.len() as u32;
     let mut n = ((order >> 8) & 0xff) as u32;
     if n == 0 {
@@ -1396,7 +1282,7 @@ fn rans_compress_stripe(
     }
     let n = n as usize;
 
-    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, out_total) };
+    let out_total = out_slice.len();
     let out_end = out_total;
 
     let mut transposed = vec![0u8; in_size as usize];
@@ -1451,7 +1337,7 @@ fn rans_compress_stripe(
     ) as usize;
     if c_meta_len >= out_total {
         *out_size = 0;
-        return std::ptr::null_mut();
+        return false;
     }
     out_slice[c_meta_len] = n as u8;
     c_meta_len += 1;
@@ -1479,23 +1365,20 @@ fn rans_compress_stripe(
                 continue;
             }
             let mut olen2 = (out_total - out2) as u32;
-            let dst = unsafe { out.add(out2) };
-            let r = rans_compress_to_4x16_into(
+            let ok = rans_compress_to_4x16_into(
                 &transposed[idx[i] as usize..idx[i] as usize + part_len[i] as usize],
-                dst,
-                olen2,
+                &mut out_slice[out2..],
                 &mut olen2,
                 mode | RANS_ORDER_NOSZ | (order & RANS_ORDER_X32),
             );
-            if !r.is_null() && olen2 != 0 && best_sz > olen2 as i32 {
+            if ok && olen2 != 0 && best_sz > olen2 as i32 {
                 best_sz = olen2 as i32;
-                best_buf =
-                    unsafe { std::slice::from_raw_parts(out.add(out2), olen2 as usize).to_vec() };
+                best_buf = out_slice[out2..out2 + olen2 as usize].to_vec();
             }
         }
         if best_sz == i32::MAX {
             *out_size = 0;
-            return std::ptr::null_mut();
+            return false;
         }
         // Copy best back
         out_slice[out2..out2 + best_sz as usize].copy_from_slice(&best_buf);
@@ -1510,7 +1393,7 @@ fn rans_compress_stripe(
 
     out_slice.copy_within(out2_start..out2, c_meta_len);
     *out_size = (c_meta_len + out2 - out2_start) as u32;
-    out
+    true
 }
 
 // rANS_static4x16pr.c:1581
@@ -1521,36 +1404,33 @@ pub fn rans_compress_4x16(input: &[u8], out_size: &mut u32, order: i32) -> Vec<u
         *out_size = 0;
         return Vec::new();
     }
-    let out_ptr = unsafe { c_compat::malloc(bound as u64) } as *mut u8;
-    if out_ptr.is_null() {
-        *out_size = 0;
-        return Vec::new();
-    }
+    let mut buf = vec![0u8; bound as usize];
     *out_size = bound;
-    let r = rans_compress_to_4x16_into(input, out_ptr, bound, out_size, order);
-    if r.is_null() {
-        unsafe { c_compat::free(out_ptr as *mut std::ffi::c_void) };
+    if !rans_compress_to_4x16_into(input, &mut buf, out_size, order) {
         return Vec::new();
     }
-    let v = unsafe { std::slice::from_raw_parts(out_ptr, *out_size as usize).to_vec() };
-    unsafe { c_compat::free(out_ptr as *mut std::ffi::c_void) };
-    v
+    buf.truncate(*out_size as usize);
+    buf
 }
 
 // rANS_static4x16pr.c:1586
 /// `unsigned char *rans_uncompress_to_4x16(...)`
+/// Decompress `input`. When `out` is `None` an owned buffer is allocated and
+/// returned in the `Some(Vec)` on success; when `out` is `Some(slice)` the
+/// result is written into that slice and an empty `Vec` is returned on success.
+/// `None` is returned on failure.
 fn rans_uncompress_to_4x16_into(
     input: &[u8],
-    out: *mut u8,
+    out: Option<&mut [u8]>,
     out_cap_in: Option<u32>,
     out_size: &mut u32,
-) -> *mut u8 {
+) -> Option<Vec<u8>> {
     let in_end = input.len(); // offset of in+in_size
     let mut in_off = 0usize;
     let mut in_size = input.len() as u32;
 
     if in_size == 0 {
-        return std::ptr::null_mut();
+        return None;
     }
 
     if (input[0] as i32 & RANS_ORDER_STRIPE) != 0 {
@@ -1579,47 +1459,29 @@ fn rans_uncompress_to_4x16_into(
     }
 
     if no_size != 0 && out_cap_in.is_none() {
-        return std::ptr::null_mut();
+        return None;
     }
 
-    // Output buffer.
-    let out_ptr: *mut u8;
-    let mut out_total: usize;
-    if out.is_null() {
-        // malloc path
-        let p = unsafe { c_compat::malloc(osz.max(1) as u64) } as *mut u8;
-        if p.is_null() {
-            return std::ptr::null_mut();
+    // Output buffer: own a fresh Vec (caller passed None) or borrow the caller's.
+    let mut owned_out: Vec<u8> = Vec::new();
+    let out_total: usize;
+    match out.as_ref() {
+        None => {
+            owned_out = vec![0u8; osz.max(1) as usize];
+            out_total = osz as usize;
+            *out_size = osz;
         }
-        out_ptr = p;
-        out_total = osz as usize;
-        *out_size = osz;
-    } else {
-        out_ptr = out;
-        out_total = out_cap_in.unwrap() as usize;
-        if (out_total as u32) < osz {
-            return std::ptr::null_mut();
+        Some(o) => {
+            if (o.len() as u32) < osz {
+                return None;
+            }
+            out_total = osz as usize;
+            *out_size = osz;
         }
-        out_total = osz as usize;
-        *out_size = osz;
     }
 
-    let cleanup_out = |p: *mut u8| {
-        if out.is_null() && !p.is_null() {
-            unsafe { c_compat::free(p as *mut std::ffi::c_void) };
-        }
-    };
-
-    // tmp buffer of same size as output
-    let need_tmp = do_pack != 0 || do_rle != 0;
-    let tmp_buf: Option<Vec<u8>> = if need_tmp {
-        Some(vec![0u8; *out_size as usize])
-    } else {
-        None
-    };
-
-    // We model tmp1/tmp2/tmp3 as separate owned buffers, then copy the final to
-    // `out_ptr`. (The C reuses out/tmp in place; the byte result is identical.)
+    // We model tmp1/tmp2/tmp3 as separate owned buffers, then copy the final into
+    // the output. (The C reuses out/tmp in place; the byte result is identical.)
     let mut tmp1_size = *out_size;
 
     // Decode pack map
@@ -1635,8 +1497,7 @@ fn rans_uncompress_to_4x16_into(
             &mut npacked_sym,
         );
         if c_meta_size == 0 {
-            cleanup_out(out_ptr);
-            return std::ptr::null_mut();
+            return None;
         }
         unpacked_sz = osz as u64;
         in_off += c_meta_size as usize;
@@ -1646,8 +1507,7 @@ fn rans_uncompress_to_4x16_into(
         in_off += sz as usize;
         in_size -= sz as u32;
         if v > tmp1_size {
-            cleanup_out(out_ptr);
-            return std::ptr::null_mut();
+            return None;
         }
         tmp1_size = v;
     }
@@ -1668,8 +1528,7 @@ fn rans_uncompress_to_4x16_into(
         );
         u_meta_size = um;
         if rle_len > tmp1_size {
-            cleanup_out(out_ptr);
-            return std::ptr::null_mut();
+            return None;
         }
         let c_meta_size;
         if u_meta_size & 1 != 0 {
@@ -1691,23 +1550,23 @@ fn rans_uncompress_to_4x16_into(
             );
             c_meta_size = cms;
             u_meta_size /= 2;
-            let v = rans_dec_func(do_simd, 0)(
+            // Decode the compressed RLE metadata into its own owned buffer.
+            let mut meta_dec = vec![0u8; u_meta_size.max(1) as usize];
+            let ok = rans_dec_func(do_simd, 0)(
                 &input[in_off + sz as usize..in_off + in_size as usize],
-                std::ptr::null_mut(),
+                &mut meta_dec,
                 u_meta_size,
             );
-            if v.is_null() {
-                cleanup_out(out_ptr);
-                return std::ptr::null_mut();
+            if !ok {
+                return None;
             }
-            meta_buf = unsafe { std::slice::from_raw_parts(v, u_meta_size as usize).to_vec() };
-            unsafe { c_compat::free(v as *mut std::ffi::c_void) };
+            meta_dec.truncate(u_meta_size as usize);
+            meta_buf = meta_dec;
             meta_off = 0;
             meta_from_input = false;
         }
         if c_meta_size + sz as u32 > in_size {
-            cleanup_out(out_ptr);
-            return std::ptr::null_mut();
+            return None;
         }
         in_off += c_meta_size as usize + sz as usize;
         in_size -= c_meta_size + sz as u32;
@@ -1719,19 +1578,17 @@ fn rans_uncompress_to_4x16_into(
     if in_size != 0 {
         if do_cat != 0 {
             if tmp1_size > in_size || tmp1_size > *out_size {
-                cleanup_out(out_ptr);
-                return std::ptr::null_mut();
+                return None;
             }
             tmp1[..tmp1_size as usize].copy_from_slice(&input[in_off..in_off + tmp1_size as usize]);
         } else {
-            let v = rans_dec_func(do_simd, order)(
+            let ok = rans_dec_func(do_simd, order)(
                 &input[in_off..in_off + in_size as usize],
-                tmp1.as_mut_ptr(),
+                &mut tmp1,
                 tmp1_size,
             );
-            if v.is_null() {
-                cleanup_out(out_ptr);
-                return std::ptr::null_mut();
+            if !ok {
+                return None;
             }
         }
     } else {
@@ -1745,8 +1602,7 @@ fn rans_uncompress_to_4x16_into(
     let mut tmp2 = tmp1;
     if do_rle != 0 {
         if u_meta_size == 0 {
-            cleanup_out(out_ptr);
-            return std::ptr::null_mut();
+            return None;
         }
         let meta: &[u8] = if meta_from_input {
             &input[meta_off..]
@@ -1755,8 +1611,7 @@ fn rans_uncompress_to_4x16_into(
         };
         let rle_nsyms = if meta[0] != 0 { meta[0] as i32 } else { 256 };
         if (u_meta_size as i32) < 1 + rle_nsyms {
-            cleanup_out(out_ptr);
-            return std::ptr::null_mut();
+            return None;
         }
         let mut unrle_size = *out_size as u64;
         let mut tmp2_new = vec![0u8; *out_size as usize];
@@ -1772,8 +1627,7 @@ fn rans_uncompress_to_4x16_into(
             &mut unrle_size,
         );
         if res.is_none() {
-            cleanup_out(out_ptr);
-            return std::ptr::null_mut();
+            return None;
         }
         tmp3_size = unrle_size as u32;
         tmp2_size = unrle_size as u32;
@@ -1796,20 +1650,29 @@ fn rans_uncompress_to_4x16_into(
             &map,
         );
         if res.is_none() {
-            cleanup_out(out_ptr);
-            return std::ptr::null_mut();
+            return None;
         }
         tmp3_size = unpacked_sz as u32;
         tmp3 = tmp3_new;
     }
 
-    // Copy tmp3 into out_ptr and report size.
+    // Copy tmp3 into the output buffer and report size.
     let n = tmp3_size as usize;
-    unsafe {
-        std::ptr::copy_nonoverlapping(tmp3.as_ptr(), out_ptr, n.min(out_total.max(n)));
-    }
+    let copy_len = n.min(out_total.max(n));
     *out_size = tmp3_size;
-    out_ptr
+    match out {
+        Some(o) => {
+            o[..copy_len].copy_from_slice(&tmp3[..copy_len]);
+            Some(Vec::new())
+        }
+        None => {
+            if owned_out.len() < copy_len {
+                owned_out.resize(copy_len, 0);
+            }
+            owned_out[..copy_len].copy_from_slice(&tmp3[..copy_len]);
+            Some(owned_out)
+        }
+    }
 }
 
 // Helper for the no_size branch of rans_uncompress_to_4x16.
@@ -1821,47 +1684,38 @@ fn out_size_from_cap(out_cap_in: Option<u32>, out_size: &mut u32) -> u32 {
 // STRIPE decompressor (rANS_static4x16pr.c:1594-1673).
 fn rans_uncompress_stripe(
     input: &[u8],
-    out: *mut u8,
+    out: Option<&mut [u8]>,
     out_cap_in: Option<u32>,
     out_size: &mut u32,
-) -> *mut u8 {
+) -> Option<Vec<u8>> {
     let in_end = input.len();
     let in_size = input.len() as u32;
     let mut c_meta_len = 1usize;
     let mut ulen = 0u32;
     c_meta_len += var_get_u32(&input[c_meta_len..], Some(in_end - c_meta_len), &mut ulen) as usize;
     if c_meta_len >= in_size as usize {
-        return std::ptr::null_mut();
+        return None;
     }
     let n = input[c_meta_len] as usize;
     c_meta_len += 1;
     if n < 1 {
-        return std::ptr::null_mut();
+        return None;
     }
 
-    // Output buffer
-    let out_ptr: *mut u8;
-    if out.is_null() {
-        if ulen >= i32::MAX as u32 {
-            return std::ptr::null_mut();
+    // Output buffer: borrow the caller's slice or own a fresh Vec.
+    match out.as_ref() {
+        None => {
+            if ulen >= i32::MAX as u32 {
+                return None;
+            }
+            *out_size = ulen;
         }
-        let p = unsafe { c_compat::malloc(ulen.max(1) as u64) } as *mut u8;
-        if p.is_null() {
-            return std::ptr::null_mut();
-        }
-        out_ptr = p;
-        *out_size = ulen;
-    } else {
-        out_ptr = out;
-        if ulen != *out_size {
-            return std::ptr::null_mut();
+        Some(_) => {
+            if ulen != *out_size {
+                return None;
+            }
         }
     }
-    let cleanup = |p: *mut u8| {
-        if out.is_null() && !p.is_null() {
-            unsafe { c_compat::free(p as *mut std::ffi::c_void) };
-        }
-    };
 
     let mut clen_n = [0u32; 256];
     let mut ulen_n = [0u32; 256];
@@ -1881,14 +1735,12 @@ fn rans_uncompress_stripe(
         ) as usize;
         clen_tot += clen_n[i] as u64;
         if c_meta_len > in_size as usize || clen_n[i] > in_size || clen_n[i] < 1 {
-            cleanup(out_ptr);
-            return std::ptr::null_mut();
+            return None;
         }
     }
 
     if c_meta_len as u64 + clen_tot > in_size as u64 {
-        cleanup(out_ptr);
-        return std::ptr::null_mut();
+        return None;
     }
     let in_size_local = c_meta_len + clen_tot as usize;
 
@@ -1897,38 +1749,46 @@ fn rans_uncompress_stripe(
     for i in 0..n {
         let mut olen = ulen_n[i];
         if in_size_local < cml {
-            cleanup(out_ptr);
-            return std::ptr::null_mut();
+            return None;
         }
+        let start = idx_n[i] as usize;
         let v = rans_uncompress_to_4x16_into(
             &input[cml..in_size_local],
-            unsafe { out_n.as_mut_ptr().add(idx_n[i] as usize) },
+            Some(&mut out_n[start..start + ulen_n[i] as usize]),
             Some(olen),
             &mut olen,
         );
-        if v.is_null() || olen != ulen_n[i] {
-            cleanup(out_ptr);
-            return std::ptr::null_mut();
+        if v.is_none() || olen != ulen_n[i] {
+            return None;
         }
         cml += clen_n[i] as usize;
     }
 
-    let out_slice = unsafe { std::slice::from_raw_parts_mut(out_ptr, ulen as usize) };
-    unstripe(out_slice, &out_n, ulen, n as u32, &mut idx_n);
     *out_size = ulen;
-    out_ptr
+    // De-interleave the n stripes into the output buffer.
+    match out {
+        Some(o) => {
+            unstripe(o, &out_n, ulen, n as u32, &mut idx_n);
+            Some(Vec::new())
+        }
+        None => {
+            let mut owned = vec![0u8; ulen as usize];
+            unstripe(&mut owned, &out_n, ulen, n as u32, &mut idx_n);
+            Some(owned)
+        }
+    }
 }
 
 // rANS_static4x16pr.c:1875
 /// `unsigned char *rans_uncompress_4x16(unsigned char *in, unsigned int in_size, unsigned int *out_size)`
 pub fn rans_uncompress_4x16(input: &[u8], out_size: &mut u32) -> Vec<u8> {
-    let r = rans_uncompress_to_4x16_into(input, std::ptr::null_mut(), None, out_size);
-    if r.is_null() {
-        return Vec::new();
+    match rans_uncompress_to_4x16_into(input, None, None, out_size) {
+        Some(mut v) => {
+            v.truncate(*out_size as usize);
+            v
+        }
+        None => Vec::new(),
     }
-    let v = unsafe { std::slice::from_raw_parts(r, *out_size as usize).to_vec() };
-    unsafe { c_compat::free(r as *mut std::ffi::c_void) };
-    v
 }
 
 #[cfg(test)]

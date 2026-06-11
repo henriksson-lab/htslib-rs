@@ -8,9 +8,9 @@
 use crate::htslib_rs::{
     hfile::{
         hFILE_plugin, hFILE_scheme_handler, hclose, hclose_abruptly, hfile_add_scheme_handler,
-        hfile_c_1342_hfile_always_remote, hfile_destroy, hfile_init, hopen, hpeek,
+        hfile_c_1342_hfile_always_remote, hopen, hpeek, HFileBackend,
     },
-    hts::{hFILE, hts_json_token, hts_verbose, ks_release, kstring_t, size_t},
+    hts::{hFILE, hts_json_token, hts_verbose, ks_release, kstring_t},
     textutils::{
         hts_json_token_str_ref, hts_json_token_type_ref, textutils_hts_json_fnext_ref,
         textutils_hts_json_fskip_value_ref,
@@ -30,33 +30,6 @@ const HFILE_LIBCURL_TRIED_SEEK: c_uint = 1 << 7;
 
 const AUTH_REFRESH_EARLY_SECS: libc::time_t = 60;
 const MIN_SEEK_FORWARD: libc::off_t = 1_000_000;
-
-type HFileReadFn = unsafe extern "C" fn(*mut hFILE, *mut c_void, size_t) -> libc::ssize_t;
-type HFileWriteFn = unsafe extern "C" fn(*mut hFILE, *const c_void, size_t) -> libc::ssize_t;
-type HFileSeekFn = unsafe extern "C" fn(*mut hFILE, libc::off_t, c_int) -> libc::off_t;
-type HFileFlushFn = unsafe extern "C" fn(*mut hFILE) -> c_int;
-type HFileCloseFn = unsafe extern "C" fn(*mut hFILE) -> c_int;
-
-#[repr(C)]
-struct HFileBackend {
-    read: Option<HFileReadFn>,
-    write: Option<HFileWriteFn>,
-    seek: Option<HFileSeekFn>,
-    flush: Option<HFileFlushFn>,
-    close: Option<HFileCloseFn>,
-}
-
-#[repr(C)]
-struct HFileLayout {
-    buffer: *mut c_char,
-    begin: *mut c_char,
-    end: *mut c_char,
-    limit: *mut c_char,
-    backend: *const HFileBackend,
-    offset: libc::off_t,
-    flags: c_uint,
-    has_errno: c_int,
-}
 
 struct HFileLibcurlAuthToken {
     path: CString,
@@ -154,17 +127,6 @@ struct HFileLibcurlBuffer {
     len: usize,
 }
 
-#[repr(C)]
-struct HFileLibcurlCallbackPrefix {
-    base: HFileLayout,
-    easy: *mut c_void,
-    multi: *mut c_void,
-    file_size: libc::off_t,
-    buffer: HFileLibcurlBuffer,
-    final_result: c_int,
-    flags: c_uint,
-}
-
 pub(crate) type HFileLibcurlHttpHeaderCallback =
     unsafe extern "C" fn(*mut c_void, *mut *mut *mut c_char) -> c_int;
 pub(crate) type HFileLibcurlRedirectCallback =
@@ -229,9 +191,12 @@ impl Default for HFileLibcurlHeaders {
     }
 }
 
-#[repr(C)]
-struct HFileLibcurlHeaderPrefix {
-    base: HFileLayout,
+// SEAM: was `HFileLibcurlHeaderPrefix` whose first field was `base: HFileLayout`.
+// The owning `hFILE` (Vec<u8> buffer + usize indices + `HFileBackend` enum) is
+// now external; this struct is purely the libcurl payload carried inside
+// `HFileBackend::Libcurl(Box<hFILE_libcurl>)`. Functions that need the base
+// buffer/offset/begin/end/limit reach them through the `&mut hFILE` argument.
+pub struct hFILE_libcurl {
     easy: *mut c_void,
     multi: *mut c_void,
     file_size: libc::off_t,
@@ -246,19 +211,9 @@ struct HFileLibcurlHeaderPrefix {
     preserved_bytes: usize,
 }
 
-impl Default for HFileLibcurlHeaderPrefix {
+impl Default for hFILE_libcurl {
     fn default() -> Self {
         Self {
-            base: HFileLayout {
-                buffer: std::ptr::null_mut(),
-                begin: std::ptr::null_mut(),
-                end: std::ptr::null_mut(),
-                limit: std::ptr::null_mut(),
-                backend: std::ptr::null(),
-                offset: 0,
-                flags: 0,
-                has_errno: 0,
-            },
             easy: std::ptr::null_mut(),
             multi: std::ptr::null_mut(),
             file_size: 0,
@@ -272,6 +227,18 @@ impl Default for HFileLibcurlHeaderPrefix {
             preserved: Vec::new(),
             preserved_bytes: 0,
         }
+    }
+}
+
+// Recover the libcurl payload from an owning `hFILE` (used at the FFI-style
+// callback boundaries where curl hands us back a `*mut hFILE` via WRITEDATA /
+// READDATA / PRIVATE). Replaces the old `fpv.cast::<HFileLibcurl*Prefix>()`.
+unsafe fn libcurl_payload_mut(fp: &mut hFILE) -> Option<&mut hFILE_libcurl> {
+    match &mut fp.backend {
+        HFileBackend::Libcurl(curl) => Some(&mut **curl),
+        #[cfg(feature = "gcs")]
+        HFileBackend::Gcs(curl) => Some(&mut **curl),
+        _ => None,
     }
 }
 
@@ -318,11 +285,7 @@ static mut HFILE_LIBCURL_SHARE_LOCK: crate::htslib_rs::c_compat::pthread_mutex_t
     crate::htslib_rs::c_compat::PTHREAD_MUTEX_INITIALIZER;
 static mut HFILE_LIBCURL_AUTH_LOCK: crate::htslib_rs::c_compat::pthread_mutex_t =
     crate::htslib_rs::c_compat::PTHREAD_MUTEX_INITIALIZER;
-static mut HFILE_LIBCURL_USERAGENT: kstring_t = kstring_t {
-    l: 0,
-    m: 0,
-    s: std::ptr::null_mut(),
-};
+static mut HFILE_LIBCURL_USERAGENT: kstring_t = kstring_t { data: Vec::new() };
 static mut HFILE_LIBCURL_SHARE: *mut c_void = std::ptr::null_mut();
 static mut HFILE_LIBCURL_AUTH_PATH: Option<CString> = None;
 // Header state keeps NonNull pointers to auth tokens; Box keeps token
@@ -685,10 +648,7 @@ pub unsafe extern "C" fn hfile_libcurl_c_326_libcurl_exit() {
         HFILE_LIBCURL_SHARE = std::ptr::null_mut();
     }
 
-    libc::free(HFILE_LIBCURL_USERAGENT.s.cast());
-    HFILE_LIBCURL_USERAGENT.l = 0;
-    HFILE_LIBCURL_USERAGENT.m = 0;
-    HFILE_LIBCURL_USERAGENT.s = std::ptr::null_mut();
+    HFILE_LIBCURL_USERAGENT.data = Vec::new();
 
     *std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_PATH) = None;
 
@@ -743,14 +703,14 @@ pub(crate) unsafe fn hfile_libcurl_c_372_free_headers(
 
 // original: get_header_list (htslib/hfile_libcurl.c:387)
 pub unsafe fn hfile_libcurl_c_387_get_header_list(fp: *mut c_void) -> *mut c_void {
-    let Some(fp) = fp.cast::<HFileLibcurlHeaderPrefix>().as_mut() else {
+    let Some(fp) = fp.cast::<hFILE_libcurl>().as_mut() else {
         return std::ptr::null_mut();
     };
     hfile_libcurl_get_header_list_ref(fp).map_or(std::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
 }
 
 fn hfile_libcurl_get_header_list_ref(
-    fp: &mut HFileLibcurlHeaderPrefix,
+    fp: &mut hFILE_libcurl,
 ) -> Option<NonNull<HFileLibcurlCurlSlist>> {
     if !fp.headers.fixed.is_empty() {
         NonNull::new(fp.headers.fixed.as_mut_ptr())
@@ -776,13 +736,13 @@ fn hfile_libcurl_is_authorization_ref(hdr: &CStr) -> bool {
 
 // original: add_callback_headers (htslib/hfile_libcurl.c:399)
 pub unsafe fn hfile_libcurl_c_399_add_callback_headers(fp: *mut c_void) -> c_int {
-    let Some(fp) = fp.cast::<HFileLibcurlHeaderPrefix>().as_mut() else {
+    let Some(fp) = fp.cast::<hFILE_libcurl>().as_mut() else {
         return -1;
     };
     hfile_libcurl_add_callback_headers_ref(fp)
 }
 
-unsafe fn hfile_libcurl_add_callback_headers_ref(fp: &mut HFileLibcurlHeaderPrefix) -> c_int {
+unsafe fn hfile_libcurl_add_callback_headers_ref(fp: &mut hFILE_libcurl) -> c_int {
     let Some(callback) = fp.headers.callback else {
         return 0;
     };
@@ -849,7 +809,7 @@ unsafe fn hfile_libcurl_read_auth_json_ref(
         type_: 0,
         str_: std::ptr::null_mut(),
     };
-    let mut str_: kstring_t = std::mem::zeroed();
+    let mut str_: kstring_t = kstring_t::default();
     let mut token: Option<CString> = None;
     let mut type_: Option<CString> = None;
     let mut expiry: Option<CString> = None;
@@ -873,19 +833,19 @@ unsafe fn hfile_libcurl_read_auth_json_ref(
             if ret != b's' as c_int {
                 return finish_auth_json(&mut str_, ret);
             }
-            token = hfile_libcurl_take_released_cstring(ks_release(&mut str_));
+            token = CString::new(ks_release(&mut str_)).ok();
         } else if libc::strcmp(key, c"token_type".as_ptr()) == 0 {
             ret = textutils_hts_json_fnext_ref(auth_fp, &mut t, &mut str_) as c_int;
             if ret != b's' as c_int {
                 return finish_auth_json(&mut str_, ret);
             }
-            type_ = hfile_libcurl_take_released_cstring(ks_release(&mut str_));
+            type_ = CString::new(ks_release(&mut str_)).ok();
         } else if libc::strcmp(key, c"expires_in".as_ptr()) == 0 {
             ret = textutils_hts_json_fnext_ref(auth_fp, &mut t, &mut str_) as c_int;
             if ret != b'n' as c_int {
                 return finish_auth_json(&mut str_, ret);
             }
-            expiry = hfile_libcurl_take_released_cstring(ks_release(&mut str_));
+            expiry = CString::new(ks_release(&mut str_)).ok();
         } else if textutils_hts_json_fskip_value_ref(auth_fp, 0) != b'v' as c_char {
             ret = b'?' as c_int;
             return finish_auth_json(&mut str_, ret);
@@ -923,10 +883,7 @@ unsafe fn hfile_libcurl_read_auth_json_ref(
 }
 
 unsafe fn finish_auth_json(str_: &mut kstring_t, ret: c_int) -> c_int {
-    libc::free(str_.s.cast());
-    str_.s = std::ptr::null_mut();
-    str_.l = 0;
-    str_.m = 0;
+    str_.data = Vec::new();
     ret
 }
 
@@ -945,33 +902,28 @@ unsafe fn hfile_libcurl_read_auth_plain_ref(
     tok: &mut HFileLibcurlAuthToken,
     auth_fp: &mut hFILE,
 ) -> c_int {
-    let mut line: kstring_t = std::mem::zeroed();
+    let mut line: kstring_t = kstring_t::default();
 
     if crate::htslib_rs::hfile::khgetline(&mut line, auth_fp as *mut hFILE) < 0 {
-        libc::free(line.s.cast());
-        return -1;
-    }
-    if crate::htslib_rs::hts::kputc(0, &mut line) < 0 {
-        libc::free(line.s.cast());
         return -1;
     }
 
-    let mut start = line.s;
-    while *start != 0 && libc::isspace(*start as c_uchar as c_int) != 0 {
-        start = start.add(1);
+    let mut start = 0usize;
+    while start < line.data.len()
+        && libc::isspace(line.data[start] as c_uchar as c_int) != 0
+    {
+        start += 1;
     }
     let mut end = start;
-    while *end != 0 && libc::isspace(*end as c_uchar as c_int) == 0 {
-        end = end.add(1);
+    while end < line.data.len() && libc::isspace(line.data[end] as c_uchar as c_int) == 0 {
+        end += 1;
     }
 
     if end > start {
-        let token_len = end.offset_from(start) as usize;
-        let token_bytes = std::slice::from_raw_parts(start.cast::<u8>(), token_len);
+        let token_bytes = &line.data[start..end];
         let mut header = b"Authorization: Bearer ".to_vec();
         header.extend_from_slice(token_bytes);
         let Ok(header) = CString::new(header) else {
-            libc::free(line.s.cast());
             return -1;
         };
         tok.token = Some(header);
@@ -980,7 +932,6 @@ unsafe fn hfile_libcurl_read_auth_plain_ref(
     }
 
     tok.expiry = 0;
-    libc::free(line.s.cast());
     0
 }
 
@@ -1049,13 +1000,13 @@ unsafe fn hfile_libcurl_renew_auth_token_ref(
 
 // original: add_auth_header (htslib/hfile_libcurl.c:587)
 pub unsafe fn hfile_libcurl_c_587_add_auth_header(fp: *mut c_void) -> c_int {
-    let Some(fp) = fp.cast::<HFileLibcurlHeaderPrefix>().as_mut() else {
+    let Some(fp) = fp.cast::<hFILE_libcurl>().as_mut() else {
         return -1;
     };
     hfile_libcurl_add_auth_header_ref(fp)
 }
 
-unsafe fn hfile_libcurl_add_auth_header_ref(fp: &mut HFileLibcurlHeaderPrefix) -> c_int {
+unsafe fn hfile_libcurl_add_auth_header_ref(fp: &mut hFILE_libcurl) -> c_int {
     let mut changed = 0;
 
     let Some(mut auth) = fp.headers.auth else {
@@ -1106,7 +1057,7 @@ unsafe fn hfile_libcurl_add_auth_header_ref(fp: &mut HFileLibcurlHeaderPrefix) -
 
 // original: get_auth_token (htslib/hfile_libcurl.c:650)
 pub unsafe fn hfile_libcurl_c_650_get_auth_token(fp: *mut c_void, url: *const c_char) -> c_int {
-    let Some(fp) = fp.cast::<HFileLibcurlHeaderPrefix>().as_mut() else {
+    let Some(fp) = fp.cast::<hFILE_libcurl>().as_mut() else {
         return -1;
     };
     let Some(url) = (!url.is_null()).then(|| CStr::from_ptr(url)) else {
@@ -1115,7 +1066,7 @@ pub unsafe fn hfile_libcurl_c_650_get_auth_token(fp: *mut c_void, url: *const c_
     hfile_libcurl_get_auth_token_ref(fp, url)
 }
 
-unsafe fn hfile_libcurl_get_auth_token_ref(fp: &mut HFileLibcurlHeaderPrefix, url: &CStr) -> c_int {
+unsafe fn hfile_libcurl_get_auth_token_ref(fp: &mut hFILE_libcurl, url: &CStr) -> c_int {
     let auth_path_ptr = std::ptr::addr_of!(HFILE_LIBCURL_AUTH_PATH);
     let Some(auth_path) = (*auth_path_ptr).as_ref() else {
         return 0;
@@ -1188,13 +1139,13 @@ unsafe fn hfile_libcurl_get_auth_token_ref(fp: &mut HFileLibcurlHeaderPrefix, ur
 
 // original: process_messages (htslib/hfile_libcurl.c:718)
 pub unsafe fn hfile_libcurl_c_718_process_messages(fp: *mut c_void) {
-    let Some(fp) = fp.cast::<HFileLibcurlHeaderPrefix>().as_mut() else {
+    let Some(fp) = fp.cast::<hFILE_libcurl>().as_mut() else {
         return;
     };
     hfile_libcurl_process_messages_ref(fp);
 }
 
-unsafe fn hfile_libcurl_process_messages_ref(fp: &mut HFileLibcurlHeaderPrefix) {
+unsafe fn hfile_libcurl_process_messages_ref(fp: &mut hFILE_libcurl) {
     let mut remaining = 0;
     loop {
         let msg = curl_multi_info_read(fp.multi, &mut remaining);
@@ -1210,13 +1161,13 @@ unsafe fn hfile_libcurl_process_messages_ref(fp: &mut HFileLibcurlHeaderPrefix) 
 
 // original: wait_perform (htslib/hfile_libcurl.c:736)
 pub unsafe fn hfile_libcurl_c_736_wait_perform(fp: *mut c_void) -> c_int {
-    let Some(fp) = fp.cast::<HFileLibcurlHeaderPrefix>().as_mut() else {
+    let Some(fp) = fp.cast::<hFILE_libcurl>().as_mut() else {
         return -1;
     };
     hfile_libcurl_wait_perform_ref(fp)
 }
 
-unsafe fn hfile_libcurl_wait_perform_ref(fp: &mut HFileLibcurlHeaderPrefix) -> c_int {
+unsafe fn hfile_libcurl_wait_perform_ref(fp: &mut hFILE_libcurl) -> c_int {
     if (fp.flags & HFILE_LIBCURL_PERFORM_AGAIN) == 0 {
         let mut timeout: libc::c_long = 1000;
         if curl_multi_timeout(fp.multi, &mut timeout) != CURLM_OK || timeout < 0 {
@@ -1264,7 +1215,9 @@ pub unsafe extern "C" fn hfile_libcurl_c_789_recv_callback(
     const CURL_WRITEFUNC_PAUSE: usize = 0x10000001;
     const HFILE_LIBCURL_PAUSED: c_uint = 1 << 0;
 
-    let Some(fp) = fpv.cast::<HFileLibcurlCallbackPrefix>().as_mut() else {
+    // SEAM: WRITEDATA points at the libcurl payload (`hFILE_libcurl`), not the
+    // owning `hFILE` — see the CURLOPT_WRITEDATA setopt calls in open/restart.
+    let Some(fp) = fpv.cast::<hFILE_libcurl>().as_mut() else {
         return 0;
     };
     let n = size.saturating_mul(nmemb);
@@ -1297,9 +1250,12 @@ pub unsafe extern "C" fn hfile_libcurl_c_807_header_callback(
     userp: *mut c_void,
 ) -> usize {
     let realsize = size.saturating_mul(nmemb);
-    let resp = userp.cast::<kstring_t>();
+    let Some(resp) = userp.cast::<kstring_t>().as_mut() else {
+        return 0;
+    };
+    let contents = std::slice::from_raw_parts(contents.cast::<u8>(), realsize);
 
-    if crate::htslib_rs::hts::kputsn(contents.cast(), realsize, resp) == libc::EOF {
+    if crate::htslib_rs::hts::kputsn(contents, realsize, resp) == libc::EOF {
         0
     } else {
         realsize
@@ -1335,14 +1291,14 @@ pub unsafe fn hfile_libcurl_c_836_retry_sleep(delay_ms: libc::c_long) {
 
 // original: retry_reconnect (htslib/hfile_libcurl.c:848)
 pub unsafe fn hfile_libcurl_c_848_retry_reconnect(fp: *mut c_void, pos: libc::off_t) -> c_int {
-    let Some(fp) = fp.cast::<HFileLibcurlHeaderPrefix>().as_mut() else {
+    let Some(fp) = fp.cast::<hFILE_libcurl>().as_mut() else {
         return -1;
     };
     hfile_libcurl_retry_reconnect_ref(fp, pos)
 }
 
 unsafe fn hfile_libcurl_retry_reconnect_ref(
-    fp: &mut HFileLibcurlHeaderPrefix,
+    fp: &mut hFILE_libcurl,
     pos: libc::off_t,
 ) -> c_int {
     hfile_libcurl_c_821_refresh_retry_config();
@@ -1358,22 +1314,27 @@ unsafe fn hfile_libcurl_retry_reconnect_ref(
 }
 
 // original: libcurl_read (htslib/hfile_libcurl.c:876)
-pub unsafe extern "C" fn hfile_libcurl_c_876_libcurl_read(
-    fpv: *mut hFILE,
+// SEAM: dispatched from `HFileBackend::read` with `fp: &mut hFILE`; the libcurl
+// payload is recovered from `fp.backend`, and `fp.offset` (the owning base
+// offset) is read out for the retry-position math below.
+pub unsafe fn hfile_libcurl_c_876_libcurl_read(
+    fp: &mut hFILE,
     bufferv: *mut c_void,
     nbytes: usize,
 ) -> libc::ssize_t {
-    let Some(fp) = fpv.cast::<HFileLibcurlHeaderPrefix>().as_mut() else {
+    let base_offset = fp.offset;
+    let Some(curl) = libcurl_payload_mut(fp) else {
         return -1;
     };
     let Some(buffer) = NonNull::new(bufferv.cast::<c_char>()) else {
         return if nbytes == 0 { 0 } else { -1 };
     };
-    hfile_libcurl_read_ref(fp, buffer, nbytes)
+    hfile_libcurl_read_ref(curl, base_offset, buffer, nbytes)
 }
 
 unsafe fn hfile_libcurl_read_ref(
-    fp: &mut HFileLibcurlHeaderPrefix,
+    fp: &mut hFILE_libcurl,
+    base_offset: libc::off_t,
     buffer: NonNull<c_char>,
     nbytes: usize,
 ) -> libc::ssize_t {
@@ -1467,7 +1428,7 @@ unsafe fn hfile_libcurl_read_ref(
 
         if (fp.flags & HFILE_LIBCURL_FINISHED) != 0 && fp.final_result != CURLE_OK {
             let err = fp.final_result;
-            let pos = fp.base.offset + filled as libc::off_t;
+            let pos = base_offset + filled as libc::off_t;
             if hfile_libcurl_c_233_is_retryable(fp.easy, err) != 0
                 && hfile_libcurl_retry_reconnect_ref(fp, pos) == 0
             {
@@ -1495,7 +1456,8 @@ pub unsafe extern "C" fn hfile_libcurl_c_1006_send_callback(
     const HFILE_LIBCURL_PAUSED: c_uint = 1 << 0;
     const HFILE_LIBCURL_CLOSING: c_uint = 1 << 1;
 
-    let Some(fp) = fpv.cast::<HFileLibcurlCallbackPrefix>().as_mut() else {
+    // SEAM: READDATA points at the libcurl payload (`hFILE_libcurl`).
+    let Some(fp) = fpv.cast::<hFILE_libcurl>().as_mut() else {
         return 0;
     };
     let mut n = size.saturating_mul(nmemb);
@@ -1526,12 +1488,14 @@ pub unsafe extern "C" fn hfile_libcurl_c_1006_send_callback(
 }
 
 // original: libcurl_write (htslib/hfile_libcurl.c:1024)
-pub unsafe extern "C" fn hfile_libcurl_c_1024_libcurl_write(
-    fpv: *mut hFILE,
+// SEAM: dispatched from `HFileBackend::write` with `fp: &mut hFILE`; only the
+// libcurl payload is touched (no base buffer access in the write path).
+pub unsafe fn hfile_libcurl_c_1024_libcurl_write(
+    fp: &mut hFILE,
     bufferv: *const c_void,
     nbytes: usize,
 ) -> libc::ssize_t {
-    let Some(fp) = fpv.cast::<HFileLibcurlHeaderPrefix>().as_mut() else {
+    let Some(fp) = libcurl_payload_mut(fp) else {
         return -1;
     };
     let Some(buffer) = NonNull::new(bufferv.cast::<c_char>().cast_mut()) else {
@@ -1541,7 +1505,7 @@ pub unsafe extern "C" fn hfile_libcurl_c_1024_libcurl_write(
 }
 
 unsafe fn hfile_libcurl_write_ref(
-    fp: &mut HFileLibcurlHeaderPrefix,
+    fp: &mut hFILE_libcurl,
     buffer: NonNull<c_char>,
     nbytes: usize,
 ) -> libc::ssize_t {
@@ -1578,43 +1542,79 @@ unsafe fn hfile_libcurl_write_ref(
 }
 
 // original: preserve_buffer_content (htslib/hfile_libcurl.c:1051)
-pub unsafe fn hfile_libcurl_c_1051_preserve_buffer_content(fp: *mut c_void) {
-    let Some(fp) = fp.cast::<HFileLibcurlHeaderPrefix>().as_mut() else {
+// SEAM: base begin/end/limit are now usize byte indices into `hFILE::buffer`
+// (a Vec<u8>); the bytes to preserve are passed as a slice from the owner.
+pub unsafe fn hfile_libcurl_c_1051_preserve_buffer_content(fp: &mut hFILE) {
+    let begin = fp.begin;
+    let end = fp.end;
+    let cap = fp.limit;
+    // Borrow the base buffer slice disjointly, then the payload.
+    let buf_slice: &[u8] = if end > begin {
+        std::slice::from_raw_parts(fp.buffer.as_ptr().add(begin), end - begin)
+    } else {
+        &[]
+    };
+    let Some(curl) = libcurl_payload_mut(fp) else {
         return;
     };
-    hfile_libcurl_preserve_buffer_content_ref(fp);
+    hfile_libcurl_preserve_buffer_content_ref(curl, begin, end, cap, buf_slice);
 }
 
-unsafe fn hfile_libcurl_preserve_buffer_content_ref(fp: &mut HFileLibcurlHeaderPrefix) {
-    if fp.base.begin == fp.base.end {
+unsafe fn hfile_libcurl_preserve_buffer_content_ref(
+    fp: &mut hFILE_libcurl,
+    begin: usize,
+    end: usize,
+    cap: usize,
+    buf: &[u8],
+) {
+    if begin == end {
         fp.preserved_bytes = 0;
         return;
     }
-    let cap = fp.base.limit.offset_from(fp.base.buffer) as usize;
     if fp.preserved.len() < cap {
         fp.preserved.resize(cap, 0);
     }
-    let n = fp.base.end.offset_from(fp.base.begin) as usize;
-    let dst = std::slice::from_raw_parts_mut(fp.preserved.as_mut_ptr(), n);
-    let src = std::slice::from_raw_parts(fp.base.begin, n);
-    dst.copy_from_slice(src);
+    let n = end - begin;
+    let dst = std::slice::from_raw_parts_mut(fp.preserved.as_mut_ptr().cast::<u8>(), n);
+    dst.copy_from_slice(&buf[..n]);
     fp.preserved_bytes = n;
 }
 
 // original: libcurl_seek (htslib/hfile_libcurl.c:1071)
-pub unsafe extern "C" fn hfile_libcurl_c_1071_libcurl_seek(
-    fpv: *mut hFILE,
+// SEAM: dispatched from `HFileBackend::seek` with `fp: &mut hFILE`; the base
+// offset/begin/end (now usize indices) are read out and threaded into the
+// payload-side seek logic.
+pub unsafe fn hfile_libcurl_c_1071_libcurl_seek(
+    fp: &mut hFILE,
     offset: libc::off_t,
     whence: c_int,
 ) -> libc::off_t {
-    let Some(fp) = fpv.cast::<HFileLibcurlHeaderPrefix>().as_mut() else {
+    let base_offset = fp.offset;
+    let base_begin = fp.begin;
+    let base_end = fp.end;
+    let base_cap = fp.limit;
+    // Snapshot the base buffer bytes [begin,end) for a possible preserve below.
+    let buf_slice: &[u8] = if base_end > base_begin {
+        std::slice::from_raw_parts(fp.buffer.as_ptr().add(base_begin), base_end - base_begin)
+    } else {
+        &[]
+    };
+    let Some(curl) = libcurl_payload_mut(fp) else {
         return -1;
     };
-    hfile_libcurl_seek_ref(fp, offset, whence)
+    hfile_libcurl_seek_ref(
+        curl, base_offset, base_begin, base_end, base_cap, buf_slice, offset, whence,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn hfile_libcurl_seek_ref(
-    fp: &mut HFileLibcurlHeaderPrefix,
+    fp: &mut hFILE_libcurl,
+    base_offset: libc::off_t,
+    base_begin: usize,
+    base_end: usize,
+    base_cap: usize,
+    buf: &[u8],
     offset: libc::off_t,
     whence: c_int,
 ) -> libc::off_t {
@@ -1625,7 +1625,7 @@ unsafe fn hfile_libcurl_seek_ref(
     let origin = match whence {
         libc::SEEK_SET => 0,
         libc::SEEK_CUR => {
-            let curpos = fp.base.offset + fp.base.begin.offset_from(fp.base.buffer) as libc::off_t;
+            let curpos = base_offset + base_begin as libc::off_t;
             match curpos.checked_add(offset) {
                 Some(pos) if pos >= 0 => pos,
                 _ => {
@@ -1660,9 +1660,8 @@ unsafe fn hfile_libcurl_seek_ref(
     let pos = origin + offset;
     if (fp.flags & HFILE_LIBCURL_TRIED_SEEK) != 0 {
         if fp.delayed_seek < 0 {
-            fp.last_offset =
-                fp.base.offset + fp.base.end.offset_from(fp.base.buffer) as libc::off_t;
-            hfile_libcurl_preserve_buffer_content_ref(fp);
+            fp.last_offset = base_offset + base_end as libc::off_t;
+            hfile_libcurl_preserve_buffer_content_ref(fp, base_begin, base_end, base_cap, buf);
         }
         fp.delayed_seek = pos;
         return pos;
@@ -1680,19 +1679,21 @@ pub unsafe fn hfile_libcurl_c_1134_restart_from_position(
     fp: *mut c_void,
     pos: libc::off_t,
 ) -> c_int {
-    let Some(fp) = fp.cast::<HFileLibcurlHeaderPrefix>().as_mut() else {
+    let Some(fp) = fp.cast::<hFILE_libcurl>().as_mut() else {
         return -1;
     };
     hfile_libcurl_restart_from_position_ref(fp, pos)
 }
 
 unsafe fn hfile_libcurl_restart_from_position_ref(
-    fp: &mut HFileLibcurlHeaderPrefix,
+    fp: &mut hFILE_libcurl,
     pos: libc::off_t,
 ) -> c_int {
-    let fp_ptr = fp as *mut HFileLibcurlHeaderPrefix;
-    let mut temp_fp = HFileLibcurlHeaderPrefix::default();
-    temp_fp.base.backend = fp.base.backend;
+    let fp_ptr = fp as *mut hFILE_libcurl;
+    let mut temp_fp = hFILE_libcurl::default();
+    // SEAM: temp_fp is now a bare libcurl payload (no embedded base); the old
+    // `temp_fp.base.backend = fp.base.backend` copy is gone — the WRITEDATA /
+    // PRIVATE curl handles point straight at this payload.
     temp_fp.multi = fp.multi;
     temp_fp.file_size = fp.file_size;
     temp_fp.final_result = -1;
@@ -1737,12 +1738,12 @@ unsafe fn hfile_libcurl_restart_from_position_ref(
     err |= curl_easy_setopt(
         temp_fp.easy,
         CURLOPT_PRIVATE,
-        (&mut temp_fp as *mut HFileLibcurlHeaderPrefix).cast::<c_void>(),
+        (&mut temp_fp as *mut hFILE_libcurl).cast::<c_void>(),
     );
     err |= curl_easy_setopt(
         temp_fp.easy,
         CURLOPT_WRITEDATA,
-        (&mut temp_fp as *mut HFileLibcurlHeaderPrefix).cast::<c_void>(),
+        (&mut temp_fp as *mut hFILE_libcurl).cast::<c_void>(),
     );
     if err != CURLE_OK {
         save_errno = hfile_libcurl_c_153_easy_errno(temp_fp.easy, err);
@@ -1819,14 +1820,17 @@ unsafe fn hfile_libcurl_restart_from_position_ref(
 }
 
 // original: libcurl_close (htslib/hfile_libcurl.c:1266)
-pub unsafe extern "C" fn hfile_libcurl_c_1266_libcurl_close(fpv: *mut hFILE) -> c_int {
-    let Some(fp) = fpv.cast::<HFileLibcurlHeaderPrefix>().as_mut() else {
+// SEAM: dispatched from `HFileBackend::close` with `fp: &mut hFILE`; the
+// libcurl payload is recovered from `fp.backend`. Deallocation of the owning
+// `hFILE` is the owner's Drop — close only tears down the curl resources.
+pub unsafe fn hfile_libcurl_c_1266_libcurl_close(fp: &mut hFILE) -> c_int {
+    let Some(fp) = libcurl_payload_mut(fp) else {
         return -1;
     };
     hfile_libcurl_close_ref(fp)
 }
 
-unsafe fn hfile_libcurl_close_ref(fp: &mut HFileLibcurlHeaderPrefix) -> c_int {
+unsafe fn hfile_libcurl_close_ref(fp: &mut hFILE_libcurl) -> c_int {
     let mut save_errno = 0;
     fp.buffer.len = 0;
     fp.flags |= HFILE_LIBCURL_CLOSING;
@@ -1935,20 +1939,18 @@ unsafe fn hfile_libcurl_open_once(
     headers: Option<&HFileLibcurlHeaders>,
     mode: u8,
 ) -> *mut hFILE {
-    let fp = hfile_init(
-        std::mem::size_of::<HFileLibcurlHeaderPrefix>(),
-        modes.as_ptr(),
-        0,
-    )
-    .cast::<HFileLibcurlHeaderPrefix>();
-    if fp.is_null() {
-        return std::ptr::null_mut();
-    }
+    // SEAM: the libcurl payload is heap-owned via Box (stable address) so the
+    // curl WRITEDATA / READDATA / PRIVATE pointers stay valid after the box is
+    // moved into `HFileBackend::Libcurl`. On success we wrap it in an owned
+    // `hFILE`; on error `goto_open_error` drops the box. (Was: hfile_init()
+    // returning a malloc'd `hFILE_libcurl` whose `base` we filled in.)
+    let mut payload = Box::new(hFILE_libcurl::default());
+    let fp: *mut hFILE_libcurl = &mut *payload;
 
     if let Some(headers) = headers {
-        std::ptr::addr_of_mut!((*fp).headers).write(headers.clone());
+        (*fp).headers = headers.clone();
     } else {
-        std::ptr::addr_of_mut!((*fp).headers).write(HFileLibcurlHeaders::default());
+        (*fp).headers = HFileLibcurlHeaders::default();
     }
     (*fp).file_size = -1;
     (*fp).buffer.ptr = None;
@@ -1963,7 +1965,7 @@ unsafe fn hfile_libcurl_open_once(
     }
     (*fp).delayed_seek = -1;
     (*fp).last_offset = -1;
-    std::ptr::addr_of_mut!((*fp).preserved).write(Vec::new());
+    (*fp).preserved = Vec::new();
     (*fp).preserved_bytes = 0;
     (*fp).nrunning = 0;
     (*fp).easy = std::ptr::null_mut();
@@ -2015,7 +2017,18 @@ unsafe fn hfile_libcurl_open_once(
     if !ca.is_null() {
         err |= curl_easy_setopt((*fp).easy, CURLOPT_CAINFO, ca);
     }
-    err |= curl_easy_setopt((*fp).easy, CURLOPT_USERAGENT, HFILE_LIBCURL_USERAGENT.s);
+    let useragent_c = if HFILE_LIBCURL_USERAGENT.data.is_empty() {
+        None
+    } else {
+        CString::new(HFILE_LIBCURL_USERAGENT.data.clone()).ok()
+    };
+    err |= curl_easy_setopt(
+        (*fp).easy,
+        CURLOPT_USERAGENT,
+        useragent_c
+            .as_ref()
+            .map_or(std::ptr::null(), |s| s.as_ptr()),
+    );
     if (*fp).headers.callback.is_some() && hfile_libcurl_add_callback_headers_ref(&mut *fp) != 0 {
         goto_open_error(fp);
         return std::ptr::null_mut();
@@ -2033,7 +2046,7 @@ unsafe fn hfile_libcurl_open_once(
     if hts_verbose >= 8 {
         err |= curl_easy_setopt((*fp).easy, CURLOPT_VERBOSE, 1 as libc::c_long);
     }
-    let mut in_header: kstring_t = std::mem::zeroed();
+    let mut in_header: kstring_t = kstring_t::default();
     if (*fp).headers.redirect.is_some() {
         err |= curl_easy_setopt(
             (*fp).easy,
@@ -2087,7 +2100,7 @@ unsafe fn hfile_libcurl_open_once(
     }
     if let Some(redirect) = (*fp).headers.redirect {
         if (300..400).contains(&response) {
-            let mut new_url: kstring_t = std::mem::zeroed();
+            let mut new_url: kstring_t = kstring_t::default();
             if redirect(
                 (*fp).headers.redirect_data,
                 response,
@@ -2096,21 +2109,24 @@ unsafe fn hfile_libcurl_open_once(
             ) != 0
             {
                 hfile_libcurl_set_callback_failure_errno();
-                libc::free(in_header.s.cast());
-                libc::free(new_url.s.cast());
                 goto_open_error(fp);
                 return std::ptr::null_mut();
             }
 
-            err = curl_easy_setopt((*fp).easy, CURLOPT_URL, new_url.s);
+            let new_url_c = CString::new(new_url.data.clone()).ok();
+            err = curl_easy_setopt(
+                (*fp).easy,
+                CURLOPT_URL,
+                new_url_c
+                    .as_ref()
+                    .map_or(std::ptr::null(), |s| s.as_ptr()),
+            );
             err |= curl_easy_setopt(
                 (*fp).easy,
                 CURLOPT_HEADERFUNCTION,
                 std::ptr::null::<c_void>(),
             );
             err |= curl_easy_setopt((*fp).easy, CURLOPT_HEADERDATA, std::ptr::null::<c_void>());
-            libc::free(in_header.s.cast());
-            libc::free(new_url.s.cast());
             if err != CURLE_OK {
                 *crate::htslib_rs::c_compat::__errno_location() =
                     hfile_libcurl_c_153_easy_errno((*fp).easy, err);
@@ -2139,7 +2155,6 @@ unsafe fn hfile_libcurl_open_once(
                 std::ptr::null::<c_void>(),
             );
             err |= curl_easy_setopt((*fp).easy, CURLOPT_HEADERDATA, std::ptr::null::<c_void>());
-            libc::free(in_header.s.cast());
             if err != CURLE_OK {
                 *crate::htslib_rs::c_compat::__errno_location() =
                     hfile_libcurl_c_153_easy_errno((*fp).easy, err);
@@ -2157,34 +2172,60 @@ unsafe fn hfile_libcurl_open_once(
             (*fp).file_size = offset;
         }
     }
-    (*fp).base.backend = &LIBCURL_BACKEND;
-    fp.cast()
+    // SEAM: success — wrap the libcurl payload in an owned `hFILE` carrying the
+    // `HFileBackend::Libcurl` variant. The Box move preserves the heap address
+    // the curl handles already point at. Replaces the old
+    // `(*fp).base.backend = &LIBCURL_BACKEND; fp.cast()`.
+    // `fp` (raw payload pointer) is no longer used; `payload` Box still owns it.
+    let owned = Box::new(libcurl_build_owned_hfile(payload, modes.to_bytes()));
+    Box::into_raw(owned)
 }
 
-unsafe fn goto_open_error(fp: *mut HFileLibcurlHeaderPrefix) {
+// SEAM: builds the owned `hFILE` root for a freshly-opened libcurl stream,
+// mirroring the buffer/flags setup the old `hfile_init` performed (128 KiB cap,
+// HFILE_MOBILE, HFILE_READONLY for read-only modes) but with a `Vec<u8>` buffer
+// and usize begin/end/limit indices.
+unsafe fn libcurl_build_owned_hfile(payload: Box<hFILE_libcurl>, mode: &[u8]) -> hFILE {
+    const HFILE_MOBILE: c_uint = 1 << 1;
+    const HFILE_READONLY: c_uint = 1 << 2;
+    let capacity = 128 * 1024usize;
+    let mut flags = HFILE_MOBILE;
+    if mode.contains(&b'r') && !mode.contains(&b'+') {
+        flags |= HFILE_READONLY;
+    }
+    hFILE {
+        buffer: vec![0u8; capacity],
+        begin: 0,
+        end: 0,
+        limit: capacity,
+        backend: HFileBackend::Libcurl(payload),
+        offset: 0,
+        flags,
+        has_errno: 0,
+    }
+}
+
+// SEAM: error cleanup for the open path. The libcurl payload is owned by the
+// caller's `payload` Box (dropped on return), so this only tears down the raw
+// curl handles; the Box's Drop releases the headers / preserved buffers. (Was:
+// also called hfile_destroy() to free the malloc'd struct + buffer.)
+unsafe fn goto_open_error(fp: *mut hFILE_libcurl) {
     let save = *crate::htslib_rs::c_compat::__errno_location();
     if !fp.is_null() {
         if !(*fp).easy.is_null() {
             curl_easy_cleanup((*fp).easy);
+            (*fp).easy = std::ptr::null_mut();
         }
         if !(*fp).multi.is_null() {
             curl_multi_cleanup((*fp).multi);
+            (*fp).multi = std::ptr::null_mut();
         }
         hfile_libcurl_c_372_free_headers(&mut (*fp).headers.fixed, 1);
         hfile_libcurl_c_372_free_headers(&mut (*fp).headers.extra, 1);
         drop(std::mem::take(&mut (*fp).preserved));
-        hfile_destroy(fp.cast());
     }
     *crate::htslib_rs::c_compat::__errno_location() = save;
 }
-
-static LIBCURL_BACKEND: HFileBackend = HFileBackend {
-    read: Some(hfile_libcurl_c_876_libcurl_read),
-    write: Some(hfile_libcurl_c_1024_libcurl_write),
-    seek: Some(hfile_libcurl_c_1071_libcurl_seek),
-    flush: None,
-    close: Some(hfile_libcurl_c_1266_libcurl_close),
-};
 
 // original: hopen_libcurl (htslib/hfile_libcurl.c:1549)
 pub unsafe fn hfile_libcurl_c_1549_hopen_libcurl(
@@ -2720,10 +2761,10 @@ mod tests {
             *std::ptr::addr_of_mut!(HFILE_LIBCURL_AUTH_MAP) = Some(Vec::new());
             HFILE_LIBCURL_ALLOW_UNENCRYPTED_AUTH_HEADER = 0;
 
-            let mut https_fp = HFileLibcurlHeaderPrefix::default();
+            let mut https_fp = hFILE_libcurl::default();
             assert_eq!(
                 hfile_libcurl_c_650_get_auth_token(
-                    (&mut https_fp as *mut HFileLibcurlHeaderPrefix).cast(),
+                    (&mut https_fp as *mut hFILE_libcurl).cast(),
                     c"https://example.test/data.bam".as_ptr(),
                 ),
                 0
@@ -2735,10 +2776,10 @@ mod tests {
                 b"Authorization: Bearer secret-token"
             );
 
-            let mut http_fp = HFileLibcurlHeaderPrefix::default();
+            let mut http_fp = hFILE_libcurl::default();
             assert_eq!(
                 hfile_libcurl_c_650_get_auth_token(
-                    (&mut http_fp as *mut HFileLibcurlHeaderPrefix).cast(),
+                    (&mut http_fp as *mut hFILE_libcurl).cast(),
                     c"http://example.test/data.bam".as_ptr(),
                 ),
                 0

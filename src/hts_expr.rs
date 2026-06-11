@@ -8,8 +8,7 @@ use crate::htslib_rs::hts::{
     HTS_LOG_ERROR,
 };
 
-#[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Default)]
 pub struct hts_expr_val_t {
     pub is_str: c_char,
     pub is_true: c_char,
@@ -18,17 +17,24 @@ pub struct hts_expr_val_t {
 }
 
 pub struct hts_filter_t {
-    pub expr: Vec<c_char>,
-    pub parsed: c_int,
-    pub curr_regex: c_int,
-    pub max_regex: c_int,
+    // NUL-terminated expression text. Carried as owned bytes; the trailing 0
+    // is retained because the recursive-descent parser walks it via a cursor.
+    pub expr: Vec<u8>,
+    pub parsed: bool,
+    pub curr_regex: usize,
+    pub max_regex: usize,
     pub preg: Vec<crate::htslib_rs::c_compat::regex_t>,
 }
 
 const MAX_REGEX: usize = 10;
 
 fn expr_val_exists(v: &hts_expr_val_t) -> bool {
-    !((v.is_str == 1 && v.s.s.is_null()) || (v.is_str == 0 && v.d.is_nan()))
+    // Mirror C hts_expr_val_exists (htslib/hts_expr.h:65): a string value exists
+    // iff its kstring buffer was actually allocated (`s.s != NULL`), NOT merely
+    // non-empty. An explicitly-set empty string therefore exists, while an
+    // absent value (never written) does not. We use the Vec's capacity as the
+    // `s.s != NULL` proxy, since kputs/kputsn force a non-zero capacity.
+    !((v.is_str == 1 && v.s.data.capacity() == 0) || (v.is_str == 0 && v.d.is_nan()))
 }
 
 fn expr_val_exists_true(v: &hts_expr_val_t) -> bool {
@@ -36,18 +42,14 @@ fn expr_val_exists_true(v: &hts_expr_val_t) -> bool {
 }
 
 fn expr_val_undef(v: &mut hts_expr_val_t) {
-    unsafe {
-        ks_clear(&mut v.s);
-    }
+    ks_clear(&mut v.s);
     v.is_true = 0;
     v.is_str = 0;
     v.d = f64::NAN;
 }
 
 fn expr_val_free(v: &mut hts_expr_val_t) {
-    unsafe {
-        ks_free(&mut v.s);
-    }
+    ks_free(&mut v.s);
 }
 
 pub fn hts_expr_val_exists(v: &hts_expr_val_t) -> c_int {
@@ -71,7 +73,7 @@ pub unsafe fn expr_func_length(res: &mut hts_expr_val_t) -> c_int {
         return -1;
     }
     res.is_str = 0;
-    res.d = res.s.l as f64;
+    res.d = res.s.data.len() as f64;
     0
 }
 
@@ -80,10 +82,9 @@ pub unsafe fn expr_func_min(res: &mut hts_expr_val_t) -> c_int {
         return -1;
     }
     let mut v = c_int::MAX;
-    let x = res.s.s.cast::<u8>();
-    for l in 0..res.s.l {
-        if v > *x.add(l) as c_int {
-            v = *x.add(l) as c_int;
+    for l in 0..res.s.data.len() {
+        if v > res.s.data[l] as c_int {
+            v = res.s.data[l] as c_int;
         }
     }
     res.is_str = 0;
@@ -96,10 +97,9 @@ pub unsafe fn expr_func_max(res: &mut hts_expr_val_t) -> c_int {
         return -1;
     }
     let mut v = c_int::MIN;
-    let x = res.s.s.cast::<u8>();
-    for l in 0..res.s.l {
-        if v < *x.add(l) as c_int {
-            v = *x.add(l) as c_int;
+    for l in 0..res.s.data.len() {
+        if v < res.s.data[l] as c_int {
+            v = res.s.data[l] as c_int;
         }
     }
     res.is_str = 0;
@@ -112,10 +112,9 @@ pub unsafe fn expr_func_avg(res: &mut hts_expr_val_t) -> c_int {
         return -1;
     }
     let mut v = 0.0;
-    let x = res.s.s.cast::<u8>();
     let mut l = 0usize;
-    while l < res.s.l {
-        v += *x.add(l) as f64;
+    while l < res.s.data.len() {
+        v += res.s.data[l] as f64;
         l += 1;
     }
     if l != 0 {
@@ -130,11 +129,7 @@ pub fn expr_val_init() -> hts_expr_val_t {
     hts_expr_val_t {
         is_str: 0,
         is_true: 0,
-        s: kstring_t {
-            l: 0,
-            m: 0,
-            s: std::ptr::null_mut(),
-        },
+        s: kstring_t::default(),
         d: 0.0,
     }
 }
@@ -157,10 +152,13 @@ unsafe fn c_prefix_matches(s: *const c_char, lit: &[u8]) -> bool {
 }
 
 unsafe fn expr_value_bytes(v: &hts_expr_val_t) -> Option<&[u8]> {
-    if v.is_str == 0 || v.s.s.is_null() {
+    // C compares with `res->s.s && val.s.s ? strcmp(...) : ...`, treating a NULL
+    // buffer as "no string". An allocated empty string still compares (strcmp on
+    // ""). Use capacity as the `s.s != NULL` proxy rather than emptiness.
+    if v.is_str == 0 || v.s.data.capacity() == 0 {
         None
     } else {
-        Some(std::slice::from_raw_parts(v.s.s.cast::<u8>(), v.s.l))
+        Some(&v.s.data)
     }
 }
 
@@ -198,10 +196,8 @@ pub unsafe fn func_expr(
                 }
                 func_ok = 1;
                 if !expr_val_exists_true(&*res) {
-                    let swap = (*res).s;
+                    expr_val_free(&mut *res);
                     *res = val;
-                    val.s = swap;
-                    expr_val_free(&mut val);
                 }
             }
         }
@@ -310,10 +306,7 @@ pub unsafe fn func_expr(
 
     let str_ = ws(*end);
     if *str_ != b')' as c_char {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
-            c"Missing ')'\n".as_ptr(),
-        );
+        eprintln!("Missing ')'");
         return -1;
     }
     *end = str_.add(1);
@@ -336,10 +329,7 @@ pub unsafe fn simple_expr(
         }
         let e = ws(*end);
         if *e != b')' as c_char {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
-                c"Missing ')'\n".as_ptr(),
-            );
+            eprintln!("Missing ')'");
             return -1;
         }
         *end = e.add(1);
@@ -366,35 +356,36 @@ pub unsafe fn simple_expr(
                 e = e.add(1);
             }
         }
+        let lit_len = e.offset_from(str_.add(1)) as usize;
+        (*res).s.data.clear();
         kputsn(
-            str_.add(1),
-            e.offset_from(str_.add(1)) as usize,
-            ks_clear(&mut (*res).s),
+            std::slice::from_raw_parts(str_.add(1).cast::<u8>(), lit_len),
+            lit_len,
+            &mut (*res).s,
         );
         if backslash != 0 {
             let mut i = 0usize;
             let mut j = 0usize;
-            while i < (*res).s.l {
-                *(*res).s.s.add(j) = *(*res).s.s.add(i);
+            while i < (*res).s.data.len() {
+                (*res).s.data[j] = (*res).s.data[i];
                 j += 1;
-                if *(*res).s.s.add(i) == b'\\' as c_char {
+                if (*res).s.data[i] == b'\\' {
                     i += 1;
-                    match *(*res).s.s.add(i) as u8 {
-                        b'"' => *(*res).s.s.add(j - 1) = b'"' as c_char,
-                        b'\\' => *(*res).s.s.add(j - 1) = b'\\' as c_char,
-                        b't' => *(*res).s.s.add(j - 1) = b'\t' as c_char,
-                        b'n' => *(*res).s.s.add(j - 1) = b'\n' as c_char,
-                        b'r' => *(*res).s.s.add(j - 1) = b'\r' as c_char,
+                    match (*res).s.data[i] {
+                        b'"' => (*res).s.data[j - 1] = b'"',
+                        b'\\' => (*res).s.data[j - 1] = b'\\',
+                        b't' => (*res).s.data[j - 1] = b'\t',
+                        b'n' => (*res).s.data[j - 1] = b'\n',
+                        b'r' => (*res).s.data[j - 1] = b'\r',
                         _ => {
-                            *(*res).s.s.add(j) = *(*res).s.s.add(i);
+                            (*res).s.data[j] = (*res).s.data[i];
                             j += 1;
                         }
                     }
                 }
                 i += 1;
             }
-            *(*res).s.s.add(j) = 0;
-            (*res).s.l = j;
+            (*res).s.data.truncate(j);
         }
         if *e != b'"' as c_char {
             return -1;
@@ -444,7 +435,7 @@ pub unsafe fn unary_expr(
             (*res).d = ((*res).is_true == 0) as c_int as f64;
             (*res).is_true = c_bool((*res).d != 0.0);
         } else if (*res).is_str != 0 {
-            (*res).d = (*res).s.s.is_null() as c_int as f64;
+            (*res).d = (*res).s.data.is_empty() as c_int as f64;
             (*res).is_true = c_bool((*res).d != 0.0);
         } else {
             (*res).d = ((*res).d as i64 == 0) as c_int as f64;
@@ -798,54 +789,62 @@ pub unsafe fn eq_expr(
             expr_val_free(&mut val);
             return -1;
         }
-        if !val.s.s.is_null() && !(*res).s.s.is_null() && val.is_true >= 0 && (*res).is_true >= 0 {
+        if !val.s.data.is_empty() && !(*res).s.data.is_empty() && val.is_true >= 0 && (*res).is_true >= 0 {
             let mut preg_tmp: crate::htslib_rs::c_compat::regex_t = std::mem::zeroed();
             let mut compile_regex = false;
             let preg_tmp_ptr = std::ptr::addr_of_mut!(preg_tmp);
             let preg = if filt.curr_regex >= filt.max_regex {
-                if filt.curr_regex >= MAX_REGEX as c_int {
+                if filt.curr_regex >= MAX_REGEX {
                     compile_regex = true;
                     preg_tmp_ptr
                 } else {
                     compile_regex = true;
-                    let idx = filt.curr_regex as usize;
+                    let idx = filt.curr_regex;
                     filt.max_regex += 1;
                     filter_regex_ptr(filt, idx)
                 }
             } else {
-                filter_regex_ptr(filt, filt.curr_regex as usize)
+                filter_regex_ptr(filt, filt.curr_regex)
             };
             if preg.is_null() {
                 expr_val_free(&mut val);
                 return -1;
             }
+            let mut val_cstr = val.s.data.clone();
+            val_cstr.push(0);
             if compile_regex {
                 let ec = crate::htslib_rs::c_compat::regcomp(
                     preg,
-                    val.s.s,
+                    val_cstr.as_ptr().cast::<c_char>(),
                     crate::htslib_rs::c_compat::REG_EXTENDED
                         | crate::htslib_rs::c_compat::REG_NOSUB,
                 );
                 if ec != 0 {
-                    let mut errbuf = [0 as c_char; 1024];
+                    let mut errbuf = [0u8; 1024];
                     crate::htslib_rs::c_compat::regerror(
                         ec,
                         preg,
-                        errbuf.as_mut_ptr(),
+                        errbuf.as_mut_ptr().cast::<c_char>(),
                         errbuf.len(),
                     );
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
-                        c"Failed regex: %.1024s\n".as_ptr(),
-                        errbuf.as_ptr(),
+                    let msg_len = errbuf.iter().position(|&b| b == 0).unwrap_or(errbuf.len());
+                    eprintln!(
+                        "Failed regex: {}",
+                        String::from_utf8_lossy(&errbuf[..msg_len])
                     );
                     expr_val_free(&mut val);
                     return -1;
                 }
             }
-            let matched =
-                crate::htslib_rs::c_compat::regexec(preg, (*res).s.s, 0, std::ptr::null_mut(), 0)
-                    == 0;
+            let mut res_cstr = (*res).s.data.clone();
+            res_cstr.push(0);
+            let matched = crate::htslib_rs::c_compat::regexec(
+                preg,
+                res_cstr.as_ptr().cast::<c_char>(),
+                0,
+                std::ptr::null_mut(),
+                0,
+            ) == 0;
             let r = if matched {
                 *str_ == b'=' as c_char
             } else {
@@ -874,7 +873,9 @@ pub unsafe fn eq_expr(
 }
 
 fn expr_truth(v: &hts_expr_val_t) -> bool {
-    v.is_true != 0 || (v.is_str != 0 && !v.s.s.is_null()) || v.d != 0.0
+    // C truthiness uses `res->s.s` (NULL test), not emptiness: an allocated
+    // (even empty) string is truthy. Use capacity as the `s.s != NULL` proxy.
+    v.is_true != 0 || (v.is_str != 0 && v.s.data.capacity() != 0) || v.d != 0.0
 }
 
 // original: and_expr (htslib/hts_expr.c:795)
@@ -960,14 +961,14 @@ pub fn hts_filter_init_bytes(expr: &[u8]) -> *mut hts_filter_t {
         return std::ptr::null_mut();
     }
     let mut expr_buf = Vec::with_capacity(expr.len() + 101);
-    expr_buf.extend(expr.iter().map(|&byte| byte as c_char));
+    expr_buf.extend_from_slice(expr);
     expr_buf.push(0);
     let preg = (0..MAX_REGEX)
         .map(|_| unsafe { std::mem::zeroed() })
         .collect::<Vec<crate::htslib_rs::c_compat::regex_t>>();
     Box::into_raw(Box::new(hts_filter_t {
         expr: expr_buf,
-        parsed: 0,
+        parsed: false,
         curr_regex: 0,
         max_regex: 0,
         preg,
@@ -975,11 +976,7 @@ pub fn hts_filter_init_bytes(expr: &[u8]) -> *mut hts_filter_t {
 }
 
 unsafe fn filter_expr_ptr(filt: &mut hts_filter_t) -> *mut c_char {
-    filt.expr.as_mut_ptr()
-}
-
-unsafe fn filter_expr_const_ptr(filt: &hts_filter_t) -> *const c_char {
-    filt.expr.as_ptr()
+    filt.expr.as_mut_ptr().cast::<c_char>()
 }
 
 unsafe fn filter_regex_ptr(
@@ -1000,7 +997,7 @@ pub unsafe fn hts_expr_c_863_hts_filter_free(filt: *mut hts_filter_t) {
     }
     let mut filt = Box::from_raw(filt);
     for i in 0..filt.max_regex {
-        crate::htslib_rs::c_compat::regfree(&mut filt.preg[i as usize]);
+        crate::htslib_rs::c_compat::regfree(&mut filt.preg[i]);
     }
 }
 
@@ -1017,15 +1014,21 @@ unsafe fn hts_filter_eval_inner(
         return -1;
     }
     if !end.is_null() && *ws(end) != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast::<libc::FILE>(),
-            c"Unable to parse expression at %s\n".as_ptr(),
-            filter_expr_const_ptr(filt),
+        let text_len = filt.expr.iter().position(|&b| b == 0).unwrap_or(filt.expr.len());
+        eprintln!(
+            "Unable to parse expression at {}",
+            String::from_utf8_lossy(&filt.expr[..text_len])
         );
         return -1;
     }
     if (*res).is_str != 0 {
-        (*res).is_true |= (!(*res).s.s.is_null()) as c_int as c_char;
+        // Upstream: `res->is_true |= res->s.s != NULL`. A present string is
+        // true even when empty; only an *absent* (null) string is false. In
+        // this owned port a null string is represented as `is_str == 0`
+        // (hts_expr_val_undef clears is_str), so `is_str != 0` already implies
+        // a present (non-null) string — hence an empty-but-present string is
+        // true. (The old `!data.is_empty()` test wrongly made "" false.)
+        (*res).is_true |= 1;
         (*res).d = (*res).is_true as f64;
     } else if expr_val_exists(&*res) {
         (*res).is_true |= ((*res).d != 0.0) as c_int as c_char;
@@ -1062,7 +1065,7 @@ pub unsafe fn hts_expr_c_903_hts_filter_eval(
     let Some(res) = res.as_mut() else {
         return -1;
     };
-    if res.s.l != 0 || res.s.m != 0 || !res.s.s.is_null() {
+    if !res.s.data.is_empty() || res.s.data.capacity() != 0 {
         hts_log_cstr(
             HTS_LOG_ERROR,
             c"hts_filter_eval".as_ptr(),

@@ -52,7 +52,7 @@ pub unsafe fn samples_read_bam_c_48_main(argc: c_int, argv: *mut *mut c_char) ->
         );
         libc::free(flags.cast());
 
-        let tidname = sam::sam_hdr_tid2name(in_samhdr, (*bamdata).core.tid);
+        let tidname = sam::sam_hdr_tid2name(&*in_samhdr, (*bamdata).core.tid);
         libc::printf(
             c"RNAME/TID: %d - %s\n".as_ptr(),
             (*bamdata).core.tid,

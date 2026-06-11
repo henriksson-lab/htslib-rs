@@ -87,6 +87,7 @@ pub unsafe fn bcf_sr_add_hreader(
             *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
             return 0;
         }
+        let idxname = idxname.as_ref().map(|_| CStr::from_ptr(idxname).to_bytes());
         bcf_sr_add_hreader_ref(readers, &mut *file_ptr, autoclose, idxname)
     }
 }
@@ -95,9 +96,14 @@ pub(crate) unsafe fn bcf_sr_add_hreader_ref(
     readers: &mut bcf_srs_t,
     file: &mut htsFile,
     autoclose: c_int,
-    idxname: *const c_char,
+    idxname: Option<&[u8]>,
 ) -> c_int {
-    unsafe { bcf_sr_add_hreader_impl(readers as *mut bcf_srs_t, file, autoclose, idxname) }
+    unsafe {
+        // Re-NUL-terminate the optional index name at the libhts boundary.
+        let idxname_c = idxname.map(|s| CString::new(s).unwrap());
+        let idxname_ptr = idxname_c.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+        bcf_sr_add_hreader_impl(readers as *mut bcf_srs_t, file, autoclose, idxname_ptr)
+    }
 }
 
 unsafe fn bcf_sr_aux_ref(readers: &bcf_srs_t) -> Option<&BcfSrAux> {
@@ -110,8 +116,8 @@ unsafe fn bcf_sr_aux_ref_mut(readers: &mut bcf_srs_t) -> Option<&mut BcfSrAux> {
 
 pub unsafe fn bcf_sr_init() -> *mut bcf_srs_t {
     unsafe {
-        let mut files = Box::new(std::mem::zeroed::<bcf_srs_t>());
-        let aux = Box::new(std::mem::zeroed::<BcfSrAux>());
+        let mut files = Box::new(bcf_srs_t::default());
+        let aux = Box::new(BcfSrAux::default());
         files.aux = Box::into_raw(aux);
         let files = Box::into_raw(files);
         bcf_sr_sort_c_675_bcf_sr_sort_init(&mut (*bcf_sr_aux_mut(files)).sort);
@@ -134,7 +140,10 @@ pub(crate) unsafe fn bcf_sr_destroy1_ref(reader: &mut bcf_sr_t, closefile: c_int
         if !reader.file.is_null() && closefile != 0 {
             let _ = hts_close(reader.file.cast());
         }
-        libc::free(reader.fname.cast());
+        if !reader.fname.is_null() {
+            drop(CString::from_raw(reader.fname));
+            reader.fname = std::ptr::null_mut();
+        }
         if !reader.tbx_idx.is_null() {
             crate::tbx::tbx_destroy(reader.tbx_idx.cast());
         }
@@ -149,15 +158,23 @@ pub(crate) unsafe fn bcf_sr_destroy1_ref(reader: &mut bcf_sr_t, closefile: c_int
             for record in std::slice::from_raw_parts(reader.buffer, reader.mbuffer as usize) {
                 bcf_destroy(*record);
             }
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                reader.buffer,
+                reader.mbuffer as usize,
+            )));
         }
-        libc::free(reader.buffer.cast());
         if !reader.samples.is_null() && reader.n_smpl > 0 {
             drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
                 reader.samples,
                 reader.n_smpl as usize,
             )));
         }
-        libc::free(reader.filter_ids.cast());
+        if !reader.filter_ids.is_null() && reader.nfilter_ids > 0 {
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                reader.filter_ids,
+                reader.nfilter_ids as usize,
+            )));
+        }
     }
 }
 
@@ -198,8 +215,18 @@ pub unsafe fn bcf_sr_destroy(files: *mut bcf_srs_t) {
             };
             bcf_sr_destroy1_ref(reader, cf);
         }
-        libc::free(files.has_line.cast());
-        libc::free(files.readers.cast());
+        if !files.has_line.is_null() && files.nreaders > 0 {
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                files.has_line,
+                files.nreaders as usize,
+            )));
+        }
+        if !files.readers.is_null() && files.nreaders > 0 {
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                files.readers,
+                files.nreaders as usize,
+            )));
+        }
         let samples = if files.samples.is_null() {
             None
         } else {
@@ -219,46 +246,49 @@ pub unsafe fn bcf_sr_destroy(files: *mut bcf_srs_t) {
         if let Some(regions) = files.regions.as_mut() {
             bcf_sr_regions_destroy_ref(regions);
         }
-        if files.tmps.m != 0 {
-            libc::free(files.tmps.s.cast());
+        if files.tmps.data.capacity() != 0 {
+            files.tmps.data = Vec::new();
         }
         if files.n_threads != 0 {
             bcf_sr_destroy_threads_ref(&mut files);
         }
         if let Some(aux) = bcf_sr_aux_ref_mut(&mut files) {
-            bcf_sr_sort_c_685_bcf_sr_sort_destroy(&mut aux.sort);
+            bcf_sr_sort_c_685_bcf_sr_sort_destroy(Some(&mut aux.sort));
         }
-        libc::free(autoclose.cast());
+        if !autoclose.is_null() && files.nreaders >= 0 {
+            // `closefile` is the autoclose array sized to the reader count.
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                autoclose,
+                files.nreaders.max(0) as usize,
+            )));
+        }
         if !files.aux.is_null() {
             drop(Box::from_raw(files.aux));
         }
     }
 }
 
-pub unsafe fn bcf_sr_strerror(errnum: c_int) -> *mut c_char {
+pub unsafe fn bcf_sr_strerror(errnum: c_int) -> Vec<u8> {
     match errnum {
-        x if x == bcf_sr_error_open_failed as c_int => unsafe {
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location())
-        },
-        x if x == bcf_sr_error_not_bgzf as c_int => {
-            c"not compressed with bgzip".as_ptr().cast_mut()
+        x if x == bcf_sr_error_open_failed as c_int => {
+            let errno = unsafe { *crate::htslib_rs::c_compat::__errno_location() };
+            std::io::Error::from_raw_os_error(errno)
+                .to_string()
+                .into_bytes()
         }
-        x if x == bcf_sr_error_idx_load_failed as c_int => {
-            c"could not load index".as_ptr().cast_mut()
+        x if x == bcf_sr_error_not_bgzf as c_int => b"not compressed with bgzip".to_vec(),
+        x if x == bcf_sr_error_idx_load_failed as c_int => b"could not load index".to_vec(),
+        x if x == bcf_sr_error_file_type_error as c_int => b"unknown file type".to_vec(),
+        x if x == bcf_sr_error_api_usage_error as c_int => b"API usage error".to_vec(),
+        x if x == bcf_sr_error_header_error as c_int => b"could not parse header".to_vec(),
+        x if x == bcf_sr_error_no_eof as c_int => {
+            b"no BGZF EOF marker; file may be truncated".to_vec()
         }
-        x if x == bcf_sr_error_file_type_error as c_int => c"unknown file type".as_ptr().cast_mut(),
-        x if x == bcf_sr_error_api_usage_error as c_int => c"API usage error".as_ptr().cast_mut(),
-        x if x == bcf_sr_error_header_error as c_int => {
-            c"could not parse header".as_ptr().cast_mut()
-        }
-        x if x == bcf_sr_error_no_eof as c_int => c"no BGZF EOF marker; file may be truncated"
-            .as_ptr()
-            .cast_mut(),
-        x if x == bcf_sr_error_no_memory as c_int => c"Out of memory".as_ptr().cast_mut(),
-        x if x == bcf_sr_error_vcf_parse_error as c_int => c"VCF parse error".as_ptr().cast_mut(),
-        x if x == bcf_sr_error_bcf_read_error as c_int => c"BCF read error".as_ptr().cast_mut(),
-        BCF_SR_ERROR_NOIDX_ERROR => c"merge of unindexed files failed".as_ptr().cast_mut(),
-        _ => c"".as_ptr().cast_mut(),
+        x if x == bcf_sr_error_no_memory as c_int => b"Out of memory".to_vec(),
+        x if x == bcf_sr_error_vcf_parse_error as c_int => b"VCF parse error".to_vec(),
+        x if x == bcf_sr_error_bcf_read_error as c_int => b"BCF read error".to_vec(),
+        BCF_SR_ERROR_NOIDX_ERROR => b"merge of unindexed files failed".to_vec(),
+        _ => Vec::new(),
     }
 }
 
@@ -429,30 +459,30 @@ pub unsafe fn bcf_sr_add_reader(files: *mut bcf_srs_t, fname: *const c_char) -> 
         let Some(files) = files.as_mut() else {
             return 0;
         };
-        let Some(fname) = fname.as_ref().map(|_| CStr::from_ptr(fname)) else {
+        let Some(fname) = fname.as_ref().map(|_| CStr::from_ptr(fname).to_bytes()) else {
             return 0;
         };
         bcf_sr_add_reader_ref(files, fname)
     }
 }
 
-pub(crate) unsafe fn bcf_sr_add_reader_ref(files: &mut bcf_srs_t, fname: &CStr) -> c_int {
+pub(crate) unsafe fn bcf_sr_add_reader_ref(files: &mut bcf_srs_t, fname: &[u8]) -> c_int {
     unsafe {
+        // Re-NUL-terminate at the libhts boundary.
+        let fname_c = CString::new(fname).unwrap();
         let mut fmode = [0 as c_char; 5];
         fmode[0] = b'r' as c_char;
-        vcf_open_mode(fmode.as_mut_ptr().add(1), fname.as_ptr(), std::ptr::null());
-        let file_ptr = hts_open(fname.as_ptr(), fmode.as_ptr());
+        vcf_open_mode(fmode.as_mut_ptr().add(1), fname_c.as_ptr(), std::ptr::null());
+        let file_ptr = hts_open(fname_c.as_ptr(), fmode.as_ptr());
         if file_ptr.is_null() {
             files.errnum = bcf_sr_error_open_failed;
             return 0;
         }
         // get idx name and pass to add_hreader
-        let mut needle = [0u8; 8];
-        needle[..HTS_IDX_DELIM.len()].copy_from_slice(HTS_IDX_DELIM);
-        let mut idxname = libc::strstr(fname.as_ptr(), needle.as_ptr().cast());
-        if !idxname.is_null() {
-            idxname = idxname.add(HTS_IDX_DELIM.len());
-        }
+        let idxname = fname
+            .windows(HTS_IDX_DELIM.len())
+            .position(|w| w == HTS_IDX_DELIM)
+            .map(|pos| &fname[pos + HTS_IDX_DELIM.len()..]);
         let ret = bcf_sr_add_hreader_ref(files, &mut *file_ptr, 1, idxname);
         if ret == 0 {
             let _ = hts_close(file_ptr);
@@ -477,8 +507,8 @@ pub(crate) unsafe fn bcf_sr_remove_reader_ref(files: &mut bcf_srs_t, i: c_int) {
         let autoclose = (*bcf_sr_aux_mut(files_ptr)).closefile;
 
         bcf_sr_sort_c_662_bcf_sr_sort_remove_reader(
-            files_ptr,
-            &mut (*bcf_sr_aux_mut(files_ptr)).sort,
+            Some(&mut *files_ptr),
+            Some(&mut (*bcf_sr_aux_mut(files_ptr)).sort),
             i,
         );
         let cf = if autoclose.is_null() {
@@ -641,13 +671,13 @@ pub unsafe fn bcf_sr_seek(readers: *mut bcf_srs_t, seq: *const c_char, pos: hts_
         let Some(readers) = readers.as_mut() else {
             return 0;
         };
-        bcf_sr_seek_ref(readers, seq.as_ref().map(|_| CStr::from_ptr(seq)), pos)
+        bcf_sr_seek_ref(readers, seq.as_ref().map(|_| CStr::from_ptr(seq).to_bytes()), pos)
     }
 }
 
 pub(crate) unsafe fn bcf_sr_seek_ref(
     readers: &mut bcf_srs_t,
-    seq: Option<&CStr>,
+    seq: Option<&[u8]>,
     pos: hts_pos_t,
 ) -> c_int {
     unsafe {
@@ -655,9 +685,11 @@ pub(crate) unsafe fn bcf_sr_seek_ref(
         if readers.regions.is_null() {
             return 0;
         }
-        let seq_ptr = seq.map_or(std::ptr::null(), CStr::as_ptr);
+        // Re-NUL-terminate the sequence name at the libhts boundary.
+        let seq_c = seq.map(|s| CString::new(s).unwrap());
+        let seq_ptr = seq_c.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
         if let Some(aux) = bcf_sr_aux_ref_mut(readers) {
-            bcf_sr_sort_c_681_bcf_sr_sort_reset(&mut aux.sort);
+            bcf_sr_sort_c_681_bcf_sr_sort_reset(Some(&mut aux.sort));
         }
         if seq.is_none() && pos == 0 {
             bcf_sr_seek_start(readers_ptr);
@@ -691,7 +723,7 @@ pub unsafe fn bcf_sr_set_samples(
         let Some(files) = files.as_mut() else {
             return 0;
         };
-        let Some(fname) = fname.as_ref().map(|_| CStr::from_ptr(fname)) else {
+        let Some(fname) = fname.as_ref().map(|_| CStr::from_ptr(fname).to_bytes()) else {
             return 0;
         };
         bcf_sr_set_samples_ref(files, fname, is_file)
@@ -700,21 +732,22 @@ pub unsafe fn bcf_sr_set_samples(
 
 pub(crate) unsafe fn bcf_sr_set_samples_ref(
     files: &mut bcf_srs_t,
-    fname: &CStr,
+    fname: &[u8],
     is_file: c_int,
 ) -> c_int {
     unsafe {
-        let fname_ptr = fname.as_ptr();
+        let fname_c = CString::new(fname).unwrap();
+        let fname_ptr = fname_c.as_ptr();
         let mut nsmpl = 0;
         let mut free_smpl = 0;
         let mut smpl: *mut *mut c_char = std::ptr::null_mut();
 
-        let exclude = if fname.to_bytes().first().copied() == Some(b'^') {
+        let exclude = if fname.first().copied() == Some(b'^') {
             crate::sam::khash_str2int_init()
         } else {
             std::ptr::null_mut()
         };
-        if !exclude.is_null() || fname.to_bytes() != b"-" {
+        if !exclude.is_null() || fname != b"-" {
             smpl = crate::hts::hts_readlist(fname_ptr, is_file, &mut nsmpl);
             if smpl.is_null() {
                 return 0;
@@ -758,10 +791,12 @@ pub(crate) unsafe fn bcf_sr_set_samples_ref(
             crate::sam::khash_str2int_destroy(exclude);
         }
         if free_smpl != 0 {
-            for i in 0..nsmpl as usize {
-                libc::free((*smpl.add(i)).cast());
+            // `smpl` was returned by hts_readlist; reclaim each NUL-terminated
+            // entry and the backing array as owned Rust allocations.
+            let list = Box::from_raw(std::ptr::slice_from_raw_parts_mut(smpl, nsmpl as usize));
+            for entry in list.iter().copied() {
+                drop(CString::from_raw(entry));
             }
-            libc::free(smpl.cast());
         }
 
         if samples.is_empty() {
@@ -821,7 +856,7 @@ pub unsafe fn bcf_sr_set_targets(
         let Some(readers) = readers.as_mut() else {
             return -1;
         };
-        let Some(targets) = targets.as_ref().map(|_| CStr::from_ptr(targets)) else {
+        let Some(targets) = targets.as_ref().map(|_| CStr::from_ptr(targets).to_bytes()) else {
             return -1;
         };
         bcf_sr_set_targets_ref(readers, targets, is_file, alleles)
@@ -830,7 +865,7 @@ pub unsafe fn bcf_sr_set_targets(
 
 pub(crate) unsafe fn bcf_sr_set_targets_ref(
     readers: &mut bcf_srs_t,
-    targets: &CStr,
+    targets: &[u8],
     is_file: c_int,
     alleles: c_int,
 ) -> c_int {
@@ -839,9 +874,9 @@ pub(crate) unsafe fn bcf_sr_set_targets_ref(
             return -1;
         }
         let mut targets = targets;
-        if targets.to_bytes().first().copied() == Some(b'^') {
+        if targets.first().copied() == Some(b'^') {
             readers.targets_exclude = 1;
-            targets = CStr::from_ptr(targets.as_ptr().add(1));
+            targets = &targets[1..];
         }
         let Some(regions) = bcf_sr_regions_init_ref(targets, is_file, 0, 1, -2) else {
             return -1;
@@ -865,7 +900,7 @@ pub unsafe fn bcf_sr_set_regions(
         let Some(readers) = readers.as_mut() else {
             return -1;
         };
-        let Some(regions) = regions.as_ref().map(|_| CStr::from_ptr(regions)) else {
+        let Some(regions) = regions.as_ref().map(|_| CStr::from_ptr(regions).to_bytes()) else {
             return -1;
         };
         bcf_sr_set_regions_ref(readers, regions, is_file)
@@ -874,7 +909,7 @@ pub unsafe fn bcf_sr_set_regions(
 
 pub(crate) unsafe fn bcf_sr_set_regions_ref(
     readers: &mut bcf_srs_t,
-    regions: &CStr,
+    regions: &[u8],
     is_file: c_int,
 ) -> c_int {
     unsafe {
@@ -913,22 +948,24 @@ pub unsafe fn bcf_sr_regions_init(
     unsafe {
         regions
             .as_ref()
-            .map(|_| CStr::from_ptr(regions))
+            .map(|_| CStr::from_ptr(regions).to_bytes())
             .and_then(|regions| bcf_sr_regions_init_ref(regions, is_file, ichr, ifrom, ito))
             .map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 }
 
 pub(crate) unsafe fn bcf_sr_regions_init_ref(
-    regions: &CStr,
+    regions: &[u8],
     is_file: c_int,
     ichr: c_int,
     ifrom: c_int,
     mut ito: c_int,
 ) -> Option<NonNull<bcf_sr_regions_t>> {
     unsafe {
+        // Re-NUL-terminate the path/region string at the libhts boundary.
+        let regions_c = CString::new(regions).unwrap();
         if is_file == 0 {
-            let reg = regions_init_string(regions.as_ptr());
+            let reg = regions_init_string(regions_c.as_ptr());
             if let Some(reg) = reg.as_mut() {
                 regions_sort_and_merge_ref(reg);
             }
@@ -940,20 +977,20 @@ pub(crate) unsafe fn bcf_sr_regions_init_ref(
         };
         let reg = reg.as_ptr();
 
-        (*reg).file = hts_open(regions.as_ptr(), c"rb".as_ptr()).cast();
+        (*reg).file = hts_open(regions_c.as_ptr(), c"rb".as_ptr()).cast();
         if (*reg).file.is_null() {
             bcf_sr_regions_destroy_ref(&mut *reg);
             return None;
         }
 
         (*reg).tbx = crate::tbx::tbx_index_load3(
-            regions.as_ptr(),
+            regions_c.as_ptr(),
             std::ptr::null(),
             crate::hts::HTS_IDX_SAVE_REMOTE | crate::hts::HTS_IDX_SILENT_FAIL,
         )
         .cast();
         if (*reg).tbx.is_null() {
-            let name = regions.to_bytes();
+            let name = regions;
             let is_bed = name
                 .get(name.len().saturating_sub(4)..)
                 .is_some_and(|suffix| suffix.eq_ignore_ascii_case(b".bed"))
@@ -963,7 +1000,7 @@ pub(crate) unsafe fn bcf_sr_regions_init_ref(
             let is_bed = if is_bed { 1 } else { 0 };
 
             let rfile: *mut htsFile = (*reg).file.cast();
-            let line_ptr: *mut kstring_t = (&raw mut (*reg).line).cast();
+            let line_ptr: *mut kstring_t = &raw mut (*reg).line;
             if (*rfile).format.format == HTS_FORMAT_VCF {
                 ito = 1;
             }
@@ -977,7 +1014,7 @@ pub(crate) unsafe fn bcf_sr_regions_init_ref(
                 let mut from: hts_pos_t = 0;
                 let mut to: hts_pos_t = 0;
                 let mut ret = regions_parse_line(
-                    (*reg).line.s,
+                    (*reg).line.data.as_mut_ptr() as *mut c_char,
                     ichr,
                     ifrom,
                     ito.abs(),
@@ -989,7 +1026,7 @@ pub(crate) unsafe fn bcf_sr_regions_init_ref(
                 if ret < 0 {
                     if ito < 0 {
                         ret = regions_parse_line(
-                            (*reg).line.s,
+                            (*reg).line.data.as_mut_ptr() as *mut c_char,
                             ichr,
                             ifrom,
                             ifrom,
@@ -1035,7 +1072,7 @@ pub(crate) unsafe fn bcf_sr_regions_init_ref(
         for i in 0..(*reg).nseqs as usize {
             crate::sam::khash_str2int_set((*reg).seq_hash, *(*reg).seq_names.add(i), i as c_int);
         }
-        (*reg).fname = libc::strdup(regions.as_ptr());
+        (*reg).fname = CString::new(regions).unwrap().into_raw();
         (*reg).is_bin = 1;
         NonNull::new(reg)
     }
@@ -1055,16 +1092,17 @@ pub unsafe fn bcf_sr_regions_seek(reg: *mut bcf_sr_regions_t, seq: *const c_char
         let Some(reg) = reg.as_mut() else {
             return -1;
         };
-        let Some(seq) = seq.as_ref().map(|_| CStr::from_ptr(seq)) else {
+        let Some(seq) = seq.as_ref().map(|_| CStr::from_ptr(seq).to_bytes()) else {
             return -1;
         };
         bcf_sr_regions_seek_ref(reg, seq)
     }
 }
 
-pub(crate) unsafe fn bcf_sr_regions_seek_ref(reg: &mut bcf_sr_regions_t, seq: &CStr) -> c_int {
+pub(crate) unsafe fn bcf_sr_regions_seek_ref(reg: &mut bcf_sr_regions_t, seq: &[u8]) -> c_int {
     unsafe {
-        let seq_ptr = seq.as_ptr();
+        let seq_c = CString::new(seq).unwrap();
+        let seq_ptr = seq_c.as_ptr();
         reg.iseq = -1;
         reg.start = -1;
         reg.end = -1;
@@ -1167,7 +1205,7 @@ pub(crate) unsafe fn bcf_sr_regions_next_ref(reg: &mut bcf_sr_regions_t) -> c_in
             };
         }
 
-        let line_ptr: *mut kstring_t = (&raw mut reg.line).cast();
+        let line_ptr: *mut kstring_t = &raw mut reg.line;
         let mut ret = 0;
         while ret == 0 {
             if !reg.itr.is_null() {
@@ -1198,7 +1236,7 @@ pub(crate) unsafe fn bcf_sr_regions_next_ref(reg: &mut bcf_sr_regions_t) -> c_in
                 }
             }
             ret = regions_parse_line(
-                reg.line.s,
+                reg.line.data.as_mut_ptr() as *mut c_char,
                 ichr,
                 ifrom,
                 ito,
@@ -1217,7 +1255,7 @@ pub(crate) unsafe fn bcf_sr_regions_next_ref(reg: &mut bcf_sr_regions_t) -> c_in
 
         *chr_end = 0;
         if crate::sam::khash_str2int_get(reg.seq_hash, chr, &mut reg.iseq) < 0 {
-            libc::abort();
+            std::process::abort();
         }
         *chr_end = b'\t' as c_char;
 
@@ -1238,7 +1276,7 @@ pub unsafe fn bcf_sr_regions_overlap(
         let Some(reg) = reg.as_mut() else {
             return -1;
         };
-        let Some(seq) = seq.as_ref().map(|_| CStr::from_ptr(seq)) else {
+        let Some(seq) = seq.as_ref().map(|_| CStr::from_ptr(seq).to_bytes()) else {
             return -1;
         };
         bcf_sr_regions_overlap_ref(reg, seq, start, end)
@@ -1247,7 +1285,7 @@ pub unsafe fn bcf_sr_regions_overlap(
 
 pub(crate) unsafe fn bcf_sr_regions_overlap_ref(
     reg: &mut bcf_sr_regions_t,
-    seq: &CStr,
+    seq: &[u8],
     start: hts_pos_t,
     end: hts_pos_t,
 ) -> c_int {
@@ -1256,14 +1294,15 @@ pub(crate) unsafe fn bcf_sr_regions_overlap_ref(
 
 unsafe fn bcf_sr_regions_overlap_inner_ref(
     reg: &mut bcf_sr_regions_t,
-    seq: &CStr,
+    seq: &[u8],
     start: hts_pos_t,
     end: hts_pos_t,
     mut missed_reg_handler: c_int,
 ) -> c_int {
     unsafe {
+        let seq_c = CString::new(seq).unwrap();
         let mut iseq = -1;
-        if crate::sam::khash_str2int_get(reg.seq_hash, seq.as_ptr(), &mut iseq) < 0 {
+        if crate::sam::khash_str2int_get(reg.seq_hash, seq_c.as_ptr(), &mut iseq) < 0 {
             return -1;
         }
         if missed_reg_handler != 0 && reg.missed_reg_handler.is_none() {

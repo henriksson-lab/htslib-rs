@@ -3,7 +3,7 @@ use std::ffi::c_int;
 pub unsafe fn ref_cache_sendfile_wrap(
     out_fd: c_int,
     in_fd: c_int,
-    offset: *mut libc::off_t,
+    offset: Option<&mut libc::off_t>,
     count: usize,
 ) -> libc::ssize_t {
     platform_sendfile_wrap(out_fd, in_fd, offset, count)
@@ -14,17 +14,21 @@ pub unsafe fn ref_cache_sendfile_wrap(
 pub unsafe fn ref_cache_sendfile_wrap_c_55_sendfile_wrap(
     out_fd: c_int,
     in_fd: c_int,
-    offset: *mut libc::off_t,
+    offset: Option<&mut libc::off_t>,
     count: usize,
 ) -> libc::ssize_t {
-    libc::sendfile(out_fd, in_fd, offset, count)
+    let offset_ptr = match offset {
+        Some(offset) => offset as *mut libc::off_t,
+        None => std::ptr::null_mut(),
+    };
+    libc::sendfile(out_fd, in_fd, offset_ptr, count)
 }
 
 #[cfg(target_os = "linux")]
 unsafe fn platform_sendfile_wrap(
     out_fd: c_int,
     in_fd: c_int,
-    offset: *mut libc::off_t,
+    offset: Option<&mut libc::off_t>,
     count: usize,
 ) -> libc::ssize_t {
     ref_cache_sendfile_wrap_c_55_sendfile_wrap(out_fd, in_fd, offset, count)
@@ -35,17 +39,17 @@ unsafe fn platform_sendfile_wrap(
 pub unsafe fn ref_cache_sendfile_wrap_c_61_sendfile_wrap(
     out_fd: c_int,
     in_fd: c_int,
-    offset: *mut libc::off_t,
+    offset: Option<&mut libc::off_t>,
     count: usize,
 ) -> libc::ssize_t {
     let mut sbytes: libc::off_t = 0;
-    let res: c_int;
 
     if count == 0 {
         return 0;
     }
 
-    res = libc::sendfile(
+    let offset = offset.expect("sendfile requires an offset");
+    let res = libc::sendfile(
         in_fd,
         out_fd,
         *offset,
@@ -66,7 +70,7 @@ pub unsafe fn ref_cache_sendfile_wrap_c_61_sendfile_wrap(
 unsafe fn platform_sendfile_wrap(
     out_fd: c_int,
     in_fd: c_int,
-    offset: *mut libc::off_t,
+    offset: Option<&mut libc::off_t>,
     count: usize,
 ) -> libc::ssize_t {
     ref_cache_sendfile_wrap_c_61_sendfile_wrap(out_fd, in_fd, offset, count)
@@ -77,17 +81,17 @@ unsafe fn platform_sendfile_wrap(
 pub unsafe fn ref_cache_sendfile_wrap_c_73_sendfile_wrap(
     out_fd: c_int,
     in_fd: c_int,
-    offset: *mut libc::off_t,
+    offset: Option<&mut libc::off_t>,
     count: usize,
 ) -> libc::ssize_t {
     let mut len = count as libc::off_t;
-    let res: c_int;
 
     if len == 0 {
         return 0;
     }
 
-    res = libc::sendfile(in_fd, out_fd, *offset, &mut len, std::ptr::null_mut(), 0);
+    let offset = offset.expect("sendfile requires an offset");
+    let res = libc::sendfile(in_fd, out_fd, *offset, &mut len, std::ptr::null_mut(), 0);
     if res == 0
         || *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR
         || *crate::htslib_rs::c_compat::__errno_location() == libc::EAGAIN
@@ -105,7 +109,7 @@ pub unsafe fn ref_cache_sendfile_wrap_c_73_sendfile_wrap(
 unsafe fn platform_sendfile_wrap(
     out_fd: c_int,
     in_fd: c_int,
-    offset: *mut libc::off_t,
+    offset: Option<&mut libc::off_t>,
     count: usize,
 ) -> libc::ssize_t {
     ref_cache_sendfile_wrap_c_73_sendfile_wrap(out_fd, in_fd, offset, count)
@@ -117,10 +121,10 @@ unsafe fn platform_sendfile_wrap(
 pub unsafe fn ref_cache_sendfile_wrap_c_87_sendfile_wrap(
     out_fd: c_int,
     in_fd: c_int,
-    offset: *mut libc::off_t,
+    offset: Option<&mut libc::off_t>,
     count: usize,
 ) -> libc::ssize_t {
-    if out_fd >= 0 || in_fd >= 0 || !offset.is_null() || count != 0 {
+    if out_fd >= 0 || in_fd >= 0 || offset.is_some() || count != 0 {
         *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
         return -2;
     }
@@ -132,7 +136,7 @@ pub unsafe fn ref_cache_sendfile_wrap_c_87_sendfile_wrap(
 unsafe fn platform_sendfile_wrap(
     out_fd: c_int,
     in_fd: c_int,
-    offset: *mut libc::off_t,
+    offset: Option<&mut libc::off_t>,
     count: usize,
 ) -> libc::ssize_t {
     ref_cache_sendfile_wrap_c_87_sendfile_wrap(out_fd, in_fd, offset, count)
@@ -173,13 +177,13 @@ mod tests {
             let mut offset: libc::off_t = 2;
 
             let copied = unsafe {
-                ref_cache_sendfile_wrap(output.as_raw_fd(), input.as_raw_fd(), &mut offset, 0)
+                ref_cache_sendfile_wrap(output.as_raw_fd(), input.as_raw_fd(), Some(&mut offset), 0)
             };
             assert_eq!(copied, 0);
             assert_eq!(offset, 2);
 
             let copied = unsafe {
-                ref_cache_sendfile_wrap(output.as_raw_fd(), input.as_raw_fd(), &mut offset, 4)
+                ref_cache_sendfile_wrap(output.as_raw_fd(), input.as_raw_fd(), Some(&mut offset), 4)
             };
             assert_eq!(copied, 4);
             assert_eq!(offset, 6);

@@ -20,22 +20,21 @@ fn expected_count(text: &str) -> usize {
 }
 
 unsafe fn header_text(hdr: *mut sam_hdr_t) -> String {
-    let text = sam_hdr_str(hdr);
+    let text = sam_hdr_str(&mut *hdr);
     if text.is_null() {
         return String::new();
     }
     String::from_utf8_lossy(std::slice::from_raw_parts(
         text.cast::<u8>(),
-        sam_hdr_length(hdr),
+        sam_hdr_length(&mut *hdr),
     ))
     .into_owned()
 }
 
 unsafe fn record_text(hdr: *const sam_hdr_t, rec: *const bam1_t) -> String {
-    let mut out: kstring_t = std::mem::zeroed();
+    let mut out: kstring_t = kstring_t::default();
     assert!(sam_format1(hdr, rec, &mut out) >= 0);
-    let text =
-        String::from_utf8_lossy(std::slice::from_raw_parts(out.s.cast::<u8>(), out.l)).into_owned();
+    let text = String::from_utf8_lossy(&out.data).into_owned();
     ks_free(&mut out);
     text
 }
@@ -147,7 +146,7 @@ unsafe fn qname(rec: *const bam1_t) -> String {
 }
 
 unsafe fn rname(hdr: *const sam_hdr_t, rec: *const bam1_t) -> String {
-    let name = sam_hdr_tid2name(hdr, (*rec).core.tid);
+    let name = sam_hdr_tid2name(&*hdr, (*rec).core.tid);
     assert!(!name.is_null());
     CStr::from_ptr(name).to_string_lossy().into_owned()
 }

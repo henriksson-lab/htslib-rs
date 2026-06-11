@@ -13,14 +13,9 @@
 
 #![allow(non_snake_case, non_camel_case_types, unused_assignments)]
 
-use std::os::raw::c_char;
-use std::os::raw::c_void;
-
 use super::arith_dynamic::{arith_compress_bound, arith_compress_to, arith_uncompress_to};
-use super::pooled_alloc::{pool_alloc, pool_alloc_t, pool_create, pool_destroy};
 use super::rans_static4x16pr::{rans_compress_4x16, rans_uncompress_4x16};
 use super::varint::{var_get_u32, var_put_u32};
-use crate::c_compat;
 
 //-----------------------------------------------------------------------------
 // #define constants (tokenise_name3.c)
@@ -99,11 +94,15 @@ impl name_type {
 /// } trie_t;
 /// ```
 // tokenise_name3.c:124
-#[derive(Debug)]
-#[repr(C)]
+///
+/// The original C uses a pool-allocated intrusive linked list of nodes joined by
+/// raw `next`/`sibling` pointers.  This Rust translation owns all nodes in an
+/// arena (`Vec<trie_t>` on the context) and joins them with `Option<usize>`
+/// indices, so no raw pointers or custom allocator are needed.
+#[derive(Debug, Default, Clone)]
 pub struct trie_t {
-    pub next: *mut trie_t,
-    pub sibling: *mut trie_t,
+    pub next: Option<usize>,
+    pub sibling: Option<usize>,
     pub count: i32,
     /// bitfield `uint32_t c:8` + `uint32_t n:24` packed into one u32
     pub cn: u32,
@@ -147,7 +146,7 @@ pub struct last_context_tok {
 /// Per-name history used for duplicate and token-match encoding.
 #[derive(Debug, Default)]
 pub struct last_context {
-    pub last_name: Vec<c_char>,
+    pub last_name: Vec<u8>,
     pub last_ntok: i32,
     pub last: Vec<last_context_tok>,
 }
@@ -171,9 +170,10 @@ pub struct name_context {
     /// For finding entire line dups
     pub counter: i32,
 
-    /// Trie used in encoder only
-    pub t_head: *mut trie_t,
-    pub pool: *mut pool_alloc_t,
+    /// Trie used in encoder only.  Node 0 (when present) is the head; all nodes
+    /// live in this arena and reference each other by index.  Empty means no
+    /// trie has been built yet.
+    pub trie: Vec<trie_t>,
 
     /// token blocks
     pub desc: Vec<descriptor>,
@@ -222,49 +222,32 @@ fn ispunct(c: i32) -> bool {
 
 /// `static name_context *create_context(int max_names)`
 // tokenise_name3.c:172
-pub fn create_context(mut max_names: i32) -> *mut name_context {
+pub fn create_context(mut max_names: i32) -> Option<name_context> {
     if max_names <= 0 {
-        return std::ptr::null_mut();
+        return None;
     }
 
     if max_names as f64 > 1e7 {
         eprintln!("Name codec currently has a max of 10 million rec.");
-        return std::ptr::null_mut();
+        return None;
     }
 
     max_names += 1;
-    let ctx = name_context {
+    Some(name_context {
         lc: (0..max_names).map(|_| last_context::default()).collect(),
         counter: 0,
-        t_head: std::ptr::null_mut(),
-        pool: std::ptr::null_mut(),
+        trie: Vec::new(),
         desc: (0..MAX_TBLOCKS).map(|_| descriptor::default()).collect(),
         token_dcount: [0; MAX_TOKENS],
         token_icount: [0; MAX_TOKENS],
         max_tok: 1,
         max_names,
-    };
-
-    Box::into_raw(Box::new(ctx))
+    })
 }
 
-/// `static void free_context(name_context *ctx)`
-// tokenise_name3.c:211
-fn free_context(ctx: *mut name_context) {
-    if ctx.is_null() {
-        return;
-    }
-
-    unsafe {
-        let ctx = Box::from_raw(ctx);
-        if !ctx.t_head.is_null() {
-            c_compat::free(ctx.t_head as *mut c_void);
-        }
-        if !ctx.pool.is_null() {
-            pool_destroy(ctx.pool);
-        }
-    }
-}
+// tokenise_name3.c:211: the original `free_context` is no longer needed; the
+// owned `name_context` (including its trie arena) is freed by Drop when the
+// value goes out of scope.
 
 //-----------------------------------------------------------------------------
 // Fast unsigned integer printing code.
@@ -272,11 +255,11 @@ fn free_context(ctx: *mut name_context) {
 
 /// `static int append_uint32_fixed(char *cp, uint32_t i, uint8_t l)`
 // tokenise_name3.c:233
-pub fn append_uint32_fixed(cp: &mut [c_char], mut i: u32, l: u8) -> i32 {
+pub fn append_uint32_fixed(cp: &mut [u8], mut i: u32, l: u8) -> i32 {
     let mut o = 0usize;
     macro_rules! emit {
         ($div:expr, $mod:expr) => {
-            cp[o] = (i / $div) as c_char + b'0' as c_char;
+            cp[o] = (i / $div) as u8 + b'0';
             o += 1;
             i %= $mod;
         };
@@ -307,18 +290,18 @@ pub fn append_uint32_fixed(cp: &mut [c_char], mut i: u32, l: u8) -> i32 {
         emit!(10, 10);
     }
     if l >= 1 {
-        cp[o] = i as c_char + b'0' as c_char;
+        cp[o] = i as u8 + b'0';
     }
     l as i32
 }
 
 /// `static int append_uint32_var(char *cp, uint32_t i)`
 // tokenise_name3.c:249
-pub fn append_uint32_var(cp: &mut [c_char], i: u32) -> i32 {
+pub fn append_uint32_var(cp: &mut [u8], i: u32) -> i32 {
     // The C goto-machinery is just an optimised unsigned-decimal print with no
     // leading zeros.  Crucially, for i == 0 it emits ZERO bytes (the final
     // `if (i) *cp++ = i+'0'` is false), so we reproduce that exactly.
-    let z = b'0' as c_char;
+    let z = b'0';
     if i == 0 {
         return 0;
     }
@@ -331,7 +314,7 @@ pub fn append_uint32_var(cp: &mut [c_char], i: u32) -> i32 {
         n += 1;
     }
     for o in 0..n {
-        cp[o] = buf[n - 1 - o] as c_char + z;
+        cp[o] = buf[n - 1 - o] + z;
     }
     n as i32
 }
@@ -479,7 +462,7 @@ pub fn decode_token_int1(
 
 /// `static int encode_token_alpha(name_context *ctx, int ntok, char *str, int len)`
 // tokenise_name3.c:411
-pub fn encode_token_alpha(ctx: &mut name_context, ntok: i32, str: &[c_char], len: i32) -> i32 {
+pub fn encode_token_alpha(ctx: &mut name_context, ntok: i32, str: &[u8], len: i32) -> i32 {
     let id = ((ntok << 4) | N_ALPHA as i32) as usize;
 
     if encode_token_type(ctx, ntok, N_ALPHA) < 0 {
@@ -488,9 +471,7 @@ pub fn encode_token_alpha(ctx: &mut name_context, ntok: i32, str: &[c_char], len
     if descriptor_grow(&mut ctx.desc[id], (len + 1) as u32) < 0 {
         return -1;
     }
-    ctx.desc[id]
-        .buf
-        .extend(str[..len as usize].iter().map(|&c| c as u8));
+    ctx.desc[id].buf.extend_from_slice(&str[..len as usize]);
     ctx.desc[id].buf.push(0);
     ctx.desc[id].buf_l += (len + 1) as usize;
     0
@@ -501,7 +482,7 @@ pub fn encode_token_alpha(ctx: &mut name_context, ntok: i32, str: &[c_char], len
 pub fn decode_token_alpha(
     ctx: &mut name_context,
     ntok: i32,
-    str: &mut [c_char],
+    str: &mut [u8],
     max_len: i32,
 ) -> i32 {
     let id = ((ntok << 4) | N_ALPHA as i32) as usize;
@@ -513,7 +494,7 @@ pub fn decode_token_alpha(
     loop {
         c = ctx.desc[id].buf[ctx.desc[id].buf_l];
         ctx.desc[id].buf_l += 1;
-        str[len as usize] = c as c_char;
+        str[len as usize] = c;
         len += 1;
         if !(c != 0 && len < max_len && ctx.desc[id].buf_l < ctx.desc[id].buf.len()) {
             break;
@@ -524,7 +505,7 @@ pub fn decode_token_alpha(
 
 /// `static int encode_token_char(name_context *ctx, int ntok, char c)`
 // tokenise_name3.c:440
-pub fn encode_token_char(ctx: &mut name_context, ntok: i32, c: c_char) -> i32 {
+pub fn encode_token_char(ctx: &mut name_context, ntok: i32, c: u8) -> i32 {
     let id = ((ntok << 4) | N_CHAR as i32) as usize;
 
     if encode_token_type(ctx, ntok, N_CHAR) < 0 {
@@ -533,20 +514,20 @@ pub fn encode_token_char(ctx: &mut name_context, ntok: i32, c: c_char) -> i32 {
     if descriptor_grow(&mut ctx.desc[id], 1) < 0 {
         return -1;
     }
-    ctx.desc[id].buf.push(c as u8);
+    ctx.desc[id].buf.push(c);
     ctx.desc[id].buf_l += 1;
     0
 }
 
 /// `static int decode_token_char(name_context *ctx, int ntok, char *str)`
 // tokenise_name3.c:452
-pub fn decode_token_char(ctx: &mut name_context, ntok: i32, str: &mut c_char) -> i32 {
+pub fn decode_token_char(ctx: &mut name_context, ntok: i32, str: &mut u8) -> i32 {
     let id = ((ntok << 4) | N_CHAR as i32) as usize;
 
     if ctx.desc[id].buf_l >= ctx.desc[id].buf.len() {
         return -1;
     }
-    *str = ctx.desc[id].buf[ctx.desc[id].buf_l] as c_char;
+    *str = ctx.desc[id].buf[ctx.desc[id].buf_l];
     ctx.desc[id].buf_l += 1;
     1
 }
@@ -598,57 +579,52 @@ fn seed_type_descriptor(desc: &mut descriptor, nreads: i32, ttype: i32) {
 
 /// `static int build_trie(name_context *ctx, char *data, size_t len, int n)`
 // tokenise_name3.c:476
-pub fn build_trie(ctx: &mut name_context, data: &[c_char], len: usize, n: i32) -> i32 {
-    if ctx.t_head.is_null() {
-        ctx.t_head =
-            unsafe { c_compat::calloc(1, std::mem::size_of::<trie_t>() as u64) } as *mut trie_t;
-        if ctx.t_head.is_null() {
-            return -1;
-        }
+pub fn build_trie(ctx: &mut name_context, data: &[u8], len: usize, n: i32) -> i32 {
+    if ctx.trie.is_empty() {
+        // Node 0 is the head.
+        ctx.trie.push(trie_t::default());
     }
 
     let mut i = 0usize;
     while i < len {
-        let mut t = ctx.t_head;
-        unsafe {
-            (*t).count += 1;
-        }
-        while i < len && (data[i] as u8) > b'\n' {
-            let c0 = data[i] as u8;
+        let mut t = 0usize; // head
+        ctx.trie[t].count += 1;
+        while i < len && data[i] > b'\n' {
+            let c0 = data[i];
             i += 1;
             if c0 & 0x80 != 0 {
                 return -1;
             }
             let c = (c0 & 127) as u32;
 
-            unsafe {
-                let mut x = (*t).next;
-                let mut l: *mut trie_t = std::ptr::null_mut();
-                while !x.is_null() && (*x).get_c() != c {
-                    l = x;
-                    x = (*x).sibling;
+            // Walk the sibling chain of t.next looking for a node with char `c`.
+            let mut x = ctx.trie[t].next;
+            let mut l: Option<usize> = None;
+            while let Some(xi) = x {
+                if ctx.trie[xi].get_c() == c {
+                    break;
                 }
-                if x.is_null() {
-                    if ctx.pool.is_null() {
-                        ctx.pool = pool_create(std::mem::size_of::<trie_t>());
-                    }
-                    x = pool_alloc(&mut *ctx.pool) as *mut trie_t;
-                    if x.is_null() {
-                        return -1;
-                    }
-                    std::ptr::write_bytes(x, 0, 1);
-                    if l.is_null() {
-                        (*t).next = x;
-                    } else {
-                        (*l).sibling = x;
-                    }
-                    (*x).set_n(n as u32);
-                    (*x).set_c(c);
-                }
-                t = x;
-                (*t).set_c(c);
-                (*t).count += 1;
+                l = x;
+                x = ctx.trie[xi].sibling;
             }
+            let xi = match x {
+                Some(xi) => xi,
+                None => {
+                    // Allocate a fresh node in the arena.
+                    let new = ctx.trie.len();
+                    ctx.trie.push(trie_t::default());
+                    match l {
+                        None => ctx.trie[t].next = Some(new),
+                        Some(li) => ctx.trie[li].sibling = Some(new),
+                    }
+                    ctx.trie[new].set_n(n as u32);
+                    ctx.trie[new].set_c(c);
+                    new
+                }
+            };
+            t = xi;
+            ctx.trie[t].set_c(c);
+            ctx.trie[t].count += 1;
         }
         i += 1;
     }
@@ -660,7 +636,7 @@ pub fn build_trie(ctx: &mut name_context, data: &[c_char], len: usize, n: i32) -
 // tokenise_name3.c:589
 pub fn search_trie(
     ctx: &mut name_context,
-    data: &[c_char],
+    data: &[u8],
     len: usize,
     n: i32,
     exact: &mut i32,
@@ -675,16 +651,16 @@ pub fn search_trie(
 
     let prefix_len: usize;
     // char *d = *data == '@' ? data+1 : data;
-    let at = data[0] as u8 == b'@';
+    let at = data[0] == b'@';
     let d_off = if at { 1usize } else { 0 };
     let l = if at { (len as i32) - 1 } else { len as i32 };
-    let f = if data[0] as u8 == b'>' { 1usize } else { 0 };
+    let f = if data[0] == b'>' { 1usize } else { 0 };
 
-    let db = |k: usize| -> i32 { data[d_off + k] as u8 as i32 };
+    let db = |k: usize| -> i32 { data[d_off + k] as i32 };
 
     if l > 70
         && db(f) == b'm' as i32
-        && data[7] as u8 == b'_'
+        && data[7] == b'_'
         && db(f + 14) == b'_' as i32
         && db(f + 61) == b'/' as i32
     {
@@ -719,12 +695,12 @@ pub fn search_trie(
         // Check Illumina and trim back to lane:tile:x:y.
         let mut colons = 0i32;
         let mut i = 0usize;
-        while i < len && data[i] as u8 > b' ' {
+        while i < len && data[i] > b' ' {
             i += 1;
         }
         while i > 0 && colons < 4 {
             i -= 1;
-            if data[i] as u8 == b':' {
+            if data[i] == b':' {
                 colons += 1;
             }
         }
@@ -739,12 +715,8 @@ pub fn search_trie(
         }
     }
 
-    if ctx.t_head.is_null() {
-        ctx.t_head =
-            unsafe { c_compat::calloc(1, std::mem::size_of::<trie_t>() as u64) } as *mut trie_t;
-        if ctx.t_head.is_null() {
-            return -1;
-        }
+    if ctx.trie.is_empty() {
+        ctx.trie.push(trie_t::default());
     }
 
     // INT_MAX representation for prefix_len comparison `i == prefix_len`
@@ -758,31 +730,38 @@ pub fn search_trie(
     let mut from_punct: i32 = from;
     let mut i = 0usize;
     while i < len {
-        let mut t = ctx.t_head;
-        while i < len && data[i] as u8 > b'\n' {
-            let c0 = data[i] as u8;
+        let mut t = 0usize; // head
+        while i < len && data[i] > b'\n' {
+            let c0 = data[i];
             i += 1;
             if c0 & 0x80 != 0 {
                 return -1;
             }
             let c = (c0 & 127) as u32;
 
-            unsafe {
-                let mut x = (*t).next;
-                while !x.is_null() && (*x).get_c() != c {
-                    x = (*x).sibling;
+            let mut x = ctx.trie[t].next;
+            while let Some(xi) = x {
+                if ctx.trie[xi].get_c() == c {
+                    break;
                 }
-                t = x;
-
-                from = (*t).get_n() as i32;
-                if (ispunct(c as i32) || isspace(c as i32)) && from != n {
-                    from_punct = (*t).get_n() as i32;
-                }
-                if i as i64 == prefix_len_i {
-                    p3 = (*t).get_n() as i32;
-                }
-                (*t).set_n(n as u32);
+                x = ctx.trie[xi].sibling;
             }
+            // In valid input every traversed char was inserted by build_trie, so
+            // the node exists; absence would have been UB in the original C.
+            let xi = match x {
+                Some(xi) => xi,
+                None => return -1,
+            };
+            t = xi;
+
+            from = ctx.trie[t].get_n() as i32;
+            if (ispunct(c as i32) || isspace(c as i32)) && from != n {
+                from_punct = ctx.trie[t].get_n() as i32;
+            }
+            if i as i64 == prefix_len_i {
+                p3 = ctx.trie[t].get_n() as i32;
+            }
+            ctx.trie[t].set_n(n as u32);
         }
         i += 1;
     }
@@ -805,7 +784,7 @@ pub fn search_trie(
 /// `static int encode_name(name_context *ctx, char *name, int len, int mode)`
 // tokenise_name3.c:695
 #[allow(unused_unsafe)]
-pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: i32) -> i32 {
+pub fn encode_name(ctx: &mut name_context, name: &mut [u8], len: i32, mode: i32) -> i32 {
     let mut is_fixed = 0i32;
     let mut fixed_len = 0i32;
     let mut exact = 0i32;
@@ -866,7 +845,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
         }
         let mut k = 0i32;
         while k < 36 {
-            encode_token_char(ctx, ntok, nb(k as usize) as c_char);
+            encode_token_char(ctx, ntok, nb(k as usize) as u8);
             let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
             lct.token_int = nb(k as usize);
             lct.token_type = N_CHAR;
@@ -1089,10 +1068,10 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
                     if encode_token_match(ctx, ntok) < 0 {
                         return -1;
                     }
-                } else if encode_token_char(ctx, ntok, ci as c_char) < 0 {
+                } else if encode_token_char(ctx, ntok, ci as u8) < 0 {
                     return -1;
                 }
-            } else if encode_token_char(ctx, ntok, ci as c_char) < 0 {
+            } else if encode_token_char(ctx, ntok, ci as u8) < 0 {
                 return -1;
             }
 
@@ -1133,7 +1112,7 @@ pub fn encode_name(ctx: &mut name_context, name: &mut [c_char], len: i32, mode: 
 /// `static int decode_name(name_context *ctx, char *name, int name_len)`
 // tokenise_name3.c:1021
 #[allow(unused_unsafe)]
-pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -> i32 {
+pub fn decode_name(ctx: &mut name_context, name: &mut [u8], name_len: i32) -> i32 {
     let t0v = decode_token_type(ctx, 0) as i32;
     let mut dist: u32 = 0;
     let cnum = ctx.counter;
@@ -1190,7 +1169,7 @@ pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -
                 if len + 1 >= name_len {
                     return -1;
                 }
-                let mut c: c_char = 0;
+                let mut c: u8 = 0;
                 if decode_token_char(ctx, ntok, &mut c) < 0 {
                     return -1;
                 }
@@ -1293,7 +1272,7 @@ pub fn decode_name(ctx: &mut name_context, name: &mut [c_char], name_len: i32) -
                         if len + 1 >= name_len {
                             return -1;
                         }
-                        name[len as usize] = pl.token_int as c_char;
+                        name[len as usize] = pl.token_int as u8;
                         len += 1;
                         let lct = &mut ctx.lc[cnum as usize].last[ntok as usize];
                         lct.token_type = N_CHAR;
@@ -1646,7 +1625,7 @@ pub fn uncompress(
 /// `uint8_t *tok3_encode_names(char *blk, int len, int level, int use_arith, int *out_len, int *last_start_p)`
 // tokenise_name3.c:1449
 pub fn tok3_encode_names(
-    blk: &mut [c_char],
+    blk: &mut [u8],
     len: i32,
     level: i32,
     use_arith: i32,
@@ -1665,18 +1644,15 @@ pub fn tok3_encode_names(
     {
         let mut i = 0i32;
         while i < len {
-            if (blk[i as usize] as u8) <= b'\n' {
+            if blk[i as usize] <= b'\n' {
                 nreads += 1;
             }
             i += 1;
         }
     }
 
-    let ctx = create_context(nreads);
-    if ctx.is_null() {
-        return None;
-    }
-    let ctx = unsafe { &mut *ctx };
+    let mut ctx = create_context(nreads)?;
+    let ctx = &mut ctx;
 
     // Construct trie
     let mut ctr = 0i32;
@@ -1684,7 +1660,7 @@ pub fn tok3_encode_names(
         let mut i = 0i32;
         let mut j = 0i32;
         while i < len {
-            while i < len && (blk[i as usize] as u8) > b'\n' {
+            while i < len && blk[i as usize] > b'\n' {
                 i += 1;
             }
             if i >= len {
@@ -1693,7 +1669,6 @@ pub fn tok3_encode_names(
             last_start = i + 1;
             let slice = &blk[j as usize..len as usize];
             if build_trie(ctx, slice, (i - j) as usize, ctr) < 0 {
-                free_context(ctx);
                 return None;
             }
             ctr += 1;
@@ -1716,15 +1691,13 @@ pub fn tok3_encode_names(
             if i >= len {
                 break;
             }
-            let bi = blk[i as usize] as u8;
+            let bi = blk[i as usize];
             if bi != 0 && bi != b'\n' {
-                free_context(ctx);
                 return None;
             }
             blk[i as usize] = 0;
             let slice = &mut blk[j as usize..len as usize];
             if encode_name(ctx, slice, i - j, 1) < 0 {
-                free_context(ctx);
                 return None;
             }
             i += 1;
@@ -1789,7 +1762,6 @@ pub fn tok3_encode_names(
                 &mut out_len_l,
             ) < 0
             {
-                free_context(ctx);
                 return None;
             }
 
@@ -1870,15 +1842,13 @@ pub fn tok3_encode_names(
         }
     }
 
-    free_context(ctx);
-
     Some(out)
 }
 
 /// `uint8_t *encode_names(char *blk, int len, int level, int use_arith, int *out_len, int *last_start_p)`
 // tokenise_name3.c:1665
 pub fn encode_names(
-    blk: &mut [c_char],
+    blk: &mut [u8],
     len: i32,
     level: i32,
     use_arith: i32,
@@ -1910,27 +1880,21 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
         | ((r#in[6] as u32) << 16)
         | ((r#in[7] as u32) << 24)) as i32;
     let use_arith = r#in[8] as i32;
-    let ctx = create_context(nreads);
-    if ctx.is_null() {
-        return None;
-    }
-    let ctx = unsafe { &mut *ctx };
+    let mut ctx = create_context(nreads)?;
+    let ctx = &mut ctx;
 
     let sz = sz as usize;
 
-    // Unpack descriptors
+    // Unpack descriptors.  On any error we just `return None`; the owned `ctx`
+    // and its buffers are released by Drop.
     let mut tnum = -1i32;
-    let err = |ctx: &mut name_context| -> Option<Vec<u8>> {
-        free_context(ctx);
-        None
-    };
 
     while o < sz {
         let ttype = r#in[o] as i32;
         o += 1;
         if ttype & 64 != 0 {
             if o + 2 > sz {
-                return err(ctx);
+                return None;
             }
             let mut j = (r#in[o] as i32) << 4;
             o += 1;
@@ -1939,27 +1903,27 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
             if ttype & 128 != 0 {
                 tnum += 1;
                 if tnum >= MAX_TOKENS as i32 {
-                    return err(ctx);
+                    return None;
                 }
                 ctx.max_tok = tnum + 1;
                 reset_desc_block(ctx, tnum);
             }
             if (ttype & 15) != 0 && (ttype & 128) != 0 {
                 if tnum < 0 {
-                    return err(ctx);
+                    return None;
                 }
                 let base = (tnum << 4) as usize;
                 seed_type_descriptor(&mut ctx.desc[base], nreads, ttype);
             }
             if tnum < 0 {
-                return err(ctx);
+                return None;
             }
             let i = ((tnum << 4) | (ttype & 15)) as usize;
             if j as usize >= i {
-                return err(ctx);
+                return None;
             }
             if ctx.desc[j as usize].buf.is_empty() {
-                return err(ctx);
+                return None;
             }
             ctx.desc[i].buf_l = 0;
             ctx.desc[i].buf = ctx.desc[j as usize].buf.clone();
@@ -1969,7 +1933,7 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
         if ttype & 128 != 0 {
             tnum += 1;
             if tnum >= MAX_TOKENS as i32 {
-                return err(ctx);
+                return None;
             }
             ctx.max_tok = tnum + 1;
             reset_desc_block(ctx, tnum);
@@ -1977,7 +1941,7 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
 
         if (ttype & 15) != 0 && (ttype & 128) != 0 {
             if tnum < 0 {
-                return err(ctx);
+                return None;
             }
             let base = (tnum << 4) as usize;
             seed_type_descriptor(&mut ctx.desc[base], nreads, ttype);
@@ -1987,14 +1951,14 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
         let in_sub = &r#in[o..sz];
         let ulen_blk = uncompressed_size(in_sub, (sz - o) as u64) as i64;
         if ulen_blk < 0 || ulen_blk >= i32::MAX as i64 {
-            return err(ctx);
+            return None;
         }
         if tnum < 0 {
-            return err(ctx);
+            return None;
         }
         let i = ((tnum << 4) | (ttype & 15)) as usize;
         if i >= MAX_TBLOCKS {
-            return err(ctx);
+            return None;
         }
 
         ctx.desc[i].buf_l = 0;
@@ -2004,14 +1968,14 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
         let clen = uncompress(use_arith, in_sub, (sz - o) as u64, out_slice, &mut usz);
         ctx.desc[i].buf.truncate(usz as usize);
         if clen < 0 || ctx.desc[i].buf.len() as i64 != ulen_blk {
-            return err(ctx);
+            return None;
         }
         o += clen as usize;
     }
 
     ulen += 1024;
     let mut ulen_rem = ulen;
-    let mut out = vec![0 as c_char; ulen as usize];
+    let mut out = vec![0u8; ulen as usize];
 
     let mut out_sz = 0usize;
     let mut ret;
@@ -2028,12 +1992,11 @@ pub fn tok3_decode_names(r#in: &[u8], sz: u32, out_len: &mut u32) -> Option<Vec<
 
     let result = if ret == 0 {
         out.truncate(out_sz);
-        Some(out.into_iter().map(|c| c as u8).collect())
+        Some(out)
     } else {
         None
     };
 
-    free_context(ctx);
     *out_len = out_sz as u32;
     result
 }

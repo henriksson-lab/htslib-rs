@@ -72,23 +72,23 @@ fn rendered_mod(m: &hts_base_mod) -> String {
     )
 }
 
-fn rendered_extended_mod(state: *mut htslib_rs::hts_base_mod_state, m: &hts_base_mod) -> String {
+fn rendered_extended_mod(state: &htslib_rs::hts_base_mod_state, m: &hts_base_mod) -> String {
     unsafe {
-        let mut strand = 0;
+        let mut strand: c_int = 0;
         let mut implicit = 0;
-        let mut canonical = 0;
+        let mut canonical: i8 = 0;
         assert_eq!(
             bam_mods_query_type(
                 state,
                 m.modified_base,
-                &mut strand,
-                &mut implicit,
-                &mut canonical,
+                Some(&mut strand),
+                Some(&mut implicit),
+                Some(&mut canonical),
             ),
             0
         );
         assert_eq!(canonical, m.canonical_base as i8);
-        assert_eq!(strand, m.strand);
+        assert_eq!(strand, m.strand as c_int);
         let implicit_marker = if implicit == 0 { '?' } else { '.' };
         let strand = if m.strand == 0 { '+' } else { '-' };
         format!(
@@ -107,7 +107,7 @@ unsafe fn append_mod_line(
     pos: i32,
     base: char,
     mods: &[hts_base_mod],
-    state: *mut htslib_rs::hts_base_mod_state,
+    state: &htslib_rs::hts_base_mod_state,
     extended: bool,
 ) {
     out.push_str(&format!("{pos}\t{base}"));
@@ -125,19 +125,25 @@ unsafe fn append_mod_line(
     out.push('\n');
 }
 
-unsafe fn append_present_line(out: &mut String, state: *mut htslib_rs::hts_base_mod_state) {
+unsafe fn append_present_line(out: &mut String, state: &mut htslib_rs::hts_base_mod_state) {
     let mut ntype = 0;
-    let types = bam_mods_recorded(state, &mut ntype);
+    let types: Vec<c_int> = bam_mods_recorded(state, &mut ntype).to_vec();
     out.push_str("Present:");
     for i in 0..ntype {
-        let mut strand = 0;
+        let mut strand: c_int = 0;
         let mut implicit = 0;
-        let mut canonical = 0;
+        let mut canonical: i8 = 0;
         assert_eq!(
-            bam_mods_queryi(state, i, &mut strand, &mut implicit, &mut canonical),
+            bam_mods_queryi(
+                state,
+                i,
+                Some(&mut strand),
+                Some(&mut implicit),
+                Some(&mut canonical)
+            ),
             0
         );
-        let code = *types.add(i as usize);
+        let code = types[i as usize];
         if code > 0 {
             out.push_str(&format!(" {}", code as u8 as char));
         } else {
@@ -156,8 +162,7 @@ unsafe fn render_test_mod_fixture(path: &str, extended: bool, flags: u32) -> Str
     assert!(!hdr.is_null());
     let rec = bam_init1();
     assert!(!rec.is_null());
-    let state = hts_base_mod_state_alloc();
-    assert!(!state.is_null());
+    let mut state = hts_base_mod_state_alloc();
 
     let mut out = String::new();
     loop {
@@ -166,7 +171,7 @@ unsafe fn render_test_mod_fixture(path: &str, extended: bool, flags: u32) -> Str
             break;
         }
 
-        assert_eq!(bam_parse_basemod2(rec, state, flags), 0);
+        assert_eq!(bam_parse_basemod2(&*rec, &mut *state, flags), 0);
         for pos in 0..(*rec).core.l_qseq {
             let mut mods = [hts_base_mod {
                 modified_base: 0,
@@ -174,21 +179,21 @@ unsafe fn render_test_mod_fixture(path: &str, extended: bool, flags: u32) -> Str
                 strand: 0,
                 qual: 0,
             }; 5];
-            let n = bam_mods_at_next_pos(rec, state, mods.as_mut_ptr(), mods.len() as i32);
+            let n = bam_mods_at_next_pos(&*rec, &mut *state, &mut mods);
             assert!(n >= 0);
             append_mod_line(
                 &mut out,
                 pos,
                 record_base(rec, pos),
                 &mods[..std::cmp::min(n as usize, mods.len())],
-                state,
+                &*state,
                 extended,
             );
         }
 
         out.push_str("---\n");
-        assert_eq!(bam_parse_basemod2(rec, state, flags), 0);
-        append_present_line(&mut out, state);
+        assert_eq!(bam_parse_basemod2(&*rec, &mut *state, flags), 0);
+        append_present_line(&mut out, &mut *state);
 
         loop {
             let mut mods = [hts_base_mod {
@@ -198,7 +203,7 @@ unsafe fn render_test_mod_fixture(path: &str, extended: bool, flags: u32) -> Str
                 qual: 0,
             }; 5];
             let mut pos = -1;
-            let n = bam_next_basemod(rec, state, mods.as_mut_ptr(), mods.len() as i32, &mut pos);
+            let n = bam_next_basemod(&*rec, &mut *state, &mut mods, &mut pos);
             assert!(n >= 0);
             if n == 0 {
                 break;
@@ -208,7 +213,7 @@ unsafe fn render_test_mod_fixture(path: &str, extended: bool, flags: u32) -> Str
                 pos,
                 record_base(rec, pos),
                 &mods[..std::cmp::min(n as usize, mods.len())],
-                state,
+                &*state,
                 false,
             );
         }
@@ -216,7 +221,7 @@ unsafe fn render_test_mod_fixture(path: &str, extended: bool, flags: u32) -> Str
         out.push_str("\n===\n\n");
     }
 
-    hts_base_mod_state_free(state);
+    hts_base_mod_state_free(Some(state));
     bam_destroy1(rec);
     sam_hdr_destroy(hdr);
     assert_eq!(hts_close(fp), 0);
@@ -244,15 +249,12 @@ unsafe extern "C" fn pileup_cd_create(
     rec: *const bam1_t,
     cd: *mut htslib_rs::bam_pileup_cd,
 ) -> c_int {
-    let state = hts_base_mod_state_alloc();
-    if state.is_null() {
+    let mut state = hts_base_mod_state_alloc();
+    if bam_parse_basemod(&*rec, &mut *state) < 0 {
+        hts_base_mod_state_free(Some(state));
         return -1;
     }
-    if bam_parse_basemod(rec, state) < 0 {
-        hts_base_mod_state_free(state);
-        return -1;
-    }
-    (*cd).p = state.cast();
+    (*cd).p = Box::into_raw(state) as *mut c_void;
     0
 }
 
@@ -261,7 +263,9 @@ unsafe extern "C" fn pileup_cd_destroy(
     _rec: *const bam1_t,
     cd: *mut htslib_rs::bam_pileup_cd,
 ) -> c_int {
-    hts_base_mod_state_free((*cd).p.cast());
+    hts_base_mod_state_free(Some(Box::from_raw(
+        (*cd).p as *mut htslib_rs::hts_base_mod_state,
+    )));
     0
 }
 
@@ -273,7 +277,9 @@ unsafe fn append_pileup_mod_line(
     pos: c_int,
     depth: c_int,
 ) {
-    let rname = CStr::from_ptr(sam_hdr_tid2name(hdr, tid)).to_str().unwrap();
+    let rname = CStr::from_ptr(sam_hdr_tid2name(&*hdr, tid))
+        .to_str()
+        .unwrap();
     out.push_str(&format!("{rname}\t{pos}\t"));
     let mut quals = String::new();
     for i in 0..depth {
@@ -289,14 +295,14 @@ unsafe fn append_pileup_mod_line(
         let qual = *bam_get_qual(rec).add(qpos as usize);
         quals.push(std::cmp::min(b'~', b'!'.saturating_add(qual)) as char);
 
-        let state = (*p).cd.p.cast::<htslib_rs::hts_base_mod_state>();
+        let state = &mut *((*p).cd.p as *mut htslib_rs::hts_base_mod_state);
         let mut mods = [hts_base_mod {
             modified_base: 0,
             canonical_base: 0,
             strand: 0,
             qual: 0,
         }; 5];
-        let n = bam_mods_at_qpos(rec, qpos, state, mods.as_mut_ptr(), mods.len() as i32);
+        let n = bam_mods_at_qpos(&*rec, qpos, state, &mut mods);
         assert!(n >= 0);
         if n > 0 {
             out.push('[');

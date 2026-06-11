@@ -28,18 +28,13 @@ pub unsafe fn samples_modstate_c_49_main(argc: c_int, argv: *mut *mut c_char) ->
         return ret;
     }
 
-    let ms = sam::hts_base_mod_state_alloc();
-    if ms.is_null() {
-        libc::printf(c"Failed to allocate state memory\n".as_ptr());
-        sam::bam_destroy1(bamdata);
-        return ret;
-    }
+    let mut ms = sam::hts_base_mod_state_alloc();
 
     let infile = crate::htslib_rs::hts::hts_open(inname, c"r".as_ptr());
     if infile.is_null() {
         libc::printf(c"Could not open %s\n".as_ptr(), inname);
         sam::bam_destroy1(bamdata);
-        sam::hts_base_mod_state_free(ms);
+        sam::hts_base_mod_state_free(Some(ms));
         return ret;
     }
     let in_samhdr = sam::sam_hdr_read(infile);
@@ -47,7 +42,7 @@ pub unsafe fn samples_modstate_c_49_main(argc: c_int, argv: *mut *mut c_char) ->
         libc::printf(c"Failed to read header from file!\n".as_ptr());
         crate::htslib_rs::hts::hts_close(infile);
         sam::bam_destroy1(bamdata);
-        sam::hts_base_mod_state_free(ms);
+        sam::hts_base_mod_state_free(Some(ms));
         return ret;
     }
 
@@ -55,20 +50,20 @@ pub unsafe fn samples_modstate_c_49_main(argc: c_int, argv: *mut *mut c_char) ->
     while ret_r >= 0 {
         let mut i = 0;
         let data = sam::bam_get_seq(bamdata);
-        if sam::bam_parse_basemod(bamdata, ms) != 0 {
+        if sam::bam_parse_basemod(&*bamdata, &mut ms) != 0 {
             libc::printf(c"Failed to parse the base mods\n".as_ptr());
             sam::sam_hdr_destroy(in_samhdr);
             crate::htslib_rs::hts::hts_close(infile);
             sam::bam_destroy1(bamdata);
-            sam::hts_base_mod_state_free(ms);
+            sam::hts_base_mod_state_free(Some(ms));
             return ret;
         }
 
         libc::printf(c"Modifications:".as_ptr());
         let mut cnt = 0;
-        let bm = sam::bam_mods_recorded(ms, &mut cnt);
+        let bm = sam::bam_mods_recorded(&mut ms, &mut cnt);
         for k in 0..cnt {
-            libc::printf(c"%c".as_ptr(), *bm.add(k as usize));
+            libc::printf(c"%c".as_ptr(), bm[k as usize]);
         }
         libc::printf(c"\n".as_ptr());
 
@@ -80,14 +75,13 @@ pub unsafe fn samples_modstate_c_49_main(argc: c_int, argv: *mut *mut c_char) ->
         }; 5];
         if opt != 0 {
             while i < (*bamdata).core.l_qseq {
-                let r =
-                    sam::bam_mods_at_next_pos(bamdata, ms, mods.as_mut_ptr(), mods.len() as c_int);
+                let r = sam::bam_mods_at_next_pos(&*bamdata, &mut ms, &mut mods);
                 if r <= -1 {
                     libc::printf(c"Failed to get modifications\n".as_ptr());
                     sam::sam_hdr_destroy(in_samhdr);
                     crate::htslib_rs::hts::hts_close(infile);
                     sam::bam_destroy1(bamdata);
-                    sam::hts_base_mod_state_free(ms);
+                    sam::hts_base_mod_state_free(Some(ms));
                     return ret;
                 } else if r as usize > mods.len() {
                     libc::printf(
@@ -96,7 +90,7 @@ pub unsafe fn samples_modstate_c_49_main(argc: c_int, argv: *mut *mut c_char) ->
                     sam::sam_hdr_destroy(in_samhdr);
                     crate::htslib_rs::hts::hts_close(infile);
                     sam::bam_destroy1(bamdata);
-                    sam::hts_base_mod_state_free(ms);
+                    sam::hts_base_mod_state_free(Some(ms));
                     return ret;
                 } else if r == 0 {
                     libc::printf(
@@ -118,19 +112,13 @@ pub unsafe fn samples_modstate_c_49_main(argc: c_int, argv: *mut *mut c_char) ->
         } else {
             let mut pos = 0;
             loop {
-                let r = sam::bam_next_basemod(
-                    bamdata,
-                    ms,
-                    mods.as_mut_ptr(),
-                    mods.len() as c_int,
-                    &mut pos,
-                );
+                let r = sam::bam_next_basemod(&*bamdata, &mut ms, &mut mods, &mut pos);
                 if r < 0 {
                     libc::printf(c"Failed to get modifications\n".as_ptr());
                     sam::sam_hdr_destroy(in_samhdr);
                     crate::htslib_rs::hts::hts_close(infile);
                     sam::bam_destroy1(bamdata);
-                    sam::hts_base_mod_state_free(ms);
+                    sam::hts_base_mod_state_free(Some(ms));
                     return ret;
                 }
                 while i < (*bamdata).core.l_qseq && i < pos {
@@ -169,18 +157,18 @@ pub unsafe fn samples_modstate_c_49_main(argc: c_int, argv: *mut *mut c_char) ->
     }
 
     if ret_r == -1 {
-        let mut strand = 0;
-        let mut implicit = 0;
-        let mut canonical = 0;
+        let mut strand: c_int = 0;
+        let mut implicit: c_int = 0;
+        let mut canonical: c_char = 0;
         let modification = b"mhfcgebaon";
         libc::printf(c"\n\nLast alignment has \n".as_ptr());
         for code in modification {
             if sam::bam_mods_query_type(
-                ms,
+                &ms,
                 *code as c_int,
-                &mut strand,
-                &mut implicit,
-                &mut canonical,
+                Some(&mut strand),
+                Some(&mut implicit),
+                Some(&mut canonical),
             ) != 0
             {
                 libc::printf(c"No modification of %c type\n".as_ptr(), *code as c_int);
@@ -211,6 +199,6 @@ pub unsafe fn samples_modstate_c_49_main(argc: c_int, argv: *mut *mut c_char) ->
     sam::sam_hdr_destroy(in_samhdr);
     crate::htslib_rs::hts::hts_close(infile);
     sam::bam_destroy1(bamdata);
-    sam::hts_base_mod_state_free(ms);
+    sam::hts_base_mod_state_free(Some(ms));
     ret
 }

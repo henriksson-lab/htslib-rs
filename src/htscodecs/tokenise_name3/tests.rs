@@ -4,12 +4,12 @@
 use super::*;
 
 /// Build a `\0`-separated block of names (the format tok3 consumes) plus its
-/// length.  Returns the block as a Vec<c_char>.
-fn make_block(names: &[&str]) -> Vec<c_char> {
-    let mut v: Vec<c_char> = Vec::new();
+/// length.  Returns the block as a Vec<u8>.
+fn make_block(names: &[&str]) -> Vec<u8> {
+    let mut v: Vec<u8> = Vec::new();
     for n in names {
         for &b in n.as_bytes() {
-            v.push(b as c_char);
+            v.push(b);
         }
         v.push(0);
     }
@@ -298,7 +298,7 @@ mod parity {
         let mut out_len = 0i32;
         unsafe {
             let p = c_tok3_encode_names(
-                block.as_mut_ptr(),
+                block.as_mut_ptr().cast::<i8>(),
                 block.len() as c_int,
                 level,
                 use_arith,

@@ -49,7 +49,7 @@ impl SamReader {
     }
 
     unsafe fn target_name(&self, tid: c_int) -> String {
-        CStr::from_ptr(sam_hdr_tid2name(self.hdr, tid))
+        CStr::from_ptr(sam_hdr_tid2name(&*self.hdr, tid))
             .to_string_lossy()
             .into_owned()
     }
@@ -80,11 +80,7 @@ unsafe extern "C" fn read_original_pileup_record(data: *mut c_void, rec: *mut ba
 }
 
 unsafe fn push_original_pileup_seq(out: &mut String, mut p: *const bam_pileup1_t, n: c_int) {
-    let mut ks = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut ks = kstring_t::default();
 
     for _ in 0..n {
         let is_rev = ((*(*p).b).core.flag as c_int & BAM_FREVERSE) != 0;
@@ -119,7 +115,7 @@ unsafe fn push_original_pileup_seq(out: &mut String, mut p: *const bam_pileup1_t
             assert!(len >= 0, "bam_plp_insertion failed");
             out.push_str(&format!("{:+}(", len));
             for j in 0..len {
-                let base = *ks.s.add(j as usize) as u8;
+                let base = ks.data[j as usize];
                 out.push(if is_rev {
                     base.to_ascii_lowercase() as char
                 } else {

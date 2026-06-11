@@ -1,38 +1,17 @@
 // Functions translated from htslib/cram/cram_stats.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_int, c_void};
-use std::ptr::{self, NonNull};
+use std::ffi::c_int;
 
 use super::*;
 
 const CRAM_STATS_SMALL_LIMIT: usize = 1024;
 const KH_INITIAL_BUCKETS: u32 = 4;
 
-unsafe fn cram_stats_ref<'a>(st: *const cram_stats_layout) -> Option<&'a cram_stats_layout> {
-    NonNull::new(st.cast_mut()).map(|st| st.as_ref())
-}
-
-unsafe fn cram_stats_mut<'a>(st: *mut cram_stats_layout) -> Option<&'a mut cram_stats_layout> {
-    NonNull::new(st).map(|mut st| st.as_mut())
-}
-
-unsafe fn cram_stats_box(st: *mut cram_stats_layout) -> Option<Box<cram_stats_layout>> {
-    if st.is_null() {
-        None
-    } else {
-        Some(Box::from_raw(st))
-    }
-}
-
-unsafe fn cram_fd_ref<'a>(fd: *const cram_fd_layout) -> Option<&'a cram_fd_layout> {
-    NonNull::new(fd.cast_mut()).map(|fd| fd.as_ref())
-}
-
 fn cram_stats_new() -> cram_stats_layout {
     cram_stats_layout {
         freqs: [0; 1024],
-        h: ptr::null_mut(),
+        h: None,
         nsamp: 0,
         nvals: 0,
         min_val: 0,
@@ -44,8 +23,8 @@ fn cram_stats_create() -> Box<cram_stats_layout> {
     Box::new(cram_stats_new())
 }
 
-pub unsafe fn cram_cram_stats_c_48_cram_stats_create() -> *mut c_void {
-    Box::into_raw(cram_stats_create()).cast()
+pub fn cram_cram_stats_c_48_cram_stats_create() -> Box<cram_stats_layout> {
+    cram_stats_create()
 }
 
 fn kh_flags_len(n_buckets: u32) -> u32 {
@@ -61,30 +40,6 @@ fn kh_hash(key: i64) -> u32 {
     ((key >> 33) ^ key ^ (key << 11)) as u32
 }
 
-unsafe fn kh_flags(h: &kh_m_i2i_layout) -> &[u32] {
-    std::slice::from_raw_parts(h.flags, kh_flags_len(h.n_buckets) as usize)
-}
-
-unsafe fn kh_flags_mut(h: &mut kh_m_i2i_layout) -> &mut [u32] {
-    std::slice::from_raw_parts_mut(h.flags, kh_flags_len(h.n_buckets) as usize)
-}
-
-unsafe fn kh_keys(h: &kh_m_i2i_layout) -> &[i64] {
-    std::slice::from_raw_parts(h.keys, h.n_buckets as usize)
-}
-
-unsafe fn kh_keys_mut(h: &mut kh_m_i2i_layout) -> &mut [i64] {
-    std::slice::from_raw_parts_mut(h.keys, h.n_buckets as usize)
-}
-
-unsafe fn kh_vals(h: &kh_m_i2i_layout) -> &[c_int] {
-    std::slice::from_raw_parts(h.vals, h.n_buckets as usize)
-}
-
-unsafe fn kh_vals_mut(h: &mut kh_m_i2i_layout) -> &mut [c_int] {
-    std::slice::from_raw_parts_mut(h.vals, h.n_buckets as usize)
-}
-
 fn kh_flag_at(flags: &[u32], k: u32) -> u32 {
     (flags[(k >> 4) as usize] >> ((k & 0x0f) << 1)) & 3
 }
@@ -97,11 +52,8 @@ fn kh_mark_deleted(flags: &mut [u32], k: u32) {
     flags[(k >> 4) as usize] |= 1 << ((k & 0x0f) << 1);
 }
 
-unsafe fn kh_alloc(n_buckets: u32) -> Option<NonNull<kh_m_i2i_layout>> {
+fn kh_alloc(n_buckets: u32) -> Box<kh_m_i2i_layout> {
     let flags_n = kh_flags_len(n_buckets);
-    let flags = vec![0xaaaa_aaaau32; flags_n as usize].into_boxed_slice();
-    let keys = vec![0i64; n_buckets as usize].into_boxed_slice();
-    let vals = vec![0 as c_int; n_buckets as usize].into_boxed_slice();
 
     let upper_bound = if n_buckets == KH_INITIAL_BUCKETS {
         (n_buckets as f64 * 0.77) as u32
@@ -109,76 +61,40 @@ unsafe fn kh_alloc(n_buckets: u32) -> Option<NonNull<kh_m_i2i_layout>> {
         (n_buckets as f64 * 0.77 + 0.5) as u32
     };
 
-    Some(NonNull::from(Box::leak(Box::new(kh_m_i2i_layout {
+    Box::new(kh_m_i2i_layout {
         n_buckets,
         size: 0,
         n_occupied: 0,
         upper_bound,
-        flags: Box::leak(flags).as_mut_ptr(),
-        keys: Box::leak(keys).as_mut_ptr(),
-        vals: Box::leak(vals).as_mut_ptr(),
-    }))))
+        flags: vec![0xaaaa_aaaau32; flags_n as usize],
+        keys: vec![0i64; n_buckets as usize],
+        vals: vec![0 as c_int; n_buckets as usize],
+    })
 }
 
-unsafe fn kh_free(mut h: NonNull<kh_m_i2i_layout>) {
-    let h_ref = h.as_mut();
-    if !h_ref.flags.is_null() {
-        drop(Box::from_raw(ptr::slice_from_raw_parts_mut(
-            h_ref.flags,
-            kh_flags_len(h_ref.n_buckets) as usize,
-        )));
+fn stats_ensure_hash(st: &mut cram_stats_layout) -> &mut kh_m_i2i_layout {
+    if st.h.is_none() {
+        st.h = Some(kh_alloc(KH_INITIAL_BUCKETS));
     }
-    if !h_ref.keys.is_null() {
-        drop(Box::from_raw(ptr::slice_from_raw_parts_mut(
-            h_ref.keys,
-            h_ref.n_buckets as usize,
-        )));
-    }
-    if !h_ref.vals.is_null() {
-        drop(Box::from_raw(ptr::slice_from_raw_parts_mut(
-            h_ref.vals,
-            h_ref.n_buckets as usize,
-        )));
-    }
-    drop(Box::from_raw(h.as_ptr()));
+    st.h.as_mut().unwrap()
 }
 
-fn stats_hash_mut(st: &mut cram_stats_layout) -> Option<NonNull<kh_m_i2i_layout>> {
-    NonNull::new(st.h.cast::<kh_m_i2i_layout>())
-}
-
-fn stats_hash_ref(st: &cram_stats_layout) -> Option<NonNull<kh_m_i2i_layout>> {
-    NonNull::new(st.h.cast::<kh_m_i2i_layout>())
-}
-
-unsafe fn stats_ensure_hash(st: &mut cram_stats_layout) -> Option<NonNull<kh_m_i2i_layout>> {
-    if let Some(h) = stats_hash_mut(st) {
-        return Some(h);
-    }
-
-    let h = kh_alloc(KH_INITIAL_BUCKETS)?;
-    st.h = h.as_ptr().cast();
-    Some(h)
-}
-
-unsafe fn kh_find_occupied(h: &kh_m_i2i_layout, key: i64) -> Option<u32> {
+fn kh_find_occupied(h: &kh_m_i2i_layout, key: i64) -> Option<u32> {
     if h.n_buckets == 0 {
         return None;
     }
 
-    let flags = kh_flags(h);
-    let keys = kh_keys(h);
     let mask = h.n_buckets - 1;
     let mut k = kh_hash(key) & mask;
     let last = k;
     let mut step = 0u32;
 
     loop {
-        let flag = kh_flag_at(flags, k);
+        let flag = kh_flag_at(&h.flags, k);
         if (flag & 2) != 0 {
             return None;
         }
-        if (flag & 1) == 0 && keys[k as usize] == key {
+        if (flag & 1) == 0 && h.keys[k as usize] == key {
             return Some(k);
         }
         step += 1;
@@ -189,14 +105,12 @@ unsafe fn kh_find_occupied(h: &kh_m_i2i_layout, key: i64) -> Option<u32> {
     }
 }
 
-unsafe fn kh_insert_absent(h: &mut kh_m_i2i_layout, key: i64, val: c_int) {
+fn kh_insert_absent(h: &mut kh_m_i2i_layout, key: i64, val: c_int) {
     let mask = h.n_buckets - 1;
     let mut x = h.n_buckets;
     let mut site = h.n_buckets;
     let mut i = kh_hash(key) & mask;
-    let flags = kh_flags(h);
-    let keys = kh_keys(h);
-    let flag = kh_flag_at(flags, i);
+    let flag = kh_flag_at(&h.flags, i);
 
     if (flag & 2) != 0 {
         x = i;
@@ -204,10 +118,10 @@ unsafe fn kh_insert_absent(h: &mut kh_m_i2i_layout, key: i64, val: c_int) {
         let last = i;
         let mut step = 0u32;
         while {
-            let flag = kh_flag_at(flags, i);
-            (flag & 2) == 0 && ((flag & 1) != 0 || keys[i as usize] != key)
+            let flag = kh_flag_at(&h.flags, i);
+            (flag & 2) == 0 && ((flag & 1) != 0 || h.keys[i as usize] != key)
         } {
-            let flag = kh_flag_at(flags, i);
+            let flag = kh_flag_at(&h.flags, i);
             if (flag & 1) != 0 {
                 site = i;
             }
@@ -219,7 +133,7 @@ unsafe fn kh_insert_absent(h: &mut kh_m_i2i_layout, key: i64, val: c_int) {
             }
         }
         if x == h.n_buckets {
-            let flag = kh_flag_at(flags, i);
+            let flag = kh_flag_at(&h.flags, i);
             if (flag & 2) != 0 && site != h.n_buckets {
                 x = site;
             } else {
@@ -228,45 +142,43 @@ unsafe fn kh_insert_absent(h: &mut kh_m_i2i_layout, key: i64, val: c_int) {
         }
     }
 
-    let flag = kh_flag_at(kh_flags(h), x);
+    let flag = kh_flag_at(&h.flags, x);
     if (flag & 2) != 0 {
-        kh_keys_mut(h)[x as usize] = key;
-        kh_vals_mut(h)[x as usize] = val;
-        kh_mark_occupied(kh_flags_mut(h), x);
+        h.keys[x as usize] = key;
+        h.vals[x as usize] = val;
+        kh_mark_occupied(&mut h.flags, x);
         h.size += 1;
         h.n_occupied += 1;
     } else if (flag & 1) != 0 {
-        kh_keys_mut(h)[x as usize] = key;
-        kh_vals_mut(h)[x as usize] = val;
-        kh_mark_occupied(kh_flags_mut(h), x);
+        h.keys[x as usize] = key;
+        h.vals[x as usize] = val;
+        kh_mark_occupied(&mut h.flags, x);
         h.size += 1;
     }
 }
 
-unsafe fn kh_resize(h: NonNull<kh_m_i2i_layout>) -> Option<NonNull<kh_m_i2i_layout>> {
-    let old_h = h.as_ref();
+fn kh_resize(old_h: &kh_m_i2i_layout) -> Box<kh_m_i2i_layout> {
     let old_n = old_h.n_buckets;
     let new_n = if old_n == 0 {
         KH_INITIAL_BUCKETS
     } else {
         old_n << 1
     };
-    let mut new_h = kh_alloc(new_n)?;
+    let mut new_h = kh_alloc(new_n);
 
     for k in 0..old_n {
-        if kh_flag_at(kh_flags(old_h), k) != 0 {
+        if kh_flag_at(&old_h.flags, k) != 0 {
             continue;
         }
-        let key = kh_keys(old_h)[k as usize];
-        let val = kh_vals(old_h)[k as usize];
-        kh_insert_absent(new_h.as_mut(), key, val);
+        let key = old_h.keys[k as usize];
+        let val = old_h.vals[k as usize];
+        kh_insert_absent(&mut new_h, key, val);
     }
 
-    kh_free(h);
-    Some(new_h)
+    new_h
 }
 
-unsafe fn cram_stats_add(st: &mut cram_stats_layout, val: c_int) {
+fn cram_stats_add(st: &mut cram_stats_layout, val: c_int) {
     st.nsamp += 1;
 
     if (0..CRAM_STATS_SMALL_LIMIT as c_int).contains(&val) {
@@ -274,34 +186,26 @@ unsafe fn cram_stats_add(st: &mut cram_stats_layout, val: c_int) {
         return;
     }
 
-    let Some(mut h) = stats_ensure_hash(st) else {
-        return;
-    };
+    let h = stats_ensure_hash(st);
 
-    if let Some(k) = kh_find_occupied(h.as_ref(), val as i64) {
-        kh_vals_mut(h.as_mut())[k as usize] += 1;
+    if let Some(k) = kh_find_occupied(h, val as i64) {
+        h.vals[k as usize] += 1;
         return;
     }
 
-    if h.as_ref().n_occupied >= h.as_ref().upper_bound {
-        let Some(new_h) = kh_resize(h) else {
-            return;
-        };
-        st.h = new_h.as_ptr().cast();
-        h = new_h;
+    if h.n_occupied >= h.upper_bound {
+        let resized = kh_resize(h);
+        st.h = Some(resized);
     }
 
-    kh_insert_absent(h.as_mut(), val as i64, 1);
+    kh_insert_absent(st.h.as_mut().unwrap(), val as i64, 1);
 }
 
-pub unsafe fn cram_cram_stats_c_52_cram_stats_add(st: *mut c_void, val: c_int) {
-    let Some(st) = cram_stats_mut(st.cast()) else {
-        return;
-    };
+pub fn cram_cram_stats_c_52_cram_stats_add(st: &mut cram_stats_layout, val: c_int) {
     cram_stats_add(st, val);
 }
 
-unsafe fn cram_stats_del(st: &mut cram_stats_layout, val: c_int) {
+fn cram_stats_del(st: &mut cram_stats_layout, val: c_int) {
     st.nsamp -= 1;
 
     if (0..CRAM_STATS_SMALL_LIMIT as c_int).contains(&val) {
@@ -310,13 +214,12 @@ unsafe fn cram_stats_del(st: &mut cram_stats_layout, val: c_int) {
         return;
     }
 
-    if let Some(mut h) = stats_hash_mut(st) {
-        if let Some(k) = kh_find_occupied(h.as_ref(), val as i64) {
-            let vals = kh_vals_mut(h.as_mut());
-            vals[k as usize] -= 1;
-            if vals[k as usize] == 0 {
-                kh_mark_deleted(kh_flags_mut(h.as_mut()), k);
-                h.as_mut().size -= 1;
+    if let Some(h) = st.h.as_mut() {
+        if let Some(k) = kh_find_occupied(h, val as i64) {
+            h.vals[k as usize] -= 1;
+            if h.vals[k as usize] == 0 {
+                kh_mark_deleted(&mut h.flags, k);
+                h.size -= 1;
             }
             return;
         }
@@ -325,23 +228,20 @@ unsafe fn cram_stats_del(st: &mut cram_stats_layout, val: c_int) {
     st.nsamp += 1;
 }
 
-pub unsafe fn cram_cram_stats_c_80_cram_stats_del(st: *mut c_void, val: c_int) {
-    let Some(st) = cram_stats_mut(st.cast()) else {
-        return;
-    };
+pub fn cram_cram_stats_c_80_cram_stats_del(st: &mut cram_stats_layout, val: c_int) {
     cram_stats_del(st, val);
 }
 
-unsafe fn kh_occupied_entries(h: &kh_m_i2i_layout, mut f: impl FnMut(i64, c_int)) {
+fn kh_occupied_entries(h: &kh_m_i2i_layout, mut f: impl FnMut(i64, c_int)) {
     for k in 0..h.n_buckets {
-        if kh_flag_at(kh_flags(h), k) != 0 {
+        if kh_flag_at(&h.flags, k) != 0 {
             continue;
         }
-        f(kh_keys(h)[k as usize], kh_vals(h)[k as usize]);
+        f(h.keys[k as usize], h.vals[k as usize]);
     }
 }
 
-unsafe fn cram_stats_dump(st: &cram_stats_layout) {
+fn cram_stats_dump(st: &cram_stats_layout) {
     eprintln!("cram_stats:");
 
     for (i, &freq) in st.freqs.iter().enumerate() {
@@ -351,21 +251,18 @@ unsafe fn cram_stats_dump(st: &cram_stats_layout) {
         eprintln!("\t{}\t{}", i, freq);
     }
 
-    if let Some(h) = stats_hash_ref(st) {
-        kh_occupied_entries(h.as_ref(), |key, val| {
+    if let Some(h) = st.h.as_ref() {
+        kh_occupied_entries(h, |key, val| {
             eprintln!("\t{}\t{}", key, val);
         });
     }
 }
 
-pub unsafe fn cram_cram_stats_c_105_cram_stats_dump(st: *mut c_void) {
-    let Some(st) = cram_stats_ref(st.cast()) else {
-        return;
-    };
+pub fn cram_cram_stats_c_105_cram_stats_dump(st: &cram_stats_layout) {
     cram_stats_dump(st);
 }
 
-unsafe fn cram_stats_encoding(fd: &cram_fd_layout, st: &mut cram_stats_layout) -> c_int {
+fn cram_stats_encoding(fd: &cram_fd_layout, st: &mut cram_stats_layout) -> c_int {
     let mut nvals = 0i32;
     let mut max_val = 0i32;
     let mut min_val = i32::MAX;
@@ -381,8 +278,8 @@ unsafe fn cram_stats_encoding(fd: &cram_fd_layout, st: &mut cram_stats_layout) -
         nvals += 1;
     }
 
-    if let Some(h) = stats_hash_ref(st) {
-        kh_occupied_entries(h.as_ref(), |key, val| {
+    if let Some(h) = st.h.as_ref() {
+        kh_occupied_entries(h, |key, val| {
             let i = key as i32;
             ntot += val;
             max_val = max_val.max(i);
@@ -411,30 +308,21 @@ unsafe fn cram_stats_encoding(fd: &cram_fd_layout, st: &mut cram_stats_layout) -
     }
 }
 
-pub unsafe fn cram_cram_stats_c_134_cram_stats_encoding(fd: *mut c_void, st: *mut c_void) -> c_int {
-    let Some(fd) = cram_fd_ref(fd.cast()) else {
-        return 0;
-    };
-    let Some(st) = cram_stats_mut(st.cast()) else {
-        return 0;
-    };
+pub fn cram_cram_stats_c_134_cram_stats_encoding(
+    fd: &cram_fd_layout,
+    st: &mut cram_stats_layout,
+) -> c_int {
     cram_stats_encoding(fd, st)
 }
 
-unsafe fn cram_stats_free(st: &mut cram_stats_layout) {
-    if let Some(h) = stats_hash_mut(st) {
-        kh_free(h);
-        st.h = std::ptr::null_mut();
-    }
+fn cram_stats_free(st: &mut cram_stats_layout) {
+    st.h = None;
 }
 
-unsafe fn cram_stats_destroy(mut st: Box<cram_stats_layout>) {
+fn cram_stats_destroy(mut st: Box<cram_stats_layout>) {
     cram_stats_free(&mut st);
 }
 
-pub unsafe fn cram_cram_stats_c_223_cram_stats_free(st: *mut c_void) {
-    let Some(st) = cram_stats_box(st.cast()) else {
-        return;
-    };
+pub fn cram_cram_stats_c_223_cram_stats_free(st: Box<cram_stats_layout>) {
     cram_stats_destroy(st);
 }

@@ -23,42 +23,17 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.  */
 
 use crate::htslib_rs::{
-    hfile,
+    hfile::{self, HFileBackend},
     hts::{hFILE, hts_json_token, ks_free, kstring_t, size_t},
     textutils::{textutils_hts_json_fnext_ref, textutils_hts_json_fskip_value_ref},
 };
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::ptr::NonNull;
 
-type HFileReadFn = unsafe extern "C" fn(*mut hFILE, *mut c_void, size_t) -> libc::ssize_t;
-type HFileWriteFn = unsafe extern "C" fn(*mut hFILE, *const c_void, size_t) -> libc::ssize_t;
-type HFileSeekFn = unsafe extern "C" fn(*mut hFILE, libc::off_t, c_int) -> libc::off_t;
-type HFileFlushFn = unsafe extern "C" fn(*mut hFILE) -> c_int;
-type HFileCloseFn = unsafe extern "C" fn(*mut hFILE) -> c_int;
-
-#[repr(C)]
-struct hFILE_backend {
-    read: Option<HFileReadFn>,
-    write: Option<HFileWriteFn>,
-    seek: Option<HFileSeekFn>,
-    flush: Option<HFileFlushFn>,
-    close: Option<HFileCloseFn>,
-}
-
-#[repr(C)]
-struct hFILE_layout {
-    buffer: *mut c_char,
-    begin: *mut c_char,
-    end: *mut c_char,
-    limit: *mut c_char,
-    backend: *const hFILE_backend,
-    offset: libc::off_t,
-    flags: c_uint,
-    has_errno: c_int,
-    alloc_size: size_t,
-}
-
+// hFILE flag bits (mirrors hfile.rs). Multipart is a mobile (streaming),
+// read-only backend.
 const HFILE_MOBILE: c_uint = 1 << 1;
+const HFILE_READONLY: c_uint = 1 << 2;
 
 // Synthesize a System V AMD64 __va_list_tag from pointer-sized words so the
 // recursive open can be routed through native hfile_c_1317_hopen_vargs instead
@@ -88,12 +63,11 @@ pub struct KStringCString {
 }
 
 impl KStringCString {
-    unsafe fn from_raw(ptr: *mut c_char) -> Option<Self> {
-        if ptr.is_null() {
-            return None;
-        }
-        let value = CStr::from_ptr(ptr).to_owned();
-        crate::htslib_rs::c_compat::free(ptr.cast());
+    fn from_raw(bytes: Vec<u8>) -> Option<Self> {
+        // The owned kstring_t carries no trailing NUL; CString::new appends one.
+        // Interior NULs make this fail, matching the old "stop at NUL" behaviour
+        // by yielding None for malformed input.
+        let value = CString::new(bytes).ok()?;
         Some(Self { value })
     }
 
@@ -111,9 +85,14 @@ pub struct hfile_part {
     pub headers: Vec<KStringCString>,
 }
 
-#[repr(C)]
+// original: hFILE_multipart (htslib/multipart.c:46)
+//
+// SEAM: the subclass no longer embeds `base: hFILE_layout`. It is now the
+// payload of `HFileBackend::Multipart(Box<hFILE_multipart>)`, so it carries
+// only the backend-specific state. The owning `hFILE` (buffer + flags + the
+// enum) lives one level up and is reached as `&mut hFILE` in the dispatch
+// bodies below.
 pub struct hFILE_multipart {
-    base: hFILE_layout,
     parts: Vec<hfile_part>,
     current: usize,
     currentfp: Option<hfile::OwnedHFile>,
@@ -199,20 +178,17 @@ unsafe fn multipart_read_ref(fp: &mut hFILE_multipart, buffer: &mut [u8]) -> lib
             }
         }
 
+        // SEAM: the sub-stream is now an owned `hFILE`. Reach it as `&mut hFILE`
+        // and, when it is a mobile (streaming) backend, dispatch its read
+        // directly through the `HFileBackend` enum (was the old vtable
+        // `(*backend).read`); otherwise fall back to the buffered hread.
         let currentfp = fp.currentfp.as_ref().expect("multipart current hFILE");
-        let current_layout = currentfp.as_ptr().cast::<hFILE_layout>();
-        let n = if ((*current_layout).flags & HFILE_MOBILE) != 0 {
-            let read = (*(*current_layout).backend)
-                .read
-                .expect("hFILE read backend");
-            read(
-                currentfp.as_ptr(),
-                buffer.as_mut_ptr().cast(),
-                buffer.len() as size_t,
-            )
+        let sub = &mut *currentfp.as_ptr();
+        let n = if (sub.flags & HFILE_MOBILE) != 0 {
+            HFileBackend::read(sub, buffer)
         } else {
             hfile::htslib_hfile_h_247_hread(
-                currentfp.as_ptr(),
+                sub as *mut hFILE,
                 buffer.as_mut_ptr().cast(),
                 buffer.len() as size_t,
             )
@@ -233,12 +209,12 @@ unsafe fn multipart_read_ref(fp: &mut hFILE_multipart, buffer: &mut [u8]) -> lib
 }
 
 // original: multipart_read (htslib/multipart.c:73)
-pub unsafe extern "C" fn multipart_c_73_multipart_read(
-    fpv: *mut hFILE,
+pub unsafe fn multipart_c_73_multipart_read(
+    fp: &mut hFILE,
     buffer: *mut c_void,
     nbytes: size_t,
 ) -> libc::ssize_t {
-    let Some(fp) = fpv.cast::<hFILE_multipart>().as_mut() else {
+    let HFileBackend::Multipart(m) = &mut fp.backend else {
         *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
         return -1;
     };
@@ -246,13 +222,14 @@ pub unsafe extern "C" fn multipart_c_73_multipart_read(
         *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
         return -1;
     }
+    let m: &mut hFILE_multipart = &mut *m;
     let buffer = std::slice::from_raw_parts_mut(buffer.cast::<u8>(), nbytes);
-    multipart_read_ref(fp, buffer)
+    multipart_read_ref(m, buffer)
 }
 
 // original: multipart_write (htslib/multipart.c:114)
-pub unsafe extern "C" fn multipart_c_114_multipart_write(
-    _fpv: *mut hFILE,
+pub unsafe fn multipart_c_114_multipart_write(
+    _fp: &mut hFILE,
     _buffer: *const c_void,
     _nbytes: size_t,
 ) -> libc::ssize_t {
@@ -261,8 +238,8 @@ pub unsafe extern "C" fn multipart_c_114_multipart_write(
 }
 
 // original: multipart_seek (htslib/multipart.c:120)
-pub unsafe extern "C" fn multipart_c_120_multipart_seek(
-    _fpv: *mut hFILE,
+pub unsafe fn multipart_c_120_multipart_seek(
+    _fp: &mut hFILE,
     _offset: libc::off_t,
     _whence: c_int,
 ) -> libc::off_t {
@@ -271,17 +248,19 @@ pub unsafe extern "C" fn multipart_c_120_multipart_seek(
 }
 
 // original: multipart_close (htslib/multipart.c:126)
-pub unsafe extern "C" fn multipart_c_126_multipart_close(fpv: *mut hFILE) -> c_int {
-    let fp = &mut *fpv.cast::<hFILE_multipart>();
+pub unsafe fn multipart_c_126_multipart_close(fp: &mut hFILE) -> c_int {
+    let HFileBackend::Multipart(m) = &mut fp.backend else {
+        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        return -1;
+    };
+    let m: &mut hFILE_multipart = &mut *m;
 
-    multipart_c_66_free_all_parts(fp);
-    if let Some(currentfp) = fp.currentfp.take() {
+    multipart_c_66_free_all_parts(m);
+    if let Some(currentfp) = m.currentfp.take() {
         if currentfp.close() < 0 {
-            std::ptr::drop_in_place(std::ptr::addr_of_mut!(fp.parts));
             return -1;
         }
     }
-    std::ptr::drop_in_place(std::ptr::addr_of_mut!(fp.parts));
 
     0
 }
@@ -293,15 +272,6 @@ unsafe fn multipart_reserve_parts(fp: &mut hFILE_multipart) -> c_int {
     }
     0
 }
-
-// original: multipart_backend (htslib/multipart.c:138)
-static MULTIPART_BACKEND: hFILE_backend = hFILE_backend {
-    read: Some(multipart_c_73_multipart_read),
-    write: Some(multipart_c_114_multipart_write),
-    seek: Some(multipart_c_120_multipart_seek),
-    flush: None,
-    close: Some(multipart_c_126_multipart_close),
-};
 
 // original: parse_ga4gh_body_json (htslib/multipart.c:149)
 pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
@@ -366,8 +336,8 @@ pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
                                 return t.type_;
                             }
 
-                            crate::htslib_rs::hts::kputs(c": ".as_ptr(), header);
-                            crate::htslib_rs::hts::kputs(t.str_, header);
+                            crate::htslib_rs::hts::kputs(b": ", header);
+                            crate::htslib_rs::hts::kputs(CStr::from_ptr(t.str_).to_bytes(), header);
                             let part = fp.part_mut(part_index);
                             if part.headers.try_reserve(1).is_err() {
                                 *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
@@ -449,21 +419,6 @@ pub unsafe fn multipart_c_220_parse_ga4gh_redirect_json(
     b'v' as c_char
 }
 
-unsafe fn multipart_init(mode: &CStr) -> Option<NonNull<hFILE_multipart>> {
-    let fp = NonNull::new(
-        hfile::hfile_init(std::mem::size_of::<hFILE_multipart>(), mode.as_ptr(), 0)
-            .cast::<hFILE_multipart>(),
-    )?;
-    std::ptr::addr_of_mut!((*fp.as_ptr()).parts).write(Vec::new());
-    Some(fp)
-}
-
-unsafe fn multipart_destroy(mut fp: NonNull<hFILE_multipart>) {
-    multipart_c_66_free_all_parts(fp.as_mut());
-    std::ptr::drop_in_place(std::ptr::addr_of_mut!((*fp.as_ptr()).parts));
-    hfile::hfile_destroy(fp.as_ptr().cast());
-}
-
 // original: hopen_htsget_redirect (htslib/multipart.c:241)
 pub unsafe fn multipart_c_241_hopen_htsget_redirect(
     hfile: *mut hFILE,
@@ -480,19 +435,22 @@ unsafe fn multipart_hopen_htsget_redirect_ref(
     mut hfile: NonNull<hFILE>,
     mode: &CStr,
 ) -> *mut hFILE {
-    let mut s1: kstring_t = std::mem::zeroed();
-    let mut s2: kstring_t = std::mem::zeroed();
+    let mut s1: kstring_t = kstring_t::default();
+    let mut s2: kstring_t = kstring_t::default();
 
-    let Some(mut fp) = multipart_init(mode) else {
-        return std::ptr::null_mut();
+    // SEAM: build the backend payload directly (no more hfile_init of a
+    // subclass that embedded `base`). Parsing populates `parts`.
+    let mut m = hFILE_multipart {
+        parts: Vec::new(),
+        current: 0,
+        currentfp: None,
     };
 
-    let ret =
-        multipart_c_220_parse_ga4gh_redirect_json(fp.as_mut(), hfile.as_mut(), &mut s1, &mut s2);
+    let ret = multipart_c_220_parse_ga4gh_redirect_json(&mut m, hfile.as_mut(), &mut s1, &mut s2);
     ks_free(&mut s1);
     ks_free(&mut s2);
     if ret != b'v' as c_char {
-        multipart_destroy(fp);
+        multipart_c_66_free_all_parts(&mut m);
         *crate::htslib_rs::c_compat::__errno_location() = if ret == b'?' as c_char || ret == 0 {
             libc::EPROTO
         } else {
@@ -501,8 +459,32 @@ unsafe fn multipart_hopen_htsget_redirect_ref(
         return std::ptr::null_mut();
     }
 
-    fp.as_mut().current = 0;
-    fp.as_mut().currentfp = None;
-    fp.as_mut().base.backend = &MULTIPART_BACKEND;
-    &mut fp.as_mut().base as *mut hFILE_layout as *mut hFILE
+    m.current = 0;
+    m.currentfp = None;
+
+    // SEAM: construct and OWN the root hFILE. The buffer is a Vec<u8> sized to
+    // the default read capacity; begin/end/limit are byte indices. The backend
+    // is the enum variant carrying the multipart payload inline. Ownership is
+    // handed to the caller as a raw pointer (Box::into_raw); hclose reclaims it.
+    let readonly = hfile_mode_is_readonly(mode.to_bytes());
+    let mut flags = HFILE_MOBILE;
+    if readonly {
+        flags |= HFILE_READONLY;
+    }
+    let capacity = 128 * 1024usize;
+    let owner = Box::new(hFILE {
+        buffer: vec![0u8; capacity],
+        begin: 0,
+        end: 0,
+        limit: capacity,
+        backend: HFileBackend::Multipart(Box::new(m)),
+        offset: 0,
+        flags,
+        has_errno: 0,
+    });
+    Box::into_raw(owner)
+}
+
+fn hfile_mode_is_readonly(mode: &[u8]) -> bool {
+    mode.contains(&b'r') && !mode.contains(&b'+')
 }

@@ -57,11 +57,7 @@ unsafe fn formatted_alignment_records(path: &str, reference: Option<&str>) -> Ve
     assert!(!hdr.is_null());
     let rec = bam_init1();
     assert!(!rec.is_null());
-    let mut line = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut line = kstring_t::default();
 
     let mut out = Vec::new();
     loop {
@@ -70,10 +66,9 @@ unsafe fn formatted_alignment_records(path: &str, reference: Option<&str>) -> Ve
             break;
         }
         assert!(sam_format1(hdr, rec, &mut line) >= 0);
-        out.push(CStr::from_ptr(line.s).to_string_lossy().into_owned());
+        out.push(String::from_utf8_lossy(&line.data).into_owned());
     }
 
-    libc::free(line.s.cast());
     bam_destroy1(rec);
     sam_hdr_destroy(hdr);
     assert_eq!(hts_close(fp), 0);

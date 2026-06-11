@@ -28,10 +28,6 @@ unsafe fn range_layout_mut<'a>(r: *mut cram_range_layout) -> Option<&'a mut cram
     r.as_mut()
 }
 
-fn nul_terminated_len(buf: &[u8]) -> usize {
-    buf.iter().position(|&byte| byte == 0).unwrap_or(buf.len())
-}
-
 fn index_buckets(fd: &cram_fd_layout) -> Option<&[cram_index_layout]> {
     let index = NonNull::new(fd.index.cast::<cram_index_layout>())?;
     let len = fd.index_sz.max(0) as usize;
@@ -74,11 +70,7 @@ unsafe fn next_index_node(node: NonNull<cram_index_layout>) -> Option<NonNull<cr
 }
 
 fn kstring_bytes(k: &kstring_t) -> Option<&[u8]> {
-    if k.s.is_null() && k.l != 0 {
-        None
-    } else {
-        Some(unsafe { std::slice::from_raw_parts(k.s.cast::<u8>(), k.l) })
-    }
+    Some(&k.data)
 }
 
 struct KStringParser<'a> {
@@ -297,7 +289,6 @@ unsafe fn cram_index_build_multiref_ref(
     let mut ref_: i32 = -2;
     let mut ref_start: i64 = 0;
     let mut ref_end: i64 = c_int::MIN as i64;
-    let mut buf = [0_u8; 1024];
 
     let mut last_ref: i32 = -9;
     let mut last_pos: i64 = -9;
@@ -306,10 +297,7 @@ unsafe fn cram_index_build_multiref_ref(
     while i < num_records {
         let rec = sl.crecs.add(i as usize);
         if (*rec).ref_id == last_ref && (*rec).apos < last_pos {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"CRAM file is not sorted by chromosome / position\n".as_ptr(),
-            );
+            eprintln!("CRAM file is not sorted by chromosome / position");
             return -2;
         }
         last_ref = (*rec).ref_id;
@@ -324,10 +312,8 @@ unsafe fn cram_index_build_multiref_ref(
         }
 
         if ref_ != -2 {
-            libc::snprintf(
-                buf.as_mut_ptr().cast(),
-                buf.len(),
-                c"%d\t%ld\t%ld\t%ld\t%d\t%d\n".as_ptr(),
+            let line = format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\n",
                 ref_,
                 ref_start,
                 ref_end - ref_start + 1,
@@ -335,9 +321,7 @@ unsafe fn cram_index_build_multiref_ref(
                 landmark,
                 sz,
             );
-            if crate::htslib_rs::bgzf::bgzf_write(fp, buf.as_ptr().cast(), nul_terminated_len(&buf))
-                < 0
-            {
+            if crate::htslib_rs::bgzf::bgzf_write(fp, line.as_ptr().cast(), line.len()) < 0 {
                 return -4;
             }
         }
@@ -349,10 +333,8 @@ unsafe fn cram_index_build_multiref_ref(
     }
 
     if ref_ != -2 {
-        libc::snprintf(
-            buf.as_mut_ptr().cast(),
-            buf.len(),
-            c"%d\t%ld\t%ld\t%ld\t%d\t%d\n".as_ptr(),
+        let line = format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
             ref_,
             ref_start,
             ref_end - ref_start + 1,
@@ -360,8 +342,7 @@ unsafe fn cram_index_build_multiref_ref(
             landmark,
             sz,
         );
-        if crate::htslib_rs::bgzf::bgzf_write(fp, buf.as_ptr().cast(), nul_terminated_len(&buf)) < 0
-        {
+        if crate::htslib_rs::bgzf::bgzf_write(fp, line.as_ptr().cast(), line.len()) < 0 {
             return -4;
         }
     }
@@ -401,24 +382,16 @@ unsafe fn cram_index_slice_ref(
     spos: libc::off_t,
     sz: libc::off_t,
 ) -> c_int {
-    let mut buf = [0_u8; 1024];
-
     if sz > c_int::MAX as libc::off_t {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"CRAM slice is too big (%ld bytes)\n".as_ptr(),
-            sz,
-        );
+        eprintln!("CRAM slice is too big ({} bytes)", sz);
         return -1;
     }
 
     if (*sl.hdr).ref_seq_id == -2 {
         cram_index_build_multiref_ref(sl, fp, cpos, spos as i32, sz as i32)
     } else {
-        libc::snprintf(
-            buf.as_mut_ptr().cast(),
-            buf.len(),
-            c"%d\t%ld\t%ld\t%ld\t%d\t%d\n".as_ptr(),
+        let line = format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
             (*sl.hdr).ref_seq_id,
             (*sl.hdr).ref_seq_start,
             (*sl.hdr).ref_seq_span,
@@ -426,9 +399,7 @@ unsafe fn cram_index_slice_ref(
             spos as c_int,
             sz as c_int,
         );
-        if crate::htslib_rs::bgzf::bgzf_write(fp, buf.as_ptr().cast(), nul_terminated_len(&buf))
-            >= 0
-        {
+        if crate::htslib_rs::bgzf::bgzf_write(fp, line.as_ptr().cast(), line.len()) >= 0 {
             0
         } else {
             -4
@@ -688,19 +659,10 @@ unsafe fn link_index_ref(fd: &mut cram_fd_layout) {
 // `*pos`, skipping leading spaces/tabs. Returns 0 on success (and advances
 // `*pos`), -1 if no digit is found.
 pub unsafe fn cram_cram_index_c_120_kget_int32(
-    k: *mut kstring_t,
-    pos: *mut usize,
-    val_p: *mut i32,
+    k: &kstring_t,
+    pos: &mut usize,
+    val_p: &mut i32,
 ) -> c_int {
-    let Some(k) = k.as_ref() else {
-        return -1;
-    };
-    let Some(pos) = pos.as_mut() else {
-        return -1;
-    };
-    let Some(val_p) = val_p.as_mut() else {
-        return -1;
-    };
     let Some(parser) = KStringParser::from_kstring(k) else {
         return -1;
     };
@@ -718,19 +680,10 @@ unsafe fn kget_int32_ref(k: &kstring_t, pos: &mut usize, val_p: &mut i32) -> c_i
 //
 // Same as `kget_int32` but reads into an `i64`.
 pub unsafe fn cram_cram_index_c_145_kget_int64(
-    k: *mut kstring_t,
-    pos: *mut usize,
-    val_p: *mut i64,
+    k: &kstring_t,
+    pos: &mut usize,
+    val_p: &mut i64,
 ) -> c_int {
-    let Some(k) = k.as_ref() else {
-        return -1;
-    };
-    let Some(pos) = pos.as_mut() else {
-        return -1;
-    };
-    let Some(val_p) = val_p.as_mut() else {
-        return -1;
-    };
     let Some(parser) = KStringParser::from_kstring(k) else {
         return -1;
     };
@@ -860,9 +813,13 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
     idx_stack.push(idx);
 
     // Support pathX.cram##idx##pathY.crai
-    let fn_delim = libc::strstr(fn_, HTS_IDX_DELIM.as_ptr().cast());
-    if !fn_delim.is_null() && fn_idx.is_null() {
-        fn_idx = fn_delim.add(HTS_IDX_DELIM.len() - 1);
+    let fn_bytes = CStr::from_ptr(fn_).to_bytes();
+    let needle: &[u8] = &HTS_IDX_DELIM[..HTS_IDX_DELIM.len() - 1];
+    let fn_delim = fn_bytes
+        .windows(needle.len())
+        .position(|w| w == needle);
+    if let (Some(off), true) = (fn_delim, fn_idx.is_null()) {
+        fn_idx = fn_.add(off + needle.len());
     }
 
     let _resolved_idx_filename = if fn_idx.is_null() {
@@ -878,10 +835,9 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
         }
 
         let Some(resolved_idx_filename) = ResolvedCraiIndexFilename::new(resolved_idx) else {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Could not retrieve index file for '%s'\n".as_ptr(),
-                fn_,
+            eprintln!(
+                "Could not retrieve index file for '{}'",
+                String::from_utf8_lossy(CStr::from_ptr(fn_).to_bytes())
             );
             fail!();
         };
@@ -893,10 +849,9 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
 
     let fp = hopen(fn_idx, c"r".as_ptr());
     if fp.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Could not open index file '%s'\n".as_ptr(),
-            fn_idx,
+        eprintln!(
+            "Could not open index file '{}'",
+            String::from_utf8_lossy(CStr::from_ptr(fn_idx).to_bytes())
         );
         fail!();
     }
@@ -963,11 +918,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
         e.end += e.start - 1;
 
         if e.refid < -1 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Malformed index file, refid %d\n".as_ptr(),
-                e.refid,
-            );
+            eprintln!("Malformed index file, refid {}", e.refid);
             fail!();
         }
 
@@ -1214,10 +1165,8 @@ unsafe fn cram_index_container_ref(
     while j < c.num_landmarks {
         let spos = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fd.fp);
         if spos - cpos - c.offset as libc::off_t != *c.landmark.add(j as usize) as libc::off_t {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"CRAM slice offset %ld does not match landmark %d in container header (%d)\n"
-                    .as_ptr(),
+            eprintln!(
+                "CRAM slice offset {} does not match landmark {} in container header ({})",
                 (spos - cpos - c.offset as libc::off_t) as i64,
                 j,
                 *c.landmark.add(j as usize),
@@ -1309,7 +1258,11 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
 
     let fp = bgzf_open(fn_idx, c"wg".as_ptr());
     if fp.is_null() {
-        libc::perror(fn_idx);
+        eprintln!(
+            "{}: {}",
+            String::from_utf8_lossy(CStr::from_ptr(fn_idx).to_bytes()),
+            std::io::Error::last_os_error()
+        );
         return -4;
     }
 
@@ -1322,7 +1275,7 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
             break;
         }
         if fdl.err != 0 {
-            libc::perror(c"Cram container read".as_ptr());
+            eprintln!("Cram container read: {}", std::io::Error::last_os_error());
             return -1;
         }
 
@@ -1345,10 +1298,7 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
         }
 
         if (*cl).ref_seq_id as i64 == last_ref && (*cl).ref_seq_start < last_start {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"CRAM file is not sorted by chromosome / position\n".as_ptr(),
-            );
+            eprintln!("CRAM file is not sorted by chromosome / position");
             return -2;
         }
         last_ref = (*cl).ref_seq_id as i64;
@@ -1366,13 +1316,11 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
 
         let next_cpos = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fdl.fp);
         if next_cpos != hpos + (*cl).length as libc::off_t {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Length %d in container header at offset %lld does not match block lengths (%lld)\n"
-                    .as_ptr(),
+            eprintln!(
+                "Length {} in container header at offset {} does not match block lengths ({})",
                 (*cl).length,
-                cpos as libc::c_longlong,
-                (next_cpos - hpos) as libc::c_longlong,
+                cpos as i64,
+                (next_cpos - hpos) as i64,
             );
             return -1;
         }

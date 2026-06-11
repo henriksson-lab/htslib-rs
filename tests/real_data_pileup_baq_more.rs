@@ -37,7 +37,7 @@ impl SamReader {
     }
 
     unsafe fn target_name(&self, tid: c_int) -> String {
-        CStr::from_ptr(sam_hdr_tid2name(self.hdr, tid))
+        CStr::from_ptr(sam_hdr_tid2name(&*self.hdr, tid))
             .to_string_lossy()
             .into_owned()
     }
@@ -252,8 +252,8 @@ unsafe fn assert_realigned_records_match_expected_with(
     let (expected_hdr, expected_records) = read_all_records(expected_path);
     assert_eq!(input_records.len(), expected_records.len());
     assert_eq!(
-        sam_hdr_tid2len(input_hdr, 0),
-        sam_hdr_tid2len(expected_hdr, 0)
+        sam_hdr_tid2len(&*input_hdr, 0),
+        sam_hdr_tid2len(&*expected_hdr, 0)
     );
 
     for (observed, expected) in input_records.iter().zip(expected_records.iter()) {
@@ -595,7 +595,7 @@ fn mpileup_overlap_fixture_reports_overlap_adjusted_qualities() {
             (column.target.as_str(), column.pos1, column.depth),
             ("1", 100003, 2)
         );
-        assert_eq!(sam_hdr_tid2len(reader.hdr, tid), 249_250_621);
+        assert_eq!(sam_hdr_tid2len(&*reader.hdr, tid), 249_250_621);
         assert_eq!(
             entries
                 .iter()
@@ -680,8 +680,8 @@ fn realn_baq_expected_fixture_exposes_exact_baq_tags_and_metadata() {
     unsafe {
         let (hdr, records) = read_all_records("htslib/test/realn03_exp.sam");
         assert_eq!(records.len(), 2);
-        assert_eq!(sam_hdr_tid2len(hdr, 0), 11);
-        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 0)), c"MX");
+        assert_eq!(sam_hdr_tid2len(&*hdr, 0), 11);
+        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(&*hdr, 0)), c"MX");
 
         for (rec, qname) in records.iter().zip(["M", "X"]) {
             assert_eq!(

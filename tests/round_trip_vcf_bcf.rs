@@ -48,11 +48,7 @@ unsafe fn render_variant_file(path: &Path) -> Vec<String> {
 
     let rec = bcf_init();
     assert!(!rec.is_null());
-    let mut line = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut line = kstring_t::default();
 
     let mut out = Vec::new();
     loop {
@@ -61,9 +57,9 @@ unsafe fn render_variant_file(path: &Path) -> Vec<String> {
             break;
         }
         assert_eq!(bcf_subset_format(hdr, rec), 0);
-        line.l = 0;
+        line.data.clear();
         assert_eq!(vcf_format(hdr, rec, &mut line), 0);
-        let mut text = CStr::from_ptr(line.s).to_string_lossy().into_owned();
+        let mut text = String::from_utf8_lossy(&line.data).into_owned();
         // vcf_format always terminates with '\n'; trim so per-record comparison
         // is line-oriented.
         if text.ends_with('\n') {

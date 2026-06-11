@@ -13,7 +13,7 @@ fn c_fixture(path: &str) -> CString {
 }
 
 unsafe fn kstring_text(ks: &kstring_t) -> String {
-    String::from_utf8_lossy(std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l)).into_owned()
+    String::from_utf8_lossy(&ks.data).into_owned()
 }
 
 fn temp_longrefs_path(name: &str) -> std::path::PathBuf {
@@ -28,9 +28,9 @@ fn temp_longrefs_path(name: &str) -> std::path::PathBuf {
 }
 
 unsafe fn sam_header_text(hdr: *mut htslib_rs::sam_hdr_t) -> String {
-    let len = sam_hdr_length(hdr);
-    assert!(!sam_hdr_str(hdr).is_null());
-    String::from_utf8(std::slice::from_raw_parts(sam_hdr_str(hdr).cast::<u8>(), len).to_vec())
+    let len = sam_hdr_length(&mut *hdr);
+    assert!(!sam_hdr_str(&mut *hdr).is_null());
+    String::from_utf8(std::slice::from_raw_parts(sam_hdr_str(&mut *hdr).cast::<u8>(), len).to_vec())
         .unwrap()
 }
 
@@ -40,7 +40,7 @@ unsafe fn append_formatted_record(
     line: &mut kstring_t,
     out: &mut String,
 ) {
-    line.l = 0;
+    line.data.clear();
     assert!(sam_format1(hdr, rec, line) >= 0);
     out.push_str(&kstring_text(line));
     out.push('\n');
@@ -108,7 +108,7 @@ unsafe fn render_longref_region(
     assert!(!iter.is_null());
     let rec = bam_init1();
     assert!(!rec.is_null());
-    let mut line: kstring_t = std::mem::zeroed();
+    let mut line = kstring_t::default();
     let mut out = sam_header_text(hdr);
 
     loop {
@@ -153,7 +153,7 @@ unsafe fn render_longref_multi_region(
     assert!(!iter.is_null());
     let rec = bam_init1();
     assert!(!rec.is_null());
-    let mut line: kstring_t = std::mem::zeroed();
+    let mut line = kstring_t::default();
     let mut out = sam_header_text(hdr);
 
     loop {
@@ -188,11 +188,11 @@ unsafe fn formatted_vcf_records(path: &str) -> Vec<String> {
     assert!(!hdr.is_null());
     let rec = bcf_init();
     assert!(!rec.is_null());
-    let mut line: kstring_t = std::mem::zeroed();
+    let mut line = kstring_t::default();
 
     let mut records = Vec::new();
     while bcf_read(fp, hdr, rec) >= 0 {
-        line.l = 0;
+        line.data.clear();
         assert_eq!(vcf_format(hdr, rec, &mut line), 0);
         records.push(kstring_text(&line));
     }

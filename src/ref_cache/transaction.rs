@@ -1,4 +1,4 @@
-use super::http_parser::Http_Parser;
+use super::http_parser::HttpParser;
 use super::ref_files::{
     ref_cache_ref_files_c_145_get_ref_size, ref_cache_ref_files_c_149_get_ref_available,
     ref_cache_ref_files_c_153_get_ref_id, ref_cache_ref_files_c_157_get_ref_complete,
@@ -6,15 +6,10 @@ use super::ref_files::{
     ref_cache_ref_files_c_174_update_ref_available,
     ref_cache_ref_files_c_179_update_ref_with_content_len,
     ref_cache_ref_files_c_185_set_ref_complete, ref_cache_ref_files_c_193_release_ref_file,
-    RefFile,
 };
 use super::sendfile_wrap::ref_cache_sendfile_wrap;
-use super::server::{
-    ref_cache_server_c_395_queue_transaction_write, ref_cache_server_c_840_client_host, Client,
-};
-use crate::htslib_rs::cram;
-use std::ffi::{c_char, c_int, c_uint, c_ulong};
-use std::ptr::NonNull;
+use super::server::{ref_cache_server_c_395_queue_transaction_write, RefCacheClientsLayout};
+use std::ffi::{c_int, c_uint};
 
 const TRANSACT_KEEP_ALIVE: c_uint = 2;
 const TRANSACT_TEXT_CONST: c_uint = 1;
@@ -43,132 +38,107 @@ fn ref_cache_errno_is_transient_write(errno: c_int) -> bool {
     ref_cache_errno_is_would_block(errno) || errno == libc::EINTR
 }
 
-#[repr(C)]
-struct HttpParserLayout {
-    state: c_int,
-    req_type: c_int,
-    http_vers: c_int,
-    trans_enc: c_int,
-    content_length: c_ulong,
-    bytes: c_ulong,
-    uri: *mut c_char,
-    key: *mut c_char,
-    val: *mut c_char,
-    buffer: *mut c_char,
-    user_agent: *mut c_char,
-    referrer: *mut c_char,
-    range_from: libc::off_t,
-    range_to: libc::off_t,
-    key_sz: usize,
-    key_used: usize,
-    val_sz: usize,
-    val_used: usize,
-    upstream: c_int,
-    flags: c_uint,
-    in_: c_uint,
-    out: c_uint,
-    pos: c_uint,
-    used: c_uint,
-    uri_buf: Vec<u8>,
-    key_buf: Vec<u8>,
-    val_buf: Vec<u8>,
-    buffer_buf: Vec<u8>,
-    user_agent_buf: Vec<u8>,
-    referrer_buf: Vec<u8>,
-}
-
-#[repr(C)]
-struct TransactionPrefixLayout {
+// original: Transaction (htslib/ref_cache/transaction.c:70)
+//
+// The C code allocated transactions out of a pooled allocator and threaded
+// them through two intrusive raw-pointer lists: `next` (the per-client request
+// pipeline) and `next_id` (a hash bucket keyed by ref id). Both lists, plus the
+// pool, have been restructured into a single owned arena (`TRANSACTION_ARENA`)
+// of `Option<Box<Transaction>>` cells indexed by `TransactionId` (a usize
+// slot). What used to be `*mut Transaction` is now a `TransactionId`; the
+// `next`/`next_id` links are `Option<TransactionId>` indices into the arena.
+//
+// Concurrency note (audit 2026-05):
+//
+// The arena and hash bucket array belong to the `ref-cache` daemon server
+// worker, which is single-threaded by construction (fork-based process model,
+// epoll event loop — see `src/ref_cache/main.rs` and `src/ref_cache/server.rs`).
+// `grep -rn 'pthread_create\|thread::spawn' src/ref_cache/` returns no matches;
+// do not add additional threads here without revisiting this.
+//
+// SAFETY: single-threaded daemon worker.
+pub struct Transaction {
     state: c_int,
     flags: c_uint,
-    next: *mut Transaction,
-    next_id: *mut Transaction,
-    client: *mut Client,
-    user_agent: *mut c_char,
-    referrer: *mut c_char,
-    req_str: *mut c_char,
-    text: *mut c_char,
+    next: Option<TransactionId>,
+    next_id: Option<TransactionId>,
+    // Id of the owning client (an index into the server's client arena); the
+    // server module identifies clients by this id rather than by pointer.
+    client: Option<usize>,
+    user_agent: Vec<u8>,
+    referrer: Vec<u8>,
+    req_str: Vec<u8>,
+    text: Vec<u8>,
     range_from: libc::off_t,
     range_to: libc::off_t,
-    sz: usize,
     out: usize,
-    ref_: *mut RefFile,
+    // Id of the associated cached reference (an index into `ref_files`); `None`
+    // when the transaction has no backing file. The ref_files module identifies
+    // refs by this id rather than by pointer.
+    ref_: Option<usize>,
     fd_sz: libc::off_t,
     fd_sent: libc::off_t,
     rc: c_uint,
     http_vers: c_int,
-    user_agent_buf: Vec<u8>,
-    referrer_buf: Vec<u8>,
-    req_str_buf: Vec<u8>,
-    text_buf: Vec<u8>,
 }
 
-// Concurrency note (audit 2026-05):
-//
-// Both statics belong to the `ref-cache` daemon server worker, which is
-// single-threaded by construction (fork-based process model, epoll event
-// loop — see `src/ref_cache/main.rs` and `src/ref_cache/server.rs`). The
-// transaction pool is lazily created on the first call to
-// `ref_cache_transaction_c_136_new_transaction`; because that call runs on
-// the daemon's single owning thread, no synchronization is required.
-// `REF_CACHE_TRANSACTIONS` is a fixed-size hash bucket array indexed by
-// `id & REF_CACHE_TRANSACT_MASK` and is also touched only from that thread.
-// `grep -rn 'pthread_create\|thread::spawn' src/ref_cache/` returns no
-// matches; do not add additional threads here without revisiting this.
-//
-// SAFETY: single-threaded daemon worker.
-static mut REF_CACHE_TRANSACTION_POOL: Option<Box<cram::pool_alloc_t>> = None;
-static mut REF_CACHE_TRANSACTIONS: [*mut Transaction; 0x400] = [std::ptr::null_mut(); 0x400];
+/// Index of a live transaction in `TRANSACTION_ARENA`.
+pub type TransactionId = usize;
 
-// original: Transaction (htslib/ref_cache/transaction.c:70)
-#[repr(C)]
-pub struct Transaction {
-    _private: [u8; 0],
+// The owning arena of live transactions. Each occupied slot holds a boxed
+// `Transaction`; freeing a transaction sets its slot to `None` and the slot is
+// recycled by the next allocation.
+static mut TRANSACTION_ARENA: Vec<Option<Box<Transaction>>> = Vec::new();
+// Hash bucket array: each bucket is the head `TransactionId` of an intrusive
+// `next_id` list, indexed by `ref_id & REF_CACHE_TRANSACT_MASK`.
+static mut REF_CACHE_TRANSACTIONS: [Option<TransactionId>; 0x400] = [None; 0x400];
+
+// `txn!(id)` borrows the live transaction in arena slot `id`; `arena!()` and
+// `buckets!()` borrow the global owning arena and the per-ref hash bucket array.
+// These are macros (not functions) so they expand inline and the new-helper
+// prohibition is respected while keeping the call sites readable.
+macro_rules! arena {
+    () => {
+        (&mut *std::ptr::addr_of_mut!(TRANSACTION_ARENA))
+    };
+}
+macro_rules! buckets {
+    () => {
+        (&mut *std::ptr::addr_of_mut!(REF_CACHE_TRANSACTIONS))
+    };
+}
+macro_rules! txn {
+    ($id:expr) => {
+        arena!()[$id].as_mut().expect("transaction slot occupied")
+    };
 }
 
-fn raw_ptr_from_vec(buf: &mut Vec<u8>) -> *mut c_char {
-    if buf.is_empty() {
-        std::ptr::null_mut()
-    } else {
-        buf.as_mut_ptr().cast()
+impl Transaction {
+    fn clear_owned_text(&mut self) {
+        self.text.clear();
+        self.out = 0;
+        self.flags &= !TRANSACT_TEXT_CONST;
     }
-}
 
-unsafe fn c_bytes<'a>(ptr: *const c_char) -> &'a [u8] {
-    if ptr.is_null() {
-        &[]
-    } else {
-        std::slice::from_raw_parts(ptr.cast::<u8>(), libc::strlen(ptr))
+    fn set_owned_text(&mut self, text: Vec<u8>) {
+        self.text = text;
+        self.out = 0;
+        self.flags &= !TRANSACT_TEXT_CONST;
     }
-}
 
-unsafe fn take_parser_c_buf(buf: &mut Vec<u8>, raw: &mut *mut c_char) -> Vec<u8> {
-    *raw = std::ptr::null_mut();
-    std::mem::take(buf)
-}
+    // The C code distinguished static-storage response text (no free needed)
+    // from heap text via TRANSACT_TEXT_CONST. With owned `Vec<u8>`, drop handles
+    // both uniformly; we still set the flag bit for observable flag-state parity.
+    fn set_static_text(&mut self, text: &'static [u8]) {
+        self.text = text.to_vec();
+        self.out = 0;
+        self.flags |= TRANSACT_TEXT_CONST;
+    }
 
-unsafe fn clear_owned_text(transact: &mut TransactionPrefixLayout) {
-    transact.text_buf.clear();
-    transact.text = std::ptr::null_mut();
-    transact.sz = 0;
-    transact.out = 0;
-    transact.flags &= !TRANSACT_TEXT_CONST;
-}
-
-unsafe fn set_owned_text(transact: &mut TransactionPrefixLayout, text: Vec<u8>) {
-    transact.text_buf = text;
-    transact.text = raw_ptr_from_vec(&mut transact.text_buf);
-    transact.sz = transact.text_buf.len();
-    transact.out = 0;
-    transact.flags &= !TRANSACT_TEXT_CONST;
-}
-
-unsafe fn set_static_text(transact: &mut TransactionPrefixLayout, text: &'static [u8]) {
-    transact.text_buf.clear();
-    transact.text = text.as_ptr().cast::<c_char>().cast_mut();
-    transact.sz = text.len();
-    transact.out = 0;
-    transact.flags |= TRANSACT_TEXT_CONST;
+    // Number of response-text bytes to emit (former `sz` field, now derived).
+    fn text_len(&self) -> usize {
+        self.text.len()
+    }
 }
 
 fn http_vers_bytes(http_vers: c_int) -> Option<&'static [u8]> {
@@ -179,190 +149,157 @@ fn http_vers_bytes(http_vers: c_int) -> Option<&'static [u8]> {
     }
 }
 
-unsafe fn ref_cache_transaction_pool() -> Option<&'static mut cram::pool_alloc_t> {
-    let pool_slot = std::ptr::addr_of_mut!(REF_CACHE_TRANSACTION_POOL);
-    if (*pool_slot).is_none() {
-        *pool_slot = Some(cram::pool_create(std::mem::size_of::<
-            TransactionPrefixLayout,
-        >()));
-    }
-    (*pool_slot).as_deref_mut()
-}
-
 // original: new_transaction (htslib/ref_cache/transaction.c:136)
 pub unsafe fn ref_cache_transaction_c_136_new_transaction(
-    client: *mut Client,
-    parser: *mut Http_Parser,
-) -> *mut Transaction {
-    let Some(pool) = ref_cache_transaction_pool() else {
-        return std::ptr::null_mut();
-    };
-    let Some(transact) = cram::pool_alloc(pool).map(NonNull::<u8>::cast::<TransactionPrefixLayout>)
-    else {
-        return std::ptr::null_mut();
-    };
-    let transact = transact.as_ptr();
+    client: Option<usize>,
+    parser: &mut HttpParser,
+) -> Option<TransactionId> {
+    let user_agent = parser.take_user_agent();
+    let referrer = parser.take_referrer();
 
-    let parser_layout = parser.cast::<HttpParserLayout>();
-    let mut user_agent_buf = take_parser_c_buf(
-        &mut (*parser_layout).user_agent_buf,
-        &mut (*parser_layout).user_agent,
-    );
-    let mut referrer_buf = take_parser_c_buf(
-        &mut (*parser_layout).referrer_buf,
-        &mut (*parser_layout).referrer,
-    );
-    let user_agent = raw_ptr_from_vec(&mut user_agent_buf);
-    let referrer = raw_ptr_from_vec(&mut referrer_buf);
+    let transaction = Box::new(Transaction {
+        state: 0,
+        flags: parser.flags()
+            & (TRANSACT_KEEP_ALIVE
+                | TRANSACT_RANGE_FROM
+                | TRANSACT_RANGE_TO
+                | TRANSACT_RANGE_SUFFIX),
+        next: None,
+        next_id: None,
+        user_agent,
+        referrer,
+        req_str: Vec::new(),
+        text: Vec::new(),
+        range_from: parser.range_from(),
+        range_to: parser.range_to(),
+        out: 0,
+        client,
+        ref_: None,
+        fd_sz: 0,
+        fd_sent: 0,
+        rc: 0,
+        http_vers: parser.http_vers(),
+    });
 
-    std::ptr::write(
-        transact,
-        TransactionPrefixLayout {
-            state: 0,
-            flags: (*parser_layout).flags
-                & (TRANSACT_KEEP_ALIVE
-                    | TRANSACT_RANGE_FROM
-                    | TRANSACT_RANGE_TO
-                    | TRANSACT_RANGE_SUFFIX),
-            next: std::ptr::null_mut(),
-            next_id: std::ptr::null_mut(),
-            client,
-            user_agent,
-            referrer,
-            req_str: std::ptr::null_mut(),
-            text: std::ptr::null_mut(),
-            range_from: (*parser_layout).range_from,
-            range_to: (*parser_layout).range_to,
-            sz: 0,
-            out: 0,
-            ref_: std::ptr::null_mut(),
-            fd_sz: 0,
-            fd_sent: 0,
-            rc: 0,
-            http_vers: (*parser_layout).http_vers,
-            user_agent_buf,
-            referrer_buf,
-            req_str_buf: Vec::new(),
-            text_buf: Vec::new(),
-        },
-    );
-
-    transact.cast()
+    let arena = arena!();
+    if let Some(slot) = arena.iter().position(|s| s.is_none()) {
+        arena[slot] = Some(transaction);
+        Some(slot)
+    } else {
+        arena.push(Some(transaction));
+        Some(arena.len() - 1)
+    }
 }
 
 // original: transaction_clear_ref (htslib/ref_cache/transaction.c:166)
-pub unsafe fn ref_cache_transaction_c_166_transaction_clear_ref(transact: *mut Transaction) {
-    let transact_layout = transact.cast::<TransactionPrefixLayout>();
-    if (*transact_layout).ref_.is_null() {
+pub unsafe fn ref_cache_transaction_c_166_transaction_clear_ref(transact: TransactionId) {
+    let Some(ref_) = txn!(transact).ref_ else {
         return;
-    }
-    let id = ref_cache_ref_files_c_153_get_ref_id((*transact_layout).ref_);
+    };
+    let id = ref_cache_ref_files_c_153_get_ref_id(ref_);
     let slot = (id & REF_CACHE_TRANSACT_MASK) as usize;
-    if REF_CACHE_TRANSACTIONS[slot] == transact {
-        REF_CACHE_TRANSACTIONS[slot] = (*transact_layout).next_id;
+    let next_id = txn!(transact).next_id;
+    if buckets!()[slot] == Some(transact) {
+        buckets!()[slot] = next_id;
     } else {
-        let mut t = REF_CACHE_TRANSACTIONS[slot];
-        while !t.is_null() && (*(t.cast::<TransactionPrefixLayout>())).next_id != transact {
-            t = (*(t.cast::<TransactionPrefixLayout>())).next_id;
+        let mut t = buckets!()[slot];
+        while let Some(cur) = t {
+            if txn!(cur).next_id == Some(transact) {
+                break;
+            }
+            t = txn!(cur).next_id;
         }
-        if !t.is_null() {
-            (*(t.cast::<TransactionPrefixLayout>())).next_id = (*transact_layout).next_id;
+        if let Some(cur) = t {
+            txn!(cur).next_id = next_id;
         }
     }
-    ref_cache_ref_files_c_193_release_ref_file((*transact_layout).ref_);
-    (*transact_layout).ref_ = std::ptr::null_mut();
-    (*transact_layout).next_id = std::ptr::null_mut();
+    ref_cache_ref_files_c_193_release_ref_file(ref_);
+    txn!(transact).ref_ = None;
+    txn!(transact).next_id = None;
 }
 
 // original: free_transaction (htslib/ref_cache/transaction.c:181)
-pub unsafe fn ref_cache_transaction_c_181_free_transaction(transact: *mut Transaction) {
-    let transact_layout = transact.cast::<TransactionPrefixLayout>();
+pub unsafe fn ref_cache_transaction_c_181_free_transaction(transact: TransactionId) {
     ref_cache_transaction_c_166_transaction_clear_ref(transact);
-    std::ptr::drop_in_place(transact_layout);
-    let pool_slot = std::ptr::addr_of_mut!(REF_CACHE_TRANSACTION_POOL);
-    if let (Some(pool), Some(transact)) = (
-        (*pool_slot).as_deref_mut(),
-        NonNull::new(transact.cast::<u8>()),
-    ) {
-        cram::pool_free(pool, transact);
-    }
+    // Dropping the boxed transaction frees its owned buffers; the freed slot is
+    // recycled by the next allocation.
+    arena!()[transact] = None;
 }
 
 // original: free_transaction_list (htslib/ref_cache/transaction.c:196)
-pub unsafe fn ref_cache_transaction_c_196_free_transaction_list(mut head: *mut Transaction) {
-    while !head.is_null() {
-        let next = (*(head.cast::<TransactionPrefixLayout>())).next;
-        ref_cache_transaction_c_181_free_transaction(head);
+pub unsafe fn ref_cache_transaction_c_196_free_transaction_list(mut head: Option<TransactionId>) {
+    while let Some(cur) = head {
+        let next = txn!(cur).next;
+        ref_cache_transaction_c_181_free_transaction(cur);
         head = next;
     }
 }
 
 // original: switch_to_next_transaction (htslib/ref_cache/transaction.c:204)
 pub unsafe fn ref_cache_transaction_c_204_switch_to_next_transaction(
-    transact: *mut Transaction,
-) -> *mut Transaction {
-    let next = (*(transact.cast::<TransactionPrefixLayout>())).next;
+    transact: TransactionId,
+) -> Option<TransactionId> {
+    let next = txn!(transact).next;
     ref_cache_transaction_c_181_free_transaction(transact);
     next
 }
 
 // original: transaction_get_client (htslib/ref_cache/transaction.c:210)
 pub unsafe fn ref_cache_transaction_c_210_transaction_get_client(
-    transact: *mut Transaction,
-) -> *mut Client {
-    (*(transact.cast::<TransactionPrefixLayout>())).client
+    transact: TransactionId,
+) -> Option<usize> {
+    txn!(transact).client
 }
 
 // original: transaction_get_keep_alive (htslib/ref_cache/transaction.c:214)
 pub unsafe fn ref_cache_transaction_c_214_transaction_get_keep_alive(
-    transact: *mut Transaction,
+    transact: TransactionId,
 ) -> c_int {
-    (((*(transact.cast::<TransactionPrefixLayout>())).flags & TRANSACT_KEEP_ALIVE) != 0) as c_int
+    ((txn!(transact).flags & TRANSACT_KEEP_ALIVE) != 0) as c_int
 }
 
 // original: transaction_set_ref (htslib/ref_cache/transaction.c:218)
 pub unsafe fn ref_cache_transaction_c_218_transaction_set_ref(
-    transact: *mut Transaction,
-    ref_: *mut RefFile,
+    transact: TransactionId,
+    ref_: usize,
 ) {
-    let transact_layout = transact.cast::<TransactionPrefixLayout>();
-    (*transact_layout).ref_ = ref_;
     let id = ref_cache_ref_files_c_153_get_ref_id(ref_);
+    txn!(transact).ref_ = Some(ref_);
     let slot = (id & REF_CACHE_TRANSACT_MASK) as usize;
-    (*transact_layout).next_id = REF_CACHE_TRANSACTIONS[slot];
-    REF_CACHE_TRANSACTIONS[slot] = transact;
+    txn!(transact).next_id = buckets!()[slot];
+    buckets!()[slot] = Some(transact);
 }
 
 // original: calculate_range_available (htslib/ref_cache/transaction.c:225)
 pub unsafe fn ref_cache_transaction_c_225_calculate_range_available(
-    transact: *mut Transaction,
+    transact: TransactionId,
     size: libc::off_t,
-    range_start_out: *mut libc::off_t,
-    range_end_out: *mut libc::off_t,
+    range_start_out: &mut libc::off_t,
+    range_end_out: &mut libc::off_t,
 ) {
-    let transact = transact.cast::<TransactionPrefixLayout>();
+    let transact = txn!(transact);
     let mut range_start: libc::off_t = -1;
     let mut range_end: libc::off_t = -1;
-    let mut have_range = ((*transact).flags & (TRANSACT_RANGE_FROM | TRANSACT_RANGE_SUFFIX)) != 0;
+    let mut have_range = (transact.flags & (TRANSACT_RANGE_FROM | TRANSACT_RANGE_SUFFIX)) != 0;
 
     if have_range {
-        if ((*transact).flags & TRANSACT_RANGE_SUFFIX) != 0 {
+        if (transact.flags & TRANSACT_RANGE_SUFFIX) != 0 {
             range_end = size;
-            range_start = if (*transact).range_to < range_end {
-                range_end - (*transact).range_to
+            range_start = if transact.range_to < range_end {
+                range_end - transact.range_to
             } else {
                 0
             };
-            if range_start == 0 || (*transact).range_to == 0 {
+            if range_start == 0 || transact.range_to == 0 {
                 have_range = false;
             }
-        } else if (*transact).range_from > (*transact).range_to || (*transact).range_from >= size {
+        } else if transact.range_from > transact.range_to || transact.range_from >= size {
             have_range = false;
         } else {
-            range_start = (*transact).range_from;
-            range_end = if ((*transact).flags & TRANSACT_RANGE_TO) != 0 {
-                if (*transact).range_to + 1 < size {
-                    (*transact).range_to + 1
+            range_start = transact.range_from;
+            range_end = if (transact.flags & TRANSACT_RANGE_TO) != 0 {
+                if transact.range_to + 1 < size {
+                    transact.range_to + 1
                 } else {
                     size
                 }
@@ -377,53 +314,48 @@ pub unsafe fn ref_cache_transaction_c_225_calculate_range_available(
 
 // original: transaction_set_req_str (htslib/ref_cache/transaction.c:264)
 pub unsafe fn ref_cache_transaction_c_264_transaction_set_req_str(
-    transact: *mut Transaction,
-    requested: *const c_char,
+    transact: TransactionId,
+    requested: &[u8],
 ) {
-    let transact = &mut *transact.cast::<TransactionPrefixLayout>();
-    let requested = c_bytes(requested);
+    let transact = txn!(transact);
     let len = requested.len().min(REF_CACHE_MAX_REQUEST_LEN);
-    transact.req_str_buf.clear();
-    transact.req_str_buf.extend_from_slice(&requested[..len]);
-    transact.req_str_buf.push(0);
-    transact.req_str = raw_ptr_from_vec(&mut transact.req_str_buf);
+    transact.req_str.clear();
+    transact.req_str.extend_from_slice(&requested[..len]);
 }
 
 // original: transaction_by_id (htslib/ref_cache/transaction.c:270)
 pub unsafe fn ref_cache_transaction_c_270_transaction_by_id(
     id: c_uint,
-    start: *mut Transaction,
-) -> *mut Transaction {
-    let mut r = if start.is_null() {
-        REF_CACHE_TRANSACTIONS[(id & REF_CACHE_TRANSACT_MASK) as usize]
-    } else {
-        (*(start.cast::<TransactionPrefixLayout>())).next_id
+    start: Option<TransactionId>,
+) -> Option<TransactionId> {
+    let mut r = match start {
+        None => buckets!()[(id & REF_CACHE_TRANSACT_MASK) as usize],
+        Some(start) => txn!(start).next_id,
     };
-    while !r.is_null()
-        && !(*(r.cast::<TransactionPrefixLayout>())).ref_.is_null()
-        && ref_cache_ref_files_c_153_get_ref_id((*(r.cast::<TransactionPrefixLayout>())).ref_) != id
-    {
-        r = (*(r.cast::<TransactionPrefixLayout>())).next_id;
+    while let Some(cur) = r {
+        let Some(ref_) = txn!(cur).ref_ else {
+            break;
+        };
+        if ref_cache_ref_files_c_153_get_ref_id(ref_) == id {
+            break;
+        }
+        r = txn!(cur).next_id;
     }
     r
 }
 
 // original: set_error_response (htslib/ref_cache/transaction.c:277)
-pub unsafe fn ref_cache_transaction_c_277_set_error_response(
-    transact: *mut Transaction,
-    code: c_uint,
-) {
-    let transact = transact.cast::<TransactionPrefixLayout>();
-
-    if (*transact).state >= TRANSACT_SENDING_TEXT {
-        (*transact).state = TRANSACT_FINISHED;
-        (*transact).flags &= !TRANSACT_KEEP_ALIVE;
+pub unsafe fn ref_cache_transaction_c_277_set_error_response(transact: TransactionId, code: c_uint) {
+    if txn!(transact).state >= TRANSACT_SENDING_TEXT {
+        let t = txn!(transact);
+        t.state = TRANSACT_FINISHED;
+        t.flags &= !TRANSACT_KEEP_ALIVE;
         return;
     }
 
-    clear_owned_text(&mut *transact);
+    txn!(transact).clear_owned_text();
 
-    let vers = if (*transact).http_vers == HTTP_1_1 {
+    let vers = if txn!(transact).http_vers == HTTP_1_1 {
         1
     } else {
         0
@@ -448,52 +380,49 @@ pub unsafe fn ref_cache_transaction_c_277_set_error_response(
         (_, 0) => b"HTTP/1.0 500 Internal Server Error\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n500 Internal Server Error\r\n",
         _ => b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\n500 Internal Server Error\r\n",
     };
-    set_static_text(&mut *transact, text);
+    txn!(transact).set_static_text(text);
 
-    (*transact).rc = code;
-    ref_cache_transaction_c_166_transaction_clear_ref(transact.cast());
-    (*transact).flags &= !TRANSACT_KEEP_ALIVE;
-    (*transact).state = TRANSACT_GOT_TEXT;
+    txn!(transact).rc = code;
+    ref_cache_transaction_c_166_transaction_clear_ref(transact);
+    let t = txn!(transact);
+    t.flags &= !TRANSACT_KEEP_ALIVE;
+    t.state = TRANSACT_GOT_TEXT;
 }
 
 // original: http_vers_string (htslib/ref_cache/transaction.c:313)
 pub unsafe fn ref_cache_transaction_c_313_http_vers_string(
-    transact: *mut Transaction,
-) -> *const c_char {
-    match (*(transact.cast::<TransactionPrefixLayout>())).http_vers {
-        HTTP_1_0 => c"HTTP/1.0".as_ptr(),
-        HTTP_1_1 => c"HTTP/1.1".as_ptr(),
-        _ => std::ptr::null(),
-    }
+    transact: TransactionId,
+) -> Option<&'static [u8]> {
+    http_vers_bytes(txn!(transact).http_vers)
 }
 
 // original: set_ref_file_response (htslib/ref_cache/transaction.c:322)
 pub unsafe fn ref_cache_transaction_c_322_set_ref_file_response(
-    transact: *mut Transaction,
+    transact: TransactionId,
     len: i64,
     range_start: libc::off_t,
     range_end: libc::off_t,
 ) -> c_int {
-    let transact_layout = transact.cast::<TransactionPrefixLayout>();
-    let Some(vers) = http_vers_bytes((*transact_layout).http_vers) else {
+    let Some(vers) = http_vers_bytes(txn!(transact).http_vers) else {
         ref_cache_transaction_c_277_set_error_response(transact, 505);
         return -1;
     };
-    let mut keep_alive = ((*transact_layout).flags & TRANSACT_KEEP_ALIVE) != 0
-        && (*transact_layout).http_vers == HTTP_1_1;
+    let mut keep_alive =
+        (txn!(transact).flags & TRANSACT_KEEP_ALIVE) != 0 && txn!(transact).http_vers == HTTP_1_1;
     let mut rc = 200u32;
 
-    assert!((*transact_layout).state < TRANSACT_SENDING_TEXT);
+    assert!(txn!(transact).state < TRANSACT_SENDING_TEXT);
 
-    clear_owned_text(&mut *transact_layout);
+    txn!(transact).clear_owned_text();
 
+    let vers = std::str::from_utf8(vers).unwrap();
     let text = if len != 0 {
         if range_start >= 0 {
             assert!(range_end > range_start && range_end > 0);
             rc = 206;
             format!(
                 "{} 206 Partial content\r\nContent-Type: text/plain\r\nContent-Range: bytes {}-{}/{}\r\nContent-Length: {}\r\n{}\r\n",
-                std::str::from_utf8_unchecked(vers),
+                vers,
                 range_start,
                 range_end - 1,
                 len,
@@ -503,7 +432,7 @@ pub unsafe fn ref_cache_transaction_c_322_set_ref_file_response(
         } else {
             format!(
                 "{} 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n{}\r\n",
-                std::str::from_utf8_unchecked(vers),
+                vers,
                 len,
                 if keep_alive {
                     ""
@@ -514,45 +443,41 @@ pub unsafe fn ref_cache_transaction_c_322_set_ref_file_response(
         }
     } else {
         keep_alive = false;
-        format!(
-            "{} 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n",
-            std::str::from_utf8_unchecked(vers),
-        )
+        format!("{} 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n", vers)
     };
 
-    (*transact_layout).rc = rc;
-    set_owned_text(&mut *transact_layout, text.into_bytes());
-    (*transact_layout).state = TRANSACT_GOT_TEXT;
+    let t = txn!(transact);
+    t.rc = rc;
+    t.set_owned_text(text.into_bytes());
+    t.state = TRANSACT_GOT_TEXT;
 
     if !keep_alive {
-        (*transact_layout).flags &= !TRANSACT_KEEP_ALIVE;
+        t.flags &= !TRANSACT_KEEP_ALIVE;
     }
     0
 }
 
 // original: set_message_response (htslib/ref_cache/transaction.c:408)
 pub unsafe fn ref_cache_transaction_c_408_set_message_response(
-    transact: *mut Transaction,
-    content_type: *const c_char,
-    message: *const c_char,
-    len: usize,
+    transact: TransactionId,
+    content_type: &[u8],
+    message: &[u8],
 ) {
-    let transact_layout = transact.cast::<TransactionPrefixLayout>();
-    let Some(vers) = http_vers_bytes((*transact_layout).http_vers) else {
+    let Some(vers) = http_vers_bytes(txn!(transact).http_vers) else {
         ref_cache_transaction_c_277_set_error_response(transact, 505);
         return;
     };
-    let keep_alive = ((*transact_layout).flags & TRANSACT_KEEP_ALIVE) != 0
-        && (*transact_layout).http_vers == HTTP_1_1;
+    let keep_alive =
+        (txn!(transact).flags & TRANSACT_KEEP_ALIVE) != 0 && txn!(transact).http_vers == HTTP_1_1;
 
-    assert!((*transact_layout).state < TRANSACT_SENDING_TEXT);
+    assert!(txn!(transact).state < TRANSACT_SENDING_TEXT);
 
-    clear_owned_text(&mut *transact_layout);
+    txn!(transact).clear_owned_text();
     let mut text = format!(
         "{} 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}\r\n",
-        std::str::from_utf8_unchecked(vers),
-        std::str::from_utf8_unchecked(c_bytes(content_type)),
-        len,
+        std::str::from_utf8(vers).unwrap(),
+        String::from_utf8_lossy(content_type),
+        message.len(),
         if keep_alive {
             ""
         } else {
@@ -560,113 +485,103 @@ pub unsafe fn ref_cache_transaction_c_408_set_message_response(
         },
     )
     .into_bytes();
-    text.extend_from_slice(std::slice::from_raw_parts(message.cast::<u8>(), len));
+    text.extend_from_slice(message);
 
-    (*transact_layout).rc = 200;
-    set_owned_text(&mut *transact_layout, text);
-    (*transact_layout).state = TRANSACT_GOT_TEXT;
+    let t = txn!(transact);
+    t.rc = 200;
+    t.set_owned_text(text);
+    t.state = TRANSACT_GOT_TEXT;
 
     if !keep_alive {
-        (*transact_layout).flags &= !TRANSACT_KEEP_ALIVE;
+        t.flags &= !TRANSACT_KEEP_ALIVE;
     }
 }
 
 // original: send_file (htslib/ref_cache/transaction.c:460)
 pub unsafe fn ref_cache_transaction_c_460_send_file(
-    transact: *mut Transaction,
+    transact: TransactionId,
     out_fd: c_int,
     in_fd: c_int,
     end: libc::off_t,
 ) -> libc::ssize_t {
-    let transact = transact.cast::<TransactionPrefixLayout>();
-    assert!(end >= (*transact).fd_sent);
-    ref_cache_sendfile_wrap(
-        out_fd,
-        in_fd,
-        &mut (*transact).fd_sent,
-        (end - (*transact).fd_sent) as usize,
-    )
+    let transact = txn!(transact);
+    assert!(end >= transact.fd_sent);
+    let count = (end - transact.fd_sent) as usize;
+    ref_cache_sendfile_wrap(out_fd, in_fd, Some(&mut transact.fd_sent), count)
 }
 
 // original: transaction_send_data (htslib/ref_cache/transaction.c:556)
 pub unsafe fn ref_cache_transaction_c_556_transaction_send_data(
-    transact: *mut Transaction,
+    transact: TransactionId,
     fd: c_int,
 ) -> c_int {
-    let transact = transact.cast::<TransactionPrefixLayout>();
-
-    if (*transact).state == TRANSACT_GOT_TEXT {
-        (*transact).state = TRANSACT_SENDING_TEXT;
+    if txn!(transact).state == TRANSACT_GOT_TEXT {
+        txn!(transact).state = TRANSACT_SENDING_TEXT;
     }
 
-    if (*transact).state == TRANSACT_SENDING_TEXT {
-        assert!(!(*transact).text.is_null());
-        let bytes = libc::write(
-            fd,
-            (*transact).text.cast(),
-            (*transact).sz - (*transact).out,
-        );
+    if txn!(transact).state == TRANSACT_SENDING_TEXT {
+        let t = txn!(transact);
+        // Single write syscall boundary: pass the owned slice's pointer/length.
+        let remaining = &t.text[t.out..];
+        let bytes = libc::write(fd, remaining.as_ptr().cast(), remaining.len());
         if bytes < 0 {
             let errno = *crate::htslib_rs::c_compat::__errno_location();
             if !ref_cache_errno_is_transient_write(errno) {
-                libc::fprintf(
-                    crate::htslib_rs::ref_cache::compat::stderr(),
-                    c"Error from fd #%d : %s\n".as_ptr(),
+                eprintln!(
+                    "Error from fd #{} : {}",
                     fd,
-                    libc::strerror(errno),
+                    std::io::Error::from_raw_os_error(errno)
                 );
                 return REF_CACHE_WRITE_ERROR;
             }
             return REF_CACHE_WRITE_BLOCKED;
         }
-        (*transact).out += bytes as usize;
-        if (*transact).out < (*transact).sz {
+        t.out += bytes as usize;
+        if t.out < t.text_len() {
             return REF_CACHE_WRITE_BLOCKED;
         }
-        if (*transact).ref_.is_null() {
-            (*transact).state = TRANSACT_FINISHED;
+        if t.ref_.is_none() {
+            t.state = TRANSACT_FINISHED;
             return REF_CACHE_WRITE_COMPLETE;
         }
-        (*transact).state = TRANSACT_SENDING_FILE;
+        t.state = TRANSACT_SENDING_FILE;
     }
 
-    match (*transact).state {
+    let state = txn!(transact).state;
+    match state {
         TRANSACT_SENDING_FILE => {
-            assert!(!(*transact).ref_.is_null());
-            let ref_fd = ref_cache_ref_files_c_161_get_ref_fd((*transact).ref_);
-            let available = ref_cache_ref_files_c_149_get_ref_available((*transact).ref_);
+            let ref_ = txn!(transact).ref_.expect("ref set for sending file");
+            let ref_fd = ref_cache_ref_files_c_161_get_ref_fd(ref_);
+            let available = ref_cache_ref_files_c_149_get_ref_available(ref_);
             assert!(ref_fd >= 0);
 
-            let mut end = if ref_cache_ref_files_c_145_get_ref_size((*transact).ref_) > 0 {
-                (*transact).fd_sz
+            let mut end = if ref_cache_ref_files_c_145_get_ref_size(ref_) > 0 {
+                txn!(transact).fd_sz
             } else {
                 available
             };
 
-            if available <= (*transact).fd_sent {
+            if available <= txn!(transact).fd_sent {
                 return REF_CACHE_WRITE_BLOCKED_UPSTREAM;
             }
             if available < end {
                 end = available;
             }
-            let sent = ref_cache_transaction_c_460_send_file(transact.cast(), fd, ref_fd, end);
+            let sent = ref_cache_transaction_c_460_send_file(transact, fd, ref_fd, end);
             if sent < 0 {
                 let errno = *crate::htslib_rs::c_compat::__errno_location();
                 if !ref_cache_errno_is_would_block(errno) {
-                    libc::fprintf(
-                        crate::htslib_rs::ref_cache::compat::stderr(),
-                        c"sendfile fd #%d : %s\n".as_ptr(),
+                    eprintln!(
+                        "sendfile fd #{} : {}",
                         fd,
-                        libc::strerror(errno),
+                        std::io::Error::from_raw_os_error(errno)
                     );
                     return REF_CACHE_WRITE_ERROR;
                 }
                 return REF_CACHE_WRITE_BLOCKED;
             }
-            if (*transact).fd_sent < end
-                || ref_cache_ref_files_c_157_get_ref_complete((*transact).ref_) == 0
-            {
-                if (*transact).fd_sent == end {
+            if txn!(transact).fd_sent < end || ref_cache_ref_files_c_157_get_ref_complete(ref_) == 0 {
+                if txn!(transact).fd_sent == end {
                     REF_CACHE_WRITE_BLOCKED_UPSTREAM
                 } else {
                     REF_CACHE_WRITE_BLOCKED
@@ -677,74 +592,73 @@ pub unsafe fn ref_cache_transaction_c_556_transaction_send_data(
         }
         TRANSACT_FINISHED => REF_CACHE_WRITE_COMPLETE,
         _ => {
-            libc::fprintf(
-                crate::htslib_rs::ref_cache::compat::stderr(),
-                c"resp_send_data entered when transaction in wrong state (%d)\n".as_ptr(),
-                (*transact).state,
+            eprintln!(
+                "resp_send_data entered when transaction in wrong state ({})",
+                state
             );
-            libc::abort();
+            std::process::abort();
         }
     }
 }
 
 // original: transaction_have_content (htslib/ref_cache/transaction.c:619)
 pub unsafe fn ref_cache_transaction_c_619_transaction_have_content(
-    transact: *mut Transaction,
+    transact: TransactionId,
 ) -> c_int {
-    ((*(transact.cast::<TransactionPrefixLayout>())).state > TRANSACT_WAITING_TEXT) as c_int
+    (txn!(transact).state > TRANSACT_WAITING_TEXT) as c_int
 }
 
 // original: transaction_set_next (htslib/ref_cache/transaction.c:623)
 pub unsafe fn ref_cache_transaction_c_623_transaction_set_next(
-    transact: *mut Transaction,
-    next: *mut Transaction,
+    transact: TransactionId,
+    next: TransactionId,
 ) {
-    let transact = transact.cast::<TransactionPrefixLayout>();
-    assert!((*transact).next.is_null());
-    (*transact).next = next;
+    let transact = txn!(transact);
+    assert!(transact.next.is_none());
+    transact.next = Some(next);
 }
 
 // original: transaction_has_data_to_send (htslib/ref_cache/transaction.c:628)
 pub unsafe fn ref_cache_transaction_c_628_transaction_has_data_to_send(
-    transact: *mut Transaction,
+    transact: TransactionId,
 ) -> c_int {
-    let transact = transact.cast::<TransactionPrefixLayout>();
     let mut have_data = 0;
 
-    match (*transact).state {
+    match txn!(transact).state {
         TRANSACT_WAITING_TEXT => {}
         TRANSACT_GOT_TEXT | TRANSACT_SENDING_TEXT => {
-            if (*transact).out < (*transact).sz {
+            let t = txn!(transact);
+            if t.out < t.text_len() {
                 have_data = 1;
             }
         }
         TRANSACT_SENDING_FILE => {
-            let available = ref_cache_ref_files_c_149_get_ref_available((*transact).ref_);
-            let mut end = if ref_cache_ref_files_c_145_get_ref_size((*transact).ref_) > 0 {
-                (*transact).fd_sz
+            let ref_ = txn!(transact).ref_.expect("ref set for sending file");
+            let available = ref_cache_ref_files_c_149_get_ref_available(ref_);
+            let mut end = if ref_cache_ref_files_c_145_get_ref_size(ref_) > 0 {
+                txn!(transact).fd_sz
             } else {
                 available
             };
             if available < end {
                 end = available;
             }
-            if (*transact).fd_sent < end {
+            if txn!(transact).fd_sent < end {
                 have_data = 1;
             }
         }
         TRANSACT_FINISHED => have_data = 1,
-        _ => libc::abort(),
+        _ => std::process::abort(),
     }
     have_data
 }
 
 // original: set_transaction_file_range (htslib/ref_cache/transaction.c:654)
 pub unsafe fn ref_cache_transaction_c_654_set_transaction_file_range(
-    transact: *mut Transaction,
+    transact: TransactionId,
     size: i64,
     ref_data_available: c_int,
 ) {
-    let transact_layout = transact.cast::<TransactionPrefixLayout>();
     let mut res = 0;
     let mut range_start: libc::off_t = -1;
     let mut range_end: libc::off_t = -1;
@@ -766,160 +680,167 @@ pub unsafe fn ref_cache_transaction_c_654_set_transaction_file_range(
         );
     }
     if res == 0 {
-        (*transact_layout).fd_sz = if range_end >= 0 {
-            range_end
-        } else {
-            ref_cache_ref_files_c_145_get_ref_size((*transact_layout).ref_)
-        };
-        (*transact_layout).fd_sent = if range_start >= 0 { range_start } else { 0 };
+        let ref_size = txn!(transact)
+            .ref_
+            .map(|r| ref_cache_ref_files_c_145_get_ref_size(r))
+            .unwrap_or(0);
+        let t = txn!(transact);
+        t.fd_sz = if range_end >= 0 { range_end } else { ref_size };
+        t.fd_sent = if range_start >= 0 { range_start } else { 0 };
     }
 }
 
 // original: update_with_initial_size (htslib/ref_cache/transaction.c:671)
 pub unsafe fn ref_cache_transaction_c_671_update_with_initial_size(
-    mut transact: *mut Transaction,
+    clients: &mut RefCacheClientsLayout,
+    mut transact: Option<TransactionId>,
     size: i64,
     ref_id: c_uint,
-    write_stack: *mut *mut Client,
+    write_stack: &mut usize,
 ) {
-    while !transact.is_null() {
-        ref_cache_transaction_c_654_set_transaction_file_range(transact, size, 1);
-        ref_cache_server_c_395_queue_transaction_write(transact, write_stack);
-        transact = ref_cache_transaction_c_270_transaction_by_id(ref_id, transact);
+    while let Some(cur) = transact {
+        ref_cache_transaction_c_654_set_transaction_file_range(cur, size, 1);
+        ref_cache_server_c_395_queue_transaction_write(clients, cur, write_stack);
+        transact = ref_cache_transaction_c_270_transaction_by_id(ref_id, Some(cur));
     }
 }
 
 // original: got_download_started (htslib/ref_cache/transaction.c:680)
 pub unsafe fn ref_cache_transaction_c_680_got_download_started(
+    clients: &mut RefCacheClientsLayout,
     id: c_uint,
     val: i64,
     fd: c_int,
-    write_stack: *mut *mut Client,
+    write_stack: &mut usize,
 ) {
-    let transact = ref_cache_transaction_c_270_transaction_by_id(id, std::ptr::null_mut());
-    if transact.is_null() {
+    let Some(transact) = ref_cache_transaction_c_270_transaction_by_id(id, None) else {
         return;
-    }
+    };
 
-    let transact_layout = transact.cast::<TransactionPrefixLayout>();
-    assert!(!(*transact_layout).ref_.is_null());
-    ref_cache_ref_files_c_165_update_ref_download_started((*transact_layout).ref_, fd, val);
+    let ref_ = txn!(transact).ref_.expect("ref set on download start");
+    ref_cache_ref_files_c_165_update_ref_download_started(ref_, fd, val);
 
     if val >= 0 {
-        ref_cache_transaction_c_671_update_with_initial_size(transact, val, id, write_stack);
+        ref_cache_transaction_c_671_update_with_initial_size(
+            clients,
+            Some(transact),
+            val,
+            id,
+            write_stack,
+        );
     }
 }
 
 // original: got_download_part (htslib/ref_cache/transaction.c:698)
 pub unsafe fn ref_cache_transaction_c_698_got_download_part(
+    clients: &mut RefCacheClientsLayout,
     id: c_uint,
     val: i64,
-    write_stack: *mut *mut Client,
+    write_stack: &mut usize,
 ) {
     assert!(val >= 0);
 
-    let mut transact = ref_cache_transaction_c_270_transaction_by_id(id, std::ptr::null_mut());
-    if transact.is_null() {
+    let Some(first) = ref_cache_transaction_c_270_transaction_by_id(id, None) else {
         return;
-    }
+    };
 
-    assert!(!(*(transact.cast::<TransactionPrefixLayout>()))
-        .ref_
-        .is_null());
-    ref_cache_ref_files_c_174_update_ref_available(
-        (*(transact.cast::<TransactionPrefixLayout>())).ref_,
-        val,
-    );
+    let ref_ = txn!(first).ref_.expect("ref set on download part");
+    ref_cache_ref_files_c_174_update_ref_available(ref_, val);
 
-    while !transact.is_null() {
-        ref_cache_server_c_395_queue_transaction_write(transact, write_stack);
-        transact = ref_cache_transaction_c_270_transaction_by_id(id, transact);
+    let mut transact = Some(first);
+    while let Some(cur) = transact {
+        ref_cache_server_c_395_queue_transaction_write(clients, cur, write_stack);
+        transact = ref_cache_transaction_c_270_transaction_by_id(id, Some(cur));
     }
 }
 
 // original: got_download_clen (htslib/ref_cache/transaction.c:715)
 pub unsafe fn ref_cache_transaction_c_715_got_download_clen(
+    clients: &mut RefCacheClientsLayout,
     id: c_uint,
     val: i64,
-    write_stack: *mut *mut Client,
+    write_stack: &mut usize,
 ) {
     assert!(val >= 0);
 
-    let transact = ref_cache_transaction_c_270_transaction_by_id(id, std::ptr::null_mut());
-    if transact.is_null() {
+    let Some(transact) = ref_cache_transaction_c_270_transaction_by_id(id, None) else {
         return;
-    }
+    };
 
-    let transact_layout = transact.cast::<TransactionPrefixLayout>();
-    assert!(!(*transact_layout).ref_.is_null());
-    ref_cache_ref_files_c_179_update_ref_with_content_len((*transact_layout).ref_, val);
+    let ref_ = txn!(transact).ref_.expect("ref set on download clen");
+    ref_cache_ref_files_c_179_update_ref_with_content_len(ref_, val);
 
-    ref_cache_transaction_c_671_update_with_initial_size(transact, val, id, write_stack);
+    ref_cache_transaction_c_671_update_with_initial_size(
+        clients,
+        Some(transact),
+        val,
+        id,
+        write_stack,
+    );
 }
 
 // original: got_download_result (htslib/ref_cache/transaction.c:730)
 pub unsafe fn ref_cache_transaction_c_730_got_download_result(
+    clients: &mut RefCacheClientsLayout,
     id: c_uint,
     val: i64,
-    write_stack: *mut *mut Client,
+    write_stack: &mut usize,
 ) {
     assert!((0..1000).contains(&val));
 
-    let mut transact = ref_cache_transaction_c_270_transaction_by_id(id, std::ptr::null_mut());
-    if transact.is_null() {
+    let Some(first) = ref_cache_transaction_c_270_transaction_by_id(id, None) else {
         return;
-    }
+    };
 
     if val != 200 {
-        while !transact.is_null() {
-            ref_cache_transaction_c_277_set_error_response(transact, val as c_uint);
-            ref_cache_server_c_395_queue_transaction_write(transact, write_stack);
-            transact = ref_cache_transaction_c_270_transaction_by_id(id, transact);
+        let mut transact = Some(first);
+        while let Some(cur) = transact {
+            ref_cache_transaction_c_277_set_error_response(cur, val as c_uint);
+            ref_cache_server_c_395_queue_transaction_write(clients, cur, write_stack);
+            transact = ref_cache_transaction_c_270_transaction_by_id(id, Some(cur));
         }
         return;
     }
 
-    assert!(!(*(transact.cast::<TransactionPrefixLayout>()))
-        .ref_
-        .is_null());
+    let ref_ = txn!(first).ref_.expect("ref set on download result");
 
-    let no_initial_content_length = ref_cache_ref_files_c_185_set_ref_complete(
-        (*(transact.cast::<TransactionPrefixLayout>())).ref_,
-    );
-    let available = ref_cache_ref_files_c_149_get_ref_available(
-        (*(transact.cast::<TransactionPrefixLayout>())).ref_,
-    );
+    let no_initial_content_length = ref_cache_ref_files_c_185_set_ref_complete(ref_);
+    let available = ref_cache_ref_files_c_149_get_ref_available(ref_);
 
-    while !transact.is_null() {
-        let t = transact.cast::<TransactionPrefixLayout>();
-        if no_initial_content_length != 0 || (*t).fd_sz > available {
-            (*t).fd_sz = available;
+    let mut transact = Some(first);
+    while let Some(cur) = transact {
+        let t = txn!(cur);
+        if no_initial_content_length != 0 || t.fd_sz > available {
+            t.fd_sz = available;
         }
-        if (*t).fd_sent >= (*t).fd_sz {
-            (*t).state = TRANSACT_FINISHED;
-        } else if (*t).state < TRANSACT_SENDING_TEXT {
-            ref_cache_transaction_c_654_set_transaction_file_range(transact, available, 1);
+        if t.fd_sent >= t.fd_sz {
+            t.state = TRANSACT_FINISHED;
+        } else if t.state < TRANSACT_SENDING_TEXT {
+            ref_cache_transaction_c_654_set_transaction_file_range(cur, available, 1);
         }
-        ref_cache_server_c_395_queue_transaction_write(transact, write_stack);
-        transact = ref_cache_transaction_c_270_transaction_by_id(id, transact);
+        ref_cache_server_c_395_queue_transaction_write(clients, cur, write_stack);
+        transact = ref_cache_transaction_c_270_transaction_by_id(id, Some(cur));
     }
 }
 
 // original: make_log_message (htslib/ref_cache/transaction.c:769)
+//
+// Returns the formatted Common-Log-Format line as owned bytes (the C version
+// snprintf'd into a caller buffer). The client hostname is resolved by the
+// caller (which owns the client arena) and passed in as `client_host`, since a
+// transaction now stores only the client id, not a back-pointer to the arena.
 pub unsafe fn ref_cache_transaction_c_769_make_log_message(
-    transact: *mut Transaction,
-    buffer: *mut c_char,
-    size: usize,
-) -> usize {
-    let transact = transact.cast::<TransactionPrefixLayout>();
-    let mut timestamp = [0 as c_char; 32];
-    let t = libc::time(std::ptr::null_mut());
+    transact: TransactionId,
+    client_host: &[u8],
+) -> Vec<u8> {
+    let t = txn!(transact);
+    let time = libc::time(std::ptr::null_mut());
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
     let (year, month, day, hour, minute, second, _) =
-        crate::htslib_rs::c_compat::unix_time_utc_parts(t);
-    let timestamp_text = format!(
+        crate::htslib_rs::c_compat::unix_time_utc_parts(time);
+    let timestamp = format!(
         "{:02}/{}/{:04}:{:02}:{:02}:{:02} +0000",
         day,
         MONTHS[(month - 1) as usize],
@@ -928,32 +849,24 @@ pub unsafe fn ref_cache_transaction_c_769_make_log_message(
         minute,
         second
     );
-    crate::htslib_rs::c_compat::write_c_str(&mut timestamp, &timestamp_text);
-    let bytes = libc::snprintf(
-        buffer,
-        size,
-        c"REQ %s - - %s \"%s\" %d %zu \"%s\" \"%s\"\n".as_ptr(),
-        ref_cache_server_c_840_client_host((*transact).client),
-        timestamp.as_ptr(),
-        if !(*transact).req_str.is_null() {
-            (*transact).req_str
-        } else {
-            c"".as_ptr().cast_mut()
-        },
-        (*transact).rc as c_int,
-        (*transact).out + (*transact).fd_sent as usize,
-        if !(*transact).user_agent.is_null() {
-            (*transact).user_agent
-        } else {
-            c"".as_ptr().cast_mut()
-        },
-        if !(*transact).referrer.is_null() {
-            (*transact).referrer
-        } else {
-            c"".as_ptr().cast_mut()
-        },
-    );
-    bytes as usize
+
+    let mut out: Vec<u8> = Vec::new();
+    out.extend_from_slice(b"REQ ");
+    out.extend_from_slice(client_host);
+    out.extend_from_slice(b" - - ");
+    out.extend_from_slice(timestamp.as_bytes());
+    out.extend_from_slice(b" \"");
+    out.extend_from_slice(&t.req_str);
+    out.extend_from_slice(b"\" ");
+    out.extend_from_slice(format!("{}", t.rc as c_int).as_bytes());
+    out.push(b' ');
+    out.extend_from_slice(format!("{}", t.out + t.fd_sent as usize).as_bytes());
+    out.extend_from_slice(b" \"");
+    out.extend_from_slice(&t.user_agent);
+    out.extend_from_slice(b"\" \"");
+    out.extend_from_slice(&t.referrer);
+    out.extend_from_slice(b"\"\n");
+    out
 }
 
 #[cfg(test)]

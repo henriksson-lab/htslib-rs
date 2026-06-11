@@ -303,11 +303,11 @@ fn reads_demo_sample_sam_header_and_exact_records() {
 
         let hdr = sam_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(sam_hdr_nref(hdr), 2);
-        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 0)), c"T1");
-        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 1)), c"T2");
-        assert_eq!(sam_hdr_tid2len(hdr, 0), 40);
-        assert_eq!(sam_hdr_tid2len(hdr, 1), 40);
+        assert_eq!(sam_hdr_nref(&*hdr), 2);
+        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(&*hdr, 0)), c"T1");
+        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(&*hdr, 1)), c"T2");
+        assert_eq!(sam_hdr_tid2len(&*hdr, 0), 40);
+        assert_eq!(sam_hdr_tid2len(&*hdr, 1), 40);
 
         let rec = bam_init1();
         assert!(!rec.is_null());
@@ -1050,48 +1050,47 @@ fn write_fast_sample_command_appends_fasta_and_fastq_records() {
 fn parses_demo_sample_bed_with_regidx_and_queries_overlaps() {
     unsafe {
         let path = c_fixture("htslib/samples/sample.bed");
-        let idx = regidx_c_246_regidx_init(path.as_ptr(), None, None, 0, std::ptr::null_mut());
-        assert!(!idx.is_null());
+        let mut idx = regidx_c_246_regidx_init(Some(path.as_bytes()), None, None, 0, None)
+            .expect("regidx_init failed");
 
-        assert_eq!(regidx_c_98_regidx_nregs(idx), 4);
-        assert_eq!(regidx_c_91_regidx_seq_nregs(idx, c"T1".as_ptr()), 2);
-        assert_eq!(regidx_c_91_regidx_seq_nregs(idx, c"T2".as_ptr()), 2);
-        assert_eq!(regidx_c_91_regidx_seq_nregs(idx, c"T3".as_ptr()), 0);
+        assert_eq!(regidx_c_98_regidx_nregs(&idx), 4);
+        assert_eq!(regidx_c_91_regidx_seq_nregs(&idx, b"T1"), 2);
+        assert_eq!(regidx_c_91_regidx_seq_nregs(&idx, b"T2"), 2);
+        assert_eq!(regidx_c_91_regidx_seq_nregs(&idx, b"T3"), 0);
 
-        let itr = regidx_c_584_regitr_init(idx);
-        assert!(!itr.is_null());
+        let mut itr = regidx_c_584_regitr_init(&mut idx);
 
         assert_eq!(
-            regidx_c_401_regidx_overlap(idx, c"T1".as_ptr(), 1, 1, itr),
+            regidx_c_401_regidx_overlap(&mut idx, b"T1", 1, 1, Some(&mut itr)),
             1
         );
-        assert_eq!(regidx_c_612_regitr_overlap(itr), 1);
-        assert_eq!((*itr).beg, 1);
-        assert_eq!((*itr).end, 1);
-        assert_eq!(regidx_c_612_regitr_overlap(itr), 0);
+        assert_eq!(regidx_c_612_regitr_overlap(&mut itr), 1);
+        assert_eq!(itr.beg, 1);
+        assert_eq!(itr.end, 1);
+        assert_eq!(regidx_c_612_regitr_overlap(&mut itr), 0);
 
         assert_eq!(
-            regidx_c_401_regidx_overlap(idx, c"T1".as_ptr(), 30, 34, itr),
+            regidx_c_401_regidx_overlap(&mut idx, b"T1", 30, 34, Some(&mut itr)),
             1
         );
-        assert_eq!(regidx_c_612_regitr_overlap(itr), 1);
-        assert_eq!((*itr).beg, 30);
-        assert_eq!((*itr).end, 34);
+        assert_eq!(regidx_c_612_regitr_overlap(&mut itr), 1);
+        assert_eq!(itr.beg, 30);
+        assert_eq!(itr.end, 34);
 
         assert_eq!(
-            regidx_c_401_regidx_overlap(idx, c"T2".as_ptr(), 39, 39, itr),
+            regidx_c_401_regidx_overlap(&mut idx, b"T2", 39, 39, Some(&mut itr)),
             1
         );
-        assert_eq!(regidx_c_612_regitr_overlap(itr), 1);
-        assert_eq!((*itr).beg, 30);
-        assert_eq!((*itr).end, 39);
+        assert_eq!(regidx_c_612_regitr_overlap(&mut itr), 1);
+        assert_eq!(itr.beg, 30);
+        assert_eq!(itr.end, 39);
 
         assert_eq!(
-            regidx_c_401_regidx_overlap(idx, c"T2".as_ptr(), 41, 41, itr),
+            regidx_c_401_regidx_overlap(&mut idx, b"T2", 41, 41, Some(&mut itr)),
             0
         );
         assert_eq!(
-            regidx_c_401_regidx_overlap(idx, c"T3".as_ptr(), 0, 10, itr),
+            regidx_c_401_regidx_overlap(&mut idx, b"T3", 0, 10, Some(&mut itr)),
             0
         );
 

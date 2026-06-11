@@ -19,7 +19,7 @@ pub const UNDERSCORE: u32 = 9;
 ///   * Opens `__FILE__` and copies the source through to stdout. The C uses
 ///     the preprocessor macro `__FILE__` which expands to the path of the
 ///     source file being compiled. Rust has no equivalent macro that survives
-///     into a runtime `fopen()`, so we hard-code the bundled C header path
+///     into a runtime file read, so we hard-code the bundled C header path
 ///     (`htslib/htscodecs/htscodecs/permute.h`) here: when this program is
 ///     run from the crate root that file is reachable and its byte stream
 ///     is identical to what the C tool would emit (the bundled header is
@@ -29,92 +29,98 @@ pub const UNDERSCORE: u32 = 9;
 ///
 /// `printf` format strings are kept byte-for-byte identical to the C so the
 /// generated output is byte-identical to the C tool's output.
+///
+/// The C tool emits via `printf`, i.e. the libc `stdout` FILE stream. This
+/// translation does likewise (`libc::fwrite` into `c_compat::stdout`) rather
+/// than Rust's `print!`/`println!`: the C `stdout` stream is the stream the
+/// callers (and the unit tests) capture by redirecting fd 1 and flushing it,
+/// whereas Rust's `print!` is diverted into libtest's per-thread output-capture
+/// sink and would never reach a redirected fd 1.
 // permute.h:10
 pub fn main() -> i32 {
-    // SAFETY: libc FFI; pointers are valid for the duration of the calls.
-    unsafe {
-        // FILE *fp = fopen(__FILE__, "r");
-        // Use the bundled C source path; see doc comment above.
-        let path = c"htslib/htscodecs/htscodecs/permute.h";
-        let fp = libc::fopen(path.as_ptr(), c"r".as_ptr());
-        // The C does not check fp for NULL before fgets(); a NULL would
-        // crash. We mirror that behaviour but guard the dereference to
-        // keep the Rust function panic-free if the file is missing.
-        if !fp.is_null() {
-            let mut line = [0 as libc::c_char; 8192];
-            // while(fgets(line, 8192, fp)) { printf("%s", line); }
-            while !libc::fgets(line.as_mut_ptr(), 8192, fp).is_null() {
-                libc::printf(c"%s".as_ptr(), line.as_ptr());
-            }
-            // The C calls `close(fp)` (a typo for `fclose`); fclose is the
-            // correct call for a FILE*, so we use it here.
-            libc::fclose(fp);
-        }
-        libc::printf(c"\n".as_ptr());
-
-        // Decode table; distributes N adjacent values across lanes
-        libc::printf(c"#define _ 9\n".as_ptr());
-        libc::printf(c"static uint32_t permute[256][8] = { // reverse binary bit order\n".as_ptr());
-        let mut i: libc::c_int = 0;
-        while i < 256 {
-            let mut b: libc::c_int = 0;
-            let mut v: [libc::c_int; 8] = [0; 8];
-            let mut j: libc::c_int = 0;
-            while j < 8 {
-                if (i & (1 << j)) != 0 {
-                    b += 1;
-                    v[j as usize] = b;
-                }
-                j += 1;
-            }
-            libc::printf(c"  { ".as_ptr());
-            let mut j: libc::c_int = 0;
-            while j < 8 {
-                if v[j as usize] != 0 {
-                    libc::printf(c"%d,".as_ptr(), v[j as usize] - 1);
-                } else {
-                    libc::printf(c"_,".as_ptr());
-                }
-                j += 1;
-            }
-            libc::printf(c"},\n".as_ptr());
-            i += 1;
-        }
-        libc::printf(c"};\n\n".as_ptr());
-
-        // Encode table; collapses N values spread across lanes
-        libc::printf(
-            c"static uint32_t permutec[256][8] = { // reverse binary bit order\n".as_ptr(),
+    // Local closure mirroring C `printf("%s", ...)`: write the given bytes to
+    // the libc `stdout` stream. (`fwrite` of a byte slice == `fputs`/`printf`
+    // for our fixed, NUL-free format strings, and preserves embedded bytes from
+    // the source-echo prelude.)
+    let emit = |s: &[u8]| unsafe {
+        libc::fwrite(
+            s.as_ptr().cast(),
+            1,
+            s.len(),
+            crate::htslib_rs::c_compat::stdout.cast(),
         );
-        let mut i: libc::c_int = 0;
-        while i < 256 {
-            let mut b: libc::c_int = 0;
-            let mut v: [libc::c_int; 9] = [0; 9];
-            let mut j: libc::c_int = 0;
-            while j < 8 {
-                if (i & (1 << j)) != 0 {
-                    v[b as usize] = j + 1;
-                    b += 1;
-                }
-                j += 1;
-            }
-            libc::printf(c"  { ".as_ptr());
-            let mut j: libc::c_int = b - 8;
-            while j < b {
-                if j >= 0 && v[j as usize] != 0 {
-                    libc::printf(c"%d,".as_ptr(), v[j as usize] - 1);
-                } else {
-                    libc::printf(c"_,".as_ptr());
-                }
-                j += 1;
-            }
-            libc::printf(c"},\n".as_ptr());
-            i += 1;
-        }
-        libc::printf(c"};\n".as_ptr());
+    };
 
-        0
+    // FILE *fp = fopen(__FILE__, "r"); while(fgets(...)) printf("%s", line);
+    // Use the bundled C source path; see doc comment above. The C does not
+    // check fp for NULL before reading; we mirror that "copy through if
+    // present" behaviour by silently skipping when the file is missing.
+    let path = "htslib/htscodecs/htscodecs/permute.h";
+    if let Ok(contents) = std::fs::read(path) {
+        emit(&contents);
     }
+    emit(b"\n");
+
+    // Decode table; distributes N adjacent values across lanes
+    emit(b"#define _ 9\n");
+    emit(b"static uint32_t permute[256][8] = { // reverse binary bit order\n");
+    let mut i: i32 = 0;
+    while i < 256 {
+        let mut b: i32 = 0;
+        let mut v: [i32; 8] = [0; 8];
+        let mut j: i32 = 0;
+        while j < 8 {
+            if (i & (1 << j)) != 0 {
+                b += 1;
+                v[j as usize] = b;
+            }
+            j += 1;
+        }
+        emit(b"  { ");
+        let mut j: i32 = 0;
+        while j < 8 {
+            if v[j as usize] != 0 {
+                emit(format!("{},", v[j as usize] - 1).as_bytes());
+            } else {
+                emit(b"_,");
+            }
+            j += 1;
+        }
+        emit(b"},\n");
+        i += 1;
+    }
+    emit(b"};\n\n");
+
+    // Encode table; collapses N values spread across lanes
+    emit(b"static uint32_t permutec[256][8] = { // reverse binary bit order\n");
+    let mut i: i32 = 0;
+    while i < 256 {
+        let mut b: i32 = 0;
+        let mut v: [i32; 9] = [0; 9];
+        let mut j: i32 = 0;
+        while j < 8 {
+            if (i & (1 << j)) != 0 {
+                v[b as usize] = j + 1;
+                b += 1;
+            }
+            j += 1;
+        }
+        emit(b"  { ");
+        let mut j: i32 = b - 8;
+        while j < b {
+            if j >= 0 && v[j as usize] != 0 {
+                emit(format!("{},", v[j as usize] - 1).as_bytes());
+            } else {
+                emit(b"_,");
+            }
+            j += 1;
+        }
+        emit(b"},\n");
+        i += 1;
+    }
+    emit(b"};\n");
+
+    0
 }
 
 /// ```c

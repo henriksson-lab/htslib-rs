@@ -71,11 +71,10 @@ unsafe fn base_at(rec: *const bam1_t, qpos: i32) -> char {
 }
 
 /// Collect the (sorted) set of recorded mod type codes via `bam_mods_recorded`.
-unsafe fn recorded_types(state: *mut hts_base_mod_state) -> Vec<i32> {
+unsafe fn recorded_types(state: &mut hts_base_mod_state) -> Vec<i32> {
     let mut ntype: c_int = 0;
     let types = bam_mods_recorded(state, &mut ntype);
-    assert!(!types.is_null());
-    let mut out: Vec<i32> = (0..ntype).map(|i| *types.add(i as usize)).collect();
+    let mut out: Vec<i32> = (0..ntype as usize).map(|i| types[i]).collect();
     out.sort();
     out
 }
@@ -90,11 +89,10 @@ fn state_alloc_and_free_round_trip_for_each_record_in_multi_fixture() {
         let records = read_records("htslib/test/base_mods/MM-multi.sam");
         assert_eq!(records.len(), 2);
         for &rec in &records {
-            let state = hts_base_mod_state_alloc();
-            assert!(!state.is_null());
-            assert_eq!(bam_parse_basemod(rec, state), 0);
+            let mut state = hts_base_mod_state_alloc();
+            assert_eq!(bam_parse_basemod(&*rec, &mut *state), 0);
             // Free without iterating must not leak or crash.
-            hts_base_mod_state_free(state);
+            hts_base_mod_state_free(Some(state));
         }
         destroy_records(records);
     }
@@ -109,15 +107,14 @@ fn mods_recorded_reports_three_distinct_mod_types_for_mm_multi_r1() {
     unsafe {
         let records = read_records("htslib/test/base_mods/MM-multi.sam");
         // r1 has separate C+m, C+h, N+n entries.
-        let state = hts_base_mod_state_alloc();
-        assert!(!state.is_null());
-        assert_eq!(bam_parse_basemod(records[0], state), 0);
+        let mut state = hts_base_mod_state_alloc();
+        assert_eq!(bam_parse_basemod(&*records[0], &mut *state), 0);
 
-        let codes = recorded_types(state);
+        let codes = recorded_types(&mut *state);
         // 'h' = 104, 'm' = 109, 'n' = 110 (sorted ascending).
         assert_eq!(codes, vec![b'h' as i32, b'm' as i32, b'n' as i32]);
 
-        hts_base_mod_state_free(state);
+        hts_base_mod_state_free(Some(state));
         destroy_records(records);
     }
 }
@@ -127,11 +124,10 @@ fn mods_recorded_reports_chebi_numeric_code_as_negative_int() {
     unsafe {
         let records = read_records("htslib/test/base_mods/MM-chebi.sam");
         assert_eq!(records.len(), 1);
-        let state = hts_base_mod_state_alloc();
-        assert!(!state.is_null());
-        assert_eq!(bam_parse_basemod(records[0], state), 0);
+        let mut state = hts_base_mod_state_alloc();
+        assert_eq!(bam_parse_basemod(&*records[0], &mut *state), 0);
 
-        let codes = recorded_types(state);
+        let codes = recorded_types(&mut *state);
         // Three mod entries: C+m (109), C+76792 (CHEBI numeric, encoded as
         // -76792), N+n (110). After sort the negative number is first.
         assert_eq!(codes.len(), 3);
@@ -142,7 +138,7 @@ fn mods_recorded_reports_chebi_numeric_code_as_negative_int() {
         assert!(codes.contains(&(b'm' as i32)));
         assert!(codes.contains(&(b'n' as i32)));
 
-        hts_base_mod_state_free(state);
+        hts_base_mod_state_free(Some(state));
         destroy_records(records);
     }
 }
@@ -154,21 +150,20 @@ fn mods_recorded_is_zero_when_record_has_no_mm_tag() {
         let records = read_records("htslib/test/base_mods/MM-not-all-modded.sam");
         assert_eq!(records.len(), 4);
 
-        let state = hts_base_mod_state_alloc();
-        assert!(!state.is_null());
+        let mut state = hts_base_mod_state_alloc();
         // Records 1 and 3 (0-indexed) have no MM/ML tag => parse returns 0
         // and recorded mods are empty.
         for idx in [1usize, 3usize] {
-            assert_eq!(bam_parse_basemod(records[idx], state), 0);
+            assert_eq!(bam_parse_basemod(&*records[idx], &mut *state), 0);
             let mut ntype: c_int = 0;
-            let types = bam_mods_recorded(state, &mut ntype);
+            let types = bam_mods_recorded(&mut *state, &mut ntype);
             assert_eq!(ntype, 0, "record {idx} should have no recorded mods");
-            // `types` may still be non-null (points to inline state buffer);
+            // `types` is the inline state buffer slice;
             // we just don't read past `ntype` elements.
             let _ = types;
         }
 
-        hts_base_mod_state_free(state);
+        hts_base_mod_state_free(Some(state));
         destroy_records(records);
     }
 }
@@ -186,19 +181,18 @@ fn mods_query_type_and_queryi_agree_on_orient_top_and_bottom_strands() {
 
         // top-fwd: C+m
         {
-            let state = hts_base_mod_state_alloc();
-            assert!(!state.is_null());
-            assert_eq!(bam_parse_basemod(records[0], state), 0);
+            let mut state = hts_base_mod_state_alloc();
+            assert_eq!(bam_parse_basemod(&*records[0], &mut *state), 0);
             let mut strand_a = 0;
             let mut implicit_a = 0;
             let mut canonical_a: i8 = 0;
             assert_eq!(
                 bam_mods_query_type(
-                    state,
+                    &*state,
                     b'm' as c_int,
-                    &mut strand_a,
-                    &mut implicit_a,
-                    &mut canonical_a,
+                    Some(&mut strand_a),
+                    Some(&mut implicit_a),
+                    Some(&mut canonical_a),
                 ),
                 0
             );
@@ -206,7 +200,13 @@ fn mods_query_type_and_queryi_agree_on_orient_top_and_bottom_strands() {
             let mut implicit_b = 0;
             let mut canonical_b: i8 = 0;
             assert_eq!(
-                bam_mods_queryi(state, 0, &mut strand_b, &mut implicit_b, &mut canonical_b),
+                bam_mods_queryi(
+                    &*state,
+                    0,
+                    Some(&mut strand_b),
+                    Some(&mut implicit_b),
+                    Some(&mut canonical_b),
+                ),
                 0
             );
             assert_eq!(strand_a, strand_b);
@@ -215,30 +215,29 @@ fn mods_query_type_and_queryi_agree_on_orient_top_and_bottom_strands() {
             // top strand: strand == 0 (positive), canonical == 'C'.
             assert_eq!(strand_a, 0);
             assert_eq!(canonical_a as u8 as char, 'C');
-            hts_base_mod_state_free(state);
+            hts_base_mod_state_free(Some(state));
         }
 
         // bot-fwd: G-m  -> strand should be 1 (negative), canonical 'G'.
         {
-            let state = hts_base_mod_state_alloc();
-            assert!(!state.is_null());
-            assert_eq!(bam_parse_basemod(records[2], state), 0);
+            let mut state = hts_base_mod_state_alloc();
+            assert_eq!(bam_parse_basemod(&*records[2], &mut *state), 0);
             let mut strand = 0;
             let mut implicit = 0;
             let mut canonical: i8 = 0;
             assert_eq!(
                 bam_mods_query_type(
-                    state,
+                    &*state,
                     b'm' as c_int,
-                    &mut strand,
-                    &mut implicit,
-                    &mut canonical,
+                    Some(&mut strand),
+                    Some(&mut implicit),
+                    Some(&mut canonical),
                 ),
                 0
             );
             assert_eq!(strand, 1, "G-m must be reported on the negative strand");
             assert_eq!(canonical as u8 as char, 'G');
-            hts_base_mod_state_free(state);
+            hts_base_mod_state_free(Some(state));
         }
     }
 }
@@ -247,9 +246,8 @@ fn mods_query_type_and_queryi_agree_on_orient_top_and_bottom_strands() {
 fn mods_query_type_returns_minus_one_for_unrecorded_code() {
     unsafe {
         let records = read_records("htslib/test/base_mods/MM-double.sam");
-        let state = hts_base_mod_state_alloc();
-        assert!(!state.is_null());
-        assert_eq!(bam_parse_basemod(records[0], state), 0);
+        let mut state = hts_base_mod_state_alloc();
+        assert_eq!(bam_parse_basemod(&*records[0], &mut *state), 0);
 
         // 'x' is never recorded in MM-double; expect -1.
         let mut strand = 0;
@@ -257,22 +255,28 @@ fn mods_query_type_returns_minus_one_for_unrecorded_code() {
         let mut canonical: i8 = 0;
         assert_eq!(
             bam_mods_query_type(
-                state,
+                &*state,
                 b'x' as c_int,
-                &mut strand,
-                &mut implicit,
-                &mut canonical,
+                Some(&mut strand),
+                Some(&mut implicit),
+                Some(&mut canonical),
             ),
             -1
         );
 
         // queryi out-of-range => -1 too.
         assert_eq!(
-            bam_mods_queryi(state, 99, &mut strand, &mut implicit, &mut canonical),
+            bam_mods_queryi(
+                &*state,
+                99,
+                Some(&mut strand),
+                Some(&mut implicit),
+                Some(&mut canonical),
+            ),
             -1
         );
 
-        hts_base_mod_state_free(state);
+        hts_base_mod_state_free(Some(state));
         destroy_records(records);
     }
 }
@@ -281,9 +285,8 @@ fn mods_query_type_returns_minus_one_for_unrecorded_code() {
 fn mods_query_type_reports_implicit_default_for_chebi_fixture() {
     unsafe {
         let records = read_records("htslib/test/base_mods/MM-chebi.sam");
-        let state = hts_base_mod_state_alloc();
-        assert!(!state.is_null());
-        assert_eq!(bam_parse_basemod(records[0], state), 0);
+        let mut state = hts_base_mod_state_alloc();
+        assert_eq!(bam_parse_basemod(&*records[0], &mut *state), 0);
 
         // 'm' has no explicit '?' marker => implicit == 1 (default-zero).
         // ChEBI numeric code -76792 same.
@@ -292,7 +295,13 @@ fn mods_query_type_reports_implicit_default_for_chebi_fixture() {
             let mut implicit: c_int = -1;
             let mut canonical: i8 = 0;
             assert_eq!(
-                bam_mods_query_type(state, code, &mut strand, &mut implicit, &mut canonical),
+                bam_mods_query_type(
+                    &*state,
+                    code,
+                    Some(&mut strand),
+                    Some(&mut implicit),
+                    Some(&mut canonical),
+                ),
                 0,
                 "mod code {code} should be present"
             );
@@ -302,7 +311,7 @@ fn mods_query_type_reports_implicit_default_for_chebi_fixture() {
             );
         }
 
-        hts_base_mod_state_free(state);
+        hts_base_mod_state_free(Some(state));
         destroy_records(records);
     }
 }
@@ -323,9 +332,8 @@ fn mods_at_next_pos_reports_mods_at_exact_positions_in_mm_double() {
         assert_eq!(records.len(), 1);
         let rec = records[0];
 
-        let state = hts_base_mod_state_alloc();
-        assert!(!state.is_null());
-        assert_eq!(bam_parse_basemod(rec, state), 0);
+        let mut state = hts_base_mod_state_alloc();
+        assert_eq!(bam_parse_basemod(&*rec, &mut *state), 0);
 
         let mut mods_per_pos = Vec::new();
         for pos in 0..(*rec).core.l_qseq {
@@ -335,7 +343,7 @@ fn mods_at_next_pos_reports_mods_at_exact_positions_in_mm_double() {
                 strand: 0,
                 qual: 0,
             }; 8];
-            let n = bam_mods_at_next_pos(rec, state, mods.as_mut_ptr(), mods.len() as i32);
+            let n = bam_mods_at_next_pos(&*rec, &mut *state, &mut mods);
             assert!(n >= 0, "bam_mods_at_next_pos failed at qpos {pos}: {n}");
             if n > 0 {
                 let mut codes: Vec<i32> = (0..n as usize).map(|i| mods[i].modified_base).collect();
@@ -354,7 +362,7 @@ fn mods_at_next_pos_reports_mods_at_exact_positions_in_mm_double() {
         assert!(codes_at_13.contains(&(b'm' as i32)));
         assert!(codes_at_13.contains(&(b'o' as i32)));
 
-        hts_base_mod_state_free(state);
+        hts_base_mod_state_free(Some(state));
         destroy_records(records);
     }
 }
@@ -369,9 +377,8 @@ fn mods_at_qpos_seeks_directly_to_modded_position_in_mm_double() {
         let records = read_records("htslib/test/base_mods/MM-double.sam");
         let rec = records[0];
 
-        let state = hts_base_mod_state_alloc();
-        assert!(!state.is_null());
-        assert_eq!(bam_parse_basemod(rec, state), 0);
+        let mut state = hts_base_mod_state_alloc();
+        assert_eq!(bam_parse_basemod(&*rec, &mut *state), 0);
 
         // Jump to qpos 30 (a known modded C+m site) without iterating from 0.
         let mut mods = [hts_base_mod {
@@ -380,14 +387,14 @@ fn mods_at_qpos_seeks_directly_to_modded_position_in_mm_double() {
             strand: 0,
             qual: 0,
         }; 4];
-        let n = bam_mods_at_qpos(rec, 30, state, mods.as_mut_ptr(), mods.len() as i32);
+        let n = bam_mods_at_qpos(&*rec, 30, &mut *state, &mut mods);
         assert_eq!(n, 1, "qpos 30 should have one mod");
         assert_eq!(mods[0].modified_base, b'm' as i32);
         assert_eq!(mods[0].canonical_base as u8 as char, 'C');
         assert_eq!(mods[0].strand, 0);
         assert_eq!(mods[0].qual, 153);
 
-        hts_base_mod_state_free(state);
+        hts_base_mod_state_free(Some(state));
         destroy_records(records);
     }
 }
@@ -398,9 +405,8 @@ fn mods_at_qpos_reports_no_mod_for_intermediate_unmodded_position() {
         let records = read_records("htslib/test/base_mods/MM-double.sam");
         let rec = records[0];
 
-        let state = hts_base_mod_state_alloc();
-        assert!(!state.is_null());
-        assert_eq!(bam_parse_basemod(rec, state), 0);
+        let mut state = hts_base_mod_state_alloc();
+        assert_eq!(bam_parse_basemod(&*rec, &mut *state), 0);
 
         // qpos 0 (a G, but the MM tag's first G-m site is qpos 1, not 0).
         let mut mods = [hts_base_mod {
@@ -409,10 +415,10 @@ fn mods_at_qpos_reports_no_mod_for_intermediate_unmodded_position() {
             strand: 0,
             qual: 0,
         }; 4];
-        let n = bam_mods_at_qpos(rec, 0, state, mods.as_mut_ptr(), mods.len() as i32);
+        let n = bam_mods_at_qpos(&*rec, 0, &mut *state, &mut mods);
         assert_eq!(n, 0, "qpos 0 should have no mod");
 
-        hts_base_mod_state_free(state);
+        hts_base_mod_state_free(Some(state));
         destroy_records(records);
     }
 }
@@ -428,9 +434,8 @@ fn next_basemod_returns_ascending_positions_for_mm_multi_r1() {
         let records = read_records("htslib/test/base_mods/MM-multi.sam");
         let rec = records[0]; // r1
 
-        let state = hts_base_mod_state_alloc();
-        assert!(!state.is_null());
-        assert_eq!(bam_parse_basemod(rec, state), 0);
+        let mut state = hts_base_mod_state_alloc();
+        assert_eq!(bam_parse_basemod(&*rec, &mut *state), 0);
 
         let mut seen = Vec::new();
         loop {
@@ -441,7 +446,7 @@ fn next_basemod_returns_ascending_positions_for_mm_multi_r1() {
                 qual: 0,
             }; 8];
             let mut pos = -1;
-            let n = bam_next_basemod(rec, state, mods.as_mut_ptr(), mods.len() as i32, &mut pos);
+            let n = bam_next_basemod(&*rec, &mut *state, &mut mods, &mut pos);
             if n <= 0 {
                 break;
             }
@@ -456,7 +461,7 @@ fn next_basemod_returns_ascending_positions_for_mm_multi_r1() {
             assert!(w[0] < w[1]);
         }
 
-        hts_base_mod_state_free(state);
+        hts_base_mod_state_free(Some(state));
         destroy_records(records);
     }
 }
@@ -473,10 +478,9 @@ fn parse_basemod2_with_report_unchecked_flag_emits_hash_marker_for_variants_fixt
         // record[6] is the unchecked variant (per existing test).
         let rec = records[6];
 
-        let state = hts_base_mod_state_alloc();
-        assert!(!state.is_null());
+        let mut state = hts_base_mod_state_alloc();
         // flag=1 == HTS_MOD_REPORT_UNCHECKED
-        assert_eq!(bam_parse_basemod2(rec, state, 1), 0);
+        assert_eq!(bam_parse_basemod2(&*rec, &mut *state, 1), 0);
 
         // Walk and verify at least one mod has qual == HTS_MOD_UNCHECKED.
         let mut saw_unchecked = false;
@@ -488,7 +492,7 @@ fn parse_basemod2_with_report_unchecked_flag_emits_hash_marker_for_variants_fixt
                 qual: 0,
             }; 8];
             let mut pos = -1;
-            let n = bam_next_basemod(rec, state, mods.as_mut_ptr(), mods.len() as i32, &mut pos);
+            let n = bam_next_basemod(&*rec, &mut *state, &mut mods, &mut pos);
             if n <= 0 {
                 break;
             }
@@ -503,7 +507,7 @@ fn parse_basemod2_with_report_unchecked_flag_emits_hash_marker_for_variants_fixt
             "HTS_MOD_REPORT_UNCHECKED should surface at least one '#' qual"
         );
 
-        hts_base_mod_state_free(state);
+        hts_base_mod_state_free(Some(state));
         destroy_records(records);
     }
 }

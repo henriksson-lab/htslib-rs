@@ -1,17 +1,25 @@
-use std::{
-    ffi::{c_void, CStr},
-    ptr::{self, NonNull},
-};
+use std::ffi::c_void;
 
 use super::hts::{
-    hts_name2id_f, hts_pair_pos_t, hts_parse_region, hts_pos_t, hts_reglist_t, HTS_IDX_NOCOOR,
-    HTS_IDX_START, HTS_PARSE_THOUSANDS_SEP,
+    hts_name2id_f, hts_pair_pos_t, hts_parse_region, hts_pos_t, HTS_IDX_NOCOOR, HTS_IDX_START,
+    HTS_PARSE_THOUSANDS_SEP,
 };
 
 // original: reglist (htslib/region.c:31)
 pub struct region_c_31_reglist {
     tid: i32,
     intervals: Vec<hts_pair_pos_t>,
+}
+
+/// Owned, idiomatic equivalent of the C `hts_reglist_t` entry: the region name
+/// and interval list are carried as owned Rust rather than raw `malloc`ed
+/// pointers plus a separate count.
+pub struct region_reglist_entry {
+    pub reg: Option<Vec<u8>>,
+    pub intervals: Vec<hts_pair_pos_t>,
+    pub tid: i32,
+    pub min_beg: hts_pos_t,
+    pub max_end: hts_pos_t,
 }
 
 // original: reghash_t (htslib/region.c:38)
@@ -42,11 +50,8 @@ fn region_compare_hts_pair_pos(a: &hts_pair_pos_t, b: &hts_pair_pos_t) -> i32 {
 }
 
 // original: compare_hts_pair_pos_t (htslib/region.c:41)
-pub unsafe extern "C" fn region_c_41_compare_hts_pair_pos_t(
-    av: *const c_void,
-    bv: *const c_void,
-) -> i32 {
-    region_compare_hts_pair_pos(&*av.cast::<hts_pair_pos_t>(), &*bv.cast::<hts_pair_pos_t>())
+pub fn region_c_41_compare_hts_pair_pos_t(a: &hts_pair_pos_t, b: &hts_pair_pos_t) -> i32 {
+    region_compare_hts_pair_pos(a, b)
 }
 
 // original: reg_compact (htslib/region.c:87)
@@ -114,68 +119,6 @@ pub fn region_c_123_reg_insert(
     p.intervals.push(hts_pair_pos_t { beg, end });
 
     0
-}
-
-fn region_intervals_into_boxed_slice(
-    intervals: &[hts_pair_pos_t],
-) -> Option<Box<[hts_pair_pos_t]>> {
-    if intervals.is_empty() {
-        return None;
-    }
-
-    let mut owned = Vec::new();
-    if owned.try_reserve_exact(intervals.len()).is_err() {
-        return None;
-    }
-    owned.extend_from_slice(intervals);
-    Some(owned.into_boxed_slice())
-}
-
-fn region_leak_hts_reglist_intervals(intervals: Box<[hts_pair_pos_t]>) -> NonNull<hts_pair_pos_t> {
-    NonNull::from(Box::leak(intervals)).cast()
-}
-
-fn region_hts_reglist_entry_from_region(
-    src: &region_c_31_reglist,
-    intervals: Box<[hts_pair_pos_t]>,
-) -> Option<hts_reglist_t> {
-    let count = u32::try_from(intervals.len()).ok()?;
-    let intervals = region_leak_hts_reglist_intervals(intervals);
-    Some(hts_reglist_t {
-        reg: ptr::null(),
-        intervals: intervals.as_ptr(),
-        tid: src.tid,
-        count,
-        min_beg: src.intervals.first().map_or(0, |interval| interval.beg),
-        max_end: src.intervals.last().map_or(0, |interval| interval.end),
-    })
-}
-
-fn region_empty_hts_reglist_entry() -> hts_reglist_t {
-    hts_reglist_t {
-        reg: ptr::null(),
-        intervals: ptr::null_mut(),
-        tid: 0,
-        count: 0,
-        min_beg: 0,
-        max_end: 0,
-    }
-}
-
-fn region_take_hts_reglist_intervals(entry: &mut hts_reglist_t) -> Option<Box<[hts_pair_pos_t]>> {
-    let intervals = NonNull::new(entry.intervals)?;
-    entry.intervals = ptr::null_mut();
-    let count = std::mem::take(&mut entry.count) as usize;
-    let intervals = ptr::slice_from_raw_parts_mut(intervals.as_ptr(), count);
-    Some(unsafe { Box::from_raw(intervals) })
-}
-
-fn region_drop_hts_reglist_intervals(entries: &mut [hts_reglist_t]) {
-    for entry in entries {
-        if let Some(intervals) = region_take_hts_reglist_intervals(entry) {
-            drop(intervals);
-        }
-    }
 }
 
 fn region_khash_int_order(entries: &[region_c_31_reglist]) -> Vec<usize> {
@@ -280,11 +223,11 @@ fn region_khash_int_order(entries: &[region_c_31_reglist]) -> Vec<usize> {
 
 // original: hts_reglist_create (htslib/region.c:177)
 pub unsafe fn region_c_177_hts_reglist_create(
-    argv: Option<&[&CStr]>,
+    argv: Option<&[&[u8]]>,
     r_count: Option<&mut i32>,
-    hdr: Option<NonNull<c_void>>,
+    hdr: Option<&mut c_void>,
     getid: hts_name2id_f,
-) -> Option<Box<[hts_reglist_t]>> {
+) -> Option<Vec<region_reglist_entry>> {
     let Some(argv) = argv else {
         return None;
     };
@@ -292,23 +235,16 @@ pub unsafe fn region_c_177_hts_reglist_create(
         return None;
     };
 
-    let argv_bytes: Vec<&[u8]> = argv.iter().map(|arg| arg.to_bytes()).collect();
-    region_reglist_create_bytes(&argv_bytes, r_count, hdr, getid)
-}
-
-fn region_reglist_create_bytes(
-    argv: &[&[u8]],
-    r_count: &mut i32,
-    hdr: Option<NonNull<c_void>>,
-    getid: hts_name2id_f,
-) -> Option<Box<[hts_reglist_t]>> {
     if argv.is_empty() {
         return None;
     };
-    let mut h = reghash_new();
-    let mut l_count = 0usize;
 
-    for (i, &arg) in argv.iter().enumerate() {
+    // Raw header pointer is only needed at the FFI `hts_parse_region` boundary.
+    let hdr = hdr.map_or(std::ptr::null_mut(), |h| h as *mut c_void);
+
+    let mut h = reghash_new();
+
+    for &arg in argv.iter() {
         let mut tid = 0;
         let mut beg: hts_pos_t = 0;
         let mut end: hts_pos_t = 0;
@@ -336,7 +272,7 @@ fn region_reglist_create_bytes(
                     &mut beg,
                     &mut end,
                     getid,
-                    hdr.map_or(ptr::null_mut(), NonNull::as_ptr),
+                    hdr,
                     HTS_PARSE_THOUSANDS_SEP,
                 )
                 .is_null()
@@ -364,16 +300,14 @@ fn region_reglist_create_bytes(
         return None;
     };
 
-    let mut h_reglist = Vec::new();
+    let mut h_reglist: Vec<region_reglist_entry> = Vec::new();
     if h_reglist.try_reserve_exact(region_count).is_err() {
         return None;
     }
-    h_reglist.resize_with(region_count, region_empty_hts_reglist_entry);
-    let mut h_reglist = h_reglist.into_boxed_slice();
 
     let order = region_khash_int_order(&h.entries);
     for entry_idx in order {
-        if l_count >= region_count {
+        if h_reglist.len() >= region_count {
             break;
         }
         let p = &mut h.entries[entry_idx];
@@ -381,27 +315,25 @@ fn region_reglist_create_bytes(
             continue;
         }
 
-        let Some(intervals) = region_intervals_into_boxed_slice(&p.intervals) else {
-            region_drop_hts_reglist_intervals(&mut h_reglist[..l_count]);
-            return None;
-        };
-        let Some(reglist_entry) = region_hts_reglist_entry_from_region(p, intervals) else {
-            region_drop_hts_reglist_intervals(&mut h_reglist[..l_count]);
-            return None;
-        };
-
-        h_reglist[l_count] = reglist_entry;
-        l_count += 1;
+        let intervals = std::mem::take(&mut p.intervals);
+        let min_beg = intervals.first().map_or(0, |interval| interval.beg);
+        let max_end = intervals.last().map_or(0, |interval| interval.end);
+        h_reglist.push(region_reglist_entry {
+            reg: None,
+            intervals,
+            tid: p.tid,
+            min_beg,
+            max_end,
+        });
     }
 
     Some(h_reglist)
 }
 
 // original: hts_reglist_free (htslib/region.c:266)
-pub fn region_c_266_hts_reglist_free(reglist: Option<Box<[hts_reglist_t]>>) {
-    if let Some(mut reglist) = reglist {
-        region_drop_hts_reglist_intervals(&mut reglist);
-    }
+pub fn region_c_266_hts_reglist_free(reglist: Option<Vec<region_reglist_entry>>) {
+    // Owned `Vec`s drop their intervals automatically; nothing to free manually.
+    drop(reglist);
 }
 
 #[cfg(test)]
@@ -409,19 +341,18 @@ mod tests {
     use super::*;
 
     fn reglist_by_tid(
-        reglist: &[hts_reglist_t],
+        reglist: &[region_reglist_entry],
     ) -> std::collections::BTreeMap<i32, (u32, hts_pos_t, hts_pos_t, Vec<(hts_pos_t, hts_pos_t)>)>
     {
         let mut by_tid = std::collections::BTreeMap::new();
         for r in reglist {
-            let intervals = unsafe { std::slice::from_raw_parts(r.intervals, r.count as usize) };
             by_tid.insert(
                 r.tid,
                 (
-                    r.count,
+                    r.intervals.len() as u32,
                     r.min_beg,
                     r.max_end,
-                    intervals
+                    r.intervals
                         .iter()
                         .map(|iv| (iv.beg, iv.end))
                         .collect::<Vec<_>>(),
@@ -432,9 +363,10 @@ mod tests {
     }
 
     unsafe extern "C" fn test_name2id(_data: *mut c_void, name: *const i8) -> i32 {
-        if libc::strcmp(name, c"chr1".as_ptr()) == 0 {
+        let name = std::ffi::CStr::from_ptr(name).to_bytes();
+        if name == b"chr1" {
             0
-        } else if libc::strcmp(name, c"chr2".as_ptr()) == 0 {
+        } else if name == b"chr2" {
             1
         } else {
             -1
@@ -442,7 +374,7 @@ mod tests {
     }
 
     unsafe extern "C" fn fatal_name2id(data: *mut c_void, name: *const i8) -> i32 {
-        if libc::strcmp(name, c"fatal".as_ptr()) == 0 {
+        if std::ffi::CStr::from_ptr(name).to_bytes() == b"fatal" {
             -2
         } else {
             test_name2id(data, name)
@@ -451,47 +383,26 @@ mod tests {
 
     #[test]
     fn compare_hts_pair_pos_t_orders_begin_then_end() {
-        unsafe {
-            let a = hts_pair_pos_t { beg: 10, end: 20 };
-            let b = hts_pair_pos_t { beg: 10, end: 25 };
-            let c = hts_pair_pos_t { beg: 11, end: 12 };
-            assert_eq!(region_compare_hts_pair_pos(&a, &b), -1);
-            assert_eq!(region_compare_hts_pair_pos(&c, &b), 1);
-            assert_eq!(region_compare_hts_pair_pos(&a, &a), 0);
+        let a = hts_pair_pos_t { beg: 10, end: 20 };
+        let b = hts_pair_pos_t { beg: 10, end: 25 };
+        let c = hts_pair_pos_t { beg: 11, end: 12 };
+        assert_eq!(region_compare_hts_pair_pos(&a, &b), -1);
+        assert_eq!(region_compare_hts_pair_pos(&c, &b), 1);
+        assert_eq!(region_compare_hts_pair_pos(&a, &a), 0);
 
-            let a = hts_sys::hts_pair_pos_t { beg: 10, end: 20 };
-            let b = hts_sys::hts_pair_pos_t { beg: 10, end: 25 };
-            let c = hts_sys::hts_pair_pos_t { beg: 11, end: 12 };
-            assert_eq!(
-                region_c_41_compare_hts_pair_pos_t(
-                    (&a as *const hts_sys::hts_pair_pos_t).cast(),
-                    (&b as *const hts_sys::hts_pair_pos_t).cast()
-                ),
-                -1
-            );
-            assert_eq!(
-                region_c_41_compare_hts_pair_pos_t(
-                    (&c as *const hts_sys::hts_pair_pos_t).cast(),
-                    (&b as *const hts_sys::hts_pair_pos_t).cast()
-                ),
-                1
-            );
-            assert_eq!(
-                region_c_41_compare_hts_pair_pos_t(
-                    (&a as *const hts_sys::hts_pair_pos_t).cast(),
-                    (&a as *const hts_sys::hts_pair_pos_t).cast()
-                ),
-                0
-            );
-        }
+        assert_eq!(region_c_41_compare_hts_pair_pos_t(&a, &b), -1);
+        assert_eq!(region_c_41_compare_hts_pair_pos_t(&c, &b), 1);
+        assert_eq!(region_c_41_compare_hts_pair_pos_t(&a, &a), 0);
     }
 
     #[test]
     fn hts_reglist_create_rejects_empty_inputs_like_c() {
         unsafe {
             let mut count = 7;
+            let empty: [&[u8]; 0] = [];
             assert!(
-                region_c_177_hts_reglist_create(Some(&[]), Some(&mut count), None, None,).is_none()
+                region_c_177_hts_reglist_create(Some(&empty), Some(&mut count), None, None,)
+                    .is_none()
             );
             region_c_266_hts_reglist_free(None);
         }
@@ -515,7 +426,7 @@ mod tests {
     #[test]
     fn hts_reglist_create_rejects_missing_count_without_touching_inputs() {
         unsafe {
-            let args = [c"chr1:1-2"];
+            let args: [&[u8]; 1] = [b"chr1:1-2"];
             let count = 7;
             assert!(
                 region_c_177_hts_reglist_create(Some(&args), None, None, Some(test_name2id),)
@@ -569,19 +480,25 @@ mod tests {
 
     #[test]
     fn hts_reglist_free_tolerates_null_interval_entries() {
-        let reglist: Box<[hts_reglist_t]> = Box::new([region_empty_hts_reglist_entry()]);
+        let reglist = vec![region_reglist_entry {
+            reg: None,
+            intervals: Vec::new(),
+            tid: 0,
+            min_beg: 0,
+            max_end: 0,
+        }];
         region_c_266_hts_reglist_free(Some(reglist));
     }
 
     #[test]
     fn hts_reglist_create_parses_compacts_and_steals_intervals_like_c() {
         unsafe {
-            let args = [
-                c"chr1:10-20",
-                c"chr1:18-25",
-                c"chr2:1-3",
-                c"unknown:1-2",
-                c"*",
+            let args: [&[u8]; 5] = [
+                b"chr1:10-20",
+                b"chr1:18-25",
+                b"chr2:1-3",
+                b"unknown:1-2",
+                b"*",
             ];
             let mut count = 0;
             let reglist = region_c_177_hts_reglist_create(
@@ -608,7 +525,7 @@ mod tests {
     #[test]
     fn hts_reglist_create_returns_null_when_all_regions_are_ignored() {
         unsafe {
-            let args = [c"unknown", c"missing:1-2"];
+            let args: [&[u8]; 2] = [b"unknown", b"missing:1-2"];
             let mut count = 9;
             let reglist = region_c_177_hts_reglist_create(
                 Some(&args),
@@ -624,7 +541,7 @@ mod tests {
     #[test]
     fn hts_reglist_create_aborts_on_fatal_name_lookup() {
         unsafe {
-            let args = [c"chr1:1-2", c"fatal:3-4"];
+            let args: [&[u8]; 2] = [b"chr1:1-2", b"fatal:3-4"];
             let mut count = 9;
             let reglist = region_c_177_hts_reglist_create(
                 Some(&args),
@@ -640,7 +557,7 @@ mod tests {
     #[test]
     fn hts_reglist_create_handles_start_marker_and_ignored_unknowns() {
         unsafe {
-            let args = [c"unknown", c".", c"chr1:5-5"];
+            let args: [&[u8]; 3] = [b"unknown", b".", b"chr1:5-5"];
             let mut count = 0;
             let reglist = region_c_177_hts_reglist_create(
                 Some(&args),
@@ -664,7 +581,7 @@ mod tests {
     #[test]
     fn hts_reglist_create_compacts_duplicate_special_markers() {
         unsafe {
-            let args = [c"*", c"*", c".", c"."];
+            let args: [&[u8]; 4] = [b"*", b"*", b".", b"."];
             let mut count = 0;
             let reglist = region_c_177_hts_reglist_create(
                 Some(&args),
@@ -692,7 +609,7 @@ mod tests {
     #[test]
     fn hts_reglist_create_handles_special_markers_without_name_lookup() {
         unsafe {
-            let args = [c".", c"*"];
+            let args: [&[u8]; 2] = [b".", b"*"];
             let mut count = 0;
             let reglist =
                 region_c_177_hts_reglist_create(Some(&args), Some(&mut count), None, None);
@@ -713,7 +630,7 @@ mod tests {
     #[test]
     fn hts_reglist_create_returns_entries_in_khash_bucket_scan_order() {
         unsafe {
-            let args = [c"chr2:1-2", c"chr1:1-2", c".", c"*"];
+            let args: [&[u8]; 4] = [b"chr2:1-2", b"chr1:1-2", b".", b"*"];
             let mut count = 0;
             let reglist = region_c_177_hts_reglist_create(
                 Some(&args),

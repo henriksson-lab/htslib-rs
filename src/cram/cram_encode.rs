@@ -1139,7 +1139,7 @@ pub unsafe fn cram_cram_encode_c_804_cram_compress_slice(
     crate::htslib_rs::c_compat::pthread_mutex_lock(&raw mut (*fdl).metrics_lock);
     let mut i: c_int = 0;
     while i < DS_ENC_END {
-        if !(*cl).stats[i as usize].is_null() && (*(*cl).stats[i as usize]).nvals > 16 {
+        if !(*cl).stats[i as usize].is_none() && (*cl).stats[i as usize].as_ref().unwrap().nvals > 16 {
             (*(*fdl).m[i as usize]).unpackable = 1;
         }
         i += 1;
@@ -1713,11 +1713,11 @@ pub unsafe fn cram_cram_encode_c_1557_cram_add_to_ref_MD(
     // The 16-byte IUPAC -> "=ACMGRSVTWYHKDBN" translation table.
     const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
 
-    let seq: *mut u8 = (*b)
-        .data
+    let bdata: *mut u8 = (*b).data.as_mut_ptr();
+    let seq: *mut u8 = bdata
         .add(((*b).core.n_cigar << 2) as usize)
         .add((*b).core.l_qname as usize);
-    let cigar: *mut u32 = (*b).data.add((*b).core.l_qname as usize).cast::<u32>();
+    let cigar: *mut u32 = bdata.add((*b).core.l_qname as usize).cast::<u32>();
     let ncigar: u32 = (*b).core.n_cigar;
     let cigar_slice = std::slice::from_raw_parts(cigar, ncigar as usize);
     let mut cig_op: u32 = 0;
@@ -1923,14 +1923,14 @@ pub unsafe fn cram_cram_encode_c_1663_cram_add_to_ref(
             return ret0;
         }
     }
-    let cigar: *mut u32 = (*b).data.add((*b).core.l_qname as usize).cast::<u32>();
+    let bdata: *mut u8 = (*b).data.as_mut_ptr();
+    let cigar: *mut u32 = bdata.add((*b).core.l_qname as usize).cast::<u32>();
     let ncigar: u32 = (*b).core.n_cigar;
     let mut i: u32;
     let mut j: u32;
     let mut iseq: i64 = 0;
     let mut iref: i64 = (*b).core.pos - ref_start;
-    let seq: *mut u8 = (*b)
-        .data
+    let seq: *mut u8 = bdata
         .add(((*b).core.n_cigar << 2) as usize)
         .add((*b).core.l_qname as usize);
     // BAM 4-bit code -> ACGTN index (0..4). 4 = "N" sink for ambiguous codes.
@@ -2099,34 +2099,40 @@ pub unsafe fn cram_cram_encode_c_1798_validate_md5(fd: *mut cram_fd, ref_id: c_i
     let sq_tag = [b'S' as c_char, b'Q' as c_char, 0];
     let sn_tag = [b'S' as c_char, b'N' as c_char, 0];
     let ty = crate::htslib_rs::sam::sam_hrecs_find_type_id(
-        hrecs,
-        sq_tag.as_ptr(),
+        &mut *hrecs,
+        std::ffi::CStr::from_ptr(sq_tag.as_ptr()),
         sn_tag.as_ptr(),
         ref_name,
     );
-    if ty.is_null() {
-        return 0;
-    }
+    let ty = match ty {
+        Some(ty) => ty,
+        None => return 0,
+    };
     let m5_tag = [b'M' as c_char, b'5' as c_char, 0];
-    let m5tag =
-        crate::htslib_rs::sam::sam_hrecs_find_key(ty, m5_tag.as_ptr(), std::ptr::null_mut());
+    let m5tag = crate::htslib_rs::sam::sam_hrecs_find_key(
+        &mut *ty.as_ptr(),
+        std::ffi::CStr::from_ptr(m5_tag.as_ptr()),
+        None,
+    )
+    .map_or(std::ptr::null_mut(), |p| p.as_ptr());
     if m5tag.is_null() {
         return 0;
     }
-    let ref_seq = (*entry).seq;
+    let ref_seq = &(*entry).seq;
     let len = (*entry).length;
-    let md5 = crate::htslib_rs::md5::hts_md5_init();
-    if md5.is_null() {
-        return -1;
-    }
+    let mut md5 = crate::htslib_rs::md5::hts_md5_init();
     let mut buf: [c_uchar; 16] = [0; 16];
-    let mut buf2: [c_char; 33] = [0; 33];
-    crate::htslib_rs::md5::hts_md5_update(md5, ref_seq.cast::<c_void>(), len as std::ffi::c_ulong);
-    crate::htslib_rs::md5::hts_md5_final(buf.as_mut_ptr(), md5);
-    crate::htslib_rs::md5::hts_md5_destroy(md5);
-    crate::htslib_rs::md5::hts_md5_hex(buf2.as_mut_ptr(), buf.as_ptr());
+    let mut buf2: [u8; 33] = [0; 33];
+    crate::htslib_rs::md5::hts_md5_update(
+        &mut md5,
+        &ref_seq[..len as usize],
+        len as usize,
+    );
+    crate::htslib_rs::md5::hts_md5_final(&mut buf, &mut md5);
+    crate::htslib_rs::md5::hts_md5_destroy(Some(md5));
+    crate::htslib_rs::md5::hts_md5_hex(&mut buf2, &buf);
     // (*m5tag).str_ points at "M5:<hex>"; skip the 3-byte "M5:" prefix.
-    if libc::strcmp((*m5tag).str_.add(3), buf2.as_ptr()) != 0 {
+    if std::ffi::CStr::from_ptr((*m5tag).str_.add(3)).to_bytes() != &buf2[..32] {
         hts_log_cstr(
             HTS_LOG_ERROR,
             c"validate_md5".as_ptr(),
@@ -2186,7 +2192,7 @@ pub unsafe fn cram_cram_encode_c_1344_lossy_read_names(
         let e: u64 = cram_cram_encode_c_1301_expected_template_count(b) as u64;
         // Pack u.counts.e (low 32 bits) | u.counts.c (high 32 bits).
         let u_initial: u64 = (e as u32 as u64) | ((1u32 as u64) << 32);
-        let k = kh_put_m_s2u64(names, (*b).data.cast::<c_char>(), &raw mut n);
+        let k = kh_put_m_s2u64(names, (*b).data.as_ptr().cast::<c_char>(), &raw mut n);
         if n == -1 {
             hash_fail = true;
             break;
@@ -2222,7 +2228,7 @@ pub unsafe fn cram_cram_encode_c_1344_lossy_read_names(
         while r2 < (*(*sl).hdr).num_records {
             let cr = (*sl).crecs.offset(r2 as isize);
             let b = *(*cl).bams.offset(r1 as isize);
-            let k = kh_get_m_s2u64(names, (*b).data.cast::<c_char>());
+            let k = kh_get_m_s2u64(names, (*b).data.as_ptr().cast::<c_char>());
             if k == (*names).n_buckets {
                 ok = false;
                 break;
@@ -2281,7 +2287,7 @@ pub unsafe fn cram_cram_encode_c_1437_add_read_names(
                 let nlen = (*b).core.l_qname as c_int - (*b).core.l_extranul as c_int;
                 if cram_cram_io_h_248_block_append(
                     (*sl).name_blk.cast::<cram_block>(),
-                    (*b).data.cast::<c_void>(),
+                    (*b).data.as_ptr().cast::<c_void>(),
                     nlen as usize,
                 ) < 0
                 {
@@ -2295,7 +2301,7 @@ pub unsafe fn cram_cram_encode_c_1437_add_read_names(
         // Production `cram_stats_add` returns `()`. Matches mirror's behaviour
         // when shrunk to c_int: stats add never fails in the native impl.
         cram_cram_stats_c_52_cram_stats_add(
-            (*cl).stats[DS_RN as usize].cast::<c_void>(),
+            (*cl).stats[DS_RN as usize].as_deref_mut().unwrap(),
             (*cr).name_len,
         );
         r1 += 1;
@@ -2336,7 +2342,7 @@ unsafe fn cram_encode_add_feature(
     if fresh163 == 0 {
         r.feature = sl.nfeatures;
         cram_cram_stats_c_52_cram_stats_add(
-            cl.stats[DS_FP_ENC as usize].cast::<c_void>(),
+            cl.stats[DS_FP_ENC as usize].as_deref_mut().unwrap(),
             (*fx).pos,
         );
     } else {
@@ -2345,11 +2351,11 @@ unsafe fn cram_encode_add_feature(
             .offset(r.feature.wrapping_add(r.nfeature).wrapping_sub(2) as isize)
             .cast::<cram_feature_X_layout>();
         cram_cram_stats_c_52_cram_stats_add(
-            cl.stats[DS_FP_ENC as usize].cast::<c_void>(),
+            cl.stats[DS_FP_ENC as usize].as_deref_mut().unwrap(),
             (*fx).pos - (*prev).pos,
         );
     }
-    cram_cram_stats_c_52_cram_stats_add(cl.stats[DS_FC_ENC as usize].cast::<c_void>(), (*fx).code);
+    cram_cram_stats_c_52_cram_stats_add(cl.stats[DS_FC_ENC as usize].as_deref_mut().unwrap(), (*fx).code);
     let fresh164 = sl.nfeatures;
     sl.nfeatures = sl.nfeatures.wrapping_add(1);
     *sl.features.offset(fresh164 as isize) = *f;
@@ -2384,7 +2390,7 @@ pub(crate) unsafe fn cram_cram_encode_c_2605_cram_add_substitution(
         (*fx).base = (*fdl).cram_sub_matrix[(ref_0 as c_int & 0x1f) as usize]
             [(base as c_int & 0x1f) as usize] as c_int;
         cram_cram_stats_c_52_cram_stats_add(
-            (*c.cast::<cram_container_layout>()).stats[DS_BS_ENC as usize].cast::<c_void>(),
+            (*c.cast::<cram_container_layout>()).stats[DS_BS_ENC as usize].as_deref_mut().unwrap(),
             (*fx).base,
         );
     } else {
@@ -2394,11 +2400,11 @@ pub(crate) unsafe fn cram_cram_encode_c_2605_cram_add_substitution(
         (*fb).base = base as c_int;
         (*fb).qual = qual as c_int;
         cram_cram_stats_c_52_cram_stats_add(
-            (*c.cast::<cram_container_layout>()).stats[DS_BA_ENC as usize].cast::<c_void>(),
+            (*c.cast::<cram_container_layout>()).stats[DS_BA_ENC as usize].as_deref_mut().unwrap(),
             (*fb).base,
         );
         cram_cram_stats_c_52_cram_stats_add(
-            (*c.cast::<cram_container_layout>()).stats[DS_QS as usize].cast::<c_void>(),
+            (*c.cast::<cram_container_layout>()).stats[DS_QS as usize].as_deref_mut().unwrap(),
             (*fb).qual,
         );
         if cram_cram_io_h_261_block_append_char((*sl).qual_blk.cast::<cram_block>(), qual) < 0 {
@@ -2459,11 +2465,11 @@ pub(crate) unsafe fn cram_cram_encode_c_2645_cram_add_base(
     (*fb).base = base as c_int;
     (*fb).qual = qual as c_int;
     cram_cram_stats_c_52_cram_stats_add(
-        (*cl).stats[DS_BA_ENC as usize].cast::<c_void>(),
+        (*cl).stats[DS_BA_ENC as usize].as_deref_mut().unwrap(),
         base as c_int,
     );
     cram_cram_stats_c_52_cram_stats_add(
-        (*cl).stats[DS_QS as usize].cast::<c_void>(),
+        (*cl).stats[DS_QS as usize].as_deref_mut().unwrap(),
         qual as c_int,
     );
     if cram_cram_io_h_261_block_append_char((*sl).qual_blk.cast::<cram_block>(), qual) < 0 {
@@ -2495,7 +2501,7 @@ pub(crate) unsafe fn cram_cram_encode_c_2662_cram_add_quality(
     (*fq).code = 'Q' as c_int;
     (*fq).qual = qual as c_int;
     cram_cram_stats_c_52_cram_stats_add(
-        (*cl).stats[DS_QS as usize].cast::<c_void>(),
+        (*cl).stats[DS_QS as usize].as_deref_mut().unwrap(),
         qual as c_int,
     );
     if cram_cram_io_h_261_block_append_char((*sl).qual_blk.cast::<cram_block>(), qual) < 0 {
@@ -2525,7 +2531,7 @@ pub(crate) unsafe fn cram_cram_encode_c_2677_cram_add_deletion(
     (*fd_).pos = pos + 1;
     (*fd_).code = 'D' as c_int;
     (*fd_).len = len;
-    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_DL_ENC as usize].cast::<c_void>(), len);
+    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_DL_ENC as usize].as_deref_mut().unwrap(), len);
     cram_encode_add_feature(
         &mut *c.cast::<cram_container_layout>(),
         &mut *s.cast::<cram_slice_layout>(),
@@ -2620,7 +2626,7 @@ pub(crate) unsafe fn cram_cram_encode_c_2723_cram_add_hardclip(
     (*fs).pos = pos + 1;
     (*fs).code = 'H' as c_int;
     (*fs).len = len;
-    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_HC_ENC as usize].cast::<c_void>(), len);
+    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_HC_ENC as usize].as_deref_mut().unwrap(), len);
     cram_encode_add_feature(
         &mut *c.cast::<cram_container_layout>(),
         &mut *s.cast::<cram_slice_layout>(),
@@ -2645,7 +2651,7 @@ pub(crate) unsafe fn cram_cram_encode_c_2733_cram_add_skip(
     (*fs).pos = pos + 1;
     (*fs).code = 'N' as c_int;
     (*fs).len = len;
-    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_RS_ENC as usize].cast::<c_void>(), len);
+    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_RS_ENC as usize].as_deref_mut().unwrap(), len);
     cram_encode_add_feature(
         &mut *c.cast::<cram_container_layout>(),
         &mut *s.cast::<cram_slice_layout>(),
@@ -2670,7 +2676,7 @@ pub(crate) unsafe fn cram_cram_encode_c_2743_cram_add_pad(
     (*fs).pos = pos + 1;
     (*fs).code = 'P' as c_int;
     (*fs).len = len;
-    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_PD_ENC as usize].cast::<c_void>(), len);
+    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_PD_ENC as usize].as_deref_mut().unwrap(), len);
     cram_encode_add_feature(
         &mut *c.cast::<cram_container_layout>(),
         &mut *s.cast::<cram_slice_layout>(),
@@ -2710,7 +2716,7 @@ pub(crate) unsafe fn cram_cram_encode_c_2753_cram_add_insertion(
         (*fi).code = 'i' as c_int;
         (*fi).base = b as c_int;
         cram_cram_stats_c_52_cram_stats_add(
-            (*cl).stats[DS_BA_ENC as usize].cast::<c_void>(),
+            (*cl).stats[DS_BA_ENC as usize].as_deref_mut().unwrap(),
             b as c_int,
         );
     } else {
@@ -2801,7 +2807,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
     let mut orig: *mut c_char;
     let mut aux_storage: Vec<c_char> = Vec::new();
     let mut brg: *mut sam_hrec_rg_t = std::ptr::null_mut();
-    let mut aux_size: c_int = ((*b).l_data as u32)
+    let mut aux_size: c_int = ((*b).data.len() as c_int as u32)
         .wrapping_sub((*b).core.n_cigar << 2)
         .wrapping_sub((*b).core.l_qname as u32)
         .wrapping_sub((*b).core.l_qseq as u32)
@@ -2819,6 +2825,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
 
     let bam_aux = (*b)
         .data
+        .as_mut_ptr()
         .add(((*b).core.n_cigar << 2) as usize)
         .add((*b).core.l_qname as usize)
         .add((((*b).core.l_qseq + 1) >> 1) as usize)
@@ -2884,7 +2891,11 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                 current_block = 9865445363914956224;
                 break;
             } else {
-                brg = crate::htslib_rs::sam::sam_hrecs_find_rg((*(*fdl).header).hrecs, rg);
+                brg = crate::htslib_rs::sam::sam_hrecs_find_rg(
+                    &mut *(*(*fdl).header).hrecs,
+                    std::ffi::CStr::from_ptr(rg),
+                )
+                .map_or(std::ptr::null_mut(), |p| p.as_ptr());
                 if !brg.is_null() {
                     if (*fdl).version >> 8 < 4 {
                         continue;
@@ -2914,9 +2925,9 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
             && (*crl).flags & BAM_FUNMAP == 0
             && verbatim_MD == 0
             && !MD.is_null()
-            && !(*MD).s.is_null()
+            && !(*MD).data.is_empty()
             && libc::strncasecmp(
-                (*MD).s,
+                (*MD).data.as_ptr().cast::<c_char>(),
                 aux.offset(3),
                 orig.offset(aux_size as isize).offset_from(aux.offset(3)) as usize,
             ) == 0
@@ -3046,7 +3057,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                     90 | 72 => {
                         c_0 = cram_cram_codecs_c_3928_cram_encoder_init(
                             E_BYTE_ARRAY_STOP,
-                            std::ptr::null_mut(),
+                            None,
                             E_BYTE_ARRAY,
                             (&raw mut i2 as *mut c_int).cast(),
                             (*fdl).version,
@@ -3065,7 +3076,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                         };
                         let mut st = cram_stats_layout {
                             freqs: [0; 1024],
-                            h: std::ptr::null_mut(),
+                            h: None,
                             nsamp: 0,
                             nvals: 0,
                             min_val: 0,
@@ -3078,18 +3089,13 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                             e.len_encoding = E_CONST_INT;
                             e.len_dat = std::ptr::null_mut();
                         }
-                        libc::memset(
-                            (&raw mut st).cast(),
-                            0,
-                            std::mem::size_of::<cram_stats_layout>(),
-                        );
-                        cram_cram_stats_c_52_cram_stats_add((&raw mut st).cast(), 1);
-                        cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (&raw mut st).cast());
+                        cram_cram_stats_c_52_cram_stats_add(&mut st, 1);
+                        cram_cram_stats_c_134_cram_stats_encoding(&*fdl, &mut st);
                         e.val_encoding = E_EXTERNAL;
                         e.val_dat = sk as *mut c_void;
                         c_0 = cram_cram_codecs_c_3928_cram_encoder_init(
                             E_BYTE_ARRAY_LEN,
-                            (&raw mut st).cast(),
+                            Some(&mut st),
                             E_BYTE_ARRAY,
                             (&raw mut e).cast(),
                             (*fdl).version,
@@ -3108,7 +3114,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                         };
                         let mut st_0 = cram_stats_layout {
                             freqs: [0; 1024],
-                            h: std::ptr::null_mut(),
+                            h: None,
                             nsamp: 0,
                             nvals: 0,
                             min_val: 0,
@@ -3121,21 +3127,13 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                             e_0.len_encoding = E_CONST_INT;
                             e_0.len_dat = std::ptr::null_mut();
                         }
-                        libc::memset(
-                            (&raw mut st_0).cast(),
-                            0,
-                            std::mem::size_of::<cram_stats_layout>(),
-                        );
-                        cram_cram_stats_c_52_cram_stats_add((&raw mut st_0).cast(), 2);
-                        cram_cram_stats_c_134_cram_stats_encoding(
-                            fd.cast(),
-                            (&raw mut st_0).cast(),
-                        );
+                        cram_cram_stats_c_52_cram_stats_add(&mut st_0, 2);
+                        cram_cram_stats_c_134_cram_stats_encoding(&*fdl, &mut st_0);
                         e_0.val_encoding = E_EXTERNAL;
                         e_0.val_dat = sk as *mut c_void;
                         c_0 = cram_cram_codecs_c_3928_cram_encoder_init(
                             E_BYTE_ARRAY_LEN,
-                            (&raw mut st_0).cast(),
+                            Some(&mut st_0),
                             E_BYTE_ARRAY,
                             (&raw mut e_0).cast(),
                             (*fdl).version,
@@ -3154,7 +3152,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                         };
                         let mut st_1 = cram_stats_layout {
                             freqs: [0; 1024],
-                            h: std::ptr::null_mut(),
+                            h: None,
                             nsamp: 0,
                             nvals: 0,
                             min_val: 0,
@@ -3167,21 +3165,13 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                             e_1.len_encoding = E_CONST_INT;
                             e_1.len_dat = std::ptr::null_mut();
                         }
-                        libc::memset(
-                            (&raw mut st_1).cast(),
-                            0,
-                            std::mem::size_of::<cram_stats_layout>(),
-                        );
-                        cram_cram_stats_c_52_cram_stats_add((&raw mut st_1).cast(), 4);
-                        cram_cram_stats_c_134_cram_stats_encoding(
-                            fd.cast(),
-                            (&raw mut st_1).cast(),
-                        );
+                        cram_cram_stats_c_52_cram_stats_add(&mut st_1, 4);
+                        cram_cram_stats_c_134_cram_stats_encoding(&*fdl, &mut st_1);
                         e_1.val_encoding = E_EXTERNAL;
                         e_1.val_dat = sk as *mut c_void;
                         c_0 = cram_cram_codecs_c_3928_cram_encoder_init(
                             E_BYTE_ARRAY_LEN,
-                            (&raw mut st_1).cast(),
+                            Some(&mut st_1),
                             E_BYTE_ARRAY,
                             (&raw mut e_1).cast(),
                             (*fdl).version,
@@ -3208,7 +3198,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                         e_2.val_dat = sk as *mut c_void;
                         c_0 = cram_cram_codecs_c_3928_cram_encoder_init(
                             E_BYTE_ARRAY_LEN,
-                            std::ptr::null_mut(),
+                            None,
                             E_BYTE_ARRAY,
                             (&raw mut e_2).cast(),
                             (*fdl).version,
@@ -3505,15 +3495,21 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
             if new_ == 0 {
                 (*(td_b.cast::<cram_block_layout>())).byte = TD_blk_size as usize;
             } else {
-                let pooled_key: *mut c_char = cram_string_alloc_c_153_string_ndup(
-                    (*(*cl).comp_hdr).td_keys.cast(),
-                    (*(td_b.cast::<cram_block_layout>()))
-                        .data
-                        .add(TD_blk_size as usize) as *const c_char,
-                    (*(td_b.cast::<cram_block_layout>()))
-                        .byte
-                        .wrapping_sub(TD_blk_size as usize),
+                let src_len = (*(td_b.cast::<cram_block_layout>()))
+                    .byte
+                    .wrapping_sub(TD_blk_size as usize);
+                let src = std::slice::from_raw_parts(
+                    (*(td_b.cast::<cram_block_layout>())).data.add(TD_blk_size as usize),
+                    src_len,
                 );
+                let pooled_key: *mut c_char = match cram_string_alloc_c_153_string_ndup(
+                    (*(*cl).comp_hdr).td_keys.as_deref_mut().unwrap(),
+                    src,
+                    src_len,
+                ) {
+                    Some(s) => s.as_mut_ptr() as *mut c_char,
+                    None => std::ptr::null_mut(),
+                };
                 if pooled_key.is_null() {
                     td_ok = false;
                 } else {
@@ -3525,7 +3521,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
             if td_ok {
                 (*crl).tl = *(*td_hash).vals.offset(k as isize);
                 cram_cram_stats_c_52_cram_stats_add(
-                    (*cl).stats[DS_TL_LOCAL as usize].cast(),
+                    (*cl).stats[DS_TL_LOCAL as usize].as_deref_mut().unwrap(),
                     (*crl).tl,
                 );
                 if !err.is_null() {
@@ -3615,7 +3611,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
     if md.is_null() {
         MD = std::ptr::null_mut();
     } else {
-        (*MD).l = 0;
+        (*MD).data.clear();
     }
 
     let mut cf_tag: c_int = 0;
@@ -3634,9 +3630,9 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
         std::ptr::null_mut()
     };
     (*crl).ref_id = (*b).core.tid;
-    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_RI].cast::<c_void>(), (*crl).ref_id);
+    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_RI].as_deref_mut().unwrap(), (*crl).ref_id);
     cram_cram_stats_c_52_cram_stats_add(
-        (*cl).stats[DS_BF].cast::<c_void>(),
+        (*cl).stats[DS_BF].as_deref_mut().unwrap(),
         (*fdl).cram_flag_swap[((*crl).flags & 0xfff) as usize] as c_int,
     );
 
@@ -3661,7 +3657,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
             (*cl).pos_sorted = 0;
         } else {
             cram_cram_stats_c_52_cram_stats_add(
-                (*cl).stats[DS_AP].cast::<c_void>(),
+                (*cl).stats[DS_AP].as_deref_mut().unwrap(),
                 ((*crl).apos - (*sl).last_apos) as c_int,
             );
             (*sl).last_apos = (*crl).apos;
@@ -3691,6 +3687,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
     let seq_len = (*crl).len as usize;
     let packed_seq = (*b)
         .data
+        .as_ptr()
         .add(((*b).core.n_cigar << 2) as usize)
         .add((*b).core.l_qname as usize);
     let packed_seq = std::slice::from_raw_parts(packed_seq, seq_len.div_ceil(2));
@@ -3701,6 +3698,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
     // qual = bam_qual(b)
     let qual: *mut c_char = (*b)
         .data
+        .as_mut_ptr()
         .add(((*b).core.n_cigar << 2) as usize)
         .add((*b).core.l_qname as usize)
         .add((((*b).core.l_qseq + 1) >> 1) as usize) as *mut c_char;
@@ -3742,7 +3740,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
         }
 
         let cig_to: *mut u32 = (*sl).cigar;
-        let cig_from: *mut u32 = (*b).data.add((*b).core.l_qname as usize).cast::<u32>();
+        let cig_from: *mut u32 = (*b).data.as_mut_ptr().add((*b).core.l_qname as usize).cast::<u32>();
 
         (*crl).feature = 0;
         (*crl).nfeature = 0;
@@ -3783,10 +3781,10 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
                         }
                         if *rp.offset(l as isize) != *sp.offset(l as isize) {
                             if !MD.is_null() && !ref_0.is_null() {
-                                if kputuw((apos + l as i64 - MD_last) as u32, MD) < 0 {
+                                if kputuw((apos + l as i64 - MD_last) as u32, &mut *MD) < 0 {
                                     return -1;
                                 }
-                                if kputc(*rp.offset(l as isize) as c_int, MD) < 0 {
+                                if kputc(*rp.offset(l as isize) as c_int, &mut *MD) < 0 {
                                     return -1;
                                 }
                                 MD_last = apos + l as i64 + 1;
@@ -3882,11 +3880,11 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
                 }
             } else if cig_op == BAM_CDEL {
                 if !MD.is_null() && !ref_0.is_null() {
-                    if kputuw((apos - MD_last) as u32, MD) < 0 {
+                    if kputuw((apos - MD_last) as u32, &mut *MD) < 0 {
                         return -1;
                     }
                     if apos < (*cl).ref_end {
-                        if kputc_(b'^' as c_int, MD) < 0 {
+                        if kputc_(b'^' as c_int, &mut *MD) < 0 {
                             return -1;
                         }
                         let span = if (*cl).ref_end - apos < cig_len as i64 {
@@ -3894,7 +3892,11 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
                         } else {
                             cig_len as i64
                         };
-                        if kputsn(ref_0.offset(apos as isize), span as usize, MD) < 0 {
+                        let md_src = std::slice::from_raw_parts(
+                            ref_0.offset(apos as isize).cast::<u8>(),
+                            span as usize,
+                        );
+                        if kputsn(md_src, span as usize, &mut *MD) < 0 {
                             return -1;
                         }
                     }
@@ -4067,11 +4069,11 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
             }
         };
         cram_cram_stats_c_52_cram_stats_add(
-            (*cl).stats[DS_FN].cast::<c_void>(),
+            (*cl).stats[DS_FN].as_deref_mut().unwrap(),
             (*crl).nfeature as c_int,
         );
 
-        if !MD.is_null() && !ref_0.is_null() && kputuw((apos - MD_last) as u32, MD) < 0 {
+        if !MD.is_null() && !ref_0.is_null() && kputuw((apos - MD_last) as u32, &mut *MD) < 0 {
             return -1;
         }
     } else {
@@ -4088,7 +4090,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
         let mut i: c_int = 0;
         while i < (*crl).len {
             cram_cram_stats_c_52_cram_stats_add(
-                (*cl).stats[DS_BA].cast::<c_void>(),
+                (*cl).stats[DS_BA].as_deref_mut().unwrap(),
                 *seq.offset(i as isize) as c_int,
             );
             i += 1;
@@ -4120,7 +4122,8 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
     if !brg.is_null() {
         (*crl).rg = (*brg).id;
     } else if ((*fdl).version >> 8) == 1 {
-        let brg2 = sam_hrecs_find_rg((*(*fdl).header).hrecs, c"UNKNOWN".as_ptr());
+        let brg2 = sam_hrecs_find_rg(&mut *(*(*fdl).header).hrecs, c"UNKNOWN")
+            .map_or(std::ptr::null_mut(), |p| p.as_ptr());
         if brg2.is_null() {
             return -1;
         }
@@ -4128,7 +4131,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
     } else {
         (*crl).rg = -1;
     }
-    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_RG].cast::<c_void>(), (*crl).rg);
+    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_RG].as_deref_mut().unwrap(), (*crl).rg);
 
     // Append to the qual block now. cram_add_substitution can generate BA/QS
     // events which need to be in the qual block before we append the rest.
@@ -4156,9 +4159,10 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
             let cp = (*qual_blk).data.add((*qual_blk).byte) as *mut c_char;
             let from = (*b)
                 .data
+                .as_ptr()
                 .add(((*b).core.n_cigar << 2) as usize)
                 .add((*b).core.l_qname as usize)
-                .add((((*b).core.l_qseq + 1) >> 1) as usize) as *mut c_char;
+                .add((((*b).core.l_qseq + 1) >> 1) as usize) as *const c_char;
             memcpy(cp.cast(), from.cast(), (*crl).len as u64);
 
             // Store quality in original orientation for better compression.
@@ -4183,7 +4187,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
         };
     }
 
-    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_RL].cast::<c_void>(), (*crl).len);
+    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_RL].as_deref_mut().unwrap(), (*crl).len);
 
     // Now we know apos and aend both — update mate-pair information.
     {
@@ -4198,7 +4202,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
 
         if (*crl).flags & BAM_FPAIRED != 0 {
             let pair_h = (*sl).pair[sec].cast::<kh_m_s2i_layout>();
-            let qname = (*b).data as *const c_char;
+            let qname = (*b).data.as_ptr() as *const c_char;
             new_ = 0;
             k = kh_put_m_s2i(pair_h, qname, &raw mut new_);
             if new_ == -1 {
@@ -4207,7 +4211,15 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
                 // bam_name(b) is likely to change, so copy it to a string pool.
                 let qname_len =
                     ((*b).core.l_qname as c_int - (*b).core.l_extranul as c_int) as usize;
-                let key = cram_string_alloc_c_153_string_ndup((*sl).pair_keys, qname, qname_len);
+                let qname_src = std::slice::from_raw_parts(qname as *const u8, qname_len);
+                let key: *const c_char = match cram_string_alloc_c_153_string_ndup(
+                    (*sl).pair_keys.as_deref_mut().unwrap(),
+                    qname_src,
+                    qname_len,
+                ) {
+                    Some(s) => s.as_mut_ptr() as *const c_char,
+                    None => std::ptr::null(),
+                };
                 if key.is_null() {
                     return -1;
                 }
@@ -4356,7 +4368,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
                 // cram_stats_add() calls since they are not emitted.
                 (*crl).mate_pos = (*p).apos;
                 cram_cram_stats_c_52_cram_stats_add(
-                    (*cl).stats[DS_NP].cast::<c_void>(),
+                    (*cl).stats[DS_NP].as_deref_mut().unwrap(),
                     (*crl).mate_pos as c_int,
                 );
                 (*crl).tlen = if explicit_tlen != 0 {
@@ -4365,7 +4377,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
                     sign * (aright - aleft + 1)
                 };
                 cram_cram_stats_c_52_cram_stats_add(
-                    (*cl).stats[DS_TS].cast::<c_void>(),
+                    (*cl).stats[DS_TS].as_deref_mut().unwrap(),
                     (*crl).tlen as c_int,
                 );
                 (*crl).mate_flags = (((*p).flags & BAM_FMUNMAP == BAM_FMUNMAP) as i32)
@@ -4375,21 +4387,21 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
                 // Decrement statistics aggregated earlier
                 if (*p).cram_flags & CRAM_FLAG_STATS_ADDED != 0 {
                     cram_cram_stats_c_80_cram_stats_del(
-                        (*cl).stats[DS_NP].cast::<c_void>(),
+                        (*cl).stats[DS_NP].as_deref_mut().unwrap(),
                         (*p).mate_pos as c_int,
                     );
                     cram_cram_stats_c_80_cram_stats_del(
-                        (*cl).stats[DS_MF].cast::<c_void>(),
+                        (*cl).stats[DS_MF].as_deref_mut().unwrap(),
                         (*p).mate_flags,
                     );
                     if (*p).cram_flags & CRAM_FLAG_EXPLICIT_TLEN == 0 && explicit_tlen == 0 {
                         cram_cram_stats_c_80_cram_stats_del(
-                            (*cl).stats[DS_TS].cast::<c_void>(),
+                            (*cl).stats[DS_TS].as_deref_mut().unwrap(),
                             (*p).tlen as c_int,
                         );
                     }
                     cram_cram_stats_c_80_cram_stats_del(
-                        (*cl).stats[DS_NS].cast::<c_void>(),
+                        (*cl).stats[DS_NS].as_deref_mut().unwrap(),
                         (*p).mate_ref_id,
                     );
                 }
@@ -4398,14 +4410,14 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
                 (*crl).cram_flags &= !CRAM_FLAG_DETACHED;
                 (*crl).cram_flags |= explicit_tlen;
                 cram_cram_stats_c_52_cram_stats_add(
-                    (*cl).stats[DS_CF].cast::<c_void>(),
+                    (*cl).stats[DS_CF].as_deref_mut().unwrap(),
                     (*crl).cram_flags & CRAM_FLAG_MASK,
                 );
 
                 // Clear detached from p flags and set downstream
                 if (*p).cram_flags & CRAM_FLAG_STATS_ADDED != 0 {
                     cram_cram_stats_c_80_cram_stats_del(
-                        (*cl).stats[DS_CF].cast::<c_void>(),
+                        (*cl).stats[DS_CF].as_deref_mut().unwrap(),
                         (*p).cram_flags & CRAM_FLAG_MASK,
                     );
                     (*p).cram_flags &= !CRAM_FLAG_STATS_ADDED;
@@ -4414,13 +4426,13 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
                 (*p).cram_flags &= !CRAM_FLAG_DETACHED;
                 (*p).cram_flags |= CRAM_FLAG_MATE_DOWNSTREAM | explicit_tlen;
                 cram_cram_stats_c_52_cram_stats_add(
-                    (*cl).stats[DS_CF].cast::<c_void>(),
+                    (*cl).stats[DS_CF].as_deref_mut().unwrap(),
                     (*p).cram_flags & CRAM_FLAG_MASK,
                 );
 
                 (*p).mate_line = rnum - ((val0 & ((1 << 30) - 1)) + 1);
                 cram_cram_stats_c_52_cram_stats_add(
-                    (*cl).stats[DS_NF].cast::<c_void>(),
+                    (*cl).stats[DS_NF].as_deref_mut().unwrap(),
                     (*p).mate_line,
                 );
 
@@ -4442,30 +4454,30 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
             }
 
             cram_cram_stats_c_52_cram_stats_add(
-                (*cl).stats[DS_MF].cast::<c_void>(),
+                (*cl).stats[DS_MF].as_deref_mut().unwrap(),
                 (*crl).mate_flags,
             );
 
             let mp = (*b).core.mpos + 1;
             (*crl).mate_pos = if mp > 0 { mp } else { 0 };
             cram_cram_stats_c_52_cram_stats_add(
-                (*cl).stats[DS_NP].cast::<c_void>(),
+                (*cl).stats[DS_NP].as_deref_mut().unwrap(),
                 (*crl).mate_pos as c_int,
             );
 
             (*crl).tlen = (*b).core.isize;
             cram_cram_stats_c_52_cram_stats_add(
-                (*cl).stats[DS_TS].cast::<c_void>(),
+                (*cl).stats[DS_TS].as_deref_mut().unwrap(),
                 (*crl).tlen as c_int,
             );
 
             (*crl).cram_flags |= CRAM_FLAG_DETACHED;
             cram_cram_stats_c_52_cram_stats_add(
-                (*cl).stats[DS_CF].cast::<c_void>(),
+                (*cl).stats[DS_CF].as_deref_mut().unwrap(),
                 (*crl).cram_flags & CRAM_FLAG_MASK,
             );
             cram_cram_stats_c_52_cram_stats_add(
-                (*cl).stats[DS_NS].cast::<c_void>(),
+                (*cl).stats[DS_NS].as_deref_mut().unwrap(),
                 (*b).core.mtid,
             );
 
@@ -4474,7 +4486,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
     }
 
     (*crl).mqual = (*b).core.qual as i32;
-    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_MQ].cast::<c_void>(), (*crl).mqual);
+    cram_cram_stats_c_52_cram_stats_add((*cl).stats[DS_MQ].as_deref_mut().unwrap(), (*crl).mqual);
 
     (*crl).mate_ref_id = (*b).core.mtid;
 
@@ -4678,7 +4690,8 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                     if (*cl).ref_id >= 0 {
                         (*cl).ref_seq_id = (*cl).ref_id;
                         let entry = *(*(*fdl).refs).ref_id.offset((*cl).ref_seq_id as isize);
-                        (*cl).ref_ = (*entry).seq;
+                        // ref_ is a borrow into the entry's owned seq buffer (ref_free=0).
+                        (*cl).ref_ = (*entry).seq.as_ptr() as *mut c_char;
                         (*cl).ref_start = 1;
                         (*cl).ref_end = (*entry).length;
                     }
@@ -4750,21 +4763,9 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                 inner: kstring_t,
             }
 
-            impl Drop for MdKString {
-                fn drop(&mut self) {
-                    unsafe {
-                        free(self.inner.s.cast());
-                    }
-                }
-            }
-
-            // MD kstring (reused across records, freed per-slice).
+            // MD kstring (reused across records). The owned Vec frees itself on drop.
             let mut md_ks = MdKString {
-                inner: kstring_t {
-                    l: 0,
-                    m: 0,
-                    s: std::ptr::null_mut(),
-                },
+                inner: kstring_t { data: Vec::new() },
             };
 
             // Embed consensus / MD-generated ref.
@@ -4841,10 +4842,11 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                     }
                     (*cl).ref_seq_id = (*b).core.tid;
                     let entry = *(*(*fdl).refs).ref_id.offset((*cl).ref_seq_id as isize);
-                    if (*entry).seq.is_null() {
+                    if (*entry).seq.is_empty() {
                         return -1;
                     }
-                    (*cl).ref_ = (*entry).seq;
+                    // ref_ is a borrow into the entry's owned seq buffer (ref_free=0).
+                    (*cl).ref_ = (*entry).seq.as_ptr() as *mut c_char;
                     (*cl).ref_start = 1;
                     (*cl).ref_end = (*entry).length;
                 }
@@ -4969,10 +4971,10 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
         (*cl).bams = std::ptr::null_mut();
 
         // Detect if a multi-seq container.
-        cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_RI].cast());
-        multi_ref = ((*(*cl).stats[DS_RI]).nvals > 1) as c_int;
+        cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_RI].as_deref_mut().unwrap());
+        multi_ref = ((*cl).stats[DS_RI].as_ref().unwrap().nvals > 1) as c_int;
         crate::htslib_rs::c_compat::pthread_mutex_lock(&raw mut (*fdl).metrics_lock);
-        (*fdl).last_ri_count = (*(*cl).stats[DS_RI]).nvals;
+        (*fdl).last_ri_count = (*cl).stats[DS_RI].as_ref().unwrap().nvals;
         crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).metrics_lock);
 
         if multi_ref != 0 {
@@ -4996,21 +4998,21 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                 if ((*fdl).version >> 8) != 1 {
                     let hdr_blk = (*s).hdr;
                     if (*hdr_blk).ref_seq_id >= 0 && (*cl).multi_seq == 0 && no_ref == 0 {
-                        let md5 = crate::htslib_rs::md5::hts_md5_init();
-                        if md5.is_null() {
-                            return -1;
-                        }
+                        let mut md5 = crate::htslib_rs::md5::hts_md5_init();
                         let off = ((*hdr_blk).ref_seq_start - (*cl).ref_start) as isize;
                         crate::htslib_rs::md5::hts_md5_update(
-                            md5,
-                            (*cl).ref_.offset(off).cast::<c_void>(),
-                            (*hdr_blk).ref_seq_span as std::ffi::c_ulong,
+                            &mut md5,
+                            std::slice::from_raw_parts(
+                                (*cl).ref_.offset(off) as *const u8,
+                                (*hdr_blk).ref_seq_span as usize,
+                            ),
+                            (*hdr_blk).ref_seq_span as usize,
                         );
                         crate::htslib_rs::md5::hts_md5_final(
-                            (&raw mut (*hdr_blk).md5).cast::<c_uchar>(),
-                            md5,
+                            &mut (*hdr_blk).md5,
+                            &mut md5,
                         );
-                        crate::htslib_rs::md5::hts_md5_destroy(md5);
+                        crate::htslib_rs::md5::hts_md5_destroy(Some(md5));
                     } else {
                         libc::memset((&raw mut (*hdr_blk).md5).cast::<c_void>(), 0, 16);
                     }
@@ -5028,27 +5030,27 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
 
         // === DS_BF ===
         (*hl).codecs[DS_BF] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_BF].cast()),
-            (*cl).stats[DS_BF].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_BF].as_deref_mut().unwrap()),
+            (*cl).stats[DS_BF].as_deref_mut(),
             E_INT,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_BF]).nvals != 0 && (*hl).codecs[DS_BF].is_null() {
+        if (*cl).stats[DS_BF].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_BF].is_null() {
             return -1;
         }
 
         // === DS_CF ===
         (*hl).codecs[DS_CF] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_CF].cast()),
-            (*cl).stats[DS_CF].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_CF].as_deref_mut().unwrap()),
+            (*cl).stats[DS_CF].as_deref_mut(),
             E_INT,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_CF]).nvals != 0 && (*hl).codecs[DS_CF].is_null() {
+        if (*cl).stats[DS_CF].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_CF].is_null() {
             return -1;
         }
 
@@ -5056,8 +5058,8 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
         if (*cl).pos_sorted != 0 || (version >> 8) >= 4 {
             if (*cl).pos_sorted != 0 {
                 (*hl).codecs[DS_AP] = cram_cram_codecs_c_3928_cram_encoder_init(
-                    cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_AP].cast()),
-                    (*cl).stats[DS_AP].cast(),
+                    cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_AP].as_deref_mut().unwrap()),
+                    (*cl).stats[DS_AP].as_deref_mut(),
                     if is_v4 != 0 { E_LONG } else { E_INT },
                     std::ptr::null_mut(),
                     version,
@@ -5070,7 +5072,7 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                     } else {
                         E_EXTERNAL
                     },
-                    std::ptr::null_mut(),
+                    None,
                     if is_v4 != 0 { E_LONG } else { E_INT },
                     std::ptr::null_mut(),
                     version,
@@ -5082,7 +5084,7 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
             let mut p: [i64; 2] = [0, (*cl).max_apos];
             (*hl).codecs[DS_AP] = cram_cram_codecs_c_3928_cram_encoder_init(
                 E_BETA,
-                std::ptr::null_mut(),
+                None,
                 if is_v4 != 0 { E_LONG } else { E_INT },
                 (&raw mut p).cast::<c_void>(),
                 version,
@@ -5095,170 +5097,170 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
 
         // === DS_RG ===
         (*hl).codecs[DS_RG] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_RG].cast()),
-            (*cl).stats[DS_RG].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_RG].as_deref_mut().unwrap()),
+            (*cl).stats[DS_RG].as_deref_mut(),
             E_INT,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_RG]).nvals != 0 && (*hl).codecs[DS_RG].is_null() {
+        if (*cl).stats[DS_RG].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_RG].is_null() {
             return -1;
         }
 
         // === DS_MQ ===
         (*hl).codecs[DS_MQ] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_MQ].cast()),
-            (*cl).stats[DS_MQ].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_MQ].as_deref_mut().unwrap()),
+            (*cl).stats[DS_MQ].as_deref_mut(),
             E_INT,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_MQ]).nvals != 0 && (*hl).codecs[DS_MQ].is_null() {
+        if (*cl).stats[DS_MQ].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_MQ].is_null() {
             return -1;
         }
 
         // === DS_NS ===
         (*hl).codecs[DS_NS] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_NS].cast()),
-            (*cl).stats[DS_NS].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_NS].as_deref_mut().unwrap()),
+            (*cl).stats[DS_NS].as_deref_mut(),
             E_INT,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_NS]).nvals != 0 && (*hl).codecs[DS_NS].is_null() {
+        if (*cl).stats[DS_NS].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_NS].is_null() {
             return -1;
         }
 
         // === DS_MF ===
         (*hl).codecs[DS_MF] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_MF].cast()),
-            (*cl).stats[DS_MF].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_MF].as_deref_mut().unwrap()),
+            (*cl).stats[DS_MF].as_deref_mut(),
             E_INT,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_MF]).nvals != 0 && (*hl).codecs[DS_MF].is_null() {
+        if (*cl).stats[DS_MF].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_MF].is_null() {
             return -1;
         }
 
         // === DS_TS ===
         (*hl).codecs[DS_TS] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_TS].cast()),
-            (*cl).stats[DS_TS].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_TS].as_deref_mut().unwrap()),
+            (*cl).stats[DS_TS].as_deref_mut(),
             if is_v4 != 0 { E_LONG } else { E_INT },
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_TS]).nvals != 0 && (*hl).codecs[DS_TS].is_null() {
+        if (*cl).stats[DS_TS].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_TS].is_null() {
             return -1;
         }
 
         // === DS_NP ===
         (*hl).codecs[DS_NP] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_NP].cast()),
-            (*cl).stats[DS_NP].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_NP].as_deref_mut().unwrap()),
+            (*cl).stats[DS_NP].as_deref_mut(),
             if is_v4 != 0 { E_LONG } else { E_INT },
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_NP]).nvals != 0 && (*hl).codecs[DS_NP].is_null() {
+        if (*cl).stats[DS_NP].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_NP].is_null() {
             return -1;
         }
 
         // === DS_NF ===
         (*hl).codecs[DS_NF] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_NF].cast()),
-            (*cl).stats[DS_NF].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_NF].as_deref_mut().unwrap()),
+            (*cl).stats[DS_NF].as_deref_mut(),
             E_INT,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_NF]).nvals != 0 && (*hl).codecs[DS_NF].is_null() {
+        if (*cl).stats[DS_NF].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_NF].is_null() {
             return -1;
         }
 
         // === DS_RL ===
         (*hl).codecs[DS_RL] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_RL].cast()),
-            (*cl).stats[DS_RL].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_RL].as_deref_mut().unwrap()),
+            (*cl).stats[DS_RL].as_deref_mut(),
             E_INT,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_RL]).nvals != 0 && (*hl).codecs[DS_RL].is_null() {
+        if (*cl).stats[DS_RL].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_RL].is_null() {
             return -1;
         }
 
         // === DS_FN ===
         (*hl).codecs[DS_FN] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_FN].cast()),
-            (*cl).stats[DS_FN].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_FN].as_deref_mut().unwrap()),
+            (*cl).stats[DS_FN].as_deref_mut(),
             E_INT,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_FN]).nvals != 0 && (*hl).codecs[DS_FN].is_null() {
+        if (*cl).stats[DS_FN].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_FN].is_null() {
             return -1;
         }
 
         // === DS_FC ===
         (*hl).codecs[DS_FC] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_FC].cast()),
-            (*cl).stats[DS_FC].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_FC].as_deref_mut().unwrap()),
+            (*cl).stats[DS_FC].as_deref_mut(),
             E_BYTE,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_FC]).nvals != 0 && (*hl).codecs[DS_FC].is_null() {
+        if (*cl).stats[DS_FC].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_FC].is_null() {
             return -1;
         }
 
         // === DS_FP ===
         (*hl).codecs[DS_FP] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_FP].cast()),
-            (*cl).stats[DS_FP].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_FP].as_deref_mut().unwrap()),
+            (*cl).stats[DS_FP].as_deref_mut(),
             E_INT,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_FP]).nvals != 0 && (*hl).codecs[DS_FP].is_null() {
+        if (*cl).stats[DS_FP].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_FP].is_null() {
             return -1;
         }
 
         // === DS_DL ===
         (*hl).codecs[DS_DL] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_DL].cast()),
-            (*cl).stats[DS_DL].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_DL].as_deref_mut().unwrap()),
+            (*cl).stats[DS_DL].as_deref_mut(),
             E_INT,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_DL]).nvals != 0 && (*hl).codecs[DS_DL].is_null() {
+        if (*cl).stats[DS_DL].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_DL].is_null() {
             return -1;
         }
 
         // === DS_BA ===
         (*hl).codecs[DS_BA] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_BA].cast()),
-            (*cl).stats[DS_BA].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_BA].as_deref_mut().unwrap()),
+            (*cl).stats[DS_BA].as_deref_mut(),
             E_BYTE,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_BA]).nvals != 0 && (*hl).codecs[DS_BA].is_null() {
+        if (*cl).stats[DS_BA].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_BA].is_null() {
             return -1;
         }
 
@@ -5278,7 +5280,7 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
             };
             (*hl).codecs[DS_BB] = cram_cram_codecs_c_3928_cram_encoder_init(
                 E_BYTE_ARRAY_LEN,
-                std::ptr::null_mut(),
+                None,
                 E_BYTE_ARRAY,
                 (&raw mut e).cast::<c_void>(),
                 version,
@@ -5293,14 +5295,14 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
 
         // === DS_BS ===
         (*hl).codecs[DS_BS] = cram_cram_codecs_c_3928_cram_encoder_init(
-            cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_BS].cast()),
-            (*cl).stats[DS_BS].cast(),
+            cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_BS].as_deref_mut().unwrap()),
+            (*cl).stats[DS_BS].as_deref_mut(),
             E_BYTE,
             std::ptr::null_mut(),
             version,
             vv_ptr,
         );
-        if (*(*cl).stats[DS_BS]).nvals != 0 && (*hl).codecs[DS_BS].is_null() {
+        if (*cl).stats[DS_BS].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_BS].is_null() {
             return -1;
         }
 
@@ -5314,26 +5316,26 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
             (*hl).codecs[DS_SC] = std::ptr::null_mut();
 
             (*hl).codecs[DS_TC] = cram_cram_codecs_c_3928_cram_encoder_init(
-                cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_TC].cast()),
-                (*cl).stats[DS_TC].cast(),
+                cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_TC].as_deref_mut().unwrap()),
+                (*cl).stats[DS_TC].as_deref_mut(),
                 E_BYTE,
                 std::ptr::null_mut(),
                 version,
                 vv_ptr,
             );
-            if (*(*cl).stats[DS_TC]).nvals != 0 && (*hl).codecs[DS_TC].is_null() {
+            if (*cl).stats[DS_TC].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_TC].is_null() {
                 return -1;
             }
 
             (*hl).codecs[DS_TN] = cram_cram_codecs_c_3928_cram_encoder_init(
-                cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_TN].cast()),
-                (*cl).stats[DS_TN].cast(),
+                cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_TN].as_deref_mut().unwrap()),
+                (*cl).stats[DS_TN].as_deref_mut(),
                 E_INT,
                 std::ptr::null_mut(),
                 version,
                 vv_ptr,
             );
-            if (*(*cl).stats[DS_TN]).nvals != 0 && (*hl).codecs[DS_TN].is_null() {
+            if (*cl).stats[DS_TN].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_TN].is_null() {
                 return -1;
             }
         } else {
@@ -5342,66 +5344,66 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
 
             // === DS_TL ===
             (*hl).codecs[DS_TL] = cram_cram_codecs_c_3928_cram_encoder_init(
-                cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_TL].cast()),
-                (*cl).stats[DS_TL].cast(),
+                cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_TL].as_deref_mut().unwrap()),
+                (*cl).stats[DS_TL].as_deref_mut(),
                 E_INT,
                 std::ptr::null_mut(),
                 version,
                 vv_ptr,
             );
-            if (*(*cl).stats[DS_TL]).nvals != 0 && (*hl).codecs[DS_TL].is_null() {
+            if (*cl).stats[DS_TL].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_TL].is_null() {
                 return -1;
             }
 
             // === DS_RI ===
             (*hl).codecs[DS_RI] = cram_cram_codecs_c_3928_cram_encoder_init(
-                cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_RI].cast()),
-                (*cl).stats[DS_RI].cast(),
+                cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_RI].as_deref_mut().unwrap()),
+                (*cl).stats[DS_RI].as_deref_mut(),
                 E_INT,
                 std::ptr::null_mut(),
                 version,
                 vv_ptr,
             );
-            if (*(*cl).stats[DS_RI]).nvals != 0 && (*hl).codecs[DS_RI].is_null() {
+            if (*cl).stats[DS_RI].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_RI].is_null() {
                 return -1;
             }
 
             // === DS_RS ===
             (*hl).codecs[DS_RS] = cram_cram_codecs_c_3928_cram_encoder_init(
-                cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_RS].cast()),
-                (*cl).stats[DS_RS].cast(),
+                cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_RS].as_deref_mut().unwrap()),
+                (*cl).stats[DS_RS].as_deref_mut(),
                 E_INT,
                 std::ptr::null_mut(),
                 version,
                 vv_ptr,
             );
-            if (*(*cl).stats[DS_RS]).nvals != 0 && (*hl).codecs[DS_RS].is_null() {
+            if (*cl).stats[DS_RS].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_RS].is_null() {
                 return -1;
             }
 
             // === DS_PD ===
             (*hl).codecs[DS_PD] = cram_cram_codecs_c_3928_cram_encoder_init(
-                cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_PD].cast()),
-                (*cl).stats[DS_PD].cast(),
+                cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_PD].as_deref_mut().unwrap()),
+                (*cl).stats[DS_PD].as_deref_mut(),
                 E_INT,
                 std::ptr::null_mut(),
                 version,
                 vv_ptr,
             );
-            if (*(*cl).stats[DS_PD]).nvals != 0 && (*hl).codecs[DS_PD].is_null() {
+            if (*cl).stats[DS_PD].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_PD].is_null() {
                 return -1;
             }
 
             // === DS_HC ===
             (*hl).codecs[DS_HC] = cram_cram_codecs_c_3928_cram_encoder_init(
-                cram_cram_stats_c_134_cram_stats_encoding(fd.cast(), (*cl).stats[DS_HC].cast()),
-                (*cl).stats[DS_HC].cast(),
+                cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_HC].as_deref_mut().unwrap()),
+                (*cl).stats[DS_HC].as_deref_mut(),
                 E_INT,
                 std::ptr::null_mut(),
                 version,
                 vv_ptr,
             );
-            if (*(*cl).stats[DS_HC]).nvals != 0 && (*hl).codecs[DS_HC].is_null() {
+            if (*cl).stats[DS_HC].as_ref().unwrap().nvals != 0 && (*hl).codecs[DS_HC].is_null() {
                 return -1;
             }
 
@@ -5411,7 +5413,7 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
             let mut i2: [c_int; 2] = [0, DS_SC as c_int];
             (*hl).codecs[DS_SC] = cram_cram_codecs_c_3928_cram_encoder_init(
                 E_BYTE_ARRAY_STOP,
-                std::ptr::null_mut(),
+                None,
                 E_BYTE_ARRAY,
                 (&raw mut i2).cast::<c_void>(),
                 version,
@@ -5428,7 +5430,7 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
             let mut i2: [c_int; 2] = [0, DS_IN as c_int];
             (*hl).codecs[DS_IN] = cram_cram_codecs_c_3928_cram_encoder_init(
                 E_BYTE_ARRAY_STOP,
-                std::ptr::null_mut(),
+                None,
                 E_BYTE_ARRAY,
                 (&raw mut i2).cast::<c_void>(),
                 version,
@@ -5442,7 +5444,7 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
         // === DS_QS ===
         (*hl).codecs[DS_QS] = cram_cram_codecs_c_3928_cram_encoder_init(
             E_EXTERNAL,
-            std::ptr::null_mut(),
+            None,
             E_BYTE,
             cram_data_series_id_ptr(DS_QS),
             version,
@@ -5457,7 +5459,7 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
             let mut i2: [c_int; 2] = [0, DS_RN as c_int];
             (*hl).codecs[DS_RN] = cram_cram_codecs_c_3928_cram_encoder_init(
                 E_BYTE_ARRAY_STOP,
-                std::ptr::null_mut(),
+                None,
                 E_BYTE_ARRAY,
                 (&raw mut i2).cast::<c_void>(),
                 version,
@@ -5621,7 +5623,7 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
 }
 
 pub unsafe fn cram_cram_encode_c_1246_bam_data_end(b: *mut bam1_t) -> *const c_char {
-    (*b).data.add((*b).l_data as usize).cast()
+    (*b).data.as_ptr().add((*b).data.len()).cast()
 }
 
 pub unsafe fn cram_cram_encode_c_1253_bam_aux2i_end(
@@ -5933,7 +5935,7 @@ pub unsafe fn cram_cram_encode_c_4049_cram_put_bam_seq(fd: *mut cram_fd, b: *mut
     } else {
         let qlen = crate::htslib_rs::sam::bam_cigar2qlen(
             (*b).core.n_cigar as c_int,
-            (*b).data.add((*b).core.l_qname as usize).cast::<u32>(),
+            (*b).data.as_ptr().add((*b).core.l_qname as usize) as *const u32,
         );
         if qlen > 100_000_000 {
             return -1;
@@ -5943,7 +5945,7 @@ pub unsafe fn cram_cram_encode_c_4049_cram_put_bam_seq(fd: *mut cram_fd, b: *mut
     (*c).curr_rec += 1;
     (*c).curr_c_rec += 1;
     (*c).s_aux_bytes = (*c).s_aux_bytes.wrapping_add(
-        ((*b).l_data as u32)
+        ((*b).data.len() as c_int as u32)
             .wrapping_sub((*b).core.n_cigar << 2)
             .wrapping_sub((*b).core.l_qname as u32)
             .wrapping_sub((*b).core.l_qseq as u32)

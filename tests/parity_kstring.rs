@@ -27,16 +27,9 @@ use std::ffi::{c_char, c_int, c_void, CStr, CString};
 // ---------------------------------------------------------------------------
 
 unsafe fn kputd_native(d: f64) -> (Vec<u8>, c_int) {
-    let mut s: kstring_t = std::mem::zeroed();
+    let mut s = kstring_t::default();
     let ret = htslib_rs::kstring::kputd(d, &mut s);
-    let bytes = if s.s.is_null() {
-        Vec::new()
-    } else {
-        CStr::from_ptr(s.s).to_bytes().to_vec()
-    };
-    if !s.s.is_null() {
-        libc::free(s.s.cast());
-    }
+    let bytes = s.data.as_slice().to_vec();
     (bytes, ret)
 }
 
@@ -189,13 +182,8 @@ fn parity_ksplit_core_various_inputs() {
 #[test]
 fn parity_ksplit_native_matches_ksplit_core() {
     unsafe {
-        let input = b"foo\tbar\tbaz\0";
-        let mut buf = input.to_vec();
-        let mut ks = kstring_t {
-            l: input.len() - 1,
-            m: input.len(),
-            s: buf.as_mut_ptr().cast::<c_char>(),
-        };
+        let mut ks = kstring_t::default();
+        ks.data.extend_from_slice(b"foo\tbar\tbaz");
         // ksplit allocates ks.s-pointed offsets; it writes NULs into the buf.
         let mut n: c_int = 0;
         let offsets = htslib_rs::kstring::ksplit(&mut ks, b'\t' as c_int, &mut n);
@@ -464,13 +452,10 @@ unsafe fn read_all_with_kgetline_native(file_path: &std::path::Path) -> Vec<Vec<
     let fp = libc::fopen(cpath.as_ptr(), mode);
     assert!(!fp.is_null());
 
-    let mut s: kstring_t = std::mem::zeroed();
+    let mut s = kstring_t::default();
     let mut lines = Vec::new();
     loop {
-        s.l = 0;
-        if !s.s.is_null() {
-            *s.s = 0;
-        }
+        s.data.clear();
         let ret = htslib_rs::kstring::kgetline(
             &mut s,
             Some(htslib_rs::kstring::fgets_wrapper),
@@ -479,11 +464,8 @@ unsafe fn read_all_with_kgetline_native(file_path: &std::path::Path) -> Vec<Vec<
         if ret == libc::EOF {
             break;
         }
-        let bytes = std::slice::from_raw_parts(s.s as *const u8, s.l).to_vec();
+        let bytes = s.data.as_slice().to_vec();
         lines.push(bytes);
-    }
-    if !s.s.is_null() {
-        libc::free(s.s.cast());
     }
     libc::fclose(fp);
     lines
@@ -593,22 +575,16 @@ fn parity_kgetline2_synthetic_stream() {
         // Native side
         let fp_n = libc::fopen(cpath.as_ptr(), c"r".as_ptr());
         assert!(!fp_n.is_null());
-        let mut s_n: kstring_t = std::mem::zeroed();
+        let mut s_n = kstring_t::default();
         let mut lines_n: Vec<Vec<u8>> = Vec::new();
         loop {
-            s_n.l = 0;
-            if !s_n.s.is_null() {
-                *s_n.s = 0;
-            }
+            s_n.data.clear();
             let ret =
                 htslib_rs::kstring::kgetline2(&mut s_n, Some(fgetln_bridge_native), fp_n.cast());
             if ret == libc::EOF {
                 break;
             }
-            lines_n.push(std::slice::from_raw_parts(s_n.s as *const u8, s_n.l).to_vec());
-        }
-        if !s_n.s.is_null() {
-            libc::free(s_n.s.cast());
+            lines_n.push(s_n.data.as_slice().to_vec());
         }
         libc::fclose(fp_n);
 
@@ -652,21 +628,15 @@ fn native_kfgetline_smoke() {
     unsafe {
         let fp = libc::fopen(cpath.as_ptr(), c"r".as_ptr());
         assert!(!fp.is_null());
-        let mut s: kstring_t = std::mem::zeroed();
+        let mut s = kstring_t::default();
         let mut lines: Vec<Vec<u8>> = Vec::new();
         loop {
-            s.l = 0;
-            if !s.s.is_null() {
-                *s.s = 0;
-            }
+            s.data.clear();
             let ret = htslib_rs::kstring::kfgetline(&mut s, fp.cast());
             if ret == libc::EOF {
                 break;
             }
-            lines.push(std::slice::from_raw_parts(s.s as *const u8, s.l).to_vec());
-        }
-        if !s.s.is_null() {
-            libc::free(s.s.cast());
+            lines.push(s.data.as_slice().to_vec());
         }
         libc::fclose(fp);
         assert_eq!(

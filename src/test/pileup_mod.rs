@@ -32,13 +32,9 @@ pub unsafe fn test_pileup_mod_c_49_process_pileup(
     n: c_int,
 ) {
     const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
-    let mut s = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut s = kstring_t::default();
 
-    libc::printf(c"%s\t%d\t".as_ptr(), sam::sam_hdr_tid2name(h, tid), pos);
+    libc::printf(c"%s\t%d\t".as_ptr(), sam::sam_hdr_tid2name(&*h, tid), pos);
     for _ in 0..n {
         if sam::bam_pileup1_is_del(p) != 0 {
             libc::putchar(b'*' as c_int);
@@ -60,13 +56,9 @@ pub unsafe fn test_pileup_mod_c_49_process_pileup(
         p = p.add(1);
     }
     libc::putchar(b'\t' as c_int);
-    libc::puts(if s.l != 0 {
-        s.s
-    } else {
-        c"".as_ptr().cast_mut()
-    });
-
-    libc::free(s.s.cast());
+    let mut s_cstr = s.data.clone();
+    s_cstr.push(0);
+    libc::puts(s_cstr.as_ptr().cast());
 }
 
 // Initialise and destroy the base modifier state data. This is called
@@ -77,12 +69,12 @@ pub unsafe extern "C" fn test_pileup_mod_c_74_pileup_cd_create(
     b: *const sam::bam1_t,
     cd: *mut sam::bam_pileup_cd,
 ) -> c_int {
-    let m = sam::hts_base_mod_state_alloc();
-    if sam::bam_parse_basemod(b, m) < 0 {
-        sam::hts_base_mod_state_free(m);
+    let mut m = sam::hts_base_mod_state_alloc();
+    if sam::bam_parse_basemod(&*b, &mut m) < 0 {
+        sam::hts_base_mod_state_free(Some(m));
         return -1;
     }
-    (*cd).p = m.cast();
+    (*cd).p = Box::into_raw(m).cast();
     0
 }
 
@@ -92,7 +84,9 @@ pub unsafe extern "C" fn test_pileup_mod_c_84_pileup_cd_destroy(
     _b: *const sam::bam1_t,
     cd: *mut sam::bam_pileup_cd,
 ) -> c_int {
-    sam::hts_base_mod_state_free((*cd).p.cast());
+    sam::hts_base_mod_state_free(Some(Box::from_raw(
+        (*cd).p.cast::<sam::hts_base_mod_state>(),
+    )));
     0
 }
 
@@ -107,13 +101,9 @@ pub unsafe fn test_pileup_mod_c_91_process_mod_pileup1(
     n: c_int,
 ) {
     const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
-    let mut s = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut s = kstring_t::default();
 
-    libc::printf(c"%s\t%d\t".as_ptr(), sam::sam_hdr_tid2name(h, tid), pos);
+    libc::printf(c"%s\t%d\t".as_ptr(), sam::sam_hdr_tid2name(&*h, tid), pos);
     for _ in 0..n {
         if sam::bam_pileup1_is_del(p) != 0 {
             libc::putchar(b'*' as c_int);
@@ -134,14 +124,14 @@ pub unsafe fn test_pileup_mod_c_91_process_mod_pileup1(
         );
 
         // Simple mod detection; assumes at most 5 mods
-        let m = (*p).cd.p.cast::<sam::hts_base_mod_state>();
+        let m = &mut *(*p).cd.p.cast::<sam::hts_base_mod_state>();
         let mut mods = [sam::hts_base_mod {
             modified_base: 0,
             canonical_base: 0,
             strand: 0,
             qual: 0,
         }; 5];
-        let nm = sam::bam_mods_at_qpos((*p).b, (*p).qpos, m, mods.as_mut_ptr(), 5);
+        let nm = sam::bam_mods_at_qpos(&*(*p).b, (*p).qpos, m, &mut mods);
         if nm > 0 {
             libc::putchar(b'[' as c_int);
             for j in 0..nm {
@@ -171,13 +161,9 @@ pub unsafe fn test_pileup_mod_c_91_process_mod_pileup1(
         p = p.add(1);
     }
     libc::putchar(b'\t' as c_int);
-    libc::puts(if s.l != 0 {
-        s.s
-    } else {
-        c"".as_ptr().cast_mut()
-    });
-
-    libc::free(s.s.cast());
+    let mut s_cstr = s.data.clone();
+    s_cstr.push(0);
+    libc::puts(s_cstr.as_ptr().cast());
 }
 
 // Report a line of pileup, including base modifications.
@@ -196,15 +182,11 @@ pub unsafe fn test_pileup_mod_c_140_process_mod_pileup2(
     n: c_int,
 ) {
     const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
-    let mut s = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut s = kstring_t::default();
 
     libc::printf(
         c"%s\t%d\t%d\t".as_ptr(),
-        sam::sam_hdr_tid2name(h, tid),
+        sam::sam_hdr_tid2name(&*h, tid),
         pos,
         n,
     );
@@ -220,7 +202,7 @@ pub unsafe fn test_pileup_mod_c_140_process_mod_pileup2(
         let c = SEQ_NT16_STR[sam::bam_seqi(seq, (*p).qpos as usize) as usize];
 
         // Simple mod detection; assumes at most 2 non-ChEBI mods
-        let m = (*p).cd.p.cast::<sam::hts_base_mod_state>();
+        let m = &mut *(*p).cd.p.cast::<sam::hts_base_mod_state>();
         let is_rev = sam::bam_is_rev((*p).b);
         let mut mod_ = sam::hts_base_mod {
             modified_base: 0,
@@ -229,7 +211,9 @@ pub unsafe fn test_pileup_mod_c_140_process_mod_pileup2(
             qual: 0,
         };
         let mut q = *qual.add((*p).qpos as usize);
-        let base = if sam::bam_mods_at_qpos((*p).b, (*p).qpos, m, &mut mod_, 1) > 0 {
+        let base = if sam::bam_mods_at_qpos(&*(*p).b, (*p).qpos, m, std::slice::from_mut(&mut mod_))
+            > 0
+        {
             // base mod as phred scale
             q = (-10.0 * (1.0 - ((mod_.qual as f64 + 0.5) / 256.0)).log10() + 0.5) as u8;
             mod_.modified_base
@@ -252,13 +236,9 @@ pub unsafe fn test_pileup_mod_c_140_process_mod_pileup2(
         p = p.add(1);
     }
     libc::putchar(b'\t' as c_int);
-    libc::puts(if s.l != 0 {
-        s.s
-    } else {
-        c"".as_ptr().cast_mut()
-    });
-
-    libc::free(s.s.cast());
+    let mut s_cstr = s.data.clone();
+    s_cstr.push(0);
+    libc::puts(s_cstr.as_ptr().cast());
 }
 
 // original: main (htslib/test/pileup_mod.c:185)

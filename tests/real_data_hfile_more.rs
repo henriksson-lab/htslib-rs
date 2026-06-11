@@ -100,9 +100,13 @@ fn htsfile_raw_copy_preserves_real_text_fixture_bytes() {
         let dst = temp_path("copy-index-vcf", "vcf");
         let _ = std::fs::remove_file(&dst);
 
-        let src_c = CString::new(src.to_string_lossy().as_bytes()).unwrap();
-        let dst_c = CString::new(dst.to_string_lossy().as_bytes()).unwrap();
-        htslib_rs::htsfile::htsfile_c_169_copy_raw(src_c.as_ptr(), dst_c.as_ptr());
+        let argv = vec![
+            b"htsfile".to_vec(),
+            b"-C".to_vec(),
+            src.to_string_lossy().as_bytes().to_vec(),
+            dst.to_string_lossy().as_bytes().to_vec(),
+        ];
+        assert_eq!(htslib_rs::htsfile::htsfile_c_227_main(argv), 0);
 
         assert_eq!(std::fs::read(&dst).unwrap(), std::fs::read(&src).unwrap());
         let _ = std::fs::remove_file(dst);
@@ -121,9 +125,13 @@ fn htsfile_raw_copy_preserves_real_compressed_and_index_bytes() {
             let dst = temp_path(label, extension);
             let _ = std::fs::remove_file(&dst);
 
-            let src_c = CString::new(src.to_string_lossy().as_bytes()).unwrap();
-            let dst_c = CString::new(dst.to_string_lossy().as_bytes()).unwrap();
-            htslib_rs::htsfile::htsfile_c_169_copy_raw(src_c.as_ptr(), dst_c.as_ptr());
+            let argv = vec![
+                b"htsfile".to_vec(),
+                b"-C".to_vec(),
+                src.to_string_lossy().as_bytes().to_vec(),
+                dst.to_string_lossy().as_bytes().to_vec(),
+            ];
+            assert_eq!(htslib_rs::htsfile::htsfile_c_227_main(argv), 0);
 
             assert_eq!(
                 std::fs::read(&dst).unwrap(),

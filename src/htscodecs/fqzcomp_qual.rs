@@ -13,7 +13,7 @@
 
 use crate::htscodecs::c_range_coder::*;
 use crate::htscodecs::c_simple_model::*;
-use crate::htscodecs::utils::{fast_log, htscodecs_tls_alloc, htscodecs_tls_free};
+use crate::htscodecs::utils::fast_log;
 use crate::htscodecs::varint::{var_get_u32, var_put_u32};
 
 // C `INT_MAX` sentinel value stored in qmap[].  fqzcomp_qual.c:855 etc.
@@ -69,11 +69,13 @@ pub const PFLAG_HAVE_QTAB: i32 = 128; // fqzcomp_qual.h:79
 /// } fqz_slice;
 /// ```
 // fqzcomp_qual.h:59
-#[repr(C)]
+///
+/// The C `len`/`flags` pointers (each of length `num_records`) are owned heap
+/// arrays, so they collapse into owned `Vec<u32>` fields.
 pub struct fqz_slice {
     pub num_records: i32,
-    pub len: *mut u32,
-    pub flags: *mut u32,
+    pub len: Vec<u32>,
+    pub flags: Vec<u32>,
 }
 
 /// A single parameter block.
@@ -475,7 +477,7 @@ pub fn read_array(r#in: &[u8], array: &mut [u32], size: i32) -> i32 {
 
 /// `static inline void mm_prefetch(void *x)`
 // fqzcomp_qual.c:206
-pub fn mm_prefetch(_x: *mut std::ffi::c_void) {
+pub fn mm_prefetch<T>(_x: &T) {
     // Fetch-and-discard prefetch hint; a no-op in safe Rust.
 }
 
@@ -585,9 +587,9 @@ pub fn fqz_qual_stats(
 ) {
     let in_size = r#in.len();
     let num_records = s.num_records;
-    // s->len[] and s->flags[] views.
-    let s_len = unsafe { std::slice::from_raw_parts(s.len, num_records as usize) };
-    let s_flags = unsafe { std::slice::from_raw_parts_mut(s.flags, num_records as usize) };
+    // s->len[] and s->flags[] are owned Vec fields; borrow them directly.
+    let s_len = &s.len;
+    let s_flags = &mut s.flags;
 
     // qhistb[NP][256], qhist1, qhist2
     let mut qhistb = vec![[0u32; 256]; NP as usize];
@@ -1068,16 +1070,15 @@ pub fn fqz_pick_parameters(
     // Validity check input lengths and buffer size.
     {
         let num_records = s.num_records;
-        let s_len = unsafe { std::slice::from_raw_parts_mut(s.len, num_records as usize) };
         let mut tlen: usize = 0;
         for i in 0..num_records as usize {
-            if tlen + s_len[i] as usize > in_size {
-                s_len[i] = (in_size - tlen) as u32;
+            if tlen + s.len[i] as usize > in_size {
+                s.len[i] = (in_size - tlen) as u32;
             }
-            tlen += s_len[i] as usize;
+            tlen += s.len[i] as usize;
         }
         if num_records > 0 && tlen < in_size {
-            s_len[(num_records - 1) as usize] += (in_size - tlen) as u32;
+            s.len[(num_records - 1) as usize] += (in_size - tlen) as u32;
         }
     }
 
@@ -1088,7 +1089,7 @@ pub fn fqz_pick_parameters(
 
     // Check for fixed length.
     let num_records = s.num_records;
-    let s_len = unsafe { std::slice::from_raw_parts(s.len, num_records as usize) };
+    let s_len = &s.len;
     let first_len = s_len[0];
     let mut i: usize = 1;
     while i < num_records as usize {
@@ -1207,11 +1208,10 @@ pub fn fqz_pick_parameters(
     }
 
     if gp.max_sel != 0 && num_records != 0 {
-        let s_flags = unsafe { std::slice::from_raw_parts(s.flags, num_records as usize) };
         let mut max: i32 = 0;
         for i in 0..num_records as usize {
-            if max < (s_flags[i] >> 16) as i32 {
-                max = (s_flags[i] >> 16) as i32;
+            if max < (s.flags[i] >> 16) as i32 {
+                max = (s.flags[i] >> 16) as i32;
             }
         }
         gp.max_sel = max;
@@ -1243,8 +1243,8 @@ pub fn compress_new_read(
 ) -> i32 {
     let rec = state.rec;
     let mut i = *in_i;
-    let s_len = unsafe { std::slice::from_raw_parts(s.len, s.num_records as usize) };
-    let s_flags = unsafe { std::slice::from_raw_parts(s.flags, s.num_records as usize) };
+    let s_len = &s.len;
+    let s_flags = &s.flags;
 
     if _pm.do_sel != 0 || (gp.gflags & GFLAG_MULTI_PARAM as u32) != 0 {
         state.s = if rec < s.num_records as isize {
@@ -1366,7 +1366,6 @@ pub fn compress_block_fqz2f(
 
     // malloc(comp_sz) modelled with a zeroed Vec of that capacity/length.
     let mut comp: Vec<u8> = vec![0u8; comp_sz];
-    let comp_ptr = comp.as_mut_ptr();
 
     // comp_idx = var_put_u32(comp, compe, in_size)
     comp_idx = var_put_u32(&mut comp, Some(comp_sz), in_size as u32) as usize;
@@ -1390,15 +1389,17 @@ pub fn compress_block_fqz2f(
         return Vec::new();
     }
 
-    unsafe {
-        RC_SetOutput(&mut rc, comp_ptr.add(comp_idx));
-        RC_SetOutputEnd(&mut rc, comp_ptr.add(comp_sz));
-    }
+    // Hand the owned `comp` buffer (already carrying the varint+params header
+    // in its first `comp_idx` bytes) to the range coder.  The new RC takes
+    // ownership of the Vec; we then point its base/cursor past the header so
+    // the encoder writes after it, matching the C `out + comp_idx` start.
+    RC_SetOutput(&mut rc, comp);
+    RC_SetOutputEnd(&mut rc, comp_sz);
+    rc.in_pos = comp_idx; // encoder's fixed base (used by RC_OutSize)
+    rc.out_pos = comp_idx; // write cursor starts after the header
     RC_StartEncode(&mut rc);
 
     let num_records = s.num_records;
-    let s_len = unsafe { std::slice::from_raw_parts(s.len, num_records as usize) };
-    let s_flags = unsafe { std::slice::from_raw_parts(s.flags, num_records as usize) };
 
     // For CRAM3.1, reverse upfront if needed.
     if gp.gflags & GFLAG_DO_REV as u32 != 0 {
@@ -1406,11 +1407,11 @@ pub fn compress_block_fqz2f(
         let mut rec: isize = 0;
         while i < in_size {
             let len = if rec < num_records as isize - 1 {
-                s_len[rec as usize] as usize
+                s.len[rec as usize] as usize
             } else {
                 in_size - i
             };
-            if s_flags[rec as usize] & FQZ_FREVERSE as u32 != 0 {
+            if s.flags[rec as usize] & FQZ_FREVERSE as u32 != 0 {
                 let (mut bi, mut bj) = (0usize, len - 1);
                 while bi < bj {
                     r#in.swap(i + bi, i + bj);
@@ -1434,7 +1435,7 @@ pub fn compress_block_fqz2f(
     let mut errored = false;
     while i < in_size {
         if state.p == 0 {
-            if state.rec >= num_records as isize || s_len[state.rec as usize] == 0 {
+            if state.rec >= num_records as isize || s.len[state.rec as usize] == 0 {
                 errored = true;
                 break;
             }
@@ -1508,11 +1509,11 @@ pub fn compress_block_fqz2f(
         let mut rec: isize = 0;
         while i < in_size {
             let len = if rec < num_records as isize - 1 {
-                s_len[rec as usize] as usize
+                s.len[rec as usize] as usize
             } else {
                 in_size - i
             };
-            if s_flags[rec as usize] & FQZ_FREVERSE as u32 != 0 {
+            if s.flags[rec as usize] & FQZ_FREVERSE as u32 != 0 {
                 let (mut bi, mut bj) = (0usize, len - 1);
                 while bi < bj {
                     r#in.swap(i + bi, i + bj);
@@ -1526,9 +1527,8 @@ pub fn compress_block_fqz2f(
     }
 
     // Clear selector abuse of flags.
-    let s_flags_mut = unsafe { std::slice::from_raw_parts_mut(s.flags, num_records as usize) };
     for rec in 0..num_records as usize {
-        s_flags_mut[rec] &= 0xffff;
+        s.flags[rec] &= 0xffff;
     }
 
     *out_size = comp_idx + RC_OutSize(&rc);
@@ -1538,8 +1538,9 @@ pub fn compress_block_fqz2f(
         fqz_free_parameters(gp);
     }
 
-    // Hand back the full malloc-sized buffer; caller uses *out_size bytes.
-    comp
+    // The range coder owns the buffer now (header + encoded payload); take it
+    // back and hand it to the caller, who uses the first *out_size bytes.
+    std::mem::take(&mut rc.buf)
 }
 
 /// `int fqz_read_parameters1(fqz_param *pm, unsigned char *in, size_t in_size)`
@@ -1868,12 +1869,11 @@ pub fn uncompress_block_fqz2f(
     // Allocate output buffer (Rust-owned).
     let mut uncomp: Vec<u8> = vec![0u8; *out_size];
 
-    // Set up the range coder over the remaining input.  We need a stable
-    // pointer to the input bytes for the duration of decoding.
-    let in_ptr = r#in.as_ptr() as *mut u8;
-    unsafe {
-        RC_SetInput(&mut rc, in_ptr.add(in_idx), in_ptr.add(in_size));
-    }
+    // Set up the range coder over the input.  The new range coder owns its
+    // buffer, so hand it a copy of the compressed bytes; `in_idx` is the read
+    // base (past the varint+params header) and `in_size` the valid length.
+    RC_SetInput(&mut rc, r#in.to_vec(), in_size);
+    rc.in_pos = in_idx;
     RC_StartDecode(&mut rc);
 
     let mut nrec: usize = 1000;

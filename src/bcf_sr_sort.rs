@@ -281,9 +281,12 @@ unsafe fn bcf_sr_sort_set_active_ref(srt: &mut BcfSrSort, idx: c_int) -> c_int {
     }
 }
 
-pub unsafe fn bcf_sr_sort_c_324_bcf_sr_sort_set_active(srt: *mut BcfSrSort, idx: c_int) -> c_int {
+pub unsafe fn bcf_sr_sort_c_324_bcf_sr_sort_set_active(
+    srt: Option<&mut BcfSrSort>,
+    idx: c_int,
+) -> c_int {
     unsafe {
-        let Some(srt) = srt.as_mut() else { return -1 };
+        let Some(srt) = srt else { return -1 };
         bcf_sr_sort_set_active_ref(srt, idx)
     }
 }
@@ -315,9 +318,12 @@ unsafe fn bcf_sr_sort_add_active_ref(srt: &mut BcfSrSort, idx: c_int) -> c_int {
     }
 }
 
-pub unsafe fn bcf_sr_sort_c_331_bcf_sr_sort_add_active(srt: *mut BcfSrSort, idx: c_int) -> c_int {
+pub unsafe fn bcf_sr_sort_c_331_bcf_sr_sort_add_active(
+    srt: Option<&mut BcfSrSort>,
+    idx: c_int,
+) -> c_int {
     unsafe {
-        let Some(srt) = srt.as_mut() else { return -1 };
+        let Some(srt) = srt else { return -1 };
         bcf_sr_sort_add_active_ref(srt, idx)
     }
 }
@@ -332,6 +338,9 @@ unsafe fn bcf_sr_sort_set_ref(
         if bcf_sr_sort_reserve_vcf_buf(readers, srt) < 0 {
             return -1;
         }
+        // srt.chr is a shared (repr(C)) *const c_char field that the still-C-mirror
+        // grouping code dereferences as a NUL-terminated string, so it must alias the
+        // caller-owned NUL-terminated buffer that `chr` borrows; keep it as a CStr.
         let chr_ptr = chr.as_ptr();
 
         let nsr = srt.nsr;
@@ -584,12 +593,12 @@ pub unsafe fn bcf_sr_sort_c_593_bcf_sr_sort_next(
 }
 
 pub unsafe fn bcf_sr_sort_c_662_bcf_sr_sort_remove_reader(
-    _readers: *mut bcf_srs_t,
-    srt: *mut BcfSrSort,
+    _readers: Option<&mut bcf_srs_t>,
+    srt: Option<&mut BcfSrSort>,
     i: c_int,
 ) {
     unsafe {
-        let Some(srt) = srt.as_mut() else { return };
+        let Some(srt) = srt else { return };
         bcf_sr_sort_remove_reader_ref(srt, i);
     }
 }
@@ -615,13 +624,11 @@ unsafe fn bcf_sr_sort_remove_reader_ref(srt: &mut BcfSrSort, i: c_int) {
 }
 
 fn bcf_sr_sort_new_box() -> Box<BcfSrSort> {
-    Box::new(unsafe { zeroed() })
+    Box::new(BcfSrSort::default())
 }
 
 fn bcf_sr_sort_init_ref(srt: &mut BcfSrSort) {
-    unsafe {
-        *srt = zeroed();
-    }
+    *srt = BcfSrSort::default();
 }
 
 pub unsafe fn bcf_sr_sort_c_675_bcf_sr_sort_init(srt: *mut BcfSrSort) -> *mut BcfSrSort {
@@ -634,11 +641,9 @@ pub unsafe fn bcf_sr_sort_c_675_bcf_sr_sort_init(srt: *mut BcfSrSort) -> *mut Bc
     }
 }
 
-pub unsafe fn bcf_sr_sort_c_681_bcf_sr_sort_reset(srt: *mut BcfSrSort) {
-    unsafe {
-        if let Some(srt) = srt.as_mut() {
-            bcf_sr_sort_reset_ref(srt);
-        }
+pub unsafe fn bcf_sr_sort_c_681_bcf_sr_sort_reset(srt: Option<&mut BcfSrSort>) {
+    if let Some(srt) = srt {
+        bcf_sr_sort_reset_ref(srt);
     }
 }
 
@@ -646,9 +651,9 @@ fn bcf_sr_sort_reset_ref(srt: &mut BcfSrSort) {
     srt.chr = std::ptr::null();
 }
 
-pub unsafe fn bcf_sr_sort_c_685_bcf_sr_sort_destroy(srt: *mut BcfSrSort) {
+pub unsafe fn bcf_sr_sort_c_685_bcf_sr_sort_destroy(srt: Option<&mut BcfSrSort>) {
     unsafe {
-        let Some(srt) = srt.as_mut() else { return };
+        let Some(srt) = srt else { return };
         bcf_sr_sort_destroy_ref(srt);
     }
 }
@@ -696,11 +701,11 @@ unsafe fn bcf_sr_sort_destroy_ref(srt: &mut BcfSrSort) {
         }
         libc::free(srt.vset);
 
-        libc::free(srt.str_.s.cast());
+        crate::htslib_rs::hts::ks_free(&mut srt.str_);
         libc::free(srt.off.cast());
         libc::free(srt.charp.cast());
         libc::free(srt.cnt.cast());
         libc::free(srt.pmat.cast());
-        *srt = zeroed();
+        *srt = BcfSrSort::default();
     }
 }

@@ -63,9 +63,19 @@ pub unsafe fn samples_rem_header_c_49_main(argc: c_int, argv: *mut *mut c_char) 
     }
 
     let remove_ret = if !idval.is_null() {
-        sam::sam_hdr_remove_line_id(in_samhdr, header, id, idval)
+        sam::sam_hdr_remove_line_id(
+            &mut *in_samhdr,
+            std::ffi::CStr::from_ptr(header),
+            id,
+            idval,
+        )
     } else {
-        sam::sam_hdr_remove_lines(in_samhdr, header, id, std::ptr::null_mut())
+        sam::sam_hdr_remove_lines(
+            &mut *in_samhdr,
+            std::ffi::CStr::from_ptr(header),
+            id,
+            std::ptr::null_mut(),
+        )
     };
     if remove_ret != 0 {
         libc::printf(c"Failed to remove header line\n".as_ptr());

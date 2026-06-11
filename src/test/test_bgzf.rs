@@ -1816,7 +1816,7 @@ pub unsafe fn test_test_bgzf_c_924_test_bgzf_getline(
     mode: *const c_char,
     nthreads: c_int,
 ) -> c_int {
-    let mut str_: kstring_t = std::mem::zeroed();
+    let mut str_: kstring_t = kstring_t::default();
     let text = (*f).text.cast::<c_char>();
     let mut bgz =
         test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf, mode, c"test_bgzf_getline".as_ptr());
@@ -1891,10 +1891,12 @@ pub unsafe fn test_test_bgzf_c_924_test_bgzf_getline(
                 },
             );
             bgzf_close(bgz);
-            libc::free(ks_release(&mut str_).cast());
+            ks_release(&mut str_);
             return -1;
         }
-        if str_.l != l || libc::memcmp(text.add(pos).cast(), str_.s.cast(), l) != 0 {
+        if str_.data.len() != l
+            || libc::memcmp(text.add(pos).cast(), str_.data.as_ptr().cast(), l) != 0
+        {
             libc::fprintf(
                 crate::htslib_rs::c_compat::stderr.cast(),
                 c"%s : Unexpected data from bgzf_getline on %s\nExpected : %.*s\nGot      : %.*s\n"
@@ -1903,11 +1905,11 @@ pub unsafe fn test_test_bgzf_c_924_test_bgzf_getline(
                 (*f).tmp_bgzf,
                 l as c_int,
                 (*f).text.add(pos).cast::<c_char>(),
-                str_.l as c_int,
-                str_.s,
+                str_.data.len() as c_int,
+                str_.data.as_ptr(),
             );
             bgzf_close(bgz);
-            libc::free(ks_release(&mut str_).cast());
+            ks_release(&mut str_);
             return -1;
         }
         pos += l + 1;
@@ -1919,10 +1921,10 @@ pub unsafe fn test_test_bgzf_c_924_test_bgzf_getline(
         0,
     ) != 0
     {
-        libc::free(ks_release(&mut str_).cast());
+        ks_release(&mut str_);
         return -1;
     }
-    libc::free(ks_release(&mut str_).cast());
+    ks_release(&mut str_);
     0
 }
 
@@ -1932,7 +1934,7 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
     mode: *const c_char,
     nthreads: c_int,
 ) -> c_int {
-    let mut str_: kstring_t = std::mem::zeroed();
+    let mut str_: kstring_t = kstring_t::default();
     let text = (*f).text.cast::<c_char>();
     let lvl = hts_get_log_level();
     hts_set_log_level(HTS_LOG_OFF);
@@ -2002,7 +2004,7 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
     while newsize > block2_start {
         if libc::truncate((*f).tmp_bgzf, newsize) != 0 {
             hts_set_log_level(lvl);
-            libc::free(ks_release(&mut str_).cast());
+            ks_release(&mut str_);
             return -1;
         }
         bgz = test_test_bgzf_c_109_try_bgzf_open(
@@ -2012,7 +2014,7 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
         );
         if bgz.is_null() {
             hts_set_log_level(lvl);
-            libc::free(ks_release(&mut str_).cast());
+            ks_release(&mut str_);
             return -1;
         }
         if nthreads > 0
@@ -2024,7 +2026,7 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
         {
             hts_set_log_level(lvl);
             bgzf_close(bgz);
-            libc::free(ks_release(&mut str_).cast());
+            ks_release(&mut str_);
             return -1;
         }
 
@@ -2049,10 +2051,12 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
                 );
                 hts_set_log_level(lvl);
                 bgzf_close(bgz);
-                libc::free(ks_release(&mut str_).cast());
+                ks_release(&mut str_);
                 return -1;
             }
-            if str_.l != l || libc::memcmp(text.add(pos).cast(), str_.s.cast(), l) != 0 {
+            if str_.data.len() != l
+                || libc::memcmp(text.add(pos).cast(), str_.data.as_ptr().cast(), l) != 0
+            {
                 libc::fprintf(
                     crate::htslib_rs::c_compat::stderr.cast(),
                     c"%s : Unexpected data from bgzf_getline on %s\nExpected : %.*s\nGot      : %.*s\n".as_ptr(),
@@ -2060,12 +2064,12 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
                     (*f).tmp_bgzf,
                     l as c_int,
                     (*f).text.add(pos).cast::<c_char>(),
-                    str_.l as c_int,
-                    str_.s,
+                    str_.data.len() as c_int,
+                    str_.data.as_ptr(),
                 );
                 hts_set_log_level(lvl);
                 bgzf_close(bgz);
-                libc::free(ks_release(&mut str_).cast());
+                ks_release(&mut str_);
                 return -1;
             }
             pos += l + 1;
@@ -2082,7 +2086,7 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
                 );
                 hts_set_log_level(lvl);
                 bgzf_close(bgz);
-                libc::free(ks_release(&mut str_).cast());
+                ks_release(&mut str_);
                 return -1;
             }
         }
@@ -2094,12 +2098,12 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
         ) == 0
         {
             hts_set_log_level(lvl);
-            libc::free(ks_release(&mut str_).cast());
+            ks_release(&mut str_);
             return -1;
         }
         newsize -= 1;
     }
-    libc::free(ks_release(&mut str_).cast());
+    ks_release(&mut str_);
     hts_set_log_level(lvl);
     0
 }

@@ -26,8 +26,9 @@ fn tmp_vcf_path(label: &str) -> std::path::PathBuf {
 unsafe fn assert_alleles(rec: *mut htslib_rs::bcf1_t, expected: &[&CStr]) {
     assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
     assert_eq!((*rec).n_allele() as usize, expected.len());
+    let d = &(*rec).d;
     for (i, allele) in expected.iter().enumerate() {
-        assert_eq!(CStr::from_ptr(*(*rec).d.allele.add(i)), *allele);
+        assert_eq!(d.allele[i].as_slice(), allele.to_bytes());
     }
 }
 

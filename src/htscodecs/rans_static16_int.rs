@@ -15,7 +15,7 @@
 
 use crate::htscodecs::rans_static4x16pr::{rans_compress_O0_4x16, rans_compute_shift};
 use crate::htscodecs::rans_word::{RansEncSymbol, RansEncSymbolInit};
-use crate::htscodecs::utils::{hist1_4, htscodecs_tls_calloc, htscodecs_tls_free, MAGIC};
+use crate::htscodecs::utils::{hist1_4, MAGIC};
 use crate::htscodecs::varint::{var_get_u32, var_put_u32};
 
 // rANS_static16_int.h:48 — top bits in order byte
@@ -344,23 +344,17 @@ pub fn encode_freq1(
     let mut cp = out_base; // C: cp = out (offset)
 
     // uint32_t (*F)[256] = calloc(256, sizeof(*F));
-    let fptr = htscodecs_tls_calloc(256, 256 * core::mem::size_of::<u32>());
-    if fptr.is_null() {
-        return -1;
-    }
-    let F: &mut [[u32; 256]] =
-        unsafe { core::slice::from_raw_parts_mut(fptr as *mut [u32; 256], 256) };
+    let mut F: Vec<[u32; 256]> = vec![[0u32; 256]; 256];
 
     let mut T = [0u32; 256 + MAGIC];
     let isz4 = (in_size / Nway as u32) as usize;
     if hist1_4(
         input,
         in_size,
-        unsafe { &mut *(F.as_mut_ptr() as *mut [[u32; 256]; 256]) },
+        (&mut F[..]).try_into().unwrap(),
         &mut T,
     ) < 0
     {
-        htscodecs_tls_free(fptr);
         return -1;
     }
     for z in 1..Nway as usize {
@@ -379,7 +373,7 @@ pub fn encode_freq1(
     // Decide between 10-bit and 12-bit freqs.
     let mut S = [0u32; 256];
     // rans_compute_shift(T, F, T, S): F0 and T are the same array (read-only).
-    let shift = rans_compute_shift(&T[..256], F, &T[..256], &mut S);
+    let shift = rans_compute_shift(&T[..256], &F, &T[..256], &mut S);
 
     for (i, &s) in S.iter().enumerate().take(256) {
         if T[i] == 0 {
@@ -390,7 +384,6 @@ pub fn encode_freq1(
             max_val = TOTFREQ_O1_FAST;
         }
         if normalise_freq(&mut F[i], T[i] as i32, max_val) < 0 {
-            htscodecs_tls_free(fptr);
             return -1;
         }
         T[i] = max_val;
@@ -428,7 +421,6 @@ pub fn encode_freq1(
     }
 
     *cp_p = cp;
-    htscodecs_tls_free(fptr);
     shift
 }
 

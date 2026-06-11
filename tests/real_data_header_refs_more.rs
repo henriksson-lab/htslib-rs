@@ -25,16 +25,16 @@ unsafe fn assert_alignment_header_targets(
 
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null(), "failed to read header from {path}");
-    assert_eq!(sam_hdr_nref(hdr), expected.len() as i32);
+    assert_eq!(sam_hdr_nref(&*hdr), expected.len() as i32);
     assert_eq!((*hdr).n_targets, expected.len() as i32);
     assert!(!(*hdr).target_name.is_null());
     assert!(!(*hdr).target_len.is_null());
 
     for (tid, (name, len)) in expected.iter().enumerate() {
         let tid = tid as i32;
-        assert_eq!(sam_hdr_name2tid(hdr, name.as_ptr()), tid);
-        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, tid)), *name);
-        assert_eq!(sam_hdr_tid2len(hdr, tid), *len);
+        assert_eq!(sam_hdr_name2tid(&mut *hdr, name), tid);
+        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(&*hdr, tid)), *name);
+        assert_eq!(sam_hdr_tid2len(&*hdr, tid), *len);
         assert_eq!(CStr::from_ptr(*(*hdr).target_name.add(tid as usize)), *name);
         if *len <= u32::MAX as hts_pos_t {
             assert_eq!(*(*hdr).target_len.add(tid as usize), *len as u32);

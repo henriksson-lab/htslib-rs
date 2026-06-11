@@ -1,6 +1,8 @@
 use crate::htslib_rs::hts::{hFILE, hts_json_token, isprint_c, kstring_t, size_t};
-use std::ffi::{c_void, CString};
+use std::ffi::c_void;
 use std::ptr::NonNull;
+
+const EOF: i32 = -1;
 
 // original: dehex (htslib/textutils.c:37)
 fn dehex(c: i8) -> i32 {
@@ -51,14 +53,14 @@ pub unsafe fn textutils_fscan_string_ref(fp: &mut hFILE, d: &mut kstring_t) -> i
 
     loop {
         let mut c = crate::htslib_rs::hfile::htslib_hfile_h_163_hgetc(fp);
-        if c == libc::EOF {
+        if c == EOF {
             break;
         }
 
         match c as u8 {
             b'\\' => {
                 c = crate::htslib_rs::hfile::htslib_hfile_h_163_hgetc(fp);
-                if c == libc::EOF {
+                if c == EOF {
                     return if e == 0 { 0 } else { -1 };
                 }
 
@@ -70,19 +72,19 @@ pub unsafe fn textutils_fscan_string_ref(fp: &mut hFILE, d: &mut kstring_t) -> i
                     b't' => e |= (crate::htslib_rs::hts::kputc(b'\t' as i32, d) < 0) as u32,
                     b'u' => {
                         c = crate::htslib_rs::hfile::htslib_hfile_h_163_hgetc(fp);
-                        if c != libc::EOF {
+                        if c != EOF {
                             let d1 = dehex(c as i8);
                             if d1 >= 0 {
                                 c = crate::htslib_rs::hfile::htslib_hfile_h_163_hgetc(fp);
-                                if c != libc::EOF {
+                                if c != EOF {
                                     let d2 = dehex(c as i8);
                                     if d2 >= 0 {
                                         c = crate::htslib_rs::hfile::htslib_hfile_h_163_hgetc(fp);
-                                        if c != libc::EOF {
+                                        if c != EOF {
                                             let d3 = dehex(c as i8);
                                             if d3 >= 0 {
                                                 c = crate::htslib_rs::hfile::htslib_hfile_h_163_hgetc(fp);
-                                                if c != libc::EOF {
+                                                if c != EOF {
                                                     let d4 = dehex(c as i8);
                                                     if d4 >= 0 {
                                                         let mut buf = [0 as i8; 8];
@@ -94,8 +96,12 @@ pub unsafe fn textutils_fscan_string_ref(fp: &mut hFILE, d: &mut kstring_t) -> i
                                                                 | d4)
                                                                 as u32,
                                                         );
+                                                        let buf_u8: &[u8] = std::slice::from_raw_parts(
+                                                            buf.as_ptr().cast::<u8>(),
+                                                            buf.len(),
+                                                        );
                                                         e |= (crate::htslib_rs::hts::kputsn(
-                                                            buf.as_ptr(),
+                                                            buf_u8,
                                                             len,
                                                             d,
                                                         ) < 0)
@@ -179,7 +185,7 @@ pub unsafe fn textutils_hts_json_fnext_ref(
 
         match c {
             x if matches!(x as u8, b' ' | b'\t' | b'\r' | b'\n' | b',' | b':') => continue,
-            x if x == libc::EOF => {
+            x if x == EOF => {
                 token.type_ = 0;
                 return token.type_;
             }
@@ -188,19 +194,19 @@ pub unsafe fn textutils_hts_json_fnext_ref(
                 return token.type_;
             }
             x if x == b'"' as i32 => {
-                kstr.l = 0;
+                kstr.data.clear();
                 textutils_fscan_string_ref(fp, kstr);
-                if kstr.l == 0 {
-                    crate::htslib_rs::hts::kputsn(c"".as_ptr(), 0, kstr);
-                }
-                token.str_ = kstr.s;
+                // NUL-terminate the owned buffer so the raw token.str_ pointer
+                // exposes a valid C string at this FFI-style boundary.
+                kstr.data.push(0);
+                token.str_ = kstr.data.as_mut_ptr().cast();
                 token.type_ = b's' as i8;
                 return token.type_;
             }
             _ => {
                 let mut peek = 0 as i8;
 
-                kstr.l = 0;
+                kstr.data.clear();
                 crate::htslib_rs::hts::kputc(c, kstr);
                 while crate::htslib_rs::hfile::hpeek(fp, (&mut peek as *mut i8).cast(), 1) == 1
                     && !matches!(
@@ -209,12 +215,15 @@ pub unsafe fn textutils_hts_json_fnext_ref(
                     )
                 {
                     c = crate::htslib_rs::hfile::htslib_hfile_h_163_hgetc(fp);
-                    if c == libc::EOF {
+                    if c == EOF {
                         break;
                     }
                     crate::htslib_rs::hts::kputc(c, kstr);
                 }
-                token.str_ = kstr.s;
+                // NUL-terminate the owned buffer so the raw token.str_ pointer
+                // exposes a valid C string at this FFI-style boundary.
+                kstr.data.push(0);
+                token.str_ = kstr.data.as_mut_ptr().cast();
                 token.type_ = token_type_ref(token);
                 return token.type_;
             }
@@ -287,13 +296,10 @@ pub unsafe fn textutils_c_402_hts_json_fskip_value(fp: *mut hFILE, type_: i8) ->
 }
 
 pub unsafe fn textutils_hts_json_fskip_value_ref(fp: &mut hFILE, type_: i8) -> i8 {
-    let mut str_: kstring_t = std::mem::zeroed();
-    let ret = skip_value(type_, &mut |token| {
+    let mut str_: kstring_t = kstring_t::default();
+    skip_value(type_, &mut |token| {
         textutils_fnext_ref(fp, &mut str_, token)
-    });
-    let str_owner = unsafe { crate::htslib_rs::c_compat::FreeOnDrop::from_raw(str_.s) };
-    drop(str_owner);
-    ret
+    })
 }
 
 // ----------------------------------------------------------------------
@@ -607,7 +613,7 @@ unsafe fn hts_json_snext_nonnull(
 
     if hidden != 0 {
         *state &= !3;
-        token.type_ = *c"?}]?".as_ptr().add(hidden) as i8;
+        token.type_ = b"?}]?"[hidden] as i8;
         return token.type_;
     }
 
@@ -690,28 +696,13 @@ pub unsafe fn hts_json_sskip_value_ref(str_: *mut i8, state: &mut size_t, type_:
     })
 }
 
-pub unsafe fn stringify_argv(argc: i32, argv: *mut *mut i8) -> *mut i8 {
-    let argc = argc.max(0) as usize;
-    if argc != 0 && argv.is_null() {
-        return std::ptr::null_mut();
-    }
-    let args_raw = std::slice::from_raw_parts(argv, argc);
-    if args_raw.iter().any(|arg| arg.is_null()) {
-        return std::ptr::null_mut();
-    }
-    let args = args_raw
-        .iter()
-        .map(|&arg| {
-            let len = c_strlen(arg);
-            std::slice::from_raw_parts(arg.cast::<u8>(), len)
-        })
-        .collect::<Vec<_>>();
-    stringify_argv_ref(&args).map_or(std::ptr::null_mut(), CString::into_raw)
+pub fn stringify_argv(args: &[&[u8]]) -> Option<Vec<u8>> {
+    stringify_argv_ref(args)
 }
 
-pub fn stringify_argv_ref(args: &[&[u8]]) -> Option<CString> {
+pub fn stringify_argv_ref(args: &[&[u8]]) -> Option<Vec<u8>> {
     let mut bytes = Vec::<u8>::with_capacity(
-        args.iter().map(|arg| arg.len()).sum::<usize>() + args.len().saturating_sub(1) + 1,
+        args.iter().map(|arg| arg.len()).sum::<usize>() + args.len().saturating_sub(1),
     );
 
     for (i, arg) in args.iter().enumerate() {
@@ -723,13 +714,7 @@ pub fn stringify_argv_ref(args: &[&[u8]]) -> Option<CString> {
                 .map(|&byte| if byte == b'\t' { b' ' } else { byte }),
         );
     }
-    CString::new(bytes).ok()
-}
-
-pub unsafe fn stringify_argv_free(s: *mut i8) {
-    if !s.is_null() {
-        drop(CString::from_raw(s));
-    }
+    Some(bytes)
 }
 
 pub unsafe fn hts_strprint(

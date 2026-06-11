@@ -409,6 +409,11 @@ fn capture_main_stdout() -> (i32, Vec<u8>) {
         libc::dup2(out_fd, libc::STDOUT_FILENO);
         libc::close(out_fd);
 
+        // `super::main` emits through the libc `stdout` stream (mirroring the C
+        // tool's `printf`), so its bytes land on fd 1 — which we have redirected
+        // to the temp file above. Flush that stream before measuring the file so
+        // `lseek` sees the complete output. FD1_LOCK (held across this whole
+        // block) keeps the fd-1 swap serialized between concurrent test threads.
         rc = super::main();
         libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
 

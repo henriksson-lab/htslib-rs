@@ -1,11 +1,11 @@
 use super::http_parser::{
     ref_cache_http_parser_c_111_init_http_parser, ref_cache_http_parser_c_131_cleanup_http_parser,
-    ref_cache_http_parser_c_601_parser_read_data,
+    ref_cache_http_parser_c_601_parser_read_data, HttpParser,
 };
 use super::listener::Listeners;
 use super::misc::ref_cache_misc_h_40_setnonblock;
 use super::options::Options;
-use super::poll_wrap::{Pw_fd_type, Pw_item};
+use super::poll_wrap::Pw_fd_type;
 use super::poll_wrap_epoll::{
     ref_cache_poll_wrap_epoll_c_106_pw_mod, ref_cache_poll_wrap_epoll_c_120_pw_wait,
     ref_cache_poll_wrap_epoll_c_126_pw_remove, ref_cache_poll_wrap_epoll_c_49_pw_init,
@@ -23,11 +23,12 @@ use super::transaction::{
     ref_cache_transaction_c_680_got_download_started,
     ref_cache_transaction_c_698_got_download_part, ref_cache_transaction_c_715_got_download_clen,
     ref_cache_transaction_c_730_got_download_result, ref_cache_transaction_c_769_make_log_message,
-    Transaction,
+    TransactionId,
 };
-use super::upstream::ref_cache_upstream_c_215_upstream_recv_msg;
-use crate::htslib_rs::cram;
-use std::ffi::{c_char, c_int, c_uchar, c_uint, c_void};
+use super::upstream::{
+    ref_cache_upstream_c_215_upstream_recv_msg, Upstream_msg, Upstream_msg_code,
+};
+use std::ffi::{c_int, c_uchar, c_uint};
 
 const REF_CACHE_ON_READ_LIST: c_uint = 0x01;
 const REF_CACHE_ON_WRITE_LIST: c_uint = 0x02;
@@ -66,131 +67,99 @@ const REF_CACHE_WRITE_ERROR: c_int = 5;
 const REF_CACHE_LOG_BUF_SZ: usize = 0x10000;
 const REF_CACHE_LOG_BUF_MASK: usize = REF_CACHE_LOG_BUF_SZ - 1;
 
-#[repr(C)]
-struct HttpParserLayout {
-    state: c_int,
-    req_type: c_int,
-    http_vers: c_int,
-    trans_enc: c_int,
-    content_length: libc::c_ulong,
-    bytes: libc::c_ulong,
-    uri: *mut c_char,
-    key: *mut c_char,
-    val: *mut c_char,
-    buffer: *mut c_char,
-    user_agent: *mut c_char,
-    referrer: *mut c_char,
-    range_from: libc::off_t,
-    range_to: libc::off_t,
-    key_sz: usize,
-    key_used: usize,
-    val_sz: usize,
-    val_used: usize,
-    upstream: c_int,
+// A sentinel meaning "no client" for the index-based intrusive lists that
+// replace the original C raw-pointer doubly-linked lists.
+const NO_CLIENT: usize = usize::MAX;
+
+// original: Client (htslib/ref_cache/server.c:71)
+//
+// The original C `Client` was an intrusive node in two doubly-linked lists
+// (read + write) using raw `prev`/`next` pointers, allocated from an arena
+// pool. We restructure it into an owned arena entry held in a `Vec`, where the
+// links are `usize` indices into that arena (NO_CLIENT == null). `host` and the
+// HTTP parser are now owned by value, and the request pipeline (`transact` /
+// `last_transact`) is referenced by `TransactionId` (an index into the
+// transaction arena) rather than by `*mut Transaction`.
+pub struct Client {
+    // None until the client is registered with the poller; the index is into
+    // the poller's own arena.
+    polled: Option<usize>,
+    // The client's socket fd, cached here so do_reads/do_writes don't have to
+    // round-trip through the poller arena to recover it.
+    fd: c_int,
+    prev: usize,
+    next: usize,
+    prev_write: usize,
+    next_write: usize,
+    host: Vec<u8>,
+    transact: Option<TransactionId>,
+    last_transact: Option<TransactionId>,
+    parser: HttpParser,
     flags: c_uint,
-    in_: c_uint,
-    out: c_uint,
-    pos: c_uint,
-    used: c_uint,
-    uri_buf: Vec<u8>,
-    key_buf: Vec<u8>,
-    val_buf: Vec<u8>,
-    buffer_buf: Vec<u8>,
-    user_agent_buf: Vec<u8>,
-    referrer_buf: Vec<u8>,
+    // True when this arena slot is occupied by a live client.
+    in_use: bool,
 }
 
-#[repr(C)]
-struct ClientLayout {
-    polled: *mut Pw_item,
-    prev: *mut Client,
-    next: *mut Client,
-    prev_write: *mut Client,
-    next_write: *mut Client,
-    host: *mut c_char,
-    transact: *mut Transaction,
-    last_transact: *mut Transaction,
-    parser: HttpParserLayout,
-    flags: c_uint,
+impl Client {
+    fn empty() -> Self {
+        Self {
+            polled: None,
+            fd: -1,
+            prev: NO_CLIENT,
+            next: NO_CLIENT,
+            prev_write: NO_CLIENT,
+            next_write: NO_CLIENT,
+            host: Vec::new(),
+            transact: None,
+            last_transact: None,
+            parser: ref_cache_http_parser_c_111_init_http_parser(-1),
+            flags: 0,
+            in_use: false,
+        }
+    }
 }
 
-#[repr(C)]
+// original: clients container (the C arena pool plus the read/write list heads)
 pub struct RefCacheClientsLayout {
-    client_pool: *mut cram::pool_alloc_t,
-    can_read: *mut Client,
-    can_write: *mut Client,
+    // Owned arena of clients; indices into this Vec replace raw pointers.
+    arena: Vec<Client>,
+    // Free arena slots available for reuse.
+    free_slots: Vec<usize>,
+    can_read: usize,
+    can_write: usize,
     count: usize,
 }
 
-#[repr(C)]
-struct RefCacheLogBufferLayout {
-    buffer: [c_char; REF_CACHE_LOG_BUF_SZ],
+impl Default for RefCacheClientsLayout {
+    fn default() -> Self {
+        Self {
+            arena: Vec::new(),
+            free_slots: Vec::new(),
+            can_read: NO_CLIENT,
+            can_write: NO_CLIENT,
+            count: 0,
+        }
+    }
+}
+
+pub struct RefCacheLogBufferLayout {
+    buffer: Vec<u8>,
     in_: usize,
     out: usize,
 }
 
-#[repr(C)]
-struct RefCacheMatchAddrLayout {
-    family: libc::sa_family_t,
-    mask_bytes: u8,
-    mask: u8,
-    addr: [c_uchar; 16],
-}
-
-#[repr(C)]
-struct RefCacheOptionsLayout {
-    cache_dir: *const c_char,
-    log_dir: *const c_char,
-    error_log_file: *const c_char,
-    log: *mut libc::FILE,
-    upstream_url: *const c_char,
-    upstream_url_len: usize,
-    match_addrs: *mut RefCacheMatchAddrLayout,
-    num_match_addrs: usize,
-    match_addrs_size: usize,
-    first_ip6: usize,
-    max_log_sz: libc::off_t,
-    cache_fd: c_int,
-    listen_fds: c_int,
-    daemon: c_int,
-    port: u16,
-    nlogs: u16,
-    max_kids: u16,
-    verbosity: u8,
-    no_log: u8,
-}
-
-#[repr(C)]
-struct RefCacheListenersLayout {
-    nsocks: usize,
-    sockets: *mut c_int,
-}
-
-#[repr(C)]
-struct RefCacheUpstreamMsgLayout {
-    id: c_uint,
-    code: c_int,
-    val: i64,
-}
-
-#[repr(C)]
-struct RefCachePwItemLayout {
-    fd: c_int,
-    fd_type: Pw_fd_type,
-    userp: *mut c_void,
-}
-
-// original: Client (htslib/ref_cache/server.c:71)
-#[repr(C)]
-pub struct Client {
-    _private: [u8; 0],
+impl Default for RefCacheLogBufferLayout {
+    fn default() -> Self {
+        Self {
+            buffer: vec![0u8; REF_CACHE_LOG_BUF_SZ],
+            in_: 0,
+            out: 0,
+        }
+    }
 }
 
 // original: Log_buffer (htslib/ref_cache/server.c:99)
-#[repr(C)]
-pub struct Log_buffer {
-    _private: [u8; 0],
-}
+pub type Log_buffer = RefCacheLogBufferLayout;
 
 // original: SocketAddress (htslib/ref_cache/server.c:100)
 #[repr(C)]
@@ -199,245 +168,230 @@ pub struct SocketAddress {
 }
 
 // original: init_clients (htslib/ref_cache/server.c:107)
-pub unsafe fn ref_cache_server_c_107_init_clients(clients: *mut RefCacheClientsLayout) -> c_int {
-    (*clients).client_pool =
-        cram::cram_pooled_alloc_c_64_pool_create(std::mem::size_of::<ClientLayout>());
-    if (*clients).client_pool.is_null() {
-        return -1;
-    }
-    (*clients).can_read = std::ptr::null_mut();
-    (*clients).can_write = std::ptr::null_mut();
-    (*clients).count = 0;
+pub fn ref_cache_server_c_107_init_clients(clients: &mut RefCacheClientsLayout) -> c_int {
+    clients.arena = Vec::new();
+    clients.free_slots = Vec::new();
+    clients.can_read = NO_CLIENT;
+    clients.can_write = NO_CLIENT;
+    clients.count = 0;
     0
 }
 
 // original: read_stack_push (htslib/ref_cache/server.c:115)
-pub unsafe fn ref_cache_server_c_115_read_stack_push(client: *mut Client, stack: *mut *mut Client) {
-    let client_l = client.cast::<ClientLayout>();
-    if ((*client_l).flags & REF_CACHE_ON_READ_LIST) != 0 {
+pub fn ref_cache_server_c_115_read_stack_push(
+    clients: &mut RefCacheClientsLayout,
+    client: usize,
+    stack: &mut usize,
+) {
+    if (clients.arena[client].flags & REF_CACHE_ON_READ_LIST) != 0 {
         return;
     }
-    (*client_l).flags |= REF_CACHE_ON_READ_LIST;
-    if !(*stack).is_null() {
-        (*(*stack).cast::<ClientLayout>()).prev = client;
+    clients.arena[client].flags |= REF_CACHE_ON_READ_LIST;
+    if *stack != NO_CLIENT {
+        clients.arena[*stack].prev = client;
     }
-    (*client_l).next = *stack;
-    (*client_l).prev = std::ptr::null_mut();
+    clients.arena[client].next = *stack;
+    clients.arena[client].prev = NO_CLIENT;
     *stack = client;
 }
 
 // original: read_stack_pop (htslib/ref_cache/server.c:125)
-pub unsafe fn ref_cache_server_c_125_read_stack_pop(
-    clients: *mut RefCacheClientsLayout,
-) -> *mut Client {
-    let can_read = (*clients).can_read;
-    if can_read.is_null() {
-        return std::ptr::null_mut();
+pub fn ref_cache_server_c_125_read_stack_pop(clients: &mut RefCacheClientsLayout) -> usize {
+    let can_read = clients.can_read;
+    if can_read == NO_CLIENT {
+        return NO_CLIENT;
     }
-    let can_read_l = can_read.cast::<ClientLayout>();
-    (*clients).can_read = (*can_read_l).next;
-    if !(*clients).can_read.is_null() {
-        (*(*clients).can_read.cast::<ClientLayout>()).prev = std::ptr::null_mut();
+    clients.can_read = clients.arena[can_read].next;
+    if clients.can_read != NO_CLIENT {
+        let next = clients.can_read;
+        clients.arena[next].prev = NO_CLIENT;
     }
-    (*can_read_l).prev = std::ptr::null_mut();
-    (*can_read_l).next = std::ptr::null_mut();
-    assert!(((*can_read_l).flags & REF_CACHE_ON_READ_LIST) != 0);
-    (*can_read_l).flags &= !REF_CACHE_ON_READ_LIST;
+    clients.arena[can_read].prev = NO_CLIENT;
+    clients.arena[can_read].next = NO_CLIENT;
+    assert!((clients.arena[can_read].flags & REF_CACHE_ON_READ_LIST) != 0);
+    clients.arena[can_read].flags &= !REF_CACHE_ON_READ_LIST;
     can_read
 }
 
 // original: read_stack_remove (htslib/ref_cache/server.c:137)
-pub unsafe fn ref_cache_server_c_137_read_stack_remove(
-    clients: *mut RefCacheClientsLayout,
-    client: *mut Client,
+pub fn ref_cache_server_c_137_read_stack_remove(
+    clients: &mut RefCacheClientsLayout,
+    client: usize,
 ) {
-    let client_l = client.cast::<ClientLayout>();
-    (*client_l).flags &= !REF_CACHE_ON_READ_LIST;
-    if (*clients).can_read == client {
-        (*clients).can_read = (*client_l).next;
-        if !(*clients).can_read.is_null() {
-            (*(*clients).can_read.cast::<ClientLayout>()).prev = std::ptr::null_mut();
+    clients.arena[client].flags &= !REF_CACHE_ON_READ_LIST;
+    if clients.can_read == client {
+        clients.can_read = clients.arena[client].next;
+        if clients.can_read != NO_CLIENT {
+            let next = clients.can_read;
+            clients.arena[next].prev = NO_CLIENT;
         }
     } else {
-        let prev = (*client_l).prev;
-        let next = (*client_l).next;
-        (*prev.cast::<ClientLayout>()).next = next;
-        if !next.is_null() {
-            (*next.cast::<ClientLayout>()).prev = prev;
+        let prev = clients.arena[client].prev;
+        let next = clients.arena[client].next;
+        clients.arena[prev].next = next;
+        if next != NO_CLIENT {
+            clients.arena[next].prev = prev;
         }
     }
-    (*client_l).prev = std::ptr::null_mut();
-    (*client_l).next = std::ptr::null_mut();
+    clients.arena[client].prev = NO_CLIENT;
+    clients.arena[client].next = NO_CLIENT;
 }
 
 // original: write_stack_push (htslib/ref_cache/server.c:151)
-pub unsafe fn ref_cache_server_c_151_write_stack_push(
-    client: *mut Client,
-    stack: *mut *mut Client,
+pub fn ref_cache_server_c_151_write_stack_push(
+    clients: &mut RefCacheClientsLayout,
+    client: usize,
+    stack: &mut usize,
 ) {
-    let client_l = client.cast::<ClientLayout>();
-    if ((*client_l).flags & REF_CACHE_ON_WRITE_LIST) != 0 {
+    if (clients.arena[client].flags & REF_CACHE_ON_WRITE_LIST) != 0 {
         return;
     }
-    (*client_l).flags |= REF_CACHE_ON_WRITE_LIST;
-    if !(*stack).is_null() {
-        (*(*stack).cast::<ClientLayout>()).prev_write = client;
+    clients.arena[client].flags |= REF_CACHE_ON_WRITE_LIST;
+    if *stack != NO_CLIENT {
+        clients.arena[*stack].prev_write = client;
     }
-    (*client_l).next_write = *stack;
-    (*client_l).prev_write = std::ptr::null_mut();
+    clients.arena[client].next_write = *stack;
+    clients.arena[client].prev_write = NO_CLIENT;
     *stack = client;
 }
 
 // original: write_stack_pop (htslib/ref_cache/server.c:161)
-pub unsafe fn ref_cache_server_c_161_write_stack_pop(
-    clients: *mut RefCacheClientsLayout,
-) -> *mut Client {
-    let can_write = (*clients).can_write;
-    if can_write.is_null() {
-        return std::ptr::null_mut();
+pub fn ref_cache_server_c_161_write_stack_pop(clients: &mut RefCacheClientsLayout) -> usize {
+    let can_write = clients.can_write;
+    if can_write == NO_CLIENT {
+        return NO_CLIENT;
     }
-    let can_write_l = can_write.cast::<ClientLayout>();
-    (*clients).can_write = (*can_write_l).next_write;
-    if !(*clients).can_write.is_null() {
-        (*(*clients).can_write.cast::<ClientLayout>()).prev_write = std::ptr::null_mut();
+    clients.can_write = clients.arena[can_write].next_write;
+    if clients.can_write != NO_CLIENT {
+        let next = clients.can_write;
+        clients.arena[next].prev_write = NO_CLIENT;
     }
-    (*can_write_l).prev_write = std::ptr::null_mut();
-    (*can_write_l).next_write = std::ptr::null_mut();
-    assert!(((*can_write_l).flags & REF_CACHE_ON_WRITE_LIST) != 0);
-    (*can_write_l).flags &= !REF_CACHE_ON_WRITE_LIST;
+    clients.arena[can_write].prev_write = NO_CLIENT;
+    clients.arena[can_write].next_write = NO_CLIENT;
+    assert!((clients.arena[can_write].flags & REF_CACHE_ON_WRITE_LIST) != 0);
+    clients.arena[can_write].flags &= !REF_CACHE_ON_WRITE_LIST;
     can_write
 }
 
 // original: write_stack_remove (htslib/ref_cache/server.c:173)
-pub unsafe fn ref_cache_server_c_173_write_stack_remove(
-    clients: *mut RefCacheClientsLayout,
-    client: *mut Client,
+pub fn ref_cache_server_c_173_write_stack_remove(
+    clients: &mut RefCacheClientsLayout,
+    client: usize,
 ) {
-    let client_l = client.cast::<ClientLayout>();
-    (*client_l).flags &= !REF_CACHE_ON_WRITE_LIST;
-    if (*clients).can_write == client {
-        (*clients).can_write = (*client_l).next_write;
-        if !(*clients).can_write.is_null() {
-            (*(*clients).can_write.cast::<ClientLayout>()).prev_write = std::ptr::null_mut();
+    clients.arena[client].flags &= !REF_CACHE_ON_WRITE_LIST;
+    if clients.can_write == client {
+        clients.can_write = clients.arena[client].next_write;
+        if clients.can_write != NO_CLIENT {
+            let next = clients.can_write;
+            clients.arena[next].prev_write = NO_CLIENT;
         }
     } else {
-        let prev = (*client_l).prev_write;
-        let next = (*client_l).next_write;
-        (*prev.cast::<ClientLayout>()).next_write = next;
-        if !next.is_null() {
-            (*next.cast::<ClientLayout>()).prev_write = prev;
+        let prev = clients.arena[client].prev_write;
+        let next = clients.arena[client].next_write;
+        clients.arena[prev].next_write = next;
+        if next != NO_CLIENT {
+            clients.arena[next].prev_write = prev;
         }
     }
-    (*client_l).prev_write = std::ptr::null_mut();
-    (*client_l).next_write = std::ptr::null_mut();
+    clients.arena[client].prev_write = NO_CLIENT;
+    clients.arena[client].next_write = NO_CLIENT;
 }
 
 // original: get_free_client (htslib/ref_cache/server.c:187)
-pub unsafe fn ref_cache_server_c_187_get_free_client(
-    clients: *mut RefCacheClientsLayout,
-) -> *mut Client {
-    let client = cram::cram_pooled_alloc_c_115_pool_alloc((*clients).client_pool).cast::<Client>();
-    libc::memset(client.cast(), 0, std::mem::size_of::<ClientLayout>());
-    (*clients).count += 1;
-    client
+pub fn ref_cache_server_c_187_get_free_client(clients: &mut RefCacheClientsLayout) -> usize {
+    let idx = if let Some(slot) = clients.free_slots.pop() {
+        clients.arena[slot] = Client::empty();
+        slot
+    } else {
+        clients.arena.push(Client::empty());
+        clients.arena.len() - 1
+    };
+    clients.arena[idx].in_use = true;
+    clients.count += 1;
+    idx
 }
 
 // original: close_client (htslib/ref_cache/server.c:194)
 pub unsafe fn ref_cache_server_c_194_close_client(
-    clients: *mut RefCacheClientsLayout,
-    client: *mut Client,
-    pw: *mut Poll_wrap,
+    clients: &mut RefCacheClientsLayout,
+    client: usize,
+    pw: &mut Poll_wrap,
 ) {
-    let client_l = client.cast::<ClientLayout>();
-    assert!((*clients).count > 0);
-    if !(*client_l).polled.is_null() {
-        ref_cache_poll_wrap_epoll_c_126_pw_remove(pw, (*client_l).polled, 1);
-        (*client_l).polled = std::ptr::null_mut();
+    assert!(clients.count > 0);
+    if let Some(polled) = clients.arena[client].polled.take() {
+        ref_cache_poll_wrap_epoll_c_126_pw_remove(pw, polled, true);
     }
 
-    if ((*client_l).flags & REF_CACHE_ON_READ_LIST) != 0 {
+    if (clients.arena[client].flags & REF_CACHE_ON_READ_LIST) != 0 {
         ref_cache_server_c_137_read_stack_remove(clients, client);
     }
 
-    if ((*client_l).flags & REF_CACHE_ON_WRITE_LIST) != 0 {
+    if (clients.arena[client].flags & REF_CACHE_ON_WRITE_LIST) != 0 {
         ref_cache_server_c_173_write_stack_remove(clients, client);
     }
 
-    ref_cache_http_parser_c_131_cleanup_http_parser(
-        (&mut (*client_l).parser as *mut HttpParserLayout).cast(),
-    );
+    ref_cache_http_parser_c_131_cleanup_http_parser(&mut clients.arena[client].parser);
 
-    ref_cache_transaction_c_196_free_transaction_list((*client_l).transact);
-    (*client_l).transact = std::ptr::null_mut();
-    (*client_l).last_transact = std::ptr::null_mut();
-    if !(*client_l).host.is_null() {
-        libc::free((*client_l).host.cast());
-        (*client_l).host = std::ptr::null_mut();
-    }
+    ref_cache_transaction_c_196_free_transaction_list(clients.arena[client].transact);
 
-    cram::cram_pooled_alloc_c_144_pool_free((*clients).client_pool, client.cast());
-    (*clients).count -= 1;
+    // Returning the slot to the arena and dropping its owned contents replaces
+    // the C arena `pool_free`; Drop handles `host` and the parser buffers.
+    clients.arena[client] = Client::empty();
+    clients.free_slots.push(client);
+    clients.count -= 1;
 }
 
 // original: check_addr_allowed (htslib/ref_cache/server.c:222)
 pub unsafe fn ref_cache_server_c_222_check_addr_allowed(
-    opts: *const Options,
+    opts: &Options,
     mut family: libc::sa_family_t,
-    addr: *const SocketAddress,
+    addr: &SocketAddress,
     addrlen: libc::socklen_t,
 ) -> c_int {
-    let opts = opts.cast::<RefCacheOptionsLayout>();
     let start;
     let end;
     let mut addrp: *const c_uchar;
 
-    if (*opts).match_addrs.is_null() {
+    if opts.match_addrs_storage.is_empty() {
         return 0;
     }
 
+    let addr = addr as *const SocketAddress;
     if family == libc::AF_INET as libc::sa_family_t
         && addrlen as usize == std::mem::size_of::<libc::sockaddr_in>()
     {
         let in4 = addr.cast::<libc::sockaddr_in>();
         addrp = (&(*in4).sin_addr as *const libc::in_addr).cast();
         start = 0usize;
-        end = (*opts).first_ip6;
+        end = opts.first_ip6;
     } else if family == libc::AF_INET6 as libc::sa_family_t
         && addrlen as usize == std::mem::size_of::<libc::sockaddr_in6>()
     {
         let v4mapped_prefix: [c_uchar; 12] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff];
         let in6 = addr.cast::<libc::sockaddr_in6>();
         addrp = (&(*in6).sin6_addr as *const libc::in6_addr).cast();
-        if libc::memcmp(
-            addrp.cast(),
-            v4mapped_prefix.as_ptr().cast(),
-            v4mapped_prefix.len(),
-        ) == 0
-        {
+        let prefix = std::slice::from_raw_parts(addrp, v4mapped_prefix.len());
+        if prefix == v4mapped_prefix {
             family = libc::AF_INET as libc::sa_family_t;
             addrp = addrp.add(12);
             start = 0;
-            end = (*opts).first_ip6;
+            end = opts.first_ip6;
         } else {
-            start = (*opts).first_ip6;
-            end = (*opts).num_match_addrs;
+            start = opts.first_ip6;
+            end = opts.match_addrs_storage.len();
         }
     } else {
         return -1;
     }
 
-    for i in start..end {
-        let ma = (*opts).match_addrs.add(i);
-        if family != (*ma).family {
+    for ma in &opts.match_addrs_storage[start..end] {
+        if family != ma.family {
             continue;
         }
-        if libc::memcmp(
-            addrp.cast(),
-            (*ma).addr.as_ptr().cast(),
-            (*ma).mask_bytes as usize,
-        ) == 0
-            && (*addrp.add((*ma).mask_bytes as usize) & (*ma).mask)
-                == ((*ma).addr[(*ma).mask_bytes as usize] & (*ma).mask)
+        let mask_bytes = ma.mask_bytes as usize;
+        let addr_prefix = std::slice::from_raw_parts(addrp, mask_bytes);
+        if addr_prefix == &ma.addr[..mask_bytes]
+            && (*addrp.add(mask_bytes) & ma.mask) == (ma.addr[mask_bytes] & ma.mask)
         {
             return 0;
         }
@@ -447,18 +401,19 @@ pub unsafe fn ref_cache_server_c_222_check_addr_allowed(
 
 // original: handle_incoming (htslib/ref_cache/server.c:268)
 pub unsafe fn ref_cache_server_c_268_handle_incoming(
-    opts: *const Options,
+    opts: &Options,
     listener: c_int,
     upstream: c_int,
-    pw: *mut Poll_wrap,
-    clients: *mut RefCacheClientsLayout,
+    pw: &mut Poll_wrap,
+    clients: &mut RefCacheClientsLayout,
 ) {
-    let opts_l = opts.cast::<RefCacheOptionsLayout>();
     let mut addr: libc::sockaddr_storage = std::mem::zeroed();
     let mut addrlen = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-    let mut host = [0 as c_char; REF_CACHE_NI_MAXHOST];
+    // Host name buffer; resolved name lands here as raw bytes (no NUL handling).
+    let mut host_buf = [0u8; REF_CACHE_NI_MAXHOST];
 
     loop {
+        // Genuine syscall: accept(2). Buffers around it are owned/sliced.
         let incoming = libc::accept(
             listener,
             (&mut addr as *mut libc::sockaddr_storage).cast(),
@@ -468,48 +423,47 @@ pub unsafe fn ref_cache_server_c_268_handle_incoming(
             break;
         }
 
+        // Genuine syscall: getnameinfo(3). It writes into our owned buffer.
         let res = libc::getnameinfo(
             (&addr as *const libc::sockaddr_storage).cast(),
             addrlen,
-            host.as_mut_ptr(),
-            host.len() as libc::socklen_t,
+            host_buf.as_mut_ptr().cast(),
+            host_buf.len() as libc::socklen_t,
             std::ptr::null_mut(),
             0,
             libc::NI_NUMERICHOST,
         );
+        // Resolved host as a borrowed byte slice (up to first NUL).
+        let host_len = host_buf.iter().position(|&b| b == 0).unwrap_or(host_buf.len());
+        let mut host: Vec<u8> = host_buf[..host_len].to_vec();
         if res != 0 {
-            libc::fprintf(
-                crate::htslib_rs::ref_cache::compat::stderr(),
-                c"Couldn't resolve host for incoming client: %s\n".as_ptr(),
-                libc::gai_strerror(res),
-            );
-            libc::strcpy(host.as_mut_ptr(), c"<unknown>".as_ptr());
+            let msg = std::ffi::CStr::from_ptr(libc::gai_strerror(res)).to_string_lossy();
+            eprintln!("Couldn't resolve host for incoming client: {}", msg);
+            host = b"<unknown>".to_vec();
         }
 
         if ref_cache_server_c_222_check_addr_allowed(
             opts,
             addr.ss_family,
-            (&addr as *const libc::sockaddr_storage).cast(),
+            &*(&addr as *const libc::sockaddr_storage as *const SocketAddress),
             addrlen,
         ) != 0
         {
-            if (*opts_l).verbosity > 1 {
-                libc::fprintf(
-                    crate::htslib_rs::ref_cache::compat::stderr(),
-                    c"Rejected incoming client from %s\n".as_ptr(),
-                    host.as_ptr(),
+            if opts.verbosity > 1 {
+                eprintln!(
+                    "Rejected incoming client from {}",
+                    String::from_utf8_lossy(&host)
                 );
             }
             libc::close(incoming);
             continue;
         }
 
-        if (*opts_l).verbosity > 1 {
-            libc::fprintf(
-                crate::htslib_rs::ref_cache::compat::stderr(),
-                c"Accepted incoming client from %s on fd #%d\n".as_ptr(),
-                host.as_ptr(),
-                incoming,
+        if opts.verbosity > 1 {
+            eprintln!(
+                "Accepted incoming client from {} on fd #{}",
+                String::from_utf8_lossy(&host),
+                incoming
             );
         }
 
@@ -519,44 +473,35 @@ pub unsafe fn ref_cache_server_c_268_handle_incoming(
         }
 
         let client = ref_cache_server_c_187_get_free_client(clients);
-        if client.is_null() {
-            libc::perror(c"Getting free client struct".as_ptr());
-            libc::close(incoming);
-            return;
-        }
+        // get_free_client always yields a slot now; no null path.
 
         let events =
             (libc::EPOLLIN | libc::EPOLLOUT | libc::EPOLLERR | libc::EPOLLHUP | libc::EPOLLET)
                 as u32;
-        let client_l = client.cast::<ClientLayout>();
-        (*client_l).polled = ref_cache_poll_wrap_epoll_c_78_pw_register(
+        // The parser is freshly initialised when the arena slot is taken
+        // (Client::empty); re-init it here with the correct upstream fd.
+        clients.arena[client].parser = ref_cache_http_parser_c_111_init_http_parser(upstream);
+        let polled = ref_cache_poll_wrap_epoll_c_78_pw_register(
             pw,
             incoming,
             REF_CACHE_SV_CLIENT,
             events,
-            client.cast(),
+            client,
         );
-        if (*client_l).polled.is_null() {
-            libc::perror(c"Registering client with poll".as_ptr());
+        let Some(polled) = polled else {
+            eprintln!("Registering client with poll: {}", std::io::Error::last_os_error());
             ref_cache_server_c_194_close_client(clients, client, pw);
             return;
-        }
-        (*client_l).flags = 0;
-        (*client_l).host = libc::strdup(host.as_ptr());
-        (*client_l).transact = std::ptr::null_mut();
-        (*client_l).last_transact = std::ptr::null_mut();
-        if ref_cache_http_parser_c_111_init_http_parser(
-            (&mut (*client_l).parser as *mut HttpParserLayout).cast(),
-            upstream,
-        ) < 0
-        {
-            libc::perror(c"Setting up Http_Parser struct".as_ptr());
-            ref_cache_server_c_194_close_client(clients, client, pw);
-            return;
-        }
+        };
+        clients.arena[client].polled = Some(polled);
+        clients.arena[client].fd = incoming;
+        clients.arena[client].flags = 0;
+        clients.arena[client].host = host;
+        clients.arena[client].transact = None;
+        clients.arena[client].last_transact = None;
     }
 
-    match *crate::htslib_rs::c_compat::__errno_location() {
+    match std::io::Error::last_os_error().raw_os_error().unwrap_or(0) {
         libc::EAGAIN
         | libc::EINTR
         | libc::ENETDOWN
@@ -565,125 +510,122 @@ pub unsafe fn ref_cache_server_c_268_handle_incoming(
         | libc::EHOSTUNREACH
         | libc::EOPNOTSUPP
         | libc::ENETUNREACH => {}
-        _ => libc::perror(c"Error while accepting incoming client".as_ptr()),
+        _ => eprintln!(
+            "Error while accepting incoming client: {}",
+            std::io::Error::last_os_error()
+        ),
     }
 }
 
 // original: client_add_transaction (htslib/ref_cache/server.c:352)
 pub unsafe fn ref_cache_server_c_352_client_add_transaction(
-    client: *mut Client,
-    transact: *mut Transaction,
+    clients: &mut RefCacheClientsLayout,
+    client: usize,
+    transact: TransactionId,
 ) {
-    let client_l = client.cast::<ClientLayout>();
-    if (*client_l).transact.is_null() {
-        assert!((*client_l).last_transact.is_null());
-        (*client_l).transact = transact;
-        (*client_l).last_transact = transact;
+    if clients.arena[client].transact.is_none() {
+        assert!(clients.arena[client].last_transact.is_none());
+        clients.arena[client].transact = Some(transact);
+        clients.arena[client].last_transact = Some(transact);
     } else {
-        ref_cache_transaction_c_623_transaction_set_next((*client_l).last_transact, transact);
-        (*client_l).last_transact = transact;
+        let last = clients.arena[client]
+            .last_transact
+            .expect("last_transact set when transact set");
+        ref_cache_transaction_c_623_transaction_set_next(last, transact);
+        clients.arena[client].last_transact = Some(transact);
     }
 }
 
 // original: handle_upstream (htslib/ref_cache/server.c:362)
 pub unsafe fn ref_cache_server_c_362_handle_upstream(
     upstream: c_int,
-    clients: *mut RefCacheClientsLayout,
+    clients: &mut RefCacheClientsLayout,
     verbosity: c_int,
 ) {
-    let mut msg = RefCacheUpstreamMsgLayout {
+    let mut msg = Upstream_msg {
         id: 0,
-        code: 0,
+        code: Upstream_msg_code::US_START,
         val: 0,
     };
     let mut fd = -1;
 
-    let res = ref_cache_upstream_c_215_upstream_recv_msg(
-        upstream,
-        (&mut msg as *mut RefCacheUpstreamMsgLayout).cast(),
-        &mut fd,
-    );
+    let res = ref_cache_upstream_c_215_upstream_recv_msg(upstream, &mut msg, &mut fd);
     if res <= 0 {
         return;
     }
 
     if verbosity > 2 {
-        libc::fprintf(
-            crate::htslib_rs::ref_cache::compat::stderr(),
-            c"Message from upstream: %u, %d, %lld\n".as_ptr(),
-            msg.id,
-            msg.code,
-            msg.val as libc::c_longlong,
+        eprintln!(
+            "Message from upstream: {}, {:?}, {}",
+            msg.id, msg.code, msg.val
         );
     }
 
+    // The download-* handlers manipulate the write stack head; move it into a
+    // local so the handlers can take `&mut clients` and a separate `&mut head`
+    // without aliasing, then write it back.
+    let mut can_write = clients.can_write;
     match msg.code {
-        REF_CACHE_US_START => {
+        Upstream_msg_code::US_START => {
             ref_cache_transaction_c_680_got_download_started(
+                clients,
                 msg.id,
                 msg.val,
                 fd,
-                &mut (*clients).can_write,
+                &mut can_write,
             );
         }
-        REF_CACHE_US_PARTIAL_LENGTH => {
-            ref_cache_transaction_c_698_got_download_part(
-                msg.id,
-                msg.val,
-                &mut (*clients).can_write,
-            );
+        Upstream_msg_code::US_PARTIAL_LENGTH => {
+            ref_cache_transaction_c_698_got_download_part(clients, msg.id, msg.val, &mut can_write);
         }
-        REF_CACHE_US_CONTENT_LENGTH => {
-            ref_cache_transaction_c_715_got_download_clen(
-                msg.id,
-                msg.val,
-                &mut (*clients).can_write,
-            );
+        Upstream_msg_code::US_CONTENT_LENGTH => {
+            ref_cache_transaction_c_715_got_download_clen(clients, msg.id, msg.val, &mut can_write);
         }
-        REF_CACHE_US_RESULT => {
-            ref_cache_transaction_c_730_got_download_result(
-                msg.id,
-                msg.val,
-                &mut (*clients).can_write,
-            );
+        Upstream_msg_code::US_RESULT => {
+            ref_cache_transaction_c_730_got_download_result(clients, msg.id, msg.val, &mut can_write);
         }
-        _ => libc::abort(),
     }
+    clients.can_write = can_write;
 }
 
 // original: queue_transaction_write (htslib/ref_cache/server.c:395)
 pub unsafe fn ref_cache_server_c_395_queue_transaction_write(
-    transact: *mut Transaction,
-    write_stack: *mut *mut Client,
+    clients: &mut RefCacheClientsLayout,
+    transact: TransactionId,
+    write_stack: &mut usize,
 ) {
-    let client = ref_cache_transaction_c_210_transaction_get_client(transact);
-    let client_l = client.cast::<ClientLayout>();
+    let Some(client) = ref_cache_transaction_c_210_transaction_get_client(transact) else {
+        return;
+    };
 
-    if ((*client_l).flags & REF_CACHE_ON_WRITE_LIST) != 0 {
+    if (clients.arena[client].flags & REF_CACHE_ON_WRITE_LIST) != 0 {
         return;
     }
-    if transact != (*client_l).transact {
+    if clients.arena[client].transact != Some(transact) {
         return;
     }
     if ref_cache_transaction_c_628_transaction_has_data_to_send(transact) == 0 {
         return;
     }
-    ref_cache_server_c_151_write_stack_push(client, write_stack);
+    ref_cache_server_c_151_write_stack_push(clients, client, write_stack);
 }
 
 // original: eat_input (htslib/ref_cache/server.c:422)
 pub unsafe fn ref_cache_server_c_422_eat_input(fd: c_int) -> c_int {
-    let mut buffer = [0 as c_char; 65536];
+    let mut buffer = vec![0u8; 65536];
     let mut bytes;
 
     loop {
+        // Genuine syscall: read(2) into an owned buffer.
         bytes = libc::read(fd, buffer.as_mut_ptr().cast(), buffer.len());
-        if !(bytes < 0 && *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR) {
+        if !(bytes < 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR))
+        {
             break;
         }
     }
     if bytes < 0 {
-        let errno = *crate::htslib_rs::c_compat::__errno_location();
+        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
         if errno == libc::EAGAIN || errno == libc::EWOULDBLOCK {
             return REF_CACHE_READ_BLOCKED;
         }
@@ -701,128 +643,117 @@ pub unsafe fn ref_cache_server_c_422_eat_input(fd: c_int) -> c_int {
 
 // original: queue_log_msg (htslib/ref_cache/server.c:436)
 pub unsafe fn ref_cache_server_c_436_queue_log_msg(
-    log_buf: *mut Log_buffer,
-    transact: *mut Transaction,
+    log_buf: &mut RefCacheLogBufferLayout,
+    client_host: &[u8],
+    transact: TransactionId,
 ) {
-    let log_buf = log_buf.cast::<RefCacheLogBufferLayout>();
-    let mut buf = [0 as c_char;
-        128 + REF_CACHE_MAX_UA_LEN + REF_CACHE_MAX_REFERRER_LEN + REF_CACHE_MAX_REQUEST_LEN + 1025];
-    let mut b = buf.as_mut_ptr();
-    let mut bytes =
-        ref_cache_transaction_c_769_make_log_message(transact, buf.as_mut_ptr(), buf.len());
-    debug_assert!(bytes < buf.len());
-    if bytes >= buf.len() {
-        bytes = buf.len() - 1;
+    // make_log_message now returns the formatted line as owned bytes; the client
+    // hostname is resolved by the caller (which owns the client arena).
+    let buf = ref_cache_transaction_c_769_make_log_message(transact, client_host);
+    let mut bytes = buf.len();
+    let cap = 128 + REF_CACHE_MAX_UA_LEN + REF_CACHE_MAX_REFERRER_LEN + REF_CACHE_MAX_REQUEST_LEN + 1025;
+    debug_assert!(bytes < cap);
+    if bytes >= cap {
+        bytes = cap - 1;
     }
 
-    let space = if (*log_buf).in_ >= (*log_buf).out {
-        REF_CACHE_LOG_BUF_SZ - (*log_buf).in_ + (*log_buf).out - 1
+    let space = if log_buf.in_ >= log_buf.out {
+        REF_CACHE_LOG_BUF_SZ - log_buf.in_ + log_buf.out - 1
     } else {
-        (*log_buf).out - (*log_buf).in_ - 1
+        log_buf.out - log_buf.in_ - 1
     };
     if bytes > space {
         return;
     }
 
-    if (*log_buf).in_ >= (*log_buf).out {
-        let mut l = REF_CACHE_LOG_BUF_SZ - (*log_buf).in_ - if (*log_buf).out == 0 { 1 } else { 0 };
+    // Offset into the produced message as we copy it into the ring buffer.
+    let mut src_off = 0usize;
+    if log_buf.in_ >= log_buf.out {
+        let mut l = REF_CACHE_LOG_BUF_SZ - log_buf.in_ - if log_buf.out == 0 { 1 } else { 0 };
         if l > bytes {
             l = bytes;
         }
-        libc::memcpy(
-            (*log_buf).buffer.as_mut_ptr().add((*log_buf).in_).cast(),
-            b.cast(),
-            l,
-        );
-        b = b.add(l);
+        let in_ = log_buf.in_;
+        log_buf.buffer[in_..in_ + l].copy_from_slice(&buf[src_off..src_off + l]);
+        src_off += l;
         bytes -= l;
-        (*log_buf).in_ = ((*log_buf).in_ + l) & REF_CACHE_LOG_BUF_MASK;
+        log_buf.in_ = (log_buf.in_ + l) & REF_CACHE_LOG_BUF_MASK;
     }
-    if bytes > 0 && (*log_buf).in_ < (*log_buf).out {
-        assert!(bytes < (*log_buf).out - (*log_buf).in_ - 1);
-        libc::memcpy(
-            (*log_buf).buffer.as_mut_ptr().add((*log_buf).in_).cast(),
-            b.cast(),
-            bytes,
-        );
-        (*log_buf).in_ += bytes;
+    if bytes > 0 && log_buf.in_ < log_buf.out {
+        assert!(bytes < log_buf.out - log_buf.in_ - 1);
+        let in_ = log_buf.in_;
+        log_buf.buffer[in_..in_ + bytes].copy_from_slice(&buf[src_off..src_off + bytes]);
+        log_buf.in_ += bytes;
     }
-    assert!((*log_buf).in_ < REF_CACHE_LOG_BUF_SZ);
-    assert!((*log_buf).in_ != (*log_buf).out);
+    assert!(log_buf.in_ < REF_CACHE_LOG_BUF_SZ);
+    assert!(log_buf.in_ != log_buf.out);
 }
 
 // original: send_to_log (htslib/ref_cache/server.c:470)
-pub unsafe fn ref_cache_server_c_470_send_to_log(log_buf: *mut Log_buffer, log_fd: c_int) -> c_int {
-    let log_buf = log_buf.cast::<RefCacheLogBufferLayout>();
+pub unsafe fn ref_cache_server_c_470_send_to_log(
+    log_buf: &mut RefCacheLogBufferLayout,
+    log_fd: c_int,
+) -> c_int {
     let mut bytes;
 
-    if (*log_buf).out == (*log_buf).in_ {
+    if log_buf.out == log_buf.in_ {
         return REF_CACHE_WRITE_MORE;
     }
-    if (*log_buf).out > (*log_buf).in_ {
-        let len = REF_CACHE_LOG_BUF_SZ - (*log_buf).out;
+    if log_buf.out > log_buf.in_ {
+        let len = REF_CACHE_LOG_BUF_SZ - log_buf.out;
         loop {
-            bytes = libc::write(
-                log_fd,
-                (*log_buf).buffer.as_ptr().add((*log_buf).out).cast(),
-                len,
-            );
-            if !(bytes < 0 && *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR) {
+            // Genuine syscall: write(2) of an owned-buffer slice.
+            bytes = libc::write(log_fd, log_buf.buffer[log_buf.out..].as_ptr().cast(), len);
+            if !(bytes < 0
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR))
+            {
                 break;
             }
         }
 
         if bytes < 0 {
-            let errno = *crate::htslib_rs::c_compat::__errno_location();
+            let err = std::io::Error::last_os_error();
+            let errno = err.raw_os_error().unwrap_or(0);
             if errno == libc::EAGAIN || errno == libc::EWOULDBLOCK {
                 return REF_CACHE_WRITE_BLOCKED;
             }
-            libc::fprintf(
-                crate::htslib_rs::ref_cache::compat::stderr(),
-                c"Couldn't write to log: %s\n".as_ptr(),
-                libc::strerror(errno),
-            );
+            eprintln!("Couldn't write to log: {}", err);
             return REF_CACHE_WRITE_ERROR;
         }
 
-        (*log_buf).out = ((*log_buf).out + bytes as usize) & REF_CACHE_LOG_BUF_MASK;
+        log_buf.out = (log_buf.out + bytes as usize) & REF_CACHE_LOG_BUF_MASK;
         if (bytes as usize) < len {
             return REF_CACHE_WRITE_BLOCKED;
         }
     }
 
-    if (*log_buf).out == (*log_buf).in_ {
+    if log_buf.out == log_buf.in_ {
         return REF_CACHE_WRITE_MORE;
     }
-    assert!((*log_buf).out < (*log_buf).in_);
+    assert!(log_buf.out < log_buf.in_);
 
-    let len = (*log_buf).in_ - (*log_buf).out;
+    let len = log_buf.in_ - log_buf.out;
     loop {
-        bytes = libc::write(
-            log_fd,
-            (*log_buf).buffer.as_ptr().add((*log_buf).out).cast(),
-            len,
-        );
-        if !(bytes < 0 && *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR) {
+        bytes = libc::write(log_fd, log_buf.buffer[log_buf.out..].as_ptr().cast(), len);
+        if !(bytes < 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR))
+        {
             break;
         }
     }
 
     if bytes < 0 {
-        let errno = *crate::htslib_rs::c_compat::__errno_location();
+        let err = std::io::Error::last_os_error();
+        let errno = err.raw_os_error().unwrap_or(0);
         if errno == libc::EAGAIN || errno == libc::EWOULDBLOCK {
             return REF_CACHE_WRITE_BLOCKED;
         }
-        libc::fprintf(
-            crate::htslib_rs::ref_cache::compat::stderr(),
-            c"Couldn't write to log: %s\n".as_ptr(),
-            libc::strerror(errno),
-        );
+        eprintln!("Couldn't write to log: {}", err);
         return REF_CACHE_WRITE_ERROR;
     }
 
-    (*log_buf).out += bytes as usize;
-    assert!((*log_buf).out < REF_CACHE_LOG_BUF_SZ);
+    log_buf.out += bytes as usize;
+    assert!(log_buf.out < REF_CACHE_LOG_BUF_SZ);
     if (bytes as usize) < len {
         REF_CACHE_WRITE_BLOCKED
     } else {
@@ -832,302 +763,256 @@ pub unsafe fn ref_cache_server_c_470_send_to_log(log_buf: *mut Log_buffer, log_f
 
 // original: handle_client_events (htslib/ref_cache/server.c:509)
 pub unsafe fn ref_cache_server_c_509_handle_client_events(
-    clients: *mut RefCacheClientsLayout,
-    opts: *const Options,
-    pw: *mut Poll_wrap,
-    item: *mut Pw_item,
+    clients: &mut RefCacheClientsLayout,
+    opts: &Options,
+    pw: &mut Poll_wrap,
+    client: usize,
     evts: c_uint,
 ) {
-    let opts_l = opts.cast::<RefCacheOptionsLayout>();
-    let item_l = item.cast::<RefCachePwItemLayout>();
-    let client = (*item_l).userp.cast::<Client>();
-    assert!(!client.is_null());
-    let client_l = client.cast::<ClientLayout>();
-    let polled_l = (*client_l).polled.cast::<RefCachePwItemLayout>();
+    let fd = clients.arena[client].fd;
 
-    if (*opts_l).verbosity > 2 {
-        libc::fprintf(
-            crate::htslib_rs::ref_cache::compat::stderr(),
-            c"Events %04x for fd #%d\n".as_ptr(),
-            evts,
-            (*polled_l).fd,
-        );
+    if opts.verbosity > 2 {
+        eprintln!("Events {:04x} for fd #{}", evts, fd);
     }
     if (evts & libc::EPOLLHUP as c_uint) != 0 {
-        if (*opts_l).verbosity > 1 {
-            libc::fprintf(
-                crate::htslib_rs::ref_cache::compat::stderr(),
-                c"Got hangup on fd#%d\n".as_ptr(),
-                (*polled_l).fd,
-            );
+        if opts.verbosity > 1 {
+            eprintln!("Got hangup on fd#{}", fd);
         }
         ref_cache_server_c_194_close_client(clients, client, pw);
         return;
     } else if (evts & (libc::EPOLLIN | libc::EPOLLERR) as c_uint) != 0 {
-        if ((*client_l).flags & REF_CACHE_READ_CLOSED) == 0 {
-            ref_cache_server_c_115_read_stack_push(client, &mut (*clients).can_read);
+        if (clients.arena[client].flags & REF_CACHE_READ_CLOSED) == 0 {
+            let mut can_read = clients.can_read;
+            ref_cache_server_c_115_read_stack_push(clients, client, &mut can_read);
+            clients.can_read = can_read;
         } else {
-            assert!(((*client_l).flags & REF_CACHE_ON_READ_LIST) == 0);
+            assert!((clients.arena[client].flags & REF_CACHE_ON_READ_LIST) == 0);
         }
     }
 
     if (evts & libc::EPOLLOUT as c_uint) != 0 {
-        (*client_l).flags |= REF_CACHE_CAN_WRITE;
-        if ((*client_l).flags & REF_CACHE_ON_WRITE_LIST) == 0
-            && !(*client_l).transact.is_null()
-            && ref_cache_transaction_c_619_transaction_have_content((*client_l).transact) != 0
-        {
-            ref_cache_server_c_151_write_stack_push(client, &mut (*clients).can_write);
+        clients.arena[client].flags |= REF_CACHE_CAN_WRITE;
+        if (clients.arena[client].flags & REF_CACHE_ON_WRITE_LIST) == 0 {
+            if let Some(transact) = clients.arena[client].transact {
+                if ref_cache_transaction_c_619_transaction_have_content(transact) != 0 {
+                    let mut can_write = clients.can_write;
+                    ref_cache_server_c_151_write_stack_push(clients, client, &mut can_write);
+                    clients.can_write = can_write;
+                }
+            }
         }
     }
 }
 
 // original: do_reads (htslib/ref_cache/server.c:565)
 pub unsafe fn ref_cache_server_c_565_do_reads(
-    clients: *mut RefCacheClientsLayout,
-    opts: *const Options,
-    pw: *mut Poll_wrap,
+    clients: &mut RefCacheClientsLayout,
+    opts: &Options,
+    pw: &mut Poll_wrap,
 ) {
-    let opts_l = opts.cast::<RefCacheOptionsLayout>();
-    let mut can_read: *mut Client = std::ptr::null_mut();
+    let mut can_read: usize = NO_CLIENT;
 
     loop {
         let client = ref_cache_server_c_125_read_stack_pop(clients);
-        if client.is_null() {
+        if client == NO_CLIENT {
             break;
         }
-        let client_l = client.cast::<ClientLayout>();
-        let fd = (*((*client_l).polled.cast::<RefCachePwItemLayout>())).fd;
+        let fd = clients.arena[client].fd;
 
-        if (*opts_l).verbosity > 2 {
-            libc::fprintf(
-                crate::htslib_rs::ref_cache::compat::stderr(),
-                c"Reading fd #%d\n".as_ptr(),
-                fd,
-            );
+        if opts.verbosity > 2 {
+            eprintln!("Reading fd #{}", fd);
         }
 
-        let res = if ((*client_l).flags & REF_CACHE_READ_DRAIN) == 0 {
-            let res = ref_cache_http_parser_c_601_parser_read_data(
-                opts,
-                client,
-                (&mut (*client_l).parser as *mut HttpParserLayout).cast(),
-                fd,
+        let res = if (clients.arena[client].flags & REF_CACHE_READ_DRAIN) == 0 {
+            // Borrow the parser out of the client slot so the parser and the
+            // client arena can both be mutated; put it back afterwards.
+            let mut parser = std::mem::replace(
+                &mut clients.arena[client].parser,
+                ref_cache_http_parser_c_111_init_http_parser(-1),
             );
-            if (*opts_l).verbosity > 2 {
-                libc::fprintf(
-                    crate::htslib_rs::ref_cache::compat::stderr(),
-                    c"parser_read_data returned %d\n".as_ptr(),
-                    res,
-                );
+            let res = ref_cache_http_parser_c_601_parser_read_data(
+                opts, clients, client, &mut parser, fd,
+            );
+            clients.arena[client].parser = parser;
+            if opts.verbosity > 2 {
+                eprintln!("parser_read_data returned {}", res);
             }
-            if ((*client_l).flags & (REF_CACHE_CAN_WRITE | REF_CACHE_ON_WRITE_LIST))
+            if (clients.arena[client].flags & (REF_CACHE_CAN_WRITE | REF_CACHE_ON_WRITE_LIST))
                 == REF_CACHE_CAN_WRITE
-                && !(*client_l).transact.is_null()
-                && ref_cache_transaction_c_619_transaction_have_content((*client_l).transact) != 0
             {
-                ref_cache_server_c_151_write_stack_push(client, &mut (*clients).can_write);
+                if let Some(transact) = clients.arena[client].transact {
+                    if ref_cache_transaction_c_619_transaction_have_content(transact) != 0 {
+                        let mut can_write = clients.can_write;
+                        ref_cache_server_c_151_write_stack_push(clients, client, &mut can_write);
+                        clients.can_write = can_write;
+                    }
+                }
             }
             res
         } else {
             let res = ref_cache_server_c_422_eat_input(fd);
-            if (*opts_l).verbosity > 2 {
-                libc::fprintf(
-                    crate::htslib_rs::ref_cache::compat::stderr(),
-                    c"eat_input returned %d\n".as_ptr(),
-                    res,
-                );
+            if opts.verbosity > 2 {
+                eprintln!("eat_input returned {}", res);
             }
             res
         };
 
         match res {
             REF_CACHE_READ_MORE => {
-                if (*opts_l).verbosity > 2 {
-                    libc::fprintf(
-                        crate::htslib_rs::ref_cache::compat::stderr(),
-                        c"fd #%d has more data...\n".as_ptr(),
-                        fd,
-                    );
+                if opts.verbosity > 2 {
+                    eprintln!("fd #{} has more data...", fd);
                 }
-                ref_cache_server_c_115_read_stack_push(client, &mut can_read);
+                ref_cache_server_c_115_read_stack_push(clients, client, &mut can_read);
             }
             REF_CACHE_READ_EOF => {
-                (*client_l).flags |= REF_CACHE_READ_CLOSED;
-                if (((*client_l).flags & (REF_CACHE_READ_CLOSED | REF_CACHE_READ_DRAIN)) != 0)
-                    && ((*client_l).transact.is_null()
-                        || ref_cache_transaction_c_619_transaction_have_content(
-                            (*client_l).transact,
-                        ) == 0)
+                clients.arena[client].flags |= REF_CACHE_READ_CLOSED;
+                let no_content = match clients.arena[client].transact {
+                    None => true,
+                    Some(t) => ref_cache_transaction_c_619_transaction_have_content(t) == 0,
+                };
+                if ((clients.arena[client].flags & (REF_CACHE_READ_CLOSED | REF_CACHE_READ_DRAIN))
+                    != 0)
+                    && no_content
                 {
-                    if (*opts_l).verbosity > 1 {
-                        libc::fprintf(
-                            crate::htslib_rs::ref_cache::compat::stderr(),
-                            c"Closing fd #%d (EOF)\n".as_ptr(),
-                            fd,
-                        );
+                    if opts.verbosity > 1 {
+                        eprintln!("Closing fd #{} (EOF)", fd);
                     }
-                    assert!(((*client_l).flags & REF_CACHE_ON_READ_LIST) == 0);
+                    assert!((clients.arena[client].flags & REF_CACHE_ON_READ_LIST) == 0);
                     ref_cache_server_c_194_close_client(clients, client, pw);
                 }
             }
             REF_CACHE_READ_BLOCKED => {
-                if (((*client_l).flags & (REF_CACHE_READ_CLOSED | REF_CACHE_READ_DRAIN)) != 0)
-                    && ((*client_l).transact.is_null()
-                        || ref_cache_transaction_c_619_transaction_have_content(
-                            (*client_l).transact,
-                        ) == 0)
+                let no_content = match clients.arena[client].transact {
+                    None => true,
+                    Some(t) => ref_cache_transaction_c_619_transaction_have_content(t) == 0,
+                };
+                if ((clients.arena[client].flags & (REF_CACHE_READ_CLOSED | REF_CACHE_READ_DRAIN))
+                    != 0)
+                    && no_content
                 {
-                    if (*opts_l).verbosity > 1 {
-                        libc::fprintf(
-                            crate::htslib_rs::ref_cache::compat::stderr(),
-                            c"Closing fd #%d (EOF)\n".as_ptr(),
-                            fd,
-                        );
+                    if opts.verbosity > 1 {
+                        eprintln!("Closing fd #{} (EOF)", fd);
                     }
-                    assert!(((*client_l).flags & REF_CACHE_ON_READ_LIST) == 0);
+                    assert!((clients.arena[client].flags & REF_CACHE_ON_READ_LIST) == 0);
                     ref_cache_server_c_194_close_client(clients, client, pw);
                 }
             }
             REF_CACHE_READ_ERROR => {
-                if (*opts_l).verbosity > 1 {
-                    libc::fprintf(
-                        crate::htslib_rs::ref_cache::compat::stderr(),
-                        c"Closing fd #%d (read error)\n".as_ptr(),
-                        fd,
-                    );
+                if opts.verbosity > 1 {
+                    eprintln!("Closing fd #{} (read error)", fd);
                 }
-                assert!(((*client_l).flags & REF_CACHE_ON_READ_LIST) == 0);
+                assert!((clients.arena[client].flags & REF_CACHE_ON_READ_LIST) == 0);
                 ref_cache_server_c_194_close_client(clients, client, pw);
             }
             _ => {}
         }
     }
-    (*clients).can_read = can_read;
+    clients.can_read = can_read;
 }
 
 // original: do_writes (htslib/ref_cache/server.c:642)
 pub unsafe fn ref_cache_server_c_642_do_writes(
-    clients: *mut RefCacheClientsLayout,
-    opts: *const Options,
-    pw: *mut Poll_wrap,
-    log_buf: *mut Log_buffer,
+    clients: &mut RefCacheClientsLayout,
+    opts: &Options,
+    pw: &mut Poll_wrap,
+    log_buf: &mut RefCacheLogBufferLayout,
 ) {
-    let opts_l = opts.cast::<RefCacheOptionsLayout>();
-    let mut can_write: *mut Client = std::ptr::null_mut();
+    let mut can_write: usize = NO_CLIENT;
 
     loop {
         let client = ref_cache_server_c_161_write_stack_pop(clients);
-        if client.is_null() {
+        if client == NO_CLIENT {
             break;
         }
-        let client_l = client.cast::<ClientLayout>();
-        let fd = (*((*client_l).polled.cast::<RefCachePwItemLayout>())).fd;
+        let fd = clients.arena[client].fd;
 
-        if (*opts_l).verbosity > 1 {
-            libc::fprintf(
-                crate::htslib_rs::ref_cache::compat::stderr(),
-                c"Writing to fd #%d\n".as_ptr(),
-                fd,
-            );
+        if opts.verbosity > 1 {
+            eprintln!("Writing to fd #{}", fd);
         }
-        let res = ref_cache_transaction_c_556_transaction_send_data((*client_l).transact, fd);
-        if (*opts_l).verbosity > 2 {
-            libc::fprintf(
-                crate::htslib_rs::ref_cache::compat::stderr(),
-                c"transact_send_data returned %d\n".as_ptr(),
-                res,
-            );
+        let cur_transact = clients.arena[client]
+            .transact
+            .expect("write stack only holds clients with a current transaction");
+        let res = ref_cache_transaction_c_556_transaction_send_data(cur_transact, fd);
+        if opts.verbosity > 2 {
+            eprintln!("transact_send_data returned {}", res);
         }
 
         match res {
             REF_CACHE_WRITE_BLOCKED => {
-                (*client_l).flags &= !REF_CACHE_CAN_WRITE;
+                clients.arena[client].flags &= !REF_CACHE_CAN_WRITE;
             }
             REF_CACHE_WRITE_BLOCKED_UPSTREAM => {}
             REF_CACHE_WRITE_COMPLETE => {
-                ref_cache_server_c_436_queue_log_msg(log_buf, (*client_l).transact);
-                if ref_cache_transaction_c_214_transaction_get_keep_alive((*client_l).transact) != 0
-                {
-                    (*client_l).transact = ref_cache_transaction_c_204_switch_to_next_transaction(
-                        (*client_l).transact,
-                    );
+                let host = clients.arena[client].host.clone();
+                ref_cache_server_c_436_queue_log_msg(log_buf, &host, cur_transact);
+                if ref_cache_transaction_c_214_transaction_get_keep_alive(cur_transact) != 0 {
+                    clients.arena[client].transact =
+                        ref_cache_transaction_c_204_switch_to_next_transaction(cur_transact);
                 } else {
-                    ref_cache_transaction_c_196_free_transaction_list((*client_l).transact);
-                    (*client_l).transact = std::ptr::null_mut();
-                    (*client_l).flags |= REF_CACHE_READ_DRAIN;
+                    ref_cache_transaction_c_196_free_transaction_list(Some(cur_transact));
+                    clients.arena[client].transact = None;
+                    clients.arena[client].flags |= REF_CACHE_READ_DRAIN;
                 }
 
-                if (*client_l).transact.is_null() {
-                    (*client_l).last_transact = std::ptr::null_mut();
-                    if ((*client_l).flags & (REF_CACHE_READ_CLOSED | REF_CACHE_READ_DRAIN)) != 0 {
-                        if (*opts_l).verbosity > 2 {
-                            libc::fprintf(
-                                crate::htslib_rs::ref_cache::compat::stderr(),
-                                c"Shutting down fd #%d\n".as_ptr(),
-                                fd,
-                            );
-                        }
-                        if libc::shutdown(fd, libc::SHUT_WR) == -1 {
-                            libc::fprintf(
-                                crate::htslib_rs::ref_cache::compat::stderr(),
-                                c"Error from shutdown(%d, SHUT_WR) : %s\n".as_ptr(),
-                                fd,
-                                libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
-                            );
-                            ref_cache_server_c_194_close_client(clients, client, pw);
+                match clients.arena[client].transact {
+                    None => {
+                        clients.arena[client].last_transact = None;
+                        if (clients.arena[client].flags
+                            & (REF_CACHE_READ_CLOSED | REF_CACHE_READ_DRAIN))
+                            != 0
+                        {
+                            if opts.verbosity > 2 {
+                                eprintln!("Shutting down fd #{}", fd);
+                            }
+                            // Genuine syscall: shutdown(2).
+                            if libc::shutdown(fd, libc::SHUT_WR) == -1 {
+                                eprintln!(
+                                    "Error from shutdown({}, SHUT_WR) : {}",
+                                    fd,
+                                    std::io::Error::last_os_error()
+                                );
+                                ref_cache_server_c_194_close_client(clients, client, pw);
+                            }
                         }
                     }
-                } else if ref_cache_transaction_c_619_transaction_have_content((*client_l).transact)
-                    != 0
-                {
-                    if (*opts_l).verbosity > 2 {
-                        libc::fprintf(
-                            crate::htslib_rs::ref_cache::compat::stderr(),
-                            c"fd #%d can send more data...\n".as_ptr(),
-                            fd,
-                        );
+                    Some(next) => {
+                        if ref_cache_transaction_c_619_transaction_have_content(next) != 0 {
+                            if opts.verbosity > 2 {
+                                eprintln!("fd #{} can send more data...", fd);
+                            }
+                            ref_cache_server_c_151_write_stack_push(clients, client, &mut can_write);
+                        }
                     }
-                    ref_cache_server_c_151_write_stack_push(client, &mut can_write);
                 }
             }
             REF_CACHE_WRITE_MORE => {
-                if (*opts_l).verbosity > 2 {
-                    libc::fprintf(
-                        crate::htslib_rs::ref_cache::compat::stderr(),
-                        c"fd #%d can send more data...\n".as_ptr(),
-                        fd,
-                    );
+                if opts.verbosity > 2 {
+                    eprintln!("fd #{} can send more data...", fd);
                 }
-                ref_cache_server_c_151_write_stack_push(client, &mut can_write);
+                ref_cache_server_c_151_write_stack_push(clients, client, &mut can_write);
             }
             REF_CACHE_WRITE_EOF | REF_CACHE_WRITE_ERROR => {
-                if (*opts_l).verbosity > 1 {
-                    libc::fprintf(
-                        crate::htslib_rs::ref_cache::compat::stderr(),
-                        c"Closing fd #%d\n".as_ptr(),
-                        fd,
-                    );
+                if opts.verbosity > 1 {
+                    eprintln!("Closing fd #{}", fd);
                 }
                 ref_cache_server_c_194_close_client(clients, client, pw);
             }
             _ => {}
         }
     }
-    (*clients).can_write = can_write;
+    clients.can_write = can_write;
 }
 
 // original: run_poll_loop (htslib/ref_cache/server.c:721)
 pub unsafe fn ref_cache_server_c_721_run_poll_loop(
-    opts: *const Options,
-    lsocks: *mut Listeners,
+    opts: &Options,
+    lsocks: &mut Listeners,
     upstream: c_int,
     log_fd: c_int,
 ) -> c_int {
-    let opts_l = opts.cast::<RefCacheOptionsLayout>();
-    let mut clients: RefCacheClientsLayout = std::mem::zeroed();
-    let mut events = [std::mem::zeroed::<libc::epoll_event>(); REF_CACHE_MAX_EVENTS as usize];
-    let mut log_buf: RefCacheLogBufferLayout = std::mem::zeroed();
+    let mut clients = RefCacheClientsLayout::default();
+    let mut events = vec![std::mem::zeroed::<libc::epoll_event>(); REF_CACHE_MAX_EVENTS as usize];
+    let mut log_buf = RefCacheLogBufferLayout::default();
     let mut log_can_write = 0;
     let mut running = 1;
 
@@ -1135,83 +1020,90 @@ pub unsafe fn ref_cache_server_c_721_run_poll_loop(
     log_buf.out = 0;
 
     if ref_cache_misc_h_40_setnonblock(log_fd) != 0 {
-        libc::perror(c"Setting nonblocking on log pipe".as_ptr());
+        eprintln!("Setting nonblocking on log pipe: {}", std::io::Error::last_os_error());
         return -1;
     }
 
     if ref_cache_server_c_107_init_clients(&mut clients) != 0 {
-        libc::perror(c"Initializing clients array".as_ptr());
+        eprintln!("Initializing clients array: {}", std::io::Error::last_os_error());
         return -1;
     }
 
-    let pw = ref_cache_poll_wrap_epoll_c_49_pw_init(((*opts_l).verbosity > 2) as c_int);
-    if pw.is_null() {
-        libc::perror(c"Initializing poller".as_ptr());
+    // The poller is now an owned `Box<Poll_wrap>`; registration returns an
+    // arena index (`Option<usize>`) used as the handle for mod/remove.
+    let Some(mut pw_box) = ref_cache_poll_wrap_epoll_c_49_pw_init(opts.verbosity > 2) else {
+        eprintln!("Initializing poller: {}", std::io::Error::last_os_error());
+        return -1;
+    };
+    let pw = &mut *pw_box;
+
+    if super::listener::ref_cache_listener_c_242_register_listener_pollers(lsocks, pw) != 0 {
         return -1;
     }
 
-    if super::listener::ref_cache_listener_c_242_register_listener_pollers(lsocks.cast(), pw) != 0 {
-        return -1;
-    }
-
-    if upstream != -1 {
-        let polled_upstream = ref_cache_poll_wrap_epoll_c_78_pw_register(
+    if upstream != -1
+        && ref_cache_poll_wrap_epoll_c_78_pw_register(
             pw,
             upstream,
             REF_CACHE_SV_UPSTREAM,
             (libc::EPOLLIN | libc::EPOLLERR | libc::EPOLLHUP) as u32,
-            std::ptr::null_mut::<c_void>(),
-        );
-        if polled_upstream.is_null() {
-            libc::perror(c"Adding upstream socket to poller".as_ptr());
-            return -1;
-        }
+            0,
+        )
+        .is_none()
+    {
+        eprintln!("Adding upstream socket to poller: {}", std::io::Error::last_os_error());
+        return -1;
     }
 
-    let polled_log = ref_cache_poll_wrap_epoll_c_78_pw_register(
+    let Some(polled_log) = ref_cache_poll_wrap_epoll_c_78_pw_register(
         pw,
         log_fd,
         REF_CACHE_SV_LOG,
         (libc::EPOLLOUT | libc::EPOLLERR | libc::EPOLLHUP) as u32,
-        std::ptr::null_mut::<c_void>(),
-    );
-    if polled_log.is_null() {
-        libc::perror(c"Adding log pipe to poller".as_ptr());
+        0,
+    ) else {
+        eprintln!("Adding log pipe to poller: {}", std::io::Error::last_os_error());
         return -1;
-    }
+    };
 
     while running != 0 || clients.count > 0 {
         let nevts = ref_cache_poll_wrap_epoll_c_120_pw_wait(
             pw,
-            events.as_mut_ptr().cast(),
-            REF_CACHE_MAX_EVENTS,
-            if clients.can_read.is_null() && clients.can_write.is_null() {
+            &mut events,
+            if clients.can_read == NO_CLIENT && clients.can_write == NO_CLIENT {
                 -1
             } else {
                 0
             },
         );
         if nevts == -1 {
-            if *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
                 continue;
             }
-            libc::perror(c"Error from poller".as_ptr());
+            eprintln!("Error from poller: {}", std::io::Error::last_os_error());
             return -1;
         }
 
         let mut e = 0;
         while e < nevts {
             let evts = events[e as usize].events;
-            let item = events[e as usize].u64 as *mut Pw_item;
-            assert!(!item.is_null());
-            let item_l = item.cast::<RefCachePwItemLayout>();
+            // epoll's `u64` carries the poller arena index; recover the item's
+            // type/fd/userp through the poller rather than a raw pointer.
+            let item_idx = events[e as usize].u64 as usize;
+            let Some(item) = pw.item_at(item_idx) else {
+                eprintln!("Stale polled item index {}", item_idx);
+                return -1;
+            };
+            let fd_type = item.fd_type;
+            let item_fd = item.fd;
+            let item_client = item.userp;
 
-            match (*item_l).fd_type {
+            match fd_type {
                 REF_CACHE_SV_LISTENER => {
                     if running != 0 {
                         ref_cache_server_c_268_handle_incoming(
                             opts,
-                            (*item_l).fd,
+                            item_fd,
                             upstream,
                             pw,
                             &mut clients,
@@ -1222,17 +1114,17 @@ pub unsafe fn ref_cache_server_c_721_run_poll_loop(
                     ref_cache_server_c_362_handle_upstream(
                         upstream,
                         &mut clients,
-                        (*opts_l).verbosity as c_int,
+                        opts.verbosity as c_int,
                     );
                 }
                 REF_CACHE_SV_LOG => {
                     if ref_cache_poll_wrap_epoll_c_106_pw_mod(
                         pw,
-                        item,
+                        item_idx,
                         (libc::EPOLLERR | libc::EPOLLHUP) as u32,
                     ) != 0
                     {
-                        libc::perror(c"Disarming log poller".as_ptr());
+                        eprintln!("Disarming log poller: {}", std::io::Error::last_os_error());
                         return -1;
                     }
                     if (evts & (libc::EPOLLHUP | libc::EPOLLERR) as u32) != 0 {
@@ -1242,14 +1134,16 @@ pub unsafe fn ref_cache_server_c_721_run_poll_loop(
                     }
                 }
                 REF_CACHE_SV_CLIENT => {
-                    ref_cache_server_c_509_handle_client_events(&mut clients, opts, pw, item, evts);
+                    ref_cache_server_c_509_handle_client_events(
+                        &mut clients,
+                        opts,
+                        pw,
+                        item_client,
+                        evts,
+                    );
                 }
                 _ => {
-                    libc::fprintf(
-                        crate::htslib_rs::ref_cache::compat::stderr(),
-                        c"Unexpected polled item type %d\n".as_ptr(),
-                        (*item_l).fd_type as c_int,
-                    );
+                    eprintln!("Unexpected polled item type {}", fd_type as c_int);
                     return -1;
                 }
             }
@@ -1257,18 +1151,10 @@ pub unsafe fn ref_cache_server_c_721_run_poll_loop(
         }
 
         ref_cache_server_c_565_do_reads(&mut clients, opts, pw);
-        ref_cache_server_c_642_do_writes(
-            &mut clients,
-            opts,
-            pw,
-            (&mut log_buf as *mut RefCacheLogBufferLayout).cast(),
-        );
+        ref_cache_server_c_642_do_writes(&mut clients, opts, pw, &mut log_buf);
 
         if log_can_write != 0 && log_buf.in_ != log_buf.out {
-            let res = ref_cache_server_c_470_send_to_log(
-                (&mut log_buf as *mut RefCacheLogBufferLayout).cast(),
-                log_fd,
-            );
+            let res = ref_cache_server_c_470_send_to_log(&mut log_buf, log_fd);
             if res == REF_CACHE_WRITE_ERROR {
                 return -1;
             }
@@ -1279,7 +1165,7 @@ pub unsafe fn ref_cache_server_c_721_run_poll_loop(
                     (libc::EPOLLOUT | libc::EPOLLERR | libc::EPOLLHUP) as u32,
                 ) != 0
                 {
-                    libc::perror(c"Re-arming log poller".as_ptr());
+                    eprintln!("Re-arming log poller: {}", std::io::Error::last_os_error());
                     return -1;
                 }
                 log_can_write = 0;
@@ -1290,10 +1176,10 @@ pub unsafe fn ref_cache_server_c_721_run_poll_loop(
 }
 
 // original: client_host (htslib/ref_cache/server.c:840)
-pub unsafe fn ref_cache_server_c_840_client_host(client: *mut Client) -> *const c_char {
-    let host = (*(client.cast::<ClientLayout>())).host;
-    if host.is_null() {
-        c"<NULL>".as_ptr()
+pub fn ref_cache_server_c_840_client_host(clients: &RefCacheClientsLayout, client: usize) -> &[u8] {
+    let host = &clients.arena[client].host;
+    if host.is_empty() {
+        b"<NULL>"
     } else {
         host
     }

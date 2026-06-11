@@ -1,6 +1,3 @@
-use std::ffi::{c_int, c_void};
-
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Pw_fd_type {
     SV_LISTENER = 1,
@@ -16,23 +13,27 @@ pub enum Pw_fd_type {
     MAIN_SIG = 0x20001,
 }
 
-pub const PW_IN: c_int = libc::POLLIN as c_int;
-pub const PW_OUT: c_int = libc::POLLOUT as c_int;
-pub const PW_ERR: c_int = libc::POLLERR as c_int;
-pub const PW_HUP: c_int = libc::POLLHUP as c_int;
-pub const PW_EDGE: c_int = 0;
+// Genuine OS poll() flag bits; kept as the kernel-level constants.
+pub const PW_IN: i32 = libc::POLLIN as i32;
+pub const PW_OUT: i32 = libc::POLLOUT as i32;
+pub const PW_ERR: i32 = libc::POLLERR as i32;
+pub const PW_HUP: i32 = libc::POLLHUP as i32;
+pub const PW_EDGE: i32 = 0;
 
 // original: Pw_events (htslib/ref_cache/poll_wrap.h:75)
-#[repr(C)]
 pub struct Pw_events {
     pub events: u32,
-    pub item: *mut Pw_item,
+    // Snapshot of the registered Pw_item (was *mut Pw_item). Pw_item is Copy,
+    // so events carry it by value rather than borrowing the owning arena.
+    pub item: Option<Pw_item>,
 }
 
 // original: Pw_item (htslib/ref_cache/poll_wrap.h:89)
-#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct Pw_item {
-    pub fd: c_int,
+    pub fd: i32,
     pub fd_type: Pw_fd_type,
-    pub userp: *mut c_void,
+    // Client arena index (was void *userp). Callbacks recover the concrete
+    // entry via `userp as usize` against the owning arena.
+    pub userp: usize,
 }

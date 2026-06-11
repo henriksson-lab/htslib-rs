@@ -7,7 +7,6 @@ extern "C" {
     fn tgamma(x: f64) -> f64;
 }
 
-#[repr(C)]
 pub struct hgacc_t {
     pub n11: i32,
     pub n1_: i32,
@@ -172,28 +171,25 @@ pub fn kfunc_demo_main() -> i32 {
     let mut x = 5.5;
     let y = 3.0;
 
-    unsafe {
-        libc::printf(c"erfc(%lg): %lg, %lg\n".as_ptr(), x, erfc(x), kf_erfc(x));
-        libc::printf(
-            c"upper-gamma(%lg,%lg): %lg\n".as_ptr(),
-            x,
-            y,
-            kf_gammaq(y, x) * tgamma(y),
-        );
-    }
+    let (erfc_x, tgamma_y) = unsafe { (erfc(x), tgamma(y)) };
+    println!("erfc({}): {}, {}", x, erfc_x, kf_erfc(x));
+    println!(
+        "upper-gamma({},{}): {}",
+        x,
+        y,
+        kf_gammaq(y, x) * tgamma_y,
+    );
 
     let a = 2.0;
     let b = 2.0;
     x = 0.5;
-    unsafe {
-        libc::printf(
-            c"incomplete-beta(%lg,%lg,%lg): %lg\n".as_ptr(),
-            a,
-            b,
-            x,
-            kf_betai(a, b, x) / (kf_lgamma(a + b) - kf_lgamma(a) - kf_lgamma(b)).exp(),
-        );
-    }
+    println!(
+        "incomplete-beta({},{},{}): {}",
+        a,
+        b,
+        x,
+        kf_betai(a, b, x) / (kf_lgamma(a + b) - kf_lgamma(a) - kf_lgamma(b)).exp(),
+    );
 
     0
 }

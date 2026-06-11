@@ -23,44 +23,6 @@ const BCF_VL_LA: c_int = 6;
 const BCF_VL_LG: c_int = 7;
 const BCF_VL_LR: c_int = 8;
 
-struct OwnedKString {
-    raw: kstring_t,
-}
-
-impl OwnedKString {
-    fn new() -> Self {
-        Self {
-            raw: kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            },
-        }
-    }
-}
-
-impl std::ops::Deref for OwnedKString {
-    type Target = kstring_t;
-
-    fn deref(&self) -> &Self::Target {
-        &self.raw
-    }
-}
-
-impl std::ops::DerefMut for OwnedKString {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.raw
-    }
-}
-
-impl Drop for OwnedKString {
-    fn drop(&mut self) {
-        unsafe {
-            crate::htslib_rs::c_compat::free(self.raw.s.cast());
-        }
-    }
-}
-
 struct CBuffer<T> {
     ptr: Option<NonNull<T>>,
 }
@@ -103,11 +65,11 @@ impl<T> Drop for CBuffer<T> {
 
 // original: bcf_remove_allele_set (htslib/vcfutils.c:659)
 pub unsafe fn vcfutils_c_659_bcf_remove_allele_set(
-    header: *const bcf_hdr_t,
-    line: *mut bcf1_t,
-    rm_set: *const kbitset_t,
+    header: &bcf_hdr_t,
+    line: &mut bcf1_t,
+    rm_set: &kbitset_t,
 ) -> c_int {
-    vcfutils_bcf_remove_allele_set_rs(&*header, &mut *line, &*rm_set)
+    vcfutils_bcf_remove_allele_set_rs(header, line, rm_set)
 }
 
 unsafe fn vcfutils_bcf_remove_allele_set_rs(
@@ -138,7 +100,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
     vcf::bcf_unpack(line, BCF_UN_ALL as c_int);
 
     let n_sample = line.n_sample() as c_int;
-    let mut str_ = OwnedKString::new();
+    let mut str_ = kstring_t::default();
 
     macro_rules! err {
         () => {{
@@ -146,24 +108,23 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
         }};
     }
 
-    kputs(*line.d.allele.add(0), &mut *str_);
+    kputs(&line.d.allele[0], &mut str_);
 
     let mut nrm = 0;
     map[0] = 0;
     let mut j = 1;
     for i in 1..line.n_allele() as c_int {
-        if libc::strcmp(*line.d.allele.add(i as usize), c"<CNV:TR>".as_ptr()) == 0 {
+        if line.d.allele[i as usize].as_slice() == b"<CNV:TR>" {
             have_cnv_tr = 1;
         }
 
         if kbs_exists(rm_set, i) != 0 {
-            *line.d.allele.add(i as usize) = std::ptr::null_mut();
             map[i as usize] = -1;
             nrm += 1;
             continue;
         }
-        kputc(b',' as c_int, &mut *str_);
-        kputs(*line.d.allele.add(i as usize), &mut *str_);
+        kputc(b',' as c_int, &mut str_);
+        kputs(&line.d.allele[i as usize], &mut str_);
         map[i as usize] = j;
         j += 1;
     }
@@ -199,7 +160,9 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
     let n_g_ori = n_r_ori * (n_r_ori + 1) / 2;
     let mut n_g_new = n_r_new * (n_r_new + 1) / 2;
 
-    if vcf::bcf_update_alleles_str(header, line, str_.s) < 0 {
+    let mut str_cstr = str_.data.clone();
+    str_cstr.push(0);
+    if vcf::bcf_update_alleles_str(header, line, str_cstr.as_ptr().cast::<c_char>()) < 0 {
         return -1;
     }
 
@@ -216,8 +179,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
 
     let mut mdat_bytes = 0;
     for i in 0..line.n_info() {
-        let info = line.d.info.add(i as usize);
-        let info_key = (*info).key as usize;
+        let info_key = line.d.info[i as usize].key as usize;
         let id = (*header.id[BCF_DT_ID as usize].add(info_key)).key;
         let mut vlen =
             ((*(*header.id[BCF_DT_ID as usize].add(info_key)).val).info[BCF_HL_INFO as usize] >> 8
@@ -260,7 +222,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
         }
 
         if type_ == BCF_HT_STR as c_int {
-            str_.l = 0;
+            str_.data.clear();
             let mut ss = dat.cast::<c_char>();
             let mut se = dat.cast::<c_char>();
             let s0 = *ss;
@@ -288,10 +250,15 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                         jj += 1;
                         continue;
                     }
-                    if str_.l != 0 {
-                        kputc(b',' as c_int, &mut *str_);
+                    if !str_.data.is_empty() {
+                        kputc(b',' as c_int, &mut str_);
                     }
-                    kputsn(ss, se.offset_from(ss) as usize, &mut *str_);
+                    let len = se.offset_from(ss) as usize;
+                    kputsn(
+                        std::slice::from_raw_parts(ss.cast::<u8>(), len),
+                        len,
+                        &mut str_,
+                    );
                     if *se != 0 {
                         se = se.add(1);
                     }
@@ -322,10 +289,15 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                             ss = se;
                             continue;
                         }
-                        if str_.l != 0 {
-                            kputc(b',' as c_int, &mut *str_);
+                        if !str_.data.is_empty() {
+                            kputc(b',' as c_int, &mut str_);
                         }
-                        kputsn(ss, se.offset_from(ss) as usize, &mut *str_);
+                        let len = se.offset_from(ss) as usize;
+                        kputsn(
+                            std::slice::from_raw_parts(ss.cast::<u8>(), len),
+                            len,
+                            &mut str_,
+                        );
                         if *se != 0 {
                             se = se.add(1);
                         }
@@ -342,7 +314,20 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                     err!();
                 }
             }
-            nret = vcf::bcf_update_info(header, line, id, str_.s.cast(), str_.l as c_int, type_);
+            // bcf_update_info() takes the string length from strlen() for STR
+            // tags (matching htslib's contract: callers pass a NUL-terminated
+            // buffer). The owned kstring Vec carries exactly its bytes with no
+            // trailing NUL, so terminate a copy before handing it over.
+            let mut str_cstr = str_.data.clone();
+            str_cstr.push(0);
+            nret = vcf::bcf_update_info(
+                header,
+                line,
+                id,
+                str_cstr.as_ptr().cast(),
+                str_.data.len() as c_int,
+                type_,
+            );
             if nret < 0 {
                 err!();
             }
@@ -350,28 +335,29 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
         }
 
         if nret == 1 {
-            let missing = match (*info).type_ {
+            let info = &line.d.info[i as usize];
+            let missing = match info.type_ {
                 x if x == BCF_BT_INT8 as c_int => {
-                    *(*info).vptr.cast::<i8>() as c_int == bcf_int8_missing
+                    *info.vptr.cast::<i8>() as c_int == bcf_int8_missing
                 }
                 x if x == BCF_BT_INT16 as c_int => {
-                    // `(*info).vptr` points into a packed BCF record byte buffer
+                    // `info.vptr` points into a packed BCF record byte buffer
                     // whose alignment is not guaranteed for multi-byte ints, so
                     // read via `read_unaligned` to avoid misaligned-pointer UB.
-                    i16::from_le(core::ptr::read_unaligned((*info).vptr.cast::<i16>())) as c_int
+                    i16::from_le(core::ptr::read_unaligned(info.vptr.cast::<i16>())) as c_int
                         == bcf_int16_missing
                 }
                 x if x == BCF_BT_INT32 as c_int => {
                     // See above: vptr is a packed-record byte pointer; use
                     // `read_unaligned` to avoid misaligned-pointer UB.
-                    i32::from_le(core::ptr::read_unaligned((*info).vptr.cast::<i32>()))
+                    i32::from_le(core::ptr::read_unaligned(info.vptr.cast::<i32>()))
                         == bcf_int32_missing
                 }
                 x if x == BCF_BT_FLOAT as c_int => {
                     // See above: vptr is a packed-record byte pointer; use
                     // `read_unaligned` to avoid misaligned-pointer UB.
                     f32::from_bits(u32::from_le(core::ptr::read_unaligned(
-                        (*info).vptr.cast::<u32>(),
+                        info.vptr.cast::<u32>(),
                     )))
                     .to_bits()
                         == bcf_float_missing
@@ -617,10 +603,10 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
             if max_k < num_laa_vals {
                 if max_k > 0 {
                     for sample in 1..n_sample {
-                        libc::memmove(
-                            laa.add((sample * max_k) as usize).cast(),
-                            laa.add((sample * num_laa_vals) as usize).cast(),
-                            max_k as usize * size_of::<c_int>(),
+                        std::ptr::copy(
+                            laa.add((sample * num_laa_vals) as usize),
+                            laa.add((sample * max_k) as usize),
+                            max_k as usize,
                         );
                     }
                     new_num_laa = n_sample * max_k;
@@ -646,8 +632,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
     }
 
     for fmt_i in 0..line.n_fmt() {
-        let fmt = line.d.fmt.add(fmt_i as usize);
-        let fmt_id = (*fmt).id as usize;
+        let fmt_id = line.d.fmt[fmt_i as usize].id as usize;
         let id = (*header.id[BCF_DT_ID as usize].add(fmt_id)).key;
         let vlen = ((*(*header.id[BCF_DT_ID as usize].add(fmt_id)).val).info[BCF_HL_FMT as usize]
             >> 8
@@ -683,7 +668,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
 
         if type_ == BCF_HT_STR as c_int {
             let width = nret / n_sample;
-            str_.l = 0;
+            str_.data.clear();
             if (vl_a_r_la_lr & (1_u32 << vlen)) != 0 {
                 let mut nexp = 0;
                 let mut inc = 0;
@@ -712,7 +697,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                     let mut ptr = ss;
                     let s0 = *ss;
                     let mut k_dst = 0;
-                    let l0 = str_.l;
+                    let l0 = str_.data.len();
                     let sample_map = if is_local != 0 {
                         laa_map.as_mut_ptr().add((sample * laa_map_stride) as usize)
                     } else {
@@ -736,9 +721,14 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                             continue;
                         }
                         if k_dst != 0 {
-                            kputc(b',' as c_int, &mut *str_);
+                            kputc(b',' as c_int, &mut str_);
                         }
-                        kputsn(ss, ptr.offset_from(ss) as usize, &mut *str_);
+                        let len = ptr.offset_from(ss) as usize;
+                        kputsn(
+                            std::slice::from_raw_parts(ss.cast::<u8>(), len),
+                            len,
+                            &mut str_,
+                        );
                         ptr = ptr.add(1);
                         ss = ptr;
                         k_dst += 1;
@@ -747,9 +737,9 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                     if k_src != nexp && !(k_src == 1 && s0 == b'.' as c_char) {
                         err!();
                     }
-                    let mut l = str_.l - l0;
+                    let mut l = str_.data.len() - l0;
                     while l < width as usize {
-                        kputc(if l == 0 { b'.' } else { 0 } as c_int, &mut *str_);
+                        kputc(if l == 0 { b'.' } else { 0 } as c_int, &mut str_);
                         l += 1;
                     }
                 }
@@ -760,7 +750,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                     let mut ptr = ss;
                     let s0 = *ss;
                     let mut k_dst = 0;
-                    let l0 = str_.l;
+                    let l0 = str_.data.len();
                     let mut nexp = 0;
                     let sample_n_r_ori = if is_local != 0 {
                         lr_orig[sample as usize]
@@ -797,7 +787,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                     }
                     ptr = ss;
                     if nexp == 1 && s0 == b'.' as c_char {
-                        kputc(b'.' as c_int, &mut *str_);
+                        kputc(b'.' as c_int, &mut str_);
                     } else if nexp == sample_n_g_ori {
                         for ia in 0..sample_n_r_ori {
                             for ib in 0..=ia {
@@ -815,9 +805,14 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                                     continue;
                                 }
                                 if k_dst != 0 {
-                                    kputc(b',' as c_int, &mut *str_);
+                                    kputc(b',' as c_int, &mut str_);
                                 }
-                                kputsn(ss, ptr.offset_from(ss) as usize, &mut *str_);
+                                let len = ptr.offset_from(ss) as usize;
+                                kputsn(
+                                    std::slice::from_raw_parts(ss.cast::<u8>(), len),
+                                    len,
+                                    &mut str_,
+                                );
                                 ptr = ptr.add(1);
                                 ss = ptr;
                                 k_dst += 1;
@@ -842,9 +837,14 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                                 continue;
                             }
                             if k_dst != 0 {
-                                kputc(b',' as c_int, &mut *str_);
+                                kputc(b',' as c_int, &mut str_);
                             }
-                            kputsn(ss, ptr.offset_from(ss) as usize, &mut *str_);
+                            let len = ptr.offset_from(ss) as usize;
+                            kputsn(
+                                std::slice::from_raw_parts(ss.cast::<u8>(), len),
+                                len,
+                                &mut str_,
+                            );
                             ptr = ptr.add(1);
                             ss = ptr;
                             k_dst += 1;
@@ -854,14 +854,21 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                             err!();
                         }
                     }
-                    let mut l = str_.l - l0;
+                    let mut l = str_.data.len() - l0;
                     while l < width as usize {
-                        kputc(0, &mut *str_);
+                        kputc(0, &mut str_);
                         l += 1;
                     }
                 }
             }
-            nret = vcf::bcf_update_format(header, line, id, str_.s.cast(), str_.l as c_int, type_);
+            nret = vcf::bcf_update_format(
+                header,
+                line,
+                id,
+                str_.data.as_ptr().cast(),
+                str_.data.len() as c_int,
+                type_,
+            );
             if nret < 0 {
                 err!();
             }
@@ -871,10 +878,11 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
         let nori = nret / n_sample;
         if nori == 1 && !(vlen == BCF_VL_A as c_int && nori == n_a_ori) {
             let mut all_missing = 1;
-            match (*fmt).type_ {
+            let fmt = &line.d.fmt[fmt_i as usize];
+            match fmt.type_ {
                 x if x == BCF_BT_INT8 as c_int => {
                     for sample in 0..n_sample {
-                        let val = *(*fmt).p.add((sample * (*fmt).size) as usize).cast::<i8>();
+                        let val = *fmt.p.add((sample * fmt.size) as usize).cast::<i8>();
                         if val as c_int != bcf_int8_missing {
                             all_missing = 0;
                             break;
@@ -883,11 +891,11 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                 }
                 x if x == BCF_BT_INT16 as c_int => {
                     for sample in 0..n_sample {
-                        // `(*fmt).p` indexes into a packed BCF record byte
+                        // `fmt.p` indexes into a packed BCF record byte
                         // buffer whose alignment is not guaranteed for
                         // multi-byte ints; use `read_unaligned` to avoid UB.
                         let val = i16::from_le(core::ptr::read_unaligned(
-                            (*fmt).p.add((sample * (*fmt).size) as usize).cast::<i16>(),
+                            fmt.p.add((sample * fmt.size) as usize).cast::<i16>(),
                         ));
                         if val as c_int != bcf_int16_missing {
                             all_missing = 0;
@@ -899,7 +907,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                     for sample in 0..n_sample {
                         // See above: packed-record byte pointer, use `read_unaligned`.
                         let val = i32::from_le(core::ptr::read_unaligned(
-                            (*fmt).p.add((sample * (*fmt).size) as usize).cast::<i32>(),
+                            fmt.p.add((sample * fmt.size) as usize).cast::<i32>(),
                         ));
                         if val != bcf_int32_missing {
                             all_missing = 0;
@@ -911,7 +919,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
                     for sample in 0..n_sample {
                         // See above: packed-record byte pointer, use `read_unaligned`.
                         let val = u32::from_le(core::ptr::read_unaligned(
-                            (*fmt).p.add((sample * (*fmt).size) as usize).cast::<u32>(),
+                            fmt.p.add((sample * fmt.size) as usize).cast::<u32>(),
                         ));
                         if val != bcf_float_missing {
                             all_missing = 0;
@@ -1296,34 +1304,32 @@ pub unsafe fn vcfutils_c_349_fixup_info_length_code(info: &mut bcf_info_t) -> c_
     let new_len = ptr.offset_from(buf.as_ptr());
     let old_len = info.vptr_off() as isize;
     if new_len == old_len {
-        libc::memcpy(
-            info.vptr.offset(-old_len).cast(),
-            buf.as_ptr().cast(),
-            new_len as usize,
-        );
+        std::slice::from_raw_parts_mut(info.vptr.offset(-old_len), new_len as usize)
+            .copy_from_slice(&buf[..new_len as usize]);
     } else if new_len < old_len {
         let adjust = old_len - new_len;
-        libc::memcpy(
-            info.vptr.offset(-old_len).cast(),
-            buf.as_ptr().cast(),
-            new_len as usize,
-        );
-        libc::memmove(
-            info.vptr.offset(-adjust).cast(),
-            info.vptr.cast(),
+        std::slice::from_raw_parts_mut(info.vptr.offset(-old_len), new_len as usize)
+            .copy_from_slice(&buf[..new_len as usize]);
+        std::ptr::copy(
+            info.vptr,
+            info.vptr.offset(-adjust),
             info.vptr_len as usize,
         );
         info.vptr = info.vptr.offset(-adjust);
         info.set_vptr_off((info.vptr_off() as isize - adjust) as u32);
     } else {
+        // The reallocated record buffer remains owned by the C BCF record
+        // (it is later freed via `info.vptr_free`), so it is allocated with
+        // libc::malloc to stay compatible with the C-side `free`.
         let new_info = libc::malloc(info.vptr_len as usize + new_len as usize).cast::<u8>();
         if new_info.is_null() {
             return -1;
         }
-        libc::memcpy(new_info.cast(), buf.as_ptr().cast(), new_len as usize);
-        libc::memcpy(
-            new_info.add(new_len as usize).cast(),
-            info.vptr.cast(),
+        std::slice::from_raw_parts_mut(new_info, new_len as usize)
+            .copy_from_slice(&buf[..new_len as usize]);
+        std::ptr::copy_nonoverlapping(
+            info.vptr,
+            new_info.add(new_len as usize),
             info.vptr_len as usize,
         );
         if info.vptr_free() != 0 {
@@ -1406,11 +1412,7 @@ pub unsafe fn vcfutils_c_423_trim_int_cnv_tr_int_tags(
             continue;
         }
         if new_pos < orig_pos {
-            libc::memmove(
-                info.vptr.add(new_pos).cast(),
-                info.vptr.add(orig_pos).cast(),
-                byte_len,
-            );
+            std::ptr::copy(info.vptr.add(orig_pos), info.vptr.add(new_pos), byte_len);
         }
         orig_pos += byte_len;
         new_pos += byte_len;
@@ -1475,11 +1477,7 @@ pub unsafe fn vcfutils_c_498_trim_int_cnv_tr_str_tags(
             continue;
         }
         if new_pos < orig_pos {
-            libc::memmove(
-                info.vptr.add(new_pos).cast(),
-                info.vptr.add(orig_pos).cast(),
-                span,
-            );
+            std::ptr::copy(info.vptr.add(orig_pos), info.vptr.add(new_pos), span);
         }
         orig_pos += span;
         new_pos += span;
@@ -1529,7 +1527,7 @@ pub unsafe fn vcfutils_c_561_fixup_cnv_tr_info_tags(
     }
 
     for i in 0..line.n_info() {
-        let info = &mut *line.d.info.add(i as usize);
+        let info = &mut line.d.info[i as usize];
         let id = (*header.id[BCF_DT_ID as usize].add(info.key as usize)).key;
         let id_str = CStr::from_ptr(id);
         let orig_ptr = info.vptr.sub(info.vptr_off() as usize);
@@ -1603,19 +1601,20 @@ pub unsafe fn vcfutils_c_561_fixup_cnv_tr_info_tags(
 }
 
 pub unsafe fn vcfutils_c_186_bcf_trim_alleles(
-    header: *const bcf_hdr_t,
-    line: *mut bcf1_t,
+    header: &bcf_hdr_t,
+    line: &mut bcf1_t,
 ) -> c_int {
-    vcfutils_bcf_trim_alleles_rs(&*header, &mut *line)
+    vcfutils_bcf_trim_alleles_rs(header, line)
 }
 
 unsafe fn vcfutils_bcf_trim_alleles_rs(header: &bcf_hdr_t, line: &mut bcf1_t) -> c_int {
     let mut ret = 0;
     let mut nrm = 0;
-    let gt = bcf_get_fmt(header, line, c"GT".as_ptr());
-    if gt.is_null() {
+    let gt_ptr = bcf_get_fmt(header, line, c"GT".as_ptr());
+    if gt_ptr.is_null() {
         return 0;
     }
+    let gt = &*gt_ptr;
 
     let n_allele = line.n_allele() as usize;
     let mut ac = Vec::new();
@@ -1625,9 +1624,9 @@ unsafe fn vcfutils_bcf_trim_alleles_rs(header: &bcf_hdr_t, line: &mut bcf1_t) ->
     ac.resize(n_allele, 0);
 
     for i in 0..line.n_sample() as usize {
-        let p = (*gt).p.add(i * (*gt).size as usize);
-        for ial in 0..(*gt).n as usize {
-            let val = match (*gt).type_ {
+        let p = gt.p.add(i * gt.size as usize);
+        for ial in 0..gt.n as usize {
+            let val = match gt.type_ {
                 x if x == BCF_BT_INT8 as c_int => {
                     let v = le_to_i8(p.add(ial)) as c_int;
                     if v == bcf_int8_vector_end {
@@ -1696,11 +1695,11 @@ unsafe fn vcfutils_bcf_trim_alleles_rs(header: &bcf_hdr_t, line: &mut bcf1_t) ->
 }
 
 pub unsafe fn vcfutils_c_241_bcf_remove_alleles(
-    header: *const bcf_hdr_t,
-    line: *mut bcf1_t,
+    header: &bcf_hdr_t,
+    line: &mut bcf1_t,
     mask: c_int,
 ) -> c_int {
-    vcfutils_bcf_remove_alleles_rs(&*header, &mut *line, mask)
+    vcfutils_bcf_remove_alleles_rs(header, line, mask)
 }
 
 unsafe fn vcfutils_bcf_remove_alleles_rs(
@@ -1748,22 +1747,22 @@ unsafe fn vcfutils_bcf_calc_ac_rs(
         let mut an = -1;
         let mut ac_len = 0;
         let mut ac_type = 0;
-        let mut ac_ptr: *mut u8 = std::ptr::null_mut();
+        let mut ac_ptr: Option<*mut u8> = None;
 
         if an_id >= 0 && ac_id >= 0 {
             for i in 0..line.n_info() as usize {
-                let z = line.d.info.add(i);
-                if (*z).key == an_id {
-                    an = (*z).v1.i as c_int;
-                } else if (*z).key == ac_id {
-                    ac_ptr = (*z).vptr;
-                    ac_len = (*z).len;
-                    ac_type = (*z).type_;
+                let z = &line.d.info[i];
+                if z.key == an_id {
+                    an = z.v1.i as c_int;
+                } else if z.key == ac_id {
+                    ac_ptr = Some(z.vptr);
+                    ac_len = z.len;
+                    ac_type = z.type_;
                 }
             }
         }
 
-        if an >= 0 && !ac_ptr.is_null() {
+        if let (true, Some(ac_ptr)) = (an >= 0, ac_ptr) {
             if ac_len != line.n_allele() as c_int - 1 {
                 return 0;
             }
@@ -1775,13 +1774,13 @@ unsafe fn vcfutils_bcf_calc_ac_rs(
                         le_to_i16(ac_ptr.add(i * size_of::<i16>())) as c_int
                     }
                     x if x == BCF_BT_INT32 as c_int => le_to_i32(ac_ptr.add(i * size_of::<i32>())),
-                    _ => libc::exit(1),
+                    _ => std::process::exit(1),
                 };
                 ac[i + 1] = val;
                 nac += val;
             }
             if an < nac {
-                libc::exit(1);
+                std::process::exit(1);
             }
             ac[0] = an - nac;
             return 1;
@@ -1795,22 +1794,22 @@ unsafe fn vcfutils_bcf_calc_ac_rs(
         }
         bcf_unpack(line, BCF_UN_FMT as c_int);
 
-        let mut fmt_gt: *mut bcf_fmt_t = std::ptr::null_mut();
+        let mut fmt_gt: Option<&bcf_fmt_t> = None;
         for i in 0..line.n_fmt() as usize {
-            let fmt = line.d.fmt.add(i);
-            if (*fmt).id == gt_id {
-                fmt_gt = fmt;
+            let fmt = &line.d.fmt[i];
+            if fmt.id == gt_id {
+                fmt_gt = Some(fmt);
                 break;
             }
         }
-        if fmt_gt.is_null() {
+        let Some(fmt_gt) = fmt_gt else {
             return 0;
-        }
+        };
 
         for i in 0..line.n_sample() as usize {
-            let p = (*fmt_gt).p.add(i * (*fmt_gt).size as usize);
-            for ial in 0..(*fmt_gt).n as usize {
-                let val = match (*fmt_gt).type_ {
+            let p = fmt_gt.p.add(i * fmt_gt.size as usize);
+            for ial in 0..fmt_gt.n as usize {
+                let val = match fmt_gt.type_ {
                     x if x == BCF_BT_INT8 as c_int => {
                         let v = le_to_i8(p.add(ial)) as c_int;
                         if v == bcf_int8_vector_end {
@@ -1832,13 +1831,13 @@ unsafe fn vcfutils_bcf_calc_ac_rs(
                         }
                         v
                     }
-                    _ => libc::exit(1),
+                    _ => std::process::exit(1),
                 };
                 if val >> 1 == 0 {
                     continue;
                 }
                 if val >> 1 > line.n_allele() as c_int {
-                    libc::exit(1);
+                    std::process::exit(1);
                 }
                 ac[((val >> 1) - 1) as usize] += 1;
             }
@@ -1903,7 +1902,7 @@ unsafe fn vcfutils_bcf_gt_type_rs(
                 }
                 v
             }
-            _ => libc::exit(1),
+            _ => std::process::exit(1),
         };
         if val >> 1 == 0 {
             return GT_UNKN as c_int;
@@ -1959,24 +1958,24 @@ pub fn bcf_acgt2int(mut c: c_char) -> c_int {
     }
 }
 
-pub unsafe fn bcf_trim_alleles(header: *const bcf_hdr_t, line: *mut bcf1_t) -> c_int {
+pub unsafe fn bcf_trim_alleles(header: &bcf_hdr_t, line: &mut bcf1_t) -> c_int {
     vcfutils_c_186_bcf_trim_alleles(header, line)
 }
 
 pub unsafe fn bcf_remove_alleles(
-    header: *const bcf_hdr_t,
-    line: *mut bcf1_t,
+    header: &bcf_hdr_t,
+    line: &mut bcf1_t,
     mask: c_int,
 ) -> c_int {
     vcfutils_c_241_bcf_remove_alleles(header, line, mask)
 }
 
 pub unsafe fn bcf_remove_allele_set(
-    header: *const bcf_hdr_t,
-    line: *mut bcf1_t,
-    rm_set: *const super::hts::kbitset_t,
+    header: &bcf_hdr_t,
+    line: &mut bcf1_t,
+    rm_set: &super::hts::kbitset_t,
 ) -> c_int {
-    vcfutils_c_659_bcf_remove_allele_set(header, line, rm_set.cast())
+    vcfutils_c_659_bcf_remove_allele_set(header, line, rm_set)
 }
 
 pub unsafe fn bcf_calc_ac(

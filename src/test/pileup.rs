@@ -44,11 +44,7 @@ pub unsafe fn test_pileup_c_76_print_pileup_seq(
     n: c_int,
 ) -> c_int {
     const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
-    let mut ks = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut ks = kstring_t::default();
     for _ in 0..n {
         let seq = sam::bam_get_seq((*p).b);
         let is_rev = ((*(*p).b).core.flag as c_int & sam::BAM_FREVERSE) != 0;
@@ -89,12 +85,11 @@ pub unsafe fn test_pileup_c_76_print_pileup_seq(
             let len = sam::bam_plp_insertion(p, &mut ks, &mut del_len);
             if len < 0 {
                 libc::perror(c"bam_plp_insertion".as_ptr());
-                libc::free(ks.s.cast());
                 return -1;
             }
             libc::printf(c"%+d(".as_ptr(), len);
             for j in 0..len {
-                let c = *ks.s.add(j as usize) as u8;
+                let c = ks.data[j as usize];
                 libc::putchar(if is_rev {
                     libc::tolower(c as c_int)
                 } else {
@@ -111,7 +106,6 @@ pub unsafe fn test_pileup_c_76_print_pileup_seq(
         }
         p = p.add(1);
     }
-    libc::free(ks.s.cast());
     0
 }
 

@@ -69,7 +69,7 @@ pub unsafe fn kstring_kvsprintf_bytes_ref(
     if out.len() > c_int::MAX as usize {
         return -1;
     }
-    if kputsn(out.as_ptr().cast(), out.len(), s) < 0 {
+    if kputsn(&out, out.len(), s) < 0 {
         -1
     } else {
         out.len() as c_int
@@ -172,52 +172,54 @@ pub unsafe fn kstring_ksprintf_bytes_ref(
     if out.len() > c_int::MAX as usize {
         return -1;
     }
-    kputsn(out.as_ptr().cast(), out.len(), s)
+    kputsn(&out, out.len(), s)
 }
 
 // original: main (htslib/kstring.c:531)
 pub unsafe fn kstring_c_531_main() -> c_int {
-    let mut s: kstring_t = std::mem::zeroed();
+    let mut s = kstring_t::default();
     let mut aux: ks_tokaux_t = std::mem::zeroed();
 
-    kstring_ksprintf_ref(&mut s, c" abcdefg:    %d ", &[KsPrintfArg::Int(100)]);
-    libc::printf(c"'%s'\n".as_ptr(), s.s);
+    kstring_ksprintf_bytes_ref(&mut s, b" abcdefg:    %d ", &[KsPrintfArg::Int(100)]);
+    println!("'{}'", String::from_utf8_lossy(&s.data));
 
     let fields = ksplit_vec_ref(&mut s, 0).unwrap_or_default();
-    let n = fields.len() as c_int;
-    let mut i = 0;
-    while i < n {
-        libc::printf(
-            c"field[%d] = '%s'\n".as_ptr(),
+    for (i, &offset) in fields.iter().enumerate() {
+        // ksplit writes NUL separators into the buffer; read up to the next one.
+        let start = offset as usize;
+        let end = s.data[start..]
+            .iter()
+            .position(|&b| b == 0)
+            .map(|p| start + p)
+            .unwrap_or(s.data.len());
+        println!(
+            "field[{}] = '{}'",
             i,
-            s.s.add(fields[i as usize] as usize),
+            String::from_utf8_lossy(&s.data[start..end])
         );
-        i += 1;
     }
 
-    s.l = 0;
-    let mut p = kstrtok_ref(Some(c"ab:cde:fg/hij::k"), Some(c":/"), &mut aux);
+    s.data.clear();
+    let mut p = kstrtok_bytes_ref(Some(b"ab:cde:fg/hij::k"), Some(b":/"), &mut aux);
     while !p.is_null() {
-        kputsn(p, aux.p.offset_from(p) as usize, &mut s);
+        let len = aux.p.offset_from(p) as usize;
+        kputsn(std::slice::from_raw_parts(p.cast::<u8>(), len), len, &mut s);
         kputc(b'\n' as c_int, &mut s);
-        p = kstrtok_ref(None, None, &mut aux);
+        p = kstrtok_bytes_ref(None, None, &mut aux);
     }
-    libc::printf(c"%s".as_ptr(), s.s);
+    print!("{}", String::from_utf8_lossy(&s.data));
 
     ks_free(&mut s);
 
     {
-        let str_ = c"abcdefgcdgcagtcakcdcd".as_ptr();
-        let pat = c"cd";
-        let mut s = str_;
+        let haystack = b"abcdefgcdgcagtcakcdcd";
+        let pat = b"cd";
+        let mut from = 0usize;
         let mut prep = None;
-        loop {
-            let ret = kstrstr_boxed_prep_ref(CStr::from_ptr(s), pat, Some(&mut prep));
-            if ret.is_null() {
-                break;
-            }
-            libc::printf(c"match: %s\n".as_ptr(), ret);
-            s = ret.add(prep.as_deref().unwrap()[0] as usize);
+        while let Some(rel) = kstrstr_bytes_boxed_prep_ref(&haystack[from..], pat, Some(&mut prep)) {
+            let at = from + rel;
+            println!("match: {}", String::from_utf8_lossy(&haystack[at..]));
+            from = at + prep.as_deref().unwrap()[0] as usize;
         }
     }
 
@@ -281,7 +283,7 @@ pub unsafe fn ksplit(s: *mut kstring_t, delimiter: c_int, n: *mut c_int) -> *mut
 }
 
 pub unsafe fn ksplit_ref(s: &mut kstring_t, delimiter: c_int, n: &mut c_int) -> *mut c_int {
-    if s.s.is_null() {
+    if s.data.is_empty() {
         *n = 0;
         return std::ptr::null_mut();
     }
@@ -305,27 +307,33 @@ pub unsafe fn ksplit_ref(s: &mut kstring_t, delimiter: c_int, n: &mut c_int) -> 
 }
 
 pub unsafe fn ksplit_vec_ref(s: &mut kstring_t, delimiter: c_int) -> Option<Vec<c_int>> {
-    if s.s.is_null() {
+    if s.data.is_empty() {
         return None;
     }
 
-    ksplit_core_slice_ref(
-        std::slice::from_raw_parts_mut(s.s.cast::<u8>(), s.l + 1),
-        delimiter,
-        true,
-    )
+    // The split scans one past the content (where the old NUL terminator lived)
+    // to flush the final field; append a temporary 0 then drop it again so the
+    // in-place NUL separators it writes persist in the owned buffer.
+    s.data.push(0);
+    let result = ksplit_core_slice_ref(&mut s.data, delimiter, true);
+    s.data.pop();
+    result
 }
 
 fn ksplit_core_slice_ref(buf: &mut [u8], delimiter: c_int, write_nuls: bool) -> Option<Vec<c_int>> {
     let mut offsets = Vec::new();
-    let mut last_char = 0;
+    let mut last_char = 0u8 as c_int;
     let mut last_start = 0;
     for (i, ch) in buf.iter_mut().enumerate() {
         let signed_ch = *ch as i8 as c_int;
         let unsigned_ch = *ch as c_int;
+        // isspace(c) for the C locale: ' ', '\t', '\n', '\v', '\f', '\r'.
+        let is_space = |c: c_int| matches!(c, 0x20 | 0x09 | 0x0a | 0x0b | 0x0c | 0x0d);
+        // isgraph(c) for the C locale: any printable character except space.
+        let is_graph = |c: c_int| (0x21..=0x7e).contains(&c);
         if delimiter == 0 {
-            if unsafe { libc::isspace(unsigned_ch) } != 0 || *ch == 0 {
-                if unsafe { libc::isgraph(last_char) } != 0 {
+            if is_space(unsigned_ch) || *ch == 0 {
+                if is_graph(last_char) {
                     offsets.try_reserve(1).ok()?;
                     if write_nuls {
                         *ch = 0;
@@ -334,7 +342,7 @@ fn ksplit_core_slice_ref(buf: &mut [u8], delimiter: c_int, write_nuls: bool) -> 
                         offsets.push(0);
                     }
                 }
-            } else if unsafe { libc::isspace(last_char) } != 0 || last_char == 0 {
+            } else if is_space(last_char) || last_char == 0 {
                 last_start = i as c_int;
             }
         } else if signed_ch == delimiter || *ch == 0 {
@@ -390,35 +398,40 @@ unsafe fn copy_offsets_to_libc_buffer(
 
 pub unsafe fn kgetline(s: *mut kstring_t, fgets_fn: kgets_func, fp: *mut c_void) -> c_int {
     if s.is_null() {
-        return libc::EOF;
+        return -1;
     }
     kgetline_ref(&mut *s, fgets_fn, fp)
 }
 
 pub unsafe fn kgetline_ref(s: &mut kstring_t, fgets_fn: kgets_func, fp: *mut c_void) -> c_int {
-    let l0 = s.l;
-    while s.l == l0 || *s.s.add(s.l - 1) != b'\n' as c_char {
-        if s.m - s.l < 200 && ks_resize(s, s.m + 200) < 0 {
-            return libc::EOF;
+    let l0 = s.data.len();
+    while s.data.len() == l0 || s.data[s.data.len() - 1] != b'\n' {
+        // Keep at least 200 bytes of spare capacity (plus room for the NUL the
+        // C fgets boundary writes), then let fgets fill the raw tail in place.
+        if s.data.capacity() - s.data.len() < 200 {
+            ks_resize(s, s.data.capacity() + 200);
         }
-        let ret = fgets_fn.unwrap_unchecked()(s.s.add(s.l), (s.m - s.l) as c_int, fp);
+        let len = s.data.len();
+        let avail = s.data.capacity() - len;
+        let ret = fgets_fn.unwrap_unchecked()(s.data.as_mut_ptr().add(len).cast(), avail as c_int, fp);
         if ret.is_null() {
             break;
         }
-        s.l += CStr::from_ptr(s.s.add(s.l)).to_bytes().len();
+        // fgets wrote a NUL-terminated string into the spare capacity; adopt it.
+        let written = CStr::from_ptr(s.data.as_ptr().add(len).cast()).to_bytes().len();
+        s.data.set_len(len + written);
     }
 
-    if s.l == l0 {
-        return libc::EOF;
+    if s.data.len() == l0 {
+        return -1;
     }
 
-    if s.l > l0 && *s.s.add(s.l - 1) == b'\n' as c_char {
-        s.l -= 1;
-        if s.l > l0 && *s.s.add(s.l - 1) == b'\r' as c_char {
-            s.l -= 1;
+    if s.data.len() > l0 && s.data[s.data.len() - 1] == b'\n' {
+        s.data.pop();
+        if s.data.len() > l0 && s.data[s.data.len() - 1] == b'\r' {
+            s.data.pop();
         }
     }
-    *s.s.add(s.l) = 0;
     0
 }
 
@@ -432,43 +445,43 @@ pub unsafe extern "C" fn fgets_wrapper(
 
 pub unsafe fn kfgetline(s: *mut kstring_t, fp: *mut libc::FILE) -> c_int {
     if s.is_null() || fp.is_null() {
-        return libc::EOF;
+        return -1;
     }
     kgetline_ref(&mut *s, Some(fgets_wrapper), fp.cast())
 }
 
 pub unsafe fn kgetline2(s: *mut kstring_t, fgets_fn: kgets_func2, fp: *mut c_void) -> c_int {
     if s.is_null() {
-        return libc::EOF;
+        return -1;
     }
     kgetline2_ref(&mut *s, fgets_fn, fp)
 }
 
 pub unsafe fn kgetline2_ref(s: &mut kstring_t, fgets_fn: kgets_func2, fp: *mut c_void) -> c_int {
-    let l0 = s.l;
-    while s.l == l0 || *s.s.add(s.l - 1) != b'\n' as c_char {
-        if s.m - s.l < 200 && ks_resize(s, s.m + 200) < 0 {
-            fgets_fn.unwrap_unchecked()(s.s.add(s.l), 0, fp);
-            return libc::EOF;
+    let l0 = s.data.len();
+    while s.data.len() == l0 || s.data[s.data.len() - 1] != b'\n' {
+        if s.data.capacity() - s.data.len() < 200 {
+            ks_resize(s, s.data.capacity() + 200);
         }
-        let len = fgets_fn.unwrap_unchecked()(s.s.add(s.l), s.m - s.l, fp);
-        if len <= 0 {
+        let len = s.data.len();
+        let avail = s.data.capacity() - len;
+        let written = fgets_fn.unwrap_unchecked()(s.data.as_mut_ptr().add(len).cast(), avail, fp);
+        if written <= 0 {
             break;
         }
-        s.l += len as usize;
+        s.data.set_len(len + written as usize);
     }
 
-    if s.l == l0 {
-        return libc::EOF;
+    if s.data.len() == l0 {
+        return -1;
     }
 
-    if s.l > l0 && *s.s.add(s.l - 1) == b'\n' as c_char {
-        s.l -= 1;
-        if s.l > l0 && *s.s.add(s.l - 1) == b'\r' as c_char {
-            s.l -= 1;
+    if s.data.len() > l0 && s.data[s.data.len() - 1] == b'\n' {
+        s.data.pop();
+        if s.data.len() > l0 && s.data[s.data.len() - 1] == b'\r' {
+            s.data.pop();
         }
     }
-    *s.s.add(s.l) = 0;
     0
 }
 
@@ -1092,7 +1105,7 @@ pub unsafe fn kputd_ref(d: f64, s: &mut kstring_t) -> c_int {
     if text.len() > c_int::MAX as usize {
         return -1;
     }
-    if kputsn(text.as_ptr().cast(), text.len(), s) < 0 {
+    if kputsn(&text, text.len(), s) < 0 {
         return -1;
     }
     text.len() as c_int
@@ -1164,20 +1177,18 @@ fn kputd_bytes(d: f64) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CStr;
 
     #[test]
     fn ksprintf_allocates_and_appends_to_kstring() {
         unsafe {
-            let mut s: kstring_t = std::mem::zeroed();
+            let mut s = kstring_t::default();
 
             assert_eq!(
                 kstring_c_177_ksprintf(&mut s, c"sample-%d".as_ptr(), &[KsPrintfArg::Int(42)]),
                 9
             );
-            assert!(!s.s.is_null());
-            assert_eq!(s.l, 9);
-            assert_eq!(CStr::from_ptr(s.s).to_bytes(), b"sample-42");
+            assert_eq!(s.data.len(), 9);
+            assert_eq!(s.data.as_slice(), b"sample-42");
 
             assert_eq!(
                 kstring_c_177_ksprintf(
@@ -1187,8 +1198,8 @@ mod tests {
                 ),
                 3
             );
-            assert_eq!(s.l, 12);
-            assert_eq!(CStr::from_ptr(s.s).to_bytes(), b"sample-42:ok");
+            assert_eq!(s.data.len(), 12);
+            assert_eq!(s.data.as_slice(), b"sample-42:ok");
 
             ks_free(&mut s);
         }
@@ -1197,7 +1208,7 @@ mod tests {
     #[test]
     fn kvsprintf_formats_synthetic_va_list_without_c_vsnprintf() {
         unsafe {
-            let mut s: kstring_t = std::mem::zeroed();
+            let mut s = kstring_t::default();
             let mut reg_save = [0usize; 24];
             reg_save[0] = 7;
             reg_save[1] = c"abc".as_ptr() as usize;
@@ -1215,7 +1226,7 @@ mod tests {
                 kstring_c_142_kvsprintf(&mut s, c"%d:%s:%g:%%".as_ptr(), &mut args),
                 11
             );
-            assert_eq!(CStr::from_ptr(s.s).to_bytes(), b"7:abc:3.5:%");
+            assert_eq!(s.data.as_slice(), b"7:abc:3.5:%");
 
             ks_free(&mut s);
         }

@@ -8,11 +8,8 @@
 
 use crate::htslib_rs::{
     bgzf,
-    hts::{
-        htsFile, hts_close, hts_getline, hts_open, hts_pos_t, isdigit_c, isspace_c, kputc, kputs,
-        kputw, ks_resize, kstring_t, BGZF,
-    },
-    regidx, sam,
+    hts::{htsFile, hts_close, hts_getline, hts_open, hts_pos_t, kstring_t, BGZF},
+    regidx,
 };
 use std::ffi::{c_void, CStr};
 
@@ -22,75 +19,43 @@ const ANNOT_TSV_ANN_CNT: i32 = 4;
 const ANNOT_TSV_PRINT_MATCHING: i32 = 1;
 const ANNOT_TSV_PRINT_NONMATCHING: i32 = 2;
 
-#[derive(Default)]
-struct AnnotTsvOffsets(Vec<*mut i8>);
-
-impl AnnotTsvOffsets {
-    fn add(&mut self, i: usize) -> *mut *mut i8 {
-        unsafe { self.0.as_mut_ptr().add(i) }
-    }
-
-    fn clear(&mut self) {
-        self.0.clear();
-    }
-
-    fn push(&mut self, ptr: *mut i8) {
-        self.0.push(ptr);
-    }
-
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    fn iter(&self) -> std::slice::Iter<'_, *mut i8> {
-        self.0.iter()
-    }
-
-    fn get(&self, i: usize) -> *mut i8 {
-        self.0[i]
-    }
-
-    fn set(&mut self, i: usize, ptr: *mut i8) {
-        self.0[i] = ptr;
-    }
-}
-
+/// A split line: each column is an owned, NUL-free byte string.
+///
+/// This replaces the C idiom of a single `rmme` buffer plus an array of
+/// interior `*mut i8` offsets. The number of live columns is simply
+/// `self.cols.len()`.
 #[derive(Default)]
 struct AnnotTsvCols {
-    n: usize,
-    off: AnnotTsvOffsets,
-    rmme: Option<Box<[i8]>>,
+    cols: Vec<Vec<u8>>,
 }
 
-#[repr(C)]
 struct AnnotTsvHdr {
-    name2idx: *mut c_void,
-    cols: *mut AnnotTsvCols,
-    annots: *mut AnnotTsvCols,
+    // Maps a column name to its index. Replaces the C khash_str2int handle.
+    name2idx: std::collections::HashMap<Vec<u8>, i32>,
+    cols: Option<Box<AnnotTsvCols>>,
+    annots: Option<Box<AnnotTsvCols>>,
     dummy: i32,
 }
 
-#[repr(C)]
 struct AnnotTsvDatHeaderOnly {
-    fname: *mut i8,
+    fname: Vec<u8>,
     hdr: AnnotTsvHdr,
 }
 
-#[repr(C)]
-struct AnnotTsvDat {
-    fname: *mut i8,
+pub struct AnnotTsvDat {
+    fname: Vec<u8>,
     hdr: AnnotTsvHdr,
-    core: *mut AnnotTsvCols,
-    match_: *mut AnnotTsvCols,
-    transfer: *mut AnnotTsvCols,
-    annots: *mut AnnotTsvCols,
+    core: Option<Box<AnnotTsvCols>>,
+    match_: Option<Box<AnnotTsvCols>>,
+    transfer: Option<Box<AnnotTsvCols>>,
+    annots: Option<Box<AnnotTsvCols>>,
     core_idx: Vec<i32>,
     match_idx: Vec<i32>,
     transfer_idx: Vec<i32>,
     annots_idx: Vec<i32>,
     nannots_added: Vec<i32>,
     coor_base: [i32; 2],
-    delim: i8,
+    delim: u8,
     grow_n: i32,
     line: kstring_t,
     fp: *mut htsFile,
@@ -99,17 +64,17 @@ struct AnnotTsvDat {
 impl Default for AnnotTsvDat {
     fn default() -> Self {
         Self {
-            fname: std::ptr::null_mut(),
+            fname: Vec::new(),
             hdr: AnnotTsvHdr {
-                name2idx: std::ptr::null_mut(),
-                cols: std::ptr::null_mut(),
-                annots: std::ptr::null_mut(),
+                name2idx: std::collections::HashMap::new(),
+                cols: None,
+                annots: None,
                 dummy: 0,
             },
-            core: std::ptr::null_mut(),
-            match_: std::ptr::null_mut(),
-            transfer: std::ptr::null_mut(),
-            annots: std::ptr::null_mut(),
+            core: None,
+            match_: None,
+            transfer: None,
+            annots: None,
             core_idx: Vec::new(),
             match_idx: Vec::new(),
             transfer_idx: Vec::new(),
@@ -118,11 +83,7 @@ impl Default for AnnotTsvDat {
             coor_base: [0; 2],
             delim: 0,
             grow_n: 0,
-            line: kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            },
+            line: kstring_t { data: Vec::new() },
             fp: std::ptr::null_mut(),
         }
     }
@@ -137,26 +98,25 @@ struct AnnotTsvNbp {
 
 struct ParsedTab {
     cols: Box<AnnotTsvCols>,
-    chr_beg: *mut i8,
-    chr_end: *mut i8,
+    /// Chromosome name (the first core column), NUL-free.
+    chr: Vec<u8>,
     beg: hts_pos_t,
     end: hts_pos_t,
 }
 
-#[repr(C)]
-struct AnnotTsvArgs {
+pub struct AnnotTsvArgs {
     nbp: Option<Box<AnnotTsvNbp>>,
     dst: AnnotTsvDat,
     src: AnnotTsvDat,
-    core_str: *mut i8,
-    coords_str: *mut i8,
-    match_str: *mut i8,
-    transfer_str: *mut i8,
-    annots_str: *mut i8,
-    headers_str: *mut i8,
-    delim_str: *mut i8,
-    temp_dir: *mut i8,
-    out_fname: *mut i8,
+    core_str: Vec<u8>,
+    coords_str: Vec<u8>,
+    match_str: Vec<u8>,
+    transfer_str: Vec<u8>,
+    annots_str: Vec<u8>,
+    headers_str: Vec<u8>,
+    delim_str: Vec<u8>,
+    temp_dir: Vec<u8>,
+    out_fname: Vec<u8>,
     out_fp: *mut BGZF,
     allow_dups: i32,
     max_annots: i32,
@@ -165,11 +125,12 @@ struct AnnotTsvArgs {
     overlap_either: i32,
     overlap_src: f64,
     overlap_dst: f64,
-    idx: *mut regidx::regidx_t,
-    itr: *mut regidx::regitr_t,
+    idx: Option<Box<regidx::regidx_t>>,
+    itr: Option<Box<regidx::regitr_t>>,
     tmp_kstr: kstring_t,
-    tmp_cols: *mut Vec<AnnotTsvCols>,
-    tmp_hash: Vec<*mut c_void>,
+    tmp_cols: Vec<AnnotTsvCols>,
+    // One de-dup set per transfer column. Replaces the C khash_str2int handles.
+    tmp_hash: Vec<std::collections::HashSet<Vec<u8>>>,
 }
 
 impl Default for AnnotTsvArgs {
@@ -178,15 +139,15 @@ impl Default for AnnotTsvArgs {
             nbp: None,
             dst: AnnotTsvDat::default(),
             src: AnnotTsvDat::default(),
-            core_str: std::ptr::null_mut(),
-            coords_str: std::ptr::null_mut(),
-            match_str: std::ptr::null_mut(),
-            transfer_str: std::ptr::null_mut(),
-            annots_str: std::ptr::null_mut(),
-            headers_str: std::ptr::null_mut(),
-            delim_str: std::ptr::null_mut(),
-            temp_dir: std::ptr::null_mut(),
-            out_fname: std::ptr::null_mut(),
+            core_str: Vec::new(),
+            coords_str: Vec::new(),
+            match_str: Vec::new(),
+            transfer_str: Vec::new(),
+            annots_str: Vec::new(),
+            headers_str: Vec::new(),
+            delim_str: Vec::new(),
+            temp_dir: Vec::new(),
+            out_fname: Vec::new(),
             out_fp: std::ptr::null_mut(),
             allow_dups: 0,
             max_annots: 0,
@@ -195,14 +156,10 @@ impl Default for AnnotTsvArgs {
             overlap_either: 0,
             overlap_src: 0.0,
             overlap_dst: 0.0,
-            idx: std::ptr::null_mut(),
-            itr: std::ptr::null_mut(),
-            tmp_kstr: kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            },
-            tmp_cols: std::ptr::null_mut(),
+            idx: None,
+            itr: None,
+            tmp_kstr: kstring_t { data: Vec::new() },
+            tmp_cols: Vec::new(),
             tmp_hash: Vec::new(),
         }
     }
@@ -358,122 +315,78 @@ pub unsafe fn annot_tsv_c_168_nbp_length(nbp: *mut c_void) -> hts_pos_t {
     nbp_length(&mut *nbp)
 }
 
-unsafe fn cols_split_into(line: *const i8, cols: &mut AnnotTsvCols, delim: i8) {
-    cols.n = 0;
-    cols.off.clear();
-    let bytes = CStr::from_ptr(line).to_bytes_with_nul();
-    let mut rmme: Box<[i8]> = bytes
-        .iter()
-        .map(|&byte| byte as i8)
-        .collect::<Vec<_>>()
-        .into_boxed_slice();
-
-    let mut ss = rmme.as_mut_ptr();
-    loop {
-        let mut se = ss;
-        while *se != 0 && *se != delim {
-            se = se.add(1);
-        }
-        let tmp = *se;
-        *se = 0;
-        cols.off.push(ss);
-        cols.n += 1;
-        if tmp == 0 {
-            break;
-        }
-        ss = se.add(1);
+fn cols_split_into(line: &[u8], cols: &mut AnnotTsvCols, delim: u8) {
+    cols.cols.clear();
+    // Split on `delim`. A trailing delimiter produces a trailing empty field,
+    // matching the C behaviour of always emitting at least one column.
+    for field in line.split(|&byte| byte == delim) {
+        cols.cols.push(field.to_vec());
     }
-    cols.rmme = Some(rmme);
 }
 
-unsafe fn cols_split_box(line: *const i8, delim: i8) -> Box<AnnotTsvCols> {
+fn cols_split_box(line: &[u8], delim: u8) -> Box<AnnotTsvCols> {
     let mut cols = Box::<AnnotTsvCols>::default();
     cols_split_into(line, &mut cols, delim);
     cols
 }
 
-unsafe fn cols_split_raw(line: *const i8, delim: i8) -> *mut AnnotTsvCols {
-    Box::into_raw(cols_split_box(line, delim))
+fn cols_append(cols: &mut AnnotTsvCols, str_: &[u8]) {
+    cols.cols.push(str_.to_vec());
 }
 
-unsafe fn cols_append(cols: &mut AnnotTsvCols, str_: *mut i8) {
-    if cols.rmme.is_some() {
-        let mut bytes = Vec::<i8>::new();
-        for &old in cols.off.iter().take(cols.n) {
-            let old_bytes = CStr::from_ptr(old).to_bytes_with_nul();
-            bytes.extend(old_bytes.iter().map(|&byte| byte as i8));
-        }
-        let str_bytes = CStr::from_ptr(str_).to_bytes_with_nul();
-        bytes.extend(str_bytes.iter().map(|&byte| byte as i8));
-
-        let mut rmme = bytes.into_boxed_slice();
-        let mut off = AnnotTsvOffsets(Vec::with_capacity(cols.off.len() + 1));
-        let mut ptr = rmme.as_mut_ptr();
-        loop {
-            off.push(ptr);
-            while *ptr != 0 {
-                ptr = ptr.add(1);
-            }
-            ptr = ptr.add(1);
-            if ptr >= rmme.as_mut_ptr().add(rmme.len()) {
-                break;
-            }
-        }
-        cols.rmme = Some(rmme);
-        cols.off = off;
-        cols.n += 1;
-        return;
-    }
-    if cols.n < cols.off.len() {
-        cols.off.set(cols.n, str_);
-    } else {
-        cols.off.push(str_);
-    }
-    cols.n += 1;
+fn cols_clear(cols: &mut AnnotTsvCols) {
+    cols.cols.clear();
 }
 
-unsafe fn cols_clear(cols: &mut AnnotTsvCols) {
-    cols.rmme = None;
-    cols.n = 0;
-    cols.off.clear();
-}
-
-unsafe fn cols_destroy_ptr(cols: *mut AnnotTsvCols) {
-    if !cols.is_null() {
-        drop(Box::from_raw(cols));
-    }
-}
-
-unsafe fn parse_tab_with_payload_ref(line: *const i8, dat: &mut AnnotTsvDat) -> Option<ParsedTab> {
-    if *line == b'#' as i8 {
+fn parse_tab_with_payload_ref(line: &[u8], dat: &mut AnnotTsvDat) -> Option<ParsedTab> {
+    if line.first() == Some(&b'#') {
         return None;
     }
 
     let cols = cols_split_box(line, dat.delim);
-    if cols.n < dat.core_idx[0] as usize {
-        libc::abort();
+    if cols.cols.len() < dat.core_idx[0] as usize {
+        std::process::abort();
     }
-    let chr_beg = cols.off.get(dat.core_idx[0] as usize);
-    let chr_end = chr_beg.add(libc::strlen(chr_beg) - 1);
+    let chr = cols.cols[dat.core_idx[0] as usize].clone();
 
-    if cols.n < dat.core_idx[1] as usize {
-        libc::abort();
+    if cols.cols.len() < dat.core_idx[1] as usize {
+        std::process::abort();
     }
-    let mut tmp: *mut i8 = std::ptr::null_mut();
-    let mut ptr = cols.off.get(dat.core_idx[1] as usize);
-    let mut beg = libc::strtod(ptr, &mut tmp) as hts_pos_t;
-    if tmp == ptr {
-        libc::abort();
-    }
+    // strtod equivalent: parse the leading numeric prefix; abort if none.
+    let beg_field = &cols.cols[dat.core_idx[1] as usize];
+    let beg_prefix = {
+        let mut k = 0;
+        while k < beg_field.len()
+            && (beg_field[k].is_ascii_digit()
+                || matches!(beg_field[k], b'+' | b'-' | b'.' | b'e' | b'E'))
+        {
+            k += 1;
+        }
+        k
+    };
+    let mut beg = std::str::from_utf8(&beg_field[..beg_prefix])
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or_else(|| std::process::abort()) as hts_pos_t;
 
-    if cols.n < dat.core_idx[2] as usize {
-        libc::abort();
+    if cols.cols.len() < dat.core_idx[2] as usize {
+        std::process::abort();
     }
-    ptr = cols.off.get(dat.core_idx[2] as usize);
-    let mut end = libc::strtod(ptr, &mut tmp) as hts_pos_t;
-    if tmp == ptr {
-        libc::abort();
-    }
+    let end_field = &cols.cols[dat.core_idx[2] as usize];
+    let end_prefix = {
+        let mut k = 0;
+        while k < end_field.len()
+            && (end_field[k].is_ascii_digit()
+                || matches!(end_field[k], b'+' | b'-' | b'.' | b'e' | b'E'))
+        {
+            k += 1;
+        }
+        k
+    };
+    let mut end = std::str::from_utf8(&end_field[..end_prefix])
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or_else(|| std::process::abort()) as hts_pos_t;
 
     beg -= dat.coor_base[0] as hts_pos_t - 1;
     end -= dat.coor_base[1] as hts_pos_t - 1;
@@ -484,99 +397,154 @@ unsafe fn parse_tab_with_payload_ref(line: *const i8, dat: &mut AnnotTsvDat) -> 
 
     Some(ParsedTab {
         cols,
-        chr_beg,
-        chr_end,
+        chr,
         beg,
         end,
     })
 }
 
 // original: cols_split (htslib/annot-tsv.c:187)
-pub unsafe fn annot_tsv_c_187_cols_split(
-    line: *const i8,
-    cols: *mut c_void,
-    delim: i8,
-) -> *mut c_void {
-    let cols = if cols.is_null() {
-        Box::into_raw(Box::<AnnotTsvCols>::default())
-    } else {
-        cols.cast::<AnnotTsvCols>()
-    };
-    if cols.is_null() {
-        libc::abort();
-    }
-    cols_split_into(line, &mut *cols, delim);
-    cols.cast()
+fn annot_tsv_c_187_cols_split(
+    line: &[u8],
+    cols: Option<Box<AnnotTsvCols>>,
+    delim: u8,
+) -> Box<AnnotTsvCols> {
+    let mut cols = cols.unwrap_or_default();
+    cols_split_into(line, &mut cols, delim);
+    cols
 }
 
 // original: cols_append (htslib/annot-tsv.c:217)
-pub unsafe fn annot_tsv_c_217_cols_append(cols: *mut c_void, str_: *mut i8) {
-    let cols = cols.cast::<AnnotTsvCols>();
-    cols_append(&mut *cols, str_);
+fn annot_tsv_c_217_cols_append(cols: &mut AnnotTsvCols, str_: &[u8]) {
+    cols_append(cols, str_);
 }
 
 // original: cols_clear (htslib/annot-tsv.c:261)
-pub unsafe fn annot_tsv_c_261_cols_clear(cols: *mut c_void) {
-    let cols = cols.cast::<AnnotTsvCols>();
-    if cols.is_null() {
-        return;
-    }
-    cols_clear(&mut *cols);
+fn annot_tsv_c_261_cols_clear(cols: &mut AnnotTsvCols) {
+    cols_clear(cols);
 }
 
 // original: cols_destroy (htslib/annot-tsv.c:269)
-pub unsafe fn annot_tsv_c_269_cols_destroy(cols: *mut c_void) {
-    cols_destroy_ptr(cols.cast::<AnnotTsvCols>());
+fn annot_tsv_c_269_cols_destroy(cols: Option<Box<AnnotTsvCols>>) {
+    drop(cols);
 }
 
 // original: parse_tab_with_payload (htslib/annot-tsv.c:276)
-pub unsafe extern "C" fn annot_tsv_c_276_parse_tab_with_payload(
-    line: *const i8,
-    chr_beg: *mut *mut i8,
-    chr_end: *mut *mut i8,
-    beg: *mut hts_pos_t,
-    end: *mut hts_pos_t,
-    payload: *mut c_void,
-    usr: *mut c_void,
+//
+// regidx callback. The `usr` byte buffer carries the source `AnnotTsvDat`
+// parse config (delim + the three core column indices + the two coordinate
+// bases) serialized as: 1 delim byte followed by five little-endian i32s. The
+// `payload` slot stores a raw `*mut AnnotTsvCols` pointer (the split line),
+// which `annot_tsv_c_322_free_payload` later reclaims. This pointer-in-payload
+// scheme is the genuine boundary with regidx's opaque payload machinery.
+fn annot_tsv_c_276_parse_tab_with_payload(
+    line: &[u8],
+    out: &mut regidx::ParsedRegion,
+    payload: &mut [u8],
+    usr: Option<&mut Vec<u8>>,
 ) -> i32 {
-    let Some(parsed) = parse_tab_with_payload_ref(line, &mut *usr.cast::<AnnotTsvDat>()) else {
-        *(payload.cast::<*mut AnnotTsvCols>()) = std::ptr::null_mut();
+    if line.first() == Some(&b'#') {
         return -1;
-    };
-    *chr_beg = parsed.chr_beg;
-    *chr_end = parsed.chr_end;
-    *beg = parsed.beg;
-    *end = parsed.end;
-    *(payload.cast::<*mut AnnotTsvCols>()) = Box::into_raw(parsed.cols);
+    }
+    let cfg = usr.expect("annot-tsv regidx usr config");
+    let delim = cfg[0];
+    let core0 = i32::from_le_bytes(cfg[1..5].try_into().unwrap());
+    let core1 = i32::from_le_bytes(cfg[5..9].try_into().unwrap());
+    let core2 = i32::from_le_bytes(cfg[9..13].try_into().unwrap());
+    let coor0 = i32::from_le_bytes(cfg[13..17].try_into().unwrap());
+    let coor1 = i32::from_le_bytes(cfg[17..21].try_into().unwrap());
 
+    let cols = cols_split_box(line, delim);
+    let n = cols.cols.len() as i32;
+    if n < core0 || n < core1 || n < core2 {
+        std::process::abort();
+    }
+
+    // Locate the byte span of the chromosome (core0-th field) within `line`.
+    let mut field = 0;
+    let mut start = 0;
+    let mut chr_range = None;
+    let mut idx = 0;
+    loop {
+        let is_delim = idx == line.len() || line[idx] == delim;
+        if is_delim {
+            if field == core0 {
+                chr_range = Some(start..=idx.saturating_sub(1).max(start));
+                break;
+            }
+            field += 1;
+            start = idx + 1;
+        }
+        if idx == line.len() {
+            break;
+        }
+        idx += 1;
+    }
+    out.chr = chr_range;
+
+    // strtod equivalent on the beg/end fields.
+    let parse_leading = |f: &[u8]| -> hts_pos_t {
+        let mut k = 0;
+        while k < f.len() && (f[k].is_ascii_digit() || matches!(f[k], b'+' | b'-' | b'.' | b'e' | b'E')) {
+            k += 1;
+        }
+        std::str::from_utf8(&f[..k])
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or_else(|| std::process::abort()) as hts_pos_t
+    };
+    let mut beg = parse_leading(&cols.cols[core1 as usize]) - (coor0 as hts_pos_t - 1);
+    let mut end = parse_leading(&cols.cols[core2 as usize]) - (coor1 as hts_pos_t - 1);
+    if end < beg {
+        std::mem::swap(&mut beg, &mut end);
+    }
+    out.beg = beg;
+    out.end = end;
+
+    // Store the owned cols as a raw pointer in the payload slot.
+    let ptr = Box::into_raw(cols);
+    let bytes = (ptr as usize).to_ne_bytes();
+    payload[..bytes.len()].copy_from_slice(&bytes);
     0
 }
 
 // original: free_payload (htslib/annot-tsv.c:322)
-pub unsafe extern "C" fn annot_tsv_c_322_free_payload(payload: *mut c_void) {
-    let cols = *(payload.cast::<*mut AnnotTsvCols>());
-    annot_tsv_c_269_cols_destroy(cols.cast());
+fn annot_tsv_c_322_free_payload(payload: &mut [u8]) {
+    const N: usize = std::mem::size_of::<usize>();
+    let mut bytes = [0u8; N];
+    bytes.copy_from_slice(&payload[..N]);
+    let ptr = usize::from_ne_bytes(bytes) as *mut AnnotTsvCols;
+    if !ptr.is_null() {
+        drop(unsafe { Box::from_raw(ptr) });
+    }
 }
 
-unsafe fn parse_header(dat: &mut AnnotTsvDat, fname: *mut i8, mut nth_row: i32, autodetect: i32) {
-    dat.fp = hts_open(fname, c"r".as_ptr());
+unsafe fn parse_header(dat: &mut AnnotTsvDat, fname: &[u8], mut nth_row: i32, autodetect: i32) {
+    // hts_open still takes a NUL-terminated path (genuine I/O boundary).
+    let fname_c = std::ffi::CString::new(fname).unwrap();
+    dat.fp = hts_open(fname_c.as_ptr(), c"r".as_ptr());
     if dat.fp.is_null() {
-        libc::abort();
+        std::process::abort();
     }
 
-    let mut buf: Vec<Box<[i8]>> = Vec::new();
+    let mut buf: Vec<Vec<u8>> = Vec::new();
     if nth_row < 0 {
         buf.reserve_exact((-nth_row) as usize);
     }
 
     let mut irow = 0;
+    // hts_getline / kstring is still the external line buffer (I/O boundary);
+    // its bytes are read as a slice without the NUL terminator.
     while hts_getline(dat.fp, 2, &mut dat.line) > 0 {
+        let line = dat.line.data.clone();
+        let line = line.as_slice();
+        let first = line.first().copied();
         if autodetect != 0 {
-            nth_row = if *dat.line.s == b'#' as i8 { 1 } else { 0 };
+            nth_row = if first == Some(b'#') { 1 } else { 0 };
             break;
         }
         if nth_row == 0 {
-            if *dat.line.s == b'#' as i8 {
+            if first == Some(b'#') {
                 continue;
             }
             break;
@@ -588,214 +556,210 @@ unsafe fn parse_header(dat: &mut AnnotTsvDat, fname: *mut i8, mut nth_row: i32, 
             }
             break;
         }
-        if *dat.line.s != b'#' as i8 {
+        if first != Some(b'#') {
             break;
         }
         if buf.len() == (-nth_row) as usize {
-            drop(buf.remove(0));
+            buf.remove(0);
         }
-        let saved = CStr::from_ptr(dat.line.s)
-            .to_bytes_with_nul()
-            .iter()
-            .map(|&byte| byte as i8)
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        buf.push(saved);
+        buf.push(line.to_vec());
     }
 
     let mut keep_line = 0;
     let mut cols = if nth_row < 0 {
         if buf.len() != (-nth_row) as usize {
-            libc::abort();
+            std::process::abort();
         }
         keep_line = 1;
-        cols_split_box(buf[0].as_ptr(), dat.delim)
+        cols_split_box(&buf[0], dat.delim)
     } else {
-        cols_split_box(dat.line.s, dat.delim)
+        cols_split_box(&dat.line.data, dat.delim)
     };
 
-    if dat.line.l == 0 || cols.n == 0 {
-        libc::abort();
+    if dat.line.data.is_empty() || cols.cols.is_empty() {
+        std::process::abort();
     }
 
     if nth_row == 0 {
-        let mut str_: kstring_t = std::mem::zeroed();
-        for i in 0..cols.n as i32 {
+        // Build a synthetic "1<delim>2<delim>..." header line.
+        let mut synth = Vec::<u8>::new();
+        for i in 0..cols.cols.len() {
             if i > 0 {
-                kputc(dat.delim as i32, &mut str_);
+                synth.push(dat.delim);
             }
-            kputw(i + 1, &mut str_);
+            synth.extend_from_slice((i + 1).to_string().as_bytes());
         }
-        cols = cols_split_box(str_.s, dat.delim);
-        libc::free(str_.s.cast());
+        cols = cols_split_box(&synth, dat.delim);
         dat.hdr.dummy = 1;
         keep_line = 1;
     }
 
-    dat.hdr.name2idx = sam::khash_str2int_init();
-    for i in 0..cols.n as usize {
-        let mut ss = cols.off.get(i);
-        while *ss != 0 && (*ss == b'#' as i8 || isspace_c(*ss) != 0) {
-            ss = ss.add(1);
+    dat.hdr.name2idx.clear();
+    for i in 0..cols.cols.len() {
+        // Trim leading '#'/whitespace, an optional "[<digits>]" index tag, then
+        // leading '#'/whitespace again.
+        let col = &cols.cols[i];
+        let mut start = 0;
+        while start < col.len() && (col[start] == b'#' || col[start].is_ascii_whitespace()) {
+            start += 1;
         }
-        if *ss == 0 {
-            libc::abort();
+        if start == col.len() {
+            std::process::abort();
         }
-        if *ss == b'[' as i8 {
-            let mut se = ss.add(1);
-            while *se != 0 && isdigit_c(*se) != 0 {
-                se = se.add(1);
+        if col[start] == b'[' {
+            let mut se = start + 1;
+            while se < col.len() && col[se].is_ascii_digit() {
+                se += 1;
             }
-            if *se == b']' as i8 {
-                ss = se.add(1);
+            if se < col.len() && col[se] == b']' {
+                start = se + 1;
             }
         }
-        while *ss != 0 && (*ss == b'#' as i8 || isspace_c(*ss) != 0) {
-            ss = ss.add(1);
+        while start < col.len() && (col[start] == b'#' || col[start].is_ascii_whitespace()) {
+            start += 1;
         }
-        if *ss == 0 {
-            libc::abort();
+        if start == col.len() {
+            std::process::abort();
         }
-        cols.off.set(i, ss);
-        sam::khash_str2int_set(dat.hdr.name2idx, ss, i as i32);
+        let trimmed = col[start..].to_vec();
+        cols.cols[i] = trimmed;
+        dat.hdr.name2idx.insert(cols.cols[i].clone(), i as i32);
     }
-    dat.hdr.cols = Box::into_raw(cols);
+    dat.hdr.cols = Some(cols);
     if keep_line == 0 {
-        dat.line.l = 0;
+        dat.line.data.clear();
     }
 }
 
 // original: parse_header (htslib/annot-tsv.c:335)
 pub unsafe fn annot_tsv_c_335_parse_header(
-    dat: *mut c_void,
-    fname: *mut i8,
+    dat: &mut AnnotTsvDat,
+    fname: &[u8],
     nth_row: i32,
     autodetect: i32,
 ) {
-    parse_header(&mut *dat.cast::<AnnotTsvDat>(), fname, nth_row, autodetect);
+    parse_header(dat, fname, nth_row, autodetect);
 }
 
 unsafe fn write_header(args: &mut AnnotTsvArgs, dat: &mut AnnotTsvDat) {
     if dat.hdr.dummy != 0 || args.no_write_hdr > 1 {
         return;
     }
-    let mut str_: kstring_t = std::mem::zeroed();
-    kputc(b'#' as i32, &mut str_);
-    for i in 0..(*dat.hdr.cols).n as usize {
+    let cols = dat.hdr.cols.as_ref().expect("header cols must be parsed");
+    let mut out = Vec::<u8>::new();
+    out.push(b'#');
+    for i in 0..cols.cols.len() {
         if i > 0 {
-            kputc(dat.delim as i32, &mut str_);
+            out.push(dat.delim);
         }
         if args.no_write_hdr == 0 {
-            kputc(b'[' as i32, &mut str_);
-            kputw(i as i32 + 1, &mut str_);
-            kputc(b']' as i32, &mut str_);
+            out.push(b'[');
+            out.extend_from_slice((i + 1).to_string().as_bytes());
+            out.push(b']');
         }
-        kputs((*dat.hdr.cols).off.get(i), &mut str_);
+        out.extend_from_slice(&cols.cols[i]);
     }
-    if !dat.hdr.annots.is_null() {
-        for i in 0..(*dat.hdr.annots).n as usize {
-            if str_.l > 1 {
-                kputc(dat.delim as i32, &mut str_);
+    if let Some(annots) = dat.hdr.annots.as_ref() {
+        for col in &annots.cols {
+            if out.len() > 1 {
+                out.push(dat.delim);
             }
-            kputs((*dat.hdr.annots).off.get(i), &mut str_);
+            out.extend_from_slice(col);
         }
     }
-    kputc(b'\n' as i32, &mut str_);
-    if bgzf::bgzf_write(args.out_fp, str_.s.cast(), str_.l) != str_.l as isize {
-        libc::abort();
+    out.push(b'\n');
+    // bgzf_write is the genuine I/O boundary; hand it the slice ptr + len.
+    if bgzf::bgzf_write(args.out_fp, out.as_ptr().cast(), out.len()) != out.len() as isize {
+        std::process::abort();
     }
-    libc::free(str_.s.cast());
 }
 
 // original: write_header (htslib/annot-tsv.c:440)
-pub unsafe fn annot_tsv_c_440_write_header(args: *mut c_void, dat: *mut c_void) {
-    write_header(
-        &mut *args.cast::<AnnotTsvArgs>(),
-        &mut *dat.cast::<AnnotTsvDat>(),
-    );
+pub unsafe fn annot_tsv_c_440_write_header(args: &mut AnnotTsvArgs, dat_is_src: bool) {
+    if dat_is_src {
+        let mut dat = std::mem::take(&mut args.src);
+        write_header(args, &mut dat);
+        args.src = dat;
+    } else {
+        let mut dat = std::mem::take(&mut args.dst);
+        write_header(args, &mut dat);
+        args.dst = dat;
+    }
 }
 
-unsafe fn destroy_header(dat: &mut AnnotTsvDatHeaderOnly) {
-    if !dat.hdr.cols.is_null() {
-        cols_destroy_ptr(dat.hdr.cols);
-    }
-    sam::khash_str2int_destroy(dat.hdr.name2idx);
+fn destroy_header(dat: &mut AnnotTsvDatHeaderOnly) {
+    dat.hdr.cols = None;
+    dat.hdr.name2idx.clear();
 }
 
 // original: destroy_header (htslib/annot-tsv.c:465)
-pub unsafe fn annot_tsv_c_465_destroy_header(dat: *mut c_void) {
-    destroy_header(&mut *dat.cast::<AnnotTsvDatHeaderOnly>());
+fn annot_tsv_c_465_destroy_header(dat: &mut AnnotTsvDatHeaderOnly) {
+    destroy_header(dat);
 }
 
 unsafe fn read_next_line(dat: &mut AnnotTsvDat) -> i32 {
-    if dat.line.l != 0 {
-        return dat.line.l as i32;
+    if !dat.line.data.is_empty() {
+        return dat.line.data.len() as i32;
     }
     let ret = crate::htslib_rs::hts::hts_getline(dat.fp, 2, &mut dat.line);
     if ret > 0 {
-        return dat.line.l as i32;
+        return dat.line.data.len() as i32;
     }
     if ret < -1 {
-        libc::abort();
+        std::process::abort();
     }
     0
 }
 
 // original: read_next_line (htslib/annot-tsv.c:471)
-pub unsafe fn annot_tsv_c_471_read_next_line(dat: *mut c_void) -> i32 {
-    read_next_line(&mut *dat.cast::<AnnotTsvDat>())
+pub unsafe fn annot_tsv_c_471_read_next_line(dat: &mut AnnotTsvDat) -> i32 {
+    read_next_line(dat)
 }
 
-unsafe fn sanity_check_columns(hdr: &AnnotTsvHdr, cols: &AnnotTsvCols, force: i32) -> Vec<i32> {
-    let mut col2idx = vec![0; cols.n];
-    for i in 0..cols.n {
-        let mut idx = 0;
-        if sam::khash_str2int_get(hdr.name2idx, cols.off.get(i), &mut idx) < 0 {
-            if force == 0 {
-                libc::abort();
+fn sanity_check_columns(hdr: &AnnotTsvHdr, cols: &AnnotTsvCols, force: i32) -> Vec<i32> {
+    let mut col2idx = vec![0; cols.cols.len()];
+    for i in 0..cols.cols.len() {
+        let idx = match hdr.name2idx.get(&cols.cols[i]) {
+            Some(&v) => v,
+            None => {
+                if force == 0 {
+                    std::process::abort();
+                }
+                -1
             }
-            idx = -1;
-        }
+        };
         col2idx[i] = idx;
     }
     col2idx
 }
 
 // original: sanity_check_columns (htslib/annot-tsv.c:480)
-pub unsafe fn annot_tsv_c_480_sanity_check_columns(
-    _fname: *mut i8,
-    hdr: *mut c_void,
-    cols: *mut c_void,
-    col2idx: *mut *mut i32,
+fn annot_tsv_c_480_sanity_check_columns(
+    _fname: &[u8],
+    hdr: &AnnotTsvHdr,
+    cols: &AnnotTsvCols,
     force: i32,
-) {
-    let hdr = hdr.cast::<AnnotTsvHdr>();
-    let cols = cols.cast::<AnnotTsvCols>();
-    *col2idx = Box::into_raw(sanity_check_columns(&*hdr, &*cols, force).into_boxed_slice()).cast();
+) -> Vec<i32> {
+    sanity_check_columns(hdr, cols, force)
 }
 
-unsafe fn parse_coor_base(str_: *mut i8, dat: &mut AnnotTsvDat) {
-    let len = libc::strlen(dat.fname);
+fn parse_coor_base(str_: &[u8], dat: &mut AnnotTsvDat) {
+    let fname = &dat.fname;
     let mut beg = 1;
     let mut end = 1;
-    if *str_ != 0 {
-        if *str_ == b'0' as i8 {
-            beg = 0;
-        } else if *str_ == b'1' as i8 {
-            beg = 1;
-        } else {
-            libc::abort();
-        }
-
-        if *str_.add(1) == b'0' as i8 {
-            end = 0;
-        } else if *str_.add(1) == b'1' as i8 {
-            end = 1;
-        } else {
-            libc::abort();
-        }
-    } else if (len >= 4 && libc::strcasecmp(c".bed".as_ptr(), dat.fname.add(len - 4)) == 0)
-        || (len >= 7 && libc::strcasecmp(c".bed.gz".as_ptr(), dat.fname.add(len - 7)) == 0)
+    if !str_.is_empty() {
+        beg = match str_[0] {
+            b'0' => 0,
+            b'1' => 1,
+            _ => std::process::abort(),
+        };
+        end = match str_.get(1) {
+            Some(b'0') => 0,
+            Some(b'1') => 1,
+            _ => std::process::abort(),
+        };
+    } else if fname.len() >= 4 && fname[fname.len() - 4..].eq_ignore_ascii_case(b".bed")
+        || fname.len() >= 7 && fname[fname.len() - 7..].eq_ignore_ascii_case(b".bed.gz")
     {
         beg = 0;
     }
@@ -804,243 +768,229 @@ unsafe fn parse_coor_base(str_: *mut i8, dat: &mut AnnotTsvDat) {
 }
 
 // original: parse_coor_base (htslib/annot-tsv.c:495)
-pub unsafe fn annot_tsv_c_495_parse_coor_base(_args: *mut c_void, str_: *mut i8, dat: *mut c_void) {
-    parse_coor_base(str_, &mut *dat.cast::<AnnotTsvDat>());
+fn annot_tsv_c_495_parse_coor_base(_args: &mut AnnotTsvArgs, str_: &[u8], dat: &mut AnnotTsvDat) {
+    parse_coor_base(str_, dat);
 }
 
 // original: init_data (htslib/annot-tsv.c:515)
-pub unsafe fn annot_tsv_c_515_init_data(args: *mut c_void) {
-    let args = args.cast::<AnnotTsvArgs>();
-    if (*args).delim_str.is_null() {
-        (*args).dst.delim = b'\t' as i8;
-        (*args).src.delim = b'\t' as i8;
-    } else if libc::strlen((*args).delim_str) == 1 {
-        (*args).dst.delim = *(*args).delim_str;
-        (*args).src.delim = *(*args).delim_str;
-    } else if libc::strlen((*args).delim_str) == 3 && *(*args).delim_str.add(1) == b':' as i8 {
-        (*args).src.delim = *(*args).delim_str;
-        (*args).dst.delim = *(*args).delim_str.add(2);
+pub unsafe fn annot_tsv_c_515_init_data(args: &mut AnnotTsvArgs) {
+    if args.delim_str.is_empty() {
+        args.dst.delim = b'\t';
+        args.src.delim = b'\t';
+    } else if args.delim_str.len() == 1 {
+        args.dst.delim = args.delim_str[0];
+        args.src.delim = args.delim_str[0];
+    } else if args.delim_str.len() == 3 && args.delim_str[1] == b':' {
+        args.src.delim = args.delim_str[0];
+        args.dst.delim = args.delim_str[2];
     } else {
-        libc::abort();
+        std::process::abort();
     }
 
     let mut isrc = 0;
     let mut idst = 0;
     let mut autodetect = 1;
-    if !(*args).headers_str.is_null() {
-        let tmp = cols_split_raw((*args).headers_str, b':' as i8);
-        let mut rmme: *mut i8 = std::ptr::null_mut();
-        isrc = libc::strtol(*(*tmp).off.add(0), &mut rmme, 10) as i32;
-        if *rmme != 0 || *(*tmp).off.add(0) == rmme {
-            libc::abort();
-        }
-        let dst_str = if (*tmp).n == 2 {
-            *(*tmp).off.add(1)
+    if !args.headers_str.is_empty() {
+        let tmp = cols_split_box(&args.headers_str, b':');
+        // strtol equivalent: parse each side as a base-10 integer; abort on any
+        // trailing/garbage characters.
+        isrc = std::str::from_utf8(&tmp.cols[0])
+            .ok()
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or_else(|| std::process::abort());
+        let dst_str = if tmp.cols.len() == 2 {
+            &tmp.cols[1]
         } else {
-            *(*tmp).off.add(0)
+            &tmp.cols[0]
         };
-        idst = libc::strtol(dst_str, &mut rmme, 10) as i32;
-        if *rmme != 0 || dst_str == rmme {
-            libc::abort();
-        }
-        cols_destroy_ptr(tmp);
+        idst = std::str::from_utf8(dst_str)
+            .ok()
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or_else(|| std::process::abort());
         autodetect = 0;
     }
-    parse_header(&mut (*args).dst, (*args).dst.fname, idst, autodetect);
-    parse_header(&mut (*args).src, (*args).src.fname, isrc, autodetect);
+    let dst_fname = args.dst.fname.clone();
+    let src_fname = args.src.fname.clone();
+    parse_header(&mut args.dst, &dst_fname, idst, autodetect);
+    parse_header(&mut args.src, &src_fname, isrc, autodetect);
 
-    if (*args).core_str.is_null() {
-        (*args).core_str = c"chr,beg,end:chr,beg,end".as_ptr().cast_mut();
+    if args.core_str.is_empty() {
+        args.core_str = b"chr,beg,end:chr,beg,end".to_vec();
     }
-    let mut tmp = cols_split_raw((*args).core_str, b':' as i8);
-    (*args).src.core = cols_split_raw((*tmp).off.get(0), b',' as i8);
-    (*args).dst.core = cols_split_raw(
-        if (*tmp).n == 2 {
-            (*tmp).off.get(1)
+    let tmp = cols_split_box(&args.core_str, b':');
+    args.src.core = Some(cols_split_box(&tmp.cols[0], b','));
+    args.dst.core = Some(cols_split_box(
+        if tmp.cols.len() == 2 {
+            &tmp.cols[1]
         } else {
-            (*tmp).off.get(0)
+            &tmp.cols[0]
         },
-        b',' as i8,
-    );
-    (*args).src.core_idx = sanity_check_columns(&(*args).src.hdr, &*(*args).src.core, 0);
-    (*args).dst.core_idx = sanity_check_columns(&(*args).dst.hdr, &*(*args).dst.core, 0);
-    if (*(*args).src.core).n != 3 || (*(*args).dst.core).n != 3 {
-        libc::abort();
-    }
-    cols_destroy_ptr(tmp);
-
-    if (*args).coords_str.is_null() {
-        (*args).coords_str = c":".as_ptr().cast_mut();
-    }
-    tmp = cols_split_raw((*args).coords_str, b':' as i8);
-    parse_coor_base((*tmp).off.get(0), &mut (*args).src);
-    parse_coor_base(
-        if (*tmp).n == 2 {
-            (*tmp).off.get(1)
-        } else {
-            (*tmp).off.get(0)
-        },
-        &mut (*args).dst,
-    );
-    cols_destroy_ptr(tmp);
-
-    if !(*args).match_str.is_null() {
-        tmp = cols_split_raw((*args).match_str, b':' as i8);
-        (*args).src.match_ = cols_split_raw((*tmp).off.get(0), b',' as i8);
-        (*args).dst.match_ = cols_split_raw(
-            if (*tmp).n == 2 {
-                (*tmp).off.get(1)
-            } else {
-                (*tmp).off.get(0)
-            },
-            b',' as i8,
-        );
-        (*args).src.match_idx = sanity_check_columns(&(*args).src.hdr, &*(*args).src.match_, 0);
-        (*args).dst.match_idx = sanity_check_columns(&(*args).dst.hdr, &*(*args).dst.match_, 0);
-        if (*(*args).src.match_).n != (*(*args).dst.match_).n {
-            libc::abort();
-        }
-        cols_destroy_ptr(tmp);
+        b',',
+    ));
+    args.src.core_idx = sanity_check_columns(&args.src.hdr, args.src.core.as_ref().unwrap(), 0);
+    args.dst.core_idx = sanity_check_columns(&args.dst.hdr, args.dst.core.as_ref().unwrap(), 0);
+    if args.src.core.as_ref().unwrap().cols.len() != 3
+        || args.dst.core.as_ref().unwrap().cols.len() != 3
+    {
+        std::process::abort();
     }
 
-    if !(*args).transfer_str.is_null() {
-        tmp = cols_split_raw((*args).transfer_str, b':' as i8);
-        (*args).src.transfer = cols_split_raw((*tmp).off.get(0), b',' as i8);
-        (*args).dst.transfer = cols_split_raw(
-            if (*tmp).n == 2 {
-                (*tmp).off.get(1)
-            } else {
-                (*tmp).off.get(0)
-            },
-            b',' as i8,
-        );
-        (*args).src.transfer_idx =
-            sanity_check_columns(&(*args).src.hdr, &*(*args).src.transfer, 1);
-        (*args).dst.transfer_idx =
-            sanity_check_columns(&(*args).dst.hdr, &*(*args).dst.transfer, 1);
-        if (*(*args).src.transfer).n != (*(*args).dst.transfer).n {
-            libc::abort();
-        }
-        for i in 0..(*(*args).src.transfer).n as usize {
-            if (&(*args).src.transfer_idx)[i] == -1 {
-                cols_append(
-                    &mut *(*args).src.hdr.cols,
-                    (*(*args).src.transfer).off.get(i),
-                );
-                (&mut (*args).src.transfer_idx)[i] = -((*(*args).src.hdr.cols).n as i32);
-                (*args).src.grow_n += 1;
-            }
-        }
-        for i in 0..(*(*args).dst.transfer).n as usize {
-            if (&(*args).dst.transfer_idx)[i] == -1 {
-                cols_append(
-                    &mut *(*args).dst.hdr.cols,
-                    (*(*args).dst.transfer).off.get(i),
-                );
-                (&mut (*args).dst.transfer_idx)[i] = (*(*args).dst.hdr.cols).n as i32 - 1;
-                (*args).dst.grow_n += 1;
-            }
-        }
-        (*args).tmp_cols = Box::into_raw(Box::new(
-            (0..(*(*args).src.transfer).n)
-                .map(|_| AnnotTsvCols::default())
-                .collect::<Vec<_>>(),
-        ));
-        (*args).tmp_hash = vec![std::ptr::null_mut(); (*(*args).src.transfer).n];
-        for i in 0..(*(*args).src.transfer).n {
-            (&mut (*args).tmp_hash)[i] = sam::khash_str2int_init();
-        }
-        cols_destroy_ptr(tmp);
+    if args.coords_str.is_empty() {
+        args.coords_str = b":".to_vec();
+    }
+    let tmp = cols_split_box(&args.coords_str, b':');
+    let coords0 = tmp.cols[0].clone();
+    let coords1 = if tmp.cols.len() == 2 {
+        tmp.cols[1].clone()
     } else {
-        (*args).src.transfer = Box::into_raw(Box::<AnnotTsvCols>::default());
-    }
-    (*args).src.nannots_added = vec![0; (*(*args).src.transfer).n];
+        tmp.cols[0].clone()
+    };
+    parse_coor_base(&coords0, &mut args.src);
+    parse_coor_base(&coords1, &mut args.dst);
 
-    if !(*args).annots_str.is_null() {
-        tmp = cols_split_raw((*args).annots_str, b':' as i8);
-        (*args).src.annots = cols_split_raw((*tmp).off.get(0), b',' as i8);
-        (*args).dst.annots = cols_split_raw(
-            if (*tmp).n == 2 {
-                (*tmp).off.get(1)
+    if !args.match_str.is_empty() {
+        let tmp = cols_split_box(&args.match_str, b':');
+        args.src.match_ = Some(cols_split_box(&tmp.cols[0], b','));
+        args.dst.match_ = Some(cols_split_box(
+            if tmp.cols.len() == 2 {
+                &tmp.cols[1]
             } else {
-                (*tmp).off.get(0)
+                &tmp.cols[0]
             },
-            b',' as i8,
-        );
-        if (*(*args).src.annots).n != (*(*args).dst.annots).n {
-            libc::abort();
+            b',',
+        ));
+        args.src.match_idx =
+            sanity_check_columns(&args.src.hdr, args.src.match_.as_ref().unwrap(), 0);
+        args.dst.match_idx =
+            sanity_check_columns(&args.dst.hdr, args.dst.match_.as_ref().unwrap(), 0);
+        if args.src.match_.as_ref().unwrap().cols.len()
+            != args.dst.match_.as_ref().unwrap().cols.len()
+        {
+            std::process::abort();
         }
-        (*args).dst.annots_idx = vec![0; (*(*args).dst.annots).n];
-        for i in 0..(*(*args).src.annots).n {
-            let src = (*(*args).src.annots).off.get(i);
-            if libc::strcasecmp(src, c"nbp".as_ptr()) == 0 {
-                (&mut (*args).dst.annots_idx)[i] = ANNOT_TSV_ANN_NBP;
-                cols_append(
-                    &mut *(*args).dst.hdr.cols,
-                    if (*tmp).n == 2 {
-                        (*(*args).dst.annots).off.get(i)
-                    } else {
-                        c"nbp".as_ptr().cast_mut()
-                    },
-                );
-            } else if libc::strcasecmp(src, c"frac".as_ptr()) == 0 {
-                (&mut (*args).dst.annots_idx)[i] = ANNOT_TSV_ANN_FRAC;
-                cols_append(
-                    &mut *(*args).dst.hdr.cols,
-                    if (*tmp).n == 2 {
-                        (*(*args).dst.annots).off.get(i)
-                    } else {
-                        c"frac".as_ptr().cast_mut()
-                    },
-                );
-            } else if libc::strcasecmp(src, c"cnt".as_ptr()) == 0 {
-                (&mut (*args).dst.annots_idx)[i] = ANNOT_TSV_ANN_CNT;
-                cols_append(
-                    &mut *(*args).dst.hdr.cols,
-                    if (*tmp).n == 2 {
-                        (*(*args).dst.annots).off.get(i)
-                    } else {
-                        c"cnt".as_ptr().cast_mut()
-                    },
-                );
+    }
+
+    if !args.transfer_str.is_empty() {
+        let tmp = cols_split_box(&args.transfer_str, b':');
+        args.src.transfer = Some(cols_split_box(&tmp.cols[0], b','));
+        args.dst.transfer = Some(cols_split_box(
+            if tmp.cols.len() == 2 {
+                &tmp.cols[1]
             } else {
-                libc::abort();
+                &tmp.cols[0]
+            },
+            b',',
+        ));
+        args.src.transfer_idx =
+            sanity_check_columns(&args.src.hdr, args.src.transfer.as_ref().unwrap(), 1);
+        args.dst.transfer_idx =
+            sanity_check_columns(&args.dst.hdr, args.dst.transfer.as_ref().unwrap(), 1);
+        let n_transfer = args.src.transfer.as_ref().unwrap().cols.len();
+        if n_transfer != args.dst.transfer.as_ref().unwrap().cols.len() {
+            std::process::abort();
+        }
+        for i in 0..n_transfer {
+            if args.src.transfer_idx[i] == -1 {
+                let name = args.src.transfer.as_ref().unwrap().cols[i].clone();
+                let hdr_cols = args.src.hdr.cols.as_mut().unwrap();
+                cols_append(hdr_cols, &name);
+                args.src.transfer_idx[i] = -(hdr_cols.cols.len() as i32);
+                args.src.grow_n += 1;
             }
         }
-        (*args).nbp = Some(Box::<AnnotTsvNbp>::default());
-        cols_destroy_ptr(tmp);
+        for i in 0..n_transfer {
+            if args.dst.transfer_idx[i] == -1 {
+                let name = args.dst.transfer.as_ref().unwrap().cols[i].clone();
+                let hdr_cols = args.dst.hdr.cols.as_mut().unwrap();
+                cols_append(hdr_cols, &name);
+                args.dst.transfer_idx[i] = hdr_cols.cols.len() as i32 - 1;
+                args.dst.grow_n += 1;
+            }
+        }
+        args.tmp_cols = (0..n_transfer).map(|_| AnnotTsvCols::default()).collect();
+        args.tmp_hash = (0..n_transfer)
+            .map(|_| std::collections::HashSet::new())
+            .collect();
+    } else {
+        args.src.transfer = Some(Box::<AnnotTsvCols>::default());
+    }
+    args.src.nannots_added = vec![0; args.src.transfer.as_ref().unwrap().cols.len()];
+
+    if !args.annots_str.is_empty() {
+        let tmp = cols_split_box(&args.annots_str, b':');
+        args.src.annots = Some(cols_split_box(&tmp.cols[0], b','));
+        args.dst.annots = Some(cols_split_box(
+            if tmp.cols.len() == 2 {
+                &tmp.cols[1]
+            } else {
+                &tmp.cols[0]
+            },
+            b',',
+        ));
+        let n_annots = args.src.annots.as_ref().unwrap().cols.len();
+        if n_annots != args.dst.annots.as_ref().unwrap().cols.len() {
+            std::process::abort();
+        }
+        args.dst.annots_idx = vec![0; n_annots];
+        let two_sided = tmp.cols.len() == 2;
+        for i in 0..n_annots {
+            let src = args.src.annots.as_ref().unwrap().cols[i].clone();
+            let dst_name = args.dst.annots.as_ref().unwrap().cols[i].clone();
+            let (flag, default): (i32, &[u8]) = if src.eq_ignore_ascii_case(b"nbp") {
+                (ANNOT_TSV_ANN_NBP, b"nbp")
+            } else if src.eq_ignore_ascii_case(b"frac") {
+                (ANNOT_TSV_ANN_FRAC, b"frac")
+            } else if src.eq_ignore_ascii_case(b"cnt") {
+                (ANNOT_TSV_ANN_CNT, b"cnt")
+            } else {
+                std::process::abort();
+            };
+            args.dst.annots_idx[i] = flag;
+            let name = if two_sided { dst_name } else { default.to_vec() };
+            cols_append(args.dst.hdr.cols.as_mut().unwrap(), &name);
+        }
+        args.nbp = Some(Box::<AnnotTsvNbp>::default());
     }
 
-    (*args).idx = regidx::regidx_c_246_regidx_init(
-        std::ptr::null(),
+    // regidx owns the source index. The parse callback needs the source
+    // parse-config, which is serialized into the `usr` byte buffer as
+    // delim + core_idx[0..3] + coor_base[0..2] (1 byte + five LE i32s).
+    let mut usr_cfg = Vec::with_capacity(1 + 5 * 4);
+    usr_cfg.push(args.src.delim);
+    usr_cfg.extend_from_slice(&args.src.core_idx[0].to_le_bytes());
+    usr_cfg.extend_from_slice(&args.src.core_idx[1].to_le_bytes());
+    usr_cfg.extend_from_slice(&args.src.core_idx[2].to_le_bytes());
+    usr_cfg.extend_from_slice(&args.src.coor_base[0].to_le_bytes());
+    usr_cfg.extend_from_slice(&args.src.coor_base[1].to_le_bytes());
+    let mut idx = regidx::regidx_c_246_regidx_init(
+        None,
         Some(annot_tsv_c_276_parse_tab_with_payload),
         Some(annot_tsv_c_322_free_payload),
-        std::mem::size_of::<AnnotTsvCols>(),
-        (&mut (*args).src as *mut AnnotTsvDat).cast(),
-    );
-    while read_next_line(&mut (*args).src) != 0 {
-        if regidx::regidx_c_198_regidx_insert((*args).idx, (*args).src.line.s) != 0 {
-            libc::abort();
+        std::mem::size_of::<*mut AnnotTsvCols>(),
+        Some(usr_cfg),
+    )
+    .expect("regidx_init");
+    while read_next_line(&mut args.src) != 0 {
+        let line = args.src.line.data.clone();
+        if regidx::regidx_c_198_regidx_insert(&mut idx, &line) != 0 {
+            std::process::abort();
         }
-        (*args).src.line.l = 0;
+        args.src.line.data.clear();
     }
-    (*args).itr = regidx::regidx_c_584_regitr_init((*args).idx);
-    if hts_close((*args).src.fp) != 0 {
-        libc::abort();
+    args.itr = Some(regidx::regidx_c_584_regitr_init(&mut idx));
+    args.idx = Some(idx);
+    if hts_close(args.src.fp) != 0 {
+        std::process::abort();
     }
 
-    let len = if !(*args).out_fname.is_null() {
-        libc::strlen((*args).out_fname)
-    } else {
-        0
-    };
-    (*args).out_fp = if len != 0 {
-        let compress_output = (len >= 3
-            && libc::strcasecmp(c".gz".as_ptr(), (*args).out_fname.add(len - 3)) == 0)
-            || (len >= 4
-                && libc::strcasecmp(c".bgz".as_ptr(), (*args).out_fname.add(len - 4)) == 0);
+    args.out_fp = if !args.out_fname.is_empty() {
+        let name = &args.out_fname;
+        let compress_output = (name.len() >= 3
+            && name[name.len() - 3..].eq_ignore_ascii_case(b".gz"))
+            || (name.len() >= 4 && name[name.len() - 4..].eq_ignore_ascii_case(b".bgz"));
+        let path = std::ffi::CString::new(name.as_slice()).unwrap();
         bgzf::bgzf_open(
-            (*args).out_fname,
+            path.as_ptr(),
             if compress_output {
                 c"wg".as_ptr()
             } else {
@@ -1050,126 +1000,78 @@ pub unsafe fn annot_tsv_c_515_init_data(args: *mut c_void) {
     } else {
         bgzf::bgzf_open(c"-".as_ptr(), c"wu".as_ptr())
     };
-    if (*args).out_fp.is_null() {
-        libc::abort();
+    if args.out_fp.is_null() {
+        std::process::abort();
     }
 }
 
 // original: destroy_data (htslib/annot-tsv.c:666)
-pub unsafe fn annot_tsv_c_666_destroy_data(args: *mut c_void) {
-    let args = args.cast::<AnnotTsvArgs>();
-    let src_core_n = if (*args).src.core.is_null() {
-        0
-    } else {
-        (*(*args).src.core).n
-    };
-    let dst_core_n = if (*args).dst.core.is_null() {
-        0
-    } else {
-        (*(*args).dst.core).n
-    };
-    let src_match_n = if (*args).src.match_.is_null() {
-        0
-    } else {
-        (*(*args).src.match_).n
-    };
-    let dst_match_n = if (*args).dst.match_.is_null() {
-        0
-    } else {
-        (*(*args).dst.match_).n
-    };
-    let src_transfer_n = if (*args).src.transfer.is_null() {
-        0
-    } else {
-        (*(*args).src.transfer).n
-    };
-    let dst_transfer_n = if (*args).dst.transfer.is_null() {
-        0
-    } else {
-        (*(*args).dst.transfer).n
-    };
-    let dst_annots_n = if (*args).dst.annots.is_null() {
-        0
-    } else {
-        (*(*args).dst.annots).n
-    };
-    if crate::htslib_rs::bgzf::bgzf_close((*args).out_fp) != 0 {
-        libc::abort();
+pub unsafe fn annot_tsv_c_666_destroy_data(args: &mut AnnotTsvArgs) {
+    if crate::htslib_rs::bgzf::bgzf_close(args.out_fp) != 0 {
+        std::process::abort();
     }
-    if crate::htslib_rs::hts::hts_close((*args).dst.fp) != 0 {
-        libc::abort();
+    if crate::htslib_rs::hts::hts_close(args.dst.fp) != 0 {
+        std::process::abort();
     }
-    for hash in (*args).tmp_hash.drain(..) {
-        sam::khash_str2int_destroy(hash);
+    // All owned column/hash data is dropped simply by clearing/replacing the
+    // owning fields; no manual element-by-element free is needed.
+    args.tmp_hash.clear();
+    args.tmp_cols.clear();
+    args.src.core = None;
+    args.dst.core = None;
+    args.src.match_ = None;
+    args.dst.match_ = None;
+    args.src.transfer = None;
+    args.dst.transfer = None;
+    args.src.annots = None;
+    args.dst.annots = None;
+    args.nbp = None;
+    args.src.hdr.cols = None;
+    args.src.hdr.name2idx.clear();
+    args.dst.hdr.cols = None;
+    args.dst.hdr.name2idx.clear();
+    args.src.nannots_added.clear();
+    args.src.core_idx.clear();
+    args.dst.core_idx.clear();
+    args.src.match_idx.clear();
+    args.dst.match_idx.clear();
+    args.src.transfer_idx.clear();
+    args.dst.transfer_idx.clear();
+    args.dst.annots_idx.clear();
+    // The kstring line buffers now own their bytes directly; releasing the
+    // Vec frees them.
+    args.src.line.data = Vec::new();
+    args.dst.line.data = Vec::new();
+    if let Some(itr) = args.itr.take() {
+        crate::htslib_rs::regidx::regidx_c_606_regitr_destroy(itr);
     }
-    if !(*args).tmp_cols.is_null() {
-        for col in (*(*args).tmp_cols).iter_mut() {
-            cols_clear(col);
-        }
-        drop(Box::from_raw((*args).tmp_cols));
+    if let Some(idx) = args.idx.take() {
+        crate::htslib_rs::regidx::regidx_c_311_regidx_destroy(idx);
     }
-    cols_destroy_ptr((*args).src.core);
-    cols_destroy_ptr((*args).dst.core);
-    cols_destroy_ptr((*args).src.match_);
-    cols_destroy_ptr((*args).dst.match_);
-    cols_destroy_ptr((*args).src.transfer);
-    cols_destroy_ptr((*args).dst.transfer);
-    if !(*args).src.annots.is_null() {
-        cols_destroy_ptr((*args).src.annots);
-    }
-    if !(*args).dst.annots.is_null() {
-        cols_destroy_ptr((*args).dst.annots);
-    }
-    (*args).nbp = None;
-    destroy_header(&mut *((&mut (*args).src as *mut AnnotTsvDat).cast::<AnnotTsvDatHeaderOnly>()));
-    destroy_header(&mut *((&mut (*args).dst as *mut AnnotTsvDat).cast::<AnnotTsvDatHeaderOnly>()));
-    (*args).src.nannots_added.clear();
-    (*args).src.core_idx.clear();
-    (*args).dst.core_idx.clear();
-    (*args).src.match_idx.clear();
-    (*args).dst.match_idx.clear();
-    (*args).src.transfer_idx.clear();
-    (*args).dst.transfer_idx.clear();
-    (*args).dst.annots_idx.clear();
-    libc::free((*args).src.line.s.cast());
-    libc::free((*args).dst.line.s.cast());
-    if !(*args).itr.is_null() {
-        crate::htslib_rs::regidx::regidx_c_606_regitr_destroy(
-            (*args).itr.cast::<crate::htslib_rs::regidx::regitr_t>(),
-        );
-    }
-    if !(*args).idx.is_null() {
-        crate::htslib_rs::regidx::regidx_c_311_regidx_destroy(
-            (*args).idx.cast::<crate::htslib_rs::regidx::regidx_t>(),
-        );
-    }
-    libc::free((*args).tmp_kstr.s.cast());
+    args.tmp_kstr.data = Vec::new();
 }
 
-unsafe fn write_string(args: &mut AnnotTsvArgs, mut str_: *mut i8, mut len: usize) {
-    if len == 0 {
-        len = libc::strlen(str_);
-    }
-    if len == 0 {
-        str_ = c".".as_ptr().cast_mut();
-        len = 1;
-    }
-    if crate::htslib_rs::bgzf::bgzf_write(args.out_fp, str_.cast(), len) != len as isize {
-        libc::abort();
+unsafe fn write_string(args: &mut AnnotTsvArgs, str_: &[u8]) {
+    // An empty field is written as a single "." placeholder.
+    let buf: &[u8] = if str_.is_empty() { b"." } else { str_ };
+    if crate::htslib_rs::bgzf::bgzf_write(args.out_fp, buf.as_ptr().cast(), buf.len())
+        != buf.len() as isize
+    {
+        std::process::abort();
     }
 }
 
 // original: write_string (htslib/annot-tsv.c:703)
-pub unsafe fn annot_tsv_c_703_write_string(args: *mut c_void, str_: *mut i8, len: usize) {
-    write_string(&mut *args.cast::<AnnotTsvArgs>(), str_, len);
+pub unsafe fn annot_tsv_c_703_write_string(args: &mut AnnotTsvArgs, str_: &[u8]) {
+    write_string(args, str_);
 }
 
 unsafe fn write_annots(args: &mut AnnotTsvArgs) {
-    if args.dst.annots.is_null() {
+    let Some(annots) = args.dst.annots.as_ref() else {
         return;
-    }
+    };
+    let n_annots = annots.cols.len();
 
-    args.tmp_kstr.l = 0;
     let (len, frac_denominator, cnt) = {
         let nbp = args.nbp.as_mut().expect("annotations require nbp state");
         (
@@ -1178,66 +1080,87 @@ unsafe fn write_annots(args: &mut AnnotTsvArgs) {
             (nbp.regs.len() / 2) as i32,
         )
     };
-    for i in 0..(*args.dst.annots).n as usize {
-        crate::htslib_rs::hts::kputc(args.dst.delim as i32, &mut args.tmp_kstr);
+    let mut out = Vec::<u8>::new();
+    for i in 0..n_annots {
+        out.push(args.dst.delim);
         let ann = args.dst.annots_idx[i];
         if ann == ANNOT_TSV_ANN_NBP {
-            crate::htslib_rs::hts::kputw(len as i32, &mut args.tmp_kstr);
+            out.extend_from_slice(len.to_string().as_bytes());
         } else if ann == ANNOT_TSV_ANN_FRAC {
-            crate::htslib_rs::hts::kputd(len as f64 / frac_denominator, &mut args.tmp_kstr);
+            // C uses kputd (a custom %g-style formatter that culls trailing
+            // zeros, htslib/annot-tsv.c:727), not a fixed-precision %f.
+            let mut frac_kstr = kstring_t { data: Vec::new() };
+            crate::htslib_rs::kstring::kputd_ref(len as f64 / frac_denominator, &mut frac_kstr);
+            out.extend_from_slice(&frac_kstr.data);
         } else if ann == ANNOT_TSV_ANN_CNT {
-            crate::htslib_rs::hts::kputw(cnt, &mut args.tmp_kstr);
+            out.extend_from_slice(cnt.to_string().as_bytes());
         }
     }
-    write_string(args, args.tmp_kstr.s, args.tmp_kstr.l);
+    write_string(args, &out);
 }
 
 // original: write_annots (htslib/annot-tsv.c:709)
-pub unsafe fn annot_tsv_c_709_write_annots(args: *mut c_void) {
-    write_annots(&mut *args.cast::<AnnotTsvArgs>());
+pub unsafe fn annot_tsv_c_709_write_annots(args: &mut AnnotTsvArgs) {
+    write_annots(args);
 }
 
 // original: process_line (htslib/annot-tsv.c:737)
-pub unsafe fn annot_tsv_c_737_process_line(args: *mut c_void, line: *mut i8, size: usize) {
-    let args = args.cast::<AnnotTsvArgs>();
-    let Some(parsed) = parse_tab_with_payload_ref(line, &mut (*args).dst) else {
+pub unsafe fn annot_tsv_c_737_process_line(args: &mut AnnotTsvArgs, line: &[u8]) {
+    let Some(parsed) = parse_tab_with_payload_ref(line, &mut args.dst) else {
         return;
     };
-    let chr_beg = parsed.chr_beg;
+    let chr = parsed.chr.clone();
     let beg = parsed.beg;
     let end = parsed.end;
     let mut dst_cols = parsed.cols;
 
-    if let Some(nbp) = (*args).nbp.as_mut() {
+    if let Some(nbp) = args.nbp.as_mut() {
         nbp_reset(nbp, beg, end);
     }
 
-    if regidx::regidx_c_401_regidx_overlap((*args).idx, chr_beg, beg, end, (*args).itr) == 0 {
-        if (*args).mode & ANNOT_TSV_PRINT_NONMATCHING != 0 {
-            write_string(&mut *args, line, size);
-            write_annots(&mut *args);
-            write_string(&mut *args, c"\n".as_ptr().cast_mut(), 1);
+    let overlap = {
+        let idx = args.idx.as_mut().expect("regidx index");
+        let itr = args.itr.as_mut().expect("regitr");
+        regidx::regidx_c_401_regidx_overlap(idx, &chr, beg, end, Some(itr))
+    };
+    if overlap == 0 {
+        if args.mode & ANNOT_TSV_PRINT_NONMATCHING != 0 {
+            write_string(args, line);
+            write_annots(args);
+            write_string(args, b"\n");
         }
         return;
     }
 
-    for i in 0..(*(*args).src.transfer).n as usize {
-        (&mut (*args).src.nannots_added)[i] = 0;
-        (&mut (*(*args).tmp_cols))[i].n = 0;
-        sam::khash_str2int_destroy((&(*args).tmp_hash)[i]);
-        (&mut (*args).tmp_hash)[i] = sam::khash_str2int_init();
+    let n_transfer = args.src.transfer.as_ref().unwrap().cols.len();
+    for i in 0..n_transfer {
+        args.src.nannots_added[i] = 0;
+        args.tmp_cols[i].cols.clear();
+        args.tmp_hash[i].clear();
     }
 
     let mut has_match = 0;
-    let mut annot_len: usize = 0;
-    while regidx::regidx_c_612_regitr_overlap((*args).itr) != 0 {
-        if (*args).overlap_src != 0.0 || (*args).overlap_dst != 0.0 {
+    loop {
+        let (itr_beg, itr_end, src_cols) = {
+            let itr = args.itr.as_mut().expect("regitr");
+            if regidx::regidx_c_612_regitr_overlap(itr) == 0 {
+                break;
+            }
+            // The regitr payload carries the raw `*mut AnnotTsvCols` pointer bytes
+            // that the parse callback stored; reconstruct the borrow here.
+            const N: usize = std::mem::size_of::<usize>();
+            let mut bytes = [0u8; N];
+            bytes.copy_from_slice(&itr.payload[..N]);
+            let ptr = usize::from_ne_bytes(bytes) as *const AnnotTsvCols;
+            (itr.beg, itr.end, &*ptr)
+        };
+        if args.overlap_src != 0.0 || args.overlap_dst != 0.0 {
             let len_dst = (end - beg + 1) as f64;
-            let len_src = ((*(*args).itr).end - (*(*args).itr).beg + 1) as f64;
-            let isec = (((*(*args).itr).end.min(end)) - ((*(*args).itr).beg.max(beg)) + 1) as f64;
-            let pass_dst = (isec / len_dst >= (*args).overlap_dst) as i32;
-            let pass_src = (isec / len_src >= (*args).overlap_src) as i32;
-            if (*args).overlap_either != 0 {
+            let len_src = (itr_end - itr_beg + 1) as f64;
+            let isec = (itr_end.min(end) - itr_beg.max(beg) + 1) as f64;
+            let pass_dst = (isec / len_dst >= args.overlap_dst) as i32;
+            let pass_src = (isec / len_src >= args.overlap_src) as i32;
+            if args.overlap_either != 0 {
                 if pass_dst == 0 && pass_src == 0 {
                     continue;
                 }
@@ -1245,64 +1168,53 @@ pub unsafe fn annot_tsv_c_737_process_line(args: *mut c_void, line: *mut i8, siz
                 continue;
             }
         }
-        let src_cols = *(*(*args).itr)
-            .payload
-            .expect("regidx overlap payload")
-            .cast::<*mut AnnotTsvCols>()
-            .as_ptr();
-        if !(*args).dst.match_.is_null() && (*(*args).dst.match_).n != 0 {
-            let mut i = 0usize;
-            while i < (*(*args).dst.match_).n as usize {
-                if (&(*args).dst.match_idx)[i] > dst_cols.n as i32 {
-                    libc::abort();
+        if let Some(dst_match) = args.dst.match_.as_ref() {
+            if !dst_match.cols.is_empty() {
+                let mut i = 0usize;
+                while i < dst_match.cols.len() {
+                    if args.dst.match_idx[i] > dst_cols.cols.len() as i32 {
+                        std::process::abort();
+                    }
+                    let dst = &dst_cols.cols[args.dst.match_idx[i] as usize];
+                    let src = &src_cols.cols[args.src.match_idx[i] as usize];
+                    if dst != src {
+                        break;
+                    }
+                    i += 1;
                 }
-                let dst = dst_cols.off.get((&(*args).dst.match_idx)[i] as usize);
-                let src = (*src_cols).off.get((&(*args).src.match_idx)[i] as usize);
-                if libc::strcmp(dst, src) != 0 {
-                    break;
+                if i != dst_match.cols.len() {
+                    continue;
                 }
-                i += 1;
-            }
-            if i != (*(*args).dst.match_).n as usize {
-                continue;
             }
         }
         has_match = 1;
 
-        if let Some(nbp) = (*args).nbp.as_mut() {
-            nbp_add(
-                nbp,
-                (*(*args).itr).beg.max(beg),
-                (*(*args).itr).end.min(end),
-            );
+        if let Some(nbp) = args.nbp.as_mut() {
+            nbp_add(nbp, itr_beg.max(beg), itr_end.min(end));
         }
 
         let mut max_annots_reached = 0;
-        for i in 0..(*(*args).src.transfer).n as usize {
-            let mut str_ = if (&(*args).src.transfer_idx)[i] >= 0 {
-                (*src_cols).off.get((&(*args).src.transfer_idx)[i] as usize)
+        for i in 0..n_transfer {
+            let idx = args.src.transfer_idx[i];
+            let value: Vec<u8> = if idx >= 0 {
+                src_cols.cols[idx as usize].clone()
             } else {
-                (*(*args).src.hdr.cols)
-                    .off
-                    .get((-(&(*args).src.transfer_idx)[i] - 1) as usize)
+                args.src.hdr.cols.as_ref().unwrap().cols[(-idx - 1) as usize].clone()
             };
-            if str_.is_null() || *str_ == 0 {
-                str_ = c".".as_ptr().cast_mut();
-            }
-            if (*args).allow_dups == 0 {
-                if sam::khash_str2int_has_key((&(*args).tmp_hash)[i], str_) != 0 {
+            let str_: Vec<u8> = if value.is_empty() { b".".to_vec() } else { value };
+            if args.allow_dups == 0 {
+                if args.tmp_hash[i].contains(&str_) {
                     continue;
                 }
-                sam::khash_str2int_set((&(*args).tmp_hash)[i], str_, 1);
+                args.tmp_hash[i].insert(str_.clone());
             }
-            if (*args).max_annots != 0 {
-                (&mut (*args).src.nannots_added)[i] += 1;
-                if (&(*args).src.nannots_added)[i] >= (*args).max_annots {
+            if args.max_annots != 0 {
+                args.src.nannots_added[i] += 1;
+                if args.src.nannots_added[i] >= args.max_annots {
                     max_annots_reached = 1;
                 }
             }
-            cols_append(&mut (&mut (*(*args).tmp_cols))[i], str_);
-            annot_len += libc::strlen(str_);
+            cols_append(&mut args.tmp_cols[i], &str_);
         }
         if max_annots_reached != 0 {
             break;
@@ -1310,60 +1222,47 @@ pub unsafe fn annot_tsv_c_737_process_line(args: *mut c_void, line: *mut i8, siz
     }
 
     if has_match == 0 {
-        if (*args).mode & ANNOT_TSV_PRINT_NONMATCHING != 0 {
-            write_string(&mut *args, line, size);
-            write_annots(&mut *args);
-            write_string(&mut *args, c"\n".as_ptr().cast_mut(), 1);
+        if args.mode & ANNOT_TSV_PRINT_NONMATCHING != 0 {
+            write_string(args, line);
+            write_annots(args);
+            write_string(args, b"\n");
         }
         return;
     }
-    if (*args).mode & ANNOT_TSV_PRINT_MATCHING == 0 {
+    if args.mode & ANNOT_TSV_PRINT_MATCHING == 0 {
         return;
     }
 
-    (*args).tmp_kstr.l = 0;
-    ks_resize(
-        &mut (*args).tmp_kstr,
-        annot_len * 3 + (*(*args).src.transfer).n as usize * 2,
-    );
-    for i in 0..(*(*args).src.transfer).n as usize {
-        let mut off = (*args).tmp_kstr.s.add((*args).tmp_kstr.l);
-        dst_cols
-            .off
-            .set((&(*args).dst.transfer_idx)[i] as usize, off);
-        let ann = &mut (&mut (*(*args).tmp_cols))[i] as *mut AnnotTsvCols;
-        if (*ann).n == 0 {
-            *off = b'.' as i8;
-            *off.add(1) = 0;
-            (*args).tmp_kstr.l += 2;
-            continue;
-        }
-        for j in 0..(*ann).n as usize {
-            if j > 0 {
-                *off = b',' as i8;
-                off = off.add(1);
-                (*args).tmp_kstr.l += 1;
-            }
-            let len = libc::strlen(*(*ann).off.add(j));
-            libc::memcpy(off.cast(), (*(*ann).off.add(j)).cast(), len);
-            off = off.add(len);
-            (*args).tmp_kstr.l += len;
-        }
-        *off = 0;
-        (*args).tmp_kstr.l += 1;
+    // Build the joined transfer values directly into the destination columns,
+    // replacing the C trick of pointing column offsets into a scratch kstring.
+    for i in 0..n_transfer {
+        let ann = &args.tmp_cols[i];
+        let joined: Vec<u8> = if ann.cols.is_empty() {
+            b".".to_vec()
+        } else {
+            ann.cols.join(&b","[..])
+        };
+        let target = args.dst.transfer_idx[i] as usize;
+        dst_cols.cols[target] = joined;
     }
-    write_string(&mut *args, dst_cols.off.get(0), 0);
-    for i in 1..dst_cols.n {
-        write_string(&mut *args, &mut (*args).dst.delim as *mut i8, 1);
-        write_string(&mut *args, dst_cols.off.get(i), 0);
+    let delim = [args.dst.delim];
+    write_string(args, &dst_cols.cols[0]);
+    for i in 1..dst_cols.cols.len() {
+        write_string(args, &delim);
+        write_string(args, &dst_cols.cols[i]);
     }
-    write_annots(&mut *args);
-    write_string(&mut *args, c"\n".as_ptr().cast_mut(), 1);
+    write_annots(args);
+    write_string(args, b"\n");
 }
 
 // original: usage_text (htslib/annot-tsv.c:880)
-pub unsafe fn annot_tsv_c_880_usage_text() -> *const i8 {
-    ANNOT_TSV_USAGE_TEXT.as_ptr().cast()
+pub fn annot_tsv_c_880_usage_text() -> &'static [u8] {
+    // Strip the trailing NUL terminator that the C original carried.
+    let text = ANNOT_TSV_USAGE_TEXT;
+    match text.last() {
+        Some(0) => &text[..text.len() - 1],
+        _ => text,
+    }
 }
 
 // original: main (htslib/annot-tsv.c:956)
@@ -1373,39 +1272,38 @@ pub unsafe fn annot_tsv_c_956_main(argc: i32, argv: *mut *mut i8) -> i32 {
     let argv_slice = std::slice::from_raw_parts(argv, argc as usize);
     let mut i = 1usize;
     while i < argv_slice.len() {
-        let arg = CStr::from_ptr(argv_slice[i]).to_bytes();
-        let mut optarg: *mut i8 = std::ptr::null_mut();
+        // argv entries are OS-provided C strings; copy each to an owned slice.
+        let arg = CStr::from_ptr(argv_slice[i]).to_bytes().to_vec();
+        let mut optarg: Option<Vec<u8>> = None;
         let c = if let Some(long) = arg.strip_prefix(b"--") {
-            let (name, value) = match long.iter().position(|&ch| ch == b'=') {
-                Some(eq) => (
-                    &long[..eq],
-                    Some(argv_slice[i].cast::<i8>().add(2 + eq + 1)),
-                ),
-                None => (long, None),
-            };
+            let (name, value): (&[u8], Option<Vec<u8>>) =
+                match long.iter().position(|&ch| ch == b'=') {
+                    Some(eq) => (&long[..eq], Some(long[eq + 1..].to_vec())),
+                    None => (long, None),
+                };
             match name {
                 b"allow-dups" => 0,
                 b"version" => 1,
                 b"max-annots" => {
-                    optarg = value.unwrap_or_else(|| {
+                    optarg = Some(value.unwrap_or_else(|| {
                         i += 1;
                         if i >= argv_slice.len() {
-                            libc::abort();
+                            std::process::abort();
                         }
-                        argv_slice[i]
-                    });
+                        CStr::from_ptr(argv_slice[i]).to_bytes().to_vec()
+                    }));
                     2
                 }
                 b"help" => 4,
                 b"core" | b"coords" | b"transfer" | b"match" | b"output" | b"source-file"
                 | b"target-file" | b"annotate" | b"headers" | b"overlap" | b"delim" => {
-                    optarg = value.unwrap_or_else(|| {
+                    optarg = Some(value.unwrap_or_else(|| {
                         i += 1;
                         if i >= argv_slice.len() {
-                            libc::abort();
+                            std::process::abort();
                         }
-                        argv_slice[i]
-                    });
+                        CStr::from_ptr(argv_slice[i]).to_bytes().to_vec()
+                    }));
                     match name {
                         b"core" => b'c' as i32,
                         b"coords" => b'C' as i32,
@@ -1418,14 +1316,14 @@ pub unsafe fn annot_tsv_c_956_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         b"headers" => b'h' as i32,
                         b"overlap" => b'O' as i32,
                         b"delim" => b'd' as i32,
-                        _ => libc::abort(),
+                        _ => std::process::abort(),
                     }
                 }
                 b"no-header-idx" => b'I' as i32,
                 b"ignore-headers" => b'H' as i32,
                 b"reciprocal" => b'r' as i32,
                 b"drop-overlaps" => b'x' as i32,
-                _ => libc::abort(),
+                _ => std::process::abort(),
             }
         } else if arg.starts_with(b"-") && arg.len() > 1 {
             let mut pos = 1usize;
@@ -1434,23 +1332,23 @@ pub unsafe fn annot_tsv_c_956_main(argc: i32, argv: *mut *mut i8) -> i32 {
                 let opt = arg[pos];
                 match opt {
                     b'I' => (*args).no_write_hdr += 1,
-                    b'H' => (*args).headers_str = c"0:0".as_ptr().cast_mut(),
+                    b'H' => (*args).headers_str = b"0:0".to_vec(),
                     b'r' => reciprocal = 1,
                     b'x' => (*args).mode = ANNOT_TSV_PRINT_NONMATCHING,
                     b'c' | b'C' | b'f' | b'm' | b'o' | b's' | b't' | b'a' | b'O' | b'h' | b'd' => {
-                        optarg = if pos + 1 < arg.len() {
-                            argv_slice[i].cast::<i8>().add(pos + 1)
+                        optarg = Some(if pos + 1 < arg.len() {
+                            arg[pos + 1..].to_vec()
                         } else {
                             i += 1;
                             if i >= argv_slice.len() {
-                                libc::abort();
+                                std::process::abort();
                             }
-                            argv_slice[i]
-                        };
+                            CStr::from_ptr(argv_slice[i]).to_bytes().to_vec()
+                        });
                         parsed = opt as i32;
                         break;
                     }
-                    _ => libc::abort(),
+                    _ => std::process::abort(),
                 }
                 pos += 1;
             }
@@ -1460,86 +1358,97 @@ pub unsafe fn annot_tsv_c_956_main(argc: i32, argv: *mut *mut i8) -> i32 {
             }
             parsed
         } else {
-            libc::abort();
+            std::process::abort();
         };
 
         match c {
             0 => (*args).allow_dups = 1,
             1 => return 0,
             2 => {
-                let mut tmp: *mut i8 = std::ptr::null_mut();
-                (*args).max_annots = libc::strtod(optarg, &mut tmp) as i32;
-                if tmp == optarg || *tmp != 0 {
-                    libc::abort();
-                }
+                // strtod-as-int: parse the whole argument as an integer.
+                let optarg = optarg.take().unwrap();
+                (*args).max_annots = std::str::from_utf8(&optarg)
+                    .ok()
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                    .filter(|_| std::str::from_utf8(&optarg).map(|s| !s.is_empty()).unwrap_or(false))
+                    .map(|v| v as i32)
+                    .unwrap_or_else(|| std::process::abort());
             }
             x if x == b'I' as i32 => (*args).no_write_hdr += 1,
-            x if x == b'd' as i32 => (*args).delim_str = optarg,
-            x if x == b'h' as i32 => (*args).headers_str = optarg,
-            x if x == b'H' as i32 => (*args).headers_str = c"0:0".as_ptr().cast_mut(),
+            x if x == b'd' as i32 => (*args).delim_str = optarg.take().unwrap(),
+            x if x == b'h' as i32 => (*args).headers_str = optarg.take().unwrap(),
+            x if x == b'H' as i32 => (*args).headers_str = b"0:0".to_vec(),
             x if x == b'r' as i32 => reciprocal = 1,
-            x if x == b'c' as i32 => (*args).core_str = optarg,
-            x if x == b'C' as i32 => (*args).coords_str = optarg,
-            x if x == b't' as i32 => (*args).dst.fname = optarg,
-            x if x == b'm' as i32 => (*args).match_str = optarg,
-            x if x == b'a' as i32 => (*args).annots_str = optarg,
-            x if x == b'o' as i32 => (*args).out_fname = optarg,
+            x if x == b'c' as i32 => (*args).core_str = optarg.take().unwrap(),
+            x if x == b'C' as i32 => (*args).coords_str = optarg.take().unwrap(),
+            x if x == b't' as i32 => (*args).dst.fname = optarg.take().unwrap(),
+            x if x == b'm' as i32 => (*args).match_str = optarg.take().unwrap(),
+            x if x == b'a' as i32 => (*args).annots_str = optarg.take().unwrap(),
+            x if x == b'o' as i32 => (*args).out_fname = optarg.take().unwrap(),
             x if x == b'O' as i32 => {
-                let mut tmp: *mut i8 = std::ptr::null_mut();
-                (*args).overlap_src = libc::strtod(optarg, &mut tmp);
-                if tmp == optarg || (*tmp != 0 && *tmp != b',' as i8) {
-                    libc::abort();
-                }
+                let optarg = optarg.take().unwrap();
+                // Parse "FLOAT[,FLOAT]" overlap requirement.
+                let comma = optarg.iter().position(|&ch| ch == b',');
+                let src_part = &optarg[..comma.unwrap_or(optarg.len())];
+                (*args).overlap_src = std::str::from_utf8(src_part)
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or_else(|| std::process::abort());
                 if (*args).overlap_src < 0.0 || (*args).overlap_src > 1.0 {
-                    libc::abort();
+                    std::process::abort();
                 }
-                if *tmp != 0 {
-                    (*args).overlap_dst = libc::strtod(tmp.add(1), &mut tmp);
-                    if *tmp != 0 || (*args).overlap_dst < 0.0 || (*args).overlap_dst > 1.0 {
-                        libc::abort();
+                if let Some(comma) = comma {
+                    let dst_part = &optarg[comma + 1..];
+                    (*args).overlap_dst = std::str::from_utf8(dst_part)
+                        .ok()
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .unwrap_or_else(|| std::process::abort());
+                    if (*args).overlap_dst < 0.0 || (*args).overlap_dst > 1.0 {
+                        std::process::abort();
                     }
                 } else {
                     (*args).overlap_either = 1;
                 }
             }
-            x if x == b's' as i32 => (*args).src.fname = optarg,
-            x if x == b'f' as i32 => (*args).transfer_str = optarg,
+            x if x == b's' as i32 => (*args).src.fname = optarg.take().unwrap(),
+            x if x == b'f' as i32 => (*args).transfer_str = optarg.take().unwrap(),
             x if x == b'x' as i32 => (*args).mode = ANNOT_TSV_PRINT_NONMATCHING,
             4 => return 0,
-            _ => libc::abort(),
+            _ => std::process::abort(),
         }
         i += 1;
     }
     if argc == 1 {
-        libc::abort();
+        std::process::abort();
     }
-    if (*args).dst.fname.is_null() && (*args).src.fname.is_null() {
-        libc::abort();
+    if (*args).dst.fname.is_empty() && (*args).src.fname.is_empty() {
+        std::process::abort();
     }
-    if (*args).dst.fname.is_null() {
-        (*args).dst.fname = c"-".as_ptr().cast_mut();
+    if (*args).dst.fname.is_empty() {
+        (*args).dst.fname = b"-".to_vec();
     }
-    if (*args).src.fname.is_null() {
-        (*args).src.fname = c"-".as_ptr().cast_mut();
+    if (*args).src.fname.is_empty() {
+        (*args).src.fname = b"-".to_vec();
     }
     if (*args).mode == 0 {
-        (*args).mode = if (*args).transfer_str.is_null() && (*args).annots_str.is_null() {
+        (*args).mode = if (*args).transfer_str.is_empty() && (*args).annots_str.is_empty() {
             ANNOT_TSV_PRINT_MATCHING
         } else {
             ANNOT_TSV_PRINT_MATCHING | ANNOT_TSV_PRINT_NONMATCHING
         };
     }
-    if (!(*args).transfer_str.is_null() || !(*args).annots_str.is_null())
+    if (!(*args).transfer_str.is_empty() || !(*args).annots_str.is_empty())
         && (*args).mode & ANNOT_TSV_PRINT_MATCHING == 0
     {
-        libc::abort();
+        std::process::abort();
     }
     if reciprocal != 0 {
         if (*args).overlap_dst != 0.0
             && (*args).overlap_src != 0.0
             && (*args).overlap_dst != (*args).overlap_src
         {
-            libc::abort();
+            std::process::abort();
         }
         if (*args).overlap_src == 0.0 {
             (*args).overlap_src = (*args).overlap_dst;
@@ -1549,17 +1458,23 @@ pub unsafe fn annot_tsv_c_956_main(argc: i32, argv: *mut *mut i8) -> i32 {
         (*args).overlap_either = 0;
     }
 
-    annot_tsv_c_515_init_data(args.cast());
-    write_header(&mut *args, &mut (*args).dst);
-    while read_next_line(&mut (*args).dst) != 0 {
-        for _ in 0..(*args).dst.grow_n {
-            kputc((*args).dst.delim as i32, &mut (*args).dst.line);
-            kputc(b'.' as i32, &mut (*args).dst.line);
-        }
-        annot_tsv_c_737_process_line(args.cast(), (*args).dst.line.s, (*args).dst.line.l);
-        (*args).dst.line.l = 0;
+    annot_tsv_c_515_init_data(&mut *args);
+    {
+        let mut dst = std::mem::take(&mut (*args).dst);
+        write_header(&mut *args, &mut dst);
+        (*args).dst = dst;
     }
-    annot_tsv_c_666_destroy_data(args.cast());
+    while read_next_line(&mut (*args).dst) != 0 {
+        // Pad the line with "<delim>." for each newly created destination column.
+        let mut padded = (*args).dst.line.data.clone();
+        for _ in 0..(*args).dst.grow_n {
+            padded.push((*args).dst.delim);
+            padded.push(b'.');
+        }
+        annot_tsv_c_737_process_line(&mut *args, &padded);
+        (*args).dst.line.data.clear();
+    }
+    annot_tsv_c_666_destroy_data(&mut *args);
     drop(Box::from_raw(args));
     0
 }

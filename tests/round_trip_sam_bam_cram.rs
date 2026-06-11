@@ -53,11 +53,7 @@ unsafe fn collect_formatted_records(path: &Path, reference: Option<&str>) -> Vec
     let rec = bam_init1();
     assert!(!rec.is_null());
 
-    let mut line = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut line = kstring_t::default();
     let mut out = Vec::new();
     loop {
         let ret = sam_read1(fp, hdr, rec);
@@ -65,12 +61,9 @@ unsafe fn collect_formatted_records(path: &Path, reference: Option<&str>) -> Vec
             break;
         }
         assert!(sam_format1(hdr, rec, &mut line) >= 0);
-        out.push(CStr::from_ptr(line.s).to_string_lossy().into_owned());
+        out.push(String::from_utf8_lossy(&line.data).into_owned());
     }
 
-    if !line.s.is_null() {
-        libc::free(line.s.cast());
-    }
     bam_destroy1(rec);
     sam_hdr_destroy(hdr);
     assert_eq!(hts_close(fp), 0);

@@ -497,16 +497,16 @@ fn bgziptest_gzi_load_adds_original_implicit_zero_offset() {
         let gzi = c_fixture("htslib/test/bgziptest.txt.gz.gzi");
 
         assert_eq!(bgzf_index_load(fp, gzi.as_ptr(), std::ptr::null()), 0);
-        assert!(!(*fp).idx.is_null());
+        assert!((*fp).idx.is_some());
 
-        let idx = (*fp).idx.cast::<bgzidx_t>();
-        assert_eq!((*idx).noffs, 6);
-        assert_eq!((*idx).moffs, 6);
-        assert_eq!((*idx).ublock_addr, 0);
+        let idx = (*fp).idx.as_ref().unwrap();
+        assert_eq!(idx.noffs, 6);
+        assert_eq!(idx.moffs, 6);
+        assert_eq!(idx.ublock_addr, 0);
 
         let expected_pairs = [(0, 0), (29, 1), (59, 3), (90, 6), (122, 10), (153, 15)];
         for (i, &(compressed_offset, uncompressed_offset)) in expected_pairs.iter().enumerate() {
-            let off = (*idx).offs.add(i);
+            let off = idx.offs.add(i);
             assert_eq!((*off).caddr, compressed_offset);
             assert_eq!((*off).uaddr, uncompressed_offset);
         }
@@ -670,22 +670,14 @@ fn bgziptest_getc_peek_and_getline_cross_original_block_boundaries() {
         assert_eq!((*fp).block_offset, 0);
         assert_eq!((*fp).block_length, 0);
 
-        let mut line = kstring_t {
-            l: 0,
-            m: 0,
-            s: std::ptr::null_mut(),
-        };
+        let mut line = kstring_t::default();
         assert_eq!(bgzf_getline(fp, b'4' as i32, &mut line), 3);
-        assert_eq!(
-            std::slice::from_raw_parts(line.s.cast::<u8>(), line.l),
-            b"333"
-        );
+        assert_eq!(line.data.as_slice(), b"333");
         assert_eq!(bgzf_utell(fp), 7);
         assert_eq!(bgzf_peek(fp), b'4' as i32);
         assert_eq!(bgzf_getc(fp), b'4' as i32);
         assert_eq!(bgzf_utell(fp), 8);
 
-        libc::free(line.s.cast());
         assert_eq!(bgzf_close(fp), 0);
     }
 }

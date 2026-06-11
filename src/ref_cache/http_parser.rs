@@ -10,9 +10,9 @@ use super::request_handler::{
     ref_cache_request_handler_c_148_handle_request, ref_cache_request_handler_c_167_handle_error,
 };
 use super::server::ref_cache_server_c_352_client_add_transaction;
-use super::server::Client;
-use super::transaction::Transaction;
-use std::ffi::{c_char, c_int, c_uchar, c_uint, c_ulong};
+use super::server::RefCacheClientsLayout;
+use super::transaction::TransactionId;
+use std::ffi::{c_int, c_uchar, c_uint, c_ulong};
 
 const REF_CACHE_MAX_UA_LEN: usize = 128;
 const REF_CACHE_MAX_REFERRER_LEN: usize = 128;
@@ -77,88 +77,74 @@ static REF_CACHE_TOKEN_CHARS: [c_uchar; 256] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
-// Concurrency note (audit 2026-05):
-//
-// `REF_CACHE_HTTP_LINE` is a scratch buffer used to assemble a single line
-// of an HTTP request while the parser is reassembling a wrapped header
-// across ring-buffer boundaries (see
-// `ref_cache_http_parser_c_158_parser_get_line`). The buffer is owned by
-// the `ref-cache` daemon's single epoll worker thread (fork-based process
-// model — see `src/ref_cache/main.rs` and `src/ref_cache/server.rs`); no
-// threading primitives exist anywhere in the `ref_cache` subsystem, so the
-// buffer is touched by exactly one thread at a time.
-//
-// SAFETY: single-threaded daemon worker; the function reads the parser
-// state, decides if a contiguous line is available, and either returns an
-// inline pointer into `(*parser).buffer` or copies into this static. The
-// returned pointer is consumed before the next call, so there is also no
-// re-entrancy hazard within the single thread.
-static mut REF_CACHE_HTTP_LINE: [c_char; REF_CACHE_BUF_SZ as usize + 1] =
-    [0; REF_CACHE_BUF_SZ as usize + 1];
+// The parser owns all of its scratch state. A request line is reassembled
+// into an owned `Vec<u8>` returned by
+// `ref_cache_http_parser_c_158_parser_get_line` and consumed before the next
+// call (the `ref-cache` daemon is a single-threaded, fork-based epoll worker;
+// see `src/ref_cache/main.rs` and `src/ref_cache/server.rs`).
 
-#[repr(C)]
-struct HttpParserLayout {
+pub struct HttpParser {
     state: c_int,
     req_type: c_int,
     http_vers: c_int,
     trans_enc: c_int,
     content_length: c_ulong,
     bytes: c_ulong,
-    uri: *mut c_char,
-    key: *mut c_char,
-    val: *mut c_char,
-    buffer: *mut c_char,
-    user_agent: *mut c_char,
-    referrer: *mut c_char,
+    // Header key/value accumulators. These hold the logical bytes only (no
+    // trailing NUL); `.len()` is the used length.
+    uri: Vec<u8>,
+    key: Vec<u8>,
+    val: Vec<u8>,
+    user_agent: Vec<u8>,
+    referrer: Vec<u8>,
+    // Ring buffer of received bytes.
+    buffer: Vec<u8>,
     range_from: libc::off_t,
     range_to: libc::off_t,
-    key_sz: usize,
-    key_used: usize,
-    val_sz: usize,
-    val_used: usize,
     upstream: c_int,
     flags: c_uint,
     in_: c_uint,
     out: c_uint,
     pos: c_uint,
     used: c_uint,
-    uri_buf: Vec<u8>,
-    key_buf: Vec<u8>,
-    val_buf: Vec<u8>,
-    buffer_buf: Vec<u8>,
-    user_agent_buf: Vec<u8>,
-    referrer_buf: Vec<u8>,
 }
 
-#[repr(C)]
-struct RefCacheMatchAddrLayout {
-    family: libc::sa_family_t,
-    mask_bytes: u8,
-    mask: u8,
-    addr: [libc::c_uchar; 16],
-}
-
-#[repr(C)]
-struct RefCacheOptionsLayout {
-    cache_dir: *const c_char,
-    log_dir: *const c_char,
-    error_log_file: *const c_char,
-    log: *mut libc::FILE,
-    upstream_url: *const c_char,
-    upstream_url_len: usize,
-    match_addrs: *mut RefCacheMatchAddrLayout,
-    num_match_addrs: usize,
-    match_addrs_size: usize,
-    first_ip6: usize,
-    max_log_sz: libc::off_t,
-    cache_fd: c_int,
-    listen_fds: c_int,
-    daemon: c_int,
-    port: u16,
-    nlogs: u16,
-    max_kids: u16,
-    verbosity: u8,
-    no_log: u8,
+impl HttpParser {
+    pub fn uri(&self) -> &[u8] {
+        &self.uri
+    }
+    pub fn upstream(&self) -> c_int {
+        self.upstream
+    }
+    pub fn req_type(&self) -> c_int {
+        self.req_type
+    }
+    pub fn http_vers(&self) -> c_int {
+        self.http_vers
+    }
+    pub fn flags(&self) -> c_uint {
+        self.flags
+    }
+    pub fn state(&self) -> c_int {
+        self.state
+    }
+    pub fn set_state(&mut self, state: c_int) {
+        self.state = state;
+    }
+    pub fn range_from(&self) -> libc::off_t {
+        self.range_from
+    }
+    pub fn range_to(&self) -> libc::off_t {
+        self.range_to
+    }
+    // Move the accumulated User-Agent / Referer out of the parser into the
+    // transaction that is taking ownership of them.
+    pub fn take_user_agent(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.user_agent)
+    }
+    pub fn take_referrer(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.referrer)
+    }
 }
 
 fn ref_cache_http_parser_is_lws(ch: c_uchar) -> bool {
@@ -167,25 +153,6 @@ fn ref_cache_http_parser_is_lws(ch: c_uchar) -> bool {
 
 fn ref_cache_http_parser_is_token(ch: c_uchar) -> bool {
     REF_CACHE_TOKEN_CHARS[ch as usize] != 0
-}
-
-impl HttpParserLayout {
-    fn refresh_raw_ptrs(&mut self) {
-        self.uri = nul_terminated_ptr(&mut self.uri_buf);
-        self.key = nul_terminated_ptr(&mut self.key_buf);
-        self.val = nul_terminated_ptr(&mut self.val_buf);
-        self.buffer = self.buffer_buf.as_mut_ptr().cast();
-        self.user_agent = nul_terminated_ptr(&mut self.user_agent_buf);
-        self.referrer = nul_terminated_ptr(&mut self.referrer_buf);
-    }
-}
-
-fn nul_terminated_ptr(buf: &mut [u8]) -> *mut c_char {
-    if buf.is_empty() {
-        std::ptr::null_mut()
-    } else {
-        buf.as_mut_ptr().cast()
-    }
 }
 
 fn lws_spn_bytes(s: &[u8]) -> usize {
@@ -254,21 +221,16 @@ fn limited_header_value(src: &[u8], max_len: usize) -> Vec<u8> {
         out.extend_from_slice(&src[..max_len - 3]);
         out.extend_from_slice(b"...");
     }
-    out.push(0);
     out
 }
 
-fn parse_range_bytes(parser: &mut HttpParserLayout) {
-    let mut v = parser.val_buf.as_slice();
+fn parse_range_bytes(parser: &mut HttpParser) {
+    let mut v = parser.val.as_slice();
     let off_max: libc::off_t = if std::mem::size_of::<libc::off_t>() < 8 {
         i32::MAX as libc::off_t
     } else {
         i64::MAX as libc::off_t
     };
-
-    if v.last() == Some(&0) {
-        v = &v[..v.len() - 1];
-    }
 
     if v.len() < 5 || !v[..5].eq_ignore_ascii_case(b"bytes") {
         parser.flags &= !(TRANSACT_RANGE_FROM | TRANSACT_RANGE_TO | TRANSACT_RANGE_SUFFIX);
@@ -341,205 +303,158 @@ fn parse_range_bytes(parser: &mut HttpParserLayout) {
 }
 
 // original: lws_spn (htslib/ref_cache/http_parser.c:93)
-pub unsafe fn ref_cache_http_parser_c_93_lws_spn(s: *mut c_char) -> usize {
-    let mut c = 0;
-    while ref_cache_http_parser_is_lws(*s.add(c) as c_uchar) {
-        c += 1;
-    }
-    c
+pub fn ref_cache_http_parser_c_93_lws_spn(s: &[u8]) -> usize {
+    lws_spn_bytes(s)
 }
 
 // original: lws_cspn (htslib/ref_cache/http_parser.c:99)
-pub unsafe fn ref_cache_http_parser_c_99_lws_cspn(s: *mut c_char) -> usize {
-    let mut c = 0;
-    while *s.add(c) != 0 && !ref_cache_http_parser_is_lws(*s.add(c) as c_uchar) {
-        c += 1;
-    }
-    c
+pub fn ref_cache_http_parser_c_99_lws_cspn(s: &[u8]) -> usize {
+    lws_cspn_bytes(s)
 }
 
 // original: tok_spn (htslib/ref_cache/http_parser.c:105)
-pub unsafe fn ref_cache_http_parser_c_105_tok_spn(s: *mut c_char) -> usize {
-    let mut c = 0;
-    while ref_cache_http_parser_is_token(*s.add(c) as c_uchar) {
-        c += 1;
-    }
-    c
+pub fn ref_cache_http_parser_c_105_tok_spn(s: &[u8]) -> usize {
+    tok_spn_bytes(s)
 }
 
 // original: init_http_parser (htslib/ref_cache/http_parser.c:111)
-pub unsafe fn ref_cache_http_parser_c_111_init_http_parser(
-    parser: *mut Http_Parser,
-    upstream: c_int,
-) -> c_int {
-    let parser = parser.cast::<HttpParserLayout>();
-    let mut layout = HttpParserLayout {
+pub fn ref_cache_http_parser_c_111_init_http_parser(upstream: c_int) -> HttpParser {
+    HttpParser {
         state: 0,
         req_type: 0,
         http_vers: 0,
         trans_enc: 0,
         content_length: 0,
         bytes: 0,
-        uri: std::ptr::null_mut(),
-        key: std::ptr::null_mut(),
-        val: std::ptr::null_mut(),
-        buffer: std::ptr::null_mut(),
-        user_agent: std::ptr::null_mut(),
-        referrer: std::ptr::null_mut(),
+        uri: Vec::new(),
+        key: Vec::new(),
+        val: Vec::new(),
+        user_agent: Vec::new(),
+        referrer: Vec::new(),
+        buffer: vec![0; REF_CACHE_BUF_SZ as usize],
         range_from: 0,
         range_to: 0,
-        key_sz: 0,
-        key_used: 0,
-        val_sz: 0,
-        val_used: 0,
         upstream,
         flags: 0,
         in_: 0,
         out: 0,
         pos: 0,
         used: 0,
-        uri_buf: Vec::new(),
-        key_buf: Vec::new(),
-        val_buf: Vec::new(),
-        buffer_buf: vec![0; REF_CACHE_BUF_SZ as usize],
-        user_agent_buf: Vec::new(),
-        referrer_buf: Vec::new(),
-    };
-    layout.refresh_raw_ptrs();
-    parser.write(layout);
-    0
+    }
 }
 
 // original: cleanup_http_parser (htslib/ref_cache/http_parser.c:131)
-pub unsafe fn ref_cache_http_parser_c_131_cleanup_http_parser(parser: *mut Http_Parser) {
-    let parser = parser.cast::<HttpParserLayout>();
-    if (*parser).buffer.is_null() {
-        return;
-    }
-    std::ptr::drop_in_place(parser);
-    parser
-        .cast::<u8>()
-        .write_bytes(0, std::mem::size_of::<HttpParserLayout>());
+pub fn ref_cache_http_parser_c_131_cleanup_http_parser(_parser: &mut HttpParser) {
+    // Owned `Vec`s are released by `HttpParser`'s `Drop`; nothing to do here.
 }
 
 // original: parser_get_line (htslib/ref_cache/http_parser.c:158)
-pub unsafe fn ref_cache_http_parser_c_158_parser_get_line(
-    parser: *mut Http_Parser,
-    len: *mut usize,
-) -> *mut c_char {
-    let parser = parser.cast::<HttpParserLayout>();
-    let line = std::ptr::addr_of_mut!(REF_CACHE_HTTP_LINE).cast::<c_char>();
-    let mut lpos: usize;
-
-    if (*parser).used == 0 {
-        assert!((*parser).in_ == (*parser).out);
-        assert!((*parser).pos == (*parser).out);
-        return std::ptr::null_mut();
+//
+// Reassembles a single line (up to a `\n`) out of the ring buffer and returns
+// it as owned bytes, with any trailing `\r` stripped. Returns `None` when no
+// complete line is currently available.
+pub fn ref_cache_http_parser_c_158_parser_get_line(parser: &mut HttpParser) -> Option<Vec<u8>> {
+    if parser.used == 0 {
+        assert!(parser.in_ == parser.out);
+        assert!(parser.pos == parser.out);
+        return None;
     }
 
     loop {
-        if (&(*parser).buffer_buf)[(*parser).pos as usize] == b'\n' {
+        if parser.buffer[parser.pos as usize] == b'\n' {
             break;
         }
-        (*parser).pos = ((*parser).pos + 1) & REF_CACHE_BUF_MASK;
-        if (*parser).pos == (*parser).in_ {
+        parser.pos = (parser.pos + 1) & REF_CACHE_BUF_MASK;
+        if parser.pos == parser.in_ {
             break;
         }
     }
-    if (*parser).pos == (*parser).in_ && (&(*parser).buffer_buf)[(*parser).pos as usize] != b'\n' {
-        if (*parser).used == REF_CACHE_BUF_SZ {
-            (*parser).state = REF_CACHE_ERR_TOO_LARGE;
-            return std::ptr::null_mut();
+    if parser.pos == parser.in_ && parser.buffer[parser.pos as usize] != b'\n' {
+        if parser.used == REF_CACHE_BUF_SZ {
+            parser.state = REF_CACHE_ERR_TOO_LARGE;
         }
-        return std::ptr::null_mut();
+        return None;
     }
 
-    lpos = 0;
-    if (*parser).pos <= (*parser).out {
-        let n = (REF_CACHE_BUF_SZ - (*parser).out) as usize;
-        let out = (*parser).out as usize;
-        std::slice::from_raw_parts_mut(line.cast::<u8>().add(lpos), n)
-            .copy_from_slice(&(&(*parser).buffer_buf)[out..out + n]);
-        lpos += n;
-        (*parser).out = 0;
+    let mut line = Vec::new();
+    if parser.pos <= parser.out {
+        let n = (REF_CACHE_BUF_SZ - parser.out) as usize;
+        let out = parser.out as usize;
+        line.extend_from_slice(&parser.buffer[out..out + n]);
+        parser.out = 0;
     }
-    let n = ((*parser).pos - (*parser).out) as usize;
-    let out = (*parser).out as usize;
-    std::slice::from_raw_parts_mut(line.cast::<u8>().add(lpos), n)
-        .copy_from_slice(&(&(*parser).buffer_buf)[out..out + n]);
-    lpos += n;
-    *line.add(lpos) = 0;
-    if lpos > 0 && *line.add(lpos - 1) == b'\r' as c_char {
-        lpos -= 1;
-        *line.add(lpos) = 0;
+    let n = (parser.pos - parser.out) as usize;
+    let out = parser.out as usize;
+    line.extend_from_slice(&parser.buffer[out..out + n]);
+    if line.last() == Some(&b'\r') {
+        line.pop();
     }
-    *len = lpos;
-    (*parser).pos = ((*parser).pos + 1) & REF_CACHE_BUF_MASK;
-    (*parser).out = (*parser).pos;
-    (*parser).used = if (*parser).out > (*parser).in_ {
-        REF_CACHE_BUF_SZ - (*parser).out + (*parser).in_
+    parser.pos = (parser.pos + 1) & REF_CACHE_BUF_MASK;
+    parser.out = parser.pos;
+    parser.used = if parser.out > parser.in_ {
+        REF_CACHE_BUF_SZ - parser.out + parser.in_
     } else {
-        (*parser).in_ - (*parser).out
+        parser.in_ - parser.out
     };
-    line
+    Some(line)
 }
 
 // original: parser_read_input (htslib/ref_cache/http_parser.c:201)
-pub unsafe fn ref_cache_http_parser_c_201_parser_read_input(
-    parser: *mut Http_Parser,
-    fd: c_int,
-) -> c_int {
-    let parser = parser.cast::<HttpParserLayout>();
-    let buffer = (*parser).buffer_buf.as_mut_ptr();
-    let mut iov = [
-        libc::iovec {
-            iov_base: buffer.add((*parser).in_ as usize).cast(),
-            iov_len: 0,
-        },
-        libc::iovec {
-            iov_base: buffer.cast(),
-            iov_len: 0,
-        },
-    ];
-    let mut nio = 1;
-
-    assert!((*parser).used <= REF_CACHE_BUF_SZ);
-    if (*parser).used == REF_CACHE_BUF_SZ {
+pub fn ref_cache_http_parser_c_201_parser_read_input(parser: &mut HttpParser, fd: c_int) -> c_int {
+    assert!(parser.used <= REF_CACHE_BUF_SZ);
+    if parser.used == REF_CACHE_BUF_SZ {
         return REF_CACHE_READ_MORE;
     }
 
-    if (*parser).in_ > (*parser).out || (*parser).used == 0 {
-        iov[0].iov_len = (REF_CACHE_BUF_SZ - (*parser).in_) as usize;
-        if (*parser).out > 0 {
-            iov[1].iov_len = (*parser).out as usize;
-            nio = 2;
-        }
+    // Compute the two contiguous free regions of the ring buffer.
+    let (head_off, head_len, tail_len) = if parser.in_ > parser.out || parser.used == 0 {
+        (
+            parser.in_ as usize,
+            (REF_CACHE_BUF_SZ - parser.in_) as usize,
+            parser.out as usize,
+        )
     } else {
-        assert!((*parser).in_ < (*parser).out);
-        iov[0].iov_len = ((*parser).out - (*parser).in_) as usize;
-    }
+        assert!(parser.in_ < parser.out);
+        (
+            parser.in_ as usize,
+            (parser.out - parser.in_) as usize,
+            0,
+        )
+    };
 
-    let res = libc::readv(fd, iov.as_ptr(), nio);
+    // Scatter read into the (up to) two free regions. `readv` is a genuine
+    // syscall with no std equivalent for the gather form, so it stays; only the
+    // pointers handed to it are derived from the owned `Vec`.
+    let buffer = parser.buffer.as_mut_ptr();
+    let iov = [
+        libc::iovec {
+            iov_base: unsafe { buffer.add(head_off) }.cast(),
+            iov_len: head_len,
+        },
+        libc::iovec {
+            iov_base: buffer.cast(),
+            iov_len: tail_len,
+        },
+    ];
+    let nio = if tail_len > 0 { 2 } else { 1 };
+
+    let res = unsafe { libc::readv(fd, iov.as_ptr(), nio) };
     if res < 0 {
-        let errno = *crate::htslib_rs::c_compat::__errno_location();
+        let err = std::io::Error::last_os_error();
+        let errno = err.raw_os_error().unwrap_or(0);
         if errno != libc::EAGAIN && errno != libc::EWOULDBLOCK && errno != libc::EINTR {
-            libc::fprintf(
-                crate::htslib_rs::ref_cache::compat::stderr(),
-                c"Error from fd #%d : %s\n".as_ptr(),
-                fd,
-                libc::strerror(errno),
-            );
+            eprintln!("Error from fd #{} : {}", fd, err);
             return REF_CACHE_READ_ERROR;
         }
         return REF_CACHE_READ_BLOCKED;
     }
 
-    (*parser).in_ = ((*parser).in_ + res as c_uint) & REF_CACHE_BUF_MASK;
-    (*parser).used += res as c_uint;
+    parser.in_ = (parser.in_ + res as c_uint) & REF_CACHE_BUF_MASK;
+    parser.used += res as c_uint;
 
     if res == 0 {
         REF_CACHE_READ_EOF
-    } else if (res as usize) < iov[0].iov_len + iov[1].iov_len {
+    } else if (res as usize) < head_len + tail_len {
         REF_CACHE_READ_BLOCKED
     } else {
         REF_CACHE_READ_MORE
@@ -547,317 +462,241 @@ pub unsafe fn ref_cache_http_parser_c_201_parser_read_input(
 }
 
 // original: read_request_line (htslib/ref_cache/http_parser.c:246)
-pub unsafe fn ref_cache_http_parser_c_246_read_request_line(
-    opts: *const Options,
-    parser: *mut Http_Parser,
-) {
-    let opts = opts.cast::<RefCacheOptionsLayout>();
-    let parser = parser.cast::<HttpParserLayout>();
-    let mut len = 0usize;
-    let mut line: *mut c_char;
-
-    loop {
-        line = ref_cache_http_parser_c_158_parser_get_line(parser.cast(), &mut len);
-        if line.is_null() || len != 0 {
-            break;
+pub fn ref_cache_http_parser_c_246_read_request_line(opts: &Options, parser: &mut HttpParser) {
+    let line = loop {
+        match ref_cache_http_parser_c_158_parser_get_line(parser) {
+            None => return,
+            Some(l) if !l.is_empty() => break l,
+            Some(_) => continue,
         }
-    }
-    if line.is_null() {
-        return;
+    };
+    let len = line.len();
+
+    if opts.verbosity > 2 {
+        eprintln!("RECV'D: {}", String::from_utf8_lossy(&line));
     }
 
-    if (*opts).verbosity > 2 {
-        libc::fprintf(
-            crate::htslib_rs::ref_cache::compat::stderr(),
-            c"RECV'D: %s\n".as_ptr(),
-            line,
-        );
-    }
-
-    let line_bytes = std::slice::from_raw_parts(line.cast::<u8>(), len + 1);
-    let reqlen = lws_cspn_bytes(line_bytes);
-    let uripos = lws_spn_bytes(&line_bytes[reqlen..]) + reqlen;
-    let urilen = lws_cspn_bytes(&line_bytes[uripos..]);
-    let verpos = lws_spn_bytes(&line_bytes[uripos + urilen..]) + uripos + urilen;
+    let reqlen = lws_cspn_bytes(&line);
+    let uripos = lws_spn_bytes(&line[reqlen..]) + reqlen;
+    let urilen = lws_cspn_bytes(&line[uripos..]);
+    let verpos = lws_spn_bytes(&line[uripos + urilen..]) + uripos + urilen;
 
     if reqlen == 0 || urilen == 0 {
-        (*parser).state = REF_CACHE_ERR_BAD_REQUEST;
+        parser.state = REF_CACHE_ERR_BAD_REQUEST;
         return;
     }
     if urilen > 128 {
-        (*parser).state = REF_CACHE_ERR_LONG_URI;
+        parser.state = REF_CACHE_ERR_LONG_URI;
         return;
     }
 
-    match reqlen {
-        3 => {
-            if &line_bytes[..reqlen] == b"GET" {
-                (*parser).req_type = REF_CACHE_REQ_GET;
-            } else if &line_bytes[..reqlen] == b"PUT" {
-                (*parser).req_type = REF_CACHE_REQ_PUT;
-            } else {
-                (*parser).req_type = REF_CACHE_REQ_OTHER;
-            }
-        }
-        4 => {
-            if &line_bytes[..reqlen] == b"HEAD" {
-                (*parser).req_type = REF_CACHE_REQ_HEAD;
-            } else if &line_bytes[..reqlen] == b"POST" {
-                (*parser).req_type = REF_CACHE_REQ_POST;
-            } else {
-                (*parser).req_type = REF_CACHE_REQ_OTHER;
-            }
-        }
-        5 => {
-            if &line_bytes[..reqlen] == b"TRACE" {
-                (*parser).req_type = REF_CACHE_REQ_TRACE;
-            } else {
-                (*parser).req_type = REF_CACHE_REQ_OTHER;
-            }
-        }
-        6 => {
-            if &line_bytes[..reqlen] == b"DELETE" {
-                (*parser).req_type = REF_CACHE_REQ_DELETE;
-            } else {
-                (*parser).req_type = REF_CACHE_REQ_OTHER;
-            }
-        }
-        7 => {
-            if &line_bytes[..reqlen] == b"OPTIONS" {
-                (*parser).req_type = REF_CACHE_REQ_OPTIONS;
-            } else if &line_bytes[..reqlen] == b"CONNECT" {
-                (*parser).req_type = REF_CACHE_REQ_CONNECT;
-            } else {
-                (*parser).req_type = REF_CACHE_REQ_OTHER;
-            }
-        }
-        _ => {
-            (*parser).req_type = REF_CACHE_REQ_OTHER;
-        }
-    }
+    parser.req_type = match &line[..reqlen] {
+        b"GET" => REF_CACHE_REQ_GET,
+        b"PUT" => REF_CACHE_REQ_PUT,
+        b"HEAD" => REF_CACHE_REQ_HEAD,
+        b"POST" => REF_CACHE_REQ_POST,
+        b"TRACE" => REF_CACHE_REQ_TRACE,
+        b"DELETE" => REF_CACHE_REQ_DELETE,
+        b"OPTIONS" => REF_CACHE_REQ_OPTIONS,
+        b"CONNECT" => REF_CACHE_REQ_CONNECT,
+        _ => REF_CACHE_REQ_OTHER,
+    };
 
-    (*parser).uri_buf.clear();
-    (*parser)
-        .uri_buf
-        .extend_from_slice(&line_bytes[uripos..uripos + urilen]);
-    (*parser).uri_buf.push(0);
-    (*parser).refresh_raw_ptrs();
+    parser.uri.clear();
+    parser.uri.extend_from_slice(&line[uripos..uripos + urilen]);
 
-    if line_bytes[verpos] == 0 {
-        (*parser).http_vers = REF_CACHE_HTTP_0_9;
+    if verpos >= len {
+        parser.http_vers = REF_CACHE_HTTP_0_9;
     } else {
-        let vers = &line_bytes[verpos..len];
+        let vers = &line[verpos..len];
         if !vers.starts_with(b"HTTP/") {
-            (*parser).state = REF_CACHE_ERR_BAD_REQUEST;
+            parser.state = REF_CACHE_ERR_BAD_REQUEST;
             return;
         }
 
         let Some(dot) = vers[5..].iter().position(|&ch| ch == b'.') else {
-            (*parser).state = REF_CACHE_ERR_BAD_REQUEST;
+            parser.state = REF_CACHE_ERR_BAD_REQUEST;
             return;
         };
         let major = parse_decimal_c_ulong(&vers[5..5 + dot]);
         let minor = parse_decimal_c_ulong(&vers[6 + dot..]);
         let Some(major) = major else {
-            (*parser).state = REF_CACHE_ERR_BAD_REQUEST;
+            parser.state = REF_CACHE_ERR_BAD_REQUEST;
             return;
         };
         let Some(minor) = minor else {
-            (*parser).state = REF_CACHE_ERR_BAD_REQUEST;
+            parser.state = REF_CACHE_ERR_BAD_REQUEST;
             return;
         };
         if major == 0 {
-            (*parser).http_vers = REF_CACHE_HTTP_0_9;
+            parser.http_vers = REF_CACHE_HTTP_0_9;
         } else if major == 1 {
-            (*parser).http_vers = if minor == 0 { HTTP_1_0 } else { HTTP_1_1 };
+            parser.http_vers = if minor == 0 { HTTP_1_0 } else { HTTP_1_1 };
         } else {
-            (*parser).state = REF_CACHE_ERR_HTTP_VERS;
+            parser.state = REF_CACHE_ERR_HTTP_VERS;
             return;
         }
     }
 
-    if (*parser).http_vers == HTTP_1_1 {
-        (*parser).flags |= TRANSACT_KEEP_ALIVE;
+    if parser.http_vers == HTTP_1_1 {
+        parser.flags |= TRANSACT_KEEP_ALIVE;
     }
 
-    (*parser).state = REF_CACHE_READING_HEADERS;
+    parser.state = REF_CACHE_READING_HEADERS;
 }
 
 // original: parse_range (htslib/ref_cache/http_parser.c:333)
-pub unsafe fn ref_cache_http_parser_c_333_parse_range(parser: *mut Http_Parser) {
-    let parser = parser.cast::<HttpParserLayout>();
-    parse_range_bytes(&mut *parser);
+pub fn ref_cache_http_parser_c_333_parse_range(parser: &mut HttpParser) {
+    parse_range_bytes(parser);
 }
 
 // original: parser_parse_header (htslib/ref_cache/http_parser.c:394)
-pub unsafe fn ref_cache_http_parser_c_394_parser_parse_header(parser: *mut Http_Parser) -> c_int {
-    let parser = parser.cast::<HttpParserLayout>();
+pub fn ref_cache_http_parser_c_394_parser_parse_header(parser: &mut HttpParser) -> c_int {
     let mut res = 0;
 
-    let key = (&(*parser).key_buf)[..(*parser).key_used].to_vec();
-    let val = (&(*parser).val_buf)[..(*parser).val_used].to_vec();
+    let key = std::mem::take(&mut parser.key);
+    let val = std::mem::take(&mut parser.val);
 
     if key.eq_ignore_ascii_case(b"Content-Length") {
-        if (*parser).val_used == 0 {
-            (*parser).state = REF_CACHE_ERR_BAD_REQUEST;
+        if val.is_empty() {
+            parser.state = REF_CACHE_ERR_BAD_REQUEST;
             res = 1;
+        } else if let Some(len) = parse_decimal_c_ulong(&val) {
+            parser.content_length = len;
         } else {
-            if let Some(len) = parse_decimal_c_ulong(&val) {
-                (*parser).content_length = len;
-            } else {
-                (*parser).state = REF_CACHE_ERR_BAD_REQUEST;
-                res = 1;
-            }
+            parser.state = REF_CACHE_ERR_BAD_REQUEST;
+            res = 1;
         }
     } else if key.eq_ignore_ascii_case(b"Transfer-Encoding") {
-        if (*parser).val_used == 0 {
-            (*parser).state = REF_CACHE_ERR_BAD_REQUEST;
+        if val.is_empty() {
+            parser.state = REF_CACHE_ERR_BAD_REQUEST;
             res = 1;
         } else if val.eq_ignore_ascii_case(b"identity") {
-            (*parser).trans_enc = REF_CACHE_TE_IDENT;
+            parser.trans_enc = REF_CACHE_TE_IDENT;
         } else if val.eq_ignore_ascii_case(b"chunked") {
-            (*parser).trans_enc = REF_CACHE_TE_CHUNKED;
+            parser.trans_enc = REF_CACHE_TE_CHUNKED;
         } else {
-            (*parser).state = REF_CACHE_ERR_UNIMPLEMENTED;
+            parser.state = REF_CACHE_ERR_UNIMPLEMENTED;
             res = 1;
         }
     } else if key.eq_ignore_ascii_case(b"Connection") {
-        if ((*parser).flags & TRANSACT_KEEP_ALIVE) != 0 {
+        if (parser.flags & TRANSACT_KEEP_ALIVE) != 0 {
             let mut v = val.as_slice();
             while !v.is_empty() {
                 let l = lws_cspn_bytes(v);
                 if l == 5 && v[..l].eq_ignore_ascii_case(b"close") {
-                    (*parser).flags &= !TRANSACT_KEEP_ALIVE;
+                    parser.flags &= !TRANSACT_KEEP_ALIVE;
                     break;
                 }
                 v = &v[l + lws_spn_bytes(&v[l..])..];
             }
         }
     } else if key.eq_ignore_ascii_case(b"User-Agent") {
-        if (*parser).val_used != 0 {
-            (*parser).user_agent_buf = limited_header_value(&val, REF_CACHE_MAX_UA_LEN);
-            (*parser).refresh_raw_ptrs();
+        if !val.is_empty() {
+            parser.user_agent = limited_header_value(&val, REF_CACHE_MAX_UA_LEN);
         }
     } else if key.eq_ignore_ascii_case(b"Referer") {
-        if (*parser).val_used != 0 {
-            (*parser).referrer_buf = limited_header_value(&val, REF_CACHE_MAX_REFERRER_LEN);
-            (*parser).refresh_raw_ptrs();
+        if !val.is_empty() {
+            parser.referrer = limited_header_value(&val, REF_CACHE_MAX_REFERRER_LEN);
         }
-    } else if key.eq_ignore_ascii_case(b"Range") && (*parser).val_used != 0 {
-        ref_cache_http_parser_c_333_parse_range(parser.cast());
+    } else if key.eq_ignore_ascii_case(b"Range") && !val.is_empty() {
+        parser.val = val;
+        ref_cache_http_parser_c_333_parse_range(parser);
     }
 
-    (*parser).key_used = 0;
-    (*parser).key_buf.clear();
-    (*parser).key_buf.push(0);
-    (*parser).val_used = 0;
-    (*parser).val_buf.clear();
-    (*parser).val_buf.push(0);
-    (*parser).refresh_raw_ptrs();
+    parser.key.clear();
+    parser.val.clear();
     res
 }
 
 // original: read_headers (htslib/ref_cache/http_parser.c:452)
-pub unsafe fn ref_cache_http_parser_c_452_read_headers(parser: *mut Http_Parser) {
-    let parser_l = parser.cast::<HttpParserLayout>();
-    let mut len = 0usize;
-    let mut line = ref_cache_http_parser_c_158_parser_get_line(parser, &mut len);
-
-    while !line.is_null() {
+pub fn ref_cache_http_parser_c_452_read_headers(parser: &mut HttpParser) {
+    while let Some(line) = ref_cache_http_parser_c_158_parser_get_line(parser) {
+        let len = line.len();
         if len == 0 {
-            if (*parser_l).key_used != 0
-                && ref_cache_http_parser_c_394_parser_parse_header(parser) != 0
+            if !parser.key.is_empty() && ref_cache_http_parser_c_394_parser_parse_header(parser) != 0
             {
                 return;
             }
 
-            match (*parser_l).trans_enc {
+            match parser.trans_enc {
                 REF_CACHE_TE_IDENT => {
-                    (*parser_l).state = if (*parser_l).content_length != 0 {
+                    parser.state = if parser.content_length != 0 {
                         REF_CACHE_READING_BODY
                     } else {
                         REF_CACHE_GOT_REQUEST
                     };
-                    (*parser_l).bytes = (*parser_l).content_length;
+                    parser.bytes = parser.content_length;
                 }
                 REF_CACHE_TE_CHUNKED => {
-                    (*parser_l).state = REF_CACHE_READING_CHUNK_HEADER;
+                    parser.state = REF_CACHE_READING_CHUNK_HEADER;
                 }
                 _ => {
-                    (*parser_l).state = REF_CACHE_ERR_UNIMPLEMENTED;
+                    parser.state = REF_CACHE_ERR_UNIMPLEMENTED;
                 }
             }
             return;
         }
 
-        let line_bytes = std::slice::from_raw_parts(line.cast::<u8>(), len + 1);
-        let keylen = tok_spn_bytes(line_bytes);
-        let mut spaces = lws_spn_bytes(&line_bytes[keylen..]);
+        let keylen = tok_spn_bytes(&line);
+        let mut spaces = lws_spn_bytes(&line[keylen..]);
         if keylen > 0 {
-            if line_bytes[keylen + spaces] != b':' {
-                (*parser_l).state = REF_CACHE_ERR_BAD_REQUEST;
+            if line.get(keylen + spaces) != Some(&b':') {
+                parser.state = REF_CACHE_ERR_BAD_REQUEST;
                 return;
             }
-            spaces += 1 + lws_spn_bytes(&line_bytes[keylen + spaces + 1..]);
+            spaces += 1 + lws_spn_bytes(&line[keylen + spaces + 1..]);
 
-            if (*parser_l).key_used != 0
-                && ref_cache_http_parser_c_394_parser_parse_header(parser) != 0
+            if !parser.key.is_empty() && ref_cache_http_parser_c_394_parser_parse_header(parser) != 0
             {
                 return;
             }
 
-            (*parser_l).key_buf.clear();
-            (*parser_l).key_buf.extend_from_slice(&line_bytes[..keylen]);
-            (*parser_l).key_buf.push(0);
-            (*parser_l).key_sz = (*parser_l).key_buf.capacity();
-            (*parser_l).key_used = keylen;
-            (*parser_l).val_used = 0;
-            (*parser_l).val_buf.clear();
-            (*parser_l).val_buf.push(0);
-            (*parser_l).refresh_raw_ptrs();
+            parser.key.clear();
+            parser.key.extend_from_slice(&line[..keylen]);
+            parser.val.clear();
         } else if spaces == 0 {
-            (*parser_l).state = REF_CACHE_ERR_BAD_REQUEST;
+            parser.state = REF_CACHE_ERR_BAD_REQUEST;
             return;
         }
 
         let valpos = keylen + spaces;
-        if line_bytes[valpos] != 0 {
-            (*parser_l).val_buf.pop();
-            if (*parser_l).val_used > 0 {
-                (*parser_l).val_buf.push(b' ');
-                (*parser_l).val_used += 1;
+        if valpos < len {
+            if !parser.val.is_empty() {
+                parser.val.push(b' ');
             }
-            (*parser_l)
-                .val_buf
-                .extend_from_slice(&line_bytes[valpos..len]);
-            (*parser_l).val_used += len - valpos;
-            (*parser_l).val_buf.push(0);
-            (*parser_l).val_sz = (*parser_l).val_buf.capacity();
-            (*parser_l).refresh_raw_ptrs();
+            parser.val.extend_from_slice(&line[valpos..len]);
         }
-
-        line = ref_cache_http_parser_c_158_parser_get_line(parser, &mut len);
     }
 }
 
 // original: read_chunk_header (htslib/ref_cache/http_parser.c:529)
-pub unsafe fn ref_cache_http_parser_c_529_read_chunk_header(parser: *mut Http_Parser) {
-    let parser_l = parser.cast::<HttpParserLayout>();
-    let mut len = 0usize;
-    let line = ref_cache_http_parser_c_158_parser_get_line(parser, &mut len);
-    if line.is_null() {
+pub fn ref_cache_http_parser_c_529_read_chunk_header(parser: &mut HttpParser) {
+    let Some(line) = ref_cache_http_parser_c_158_parser_get_line(parser) else {
         return;
+    };
+
+    // Parse a hexadecimal chunk size, like strtoul(.., 16) did, skipping any
+    // leading whitespace and reading hex digits up to the first non-digit.
+    let start = lws_spn_bytes(&line);
+    let digits = line[start..]
+        .iter()
+        .take_while(|b| b.is_ascii_hexdigit())
+        .count();
+    let mut bytes: c_ulong = 0;
+    for &b in &line[start..start + digits] {
+        bytes = bytes.wrapping_mul(16).wrapping_add((b as char).to_digit(16).unwrap() as c_ulong);
+    }
+    let end = &line[start + digits..];
+    if let Some(&ch) = end.first() {
+        if !ref_cache_http_parser_is_lws(ch) && ch != b';' {
+            parser.state = REF_CACHE_ERR_BAD_REQUEST;
+            return;
+        }
     }
 
-    let mut end: *mut c_char = std::ptr::null_mut();
-    let bytes = libc::strtoul(line, &mut end, 16);
-    if *end != 0 && !ref_cache_http_parser_is_lws(*end as c_uchar) && *end != b';' as c_char {
-        (*parser_l).state = REF_CACHE_ERR_BAD_REQUEST;
-        return;
-    }
-
-    (*parser_l).bytes = bytes;
-    (*parser_l).state = if bytes != 0 {
+    parser.bytes = bytes;
+    parser.state = if bytes != 0 {
         REF_CACHE_READING_CHUNK
     } else {
         REF_CACHE_READING_CHUNK_TRAILER
@@ -865,87 +704,87 @@ pub unsafe fn ref_cache_http_parser_c_529_read_chunk_header(parser: *mut Http_Pa
 }
 
 // original: eat_data (htslib/ref_cache/http_parser.c:546)
-pub unsafe fn ref_cache_http_parser_c_546_eat_data(parser: *mut Http_Parser) {
-    let parser = parser.cast::<HttpParserLayout>();
+pub fn ref_cache_http_parser_c_546_eat_data(parser: &mut HttpParser) {
     let mut l: c_uint;
 
-    if (*parser).used == 0 {
-        assert!((*parser).in_ == (*parser).out);
-        assert!((*parser).pos == (*parser).out);
+    if parser.used == 0 {
+        assert!(parser.in_ == parser.out);
+        assert!(parser.pos == parser.out);
         return;
     }
 
-    if (*parser).in_ <= (*parser).out {
-        l = REF_CACHE_BUF_SZ - (*parser).out;
-        if (l as c_ulong) > (*parser).bytes {
-            l = (*parser).bytes as c_uint;
+    if parser.in_ <= parser.out {
+        l = REF_CACHE_BUF_SZ - parser.out;
+        if (l as c_ulong) > parser.bytes {
+            l = parser.bytes as c_uint;
         }
-        assert!(l <= (*parser).used);
-        (*parser).out = ((*parser).out + l) & REF_CACHE_BUF_MASK;
-        (*parser).bytes -= l as c_ulong;
-        (*parser).used -= l;
+        assert!(l <= parser.used);
+        parser.out = (parser.out + l) & REF_CACHE_BUF_MASK;
+        parser.bytes -= l as c_ulong;
+        parser.used -= l;
     }
-    if (*parser).out < (*parser).in_ {
-        l = (*parser).in_ - (*parser).out;
-        if (l as c_ulong) > (*parser).bytes {
-            l = (*parser).bytes as c_uint;
+    if parser.out < parser.in_ {
+        l = parser.in_ - parser.out;
+        if (l as c_ulong) > parser.bytes {
+            l = parser.bytes as c_uint;
         }
-        assert!(l <= (*parser).used);
-        (*parser).out += l;
-        (*parser).bytes -= l as c_ulong;
-        (*parser).used -= l;
+        assert!(l <= parser.used);
+        parser.out += l;
+        parser.bytes -= l as c_ulong;
+        parser.used -= l;
     }
-    (*parser).pos = (*parser).out;
+    parser.pos = parser.out;
 }
 
 // original: read_chunk (htslib/ref_cache/http_parser.c:578)
-pub unsafe fn ref_cache_http_parser_c_578_read_chunk(parser: *mut Http_Parser) {
-    let parser_l = parser.cast::<HttpParserLayout>();
+pub fn ref_cache_http_parser_c_578_read_chunk(parser: &mut HttpParser) {
     ref_cache_http_parser_c_546_eat_data(parser);
-    if (*parser_l).bytes == 0 {
-        (*parser_l).state = REF_CACHE_READING_CHUNK_TRAILER;
+    if parser.bytes == 0 {
+        parser.state = REF_CACHE_READING_CHUNK_TRAILER;
     }
 }
 
 // original: read_body (htslib/ref_cache/http_parser.c:584)
-pub unsafe fn ref_cache_http_parser_c_584_read_body(parser: *mut Http_Parser) {
-    let parser_l = parser.cast::<HttpParserLayout>();
+pub fn ref_cache_http_parser_c_584_read_body(parser: &mut HttpParser) {
     ref_cache_http_parser_c_546_eat_data(parser);
-    if (*parser_l).bytes == 0 {
-        (*parser_l).state = REF_CACHE_GOT_REQUEST;
+    if parser.bytes == 0 {
+        parser.state = REF_CACHE_GOT_REQUEST;
     }
 }
 
 // original: read_chunk_trailer (htslib/ref_cache/http_parser.c:590)
-pub unsafe fn ref_cache_http_parser_c_590_read_chunk_trailer(parser: *mut Http_Parser) {
-    let parser_l = parser.cast::<HttpParserLayout>();
-    let mut len = 0usize;
-    while !ref_cache_http_parser_c_158_parser_get_line(parser, &mut len).is_null() {
-        if len == 0 {
-            (*parser_l).state = REF_CACHE_GOT_REQUEST;
+pub fn ref_cache_http_parser_c_590_read_chunk_trailer(parser: &mut HttpParser) {
+    while let Some(line) = ref_cache_http_parser_c_158_parser_get_line(parser) {
+        if line.is_empty() {
+            parser.state = REF_CACHE_GOT_REQUEST;
             return;
         }
     }
 }
 
 // original: parser_read_data (htslib/ref_cache/http_parser.c:601)
+//
+// Ownership: the parser is borrowed out of its owning client slot by the caller;
+// the client is identified by its arena index `client` into `clients`. A produced
+// transaction is an arena index (`TransactionId`) appended to the client's
+// pipeline via `client_add_transaction`.
 pub unsafe fn ref_cache_http_parser_c_601_parser_read_data(
-    opts: *const Options,
-    client: *mut Client,
-    parser: *mut Http_Parser,
+    opts: &Options,
+    clients: &mut RefCacheClientsLayout,
+    client: usize,
+    parser: &mut HttpParser,
     fd: c_int,
 ) -> c_int {
-    let parser_layout = parser.cast::<HttpParserLayout>();
     let res = ref_cache_http_parser_c_201_parser_read_input(parser, fd);
     if res == REF_CACHE_READ_EOF || res == REF_CACHE_READ_ERROR {
         return res;
     }
 
     loop {
-        let mut transact: *mut Transaction = std::ptr::null_mut();
-        let last_state = (*parser_layout).state;
+        let mut transact: Option<TransactionId> = None;
+        let last_state = parser.state;
 
-        match (*parser_layout).state {
+        match parser.state {
             REF_CACHE_READING_REQUEST_LINE => {
                 ref_cache_http_parser_c_246_read_request_line(opts, parser);
             }
@@ -965,35 +804,36 @@ pub unsafe fn ref_cache_http_parser_c_601_parser_read_data(
                 ref_cache_http_parser_c_590_read_chunk_trailer(parser);
             }
             REF_CACHE_GOT_REQUEST => {
-                ref_cache_request_handler_c_148_handle_request(opts, client, parser, &mut transact);
+                ref_cache_request_handler_c_148_handle_request(
+                    opts,
+                    clients,
+                    client,
+                    parser,
+                    &mut transact,
+                );
             }
             REF_CACHE_SHUTTING_DOWN => {
                 return REF_CACHE_READ_EOF;
             }
             _ => {
                 ref_cache_request_handler_c_167_handle_error(
+                    clients,
                     client,
                     parser,
-                    (*parser_layout).state,
+                    last_state,
                     &mut transact,
                 );
             }
         }
 
-        if !transact.is_null() {
-            ref_cache_server_c_352_client_add_transaction(client, transact);
+        if let Some(transact) = transact {
+            ref_cache_server_c_352_client_add_transaction(clients, client, transact);
         }
 
-        if last_state == (*parser_layout).state {
+        if last_state == parser.state {
             break;
         }
     }
 
     res
-}
-
-// original: Http_Parser (htslib/ref_cache/http_parser.h:87)
-#[repr(C)]
-pub struct Http_Parser {
-    _private: [u8; 0],
 }

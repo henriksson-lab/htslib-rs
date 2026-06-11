@@ -1,7 +1,3 @@
-use std::ffi::{c_char, c_uchar, c_ulong, c_void};
-use std::mem::size_of;
-use std::ptr;
-
 #[repr(C)]
 pub struct hts_md5_context {
     lo: u32,
@@ -10,15 +6,18 @@ pub struct hts_md5_context {
     b: u32,
     c: u32,
     d: u32,
-    buffer: [c_uchar; 64],
+    buffer: [u8; 64],
     block: [u32; 16],
 }
 
-pub unsafe fn md5_c_119_body(
-    ctx: *mut hts_md5_context,
-    data: *const c_void,
-    mut size: c_ulong,
-) -> *const c_void {
+/// Processes whole 64-byte blocks from `data` (the first `size` bytes, which the
+/// caller guarantees to be a non-zero multiple of 64) and returns the remaining
+/// slice past the consumed blocks.
+pub fn md5_c_119_body<'a>(
+    ctx: &mut hts_md5_context,
+    data: &'a [u8],
+    mut size: usize,
+) -> &'a [u8] {
     macro_rules! f {
         ($x:expr, $y:expr, $z:expr) => {
             ($z) ^ (($x) & (($y) ^ ($z)))
@@ -52,26 +51,26 @@ pub unsafe fn md5_c_119_body(
         }};
     }
     macro_rules! set {
-        ($ptr:ident, $ctx:ident, $n:expr) => {{
-            let value = (*$ptr.add($n * 4) as u32)
-                | ((*$ptr.add($n * 4 + 1) as u32) << 8)
-                | ((*$ptr.add($n * 4 + 2) as u32) << 16)
-                | ((*$ptr.add($n * 4 + 3) as u32) << 24);
-            (*$ctx).block[$n] = value;
+        ($block:expr, $ctx:ident, $n:expr) => {{
+            let value = ($block[$n * 4] as u32)
+                | (($block[$n * 4 + 1] as u32) << 8)
+                | (($block[$n * 4 + 2] as u32) << 16)
+                | (($block[$n * 4 + 3] as u32) << 24);
+            $ctx.block[$n] = value;
             value
         }};
     }
     macro_rules! get {
         ($ctx:ident, $n:expr) => {
-            (*$ctx).block[$n]
+            $ctx.block[$n]
         };
     }
 
-    let mut ptr = data.cast::<c_uchar>();
-    let mut a = (*ctx).a;
-    let mut b = (*ctx).b;
-    let mut c = (*ctx).c;
-    let mut d = (*ctx).d;
+    let mut offset = 0usize;
+    let mut a = ctx.a;
+    let mut b = ctx.b;
+    let mut c = ctx.c;
+    let mut d = ctx.d;
 
     loop {
         let saved_a = a;
@@ -79,22 +78,24 @@ pub unsafe fn md5_c_119_body(
         let saved_c = c;
         let saved_d = d;
 
-        step!(f, a, b, c, d, set!(ptr, ctx, 0), 0xd76aa478, 7);
-        step!(f, d, a, b, c, set!(ptr, ctx, 1), 0xe8c7b756, 12);
-        step!(f, c, d, a, b, set!(ptr, ctx, 2), 0x242070db, 17);
-        step!(f, b, c, d, a, set!(ptr, ctx, 3), 0xc1bdceee, 22);
-        step!(f, a, b, c, d, set!(ptr, ctx, 4), 0xf57c0faf, 7);
-        step!(f, d, a, b, c, set!(ptr, ctx, 5), 0x4787c62a, 12);
-        step!(f, c, d, a, b, set!(ptr, ctx, 6), 0xa8304613, 17);
-        step!(f, b, c, d, a, set!(ptr, ctx, 7), 0xfd469501, 22);
-        step!(f, a, b, c, d, set!(ptr, ctx, 8), 0x698098d8, 7);
-        step!(f, d, a, b, c, set!(ptr, ctx, 9), 0x8b44f7af, 12);
-        step!(f, c, d, a, b, set!(ptr, ctx, 10), 0xffff5bb1, 17);
-        step!(f, b, c, d, a, set!(ptr, ctx, 11), 0x895cd7be, 22);
-        step!(f, a, b, c, d, set!(ptr, ctx, 12), 0x6b901122, 7);
-        step!(f, d, a, b, c, set!(ptr, ctx, 13), 0xfd987193, 12);
-        step!(f, c, d, a, b, set!(ptr, ctx, 14), 0xa679438e, 17);
-        step!(f, b, c, d, a, set!(ptr, ctx, 15), 0x49b40821, 22);
+        let p = &data[offset..offset + 64];
+
+        step!(f, a, b, c, d, set!(p, ctx, 0), 0xd76aa478, 7);
+        step!(f, d, a, b, c, set!(p, ctx, 1), 0xe8c7b756, 12);
+        step!(f, c, d, a, b, set!(p, ctx, 2), 0x242070db, 17);
+        step!(f, b, c, d, a, set!(p, ctx, 3), 0xc1bdceee, 22);
+        step!(f, a, b, c, d, set!(p, ctx, 4), 0xf57c0faf, 7);
+        step!(f, d, a, b, c, set!(p, ctx, 5), 0x4787c62a, 12);
+        step!(f, c, d, a, b, set!(p, ctx, 6), 0xa8304613, 17);
+        step!(f, b, c, d, a, set!(p, ctx, 7), 0xfd469501, 22);
+        step!(f, a, b, c, d, set!(p, ctx, 8), 0x698098d8, 7);
+        step!(f, d, a, b, c, set!(p, ctx, 9), 0x8b44f7af, 12);
+        step!(f, c, d, a, b, set!(p, ctx, 10), 0xffff5bb1, 17);
+        step!(f, b, c, d, a, set!(p, ctx, 11), 0x895cd7be, 22);
+        step!(f, a, b, c, d, set!(p, ctx, 12), 0x6b901122, 7);
+        step!(f, d, a, b, c, set!(p, ctx, 13), 0xfd987193, 12);
+        step!(f, c, d, a, b, set!(p, ctx, 14), 0xa679438e, 17);
+        step!(f, b, c, d, a, set!(p, ctx, 15), 0x49b40821, 22);
 
         step!(g, a, b, c, d, get!(ctx, 1), 0xf61e2562, 5);
         step!(g, d, a, b, c, get!(ctx, 6), 0xc040b340, 9);
@@ -152,125 +153,110 @@ pub unsafe fn md5_c_119_body(
         c = c.wrapping_add(saved_c);
         d = d.wrapping_add(saved_d);
 
-        ptr = ptr.add(64);
+        offset += 64;
         size = size.wrapping_sub(64);
         if size == 0 {
             break;
         }
     }
 
-    (*ctx).a = a;
-    (*ctx).b = b;
-    (*ctx).c = c;
-    (*ctx).d = d;
-    ptr.cast()
+    ctx.a = a;
+    ctx.b = b;
+    ctx.c = c;
+    ctx.d = d;
+    &data[offset..]
 }
 
-pub unsafe fn md5_c_226_hts_md5_reset(ctx: *mut hts_md5_context) {
-    (*ctx).a = 0x67452301;
-    (*ctx).b = 0xefcdab89;
-    (*ctx).c = 0x98badcfe;
-    (*ctx).d = 0x10325476;
-    (*ctx).lo = 0;
-    (*ctx).hi = 0;
+pub fn md5_c_226_hts_md5_reset(ctx: &mut hts_md5_context) {
+    ctx.a = 0x67452301;
+    ctx.b = 0xefcdab89;
+    ctx.c = 0x98badcfe;
+    ctx.d = 0x10325476;
+    ctx.lo = 0;
+    ctx.hi = 0;
 }
 
-pub unsafe fn md5_c_237_hts_md5_update(
-    ctx: *mut hts_md5_context,
-    mut data: *const c_void,
-    mut size: c_ulong,
-) {
-    let saved_lo = (*ctx).lo;
-    (*ctx).lo = saved_lo.wrapping_add(size as u32) & 0x1fff_ffff;
-    if (*ctx).lo < saved_lo {
-        (*ctx).hi = (*ctx).hi.wrapping_add(1);
+pub fn md5_c_237_hts_md5_update(ctx: &mut hts_md5_context, data: &[u8], size: usize) {
+    let mut data = data;
+    let mut size = size;
+
+    let saved_lo = ctx.lo;
+    ctx.lo = saved_lo.wrapping_add(size as u32) & 0x1fff_ffff;
+    if ctx.lo < saved_lo {
+        ctx.hi = ctx.hi.wrapping_add(1);
     }
-    (*ctx).hi = (*ctx).hi.wrapping_add((size >> 29) as u32);
+    ctx.hi = ctx.hi.wrapping_add((size >> 29) as u32);
 
-    let mut used = (saved_lo & 0x3f) as c_ulong;
+    let used = (saved_lo & 0x3f) as usize;
     if used != 0 {
         let available = 64 - used;
         if size < available {
-            ptr::copy_nonoverlapping(
-                data.cast::<c_uchar>(),
-                (*ctx).buffer.as_mut_ptr().add(used as usize),
-                size as usize,
-            );
+            ctx.buffer[used..used + size].copy_from_slice(&data[..size]);
             return;
         }
-        ptr::copy_nonoverlapping(
-            data.cast::<c_uchar>(),
-            (*ctx).buffer.as_mut_ptr().add(used as usize),
-            available as usize,
-        );
-        data = data.cast::<c_uchar>().add(available as usize).cast();
+        ctx.buffer[used..used + available].copy_from_slice(&data[..available]);
+        data = &data[available..];
         size -= available;
-        md5_c_119_body(ctx, (*ctx).buffer.as_ptr().cast(), 64);
-        used = 0;
-        let _ = used;
+        let buffer = ctx.buffer;
+        md5_c_119_body(ctx, &buffer, 64);
     }
 
     if size >= 64 {
-        data = md5_c_119_body(ctx, data, size & !0x3f).cast();
+        let consumed = size & !0x3f;
+        data = md5_c_119_body(ctx, data, consumed);
         size &= 0x3f;
     }
 
-    ptr::copy_nonoverlapping(
-        data.cast::<c_uchar>(),
-        (*ctx).buffer.as_mut_ptr(),
-        size as usize,
-    );
+    ctx.buffer[..size].copy_from_slice(&data[..size]);
 }
 
-pub unsafe fn md5_c_271_hts_md5_final(result: *mut c_uchar, ctx: *mut hts_md5_context) {
-    let mut used = ((*ctx).lo & 0x3f) as usize;
-    (*ctx).buffer[used] = 0x80;
+pub fn md5_c_271_hts_md5_final(result: &mut [u8], ctx: &mut hts_md5_context) {
+    let mut used = (ctx.lo & 0x3f) as usize;
+    ctx.buffer[used] = 0x80;
     used += 1;
 
     let mut available = 64 - used;
     if available < 8 {
-        ptr::write_bytes((*ctx).buffer.as_mut_ptr().add(used), 0, available);
-        md5_c_119_body(ctx, (*ctx).buffer.as_ptr().cast(), 64);
+        ctx.buffer[used..used + available].fill(0);
+        let buffer = ctx.buffer;
+        md5_c_119_body(ctx, &buffer, 64);
         used = 0;
         available = 64;
     }
 
-    ptr::write_bytes((*ctx).buffer.as_mut_ptr().add(used), 0, available - 8);
+    ctx.buffer[used..used + (available - 8)].fill(0);
 
-    (*ctx).lo <<= 3;
-    (*ctx).buffer[56] = (*ctx).lo as c_uchar;
-    (*ctx).buffer[57] = ((*ctx).lo >> 8) as c_uchar;
-    (*ctx).buffer[58] = ((*ctx).lo >> 16) as c_uchar;
-    (*ctx).buffer[59] = ((*ctx).lo >> 24) as c_uchar;
-    (*ctx).buffer[60] = (*ctx).hi as c_uchar;
-    (*ctx).buffer[61] = ((*ctx).hi >> 8) as c_uchar;
-    (*ctx).buffer[62] = ((*ctx).hi >> 16) as c_uchar;
-    (*ctx).buffer[63] = ((*ctx).hi >> 24) as c_uchar;
+    ctx.lo <<= 3;
+    ctx.buffer[56] = ctx.lo as u8;
+    ctx.buffer[57] = (ctx.lo >> 8) as u8;
+    ctx.buffer[58] = (ctx.lo >> 16) as u8;
+    ctx.buffer[59] = (ctx.lo >> 24) as u8;
+    ctx.buffer[60] = ctx.hi as u8;
+    ctx.buffer[61] = (ctx.hi >> 8) as u8;
+    ctx.buffer[62] = (ctx.hi >> 16) as u8;
+    ctx.buffer[63] = (ctx.hi >> 24) as u8;
 
-    md5_c_119_body(ctx, (*ctx).buffer.as_ptr().cast(), 64);
+    let buffer = ctx.buffer;
+    md5_c_119_body(ctx, &buffer, 64);
 
-    *result.add(0) = (*ctx).a as c_uchar;
-    *result.add(1) = ((*ctx).a >> 8) as c_uchar;
-    *result.add(2) = ((*ctx).a >> 16) as c_uchar;
-    *result.add(3) = ((*ctx).a >> 24) as c_uchar;
-    *result.add(4) = (*ctx).b as c_uchar;
-    *result.add(5) = ((*ctx).b >> 8) as c_uchar;
-    *result.add(6) = ((*ctx).b >> 16) as c_uchar;
-    *result.add(7) = ((*ctx).b >> 24) as c_uchar;
-    *result.add(8) = (*ctx).c as c_uchar;
-    *result.add(9) = ((*ctx).c >> 8) as c_uchar;
-    *result.add(10) = ((*ctx).c >> 16) as c_uchar;
-    *result.add(11) = ((*ctx).c >> 24) as c_uchar;
-    *result.add(12) = (*ctx).d as c_uchar;
-    *result.add(13) = ((*ctx).d >> 8) as c_uchar;
-    *result.add(14) = ((*ctx).d >> 16) as c_uchar;
-    *result.add(15) = ((*ctx).d >> 24) as c_uchar;
+    result[0] = ctx.a as u8;
+    result[1] = (ctx.a >> 8) as u8;
+    result[2] = (ctx.a >> 16) as u8;
+    result[3] = (ctx.a >> 24) as u8;
+    result[4] = ctx.b as u8;
+    result[5] = (ctx.b >> 8) as u8;
+    result[6] = (ctx.b >> 16) as u8;
+    result[7] = (ctx.b >> 24) as u8;
+    result[8] = ctx.c as u8;
+    result[9] = (ctx.c >> 8) as u8;
+    result[10] = (ctx.c >> 16) as u8;
+    result[11] = (ctx.c >> 24) as u8;
+    result[12] = ctx.d as u8;
+    result[13] = (ctx.d >> 8) as u8;
+    result[14] = (ctx.d >> 16) as u8;
+    result[15] = (ctx.d >> 24) as u8;
 
-    ptr::write_bytes(ctx.cast::<u8>(), 0, size_of::<hts_md5_context>());
-}
-
-pub unsafe fn md5_c_323_hts_md5_init() -> *mut hts_md5_context {
-    let ctx = Box::into_raw(Box::new(hts_md5_context {
+    *ctx = hts_md5_context {
         lo: 0,
         hi: 0,
         a: 0,
@@ -279,68 +265,74 @@ pub unsafe fn md5_c_323_hts_md5_init() -> *mut hts_md5_context {
         d: 0,
         buffer: [0; 64],
         block: [0; 16],
-    }));
-    md5_c_226_hts_md5_reset(ctx);
+    };
+}
+
+pub fn md5_c_323_hts_md5_init() -> Box<hts_md5_context> {
+    let mut ctx = Box::new(hts_md5_context {
+        lo: 0,
+        hi: 0,
+        a: 0,
+        b: 0,
+        c: 0,
+        d: 0,
+        buffer: [0; 64],
+        block: [0; 16],
+    });
+    md5_c_226_hts_md5_reset(&mut ctx);
     ctx
 }
 
-pub unsafe fn md5_c_344_hts_md5_init() -> *mut hts_md5_context {
+pub fn md5_c_344_hts_md5_init() -> Box<hts_md5_context> {
     md5_c_323_hts_md5_init()
 }
 
-pub unsafe fn md5_c_355_hts_md5_reset(ctx: *mut hts_md5_context) {
+pub fn md5_c_355_hts_md5_reset(ctx: &mut hts_md5_context) {
     md5_c_226_hts_md5_reset(ctx)
 }
 
-pub unsafe fn md5_c_360_hts_md5_update(
-    ctx: *mut hts_md5_context,
-    data: *const c_void,
-    size: c_ulong,
-) {
+pub fn md5_c_360_hts_md5_update(ctx: &mut hts_md5_context, data: &[u8], size: usize) {
     md5_c_237_hts_md5_update(ctx, data, size)
 }
 
-pub unsafe fn md5_c_365_hts_md5_final(digest: *mut c_uchar, ctx: *mut hts_md5_context) {
+pub fn md5_c_365_hts_md5_final(digest: &mut [u8], ctx: &mut hts_md5_context) {
     md5_c_271_hts_md5_final(digest, ctx)
 }
 
-pub unsafe fn md5_c_372_hts_md5_destroy(ctx: *mut hts_md5_context) {
-    if ctx.is_null() {
-        return;
-    }
-    drop(Box::from_raw(ctx));
+pub fn md5_c_372_hts_md5_destroy(ctx: Option<Box<hts_md5_context>>) {
+    drop(ctx);
 }
 
-pub unsafe fn md5_c_380_hts_md5_hex(hex: *mut c_char, digest: *const c_uchar) {
+pub fn md5_c_380_hts_md5_hex(hex: &mut [u8], digest: &[u8]) {
     static ALPHABET: &[u8; 16] = b"0123456789abcdef";
     for i in 0..16 {
-        *hex.add(i * 2) = ALPHABET[((*digest.add(i) >> 4) & 0xf) as usize] as c_char;
-        *hex.add(i * 2 + 1) = ALPHABET[(*digest.add(i) & 0xf) as usize] as c_char;
+        hex[i * 2] = ALPHABET[((digest[i] >> 4) & 0xf) as usize];
+        hex[i * 2 + 1] = ALPHABET[(digest[i] & 0xf) as usize];
     }
-    *hex.add(32) = 0;
+    hex[32] = 0;
 }
 
-pub unsafe fn hts_md5_init() -> *mut hts_md5_context {
+pub fn hts_md5_init() -> Box<hts_md5_context> {
     md5_c_323_hts_md5_init()
 }
 
-pub unsafe fn hts_md5_update(ctx: *mut hts_md5_context, data: *const c_void, size: c_ulong) {
+pub fn hts_md5_update(ctx: &mut hts_md5_context, data: &[u8], size: usize) {
     md5_c_237_hts_md5_update(ctx, data, size)
 }
 
-pub unsafe fn hts_md5_final(digest: *mut c_uchar, ctx: *mut hts_md5_context) {
+pub fn hts_md5_final(digest: &mut [u8], ctx: &mut hts_md5_context) {
     md5_c_271_hts_md5_final(digest, ctx)
 }
 
-pub unsafe fn hts_md5_reset(ctx: *mut hts_md5_context) {
+pub fn hts_md5_reset(ctx: &mut hts_md5_context) {
     md5_c_226_hts_md5_reset(ctx)
 }
 
-pub unsafe fn hts_md5_hex(hex: *mut c_char, digest: *const c_uchar) {
+pub fn hts_md5_hex(hex: &mut [u8], digest: &[u8]) {
     md5_c_380_hts_md5_hex(hex, digest)
 }
 
-pub unsafe fn hts_md5_destroy(ctx: *mut hts_md5_context) {
+pub fn hts_md5_destroy(ctx: Option<Box<hts_md5_context>>) {
     md5_c_372_hts_md5_destroy(ctx)
 }
 
@@ -348,197 +340,167 @@ pub unsafe fn hts_md5_destroy(ctx: *mut hts_md5_context) {
 mod tests {
     use super::*;
 
-    unsafe fn hex_digest(payloads: &[&[u8]]) -> Vec<u8> {
-        let ctx = hts_md5_init();
-        assert!(!ctx.is_null());
+    fn hex_digest(payloads: &[&[u8]]) -> Vec<u8> {
+        let mut ctx = hts_md5_init();
         for payload in payloads {
-            hts_md5_update(ctx, payload.as_ptr().cast(), payload.len() as c_ulong);
+            hts_md5_update(&mut ctx, payload, payload.len());
         }
         let mut digest = [0u8; 16];
-        hts_md5_final(digest.as_mut_ptr(), ctx);
-        let mut hex = [0 as c_char; 33];
-        hts_md5_hex(hex.as_mut_ptr(), digest.as_ptr());
-        hts_md5_destroy(ctx);
-        hex[..32].iter().map(|&ch| ch as u8).collect()
+        hts_md5_final(&mut digest, &mut ctx);
+        let mut hex = [0u8; 33];
+        hts_md5_hex(&mut hex, &digest);
+        hts_md5_destroy(Some(ctx));
+        hex[..32].to_vec()
     }
 
     #[test]
     fn md5_wrappers_hash_known_payload() {
-        unsafe {
-            assert_eq!(hex_digest(&[b"abc"]), b"900150983cd24fb0d6963f7d28e17f72");
-        }
+        assert_eq!(hex_digest(&[b"abc"]), b"900150983cd24fb0d6963f7d28e17f72");
     }
 
     #[test]
     fn md5_update_matches_known_chunk_boundaries() {
-        unsafe {
-            assert_eq!(
-                hex_digest(&[b"The quick ", b"brown fox jumps over ", b"the lazy dog",]),
-                b"9e107d9d372bb6826bd81d3542a419d6"
-            );
-            assert_eq!(
-                hex_digest(&[&[b'a'; 63], b"a", b"bc"]),
-                b"9b2dd1476ebcd57011ba6d13ca5b37c4"
-            );
-        }
+        assert_eq!(
+            hex_digest(&[b"The quick ", b"brown fox jumps over ", b"the lazy dog",]),
+            b"9e107d9d372bb6826bd81d3542a419d6"
+        );
+        assert_eq!(
+            hex_digest(&[&[b'a'; 63], b"a", b"bc"]),
+            b"9b2dd1476ebcd57011ba6d13ca5b37c4"
+        );
     }
 
     #[test]
     fn md5_final_clears_context_like_htslib_memset() {
-        unsafe {
-            let ctx = hts_md5_init();
-            assert!(!ctx.is_null());
-            hts_md5_update(ctx, b"abc".as_ptr().cast(), 3);
+        let mut ctx = hts_md5_init();
+        hts_md5_update(&mut ctx, b"abc", 3);
 
-            let mut digest = [0u8; 16];
-            hts_md5_final(digest.as_mut_ptr(), ctx);
+        let mut digest = [0u8; 16];
+        hts_md5_final(&mut digest, &mut ctx);
 
-            let bytes = std::slice::from_raw_parts(ctx.cast::<u8>(), size_of::<hts_md5_context>());
-            assert!(bytes.iter().all(|&byte| byte == 0));
-            hts_md5_destroy(ctx);
-        }
+        assert_eq!(ctx.lo, 0);
+        assert_eq!(ctx.hi, 0);
+        assert_eq!(ctx.a, 0);
+        assert_eq!(ctx.b, 0);
+        assert_eq!(ctx.c, 0);
+        assert_eq!(ctx.d, 0);
+        assert!(ctx.buffer.iter().all(|&byte| byte == 0));
+        assert!(ctx.block.iter().all(|&word| word == 0));
+        hts_md5_destroy(Some(ctx));
     }
 
     #[test]
     fn md5_update_accepts_zero_length_update() {
-        unsafe {
-            assert_eq!(hex_digest(&[b"", b""]), b"d41d8cd98f00b204e9800998ecf8427e");
-            assert_eq!(
-                hex_digest(&[b"", b"abc", b""]),
-                b"900150983cd24fb0d6963f7d28e17f72"
-            );
-        }
+        assert_eq!(hex_digest(&[b"", b""]), b"d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(
+            hex_digest(&[b"", b"abc", b""]),
+            b"900150983cd24fb0d6963f7d28e17f72"
+        );
     }
 
     #[test]
     fn md5_update_buffers_short_input_without_transforming_block() {
-        unsafe {
-            let ctx = hts_md5_init();
-            assert!(!ctx.is_null());
-            hts_md5_update(ctx, b"abc".as_ptr().cast(), 3);
+        let mut ctx = hts_md5_init();
+        hts_md5_update(&mut ctx, b"abc", 3);
 
-            assert_eq!((*ctx).lo, 3);
-            assert_eq!((*ctx).hi, 0);
-            assert_eq!(&(&(*ctx).buffer)[..3], b"abc");
-            assert_eq!((*ctx).a, 0x67452301);
-            assert_eq!((*ctx).b, 0xefcdab89);
-            assert_eq!((*ctx).c, 0x98badcfe);
-            assert_eq!((*ctx).d, 0x10325476);
+        assert_eq!(ctx.lo, 3);
+        assert_eq!(ctx.hi, 0);
+        assert_eq!(&ctx.buffer[..3], b"abc");
+        assert_eq!(ctx.a, 0x67452301);
+        assert_eq!(ctx.b, 0xefcdab89);
+        assert_eq!(ctx.c, 0x98badcfe);
+        assert_eq!(ctx.d, 0x10325476);
 
-            hts_md5_destroy(ctx);
-        }
+        hts_md5_destroy(Some(ctx));
     }
 
     #[test]
     fn md5_c_wrappers_accept_zero_length_and_null_destroy() {
-        unsafe {
-            let ctx = md5_c_344_hts_md5_init();
-            assert!(!ctx.is_null());
-            md5_c_360_hts_md5_update(ctx, b"abc".as_ptr().cast(), 3);
-            md5_c_360_hts_md5_update(ctx, b"".as_ptr().cast(), 0);
+        let mut ctx = md5_c_344_hts_md5_init();
+        md5_c_360_hts_md5_update(&mut ctx, b"abc", 3);
+        md5_c_360_hts_md5_update(&mut ctx, b"", 0);
 
-            let mut digest = [0u8; 16];
-            md5_c_365_hts_md5_final(digest.as_mut_ptr(), ctx);
-            let mut hex = [0 as c_char; 33];
-            md5_c_380_hts_md5_hex(hex.as_mut_ptr(), digest.as_ptr());
-            assert_eq!(
-                hex[..32].iter().map(|&ch| ch as u8).collect::<Vec<_>>(),
-                b"900150983cd24fb0d6963f7d28e17f72"
-            );
+        let mut digest = [0u8; 16];
+        md5_c_365_hts_md5_final(&mut digest, &mut ctx);
+        let mut hex = [0u8; 33];
+        md5_c_380_hts_md5_hex(&mut hex, &digest);
+        assert_eq!(&hex[..32], b"900150983cd24fb0d6963f7d28e17f72");
 
-            md5_c_372_hts_md5_destroy(ctx);
-            md5_c_372_hts_md5_destroy(std::ptr::null_mut());
-        }
+        md5_c_372_hts_md5_destroy(Some(ctx));
+        md5_c_372_hts_md5_destroy(None);
     }
 
     #[test]
     fn md5_reset_discards_prior_partial_update() {
-        unsafe {
-            let ctx = hts_md5_init();
-            assert!(!ctx.is_null());
+        let mut ctx = hts_md5_init();
 
-            hts_md5_update(ctx, b"prefix that must be discarded".as_ptr().cast(), 29);
-            hts_md5_reset(ctx);
-            hts_md5_update(ctx, b"abc".as_ptr().cast(), 3);
+        hts_md5_update(&mut ctx, b"prefix that must be discarded", 29);
+        hts_md5_reset(&mut ctx);
+        hts_md5_update(&mut ctx, b"abc", 3);
 
-            let mut digest = [0u8; 16];
-            hts_md5_final(digest.as_mut_ptr(), ctx);
-            let mut hex = [0 as c_char; 33];
-            hts_md5_hex(hex.as_mut_ptr(), digest.as_ptr());
-            assert_eq!(
-                hex[..32].iter().map(|&ch| ch as u8).collect::<Vec<_>>(),
-                b"900150983cd24fb0d6963f7d28e17f72"
-            );
-            hts_md5_destroy(ctx);
-        }
+        let mut digest = [0u8; 16];
+        hts_md5_final(&mut digest, &mut ctx);
+        let mut hex = [0u8; 33];
+        hts_md5_hex(&mut hex, &digest);
+        assert_eq!(&hex[..32], b"900150983cd24fb0d6963f7d28e17f72");
+        hts_md5_destroy(Some(ctx));
     }
 
     #[test]
     fn md5_hex_writes_lowercase_digits_and_nul_terminator() {
-        unsafe {
-            let digest = [
-                0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76,
-                0x54, 0x32,
-            ];
-            let mut hex = [b'X' as c_char; 34];
-            hts_md5_hex(hex.as_mut_ptr(), digest.as_ptr());
+        let digest = [
+            0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76,
+            0x54, 0x32,
+        ];
+        let mut hex = [b'X'; 34];
+        hts_md5_hex(&mut hex, &digest);
 
-            assert_eq!(
-                hex[..32].iter().map(|&ch| ch as u8).collect::<Vec<_>>(),
-                b"000123456789abcdeffedcba98765432"
-            );
-            assert_eq!(hex[32], 0);
-            assert_eq!(hex[33], b'X' as c_char);
-        }
+        assert_eq!(&hex[..32], b"000123456789abcdeffedcba98765432");
+        assert_eq!(hex[32], 0);
+        assert_eq!(hex[33], b'X');
     }
 
     #[test]
     fn md5_split_padding_boundary_matches_one_shot() {
-        unsafe {
-            let payload = [b'a'; 120];
-            assert_eq!(
-                hex_digest(&[
-                    &payload[..55],
-                    &payload[55..56],
-                    &payload[56..64],
-                    &payload[64..]
-                ]),
-                hex_digest(&[&payload])
-            );
-        }
+        let payload = [b'a'; 120];
+        assert_eq!(
+            hex_digest(&[
+                &payload[..55],
+                &payload[55..56],
+                &payload[56..64],
+                &payload[64..]
+            ]),
+            hex_digest(&[&payload])
+        );
     }
 
     #[test]
     fn md5_padding_edge_lengths_are_chunking_invariant() {
-        unsafe {
-            for len in [55, 56, 57, 64, 65] {
-                let payload = vec![b'x'; len];
-                assert_eq!(
-                    hex_digest(&[&payload[..len / 2], &payload[len / 2..]]),
-                    hex_digest(&[&payload]),
-                    "len={len}"
-                );
-            }
+        for len in [55, 56, 57, 64, 65] {
+            let payload = vec![b'x'; len];
+            assert_eq!(
+                hex_digest(&[&payload[..len / 2], &payload[len / 2..]]),
+                hex_digest(&[&payload]),
+                "len={len}"
+            );
         }
     }
 
     #[test]
     fn md5_update_carries_low_count_at_29_bit_boundary() {
-        unsafe {
-            let mut ctx = hts_md5_context {
-                lo: 0x1fff_ffff,
-                hi: 7,
-                a: 0x67452301,
-                b: 0xefcdab89,
-                c: 0x98badcfe,
-                d: 0x10325476,
-                buffer: [0; 64],
-                block: [0; 16],
-            };
+        let mut ctx = hts_md5_context {
+            lo: 0x1fff_ffff,
+            hi: 7,
+            a: 0x67452301,
+            b: 0xefcdab89,
+            c: 0x98badcfe,
+            d: 0x10325476,
+            buffer: [0; 64],
+            block: [0; 16],
+        };
 
-            md5_c_237_hts_md5_update(&mut ctx, b"x".as_ptr().cast(), 1);
-            assert_eq!(ctx.lo, 0);
-            assert_eq!(ctx.hi, 8);
-        }
+        md5_c_237_hts_md5_update(&mut ctx, b"x", 1);
+        assert_eq!(ctx.lo, 0);
+        assert_eq!(ctx.hi, 8);
     }
 }

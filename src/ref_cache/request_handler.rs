@@ -1,19 +1,19 @@
-use super::http_parser::Http_Parser;
+use super::http_parser::HttpParser;
 use super::misc::ref_cache_misc_h_38_hexval;
 use super::options::Options;
 use super::ref_files::{
     ref_cache_ref_files_c_141_get_ref_status, ref_cache_ref_files_c_145_get_ref_size,
     ref_cache_ref_files_c_193_release_ref_file, ref_cache_ref_files_c_94_get_ref_file,
 };
-use super::server::Client;
+use super::server::RefCacheClientsLayout;
 use super::transaction::{
     ref_cache_transaction_c_136_new_transaction, ref_cache_transaction_c_218_transaction_set_ref,
     ref_cache_transaction_c_264_transaction_set_req_str,
     ref_cache_transaction_c_277_set_error_response,
     ref_cache_transaction_c_408_set_message_response,
-    ref_cache_transaction_c_654_set_transaction_file_range, Transaction,
+    ref_cache_transaction_c_654_set_transaction_file_range, TransactionId,
 };
-use std::ffi::{c_char, c_int, c_uint, c_ulong};
+use std::ffi::{c_int, c_uint};
 
 const REF_DOWNLOAD_STARTED: c_int = 2;
 const REF_NOT_FOUND: c_int = 1;
@@ -27,181 +27,104 @@ const REF_CACHE_ERR_INTERNAL: c_int = 500;
 const REF_CACHE_ERR_UNIMPLEMENTED: c_int = 501;
 const REF_CACHE_REQ_GET: c_int = 1;
 
-#[repr(C)]
-struct HttpParserLayout {
-    state: c_int,
-    req_type: c_int,
-    http_vers: c_int,
-    trans_enc: c_int,
-    content_length: c_ulong,
-    bytes: c_ulong,
-    uri: *mut c_char,
-    key: *mut c_char,
-    val: *mut c_char,
-    buffer: *mut c_char,
-    user_agent: *mut c_char,
-    referrer: *mut c_char,
-    range_from: libc::off_t,
-    range_to: libc::off_t,
-    key_sz: usize,
-    key_used: usize,
-    val_sz: usize,
-    val_used: usize,
-    upstream: c_int,
-    flags: c_uint,
-    in_: c_uint,
-    out: c_uint,
-    pos: c_uint,
-    used: c_uint,
-    uri_buf: Vec<u8>,
-    key_buf: Vec<u8>,
-    val_buf: Vec<u8>,
-    buffer_buf: Vec<u8>,
-    user_agent_buf: Vec<u8>,
-    referrer_buf: Vec<u8>,
-}
-
-#[repr(C)]
-struct RefCacheMatchAddrLayout {
-    family: libc::sa_family_t,
-    mask_bytes: u8,
-    mask: u8,
-    addr: [libc::c_uchar; 16],
-}
-
-#[repr(C)]
-struct RefCacheOptionsLayout {
-    cache_dir: *const c_char,
-    log_dir: *const c_char,
-    error_log_file: *const c_char,
-    log: *mut libc::FILE,
-    upstream_url: *const c_char,
-    upstream_url_len: usize,
-    match_addrs: *mut RefCacheMatchAddrLayout,
-    num_match_addrs: usize,
-    match_addrs_size: usize,
-    first_ip6: usize,
-    max_log_sz: libc::off_t,
-    cache_fd: c_int,
-    listen_fds: c_int,
-    daemon: c_int,
-    port: u16,
-    nlogs: u16,
-    max_kids: u16,
-    verbosity: u8,
-    no_log: u8,
-}
-
-static TEXT_PLAIN: &[u8] = b"text/plain\0";
+static TEXT_PLAIN: &[u8] = b"text/plain";
 
 // original: is_hexmd5 (htslib/ref_cache/request_handler.c:49)
-pub unsafe fn ref_cache_request_handler_c_49_is_hexmd5(str_: *mut c_char) -> c_int {
-    for i in 0..32 {
-        if ref_cache_misc_h_38_hexval(*str_.add(i)) == -1 {
+//
+// `str_` is owned bytes with no trailing NUL; a valid md5 is exactly 32 hex
+// digits with nothing following (so byte 32 is end-of-slice, which in C was the
+// NUL terminator).
+pub fn ref_cache_request_handler_c_49_is_hexmd5(str_: &[u8]) -> c_int {
+    if str_.len() != 32 {
+        return 0;
+    }
+    for &b in &str_[..32] {
+        if ref_cache_misc_h_38_hexval(b) == -1 {
             return 0;
         }
     }
-    if ref_cache_misc_h_38_hexval(*str_.add(32)) == -1 {
-        1
-    } else {
-        0
-    }
+    1
 }
 
 // original: decode_uri (htslib/ref_cache/request_handler.c:56)
-pub unsafe fn ref_cache_request_handler_c_56_decode_uri(parser: *mut Http_Parser) -> *mut c_char {
-    let parser = parser.cast::<HttpParserLayout>();
-    let mut uri = (*parser).uri;
-    let mut out: *mut c_char;
-    let mut last: c_char;
-    let mut in_: *const c_char;
-    let mut d1: c_int;
-    let mut d2: c_int;
-
-    if uri.is_null() {
-        return std::ptr::null_mut();
+pub fn ref_cache_request_handler_c_56_decode_uri(parser: &mut HttpParser) -> Option<Vec<u8>> {
+    let mut uri: &[u8] = parser.uri();
+    if uri.is_empty() {
+        return None;
     }
 
     /* Deal with absolute URLs */
-    if libc::strncasecmp(uri, c"http://".as_ptr(), 7) == 0 {
-        let localpart = libc::strchr(uri.add(7), b'/' as c_int);
-        if localpart.is_null() {
-            return std::ptr::null_mut();
+    if uri.len() >= 7 && uri[..7].eq_ignore_ascii_case(b"http://") {
+        match uri[7..].iter().position(|&b| b == b'/') {
+            Some(pos) => uri = &uri[7 + pos..],
+            None => return None,
         }
-        uri = localpart;
     }
 
     /* Should always start with / now */
-    if *uri != b'/' as c_char {
-        return std::ptr::null_mut();
+    if uri.first() != Some(&b'/') {
+        return None;
     }
 
     /* Hack off query part */
-    let querypart = libc::strchr(uri, b'?' as c_int);
-    if !querypart.is_null() {
-        *querypart = b'\0' as c_char;
+    if let Some(pos) = uri.iter().position(|&b| b == b'?') {
+        uri = &uri[..pos];
     }
 
     /* Deal with multiple // and % decoding. URI will always shrink. */
-    last = b'\0' as c_char;
-    in_ = uri;
-    out = uri;
-    while *in_ != 0 {
-        if *in_ == b'/' as c_char && last == b'/' as c_char {
-            in_ = in_.add(1);
+    let mut out: Vec<u8> = Vec::with_capacity(uri.len());
+    let mut last: u8 = b'\0';
+    let mut i = 0usize;
+    while i < uri.len() {
+        let c = uri[i];
+        if c == b'/' && last == b'/' {
+            i += 1;
             continue;
         }
-        if *in_ == b'%' as c_char {
-            d1 = ref_cache_misc_h_38_hexval(*in_.add(1));
-            d2 = ref_cache_misc_h_38_hexval(*in_.add(2));
+        if c == b'%' && i + 2 < uri.len() {
+            let d1 = ref_cache_misc_h_38_hexval(uri[i + 1]);
+            let d2 = ref_cache_misc_h_38_hexval(uri[i + 2]);
             if d1 >= 0 && d2 >= 0 {
-                let v = (d1 << 4 | d2) as c_char;
-                in_ = in_.add(3);
-                if v == b'/' as c_char && last == b'/' as c_char {
+                let v = (d1 << 4 | d2) as u8;
+                i += 3;
+                if v == b'/' && last == b'/' {
                     continue;
                 }
-                *out = v;
+                out.push(v);
                 last = v;
-                out = out.add(1);
                 continue;
             }
         }
-        *out = *in_;
-        last = *in_;
-        out = out.add(1);
-        in_ = in_.add(1);
+        out.push(c);
+        last = c;
+        i += 1;
     }
-    *out = b'\0' as c_char;
-    uri
+    Some(out)
 }
 
 // original: handle_hello (htslib/ref_cache/request_handler.c:94)
-pub unsafe fn ref_cache_request_handler_c_94_handle_hello(transact: *mut Transaction) {
-    let resp = c"Hello\r\n".as_ptr();
-    ref_cache_transaction_c_408_set_message_response(
-        transact,
-        TEXT_PLAIN.as_ptr().cast(),
-        resp,
-        libc::strlen(resp),
-    );
+pub unsafe fn ref_cache_request_handler_c_94_handle_hello(transact: TransactionId) {
+    let resp: &[u8] = b"Hello\r\n";
+    ref_cache_transaction_c_408_set_message_response(transact, TEXT_PLAIN, resp);
 }
 
 // original: handle_md5 (htslib/ref_cache/request_handler.c:99)
+//
+// `md5` is the 32 hex-digit ref id as owned bytes (no trailing NUL).
 pub unsafe fn ref_cache_request_handler_c_99_handle_md5(
-    opts: *const Options,
-    parser: *mut Http_Parser,
-    transact: *mut Transaction,
-    md5: *mut c_char,
+    opts: &Options,
+    parser: &mut HttpParser,
+    transact: TransactionId,
+    md5: &[u8],
 ) {
-    // off_t range_start = -1, range_end = 0;
-    // int have_range = 0;
-    let parser = parser.cast::<HttpParserLayout>();
-    let ref_file = ref_cache_ref_files_c_94_get_ref_file(opts, md5, (*parser).upstream);
-
-    if ref_file.is_null() {
+    let mut md5_arr = [0u8; 32];
+    md5_arr.copy_from_slice(&md5[..32]);
+    let Some(ref_file) =
+        ref_cache_ref_files_c_94_get_ref_file(opts, &md5_arr, parser.upstream())
+    else {
         ref_cache_transaction_c_277_set_error_response(transact, REF_CACHE_ERR_INTERNAL as c_uint);
         return;
-    }
+    };
 
     let status = ref_cache_ref_files_c_141_get_ref_status(ref_file);
     if status == REF_NOT_FOUND {
@@ -223,48 +146,44 @@ pub unsafe fn ref_cache_request_handler_c_99_handle_md5(
 
 // original: handle_get (htslib/ref_cache/request_handler.c:126)
 pub unsafe fn ref_cache_request_handler_c_126_handle_get(
-    opts: *const Options,
-    parser: *mut Http_Parser,
-    transact: *mut Transaction,
+    opts: &Options,
+    parser: &mut HttpParser,
+    transact: TransactionId,
 ) {
-    let mut requested = ref_cache_request_handler_c_56_decode_uri(parser);
+    let requested = ref_cache_request_handler_c_56_decode_uri(parser);
 
-    if (*(opts.cast::<RefCacheOptionsLayout>())).verbosity > 1 {
-        libc::fprintf(
-            crate::htslib_rs::ref_cache::compat::stderr(),
-            c"Request: GET %s\n".as_ptr(),
-            if requested.is_null() {
-                c"".as_ptr()
-            } else {
-                requested
-            },
-        );
+    if opts.verbosity > 1 {
+        match requested.as_ref() {
+            Some(r) => eprintln!("Request: GET {}", String::from_utf8_lossy(r)),
+            None => eprintln!("Request: GET "),
+        }
     }
 
+    // set_req_str takes owned bytes (no NUL needed).
     ref_cache_transaction_c_264_transaction_set_req_str(
         transact,
-        if requested.is_null() {
-            c"".as_ptr()
-        } else {
-            requested
-        },
+        requested.as_deref().unwrap_or(b""),
     );
 
-    if requested.is_null() || *requested != b'/' as c_char {
-        ref_cache_transaction_c_277_set_error_response(
-            transact,
-            REF_CACHE_ERR_BAD_REQUEST as c_uint,
-        );
+    let requested = match requested {
+        Some(r) if r.first() == Some(&b'/') => r,
+        _ => {
+            ref_cache_transaction_c_277_set_error_response(
+                transact,
+                REF_CACHE_ERR_BAD_REQUEST as c_uint,
+            );
+            return;
+        }
+    };
+
+    let rest = &requested[1..];
+    // A valid ref id is exactly 32 hex digits (the C version required the 32nd
+    // byte to be the NUL terminator; with owned bytes that is a 32-byte slice).
+    if ref_cache_request_handler_c_49_is_hexmd5(rest) != 0 {
+        ref_cache_request_handler_c_99_handle_md5(opts, parser, transact, rest);
         return;
     }
-    requested = requested.add(1);
-    if ref_cache_request_handler_c_49_is_hexmd5(requested) != 0
-        && *requested.add(32) == b'\0' as c_char
-    {
-        ref_cache_request_handler_c_99_handle_md5(opts, parser, transact, requested);
-        return;
-    }
-    if libc::strcmp(requested, c"hello".as_ptr()) == 0 {
+    if rest == b"hello" {
         ref_cache_request_handler_c_94_handle_hello(transact);
         return;
     }
@@ -272,22 +191,28 @@ pub unsafe fn ref_cache_request_handler_c_126_handle_get(
 }
 
 // original: handle_request (htslib/ref_cache/request_handler.c:148)
+//
+// Ownership model: a transaction is an index (`TransactionId`) into the
+// transaction arena owned by `transaction.rs`. The client is identified by its
+// arena index in the server's client arena. On success, the newly created
+// transaction's id is written into `transact_out` for the caller (which then
+// appends it to the client's request pipeline). `_clients` is threaded through
+// so the handler can reach the client arena if needed; the client id is `client`.
 pub unsafe fn ref_cache_request_handler_c_148_handle_request(
-    opts: *const Options,
-    client: *mut Client,
-    parser: *mut Http_Parser,
-    transact_out: *mut *mut Transaction,
+    opts: &Options,
+    _clients: &mut RefCacheClientsLayout,
+    client: usize,
+    parser: &mut HttpParser,
+    transact_out: &mut Option<TransactionId>,
 ) {
-    let transact = ref_cache_transaction_c_136_new_transaction(client, parser);
-    let parser = parser.cast::<HttpParserLayout>();
-    if transact.is_null() {
-        (*parser).state = REF_CACHE_ERR_INTERNAL;
+    let Some(transact) = ref_cache_transaction_c_136_new_transaction(Some(client), parser) else {
+        parser.set_state(REF_CACHE_ERR_INTERNAL);
         return;
-    }
+    };
 
-    match (*parser).req_type {
+    match parser.req_type() {
         REF_CACHE_REQ_GET => {
-            ref_cache_request_handler_c_126_handle_get(opts, parser.cast(), transact);
+            ref_cache_request_handler_c_126_handle_get(opts, parser, transact);
         }
         /* case REQ_HEAD: handle_head(parser, transact); break; */
         _ => {
@@ -297,28 +222,27 @@ pub unsafe fn ref_cache_request_handler_c_148_handle_request(
             );
         }
     }
-    *transact_out = transact;
+    *transact_out = Some(transact);
 
-    if ((*parser).flags & TRANSACT_KEEP_ALIVE) != 0 && (*parser).http_vers == HTTP_1_1 {
-        (*parser).state = REF_CACHE_READING_REQUEST_LINE;
+    if (parser.flags() & TRANSACT_KEEP_ALIVE) != 0 && parser.http_vers() == HTTP_1_1 {
+        parser.set_state(REF_CACHE_READING_REQUEST_LINE);
     } else {
-        (*parser).state = REF_CACHE_SHUTTING_DOWN;
+        parser.set_state(REF_CACHE_SHUTTING_DOWN);
     }
 }
 
 // original: handle_error (htslib/ref_cache/request_handler.c:167)
 pub unsafe fn ref_cache_request_handler_c_167_handle_error(
-    client: *mut Client,
-    parser: *mut Http_Parser,
+    _clients: &mut RefCacheClientsLayout,
+    client: usize,
+    parser: &mut HttpParser,
     code: c_int,
-    transact_out: *mut *mut Transaction,
+    transact_out: &mut Option<TransactionId>,
 ) {
-    let transact = ref_cache_transaction_c_136_new_transaction(client, parser);
-    let parser = parser.cast::<HttpParserLayout>();
-    if transact.is_null() {
-        (*parser).state = REF_CACHE_ERR_INTERNAL;
+    let Some(transact) = ref_cache_transaction_c_136_new_transaction(Some(client), parser) else {
+        parser.set_state(REF_CACHE_ERR_INTERNAL);
         return;
-    }
+    };
     ref_cache_transaction_c_277_set_error_response(
         transact,
         if code >= REF_CACHE_ERR_BAD_REQUEST {
@@ -327,5 +251,5 @@ pub unsafe fn ref_cache_request_handler_c_167_handle_error(
             500
         },
     );
-    *transact_out = transact;
+    *transact_out = Some(transact);
 }

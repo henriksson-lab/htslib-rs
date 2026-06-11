@@ -3,9 +3,10 @@
 //! Header-only range coder (Eugene Shelwien, modifications by James Bonfield).
 //! Each `static inline` function in the header becomes one stub here.
 //!
-//! The C struct uses raw `uc *` pointers walking over caller-owned input and
-//! output buffers.  We keep that representation verbatim (`*mut u8`) so the
-//! carry/renormalisation byte arithmetic is bit-for-bit identical to C.
+//! The C struct walks raw `uc *` cursors over a caller-owned buffer.  We model
+//! that with an owned `Vec<u8>` plus `usize` cursor indices, so the
+//! carry/renormalisation byte arithmetic stays bit-for-bit identical to C while
+//! ownership of the working buffer lives in Rust.
 
 // #define TOP (1<<24)                       // c_range_coder.h:21
 pub const TOP: u32 = 1 << 24;
@@ -28,8 +29,12 @@ pub const THRES: u32 = 255u32.wrapping_mul(TOP);
 ///     int err;
 /// } RangeCoder;
 /// ```
+///
+/// The four `uc *` cursors of the C struct become `usize` indices into `buf`,
+/// the owned working buffer.  `in_pos`/`out_pos` are the read/write cursors and
+/// `in_end`/`out_end` the (optional) bounds.  `in_pos` doubles as the encoder's
+/// fixed base, matching how the C code reused `in_buf` for `RC_OutSize`.
 // c_range_coder.h:26
-#[repr(C)]
 pub struct RangeCoder {
     pub low: u32,
     pub code: u32,
@@ -37,10 +42,11 @@ pub struct RangeCoder {
     pub ff_num: u32,
     pub cache: u32,
     pub carry: u32,
-    pub in_buf: *mut u8,
-    pub out_buf: *mut u8,
-    pub in_end: *mut u8,
-    pub out_end: *mut u8,
+    pub buf: Vec<u8>,
+    pub in_pos: usize,
+    pub out_pos: usize,
+    pub in_end: usize,
+    pub out_end: Option<usize>,
     pub err: i32,
 }
 
@@ -55,10 +61,11 @@ impl RangeCoder {
             ff_num: 0,
             cache: 0,
             carry: 0,
-            in_buf: std::ptr::null_mut(),
-            out_buf: std::ptr::null_mut(),
-            in_end: std::ptr::null_mut(),
-            out_end: std::ptr::null_mut(),
+            buf: Vec::new(),
+            in_pos: 0,
+            out_pos: 0,
+            in_end: 0,
+            out_end: None,
             err: 0,
         }
     }
@@ -71,49 +78,59 @@ impl Default for RangeCoder {
 }
 
 /// `static inline void RC_SetInput(RangeCoder *rc, char *in, char *in_end)`
+///
+/// Takes ownership of the input buffer; `in_end` is the count of valid bytes.
 // c_range_coder.h:38
-pub fn RC_SetInput(rc: &mut RangeCoder, r#in: *mut u8, in_end: *mut u8) {
-    rc.in_buf = r#in;
-    rc.out_buf = r#in;
+pub fn RC_SetInput(rc: &mut RangeCoder, r#in: Vec<u8>, in_end: usize) {
     rc.in_end = in_end;
+    rc.buf = r#in;
+    rc.in_pos = 0;
+    rc.out_pos = 0;
 }
 
 /// `static inline void RC_SetOutput(RangeCoder *rc, char *out)`
+///
+/// Takes ownership of the output buffer.
 // c_range_coder.h:44
-pub fn RC_SetOutput(rc: &mut RangeCoder, out: *mut u8) {
-    rc.in_buf = out;
-    rc.out_buf = out;
-    rc.out_end = std::ptr::null_mut();
+pub fn RC_SetOutput(rc: &mut RangeCoder, out: Vec<u8>) {
+    rc.buf = out;
+    rc.in_pos = 0;
+    rc.out_pos = 0;
+    rc.out_end = None;
 }
 
 /// `static inline void RC_SetOutputEnd(RangeCoder *rc, char *out_end)`
 // c_range_coder.h:45
-pub fn RC_SetOutputEnd(rc: &mut RangeCoder, out_end: *mut u8) {
-    rc.out_end = out_end;
+pub fn RC_SetOutputEnd(rc: &mut RangeCoder, out_end: usize) {
+    rc.out_end = Some(out_end);
 }
 
 /// `static inline char *RC_GetInput(RangeCoder *rc)`
+///
+/// Returns the remaining (unread) input as a slice.
 // c_range_coder.h:46
-pub fn RC_GetInput(rc: &RangeCoder) -> *mut u8 {
-    rc.in_buf
+pub fn RC_GetInput(rc: &RangeCoder) -> &[u8] {
+    &rc.buf[rc.in_pos..]
 }
 
 /// `static inline char *RC_GetOutput(RangeCoder *rc)`
+///
+/// Returns the written-so-far output as a slice.
 // c_range_coder.h:47
-pub fn RC_GetOutput(rc: &RangeCoder) -> *mut u8 {
-    rc.out_buf
+pub fn RC_GetOutput(rc: &RangeCoder) -> &[u8] {
+    &rc.buf[..rc.out_pos]
 }
 
 /// `static inline size_t RC_OutSize(RangeCoder *rc)`
 // c_range_coder.h:48
 pub fn RC_OutSize(rc: &RangeCoder) -> usize {
-    (rc.out_buf as usize) - (rc.in_buf as usize)
+    rc.out_pos - rc.in_pos
 }
 
 /// `static inline size_t RC_InSize(RangeCoder *rc)`
 // c_range_coder.h:49
 pub fn RC_InSize(rc: &RangeCoder) -> usize {
-    (rc.in_buf as usize) - (rc.out_buf as usize)
+    rc.in_pos - rc.out_pos
 }
 
 /// `static inline void RC_StartEncode(RangeCoder *rc)`
@@ -139,16 +156,14 @@ pub fn RC_StartDecode(rc: &mut RangeCoder) {
     rc.code = 0;
     rc.err = 0;
     // if (rc->in_buf+5 > rc->in_end) { rc->in_buf = rc->in_end; return; }
-    if (rc.in_buf as usize) + 5 > (rc.in_end as usize) {
-        rc.in_buf = rc.in_end; // prevent decode
+    if rc.in_pos + 5 > rc.in_end {
+        rc.in_pos = rc.in_end; // prevent decode
         return;
     }
     // DO(5) rc->code = (rc->code<<8) | *rc->in_buf++;
     for _ in 0..5 {
-        unsafe {
-            rc.code = (rc.code << 8) | (*rc.in_buf as u32);
-            rc.in_buf = rc.in_buf.add(1);
-        }
+        rc.code = (rc.code << 8) | (rc.buf[rc.in_pos] as u32);
+        rc.in_pos += 1;
     }
 }
 
@@ -157,23 +172,21 @@ pub fn RC_StartDecode(rc: &mut RangeCoder) {
 pub fn RC_ShiftLowCheck(rc: &mut RangeCoder) {
     if rc.low < THRES || rc.carry != 0 {
         // if (rc->out_end && rc->FFNum >= rc->out_end - rc->out_buf) {err=-1; return;}
-        if !rc.out_end.is_null()
-            && rc.ff_num as usize >= (rc.out_end as usize) - (rc.out_buf as usize)
-        {
-            rc.err = -1;
-            return;
+        if let Some(out_end) = rc.out_end {
+            if rc.ff_num as usize >= out_end - rc.out_pos {
+                rc.err = -1;
+                return;
+            }
         }
 
-        unsafe {
-            *rc.out_buf = (rc.cache.wrapping_add(rc.carry)) as u8;
-            rc.out_buf = rc.out_buf.add(1);
+        rc.buf[rc.out_pos] = (rc.cache.wrapping_add(rc.carry)) as u8;
+        rc.out_pos += 1;
 
-            // Flush any stored FFs
-            while rc.ff_num != 0 {
-                *rc.out_buf = (rc.carry.wrapping_sub(1)) as u8; // (Carry-1)&255
-                rc.out_buf = rc.out_buf.add(1);
-                rc.ff_num -= 1;
-            }
+        // Flush any stored FFs
+        while rc.ff_num != 0 {
+            rc.buf[rc.out_pos] = (rc.carry.wrapping_sub(1)) as u8; // (Carry-1)&255
+            rc.out_pos += 1;
+            rc.ff_num -= 1;
         }
 
         // Take copy of top byte ready for next flush
@@ -190,16 +203,14 @@ pub fn RC_ShiftLowCheck(rc: &mut RangeCoder) {
 // c_range_coder.h:103
 pub fn RC_ShiftLow(rc: &mut RangeCoder) {
     if rc.low < THRES || rc.carry != 0 {
-        unsafe {
-            *rc.out_buf = (rc.cache.wrapping_add(rc.carry)) as u8;
-            rc.out_buf = rc.out_buf.add(1);
+        rc.buf[rc.out_pos] = (rc.cache.wrapping_add(rc.carry)) as u8;
+        rc.out_pos += 1;
 
-            // Flush any stored FFs
-            while rc.ff_num != 0 {
-                *rc.out_buf = (rc.carry.wrapping_sub(1)) as u8; // (Carry-1)&255
-                rc.out_buf = rc.out_buf.add(1);
-                rc.ff_num -= 1;
-            }
+        // Flush any stored FFs
+        while rc.ff_num != 0 {
+            rc.buf[rc.out_pos] = (rc.carry.wrapping_sub(1)) as u8; // (Carry-1)&255
+            rc.out_pos += 1;
+            rc.ff_num -= 1;
         }
 
         // Take copy of top byte ready for next flush
@@ -262,14 +273,12 @@ pub fn RC_Decode(rc: &mut RangeCoder, cum_freq: u32, freq: u32, _tot_freq: u32) 
     rc.code = rc.code.wrapping_sub(cum_freq.wrapping_mul(rc.range));
     rc.range = rc.range.wrapping_mul(freq);
     while rc.range < TOP {
-        if (rc.in_buf as usize) >= (rc.in_end as usize) {
+        if rc.in_pos >= rc.in_end {
             rc.err = -1;
             return;
         }
-        unsafe {
-            rc.code = (rc.code << 8).wrapping_add(*rc.in_buf as u32);
-            rc.in_buf = rc.in_buf.add(1);
-        }
+        rc.code = (rc.code << 8).wrapping_add(rc.buf[rc.in_pos] as u32);
+        rc.in_pos += 1;
         rc.range <<= 8;
     }
 }

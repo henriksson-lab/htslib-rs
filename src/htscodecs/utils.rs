@@ -2,7 +2,6 @@
 //!
 //! Thread-local storage pool helpers and histogram / transpose utilities.
 
-use core::ffi::c_void;
 use std::cell::RefCell;
 
 // ----------------------------------------------------------------------------
@@ -68,12 +67,6 @@ impl TlsSlot {
     fn capacity(&self) -> usize {
         self.buf.as_ref().map_or(0, Vec::len)
     }
-
-    fn ptr(&self) -> *mut c_void {
-        self.buf
-            .as_ref()
-            .map_or(core::ptr::null_mut(), |buf| buf.as_ptr() as *mut c_void)
-    }
 }
 
 impl tls_pool {
@@ -132,14 +125,10 @@ thread_local! {
 ///
 /// Note: unlike the C version we do *not* `free(tls)` itself: the `tls_pool`
 /// here is owned by the `thread_local!` cell, not separately heap-allocated, so
-/// freeing the buffers is the analogous step.
+/// freeing the buffers is the analogous step.  The C version took a `void*` that
+/// could be NULL; the Rust translation takes an owning `&mut tls_pool` directly.
 // utils.c:83
-pub fn htscodecs_tls_free_all(ptr: *mut c_void) {
-    let tls = ptr as *mut tls_pool;
-    if tls.is_null() {
-        return;
-    }
-    let tls = unsafe { &mut *tls };
+pub fn htscodecs_tls_free_all(tls: &mut tls_pool) {
     htscodecs_tls_free_pool(tls);
 }
 
@@ -190,8 +179,13 @@ pub fn htscodecs_tls_init() {}
 ///     return tls->bufs[avail];
 /// }
 /// ```
+/// Reserves a thread-local scratch buffer of at least `size` bytes and returns
+/// its slot index (0..MAX_TLS_BUFS).  In the C version this returned the raw
+/// `void*` buffer pointer; here we return an `Option<usize>` slot handle (with
+/// `None` standing in for the C `NULL` failure path), and the buffer itself is
+/// reached through `htscodecs_tls_with`.
 // utils.c:119 (also utils.h:63)
-pub fn htscodecs_tls_alloc(size: usize) -> *mut c_void {
+pub fn htscodecs_tls_alloc(size: usize) -> Option<usize> {
     htscodecs_tls_init();
 
     RANS_TLS.with(|cell| {
@@ -204,7 +198,7 @@ pub fn htscodecs_tls_alloc(size: usize) -> *mut c_void {
             if !slot.used {
                 if slot.buf.is_some() && size <= slot.capacity() {
                     slot.used = true;
-                    return slot.ptr();
+                    return Some(i);
                 } else if avail.is_none() {
                     avail = Some(i);
                 }
@@ -214,7 +208,7 @@ pub fn htscodecs_tls_alloc(size: usize) -> *mut c_void {
         let Some(avail) = avail else {
             // Shouldn't happen given our very limited use of this function
             eprintln!("Error: out of rans_tls_alloc slots");
-            return core::ptr::null_mut();
+            return None;
         };
 
         let slot = &mut tls.slots[avail];
@@ -222,13 +216,13 @@ pub fn htscodecs_tls_alloc(size: usize) -> *mut c_void {
         if buf.try_reserve_exact(size).is_err() {
             slot.buf = None;
             slot.used = false;
-            return core::ptr::null_mut();
+            return None;
         }
         buf.resize(size, 0);
         slot.buf = Some(buf);
         slot.used = true;
 
-        slot.ptr()
+        Some(avail)
     })
 }
 
@@ -241,14 +235,16 @@ pub fn htscodecs_tls_alloc(size: usize) -> *mut c_void {
 /// }
 /// ```
 // utils.c:173 (also utils.h:64)
-pub fn htscodecs_tls_calloc(nmemb: usize, size: usize) -> *mut c_void {
-    let ptr = htscodecs_tls_alloc(nmemb * size);
-    if !ptr.is_null() {
-        unsafe {
-            core::ptr::write_bytes(ptr as *mut u8, 0, nmemb * size);
+pub fn htscodecs_tls_calloc(nmemb: usize, size: usize) -> Option<usize> {
+    let n = nmemb * size;
+    let idx = htscodecs_tls_alloc(n)?;
+    RANS_TLS.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        if let Some(buf) = cell.0.slots[idx].buf.as_mut() {
+            buf[..n].fill(0);
         }
-    }
-    ptr
+    });
+    Some(idx)
 }
 
 /// ```c
@@ -266,22 +262,28 @@ pub fn htscodecs_tls_calloc(nmemb: usize, size: usize) -> *mut c_void {
 ///     tls->used[i] = 0;
 /// }
 /// ```
+/// Releases a thread-local slot previously handed out by
+/// `htscodecs_tls_alloc`/`htscodecs_tls_calloc`.  The C version matched the raw
+/// `void*` against the pool's stored pointers; here the caller passes back the
+/// slot index directly.
 // utils.c:183 (also utils.h:65)
-pub fn htscodecs_tls_free(ptr: *mut c_void) {
-    if ptr.is_null() {
-        return;
-    }
-
+pub fn htscodecs_tls_free(idx: usize) {
     RANS_TLS.with(|cell| {
         let mut cell = cell.borrow_mut();
         let tls = &mut cell.0;
 
-        let Some(slot) = tls.slots.iter_mut().find(|slot| slot.ptr() == ptr) else {
+        let Some(slot) = tls.slots.get_mut(idx) else {
             eprintln!(
                 "Attempt to htscodecs_tls_free a buffer not allocated with htscodecs_tls_alloc"
             );
             return;
         };
+        if slot.buf.is_none() {
+            eprintln!(
+                "Attempt to htscodecs_tls_free a buffer not allocated with htscodecs_tls_alloc"
+            );
+            return;
+        }
         if !slot.used {
             eprintln!("Attempt to htscodecs_tls_free a buffer twice");
             return;

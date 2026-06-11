@@ -393,11 +393,15 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
     if hread(TEST_HFILE_FIN, buffer.as_mut_ptr().cast(), 12) != 12 {
         test_hfile_c_38_fail!(c"hopen('mem:', 'r') failed read".as_ptr());
     }
-    if libc::strcmp(buffer.as_ptr(), test_string) != 0 {
+    // NOTE: in the owned port hopenv_mem copies the supplied buffer into the
+    // hFILE and frees the caller's allocation, so `test_string` is dangling
+    // here (unlike the C contract where the buffer becomes the hFILE's own).
+    // Compare against a stable literal rather than the freed pointer.
+    if libc::strcmp(buffer.as_ptr(), c"Test string".as_ptr()) != 0 {
         test_hfile_c_38_fail!(
             c"hopen('mem:', 'r') missread '%s' != '%s'".as_ptr(),
             buffer.as_ptr(),
-            test_string,
+            c"Test string".as_ptr(),
         );
     }
     let mut interval_buf_len: size_t = 0;
@@ -514,11 +518,7 @@ of knowledge, exceeds the short vehemence of any carnal pleasure."
         test_hfile_c_38_fail!(c"hclose(\"data:;base64,...\")".as_ptr());
     }
 
-    let mut kstr = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut kstr = kstring_t { data: Vec::new() };
 
     if libc::strcmp(
         haddextension(&mut kstr, c"foo/bar.bam".as_ptr(), 0, c".bai".as_ptr()),
@@ -589,7 +589,7 @@ of knowledge, exceeds the short vehemence of any carnal pleasure."
         test_hfile_c_38_fail!(c"haddextension http://host/bar[.crai]#frag".as_ptr());
     }
 
-    libc::free(ks_release(&mut kstr).cast());
+    let _ = ks_release(&mut kstr);
 
     libc::EXIT_SUCCESS
 }

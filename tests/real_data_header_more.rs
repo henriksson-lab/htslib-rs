@@ -42,12 +42,11 @@ unsafe fn close_header(fp: *mut htsFile, hdr: *mut sam_hdr_t) {
 }
 
 unsafe fn kstring_bytes(ks: &kstring_t) -> Vec<u8> {
-    assert!(!ks.s.is_null());
-    std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l).to_vec()
+    ks.data.clone()
 }
 
 unsafe fn header_text(hdr: *mut sam_hdr_t) -> Vec<u8> {
-    let text = sam_hdr_str(hdr);
+    let text = sam_hdr_str(&mut *hdr);
     assert!(!text.is_null());
     CStr::from_ptr(text).to_bytes().to_vec()
 }
@@ -61,12 +60,12 @@ fn count_lines_returns_known_section_counts_for_xx_rg_sam_fixture() {
     unsafe {
         // xx#rg.sam has: 1 HD, 1 SQ, 2 RG, 1 PG, 2 CO lines.
         let (fp, hdr) = open_header("htslib/test/xx#rg.sam");
-        assert_eq!(sam_hdr_count_lines(hdr, c"HD".as_ptr()), 1);
-        assert_eq!(sam_hdr_count_lines(hdr, c"SQ".as_ptr()), 1);
-        assert_eq!(sam_hdr_count_lines(hdr, c"RG".as_ptr()), 2);
-        assert_eq!(sam_hdr_count_lines(hdr, c"PG".as_ptr()), 1);
-        assert_eq!(sam_hdr_count_lines(hdr, c"CO".as_ptr()), 2);
-        assert_eq!(sam_hdr_count_lines(hdr, c"ZZ".as_ptr()), 0);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"HD"), 1);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"SQ"), 1);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"RG"), 2);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"PG"), 1);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"CO"), 2);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"ZZ"), 0);
         close_header(fp, hdr);
     }
 }
@@ -76,8 +75,8 @@ fn count_lines_returns_sq_count_for_real_bam_header() {
     unsafe {
         // range.bam has 7 @SQ lines (CHROMOSOME_I..V, X, MtDNA).
         let (fp, hdr) = open_header("htslib/test/range.bam");
-        assert_eq!(sam_hdr_count_lines(hdr, c"SQ".as_ptr()), 7);
-        assert_eq!(sam_hdr_nref(hdr), 7);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"SQ"), 7);
+        assert_eq!(sam_hdr_nref(&*hdr), 7);
         close_header(fp, hdr);
     }
 }
@@ -91,15 +90,15 @@ fn find_tag_id_returns_specific_sq_and_rg_fields_for_xx_rg() {
     unsafe {
         let (fp, hdr) = open_header("htslib/test/xx#rg.sam");
 
-        let mut ks: kstring_t = std::mem::zeroed();
+        let mut ks: kstring_t = kstring_t::default();
         // @SQ SN:xx LN:20 AS:? SP:? UR:? M5:bbf4...
         assert_eq!(
             sam_hdr_find_tag_id(
-                hdr,
-                c"SQ".as_ptr(),
+                &mut *hdr,
+                c"SQ",
                 c"SN".as_ptr(),
                 c"xx".as_ptr(),
-                c"LN".as_ptr(),
+                c"LN",
                 &mut ks,
             ),
             0
@@ -108,11 +107,11 @@ fn find_tag_id_returns_specific_sq_and_rg_fields_for_xx_rg() {
 
         assert_eq!(
             sam_hdr_find_tag_id(
-                hdr,
-                c"SQ".as_ptr(),
+                &mut *hdr,
+                c"SQ",
                 c"SN".as_ptr(),
                 c"xx".as_ptr(),
-                c"M5".as_ptr(),
+                c"M5",
                 &mut ks,
             ),
             0
@@ -122,11 +121,11 @@ fn find_tag_id_returns_specific_sq_and_rg_fields_for_xx_rg() {
         // @RG ID:x2 ... LB:x PI:1111
         assert_eq!(
             sam_hdr_find_tag_id(
-                hdr,
-                c"RG".as_ptr(),
+                &mut *hdr,
+                c"RG",
                 c"ID".as_ptr(),
                 c"x2".as_ptr(),
-                c"LB".as_ptr(),
+                c"LB",
                 &mut ks,
             ),
             0
@@ -134,11 +133,11 @@ fn find_tag_id_returns_specific_sq_and_rg_fields_for_xx_rg() {
         assert_eq!(kstring_bytes(&ks), b"x");
         assert_eq!(
             sam_hdr_find_tag_id(
-                hdr,
-                c"RG".as_ptr(),
+                &mut *hdr,
+                c"RG",
                 c"ID".as_ptr(),
                 c"x2".as_ptr(),
-                c"PI".as_ptr(),
+                c"PI",
                 &mut ks,
             ),
             0
@@ -148,11 +147,11 @@ fn find_tag_id_returns_specific_sq_and_rg_fields_for_xx_rg() {
         // Unknown tag => not found.
         assert_eq!(
             sam_hdr_find_tag_id(
-                hdr,
-                c"RG".as_ptr(),
+                &mut *hdr,
+                c"RG",
                 c"ID".as_ptr(),
                 c"x2".as_ptr(),
-                c"ZZ".as_ptr(),
+                c"ZZ",
                 &mut ks,
             ),
             -1
@@ -168,28 +167,28 @@ fn find_tag_pos_resolves_rg_by_zero_based_index() {
     unsafe {
         let (fp, hdr) = open_header("htslib/test/xx#rg.sam");
 
-        let mut ks: kstring_t = std::mem::zeroed();
+        let mut ks: kstring_t = kstring_t::default();
         // RG[0] => ID:x1
         assert_eq!(
-            sam_hdr_find_tag_pos(hdr, c"RG".as_ptr(), 0, c"ID".as_ptr(), &mut ks),
+            sam_hdr_find_tag_pos(&mut *hdr, c"RG", 0, c"ID", &mut ks),
             0
         );
         assert_eq!(kstring_bytes(&ks), b"x1");
         // RG[1] => ID:x2
         assert_eq!(
-            sam_hdr_find_tag_pos(hdr, c"RG".as_ptr(), 1, c"ID".as_ptr(), &mut ks),
+            sam_hdr_find_tag_pos(&mut *hdr, c"RG", 1, c"ID", &mut ks),
             0
         );
         assert_eq!(kstring_bytes(&ks), b"x2");
         // PG[0] => PN:emacs
         assert_eq!(
-            sam_hdr_find_tag_pos(hdr, c"PG".as_ptr(), 0, c"PN".as_ptr(), &mut ks),
+            sam_hdr_find_tag_pos(&mut *hdr, c"PG", 0, c"PN", &mut ks),
             0
         );
         assert_eq!(kstring_bytes(&ks), b"emacs");
         // Out-of-range index => -1.
         assert_eq!(
-            sam_hdr_find_tag_pos(hdr, c"RG".as_ptr(), 99, c"ID".as_ptr(), &mut ks),
+            sam_hdr_find_tag_pos(&mut *hdr, c"RG", 99, c"ID", &mut ks),
             -1
         );
 
@@ -207,9 +206,9 @@ fn find_line_id_returns_full_rg_line_text() {
     unsafe {
         let (fp, hdr) = open_header("htslib/test/xx#rg.sam");
 
-        let mut ks: kstring_t = std::mem::zeroed();
+        let mut ks: kstring_t = kstring_t::default();
         assert_eq!(
-            sam_hdr_find_line_id(hdr, c"RG".as_ptr(), c"ID".as_ptr(), c"x2".as_ptr(), &mut ks,),
+            sam_hdr_find_line_id(&mut *hdr, c"RG", c"ID", c"x2", &mut ks,),
             0
         );
         let line = kstring_bytes(&ks);
@@ -222,10 +221,10 @@ fn find_line_id_returns_full_rg_line_text() {
         // Find by non-existent ID => -1.
         assert_eq!(
             sam_hdr_find_line_id(
-                hdr,
-                c"RG".as_ptr(),
-                c"ID".as_ptr(),
-                c"nope".as_ptr(),
+                &mut *hdr,
+                c"RG",
+                c"ID",
+                c"nope",
                 &mut ks,
             ),
             -1
@@ -241,16 +240,16 @@ fn find_line_pos_resolves_hd_and_co_lines() {
     unsafe {
         let (fp, hdr) = open_header("htslib/test/xx#rg.sam");
 
-        let mut ks: kstring_t = std::mem::zeroed();
-        assert_eq!(sam_hdr_find_line_pos(hdr, c"HD".as_ptr(), 0, &mut ks), 0);
+        let mut ks: kstring_t = kstring_t::default();
+        assert_eq!(sam_hdr_find_line_pos(&mut *hdr, c"HD", 0, &mut ks), 0);
         let hd_line = kstring_bytes(&ks);
         assert!(hd_line.starts_with(b"@HD"));
         assert!(hd_line.windows(7).any(|w| w == b"VN:1.4\t") || hd_line.ends_with(b"VN:1.4"));
 
         // CO lines preserve raw text.
-        assert_eq!(sam_hdr_find_line_pos(hdr, c"CO".as_ptr(), 0, &mut ks), 0);
+        assert_eq!(sam_hdr_find_line_pos(&mut *hdr, c"CO", 0, &mut ks), 0);
         assert_eq!(kstring_bytes(&ks), b"@CO\talso test");
-        assert_eq!(sam_hdr_find_line_pos(hdr, c"CO".as_ptr(), 1, &mut ks), 0);
+        assert_eq!(sam_hdr_find_line_pos(&mut *hdr, c"CO", 1, &mut ks), 0);
         // The second CO contains an embedded tab; verify both halves are kept.
         let co1 = kstring_bytes(&ks);
         assert!(co1.starts_with(b"@CO\t"));
@@ -258,7 +257,7 @@ fn find_line_pos_resolves_hd_and_co_lines() {
         assert!(co1.windows(7).any(|w| w == b"headers"));
 
         // Out-of-range => -1.
-        assert_eq!(sam_hdr_find_line_pos(hdr, c"CO".as_ptr(), 5, &mut ks), -1);
+        assert_eq!(sam_hdr_find_line_pos(&mut *hdr, c"CO", 5, &mut ks), -1);
 
         ks_free(&mut ks);
         close_header(fp, hdr);
@@ -275,19 +274,19 @@ fn line_index_round_trips_with_line_name_for_rg() {
         let (fp, hdr) = open_header("htslib/test/xx#rg.sam");
 
         // Forward: name -> index.
-        assert_eq!(sam_hdr_line_index(hdr, c"RG".as_ptr(), c"x1".as_ptr()), 0);
-        assert_eq!(sam_hdr_line_index(hdr, c"RG".as_ptr(), c"x2".as_ptr()), 1);
+        assert_eq!(sam_hdr_line_index(&mut *hdr, c"RG", c"x1"), 0);
+        assert_eq!(sam_hdr_line_index(&mut *hdr, c"RG", c"x2"), 1);
         // Missing => -1.
         assert_eq!(
-            sam_hdr_line_index(hdr, c"RG".as_ptr(), c"missing".as_ptr()),
+            sam_hdr_line_index(&mut *hdr, c"RG", c"missing"),
             -1
         );
 
         // Reverse: index -> name.
-        let name0 = sam_hdr_line_name(hdr, c"RG".as_ptr(), 0);
+        let name0 = sam_hdr_line_name(&mut *hdr, c"RG", 0);
         assert!(!name0.is_null());
         assert_eq!(CStr::from_ptr(name0).to_bytes(), b"x1");
-        let name1 = sam_hdr_line_name(hdr, c"RG".as_ptr(), 1);
+        let name1 = sam_hdr_line_name(&mut *hdr, c"RG", 1);
         assert!(!name1.is_null());
         assert_eq!(CStr::from_ptr(name1).to_bytes(), b"x2");
 
@@ -301,10 +300,10 @@ fn line_name_for_sq_resolves_via_target_array_on_real_bam() {
         let (fp, hdr) = open_header("htslib/test/range.bam");
 
         // SQ section uses the target_name array (no hrecs needed).
-        let n0 = sam_hdr_line_name(hdr, c"SQ".as_ptr(), 0);
+        let n0 = sam_hdr_line_name(&mut *hdr, c"SQ", 0);
         assert!(!n0.is_null());
         assert_eq!(CStr::from_ptr(n0).to_bytes(), b"CHROMOSOME_I");
-        let n6 = sam_hdr_line_name(hdr, c"SQ".as_ptr(), 6);
+        let n6 = sam_hdr_line_name(&mut *hdr, c"SQ", 6);
         assert!(!n6.is_null());
         assert_eq!(CStr::from_ptr(n6).to_bytes(), b"CHROMOSOME_MtDNA");
 
@@ -331,14 +330,14 @@ fn name2tid_and_tid2name_round_trip_on_real_bam_header() {
             (c"CHROMOSOME_MtDNA", 6, 5_000),
         ];
         for &(name, tid, len) in expected {
-            assert_eq!(sam_hdr_name2tid(hdr, name.as_ptr()), tid);
-            assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, tid)), name);
-            assert_eq!(sam_hdr_tid2len(hdr, tid), len);
+            assert_eq!(sam_hdr_name2tid(&mut *hdr, name), tid);
+            assert_eq!(CStr::from_ptr(sam_hdr_tid2name(&*hdr, tid)), name);
+            assert_eq!(sam_hdr_tid2len(&*hdr, tid), len);
         }
         // Missing name => -1; out-of-range tid => null/0.
-        assert_eq!(sam_hdr_name2tid(hdr, c"chrZ".as_ptr()), -1);
-        assert!(sam_hdr_tid2name(hdr, 99).is_null());
-        assert_eq!(sam_hdr_tid2len(hdr, 99), 0);
+        assert_eq!(sam_hdr_name2tid(&mut *hdr, c"chrZ"), -1);
+        assert!(sam_hdr_tid2name(&*hdr, 99).is_null());
+        assert_eq!(sam_hdr_tid2len(&*hdr, 99), 0);
 
         close_header(fp, hdr);
     }
@@ -352,20 +351,20 @@ fn name2tid_and_tid2name_round_trip_on_real_bam_header() {
 fn add_line_appends_co_comment_and_count_lines_reflects_it() {
     unsafe {
         let (fp, hdr) = open_header("htslib/test/xx#rg.sam");
-        assert_eq!(sam_hdr_count_lines(hdr, c"CO".as_ptr()), 2);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"CO"), 2);
 
         // CO lines take a single tag whose key is the comment text and whose
         // value pointer must be null.
         let comment = CString::new("Added by integration test").unwrap();
         assert_eq!(
-            sam_hdr_add_line(hdr, c"CO".as_ptr(), &[(comment.as_ptr(), std::ptr::null())],),
+            sam_hdr_add_line(&mut *hdr, c"CO", &[(comment.as_ptr(), std::ptr::null())],),
             0
         );
-        assert_eq!(sam_hdr_count_lines(hdr, c"CO".as_ptr()), 3);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"CO"), 3);
 
         // The new CO is the third one; verify its text.
-        let mut ks: kstring_t = std::mem::zeroed();
-        assert_eq!(sam_hdr_find_line_pos(hdr, c"CO".as_ptr(), 2, &mut ks), 0);
+        let mut ks: kstring_t = kstring_t::default();
+        assert_eq!(sam_hdr_find_line_pos(&mut *hdr, c"CO", 2, &mut ks), 0);
         assert_eq!(kstring_bytes(&ks), b"@CO\tAdded by integration test");
 
         ks_free(&mut ks);
@@ -377,12 +376,12 @@ fn add_line_appends_co_comment_and_count_lines_reflects_it() {
 fn add_lines_parses_multiple_co_records_and_count_lines_increments() {
     unsafe {
         let (fp, hdr) = open_header("htslib/test/xx#rg.sam");
-        let before = sam_hdr_count_lines(hdr, c"CO".as_ptr());
+        let before = sam_hdr_count_lines(&mut *hdr, c"CO");
 
         let extra = CString::new("@CO\textra one\n@CO\textra two\n").unwrap();
         let bytes = extra.as_bytes();
-        assert_eq!(sam_hdr_add_lines(hdr, extra.as_ptr(), bytes.len()), 0);
-        let after = sam_hdr_count_lines(hdr, c"CO".as_ptr());
+        assert_eq!(sam_hdr_add_lines(&mut *hdr, bytes), 0);
+        let after = sam_hdr_count_lines(&mut *hdr, c"CO");
         assert_eq!(after, before + 2);
 
         close_header(fp, hdr);
@@ -398,7 +397,7 @@ fn add_line_rejects_invalid_inputs() {
         let bad = CString::new("text").unwrap();
         let val = CString::new("v").unwrap();
         assert_eq!(
-            sam_hdr_add_line(hdr, c"CO".as_ptr(), &[(bad.as_ptr(), val.as_ptr())],),
+            sam_hdr_add_line(&mut *hdr, c"CO", &[(bad.as_ptr(), val.as_ptr())],),
             -1
         );
 
@@ -406,12 +405,12 @@ fn add_line_rejects_invalid_inputs() {
         let k = CString::new("KK").unwrap();
         let v = CString::new("v").unwrap();
         assert_eq!(
-            sam_hdr_add_line(hdr, c"XX".as_ptr(), &[(k.as_ptr(), v.as_ptr())],),
+            sam_hdr_add_line(&mut *hdr, c"XX", &[(k.as_ptr(), v.as_ptr())],),
             -1
         );
 
         // SQ with no tags => -1.
-        assert_eq!(sam_hdr_add_line(hdr, c"SQ".as_ptr(), &[]), -1);
+        assert_eq!(sam_hdr_add_line(&mut *hdr, c"SQ", &[]), -1);
 
         close_header(fp, hdr);
     }
@@ -431,8 +430,8 @@ fn update_line_modifies_pg_tag_value_on_real_header() {
         let vn_val = CString::new("99.0").unwrap();
         assert_eq!(
             sam_hdr_update_line(
-                hdr,
-                c"PG".as_ptr(),
+                &mut *hdr,
+                c"PG",
                 c"ID".as_ptr(),
                 id.as_ptr(),
                 &[(c"VN".as_ptr(), vn_val.as_ptr())],
@@ -440,14 +439,14 @@ fn update_line_modifies_pg_tag_value_on_real_header() {
             0
         );
 
-        let mut ks: kstring_t = std::mem::zeroed();
+        let mut ks: kstring_t = kstring_t::default();
         assert_eq!(
             sam_hdr_find_tag_id(
-                hdr,
-                c"PG".as_ptr(),
+                &mut *hdr,
+                c"PG",
                 c"ID".as_ptr(),
                 id.as_ptr(),
-                c"VN".as_ptr(),
+                c"VN",
                 &mut ks,
             ),
             0
@@ -458,8 +457,8 @@ fn update_line_modifies_pg_tag_value_on_real_header() {
         let new_id = CString::new("changed").unwrap();
         assert_eq!(
             sam_hdr_update_line(
-                hdr,
-                c"PG".as_ptr(),
+                &mut *hdr,
+                c"PG",
                 c"ID".as_ptr(),
                 id.as_ptr(),
                 &[(c"ID".as_ptr(), new_id.as_ptr())],
@@ -480,19 +479,19 @@ fn update_line_modifies_pg_tag_value_on_real_header() {
 fn remove_line_id_drops_rg_and_count_decreases() {
     unsafe {
         let (fp, hdr) = open_header("htslib/test/xx#rg.sam");
-        assert_eq!(sam_hdr_count_lines(hdr, c"RG".as_ptr()), 2);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"RG"), 2);
 
         assert_eq!(
-            sam_hdr_remove_line_id(hdr, c"RG".as_ptr(), c"ID".as_ptr(), c"x2".as_ptr(),),
+            sam_hdr_remove_line_id(&mut *hdr, c"RG", c"ID".as_ptr(), c"x2".as_ptr(),),
             0
         );
-        assert_eq!(sam_hdr_count_lines(hdr, c"RG".as_ptr()), 1);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"RG"), 1);
 
         // The remaining RG should be x1.
-        let name = sam_hdr_line_name(hdr, c"RG".as_ptr(), 0);
+        let name = sam_hdr_line_name(&mut *hdr, c"RG", 0);
         assert!(!name.is_null());
         assert_eq!(CStr::from_ptr(name).to_bytes(), b"x1");
-        assert_eq!(sam_hdr_line_index(hdr, c"RG".as_ptr(), c"x2".as_ptr()), -1);
+        assert_eq!(sam_hdr_line_index(&mut *hdr, c"RG", c"x2"), -1);
 
         close_header(fp, hdr);
     }
@@ -502,20 +501,20 @@ fn remove_line_id_drops_rg_and_count_decreases() {
 fn remove_line_pos_drops_sq_and_target_array_updates() {
     unsafe {
         let (fp, hdr) = open_header("htslib/test/range.bam");
-        assert_eq!(sam_hdr_count_lines(hdr, c"SQ".as_ptr()), 7);
-        assert_eq!(sam_hdr_nref(hdr), 7);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"SQ"), 7);
+        assert_eq!(sam_hdr_nref(&*hdr), 7);
 
         // Remove the last @SQ (CHROMOSOME_MtDNA, position 6).
-        assert_eq!(sam_hdr_remove_line_pos(hdr, c"SQ".as_ptr(), 6), 0);
-        assert_eq!(sam_hdr_count_lines(hdr, c"SQ".as_ptr()), 6);
-        assert_eq!(sam_hdr_nref(hdr), 6);
-        assert_eq!(sam_hdr_name2tid(hdr, c"CHROMOSOME_MtDNA".as_ptr()), -1);
+        assert_eq!(sam_hdr_remove_line_pos(&mut *hdr, c"SQ", 6), 0);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"SQ"), 6);
+        assert_eq!(sam_hdr_nref(&*hdr), 6);
+        assert_eq!(sam_hdr_name2tid(&mut *hdr, c"CHROMOSOME_MtDNA"), -1);
 
         // Names that survive should still resolve.
-        assert_eq!(sam_hdr_name2tid(hdr, c"CHROMOSOME_I".as_ptr()), 0);
+        assert_eq!(sam_hdr_name2tid(&mut *hdr, c"CHROMOSOME_I"), 0);
 
         // Removing @PG by position is disallowed.
-        assert_eq!(sam_hdr_remove_line_pos(hdr, c"PG".as_ptr(), 0), -1);
+        assert_eq!(sam_hdr_remove_line_pos(&mut *hdr, c"PG", 0), -1);
 
         close_header(fp, hdr);
     }
@@ -527,14 +526,14 @@ fn remove_tag_id_drops_specific_tag_from_rg_line() {
         let (fp, hdr) = open_header("htslib/test/xx#rg.sam");
 
         // Confirm the PI tag exists on RG ID:x2.
-        let mut ks: kstring_t = std::mem::zeroed();
+        let mut ks: kstring_t = kstring_t::default();
         assert_eq!(
             sam_hdr_find_tag_id(
-                hdr,
-                c"RG".as_ptr(),
+                &mut *hdr,
+                c"RG",
                 c"ID".as_ptr(),
                 c"x2".as_ptr(),
-                c"PI".as_ptr(),
+                c"PI",
                 &mut ks,
             ),
             0
@@ -544,21 +543,21 @@ fn remove_tag_id_drops_specific_tag_from_rg_line() {
         // Remove it.
         assert_eq!(
             sam_hdr_remove_tag_id(
-                hdr,
-                c"RG".as_ptr(),
+                &mut *hdr,
+                c"RG",
                 c"ID".as_ptr(),
                 c"x2".as_ptr(),
-                c"PI".as_ptr(),
+                c"PI",
             ),
             0
         );
         assert_eq!(
             sam_hdr_find_tag_id(
-                hdr,
-                c"RG".as_ptr(),
+                &mut *hdr,
+                c"RG",
                 c"ID".as_ptr(),
                 c"x2".as_ptr(),
-                c"PI".as_ptr(),
+                c"PI",
                 &mut ks,
             ),
             -1
@@ -566,11 +565,11 @@ fn remove_tag_id_drops_specific_tag_from_rg_line() {
         // Removing a non-existent tag => -1 (per the htslib normalisation).
         assert_eq!(
             sam_hdr_remove_tag_id(
-                hdr,
-                c"RG".as_ptr(),
+                &mut *hdr,
+                c"RG",
                 c"ID".as_ptr(),
                 c"x2".as_ptr(),
-                c"ZZ".as_ptr(),
+                c"ZZ",
             ),
             -1
         );
@@ -588,29 +587,29 @@ fn remove_tag_id_drops_specific_tag_from_rg_line() {
 fn add_pg_appends_new_pg_and_pg_id_uniquifies_clashing_name() {
     unsafe {
         let (fp, hdr) = open_header("htslib/test/xx#rg.sam");
-        let before = sam_hdr_count_lines(hdr, c"PG".as_ptr());
+        let before = sam_hdr_count_lines(&mut *hdr, c"PG");
         assert_eq!(before, 1);
 
         // sam_hdr_pg_id with a fresh name returns the same name pointer (no clash).
-        let fresh = sam_hdr_pg_id(hdr, c"fresh".as_ptr());
+        let fresh = sam_hdr_pg_id(&mut *hdr, c"fresh");
         assert!(!fresh.is_null());
         assert_eq!(CStr::from_ptr(fresh).to_bytes(), b"fresh");
 
         // Append a new @PG.
         assert_eq!(
             sam_hdr_add_pg(
-                hdr,
-                c"myprog".as_ptr(),
+                &mut *hdr,
+                c"myprog",
                 &[(c"VN".as_ptr(), c"1.0".as_ptr())],
             ),
             0
         );
-        let after = sam_hdr_count_lines(hdr, c"PG".as_ptr());
+        let after = sam_hdr_count_lines(&mut *hdr, c"PG");
         assert_eq!(after, before + 1);
 
         // Now `emacs` is already taken; pg_id should return a uniquified copy
         // (e.g. "emacs.1") rather than the literal input.
-        let unique = sam_hdr_pg_id(hdr, c"emacs".as_ptr());
+        let unique = sam_hdr_pg_id(&mut *hdr, c"emacs");
         assert!(!unique.is_null());
         let unique_bytes = CStr::from_ptr(unique).to_bytes();
         assert_ne!(unique_bytes, b"emacs");
@@ -636,11 +635,11 @@ fn header_text_reflects_added_co_and_removed_rg() {
         // Mutate: add a CO and remove an RG.
         let comment = CString::new("tag-from-test").unwrap();
         assert_eq!(
-            sam_hdr_add_line(hdr, c"CO".as_ptr(), &[(comment.as_ptr(), std::ptr::null())],),
+            sam_hdr_add_line(&mut *hdr, c"CO", &[(comment.as_ptr(), std::ptr::null())],),
             0
         );
         assert_eq!(
-            sam_hdr_remove_line_id(hdr, c"RG".as_ptr(), c"ID".as_ptr(), c"x1".as_ptr(),),
+            sam_hdr_remove_line_id(&mut *hdr, c"RG", c"ID".as_ptr(), c"x1".as_ptr(),),
             0
         );
 

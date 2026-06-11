@@ -787,26 +787,10 @@ pub unsafe fn cram_get_refs(fd: *mut htsFile) -> *mut refs_t {
     cram_cram_external_c_1029_cram_get_refs(fd)
 }
 
-#[repr(C)]
-pub struct cram_string_alloc_string_t {
-    pub str_: *mut c_char,
-    pub used: usize,
-}
-
-#[repr(C)]
-pub struct cram_string_alloc_t {
-    pub max_length: usize,
-    pub nstrings: usize,
-    pub max_strings: usize,
-    pub strings: *mut cram_string_alloc_string_t,
-}
-
-#[repr(C)]
 pub struct mFILE {
-    pub fp: *mut libc::FILE,
-    pub data: *mut c_char,
-    pub alloced: usize,
-    pub eof: c_int,
+    pub fp: Option<*mut libc::FILE>,
+    pub data: Vec<u8>,
+    pub eof: bool,
     pub mode: c_int,
     pub size: usize,
     pub offset: usize,
@@ -822,19 +806,25 @@ pub const MF_MODEX: c_int = 32;
 pub const MF_MMAP: c_int = 64;
 pub const POOLED_ALLOC_PSIZE: usize = 1024 * 1024;
 
-#[repr(C)]
+/// Owned handle for a fixed-size slot carved out of a pool's backing store.
+/// Replaces the C intrusive free-list pointer that threaded through the first
+/// machine word of each slot.
+#[derive(Clone, Copy)]
+pub struct SlotId {
+    pub pool: usize,
+    pub offset: usize,
+}
+
 pub struct pool_t {
-    pub pool: *mut c_void,
+    pub pool: Vec<u8>,
     pub used: usize,
 }
 
 pub struct pool_alloc_t {
     pub dsize: usize,
     pub psize: usize,
-    pub npools: usize,
-    pub pools: *mut pool_t,
-    pub free: *mut c_void,
-    pub(crate) pools_storage: Vec<pool_t>,
+    pub pools: Vec<pool_t>,
+    pub free: Vec<SlotId>,
 }
 
 #[repr(C)]
@@ -863,7 +853,6 @@ struct cram_block_layout {
 // modelled; the complete layout is required so cram_new_container's
 // `calloc(1, sizeof(*c))` allocates the right size and the write-path fields
 // (stats, tags_used, slices, ...) live at the C-correct offsets.
-#[repr(C)]
 pub(crate) struct cram_container_layout {
     pub(crate) length: i32,
     ref_seq_id: i32,
@@ -905,7 +894,7 @@ pub(crate) struct cram_container_layout {
     embed_ref: c_int,
     no_ref: c_int,
     bams: *mut *mut bam1_t,
-    stats: [*mut cram_stats_layout; CRAM_DS_END],
+    stats: [Option<Box<cram_stats_layout>>; CRAM_DS_END],
     tags_used: *mut kh_generic_layout,
     refs_used: *mut c_int,
     crc32: u32,
@@ -1007,7 +996,7 @@ pub(crate) struct cram_slice_layout {
     base_blk: *mut cram_block_layout,
     soft_blk: *mut cram_block_layout,
     aux_blk: *mut cram_block_layout,
-    pair_keys: *mut cram_string_alloc_t,
+    pair_keys: Option<Box<StringPool>>,
     pair: [*mut kh_generic_layout; 2],
     ref_: *mut c_char,
     ref_start: i64,
@@ -1041,7 +1030,7 @@ pub struct cram_file_def_layout {
 }
 
 #[repr(C)]
-pub(crate) struct cram_fd_layout {
+pub struct cram_fd_layout {
     fp: *mut hFILE,
     mode: c_int,
     version: c_int,
@@ -1118,27 +1107,14 @@ pub(crate) struct cram_fd_layout {
     ap_delta: c_int,
 }
 
-#[repr(C)]
-struct hfile_layout {
-    buffer: *mut c_char,
-    begin: *mut c_char,
-    end: *mut c_char,
-    limit: *mut c_char,
-    backend: *const c_void,
-    offset: libc::off_t,
-    flags: c_uint,
-    has_errno: c_int,
-}
-
 const HFILE_MOBILE: c_uint = 1 << 1;
 const CRAM_DEFAULT_LEVEL: c_int = 5;
 const CRAM_DEFAULT_SEQS_PER_SLICE: c_int = 10000;
 const CRAM_DEFAULT_BASES_PER_SLICE: c_int = CRAM_DEFAULT_SEQS_PER_SLICE * 500;
 
-#[repr(C)]
-struct cram_stats_layout {
+pub struct cram_stats_layout {
     freqs: [c_int; 1024],
-    h: *mut c_void,
+    h: Option<Box<kh_m_i2i_layout>>,
     nsamp: c_int,
     nvals: c_int,
     min_val: i64,
@@ -1161,17 +1137,16 @@ struct cram_metrics_layout {
     unpackable: c_int,
 }
 
-#[repr(C)]
 struct ref_entry_layout {
-    name: *mut c_char,
-    fn_: *mut c_char,
+    name: Vec<u8>,
+    fn_: Vec<u8>,
     length: i64,
     ln_length: i64,
     offset: i64,
     bases_per_line: c_int,
     line_length: c_int,
     count: i64,
-    seq: *mut c_char,
+    seq: Vec<u8>,
     mf: *mut mFILE,
     is_md5: c_int,
     validated_md5: c_int,
@@ -1208,13 +1183,12 @@ union pmap_val {
     p: *mut c_char,
 }
 
-#[repr(C)]
-struct refs_t_layout {
-    pool: *mut cram_string_alloc_t,
+pub(crate) struct refs_t_layout {
+    pool: Option<Box<StringPool>>,
     h_meta: *mut kh_refs_layout,
     ref_id: *mut *mut ref_entry_layout,
     nref: c_int,
-    fn_: *mut c_char,
+    fn_: Vec<u8>,
     fp: *mut BGZF,
     count: c_int,
     lock: crate::htslib_rs::c_compat::pthread_mutex_t,
@@ -1240,18 +1214,16 @@ struct cram_codec_base_layout {
     free: Option<CramCodecFreeFn>,
 }
 
-#[repr(C)]
 struct kh_m_i2i_layout {
     n_buckets: u32,
     size: u32,
     n_occupied: u32,
     upper_bound: u32,
-    flags: *mut u32,
-    keys: *mut i64,
-    vals: *mut c_int,
+    flags: Vec<u32>,
+    keys: Vec<i64>,
+    vals: Vec<c_int>,
 }
 
-#[repr(C)]
 pub(crate) struct cram_block_compression_hdr_layout {
     ref_seq_id: i32,
     ref_seq_start: i64,
@@ -1268,7 +1240,7 @@ pub(crate) struct cram_block_compression_hdr_layout {
     ntl: i32,
     tl: *mut *mut u8,
     td_hash: *mut c_void,
-    td_keys: *mut c_void,
+    td_keys: Option<Box<StringPool>>,
     preservation_map: *mut c_void,
     rec_encoding_map: [*mut c_void; 32],
     tag_encoding_map: [*mut c_void; 32],
@@ -3166,50 +3138,39 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
             if num_records < 0 {
                 return std::ptr::null_mut();
             }
-            // sizeof(fqz_slice) + 2*num_records*sizeof(uint32_t).
-            let f_sz = std::mem::size_of::<crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_slice>()
-                + 2 * (num_records as usize) * std::mem::size_of::<u32>();
-            let f =
-                malloc(f_sz as u64).cast::<crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_slice>();
-            if f.is_null() {
-                return std::ptr::null_mut();
-            }
-            (*f).num_records = num_records;
-            let len_ptr = (f as *mut u8)
-                .add(std::mem::size_of::<
-                    crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_slice,
-                >())
-                .cast::<u32>();
-            let flags_ptr = len_ptr.add(num_records as usize);
-            (*f).len = len_ptr;
-            (*f).flags = flags_ptr;
+            // Owned fqz_slice: len/flags are now Vec<u32> holding the same
+            // per-record values the C code stored in the trailing buffer.
+            let mut f = crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_slice {
+                num_records,
+                len: vec![0u32; num_records as usize],
+                flags: vec![0u32; num_records as usize],
+            };
             // DS_QS index (12) — see cram_structs.h.
             const DS_QS_IDX: usize = 12;
             let qs_block = *(*s).block.add(DS_QS_IDX);
             let qs_uncomp = (*qs_block).uncomp_size;
             for i in 0..num_records as isize {
                 let rec = (*s).crecs.offset(i);
-                *(*f).flags.offset(i) = (*rec).flags as u32;
+                f.flags[i as usize] = (*rec).flags as u32;
                 let this_qual = (*rec).qual as i32;
                 let next_qual = if (i + 1) < num_records as isize {
                     (*(*s).crecs.offset(i + 1)).qual as i32
                 } else {
                     qs_uncomp
                 };
-                *(*f).len.offset(i) = (next_qual - this_qual) as u32;
+                f.len[i as usize] = (next_qual - this_qual) as u32;
             }
             // Run fqz_compress (strat & 0xff is cram vers; strat >> 8 is fqz strat).
             let mut out_sz_local: usize = 0;
             let in_slice = std::slice::from_raw_parts_mut(in_.cast::<u8>(), in_size);
             let v = crate::htslib_rs::htscodecs::fqzcomp_qual::fqz_compress(
                 strat & 0xff,
-                &mut *f,
+                &mut f,
                 in_slice,
                 &mut out_sz_local,
                 strat >> 8,
                 None,
             );
-            free(f.cast());
             if v.is_empty() {
                 *out_size = 0;
                 return std::ptr::null_mut();
@@ -3235,16 +3196,25 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
         }
 
         CBMI_RANS0 | CBMI_RANS1 => {
-            let mut out_size_u: c_uint = 0;
             let order: c_int = if method == CBMI_RANS0 { 0 } else { 1 };
-            let cp = crate::htslib_rs::htscodecs::rans_static::rans_compress(
-                in_.cast::<u8>(),
-                in_size as c_uint,
-                &mut out_size_u,
-                order,
-            );
-            *out_size = out_size_u as usize;
-            cp.cast::<c_char>()
+            let input = std::slice::from_raw_parts(in_.cast::<u8>(), in_size);
+            let v = crate::htslib_rs::htscodecs::rans_static::rans_compress(input, order);
+            match v {
+                Some(buf) if !buf.is_empty() => {
+                    *out_size = buf.len();
+                    let p = malloc(buf.len().max(1) as u64).cast::<c_char>();
+                    if p.is_null() {
+                        *out_size = 0;
+                        return std::ptr::null_mut();
+                    }
+                    memcpy(p.cast(), buf.as_ptr().cast(), buf.len() as u64);
+                    p
+                }
+                _ => {
+                    *out_size = 0;
+                    std::ptr::null_mut()
+                }
+            }
         }
 
         CBMI_RANS_PR0 | CBMI_RANS_PR1 | CBMI_RANS_PR64 | CBMI_RANS_PR9 | CBMI_RANS_PR128
@@ -3312,7 +3282,7 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
                 lev = 3;
             }
             let use_arith = if method == CBMI_TOK3 { 0 } else { 1 };
-            let blk = std::slice::from_raw_parts_mut(in_, in_size);
+            let blk = std::slice::from_raw_parts_mut(in_.cast::<u8>(), in_size);
             let v = crate::htslib_rs::htscodecs::tokenise_name3::tok3_encode_names(
                 blk,
                 in_size as i32,
@@ -4506,55 +4476,48 @@ mod tests {
 
     #[test]
     fn cram_string_pool_allocates_duplicates_and_grows_like_c_allocator() {
-        unsafe {
-            let pool = cram_string_alloc_c_55_string_pool_create(8);
-            assert!(!pool.is_null());
-            assert_eq!((*pool).max_length, CRAM_STRING_ALLOC_MIN_STR_SIZE);
-            assert_eq!((*pool).nstrings, 0);
+        let mut pool = cram_string_alloc_c_55_string_pool_create(8);
+        assert_eq!(pool.max_length, CRAM_STRING_ALLOC_MIN_STR_SIZE);
+        assert_eq!(pool.nstrings(), 0);
 
-            let input = CString::new("alpha").unwrap();
-            let dup = cram_string_alloc_c_149_string_dup(pool, input.as_ptr());
-            assert!(!dup.is_null());
-            assert_eq!(CStr::from_ptr(dup).to_bytes(), b"alpha");
-            assert_eq!((*pool).nstrings, 1);
-            assert_eq!((*(*pool).strings).used, 6);
+        let dup = cram_string_alloc_c_149_string_dup(&mut pool, b"alpha");
+        let dup = dup.expect("dup should allocate");
+        assert_eq!(&dup[..5], b"alpha");
+        assert_eq!(dup[5], 0);
+        assert_eq!(pool.nstrings(), 1);
+        assert_eq!(pool.used_of(0), Some(6));
 
-            let beta = CString::new("betamax").unwrap();
-            let nduped = cram_string_alloc_c_153_string_ndup(pool, beta.as_ptr(), 4);
-            assert!(!nduped.is_null());
-            assert_eq!(CStr::from_ptr(nduped).to_bytes(), b"beta");
-            assert_eq!((*pool).nstrings, 1);
+        let nduped = cram_string_alloc_c_153_string_ndup(&mut pool, b"betamax", 4);
+        let nduped = nduped.expect("ndup should allocate");
+        assert_eq!(&nduped[..4], b"beta");
+        assert_eq!(nduped[4], 0);
+        assert_eq!(pool.nstrings(), 1);
 
-            let oversized = cram_string_alloc_c_117_string_alloc(pool, 2048);
-            assert!(!oversized.is_null());
-            assert_eq!((*pool).max_length, 2048);
-            assert_eq!((*pool).nstrings, 2);
+        let oversized = cram_string_alloc_c_117_string_alloc(&mut pool, 2048);
+        assert!(oversized.is_some());
+        assert_eq!(pool.max_length, 2048);
+        assert_eq!(pool.nstrings(), 2);
 
-            assert!(cram_string_alloc_c_117_string_alloc(pool, 0).is_null());
-            cram_string_alloc_c_103_string_pool_destroy(pool);
-        }
+        assert!(cram_string_alloc_c_117_string_alloc(&mut pool, 0).is_none());
+        cram_string_alloc_c_103_string_pool_destroy(pool);
     }
 
     #[test]
     fn cram_string_pool_exact_fit_starts_new_slab_like_c_allocator() {
-        unsafe {
-            let pool = cram_string_alloc_c_55_string_pool_create(CRAM_STRING_ALLOC_MIN_STR_SIZE);
-            assert!(!pool.is_null());
+        let mut pool = cram_string_alloc_c_55_string_pool_create(CRAM_STRING_ALLOC_MIN_STR_SIZE);
 
-            let first =
-                cram_string_alloc_c_117_string_alloc(pool, CRAM_STRING_ALLOC_MIN_STR_SIZE - 1);
-            assert!(!first.is_null());
-            assert_eq!((*pool).nstrings, 1);
-            assert_eq!((*(*pool).strings).used, CRAM_STRING_ALLOC_MIN_STR_SIZE - 1);
+        let first =
+            cram_string_alloc_c_117_string_alloc(&mut pool, CRAM_STRING_ALLOC_MIN_STR_SIZE - 1);
+        assert!(first.is_some());
+        assert_eq!(pool.nstrings(), 1);
+        assert_eq!(pool.used_of(0), Some(CRAM_STRING_ALLOC_MIN_STR_SIZE - 1));
 
-            let second = cram_string_alloc_c_117_string_alloc(pool, 1);
-            assert!(!second.is_null());
-            assert_eq!((*pool).nstrings, 2);
-            assert_eq!((*(*pool).strings.add(1)).used, 1);
-            assert_ne!(first, second);
+        let second = cram_string_alloc_c_117_string_alloc(&mut pool, 1);
+        assert!(second.is_some());
+        assert_eq!(pool.nstrings(), 2);
+        assert_eq!(pool.used_of(1), Some(1));
 
-            cram_string_alloc_c_103_string_pool_destroy(pool);
-        }
+        cram_string_alloc_c_103_string_pool_destroy(pool);
     }
 
     #[test]
@@ -4608,7 +4571,7 @@ mod tests {
     #[test]
     fn cram_encode_expected_template_count_uses_flags_tc_and_sa_tags() {
         unsafe {
-            let mut data = vec![0, b'T', b'C', b'C', 5];
+            let data = vec![0, b'T', b'C', b'C', 5];
             let mut b = bam1_t {
                 core: bam1_core_t {
                     pos: 0,
@@ -4625,32 +4588,26 @@ mod tests {
                     isize: 0,
                 },
                 id: 0,
-                data: data.as_mut_ptr(),
-                l_data: data.len() as c_int,
-                m_data: data.len() as u32,
+                data,
                 mempolicy_and_reserved: 0,
             };
 
             assert_eq!(
                 cram_cram_encode_c_1246_bam_data_end(&mut b).cast::<u8>(),
-                b.data.add(b.l_data as usize)
+                b.data.as_mut_ptr().add(b.data.len())
             );
             assert_eq!(cram_cram_encode_c_1301_expected_template_count(&mut b), 5);
 
-            let mut sa_data = vec![0, b'S', b'A', b'Z', b'r', b';', 0];
+            let sa_data = vec![0, b'S', b'A', b'Z', b'r', b';', 0];
             b.core.flag = 0;
-            b.data = sa_data.as_mut_ptr();
-            b.l_data = sa_data.len() as c_int;
-            b.m_data = sa_data.len() as u32;
+            b.data = sa_data;
             assert_eq!(
                 cram_cram_encode_c_1301_expected_template_count(&mut b),
                 c_int::MAX
             );
 
-            let mut no_aux = vec![0];
-            b.data = no_aux.as_mut_ptr();
-            b.l_data = no_aux.len() as c_int;
-            b.m_data = no_aux.len() as u32;
+            let no_aux = vec![0];
+            b.data = no_aux;
             assert_eq!(cram_cram_encode_c_1301_expected_template_count(&mut b), 1);
         }
     }
@@ -5012,7 +4969,7 @@ mod tests {
                 refs,
                 ..std::mem::zeroed()
             };
-            let mut fp: htsFile = std::mem::zeroed();
+            let mut fp: htsFile = htsFile::default();
             fp.fp = crate::htslib_rs::hts::htsFilePtr {
                 cram: (&mut cram_fd as *mut cram_fd_layout).cast(),
             };
@@ -5814,19 +5771,19 @@ mod tests {
     #[test]
     fn cram_io_crc_varint_and_int32_helpers_match_c_layout() {
         unsafe {
-            let mut input = [0x81u8, 0x80, 0x00, 0x01, 0x81, 0x80, 0x80, 0x80, 0x00];
-            let mut hfile = hfile_layout {
-                buffer: input.as_mut_ptr().cast(),
-                begin: input.as_mut_ptr().cast(),
-                end: input.as_mut_ptr().add(input.len()).cast(),
-                limit: input.as_mut_ptr().add(input.len()).cast(),
-                backend: std::ptr::null(),
+            let input = [0x81u8, 0x80, 0x00, 0x01, 0x81, 0x80, 0x80, 0x80, 0x00];
+            let mut hfile = hFILE {
+                buffer: input.to_vec(),
+                begin: 0,
+                end: input.len(),
+                limit: input.len(),
+                backend: crate::htslib_rs::hfile::HFileBackend::None,
                 offset: 0,
                 flags: 0,
                 has_errno: 0,
             };
             let mut fd: cram_fd_layout = std::mem::zeroed();
-            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            fd.fp = &mut hfile as *mut hFILE;
 
             let mut crc = 0u32;
             let mut val32 = 0i32;
@@ -5877,11 +5834,11 @@ mod tests {
             );
             assert_eq!(hfile.begin, hfile.end);
 
-            let mut int_bytes = [0x78u8, 0x56, 0x34, 0x12];
-            hfile.buffer = int_bytes.as_mut_ptr().cast();
-            hfile.begin = int_bytes.as_mut_ptr().cast();
-            hfile.end = int_bytes.as_mut_ptr().add(int_bytes.len()).cast();
-            hfile.limit = hfile.end;
+            let int_bytes = [0x78u8, 0x56, 0x34, 0x12];
+            hfile.buffer = int_bytes.to_vec();
+            hfile.begin = 0;
+            hfile.end = int_bytes.len();
+            hfile.limit = int_bytes.len();
             let mut int_val = 0i32;
             assert_eq!(
                 cram_cram_io_c_1005_int32_decode(
@@ -5893,17 +5850,16 @@ mod tests {
             assert_eq!(int_val, 0x1234_5678);
             assert_eq!(hfile.begin, hfile.end);
 
-            let mut out = [0u8; 8];
-            hfile.buffer = out.as_mut_ptr().cast();
-            hfile.begin = out.as_mut_ptr().cast();
-            hfile.end = out.as_mut_ptr().cast();
-            hfile.limit = out.as_mut_ptr().add(out.len()).cast();
+            hfile.buffer = vec![0u8; 8];
+            hfile.begin = 0;
+            hfile.end = 0;
+            hfile.limit = 8;
             assert_eq!(
                 cram_cram_io_c_1020_int32_encode((&mut fd as *mut cram_fd_layout).cast(), -2i32,),
                 4
             );
-            assert_eq!(&out[..4], &[0xfe, 0xff, 0xff, 0xff]);
-            assert_eq!(hfile.begin, out.as_mut_ptr().add(4).cast());
+            assert_eq!(&hfile.buffer[..4], &[0xfe, 0xff, 0xff, 0xff]);
+            assert_eq!(hfile.begin, 4);
 
             let b = cram_cram_io_c_1388_cram_new_block(
                 crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
@@ -6177,18 +6133,18 @@ mod tests {
             header[5] = 1;
             header[6..].copy_from_slice(b"abcdefghijklmnopqrst");
 
-            let mut hfile = hfile_layout {
-                buffer: header.as_mut_ptr().cast(),
-                begin: header.as_mut_ptr().cast(),
-                end: header.as_mut_ptr().add(header.len()).cast(),
-                limit: header.as_mut_ptr().add(header.len()).cast(),
-                backend: std::ptr::null(),
+            let mut hfile = hFILE {
+                buffer: header.to_vec(),
+                begin: 0,
+                end: header.len(),
+                limit: header.len(),
+                backend: crate::htslib_rs::hfile::HFileBackend::None,
                 offset: 0,
                 flags: 0,
                 has_errno: 0,
             };
             let mut fd: cram_fd_layout = std::mem::zeroed();
-            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            fd.fp = &mut hfile as *mut hFILE;
             fd.first_container = 11;
             fd.curr_position = 5;
             fd.last_slice = 99;
@@ -6211,18 +6167,17 @@ mod tests {
             assert_eq!(fd.last_slice, 0);
             cram_cram_io_c_4698_cram_free_file_def(def);
 
-            let mut out = [0u8; 32];
-            let mut out_hfile = hfile_layout {
-                buffer: out.as_mut_ptr().cast(),
-                begin: out.as_mut_ptr().cast(),
-                end: out.as_mut_ptr().cast(),
-                limit: out.as_mut_ptr().add(out.len()).cast(),
-                backend: std::ptr::null(),
+            let mut out_hfile = hFILE {
+                buffer: vec![0u8; 32],
+                begin: 0,
+                end: 0,
+                limit: 32,
+                backend: crate::htslib_rs::hfile::HFileBackend::None,
                 offset: 0,
                 flags: 0,
                 has_errno: 0,
             };
-            fd.fp = (&mut out_hfile as *mut hfile_layout).cast();
+            fd.fp = &mut out_hfile as *mut hFILE;
             let mut write_def = cram_file_def_layout {
                 magic: [
                     b'C' as c_char,
@@ -6247,17 +6202,17 @@ mod tests {
                 ),
                 0
             );
-            assert_eq!(&out[..6], b"CRAM\x03\0");
-            assert_eq!(&out[6..10], b"test");
-            assert_eq!(out_hfile.begin, out.as_mut_ptr().add(26).cast());
+            assert_eq!(&out_hfile.buffer[..6], b"CRAM\x03\0");
+            assert_eq!(&out_hfile.buffer[6..10], b"test");
+            assert_eq!(out_hfile.begin, 26);
 
             let mut bad_magic = header;
             bad_magic[0] = b'X';
-            hfile.buffer = bad_magic.as_mut_ptr().cast();
-            hfile.begin = bad_magic.as_mut_ptr().cast();
-            hfile.end = bad_magic.as_mut_ptr().add(bad_magic.len()).cast();
-            hfile.limit = hfile.end;
-            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            hfile.buffer = bad_magic.to_vec();
+            hfile.begin = 0;
+            hfile.end = bad_magic.len();
+            hfile.limit = bad_magic.len();
+            fd.fp = &mut hfile as *mut hFILE;
             assert!(cram_cram_io_c_4660_cram_read_file_def(
                 (&mut fd as *mut cram_fd_layout).cast()
             )
@@ -6265,20 +6220,21 @@ mod tests {
 
             let mut bad_version = header;
             bad_version[4] = 5;
-            hfile.buffer = bad_version.as_mut_ptr().cast();
-            hfile.begin = bad_version.as_mut_ptr().cast();
-            hfile.end = bad_version.as_mut_ptr().add(bad_version.len()).cast();
-            hfile.limit = hfile.end;
-            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            hfile.buffer = bad_version.to_vec();
+            hfile.begin = 0;
+            hfile.end = bad_version.len();
+            hfile.limit = bad_version.len();
+            fd.fp = &mut hfile as *mut hFILE;
             assert!(cram_cram_io_c_4660_cram_read_file_def(
                 (&mut fd as *mut cram_fd_layout).cast()
             )
             .is_null());
 
-            hfile.begin = header.as_mut_ptr().cast();
-            hfile.end = header.as_mut_ptr().add(25).cast();
-            hfile.limit = header.as_mut_ptr().add(header.len()).cast();
-            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            hfile.buffer = header.to_vec();
+            hfile.begin = 0;
+            hfile.end = 25;
+            hfile.limit = header.len();
+            fd.fp = &mut hfile as *mut hFILE;
             assert!(cram_cram_io_c_4660_cram_read_file_def(
                 (&mut fd as *mut cram_fd_layout).cast()
             )
@@ -6291,19 +6247,18 @@ mod tests {
     #[test]
     fn cram_io_read_write_raw_block_round_trips_v4_layout() {
         unsafe {
-            let mut hfile_buf = [0u8; 64];
-            let mut hfile = hfile_layout {
-                buffer: hfile_buf.as_mut_ptr().cast(),
-                begin: hfile_buf.as_mut_ptr().cast(),
-                end: hfile_buf.as_mut_ptr().cast(),
-                limit: hfile_buf.as_mut_ptr().add(hfile_buf.len()).cast(),
-                backend: std::ptr::null(),
+            let mut hfile = hFILE {
+                buffer: vec![0u8; 64],
+                begin: 0,
+                end: 0,
+                limit: 64,
+                backend: crate::htslib_rs::hfile::HFileBackend::None,
                 offset: 0,
                 flags: 0,
                 has_errno: 0,
             };
             let mut fd: cram_fd_layout = std::mem::zeroed();
-            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            fd.fp = &mut hfile as *mut hFILE;
             fd.version = 4 << 8;
 
             let b = cram_cram_io_c_1388_cram_new_block(
@@ -6325,17 +6280,17 @@ mod tests {
                 cram_cram_io_c_1511_cram_write_block((&mut fd as *mut cram_fd_layout).cast(), b),
                 0
             );
-            let written = hfile.begin.offset_from(hfile_buf.as_mut_ptr().cast()) as usize;
-            assert_eq!(&hfile_buf[..8], &[0, 4, 7, 3, 3, b'a', b'b', b'c']);
+            let written = hfile.begin;
+            assert_eq!(&hfile.buffer[..8], &[0, 4, 7, 3, 3, b'a', b'b', b'c']);
             assert_eq!(written, 12);
-            let expected_crc = crate::htslib_rs::bgzf::hts_crc32(0, hfile_buf.as_ptr().cast(), 8);
+            let expected_crc = crate::htslib_rs::bgzf::hts_crc32(0, hfile.buffer.as_ptr().cast(), 8);
             assert_eq!(
-                u32::from_le_bytes(hfile_buf[8..12].try_into().unwrap()),
+                u32::from_le_bytes(hfile.buffer[8..12].try_into().unwrap()),
                 expected_crc
             );
 
-            hfile.begin = hfile_buf.as_mut_ptr().cast();
-            hfile.end = hfile_buf.as_mut_ptr().add(written).cast();
+            hfile.begin = 0;
+            hfile.end = written;
             let rb = cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
             assert!(!rb.is_null());
             let read_block = rb.cast::<cram_block_layout>();
@@ -6383,18 +6338,18 @@ mod tests {
                 0,
                 0,
             ];
-            let mut hfile = hfile_layout {
-                buffer: bytes.as_mut_ptr().cast(),
-                begin: bytes.as_mut_ptr().cast(),
-                end: bytes.as_mut_ptr().add(bytes.len()).cast(),
-                limit: bytes.as_mut_ptr().add(bytes.len()).cast(),
-                backend: std::ptr::null(),
+            let mut hfile = hFILE {
+                buffer: bytes.to_vec(),
+                begin: 0,
+                end: bytes.len(),
+                limit: bytes.len(),
+                backend: crate::htslib_rs::hfile::HFileBackend::None,
                 offset: 0,
                 flags: 0,
                 has_errno: 0,
             };
             let mut fd: cram_fd_layout = std::mem::zeroed();
-            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            fd.fp = &mut hfile as *mut hFILE;
             fd.version = 4 << 8;
 
             let b = cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
@@ -6430,18 +6385,18 @@ mod tests {
                 0,
                 0,
             ];
-            let mut hfile = hfile_layout {
-                buffer: bytes.as_mut_ptr().cast(),
-                begin: bytes.as_mut_ptr().cast(),
-                end: bytes.as_mut_ptr().add(bytes.len()).cast(),
-                limit: bytes.as_mut_ptr().add(bytes.len()).cast(),
-                backend: std::ptr::null(),
+            let mut hfile = hFILE {
+                buffer: bytes.to_vec(),
+                begin: 0,
+                end: bytes.len(),
+                limit: bytes.len(),
+                backend: crate::htslib_rs::hfile::HFileBackend::None,
                 offset: 0,
                 flags: 0,
                 has_errno: 0,
             };
             let mut fd: cram_fd_layout = std::mem::zeroed();
-            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            fd.fp = &mut hfile as *mut hFILE;
             fd.version = 4 << 8;
             fd.ignore_md5 = 1;
 
@@ -6463,53 +6418,44 @@ mod tests {
     #[test]
     fn cram_io_read_block_rejects_invalid_method_and_raw_size_mismatch() {
         unsafe {
-            let mut invalid_method = [9u8];
-            let mut hfile = hfile_layout {
-                buffer: invalid_method.as_mut_ptr().cast(),
-                begin: invalid_method.as_mut_ptr().cast(),
-                end: invalid_method.as_mut_ptr().add(invalid_method.len()).cast(),
-                limit: invalid_method.as_mut_ptr().add(invalid_method.len()).cast(),
-                backend: std::ptr::null(),
+            let invalid_method = [9u8];
+            let mut hfile = hFILE {
+                buffer: invalid_method.to_vec(),
+                begin: 0,
+                end: invalid_method.len(),
+                limit: invalid_method.len(),
+                backend: crate::htslib_rs::hfile::HFileBackend::None,
                 offset: 0,
                 flags: 0,
                 has_errno: 0,
             };
             let mut fd: cram_fd_layout = std::mem::zeroed();
-            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            fd.fp = &mut hfile as *mut hFILE;
             fd.version = 4 << 8;
 
             assert!(
                 cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast())
                     .is_null()
             );
-            assert_eq!(
-                hfile.begin,
-                invalid_method.as_mut_ptr().add(1).cast::<c_char>()
-            );
+            assert_eq!(hfile.begin, 1);
 
-            let mut raw_mismatch = [
+            let raw_mismatch = [
                 crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW as u8,
                 crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL as u8,
                 0,
                 1,
                 2,
             ];
-            hfile.buffer = raw_mismatch.as_mut_ptr().cast();
-            hfile.begin = raw_mismatch.as_mut_ptr().cast();
-            hfile.end = raw_mismatch.as_mut_ptr().add(raw_mismatch.len()).cast();
-            hfile.limit = hfile.end;
+            hfile.buffer = raw_mismatch.to_vec();
+            hfile.begin = 0;
+            hfile.end = raw_mismatch.len();
+            hfile.limit = raw_mismatch.len();
 
             assert!(
                 cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast())
                     .is_null()
             );
-            assert_eq!(
-                hfile.begin,
-                raw_mismatch
-                    .as_mut_ptr()
-                    .add(raw_mismatch.len())
-                    .cast::<c_char>()
-            );
+            assert_eq!(hfile.begin, raw_mismatch.len());
         }
     }
 
@@ -6517,19 +6463,18 @@ mod tests {
     fn cram_io_write_absent_raw_zero_block_round_trips_v3_and_v4() {
         unsafe {
             for version in [3, 4] {
-                let mut hfile_buf = [0u8; 32];
-                let mut hfile = hfile_layout {
-                    buffer: hfile_buf.as_mut_ptr().cast(),
-                    begin: hfile_buf.as_mut_ptr().cast(),
-                    end: hfile_buf.as_mut_ptr().cast(),
-                    limit: hfile_buf.as_mut_ptr().add(hfile_buf.len()).cast(),
-                    backend: std::ptr::null(),
+                let mut hfile = hFILE {
+                    buffer: vec![0u8; 32],
+                    begin: 0,
+                    end: 0,
+                    limit: 32,
+                    backend: crate::htslib_rs::hfile::HFileBackend::None,
                     offset: 0,
                     flags: 0,
                     has_errno: 0,
                 };
                 let mut fd: cram_fd_layout = std::mem::zeroed();
-                fd.fp = (&mut hfile as *mut hfile_layout).cast();
+                fd.fp = &mut hfile as *mut hFILE;
                 fd.version = version << 8;
 
                 let b = cram_cram_io_c_1388_cram_new_block(
@@ -6555,20 +6500,20 @@ mod tests {
                     ),
                     0
                 );
-                let written = hfile.begin.offset_from(hfile_buf.as_mut_ptr().cast()) as usize;
+                let written = hfile.begin;
                 assert_eq!(written, 9);
-                assert_eq!(&hfile_buf[..5], &[0, 4, 0, 0, 0]);
+                assert_eq!(&hfile.buffer[..5], &[0, 4, 0, 0, 0]);
                 let expected_crc =
-                    crate::htslib_rs::bgzf::hts_crc32(0, hfile_buf.as_ptr().cast(), 5);
+                    crate::htslib_rs::bgzf::hts_crc32(0, hfile.buffer.as_ptr().cast(), 5);
                 assert_eq!(
-                    u32::from_le_bytes(hfile_buf[5..9].try_into().unwrap()),
+                    u32::from_le_bytes(hfile.buffer[5..9].try_into().unwrap()),
                     expected_crc
                 );
 
-                hfile.begin = hfile_buf.as_mut_ptr().cast();
-                hfile.end = hfile_buf.as_mut_ptr().add(written).cast();
-                assert_eq!(hfile.begin, hfile_buf.as_mut_ptr().cast());
-                assert_eq!(hfile.end, hfile_buf.as_mut_ptr().add(written).cast());
+                hfile.begin = 0;
+                hfile.end = written;
+                assert_eq!(hfile.begin, 0);
+                assert_eq!(hfile.end, written);
                 let rb =
                     cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
                 assert!(!rb.is_null());
@@ -6610,18 +6555,18 @@ mod tests {
                 0xde,
                 0xad,
             ];
-            let mut hfile = hfile_layout {
-                buffer: bytes.as_mut_ptr().cast(),
-                begin: bytes.as_mut_ptr().cast(),
-                end: bytes.as_mut_ptr().add(bytes.len()).cast(),
-                limit: bytes.as_mut_ptr().add(bytes.len()).cast(),
-                backend: std::ptr::null(),
+            let mut hfile = hFILE {
+                buffer: bytes.to_vec(),
+                begin: 0,
+                end: bytes.len(),
+                limit: bytes.len(),
+                backend: crate::htslib_rs::hfile::HFileBackend::None,
                 offset: 0,
                 flags: 0,
                 has_errno: 0,
             };
             let mut fd: cram_fd_layout = std::mem::zeroed();
-            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            fd.fp = &mut hfile as *mut hFILE;
             fd.version = 2 << 8;
 
             let b = cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
@@ -6641,7 +6586,7 @@ mod tests {
                 std::slice::from_raw_parts((*block).data, (*block).alloc),
                 b"xyz"
             );
-            assert_eq!(hfile.begin, bytes.as_mut_ptr().add(8).cast::<c_char>());
+            assert_eq!(hfile.begin, 8);
 
             cram_cram_io_c_1565_cram_free_block(b);
         }
@@ -6660,18 +6605,18 @@ mod tests {
                 0xde,
                 0xad,
             ];
-            let mut hfile = hfile_layout {
-                buffer: bytes.as_mut_ptr().cast(),
-                begin: bytes.as_mut_ptr().cast(),
-                end: bytes.as_mut_ptr().add(bytes.len()).cast(),
-                limit: bytes.as_mut_ptr().add(bytes.len()).cast(),
-                backend: std::ptr::null(),
+            let mut hfile = hFILE {
+                buffer: bytes.to_vec(),
+                begin: 0,
+                end: bytes.len(),
+                limit: bytes.len(),
+                backend: crate::htslib_rs::hfile::HFileBackend::None,
                 offset: 0,
                 flags: 0,
                 has_errno: 0,
             };
             let mut fd: cram_fd_layout = std::mem::zeroed();
-            fd.fp = (&mut hfile as *mut hfile_layout).cast();
+            fd.fp = &mut hfile as *mut hFILE;
             fd.version = 2 << 8;
 
             let b = cram_cram_io_c_1414_cram_read_block((&mut fd as *mut cram_fd_layout).cast());
@@ -6682,7 +6627,7 @@ mod tests {
             assert_eq!((*block).uncomp_size, 0);
             assert_eq!((*block).alloc, 0);
             assert!((*block).data.is_null());
-            assert_eq!(hfile.begin, bytes.as_mut_ptr().add(6).cast::<c_char>());
+            assert_eq!(hfile.begin, 6);
 
             cram_cram_io_c_1565_cram_free_block(b);
         }
@@ -6837,7 +6782,7 @@ mod tests {
             let layout = hdr.cast::<cram_block_compression_hdr_layout>();
             assert!(!(*layout).td_blk.is_null());
             assert!(!(*layout).td_hash.is_null());
-            assert!(!(*layout).td_keys.is_null());
+            assert!((*layout).td_keys.is_some());
             assert_eq!((*layout).ntl, 0);
             assert!((*layout).tl.is_null());
             assert!((*layout).preservation_map.is_null());
@@ -6851,9 +6796,9 @@ mod tests {
                 crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE
             );
             assert_eq!((*block).content_id, 0);
-            let pool = (*layout).td_keys.cast::<cram_string_alloc_t>();
-            assert_eq!((*pool).max_length, 8192);
-            assert_eq!((*pool).nstrings, 0);
+            let pool = (*layout).td_keys.as_ref().expect("td_keys pool");
+            assert_eq!(pool.max_length, 8192);
+            assert_eq!(pool.nstrings(), 0);
 
             cram_cram_io_c_4356_cram_free_compression_header(hdr);
             cram_cram_io_c_4356_cram_free_compression_header(std::ptr::null_mut());
@@ -6905,19 +6850,16 @@ mod tests {
     #[test]
     fn cram_io_ref_entry_free_seq_closes_or_frees_sequence_like_c() {
         unsafe {
-            let seq = malloc(4).cast::<c_char>();
-            assert!(!seq.is_null());
-            std::ptr::copy_nonoverlapping(c"ACG".as_ptr(), seq, 4);
             let mut heap_entry = ref_entry_layout {
-                name: std::ptr::null_mut(),
-                fn_: std::ptr::null_mut(),
+                name: Vec::new(),
+                fn_: Vec::new(),
                 length: 0,
                 ln_length: 0,
                 offset: 0,
                 bases_per_line: 0,
                 line_length: 0,
                 count: 0,
-                seq,
+                seq: b"ACG\0".to_vec(),
                 mf: std::ptr::null_mut(),
                 is_md5: 0,
                 validated_md5: 0,
@@ -6925,7 +6867,7 @@ mod tests {
             cram_cram_io_c_2417_ref_entry_free_seq(
                 (&mut heap_entry as *mut ref_entry_layout).cast(),
             );
-            assert!(heap_entry.seq.is_null());
+            assert!(heap_entry.seq.is_empty());
             assert!(heap_entry.mf.is_null());
 
             let mf_data = malloc(4).cast::<c_char>();
@@ -6934,15 +6876,15 @@ mod tests {
             let mf = cram_mFILE_c_207_mfcreate(mf_data, 4);
             assert!(!mf.is_null());
             let mut mfile_entry = ref_entry_layout {
-                name: std::ptr::null_mut(),
-                fn_: std::ptr::null_mut(),
+                name: Vec::new(),
+                fn_: Vec::new(),
                 length: 0,
                 ln_length: 0,
                 offset: 0,
                 bases_per_line: 0,
                 line_length: 0,
                 count: 0,
-                seq: mf_data,
+                seq: b"TGA\0".to_vec(),
                 mf,
                 is_md5: 0,
                 validated_md5: 0,
@@ -6950,7 +6892,7 @@ mod tests {
             cram_cram_io_c_2417_ref_entry_free_seq(
                 (&mut mfile_entry as *mut ref_entry_layout).cast(),
             );
-            assert!(mfile_entry.seq.is_null());
+            assert!(mfile_entry.seq.is_empty());
             assert!(mfile_entry.mf.is_null());
         }
     }
@@ -6961,16 +6903,16 @@ mod tests {
             let r = cram_cram_io_c_2467_refs_create();
             assert!(!r.is_null());
             let refs = r.cast::<refs_t_layout>();
-            assert!(!(*refs).pool.is_null());
+            assert!((*refs).pool.is_some());
             assert!(!(*refs).h_meta.is_null());
             assert!((*refs).ref_id.is_null());
             assert_eq!((*refs).nref, 0);
-            assert!((*refs).fn_.is_null());
+            assert!((*refs).fn_.is_empty());
             assert!((*refs).fp.is_null());
             assert_eq!((*refs).count, 1);
             assert!((*refs).last.is_null());
             assert_eq!((*refs).last_id, -1);
-            assert_eq!((*(*refs).pool).max_length, 8192);
+            assert_eq!((*refs).pool.as_ref().unwrap().max_length, 8192);
             assert_eq!((*(*refs).h_meta).n_buckets, 0);
 
             (*refs).count = 2;
@@ -7000,9 +6942,8 @@ mod tests {
             let entry = calloc(1, std::mem::size_of::<ref_entry_layout>() as u64)
                 .cast::<ref_entry_layout>();
             assert!(!entry.is_null());
-            (*entry).seq = malloc(4).cast::<c_char>();
-            assert!(!(*entry).seq.is_null());
-            std::ptr::copy_nonoverlapping(c"NNN".as_ptr(), (*entry).seq, 4);
+            (*entry).seq = b"NNN\0".to_vec();
+            assert!(!(*entry).seq.is_empty());
             *(*h).vals = entry;
 
             (*refs).ref_id = malloc(std::mem::size_of::<*mut ref_entry_layout>() as u64)
@@ -7027,11 +6968,10 @@ mod tests {
             let _ = std::fs::remove_file(&fai);
             std::fs::write(&path, b">chr1\nACGTACGT\n").unwrap();
 
-            let uri = CString::new(format!("file://{}", path.to_string_lossy())).unwrap();
-            let mut uri_bytes = uri.into_bytes_with_nul();
+            let uri = format!("file://{}", path.to_string_lossy()).into_bytes();
             let mode = CString::new("r").unwrap();
             let fp = cram_cram_io_c_2503_bgzf_open_ref(
-                uri_bytes.as_mut_ptr().cast::<c_char>(),
+                &uri,
                 mode.as_ptr().cast_mut(),
                 0,
             );
@@ -7062,10 +7002,10 @@ mod tests {
                 .cast::<ref_entry_layout>();
             assert!(!entry0.is_null());
             assert!(!entry1.is_null());
-            (*entry0).seq = malloc(4).cast::<c_char>();
-            (*entry1).seq = malloc(4).cast::<c_char>();
-            assert!(!(*entry0).seq.is_null());
-            assert!(!(*entry1).seq.is_null());
+            (*entry0).seq = vec![0u8; 4];
+            (*entry1).seq = vec![0u8; 4];
+            assert!(!(*entry0).seq.is_empty());
+            assert!(!(*entry1).seq.is_empty());
             (*entry0).length = 8;
             (*entry0).is_md5 = 1;
             (*entry0).count = 0;
@@ -7083,12 +7023,12 @@ mod tests {
             cram_cram_io_c_3213_cram_ref_decr(r, 0);
             assert_eq!((*entry0).count, 0);
             assert_eq!((*refs).last_id, 0);
-            assert!(!(*entry0).seq.is_null());
+            assert!(!(*entry0).seq.is_empty());
 
             cram_cram_io_c_3213_cram_ref_decr(r, 1);
             assert_eq!((*entry1).count, 0);
             assert_eq!((*refs).last_id, 1);
-            assert!((*entry0).seq.is_null());
+            assert!((*entry0).seq.is_empty());
             assert_eq!((*entry0).length, 0);
 
             cram_cram_io_c_2417_ref_entry_free_seq(entry1.cast());
@@ -7102,23 +7042,32 @@ mod tests {
     fn cram_reference_incr_decr_ignore_null_entries_and_unloaded_sequences() {
         unsafe {
             let mut unloaded = ref_entry_layout {
-                name: std::ptr::null_mut(),
-                fn_: std::ptr::null_mut(),
+                name: Vec::new(),
+                fn_: Vec::new(),
                 length: 0,
                 ln_length: 0,
                 offset: 0,
                 bases_per_line: 0,
                 line_length: 0,
                 count: 7,
-                seq: std::ptr::null_mut(),
+                seq: Vec::new(),
                 mf: std::ptr::null_mut(),
                 is_md5: 0,
                 validated_md5: 0,
             };
             let mut ref_id = [std::ptr::null_mut(), &mut unloaded as *mut ref_entry_layout];
-            let mut refs: refs_t_layout = std::mem::zeroed();
-            refs.ref_id = ref_id.as_mut_ptr();
-            refs.last_id = 1;
+            let mut refs = refs_t_layout {
+                pool: None,
+                h_meta: std::ptr::null_mut(),
+                ref_id: ref_id.as_mut_ptr(),
+                nref: 0,
+                fn_: Vec::new(),
+                fp: std::ptr::null_mut(),
+                count: 0,
+                lock: crate::htslib_rs::c_compat::PTHREAD_MUTEX_INITIALIZER,
+                last: std::ptr::null_mut(),
+                last_id: 1,
+            };
 
             cram_cram_io_c_3169_cram_ref_incr_locked((&mut refs as *mut refs_t_layout).cast(), 0);
             cram_cram_io_c_3189_cram_ref_decr_locked((&mut refs as *mut refs_t_layout).cast(), 0);
@@ -7154,15 +7103,15 @@ mod tests {
             let raw_fp = bgzf_open(raw_c.as_ptr(), c"r".as_ptr());
             assert!(!raw_fp.is_null());
             let mut raw_entry = ref_entry_layout {
-                name: std::ptr::null_mut(),
-                fn_: std::ptr::null_mut(),
+                name: Vec::new(),
+                fn_: Vec::new(),
                 length: 0,
                 ln_length: 0,
                 offset: 0,
                 bases_per_line: 0,
                 line_length: 0,
                 count: 0,
-                seq: std::ptr::null_mut(),
+                seq: Vec::new(),
                 mf: std::ptr::null_mut(),
                 is_md5: 0,
                 validated_md5: 0,
@@ -7182,15 +7131,15 @@ mod tests {
             let wrapped_fp = bgzf_open(wrapped_c.as_ptr(), c"r".as_ptr());
             assert!(!wrapped_fp.is_null());
             let mut wrapped_entry = ref_entry_layout {
-                name: std::ptr::null_mut(),
-                fn_: std::ptr::null_mut(),
+                name: Vec::new(),
+                fn_: Vec::new(),
                 length: 0,
                 ln_length: 0,
                 offset: 6,
                 bases_per_line: 3,
                 line_length: 4,
                 count: 0,
-                seq: std::ptr::null_mut(),
+                seq: Vec::new(),
                 mf: std::ptr::null_mut(),
                 is_md5: 0,
                 validated_md5: 0,
@@ -7231,7 +7180,7 @@ mod tests {
             let r = cram_cram_io_c_2467_refs_create();
             assert!(!r.is_null());
             let refs = r.cast::<refs_t_layout>();
-            (*refs).fn_ = path_c.as_ptr().cast_mut();
+            (*refs).fn_ = path_c.as_bytes().to_vec();
             (*refs).nref = 1;
             (*refs).ref_id = malloc(std::mem::size_of::<*mut ref_entry_layout>() as u64)
                 .cast::<*mut ref_entry_layout>();
@@ -7239,7 +7188,7 @@ mod tests {
             let entry = calloc(1, std::mem::size_of::<ref_entry_layout>() as u64)
                 .cast::<ref_entry_layout>();
             assert!(!entry.is_null());
-            (*entry).fn_ = path_c.as_ptr().cast_mut();
+            (*entry).fn_ = path_c.as_bytes().to_vec();
             (*entry).length = 4;
             (*entry).offset = 6;
             (*entry).bases_per_line = 4;
@@ -7251,10 +7200,8 @@ mod tests {
             assert!(!(*refs).fp.is_null());
             assert_eq!((*refs).last, entry);
             assert_eq!((*entry).count, 2);
-            assert_eq!(
-                std::slice::from_raw_parts((*entry).seq.cast::<u8>(), 4),
-                b"ACGT"
-            );
+            let seq = &(*entry).seq;
+            assert_eq!(&seq[..4], b"ACGT");
             assert!(fai.exists());
 
             let loaded_again = cram_cram_io_c_3323_cram_ref_load(r, 0, 0);
@@ -7289,25 +7236,23 @@ mod tests {
             let refs_l = refs.cast::<refs_t_layout>();
             assert_eq!((*refs_l).nref, 2);
             assert!(!(*refs_l).fp.is_null());
-            assert_eq!(CStr::from_ptr((*refs_l).fn_).to_bytes(), path_c.as_bytes());
+            assert_eq!((*refs_l).fn_.as_slice(), path_c.as_bytes());
 
             let chr1 = *(*refs_l).ref_id;
             let chr2 = *(*refs_l).ref_id.add(1);
-            assert_eq!(CStr::from_ptr((*chr1).name).to_bytes(), b"chr1");
+            assert_eq!((*chr1).name.as_slice(), b"chr1");
             assert_eq!((*chr1).length, 4);
             assert_eq!((*chr1).offset, 6);
             assert_eq!((*chr1).bases_per_line, 4);
             assert_eq!((*chr1).line_length, 5);
-            assert_eq!(CStr::from_ptr((*chr2).name).to_bytes(), b"chr2");
+            assert_eq!((*chr2).name.as_slice(), b"chr2");
             assert_eq!((*chr2).length, 4);
             assert_eq!((*chr2).offset, 17);
 
             let loaded = cram_cram_io_c_3323_cram_ref_load(refs, 1, 0);
             assert_eq!(loaded, chr2.cast());
-            assert_eq!(
-                std::slice::from_raw_parts((*chr2).seq.cast::<u8>(), 4),
-                b"NNAC"
-            );
+            let seq = &(*chr2).seq;
+            assert_eq!(&seq[..4], b"NNAC");
 
             cram_cram_io_c_2427_refs_free(refs);
             std::fs::remove_file(path).unwrap();
@@ -7346,12 +7291,12 @@ mod tests {
             let refs_l = refs.cast::<refs_t_layout>();
             assert_eq!((*refs_l).nref, 1);
             assert_eq!(
-                CStr::from_ptr((*refs_l).fn_).to_bytes(),
+                (*refs_l).fn_.as_slice(),
                 path.to_string_lossy().as_bytes()
             );
 
             let chr = *(*refs_l).ref_id;
-            assert_eq!(CStr::from_ptr((*chr).name).to_bytes(), b"chrX");
+            assert_eq!((*chr).name.as_slice(), b"chrX");
             assert_eq!((*chr).fn_, (*refs_l).fn_);
             assert_eq!((*chr).length, 4);
             assert_eq!((*chr).offset, 6);
@@ -7384,17 +7329,19 @@ mod tests {
             let refs_l = refs.cast::<refs_t_layout>();
             let chr1 = *(*refs_l).ref_id;
             let chr2 = *(*refs_l).ref_id.add(1);
-            assert_eq!(CStr::from_ptr((*chr1).name).to_bytes(), b"chr1");
-            assert_eq!(CStr::from_ptr((*chr2).name).to_bytes(), b"chr2");
+            assert_eq!((*chr1).name.as_slice(), b"chr1");
+            assert_eq!((*chr2).name.as_slice(), b"chr2");
 
+            let chr2_name = CString::new((*chr2).name.clone()).unwrap();
+            let chr1_name = CString::new((*chr1).name.clone()).unwrap();
             let mut header_refs = [
                 crate::htslib_rs::sam::sam_hrec_sq_t {
-                    name: (*chr2).name,
+                    name: chr2_name.as_ptr(),
                     len: 1,
                     ty: std::ptr::null_mut(),
                 },
                 crate::htslib_rs::sam::sam_hrec_sq_t {
-                    name: (*chr1).name,
+                    name: chr1_name.as_ptr(),
                     len: 2,
                     ty: std::ptr::null_mut(),
                 },
@@ -7470,12 +7417,12 @@ mod tests {
             assert_eq!((*refs_l).nref, 2);
             assert!(!(*refs_l).ref_id.is_null());
             assert_eq!(
-                CStr::from_ptr((*(*(*refs_l).ref_id.add(0))).name),
-                CStr::from_ptr(chr1.as_ptr())
+                (*(*(*refs_l).ref_id.add(0))).name.as_slice(),
+                chr1.to_bytes()
             );
             assert_eq!(
-                CStr::from_ptr((*(*(*refs_l).ref_id.add(1))).name),
-                CStr::from_ptr(chr2.as_ptr())
+                (*(*(*refs_l).ref_id.add(1))).name.as_slice(),
+                chr2.to_bytes()
             );
             assert_eq!((*(*(*refs_l).ref_id.add(0))).length, 0);
 
@@ -7534,11 +7481,14 @@ mod tests {
                 0
             );
             assert!(!fd.refs.is_null());
-            assert_eq!(fd.ref_fn, (*fd.refs.cast::<refs_t_layout>()).fn_);
+            assert_eq!(
+                CStr::from_ptr(fd.ref_fn).to_bytes(),
+                (*fd.refs.cast::<refs_t_layout>()).fn_.as_slice()
+            );
             assert_eq!((*fd.refs.cast::<refs_t_layout>()).nref, 1);
             assert_eq!(header_refs[0].len, 6);
             assert_eq!(
-                CStr::from_ptr((*(*(*fd.refs.cast::<refs_t_layout>()).ref_id)).name).to_bytes(),
+                (*(*(*fd.refs.cast::<refs_t_layout>()).ref_id)).name.as_slice(),
                 b"chr2"
             );
             cram_cram_io_c_2427_refs_free(fd.refs.cast());
@@ -7567,7 +7517,7 @@ mod tests {
             assert!(!fd.refs.is_null());
             assert_eq!((*fd.refs.cast::<refs_t_layout>()).nref, 1);
             assert!(
-                CStr::from_ptr((*(*(*fd.refs.cast::<refs_t_layout>()).ref_id)).name).to_bytes()
+                (*(*(*fd.refs.cast::<refs_t_layout>()).ref_id)).name.as_slice()
                     == b"header_only"
             );
             cram_cram_io_c_2427_refs_free(fd.refs.cast());
@@ -7611,7 +7561,7 @@ mod tests {
             assert_eq!(fd.header, (&mut hdr as *mut sam_hdr_t).cast());
             assert_eq!((*refs_l).nref, 1);
             assert_eq!(
-                CStr::from_ptr((*(*(*refs_l).ref_id)).name).to_bytes(),
+                (*(*(*refs_l).ref_id)).name.as_slice(),
                 b"chr_set"
             );
 
@@ -7664,59 +7614,54 @@ mod tests {
     #[test]
     fn cram_stats_track_small_and_hash_values() {
         unsafe {
-            let st = cram_cram_stats_c_48_cram_stats_create();
-            assert!(!st.is_null());
+            let mut st = cram_cram_stats_c_48_cram_stats_create();
 
-            cram_cram_stats_c_52_cram_stats_add(st, 5);
-            cram_cram_stats_c_52_cram_stats_add(st, 5);
-            cram_cram_stats_c_52_cram_stats_add(st, 1024);
-            cram_cram_stats_c_52_cram_stats_add(st, -3);
+            cram_cram_stats_c_52_cram_stats_add(&mut st, 5);
+            cram_cram_stats_c_52_cram_stats_add(&mut st, 5);
+            cram_cram_stats_c_52_cram_stats_add(&mut st, 1024);
+            cram_cram_stats_c_52_cram_stats_add(&mut st, -3);
 
-            let layout = st.cast::<cram_stats_layout>();
-            assert_eq!((*layout).nsamp, 4);
-            assert_eq!((*layout).freqs[5], 2);
-            assert!(!(*layout).h.is_null());
+            assert_eq!(st.nsamp, 4);
+            assert_eq!(st.freqs[5], 2);
+            assert!(st.h.is_some());
 
-            let h = (*layout).h.cast::<kh_m_i2i_layout>();
+            let h = st.h.as_ref().unwrap();
             let mut saw_1024 = 0;
             let mut saw_minus_3 = 0;
-            for k in 0..(*h).n_buckets {
-                let flag = *(*h).flags.add((k >> 4) as usize);
+            for k in 0..h.n_buckets {
+                let flag = h.flags[(k >> 4) as usize];
                 if ((flag >> ((k & 0x0f) << 1)) & 3) != 0 {
                     continue;
                 }
-                match *(*h).keys.add(k as usize) {
-                    1024 => saw_1024 = *(*h).vals.add(k as usize),
-                    -3 => saw_minus_3 = *(*h).vals.add(k as usize),
+                match h.keys[k as usize] {
+                    1024 => saw_1024 = h.vals[k as usize],
+                    -3 => saw_minus_3 = h.vals[k as usize],
                     _ => {}
                 }
             }
             assert_eq!(saw_1024, 1);
             assert_eq!(saw_minus_3, 1);
 
-            cram_cram_stats_c_80_cram_stats_del(st, 5);
-            assert_eq!((*layout).freqs[5], 1);
-            assert_eq!((*layout).nsamp, 3);
+            cram_cram_stats_c_80_cram_stats_del(&mut st, 5);
+            assert_eq!(st.freqs[5], 1);
+            assert_eq!(st.nsamp, 3);
 
-            cram_cram_stats_c_80_cram_stats_del(st, 99999);
-            assert_eq!((*layout).nsamp, 3);
+            cram_cram_stats_c_80_cram_stats_del(&mut st, 99999);
+            assert_eq!(st.nsamp, 3);
 
-            let mut fd = cram_fd_layout {
+            let fd = cram_fd_layout {
                 fp: std::ptr::null_mut(),
                 mode: 0,
                 version: 4 << 8,
                 ..std::mem::zeroed()
             };
             assert_eq!(
-                cram_cram_stats_c_134_cram_stats_encoding(
-                    (&mut fd as *mut cram_fd_layout).cast(),
-                    st
-                ),
+                cram_cram_stats_c_134_cram_stats_encoding(&fd, &mut st),
                 42
             );
-            assert_eq!((*layout).nvals, 3);
-            assert_eq!((*layout).min_val, -3);
-            assert_eq!((*layout).max_val, 1024);
+            assert_eq!(st.nvals, 3);
+            assert_eq!(st.min_val, -3);
+            assert_eq!(st.max_val, 1024);
 
             cram_cram_stats_c_223_cram_stats_free(st);
         }
@@ -7725,62 +7670,47 @@ mod tests {
     #[test]
     fn cram_stats_encoding_matches_version_policy() {
         unsafe {
-            let mut fd4 = cram_fd_layout {
+            let fd4 = cram_fd_layout {
                 fp: std::ptr::null_mut(),
                 mode: 0,
                 version: 4 << 8,
                 ..std::mem::zeroed()
             };
-            let mut fd3 = cram_fd_layout {
+            let fd3 = cram_fd_layout {
                 fp: std::ptr::null_mut(),
                 mode: 0,
                 version: 3 << 8,
                 ..std::mem::zeroed()
             };
 
-            let empty = cram_cram_stats_c_48_cram_stats_create();
+            let mut empty = cram_cram_stats_c_48_cram_stats_create();
             assert_eq!(
-                cram_cram_stats_c_134_cram_stats_encoding(
-                    (&mut fd4 as *mut cram_fd_layout).cast(),
-                    empty
-                ),
+                cram_cram_stats_c_134_cram_stats_encoding(&fd4, &mut empty),
                 42
             );
             cram_cram_stats_c_223_cram_stats_free(empty);
 
-            let single = cram_cram_stats_c_48_cram_stats_create();
-            cram_cram_stats_c_52_cram_stats_add(single, 7);
+            let mut single = cram_cram_stats_c_48_cram_stats_create();
+            cram_cram_stats_c_52_cram_stats_add(&mut single, 7);
             assert_eq!(
-                cram_cram_stats_c_134_cram_stats_encoding(
-                    (&mut fd4 as *mut cram_fd_layout).cast(),
-                    single
-                ),
+                cram_cram_stats_c_134_cram_stats_encoding(&fd4, &mut single),
                 44
             );
             assert_eq!(
-                cram_cram_stats_c_134_cram_stats_encoding(
-                    (&mut fd3 as *mut cram_fd_layout).cast(),
-                    single
-                ),
+                cram_cram_stats_c_134_cram_stats_encoding(&fd3, &mut single),
                 3
             );
             cram_cram_stats_c_223_cram_stats_free(single);
 
-            let multi = cram_cram_stats_c_48_cram_stats_create();
-            cram_cram_stats_c_52_cram_stats_add(multi, 7);
-            cram_cram_stats_c_52_cram_stats_add(multi, 8);
+            let mut multi = cram_cram_stats_c_48_cram_stats_create();
+            cram_cram_stats_c_52_cram_stats_add(&mut multi, 7);
+            cram_cram_stats_c_52_cram_stats_add(&mut multi, 8);
             assert_eq!(
-                cram_cram_stats_c_134_cram_stats_encoding(
-                    (&mut fd4 as *mut cram_fd_layout).cast(),
-                    multi
-                ),
+                cram_cram_stats_c_134_cram_stats_encoding(&fd4, &mut multi),
                 41
             );
             assert_eq!(
-                cram_cram_stats_c_134_cram_stats_encoding(
-                    (&mut fd3 as *mut cram_fd_layout).cast(),
-                    multi
-                ),
+                cram_cram_stats_c_134_cram_stats_encoding(&fd3, &mut multi),
                 1
             );
             cram_cram_stats_c_223_cram_stats_free(multi);
@@ -8103,7 +8033,7 @@ mod tests {
 
             let mut st = cram_stats_layout {
                 freqs: [0; 1024],
-                h: std::ptr::null_mut(),
+                h: None,
                 nsamp: 0,
                 nvals: 2,
                 min_val: 0,
@@ -8488,7 +8418,7 @@ mod tests {
             xpack_dat.map[40] = 3;
             let xpack_enc = cram_cram_codecs_c_3928_cram_encoder_init(
                 51,
-                std::ptr::null_mut(),
+                None,
                 1,
                 (&mut xpack_dat as *mut cram_xpack_decoder_layout).cast(),
                 3 << 8,
@@ -8983,7 +8913,7 @@ mod tests {
             };
             let enc = cram_cram_codecs_c_3928_cram_encoder_init(
                 53,
-                std::ptr::null_mut(),
+                None,
                 4,
                 (&mut xdelta_dat as *mut cram_xdelta_decoder_layout).cast(),
                 3 << 8,
@@ -9338,7 +9268,7 @@ mod tests {
                 ntl: 0,
                 tl: std::ptr::null_mut(),
                 td_hash: std::ptr::null_mut(),
-                td_keys: std::ptr::null_mut(),
+                td_keys: None,
                 preservation_map: std::ptr::null_mut(),
                 rec_encoding_map: [std::ptr::null_mut(); 32],
                 tag_encoding_map: [std::ptr::null_mut(); 32],
@@ -9395,7 +9325,7 @@ mod tests {
             };
             let enc = cram_cram_codecs_c_3928_cram_encoder_init(
                 52,
-                std::ptr::null_mut(),
+                None,
                 4,
                 (&mut enc_dat as *mut cram_xrle_decoder_layout).cast(),
                 3 << 8,
@@ -9479,11 +9409,7 @@ mod tests {
             );
             assert_eq!(subexp_out, [1, 4]);
 
-            let mut ks = kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            };
+            let mut ks = kstring_t { data: Vec::new() };
             assert_eq!(
                 cram_cram_codecs_c_2501_cram_subexp_describe(
                     (&mut subexp as *mut cram_codec_subexp_layout).cast(),
@@ -9491,11 +9417,7 @@ mod tests {
                 ),
                 0
             );
-            assert_eq!(
-                std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l),
-                b"SUBEXP(offset=1,k=2)"
-            );
-            free(ks.s.cast());
+            assert_eq!(ks.data.as_slice(), b"SUBEXP(offset=1,k=2)");
 
             let mut vv = varint_vec_layout {
                 varint_decode32_crc: std::ptr::null_mut(),
@@ -9582,11 +9504,7 @@ mod tests {
             );
             assert_eq!(gamma_out, [4]);
 
-            let mut ks = kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            };
+            let mut ks = kstring_t { data: Vec::new() };
             assert_eq!(
                 cram_cram_codecs_c_2575_cram_gamma_describe(
                     (&mut gamma as *mut cram_codec_gamma_layout).cast(),
@@ -9595,10 +9513,9 @@ mod tests {
                 0
             );
             assert_eq!(
-                std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l),
+                ks.data.as_slice(),
                 b"GAMMA(offset=1)"
             );
-            free(ks.s.cast());
 
             let mut gamma_header = [3u8];
             let gamma_init = cram_cram_codecs_c_2580_cram_gamma_decode_init(
@@ -9793,11 +9710,7 @@ mod tests {
 
             codec.huffman.ncodes = 2;
             codec.huffman.codes = codes.as_mut_ptr();
-            let mut ks = kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            };
+            let mut ks = kstring_t { data: Vec::new() };
             assert_eq!(
                 cram_cram_codecs_c_2795_cram_huffman_describe(
                     (&mut codec as *mut cram_codec_huffman_layout).cast(),
@@ -9806,10 +9719,9 @@ mod tests {
                 0
             );
             assert_eq!(
-                std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l),
+                ks.data.as_slice(),
                 b"HUFFMAN(codes={65,66},lengths={1,1})"
             );
-            free(ks.s.cast());
 
             let mut vv = varint_vec_layout {
                 varint_decode32_crc: std::ptr::null_mut(),
@@ -10029,7 +9941,7 @@ mod tests {
 
             let mut st = cram_stats_layout {
                 freqs: [0; 1024],
-                h: std::ptr::null_mut(),
+                h: None,
                 nsamp: 0,
                 nvals: 3,
                 min_val: 0,
@@ -10271,7 +10183,7 @@ mod tests {
 
             let mut enc_st = cram_stats_layout {
                 freqs: [0; 1024],
-                h: std::ptr::null_mut(),
+                h: None,
                 nsamp: 0,
                 nvals: 1,
                 min_val: 0,
@@ -10287,7 +10199,7 @@ mod tests {
             };
             let enc = cram_cram_codecs_c_3928_cram_encoder_init(
                 4,
-                (&mut enc_st as *mut cram_stats_layout).cast(),
+                Some(&mut enc_st),
                 4,
                 (&mut enc_dat as *mut cram_byte_array_len_encoder_dat_layout).cast(),
                 3 << 8,
@@ -10495,11 +10407,7 @@ mod tests {
                 },
                 ..len_codec
             };
-            let mut ks = kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            };
+            let mut ks = kstring_t { data: Vec::new() };
             assert_eq!(
                 cram_cram_codecs_c_3412_cram_byte_array_len_describe(
                     (&mut bal_codec as *mut cram_codec_byte_array_len_layout).cast(),
@@ -10508,10 +10416,9 @@ mod tests {
                 0
             );
             assert_eq!(
-                std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l),
+                ks.data.as_slice(),
                 b"BYTE_ARRAY_LEN(len_codec={LEN},val_codec={VAL}"
             );
-            free(ks.s.cast());
 
             let mut stop_codec = cram_codec_byte_array_stop_layout {
                 codec: 0,
@@ -10531,11 +10438,7 @@ mod tests {
                     content_id: 123,
                 },
             };
-            let mut ks = kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            };
+            let mut ks = kstring_t { data: Vec::new() };
             assert_eq!(
                 cram_cram_codecs_c_3675_cram_byte_array_stop_describe(
                     (&mut stop_codec as *mut cram_codec_byte_array_stop_layout).cast(),
@@ -10544,10 +10447,9 @@ mod tests {
                 0
             );
             assert_eq!(
-                std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l),
+                ks.data.as_slice(),
                 b"BYTE_ARRAY_STOP(stop=44,id=123)"
             );
-            free(ks.s.cast());
 
             let mut vv = varint_vec_layout {
                 varint_decode32_crc: std::ptr::null_mut(),
@@ -10675,11 +10577,7 @@ mod tests {
                     type_: 3,
                 },
             };
-            let mut ks = kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            };
+            let mut ks = kstring_t { data: Vec::new() };
             assert_eq!(
                 cram_cram_codecs_c_454_cram_external_describe(
                     (&mut external as *mut cram_codec_external_layout).cast(),
@@ -10688,10 +10586,9 @@ mod tests {
                 0
             );
             assert_eq!(
-                std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l),
+                ks.data.as_slice(),
                 b"EXTERNAL(id=12)"
             );
-            free(ks.s.cast());
 
             let mut external_header = [0u8; 2];
             let ext_dec = cram_cram_codecs_c_459_cram_external_decode_init(
@@ -10764,11 +10661,7 @@ mod tests {
                     type_: 6,
                 },
             };
-            let mut ks = kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            };
+            let mut ks = kstring_t { data: Vec::new() };
             assert_eq!(
                 cram_cram_codecs_c_752_cram_varint_describe(
                     (&mut varint as *mut cram_codec_varint_layout).cast(),
@@ -10777,10 +10670,9 @@ mod tests {
                 0
             );
             assert_eq!(
-                std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l),
+                ks.data.as_slice(),
                 b"VARINT(id=9,offset=-7,type=6)"
             );
-            free(ks.s.cast());
 
             let mut varint_header = [0u8; 5];
             let var_dec = cram_cram_codecs_c_760_cram_varint_decode_init(
@@ -10824,7 +10716,7 @@ mod tests {
 
             let mut st = cram_stats_layout {
                 freqs: [0; 1024],
-                h: std::ptr::null_mut(),
+                h: None,
                 nsamp: 0,
                 nvals: 1,
                 min_val: 5,
@@ -10860,11 +10752,7 @@ mod tests {
                 describe: std::ptr::null_mut(),
                 xconst: cram_const_codec_layout { val: -5 },
             };
-            let mut ks = kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            };
+            let mut ks = kstring_t { data: Vec::new() };
             assert_eq!(
                 cram_cram_codecs_c_976_cram_const_describe(
                     (&mut constant as *mut cram_codec_const_layout).cast(),
@@ -10873,10 +10761,9 @@ mod tests {
                 0
             );
             assert_eq!(
-                std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l),
+                ks.data.as_slice(),
                 b"CONST(val=-5)"
             );
-            free(ks.s.cast());
 
             let mut const_header = [0u8; 3];
             let const_dec = cram_cram_codecs_c_981_cram_const_decode_init(
@@ -10966,11 +10853,7 @@ mod tests {
                     nbits: 5,
                 },
             };
-            let mut ks = kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            };
+            let mut ks = kstring_t { data: Vec::new() };
             assert_eq!(
                 cram_cram_codecs_c_1136_cram_beta_describe(
                     (&mut beta as *mut cram_codec_beta_layout).cast(),
@@ -10979,10 +10862,9 @@ mod tests {
                 0
             );
             assert_eq!(
-                std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l),
+                ks.data.as_slice(),
                 b"BETA(offset=2, nbits=5)"
             );
-            free(ks.s.cast());
 
             let mut beta_vv = varint_vec_layout {
                 varint_get32: Some(test_xdelta_varint_get32),
@@ -11150,11 +11032,7 @@ mod tests {
             assert_eq!(ids, [17, 23]);
 
             external.describe = cram_fn_ptr(cram_cram_codecs_c_454_cram_external_describe as usize);
-            let mut ks = kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            };
+            let mut ks = kstring_t { data: Vec::new() };
             assert_eq!(
                 cram_cram_codecs_c_4185_cram_codec_describe(
                     (&mut external as *mut cram_codec_external_layout).cast(),
@@ -11163,18 +11041,12 @@ mod tests {
                 0
             );
             assert_eq!(
-                std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l),
+                ks.data.as_slice(),
                 b"EXTERNAL(id=12)"
             );
-            free(ks.s.cast());
-            let mut ks = kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            };
+            let mut ks = kstring_t { data: Vec::new() };
             assert_eq!(cram_codec_describe(std::ptr::null_mut(), &mut ks), 0);
-            assert_eq!(std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l), b"?");
-            free(ks.s.cast());
+            assert_eq!(ks.data.as_slice(), b"?");
 
             external.decode =
                 cram_fn_ptr(cram_cram_codecs_c_390_cram_external_decode_char as usize);
@@ -11276,11 +11148,11 @@ mod tests {
     }
 
     unsafe extern "C" fn test_codec_describe_len(_c: *mut c_void, ks: *mut kstring_t) -> c_int {
-        (kputsn(c"LEN".as_ptr(), 3, ks) < 0) as c_int
+        (kputsn(b"LEN", 3, &mut *ks) < 0) as c_int
     }
 
     unsafe extern "C" fn test_codec_describe_val(_c: *mut c_void, ks: *mut kstring_t) -> c_int {
-        (kputsn(c"VAL".as_ptr(), 3, ks) < 0) as c_int
+        (kputsn(b"VAL", 3, &mut *ks) < 0) as c_int
     }
 
     unsafe extern "C" fn test_byte_array_len_decode_len(
@@ -12573,22 +12445,20 @@ mod tests {
                 std::process::id()
             ));
             std::fs::write(&path, b"trace").unwrap();
-            let file = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+            let file = path.to_string_lossy().into_owned();
             assert_eq!(
-                cram_open_trace_file_c_90_is_file(file.as_ptr().cast_mut()),
-                1
+                cram_open_trace_file_c_90_is_file(file.as_bytes()),
+                true
             );
 
-            let dir = CString::new("/tmp").unwrap();
             assert_eq!(
-                cram_open_trace_file_c_90_is_file(dir.as_ptr().cast_mut()),
-                0
+                cram_open_trace_file_c_90_is_file(b"/tmp"),
+                false
             );
 
-            let missing = CString::new("/tmp/htslib_rs-missing-file-probe").unwrap();
             assert_eq!(
-                cram_open_trace_file_c_90_is_file(missing.as_ptr().cast_mut()),
-                0
+                cram_open_trace_file_c_90_is_file(b"/tmp/htslib_rs-missing-file-probe"),
+                false
             );
 
             std::fs::remove_file(path).unwrap();
@@ -12598,83 +12468,51 @@ mod tests {
     #[test]
     fn cram_open_trace_file_tokenise_search_path_matches_colon_rules() {
         unsafe {
-            let input = CString::new("alpha::beta:gamma::delta::").unwrap();
-            let out = cram_open_trace_file_c_108_tokenise_search_path(input.as_ptr());
-            assert!(!out.is_null());
+            let input = b"alpha::beta:gamma::delta::";
+            let out = cram_open_trace_file_c_108_tokenise_search_path(Some(input));
+            assert!(!out.is_empty());
 
             let expected = b"alpha:beta\0gamma:delta:\0./\0\0";
-            assert_eq!(
-                std::slice::from_raw_parts(out.cast::<u8>(), expected.len()),
-                expected
-            );
-            free(out.cast());
+            assert_eq!(&out[..expected.len()], expected);
 
-            let out = cram_open_trace_file_c_108_tokenise_search_path(std::ptr::null());
-            assert!(!out.is_null());
-            assert_eq!(std::slice::from_raw_parts(out.cast::<u8>(), 4), b"./\0\0");
-            free(out.cast());
+            let out = cram_open_trace_file_c_108_tokenise_search_path(None);
+            assert!(!out.is_empty());
+            assert_eq!(&out[..4], b"./\0\0");
         }
     }
 
     #[test]
     fn cram_open_trace_file_tokenise_search_path_preserves_remote_url_prefixes() {
         unsafe {
-            let input = CString::new("URL=http://example.invalid/data:local").unwrap();
-            let out = cram_open_trace_file_c_108_tokenise_search_path(input.as_ptr());
-            assert!(!out.is_null());
+            let input = b"URL=http://example.invalid/data:local";
+            let out = cram_open_trace_file_c_108_tokenise_search_path(Some(input));
+            assert!(!out.is_empty());
 
             let expected = b"URL=http://example.invalid/data\0local\0./\0\0";
-            assert_eq!(
-                std::slice::from_raw_parts(out.cast::<u8>(), expected.len()),
-                expected
-            );
-            free(out.cast());
+            assert_eq!(&out[..expected.len()], expected);
         }
     }
 
     #[test]
     fn cram_open_trace_file_expand_path_matches_percent_rules() {
-        unsafe {
-            let file = CString::new("abcdef").unwrap();
-            let dirname = CString::new("root/%2s/%s").unwrap();
-            let out =
-                cram_open_trace_file_c_230_expand_path(file.as_ptr(), dirname.as_ptr(), c_int::MAX);
-            assert!(!out.is_null());
-            assert_eq!(CStr::from_ptr(out).to_bytes(), b"root/ab/cdef");
-            free(out.cast());
+        let out = cram_open_trace_file_c_230_expand_path(b"abcdef", b"root/%2s/%s", c_int::MAX);
+        assert_eq!(out.as_slice(), b"root/ab/cdef");
 
-            let absolute = CString::new("/tmp/ref.fa").unwrap();
-            let dot = CString::new(".").unwrap();
-            let out = cram_open_trace_file_c_230_expand_path(absolute.as_ptr(), dot.as_ptr(), 1);
-            assert!(!out.is_null());
-            assert_eq!(CStr::from_ptr(out).to_bytes(), b"/tmp/ref.fa");
-            free(out.cast());
+        let out = cram_open_trace_file_c_230_expand_path(b"/tmp/ref.fa", b".", 1);
+        assert_eq!(out.as_slice(), b"/tmp/ref.fa");
 
-            let bad = CString::new("root/%22s").unwrap();
-            let out = cram_open_trace_file_c_230_expand_path(file.as_ptr(), bad.as_ptr(), 1);
-            assert!(!out.is_null());
-            assert_eq!(CStr::from_ptr(out).to_bytes(), b"root/%22s/abcdef");
-            free(out.cast());
+        let out = cram_open_trace_file_c_230_expand_path(b"abcdef", b"root/%22s", 1);
+        assert_eq!(out.as_slice(), b"root/%22s/abcdef");
 
-            let zero = CString::new("root/%0s//").unwrap();
-            let out = cram_open_trace_file_c_230_expand_path(file.as_ptr(), zero.as_ptr(), 1);
-            assert!(!out.is_null());
-            assert_eq!(CStr::from_ptr(out).to_bytes(), b"root/abcdef");
-            free(out.cast());
-        }
+        let out = cram_open_trace_file_c_230_expand_path(b"abcdef", b"root/%0s//", 1);
+        assert_eq!(out.as_slice(), b"root/abcdef");
     }
 
     #[test]
     fn cram_open_trace_file_expand_path_consumes_file_across_multiple_percent_tokens() {
-        unsafe {
-            let file = CString::new("abcdef").unwrap();
-            let dirname = CString::new("root/%1s/%2s/%s").unwrap();
-            let out =
-                cram_open_trace_file_c_230_expand_path(file.as_ptr(), dirname.as_ptr(), c_int::MAX);
-            assert!(!out.is_null());
-            assert_eq!(CStr::from_ptr(out).to_bytes(), b"root/a/bc/def");
-            free(out.cast());
-        }
+        let out =
+            cram_open_trace_file_c_230_expand_path(b"abcdef", b"root/%1s/%2s/%s", c_int::MAX);
+        assert_eq!(out.as_slice(), b"root/a/bc/def");
     }
 
     #[test]
@@ -12686,19 +12524,17 @@ mod tests {
             let file_path = dir.join("trace.ab1");
             std::fs::write(&file_path, b"trace").unwrap();
 
-            let file = CString::new("trace.ab1").unwrap();
-            let search = CString::new(format!(
+            let search = format!(
                 "URL=http://example.invalid/ref:{}",
                 dir.to_string_lossy()
-            ))
-            .unwrap();
-            let out = cram_open_trace_file_c_433_find_path(file.as_ptr(), search.as_ptr());
-            assert!(!out.is_null());
+            )
+            .into_bytes();
+            let out = cram_open_trace_file_c_433_find_path(b"trace.ab1", Some(&search));
+            let out = out.expect("find_path should return a path");
             assert_eq!(
-                CStr::from_ptr(out).to_bytes(),
+                out.as_slice(),
                 file_path.to_string_lossy().as_bytes()
             );
-            free(out.cast());
 
             std::fs::remove_file(file_path).unwrap();
             std::fs::remove_dir(dir).unwrap();
@@ -12714,18 +12550,11 @@ mod tests {
             let file_path = dir.join("trace.dat");
             std::fs::write(&file_path, b"dir-data").unwrap();
 
-            let file = CString::new("trace.dat").unwrap();
-            let dirname = CString::new(dir.to_string_lossy().as_bytes()).unwrap();
-            let mf = cram_open_trace_file_c_314_find_file_dir(
-                file.as_ptr(),
-                dirname.as_ptr().cast_mut(),
-            );
-            assert!(!mf.is_null());
-            assert_eq!(
-                std::slice::from_raw_parts((*mf).data.cast::<u8>(), (*mf).size),
-                b"dir-data"
-            );
-            assert_eq!(cram_mFILE_c_361_mfclose(mf), 0);
+            let dirname = dir.to_string_lossy().into_owned().into_bytes();
+            let mf = cram_open_trace_file_c_314_find_file_dir(b"trace.dat", &dirname);
+            let mf = mf.expect("find_file_dir should open mfile");
+            assert_eq!(&mf.as_ref().data[..mf.as_ref().size], b"dir-data");
+            assert_eq!(cram_mFILE_c_361_mfclose(mf.as_ptr()), 0);
 
             std::fs::remove_file(file_path).unwrap();
             std::fs::remove_dir(dir).unwrap();
@@ -12741,45 +12570,34 @@ mod tests {
             let file_path = dir.join("trace.dat");
             std::fs::write(&file_path, b"trace payload").unwrap();
 
-            let file = CString::new("trace.dat").unwrap();
-            let dirname = CString::new(dir.to_string_lossy().as_bytes()).unwrap();
-            let mf = cram_open_trace_file_c_182_find_file_url(
-                file.as_ptr(),
-                dirname.as_ptr().cast_mut(),
+            let dirname = dir.to_string_lossy().into_owned().into_bytes();
+            let mf = cram_open_trace_file_c_182_find_file_url(b"trace.dat", &dirname);
+            let mf = mf.expect("find_file_url should open mfile");
+            assert_eq!(&mf.as_ref().data[..mf.as_ref().size], b"trace payload");
+            assert_eq!(cram_mFILE_c_361_mfclose(mf.as_ptr()), 0);
+
+            let opened = cram_open_trace_file_c_352_open_path_mfile(
+                b"trace.dat",
+                Some(&dirname),
+                None,
             );
-            assert!(!mf.is_null());
+            let opened = opened.expect("open_path_mfile should open mfile");
+            assert!(opened.local);
             assert_eq!(
-                std::slice::from_raw_parts((*mf).data.cast::<u8>(), (*mf).size),
+                &opened.mf.as_ref().data[..opened.mf.as_ref().size],
                 b"trace payload"
             );
-            assert_eq!(cram_mFILE_c_361_mfclose(mf), 0);
+            assert_eq!(cram_mFILE_c_361_mfclose(opened.mf.as_ptr()), 0);
 
-            let mut local = -1;
-            let mf = cram_open_trace_file_c_352_open_path_mfile(
-                file.as_ptr(),
-                dirname.as_ptr().cast_mut(),
-                std::ptr::null_mut(),
-                &mut local,
+            let relative = file_path.to_string_lossy().into_owned().into_bytes();
+            let opened = cram_open_trace_file_c_352_open_path_mfile(
+                b"trace.dat",
+                Some(b"/definitely/not/here"),
+                Some(&relative),
             );
-            assert!(!mf.is_null());
-            assert_eq!(local, 1);
-            assert_eq!(
-                std::slice::from_raw_parts((*mf).data.cast::<u8>(), (*mf).size),
-                b"trace payload"
-            );
-            assert_eq!(cram_mFILE_c_361_mfclose(mf), 0);
-
-            let relative = CString::new(file_path.to_string_lossy().as_bytes()).unwrap();
-            let missing_path = CString::new("/definitely/not/here").unwrap();
-            let mf = cram_open_trace_file_c_352_open_path_mfile(
-                file.as_ptr(),
-                missing_path.as_ptr().cast_mut(),
-                relative.as_ptr().cast_mut(),
-                &mut local,
-            );
-            assert!(!mf.is_null());
-            assert_eq!(local, 1);
-            assert_eq!(cram_mFILE_c_361_mfclose(mf), 0);
+            let opened = opened.expect("open_path_mfile fallback should open mfile");
+            assert!(opened.local);
+            assert_eq!(cram_mFILE_c_361_mfclose(opened.mf.as_ptr()), 0);
 
             std::fs::remove_file(file_path).unwrap();
             std::fs::remove_dir(dir).unwrap();
@@ -12797,35 +12615,27 @@ mod tests {
             let file_path = dir.join("trace.dat");
             std::fs::write(&file_path, b"fallback-data").unwrap();
 
-            let file = CString::new("trace.dat").unwrap();
-            let missing_path = CString::new("/definitely/not/here").unwrap();
             let relative =
-                CString::new(dir.join("anchor.cram").to_string_lossy().as_bytes()).unwrap();
-            let mut local = -1;
-            let mf = cram_open_trace_file_c_352_open_path_mfile(
-                file.as_ptr(),
-                missing_path.as_ptr().cast_mut(),
-                relative.as_ptr().cast_mut(),
-                &mut local,
+                dir.join("anchor.cram").to_string_lossy().into_owned().into_bytes();
+            let opened = cram_open_trace_file_c_352_open_path_mfile(
+                b"trace.dat",
+                Some(b"/definitely/not/here"),
+                Some(&relative),
             );
-            assert!(!mf.is_null());
-            assert_eq!(local, 1);
+            let opened = opened.expect("fallback should open mfile");
+            assert!(opened.local);
             assert_eq!(
-                std::slice::from_raw_parts((*mf).data.cast::<u8>(), (*mf).size),
+                &opened.mf.as_ref().data[..opened.mf.as_ref().size],
                 b"fallback-data"
             );
-            assert_eq!(cram_mFILE_c_361_mfclose(mf), 0);
+            assert_eq!(cram_mFILE_c_361_mfclose(opened.mf.as_ptr()), 0);
 
-            let missing_file = CString::new("missing.dat").unwrap();
-            local = -7;
-            let mf = cram_open_trace_file_c_352_open_path_mfile(
-                missing_file.as_ptr(),
-                missing_path.as_ptr().cast_mut(),
-                relative.as_ptr().cast_mut(),
-                &mut local,
+            let opened = cram_open_trace_file_c_352_open_path_mfile(
+                b"missing.dat",
+                Some(b"/definitely/not/here"),
+                Some(&relative),
             );
-            assert!(mf.is_null());
-            assert_eq!(local, 1);
+            assert!(opened.is_none());
 
             std::fs::remove_file(file_path).unwrap();
             std::fs::remove_dir(dir).unwrap();
@@ -12964,24 +12774,38 @@ mod tests {
     #[test]
     fn cram_reference_decrement_eviction_frees_previous_unreferenced_cached_seq() {
         unsafe {
-            let seq0 = malloc(4).cast::<c_char>();
-            let seq1 = malloc(4).cast::<c_char>();
-            assert!(!seq0.is_null());
-            assert!(!seq1.is_null());
-
-            let mut e0: ref_entry_layout = std::mem::zeroed();
-            e0.seq = seq0;
-            let mut e1: ref_entry_layout = std::mem::zeroed();
-            e1.seq = seq1;
+            let new_entry = |seq: Vec<u8>| ref_entry_layout {
+                name: Vec::new(),
+                fn_: Vec::new(),
+                length: 0,
+                ln_length: 0,
+                offset: 0,
+                bases_per_line: 0,
+                line_length: 0,
+                count: 0,
+                seq,
+                mf: std::ptr::null_mut(),
+                is_md5: 0,
+                validated_md5: 0,
+            };
+            let mut e0 = new_entry(vec![0u8; 4]);
+            let mut e1 = new_entry(vec![0u8; 4]);
             let mut ref_id = [
                 &mut e0 as *mut ref_entry_layout,
                 &mut e1 as *mut ref_entry_layout,
             ];
-            let mut refs: refs_t_layout = std::mem::zeroed();
-            refs.ref_id = ref_id.as_mut_ptr();
-            refs.nref = ref_id.len() as c_int;
-            refs.last = &mut e1;
-            refs.last_id = 1;
+            let mut refs = refs_t_layout {
+                pool: None,
+                h_meta: std::ptr::null_mut(),
+                ref_id: ref_id.as_mut_ptr(),
+                nref: ref_id.len() as c_int,
+                fn_: Vec::new(),
+                fp: std::ptr::null_mut(),
+                count: 0,
+                lock: crate::htslib_rs::c_compat::PTHREAD_MUTEX_INITIALIZER,
+                last: &mut e1,
+                last_id: 1,
+            };
 
             cram_cram_io_c_3169_cram_ref_incr_locked((&mut refs as *mut refs_t_layout).cast(), 0);
             assert_eq!(e0.count, 1);
@@ -12990,10 +12814,10 @@ mod tests {
             cram_cram_io_c_3189_cram_ref_decr_locked((&mut refs as *mut refs_t_layout).cast(), 0);
             assert_eq!(e0.count, 0);
             assert_eq!(refs.last_id, 0);
-            assert!(e1.seq.is_null());
+            assert!(e1.seq.is_empty());
 
             cram_cram_io_c_2417_ref_entry_free_seq((&mut e0 as *mut ref_entry_layout).cast());
-            assert!(e0.seq.is_null());
+            assert!(e0.seq.is_empty());
         }
     }
 
@@ -13001,10 +12825,9 @@ mod tests {
     fn cram_mfile_seek_tell_rewind_truncate_and_eof_match_field_rules() {
         unsafe {
             let mut mf = mFILE {
-                fp: std::ptr::null_mut(),
-                data: std::ptr::null_mut(),
-                alloced: 0,
-                eof: 1,
+                fp: None,
+                data: Vec::new(),
+                eof: true,
                 mode: 0,
                 size: 100,
                 offset: 10,
@@ -13013,22 +12836,22 @@ mod tests {
 
             assert_eq!(cram_mFILE_c_451_mfseek(&mut mf, 20, libc::SEEK_SET), 0);
             assert_eq!(cram_mFILE_c_471_mftell(&mut mf), 20);
-            assert_eq!(mf.eof, 0);
+            assert!(!mf.eof);
 
             assert_eq!(cram_mFILE_c_451_mfseek(&mut mf, 5, libc::SEEK_CUR), 0);
             assert_eq!(mf.offset, 25);
             assert_eq!(cram_mFILE_c_451_mfseek(&mut mf, -10, libc::SEEK_END), 0);
             assert_eq!(mf.offset, 90);
 
-            mf.eof = 1;
+            mf.eof = true;
             cram_mFILE_c_475_mrewind(&mut mf);
-            assert_eq!((mf.offset, mf.eof), (0, 0));
+            assert_eq!((mf.offset, mf.eof), (0, false));
 
             mf.offset = 80;
             cram_mFILE_c_488_mftruncate(&mut mf, 50);
             assert_eq!((mf.size, mf.offset), (50, 50));
-            mf.eof = 7;
-            assert_eq!(cram_mFILE_c_494_mfeof(&mut mf), 7);
+            mf.eof = true;
+            assert_eq!(cram_mFILE_c_494_mfeof(&mut mf), 1);
 
             assert_eq!(cram_mFILE_c_451_mfseek(&mut mf, 0, -999), -1);
         }
@@ -13041,7 +12864,6 @@ mod tests {
             std::ptr::copy_nonoverlapping(b"abcdef".as_ptr().cast::<c_char>(), data, 6);
             let mf = cram_mFILE_c_207_mfcreate(data, 6);
             assert!(!mf.is_null());
-            (*mf).alloced = 16;
             (*mf).mode = MF_READ | MF_WRITE | MF_APPEND;
             (*mf).offset = 2;
             (*mf).flush_pos = 6;
@@ -13054,10 +12876,8 @@ mod tests {
             assert_eq!((*mf).offset, 8);
             assert_eq!((*mf).size, 8);
             assert_eq!((*mf).flush_pos, 6);
-            assert_eq!(
-                std::slice::from_raw_parts((*mf).data.cast::<u8>(), (*mf).size),
-                b"abcdefXY"
-            );
+            let data = &(*mf).data;
+            assert_eq!(&data[..(*mf).size], b"abcdefXY");
 
             (*mf).offset = 3;
             cram_mFILE_c_488_mftruncate(mf, -1);
@@ -13088,7 +12908,7 @@ mod tests {
                 input.len()
             );
             assert_eq!((*mf).size, 5);
-            assert!((*mf).alloced >= 1024);
+            assert!((*mf).data.capacity() >= 1024);
 
             cram_mFILE_c_475_mrewind(mf);
             let mut out = [0u8; 8];
@@ -13097,7 +12917,7 @@ mod tests {
                 2
             );
             assert_eq!(&out[..5], b"hello");
-            assert_eq!((*mf).eof, 1);
+            assert!((*mf).eof);
 
             let repl = malloc(4).cast::<c_char>();
             std::ptr::copy_nonoverlapping(c"abc".as_ptr(), repl, 4);
@@ -13128,12 +12948,10 @@ mod tests {
             );
             (*mf).flush_pos = 3;
             assert_eq!(cram_mFILE_c_389_mfdetach(mf), 0);
-            assert!((*mf).fp.is_null());
+            assert!((*mf).fp.is_none());
             assert_eq!((*mf).flush_pos, (*mf).size);
-            assert_eq!(
-                std::slice::from_raw_parts((*mf).data.cast::<u8>(), (*mf).size),
-                b"abcdef"
-            );
+            let data = &(*mf).data;
+            assert_eq!(&data[..(*mf).size], b"abcdef");
 
             assert_eq!(cram_mFILE_c_408_mfdestroy(mf), 0);
             assert_eq!(std::fs::read(&path).unwrap(), b"\0\0\0def");
@@ -13166,22 +12984,18 @@ mod tests {
             let mf = cram_mFILE_c_347_mfopen(c_path.as_ptr(), c"rb".as_ptr());
             assert!(!mf.is_null());
             assert_eq!((*mf).size, 6);
-            assert_eq!(
-                std::slice::from_raw_parts((*mf).data.cast::<u8>(), (*mf).size),
-                b"abcdef"
-            );
-            assert!(!(*mf).fp.is_null());
+            let data = &(*mf).data;
+            assert_eq!(&data[..(*mf).size], b"abcdef");
+            assert!((*mf).fp.is_some());
             assert_eq!(cram_mFILE_c_361_mfclose(mf), 0);
 
             let fp = libc::fopen(c_path.as_ptr(), mode.as_ptr());
             assert!(!fp.is_null());
             let mf = cram_mFILE_c_246_mfcreate_from(c_path.as_ptr(), c"rb".as_ptr(), fp);
             assert!(!mf.is_null());
-            assert!((*mf).fp.is_null());
-            assert_eq!(
-                std::slice::from_raw_parts((*mf).data.cast::<u8>(), (*mf).size),
-                b"abcdef"
-            );
+            assert!((*mf).fp.is_none());
+            let data = &(*mf).data;
+            assert_eq!(&data[..(*mf).size], b"abcdef");
             assert_eq!(cram_mFILE_c_408_mfdestroy(mf), 0);
             libc::fclose(fp);
 
@@ -13208,7 +13022,7 @@ mod tests {
             assert_ne!((*mf).mode & MF_WRITE, 0);
             assert_ne!((*mf).mode & MF_TRUNC, 0);
             assert_ne!((*mf).mode & MF_BINARY, 0);
-            assert!((*mf).data.is_null());
+            assert!((*mf).data.is_empty());
 
             assert_eq!(cram_mFILE_c_361_mfclose(mf), 0);
             assert_eq!(std::fs::read(&path).unwrap(), b"");
@@ -13239,10 +13053,8 @@ mod tests {
             cram_mFILE_c_475_mrewind(mf);
             cram_mFILE_c_656_mfascii(mf);
             assert_eq!((*mf).size, 6);
-            assert_eq!(
-                std::slice::from_raw_parts((*mf).data.cast::<u8>(), 6),
-                b"X\nbc\nz"
-            );
+            let data = &(*mf).data;
+            assert_eq!(&data[..6], b"X\nbc\nz");
 
             let mut stolen_size = 0usize;
             let stolen = cram_mFILE_c_428_mfsteal(mf, &mut stolen_size);
@@ -13260,17 +13072,17 @@ mod tests {
             assert!(!mf.is_null());
 
             assert_eq!(cram_mFILE_c_557_mfgetc(mf), -1);
-            assert_eq!((*mf).eof, 1);
+            assert!((*mf).eof);
 
-            (*mf).eof = 0;
+            (*mf).eof = false;
             assert_eq!(cram_mFILE_c_567_mungetc(b'Z' as c_int, mf), -1);
-            assert_eq!((*mf).eof, 1);
+            assert!((*mf).eof);
 
-            (*mf).eof = 0;
+            (*mf).eof = false;
             let mut line = [b'x' as c_char; 4];
             assert!(cram_mFILE_c_577_mfgets(line.as_mut_ptr(), line.len() as c_int, mf).is_null());
             assert_eq!(line[0], 0);
-            assert_eq!((*mf).eof, 1);
+            assert!((*mf).eof);
             assert_eq!((*mf).offset, 0);
 
             assert_eq!(cram_mFILE_c_408_mfdestroy(mf), 0);
@@ -13285,19 +13097,19 @@ mod tests {
             assert!(!in1.is_null());
             assert_eq!(in1, in2);
             assert_eq!((*in1).mode, MF_READ | MF_WRITE);
-            assert!(!(*in1).fp.is_null());
+            assert!((*in1).fp.is_some());
 
             let out1 = cram_mFILE_c_176_mstdout();
             let out2 = cram_mFILE_c_176_mstdout();
             assert!(!out1.is_null());
             assert_eq!(out1, out2);
             assert_eq!((*out1).mode, MF_WRITE);
-            assert!(!(*out1).fp.is_null());
+            assert!((*out1).fp.is_some());
 
             let saved_fp = (*out1).fp;
             let tmp_fp = libc::tmpfile();
             assert!(!tmp_fp.is_null());
-            (*out1).fp = tmp_fp;
+            (*out1).fp = Some(tmp_fp);
 
             let mut msg = *b"x";
             assert_eq!(
@@ -13317,7 +13129,7 @@ mod tests {
             assert_eq!(err1, err2);
             assert_ne!(err1, out1);
             assert_eq!((*err1).mode, MF_WRITE);
-            assert!(!(*err1).fp.is_null());
+            assert!((*err1).fp.is_some());
         }
     }
 
@@ -13328,26 +13140,21 @@ mod tests {
             assert_eq!(cram_pooled_alloc_c_47_next_power_2(1), 1);
             assert_eq!(cram_pooled_alloc_c_47_next_power_2(17), 32);
 
-            let p = cram_pooled_alloc_c_64_pool_create(3);
-            assert!(!p.is_null());
-            assert_eq!((*p).dsize, std::mem::size_of::<*mut c_void>());
-            assert_eq!((*p).psize, 8192);
-            assert_eq!((*p).npools, 0);
+            let mut p = cram_pooled_alloc_c_64_pool_create(3);
+            assert_eq!(p.dsize, std::mem::size_of::<*mut c_void>());
+            assert_eq!(p.psize, 8192);
+            assert_eq!(p.pools.len(), 0);
 
-            let a = cram_pooled_alloc_c_115_pool_alloc(p);
-            let b = cram_pooled_alloc_c_115_pool_alloc(p);
-            assert!(!a.is_null());
-            assert!(!b.is_null());
-            assert_eq!((*p).npools, 1);
-            assert_eq!((*(*p).pools).used, (*p).dsize * 2);
-            assert_eq!(
-                b.cast::<u8>().offset_from(a.cast::<u8>()) as usize,
-                (*p).dsize
-            );
+            let a = cram_pooled_alloc_c_115_pool_alloc(&mut p).expect("a slot");
+            let b = cram_pooled_alloc_c_115_pool_alloc(&mut p).expect("b slot");
+            assert_eq!(p.pools.len(), 1);
+            assert_eq!(p.pools[0].used, p.dsize * 2);
+            assert_eq!(a.pool, b.pool);
+            assert_eq!(b.offset - a.offset, p.dsize);
 
-            cram_pooled_alloc_c_144_pool_free(p, a);
-            let reused = cram_pooled_alloc_c_115_pool_alloc(p);
-            assert_eq!(reused, a);
+            cram_pooled_alloc_c_144_pool_free(&mut p, a);
+            let reused = cram_pooled_alloc_c_115_pool_alloc(&mut p).expect("reused slot");
+            assert_eq!((reused.pool, reused.offset), (a.pool, a.offset));
 
             cram_pooled_alloc_c_84_pool_destroy(p);
         }
@@ -13356,24 +13163,23 @@ mod tests {
     #[test]
     fn cram_pooled_allocator_starts_new_pool_at_exact_capacity_edge() {
         unsafe {
-            let p = cram_pooled_alloc_c_64_pool_create(8192);
-            assert!(!p.is_null());
-            assert_eq!((*p).dsize, 8192);
-            assert_eq!((*p).psize, POOLED_ALLOC_PSIZE);
+            let mut p = cram_pooled_alloc_c_64_pool_create(8192);
+            assert_eq!(p.dsize, 8192);
+            assert_eq!(p.psize, POOLED_ALLOC_PSIZE);
 
-            let slots_before_edge = (*p).psize / (*p).dsize - 1;
-            let first = cram_pooled_alloc_c_115_pool_alloc(p);
-            assert!(!first.is_null());
+            let slots_before_edge = p.psize / p.dsize - 1;
+            let first = cram_pooled_alloc_c_115_pool_alloc(&mut p);
+            assert!(first.is_some());
             for _ in 1..slots_before_edge {
-                assert!(!cram_pooled_alloc_c_115_pool_alloc(p).is_null());
+                assert!(cram_pooled_alloc_c_115_pool_alloc(&mut p).is_some());
             }
-            assert_eq!((*p).npools, 1);
-            assert_eq!((*(*p).pools).used, (*p).psize - (*p).dsize);
+            assert_eq!(p.pools.len(), 1);
+            assert_eq!(p.pools[0].used, p.psize - p.dsize);
 
-            let second_pool_first = cram_pooled_alloc_c_115_pool_alloc(p);
-            assert!(!second_pool_first.is_null());
-            assert_eq!((*p).npools, 2);
-            assert_eq!((*(*p).pools.add(1)).used, (*p).dsize);
+            let second_pool_first = cram_pooled_alloc_c_115_pool_alloc(&mut p);
+            assert!(second_pool_first.is_some());
+            assert_eq!(p.pools.len(), 2);
+            assert_eq!(p.pools[1].used, p.dsize);
 
             cram_pooled_alloc_c_84_pool_destroy(p);
         }
@@ -13382,12 +13188,10 @@ mod tests {
     #[test]
     fn cram_pooled_allocator_disabled_branch_allocates_directly_and_test_main_runs() {
         unsafe {
-            let p = cram_pooled_alloc_c_64_pool_create(12);
-            assert!(!p.is_null());
-            let ptr = cram_pooled_alloc_c_151_pool_alloc(p);
-            assert!(!ptr.is_null());
-            assert_eq!((*p).npools, 0);
-            cram_pooled_alloc_c_155_pool_free(p, ptr);
+            let mut p = cram_pooled_alloc_c_64_pool_create(12);
+            let id = cram_pooled_alloc_c_115_pool_alloc(&mut p).expect("slot");
+            assert_eq!(p.pools.len(), 1);
+            cram_pooled_alloc_c_144_pool_free(&mut p, id);
             cram_pooled_alloc_c_84_pool_destroy(p);
 
             assert_eq!(cram_pooled_alloc_c_167_main(), 0);
@@ -13871,7 +13675,7 @@ mod tests {
     #[test]
     fn cram_native_decode_pipeline_record_parity_with_c() {
         use crate::htslib_rs::cram::decode_pipeline;
-        use crate::htslib_rs::sam::{bam1_t, bam_destroy1, bam_init1};
+        use crate::htslib_rs::sam::{bam1_c_t, bam1_t, bam_destroy1, bam_init1};
 
         // (cram fixture, reference fasta or None for no-ref/unmapped).
         // Anchor on CARGO_MANIFEST_DIR so the lookup is cwd-independent: other
@@ -13905,6 +13709,13 @@ mod tests {
         unsafe extern "C" {
             #[link_name = "cram_get_bam_seq"]
             fn htslib_cram_get_bam_seq(fd: *mut cram_fd, bam: *mut *mut c_void) -> c_int;
+            // The C oracle fills a libhts-ABI bam1_t (the repr(C) mirror,
+            // bam1_c_t). It must be allocated/freed by libhts so its data
+            // pointer is realloc/free-compatible with the C decode pipeline.
+            #[link_name = "bam_init1"]
+            fn htslib_bam_init1() -> *mut bam1_c_t;
+            #[link_name = "bam_destroy1"]
+            fn htslib_bam_destroy1(b: *mut bam1_c_t);
         }
 
         let mut tested = 0usize;
@@ -13964,11 +13775,11 @@ mod tests {
 
                 // Each fd needs the SAM header loaded for decode. cram_open did
                 // that; grab it for both pipelines (they use their own fd's hdr).
-                let mut bam_c: *mut bam1_t = bam_init1();
+                let mut bam_c: *mut bam1_c_t = htslib_bam_init1();
                 let mut bam_n: *mut bam1_t = bam_init1();
                 let mut nrec = 0usize;
                 loop {
-                    let rc = htslib_cram_get_bam_seq(fd_c, (&mut bam_c as *mut *mut bam1_t).cast());
+                    let rc = htslib_cram_get_bam_seq(fd_c, (&mut bam_c as *mut *mut bam1_c_t).cast());
                     let rn = decode_pipeline::cram_get_bam_seq(
                         fd_n.cast(),
                         (&mut bam_n as *mut *mut bam1_t).cast(),
@@ -14012,13 +13823,13 @@ mod tests {
                     feq!(isize);
 
                     let lc = (*bam_c).l_data;
-                    let ln = (*bam_n).l_data;
+                    let ln = (*bam_n).data.len() as c_int;
                     assert_eq!(
                         lc, ln,
                         "{cram}: record {nrec} l_data differs (C={lc} native={ln})"
                     );
                     let dc = std::slice::from_raw_parts((*bam_c).data, lc as usize);
-                    let dn = std::slice::from_raw_parts((*bam_n).data, ln as usize);
+                    let dn = std::slice::from_raw_parts((*bam_n).data.as_ptr(), ln as usize);
                     assert_eq!(
                         dc, dn,
                         "{cram}: record {nrec} bam1_t data block differs (qname/cigar/seq/qual/aux)"
@@ -14029,7 +13840,7 @@ mod tests {
                 eprintln!("[parity] {cram}: {nrec} records matched byte-for-byte");
                 assert!(nrec > 0, "{cram}: decoded zero records");
 
-                bam_destroy1(bam_c);
+                htslib_bam_destroy1(bam_c);
                 bam_destroy1(bam_n);
                 // Restore the libhts-owned refs on fd_n and free the
                 // native-built refs ourselves (incompatible ABI with libhts'

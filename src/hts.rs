@@ -1,5 +1,5 @@
 use std::{
-    ffi::{c_char, c_int, c_short, c_void, CStr},
+    ffi::{c_char, c_int, c_short, c_uint, c_void, CStr},
     path::{Path, PathBuf},
     ptr::NonNull,
 };
@@ -588,11 +588,11 @@ unsafe fn fscan_string(fp: *mut hFILE, d: *mut kstring_t) -> c_int {
                     return if e == 0 { 0 } else { -1 };
                 }
                 match c as u8 {
-                    b'b' => e |= (kputc(b'\x08' as c_int, d) < 0) as u32,
-                    b'f' => e |= (kputc(b'\x0c' as c_int, d) < 0) as u32,
-                    b'n' => e |= (kputc(b'\n' as c_int, d) < 0) as u32,
-                    b'r' => e |= (kputc(b'\r' as c_int, d) < 0) as u32,
-                    b't' => e |= (kputc(b'\t' as c_int, d) < 0) as u32,
+                    b'b' => e |= (kputc(b'\x08' as c_int, &mut *d) < 0) as u32,
+                    b'f' => e |= (kputc(b'\x0c' as c_int, &mut *d) < 0) as u32,
+                    b'n' => e |= (kputc(b'\n' as c_int, &mut *d) < 0) as u32,
+                    b'r' => e |= (kputc(b'\r' as c_int, &mut *d) < 0) as u32,
+                    b't' => e |= (kputc(b'\t' as c_int, &mut *d) < 0) as u32,
                     b'u' => {
                         let c1 = super::hfile::htslib_hfile_h_163_hgetc(fp);
                         let d1 = if c1 != libc::EOF {
@@ -637,14 +637,15 @@ unsafe fn fscan_string(fp: *mut hFILE, d: *mut kstring_t) -> c_int {
                                 ((d1 << 12) | (d2 << 8) | (d3 << 4) | d4) as u32,
                             );
                             let len = lim.offset_from(buf.as_ptr()) as size_t;
-                            e |= (kputsn(buf.as_ptr(), len, d) < 0) as u32;
+                            let buf_bytes = std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), len);
+                            e |= (kputsn(buf_bytes, len, &mut *d) < 0) as u32;
                         }
                     }
-                    _ => e |= (kputc(c, d) < 0) as u32,
+                    _ => e |= (kputc(c, &mut *d) < 0) as u32,
                 }
             }
             b'"' => return if e == 0 { 0 } else { -1 },
-            _ => e |= (kputc(c, d) < 0) as u32,
+            _ => e |= (kputc(c, &mut *d) < 0) as u32,
         }
     }
     if e == 0 {
@@ -684,18 +685,21 @@ pub unsafe fn hts_json_fnext(
                 return (*token).type_;
             }
             x if x == b'"' as c_int => {
-                (*kstr).l = 0;
+                // SEAM: kstr may be an unallocated (NULL-pointer) calloc'd kstring;
+                // truncate(0) empties it without the NULL-pointer abort that
+                // Vec::clear() would hit (see hts_getline).
+                (*kstr).data.truncate(0);
                 fscan_string(fp, kstr);
-                if (*kstr).l == 0 {
-                    kputsn(c"".as_ptr(), 0, kstr);
+                if (*kstr).data.is_empty() {
+                    kputsn(b"", 0, &mut *kstr);
                 }
-                (*token).str_ = (*kstr).s;
+                (*token).str_ = (*kstr).data.as_mut_ptr().cast();
                 (*token).type_ = b's' as c_char;
                 return (*token).type_;
             }
             _ => {
-                (*kstr).l = 0;
-                kputc(c, kstr);
+                (*kstr).data.truncate(0);
+                kputc(c, &mut *kstr);
                 let mut peek: c_char = 0;
                 while hpeek(fp, (&mut peek as *mut c_char).cast(), 1) == 1
                     && libc::strchr(c" \t\r\n,]}".as_ptr(), peek as c_int).is_null()
@@ -704,9 +708,9 @@ pub unsafe fn hts_json_fnext(
                     if nc == libc::EOF {
                         break;
                     }
-                    kputc(nc, kstr);
+                    kputc(nc, &mut *kstr);
                 }
-                (*token).str_ = (*kstr).s;
+                (*token).str_ = (*kstr).data.as_mut_ptr().cast();
                 (*token).type_ = token_type(token);
                 return (*token).type_;
             }
@@ -719,14 +723,13 @@ unsafe fn fnext(arg1: *mut c_void, arg2: *mut c_void, token: *mut hts_json_token
 }
 
 pub unsafe fn hts_json_fskip_value(fp: *mut hFILE, type_: c_char) -> c_char {
-    let mut str_: kstring_t = std::mem::zeroed();
+    let mut str_: kstring_t = kstring_t::default();
     let ret = skip_value(
         type_,
         Some(fnext),
         fp.cast(),
         (&mut str_ as *mut kstring_t).cast(),
     );
-    libc::free(str_.s.cast());
     ret
 }
 
@@ -1205,9 +1208,9 @@ pub unsafe fn hts_c_540_colmatch(columns: *const c_char, pattern: *const c_char)
 }
 
 pub unsafe fn hts_is_utf16_text(str_: *const kstring_t) -> c_int {
-    let u = (*str_).s.cast::<u8>();
-    if (*str_).l > 0 && !(*str_).s.is_null() {
-        is_utf16_text(u, u.add((*str_).l))
+    let u = (*str_).data.as_ptr();
+    if !(*str_).data.is_empty() {
+        is_utf16_text(u, u.add((*str_).data.len()))
     } else {
         0
     }
@@ -1350,11 +1353,7 @@ unsafe fn hts_parse_region_ref(
 
     let mut s = s.as_ptr();
     let mut s_len = CStr::from_ptr(s).to_bytes().len();
-    let mut ks = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut ks = kstring_t::default();
     let mut colon: *const c_char = std::ptr::null();
     let mut quoted = 0usize;
 
@@ -1400,54 +1399,52 @@ unsafe fn hts_parse_region_ref(
     if colon.is_null() {
         *beg = 0;
         *end = HTS_POS_MAX;
-        kputsn(s, s_len - quoted, &mut ks);
-        if ks.s.is_null() {
-            *tid = -2;
-            return std::ptr::null();
-        }
-        *tid = getid(hdr, ks.s);
-        crate::htslib_rs::c_compat::free(ks.s.cast());
+        kputsn(
+            std::slice::from_raw_parts(s.cast::<u8>(), s_len - quoted),
+            s_len - quoted,
+            &mut ks,
+        );
+        ks.data.push(0);
+        *tid = getid(hdr, ks.data.as_ptr().cast());
+        ks.data.pop();
         return if *tid >= 0 { s_end } else { std::ptr::null() };
     }
 
     if quoted == 0 {
         *beg = 0;
         *end = HTS_POS_MAX;
-        kputsn(s, s_len, &mut ks);
-        if ks.s.is_null() {
-            *tid = -2;
-            return std::ptr::null();
-        }
-        *tid = getid(hdr, ks.s);
+        kputsn(
+            std::slice::from_raw_parts(s.cast::<u8>(), s_len),
+            s_len,
+            &mut ks,
+        );
+        ks.data.push(0);
+        *tid = getid(hdr, ks.data.as_ptr().cast());
+        ks.data.pop();
         if *tid >= 0 {
-            ks.l = 0;
-            kputsn(s, colon.offset_from(s) as usize, &mut ks);
-            if ks.s.is_null() {
-                *tid = -2;
-                return std::ptr::null();
-            }
-            if getid(hdr, ks.s) >= 0 {
-                crate::htslib_rs::c_compat::free(ks.s.cast());
+            ks.data.clear();
+            let len = colon.offset_from(s) as usize;
+            kputsn(std::slice::from_raw_parts(s.cast::<u8>(), len), len, &mut ks);
+            ks.data.push(0);
+            let found = getid(hdr, ks.data.as_ptr().cast());
+            ks.data.pop();
+            if found >= 0 {
                 *tid = -1;
                 return std::ptr::null();
             }
-            crate::htslib_rs::c_compat::free(ks.s.cast());
             return s_end;
         }
         if *tid < -1 {
-            crate::htslib_rs::c_compat::free(ks.s.cast());
             return std::ptr::null();
         }
     }
 
-    ks.l = 0;
-    kputsn(s, colon.offset_from(s) as usize - quoted, &mut ks);
-    if ks.s.is_null() {
-        *tid = -2;
-        return std::ptr::null();
-    }
-    *tid = getid(hdr, ks.s);
-    crate::htslib_rs::c_compat::free(ks.s.cast());
+    ks.data.clear();
+    let len = colon.offset_from(s) as usize - quoted;
+    kputsn(std::slice::from_raw_parts(s.cast::<u8>(), len), len, &mut ks);
+    ks.data.push(0);
+    *tid = getid(hdr, ks.data.as_ptr().cast());
+    ks.data.pop();
     if *tid < 0 {
         return std::ptr::null();
     }
@@ -2002,8 +1999,50 @@ pub unsafe fn double_to_le(val: f64, buf: *mut u8) {
     u64_to_le(val.to_bits(), buf);
 }
 
-#[repr(C)]
+// === BGZF: owned root struct (SEAM phase 1) ===
+//
+// Previously a `#[repr(C)]` mirror of the C struct where
+// uncompressed_block/compressed_block/cache/mt/idx were `*mut c_void` and
+// `fp` was `*mut hFILE`. Now an owned Rust struct: the BGZF owns its buffers
+// (Vec<u8>), its hFILE, its cache, its multi-threading aux, and its index.
+//
+// `bitfields` keeps the original packed bit-twiddling (open/compress/is_write/
+// is_be/compress_level/is_compressed/is_gzip/cache_size bits) — accessor
+// methods in bgzf.rs continue to mask/shift it.
 pub struct BGZF {
+    pub bitfields: u32,
+    pub cache_size: c_int,
+    pub block_length: c_int,
+    pub block_clength: c_int,
+    pub block_offset: c_int,
+    pub block_address: i64,
+    pub uncompressed_address: i64,
+    /// owned scratch buffer for the decompressed BGZF block
+    pub uncompressed_block: Vec<u8>,
+    /// owned scratch buffer for the compressed BGZF block
+    pub compressed_block: Vec<u8>,
+    /// owned LRU block cache (None when caching disabled)
+    pub cache: Option<Box<crate::htslib_rs::bgzf::bgzf_cache_t>>,
+    /// the BGZF's underlying file handle: None / a bare fd / an owned hFILE
+    pub fp: crate::htslib_rs::bgzf::BgzfFp,
+    /// owned multi-threaded writer/reader aux state (None for single-threaded)
+    pub mt: Option<Box<crate::htslib_rs::bgzf::bgzf_mtaux_t>>,
+    /// owned on-the-fly GZI index (None when not indexing)
+    pub idx: Option<Box<crate::htslib_rs::bgzf::bgzidx_t>>,
+    pub idx_build_otf: c_int,
+    pub gz_stream: Option<NonNull<crate::htslib_rs::bgzf::GzipStream>>,
+    pub seeked: i64,
+}
+
+// === Parity mirror for BGZF ===
+// Only used under `parity` for differential tests against the C hts_sys lib.
+// Keeps the original C ABI layout (raw void*/hFILE*) so a *mut BGZF_c handed
+// to/from the C library can be reinterpreted. Conversion happens at the FFI
+// boundary in bgzf.rs (see bgzf_to_c / bgzf_from_c there); production paths
+// never touch this type.
+#[cfg(feature = "parity")]
+#[repr(C)]
+pub struct BGZF_c {
     pub bitfields: u32,
     pub cache_size: c_int,
     pub block_length: c_int,
@@ -2014,11 +2053,11 @@ pub struct BGZF {
     pub uncompressed_block: *mut c_void,
     pub compressed_block: *mut c_void,
     pub cache: *mut c_void,
-    pub fp: *mut hFILE,
+    pub fp: *mut hFILE_c,
     pub mt: *mut c_void,
     pub idx: *mut c_void,
     pub idx_build_otf: c_int,
-    pub gz_stream: Option<NonNull<crate::htslib_rs::bgzf::GzipStream>>,
+    pub gz_stream: *mut c_void,
     pub seeked: i64,
 }
 
@@ -2027,14 +2066,54 @@ pub struct cram_fd {
     _private: [u8; 0],
 }
 
-#[repr(C)]
+// === hFILE: owned root struct (SEAM phase 1) ===
+//
+// Previously an opaque forward-decl `struct hFILE { _private: [u8;0] }` whose
+// real layout lived in hfile.rs as `hfile_layout` with raw `*mut u8`
+// buffer/begin/end/limit pointers and a `*const hfile_backend_layout` vtable.
+//
+// Now an owned struct: the buffer is a `Vec<u8>` and begin/end/limit are
+// `usize` indices into it. The backend vtable-of-fn-pointers is replaced by
+// the `HFileBackend` enum (see hfile.rs) which carries each finite backend's
+// own state inline and dispatches via `match`.
 pub struct hFILE {
-    _private: [u8; 0],
+    /// owned I/O buffer; `begin`/`end`/`limit` are byte indices into it
+    pub buffer: Vec<u8>,
+    /// index of first buffered-but-unconsumed byte
+    pub begin: usize,
+    /// index one past the last valid buffered byte
+    pub end: usize,
+    /// usable capacity (buffer is sized to this)
+    pub limit: usize,
+    /// enum dispatch replacing the old `*const hfile_backend_layout`
+    pub backend: crate::htslib_rs::hfile::HFileBackend,
+    pub offset: libc::off_t,
+    pub flags: c_uint,
+    pub has_errno: i32,
+}
+
+// === Parity mirror for hFILE ===
+// C ABI layout of the buffered hFILE, used only under `parity`.
+#[cfg(feature = "parity")]
+#[repr(C)]
+pub struct hFILE_c {
+    pub buffer: *mut u8,
+    pub begin: *mut u8,
+    pub end: *mut u8,
+    pub limit: *mut u8,
+    pub backend: *const c_void,
+    pub offset: libc::off_t,
+    pub flags: c_uint,
+    pub has_errno: i32,
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct kstring_t {
+    pub data: Vec<u8>,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
-pub struct kstring_t {
+pub struct kstring_c_t {
     pub l: size_t,
     pub m: size_t,
     pub s: *mut c_char,
@@ -2221,70 +2300,42 @@ pub unsafe fn kbs_next(bs: &kbitset_t, itr: &mut kbitset_iter_t) -> c_int {
     ret
 }
 
-pub unsafe fn ks_initialize(s: *mut kstring_t) {
-    (*s).l = 0;
-    (*s).m = 0;
-    (*s).s = std::ptr::null_mut();
+pub fn ks_initialize(s: &mut kstring_t) {
+    s.data.clear();
 }
 
-pub unsafe fn ks_resize(s: *mut kstring_t, mut size: size_t) -> c_int {
-    if (*s).m < size {
-        if size <= usize::MAX >> 2 {
-            size += size >> 1;
-        }
-        let tmp = crate::htslib_rs::c_compat::realloc((*s).s.cast(), size as u64).cast::<c_char>();
-        if tmp.is_null() {
-            return -1;
-        }
-        (*s).s = tmp;
-        (*s).m = size;
-    }
+pub fn ks_resize(s: &mut kstring_t, size: size_t) -> c_int {
+    s.data.reserve(size.saturating_sub(s.data.len()));
     0
 }
 
-pub unsafe fn ks_expand(s: *mut kstring_t, expansion: size_t) -> c_int {
-    let Some(new_size) = (*s).l.checked_add(expansion) else {
-        *crate::htslib_rs::c_compat::__errno_location() =
-            crate::htslib_rs::c_compat::EOVERFLOW as c_int;
-        return -1;
-    };
-    ks_resize(s, new_size)
+pub fn ks_expand(s: &mut kstring_t, expansion: size_t) -> c_int {
+    s.data.reserve(expansion);
+    0
 }
 
-pub unsafe fn ks_str(s: *mut kstring_t) -> *mut c_char {
-    (*s).s
+pub fn ks_str(s: &mut kstring_t) -> &mut Vec<u8> {
+    &mut s.data
 }
 
-pub unsafe fn ks_c_str(s: *mut kstring_t) -> *const c_char {
-    if (*s).l != 0 && !(*s).s.is_null() {
-        (*s).s
-    } else {
-        c"".as_ptr()
-    }
+pub fn ks_c_str(s: &kstring_t) -> &[u8] {
+    &s.data
 }
 
-pub unsafe fn ks_len(s: *mut kstring_t) -> size_t {
-    (*s).l
+pub fn ks_len(s: &kstring_t) -> size_t {
+    s.data.len()
 }
 
-pub unsafe fn ks_clear(s: *mut kstring_t) -> *mut kstring_t {
-    (*s).l = 0;
-    s
+pub fn ks_clear(s: &mut kstring_t) {
+    s.data.clear();
 }
 
-pub unsafe fn ks_release(s: *mut kstring_t) -> *mut c_char {
-    let ss = (*s).s;
-    (*s).l = 0;
-    (*s).m = 0;
-    (*s).s = std::ptr::null_mut();
-    ss
+pub fn ks_release(s: &mut kstring_t) -> Vec<u8> {
+    std::mem::take(&mut s.data)
 }
 
-pub unsafe fn ks_free(s: *mut kstring_t) {
-    if !s.is_null() {
-        crate::htslib_rs::c_compat::free((*s).s.cast());
-        ks_initialize(s);
-    }
+pub fn ks_free(s: &mut kstring_t) {
+    s.data = Vec::new();
 }
 
 pub unsafe fn hts_prefetch(p: *mut c_void) {
@@ -2295,188 +2346,75 @@ pub unsafe fn hts_prefetch_builtin(p: *mut c_void) {
     hts_prefetch(p);
 }
 
-pub unsafe fn kputsn(p: *const c_char, l: size_t, s: *mut kstring_t) -> c_int {
-    let Some(new_sz) = (*s).l.checked_add(l).and_then(|v| v.checked_add(2)) else {
-        *crate::htslib_rs::c_compat::__errno_location() =
-            crate::htslib_rs::c_compat::EOVERFLOW as c_int;
-        return -1;
-    };
-    if ks_resize(s, new_sz) < 0 {
-        return -1;
+pub fn kputsn(p: &[u8], l: size_t, s: &mut kstring_t) -> c_int {
+    // C kputsn always ensures a backing buffer (for the trailing NUL), so even a
+    // zero-length write leaves `s->s != NULL`. Preserve that invariant here by
+    // forcing a non-zero capacity; downstream code (e.g. hts_expr's
+    // `s.s == NULL` exists-test) relies on capacity to distinguish an
+    // explicitly-set empty string from a never-allocated one.
+    if s.data.capacity() == 0 {
+        s.data.reserve(1);
     }
-    if l > 0 {
-        crate::htslib_rs::c_compat::memcpy((*s).s.add((*s).l).cast(), p.cast(), l as u64);
-    }
-    (*s).l += l;
-    *(*s).s.add((*s).l) = 0;
+    s.data.extend_from_slice(&p[..l]);
     l as c_int
 }
 
-pub unsafe fn kputs(p: *const c_char, s: *mut kstring_t) -> c_int {
-    if p.is_null() {
-        *crate::htslib_rs::c_compat::__errno_location() =
-            crate::htslib_rs::c_compat::EFAULT as c_int;
-        return -1;
+pub fn kputs(p: &[u8], s: &mut kstring_t) -> c_int {
+    if s.data.capacity() == 0 {
+        s.data.reserve(1);
     }
-    kputsn(p, CStr::from_ptr(p).to_bytes().len(), s)
+    s.data.extend_from_slice(p);
+    p.len() as c_int
 }
 
-pub unsafe fn kputc(c: c_int, s: *mut kstring_t) -> c_int {
-    if ks_resize(s, (*s).l + 2) < 0 {
-        return -1;
-    }
-    *(*s).s.add((*s).l) = c as c_char;
-    (*s).l += 1;
-    *(*s).s.add((*s).l) = 0;
+pub fn kputc(c: c_int, s: &mut kstring_t) -> c_int {
+    s.data.push(c as u8);
     (c as u8) as c_int
 }
 
-pub unsafe fn kputc_(c: c_int, s: *mut kstring_t) -> c_int {
-    if ks_resize(s, (*s).l + 1) < 0 {
-        return -1;
-    }
-    *(*s).s.add((*s).l) = c as c_char;
-    (*s).l += 1;
+pub fn kputc_(c: c_int, s: &mut kstring_t) -> c_int {
+    s.data.push(c as u8);
     1
 }
 
-pub unsafe fn kputsn_(p: *const c_void, l: size_t, s: *mut kstring_t) -> c_int {
-    let Some(new_sz) = (*s).l.checked_add(l) else {
-        *crate::htslib_rs::c_compat::__errno_location() =
-            crate::htslib_rs::c_compat::EOVERFLOW as c_int;
-        return -1;
-    };
-    if ks_resize(s, if new_sz == 0 { 1 } else { new_sz }) < 0 {
-        return -1;
+pub fn kputsn_(p: &[u8], l: size_t, s: &mut kstring_t) -> c_int {
+    if s.data.capacity() == 0 {
+        s.data.reserve(1);
     }
-    if l > 0 {
-        crate::htslib_rs::c_compat::memcpy((*s).s.add((*s).l).cast(), p, l as u64);
-    }
-    (*s).l += l;
+    s.data.extend_from_slice(&p[..l]);
     l as c_int
 }
 
-pub unsafe fn kputuw(x: u32, s: *mut kstring_t) -> c_int {
-    static KPUTUW_DIG2R: &[u8; 200] = b"0001020304050607080910111213141516171819\
-          2021222324252627282930313233343536373839\
-          4041424344454647484950515253545556575859\
-          6061626364656667686970717273747576777879\
-          8081828384858687888990919293949596979899";
-
-    if x < 10 {
-        if ks_resize(s, (*s).l + 2) < 0 {
-            return libc::EOF;
-        }
-        *(*s).s.add((*s).l) = (b'0' + x as u8) as c_char;
-        (*s).l += 1;
-        *(*s).s.add((*s).l) = 0;
-        return 0;
+pub fn kputuw(x: u32, s: &mut kstring_t) -> c_int {
+    if s.data.capacity() == 0 {
+        s.data.reserve(1);
     }
-
-    let mut m = 1u64;
-    let mut l = 0usize;
-    loop {
-        l += 1;
-        m *= 10;
-        if (x as u64) < m {
-            break;
-        }
-    }
-
-    if ks_resize(s, (*s).l + l + 2) < 0 {
-        return libc::EOF;
-    }
-
-    let mut x = x;
-    let mut j = l;
-    let cp = (*s).s.add((*s).l);
-    while x >= 10 {
-        let d = 2 * (x % 100) as usize;
-        x /= 100;
-        j -= 2;
-        crate::htslib_rs::c_compat::memcpy(
-            cp.add(j).cast(),
-            KPUTUW_DIG2R.as_ptr().add(d).cast(),
-            2,
-        );
-    }
-    if j == 1 {
-        *cp = (x as u8 + b'0') as c_char;
-    }
-    (*s).l += l;
-    *(*s).s.add((*s).l) = 0;
+    s.data.extend_from_slice(x.to_string().as_bytes());
     0
 }
 
-pub unsafe fn kputw(c: c_int, s: *mut kstring_t) -> c_int {
-    if c < 0 {
-        if kputc(b'-' as c_int, s) < 0 {
-            return -1;
-        }
-        kputuw(c.wrapping_neg() as u32, s)
-    } else {
-        kputuw(c as u32, s)
+pub fn kputw(c: c_int, s: &mut kstring_t) -> c_int {
+    if s.data.capacity() == 0 {
+        s.data.reserve(1);
     }
-}
-
-pub unsafe fn kputll(c: i64, s: *mut kstring_t) -> c_int {
-    static KPUTULL_DIG2R: &[u8; 200] = b"0001020304050607080910111213141516171819\
-          2021222324252627282930313233343536373839\
-          4041424344454647484950515253545556575859\
-          6061626364656667686970717273747576777879\
-          8081828384858687888990919293949596979899";
-
-    if ks_resize(s, (*s).l + 23) < 0 {
-        return libc::EOF;
-    }
-
-    let mut x = c as u64;
-    if c < 0 {
-        x = x.wrapping_neg();
-        *(*s).s.add((*s).l) = b'-' as c_char;
-        (*s).l += 1;
-    }
-
-    if x <= u32::MAX as u64 {
-        return kputuw(x as u32, s);
-    }
-
-    let mut m = 1u64;
-    let mut l = 0usize;
-    if x >= 10_000_000_000_000_000_000u64 {
-        l = 20;
-    } else {
-        loop {
-            l += 1;
-            m *= 10;
-            if x < m {
-                break;
-            }
-        }
-    }
-
-    let mut j = l;
-    let cp = (*s).s.add((*s).l);
-    while x >= 10 {
-        let d = 2 * (x % 100) as usize;
-        x /= 100;
-        j -= 2;
-        crate::htslib_rs::c_compat::memcpy(
-            cp.add(j).cast(),
-            KPUTULL_DIG2R.as_ptr().add(d).cast(),
-            2,
-        );
-    }
-    if j == 1 {
-        *cp = (x as u8 + b'0') as c_char;
-    }
-    (*s).l += l;
-    *(*s).s.add((*s).l) = 0;
+    s.data.extend_from_slice(c.to_string().as_bytes());
     0
 }
 
-pub unsafe fn kputl(c: isize, s: *mut kstring_t) -> c_int {
-    kputll(c as i64, s)
+pub fn kputll(c: i64, s: &mut kstring_t) -> c_int {
+    if s.data.capacity() == 0 {
+        s.data.reserve(1);
+    }
+    s.data.extend_from_slice(c.to_string().as_bytes());
+    0
+}
+
+pub fn kputl(c: isize, s: &mut kstring_t) -> c_int {
+    if s.data.capacity() == 0 {
+        s.data.reserve(1);
+    }
+    s.data.extend_from_slice(c.to_string().as_bytes());
+    0
 }
 
 pub use crate::htslib_rs::kstring::{ksplit, ksplit_core};
@@ -2504,23 +2442,23 @@ pub unsafe fn __ac_FNV1a_hash_string(mut s: *const c_char) -> u32 {
     h
 }
 
-pub unsafe fn __ac_X31_hash_kstring(ks: kstring_t) -> u32 {
+pub fn __ac_X31_hash_kstring(ks: &kstring_t) -> u32 {
     let mut h = 0u32;
     let mut i = 0usize;
-    while i < ks.l {
-        h = (h << 5).wrapping_sub(h).wrapping_add(*ks.s.add(i) as u32);
+    while i < ks.data.len() {
+        h = (h << 5).wrapping_sub(h).wrapping_add(ks.data[i] as u32);
         i += 1;
     }
     h
 }
 
-pub unsafe fn __ac_FNV1a_hash_kstring(ks: kstring_t) -> u32 {
+pub fn __ac_FNV1a_hash_kstring(ks: &kstring_t) -> u32 {
     let offset_basis: u32 = 2166136261;
     let fnv_prime: u32 = 16777619;
     let mut h = offset_basis;
     let mut i = 0usize;
-    while i < ks.l {
-        h = (h ^ (*ks.s.add(i) as u8 as u32)).wrapping_mul(fnv_prime);
+    while i < ks.data.len() {
+        h = (h ^ (ks.data[i] as u32)).wrapping_mul(fnv_prime);
         i += 1;
     }
     h
@@ -2542,43 +2480,22 @@ pub use crate::htslib_rs::kstring::{
     boyer_moore, fast_exp, karp_rabin, kmemmem, ksBM_prep, kstrnstr, kstrstr,
 };
 
-pub unsafe fn kinsert_char(c: c_char, pos: size_t, s: *mut kstring_t) -> c_int {
-    if s.is_null() || pos > (*s).l {
+pub fn kinsert_char(c: c_char, pos: size_t, s: &mut kstring_t) -> c_int {
+    if pos > s.data.len() {
         return -1;
     }
-    if ks_resize(s, (*s).l + 2) < 0 {
-        return -1;
-    }
-    crate::htslib_rs::c_compat::memmove(
-        (*s).s.add(pos + 1).cast(),
-        (*s).s.add(pos).cast(),
-        ((*s).l - pos) as u64,
-    );
-    *(*s).s.add(pos) = c;
-    (*s).l += 1;
-    *(*s).s.add((*s).l) = 0;
+    s.data.insert(pos, c as u8);
     0
 }
 
-pub unsafe fn kinsert_str(str_: *const c_char, pos: size_t, s: *mut kstring_t) -> c_int {
-    if s.is_null() || pos > (*s).l || str_.is_null() {
+pub fn kinsert_str(str_: &[u8], pos: size_t, s: &mut kstring_t) -> c_int {
+    if pos > s.data.len() {
         return -1;
     }
-    let len = CStr::from_ptr(str_).to_bytes().len();
-    if len == 0 {
+    if str_.is_empty() {
         return 0;
     }
-    if ks_resize(s, (*s).l + len + 1) < 0 {
-        return -1;
-    }
-    crate::htslib_rs::c_compat::memmove(
-        (*s).s.add(pos + len).cast(),
-        (*s).s.add(pos).cast(),
-        ((*s).l - pos) as u64,
-    );
-    crate::htslib_rs::c_compat::memcpy((*s).s.add(pos).cast(), str_.cast(), len as u64);
-    (*s).l += len;
-    *(*s).s.add((*s).l) = 0;
+    s.data.splice(pos..pos, str_.iter().copied());
     0
 }
 
@@ -2604,7 +2521,7 @@ pub use crate::htslib_rs::hts_expr::{
 pub use crate::htslib_rs::kstring::kputd;
 
 pub unsafe fn kvsprintf(
-    s: *mut kstring_t,
+    s: &mut kstring_t,
     fmt: *const c_char,
     ap: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> c_int {
@@ -2629,12 +2546,33 @@ pub struct htsFormat {
     pub specific: *mut c_void,
 }
 
+impl Default for htsFormat {
+    fn default() -> Self {
+        htsFormat {
+            category: 0,
+            format: 0,
+            version: htsFormatVersion { major: 0, minor: 0 },
+            compression: 0,
+            compression_level: 0,
+            specific: std::ptr::null_mut(),
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub union htsFilePtr {
     pub bgzf: *mut BGZF,
     pub cram: *mut cram_fd,
     pub hfile: *mut hFILE,
+}
+
+impl Default for htsFilePtr {
+    fn default() -> Self {
+        htsFilePtr {
+            bgzf: std::ptr::null_mut(),
+        }
+    }
 }
 
 #[repr(C)]
@@ -2788,6 +2726,26 @@ pub struct htsFile {
     pub filter: *mut c_void,
 }
 
+impl Default for htsFile {
+    fn default() -> Self {
+        htsFile {
+            bitfields: 0,
+            padding_0: 0,
+            lineno: 0,
+            line: kstring_t::default(),
+            fn_: std::ptr::null_mut(),
+            fn_aux: std::ptr::null_mut(),
+            fp: htsFilePtr::default(),
+            state: std::ptr::null_mut(),
+            format: htsFormat::default(),
+            idx: std::ptr::null_mut(),
+            fnidx: std::ptr::null(),
+            bam_header: std::ptr::null_mut(),
+            filter: std::ptr::null_mut(),
+        }
+    }
+}
+
 use crate::htslib_rs::hfile::hclose;
 
 extern "C" {
@@ -2849,7 +2807,7 @@ pub unsafe fn hts_open_tmpfile(
         let t: u32 = now ^ nanos ^ ptr_seed;
         n += 1;
 
-        ks_clear(tmpname);
+        ks_clear(&mut *tmpname);
         // ksprintf(tmpname, "%s.tmp_%d_%d_%u", fname, pid, n, t)
         // Our portable ksprintf supports %s/%d; %u is the same shape, format
         // as int via the same Int variant since values fit.
@@ -2868,7 +2826,12 @@ pub unsafe fn hts_open_tmpfile(
             break;
         }
 
-        fp = NonNull::new(crate::htslib_rs::hfile::hopen((*tmpname).s, mode));
+        (*tmpname).data.push(0);
+        fp = NonNull::new(crate::htslib_rs::hfile::hopen(
+            (*tmpname).data.as_ptr().cast(),
+            mode,
+        ));
+        (*tmpname).data.pop();
         if fp.is_some() {
             break;
         }
@@ -3033,7 +2996,10 @@ pub unsafe fn hts_hopen(fp: *mut hFILE, fn_: *const c_char, mode: *const c_char)
     if hts_fp.is_null() {
         return std::ptr::null_mut();
     }
-
+    // calloc zeroed `line`, but it now owns a `Vec<u8>` whose all-zero bytes
+    // form an INVALID Vec (null data pointer). Overwrite it with a real empty
+    // kstring so later `.clear()`/push operations (e.g. vcf_write) are sound.
+    std::ptr::write(std::ptr::addr_of_mut!((*hts_fp).line), kstring_t::default());
     (*hts_fp).fn_ = c_compat::strdup(fn_);
     if (*hts_fp).fn_.is_null() {
         c_compat::free(hts_fp.cast());
@@ -3440,77 +3406,77 @@ pub unsafe fn hts_c_775_hts_format_description(format: *const htsFormat) -> *mut
     const XZ_COMPRESSION: htsCompression = 6;
     const ZSTD_COMPRESSION: htsCompression = 7;
 
-    let mut str_: kstring_t = std::mem::zeroed();
+    let mut str_: kstring_t = kstring_t::default();
 
     match (*format).format {
         x if x == HTS_FORMAT_SAM => {
-            kputs(c"SAM".as_ptr(), &mut str_);
+            kputs(b"SAM", &mut str_);
         }
         x if x == HTS_FORMAT_BAM => {
-            kputs(c"BAM".as_ptr(), &mut str_);
+            kputs(b"BAM", &mut str_);
         }
         x if x == HTS_FORMAT_CRAM => {
-            kputs(c"CRAM".as_ptr(), &mut str_);
+            kputs(b"CRAM", &mut str_);
         }
         x if x == HTS_FORMAT_FASTA_FORMAT => {
-            kputs(c"FASTA".as_ptr(), &mut str_);
+            kputs(b"FASTA", &mut str_);
         }
         x if x == HTS_FORMAT_FASTQ_FORMAT => {
-            kputs(c"FASTQ".as_ptr(), &mut str_);
+            kputs(b"FASTQ", &mut str_);
         }
         x if x == HTS_FORMAT_VCF => {
-            kputs(c"VCF".as_ptr(), &mut str_);
+            kputs(b"VCF", &mut str_);
         }
         x if x == HTS_FORMAT_BCF => {
             if (*format).version.major == 1 {
-                kputs(c"Legacy BCF".as_ptr(), &mut str_);
+                kputs(b"Legacy BCF", &mut str_);
             } else {
-                kputs(c"BCF".as_ptr(), &mut str_);
+                kputs(b"BCF", &mut str_);
             }
         }
         x if x == HTS_FORMAT_BAI => {
-            kputs(c"BAI".as_ptr(), &mut str_);
+            kputs(b"BAI", &mut str_);
         }
         x if x == HTS_FORMAT_CRAI_EXACT => {
-            kputs(c"CRAI".as_ptr(), &mut str_);
+            kputs(b"CRAI", &mut str_);
         }
         x if x == HTS_FORMAT_CSI => {
-            kputs(c"CSI".as_ptr(), &mut str_);
+            kputs(b"CSI", &mut str_);
         }
         x if x == HTS_FORMAT_FAI_FORMAT => {
-            kputs(c"FASTA-IDX".as_ptr(), &mut str_);
+            kputs(b"FASTA-IDX", &mut str_);
         }
         x if x == HTS_FORMAT_FQI_FORMAT => {
-            kputs(c"FASTQ-IDX".as_ptr(), &mut str_);
+            kputs(b"FASTQ-IDX", &mut str_);
         }
         x if x == HTS_FORMAT_GZI => {
-            kputs(c"GZI".as_ptr(), &mut str_);
+            kputs(b"GZI", &mut str_);
         }
         x if x == HTS_FORMAT_TBI => {
-            kputs(c"Tabix".as_ptr(), &mut str_);
+            kputs(b"Tabix", &mut str_);
         }
         x if x == HTS_FORMAT_BED => {
-            kputs(c"BED".as_ptr(), &mut str_);
+            kputs(b"BED", &mut str_);
         }
         x if x == HTS_FORMAT_D4_FORMAT => {
-            kputs(c"D4".as_ptr(), &mut str_);
+            kputs(b"D4", &mut str_);
         }
         x if x == HTS_FORMAT_HTSGET => {
-            kputs(c"htsget".as_ptr(), &mut str_);
+            kputs(b"htsget", &mut str_);
         }
         x if x == HTS_FORMAT_CRYPT4GH_FORMAT => {
-            kputs(c"crypt4gh".as_ptr(), &mut str_);
+            kputs(b"crypt4gh", &mut str_);
         }
         x if x == HTS_FORMAT_EMPTY_FORMAT => {
-            kputs(c"empty".as_ptr(), &mut str_);
+            kputs(b"empty", &mut str_);
         }
         _ => {
-            kputs(c"unknown".as_ptr(), &mut str_);
+            kputs(b"unknown", &mut str_);
         }
     }
 
     if (*format).version.major >= 0 {
-        kputs(c" version ".as_ptr(), &mut str_);
+        kputs(b" version ", &mut str_);
         kputw((*format).version.major as c_int, &mut str_);
         if (*format).version.minor >= 0 {
             kputc(b'.' as c_int, &mut str_);
@@ -3520,22 +3486,22 @@ pub unsafe fn hts_c_775_hts_format_description(format: *const htsFormat) -> *mut
 
     match (*format).compression {
         x if x == HTS_COMPRESSION_BZIP2 => {
-            kputs(c" bzip2-compressed".as_ptr(), &mut str_);
+            kputs(b" bzip2-compressed", &mut str_);
         }
         RAZF_COMPRESSION => {
-            kputs(c" legacy-RAZF-compressed".as_ptr(), &mut str_);
+            kputs(b" legacy-RAZF-compressed", &mut str_);
         }
         XZ_COMPRESSION => {
-            kputs(c" XZ-compressed".as_ptr(), &mut str_);
+            kputs(b" XZ-compressed", &mut str_);
         }
         ZSTD_COMPRESSION => {
-            kputs(c" Zstandard-compressed".as_ptr(), &mut str_);
+            kputs(b" Zstandard-compressed", &mut str_);
         }
         x if x == HTS_COMPRESSION_CUSTOM => {
-            kputs(c" compressed".as_ptr(), &mut str_);
+            kputs(b" compressed", &mut str_);
         }
         x if x == HTS_COMPRESSION_GZIP => {
-            kputs(c" gzip-compressed".as_ptr(), &mut str_);
+            kputs(b" gzip-compressed", &mut str_);
         }
         x if x == HTS_COMPRESSION_BGZF => match (*format).format {
             x if x == HTS_FORMAT_BAM
@@ -3543,10 +3509,10 @@ pub unsafe fn hts_c_775_hts_format_description(format: *const htsFormat) -> *mut
                 || x == HTS_FORMAT_CSI
                 || x == HTS_FORMAT_TBI =>
             {
-                kputs(c" compressed".as_ptr(), &mut str_);
+                kputs(b" compressed", &mut str_);
             }
             _ => {
-                kputs(c" BGZF-compressed".as_ptr(), &mut str_);
+                kputs(b" BGZF-compressed", &mut str_);
             }
         },
         x if x == HTS_COMPRESSION_NO_COMPRESSION => match (*format).format {
@@ -3556,7 +3522,7 @@ pub unsafe fn hts_c_775_hts_format_description(format: *const htsFormat) -> *mut
                 || x == HTS_FORMAT_CSI
                 || x == HTS_FORMAT_TBI =>
             {
-                kputs(c" uncompressed".as_ptr(), &mut str_);
+                kputs(b" uncompressed", &mut str_);
             }
             _ => {}
         },
@@ -3565,16 +3531,16 @@ pub unsafe fn hts_c_775_hts_format_description(format: *const htsFormat) -> *mut
 
     match (*format).category {
         x if x == HTS_FORMAT_SEQUENCE_DATA => {
-            kputs(c" sequence".as_ptr(), &mut str_);
+            kputs(b" sequence", &mut str_);
         }
         x if x == HTS_FORMAT_VARIANT_DATA => {
-            kputs(c" variant calling".as_ptr(), &mut str_);
+            kputs(b" variant calling", &mut str_);
         }
         x if x == HTS_FORMAT_INDEX_FILE => {
-            kputs(c" index".as_ptr(), &mut str_);
+            kputs(b" index", &mut str_);
         }
         x if x == HTS_FORMAT_REGION_LIST => {
-            kputs(c" genomic region".as_ptr(), &mut str_);
+            kputs(b" genomic region", &mut str_);
         }
         _ => {}
     }
@@ -3592,18 +3558,24 @@ pub unsafe fn hts_c_775_hts_format_description(format: *const htsFormat) -> *mut
                 || x == HTS_FORMAT_FASTQ_FORMAT
                 || x == HTS_FORMAT_HTSGET =>
             {
-                kputs(c" text".as_ptr(), &mut str_);
+                kputs(b" text", &mut str_);
             }
             x if x == HTS_FORMAT_EMPTY_FORMAT => {}
             _ => {
-                kputs(c" data".as_ptr(), &mut str_);
+                kputs(b" data", &mut str_);
             }
         }
     } else {
-        kputs(c" data".as_ptr(), &mut str_);
+        kputs(b" data", &mut str_);
     }
 
-    ks_release(&mut str_)
+    let released = ks_release(&mut str_);
+    let out = crate::htslib_rs::c_compat::malloc((released.len() + 1) as u64).cast::<c_char>();
+    if !out.is_null() {
+        std::ptr::copy_nonoverlapping(released.as_ptr().cast::<c_char>(), out, released.len());
+        *out.add(released.len()) = 0;
+    }
+    out
 }
 
 pub unsafe fn hts_opt_add(opts: *mut *mut hts_opt, c_arg: *const c_char) -> c_int {
@@ -3960,7 +3932,7 @@ pub unsafe fn hts_set_opt_ptr(fp: *mut htsFile, opt: hts_fmt_option, val: *mut c
         _ => {
             if (*fp).format.format == HTS_FORMAT_CRAM {
                 (*fp).fp.cram.as_mut().map_or(-1, |cram| {
-                    crate::cram_options_bridge::cram_set_option_ptr(cram, opt, NonNull::new(val))
+                    crate::cram_options_bridge::cram_set_option_ptr(cram, opt, val.as_ref())
                 })
             } else {
                 0
@@ -4188,7 +4160,7 @@ pub unsafe fn hts_set_thread_pool(fp: *mut htsFile, p: *mut htsThreadPool) -> c_
             crate::cram_options_bridge::cram_set_option_ptr(
                 cram,
                 CRAM_OPT_THREAD_POOL,
-                NonNull::new(p.cast::<c_void>()),
+                p.cast::<c_void>().as_ref(),
             )
         })
     } else {
@@ -4218,7 +4190,7 @@ pub unsafe fn hts_set_fai_filename(fp: *mut htsFile, fn_aux: *const c_char) -> c
             crate::cram_options_bridge::cram_set_option_ptr(
                 cram,
                 CRAM_OPT_REFERENCE,
-                NonNull::new((*fp).fn_aux.cast::<c_void>()),
+                (*fp).fn_aux.cast::<c_void>().as_ref(),
             )
         }) != 0
     {
@@ -4260,16 +4232,18 @@ pub unsafe fn hts_c_1979_hts_open_tmpfile(
         let t = (libc::time(std::ptr::null_mut()) as u32) ^ (clock() as u32) ^ ptr;
         n += 1;
 
-        ks_clear(tmpname);
-        if kputs(fname, tmpname) < 0 {
+        ks_clear(&mut *tmpname);
+        if kputs(CStr::from_ptr(fname).to_bytes(), &mut *tmpname) < 0 {
             break std::ptr::null_mut();
         }
         let suffix = format!(".tmp_{}_{}_{}", pid, n, t);
-        if kputsn(suffix.as_ptr().cast(), suffix.len(), tmpname) < 0 {
+        if kputsn(suffix.as_bytes(), suffix.len(), &mut *tmpname) < 0 {
             break std::ptr::null_mut();
         }
 
-        fp = hopen((*tmpname).s, mode);
+        (*tmpname).data.push(0);
+        fp = hopen((*tmpname).data.as_ptr().cast(), mode);
+        (*tmpname).data.pop();
         if !fp.is_null() || *c_compat::__errno_location() != libc::EEXIST as c_int || n >= 100 {
             break fp;
         }
@@ -4407,11 +4381,17 @@ pub unsafe fn hts_getline(fp: *mut htsFile, delimiter: c_int, str: *mut kstring_
 
     let ret = match (*fp).format.compression {
         HTS_COMPRESSION_NO_COMPRESSION => {
-            (*str).l = 0;
+            // SEAM: `str` may be a freshly calloc'd kstring (e.g. htsFile.line from
+            // hts_hopen), whose Vec has a NULL data pointer. Vec::clear() routes
+            // through slice::from_raw_parts_mut, which aborts on a NULL pointer even
+            // at len 0. `truncate(0)` uses the raw (precondition-free) slice path and
+            // is equivalent for our purposes (it empties the Vec without freeing),
+            // so it is safe on a not-yet-allocated kstring and a no-op once empty.
+            (*str).data.truncate(0);
             let mut ret = kgetline2(str, Some(hgetln_wrapper), (*fp).fp.hfile.cast::<c_void>());
             if ret >= 0 {
-                ret = if (*str).l <= c_int::MAX as usize {
-                    (*str).l as c_int
+                ret = if (*str).data.len() <= c_int::MAX as usize {
+                    (*str).data.len() as c_int
                 } else {
                     c_int::MAX
                 };
@@ -4459,14 +4439,14 @@ pub unsafe fn hts_c_2065_hts_readlist(
             return std::ptr::null_mut();
         }
 
-        let mut str_: kstring_t = std::mem::zeroed();
+        let mut str_: kstring_t = kstring_t::default();
         let mut ret;
         loop {
             ret = bgzf_getline(fp, b'\n' as c_int, &mut str_);
             if ret < 0 {
                 break;
             }
-            if str_.l == 0 {
+            if str_.data.is_empty() {
                 continue;
             }
             if n == 0 && hts_is_utf16_text(&str_) != 0 {
@@ -4494,17 +4474,17 @@ pub unsafe fn hts_c_2065_hts_readlist(
                 }
                 c_compat::free(s.cast());
                 bgzf_close(fp);
-                c_compat::free(str_.s.cast());
                 return std::ptr::null_mut();
             }
-            *s.add(n as usize) = c_compat::strdup(str_.s);
+            str_.data.push(0);
+            *s.add(n as usize) = c_compat::strdup(str_.data.as_ptr().cast());
+            str_.data.pop();
             if (*s.add(n as usize)).is_null() {
                 for i in 0..n {
                     c_compat::free((*s.add(i as usize)).cast());
                 }
                 c_compat::free(s.cast());
                 bgzf_close(fp);
-                c_compat::free(str_.s.cast());
                 return std::ptr::null_mut();
             }
             n += 1;
@@ -4515,11 +4495,9 @@ pub unsafe fn hts_c_2065_hts_readlist(
             }
             c_compat::free(s.cast());
             bgzf_close(fp);
-            c_compat::free(str_.s.cast());
-            return std::ptr::null_mut();
+                return std::ptr::null_mut();
         }
         bgzf_close(fp);
-        c_compat::free(str_.s.cast());
     } else {
         let mut q = string;
         let mut p = string;
@@ -4589,14 +4567,14 @@ pub unsafe fn hts_c_2130_hts_readlines(fn_: *const c_char, n_out: *mut c_int) ->
     let fp = bgzf_open(fn_, c"r".as_ptr());
 
     if !fp.is_null() {
-        let mut str_: kstring_t = std::mem::zeroed();
+        let mut str_: kstring_t = kstring_t::default();
         let mut ret;
         loop {
             ret = bgzf_getline(fp, b'\n' as c_int, &mut str_);
             if ret < 0 {
                 break;
             }
-            if str_.l == 0 {
+            if str_.data.is_empty() {
                 continue;
             }
             if n == 0 && hts_is_utf16_text(&str_) != 0 {
@@ -4624,17 +4602,17 @@ pub unsafe fn hts_c_2130_hts_readlines(fn_: *const c_char, n_out: *mut c_int) ->
                 }
                 c_compat::free(s.cast());
                 bgzf_close(fp);
-                c_compat::free(str_.s.cast());
                 return std::ptr::null_mut();
             }
-            *s.add(n as usize) = c_compat::strdup(str_.s);
+            str_.data.push(0);
+            *s.add(n as usize) = c_compat::strdup(str_.data.as_ptr().cast());
+            str_.data.pop();
             if (*s.add(n as usize)).is_null() {
                 for i in 0..n {
                     c_compat::free((*s.add(i as usize)).cast());
                 }
                 c_compat::free(s.cast());
                 bgzf_close(fp);
-                c_compat::free(str_.s.cast());
                 return std::ptr::null_mut();
             }
             n += 1;
@@ -4645,11 +4623,9 @@ pub unsafe fn hts_c_2130_hts_readlines(fn_: *const c_char, n_out: *mut c_int) ->
             }
             c_compat::free(s.cast());
             bgzf_close(fp);
-            c_compat::free(str_.s.cast());
-            return std::ptr::null_mut();
+                return std::ptr::null_mut();
         }
         bgzf_close(fp);
-        c_compat::free(str_.s.cast());
     } else if *fn_ == b':' as c_char {
         let mut q = fn_.add(1);
         let mut p = q;
@@ -4782,30 +4758,67 @@ pub unsafe fn hts_reglist_create(
     if argv_raw.iter().any(|arg| arg.is_null()) {
         return std::ptr::null_mut();
     }
-    let argv_refs: Vec<&CStr> = argv_raw
+    let argv_refs: Vec<&[u8]> = argv_raw
         .iter()
         .copied()
-        .map(|arg| CStr::from_ptr(arg))
+        .map(|arg| CStr::from_ptr(arg).to_bytes())
         .collect();
     crate::htslib_rs::region::region_c_177_hts_reglist_create(
         Some(argv_refs.as_slice()),
         Some(&mut *r_count),
-        std::ptr::NonNull::new(hdr),
+        hdr.as_mut(),
         getid,
     )
     .map_or(std::ptr::null_mut(), |reglist| {
-        Box::into_raw(reglist).cast()
+        // Materialize the owned `region_reglist_entry` list into the `repr(C)`
+        // `hts_reglist_t` array consumed by the iterator FFI: `reg` is strdup'd
+        // and `intervals` is a malloc'd copy of the owned interval Vec.
+        let raw: Vec<hts_reglist_t> = reglist
+            .into_iter()
+            .map(|entry| {
+                let reg = entry.reg.map_or(std::ptr::null(), |name| {
+                    let mut cstr: Vec<u8> = name;
+                    cstr.push(0);
+                    c_compat::strdup(cstr.as_ptr().cast()).cast_const()
+                });
+                let intervals = if entry.intervals.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    let bytes = entry.intervals.len() * std::mem::size_of::<hts_pair_pos_t>();
+                    let dst = c_compat::malloc(bytes as u64).cast::<hts_pair_pos_t>();
+                    std::ptr::copy_nonoverlapping(
+                        entry.intervals.as_ptr(),
+                        dst,
+                        entry.intervals.len(),
+                    );
+                    dst
+                };
+                hts_reglist_t {
+                    reg,
+                    intervals,
+                    tid: entry.tid,
+                    count: entry.intervals.len() as u32,
+                    min_beg: entry.min_beg,
+                    max_end: entry.max_end,
+                }
+            })
+            .collect();
+        *r_count = raw.len() as c_int;
+        Box::into_raw(raw.into_boxed_slice()).cast()
     })
 }
 
 pub unsafe fn hts_reglist_free(reglist: *mut hts_reglist_t, count: c_int) {
-    let reglist = if reglist.is_null() || count <= 0 {
-        None
-    } else {
-        let reglist_slice = std::ptr::slice_from_raw_parts_mut(reglist, count as usize);
-        Some(Box::from_raw(reglist_slice))
-    };
-    crate::htslib_rs::region::region_c_266_hts_reglist_free(reglist)
+    if reglist.is_null() || count <= 0 {
+        return;
+    }
+    let reglist_slice = std::ptr::slice_from_raw_parts_mut(reglist, count as usize);
+    let boxed = Box::from_raw(reglist_slice);
+    for entry in boxed.iter() {
+        c_compat::free(entry.reg.cast_mut().cast());
+        c_compat::free(entry.intervals.cast());
+    }
+    drop(boxed);
 }
 
 pub unsafe fn hts_close(fp: *mut htsFile) -> c_int {
@@ -4825,7 +4838,7 @@ pub unsafe fn hts_close(fp: *mut htsFile) -> c_int {
             hts_idx_destroy((*fp).idx);
             crate::htslib_rs::c_compat::free((*fp).fn_.cast());
             crate::htslib_rs::c_compat::free((*fp).fn_aux.cast());
-            crate::htslib_rs::c_compat::free((*fp).line.s.cast());
+            ks_free(&mut (*fp).line);
             crate::htslib_rs::c_compat::free(fp.cast());
             ret
         }
@@ -4839,7 +4852,7 @@ pub unsafe fn hts_close(fp: *mut htsFile) -> c_int {
             hts_idx_destroy((*fp).idx);
             crate::htslib_rs::c_compat::free((*fp).fn_.cast());
             crate::htslib_rs::c_compat::free((*fp).fn_aux.cast());
-            crate::htslib_rs::c_compat::free((*fp).line.s.cast());
+            ks_free(&mut (*fp).line);
             crate::htslib_rs::c_compat::free(fp.cast());
             ret
         }
@@ -4853,7 +4866,7 @@ pub unsafe fn hts_close(fp: *mut htsFile) -> c_int {
             hts_idx_destroy((*fp).idx);
             crate::htslib_rs::c_compat::free((*fp).fn_.cast());
             crate::htslib_rs::c_compat::free((*fp).fn_aux.cast());
-            crate::htslib_rs::c_compat::free((*fp).line.s.cast());
+            ks_free(&mut (*fp).line);
             crate::htslib_rs::c_compat::free(fp.cast());
             ret
         }
@@ -4869,7 +4882,7 @@ pub unsafe fn hts_close(fp: *mut htsFile) -> c_int {
             hts_idx_destroy((*fp).idx);
             crate::htslib_rs::c_compat::free((*fp).fn_.cast());
             crate::htslib_rs::c_compat::free((*fp).fn_aux.cast());
-            crate::htslib_rs::c_compat::free((*fp).line.s.cast());
+            ks_free(&mut (*fp).line);
             crate::htslib_rs::c_compat::free(fp.cast());
             ret
         }
@@ -4888,7 +4901,7 @@ pub unsafe fn hts_close(fp: *mut htsFile) -> c_int {
             hts_idx_destroy((*fp).idx);
             crate::htslib_rs::c_compat::free((*fp).fn_.cast());
             crate::htslib_rs::c_compat::free((*fp).fn_aux.cast());
-            crate::htslib_rs::c_compat::free((*fp).line.s.cast());
+            ks_free(&mut (*fp).line);
             crate::htslib_rs::c_compat::free(fp.cast());
             ret
         }
@@ -4898,7 +4911,7 @@ pub unsafe fn hts_close(fp: *mut htsFile) -> c_int {
             hts_idx_destroy((*fp).idx);
             crate::htslib_rs::c_compat::free((*fp).fn_.cast());
             crate::htslib_rs::c_compat::free((*fp).fn_aux.cast());
-            crate::htslib_rs::c_compat::free((*fp).line.s.cast());
+            ks_free(&mut (*fp).line);
             crate::htslib_rs::c_compat::free(fp.cast());
             -1
         }
@@ -6163,8 +6176,8 @@ pub unsafe fn hts_c_4623_idx_test_and_fetch(
     if hisremote(fn_) != 0 {
         let buf_size = 1024 * 1024usize;
         let mut fmt: htsFormat = std::mem::zeroed();
-        let mut s: kstring_t = std::mem::zeroed();
-        let mut tmps: kstring_t = std::mem::zeroed();
+        let mut s: kstring_t = kstring_t::default();
+        let mut tmps: kstring_t = kstring_t::default();
 
         let non_s3 = libc::strncmp(fn_, c"s3://".as_ptr(), 5) != 0
             && libc::strncmp(fn_, c"s3+http://".as_ptr(), 10) != 0
@@ -6182,12 +6195,16 @@ pub unsafe fn hts_c_4623_idx_test_and_fetch(
             p = p.add(1);
         }
 
-        if kputsn(p, e.offset_from(p) as size_t, &mut s) < 0 {
-            c_compat::free(s.s.cast());
+        if kputsn(
+            std::slice::from_raw_parts(p.cast::<u8>(), e.offset_from(p) as size_t),
+            e.offset_from(p) as size_t,
+            &mut s,
+        ) < 0
+        {
             return -2;
         }
-        if crate::htslib_rs::c_compat::access(s.s, crate::htslib_rs::c_compat::R_OK) == 0 {
-            c_compat::free(s.s.cast());
+        s.data.push(0);
+        if crate::htslib_rs::c_compat::access(s.data.as_ptr().cast(), crate::htslib_rs::c_compat::R_OK) == 0 {
             *local_fn = p;
             *local_len = e.offset_from(p) as c_int;
             return 0;
@@ -6195,13 +6212,11 @@ pub unsafe fn hts_c_4623_idx_test_and_fetch(
 
         let remote_hfp = hopen(fn_, c"r".as_ptr());
         if remote_hfp.is_null() {
-            c_compat::free(s.s.cast());
             return -1;
         }
         if hts_c_556_hts_detect_format2(remote_hfp, fn_, &mut fmt) != 0 {
             let save_errno = *c_compat::__errno_location();
             hclose_abruptly(remote_hfp);
-            c_compat::free(s.s.cast());
             *c_compat::__errno_location() = save_errno;
             return -2;
         }
@@ -6214,18 +6229,16 @@ pub unsafe fn hts_c_4623_idx_test_and_fetch(
         {
             let save_errno = *c_compat::__errno_location();
             hclose_abruptly(remote_hfp);
-            c_compat::free(s.s.cast());
             *c_compat::__errno_location() = save_errno;
             return -2;
         }
 
         if download != 0 {
-            let local_fp = hts_c_1979_hts_open_tmpfile(s.s, c"wx".as_ptr(), &mut tmps);
+            let local_fp = hts_c_1979_hts_open_tmpfile(s.data.as_ptr().cast(), c"wx".as_ptr(), &mut tmps);
+            tmps.data.push(0);
             if local_fp.is_null() {
                 let save_errno = *c_compat::__errno_location();
                 hclose_abruptly(remote_hfp);
-                c_compat::free(tmps.s.cast());
-                c_compat::free(s.s.cast());
                 *c_compat::__errno_location() = save_errno;
                 return -2;
             }
@@ -6234,11 +6247,9 @@ pub unsafe fn hts_c_4623_idx_test_and_fetch(
                 let save_errno = *c_compat::__errno_location();
                 hclose_abruptly(remote_hfp);
                 hclose_abruptly(local_fp);
-                if tmps.l > 0 {
-                    libc::unlink(tmps.s);
+                if !tmps.data.is_empty() {
+                    libc::unlink(tmps.data.as_ptr().cast());
                 }
-                c_compat::free(tmps.s.cast());
-                c_compat::free(s.s.cast());
                 *c_compat::__errno_location() = save_errno;
                 return -2;
             }
@@ -6250,11 +6261,9 @@ pub unsafe fn hts_c_4623_idx_test_and_fetch(
                         let save_errno = *c_compat::__errno_location();
                         hclose_abruptly(remote_hfp);
                         hclose_abruptly(local_fp);
-                        if tmps.l > 0 {
-                            libc::unlink(tmps.s);
+                        if !tmps.data.is_empty() {
+                            libc::unlink(tmps.data.as_ptr().cast());
                         }
-                        c_compat::free(tmps.s.cast());
-                        c_compat::free(s.s.cast());
                         *c_compat::__errno_location() = save_errno;
                         return -2;
                     }
@@ -6265,11 +6274,9 @@ pub unsafe fn hts_c_4623_idx_test_and_fetch(
                     c_compat::free(buf.cast());
                     hclose_abruptly(remote_hfp);
                     hclose_abruptly(local_fp);
-                    if tmps.l > 0 {
-                        libc::unlink(tmps.s);
+                    if !tmps.data.is_empty() {
+                        libc::unlink(tmps.data.as_ptr().cast());
                     }
-                    c_compat::free(tmps.s.cast());
-                    c_compat::free(s.s.cast());
                     *c_compat::__errno_location() = save_errno;
                     return -2;
                 }
@@ -6277,22 +6284,18 @@ pub unsafe fn hts_c_4623_idx_test_and_fetch(
             if hclose(local_fp) < 0 {
                 let save_errno = *c_compat::__errno_location();
                 hclose_abruptly(remote_hfp);
-                if tmps.l > 0 {
-                    libc::unlink(tmps.s);
+                if !tmps.data.is_empty() {
+                    libc::unlink(tmps.data.as_ptr().cast());
                 }
-                c_compat::free(tmps.s.cast());
-                c_compat::free(s.s.cast());
                 *c_compat::__errno_location() = save_errno;
                 return -2;
             }
-            if libc::rename(tmps.s, s.s) < 0 {
+            if libc::rename(tmps.data.as_ptr().cast(), s.data.as_ptr().cast()) < 0 {
                 let save_errno = *c_compat::__errno_location();
                 hclose_abruptly(remote_hfp);
-                if tmps.l > 0 {
-                    libc::unlink(tmps.s);
+                if !tmps.data.is_empty() {
+                    libc::unlink(tmps.data.as_ptr().cast());
                 }
-                c_compat::free(tmps.s.cast());
-                c_compat::free(s.s.cast());
                 *c_compat::__errno_location() = save_errno;
                 return -2;
             }
@@ -6305,8 +6308,6 @@ pub unsafe fn hts_c_4623_idx_test_and_fetch(
         }
 
         hclose(remote_hfp);
-        c_compat::free(tmps.s.cast());
-        c_compat::free(s.s.cast());
         return 0;
     }
 
@@ -8678,7 +8679,12 @@ mod tests {
         assert_eq!(align_of::<htsFormat>(), 8);
         assert_eq!(size_of::<htsFilePtr>(), 8);
         assert_eq!(align_of::<htsFilePtr>(), 8);
-        assert_eq!(size_of::<BGZF>(), 112);
+        // BGZF is intentionally no longer a C-ABI mirror: the owned refactor
+        // replaced its raw void*/hFILE* fields with Vec/Box/Option/enum members
+        // (uncompressed_block, compressed_block, cache, fp: BgzfFp, mt, idx,
+        // gz_stream), so it is wider than the old 112-byte C struct. Assert the
+        // owned size rather than the obsolete C-ABI size.
+        assert_eq!(size_of::<BGZF>(), 144);
         assert_eq!(align_of::<BGZF>(), 8);
         assert_eq!(size_of::<htsFile>(), 136);
         assert_eq!(align_of::<htsFile>(), 8);
@@ -8718,10 +8724,9 @@ mod tests {
         assert_eq!(std::mem::offset_of!(htsFile, fnidx), 112);
         assert_eq!(std::mem::offset_of!(htsFile, bam_header), 120);
         assert_eq!(std::mem::offset_of!(htsFile, filter), 128);
-        assert_eq!(std::mem::offset_of!(BGZF, cache_size), 4);
-        assert_eq!(std::mem::offset_of!(BGZF, block_length), 8);
-        assert_eq!(std::mem::offset_of!(BGZF, block_offset), 16);
-        assert_eq!(std::mem::offset_of!(BGZF, block_address), 24);
+        // BGZF field-offset asserts are obsolete: BGZF is no longer #[repr(C)]
+        // (it is now an owned struct, see size assert above), so the compiler is
+        // free to reorder its fields and these C-ABI offsets no longer hold.
         assert_eq!(std::mem::offset_of!(hts_idx_t, fmt), 0);
         assert_eq!(std::mem::offset_of!(hts_idx_t, l_meta), 16);
         assert_eq!(std::mem::offset_of!(hts_idx_t, n_no_coor), 32);
@@ -8876,11 +8881,7 @@ mod tests {
                 bitfields: 0,
                 padding_0: 0,
                 lineno: 0,
-                line: kstring_t {
-                    l: 0,
-                    m: 0,
-                    s: std::ptr::null_mut(),
-                },
+                line: kstring_t::default(),
                 fn_: std::ptr::null_mut(),
                 fn_aux: std::ptr::null_mut(),
                 fp: htsFilePtr {
@@ -8910,12 +8911,12 @@ mod tests {
                 block_offset: 0,
                 block_address: 0,
                 uncompressed_address: 10,
-                uncompressed_block: std::ptr::null_mut(),
-                compressed_block: std::ptr::null_mut(),
-                cache: std::ptr::null_mut(),
-                fp: std::ptr::null_mut(),
-                mt: std::ptr::null_mut(),
-                idx: std::ptr::null_mut(),
+                uncompressed_block: Vec::new(),
+                compressed_block: Vec::new(),
+                cache: None,
+                fp: crate::htslib_rs::bgzf::BgzfFp::None,
+                mt: None,
+                idx: None,
                 idx_build_otf: 0,
                 gz_stream: None,
                 seeked: 0,
@@ -9359,23 +9360,14 @@ mod tests {
     #[test]
     fn textutils_stringify_argv_matches_c_rules() {
         unsafe {
-            let mut args = [
-                CString::new("prog").unwrap(),
-                CString::new("one\ttwo").unwrap(),
-                CString::new("").unwrap(),
-                CString::new("last").unwrap(),
-            ];
-            let mut argv: Vec<*mut c_char> =
-                args.iter_mut().map(|arg| arg.as_ptr().cast_mut()).collect();
-            let s = stringify_argv(argv.len() as c_int, argv.as_mut_ptr());
-            assert!(!s.is_null());
-            assert_eq!(CStr::from_ptr(s).to_bytes(), b"prog one two  last");
-            crate::htslib_rs::textutils::stringify_argv_free(s);
+            let args: [&[u8]; 4] = [b"prog", b"one\ttwo", b"", b"last"];
+            let s = stringify_argv(&args);
+            assert!(s.is_some());
+            assert_eq!(s.unwrap().as_slice(), b"prog one two  last");
 
-            let s = stringify_argv(0, argv.as_mut_ptr());
-            assert!(!s.is_null());
-            assert_eq!(CStr::from_ptr(s).to_bytes(), b"");
-            crate::htslib_rs::textutils::stringify_argv_free(s);
+            let s = stringify_argv(&[]);
+            assert!(s.is_some());
+            assert_eq!(s.unwrap().as_slice(), b"");
         }
     }
 
@@ -9556,37 +9548,31 @@ mod tests {
             let mut res = hts_expr_val_t {
                 is_str: 0,
                 is_true: 0,
-                s: kstring_t {
-                    l: 0,
-                    m: 0,
-                    s: std::ptr::null_mut(),
-                },
+                s: kstring_t::default(),
                 d: 3.0,
             };
             assert_eq!(expr_func_length(&mut res), -1);
 
             let bytes = b"AZaz";
             res.is_str = 1;
-            res.s.l = bytes.len();
-            res.s.m = 0;
-            res.s.s = bytes.as_ptr().cast::<c_char>().cast_mut();
+            res.s.data = bytes.to_vec();
             assert_eq!(expr_func_length(&mut res), 0);
             assert_eq!(res.is_str, 0);
             assert_eq!(res.d, 4.0);
 
             res.is_str = 1;
-            res.s.l = bytes.len();
+            res.s.data = bytes.to_vec();
             assert_eq!(expr_func_min(&mut res), 0);
             assert_eq!(res.is_str, 0);
             assert_eq!(res.d, b'A' as f64);
 
             res.is_str = 1;
-            res.s.l = bytes.len();
+            res.s.data = bytes.to_vec();
             assert_eq!(expr_func_max(&mut res), 0);
             assert_eq!(res.d, b'z' as f64);
 
             res.is_str = 1;
-            res.s.l = bytes.len();
+            res.s.data = bytes.to_vec();
             assert_eq!(expr_func_avg(&mut res), 0);
             assert_eq!(
                 res.d,
@@ -9594,15 +9580,15 @@ mod tests {
             );
 
             res.is_str = 1;
-            res.s.l = 0;
+            res.s.data.clear();
             assert_eq!(expr_func_min(&mut res), 0);
             assert!(res.d.is_nan());
             res.is_str = 1;
-            res.s.l = 0;
+            res.s.data.clear();
             assert_eq!(expr_func_max(&mut res), 0);
             assert!(res.d.is_nan());
             res.is_str = 1;
-            res.s.l = 0;
+            res.s.data.clear();
             assert_eq!(expr_func_avg(&mut res), 0);
             assert_eq!(res.d, 0.0);
         }
@@ -9633,7 +9619,8 @@ mod tests {
             *end = str_.add(3);
             (*res).is_str = 1;
             (*res).is_true = 1;
-            kputsn(c"abc".as_ptr(), 3, ks_clear(&mut (*res).s));
+            ks_clear(&mut (*res).s);
+            kputsn(b"abc", 3, &mut (*res).s);
             0
         } else if libc::strncmp(str_, c"MISSING".as_ptr(), 7) == 0 {
             *end = str_.add(7);
@@ -9676,18 +9663,21 @@ mod tests {
         } else if libc::strncmp(str_, c"magic".as_ptr(), 5) == 0 {
             *end = str_.add(5);
             (*res).is_str = 1;
-            kputsn(c"plugh".as_ptr(), 5, ks_clear(&mut (*res).s));
+            ks_clear(&mut (*res).s);
+            kputsn(b"plugh", 5, &mut (*res).s);
             0
         } else if libc::strncmp(str_, c"empty-but-true".as_ptr(), 14) == 0 {
             *end = str_.add(14);
             (*res).is_true = 1;
             (*res).is_str = 1;
-            kputsn(c"".as_ptr(), 0, ks_clear(&mut (*res).s));
+            ks_clear(&mut (*res).s);
+            kputsn(b"", 0, &mut (*res).s);
             0
         } else if libc::strncmp(str_, c"empty".as_ptr(), 5) == 0 {
             *end = str_.add(5);
             (*res).is_str = 1;
-            kputsn(c"".as_ptr(), 0, ks_clear(&mut (*res).s));
+            ks_clear(&mut (*res).s);
+            kputsn(b"", 0, &mut (*res).s);
             0
         } else if libc::strncmp(str_, c"zero-but-true".as_ptr(), 13) == 0 {
             *end = str_.add(13);
@@ -9729,7 +9719,7 @@ mod tests {
             let expr = CString::new(case.expr).unwrap();
             let filt = hts_expr_c_849_hts_filter_init(expr.as_ptr());
             assert!(!filt.is_null(), "failed to init {}", case.expr);
-            let mut res: hts_expr_val_t = std::mem::zeroed();
+            let mut res: hts_expr_val_t = hts_expr_val_t::default();
             assert_eq!(
                 hts_expr_c_920_hts_filter_eval2(
                     filt,
@@ -9752,9 +9742,8 @@ mod tests {
             match case.s {
                 Some(expected) => {
                     assert_ne!(res.is_str, 0, "string flag for {}", case.expr);
-                    assert!(!res.s.s.is_null(), "string pointer for {}", case.expr);
                     assert_eq!(
-                        CStr::from_ptr(res.s.s).to_str().unwrap(),
+                        std::str::from_utf8(&res.s.data).unwrap(),
                         expected,
                         "string value for {}",
                         case.expr
@@ -9782,7 +9771,7 @@ mod tests {
             for expr in cases {
                 let filt = hts_expr_c_849_hts_filter_init(expr);
                 assert!(!filt.is_null());
-                let mut res: hts_expr_val_t = std::mem::zeroed();
+                let mut res: hts_expr_val_t = hts_expr_val_t::default();
                 assert_eq!(
                     hts_expr_c_920_hts_filter_eval2(
                         filt,
@@ -9801,7 +9790,7 @@ mod tests {
 
             let filt = hts_expr_c_849_hts_filter_init(c"MISSING && NUM".as_ptr());
             assert!(!filt.is_null());
-            let mut res: hts_expr_val_t = std::mem::zeroed();
+            let mut res: hts_expr_val_t = hts_expr_val_t::default();
             assert_eq!(
                 hts_expr_c_920_hts_filter_eval2(
                     filt,
@@ -10160,7 +10149,7 @@ mod tests {
             assert_eq!(pairs[1].u, 0x4444_3333_2222_1111);
             assert_eq!(pairs[1].v, 0xdddd_cccc_bbbb_aaaa);
 
-            let mut fp: BGZF = std::mem::zeroed();
+            let mut fp: BGZF = BGZF::default();
             idx.otf_fp = std::ptr::null_mut();
             assert_eq!(hts_c_2748_need_idx_ugly_delay_hack(&idx), 0);
             idx.otf_fp = &mut fp;
@@ -11238,11 +11227,7 @@ mod tests {
             bitfields: 1 << 4,
             padding_0: 0,
             lineno: 0,
-            line: kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            },
+            line: kstring_t::default(),
             fn_: std::ptr::null_mut(),
             fn_aux: std::ptr::null_mut(),
             fp: htsFilePtr {
@@ -11314,11 +11299,7 @@ mod tests {
             bitfields: 1 << 4,
             padding_0: 0,
             lineno: 0,
-            line: kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            },
+            line: kstring_t::default(),
             fn_: std::ptr::null_mut(),
             fn_aux: std::ptr::null_mut(),
             fp: htsFilePtr {
@@ -11402,20 +11383,17 @@ mod tests {
     #[test]
     fn kstring_split_token_and_search_helpers_match_c_rules() {
         unsafe {
-            let mut split_buf = *b"  alpha\tbeta gamma  \0";
             let mut ks = kstring_t {
-                l: 20,
-                m: split_buf.len(),
-                s: split_buf.as_mut_ptr().cast(),
+                data: b"  alpha\tbeta gamma  ".to_vec(),
             };
             let offsets = crate::htslib_rs::kstring::ksplit_vec_ref(&mut ks, 0).unwrap();
             assert_eq!(offsets, [2, 8, 13]);
             assert_eq!(
-                CStr::from_ptr(split_buf.as_ptr().add(2).cast()).to_bytes(),
+                CStr::from_ptr(ks.data.as_ptr().add(2).cast()).to_bytes(),
                 b"alpha"
             );
             assert_eq!(
-                CStr::from_ptr(split_buf.as_ptr().add(8).cast()).to_bytes(),
+                CStr::from_ptr(ks.data.as_ptr().add(8).cast()).to_bytes(),
                 b"beta"
             );
 
@@ -11472,14 +11450,13 @@ mod tests {
             assert!(libc::fputs(c"alpha\r\nbeta\n".as_ptr(), fp) >= 0);
             libc::rewind(fp);
 
-            let mut ks: kstring_t = std::mem::zeroed();
+            let mut ks: kstring_t = kstring_t::default();
             assert_eq!(kfgetline(&mut ks, fp), 0);
-            assert_eq!(CStr::from_ptr(ks.s).to_bytes(), b"alpha");
+            assert_eq!(ks.data.as_slice(), b"alpha");
             assert_eq!(kfgetline(&mut ks, fp), 0);
-            assert_eq!(CStr::from_ptr(ks.s).to_bytes(), b"alphabeta");
+            assert_eq!(ks.data.as_slice(), b"alphabeta");
             assert_eq!(kfgetline(&mut ks, fp), libc::EOF);
 
-            crate::htslib_rs::c_compat::free(ks.s.cast());
             assert_eq!(libc::fclose(fp), 0);
         }
     }
@@ -11487,11 +11464,7 @@ mod tests {
     #[test]
     fn kstring_integer_writers_match_decimal_c_rules() {
         unsafe {
-            let mut ks = kstring_t {
-                l: 0,
-                m: 0,
-                s: std::ptr::null_mut(),
-            };
+            let mut ks = kstring_t::default();
             assert_eq!(kputuw(0, &mut ks), 0);
             assert_eq!(kputc(b',' as c_int, &mut ks), b',' as c_int);
             assert_eq!(kputuw(4_294_967_295, &mut ks), 0);
@@ -11500,77 +11473,61 @@ mod tests {
             assert_eq!(kputc(b',' as c_int, &mut ks), b',' as c_int);
             assert_eq!(kputll(i64::MIN, &mut ks), 0);
             assert_eq!(
-                CStr::from_ptr(ks.s).to_bytes(),
+                ks.data.as_slice(),
                 b"0,4294967295,-2147483648,-9223372036854775808"
             );
-            crate::htslib_rs::c_compat::free(ks.s.cast());
         }
     }
 
     #[test]
     fn kstring_insert_and_c_string_accessors_match_c_rules() {
         unsafe {
-            let mut ks: kstring_t = std::mem::zeroed();
-            assert_eq!(CStr::from_ptr(ks_c_str(&mut ks)).to_bytes(), b"");
-            assert_eq!(kputs(c"ace".as_ptr(), &mut ks), 3);
+            let mut ks: kstring_t = kstring_t::default();
+            assert_eq!(ks_c_str(&ks), b"");
+            assert_eq!(kputs(b"ace", &mut ks), 3);
             assert_eq!(kinsert_char(b'b' as c_char, 1, &mut ks), 0);
-            assert_eq!(kinsert_str(c"de".as_ptr(), 3, &mut ks), 0);
-            assert_eq!(ks_len(&mut ks), 6);
-            assert_eq!(CStr::from_ptr(ks_c_str(&mut ks)).to_bytes(), b"abcdee");
-            assert_eq!(kinsert_str(c"".as_ptr(), ks.l, &mut ks), 0);
-            assert_eq!(kinsert_char(b'!' as c_char, ks.l + 1, &mut ks), -1);
-            assert_eq!(kinsert_str(std::ptr::null(), 0, &mut ks), -1);
+            assert_eq!(kinsert_str(b"de", 3, &mut ks), 0);
+            assert_eq!(ks_len(&ks), 6);
+            assert_eq!(ks_c_str(&ks), b"abcdee");
+            assert_eq!(kinsert_str(b"", ks.data.len(), &mut ks), 0);
+            assert_eq!(kinsert_char(b'!' as c_char, ks.data.len() + 1, &mut ks), -1);
+            assert_eq!(kinsert_str(&[], 0, &mut ks), 0);
             let released = ks_release(&mut ks);
-            assert!(!released.is_null());
-            assert_eq!(ks.l, 0);
-            assert_eq!(ks.m, 0);
-            assert!(ks.s.is_null());
-            c_compat::free(released.cast());
+            assert_eq!(released.as_slice(), b"abcdee");
+            assert_eq!(ks.data.len(), 0);
         }
     }
 
     #[test]
     fn kstring_raw_append_clear_and_release_match_c_rules() {
         unsafe {
-            let mut ks: kstring_t = std::mem::zeroed();
+            let mut ks: kstring_t = kstring_t::default();
 
-            assert_eq!(CStr::from_ptr(ks_c_str(&mut ks)).to_bytes(), b"");
-            assert_eq!(kputsn_(b"abc".as_ptr().cast(), 3, &mut ks), 3);
-            assert_eq!(ks_len(&mut ks), 3);
-            assert_eq!(
-                std::slice::from_raw_parts(ks_str(&mut ks).cast::<u8>(), ks_len(&mut ks)),
-                b"abc"
-            );
+            assert_eq!(ks_c_str(&ks), b"");
+            assert_eq!(kputsn_(b"abc", 3, &mut ks), 3);
+            assert_eq!(ks_len(&ks), 3);
+            assert_eq!(ks_str(&mut ks).as_slice(), b"abc");
 
             assert_eq!(kputc_(b'X' as c_int, &mut ks), 1);
-            assert_eq!(ks_len(&mut ks), 4);
-            assert_eq!(
-                std::slice::from_raw_parts(ks_str(&mut ks).cast::<u8>(), ks_len(&mut ks)),
-                b"abcX"
-            );
+            assert_eq!(ks_len(&ks), 4);
+            assert_eq!(ks_str(&mut ks).as_slice(), b"abcX");
 
             assert_eq!(kputc(0xff, &mut ks), 0xff);
-            assert_eq!(ks_len(&mut ks), 5);
-            assert_eq!(
-                std::slice::from_raw_parts(ks_str(&mut ks).cast::<u8>(), ks_len(&mut ks)),
-                b"abcX\xff"
-            );
+            assert_eq!(ks_len(&ks), 5);
+            assert_eq!(ks_str(&mut ks).as_slice(), b"abcX\xff");
 
-            assert_eq!(ks_clear(&mut ks), &mut ks as *mut kstring_t);
-            assert_eq!(ks_len(&mut ks), 0);
-            assert_eq!(CStr::from_ptr(ks_c_str(&mut ks)).to_bytes(), b"");
-            assert!(!ks_str(&mut ks).is_null());
+            ks_clear(&mut ks);
+            assert_eq!(ks_len(&ks), 0);
+            assert_eq!(ks_c_str(&ks), b"");
 
             let released = ks_release(&mut ks);
-            assert!(!released.is_null());
-            assert_eq!(ks_len(&mut ks), 0);
-            assert_eq!(ks_str(&mut ks), std::ptr::null_mut());
-            crate::htslib_rs::c_compat::free(released.cast());
+            assert_eq!(released.as_slice(), b"");
+            assert_eq!(ks_len(&ks), 0);
 
             ks_initialize(&mut ks);
-            assert_eq!(kputsn(c"".as_ptr(), 0, &mut ks), 0);
-            assert_eq!(ks_len(&mut ks), 0);
-            assert_eq!(CStr::from_ptr(ks_str(&mut ks)).to_bytes(), b"");
+            assert_eq!(kputsn(b"", 0, &mut ks), 0);
+            assert_eq!(ks_len(&ks), 0);
+            assert_eq!(ks_str(&mut ks).as_slice(), b"");
             ks_free(&mut ks);
         }
     }
@@ -11708,9 +11665,7 @@ mod tests {
             );
 
             let ks = kstring_t {
-                l: utf16le.len(),
-                m: utf16le.len(),
-                s: utf16le.as_ptr() as *mut c_char,
+                data: utf16le.to_vec(),
             };
             assert_eq!(hts_is_utf16_text(&ks), 2);
 
@@ -11720,7 +11675,7 @@ mod tests {
             assert_eq!(hts_c_2186_hts_file_type(c"sample.bcf".as_ptr()), 5);
             assert_eq!(hts_c_2186_hts_file_type(c"sample.unknown".as_ptr()), 0);
 
-            let mut eof_fp: htsFile = std::mem::zeroed();
+            let mut eof_fp: htsFile = htsFile::default();
             eof_fp.format.compression = HTS_COMPRESSION_NO_COMPRESSION;
             eof_fp.format.format = HTS_FORMAT_SAM;
             assert_eq!(hts_c_2208_hts_check_EOF(&mut eof_fp), 3);
@@ -11731,11 +11686,11 @@ mod tests {
                 std::process::id()
             ))
             .unwrap();
-            let mut tmpname: kstring_t = std::mem::zeroed();
+            let mut tmpname: kstring_t = kstring_t::default();
             let fp = hts_c_1979_hts_open_tmpfile(base.as_ptr(), c"w".as_ptr(), &mut tmpname);
             assert!(!fp.is_null());
             assert_eq!(hclose(fp), 0);
-            let created = CStr::from_ptr(tmpname.s).to_string_lossy().into_owned();
+            let created = String::from_utf8_lossy(&tmpname.data).into_owned();
             assert!(created.contains(".tmp_"));
             assert!(std::fs::metadata(&created).is_ok());
             std::fs::remove_file(&created).unwrap();
@@ -11851,7 +11806,7 @@ mod tests {
             assert_eq!((*next).opt, CRAM_OPT_REFERENCE);
             assert_eq!(CStr::from_ptr((*next).val.s).to_bytes(), b"ref.fa");
 
-            let mut apply_fp: htsFile = std::mem::zeroed();
+            let mut apply_fp: htsFile = htsFile::default();
             apply_fp.format.format = HTS_FORMAT_SAM;
             assert_eq!(hts_c_1247_hts_opt_apply(&mut apply_fp, next), 0);
             assert_eq!(CStr::from_ptr(apply_fp.fn_aux).to_bytes(), b"ref.fa");
@@ -11906,7 +11861,7 @@ mod tests {
                 -1
             );
 
-            let mut process_fp: htsFile = std::mem::zeroed();
+            let mut process_fp: htsFile = htsFile::default();
             process_fp.format.format = HTS_FORMAT_SAM;
             assert_eq!(
                 hts_c_1413_hts_process_opts(&mut process_fp, c"reference=ref2.fa".as_ptr()),

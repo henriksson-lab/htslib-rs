@@ -26,9 +26,9 @@ fn real_bgzf_gzi_loads_exact_block_index_offsets() {
         let gzi = c_fixture("htslib/test/bgziptest.txt.gz.gzi");
 
         assert_eq!(bgzf_index_load(fp, gzi.as_ptr(), std::ptr::null()), 0);
-        assert!(!(*fp).idx.is_null());
+        assert!((*fp).idx.is_some());
 
-        let idx = (*fp).idx.cast::<bgzidx_t>();
+        let idx: &bgzidx_t = (*fp).idx.as_deref().unwrap();
         assert_eq!((*idx).noffs, 6);
         assert_eq!((*idx).moffs, 6);
 

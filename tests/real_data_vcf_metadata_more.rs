@@ -48,16 +48,12 @@ unsafe fn render_vcf(path: &str) -> String {
 
     let rec = bcf_init();
     assert!(!rec.is_null());
-    let mut line = kstring_t {
-        l: 0,
-        m: 0,
-        s: std::ptr::null_mut(),
-    };
+    let mut line = kstring_t::default();
     while bcf_read(fp, hdr, rec) >= 0 {
-        line.l = 0;
+        line.data.clear();
         assert_eq!(vcf_format(hdr, rec, &mut line), 0);
-        assert!(!line.s.is_null());
-        out.push_str(&CStr::from_ptr(line.s).to_string_lossy());
+        assert!(!line.data.is_empty());
+        out.push_str(&String::from_utf8_lossy(&line.data));
     }
 
     ks_free(&mut line);
@@ -89,7 +85,8 @@ unsafe fn assert_alleles(rec: *mut htslib_rs::bcf1_t, expected: &[&CStr]) {
     assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
     assert_eq!((*rec).n_allele() as usize, expected.len());
     for (i, allele) in expected.iter().enumerate() {
-        assert_eq!(CStr::from_ptr(*(*rec).d.allele.add(i)), *allele);
+        let d = &(*rec).d;
+        assert_eq!(&d.allele[i][..], allele.to_bytes());
     }
 }
 
@@ -385,15 +382,11 @@ fn large_info_end_repair_keeps_packed_info_prefix() {
         );
         assert_eq!(&packed[packed.len() - 8..], &3_000_000_000i64.to_le_bytes());
 
-        let mut line = kstring_t {
-            l: 0,
-            m: 0,
-            s: std::ptr::null_mut(),
-        };
+        let mut line = kstring_t::default();
         assert_eq!(vcf_format(hdr, rec, &mut line), 0);
         assert_eq!(
-            CStr::from_ptr(line.s),
-            c"chr1\t1\t.\tA\t<DEL>\t.\t.\tEND=3000000000\n"
+            &line.data[..],
+            c"chr1\t1\t.\tA\t<DEL>\t.\t.\tEND=3000000000\n".to_bytes()
         );
 
         ks_free(&mut line);

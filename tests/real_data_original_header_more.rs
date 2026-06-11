@@ -17,11 +17,11 @@ fn c_fixture(path: &str) -> CString {
 }
 
 unsafe fn kstring_bytes(ks: &kstring_t) -> Vec<u8> {
-    assert!(!ks.s.is_null());
-    std::slice::from_raw_parts(ks.s.cast::<u8>(), ks.l).to_vec()
+    ks.data.clone()
 }
 
 unsafe fn sam_header_text(hdr: *mut htslib_rs::sam_hdr_t) -> String {
+    let hdr = &mut *hdr;
     let len = sam_hdr_length(hdr);
     assert!(!sam_hdr_str(hdr).is_null());
     String::from_utf8(std::slice::from_raw_parts(sam_hdr_str(hdr).cast::<u8>(), len).to_vec())
@@ -35,9 +35,9 @@ unsafe fn assert_sam_tag_by_pos(
     key: &CStr,
     expected: &[u8],
 ) {
-    let mut ks: kstring_t = std::mem::zeroed();
+    let mut ks: kstring_t = kstring_t::default();
     assert_eq!(
-        sam_hdr_find_tag_pos(hdr, type_.as_ptr(), pos, key.as_ptr(), &mut ks),
+        sam_hdr_find_tag_pos(&mut *hdr, type_, pos, key, &mut ks),
         0,
         "missing {type_:?}[{pos}].{key:?}"
     );
@@ -53,14 +53,14 @@ unsafe fn assert_sam_tag_by_id(
     key: &CStr,
     expected: &[u8],
 ) {
-    let mut ks: kstring_t = std::mem::zeroed();
+    let mut ks: kstring_t = kstring_t::default();
     assert_eq!(
         sam_hdr_find_tag_id(
-            hdr,
-            type_.as_ptr(),
+            &mut *hdr,
+            type_,
             id_key.as_ptr(),
             id_value.as_ptr(),
-            key.as_ptr(),
+            key,
             &mut ks,
         ),
         0,
@@ -99,11 +99,11 @@ fn xx_rg_sam_header_preserves_exact_lookup_tags_and_comments() {
     unsafe {
         let (fp, hdr) = sam_header("htslib/test/xx#rg.sam");
 
-        assert_eq!(sam_hdr_count_lines(hdr, c"HD".as_ptr()), 1);
-        assert_eq!(sam_hdr_count_lines(hdr, c"SQ".as_ptr()), 1);
-        assert_eq!(sam_hdr_count_lines(hdr, c"RG".as_ptr()), 2);
-        assert_eq!(sam_hdr_count_lines(hdr, c"PG".as_ptr()), 1);
-        assert_eq!(sam_hdr_count_lines(hdr, c"CO".as_ptr()), 2);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"HD"), 1);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"SQ"), 1);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"RG"), 2);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"PG"), 1);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"CO"), 2);
 
         assert_sam_tag_by_pos(hdr, c"HD", 0, c"VN", b"1.4");
         assert_sam_tag_by_pos(hdr, c"HD", 0, c"SO", b"coordinate");
@@ -115,11 +115,11 @@ fn xx_rg_sam_header_preserves_exact_lookup_tags_and_comments() {
         assert_sam_tag_by_pos(hdr, c"SQ", 0, c"M5", b"bbf4de6d8497a119dda6e074521643dc");
 
         assert_eq!(
-            CStr::from_ptr(sam_hdr_line_name(hdr, c"RG".as_ptr(), 0)),
+            CStr::from_ptr(sam_hdr_line_name(&mut *hdr, c"RG", 0)),
             c"x1"
         );
         assert_eq!(
-            CStr::from_ptr(sam_hdr_line_name(hdr, c"RG".as_ptr(), 1)),
+            CStr::from_ptr(sam_hdr_line_name(&mut *hdr, c"RG", 1)),
             c"x2"
         );
         assert_sam_tag_by_id(hdr, c"RG", c"ID", c"x1", c"SM", b"x1");
@@ -129,17 +129,17 @@ fn xx_rg_sam_header_preserves_exact_lookup_tags_and_comments() {
         assert_sam_tag_by_id(hdr, c"RG", c"ID", c"x2", c"PI", b"1111");
 
         assert_eq!(
-            CStr::from_ptr(sam_hdr_line_name(hdr, c"PG".as_ptr(), 0)),
+            CStr::from_ptr(sam_hdr_line_name(&mut *hdr, c"PG", 0)),
             c"emacs"
         );
         assert_sam_tag_by_id(hdr, c"PG", c"ID", c"emacs", c"PN", b"emacs");
         assert_sam_tag_by_id(hdr, c"PG", c"ID", c"emacs", c"VN", b"23.1.1");
 
-        let mut co: kstring_t = std::mem::zeroed();
-        assert_eq!(sam_hdr_find_line_pos(hdr, c"CO".as_ptr(), 0, &mut co), 0);
+        let mut co: kstring_t = kstring_t::default();
+        assert_eq!(sam_hdr_find_line_pos(&mut *hdr, c"CO", 0, &mut co), 0);
         assert_eq!(kstring_bytes(&co), b"@CO\talso test");
         ks_free(&mut co);
-        assert_eq!(sam_hdr_find_line_pos(hdr, c"CO".as_ptr(), 1, &mut co), 0);
+        assert_eq!(sam_hdr_find_line_pos(&mut *hdr, c"CO", 1, &mut co), 0);
         assert_eq!(kstring_bytes(&co), b"@CO\tother\theaders");
         ks_free(&mut co);
 
@@ -152,13 +152,13 @@ fn padded_c1_sam_header_keeps_original_read_group_fields() {
     unsafe {
         let (fp, hdr) = sam_header("htslib/test/c1#pad3.sam");
 
-        assert_eq!(sam_hdr_count_lines(hdr, c"SQ".as_ptr()), 1);
-        assert_eq!(sam_hdr_count_lines(hdr, c"RG".as_ptr()), 1);
-        assert_eq!(sam_hdr_name2tid(hdr, c"c1".as_ptr()), 0);
-        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 0)), c"c1");
-        assert_eq!(sam_hdr_tid2len(hdr, 0), 10);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"SQ"), 1);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"RG"), 1);
+        assert_eq!(sam_hdr_name2tid(&mut *hdr, c"c1"), 0);
+        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(&*hdr, 0)), c"c1");
+        assert_eq!(sam_hdr_tid2len(&*hdr, 0), 10);
         assert_eq!(
-            CStr::from_ptr(sam_hdr_line_name(hdr, c"RG".as_ptr(), 0)),
+            CStr::from_ptr(sam_hdr_line_name(&mut *hdr, c"RG", 0)),
             c"p.sam"
         );
         assert_sam_tag_by_id(hdr, c"RG", c"ID", c"p.sam", c"SM", b"unknown");
@@ -173,9 +173,9 @@ fn index3_expected_sam_header_keeps_original_comments_and_m5_tag() {
     unsafe {
         let (fp, hdr) = sam_header("htslib/test/index3_exp.sam");
 
-        assert_eq!(sam_hdr_count_lines(hdr, c"HD".as_ptr()), 1);
-        assert_eq!(sam_hdr_count_lines(hdr, c"SQ".as_ptr()), 1);
-        assert_eq!(sam_hdr_count_lines(hdr, c"CO".as_ptr()), 3);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"HD"), 1);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"SQ"), 1);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"CO"), 3);
         assert_sam_tag_by_pos(hdr, c"HD", 0, c"VN", b"1.6");
         assert_sam_tag_by_pos(hdr, c"HD", 0, c"SO", b"coordinate");
         assert_sam_tag_by_pos(hdr, c"SQ", 0, c"SN", b"CHROMOSOME_I");
@@ -188,10 +188,10 @@ fn index3_expected_sam_header_keeps_original_comments_and_m5_tag() {
             b"@CO\tUse option seqs_per_slice=2 when writing CRAM so that records are".as_slice(),
             b"@CO\tstored in multiple containers.".as_slice(),
         ];
-        let mut co: kstring_t = std::mem::zeroed();
+        let mut co: kstring_t = kstring_t::default();
         for (i, expected) in expected_comments.iter().enumerate() {
             assert_eq!(
-                sam_hdr_find_line_pos(hdr, c"CO".as_ptr(), i as c_int, &mut co),
+                sam_hdr_find_line_pos(&mut *hdr, c"CO", i as c_int, &mut co),
                 0
             );
             assert_eq!(kstring_bytes(&co), *expected);
@@ -207,7 +207,7 @@ fn index_dos_sam_header_normalizes_crlf_and_keeps_all_sq_targets() {
     unsafe {
         let (fp, hdr) = sam_header("htslib/test/index_dos.sam");
 
-        assert_eq!(sam_hdr_count_lines(hdr, c"SQ".as_ptr()), 7);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"SQ"), 7);
         for (tid, (name, len, md5)) in [
             (
                 c"CHROMOSOME_I",
@@ -249,9 +249,9 @@ fn index_dos_sam_header_normalizes_crlf_and_keeps_all_sq_targets() {
         .enumerate()
         {
             let tid = tid as c_int;
-            assert_eq!(sam_hdr_name2tid(hdr, name.as_ptr()), tid);
-            assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, tid)), *name);
-            assert_eq!(sam_hdr_tid2len(hdr, tid), *len);
+            assert_eq!(sam_hdr_name2tid(&mut *hdr, name), tid);
+            assert_eq!(CStr::from_ptr(sam_hdr_tid2name(&*hdr, tid)), *name);
+            assert_eq!(sam_hdr_tid2len(&*hdr, tid), *len);
             assert_sam_tag_by_pos(hdr, c"SQ", tid, c"M5", md5);
         }
 
@@ -314,16 +314,16 @@ fn minimal_sam_header_without_hd_keeps_two_original_targets_only() {
     unsafe {
         let (fp, hdr) = sam_header("htslib/test/xx#minimal.sam");
 
-        assert_eq!(sam_hdr_count_lines(hdr, c"HD".as_ptr()), 0);
-        assert_eq!(sam_hdr_count_lines(hdr, c"SQ".as_ptr()), 2);
-        assert_eq!(sam_hdr_count_lines(hdr, c"RG".as_ptr()), 0);
-        assert_eq!(sam_hdr_count_lines(hdr, c"PG".as_ptr()), 0);
-        assert_eq!(sam_hdr_name2tid(hdr, c"xx".as_ptr()), 0);
-        assert_eq!(sam_hdr_name2tid(hdr, c"yy".as_ptr()), 1);
-        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 0)), c"xx");
-        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(hdr, 1)), c"yy");
-        assert_eq!(sam_hdr_tid2len(hdr, 0), 20);
-        assert_eq!(sam_hdr_tid2len(hdr, 1), 20);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"HD"), 0);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"SQ"), 2);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"RG"), 0);
+        assert_eq!(sam_hdr_count_lines(&mut *hdr, c"PG"), 0);
+        assert_eq!(sam_hdr_name2tid(&mut *hdr, c"xx"), 0);
+        assert_eq!(sam_hdr_name2tid(&mut *hdr, c"yy"), 1);
+        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(&*hdr, 0)), c"xx");
+        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(&*hdr, 1)), c"yy");
+        assert_eq!(sam_hdr_tid2len(&*hdr, 0), 20);
+        assert_eq!(sam_hdr_tid2len(&*hdr, 1), 20);
         assert_eq!(
             sam_header_text(hdr),
             "@SQ\tSN:xx\tLN:20\n@SQ\tSN:yy\tLN:20\n"
