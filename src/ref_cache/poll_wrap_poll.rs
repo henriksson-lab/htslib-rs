@@ -1,5 +1,3 @@
-use std::ffi::{c_int, c_uint};
-
 use super::poll_wrap::{Pw_events, Pw_fd_type, Pw_item};
 
 const INIT_POLLED_SZ: usize = 16;
@@ -8,11 +6,11 @@ const INIT_IDX_SZ: usize = 16;
 // original: Poll_wrap (htslib/ref_cache/poll_wrap_poll.c:47)
 pub struct Poll_wrap {
     polled: Vec<libc::pollfd>,
-    fd_index: Vec<c_uint>,
+    fd_index: Vec<u32>,
     // Owned arena of registered items, indexed by file descriptor.
     // `None` means the slot is unused (replaces the old NULL pointer check).
     item_index: Vec<Option<Box<Pw_item>>>,
-    last_out: c_uint,
+    last_out: u32,
     need_compact: bool,
     debug: bool,
 }
@@ -56,7 +54,7 @@ pub fn ref_cache_poll_wrap_poll_c_69_pw_init(debug: bool) -> Option<Box<Poll_wra
 // original: pw_register (htslib/ref_cache/poll_wrap_poll.c:95)
 pub fn ref_cache_poll_wrap_poll_c_95_pw_register(
     pw: &mut Poll_wrap,
-    fd: c_int,
+    fd: i32,
     fd_type: Pw_fd_type,
     init_events: u32,
     userp: usize,
@@ -66,7 +64,7 @@ pub fn ref_cache_poll_wrap_poll_c_95_pw_register(
             "pw_register({:p}, {}, {}, 0x{:04x}, {})",
             pw as *const Poll_wrap,
             fd,
-            fd_type as c_int,
+            fd_type as i32,
             init_events,
             userp,
         );
@@ -74,7 +72,7 @@ pub fn ref_cache_poll_wrap_poll_c_95_pw_register(
 
     if fd < 0 {
         unsafe {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::EBADF;
+            *libc::__errno_location() = libc::EBADF;
         }
         return None;
     }
@@ -83,7 +81,7 @@ pub fn ref_cache_poll_wrap_poll_c_95_pw_register(
 
     if fd_idx < pw.item_index.len() && pw.item_index[fd_idx].is_some() {
         unsafe {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::EEXIST;
+            *libc::__errno_location() = libc::EEXIST;
         }
         return None;
     }
@@ -108,7 +106,7 @@ pub fn ref_cache_poll_wrap_poll_c_95_pw_register(
         return None;
     }
 
-    pw.fd_index[fd_idx] = pw.polled.len() as c_uint;
+    pw.fd_index[fd_idx] = pw.polled.len() as u32;
     pw.item_index[fd_idx] = Some(Box::new(Pw_item {
         fd,
         fd_type,
@@ -129,7 +127,7 @@ pub fn ref_cache_poll_wrap_poll_c_157_pw_mod(
     pw: &mut Poll_wrap,
     item: &Pw_item,
     events: u32,
-) -> c_int {
+) -> i32 {
     if pw.debug {
         eprintln!(
             "pw_mod({:p}, {}, 0x{:04x})",
@@ -142,7 +140,7 @@ pub fn ref_cache_poll_wrap_poll_c_157_pw_mod(
     let fd_idx = item.fd as usize;
     if item.fd < 0 || fd_idx >= pw.item_index.len() || pw.item_index[fd_idx].is_none() {
         unsafe {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::ENOENT;
+            *libc::__errno_location() = libc::ENOENT;
         }
         return -1;
     }
@@ -155,23 +153,23 @@ pub fn ref_cache_poll_wrap_poll_c_157_pw_mod(
 pub fn ref_cache_poll_wrap_poll_c_173_pw_wait(
     pw: &mut Poll_wrap,
     events: &mut [Pw_events],
-    max_events: c_int,
-    timeout: c_int,
-) -> c_int {
+    max_events: i32,
+    timeout: i32,
+) -> i32 {
     let mut out = 0;
 
     if pw.need_compact {
         let mut j = 0usize;
         for i in 0..pw.polled.len() {
-            if i as c_uint == pw.last_out {
-                pw.last_out = j as c_uint;
+            if i as u32 == pw.last_out {
+                pw.last_out = j as u32;
             }
             if pw.item_index[pw.polled[i].fd as usize].is_none() {
                 continue;
             }
             if i != j {
                 pw.polled[j] = pw.polled[i];
-                pw.fd_index[pw.polled[j].fd as usize] = j as c_uint;
+                pw.fd_index[pw.polled[j].fd as usize] = j as u32;
             }
             j += 1;
         }
@@ -221,7 +219,7 @@ pub fn ref_cache_poll_wrap_poll_c_220_pw_remove(
     pw: &mut Poll_wrap,
     item: &Pw_item,
     do_close: bool,
-) -> c_int {
+) -> i32 {
     let fd = item.fd;
 
     if pw.debug {
@@ -236,7 +234,7 @@ pub fn ref_cache_poll_wrap_poll_c_220_pw_remove(
     let fd_idx = item.fd as usize;
     if item.fd < 0 || fd_idx >= pw.item_index.len() || pw.item_index[fd_idx].is_none() {
         unsafe {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::ENOENT;
+            *libc::__errno_location() = libc::ENOENT;
         }
         return -1;
     }

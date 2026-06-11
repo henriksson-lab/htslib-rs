@@ -1,24 +1,22 @@
-use std::ffi::c_int;
-
 pub unsafe fn ref_cache_sendfile_wrap(
-    out_fd: c_int,
-    in_fd: c_int,
-    offset: Option<&mut libc::off_t>,
+    out_fd: i32,
+    in_fd: i32,
+    offset: Option<&mut i64>,
     count: usize,
-) -> libc::ssize_t {
+) -> isize {
     platform_sendfile_wrap(out_fd, in_fd, offset, count)
 }
 
 // original: sendfile_wrap (htslib/ref_cache/sendfile_wrap.c:55)
 #[cfg(target_os = "linux")]
 pub unsafe fn ref_cache_sendfile_wrap_c_55_sendfile_wrap(
-    out_fd: c_int,
-    in_fd: c_int,
-    offset: Option<&mut libc::off_t>,
+    out_fd: i32,
+    in_fd: i32,
+    offset: Option<&mut i64>,
     count: usize,
-) -> libc::ssize_t {
+) -> isize {
     let offset_ptr = match offset {
-        Some(offset) => offset as *mut libc::off_t,
+        Some(offset) => offset as *mut i64,
         None => std::ptr::null_mut(),
     };
     libc::sendfile(out_fd, in_fd, offset_ptr, count)
@@ -26,23 +24,23 @@ pub unsafe fn ref_cache_sendfile_wrap_c_55_sendfile_wrap(
 
 #[cfg(target_os = "linux")]
 unsafe fn platform_sendfile_wrap(
-    out_fd: c_int,
-    in_fd: c_int,
-    offset: Option<&mut libc::off_t>,
+    out_fd: i32,
+    in_fd: i32,
+    offset: Option<&mut i64>,
     count: usize,
-) -> libc::ssize_t {
+) -> isize {
     ref_cache_sendfile_wrap_c_55_sendfile_wrap(out_fd, in_fd, offset, count)
 }
 
 // original: sendfile_wrap (htslib/ref_cache/sendfile_wrap.c:61)
 #[cfg(target_os = "freebsd")]
 pub unsafe fn ref_cache_sendfile_wrap_c_61_sendfile_wrap(
-    out_fd: c_int,
-    in_fd: c_int,
-    offset: Option<&mut libc::off_t>,
+    out_fd: i32,
+    in_fd: i32,
+    offset: Option<&mut i64>,
     count: usize,
-) -> libc::ssize_t {
-    let mut sbytes: libc::off_t = 0;
+) -> isize {
+    let mut sbytes: i64 = 0;
 
     if count == 0 {
         return 0;
@@ -60,31 +58,31 @@ pub unsafe fn ref_cache_sendfile_wrap_c_61_sendfile_wrap(
     );
     *offset += sbytes;
     if res < 0 {
-        res as libc::ssize_t
+        res as isize
     } else {
-        sbytes as libc::ssize_t
+        sbytes as isize
     }
 }
 
 #[cfg(target_os = "freebsd")]
 unsafe fn platform_sendfile_wrap(
-    out_fd: c_int,
-    in_fd: c_int,
-    offset: Option<&mut libc::off_t>,
+    out_fd: i32,
+    in_fd: i32,
+    offset: Option<&mut i64>,
     count: usize,
-) -> libc::ssize_t {
+) -> isize {
     ref_cache_sendfile_wrap_c_61_sendfile_wrap(out_fd, in_fd, offset, count)
 }
 
 // original: sendfile_wrap (htslib/ref_cache/sendfile_wrap.c:73)
 #[cfg(target_os = "macos")]
 pub unsafe fn ref_cache_sendfile_wrap_c_73_sendfile_wrap(
-    out_fd: c_int,
-    in_fd: c_int,
-    offset: Option<&mut libc::off_t>,
+    out_fd: i32,
+    in_fd: i32,
+    offset: Option<&mut i64>,
     count: usize,
-) -> libc::ssize_t {
-    let mut len = count as libc::off_t;
+) -> isize {
+    let mut len = count as i64;
 
     if len == 0 {
         return 0;
@@ -93,25 +91,25 @@ pub unsafe fn ref_cache_sendfile_wrap_c_73_sendfile_wrap(
     let offset = offset.expect("sendfile requires an offset");
     let res = libc::sendfile(in_fd, out_fd, *offset, &mut len, std::ptr::null_mut(), 0);
     if res == 0
-        || *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR
-        || *crate::htslib_rs::c_compat::__errno_location() == libc::EAGAIN
+        || *libc::__errno_location() == libc::EINTR
+        || *libc::__errno_location() == libc::EAGAIN
     {
         *offset += len;
     }
     if res < 0 {
-        res as libc::ssize_t
+        res as isize
     } else {
-        len as libc::ssize_t
+        len as isize
     }
 }
 
 #[cfg(target_os = "macos")]
 unsafe fn platform_sendfile_wrap(
-    out_fd: c_int,
-    in_fd: c_int,
-    offset: Option<&mut libc::off_t>,
+    out_fd: i32,
+    in_fd: i32,
+    offset: Option<&mut i64>,
     count: usize,
-) -> libc::ssize_t {
+) -> isize {
     ref_cache_sendfile_wrap_c_73_sendfile_wrap(out_fd, in_fd, offset, count)
 }
 
@@ -119,26 +117,26 @@ unsafe fn platform_sendfile_wrap(
 // original: sendfile_wrap (htslib/ref_cache/sendfile_wrap.c:87)
 #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "macos")))]
 pub unsafe fn ref_cache_sendfile_wrap_c_87_sendfile_wrap(
-    out_fd: c_int,
-    in_fd: c_int,
-    offset: Option<&mut libc::off_t>,
+    out_fd: i32,
+    in_fd: i32,
+    offset: Option<&mut i64>,
     count: usize,
-) -> libc::ssize_t {
+) -> isize {
     if out_fd >= 0 || in_fd >= 0 || offset.is_some() || count != 0 {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -2;
     }
-    *crate::htslib_rs::c_compat::__errno_location() = crate::htslib_rs::c_compat::ENOSYS;
+    *libc::__errno_location() = libc::ENOSYS;
     -1
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "macos")))]
 unsafe fn platform_sendfile_wrap(
-    out_fd: c_int,
-    in_fd: c_int,
-    offset: Option<&mut libc::off_t>,
+    out_fd: i32,
+    in_fd: i32,
+    offset: Option<&mut i64>,
     count: usize,
-) -> libc::ssize_t {
+) -> isize {
     ref_cache_sendfile_wrap_c_87_sendfile_wrap(out_fd, in_fd, offset, count)
 }
 
@@ -174,7 +172,7 @@ mod tests {
                 .truncate(true)
                 .open(&output_path)
                 .expect("open output");
-            let mut offset: libc::off_t = 2;
+            let mut offset: i64 = 2;
 
             let copied = unsafe {
                 ref_cache_sendfile_wrap(output.as_raw_fd(), input.as_raw_fd(), Some(&mut offset), 0)

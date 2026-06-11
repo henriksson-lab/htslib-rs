@@ -1,69 +1,83 @@
-use std::ffi::{c_char, c_int};
-
 use crate::htslib_rs::hts::hts_pos_t;
+use std::io::Write;
 
 // original: print_usage (htslib/samples/read_fast_index.c:38)
-pub unsafe fn samples_read_fast_index_c_38_print_usage(fp: *mut libc::FILE) {
-    libc::fprintf(
-        fp,
-        c"Usage: read_fast_i <infile> A/Q 0/1 regiondef\nReads the fasta/fastq file using index and shows the content.\nFor fasta files use A and Q for fastq files.\nRegion can be 1 or more of <reference name>[:start-end] entries separated by comma.\nFor single region, give regcount as 0 and non 0 for multi-regions.\n".as_ptr(),
+pub fn samples_read_fast_index_c_38_print_usage() {
+    eprint!(
+        "Usage: read_fast_i <infile> A/Q 0/1 regiondef\nReads the fasta/fastq file using index and shows the content.\nFor fasta files use A and Q for fastq files.\nRegion can be 1 or more of <reference name>[:start-end] entries separated by comma.\nFor single region, give regcount as 0 and non 0 for multi-regions.\n"
     );
 }
 
 // original: main (htslib/samples/read_fast_index.c:53)
-pub unsafe fn samples_read_fast_index_c_53_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
-    const HTS_PARSE_LIST: c_int = 4;
-    let mut ret = libc::EXIT_FAILURE;
+pub unsafe fn samples_read_fast_index_c_53_main(argc: i32, argv: *mut *mut u8) -> i32 {
+    const HTS_PARSE_LIST: i32 = 4;
+    let mut ret = 1;
+    let mut __out = std::io::stdout();
 
     if argc != 5 {
-        samples_read_fast_index_c_38_print_usage(crate::htslib_rs::c_compat::stdout.cast());
+        samples_read_fast_index_c_38_print_usage();
         return ret;
     }
     let inname = *argv.add(1);
-    let fmt = if **argv.add(2) == b'Q' as c_char {
+    let fmt = if **argv.add(2) == b'Q' {
         crate::htslib_rs::faidx::FAI_FASTQ
     } else {
         crate::htslib_rs::faidx::FAI_FASTA
     };
-    let usemulti = libc::atoi(*argv.add(3));
+    // boundary: argv string still passed to raw-ptr atoi; parse the digit run here
+    let usemulti = libc::atoi(*argv.add(3).cast());
     let mut region = *argv.add(4);
 
     let idx = crate::htslib_rs::faidx::fai_load3_format(
-        inname,
+        inname.cast(),
         std::ptr::null(),
         std::ptr::null(),
         crate::htslib_rs::faidx::FAI_CREATE,
         fmt,
     );
     if idx.is_null() {
-        libc::printf(c"Failed to load index\n".as_ptr());
+        writeln!(__out, "Failed to load index").unwrap();
+        __out.flush().unwrap();
         return ret;
     }
 
     if usemulti == 0 {
         let mut len: hts_pos_t = 0;
-        let mut data = crate::htslib_rs::faidx::fai_fetch64(idx, region, &mut len);
+        // boundary: faidx returns a malloc'd C string (raw ptr)
+        let mut data = crate::htslib_rs::faidx::fai_fetch64(idx, region.cast(), &mut len);
         if data.is_null() {
             if len == -1 {
-                libc::printf(c"Failed to get data\n".as_ptr());
+                writeln!(__out, "Failed to get data").unwrap();
+                __out.flush().unwrap();
                 crate::htslib_rs::faidx::fai_destroy(idx);
                 return ret;
             }
-            libc::printf(c"Data not found for given region\n".as_ptr());
+            writeln!(__out, "Data not found for given region").unwrap();
         } else {
-            libc::printf(c"Data: %ld %s\n".as_ptr(), len as libc::c_long, data);
+            writeln!(
+                __out,
+                "Data: {} {}",
+                len,
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(data.cast()).to_bytes())
+            ).unwrap();
             libc::free(data.cast());
             if fmt == crate::htslib_rs::faidx::FAI_FASTQ {
-                data = crate::htslib_rs::faidx::fai_fetchqual64(idx, region, &mut len);
+                data = crate::htslib_rs::faidx::fai_fetchqual64(idx, region.cast(), &mut len);
                 if data.is_null() {
                     if len == -1 {
-                        libc::printf(c"Failed to get data\n".as_ptr());
+                        writeln!(__out, "Failed to get data").unwrap();
+                        __out.flush().unwrap();
                         crate::htslib_rs::faidx::fai_destroy(idx);
                         return ret;
                     }
-                    libc::printf(c"Data not found for given region\n".as_ptr());
+                    writeln!(__out, "Data not found for given region").unwrap();
                 } else {
-                    libc::printf(c"Qual: %ld %s\n".as_ptr(), len as libc::c_long, data);
+                    writeln!(
+                        __out,
+                        "Qual: {} {}",
+                        len,
+                        String::from_utf8_lossy(std::ffi::CStr::from_ptr(data.cast()).to_bytes())
+                    ).unwrap();
                     libc::free(data.cast());
                 }
             }
@@ -75,7 +89,7 @@ pub unsafe fn samples_read_fast_index_c_53_main(argc: c_int, argv: *mut *mut c_c
             let mut end: hts_pos_t = 0;
             let remaining = crate::htslib_rs::faidx::fai_parse_region(
                 idx,
-                region,
+                region.cast(),
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -85,47 +99,68 @@ pub unsafe fn samples_read_fast_index_c_53_main(argc: c_int, argv: *mut *mut c_c
                 break;
             }
             if crate::htslib_rs::faidx::fai_adjust_region(&*idx, tid, &mut beg, &mut end) == -1 {
-                libc::printf(c"Error in adjusting region for tid %d\n".as_ptr(), tid);
+                writeln!(__out, "Error in adjusting region for tid {}", tid).unwrap();
+                __out.flush().unwrap();
                 crate::htslib_rs::faidx::fai_destroy(idx);
                 return ret;
             }
 
             let name = crate::htslib_rs::faidx::faidx_iseq(&*idx, tid)
-                .map_or(std::ptr::null(), |s| s.as_ptr() as *const c_char);
+                .map_or(std::ptr::null(), |s| s.as_ptr() as *const u8);
             let mut len: hts_pos_t = 0;
             let mut data =
-                crate::htslib_rs::faidx::faidx_fetch_seq64(idx, name, beg, end, &mut len);
+                crate::htslib_rs::faidx::faidx_fetch_seq64(idx, name.cast(), beg, end, &mut len);
             if data.is_null() {
                 if len == -1 {
-                    libc::printf(c"Failed to get data\n".as_ptr());
+                    writeln!(__out, "Failed to get data").unwrap();
+                    __out.flush().unwrap();
                     crate::htslib_rs::faidx::fai_destroy(idx);
                     return ret;
                 }
-                libc::printf(c"No data found for given region\n".as_ptr());
+                writeln!(__out, "No data found for given region").unwrap();
             } else {
-                libc::printf(c"Data: %ld %s\n".as_ptr(), len as libc::c_long, data);
+                writeln!(
+                    __out,
+                    "Data: {} {}",
+                    len,
+                    String::from_utf8_lossy(std::ffi::CStr::from_ptr(data.cast()).to_bytes())
+                ).unwrap();
                 libc::free(data.cast());
                 if fmt == crate::htslib_rs::faidx::FAI_FASTQ {
-                    data =
-                        crate::htslib_rs::faidx::faidx_fetch_qual64(idx, name, beg, end, &mut len);
+                    data = crate::htslib_rs::faidx::faidx_fetch_qual64(
+                        idx,
+                        name.cast(),
+                        beg,
+                        end,
+                        &mut len,
+                    );
                     if data.is_null() {
                         if len == -1 {
-                            libc::printf(c"Failed to get qual data\n".as_ptr());
+                            writeln!(__out, "Failed to get qual data").unwrap();
+                            __out.flush().unwrap();
                             crate::htslib_rs::faidx::fai_destroy(idx);
                             return ret;
                         }
-                        libc::printf(c"No data found for given region\n".as_ptr());
+                        writeln!(__out, "No data found for given region").unwrap();
                     } else {
-                        libc::printf(c"Qual: %ld %s\n".as_ptr(), len as libc::c_long, data);
+                        writeln!(
+                            __out,
+                            "Qual: {} {}",
+                            len,
+                            String::from_utf8_lossy(
+                                std::ffi::CStr::from_ptr(data.cast()).to_bytes()
+                            )
+                        ).unwrap();
                         libc::free(data.cast());
                     }
                 }
             }
-            region = remaining.cast_mut();
+            region = remaining.cast_mut().cast();
         }
     }
 
-    ret = libc::EXIT_SUCCESS;
+    ret = 0;
     crate::htslib_rs::faidx::fai_destroy(idx);
+    __out.flush().unwrap();
     ret
 }

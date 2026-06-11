@@ -2,15 +2,16 @@ use flate2::{write::GzEncoder, Compression};
 use htslib_rs::{
     hclose, hgets, hopen, hpeek, hseek, htslib_hfile_h_155_htell, htslib_hfile_h_247_hread,
 };
-use std::ffi::CString;
 use std::io::Write;
 
 fn fixture(path: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
 }
 
-fn c_fixture(path: &str) -> CString {
-    CString::new(fixture(path).to_string_lossy().as_bytes()).unwrap()
+fn c_fixture(path: &str) -> Vec<u8> {
+    let mut bytes = fixture(path).to_string_lossy().as_bytes().to_vec();
+    bytes.push(0);
+    bytes
 }
 
 fn temp_path(label: &str, extension: &str) -> std::path::PathBuf {
@@ -27,7 +28,7 @@ fn hfile_peek_read_and_seek_match_real_fixture_bytes() {
         assert!(expected.len() > 512);
 
         let path = c_fixture("htslib/test/index.vcf");
-        let fp = hopen(path.as_ptr(), c"r".as_ptr());
+        let fp = hopen(path.as_ptr().cast(), b"r\0".as_ptr().cast());
         assert!(!fp.is_null());
 
         let mut peeked = [0u8; 17];
@@ -73,18 +74,17 @@ fn hfile_hgets_reads_real_vcf_header_lines_like_std_io() {
         let mut expected_lines = expected.lines();
 
         let path = c_fixture("htslib/test/index.vcf");
-        let fp = hopen(path.as_ptr(), c"r".as_ptr());
+        let fp = hopen(path.as_ptr().cast(), b"r\0".as_ptr().cast());
         assert!(!fp.is_null());
 
-        let mut buf = [0i8; 256];
+        let mut buf = [0u8; 256];
         for _ in 0..4 {
             assert_eq!(
-                hgets(buf.as_mut_ptr(), buf.len() as i32, fp),
-                buf.as_mut_ptr()
+                hgets(buf.as_mut_ptr().cast(), buf.len() as i32, fp),
+                buf.as_mut_ptr().cast()
             );
-            let got = std::ffi::CStr::from_ptr(buf.as_ptr())
-                .to_string_lossy()
-                .into_owned();
+            let nul = buf.iter().position(|&b| b == 0).unwrap();
+            let got = String::from_utf8_lossy(&buf[..nul]).into_owned();
             let expected_line = expected_lines.next().unwrap();
             assert_eq!(got, format!("{expected_line}\n"));
         }

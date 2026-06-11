@@ -27,7 +27,7 @@
 // "undefined symbol: hts_filter_init" at link time.
 use hts_sys as _;
 
-use std::ffi::{c_char, c_int, c_void, CStr};
+use std::ffi::c_void;
 use std::path::Path;
 
 // ---------------------------------------------------------------------------
@@ -50,13 +50,13 @@ struct CHtsFilter {
 struct CKstring {
     l: usize,
     m: usize,
-    s: *mut c_char,
+    s: *mut u8,
 }
 
 #[repr(C)]
 struct CHtsExprVal {
-    is_str: c_char,
-    is_true: c_char,
+    is_str: u8,
+    is_true: u8,
     s: CKstring,
     d: f64,
 }
@@ -66,27 +66,27 @@ struct CHtsExprVal {
 type CExprSymFunc = Option<
     unsafe extern "C" fn(
         data: *mut c_void,
-        str_: *mut c_char,
-        end: *mut *mut c_char,
+        str_: *mut u8,
+        end: *mut *mut u8,
         res: *mut CHtsExprVal,
-    ) -> c_int,
+    ) -> i32,
 >;
 
 extern "C" {
-    fn hts_filter_init(str_: *const c_char) -> *mut CHtsFilter;
+    fn hts_filter_init(str_: *const u8) -> *mut CHtsFilter;
     fn hts_filter_free(filt: *mut CHtsFilter);
     fn hts_filter_eval(
         filt: *mut CHtsFilter,
         data: *mut c_void,
         sym_func: CExprSymFunc,
         res: *mut CHtsExprVal,
-    ) -> c_int;
+    ) -> i32;
     fn hts_filter_eval2(
         filt: *mut CHtsFilter,
         data: *mut c_void,
         sym_func: CExprSymFunc,
         res: *mut CHtsExprVal,
-    ) -> c_int;
+    ) -> i32;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,19 +95,19 @@ extern "C" {
 // ---------------------------------------------------------------------------
 
 unsafe extern "C" fn lookup_native(
-    _data: *mut c_void,
-    str_: *mut c_char,
-    end: *mut *mut c_char,
+    _data: *mut std::ffi::c_void,
+    str_: *mut std::ffi::c_char,
+    end: *mut *mut std::ffi::c_char,
     res: *mut htslib_rs::hts_expr::hts_expr_val_t,
-) -> c_int {
+) -> i32 {
     (*res).is_str = 0;
-    if libc::strncmp(str_, c"a".as_ptr(), 1) == 0 {
+    if *str_ == b'a' as std::ffi::c_char {
         *end = str_.add(1);
         (*res).d = 1.0;
-    } else if libc::strncmp(str_, c"b".as_ptr(), 1) == 0 {
+    } else if *str_ == b'b' as std::ffi::c_char {
         *end = str_.add(1);
         (*res).d = 2.0;
-    } else if libc::strncmp(str_, c"c".as_ptr(), 1) == 0 {
+    } else if *str_ == b'c' as std::ffi::c_char {
         *end = str_.add(1);
         (*res).d = 3.0;
     } else {
@@ -118,18 +118,18 @@ unsafe extern "C" fn lookup_native(
 
 unsafe extern "C" fn lookup_c(
     _data: *mut c_void,
-    str_: *mut c_char,
-    end: *mut *mut c_char,
+    str_: *mut u8,
+    end: *mut *mut u8,
     res: *mut CHtsExprVal,
-) -> c_int {
+) -> i32 {
     (*res).is_str = 0;
-    if libc::strncmp(str_, c"a".as_ptr(), 1) == 0 {
+    if *str_ == b'a' {
         *end = str_.add(1);
         (*res).d = 1.0;
-    } else if libc::strncmp(str_, c"b".as_ptr(), 1) == 0 {
+    } else if *str_ == b'b' {
         *end = str_.add(1);
         (*res).d = 2.0;
-    } else if libc::strncmp(str_, c"c".as_ptr(), 1) == 0 {
+    } else if *str_ == b'c' {
         *end = str_.add(1);
         (*res).d = 3.0;
     } else {
@@ -142,9 +142,11 @@ unsafe extern "C" fn lookup_c(
 // Parity helpers
 // ---------------------------------------------------------------------------
 
-fn run_native(expr: &CStr) -> (c_int, c_int, c_int, f64, Vec<u8>) {
+fn run_native(expr: &[u8]) -> (i32, i32, i32, f64, Vec<u8>) {
     unsafe {
-        let filt = htslib_rs::hts_expr::hts_filter_init(expr.as_ptr());
+        // The native init takes the expression as a byte slice and rejects any
+        // embedded NUL, so strip the trailing NUL the C path consumes implicitly.
+        let filt = htslib_rs::hts_expr::hts_filter_init(expr.strip_suffix(b"\0").unwrap_or(expr));
         assert!(
             !filt.is_null(),
             "native hts_filter_init returned NULL for {expr:?}"
@@ -164,8 +166,8 @@ fn run_native(expr: &CStr) -> (c_int, c_int, c_int, f64, Vec<u8>) {
         let s_bytes = res.s.data.to_vec();
         let out = (
             rc,
-            res.is_str as c_int,
-            res.is_true as c_int,
+            res.is_str as i32,
+            res.is_true as i32,
             res.d,
             s_bytes,
         );
@@ -175,7 +177,7 @@ fn run_native(expr: &CStr) -> (c_int, c_int, c_int, f64, Vec<u8>) {
     }
 }
 
-fn run_c(expr: &CStr) -> (c_int, c_int, c_int, f64, Vec<u8>) {
+fn run_c(expr: &[u8]) -> (i32, i32, i32, f64, Vec<u8>) {
     unsafe {
         let filt = hts_filter_init(expr.as_ptr());
         assert!(
@@ -196,8 +198,8 @@ fn run_c(expr: &CStr) -> (c_int, c_int, c_int, f64, Vec<u8>) {
         };
         let out = (
             rc,
-            res.is_str as c_int,
-            res.is_true as c_int,
+            res.is_str as i32,
+            res.is_true as i32,
             res.d,
             s_bytes,
         );
@@ -218,19 +220,19 @@ fn run_c(expr: &CStr) -> (c_int, c_int, c_int, f64, Vec<u8>) {
 fn parity_hts_filter_init_succeeds() {
     // hts_filter_init does no parsing — it just allocates and copies the
     // string. Both sides should succeed (non-NULL) for any non-NULL input.
-    let exprs: &[&CStr] = &[
-        c"a + b",
-        c"1",
-        c"a > b && c < 10",
-        c"FLAG & 4",
-        c"MAPQ >= 30",
-        c"length(SEQ) > 50",
-        c"min(MAPQ, NM) > 0",
-        c"!(a == b)",
+    let exprs: &[&[u8]] = &[
+        b"a + b\0",
+        b"1\0",
+        b"a > b && c < 10\0",
+        b"FLAG & 4\0",
+        b"MAPQ >= 30\0",
+        b"length(SEQ) > 50\0",
+        b"min(MAPQ, NM) > 0\0",
+        b"!(a == b)\0",
     ];
     for e in exprs {
         unsafe {
-            let n = htslib_rs::hts_expr::hts_filter_init(e.as_ptr());
+            let n = htslib_rs::hts_expr::hts_filter_init(e.strip_suffix(b"\0").unwrap_or(e));
             let cc = hts_filter_init(e.as_ptr());
             assert!(!n.is_null(), "native init NULL for {e:?}");
             assert!(!cc.is_null(), "C init NULL for {e:?}");
@@ -243,31 +245,31 @@ fn parity_hts_filter_init_succeeds() {
 #[test]
 fn parity_hts_filter_eval2_arithmetic() {
     // Use only a/b/c which lookup_* resolves to 1.0/2.0/3.0.
-    let exprs: &[&CStr] = &[
-        c"a",
-        c"b",
-        c"c",
-        c"a + b",
-        c"c - a",
-        c"a * b * c",
-        c"c / b",
-        c"a + b * c",
-        c"(a + b) * c",
-        c"-a",
-        c"!a",
-        c"!0",
-        c"a == 1",
-        c"b > a",
-        c"a < b && b < c",
-        c"a || c",
-        c"a & 0",
-        c"6 | 1",
-        c"3 ^ 1",
-        c"3 % 2",
-        c"min(a, c)",
-        c"max(a, c)",
-        c"avg(a, c)",
-        c"a == b ? a : c",
+    let exprs: &[&[u8]] = &[
+        b"a\0",
+        b"b\0",
+        b"c\0",
+        b"a + b\0",
+        b"c - a\0",
+        b"a * b * c\0",
+        b"c / b\0",
+        b"a + b * c\0",
+        b"(a + b) * c\0",
+        b"-a\0",
+        b"!a\0",
+        b"!0\0",
+        b"a == 1\0",
+        b"b > a\0",
+        b"a < b && b < c\0",
+        b"a || c\0",
+        b"a & 0\0",
+        b"6 | 1\0",
+        b"3 ^ 1\0",
+        b"3 % 2\0",
+        b"min(a, c)\0",
+        b"max(a, c)\0",
+        b"avg(a, c)\0",
+        b"a == b ? a : c\0",
     ];
     for e in exprs {
         let n = run_native(e);
@@ -288,10 +290,10 @@ fn parity_hts_filter_eval2_arithmetic() {
 fn parity_hts_filter_eval_deprecated_path() {
     // Exercise the deprecated `hts_filter_eval` entry too — it differs from
     // eval2 by demanding a pre-cleared result struct (which we ensure).
-    let expr = c"a + b * c";
+    let expr: &[u8] = b"a + b * c\0";
     unsafe {
         // Native
-        let nfilt = htslib_rs::hts_expr::hts_filter_init(expr.as_ptr());
+        let nfilt = htslib_rs::hts_expr::hts_filter_init(expr.strip_suffix(b"\0").unwrap_or(expr));
         let mut nres = htslib_rs::hts_expr::hts_expr_val_t {
             is_str: 0,
             is_true: 0,
@@ -343,15 +345,15 @@ fn hts_filter_free_handles_null_safely() {
 fn hts_filter_init_and_free_basic() {
     // Sanity-check init+free across a few expression shapes, including the
     // ones requested in the parity-task prompt.
-    let exprs: &[&CStr] = &[
-        c"FLAG & 4",
-        c"MAPQ >= 30",
-        c"length(SEQ) > 50",
-        c"min(MAPQ, NM) > 0",
+    let exprs: &[&[u8]] = &[
+        b"FLAG & 4\0",
+        b"MAPQ >= 30\0",
+        b"length(SEQ) > 50\0",
+        b"min(MAPQ, NM) > 0\0",
     ];
     for e in exprs {
         unsafe {
-            let n = htslib_rs::hts_expr::hts_filter_init(e.as_ptr());
+            let n = htslib_rs::hts_expr::hts_filter_init(e.strip_suffix(b"\0").unwrap_or(e));
             assert!(!n.is_null());
             htslib_rs::hts_expr::hts_filter_free(n);
 
@@ -390,8 +392,8 @@ struct RecordCtx {
 type FieldGetter = fn(&RecordCtx) -> f64;
 
 unsafe fn resolve_field(
-    str_: *mut c_char,
-    end: *mut *mut c_char,
+    str_: *mut u8,
+    end: *mut *mut u8,
     ctx: *const RecordCtx,
 ) -> Option<f64> {
     let known: &[(&[u8], FieldGetter)] = &[
@@ -400,9 +402,9 @@ unsafe fn resolve_field(
         (b"POS", |c| c.pos as f64),
     ];
     for (name, getter) in known {
-        if libc::strncmp(str_, name.as_ptr().cast(), name.len()) == 0 {
+        if std::slice::from_raw_parts(str_, name.len()) == *name {
             // Ensure the next char is not alnum/_ (so we don't match "FLAG2").
-            let next = *str_.add(name.len()) as u8;
+            let next = *str_.add(name.len());
             if !(next.is_ascii_alphanumeric() || next == b'_') {
                 *end = str_.add(name.len());
                 return Some(getter(&*ctx));
@@ -413,13 +415,13 @@ unsafe fn resolve_field(
 }
 
 unsafe extern "C" fn record_lookup_native(
-    data: *mut c_void,
-    str_: *mut c_char,
-    end: *mut *mut c_char,
+    data: *mut std::ffi::c_void,
+    str_: *mut std::ffi::c_char,
+    end: *mut *mut std::ffi::c_char,
     res: *mut htslib_rs::hts_expr::hts_expr_val_t,
-) -> c_int {
+) -> i32 {
     (*res).is_str = 0;
-    if let Some(v) = resolve_field(str_, end, data.cast::<RecordCtx>()) {
+    if let Some(v) = resolve_field(str_.cast::<u8>(), end.cast::<*mut u8>(), data.cast::<RecordCtx>()) {
         (*res).d = v;
         0
     } else {
@@ -429,10 +431,10 @@ unsafe extern "C" fn record_lookup_native(
 
 unsafe extern "C" fn record_lookup_c(
     data: *mut c_void,
-    str_: *mut c_char,
-    end: *mut *mut c_char,
+    str_: *mut u8,
+    end: *mut *mut u8,
     res: *mut CHtsExprVal,
-) -> c_int {
+) -> i32 {
     (*res).is_str = 0;
     if let Some(v) = resolve_field(str_, end, data.cast::<RecordCtx>()) {
         (*res).d = v;
@@ -453,18 +455,19 @@ fn parity_hts_filter_eval_against_real_bam_records() {
         // Don't fail the suite if the fixture isn't checked out.
         return;
     }
-    let cpath = std::ffi::CString::new(fixture_path.to_str().unwrap()).unwrap();
+    let mut cpath = fixture_path.to_str().unwrap().as_bytes().to_vec();
+    cpath.push(0);
 
-    let exprs: &[&CStr] = &[
-        c"FLAG & 4",
-        c"MAPQ >= 30",
-        c"FLAG == 0",
-        c"MAPQ > 0 && (FLAG & 256) == 0",
-        c"POS > 0",
+    let exprs: &[&[u8]] = &[
+        b"FLAG & 4\0",
+        b"MAPQ >= 30\0",
+        b"FLAG == 0\0",
+        b"MAPQ > 0 && (FLAG & 256) == 0\0",
+        b"POS > 0\0",
     ];
 
     unsafe {
-        let fp = hts_open(cpath.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(cpath.as_ptr().cast(), b"r\0".as_ptr().cast());
         assert!(!fp.is_null());
         let hdr = sam_hdr_read(fp);
         assert!(!hdr.is_null());
@@ -486,7 +489,7 @@ fn parity_hts_filter_eval_against_real_bam_records() {
             };
             for e in exprs {
                 // Native
-                let nfilt = htslib_rs::hts_expr::hts_filter_init(e.as_ptr());
+                let nfilt = htslib_rs::hts_expr::hts_filter_init(e.strip_suffix(b"\0").unwrap_or(e));
                 let mut nres = htslib_rs::hts_expr::hts_expr_val_t {
                     is_str: 0,
                     is_true: 0,
@@ -495,7 +498,7 @@ fn parity_hts_filter_eval_against_real_bam_records() {
                 };
                 let n_rc = htslib_rs::hts_expr::hts_filter_eval2(
                     nfilt,
-                    (&ctx as *const RecordCtx) as *mut c_void,
+                    (&ctx as *const RecordCtx) as *mut (),
                     Some(record_lookup_native),
                     &mut nres,
                 );

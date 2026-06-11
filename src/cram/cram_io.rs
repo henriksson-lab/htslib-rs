@@ -1,11 +1,12 @@
 // Functions translated from htslib/cram/cram_io.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
+use std::ffi::CStr;
 
+use crate::htslib_rs::c_compat::{calloc, free, malloc, memcpy, realloc, strdup};
 use super::*;
 
-unsafe fn c_char_bytes<'a>(ptr: *const c_char) -> Option<&'a [u8]> {
+unsafe fn c_char_bytes<'a>(ptr: *const u8) -> Option<&'a [u8]> {
     if ptr.is_null() {
         return None;
     }
@@ -27,14 +28,14 @@ unsafe fn c_char_bytes<'a>(ptr: *const c_char) -> Option<&'a [u8]> {
 /// single-threaded (the C cram_flush_thread / cram_flush_result / reset_metrics
 /// helpers are not yet translated). On-disk output is bit-identical to the
 /// MT path; only throughput is lost for that one flush.
-pub unsafe fn cram_cram_io_c_5446_cram_flush(fd: *mut cram_fd) -> c_int {
+pub unsafe fn cram_cram_io_c_5446_cram_flush(fd: *mut cram_fd) -> i32 {
     if fd.is_null() {
         return -1;
     }
-    let mut ret: c_int = 0;
+    let mut ret: i32 = 0;
 
     let fdl = fd.cast::<cram_fd_layout>();
-    if (*fdl).mode == b'w' as c_int && !(*fdl).ctr.is_null() {
+    if (*fdl).mode == b'w' as i32 && !(*fdl).ctr.is_null() {
         let ctr = (*fdl).ctr;
         if !(*ctr).slice.is_null() {
             cram_update_curr_slice_native(ctr, (*fdl).version);
@@ -58,10 +59,10 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
     fd: *mut cram_fd,
     opt: hts_fmt_option,
     args: *mut crate::htslib_rs::c_compat::__va_list_tag,
-) -> c_int {
+) -> i32 {
     unsafe {
         if fd.is_null() {
-            *__errno_location() = libc::EBADF;
+            *libc::__errno_location() = libc::EBADF;
             return -1;
         }
 
@@ -71,12 +72,12 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
                 (*fdl).decode_md = cram_voption_va_arg_int(args);
             }
             x if x == crate::htslib_rs::cram::CRAM_OPT_PREFIX => {
-                let prefix = cram_voption_va_arg_ptr::<c_char>(args);
+                let prefix = cram_voption_va_arg_ptr::<u8>(args);
                 free((*fdl).prefix.cast());
                 (*fdl).prefix = if prefix.is_null() {
                     std::ptr::null_mut()
                 } else {
-                    strdup(prefix)
+                    strdup(prefix.cast::<i8>())
                 };
                 if !prefix.is_null() && (*fdl).prefix.is_null() {
                     return -1;
@@ -170,11 +171,11 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
             x if x == crate::htslib_rs::cram::CRAM_OPT_REFERENCE => {
                 return cram_cram_io_c_3597_cram_load_reference(
                     fd,
-                    cram_voption_va_arg_ptr::<c_char>(args),
+                    cram_voption_va_arg_ptr::<u8>(args),
                 );
             }
             x if x == crate::htslib_rs::cram::CRAM_OPT_VERSION => {
-                return cram_voption_set_version(fd, cram_voption_va_arg_ptr::<c_char>(args));
+                return cram_voption_set_version(fd, cram_voption_va_arg_ptr::<u8>(args));
             }
             x if x == crate::htslib_rs::cram::CRAM_OPT_MULTI_SEQ_PER_SLICE => {
                 let multi_seq = cram_voption_va_arg_int(args);
@@ -219,7 +220,7 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
                 (*fdl).own_pool = 0;
             }
             x if x == crate::htslib_rs::cram::CRAM_OPT_REQUIRED_FIELDS => {
-                (*fdl).required_fields = cram_voption_va_arg_int(args) as c_uint;
+                (*fdl).required_fields = cram_voption_va_arg_int(args) as u32;
                 if (*fdl).range.refid != -2 {
                     (*fdl).required_fields |= crate::htslib_rs::cram::SAM_POS;
                 }
@@ -270,7 +271,7 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
                 }
             }
             _ => {
-                *__errno_location() = EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 return -1;
             }
         }
@@ -278,7 +279,7 @@ pub unsafe fn cram_cram_io_c_5692_cram_set_voption(
         0
     }
 }
-pub fn cram_eof(fd: &cram_fd_layout) -> c_int {
+pub fn cram_eof(fd: &cram_fd_layout) -> i32 {
     fd.eof
 }
 /// `cram_seek` (htslib/cram/cram_io.c:5431).
@@ -286,7 +287,7 @@ pub fn cram_eof(fd: &cram_fd_layout) -> c_int {
 /// Seeks within a CRAM file: clears the out-of-coord flag, drains the
 /// per-fd decode queue (if any), then forwards the request to `hseek`.
 /// Returns 0 on success, -1 on failure.
-pub unsafe fn cram_seek(fd: &mut cram_fd_layout, offset: libc::off_t, whence: c_int) -> c_int {
+pub unsafe fn cram_seek(fd: &mut cram_fd_layout, offset: libc::off_t, whence: i32) -> i32 {
     fd.ooc = 0;
 
     // Drain any in-flight decode jobs natively (matches htslib's
@@ -305,7 +306,7 @@ pub unsafe fn cram_seek(fd: &mut cram_fd_layout, offset: libc::off_t, whence: c_
 /// from the tail of the file. Returns 1 if found, 0 if not, 2 if the
 /// underlying stream is not seekable, 3 if the CRAM version doesn't
 /// support an EOF marker, and -1 on I/O failure.
-pub unsafe fn cram_check_eof(fd: &mut cram_fd_layout) -> c_int {
+pub unsafe fn cram_check_eof(fd: &mut cram_fd_layout) -> i32 {
     // Byte 9 in these templates is & with 0x0f to resolve differences
     // between ITF-8 interpretations between early Java and C
     // implementations of CRAM.
@@ -330,7 +331,7 @@ pub unsafe fn cram_check_eof(fd: &mut cram_fd_layout) -> c_int {
     } else {
         &TEMPLATE_3
     };
-    let template_len = template.len() as libc::ssize_t;
+    let template_len = template.len() as isize;
 
     let fp = fd.fp;
     // htell() == fp->offset + (fp->begin - fp->buffer); begin is now a byte
@@ -338,7 +339,7 @@ pub unsafe fn cram_check_eof(fd: &mut cram_fd_layout) -> c_int {
     let offset: libc::off_t = (*fp).offset + (*fp).begin as libc::off_t;
 
     if crate::htslib_rs::hfile::hseek(fp, -(template_len as libc::off_t), libc::SEEK_END) < 0 {
-        if *__errno_location() == libc::ESPIPE {
+        if *libc::__errno_location() == libc::ESPIPE {
             // hclearerr(fp): clear pending error.
             (*fp).has_errno = 0;
             return 2;
@@ -351,7 +352,7 @@ pub unsafe fn cram_check_eof(fd: &mut cram_fd_layout) -> c_int {
     if crate::htslib_rs::hfile::htslib_hfile_h_247_hread(
         fp,
         buf.as_mut_ptr().cast(),
-        template_len as libc::size_t,
+        template_len as usize,
     ) != template_len
     {
         return -1;
@@ -368,12 +369,12 @@ pub unsafe fn cram_check_eof(fd: &mut cram_fd_layout) -> c_int {
 }
 pub unsafe fn cram_cram_io_c_1388_cram_new_block(
     content_type: cram_content_type,
-    content_id: c_int,
+    content_id: i32,
 ) -> *mut cram_block {
     Box::into_raw(Box::new(cram_new_block_owned(content_type, content_id))).cast()
 }
 
-fn cram_new_block_owned(content_type: cram_content_type, content_id: c_int) -> cram_block_layout {
+fn cram_new_block_owned(content_type: cram_content_type, content_id: i32) -> cram_block_layout {
     cram_block_layout {
         method: crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW,
         orig_method: crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW,
@@ -392,7 +393,7 @@ fn cram_new_block_owned(content_type: cram_content_type, content_id: c_int) -> c
         crc_part: 0,
     }
 }
-pub fn itf8_put(out: &mut [u8], val: i32) -> c_int {
+pub fn itf8_put(out: &mut [u8], val: i32) -> i32 {
     let v = val as u32;
     let (bytes, len): ([u8; 5], usize) = if (v & !0x0000_007f) == 0 {
         ([v as u8, 0, 0, 0, 0], 1)
@@ -436,10 +437,10 @@ pub fn itf8_put(out: &mut [u8], val: i32) -> c_int {
         return -1;
     }
     out[..len].copy_from_slice(&bytes[..len]);
-    len as c_int
+    len as i32
 }
 
-pub fn ltf8_put(out: &mut [u8], val: i64) -> c_int {
+pub fn ltf8_put(out: &mut [u8], val: i64) -> i32 {
     let v = val as u64;
     let (bytes, len): ([u8; 9], usize) = if (v & !((1u64 << 7) - 1)) == 0 {
         ([v as u8, 0, 0, 0, 0, 0, 0, 0, 0], 1)
@@ -558,9 +559,9 @@ pub fn ltf8_put(out: &mut [u8], val: i64) -> c_int {
         return -1;
     }
     out[..len].copy_from_slice(&bytes[..len]);
-    len as c_int
+    len as i32
 }
-pub unsafe fn cram_cram_io_c_138_itf8_decode(fd: *mut cram_fd, val_p: *mut i32) -> c_int {
+pub unsafe fn cram_cram_io_c_138_itf8_decode(fd: *mut cram_fd, val_p: *mut i32) -> i32 {
     let nbytes = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 4];
     let nbits = [
         0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x3f, 0x3f, 0x3f, 0x3f, 0x1f, 0x1f, 0x0f,
@@ -581,28 +582,28 @@ pub unsafe fn cram_cram_io_c_138_itf8_decode(fd: *mut cram_fd, val_p: *mut i32) 
             1
         }
         1 => {
-            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as c_int);
+            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as i32);
             *val_p = val;
             2
         }
         2 => {
-            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as c_int);
-            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as c_int);
+            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as i32);
+            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as i32);
             *val_p = val;
             3
         }
         3 => {
-            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as c_int);
-            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as c_int);
-            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as c_int);
+            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as i32);
+            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as i32);
+            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as i32);
             *val_p = val;
             4
         }
         _ => {
-            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as c_int);
-            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as c_int);
-            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as c_int);
-            val = (val << 4) | ((htslib_hfile_h_163_hgetc(fp) as u8 as c_int) & 0x0f);
+            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as i32);
+            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as i32);
+            val = (val << 8) | (htslib_hfile_h_163_hgetc(fp) as u8 as i32);
+            val = (val << 4) | ((htslib_hfile_h_163_hgetc(fp) as u8 as i32) & 0x0f);
             *val_p = val;
             5
         }
@@ -612,7 +613,7 @@ pub unsafe fn cram_cram_io_c_196_itf8_decode_crc(
     fd: *mut cram_fd,
     val_p: *mut i32,
     crc: *mut u32,
-) -> c_int {
+) -> i32 {
     let nbytes = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 4];
     let nbits = [
         0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x3f, 0x3f, 0x3f, 0x3f, 0x1f, 0x1f, 0x0f,
@@ -642,22 +643,22 @@ pub unsafe fn cram_cram_io_c_196_itf8_decode_crc(
             1
         }
         1 => {
-            val = (val << 8) | c[1] as c_int;
+            val = (val << 8) | c[1] as i32;
             *val_p = val;
             *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 2);
             2
         }
         2 => {
-            val = (val << 8) | c[1] as c_int;
-            val = (val << 8) | c[2] as c_int;
+            val = (val << 8) | c[1] as i32;
+            val = (val << 8) | c[2] as i32;
             *val_p = val;
             *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 3);
             3
         }
         3 => {
-            val = (val << 8) | c[1] as c_int;
-            val = (val << 8) | c[2] as c_int;
-            val = (val << 8) | c[3] as c_int;
+            val = (val << 8) | c[1] as i32;
+            val = (val << 8) | c[2] as i32;
+            val = (val << 8) | c[3] as i32;
             *val_p = val;
             *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 4);
             4
@@ -674,17 +675,17 @@ pub unsafe fn cram_cram_io_c_196_itf8_decode_crc(
         }
     }
 }
-pub unsafe fn cram_cram_io_c_382_itf8_encode(fd: *mut cram_fd, val: i32) -> c_int {
+pub unsafe fn cram_cram_io_c_382_itf8_encode(fd: *mut cram_fd, val: i32) -> i32 {
     let mut buf = [0u8; 5];
     let len = itf8_put(&mut buf, val);
     let fp = (*fd.cast::<cram_fd_layout>()).fp;
-    if htslib_hfile_h_292_hwrite(fp, buf.as_ptr().cast(), len as usize) == len as libc::ssize_t {
+    if htslib_hfile_h_292_hwrite(fp, buf.as_ptr().cast(), len as usize) == len as isize {
         0
     } else {
         -1
     }
 }
-pub unsafe fn cram_cram_io_c_420_ltf8_decode(fd: *mut cram_fd, val_p: *mut i64) -> c_int {
+pub unsafe fn cram_cram_io_c_420_ltf8_decode(fd: *mut cram_fd, val_p: *mut i64) -> i32 {
     let fp = (*fd.cast::<cram_fd_layout>()).fp;
     let c = htslib_hfile_h_163_hgetc(fp);
     if c == -1 {
@@ -743,17 +744,17 @@ pub unsafe fn cram_cram_io_c_420_ltf8_decode(fd: *mut cram_fd, val_p: *mut i64) 
     }
 }
 pub unsafe fn cram_cram_io_c_1068_zlib_mem_inflate(
-    cdata: *mut c_char,
+    cdata: *mut u8,
     csize: usize,
     size: *mut usize,
-) -> *mut c_char {
+) -> *mut u8 {
     cram_cram_io_c_1157_zlib_mem_inflate(cdata, csize, size)
 }
 pub unsafe fn cram_cram_io_c_1157_zlib_mem_inflate(
-    cdata: *mut c_char,
+    cdata: *mut u8,
     csize: usize,
     size: *mut usize,
-) -> *mut c_char {
+) -> *mut u8 {
     let input = std::slice::from_raw_parts(cdata.cast::<u8>(), csize);
     let mut decoder = flate2::read::GzDecoder::new(input);
     let mut out = Vec::with_capacity((csize as f64 * 1.2) as usize + 100);
@@ -762,7 +763,7 @@ pub unsafe fn cram_cram_io_c_1157_zlib_mem_inflate(
     }
 
     let alloc_len = out.len().max(1);
-    let data = malloc(alloc_len as u64).cast::<c_char>();
+    let data = malloc(alloc_len as u64).cast::<u8>();
     if data.is_null() {
         return std::ptr::null_mut();
     }
@@ -772,7 +773,7 @@ pub unsafe fn cram_cram_io_c_1157_zlib_mem_inflate(
     *size = out.len();
     data
 }
-pub unsafe fn cram_cram_io_c_5127_cram_init_varint(vv: *mut c_void, version: c_int) {
+pub unsafe fn cram_cram_io_c_5127_cram_init_varint(vv: *mut (), version: i32) {
     let vv = vv.cast::<varint_vec_layout>();
     if version >= 4 {
         (*vv).varint_get32 = Some(cram_cram_io_c_772_uint7_get_32);
@@ -838,7 +839,7 @@ pub unsafe fn cram_cram_io_c_5170_cram_init_tables(fd: *mut cram_fd) {
     if ((*fd).version >> 8) == 1 {
         for i in 0..0x200usize {
             let mut f = 0;
-            let i_c = i as c_int;
+            let i_c = i as i32;
             if (i_c & CRAM_FPAIRED) != 0 {
                 f |= BAM_FPAIRED;
             }
@@ -866,12 +867,12 @@ pub unsafe fn cram_cram_io_c_5170_cram_init_tables(fd: *mut cram_fd) {
             if (i_c & CRAM_FDUP) != 0 {
                 f |= BAM_FDUP;
             }
-            (*fd).bam_flag_swap[i] = f as c_uint;
+            (*fd).bam_flag_swap[i] = f as u32;
         }
 
         for i in 0..0x1000usize {
             let mut g = 0;
-            let i_c = i as c_int;
+            let i_c = i as i32;
             if (i_c & BAM_FPAIRED) != 0 {
                 g |= CRAM_FPAIRED;
             }
@@ -899,14 +900,14 @@ pub unsafe fn cram_cram_io_c_5170_cram_init_tables(fd: *mut cram_fd) {
             if (i_c & BAM_FDUP) != 0 {
                 g |= CRAM_FDUP;
             }
-            (*fd).cram_flag_swap[i] = g as c_uint;
+            (*fd).cram_flag_swap[i] = g as u32;
         }
     } else {
         for i in 0..0x1000usize {
-            (*fd).bam_flag_swap[i] = i as c_uint;
+            (*fd).bam_flag_swap[i] = i as u32;
         }
         for i in 0..0x1000usize {
-            (*fd).cram_flag_swap[i] = i as c_uint;
+            (*fd).cram_flag_swap[i] = i as u32;
         }
     }
 
@@ -974,7 +975,7 @@ pub unsafe fn cram_cram_io_c_501_ltf8_decode_crc(
     fd: *mut cram_fd,
     val_p: *mut i64,
     crc: *mut u32,
-) -> c_int {
+) -> i32 {
     let fp = (*fd.cast::<cram_fd_layout>()).fp;
     let mut c = [0u8; 9];
 
@@ -994,7 +995,7 @@ pub unsafe fn cram_cram_io_c_501_ltf8_decode_crc(
             return -1;
         }
         c[1] = v as u8;
-        val = (val << 8) | c[1] as c_int;
+        val = (val << 8) | c[1] as i32;
         *val_p = (val & ((1 << (6 + 8)) - 1)) as i64;
         *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), 2);
         return 2;
@@ -1047,9 +1048,9 @@ pub unsafe fn cram_cram_io_c_501_ltf8_decode_crc(
         };
     }
     *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, c.as_ptr().cast(), len);
-    len as c_int
+    len as i32
 }
-pub unsafe extern "C" fn cram_cram_io_c_620_itf8_put_blk(blk: *mut cram_block, val: i32) -> c_int {
+pub unsafe extern "C" fn cram_cram_io_c_620_itf8_put_blk(blk: *mut cram_block, val: i32) -> i32 {
     let mut buf = [0u8; 5];
     let sz = itf8_put(&mut buf, val);
     if cram_cram_io_h_248_block_append(blk, buf.as_ptr().cast(), sz as usize) != 0 {
@@ -1057,7 +1058,7 @@ pub unsafe extern "C" fn cram_cram_io_c_620_itf8_put_blk(blk: *mut cram_block, v
     }
     sz
 }
-pub unsafe extern "C" fn cram_cram_io_c_632_ltf8_put_blk(blk: *mut cram_block, val: i64) -> c_int {
+pub unsafe extern "C" fn cram_cram_io_c_632_ltf8_put_blk(blk: *mut cram_block, val: i64) -> i32 {
     let mut buf = [0u8; 9];
     let sz = ltf8_put(&mut buf, val);
     if cram_cram_io_h_248_block_append(blk, buf.as_ptr().cast(), sz as usize) != 0 {
@@ -1066,9 +1067,9 @@ pub unsafe extern "C" fn cram_cram_io_c_632_ltf8_put_blk(blk: *mut cram_block, v
     sz
 }
 pub unsafe extern "C" fn cram_cram_io_c_644_safe_itf8_get(
-    cp: *mut *mut c_char,
-    endp: *const c_char,
-    err: *mut c_int,
+    cp: *mut *mut u8,
+    endp: *const u8,
+    err: *mut i32,
 ) -> i64 {
     let up = (*cp).cast::<u8>();
     if !endp.is_null() {
@@ -1119,9 +1120,9 @@ pub unsafe extern "C" fn cram_cram_io_c_644_safe_itf8_get(
     }
 }
 pub unsafe extern "C" fn cram_cram_io_c_673_safe_ltf8_get(
-    cp: *mut *mut c_char,
-    endp: *const c_char,
-    err: *mut c_int,
+    cp: *mut *mut u8,
+    endp: *const u8,
+    err: *mut i32,
 ) -> i64 {
     let up = (*cp).cast::<u8>();
     if !endp.is_null() {
@@ -1220,10 +1221,10 @@ pub unsafe extern "C" fn cram_cram_io_c_673_safe_ltf8_get(
     }
 }
 pub unsafe extern "C" fn cram_cram_io_c_747_safe_itf8_put(
-    cp: *mut c_char,
-    _cp_end: *mut c_char,
+    cp: *mut u8,
+    _cp_end: *mut u8,
     val: i32,
-) -> c_int {
+) -> i32 {
     let Some(out) = cp.cast::<u8>().as_mut() else {
         return -1;
     };
@@ -1231,17 +1232,17 @@ pub unsafe extern "C" fn cram_cram_io_c_747_safe_itf8_put(
     itf8_put(out, val)
 }
 pub unsafe extern "C" fn cram_cram_io_c_751_safe_ltf8_put(
-    cp: *mut c_char,
-    _cp_end: *mut c_char,
+    cp: *mut u8,
+    _cp_end: *mut u8,
     val: i64,
-) -> c_int {
+) -> i32 {
     let Some(out) = cp.cast::<u8>().as_mut() else {
         return -1;
     };
     let out = std::slice::from_raw_parts_mut(out, 9);
     ltf8_put(out, val)
 }
-pub extern "C" fn cram_cram_io_c_755_itf8_size(v: i64) -> c_int {
+pub extern "C" fn cram_cram_io_c_755_itf8_size(v: i64) -> i32 {
     if (v & !0x7f) == 0 {
         1
     } else if (v & !0x3fff) == 0 {
@@ -1254,7 +1255,7 @@ pub extern "C" fn cram_cram_io_c_755_itf8_size(v: i64) -> c_int {
         5
     }
 }
-pub extern "C" fn cram_cram_io_c_768_uint7_size(v: i64) -> c_int {
+pub extern "C" fn cram_cram_io_c_768_uint7_size(v: i64) -> i32 {
     let mut v = v as u64;
     let mut n = 1;
     while v >= 0x80 {
@@ -1264,9 +1265,9 @@ pub extern "C" fn cram_cram_io_c_768_uint7_size(v: i64) -> c_int {
     n
 }
 pub unsafe extern "C" fn cram_cram_io_c_772_uint7_get_32(
-    cp: *mut *mut c_char,
-    endp: *const c_char,
-    err: *mut c_int,
+    cp: *mut *mut u8,
+    endp: *const u8,
+    err: *mut i32,
 ) -> i64 {
     let mut p = (*cp).cast::<u8>();
     let end = endp.cast::<u8>();
@@ -1297,17 +1298,17 @@ pub unsafe extern "C" fn cram_cram_io_c_772_uint7_get_32(
     val as i64
 }
 pub unsafe extern "C" fn cram_cram_io_c_780_sint7_get_32(
-    cp: *mut *mut c_char,
-    endp: *const c_char,
-    err: *mut c_int,
+    cp: *mut *mut u8,
+    endp: *const u8,
+    err: *mut i32,
 ) -> i64 {
     let u = cram_cram_io_c_772_uint7_get_32(cp, endp, err) as u32;
     ((u >> 1) as i32 ^ -((u & 1) as i32)) as i64
 }
 pub unsafe extern "C" fn cram_cram_io_c_788_uint7_get_64(
-    cp: *mut *mut c_char,
-    endp: *const c_char,
-    err: *mut c_int,
+    cp: *mut *mut u8,
+    endp: *const u8,
+    err: *mut i32,
 ) -> i64 {
     let mut p = (*cp).cast::<u8>();
     let end = endp.cast::<u8>();
@@ -1338,32 +1339,32 @@ pub unsafe extern "C" fn cram_cram_io_c_788_uint7_get_64(
     val as i64
 }
 pub unsafe extern "C" fn cram_cram_io_c_796_sint7_get_64(
-    cp: *mut *mut c_char,
-    endp: *const c_char,
-    err: *mut c_int,
+    cp: *mut *mut u8,
+    endp: *const u8,
+    err: *mut i32,
 ) -> i64 {
     let u = cram_cram_io_c_788_uint7_get_64(cp, endp, err) as u64;
     ((u >> 1) as i64) ^ -((u & 1) as i64)
 }
 pub unsafe extern "C" fn cram_cram_io_c_804_uint7_put_32(
-    cp: *mut c_char,
-    endp: *mut c_char,
+    cp: *mut u8,
+    endp: *mut u8,
     val: i32,
-) -> c_int {
+) -> i32 {
     cram_cram_io_c_812_uint7_put_64(cp, endp, val as u32 as i64)
 }
 pub unsafe extern "C" fn cram_cram_io_c_808_sint7_put_32(
-    cp: *mut c_char,
-    endp: *mut c_char,
+    cp: *mut u8,
+    endp: *mut u8,
     val: i32,
-) -> c_int {
+) -> i32 {
     cram_cram_io_c_804_uint7_put_32(cp, endp, ((val as u32) << 1 ^ (val >> 31) as u32) as i32)
 }
 pub unsafe extern "C" fn cram_cram_io_c_812_uint7_put_64(
-    cp: *mut c_char,
-    endp: *mut c_char,
+    cp: *mut u8,
+    endp: *mut u8,
     val: i64,
-) -> c_int {
+) -> i32 {
     let mut p = cp.cast::<u8>();
     let end = endp.cast::<u8>();
     let v = val as u64;
@@ -1385,16 +1386,16 @@ pub unsafe extern "C" fn cram_cram_io_c_812_uint7_put_64(
     n
 }
 pub unsafe extern "C" fn cram_cram_io_c_816_sint7_put_64(
-    cp: *mut c_char,
-    endp: *mut c_char,
+    cp: *mut u8,
+    endp: *mut u8,
     val: i64,
-) -> c_int {
+) -> i32 {
     cram_cram_io_c_812_uint7_put_64(cp, endp, ((val as u64) << 1 ^ (val >> 63) as u64) as i64)
 }
 pub unsafe extern "C" fn cram_cram_io_c_821_uint7_put_blk_32(
     blk: *mut cram_block,
     v: i32,
-) -> c_int {
+) -> i32 {
     let mut buf = [0u8; 10];
     let sz = cram_cram_io_c_804_uint7_put_32(
         buf.as_mut_ptr().cast(),
@@ -1409,7 +1410,7 @@ pub unsafe extern "C" fn cram_cram_io_c_821_uint7_put_blk_32(
 pub unsafe extern "C" fn cram_cram_io_c_831_sint7_put_blk_32(
     blk: *mut cram_block,
     v: i32,
-) -> c_int {
+) -> i32 {
     let mut buf = [0u8; 10];
     let sz = cram_cram_io_c_808_sint7_put_32(
         buf.as_mut_ptr().cast(),
@@ -1424,7 +1425,7 @@ pub unsafe extern "C" fn cram_cram_io_c_831_sint7_put_blk_32(
 pub unsafe extern "C" fn cram_cram_io_c_841_uint7_put_blk_64(
     blk: *mut cram_block,
     v: i64,
-) -> c_int {
+) -> i32 {
     let mut buf = [0u8; 10];
     let sz = cram_cram_io_c_812_uint7_put_64(
         buf.as_mut_ptr().cast(),
@@ -1439,7 +1440,7 @@ pub unsafe extern "C" fn cram_cram_io_c_841_uint7_put_blk_64(
 pub unsafe extern "C" fn cram_cram_io_c_851_sint7_put_blk_64(
     blk: *mut cram_block,
     v: i64,
-) -> c_int {
+) -> i32 {
     let mut buf = [0u8; 10];
     let sz = cram_cram_io_c_816_sint7_put_64(
         buf.as_mut_ptr().cast(),
@@ -1455,7 +1456,7 @@ pub unsafe fn cram_cram_io_c_862_uint7_decode_crc32(
     fd: *mut crate::htslib_rs::hts::cram_fd,
     val_p: *mut i32,
     crc: *mut u32,
-) -> c_int {
+) -> i32 {
     let fp = (*fd.cast::<cram_fd_layout>()).fp;
     let mut b = [0u8; 5];
     let mut i = 0usize;
@@ -1466,7 +1467,7 @@ pub unsafe fn cram_cram_io_c_862_uint7_decode_crc32(
             let buf = &(*fp).buffer;
             let c = buf[(*fp).begin];
             (*fp).begin += 1;
-            c as c_int
+            c as i32
         } else {
             crate::htslib_rs::hfile::hgetc2(fp)
         };
@@ -1483,13 +1484,13 @@ pub unsafe fn cram_cram_io_c_862_uint7_decode_crc32(
 
     *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, b.as_ptr().cast(), i);
     *val_p = v as i32;
-    i as c_int
+    i as i32
 }
 pub unsafe fn cram_cram_io_c_907_sint7_decode_crc32(
     fd: *mut crate::htslib_rs::hts::cram_fd,
     val_p: *mut i32,
     crc: *mut u32,
-) -> c_int {
+) -> i32 {
     let fp = (*fd.cast::<cram_fd_layout>()).fp;
     let mut b = [0u8; 5];
     let mut i = 0usize;
@@ -1500,7 +1501,7 @@ pub unsafe fn cram_cram_io_c_907_sint7_decode_crc32(
             let buf = &(*fp).buffer;
             let c = buf[(*fp).begin];
             (*fp).begin += 1;
-            c as c_int
+            c as i32
         } else {
             crate::htslib_rs::hfile::hgetc2(fp)
         };
@@ -1517,13 +1518,13 @@ pub unsafe fn cram_cram_io_c_907_sint7_decode_crc32(
 
     *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, b.as_ptr().cast(), i);
     *val_p = ((v >> 1) as i32) ^ -((v & 1) as i32);
-    i as c_int
+    i as i32
 }
 pub unsafe fn cram_cram_io_c_953_uint7_decode_crc64(
     fd: *mut crate::htslib_rs::hts::cram_fd,
     val_p: *mut i64,
     crc: *mut u32,
-) -> c_int {
+) -> i32 {
     let fp = (*fd.cast::<cram_fd_layout>()).fp;
     let mut b = [0u8; 10];
     let mut i = 0usize;
@@ -1534,7 +1535,7 @@ pub unsafe fn cram_cram_io_c_953_uint7_decode_crc64(
             let buf = &(*fp).buffer;
             let c = buf[(*fp).begin];
             (*fp).begin += 1;
-            c as c_int
+            c as i32
         } else {
             crate::htslib_rs::hfile::hgetc2(fp)
         };
@@ -1551,12 +1552,12 @@ pub unsafe fn cram_cram_io_c_953_uint7_decode_crc64(
 
     *crc = crate::htslib_rs::bgzf::hts_crc32(*crc, b.as_ptr().cast(), i);
     *val_p = v as i64;
-    i as c_int
+    i as i32
 }
-pub unsafe fn int32_decode(fd: &mut cram_fd_layout, val: &mut i32) -> c_int {
+pub unsafe fn int32_decode(fd: &mut cram_fd_layout, val: &mut i32) -> i32 {
     let fp = fd.fp;
     let mut i = 0i32;
-    let buffer = (&mut i as *mut i32).cast::<c_void>();
+    let buffer = (&mut i as *mut i32).cast::<()>();
     let nbytes = std::mem::size_of::<i32>();
     let mut n = (*fp).end - (*fp).begin;
     if n > nbytes {
@@ -1566,21 +1567,21 @@ pub unsafe fn int32_decode(fd: &mut cram_fd_layout, val: &mut i32) -> c_int {
     std::ptr::copy_nonoverlapping((*fp).buffer.as_ptr().add(begin), buffer.cast::<u8>(), n);
     (*fp).begin += n;
     let got = if n == nbytes || ((*fp).flags & HFILE_MOBILE) == 0 {
-        n as libc::ssize_t
+        n as isize
     } else {
-        crate::htslib_rs::hfile::hread2(fp, buffer, nbytes, n)
+        crate::htslib_rs::hfile::hread2(fp, buffer.cast(), nbytes, n)
     };
-    if got != nbytes as libc::ssize_t {
+    if got != nbytes as isize {
         return -1;
     }
 
     *val = i32::from_le(i);
     4
 }
-pub unsafe fn int32_encode(fd: &mut cram_fd_layout, val: i32) -> c_int {
+pub unsafe fn int32_encode(fd: &mut cram_fd_layout, val: i32) -> i32 {
     let fp = fd.fp;
     let v = val.to_le();
-    let buffer = (&v as *const i32).cast::<c_void>();
+    let buffer = (&v as *const i32).cast::<()>();
     let nbytes = std::mem::size_of::<i32>();
 
     if ((*fp).flags & HFILE_MOBILE) == 0 {
@@ -1593,7 +1594,7 @@ pub unsafe fn int32_encode(fd: &mut cram_fd_layout, val: i32) -> c_int {
 
     let mut n = (*fp).limit - (*fp).begin;
     let wrote = if nbytes >= n && (*fp).begin == 0 {
-        crate::htslib_rs::hfile::hwrite2(fp, buffer, nbytes, 0)
+        crate::htslib_rs::hfile::hwrite2(fp, buffer.cast(), nbytes, 0)
     } else {
         if n > nbytes {
             n = nbytes;
@@ -1602,18 +1603,18 @@ pub unsafe fn int32_encode(fd: &mut cram_fd_layout, val: i32) -> c_int {
         std::ptr::copy_nonoverlapping(buffer.cast::<u8>(), (*fp).buffer.as_mut_ptr().add(begin), n);
         (*fp).begin += n;
         if n == nbytes {
-            n as libc::ssize_t
+            n as isize
         } else {
-            crate::htslib_rs::hfile::hwrite2(fp, buffer, nbytes, n)
+            crate::htslib_rs::hfile::hwrite2(fp, buffer.cast(), nbytes, n)
         }
     };
 
-    if wrote != nbytes as libc::ssize_t {
+    if wrote != nbytes as isize {
         return -1;
     }
     4
 }
-pub unsafe fn int32_get_blk(block: &mut cram_block_layout, val: &mut i32) -> c_int {
+pub unsafe fn int32_get_blk(block: &mut cram_block_layout, val: &mut i32) -> i32 {
     if block.uncomp_size < 0 || (block.uncomp_size as usize).saturating_sub(block.byte) < 4 {
         return -1;
     }
@@ -1627,7 +1628,7 @@ pub unsafe fn int32_get_blk(block: &mut cram_block_layout, val: &mut i32) -> c_i
     block.byte += 4;
     4
 }
-pub unsafe fn int32_put_blk(block: &mut cram_block_layout, val: i32) -> c_int {
+pub unsafe fn int32_put_blk(block: &mut cram_block_layout, val: i32) -> i32 {
     let v = val as u32;
     let cp = [
         (v & 0xff) as u8,
@@ -1696,7 +1697,7 @@ pub unsafe fn cram_read_block(fd_layout: &mut cram_fd_layout) -> *mut cram_block
         let buf = &(*fp).buffer;
         let c = buf[(*fp).begin];
         (*fp).begin += 1;
-        c as c_int
+        c as i32
     } else {
         crate::htslib_rs::hfile::hgetc2(fp)
     };
@@ -1714,7 +1715,7 @@ pub unsafe fn cram_read_block(fd_layout: &mut cram_fd_layout) -> *mut cram_block
         let buf = &(*fp).buffer;
         let c = buf[(*fp).begin];
         (*fp).begin += 1;
-        c as c_int
+        c as i32
     } else {
         crate::htslib_rs::hfile::hgetc2(fp)
     };
@@ -1758,7 +1759,7 @@ pub unsafe fn cram_read_block(fd_layout: &mut cram_fd_layout) -> *mut cram_block
                     let buf = &(*fp).buffer;
                     let c = buf[(*fp).begin];
                     (*fp).begin += 1;
-                    c as c_int
+                    c as i32
                 } else {
                     crate::htslib_rs::hfile::hgetc2(fp)
                 };
@@ -1780,10 +1781,10 @@ pub unsafe fn cram_read_block(fd_layout: &mut cram_fd_layout) -> *mut cram_block
                     break;
                 }
             }
-            let mut cp = buf.as_mut_ptr().cast::<c_char>();
+            let mut cp = buf.as_mut_ptr().cast::<u8>();
             *out = cram_cram_io_c_644_safe_itf8_get(
                 &mut cp,
-                buf.as_ptr().add(n).cast::<c_char>(),
+                buf.as_ptr().add(n).cast::<u8>(),
                 std::ptr::null_mut(),
             ) as i32;
             crc = crate::htslib_rs::bgzf::hts_crc32(crc, buf.as_ptr().cast(), n);
@@ -1822,11 +1823,11 @@ pub unsafe fn cram_read_block(fd_layout: &mut cram_fd_layout) -> *mut cram_block
     }
     (*fp).begin += n;
     let got = if n == data_len || ((*fp).flags & HFILE_MOBILE) == 0 {
-        n as libc::ssize_t
+        n as isize
     } else {
         crate::htslib_rs::hfile::hread2(fp, (*b).data.cast(), data_len, n)
     };
-    if got != data_len as libc::ssize_t {
+    if got != data_len as isize {
         return std::ptr::null_mut();
     }
 
@@ -1853,7 +1854,7 @@ pub unsafe fn cram_read_block(fd_layout: &mut cram_fd_layout) -> *mut cram_block
 pub unsafe fn cram_write_block(
     fd_layout: &mut cram_fd_layout,
     b: &mut cram_block_layout,
-) -> c_int {
+) -> i32 {
     let fp = fd_layout.fp;
 
     for c in [b.method, b.content_type] {
@@ -1903,12 +1904,12 @@ pub unsafe fn cram_write_block(
         std::ptr::copy_nonoverlapping(vardata.as_ptr(), (*fp).buffer.as_mut_ptr().add(begin), n);
         (*fp).begin += n;
         if n == vardata_o {
-            n as libc::ssize_t
+            n as isize
         } else {
             crate::htslib_rs::hfile::hwrite2(fp, vardata.as_ptr().cast(), vardata_o, n)
         }
     };
-    if wrote != vardata_o as libc::ssize_t {
+    if wrote != vardata_o as isize {
         return -1;
     }
 
@@ -1930,12 +1931,12 @@ pub unsafe fn cram_write_block(
             std::ptr::copy_nonoverlapping(b.data, (*fp).buffer.as_mut_ptr().add(begin), n);
             (*fp).begin += n;
             if n == data_len {
-                n as libc::ssize_t
+                n as isize
             } else {
                 crate::htslib_rs::hfile::hwrite2(fp, b.data.cast(), data_len, n)
             }
         };
-        if wrote != data_len as libc::ssize_t {
+        if wrote != data_len as isize {
             return -1;
         }
     }
@@ -1983,7 +1984,7 @@ pub unsafe fn cram_write_block(
 
     0
 }
-pub unsafe fn cram_uncompress_block(b: &mut cram_block_layout) -> c_int {
+pub unsafe fn cram_uncompress_block(b: &mut cram_block_layout) -> i32 {
     if b.crc32_checked == 0 {
         let crc = crate::htslib_rs::bgzf::hts_crc32(
             b.crc_part,
@@ -2010,7 +2011,7 @@ pub unsafe fn cram_uncompress_block(b: &mut cram_block_layout) -> c_int {
         crate::htslib_rs::cram::CRAM_BLOCK_METHOD_GZIP => {
             let mut uncomp_size = b.uncomp_size as usize;
             let uncomp = cram_cram_io_c_1157_zlib_mem_inflate(
-                b.data.cast::<c_char>(),
+                b.data.cast::<u8>(),
                 b.comp_size as usize,
                 &mut uncomp_size,
             );
@@ -2030,13 +2031,13 @@ pub unsafe fn cram_uncompress_block(b: &mut cram_block_layout) -> c_int {
         crate::htslib_rs::cram::CRAM_BLOCK_METHOD_BZIP2 => -1,
         crate::htslib_rs::cram::CRAM_BLOCK_METHOD_LZMA => -1,
         crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RANS => {
-            let usize = b.uncomp_size as c_uint;
+            let usize = b.uncomp_size as u32;
             let input = std::slice::from_raw_parts(b.data, b.comp_size as usize);
             let v = match crate::htslib_rs::htscodecs::rans_static::rans_uncompress(input) {
                 Some(v) => v,
                 None => return -1,
             };
-            let usize2 = v.len() as c_uint;
+            let usize2 = v.len() as u32;
             let uncomp = cram_dup_to_malloc(&v);
             if uncomp.is_null() {
                 return -1;
@@ -2073,8 +2074,8 @@ pub unsafe fn cram_uncompress_block(b: &mut cram_block_layout) -> c_int {
             0
         }
         5 => {
-            let usize = b.uncomp_size as c_uint;
-            let mut usize2 = 0 as c_uint;
+            let usize = b.uncomp_size as u32;
+            let mut usize2 = 0 as u32;
             let input = std::slice::from_raw_parts(b.data, b.comp_size as usize);
             let v = crate::htslib_rs::htscodecs::rans_static4x16pr::rans_uncompress_4x16(
                 input,
@@ -2097,8 +2098,8 @@ pub unsafe fn cram_uncompress_block(b: &mut cram_block_layout) -> c_int {
             0
         }
         6 => {
-            let usize = b.uncomp_size as c_uint;
-            let mut usize2 = 0 as c_uint;
+            let usize = b.uncomp_size as u32;
+            let mut usize2 = 0 as u32;
             let input = std::slice::from_raw_parts(b.data, b.comp_size as usize);
             let v = crate::htslib_rs::htscodecs::arith_dynamic::arith_uncompress_to(
                 input,
@@ -2149,15 +2150,15 @@ pub unsafe fn cram_uncompress_block(b: &mut cram_block_layout) -> c_int {
 /// `cram_compress_block2` (htslib/cram/cram_io.c:2317): thin wrapper.
 ///
 /// The slice pointer is opaque here (cram_slice doesn't have a pub native
-/// type alias yet); pass it via `*mut c_void` and cast inside.
+/// type alias yet); pass it via `*mut ()` and cast inside.
 pub unsafe fn cram_cram_io_c_2317_cram_compress_block2(
     fd: *mut cram_fd,
-    s: *mut c_void,
+    s: *mut (),
     b: *mut cram_block,
     metrics: *mut cram_metrics,
-    method: c_int,
-    level: c_int,
-) -> c_int {
+    method: i32,
+    level: i32,
+) -> i32 {
     cram_cram_io_c_1913_cram_compress_block3(
         fd,
         s.cast::<cram_slice_layout>(),
@@ -2173,9 +2174,9 @@ pub unsafe fn cram_cram_io_c_2323_cram_compress_block(
     fd: *mut cram_fd,
     b: *mut cram_block,
     metrics: *mut cram_metrics,
-    method: c_int,
-    level: c_int,
-) -> c_int {
+    method: i32,
+    level: i32,
+) -> i32 {
     cram_cram_io_c_2317_cram_compress_block2(fd, std::ptr::null_mut(), b, metrics, method, level)
 }
 pub unsafe fn cram_cram_io_c_2327_cram_new_metrics() -> *mut cram_metrics {
@@ -2194,7 +2195,7 @@ pub unsafe fn cram_cram_io_c_2327_cram_new_metrics() -> *mut cram_metrics {
 
     m.cast()
 }
-pub unsafe fn cram_cram_io_c_2417_ref_entry_free_seq(e: *mut c_void) {
+pub unsafe fn cram_cram_io_c_2417_ref_entry_free_seq(e: *mut ()) {
     let e = e.cast::<ref_entry_layout>();
     if !(*e).mf.is_null() {
         cram_mFILE_c_361_mfclose((*e).mf);
@@ -2277,8 +2278,8 @@ pub unsafe fn cram_cram_io_c_2467_refs_create() -> *mut refs_t {
 }
 pub unsafe fn cram_cram_io_c_2503_bgzf_open_ref(
     fn_in: &[u8],
-    mode: *mut c_char,
-    is_md5: c_int,
+    mode: *mut u8,
+    is_md5: i32,
 ) -> *mut BGZF {
     let fn_bytes: &[u8] = if fn_in.starts_with(b"file://") {
         &fn_in[7..]
@@ -2289,24 +2290,27 @@ pub unsafe fn cram_cram_io_c_2503_bgzf_open_ref(
     let fn_ = fn_cstring.as_ptr().cast_mut();
 
     if is_md5 == 0 && hisremote(fn_) == 0 {
-        let mut fai_file = [0 as c_char; crate::htslib_rs::c_compat::PATH_MAX as usize];
+        let mut fai_file = [0 as u8; libc::PATH_MAX as usize];
         libc::snprintf(
-            fai_file.as_mut_ptr(),
-            crate::htslib_rs::c_compat::PATH_MAX as usize,
+            fai_file.as_mut_ptr().cast(),
+            libc::PATH_MAX as usize,
             c"%s.fai".as_ptr(),
             fn_,
         );
-        if crate::htslib_rs::c_compat::access(fai_file.as_ptr(), crate::htslib_rs::c_compat::R_OK)
-            != 0
+        if libc::access(fai_file.as_ptr().cast(), libc::R_OK) != 0
             && fai_build(fn_) != 0
         {
             return std::ptr::null_mut();
         }
     }
 
-    let fp = bgzf_open(fn_, mode);
+    let fp = bgzf_open(fn_, mode.cast());
     if fp.is_null() {
-        libc::perror(fn_);
+        eprintln!(
+            "{}: {}",
+            String::from_utf8_lossy(c_char_bytes(fn_.cast()).unwrap_or(b"")),
+            std::io::Error::last_os_error()
+        );
         return std::ptr::null_mut();
     }
 
@@ -2316,7 +2320,7 @@ pub unsafe fn cram_cram_io_c_2503_bgzf_open_ref(
             CStr::from_ptr(fn_).to_string_lossy()
         ))
         .unwrap();
-        hts_log_cstr(HTS_LOG_ERROR, c"bgzf_open_ref".as_ptr(), msg.as_ptr());
+        hts_log_cstr(HTS_LOG_ERROR, b"bgzf_open_ref", msg.as_bytes());
         bgzf_close(fp);
         return std::ptr::null_mut();
     }
@@ -2325,11 +2329,11 @@ pub unsafe fn cram_cram_io_c_2503_bgzf_open_ref(
 }
 pub unsafe fn cram_cram_io_c_2541_refs_load_fai(
     r_orig: *mut refs_t,
-    fn_: *const c_char,
-    is_err: c_int,
+    fn_: *const u8,
+    is_err: i32,
 ) -> *mut refs_t {
-    let mut fai_fn = [0 as c_char; crate::htslib_rs::c_compat::PATH_MAX as usize];
-    let mut line = [0 as c_char; 8192];
+    let mut fai_fn = [0 as u8; libc::PATH_MAX as usize];
+    let mut line = [0 as u8; 8192];
     let mut r = r_orig.cast::<refs_t_layout>();
     let fn_bytes = c_char_bytes(fn_).unwrap_or(&[]);
     let fn_l = fn_bytes.len();
@@ -2355,56 +2359,60 @@ pub unsafe fn cram_cram_io_c_2541_refs_load_fai(
         (*r).fn_ = fn_bytes[..fn_delim_offset].to_vec();
         let idx = fn_.add(fn_delim_offset + 7);
         libc::snprintf(
-            fai_fn.as_mut_ptr(),
-            crate::htslib_rs::c_compat::PATH_MAX as usize,
+            fai_fn.as_mut_ptr().cast(),
+            libc::PATH_MAX as usize,
             c"%s".as_ptr(),
-            idx,
+            idx.cast::<i8>(),
         );
     } else if fn_bytes.ends_with(b".fai") {
         if (*r).fn_.is_empty() {
             (*r).fn_ = fn_bytes[..fn_l - 4].to_vec();
         }
         libc::snprintf(
-            fai_fn.as_mut_ptr(),
-            crate::htslib_rs::c_compat::PATH_MAX as usize,
+            fai_fn.as_mut_ptr().cast(),
+            libc::PATH_MAX as usize,
             c"%s".as_ptr(),
-            fn_,
+            fn_.cast::<i8>(),
         );
     } else {
         (*r).fn_ = fn_bytes.to_vec();
         libc::snprintf(
-            fai_fn.as_mut_ptr(),
-            crate::htslib_rs::c_compat::PATH_MAX as usize,
+            fai_fn.as_mut_ptr().cast(),
+            libc::PATH_MAX as usize,
             c"%.*s.fai".as_ptr(),
-            crate::htslib_rs::c_compat::PATH_MAX - 5,
-            fn_,
+            libc::PATH_MAX - 5,
+            fn_.cast::<i8>(),
         );
     }
 
-    (*r).fp = cram_cram_io_c_2503_bgzf_open_ref(&(*r).fn_, c"r".as_ptr().cast_mut(), 0);
+    (*r).fp = cram_cram_io_c_2503_bgzf_open_ref(&(*r).fn_, c"r".as_ptr().cast_mut().cast(), 0);
     if (*r).fp.is_null() {
         let msg = std::ffi::CString::new(format!(
             "Failed to open reference file '{}'",
             String::from_utf8_lossy(&(*r).fn_)
         ))
         .unwrap();
-        hts_log_cstr(HTS_LOG_ERROR, c"refs_load_fai".as_ptr(), msg.as_ptr());
+        hts_log_cstr(HTS_LOG_ERROR, b"refs_load_fai", msg.as_bytes());
         if r_orig.is_null() {
             cram_cram_io_c_2427_refs_free(r.cast());
         }
         return std::ptr::null_mut();
     }
 
-    let fp = hopen(fai_fn.as_ptr(), c"r".as_ptr());
+    let fp = hopen(fai_fn.as_ptr().cast(), c"r".as_ptr());
     if fp.is_null() {
         let msg = std::ffi::CString::new(format!(
             "Failed to open index file '{}'",
-            CStr::from_ptr(fai_fn.as_ptr()).to_string_lossy()
+            CStr::from_ptr(fai_fn.as_ptr().cast()).to_string_lossy()
         ))
         .unwrap();
-        hts_log_cstr(HTS_LOG_ERROR, c"refs_load_fai".as_ptr(), msg.as_ptr());
+        hts_log_cstr(HTS_LOG_ERROR, b"refs_load_fai", msg.as_bytes());
         if is_err != 0 {
-            libc::perror(fai_fn.as_ptr());
+            eprintln!(
+                "{}: {}",
+                String::from_utf8_lossy(c_char_bytes(fai_fn.as_ptr()).unwrap_or(b"")),
+                std::io::Error::last_os_error()
+            );
         }
         if r_orig.is_null() {
             cram_cram_io_c_2427_refs_free(r.cast());
@@ -2412,7 +2420,7 @@ pub unsafe fn cram_cram_io_c_2541_refs_load_fai(
         return std::ptr::null_mut();
     }
 
-    while !hgets(line.as_mut_ptr(), 8192, fp).is_null() {
+    while !hgets(line.as_mut_ptr().cast(), 8192, fp).is_null() {
         let e = Box::into_raw(Box::new(ref_entry_layout {
             name: Vec::new(),
             fn_: Vec::new(),
@@ -2429,32 +2437,41 @@ pub unsafe fn cram_cram_io_c_2541_refs_load_fai(
         }));
 
         let mut cp = line.as_mut_ptr();
-        while *cp != 0 && isspace_c(*cp) == 0 {
+        while *cp != 0 && isspace_c(*cp as i8) == 0 {
             cp = cp.add(1);
         }
         *cp = 0;
         cp = cp.add(1);
         (*e).name = c_char_bytes(line.as_ptr()).unwrap_or(&[]).to_vec();
 
-        while *cp != 0 && isspace_c(*cp) != 0 {
+        while *cp != 0 && isspace_c(*cp as i8) != 0 {
             cp = cp.add(1);
         }
-        (*e).length = libc::strtoll(cp, &mut cp, 10);
+        let mut cp_i8 = cp.cast::<i8>();
+        (*e).length = libc::strtoll(cp_i8, &mut cp_i8, 10);
+        cp = cp_i8.cast::<u8>();
 
-        while *cp != 0 && isspace_c(*cp) != 0 {
+        while *cp != 0 && isspace_c(*cp as i8) != 0 {
             cp = cp.add(1);
         }
-        (*e).offset = libc::strtoll(cp, &mut cp, 10);
+        let mut cp_i8 = cp.cast::<i8>();
+        (*e).offset = libc::strtoll(cp_i8, &mut cp_i8, 10);
+        cp = cp_i8.cast::<u8>();
 
-        while *cp != 0 && isspace_c(*cp) != 0 {
+        while *cp != 0 && isspace_c(*cp as i8) != 0 {
             cp = cp.add(1);
         }
-        (*e).bases_per_line = libc::strtol(cp, &mut cp, 10) as c_int;
+        let mut cp_i8 = cp.cast::<i8>();
+        (*e).bases_per_line = libc::strtol(cp_i8, &mut cp_i8, 10) as i32;
+        cp = cp_i8.cast::<u8>();
 
-        while *cp != 0 && isspace_c(*cp) != 0 {
+        while *cp != 0 && isspace_c(*cp as i8) != 0 {
             cp = cp.add(1);
         }
-        (*e).line_length = libc::strtol(cp, &mut cp, 10) as c_int;
+        let mut cp_i8 = cp.cast::<i8>();
+        (*e).line_length = libc::strtol(cp_i8, &mut cp_i8, 10) as i32;
+        cp = cp_i8.cast::<u8>();
+        let _ = cp;
         (*e).fn_ = (*r).fn_.clone();
         (*e).count = 0;
         (*e).is_md5 = 0;
@@ -2492,9 +2509,9 @@ pub unsafe fn cram_cram_io_c_2541_refs_load_fai(
                 malloc((flags_words as usize * std::mem::size_of::<u32>()) as u64).cast::<u32>();
             let new_keys = calloc(
                 new_n_buckets as u64,
-                std::mem::size_of::<*const c_char>() as u64,
+                std::mem::size_of::<*const u8>() as u64,
             )
-            .cast::<*const c_char>();
+            .cast::<*const i8>();
             let new_vals = calloc(
                 new_n_buckets as u64,
                 std::mem::size_of::<*mut ref_entry_layout>() as u64,
@@ -2707,15 +2724,15 @@ pub unsafe fn cram_cram_io_c_2693_sanitise_SQ_lines(fd: *mut cram_fd) {
                 "Header @SQ length mismatch for ref {}, {} vs {}",
                 String::from_utf8_lossy(&(*r).name),
                 (*(*hrecs).ref_.add(iref as usize)).len,
-                (*r).length as c_int,
+                (*r).length as i32,
             ))
             .unwrap();
-            hts_log_cstr(HTS_LOG_WARNING, c"sanitise_SQ_lines".as_ptr(), msg.as_ptr());
+            hts_log_cstr(HTS_LOG_WARNING, b"sanitise_SQ_lines", msg.as_bytes());
             (*(*hrecs).ref_.add(iref as usize)).len = (*r).length;
         }
     }
 }
-pub unsafe fn cram_cram_io_c_2737_refs2id(r: *mut refs_t, hdr: *mut sam_hdr_t) -> c_int {
+pub unsafe fn cram_cram_io_c_2737_refs2id(r: *mut refs_t, hdr: *mut sam_hdr_t) -> i32 {
     let r = r.cast::<refs_t_layout>();
     let hrec = (*hdr).hrecs;
 
@@ -2772,10 +2789,10 @@ pub unsafe fn cram_cram_io_c_2737_refs2id(r: *mut refs_t, hdr: *mut sam_hdr_t) -
         } else {
             let msg = std::ffi::CString::new(format!(
                 "Unable to find ref name '{}'",
-                CStr::from_ptr(name).to_string_lossy()
+                CStr::from_ptr(name.cast()).to_string_lossy()
             ))
             .unwrap();
-            hts_log_cstr(HTS_LOG_WARNING, c"refs2id".as_ptr(), msg.as_ptr());
+            hts_log_cstr(HTS_LOG_WARNING, b"refs2id", msg.as_bytes());
         }
     }
 
@@ -2784,7 +2801,7 @@ pub unsafe fn cram_cram_io_c_2737_refs2id(r: *mut refs_t, hdr: *mut sam_hdr_t) -
 pub unsafe fn cram_cram_io_c_2852_cram_set_header2(
     fd: *mut cram_fd,
     hdr: *const sam_hdr_t,
-) -> c_int {
+) -> i32 {
     if fd.is_null() || hdr.is_null() {
         return -1;
     }
@@ -2802,10 +2819,10 @@ pub unsafe fn cram_cram_io_c_2852_cram_set_header2(
 
     cram_cram_io_c_2768_refs_from_header(fd.cast())
 }
-pub unsafe fn cram_cram_io_c_2866_cram_set_header(fd: *mut cram_fd, hdr: *mut sam_hdr_t) -> c_int {
+pub unsafe fn cram_cram_io_c_2866_cram_set_header(fd: *mut cram_fd, hdr: *mut sam_hdr_t) -> i32 {
     cram_cram_io_c_2852_cram_set_header2(fd, hdr)
 }
-pub unsafe fn cram_cram_io_c_2768_refs_from_header(fd: *mut cram_fd) -> c_int {
+pub unsafe fn cram_cram_io_c_2768_refs_from_header(fd: *mut cram_fd) -> i32 {
     if fd.is_null() {
         return -1;
     }
@@ -2903,7 +2920,7 @@ pub unsafe fn cram_cram_io_c_2768_refs_from_header(fd: *mut cram_fd) -> c_int {
         if !(*h_ref).ty.is_null() {
             let tag = crate::htslib_rs::sam::sam_hrecs_find_key(
                 &mut *(*h_ref).ty.cast::<crate::htslib_rs::sam::sam_hrec_type_t>(),
-                c"M5",
+                b"M5",
             )
             .0
             .map(|p| p.as_ptr().cast::<sam_hrec_tag_layout>())
@@ -2911,7 +2928,7 @@ pub unsafe fn cram_cram_io_c_2768_refs_from_header(fd: *mut cram_fd) -> c_int {
             if !tag.is_null() {
                 (*e).fn_ = cram_string_alloc_c_149_string_dup(
                     (*r).pool.as_deref_mut().unwrap(),
-                    c_char_bytes((*tag).str_.add(3)).unwrap_or(&[]),
+                    c_char_bytes((*tag).str_.add(3).cast()).unwrap_or(&[]),
                 )
                 .map(|s| s[..s.len().saturating_sub(1)].to_vec())
                 .unwrap_or_default();
@@ -2919,7 +2936,7 @@ pub unsafe fn cram_cram_io_c_2768_refs_from_header(fd: *mut cram_fd) -> c_int {
 
             let tag = crate::htslib_rs::sam::sam_hrecs_find_key(
                 &mut *(*h_ref).ty.cast::<crate::htslib_rs::sam::sam_hrec_type_t>(),
-                c"LN",
+                b"LN",
             )
             .0
             .map(|p| p.as_ptr().cast::<sam_hrec_tag_layout>())
@@ -2954,9 +2971,9 @@ pub unsafe fn cram_cram_io_c_2768_refs_from_header(fd: *mut cram_fd) -> c_int {
                 malloc((flags_words as usize * std::mem::size_of::<u32>()) as u64).cast::<u32>();
             let new_keys = calloc(
                 new_n_buckets as u64,
-                std::mem::size_of::<*const c_char>() as u64,
+                std::mem::size_of::<*const u8>() as u64,
             )
-            .cast::<*const c_char>();
+            .cast::<*const i8>();
             let new_vals = calloc(
                 new_n_buckets as u64,
                 std::mem::size_of::<*mut ref_entry_layout>() as u64,
@@ -3065,7 +3082,7 @@ pub unsafe fn cram_cram_io_c_2768_refs_from_header(fd: *mut cram_fd) -> c_int {
 
     0
 }
-pub unsafe fn cram_cram_io_c_3169_cram_ref_incr_locked(r: *mut refs_t, id: c_int) {
+pub unsafe fn cram_cram_io_c_3169_cram_ref_incr_locked(r: *mut refs_t, id: i32) {
     let r = r.cast::<refs_t_layout>();
     if id < 0
         || (*(*r).ref_id.add(id as usize)).is_null()
@@ -3080,13 +3097,13 @@ pub unsafe fn cram_cram_io_c_3169_cram_ref_incr_locked(r: *mut refs_t, id: c_int
 
     (*(*(*r).ref_id.add(id as usize))).count += 1;
 }
-pub unsafe fn cram_cram_io_c_3183_cram_ref_incr(r: *mut refs_t, id: c_int) {
+pub unsafe fn cram_cram_io_c_3183_cram_ref_incr(r: *mut refs_t, id: i32) {
     let rl = r.cast::<refs_t_layout>();
     crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*rl).lock);
     cram_cram_io_c_3169_cram_ref_incr_locked(r, id);
     crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*rl).lock);
 }
-pub unsafe fn cram_cram_io_c_3189_cram_ref_decr_locked(r: *mut refs_t, id: c_int) {
+pub unsafe fn cram_cram_io_c_3189_cram_ref_decr_locked(r: *mut refs_t, id: i32) {
     let r = r.cast::<refs_t_layout>();
     if id < 0
         || (*(*r).ref_id.add(id as usize)).is_null()
@@ -3111,7 +3128,7 @@ pub unsafe fn cram_cram_io_c_3189_cram_ref_decr_locked(r: *mut refs_t, id: c_int
         (*r).last_id = id;
     }
 }
-pub unsafe fn cram_cram_io_c_3213_cram_ref_decr(r: *mut refs_t, id: c_int) {
+pub unsafe fn cram_cram_io_c_3213_cram_ref_decr(r: *mut refs_t, id: i32) {
     let rl = r.cast::<refs_t_layout>();
     crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*rl).lock);
     cram_cram_io_c_3189_cram_ref_decr_locked(r, id);
@@ -3119,10 +3136,10 @@ pub unsafe fn cram_cram_io_c_3213_cram_ref_decr(r: *mut refs_t, id: c_int) {
 }
 pub unsafe fn cram_cram_io_c_3228_load_ref_portion(
     fp: *mut BGZF,
-    e: *mut c_void,
+    e: *mut (),
     start: i64,
     mut end: i64,
-) -> *mut c_char {
+) -> *mut u8 {
     let e = e.cast::<ref_entry_layout>();
 
     if end < start {
@@ -3147,20 +3164,26 @@ pub unsafe fn cram_cram_io_c_3228_load_ref_portion(
         + 1;
 
     if bgzf_useek(fp, offset, libc::SEEK_SET) < 0 {
-        libc::perror(c"bgzf_useek() on reference file".as_ptr());
+        eprintln!(
+            "bgzf_useek() on reference file: {}",
+            std::io::Error::last_os_error()
+        );
         return std::ptr::null_mut();
     }
 
     if len == 0 {
         return std::ptr::null_mut();
     }
-    let seq = malloc(len as u64).cast::<c_char>();
+    let seq = malloc(len as u64).cast::<u8>();
     if seq.is_null() {
         return std::ptr::null_mut();
     }
 
     if bgzf_read(fp, seq.cast(), len as usize) != len as isize {
-        libc::perror(c"bgzf_read() on reference file".as_ptr());
+        eprintln!(
+            "bgzf_read() on reference file: {}",
+            std::io::Error::last_os_error()
+        );
         free(seq.cast());
         return std::ptr::null_mut();
     }
@@ -3170,21 +3193,21 @@ pub unsafe fn cram_cram_io_c_3228_load_ref_portion(
         let mut j = 0i64;
         while i < len {
             let ch = *seq.add(i as usize);
-            if isspace_c(ch) == 0 {
-                *seq.add(j as usize) = ((ch as u8) & !0x20) as c_char;
+            if isspace_c(ch as i8) == 0 {
+                *seq.add(j as usize) = ((ch as u8) & !0x20) as u8;
                 j += 1;
             } else {
                 break;
             }
             i += 1;
         }
-        while i < len && isspace_c(*seq.add(i as usize)) != 0 {
+        while i < len && isspace_c(*seq.add(i as usize) as i8) != 0 {
             i += 1;
         }
         while i < len - (*e).line_length as i64 {
             let j_end = j + (*e).bases_per_line as i64;
             while j < j_end {
-                *seq.add(j as usize) = ((*seq.add(i as usize) as u8) & !0x20) as c_char;
+                *seq.add(j as usize) = ((*seq.add(i as usize) as u8) & !0x20) as u8;
                 j += 1;
                 i += 1;
             }
@@ -3192,8 +3215,8 @@ pub unsafe fn cram_cram_io_c_3228_load_ref_portion(
         }
         while i < len {
             let ch = *seq.add(i as usize);
-            if isspace_c(ch) == 0 {
-                *seq.add(j as usize) = ((ch as u8) & !0x20) as c_char;
+            if isspace_c(ch as i8) == 0 {
+                *seq.add(j as usize) = ((ch as u8) & !0x20) as u8;
                 j += 1;
             }
             i += 1;
@@ -3202,15 +3225,15 @@ pub unsafe fn cram_cram_io_c_3228_load_ref_portion(
         if j != end - start + 1 {
             hts_log_cstr(
                 HTS_LOG_ERROR,
-                c"load_ref_portion".as_ptr(),
-                c"Malformed reference file".as_ptr(),
+                b"load_ref_portion",
+                b"Malformed reference file",
             );
             free(seq.cast());
             return std::ptr::null_mut();
         }
     } else {
         for i in 0..len {
-            *seq.add(i as usize) = toupper_c(*seq.add(i as usize));
+            *seq.add(i as usize) = toupper_c(*seq.add(i as usize) as i8) as u8;
         }
     }
 
@@ -3218,9 +3241,9 @@ pub unsafe fn cram_cram_io_c_3228_load_ref_portion(
 }
 pub unsafe fn cram_cram_io_c_3323_cram_ref_load(
     r: *mut refs_t,
-    id: c_int,
-    is_md5: c_int,
-) -> *mut c_void {
+    id: i32,
+    is_md5: i32,
+) -> *mut () {
     let r = r.cast::<refs_t_layout>();
     let e = *(*r).ref_id.add(id as usize);
     let start = 1i64;
@@ -3249,7 +3272,7 @@ pub unsafe fn cram_cram_io_c_3323_cram_ref_load(
             return std::ptr::null_mut();
         }
         (*r).fn_ = (*e).fn_.clone();
-        (*r).fp = cram_cram_io_c_2503_bgzf_open_ref(&(*r).fn_, c"r".as_ptr().cast_mut(), is_md5);
+        (*r).fp = cram_cram_io_c_2503_bgzf_open_ref(&(*r).fn_, c"r".as_ptr().cast_mut().cast(), is_md5);
         if (*r).fp.is_null() {
             return std::ptr::null_mut();
         }
@@ -3313,14 +3336,14 @@ impl Drop for RefCacheTmpPath {
 
 pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
     fd: *mut cram_fd,
-    id: c_int,
-    r: *mut c_void,
-) -> c_int {
+    id: i32,
+    r: *mut (),
+) -> i32 {
     let fdl = fd.cast::<cram_fd_layout>();
     let r = r.cast::<ref_entry_layout>();
     let ref_path = libc::getenv(c"REF_PATH".as_ptr());
     let local_cache = libc::getenv(c"REF_CACHE".as_ptr());
-    let mut path = [0i8; crate::htslib_rs::c_compat::PATH_MAX as usize];
+    let mut path = [0i8; libc::PATH_MAX as usize];
     let mut path_tmp = RefCacheTmpPath::new();
     let mut local_path = 0i32;
 
@@ -3330,7 +3353,7 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
             fd, id
         ))
         .unwrap();
-        hts_log_cstr(HTS_LOG_INFO, c"cram_populate_ref".as_ptr(), msg.as_ptr());
+        hts_log_cstr(HTS_LOG_INFO, b"cram_populate_ref", msg.as_bytes());
     }
 
     if (*r).name.is_empty() {
@@ -3341,15 +3364,15 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
     let hrecs = (*(*fdl).header.cast::<sam_hdr_t>()).hrecs;
     let ty = match crate::htslib_rs::sam::sam_hrecs_find_type_id(
         &mut *hrecs,
-        c"SQ",
-        Some((c"SN", r_name_c.as_c_str())),
+        b"SQ",
+        Some((b"SN", r_name_c.as_bytes())),
     ) {
         Some(ty) => ty.as_ptr(),
         None => return -1,
     };
 
     let m5tag =
-        crate::htslib_rs::sam::sam_hrecs_find_key(&mut *ty, c"M5")
+        crate::htslib_rs::sam::sam_hrecs_find_key(&mut *ty, b"M5")
             .0
             .map_or(std::ptr::null_mut(), |t| t.as_ptr().cast::<sam_hrec_tag_layout>());
 
@@ -3363,13 +3386,13 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
                 CStr::from_ptr(m5).to_string_lossy()
             ))
             .unwrap();
-            hts_log_cstr(HTS_LOG_INFO, c"cram_populate_ref".as_ptr(), msg.as_ptr());
+            hts_log_cstr(HTS_LOG_INFO, b"cram_populate_ref", msg.as_bytes());
         }
 
         // Use cache if available.
         if !local_cache.is_null() && *local_cache != 0 {
             let mut sb = std::mem::MaybeUninit::<libc::stat>::uninit();
-            if cram_cram_io_c_2884_expand_cache_path(path.as_mut_ptr(), local_cache, m5) == 0
+            if cram_cram_io_c_2884_expand_cache_path(path.as_mut_ptr().cast(), local_cache.cast(), m5.cast()) == 0
                 && libc::stat(path.as_ptr(), sb.as_mut_ptr()) == 0
             {
                 local_path = 1;
@@ -3381,18 +3404,14 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
             let mut sb = std::mem::MaybeUninit::<libc::stat>::uninit();
             if libc::stat(path.as_ptr(), sb.as_mut_ptr()) == 0 {
                 let sb = sb.assume_init();
-                if crate::htslib_rs::c_compat::stat_mode_matches(
-                    sb.st_mode,
-                    libc::S_IFMT,
-                    libc::S_IFREG,
-                ) {
+                if (sb.st_mode & libc::S_IFMT) == libc::S_IFREG {
                     let fp = bgzf_open(path.as_ptr(), c"r".as_ptr());
                     if !fp.is_null() {
                         (*r).length = sb.st_size;
                         (*r).offset = 0;
                         (*r).line_length = 0;
                         (*r).bases_per_line = 0;
-                        (*r).fn_ = c_char_bytes(path.as_ptr()).unwrap_or(&[]).to_vec();
+                        (*r).fn_ = c_char_bytes(path.as_ptr().cast()).unwrap_or(&[]).to_vec();
                         let refs = (*fdl).refs.cast::<refs_t_layout>();
                         if !(*refs).fp.is_null() && bgzf_close((*refs).fp) != 0 {
                             return -1;
@@ -3421,13 +3440,14 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
         if let Some(opened) = opened {
             let is_local = if opened.local { 1i32 } else { 0i32 };
             let mf = opened.mf.as_ptr();
-            let mut sz: usize = 0;
-            let stolen = cram_mFILE_c_428_mfsteal(mf, &mut sz).cast::<u8>();
-            if !stolen.is_null() {
-                (*r).seq = Vec::from_raw_parts(stolen, sz, sz);
+            let sz: usize;
+            if let Some(stolen) = cram_mFILE_c_428_mfsteal(mf) {
+                sz = stolen.len();
+                (*r).seq = stolen;
                 (*r).mf = std::ptr::null_mut();
             } else {
                 // Couldn't detach; keep mf around.
+                sz = (*mf).data.len();
                 (*r).seq = (*mf).data.clone();
                 (*r).mf = mf;
             }
@@ -3437,7 +3457,7 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
 
             // Populate the local disk cache if required.
             if is_local == 0 && !local_cache.is_null() && *local_cache != 0 {
-                if cram_cram_io_c_2884_expand_cache_path(path.as_mut_ptr(), local_cache, m5) < 0 {
+                if cram_cram_io_c_2884_expand_cache_path(path.as_mut_ptr().cast(), local_cache.cast(), m5.cast()) < 0 {
                     return 0; // Not fatal - we have the data already.
                 }
                 {
@@ -3446,9 +3466,9 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
                         CStr::from_ptr(path.as_ptr()).to_string_lossy()
                     ))
                     .unwrap();
-                    hts_log_cstr(HTS_LOG_INFO, c"cram_populate_ref".as_ptr(), msg.as_ptr());
+                    hts_log_cstr(HTS_LOG_INFO, b"cram_populate_ref", msg.as_bytes());
                 }
-                cram_cram_io_c_2947_mkdir_prefix(path.as_mut_ptr(), 0o1777);
+                cram_cram_io_c_2947_mkdir_prefix(path.as_mut_ptr().cast(), 0o1777);
 
                 let fp = crate::htslib_rs::hts::hts_open_tmpfile(
                     path.as_ptr(),
@@ -3456,7 +3476,11 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
                     path_tmp.as_mut_ptr(),
                 );
                 if fp.is_null() {
-                    libc::perror(path_tmp.c_path().as_ptr());
+                    eprintln!(
+                        "{}: {}",
+                        String::from_utf8_lossy(&path_tmp.inner.data),
+                        std::io::Error::last_os_error()
+                    );
                     return 0; // Not fatal.
                 }
 
@@ -3478,8 +3502,8 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
                 if m5_bytes != md5_hex {
                     hts_log_cstr(
                         HTS_LOG_ERROR,
-                        c"cram_populate_ref".as_ptr(),
-                        c"Mismatching md5sum for downloaded reference".as_ptr(),
+                        b"cram_populate_ref",
+                        b"Mismatching md5sum for downloaded reference",
                     );
                     hclose_abruptly(fp);
                     path_tmp.unlink();
@@ -3491,16 +3515,16 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
                 let path_tmp_c = path_tmp.c_path();
                 if hclose(fp) < 0
                     || length_written != (*r).length as isize
-                    || crate::htslib_rs::c_compat::chmod(path_tmp_c.as_ptr(), 0o444) < 0
+                    || libc::chmod(path_tmp_c.as_ptr(), 0o444) < 0
                     || libc::rename(path_tmp_c.as_ptr(), path.as_ptr()) < 0
                 {
                     let msg = std::ffi::CString::new(format!(
                         "Creating reference at {} failed: {}",
                         CStr::from_ptr(path.as_ptr()).to_string_lossy(),
-                        CStr::from_ptr(libc::strerror(*__errno_location())).to_string_lossy()
+                        CStr::from_ptr(libc::strerror(*libc::__errno_location())).to_string_lossy()
                     ))
                     .unwrap();
-                    hts_log_cstr(HTS_LOG_ERROR, c"cram_populate_ref".as_ptr(), msg.as_ptr());
+                    hts_log_cstr(HTS_LOG_ERROR, b"cram_populate_ref", msg.as_bytes());
                     path_tmp.unlink();
                 }
             }
@@ -3511,7 +3535,7 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
 
     // no_M5: failed to find in search path or M5 cache; try @SQ UR: tag.
     let ur_tag =
-        crate::htslib_rs::sam::sam_hrecs_find_key(&mut *ty, c"UR")
+        crate::htslib_rs::sam::sam_hrecs_find_key(&mut *ty, b"UR")
             .0
             .map_or(std::ptr::null_mut(), |t| t.as_ptr().cast::<sam_hrec_tag_layout>());
     if ur_tag.is_null() {
@@ -3519,12 +3543,12 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
     }
 
     let ur = (*ur_tag).str_.add(3);
-    let ur_bytes = c_char_bytes(ur).unwrap_or(&[]);
+    let ur_bytes = c_char_bytes(ur.cast()).unwrap_or(&[]);
     if ur_bytes.windows(3).any(|window| window == b"://") && !ur_bytes.starts_with(b"file:") {
         hts_log_cstr(
             HTS_LOG_ERROR,
-            c"cram_populate_ref".as_ptr(),
-            c"UR tags pointing to remote files are not supported".as_ptr(),
+            b"cram_populate_ref",
+            b"UR tags pointing to remote files are not supported",
         );
         return -1;
     }
@@ -3543,7 +3567,7 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
         (*refs0).fp = std::ptr::null_mut();
     }
 
-    let refs = cram_cram_io_c_2541_refs_load_fai((*fdl).refs.cast(), fn_, 0);
+    let refs = cram_cram_io_c_2541_refs_load_fai((*fdl).refs.cast(), fn_.cast(), 0);
     if refs.is_null() {
         return -1;
     }
@@ -3575,10 +3599,10 @@ pub unsafe fn cram_cram_io_c_2977_cram_populate_ref(
 // original: cram_get_ref (htslib/cram/cram_io.c:3411)
 pub unsafe fn cram_cram_io_c_3409_cram_get_ref(
     fd: *mut cram_fd,
-    id: c_int,
+    id: i32,
     mut start: i64,
     mut end: i64,
-) -> *mut c_char {
+) -> *mut u8 {
     let fdl = fd.cast::<cram_fd_layout>();
     let ostart = start;
 
@@ -3601,7 +3625,7 @@ pub unsafe fn cram_cram_io_c_3409_cram_get_ref(
         || (*(*refs).ref_id.add(id as usize)).is_null()
     {
         let msg = std::ffi::CString::new(format!("No reference found for id {}", id)).unwrap();
-        hts_log_cstr(HTS_LOG_ERROR, c"cram_get_ref".as_ptr(), msg.as_ptr());
+        hts_log_cstr(HTS_LOG_ERROR, b"cram_get_ref", msg.as_bytes());
         crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).ref_lock);
         return std::ptr::null_mut();
     }
@@ -3616,7 +3640,7 @@ pub unsafe fn cram_cram_io_c_3409_cram_get_ref(
                 String::from_utf8_lossy(&(*r).name)
             ))
             .unwrap();
-            hts_log_cstr(HTS_LOG_WARNING, c"cram_get_ref".as_ptr(), msg.as_ptr());
+            hts_log_cstr(HTS_LOG_WARNING, b"cram_get_ref", msg.as_bytes());
         }
         if cram_cram_io_c_2977_cram_populate_ref(fd, id, r.cast()) == -1 {
             let msg = std::ffi::CString::new(format!(
@@ -3624,12 +3648,11 @@ pub unsafe fn cram_cram_io_c_3409_cram_get_ref(
                 String::from_utf8_lossy(&(*r).name)
             ))
             .unwrap();
-            hts_log_cstr(HTS_LOG_WARNING, c"cram_get_ref".as_ptr(), msg.as_ptr());
+            hts_log_cstr(HTS_LOG_WARNING, b"cram_get_ref", msg.as_bytes());
             hts_log_cstr(
                 HTS_LOG_WARNING,
-                c"cram_get_ref".as_ptr(),
-                c"See https://www.htslib.org/doc/reference_seqs.html for further suggestions"
-                    .as_ptr(),
+                b"cram_get_ref",
+                b"See https://www.htslib.org/doc/reference_seqs.html for further suggestions",
             );
             crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*refs).lock);
             crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).ref_lock);
@@ -3659,7 +3682,7 @@ pub unsafe fn cram_cram_io_c_3409_cram_get_ref(
     }
 
     if (*fdl).shared_ref != 0 || !(*r).seq.is_empty() || (start == 1 && end == (*r).length) {
-        let cp: *mut c_char;
+        let cp: *mut u8;
         if id >= 0 {
             if !(*r).seq.is_empty() {
                 cram_cram_io_c_3169_cram_ref_incr_locked((*fdl).refs.cast(), id);
@@ -3684,7 +3707,7 @@ pub unsafe fn cram_cram_io_c_3409_cram_get_ref(
                 .seq
                 .as_ptr()
                 .add((ostart - 1) as usize)
-                .cast::<c_char>()
+                .cast::<u8>()
                 .cast_mut();
         } else {
             (*fdl).ref_ = std::ptr::null_mut();
@@ -3718,7 +3741,7 @@ pub unsafe fn cram_cram_io_c_3409_cram_get_ref(
         }
         (*refs).fn_ = (*r).fn_.clone();
         (*refs).fp =
-            cram_cram_io_c_2503_bgzf_open_ref(&(*refs).fn_, c"r".as_ptr().cast_mut(), (*r).is_md5);
+            cram_cram_io_c_2503_bgzf_open_ref(&(*refs).fn_, c"r".as_ptr().cast_mut().cast(), (*r).is_md5);
         if (*refs).fp.is_null() {
             crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*refs).lock);
             crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).ref_lock);
@@ -3732,7 +3755,7 @@ pub unsafe fn cram_cram_io_c_3409_cram_get_ref(
         crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).ref_lock);
         return std::ptr::null_mut();
     }
-    (*fdl).ref_ = loaded;
+    (*fdl).ref_ = loaded.cast();
 
     if !(*fdl).ref_free.is_null() {
         free((*fdl).ref_free.cast());
@@ -3750,13 +3773,13 @@ pub unsafe fn cram_cram_io_c_3409_cram_get_ref(
     if seq.is_null() {
         std::ptr::null_mut()
     } else {
-        seq.add((ostart - start) as usize)
+        seq.add((ostart - start) as usize).cast()
     }
 }
 pub unsafe fn cram_cram_io_c_3597_cram_load_reference(
     fd: *mut cram_fd,
-    mut fn_: *mut c_char,
-) -> c_int {
+    mut fn_: *mut u8,
+) -> i32 {
     let fd = fd.cast::<cram_fd_layout>();
     let mut ret = 0;
 
@@ -3764,7 +3787,7 @@ pub unsafe fn cram_cram_io_c_3597_cram_load_reference(
         (*fd).refs = cram_cram_io_c_2541_refs_load_fai(
             (*fd).refs.cast(),
             fn_,
-            !((*fd).embed_ref > 0 && (*fd).mode == b'r' as c_int) as c_int,
+            !((*fd).embed_ref > 0 && (*fd).mode == b'r' as i32) as i32,
         )
         .cast();
         fn_ = if !(*fd).refs.is_null()
@@ -3793,12 +3816,12 @@ pub unsafe fn cram_cram_io_c_3597_cram_load_reference(
         std::ptr::null_mut()
     } else {
         let bytes = (*(*fd).refs.cast::<refs_t_layout>()).fn_.as_slice();
-        let dst = crate::htslib_rs::c_compat::malloc(bytes.len() as u64 + 1).cast::<c_char>();
+        let dst = crate::htslib_rs::c_compat::malloc(bytes.len() as u64 + 1).cast::<u8>();
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst.cast::<u8>(), bytes.len());
             *dst.add(bytes.len()) = 0;
         }
-        dst
+        dst.cast()
     };
 
     if ((*fd).refs.is_null() || ((*(*fd).refs.cast::<refs_t_layout>()).nref == 0 && fn_.is_null()))
@@ -3888,7 +3911,7 @@ pub unsafe fn cram_cram_io_c_4330_cram_new_compression_header() -> *mut cram_blo
         return std::ptr::null_mut();
     }
 
-    (*hdr).td_hash = calloc(1, std::mem::size_of::<kh_generic_layout>() as u64).cast::<c_void>();
+    (*hdr).td_hash = calloc(1, std::mem::size_of::<kh_generic_layout>() as u64).cast();
     if (*hdr).td_hash.is_null() {
         cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
         return std::ptr::null_mut();
@@ -3993,10 +4016,10 @@ pub unsafe fn cram_cram_io_c_4660_cram_read_file_def(
 
     if def.magic
         != [
-            b'C' as c_char,
-            b'R' as c_char,
-            b'A' as c_char,
-            b'M' as c_char,
+            b'C' as i8,
+            b'R' as i8,
+            b'A' as i8,
+            b'M' as i8,
         ]
     {
         return std::ptr::null_mut();
@@ -4015,11 +4038,11 @@ pub unsafe fn cram_cram_io_c_4660_cram_read_file_def(
 pub unsafe fn cram_cram_io_c_4694_cram_write_file_def(
     fd: *mut cram_fd,
     def: *mut cram_file_def_layout,
-) -> c_int {
+) -> i32 {
     let fd_layout = fd.cast::<cram_fd_layout>();
     if htslib_hfile_h_292_hwrite(
         (*fd_layout).fp,
-        &(*def).magic[0] as *const c_char as *const c_void,
+        std::ptr::addr_of!((*def).magic[0]).cast(),
         26,
     ) == 26
     {
@@ -4049,7 +4072,7 @@ pub unsafe fn cram_cram_io_c_4698_cram_free_file_def(def: *mut cram_file_def_lay
 pub unsafe fn cram_cram_io_c_4889_cram_write_SAM_hdr(
     fd: *mut cram_fd,
     hdr: *mut sam_hdr_t,
-) -> c_int {
+) -> i32 {
     let fdl = fd.cast::<cram_fd_layout>();
     let major = (*fdl).version >> 8;
     let minor = (*fdl).version & 0xff;
@@ -4072,16 +4095,16 @@ pub unsafe fn cram_cram_io_c_4889_cram_write_SAM_hdr(
         if !hrecs.is_null()
             && crate::htslib_rs::sam::sam_hrecs_find_type_id(
                 &mut *hrecs,
-                c"RG",
-                Some((c"ID", c"UNKNOWN")),
+                b"RG",
+                Some((b"ID", b"UNKNOWN")),
             )
             .is_none()
             && crate::htslib_rs::sam::sam_hdr_add_line(
                 &mut *hdr,
-                c"RG",
+                b"RG",
                 &[
-                    (c"ID".as_ptr(), c"UNKNOWN".as_ptr()),
-                    (c"SM".as_ptr(), c"UNKNOWN".as_ptr()),
+                    (Some(b"ID".as_slice()), Some(b"UNKNOWN".as_slice())),
+                    (Some(b"SM".as_slice()), Some(b"UNKNOWN".as_slice())),
                 ],
             ) != 0
         {
@@ -4106,17 +4129,18 @@ pub unsafe fn cram_cram_io_c_4889_cram_write_SAM_hdr(
         let mut i = 0;
         while i < nref {
             let ref_name = (*(*hrecs).ref_.add(i as usize)).name;
+            let ref_name_bytes = c_char_bytes(ref_name).unwrap_or(&[]);
             let ty = crate::htslib_rs::sam::sam_hrecs_find_type_id(
                 &mut *hrecs,
-                c"SQ",
-                Some((c"SN", CStr::from_ptr(ref_name))),
+                b"SQ",
+                Some((b"SN", ref_name_bytes)),
             );
             let ty = match ty {
                 Some(ty) => ty.as_ptr(),
                 None => return -1,
             };
 
-            if crate::htslib_rs::sam::sam_hrecs_find_key(&mut *ty, c"M5")
+            if crate::htslib_rs::sam::sam_hrecs_find_key(&mut *ty, b"M5")
                 .0
                 .is_none()
             {
@@ -4134,19 +4158,18 @@ pub unsafe fn cram_cram_io_c_4889_cram_write_SAM_hdr(
                         // auto embed-ref
                         hts_log_cstr(
                             HTS_LOG_WARNING,
-                            c"cram_write_SAM_hdr".as_ptr(),
-                            c"No M5 tags present and could not find reference".as_ptr(),
+                            b"cram_write_SAM_hdr",
+                            b"No M5 tags present and could not find reference",
                         );
                         hts_log_cstr(
                             HTS_LOG_WARNING,
-                            c"cram_write_SAM_hdr".as_ptr(),
-                            c"Enabling embed_ref=2 option".as_ptr(),
+                            b"cram_write_SAM_hdr",
+                            b"Enabling embed_ref=2 option",
                         );
                         hts_log_cstr(
                             HTS_LOG_WARNING,
-                            c"cram_write_SAM_hdr".as_ptr(),
-                            c"NOTE: the CRAM file will be bigger than using an external reference"
-                                .as_ptr(),
+                            b"cram_write_SAM_hdr",
+                            b"NOTE: the CRAM file will be bigger than using an external reference",
                         );
                         crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).ref_lock);
                         // Best guess. It may be unmapped data with broken
@@ -4179,9 +4202,9 @@ pub unsafe fn cram_cram_io_c_4889_cram_write_SAM_hdr(
                 (*(*(*refs).ref_id.add(i as usize))).validated_md5 = 1;
                 if crate::htslib_rs::sam::sam_hdr_update_line(
                     &mut *hdr,
-                    c"SQ",
-                    Some((c"SN", CStr::from_ptr(ref_name))),
-                    &[(c"M5".as_ptr(), buf2.as_ptr().cast())],
+                    b"SQ",
+                    Some((b"SN", ref_name_bytes)),
+                    &[(Some(b"M5".as_slice()), Some(&buf2[..32]))],
                 ) != 0
                 {
                     return -1;
@@ -4189,13 +4212,14 @@ pub unsafe fn cram_cram_io_c_4889_cram_write_SAM_hdr(
             }
 
             if !(*fdl).ref_fn.is_null() {
-                let mut ref_fn_buf = [0 as c_char; crate::htslib_rs::c_compat::PATH_MAX as usize];
-                cram_cram_io_c_4850_full_path(ref_fn_buf.as_mut_ptr(), (*fdl).ref_fn);
+                let mut ref_fn_buf = [0 as u8; libc::PATH_MAX as usize];
+                cram_cram_io_c_4850_full_path(ref_fn_buf.as_mut_ptr(), (*fdl).ref_fn.cast());
+                let ur_bytes = c_char_bytes(ref_fn_buf.as_ptr()).unwrap_or(&[]);
                 if crate::htslib_rs::sam::sam_hdr_update_line(
                     &mut *hdr,
-                    c"SQ",
-                    Some((c"SN", CStr::from_ptr(ref_name))),
-                    &[(c"UR".as_ptr(), ref_fn_buf.as_ptr())],
+                    b"SQ",
+                    Some((b"SN", ref_name_bytes)),
+                    &[(Some(b"UR".as_slice()), Some(ur_bytes))],
                 ) != 0
                 {
                     return -1;
@@ -4210,8 +4234,8 @@ pub unsafe fn cram_cram_io_c_4889_cram_write_SAM_hdr(
     if header_len > i32::MAX as usize {
         hts_log_cstr(
             HTS_LOG_ERROR,
-            c"cram_write_SAM_hdr".as_ptr(),
-            c"Header is too long for CRAM format".as_ptr(),
+            b"cram_write_SAM_hdr",
+            b"Header is too long for CRAM format",
         );
         return -1;
     }
@@ -4222,7 +4246,7 @@ pub unsafe fn cram_cram_io_c_4889_cram_write_SAM_hdr(
         // Text data
         let text = crate::htslib_rs::sam::sam_hdr_str(&mut *hdr);
         if htslib_hfile_h_292_hwrite((*fdl).fp, text.cast(), header_len)
-            != header_len as libc::ssize_t
+            != header_len as isize
         {
             return -1;
         }
@@ -4514,7 +4538,7 @@ pub unsafe fn cram_cram_io_c_4717_cram_read_SAM_hdr(fd: *mut cram_fd) -> *mut sa
         return std::ptr::null_mut();
     }
 
-    let header_text = malloc(header.len() as u64).cast::<c_char>();
+    let header_text = malloc(header.len() as u64).cast::<u8>();
     if header_text.is_null() {
         crate::htslib_rs::sam::sam_hdr_destroy(hdr);
         return std::ptr::null_mut();
@@ -4537,8 +4561,8 @@ pub unsafe fn cram_cram_io_c_4717_cram_read_SAM_hdr(fd: *mut cram_fd) -> *mut sa
 /// `calloc` so byte-identical to C `calloc(1, sizeof(cram_fd))`.
 pub unsafe fn cram_cram_io_c_5289_cram_dopen(
     fp: *mut hFILE,
-    filename: *const c_char,
-    mode: *const c_char,
+    filename: *const u8,
+    mode: *const u8,
 ) -> *mut cram_fd {
     let fd = calloc(1, std::mem::size_of::<cram_fd_layout>() as u64).cast::<cram_fd_layout>();
     if fd.is_null() {
@@ -4552,19 +4576,19 @@ pub unsafe fn cram_cram_io_c_5289_cram_dopen(
         if c == 0 {
             break;
         }
-        if c >= b'0' as c_char && c <= b'9' as c_char {
-            (*fd).level = (c - b'0' as c_char) as c_int;
+        if c >= b'0' as u8 && c <= b'9' as u8 {
+            (*fd).level = (c - b'0' as u8) as i32;
             break;
         }
         i += 1;
     }
 
     (*fd).fp = fp;
-    (*fd).mode = *mode as c_int;
+    (*fd).mode = *mode as i32;
     (*fd).first_container = 0;
     (*fd).curr_position = 0;
 
-    if (*fd).mode == b'r' as c_int {
+    if (*fd).mode == b'r' as i32 {
         /* Reader */
         let def = cram_cram_io_c_4660_cram_read_file_def(fd.cast());
         if def.is_null() {
@@ -4573,7 +4597,7 @@ pub unsafe fn cram_cram_io_c_5289_cram_dopen(
         }
         (*fd).file_def = def.cast();
 
-        (*fd).version = (*def).major_version as c_int * 256 + (*def).minor_version as c_int;
+        (*fd).version = (*def).major_version as i32 * 256 + (*def).minor_version as i32;
 
         cram_cram_io_c_5170_cram_init_tables(fd.cast());
 
@@ -4588,16 +4612,16 @@ pub unsafe fn cram_cram_io_c_5289_cram_dopen(
         /* Writer */
         let mut def = Box::new(cram_file_def_layout {
             magic: [
-                b'C' as c_char,
-                b'R' as c_char,
-                b'A' as c_char,
-                b'M' as c_char,
+                b'C' as i8,
+                b'R' as i8,
+                b'A' as i8,
+                b'M' as i8,
             ],
             major_version: 0, // Indicator to write file def later.
             minor_version: 0,
             file_id: [0; 20],
         });
-        libc::strncpy(def.file_id.as_mut_ptr(), filename, 20);
+        libc::strncpy(def.file_id.as_mut_ptr(), filename.cast(), 20);
         let def = Box::into_raw(def);
 
         (*fd).file_def = def.cast();
@@ -4609,8 +4633,8 @@ pub unsafe fn cram_cram_io_c_5289_cram_dopen(
     }
 
     // prefix = strdup(basename(filename))
-    let bn = libc::strrchr(filename, b'/' as c_int);
-    let bn = if bn.is_null() { filename } else { bn.add(1) };
+    let bn = libc::strrchr(filename.cast(), b'/' as i32);
+    let bn = if bn.is_null() { filename.cast::<i8>() } else { bn.add(1) };
     (*fd).prefix = strdup(bn);
     if (*fd).prefix.is_null() {
         if !(*fd).file_def.is_null() {
@@ -4671,7 +4695,7 @@ pub unsafe fn cram_cram_io_c_5289_cram_dopen(
     (*fd).rqueue = std::ptr::null_mut();
     (*fd).job_pending = std::ptr::null_mut();
     (*fd).ooc = 0;
-    (*fd).required_fields = c_int::MAX as c_uint;
+    (*fd).required_fields = i32::MAX as u32;
 
     crate::htslib_rs::c_compat::pthread_mutex_init(&mut (*fd).metrics_lock, std::ptr::null());
     crate::htslib_rs::c_compat::pthread_mutex_init(&mut (*fd).ref_lock, std::ptr::null());
@@ -4687,7 +4711,7 @@ pub unsafe fn cram_cram_io_c_5289_cram_dopen(
     }
 
     // fd->tags_used = kh_init(m_metrics)  ==  calloc(1, sizeof(kh_m_metrics_t))
-    (*fd).tags_used = calloc(1, std::mem::size_of::<kh_generic_layout>() as u64).cast::<c_void>();
+    (*fd).tags_used = calloc(1, std::mem::size_of::<kh_generic_layout>() as u64).cast();
     if (*fd).tags_used.is_null() {
         cram_cram_io_c_5560_cram_dopen_cleanup_err(fd);
         return std::ptr::null_mut();
@@ -4712,16 +4736,16 @@ pub unsafe fn cram_cram_io_c_5289_cram_dopen(
 /// Open a CRAM file by name for read ("r") or write ("w"). Returns the fd on
 /// success or NULL on failure.
 pub unsafe fn cram_cram_io_c_5264_cram_open(
-    filename: *const c_char,
-    mode: *const c_char,
+    filename: *const u8,
+    mode: *const u8,
 ) -> *mut cram_fd {
-    let mut fmode: [c_char; 3] = [*mode, 0, 0];
+    let mut fmode: [u8; 3] = [*mode, 0, 0];
     let mode_bytes = c_char_bytes(mode).unwrap_or(&[]);
     if matches!(mode_bytes.get(1), Some(b'b' | b'c')) {
-        fmode[1] = b'b' as c_char;
+        fmode[1] = b'b' as u8;
     }
 
-    let fp = hopen(filename, fmode.as_ptr());
+    let fp = hopen(filename.cast(), fmode.as_ptr().cast());
     if fp.is_null() {
         return std::ptr::null_mut();
     }
@@ -4743,7 +4767,7 @@ pub unsafe fn cram_cram_io_c_5264_cram_open(
 /// the C library because their dependent helpers (cram_flush_thread /
 /// cram_flush_result / reset_metrics / free_bam_list / cram_index_free)
 /// have not been translated yet. Returns 0 on success, -1 on failure.
-pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
+pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> i32 {
     if fd.is_null() {
         return -1;
     }
@@ -4761,10 +4785,10 @@ pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
     // now handled natively below via the cram_flush_bridge translations of
     // `free_bam_list` (htslib/cram/cram_io.c:3697) and `cram_index_free`
     // (htslib/cram/cram_index.c:374).
-    let mut ret: c_int = 0;
+    let mut ret: i32 = 0;
 
     // C: if (fd->mode == 'w' && fd->ctr) { ... flush ... }
-    if (*fdl).mode == b'w' as c_int && !(*fdl).ctr.is_null() {
+    if (*fdl).mode == b'w' as i32 && !(*fdl).ctr.is_null() {
         let ctr_w = (*fdl).ctr;
         if !(*ctr_w).slice.is_null() {
             cram_update_curr_slice_native(ctr_w, (*fdl).version);
@@ -4777,7 +4801,7 @@ pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
     // C (cram_io.c:5572-5589): MT-pool cleanup. Drain in-flight decode jobs
     // (READ mode), flush the encoder result queue (WRITE mode), then destroy
     // the pool's result queue. Single-threaded (pool/rqueue null) is a no-op.
-    if (*fdl).mode != b'w' as c_int {
+    if (*fdl).mode != b'w' as i32 {
         cram_drain_rqueue_native(fdl);
     }
     if !(*fdl).pool.is_null() && (*fdl).eof >= 0 && !(*fdl).rqueue.is_null() {
@@ -4788,7 +4812,7 @@ pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
         if cram_flush_result_native(fd) != 0 {
             ret = -1;
         }
-        if (*fdl).mode == b'w' as c_int {
+        if (*fdl).mode == b'w' as i32 {
             // prevent double-freeing: cram_flush_result freed lc, which was the ctr
             (*fdl).ctr = std::ptr::null_mut();
         }
@@ -4797,7 +4821,7 @@ pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
     }
 
     // C: if (ret == 0 && fd->mode == 'w') cram_write_eof_block(fd)
-    if ret == 0 && (*fdl).mode == b'w' as c_int && 0 != cram_cram_io_c_5474_cram_write_eof_block(fd)
+    if ret == 0 && (*fdl).mode == b'w' as i32 && 0 != cram_cram_io_c_5474_cram_write_eof_block(fd)
     {
         ret = -1;
     }
@@ -4888,10 +4912,10 @@ pub unsafe fn cram_cram_io_c_5558_cram_close(fd: *mut cram_fd) -> c_int {
                 }
                 // m_metrics values are cram_metrics*. cram_metrics is just a
                 // freeable malloc'd struct in C (cram_new_metrics).
-                let val_ptr = (*h).vals.cast::<*mut c_void>().add(k as usize);
+                let val_ptr = (*h).vals.cast::<*mut ()>().add(k as usize);
                 let v = *val_ptr;
                 if !v.is_null() {
-                    free(v);
+                    free(v.cast());
                 }
             }
             free((*h).flags.cast());
@@ -4932,15 +4956,15 @@ pub unsafe fn cram_free_block(b: *mut cram_block) {
 }
 /// original: cram_container_size (htslib/cram/cram_io.c:3947)
 /// MAXIMUM storage size needed for the container.
-pub unsafe fn cram_cram_io_c_3947_cram_container_size(c: *mut cram_container) -> c_int {
+pub unsafe fn cram_cram_io_c_3947_cram_container_size(c: *mut cram_container) -> i32 {
     let c = c.cast::<cram_container_layout>();
     55 + 5 * (*c).num_landmarks
 }
 /// original: cram_new_container (htslib/cram/cram_io.c:3639)
 /// Creates a new empty container for subsequent writing (write path).
 pub unsafe fn cram_cram_io_c_3639_cram_new_container(
-    nrec: c_int,
-    nslice: c_int,
+    nrec: i32,
+    nslice: i32,
 ) -> *mut cram_container {
     let c = Box::into_raw(Box::new(cram_container_layout {
         length: 0,
@@ -5037,7 +5061,7 @@ pub unsafe fn cram_cram_io_c_3639_cram_new_container(
 pub unsafe fn cram_cram_io_c_4143_cram_flush_container(
     fd: *mut cram_fd,
     c: *mut cram_container,
-) -> c_int {
+) -> i32 {
     if 0 != cram_cram_encode_c_1850_cram_encode_container(fd, c) {
         return -1;
     }
@@ -5047,7 +5071,7 @@ pub unsafe fn cram_cram_io_c_4143_cram_flush_container(
 //
 // Writes the empty-container EOF marker for CRAM v2+. v1 lacks the concept
 // and returns 0 (no-op). Byte-faithful translation.
-pub unsafe fn cram_cram_io_c_5474_cram_write_eof_block(fd: *mut cram_fd) -> c_int {
+pub unsafe fn cram_cram_io_c_5474_cram_write_eof_block(fd: *mut cram_fd) -> i32 {
     let fdl = fd.cast::<cram_fd_layout>();
     let major = (*fdl).version >> 8;
     if major >= 2 {
@@ -5121,7 +5145,7 @@ pub unsafe fn cram_cram_io_c_5474_cram_write_eof_block(fd: *mut cram_fd) -> c_in
 pub unsafe fn cram_cram_io_c_4089_cram_flush_container2(
     fd: *mut cram_fd,
     c: *mut cram_container,
-) -> c_int {
+) -> i32 {
     let fdl = fd.cast::<cram_fd_layout>();
     let cl = c.cast::<cram_container_layout>();
     let fp = (*fdl).fp;
@@ -5144,7 +5168,7 @@ pub unsafe fn cram_cram_io_c_4089_cram_flush_container2(
 
     let mut file_offset = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fp);
 
-    let mut i: c_int = 0;
+    let mut i: i32 = 0;
     while i < (*cl).curr_slice {
         let s = *(*cl).slices.offset(i as isize);
         let spos = file_offset - c_offset - hdr_size;
@@ -5154,7 +5178,7 @@ pub unsafe fn cram_cram_io_c_4089_cram_flush_container2(
         }
 
         let num_blocks = (*(*s).hdr).num_blocks;
-        let mut j: c_int = 0;
+        let mut j: i32 = 0;
         while j < num_blocks {
             let blk = *(*s).block.offset(j as isize);
             if 0 != cram_write_block(&mut *fdl, &mut *blk.cast::<cram_block_layout>()) {
@@ -5194,7 +5218,7 @@ pub unsafe fn cram_cram_io_c_4089_cram_flush_container2(
 pub unsafe fn cram_cram_io_c_4275_cram_flush_container_mt(
     fd: *mut cram_fd,
     c: *mut cram_container,
-) -> c_int {
+) -> i32 {
     // The metrics_lock / reset_metrics block (cram_io.c:4288-4294) only
     // matters across MT job boundaries; we skip it.
     cram_cram_io_c_4143_cram_flush_container(fd, c)
@@ -5205,9 +5229,9 @@ pub unsafe fn cram_cram_io_c_4275_cram_flush_container_mt(
 // itself. Byte-for-byte equivalent to the C original.
 pub unsafe fn cram_cram_io_c_3697_free_bam_list(
     bams: *mut *mut crate::htslib_rs::sam::bam1_t,
-    max_rec: c_int,
+    max_rec: i32,
 ) {
-    let mut i: c_int = 0;
+    let mut i: i32 = 0;
     while i < max_rec {
         crate::htslib_rs::sam::bam_destroy1(*bams.offset(i as isize));
         i += 1;
@@ -5310,7 +5334,7 @@ pub unsafe fn cram_cram_io_c_3788_cram_read_container(
     let vv = &*vv_ptr;
     let mut crc: u32 = 0;
     let mut rd: usize = 0;
-    let mut s: c_int;
+    let mut s: i32;
 
     if major == 1 {
         s = vv_decode32(vv, fd, &mut c2.length, &mut crc);
@@ -5439,7 +5463,7 @@ pub unsafe fn cram_cram_io_c_3788_cram_read_container(
         (*c).landmark =
             calloc((*c).num_landmarks as u64, std::mem::size_of::<i32>() as u64).cast::<i32>();
         if (*c).landmark.is_null() {
-            (*fdl).err = *__errno_location();
+            (*fdl).err = *libc::__errno_location();
             cram_cram_io_c_3705_cram_free_container(c.cast());
             return std::ptr::null_mut();
         }
@@ -5462,8 +5486,8 @@ pub unsafe fn cram_cram_io_c_3788_cram_read_container(
         if crc != (*c).crc32 {
             hts_log_cstr(
                 HTS_LOG_ERROR,
-                c"cram_read_container".as_ptr(),
-                c"Container header CRC32 failure".as_ptr(),
+                b"cram_read_container",
+                b"Container header CRC32 failure",
             );
             cram_cram_io_c_3705_cram_free_container(c.cast());
             return std::ptr::null_mut();
@@ -5592,7 +5616,7 @@ pub unsafe fn cram_cram_io_c_4421_cram_free_slice(s: *mut cram_slice) {
 /// Creates a new empty in-memory slice (write path).
 pub unsafe fn cram_cram_io_c_4506_cram_new_slice(
     type_: cram_content_type,
-    nrecs: c_int,
+    nrecs: i32,
 ) -> *mut cram_slice {
     let s = Box::into_raw(Box::new(cram_slice_layout {
         hdr: std::ptr::null_mut(),
@@ -5760,8 +5784,8 @@ pub unsafe fn cram_cram_io_c_4568_cram_read_slice(
         _ => {
             hts_log_cstr(
                 HTS_LOG_ERROR,
-                c"cram_read_slice".as_ptr(),
-                c"Unexpected block type in slice".as_ptr(),
+                b"cram_read_slice",
+                b"Unexpected block type in slice",
             );
             return std::ptr::null_mut();
         }
@@ -5770,8 +5794,8 @@ pub unsafe fn cram_cram_io_c_4568_cram_read_slice(
     if (*(*s).hdr).num_blocks < 1 {
         hts_log_cstr(
             HTS_LOG_ERROR,
-            c"cram_read_slice".as_ptr(),
-            c"Slice does not include any data blocks".as_ptr(),
+            b"cram_read_slice",
+            b"Slice does not include any data blocks",
         );
         return std::ptr::null_mut();
     }
@@ -5865,7 +5889,7 @@ pub unsafe fn cram_cram_io_c_4409_cram_free_slice_header(hdr: *mut cram_block_sl
     }
     free(hdr.cast());
 }
-pub fn cram_cram_io_c_2341_cram_block_method2str(m: c_int) -> *mut c_char {
+pub fn cram_cram_io_c_2341_cram_block_method2str(m: i32) -> *mut u8 {
     let s: &'static [u8] = match m {
         -1 => b"?\0",
         0 => b"RAW\0",
@@ -5900,9 +5924,9 @@ pub fn cram_cram_io_c_2341_cram_block_method2str(m: c_int) -> *mut c_char {
         31 => b"ARITH_PR193\0",
         _ => b"?\0",
     };
-    s.as_ptr().cast::<c_char>().cast_mut()
+    s.as_ptr().cast::<u8>().cast_mut()
 }
-pub fn cram_cram_io_c_2378_cram_content_type2str(t: cram_content_type) -> *mut c_char {
+pub fn cram_cram_io_c_2378_cram_content_type2str(t: cram_content_type) -> *mut u8 {
     let s: &'static [u8] = match t {
         0 => b"FILE_HEADER\0",
         1 => b"COMPRESSION_HEADER\0",
@@ -5912,21 +5936,21 @@ pub fn cram_cram_io_c_2378_cram_content_type2str(t: cram_content_type) -> *mut c
         5 => b"CORE\0",
         _ => b"?\0",
     };
-    s.as_ptr().cast::<c_char>().cast_mut()
+    s.as_ptr().cast::<u8>().cast_mut()
 }
-pub unsafe fn cram_cram_io_c_2873_is_directory(fn_: *mut c_char) -> c_int {
+pub unsafe fn cram_cram_io_c_2873_is_directory(fn_: *mut u8) -> i32 {
     let mut buf = std::mem::MaybeUninit::<libc::stat>::uninit();
-    if libc::stat(fn_, buf.as_mut_ptr()) != 0 {
+    if libc::stat(fn_.cast(), buf.as_mut_ptr()) != 0 {
         return 0;
     }
     let buf = buf.assume_init();
-    crate::htslib_rs::c_compat::stat_mode_matches(buf.st_mode, libc::S_IFMT, libc::S_IFDIR) as c_int
+    ((buf.st_mode & libc::S_IFMT) == libc::S_IFDIR) as i32
 }
 pub unsafe fn cram_cram_io_c_2884_expand_cache_path(
-    path: *mut c_char,
-    dir: *mut c_char,
-    fn_: *const c_char,
-) -> c_int {
+    path: *mut u8,
+    dir: *mut u8,
+    fn_: *const u8,
+) -> i32 {
     if path.is_null() || dir.is_null() || fn_.is_null() {
         return -1;
     }
@@ -5945,7 +5969,7 @@ pub unsafe fn cram_cram_io_c_2884_expand_cache_path(
     let Some(bytes) = expand_cache_path_bytes(
         dir_bytes,
         fn_bytes,
-        crate::htslib_rs::c_compat::PATH_MAX as usize,
+        libc::PATH_MAX as usize,
     ) else {
         return -1;
     };
@@ -6016,44 +6040,44 @@ fn expand_cache_path_bytes(dir: &[u8], mut file: &[u8], cap_with_nul: usize) -> 
         Some(out)
     }
 }
-pub unsafe fn cram_cram_io_c_2947_mkdir_prefix(path: *mut c_char, mode: c_int) {
-    let cp = libc::strrchr(path, b'/' as c_int);
+pub unsafe fn cram_cram_io_c_2947_mkdir_prefix(path: *mut u8, mode: i32) {
+    let cp = libc::strrchr(path.cast(), b'/' as i32);
     if cp.is_null() {
         return;
     }
 
     *cp = 0;
     if cram_cram_io_c_2873_is_directory(path) != 0 {
-        *cp = b'/' as c_char;
+        *cp = b'/' as i8;
         return;
     }
 
     #[cfg(windows)]
-    let mkdir_ret = libc::mkdir(path);
+    let mkdir_ret = libc::mkdir(path.cast());
     #[cfg(not(windows))]
-    let mkdir_ret = libc::mkdir(path, mode as libc::mode_t);
+    let mkdir_ret = libc::mkdir(path.cast(), mode as libc::mode_t);
 
     if mkdir_ret == 0 {
-        crate::htslib_rs::c_compat::chmod(path, mode);
-        *cp = b'/' as c_char;
+        libc::chmod(path.cast(), mode as libc::mode_t);
+        *cp = b'/' as i8;
         return;
     }
 
     cram_cram_io_c_2947_mkdir_prefix(path, mode);
     #[cfg(windows)]
-    libc::mkdir(path);
+    libc::mkdir(path.cast());
     #[cfg(not(windows))]
-    libc::mkdir(path, mode as libc::mode_t);
-    crate::htslib_rs::c_compat::chmod(path, mode);
-    *cp = b'/' as c_char;
+    libc::mkdir(path.cast(), mode as libc::mode_t);
+    libc::chmod(path.cast(), mode as libc::mode_t);
+    *cp = b'/' as i8;
 }
-pub unsafe fn cram_cram_io_c_3695_free_bam_list(bams: *mut *mut bam1_t, max_rec: c_int) {
+pub unsafe fn cram_cram_io_c_3695_free_bam_list(bams: *mut *mut bam1_t, max_rec: i32) {
     for i in 0..max_rec {
         bam_destroy1(*bams.add(i as usize));
     }
     free(bams.cast());
 }
-pub unsafe fn cram_cram_io_c_4850_full_path(out: *mut c_char, in_: *mut c_char) {
+pub unsafe fn cram_cram_io_c_4850_full_path(out: *mut u8, in_: *mut u8) {
     if out.is_null() || in_.is_null() {
         return;
     }
@@ -6062,7 +6086,7 @@ pub unsafe fn cram_cram_io_c_4850_full_path(out: *mut c_char, in_: *mut c_char) 
         in_l += 1;
     }
     let input = std::slice::from_raw_parts(in_.cast::<u8>(), in_l);
-    let path_max = crate::htslib_rs::c_compat::PATH_MAX as usize;
+    let path_max = libc::PATH_MAX as usize;
 
     let write_output = |bytes: &[u8]| {
         let n = bytes.len().min(path_max.saturating_sub(1));
@@ -6070,14 +6094,14 @@ pub unsafe fn cram_cram_io_c_4850_full_path(out: *mut c_char, in_: *mut c_char) 
         *out.add(n) = 0;
     };
 
-    if hisremote(in_) != 0 {
+    if hisremote(in_.cast()) != 0 {
         if in_l > path_max {
             let msg = std::ffi::CString::new(format!(
                 "Reference path is longer than {}",
-                crate::htslib_rs::c_compat::PATH_MAX
+                libc::PATH_MAX
             ))
             .unwrap();
-            hts_log_cstr(HTS_LOG_ERROR, c"full_path".as_ptr(), msg.as_ptr());
+            hts_log_cstr(HTS_LOG_ERROR, b"full_path", msg.as_bytes());
             return;
         }
         write_output(input);
@@ -6092,9 +6116,7 @@ pub unsafe fn cram_cram_io_c_4850_full_path(out: *mut c_char, in_: *mut c_char) 
     if input.first().copied() == Some(b'/') || is_windows_abs {
         write_output(input);
     } else {
-        if crate::htslib_rs::c_compat::getcwd(out, crate::htslib_rs::c_compat::PATH_MAX as usize)
-            .is_null()
-        {
+        if libc::getcwd(out.cast(), libc::PATH_MAX as usize).is_null() {
             write_output(input);
             return;
         }

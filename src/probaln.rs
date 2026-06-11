@@ -1,12 +1,10 @@
-use std::ffi::c_int;
-
 // original: probaln_par_t (htslib/htslib/hts.h:1435)
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct probaln_par_t {
     pub d: f32,
     pub e: f32,
-    pub bw: c_int,
+    pub bw: i32,
 }
 
 const EI: f64 = 0.25;
@@ -32,12 +30,6 @@ static G_QUAL2PROB: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(|
     t
 });
 
-fn set_errno(errno: c_int) {
-    unsafe {
-        *crate::htslib_rs::c_compat::__errno_location() = errno;
-    }
-}
-
 fn dna_to_nt4(seq: &[u8]) -> Vec<u8> {
     let mut conv = [4u8; 256];
     conv[b'a' as usize] = 0;
@@ -52,7 +44,7 @@ fn dna_to_nt4(seq: &[u8]) -> Vec<u8> {
     seq.iter().map(|&base| conv[base as usize]).collect()
 }
 
-fn probaln_main_score(ref_arg: &[u8], query_arg: &[u8], q: c_int, par: &probaln_par_t) -> c_int {
+fn probaln_main_score(ref_arg: &[u8], query_arg: &[u8], q: i32, par: &probaln_par_t) -> i32 {
     let iqual = vec![q as u8; query_arg.len()];
     let ref_seq = dna_to_nt4(ref_arg);
     let query_seq = dna_to_nt4(query_arg);
@@ -71,26 +63,25 @@ pub fn probaln_glocal(
     query: &[u8],
     iqual: Option<&[u8]>,
     c: &probaln_par_t,
-    mut outputs: Option<(&mut [c_int], &mut [u8])>,
-) -> c_int {
+    mut outputs: Option<(&mut [i32], &mut [u8])>,
+) -> i32 {
     let mut m = [0.0_f64; 9];
-    let mut i: c_int;
-    let mut k: c_int;
-    let Pr: c_int;
-    let l_ref = ref_.len() as c_int;
-    let l_query = query.len() as c_int;
+    let mut i: i32;
+    let mut k: i32;
+    let Pr: i32;
+    let l_ref = ref_.len() as i32;
+    let l_query = query.len() as i32;
 
     macro_rules! set_u {
         ($b:expr, $i:expr, $k:expr) => {{
-            let mut x: c_int = ($i) - ($b);
+            let mut x: i32 = ($i) - ($b);
             x = if x > 0 { x } else { 0 };
             (($k) - x + 1) * 3
         }};
     }
 
-    if !(0..c_int::MAX as usize - 2).contains(&query.len()) || ref_.len() > c_int::MAX as usize {
-        set_errno(libc::EINVAL);
-        return c_int::MIN;
+    if !(0..i32::MAX as usize - 2).contains(&query.len()) || ref_.len() > i32::MAX as usize {
+        return i32::MIN;
     }
     if l_ref == 0 || l_query == 0 {
         return 0;
@@ -117,27 +108,23 @@ pub fn probaln_glocal(
     let f_len = match rows.checked_mul(i_dim) {
         Some(n) => n,
         None => {
-            set_errno(libc::ENOMEM);
-            return c_int::MIN;
+            return i32::MIN;
         }
     };
     if usize::MAX / ((l_query as usize) + 1) / i_dim < std::mem::size_of::<f64>() {
-        set_errno(libc::ENOMEM);
-        return c_int::MIN;
+        return i32::MIN;
     }
 
     let mut f = Vec::new();
     if f.try_reserve_exact(f_len).is_err() {
-        set_errno(libc::ENOMEM);
-        return c_int::MIN;
+        return i32::MIN;
     }
     f.resize(f_len, 0.0_f64);
 
     let mut b = Vec::new();
     if is_backward {
         if b.try_reserve_exact(f_len).is_err() {
-            set_errno(libc::ENOMEM);
-            return c_int::MIN;
+            return i32::MIN;
         }
         b.resize(f_len, 0.0_f64);
     }
@@ -145,15 +132,13 @@ pub fn probaln_glocal(
     let s_len = (l_query as usize) + 2;
     let mut s = Vec::new();
     if s.try_reserve_exact(s_len).is_err() {
-        set_errno(libc::ENOMEM);
-        return c_int::MIN;
+        return i32::MIN;
     }
     s.resize(s_len, 0.0_f64);
 
     let mut qual = Vec::new();
     if qual.try_reserve_exact(l_query as usize).is_err() {
-        set_errno(libc::ENOMEM);
-        return c_int::MIN;
+        return i32::MIN;
     }
     qual.resize(l_query as usize, 0.0_f32);
 
@@ -292,7 +277,7 @@ pub fn probaln_glocal(
             i += 1;
         }
         Pr1 += -4.343 * (p * l_ref as f64 * l_query as f64).ln();
-        Pr = (Pr1 + 0.499) as c_int;
+        Pr = (Pr1 + 0.499) as i32;
         if !is_backward {
             return Pr;
         }
@@ -411,7 +396,7 @@ pub fn probaln_glocal(
             let uu = u as usize;
             let z1 = mm * f[fi + uu] * b[bi + uu];
             let z2 = mm * f[fi + uu + 1] * b[bi + uu + 1];
-            let which = (z2 > z1) as c_int;
+            let which = (z2 > z1) as i32;
             let zm = if which != 0 { z2 } else { z1 };
             if zm > max {
                 max = zm;
@@ -425,7 +410,7 @@ pub fn probaln_glocal(
         sum *= s[i as usize];
         if let Some((state, q)) = outputs.as_mut() {
             state[(i - 1) as usize] = max_k;
-            k = (-4.343 * (1.0 - max).ln() + 0.499) as c_int;
+            k = (-4.343 * (1.0 - max).ln() + 0.499) as i32;
             q[(i - 1) as usize] = if k > 100 { 99 } else { k as u8 };
         }
         let _ = sum;
@@ -439,7 +424,7 @@ pub fn probaln_glocal(
 mod tests {
     use super::*;
 
-    type ProbalnCase<'a> = (&'a [u8], &'a [u8], &'a [u8], c_int);
+    type ProbalnCase<'a> = (&'a [u8], &'a [u8], &'a [u8], i32);
 
     fn encode_bases(seq: &[u8]) -> Vec<u8> {
         seq.iter()
@@ -487,9 +472,9 @@ mod tests {
                     probaln_glocal(ref_.as_slice(), query.as_slice(), Some(qual), &par, None);
                 let c_score = hts_sys::probaln_glocal(
                     ref_.as_ptr(),
-                    ref_.len() as c_int,
+                    ref_.len() as i32,
                     query.as_ptr(),
-                    query.len() as c_int,
+                    query.len() as i32,
                     qual.as_ptr(),
                     (&par as *const probaln_par_t).cast(),
                     std::ptr::null_mut(),
@@ -525,7 +510,7 @@ mod tests {
         // The overflow guard now lives in probaln_glocal itself: an
         // implausibly long query length trips the EINVAL containment check.
         // We can only assert the guard's existence indirectly, since a real
-        // slice of c_int::MAX-2 bytes is not allocatable here. Exercise the
+        // slice of i32::MAX-2 bytes is not allocatable here. Exercise the
         // boundary check on a representable empty input instead.
         let par = probaln_par_t {
             d: 0.001,
@@ -581,7 +566,7 @@ mod tests {
         let par_wide = probaln_par_t {
             d: 0.001,
             e: 0.1,
-            bw: (ref_.len() - query.len()) as c_int,
+            bw: (ref_.len() - query.len()) as i32,
         };
 
         assert_eq!(
@@ -682,9 +667,9 @@ mod tests {
             );
             let c_score = hts_sys::probaln_glocal(
                 ref_.as_ptr(),
-                ref_.len() as c_int,
+                ref_.len() as i32,
                 query.as_ptr(),
-                query.len() as c_int,
+                query.len() as i32,
                 qual.as_ptr(),
                 (&par as *const probaln_par_t).cast(),
                 c_state.as_mut_ptr(),
@@ -710,7 +695,7 @@ mod tests {
 
         assert_ne!(
             probaln_glocal(ref_.as_slice(), query.as_slice(), Some(&qual), &par, None,),
-            c_int::MIN
+            i32::MIN
         );
     }
 
@@ -735,7 +720,7 @@ mod tests {
             Some((state.as_mut_slice(), q.as_mut_slice())),
         );
 
-        assert_ne!(score, c_int::MIN);
+        assert_ne!(score, i32::MIN);
         assert!(state.iter().all(|&s| s >= 0));
         assert!(q.iter().all(|&posterior| posterior <= 99));
     }
@@ -764,9 +749,9 @@ mod tests {
             );
             let c_score = hts_sys::probaln_glocal(
                 ref_.as_ptr(),
-                ref_.len() as c_int,
+                ref_.len() as i32,
                 query.as_ptr(),
-                query.len() as c_int,
+                query.len() as i32,
                 qual.as_ptr(),
                 (&par as *const probaln_par_t).cast(),
                 c_state.as_mut_ptr(),
@@ -804,9 +789,9 @@ mod tests {
             );
             let c_score = hts_sys::probaln_glocal(
                 ref_.as_ptr(),
-                ref_.len() as c_int,
+                ref_.len() as i32,
                 query.as_ptr(),
-                query.len() as c_int,
+                query.len() as i32,
                 qual.as_ptr(),
                 (&par as *const probaln_par_t).cast(),
                 c_state.as_mut_ptr(),
@@ -826,18 +811,17 @@ pub fn probaln_c_77_probaln_glocal(
     query: &[u8],
     iqual: Option<&[u8]>,
     c: &probaln_par_t,
-    state: Option<&mut [c_int]>,
+    state: Option<&mut [i32]>,
     q: Option<&mut [u8]>,
-) -> c_int {
+) -> i32 {
     let outputs = state.zip(q);
     probaln_glocal(ref_, query, iqual, c, outputs)
 }
 
 // original: main (htslib/probaln.c:438)
 #[cfg(unix)]
-pub fn probaln_c_438_main(args: &[Vec<u8>]) -> c_int {
+pub fn probaln_c_438_main(args: &[Vec<u8>]) -> i32 {
     let Some(prog) = args.first() else {
-        set_errno(libc::EINVAL);
         return 1;
     };
     let mut par = probaln_par_t {
@@ -845,8 +829,8 @@ pub fn probaln_c_438_main(args: &[Vec<u8>]) -> c_int {
         e: 0.1,
         bw: 10,
     };
-    let mut q: c_int = 30;
-    let mut b: c_int = 10;
+    let mut q: i32 = 30;
+    let mut b: i32 = 10;
 
     // Parse `-b <int>` / `-q <int>` option flags, mirroring getopt("b:q:").
     let mut optind = 1usize;
@@ -875,7 +859,7 @@ pub fn probaln_c_438_main(args: &[Vec<u8>]) -> c_int {
                     keep.then_some(ch)
                 })
                 .collect();
-            trimmed.parse::<c_int>().unwrap_or(0)
+            trimmed.parse::<i32>().unwrap_or(0)
         };
         if flag == b'b' {
             b = parsed;

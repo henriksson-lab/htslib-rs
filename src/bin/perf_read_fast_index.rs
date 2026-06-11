@@ -11,7 +11,7 @@ fn main() {
     let status = unsafe {
         htslib_rs::samples::read_fast_index::samples_read_fast_index_c_53_main(
             argv.len() as i32,
-            argv.as_mut_ptr(),
+            argv.as_mut_ptr().cast(),
         )
     };
     std::process::exit(status);

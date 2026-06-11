@@ -1,7 +1,6 @@
 // Functions translated from htslib/header.c.
 // Extracted from src/sam.rs.
 
-use std::ffi::{c_char, c_int, c_void, CStr};
 use std::ptr::NonNull;
 
 use crate::htslib_rs::hts::{hts_pos_t, kputc, kputsn, ks_free, ks_release, kstring_t};
@@ -16,7 +15,7 @@ use crate::htslib_rs::sam::*;
 // hrecs). The previous text-append fallback was an intentional divergence from
 // C that produced verbatim insertion order; closing it brings serialization
 // into line with htslib's canonical type-grouped output.
-pub unsafe fn sam_hdr_add_lines(h: &mut sam_hdr_t, lines: &[u8]) -> c_int {
+pub unsafe fn sam_hdr_add_lines(h: &mut sam_hdr_t, lines: &[u8]) -> i32 {
     if lines.is_empty() {
         return 0;
     }
@@ -24,7 +23,7 @@ pub unsafe fn sam_hdr_add_lines(h: &mut sam_hdr_t, lines: &[u8]) -> c_int {
         return -1;
     }
     let hrecs = h.hrecs;
-    if sam_hrecs_parse_lines(hrecs, lines.as_ptr().cast(), lines.len()) != 0 {
+    if sam_hrecs_parse_lines(hrecs, lines.as_ptr(), lines.len()) != 0 {
         return -1;
     }
     // parse_single_line only appends to the global list; refresh ref_/rg_/pg_
@@ -50,32 +49,29 @@ pub unsafe fn sam_hdr_add_lines(h: &mut sam_hdr_t, lines: &[u8]) -> c_int {
 // on the previous text-mode rejection of bad inputs still see -1.
 pub unsafe fn sam_hdr_add_line(
     h: &mut sam_hdr_t,
-    type_: &CStr,
-    tags: &[(*const c_char, *const c_char)],
-) -> c_int {
-    let type_bytes = type_.to_bytes();
-    if type_bytes.len() != 2 {
+    type_: &[u8],
+    tags: &[(Option<&[u8]>, Option<&[u8]>)],
+) -> i32 {
+    if type_.len() != 2 {
         return -1;
     }
 
-    if type_bytes == b"CO" {
-        if tags.len() != 1 || tags[0].0.is_null() || !tags[0].1.is_null() {
+    if type_ == b"CO" {
+        if tags.len() != 1 || tags[0].0.is_none() || tags[0].1.is_some() {
             return -1;
         }
-        let comment = CStr::from_ptr(tags[0].0).to_bytes();
+        let comment = tags[0].0.unwrap();
         if comment.contains(&b'\n') {
             return -1;
         }
     } else {
-        if !matches!(type_bytes, b"HD" | b"SQ" | b"RG" | b"PG") || tags.is_empty() {
+        if !matches!(type_, b"HD" | b"SQ" | b"RG" | b"PG") || tags.is_empty() {
             return -1;
         }
         for &(key, value) in tags {
-            if key.is_null() || value.is_null() {
+            let (Some(key), Some(value)) = (key, value) else {
                 return -1;
-            }
-            let key = CStr::from_ptr(key).to_bytes();
-            let value = CStr::from_ptr(value).to_bytes();
+            };
             if key.is_empty()
                 || key.contains(&b'\t')
                 || key.contains(&b':')
@@ -91,16 +87,40 @@ pub unsafe fn sam_hdr_add_line(
     if h.hrecs.is_null() && sam_hdr_fill_hrecs(h) < 0 {
         return -1;
     }
-    sam_hdr_add_line_hrecs(h, type_.as_ptr(), tags)
+    // Adapt to the pointer-based callee: build NUL-terminated owned copies of
+    // type_ and each tag key/value (callees read them via CStr::from_ptr), then
+    // a parallel pointer slice. Backing buffers are collected first so that no
+    // reallocation invalidates the pointers taken afterwards.
+    let mut type_c = type_.to_vec();
+    type_c.push(0);
+    let backing: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> = tags
+        .iter()
+        .map(|&(k, v)| {
+            (
+                k.map(|b| [b, &[0u8]].concat()),
+                v.map(|b| [b, &[0u8]].concat()),
+            )
+        })
+        .collect();
+    let ptr_tags: Vec<(*const u8, *const u8)> = backing
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
+                v.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
+            )
+        })
+        .collect();
+    sam_hdr_add_line_hrecs(h, type_c.as_ptr(), &ptr_tags)
 }
 
 // original: sam_hdr_update_line (htslib/header.c:1909)
 pub unsafe fn sam_hdr_update_line(
     h: &mut sam_hdr_t,
-    type_: &CStr,
-    id: Option<(&CStr, &CStr)>,
-    tags: &[(*const c_char, *const c_char)],
-) -> c_int {
+    type_: &[u8],
+    id: Option<(&[u8], &[u8])>,
+    tags: &[(Option<&[u8]>, Option<&[u8]>)],
+) -> i32 {
     if h.hrecs.is_null() && sam_hdr_fill_hrecs(h) < 0 {
         return -1;
     }
@@ -114,24 +134,45 @@ pub unsafe fn sam_hdr_update_line(
     };
     let ty_ref = ty.as_mut();
 
-    match check_for_name_update(hrecs, ty_ref, tags) {
+    // Adapt to the pointer-based callees: NUL-terminated owned backing buffers
+    // for each tag key/value, then a parallel pointer slice.
+    let backing: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> = tags
+        .iter()
+        .map(|&(k, v)| {
+            (
+                k.map(|b| [b, &[0u8]].concat()),
+                v.map(|b| [b, &[0u8]].concat()),
+            )
+        })
+        .collect();
+    let ptr_tags: Vec<(*const u8, *const u8)> = backing
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
+                v.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
+            )
+        })
+        .collect();
+
+    match check_for_name_update(hrecs, ty_ref, &ptr_tags) {
         SamHrecNameUpdate::Clash => return -1,
         SamHrecNameUpdate::Changed
-            if header_h_58_TYPEKEY(type_.as_ptr()) == header_h_58_TYPEKEY(c"PG".as_ptr()) =>
+            if header_h_58_TYPEKEY(type_.as_ptr()) == header_h_58_TYPEKEY(b"PG".as_ptr()) =>
         {
             return -1;
         }
         _ => {}
     }
 
-    if sam_hrecs_update_pairs(hrecs, ty_ref, tags) < 0 {
+    if sam_hrecs_update_pairs(hrecs, ty_ref, &ptr_tags) < 0 {
         return -1;
     }
 
     if sam_hrecs_update_hashes(hrecs) < 0 {
         return -1;
     }
-    if ty_ref.type_ == header_h_58_TYPEKEY(c"SQ".as_ptr()) && rebuild_target_arrays(h) < 0 {
+    if ty_ref.type_ == header_h_58_TYPEKEY(b"SQ".as_ptr()) && rebuild_target_arrays(h) < 0 {
         return -1;
     }
     0
@@ -139,11 +180,11 @@ pub unsafe fn sam_hdr_update_line(
 
 pub unsafe fn sam_hdr_find_line_id(
     h: &mut sam_hdr_t,
-    type_: &CStr,
-    id_key: &CStr,
-    id_val: &CStr,
+    type_: &[u8],
+    id_key: &[u8],
+    id_val: &[u8],
     ks: &mut kstring_t,
-) -> c_int {
+) -> i32 {
     // hrecs-backed headers: sync the serialized text from hrecs, then reuse the
     // text-backed lookup below. We must not delegate to hts_sys: the C library
     // cannot index a Rust-built hrecs hash table, and for a header with no
@@ -153,8 +194,6 @@ pub unsafe fn sam_hdr_find_line_id(
         return -2;
     }
 
-    let id_key = id_key.to_bytes();
-    let id_val = id_val.to_bytes();
     let Some(line) = sam_hdr_text_find_line_id(h, type_.as_ptr(), id_key, id_val) else {
         return -1;
     };
@@ -167,10 +206,10 @@ pub unsafe fn sam_hdr_find_line_id(
 
 pub unsafe fn sam_hdr_find_line_pos(
     h: &mut sam_hdr_t,
-    type_: &CStr,
-    pos: c_int,
+    type_: &[u8],
+    pos: i32,
     ks: &mut kstring_t,
-) -> c_int {
+) -> i32 {
     // hrecs-backed: sync text from hrecs, then use the text lookup (see
     // sam_hdr_find_line_id for why we do not delegate to hts_sys).
     if !h.hrecs.is_null() && sam_hdr_rebuild(h) < 0 {
@@ -189,34 +228,42 @@ pub unsafe fn sam_hdr_find_line_pos(
 
 pub unsafe fn sam_hdr_remove_line_id(
     h: &mut sam_hdr_t,
-    type_: &CStr,
-    id: Option<(&CStr, &CStr)>,
-) -> c_int {
-    let type_ptr = type_.as_ptr();
+    type_: &[u8],
+    id: Option<(&[u8], &[u8])>,
+) -> i32 {
     if !h.hrecs.is_null() {
-        let (id_key, id_value) = id
-            .map(|(key, value)| (key.as_ptr(), value.as_ptr()))
-            .unwrap_or((std::ptr::null(), std::ptr::null()));
-        return header_c_1784_sam_hdr_remove_line_id_hrecs(h, type_ptr, id_key, id_value);
+        // Adapt to the pointer-based callee: NUL-terminate type_ and the id
+        // key/value (callee reads them via CStr::from_ptr).
+        let type_c = [type_, &[0u8]].concat();
+        let (key_c, value_c) = match id {
+            Some((key, value)) => (
+                Some([key, &[0u8]].concat()),
+                Some([value, &[0u8]].concat()),
+            ),
+            None => (None, None),
+        };
+        return header_c_1784_sam_hdr_remove_line_id_hrecs(
+            h,
+            type_c.as_ptr(),
+            key_c.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
+            value_c.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
+        );
     }
-    if type_.to_bytes() == b"PG" {
+    if type_ == b"PG" {
         return -1;
     }
     let Some((id_key, id_value)) = id else {
         return -1;
     };
-    if h.text.is_null() {
+    if h.text.is_null() || h.l_text == 0 {
         return 0;
     }
 
-    let type_bytes = type_.to_bytes();
-    if type_bytes.len() < 2 {
+    if type_.len() < 2 {
         return -1;
     }
-    let type0 = type_bytes[0];
-    let type1 = type_bytes[1];
-    let id_key = id_key.to_bytes();
-    let id_value = id_value.to_bytes();
+    let type0 = type_[0];
+    let type1 = type_[1];
     sam_hdr_text_remove_line(h, type0, type1, 0, |line, _seen| {
         sam_hdr_text_find_tag_value(line, id_key) == Some(id_value)
     })
@@ -224,58 +271,65 @@ pub unsafe fn sam_hdr_remove_line_id(
 
 pub unsafe fn sam_hdr_remove_line_pos(
     h: &mut sam_hdr_t,
-    type_: &CStr,
-    position: c_int,
-) -> c_int {
+    type_: &[u8],
+    position: i32,
+) -> i32 {
     if position < 0 {
         return -1;
     }
-    let type_ptr = type_.as_ptr();
     if !h.hrecs.is_null() {
-        return header_c_1823_sam_hdr_remove_line_pos_hrecs(h, type_ptr, position);
+        let type_c = [type_, &[0u8]].concat();
+        return header_c_1823_sam_hdr_remove_line_pos_hrecs(h, type_c.as_ptr(), position);
     }
-    if type_.to_bytes() == b"PG" {
+    if type_ == b"PG" {
         return -1;
     }
-    if h.text.is_null() {
+    if h.text.is_null() || h.l_text == 0 {
         return -1;
     }
 
-    let type_bytes = type_.to_bytes();
-    if type_bytes.len() < 2 {
+    if type_.len() < 2 {
         return -1;
     }
-    let type0 = type_bytes[0];
-    let type1 = type_bytes[1];
+    let type0 = type_[0];
+    let type1 = type_[1];
     sam_hdr_text_remove_line(h, type0, type1, -1, |_line, seen| seen == position)
 }
 
 pub unsafe fn sam_hdr_remove_except(
     h: &mut sam_hdr_t,
-    type_: &CStr,
-    id: Option<(&CStr, &CStr)>,
-) -> c_int {
-    let type_ptr = type_.as_ptr();
+    type_: &[u8],
+    id: Option<(&[u8], &[u8])>,
+) -> i32 {
     if !h.hrecs.is_null() {
-        let (id_key, id_value) = id
-            .map(|(key, value)| (key.as_ptr(), value.as_ptr()))
-            .unwrap_or((std::ptr::null(), std::ptr::null()));
-        return header_c_2015_sam_hdr_remove_except_hrecs(h, type_ptr, id_key, id_value);
+        let type_c = [type_, &[0u8]].concat();
+        let (key_c, value_c) = match id {
+            Some((key, value)) => (
+                Some([key, &[0u8]].concat()),
+                Some([value, &[0u8]].concat()),
+            ),
+            None => (None, None),
+        };
+        return header_c_2015_sam_hdr_remove_except_hrecs(
+            h,
+            type_c.as_ptr(),
+            key_c.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
+            value_c.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
+        );
     }
-    let type_bytes = type_.to_bytes();
-    if type_bytes.len() < 2 {
+    if type_.len() < 2 {
         return -1;
     }
-    let type0 = type_bytes[0];
-    let type1 = type_bytes[1];
+    let type0 = type_[0];
+    let type1 = type_[1];
     if (type0 == b'P' && type1 == b'G') || (type0 == b'C' && type1 == b'O') {
         return -1;
     }
-    if h.text.is_null() {
+    if h.text.is_null() || h.l_text == 0 {
         return 0;
     }
 
-    let keep_id = id.map(|(key, value)| (key.to_bytes(), value.to_bytes()));
+    let keep_id = id;
     let mut kept_exception = false;
     sam_hdr_text_remove_line(h, type0, type1, 0, |line, _seen| {
         if let Some((key, value)) = keep_id {
@@ -290,30 +344,30 @@ pub unsafe fn sam_hdr_remove_except(
 
 pub unsafe fn sam_hdr_remove_lines(
     h: &mut sam_hdr_t,
-    type_: &CStr,
-    id: Option<&CStr>,
-    rh: Option<NonNull<c_void>>,
-) -> c_int {
-    let type_ptr = type_.as_ptr();
+    type_: &[u8],
+    id: Option<&[u8]>,
+    rh: Option<NonNull<()>>,
+) -> i32 {
     if !h.hrecs.is_null() {
+        let type_c = [type_, &[0u8]].concat();
+        let id_c = id.map(|b| [b, &[0u8]].concat());
         return header_c_2071_sam_hdr_remove_lines_hrecs(
             h,
-            type_ptr,
-            id.map_or(std::ptr::null(), CStr::as_ptr),
+            type_c.as_ptr(),
+            id_c.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
             rh.map_or(std::ptr::null_mut(), NonNull::as_ptr),
         );
     }
-    if h.text.is_null() {
+    if h.text.is_null() || h.l_text == 0 {
         return 0;
     }
 
-    let type_bytes = type_.to_bytes();
-    if type_bytes.len() < 2 {
+    if type_.len() < 2 {
         return -1;
     }
-    let type0 = type_bytes[0];
-    let type1 = type_bytes[1];
-    let id_key = id.map(CStr::to_bytes);
+    let type0 = type_[0];
+    let type1 = type_[1];
+    let id_key = id;
     sam_hdr_text_remove_line(h, type0, type1, 0, |line, _seen| {
         let Some(key) = id_key else {
             return true;
@@ -322,18 +376,15 @@ pub unsafe fn sam_hdr_remove_lines(
             let Some(rh) = rh else {
                 return false;
             };
-            let mut nul = Vec::with_capacity(value.len() + 1);
-            nul.extend_from_slice(value);
-            nul.push(0);
-            khash_str2int_has_key(rh.as_ptr(), nul.as_ptr().cast()) != 0
+            let value_c = [value, &[0u8]].concat();
+            khash_str2int_has_key(rh.as_ptr(), value_c.as_ptr()) != 0
         });
         !keep
     })
 }
 
-pub unsafe fn sam_hdr_count_lines(h: &mut sam_hdr_t, type_: &CStr) -> c_int {
-    let type_bytes = type_.to_bytes();
-    if type_bytes.len() < 2 {
+pub unsafe fn sam_hdr_count_lines(h: &mut sam_hdr_t, type_: &[u8]) -> i32 {
+    if type_.len() < 2 {
         return -1;
     }
     // hrecs-backed: sync text from hrecs, then count in the text (see
@@ -341,13 +392,13 @@ pub unsafe fn sam_hdr_count_lines(h: &mut sam_hdr_t, type_: &CStr) -> c_int {
     if !h.hrecs.is_null() && sam_hdr_rebuild(h) < 0 {
         return -1;
     }
-    if h.text.is_null() {
+    if h.text.is_null() || h.l_text == 0 {
         return 0;
     }
 
-    let type0 = type_bytes[0];
-    let type1 = type_bytes[1];
-    let text = std::slice::from_raw_parts(h.text.cast::<u8>(), h.l_text);
+    let type0 = type_[0];
+    let type1 = type_[1];
+    let text = std::slice::from_raw_parts(h.text, h.l_text);
     let mut count = 0;
     let mut start = 0usize;
     while start < text.len() {
@@ -372,15 +423,13 @@ pub unsafe fn sam_hdr_count_lines(h: &mut sam_hdr_t, type_: &CStr) -> c_int {
 // callers see the same -1 they used to get from the dropped text-mode path.
 pub unsafe fn sam_hdr_add_pg(
     h: &mut sam_hdr_t,
-    name: &CStr,
-    tags: &[(*const c_char, *const c_char)],
-) -> c_int {
+    name: &[u8],
+    tags: &[(Option<&[u8]>, Option<&[u8]>)],
+) -> i32 {
     for &(key, value) in tags {
-        if key.is_null() || value.is_null() {
+        let (Some(key_b), Some(value_b)) = (key, value) else {
             return -1;
-        }
-        let key_b = CStr::from_ptr(key).to_bytes();
-        let value_b = CStr::from_ptr(value).to_bytes();
+        };
         if key_b.is_empty()
             || key_b.contains(&b'\t')
             || key_b.contains(&b':')
@@ -393,12 +442,33 @@ pub unsafe fn sam_hdr_add_pg(
     if h.hrecs.is_null() && sam_hdr_fill_hrecs(h) < 0 {
         return -1;
     }
-    sam_hdr_add_pg_hrecs(h, name.as_ptr(), tags)
+    // Adapt to the pointer-based callee: NUL-terminate name and each tag
+    // key/value, then build a parallel pointer slice. Backing buffers are
+    // collected first so reallocation cannot invalidate the pointers.
+    let name_c = [name, &[0u8]].concat();
+    let backing: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> = tags
+        .iter()
+        .map(|&(k, v)| {
+            (
+                k.map(|b| [b, &[0u8]].concat()),
+                v.map(|b| [b, &[0u8]].concat()),
+            )
+        })
+        .collect();
+    let ptr_tags: Vec<(*const u8, *const u8)> = backing
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
+                v.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
+            )
+        })
+        .collect();
+    sam_hdr_add_pg_hrecs(h, name_c.as_ptr(), &ptr_tags)
 }
 
-pub unsafe fn sam_hdr_line_index(bh: &mut sam_hdr_t, type_: &CStr, key: &CStr) -> c_int {
-    let type_bytes = type_.to_bytes();
-    if type_bytes.len() < 2 {
+pub unsafe fn sam_hdr_line_index(bh: &mut sam_hdr_t, type_: &[u8], key: &[u8]) -> i32 {
+    if type_.len() < 2 {
         return -1;
     }
     // hrecs-backed: sync text from hrecs, then index in the text (see
@@ -406,17 +476,17 @@ pub unsafe fn sam_hdr_line_index(bh: &mut sam_hdr_t, type_: &CStr, key: &CStr) -
     if !bh.hrecs.is_null() && sam_hdr_rebuild(bh) < 0 {
         return -1;
     }
-    if bh.text.is_null() {
+    if bh.text.is_null() || bh.l_text == 0 {
         return -1;
     }
 
     let Some(name_key) = sam_hdr_text_name_key_for_type(type_.as_ptr()) else {
         return -1;
     };
-    let needle = key.to_bytes();
-    let type0 = type_bytes[0];
-    let type1 = type_bytes[1];
-    let text = std::slice::from_raw_parts(bh.text.cast::<u8>(), bh.l_text);
+    let needle = key;
+    let type0 = type_[0];
+    let type1 = type_[1];
+    let text = std::slice::from_raw_parts(bh.text, bh.l_text);
     let mut seen = 0;
     let mut start = 0usize;
     while start < text.len() {
@@ -441,14 +511,13 @@ pub unsafe fn sam_hdr_line_index(bh: &mut sam_hdr_t, type_: &CStr, key: &CStr) -
 
 pub unsafe fn sam_hdr_line_name(
     bh: &mut sam_hdr_t,
-    type_: &CStr,
-    pos: c_int,
-) -> *const c_char {
+    type_: &[u8],
+    pos: i32,
+) -> *const u8 {
     if pos < 0 {
         return std::ptr::null();
     }
-    let type_bytes = type_.to_bytes();
-    if type_bytes.len() < 2 {
+    if type_.len() < 2 {
         return std::ptr::null();
     }
     // hrecs-backed: sync text from hrecs, then resolve from the text/targets
@@ -456,8 +525,8 @@ pub unsafe fn sam_hdr_line_name(
     if !bh.hrecs.is_null() && sam_hdr_rebuild(bh) < 0 {
         return std::ptr::null();
     }
-    if type_bytes == b"SQ" && pos < bh.n_targets {
-        return *bh.target_name.add(pos as usize);
+    if type_ == b"SQ" && pos < bh.n_targets {
+        return (*bh.target_name.add(pos as usize)).cast::<u8>().cast_const();
     }
 
     let Some(name_key) = sam_hdr_text_name_key_for_type(type_.as_ptr()) else {
@@ -484,11 +553,11 @@ pub unsafe fn sam_hdr_line_name(
 
 pub unsafe fn sam_hdr_find_tag_id(
     h: &mut sam_hdr_t,
-    type_: &CStr,
-    id: Option<(&CStr, &CStr)>,
-    key: &CStr,
+    type_: &[u8],
+    id: Option<(&[u8], &[u8])>,
+    key: &[u8],
     ks: &mut kstring_t,
-) -> c_int {
+) -> i32 {
     // hrecs-backed: sync text from hrecs, then use the text lookup (see
     // sam_hdr_find_line_id for why we do not delegate to hts_sys).
     if !h.hrecs.is_null() && sam_hdr_rebuild(h) < 0 {
@@ -496,14 +565,13 @@ pub unsafe fn sam_hdr_find_tag_id(
     }
 
     let line = if let Some((id_key, id_value)) = id {
-        sam_hdr_text_find_line_id(h, type_.as_ptr(), id_key.to_bytes(), id_value.to_bytes())
+        sam_hdr_text_find_line_id(h, type_.as_ptr(), id_key, id_value)
     } else {
         sam_hdr_text_find_line_pos(h, type_.as_ptr(), 0)
     };
     let Some(line) = line else {
         return -1;
     };
-    let key = key.to_bytes();
     let Some(value) = sam_hdr_text_find_tag_value(line, key) else {
         return -1;
     };
@@ -516,11 +584,11 @@ pub unsafe fn sam_hdr_find_tag_id(
 
 pub unsafe fn sam_hdr_find_tag_pos(
     h: &mut sam_hdr_t,
-    type_: &CStr,
-    pos: c_int,
-    key: &CStr,
+    type_: &[u8],
+    pos: i32,
+    key: &[u8],
     ks: &mut kstring_t,
-) -> c_int {
+) -> i32 {
     // hrecs-backed: sync text from hrecs, then use the text lookup (see
     // sam_hdr_find_line_id for why we do not delegate to hts_sys).
     if !h.hrecs.is_null() && sam_hdr_rebuild(h) < 0 {
@@ -530,7 +598,6 @@ pub unsafe fn sam_hdr_find_tag_pos(
     let Some(line) = sam_hdr_text_find_line_pos(h, type_.as_ptr(), pos) else {
         return -1;
     };
-    let key = key.to_bytes();
     let Some(value) = sam_hdr_text_find_tag_value(line, key) else {
         return -1;
     };
@@ -543,12 +610,11 @@ pub unsafe fn sam_hdr_find_tag_pos(
 
 pub unsafe fn sam_hdr_remove_tag_id(
     h: &mut sam_hdr_t,
-    type_: &CStr,
-    id: Option<(&CStr, &CStr)>,
-    key: &CStr,
-) -> c_int {
-    let type_bytes = type_.to_bytes();
-    if type_bytes.len() < 2 {
+    type_: &[u8],
+    id: Option<(&[u8], &[u8])>,
+    key: &[u8],
+) -> i32 {
+    if type_.len() < 2 {
         return -1;
     }
     if !h.hrecs.is_null() {
@@ -557,33 +623,51 @@ pub unsafe fn sam_hdr_remove_tag_id(
         // matching tag. Normalize to our public contract (matching the
         // retired text-mode entrypoint): 0 on real removal, -1 on
         // not-found/error, so callers and tests see a single behaviour.
+        let type_c = [type_, &[0u8]].concat();
+        let key_c = [key, &[0u8]].concat();
+        let id_key_c = id.map(|(k, _)| [k, &[0u8]].concat());
+        let id_value_c = id.map(|(_, v)| [v, &[0u8]].concat());
         let ret = header_c_2346_sam_hdr_remove_tag_id_hrecs(
             h,
-            type_.as_ptr(),
-            id.map_or(std::ptr::null(), |(key, _)| key.as_ptr()),
-            id.map_or(std::ptr::null(), |(_, value)| value.as_ptr()),
-            key.as_ptr(),
+            type_c.as_ptr(),
+            id_key_c.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
+            id_value_c.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
+            key_c.as_ptr(),
         );
         return if ret > 0 { 0 } else { -1 };
     }
-    if h.text.is_null() {
+    if h.text.is_null() || h.l_text == 0 {
         return -1;
     }
 
-    let type0 = type_bytes[0];
-    let type1 = type_bytes[1];
-    let key = key.to_bytes();
-    let id = id.map(|(id_key, id_value)| (id_key.to_bytes(), id_value.to_bytes()));
+    let type0 = type_[0];
+    let type1 = type_[1];
     sam_hdr_text_remove_tag_id(h, type0, type1, id, key)
 }
 
-pub unsafe fn sam_hdr_pg_id(h: &mut sam_hdr_t, name: &CStr) -> *const c_char {
+pub unsafe fn sam_hdr_pg_id(h: &mut sam_hdr_t, name: &[u8]) -> *const u8 {
     if !h.hrecs.is_null() {
-        return header_c_2562_sam_hdr_pg_id_hrecs(h, name.as_ptr());
+        // The pointer-based callee reads `name` via strlen/kh_get and may return
+        // the same pointer it was given (unique-name case). Stage a
+        // NUL-terminated copy in the per-header scratch buffer so the returned
+        // pointer stays valid after this call (the C contract keeps the result
+        // live until the next sam_hdr_pg_id on the same header).
+        let mut scratch = match sam_hdr_text_scratch().lock() {
+            Ok(guard) => guard,
+            Err(_) => return std::ptr::null(),
+        };
+        let buf = scratch
+            .entry((h as *mut sam_hdr_t).cast_const() as usize)
+            .or_default();
+        buf.clear();
+        buf.extend_from_slice(name);
+        buf.push(0);
+        let name_ptr = buf.as_ptr();
+        drop(scratch);
+        return header_c_2562_sam_hdr_pg_id_hrecs(h, name_ptr);
     }
 
-    let name_bytes = name.to_bytes();
-    if !sam_hdr_text_pg_id_exists(h, name_bytes) {
+    if !sam_hdr_text_pg_id_exists(h, name) {
         return name.as_ptr();
     }
 
@@ -594,14 +678,14 @@ pub unsafe fn sam_hdr_pg_id(h: &mut sam_hdr_t, name: &CStr) -> *const c_char {
     let buf = scratch
         .entry((h as *mut sam_hdr_t).cast_const() as usize)
         .or_default();
-    for n in 1..=c_int::MAX {
+    for n in 1..=i32::MAX {
         buf.clear();
-        buf.extend_from_slice(name_bytes);
+        buf.extend_from_slice(name);
         buf.push(b'.');
         buf.extend_from_slice(n.to_string().as_bytes());
         if !sam_hdr_text_pg_id_exists(h, buf) {
             buf.push(0);
-            return buf.as_ptr().cast();
+            return buf.as_ptr();
         }
     }
     std::ptr::null()
@@ -618,7 +702,7 @@ pub unsafe fn sam_hdr_length(h: &mut sam_hdr_t) -> usize {
     h.l_text
 }
 
-pub unsafe fn sam_hdr_str(h: &mut sam_hdr_t) -> *const c_char {
+pub unsafe fn sam_hdr_str(h: &mut sam_hdr_t) -> *const u8 {
     if !h.hrecs.is_null() {
         // Production-built hrecs is always Rust-marked (sam_hdr_fill_hrecs
         // marks it; cram_dopen's libhts-built header is dup'd in sam_hdr_read
@@ -628,18 +712,18 @@ pub unsafe fn sam_hdr_str(h: &mut sam_hdr_t) -> *const c_char {
         // than calling libhts on an opaque hrecs we don't own.
         return if sam_hdr_has_rust_hrecs(h) {
             if sam_hdr_rebuild(h) == 0 {
-                h.text
+                h.text.cast_const()
             } else {
                 std::ptr::null()
             }
         } else {
-            h.text
+            h.text.cast_const()
         };
     }
-    h.text
+    h.text.cast_const()
 }
 
-pub unsafe fn sam_hdr_nref(h: &sam_hdr_t) -> c_int {
+pub unsafe fn sam_hdr_nref(h: &sam_hdr_t) -> i32 {
     if !h.hrecs.is_null() {
         return (*h.hrecs).nref;
     }
@@ -721,20 +805,16 @@ pub unsafe fn sam_hrecs_free_contents(hrecs: &mut sam_hrecs_t) {
     sam_hrecs_free_ref_altname_hash_keys(hrecs);
     khash_str2int_destroy(hrecs.ref_hash);
     sam_hrecs_free_ref_altname_hash_keys(hrecs);
-    crate::htslib_rs::c_compat::free(hrecs.ref_.cast());
     khash_str2int_destroy(hrecs.rg_hash);
-    crate::htslib_rs::c_compat::free(hrecs.rg.cast());
     khash_str2int_destroy(hrecs.pg_hash);
-    crate::htslib_rs::c_compat::free(hrecs.pg.cast());
-    crate::htslib_rs::c_compat::free(hrecs.pg_end.cast());
-    crate::htslib_rs::c_compat::free(hrecs.type_order.cast());
-    crate::htslib_rs::c_compat::free(hrecs.ID_buf.cast());
+    // ref_/rg/pg/pg_end/type_order/ID_buf are owned buffers that drop with the
+    // struct; their previous C free() calls are removed.
 }
 
 // original: sam_hrecs_find_key (htslib/header.c:3009)
 pub unsafe fn sam_hrecs_find_key(
     type_: &mut sam_hrec_type_t,
-    key: &CStr,
+    key: &[u8],
 ) -> (
     Option<NonNull<sam_hrec_tag_t>>,
     Option<NonNull<sam_hrec_tag_t>>,
@@ -754,18 +834,21 @@ pub unsafe fn sam_hrecs_find_key(
 // original: sam_hrecs_find_type_id (htslib/header.c:2865)
 pub unsafe fn sam_hrecs_find_type_id(
     hrecs: &mut sam_hrecs_t,
-    type_: &CStr,
-    id: Option<(&CStr, &CStr)>,
+    type_: &[u8],
+    id: Option<(&[u8], &[u8])>,
 ) -> Option<NonNull<sam_hrec_type_t>> {
-    let type_ptr = type_.as_ptr();
-    let type_key = header_h_58_TYPEKEY(type_ptr);
-    if let Some((id_key, id_value)) = id {
-        let id_key_ptr = id_key.as_ptr();
-        let id_value_ptr = id_value.as_ptr();
-        if *type_ptr == b'S' as c_char
-            && *type_ptr.add(1) == b'Q' as c_char
-            && *id_key_ptr == b'S' as c_char
-            && *id_key_ptr.add(1) == b'N' as c_char
+    let type_key = header_h_58_TYPEKEY(type_.as_ptr());
+    // NUL-terminated copy of id_value for the pointer-based hash/cstr callees
+    // (kh_get_m_s2i and cstr_eq expect C strings).
+    let id_value_c = id.map(|(_, v)| [v, &[0u8]].concat());
+    let id_value_ptr = id_value_c
+        .as_ref()
+        .map_or(std::ptr::null(), |b| b.as_ptr());
+    if let Some((id_key, _id_value)) = id {
+        if type_[0] == b'S'
+            && type_[1] == b'Q'
+            && id_key[0] == b'S'
+            && id_key[1] == b'N'
             && !hrecs.ref_hash.is_null()
         {
             let hash = hrecs.ref_hash.cast::<khash_m_s2i_t>();
@@ -777,10 +860,10 @@ pub unsafe fn sam_hrecs_find_type_id(
                 }
             }
         }
-        if *type_ptr == b'R' as c_char
-            && *type_ptr.add(1) == b'G' as c_char
-            && *id_key_ptr == b'I' as c_char
-            && *id_key_ptr.add(1) == b'D' as c_char
+        if type_[0] == b'R'
+            && type_[1] == b'G'
+            && id_key[0] == b'I'
+            && id_key[1] == b'D'
             && !hrecs.rg_hash.is_null()
         {
             let hash = hrecs.rg_hash.cast::<khash_m_s2i_t>();
@@ -796,10 +879,10 @@ pub unsafe fn sam_hrecs_find_type_id(
                 }
             }
         }
-        if *type_ptr == b'P' as c_char
-            && *type_ptr.add(1) == b'G' as c_char
-            && *id_key_ptr == b'I' as c_char
-            && *id_key_ptr.add(1) == b'D' as c_char
+        if type_[0] == b'P'
+            && type_[1] == b'G'
+            && id_key[0] == b'I'
+            && id_key[1] == b'D'
             && !hrecs.pg_hash.is_null()
         {
             let hash = hrecs.pg_hash.cast::<khash_m_s2i_t>();
@@ -822,7 +905,7 @@ pub unsafe fn sam_hrecs_find_type_id(
         if (*line).type_ != type_key {
             return true;
         }
-        let Some((id_key, id_value)) = id else {
+        let Some((id_key, _id_value)) = id else {
             found = NonNull::new(line);
             return false;
         };
@@ -830,7 +913,7 @@ pub unsafe fn sam_hrecs_find_type_id(
         if let Some(tag) = tag {
             if !(*tag.as_ptr()).str_.is_null()
                 && (*tag.as_ptr()).len >= 3
-                && cstr_eq((*tag.as_ptr()).str_.add(3), id_value.as_ptr())
+                && cstr_eq((*tag.as_ptr()).str_.add(3), id_value_ptr)
             {
                 found = NonNull::new(line);
                 return false;
@@ -845,8 +928,8 @@ pub unsafe fn sam_hrecs_find_type_id(
 pub unsafe fn sam_hrecs_remove_key(
     hrecs: &mut sam_hrecs_t,
     type_: &mut sam_hrec_type_t,
-    key: &CStr,
-) -> c_int {
+    key: &[u8],
+) -> i32 {
     let (tag, prev) = sam_hrecs_find_key(type_, key);
     let Some(tag) = tag else {
         return 0;
@@ -857,13 +940,13 @@ pub unsafe fn sam_hrecs_remove_key(
     // referenced alt-names must also be dropped from the global ref_hash so
     // that subsequent `sam_hdr_name2tid` lookups on those altnames return -1.
     // Faithful to v1.23.
-    if type_.type_ == header_h_58_TYPEKEY(c"SQ".as_ptr())
+    if type_.type_ == header_h_58_TYPEKEY(b"SQ".as_ptr())
         && !(*tag_ptr).str_.is_null()
         && (*tag_ptr).len >= 3
         && *(*tag_ptr).str_ as u8 == b'A'
         && *(*tag_ptr).str_.add(1) as u8 == b'N'
     {
-        let (sn_tag, _) = sam_hrecs_find_key(type_, c"SN");
+        let (sn_tag, _) = sam_hrecs_find_key(type_, b"SN");
         if let Some(sn_tag) = sn_tag {
             if !(*sn_tag.as_ptr()).str_.is_null() && (*sn_tag.as_ptr()).len >= 3 {
                 let ref_hash = hrecs.ref_hash.cast::<khash_m_s2i_t>();
@@ -888,7 +971,7 @@ pub unsafe fn sam_hrecs_remove_key(
 }
 
 // original: sam_hrecs_rebuild_text (htslib/header.c:2376)
-pub unsafe fn sam_hrecs_rebuild_text(hrecs: &sam_hrecs_t, ks: &mut kstring_t) -> c_int {
+pub unsafe fn sam_hrecs_rebuild_text(hrecs: &sam_hrecs_t, ks: &mut kstring_t) -> i32 {
     ks.data.clear();
 
     if hrecs.first_line.is_null() {
@@ -902,7 +985,7 @@ pub unsafe fn sam_hrecs_rebuild_text(hrecs: &sam_hrecs_t, ks: &mut kstring_t) ->
     let first = hrecs.first_line.cast::<sam_hrec_type_t>();
     let mut line = first;
     loop {
-        if build_header_line(line, ks) < 0 || kputc(b'\n' as c_int, ks) < 0 {
+        if build_header_line(line, ks) < 0 || kputc(b'\n' as i32, ks) < 0 {
             return -1;
         }
         let next = (*line).global_next;
@@ -915,18 +998,18 @@ pub unsafe fn sam_hrecs_rebuild_text(hrecs: &sam_hrecs_t, ks: &mut kstring_t) ->
 }
 
 // original: sam_hdr_rebuild (htslib/header.c:1604)
-pub unsafe fn sam_hdr_rebuild(bh: &mut sam_hdr_t) -> c_int {
+pub unsafe fn sam_hdr_rebuild(bh: &mut sam_hdr_t) -> i32 {
     let hrecs = bh.hrecs;
     if hrecs.is_null() {
-        return if bh.text.is_null() { -1 } else { 0 };
+        return if bh.text.is_null() || bh.l_text == 0 { -1 } else { 0 };
     }
     let hrecs_ref = &mut *hrecs;
 
     if hrecs_ref.refs_changed >= 0 && rebuild_target_arrays(bh) < 0 {
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_ERROR,
-            c"sam_hdr_rebuild".as_ptr(),
-            c"Header target array rebuild has failed".as_ptr(),
+            b"sam_hdr_rebuild",
+            b"Header target array rebuild has failed",
         );
         return -1;
     }
@@ -939,8 +1022,8 @@ pub unsafe fn sam_hdr_rebuild(bh: &mut sam_hdr_t) -> c_int {
     if hrecs_ref.pgs_changed != 0 && sam_hdr_link_pg(bh) < 0 {
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_ERROR,
-            c"sam_hdr_rebuild".as_ptr(),
-            c"Linking @PG lines has failed".as_ptr(),
+            b"sam_hdr_rebuild",
+            b"Linking @PG lines has failed",
         );
         return -1;
     }
@@ -950,8 +1033,8 @@ pub unsafe fn sam_hdr_rebuild(bh: &mut sam_hdr_t) -> c_int {
         ks_free(&mut ks);
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_ERROR,
-            c"sam_hdr_rebuild".as_ptr(),
-            c"Header text rebuild has failed".as_ptr(),
+            b"sam_hdr_rebuild",
+            b"Header text rebuild has failed",
         );
         return -1;
     }
@@ -959,28 +1042,24 @@ pub unsafe fn sam_hdr_rebuild(bh: &mut sam_hdr_t) -> c_int {
     hrecs_ref.dirty = 0;
 
     /* Sync */
-    crate::htslib_rs::c_compat::free(bh.text.cast());
-    bh.l_text = ks.data.len();
-    // bh.text is a C-owned *mut c_char buffer; build a NUL-terminated copy of
-    // the owned bytes at this FFI boundary so downstream C/text consumers and
-    // free() see a heap-allocated, NUL-terminated string.
-    let released = ks_release(&mut ks);
-    let mut nul = Vec::with_capacity(released.len() + 1);
-    nul.extend_from_slice(&released);
-    nul.push(0);
-    let n = nul.len();
-    let dst = crate::htslib_rs::c_compat::malloc(n as u64).cast::<c_char>();
-    if dst.is_null() {
-        bh.text = std::ptr::null_mut();
-        return -1;
+    // bh.text is a C-style NUL-terminated buffer owned as a forgotten Vec of
+    // length l_text + 1 (matching sam.rs's text ownership convention). Free the
+    // previous buffer, then take the rebuilt bytes, append the NUL terminator,
+    // and store the raw pointer.
+    let old_len = bh.l_text;
+    if !bh.text.is_null() {
+        drop(Vec::from_raw_parts(bh.text, old_len + 1, old_len + 1));
     }
-    std::ptr::copy_nonoverlapping(nul.as_ptr().cast::<c_char>(), dst, n);
-    bh.text = dst;
+    let mut text_vec = ks_release(&mut ks);
+    bh.l_text = text_vec.len();
+    text_vec.push(0);
+    bh.text = text_vec.as_mut_ptr();
+    std::mem::forget(text_vec);
     0
 }
 
 // original: sam_hdr_fill_hrecs (htslib/header.c:1623)
-pub unsafe fn sam_hdr_fill_hrecs(bh: &mut sam_hdr_t) -> c_int {
+pub unsafe fn sam_hdr_fill_hrecs(bh: &mut sam_hdr_t) -> i32 {
     if !bh.hrecs.is_null() {
         return 0;
     }
@@ -990,7 +1069,7 @@ pub unsafe fn sam_hdr_fill_hrecs(bh: &mut sam_hdr_t) -> c_int {
     hrecs.h = (bh as *mut sam_hdr_t).cast();
     let hrecs_ptr = (&mut *hrecs) as *mut sam_hrecs_t;
     let parse_ret = if !bh.text.is_null() && bh.l_text > 0 {
-        sam_hrecs_parse_lines(hrecs_ptr, bh.text, bh.l_text)
+        sam_hrecs_parse_lines(hrecs_ptr, bh.text.cast_const(), bh.l_text)
     } else {
         0
     };
@@ -1025,14 +1104,14 @@ pub unsafe fn sam_hdr_fill_hrecs(bh: &mut sam_hdr_t) -> c_int {
 // original: sam_hrecs_find_rg (htslib/header.c:2899)
 pub unsafe fn sam_hrecs_find_rg(
     hrecs: &mut sam_hrecs_t,
-    id: &CStr,
+    id: &[u8],
 ) -> Option<NonNull<sam_hrec_rg_t>> {
     if hrecs.rg_hash.is_null() {
         return None;
     }
     let hash = hrecs.rg_hash.cast::<khash_m_s2i_t>();
-    let id = id.as_ptr();
-    let k = kh_get_m_s2i(hash, id);
+    let id_c = [id, &[0u8]].concat();
+    let k = kh_get_m_s2i(hash, id_c.as_ptr());
     if k == (*hash).n_buckets {
         return None;
     }
@@ -1044,8 +1123,8 @@ pub unsafe fn sam_hrecs_find_rg(
 }
 
 // original: sam_hrecs_sort_order (htslib/header.c:3128)
-pub unsafe fn sam_hrecs_sort_order(hrecs: &mut sam_hrecs_t) -> c_int {
-    let hd = sam_hrecs_find_first_type(hrecs, header_h_58_TYPEKEY(c"HD".as_ptr()));
+pub unsafe fn sam_hrecs_sort_order(hrecs: &mut sam_hrecs_t) -> i32 {
+    let hd = sam_hrecs_find_first_type(hrecs, header_h_58_TYPEKEY(b"HD".as_ptr()));
     let Some(hd) = hd.as_mut() else {
         return ORDER_UNSORTED;
     };
@@ -1061,8 +1140,8 @@ pub unsafe fn sam_hrecs_sort_order(hrecs: &mut sam_hrecs_t) -> c_int {
 }
 
 // original: sam_hrecs_group_order (htslib/header.c:3154)
-pub unsafe fn sam_hrecs_group_order(hrecs: &mut sam_hrecs_t) -> c_int {
-    let hd = sam_hrecs_find_first_type(hrecs, header_h_58_TYPEKEY(c"HD".as_ptr()));
+pub unsafe fn sam_hrecs_group_order(hrecs: &mut sam_hrecs_t) -> i32 {
+    let hd = sam_hrecs_find_first_type(hrecs, header_h_58_TYPEKEY(b"HD".as_ptr()));
     let Some(hd) = hd.as_mut() else {
         return ORDER_GO_NONE;
     };
@@ -1076,21 +1155,21 @@ pub unsafe fn sam_hrecs_group_order(hrecs: &mut sam_hrecs_t) -> c_int {
 }
 
 // original: known_stderr (htslib/header.c:780)
-pub unsafe fn header_c_780_known_stderr(tool: &CStr, advice: *const c_char) {
-    let tool_s = tool.to_string_lossy();
-    let msg = std::ffi::CString::new(format!(
-        "SAM file corrupted by embedded {tool_s} error/log message"
-    ))
-    .unwrap_or_default();
+pub unsafe fn header_c_780_known_stderr(tool: &[u8], advice: &[u8]) {
+    let tool_s = String::from_utf8_lossy(tool);
+    // hts_log_cstr now takes &[u8] context/message slices; pass the bytes
+    // directly. Trim any trailing NUL on advice (callers pass NUL-terminated
+    // literals) so the logged text is clean.
+    let msg = format!("SAM file corrupted by embedded {tool_s} error/log message").into_bytes();
+    let advice = advice.strip_suffix(b"\0").unwrap_or(advice);
     crate::htslib_rs::hts::hts_log_cstr(
         crate::htslib_rs::hts::HTS_LOG_WARNING,
-        c"known_stderr".as_ptr(),
-        msg.as_ptr(),
+        b"known_stderr",
+        &msg,
     );
-    // Second message was logged via "%s" with `advice`; pass it through verbatim.
     crate::htslib_rs::hts::hts_log_cstr(
         crate::htslib_rs::hts::HTS_LOG_WARNING,
-        c"known_stderr".as_ptr(),
+        b"known_stderr",
         advice,
     );
 }
@@ -1102,57 +1181,62 @@ pub unsafe fn header_c_788_warn_if_known_stderr(line: &[u8]) {
         .any(|w| w == b"M::bwa_idx_load_from_disk")
     {
         header_c_780_known_stderr(
-            c"bwa",
-            c"Use `bwa mem -o file.sam ...` or `bwa sampe -f file.sam ...` instead of `bwa ... > file.sam`"
-                .as_ptr(),
+            b"bwa",
+            b"Use `bwa mem -o file.sam ...` or `bwa sampe -f file.sam ...` instead of `bwa ... > file.sam`\0",
         );
     } else if line
         .windows(b"M::mem_pestat".len())
         .any(|w| w == b"M::mem_pestat")
     {
         header_c_780_known_stderr(
-            c"bwa",
-            c"Use `bwa mem -o file.sam ...` instead of `bwa mem ... > file.sam`".as_ptr(),
+            b"bwa",
+            b"Use `bwa mem -o file.sam ...` instead of `bwa mem ... > file.sam`\0",
         );
     } else if line
         .windows(b"loaded/built the index".len())
         .any(|w| w == b"loaded/built the index")
     {
         header_c_780_known_stderr(
-            c"minimap2",
-            c"Use `minimap2 -o file.sam ...` instead of `minimap2 ... > file.sam`".as_ptr(),
+            b"minimap2",
+            b"Use `minimap2 -o file.sam ...` instead of `minimap2 ... > file.sam`\0",
         );
     }
 }
 
 // original: valid_sam_header_type (htslib/header.c:1325)
-pub unsafe fn valid_sam_header_type(s: &CStr) -> c_int {
-    let s = s.to_bytes_with_nul();
+pub unsafe fn valid_sam_header_type(s: &[u8]) -> i32 {
     if s.len() < 4 || s[0] != b'@' {
         return 0;
     }
     match s[1] {
-        b'H' => (s[2] == b'D' && s[3] == b'\t') as c_int,
-        b'S' => (s[2] == b'Q' && s[3] == b'\t') as c_int,
-        b'R' | b'P' => (s[2] == b'G' && s[3] == b'\t') as c_int,
-        b'C' => (s[2] == b'O') as c_int,
+        b'H' => (s[2] == b'D' && s[3] == b'\t') as i32,
+        b'S' => (s[2] == b'Q' && s[3] == b'\t') as i32,
+        b'R' | b'P' => (s[2] == b'G' && s[3] == b'\t') as i32,
+        b'C' => (s[2] == b'O') as i32,
         _ => 0,
     }
 }
 
 // original: redact_header_text (htslib/header.c:1530)
 pub unsafe fn redact_header_text(bh: &mut sam_hdr_t) {
+    // bh.text is a forgotten Vec of length l_text + 1; free it (matching sam.rs's
+    // text ownership convention) and null the pointer before resetting l_text.
+    if !bh.text.is_null() {
+        drop(Vec::from_raw_parts(bh.text, bh.l_text + 1, bh.l_text + 1));
+        bh.text = std::ptr::null_mut();
+    }
     bh.l_text = 0;
-    crate::htslib_rs::c_compat::free(bh.text.cast());
-    bh.text = std::ptr::null_mut();
 }
 
 pub unsafe fn sam_hdr_incr_ref(bh: &mut sam_hdr_t) {
     bh.ref_count = bh.ref_count.wrapping_add(1);
 }
 
-pub unsafe fn sam_hdr_name2tid(h: &mut sam_hdr_t, ref_: &CStr) -> c_int {
-    let ref_ptr = ref_.as_ptr();
+pub unsafe fn sam_hdr_name2tid(h: &mut sam_hdr_t, ref_: &[u8]) -> i32 {
+    // NUL-terminated copy of ref_ for the pointer-based hash/text callees
+    // (kh_get_m_s2i and sam_hdr_text_name2tid expect C strings).
+    let ref_c = [ref_, &[0u8]].concat();
+    let ref_ptr = ref_c.as_ptr();
     if !h.hrecs.is_null() {
         let hrecs = h.hrecs;
         let ref_hash = (*hrecs).ref_hash.cast::<khash_m_s2i_t>();
@@ -1176,12 +1260,18 @@ pub unsafe fn sam_hdr_name2tid(h: &mut sam_hdr_t, ref_: &CStr) -> c_int {
     if !h.target_name.is_null() {
         for tid in 0..h.n_targets {
             let name = *h.target_name.add(tid as usize);
-            if !name.is_null() && CStr::from_ptr(name) == ref_ {
+            // target_name entries are NUL-terminated C strings; compare against
+            // the byte needle without allocating: every needle byte must match
+            // and the next byte in name must be the terminating NUL.
+            if !name.is_null()
+                && (0..ref_.len()).all(|i| *name.add(i) as u8 == ref_[i])
+                && *name.add(ref_.len()) as u8 == 0
+            {
                 return tid;
             }
         }
     }
-    if !h.text.is_null() {
+    if !h.text.is_null() && h.l_text != 0 {
         let tid = sam_hdr_text_name2tid(h, ref_ptr);
         if tid >= 0 {
             return tid;
@@ -1204,7 +1294,7 @@ pub unsafe fn sam_hdr_name2tid(h: &mut sam_hdr_t, ref_: &CStr) -> c_int {
     }
 }
 
-pub unsafe fn sam_hdr_tid2len(h: &sam_hdr_t, tid: c_int) -> hts_pos_t {
+pub unsafe fn sam_hdr_tid2len(h: &sam_hdr_t, tid: i32) -> hts_pos_t {
     if tid < 0 {
         return 0;
     }
@@ -1228,16 +1318,16 @@ pub unsafe fn sam_hdr_tid2len(h: &sam_hdr_t, tid: c_int) -> hts_pos_t {
     0
 }
 
-pub unsafe fn sam_hdr_tid2name(h: &sam_hdr_t, tid: c_int) -> *const c_char {
+pub unsafe fn sam_hdr_tid2name(h: &sam_hdr_t, tid: i32) -> *const u8 {
     if tid < 0 {
         return std::ptr::null();
     }
     let hrecs = h.hrecs;
     if !hrecs.is_null() && tid < (*hrecs).nref {
-        return (*(*hrecs).ref_.add(tid as usize)).name;
+        return (*(*hrecs).ref_.add(tid as usize)).name.cast::<u8>();
     }
     if tid < h.n_targets {
-        return *h.target_name.add(tid as usize);
+        return (*h.target_name.add(tid as usize)).cast::<u8>().cast_const();
     }
     std::ptr::null()
 }

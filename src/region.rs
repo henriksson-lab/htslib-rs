@@ -1,5 +1,3 @@
-use std::ffi::{c_void, CStr};
-
 use super::hts::{
     hts_name2id_f, hts_pair_pos_t, hts_parse_region, hts_pos_t, HTS_IDX_NOCOOR, HTS_IDX_START,
     HTS_PARSE_THOUSANDS_SEP,
@@ -225,7 +223,7 @@ fn region_khash_int_order(entries: &[region_c_31_reglist]) -> Vec<usize> {
 pub unsafe fn region_c_177_hts_reglist_create(
     argv: Option<&[&[u8]]>,
     r_count: Option<&mut i32>,
-    hdr: Option<&mut c_void>,
+    hdr: Option<&mut ()>,
     getid: hts_name2id_f,
 ) -> Option<Vec<region_reglist_entry>> {
     let Some(argv) = argv else {
@@ -240,7 +238,7 @@ pub unsafe fn region_c_177_hts_reglist_create(
     };
 
     // Raw header pointer is only needed at the FFI `hts_parse_region` boundary.
-    let hdr = hdr.map_or(std::ptr::null_mut(), |h| h as *mut c_void);
+    let hdr = hdr.map_or(std::ptr::null_mut(), |h| h as *mut ());
 
     let mut h = reghash_new();
 
@@ -262,17 +260,15 @@ pub unsafe fn region_c_177_hts_reglist_create(
         } else if arg.contains(&0) {
             false
         } else {
-            let mut region = Vec::with_capacity(arg.len() + 1);
-            region.extend_from_slice(arg);
-            region.push(0);
             unsafe {
+                let arg_c = std::ffi::CString::from_vec_unchecked(arg.to_vec());
                 !hts_parse_region(
-                    CStr::from_ptr(region.as_ptr().cast()),
+                    arg_c.as_c_str(),
                     &mut tid,
                     &mut beg,
                     &mut end,
                     getid,
-                    hdr,
+                    hdr.cast(),
                     HTS_PARSE_THOUSANDS_SEP,
                 )
                 .is_null()
@@ -362,7 +358,10 @@ mod tests {
         by_tid
     }
 
-    unsafe extern "C" fn test_name2id(_data: *mut c_void, name: *const i8) -> i32 {
+    unsafe extern "C" fn test_name2id(
+        _data: *mut std::ffi::c_void,
+        name: *const std::ffi::c_char,
+    ) -> i32 {
         let name = std::ffi::CStr::from_ptr(name).to_bytes();
         if name == b"chr1" {
             0
@@ -373,7 +372,10 @@ mod tests {
         }
     }
 
-    unsafe extern "C" fn fatal_name2id(data: *mut c_void, name: *const i8) -> i32 {
+    unsafe extern "C" fn fatal_name2id(
+        data: *mut std::ffi::c_void,
+        name: *const std::ffi::c_char,
+    ) -> i32 {
         if std::ffi::CStr::from_ptr(name).to_bytes() == b"fatal" {
             -2
         } else {

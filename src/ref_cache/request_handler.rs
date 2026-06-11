@@ -13,19 +13,17 @@ use super::transaction::{
     ref_cache_transaction_c_408_set_message_response,
     ref_cache_transaction_c_654_set_transaction_file_range, TransactionId,
 };
-use std::ffi::{c_int, c_uint};
-
-const REF_DOWNLOAD_STARTED: c_int = 2;
-const REF_NOT_FOUND: c_int = 1;
-const TRANSACT_KEEP_ALIVE: c_uint = 2;
-const HTTP_1_1: c_int = 2;
-const REF_CACHE_READING_REQUEST_LINE: c_int = 0;
-const REF_CACHE_SHUTTING_DOWN: c_int = 7;
-const REF_CACHE_ERR_BAD_REQUEST: c_int = 400;
-const REF_CACHE_ERR_NOT_FOUND: c_int = 404;
-const REF_CACHE_ERR_INTERNAL: c_int = 500;
-const REF_CACHE_ERR_UNIMPLEMENTED: c_int = 501;
-const REF_CACHE_REQ_GET: c_int = 1;
+const REF_DOWNLOAD_STARTED: i32 = 2;
+const REF_NOT_FOUND: i32 = 1;
+const TRANSACT_KEEP_ALIVE: u32 = 2;
+const HTTP_1_1: i32 = 2;
+const REF_CACHE_READING_REQUEST_LINE: i32 = 0;
+const REF_CACHE_SHUTTING_DOWN: i32 = 7;
+const REF_CACHE_ERR_BAD_REQUEST: i32 = 400;
+const REF_CACHE_ERR_NOT_FOUND: i32 = 404;
+const REF_CACHE_ERR_INTERNAL: i32 = 500;
+const REF_CACHE_ERR_UNIMPLEMENTED: i32 = 501;
+const REF_CACHE_REQ_GET: i32 = 1;
 
 static TEXT_PLAIN: &[u8] = b"text/plain";
 
@@ -34,7 +32,7 @@ static TEXT_PLAIN: &[u8] = b"text/plain";
 // `str_` is owned bytes with no trailing NUL; a valid md5 is exactly 32 hex
 // digits with nothing following (so byte 32 is end-of-slice, which in C was the
 // NUL terminator).
-pub fn ref_cache_request_handler_c_49_is_hexmd5(str_: &[u8]) -> c_int {
+pub fn ref_cache_request_handler_c_49_is_hexmd5(str_: &[u8]) -> i32 {
     if str_.len() != 32 {
         return 0;
     }
@@ -122,13 +120,13 @@ pub unsafe fn ref_cache_request_handler_c_99_handle_md5(
     let Some(ref_file) =
         ref_cache_ref_files_c_94_get_ref_file(opts, &md5_arr, parser.upstream())
     else {
-        ref_cache_transaction_c_277_set_error_response(transact, REF_CACHE_ERR_INTERNAL as c_uint);
+        ref_cache_transaction_c_277_set_error_response(transact, REF_CACHE_ERR_INTERNAL as u32);
         return;
     };
 
     let status = ref_cache_ref_files_c_141_get_ref_status(ref_file);
     if status == REF_NOT_FOUND {
-        ref_cache_transaction_c_277_set_error_response(transact, REF_CACHE_ERR_NOT_FOUND as c_uint);
+        ref_cache_transaction_c_277_set_error_response(transact, REF_CACHE_ERR_NOT_FOUND as u32);
         ref_cache_ref_files_c_193_release_ref_file(ref_file);
         return;
     }
@@ -140,7 +138,7 @@ pub unsafe fn ref_cache_request_handler_c_99_handle_md5(
     ref_cache_transaction_c_654_set_transaction_file_range(
         transact,
         size,
-        (status >= REF_DOWNLOAD_STARTED) as c_int,
+        (status >= REF_DOWNLOAD_STARTED) as i32,
     );
 }
 
@@ -170,7 +168,7 @@ pub unsafe fn ref_cache_request_handler_c_126_handle_get(
         _ => {
             ref_cache_transaction_c_277_set_error_response(
                 transact,
-                REF_CACHE_ERR_BAD_REQUEST as c_uint,
+                REF_CACHE_ERR_BAD_REQUEST as u32,
             );
             return;
         }
@@ -187,7 +185,7 @@ pub unsafe fn ref_cache_request_handler_c_126_handle_get(
         ref_cache_request_handler_c_94_handle_hello(transact);
         return;
     }
-    ref_cache_transaction_c_277_set_error_response(transact, REF_CACHE_ERR_NOT_FOUND as c_uint);
+    ref_cache_transaction_c_277_set_error_response(transact, REF_CACHE_ERR_NOT_FOUND as u32);
 }
 
 // original: handle_request (htslib/ref_cache/request_handler.c:148)
@@ -218,7 +216,7 @@ pub unsafe fn ref_cache_request_handler_c_148_handle_request(
         _ => {
             ref_cache_transaction_c_277_set_error_response(
                 transact,
-                REF_CACHE_ERR_UNIMPLEMENTED as c_uint,
+                REF_CACHE_ERR_UNIMPLEMENTED as u32,
             );
         }
     }
@@ -236,7 +234,7 @@ pub unsafe fn ref_cache_request_handler_c_167_handle_error(
     _clients: &mut RefCacheClientsLayout,
     client: usize,
     parser: &mut HttpParser,
-    code: c_int,
+    code: i32,
     transact_out: &mut Option<TransactionId>,
 ) {
     let Some(transact) = ref_cache_transaction_c_136_new_transaction(Some(client), parser) else {
@@ -246,7 +244,7 @@ pub unsafe fn ref_cache_request_handler_c_167_handle_error(
     ref_cache_transaction_c_277_set_error_response(
         transact,
         if code >= REF_CACHE_ERR_BAD_REQUEST {
-            code as c_uint
+            code as u32
         } else {
             500
         },

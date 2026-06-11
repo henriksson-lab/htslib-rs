@@ -20,8 +20,6 @@
 
 #![cfg(feature = "parity")]
 
-use std::os::raw::{c_char, c_int};
-
 #[test]
 fn linked_htslib_is_v123() {
     // 102390 == HTSlib v1.23. If this fails, hts-sys is still bundling the old
@@ -36,34 +34,34 @@ fn linked_htslib_is_v123() {
 // v1.23 ref_entry (cram/cram_structs.h): has LN_length after `length`.
 #[repr(C)]
 struct RefEntryV123 {
-    name: *mut c_char,
-    fn_: *mut c_char,
+    name: *mut u8,
+    fn_: *mut u8,
     length: i64,
     ln_length: i64, // <-- new in v1.23
     offset: i64,
-    bases_per_line: c_int,
-    line_length: c_int,
+    bases_per_line: i32,
+    line_length: i32,
     count: i64,
-    seq: *mut c_char,
-    mf: *mut std::ffi::c_void,
-    is_md5: c_int,
-    validated_md5: c_int,
+    seq: *mut u8,
+    mf: *mut (),
+    is_md5: i32,
+    validated_md5: i32,
 }
 
 // v1.19.1 ref_entry: identical but WITHOUT LN_length.
 #[repr(C)]
 struct RefEntryV119 {
-    name: *mut c_char,
-    fn_: *mut c_char,
+    name: *mut u8,
+    fn_: *mut u8,
     length: i64,
     offset: i64,
-    bases_per_line: c_int,
-    line_length: c_int,
+    bases_per_line: i32,
+    line_length: i32,
     count: i64,
-    seq: *mut c_char,
-    mf: *mut std::ffi::c_void,
-    is_md5: c_int,
-    validated_md5: c_int,
+    seq: *mut u8,
+    mf: *mut (),
+    is_md5: i32,
+    validated_md5: i32,
 }
 
 #[test]

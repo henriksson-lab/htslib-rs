@@ -94,7 +94,7 @@ pub(crate) struct OriginalMainGuard {
 /// lock; explicit `LOCK_UN` on drop is belt-and-braces (closing the file
 /// would release the lock anyway).
 struct FileLockGuard {
-    fd: libc::c_int,
+    fd: i32,
     // Keeps the underlying fd alive; closed on drop AFTER LOCK_UN below.
     _file: std::fs::File,
 }

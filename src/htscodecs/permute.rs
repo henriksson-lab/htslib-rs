@@ -29,26 +29,15 @@ pub const UNDERSCORE: u32 = 9;
 ///
 /// `printf` format strings are kept byte-for-byte identical to the C so the
 /// generated output is byte-identical to the C tool's output.
-///
-/// The C tool emits via `printf`, i.e. the libc `stdout` FILE stream. This
-/// translation does likewise (`libc::fwrite` into `c_compat::stdout`) rather
-/// than Rust's `print!`/`println!`: the C `stdout` stream is the stream the
-/// callers (and the unit tests) capture by redirecting fd 1 and flushing it,
-/// whereas Rust's `print!` is diverted into libtest's per-thread output-capture
-/// sink and would never reach a redirected fd 1.
 // permute.h:10
 pub fn main() -> i32 {
+    use std::io::Write;
     // Local closure mirroring C `printf("%s", ...)`: write the given bytes to
-    // the libc `stdout` stream. (`fwrite` of a byte slice == `fputs`/`printf`
-    // for our fixed, NUL-free format strings, and preserves embedded bytes from
-    // the source-echo prelude.)
-    let emit = |s: &[u8]| unsafe {
-        libc::fwrite(
-            s.as_ptr().cast(),
-            1,
-            s.len(),
-            crate::htslib_rs::c_compat::stdout.cast(),
-        );
+    // Rust's stdout. (Writing a byte slice == `fputs`/`printf` for our fixed,
+    // NUL-free format strings, and preserves embedded bytes from the
+    // source-echo prelude.)
+    let emit = |s: &[u8]| {
+        let _ = std::io::stdout().write_all(s);
     };
 
     // FILE *fp = fopen(__FILE__, "r"); while(fgets(...)) printf("%s", line);

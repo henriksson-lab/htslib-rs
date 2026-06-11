@@ -14,17 +14,17 @@ use crate::htslib_rs::{
     hfile::HFileBackend,
     hts::{hFILE, hts_verbose, kstring_t},
 };
-use std::ffi::{c_char, c_int, c_uchar, c_uint, c_void, CStr, CString};
+use std::ffi::c_void;
 use std::ptr::NonNull;
 
-const AUTH_LIFETIME: libc::time_t = 60;
-const CREDENTIAL_LIFETIME: libc::time_t = 60;
+const AUTH_LIFETIME: i64 = 60;
+const CREDENTIAL_LIFETIME: i64 = 60;
 const DIGEST_BUFSIZ: usize = 64;
 const SHA256_DIGEST_BUFSIZE: usize = 32;
 const HASH_LENGTH_SHA256: usize = SHA256_DIGEST_BUFSIZE * 2 + 1;
-const MINIMUM_S3_WRITE_SIZE: c_int = 5_242_880;
-const EXPAND_ON: c_int = 1112;
-const S3_MOVED_PERMANENTLY: libc::c_long = 301;
+const MINIMUM_S3_WRITE_SIZE: i32 = 5_242_880;
+const EXPAND_ON: i32 = 1112;
+const S3_MOVED_PERMANENTLY: i64 = 301;
 
 trait NullablePtrExt<T> {
     fn as_ptr(&self) -> *mut T;
@@ -43,13 +43,38 @@ impl<T> NullablePtrExt<T> for Option<NonNull<T>> {
     }
 }
 
-fn write_s3_date_header(buf: &mut [c_char], now: libc::time_t) {
+// Inlined pure UTC date decomposition (formerly c_compat::unix_time_utc_parts):
+// returns (year, month, day, hour, minute, second, weekday).
+fn unix_time_utc_parts(now: i64) -> (i32, u32, u32, u32, u32, u32, usize) {
+    let secs = now;
+    let days = secs.div_euclid(86_400);
+    let sod = secs.rem_euclid(86_400);
+    let hour = (sod / 3_600) as u32;
+    let minute = ((sod % 3_600) / 60) as u32;
+    let second = (sod % 60) as u32;
+
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = (yoe + era * 400) as i32;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = (mp + if mp < 10 { 3 } else { -9 }) as u32;
+    if month <= 2 {
+        year += 1;
+    }
+    let weekday = (days + 4).rem_euclid(7) as usize;
+    (year, month, day, hour, minute, second, weekday)
+}
+
+fn write_s3_date_header(buf: &mut [u8], now: i64) {
     const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
-    let (year, month, day, hour, minute, second, weekday) =
-        crate::htslib_rs::c_compat::unix_time_utc_parts(now);
+    let (year, month, day, hour, minute, second, weekday) = unix_time_utc_parts(now);
     let text = format!(
         "Date: {}, {:02} {} {:04} {:02}:{:02}:{:02} GMT",
         WEEKDAYS[weekday],
@@ -60,52 +85,69 @@ fn write_s3_date_header(buf: &mut [c_char], now: libc::time_t) {
         minute,
         second
     );
-    crate::htslib_rs::c_compat::write_c_str(buf, &text);
+    if !buf.is_empty() {
+        let bytes = text.as_bytes();
+        let n = bytes.len().min(buf.len() - 1);
+        buf[..n].copy_from_slice(&bytes[..n]);
+        buf[n] = 0;
+    }
 }
 
-fn write_s3_v4_dates(
-    date_long: &mut [c_char],
-    date_short: &mut [c_char],
-    now: libc::time_t,
-) -> bool {
-    let (year, month, day, hour, minute, second, _) =
-        crate::htslib_rs::c_compat::unix_time_utc_parts(now);
+fn write_s3_v4_dates(date_long: &mut [u8], date_short: &mut [u8], now: i64) -> bool {
+    let (year, month, day, hour, minute, second, _) = unix_time_utc_parts(now);
     let long = format!(
         "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
         year, month, day, hour, minute, second
     );
     let short = format!("{:04}{:02}{:02}", year, month, day);
-    crate::htslib_rs::c_compat::write_c_str(date_long, &long) == 16
-        && crate::htslib_rs::c_compat::write_c_str(date_short, &short) == 8
+    let long_n = if date_long.is_empty() {
+        0
+    } else {
+        let bytes = long.as_bytes();
+        let n = bytes.len().min(date_long.len() - 1);
+        date_long[..n].copy_from_slice(&bytes[..n]);
+        date_long[n] = 0;
+        n
+    };
+    let short_n = if date_short.is_empty() {
+        0
+    } else {
+        let bytes = short.as_bytes();
+        let n = bytes.len().min(date_short.len() - 1);
+        date_short[..n].copy_from_slice(&bytes[..n]);
+        date_short[n] = 0;
+        n
+    };
+    long_n == 16 && short_n == 8
 }
-const S3_TEMPORARY_REDIRECT: libc::c_long = 307;
-const S3_BAD_REQUEST: libc::c_long = 400;
-const HTS_LOG_INFO: c_int = 4;
+const S3_TEMPORARY_REDIRECT: i64 = 307;
+const S3_BAD_REQUEST: i64 = 400;
+const HTS_LOG_INFO: i32 = 4;
 
-const CURLE_OK: c_int = 0;
-const CURLINFO_RESPONSE_CODE: c_int = 0x200000 + 2;
-const CURLOPT_WRITEDATA: c_int = 10_001;
-const CURLOPT_URL: c_int = 10_002;
-const CURLOPT_READDATA: c_int = 10_009;
-const CURLOPT_POSTFIELDS: c_int = 10_015;
-const CURLOPT_WRITEFUNCTION: c_int = 20_011;
-const CURLOPT_READFUNCTION: c_int = 20_012;
-const CURLOPT_USERAGENT: c_int = 10_018;
-const CURLOPT_HTTPHEADER: c_int = 10_023;
-const CURLOPT_HEADERDATA: c_int = 10_029;
-const CURLOPT_CUSTOMREQUEST: c_int = 10_036;
-const CURLOPT_VERBOSE: c_int = 41;
-const CURLOPT_UPLOAD: c_int = 46;
-const CURLOPT_POST: c_int = 47;
-const CURLOPT_POSTFIELDSIZE: c_int = 60;
-const CURLOPT_HEADERFUNCTION: c_int = 20_079;
-const CURLOPT_INFILESIZE_LARGE: c_int = 30_115;
+const CURLE_OK: i32 = 0;
+const CURLINFO_RESPONSE_CODE: i32 = 0x200000 + 2;
+const CURLOPT_WRITEDATA: i32 = 10_001;
+const CURLOPT_URL: i32 = 10_002;
+const CURLOPT_READDATA: i32 = 10_009;
+const CURLOPT_POSTFIELDS: i32 = 10_015;
+const CURLOPT_WRITEFUNCTION: i32 = 20_011;
+const CURLOPT_READFUNCTION: i32 = 20_012;
+const CURLOPT_USERAGENT: i32 = 10_018;
+const CURLOPT_HTTPHEADER: i32 = 10_023;
+const CURLOPT_HEADERDATA: i32 = 10_029;
+const CURLOPT_CUSTOMREQUEST: i32 = 10_036;
+const CURLOPT_VERBOSE: i32 = 41;
+const CURLOPT_UPLOAD: i32 = 46;
+const CURLOPT_POST: i32 = 47;
+const CURLOPT_POSTFIELDSIZE: i32 = 60;
+const CURLOPT_HEADERFUNCTION: i32 = 20_079;
+const CURLOPT_INFILESIZE_LARGE: i32 = 30_115;
 
-type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
-type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> c_int;
+type HFileOpenFn = unsafe extern "C" fn(*const u8, *const u8) -> *mut hFILE;
+type HFileIsRemoteFn = unsafe extern "C" fn(*const u8) -> i32;
 type HFileVOpenFn = unsafe extern "C" fn(
-    *const c_char,
-    *const c_char,
+    *const u8,
+    *const u8,
     *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE;
 type HFilePluginDestroyFn = unsafe extern "C" fn();
@@ -119,8 +161,8 @@ type HFilePluginDestroyFn = unsafe extern "C" fn();
 struct hFILE_scheme_handler_layout {
     open: Option<HFileOpenFn>,
     isremote: Option<HFileIsRemoteFn>,
-    provider: *const c_char,
-    priority: c_int,
+    provider: *const u8,
+    priority: i32,
     vopen: Option<HFileVOpenFn>,
 }
 
@@ -128,15 +170,15 @@ unsafe impl Sync for hFILE_scheme_handler_layout {}
 
 #[repr(C)]
 struct hFILE_plugin_layout {
-    api_version: c_int,
+    api_version: i32,
     obj: Option<NonNull<c_void>>,
-    name: *const c_char,
+    name: *const u8,
     destroy: Option<HFilePluginDestroyFn>,
 }
 
 #[repr(C)]
 struct HFileLibcurlCurlSlist {
-    data: *mut c_char,
+    data: *mut u8,
     next: *mut HFileLibcurlCurlSlist,
 }
 
@@ -145,13 +187,13 @@ struct HFileLibcurlCurlSlist {
 // buffer/begin/end/limit/offset/flags state directly (see hts.rs).
 pub struct hFILE_s3 {
     curl: Option<NonNull<c_void>>,
-    ret: c_int,
+    ret: i32,
     au: Option<NonNull<S3AuthDataLayout>>,
     buffer: kstring_t,
     url: kstring_t,
-    verbose: libc::c_long,
-    write: c_int,
-    part_size: c_int,
+    verbose: i64,
+    write: i32,
+    part_size: i32,
     content_hash: kstring_t,
     authorisation: kstring_t,
     content: kstring_t,
@@ -160,14 +202,14 @@ pub struct hFILE_s3 {
     range: kstring_t,
     upload_id: kstring_t,
     completion_message: kstring_t,
-    part_no: c_int,
-    aborted: c_int,
+    part_no: i32,
+    aborted: i32,
     index: usize,
-    expand: c_int,
+    expand: i32,
     last_read: usize,
     last_read_buffer: usize,
     file_size: i64,
-    keep_going: c_int,
+    keep_going: i32,
 }
 
 impl Default for hFILE_s3 {
@@ -223,13 +265,13 @@ unsafe extern "C" {
     fn curl_easy_cleanup(curl: *mut c_void);
     fn curl_easy_init() -> *mut c_void;
     fn curl_easy_reset(curl: *mut c_void);
-    fn curl_easy_perform(curl: *mut c_void) -> c_int;
-    fn curl_easy_setopt(curl: *mut c_void, option: c_int, ...) -> c_int;
+    fn curl_easy_perform(curl: *mut c_void) -> i32;
+    fn curl_easy_setopt(curl: *mut c_void, option: i32, ...) -> i32;
     #[link_name = "curl_easy_getinfo"]
-    fn curl_easy_getinfo_long(curl: *mut c_void, info: c_int, value: *mut libc::c_long) -> c_int;
+    fn curl_easy_getinfo_long(curl: *mut c_void, info: i32, value: *mut i64) -> i32;
     fn curl_slist_append(
         list: *mut HFileLibcurlCurlSlist,
-        string: *const c_char,
+        string: *const u8,
     ) -> *mut HFileLibcurlCurlSlist;
     fn curl_slist_free_all(list: *mut HFileLibcurlCurlSlist);
 }
@@ -239,60 +281,63 @@ unsafe extern "C" {
     fn HMAC(
         evp_md: *const c_void,
         key: *const c_void,
-        key_len: c_int,
-        d: *const c_uchar,
+        key_len: i32,
+        d: *const u8,
         n: usize,
-        md: *mut c_uchar,
-        md_len: *mut c_uint,
-    ) -> *mut c_uchar;
+        md: *mut u8,
+        md_len: *mut u32,
+    ) -> *mut u8;
     fn EVP_sha1() -> *const c_void;
     fn EVP_sha256() -> *const c_void;
-    fn SHA256(d: *const c_uchar, n: usize, md: *mut c_uchar) -> *mut c_uchar;
+    fn SHA256(d: *const u8, n: usize, md: *mut u8) -> *mut u8;
 }
 
-unsafe fn cstr_bytes(ptr: *const c_char) -> Vec<u8> {
+unsafe fn cstr_bytes(ptr: *const u8) -> Vec<u8> {
     if ptr.is_null() {
         Vec::new()
     } else {
-        CStr::from_ptr(ptr).to_bytes().to_vec()
+        std::ffi::CStr::from_ptr(ptr.cast()).to_bytes().to_vec()
     }
 }
 
-unsafe fn kput_cstring(s: &mut kstring_t, text: String) -> c_int {
-    match CString::new(text) {
-        Ok(cstr) => crate::htslib_rs::hts::kputs(cstr.as_bytes(), s),
-        Err(_) => -1,
-    }
+unsafe fn kput_cstring(s: &mut kstring_t, text: String) -> i32 {
+    crate::htslib_rs::hts::kputs(text.as_bytes(), s)
 }
 
-unsafe fn kputs_literal(text: &[u8], s: &mut kstring_t) -> c_int {
+unsafe fn kputs_literal(text: &[u8], s: &mut kstring_t) -> i32 {
     crate::htslib_rs::hts::kputsn(text, text.len(), s)
 }
 
-unsafe fn ks_release_or_free(s: &mut kstring_t) -> *mut c_char {
+unsafe fn ks_release_or_free(s: &mut kstring_t) -> *mut u8 {
     if s.data.is_empty() {
         std::ptr::null_mut()
     } else {
         // Real FFI boundary: AuthHeaders stores raw NUL-terminated C strings
         // that libcurl reads, so build an owned malloc'd C string here.
-        match CString::new(crate::htslib_rs::hts::ks_release(s)) {
-            Ok(cstr) => libc::strdup(cstr.as_ptr()),
-            Err(_) => std::ptr::null_mut(),
+        let mut bytes = crate::htslib_rs::hts::ks_release(s);
+        bytes.push(0);
+        let len = bytes.len();
+        let buf = libc::malloc(len).cast::<u8>();
+        if buf.is_null() {
+            std::ptr::null_mut()
+        } else {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);
+            buf
         }
     }
 }
 
 // original: s3_sign (htslib/hfile_s3.c:142)
 pub unsafe fn hfile_s3_c_142_s3_sign(
-    digest: *mut c_uchar,
+    digest: *mut u8,
     key: *mut kstring_t,
     message: *mut kstring_t,
 ) -> usize {
-    let mut len = 0 as c_uint;
+    let mut len = 0u32;
     HMAC(
         EVP_sha1(),
         (*key).data.as_ptr().cast(),
-        (*key).data.len() as c_int,
+        (*key).data.len() as i32,
         (*message).data.as_ptr().cast(),
         (*message).data.len(),
         digest,
@@ -302,45 +347,45 @@ pub unsafe fn hfile_s3_c_142_s3_sign(
 }
 
 // original: s3_sha256 (htslib/hfile_s3.c:152)
-pub unsafe fn hfile_s3_c_152_s3_sha256(in_: *const c_uchar, length: usize, out: *mut c_uchar) {
+pub unsafe fn hfile_s3_c_152_s3_sha256(in_: *const u8, length: usize, out: *mut u8) {
     SHA256(in_, length, out);
 }
 
 // original: s3_sign_sha256 (htslib/hfile_s3.c:157)
 pub unsafe fn hfile_s3_c_157_s3_sign_sha256(
     key: *const c_void,
-    key_len: c_int,
-    d: *const c_uchar,
-    n: c_int,
-    md: *mut c_uchar,
-    md_len: *mut c_uint,
+    key_len: i32,
+    d: *const u8,
+    n: i32,
+    md: *mut u8,
+    md_len: *mut u32,
 ) {
     HMAC(EVP_sha256(), key, key_len, d, n as usize, md, md_len);
 }
 
 // original: urldecode_kput (htslib/hfile_s3.c:165)
-pub unsafe fn hfile_s3_c_165_urldecode_kput(s: *const c_char, len: c_int, str_: &mut kstring_t) {
-    let mut buf = [0 as c_char; 3];
+pub unsafe fn hfile_s3_c_165_urldecode_kput(s: *const u8, len: i32, str_: &mut kstring_t) {
     let mut i = 0;
 
     while i < len {
-        if *s.add(i as usize) == b'%' as c_char && i + 2 < len {
-            buf[0] = *s.add((i + 1) as usize);
-            buf[1] = *s.add((i + 2) as usize);
-            crate::htslib_rs::hts::kputc(
-                libc::strtol(buf.as_ptr(), std::ptr::null_mut(), 16) as c_int,
-                str_,
-            );
+        if *s.add(i as usize) == b'%' && i + 2 < len {
+            let hi = (*s.add((i + 1) as usize) as char).to_digit(16);
+            let lo = (*s.add((i + 2) as usize) as char).to_digit(16);
+            let val = match (hi, lo) {
+                (Some(hi), Some(lo)) => (hi * 16 + lo) as i32,
+                _ => 0,
+            };
+            crate::htslib_rs::hts::kputc(val, str_);
             i += 3;
         } else {
-            crate::htslib_rs::hts::kputc(*s.add(i as usize) as c_int, str_);
+            crate::htslib_rs::hts::kputc(*s.add(i as usize) as i32, str_);
             i += 1;
         }
     }
 }
 
 // original: base64_kput (htslib/hfile_s3.c:181)
-pub unsafe fn hfile_s3_c_181_base64_kput(data: *const c_uchar, len: usize, str_: &mut kstring_t) {
+pub unsafe fn hfile_s3_c_181_base64_kput(data: *const u8, len: usize, str_: &mut kstring_t) {
     static BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     let mut i = 0usize;
@@ -361,7 +406,7 @@ pub unsafe fn hfile_s3_c_181_base64_kput(data: *const c_uchar, len: usize, str_:
         }
 
         bits -= 6;
-        crate::htslib_rs::hts::kputc(BASE64[((x >> bits) & 63) as usize] as c_int, str_);
+        crate::htslib_rs::hts::kputc(BASE64[((x >> bits) & 63) as usize] as i32, str_);
     }
 
     str_.data.truncate(str_.data.len() - pad);
@@ -370,15 +415,15 @@ pub unsafe fn hfile_s3_c_181_base64_kput(data: *const c_uchar, len: usize, str_:
 
 // original: is_dns_compliant (htslib/hfile_s3.c:206)
 pub unsafe fn hfile_s3_c_206_is_dns_compliant(
-    s0: *const c_char,
-    slim: *const c_char,
-    is_https: c_int,
-) -> c_int {
+    s0: *const u8,
+    slim: *const u8,
+    is_https: i32,
+) -> i32 {
     let mut has_nondigit = 0;
     let mut len = 0;
     let mut s = s0;
     while s < slim {
-        let c = *s as u8;
+        let c = *s;
         if c.is_ascii_lowercase() {
             has_nondigit = 1;
         } else if c == b'-' {
@@ -391,10 +436,10 @@ pub unsafe fn hfile_s3_c_206_is_dns_compliant(
             if is_https != 0 {
                 return 0;
             }
-            if s == s0 || !(*s.sub(1) as u8).is_ascii_alphanumeric() {
+            if s == s0 || !(*s.sub(1)).is_ascii_alphanumeric() {
                 return 0;
             }
-            if s.add(1) == slim || !(*s.add(1) as u8).is_ascii_alphanumeric() {
+            if s.add(1) == slim || !(*s.add(1)).is_ascii_alphanumeric() {
                 return 0;
             }
         } else {
@@ -404,43 +449,42 @@ pub unsafe fn hfile_s3_c_206_is_dns_compliant(
         s = s.add(1);
     }
 
-    (has_nondigit != 0 && (3..=63).contains(&len)) as c_int
+    (has_nondigit != 0 && (3..=63).contains(&len)) as i32
 }
 
 // original: expand_tilde_open (htslib/hfile_s3.c:231)
 pub unsafe fn hfile_s3_c_231_expand_tilde_open(
-    fname: *const c_char,
-    mode: *const c_char,
+    fname: *const u8,
+    mode: *const u8,
 ) -> *mut libc::FILE {
-    if libc::strncmp(fname, c"~/".as_ptr(), 2) == 0 {
+    let fname_bytes = cstr_bytes(fname);
+    if fname_bytes.starts_with(b"~/") {
         let mut full_fname = kstring_t::default();
         let home = libc::getenv(c"HOME".as_ptr());
         if home.is_null() {
             return std::ptr::null_mut();
         }
 
-        crate::htslib_rs::hts::kputs(&cstr_bytes(home), &mut full_fname);
-        crate::htslib_rs::hts::kputs(&cstr_bytes(fname.add(1)), &mut full_fname);
+        crate::htslib_rs::hts::kputs(&cstr_bytes(home.cast()), &mut full_fname);
+        crate::htslib_rs::hts::kputs(&fname_bytes[1..], &mut full_fname);
 
         // Real syscall boundary: fopen needs a NUL-terminated path.
-        let fp = match CString::new(full_fname.data.clone()) {
-            Ok(path) => libc::fopen(path.as_ptr(), mode),
-            Err(_) => std::ptr::null_mut(),
-        };
-        fp
+        full_fname.data.push(0);
+        libc::fopen(full_fname.data.as_ptr().cast(), mode.cast())
     } else {
-        libc::fopen(fname, mode)
+        libc::fopen(fname.cast(), mode.cast())
     }
 }
 
 unsafe fn hfile_s3_c_252_parse_ini(
-    fname: *const c_char,
-    section: *const c_char,
-    pairs: &[(*const c_char, *mut kstring_t)],
+    fname: *const u8,
+    section: *const u8,
+    pairs: &[(*const u8, *mut kstring_t)],
 ) {
     let mut line = kstring_t::default();
     let mut active = 1;
-    let fp = hfile_s3_c_231_expand_tilde_open(fname, c"r".as_ptr());
+    let section_bytes = cstr_bytes(section);
+    let fp = hfile_s3_c_231_expand_tilde_open(fname, c"r".as_ptr().cast());
     if fp.is_null() {
         return;
     }
@@ -449,43 +493,43 @@ unsafe fn hfile_s3_c_252_parse_ini(
         line.data.clear();
         crate::htslib_rs::hts::kfgetline(&mut line, fp) >= 0
     } {
-        // The line parsing below relies on C-string pointer arithmetic, so build
-        // a NUL-terminated working copy of the owned bytes at this boundary.
-        let mut work: Vec<u8> = line.data.clone();
-        work.push(0);
-        let work_ptr = work.as_mut_ptr().cast::<c_char>();
-        if !work_ptr.is_null() && *work_ptr == b'[' as c_char {
-            let s = libc::strchr(work_ptr, b']' as c_int);
-            if !s.is_null() {
-                *s = 0;
-                active = (libc::strcmp(work_ptr.add(1), section) == 0) as c_int;
+        // kfgetline yields a line possibly containing interior NUL; mirror the C
+        // logic by treating the bytes up to the first NUL as the working line.
+        let nul = line.data.iter().position(|&b| b == 0);
+        let work: &[u8] = match nul {
+            Some(n) => &line.data[..n],
+            None => &line.data,
+        };
+        if work.first() == Some(&b'[') {
+            if let Some(close) = work.iter().position(|&b| b == b']') {
+                active = (work[1..close] == section_bytes[..]) as i32;
             }
         } else if active != 0 {
-            let s = libc::strpbrk(work_ptr, c":=".as_ptr());
-            if !s.is_null() {
-                let mut key = work_ptr;
-                let mut value = s.add(1);
-                while libc::isspace(*key as c_uchar as c_int) != 0 {
-                    key = key.add(1);
+            if let Some(sep) = work.iter().position(|&b| b == b':' || b == b'=') {
+                let mut key_start = 0usize;
+                while key_start < sep && (work[key_start] as char).is_whitespace() {
+                    key_start += 1;
                 }
-                let mut end = s;
-                while end > key && libc::isspace(*end.sub(1) as c_uchar as c_int) != 0 {
-                    end = end.sub(1);
+                let mut key_end = sep;
+                while key_end > key_start && (work[key_end - 1] as char).is_whitespace() {
+                    key_end -= 1;
                 }
-                *end = 0;
-                while libc::isspace(*value as c_uchar as c_int) != 0 {
-                    value = value.add(1);
+                let key = &work[key_start..key_end];
+
+                let mut value_start = sep + 1;
+                while value_start < work.len() && (work[value_start] as char).is_whitespace() {
+                    value_start += 1;
                 }
-                let mut vlen = line.data.len();
-                while vlen > 0 && libc::isspace(*work_ptr.add(vlen - 1) as c_uchar as c_int) != 0 {
-                    vlen -= 1;
-                    *work_ptr.add(vlen) = 0;
+                let mut value_end = work.len();
+                while value_end > value_start && (work[value_end - 1] as char).is_whitespace() {
+                    value_end -= 1;
                 }
+                let value = &work[value_start..value_end];
 
                 for &(akey, avar) in pairs {
-                    if libc::strcmp(key, akey) == 0 {
+                    if key == &cstr_bytes(akey)[..] {
                         (*avar).data.clear();
-                        crate::htslib_rs::hts::kputs(&cstr_bytes(value), &mut *avar);
+                        crate::htslib_rs::hts::kputs(value, &mut *avar);
                         break;
                     }
                 }
@@ -498,52 +542,54 @@ unsafe fn hfile_s3_c_252_parse_ini(
 
 // original: parse_simple (htslib/hfile_s3.c:294)
 pub unsafe fn hfile_s3_c_294_parse_simple(
-    fname: *const c_char,
+    fname: *const u8,
     id: *mut kstring_t,
     secret: *mut kstring_t,
 ) {
     let mut text = kstring_t::default();
-    let fp = hfile_s3_c_231_expand_tilde_open(fname, c"r".as_ptr());
+    let fp = hfile_s3_c_231_expand_tilde_open(fname, c"r".as_ptr().cast());
     if fp.is_null() {
         return;
     }
 
     while crate::htslib_rs::hts::kfgetline(&mut text, fp) >= 0 {
-        crate::htslib_rs::hts::kputc(b' ' as c_int, &mut text);
+        crate::htslib_rs::hts::kputc(b' ' as i32, &mut text);
     }
     libc::fclose(fp);
 
-    // The whitespace scanning below uses C-string pointer arithmetic, so build a
-    // NUL-terminated working copy of the owned bytes at this boundary.
-    let mut work: Vec<u8> = text.data.clone();
-    work.push(0);
-    let mut s = work.as_ptr().cast::<c_char>();
-    while libc::isspace(*s as c_uchar as c_int) != 0 {
-        s = s.add(1);
-    }
-    let len = libc::strcspn(s, c" \t".as_ptr());
-    crate::htslib_rs::hts::kputsn(
-        std::slice::from_raw_parts(s.cast::<u8>(), len),
-        len,
-        &mut *id,
-    );
+    // Scan the first two whitespace-delimited tokens (mirroring strcspn on the
+    // NUL-terminated text), operating directly on the owned bytes.
+    let work: &[u8] = match text.data.iter().position(|&b| b == 0) {
+        Some(n) => &text.data[..n],
+        None => &text.data,
+    };
+    let is_ws = |b: u8| b == b' ' || b == b'\t';
 
-    s = s.add(len);
-    while libc::isspace(*s as c_uchar as c_int) != 0 {
-        s = s.add(1);
+    let mut start = 0usize;
+    while start < work.len() && (work[start] as char).is_whitespace() {
+        start += 1;
     }
-    let slen = libc::strcspn(s, c" \t".as_ptr());
-    crate::htslib_rs::hts::kputsn(
-        std::slice::from_raw_parts(s.cast::<u8>(), slen),
-        slen,
-        &mut *secret,
-    );
+    let mut end = start;
+    while end < work.len() && !is_ws(work[end]) {
+        end += 1;
+    }
+    crate::htslib_rs::hts::kputsn(&work[start..end], end - start, &mut *id);
+
+    let mut start = end;
+    while start < work.len() && (work[start] as char).is_whitespace() {
+        start += 1;
+    }
+    let mut end = start;
+    while end < work.len() && !is_ws(work[end]) {
+        end += 1;
+    }
+    crate::htslib_rs::hts::kputsn(&work[start..end], end - start, &mut *secret);
 }
 
 unsafe fn hfile_s3_copy_auth_headers(
     ad: &mut S3AuthDataLayout,
-    hdrs: *mut *mut *mut c_char,
-) -> c_int {
+    hdrs: *mut *mut *mut u8,
+) -> i32 {
     ad.headers.clear();
     if ad.headers.push_strdup(ad.date.as_ptr()).is_err() {
         ad.headers.free_all_untransferred();
@@ -567,9 +613,11 @@ unsafe fn hfile_s3_copy_auth_headers(
     }
 
     if ad.auth_hdr.data.len() != 0 {
-        // push_strdup needs a NUL-terminated C string; build one at this boundary.
-        let auth_c = CString::new(ad.auth_hdr.data.clone()).unwrap_or_default();
-        if ad.headers.push_strdup(auth_c.as_ptr()).is_err() {
+        // push_strdup copies a NUL-terminated run; append a NUL so the owned
+        // bytes terminate before handing the pointer to the FFI boundary.
+        let mut auth_bytes = ad.auth_hdr.data.clone();
+        auth_bytes.push(0);
+        if ad.headers.push_strdup(auth_bytes.as_ptr()).is_err() {
             ad.headers.free_all_untransferred();
             return -1;
         }
@@ -581,7 +629,7 @@ unsafe fn hfile_s3_copy_auth_headers(
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
-struct NullableHeaderPtr(Option<NonNull<c_char>>);
+struct NullableHeaderPtr(Option<NonNull<u8>>);
 
 impl NullableHeaderPtr {
     fn none() -> Self {
@@ -608,10 +656,15 @@ impl AuthHeaders {
         self.raw.clear();
     }
 
-    unsafe fn push_strdup(&mut self, text: *const c_char) -> Result<(), ()> {
-        let Some(value) = NonNull::new(libc::strdup(text).cast()) else {
+    unsafe fn push_strdup(&mut self, text: *const u8) -> Result<(), ()> {
+        // Real FFI boundary: copy the NUL-terminated run into an owned malloc'd
+        // C string that libcurl reads and free_all_untransferred later frees.
+        let len = std::ffi::CStr::from_ptr(text.cast()).to_bytes_with_nul().len();
+        let buf = libc::malloc(len).cast::<u8>();
+        let Some(value) = NonNull::new(buf) else {
             return Err(());
         };
+        std::ptr::copy_nonoverlapping(text, value.as_ptr(), len);
         self.raw.push(NullableHeaderPtr(Some(value)));
         Ok(())
     }
@@ -624,7 +677,7 @@ impl AuthHeaders {
         Ok(())
     }
 
-    fn as_raw_mut_ptr(&mut self) -> *mut *mut c_char {
+    fn as_raw_mut_ptr(&mut self) -> *mut *mut u8 {
         if !matches!(self.raw.last(), Some(NullableHeaderPtr(None))) {
             self.raw.push(NullableHeaderPtr::none());
         }
@@ -641,17 +694,18 @@ pub struct S3AuthDataLayout {
     user_query_string: kstring_t,
     host: kstring_t,
     profile: kstring_t,
-    creds_expiry_time: libc::time_t,
-    bucket: CString,
+    creds_expiry_time: i64,
+    // NUL-terminated owned bytes (was a C `CString`); read at FFI/format sites.
+    bucket: Vec<u8>,
     auth_hdr: kstring_t,
-    auth_time: libc::time_t,
-    date: [c_char; 40],
-    date_long: [c_char; 17],
-    date_short: [c_char; 9],
+    auth_time: i64,
+    date: [u8; 40],
+    date_long: [u8; 17],
+    date_short: [u8; 9],
     date_html: kstring_t,
-    mode: c_char,
+    mode: u8,
     headers: AuthHeaders,
-    refcount: c_int,
+    refcount: i32,
 }
 
 impl Default for S3AuthDataLayout {
@@ -666,7 +720,7 @@ impl Default for S3AuthDataLayout {
             host: kstring_t::default(),
             profile: kstring_t::default(),
             creds_expiry_time: 0,
-            bucket: CString::new("").expect("empty CString"),
+            bucket: vec![0],
             auth_hdr: kstring_t::default(),
             auth_time: 0,
             date: [0; 40],
@@ -690,33 +744,32 @@ pub unsafe fn hfile_s3_c_319_free_auth_data(ad: *mut s3_auth_data) {
         (*ad).refcount -= 1;
         return;
     }
-    // The owned kstring_t Vec buffers (and the bucket CString) are released when
+    // The owned kstring_t Vec buffers (and the bucket Vec) are released when
     // this Box drops; no manual libc::free of buffer pointers is needed.
     drop(Box::from_raw(ad));
 }
 
 // original: parse_rfc3339_date (htslib/hfile_s3.c:333)
-pub unsafe fn hfile_s3_c_333_parse_rfc3339_date(datetime: *mut kstring_t) -> libc::time_t {
+pub unsafe fn hfile_s3_c_333_parse_rfc3339_date(datetime: *mut kstring_t) -> i64 {
     let mut offset = 0;
-    let mut should_be_t = 0 as c_char;
-    let mut timezone = [0 as c_char; 10];
-    let mut year = 0 as c_uint;
-    let mut mon = 0 as c_uint;
-    let mut day = 0 as c_uint;
-    let mut hour = 0 as c_uint;
-    let mut min = 0 as c_uint;
-    let mut sec = 0 as c_uint;
+    let mut should_be_t = 0u8;
+    let mut timezone = [0u8; 10];
+    let mut year = 0u32;
+    let mut mon = 0u32;
+    let mut day = 0u32;
+    let mut hour = 0u32;
+    let mut min = 0u32;
+    let mut sec = 0u32;
 
     if (*datetime).data.is_empty() {
         return 0;
     }
 
     // sscanf needs a NUL-terminated C string; build one from the owned bytes.
-    let Ok(datetime_c) = CString::new((*datetime).data.clone()) else {
-        return 0;
-    };
+    let mut datetime_c = (*datetime).data.clone();
+    datetime_c.push(0);
     let num = libc::sscanf(
-        datetime_c.as_ptr(),
+        datetime_c.as_ptr().cast(),
         c"%4u-%2u-%2u%c%2u:%2u:%2u%9s".as_ptr(),
         &mut year,
         &mut mon,
@@ -730,20 +783,17 @@ pub unsafe fn hfile_s3_c_333_parse_rfc3339_date(datetime: *mut kstring_t) -> lib
     if num < 8 {
         return 0;
     }
-    if should_be_t != b'T' as c_char
-        && should_be_t != b't' as c_char
-        && should_be_t != b' ' as c_char
-    {
+    if should_be_t != b'T' && should_be_t != b't' && should_be_t != b' ' {
         return 0;
     }
 
     let mut parsed = libc::tm {
-        tm_sec: sec as c_int,
-        tm_min: min as c_int,
-        tm_hour: hour as c_int,
-        tm_mday: day as c_int,
-        tm_mon: mon as c_int - 1,
-        tm_year: year as c_int - 1900,
+        tm_sec: sec as i32,
+        tm_min: min as i32,
+        tm_hour: hour as i32,
+        tm_mday: day as i32,
+        tm_mon: mon as i32 - 1,
+        tm_year: year as i32 - 1900,
         tm_wday: 0,
         tm_yday: 0,
         tm_isdst: 0,
@@ -765,13 +815,13 @@ pub unsafe fn hfile_s3_c_333_parse_rfc3339_date(datetime: *mut kstring_t) -> lib
         tm_zone: std::ptr::null(),
     };
 
-    match timezone[0] as u8 {
+    match timezone[0] {
         b'Z' | b'z' | 0 => {}
         b'+' | b'-' => {
-            let mut hr_off = 0 as c_uint;
-            let mut min_off = 0 as c_uint;
+            let mut hr_off = 0u32;
+            let mut min_off = 0u32;
             if libc::sscanf(
-                timezone.as_ptr().add(1),
+                timezone.as_ptr().add(1).cast(),
                 c"%2u:%2u".as_ptr(),
                 &mut hr_off,
                 &mut min_off,
@@ -779,12 +829,8 @@ pub unsafe fn hfile_s3_c_333_parse_rfc3339_date(datetime: *mut kstring_t) -> lib
                 && hr_off < 24
                 && min_off <= 60
             {
-                offset = ((hr_off * 60 + min_off) as c_int)
-                    * if timezone[0] == b'+' as c_char {
-                        -60
-                    } else {
-                        60
-                    };
+                offset = ((hr_off * 60 + min_off) as i32)
+                    * if timezone[0] == b'+' { -60 } else { 60 };
             }
         }
         _ => return 0,
@@ -792,7 +838,7 @@ pub unsafe fn hfile_s3_c_333_parse_rfc3339_date(datetime: *mut kstring_t) -> lib
 
     let when = crate::htslib_rs::hts::hts_time_gm(&mut parsed);
     if when >= 0 {
-        when + offset as libc::time_t
+        when + offset as i64
     } else {
         0
     }
@@ -804,19 +850,20 @@ pub unsafe fn hfile_s3_c_378_refresh_auth_data(ad: *mut s3_auth_data) {
     let v = libc::getenv(c"AWS_SHARED_CREDENTIALS_FILE".as_ptr());
     let mut expiry_time = kstring_t::default();
     // parse_ini wants a NUL-terminated section name; build one from profile bytes.
-    let profile_c = CString::new((*ad).profile.data.clone()).unwrap_or_default();
+    let mut profile_c = (*ad).profile.data.clone();
+    profile_c.push(0);
     hfile_s3_c_252_parse_ini(
         if v.is_null() {
-            c"~/.aws/credentials".as_ptr()
+            c"~/.aws/credentials".as_ptr().cast()
         } else {
-            v
+            v.cast()
         },
         profile_c.as_ptr(),
         &[
-            (c"aws_access_key_id".as_ptr(), &mut (*ad).id),
-            (c"aws_secret_access_key".as_ptr(), &mut (*ad).secret),
-            (c"aws_session_token".as_ptr(), &mut (*ad).token),
-            (c"expiry_time".as_ptr(), &mut expiry_time),
+            (c"aws_access_key_id".as_ptr().cast(), &mut (*ad).id),
+            (c"aws_secret_access_key".as_ptr().cast(), &mut (*ad).secret),
+            (c"aws_session_token".as_ptr().cast(), &mut (*ad).token),
+            (c"expiry_time".as_ptr().cast(), &mut expiry_time),
         ],
     );
     if expiry_time.data.len() != 0 {
@@ -826,9 +873,9 @@ pub unsafe fn hfile_s3_c_378_refresh_auth_data(ad: *mut s3_auth_data) {
 }
 
 // original: escape_query (htslib/hfile_s3.c:396)
-unsafe fn hfile_s3_escape_query_owned(qs: &CStr) -> Option<CString> {
-    let mut escaped = Vec::with_capacity(qs.to_bytes().len() * 3);
-    for &c in qs.to_bytes() {
+unsafe fn hfile_s3_escape_query_owned(qs: &[u8]) -> Vec<u8> {
+    let mut escaped = Vec::with_capacity(qs.len() * 3);
+    for &c in qs {
         if c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'~' | b'.' | b'/' | b'=' | b'&')
         {
             escaped.push(c);
@@ -836,19 +883,12 @@ unsafe fn hfile_s3_escape_query_owned(qs: &CStr) -> Option<CString> {
             escaped.extend_from_slice(format!("%{c:02X}").as_bytes());
         }
     }
-    CString::new(escaped).ok()
-}
-
-pub unsafe fn hfile_s3_c_396_escape_query(qs: *const c_char) -> *mut c_char {
-    if qs.is_null() {
-        return std::ptr::null_mut();
-    }
-    hfile_s3_escape_query_owned(CStr::from_ptr(qs)).map_or(std::ptr::null_mut(), CString::into_raw)
+    escaped
 }
 
 // original: escape_path (htslib/hfile_s3.c:424)
-unsafe fn hfile_s3_escape_path_owned(path: &CStr) -> Option<CString> {
-    let bytes = path.to_bytes();
+unsafe fn hfile_s3_escape_path_owned(path: &[u8]) -> Vec<u8> {
+    let bytes = path;
     let mut escaped = Vec::with_capacity(bytes.len() * 3);
     let mut i = 0usize;
     while i < bytes.len() {
@@ -868,26 +908,19 @@ unsafe fn hfile_s3_escape_path_owned(path: &CStr) -> Option<CString> {
     if i != bytes.len() {
         escaped.extend_from_slice(&bytes[i..]);
     }
-    CString::new(escaped).ok()
-}
-
-pub unsafe fn hfile_s3_c_424_escape_path(path: *const c_char) -> *mut c_char {
-    if path.is_null() {
-        return std::ptr::null_mut();
-    }
-    hfile_s3_escape_path_owned(CStr::from_ptr(path)).map_or(std::ptr::null_mut(), CString::into_raw)
+    escaped
 }
 
 // original: is_escaped (htslib/hfile_s3.c:460)
-pub unsafe fn hfile_s3_c_460_is_escaped(str_: *const c_char) -> c_int {
+pub unsafe fn hfile_s3_c_460_is_escaped(str_: *const u8) -> i32 {
     let mut c = str_;
     let mut escaped = 0;
     let mut needs_escape = 0;
 
     while *c != 0 {
-        let ch = *c as u8;
+        let ch = *c;
         if ch == b'%' && *c.add(1) != 0 && *c.add(2) != 0 {
-            if (*c.add(1) as u8).is_ascii_hexdigit() && (*c.add(2) as u8).is_ascii_hexdigit() {
+            if (*c.add(1)).is_ascii_hexdigit() && (*c.add(2)).is_ascii_hexdigit() {
                 escaped = 1;
                 c = c.add(3);
                 continue;
@@ -909,43 +942,43 @@ pub unsafe fn hfile_s3_c_460_is_escaped(str_: *const c_char) -> c_int {
         c = c.add(1);
     }
 
-    (escaped != 0 || needs_escape == 0) as c_int
+    (escaped != 0 || needs_escape == 0) as i32
 }
 
 // original: redirect_endpoint (htslib/hfile_s3.c:488)
 pub unsafe extern "C" fn hfile_s3_c_488_redirect_endpoint(
     auth: *mut c_void,
-    response: libc::c_long,
+    response: i64,
     header: *mut kstring_t,
     url: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     let ad = auth.cast::<S3AuthDataLayout>();
     let mut ret = -1;
     if header.is_null() || (*header).data.is_empty() {
         return ret;
     }
 
-    // The header scanning relies on C-string pointer arithmetic, so build a
-    // NUL-terminated working copy of the owned bytes at this boundary.
-    let mut work: Vec<u8> = (*header).data.clone();
-    work.push(0);
-    let work_ptr = work.as_mut_ptr().cast::<c_char>();
-    let mut new_region = libc::strstr(work_ptr, c"x-amz-bucket-region: ".as_ptr());
-    if !new_region.is_null() {
-        new_region = new_region.add(c"x-amz-bucket-region: ".to_bytes().len());
-        let mut end = new_region;
-        while libc::isalnum(*end as c_uchar as c_int) != 0
-            || libc::ispunct(*end as c_uchar as c_int) != 0
+    const TAG: &[u8] = b"x-amz-bucket-region: ";
+    let hdr = &(*header).data;
+    if let Some(pos) = hdr.windows(TAG.len()).position(|w| w == TAG) {
+        let region_start = pos + TAG.len();
+        let mut end = region_start;
+        while end < hdr.len()
+            && (hdr[end].is_ascii_alphanumeric() || hdr[end].is_ascii_punctuation())
         {
-            end = end.add(1);
+            end += 1;
         }
-        *end = 0;
+        let new_region_bytes = hdr[region_start..end].to_vec();
 
-        let host_c = CString::new((*ad).host.data.clone()).unwrap_or_default();
-        if libc::strstr(host_c.as_ptr(), c"amazonaws.com".as_ptr()).is_null() {
+        // Bucket region host must be an amazonaws.com endpoint.
+        let host_has_aws = (*ad)
+            .host
+            .data
+            .windows(b"amazonaws.com".len())
+            .any(|w| w == b"amazonaws.com");
+        if !host_has_aws {
             return ret;
         }
-        let new_region_bytes = cstr_bytes(new_region);
         (*ad).region.data.clear();
         crate::htslib_rs::hts::kputs(&new_region_bytes, &mut (*ad).region);
         (*ad).host.data.clear();
@@ -964,14 +997,11 @@ pub unsafe extern "C" fn hfile_s3_c_488_redirect_endpoint(
             (*url).data.clear();
             let host_bytes = (*ad).host.data.clone();
             crate::htslib_rs::hts::kputs(&host_bytes, &mut *url);
-            let bucket = (*ad).bucket.as_ptr();
-            crate::htslib_rs::hts::kputsn(
-                std::slice::from_raw_parts(bucket.cast::<u8>(), libc::strlen(bucket)),
-                libc::strlen(bucket),
-                &mut *url,
-            );
+            // bucket is NUL-terminated owned bytes; append up to the NUL.
+            let bucket_len = (*ad).bucket.iter().position(|&b| b == 0).unwrap_or((*ad).bucket.len());
+            crate::htslib_rs::hts::kputsn(&(*ad).bucket[..bucket_len], bucket_len, &mut *url);
             if (*ad).user_query_string.data.len() != 0 {
-                crate::htslib_rs::hts::kputc(b'?' as c_int, &mut *url);
+                crate::htslib_rs::hts::kputc(b'?' as i32, &mut *url);
                 let uqs = (*ad).user_query_string.data.clone();
                 crate::htslib_rs::hts::kputsn(&uqs, uqs.len(), &mut *url);
             }
@@ -984,98 +1014,120 @@ pub unsafe extern "C" fn hfile_s3_c_488_redirect_endpoint(
 
 // original: setup_auth_data (htslib/hfile_s3.c:545)
 pub unsafe fn hfile_s3_c_545_setup_auth_data(
-    s3url: *const c_char,
-    mode: *const c_char,
-    sigver: c_int,
+    s3url: *const u8,
+    mode: *const u8,
+    sigver: i32,
     url: *mut kstring_t,
 ) -> *mut s3_auth_data {
+    // Scan a NUL-terminated run from `p` until any byte in `set` (or NUL),
+    // returning the count (mirrors strcspn).
+    let cspn = |mut p: *const u8, set: &[u8]| -> usize {
+        let mut n = 0usize;
+        while *p != 0 && !set.contains(&*p) {
+            p = p.add(1);
+            n += 1;
+        }
+        n
+    };
+    // Find the first byte in `set` at or after `p` (mirrors strpbrk), or null.
+    let pbrk = |mut p: *const u8, set: &[u8]| -> *const u8 {
+        while *p != 0 && !set.contains(&*p) {
+            p = p.add(1);
+        }
+        if *p == 0 {
+            std::ptr::null()
+        } else {
+            p
+        }
+    };
+
     let ad = Box::into_raw(Box::<S3AuthDataLayout>::default());
-    (*ad).mode = if libc::strchr(mode, b'r' as c_int).is_null() {
-        b'w' as c_char
+    (*ad).mode = if cstr_bytes(mode).contains(&b'r') {
+        b'r'
     } else {
-        b'r' as c_char
+        b'w'
     };
 
     let mut is_https = 1;
     let mut address_style = 0;
-    let mut bucket: *const c_char;
-    if *s3url.add(2) == b'+' as c_char {
-        bucket = libc::strchr(s3url, b':' as c_int);
-        if bucket.is_null() {
+    let mut bucket: *const u8;
+    if *s3url.add(2) == b'+' {
+        let colon = pbrk(s3url, b":");
+        if colon.is_null() {
             drop(Box::from_raw(ad));
             return std::ptr::null_mut();
         }
-        bucket = bucket.add(1);
+        bucket = colon.add(1);
         let prefix_len = bucket.offset_from(s3url.add(3)) as usize;
         crate::htslib_rs::hts::kputsn(
-            std::slice::from_raw_parts(s3url.add(3).cast::<u8>(), prefix_len),
+            std::slice::from_raw_parts(s3url.add(3), prefix_len),
             prefix_len,
             &mut *url,
         );
         is_https = {
             let ud = &(*url).data;
-            (ud.len() >= 6 && &ud[..6] == b"https:") as c_int
+            (ud.len() >= 6 && &ud[..6] == b"https:") as i32
         };
     } else {
         crate::htslib_rs::hts::kputs(b"https:", &mut *url);
         bucket = s3url.add(3);
     }
-    while *bucket == b'/' as c_char {
-        crate::htslib_rs::hts::kputc(*bucket as c_int, &mut *url);
+    while *bucket == b'/' {
+        crate::htslib_rs::hts::kputc(*bucket as i32, &mut *url);
         bucket = bucket.add(1);
     }
 
-    let mut path = bucket.add(libc::strcspn(bucket, c"/?#@".as_ptr()));
-    if *path == b'@' as c_char {
-        let colon = libc::strpbrk(bucket, c":@".as_ptr());
-        if *colon != b':' as c_char {
+    let mut path = bucket.add(cspn(bucket, b"/?#@"));
+    if *path == b'@' {
+        let colon = pbrk(bucket, b":@");
+        if *colon != b':' {
             hfile_s3_c_165_urldecode_kput(
                 bucket,
-                colon.offset_from(bucket) as c_int,
+                colon.offset_from(bucket) as i32,
                 &mut (*ad).profile,
             );
         } else {
-            let colon2 = libc::strpbrk(colon.add(1), c":@".as_ptr());
+            let colon2 = pbrk(colon.add(1), b":@");
             hfile_s3_c_165_urldecode_kput(
                 bucket,
-                colon.offset_from(bucket) as c_int,
+                colon.offset_from(bucket) as i32,
                 &mut (*ad).id,
             );
             hfile_s3_c_165_urldecode_kput(
                 colon.add(1),
-                colon2.offset_from(colon.add(1)) as c_int,
+                colon2.offset_from(colon.add(1)) as i32,
                 &mut (*ad).secret,
             );
-            if *colon2 == b':' as c_char {
+            if *colon2 == b':' {
                 hfile_s3_c_165_urldecode_kput(
                     colon2.add(1),
-                    path.offset_from(colon2.add(1)) as c_int,
+                    path.offset_from(colon2.add(1)) as i32,
                     &mut (*ad).token,
                 );
             }
         }
         bucket = path.add(1);
-        path = bucket.add(libc::strcspn(bucket, c"/?#".as_ptr()));
+        path = bucket.add(cspn(bucket, b"/?#"));
     } else {
         let mut v = libc::getenv(c"AWS_ACCESS_KEY_ID".as_ptr());
         if !v.is_null() {
-            crate::htslib_rs::hts::kputs(&cstr_bytes(v), &mut (*ad).id);
+            crate::htslib_rs::hts::kputs(&cstr_bytes(v.cast()), &mut (*ad).id);
         }
         v = libc::getenv(c"AWS_SECRET_ACCESS_KEY".as_ptr());
         if !v.is_null() {
-            crate::htslib_rs::hts::kputs(&cstr_bytes(v), &mut (*ad).secret);
+            crate::htslib_rs::hts::kputs(&cstr_bytes(v.cast()), &mut (*ad).secret);
         }
         v = libc::getenv(c"AWS_SESSION_TOKEN".as_ptr());
         if !v.is_null() {
-            crate::htslib_rs::hts::kputs(&cstr_bytes(v), &mut (*ad).token);
+            crate::htslib_rs::hts::kputs(&cstr_bytes(v.cast()), &mut (*ad).token);
         }
         v = libc::getenv(c"AWS_DEFAULT_REGION".as_ptr());
         if !v.is_null() {
-            crate::htslib_rs::hts::kputs(&cstr_bytes(v), &mut (*ad).region);
+            crate::htslib_rs::hts::kputs(&cstr_bytes(v.cast()), &mut (*ad).region);
         }
         v = libc::getenv(c"HTS_S3_HOST".as_ptr());
         if !v.is_null() {
-            crate::htslib_rs::hts::kputs(&cstr_bytes(v), &mut (*ad).host);
+            crate::htslib_rs::hts::kputs(&cstr_bytes(v.cast()), &mut (*ad).host);
         }
         v = libc::getenv(c"AWS_DEFAULT_PROFILE".as_ptr());
         if v.is_null() {
@@ -1084,12 +1136,13 @@ pub unsafe fn hfile_s3_c_545_setup_auth_data(
         if v.is_null() {
             v = c"default".as_ptr().cast_mut();
         }
-        crate::htslib_rs::hts::kputs(&cstr_bytes(v), &mut (*ad).profile);
+        crate::htslib_rs::hts::kputs(&cstr_bytes(v.cast()), &mut (*ad).profile);
         v = libc::getenv(c"HTS_S3_ADDRESS_STYLE".as_ptr());
         if !v.is_null() {
-            if libc::strcasecmp(v, c"virtual".as_ptr()) == 0 {
+            let style = cstr_bytes(v.cast());
+            if style.eq_ignore_ascii_case(b"virtual") {
                 address_style = 1;
-            } else if libc::strcasecmp(v, c"path".as_ptr()) == 0 {
+            } else if style.eq_ignore_ascii_case(b"path") {
                 address_style = 2;
             }
         }
@@ -1099,21 +1152,22 @@ pub unsafe fn hfile_s3_c_545_setup_auth_data(
         let mut url_style = kstring_t::default();
         let mut expiry_time = kstring_t::default();
         let v = libc::getenv(c"AWS_SHARED_CREDENTIALS_FILE".as_ptr());
-        let profile_c = CString::new((*ad).profile.data.clone()).unwrap_or_default();
+        let mut profile_c = (*ad).profile.data.clone();
+        profile_c.push(0);
         hfile_s3_c_252_parse_ini(
             if v.is_null() {
-                c"~/.aws/credentials".as_ptr()
+                c"~/.aws/credentials".as_ptr().cast()
             } else {
-                v
+                v.cast()
             },
             profile_c.as_ptr(),
             &[
-                (c"aws_access_key_id".as_ptr(), &mut (*ad).id),
-                (c"aws_secret_access_key".as_ptr(), &mut (*ad).secret),
-                (c"aws_session_token".as_ptr(), &mut (*ad).token),
-                (c"region".as_ptr(), &mut (*ad).region),
-                (c"addressing_style".as_ptr(), &mut url_style),
-                (c"expiry_time".as_ptr(), &mut expiry_time),
+                (c"aws_access_key_id".as_ptr().cast(), &mut (*ad).id),
+                (c"aws_secret_access_key".as_ptr().cast(), &mut (*ad).secret),
+                (c"aws_session_token".as_ptr().cast(), &mut (*ad).token),
+                (c"region".as_ptr().cast(), &mut (*ad).region),
+                (c"addressing_style".as_ptr().cast(), &mut url_style),
+                (c"expiry_time".as_ptr().cast(), &mut expiry_time),
             ],
         );
         if url_style.data.len() != 0 {
@@ -1135,17 +1189,22 @@ pub unsafe fn hfile_s3_c_545_setup_auth_data(
     if (*ad).id.data.len() == 0 {
         let mut url_style = kstring_t::default();
         let v = libc::getenv(c"HTS_S3_S3CFG".as_ptr());
-        let profile_c = CString::new((*ad).profile.data.clone()).unwrap_or_default();
+        let mut profile_c = (*ad).profile.data.clone();
+        profile_c.push(0);
         hfile_s3_c_252_parse_ini(
-            if v.is_null() { c"~/.s3cfg".as_ptr() } else { v },
+            if v.is_null() {
+                c"~/.s3cfg".as_ptr().cast()
+            } else {
+                v.cast()
+            },
             profile_c.as_ptr(),
             &[
-                (c"access_key".as_ptr(), &mut (*ad).id),
-                (c"secret_key".as_ptr(), &mut (*ad).secret),
-                (c"access_token".as_ptr(), &mut (*ad).token),
-                (c"host_base".as_ptr(), &mut (*ad).host),
-                (c"bucket_location".as_ptr(), &mut (*ad).region),
-                (c"host_bucket".as_ptr(), &mut url_style),
+                (c"access_key".as_ptr().cast(), &mut (*ad).id),
+                (c"secret_key".as_ptr().cast(), &mut (*ad).secret),
+                (c"access_token".as_ptr().cast(), &mut (*ad).token),
+                (c"host_base".as_ptr().cast(), &mut (*ad).host),
+                (c"bucket_location".as_ptr().cast(), &mut (*ad).region),
+                (c"host_bucket".as_ptr().cast(), &mut url_style),
             ],
         );
         if url_style.data.len() != 0 {
@@ -1163,7 +1222,11 @@ pub unsafe fn hfile_s3_c_545_setup_auth_data(
     }
 
     if (*ad).id.data.len() == 0 {
-        hfile_s3_c_294_parse_simple(c"~/.awssecret".as_ptr(), &mut (*ad).id, &mut (*ad).secret);
+        hfile_s3_c_294_parse_simple(
+            c"~/.awssecret".as_ptr().cast(),
+            &mut (*ad).id,
+            &mut (*ad).secret,
+        );
     }
 
     let dns_compliant = match address_style {
@@ -1193,13 +1256,11 @@ pub unsafe fn hfile_s3_c_545_setup_auth_data(
         crate::htslib_rs::hts::kputs(b"us-east-1", &mut (*ad).region);
     }
 
-    let mut escaped: Option<CString> = None;
+    // `path` is the NUL-terminated remainder of the URL.
+    let path_bytes = cstr_bytes(path);
+    let mut escaped: Option<Vec<u8>> = None;
     if hfile_s3_c_460_is_escaped(path) == 0 {
-        escaped = hfile_s3_escape_path_owned(CStr::from_ptr(path));
-        if escaped.is_none() {
-            hfile_s3_c_319_free_auth_data(ad.cast());
-            return std::ptr::null_mut();
-        }
+        escaped = Some(hfile_s3_escape_path_owned(&path_bytes));
     }
 
     let bucket_len = path.offset_from(bucket) as usize;
@@ -1207,11 +1268,11 @@ pub unsafe fn hfile_s3_c_545_setup_auth_data(
     if dns_compliant != 0 {
         let url_host_pos = (*url).data.len();
         crate::htslib_rs::hts::kputsn_(
-            std::slice::from_raw_parts(bucket.cast::<u8>(), bucket_len),
+            std::slice::from_raw_parts(bucket, bucket_len),
             bucket_len,
             &mut *url,
         );
-        crate::htslib_rs::hts::kputc(b'.' as c_int, &mut *url);
+        crate::htslib_rs::hts::kputc(b'.' as i32, &mut *url);
         let host_bytes = (*ad).host.data.clone();
         crate::htslib_rs::hts::kputsn(&host_bytes, host_bytes.len(), &mut *url);
         url_path_pos = (*url).data.len();
@@ -1224,51 +1285,32 @@ pub unsafe fn hfile_s3_c_545_setup_auth_data(
         let host_bytes = (*ad).host.data.clone();
         crate::htslib_rs::hts::kputsn(&host_bytes, host_bytes.len(), &mut *url);
         url_path_pos = (*url).data.len();
-        crate::htslib_rs::hts::kputc(b'/' as c_int, &mut *url);
+        crate::htslib_rs::hts::kputc(b'/' as i32, &mut *url);
         crate::htslib_rs::hts::kputsn(
-            std::slice::from_raw_parts(bucket.cast::<u8>(), bucket_len),
+            std::slice::from_raw_parts(bucket, bucket_len),
             bucket_len,
             &mut *url,
         );
     }
-    let escaped_path = escaped.as_ref().map_or(path, |escaped| escaped.as_ptr());
-    crate::htslib_rs::hts::kputs(&cstr_bytes(escaped_path), &mut *url);
+    let escaped_path: &[u8] = escaped.as_deref().unwrap_or(&path_bytes);
+    crate::htslib_rs::hts::kputs(escaped_path, &mut *url);
 
-    let bucket = if sigver == 4 || dns_compliant == 0 {
+    let mut bucket = if sigver == 4 || dns_compliant == 0 {
         (&(*url).data)[url_path_pos..].to_vec()
     } else {
-        let source_bucket = bucket;
         let mut bucket_bytes = Vec::with_capacity((*url).data.len() - url_path_pos + bucket_len + 1);
         bucket_bytes.push(b'/');
-        bucket_bytes.extend_from_slice(std::slice::from_raw_parts(
-            source_bucket.cast::<u8>(),
-            bucket_len,
-        ));
+        bucket_bytes.extend_from_slice(std::slice::from_raw_parts(bucket, bucket_len));
         bucket_bytes.extend_from_slice(&(&(*url).data)[url_path_pos..]);
         bucket_bytes
     };
-    let mut bucket = match CString::new(bucket) {
-        Ok(bucket) => bucket,
-        Err(_) => {
-            hfile_s3_c_319_free_auth_data(ad.cast());
-            return std::ptr::null_mut();
-        }
-    };
-    if let Some(query_offset) = bucket.as_bytes().iter().position(|&b| b == b'?') {
-        let bytes = bucket.as_bytes();
-        if let Ok(query) = CString::new(&bytes[query_offset + 1..]) {
-            crate::htslib_rs::hts::kputs(query.as_bytes(), &mut (*ad).user_query_string);
-        }
-        let mut bytes = bucket.into_bytes();
-        bytes.truncate(query_offset);
-        bucket = match CString::new(bytes) {
-            Ok(bucket) => bucket,
-            Err(_) => {
-                hfile_s3_c_319_free_auth_data(ad.cast());
-                return std::ptr::null_mut();
-            }
-        };
+    if let Some(query_offset) = bucket.iter().position(|&b| b == b'?') {
+        let query = bucket[query_offset + 1..].to_vec();
+        crate::htslib_rs::hts::kputs(&query, &mut (*ad).user_query_string);
+        bucket.truncate(query_offset);
     }
+    // Store as NUL-terminated owned bytes so FFI/format reads see a C string.
+    bucket.push(0);
     (*ad).bucket = bucket;
     ad.cast()
 }
@@ -1276,10 +1318,10 @@ pub unsafe fn hfile_s3_c_545_setup_auth_data(
 // original: v2_authorisation (htslib/hfile_s3.c:774)
 pub unsafe extern "C" fn hfile_s3_c_774_v2_authorisation(
     ctx: *mut c_void,
-    hdrs: *mut *mut *mut c_char,
-) -> c_int {
+    hdrs: *mut *mut *mut u8,
+) -> i32 {
     let ad = ctx.cast::<S3AuthDataLayout>();
-    let now = libc::time(std::ptr::null_mut());
+    let now = libc::time(std::ptr::null_mut()) as i64;
     let mut message = kstring_t::default();
     let mut digest = [0u8; DIGEST_BUFSIZ];
 
@@ -1299,11 +1341,7 @@ pub unsafe extern "C" fn hfile_s3_c_774_v2_authorisation(
         (*ad).auth_time = now;
         return hfile_s3_copy_auth_headers(&mut *ad, hdrs);
     }
-    let method = if (*ad).mode == b'r' as c_char {
-        "GET"
-    } else {
-        "PUT"
-    };
+    let method = if (*ad).mode == b'r' { "GET" } else { "PUT" };
     let token_prefix = if (*ad).token.data.len() != 0 {
         "x-amz-security-token:"
     } else {
@@ -1315,16 +1353,16 @@ pub unsafe extern "C" fn hfile_s3_c_774_v2_authorisation(
         String::new()
     };
     let token_nl = if (*ad).token.data.len() != 0 { "\n" } else { "" };
+    // date is a NUL-terminated buffer; the C-string body starts at offset 6.
+    let date_nul = (*ad).date.iter().position(|&b| b == 0).unwrap_or((*ad).date.len());
+    let date_body = String::from_utf8_lossy(&(*ad).date[6..date_nul]).into_owned();
+    let bucket_nul = (*ad).bucket.iter().position(|&b| b == 0).unwrap_or((*ad).bucket.len());
+    let bucket_str = String::from_utf8_lossy(&(*ad).bucket[..bucket_nul]).into_owned();
     if kput_cstring(
         &mut message,
         format!(
             "{}\n\n\n{}\n{}{}{}{}",
-            method,
-            CStr::from_ptr((*ad).date.as_ptr().add(6)).to_string_lossy(),
-            token_prefix,
-            token,
-            token_nl,
-            CStr::from_ptr((*ad).bucket.as_ptr()).to_string_lossy()
+            method, date_body, token_prefix, token, token_nl, bucket_str
         ),
     ) < 0
     {
@@ -1349,20 +1387,21 @@ pub unsafe extern "C" fn hfile_s3_c_774_v2_authorisation(
 
 // original: hash_string (htslib/hfile_s3.c:836)
 pub unsafe fn hfile_s3_c_836_hash_string(
-    in_: *mut c_char,
+    in_: *mut u8,
     length: usize,
-    out: *mut c_char,
+    out: *mut u8,
     out_len: usize,
 ) {
     let mut hashed = [0u8; SHA256_DIGEST_BUFSIZE];
     hfile_s3_c_152_s3_sha256(in_.cast(), length, hashed.as_mut_ptr());
+    // Write lowercase hex (mirrors snprintf("%02x")), NUL-terminating each step.
     for (i, byte) in hashed.iter().enumerate() {
-        libc::snprintf(
-            out.add(i * 2),
-            out_len - i * 2,
-            c"%02x".as_ptr(),
-            *byte as c_int,
-        );
+        if i * 2 + 2 < out_len {
+            let hex = format!("{byte:02x}");
+            *out.add(i * 2) = hex.as_bytes()[0];
+            *out.add(i * 2 + 1) = hex.as_bytes()[1];
+            *out.add(i * 2 + 2) = 0;
+        }
     }
 }
 
@@ -1370,9 +1409,9 @@ pub unsafe fn hfile_s3_c_836_hash_string(
 pub unsafe fn hfile_s3_c_848_make_signature(
     ad: *mut s3_auth_data,
     string_to_sign: *mut kstring_t,
-    signature_string: *mut c_char,
+    signature_string: *mut u8,
     sig_string_len: usize,
-) -> c_int {
+) -> i32 {
     let ad = ad.cast::<S3AuthDataLayout>();
     let mut date_key = [0u8; SHA256_DIGEST_BUFSIZE];
     let mut date_region_key = [0u8; SHA256_DIGEST_BUFSIZE];
@@ -1380,7 +1419,7 @@ pub unsafe fn hfile_s3_c_848_make_signature(
     let mut signing_key = [0u8; SHA256_DIGEST_BUFSIZE];
     let mut signature = [0u8; SHA256_DIGEST_BUFSIZE];
     let mut secret_access_key = kstring_t::default();
-    let mut len = 0 as c_uint;
+    let mut len = 0u32;
 
     if kput_cstring(
         &mut secret_access_key,
@@ -1390,25 +1429,30 @@ pub unsafe fn hfile_s3_c_848_make_signature(
     {
         return -1;
     }
+    let date_short_len = (*ad)
+        .date_short
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or((*ad).date_short.len());
     hfile_s3_c_157_s3_sign_sha256(
         secret_access_key.data.as_ptr().cast(),
-        secret_access_key.data.len() as c_int,
+        secret_access_key.data.len() as i32,
         (*ad).date_short.as_ptr().cast(),
-        libc::strlen((*ad).date_short.as_ptr()) as c_int,
+        date_short_len as i32,
         date_key.as_mut_ptr(),
         &mut len,
     );
     hfile_s3_c_157_s3_sign_sha256(
         date_key.as_ptr().cast(),
-        len as c_int,
+        len as i32,
         (*ad).region.data.as_ptr().cast(),
-        (*ad).region.data.len() as c_int,
+        (*ad).region.data.len() as i32,
         date_region_key.as_mut_ptr(),
         &mut len,
     );
     hfile_s3_c_157_s3_sign_sha256(
         date_region_key.as_ptr().cast(),
-        len as c_int,
+        len as i32,
         c"s3".as_ptr().cast(),
         2,
         date_region_service_key.as_mut_ptr(),
@@ -1416,7 +1460,7 @@ pub unsafe fn hfile_s3_c_848_make_signature(
     );
     hfile_s3_c_157_s3_sign_sha256(
         date_region_service_key.as_ptr().cast(),
-        len as c_int,
+        len as i32,
         c"aws4_request".as_ptr().cast(),
         12,
         signing_key.as_mut_ptr(),
@@ -1424,19 +1468,19 @@ pub unsafe fn hfile_s3_c_848_make_signature(
     );
     hfile_s3_c_157_s3_sign_sha256(
         signing_key.as_ptr().cast(),
-        len as c_int,
+        len as i32,
         (*string_to_sign).data.as_ptr().cast(),
-        (*string_to_sign).data.len() as c_int,
+        (*string_to_sign).data.len() as i32,
         signature.as_mut_ptr(),
         &mut len,
     );
     for (i, byte) in signature.iter().take(len as usize).enumerate() {
-        libc::snprintf(
-            signature_string.add(i * 2),
-            sig_string_len - i * 2,
-            c"%02x".as_ptr(),
-            *byte as c_int,
-        );
+        if i * 2 + 2 < sig_string_len {
+            let hex = format!("{byte:02x}");
+            *signature_string.add(i * 2) = hex.as_bytes()[0];
+            *signature_string.add(i * 2 + 1) = hex.as_bytes()[1];
+            *signature_string.add(i * 2 + 2) = 0;
+        }
     }
     crate::htslib_rs::hts::ks_free(&mut secret_access_key);
     0
@@ -1445,19 +1489,27 @@ pub unsafe fn hfile_s3_c_848_make_signature(
 // original: make_authorisation (htslib/hfile_s3.c:884)
 pub unsafe fn hfile_s3_c_884_make_authorisation(
     ad: *mut s3_auth_data,
-    http_request: *mut c_char,
-    content: *mut c_char,
+    http_request: *mut u8,
+    content: *mut u8,
     auth: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     let ad = ad.cast::<S3AuthDataLayout>();
     let mut signed_headers = kstring_t::default();
     let mut canonical_headers = kstring_t::default();
     let mut canonical_request = kstring_t::default();
     let mut scope = kstring_t::default();
     let mut string_to_sign = kstring_t::default();
-    let mut cr_hash = [0 as c_char; HASH_LENGTH_SHA256];
-    let mut signature_string = [0 as c_char; HASH_LENGTH_SHA256];
+    let mut cr_hash = [0u8; HASH_LENGTH_SHA256];
+    let mut signature_string = [0u8; HASH_LENGTH_SHA256];
     let mut ret = -1;
+
+    // Render the NUL-terminated C-string inputs / fixed buffers as text.
+    let content_str = String::from_utf8_lossy(&cstr_bytes(content)).into_owned();
+    let http_request_str = String::from_utf8_lossy(&cstr_bytes(http_request)).into_owned();
+    let date_long_str = String::from_utf8_lossy(&cstr_bytes((*ad).date_long.as_ptr())).into_owned();
+    let date_short_str =
+        String::from_utf8_lossy(&cstr_bytes((*ad).date_short.as_ptr())).into_owned();
+    let bucket_str = String::from_utf8_lossy(&cstr_bytes((*ad).bucket.as_ptr())).into_owned();
 
     if (*ad).token.data.len() == 0 {
         kputs_literal(b"host;x-amz-content-sha256;x-amz-date", &mut signed_headers);
@@ -1477,8 +1529,8 @@ pub unsafe fn hfile_s3_c_884_make_authorisation(
             format!(
                 "host:{}\nx-amz-content-sha256:{}\nx-amz-date:{}\n",
                 String::from_utf8_lossy(&(*ad).host.data),
-                CStr::from_ptr(content).to_string_lossy(),
-                CStr::from_ptr((*ad).date_long.as_ptr()).to_string_lossy()
+                content_str,
+                date_long_str
             ),
         );
     } else {
@@ -1487,8 +1539,8 @@ pub unsafe fn hfile_s3_c_884_make_authorisation(
             format!(
                 "host:{}\nx-amz-content-sha256:{}\nx-amz-date:{}\nx-amz-security-token:{}\n",
                 String::from_utf8_lossy(&(*ad).host.data),
-                CStr::from_ptr(content).to_string_lossy(),
-                CStr::from_ptr((*ad).date_long.as_ptr()).to_string_lossy(),
+                content_str,
+                date_long_str,
                 String::from_utf8_lossy(&(*ad).token.data)
             ),
         );
@@ -1498,12 +1550,12 @@ pub unsafe fn hfile_s3_c_884_make_authorisation(
             &mut canonical_request,
             format!(
                 "{}\n{}\n{}\n{}\n{}\n{}",
-                CStr::from_ptr(http_request).to_string_lossy(),
-                CStr::from_ptr((*ad).bucket.as_ptr()).to_string_lossy(),
+                http_request_str,
+                bucket_str,
                 String::from_utf8_lossy(&(*ad).canonical_query_string.data),
                 String::from_utf8_lossy(&canonical_headers.data),
                 String::from_utf8_lossy(&signed_headers.data),
-                CStr::from_ptr(content).to_string_lossy()
+                content_str
             ),
         );
         if canonical_request.data.len() != 0 {
@@ -1517,7 +1569,7 @@ pub unsafe fn hfile_s3_c_884_make_authorisation(
                 &mut scope,
                 format!(
                     "{}/{}/s3/aws4_request",
-                    CStr::from_ptr((*ad).date_short.as_ptr()).to_string_lossy(),
+                    date_short_str,
                     String::from_utf8_lossy(&(*ad).region.data)
                 ),
             );
@@ -1526,9 +1578,9 @@ pub unsafe fn hfile_s3_c_884_make_authorisation(
                     &mut string_to_sign,
                     format!(
                         "AWS4-HMAC-SHA256\n{}\n{}\n{}",
-                        CStr::from_ptr((*ad).date_long.as_ptr()).to_string_lossy(),
+                        date_long_str,
                         String::from_utf8_lossy(&scope.data),
-                        CStr::from_ptr(cr_hash.as_ptr()).to_string_lossy()
+                        String::from_utf8_lossy(&cstr_bytes(cr_hash.as_ptr()))
                     ),
                 );
                 if string_to_sign.data.len() != 0
@@ -1544,10 +1596,10 @@ pub unsafe fn hfile_s3_c_884_make_authorisation(
                         format!(
                             "Authorization: AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}",
                             String::from_utf8_lossy(&(*ad).id.data),
-                            CStr::from_ptr((*ad).date_short.as_ptr()).to_string_lossy(),
+                            date_short_str,
                             String::from_utf8_lossy(&(*ad).region.data),
                             String::from_utf8_lossy(&signed_headers.data),
-                            CStr::from_ptr(signature_string.as_ptr()).to_string_lossy()
+                            String::from_utf8_lossy(&cstr_bytes(signature_string.as_ptr()))
                         ),
                     );
                     if (*auth).data.len() != 0 {
@@ -1567,8 +1619,8 @@ pub unsafe fn hfile_s3_c_884_make_authorisation(
 }
 
 // original: update_time (htslib/hfile_s3.c:968)
-pub unsafe fn hfile_s3_c_968_update_time(ad: *mut s3_auth_data, now: libc::time_t) -> c_int {
-    const AUTH_LIFETIME: libc::time_t = 60;
+pub unsafe fn hfile_s3_c_968_update_time(ad: *mut s3_auth_data, now: i64) -> i32 {
+    const AUTH_LIFETIME: i64 = 60;
     let ad = ad.cast::<S3AuthDataLayout>();
     let mut ret = -1;
 
@@ -1592,14 +1644,12 @@ pub unsafe fn hfile_s3_c_968_update_time(ad: *mut s3_auth_data, now: libc::time_
 }
 
 // original: query_cmp (htslib/hfile_s3.c:999)
-pub unsafe fn hfile_s3_c_999_query_cmp(p1: *const c_void, p2: *const c_void) -> c_int {
-    let q1 = p1.cast::<*const c_char>();
-    let q2 = p2.cast::<*const c_char>();
-    libc::strcmp(*q1, *q2)
+pub fn hfile_s3_c_999_query_cmp(q1: &[u8], q2: &[u8]) -> std::cmp::Ordering {
+    q1.cmp(q2)
 }
 
 // original: order_query_string (htslib/hfile_s3.c:1009)
-pub unsafe fn hfile_s3_c_1009_order_query_string(qs: *mut kstring_t) -> c_int {
+pub unsafe fn hfile_s3_c_1009_order_query_string(qs: *mut kstring_t) -> i32 {
     if qs.is_null() {
         return -1;
     }
@@ -1628,15 +1678,10 @@ pub unsafe fn hfile_s3_c_1009_order_query_string(qs: *mut kstring_t) -> c_int {
         crate::htslib_rs::hts::kputs(query, &mut ordered);
     }
 
-    let escaped = if ordered.data.is_empty() {
-        None
-    } else {
-        let ordered_c = CString::new(ordered.data.clone()).unwrap_or_default();
-        hfile_s3_escape_query_owned(&ordered_c)
-    };
-    if let Some(escaped) = escaped {
+    if !ordered.data.is_empty() {
+        let escaped = hfile_s3_escape_query_owned(&ordered.data);
         (*qs).data.clear();
-        crate::htslib_rs::hts::kputs(escaped.as_bytes(), &mut *qs);
+        crate::htslib_rs::hts::kputs(&escaped, &mut *qs);
         ret = 0;
     }
 
@@ -1646,22 +1691,22 @@ pub unsafe fn hfile_s3_c_1009_order_query_string(qs: *mut kstring_t) -> c_int {
 // original: v4_authorisation (htslib/hfile_s3.c:1055)
 pub unsafe extern "C" fn hfile_s3_c_1055_v4_authorisation(
     auth: *mut c_void,
-    request: *mut c_char,
+    request: *mut u8,
     content: *mut kstring_t,
-    cqs: *mut c_char,
+    cqs: *mut u8,
     hash: *mut kstring_t,
     auth_str: *mut kstring_t,
     date: *mut kstring_t,
     token: *mut kstring_t,
-    uqs: c_int,
-) -> c_int {
+    uqs: i32,
+) -> i32 {
     let ad = auth.cast::<S3AuthDataLayout>();
-    let mut content_hash = [0 as c_char; HASH_LENGTH_SHA256];
+    let mut content_hash = [0u8; HASH_LENGTH_SHA256];
     if request.is_null() {
         hfile_s3_c_319_free_auth_data(ad.cast());
         return 0;
     }
-    let now = libc::time(std::ptr::null_mut());
+    let now = libc::time(std::ptr::null_mut()) as i64;
     if hfile_s3_c_968_update_time(ad.cast(), now) != 0 {
         return -1;
     }
@@ -1677,7 +1722,7 @@ pub unsafe extern "C" fn hfile_s3_c_1055_v4_authorisation(
         );
     } else {
         hfile_s3_c_836_hash_string(
-            c"".as_ptr().cast_mut(),
+            c"".as_ptr().cast_mut().cast(),
             0,
             content_hash.as_mut_ptr(),
             content_hash.len(),
@@ -1725,10 +1770,10 @@ pub unsafe extern "C" fn hfile_s3_c_1055_v4_authorisation(
 
 pub unsafe extern "C" fn hfile_s3_c_1055_v4_auth_header_callback(
     ctx: *mut c_void,
-    hdrs: *mut *mut *mut c_char,
-) -> c_int {
+    hdrs: *mut *mut *mut u8,
+) -> i32 {
     let ad = ctx.cast::<S3AuthDataLayout>();
-    let mut content_hash = [0 as c_char; HASH_LENGTH_SHA256];
+    let mut content_hash = [0u8; HASH_LENGTH_SHA256];
     let mut content = kstring_t::default();
     let mut authorisation = kstring_t::default();
     let mut token_hdr = kstring_t::default();
@@ -1736,7 +1781,7 @@ pub unsafe extern "C" fn hfile_s3_c_1055_v4_auth_header_callback(
         hfile_s3_c_319_free_auth_data(ad.cast());
         return 0;
     }
-    let now = libc::time(std::ptr::null_mut());
+    let now = libc::time(std::ptr::null_mut()) as i64;
     if hfile_s3_c_968_update_time(ad.cast(), now) != 0 {
         return -1;
     }
@@ -1747,7 +1792,7 @@ pub unsafe extern "C" fn hfile_s3_c_1055_v4_auth_header_callback(
         return hfile_s3_copy_auth_headers(&mut *ad, hdrs);
     }
     hfile_s3_c_836_hash_string(
-        c"".as_ptr().cast_mut(),
+        c"".as_ptr().cast_mut().cast(),
         0,
         content_hash.as_mut_ptr(),
         content_hash.len(),
@@ -1764,7 +1809,7 @@ pub unsafe extern "C" fn hfile_s3_c_1055_v4_auth_header_callback(
     }
     if hfile_s3_c_884_make_authorisation(
         ad.cast(),
-        c"GET".as_ptr().cast_mut(),
+        c"GET".as_ptr().cast_mut().cast(),
         content_hash.as_mut_ptr(),
         &mut authorisation,
     ) != 0
@@ -1775,7 +1820,7 @@ pub unsafe extern "C" fn hfile_s3_c_1055_v4_auth_header_callback(
         &mut content,
         format!(
             "x-amz-content-sha256: {}",
-            CStr::from_ptr(content_hash.as_ptr()).to_string_lossy()
+            String::from_utf8_lossy(&cstr_bytes(content_hash.as_ptr()))
         ),
     );
     if (*ad).token.data.len() > 0 {
@@ -1789,8 +1834,9 @@ pub unsafe extern "C" fn hfile_s3_c_1055_v4_auth_header_callback(
         crate::htslib_rs::hts::ks_free(&mut token_hdr);
         return -1;
     }
-    // push_strdup needs a NUL-terminated C string; build one at this boundary.
-    let date_html_c = CString::new((*ad).date_html.data.clone()).unwrap_or_default();
+    // push_strdup copies a NUL-terminated run; append a NUL to the owned bytes.
+    let mut date_html_c = (*ad).date_html.data.clone();
+    date_html_c.push(0);
     (*ad).headers.clear();
     if (*ad)
         .headers
@@ -1814,36 +1860,35 @@ pub unsafe extern "C" fn hfile_s3_c_1055_v4_auth_header_callback(
     0
 }
 
-pub unsafe fn hfile_s3_c_1055_handle_400_response(fp: *mut hFILE, ad: *mut s3_auth_data) -> c_int {
+pub unsafe fn hfile_s3_c_1055_handle_400_response(fp: *mut hFILE, ad: *mut s3_auth_data) -> i32 {
     let ad = ad.cast::<S3AuthDataLayout>();
-    let mut buffer = [0 as c_char; 1024];
+    let mut buffer = [0u8; 1024];
     let bytes = htslib_hfile_h_247_hread(fp, buffer.as_mut_ptr().cast(), buffer.len() - 1);
     if bytes < 0 {
         return -1;
     }
-    buffer[bytes as usize] = 0;
-    let mut region = libc::strstr(buffer.as_mut_ptr(), c"<Region>".as_ptr());
-    if region.is_null() {
+    let body = &buffer[..bytes as usize];
+    let Some(tag_pos) = body.windows(b"<Region>".len()).position(|w| w == b"<Region>") else {
+        return -1;
+    };
+    let mut start = tag_pos + b"<Region>".len();
+    while start < body.len() && (body[start] as char).is_whitespace() {
+        start += 1;
+    }
+    let Some(rel_end) = body[start..].iter().position(|&b| b == b'<') else {
+        return -1;
+    };
+    let lt = start + rel_end;
+    if !body[lt + 1..].starts_with(b"/Region>") {
         return -1;
     }
-    region = region.add(8);
-    while libc::isspace(*region as c_uchar as c_int) != 0 {
-        region = region.add(1);
-    }
-    let mut reg_end = libc::strchr(region, b'<' as c_int);
-    if reg_end.is_null() || libc::strncmp(reg_end.add(1), c"/Region>".as_ptr(), 8) != 0 {
-        return -1;
-    }
-    while reg_end > region && libc::isspace(*reg_end.sub(1) as c_uchar as c_int) != 0 {
-        reg_end = reg_end.sub(1);
+    let mut reg_end = lt;
+    while reg_end > start && (body[reg_end - 1] as char).is_whitespace() {
+        reg_end -= 1;
     }
     (*ad).region.data.clear();
-    let region_len = reg_end.offset_from(region) as usize;
-    crate::htslib_rs::hts::kputsn(
-        std::slice::from_raw_parts(region.cast::<u8>(), region_len),
-        region_len,
-        &mut (*ad).region,
-    );
+    let region_slice = body[start..reg_end].to_vec();
+    crate::htslib_rs::hts::kputsn(&region_slice, region_slice.len(), &mut (*ad).region);
     if (*ad).region.data.len() == 0 {
         -1
     } else {
@@ -1852,128 +1897,73 @@ pub unsafe fn hfile_s3_c_1055_handle_400_response(fp: *mut hFILE, ad: *mut s3_au
 }
 
 // original: set_region (htslib/hfile_s3.c:1112)
-pub unsafe fn hfile_s3_c_1112_set_region(ad: *mut s3_auth_data, region: *mut kstring_t) -> c_int {
+pub unsafe fn hfile_s3_c_1112_set_region(ad: *mut s3_auth_data, region: *mut kstring_t) -> i32 {
     let ad = ad.cast::<S3AuthDataLayout>();
     (*ad).region.data.clear();
     let region_bytes = (*region).data.clone();
-    (crate::htslib_rs::hts::kputsn(&region_bytes, region_bytes.len(), &mut (*ad).region) < 0)
-        as c_int
+    (crate::htslib_rs::hts::kputsn(&region_bytes, region_bytes.len(), &mut (*ad).region) < 0) as i32
 }
 
 // original: stristr (htslib/hfile_s3.c:1176)
-pub unsafe fn hfile_s3_c_1176_stristr(
-    mut haystack: *mut c_char,
-    needle: *mut c_char,
-) -> *mut c_char {
-    while *haystack != 0 {
-        let mut h = haystack;
-        let mut n = needle;
-
-        while (*h as u8).eq_ignore_ascii_case(&(*n as u8)) {
-            h = h.add(1);
-            n = n.add(1);
-            if *h == 0 || *n == 0 {
-                break;
-            }
-        }
-
-        if *n == 0 {
-            break;
-        }
-
-        haystack = haystack.add(1);
+// Case-insensitive substring search; returns the byte offset of the match.
+pub fn hfile_s3_c_1176_stristr(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
     }
-
-    if *haystack == 0 {
-        std::ptr::null_mut()
-    } else {
-        haystack
-    }
+    haystack
+        .windows(needle.len())
+        .position(|w| w.eq_ignore_ascii_case(needle))
 }
 
 // original: get_entry (htslib/hfile_s3.c:1198)
 pub unsafe fn hfile_s3_c_1198_get_entry(
-    in_: *mut c_char,
-    start_tag: *mut c_char,
-    end_tag: *mut c_char,
+    in_: &[u8],
+    start_tag: &[u8],
+    end_tag: &[u8],
     out: *mut kstring_t,
-) -> c_int {
-    if in_.is_null() {
+) -> i32 {
+    let Some(start_pos) = hfile_s3_c_1176_stristr(in_, start_tag) else {
         return libc::EOF;
-    }
-
-    let mut start = hfile_s3_c_1176_stristr(in_, start_tag);
-    if start.is_null() {
+    };
+    let start = start_pos + start_tag.len();
+    let Some(rel_end) = hfile_s3_c_1176_stristr(&in_[start..], end_tag) else {
         return libc::EOF;
-    }
-
-    start = start.add(libc::strlen(start_tag));
-    let end = hfile_s3_c_1176_stristr(start, end_tag);
-    if end.is_null() {
-        return libc::EOF;
-    }
-
-    let entry_len = end.offset_from(start) as usize;
-    crate::htslib_rs::hts::kputsn(
-        std::slice::from_raw_parts(start.cast::<u8>(), entry_len),
-        entry_len,
-        &mut *out,
-    )
+    };
+    let entry = &in_[start..start + rel_end];
+    crate::htslib_rs::hts::kputsn(entry, entry.len(), &mut *out)
 }
 
 // original: report_s3_error (htslib/hfile_s3.c:1218)
-pub unsafe fn hfile_s3_c_1218_report_s3_error(
-    body: *mut kstring_t,
-    resp_code: libc::c_long,
-) -> c_int {
+pub unsafe fn hfile_s3_c_1218_report_s3_error(body: *mut kstring_t, resp_code: i64) -> i32 {
     let mut entry = kstring_t::default();
-    // get_entry needs a NUL-terminated input string; build one from body bytes.
-    let body_c = CString::new((*body).data.clone()).unwrap_or_default();
+    let body_bytes = (*body).data.clone();
 
-    if hfile_s3_c_1198_get_entry(
-        body_c.as_ptr().cast_mut(),
-        c"<Code>".as_ptr().cast_mut(),
-        c"</Code>".as_ptr().cast_mut(),
-        &mut entry,
-    ) == libc::EOF
-    {
+    if hfile_s3_c_1198_get_entry(&body_bytes, b"<Code>", b"</Code>", &mut entry) == libc::EOF {
         return -1;
     }
 
-    let entry_c = CString::new(entry.data.clone()).unwrap_or_default();
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"hfile_s3: S3 error %ld: %s\n".as_ptr(),
+    eprintln!(
+        "hfile_s3: S3 error {}: {}",
         resp_code,
-        entry_c.as_ptr(),
+        String::from_utf8_lossy(&entry.data)
     );
 
     entry.data.clear();
 
-    if hfile_s3_c_1198_get_entry(
-        body_c.as_ptr().cast_mut(),
-        c"<Message>".as_ptr().cast_mut(),
-        c"</Message>".as_ptr().cast_mut(),
-        &mut entry,
-    ) == libc::EOF
+    if hfile_s3_c_1198_get_entry(&body_bytes, b"<Message>", b"</Message>", &mut entry) == libc::EOF
     {
         return -1;
     }
 
     if entry.data.len() != 0 {
-        let entry_c = CString::new(entry.data.clone()).unwrap_or_default();
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s\n".as_ptr(),
-            entry_c.as_ptr(),
-        );
+        eprintln!("{}", String::from_utf8_lossy(&entry.data));
     }
 
     0
 }
 
 // original: http_status_errno (htslib/hfile_s3.c:1242)
-pub unsafe fn hfile_s3_c_1242_http_status_errno(status: c_int) -> c_int {
+pub unsafe fn hfile_s3_c_1242_http_status_errno(status: i32) -> i32 {
     if status >= 500 {
         match status {
             501 => libc::ENOSYS,
@@ -2063,8 +2053,8 @@ pub unsafe extern "C" fn hfile_s3_c_1293_response_callback(
 
 unsafe fn hfile_s3_add_header(
     head: &mut Option<NonNull<HFileLibcurlCurlSlist>>,
-    value: *const c_char,
-) -> c_int {
+    value: *const u8,
+) -> i32 {
     let tmp = match NonNull::new(curl_slist_append(head.as_ptr(), value)) {
         Some(tmp) => tmp,
         None => return 1,
@@ -2090,13 +2080,17 @@ unsafe fn hfile_s3_set_html_headers(
 
     // curl_slist_append needs NUL-terminated C strings; build temps from the
     // owned bytes at this FFI boundary.
-    let auth_c = CString::new(auth.data.clone()).unwrap_or_default();
-    let date_c = CString::new(date.data.clone()).unwrap_or_default();
-    let content_c = CString::new(content.data.clone()).unwrap_or_default();
-    let token_c = CString::new(token.data.clone()).unwrap_or_default();
+    let mut auth_c = auth.data.clone();
+    auth_c.push(0);
+    let mut date_c = date.data.clone();
+    date_c.push(0);
+    let mut content_c = content.data.clone();
+    content_c.push(0);
+    let mut token_c = token.data.clone();
+    token_c.push(0);
 
-    err |= hfile_s3_add_header(&mut headers, c"Content-Type:".as_ptr());
-    err |= hfile_s3_add_header(&mut headers, c"Expect:".as_ptr());
+    err |= hfile_s3_add_header(&mut headers, c"Content-Type:".as_ptr().cast());
+    err |= hfile_s3_add_header(&mut headers, c"Expect:".as_ptr().cast());
     if err == 0 && auth.data.len() != 0 {
         err |= hfile_s3_add_header(&mut headers, auth_c.as_ptr());
     }
@@ -2108,7 +2102,8 @@ unsafe fn hfile_s3_set_html_headers(
     }
     if err == 0 {
         if let Some(range) = range {
-            let range_c = CString::new(range.data.clone()).unwrap_or_default();
+            let mut range_c = range.data.clone();
+            range_c.push(0);
             err |= hfile_s3_add_header(&mut headers, range_c.as_ptr());
         }
     }
@@ -2127,18 +2122,17 @@ unsafe fn hfile_s3_set_html_headers(
     }
 }
 
-unsafe fn hfile_s3_response_code(fp: *mut hFILE_s3, response_code: *mut libc::c_long) -> c_int {
+unsafe fn hfile_s3_response_code(fp: *mut hFILE_s3, response_code: *mut i64) -> i32 {
     let Some(curl) = (*fp).curl else {
         return -1;
     };
     curl_easy_getinfo_long(curl.as_ptr(), CURLINFO_RESPONSE_CODE, response_code)
 }
 
-unsafe fn hfile_s3_finish_uploaded_part(fp: *mut hFILE_s3, response: *mut kstring_t) -> c_int {
-    let mut response_code: libc::c_long = 0;
+unsafe fn hfile_s3_finish_uploaded_part(fp: *mut hFILE_s3, response: *mut kstring_t) -> i32 {
+    let mut response_code: i64 = 0;
     if hfile_s3_response_code(fp, &mut response_code) != CURLE_OK || response_code > 200 {
-        *crate::htslib_rs::c_compat::__errno_location() =
-            hfile_s3_c_1242_http_status_errno(response_code as c_int);
+        *libc::__errno_location() = hfile_s3_c_1242_http_status_errno(response_code as i32);
         -1
     } else {
         hfile_s3_append_completed_upload_part(fp, response)
@@ -2146,15 +2140,10 @@ unsafe fn hfile_s3_finish_uploaded_part(fp: *mut hFILE_s3, response: *mut kstrin
 }
 
 // original: get_upload_id (htslib/hfile_s3.c:1837)
-unsafe fn hfile_s3_c_1837_get_upload_id(fp: *mut hFILE_s3, resp: *mut kstring_t) -> c_int {
-    // get_entry needs a NUL-terminated input string; build one from resp bytes.
-    let resp_c = CString::new((*resp).data.clone()).unwrap_or_default();
-    if hfile_s3_c_1198_get_entry(
-        resp_c.as_ptr().cast_mut(),
-        c"<UploadId>".as_ptr().cast_mut(),
-        c"</UploadId>".as_ptr().cast_mut(),
-        &mut (*fp).upload_id,
-    ) == libc::EOF
+unsafe fn hfile_s3_c_1837_get_upload_id(fp: *mut hFILE_s3, resp: *mut kstring_t) -> i32 {
+    let resp_bytes = (*resp).data.clone();
+    if hfile_s3_c_1198_get_entry(&resp_bytes, b"<UploadId>", b"</UploadId>", &mut (*fp).upload_id)
+        == libc::EOF
     {
         -1
     } else {
@@ -2162,17 +2151,10 @@ unsafe fn hfile_s3_c_1837_get_upload_id(fp: *mut hFILE_s3, resp: *mut kstring_t)
     }
 }
 
-unsafe fn hfile_s3_append_completed_upload_part(fp: *mut hFILE_s3, resp: *mut kstring_t) -> c_int {
+unsafe fn hfile_s3_append_completed_upload_part(fp: *mut hFILE_s3, resp: *mut kstring_t) -> i32 {
     let mut etag = kstring_t::default();
-    // get_entry needs a NUL-terminated input string; build one from resp bytes.
-    let resp_c = CString::new((*resp).data.clone()).unwrap_or_default();
-    if hfile_s3_c_1198_get_entry(
-        resp_c.as_ptr().cast_mut(),
-        c"ETag: \"".as_ptr().cast_mut(),
-        c"\"".as_ptr().cast_mut(),
-        &mut etag,
-    ) == libc::EOF
-    {
+    let resp_bytes = (*resp).data.clone();
+    if hfile_s3_c_1198_get_entry(&resp_bytes, b"ETag: \"", b"\"", &mut etag) == libc::EOF {
         return -1;
     }
 
@@ -2194,11 +2176,11 @@ unsafe fn hfile_s3_append_completed_upload_part(fp: *mut hFILE_s3, resp: *mut ks
 }
 
 // original: abort_upload (htslib/hfile_s3.c:1417)
-pub unsafe fn hfile_s3_c_1417_abort_upload(fp: *mut hFILE_s3) -> c_int {
+pub unsafe fn hfile_s3_c_1417_abort_upload(fp: *mut hFILE_s3) -> i32 {
     let mut url = kstring_t::default();
     let mut canonical_query_string = kstring_t::default();
     let mut ret = -1;
-    let save_errno = *crate::htslib_rs::c_compat::__errno_location();
+    let save_errno = *libc::__errno_location();
     let mut headers: Option<NonNull<HFileLibcurlCurlSlist>> = None;
 
     hfile_s3_clear_authorisation_values(&mut *fp);
@@ -2232,12 +2214,13 @@ pub unsafe fn hfile_s3_c_1417_abort_upload(fp: *mut hFILE_s3) -> c_int {
         return ret;
     }
     // v4_authorisation's cqs is a C string; build a NUL-terminated temp.
-    let cqs_c = CString::new(canonical_query_string.data.clone()).unwrap_or_default();
+    let mut cqs_c = canonical_query_string.data.clone();
+    cqs_c.push(0);
     if hfile_s3_c_1055_v4_authorisation(
         au.as_ptr().cast(),
-        c"DELETE".as_ptr().cast_mut(),
+        c"DELETE".as_ptr().cast_mut().cast(),
         std::ptr::null_mut(),
-        cqs_c.as_ptr().cast_mut(),
+        cqs_c.as_mut_ptr(),
         &mut (*fp).content_hash,
         &mut (*fp).authorisation,
         &mut (*fp).date,
@@ -2283,8 +2266,10 @@ pub unsafe fn hfile_s3_c_1417_abort_upload(fp: *mut hFILE_s3) -> c_int {
     }
 
     // CURLOPT_URL/USERAGENT need NUL-terminated C strings; build temps here.
-    let url_c = CString::new(url.data.clone()).unwrap_or_default();
-    let useragent_c = CString::new(HFILE_S3_USERAGENT.data.clone()).unwrap_or_default();
+    let mut url_c = url.data.clone();
+    url_c.push(0);
+    let mut useragent_c = (*std::ptr::addr_of!(HFILE_S3_USERAGENT.data)).clone();
+    useragent_c.push(0);
     curl_easy_reset(curl.as_ptr());
     let mut err = curl_easy_setopt(curl.as_ptr(), CURLOPT_CUSTOMREQUEST, c"DELETE".as_ptr());
     err |= curl_easy_setopt(curl.as_ptr(), CURLOPT_USERAGENT, useragent_c.as_ptr());
@@ -2319,8 +2304,8 @@ pub unsafe fn hfile_s3_c_1417_abort_upload(fp: *mut hFILE_s3) -> c_int {
 
 unsafe fn goto_abort_out(
     fp: *mut hFILE_s3,
-    _ret: c_int,
-    save_errno: c_int,
+    _ret: i32,
+    save_errno: i32,
     url: *mut kstring_t,
     canonical_query_string: *mut kstring_t,
     headers: Option<NonNull<HFileLibcurlCurlSlist>>,
@@ -2330,11 +2315,11 @@ unsafe fn goto_abort_out(
     hfile_s3_free_headers(headers);
     (*fp).aborted = 1;
     hfile_s3_cleanup(&mut *fp);
-    *crate::htslib_rs::c_compat::__errno_location() = save_errno;
+    *libc::__errno_location() = save_errno;
 }
 
 // original: complete_upload (htslib/hfile_s3.c:1479)
-pub unsafe fn hfile_s3_c_1479_complete_upload(fp: *mut hFILE_s3, resp: *mut kstring_t) -> c_int {
+pub unsafe fn hfile_s3_c_1479_complete_upload(fp: *mut hFILE_s3, resp: *mut kstring_t) -> i32 {
     let mut url = kstring_t::default();
     let mut canonical_query_string = kstring_t::default();
     let mut ret = -1;
@@ -2361,12 +2346,13 @@ pub unsafe fn hfile_s3_c_1479_complete_upload(fp: *mut hFILE_s3, resp: *mut kstr
         return -1;
     }
     // v4_authorisation's cqs is a C string; build a NUL-terminated temp.
-    let cqs_c = CString::new(canonical_query_string.data.clone()).unwrap_or_default();
+    let mut cqs_c = canonical_query_string.data.clone();
+    cqs_c.push(0);
     if hfile_s3_c_1055_v4_authorisation(
         au.as_ptr().cast(),
-        c"POST".as_ptr().cast_mut(),
+        c"POST".as_ptr().cast_mut().cast(),
         &mut (*fp).completion_message,
-        cqs_c.as_ptr().cast_mut(),
+        cqs_c.as_mut_ptr(),
         &mut (*fp).content_hash,
         &mut (*fp).authorisation,
         &mut (*fp).date,
@@ -2394,10 +2380,12 @@ pub unsafe fn hfile_s3_c_1479_complete_upload(fp: *mut hFILE_s3, resp: *mut kstr
     }
 
     // CURLOPT_URL/USERAGENT need NUL-terminated C strings; build temps here.
-    let url_c = CString::new(url.data.clone()).unwrap_or_default();
-    let useragent_c = CString::new(HFILE_S3_USERAGENT.data.clone()).unwrap_or_default();
+    let mut url_c = url.data.clone();
+    url_c.push(0);
+    let mut useragent_c = (*std::ptr::addr_of!(HFILE_S3_USERAGENT.data)).clone();
+    useragent_c.push(0);
     curl_easy_reset(curl.as_ptr());
-    let mut err = curl_easy_setopt(curl.as_ptr(), CURLOPT_POST, 1 as libc::c_long);
+    let mut err = curl_easy_setopt(curl.as_ptr(), CURLOPT_POST, 1i64);
     err |= curl_easy_setopt(
         curl.as_ptr(),
         CURLOPT_POSTFIELDS,
@@ -2406,7 +2394,7 @@ pub unsafe fn hfile_s3_c_1479_complete_upload(fp: *mut hFILE_s3, resp: *mut kstr
     err |= curl_easy_setopt(
         curl.as_ptr(),
         CURLOPT_POSTFIELDSIZE,
-        (*fp).completion_message.data.len() as libc::c_long,
+        (*fp).completion_message.data.len() as i64,
     );
     err |= curl_easy_setopt(
         curl.as_ptr(),
@@ -2462,18 +2450,16 @@ pub unsafe extern "C" fn hfile_s3_c_1546_upload_callback(
     let remaining = (*fp).buffer.data.len().saturating_sub((*fp).index);
     let read_length = remaining.min(realsize);
     if read_length != 0 {
-        libc::memcpy(
-            ptr,
-            (*fp).buffer.data.as_ptr().add((*fp).index).cast(),
-            read_length,
-        );
+        // ptr is a libcurl-provided raw buffer; copy bytes into it at the boundary.
+        let src = &(*fp).buffer.data[(*fp).index..(*fp).index + read_length];
+        std::ptr::copy_nonoverlapping(src.as_ptr(), ptr.cast::<u8>(), read_length);
         (*fp).index += read_length;
     }
     read_length
 }
 
 // original: upload_part (htslib/hfile_s3.c:1563)
-pub unsafe fn hfile_s3_c_1563_upload_part(fp: *mut hFILE_s3, resp: *mut kstring_t) -> c_int {
+pub unsafe fn hfile_s3_c_1563_upload_part(fp: *mut hFILE_s3, resp: *mut kstring_t) -> i32 {
     let mut url = kstring_t::default();
     let mut canonical_query_string = kstring_t::default();
     let mut ret = -1;
@@ -2497,12 +2483,13 @@ pub unsafe fn hfile_s3_c_1563_upload_part(fp: *mut hFILE_s3, resp: *mut kstring_
         return -1;
     }
     // v4_authorisation's cqs is a C string; build a NUL-terminated temp.
-    let cqs_c = CString::new(canonical_query_string.data.clone()).unwrap_or_default();
+    let mut cqs_c = canonical_query_string.data.clone();
+    cqs_c.push(0);
     if hfile_s3_c_1055_v4_authorisation(
         au.as_ptr().cast(),
-        c"PUT".as_ptr().cast_mut(),
+        c"PUT".as_ptr().cast_mut().cast(),
         &mut (*fp).buffer,
-        cqs_c.as_ptr().cast_mut(),
+        cqs_c.as_mut_ptr(),
         &mut (*fp).content_hash,
         &mut (*fp).authorisation,
         &mut (*fp).date,
@@ -2530,11 +2517,13 @@ pub unsafe fn hfile_s3_c_1563_upload_part(fp: *mut hFILE_s3, resp: *mut kstring_
     }
 
     // CURLOPT_URL/USERAGENT need NUL-terminated C strings; build temps here.
-    let url_c = CString::new(url.data.clone()).unwrap_or_default();
-    let useragent_c = CString::new(HFILE_S3_USERAGENT.data.clone()).unwrap_or_default();
+    let mut url_c = url.data.clone();
+    url_c.push(0);
+    let mut useragent_c = (*std::ptr::addr_of!(HFILE_S3_USERAGENT.data)).clone();
+    useragent_c.push(0);
     (*fp).index = 0;
     curl_easy_reset(curl.as_ptr());
-    let mut err = curl_easy_setopt(curl.as_ptr(), CURLOPT_UPLOAD, 1 as libc::c_long);
+    let mut err = curl_easy_setopt(curl.as_ptr(), CURLOPT_UPLOAD, 1i64);
     err |= curl_easy_setopt(
         curl.as_ptr(),
         CURLOPT_READFUNCTION,
@@ -2544,7 +2533,7 @@ pub unsafe fn hfile_s3_c_1563_upload_part(fp: *mut hFILE_s3, resp: *mut kstring_
     err |= curl_easy_setopt(
         curl.as_ptr(),
         CURLOPT_INFILESIZE_LARGE,
-        (*fp).buffer.data.len() as libc::off_t,
+        (*fp).buffer.data.len() as i64,
     );
     err |= curl_easy_setopt(
         curl.as_ptr(),
@@ -2578,7 +2567,7 @@ pub unsafe fn hfile_s3_c_1563_upload_part(fp: *mut hFILE_s3, resp: *mut kstring_
 
 // original: recv_callback (htslib/hfile_s3.c:1854)
 pub unsafe extern "C" fn hfile_s3_c_1854_recv_callback(
-    ptr: *mut c_char,
+    ptr: *mut u8,
     size: usize,
     nmemb: usize,
     fpv: *mut c_void,
@@ -2589,15 +2578,12 @@ pub unsafe extern "C" fn hfile_s3_c_1854_recv_callback(
     if n != 0 {
         let fp = fpv.cast::<hFILE_s3>();
         if crate::htslib_rs::hts::kputsn(
-            std::slice::from_raw_parts(ptr.cast::<u8>(), n),
+            std::slice::from_raw_parts(ptr, n),
             n,
             &mut (*fp).buffer,
         ) == libc::EOF
         {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"hfile_s3: error: unable to allocate memory to read data.\n".as_ptr(),
-            );
+            eprintln!("hfile_s3: error: unable to allocate memory to read data.");
             return 0;
         }
     }
@@ -2605,7 +2591,7 @@ pub unsafe extern "C" fn hfile_s3_c_1854_recv_callback(
 }
 
 // original: s3_read_close (htslib/hfile_s3.c:1869)
-pub unsafe fn hfile_s3_c_1869_s3_read_close(fp: &mut hFILE) -> c_int {
+pub unsafe fn hfile_s3_c_1869_s3_read_close(fp: &mut hFILE) -> i32 {
     let HFileBackend::S3(s3) = &mut fp.backend else {
         return -1;
     };
@@ -2618,7 +2604,7 @@ pub unsafe fn hfile_s3_c_1625_s3_write(
     fp: &mut hFILE,
     bufferv: *const c_void,
     nbytes: usize,
-) -> libc::ssize_t {
+) -> isize {
     let HFileBackend::S3(s3) = &mut fp.backend else {
         return -1;
     };
@@ -2652,11 +2638,11 @@ pub unsafe fn hfile_s3_c_1625_s3_write(
         }
     }
 
-    nbytes as libc::ssize_t
+    nbytes as isize
 }
 
 // original: s3_write_close (htslib/hfile_s3.c:1682)
-pub unsafe fn hfile_s3_c_1682_s3_write_close(fp: &mut hFILE) -> c_int {
+pub unsafe fn hfile_s3_c_1682_s3_write_close(fp: &mut hFILE) -> i32 {
     let HFileBackend::S3(s3) = &mut fp.backend else {
         return -1;
     };
@@ -2681,29 +2667,26 @@ pub unsafe fn hfile_s3_c_1682_s3_write_close(fp: &mut hFILE) -> c_int {
 
         if (*fp).part_no > 1 {
             ret = hfile_s3_c_1479_complete_upload(fp, &mut response);
-            // strstr needs a NUL-terminated input; build one from response bytes.
-            let response_c = CString::new(response.data.clone()).unwrap_or_default();
+            const MARKER: &[u8] = b"CompleteMultipartUploadResult";
             if ret == 0
                 && (response.data.is_empty()
-                    || libc::strstr(
-                        response_c.as_ptr(),
-                        c"CompleteMultipartUploadResult".as_ptr(),
-                    )
-                    .is_null())
+                    || !response
+                        .data
+                        .windows(MARKER.len())
+                        .any(|w| w == MARKER))
             {
                 ret = -1;
-                let mut response_code: libc::c_long = 0;
+                let mut response_code: i64 = 0;
                 if hfile_s3_response_code(fp, &mut response_code) == CURLE_OK {
                     if hts_verbose >= HTS_LOG_INFO
                         && hfile_s3_c_1218_report_s3_error(&mut response, response_code) != 0
                     {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"hfile_s3: warning, unable to report full S3 error status.\n".as_ptr(),
+                        eprintln!(
+                            "hfile_s3: warning, unable to report full S3 error status."
                         );
                     }
-                    *crate::htslib_rs::c_compat::__errno_location() =
-                        hfile_s3_c_1242_http_status_errno(response_code as c_int);
+                    *libc::__errno_location() =
+                        hfile_s3_c_1242_http_status_errno(response_code as i32);
                 }
             }
         } else {
@@ -2721,17 +2704,10 @@ pub unsafe fn hfile_s3_c_1682_s3_write_close(fp: &mut hFILE) -> c_int {
     ret
 }
 
-unsafe fn hfile_s3_handle_bad_request(fp: *mut hFILE_s3, resp: *mut kstring_t) -> c_int {
+unsafe fn hfile_s3_handle_bad_request(fp: *mut hFILE_s3, resp: *mut kstring_t) -> i32 {
     let mut region = kstring_t::default();
-    // get_entry needs a NUL-terminated input string; build one from resp bytes.
-    let resp_c = CString::new((*resp).data.clone()).unwrap_or_default();
-    if hfile_s3_c_1198_get_entry(
-        resp_c.as_ptr().cast_mut(),
-        c"<Region>".as_ptr().cast_mut(),
-        c"</Region>".as_ptr().cast_mut(),
-        &mut region,
-    ) == libc::EOF
-    {
+    let resp_bytes = (*resp).data.clone();
+    if hfile_s3_c_1198_get_entry(&resp_bytes, b"<Region>", b"</Region>", &mut region) == libc::EOF {
         return -1;
     }
     let Some(au) = (*fp).au else {
@@ -2748,8 +2724,8 @@ pub unsafe fn hfile_s3_c_1779_initialise_upload(
     fp: *mut hFILE_s3,
     head: *mut kstring_t,
     resp: *mut kstring_t,
-    user_query: c_int,
-) -> c_int {
+    user_query: i32,
+) -> i32 {
     let mut url = kstring_t::default();
     let mut ret = -1;
     let mut headers: Option<NonNull<HFileLibcurlCurlSlist>> = None;
@@ -2762,9 +2738,9 @@ pub unsafe fn hfile_s3_c_1779_initialise_upload(
     };
     if hfile_s3_c_1055_v4_authorisation(
         au.as_ptr().cast(),
-        c"POST".as_ptr().cast_mut(),
+        c"POST".as_ptr().cast_mut().cast(),
         std::ptr::null_mut(),
-        c"uploads=".as_ptr().cast_mut(),
+        c"uploads=".as_ptr().cast_mut().cast(),
         &mut (*fp).content_hash,
         &mut (*fp).authorisation,
         &mut (*fp).date,
@@ -2792,10 +2768,12 @@ pub unsafe fn hfile_s3_c_1779_initialise_upload(
     }
 
     // CURLOPT_URL/USERAGENT need NUL-terminated C strings; build temps here.
-    let url_c = CString::new(url.data.clone()).unwrap_or_default();
-    let useragent_c = CString::new(HFILE_S3_USERAGENT.data.clone()).unwrap_or_default();
+    let mut url_c = url.data.clone();
+    url_c.push(0);
+    let mut useragent_c = (*std::ptr::addr_of!(HFILE_S3_USERAGENT.data)).clone();
+    useragent_c.push(0);
     let mut err = curl_easy_setopt(curl.as_ptr(), CURLOPT_URL, url_c.as_ptr());
-    err |= curl_easy_setopt(curl.as_ptr(), CURLOPT_POST, 1 as libc::c_long);
+    err |= curl_easy_setopt(curl.as_ptr(), CURLOPT_POST, 1i64);
     err |= curl_easy_setopt(curl.as_ptr(), CURLOPT_POSTFIELDS, c"".as_ptr());
     err |= curl_easy_setopt(
         curl.as_ptr(),
@@ -2833,7 +2811,7 @@ pub unsafe fn hfile_s3_c_1779_initialise_upload(
     ret
 }
 
-pub unsafe fn hfile_s3_c_2072_s3_close(fp: &mut hFILE) -> c_int {
+pub unsafe fn hfile_s3_c_2072_s3_close(fp: &mut hFILE) -> i32 {
     let HFileBackend::S3(s3) = &fp.backend else {
         return -1;
     };
@@ -2845,55 +2823,42 @@ pub unsafe fn hfile_s3_c_2072_s3_close(fp: &mut hFILE) -> c_int {
 }
 
 // original: s3_seek (htslib/hfile_s3.c:2015)
-pub unsafe fn hfile_s3_c_2015_s3_seek(
-    fp: &mut hFILE,
-    offset: libc::off_t,
-    whence: c_int,
-) -> libc::off_t {
+pub unsafe fn hfile_s3_c_2015_s3_seek(fp: &mut hFILE, offset: i64, whence: i32) -> i64 {
     let HFileBackend::S3(s3) = &mut fp.backend else {
         return -1;
     };
     let fp = &mut **s3 as *mut hFILE_s3;
 
     if (*fp).write != 0 {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::ESPIPE;
+        *libc::__errno_location() = libc::ESPIPE;
         return -1;
     }
 
     let origin = match whence {
         libc::SEEK_SET => 0i64,
         libc::SEEK_CUR => {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::ENOSYS;
+            *libc::__errno_location() = libc::ENOSYS;
             return -1;
         }
         libc::SEEK_END => {
             if (*fp).file_size < 0 {
-                *crate::htslib_rs::c_compat::__errno_location() = libc::ESPIPE;
+                *libc::__errno_location() = libc::ESPIPE;
                 return -1;
             }
             (*fp).file_size
         }
         _ => {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+            *libc::__errno_location() = libc::EINVAL;
             return -1;
         }
     };
 
-    let Some(pos_i64) = origin.checked_add({
-        #[cfg(windows)]
-        {
-            i64::from(offset)
-        }
-        #[cfg(not(windows))]
-        {
-            offset
-        }
-    }) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+    let Some(pos_i64) = origin.checked_add(offset) else {
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     if pos_i64 < 0 || ((*fp).file_size >= 0 && pos_i64 > (*fp).file_size) {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
 
@@ -2908,12 +2873,12 @@ pub unsafe fn hfile_s3_c_2015_s3_seek(
         crate::htslib_rs::hts::ks_clear(&mut (*fp).buffer);
     }
 
-    (*fp).last_read as libc::off_t
+    (*fp).last_read as i64
 }
 
 // original: s3_write_open (htslib/hfile_s3.c:2102)
 pub unsafe fn hfile_s3_c_2102_s3_write_open(
-    url: *const c_char,
+    url: *const u8,
     auth: *mut s3_auth_data,
 ) -> *mut hFILE {
     // The S3 subclass state is now an owned `Box<hFILE_s3>` (the payload of the
@@ -2922,7 +2887,7 @@ pub unsafe fn hfile_s3_c_2102_s3_write_open(
     // error we reclaim it with `Box::from_raw` (its Drop frees the kstrings).
     let fp = Box::into_raw(Box::new(hFILE_s3::default()));
     let Some(curl) = NonNull::new(curl_easy_init()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *libc::__errno_location() = libc::ENOMEM;
         drop(Box::from_raw(fp));
         return std::ptr::null_mut();
     };
@@ -2938,7 +2903,20 @@ pub unsafe fn hfile_s3_c_2102_s3_write_open(
     (*fp).expand = 1;
     (*fp).write = 1;
     if let Some(env) = std::ptr::NonNull::new(libc::getenv(c"HTS_S3_PART_SIZE".as_ptr())) {
-        let part_size = libc::atoi(env.as_ptr()) * 1024 * 1024;
+        // Parse leading integer from the env value (mirrors atoi).
+        let env_bytes = cstr_bytes(env.as_ptr().cast());
+        let env_str = String::from_utf8_lossy(&env_bytes);
+        let trimmed = env_str.trim_start();
+        let mut end = 0usize;
+        for (i, c) in trimmed.char_indices() {
+            if (i == 0 && (c == '-' || c == '+')) || c.is_ascii_digit() {
+                end = i + c.len_utf8();
+            } else {
+                break;
+            }
+        }
+        let parsed: i32 = trimmed[..end].parse().unwrap_or(0);
+        let part_size = parsed * 1024 * 1024;
         if part_size > (*fp).part_size {
             (*fp).part_size = part_size;
         }
@@ -2952,7 +2930,7 @@ pub unsafe fn hfile_s3_c_2102_s3_write_open(
     }
 
     let query_start = (*fp).url.data.iter().position(|&b| b == b'?');
-    let has_user_query = query_start.is_some() as c_int;
+    let has_user_query = query_start.is_some() as i32;
     let mut response = kstring_t::default();
     let mut header = kstring_t::default();
 
@@ -2961,7 +2939,7 @@ pub unsafe fn hfile_s3_c_2102_s3_write_open(
         return std::ptr::null_mut();
     }
 
-    let mut response_code: libc::c_long = 0;
+    let mut response_code: i64 = 0;
     let mut cret = hfile_s3_response_code(fp, &mut response_code);
     if cret == CURLE_OK {
         if response_code == S3_MOVED_PERMANENTLY || response_code == S3_TEMPORARY_REDIRECT {
@@ -3004,13 +2982,10 @@ pub unsafe fn hfile_s3_c_2102_s3_write_open(
             if hts_verbose >= HTS_LOG_INFO
                 && hfile_s3_c_1218_report_s3_error(&mut response, response_code) != 0
             {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"hfile_s3: warning, unable to report full S3 error status.\n".as_ptr(),
-                );
+                eprintln!("hfile_s3: warning, unable to report full S3 error status.");
             }
-            *crate::htslib_rs::c_compat::__errno_location() =
-                hfile_s3_c_1242_http_status_errno(response_code as c_int);
+            *libc::__errno_location() =
+                hfile_s3_c_1242_http_status_errno(response_code as i32);
         }
         goto_write_open_error(fp, &mut response, &mut header);
         return std::ptr::null_mut();
@@ -3060,8 +3035,8 @@ unsafe fn goto_write_open_error(
 }
 
 unsafe fn hfile_s3_hopen_vargs(
-    url: *const c_char,
-    mode: *const c_char,
+    url: *const u8,
+    mode: *const u8,
     words: &[usize],
 ) -> *mut hFILE {
     let mut reg_save = [0usize; 6];
@@ -3080,15 +3055,16 @@ unsafe fn hfile_s3_hopen_vargs(
         reg_save_area: reg_save.as_mut_ptr().cast(),
     };
 
-    if libc::strchr(mode, b':' as c_int).is_null() {
+    if !cstr_bytes(mode).contains(&b':') {
         let mut mode_colon = kstring_t::default();
         if crate::htslib_rs::hts::kputs(&cstr_bytes(mode), &mut mode_colon) < 0
-            || crate::htslib_rs::hts::kputc(b':' as c_int, &mut mode_colon) < 0
+            || crate::htslib_rs::hts::kputc(b':' as i32, &mut mode_colon) < 0
         {
             return std::ptr::null_mut();
         }
         // hopen_vargs needs a NUL-terminated mode string; build one here.
-        let mode_colon_c = CString::new(mode_colon.data.clone()).unwrap_or_default();
+        let mut mode_colon_c = mode_colon.data.clone();
+        mode_colon_c.push(0);
         hfile_c_1317_hopen_vargs(url, mode_colon_c.as_ptr(), &mut args)
     } else {
         hfile_c_1317_hopen_vargs(url, mode, &mut args)
@@ -3096,12 +3072,12 @@ unsafe fn hfile_s3_hopen_vargs(
 }
 
 unsafe fn hfile_s3_c_2348_hopen_v4_read(
-    url: *const c_char,
-    mode: *const c_char,
+    url: *const u8,
+    mode: *const u8,
     argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
     ad: *mut S3AuthDataLayout,
-    http_response: *mut libc::c_long,
-    fail_on_error: c_int,
+    http_response: *mut i64,
+    fail_on_error: i32,
 ) -> *mut hFILE {
     let mut words = Vec::with_capacity(if argsp.is_null() { 13 } else { 15 });
     if !argsp.is_null() {
@@ -3127,8 +3103,8 @@ unsafe fn hfile_s3_c_2348_hopen_v4_read(
 }
 
 unsafe fn hfile_s3_c_774_hopen_v2_read(
-    url: *const c_char,
-    mode: *const c_char,
+    url: *const u8,
+    mode: *const u8,
     argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
     ad: *mut s3_auth_data,
 ) -> *mut hFILE {
@@ -3152,8 +3128,8 @@ unsafe fn hfile_s3_c_774_hopen_v2_read(
 }
 
 unsafe fn hfile_s3_c_2348_hopen_v4_write(
-    url: *const c_char,
-    mode: *const c_char,
+    url: *const u8,
+    mode: *const u8,
     argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
     ad: *mut S3AuthDataLayout,
 ) -> *mut hFILE {
@@ -3162,8 +3138,8 @@ unsafe fn hfile_s3_c_2348_hopen_v4_write(
 }
 
 unsafe fn hfile_s3_c_774_s3_rewrite(
-    s3url: *const c_char,
-    mode: *const c_char,
+    s3url: *const u8,
+    mode: *const u8,
     argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     let mut url = kstring_t::default();
@@ -3171,7 +3147,8 @@ unsafe fn hfile_s3_c_774_s3_rewrite(
         return std::ptr::null_mut();
     };
     // hopen_v2_read needs a NUL-terminated url; build one from the owned bytes.
-    let url_c = CString::new(url.data.clone()).unwrap_or_default();
+    let mut url_c = url.data.clone();
+    url_c.push(0);
     let fp = NonNull::new(hfile_s3_c_774_hopen_v2_read(
         url_c.as_ptr(),
         mode,
@@ -3187,8 +3164,8 @@ unsafe fn hfile_s3_c_774_s3_rewrite(
 
 // original: s3_open_v4 (htslib/hfile_s3.c:2348)
 pub unsafe fn hfile_s3_c_2348_s3_open_v4(
-    s3url: *const c_char,
-    mode: *const c_char,
+    s3url: *const u8,
+    mode: *const u8,
     argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     let mut url = kstring_t::default();
@@ -3199,10 +3176,11 @@ pub unsafe fn hfile_s3_c_2348_s3_open_v4(
     };
     let ad = ad_nn.as_ptr();
     // The hopen_v4 helpers need a NUL-terminated url; build one from owned bytes.
-    let url_c = CString::new(url.data.clone()).unwrap_or_default();
+    let mut url_c = url.data.clone();
+    url_c.push(0);
     let fp: Option<NonNull<hFILE>>;
-    if (*ad).mode == b'r' as c_char {
-        let mut http_response: libc::c_long = 0;
+    if (*ad).mode == b'r' {
+        let mut http_response: i64 = 0;
         let Some(first_fp) = NonNull::new(hfile_s3_c_2348_hopen_v4_read(
             url_c.as_ptr(),
             mode,
@@ -3232,8 +3210,8 @@ pub unsafe fn hfile_s3_c_2348_s3_open_v4(
             ));
         } else if http_response > 400 {
             (*ad).refcount = 1;
-            *crate::htslib_rs::c_compat::__errno_location() =
-                hfile_s3_c_1242_http_status_errno(http_response as c_int);
+            *libc::__errno_location() =
+                hfile_s3_c_1242_http_status_errno(http_response as i32);
             hclose_abruptly(first_fp.as_ptr());
             hfile_s3_c_319_free_auth_data(ad.cast());
             return std::ptr::null_mut();
@@ -3253,18 +3231,15 @@ pub unsafe fn hfile_s3_c_2348_s3_open_v4(
 
 // original: s3_open_v2 (htslib/hfile_s3.c:2374)
 pub unsafe fn hfile_s3_c_2374_s3_open_v2(
-    s3url: *const c_char,
-    mode: *const c_char,
+    s3url: *const u8,
+    mode: *const u8,
     argsp: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     hfile_s3_c_774_s3_rewrite(s3url, mode, argsp)
 }
 
 // original: hopen_s3 (htslib/hfile_s3.c:2400)
-unsafe extern "C" fn hfile_s3_c_2400_hopen_s3(
-    url: *const c_char,
-    mode: *const c_char,
-) -> *mut hFILE {
+unsafe extern "C" fn hfile_s3_c_2400_hopen_s3(url: *const u8, mode: *const u8) -> *mut hFILE {
     if libc::getenv(c"HTS_S3_V2".as_ptr()).is_null() {
         hfile_s3_c_2348_s3_open_v4(url, mode, std::ptr::null_mut())
     } else {
@@ -3274,8 +3249,8 @@ unsafe extern "C" fn hfile_s3_c_2400_hopen_s3(
 
 // original: vhopen_s3 (htslib/hfile_s3.c:2414)
 unsafe extern "C" fn hfile_s3_c_2414_vhopen_s3(
-    url: *const c_char,
-    mode_colon: *const c_char,
+    url: *const u8,
+    mode_colon: *const u8,
     args0: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     let mut args = std::mem::MaybeUninit::<crate::htslib_rs::c_compat::__va_list_tag>::uninit();
@@ -3294,16 +3269,16 @@ pub unsafe extern "C" fn hfile_s3_c_2426_s3_exit() {
 }
 
 // original: PLUGIN_GLOBAL (htslib/hfile_s3.c:2436)
-pub unsafe fn hfile_s3_c_2436_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> c_int {
+pub unsafe fn hfile_s3_c_2436_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> i32 {
     static HANDLER: hFILE_scheme_handler_layout = hFILE_scheme_handler_layout {
         open: Some(hfile_s3_c_2400_hopen_s3),
         isremote: Some(crate::htslib_rs::hfile::hfile_c_1342_hfile_always_remote),
-        provider: c"Amazon S3".as_ptr(),
+        provider: c"Amazon S3".as_ptr().cast(),
         priority: 2000 + 50,
         vopen: Some(hfile_s3_c_2414_vhopen_s3),
     };
 
-    (*self_.cast::<hFILE_plugin_layout>()).name = c"Amazon S3".as_ptr();
+    (*self_.cast::<hFILE_plugin_layout>()).name = c"Amazon S3".as_ptr().cast();
     (*self_.cast::<hFILE_plugin_layout>()).destroy = Some(hfile_s3_c_2426_s3_exit);
     hfile_s3_c_2426_s3_exit();
     crate::htslib_rs::kstring::ksprintf(
@@ -3314,15 +3289,15 @@ pub unsafe fn hfile_s3_c_2436_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> c_int {
         )],
     );
     hfile_add_scheme_handler(
-        c"s3".as_ptr(),
+        c"s3".as_ptr().cast(),
         (&HANDLER as *const hFILE_scheme_handler_layout).cast::<hFILE_scheme_handler>(),
     );
     hfile_add_scheme_handler(
-        c"s3+http".as_ptr(),
+        c"s3+http".as_ptr().cast(),
         (&HANDLER as *const hFILE_scheme_handler_layout).cast::<hFILE_scheme_handler>(),
     );
     hfile_add_scheme_handler(
-        c"s3+https".as_ptr(),
+        c"s3+https".as_ptr().cast(),
         (&HANDLER as *const hFILE_scheme_handler_layout).cast::<hFILE_scheme_handler>(),
     );
     0
@@ -3426,9 +3401,9 @@ mod tests {
             let mut hmac_len = 0;
             hfile_s3_c_157_s3_sign_sha256(
                 key.data.as_ptr().cast(),
-                key.data.len() as c_int,
+                key.data.len() as i32,
                 message.data.as_ptr().cast(),
-                message.data.len() as c_int,
+                message.data.len() as i32,
                 hmac_sha256.as_mut_ptr(),
                 &mut hmac_len,
             );
@@ -3448,8 +3423,8 @@ mod tests {
         unsafe {
             let mut url = kstring_t::default();
             let ad = hfile_s3_c_545_setup_auth_data(
-                c"s3://AKID:SECRET:TOKEN@bucket-name/path/to file.bam?b=2&a=1".as_ptr(),
-                c"r".as_ptr(),
+                c"s3://AKID:SECRET:TOKEN@bucket-name/path/to file.bam?b=2&a=1".as_ptr().cast(),
+                c"r".as_ptr().cast(),
                 4,
                 &mut url,
             );
@@ -3468,7 +3443,7 @@ mod tests {
                 b"bucket-name.s3.amazonaws.com"
             );
             assert_eq!(
-                CStr::from_ptr((*ad_layout).bucket.as_ptr()).to_bytes(),
+                CStr::from_ptr((*ad_layout).bucket.as_ptr().cast()).to_bytes(),
                 b"/path/to%20file.bam"
             );
             assert_eq!(
@@ -3485,8 +3460,8 @@ mod tests {
         unsafe {
             let mut url = kstring_t::default();
             let ad = hfile_s3_c_545_setup_auth_data(
-                c"s3://AKID:SECRET:TOKEN@bucket-name/path/out.bam?z=9&a=1".as_ptr(),
-                c"w".as_ptr(),
+                c"s3://AKID:SECRET:TOKEN@bucket-name/path/out.bam?z=9&a=1".as_ptr().cast(),
+                c"w".as_ptr().cast(),
                 4,
                 &mut url,
             );
@@ -3501,9 +3476,9 @@ mod tests {
             assert_eq!(
                 hfile_s3_c_1055_v4_authorisation(
                     ad.cast(),
-                    c"PUT".as_ptr().cast_mut(),
+                    c"PUT".as_ptr().cast_mut().cast(),
                     &mut content,
-                    c"partNumber=1&uploadId=upload-1".as_ptr().cast_mut(),
+                    c"partNumber=1&uploadId=upload-1".as_ptr().cast_mut().cast(),
                     &mut hash,
                     &mut auth,
                     &mut date,
@@ -3542,36 +3517,36 @@ mod tests {
         unsafe {
             let mut url = kstring_t::default();
             let ad = hfile_s3_c_545_setup_auth_data(
-                c"s3://AKID:SECRET:TOKEN@bucket-name/path/in.bam?z=9&a=1".as_ptr(),
-                c"r".as_ptr(),
+                c"s3://AKID:SECRET:TOKEN@bucket-name/path/in.bam?z=9&a=1".as_ptr().cast(),
+                c"r".as_ptr().cast(),
                 4,
                 &mut url,
             );
             assert!(!ad.is_null());
 
-            let mut hdrv: *mut *mut c_char = std::ptr::null_mut();
+            let mut hdrv: *mut *mut u8 = std::ptr::null_mut();
             assert_eq!(
                 hfile_s3_c_1055_v4_auth_header_callback(ad.cast(), &mut hdrv),
                 0
             );
             assert!(!hdrv.is_null());
 
-            let auth_text = CStr::from_ptr(*hdrv).to_string_lossy();
+            let auth_text = CStr::from_ptr((*hdrv).cast()).to_string_lossy();
             assert!(auth_text.starts_with("Authorization: AWS4-HMAC-SHA256 Credential=AKID/"));
             assert!(auth_text.contains("/us-east-1/s3/aws4_request"));
             assert!(auth_text.contains(
                 "SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token"
             ));
             assert!(auth_text.contains("Signature="));
-            assert!(CStr::from_ptr(*hdrv.add(1))
+            assert!(CStr::from_ptr((*hdrv.add(1)).cast())
                 .to_bytes()
                 .starts_with(b"x-amz-date: "));
             assert_eq!(
-                CStr::from_ptr(*hdrv.add(2)).to_bytes(),
+                CStr::from_ptr((*hdrv.add(2)).cast()).to_bytes(),
                 b"x-amz-content-sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             );
             assert_eq!(
-                CStr::from_ptr(*hdrv.add(3)).to_bytes(),
+                CStr::from_ptr((*hdrv.add(3)).cast()).to_bytes(),
                 b"X-Amz-Security-Token: TOKEN"
             );
             assert!((*hdrv.add(4)).is_null());
@@ -3597,8 +3572,8 @@ mod tests {
         unsafe {
             let mut url = kstring_t::default();
             let ad = hfile_s3_c_545_setup_auth_data(
-                c"s3://AKID:SECRET@bucket-name/path/out.bam".as_ptr(),
-                c"w".as_ptr(),
+                c"s3://AKID:SECRET@bucket-name/path/out.bam".as_ptr().cast(),
+                c"w".as_ptr().cast(),
                 4,
                 &mut url,
             );
@@ -3640,8 +3615,8 @@ mod tests {
         unsafe {
             let mut setup_url = kstring_t::default();
             let ad = hfile_s3_c_545_setup_auth_data(
-                c"s3://AKID:SECRET@bucket-name/path/in.bam?z=9&a=1".as_ptr(),
-                c"r".as_ptr(),
+                c"s3://AKID:SECRET@bucket-name/path/in.bam?z=9&a=1".as_ptr().cast(),
+                c"r".as_ptr().cast(),
                 4,
                 &mut setup_url,
             );
@@ -3867,7 +3842,7 @@ mod tests {
 
             assert_eq!(
                 hfile_s3_c_1625_s3_write(&mut hf, payload.as_ptr().cast(), payload.len(),),
-                payload.len() as libc::ssize_t
+                payload.len() as isize
             );
             let fp = s3_of(&mut hf);
             assert_eq!(fp.buffer.data.as_slice(), b"abcdef");
@@ -3898,8 +3873,8 @@ mod tests {
         unsafe {
             let mut url = kstring_t::default();
             let ad = hfile_s3_c_545_setup_auth_data(
-                c"s3://AKID:SECRET@bucket-name/path/in.bam".as_ptr(),
-                c"r".as_ptr(),
+                c"s3://AKID:SECRET@bucket-name/path/in.bam".as_ptr().cast(),
+                c"r".as_ptr().cast(),
                 4,
                 &mut url,
             );
@@ -3979,27 +3954,27 @@ mod tests {
 
             assert_eq!(hfile_s3_c_2015_s3_seek(&mut hf, 0, libc::SEEK_SET), -1);
             assert_eq!(
-                *crate::htslib_rs::c_compat::__errno_location(),
+                *libc::__errno_location(),
                 libc::ESPIPE
             );
 
             s3_of(&mut hf).write = 0;
             assert_eq!(hfile_s3_c_2015_s3_seek(&mut hf, 0, libc::SEEK_CUR), -1);
             assert_eq!(
-                *crate::htslib_rs::c_compat::__errno_location(),
+                *libc::__errno_location(),
                 libc::ENOSYS
             );
 
             assert_eq!(hfile_s3_c_2015_s3_seek(&mut hf, 1, libc::SEEK_END), -1);
             assert_eq!(
-                *crate::htslib_rs::c_compat::__errno_location(),
+                *libc::__errno_location(),
                 libc::EINVAL
             );
 
             s3_of(&mut hf).file_size = -1;
             assert_eq!(hfile_s3_c_2015_s3_seek(&mut hf, 0, libc::SEEK_END), -1);
             assert_eq!(
-                *crate::htslib_rs::c_compat::__errno_location(),
+                *libc::__errno_location(),
                 libc::ESPIPE
             );
         }
@@ -4038,24 +4013,24 @@ mod tests {
 
     #[test]
     fn s3_utc_date_formatters_match_expected_wire_formats() {
-        let now: libc::time_t = 1_748_868_896;
-        let mut date = [0 as c_char; 40];
-        let mut date_long = [0 as c_char; 17];
-        let mut date_short = [0 as c_char; 9];
+        let now: i64 = 1_748_868_896;
+        let mut date = [0u8; 40];
+        let mut date_long = [0u8; 17];
+        let mut date_short = [0u8; 9];
 
         write_s3_date_header(&mut date, now);
         assert_eq!(
-            unsafe { CStr::from_ptr(date.as_ptr()) }.to_bytes(),
+            unsafe { CStr::from_ptr(date.as_ptr().cast()) }.to_bytes(),
             b"Date: Mon, 02 Jun 2025 12:54:56 GMT"
         );
 
         assert!(write_s3_v4_dates(&mut date_long, &mut date_short, now));
         assert_eq!(
-            unsafe { CStr::from_ptr(date_long.as_ptr()) }.to_bytes(),
+            unsafe { CStr::from_ptr(date_long.as_ptr().cast()) }.to_bytes(),
             b"20250602T125456Z"
         );
         assert_eq!(
-            unsafe { CStr::from_ptr(date_short.as_ptr()) }.to_bytes(),
+            unsafe { CStr::from_ptr(date_short.as_ptr().cast()) }.to_bytes(),
             b"20250602"
         );
     }

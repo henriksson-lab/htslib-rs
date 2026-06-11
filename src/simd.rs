@@ -21,19 +21,16 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.  */
 
 use crate::htslib_rs::sam;
-use std::ffi::c_char;
-#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-use std::ffi::c_int;
 
 const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
 
-pub type Nibble2BaseFn = unsafe fn(&[u8], &mut [c_char]);
+pub type Nibble2BaseFn = unsafe fn(&[u8], &mut [u8]);
 
 pub static mut htslib_nibble2base: Nibble2BaseFn = sam::nibble2base_default;
 
 // original: cpu_supports_neon (htslib/simd.c:75)
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-pub unsafe fn simd_c_75_cpu_supports_neon() -> c_int {
+pub unsafe fn simd_c_75_cpu_supports_neon() -> i32 {
     #[cfg(target_arch = "arm")]
     {
         if std::arch::is_arm_feature_detected!("neon") {
@@ -53,11 +50,11 @@ pub unsafe fn simd_c_75_cpu_supports_neon() -> c_int {
     }
 }
 
-fn nibble2base_default_slice(nib: &[u8], seq: &mut [c_char]) {
+fn nibble2base_default_slice(nib: &[u8], seq: &mut [u8]) {
     for (i, out) in seq.iter_mut().enumerate() {
         let byte = nib[i / 2];
         let code = if i % 2 == 0 { byte >> 4 } else { byte & 0x0f };
-        *out = SEQ_NT16_STR[code as usize] as c_char;
+        *out = SEQ_NT16_STR[code as usize];
     }
 }
 
@@ -72,7 +69,7 @@ fn nibble2base_default_slice(nib: &[u8], seq: &mut [c_char]) {
 #[target_feature(enable = "ssse3")]
 // original: nibble2base_ssse3 (htslib/simd.c:132)
 #[cfg(target_arch = "x86_64")]
-unsafe fn nibble2base_ssse3_slice(nib: &[u8], seq: &mut [c_char]) {
+unsafe fn nibble2base_ssse3_slice(nib: &[u8], seq: &mut [u8]) {
     use std::arch::x86_64::{
         __m128i, _mm_and_si128, _mm_lddqu_si128, _mm_set1_epi8, _mm_shuffle_epi8, _mm_srli_epi64,
         _mm_storeu_si128, _mm_unpackhi_epi8, _mm_unpacklo_epi8,
@@ -114,7 +111,7 @@ unsafe fn nibble2base_ssse3_slice(nib: &[u8], seq: &mut [c_char]) {
 // original: nibble2base_ssse3 (htslib/simd.c:132)
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "ssse3")]
-pub unsafe fn simd_c_132_nibble2base_ssse3(nib: &[u8], seq: &mut [c_char]) {
+pub unsafe fn simd_c_132_nibble2base_ssse3(nib: &[u8], seq: &mut [u8]) {
     unsafe { nibble2base_ssse3_slice(nib, seq) };
 }
 
@@ -133,7 +130,7 @@ pub unsafe fn simd_c_164_nibble2base_resolve() {
     any(target_arch = "arm", target_arch = "aarch64"),
     target_feature = "neon"
 ))]
-unsafe fn nibble2base_neon_slice(nib: &[u8], seq0: &mut [c_char]) {
+unsafe fn nibble2base_neon_slice(nib: &[u8], seq0: &mut [u8]) {
     #[cfg(target_arch = "aarch64")]
     {
         use std::arch::aarch64::{
@@ -212,7 +209,7 @@ unsafe fn nibble2base_neon_slice(nib: &[u8], seq0: &mut [c_char]) {
     any(target_arch = "arm", target_arch = "aarch64"),
     target_feature = "neon"
 ))]
-pub unsafe fn simd_c_173_nibble2base_neon(nib: &[u8], seq0: &mut [c_char]) {
+pub unsafe fn simd_c_173_nibble2base_neon(nib: &[u8], seq0: &mut [u8]) {
     unsafe { nibble2base_neon_slice(nib, seq0) };
 }
 
@@ -256,7 +253,7 @@ mod tests {
                 0xdc, 0xfe, 0x11, 0x22, 0x33, 0x44,
             ];
             let len = 39;
-            let mut seq = [0 as c_char; 39];
+            let mut seq = [0u8; 39];
             let mut expected = [0u8; 39];
 
             for i in 0..len {
@@ -266,10 +263,7 @@ mod tests {
             }
 
             simd_c_132_nibble2base_ssse3(&packed[..len.div_ceil(2)], &mut seq[..len]);
-            assert_eq!(
-                std::slice::from_raw_parts(seq.as_ptr().cast::<u8>(), len),
-                expected
-            );
+            assert_eq!(seq[..len], expected[..len]);
         }
     }
 }

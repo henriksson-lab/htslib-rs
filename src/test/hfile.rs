@@ -22,8 +22,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.  */
 
-use std::ffi::{c_char, c_int};
-
 use crate::htslib_rs::{
     hfile::{
         haddextension, hclose, hfile_c_878_hopenv_mem, hfile_mem_get_buffer,
@@ -33,22 +31,18 @@ use crate::htslib_rs::{
         htslib_hfile_h_263_hputc as hputc, htslib_hfile_h_275_hputs as hputs,
         htslib_hfile_h_292_hwrite as hwrite,
     },
-    hts::{hFILE, ks_release, kstring_t, size_t},
+    hts::{hFILE, ks_release, kstring_t},
 };
 
 // original: fail (htslib/test/hfile.c:38)
 macro_rules! test_hfile_c_38_fail {
     ($format:expr $(, $arg:expr)* $(,)?) => {{
-        let err = *crate::htslib_rs::c_compat::__errno_location();
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), $format $(, $arg)*);
+        let err = *libc::__errno_location();
+        libc::fprintf(libc::fdopen(2, c"w".as_ptr()), $format $(, $arg)*);
         if err != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c": %s".as_ptr(),
-                libc::strerror(err),
-            );
+            libc::fprintf(libc::fdopen(2, c"w".as_ptr()), c": %s".as_ptr(), libc::strerror(err));
         }
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"\n".as_ptr());
+        libc::fprintf(libc::fdopen(2, c"w".as_ptr()), c"\n".as_ptr());
         libc::exit(libc::EXIT_FAILURE);
     }};
 }
@@ -57,7 +51,7 @@ macro_rules! test_hfile_c_38_fail {
 pub unsafe fn test_hfile_c_51_check_offset(
     f: *mut hFILE,
     off: libc::off_t,
-    message: *const c_char,
+    message: *const u8,
 ) {
     let ret = htell(f);
     if ret < 0 {
@@ -68,18 +62,18 @@ pub unsafe fn test_hfile_c_51_check_offset(
     }
 
     libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
+        libc::fdopen(2, c"w".as_ptr()),
         c"%s offset incorrect: expected %ld but got %ld\n".as_ptr(),
         message,
-        off as libc::c_long,
-        ret as libc::c_long,
+        off as i64,
+        ret as i64,
     );
     libc::exit(libc::EXIT_FAILURE);
 }
 
 // original: slurp (htslib/test/hfile.c:62)
-pub unsafe fn test_hfile_c_62_slurp(filename: *const c_char) -> *mut c_char {
-    let f = libc::fopen(filename, c"rb".as_ptr());
+pub unsafe fn test_hfile_c_62_slurp(filename: *const u8) -> Vec<u8> {
+    let f = libc::fopen(filename.cast(), c"rb".as_ptr());
     if f.is_null() {
         test_hfile_c_38_fail!(c"fopen(\"%s\", \"rb\")".as_ptr(), filename);
     }
@@ -88,19 +82,16 @@ pub unsafe fn test_hfile_c_62_slurp(filename: *const c_char) -> *mut c_char {
     if libc::fstat(libc::fileno(f), &mut sbuf) != 0 {
         test_hfile_c_38_fail!(c"fstat(\"%s\")".as_ptr(), filename);
     }
-    let filesize = sbuf.st_size as size_t;
+    let filesize = sbuf.st_size as usize;
 
-    let text = libc::malloc(filesize + 1).cast::<c_char>();
-    if text.is_null() {
-        test_hfile_c_38_fail!(c"malloc(text)".as_ptr());
-    }
+    let mut text = vec![0u8; filesize + 1];
 
-    if libc::fread(text.cast(), 1, filesize, f) != filesize {
+    if libc::fread(text.as_mut_ptr().cast(), 1, filesize, f) != filesize {
         test_hfile_c_38_fail!(c"fread".as_ptr());
     }
     libc::fclose(f);
 
-    *text.add(filesize) = 0;
+    text[filesize] = 0;
     text
 }
 
@@ -108,7 +99,7 @@ static mut TEST_HFILE_FIN: *mut hFILE = std::ptr::null_mut();
 static mut TEST_HFILE_FOUT: *mut hFILE = std::ptr::null_mut();
 
 // original: reopen (htslib/test/hfile.c:85)
-pub unsafe fn test_hfile_c_85_reopen(infname: *const c_char, outfname: *const c_char) {
+pub unsafe fn test_hfile_c_85_reopen(infname: *const u8, outfname: *const u8) {
     if !TEST_HFILE_FIN.is_null() && hclose(TEST_HFILE_FIN) != 0 {
         test_hfile_c_38_fail!(c"hclose(input)".as_ptr());
     }
@@ -116,28 +107,28 @@ pub unsafe fn test_hfile_c_85_reopen(infname: *const c_char, outfname: *const c_
         test_hfile_c_38_fail!(c"hclose(output)".as_ptr());
     }
 
-    TEST_HFILE_FIN = hopen(infname, c"r".as_ptr());
+    TEST_HFILE_FIN = hopen(infname.cast(), c"r".as_ptr());
     if TEST_HFILE_FIN.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"%s\")".as_ptr(), infname);
     }
 
-    TEST_HFILE_FOUT = hopen(outfname, c"w".as_ptr());
+    TEST_HFILE_FOUT = hopen(outfname.cast(), c"w".as_ptr());
     if TEST_HFILE_FOUT.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"%s\")".as_ptr(), outfname);
     }
 }
 
 // original: main (htslib/test/hfile.c:97)
-pub unsafe fn test_hfile_c_97_main() -> c_int {
-    static SIZE: [c_int; 5] = [1, 13, 403, 999, 30000];
+pub unsafe fn test_hfile_c_97_main() -> i32 {
+    static SIZE: [i32; 5] = [1, 13, 403, 999, 30000];
 
-    let mut buffer = [0 as c_char; 40000];
-    let mut c: c_int;
-    let mut i: c_int;
-    let mut n: libc::ssize_t;
+    let mut buffer = [0u8; 40000];
+    let mut c: i32;
+    let mut i: i32;
+    let mut n: isize;
     let mut off: libc::off_t;
 
-    test_hfile_c_85_reopen(c"vcf.c".as_ptr(), c"test/hfile1.tmp".as_ptr());
+    test_hfile_c_85_reopen(c"vcf.c".as_ptr().cast(), c"test/hfile1.tmp".as_ptr().cast());
     loop {
         c = hgetc(TEST_HFILE_FIN);
         if c == libc::EOF {
@@ -148,11 +139,11 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
         }
     }
     if herrno(TEST_HFILE_FIN) != 0 {
-        *crate::htslib_rs::c_compat::__errno_location() = herrno(TEST_HFILE_FIN);
+        *libc::__errno_location() = herrno(TEST_HFILE_FIN);
         test_hfile_c_38_fail!(c"hgetc".as_ptr());
     }
 
-    test_hfile_c_85_reopen(c"test/hfile1.tmp".as_ptr(), c"test/hfile2.tmp".as_ptr());
+    test_hfile_c_85_reopen(c"test/hfile1.tmp".as_ptr().cast(), c"test/hfile2.tmp".as_ptr().cast());
     if hpeek(TEST_HFILE_FIN, buffer.as_mut_ptr().cast(), 50) < 0 {
         test_hfile_c_38_fail!(c"hpeek".as_ptr());
     }
@@ -161,7 +152,7 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
         if n <= 0 {
             break;
         }
-        if hwrite(TEST_HFILE_FOUT, buffer.as_ptr().cast(), n as size_t) != n {
+        if hwrite(TEST_HFILE_FOUT, buffer.as_ptr().cast(), n as usize) != n {
             test_hfile_c_38_fail!(c"hwrite".as_ptr());
         }
     }
@@ -169,13 +160,13 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
         test_hfile_c_38_fail!(c"hread".as_ptr());
     }
 
-    test_hfile_c_85_reopen(c"test/hfile2.tmp".as_ptr(), c"test/hfile3.tmp".as_ptr());
+    test_hfile_c_85_reopen(c"test/hfile2.tmp".as_ptr().cast(), c"test/hfile3.tmp".as_ptr().cast());
     loop {
         n = hread(TEST_HFILE_FIN, buffer.as_mut_ptr().cast(), buffer.len());
         if n <= 0 {
             break;
         }
-        if hwrite(TEST_HFILE_FOUT, buffer.as_ptr().cast(), n as size_t) != n {
+        if hwrite(TEST_HFILE_FOUT, buffer.as_ptr().cast(), n as usize) != n {
             test_hfile_c_38_fail!(c"hwrite".as_ptr());
         }
         if hpeek(TEST_HFILE_FIN, buffer.as_mut_ptr().cast(), 700) < 0 {
@@ -186,14 +177,14 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
         test_hfile_c_38_fail!(c"hread".as_ptr());
     }
 
-    test_hfile_c_85_reopen(c"test/hfile3.tmp".as_ptr(), c"test/hfile4.tmp".as_ptr());
+    test_hfile_c_85_reopen(c"test/hfile3.tmp".as_ptr().cast(), c"test/hfile4.tmp".as_ptr().cast());
     i = 0;
     off = 0;
     loop {
         n = hread(
             TEST_HFILE_FIN,
             buffer.as_mut_ptr().cast(),
-            SIZE[(i % 5) as usize] as size_t,
+            SIZE[(i % 5) as usize] as usize,
         );
         i += 1;
         if n <= 0 {
@@ -201,31 +192,31 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
         }
         off += n as libc::off_t;
         buffer[n as usize] = 0;
-        test_hfile_c_51_check_offset(TEST_HFILE_FIN, off, c"pre-peek".as_ptr());
-        if hputs(buffer.as_ptr(), TEST_HFILE_FOUT) == libc::EOF {
+        test_hfile_c_51_check_offset(TEST_HFILE_FIN, off, c"pre-peek".as_ptr().cast());
+        if hputs(buffer.as_ptr().cast(), TEST_HFILE_FOUT) == libc::EOF {
             test_hfile_c_38_fail!(c"hputs".as_ptr());
         }
         n = hpeek(
             TEST_HFILE_FIN,
             buffer.as_mut_ptr().cast(),
-            SIZE[((i + 3) % 5) as usize] as size_t,
+            SIZE[((i + 3) % 5) as usize] as usize,
         );
         if n < 0 {
             test_hfile_c_38_fail!(c"hpeek".as_ptr());
         }
-        test_hfile_c_51_check_offset(TEST_HFILE_FIN, off, c"post-peek".as_ptr());
+        test_hfile_c_51_check_offset(TEST_HFILE_FIN, off, c"post-peek".as_ptr().cast());
     }
     if n < 0 {
         test_hfile_c_38_fail!(c"hread".as_ptr());
     }
 
-    test_hfile_c_85_reopen(c"test/hfile4.tmp".as_ptr(), c"test/hfile5.tmp".as_ptr());
-    while !hgets(buffer.as_mut_ptr(), 80, TEST_HFILE_FIN).is_null() {
-        let l = libc::strlen(buffer.as_ptr());
+    test_hfile_c_85_reopen(c"test/hfile4.tmp".as_ptr().cast(), c"test/hfile5.tmp".as_ptr().cast());
+    while !hgets(buffer.as_mut_ptr().cast(), 80, TEST_HFILE_FIN).is_null() {
+        let l = libc::strlen(buffer.as_ptr().cast());
         if l > 79 {
             test_hfile_c_38_fail!(c"hgets read %zu bytes, should be < 80".as_ptr(), l);
         }
-        if hwrite(TEST_HFILE_FOUT, buffer.as_ptr().cast(), l) != l as libc::ssize_t {
+        if hwrite(TEST_HFILE_FOUT, buffer.as_ptr().cast(), l) != l as isize {
             test_hfile_c_38_fail!(c"hwrite".as_ptr());
         }
     }
@@ -233,30 +224,30 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
         test_hfile_c_38_fail!(c"hgets".as_ptr());
     }
 
-    test_hfile_c_85_reopen(c"test/hfile5.tmp".as_ptr(), c"test/hfile6.tmp".as_ptr());
+    test_hfile_c_85_reopen(c"test/hfile5.tmp".as_ptr().cast(), c"test/hfile6.tmp".as_ptr().cast());
     n = hread(TEST_HFILE_FIN, buffer.as_mut_ptr().cast(), 200);
     if n < 0 {
         test_hfile_c_38_fail!(c"hread".as_ptr());
     } else if n != 200 {
-        test_hfile_c_38_fail!(c"hread only got %d".as_ptr(), n as c_int);
+        test_hfile_c_38_fail!(c"hread only got %d".as_ptr(), n as i32);
     }
     if hwrite(TEST_HFILE_FOUT, buffer.as_ptr().cast(), 1000) != 1000 {
         test_hfile_c_38_fail!(c"hwrite".as_ptr());
     }
-    test_hfile_c_51_check_offset(TEST_HFILE_FIN, 200, c"input/first200".as_ptr());
-    test_hfile_c_51_check_offset(TEST_HFILE_FOUT, 1000, c"output/first200".as_ptr());
+    test_hfile_c_51_check_offset(TEST_HFILE_FIN, 200, c"input/first200".as_ptr().cast());
+    test_hfile_c_51_check_offset(TEST_HFILE_FOUT, 1000, c"output/first200".as_ptr().cast());
 
     if hseek(TEST_HFILE_FIN, 800, libc::SEEK_CUR) < 0 {
         test_hfile_c_38_fail!(c"hseek/cur".as_ptr());
     }
-    test_hfile_c_51_check_offset(TEST_HFILE_FIN, 1000, c"input/seek".as_ptr());
+    test_hfile_c_51_check_offset(TEST_HFILE_FIN, 1000, c"input/seek".as_ptr().cast());
     off = 1000;
     loop {
         n = hread(TEST_HFILE_FIN, buffer.as_mut_ptr().cast(), buffer.len());
         if n <= 0 {
             break;
         }
-        if hwrite(TEST_HFILE_FOUT, buffer.as_ptr().cast(), n as size_t) != n {
+        if hwrite(TEST_HFILE_FOUT, buffer.as_ptr().cast(), n as usize) != n {
             test_hfile_c_38_fail!(c"hwrite".as_ptr());
         }
         off += n as libc::off_t;
@@ -264,8 +255,8 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
     if n < 0 {
         test_hfile_c_38_fail!(c"hread".as_ptr());
     }
-    test_hfile_c_51_check_offset(TEST_HFILE_FIN, off, c"input/eof".as_ptr());
-    test_hfile_c_51_check_offset(TEST_HFILE_FOUT, off, c"output/eof".as_ptr());
+    test_hfile_c_51_check_offset(TEST_HFILE_FIN, off, c"input/eof".as_ptr().cast());
+    test_hfile_c_51_check_offset(TEST_HFILE_FOUT, off, c"output/eof".as_ptr().cast());
 
     if hseek(TEST_HFILE_FIN, 200, libc::SEEK_SET) < 0 {
         test_hfile_c_38_fail!(c"hseek/set".as_ptr());
@@ -273,46 +264,42 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
     if hseek(TEST_HFILE_FOUT, 200, libc::SEEK_SET) < 0 {
         test_hfile_c_38_fail!(c"hseek(output)".as_ptr());
     }
-    test_hfile_c_51_check_offset(TEST_HFILE_FIN, 200, c"input/backto200".as_ptr());
-    test_hfile_c_51_check_offset(TEST_HFILE_FOUT, 200, c"output/backto200".as_ptr());
+    test_hfile_c_51_check_offset(TEST_HFILE_FIN, 200, c"input/backto200".as_ptr().cast());
+    test_hfile_c_51_check_offset(TEST_HFILE_FOUT, 200, c"output/backto200".as_ptr().cast());
     n = hread(TEST_HFILE_FIN, buffer.as_mut_ptr().cast(), 800);
     if n < 0 {
         test_hfile_c_38_fail!(c"hread".as_ptr());
     } else if n != 800 {
-        test_hfile_c_38_fail!(c"hread only got %d".as_ptr(), n as c_int);
+        test_hfile_c_38_fail!(c"hread only got %d".as_ptr(), n as i32);
     }
     if hwrite(TEST_HFILE_FOUT, buffer.as_ptr().cast(), 800) != 800 {
         test_hfile_c_38_fail!(c"hwrite".as_ptr());
     }
-    test_hfile_c_51_check_offset(TEST_HFILE_FIN, 1000, c"input/wrote800".as_ptr());
-    test_hfile_c_51_check_offset(TEST_HFILE_FOUT, 1000, c"output/wrote800".as_ptr());
+    test_hfile_c_51_check_offset(TEST_HFILE_FIN, 1000, c"input/wrote800".as_ptr().cast());
+    test_hfile_c_51_check_offset(TEST_HFILE_FOUT, 1000, c"output/wrote800".as_ptr().cast());
 
     if hflush(TEST_HFILE_FOUT) == libc::EOF {
         test_hfile_c_38_fail!(c"hflush".as_ptr());
     }
 
-    let original = test_hfile_c_62_slurp(c"vcf.c".as_ptr());
+    let original = test_hfile_c_62_slurp(c"vcf.c".as_ptr().cast());
     for i in 1..=6 {
         libc::snprintf(
-            buffer.as_mut_ptr(),
+            buffer.as_mut_ptr().cast(),
             buffer.len(),
             c"test/hfile%d.tmp".as_ptr(),
             i,
         );
-        let text: *mut c_char = test_hfile_c_62_slurp(buffer.as_ptr());
-        if libc::strcmp(original, text) != 0 {
+        let text = test_hfile_c_62_slurp(buffer.as_ptr().cast());
+        if original != text {
             libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
+                libc::fdopen(2, c"w".as_ptr()),
                 c"%s differs from vcf.c\n".as_ptr(),
                 buffer.as_ptr(),
             );
-            libc::free(text.cast());
-            libc::free(original.cast());
             return libc::EXIT_FAILURE;
         }
-        libc::free(text.cast());
     }
-    libc::free(original.cast());
 
     if hclose(TEST_HFILE_FIN) != 0 {
         test_hfile_c_38_fail!(c"hclose(input)".as_ptr());
@@ -397,14 +384,14 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
     // hFILE and frees the caller's allocation, so `test_string` is dangling
     // here (unlike the C contract where the buffer becomes the hFILE's own).
     // Compare against a stable literal rather than the freed pointer.
-    if libc::strcmp(buffer.as_ptr(), c"Test string".as_ptr()) != 0 {
+    if libc::strcmp(buffer.as_ptr().cast(), c"Test string".as_ptr()) != 0 {
         test_hfile_c_38_fail!(
             c"hopen('mem:', 'r') missread '%s' != '%s'".as_ptr(),
             buffer.as_ptr(),
             c"Test string".as_ptr(),
         );
     }
-    let mut interval_buf_len: size_t = 0;
+    let mut interval_buf_len: usize = 0;
     let mut internal_buf = hfile_mem_get_buffer(TEST_HFILE_FIN, &mut interval_buf_len);
     if internal_buf.is_null() {
         test_hfile_c_38_fail!(c"hopen('mem:', 'r') failed to get internal buffer".as_ptr());
@@ -431,7 +418,7 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
     if hread(TEST_HFILE_FIN, buffer.as_mut_ptr().cast(), 18) != 18 {
         test_hfile_c_38_fail!(c"hopen('mem:', 'wr') failed read".as_ptr());
     }
-    if libc::strcmp(buffer.as_ptr(), c"Test string extra".as_ptr()) != 0 {
+    if libc::strcmp(buffer.as_ptr().cast(), c"Test string extra".as_ptr()) != 0 {
         test_hfile_c_38_fail!(
             c"hopen('mem:', 'wr') misswrote '%s' != '%s'".as_ptr(),
             buffer.as_ptr(),
@@ -456,7 +443,7 @@ pub unsafe fn test_hfile_c_97_main() -> c_int {
         test_hfile_c_38_fail!(c"hread".as_ptr());
     }
     buffer[n as usize] = 0;
-    if libc::strcmp(buffer.as_ptr(), c"hello, world!\n".as_ptr()) != 0 {
+    if libc::strcmp(buffer.as_ptr().cast(), c"hello, world!\n".as_ptr()) != 0 {
         test_hfile_c_38_fail!(c"hread result".as_ptr());
     }
     if hclose(TEST_HFILE_FIN) != 0 {
@@ -504,7 +491,7 @@ ZSBzaG9ydCB2ZWhlbWVuY2Ugb2YgYW55IGNhcm5hbCBwbGVhc3VyZS4="
     }
     buffer[n as usize] = 0;
     if libc::strcmp(
-        buffer.as_ptr(),
+        buffer.as_ptr().cast(),
         c"Man is distinguished, not only by his reason, but by \
 this singular passion from other animals, which is a lust of the mind, that \
 by a perseverance of delight in the continued and indefatigable generation \
@@ -597,7 +584,6 @@ of knowledge, exceeds the short vehemence of any carnal pleasure."
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
     use std::process::Command;
 
     fn temp_dir() -> std::path::PathBuf {
@@ -614,13 +600,12 @@ mod tests {
             return;
         };
         unsafe {
-            let cwd = CString::new(
-                std::path::PathBuf::from(workdir)
-                    .to_string_lossy()
-                    .as_bytes(),
-            )
-            .unwrap();
-            if libc::chdir(cwd.as_ptr()) != 0 {
+            let mut cwd = std::path::PathBuf::from(workdir)
+                .to_string_lossy()
+                .as_bytes()
+                .to_vec();
+            cwd.push(0);
+            if libc::chdir(cwd.as_ptr().cast()) != 0 {
                 std::process::exit(120);
             }
             std::process::exit(test_hfile_c_97_main());

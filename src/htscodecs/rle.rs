@@ -446,7 +446,6 @@ mod tests {
     #[cfg(feature = "parity")]
     mod parity {
         use super::*;
-        use std::os::raw::c_int;
 
         extern "C" {
             #[link_name = "hts_rle_encode"]
@@ -456,7 +455,7 @@ mod tests {
                 run: *mut u8,
                 run_len: *mut u64,
                 rle_syms: *mut u8,
-                rle_nsyms: *mut c_int,
+                rle_nsyms: *mut i32,
                 out: *mut u8,
                 out_len: *mut u64,
             ) -> *mut u8;
@@ -467,7 +466,7 @@ mod tests {
                 run: *mut u8,
                 run_len: u64,
                 rle_syms: *mut u8,
-                rle_nsyms: c_int,
+                rle_nsyms: i32,
                 out: *mut u8,
                 out_len: *mut u64,
             ) -> *mut u8;
@@ -485,7 +484,7 @@ mod tests {
             let mut run = vec![0u8; data.len().max(1)];
             let mut run_len: u64 = 0;
             let mut syms = vec![0u8; 256];
-            let mut nsyms: c_int = 0;
+            let mut nsyms: i32 = 0;
             let mut out = vec![0u8; data.len() * 2 + 2];
             let mut out_len: u64 = 0;
             let p = unsafe {
@@ -548,7 +547,7 @@ mod tests {
                     run.as_mut_ptr(),
                     run.len() as u64,
                     syms.as_mut_ptr(),
-                    e.nsyms as c_int,
+                    e.nsyms,
                     out.as_mut_ptr(),
                     &mut out_len,
                 )

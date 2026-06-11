@@ -13,15 +13,10 @@ use htslib_rs::{
     bcf_destroy, bcf_hdr_destroy, bcf_hdr_write, bcf_init, bcf_read, bcf_subset_format, bcf_write,
     hts_close, hts_open, ks_free, kstring_t, vcf_format, vcf_hdr_read, vcf_read, vcf_write,
 };
-use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 
 fn fixture(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
-}
-
-fn c_path(path: &Path) -> CString {
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
 }
 
 fn tmp_path(label: &str, ext: &str) -> PathBuf {
@@ -35,8 +30,9 @@ fn tmp_path(label: &str, ext: &str) -> PathBuf {
 
 /// Render an open variant file as `<header text><record1>\n<record2>\n...`.
 unsafe fn render_variant_file(path: &Path) -> Vec<String> {
-    let path_c = c_path(path);
-    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+    let mut path_c: Vec<u8> = path.to_string_lossy().as_bytes().to_vec();
+    path_c.push(0);
+    let fp = hts_open(path_c.as_ptr().cast(), b"r\0".as_ptr().cast());
     assert!(!fp.is_null(), "failed to open {}", path.display());
 
     let hdr = vcf_hdr_read(fp);
@@ -79,11 +75,15 @@ unsafe fn render_variant_file(path: &Path) -> Vec<String> {
 /// format ("wb" = BCF, "w" = plain VCF, "wz" = bgzipped VCF).  Uses
 /// vcf_read/bcf_write (or vice versa) — the actual choice does not matter
 /// because the bcf1_t representation is shared between the two readers.
-unsafe fn copy_variants(input: &Path, output: &Path, out_mode: &CStr) {
-    let in_c = c_path(input);
-    let out_c = c_path(output);
+unsafe fn copy_variants(input: &Path, output: &Path, out_mode: &[u8]) {
+    let mut in_c: Vec<u8> = input.to_string_lossy().as_bytes().to_vec();
+    in_c.push(0);
+    let mut out_c: Vec<u8> = output.to_string_lossy().as_bytes().to_vec();
+    out_c.push(0);
+    let mut out_mode_c: Vec<u8> = out_mode.to_vec();
+    out_mode_c.push(0);
 
-    let in_fp = hts_open(in_c.as_ptr(), c"r".as_ptr());
+    let in_fp = hts_open(in_c.as_ptr().cast(), b"r\0".as_ptr().cast());
     assert!(!in_fp.is_null(), "failed to open {}", input.display());
     let hdr = vcf_hdr_read(in_fp);
     assert!(
@@ -92,13 +92,13 @@ unsafe fn copy_variants(input: &Path, output: &Path, out_mode: &CStr) {
         input.display()
     );
 
-    let out_fp = hts_open(out_c.as_ptr(), out_mode.as_ptr());
+    let out_fp = hts_open(out_c.as_ptr().cast(), out_mode_c.as_ptr().cast());
     assert!(!out_fp.is_null(), "failed to create {}", output.display());
     assert_eq!(bcf_hdr_write(out_fp, hdr), 0);
 
     let rec = bcf_init();
     assert!(!rec.is_null());
-    let is_text_out = matches!(out_mode.to_bytes(), b"w" | b"wz");
+    let is_text_out = matches!(out_mode, b"w" | b"wz");
     loop {
         let ret = bcf_read(in_fp, hdr, rec);
         if ret < 0 {
@@ -134,7 +134,7 @@ fn round_trip_vcf_to_bcf_preserves_records() {
         let original = render_variant_file(&input);
         assert!(!original.is_empty(), "input VCF had no records");
 
-        copy_variants(&input, &bcf, c"wb");
+        copy_variants(&input, &bcf, b"wb");
         let round_tripped = render_variant_file(&bcf);
 
         assert_eq!(round_tripped, original, "VCF->BCF->VCF record parity");
@@ -154,7 +154,7 @@ fn round_trip_vcf_to_bcf_handles_realistic_multi_sample_file() {
         let original = render_variant_file(&input);
         assert!(original.len() > 100, "index.vcf should hold many records");
 
-        copy_variants(&input, &bcf, c"wb");
+        copy_variants(&input, &bcf, b"wb");
         let round_tripped = render_variant_file(&bcf);
 
         assert_eq!(round_tripped.len(), original.len());
@@ -188,8 +188,8 @@ fn round_trip_bcf_to_vcf_preserves_records() {
         let original = render_variant_file(&input);
         assert!(!original.is_empty(), "input BCF had no records");
 
-        copy_variants(&input, &vcf, c"w");
-        copy_variants(&vcf, &bcf, c"wb");
+        copy_variants(&input, &vcf, b"w");
+        copy_variants(&vcf, &bcf, b"wb");
         let round_tripped = render_variant_file(&bcf);
 
         assert_eq!(round_tripped, original, "BCF->VCF->BCF record parity");

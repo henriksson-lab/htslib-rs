@@ -2,27 +2,27 @@ use htslib_rs::{
     bam_destroy1, bam_init1, hts_check_EOF, hts_close, hts_open, hts_set_fai_filename,
     sam_hdr_destroy, sam_hdr_read, sam_read1,
 };
-use std::ffi::CString;
-
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 unsafe fn count_alignment_records(path: &str, reference: Option<&str>) -> usize {
-    let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let path_c = c_fixture(path);
+    let fp = hts_open(path_c.as_ptr().cast(), c"r".as_ptr());
+    assert!(!fp.is_null(), "failed to open {}", path);
     if let Some(reference) = reference {
         let reference = c_fixture(reference);
-        assert_eq!(hts_set_fai_filename(fp, reference.as_ptr()), 0);
+        assert_eq!(hts_set_fai_filename(fp, reference.as_ptr().cast()), 0);
     }
 
     let hdr = sam_hdr_read(fp);
     assert!(
         !hdr.is_null(),
         "failed to read alignment header from {}",
-        path.to_string_lossy()
+        path
     );
     let rec = bam_init1();
     assert!(!rec.is_null());
@@ -50,19 +50,19 @@ unsafe fn assert_readable_alignment_fixture(path: &str, reference: Option<&str>)
 }
 
 unsafe fn assert_alignment_eof_is_checkable(path: &str, reference: Option<&str>) {
-    let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let path_c = c_fixture(path);
+    let fp = hts_open(path_c.as_ptr().cast(), c"r".as_ptr());
+    assert!(!fp.is_null(), "failed to open {}", path);
     if let Some(reference) = reference {
         let reference = c_fixture(reference);
-        assert_eq!(hts_set_fai_filename(fp, reference.as_ptr()), 0);
+        assert_eq!(hts_set_fai_filename(fp, reference.as_ptr().cast()), 0);
     }
 
     let hdr = sam_hdr_read(fp);
     assert!(
         !hdr.is_null(),
         "failed to read alignment header from {}",
-        path.to_string_lossy()
+        path
     );
     let rec = bam_init1();
     assert!(!rec.is_null());

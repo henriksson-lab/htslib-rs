@@ -1,8 +1,6 @@
 // Functions translated from htslib/cram/cram_codecs.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_int, c_void};
-
 use super::*;
 
 unsafe fn raw_block_mut<'a>(block: *mut cram_block) -> Option<&'a mut cram_block> {
@@ -13,7 +11,7 @@ fn cram_block_layout_mut(block: &mut cram_block) -> &mut cram_block_layout {
     unsafe { &mut *(block as *mut cram_block).cast::<cram_block_layout>() }
 }
 
-unsafe fn raw_bytes<'a>(bytes: *const c_char, len: c_int) -> Option<&'a [u8]> {
+unsafe fn raw_bytes<'a>(bytes: *const u8, len: i32) -> Option<&'a [u8]> {
     if len < 0 || (bytes.is_null() && len != 0) {
         return None;
     }
@@ -23,7 +21,7 @@ unsafe fn raw_bytes<'a>(bytes: *const c_char, len: c_int) -> Option<&'a [u8]> {
     Some(std::slice::from_raw_parts(bytes.cast::<u8>(), len as usize))
 }
 
-unsafe fn raw_c_string_bytes<'a>(bytes: *const c_char) -> Option<&'a [u8]> {
+unsafe fn raw_c_string_bytes<'a>(bytes: *const u8) -> Option<&'a [u8]> {
     if bytes.is_null() {
         return None;
     }
@@ -35,7 +33,7 @@ unsafe fn raw_c_string_bytes<'a>(bytes: *const c_char) -> Option<&'a [u8]> {
     Some(std::slice::from_raw_parts(bytes.cast::<u8>(), len))
 }
 
-unsafe fn append_bytes_to_block(block: &mut cram_block, bytes: &[u8]) -> c_int {
+unsafe fn append_bytes_to_block(block: &mut cram_block, bytes: &[u8]) -> i32 {
     cram_cram_io_h_248_block_append(
         (block as *mut cram_block).cast(),
         bytes.as_ptr().cast(),
@@ -43,35 +41,35 @@ unsafe fn append_bytes_to_block(block: &mut cram_block, bytes: &[u8]) -> c_int {
     )
 }
 
-unsafe fn extract_block_bytes<'a>(block: &mut cram_block, len: c_int) -> Option<&'a [u8]> {
+unsafe fn extract_block_bytes<'a>(block: &mut cram_block, len: i32) -> Option<&'a [u8]> {
     let bytes = cram_cram_codecs_c_319_cram_extract_block(block, len);
     raw_bytes(bytes, len)
 }
 
-unsafe fn append_optional_c_prefix(block: &mut cram_block, prefix: *const c_char) -> Option<c_int> {
+unsafe fn append_optional_c_prefix(block: &mut cram_block, prefix: *const u8) -> Option<i32> {
     let Some(bytes) = raw_c_string_bytes(prefix) else {
         return Some(0);
     };
     if append_bytes_to_block(block, bytes) == 0 {
-        Some(bytes.len() as c_int)
+        Some(bytes.len() as i32)
     } else {
         None
     }
 }
 
-unsafe fn external_codec_mut<'a>(codec: *mut c_void) -> Option<&'a mut cram_codec_external_layout> {
+unsafe fn external_codec_mut<'a>(codec: *mut ()) -> Option<&'a mut cram_codec_external_layout> {
     codec.cast::<cram_codec_external_layout>().as_mut()
 }
 
-unsafe fn varint_codec_mut<'a>(codec: *mut c_void) -> Option<&'a mut cram_codec_varint_layout> {
+unsafe fn varint_codec_mut<'a>(codec: *mut ()) -> Option<&'a mut cram_codec_varint_layout> {
     codec.cast::<cram_codec_varint_layout>().as_mut()
 }
 
-unsafe fn const_codec_mut<'a>(codec: *mut c_void) -> Option<&'a mut cram_codec_const_layout> {
+unsafe fn const_codec_mut<'a>(codec: *mut ()) -> Option<&'a mut cram_codec_const_layout> {
     codec.cast::<cram_codec_const_layout>().as_mut()
 }
 
-pub fn cram_get_bit_MSB(block: &mut cram_block_layout) -> c_int {
+pub fn cram_get_bit_MSB(block: &mut cram_block_layout) -> i32 {
     unsafe {
         if block.byte > block.alloc {
             return -1;
@@ -84,11 +82,11 @@ pub fn cram_get_bit_MSB(block: &mut cram_block_layout) -> c_int {
             block.byte += 1;
         }
 
-        (val & 1) as c_int
+        (val & 1) as i32
     }
 }
 
-pub fn cram_get_one_bits_MSB(block: &mut cram_block_layout) -> c_int {
+pub fn cram_get_one_bits_MSB(block: &mut cram_block_layout) -> i32 {
     unsafe {
         let mut n = 0;
         if block.byte >= block.uncomp_size as usize {
@@ -115,7 +113,7 @@ pub fn cram_get_one_bits_MSB(block: &mut cram_block_layout) -> c_int {
     }
 }
 
-pub fn cram_get_zero_bits_MSB(block: &mut cram_block_layout) -> c_int {
+pub fn cram_get_zero_bits_MSB(block: &mut cram_block_layout) -> i32 {
     unsafe {
         let mut n = 0;
         if block.byte >= block.uncomp_size as usize {
@@ -142,7 +140,7 @@ pub fn cram_get_zero_bits_MSB(block: &mut cram_block_layout) -> c_int {
     }
 }
 
-pub fn cram_store_bit_MSB(block: &mut cram_block_layout, bit: libc::c_uint) {
+pub fn cram_store_bit_MSB(block: &mut cram_block_layout, bit: u32) {
     unsafe {
         if block.byte >= block.alloc {
             block.alloc = if block.alloc != 0 {
@@ -150,7 +148,10 @@ pub fn cram_store_bit_MSB(block: &mut cram_block_layout, bit: libc::c_uint) {
             } else {
                 1024
             };
-            block.data = realloc(block.data.cast(), block.alloc as u64).cast::<u8>();
+            // Must use the same allocator as the rest of the cram_block
+            // machinery (block_resize_exact's libc::realloc and cram_free_block's
+            // libc::free); mixing std::alloc here corrupts the heap.
+            block.data = libc::realloc(block.data.cast(), block.alloc).cast::<u8>();
         }
 
         if bit != 0 {
@@ -166,7 +167,7 @@ pub fn cram_store_bit_MSB(block: &mut cram_block_layout, bit: libc::c_uint) {
     }
 }
 
-pub fn cram_get_bits_MSB(block: &mut cram_block_layout, mut nbits: c_int) -> i64 {
+pub fn cram_get_bits_MSB(block: &mut cram_block_layout, mut nbits: i32) -> i64 {
     unsafe {
         let mut val = 0u64;
 
@@ -196,18 +197,18 @@ pub fn cram_get_bits_MSB(block: &mut cram_block_layout, mut nbits: c_int) -> i64
     }
 }
 
-pub fn cram_store_bits_MSB(block: &mut cram_block_layout, val: u64, mut nbits: c_int) -> c_int {
+pub fn cram_store_bits_MSB(block: &mut cram_block_layout, val: u64, mut nbits: i32) -> i32 {
     unsafe {
         if block.byte + 8 >= block.alloc {
             if block.byte != 0 {
                 block.alloc *= 2;
-                block.data = realloc(block.data.cast(), (block.alloc + 8) as u64).cast::<u8>();
+                block.data = libc::realloc(block.data.cast(), block.alloc + 8).cast::<u8>();
                 if block.data.is_null() {
                     return -1;
                 }
             } else {
                 block.alloc = 1024;
-                block.data = realloc(block.data.cast(), (block.alloc + 8) as u64).cast::<u8>();
+                block.data = libc::realloc(block.data.cast(), block.alloc + 8).cast::<u8>();
                 if block.data.is_null() {
                     return -1;
                 }
@@ -254,7 +255,7 @@ pub fn cram_store_bits_MSB(block: &mut cram_block_layout, val: u64, mut nbits: c
     }
 }
 
-pub fn cram_store_bytes_MSB(block: &mut cram_block_layout, bytes: &[c_char]) {
+pub fn cram_store_bytes_MSB(block: &mut cram_block_layout, bytes: &[u8]) {
     unsafe {
         if block.bit != 7 {
             block.bit = 7;
@@ -267,24 +268,21 @@ pub fn cram_store_bytes_MSB(block: &mut cram_block_layout, bytes: &[c_char]) {
             } else {
                 1024
             };
-            block.data = realloc(block.data.cast(), block.alloc as u64).cast::<u8>();
+            block.data = libc::realloc(block.data.cast(), block.alloc).cast::<u8>();
         }
 
-        memcpy(
-            block.data.add(block.byte).cast(),
-            bytes.as_ptr().cast(),
-            bytes.len() as u64,
-        );
+        std::slice::from_raw_parts_mut(block.data.add(block.byte), bytes.len())
+            .copy_from_slice(bytes);
         block.byte += bytes.len();
     }
 }
 
 pub unsafe fn cram_cram_codecs_c_319_cram_extract_block(
     b: *mut cram_block,
-    size: c_int,
-) -> *mut c_char {
+    size: i32,
+) -> *mut u8 {
     let b = b.cast::<cram_block_layout>();
-    let cp = (*b).data.add((*b).idx as usize).cast::<c_char>();
+    let cp = (*b).data.add((*b).idx as usize).cast::<u8>();
     (*b).idx += size;
     if (*b).idx > (*b).uncomp_size {
         return std::ptr::null_mut();
@@ -295,11 +293,11 @@ pub unsafe fn cram_cram_codecs_c_319_cram_extract_block(
 
 pub unsafe fn cram_cram_codecs_c_350_cram_external_decode_int(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_external_layout>();
     let b = cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).external.content_id);
     if b.is_null() {
@@ -307,15 +305,15 @@ pub unsafe fn cram_cram_codecs_c_350_cram_external_decode_int(
     }
 
     let block = b.cast::<cram_block_layout>();
-    let mut cp = (*block).data.add((*block).idx as usize).cast::<c_char>();
+    let mut cp = (*block).data.add((*block).idx as usize).cast::<u8>();
     let endp = (*block)
         .data
         .add((*block).uncomp_size as usize)
-        .cast::<c_char>();
+        .cast::<u8>();
     let mut err = 0;
     let val = ((*(*c).vv).varint_get32.unwrap())(&mut cp, endp, &mut err);
     *(out.cast::<i32>()) = val as i32;
-    (*block).idx = cp.offset_from((*block).data.cast::<c_char>()) as i32;
+    (*block).idx = cp.offset_from((*block).data.cast::<u8>()) as i32;
     *out_size = 1;
 
     if err != 0 {
@@ -327,11 +325,11 @@ pub unsafe fn cram_cram_codecs_c_350_cram_external_decode_int(
 
 pub unsafe fn cram_cram_codecs_c_370_cram_external_decode_long(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_external_layout>();
     let b = cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).external.content_id);
     if b.is_null() {
@@ -339,15 +337,15 @@ pub unsafe fn cram_cram_codecs_c_370_cram_external_decode_long(
     }
 
     let block = b.cast::<cram_block_layout>();
-    let mut cp = (*block).data.add((*block).idx as usize).cast::<c_char>();
+    let mut cp = (*block).data.add((*block).idx as usize).cast::<u8>();
     let endp = (*block)
         .data
         .add((*block).uncomp_size as usize)
-        .cast::<c_char>();
+        .cast::<u8>();
     let mut err = 0;
     let val = ((*(*c).vv).varint_get64.unwrap())(&mut cp, endp, &mut err);
     *(out.cast::<i64>()) = val;
-    (*block).idx = cp.offset_from((*block).data.cast::<c_char>()) as i32;
+    (*block).idx = cp.offset_from((*block).data.cast::<u8>()) as i32;
     *out_size = 1;
 
     if err != 0 {
@@ -359,11 +357,11 @@ pub unsafe fn cram_cram_codecs_c_370_cram_external_decode_long(
 
 pub unsafe fn cram_cram_codecs_c_390_cram_external_decode_char(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_external_layout>();
     let b = cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).external.content_id);
     if b.is_null() {
@@ -378,18 +376,18 @@ pub unsafe fn cram_cram_codecs_c_390_cram_external_decode_char(
     };
 
     if !out.is_null() {
-        memcpy(out.cast(), bytes.as_ptr().cast(), bytes.len() as u64);
+        std::slice::from_raw_parts_mut(out, bytes.len()).copy_from_slice(bytes);
     }
     0
 }
 
 pub unsafe fn cram_cram_codecs_c_410_cram_external_decode_block(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out_: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out_: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_external_layout>();
     let b = cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).external.content_id);
     if b.is_null() {
@@ -409,7 +407,7 @@ pub unsafe fn cram_cram_codecs_c_410_cram_external_decode_block(
     append_bytes_to_block(out_block, bytes)
 }
 
-pub unsafe fn cram_cram_codecs_c_433_cram_external_decode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_433_cram_external_decode_free(c: *mut ()) {
     if !c.is_null() {
         drop(Box::from_raw(c.cast::<cram_codec_external_layout>()));
     }
@@ -417,8 +415,8 @@ pub unsafe fn cram_cram_codecs_c_433_cram_external_decode_free(c: *mut c_void) {
 
 pub unsafe fn cram_cram_codecs_c_439_cram_external_decode_size(
     slice: *mut cram_slice,
-    c: *mut c_void,
-) -> c_int {
+    c: *mut (),
+) -> i32 {
     let c = c.cast::<cram_codec_external_layout>();
     let b = cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).external.content_id);
     if b.is_null() {
@@ -430,16 +428,16 @@ pub unsafe fn cram_cram_codecs_c_439_cram_external_decode_size(
 
 pub unsafe fn cram_cram_codecs_c_450_cram_external_get_block(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
 ) -> *mut cram_block {
     let c = c.cast::<cram_codec_external_layout>();
     cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).external.content_id)
 }
 
 pub unsafe fn cram_cram_codecs_c_454_cram_external_describe(
-    c: *mut c_void,
+    c: *mut (),
     ks: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     let c = c.cast::<cram_codec_external_layout>();
     let ks = &mut *ks;
     if kputsn(b"EXTERNAL(id=", 12, ks) < 0
@@ -453,14 +451,14 @@ pub unsafe fn cram_cram_codecs_c_454_cram_external_describe(
 }
 
 pub unsafe fn cram_cram_codecs_c_459_cram_external_decode_init(
-    _hdr: *mut c_void,
-    data: *mut c_char,
-    size: c_int,
-    codec: c_int,
-    option: c_int,
-    version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    _hdr: *mut (),
+    data: *mut u8,
+    size: i32,
+    codec: i32,
+    option: i32,
+    version: i32,
+    vv: *mut (),
+) -> *mut () {
     if size < 1 {
         return std::ptr::null_mut();
     }
@@ -509,11 +507,11 @@ pub unsafe fn cram_cram_codecs_c_459_cram_external_decode_init(
     c.describe = cram_fn_ptr(cram_cram_codecs_c_454_cram_external_describe as usize);
 
     let vv = vv.cast::<varint_vec_layout>();
-    let mut cp = data;
-    let endp = data.add(size as usize);
+    let mut cp = data.cast::<u8>();
+    let endp = data.add(size as usize).cast::<u8>();
     c.external.content_id =
         ((*vv).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut()) as i32;
-    if cp.offset_from(data) != size as isize {
+    if cp.offset_from(data.cast::<u8>()) != size as isize {
         return std::ptr::null_mut();
     }
     c.external.type_ = option;
@@ -522,10 +520,10 @@ pub unsafe fn cram_cram_codecs_c_459_cram_external_decode_init(
 
 pub unsafe fn cram_cram_codecs_c_523_cram_external_encode_int(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    _in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_external_layout>();
     let i32_ = *(in_.cast::<u32>()) as i32;
     if ((*(*c).vv).varint_put32_blk.unwrap())((*c).out.cast(), i32_) >= 0 {
@@ -537,10 +535,10 @@ pub unsafe fn cram_cram_codecs_c_523_cram_external_encode_int(
 
 pub unsafe fn cram_cram_codecs_c_529_cram_external_encode_sint(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    _in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_external_layout>();
     let i32_ = *(in_.cast::<i32>());
     if ((*(*c).vv).varint_put32s_blk.unwrap())((*c).out.cast(), i32_) >= 0 {
@@ -552,10 +550,10 @@ pub unsafe fn cram_cram_codecs_c_529_cram_external_encode_sint(
 
 pub unsafe fn cram_cram_codecs_c_535_cram_external_encode_long(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    _in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_external_layout>();
     let i64_ = *(in_.cast::<u64>()) as i64;
     if ((*(*c).vv).varint_put64_blk.unwrap())((*c).out.cast(), i64_) >= 0 {
@@ -567,10 +565,10 @@ pub unsafe fn cram_cram_codecs_c_535_cram_external_encode_long(
 
 pub unsafe fn cram_cram_codecs_c_541_cram_external_encode_slong(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    _in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_external_layout>();
     let i64_ = *(in_.cast::<i64>());
     if ((*(*c).vv).varint_put64s_blk.unwrap())((*c).out.cast(), i64_) >= 0 {
@@ -582,10 +580,10 @@ pub unsafe fn cram_cram_codecs_c_541_cram_external_encode_slong(
 
 pub unsafe fn cram_cram_codecs_c_547_cram_external_encode_char(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    in_size: i32,
+) -> i32 {
     let Some(c) = external_codec_mut(c) else {
         return -1;
     };
@@ -598,18 +596,18 @@ pub unsafe fn cram_cram_codecs_c_547_cram_external_encode_char(
     append_bytes_to_block(out_block, bytes)
 }
 
-pub unsafe fn cram_cram_codecs_c_556_cram_external_encode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_556_cram_external_encode_free(c: *mut ()) {
     if !c.is_null() {
         drop(Box::from_raw(c.cast::<cram_codec_external_layout>()));
     }
 }
 
 pub unsafe fn cram_cram_codecs_c_562_cram_external_encode_store(
-    c: *mut c_void,
+    c: *mut (),
     b: *mut cram_block,
-    prefix: *mut c_char,
-    _version: c_int,
-) -> c_int {
+    prefix: *mut u8,
+    _version: i32,
+) -> i32 {
     let Some(c) = external_codec_mut(c) else {
         return -1;
     };
@@ -617,8 +615,8 @@ pub unsafe fn cram_cram_codecs_c_562_cram_external_encode_store(
         return -1;
     };
     let mut tmp = [0u8; 99];
-    let mut tp = tmp.as_mut_ptr().cast::<c_char>();
-    let tpend = tmp.as_mut_ptr().add(tmp.len()).cast::<c_char>();
+    let mut tp = tmp.as_mut_ptr().cast::<u8>();
+    let tpend = tmp.as_mut_ptr().add(tmp.len()).cast::<u8>();
     let mut len = match append_optional_c_prefix(b, prefix) {
         Some(len) => len,
         None => return -1,
@@ -638,7 +636,7 @@ pub unsafe fn cram_cram_codecs_c_562_cram_external_encode_store(
     if append_bytes_to_block(b, &tmp[..nbytes]) != 0 {
         return -1;
     }
-    len += nbytes as c_int;
+    len += nbytes as i32;
 
     if r > 0 {
         len
@@ -648,13 +646,13 @@ pub unsafe fn cram_cram_codecs_c_562_cram_external_encode_store(
 }
 
 pub unsafe fn cram_cram_codecs_c_586_cram_external_encode_init(
-    _st: *mut c_void,
-    codec: c_int,
-    option: c_int,
-    dat: *mut c_void,
-    version: c_int,
-    _vv: *mut c_void,
-) -> *mut c_void {
+    _st: *mut (),
+    codec: i32,
+    option: i32,
+    dat: *mut (),
+    version: i32,
+    _vv: *mut (),
+) -> *mut () {
     let mut c = Box::new(cram_codec_external_layout {
         codec: 1,
         out: std::ptr::null_mut(),
@@ -685,7 +683,7 @@ pub unsafe fn cram_cram_codecs_c_586_cram_external_encode_init(
     } else if option == 4 || option == 3 {
         c.encode = cram_fn_ptr(cram_cram_codecs_c_547_cram_external_encode_char as usize);
     } else {
-        libc::abort();
+        std::process::abort();
     }
     c.store = cram_fn_ptr(cram_cram_codecs_c_562_cram_external_encode_store as usize);
     Box::into_raw(c).cast()
@@ -693,26 +691,26 @@ pub unsafe fn cram_cram_codecs_c_586_cram_external_encode_init(
 
 pub unsafe fn cram_cram_codecs_c_644_cram_varint_decode_int(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_varint_layout>();
     let b = cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).varint.content_id);
     if b.is_null() {
         return if *out_size != 0 { -1 } else { 0 };
     }
     let block = b.cast::<cram_block_layout>();
-    let mut cp = (*block).data.add((*block).idx as usize).cast::<c_char>();
+    let mut cp = (*block).data.add((*block).idx as usize).cast::<u8>();
     let endp = (*block)
         .data
         .add((*block).uncomp_size as usize)
-        .cast::<c_char>();
+        .cast::<u8>();
     let mut err = 0;
     let val = ((*(*c).vv).varint_get32.unwrap())(&mut cp, endp, &mut err) + (*c).varint.offset;
     *(out.cast::<i32>()) = val as i32;
-    (*block).idx = cp.offset_from((*block).data.cast::<c_char>()) as i32;
+    (*block).idx = cp.offset_from((*block).data.cast::<u8>()) as i32;
     *out_size = 1;
     if err != 0 {
         -1
@@ -723,26 +721,26 @@ pub unsafe fn cram_cram_codecs_c_644_cram_varint_decode_int(
 
 pub unsafe fn cram_cram_codecs_c_666_cram_varint_decode_sint(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_varint_layout>();
     let b = cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).varint.content_id);
     if b.is_null() {
         return if *out_size != 0 { -1 } else { 0 };
     }
     let block = b.cast::<cram_block_layout>();
-    let mut cp = (*block).data.add((*block).idx as usize).cast::<c_char>();
+    let mut cp = (*block).data.add((*block).idx as usize).cast::<u8>();
     let endp = (*block)
         .data
         .add((*block).uncomp_size as usize)
-        .cast::<c_char>();
+        .cast::<u8>();
     let mut err = 0;
     let val = ((*(*c).vv).varint_get32s.unwrap())(&mut cp, endp, &mut err) + (*c).varint.offset;
     *(out.cast::<i32>()) = val as i32;
-    (*block).idx = cp.offset_from((*block).data.cast::<c_char>()) as i32;
+    (*block).idx = cp.offset_from((*block).data.cast::<u8>()) as i32;
     *out_size = 1;
     if err != 0 {
         -1
@@ -753,26 +751,26 @@ pub unsafe fn cram_cram_codecs_c_666_cram_varint_decode_sint(
 
 pub unsafe fn cram_cram_codecs_c_688_cram_varint_decode_long(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_varint_layout>();
     let b = cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).varint.content_id);
     if b.is_null() {
         return if *out_size != 0 { -1 } else { 0 };
     }
     let block = b.cast::<cram_block_layout>();
-    let mut cp = (*block).data.add((*block).idx as usize).cast::<c_char>();
+    let mut cp = (*block).data.add((*block).idx as usize).cast::<u8>();
     let endp = (*block)
         .data
         .add((*block).uncomp_size as usize)
-        .cast::<c_char>();
+        .cast::<u8>();
     let mut err = 0;
     let val = ((*(*c).vv).varint_get64.unwrap())(&mut cp, endp, &mut err) + (*c).varint.offset;
     *(out.cast::<i64>()) = val;
-    (*block).idx = cp.offset_from((*block).data.cast::<c_char>()) as i32;
+    (*block).idx = cp.offset_from((*block).data.cast::<u8>()) as i32;
     *out_size = 1;
     if err != 0 {
         -1
@@ -783,26 +781,26 @@ pub unsafe fn cram_cram_codecs_c_688_cram_varint_decode_long(
 
 pub unsafe fn cram_cram_codecs_c_710_cram_varint_decode_slong(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_varint_layout>();
     let b = cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).varint.content_id);
     if b.is_null() {
         return if *out_size != 0 { -1 } else { 0 };
     }
     let block = b.cast::<cram_block_layout>();
-    let mut cp = (*block).data.add((*block).idx as usize).cast::<c_char>();
+    let mut cp = (*block).data.add((*block).idx as usize).cast::<u8>();
     let endp = (*block)
         .data
         .add((*block).uncomp_size as usize)
-        .cast::<c_char>();
+        .cast::<u8>();
     let mut err = 0;
     let val = ((*(*c).vv).varint_get64s.unwrap())(&mut cp, endp, &mut err) + (*c).varint.offset;
     *(out.cast::<i64>()) = val;
-    (*block).idx = cp.offset_from((*block).data.cast::<c_char>()) as i32;
+    (*block).idx = cp.offset_from((*block).data.cast::<u8>()) as i32;
     *out_size = 1;
     if err != 0 {
         -1
@@ -811,7 +809,7 @@ pub unsafe fn cram_cram_codecs_c_710_cram_varint_decode_slong(
     }
 }
 
-pub unsafe fn cram_cram_codecs_c_732_cram_varint_decode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_732_cram_varint_decode_free(c: *mut ()) {
     if !c.is_null() {
         drop(Box::from_raw(c.cast::<cram_codec_varint_layout>()));
     }
@@ -819,8 +817,8 @@ pub unsafe fn cram_cram_codecs_c_732_cram_varint_decode_free(c: *mut c_void) {
 
 pub unsafe fn cram_cram_codecs_c_737_cram_varint_decode_size(
     slice: *mut cram_slice,
-    c: *mut c_void,
-) -> c_int {
+    c: *mut (),
+) -> i32 {
     let c = c.cast::<cram_codec_varint_layout>();
     let b = cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).varint.content_id);
     if b.is_null() {
@@ -831,16 +829,16 @@ pub unsafe fn cram_cram_codecs_c_737_cram_varint_decode_size(
 
 pub unsafe fn cram_cram_codecs_c_748_cram_varint_get_block(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
 ) -> *mut cram_block {
     let c = c.cast::<cram_codec_varint_layout>();
     cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).varint.content_id)
 }
 
 pub unsafe fn cram_cram_codecs_c_752_cram_varint_describe(
-    c: *mut c_void,
+    c: *mut (),
     ks: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     let c = c.cast::<cram_codec_varint_layout>();
     let ks = &mut *ks;
     if kputsn(b"VARINT(id=", 10, ks) < 0
@@ -858,14 +856,14 @@ pub unsafe fn cram_cram_codecs_c_752_cram_varint_describe(
 }
 
 pub unsafe fn cram_cram_codecs_c_760_cram_varint_decode_init(
-    _hdr: *mut c_void,
-    data: *mut c_char,
-    size: c_int,
-    codec: c_int,
-    option: c_int,
-    _version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    _hdr: *mut (),
+    data: *mut u8,
+    size: i32,
+    codec: i32,
+    option: i32,
+    _version: i32,
+    vv: *mut (),
+) -> *mut () {
     let mut c = Box::new(cram_codec_varint_layout {
         codec,
         out: std::ptr::null_mut(),
@@ -914,13 +912,13 @@ pub unsafe fn cram_cram_codecs_c_760_cram_varint_decode_init(
     c.describe = cram_fn_ptr(cram_cram_codecs_c_752_cram_varint_describe as usize);
 
     let vv = vv.cast::<varint_vec_layout>();
-    let mut cp = data;
-    let endp = data.add(size as usize);
+    let mut cp = data.cast::<u8>();
+    let endp = data.add(size as usize).cast::<u8>();
     c.varint.content_id =
         ((*vv).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut()) as i32;
     c.varint.offset =
         ((*vv).varint_get64s.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut());
-    if cp.offset_from(data) != size as isize {
+    if cp.offset_from(data.cast::<u8>()) != size as isize {
         return std::ptr::null_mut();
     }
     c.varint.type_ = option;
@@ -929,10 +927,10 @@ pub unsafe fn cram_cram_codecs_c_760_cram_varint_decode_init(
 
 pub unsafe fn cram_cram_codecs_c_820_cram_varint_encode_int(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    _in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_varint_layout>();
     let val = *(in_.cast::<u32>()) as i64 - (*c).varint.offset;
     if ((*(*c).vv).varint_put32_blk.unwrap())((*c).out.cast(), val as i32) >= 0 {
@@ -944,10 +942,10 @@ pub unsafe fn cram_cram_codecs_c_820_cram_varint_encode_int(
 
 pub unsafe fn cram_cram_codecs_c_827_cram_varint_encode_sint(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    _in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_varint_layout>();
     let val = *(in_.cast::<i32>()) as i64 - (*c).varint.offset;
     if ((*(*c).vv).varint_put32s_blk.unwrap())((*c).out.cast(), val as i32) >= 0 {
@@ -959,10 +957,10 @@ pub unsafe fn cram_cram_codecs_c_827_cram_varint_encode_sint(
 
 pub unsafe fn cram_cram_codecs_c_834_cram_varint_encode_long(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    _in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_varint_layout>();
     let val = *(in_.cast::<u64>()) as i64 - (*c).varint.offset;
     if ((*(*c).vv).varint_put64_blk.unwrap())((*c).out.cast(), val) >= 0 {
@@ -974,10 +972,10 @@ pub unsafe fn cram_cram_codecs_c_834_cram_varint_encode_long(
 
 pub unsafe fn cram_cram_codecs_c_841_cram_varint_encode_slong(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    _in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_varint_layout>();
     let val = *(in_.cast::<i64>()) - (*c).varint.offset;
     if ((*(*c).vv).varint_put64s_blk.unwrap())((*c).out.cast(), val) >= 0 {
@@ -987,18 +985,18 @@ pub unsafe fn cram_cram_codecs_c_841_cram_varint_encode_slong(
     }
 }
 
-pub unsafe fn cram_cram_codecs_c_848_cram_varint_encode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_848_cram_varint_encode_free(c: *mut ()) {
     if !c.is_null() {
         drop(Box::from_raw(c.cast::<cram_codec_varint_layout>()));
     }
 }
 
 pub unsafe fn cram_cram_codecs_c_854_cram_varint_encode_store(
-    c: *mut c_void,
+    c: *mut (),
     b: *mut cram_block,
-    prefix: *mut c_char,
-    _version: c_int,
-) -> c_int {
+    prefix: *mut u8,
+    _version: i32,
+) -> i32 {
     let Some(c) = varint_codec_mut(c) else {
         return -1;
     };
@@ -1006,7 +1004,7 @@ pub unsafe fn cram_cram_codecs_c_854_cram_varint_encode_store(
         return -1;
     };
     let mut tmp = [0u8; 99];
-    let mut tp = tmp.as_mut_ptr().cast::<c_char>();
+    let mut tp = tmp.as_mut_ptr().cast::<u8>();
     let mut len = match append_optional_c_prefix(b, prefix) {
         Some(len) => len,
         None => return -1,
@@ -1025,17 +1023,17 @@ pub unsafe fn cram_cram_codecs_c_854_cram_varint_encode_store(
     if append_bytes_to_block(b, &tmp[..nbytes]) != 0 {
         return -1;
     }
-    len + nbytes as c_int
+    len + nbytes as i32
 }
 
 pub unsafe fn cram_cram_codecs_c_878_cram_varint_encode_init(
-    st: *mut c_void,
-    mut codec: c_int,
-    option: c_int,
-    dat: *mut c_void,
-    _version: c_int,
-    _vv: *mut c_void,
-) -> *mut c_void {
+    st: *mut (),
+    mut codec: i32,
+    option: i32,
+    dat: *mut (),
+    _version: i32,
+    _vv: *mut (),
+) -> *mut () {
     let mut c = Box::new(cram_codec_varint_layout {
         codec,
         out: std::ptr::null_mut(),
@@ -1091,28 +1089,28 @@ pub unsafe fn cram_cram_codecs_c_878_cram_varint_encode_init(
 
 pub unsafe fn cram_cram_codecs_c_932_cram_const_decode_byte(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     if out.is_null() {
         return 0;
     }
     let c = c.cast::<cram_codec_const_layout>();
     for i in 0..*out_size {
-        *out.add(i as usize) = (*c).xconst.val as c_char;
+        *out.add(i as usize) = (*c).xconst.val as u8;
     }
     0
 }
 
 pub unsafe fn cram_cram_codecs_c_945_cram_const_decode_int(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_const_layout>();
     let out_i = out.cast::<i32>();
     for i in 0..*out_size {
@@ -1123,11 +1121,11 @@ pub unsafe fn cram_cram_codecs_c_945_cram_const_decode_int(
 
 pub unsafe fn cram_cram_codecs_c_956_cram_const_decode_long(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_const_layout>();
     let out_i = out.cast::<i64>();
     for i in 0..*out_size {
@@ -1136,16 +1134,16 @@ pub unsafe fn cram_cram_codecs_c_956_cram_const_decode_long(
     0
 }
 
-pub unsafe fn cram_cram_codecs_c_967_cram_const_decode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_967_cram_const_decode_free(c: *mut ()) {
     if !c.is_null() {
         drop(Box::from_raw(c.cast::<cram_codec_const_layout>()));
     }
 }
 
 pub unsafe fn cram_cram_codecs_c_976_cram_const_describe(
-    c: *mut c_void,
+    c: *mut (),
     ks: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     let c = c.cast::<cram_codec_const_layout>();
     let ks = &mut *ks;
     if kputsn(b"CONST(val=", 10, ks) < 0
@@ -1159,14 +1157,14 @@ pub unsafe fn cram_cram_codecs_c_976_cram_const_describe(
 }
 
 pub unsafe fn cram_cram_codecs_c_981_cram_const_decode_init(
-    _hdr: *mut c_void,
-    data: *mut c_char,
-    size: c_int,
-    codec: c_int,
-    option: c_int,
-    _version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    _hdr: *mut (),
+    data: *mut u8,
+    size: i32,
+    codec: i32,
+    option: i32,
+    _version: i32,
+    vv: *mut (),
+) -> *mut () {
     let mut c = Box::new(cram_codec_const_layout {
         codec,
         out: std::ptr::null_mut(),
@@ -1196,21 +1194,21 @@ pub unsafe fn cram_cram_codecs_c_981_cram_const_decode_init(
     c.describe = cram_fn_ptr(cram_cram_codecs_c_976_cram_const_describe as usize);
 
     let vv = vv.cast::<varint_vec_layout>();
-    let mut cp = data;
-    let endp = data.add(size as usize);
+    let mut cp = data.cast::<u8>();
+    let endp = data.add(size as usize).cast::<u8>();
     c.xconst.val = ((*vv).varint_get64s.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut());
-    if cp.offset_from(data) != size as isize {
+    if cp.offset_from(data.cast::<u8>()) != size as isize {
         return std::ptr::null_mut();
     }
     Box::into_raw(c).cast()
 }
 
 pub unsafe fn cram_cram_codecs_c_1025_cram_const_encode_store(
-    c: *mut c_void,
+    c: *mut (),
     b: *mut cram_block,
-    prefix: *mut c_char,
-    _version: c_int,
-) -> c_int {
+    prefix: *mut u8,
+    _version: i32,
+) -> i32 {
     let Some(c) = const_codec_mut(c) else {
         return -1;
     };
@@ -1218,7 +1216,7 @@ pub unsafe fn cram_cram_codecs_c_1025_cram_const_encode_store(
         return -1;
     };
     let mut tmp = [0u8; 99];
-    let mut tp = tmp.as_mut_ptr().cast::<c_char>();
+    let mut tp = tmp.as_mut_ptr().cast::<u8>();
     let mut len = match append_optional_c_prefix(b, prefix) {
         Some(len) => len,
         None => return -1,
@@ -1233,17 +1231,17 @@ pub unsafe fn cram_cram_codecs_c_1025_cram_const_encode_store(
     if append_bytes_to_block(b, &tmp[..nbytes]) != 0 {
         return -1;
     }
-    len + nbytes as c_int
+    len + nbytes as i32
 }
 
 pub unsafe fn cram_cram_codecs_c_1048_cram_const_encode_init(
-    st: *mut c_void,
-    codec: c_int,
-    _option: c_int,
-    _dat: *mut c_void,
-    _version: c_int,
-    _vv: *mut c_void,
-) -> *mut c_void {
+    st: *mut (),
+    codec: i32,
+    _option: i32,
+    _dat: *mut (),
+    _version: i32,
+    _vv: *mut (),
+) -> *mut () {
     let c = Box::new(cram_codec_const_layout {
         codec,
         out: std::ptr::null_mut(),
@@ -1266,11 +1264,11 @@ pub unsafe fn cram_cram_codecs_c_1048_cram_const_encode_init(
 
 pub unsafe fn cram_cram_codecs_c_1072_cram_beta_decode_long(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     in_: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_beta_layout>();
     let out_i = out.cast::<i64>();
     let n = *out_size;
@@ -1292,11 +1290,11 @@ pub unsafe fn cram_cram_codecs_c_1072_cram_beta_decode_long(
 
 pub unsafe fn cram_cram_codecs_c_1090_cram_beta_decode_int(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     in_: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_beta_layout>();
     let out_i = out.cast::<i32>();
     let n = *out_size;
@@ -1318,11 +1316,11 @@ pub unsafe fn cram_cram_codecs_c_1090_cram_beta_decode_int(
 
 pub unsafe fn cram_cram_codecs_c_1108_cram_beta_decode_char(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     in_: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_beta_layout>();
     let n = *out_size;
     if (*c).beta.nbits != 0 {
@@ -1333,7 +1331,7 @@ pub unsafe fn cram_cram_codecs_c_1108_cram_beta_decode_char(
             for i in 0..n {
                 *out.add(i as usize) = (cram_get_bits_MSB(&mut *in_.cast::<cram_block_layout>(), (*c).beta.nbits)
                     as i32
-                    - (*c).beta.offset) as c_char;
+                    - (*c).beta.offset) as u8;
             }
         } else {
             for _ in 0..n {
@@ -1342,22 +1340,22 @@ pub unsafe fn cram_cram_codecs_c_1108_cram_beta_decode_char(
         }
     } else if !out.is_null() {
         for i in 0..n {
-            *out.add(i as usize) = (-(*c).beta.offset) as c_char;
+            *out.add(i as usize) = (-(*c).beta.offset) as u8;
         }
     }
     0
 }
 
-pub unsafe fn cram_cram_codecs_c_1131_cram_beta_decode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_1131_cram_beta_decode_free(c: *mut ()) {
     if !c.is_null() {
         drop(Box::from_raw(c.cast::<cram_codec_beta_layout>()));
     }
 }
 
 pub unsafe fn cram_cram_codecs_c_1136_cram_beta_describe(
-    c: *mut c_void,
+    c: *mut (),
     ks: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     let c = c.cast::<cram_codec_beta_layout>();
     let ks = &mut *ks;
     if kputsn(b"BETA(offset=", 12, ks) < 0
@@ -1373,14 +1371,14 @@ pub unsafe fn cram_cram_codecs_c_1136_cram_beta_describe(
 }
 
 pub unsafe fn cram_cram_codecs_c_1142_cram_beta_decode_init(
-    _hdr: *mut c_void,
-    data: *mut c_char,
-    size: c_int,
-    _codec: c_int,
-    option: c_int,
-    _version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    _hdr: *mut (),
+    data: *mut u8,
+    size: i32,
+    _codec: i32,
+    option: i32,
+    _version: i32,
+    vv: *mut (),
+) -> *mut () {
     let mut c = Box::new(cram_codec_beta_layout {
         codec: 6,
         out: std::ptr::null_mut(),
@@ -1412,26 +1410,26 @@ pub unsafe fn cram_cram_codecs_c_1142_cram_beta_decode_init(
     c.describe = cram_fn_ptr(cram_cram_codecs_c_1136_cram_beta_describe as usize);
 
     let vv = vv.cast::<varint_vec_layout>();
-    let mut cp = data;
-    let endp = data.add(size as usize);
+    let mut cp = data.cast::<u8>();
+    let endp = data.add(size as usize).cast::<u8>();
     c.beta.offset =
         ((*vv).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut()) as i32;
     if cp < endp {
         c.beta.nbits =
             ((*vv).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut()) as i32;
     }
-    if cp.offset_from(data) != size as isize || c.beta.nbits < 0 || c.beta.nbits > 32 {
+    if cp.offset_from(data.cast::<u8>()) != size as isize || c.beta.nbits < 0 || c.beta.nbits > 32 {
         return std::ptr::null_mut();
     }
     Box::into_raw(c).cast()
 }
 
 pub unsafe fn cram_cram_codecs_c_1183_cram_beta_encode_store(
-    c: *mut c_void,
+    c: *mut (),
     b: *mut cram_block,
-    prefix: *mut c_char,
-    _version: c_int,
-) -> c_int {
+    prefix: *mut u8,
+    _version: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_beta_layout>();
     let Some(b_ref) = raw_block_mut(b) else {
         return -1;
@@ -1466,10 +1464,10 @@ pub unsafe fn cram_cram_codecs_c_1183_cram_beta_encode_store(
 
 pub unsafe fn cram_cram_codecs_c_1207_cram_beta_encode_long(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_beta_layout>();
     let syms = in_.cast::<i64>();
     let mut r = 0;
@@ -1485,12 +1483,12 @@ pub unsafe fn cram_cram_codecs_c_1207_cram_beta_encode_long(
 
 pub unsafe fn cram_cram_codecs_c_1219_cram_beta_encode_int(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_beta_layout>();
-    let syms = in_.cast::<c_int>();
+    let syms = in_.cast::<i32>();
     let mut r = 0;
     for i in 0..in_size {
         r |= cram_store_bits_MSB(
@@ -1504,10 +1502,10 @@ pub unsafe fn cram_cram_codecs_c_1219_cram_beta_encode_int(
 
 pub unsafe fn cram_cram_codecs_c_1231_cram_beta_encode_char(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_beta_layout>();
     let syms = in_.cast::<u8>();
     let mut r = 0;
@@ -1521,20 +1519,20 @@ pub unsafe fn cram_cram_codecs_c_1231_cram_beta_encode_char(
     r
 }
 
-pub unsafe fn cram_cram_codecs_c_1243_cram_beta_encode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_1243_cram_beta_encode_free(c: *mut ()) {
     if !c.is_null() {
         drop(Box::from_raw(c.cast::<cram_codec_beta_layout>()));
     }
 }
 
 pub unsafe fn cram_cram_codecs_c_1247_cram_beta_encode_init(
-    st: *mut c_void,
-    _codec: c_int,
-    option: c_int,
-    dat: *mut c_void,
-    _version: c_int,
-    _vv: *mut c_void,
-) -> *mut c_void {
+    st: *mut (),
+    _codec: i32,
+    option: i32,
+    dat: *mut (),
+    _version: i32,
+    _vv: *mut (),
+) -> *mut () {
     let mut c = Box::new(cram_codec_beta_layout {
         codec: 6,
         out: std::ptr::null_mut(),
@@ -1627,11 +1625,11 @@ pub unsafe fn cram_cram_codecs_c_1247_cram_beta_encode_init(
 
 pub unsafe fn cram_cram_codecs_c_1344_cram_xpack_decode_long(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     in_: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_xpack_layout>();
     let out_i = out.cast::<i64>();
     let n = *out_size;
@@ -1650,11 +1648,11 @@ pub unsafe fn cram_cram_codecs_c_1344_cram_xpack_decode_long(
 
 pub unsafe fn cram_cram_codecs_c_1359_cram_xpack_decode_int(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     in_: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_xpack_layout>();
     let out_i = out.cast::<i32>();
     let n = *out_size;
@@ -1676,8 +1674,8 @@ pub unsafe fn cram_cram_codecs_c_1359_cram_xpack_decode_int(
 
 pub unsafe fn cram_cram_codecs_c_1377_cram_xpack_decode_expand_char(
     slice: *mut cram_slice,
-    c: *mut c_void,
-) -> c_int {
+    c: *mut (),
+) -> i32 {
     let slice_layout = slice.cast::<cram_slice_layout>();
     let c_xpack = c.cast::<cram_codec_xpack_layout>();
     let slot = (512 + (*c_xpack).codec_id) as usize;
@@ -1760,11 +1758,11 @@ pub unsafe fn cram_cram_codecs_c_1377_cram_xpack_decode_expand_char(
 
 pub unsafe fn cram_cram_codecs_c_1408_cram_xpack_decode_char(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c_xpack = c.cast::<cram_codec_xpack_layout>();
     if (*c_xpack).xpack.nval > 1 {
         cram_cram_codecs_c_1377_cram_xpack_decode_expand_char(slice, c);
@@ -1777,10 +1775,11 @@ pub unsafe fn cram_cram_codecs_c_1408_cram_xpack_decode_char(
         }
         let block = b.cast::<cram_block_layout>();
         if !out.is_null() {
-            memcpy(
-                out.cast(),
-                (*block).data.add((*block).byte).cast(),
-                *out_size as u64,
+            std::slice::from_raw_parts_mut(out, *out_size as usize).copy_from_slice(
+                std::slice::from_raw_parts(
+                    (*block).data.add((*block).byte),
+                    *out_size as usize,
+                ),
             );
         }
         (*block).byte += *out_size as usize;
@@ -1791,7 +1790,7 @@ pub unsafe fn cram_cram_codecs_c_1408_cram_xpack_decode_char(
     0
 }
 
-pub unsafe fn cram_cram_codecs_c_1431_cram_xpack_decode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_1431_cram_xpack_decode_free(c: *mut ()) {
     if c.is_null() {
         return;
     }
@@ -1799,8 +1798,8 @@ pub unsafe fn cram_cram_codecs_c_1431_cram_xpack_decode_free(c: *mut c_void) {
     if !(*c_xpack).xpack.sub_codec.is_null() {
         let sub = (*c_xpack).xpack.sub_codec.cast::<cram_codec_xpack_layout>();
         if !(*sub).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*sub).free);
-            free_fn((*c_xpack).xpack.sub_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*sub).free);
+            free_fn((*c_xpack).xpack.sub_codec.cast());
         }
     }
     drop(Box::from_raw(c_xpack));
@@ -1808,8 +1807,8 @@ pub unsafe fn cram_cram_codecs_c_1431_cram_xpack_decode_free(c: *mut c_void) {
 
 pub unsafe fn cram_cram_codecs_c_1443_cram_xpack_decode_size(
     slice: *mut cram_slice,
-    c: *mut c_void,
-) -> c_int {
+    c: *mut (),
+) -> i32 {
     cram_cram_codecs_c_1377_cram_xpack_decode_expand_char(slice, c);
     let c_xpack = c.cast::<cram_codec_xpack_layout>();
     let slice_layout = slice.cast::<cram_slice_layout>();
@@ -1821,7 +1820,7 @@ pub unsafe fn cram_cram_codecs_c_1443_cram_xpack_decode_size(
 
 pub unsafe fn cram_cram_codecs_c_1448_cram_xpack_get_block(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
 ) -> *mut cram_block {
     cram_cram_codecs_c_1377_cram_xpack_decode_expand_char(slice, c);
     let c_xpack = c.cast::<cram_codec_xpack_layout>();
@@ -1833,14 +1832,14 @@ pub unsafe fn cram_cram_codecs_c_1448_cram_xpack_get_block(
 }
 
 pub unsafe fn cram_cram_codecs_c_1453_cram_xpack_decode_init(
-    hdr: *mut c_void,
-    data: *mut c_char,
-    size: c_int,
-    _codec: c_int,
-    option: c_int,
-    version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    hdr: *mut (),
+    data: *mut u8,
+    size: i32,
+    _codec: i32,
+    option: i32,
+    version: i32,
+    vv: *mut (),
+) -> *mut () {
     let mut c = Box::new(cram_codec_xpack_layout {
         codec: 51,
         out: std::ptr::null_mut(),
@@ -1876,8 +1875,8 @@ pub unsafe fn cram_cram_codecs_c_1453_cram_xpack_decode_init(
     };
 
     let vv_layout = vv.cast::<varint_vec_layout>();
-    let mut cp = data;
-    let endp = data.add(size as usize);
+    let mut cp = data.cast::<u8>();
+    let endp = data.add(size as usize).cast::<u8>();
     c.xpack.nbits =
         ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut())
             as i32;
@@ -1899,28 +1898,36 @@ pub unsafe fn cram_cram_codecs_c_1453_cram_xpack_decode_init(
 
     let encoding =
         ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut())
-            as c_int;
+            as i32;
     let sub_size =
         ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut())
-            as c_int;
+            as i32;
     if sub_size < 0 || endp.offset_from(cp) < sub_size as isize {
         return std::ptr::null_mut();
     }
-    c.xpack.sub_codec =
-        cram_cram_codecs_c_3872_cram_decoder_init(hdr, encoding, cp, sub_size, option, version, vv);
+    c.xpack.sub_codec = cram_cram_codecs_c_3872_cram_decoder_init(
+        hdr,
+        encoding,
+        cp.cast::<u8>(),
+        sub_size,
+        option,
+        version,
+        vv,
+    )
+    .cast();
     if c.xpack.sub_codec.is_null() {
         return std::ptr::null_mut();
     }
     cp = cp.add(sub_size as usize);
 
-    if cp.offset_from(data) != size as isize
+    if cp.offset_from(data.cast::<u8>()) != size as isize
         || c.xpack.nbits < 0
         || c.xpack.nbits > (8 * std::mem::size_of::<i64>()) as i32
     {
         let sub = c.xpack.sub_codec.cast::<cram_codec_xpack_layout>();
         if !(*sub).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*sub).free);
-            free_fn(c.xpack.sub_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*sub).free);
+            free_fn(c.xpack.sub_codec.cast());
         }
         c.xpack.sub_codec = std::ptr::null_mut();
         return std::ptr::null_mut();
@@ -1931,10 +1938,10 @@ pub unsafe fn cram_cram_codecs_c_1453_cram_xpack_decode_init(
 
 pub unsafe fn cram_cram_codecs_c_1581_cram_xpack_encode_long(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_xpack_layout>();
     let syms = in_.cast::<i64>();
     let mut r = 0;
@@ -1950,12 +1957,12 @@ pub unsafe fn cram_cram_codecs_c_1581_cram_xpack_encode_long(
 
 pub unsafe fn cram_cram_codecs_c_1592_cram_xpack_encode_int(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_xpack_layout>();
-    let syms = in_.cast::<c_int>();
+    let syms = in_.cast::<i32>();
     let mut r = 0;
     for i in 0..in_size {
         r |= cram_store_bits_MSB(
@@ -1969,10 +1976,10 @@ pub unsafe fn cram_cram_codecs_c_1592_cram_xpack_encode_int(
 
 pub unsafe fn cram_cram_codecs_c_1603_cram_xpack_encode_char(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_xpack_layout>();
     if cram_cram_io_h_248_block_append((*c).out.cast(), in_.cast(), in_size as usize) == 0 {
         0
@@ -1981,7 +1988,7 @@ pub unsafe fn cram_cram_codecs_c_1603_cram_xpack_encode_char(
     }
 }
 
-pub unsafe fn cram_cram_codecs_c_1612_cram_xpack_encode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_1612_cram_xpack_encode_free(c: *mut ()) {
     if c.is_null() {
         return;
     }
@@ -1989,15 +1996,15 @@ pub unsafe fn cram_cram_codecs_c_1612_cram_xpack_encode_free(c: *mut c_void) {
     if !(*c_xpack).xpack.sub_codec.is_null() {
         let sub = (*c_xpack).xpack.sub_codec.cast::<cram_codec_xpack_layout>();
         if !(*sub).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*sub).free);
-            free_fn((*c_xpack).xpack.sub_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*sub).free);
+            free_fn((*c_xpack).xpack.sub_codec.cast());
         }
     }
     cram_free_block((*c_xpack).out.cast());
     drop(Box::from_raw(c_xpack));
 }
 
-pub unsafe extern "C" fn cram_cram_codecs_c_1515_cram_xpack_encode_flush(c: *mut c_void) -> c_int {
+pub unsafe extern "C" fn cram_cram_codecs_c_1515_cram_xpack_encode_flush(c: *mut ()) -> i32 {
     let c_xpack = c.cast::<cram_codec_xpack_layout>();
     let out_block = (*c_xpack).out.cast::<cram_block_layout>();
     let mut meta_len = 0;
@@ -2019,7 +2026,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_1515_cram_xpack_encode_flush(c: *mut
         std::ptr::null_mut(),
         sub_codec,
         out.as_mut_ptr().cast(),
-        out_len as c_int,
+        out_len as i32,
     ) != 0
     {
         return -1;
@@ -2035,11 +2042,11 @@ pub unsafe extern "C" fn cram_cram_codecs_c_1515_cram_xpack_encode_flush(c: *mut
 }
 
 pub unsafe fn cram_cram_codecs_c_1537_cram_xpack_encode_store(
-    c: *mut c_void,
+    c: *mut (),
     b: *mut cram_block,
-    prefix: *mut c_char,
-    version: c_int,
-) -> c_int {
+    prefix: *mut u8,
+    version: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_xpack_layout>();
     let Some(b_ref) = raw_block_mut(b) else {
         return -1;
@@ -2110,13 +2117,13 @@ pub unsafe fn cram_cram_codecs_c_1537_cram_xpack_encode_store(
 }
 
 pub unsafe fn cram_cram_codecs_c_1623_cram_xpack_encode_init(
-    _st: *mut c_void,
-    _codec: c_int,
-    option: c_int,
-    dat: *mut c_void,
-    version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    _st: *mut (),
+    _codec: i32,
+    option: i32,
+    dat: *mut (),
+    version: i32,
+    vv: *mut (),
+) -> *mut () {
     let e = dat.cast::<cram_xpack_decoder_layout>();
     let mut c = Box::new(cram_codec_xpack_layout {
         codec: 51,
@@ -2153,10 +2160,11 @@ pub unsafe fn cram_cram_codecs_c_1623_cram_xpack_encode_init(
         (*e).sub_encoding,
         None,
         4,
-        (*e).sub_codec_dat,
+        (*e).sub_codec_dat.cast(),
         version,
         vv,
-    );
+    )
+    .cast();
     let mut n = 0;
     for i in 0..256usize {
         if (*e).map[i] != -1 {
@@ -2168,8 +2176,8 @@ pub unsafe fn cram_cram_codecs_c_1623_cram_xpack_encode_init(
         if !c.xpack.sub_codec.is_null() {
             let sub = c.xpack.sub_codec.cast::<cram_codec_xpack_layout>();
             if !(*sub).free.is_null() {
-                let free_fn: unsafe fn(*mut c_void) = cram_fn((*sub).free);
-                free_fn(c.xpack.sub_codec);
+                let free_fn: unsafe fn(*mut ()) = cram_fn((*sub).free);
+                free_fn(c.xpack.sub_codec.cast());
             }
             c.xpack.sub_codec = std::ptr::null_mut();
         }
@@ -2181,11 +2189,11 @@ pub unsafe fn cram_cram_codecs_c_1623_cram_xpack_encode_init(
 
 pub unsafe fn cram_cram_codecs_c_1688_cram_xdelta_decode_int(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     in_: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_xdelta_layout>();
     let out32 = out.cast::<u32>();
     for i in 0..*out_size {
@@ -2206,18 +2214,18 @@ pub unsafe fn cram_cram_codecs_c_1688_cram_xdelta_decode_int(
 
 pub unsafe fn cram_cram_codecs_c_1719_cram_xdelta_decode_block(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out_: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out_: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_xdelta_layout>();
     let out = out_.cast::<cram_block>();
     let sub = (*c).xdelta.sub_codec;
     let sub_codec = sub.cast::<cram_codec_xdelta_layout>();
     let get_block_fn: CramCodecGetBlockFn = cram_fn((*sub_codec).get_block);
     let b = get_block_fn(slice, sub);
-    let w = (*c).xdelta.word_size as c_int;
+    let w = (*c).xdelta.word_size as i32;
     let mut npad = (w - *out_size % w) % w;
     let out_sz = *out_size + npad;
     (*c).xdelta.last = 0;
@@ -2225,17 +2233,17 @@ pub unsafe fn cram_cram_codecs_c_1719_cram_xdelta_decode_block(
     let mut i = 0;
     while i < out_sz {
         let block = b.cast::<cram_block_layout>();
-        let mut cp = (*block).data.add((*block).byte).cast::<c_char>();
+        let mut cp = (*block).data.add((*block).byte).cast::<u8>();
         let cp_end = (*block)
             .data
             .add((*block).uncomp_size as usize)
-            .cast::<c_char>();
+            .cast::<u8>();
         let mut err = 0;
         let v = ((*(*c).vv).varint_get32.unwrap())(&mut cp, cp_end, &mut err) as u16;
         if err != 0 {
             return -1;
         }
-        (*block).byte = cp.offset_from((*block).data.cast::<c_char>()) as usize;
+        (*block).byte = cp.offset_from((*block).data.cast::<u8>()) as usize;
 
         match w {
             2 => {
@@ -2259,7 +2267,7 @@ pub unsafe fn cram_cram_codecs_c_1719_cram_xdelta_decode_block(
     0
 }
 
-pub unsafe fn cram_cram_codecs_c_1762_cram_xdelta_decode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_1762_cram_xdelta_decode_free(c: *mut ()) {
     if c.is_null() {
         return;
     }
@@ -2270,8 +2278,8 @@ pub unsafe fn cram_cram_codecs_c_1762_cram_xdelta_decode_free(c: *mut c_void) {
             .sub_codec
             .cast::<cram_codec_xdelta_layout>();
         if !(*sub).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*sub).free);
-            free_fn((*c_xdelta).xdelta.sub_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*sub).free);
+            free_fn((*c_xdelta).xdelta.sub_codec.cast());
         }
     }
     drop(Box::from_raw(c_xdelta));
@@ -2279,8 +2287,8 @@ pub unsafe fn cram_cram_codecs_c_1762_cram_xdelta_decode_free(c: *mut c_void) {
 
 pub unsafe fn cram_cram_codecs_c_1771_cram_xdelta_decode_size(
     slice: *mut cram_slice,
-    c: *mut c_void,
-) -> c_int {
+    c: *mut (),
+) -> i32 {
     cram_cram_codecs_c_1705_cram_xdelta_decode_expand_char(slice, c);
     let slice = slice.cast::<cram_slice_layout>();
     let c = c.cast::<cram_codec_xdelta_layout>();
@@ -2290,7 +2298,7 @@ pub unsafe fn cram_cram_codecs_c_1771_cram_xdelta_decode_size(
 
 pub unsafe fn cram_cram_codecs_c_1776_cram_xdelta_get_block(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
 ) -> *mut cram_block {
     cram_cram_codecs_c_1705_cram_xdelta_decode_expand_char(slice, c);
     let slice = slice.cast::<cram_slice_layout>();
@@ -2299,14 +2307,14 @@ pub unsafe fn cram_cram_codecs_c_1776_cram_xdelta_get_block(
 }
 
 pub unsafe fn cram_cram_codecs_c_1781_cram_xdelta_decode_init(
-    hdr: *mut c_void,
-    data: *mut c_char,
-    size: c_int,
-    _codec: c_int,
-    mut option: c_int,
-    version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    hdr: *mut (),
+    data: *mut u8,
+    size: i32,
+    _codec: i32,
+    mut option: i32,
+    version: i32,
+    vv: *mut (),
+) -> *mut () {
     let mut c = Box::new(cram_codec_xdelta_layout {
         codec: 53,
         out: std::ptr::null_mut(),
@@ -2345,33 +2353,41 @@ pub unsafe fn cram_cram_codecs_c_1781_cram_xdelta_decode_init(
     c.get_block = cram_fn_ptr(cram_cram_codecs_c_1776_cram_xdelta_get_block as usize);
 
     let vv_layout = vv.cast::<varint_vec_layout>();
-    let mut cp = data;
-    let endp = data.add(size as usize);
+    let mut cp = data.cast::<u8>();
+    let endp = data.add(size as usize).cast::<u8>();
     c.xdelta.word_size =
         ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut())
             as u8;
 
     let encoding =
         ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut())
-            as c_int;
+            as i32;
     let sub_size =
         ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut())
-            as c_int;
+            as i32;
     if sub_size < 0 || endp.offset_from(cp) < sub_size as isize {
         return std::ptr::null_mut();
     }
-    c.xdelta.sub_codec =
-        cram_cram_codecs_c_3872_cram_decoder_init(hdr, encoding, cp, sub_size, option, version, vv);
+    c.xdelta.sub_codec = cram_cram_codecs_c_3872_cram_decoder_init(
+        hdr,
+        encoding,
+        cp.cast::<u8>(),
+        sub_size,
+        option,
+        version,
+        vv,
+    )
+    .cast();
     if c.xdelta.sub_codec.is_null() {
         return std::ptr::null_mut();
     }
     cp = cp.add(sub_size as usize);
 
-    if cp.offset_from(data) != size as isize {
+    if cp.offset_from(data.cast::<u8>()) != size as isize {
         let sub = c.xdelta.sub_codec.cast::<cram_codec_xdelta_layout>();
         if !(*sub).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*sub).free);
-            free_fn(c.xdelta.sub_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*sub).free);
+            free_fn(c.xdelta.sub_codec.cast());
         }
         c.xdelta.sub_codec = std::ptr::null_mut();
         return std::ptr::null_mut();
@@ -2380,7 +2396,7 @@ pub unsafe fn cram_cram_codecs_c_1781_cram_xdelta_decode_init(
     Box::into_raw(c).cast()
 }
 
-pub unsafe extern "C" fn cram_cram_codecs_c_1835_cram_xdelta_encode_flush(c: *mut c_void) -> c_int {
+pub unsafe extern "C" fn cram_cram_codecs_c_1835_cram_xdelta_encode_flush(c: *mut ()) -> i32 {
     let c = c.cast::<cram_codec_xdelta_layout>();
     let b = cram_cram_io_c_1388_cram_new_block(
         crate::htslib_rs::cram::CRAM_CONTENT_TYPE_FILE_HEADER,
@@ -2458,7 +2474,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_1835_cram_xdelta_encode_flush(c: *mu
         std::ptr::null_mut(),
         sub_codec,
         (*b_layout).data.cast(),
-        (*b_layout).byte as c_int,
+        (*b_layout).byte as i32,
     ) == 0
     {
         r = 0;
@@ -2469,11 +2485,11 @@ pub unsafe extern "C" fn cram_cram_codecs_c_1835_cram_xdelta_encode_flush(c: *mu
 }
 
 pub unsafe fn cram_cram_codecs_c_1930_cram_xdelta_encode_store(
-    c: *mut c_void,
+    c: *mut (),
     b: *mut cram_block,
-    prefix: *mut c_char,
-    version: c_int,
-) -> c_int {
+    prefix: *mut u8,
+    version: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_xdelta_layout>();
     let Some(b_ref) = raw_block_mut(b) else {
         return -1;
@@ -2524,10 +2540,10 @@ pub unsafe fn cram_cram_codecs_c_1930_cram_xdelta_encode_store(
 
 pub unsafe fn cram_cram_codecs_c_1976_cram_xdelta_encode_char(
     slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_xdelta_layout>();
     if in_size < 0 {
         return -1;
@@ -2535,14 +2551,14 @@ pub unsafe fn cram_cram_codecs_c_1976_cram_xdelta_encode_char(
     let Some(dat_len) = (in_size as usize).checked_mul(5) else {
         return -1;
     };
-    let mut dat = Vec::<c_char>::new();
+    let mut dat = Vec::<u8>::new();
     if dat.try_reserve_exact(dat_len).is_err() {
         return -1;
     }
     dat.resize(dat_len, 0);
     let dat_ptr = dat.as_mut_ptr();
-    let mut cp = dat_ptr;
-    let cp_end = dat_ptr.add(dat_len);
+    let mut cp = dat_ptr.cast::<u8>();
+    let cp_end = dat_ptr.add(dat_len).cast::<u8>();
     (*c).xdelta.last = 0;
 
     if (*c).xdelta.word_size == 2 {
@@ -2572,14 +2588,20 @@ pub unsafe fn cram_cram_codecs_c_1976_cram_xdelta_encode_char(
     let sub_codec = (*c).xdelta.sub_codec;
     let sub_layout = sub_codec.cast::<cram_codec_xdelta_layout>();
     let encode: CramCodecEncodeFn = cram_fn((*sub_layout).encode);
-    if encode(slice, sub_codec, dat_ptr, cp.offset_from(dat_ptr) as c_int) != 0 {
+    if encode(
+        slice,
+        sub_codec,
+        dat_ptr.cast(),
+        cp.offset_from(dat_ptr.cast::<u8>()) as i32,
+    ) != 0
+    {
         return -1;
     }
 
     0
 }
 
-pub unsafe fn cram_cram_codecs_c_2011_cram_xdelta_encode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_2011_cram_xdelta_encode_free(c: *mut ()) {
     if c.is_null() {
         return;
     }
@@ -2590,8 +2612,8 @@ pub unsafe fn cram_cram_codecs_c_2011_cram_xdelta_encode_free(c: *mut c_void) {
             .sub_codec
             .cast::<cram_codec_xdelta_layout>();
         if !(*sub).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*sub).free);
-            free_fn((*c_xdelta).xdelta.sub_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*sub).free);
+            free_fn((*c_xdelta).xdelta.sub_codec.cast());
         }
     }
     cram_free_block((*c_xdelta).out.cast());
@@ -2599,13 +2621,13 @@ pub unsafe fn cram_cram_codecs_c_2011_cram_xdelta_encode_free(c: *mut c_void) {
 }
 
 pub unsafe fn cram_cram_codecs_c_2022_cram_xdelta_encode_init(
-    _st: *mut c_void,
-    _codec: c_int,
-    option: c_int,
-    dat: *mut c_void,
-    version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    _st: *mut (),
+    _codec: i32,
+    option: i32,
+    dat: *mut (),
+    version: i32,
+    vv: *mut (),
+) -> *mut () {
     let mut c = Box::new(cram_codec_xdelta_layout {
         codec: 53,
         out: std::ptr::null_mut(),
@@ -2641,10 +2663,11 @@ pub unsafe fn cram_cram_codecs_c_2022_cram_xdelta_encode_init(
         (*e).sub_encoding,
         None,
         4,
-        (*e).sub_codec_dat,
+        (*e).sub_codec_dat.cast(),
         version,
         vv,
-    );
+    )
+    .cast();
     if c.xdelta.sub_codec.is_null() {
         return std::ptr::null_mut();
     }
@@ -2654,8 +2677,8 @@ pub unsafe fn cram_cram_codecs_c_2022_cram_xdelta_encode_init(
 
 pub unsafe fn cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(
     slice: *mut cram_slice,
-    c: *mut c_void,
-) -> c_int {
+    c: *mut (),
+) -> i32 {
     let slice_layout = slice.cast::<cram_slice_layout>();
     let c_xrle = c.cast::<cram_codec_xrle_layout>();
     let cache_index = (512 + (*c_xrle).codec_id) as usize;
@@ -2723,7 +2746,11 @@ pub unsafe fn cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(
     let nb = cp.offset_from(len_dat) as usize;
 
     let b_layout = b.cast::<cram_block_layout>();
-    (*b_layout).data = malloc(out_sz).cast();
+    (*b_layout).data = if out_sz == 0 {
+        std::ptr::NonNull::<u8>::dangling().as_ptr()
+    } else {
+        std::alloc::alloc(std::alloc::Layout::from_size_align_unchecked(out_sz as usize, 1))
+    };
     if (*b_layout).data.is_null() {
         return -1;
     }
@@ -2731,7 +2758,7 @@ pub unsafe fn cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(
         std::slice::from_raw_parts(lit_dat, lit_sz as usize),
         std::slice::from_raw_parts(len_dat.add(nb), len_sz - nb),
         &rle_syms[..rle_nsyms],
-        rle_nsyms as c_int,
+        rle_nsyms as i32,
         std::slice::from_raw_parts_mut((*b_layout).data, out_sz as usize),
         &mut out_sz,
     );
@@ -2741,8 +2768,8 @@ pub unsafe fn cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(
 
 pub unsafe extern "C" fn cram_cram_codecs_c_2115_cram_xrle_decode_size(
     slice: *mut cram_slice,
-    c: *mut c_void,
-) -> c_int {
+    c: *mut (),
+) -> i32 {
     cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(slice, c);
     let slice_layout = slice.cast::<cram_slice_layout>();
     let c_xrle = c.cast::<cram_codec_xrle_layout>();
@@ -2754,7 +2781,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2115_cram_xrle_decode_size(
 
 pub unsafe extern "C" fn cram_cram_codecs_c_2120_cram_xrle_get_block(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
 ) -> *mut cram_block {
     cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(slice, c);
     let slice_layout = slice.cast::<cram_slice_layout>();
@@ -2767,11 +2794,11 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2120_cram_xrle_get_block(
 
 pub unsafe extern "C" fn cram_cram_codecs_c_2125_cram_xrle_decode_char(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let n = *out_size;
     cram_cram_codecs_c_2074_cram_xrle_decode_expand_char(slice, c);
     let slice_layout = slice.cast::<cram_slice_layout>();
@@ -2781,17 +2808,15 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2125_cram_xrle_decode_char(
         .add((512 + (*c_xrle).codec_id) as usize);
     let b_layout = b.cast::<cram_block_layout>();
     if !out.is_null() {
-        memcpy(
-            out.cast(),
-            (*b_layout).data.add((*b_layout).idx as usize).cast(),
-            n as u64,
+        std::slice::from_raw_parts_mut(out, n as usize).copy_from_slice(
+            std::slice::from_raw_parts((*b_layout).data.add((*b_layout).idx as usize), n as usize),
         );
     }
     (*b_layout).idx += n;
     0
 }
 
-pub unsafe fn cram_cram_codecs_c_2172_cram_xrle_decode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_2172_cram_xrle_decode_free(c: *mut ()) {
     if c.is_null() {
         return;
     }
@@ -2799,29 +2824,29 @@ pub unsafe fn cram_cram_codecs_c_2172_cram_xrle_decode_free(c: *mut c_void) {
     if !(*c_xrle).xrle.len_codec.is_null() {
         let len = (*c_xrle).xrle.len_codec.cast::<cram_codec_xrle_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
-            free_fn((*c_xrle).xrle.len_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*len).free);
+            free_fn((*c_xrle).xrle.len_codec.cast());
         }
     }
     if !(*c_xrle).xrle.lit_codec.is_null() {
         let lit = (*c_xrle).xrle.lit_codec.cast::<cram_codec_xrle_layout>();
         if !(*lit).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*lit).free);
-            free_fn((*c_xrle).xrle.lit_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*lit).free);
+            free_fn((*c_xrle).xrle.lit_codec.cast());
         }
     }
     drop(Box::from_raw(c_xrle));
 }
 
 pub unsafe fn cram_cram_codecs_c_2184_cram_xrle_decode_init(
-    hdr: *mut c_void,
-    data: *mut c_char,
-    size: c_int,
-    _codec: c_int,
-    option: c_int,
-    version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    hdr: *mut (),
+    data: *mut u8,
+    size: i32,
+    _codec: i32,
+    option: i32,
+    version: i32,
+    vv: *mut (),
+) -> *mut () {
     let mut c = Box::new(cram_codec_xrle_layout {
         codec: 52,
         out: std::ptr::null_mut(),
@@ -2864,48 +2889,49 @@ pub unsafe fn cram_cram_codecs_c_2184_cram_xrle_decode_init(
     c.get_block = cram_fn_ptr(cram_cram_codecs_c_2120_cram_xrle_get_block as usize);
 
     let vv_layout = vv.cast::<varint_vec_layout>();
-    let mut cp = data;
-    let endp = data.add(size as usize);
+    let mut cp = data.cast::<u8>();
+    let endp = data.add(size as usize).cast::<u8>();
     let mut err = 0;
 
-    let nrle = ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), &mut err) as c_int;
+    let nrle = ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), &mut err) as i32;
     for _ in 0..nrle.min(256) {
-        let j = ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), &mut err) as c_int;
+        let j = ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), &mut err) as i32;
         if (0..256).contains(&j) {
             c.xrle.rep_score[j as usize] = 1;
         }
     }
 
     c.xrle.len_encoding =
-        ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), &mut err) as c_int;
+        ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), &mut err) as i32;
     let sub_size =
-        ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), &mut err) as c_int;
+        ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), &mut err) as i32;
     if sub_size < 0 || endp.offset_from(cp) < sub_size as isize {
         return std::ptr::null_mut();
     }
     c.xrle.len_codec = cram_cram_codecs_c_3872_cram_decoder_init(
         hdr,
         c.xrle.len_encoding,
-        cp,
+        cp.cast::<u8>(),
         sub_size,
         1,
         version,
         vv,
-    );
+    )
+    .cast();
     if c.xrle.len_codec.is_null() {
         return std::ptr::null_mut();
     }
     cp = cp.add(sub_size as usize);
 
     c.xrle.lit_encoding =
-        ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), &mut err) as c_int;
+        ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), &mut err) as i32;
     let sub_size =
-        ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), &mut err) as c_int;
+        ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), &mut err) as i32;
     if sub_size < 0 || endp.offset_from(cp) < sub_size as isize {
         let len = c.xrle.len_codec.cast::<cram_codec_xrle_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
-            free_fn(c.xrle.len_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*len).free);
+            free_fn(c.xrle.len_codec.cast());
         }
         c.xrle.len_codec = std::ptr::null_mut();
         return std::ptr::null_mut();
@@ -2913,17 +2939,18 @@ pub unsafe fn cram_cram_codecs_c_2184_cram_xrle_decode_init(
     c.xrle.lit_codec = cram_cram_codecs_c_3872_cram_decoder_init(
         hdr,
         c.xrle.lit_encoding,
-        cp,
+        cp.cast::<u8>(),
         sub_size,
         option,
         version,
         vv,
-    );
+    )
+    .cast();
     if c.xrle.lit_codec.is_null() {
         let len = c.xrle.len_codec.cast::<cram_codec_xrle_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
-            free_fn(c.xrle.len_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*len).free);
+            free_fn(c.xrle.len_codec.cast());
         }
         c.xrle.len_codec = std::ptr::null_mut();
         return std::ptr::null_mut();
@@ -2932,14 +2959,14 @@ pub unsafe fn cram_cram_codecs_c_2184_cram_xrle_decode_init(
     if err != 0 {
         let len = c.xrle.len_codec.cast::<cram_codec_xrle_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
-            free_fn(c.xrle.len_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*len).free);
+            free_fn(c.xrle.len_codec.cast());
         }
         c.xrle.len_codec = std::ptr::null_mut();
         let lit = c.xrle.lit_codec.cast::<cram_codec_xrle_layout>();
         if !(*lit).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*lit).free);
-            free_fn(c.xrle.lit_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*lit).free);
+            free_fn(c.xrle.lit_codec.cast());
         }
         c.xrle.lit_codec = std::ptr::null_mut();
         return std::ptr::null_mut();
@@ -2948,7 +2975,7 @@ pub unsafe fn cram_cram_codecs_c_2184_cram_xrle_decode_init(
     Box::into_raw(c).cast()
 }
 
-pub unsafe extern "C" fn cram_cram_codecs_c_2257_cram_xrle_encode_flush(c: *mut c_void) -> c_int {
+pub unsafe extern "C" fn cram_cram_codecs_c_2257_cram_xrle_encode_flush(c: *mut ()) -> i32 {
     let c_xrle = c.cast::<cram_codec_xrle_layout>();
     let mut rle_syms = [0u8; 256];
     let mut rle_nsyms = 0;
@@ -2988,7 +3015,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2257_cram_xrle_encode_flush(c: *mut 
 
     let mut out_len_size = 0u64;
     let mut out_lit_size = 0u64;
-    let mut rle_nsyms_i = rle_nsyms as c_int;
+    let mut rle_nsyms_i = rle_nsyms as i32;
     let out_lit_vec = crate::htslib_rs::htscodecs::rle::hts_rle_encode_raw_slices(
         std::slice::from_raw_parts(
             (*c_xrle).xrle.to_flush.cast(),
@@ -3001,14 +3028,8 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2257_cram_xrle_encode_flush(c: *mut 
         None,
         &mut out_lit_size,
     );
-    let out_lit: *mut u8 = match out_lit_vec {
-        Some(mut v) => {
-            let p = v.as_mut_ptr();
-            std::mem::forget(v);
-            p
-        }
-        None => std::ptr::null_mut(),
-    };
+    let mut out_lit_vec = out_lit_vec.unwrap_or_default();
+    let out_lit: *mut u8 = out_lit_vec.as_mut_ptr();
     out_len_size += nb as u64;
 
     let len_codec = (*c_xrle).xrle.len_codec;
@@ -3018,10 +3039,9 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2257_cram_xrle_encode_flush(c: *mut 
         std::ptr::null_mut(),
         len_codec,
         out_len_ptr.cast(),
-        out_len_size as c_int,
+        out_len_size as i32,
     ) != 0
     {
-        free(out_lit.cast());
         return -1;
     }
 
@@ -3032,23 +3052,21 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2257_cram_xrle_encode_flush(c: *mut 
         std::ptr::null_mut(),
         lit_codec,
         out_lit.cast(),
-        out_lit_size as c_int,
+        out_lit_size as i32,
     ) != 0
     {
-        free(out_lit.cast());
         return -1;
     }
 
-    free(out_lit.cast());
     0
 }
 
 pub unsafe extern "C" fn cram_cram_codecs_c_2303_cram_xrle_encode_store(
-    c: *mut c_void,
+    c: *mut (),
     b: *mut cram_block,
-    prefix: *mut c_char,
-    version: c_int,
-) -> c_int {
+    prefix: *mut u8,
+    version: i32,
+) -> i32 {
     let c_xrle = c.cast::<cram_codec_xrle_layout>();
     let Some(b_ref) = raw_block_mut(b) else {
         return -1;
@@ -3141,10 +3159,10 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2303_cram_xrle_encode_store(
 
 pub unsafe fn cram_cram_codecs_c_2371_cram_xrle_encode_char(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_xrle_layout>();
     if !(*c).xrle.to_flush.is_null() {
         if (*c).out.is_null() {
@@ -3172,12 +3190,12 @@ pub unsafe fn cram_cram_codecs_c_2371_cram_xrle_encode_char(
         return 0;
     }
 
-    (*c).xrle.to_flush = in_;
+    (*c).xrle.to_flush = in_.cast();
     (*c).xrle.to_flush_size = in_size as usize;
     0
 }
 
-pub unsafe fn cram_cram_codecs_c_2396_cram_xrle_encode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_2396_cram_xrle_encode_free(c: *mut ()) {
     if c.is_null() {
         return;
     }
@@ -3185,15 +3203,15 @@ pub unsafe fn cram_cram_codecs_c_2396_cram_xrle_encode_free(c: *mut c_void) {
     if !(*c_xrle).xrle.len_codec.is_null() {
         let len = (*c_xrle).xrle.len_codec.cast::<cram_codec_xrle_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
-            free_fn((*c_xrle).xrle.len_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*len).free);
+            free_fn((*c_xrle).xrle.len_codec.cast());
         }
     }
     if !(*c_xrle).xrle.lit_codec.is_null() {
         let lit = (*c_xrle).xrle.lit_codec.cast::<cram_codec_xrle_layout>();
         if !(*lit).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*lit).free);
-            free_fn((*c_xrle).xrle.lit_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*lit).free);
+            free_fn((*c_xrle).xrle.lit_codec.cast());
         }
     }
     cram_free_block((*c_xrle).out.cast());
@@ -3201,13 +3219,13 @@ pub unsafe fn cram_cram_codecs_c_2396_cram_xrle_encode_free(c: *mut c_void) {
 }
 
 pub unsafe fn cram_cram_codecs_c_2409_cram_xrle_encode_init(
-    _st: *mut c_void,
-    _codec: c_int,
-    option: c_int,
-    dat: *mut c_void,
-    version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    _st: *mut (),
+    _codec: i32,
+    option: i32,
+    dat: *mut (),
+    version: i32,
+    vv: *mut (),
+) -> *mut () {
     let mut c = Box::new(cram_codec_xrle_layout {
         codec: 52,
         out: std::ptr::null_mut(),
@@ -3252,10 +3270,11 @@ pub unsafe fn cram_cram_codecs_c_2409_cram_xrle_encode_init(
         (*e).len_encoding,
         None,
         3,
-        (*e).len_dat,
+        (*e).len_dat.cast(),
         version,
         vv,
-    );
+    )
+    .cast();
     if c.xrle.len_codec.is_null() {
         return std::ptr::null_mut();
     }
@@ -3263,15 +3282,16 @@ pub unsafe fn cram_cram_codecs_c_2409_cram_xrle_encode_init(
         (*e).lit_encoding,
         None,
         3,
-        (*e).lit_dat,
+        (*e).lit_dat.cast(),
         version,
         vv,
-    );
+    )
+    .cast();
     if c.xrle.lit_codec.is_null() {
         let len = c.xrle.len_codec.cast::<cram_codec_xrle_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
-            free_fn(c.xrle.len_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*len).free);
+            free_fn(c.xrle.len_codec.cast());
         }
         c.xrle.len_codec = std::ptr::null_mut();
         return std::ptr::null_mut();
@@ -3283,11 +3303,11 @@ pub unsafe fn cram_cram_codecs_c_2409_cram_xrle_encode_init(
 
 pub unsafe fn cram_cram_codecs_c_2452_cram_subexp_decode(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     in_: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_subexp_layout>();
     let out_i = out.cast::<i32>();
     let k = (*c).subexp.k;
@@ -3317,16 +3337,16 @@ pub unsafe fn cram_cram_codecs_c_2452_cram_subexp_decode(
     0
 }
 
-pub unsafe fn cram_cram_codecs_c_2496_cram_subexp_decode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_2496_cram_subexp_decode_free(c: *mut ()) {
     if !c.is_null() {
         drop(Box::from_raw(c.cast::<cram_codec_subexp_layout>()));
     }
 }
 
 pub unsafe fn cram_cram_codecs_c_2501_cram_subexp_describe(
-    c: *mut c_void,
+    c: *mut (),
     ks: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     let c = c.cast::<cram_codec_subexp_layout>();
     let ks = &mut *ks;
     if kputsn(b"SUBEXP(offset=", 14, ks) < 0
@@ -3342,14 +3362,14 @@ pub unsafe fn cram_cram_codecs_c_2501_cram_subexp_describe(
 }
 
 pub unsafe fn cram_cram_codecs_c_2508_cram_subexp_decode_init(
-    _hdr: *mut c_void,
-    data: *mut c_char,
-    size: c_int,
-    _codec: c_int,
-    option: c_int,
-    _version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    _hdr: *mut (),
+    data: *mut u8,
+    size: i32,
+    _codec: i32,
+    option: i32,
+    _version: i32,
+    vv: *mut (),
+) -> *mut () {
     if option != 1 {
         return std::ptr::null_mut();
     }
@@ -3370,13 +3390,13 @@ pub unsafe fn cram_cram_codecs_c_2508_cram_subexp_decode_init(
     });
 
     let vv = vv.cast::<varint_vec_layout>();
-    let mut cp = data;
-    let endp = data.add(size as usize);
+    let mut cp = data.cast::<u8>();
+    let endp = data.add(size as usize).cast::<u8>();
     c.subexp.offset =
         ((*vv).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut()) as i32;
     c.subexp.k =
         ((*vv).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut()) as i32;
-    if cp.offset_from(data) != size as isize || c.subexp.k < 0 {
+    if cp.offset_from(data.cast::<u8>()) != size as isize || c.subexp.k < 0 {
         return std::ptr::null_mut();
     }
     Box::into_raw(c).cast()
@@ -3384,11 +3404,11 @@ pub unsafe fn cram_cram_codecs_c_2508_cram_subexp_decode_init(
 
 pub unsafe fn cram_cram_codecs_c_2546_cram_gamma_decode(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     in_: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_gamma_layout>();
     let out_i = out.cast::<i32>();
     for i in 0..*out_size {
@@ -3407,16 +3427,16 @@ pub unsafe fn cram_cram_codecs_c_2546_cram_gamma_decode(
     0
 }
 
-pub unsafe fn cram_cram_codecs_c_2570_cram_gamma_decode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_2570_cram_gamma_decode_free(c: *mut ()) {
     if !c.is_null() {
         drop(Box::from_raw(c.cast::<cram_codec_gamma_layout>()));
     }
 }
 
 pub unsafe fn cram_cram_codecs_c_2575_cram_gamma_describe(
-    c: *mut c_void,
+    c: *mut (),
     ks: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     let c = c.cast::<cram_codec_gamma_layout>();
     let ks = &mut *ks;
     if kputsn(b"GAMMA(offset=", 13, ks) < 0
@@ -3430,14 +3450,14 @@ pub unsafe fn cram_cram_codecs_c_2575_cram_gamma_describe(
 }
 
 pub unsafe fn cram_cram_codecs_c_2580_cram_gamma_decode_init(
-    _hdr: *mut c_void,
-    data: *mut c_char,
-    size: c_int,
-    _codec: c_int,
-    option: c_int,
-    _version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    _hdr: *mut (),
+    data: *mut u8,
+    size: i32,
+    _codec: i32,
+    option: i32,
+    _version: i32,
+    vv: *mut (),
+) -> *mut () {
     if option != 1 || size < 1 {
         return std::ptr::null_mut();
     }
@@ -3458,17 +3478,17 @@ pub unsafe fn cram_cram_codecs_c_2580_cram_gamma_decode_init(
     });
 
     let vv = vv.cast::<varint_vec_layout>();
-    let mut cp = data;
-    let endp = data.add(size as usize);
+    let mut cp = data.cast::<u8>();
+    let endp = data.add(size as usize).cast::<u8>();
     c.gamma.offset =
         ((*vv).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut()) as i32;
-    if cp.offset_from(data) != size as isize {
+    if cp.offset_from(data.cast::<u8>()) != size as isize {
         return std::ptr::null_mut();
     }
     Box::into_raw(c).cast()
 }
 
-pub unsafe fn cram_cram_codecs_c_2622_code_sort(vp1: *const c_void, vp2: *const c_void) -> c_int {
+pub unsafe fn cram_cram_codecs_c_2622_code_sort(vp1: *const (), vp2: *const ()) -> i32 {
     let c1 = vp1.cast::<cram_huffman_code_layout>();
     let c2 = vp2.cast::<cram_huffman_code_layout>();
     if (*c1).len != (*c2).len {
@@ -3482,7 +3502,7 @@ pub unsafe fn cram_cram_codecs_c_2622_code_sort(vp1: *const c_void, vp2: *const 
     }
 }
 
-pub unsafe fn cram_cram_codecs_c_2632_cram_huffman_decode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_2632_cram_huffman_decode_free(c: *mut ()) {
     if c.is_null() {
         return;
     }
@@ -3495,54 +3515,53 @@ pub unsafe fn cram_cram_codecs_c_2632_cram_huffman_decode_free(c: *mut c_void) {
 }
 
 pub unsafe fn cram_cram_codecs_c_2795_cram_huffman_describe(
-    c: *mut c_void,
+    c: *mut (),
     ks: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     let c = c.cast::<cram_codec_huffman_layout>();
     let ks = &mut *ks;
     let mut r = 0;
-    r |= (kputsn(b"HUFFMAN(codes={", 15, ks) < 0) as c_int;
+    r |= (kputsn(b"HUFFMAN(codes={", 15, ks) < 0) as i32;
     for n in 0..(*c).huffman.ncodes {
         if n != 0 {
-            r |= (kputsn(b",", 1, ks) < 0) as c_int;
+            r |= (kputsn(b",", 1, ks) < 0) as i32;
         }
-        r |= (kputll((*(*c).huffman.codes.add(n as usize)).symbol, ks) < 0) as c_int;
+        r |= (kputll((*(*c).huffman.codes.add(n as usize)).symbol, ks) < 0) as i32;
     }
-    r |= (kputsn(b"},lengths={", 11, ks) < 0) as c_int;
+    r |= (kputsn(b"},lengths={", 11, ks) < 0) as i32;
     for n in 0..(*c).huffman.ncodes {
         if n != 0 {
-            r |= (kputsn(b",", 1, ks) < 0) as c_int;
+            r |= (kputsn(b",", 1, ks) < 0) as i32;
         }
-        r |= (kputw((*(*c).huffman.codes.add(n as usize)).len, ks) < 0) as c_int;
+        r |= (kputw((*(*c).huffman.codes.add(n as usize)).len, ks) < 0) as i32;
     }
-    r |= (kputsn(b"})", 2, ks) < 0) as c_int;
+    r |= (kputsn(b"})", 2, ks) < 0) as i32;
     r
 }
 
 pub unsafe fn cram_cram_codecs_c_2814_cram_huffman_decode_init(
-    _hdr: *mut c_void,
-    data: *mut c_char,
-    size: c_int,
-    _codec: c_int,
-    option: c_int,
-    _version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    _hdr: *mut (),
+    data: *mut u8,
+    size: i32,
+    _codec: i32,
+    option: i32,
+    _version: i32,
+    vv: *mut (),
+) -> *mut () {
     if option == 5 {
         return std::ptr::null_mut();
     }
 
     let vv = vv.cast::<varint_vec_layout>();
-    let mut cp = data;
-    let data_end = data.add(size as usize);
+    let mut cp = data.cast::<u8>();
+    let data_end = data.add(size as usize).cast::<u8>();
     let mut err = 0;
     let ncodes64 = ((*vv).varint_get32.unwrap())(&mut cp, data_end.cast_const(), &mut err);
     if ncodes64 < 0 {
         return std::ptr::null_mut();
     }
-    let ncodes = ncodes64 as c_int;
+    let ncodes = ncodes64 as i32;
     if ncodes as usize >= usize::MAX / std::mem::size_of::<cram_huffman_code_layout>() {
-        *__errno_location() = ENOMEM;
         return std::ptr::null_mut();
     }
 
@@ -3603,7 +3622,7 @@ pub unsafe fn cram_cram_codecs_c_2814_cram_huffman_decode_init(
         return std::ptr::null_mut();
     }
 
-    let n_lens = ((*vv).varint_get32.unwrap())(&mut cp, data_end.cast_const(), &mut err) as c_int;
+    let n_lens = ((*vv).varint_get32.unwrap())(&mut cp, data_end.cast_const(), &mut err) as i32;
     if n_lens != ncodes {
         return std::ptr::null_mut();
     }
@@ -3625,7 +3644,7 @@ pub unsafe fn cram_cram_codecs_c_2814_cram_huffman_decode_init(
             max_len = len;
         }
     }
-    if err != 0 || cp.offset_from(data) != size as isize || max_len >= ncodes {
+    if err != 0 || cp.offset_from(data.cast::<u8>()) != size as isize || max_len >= ncodes {
         return std::ptr::null_mut();
     }
     if max_len > 31 {
@@ -3696,16 +3715,16 @@ pub unsafe fn cram_cram_codecs_c_2814_cram_huffman_decode_init(
 
 pub unsafe fn cram_cram_codecs_c_2646_cram_huffman_decode_char0(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     if out.is_null() {
         return 0;
     }
     let c = c.cast::<cram_codec_huffman_layout>();
-    let symbol = (*(*c).huffman.codes).symbol as c_char;
+    let symbol = (*(*c).huffman.codes).symbol as u8;
     for i in 0..*out_size {
         *out.add(i as usize) = symbol;
     }
@@ -3714,11 +3733,11 @@ pub unsafe fn cram_cram_codecs_c_2646_cram_huffman_decode_char0(
 
 pub unsafe fn cram_cram_codecs_c_2660_cram_huffman_decode_char(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     in_: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_huffman_layout>();
     let ncodes = (*c).huffman.ncodes;
     let codes = (*c).huffman.codes;
@@ -3747,7 +3766,7 @@ pub unsafe fn cram_cram_codecs_c_2660_cram_huffman_decode_char(
             }
             if (*codes.add(idx as usize)).code == val && (*codes.add(idx as usize)).len == len {
                 if !out.is_null() {
-                    *out.add(i as usize) = (*codes.add(idx as usize)).symbol as c_char;
+                    *out.add(i as usize) = (*codes.add(idx as usize)).symbol as u8;
                 }
                 break;
             }
@@ -3758,11 +3777,11 @@ pub unsafe fn cram_cram_codecs_c_2660_cram_huffman_decode_char(
 
 pub unsafe fn cram_cram_codecs_c_2695_cram_huffman_decode_int0(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_huffman_layout>();
     let out_i = out.cast::<i32>();
     let symbol = (*(*c).huffman.codes).symbol as i32;
@@ -3774,11 +3793,11 @@ pub unsafe fn cram_cram_codecs_c_2695_cram_huffman_decode_int0(
 
 pub unsafe fn cram_cram_codecs_c_2708_cram_huffman_decode_int(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     in_: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_huffman_layout>();
     let ncodes = (*c).huffman.ncodes;
     let codes = (*c).huffman.codes;
@@ -3817,11 +3836,11 @@ pub unsafe fn cram_cram_codecs_c_2708_cram_huffman_decode_int(
 
 pub unsafe fn cram_cram_codecs_c_2745_cram_huffman_decode_long0(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_huffman_layout>();
     let out_i = out.cast::<i64>();
     let symbol = (*(*c).huffman.codes).symbol;
@@ -3833,11 +3852,11 @@ pub unsafe fn cram_cram_codecs_c_2745_cram_huffman_decode_long0(
 
 pub unsafe fn cram_cram_codecs_c_2758_cram_huffman_decode_long(
     _slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     in_: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_huffman_layout>();
     let ncodes = (*c).huffman.ncodes;
     let codes = (*c).huffman.codes;
@@ -3876,15 +3895,15 @@ pub unsafe fn cram_cram_codecs_c_2758_cram_huffman_decode_long(
 
 pub unsafe fn cram_cram_codecs_c_2994_cram_huffman_encode_char(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    mut in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    mut in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_huffman_encoder_layout>();
     let mut syms = in_.cast::<u8>();
     let mut r = 0;
     while in_size != 0 {
-        let sym = *syms as c_int;
+        let sym = *syms as i32;
         syms = syms.add(1);
         let i = if (-1..128).contains(&sym) {
             (*c).huffman.val2code[(sym + 1) as usize]
@@ -3911,12 +3930,12 @@ pub unsafe fn cram_cram_codecs_c_2994_cram_huffman_encode_char(
 
 pub unsafe fn cram_cram_codecs_c_3030_cram_huffman_encode_int(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    mut in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    mut in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_huffman_encoder_layout>();
-    let mut syms = in_.cast::<c_int>();
+    let mut syms = in_.cast::<i32>();
     let mut r = 0;
     while in_size != 0 {
         let sym = *syms;
@@ -3946,10 +3965,10 @@ pub unsafe fn cram_cram_codecs_c_3030_cram_huffman_encode_int(
 
 pub unsafe fn cram_cram_codecs_c_3067_cram_huffman_encode_long(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    mut in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    mut in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_huffman_encoder_layout>();
     let mut syms = in_.cast::<i64>();
     let mut r = 0;
@@ -3979,7 +3998,7 @@ pub unsafe fn cram_cram_codecs_c_3067_cram_huffman_encode_long(
     r
 }
 
-pub unsafe fn cram_cram_codecs_c_3099_cram_huffman_encode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_3099_cram_huffman_encode_free(c: *mut ()) {
     if c.is_null() {
         return;
     }
@@ -3992,24 +4011,24 @@ pub unsafe fn cram_cram_codecs_c_3099_cram_huffman_encode_free(c: *mut c_void) {
 }
 
 pub unsafe fn cram_cram_codecs_c_3112_cram_huffman_encode_store(
-    c: *mut c_void,
+    c: *mut (),
     b: *mut cram_block,
-    prefix: *mut c_char,
-    _version: c_int,
-) -> c_int {
+    prefix: *mut u8,
+    _version: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_huffman_encoder_layout>();
     let codes = (*c).huffman.codes;
     let tmp_len = 6usize
         .saturating_mul((*c).huffman.nvals as usize)
         .saturating_add(16);
-    let mut tmp = Vec::<c_char>::new();
+    let mut tmp = Vec::<u8>::new();
     if tmp.try_reserve_exact(tmp_len).is_err() {
         return -1;
     }
     tmp.resize(tmp_len, 0);
     let tmp_ptr = tmp.as_mut_ptr();
-    let mut tp = tmp_ptr;
-    let tpend = tmp_ptr.add(tmp_len);
+    let mut tp = tmp_ptr.cast::<u8>();
+    let tpend = tmp_ptr.add(tmp_len).cast::<u8>();
     let Some(b_ref) = raw_block_mut(b) else {
         return -1;
     };
@@ -4066,7 +4085,7 @@ pub unsafe fn cram_cram_codecs_c_3112_cram_huffman_encode_store(
     let n = ((*(*c).vv).varint_put32_blk.unwrap())(b, (*c).codec);
     len += n;
     r |= n;
-    let payload_len = tp.offset_from(tmp_ptr) as c_int;
+    let payload_len = tp.offset_from(tmp_ptr.cast::<u8>()) as i32;
     let n = ((*(*c).vv).varint_put32_blk.unwrap())(b, payload_len);
     len += n;
     r |= n;
@@ -4083,15 +4102,15 @@ pub unsafe fn cram_cram_codecs_c_3112_cram_huffman_encode_store(
 }
 
 pub unsafe fn cram_cram_codecs_c_3176_cram_huffman_encode_init(
-    st: *mut c_void,
-    _codec: c_int,
-    option: c_int,
-    _dat: *mut c_void,
-    _version: c_int,
-    _vv: *mut c_void,
-) -> *mut c_void {
-    let mut vals = Vec::<c_int>::new();
-    let mut freqs = Vec::<c_int>::new();
+    st: *mut (),
+    _codec: i32,
+    option: i32,
+    _dat: *mut (),
+    _version: i32,
+    _vv: *mut (),
+) -> *mut () {
+    let mut vals = Vec::<i32>::new();
+    let mut freqs = Vec::<i32>::new();
     let mut max_val = 0i32;
     let mut min_val = i32::MAX;
 
@@ -4124,7 +4143,7 @@ pub unsafe fn cram_cram_codecs_c_3176_cram_huffman_encode_init(
         if vals.try_reserve_exact(1).is_err() || freqs.try_reserve_exact(1).is_err() {
             return std::ptr::null_mut();
         }
-        vals.push(i as c_int);
+        vals.push(i as i32);
         freqs.push((*st).freqs[i]);
         if max_val < i as i32 {
             max_val = i as i32;
@@ -4144,7 +4163,7 @@ pub unsafe fn cram_cram_codecs_c_3176_cram_huffman_encode_init(
             if vals.try_reserve_exact(1).is_err() || freqs.try_reserve_exact(1).is_err() {
                 return std::ptr::null_mut();
             }
-            vals.push(h.keys[k as usize] as c_int);
+            vals.push(h.keys[k as usize] as i32);
             freqs.push(h.vals[k as usize]);
             if max_val < i_after_stat_loop {
                 max_val = i_after_stat_loop;
@@ -4164,7 +4183,7 @@ pub unsafe fn cram_cram_codecs_c_3176_cram_huffman_encode_init(
         return std::ptr::null_mut();
     }
     freqs.resize(2 * nvals, 0);
-    let mut lens = Vec::<c_int>::new();
+    let mut lens = Vec::<i32>::new();
     if lens.try_reserve_exact(2 * nvals).is_err() {
         return std::ptr::null_mut();
     }
@@ -4195,8 +4214,8 @@ pub unsafe fn cram_cram_codecs_c_3176_cram_huffman_encode_init(
             break;
         }
         freqs[heap_nvals] = low1 + low2;
-        lens[ind1] = heap_nvals as c_int;
-        lens[ind2] = heap_nvals as c_int;
+        lens[ind1] = heap_nvals as i32;
+        lens[ind2] = heap_nvals as i32;
         freqs[ind1] *= -1;
         freqs[ind2] *= -1;
         heap_nvals += 1;
@@ -4247,12 +4266,12 @@ pub unsafe fn cram_cram_codecs_c_3176_cram_huffman_encode_init(
 
         let symbol = codes[i].symbol;
         if (-1..128).contains(&symbol) {
-            c.huffman.val2code[(symbol + 1) as usize] = i as c_int;
+            c.huffman.val2code[(symbol + 1) as usize] = i as i32;
         }
     }
 
     c.huffman.codes = codes.as_mut_ptr();
-    c.huffman.nvals = nvals as c_int;
+    c.huffman.nvals = nvals as i32;
     c.huffman.option = option;
     c.free = cram_fn_ptr(cram_cram_codecs_c_3099_cram_huffman_encode_free as usize);
     c.encode = if option == 3 || option == 4 {
@@ -4285,11 +4304,11 @@ pub unsafe fn cram_cram_codecs_c_3176_cram_huffman_encode_init(
 
 pub unsafe fn cram_cram_codecs_c_3371_cram_byte_array_len_decode(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     in_: *mut cram_block,
-    out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_byte_array_len_layout>();
     let mut len = 0i32;
     let mut one = 1;
@@ -4315,7 +4334,7 @@ pub unsafe fn cram_cram_codecs_c_3371_cram_byte_array_len_decode(
     if r == 0 && !val_codec.is_null() {
         let val_decode: CramCodecDecodeFn =
             cram_fn((*(val_codec.cast::<cram_codec_byte_array_len_layout>())).decode);
-        r = val_decode(slice, val_codec, in_, out, &mut len);
+        r = val_decode(slice, val_codec, in_, out.cast(), &mut len);
     } else {
         return -1;
     }
@@ -4323,7 +4342,7 @@ pub unsafe fn cram_cram_codecs_c_3371_cram_byte_array_len_decode(
     r
 }
 
-pub unsafe fn cram_cram_codecs_c_3400_cram_byte_array_len_decode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_3400_cram_byte_array_len_decode_free(c: *mut ()) {
     if c.is_null() {
         return;
     }
@@ -4334,8 +4353,8 @@ pub unsafe fn cram_cram_codecs_c_3400_cram_byte_array_len_decode_free(c: *mut c_
             .len_codec
             .cast::<cram_codec_byte_array_len_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
-            free_fn((*c_ba).byte_array_len.len_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*len).free);
+            free_fn((*c_ba).byte_array_len.len_codec.cast());
         }
     }
     if !(*c_ba).byte_array_len.val_codec.is_null() {
@@ -4344,20 +4363,20 @@ pub unsafe fn cram_cram_codecs_c_3400_cram_byte_array_len_decode_free(c: *mut c_
             .val_codec
             .cast::<cram_codec_byte_array_len_layout>();
         if !(*val).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*val).free);
-            free_fn((*c_ba).byte_array_len.val_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*val).free);
+            free_fn((*c_ba).byte_array_len.val_codec.cast());
         }
     }
     drop(Box::from_raw(c_ba));
 }
 
 pub unsafe fn cram_cram_codecs_c_3412_cram_byte_array_len_describe(
-    c: *mut c_void,
+    c: *mut (),
     ks: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     let c = c.cast::<cram_codec_byte_array_len_layout>();
     let mut r = 0;
-    r |= (kputsn(b"BYTE_ARRAY_LEN(len_codec={", 26, &mut *ks) < 0) as c_int;
+    r |= (kputsn(b"BYTE_ARRAY_LEN(len_codec={", 26, &mut *ks) < 0) as i32;
     let len_codec = (*c).byte_array_len.len_codec;
     if !(*(len_codec.cast::<cram_codec_byte_array_len_layout>()))
         .describe
@@ -4367,9 +4386,9 @@ pub unsafe fn cram_cram_codecs_c_3412_cram_byte_array_len_describe(
             cram_fn((*(len_codec.cast::<cram_codec_byte_array_len_layout>())).describe);
         r |= describe(len_codec, ks);
     } else {
-        r |= (kputsn(b"?", 1, &mut *ks) < 0) as c_int;
+        r |= (kputsn(b"?", 1, &mut *ks) < 0) as i32;
     }
-    r |= (kputsn(b"},val_codec={", 13, &mut *ks) < 0) as c_int;
+    r |= (kputsn(b"},val_codec={", 13, &mut *ks) < 0) as i32;
     let val_codec = (*c).byte_array_len.val_codec;
     if !(*(val_codec.cast::<cram_codec_byte_array_len_layout>()))
         .describe
@@ -4379,21 +4398,21 @@ pub unsafe fn cram_cram_codecs_c_3412_cram_byte_array_len_describe(
             cram_fn((*(val_codec.cast::<cram_codec_byte_array_len_layout>())).describe);
         r |= describe(val_codec, ks);
     } else {
-        r |= (kputsn(b"?", 1, &mut *ks) < 0) as c_int;
+        r |= (kputsn(b"?", 1, &mut *ks) < 0) as i32;
     }
-    r |= (kputsn(b"}", 1, &mut *ks) < 0) as c_int;
+    r |= (kputsn(b"}", 1, &mut *ks) < 0) as i32;
     r
 }
 
 pub unsafe fn cram_cram_codecs_c_3428_cram_byte_array_len_decode_init(
-    hdr: *mut c_void,
-    data: *mut c_char,
-    size: c_int,
-    _codec: c_int,
-    option: c_int,
-    version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    hdr: *mut (),
+    data: *mut u8,
+    size: i32,
+    _codec: i32,
+    option: i32,
+    version: i32,
+    vv: *mut (),
+) -> *mut () {
     let mut c = Box::new(cram_codec_byte_array_len_layout {
         codec: 4,
         out: std::ptr::null_mut(),
@@ -4414,20 +4433,28 @@ pub unsafe fn cram_cram_codecs_c_3428_cram_byte_array_len_decode_init(
     });
 
     let vv_layout = vv.cast::<varint_vec_layout>();
-    let mut cp = data;
-    let endp = data.add(size as usize);
+    let mut cp = data.cast::<u8>();
+    let endp = data.add(size as usize).cast::<u8>();
 
     let encoding =
         ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut())
-            as c_int;
+            as i32;
     let sub_size =
         ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut())
-            as c_int;
+            as i32;
     if sub_size < 0 || endp.offset_from(cp) < sub_size as isize {
         return std::ptr::null_mut();
     }
-    c.byte_array_len.len_codec =
-        cram_cram_codecs_c_3872_cram_decoder_init(hdr, encoding, cp, sub_size, 1, version, vv);
+    c.byte_array_len.len_codec = cram_cram_codecs_c_3872_cram_decoder_init(
+        hdr,
+        encoding,
+        cp.cast::<u8>(),
+        sub_size,
+        1,
+        version,
+        vv,
+    )
+    .cast();
     if c.byte_array_len.len_codec.is_null() {
         return std::ptr::null_mut();
     }
@@ -4435,46 +4462,54 @@ pub unsafe fn cram_cram_codecs_c_3428_cram_byte_array_len_decode_init(
 
     let encoding =
         ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut())
-            as c_int;
+            as i32;
     let sub_size =
         ((*vv_layout).varint_get32.unwrap())(&mut cp, endp.cast_const(), std::ptr::null_mut())
-            as c_int;
+            as i32;
     if sub_size < 0 || endp.offset_from(cp) < sub_size as isize {
         let len = c
             .byte_array_len
             .len_codec
             .cast::<cram_codec_byte_array_len_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
-            free_fn(c.byte_array_len.len_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*len).free);
+            free_fn(c.byte_array_len.len_codec.cast());
         }
         c.byte_array_len.len_codec = std::ptr::null_mut();
         return std::ptr::null_mut();
     }
-    c.byte_array_len.val_codec =
-        cram_cram_codecs_c_3872_cram_decoder_init(hdr, encoding, cp, sub_size, option, version, vv);
+    c.byte_array_len.val_codec = cram_cram_codecs_c_3872_cram_decoder_init(
+        hdr,
+        encoding,
+        cp.cast::<u8>(),
+        sub_size,
+        option,
+        version,
+        vv,
+    )
+    .cast();
     if c.byte_array_len.val_codec.is_null() {
         let len = c
             .byte_array_len
             .len_codec
             .cast::<cram_codec_byte_array_len_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
-            free_fn(c.byte_array_len.len_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*len).free);
+            free_fn(c.byte_array_len.len_codec.cast());
         }
         c.byte_array_len.len_codec = std::ptr::null_mut();
         return std::ptr::null_mut();
     }
     cp = cp.add(sub_size as usize);
 
-    if cp.offset_from(data) != size as isize {
+    if cp.offset_from(data.cast::<u8>()) != size as isize {
         let len = c
             .byte_array_len
             .len_codec
             .cast::<cram_codec_byte_array_len_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
-            free_fn(c.byte_array_len.len_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*len).free);
+            free_fn(c.byte_array_len.len_codec.cast());
         }
         c.byte_array_len.len_codec = std::ptr::null_mut();
         let val = c
@@ -4482,8 +4517,8 @@ pub unsafe fn cram_cram_codecs_c_3428_cram_byte_array_len_decode_init(
             .val_codec
             .cast::<cram_codec_byte_array_len_layout>();
         if !(*val).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*val).free);
-            free_fn(c.byte_array_len.val_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*val).free);
+            free_fn(c.byte_array_len.val_codec.cast());
         }
         c.byte_array_len.val_codec = std::ptr::null_mut();
         return std::ptr::null_mut();
@@ -4494,10 +4529,10 @@ pub unsafe fn cram_cram_codecs_c_3428_cram_byte_array_len_decode_init(
 
 pub unsafe fn cram_cram_codecs_c_3479_cram_byte_array_len_encode(
     slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_byte_array_len_layout>();
     let mut i32_ = in_size;
     let len_codec = (*c).byte_array_len.len_codec;
@@ -4508,20 +4543,20 @@ pub unsafe fn cram_cram_codecs_c_3479_cram_byte_array_len_encode(
         cram_fn((*(val_codec.cast::<cram_codec_byte_array_len_layout>())).encode);
     let mut r = 0;
     r |= len_encode(slice, len_codec, (&mut i32_ as *mut i32).cast(), 1);
-    r |= val_encode(slice, val_codec, in_, in_size);
+    r |= val_encode(slice, val_codec, in_.cast(), in_size);
     r
 }
 
-pub unsafe fn cram_cram_codecs_c_3493_cram_byte_array_len_encode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_3493_cram_byte_array_len_encode_free(c: *mut ()) {
     cram_cram_codecs_c_3400_cram_byte_array_len_decode_free(c);
 }
 
 pub unsafe fn cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
-    c: *mut c_void,
+    c: *mut (),
     b: *mut cram_block,
-    prefix: *mut c_char,
-    version: c_int,
-) -> c_int {
+    prefix: *mut u8,
+    version: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_byte_array_len_layout>();
     let Some(b_ref) = raw_block_mut(b) else {
         return -1;
@@ -4597,13 +4632,13 @@ pub unsafe fn cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
 }
 
 pub unsafe fn cram_cram_codecs_c_3547_cram_byte_array_len_encode_init(
-    st: *mut c_void,
-    _codec: c_int,
-    _option: c_int,
-    dat: *mut c_void,
-    version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    st: *mut (),
+    _codec: i32,
+    _option: i32,
+    dat: *mut (),
+    version: i32,
+    vv: *mut (),
+) -> *mut () {
     let e = dat.cast::<cram_byte_array_len_encoder_dat_layout>();
     let mut c = Box::new(cram_codec_byte_array_len_layout {
         codec: 4,
@@ -4628,18 +4663,20 @@ pub unsafe fn cram_cram_codecs_c_3547_cram_byte_array_len_encode_init(
         (*e).len_encoding,
         st.cast::<cram_stats_layout>().as_mut(),
         1,
-        (*e).len_dat,
+        (*e).len_dat.cast(),
         version,
         vv,
-    );
+    )
+    .cast();
     c.byte_array_len.val_codec = cram_cram_codecs_c_3928_cram_encoder_init(
         (*e).val_encoding,
         None,
         4,
-        (*e).val_dat,
+        (*e).val_dat.cast(),
         version,
         vv,
-    );
+    )
+    .cast();
     if c.byte_array_len.len_codec.is_null() {
         return std::ptr::null_mut();
     }
@@ -4649,8 +4686,8 @@ pub unsafe fn cram_cram_codecs_c_3547_cram_byte_array_len_encode_init(
             .len_codec
             .cast::<cram_codec_byte_array_len_layout>();
         if !(*len).free.is_null() {
-            let free_fn: unsafe fn(*mut c_void) = cram_fn((*len).free);
-            free_fn(c.byte_array_len.len_codec);
+            let free_fn: unsafe fn(*mut ()) = cram_fn((*len).free);
+            free_fn(c.byte_array_len.len_codec.cast());
         }
         c.byte_array_len.len_codec = std::ptr::null_mut();
         return std::ptr::null_mut();
@@ -4661,11 +4698,11 @@ pub unsafe fn cram_cram_codecs_c_3547_cram_byte_array_len_encode_init(
 
 pub unsafe fn cram_cram_codecs_c_3586_cram_byte_array_stop_decode_char(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    mut out: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    mut out: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_byte_array_stop_layout>();
     let b = cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).byte_array_stop.content_id);
     if b.is_null() {
@@ -4687,7 +4724,7 @@ pub unsafe fn cram_cram_codecs_c_3586_cram_byte_array_stop_decode_char(
             if term < 0 || *cp == (*c).byte_array_stop.stop {
                 break;
             }
-            *out = *cp as c_char;
+            *out = *cp as u8;
             out = out.add(1);
             cp = cp.add(1);
         }
@@ -4703,18 +4740,18 @@ pub unsafe fn cram_cram_codecs_c_3586_cram_byte_array_stop_decode_char(
     if cp >= (*b).data.add((*b).uncomp_size as usize) || *cp != (*c).byte_array_stop.stop {
         return -1;
     }
-    *out_size = cp.offset_from((*b).data.add(start_idx as usize)) as c_int;
+    *out_size = cp.offset_from((*b).data.add(start_idx as usize)) as i32;
     (*b).idx = cp.offset_from((*b).data) as i32 + 1;
     0
 }
 
 pub unsafe fn cram_cram_codecs_c_3626_cram_byte_array_stop_decode_block(
     slice: *mut cram_slice,
-    c: *mut c_void,
+    c: *mut (),
     _in: *mut cram_block,
-    out_: *mut c_char,
-    out_size: *mut c_int,
-) -> c_int {
+    out_: *mut u8,
+    out_size: *mut i32,
+) -> i32 {
     let c = c.cast::<cram_codec_byte_array_stop_layout>();
     let b = cram_cram_io_h_183_cram_get_block_by_id(slice, (*c).byte_array_stop.content_id);
     if b.is_null() {
@@ -4743,25 +4780,25 @@ pub unsafe fn cram_cram_codecs_c_3626_cram_byte_array_stop_decode_block(
     {
         return -1;
     }
-    *out_size = cp.offset_from((*b).data.add((*b).idx as usize)) as c_int;
+    *out_size = cp.offset_from((*b).data.add((*b).idx as usize)) as i32;
     (*b).idx = cp.offset_from((*b).data) as i32 + 1;
     0
 }
 
-pub unsafe fn cram_cram_codecs_c_3669_cram_byte_array_stop_decode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_3669_cram_byte_array_stop_decode_free(c: *mut ()) {
     if !c.is_null() {
         drop(Box::from_raw(c.cast::<cram_codec_byte_array_stop_layout>()));
     }
 }
 
 pub unsafe fn cram_cram_codecs_c_3675_cram_byte_array_stop_describe(
-    c: *mut c_void,
+    c: *mut (),
     ks: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     let c = c.cast::<cram_codec_byte_array_stop_layout>();
     let ks = &mut *ks;
     if kputsn(b"BYTE_ARRAY_STOP(stop=", 21, ks) < 0
-        || kputw((*c).byte_array_stop.stop as c_int, ks) < 0
+        || kputw((*c).byte_array_stop.stop as i32, ks) < 0
         || kputsn(b",id=", 4, ks) < 0
         || kputw((*c).byte_array_stop.content_id, ks) < 0
         || kputsn(b")", 1, ks) < 0
@@ -4773,14 +4810,14 @@ pub unsafe fn cram_cram_codecs_c_3675_cram_byte_array_stop_describe(
 }
 
 pub unsafe fn cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
-    _hdr: *mut c_void,
-    data: *mut c_char,
-    size: c_int,
-    _codec: c_int,
-    option: c_int,
-    version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
+    _hdr: *mut (),
+    data: *mut u8,
+    size: i32,
+    _codec: i32,
+    option: i32,
+    version: i32,
+    vv: *mut (),
+) -> *mut () {
     let vv = vv.cast::<varint_vec_layout>();
     let mut cp = data.cast::<u8>();
     let min_size = if (version >> 8) == 1 { 5 } else { 2 };
@@ -4824,8 +4861,8 @@ pub unsafe fn cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
         cp = cp.add(4);
     } else {
         let mut err = 0;
-        let mut c_cp = cp.cast::<c_char>();
-        let endp = data.add(size as usize);
+        let mut c_cp = cp.cast::<u8>();
+        let endp = data.add(size as usize).cast::<u8>();
         c.byte_array_stop.content_id =
             ((*vv).varint_get32.unwrap())(&mut c_cp, endp.cast_const(), &mut err) as i32;
         cp = c_cp.cast::<u8>();
@@ -4834,7 +4871,7 @@ pub unsafe fn cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
         }
     }
 
-    if cp.cast::<c_char>().offset_from(data) != size as isize {
+    if cp.cast::<u8>().offset_from(data) != size as isize {
         return std::ptr::null_mut();
     }
 
@@ -4843,29 +4880,29 @@ pub unsafe fn cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
 
 pub unsafe fn cram_cram_codecs_c_3733_cram_byte_array_stop_encode(
     _slice: *mut cram_slice,
-    c: *mut c_void,
-    in_: *mut c_char,
-    in_size: c_int,
-) -> c_int {
+    c: *mut (),
+    in_: *mut u8,
+    in_size: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_byte_array_stop_layout>();
     if cram_cram_io_h_248_block_append((*c).out.cast(), in_.cast(), in_size as usize) != 0 {
         return -1;
     }
-    cram_cram_io_h_261_block_append_char((*c).out.cast(), (*c).byte_array_stop.stop as c_char)
+    cram_cram_io_h_261_block_append_char((*c).out.cast(), (*c).byte_array_stop.stop as u8)
 }
 
-pub unsafe fn cram_cram_codecs_c_3743_cram_byte_array_stop_encode_free(c: *mut c_void) {
+pub unsafe fn cram_cram_codecs_c_3743_cram_byte_array_stop_encode_free(c: *mut ()) {
     if !c.is_null() {
         drop(Box::from_raw(c.cast::<cram_codec_byte_array_stop_layout>()));
     }
 }
 
 pub unsafe fn cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store(
-    c: *mut c_void,
+    c: *mut (),
     b: *mut cram_block,
-    prefix: *mut c_char,
-    version: c_int,
-) -> c_int {
+    prefix: *mut u8,
+    version: i32,
+) -> i32 {
     let c = c.cast::<cram_codec_byte_array_stop_layout>();
     let Some(b_ref) = raw_block_mut(b) else {
         return -1;
@@ -4875,51 +4912,54 @@ pub unsafe fn cram_cram_codecs_c_3749_cram_byte_array_stop_encode_store(
         None => return -1,
     };
 
-    let mut buf = [0 as c_char; 20];
+    let mut buf = [0 as u8; 20];
     let mut cp = buf.as_mut_ptr();
     let endp = buf.as_mut_ptr().add(20);
     let vv = (*c).vv;
-    cp = cp.add(((*vv).varint_put32.unwrap())(cp, endp, (*c).codec) as usize);
+    cp = cp.add(((*vv).varint_put32.unwrap())(cp.cast(), endp.cast(), (*c).codec) as usize);
     if (version >> 8) == 1 {
-        cp = cp.add(((*vv).varint_put32.unwrap())(cp, endp, 5) as usize);
-        *cp = (*c).byte_array_stop.stop as c_char;
+        cp = cp.add(((*vv).varint_put32.unwrap())(cp.cast(), endp.cast(), 5) as usize);
+        *cp = (*c).byte_array_stop.stop as u8;
         cp = cp.add(1);
-        *cp = (*c).byte_array_stop.content_id as c_char;
+        *cp = (*c).byte_array_stop.content_id as u8;
         cp = cp.add(1);
-        *cp = ((*c).byte_array_stop.content_id >> 8) as c_char;
+        *cp = ((*c).byte_array_stop.content_id >> 8) as u8;
         cp = cp.add(1);
-        *cp = ((*c).byte_array_stop.content_id >> 16) as c_char;
+        *cp = ((*c).byte_array_stop.content_id >> 16) as u8;
         cp = cp.add(1);
-        *cp = ((*c).byte_array_stop.content_id >> 24) as c_char;
+        *cp = ((*c).byte_array_stop.content_id >> 24) as u8;
         cp = cp.add(1);
     } else {
         cp = cp.add(((*vv).varint_put32.unwrap())(
-            cp,
-            endp,
+            cp.cast(),
+            endp.cast(),
             1 + ((*vv).varint_size.unwrap())((*c).byte_array_stop.content_id as i64),
         ) as usize);
-        *cp = (*c).byte_array_stop.stop as c_char;
+        *cp = (*c).byte_array_stop.stop as u8;
         cp = cp.add(1);
-        cp = cp
-            .add(((*vv).varint_put32.unwrap())(cp, endp, (*c).byte_array_stop.content_id) as usize);
+        cp = cp.add(((*vv).varint_put32.unwrap())(
+            cp.cast(),
+            endp.cast(),
+            (*c).byte_array_stop.content_id,
+        ) as usize);
     }
 
     let n = cp.offset_from(buf.as_ptr()) as usize;
     if cram_cram_io_h_248_block_append(b, buf.as_ptr().cast(), n) != 0 {
         return -1;
     }
-    len + n as c_int
+    len + n as i32
 }
 
 pub unsafe fn cram_cram_codecs_c_3785_cram_byte_array_stop_encode_init(
-    _st: *mut c_void,
-    _codec: c_int,
-    _option: c_int,
-    dat: *mut c_void,
-    _version: c_int,
-    _vv: *mut c_void,
-) -> *mut c_void {
-    let dat = dat.cast::<c_int>();
+    _st: *mut (),
+    _codec: i32,
+    _option: i32,
+    dat: *mut (),
+    _version: i32,
+    _vv: *mut (),
+) -> *mut () {
+    let dat = dat.cast::<i32>();
     let c = Box::new(cram_codec_byte_array_stop_layout {
         codec: 5,
         out: std::ptr::null_mut(),
@@ -4942,15 +4982,17 @@ pub unsafe fn cram_cram_codecs_c_3785_cram_byte_array_stop_encode_init(
 }
 
 pub unsafe fn cram_cram_codecs_c_3872_cram_decoder_init(
-    hdr: *mut c_void,
-    codec: c_int,
-    data: *mut c_char,
-    size: c_int,
-    option: c_int,
-    version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
-    let init: Option<CramCodecDecodeInitFn> = match codec {
+    hdr: *mut (),
+    codec: i32,
+    data: *mut u8,
+    size: i32,
+    option: i32,
+    version: i32,
+    vv: *mut (),
+) -> *mut () {
+    let init: Option<
+        unsafe fn(*mut (), *mut u8, i32, i32, i32, i32, *mut ()) -> *mut (),
+    > = match codec {
         1 => Some(cram_cram_codecs_c_459_cram_external_decode_init),
         3 => Some(cram_cram_codecs_c_2814_cram_huffman_decode_init),
         4 => Some(cram_cram_codecs_c_3428_cram_byte_array_len_decode_init),
@@ -4981,19 +5023,19 @@ pub unsafe fn cram_cram_codecs_c_3872_cram_decoder_init(
 }
 
 pub unsafe fn cram_cram_codecs_c_3928_cram_encoder_init(
-    mut codec: c_int,
+    mut codec: i32,
     st: Option<&mut cram_stats_layout>,
-    option: c_int,
-    dat: *mut c_void,
-    version: c_int,
-    vv: *mut c_void,
-) -> *mut c_void {
-    let st: *mut c_void = match st {
+    option: i32,
+    dat: *mut (),
+    version: i32,
+    vv: *mut (),
+) -> *mut () {
+    let st: *mut () = match st {
         Some(s) => {
             if s.nvals == 0 {
                 return std::ptr::null_mut();
             }
-            (s as *mut cram_stats_layout).cast::<c_void>()
+            (s as *mut cram_stats_layout).cast::<()>()
         }
         None => std::ptr::null_mut(),
     };
@@ -5006,7 +5048,9 @@ pub unsafe fn cram_cram_codecs_c_3928_cram_encoder_init(
         }
     }
 
-    let init: Option<CramCodecEncodeInitFn> = match codec {
+    let init: Option<
+        unsafe fn(*mut (), i32, i32, *mut (), i32, *mut ()) -> *mut (),
+    > = match codec {
         1 => Some(cram_cram_codecs_c_586_cram_external_encode_init),
         3 => Some(cram_cram_codecs_c_3176_cram_huffman_encode_init),
         4 => Some(cram_cram_codecs_c_3547_cram_byte_array_len_encode_init),
@@ -5029,11 +5073,11 @@ pub unsafe fn cram_cram_codecs_c_3928_cram_encoder_init(
         (*(r.cast::<cram_codec_external_layout>())).vv = vv.cast::<varint_vec_layout>();
         r
     } else {
-        libc::abort();
+        std::process::abort();
     }
 }
 
-pub unsafe fn cram_cram_codecs_c_3968_cram_codec_to_id(c: *mut c_void, id2: *mut c_int) -> c_int {
+pub unsafe fn cram_cram_codecs_c_3968_cram_codec_to_id(c: *mut (), id2: *mut i32) -> i32 {
     let codec = (*(c.cast::<cram_codec_external_layout>())).codec;
     let mut bnum2 = -2;
     let bnum1 = match codec {
@@ -5056,8 +5100,8 @@ pub unsafe fn cram_cram_codecs_c_3968_cram_codec_to_id(c: *mut c_void, id2: *mut
             let c = c.cast::<cram_codec_byte_array_len_layout>();
             let len_codec = (*c).byte_array_len.len_codec;
             let val_codec = (*c).byte_array_len.val_codec;
-            bnum2 = cram_cram_codecs_c_3968_cram_codec_to_id(val_codec, std::ptr::null_mut());
-            cram_cram_codecs_c_3968_cram_codec_to_id(len_codec, std::ptr::null_mut())
+            bnum2 = cram_cram_codecs_c_3968_cram_codec_to_id(val_codec.cast(), std::ptr::null_mut());
+            cram_cram_codecs_c_3968_cram_codec_to_id(len_codec.cast(), std::ptr::null_mut())
         }
         5 => {
             (*(c.cast::<cram_codec_byte_array_stop_layout>()))
@@ -5074,9 +5118,9 @@ pub unsafe fn cram_cram_codecs_c_3968_cram_codec_to_id(c: *mut c_void, id2: *mut
 }
 
 pub unsafe fn cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
-    _fd: *mut c_void,
-    c: *mut c_void,
-) -> c_int {
+    _fd: *mut (),
+    c: *mut (),
+) -> i32 {
     let base = c.cast::<cram_codec_external_layout>();
     match (*base).codec {
         43 | 44 => {
@@ -5221,7 +5265,7 @@ pub unsafe fn cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
             let xpack = c.cast::<cram_codec_xpack_layout>();
             if cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
                 std::ptr::null_mut(),
-                (*xpack).xpack.sub_codec,
+                (*xpack).xpack.sub_codec.cast(),
             ) == -1
             {
                 return -1;
@@ -5238,11 +5282,11 @@ pub unsafe fn cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
             let bal = c.cast::<cram_codec_byte_array_len_layout>();
             if cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
                 std::ptr::null_mut(),
-                (*bal).byte_array_len.len_codec,
+                (*bal).byte_array_len.len_codec.cast(),
             ) == -1
                 || cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
                     std::ptr::null_mut(),
-                    (*bal).byte_array_len.val_codec,
+                    (*bal).byte_array_len.val_codec.cast(),
                 ) == -1
             {
                 return -1;
@@ -5263,9 +5307,9 @@ pub unsafe fn cram_cram_codecs_c_4031_cram_codec_decoder2encoder(
 }
 
 pub unsafe fn cram_cram_codecs_c_4185_cram_codec_describe(
-    c: *mut c_void,
+    c: *mut (),
     ks: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     if !c.is_null()
         && !(*(c.cast::<cram_codec_external_layout>()))
             .describe
@@ -5273,7 +5317,7 @@ pub unsafe fn cram_cram_codecs_c_4185_cram_codec_describe(
     {
         let describe: CramCodecDescribeFn =
             cram_fn((*(c.cast::<cram_codec_external_layout>())).describe);
-        describe(c, ks)
+        describe(c.cast(), ks)
     } else if kputsn(b"?", 1, &mut *ks) < 0 {
         -1
     } else {
@@ -5282,17 +5326,17 @@ pub unsafe fn cram_cram_codecs_c_4185_cram_codec_describe(
 }
 pub fn cram_cram_codecs_c_972_cram_const_decode_size(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
-) -> c_int {
+    _c: *mut (),
+) -> i32 {
     0
 }
 
 pub fn cram_cram_codecs_c_1020_cram_const_encode(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
-    _in: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    _c: *mut (),
+    _in: *mut u8,
+    _in_size: i32,
+) -> i32 {
     0
 }
 
@@ -5318,28 +5362,28 @@ pub fn cram_cram_codecs_c_1682_unzigzag32(x: u32) -> i32 {
 
 pub fn cram_cram_codecs_c_1684_cram_xdelta_decode_long(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
+    _c: *mut (),
     _in: *mut cram_block,
-    _out: *mut c_char,
-    _out_size: *mut c_int,
-) -> c_int {
+    _out: *mut u8,
+    _out_size: *mut i32,
+) -> i32 {
     -1
 }
 
 pub fn cram_cram_codecs_c_1705_cram_xdelta_decode_expand_char(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
-) -> c_int {
+    _c: *mut (),
+) -> i32 {
     -1
 }
 
 pub fn cram_cram_codecs_c_1709_cram_xdelta_decode_char(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
+    _c: *mut (),
     _in: *mut cram_block,
-    _out: *mut c_char,
-    _out_size: *mut c_int,
-) -> c_int {
+    _out: *mut u8,
+    _out_size: *mut i32,
+) -> i32 {
     -1
 }
 
@@ -5349,98 +5393,98 @@ pub fn cram_cram_codecs_c_1713_le_int2(i: i16) -> i16 {
 
 pub fn cram_cram_codecs_c_1966_cram_xdelta_encode_long(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
-    _in: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    _c: *mut (),
+    _in: *mut u8,
+    _in_size: i32,
+) -> i32 {
     -1
 }
 
 pub fn cram_cram_codecs_c_1971_cram_xdelta_encode_int(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
-    _in: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    _c: *mut (),
+    _in: *mut u8,
+    _in_size: i32,
+) -> i32 {
     -1
 }
 
 pub fn cram_cram_codecs_c_2063_cram_xrle_decode_long(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
+    _c: *mut (),
     _in: *mut cram_block,
-    _out: *mut c_char,
-    _out_size: *mut c_int,
-) -> c_int {
+    _out: *mut u8,
+    _out_size: *mut i32,
+) -> i32 {
     -1
 }
 
 pub fn cram_cram_codecs_c_2068_cram_xrle_decode_int(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
+    _c: *mut (),
     _in: *mut cram_block,
-    _out: *mut c_char,
-    _out_size: *mut c_int,
-) -> c_int {
+    _out: *mut u8,
+    _out_size: *mut i32,
+) -> i32 {
     -1
 }
 
 pub fn cram_cram_codecs_c_2359_cram_xrle_encode_long(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
-    _in: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    _c: *mut (),
+    _in: *mut u8,
+    _in_size: i32,
+) -> i32 {
     -1
 }
 
 pub fn cram_cram_codecs_c_2365_cram_xrle_encode_int(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
-    _in: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    _c: *mut (),
+    _in: *mut u8,
+    _in_size: i32,
+) -> i32 {
     -1
 }
 
 pub fn cram_cram_codecs_c_2641_cram_huffman_decode_null(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
+    _c: *mut (),
     _in: *mut cram_block,
-    _out: *mut c_char,
-    _out_size: *mut c_int,
-) -> c_int {
+    _out: *mut u8,
+    _out_size: *mut i32,
+) -> i32 {
     -1
 }
 
 pub fn cram_cram_codecs_c_2989_cram_huffman_encode_char0(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
-    _in: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    _c: *mut (),
+    _in: *mut u8,
+    _in_size: i32,
+) -> i32 {
     0
 }
 
 pub fn cram_cram_codecs_c_3025_cram_huffman_encode_int0(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
-    _in: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    _c: *mut (),
+    _in: *mut u8,
+    _in_size: i32,
+) -> i32 {
     0
 }
 
 pub fn cram_cram_codecs_c_3062_cram_huffman_encode_long0(
     _slice: *mut cram_slice,
-    _c: *mut c_void,
-    _in: *mut c_char,
-    _in_size: c_int,
-) -> c_int {
+    _c: *mut (),
+    _in: *mut u8,
+    _in_size: i32,
+) -> i32 {
     0
 }
 
-pub fn cram_cram_codecs_c_3811_cram_encoding2str(t: c_int) -> *mut c_char {
+pub fn cram_cram_codecs_c_3811_cram_encoding2str(t: i32) -> *mut u8 {
     let s: &'static [u8] = match t {
         0 => b"NULL\0",
         1 => b"EXTERNAL\0",
@@ -5458,5 +5502,5 @@ pub fn cram_cram_codecs_c_3811_cram_encoding2str(t: c_int) -> *mut c_char {
         44 => b"CONST_INT\0",
         _ => b"?\0",
     };
-    s.as_ptr().cast::<c_char>().cast_mut()
+    s.as_ptr().cast::<u8>().cast_mut()
 }

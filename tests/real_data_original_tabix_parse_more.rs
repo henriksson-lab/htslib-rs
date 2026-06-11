@@ -5,8 +5,6 @@ use htslib_rs::{
     tbx_c_96_tbx_parse1, tbx_conf_bed, tbx_conf_gff, tbx_conf_vcf, tbx_destroy, tbx_index_build2,
     tbx_index_load2, tbx_intv_t, tbx_itr_querys1,
 };
-use std::ffi::{CStr, CString};
-use std::os::raw::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -20,8 +18,10 @@ fn fixture(path: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
 }
 
-fn c_path(path: &std::path::Path) -> CString {
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+fn c_path(path: &std::path::Path) -> Vec<u8> {
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 fn temp_path(name: &str) -> std::path::PathBuf {
@@ -39,10 +39,10 @@ fn temp_path(name: &str) -> std::path::PathBuf {
 unsafe fn bgzip_copy(src: &std::path::Path, dst: &std::path::Path) {
     let bytes = std::fs::read(src).unwrap();
     let dst_c = c_path(dst);
-    let fp = bgzf_open(dst_c.as_ptr(), c"w".as_ptr());
+    let fp = bgzf_open(dst_c.as_ptr().cast(), b"w\0".as_ptr().cast());
     assert!(!fp.is_null(), "failed to create {}", dst.display());
     assert_eq!(
-        bgzf_write(fp, bytes.as_ptr().cast::<c_void>(), bytes.len()),
+        bgzf_write(fp, bytes.as_ptr().cast(), bytes.len()),
         bytes.len() as isize
     );
     assert_eq!(bgzf_close(fp), 0);
@@ -53,7 +53,7 @@ unsafe fn query_tabix_rows(
     index_suffix: &str,
     min_shift: i32,
     conf: &htslib_rs::tbx_conf_t,
-    region: &CStr,
+    region: &[u8],
 ) -> String {
     let bgz = temp_path(&format!("{src}.{index_suffix}.gz").replace('/', "_"));
     let idx = temp_path(&format!("{src}.{index_suffix}.gz.{index_suffix}").replace('/', "_"));
@@ -64,15 +64,20 @@ unsafe fn query_tabix_rows(
     let bgz_c = c_path(&bgz);
     let idx_c = c_path(&idx);
     assert_eq!(
-        tbx_index_build2(bgz_c.as_ptr(), idx_c.as_ptr(), min_shift, conf),
+        tbx_index_build2(
+            &bgz_c[..bgz_c.len() - 1],
+            Some(&idx_c[..idx_c.len() - 1]),
+            min_shift,
+            conf
+        ),
         0
     );
 
-    let tbx = tbx_index_load2(bgz_c.as_ptr(), idx_c.as_ptr());
+    let tbx = tbx_index_load2(&bgz_c[..bgz_c.len() - 1], Some(&idx_c[..idx_c.len() - 1]));
     assert!(!tbx.is_null());
-    let fp = hts_open(bgz_c.as_ptr(), c"r".as_ptr());
+    let fp = hts_open(bgz_c.as_ptr().cast(), b"r\0".as_ptr().cast());
     assert!(!fp.is_null());
-    let itr = tbx_itr_querys1(&mut *tbx, region.as_ptr());
+    let itr = tbx_itr_querys1(&mut *tbx, &region[..region.len() - 1]);
     assert!(!itr.is_null(), "failed to query region {region:?}");
 
     let mut line: kstring_t = kstring_t::default();
@@ -81,8 +86,8 @@ unsafe fn query_tabix_rows(
         let ret = hts_itr_next(
             hts_get_bgzfp(fp),
             itr,
-            (&mut line as *mut kstring_t).cast::<c_void>(),
-            tbx.cast::<c_void>(),
+            (&mut line as *mut kstring_t).cast(),
+            tbx.cast(),
         );
         if ret < 0 {
             break;
@@ -101,7 +106,8 @@ unsafe fn query_tabix_rows(
 }
 
 unsafe fn parse_interval(conf: &htslib_rs::tbx_conf_t, line: &str) -> ParsedInterval {
-    let mut bytes = CString::new(line).unwrap().into_bytes_with_nul();
+    let mut bytes = line.as_bytes().to_vec();
+    bytes.push(0);
     let mut intv: tbx_intv_t = std::mem::zeroed();
     let line_len = bytes.len() - 1;
     assert_eq!(
@@ -114,9 +120,8 @@ unsafe fn parse_interval(conf: &htslib_rs::tbx_conf_t, line: &str) -> ParsedInte
     let seq = if let Some(se) = intv.se {
         String::from_utf8_lossy(&bytes[ss..se]).into_owned()
     } else {
-        CStr::from_ptr(bytes.as_ptr().add(ss).cast())
-            .to_string_lossy()
-            .into_owned()
+        let end = bytes[ss..].iter().position(|&b| b == 0).unwrap() + ss;
+        String::from_utf8_lossy(&bytes[ss..end]).into_owned()
     };
 
     ParsedInterval {
@@ -131,15 +136,10 @@ fn tabix_parse_regions_expands_region_file_and_appends_argv_regions() {
     unsafe {
         let regions = fixture("htslib/test/tabix/bed_file.bed");
         let regions_c = c_path(&regions);
-        let argv = [CString::new("chr7:10-20").unwrap()];
-        let mut argv_ptrs = argv
-            .iter()
-            .map(|arg| arg.as_ptr().cast_mut())
-            .collect::<Vec<_>>();
+        let argv = [b"chr7:10-20".to_vec()];
         let regs = tabix_c_135_parse_regions(
-            regions_c.as_ptr().cast_mut(),
-            argv_ptrs.as_mut_ptr(),
-            argv_ptrs.len() as libc::c_int,
+            Some(&regions_c[..regions_c.len() - 1]),
+            &argv,
         );
         assert!(regs.is_some());
         let regs = regs.unwrap();
@@ -167,7 +167,7 @@ fn indexes_original_tabix_vcf_tbi_and_csi_queries_exact_expected_output() {
                     suffix,
                     min_shift,
                     &conf,
-                    c"1:3000151-3000151",
+                    b"1:3000151-3000151\0",
                 ),
                 include_str!("../htslib/test/tabix/vcf_file.1.3000151.out")
             );
@@ -177,7 +177,7 @@ fn indexes_original_tabix_vcf_tbi_and_csi_queries_exact_expected_output() {
                     suffix,
                     min_shift,
                     &conf,
-                    c"2:3199812-3199812",
+                    b"2:3199812-3199812\0",
                 ),
                 include_str!("../htslib/test/tabix/vcf_file.2.3199812.out")
             );
@@ -195,7 +195,7 @@ fn indexes_original_tabix_bed_and_gff_queries_exact_expected_output() {
                 "tbi",
                 0,
                 &bed_conf,
-                c"Y:100200-100200",
+                b"Y:100200-100200\0",
             ),
             include_str!("../htslib/test/tabix/bed_file.Y.100200.out")
         );
@@ -207,7 +207,7 @@ fn indexes_original_tabix_bed_and_gff_queries_exact_expected_output() {
                 "tbi",
                 0,
                 &gff_conf,
-                c"X:2934832-2935190",
+                b"X:2934832-2935190\0",
             ),
             include_str!("../htslib/test/tabix/gff_file.X.2934832.2935190.out")
         );
@@ -227,7 +227,12 @@ fn original_large_chr_tbi_fails_but_csi_query_matches_expected_output() {
         let bgz_c = c_path(&bgz);
         let tbi_c = c_path(&tbi);
         assert_ne!(
-            tbx_index_build2(bgz_c.as_ptr(), tbi_c.as_ptr(), 0, &conf),
+            tbx_index_build2(
+                &bgz_c[..bgz_c.len() - 1],
+                Some(&tbi_c[..tbi_c.len() - 1]),
+                0,
+                &conf
+            ),
             0
         );
         let _ = std::fs::remove_file(&bgz);
@@ -239,7 +244,7 @@ fn original_large_chr_tbi_fails_but_csi_query_matches_expected_output() {
                 "csi",
                 14,
                 &conf,
-                c"chr20:1-2147483647",
+                b"chr20:1-2147483647\0",
             ),
             include_str!("../htslib/test/tabix/large_chr.20.1.2147483647.out")
         );
@@ -256,7 +261,7 @@ fn original_large_chr_csi_query_includes_terminal_i32_boundary_record() {
                 "csi",
                 14,
                 &conf,
-                c"chr20:2147483647-2147483647",
+                b"chr20:2147483647-2147483647\0",
             ),
             "chr20\t2147483647\t.\tA\tT\t999\tPASS\t.\n"
         );
@@ -483,7 +488,8 @@ fn vcf_alt_allele_limit_restores_temporary_field_split_like_c() {
         let conf = tbx_conf_vcf();
         let alt = vec!["A"; 65_536].join(",");
         let line = format!("1\t100\t.\tG\t{alt}\t.\tPASS\t.");
-        let mut bytes = CString::new(line.as_str()).unwrap().into_bytes_with_nul();
+        let mut bytes = line.as_bytes().to_vec();
+        bytes.push(0);
         let original = bytes.clone();
         let mut intv: htslib_rs::tbx_intv_t = std::mem::zeroed();
 

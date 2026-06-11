@@ -1,21 +1,19 @@
-use std::ffi::{c_char, c_int, c_void};
-
 unsafe fn run_thrash_threads4(
-    input: *const c_char,
+    input: *const u8,
     pre_reads: usize,
     iterations: usize,
-    n_threads: c_int,
+    n_threads: i32,
     sleep_usecs: i64,
     verbose: bool,
-) -> c_int {
-    let mut fpin = crate::htslib_rs::bgzf::bgzf_open(input, c"r".as_ptr());
+) -> i32 {
+    let mut fpin = crate::htslib_rs::bgzf::bgzf_open(input.cast(), c"r".as_ptr());
     if fpin.is_null() {
         return libc::EXIT_FAILURE;
     }
 
     let mut buf = [0_u8; 65536];
     for _ in 0..pre_reads {
-        if crate::htslib_rs::bgzf::bgzf_read(fpin, buf.as_mut_ptr().cast::<c_void>(), buf.len()) < 0
+        if crate::htslib_rs::bgzf::bgzf_read(fpin, buf.as_mut_ptr().cast(), buf.len()) < 0
         {
             libc::abort();
         }
@@ -27,9 +25,9 @@ unsafe fn run_thrash_threads4(
 
     for i in 0..iterations {
         if verbose {
-            libc::printf(c"i=%d\n".as_ptr(), i as c_int);
+            eprintln!("i={i}");
         }
-        fpin = crate::htslib_rs::bgzf::bgzf_open(input, c"r".as_ptr());
+        fpin = crate::htslib_rs::bgzf::bgzf_open(input.cast(), c"r".as_ptr());
         if fpin.is_null() {
             return libc::EXIT_FAILURE;
         }
@@ -38,11 +36,11 @@ unsafe fn run_thrash_threads4(
             return libc::EXIT_FAILURE;
         }
         if crate::htslib_rs::bgzf::bgzf_seek(fpin, pos, libc::SEEK_SET) < 0 {
-            libc::puts(c"!".as_ptr());
+            println!("!");
         }
         crate::htslib_rs::hts::hts_usleep(sleep_usecs);
         if crate::htslib_rs::bgzf::bgzf_seek(fpin, 0, libc::SEEK_SET) < 0 {
-            libc::puts(c"!".as_ptr());
+            println!("!");
         }
         crate::htslib_rs::hts::hts_usleep(sleep_usecs);
         if crate::htslib_rs::bgzf::bgzf_close(fpin) != 0 {
@@ -54,12 +52,9 @@ unsafe fn run_thrash_threads4(
 }
 
 // original: main (htslib/test/thrash_threads4.c:34)
-pub unsafe fn test_thrash_threads4_c_34_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_thrash_threads4_c_34_main(argc: i32, argv: *mut *mut u8) -> i32 {
     if argc <= 1 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Usage: thrash_threads4 input.bam\n".as_ptr(),
-        );
+        eprintln!("Usage: thrash_threads4 input.bam");
         libc::exit(1);
     }
 
@@ -69,7 +64,6 @@ pub unsafe fn test_thrash_threads4_c_34_main(argc: c_int, argv: *mut *mut c_char
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::{c_void, CString};
     use std::os::unix::ffi::OsStrExt;
 
     fn temp_bgzf_path(label: &str) -> std::path::PathBuf {
@@ -79,19 +73,20 @@ mod tests {
     #[test]
     fn deterministic_thrash_threads4_reopens_and_seeks_threaded_reader() {
         let path = temp_bgzf_path("thrash-threads4.bgz");
-        let path_c = CString::new(path.as_os_str().as_bytes()).unwrap();
+        let mut path_c = path.as_os_str().as_bytes().to_vec();
+        path_c.push(0);
 
         unsafe {
-            let fp = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+            let fp = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr().cast(), c"w".as_ptr());
             assert!(!fp.is_null());
             let data = vec![b'A'; 70_000];
             assert_eq!(
-                crate::htslib_rs::bgzf::bgzf_write(fp, data.as_ptr().cast::<c_void>(), data.len()),
+                crate::htslib_rs::bgzf::bgzf_write(fp, data.as_ptr().cast::<libc::c_void>(), data.len()),
                 data.len() as isize
             );
             assert_eq!(crate::htslib_rs::bgzf::bgzf_close(fp), 0);
 
-            assert_eq!(run_thrash_threads4(path_c.as_ptr(), 1, 3, 2, 0, false), 0);
+            assert_eq!(run_thrash_threads4(path_c.as_ptr().cast(), 1, 3, 2, 0, false), 0);
         }
 
         let _ = std::fs::remove_file(path);

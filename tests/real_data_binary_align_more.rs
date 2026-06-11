@@ -3,11 +3,11 @@ use htslib_rs::{
     hts_detect_format2, hts_open, hts_set_fai_filename, sam_hdr_destroy, sam_hdr_read, sam_read1,
     HTS_FORMAT_BAM, HTS_FORMAT_CRAM,
 };
-use std::ffi::{CStr, CString};
-
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().as_bytes().to_vec();
+    bytes.push(0);
+    bytes
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -27,9 +27,15 @@ struct RecordCore {
 impl RecordCore {
     unsafe fn from_record(rec: *mut htslib_rs::bam1_t) -> Self {
         Self {
-            qname: CStr::from_ptr(bam_get_qname(rec))
-                .to_string_lossy()
-                .into_owned(),
+            qname: {
+                let qname_ptr = bam_get_qname(rec);
+                let mut len = 0;
+                while *qname_ptr.add(len) != 0 {
+                    len += 1;
+                }
+                let bytes: &[u8] = std::slice::from_raw_parts(qname_ptr, len);
+                String::from_utf8_lossy(bytes).into_owned()
+            },
             flag: (*rec).core.flag,
             tid: (*rec).core.tid,
             pos: (*rec).core.pos,
@@ -45,19 +51,23 @@ impl RecordCore {
 
 unsafe fn count_and_first_record(path: &str, reference: Option<&str>) -> (usize, RecordCore) {
     let path_c = c_fixture(path);
-    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path_c.to_string_lossy());
+    let fp = hts_open(path_c.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path_c)
+    );
 
     if let Some(reference) = reference {
         let reference_c = c_fixture(reference);
-        assert_eq!(hts_set_fai_filename(fp, reference_c.as_ptr()), 0);
+        assert_eq!(hts_set_fai_filename(fp, reference_c.as_ptr().cast()), 0);
     }
 
     let hdr = sam_hdr_read(fp);
     assert!(
         !hdr.is_null(),
         "failed to read alignment header from {}",
-        path_c.to_string_lossy()
+        String::from_utf8_lossy(&path_c)
     );
 
     let rec = bam_init1();
@@ -89,12 +99,16 @@ unsafe fn count_records(path: &str, reference: Option<&str>) -> usize {
 
 unsafe fn assert_readable_and_eof_checkable(path: &str, reference: Option<&str>) {
     let path_c = c_fixture(path);
-    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path_c.to_string_lossy());
+    let fp = hts_open(path_c.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path_c)
+    );
 
     if let Some(reference) = reference {
         let reference_c = c_fixture(reference);
-        assert_eq!(hts_set_fai_filename(fp, reference_c.as_ptr()), 0);
+        assert_eq!(hts_set_fai_filename(fp, reference_c.as_ptr().cast()), 0);
     }
 
     let hdr = sam_hdr_read(fp);
@@ -122,11 +136,15 @@ unsafe fn assert_readable_and_eof_checkable(path: &str, reference: Option<&str>)
 fn detect_fixture_format(path: &str) -> htsFormat {
     unsafe {
         let path_c = c_fixture(path);
-        let fp = hopen(path_c.as_ptr(), c"r".as_ptr());
-        assert!(!fp.is_null(), "failed to open {}", path_c.to_string_lossy());
+        let fp = hopen(path_c.as_ptr().cast(), b"r\0".as_ptr().cast());
+        assert!(
+            !fp.is_null(),
+            "failed to open {}",
+            String::from_utf8_lossy(&path_c)
+        );
 
         let mut fmt: htsFormat = std::mem::zeroed();
-        assert_eq!(hts_detect_format2(fp, path_c.as_ptr(), &mut fmt), 0);
+        assert_eq!(hts_detect_format2(fp, path_c.as_ptr().cast(), &mut fmt), 0);
         assert_eq!(hclose(fp), 0);
         fmt
     }

@@ -37,33 +37,30 @@ static mut SHOW_HEADERS: i32 = 1;
 static mut VERBOSE: i32 = 0;
 static mut STATUS: i32 = 0;
 
-// NUL-terminated mode/filename byte strings retained for the C FFI boundary.
-const MODE_READ: &[u8] = b"r\0";
-const MODE_WRITE: &[u8] = b"w\0";
-const STDIO_FILENAME: &[u8] = b"-\0";
+// Mode/filename byte strings.
+const MODE_READ: &[u8] = b"r";
+const MODE_WRITE: &[u8] = b"w";
+const STDIO_FILENAME: &[u8] = b"-";
 
-/// An owned filename. `bytes` keeps a trailing NUL so it can be handed to the
-/// remaining C FFI entry points; `display()` yields the human-readable form
-/// without the terminator.
+/// An owned filename held as a plain byte string.
 pub struct CFilename {
     bytes: Vec<u8>,
 }
 
 impl CFilename {
-    /// Build from an owned, NUL-free byte string.
-    fn from_bytes(mut bytes: Vec<u8>) -> Self {
-        bytes.push(0);
+    /// Build from an owned byte string.
+    fn from_bytes(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
 
-    /// NUL-terminated bytes for FFI calls.
-    fn as_bytes_with_nul(&self) -> &[u8] {
+    /// Bytes for passing to file-opening calls.
+    fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// Human-readable filename without the trailing NUL.
+    /// Human-readable filename.
     fn display(&self) -> std::borrow::Cow<'_, str> {
-        String::from_utf8_lossy(&self.bytes[..self.bytes.len() - 1])
+        String::from_utf8_lossy(&self.bytes)
     }
 }
 
@@ -73,8 +70,15 @@ struct HFileHandle {
 
 impl HFileHandle {
     unsafe fn open(filename: &[u8], mode: &[u8]) -> Option<Self> {
-        NonNull::new(hfile::hopen(filename.as_ptr().cast(), mode.as_ptr().cast()))
-            .map(|ptr| Self { ptr })
+        let mut filename_c = filename.to_vec();
+        filename_c.push(0);
+        let mut mode_c = mode.to_vec();
+        mode_c.push(0);
+        NonNull::new(hfile::hopen(
+            filename_c.as_ptr().cast(),
+            mode_c.as_ptr().cast(),
+        ))
+        .map(|ptr| Self { ptr })
     }
 
     fn as_mut(&mut self) -> &mut hts::hFILE {
@@ -106,9 +110,13 @@ struct HtsFileHandle {
 
 impl HtsFileHandle {
     unsafe fn open(filename: &[u8], mode: &[u8]) -> Option<Self> {
+        let mut filename_c = filename.to_vec();
+        filename_c.push(0);
+        let mut mode_c = mode.to_vec();
+        mode_c.push(0);
         NonNull::new(hts::hts_open(
-            filename.as_ptr().cast(),
-            mode.as_ptr().cast(),
+            filename_c.as_ptr().cast(),
+            mode_c.as_ptr().cast(),
         ))
         .map(|ptr| Self { ptr })
     }
@@ -119,10 +127,14 @@ impl HtsFileHandle {
         mode: &[u8],
     ) -> Result<Self, HFileHandle> {
         let ptr = hfile.ptr.as_ptr();
+        let mut filename_c = filename.to_vec();
+        filename_c.push(0);
+        let mut mode_c = mode.to_vec();
+        mode_c.push(0);
         match NonNull::new(hts::hts_hopen(
             ptr,
-            filename.as_ptr().cast(),
-            mode.as_ptr().cast(),
+            filename_c.as_ptr().cast(),
+            mode_c.as_ptr().cast(),
         )) {
             Some(ptr) => {
                 std::mem::forget(hfile);
@@ -395,7 +407,7 @@ pub unsafe fn htsfile_c_152_view_raw(fp: &mut hts::hFILE, filename: &CFilename) 
     let mut out = std::io::stdout().lock();
     loop {
         let c = hfile::htslib_hfile_h_163_hgetc(fp);
-        if c == libc::EOF {
+        if c == -1 {
             break;
         }
         if (0x20..=0x7e).contains(&c) || c == b'\n' as i32 || c == b'\t' as i32 {
@@ -423,7 +435,7 @@ pub unsafe fn htsfile_c_152_view_raw(fp: &mut hts::hFILE, filename: &CFilename) 
 
 // original: copy_raw (htslib/htsfile.c:169)
 pub unsafe fn htsfile_c_169_copy_raw(srcfilename: &CFilename, destfilename: &CFilename) {
-    let Some(mut src) = HFileHandle::open(srcfilename.as_bytes_with_nul(), MODE_READ) else {
+    let Some(mut src) = HFileHandle::open(srcfilename.as_bytes(), MODE_READ) else {
         error!(
             std::io::Error::last_os_error().raw_os_error().unwrap_or(0),
             format!("can't open \"{}\"", srcfilename.display())
@@ -441,7 +453,7 @@ pub unsafe fn htsfile_c_169_copy_raw(srcfilename: &CFilename, destfilename: &CFi
     }
     buffer.resize(1_048_576, 0);
 
-    let Some(mut dest) = HFileHandle::open(destfilename.as_bytes_with_nul(), MODE_WRITE) else {
+    let Some(mut dest) = HFileHandle::open(destfilename.as_bytes(), MODE_WRITE) else {
         error!(
             std::io::Error::last_os_error().raw_os_error().unwrap_or(0),
             format!("can't create \"{}\"", destfilename.display())
@@ -560,7 +572,8 @@ pub unsafe fn htsfile_c_227_main(argv: Vec<Vec<u8>>) -> i32 {
                     VERBOSE += 1;
                 }
                 1 => {
-                    let version = std::ffi::CStr::from_ptr(hts::hts_version()).to_string_lossy();
+                    let version =
+                        String::from_utf8_lossy(std::ffi::CStr::from_ptr(hts::hts_version()).to_bytes());
                     println!(
                         "htsfile (htslib) {}\nCopyright (C) 2025 Genome Research Ltd.",
                         version
@@ -587,7 +600,7 @@ pub unsafe fn htsfile_c_227_main(argv: Vec<Vec<u8>>) -> i32 {
     }
 
     for filename in &operands {
-        let Some(fp) = HFileHandle::open(filename.as_bytes_with_nul(), MODE_READ) else {
+        let Some(fp) = HFileHandle::open(filename.as_bytes(), MODE_READ) else {
             error!(
                 std::io::Error::last_os_error().raw_os_error().unwrap_or(0),
                 format!("can't open \"{}\"", filename.display())
@@ -599,7 +612,7 @@ pub unsafe fn htsfile_c_227_main(argv: Vec<Vec<u8>>) -> i32 {
             let mut fmt: hts::htsFormat = std::mem::zeroed();
             if hts::hts_detect_format2(
                 fp.as_ptr(),
-                filename.as_bytes_with_nul().as_ptr().cast(),
+                filename.as_bytes().as_ptr().cast(),
                 &mut fmt,
             ) < 0
             {
@@ -611,11 +624,18 @@ pub unsafe fn htsfile_c_227_main(argv: Vec<Vec<u8>>) -> i32 {
             }
 
             let description = hts::hts_format_description(&fmt);
-            let desc = std::ffi::CStr::from_ptr(description).to_string_lossy();
+            let desc = String::from_utf8_lossy(
+                std::ffi::CStr::from_ptr(description).to_bytes(),
+            )
+            .into_owned();
             println!("{}:\t{}", filename.display(), desc);
-            libc::free(description.cast());
+            let len = std::ffi::CStr::from_ptr(description).to_bytes_with_nul().len();
+            drop(Box::from_raw(std::slice::from_raw_parts_mut(
+                description.cast::<u8>(),
+                len,
+            )));
         } else {
-            match HtsFileHandle::from_hfile(fp, filename.as_bytes_with_nul(), MODE_READ) {
+            match HtsFileHandle::from_hfile(fp, filename.as_bytes(), MODE_READ) {
                 Ok(mut hts_file) => {
                     match hts_file.as_ref().format.category {
                         hts::HTS_FORMAT_SEQUENCE_DATA => {

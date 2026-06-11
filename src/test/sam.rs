@@ -2,9 +2,7 @@ use crate::htslib_rs::{
     hts::{htsFile, htsFormat, hts_pos_t, kstring_t},
     sam,
 };
-use std::ffi::{c_char, c_int, c_uint, c_void};
-
-static mut TEST_SAM_STATUS: c_int = libc::EXIT_SUCCESS;
+static mut TEST_SAM_STATUS: i32 = libc::EXIT_SUCCESS;
 
 // SEAM: hoisted from test_mempolicy's local `const MAX_RECS` so the cleanup
 // helper (which reconstructs the owned boxed bam1_t array to drop it) can size
@@ -14,26 +12,24 @@ const TEST_MEMPOLICY_MAX_RECS: usize = 1000;
 // original: check_bam_aux_get (htslib/test/sam.c:78)
 pub unsafe fn test_sam_c_78_check_bam_aux_get(
     aln: *const sam::bam1_t,
-    tag: *const c_char,
-    type_: c_char,
+    tag: *const u8,
+    type_: u8,
 ) -> *mut u8 {
     let p = sam::bam_aux_get(aln, tag);
     if !p.is_null() {
-        if *p as c_char == type_ {
+        if *p == type_ {
             return p;
         }
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: %s field of type '%c', expected '%c'\n".as_ptr(),
-            tag,
-            *p as c_int,
-            type_ as c_int,
+        eprintln!(
+            "Failed: {} field of type '{}', expected '{}'",
+            std::ffi::CStr::from_ptr(tag.cast()).to_string_lossy(),
+            *p as char,
+            type_ as char,
         );
     } else {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: can't find %s field\n".as_ptr(),
-            tag,
+        eprintln!(
+            "Failed: can't find {} field",
+            std::ffi::CStr::from_ptr(tag.cast()).to_string_lossy(),
         );
     }
     TEST_SAM_STATUS = libc::EXIT_FAILURE;
@@ -43,8 +39,8 @@ pub unsafe fn test_sam_c_78_check_bam_aux_get(
 // original: check_aux_count (htslib/test/sam.c:90)
 pub unsafe fn test_sam_c_90_check_aux_count(
     aln: *const sam::bam1_t,
-    expected: c_int,
-    what: *const c_char,
+    expected: i32,
+    what: *const u8,
 ) {
     let mut itr = sam::bam_aux_first(aln);
     let mut n = 0;
@@ -53,10 +49,9 @@ pub unsafe fn test_sam_c_90_check_aux_count(
         itr = sam::bam_aux_next(aln, itr);
     }
     if n != expected {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: %s has %d aux fields, expected %d\n".as_ptr(),
-            what,
+        eprintln!(
+            "Failed: {} has {} aux fields, expected {}",
+            std::ffi::CStr::from_ptr(what.cast()).to_string_lossy(),
             n,
             expected,
         );
@@ -67,21 +62,20 @@ pub unsafe fn test_sam_c_90_check_aux_count(
 // original: check_int_B_array (htslib/test/sam.c:99)
 pub unsafe fn test_sam_c_99_check_int_B_array(
     aln: *mut sam::bam1_t,
-    tag: *mut c_char,
-    nvals: c_uint,
+    tag: *mut u8,
+    nvals: u32,
     vals: *mut i64,
 ) {
-    let p = test_sam_c_78_check_bam_aux_get(aln, tag, b'B' as c_char);
+    let p = test_sam_c_78_check_bam_aux_get(aln, tag, b'B');
     if p.is_null() {
         return;
     }
 
     let len = sam::bam_auxB_len(p);
     if len != nvals {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: Wrong length reported for %s field, got %u, expected %u\n".as_ptr(),
-            tag,
+        eprintln!(
+            "Failed: Wrong length reported for {} field, got {}, expected {}",
+            std::ffi::CStr::from_ptr(tag.cast()).to_string_lossy(),
             len,
             nvals,
         );
@@ -92,24 +86,21 @@ pub unsafe fn test_sam_c_99_check_int_B_array(
         let expected = *vals.add(i as usize);
         let got_i = sam::bam_auxB2i(p, i);
         if got_i != expected {
-            libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Failed: Wrong value from bam_auxB2i for %s field index %u, got %ld expected %ld\n".as_ptr(),
-                    tag,
-                    i,
-                    got_i as libc::c_long,
-                    expected as libc::c_long,
-                );
+            eprintln!(
+                "Failed: Wrong value from bam_auxB2i for {} field index {}, got {} expected {}",
+                std::ffi::CStr::from_ptr(tag.cast()).to_string_lossy(),
+                i,
+                got_i,
+                expected,
+            );
             TEST_SAM_STATUS = libc::EXIT_FAILURE;
         }
 
         let got_f = sam::bam_auxB2f(p, i);
         if got_f != expected as f64 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed: Wrong value from bam_auxB2f for %s field index %u, got %f expected %f\n"
-                    .as_ptr(),
-                tag,
+            eprintln!(
+                "Failed: Wrong value from bam_auxB2f for {} field index {}, got {} expected {}",
+                std::ffi::CStr::from_ptr(tag.cast()).to_string_lossy(),
                 i,
                 got_f,
                 expected as f64,
@@ -122,18 +113,17 @@ pub unsafe fn test_sam_c_99_check_int_B_array(
 // original: test_update_int (htslib/test/sam.c:136)
 pub unsafe fn test_sam_c_136_test_update_int(
     aln: *mut sam::bam1_t,
-    target_id: *const c_char,
+    target_id: *const u8,
     target_val: i64,
-    expected_type: c_char,
-    next_id: *const c_char,
+    expected_type: u8,
+    next_id: *const u8,
     next_val: i64,
-    next_type: c_char,
-) -> c_int {
+    next_type: u8,
+) -> i32 {
     if sam::bam_aux_update_int(aln, target_id, target_val) < 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: update %.2s tag\n".as_ptr(),
-            target_id,
+        eprintln!(
+            "Failed: update {} tag",
+            std::ffi::CStr::from_ptr(target_id.cast()).to_string_lossy(),
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         return -1;
@@ -141,23 +131,21 @@ pub unsafe fn test_sam_c_136_test_update_int(
 
     let mut p = sam::bam_aux_get(aln, target_id);
     if p.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: find %.2s tag\n".as_ptr(),
-            target_id,
+        eprintln!(
+            "Failed: find {} tag",
+            std::ffi::CStr::from_ptr(target_id.cast()).to_string_lossy(),
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         return -1;
     }
-    if *p as c_char != expected_type || sam::bam_aux2i(p) != target_val {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: %.2s field is %c:%ld; expected %c:%ld\n".as_ptr(),
-            target_id,
-            *p as c_int,
-            sam::bam_aux2i(p) as libc::c_long,
-            expected_type as c_int,
-            target_val as libc::c_long,
+    if *p != expected_type || sam::bam_aux2i(p) != target_val {
+        eprintln!(
+            "Failed: {} field is {}:{}; expected {}:{}",
+            std::ffi::CStr::from_ptr(target_id.cast()).to_string_lossy(),
+            *p as char,
+            sam::bam_aux2i(p),
+            expected_type as char,
+            target_val,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         return -1;
@@ -168,26 +156,24 @@ pub unsafe fn test_sam_c_136_test_update_int(
     }
     p = sam::bam_aux_get(aln, next_id);
     if p.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: find %.2s tag after updating %.2s\n".as_ptr(),
-            next_id,
-            target_id,
+        eprintln!(
+            "Failed: find {} tag after updating {}",
+            std::ffi::CStr::from_ptr(next_id.cast()).to_string_lossy(),
+            std::ffi::CStr::from_ptr(target_id.cast()).to_string_lossy(),
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         return -1;
     }
-    if *p as c_char != next_type || sam::bam_aux2i(p) != next_val {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: after updating %.2s to %ld: %.2s field is %c:%ld; expected %c:%ld\n".as_ptr(),
-            target_id,
-            target_val as libc::c_long,
-            next_id,
-            *p as c_int,
-            sam::bam_aux2i(p) as libc::c_long,
-            next_type as c_int,
-            next_val as libc::c_long,
+    if *p != next_type || sam::bam_aux2i(p) != next_val {
+        eprintln!(
+            "Failed: after updating {} to {}: {} field is {}:{}; expected {}:{}",
+            std::ffi::CStr::from_ptr(target_id.cast()).to_string_lossy(),
+            target_val,
+            std::ffi::CStr::from_ptr(next_id.cast()).to_string_lossy(),
+            *p as char,
+            sam::bam_aux2i(p),
+            next_type as char,
+            next_val,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         return -1;
@@ -199,19 +185,18 @@ pub unsafe fn test_sam_c_136_test_update_int(
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn test_sam_c_192_test_update_array(
     aln: *mut sam::bam1_t,
-    target_id: *const c_char,
+    target_id: *const u8,
     type_: u8,
     nitems: u32,
-    data: *mut c_void,
-    next_id: *const c_char,
+    data: *mut (),
+    next_id: *const u8,
     next_val: i64,
-    next_type: c_char,
-) -> c_int {
+    next_type: u8,
+) -> i32 {
     if sam::bam_aux_update_array(aln, target_id, type_, nitems, data.cast()) < 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: update %.2s tag\n".as_ptr(),
-            target_id,
+        eprintln!(
+            "Failed: update {} tag",
+            std::ffi::CStr::from_ptr(target_id.cast()).to_string_lossy(),
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         return -1;
@@ -219,10 +204,9 @@ pub unsafe fn test_sam_c_192_test_update_array(
 
     let mut p = sam::bam_aux_get(aln, target_id);
     if p.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: find %.2s tag\n".as_ptr(),
-            target_id,
+        eprintln!(
+            "Failed: find {} tag",
+            std::ffi::CStr::from_ptr(target_id.cast()).to_string_lossy(),
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         return -1;
@@ -240,10 +224,9 @@ pub unsafe fn test_sam_c_192_test_update_array(
             _ => true,
         };
         if !ok {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed: Wrong value for %.2s field index %u\n".as_ptr(),
-                target_id,
+            eprintln!(
+                "Failed: Wrong value for {} field index {}",
+                std::ffi::CStr::from_ptr(target_id.cast()).to_string_lossy(),
                 i,
             );
             TEST_SAM_STATUS = libc::EXIT_FAILURE;
@@ -256,25 +239,23 @@ pub unsafe fn test_sam_c_192_test_update_array(
     }
     p = sam::bam_aux_get(aln, next_id);
     if p.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: find %.2s tag after updating %.2s\n".as_ptr(),
-            next_id,
-            target_id,
+        eprintln!(
+            "Failed: find {} tag after updating {}",
+            std::ffi::CStr::from_ptr(next_id.cast()).to_string_lossy(),
+            std::ffi::CStr::from_ptr(target_id.cast()).to_string_lossy(),
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         return -1;
     }
-    if *p as c_char != next_type || sam::bam_aux2i(p) != next_val {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: after updating %.2s: %.2s field is %c:%ld; expected %c:%ld\n".as_ptr(),
-            target_id,
-            next_id,
-            *p as c_int,
-            sam::bam_aux2i(p) as libc::c_long,
-            next_type as c_int,
-            next_val as libc::c_long,
+    if *p != next_type || sam::bam_aux2i(p) != next_val {
+        eprintln!(
+            "Failed: after updating {}: {} field is {}:{}; expected {}:{}",
+            std::ffi::CStr::from_ptr(target_id.cast()).to_string_lossy(),
+            std::ffi::CStr::from_ptr(next_id.cast()).to_string_lossy(),
+            *p as char,
+            sam::bam_aux2i(p),
+            next_type as char,
+            next_val,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         return -1;
@@ -284,14 +265,14 @@ pub unsafe fn test_sam_c_192_test_update_array(
 }
 
 // original: aux_fields1 (htslib/test/sam.c:248)
-pub unsafe fn test_sam_c_248_aux_fields1() -> c_int {
+pub unsafe fn test_sam_c_248_aux_fields1() -> i32 {
     let sam_text = c"data:,@SQ\tSN:one\tLN:1000\n@SQ\tSN:two\tLN:500\nr1\t0\tone\t500\t20\t8M\t*\t0\t0\tATGCATGC\tqqqqqqqq\tXA:A:k\tXi:i:37\tXf:f:3.141592653589793\tXd:d:2.718281828459045\tXZ:Z:Hello, world!\tXH:H:DEADBEEF\tXB:B:c,-2,0,+2\tB0:B:i,-2147483648,-1,0,1,2147483647\tB1:B:I,0,1,2147483648,4294967295\tB2:B:s,-32768,-1,0,1,32767\tB3:B:S,0,1,32768,65535\tB4:B:c,-128,-1,0,1,127\tB5:B:C,0,1,127,255\tBf:B:f,-3.14159,2.71828\tZZ:i:1000000\tF2:d:2.46801\tY1:i:-2147483648\tY2:i:-2147483647\tY3:i:-1\tY4:i:0\tY5:i:1\tY6:i:2147483647\tY7:i:2147483648\tY8:i:4294967295\nr2\t0x8D\t*\t0\t0\t*\t*\t0\t0\tATGC\tqqqq\n";
     let r1 = c"r1\t0\tone\t500\t20\t8M\t*\t0\t0\tATGCATGC\tqqqqqqqq\tXi:i:37\tXf:f:3.14159\tXd:d:2.71828\tXZ:Z:Yo, dude\tXH:H:DEADBEEF\tXB:B:c,-2,0,2\tB0:B:i,-2147483648,-1,0,1,2147483647\tB1:B:I,0,1,2147483648,4294967295\tB2:B:s,-32768,-1,0,1,32767\tB3:B:S,0,1,32768,65535\tB4:B:c,-128,-1,0,1,127\tB5:B:C,0,1,127,255\tBf:B:f,-3.14159,2.71828\tZZ:i:1000000\tF2:f:9.8765\tY1:i:-2147483648\tY2:i:-2147483647\tY3:i:-1\tY4:i:0\tY5:i:1\tY6:i:2147483647\tY7:i:2147483648\tY8:i:4294967295\tN0:i:-1234\tN1:i:1234\tN2:i:-2\tN3:i:3\tF1:f:4.5678\tN4:B:S,65535,32768,1,0\tN5:i:4242\tZa:Z:Hello, world!\tZb:Z:Bonjour, tout le monde";
     let r2 = c"r2\t141\t*\t0\t0\t*\t*\t0\t0\tATGC\tqqqq";
 
     let in_ = crate::htslib_rs::hts::hts_open(sam_text.as_ptr(), c"r".as_ptr());
     if in_.is_null() {
-        test_sam_bam_set1_fail(c"aux_fields1".as_ptr(), c"sam_open failed".as_ptr());
+        test_sam_bam_set1_fail(c"aux_fields1".as_ptr().cast(), c"sam_open failed".as_ptr().cast());
         return 1;
     }
     let header = sam::sam_hdr_read(in_);
@@ -299,8 +280,8 @@ pub unsafe fn test_sam_c_248_aux_fields1() -> c_int {
     let mut ks = kstring_t { data: Vec::new() };
     if header.is_null() || aln.is_null() {
         test_sam_bam_set1_fail(
-            c"aux_fields1".as_ptr(),
-            c"allocation/header failure".as_ptr(),
+            c"aux_fields1".as_ptr().cast(),
+            c"allocation/header failure".as_ptr().cast(),
         );
         if !aln.is_null() {
             sam::bam_destroy1(aln);
@@ -311,119 +292,115 @@ pub unsafe fn test_sam_c_248_aux_fields1() -> c_int {
     }
 
     if sam::sam_read1(in_, header, aln) >= 0 {
-        let mut p = test_sam_c_78_check_bam_aux_get(aln, c"XA".as_ptr(), b'A' as c_char);
-        if !p.is_null() && sam::bam_aux2A(p) != b'k' as c_char {
-            test_sam_bam_set1_fail(c"aux_fields1".as_ptr(), c"XA field mismatch".as_ptr());
+        let mut p = test_sam_c_78_check_bam_aux_get(aln, c"XA".as_ptr().cast(), b'A');
+        if !p.is_null() && sam::bam_aux2A(p) != b'k' {
+            test_sam_bam_set1_fail(c"aux_fields1".as_ptr().cast(), c"XA field mismatch".as_ptr().cast());
         }
-        test_sam_c_90_check_aux_count(aln, 24, c"Original record".as_ptr());
+        test_sam_c_90_check_aux_count(aln, 24, c"Original record".as_ptr().cast());
         sam::bam_aux_del(aln, p);
-        if !sam::bam_aux_get(aln, c"XA".as_ptr()).is_null() {
+        if !sam::bam_aux_get(aln, c"XA".as_ptr().cast()).is_null() {
             test_sam_bam_set1_fail(
-                c"aux_fields1".as_ptr(),
-                c"XA field was not deleted".as_ptr(),
+                c"aux_fields1".as_ptr().cast(),
+                c"XA field was not deleted".as_ptr().cast(),
             );
         }
-        test_sam_c_90_check_aux_count(aln, 23, c"Record post-XA-deletion".as_ptr());
+        test_sam_c_90_check_aux_count(aln, 23, c"Record post-XA-deletion".as_ptr().cast());
 
-        p = test_sam_c_78_check_bam_aux_get(aln, c"Xi".as_ptr(), b'C' as c_char);
+        p = test_sam_c_78_check_bam_aux_get(aln, c"Xi".as_ptr().cast(), b'C');
         if !p.is_null() && sam::bam_aux2i(p) != 37 {
-            test_sam_bam_set1_fail(c"aux_fields1".as_ptr(), c"Xi field mismatch".as_ptr());
+            test_sam_bam_set1_fail(c"aux_fields1".as_ptr().cast(), c"Xi field mismatch".as_ptr().cast());
         }
-        p = test_sam_c_78_check_bam_aux_get(aln, c"Xf".as_ptr(), b'f' as c_char);
+        p = test_sam_c_78_check_bam_aux_get(aln, c"Xf".as_ptr().cast(), b'f');
         if !p.is_null() && (sam::bam_aux2f(p) - std::f64::consts::PI).abs() > 1e-6 {
-            test_sam_bam_set1_fail(c"aux_fields1".as_ptr(), c"Xf field mismatch".as_ptr());
+            test_sam_bam_set1_fail(c"aux_fields1".as_ptr().cast(), c"Xf field mismatch".as_ptr().cast());
         }
-        p = test_sam_c_78_check_bam_aux_get(aln, c"Xd".as_ptr(), b'd' as c_char);
+        p = test_sam_c_78_check_bam_aux_get(aln, c"Xd".as_ptr().cast(), b'd');
         if !p.is_null() && (sam::bam_aux2f(p) - std::f64::consts::E).abs() > 1e-6 {
-            test_sam_bam_set1_fail(c"aux_fields1".as_ptr(), c"Xd field mismatch".as_ptr());
+            test_sam_bam_set1_fail(c"aux_fields1".as_ptr().cast(), c"Xd field mismatch".as_ptr().cast());
         }
 
         sam::bam_aux_update_str(
             aln,
-            c"XZ".as_ptr(),
-            (c"Yo, dude".to_bytes().len() + 1) as c_int,
-            c"Yo, dude".as_ptr(),
+            c"XZ".as_ptr().cast(),
+            (c"Yo, dude".to_bytes().len() + 1) as i32,
+            c"Yo, dude".as_ptr().cast(),
         );
-        sam::bam_aux_update_float(aln, c"F2".as_ptr(), 9.8765);
+        sam::bam_aux_update_float(aln, c"F2".as_ptr().cast(), 9.8765);
         let mut ival: i32 = -1234;
         let mut uval: u32 = 1234;
         sam::bam_aux_append(
             aln,
-            c"N0".as_ptr(),
-            b'i' as c_char,
-            std::mem::size_of_val(&ival) as c_int,
+            c"N0".as_ptr().cast(),
+            b'i',
+            std::mem::size_of_val(&ival) as i32,
             (&mut ival as *mut i32).cast(),
         );
         sam::bam_aux_append(
             aln,
-            c"N1".as_ptr(),
-            b'I' as c_char,
-            std::mem::size_of_val(&uval) as c_int,
+            c"N1".as_ptr().cast(),
+            b'I',
+            std::mem::size_of_val(&uval) as i32,
             (&mut uval as *mut u32).cast(),
         );
-        sam::bam_aux_update_int(aln, c"N2".as_ptr(), -2);
-        sam::bam_aux_update_int(aln, c"N3".as_ptr(), 3);
-        sam::bam_aux_update_float(aln, c"F1".as_ptr(), 4.5678);
+        sam::bam_aux_update_int(aln, c"N2".as_ptr().cast(), -2);
+        sam::bam_aux_update_int(aln, c"N3".as_ptr().cast(), 3);
+        sam::bam_aux_update_float(aln, c"F1".as_ptr().cast(), 4.5678);
         let mut n4v7 = [65535u16, 32768, 1, 0];
         test_sam_c_192_test_update_array(
             aln,
-            c"N4".as_ptr(),
+            c"N4".as_ptr().cast(),
             b'S',
             n4v7.len() as u32,
             n4v7.as_mut_ptr().cast(),
-            c"".as_ptr(),
+            c"".as_ptr().cast(),
             0,
             0,
         );
-        sam::bam_aux_update_int(aln, c"N5".as_ptr(), 4242);
+        sam::bam_aux_update_int(aln, c"N5".as_ptr().cast(), 4242);
         sam::bam_aux_update_str(
             aln,
-            c"Za".as_ptr(),
-            c"Hello, world!".to_bytes().len() as c_int,
-            c"Hello, world!".as_ptr(),
+            c"Za".as_ptr().cast(),
+            c"Hello, world!".to_bytes().len() as i32,
+            c"Hello, world!".as_ptr().cast(),
         );
         sam::bam_aux_update_str(
             aln,
-            c"Zb".as_ptr(),
-            (c"Bonjour, tout le monde".to_bytes().len() + 1) as c_int,
-            c"Bonjour, tout le monde".as_ptr(),
+            c"Zb".as_ptr().cast(),
+            (c"Bonjour, tout le monde".to_bytes().len() + 1) as i32,
+            c"Bonjour, tout le monde".as_ptr().cast(),
         );
 
         let fmt_ret = sam::sam_format1(header, aln, &mut ks);
-        let mut ks_cstr = ks.data.clone();
-        ks_cstr.push(0);
-        if fmt_ret < 0 || libc::strcmp(ks_cstr.as_ptr().cast(), r1.as_ptr()) != 0 {
+        if fmt_ret < 0 || ks.data != r1.to_bytes() {
             test_sam_bam_set1_fail(
-                c"aux_fields1".as_ptr(),
-                c"record formatted incorrectly".as_ptr(),
+                c"aux_fields1".as_ptr().cast(),
+                c"record formatted incorrectly".as_ptr().cast(),
             );
         }
         p = sam::bam_aux_remove(
             aln,
-            test_sam_c_78_check_bam_aux_get(aln, c"XH".as_ptr(), b'H' as c_char),
+            test_sam_c_78_check_bam_aux_get(aln, c"XH".as_ptr().cast(), b'H'),
         );
-        if !sam::bam_aux_get(aln, c"XH".as_ptr()).is_null()
-            || libc::strncmp(sam::bam_aux_tag(p), c"XB".as_ptr(), 2) != 0
-            || sam::bam_aux_type(p) != b'B' as c_char
+        if !sam::bam_aux_get(aln, c"XH".as_ptr().cast()).is_null()
+            || std::slice::from_raw_parts(sam::bam_aux_tag(p), 2) != b"XB"
+            || sam::bam_aux_type(p) != b'B'
         {
-            test_sam_bam_set1_fail(c"aux_fields1".as_ptr(), c"bam_aux_remove failed".as_ptr());
+            test_sam_bam_set1_fail(c"aux_fields1".as_ptr().cast(), c"bam_aux_remove failed".as_ptr().cast());
         }
     } else {
-        test_sam_bam_set1_fail(c"aux_fields1".as_ptr(), c"can't read record".as_ptr());
+        test_sam_bam_set1_fail(c"aux_fields1".as_ptr().cast(), c"can't read record".as_ptr().cast());
     }
 
     if sam::sam_read1(in_, header, aln) >= 0 {
         let fmt_ret = sam::sam_format1(header, aln, &mut ks);
-        let mut ks_cstr = ks.data.clone();
-        ks_cstr.push(0);
         if fmt_ret < 0
             || (*aln).core.flag != 0x8d
-            || libc::strcmp(ks_cstr.as_ptr().cast(), r2.as_ptr()) != 0
+            || ks.data != r2.to_bytes()
         {
-            test_sam_bam_set1_fail(c"aux_fields1".as_ptr(), c"record r2 checks failed".as_ptr());
+            test_sam_bam_set1_fail(c"aux_fields1".as_ptr().cast(), c"record r2 checks failed".as_ptr().cast());
         }
     } else {
-        test_sam_bam_set1_fail(c"aux_fields1".as_ptr(), c"can't read record r2".as_ptr());
+        test_sam_bam_set1_fail(c"aux_fields1".as_ptr().cast(), c"can't read record r2".as_ptr().cast());
     }
 
     sam::bam_destroy1(aln);
@@ -442,51 +419,48 @@ pub unsafe fn test_sam_c_557_set_qname() {
 
     let in_ = crate::htslib_rs::hts::hts_open(sam_text.as_ptr(), c"r".as_ptr());
     if in_.is_null() {
-        test_sam_bam_set1_fail(c"set_qname".as_ptr(), c"can't open SAM input".as_ptr());
+        test_sam_bam_set1_fail(c"set_qname".as_ptr().cast(), c"can't open SAM input".as_ptr().cast());
         return;
     }
     let header = sam::sam_hdr_read(in_);
     if header.is_null() {
         crate::htslib_rs::hts::hts_close(in_);
-        test_sam_bam_set1_fail(c"set_qname".as_ptr(), c"can't read header".as_ptr());
+        test_sam_bam_set1_fail(c"set_qname".as_ptr().cast(), c"can't read header".as_ptr().cast());
         return;
     }
     let aln = sam::bam_init1();
     if aln.is_null() {
         sam::bam_hdr_destroy(header);
         crate::htslib_rs::hts::hts_close(in_);
-        test_sam_bam_set1_fail(c"set_qname".as_ptr(), c"can't allocate alignment".as_ptr());
+        test_sam_bam_set1_fail(c"set_qname".as_ptr().cast(), c"can't allocate alignment".as_ptr().cast());
         return;
     }
 
     let mut ks = kstring_t { data: Vec::new() };
     let cases = [
-        (c"r1".as_ptr(), r1.as_ptr()),
-        (c"r234".as_ptr(), r2.as_ptr()),
-        (c"xyz".as_ptr(), r3.as_ptr()),
+        (c"r1".as_ptr(), r1.to_bytes()),
+        (c"r234".as_ptr(), r2.to_bytes()),
+        (c"xyz".as_ptr(), r3.to_bytes()),
     ];
 
     for (qname, expected) in cases {
         if sam::sam_read1(in_, header, aln) < 0 {
-            test_sam_bam_set1_fail(c"set_qname".as_ptr(), c"can't read record".as_ptr());
+            test_sam_bam_set1_fail(c"set_qname".as_ptr().cast(), c"can't read record".as_ptr().cast());
             break;
         }
-        if sam::bam_set_qname(aln, qname) < 0 {
-            test_sam_bam_set1_fail(c"set_qname".as_ptr(), c"can't set qname".as_ptr());
+        if sam::bam_set_qname(aln, qname.cast()) < 0 {
+            test_sam_bam_set1_fail(c"set_qname".as_ptr().cast(), c"can't set qname".as_ptr().cast());
             break;
         }
         if sam::sam_format1(header, aln, &mut ks) < 0 {
-            test_sam_bam_set1_fail(c"set_qname".as_ptr(), c"can't format record".as_ptr());
+            test_sam_bam_set1_fail(c"set_qname".as_ptr().cast(), c"can't format record".as_ptr().cast());
             break;
         }
-        let mut ks_cstr = ks.data.clone();
-        ks_cstr.push(0);
-        if libc::strcmp(ks_cstr.as_ptr().cast(), expected) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed: record formatted incorrectly:\nGot: \"%s\"\nExp: \"%s\"\n".as_ptr(),
-                ks_cstr.as_ptr().cast::<c_char>(),
-                expected,
+        if ks.data != expected {
+            eprintln!(
+                "Failed: record formatted incorrectly:\nGot: \"{}\"\nExp: \"{}\"",
+                String::from_utf8_lossy(&ks.data),
+                String::from_utf8_lossy(expected),
             );
             TEST_SAM_STATUS = libc::EXIT_FAILURE;
             break;
@@ -517,33 +491,31 @@ pub unsafe fn test_sam_c_604_iterators1() {
 
 // original: copy_check_alignment (htslib/test/sam.c:612)
 pub unsafe fn test_sam_c_612_copy_check_alignment(
-    infname: *const c_char,
-    informat: *const c_char,
-    outfname: *const c_char,
-    outmode: *const c_char,
-    outref: *const c_char,
+    infname: *const u8,
+    informat: *const u8,
+    outfname: *const u8,
+    outmode: *const u8,
+    outref: *const u8,
 ) {
-    let in_ = crate::htslib_rs::hts::hts_open(infname, c"r".as_ptr());
-    let out = crate::htslib_rs::hts::hts_open(outfname, outmode);
+    let in_ = crate::htslib_rs::hts::hts_open(infname.cast(), c"r".as_ptr());
+    let out = crate::htslib_rs::hts::hts_open(outfname.cast(), outmode.cast());
     let aln = sam::bam_init1();
     let mut header: *mut sam::sam_hdr_t = std::ptr::null_mut();
 
     if in_.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: couldn't open %s\n".as_ptr(),
-            infname,
+        eprintln!(
+            "Failed: couldn't open {}",
+            std::ffi::CStr::from_ptr(infname.cast()).to_string_lossy(),
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         goto_copy_check_alignment_cleanup(in_, out, aln, header);
         return;
     }
     if out.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: couldn't open %s with mode %s\n".as_ptr(),
-            outfname,
-            outmode,
+        eprintln!(
+            "Failed: couldn't open {} with mode {}",
+            std::ffi::CStr::from_ptr(outfname.cast()).to_string_lossy(),
+            std::ffi::CStr::from_ptr(outmode.cast()).to_string_lossy(),
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         goto_copy_check_alignment_cleanup(in_, out, aln, header);
@@ -551,8 +523,8 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
     }
     if aln.is_null() {
         test_sam_bam_set1_fail(
-            c"copy_check_alignment".as_ptr(),
-            c"bam_init1() failed".as_ptr(),
+            c"copy_check_alignment".as_ptr().cast(),
+            c"bam_init1() failed".as_ptr().cast(),
         );
         goto_copy_check_alignment_cleanup(in_, out, aln, header);
         return;
@@ -573,11 +545,10 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
             outref.cast_mut().cast(),
         ) < 0
     {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: setting reference %s for %s\n".as_ptr(),
-            outref,
-            outfname,
+        eprintln!(
+            "Failed: setting reference {} for {}",
+            std::ffi::CStr::from_ptr(outref.cast()).to_string_lossy(),
+            std::ffi::CStr::from_ptr(outfname.cast()).to_string_lossy(),
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         goto_copy_check_alignment_cleanup(in_, out, aln, header);
@@ -586,20 +557,18 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
 
     header = sam::sam_hdr_read(in_);
     if header.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: reading header from %s\n".as_ptr(),
-            infname,
+        eprintln!(
+            "Failed: reading header from {}",
+            std::ffi::CStr::from_ptr(infname.cast()).to_string_lossy(),
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         goto_copy_check_alignment_cleanup(in_, out, aln, header);
         return;
     }
     if sam::sam_hdr_write(out, header) < 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: writing headers to %s\n".as_ptr(),
-            outfname,
+        eprintln!(
+            "Failed: writing headers to {}",
+            std::ffi::CStr::from_ptr(outfname.cast()).to_string_lossy(),
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
@@ -608,33 +577,30 @@ pub unsafe fn test_sam_c_612_copy_check_alignment(
         let res = sam::sam_read1(in_, header, aln);
         if res < 0 {
             if res < -1 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Failed: failed to read alignment from %s\n".as_ptr(),
-                    infname,
+                eprintln!(
+                    "Failed: failed to read alignment from {}",
+                    std::ffi::CStr::from_ptr(infname.cast()).to_string_lossy(),
                 );
                 TEST_SAM_STATUS = libc::EXIT_FAILURE;
             }
             break;
         }
 
-        let mod4 = (sam::bam_get_cigar(aln) as isize % 4) as c_int;
+        let mod4 = (sam::bam_get_cigar(aln) as isize % 4) as i32;
         if mod4 != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed: %s CIGAR not 4-byte aligned; offset is 4k+%d for \"%s\"\n".as_ptr(),
-                informat,
+            eprintln!(
+                "Failed: {} CIGAR not 4-byte aligned; offset is 4k+{} for \"{}\"",
+                std::ffi::CStr::from_ptr(informat.cast()).to_string_lossy(),
                 mod4,
-                sam::bam_get_qname(aln),
+                std::ffi::CStr::from_ptr(sam::bam_get_qname(aln).cast()).to_string_lossy(),
             );
             TEST_SAM_STATUS = libc::EXIT_FAILURE;
         }
 
         if sam::sam_c_4553_sam_write1(out, header, aln) < 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed: writing to %s\n".as_ptr(),
-                outfname,
+            eprintln!(
+                "Failed: writing to {}",
+                std::ffi::CStr::from_ptr(outfname.cast()).to_string_lossy(),
             );
             TEST_SAM_STATUS = libc::EXIT_FAILURE;
         }
@@ -662,30 +628,23 @@ unsafe fn goto_copy_check_alignment_cleanup(
 // original: check_target_names (htslib/test/sam.c:669)
 pub unsafe fn test_sam_c_669_check_target_names(
     header: *mut sam::sam_hdr_t,
-    expected_n_targets: c_int,
-    expected_targets: *mut *const c_char,
-    expected_lengths: *const c_int,
-) -> c_int {
+    expected_n_targets: i32,
+    expected_targets: *mut *const u8,
+    expected_lengths: *const i32,
+) -> i32 {
     if (*header).target_name.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: target_name is NULL\n".as_ptr(),
-        );
+        eprintln!("Failed: target_name is NULL");
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         return -1;
     }
     if (*header).target_len.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: target_len is NULL\n".as_ptr(),
-        );
+        eprintln!("Failed: target_len is NULL");
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
         return -1;
     }
     if (*header).n_targets != expected_n_targets {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: header->n_targets (%d) != expected_n_targets (%d)\n".as_ptr(),
+        eprintln!(
+            "Failed: header->n_targets ({}) != expected_n_targets ({})",
             (*header).n_targets,
             expected_n_targets,
         );
@@ -696,30 +655,29 @@ pub unsafe fn test_sam_c_669_check_target_names(
     for i in 0..expected_n_targets {
         let name = *(*header).target_name.add(i as usize);
         let expected_name = *expected_targets.add(i as usize);
-        if name.is_null() || libc::strcmp(name, expected_name) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed: header->target_name[%d] (%s) != \"%s\"\n".as_ptr(),
+        if name.is_null()
+            || std::ffi::CStr::from_ptr(name.cast()).to_bytes()
+                != std::ffi::CStr::from_ptr(expected_name.cast()).to_bytes()
+        {
+            eprintln!(
+                "Failed: header->target_name[{}] ({}) != \"{}\"",
                 i,
                 if name.is_null() {
-                    c"NULL".as_ptr()
+                    "NULL".to_string()
                 } else {
-                    name
+                    std::ffi::CStr::from_ptr(name.cast()).to_string_lossy().into_owned()
                 },
-                expected_name,
+                std::ffi::CStr::from_ptr(expected_name.cast()).to_string_lossy(),
             );
             TEST_SAM_STATUS = libc::EXIT_FAILURE;
             return -1;
         }
-        let len = *(*header).target_len.add(i as usize) as c_int;
+        let len = *(*header).target_len.add(i as usize) as i32;
         let expected_len = *expected_lengths.add(i as usize);
         if len != expected_len {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed: header->target_len[%d] (%d) != %d\n".as_ptr(),
-                i,
-                len,
-                expected_len,
+            eprintln!(
+                "Failed: header->target_len[{}] ({}) != {}",
+                i, len, expected_len,
             );
             TEST_SAM_STATUS = libc::EXIT_FAILURE;
             return -1;
@@ -732,145 +690,140 @@ pub unsafe fn test_sam_c_669_check_target_names(
 pub unsafe fn test_sam_c_705_use_header_api() {
     let header_text = c"data:,@HD\tVN:1.4\tGO:group\tSS:coordinate:queryname\n@SQ\tSN:ref0\tLN:100\n@CO\tThis line below will be updated\n@SQ\tSN:ref1\tLN:5001\tM5:983dalu9ue2\n@SQ\tSN:ref1.5\tLN:5001\n@CO\tThis line is good\n@SQ\tSN:ref2\tLN:5002\n";
     let expected = c"@HD\tVN:1.5\tSO:coordinate\n@CO\tThis line below will be updated\n@SQ\tSN:ref1\tLN:5001\tM5:kja8u34a2q3\n@CO\tThis line is good\n@SQ\tSN:ref2\tLN:5002\n@SQ\tSN:ref3\tLN:5003\n@PG\tID:samtools\tPN:samtools\tVN:1.9\n@RG\tID:run1\n@RG\tID:run4\n";
-    let expected_targets = [c"ref1".as_ptr(), c"ref2".as_ptr(), c"ref3".as_ptr()];
+    let expected_targets: [*const u8; 3] = [
+        c"ref1".as_ptr().cast(),
+        c"ref2".as_ptr().cast(),
+        c"ref3".as_ptr().cast(),
+    ];
     let expected_lengths = [5001, 5002, 5003];
     let outfname = c"test/sam_header.tmp.sam_".as_ptr();
     let in_ = crate::htslib_rs::hts::hts_open(header_text.as_ptr(), c"r".as_ptr());
     let mut out = crate::htslib_rs::hts::hts_open(outfname, c"w".as_ptr());
     let mut header: *mut sam::sam_hdr_t = std::ptr::null_mut();
-    let mut inf: *mut libc::FILE = std::ptr::null_mut();
     let mut ks = kstring_t { data: Vec::new() };
     if in_.is_null() || out.is_null() {
-        test_sam_bam_set1_fail(c"use_header_api".as_ptr(), c"open failed".as_ptr());
-        goto_use_header_api_cleanup(in_, out, inf, header, &mut ks);
+        test_sam_bam_set1_fail(c"use_header_api".as_ptr().cast(), c"open failed".as_ptr().cast());
+        goto_use_header_api_cleanup(in_, out, header, &mut ks);
         return;
     }
     header = sam::sam_hdr_read(in_);
     if header.is_null() {
         test_sam_bam_set1_fail(
-            c"use_header_api".as_ptr(),
-            c"reading header from file".as_ptr(),
+            c"use_header_api".as_ptr().cast(),
+            c"reading header from file".as_ptr().cast(),
         );
-        goto_use_header_api_cleanup(in_, out, inf, header, &mut ks);
+        goto_use_header_api_cleanup(in_, out, header, &mut ks);
         return;
     }
     if sam::sam_hdr_remove_tag_id(
         &mut *header,
-        c"HD",
+        b"HD",
         None,
-        c"GO",
+        b"GO",
     ) != 0
         || sam::sam_hdr_update_line(
             &mut *header,
-            c"HD",
+            b"HD",
             None,
-            &[(c"VN".as_ptr(), c"1.5".as_ptr())],
+            &[(Some(&b"VN"[..]), Some(&b"1.5"[..]))],
         ) != 0
         || sam::sam_hdr_add_line(
             &mut *header,
-            c"SQ",
+            b"SQ",
             &[
-                (c"SN".as_ptr(), c"ref3".as_ptr()),
-                (c"LN".as_ptr(), c"5003".as_ptr()),
+                (Some(&b"SN"[..]), Some(&b"ref3"[..])),
+                (Some(&b"LN"[..]), Some(&b"5003"[..])),
             ],
         ) < 0
         || sam::sam_hdr_update_line(
             &mut *header,
-            c"SQ",
-            Some((c"SN", c"ref1")),
-            &[(c"M5".as_ptr(), c"kja8u34a2q3".as_ptr())],
+            b"SQ",
+            Some((&b"SN"[..], &b"ref1"[..])),
+            &[(Some(&b"M5"[..]), Some(&b"kja8u34a2q3"[..]))],
         ) != 0
         || sam::sam_hdr_add_pg(
             &mut *header,
-            c"samtools",
-            &[(c"VN".as_ptr(), c"1.9".as_ptr())],
+            b"samtools",
+            &[(Some(&b"VN"[..]), Some(&b"1.9"[..]))],
         ) != 0
     {
-        test_sam_bam_set1_fail(c"use_header_api".as_ptr(), c"header edit failed".as_ptr());
-        goto_use_header_api_cleanup(in_, out, inf, header, &mut ks);
+        test_sam_bam_set1_fail(c"use_header_api".as_ptr().cast(), c"header edit failed".as_ptr().cast());
+        goto_use_header_api_cleanup(in_, out, header, &mut ks);
         return;
     }
     let rg_line = b"@RG\tID:run1";
     if sam::sam_hdr_add_lines(&mut *header, rg_line) != 0
         || sam::sam_hdr_add_line(
             &mut *header,
-            c"RG",
-            &[(c"ID".as_ptr(), c"run2".as_ptr())],
+            b"RG",
+            &[(Some(&b"ID"[..]), Some(&b"run2"[..]))],
         ) < 0
         || sam::sam_hdr_add_line(
             &mut *header,
-            c"RG",
-            &[(c"ID".as_ptr(), c"run3".as_ptr())],
+            b"RG",
+            &[(Some(&b"ID"[..]), Some(&b"run3"[..]))],
         ) < 0
         || sam::sam_hdr_add_line(
             &mut *header,
-            c"RG",
-            &[(c"ID".as_ptr(), c"run4".as_ptr())],
+            b"RG",
+            &[(Some(&b"ID"[..]), Some(&b"run4"[..]))],
         ) < 0
-        || sam::sam_hdr_line_index(&mut *header, c"RG", c"run4") != 3
-        || sam::sam_hdr_line_index(&mut *header, c"RG", c"run5") != -1
-        || sam::sam_hdr_remove_line_id(&mut *header, c"RG", Some((c"ID", c"run2"))) < 0
-        || sam::sam_hdr_remove_line_pos(&mut *header, c"RG", 1) < 0
-        || sam::sam_hdr_remove_line_id(&mut *header, c"SQ", Some((c"SN", c"ref0"))) < 0
-        || sam::sam_hdr_remove_line_pos(&mut *header, c"SQ", 1) < 0
+        || sam::sam_hdr_line_index(&mut *header, b"RG", b"run4") != 3
+        || sam::sam_hdr_line_index(&mut *header, b"RG", b"run5") != -1
+        || sam::sam_hdr_remove_line_id(&mut *header, b"RG", Some((&b"ID"[..], &b"run2"[..]))) < 0
+        || sam::sam_hdr_remove_line_pos(&mut *header, b"RG", 1) < 0
+        || sam::sam_hdr_remove_line_id(&mut *header, b"SQ", Some((&b"SN"[..], &b"ref0"[..]))) < 0
+        || sam::sam_hdr_remove_line_pos(&mut *header, b"SQ", 1) < 0
         || sam::sam_hdr_remove_tag_id(
             &mut *header,
-            c"HD",
+            b"HD",
             None,
-            c"SS",
+            b"SS",
         ) < 0
         || sam::sam_hdr_update_line(
             &mut *header,
-            c"HD",
+            b"HD",
             None,
-            &[(c"SO".as_ptr(), c"coordinate".as_ptr())],
+            &[(Some(&b"SO"[..]), Some(&b"coordinate"[..]))],
         ) < 0
         || test_sam_c_669_check_target_names(
             header,
-            expected_targets.len() as c_int,
-            expected_targets.as_ptr() as *mut *const c_char,
+            expected_targets.len() as i32,
+            expected_targets.as_ptr() as *mut *const u8,
             expected_lengths.as_ptr(),
         ) < 0
     {
         test_sam_bam_set1_fail(
-            c"use_header_api".as_ptr(),
-            c"header API checks failed".as_ptr(),
+            c"use_header_api".as_ptr().cast(),
+            c"header API checks failed".as_ptr().cast(),
         );
-        goto_use_header_api_cleanup(in_, out, inf, header, &mut ks);
+        goto_use_header_api_cleanup(in_, out, header, &mut ks);
         return;
     }
     if sam::sam_hdr_write(out, header) < 0 || crate::htslib_rs::hts::hts_close(out) < 0 {
         out = std::ptr::null_mut();
         test_sam_bam_set1_fail(
-            c"use_header_api".as_ptr(),
-            c"writing headers failed".as_ptr(),
+            c"use_header_api".as_ptr().cast(),
+            c"writing headers failed".as_ptr().cast(),
         );
-        goto_use_header_api_cleanup(in_, out, inf, header, &mut ks);
+        goto_use_header_api_cleanup(in_, out, header, &mut ks);
         return;
     }
     out = std::ptr::null_mut();
-    inf = libc::fopen(outfname, c"r".as_ptr());
-    let mut buffer = [0 as c_char; 4096];
-    let bytes = if inf.is_null() {
-        0
-    } else {
-        libc::fread(buffer.as_mut_ptr().cast(), 1, buffer.len(), inf)
-    };
-    if bytes != expected.to_bytes().len()
-        || libc::memcmp(buffer.as_ptr().cast(), expected.as_ptr().cast(), bytes) != 0
-    {
+    let outfname_str = std::ffi::CStr::from_ptr(outfname.cast()).to_string_lossy();
+    let buffer = std::fs::read(outfname_str.as_ref()).unwrap_or_default();
+    if buffer != expected.to_bytes() {
         test_sam_bam_set1_fail(
-            c"use_header_api".as_ptr(),
-            c"edited header does not match expected version".as_ptr(),
+            c"use_header_api".as_ptr().cast(),
+            c"edited header does not match expected version".as_ptr().cast(),
         );
     }
-    goto_use_header_api_cleanup(in_, out, inf, header, &mut ks);
+    goto_use_header_api_cleanup(in_, out, header, &mut ks);
 }
 
 unsafe fn goto_use_header_api_cleanup(
     in_: *mut htsFile,
     out: *mut htsFile,
-    inf: *mut libc::FILE,
     header: *mut sam::sam_hdr_t,
     ks: &mut kstring_t,
 ) {
@@ -880,9 +833,6 @@ unsafe fn goto_use_header_api_cleanup(
     }
     if !out.is_null() {
         crate::htslib_rs::hts::hts_close(out);
-    }
-    if !inf.is_null() {
-        libc::fclose(inf);
     }
     crate::htslib_rs::hts::ks_free(ks);
 }
@@ -894,72 +844,74 @@ pub unsafe fn test_sam_c_921_test_header_pg_lines() {
     let expected = c"@HD\tVN:1.5\n@PG\tID:prog1\tPN:prog1\n@PG\tID:prog2\tPN:prog2\tPP:prog1\n@PG\tID:prog3\tPN:prog3\tPP:prog2\n@PG\tID:prog4\tPN:prog4\tPP:prog1\n@PG\tID:prog5\tPN:prog5\tPP:prog2\n@PG\tID:prog6\tPN:prog6\tPP:prog3\n@PG\tID:prog6.1\tPN:prog6\tPP:prog4\n@PG\tID:prog6.2\tPN:prog6\tPP:prog5\n@PG\tPN:prog7\tID:my_id\tPP:prog6\n";
     let in_ = crate::htslib_rs::hts::hts_open(header_text.as_ptr(), c"r".as_ptr());
     if in_.is_null() {
-        test_sam_bam_set1_fail(c"test_header_pg_lines".as_ptr(), c"open failed".as_ptr());
+        test_sam_bam_set1_fail(c"test_header_pg_lines".as_ptr().cast(), c"open failed".as_ptr().cast());
         return;
     }
     let header = sam::sam_hdr_read(in_);
     if header.is_null() {
         crate::htslib_rs::hts::hts_close(in_);
         test_sam_bam_set1_fail(
-            c"test_header_pg_lines".as_ptr(),
-            c"reading header from file".as_ptr(),
+            c"test_header_pg_lines".as_ptr().cast(),
+            c"reading header from file".as_ptr().cast(),
         );
         return;
     }
     let old_log_level = crate::htslib_rs::hts::hts_get_log_level();
-    if sam::sam_hdr_add_pg(&mut *header, c"prog3", &[]) != 0
+    if sam::sam_hdr_add_pg(&mut *header, b"prog3", &[]) != 0
         || sam::sam_hdr_add_pg(
             &mut *header,
-            c"prog4",
-            &[(c"PP".as_ptr(), c"prog1".as_ptr())],
+            b"prog4",
+            &[(Some(&b"PP"[..]), Some(&b"prog1"[..]))],
         ) != 0
         || sam::sam_hdr_add_line(
             &mut *header,
-            c"PG",
+            b"PG",
             &[
-                (c"ID".as_ptr(), c"prog5".as_ptr()),
-                (c"PN".as_ptr(), c"prog5".as_ptr()),
-                (c"PP".as_ptr(), c"prog2".as_ptr()),
+                (Some(&b"ID"[..]), Some(&b"prog5"[..])),
+                (Some(&b"PN"[..]), Some(&b"prog5"[..])),
+                (Some(&b"PP"[..]), Some(&b"prog2"[..])),
             ],
         ) != 0
-        || sam::sam_hdr_add_pg(&mut *header, c"prog6", &[]) != 0
+        || sam::sam_hdr_add_pg(&mut *header, b"prog6", &[]) != 0
         || sam::sam_hdr_add_pg(
             &mut *header,
-            c"prog7",
+            b"prog7",
             &[
-                (c"ID".as_ptr(), c"my_id".as_ptr()),
-                (c"PP".as_ptr(), c"prog6".as_ptr()),
+                (Some(&b"ID"[..]), Some(&b"my_id"[..])),
+                (Some(&b"PP"[..]), Some(&b"prog6"[..])),
             ],
         ) != 0
     {
         test_sam_bam_set1_fail(
-            c"test_header_pg_lines".as_ptr(),
-            c"sam_hdr_add_pg failed".as_ptr(),
+            c"test_header_pg_lines".as_ptr().cast(),
+            c"sam_hdr_add_pg failed".as_ptr().cast(),
         );
     }
     crate::htslib_rs::hts::hts_set_log_level(crate::htslib_rs::hts::HTS_LOG_OFF);
     if sam::sam_hdr_add_pg(
         &mut *header,
-        c"prog8",
-        &[(c"ID".as_ptr(), c"my_id".as_ptr())],
+        b"prog8",
+        &[(Some(&b"ID"[..]), Some(&b"my_id"[..]))],
     ) == 0
         || sam::sam_hdr_add_pg(
             &mut *header,
-            c"prog9",
-            &[(c"PP".as_ptr(), c"non-existent".as_ptr())],
+            b"prog9",
+            &[(Some(&b"PP"[..]), Some(&b"non-existent"[..]))],
         ) == 0
     {
         test_sam_bam_set1_fail(
-            c"test_header_pg_lines".as_ptr(),
-            c"unexpected add_pg success".as_ptr(),
+            c"test_header_pg_lines".as_ptr().cast(),
+            c"unexpected add_pg success".as_ptr().cast(),
         );
     }
     crate::htslib_rs::hts::hts_set_log_level(old_log_level);
     let text = sam::sam_hdr_str(&mut *header);
-    if text.is_null() || libc::strcmp(text, expected.as_ptr()) != 0 {
+    if text.is_null()
+        || std::ffi::CStr::from_ptr(text.cast()).to_bytes() != expected.to_bytes()
+    {
         test_sam_bam_set1_fail(
-            c"test_header_pg_lines".as_ptr(),
-            c"edited header does not match expected version".as_ptr(),
+            c"test_header_pg_lines".as_ptr().cast(),
+            c"edited header does not match expected version".as_ptr().cast(),
         );
     }
     sam::sam_hdr_destroy(header);
@@ -985,17 +937,20 @@ pub unsafe fn test_sam_c_1008_test_header_pg_loops() {
         } else {
             sam::sam_hdr_read(in_)
         };
-        if header.is_null() || sam::sam_hdr_add_pg(&mut *header, c"new_prog", &[]) != 0 {
+        if header.is_null() || sam::sam_hdr_add_pg(&mut *header, b"new_prog", &[]) != 0 {
             test_sam_bam_set1_fail(
-                c"test_header_pg_loops".as_ptr(),
-                c"PG loop setup failed".as_ptr(),
+                c"test_header_pg_loops".as_ptr().cast(),
+                c"PG loop setup failed".as_ptr().cast(),
             );
         } else {
             let text = sam::sam_hdr_str(&mut *header);
-            if text.is_null() || libc::strcmp(text, expected[i]) != 0 {
+            if text.is_null()
+                || std::ffi::CStr::from_ptr(text.cast()).to_bytes()
+                    != std::ffi::CStr::from_ptr(expected[i]).to_bytes()
+            {
                 test_sam_bam_set1_fail(
-                    c"test_header_pg_loops".as_ptr(),
-                    c"edited header does not match expected version".as_ptr(),
+                    c"test_header_pg_loops".as_ptr().cast(),
+                    c"edited header does not match expected version".as_ptr().cast(),
                 );
             }
         }
@@ -1011,65 +966,71 @@ pub unsafe fn test_sam_c_1008_test_header_pg_loops() {
 pub unsafe fn test_sam_c_1087_test_header_updates() {
     let header_text = c"@HD\tVN:1.4\n@SQ\tSN:chr1\tLN:100\n@SQ\tSN:chr2\tLN:200\n@SQ\tSN:chr3\tLN:300\n@RG\tID:run1\n@RG\tID:run2\n@RG\tID:run3\n@PG\tID:prog1\tPN:prog1\n";
     let expected = c"@HD\tVN:1.4\n@SQ\tSN:1\tLN:100\n@SQ\tSN:chr2\tLN:2000\n@SQ\tSN:chr3\tLN:300\n@RG\tID:run1\tDS:hello\n@RG\tID:aliquot2\n@RG\tID:run3\n@PG\tID:prog1\tPN:prog1\n";
-    let expected_targets = [c"1".as_ptr(), c"chr2".as_ptr(), c"chr3".as_ptr()];
+    let expected_targets: [*const u8; 3] = [
+        c"1".as_ptr().cast(),
+        c"chr2".as_ptr().cast(),
+        c"chr3".as_ptr().cast(),
+    ];
     let expected_lengths = [100, 2000, 300];
-    let header = sam::sam_hdr_parse(header_text.to_bytes().len(), header_text.as_ptr());
+    let header = sam::sam_hdr_parse(header_text.to_bytes().len(), header_text.as_ptr().cast());
     if header.is_null() {
         test_sam_bam_set1_fail(
-            c"test_header_updates".as_ptr(),
-            c"creating sam header".as_ptr(),
+            c"test_header_updates".as_ptr().cast(),
+            c"creating sam header".as_ptr().cast(),
         );
         return;
     }
     if sam::sam_hdr_update_line(
         &mut *header,
-        c"SQ",
-        Some((c"SN", c"chr2")),
-        &[(c"LN".as_ptr(), c"2000".as_ptr())],
+        b"SQ",
+        Some((&b"SN"[..], &b"chr2"[..])),
+        &[(Some(&b"LN"[..]), Some(&b"2000"[..]))],
     ) != 0
         || sam::sam_hdr_update_line(
             &mut *header,
-            c"SQ",
-            Some((c"SN", c"chr1")),
-            &[(c"SN".as_ptr(), c"1".as_ptr())],
+            b"SQ",
+            Some((&b"SN"[..], &b"chr1"[..])),
+            &[(Some(&b"SN"[..]), Some(&b"1"[..]))],
         ) != 0
         || sam::sam_hdr_update_line(
             &mut *header,
-            c"RG",
-            Some((c"ID", c"run1")),
-            &[(c"DS".as_ptr(), c"hello".as_ptr())],
+            b"RG",
+            Some((&b"ID"[..], &b"run1"[..])),
+            &[(Some(&b"DS"[..]), Some(&b"hello"[..]))],
         ) != 0
         || sam::sam_hdr_update_line(
             &mut *header,
-            c"RG",
-            Some((c"ID", c"run2")),
-            &[(c"ID".as_ptr(), c"aliquot2".as_ptr())],
+            b"RG",
+            Some((&b"ID"[..], &b"run2"[..])),
+            &[(Some(&b"ID"[..]), Some(&b"aliquot2"[..]))],
         ) != 0
         || test_sam_c_669_check_target_names(
             header,
-            expected_targets.len() as c_int,
-            expected_targets.as_ptr() as *mut *const c_char,
+            expected_targets.len() as i32,
+            expected_targets.as_ptr() as *mut *const u8,
             expected_lengths.as_ptr(),
         ) < 0
     {
         test_sam_bam_set1_fail(
-            c"test_header_updates".as_ptr(),
-            c"header update failed".as_ptr(),
+            c"test_header_updates".as_ptr().cast(),
+            c"header update failed".as_ptr().cast(),
         );
     }
     for (i, name) in expected_targets.iter().enumerate() {
-        if sam::sam_hdr_name2tid(&mut *header, std::ffi::CStr::from_ptr(*name)) != i as c_int {
+        if sam::sam_hdr_name2tid(&mut *header, std::ffi::CStr::from_ptr((*name).cast()).to_bytes()) != i as i32 {
             test_sam_bam_set1_fail(
-                c"test_header_updates".as_ptr(),
-                c"sam_hdr_name2tid unexpected result".as_ptr(),
+                c"test_header_updates".as_ptr().cast(),
+                c"sam_hdr_name2tid unexpected result".as_ptr().cast(),
             );
         }
     }
     let hdr_str = sam::sam_hdr_str(&mut *header);
-    if hdr_str.is_null() || libc::strcmp(hdr_str, expected.as_ptr()) != 0 {
+    if hdr_str.is_null()
+        || std::ffi::CStr::from_ptr(hdr_str.cast()).to_bytes() != expected.to_bytes()
+    {
         test_sam_bam_set1_fail(
-            c"test_header_updates".as_ptr(),
-            c"edited header does not match expected version".as_ptr(),
+            c"test_header_updates".as_ptr().cast(),
+            c"edited header does not match expected version".as_ptr().cast(),
         );
     }
     sam::sam_hdr_destroy(header);
@@ -1080,36 +1041,38 @@ pub unsafe fn test_sam_c_1182_test_header_remove_lines() {
     let header_text = c"@HD\tVN:1.4\n@SQ\tSN:chr1\tLN:100\n@SQ\tSN:chr2\tLN:200\n@SQ\tSN:chr3\tLN:300\n@RG\tID:run1\n@RG\tID:run2\n@RG\tID:run3\n@PG\tID:prog1\tPN:prog1\n";
     let expected =
         c"@HD\tVN:1.4\n@SQ\tSN:chr1\tLN:100\n@SQ\tSN:chr3\tLN:300\n@PG\tID:prog1\tPN:prog1\n";
-    let header = sam::sam_hdr_parse(header_text.to_bytes().len(), header_text.as_ptr());
+    let header = sam::sam_hdr_parse(header_text.to_bytes().len(), header_text.as_ptr().cast());
     let rh = sam::khash_str2int_init();
     if header.is_null() || rh.is_null() {
         test_sam_bam_set1_fail(
-            c"test_header_remove_lines".as_ptr(),
-            c"setup failed".as_ptr(),
+            c"test_header_remove_lines".as_ptr().cast(),
+            c"setup failed".as_ptr().cast(),
         );
     } else {
-        let chr3 = libc::strdup(c"chr3".as_ptr());
-        let chr1 = libc::strdup(c"chr1".as_ptr());
-        sam::khash_str2int_set(rh, chr3, 1);
-        sam::khash_str2int_set(rh, chr1, 1);
-        if sam::sam_hdr_remove_lines(&mut *header, c"SQ", Some(c"SN"), std::ptr::NonNull::new(rh)) != 0
+        let mut chr3 = b"chr3\0".to_vec();
+        let mut chr1 = b"chr1\0".to_vec();
+        sam::khash_str2int_set(rh, chr3.as_mut_ptr().cast(), 1);
+        sam::khash_str2int_set(rh, chr1.as_mut_ptr().cast(), 1);
+        if sam::sam_hdr_remove_lines(&mut *header, b"SQ", Some(&b"SN"[..]), std::ptr::NonNull::new(rh)) != 0
             || sam::sam_hdr_remove_lines(
                 &mut *header,
-                c"RG",
-                Some(c"ID"),
+                b"RG",
+                Some(&b"ID"[..]),
                 None,
             ) != 0
         {
             test_sam_bam_set1_fail(
-                c"test_header_remove_lines".as_ptr(),
-                c"sam_hdr_remove_lines failed".as_ptr(),
+                c"test_header_remove_lines".as_ptr().cast(),
+                c"sam_hdr_remove_lines failed".as_ptr().cast(),
             );
         }
         let hdr_str = sam::sam_hdr_str(&mut *header);
-        if hdr_str.is_null() || libc::strcmp(hdr_str, expected.as_ptr()) != 0 {
+        if hdr_str.is_null()
+            || std::ffi::CStr::from_ptr(hdr_str.cast()).to_bytes() != expected.to_bytes()
+        {
             test_sam_bam_set1_fail(
-                c"test_header_remove_lines".as_ptr(),
-                c"edited header does not match expected version".as_ptr(),
+                c"test_header_remove_lines".as_ptr().cast(),
+                c"edited header does not match expected version".as_ptr().cast(),
             );
         }
         sam::khash_str2int_destroy_free(rh);
@@ -1129,15 +1092,15 @@ pub unsafe fn test_sam_c_1258_test_header_ref_altnames() {
     let header = sam::sam_hdr_init();
     if header.is_null() {
         test_sam_bam_set1_fail(
-            c"test_header_ref_altnames".as_ptr(),
-            c"sam_hdr_init".as_ptr(),
+            c"test_header_ref_altnames".as_ptr().cast(),
+            c"sam_hdr_init".as_ptr().cast(),
         );
         return;
     }
     if sam::sam_hdr_add_lines(&mut *header, initial_header.to_bytes()) < 0 {
         test_sam_bam_set1_fail(
-            c"test_header_ref_altnames".as_ptr(),
-            c"sam_hdr_add_lines for altnames".as_ptr(),
+            c"test_header_ref_altnames".as_ptr().cast(),
+            c"sam_hdr_add_lines for altnames".as_ptr().cast(),
         );
     }
     let checks = [
@@ -1153,56 +1116,56 @@ pub unsafe fn test_sam_c_1258_test_header_ref_altnames() {
         (c"barney".as_ptr(), -1),
     ];
     for (name, exp) in checks {
-        if sam::sam_hdr_name2tid(&mut *header, std::ffi::CStr::from_ptr(name)) != exp {
+        if sam::sam_hdr_name2tid(&mut *header, std::ffi::CStr::from_ptr(name).to_bytes()) != exp {
             test_sam_bam_set1_fail(
-                c"test_header_ref_altnames".as_ptr(),
-                c"initial altname lookup failed".as_ptr(),
+                c"test_header_ref_altnames".as_ptr().cast(),
+                c"initial altname lookup failed".as_ptr().cast(),
             );
         }
     }
     if sam::sam_hdr_add_line(
         &mut *header,
-        c"SQ",
+        b"SQ",
         &[
-            (c"AN".as_ptr(), c"fred".as_ptr()),
-            (c"LN".as_ptr(), c"500".as_ptr()),
-            (c"SN".as_ptr(), c"barney".as_ptr()),
+            (Some(&b"AN"[..]), Some(&b"fred"[..])),
+            (Some(&b"LN"[..]), Some(&b"500"[..])),
+            (Some(&b"SN"[..]), Some(&b"barney"[..])),
         ],
     ) < 0
     {
         test_sam_bam_set1_fail(
-            c"test_header_ref_altnames".as_ptr(),
-            c"sam_hdr_add_line for altnames".as_ptr(),
+            c"test_header_ref_altnames".as_ptr().cast(),
+            c"sam_hdr_add_line for altnames".as_ptr().cast(),
         );
     }
-    if sam::sam_hdr_name2tid(&mut *header, c"fred") != 4
-        || sam::sam_hdr_name2tid(&mut *header, c"barney") != 4
+    if sam::sam_hdr_name2tid(&mut *header, b"fred") != 4
+        || sam::sam_hdr_name2tid(&mut *header, b"barney") != 4
     {
         test_sam_bam_set1_fail(
-            c"test_header_ref_altnames".as_ptr(),
-            c"barney added lookup failed".as_ptr(),
+            c"test_header_ref_altnames".as_ptr().cast(),
+            c"barney added lookup failed".as_ptr().cast(),
         );
     }
-    if sam::sam_hdr_remove_line_id(&mut *header, c"SQ", Some((c"SN", c"chr2"))) < 0
-        || sam::sam_hdr_name2tid(&mut *header, c"2") != -1
-        || sam::sam_hdr_name2tid(&mut *header, c"chr2") != -1
+    if sam::sam_hdr_remove_line_id(&mut *header, b"SQ", Some((&b"SN"[..], &b"chr2"[..]))) < 0
+        || sam::sam_hdr_name2tid(&mut *header, b"2") != -1
+        || sam::sam_hdr_name2tid(&mut *header, b"chr2") != -1
     {
         test_sam_bam_set1_fail(
-            c"test_header_ref_altnames".as_ptr(),
-            c"chr2 removal lookup failed".as_ptr(),
+            c"test_header_ref_altnames".as_ptr().cast(),
+            c"chr2 removal lookup failed".as_ptr().cast(),
         );
     }
     if sam::sam_hdr_remove_tag_id(
         &mut *header,
-        c"SQ",
-        Some((c"SN", c"1")),
-        c"AN",
+        b"SQ",
+        Some((&b"SN"[..], &b"1"[..])),
+        b"AN",
     ) < 0
-        || sam::sam_hdr_name2tid(&mut *header, c"chr1") != -1
+        || sam::sam_hdr_name2tid(&mut *header, b"chr1") != -1
     {
         test_sam_bam_set1_fail(
-            c"test_header_ref_altnames".as_ptr(),
-            c"AN removal lookup failed".as_ptr(),
+            c"test_header_ref_altnames".as_ptr().cast(),
+            c"AN removal lookup failed".as_ptr().cast(),
         );
     }
     sam::sam_hdr_destroy(header);
@@ -1231,23 +1194,18 @@ pub unsafe fn test_sam_c_1348_samrecord_layout() {
 
     let actual_core = std::mem::size_of::<sam::bam1_core_t>();
     if actual_core != core_size {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: sizeof bam1_core_t is %zu, expected %d\n".as_ptr(),
-            actual_core,
-            core_size as c_int,
+        eprintln!(
+            "Failed: sizeof bam1_core_t is {}, expected {}",
+            actual_core, core_size,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
 
     let actual_bam = std::mem::size_of::<sam::bam1_t>();
     if actual_bam != bam1_t_size && actual_bam != bam1_t_size2 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: sizeof bam1_t is %zu, expected either %zu or %zu\n".as_ptr(),
-            actual_bam,
-            bam1_t_size,
-            bam1_t_size2,
+        eprintln!(
+            "Failed: sizeof bam1_t is {}, expected either {} or {}",
+            actual_bam, bam1_t_size, bam1_t_size2,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
@@ -1257,20 +1215,19 @@ pub unsafe fn test_sam_c_1348_samrecord_layout() {
 pub unsafe fn test_sam_c_1388_check_ref_lengths(
     header: *const sam::sam_hdr_t,
     expected_lengths: *const hts_pos_t,
-    num_refs: c_int,
-    hdr_name: *const c_char,
-) -> c_int {
+    num_refs: i32,
+    hdr_name: *const u8,
+) -> i32 {
     for i in 0..num_refs {
         let ln = sam::sam_hdr_tid2len(&*header, i);
         let expected = *expected_lengths.add(i as usize);
         if ln != expected {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed: Wrong length for %s ref %d : expected %ld got %ld\n".as_ptr(),
-                hdr_name,
+            eprintln!(
+                "Failed: Wrong length for {} ref {} : expected {} got {}",
+                std::ffi::CStr::from_ptr(hdr_name.cast()).to_string_lossy(),
                 i,
-                expected as libc::c_long,
-                ln as libc::c_long,
+                expected,
+                ln,
             );
             TEST_SAM_STATUS = libc::EXIT_FAILURE;
             return -1;
@@ -1285,7 +1242,7 @@ pub unsafe fn test_sam_c_1405_check_big_ref() {
     test_sam_c_1405_check_big_ref_parse(1);
 }
 
-pub unsafe fn test_sam_c_1405_check_big_ref_parse(parse_header: c_int) {
+pub unsafe fn test_sam_c_1405_check_big_ref_parse(parse_header: i32) {
     let sam_text = c"data:,@HD\tVN:1.4\n@SQ\tSN:large#1\tLN:5000000000\n@SQ\tSN:small#1\tLN:100\n@SQ\tSN:large#2\tLN:4611686018427387904\n@SQ\tSN:small#2\tLN:1\nr1\t0\tlarge#1\t4999999000\t50\t8M\t*\t0\t0\tACGTACGT\tabcdefgh\nr2\t0\tsmall#1\t1\t50\t8M\t*\t0\t0\tACGTACGT\tabcdefgh\nr3\t0\tlarge#2\t4611686018427387000\t50\t8M\t*\t0\t0\tACGTACGT\tabcdefgh\np1\t99\tlarge#2\t1\t50\t8M\t=\t4611686018427387895\t4611686018427387903\tACGTACGT\tabcdefgh\np1\t147\tlarge#2\t4611686018427387895\t50\t8M\t=\t1\t-4611686018427387903\tACGTACGT\tabcdefgh\nr4\t0\tsmall#2\t2\t50\t8M\t*\t0\t0\tACGTACGT\tabcdefgh\n";
     let expected_lengths: [hts_pos_t; 4] = [5000000000, 100, 4611686018427387904, 1];
     let expected_tids = [0, 1, 2, 2, 2, 3];
@@ -1307,21 +1264,21 @@ pub unsafe fn test_sam_c_1405_check_big_ref_parse(parse_header: c_int) {
     };
     let aln = sam::bam_init1();
     if header.is_null() || aln.is_null() {
-        test_sam_bam_set1_fail(c"check_big_ref".as_ptr(), c"setup failed".as_ptr());
+        test_sam_bam_set1_fail(c"check_big_ref".as_ptr().cast(), c"setup failed".as_ptr().cast());
     } else {
         if parse_header != 0
-            && sam::sam_hdr_count_lines(&mut *header, c"SQ") != expected_lengths.len() as c_int
+            && sam::sam_hdr_count_lines(&mut *header, b"SQ") != expected_lengths.len() as i32
         {
             test_sam_bam_set1_fail(
-                c"check_big_ref".as_ptr(),
-                c"Wrong number of SQ lines in header".as_ptr(),
+                c"check_big_ref".as_ptr().cast(),
+                c"Wrong number of SQ lines in header".as_ptr().cast(),
             );
         }
         test_sam_c_1388_check_ref_lengths(
             header,
             expected_lengths.as_ptr(),
-            expected_lengths.len() as c_int,
-            c"header".as_ptr(),
+            expected_lengths.len() as i32,
+            c"header".as_ptr().cast(),
         );
         let mut i = 0usize;
         loop {
@@ -1336,8 +1293,8 @@ pub unsafe fn test_sam_c_1405_check_big_ref_parse(parse_header: c_int) {
                 || (*aln).core.mpos != expected_mpos[i]
             {
                 test_sam_bam_set1_fail(
-                    c"check_big_ref".as_ptr(),
-                    c"alignment coordinate check failed".as_ptr(),
+                    c"check_big_ref".as_ptr().cast(),
+                    c"alignment coordinate check failed".as_ptr().cast(),
                 );
                 break;
             }
@@ -1345,8 +1302,8 @@ pub unsafe fn test_sam_c_1405_check_big_ref_parse(parse_header: c_int) {
         }
         if i != expected_tids.len() {
             test_sam_bam_set1_fail(
-                c"check_big_ref".as_ptr(),
-                c"wrong number of alignment records".as_ptr(),
+                c"check_big_ref".as_ptr().cast(),
+                c"wrong number of alignment records".as_ptr().cast(),
             );
         }
     }
@@ -1358,102 +1315,86 @@ pub unsafe fn test_sam_c_1405_check_big_ref_parse(parse_header: c_int) {
 }
 
 // original: faidx1 (htslib/test/sam.c:1578)
-pub unsafe fn test_sam_c_1578_faidx1(filename: *const c_char) {
+pub unsafe fn test_sam_c_1578_faidx1(filename: *const u8) {
     let mut n_exp = 0;
     let mut n_fq_exp = 0;
-    let fin = libc::fopen(filename, c"rb".as_ptr());
-    if fin.is_null() {
-        test_sam_bam_set1_fail(c"faidx1".as_ptr(), c"can't open input file".as_ptr());
-        return;
-    }
+    let filename_str = std::ffi::CStr::from_ptr(filename.cast())
+        .to_string_lossy()
+        .into_owned();
+    let contents = match std::fs::read(&filename_str) {
+        Ok(c) => c,
+        Err(_) => {
+            test_sam_bam_set1_fail(c"faidx1".as_ptr().cast(), c"can't open input file".as_ptr().cast());
+            return;
+        }
+    };
 
-    let tmp_len = libc::strlen(filename) + 5;
-    let tmpfilename = libc::malloc(tmp_len).cast::<c_char>();
-    if tmpfilename.is_null() {
-        libc::fclose(fin);
-        test_sam_bam_set1_fail(
-            c"faidx1".as_ptr(),
-            c"can't allocate temporary name".as_ptr(),
-        );
-        return;
-    }
-    libc::snprintf(tmpfilename, tmp_len, c"%s.tmp".as_ptr(), filename);
+    // tmpfilename as a NUL-terminated Vec<u8> to pass to the still-raw faidx API.
+    let mut tmpfilename = filename_str.clone().into_bytes();
+    tmpfilename.extend_from_slice(b".tmp\0");
 
-    let fout = libc::fopen(tmpfilename, c"wb".as_ptr());
-    if fout.is_null() {
-        libc::fclose(fin);
-        libc::free(tmpfilename.cast());
-        test_sam_bam_set1_fail(c"faidx1".as_ptr(), c"can't create temporary file".as_ptr());
-        return;
-    }
-
-    let mut line = [0 as c_char; 500];
-    while !libc::fgets(line.as_mut_ptr(), line.len() as c_int, fin).is_null() {
-        if line[0] == b'>' as c_char {
+    // Count `>` (FASTA) and `+\n` (FASTQ) marker lines while copying.
+    for line in contents.split_inclusive(|&b| b == b'\n') {
+        if line.first() == Some(&b'>') {
             n_exp += 1;
         }
-        if line[0] == b'+' as c_char && line[1] == b'\n' as c_char {
+        if line.first() == Some(&b'+') && line.get(1) == Some(&b'\n') {
             n_fq_exp += 1;
         }
-        libc::fputs(line.as_ptr(), fout);
     }
-    libc::fclose(fin);
-    libc::fclose(fout);
+    let tmp_path = String::from_utf8_lossy(&tmpfilename[..tmpfilename.len() - 1]).into_owned();
+    if std::fs::write(&tmp_path, &contents).is_err() {
+        test_sam_bam_set1_fail(c"faidx1".as_ptr().cast(), c"can't create temporary file".as_ptr().cast());
+        return;
+    }
 
     if n_exp == 0 && n_fq_exp != 0 {
         n_exp = n_fq_exp;
     }
 
-    if crate::htslib_rs::faidx::fai_build(tmpfilename) < 0 {
-        test_sam_bam_set1_fail(c"faidx1".as_ptr(), c"can't index temporary file".as_ptr());
-        goto_faidx1_cleanup(tmpfilename);
+    if crate::htslib_rs::faidx::fai_build(tmpfilename.as_ptr().cast()) < 0 {
+        test_sam_bam_set1_fail(c"faidx1".as_ptr().cast(), c"can't index temporary file".as_ptr().cast());
+        goto_faidx1_cleanup(&tmp_path);
         return;
     }
-    let fai = crate::htslib_rs::faidx::fai_load(tmpfilename);
+    let fai = crate::htslib_rs::faidx::fai_load(tmpfilename.as_ptr().cast());
     if fai.is_null() {
-        test_sam_bam_set1_fail(c"faidx1".as_ptr(), c"can't load faidx file".as_ptr());
-        goto_faidx1_cleanup(tmpfilename);
+        test_sam_bam_set1_fail(c"faidx1".as_ptr().cast(), c"can't load faidx file".as_ptr().cast());
+        goto_faidx1_cleanup(&tmp_path);
         return;
     }
 
     let n = crate::htslib_rs::faidx::faidx_fetch_nseq(fai);
     if n != n_exp {
         test_sam_bam_set1_fail(
-            c"faidx1".as_ptr(),
-            c"faidx_fetch_nseq returned unexpected count".as_ptr(),
+            c"faidx1".as_ptr().cast(),
+            c"faidx_fetch_nseq returned unexpected count".as_ptr().cast(),
         );
     }
     let n = crate::htslib_rs::faidx::faidx_nseq(fai);
     if n != n_exp {
         test_sam_bam_set1_fail(
-            c"faidx1".as_ptr(),
-            c"faidx_nseq returned unexpected count".as_ptr(),
+            c"faidx1".as_ptr().cast(),
+            c"faidx_nseq returned unexpected count".as_ptr().cast(),
         );
     }
 
     crate::htslib_rs::faidx::fai_destroy(fai);
-    goto_faidx1_cleanup(tmpfilename);
+    goto_faidx1_cleanup(&tmp_path);
 }
 
-unsafe fn goto_faidx1_cleanup(tmpfilename: *mut c_char) {
-    let fai_len = libc::strlen(tmpfilename) + 5;
-    let fai_name = libc::malloc(fai_len).cast::<c_char>();
-    if !fai_name.is_null() {
-        libc::snprintf(fai_name, fai_len, c"%s.fai".as_ptr(), tmpfilename);
-        libc::unlink(fai_name);
-        libc::free(fai_name.cast());
-    }
-    libc::unlink(tmpfilename);
-    libc::free(tmpfilename.cast());
+unsafe fn goto_faidx1_cleanup(tmpfilename: &str) {
+    let _ = std::fs::remove_file(format!("{tmpfilename}.fai"));
+    let _ = std::fs::remove_file(tmpfilename);
 }
 
 // original: test_empty_sam_file (htslib/test/sam.c:1618)
-pub unsafe fn test_sam_c_1618_test_empty_sam_file(filename: *const c_char) {
-    let in_ = crate::htslib_rs::hts::hts_open(filename, c"r".as_ptr());
+pub unsafe fn test_sam_c_1618_test_empty_sam_file(filename: *const u8) {
+    let in_ = crate::htslib_rs::hts::hts_open(filename.cast(), c"r".as_ptr());
     if in_.is_null() {
         test_sam_bam_set1_fail(
-            c"test_empty_sam_file".as_ptr(),
-            c"can't open file to read as SAM".as_ptr(),
+            c"test_empty_sam_file".as_ptr().cast(),
+            c"can't open file to read as SAM".as_ptr().cast(),
         );
         return;
     }
@@ -1465,20 +1406,20 @@ pub unsafe fn test_sam_c_1618_test_empty_sam_file(filename: *const c_char) {
 
     if format != crate::htslib_rs::hts::HTS_FORMAT_EMPTY_FORMAT {
         test_sam_bam_set1_fail(
-            c"test_empty_sam_file".as_ptr(),
-            c"empty file detected as unexpected format".as_ptr(),
+            c"test_empty_sam_file".as_ptr().cast(),
+            c"empty file detected as unexpected format".as_ptr().cast(),
         );
     }
     if !header.is_null() {
         test_sam_bam_set1_fail(
-            c"test_empty_sam_file".as_ptr(),
-            c"sam_hdr_read from empty file should fail".as_ptr(),
+            c"test_empty_sam_file".as_ptr().cast(),
+            c"sam_hdr_read from empty file should fail".as_ptr().cast(),
         );
     }
     if ret >= -1 {
         test_sam_bam_set1_fail(
-            c"test_empty_sam_file".as_ptr(),
-            c"sam_read1 from empty file should fail".as_ptr(),
+            c"test_empty_sam_file".as_ptr().cast(),
+            c"sam_read1 from empty file should fail".as_ptr().cast(),
         );
     }
 
@@ -1488,12 +1429,12 @@ pub unsafe fn test_sam_c_1618_test_empty_sam_file(filename: *const c_char) {
 }
 
 // original: test_text_file (htslib/test/sam.c:1641)
-pub unsafe fn test_sam_c_1641_test_text_file(filename: *const c_char, nexp: c_int) {
-    let in_ = crate::htslib_rs::hts::hts_open(filename, c"r".as_ptr());
+pub unsafe fn test_sam_c_1641_test_text_file(filename: *const u8, nexp: i32) {
+    let in_ = crate::htslib_rs::hts::hts_open(filename.cast(), c"r".as_ptr());
     if in_.is_null() {
         test_sam_bam_set1_fail(
-            c"test_text_file".as_ptr(),
-            c"can't open file to read as text".as_ptr(),
+            c"test_text_file".as_ptr().cast(),
+            c"can't open file to read as text".as_ptr().cast(),
         );
         return;
     }
@@ -1502,7 +1443,7 @@ pub unsafe fn test_sam_c_1641_test_text_file(filename: *const c_char, nexp: c_in
     let mut n = 0;
     let mut ret;
     loop {
-        ret = crate::htslib_rs::hts::hts_getline(in_, b'\n' as c_int, &mut str_);
+        ret = crate::htslib_rs::hts::hts_getline(in_, b'\n' as i32, &mut str_);
         if ret < 0 {
             break;
         }
@@ -1510,21 +1451,21 @@ pub unsafe fn test_sam_c_1641_test_text_file(filename: *const c_char, nexp: c_in
         n += 1;
         if ret as usize != len {
             test_sam_bam_set1_fail(
-                c"test_text_file".as_ptr(),
-                c"hts_getline read unexpected line length".as_ptr(),
+                c"test_text_file".as_ptr().cast(),
+                c"hts_getline read unexpected line length".as_ptr().cast(),
             );
         }
     }
     if ret != -1 {
         test_sam_bam_set1_fail(
-            c"test_text_file".as_ptr(),
-            c"hts_getline got an error".as_ptr(),
+            c"test_text_file".as_ptr().cast(),
+            c"hts_getline got an error".as_ptr().cast(),
         );
     }
     if n != nexp {
         test_sam_bam_set1_fail(
-            c"test_text_file".as_ptr(),
-            c"hts_getline read unexpected number of lines".as_ptr(),
+            c"test_text_file".as_ptr().cast(),
+            c"hts_getline read unexpected number of lines".as_ptr().cast(),
         );
     }
 
@@ -1535,25 +1476,22 @@ pub unsafe fn test_sam_c_1641_test_text_file(filename: *const c_char, nexp: c_in
 // original: check_enum1 (htslib/test/sam.c:1661)
 pub unsafe fn test_sam_c_1661_check_enum1() {
     if crate::htslib_rs::hts::HTS_COMPRESSION_NO_COMPRESSION != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: no_compression is %d\n".as_ptr(),
+        eprintln!(
+            "Failed: no_compression is {}",
             crate::htslib_rs::hts::HTS_COMPRESSION_NO_COMPRESSION,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
     if crate::htslib_rs::hts::HTS_COMPRESSION_GZIP != 1 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: gzip is %d\n".as_ptr(),
+        eprintln!(
+            "Failed: gzip is {}",
             crate::htslib_rs::hts::HTS_COMPRESSION_GZIP,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
     if crate::htslib_rs::hts::HTS_COMPRESSION_BGZF != 2 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: bgzf is %d\n".as_ptr(),
+        eprintln!(
+            "Failed: bgzf is {}",
             crate::htslib_rs::hts::HTS_COMPRESSION_BGZF,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
@@ -1568,114 +1506,89 @@ pub unsafe fn test_sam_c_1669_check_cigar_tab() {
         .filter(|value| **value < 0)
         .count();
     if n_neg + cigar_str.len() != 256 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: bam_cigar_table has %d unset entries\n".as_ptr(),
-            n_neg as c_int,
-        );
+        eprintln!("Failed: bam_cigar_table has {} unset entries", n_neg);
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
 
     for (i, ch) in cigar_str.iter().copied().enumerate() {
         if sam::BAM_CIGAR_TABLE[ch as usize] != i as i8 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed: bam_cigar_table['%c'] is not %d\n".as_ptr(),
-                ch as c_int,
-                i as c_int,
+            eprintln!(
+                "Failed: bam_cigar_table['{}'] is not {}",
+                ch as char, i,
             );
             TEST_SAM_STATUS = libc::EXIT_FAILURE;
         }
     }
 }
 
-unsafe fn goto_generator_cleanup(f: *mut libc::FILE, ref_: *mut c_char, res: c_int) -> c_int {
-    if !f.is_null() {
-        libc::fclose(f);
-    }
-    libc::free(ref_.cast());
-    res
-}
-
 // original: generator (htslib/test/sam.c:1688)
-pub unsafe fn test_sam_c_1688_generator(name: *const c_char) -> c_int {
+pub unsafe fn test_sam_c_1688_generator(name: *const u8) -> i32 {
+    use std::io::Write;
     const MAX_RECS: usize = 1000;
     const SEQ_LEN: usize = 100;
 
-    let mut res = -1;
-    let f = libc::fopen(name, c"w".as_ptr());
-    if f.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Couldn't open \"%s\"\n".as_ptr(),
-            name,
-        );
-        return -1;
-    }
+    let name_str = std::ffi::CStr::from_ptr(name.cast())
+        .to_string_lossy()
+        .into_owned();
+    let mut f = match std::fs::File::create(&name_str) {
+        Ok(f) => std::io::BufWriter::new(f),
+        Err(_) => {
+            eprintln!("Couldn't open \"{name_str}\"");
+            return -1;
+        }
+    };
 
-    let ref_ = libc::malloc(MAX_RECS + SEQ_LEN + 1).cast::<c_char>();
-    if ref_.is_null() {
-        libc::fclose(f);
-        return -1;
-    }
-
+    let mut ref_ = vec![0u8; MAX_RECS + SEQ_LEN];
+    let bases = b"ACGT";
     let mut lfsr = 0xbadcafe_u32;
-    for i in 0..(MAX_RECS + SEQ_LEN) {
+    for r in ref_.iter_mut() {
         lfsr ^= lfsr << 13;
         lfsr ^= lfsr >> 17;
         lfsr ^= lfsr << 5;
-        *ref_.add(i) = *c"ACGT".as_ptr().add((lfsr & 3) as usize);
-    }
-    *ref_.add(MAX_RECS + SEQ_LEN) = 0;
-
-    let mut qual = [0 as c_char; SEQ_LEN + 1];
-    for (i, q) in qual.iter_mut().take(SEQ_LEN).enumerate() {
-        *q = (b'A' + (i as u8 & 0xf)) as c_char;
+        *r = bases[(lfsr & 3) as usize];
     }
 
-    if libc::fputs(c"@HD\tVN:1.4\n".as_ptr(), f) < 0 {
-        goto_generator_cleanup(f, ref_, res);
-        return res;
+    let mut qual = [0u8; SEQ_LEN];
+    for (i, q) in qual.iter_mut().enumerate() {
+        *q = b'A' + (i as u8 & 0xf);
     }
-    if libc::fprintf(
-        f,
-        c"@SQ\tSN:ref1\tLN:%d\n".as_ptr(),
-        (MAX_RECS + SEQ_LEN) as c_int,
-    ) < 0
-    {
-        goto_generator_cleanup(f, ref_, res);
-        return res;
+
+    if f.write_all(b"@HD\tVN:1.4\n").is_err() {
+        return -1;
+    }
+    if writeln!(f, "@SQ\tSN:ref1\tLN:{}", MAX_RECS + SEQ_LEN).is_err() {
+        return -1;
     }
     for i in 0..MAX_RECS {
-        if libc::fprintf(
-            f,
-            c"read%zu\t0\tref1\t%zu\t64\t100M\t*\t0\t0\t%.*s\t%.*s\n".as_ptr(),
-            i + 1,
-            i + 1,
-            SEQ_LEN as c_int,
-            ref_.add(i),
-            SEQ_LEN as c_int,
-            qual.as_ptr(),
-        ) < 0
+        let seq = &ref_[i..i + SEQ_LEN];
+        if write!(f, "read{}\t0\tref1\t{}\t64\t100M\t*\t0\t0\t", i + 1, i + 1).is_err()
+            || f.write_all(seq).is_err()
+            || f.write_all(b"\t").is_err()
+            || f.write_all(&qual).is_err()
+            || f.write_all(b"\n").is_err()
         {
-            goto_generator_cleanup(f, ref_, res);
-            return res;
+            return -1;
         }
     }
 
-    if libc::fclose(f) == 0 {
-        res = 0;
+    match f.into_inner() {
+        Ok(inner) => {
+            if inner.sync_all().is_ok() {
+                0
+            } else {
+                -1
+            }
+        }
+        Err(_) => -1,
     }
-    libc::free(ref_.cast());
-    res
 }
 
 // original: read_data_block (htslib/test/sam.c:1735)
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn test_sam_c_1735_read_data_block(
-    in_name: *const c_char,
+    in_name: *const u8,
     fp_in: *mut htsFile,
-    out_name: *const c_char,
+    out_name: *const u8,
     fp_out: *mut htsFile,
     header: *mut sam::sam_hdr_t,
     recs: *mut sam::bam1_t,
@@ -1683,7 +1596,7 @@ pub unsafe fn test_sam_c_1735_read_data_block(
     buffer: *mut u8,
     bufsz: usize,
     nrecs_out: *mut usize,
-) -> c_int {
+) -> i32 {
     let mut nrecs = 0usize;
     let mut ret = -1;
     let mut res = -1;
@@ -1705,7 +1618,7 @@ pub unsafe fn test_sam_c_1735_read_data_block(
 
         if !fp_out.is_null() && sam::sam_c_4553_sam_write1(fp_out, header, rec) < 0 {
             nrecs += 1;
-            test_sam_bam_set1_fail(c"read_data_block".as_ptr(), c"sam_write1 failed".as_ptr());
+            test_sam_bam_set1_fail(c"read_data_block".as_ptr().cast(), c"sam_write1 failed".as_ptr().cast());
             *nrecs_out = nrecs;
             return ret;
         }
@@ -1715,7 +1628,7 @@ pub unsafe fn test_sam_c_1735_read_data_block(
 
     if res < -1 {
         let _ = in_name;
-        test_sam_bam_set1_fail(c"read_data_block".as_ptr(), c"sam_read1 failed".as_ptr());
+        test_sam_bam_set1_fail(c"read_data_block".as_ptr().cast(), c"sam_read1 failed".as_ptr().cast());
     } else {
         ret = 0;
     }
@@ -1727,57 +1640,44 @@ pub unsafe fn test_sam_c_1735_read_data_block(
 // original: test_parse_decimal1 (htslib/test/sam.c:1781)
 pub unsafe fn test_sam_c_1781_test_parse_decimal1(
     exp: i64,
-    str_: *const c_char,
+    str_: *const u8,
     exp_consumed: usize,
-    flags: c_int,
-    warning: *const c_char,
+    flags: i32,
+    warning: *const u8,
 ) {
+    let str_disp = std::ffi::CStr::from_ptr(str_.cast()).to_string_lossy();
     if !warning.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"(Expect %s message for \"%s\")\n".as_ptr(),
-            warning,
-            str_,
+        eprintln!(
+            "(Expect {} message for \"{}\")",
+            std::ffi::CStr::from_ptr(warning.cast()).to_string_lossy(),
+            str_disp,
         );
     }
 
-    let mut val = crate::htslib_rs::hts::hts_parse_decimal(str_, std::ptr::null_mut(), flags);
+    let mut val = crate::htslib_rs::hts::hts_parse_decimal(str_.cast(), std::ptr::null_mut(), flags);
     if val != exp {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: hts_parse_decimal(\"%s\", NULL, %d) returned %lld, expected %lld\n".as_ptr(),
-            str_,
-            flags,
-            val as libc::c_longlong,
-            exp as libc::c_longlong,
+        eprintln!(
+            "Failed: hts_parse_decimal(\"{}\", NULL, {}) returned {}, expected {}",
+            str_disp, flags, val, exp,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
 
-    let mut end: *mut c_char = std::ptr::null_mut();
-    val = crate::htslib_rs::hts::hts_parse_decimal(str_, &mut end, flags);
+    let mut end: *mut i8 = std::ptr::null_mut();
+    val = crate::htslib_rs::hts::hts_parse_decimal(str_.cast(), &mut end, flags);
     if val != exp {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: hts_parse_decimal(\"%s\", ..., %d) returned %lld, expected %lld\n".as_ptr(),
-            str_,
-            flags,
-            val as libc::c_longlong,
-            exp as libc::c_longlong,
+        eprintln!(
+            "Failed: hts_parse_decimal(\"{}\", ..., {}) returned {}, expected {}",
+            str_disp, flags, val, exp,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
 
-    let consumed = end.offset_from(str_) as usize;
+    let consumed = end.offset_from(str_.cast::<i8>()) as usize;
     if consumed != exp_consumed {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: hts_parse_decimal(\"%s\", ..., %d) consumed %zu chars, expected %zu\n"
-                .as_ptr(),
-            str_,
-            flags,
-            consumed,
-            exp_consumed,
+        eprintln!(
+            "Failed: hts_parse_decimal(\"{}\", ..., {}) consumed {} chars, expected {}",
+            str_disp, flags, consumed, exp_consumed,
         );
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
@@ -1785,48 +1685,48 @@ pub unsafe fn test_sam_c_1781_test_parse_decimal1(
 
 // original: test_parse_decimal (htslib/test/sam.c:1795)
 pub unsafe fn test_sam_c_1795_test_parse_decimal() {
-    test_sam_c_1781_test_parse_decimal1(37, c"+37".as_ptr(), 3, 0, std::ptr::null());
+    test_sam_c_1781_test_parse_decimal1(37, c"+37".as_ptr().cast(), 3, 0, std::ptr::null());
     test_sam_c_1781_test_parse_decimal1(
         -1001,
-        c" \t -1,001x".as_ptr(),
+        c" \t -1,001x".as_ptr().cast(),
         9,
         crate::htslib_rs::hts::HTS_PARSE_THOUSANDS_SEP,
-        c"trailing 'x'".as_ptr(),
+        c"trailing 'x'".as_ptr().cast(),
     );
     test_sam_c_1781_test_parse_decimal1(
         i64::MAX,
-        c"+9223372036854775807".as_ptr(),
+        c"+9223372036854775807".as_ptr().cast(),
         20,
         0,
         std::ptr::null(),
     );
     test_sam_c_1781_test_parse_decimal1(
         i64::MIN,
-        c"-9,223,372,036,854,775,808".as_ptr(),
+        c"-9,223,372,036,854,775,808".as_ptr().cast(),
         26,
         crate::htslib_rs::hts::HTS_PARSE_THOUSANDS_SEP,
         std::ptr::null(),
     );
-    test_sam_c_1781_test_parse_decimal1(1500, c"1.5e3".as_ptr(), 5, 0, std::ptr::null());
-    test_sam_c_1781_test_parse_decimal1(1500, c"1.5e+3k".as_ptr(), 6, 0, c"trailing 'k'".as_ptr());
-    test_sam_c_1781_test_parse_decimal1(1500000000, c"1.5G".as_ptr(), 4, 0, std::ptr::null());
-    test_sam_c_1781_test_parse_decimal1(12345, c"12.345k".as_ptr(), 7, 0, std::ptr::null());
+    test_sam_c_1781_test_parse_decimal1(1500, c"1.5e3".as_ptr().cast(), 5, 0, std::ptr::null());
+    test_sam_c_1781_test_parse_decimal1(1500, c"1.5e+3k".as_ptr().cast(), 6, 0, c"trailing 'k'".as_ptr().cast());
+    test_sam_c_1781_test_parse_decimal1(1500000000, c"1.5G".as_ptr().cast(), 4, 0, std::ptr::null());
+    test_sam_c_1781_test_parse_decimal1(12345, c"12.345k".as_ptr().cast(), 7, 0, std::ptr::null());
     test_sam_c_1781_test_parse_decimal1(
         12345,
-        c"12.3456k".as_ptr(),
+        c"12.3456k".as_ptr().cast(),
         8,
         0,
-        c"dropped fraction".as_ptr(),
+        c"dropped fraction".as_ptr().cast(),
     );
-    test_sam_c_1781_test_parse_decimal1(0, c"A".as_ptr(), 0, 0, c"invalid numeric".as_ptr());
-    test_sam_c_1781_test_parse_decimal1(0, c"G".as_ptr(), 0, 0, c"invalid numeric".as_ptr());
-    test_sam_c_1781_test_parse_decimal1(0, c" +/-".as_ptr(), 0, 0, c"invalid numeric".as_ptr());
+    test_sam_c_1781_test_parse_decimal1(0, c"A".as_ptr().cast(), 0, 0, c"invalid numeric".as_ptr().cast());
+    test_sam_c_1781_test_parse_decimal1(0, c"G".as_ptr().cast(), 0, 0, c"invalid numeric".as_ptr().cast());
+    test_sam_c_1781_test_parse_decimal1(0, c" +/-".as_ptr().cast(), 0, 0, c"invalid numeric".as_ptr().cast());
     test_sam_c_1781_test_parse_decimal1(
         0,
-        c" \t -.e+9999".as_ptr(),
+        c" \t -.e+9999".as_ptr().cast(),
         0,
         0,
-        c"invalid numeric".as_ptr(),
+        c"invalid numeric".as_ptr().cast(),
     );
 }
 
@@ -1841,7 +1741,9 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
     let recs_box: Box<[sam::bam1_t; TEST_MEMPOLICY_MAX_RECS]> =
         Box::new(std::array::from_fn(|_| sam::bam1_t::default()));
     let recs = Box::into_raw(recs_box).cast::<sam::bam1_t>();
-    let buffer = libc::malloc(bufsz).cast::<u8>();
+    // SEAM: the shared scratch buffer is an owned Vec (replaces libc::malloc/free).
+    let mut buffer_vec = vec![0u8; bufsz];
+    let buffer = buffer_vec.as_mut_ptr();
     let fname = c"test/sam_alignment.tmp.sam".as_ptr();
     let bam_name = c"test/sam_alignment.tmp.bam".as_ptr();
     let cram_name = c"test/sam_alignment.tmp.cram".as_ptr();
@@ -1853,7 +1755,7 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
     let mut header: *mut sam::sam_hdr_t = std::ptr::null_mut();
     let mut cram_fmt: htsFormat = std::mem::zeroed();
     if recs.is_null() || buffer.is_null() {
-        test_sam_bam_set1_fail(c"test_mempolicy".as_ptr(), c"Allocating buffer".as_ptr());
+        test_sam_bam_set1_fail(c"test_mempolicy".as_ptr().cast(), c"Allocating buffer".as_ptr().cast());
         goto_test_mempolicy_cleanup(
             recs,
             buffer,
@@ -1866,7 +1768,7 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
         );
         return;
     }
-    if test_sam_c_1688_generator(fname) < 0 {
+    if test_sam_c_1688_generator(fname.cast()) < 0 {
         goto_test_mempolicy_cleanup(
             recs,
             buffer,
@@ -1892,8 +1794,8 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
         || sam::sam_hdr_write(bam_fp, header) < 0
     {
         test_sam_bam_set1_fail(
-            c"test_mempolicy".as_ptr(),
-            c"SAM to BAM setup failed".as_ptr(),
+            c"test_mempolicy".as_ptr().cast(),
+            c"SAM to BAM setup failed".as_ptr().cast(),
         );
         goto_test_mempolicy_cleanup(
             recs,
@@ -1908,7 +1810,7 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
         return;
     }
     if test_sam_c_1735_read_data_block(
-        fname, fp, bam_name, bam_fp, header, recs, TEST_MEMPOLICY_MAX_RECS, buffer, bufsz, &mut nrecs,
+        fname.cast(), fp, bam_name.cast(), bam_fp, header, recs, TEST_MEMPOLICY_MAX_RECS, buffer, bufsz, &mut nrecs,
     ) < 0
     {
         goto_test_mempolicy_cleanup(
@@ -1925,7 +1827,7 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
     }
     if crate::htslib_rs::hts::hts_close(bam_fp) < 0 {
         bam_fp = std::ptr::null_mut();
-        test_sam_bam_set1_fail(c"test_mempolicy".as_ptr(), c"sam_close BAM".as_ptr());
+        test_sam_bam_set1_fail(c"test_mempolicy".as_ptr().cast(), c"sam_close BAM".as_ptr().cast());
         goto_test_mempolicy_cleanup(
             recs,
             buffer,
@@ -1942,12 +1844,12 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
     for i in (0..TEST_MEMPOLICY_MAX_RECS).step_by(11) {
         if sam::bam_aux_update_str(
             recs.add(i),
-            c"ZZ".as_ptr(),
-            tag_text.to_bytes().len() as c_int,
-            tag_text.as_ptr(),
+            c"ZZ".as_ptr().cast(),
+            tag_text.to_bytes().len() as i32,
+            tag_text.as_ptr().cast(),
         ) < 0
         {
-            test_sam_bam_set1_fail(c"test_mempolicy".as_ptr(), c"bam_aux_update_str".as_ptr());
+            test_sam_bam_set1_fail(c"test_mempolicy".as_ptr().cast(), c"bam_aux_update_str".as_ptr().cast());
             break;
         }
     }
@@ -1957,7 +1859,7 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
     nrecs = 0;
     if crate::htslib_rs::hts::hts_close(fp) < 0 {
         fp = std::ptr::null_mut();
-        test_sam_bam_set1_fail(c"test_mempolicy".as_ptr(), c"sam_close SAM".as_ptr());
+        test_sam_bam_set1_fail(c"test_mempolicy".as_ptr().cast(), c"sam_close SAM".as_ptr().cast());
         goto_test_mempolicy_cleanup(
             recs,
             buffer,
@@ -1976,7 +1878,7 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
 
     bam_fp = crate::htslib_rs::hts::hts_open(bam_name, c"r".as_ptr());
     if crate::htslib_rs::hts::hts_parse_format(&mut cram_fmt, c"cram,no_ref".as_ptr()) < 0 {
-        test_sam_bam_set1_fail(c"test_mempolicy".as_ptr(), c"hts_parse_format".as_ptr());
+        test_sam_bam_set1_fail(c"test_mempolicy".as_ptr().cast(), c"hts_parse_format".as_ptr().cast());
         goto_test_mempolicy_cleanup(
             recs,
             buffer,
@@ -2001,8 +1903,8 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
         || sam::sam_hdr_write(cram_fp, header) < 0
     {
         test_sam_bam_set1_fail(
-            c"test_mempolicy".as_ptr(),
-            c"BAM to CRAM setup failed".as_ptr(),
+            c"test_mempolicy".as_ptr().cast(),
+            c"BAM to CRAM setup failed".as_ptr().cast(),
         );
         goto_test_mempolicy_cleanup(
             recs,
@@ -2017,7 +1919,7 @@ pub unsafe fn test_sam_c_1812_test_mempolicy() {
         return;
     }
     test_sam_c_1735_read_data_block(
-        bam_name, bam_fp, cram_name, cram_fp, header, recs, TEST_MEMPOLICY_MAX_RECS, buffer, bufsz, &mut nrecs,
+        bam_name.cast(), bam_fp, cram_name.cast(), cram_fp, header, recs, TEST_MEMPOLICY_MAX_RECS, buffer, bufsz, &mut nrecs,
     );
     goto_test_mempolicy_cleanup(
         recs,
@@ -2055,7 +1957,8 @@ unsafe fn goto_test_mempolicy_cleanup(
     for i in 0..nrecs {
         sam::bam_destroy1(recs.add(i));
     }
-    libc::free(buffer.cast());
+    // SEAM: the scratch buffer is an owned Vec in the caller; nothing to free here.
+    let _ = buffer;
     // SEAM: reclaim the owned boxed bam1_t array (replaces libc::free(recs)).
     // The structs are BAM_USER_OWNS_STRUCT, so the bam_destroy1 calls above only
     // cleared their data Vecs; dropping the Box releases the array storage (and
@@ -2075,8 +1978,8 @@ pub unsafe fn test_sam_c_2000_test_bam_set1_minimal() {
     let bam = sam::bam_init1();
     if bam.is_null() {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_minimal".as_ptr(),
-            c"failed to initialize BAM struct.".as_ptr(),
+            c"test_bam_set1_minimal".as_ptr().cast(),
+            c"failed to initialize BAM struct.".as_ptr().cast(),
         );
         return;
     }
@@ -2102,12 +2005,12 @@ pub unsafe fn test_sam_c_2000_test_bam_set1_minimal() {
     if r != 4
         || (*bam).core.l_qname != 4
         || (*bam).core.l_extranul != 2
-        || libc::strcmp(sam::bam_get_qname(bam), c"*".as_ptr()) != 0
+        || std::ffi::CStr::from_ptr(sam::bam_get_qname(bam).cast()).to_bytes() != b"*"
         || (*bam).core.pos != 0
         || (*bam).core.tid != -1
-        || (*bam).core.bin as c_int != crate::htslib_rs::hts::hts_reg2bin(0, 1, 14, 5)
+        || (*bam).core.bin as i32 != crate::htslib_rs::hts::hts_reg2bin(0, 1, 14, 5)
         || (*bam).core.qual != 0xff
-        || (*bam).core.flag as c_int != sam::BAM_FUNMAP
+        || (*bam).core.flag as i32 != sam::BAM_FUNMAP
         || (*bam).core.n_cigar != 0
         || (*bam).core.mtid != -1
         || (*bam).core.mpos != 0
@@ -2116,8 +2019,8 @@ pub unsafe fn test_sam_c_2000_test_bam_set1_minimal() {
         || sam::bam_get_l_aux(bam) != 0
     {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_minimal".as_ptr(),
-            c"bam_set1 minimal checks failed.".as_ptr(),
+            c"test_bam_set1_minimal".as_ptr().cast(),
+            c"bam_set1 minimal checks failed.".as_ptr().cast(),
         );
     }
     sam::bam_destroy1(bam);
@@ -2139,8 +2042,8 @@ pub unsafe fn test_sam_c_2031_test_bam_set1_full() {
     let bam = sam::bam_init1();
     if bam.is_null() {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_full".as_ptr(),
-            c"failed to initialize BAM struct.".as_ptr(),
+            c"test_bam_set1_full".as_ptr().cast(),
+            c"failed to initialize BAM struct.".as_ptr().cast(),
         );
         return;
     }
@@ -2148,7 +2051,7 @@ pub unsafe fn test_sam_c_2031_test_bam_set1_full() {
     let r = sam::bam_set1(
         bam,
         qname_c.to_bytes().len(),
-        qname,
+        qname.cast(),
         sam::BAM_FREVERSE as u16,
         1,
         1000,
@@ -2159,28 +2062,26 @@ pub unsafe fn test_sam_c_2031_test_bam_set1_full() {
         2000,
         3000,
         seq_len,
-        seq,
-        qual,
+        seq.cast(),
+        qual.cast(),
         64,
     );
 
     let mut ok = r == 39
         && (*bam).core.l_qname == 12
         && (*bam).core.l_extranul == 1
-        && libc::strcmp(sam::bam_get_qname(bam), qname) == 0
+        && std::ffi::CStr::from_ptr(sam::bam_get_qname(bam).cast()).to_bytes()
+            == std::ffi::CStr::from_ptr(qname.cast()).to_bytes()
         && (*bam).core.n_cigar as usize == cigar.len()
-        && libc::memcmp(
-            sam::bam_get_cigar(bam).cast(),
-            cigar.as_ptr().cast(),
-            std::mem::size_of_val(&cigar),
-        ) == 0
+        && std::slice::from_raw_parts(sam::bam_get_cigar(bam), cigar.len()) == cigar
         && (*bam).core.l_qseq as usize == seq_len
-        && libc::memcmp(sam::bam_get_qual(bam).cast(), qual.cast(), seq_len) == 0
+        && std::slice::from_raw_parts(sam::bam_get_qual(bam), seq_len)
+            == std::slice::from_raw_parts(qual.cast::<u8>(), seq_len)
         && (*bam).core.pos == 1000
         && (*bam).core.tid == 1
-        && (*bam).core.bin as c_int == crate::htslib_rs::hts::hts_reg2bin(1000, 1010, 14, 5)
+        && (*bam).core.bin as i32 == crate::htslib_rs::hts::hts_reg2bin(1000, 1010, 14, 5)
         && (*bam).core.qual == 42
-        && (*bam).core.flag as c_int == sam::BAM_FREVERSE
+        && (*bam).core.flag as i32 == sam::BAM_FREVERSE
         && (*bam).core.mtid == 2
         && (*bam).core.mpos == 2000
         && (*bam).core.isize == 3000
@@ -2192,8 +2093,8 @@ pub unsafe fn test_sam_c_2031_test_bam_set1_full() {
     }
     if !ok {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_full".as_ptr(),
-            c"bam_set1 full checks failed.".as_ptr(),
+            c"test_bam_set1_full".as_ptr().cast(),
+            c"bam_set1 full checks failed.".as_ptr().cast(),
         );
     }
     sam::bam_destroy1(bam);
@@ -2204,8 +2105,8 @@ pub unsafe fn test_sam_c_2078_test_bam_set1_even_and_odd_seq_len() {
     let bam = sam::bam_init1();
     if bam.is_null() {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_even_and_odd_seq_len".as_ptr(),
-            c"failed to initialize BAM struct.".as_ptr(),
+            c"test_bam_set1_even_and_odd_seq_len".as_ptr().cast(),
+            c"failed to initialize BAM struct.".as_ptr().cast(),
         );
         return;
     }
@@ -2226,7 +2127,7 @@ pub unsafe fn test_sam_c_2078_test_bam_set1_even_and_odd_seq_len() {
             0,
             0,
             seq_len,
-            seq,
+            seq.cast(),
             std::ptr::null(),
             0,
         );
@@ -2237,8 +2138,8 @@ pub unsafe fn test_sam_c_2078_test_bam_set1_even_and_odd_seq_len() {
         }
         if !ok {
             test_sam_bam_set1_fail(
-                c"test_bam_set1_even_and_odd_seq_len".as_ptr(),
-                c"sequence checks failed.".as_ptr(),
+                c"test_bam_set1_even_and_odd_seq_len".as_ptr().cast(),
+                c"sequence checks failed.".as_ptr().cast(),
             );
             break;
         }
@@ -2254,8 +2155,8 @@ pub unsafe fn test_sam_c_2108_test_bam_set1_with_seq_but_no_qual() {
     let bam = sam::bam_init1();
     if bam.is_null() {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_with_seq_but_no_qual".as_ptr(),
-            c"failed to initialize BAM struct.".as_ptr(),
+            c"test_bam_set1_with_seq_but_no_qual".as_ptr().cast(),
+            c"failed to initialize BAM struct.".as_ptr().cast(),
         );
         return;
     }
@@ -2273,7 +2174,7 @@ pub unsafe fn test_sam_c_2108_test_bam_set1_with_seq_but_no_qual() {
         0,
         0,
         seq_len,
-        seq,
+        seq.cast(),
         std::ptr::null(),
         0,
     );
@@ -2285,8 +2186,8 @@ pub unsafe fn test_sam_c_2108_test_bam_set1_with_seq_but_no_qual() {
     }
     if !ok {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_with_seq_but_no_qual".as_ptr(),
-            c"sequence or quality checks failed.".as_ptr(),
+            c"test_bam_set1_with_seq_but_no_qual".as_ptr().cast(),
+            c"sequence or quality checks failed.".as_ptr().cast(),
         );
     }
     sam::bam_destroy1(bam);
@@ -2297,16 +2198,16 @@ pub unsafe fn test_sam_c_2132_test_bam_set1_validate_qname() {
     let bam = sam::bam_init1();
     if bam.is_null() {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_validate_qname".as_ptr(),
-            c"failed to initialize BAM struct.".as_ptr(),
+            c"test_bam_set1_validate_qname".as_ptr().cast(),
+            c"failed to initialize BAM struct.".as_ptr().cast(),
         );
         return;
     }
-    let too_long = [b'A' as c_char; 255];
+    let too_long = [b'A'; 255];
     let r = sam::bam_set1(
         bam,
         too_long.len(),
-        too_long.as_ptr(),
+        too_long.as_ptr().cast(),
         sam::BAM_FUNMAP as u16,
         -1,
         0,
@@ -2321,10 +2222,10 @@ pub unsafe fn test_sam_c_2132_test_bam_set1_validate_qname() {
         std::ptr::null(),
         0,
     );
-    if r >= 0 || *crate::htslib_rs::c_compat::__errno_location() != libc::EINVAL {
+    if r >= 0 || *libc::__errno_location() != libc::EINVAL {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_validate_qname".as_ptr(),
-            c"qname validation failed.".as_ptr(),
+            c"test_bam_set1_validate_qname".as_ptr().cast(),
+            c"qname validation failed.".as_ptr().cast(),
         );
     }
     sam::bam_destroy1(bam);
@@ -2335,8 +2236,8 @@ pub unsafe fn test_sam_c_2149_test_bam_set1_validate_seq() {
     let bam = sam::bam_init1();
     if bam.is_null() {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_validate_seq".as_ptr(),
-            c"failed to initialize BAM struct.".as_ptr(),
+            c"test_bam_set1_validate_seq".as_ptr().cast(),
+            c"failed to initialize BAM struct.".as_ptr().cast(),
         );
         return;
     }
@@ -2355,14 +2256,14 @@ pub unsafe fn test_sam_c_2149_test_bam_set1_validate_seq() {
         0,
         0,
         i32::MAX as usize + 1,
-        sequence,
+        sequence.cast(),
         std::ptr::null(),
         0,
     );
-    if r >= 0 || *crate::htslib_rs::c_compat::__errno_location() != libc::EINVAL {
+    if r >= 0 || *libc::__errno_location() != libc::EINVAL {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_validate_seq".as_ptr(),
-            c"sequence validation failed.".as_ptr(),
+            c"test_bam_set1_validate_seq".as_ptr().cast(),
+            c"sequence validation failed.".as_ptr().cast(),
         );
     }
     sam::bam_destroy1(bam);
@@ -2377,8 +2278,8 @@ pub unsafe fn test_sam_c_2166_test_bam_set1_validate_cigar() {
     let bam = sam::bam_init1();
     if bam.is_null() {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_validate_cigar".as_ptr(),
-            c"failed to initialize BAM struct.".as_ptr(),
+            c"test_bam_set1_validate_cigar".as_ptr().cast(),
+            c"failed to initialize BAM struct.".as_ptr().cast(),
         );
         return;
     }
@@ -2397,11 +2298,11 @@ pub unsafe fn test_sam_c_2166_test_bam_set1_validate_cigar() {
         0,
         0,
         seq_len,
-        seq,
+        seq.cast(),
         std::ptr::null(),
         0,
     );
-    let e1 = *crate::htslib_rs::c_compat::__errno_location();
+    let e1 = *libc::__errno_location();
     let r2 = sam::bam_set1(
         bam,
         0,
@@ -2420,7 +2321,7 @@ pub unsafe fn test_sam_c_2166_test_bam_set1_validate_cigar() {
         std::ptr::null(),
         0,
     );
-    let e2 = *crate::htslib_rs::c_compat::__errno_location();
+    let e2 = *libc::__errno_location();
     let r3 = sam::bam_set1(
         bam,
         0,
@@ -2435,11 +2336,11 @@ pub unsafe fn test_sam_c_2166_test_bam_set1_validate_cigar() {
         0,
         0,
         seq_len,
-        seq,
+        seq.cast(),
         std::ptr::null(),
         0,
     );
-    let e3 = *crate::htslib_rs::c_compat::__errno_location();
+    let e3 = *libc::__errno_location();
     if r1 >= 0
         || e1 != libc::EINVAL
         || r2 >= 0
@@ -2448,8 +2349,8 @@ pub unsafe fn test_sam_c_2166_test_bam_set1_validate_cigar() {
         || e3 != libc::EINVAL
     {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_validate_cigar".as_ptr(),
-            c"cigar validation failed.".as_ptr(),
+            c"test_bam_set1_validate_cigar".as_ptr().cast(),
+            c"cigar validation failed.".as_ptr().cast(),
         );
     }
     sam::bam_destroy1(bam);
@@ -2462,8 +2363,8 @@ pub unsafe fn test_sam_c_2195_test_bam_set1_validate_size_limits() {
     let bam = sam::bam_init1();
     if bam.is_null() {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_validate_size_limits".as_ptr(),
-            c"failed to initialize BAM struct.".as_ptr(),
+            c"test_bam_set1_validate_size_limits".as_ptr().cast(),
+            c"failed to initialize BAM struct.".as_ptr().cast(),
         );
         return;
     }
@@ -2481,11 +2382,11 @@ pub unsafe fn test_sam_c_2195_test_bam_set1_validate_size_limits() {
         0,
         0,
         2 * (i32::MAX as usize) / 3,
-        seq,
+        seq.cast(),
         std::ptr::null(),
         0,
     );
-    let e1 = *crate::htslib_rs::c_compat::__errno_location();
+    let e1 = *libc::__errno_location();
     let r2 = sam::bam_set1(
         bam,
         0,
@@ -2504,7 +2405,7 @@ pub unsafe fn test_sam_c_2195_test_bam_set1_validate_size_limits() {
         std::ptr::null(),
         0,
     );
-    let e2 = *crate::htslib_rs::c_compat::__errno_location();
+    let e2 = *libc::__errno_location();
     let r3 = sam::bam_set1(
         bam,
         0,
@@ -2523,7 +2424,7 @@ pub unsafe fn test_sam_c_2195_test_bam_set1_validate_size_limits() {
         std::ptr::null(),
         i32::MAX as usize,
     );
-    let e3 = *crate::htslib_rs::c_compat::__errno_location();
+    let e3 = *libc::__errno_location();
     if r1 >= 0
         || e1 != libc::EINVAL
         || r2 >= 0
@@ -2532,19 +2433,18 @@ pub unsafe fn test_sam_c_2195_test_bam_set1_validate_size_limits() {
         || e3 != libc::EINVAL
     {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_validate_size_limits".as_ptr(),
-            c"size limit validation failed.".as_ptr(),
+            c"test_bam_set1_validate_size_limits".as_ptr().cast(),
+            c"size limit validation failed.".as_ptr().cast(),
         );
     }
     sam::bam_destroy1(bam);
 }
 
-unsafe fn test_sam_bam_set1_fail(func: *const c_char, message: *const c_char) {
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"Failed: %s: %s\n".as_ptr(),
-        func,
-        message,
+unsafe fn test_sam_bam_set1_fail(func: *const u8, message: *const u8) {
+    eprintln!(
+        "Failed: {}: {}",
+        std::ffi::CStr::from_ptr(func.cast()).to_string_lossy(),
+        std::ffi::CStr::from_ptr(message.cast()).to_string_lossy(),
     );
     TEST_SAM_STATUS = libc::EXIT_FAILURE;
 }
@@ -2566,9 +2466,10 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
         "htslib_rs-test-bam-set1-write-read-{}.bam",
         std::process::id()
     ));
-    let temp_fname = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+    let mut temp_fname = path.to_string_lossy().into_owned().into_bytes();
+    temp_fname.push(0);
 
-    let mut writer = crate::htslib_rs::hts::hts_open(temp_fname.as_ptr(), c"wb".as_ptr());
+    let mut writer = crate::htslib_rs::hts::hts_open(temp_fname.as_ptr().cast(), c"wb".as_ptr());
     let mut reader: *mut htsFile = std::ptr::null_mut();
     let mut w_header: *mut sam::sam_hdr_t = std::ptr::null_mut();
     let mut r_header: *mut sam::sam_hdr_t = std::ptr::null_mut();
@@ -2578,11 +2479,11 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
 
     if writer.is_null() {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_write_and_read_back".as_ptr(),
-            c"failed to open bam file for writing.".as_ptr(),
+            c"test_bam_set1_write_and_read_back".as_ptr().cast(),
+            c"failed to open bam file for writing.".as_ptr().cast(),
         );
         goto_test_bam_set1_write_read_cleanup(
-            temp_fname.as_ptr(),
+            temp_fname.as_ptr().cast(),
             writer,
             reader,
             w_header,
@@ -2601,11 +2502,11 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
         || sam::sam_hdr_write(writer, w_header) != 0
     {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_write_and_read_back".as_ptr(),
-            c"failed to write bam header.".as_ptr(),
+            c"test_bam_set1_write_and_read_back".as_ptr().cast(),
+            c"failed to write bam header.".as_ptr().cast(),
         );
         goto_test_bam_set1_write_read_cleanup(
-            temp_fname.as_ptr(),
+            temp_fname.as_ptr().cast(),
             writer,
             reader,
             w_header,
@@ -2620,11 +2521,11 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
     w_bam = sam::bam_init1();
     if w_bam.is_null() {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_write_and_read_back".as_ptr(),
-            c"failed to initialize BAM struct.".as_ptr(),
+            c"test_bam_set1_write_and_read_back".as_ptr().cast(),
+            c"failed to initialize BAM struct.".as_ptr().cast(),
         );
         goto_test_bam_set1_write_read_cleanup(
-            temp_fname.as_ptr(),
+            temp_fname.as_ptr().cast(),
             writer,
             reader,
             w_header,
@@ -2638,7 +2539,7 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
     let mut r = sam::bam_set1(
         w_bam,
         qname_c.to_bytes().len(),
-        qname,
+        qname.cast(),
         (sam::BAM_FPAIRED | sam::BAM_FREVERSE) as u16,
         0,
         1000,
@@ -2649,17 +2550,17 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
         2000,
         3000,
         seq_len,
-        seq,
-        qual,
+        seq.cast(),
+        qual.cast(),
         64,
     );
     if r < 0 || sam::sam_c_4553_sam_write1(writer, w_header, w_bam) < 0 {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_write_and_read_back".as_ptr(),
-            c"failed to write alignment.".as_ptr(),
+            c"test_bam_set1_write_and_read_back".as_ptr().cast(),
+            c"failed to write alignment.".as_ptr().cast(),
         );
         goto_test_bam_set1_write_read_cleanup(
-            temp_fname.as_ptr(),
+            temp_fname.as_ptr().cast(),
             writer,
             reader,
             w_header,
@@ -2677,11 +2578,11 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
     writer = std::ptr::null_mut();
     if r != 0 {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_write_and_read_back".as_ptr(),
-            c"failed to close bam file for writing.".as_ptr(),
+            c"test_bam_set1_write_and_read_back".as_ptr().cast(),
+            c"failed to close bam file for writing.".as_ptr().cast(),
         );
         goto_test_bam_set1_write_read_cleanup(
-            temp_fname.as_ptr(),
+            temp_fname.as_ptr().cast(),
             writer,
             reader,
             w_header,
@@ -2695,14 +2596,14 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
     sam::sam_hdr_destroy(w_header);
     w_header = std::ptr::null_mut();
 
-    reader = crate::htslib_rs::hts::hts_open(temp_fname.as_ptr(), c"rb".as_ptr());
+    reader = crate::htslib_rs::hts::hts_open(temp_fname.as_ptr().cast(), c"rb".as_ptr());
     if reader.is_null() {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_write_and_read_back".as_ptr(),
-            c"failed to open bam file for reading.".as_ptr(),
+            c"test_bam_set1_write_and_read_back".as_ptr().cast(),
+            c"failed to open bam file for reading.".as_ptr().cast(),
         );
         goto_test_bam_set1_write_read_cleanup(
-            temp_fname.as_ptr(),
+            temp_fname.as_ptr().cast(),
             writer,
             reader,
             w_header,
@@ -2717,26 +2618,22 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
     if r_header.is_null()
         || sam::sam_hdr_find_tag_id(
             &mut *r_header,
-            c"SQ",
+            b"SQ",
             None,
-            c"SN",
+            b"SN",
             &mut ks,
         ) != 0
-        || {
-            let mut ks_cstr = crate::htslib_rs::hts::ks_c_str(&ks).to_vec();
-            ks_cstr.push(0);
-            libc::strcmp(ks_cstr.as_ptr().cast(), c"t1".as_ptr()) != 0
-        }
+        || crate::htslib_rs::hts::ks_c_str(&ks) != b"t1"
         || (*r_header).n_targets != 1
-        || libc::strcmp(*(*r_header).target_name, c"t1".as_ptr()) != 0
+        || std::ffi::CStr::from_ptr((*(*r_header).target_name).cast()).to_bytes() != b"t1"
         || *(*r_header).target_len != 5000
     {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_write_and_read_back".as_ptr(),
-            c"failed to read expected bam header.".as_ptr(),
+            c"test_bam_set1_write_and_read_back".as_ptr().cast(),
+            c"failed to read expected bam header.".as_ptr().cast(),
         );
         goto_test_bam_set1_write_read_cleanup(
-            temp_fname.as_ptr(),
+            temp_fname.as_ptr().cast(),
             writer,
             reader,
             w_header,
@@ -2751,24 +2648,21 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
     r_bam = sam::bam_init1();
     if r_bam.is_null()
         || sam::sam_read1(reader, r_header, r_bam) < 0
-        || libc::strcmp(sam::bam_get_qname(r_bam), qname) != 0
+        || std::ffi::CStr::from_ptr(sam::bam_get_qname(r_bam).cast()).to_bytes()
+            != std::ffi::CStr::from_ptr(qname.cast()).to_bytes()
         || (*r_bam).core.n_cigar as usize != cigar.len()
-        || libc::memcmp(
-            sam::bam_get_cigar(r_bam).cast(),
-            cigar.as_ptr().cast(),
-            std::mem::size_of_val(&cigar),
-        ) != 0
+        || std::slice::from_raw_parts(sam::bam_get_cigar(r_bam), cigar.len()) != cigar
         || (*r_bam).core.l_qseq as usize != seq_len
         || sam::sam_read1(reader, r_header, r_bam) >= 0
     {
         test_sam_bam_set1_fail(
-            c"test_bam_set1_write_and_read_back".as_ptr(),
-            c"failed to read expected bam alignment.".as_ptr(),
+            c"test_bam_set1_write_and_read_back".as_ptr().cast(),
+            c"failed to read expected bam alignment.".as_ptr().cast(),
         );
     }
 
     goto_test_bam_set1_write_read_cleanup(
-        temp_fname.as_ptr(),
+        temp_fname.as_ptr().cast(),
         writer,
         reader,
         w_header,
@@ -2781,7 +2675,7 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn goto_test_bam_set1_write_read_cleanup(
-    temp_fname: *const c_char,
+    temp_fname: *const u8,
     writer: *mut htsFile,
     reader: *mut htsFile,
     w_header: *mut sam::sam_hdr_t,
@@ -2809,65 +2703,71 @@ unsafe fn goto_test_bam_set1_write_read_cleanup(
         crate::htslib_rs::hts::hts_close(reader);
     }
     crate::htslib_rs::hts::ks_free(ks);
-    libc::unlink(temp_fname);
+    let _ = std::fs::remove_file(
+        std::ffi::CStr::from_ptr(temp_fname.cast())
+            .to_string_lossy()
+            .as_ref(),
+    );
 }
 
 // original: test_cigar_api (htslib/test/sam.c:2307)
 pub unsafe fn test_sam_c_2307_test_cigar_api() {
     let mut buf: *mut u32 = std::ptr::null_mut();
-    let mut end: *mut c_char = std::ptr::null_mut();
+    let mut end: *mut u8 = std::ptr::null_mut();
     let mut m = 0usize;
 
-    let cig = c"*".as_ptr();
-    let mut n = sam::sam_parse_cigar(cig, &mut end, &mut buf, &mut m);
+    let cig: *const u8 = c"*".as_ptr().cast();
+    let mut n = sam::sam_parse_cigar(cig.cast(), &mut end, &mut buf, &mut m);
     if n != 0 || m != 0 || end.offset_from(cig) != 1 {
         test_sam_bam_set1_fail(
-            c"test_cigar_api".as_ptr(),
-            c"failed to parse undefined CIGAR".as_ptr(),
+            c"test_cigar_api".as_ptr().cast(),
+            c"failed to parse undefined CIGAR".as_ptr().cast(),
         );
     }
 
-    let cig = c"2M3X1I10M5D".as_ptr();
-    n = sam::sam_parse_cigar(cig, &mut end, &mut buf, &mut m);
+    let cig: *const u8 = c"2M3X1I10M5D".as_ptr().cast();
+    n = sam::sam_parse_cigar(cig.cast(), &mut end, &mut buf, &mut m);
     if n != 5 || m == 0 || end.offset_from(cig) != 11 {
         test_sam_bam_set1_fail(
-            c"test_cigar_api".as_ptr(),
-            c"failed to parse CIGAR string: 2M3X1I10M5D".as_ptr(),
+            c"test_cigar_api".as_ptr().cast(),
+            c"failed to parse CIGAR string: 2M3X1I10M5D".as_ptr().cast(),
         );
     }
 
     n = sam::sam_parse_cigar(
-        c"722M15D187217376188323783284M67I".as_ptr(),
+        c"722M15D187217376188323783284M67I".as_ptr().cast(),
         std::ptr::null_mut(),
         &mut buf,
         &mut m,
     );
     if n != -1 {
         test_sam_bam_set1_fail(
-            c"test_cigar_api".as_ptr(),
+            c"test_cigar_api".as_ptr().cast(),
             c"failed to flag CIGAR string with long op length: 722M15D187217376188323783284M67I"
-                .as_ptr(),
+                .as_ptr().cast(),
         );
     }
 
     n = sam::sam_parse_cigar(
-        c"53I722MD8X".as_ptr(),
+        c"53I722MD8X".as_ptr().cast(),
         std::ptr::null_mut(),
         &mut buf,
         &mut m,
     );
     if n != -1 {
         test_sam_bam_set1_fail(
-            c"test_cigar_api".as_ptr(),
-            c"failed to flag CIGAR string with no op length: 53I722MD8X".as_ptr(),
+            c"test_cigar_api".as_ptr().cast(),
+            c"failed to flag CIGAR string with no op length: 53I722MD8X".as_ptr().cast(),
         );
     }
 
-    libc::free(buf.cast());
+    // SEAM: `buf` is filled by the (parallel-converting) production sam_parse_cigar,
+    // which now owns/reclaims its growth buffer; the test no longer frees it.
+    let _ = buf;
 }
 
 // original: main (htslib/test/sam.c:2328)
-pub unsafe fn test_sam_c_2328_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_sam_c_2328_main(argc: i32, argv: *mut *mut u8) -> i32 {
     TEST_SAM_STATUS = libc::EXIT_SUCCESS;
     test_sam_c_248_aux_fields1();
     test_sam_c_604_iterators1();
@@ -2878,11 +2778,11 @@ pub unsafe fn test_sam_c_2328_main(argc: c_int, argv: *mut *mut c_char) -> c_int
     test_sam_c_1087_test_header_updates();
     test_sam_c_1182_test_header_remove_lines();
     test_sam_c_1258_test_header_ref_altnames();
-    test_sam_c_1618_test_empty_sam_file(c"test/emptyfile".as_ptr());
-    test_sam_c_1641_test_text_file(c"test/emptyfile".as_ptr(), 0);
-    test_sam_c_1641_test_text_file(c"test/xx#pair.sam".as_ptr(), 7);
-    test_sam_c_1641_test_text_file(c"test/xx.fa".as_ptr(), 7);
-    test_sam_c_1641_test_text_file(c"test/faidx/fastqs.fq".as_ptr(), 500);
+    test_sam_c_1618_test_empty_sam_file(c"test/emptyfile".as_ptr().cast());
+    test_sam_c_1641_test_text_file(c"test/emptyfile".as_ptr().cast(), 0);
+    test_sam_c_1641_test_text_file(c"test/xx#pair.sam".as_ptr().cast(), 7);
+    test_sam_c_1641_test_text_file(c"test/xx.fa".as_ptr().cast(), 7);
+    test_sam_c_1641_test_text_file(c"test/faidx/fastqs.fq".as_ptr().cast(), 500);
     test_sam_c_1661_check_enum1();
     test_sam_c_1669_check_cigar_tab();
     test_sam_c_1405_check_big_ref_parse(0);
@@ -2911,7 +2811,7 @@ pub unsafe fn test_sam_c_2328_main(argc: c_int, argv: *mut *mut c_char) -> c_int
 mod tests {
     use super::*;
     use std::sync::Mutex;
-    use std::{env, ffi::CString, fs, path::PathBuf};
+    use std::{env, fs, path::PathBuf};
 
     static TEST_SAM_LOCK: Mutex<()> = Mutex::new(());
 
@@ -2963,17 +2863,17 @@ mod tests {
             assert!(!header.is_null());
             assert!(!aln.is_null());
             assert!(sam::sam_read1(in_, header, aln) >= 0);
-            let xa = test_sam_c_78_check_bam_aux_get(aln, c"XA".as_ptr(), b'A' as c_char);
+            let xa = test_sam_c_78_check_bam_aux_get(aln, c"XA".as_ptr().cast(), b'A');
             assert!(!xa.is_null());
-            assert_eq!(sam::bam_aux2A(xa), b'k' as c_char);
-            test_sam_c_90_check_aux_count(aln, 2, c"direct AUX record".as_ptr());
+            assert_eq!(sam::bam_aux2A(xa), b'k');
+            test_sam_c_90_check_aux_count(aln, 2, c"direct AUX record".as_ptr().cast());
             assert_eq!(
                 test_sam_c_136_test_update_int(
                     aln,
-                    c"Xi".as_ptr(),
+                    c"Xi".as_ptr().cast(),
                     -129,
-                    b's' as c_char,
-                    c"".as_ptr(),
+                    b's',
+                    c"".as_ptr().cast(),
                     0,
                     0,
                 ),
@@ -3077,31 +2977,36 @@ klmno\t0\tCHROMOSOME_II\t500\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
 
         unsafe {
             TEST_SAM_STATUS = libc::EXIT_SUCCESS;
-            let qnames_c = CString::new(qnames).unwrap();
-            let bam_c = CString::new(bam.to_string_lossy().as_bytes()).unwrap();
-            let cram_c = CString::new(cram.to_string_lossy().as_bytes()).unwrap();
-            let sam_out_c = CString::new(sam_out.to_string_lossy().as_bytes()).unwrap();
-            let ref_c = CString::new("htslib/test/ce.fa").unwrap();
+            // NUL-terminated byte buffers carry the paths to the *const u8 test APIs.
+            let mut qnames_c = qnames.into_bytes();
+            qnames_c.push(0);
+            let mut bam_c = bam.to_string_lossy().into_owned().into_bytes();
+            bam_c.push(0);
+            let mut cram_c = cram.to_string_lossy().into_owned().into_bytes();
+            cram_c.push(0);
+            let mut sam_out_c = sam_out.to_string_lossy().into_owned().into_bytes();
+            sam_out_c.push(0);
+            let ref_c = b"htslib/test/ce.fa\0";
 
             test_sam_c_612_copy_check_alignment(
                 qnames_c.as_ptr(),
-                c"SAM".as_ptr(),
+                c"SAM".as_ptr().cast(),
                 bam_c.as_ptr(),
-                c"wb".as_ptr(),
+                c"wb".as_ptr().cast(),
                 std::ptr::null(),
             );
             test_sam_c_612_copy_check_alignment(
                 bam_c.as_ptr(),
-                c"BAM".as_ptr(),
+                c"BAM".as_ptr().cast(),
                 cram_c.as_ptr(),
-                c"wc".as_ptr(),
+                c"wc".as_ptr().cast(),
                 ref_c.as_ptr(),
             );
             test_sam_c_612_copy_check_alignment(
                 cram_c.as_ptr(),
-                c"CRAM".as_ptr(),
+                c"CRAM".as_ptr().cast(),
                 sam_out_c.as_ptr(),
-                c"w".as_ptr(),
+                c"w".as_ptr().cast(),
                 ref_c.as_ptr(),
             );
             test_sam_c_1641_test_text_file(sam_out_c.as_ptr(), 11);
@@ -3143,10 +3048,14 @@ klmno\t0\tCHROMOSOME_II\t500\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
 
         unsafe {
             TEST_SAM_STATUS = libc::EXIT_SUCCESS;
-            let empty_c = CString::new(empty.to_string_lossy().as_bytes()).unwrap();
-            let pair_c = CString::new(pair_sam.to_string_lossy().as_bytes()).unwrap();
-            let fasta_c = CString::new(fasta.to_string_lossy().as_bytes()).unwrap();
-            let fastq_c = CString::new(fastq.to_string_lossy().as_bytes()).unwrap();
+            let mut empty_c = empty.to_string_lossy().into_owned().into_bytes();
+            empty_c.push(0);
+            let mut pair_c = pair_sam.to_string_lossy().into_owned().into_bytes();
+            pair_c.push(0);
+            let mut fasta_c = fasta.to_string_lossy().into_owned().into_bytes();
+            fasta_c.push(0);
+            let mut fastq_c = fastq.to_string_lossy().into_owned().into_bytes();
+            fastq_c.push(0);
 
             test_sam_c_1618_test_empty_sam_file(empty_c.as_ptr());
             test_sam_c_1641_test_text_file(empty_c.as_ptr(), 0);
@@ -3208,8 +3117,10 @@ klmno\t0\tCHROMOSOME_II\t500\t10\t4M\t*\t0\t0\tATGC\tqqqq\n\
 
         unsafe {
             TEST_SAM_STATUS = libc::EXIT_SUCCESS;
-            let fasta_c = CString::new(fasta.to_string_lossy().as_bytes()).unwrap();
-            let fastq_c = CString::new(fastq.to_string_lossy().as_bytes()).unwrap();
+            let mut fasta_c = fasta.to_string_lossy().into_owned().into_bytes();
+            fasta_c.push(0);
+            let mut fastq_c = fastq.to_string_lossy().into_owned().into_bytes();
+            fastq_c.push(0);
 
             test_sam_c_1578_faidx1(fasta_c.as_ptr());
             test_sam_c_1578_faidx1(fastq_c.as_ptr());

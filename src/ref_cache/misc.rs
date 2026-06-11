@@ -1,5 +1,3 @@
-use std::ffi::c_int;
-
 const fn build_hexvals() -> [i8; 256] {
     let mut vals = [-1; 256];
     let mut i = 0;
@@ -20,12 +18,12 @@ const fn build_hexvals() -> [i8; 256] {
 pub const ref_cache_misc_h_36_hexvals: [i8; 256] = build_hexvals();
 
 // original: hexval (htslib/ref_cache/misc.h:38)
-pub fn ref_cache_misc_h_38_hexval(c: u8) -> c_int {
-    ref_cache_misc_h_36_hexvals[c as usize] as c_int
+pub fn ref_cache_misc_h_38_hexval(c: u8) -> i32 {
+    ref_cache_misc_h_36_hexvals[c as usize] as i32
 }
 
 // original: setnonblock (htslib/ref_cache/misc.h:40)
-pub unsafe fn ref_cache_misc_h_40_setnonblock(fd: c_int) -> c_int {
+pub unsafe fn ref_cache_misc_h_40_setnonblock(fd: i32) -> i32 {
     let val = libc::fcntl(fd, libc::F_GETFL);
     if val == -1 {
         eprintln!("Couldn't get file descriptor flags");
@@ -40,17 +38,17 @@ pub unsafe fn ref_cache_misc_h_40_setnonblock(fd: c_int) -> c_int {
 }
 
 // original: do_write_all (htslib/ref_cache/misc.h:55)
-pub unsafe fn ref_cache_misc_h_55_do_write_all(fd: c_int, buf: &[u8]) -> libc::ssize_t {
-    let mut res: libc::ssize_t = 0;
+pub unsafe fn ref_cache_misc_h_55_do_write_all(fd: i32, buf: &[u8]) -> isize {
+    let mut res: isize = 0;
     let mut offset = 0usize;
     while offset < buf.len() {
         let count = buf.len() - offset;
         loop {
             res = libc::write(fd, buf[offset..].as_ptr().cast(), count);
             if !(res < 0
-                && (*crate::htslib_rs::c_compat::__errno_location() == libc::EINTR
-                    || *crate::htslib_rs::c_compat::__errno_location() == libc::EAGAIN
-                    || *crate::htslib_rs::c_compat::__errno_location() == libc::EWOULDBLOCK))
+                && (*libc::__errno_location() == libc::EINTR
+                    || *libc::__errno_location() == libc::EAGAIN
+                    || *libc::__errno_location() == libc::EWOULDBLOCK))
             {
                 break;
             }
@@ -68,18 +66,18 @@ pub unsafe fn ref_cache_misc_h_55_do_write_all(fd: c_int, buf: &[u8]) -> libc::s
 }
 
 // original: do_read_all (htslib/ref_cache/misc.h:72)
-pub unsafe fn ref_cache_misc_h_72_do_read_all(fd: c_int, buf: &mut [u8]) -> libc::ssize_t {
-    let mut res: libc::ssize_t = 0;
-    let mut bytes: libc::ssize_t = 0;
+pub unsafe fn ref_cache_misc_h_72_do_read_all(fd: i32, buf: &mut [u8]) -> isize {
+    let mut res: isize = 0;
+    let mut bytes: isize = 0;
     let count = buf.len();
 
     while (bytes as usize) < count {
         loop {
             res = libc::read(fd, buf[bytes as usize..].as_mut_ptr().cast(), count);
             if !(res < 0
-                && (*crate::htslib_rs::c_compat::__errno_location() == libc::EINTR
-                    || *crate::htslib_rs::c_compat::__errno_location() == libc::EAGAIN
-                    || *crate::htslib_rs::c_compat::__errno_location() == libc::EWOULDBLOCK))
+                && (*libc::__errno_location() == libc::EINTR
+                    || *libc::__errno_location() == libc::EAGAIN
+                    || *libc::__errno_location() == libc::EWOULDBLOCK))
             {
                 break;
             }

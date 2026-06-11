@@ -1,61 +1,71 @@
-use std::ffi::{c_char, c_int};
-
 use crate::htslib_rs::{hts, sam};
+use std::io::Write;
 
 // original: print_usage (htslib/samples/mod_bam.c:38)
-pub unsafe fn samples_mod_bam_c_38_print_usage(fp: *mut libc::FILE) {
-    libc::fprintf(
-        fp,
-        c"Usage: mod_bam infile QNAME fieldpos newval\nModifies the alignment data field\nfieldpos - 1 QNAME 2 FLAG 3 RNAME 4 POS 5 MAPQ 6 CIGAR 7 RNEXT 8 PNEXT 9 TLEN 10 SEQ 11 QUAL\n".as_ptr(),
+pub unsafe fn samples_mod_bam_c_38_print_usage() {
+    eprint!(
+        "Usage: mod_bam infile QNAME fieldpos newval\nModifies the alignment data field\nfieldpos - 1 QNAME 2 FLAG 3 RNAME 4 POS 5 MAPQ 6 CIGAR 7 RNEXT 8 PNEXT 9 TLEN 10 SEQ 11 QUAL\n"
     );
 }
 
 // original: main (htslib/samples/mod_bam.c:50)
-pub unsafe fn samples_mod_bam_c_50_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
-    let mut ret = libc::EXIT_FAILURE;
+pub unsafe fn samples_mod_bam_c_50_main(argc: i32, argv: *mut *mut u8) -> i32 {
+    let mut ret = 1;
+    let mut __out = std::io::stdout();
     let mut in_samhdr = std::ptr::null_mut();
     let mut infile = std::ptr::null_mut();
     let mut outfile = std::ptr::null_mut();
 
     if argc != 5 {
-        samples_mod_bam_c_38_print_usage(crate::htslib_rs::c_compat::stderr.cast());
+        samples_mod_bam_c_38_print_usage();
         return ret;
     }
-    let inname = *argv.add(1);
-    let qname = *argv.add(2);
-    let field = libc::atoi(*argv.add(3));
-    let val = *argv.add(4);
+    // command-line args are NUL-terminated C strings; expose as byte slices,
+    // and pass `.as_ptr().cast()` at raw C-ABI boundaries in other files.
+    let inname = std::ffi::CStr::from_ptr((*argv.add(1)).cast()).to_bytes();
+    let qname = std::ffi::CStr::from_ptr((*argv.add(2)).cast()).to_bytes();
+    let field_bytes = std::ffi::CStr::from_ptr((*argv.add(3)).cast()).to_bytes();
+    let field: i32 = std::str::from_utf8(field_bytes).unwrap_or("").trim().parse().unwrap_or(0);
+    let val = std::ffi::CStr::from_ptr((*argv.add(4)).cast()).to_bytes();
 
     let mut bamdata = sam::bam_init1();
     if bamdata.is_null() {
-        libc::printf(c"Failed to allocate data memory!\n".as_ptr());
+        write!(__out, "Failed to allocate data memory!\n").unwrap();
     } else {
-        infile = hts::hts_open(inname, c"r".as_ptr());
+        // NUL-terminated copies for raw C-ABI callees in other files.
+        let inname_c: Vec<u8> = inname.iter().copied().chain(std::iter::once(0)).collect();
+        infile = hts::hts_open(inname_c.as_ptr().cast(), c"r".as_ptr());
         outfile = hts::hts_open(c"-".as_ptr(), c"w".as_ptr());
         if infile.is_null() || outfile.is_null() {
-            libc::printf(c"Could not open input/output\n".as_ptr());
+            write!(__out, "Could not open input/output\n").unwrap();
         } else {
             in_samhdr = sam::sam_hdr_read(infile);
             if in_samhdr.is_null() {
-                libc::printf(c"Failed to read header from file!\n".as_ptr());
+                write!(__out, "Failed to read header from file!\n").unwrap();
             } else if sam::sam_hdr_write(outfile, in_samhdr) == -1 {
-                libc::printf(c"Failed to write header\n".as_ptr());
+                write!(__out, "Failed to write header\n").unwrap();
             } else {
                 let mut ret_r = sam::sam_read1(infile, in_samhdr, bamdata);
                 while ret_r >= 0 {
                     ret = 0;
-                    if libc::strcasecmp(qname, sam::bam_get_qname(bamdata)) == 0 {
+                    let cur_qname =
+                        std::ffi::CStr::from_ptr(sam::bam_get_qname(bamdata).cast::<i8>()).to_bytes();
+                    if qname.eq_ignore_ascii_case(cur_qname) {
                         match field {
                             1 => {
-                                ret = sam::bam_set_qname(bamdata, val);
+                                let val_c: Vec<u8> =
+                                    val.iter().copied().chain(std::iter::once(0)).collect();
+                                ret = sam::bam_set_qname(bamdata, val_c.as_ptr().cast());
                             }
                             2 => {
-                                (*bamdata).core.flag = (libc::atol(val) & 0xffff) as u16;
+                                let v: i64 =
+                                    std::str::from_utf8(val).unwrap_or("").trim().parse().unwrap_or(0);
+                                (*bamdata).core.flag = (v & 0xffff) as u16;
                             }
                             3 | 7 => {
-                                ret = sam::sam_hdr_name2tid(&mut *in_samhdr, std::ffi::CStr::from_ptr(val));
+                                ret = sam::sam_hdr_name2tid(&mut *in_samhdr, val);
                                 if ret < 0 {
-                                    libc::printf(c"Invalid reference name\n".as_ptr());
+                                    write!(__out, "Invalid reference name\n").unwrap();
                                     ret = -1;
                                 } else if field == 3 {
                                     (*bamdata).core.tid = ret;
@@ -64,27 +74,31 @@ pub unsafe fn samples_mod_bam_c_50_main(argc: c_int, argv: *mut *mut c_char) -> 
                                 }
                             }
                             4 => {
-                                (*bamdata).core.pos = libc::atoll(val) as hts::hts_pos_t;
+                                let v: i64 =
+                                    std::str::from_utf8(val).unwrap_or("").trim().parse().unwrap_or(0);
+                                (*bamdata).core.pos = v as hts::hts_pos_t;
                             }
                             5 => {
-                                (*bamdata).core.qual = (libc::atoi(val) & 0x0ff) as u8;
+                                let v: i32 =
+                                    std::str::from_utf8(val).unwrap_or("").trim().parse().unwrap_or(0);
+                                (*bamdata).core.qual = (v & 0x0ff) as u8;
                             }
                             6 => {
                                 let mut cigar: *mut u32 = std::ptr::null_mut();
                                 let mut size = 0usize;
                                 let ncigar = sam::sam_parse_cigar(
-                                    val,
+                                    val.as_ptr().cast(),
                                     std::ptr::null_mut(),
                                     &mut cigar,
                                     &mut size,
                                 );
                                 if ncigar < 0 {
-                                    libc::printf(c"Failed to parse cigar\n".as_ptr());
+                                    write!(__out, "Failed to parse cigar\n").unwrap();
                                     ret = -1;
                                 } else {
                                     let newbam = sam::bam_init1();
                                     if newbam.is_null() {
-                                        libc::printf(c"Failed to create new bam data\n".as_ptr());
+                                        write!(__out, "Failed to create new bam data\n").unwrap();
                                         ret = -1;
                                     } else if sam::bam_set1(
                                         newbam,
@@ -105,38 +119,52 @@ pub unsafe fn samples_mod_bam_c_50_main(argc: c_int, argv: *mut *mut c_char) -> 
                                         sam::bam_get_l_aux(bamdata) as usize,
                                     ) < 0
                                     {
-                                        libc::printf(c"Failed to set bamdata\n".as_ptr());
+                                        write!(__out, "Failed to set bamdata\n").unwrap();
                                         sam::bam_destroy1(newbam);
                                         ret = -1;
                                     } else {
-                                        libc::memcpy(
-                                            sam::bam_get_seq(newbam).cast_mut().cast(),
-                                            sam::bam_get_seq(bamdata).cast(),
-                                            ((*bamdata).core.l_qseq as usize).div_ceil(2),
-                                        );
-                                        libc::memcpy(
-                                            sam::bam_get_aux(newbam).cast_mut().cast(),
-                                            sam::bam_get_aux(bamdata).cast(),
-                                            sam::bam_get_l_aux(bamdata) as usize,
-                                        );
+                                        let seq_len = ((*bamdata).core.l_qseq as usize).div_ceil(2);
+                                        std::slice::from_raw_parts_mut(
+                                            sam::bam_get_seq(newbam).cast_mut(),
+                                            seq_len,
+                                        )
+                                        .copy_from_slice(std::slice::from_raw_parts(
+                                            sam::bam_get_seq(bamdata),
+                                            seq_len,
+                                        ));
+                                        let aux_len = sam::bam_get_l_aux(bamdata) as usize;
+                                        std::slice::from_raw_parts_mut(
+                                            sam::bam_get_aux(newbam).cast_mut(),
+                                            aux_len,
+                                        )
+                                        .copy_from_slice(std::slice::from_raw_parts(
+                                            sam::bam_get_aux(bamdata),
+                                            aux_len,
+                                        ));
                                         sam::bam_destroy1(bamdata);
                                         bamdata = newbam;
                                     }
                                 }
                                 if !cigar.is_null() {
-                                    libc::free(cigar.cast());
+                                    // cigar was allocated by the raw C-ABI sam_parse_cigar;
+                                    // hand the buffer back to its owner to release.
+                                    drop(Box::from_raw(cigar));
                                 }
                             }
                             8 => {
-                                (*bamdata).core.mpos = libc::atoll(val) as hts::hts_pos_t;
+                                let v: i64 =
+                                    std::str::from_utf8(val).unwrap_or("").trim().parse().unwrap_or(0);
+                                (*bamdata).core.mpos = v as hts::hts_pos_t;
                             }
                             9 => {
-                                (*bamdata).core.isize = libc::atoll(val) as hts::hts_pos_t;
+                                let v: i64 =
+                                    std::str::from_utf8(val).unwrap_or("").trim().parse().unwrap_or(0);
+                                (*bamdata).core.isize = v as hts::hts_pos_t;
                             }
                             10 => {
-                                let len = libc::strlen(val) as c_int;
+                                let len = val.len() as i32;
                                 if (*bamdata).core.l_qseq != len {
-                                    libc::printf(c"SEQ length different\n".as_ptr());
+                                    write!(__out, "SEQ length different\n").unwrap();
                                     ret = -1;
                                 } else {
                                     let seq = sam::bam_get_seq(bamdata).cast_mut();
@@ -144,46 +172,49 @@ pub unsafe fn samples_mod_bam_c_50_main(argc: c_int, argv: *mut *mut c_char) -> 
                                         sam::bam_set_seqi(
                                             seq,
                                             i,
-                                            sam::SEQ_NT16_TABLE[*val.add(i) as u8 as usize],
+                                            sam::SEQ_NT16_TABLE[val[i] as usize],
                                         );
                                     }
                                 }
                             }
                             11 => {
-                                let len = libc::strlen(val) as c_int;
+                                let len = val.len() as i32;
                                 if len != (*bamdata).core.l_qseq {
-                                    libc::printf(c"Qual length different than sequence\n".as_ptr());
+                                    write!(__out, "Qual length different than sequence\n").unwrap();
                                     ret = -1;
                                 } else {
-                                    let qual = sam::bam_get_qual(bamdata).cast_mut();
+                                    let qual = std::slice::from_raw_parts_mut(
+                                        sam::bam_get_qual(bamdata).cast_mut(),
+                                        len as usize,
+                                    );
                                     for i in 0..len as usize {
-                                        *qual.add(i) = (*val.add(i) as u8).wrapping_sub(33);
+                                        qual[i] = val[i].wrapping_sub(33);
                                     }
                                 }
                             }
                             _ => {
-                                libc::printf(c"Invalid input\n".as_ptr());
-                                ret = libc::EXIT_FAILURE;
+                                write!(__out, "Invalid input\n").unwrap();
+                                ret = 1;
                                 break;
                             }
                         }
                         if ret < 0 {
-                            libc::printf(c"Failed to set new data\n".as_ptr());
-                            ret = libc::EXIT_FAILURE;
+                            write!(__out, "Failed to set new data\n").unwrap();
+                            ret = 1;
                             break;
                         }
                     }
                     if sam::sam_c_4553_sam_write1(outfile, in_samhdr, bamdata) < 0 {
-                        libc::printf(c"Failed to write bam data\n".as_ptr());
-                        ret = libc::EXIT_FAILURE;
+                        write!(__out, "Failed to write bam data\n").unwrap();
+                        ret = 1;
                         break;
                     }
                     ret_r = sam::sam_read1(infile, in_samhdr, bamdata);
                 }
-                if ret_r == -1 || ret != libc::EXIT_FAILURE {
-                    ret = libc::EXIT_SUCCESS;
+                if ret_r == -1 || ret != 1 {
+                    ret = 0;
                 } else {
-                    libc::printf(c"Failed to read data\n".as_ptr());
+                    write!(__out, "Failed to read data\n").unwrap();
                 }
             }
         }
@@ -201,5 +232,6 @@ pub unsafe fn samples_mod_bam_c_50_main(argc: c_int, argv: *mut *mut c_char) -> 
     if !bamdata.is_null() {
         sam::bam_destroy1(bamdata);
     }
+    __out.flush().unwrap();
     ret
 }

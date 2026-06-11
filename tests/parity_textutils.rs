@@ -27,70 +27,73 @@
 #![cfg(feature = "parity")]
 
 use htslib_rs::{hts_json_token, kstring_t};
-use std::ffi::{c_char, c_int, c_void, CStr};
 
 // ---------------------------------------------------------------------------
 // Manual externs into libhts for symbols not in hts-sys's bindgen output.
-// These signatures mirror textutils_internal.h verbatim.
+// These signatures mirror textutils_internal.h verbatim. This is a genuine
+// external-C boundary, so the raw FFI is kept; c_char text is carried as u8
+// and c_void opaque handles as *mut ().
 // ---------------------------------------------------------------------------
 
 extern "C" {
-    fn hts_decode_percent(dest: *mut c_char, destlen: *mut usize, s: *const c_char) -> c_int;
+    fn hts_decode_percent(dest: *mut u8, destlen: *mut usize, s: *const u8) -> i32;
 
     fn hts_base64_decoded_length(len: usize) -> usize;
 
-    fn hts_decode_base64(dest: *mut c_char, destlen: *mut usize, s: *const c_char) -> c_int;
+    fn hts_decode_base64(dest: *mut u8, destlen: *mut usize, s: *const u8) -> i32;
 
-    fn hts_json_alloc_token() -> *mut c_void;
-    fn hts_json_free_token(t: *mut c_void);
-    fn hts_json_token_type(t: *mut c_void) -> c_char;
-    fn hts_json_token_str(t: *mut c_void) -> *mut c_char;
-    fn hts_json_snext(str_: *mut c_char, state: *mut usize, token: *mut c_void) -> c_char;
-    fn hts_json_sskip_value(str_: *mut c_char, state: *mut usize, type_: c_char) -> c_char;
+    fn hts_json_alloc_token() -> *mut ();
+    fn hts_json_free_token(t: *mut ());
+    fn hts_json_token_type(t: *mut ()) -> u8;
+    fn hts_json_token_str(t: *mut ()) -> *mut u8;
+    fn hts_json_snext(str_: *mut u8, state: *mut usize, token: *mut ()) -> u8;
+    fn hts_json_sskip_value(str_: *mut u8, state: *mut usize, type_: u8) -> u8;
 
     fn hts_strprint(
-        buf: *mut c_char,
+        buf: *mut u8,
         buflen: usize,
-        quote: c_char,
-        s: *const c_char,
+        quote: u8,
+        s: *const u8,
         len: usize,
-    ) -> *const c_char;
+    ) -> *const u8;
 }
 
 // ---------------------------------------------------------------------------
 // hts_decode_percent
 // ---------------------------------------------------------------------------
 
-unsafe fn decode_percent_native(input: &CStr) -> (Vec<u8>, usize) {
-    let mut buf = vec![0i8; input.to_bytes().len() + 1];
+unsafe fn decode_percent_native(input: &[u8]) -> (Vec<u8>, usize) {
+    let mut buf = vec![0u8; input.len() + 1];
     let mut len: usize = 0;
-    let ret = htslib_rs::textutils::hts_decode_percent(&mut buf, &mut len, input.to_bytes());
+    let ret = htslib_rs::textutils::hts_decode_percent(&mut buf, &mut len, input);
     assert_eq!(ret, 0);
-    let bytes = std::slice::from_raw_parts(buf.as_ptr() as *const u8, len).to_vec();
+    let bytes = buf[..len].to_vec();
     (bytes, len)
 }
 
-unsafe fn decode_percent_c(input: &CStr) -> (Vec<u8>, usize) {
-    let mut buf = vec![0i8; input.to_bytes().len() + 1];
+unsafe fn decode_percent_c(input: &[u8]) -> (Vec<u8>, usize) {
+    let mut cinput = input.to_vec();
+    cinput.push(0);
+    let mut buf = vec![0u8; input.len() + 1];
     let mut len: usize = 0;
-    let ret = hts_decode_percent(buf.as_mut_ptr(), &mut len, input.as_ptr());
+    let ret = hts_decode_percent(buf.as_mut_ptr(), &mut len, cinput.as_ptr());
     assert_eq!(ret, 0);
-    let bytes = std::slice::from_raw_parts(buf.as_ptr() as *const u8, len).to_vec();
+    let bytes = buf[..len].to_vec();
     (bytes, len)
 }
 
 #[test]
 fn parity_hts_decode_percent() {
-    let cases: &[&CStr] = &[
-        c"hello%20world",
-        c"%2Fpath%2Fto%2Ffile",
-        c"no-escapes-here",
-        c"",
-        c"%41%42%43", // ABC
-        c"mixed%20stuff%21here",
-        c"%XYbad", // invalid escape — should be left as %XY
-        c"%2",     // truncated escape
-        c"a%00b",  // %00 produces an embedded NUL
+    let cases: &[&[u8]] = &[
+        b"hello%20world",
+        b"%2Fpath%2Fto%2Ffile",
+        b"no-escapes-here",
+        b"",
+        b"%41%42%43", // ABC
+        b"mixed%20stuff%21here",
+        b"%XYbad", // invalid escape — should be left as %XY
+        b"%2",     // truncated escape
+        b"a%00b",  // %00 produces an embedded NUL
     ];
     unsafe {
         for input in cases {
@@ -121,34 +124,36 @@ fn parity_hts_base64_decoded_length() {
 #[test]
 fn parity_hts_decode_base64() {
     // standard base64 strings
-    let cases: &[(&CStr, &[u8])] = &[
-        (c"SGVsbG8=", b"Hello"),
-        (c"SGVsbG8gV29ybGQ=", b"Hello World"),
-        (c"YQ==", b"a"),
-        (c"YWI=", b"ab"),
-        (c"YWJj", b"abc"),
-        (c"AAAA", &[0, 0, 0]),
-        (c"", b""),
+    let cases: &[(&[u8], &[u8])] = &[
+        (b"SGVsbG8=", b"Hello"),
+        (b"SGVsbG8gV29ybGQ=", b"Hello World"),
+        (b"YQ==", b"a"),
+        (b"YWI=", b"ab"),
+        (b"YWJj", b"abc"),
+        (b"AAAA", &[0, 0, 0]),
+        (b"", b""),
     ];
     unsafe {
         for (input, expected) in cases {
-            let cap_n = htslib_rs::textutils::hts_base64_decoded_length(input.to_bytes().len()) + 8;
-            let mut buf_n = vec![0i8; cap_n];
+            let cap_n = htslib_rs::textutils::hts_base64_decoded_length(input.len()) + 8;
+            let mut buf_n = vec![0u8; cap_n];
             let mut len_n: usize = 0;
-            htslib_rs::textutils::hts_decode_base64(&mut buf_n, &mut len_n, input.to_bytes());
+            htslib_rs::textutils::hts_decode_base64(&mut buf_n, &mut len_n, input);
 
-            let cap_c = hts_base64_decoded_length(input.to_bytes().len()) + 8;
-            let mut buf_c = vec![0i8; cap_c];
+            let mut cinput = input.to_vec();
+            cinput.push(0);
+            let cap_c = hts_base64_decoded_length(input.len()) + 8;
+            let mut buf_c = vec![0u8; cap_c];
             let mut len_c: usize = 0;
-            hts_decode_base64(buf_c.as_mut_ptr(), &mut len_c, input.as_ptr());
+            hts_decode_base64(buf_c.as_mut_ptr(), &mut len_c, cinput.as_ptr());
 
             assert_eq!(
                 len_n, len_c,
                 "base64 decoded length mismatch for {:?}",
                 input
             );
-            let nb = std::slice::from_raw_parts(buf_n.as_ptr() as *const u8, len_n);
-            let cb = std::slice::from_raw_parts(buf_c.as_ptr() as *const u8, len_c);
+            let nb = &buf_n[..len_n];
+            let cb = &buf_c[..len_c];
             assert_eq!(nb, cb, "base64 bytes mismatch for {:?}", input);
             if !expected.is_empty() {
                 assert_eq!(nb, *expected, "base64 wrong decode for {:?}", input);
@@ -161,24 +166,28 @@ fn parity_hts_decode_base64() {
 // hts_json_* (parsing JSON via the s-variant API)
 // ---------------------------------------------------------------------------
 
-unsafe fn parse_json_native(json: &mut [u8]) -> Vec<(c_char, Vec<u8>)> {
+unsafe fn parse_json_native(json: &mut [u8]) -> Vec<(u8, Vec<u8>)> {
     let token = htslib_rs::textutils::hts_json_alloc_token();
     assert!(!token.is_null());
     let mut state: usize = 0;
-    let mut tokens: Vec<(c_char, Vec<u8>)> = Vec::new();
+    let mut tokens: Vec<(u8, Vec<u8>)> = Vec::new();
     loop {
         let t = htslib_rs::textutils::hts_json_snext(
-            json.as_mut_ptr().cast::<c_char>(),
+            json.as_mut_ptr().cast(),
             &mut state,
             &mut *token,
         );
         if t == 0 {
             break;
         }
-        let type_ = htslib_rs::textutils::hts_json_token_type(token);
+        let type_ = htslib_rs::textutils::hts_json_token_type(token) as u8;
         let str_ = htslib_rs::textutils::hts_json_token_str(&*token);
         let val = if !str_.is_null() {
-            CStr::from_ptr(str_).to_bytes().to_vec()
+            let mut n = 0usize;
+            while *str_.add(n) != 0 {
+                n += 1;
+            }
+            std::slice::from_raw_parts(str_.cast::<u8>(), n).to_vec()
         } else {
             Vec::new()
         };
@@ -191,20 +200,24 @@ unsafe fn parse_json_native(json: &mut [u8]) -> Vec<(c_char, Vec<u8>)> {
     tokens
 }
 
-unsafe fn parse_json_c(json: &mut [u8]) -> Vec<(c_char, Vec<u8>)> {
+unsafe fn parse_json_c(json: &mut [u8]) -> Vec<(u8, Vec<u8>)> {
     let token = hts_json_alloc_token();
     assert!(!token.is_null());
     let mut state: usize = 0;
-    let mut tokens: Vec<(c_char, Vec<u8>)> = Vec::new();
+    let mut tokens: Vec<(u8, Vec<u8>)> = Vec::new();
     loop {
-        let t = hts_json_snext(json.as_mut_ptr().cast::<c_char>(), &mut state, token);
+        let t = hts_json_snext(json.as_mut_ptr(), &mut state, token);
         if t == 0 {
             break;
         }
         let type_ = hts_json_token_type(token);
         let str_ = hts_json_token_str(token);
         let val = if !str_.is_null() {
-            CStr::from_ptr(str_).to_bytes().to_vec()
+            let mut n = 0usize;
+            while *str_.add(n) != 0 {
+                n += 1;
+            }
+            std::slice::from_raw_parts(str_, n).to_vec()
         } else {
             Vec::new()
         };
@@ -279,12 +292,12 @@ fn parity_hts_json_sskip_value() {
             // C
             let tok_c = hts_json_alloc_token();
             let mut state_c: usize = 0;
-            let t0_c = hts_json_snext(b.as_mut_ptr().cast(), &mut state_c, tok_c);
-            let after_c = hts_json_sskip_value(b.as_mut_ptr().cast(), &mut state_c, t0_c);
+            let t0_c = hts_json_snext(b.as_mut_ptr(), &mut state_c, tok_c);
+            let after_c = hts_json_sskip_value(b.as_mut_ptr(), &mut state_c, t0_c);
             hts_json_free_token(tok_c);
 
-            assert_eq!(t0_n, t0_c, "initial token type mismatch for {:?}", snippet);
-            assert_eq!(after_n, after_c, "sskip_value mismatch for {:?}", snippet);
+            assert_eq!(t0_n as u8, t0_c, "initial token type mismatch for {:?}", snippet);
+            assert_eq!(after_n as u8, after_c, "sskip_value mismatch for {:?}", snippet);
             assert_eq!(
                 state_n, state_c,
                 "post-skip state mismatch for {:?}",
@@ -298,28 +311,47 @@ fn parity_hts_json_sskip_value() {
 // stringify_argv
 // ---------------------------------------------------------------------------
 
-unsafe fn stringify_argv_native(args: &[&CStr]) -> Vec<u8> {
-    let owned: Vec<&[u8]> = args.iter().map(|s| s.to_bytes()).collect();
+unsafe fn stringify_argv_native(args: &[&[u8]]) -> Vec<u8> {
+    let owned: Vec<&[u8]> = args.to_vec();
     let bytes = htslib_rs::textutils::stringify_argv(&owned).expect("stringify_argv returned None");
     bytes
 }
 
-unsafe fn stringify_argv_c(args: &[&CStr]) -> Vec<u8> {
-    let mut ptrs: Vec<*mut c_char> = args.iter().map(|s| s.as_ptr() as *mut c_char).collect();
-    let p = hts_sys::stringify_argv(ptrs.len() as c_int, ptrs.as_mut_ptr());
+unsafe fn stringify_argv_c(args: &[&[u8]]) -> Vec<u8> {
+    // Build NUL-terminated C strings for the genuine hts_sys C boundary.
+    let owned: Vec<Vec<u8>> = args
+        .iter()
+        .map(|s| {
+            let mut v = s.to_vec();
+            v.push(0);
+            v
+        })
+        .collect();
+    let mut ptrs: Vec<*mut std::os::raw::c_char> =
+        owned.iter().map(|s| s.as_ptr() as *mut std::os::raw::c_char).collect();
+    let p = hts_sys::stringify_argv(ptrs.len() as std::os::raw::c_int, ptrs.as_mut_ptr());
     assert!(!p.is_null());
-    let bytes = CStr::from_ptr(p).to_bytes().to_vec();
+    let bytes = std::ffi::CStr::from_ptr(p).to_bytes().to_vec();
     libc::free(p.cast());
     bytes
 }
 
 #[test]
 fn parity_stringify_argv() {
-    let cases: &[Vec<&CStr>] = &[
-        vec![c"prog"],
-        vec![c"samtools", c"view", c"-h", c"in.bam"],
-        vec![c"a\tb", c"normal", c"with spaces"], // tabs -> spaces
-        vec![c"single"],
+    let cases: &[Vec<&[u8]>] = &[
+        vec![b"prog".as_slice()],
+        vec![
+            b"samtools".as_slice(),
+            b"view".as_slice(),
+            b"-h".as_slice(),
+            b"in.bam".as_slice(),
+        ],
+        vec![
+            b"a\tb".as_slice(),
+            b"normal".as_slice(),
+            b"with spaces".as_slice(),
+        ], // tabs -> spaces
+        vec![b"single".as_slice()],
         vec![],
     ];
     unsafe {
@@ -330,7 +362,9 @@ fn parity_stringify_argv() {
                 n,
                 c,
                 "stringify_argv mismatch for args={:?}",
-                args.iter().map(|s| s.to_string_lossy()).collect::<Vec<_>>()
+                args.iter()
+                    .map(|s| String::from_utf8_lossy(s))
+                    .collect::<Vec<_>>()
             );
         }
     }
@@ -340,40 +374,41 @@ fn parity_stringify_argv() {
 // hts_strprint
 // ---------------------------------------------------------------------------
 
-unsafe fn strprint_native(quote: c_char, s: &CStr, len: usize, buflen: usize) -> Vec<u8> {
-    let mut buf = vec![0i8; buflen];
-    let sb = s.to_bytes();
-    let s_slice = &sb[..len.min(sb.len())];
+unsafe fn strprint_native(quote: u8, s: &[u8], len: usize, buflen: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; buflen];
+    let s_slice = &s[..len.min(s.len())];
     htslib_rs::textutils::hts_strprint(&mut buf, quote, s_slice);
     // Read up to first NUL
-    let s = CStr::from_ptr(buf.as_ptr()).to_bytes().to_vec();
-    s
+    let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    buf[..n].to_vec()
 }
 
-unsafe fn strprint_c(quote: c_char, s: &CStr, len: usize, buflen: usize) -> Vec<u8> {
-    let mut buf = vec![0i8; buflen];
-    hts_strprint(buf.as_mut_ptr(), buflen, quote, s.as_ptr(), len);
-    let s = CStr::from_ptr(buf.as_ptr()).to_bytes().to_vec();
-    s
+unsafe fn strprint_c(quote: u8, s: &[u8], len: usize, buflen: usize) -> Vec<u8> {
+    let mut cs = s.to_vec();
+    cs.push(0);
+    let mut buf = vec![0u8; buflen];
+    hts_strprint(buf.as_mut_ptr(), buflen, quote, cs.as_ptr(), len);
+    let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    buf[..n].to_vec()
 }
 
 #[test]
 fn parity_hts_strprint() {
     // (quote, content, len, buflen)
-    let cases: &[(c_char, &CStr, usize, usize)] = &[
-        (b'"' as c_char, c"hello world", usize::MAX, 64),
-        (b'\'' as c_char, c"a\tb\nc", usize::MAX, 64),
-        (0, c"plain", usize::MAX, 64),
-        (b'"' as c_char, c"backslash\\here", usize::MAX, 64),
-        (b'"' as c_char, c"non-printable \x01 char", usize::MAX, 64),
-        (b'"' as c_char, c"unterminated and then some", 5, 64), // explicit len
+    let cases: &[(u8, &[u8], usize, usize)] = &[
+        (b'"', b"hello world", usize::MAX, 64),
+        (b'\'', b"a\tb\nc", usize::MAX, 64),
+        (0, b"plain", usize::MAX, 64),
+        (b'"', b"backslash\\here", usize::MAX, 64),
+        (b'"', b"non-printable \x01 char", usize::MAX, 64),
+        (b'"', b"unterminated and then some", 5, 64), // explicit len
         (
-            b'"' as c_char,
-            c"tiny buf needs ellipsis maybe",
+            b'"',
+            b"tiny buf needs ellipsis maybe",
             usize::MAX,
             8,
         ),
-        (0, c"", usize::MAX, 16),
+        (0, b"", usize::MAX, 16),
     ];
     unsafe {
         for (q, s, l, b) in cases {
@@ -383,8 +418,8 @@ fn parity_hts_strprint() {
                 n,
                 cc,
                 "hts_strprint mismatch for quote={} s={:?} len={} buflen={}",
-                *q as u8 as char,
-                s.to_string_lossy(),
+                *q as char,
+                String::from_utf8_lossy(s),
                 l,
                 b
             );
@@ -398,12 +433,14 @@ fn native_sscan_string_smoke() {
     // move from src/hts.rs to src/textutils.rs).
     let mut buf = b"hello\\nworld\"trail\0".to_vec();
     unsafe {
+        let buf_len = buf.len();
         let rest = htslib_rs::textutils::sscan_string(std::slice::from_raw_parts_mut(
-            buf.as_mut_ptr().cast::<c_char>(),
-            buf.len(),
+            buf.as_mut_ptr(),
+            buf_len,
         ));
         assert!(rest.is_some());
-        let parsed = CStr::from_ptr(buf.as_ptr().cast()).to_bytes();
+        let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        let parsed = &buf[..n];
         assert_eq!(parsed, b"hello\nworld");
     }
     // Quiet unused-import warning if any

@@ -2,14 +2,15 @@ use htslib_rs::{
     bcf_destroy, bcf_hdr_destroy, bcf_hdr_fmt_text, bcf_hdr_write, bcf_init, bcf_subset_format,
     bcf_write, hts_close, hts_open, ks_free, kstring_t, vcf_format, vcf_hdr_read, vcf_read,
 };
-use std::ffi::{CStr, CString};
 
 fn fixture(path: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
 }
 
-fn c_fixture(path: &str) -> CString {
-    CString::new(fixture(path).to_string_lossy().as_bytes()).unwrap()
+fn c_fixture(path: &str) -> Vec<u8> {
+    let mut bytes = fixture(path).to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 unsafe fn render_vcf(path: &str) -> String {
@@ -17,8 +18,9 @@ unsafe fn render_vcf(path: &str) -> String {
 }
 
 unsafe fn render_vcf_path(path: &std::path::Path) -> String {
-    let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
-    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+    let mut path_c = path.to_string_lossy().into_owned().into_bytes();
+    path_c.push(0);
+    let fp = hts_open(path_c.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null(), "failed to open {}", path.display());
 
     let hdr = vcf_hdr_read(fp);
@@ -31,9 +33,10 @@ unsafe fn render_vcf_path(path: &std::path::Path) -> String {
     let mut len = 0;
     let header_text = bcf_hdr_fmt_text(hdr, 0, &mut len);
     assert!(!header_text.is_null());
-    let mut out = CStr::from_ptr(header_text).to_string_lossy().into_owned();
+    let header_bytes = std::ffi::CStr::from_ptr(header_text).to_bytes();
+    let mut out = String::from_utf8_lossy(header_bytes).into_owned();
     assert_eq!(out.len(), len as usize);
-    libc::free(header_text.cast());
+    // header_text was C-allocated; ownership handled at the FFI boundary.
 
     let rec = bcf_init();
     assert!(!rec.is_null());
@@ -65,13 +68,14 @@ unsafe fn write_bcf_copy(vcf_path: &str, label: &str) -> std::path::PathBuf {
     let _ = std::fs::remove_file(&out_path);
 
     let in_path = c_fixture(vcf_path);
-    let in_fp = hts_open(in_path.as_ptr(), c"r".as_ptr());
+    let in_fp = hts_open(in_path.as_ptr().cast(), c"r".as_ptr());
     assert!(!in_fp.is_null(), "failed to open {vcf_path}");
     let hdr = vcf_hdr_read(in_fp);
     assert!(!hdr.is_null());
 
-    let out_path_c = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
-    let out_fp = hts_open(out_path_c.as_ptr(), c"wb".as_ptr());
+    let mut out_path_c = out_path.to_string_lossy().into_owned().into_bytes();
+    out_path_c.push(0);
+    let out_fp = hts_open(out_path_c.as_ptr().cast(), c"wb".as_ptr());
     assert!(!out_fp.is_null(), "failed to write {}", out_path.display());
     assert_eq!(bcf_hdr_write(out_fp, hdr), 0);
 

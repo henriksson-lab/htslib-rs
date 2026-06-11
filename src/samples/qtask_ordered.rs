@@ -1,11 +1,9 @@
-use std::ffi::{c_char, c_int, c_void};
-
 use crate::htslib_rs::{hts, sam, thread_pool};
 
 #[repr(C)]
 struct QTaskOrderedData {
-    count: c_int,
-    maxsize: c_int,
+    count: i32,
+    maxsize: i32,
     bamarray: *mut *mut sam::bam1_t,
     next: *mut QTaskOrderedData,
 }
@@ -22,22 +20,21 @@ struct QTaskOrderedWrite {
     samhdr: *mut sam::sam_hdr_t,
     queue: *mut thread_pool::hts_tpool_process,
     cache: *mut QTaskOrderedDataCache,
-    result: c_int,
+    result: i32,
 }
 
 // original: print_usage (htslib/samples/qtask_ordered.c:61)
-pub unsafe fn samples_qtask_ordered_c_61_print_usage(fp: *mut libc::FILE) {
-    libc::fprintf(
-        fp,
-        c"Usage: qtask_ordered infile threadcount outdir [chunksize]\nCalculates GC ratio - sum(G,C) / sum(A,T,C,G) - and adds to each alignment\nas xr:f aux tag. Output is saved in outdir.\nchunksize [4096] sets the number of alignments clubbed together to process.\n".as_ptr(),
+pub unsafe fn samples_qtask_ordered_c_61_print_usage() {
+    eprintln!(
+        "Usage: qtask_ordered infile threadcount outdir [chunksize]\nCalculates GC ratio - sum(G,C) / sum(A,T,C,G) - and adds to each alignment\nas xr:f aux tag. Output is saved in outdir.\nchunksize [4096] sets the number of alignments clubbed together to process."
     );
 }
 
 // original: getbamstorage (htslib/samples/qtask_ordered.c:75)
 pub unsafe extern "C" fn samples_qtask_ordered_c_75_getbamstorage(
-    chunk: c_int,
-    bamcache: *mut c_void,
-) -> *mut c_void {
+    chunk: i32,
+    bamcache: *mut (),
+) -> *mut () {
     let bamcache = bamcache.cast::<QTaskOrderedDataCache>();
     if bamcache.is_null() {
         return std::ptr::null_mut();
@@ -46,28 +43,28 @@ pub unsafe extern "C" fn samples_qtask_ordered_c_75_getbamstorage(
         return std::ptr::null_mut();
     }
 
-    let mut bamdata: *mut QTaskOrderedData;
+    let bamdata: *mut QTaskOrderedData;
     if !(*bamcache).list.is_null() {
         bamdata = (*bamcache).list;
         (*bamcache).list = (*bamdata).next;
         (*bamdata).next = std::ptr::null_mut();
         (*bamdata).count = 0;
     } else {
-        bamdata = libc::malloc(std::mem::size_of::<QTaskOrderedData>()).cast::<QTaskOrderedData>();
+        bamdata = Box::into_raw(Box::new(QTaskOrderedData {
+            count: 0,
+            maxsize: 0,
+            bamarray: std::ptr::null_mut(),
+            next: std::ptr::null_mut(),
+        }));
         if !bamdata.is_null() {
-            (*bamdata).bamarray =
-                libc::malloc(chunk as usize * std::mem::size_of::<*mut sam::bam1_t>()).cast();
-            if (*bamdata).bamarray.is_null() {
-                libc::free(bamdata.cast());
-                bamdata = std::ptr::null_mut();
-            } else {
-                for i in 0..chunk {
-                    *(*bamdata).bamarray.add(i as usize) = sam::bam_init1();
-                }
-                (*bamdata).maxsize = chunk;
-                (*bamdata).count = 0;
-                (*bamdata).next = std::ptr::null_mut();
+            let mut array: Vec<*mut sam::bam1_t> = Vec::with_capacity(chunk as usize);
+            for _ in 0..chunk {
+                array.push(sam::bam_init1());
             }
+            (*bamdata).bamarray = array.leak().as_mut_ptr();
+            (*bamdata).maxsize = chunk;
+            (*bamdata).count = 0;
+            (*bamdata).next = std::ptr::null_mut();
         }
     }
 
@@ -76,24 +73,31 @@ pub unsafe extern "C" fn samples_qtask_ordered_c_75_getbamstorage(
 }
 
 // original: cleanup_bamstorage (htslib/samples/qtask_ordered.c:121)
-pub unsafe extern "C" fn samples_qtask_ordered_c_121_cleanup_bamstorage(arg: *mut c_void) {
+pub unsafe extern "C" fn samples_qtask_ordered_c_121_cleanup_bamstorage(
+    arg: *mut std::ffi::c_void,
+) {
     let bamdata = arg.cast::<QTaskOrderedData>();
     if bamdata.is_null() {
         return;
     }
     if !(*bamdata).bamarray.is_null() {
-        for i in 0..(*bamdata).maxsize {
-            sam::bam_destroy1(*(*bamdata).bamarray.add(i as usize));
+        let array = Vec::from_raw_parts(
+            (*bamdata).bamarray,
+            (*bamdata).maxsize as usize,
+            (*bamdata).maxsize as usize,
+        );
+        for &bam in &array {
+            sam::bam_destroy1(bam);
         }
-        libc::free((*bamdata).bamarray.cast());
+        drop(array);
     }
-    libc::free(bamdata.cast());
+    drop(Box::from_raw(bamdata));
 }
 
 // original: thread_ordered_proc (htslib/samples/qtask_ordered.c:143)
 pub unsafe extern "C" fn samples_qtask_ordered_c_143_thread_ordered_proc(
-    args: *mut c_void,
-) -> *mut c_void {
+    args: *mut std::ffi::c_void,
+) -> *mut std::ffi::c_void {
     let bamdata = args.cast::<QTaskOrderedData>();
     if bamdata.is_null() {
         return std::ptr::null_mut();
@@ -111,16 +115,15 @@ pub unsafe extern "C" fn samples_qtask_ordered_c_143_thread_ordered_proc(
         let gcratio = (count[2] + count[4]) as f32 / denom;
         if sam::bam_aux_append(
             bam,
-            c"xr".as_ptr(),
-            b'f' as c_char,
-            std::mem::size_of::<f32>() as c_int,
+            b"xr\0".as_ptr().cast(),
+            b'f' as u8,
+            std::mem::size_of::<f32>() as i32,
             (&gcratio as *const f32).cast::<u8>(),
         ) < 0
         {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed to add aux tag xr, errno: %d\n".as_ptr(),
-                *crate::htslib_rs::c_compat::__errno_location(),
+            eprintln!(
+                "Failed to add aux tag xr, errno: {}",
+                *crate::htslib_rs::c_compat::__errno_location()
             );
             break;
         }
@@ -130,8 +133,8 @@ pub unsafe extern "C" fn samples_qtask_ordered_c_143_thread_ordered_proc(
 
 // original: threadfn_orderedwrite (htslib/samples/qtask_ordered.c:176)
 pub extern "C" fn samples_qtask_ordered_c_176_threadfn_orderedwrite(
-    args: *mut c_void,
-) -> *mut c_void {
+    args: *mut std::ffi::c_void,
+) -> *mut std::ffi::c_void {
     unsafe {
         let tdata = args.cast::<QTaskOrderedWrite>();
         (*tdata).result = 0;
@@ -154,10 +157,7 @@ pub extern "C" fn samples_qtask_ordered_c_176_threadfn_orderedwrite(
                     *(*bamdata).bamarray.add(i as usize),
                 ) < 0
                 {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Failed to write output data\n".as_ptr(),
-                    );
+                    eprintln!("Failed to write output data");
                     (*tdata).result = -1;
                     break;
                 }
@@ -176,8 +176,8 @@ pub extern "C" fn samples_qtask_ordered_c_176_threadfn_orderedwrite(
 }
 
 // original: main (htslib/samples/qtask_ordered.c:223)
-pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
-    let mut ret = libc::EXIT_FAILURE;
+pub unsafe fn samples_qtask_ordered_c_223_main(argc: i32, argv: *mut *mut u8) -> i32 {
+    let mut ret = 1;
     let mut c = 0;
     let mut started_thread = 0;
     let mut infile = std::ptr::null_mut();
@@ -196,13 +196,13 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
     crate::htslib_rs::c_compat::pthread_mutex_init(&mut bamcache.lock, std::ptr::null());
 
     if argc != 4 && argc != 5 {
-        samples_qtask_ordered_c_61_print_usage(crate::htslib_rs::c_compat::stdout.cast());
+        samples_qtask_ordered_c_61_print_usage();
     } else {
         let inname = *argv.add(1);
-        let mut cnt = libc::atoi(*argv.add(2));
+        let mut cnt = libc::atoi(*argv.add(2).cast());
         let outdir = *argv.add(3);
         let mut chunk = if argc == 5 {
-            libc::atoi(*argv.add(4))
+            libc::atoi(*argv.add(4).cast())
         } else {
             0
         };
@@ -213,63 +213,43 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
             chunk = 4096;
         }
 
-        let size = libc::strlen(outdir) + c"/out.bam".to_bytes_with_nul().len() + 1;
-        let file = libc::malloc(size).cast::<c_char>();
-        if file.is_null() {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed to set output path\n".as_ptr(),
-            );
-        } else {
-            libc::snprintf(file, size, c"%s/out.bam".as_ptr(), outdir);
+        // Build "<outdir>/out.bam" as a NUL-terminated byte buffer to pass to the raw C-ABI hts_open.
+        let outdir_bytes = std::ffi::CStr::from_ptr(outdir.cast()).to_bytes();
+        let mut file: Vec<u8> = Vec::new();
+        file.extend_from_slice(outdir_bytes);
+        file.extend_from_slice(b"/out.bam\0");
+        {
             pool = thread_pool::hts_tpool_init(cnt);
             if pool.is_null() {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Failed to create thread pool\n".as_ptr(),
-                );
+                eprintln!("Failed to create thread pool");
             } else {
                 tpool.pool = pool;
                 queue = thread_pool::hts_tpool_process_init(pool, cnt * 2, 0);
                 if queue.is_null() {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Failed to create queue\n".as_ptr(),
-                    );
+                    eprintln!("Failed to create queue");
                 } else {
-                    infile = hts::hts_open(inname, c"r".as_ptr());
+                    infile = hts::hts_open(inname.cast(), b"r\0".as_ptr().cast());
                     if infile.is_null() {
-                        libc::fprintf(
-                            crate::htslib_rs::c_compat::stderr.cast(),
-                            c"Could not open %s\n".as_ptr(),
-                            inname,
+                        eprintln!(
+                            "Could not open {}",
+                            String::from_utf8_lossy(
+                                std::ffi::CStr::from_ptr(inname.cast()).to_bytes()
+                            )
                         );
                     } else {
-                        outfile = hts::hts_open(file, c"wb".as_ptr());
+                        outfile = hts::hts_open(file.as_ptr().cast(), b"wb\0".as_ptr().cast());
                         if outfile.is_null() {
-                            libc::fprintf(
-                                crate::htslib_rs::c_compat::stderr.cast(),
-                                c"Could not open output file\n".as_ptr(),
-                            );
+                            eprintln!("Could not open output file");
                         } else if hts::hts_set_thread_pool(infile, &mut tpool) < 0
                             || hts::hts_set_thread_pool(outfile, &mut tpool) < 0
                         {
-                            libc::fprintf(
-                                crate::htslib_rs::c_compat::stderr.cast(),
-                                c"Failed to set threads to i/o files\n".as_ptr(),
-                            );
+                            eprintln!("Failed to set threads to i/o files");
                         } else {
                             in_samhdr = sam::sam_hdr_read(infile);
                             if in_samhdr.is_null() {
-                                libc::fprintf(
-                                    crate::htslib_rs::c_compat::stderr.cast(),
-                                    c"Failed to read header from file!\n".as_ptr(),
-                                );
+                                eprintln!("Failed to read header from file!");
                             } else if sam::sam_hdr_write(outfile, in_samhdr) == -1 {
-                                libc::fprintf(
-                                    crate::htslib_rs::c_compat::stderr.cast(),
-                                    c"Failed to write header\n".as_ptr(),
-                                );
+                                eprintln!("Failed to write header");
                             } else {
                                 twritedata.outfile = outfile;
                                 twritedata.samhdr = in_samhdr;
@@ -283,10 +263,7 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
                                     (&mut twritedata as *mut QTaskOrderedWrite).cast(),
                                 ) != 0
                                 {
-                                    libc::fprintf(
-                                        crate::htslib_rs::c_compat::stderr.cast(),
-                                        c"Failed to create writer thread\n".as_ptr(),
-                                    );
+                                    eprintln!("Failed to create writer thread");
                                 } else {
                                     started_thread = 1;
                                     let mut dispatch_failed = false;
@@ -298,10 +275,7 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
                                         )
                                         .cast();
                                         if bamdata.is_null() {
-                                            libc::fprintf(
-                                                crate::htslib_rs::c_compat::stderr.cast(),
-                                                c"Failed to allocate memory\n".as_ptr(),
-                                            );
+                                            eprintln!("Failed to allocate memory");
                                             break;
                                         }
                                         cnt = 0;
@@ -334,24 +308,18 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
                                                 0,
                                             ) == -1
                                             {
-                                                libc::fprintf(
-                                                    crate::htslib_rs::c_compat::stderr.cast(),
-                                                    c"Failed to schedule processing\n".as_ptr(),
-                                                );
+                                                eprintln!("Failed to schedule processing");
                                                 dispatch_failed = true;
                                                 break;
                                             }
                                             bamdata = std::ptr::null_mut();
                                         } else {
-                                            libc::fprintf(
-                                                crate::htslib_rs::c_compat::stderr.cast(),
-                                                c"Error in reading data\n".as_ptr(),
-                                            );
+                                            eprintln!("Error in reading data");
                                             break;
                                         }
                                     }
                                     if !dispatch_failed {
-                                        ret = libc::EXIT_SUCCESS;
+                                        ret = 0;
                                     }
                                 }
                             }
@@ -359,7 +327,7 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
                     }
                 }
             }
-            libc::free(file.cast());
+            drop(file);
         }
     }
 
@@ -372,11 +340,8 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
                 std::ptr::null_mut(),
             ) == -1
             {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Failed to schedule sentinel job\n".as_ptr(),
-                );
-                ret = libc::EXIT_FAILURE;
+                eprintln!("Failed to schedule sentinel job");
+                ret = 1;
             }
         } else {
             thread_pool::hts_tpool_process_shutdown(queue);
@@ -386,7 +351,7 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
     if started_thread != 0 {
         crate::htslib_rs::c_compat::pthread_join(thread, std::ptr::null_mut());
         if twritedata.result != 0 {
-            ret = libc::EXIT_FAILURE;
+            ret = 1;
         }
     }
 
@@ -397,10 +362,10 @@ pub unsafe fn samples_qtask_ordered_c_223_main(argc: c_int, argv: *mut *mut c_ch
         sam::sam_hdr_destroy(in_samhdr);
     }
     if !infile.is_null() && hts::hts_close(infile) != 0 {
-        ret = libc::EXIT_FAILURE;
+        ret = 1;
     }
     if !outfile.is_null() && hts::hts_close(outfile) != 0 {
-        ret = libc::EXIT_FAILURE;
+        ret = 1;
     }
     if !bamdata.is_null() {
         samples_qtask_ordered_c_121_cleanup_bamstorage(bamdata.cast());

@@ -239,7 +239,6 @@ pub const NP: i32 = 32; // fqzcomp_qual.c:397
 /// } fqz_state;
 /// ```
 // fqzcomp_qual.c:216
-#[repr(C)]
 pub struct fqz_state {
     pub qctx: u32,
     pub p: u32,

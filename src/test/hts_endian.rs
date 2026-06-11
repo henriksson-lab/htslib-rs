@@ -3,7 +3,6 @@ use crate::htslib_rs::hts::{
     le_to_i16, le_to_i32, le_to_i64, le_to_u16, le_to_u32, le_to_u64, u16_to_le, u32_to_le,
     u64_to_le,
 };
-use std::ffi::{c_char, c_int, c_uchar};
 
 // original: Test16 (htslib/test/hts_endian.c:34)
 #[derive(Clone, Copy)]
@@ -269,26 +268,18 @@ const TESTS_DOUBLE: [TestDouble; 7] = [
 ];
 
 // original: to_hex (htslib/test/hts_endian.c:149)
-pub unsafe fn test_hts_endian_c_149_to_hex(buf: *mut c_uchar, len: c_int) -> *mut c_char {
-    static mut STR: [c_char; 64] = [0; 64];
-    let out = std::ptr::addr_of_mut!(STR).cast::<c_char>();
+pub fn test_hts_endian_c_149_to_hex(buf: &[u8], len: i32) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
     let mut i = 0;
-    let mut o = 0usize;
     while i < len {
-        libc::snprintf(
-            out.add(o),
-            64usize.saturating_sub(o),
-            c"%02x ".as_ptr(),
-            *buf.add(i as usize) as c_int,
-        );
+        out.extend_from_slice(format!("{:02x} ", buf[i as usize]).as_bytes());
         i += 1;
-        o += 3;
     }
     out
 }
 
 // original: t16_bit (htslib/test/hts_endian.c:159)
-pub unsafe fn test_hts_endian_c_159_t16_bit(verbose: c_int) -> c_int {
+pub unsafe fn test_hts_endian_c_159_t16_bit(verbose: i32) -> i32 {
     let mut buf = [0u8; 9];
     let mut errors = 0;
 
@@ -297,107 +288,98 @@ pub unsafe fn test_hts_endian_c_159_t16_bit(verbose: c_int) -> c_int {
         let mut i16_: i16;
 
         if verbose != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"%s %6d %6d\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 2),
-                test.i16_ as c_int,
-                test.u16_ as c_int,
+            eprintln!(
+                "{} {:6} {:6}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 2)),
+                test.i16_,
+                test.u16_,
             );
         }
 
         u16_ = le_to_u16(test.u8.as_ptr());
         if u16_ != test.u16_ {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %s => %u; expected %u\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 2),
-                u16_ as libc::c_uint,
-                test.u16_ as libc::c_uint,
+            eprintln!(
+                "Failed {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 2)),
+                u16_,
+                test.u16_,
             );
             errors += 1;
         }
 
         i16_ = le_to_i16(test.u8.as_ptr());
         if i16_ != test.i16_ {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %s => %d; expected %d\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 2),
-                i16_ as c_int,
-                test.i16_ as c_int,
+            eprintln!(
+                "Failed {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 2)),
+                i16_,
+                test.i16_,
             );
             errors += 1;
         }
 
         u16_ = le_to_u16(test.u8_unaligned.as_ptr().add(1));
         if u16_ != test.u16_ {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %s => %u; expected %u\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 2),
-                u16_ as libc::c_uint,
-                test.u16_ as libc::c_uint,
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8_unaligned[1..], 2)),
+                u16_,
+                test.u16_,
             );
             errors += 1;
         }
 
         i16_ = le_to_i16(test.u8_unaligned.as_ptr().add(1));
         if i16_ != test.i16_ {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %s => %d; expected %d\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 2),
-                i16_ as c_int,
-                test.i16_ as c_int,
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8_unaligned[1..], 2)),
+                i16_,
+                test.i16_,
             );
             errors += 1;
         }
 
         u16_to_le(test.u16_, buf.as_mut_ptr());
-        if libc::memcmp(buf.as_ptr().cast(), test.u8.as_ptr().cast(), 2) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %u => %s; expected %s\n".as_ptr(),
-                test.u16_ as libc::c_uint,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 2),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 2),
+        if buf[..2] != test.u8[..2] {
+            eprintln!(
+                "Failed {} => {}; expected {}",
+                test.u16_,
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf, 2)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 2)),
             );
             errors += 1;
         }
 
         i16_to_le(test.i16_, buf.as_mut_ptr());
-        if libc::memcmp(buf.as_ptr().cast(), test.u8.as_ptr().cast(), 2) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %d => %s; expected %s\n".as_ptr(),
-                test.i16_ as c_int,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 2),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 2),
+        if buf[..2] != test.u8[..2] {
+            eprintln!(
+                "Failed {} => {}; expected {}",
+                test.i16_,
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf, 2)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 2)),
             );
             errors += 1;
         }
 
         u16_to_le(test.u16_, buf.as_mut_ptr().add(1));
-        if libc::memcmp(buf.as_ptr().add(1).cast(), test.u8.as_ptr().cast(), 2) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %u => %s; expected %s\n".as_ptr(),
-                test.u16_ as libc::c_uint,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 2),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 2),
+        if buf[1..3] != test.u8[..2] {
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
+                test.u16_,
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf[1..], 2)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 2)),
             );
             errors += 1;
         }
 
         i16_to_le(test.i16_, buf.as_mut_ptr().add(1));
-        if libc::memcmp(buf.as_ptr().add(1).cast(), test.u8.as_ptr().cast(), 2) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %d => %s; expected %s\n".as_ptr(),
-                test.i16_ as c_int,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 2),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 2),
+        if buf[1..3] != test.u8[..2] {
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
+                test.i16_,
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf[1..], 2)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 2)),
             );
             errors += 1;
         }
@@ -407,7 +389,7 @@ pub unsafe fn test_hts_endian_c_159_t16_bit(verbose: c_int) -> c_int {
 }
 
 // original: t32_bit (htslib/test/hts_endian.c:242)
-pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
+pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: i32) -> i32 {
     let mut buf = [0u8; 9];
     let mut errors = 0;
 
@@ -416,10 +398,9 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
         let mut i32_: i32;
 
         if verbose != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"%s %11d %11u\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
+            eprintln!(
+                "{} {:11} {:11}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 4)),
                 test.i32_,
                 test.u32_,
             );
@@ -427,10 +408,9 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
 
         u32_ = le_to_u32(test.u8.as_ptr());
         if u32_ != test.u32_ {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %s => %u; expected %u\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
+            eprintln!(
+                "Failed {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 4)),
                 u32_,
                 test.u32_,
             );
@@ -439,10 +419,9 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
 
         i32_ = le_to_i32(test.u8.as_ptr());
         if i32_ != test.i32_ {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %s => %d; expected %d\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
+            eprintln!(
+                "Failed {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 4)),
                 i32_,
                 test.i32_,
             );
@@ -451,10 +430,9 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
 
         u32_ = le_to_u32(test.u8_unaligned.as_ptr().add(1));
         if u32_ != test.u32_ {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %s => %u; expected %u\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 4),
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8_unaligned[1..], 4)),
                 u32_,
                 test.u32_,
             );
@@ -463,10 +441,9 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
 
         i32_ = le_to_i32(test.u8_unaligned.as_ptr().add(1));
         if i32_ != test.i32_ {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %s => %d; expected %d\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 4),
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8_unaligned[1..], 4)),
                 i32_,
                 test.i32_,
             );
@@ -474,49 +451,45 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
         }
 
         u32_to_le(test.u32_, buf.as_mut_ptr());
-        if libc::memcmp(buf.as_ptr().cast(), test.u8.as_ptr().cast(), 4) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %u => %s; expected %s\n".as_ptr(),
+        if buf[..4] != test.u8[..4] {
+            eprintln!(
+                "Failed {} => {}; expected {}",
                 test.u32_,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 4),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf, 4)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 4)),
             );
             errors += 1;
         }
 
         i32_to_le(test.i32_, buf.as_mut_ptr());
-        if libc::memcmp(buf.as_ptr().cast(), test.u8.as_ptr().cast(), 4) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %d => %s; expected %s\n".as_ptr(),
+        if buf[..4] != test.u8[..4] {
+            eprintln!(
+                "Failed {} => {}; expected {}",
                 test.i32_,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 4),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf, 4)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 4)),
             );
             errors += 1;
         }
 
         u32_to_le(test.u32_, buf.as_mut_ptr().add(1));
-        if libc::memcmp(buf.as_ptr().add(1).cast(), test.u8.as_ptr().cast(), 4) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %u => %s; expected %s\n".as_ptr(),
+        if buf[1..5] != test.u8[..4] {
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
                 test.u32_,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 4),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf[1..], 4)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 4)),
             );
             errors += 1;
         }
 
         i32_to_le(test.i32_, buf.as_mut_ptr().add(1));
-        if libc::memcmp(buf.as_ptr().add(1).cast(), test.u8.as_ptr().cast(), 4) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %d => %s; expected %s\n".as_ptr(),
+        if buf[1..5] != test.u8[..4] {
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
                 test.i32_,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 4),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf[1..], 4)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 4)),
             );
             errors += 1;
         }
@@ -526,7 +499,7 @@ pub unsafe fn test_hts_endian_c_242_t32_bit(verbose: c_int) -> c_int {
 }
 
 // original: t64_bit (htslib/test/hts_endian.c:323)
-pub unsafe fn test_hts_endian_c_323_t64_bit(verbose: c_int) -> c_int {
+pub unsafe fn test_hts_endian_c_323_t64_bit(verbose: i32) -> i32 {
     let mut buf = [0u8; 9];
     let mut errors = 0;
 
@@ -535,107 +508,98 @@ pub unsafe fn test_hts_endian_c_323_t64_bit(verbose: c_int) -> c_int {
         let mut i64_: i64;
 
         if verbose != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"%s %20lld %20llu\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
-                test.i64_ as libc::c_longlong,
-                test.u64_ as libc::c_ulonglong,
+            eprintln!(
+                "{} {:20} {:20}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 8)),
+                test.i64_,
+                test.u64_,
             );
         }
 
         u64_ = le_to_u64(test.u8.as_ptr());
         if u64_ != test.u64_ {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %s => %llu; expected %llu\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
-                u64_ as libc::c_ulonglong,
-                test.u64_ as libc::c_ulonglong,
+            eprintln!(
+                "Failed {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 8)),
+                u64_,
+                test.u64_,
             );
             errors += 1;
         }
 
         i64_ = le_to_i64(test.u8.as_ptr());
         if i64_ != test.i64_ {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %s => %lld; expected %lld\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
-                i64_ as libc::c_longlong,
-                test.i64_ as libc::c_longlong,
+            eprintln!(
+                "Failed {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 8)),
+                i64_,
+                test.i64_,
             );
             errors += 1;
         }
 
         u64_ = le_to_u64(test.u8_unaligned.as_ptr().add(1));
         if u64_ != test.u64_ {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %s => %llu; expected %llu\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 8),
-                u64_ as libc::c_ulonglong,
-                test.u64_ as libc::c_ulonglong,
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8_unaligned[1..], 8)),
+                u64_,
+                test.u64_,
             );
             errors += 1;
         }
 
         i64_ = le_to_i64(test.u8_unaligned.as_ptr().add(1));
         if i64_ != test.i64_ {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %s => %lld; expected %lld\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 8),
-                i64_ as libc::c_longlong,
-                test.i64_ as libc::c_longlong,
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8_unaligned[1..], 8)),
+                i64_,
+                test.i64_,
             );
             errors += 1;
         }
 
         u64_to_le(test.u64_, buf.as_mut_ptr());
-        if libc::memcmp(buf.as_ptr().cast(), test.u8.as_ptr().cast(), 8) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %llu => %s; expected %s\n".as_ptr(),
-                test.u64_ as libc::c_ulonglong,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 8),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
+        if buf[..8] != test.u8[..8] {
+            eprintln!(
+                "Failed {} => {}; expected {}",
+                test.u64_,
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf, 8)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 8)),
             );
             errors += 1;
         }
 
         i64_to_le(test.i64_, buf.as_mut_ptr());
-        if libc::memcmp(buf.as_ptr().cast(), test.u8.as_ptr().cast(), 8) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %lld => %s; expected %s\n".as_ptr(),
-                test.i64_ as libc::c_longlong,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 8),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
+        if buf[..8] != test.u8[..8] {
+            eprintln!(
+                "Failed {} => {}; expected {}",
+                test.i64_,
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf, 8)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 8)),
             );
             errors += 1;
         }
 
         u64_to_le(test.u64_, buf.as_mut_ptr().add(1));
-        if libc::memcmp(buf.as_ptr().add(1).cast(), test.u8.as_ptr().cast(), 8) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %llu => %s; expected %s\n".as_ptr(),
-                test.u64_ as libc::c_ulonglong,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 8),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
+        if buf[1..9] != test.u8[..8] {
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
+                test.u64_,
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf[1..], 8)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 8)),
             );
             errors += 1;
         }
 
         i64_to_le(test.i64_, buf.as_mut_ptr().add(1));
-        if libc::memcmp(buf.as_ptr().add(1).cast(), test.u8.as_ptr().cast(), 8) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %lld => %s; expected %s\n".as_ptr(),
-                test.i64_ as libc::c_longlong,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 8),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
+        if buf[1..9] != test.u8[..8] {
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
+                test.i64_,
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf[1..], 8)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 8)),
             );
             errors += 1;
         }
@@ -645,7 +609,7 @@ pub unsafe fn test_hts_endian_c_323_t64_bit(verbose: c_int) -> c_int {
 }
 
 // original: t_float (htslib/test/hts_endian.c:406)
-pub unsafe fn test_hts_endian_c_406_t_float(verbose: c_int) -> c_int {
+pub unsafe fn test_hts_endian_c_406_t_float(verbose: i32) -> i32 {
     let mut buf = [0u8; 9];
     let mut errors = 0;
 
@@ -653,20 +617,18 @@ pub unsafe fn test_hts_endian_c_406_t_float(verbose: c_int) -> c_int {
         let mut f: f32;
 
         if verbose != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"%s %g\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
+            eprintln!(
+                "{} {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 4)),
                 test.f as f64,
             );
         }
 
         f = le_to_float(test.u8.as_ptr());
         if f != test.f {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %s => %g; expected %g\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
+            eprintln!(
+                "Failed {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 4)),
                 f as f64,
                 test.f as f64,
             );
@@ -675,10 +637,9 @@ pub unsafe fn test_hts_endian_c_406_t_float(verbose: c_int) -> c_int {
 
         f = le_to_float(test.u8_unaligned.as_ptr().add(1));
         if f != test.f {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %s => %g; expected %g\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 4),
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8_unaligned[1..], 4)),
                 f as f64,
                 test.f as f64,
             );
@@ -686,24 +647,22 @@ pub unsafe fn test_hts_endian_c_406_t_float(verbose: c_int) -> c_int {
         }
 
         float_to_le(test.f, buf.as_mut_ptr());
-        if libc::memcmp(test.u8.as_ptr().cast(), buf.as_ptr().cast(), 4) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %g => %s; expected %s\n".as_ptr(),
+        if test.u8[..4] != buf[..4] {
+            eprintln!(
+                "Failed {} => {}; expected {}",
                 test.f as f64,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 4),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf, 4)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 4)),
             );
         }
 
         float_to_le(test.f, buf.as_mut_ptr().add(1));
-        if libc::memcmp(test.u8.as_ptr().cast(), buf.as_ptr().add(1).cast(), 4) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %g => %s; expected %s\n".as_ptr(),
+        if test.u8[..4] != buf[1..5] {
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
                 test.f as f64,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 4),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 4),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf[1..], 4)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 4)),
             );
         }
     }
@@ -712,7 +671,7 @@ pub unsafe fn test_hts_endian_c_406_t_float(verbose: c_int) -> c_int {
 }
 
 // original: t_double (htslib/test/hts_endian.c:451)
-pub unsafe fn test_hts_endian_c_451_t_double(verbose: c_int) -> c_int {
+pub unsafe fn test_hts_endian_c_451_t_double(verbose: i32) -> i32 {
     let mut buf = [0u8; 9];
     let mut errors = 0;
 
@@ -720,20 +679,18 @@ pub unsafe fn test_hts_endian_c_451_t_double(verbose: c_int) -> c_int {
         let mut f: f64;
 
         if verbose != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"%s %.15g\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
+            eprintln!(
+                "{} {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 8)),
                 test.d,
             );
         }
 
         f = le_to_double(test.u8.as_ptr());
         if f != test.d {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %s => %.15g; expected %.15g\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
+            eprintln!(
+                "Failed {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 8)),
                 f,
                 test.d,
             );
@@ -742,10 +699,9 @@ pub unsafe fn test_hts_endian_c_451_t_double(verbose: c_int) -> c_int {
 
         f = le_to_double(test.u8_unaligned.as_ptr().add(1));
         if f != test.d {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %s => %.15g; expected %.15g\n".as_ptr(),
-                test_hts_endian_c_149_to_hex(test.u8_unaligned.as_ptr().add(1).cast_mut(), 8),
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8_unaligned[1..], 8)),
                 f,
                 test.d,
             );
@@ -753,24 +709,22 @@ pub unsafe fn test_hts_endian_c_451_t_double(verbose: c_int) -> c_int {
         }
 
         double_to_le(test.d, buf.as_mut_ptr());
-        if libc::memcmp(test.u8.as_ptr().cast(), buf.as_ptr().cast(), 8) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed %.15g => %s; expected %s\n".as_ptr(),
+        if test.u8[..8] != buf[..8] {
+            eprintln!(
+                "Failed {} => {}; expected {}",
                 test.d,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr(), 8),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf, 8)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 8)),
             );
         }
 
         double_to_le(test.d, buf.as_mut_ptr().add(1));
-        if libc::memcmp(test.u8.as_ptr().cast(), buf.as_ptr().add(1).cast(), 8) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed unaligned %.15g => %s; expected %s\n".as_ptr(),
+        if test.u8[..8] != buf[1..9] {
+            eprintln!(
+                "Failed unaligned {} => {}; expected {}",
                 test.d,
-                test_hts_endian_c_149_to_hex(buf.as_mut_ptr().add(1), 8),
-                test_hts_endian_c_149_to_hex(test.u8.as_ptr().cast_mut(), 8),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&buf[1..], 8)),
+                String::from_utf8_lossy(&test_hts_endian_c_149_to_hex(&test.u8, 8)),
             );
         }
     }
@@ -779,11 +733,11 @@ pub unsafe fn test_hts_endian_c_451_t_double(verbose: c_int) -> c_int {
 }
 
 // original: main (htslib/test/hts_endian.c:496)
-pub unsafe fn test_hts_endian_c_496_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_hts_endian_c_496_main(argc: i32, argv: &[&[u8]]) -> i32 {
     let mut verbose = 0;
     let mut errors = 0;
 
-    if argc > 1 && libc::strcmp(*argv.add(1), c"-v".as_ptr()) == 0 {
+    if argc > 1 && argv[1] == b"-v" {
         verbose = 1;
     }
 
@@ -794,11 +748,7 @@ pub unsafe fn test_hts_endian_c_496_main(argc: c_int, argv: *mut *mut c_char) ->
     errors += test_hts_endian_c_451_t_double(verbose);
 
     if errors != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%d errors\n".as_ptr(),
-            errors,
-        );
+        eprintln!("{} errors", errors);
         return libc::EXIT_FAILURE;
     }
 

@@ -1,47 +1,45 @@
-use std::ffi::{c_char, c_int, c_void};
-
 use crate::htslib_rs::hts::{htsFile, hts_pos_t};
 use crate::htslib_rs::sam;
+use std::io::Write;
 
 // original: plpconf (htslib/samples/mpileup.c:45)
-#[repr(C)]
 struct PlpConf {
-    inname: *mut c_char,
+    inname: Vec<u8>,
     infile: *mut htsFile,
     in_samhdr: *mut sam::sam_hdr_t,
 }
 
 // original: print_usage (htslib/samples/mpileup.c:38)
-pub unsafe fn samples_mpileup_c_38_print_usage(fp: *mut libc::FILE) {
-    libc::fprintf(
-        fp,
-        c"Usage: mpileup infile ...\nShows the mpileup api usage.\n".as_ptr(),
-    );
+pub fn samples_mpileup_c_38_print_usage() {
+    eprint!("Usage: mpileup infile ...\nShows the mpileup api usage.\n");
 }
 
 // original: plpconstructor (htslib/samples/mpileup.c:56)
+// boundary: extern "C" callback for bam_mplp_constructor; opaque args kept as *mut ()
 pub unsafe extern "C" fn samples_mpileup_c_56_plpconstructor(
-    _data: *mut c_void,
+    _data: *mut (),
     _b: *const sam::bam1_t,
     _cd: *mut sam::bam_pileup_cd,
-) -> c_int {
+) -> i32 {
     0
 }
 
 // original: plpdestructor (htslib/samples/mpileup.c:60)
+// boundary: extern "C" callback for bam_mplp_destructor; opaque args kept as *mut ()
 pub unsafe extern "C" fn samples_mpileup_c_60_plpdestructor(
-    _data: *mut c_void,
+    _data: *mut (),
     _b: *const sam::bam1_t,
     _cd: *mut sam::bam_pileup_cd,
-) -> c_int {
+) -> i32 {
     0
 }
 
 // original: readdata (htslib/samples/mpileup.c:68)
+// boundary: extern "C" callback for bam_mplp_init; data is opaque *mut () (a *mut PlpConf slot)
 pub unsafe extern "C" fn samples_mpileup_c_68_readdata(
-    data: *mut c_void,
+    data: *mut (),
     b: *mut sam::bam1_t,
-) -> c_int {
+) -> i32 {
     let conf = data.cast::<PlpConf>();
     if conf.is_null() || (*conf).infile.is_null() {
         return -2;
@@ -50,72 +48,67 @@ pub unsafe extern "C" fn samples_mpileup_c_68_readdata(
 }
 
 // original: main (htslib/samples/mpileup.c:84)
-pub unsafe fn samples_mpileup_c_84_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn samples_mpileup_c_84_main(argc: i32, argv: *mut *mut u8) -> i32 {
     const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
-    let mut ret = libc::EXIT_FAILURE;
+    let mut ret = 1;
+    let mut __out = std::io::stdout();
     let n_input = argc - 1;
     let mut bamdata: *mut sam::bam1_t = std::ptr::null_mut();
     let mut mplpiter: sam::bam_mplp_t = std::ptr::null_mut();
 
     if argc < 2 {
-        samples_mpileup_c_38_print_usage(crate::htslib_rs::c_compat::stderr.cast());
+        samples_mpileup_c_38_print_usage();
         return ret;
     }
 
-    let conf: *mut *mut PlpConf = crate::htslib_rs::c_compat::calloc(
-        n_input as u64,
-        std::mem::size_of::<*mut PlpConf>() as u64,
-    )
-    .cast();
-    if !conf.is_null() {
-        for input in 0..n_input {
-            *conf.add(input as usize) =
-                crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<PlpConf>() as u64).cast();
-        }
-    }
-    let depth: *mut c_int =
-        crate::htslib_rs::c_compat::calloc(n_input as u64, std::mem::size_of::<c_int>() as u64)
-            .cast();
-    let plp: *mut *const sam::bam_pileup1_t = crate::htslib_rs::c_compat::calloc(
-        n_input as u64,
-        std::mem::size_of::<*const sam::bam_pileup1_t>() as u64,
-    )
-    .cast();
-    if conf.is_null() || depth.is_null() || plp.is_null() {
-        libc::printf(c"Failed to allocate memory\n".as_ptr());
-        goto_mpileup_cleanup(n_input, conf, depth, plp, bamdata, mplpiter);
-        return ret;
-    }
+    // Owned per-input configuration. The mpileup readdata callback receives a
+    // pointer to one of these slots as opaque data.
+    let mut conf: Vec<PlpConf> = Vec::with_capacity(n_input as usize);
+    let mut depth: Vec<i32> = vec![0; n_input as usize];
+    let mut plp: Vec<*const sam::bam_pileup1_t> = vec![std::ptr::null(); n_input as usize];
 
     for input in 0..n_input {
-        let slot = *conf.add(input as usize);
-        if slot.is_null() {
-            libc::printf(c"Failed to allocate memory\n".as_ptr());
-            goto_mpileup_cleanup(n_input, conf, depth, plp, bamdata, mplpiter);
-            return ret;
+        // inname is a raw C-string from argv; copy its bytes including the NUL
+        // terminator so it can be handed back to the raw-ptr hts_open API.
+        let raw = *argv.add((input + 1) as usize);
+        let mut len = 0usize;
+        while *raw.add(len) != 0 {
+            len += 1;
         }
-        (*slot).inname = *argv.add((input + 1) as usize);
+        let inname = std::slice::from_raw_parts(raw, len + 1).to_vec();
+        conf.push(PlpConf {
+            inname,
+            infile: std::ptr::null_mut(),
+            in_samhdr: std::ptr::null_mut(),
+        });
     }
 
     bamdata = sam::bam_init1();
     if bamdata.is_null() {
-        libc::printf(c"Failed to initialize bamdata\n".as_ptr());
-        goto_mpileup_cleanup(n_input, conf, depth, plp, bamdata, mplpiter);
+        write!(__out, "Failed to initialize bamdata\n").unwrap();
+        __out.flush().unwrap();
+        goto_mpileup_cleanup(&mut conf, bamdata, mplpiter);
         return ret;
     }
 
-    for input in 0..n_input {
-        let slot = *conf.add(input as usize);
-        (*slot).infile = crate::htslib_rs::hts::hts_open((*slot).inname, c"r".as_ptr());
-        if (*slot).infile.is_null() {
-            libc::printf(c"Could not open %s\n".as_ptr(), (*slot).inname);
-            goto_mpileup_cleanup(n_input, conf, depth, plp, bamdata, mplpiter);
+    for slot in conf.iter_mut() {
+        slot.infile =
+            crate::htslib_rs::hts::hts_open(slot.inname.as_ptr().cast(), c"r".as_ptr());
+        if slot.infile.is_null() {
+            write!(
+                __out,
+                "Could not open {}\n",
+                String::from_utf8_lossy(&slot.inname[..slot.inname.len() - 1])
+            ).unwrap();
+            __out.flush().unwrap();
+            goto_mpileup_cleanup(&mut conf, bamdata, mplpiter);
             return ret;
         }
-        (*slot).in_samhdr = sam::sam_hdr_read((*slot).infile);
-        if (*slot).in_samhdr.is_null() {
-            libc::printf(c"Failed to read header from file!\n".as_ptr());
-            goto_mpileup_cleanup(n_input, conf, depth, plp, bamdata, mplpiter);
+        slot.in_samhdr = sam::sam_hdr_read(slot.infile);
+        if slot.in_samhdr.is_null() {
+            write!(__out, "Failed to read header from file!\n").unwrap();
+            __out.flush().unwrap();
+            goto_mpileup_cleanup(&mut conf, bamdata, mplpiter);
             return ret;
         }
     }
@@ -123,11 +116,12 @@ pub unsafe fn samples_mpileup_c_84_main(argc: c_int, argv: *mut *mut c_char) -> 
     mplpiter = sam::bam_mplp_init(
         n_input,
         Some(samples_mpileup_c_68_readdata),
-        conf.cast::<*mut c_void>(),
+        conf.as_mut_ptr().cast(),
     );
     if mplpiter.is_null() {
-        libc::printf(c"Failed to initialize mpileup data\n".as_ptr());
-        goto_mpileup_cleanup(n_input, conf, depth, plp, bamdata, mplpiter);
+        write!(__out, "Failed to initialize mpileup data\n").unwrap();
+        __out.flush().unwrap();
+        goto_mpileup_cleanup(&mut conf, bamdata, mplpiter);
         return ret;
     }
 
@@ -136,81 +130,80 @@ pub unsafe fn samples_mpileup_c_84_main(argc: c_int, argv: *mut *mut c_char) -> 
 
     let mut tid = -1;
     let mut refpos: hts_pos_t = -1;
-    while sam::bam_mplp64_auto(mplpiter, &mut tid, &mut refpos, depth, plp) > 0 {
-        libc::printf(c"%d\t%ld\t".as_ptr(), tid + 1, refpos as libc::c_long + 1);
-        for input in 0..n_input {
-            let plp_input = *plp.add(input as usize);
-            for dpt in 0..*depth.add(input as usize) {
+    while sam::bam_mplp64_auto(
+        mplpiter,
+        &mut tid,
+        &mut refpos,
+        depth.as_mut_ptr(),
+        plp.as_mut_ptr(),
+    ) > 0
+    {
+        write!(__out, "{}\t{}\t", tid + 1, refpos + 1).unwrap();
+        for input in 0..n_input as usize {
+            let plp_input = plp[input];
+            for dpt in 0..depth[input] {
                 let p = plp_input.add(dpt as usize);
                 if sam::bam_pileup1_is_del(p) != 0 || sam::bam_pileup1_is_refskip(p) != 0 {
-                    libc::printf(c"*".as_ptr());
+                    write!(__out, "*").unwrap();
                     continue;
                 }
                 let seq = sam::bam_get_seq((*p).b);
-                let base = SEQ_NT16_STR[sam::bam_seqi(seq, (*p).qpos as usize) as usize] as c_int;
+                let base = SEQ_NT16_STR[sam::bam_seqi(seq, (*p).qpos as usize) as usize];
                 let out = if sam::bam_pileup1_is_head(p) != 0
                     || sam::bam_pileup1_is_tail(plp_input) != 0
                 {
-                    libc::toupper(base)
+                    base.to_ascii_uppercase()
                 } else {
-                    libc::tolower(base)
+                    base.to_ascii_lowercase()
                 };
-                libc::printf(c"%c".as_ptr(), out);
+                write!(__out, "{}", out as char).unwrap();
                 if (*p).indel > 0 {
-                    libc::printf(c"+%d".as_ptr(), (*p).indel);
+                    write!(__out, "+{}", (*p).indel).unwrap();
                     for k in 0..(*p).indel {
                         let ins_base = SEQ_NT16_STR
-                            [sam::bam_seqi(seq, ((*p).qpos + k + 1) as usize) as usize]
-                            as c_int;
-                        libc::printf(c"%c".as_ptr(), libc::tolower(ins_base));
+                            [sam::bam_seqi(seq, ((*p).qpos + k + 1) as usize) as usize];
+                        write!(__out, "{}", ins_base.to_ascii_lowercase() as char).unwrap();
                     }
                 } else if (*p).indel < 0 {
-                    libc::printf(c"%d".as_ptr(), (*p).indel);
+                    write!(__out, "{}", (*p).indel).unwrap();
                     for _ in 0..(-(*p).indel) {
-                        libc::printf(c"?".as_ptr());
+                        write!(__out, "?").unwrap();
                     }
                 }
             }
-            libc::printf(c" ".as_ptr());
+            write!(__out, " ").unwrap();
         }
-        libc::printf(c"\n".as_ptr());
-        libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
+        write!(__out, "\n").unwrap();
+        __out.flush().unwrap();
     }
 
-    ret = libc::EXIT_SUCCESS;
-    goto_mpileup_cleanup(n_input, conf, depth, plp, bamdata, mplpiter);
+    ret = 0;
+    goto_mpileup_cleanup(&mut conf, bamdata, mplpiter);
+    __out.flush().unwrap();
     ret
 }
 
 unsafe fn goto_mpileup_cleanup(
-    n_input: c_int,
-    conf: *mut *mut PlpConf,
-    depth: *mut c_int,
-    plp: *mut *const sam::bam_pileup1_t,
+    conf: &mut Vec<PlpConf>,
     bamdata: *mut sam::bam1_t,
     mplpiter: sam::bam_mplp_t,
 ) {
-    if !conf.is_null() {
-        for input in 0..n_input {
-            let slot = *conf.add(input as usize);
-            if !slot.is_null() {
-                if !(*slot).in_samhdr.is_null() {
-                    sam::sam_hdr_destroy((*slot).in_samhdr);
-                }
-                if !(*slot).infile.is_null() {
-                    crate::htslib_rs::hts::hts_close((*slot).infile);
-                }
-                crate::htslib_rs::c_compat::free(slot.cast());
-            }
+    for slot in conf.iter() {
+        if !slot.in_samhdr.is_null() {
+            sam::sam_hdr_destroy(slot.in_samhdr);
         }
-        crate::htslib_rs::c_compat::free(conf.cast());
+        if !slot.infile.is_null() {
+            crate::htslib_rs::hts::hts_close(slot.infile);
+        }
     }
+    // The PlpConf slots (and their inname buffers) are owned Rust values; they
+    // are dropped when `conf` goes out of scope.
+    conf.clear();
     if !bamdata.is_null() {
         sam::bam_destroy1(bamdata);
     }
     if !mplpiter.is_null() {
         sam::bam_mplp_destroy(mplpiter);
     }
-    crate::htslib_rs::c_compat::free(depth.cast());
-    crate::htslib_rs::c_compat::free(plp.cast());
+    // depth and plp are owned Vecs in the caller and freed on scope exit.
 }

@@ -35,7 +35,6 @@ use super::{
 };
 use std::cell::UnsafeCell;
 use std::cmp::Ordering;
-use std::ffi::{c_char, c_int, c_ulong};
 
 type PollWrap = poll_impl::Poll_wrap;
 type PwEvents = poll_impl::Pw_events;
@@ -54,19 +53,19 @@ pub struct Child_proc {
     // Arena handle returned by the poller (an index into its item arena), or None
     // when this child's log pipe is not currently registered.
     polled_rd: Option<usize>,
-    log_rd: c_int,
-    log_wr: c_int,
-    upstream: c_int,
+    log_rd: i32,
+    log_wr: i32,
+    upstream: i32,
 }
 
 struct ProcessVec<T>(UnsafeCell<Option<Vec<T>>>);
 
 unsafe impl<T> Sync for ProcessVec<T> {}
 
-static UPSTREAM: ProcessVec<c_int> = ProcessVec(UnsafeCell::new(None));
+static UPSTREAM: ProcessVec<i32> = ProcessVec(UnsafeCell::new(None));
 static KIDS: ProcessVec<Child_proc> = ProcessVec(UnsafeCell::new(None));
 static mut nkids: usize = 0;
-static mut sig_fds: [c_int; 2] = [0; 2];
+static mut sig_fds: [i32; 2] = [0; 2];
 // Arena handle for the signal pipe registration (index into the poller's arena).
 pub static mut polled_sig: Option<usize> = None;
 
@@ -78,7 +77,7 @@ static mut argv0: *mut u8 = std::ptr::null_mut();
 static mut argv0_len: usize = 0;
 
 const NI_MAXHOST: usize = 1025;
-const MAX_EVENTS: c_int = 16;
+const MAX_EVENTS: i32 = 16;
 
 // original: change_name (htslib/ref_cache/main.c:99)
 pub unsafe fn ref_cache_main_c_99_change_name(name: &[u8]) {
@@ -94,12 +93,12 @@ pub unsafe fn ref_cache_main_c_99_change_name(name: &[u8]) {
         // PR_SET_NAME wants a NUL-terminated string.
         let mut name_c = name.to_vec();
         name_c.push(0);
-        libc::prctl(libc::PR_SET_NAME, name_c.as_ptr() as c_ulong, 0, 0, 0);
+        libc::prctl(libc::PR_SET_NAME, name_c.as_ptr() as u64, 0, 0, 0);
     }
 }
 
 // original: init_children (htslib/ref_cache/main.c:107)
-pub unsafe fn ref_cache_main_c_107_init_children(opts: &Options) -> c_int {
+pub unsafe fn ref_cache_main_c_107_init_children(opts: &Options) -> i32 {
     let max_kids = opts.max_kids as usize;
     *UPSTREAM.0.get() = Some(vec![-1; max_kids + 1]);
     *KIDS.0.get() = Some(vec![
@@ -118,7 +117,7 @@ pub unsafe fn ref_cache_main_c_107_init_children(opts: &Options) -> c_int {
     let kids_vec = (*KIDS.0.get()).as_mut().unwrap();
 
     let mut k = 0;
-    while k <= opts.max_kids as c_int {
+    while k <= opts.max_kids as i32 {
         kids_vec[k as usize].type_ = Child_type::CHLD_SERVER;
         kids_vec[k as usize].pid = 0;
         kids_vec[k as usize].polled_rd = None;
@@ -132,7 +131,7 @@ pub unsafe fn ref_cache_main_c_107_init_children(opts: &Options) -> c_int {
     kids_vec[max_kids].type_ = Child_type::CHLD_UPSTREAM;
 
     k = 0;
-    while k < opts.max_kids as c_int {
+    while k < opts.max_kids as i32 {
         let mut sv = [0; 2];
         let mut pipefd = [0; 2];
 
@@ -157,9 +156,9 @@ pub unsafe fn ref_cache_main_c_107_init_children(opts: &Options) -> c_int {
         }
         k += 1;
     }
-    if k < opts.max_kids as c_int {
+    if k < opts.max_kids as i32 {
         let mut i = 0;
-        while i < opts.max_kids as c_int {
+        while i < opts.max_kids as i32 {
             if kids_vec[i as usize].log_rd >= 0 {
                 libc::close(kids_vec[i as usize].log_rd);
             }
@@ -180,10 +179,10 @@ pub unsafe fn ref_cache_main_c_107_init_children(opts: &Options) -> c_int {
     }
 
     /* Pipe for signals */
-    if libc::pipe(std::ptr::addr_of_mut!(sig_fds).cast::<c_int>()) != 0 {
+    if libc::pipe(std::ptr::addr_of_mut!(sig_fds).cast::<i32>()) != 0 {
         eprintln!("pipe: {}", std::io::Error::last_os_error());
         let mut i = 0;
-        while i < opts.max_kids as c_int {
+        while i < opts.max_kids as i32 {
             if kids_vec[i as usize].log_rd >= 0 {
                 libc::close(kids_vec[i as usize].log_rd);
             }
@@ -209,14 +208,14 @@ pub unsafe fn ref_cache_main_c_107_init_children(opts: &Options) -> c_int {
 // original: set_up_child (htslib/ref_cache/main.c:168)
 pub unsafe fn ref_cache_main_c_168_set_up_child(
     opts: &Options,
-    mut k: c_int,
-    is_upstream: c_int,
+    mut k: i32,
+    is_upstream: i32,
     pw: Option<&mut PollWrap>,
-) -> c_int {
+) -> i32 {
     let mut sigact: libc::sigaction = std::mem::zeroed();
 
     if is_upstream != 0 {
-        k = opts.max_kids as c_int;
+        k = opts.max_kids as i32;
     }
 
     /* Restore default signal handler */
@@ -234,7 +233,7 @@ pub unsafe fn ref_cache_main_c_168_set_up_child(
 
         /* Close all the file descriptors we don't need */
         let mut i = 0;
-        while i < opts.max_kids as c_int {
+        while i < opts.max_kids as i32 {
             libc::close(kids_vec[i as usize].log_rd);
             if is_upstream == 0 && upstream_vec[i as usize] >= 0 {
                 libc::close(upstream_vec[i as usize]);
@@ -280,18 +279,18 @@ pub unsafe fn ref_cache_main_c_211_make_new_child(
     opts: &Options,
     lsocks: &mut Listeners,
     pw: Option<&mut PollWrap>,
-) -> c_int {
+) -> i32 {
     let kids_vec = (*KIDS.0.get()).as_mut().unwrap();
 
     /* Find a free slot */
     let mut k = 0;
-    while k < opts.max_kids as c_int {
+    while k < opts.max_kids as i32 {
         if kids_vec[k as usize].pid == 0 {
             break;
         }
         k += 1;
     }
-    assert!(k < opts.max_kids as c_int);
+    assert!(k < opts.max_kids as i32);
 
     /* Start the child process */
     let pid = libc::fork();
@@ -322,7 +321,7 @@ pub unsafe fn ref_cache_main_c_211_make_new_child(
 pub unsafe fn ref_cache_main_c_245_start_upstream(
     opts: &Options,
     pw: Option<&mut PollWrap>,
-) -> c_int {
+) -> i32 {
     let mut liveness_pipe = [-1, -1];
 
     // Make pipe so child can detect parent going away
@@ -370,7 +369,7 @@ pub unsafe fn ref_cache_main_c_245_start_upstream(
 }
 
 // original: sig_handler (htslib/ref_cache/main.c:283)
-pub unsafe extern "C" fn ref_cache_main_c_283_sig_handler(signal: c_int) {
+pub unsafe extern "C" fn ref_cache_main_c_283_sig_handler(signal: i32) {
     match signal {
         libc::SIGCHLD => {
             if got_chld != 0 {
@@ -389,13 +388,13 @@ pub unsafe extern "C" fn ref_cache_main_c_283_sig_handler(signal: c_int) {
     loop {
         // write() is a genuine syscall and is async-signal-safe (unlike Rust I/O).
         bytes = libc::write(sig_fds[1], (&c as *const u8).cast(), 1);
-        if !(bytes < 0 && *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR) {
+        if !(bytes < 0 && *libc::__errno_location() == libc::EINTR) {
             break;
         }
     }
     if bytes < 0
-        && *crate::htslib_rs::c_compat::__errno_location() != libc::EAGAIN
-        && *crate::htslib_rs::c_compat::__errno_location() != libc::EWOULDBLOCK
+        && *libc::__errno_location() != libc::EAGAIN
+        && *libc::__errno_location() != libc::EWOULDBLOCK
     {
         libc::close(sig_fds[1]); /* Should get the attention of the other end... */
     }
@@ -405,7 +404,7 @@ pub unsafe extern "C" fn ref_cache_main_c_283_sig_handler(signal: c_int) {
 pub unsafe fn ref_cache_main_c_306_handle_sigchld(
     opts: &Options,
     mut pw: Option<&mut PollWrap>,
-) -> c_int {
+) -> i32 {
     let mut buffer = [0u8; 16];
     let mut pid;
 
@@ -413,7 +412,7 @@ pub unsafe fn ref_cache_main_c_306_handle_sigchld(
     let mut bytes;
     loop {
         bytes = libc::read(sig_fds[0], buffer.as_mut_ptr().cast(), buffer.len());
-        if !(bytes < 0 && *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR) {
+        if !(bytes < 0 && *libc::__errno_location() == libc::EINTR) {
             break;
         }
     }
@@ -437,8 +436,8 @@ pub unsafe fn ref_cache_main_c_306_handle_sigchld(
         let mut status = 0;
         pid = libc::waitpid(-1, &mut status, libc::WNOHANG);
         if pid < 0 {
-            if *crate::htslib_rs::c_compat::__errno_location() == libc::ECHILD
-                || *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR
+            if *libc::__errno_location() == libc::ECHILD
+                || *libc::__errno_location() == libc::EINTR
             {
                 continue;
             }
@@ -466,7 +465,7 @@ pub unsafe fn ref_cache_main_c_306_handle_sigchld(
             {
                 let mut i = 0;
                 let kids_vec = (*KIDS.0.get()).as_mut().unwrap();
-                while i < opts.max_kids as c_int + 1 {
+                while i < opts.max_kids as i32 + 1 {
                     if kids_vec[i as usize].pid == pid {
                         kids_vec[i as usize].pid = 0;
                         if kids_vec[i as usize].type_ == Child_type::CHLD_UPSTREAM {
@@ -559,7 +558,7 @@ pub unsafe fn ref_cache_main_c_393_run_server_population(
     opts: &Options,
     lsocks: &mut Listeners,
     logfiles: &mut Logfiles,
-) -> c_int {
+) -> i32 {
     let mut sigact: libc::sigaction = std::mem::zeroed();
     let mut logged = 0;
 
@@ -600,7 +599,7 @@ pub unsafe fn ref_cache_main_c_393_run_server_population(
         let timeout = if logged != 0 { 100 } else { -1 };
         let ret = poll_impl::ref_cache_poll_wrap_epoll_c_120_pw_wait(&mut pw, &mut events, timeout);
         if ret < 0 {
-            if *crate::htslib_rs::c_compat::__errno_location() != libc::EINTR {
+            if *libc::__errno_location() != libc::EINTR {
                 eprintln!("Waiting for poller: {}", std::io::Error::last_os_error());
                 return -1;
             }
@@ -638,7 +637,7 @@ pub unsafe fn ref_cache_main_c_393_run_server_population(
                 loop {
                     bytes = libc::read(kid.log_rd, buffer.as_mut_ptr().cast(), buffer.len());
                     if !(bytes < 0
-                        && *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR)
+                        && *libc::__errno_location() == libc::EINTR)
                     {
                         break;
                     }
@@ -680,9 +679,9 @@ pub unsafe fn ref_cache_main_c_393_run_server_population(
 
 // original: daemonise (htslib/ref_cache/main.c:493)
 pub unsafe fn ref_cache_main_c_493_daemonise(
-    daemon_fds: &mut [c_int; 2],
+    daemon_fds: &mut [i32; 2],
     opts: &Options,
-) -> c_int {
+) -> i32 {
     let error_log_file = opts.error_log_file.as_deref();
     let mut fd_limit: libc::rlimit = std::mem::zeroed();
     let mut all_sigs: libc::sigset_t = std::mem::zeroed();
@@ -696,9 +695,9 @@ pub unsafe fn ref_cache_main_c_493_daemonise(
     }
 
     // Close any open file descriptors above 3 (apart from the pipe passed in)
-    let save_errno = *crate::htslib_rs::c_compat::__errno_location();
+    let save_errno = *libc::__errno_location();
     let mut i = 3;
-    while i < fd_limit.rlim_cur as c_int {
+    while i < fd_limit.rlim_cur as i32 {
         if i != daemon_fds[0] && i != daemon_fds[1] {
             libc::close(i);
         }
@@ -712,7 +711,7 @@ pub unsafe fn ref_cache_main_c_493_daemonise(
     libc::sigdelset(&mut all_sigs, libc::SIGKILL); // Can't be changed
     libc::sigdelset(&mut all_sigs, libc::SIGSTOP); // Can't be changed
     i = 1;
-    while i < (std::mem::size_of_val(&all_sigs) * 8) as c_int {
+    while i < (std::mem::size_of_val(&all_sigs) * 8) as i32 {
         if libc::sigismember(&all_sigs, i) == 0 {
             i += 1;
             continue;
@@ -724,7 +723,7 @@ pub unsafe fn ref_cache_main_c_493_daemonise(
             // Ideally, sigfillset() would only fill valid signals,
             // but sadly on Linux, at least, that doesn't appear to be
             // the case so we should expect to get EINVAL
-            if *crate::htslib_rs::c_compat::__errno_location() != libc::EINVAL {
+            if *libc::__errno_location() != libc::EINVAL {
                 eprintln!(
                     "Resetting signal handler {}: {}",
                     i,
@@ -737,7 +736,7 @@ pub unsafe fn ref_cache_main_c_493_daemonise(
         }
         i += 1;
     }
-    *crate::htslib_rs::c_compat::__errno_location() = save_errno;
+    *libc::__errno_location() = save_errno;
 
     // Unblock all signals
     libc::sigemptyset(&mut all_sigs);
@@ -849,7 +848,7 @@ pub unsafe fn ref_cache_main_c_493_daemonise(
 }
 
 // original: get_systemd_listen_fds (htslib/ref_cache/main.c:633)
-pub unsafe fn ref_cache_main_c_633_get_systemd_listen_fds(opts: &mut Options) -> c_int {
+pub unsafe fn ref_cache_main_c_633_get_systemd_listen_fds(opts: &mut Options) -> i32 {
     let mut fd_limit: libc::rlimit = std::mem::zeroed();
     let our_pid = libc::getpid();
     let env_listen_pid = std::env::var("LISTEN_PID");
@@ -885,12 +884,12 @@ pub unsafe fn ref_cache_main_c_633_get_systemd_listen_fds(opts: &mut Options) ->
             return -1;
         }
     }
-    let listen_fds = match env_listen_fds.parse::<libc::c_long>() {
+    let listen_fds = match env_listen_fds.parse::<i64>() {
         Ok(fds)
             if fds > 0
-                && fds <= c_int::MAX as libc::c_long
-                && fds <= fd_limit.rlim_cur as libc::c_long
-                    - options::FIRST_SD_LISTEN_FD as libc::c_long =>
+                && fds <= i32::MAX as i64
+                && fds <= fd_limit.rlim_cur as i64
+                    - options::FIRST_SD_LISTEN_FD as i64 =>
         {
             fds
         }
@@ -899,7 +898,7 @@ pub unsafe fn ref_cache_main_c_633_get_systemd_listen_fds(opts: &mut Options) ->
             return -1;
         }
     };
-    opts.listen_fds = listen_fds as c_int;
+    opts.listen_fds = listen_fds as i32;
     std::env::remove_var("LISTEN_PID");
     std::env::remove_var("LISTEN_FDS");
     std::env::remove_var("LISTEN_FDNAMES");
@@ -907,7 +906,7 @@ pub unsafe fn ref_cache_main_c_633_get_systemd_listen_fds(opts: &mut Options) ->
 }
 
 // original: add_match_addr (htslib/ref_cache/main.c:677)
-pub unsafe fn ref_cache_main_c_677_add_match_addr(opts: &mut Options, addr_list: &[u8]) -> c_int {
+pub unsafe fn ref_cache_main_c_677_add_match_addr(opts: &mut Options, addr_list: &[u8]) -> i32 {
     let addr_list_len = addr_list.len();
     let mut host_start = 0usize;
     let mut addrs: *mut libc::addrinfo;
@@ -949,10 +948,10 @@ pub unsafe fn ref_cache_main_c_677_add_match_addr(opts: &mut Options, addr_list:
                 );
                 return -1;
             }
-            let netmask_bits: c_ulong = std::str::from_utf8(&nm[..digits_len])
+            let netmask_bits: u64 = std::str::from_utf8(&nm[..digits_len])
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(c_ulong::MAX);
+                .unwrap_or(u64::MAX);
             if netmask_bits > 128 {
                 eprintln!(
                     "Netmask \"{}/{}\" too large",
@@ -1036,17 +1035,17 @@ pub unsafe fn ref_cache_main_c_677_add_match_addr(opts: &mut Options, addr_list:
             } else {
                 eprintln!(
                     "Unexpected address type/length! Got {}/{} expected {}/{} or {}/{}",
-                    (*(*addr).ai_addr).sa_family as libc::c_uint,
-                    (*addr).ai_addrlen as libc::size_t,
-                    libc::AF_INET as libc::c_uint,
+                    (*(*addr).ai_addr).sa_family as u32,
+                    (*addr).ai_addrlen as usize,
+                    libc::AF_INET as u32,
                     std::mem::size_of::<libc::sockaddr_in>(),
-                    libc::AF_INET6 as libc::c_uint,
+                    libc::AF_INET6 as u32,
                     std::mem::size_of::<libc::sockaddr_in6>(),
                 );
                 libc::freeaddrinfo(addrs);
                 return -1;
             };
-            let max_mask_bits = (alen * 8) as c_ulong;
+            let max_mask_bits = (alen * 8) as u64;
 
             // Store netmask
             if netmask_bits > max_mask_bits {
@@ -1107,7 +1106,7 @@ pub fn ref_cache_main_c_826_sort_match_addrs(opts: &mut Options) {
     opts.match_addrs_storage.dedup();
 
     for (i, ma) in opts.match_addrs_storage.iter().enumerate() {
-        if ip6_seen == 0 && ma.family as c_int == libc::AF_INET6 {
+        if ip6_seen == 0 && ma.family as i32 == libc::AF_INET6 {
             opts.first_ip6 = i;
             ip6_seen = 1;
             break;
@@ -1119,7 +1118,7 @@ pub fn ref_cache_main_c_826_sort_match_addrs(opts: &mut Options) {
 }
 
 // original: usage (htslib/ref_cache/main.c:857)
-pub unsafe fn ref_cache_main_c_857_usage(prog: &[u8], help: c_int, opts: &Options) {
+pub unsafe fn ref_cache_main_c_857_usage(prog: &[u8], help: i32, opts: &Options) {
     eprintln!("Usage: {} [options] -d <dir>", String::from_utf8_lossy(prog));
     if help != 0 {
         // Render the optional "[<upstream url>]" suffix as plain Rust strings.
@@ -1139,10 +1138,10 @@ pub unsafe fn ref_cache_main_c_857_usage(prog: &[u8], help: c_int, opts: &Option
         };
         eprint!(
             "Options:\n  -b         Run in background as a daemon\n  -d <dir>   Directory for cached reference files\n  -h         Show help\n  -l <dir>   Directory for log files.  Log to stdout if not set and running in\n             foreground\n  -L         Don't log\n  -m <list>  Only respond to connections from these networks\n  -n <1-4>   Number of server processes to run [{}]\n  -p <num>   Port number to listen on [{}]\n  -r <num>   Number of request log files to keep [{}]\n  -R <num>   Maximum size of a single request log file (MiB) [{}]\n  -s         Run as a systemd socket service\n  -u <url>   URL for upstream server{}{}{}\n  -U         Only serve local files, turn off upstream\n  -v         Turn on debugging output\n",
-            opts.max_kids as libc::c_uint,
-            opts.port as libc::c_uint,
-            opts.nlogs as libc::c_uint,
-            (opts.max_log_sz >> 20) as libc::c_longlong,
+            opts.max_kids as u32,
+            opts.port as u32,
+            opts.nlogs as u32,
+            (opts.max_log_sz >> 20) as i64,
             upstream_open,
             upstream_url,
             upstream_close,
@@ -1157,14 +1156,14 @@ pub unsafe fn ref_cache_main_c_889_get_opt_val(
     opt: &[u8],
     min: u16,
     max: u16,
-    badarg: &mut c_int,
+    badarg: &mut i32,
 ) -> u16 {
-    let lmin = min as libc::c_long;
-    let lmax = max as libc::c_long;
+    let lmin = min as i64;
+    let lmax = max as i64;
 
     // Parse like strtol(arg, &end, 0): base auto-detected from prefix, and the
     // whole (non-empty) string must be consumed.
-    let parsed: Option<libc::c_long> = (|| {
+    let parsed: Option<i64> = (|| {
         if arg.is_empty() {
             return None;
         }
@@ -1189,7 +1188,7 @@ pub unsafe fn ref_cache_main_c_889_get_opt_val(
             return None;
         }
         let s = std::str::from_utf8(digits).ok()?;
-        let v = libc::c_long::from_str_radix(s, radix).ok()?;
+        let v = i64::from_str_radix(s, radix).ok()?;
         Some(if neg { -v } else { v })
     })();
 
@@ -1222,7 +1221,7 @@ pub unsafe fn ref_cache_main_c_889_get_opt_val(
 }
 
 // original: main (htslib/ref_cache/main.c:913)
-pub unsafe fn ref_cache_main_c_913_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn ref_cache_main_c_913_main(argc: i32, argv: *mut *mut u8) -> i32 {
     let mut opts: Options;
     let mut lsocks: Option<Box<Listeners>> = None;
     let mut logfiles: Option<Box<Logfiles>> = None;
@@ -1236,14 +1235,19 @@ pub unsafe fn ref_cache_main_c_913_main(argc: c_int, argv: *mut *mut c_char) -> 
 
     // argv[0] as a byte slice (for usage() and change_name()).
     let prog0 = {
-        let p = *argv.add(0);
-        std::slice::from_raw_parts(p.cast::<u8>(), libc::strlen(p))
+        let p: *const u8 = *argv.add(0);
+        // strlen on the NUL-terminated argv[0].
+        let mut len = 0usize;
+        while *p.add(len) != 0 {
+            len += 1;
+        }
+        std::slice::from_raw_parts(p, len)
     };
 
     #[allow(clippy::never_loop)]
     'main_body: loop {
         /* Copy argv[0] for change_name() */
-        argv0 = (*argv.add(0)).cast::<u8>();
+        argv0 = *argv.add(0);
         argv0_len = prog0.len();
 
         /* Options */
@@ -1399,7 +1403,7 @@ pub unsafe fn ref_cache_main_c_913_main(argc: c_int, argv: *mut *mut c_char) -> 
 
         if opts.daemon != DaemonType::systemd_socket_service {
             /* See if we're already running */
-            let res = ping::ref_cache_ping_c_39_check_running(opts.port as c_int);
+            let res = ping::ref_cache_ping_c_39_check_running(opts.port as i32);
             if res != 0 {
                 retval = if res < 0 { 1 } else { 0 };
                 break 'main_body;
@@ -1483,7 +1487,7 @@ pub unsafe fn ref_cache_main_c_913_main(argc: c_int, argv: *mut *mut c_char) -> 
                 );
             }
             _ => {
-                lsocks = listener::ref_cache_listener_c_95_get_listen_sockets(opts.port as c_int);
+                lsocks = listener::ref_cache_listener_c_95_get_listen_sockets(opts.port as i32);
             }
         }
         if lsocks.is_none() {

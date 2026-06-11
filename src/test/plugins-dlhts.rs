@@ -22,213 +22,207 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.  */
 
-use std::ffi::{c_char, c_int, c_void};
-
 use crate::htslib_rs::hts::hFILE;
 
 unsafe extern "C" {
-    static mut optind: c_int;
+    static mut optind: i32;
 }
 
-const EPROTONOSUPPORT: c_int = libc::EPROTONOSUPPORT;
+const EPROTONOSUPPORT: i32 = libc::EPROTONOSUPPORT;
 
 type VoidFunc = unsafe extern "C" fn();
-type HopenFunc = unsafe extern "C" fn(*const c_char, *const c_char, ...) -> *mut hFILE;
+// __va_list_tag boundary: variadic hopen signature kept for transmute compatibility.
+type HopenFunc = unsafe extern "C" fn(*const u8, *const u8, ...) -> *mut hFILE;
 type HcloseAbruptlyFunc = unsafe extern "C" fn(*mut hFILE);
-type CstrFunc = unsafe extern "C" fn() -> *const c_char;
+type CstrFunc = unsafe extern "C" fn() -> *const u8;
 
-static mut TEST_PLUGINS_DLHTS_ERRORS: c_int = 0;
-static mut TEST_PLUGINS_DLHTS_VERBOSE: c_int = 0;
+static mut TEST_PLUGINS_DLHTS_ERRORS: i32 = 0;
+static mut TEST_PLUGINS_DLHTS_VERBOSE: i32 = 0;
 
-static mut TEST_PLUGINS_DLHTS_HOPEN_P: *mut c_void = std::ptr::null_mut();
-static mut TEST_PLUGINS_DLHTS_HCLOSE_ABRUPTLY_P: *mut c_void = std::ptr::null_mut();
+static mut TEST_PLUGINS_DLHTS_HOPEN_P: *mut () = std::ptr::null_mut();
+static mut TEST_PLUGINS_DLHTS_HCLOSE_ABRUPTLY_P: *mut () = std::ptr::null_mut();
 
 // original: sym (htslib/test/plugins-dlhts.c:48)
-pub unsafe fn test_plugins_dlhts_c_48_sym(htslib: *mut c_void, name: *const c_char) -> *mut c_void {
-    let ptr = libc::dlsym(htslib, name);
+pub unsafe fn test_plugins_dlhts_c_48_sym(htslib: *mut (), name: &[u8]) -> *mut () {
+    let ptr = libc::dlsym(htslib.cast(), name.as_ptr().cast());
     if ptr.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Can't find symbol \"%s\": %s\n".as_ptr(),
-            name,
-            libc::dlerror(),
+        let err = std::ffi::CStr::from_ptr(libc::dlerror()).to_bytes();
+        eprintln!(
+            "Can't find symbol \"{}\": {}",
+            String::from_utf8_lossy(name),
+            String::from_utf8_lossy(err)
         );
-        libc::exit(libc::EXIT_FAILURE);
+        std::process::exit(1);
     }
-    ptr
+    ptr.cast()
 }
 
 // original: func (htslib/test/plugins-dlhts.c:59)
-pub unsafe fn test_plugins_dlhts_c_59_func(
-    htslib: *mut c_void,
-    name: *const c_char,
-) -> *mut c_void {
+pub unsafe fn test_plugins_dlhts_c_59_func(htslib: *mut (), name: &[u8]) -> *mut () {
     test_plugins_dlhts_c_48_sym(htslib, name)
 }
 
 // original: test_hopen (htslib/test/plugins-dlhts.c:75)
-pub unsafe fn test_plugins_dlhts_c_75_test_hopen(fname: *const c_char, expected: c_int) {
-    let fp = (std::mem::transmute::<*mut c_void, HopenFunc>(TEST_PLUGINS_DLHTS_HOPEN_P))(
-        fname,
-        c"r".as_ptr(),
+pub unsafe fn test_plugins_dlhts_c_75_test_hopen(fname: &[u8], expected: i32) {
+    let fp = (std::mem::transmute::<*mut (), HopenFunc>(TEST_PLUGINS_DLHTS_HOPEN_P))(
+        fname.as_ptr(),
+        b"r\0".as_ptr(),
     );
     if !fp.is_null() {
-        (std::mem::transmute::<*mut c_void, HcloseAbruptlyFunc>(
+        (std::mem::transmute::<*mut (), HcloseAbruptlyFunc>(
             TEST_PLUGINS_DLHTS_HCLOSE_ABRUPTLY_P,
         ))(fp);
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Opening \"%s\" actually succeeded\n".as_ptr(),
-            fname,
+        eprintln!(
+            "Opening \"{}\" actually succeeded",
+            String::from_utf8_lossy(fname)
         );
         TEST_PLUGINS_DLHTS_ERRORS += 1;
         return;
     }
 
-    let errno = *crate::htslib_rs::c_compat::__errno_location();
-    let supported = (errno != EPROTONOSUPPORT) as c_int;
+    let errno = *libc::__errno_location();
+    let supported = (errno != EPROTONOSUPPORT) as i32;
     if supported != expected {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Opening \"%s\" failed badly: %s\n".as_ptr(),
-            fname,
-            libc::strerror(errno),
+        let strerr = std::ffi::CStr::from_ptr(libc::strerror(errno)).to_bytes();
+        eprintln!(
+            "Opening \"{}\" failed badly: {}",
+            String::from_utf8_lossy(fname),
+            String::from_utf8_lossy(strerr)
         );
         TEST_PLUGINS_DLHTS_ERRORS += 1;
     } else if TEST_PLUGINS_DLHTS_VERBOSE != 0 {
-        libc::printf(
-            c"Opening \"%s\" produces %s\n".as_ptr(),
-            fname,
-            libc::strerror(errno),
+        let strerr = std::ffi::CStr::from_ptr(libc::strerror(errno)).to_bytes();
+        println!(
+            "Opening \"{}\" produces {}",
+            String::from_utf8_lossy(fname),
+            String::from_utf8_lossy(strerr)
         );
     }
 }
 
 // original: verbose_log (htslib/test/plugins-dlhts.c:94)
-pub unsafe fn test_plugins_dlhts_c_94_verbose_log(message: *const c_char) {
-    libc::fflush(crate::htslib_rs::c_compat::stderr.cast());
+pub unsafe fn test_plugins_dlhts_c_94_verbose_log(message: &[u8]) {
+    use std::io::Write;
+    let _ = std::io::stderr().flush();
     if TEST_PLUGINS_DLHTS_VERBOSE != 0 {
-        libc::puts(message);
+        println!("{}", String::from_utf8_lossy(message));
     }
-    libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
+    let _ = std::io::stdout().flush();
 }
 
 // original: main (htslib/test/plugins-dlhts.c:101)
-pub unsafe fn test_plugins_dlhts_c_101_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_plugins_dlhts_c_101_main(argc: i32, argv: *mut *mut u8) -> i32 {
     let mut dlflags = libc::RTLD_NOW;
     #[cfg(target_os = "macos")]
-    let skip = ((dlflags & libc::RTLD_LOCAL) != 0) as c_int;
+    let skip = ((dlflags & libc::RTLD_LOCAL) != 0) as i32;
     #[cfg(not(target_os = "macos"))]
     let skip = 0;
 
     loop {
-        let c = libc::getopt(argc, argv, c"glv".as_ptr());
+        let c = libc::getopt(argc, argv.cast(), b"glv\0".as_ptr().cast());
         if c < 0 {
             break;
         }
         match c {
-            c if c == b'g' as c_int => dlflags |= libc::RTLD_GLOBAL,
-            c if c == b'l' as c_int => dlflags |= libc::RTLD_LOCAL,
-            c if c == b'v' as c_int => TEST_PLUGINS_DLHTS_VERBOSE += 1,
+            c if c == b'g' as i32 => dlflags |= libc::RTLD_GLOBAL,
+            c if c == b'l' as i32 => dlflags |= libc::RTLD_LOCAL,
+            c if c == b'v' as i32 => TEST_PLUGINS_DLHTS_VERBOSE += 1,
             _ => {}
         }
     }
 
     if optind >= argc {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Usage: plugins-dlhts [-glv] LIBHTSFILE\n".as_ptr(),
-        );
+        eprintln!("Usage: plugins-dlhts [-glv] LIBHTSFILE");
         return libc::EXIT_FAILURE;
     }
 
-    let htslib = libc::dlopen(*argv.add(optind as usize), dlflags);
+    let htslib = libc::dlopen((*argv.add(optind as usize)).cast(), dlflags);
     if htslib.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Can't dlopen \"%s\": %s\n".as_ptr(),
-            *argv.add(optind as usize),
-            libc::dlerror(),
+        let argname = std::ffi::CStr::from_ptr((*argv.add(optind as usize)).cast()).to_bytes();
+        let err = std::ffi::CStr::from_ptr(libc::dlerror()).to_bytes();
+        eprintln!(
+            "Can't dlopen \"{}\": {}",
+            String::from_utf8_lossy(argname),
+            String::from_utf8_lossy(err)
         );
         return libc::EXIT_FAILURE;
     }
 
     if TEST_PLUGINS_DLHTS_VERBOSE != 0 {
         let hts_verbosep =
-            test_plugins_dlhts_c_48_sym(htslib, c"hts_verbose".as_ptr()).cast::<c_int>();
+            test_plugins_dlhts_c_48_sym(htslib.cast(), b"hts_verbose\0").cast::<i32>();
         *hts_verbosep += TEST_PLUGINS_DLHTS_VERBOSE;
 
-        libc::printf(
-            c"Loaded HTSlib %s\n".as_ptr(),
-            (std::mem::transmute::<*mut c_void, CstrFunc>(test_plugins_dlhts_c_59_func(
-                htslib,
-                c"hts_version".as_ptr(),
-            )))(),
-        );
+        let version = (std::mem::transmute::<*mut (), CstrFunc>(test_plugins_dlhts_c_59_func(
+            htslib.cast(),
+            b"hts_version\0",
+        )))();
+        let version = std::ffi::CStr::from_ptr(version.cast()).to_bytes();
+        println!("Loaded HTSlib {}", String::from_utf8_lossy(version));
     }
 
-    TEST_PLUGINS_DLHTS_HOPEN_P = test_plugins_dlhts_c_59_func(htslib, c"hopen".as_ptr());
+    TEST_PLUGINS_DLHTS_HOPEN_P = test_plugins_dlhts_c_59_func(htslib.cast(), b"hopen\0");
     TEST_PLUGINS_DLHTS_HCLOSE_ABRUPTLY_P =
-        test_plugins_dlhts_c_59_func(htslib, c"hclose_abruptly".as_ptr());
+        test_plugins_dlhts_c_59_func(htslib.cast(), b"hclose_abruptly\0");
 
-    test_plugins_dlhts_c_75_test_hopen(c"bad-scheme:unsupported".as_ptr(), 0);
+    test_plugins_dlhts_c_75_test_hopen(b"bad-scheme:unsupported\0", 0);
 
     if skip == 0 {
         #[cfg(feature = "libcurl")]
-        test_plugins_dlhts_c_75_test_hopen(c"https://localhost:99999/invalid_port".as_ptr(), 1);
+        test_plugins_dlhts_c_75_test_hopen(b"https://localhost:99999/invalid_port\0", 1);
         #[cfg(feature = "gcs")]
-        test_plugins_dlhts_c_75_test_hopen(c"gs:invalid".as_ptr(), 1);
+        test_plugins_dlhts_c_75_test_hopen(b"gs:invalid\0", 1);
         #[cfg(feature = "s3")]
-        test_plugins_dlhts_c_75_test_hopen(c"s3:invalid".as_ptr(), 1);
+        test_plugins_dlhts_c_75_test_hopen(b"s3:invalid\0", 1);
     } else {
-        test_plugins_dlhts_c_94_verbose_log(c"Skipping most tests".as_ptr());
+        test_plugins_dlhts_c_94_verbose_log(b"Skipping most tests");
     }
 
-    test_plugins_dlhts_c_94_verbose_log(c"Calling hts_lib_shutdown()".as_ptr());
-    (std::mem::transmute::<*mut c_void, VoidFunc>(test_plugins_dlhts_c_59_func(
-        htslib,
-        c"hts_lib_shutdown".as_ptr(),
+    test_plugins_dlhts_c_94_verbose_log(b"Calling hts_lib_shutdown()");
+    (std::mem::transmute::<*mut (), VoidFunc>(test_plugins_dlhts_c_59_func(
+        htslib.cast(),
+        b"hts_lib_shutdown\0",
     )))();
 
-    test_plugins_dlhts_c_94_verbose_log(c"Calling dlclose(htslib)".as_ptr());
+    test_plugins_dlhts_c_94_verbose_log(b"Calling dlclose(htslib)");
     if libc::dlclose(htslib) < 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Can't dlclose \"%s\": %s\n".as_ptr(),
-            *argv.add(optind as usize),
-            libc::dlerror(),
+        let argname = std::ffi::CStr::from_ptr((*argv.add(optind as usize)).cast()).to_bytes();
+        let err = std::ffi::CStr::from_ptr(libc::dlerror()).to_bytes();
+        eprintln!(
+            "Can't dlclose \"{}\": {}",
+            String::from_utf8_lossy(argname),
+            String::from_utf8_lossy(err)
         );
         TEST_PLUGINS_DLHTS_ERRORS += 1;
     }
 
-    test_plugins_dlhts_c_94_verbose_log(c"Returning from main()".as_ptr());
+    test_plugins_dlhts_c_94_verbose_log(b"Returning from main()");
 
     if TEST_PLUGINS_DLHTS_ERRORS > 0 {
-        libc::printf(c"FAILED: %d errors\n".as_ptr(), TEST_PLUGINS_DLHTS_ERRORS);
+        println!("FAILED: {} errors", TEST_PLUGINS_DLHTS_ERRORS);
         return libc::EXIT_FAILURE;
     }
 
     if TEST_PLUGINS_DLHTS_VERBOSE != 0 {
-        libc::printf(c"All tests passed\n".as_ptr());
+        println!("All tests passed");
     }
     libc::EXIT_SUCCESS
 }
 
 // original: main (htslib/test/plugins-dlhts.c:180)
-pub unsafe fn test_plugins_dlhts_c_180_main() -> c_int {
-    libc::printf(c"Tests skipped due to plugins being disabled\n".as_ptr());
+pub unsafe fn test_plugins_dlhts_c_180_main() -> i32 {
+    println!("Tests skipped due to plugins being disabled");
     libc::EXIT_SUCCESS
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
     use std::sync::{Mutex, OnceLock};
 
     unsafe extern "C" {
         #[link_name = "hopen"]
-        fn linked_hopen(fname: *const c_char, mode: *const c_char, ...) -> *mut hFILE;
+        fn linked_hopen(fname: *const u8, mode: *const u8, ...) -> *mut hFILE;
         #[link_name = "hclose_abruptly"]
         fn linked_hclose_abruptly(fp: *mut hFILE);
     }
@@ -241,8 +235,8 @@ mod tests {
     unsafe fn reset_state() {
         TEST_PLUGINS_DLHTS_ERRORS = 0;
         TEST_PLUGINS_DLHTS_VERBOSE = 0;
-        TEST_PLUGINS_DLHTS_HOPEN_P = linked_hopen as *mut c_void;
-        TEST_PLUGINS_DLHTS_HCLOSE_ABRUPTLY_P = linked_hclose_abruptly as *mut c_void;
+        TEST_PLUGINS_DLHTS_HOPEN_P = linked_hopen as *mut ();
+        TEST_PLUGINS_DLHTS_HCLOSE_ABRUPTLY_P = linked_hclose_abruptly as *mut ();
         // optind = 0 forces glibc getopt full reinit (shared-process tests).
         optind = 0;
     }
@@ -253,13 +247,14 @@ mod tests {
         unsafe {
             reset_state();
 
-            test_plugins_dlhts_c_75_test_hopen(c"bad-scheme:unsupported".as_ptr(), 0);
+            test_plugins_dlhts_c_75_test_hopen(b"bad-scheme:unsupported\0", 0);
             let errors = TEST_PLUGINS_DLHTS_ERRORS;
             assert_eq!(errors, 0);
 
-            let missing =
-                CString::new(format!("/tmp/plugins-dlhts-missing-{}", std::process::id())).unwrap();
-            test_plugins_dlhts_c_75_test_hopen(missing.as_ptr(), 1);
+            let mut missing =
+                format!("/tmp/plugins-dlhts-missing-{}", std::process::id()).into_bytes();
+            missing.push(0);
+            test_plugins_dlhts_c_75_test_hopen(&missing, 1);
             let errors = TEST_PLUGINS_DLHTS_ERRORS;
             assert_eq!(errors, 0);
         }
@@ -270,9 +265,9 @@ mod tests {
         let _guard = plugins_dlhts_test_lock();
         unsafe {
             reset_state();
-            let mut argv = [c"plugins-dlhts".as_ptr().cast_mut()];
+            let mut argv = [b"plugins-dlhts\0".as_ptr().cast_mut()];
 
-            let rc = test_plugins_dlhts_c_101_main(argv.len() as c_int, argv.as_mut_ptr());
+            let rc = test_plugins_dlhts_c_101_main(argv.len() as i32, argv.as_mut_ptr());
 
             assert_eq!(rc, libc::EXIT_FAILURE);
             let errors = TEST_PLUGINS_DLHTS_ERRORS;

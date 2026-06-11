@@ -4,7 +4,6 @@ use htslib_rs::{
         bgzf_block_write, bgzf_c_1942_lazy_flush, bgzf_check_EOF, bgzf_close, bgzf_compression,
         bgzf_getc, bgzf_getline, bgzf_index_destroy, bgzf_index_load, bgzf_is_bgzf, bgzf_open,
         bgzf_peek, bgzf_raw_read, bgzf_read, bgzf_seek, bgzf_useek, bgzf_utell, bgzf_write,
-        bgzidx_t,
     },
     bgzip::bgzip_c_217_main,
     kstring_t,
@@ -19,7 +18,6 @@ use htslib_rs::{
     },
     BGZF,
 };
-use std::ffi::CString;
 use std::io::Write;
 use std::process::Command;
 
@@ -31,13 +29,15 @@ fn fixture(path: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
 }
 
-fn c_fixture(path: &str) -> CString {
-    CString::new(fixture(path).to_string_lossy().as_bytes()).unwrap()
+fn c_fixture(path: &str) -> Vec<u8> {
+    let mut bytes = fixture(path).to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 unsafe fn open_bgzf_fixture(path: &str) -> *mut BGZF {
     let path = c_fixture(path);
-    let fp = bgzf_open(path.as_ptr(), c"r".as_ptr());
+    let fp = bgzf_open(path.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null());
     fp
 }
@@ -70,8 +70,8 @@ fn gzip_member(data: &[u8]) -> Vec<u8> {
 
 fn with_original_test_bgzf_setup(
     label: &str,
-    run: impl FnOnce(&mut Files) -> Vec<(&'static str, libc::c_int)>,
-) -> Vec<(&'static str, libc::c_int)> {
+    run: impl FnOnce(&mut Files) -> Vec<(&'static str, i32)>,
+) -> Vec<(&'static str, i32)> {
     let workdir = std::env::temp_dir().join(format!(
         "htslib_rs-original-test-bgzf-{label}-{}",
         std::process::id()
@@ -91,22 +91,23 @@ fn with_original_test_bgzf_setup(
     )
     .unwrap();
 
-    let base_c = CString::new(base.to_string_lossy().as_bytes()).unwrap();
+    let mut base_c = base.to_string_lossy().into_owned().into_bytes();
+    base_c.push(0);
     let results = unsafe {
         let mut files = Files {
-            src_plain: std::ptr::null_mut(),
-            src_bgzf: std::ptr::null_mut(),
-            src_idx: std::ptr::null_mut(),
-            tmp_bgzf: std::ptr::null_mut(),
-            tmp_idx: std::ptr::null_mut(),
+            src_plain: Vec::new(),
+            src_bgzf: Vec::new(),
+            src_idx: Vec::new(),
+            tmp_bgzf: Vec::new(),
+            tmp_idx: Vec::new(),
             f_plain: std::ptr::null_mut(),
             f_bgzf: std::ptr::null_mut(),
             f_idx: std::ptr::null_mut(),
-            text: std::ptr::null(),
+            text: Vec::new(),
             ltext: 0,
         };
 
-        assert_eq!(test_test_bgzf_c_357_setup(base_c.as_ptr(), &mut files), 0);
+        assert_eq!(test_test_bgzf_c_357_setup(base_c.as_ptr().cast(), &mut files), 0);
         let results = run(&mut files);
         let retval = if results.iter().all(|(_, result)| *result == 0) {
             libc::EXIT_SUCCESS
@@ -128,12 +129,13 @@ fn lazy_flush_non_mt_writes_current_partial_block_without_closing_stream() {
         std::process::id(),
         "split"
     ));
-    let out_c = CString::new(out.to_string_lossy().as_bytes()).unwrap();
+    let mut out_c = out.to_string_lossy().into_owned().into_bytes();
+    out_c.push(0);
     let first = b"first partial block\n";
     let second = b"second partial block\n";
 
     unsafe {
-        let fp = bgzf_open(out_c.as_ptr(), c"w".as_ptr());
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"w".as_ptr());
         assert!(!fp.is_null());
         assert_eq!(
             bgzf_write(fp, first.as_ptr().cast(), first.len()),
@@ -159,7 +161,7 @@ fn lazy_flush_non_mt_writes_current_partial_block_without_closing_stream() {
     assert_eq!(&raw[raw.len() - BGZF_EOF_MARKER.len()..], BGZF_EOF_MARKER);
 
     unsafe {
-        let fp = bgzf_open(out_c.as_ptr(), c"r".as_ptr());
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
         let mut observed = vec![0_u8; first.len() + second.len()];
         assert_eq!(
@@ -198,18 +200,20 @@ fn bgzip_stdout_compresses_real_sam_to_stdout_not_literal_dash_file() {
             }
             libc::close(pipefd[1]);
 
-            let cwd = CString::new(workdir.to_string_lossy().as_bytes()).unwrap();
-            if libc::chdir(cwd.as_ptr()) < 0 {
+            let mut cwd = workdir.to_string_lossy().into_owned().into_bytes();
+            cwd.push(0);
+            if libc::chdir(cwd.as_ptr().cast()) < 0 {
                 libc::_exit(121);
             }
 
-            let argv0 = CString::new("bgzip").unwrap();
-            let arg1 = CString::new("-c").unwrap();
-            let arg2 = CString::new(input.to_string_lossy().as_bytes()).unwrap();
+            let mut argv0 = b"bgzip\0".to_vec();
+            let mut arg1 = b"-c\0".to_vec();
+            let mut arg2 = input.to_string_lossy().into_owned().into_bytes();
+            arg2.push(0);
             let mut argv = [
-                argv0.as_ptr().cast_mut(),
-                arg1.as_ptr().cast_mut(),
-                arg2.as_ptr().cast_mut(),
+                argv0.as_mut_ptr().cast(),
+                arg1.as_mut_ptr().cast(),
+                arg2.as_mut_ptr().cast(),
                 std::ptr::null_mut(),
             ];
             let ret = bgzip_c_217_main(3, argv.as_mut_ptr());
@@ -239,8 +243,9 @@ fn bgzip_stdout_compresses_real_sam_to_stdout_not_literal_dash_file() {
 
         let out = workdir.join("stdout.sam.gz");
         std::fs::write(&out, &compressed).unwrap();
-        let out_c = CString::new(out.to_string_lossy().as_bytes()).unwrap();
-        let fp = bgzf_open(out_c.as_ptr(), c"r".as_ptr());
+        let mut out_c = out.to_string_lossy().into_owned().into_bytes();
+        out_c.push(0);
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
         let mut actual = Vec::new();
         loop {
@@ -314,9 +319,10 @@ fn bgzip_thread_options_round_trip_with_synchronous_bgzf_backend() {
                 output.stdout.len()
             ));
             std::fs::write(&path, &output.stdout).unwrap();
-            let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+            let mut path_c = path.to_string_lossy().into_owned().into_bytes();
+            path_c.push(0);
             unsafe {
-                let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+                let fp = bgzf_open(path_c.as_ptr().cast(), c"r".as_ptr());
                 assert!(!fp.is_null());
                 let mut actual = vec![0_u8; expected.len()];
                 assert_eq!(
@@ -347,10 +353,11 @@ fn bgzf_open_reads_ordinary_gzip_stream_like_upstream() {
         gz.write_all(&plain).unwrap();
         gz.finish().unwrap();
     }
-    let out_c = CString::new(out.to_string_lossy().as_bytes()).unwrap();
+    let mut out_c = out.to_string_lossy().into_owned().into_bytes();
+    out_c.push(0);
 
     unsafe {
-        let fp = bgzf_open(out_c.as_ptr(), c"r".as_ptr());
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
         assert_eq!(bgzf_compression(fp), 1);
 
@@ -384,10 +391,11 @@ fn bgzf_open_reads_concatenated_ordinary_gzip_members_like_upstream() {
     concatenated.extend_from_slice(&gzip_member(&first));
     concatenated.extend_from_slice(&gzip_member(&second));
     std::fs::write(&out, concatenated).unwrap();
-    let out_c = CString::new(out.to_string_lossy().as_bytes()).unwrap();
+    let mut out_c = out.to_string_lossy().into_owned().into_bytes();
+    out_c.push(0);
 
     unsafe {
-        let fp = bgzf_open(out_c.as_ptr(), c"r".as_ptr());
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
         assert_eq!(bgzf_compression(fp), 1);
 
@@ -423,10 +431,11 @@ fn bgzf_open_reads_large_ordinary_gzip_stream_across_internal_blocks() {
         gz.write_all(&plain).unwrap();
         gz.finish().unwrap();
     }
-    let out_c = CString::new(out.to_string_lossy().as_bytes()).unwrap();
+    let mut out_c = out.to_string_lossy().into_owned().into_bytes();
+    out_c.push(0);
 
     unsafe {
-        let fp = bgzf_open(out_c.as_ptr(), c"r".as_ptr());
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
         assert_eq!(bgzf_compression(fp), 1);
 
@@ -456,13 +465,14 @@ fn bgziptest_rebgzip_reconstructs_exact_original_bgzf_stream() {
         std::process::id(),
         "exact"
     ));
-    let out_c = CString::new(out.to_string_lossy().as_bytes()).unwrap();
+    let mut out_c = out.to_string_lossy().into_owned().into_bytes();
+    out_c.push(0);
     let gzi = c_fixture("htslib/test/bgziptest.txt.gz.gzi");
 
     unsafe {
-        let fp = bgzf_open(out_c.as_ptr(), c"w".as_ptr());
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"w".as_ptr());
         assert!(!fp.is_null());
-        assert_eq!(bgzf_index_load(fp, gzi.as_ptr(), std::ptr::null()), 0);
+        assert_eq!(bgzf_index_load(fp, gzi.as_ptr().cast(), std::ptr::null()), 0);
         assert_eq!(
             bgzf_block_write(fp, plain.as_ptr().cast(), plain.len()),
             plain.len() as isize
@@ -496,7 +506,7 @@ fn bgziptest_gzi_load_adds_original_implicit_zero_offset() {
         let fp = open_bgzf_fixture("htslib/test/bgziptest.txt.gz");
         let gzi = c_fixture("htslib/test/bgziptest.txt.gz.gzi");
 
-        assert_eq!(bgzf_index_load(fp, gzi.as_ptr(), std::ptr::null()), 0);
+        assert_eq!(bgzf_index_load(fp, gzi.as_ptr().cast(), std::ptr::null()), 0);
         assert!((*fp).idx.is_some());
 
         let idx = (*fp).idx.as_ref().unwrap();
@@ -550,7 +560,7 @@ fn bgziptest_useek_rejects_offset_beyond_indexed_terminal_block() {
         let fp = open_bgzf_fixture("htslib/test/bgziptest.txt.gz");
         let gzi = c_fixture("htslib/test/bgziptest.txt.gz.gzi");
 
-        assert_eq!(bgzf_index_load(fp, gzi.as_ptr(), std::ptr::null()), 0);
+        assert_eq!(bgzf_index_load(fp, gzi.as_ptr().cast(), std::ptr::null()), 0);
         assert_eq!(bgzf_useek(fp, 16, libc::SEEK_SET), -1);
         assert_eq!(bgzf_utell(fp), 0);
 
@@ -570,9 +580,9 @@ fn real_bgzf_probes_and_eof_checks_match_original_fixture_markers() {
             "htslib/test/mpileup/small.bam",
         ] {
             let c_path = c_fixture(path);
-            assert_eq!(bgzf_is_bgzf(c_path.as_ptr()), 1, "{path}");
+            assert_eq!(bgzf_is_bgzf(c_path.as_ptr().cast()), 1, "{path}");
 
-            let fp = bgzf_open(c_path.as_ptr(), c"r".as_ptr());
+            let fp = bgzf_open(c_path.as_ptr().cast(), c"r".as_ptr());
             assert!(!fp.is_null(), "{path}");
             assert_eq!(bgzf_check_EOF(fp), 1, "{path}");
             assert_eq!(bgzf_utell(fp), 0, "{path}");
@@ -592,7 +602,7 @@ fn real_bgzf_probes_and_eof_checks_match_original_fixture_markers() {
             "htslib/test/emptyfile",
         ] {
             let c_path = c_fixture(path);
-            assert_eq!(bgzf_is_bgzf(c_path.as_ptr()), 0, "{path}");
+            assert_eq!(bgzf_is_bgzf(c_path.as_ptr().cast()), 0, "{path}");
         }
     }
 }
@@ -691,7 +701,7 @@ fn original_test_bgzf_read_write_embed_eof_and_index_cases_run_on_fixtures() {
                 "write-read-bgzf-open-compressed",
                 test_test_bgzf_c_435_test_write_read(
                     files,
-                    c"w".as_ptr(),
+                    c"w".as_ptr().cast(),
                     Open_method::USE_BGZF_OPEN,
                     0,
                     2,
@@ -701,7 +711,7 @@ fn original_test_bgzf_read_write_embed_eof_and_index_cases_run_on_fixtures() {
                 "write-read-bgzf-open-uncompressed",
                 test_test_bgzf_c_435_test_write_read(
                     files,
-                    c"wu".as_ptr(),
+                    c"wu".as_ptr().cast(),
                     Open_method::USE_BGZF_OPEN,
                     0,
                     0,
@@ -709,7 +719,7 @@ fn original_test_bgzf_read_write_embed_eof_and_index_cases_run_on_fixtures() {
             ),
             (
                 "embedded-eof-single-thread",
-                test_test_bgzf_c_511_test_embed_eof(files, c"w".as_ptr(), 0),
+                test_test_bgzf_c_511_test_embed_eof(files, c"w".as_ptr().cast(), 0),
             ),
             (
                 "index-load-dump",
@@ -729,31 +739,31 @@ fn original_test_bgzf_eof_index_useek_and_tell_cases_run_on_fixtures() {
         vec![
             (
                 "check-eof-source",
-                test_test_bgzf_c_622_test_check_EOF(files.src_bgzf, 1),
+                test_test_bgzf_c_622_test_check_EOF(files.src_bgzf.as_mut_ptr(), 1),
             ),
             (
                 "index-useek-getc-compressed",
-                test_test_bgzf_c_638_test_index_useek_getc(files, c"w".as_ptr(), 1000000, 0),
+                test_test_bgzf_c_638_test_index_useek_getc(files, c"w".as_ptr().cast(), 1000000, 0),
             ),
             (
                 "index-useek-getc-uncompressed",
-                test_test_bgzf_c_638_test_index_useek_getc(files, c"wu".as_ptr(), 0, 0),
+                test_test_bgzf_c_638_test_index_useek_getc(files, c"wu".as_ptr().cast(), 0, 0),
             ),
             (
                 "tell-seek-getc-compressed",
-                test_test_bgzf_c_730_test_tell_seek_getc(files, c"w".as_ptr(), 0, 0),
+                test_test_bgzf_c_730_test_tell_seek_getc(files, c"w".as_ptr().cast(), 0, 0),
             ),
             (
                 "tell-seek-getc-uncompressed",
-                test_test_bgzf_c_730_test_tell_seek_getc(files, c"wu".as_ptr(), 0, 0),
+                test_test_bgzf_c_730_test_tell_seek_getc(files, c"wu".as_ptr().cast(), 0, 0),
             ),
             (
                 "tell-read-compressed",
-                test_test_bgzf_c_831_test_tell_read(files, c"w".as_ptr()),
+                test_test_bgzf_c_831_test_tell_read(files, c"w".as_ptr().cast()),
             ),
             (
                 "tell-read-uncompressed",
-                test_test_bgzf_c_831_test_tell_read(files, c"wu".as_ptr()),
+                test_test_bgzf_c_831_test_tell_read(files, c"wu".as_ptr().cast()),
             ),
         ]
     });
@@ -769,11 +779,11 @@ fn original_test_bgzf_getline_reads_generated_real_fixture_text() {
         vec![
             (
                 "getline-single-thread",
-                test_test_bgzf_c_924_test_bgzf_getline(files, c"w".as_ptr(), 0),
+                test_test_bgzf_c_924_test_bgzf_getline(files, c"w".as_ptr().cast(), 0),
             ),
             (
                 "getline-thread-option-1",
-                test_test_bgzf_c_924_test_bgzf_getline(files, c"w".as_ptr(), 1),
+                test_test_bgzf_c_924_test_bgzf_getline(files, c"w".as_ptr().cast(), 1),
             ),
         ]
     });
@@ -788,7 +798,7 @@ fn original_test_bgzf_getline_reports_truncated_block_errors() {
     let results = with_original_test_bgzf_setup("truncated-getline", |files| unsafe {
         vec![(
             "truncated-getline-single-thread",
-            test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(files, c"w".as_ptr(), 0),
+            test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(files, c"w".as_ptr().cast(), 0),
         )]
     });
 
@@ -818,24 +828,25 @@ fn original_test_bgzf_small_useek_reads_cover_compressed_and_uncompressed_modes(
     )
     .unwrap();
 
-    let base_c = CString::new(base.to_string_lossy().as_bytes()).unwrap();
+    let mut base_c = base.to_string_lossy().into_owned().into_bytes();
+    base_c.push(0);
     unsafe {
         let mut files = Files {
-            src_plain: std::ptr::null_mut(),
-            src_bgzf: std::ptr::null_mut(),
-            src_idx: std::ptr::null_mut(),
-            tmp_bgzf: std::ptr::null_mut(),
-            tmp_idx: std::ptr::null_mut(),
+            src_plain: Vec::new(),
+            src_bgzf: Vec::new(),
+            src_idx: Vec::new(),
+            tmp_bgzf: Vec::new(),
+            tmp_idx: Vec::new(),
             f_plain: std::ptr::null_mut(),
             f_bgzf: std::ptr::null_mut(),
             f_idx: std::ptr::null_mut(),
-            text: std::ptr::null(),
+            text: Vec::new(),
             ltext: 0,
         };
 
-        assert_eq!(test_test_bgzf_c_357_setup(base_c.as_ptr(), &mut files), 0);
-        let compressed = test_test_bgzf_c_881_test_useek_read_small(&mut files, c"w".as_ptr());
-        let uncompressed = test_test_bgzf_c_881_test_useek_read_small(&mut files, c"wu".as_ptr());
+        assert_eq!(test_test_bgzf_c_357_setup(base_c.as_ptr().cast(), &mut files), 0);
+        let compressed = test_test_bgzf_c_881_test_useek_read_small(&mut files, c"w".as_ptr().cast());
+        let uncompressed = test_test_bgzf_c_881_test_useek_read_small(&mut files, c"wu".as_ptr().cast());
         let retval = if compressed == 0 && uncompressed == 0 {
             libc::EXIT_SUCCESS
         } else {
@@ -872,16 +883,15 @@ fn original_test_bgzf_main_runs_against_original_fixture() {
         )
         .unwrap();
 
-        let mut args = [
-            CString::new("test_bgzf").unwrap(),
-            CString::new(base.to_string_lossy().as_bytes()).unwrap(),
-        ];
+        let mut arg_bytes = base.to_string_lossy().into_owned().into_bytes();
+        arg_bytes.push(0);
+        let mut args = [b"test_bgzf\0".to_vec(), arg_bytes];
         let mut argv = args
             .iter_mut()
-            .map(|arg| arg.as_ptr().cast_mut())
+            .map(|arg| arg.as_mut_ptr())
             .collect::<Vec<_>>();
         assert_eq!(
-            test_test_bgzf_c_1073_main(argv.len() as libc::c_int, argv.as_mut_ptr()),
+            test_test_bgzf_c_1073_main(argv.len() as i32, argv.as_mut_ptr()),
             libc::EXIT_SUCCESS
         );
 

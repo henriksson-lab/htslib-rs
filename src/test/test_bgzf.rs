@@ -7,28 +7,24 @@ use crate::htslib_rs::{
     hfile::{hclose_abruptly, hfile_oflags, hopen},
     hts::{hts_get_log_level, hts_set_log_level, ks_release, kstring_t, BGZF, HTS_LOG_OFF},
 };
-use std::{
-    ffi::{c_char, c_int, c_void},
-    ptr,
-};
+use std::ptr;
 
-pub const BGZF_SUFFIX: *const c_char = c".gz".as_ptr();
-pub const IDX_SUFFIX: *const c_char = c".gzi".as_ptr();
-pub const TMP_SUFFIX: *const c_char = c".tmp".as_ptr();
+pub const BGZF_SUFFIX: &[u8] = b".gz\0";
+pub const IDX_SUFFIX: &[u8] = b".gzi\0";
+pub const TMP_SUFFIX: &[u8] = b".tmp\0";
 
 const BUFSZ: usize = 32768;
 
-#[repr(C)]
 pub struct Files {
-    pub src_plain: *mut c_char,
-    pub src_bgzf: *mut c_char,
-    pub src_idx: *mut c_char,
-    pub tmp_bgzf: *mut c_char,
-    pub tmp_idx: *mut c_char,
+    pub src_plain: Vec<u8>,
+    pub src_bgzf: Vec<u8>,
+    pub src_idx: Vec<u8>,
+    pub tmp_bgzf: Vec<u8>,
+    pub tmp_idx: Vec<u8>,
     pub f_plain: *mut libc::FILE,
     pub f_bgzf: *mut libc::FILE,
     pub f_idx: *mut libc::FILE,
-    pub text: *const u8,
+    pub text: Vec<u8>,
     pub ltext: usize,
 }
 
@@ -42,16 +38,15 @@ pub enum Open_method {
 
 // original: try_fopen (htslib/test/test_bgzf.c:68)
 pub unsafe fn test_test_bgzf_c_68_try_fopen(
-    name: *const c_char,
-    mode: *const c_char,
+    name: *const u8,
+    mode: *const u8,
 ) -> *mut libc::FILE {
-    let f = libc::fopen(name, mode);
+    let f = libc::fopen(name.cast(), mode.cast());
     if f.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Couldn't open %s : %s\n".as_ptr(),
+        eprintln!(
+            "Couldn't open {:?} : errno {}",
             name,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         return ptr::null_mut();
     }
@@ -61,18 +56,17 @@ pub unsafe fn test_test_bgzf_c_68_try_fopen(
 // original: try_fclose (htslib/test/test_bgzf.c:77)
 pub unsafe fn test_test_bgzf_c_77_try_fclose(
     file: *mut *mut libc::FILE,
-    name: *const c_char,
-    func: *const c_char,
-) -> c_int {
+    name: *const u8,
+    func: &[u8],
+) -> i32 {
     let to_close = *file;
     *file = ptr::null_mut();
     if libc::fclose(to_close) != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Error on closing %s : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : Error on closing {:?} : errno {}",
             func,
             name,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         return -1;
     }
@@ -83,38 +77,36 @@ pub unsafe fn test_test_bgzf_c_77_try_fclose(
 // original: try_fread (htslib/test/test_bgzf.c:89)
 pub unsafe fn test_test_bgzf_c_89_try_fread(
     in_: *mut libc::FILE,
-    buf: *mut c_void,
+    buf: *mut (),
     len: usize,
-    func: *const c_char,
-    fname: *const c_char,
-) -> libc::ssize_t {
-    let got = libc::fread(buf, 1, len, in_);
+    func: &[u8],
+    fname: *const u8,
+) -> isize {
+    let got = libc::fread(buf.cast(), 1, len, in_);
     if got == 0 && libc::ferror(in_) != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Error reading from %s : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : Error reading from {:?} : errno {}",
             func,
             fname,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         return -1;
     }
-    got as libc::ssize_t
+    got as isize
 }
 
 // original: try_fseek_start (htslib/test/test_bgzf.c:100)
 pub unsafe fn test_test_bgzf_c_100_try_fseek_start(
     f: *mut libc::FILE,
-    name: *const c_char,
-    func: *const c_char,
-) -> c_int {
+    name: *const u8,
+    func: &[u8],
+) -> i32 {
     if libc::fseek(f, 0, libc::SEEK_SET) != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Couldn't seek on %s : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : Couldn't seek on {:?} : errno {}",
             func,
             name,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         return -1;
     }
@@ -123,19 +115,18 @@ pub unsafe fn test_test_bgzf_c_100_try_fseek_start(
 
 // original: try_bgzf_open (htslib/test/test_bgzf.c:109)
 pub unsafe fn test_test_bgzf_c_109_try_bgzf_open(
-    name: *const c_char,
-    mode: *const c_char,
-    func: *const c_char,
+    name: *const u8,
+    mode: *const u8,
+    func: &[u8],
 ) -> *mut BGZF {
-    let bgz = bgzf_open(name, mode);
+    let bgz = bgzf_open(name.cast(), mode.cast());
     if bgz.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Couldn't bgzf_open %s with mode %s : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : Couldn't bgzf_open {:?} with mode {:?} : errno {}",
             func,
             name,
             mode,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         return ptr::null_mut();
     }
@@ -144,32 +135,30 @@ pub unsafe fn test_test_bgzf_c_109_try_bgzf_open(
 
 // original: try_bgzf_dopen (htslib/test/test_bgzf.c:120)
 pub unsafe fn test_test_bgzf_c_120_try_bgzf_dopen(
-    name: *const c_char,
-    mode: *const c_char,
-    func: *const c_char,
+    name: *const u8,
+    mode: *const u8,
+    func: &[u8],
 ) -> *mut BGZF {
-    let fd = libc::open(name, hfile_oflags(mode), 0o666);
+    let fd = libc::open(name.cast(), hfile_oflags(mode.cast()), 0o666);
     if fd < 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Failed to open %s with mode %s : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : Failed to open {:?} with mode {:?} : errno {}",
             func,
             name,
             mode,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         return ptr::null_mut();
     }
 
-    let bgz = bgzf_dopen(fd, mode);
+    let bgz = bgzf_dopen(fd, mode.cast());
     if bgz.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : bgzf_dopen failed on %s mode %s : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : bgzf_dopen failed on {:?} mode {:?} : errno {}",
             func,
             name,
             mode,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         libc::close(fd);
         return ptr::null_mut();
@@ -180,32 +169,30 @@ pub unsafe fn test_test_bgzf_c_120_try_bgzf_dopen(
 
 // original: try_bgzf_hopen (htslib/test/test_bgzf.c:141)
 pub unsafe fn test_test_bgzf_c_141_try_bgzf_hopen(
-    name: *const c_char,
-    mode: *const c_char,
-    func: *const c_char,
+    name: *const u8,
+    mode: *const u8,
+    func: &[u8],
 ) -> *mut BGZF {
-    let hfp = hopen(name, mode);
+    let hfp = hopen(name.cast(), mode.cast());
     if hfp.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : hopen failed on %s mode %s : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : hopen failed on {:?} mode {:?} : errno {}",
             func,
             name,
             mode,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         return ptr::null_mut();
     }
 
-    let bgz = bgzf_hopen(hfp, mode);
+    let bgz = bgzf_hopen(hfp, mode.cast());
     if bgz.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : bgzf_hopen failed on %s mode %s : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : bgzf_hopen failed on {:?} mode {:?} : errno {}",
             func,
             name,
             mode,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         hclose_abruptly(hfp);
         return ptr::null_mut();
@@ -217,37 +204,26 @@ pub unsafe fn test_test_bgzf_c_141_try_bgzf_hopen(
 // original: try_bgzf_close (htslib/test/test_bgzf.c:163)
 pub unsafe fn test_test_bgzf_c_163_try_bgzf_close(
     bgz: *mut *mut BGZF,
-    name: *const c_char,
-    func: *const c_char,
-    expected_fail: c_int,
-) -> c_int {
+    name: *const u8,
+    func: &[u8],
+    expected_fail: i32,
+) -> i32 {
     let to_close = *bgz;
     *bgz = ptr::null_mut();
     if bgzf_close(to_close) != 0 {
         if expected_fail == 0 {
-            let errno = *crate::htslib_rs::c_compat::__errno_location();
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"%s : bgzf_close failed on %s%s%s\n".as_ptr(),
+            let errno = *libc::__errno_location();
+            eprintln!(
+                "{:?} : bgzf_close failed on {:?} : errno {}",
                 func,
                 name,
-                if errno != 0 {
-                    c" : ".as_ptr()
-                } else {
-                    c"".as_ptr()
-                },
-                if errno != 0 {
-                    libc::strerror(errno)
-                } else {
-                    c"".as_ptr()
-                },
+                errno,
             );
         }
         return -1;
     } else if expected_fail != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : bgzf_close worked on %s, but expected failure\n".as_ptr(),
+        eprintln!(
+            "{:?} : bgzf_close worked on {:?}, but expected failure",
             func,
             name,
         );
@@ -258,64 +234,61 @@ pub unsafe fn test_test_bgzf_c_163_try_bgzf_close(
 // original: try_bgzf_read (htslib/test/test_bgzf.c:180)
 pub unsafe fn test_test_bgzf_c_180_try_bgzf_read(
     fp: *mut BGZF,
-    data: *mut c_void,
+    data: *mut (),
     length: usize,
-    name: *const c_char,
-    func: *const c_char,
-) -> libc::ssize_t {
-    let got = bgzf_read_small(fp, data, length);
+    name: *const u8,
+    func: &[u8],
+) -> isize {
+    let got = bgzf_read_small(fp, data.cast(), length);
     if got < 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Error from bgzf_read %s : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : Error from bgzf_read {:?} : errno {}",
             func,
             name,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
     }
-    got as libc::ssize_t
+    got as isize
 }
 
 // original: try_bgzf_write (htslib/test/test_bgzf.c:190)
 pub unsafe fn test_test_bgzf_c_190_try_bgzf_write(
     fp: *mut BGZF,
-    data: *const c_void,
+    data: *const (),
     length: usize,
-    name: *const c_char,
-    func: *const c_char,
-) -> libc::ssize_t {
-    let put = bgzf_write_small(fp, data, length);
+    name: *const u8,
+    func: &[u8],
+) -> isize {
+    let put = bgzf_write_small(fp, data.cast(), length);
     if put < length as isize {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : %s %s : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : {} {:?} : errno {}",
             func,
             if put < 0 {
-                c"Error writing to".as_ptr()
+                "Error writing to"
             } else {
-                c"Short write on".as_ptr()
+                "Short write on"
             },
             name,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         return -1;
     }
 
-    put as libc::ssize_t
+    put as isize
 }
 
 // original: try_bgzf_compression (htslib/test/test_bgzf.c:203)
 pub unsafe fn test_test_bgzf_c_203_try_bgzf_compression(
     fp: *mut BGZF,
-    expect: c_int,
-    name: *const c_char,
-    func: *const c_char,
-) -> c_int {
+    expect: i32,
+    name: *const u8,
+    func: &[u8],
+) -> i32 {
     let res = bgzf_compression(fp);
     if res != expect {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Unexpected result %d from bgzf_compression on %s; expected %d\n".as_ptr(),
+        eprintln!(
+            "{:?} : Unexpected result {} from bgzf_compression on {:?}; expected {}",
             func,
             res,
             name,
@@ -329,15 +302,14 @@ pub unsafe fn test_test_bgzf_c_203_try_bgzf_compression(
 // original: try_bgzf_mt (htslib/test/test_bgzf.c:216)
 pub unsafe fn test_test_bgzf_c_216_try_bgzf_mt(
     bgz: *mut BGZF,
-    nthreads: c_int,
-    func: *const c_char,
-) -> c_int {
+    nthreads: i32,
+    func: &[u8],
+) -> i32 {
     if bgzf_mt(bgz, nthreads, 64) != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Error from bgzf_mt : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : Error from bgzf_mt : errno {}",
             func,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         return -1;
     }
@@ -347,16 +319,15 @@ pub unsafe fn test_test_bgzf_c_216_try_bgzf_mt(
 // original: try_bgzf_index_build_init (htslib/test/test_bgzf.c:225)
 pub unsafe fn test_test_bgzf_c_225_try_bgzf_index_build_init(
     bgz: *mut BGZF,
-    name: *const c_char,
-    func: *const c_char,
-) -> c_int {
+    name: *const u8,
+    func: &[u8],
+) -> i32 {
     if bgzf_index_build_init(bgz) != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Error from bgzf_index_build_init on %s : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : Error from bgzf_index_build_init on {:?} : errno {}",
             func,
             name,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         return -1;
     }
@@ -366,22 +337,17 @@ pub unsafe fn test_test_bgzf_c_225_try_bgzf_index_build_init(
 // original: try_bgzf_index_load (htslib/test/test_bgzf.c:235)
 pub unsafe fn test_test_bgzf_c_235_try_bgzf_index_load(
     fp: *mut BGZF,
-    bname: *const c_char,
-    suffix: *const c_char,
-    func: *const c_char,
-) -> c_int {
-    if bgzf_index_load(fp, bname, suffix) != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Couldn't bgzf_index_load %s%s : %s\n".as_ptr(),
+    bname: *const u8,
+    suffix: *const u8,
+    func: &[u8],
+) -> i32 {
+    if bgzf_index_load(fp, bname.cast(), suffix.cast()) != 0 {
+        eprintln!(
+            "{:?} : Couldn't bgzf_index_load {:?}{:?} : errno {}",
             func,
             bname,
-            if suffix.is_null() {
-                c"".as_ptr()
-            } else {
-                suffix
-            },
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            suffix,
+            *libc::__errno_location(),
         );
         return -1;
     }
@@ -391,22 +357,17 @@ pub unsafe fn test_test_bgzf_c_235_try_bgzf_index_load(
 // original: try_bgzf_index_dump (htslib/test/test_bgzf.c:245)
 pub unsafe fn test_test_bgzf_c_245_try_bgzf_index_dump(
     fp: *mut BGZF,
-    bname: *const c_char,
-    suffix: *const c_char,
-    func: *const c_char,
-) -> c_int {
-    if bgzf_index_dump(fp, bname, suffix) != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Couldn't bgzf_index_dump %s%s : %s\n".as_ptr(),
+    bname: *const u8,
+    suffix: *const u8,
+    func: &[u8],
+) -> i32 {
+    if bgzf_index_dump(fp, bname.cast(), suffix.cast()) != 0 {
+        eprintln!(
+            "{:?} : Couldn't bgzf_index_dump {:?}{:?} : errno {}",
             func,
             bname,
-            if suffix.is_null() {
-                c"".as_ptr()
-            } else {
-                suffix
-            },
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            suffix,
+            *libc::__errno_location(),
         );
         return -1;
     }
@@ -416,18 +377,16 @@ pub unsafe fn test_test_bgzf_c_245_try_bgzf_index_dump(
 // original: try_bgzf_tell (htslib/test/test_bgzf.c:255)
 pub unsafe fn test_test_bgzf_c_255_try_bgzf_tell(
     fp: *mut BGZF,
-    name: *const c_char,
-    func: *const c_char,
+    name: *const u8,
+    func: &[u8],
 ) -> i64 {
     let told = (((*fp).block_address as u64) << 16 | ((*fp).block_offset as u64 & 0xffff)) as i64;
     if told < 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : %s %s : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : Error telling in {:?} : errno {}",
             func,
-            c"Error telling in".as_ptr(),
             name,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         return -1;
     }
@@ -438,18 +397,17 @@ pub unsafe fn test_test_bgzf_c_255_try_bgzf_tell(
 pub unsafe fn test_test_bgzf_c_267_try_bgzf_tell_expect(
     fp: *mut BGZF,
     expected: i64,
-    name: *const c_char,
-    func: *const c_char,
+    name: *const u8,
+    func: &[u8],
 ) -> i64 {
     let told = test_test_bgzf_c_255_try_bgzf_tell(fp, name, func);
     if told != expected {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Unexpected value (%ld) from bgzf_tell on %s; expected %ld\n".as_ptr(),
+        eprintln!(
+            "{:?} : Unexpected value ({}) from bgzf_tell on {:?}; expected {}",
             func,
-            told as libc::c_long,
+            told,
             name,
-            expected as libc::c_long,
+            expected,
         );
         return -1;
     }
@@ -460,19 +418,18 @@ pub unsafe fn test_test_bgzf_c_267_try_bgzf_tell_expect(
 pub unsafe fn test_test_bgzf_c_278_try_bgzf_seek(
     fp: *mut BGZF,
     pos: i64,
-    whence: c_int,
-    name: *const c_char,
-    func: *const c_char,
-) -> c_int {
+    whence: i32,
+    name: *const u8,
+    func: &[u8],
+) -> i32 {
     if bgzf_seek(fp, pos, whence) < 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Error from bgzf_seek(%s, %ld, %d) : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : Error from bgzf_seek({:?}, {}, {}) : errno {}",
             func,
             name,
-            pos as libc::c_long,
+            pos,
             whence,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         return -1;
     }
@@ -482,20 +439,19 @@ pub unsafe fn test_test_bgzf_c_278_try_bgzf_seek(
 // original: try_bgzf_useek (htslib/test/test_bgzf.c:288)
 pub unsafe fn test_test_bgzf_c_288_try_bgzf_useek(
     fp: *mut BGZF,
-    uoffset: libc::c_long,
-    where_: c_int,
-    name: *const c_char,
-    func: *const c_char,
-) -> c_int {
+    uoffset: i64,
+    where_: i32,
+    name: *const u8,
+    func: &[u8],
+) -> i32 {
     if bgzf_useek(fp, uoffset, where_) < 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Error from bgzf_useek(%s, %ld, %d) : %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : Error from bgzf_useek({:?}, {}, {}) : errno {}",
             func,
             name,
             uoffset,
             where_,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+            *libc::__errno_location(),
         );
         return -1;
     }
@@ -506,15 +462,14 @@ pub unsafe fn test_test_bgzf_c_288_try_bgzf_useek(
 pub unsafe fn test_test_bgzf_c_298_try_bgzf_getc(
     fp: *mut BGZF,
     pos: usize,
-    expected: c_int,
-    name: *const c_char,
-    func: *const c_char,
-) -> c_int {
+    expected: i32,
+    name: *const u8,
+    func: &[u8],
+) -> i32 {
     let c = bgzf_getc(fp);
     if c != expected {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Unexpected value (%d) from bgzf_getc on %s pos %zu; expected %d\n".as_ptr(),
+        eprintln!(
+            "{:?} : Unexpected value ({}) from bgzf_getc on {:?} pos {}; expected {}",
             func,
             c,
             name,
@@ -530,15 +485,14 @@ pub unsafe fn test_test_bgzf_c_298_try_bgzf_getc(
 pub unsafe fn test_test_bgzf_c_311_try_skip(
     fp: *mut BGZF,
     count: usize,
-    name: *const c_char,
-    func: *const c_char,
-) -> c_int {
+    name: *const u8,
+    func: &[u8],
+) -> i32 {
     for _ in 0..count {
         let c = bgzf_getc(fp);
         if c < 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"%s : Error from bgzf_getc on %s\n".as_ptr(),
+            eprintln!(
+                "{:?} : Error from bgzf_getc on {:?}",
                 func,
                 name,
             );
@@ -554,23 +508,21 @@ pub unsafe fn test_test_bgzf_c_327_compare_buffers(
     b2: *const u8,
     l1: usize,
     l2: usize,
-    name1: *const c_char,
-    name2: *const c_char,
-    func: *const c_char,
-) -> c_int {
+    name1: *const u8,
+    name2: *const u8,
+    func: &[u8],
+) -> i32 {
     if l1 != l2 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : EOF on %s\n".as_ptr(),
+        eprintln!(
+            "{:?} : EOF on {:?}",
             func,
             if l1 < l2 { name1 } else { name2 },
         );
         return -1;
     }
-    if libc::memcmp(b1.cast(), b2.cast(), l1) != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : difference between %s and %s\n".as_ptr(),
+    if std::slice::from_raw_parts(b1, l1) != std::slice::from_raw_parts(b2, l2) {
+        eprintln!(
+            "{:?} : difference between {:?} and {:?}",
             func,
             name1,
             name2,
@@ -582,10 +534,10 @@ pub unsafe fn test_test_bgzf_c_327_compare_buffers(
 }
 
 // original: cleanup (htslib/test/test_bgzf.c:344)
-pub unsafe fn test_test_bgzf_c_344_cleanup(f: *mut Files, retval: c_int) {
+pub unsafe fn test_test_bgzf_c_344_cleanup(f: *mut Files, retval: i32) {
     if retval == libc::EXIT_SUCCESS {
-        libc::unlink((*f).tmp_bgzf);
-        libc::unlink((*f).tmp_idx);
+        libc::unlink((*f).tmp_bgzf.as_ptr().cast());
+        libc::unlink((*f).tmp_idx.as_ptr().cast());
     }
     if !(*f).f_plain.is_null() {
         libc::fclose((*f).f_plain);
@@ -596,85 +548,74 @@ pub unsafe fn test_test_bgzf_c_344_cleanup(f: *mut Files, retval: c_int) {
     if !(*f).f_idx.is_null() {
         libc::fclose((*f).f_idx);
     }
-    libc::free((*f).src_plain.cast());
-    libc::free((*f).text.cast_mut().cast());
+    // src_plain and text are owned Vec<u8>; dropped automatically with `f`.
 }
 
 // original: setup (htslib/test/test_bgzf.c:357)
-pub unsafe fn test_test_bgzf_c_357_setup(src: *const c_char, f: *mut Files) -> c_int {
-    let len = libc::strlen(src)
-        + libc::strlen(BGZF_SUFFIX)
-        + libc::strlen(IDX_SUFFIX)
-        + libc::strlen(TMP_SUFFIX)
-        + 8;
+pub unsafe fn test_test_bgzf_c_357_setup(src: *const u8, f: *mut Files) -> i32 {
+    // Read the NUL-terminated `src` argument into a byte slice (without trailing NUL).
+    let mut src_len = 0usize;
+    while *src.add(src_len) != 0 {
+        src_len += 1;
+    }
+    let src_bytes = std::slice::from_raw_parts(src, src_len);
+
+    // Suffix constants carry a trailing NUL; strip it for concatenation.
+    let bgzf_suffix = &BGZF_SUFFIX[..BGZF_SUFFIX.len() - 1];
+    let idx_suffix = &IDX_SUFFIX[..IDX_SUFFIX.len() - 1];
+    let tmp_suffix = &TMP_SUFFIX[..TMP_SUFFIX.len() - 1];
+
     let max = 50000u32;
     let text_sz = max as usize * 8 + 1;
 
-    let mem = libc::calloc(5, len).cast::<c_char>();
-    if mem.is_null() {
-        libc::perror(c"test_test_bgzf_c_357_setup".as_ptr());
-        return -1;
-    }
+    // Build the five NUL-terminated path names as owned Vec<u8>.
+    let mut src_plain = src_bytes.to_vec();
+    src_plain.push(0);
 
-    libc::snprintf(mem, len, c"%s".as_ptr(), src);
-    libc::snprintf(mem.add(len), len, c"%s%s".as_ptr(), src, BGZF_SUFFIX);
-    libc::snprintf(
-        mem.add(len * 2),
-        len,
-        c"%s%s%s".as_ptr(),
-        src,
-        BGZF_SUFFIX,
-        IDX_SUFFIX,
-    );
-    libc::snprintf(
-        mem.add(len * 3),
-        len,
-        c"%s%s%s".as_ptr(),
-        src,
-        TMP_SUFFIX,
-        BGZF_SUFFIX,
-    );
-    libc::snprintf(
-        mem.add(len * 4),
-        len,
-        c"%s%s%s%s".as_ptr(),
-        src,
-        TMP_SUFFIX,
-        BGZF_SUFFIX,
-        IDX_SUFFIX,
-    );
+    let mut src_bgzf = src_bytes.to_vec();
+    src_bgzf.extend_from_slice(bgzf_suffix);
+    src_bgzf.push(0);
 
-    (*f).src_plain = mem;
-    (*f).src_bgzf = mem.add(len);
-    (*f).src_idx = mem.add(len * 2);
-    (*f).tmp_bgzf = mem.add(len * 3);
-    (*f).tmp_idx = mem.add(len * 4);
+    let mut src_idx = src_bytes.to_vec();
+    src_idx.extend_from_slice(bgzf_suffix);
+    src_idx.extend_from_slice(idx_suffix);
+    src_idx.push(0);
 
-    let text = libc::malloc(text_sz).cast::<c_char>();
-    if text.is_null() {
-        libc::perror(c"test_test_bgzf_c_357_setup".as_ptr());
-        return -1;
-    }
+    let mut tmp_bgzf = src_bytes.to_vec();
+    tmp_bgzf.extend_from_slice(tmp_suffix);
+    tmp_bgzf.extend_from_slice(bgzf_suffix);
+    tmp_bgzf.push(0);
+
+    let mut tmp_idx = src_bytes.to_vec();
+    tmp_idx.extend_from_slice(tmp_suffix);
+    tmp_idx.extend_from_slice(bgzf_suffix);
+    tmp_idx.extend_from_slice(idx_suffix);
+    tmp_idx.push(0);
+
+    (*f).src_plain = src_plain;
+    (*f).src_bgzf = src_bgzf;
+    (*f).src_idx = src_idx;
+    (*f).tmp_bgzf = tmp_bgzf;
+    (*f).tmp_idx = tmp_idx;
+
+    // Build the text buffer: max lines of "%07u\n" plus a trailing NUL.
+    let mut text = Vec::with_capacity(text_sz);
     for i in 0..max {
-        libc::snprintf(
-            text.add(i as usize * 8),
-            text_sz - i as usize * 8,
-            c"%07u\n".as_ptr(),
-            i,
-        );
+        text.extend_from_slice(format!("{:07}\n", i).as_bytes());
     }
-    (*f).text = text.cast();
+    text.push(0);
+    (*f).text = text;
     (*f).ltext = text_sz - 1;
 
-    (*f).f_plain = test_test_bgzf_c_68_try_fopen((*f).src_plain, c"rb".as_ptr());
+    (*f).f_plain = test_test_bgzf_c_68_try_fopen((*f).src_plain.as_ptr(), b"rb\0".as_ptr());
     if (*f).f_plain.is_null() {
         return -1;
     }
-    (*f).f_bgzf = test_test_bgzf_c_68_try_fopen((*f).src_bgzf, c"rb".as_ptr());
+    (*f).f_bgzf = test_test_bgzf_c_68_try_fopen((*f).src_bgzf.as_ptr(), b"rb\0".as_ptr());
     if (*f).f_bgzf.is_null() {
         return -1;
     }
-    (*f).f_idx = test_test_bgzf_c_68_try_fopen((*f).src_idx, c"rb".as_ptr());
+    (*f).f_idx = test_test_bgzf_c_68_try_fopen((*f).src_idx.as_ptr(), b"rb\0".as_ptr());
     if (*f).f_idx.is_null() {
         return -1;
     }
@@ -683,13 +624,13 @@ pub unsafe fn test_test_bgzf_c_357_setup(src: *const c_char, f: *mut Files) -> c
 }
 
 // original: test_read (htslib/test/test_bgzf.c:403)
-pub unsafe fn test_test_bgzf_c_403_test_read(f: *mut Files) -> c_int {
+pub unsafe fn test_test_bgzf_c_403_test_read(f: *mut Files) -> i32 {
     let mut bg_buf = [0u8; BUFSZ];
     let mut f_buf = [0u8; BUFSZ];
 
-    *crate::htslib_rs::c_compat::__errno_location() = 0;
+    *libc::__errno_location() = 0;
     let mut bgz =
-        test_test_bgzf_c_109_try_bgzf_open((*f).src_bgzf, c"r".as_ptr(), c"test_read".as_ptr());
+        test_test_bgzf_c_109_try_bgzf_open((*f).src_bgzf.as_ptr(), b"r\0".as_ptr(), b"test_read");
     if bgz.is_null() {
         return -1;
     }
@@ -699,8 +640,8 @@ pub unsafe fn test_test_bgzf_c_403_test_read(f: *mut Files) -> c_int {
             bgz,
             bg_buf.as_mut_ptr().cast(),
             BUFSZ,
-            (*f).src_bgzf,
-            c"test_read".as_ptr(),
+            (*f).src_bgzf.as_ptr(),
+            b"test_read",
         );
         if bg_got < 0 {
             bgzf_close(bgz);
@@ -711,8 +652,8 @@ pub unsafe fn test_test_bgzf_c_403_test_read(f: *mut Files) -> c_int {
             (*f).f_plain,
             f_buf.as_mut_ptr().cast(),
             BUFSZ,
-            c"test_read".as_ptr(),
-            (*f).src_plain,
+            b"test_read",
+            (*f).src_plain.as_ptr(),
         );
         if f_got < 0 {
             bgzf_close(bgz);
@@ -724,9 +665,9 @@ pub unsafe fn test_test_bgzf_c_403_test_read(f: *mut Files) -> c_int {
             bg_buf.as_ptr(),
             f_got as usize,
             bg_got as usize,
-            (*f).src_plain,
-            (*f).src_bgzf,
-            c"test_read".as_ptr(),
+            (*f).src_plain.as_ptr(),
+            (*f).src_bgzf.as_ptr(),
+            b"test_read",
         ) != 0
         {
             bgzf_close(bgz);
@@ -738,10 +679,10 @@ pub unsafe fn test_test_bgzf_c_403_test_read(f: *mut Files) -> c_int {
         }
     }
 
-    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).src_bgzf, c"test_read".as_ptr(), 0) != 0 {
+    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).src_bgzf.as_ptr(), b"test_read", 0) != 0 {
         return -1;
     }
-    if test_test_bgzf_c_100_try_fseek_start((*f).f_plain, (*f).src_plain, c"test_read".as_ptr())
+    if test_test_bgzf_c_100_try_fseek_start((*f).f_plain, (*f).src_plain.as_ptr(), b"test_read")
         != 0
     {
         return -1;
@@ -753,23 +694,23 @@ pub unsafe fn test_test_bgzf_c_403_test_read(f: *mut Files) -> c_int {
 // original: test_write_read (htslib/test/test_bgzf.c:435)
 pub unsafe fn test_test_bgzf_c_435_test_write_read(
     f: *mut Files,
-    mode: *const c_char,
+    mode: *const u8,
     method: Open_method,
-    nthreads: c_int,
-    expected_compression: c_int,
-) -> c_int {
+    nthreads: i32,
+    expected_compression: i32,
+) -> i32 {
     let mut pos = 0usize;
     let mut bg_buf = [0u8; BUFSZ];
 
     let mut bgz = match method {
         Open_method::USE_BGZF_DOPEN => {
-            test_test_bgzf_c_120_try_bgzf_dopen((*f).tmp_bgzf, mode, c"test_write_read".as_ptr())
+            test_test_bgzf_c_120_try_bgzf_dopen((*f).tmp_bgzf.as_ptr(), mode, b"test_write_read")
         }
         Open_method::USE_BGZF_HOPEN => {
-            test_test_bgzf_c_141_try_bgzf_hopen((*f).tmp_bgzf, mode, c"test_write_read".as_ptr())
+            test_test_bgzf_c_141_try_bgzf_hopen((*f).tmp_bgzf.as_ptr(), mode, b"test_write_read")
         }
         Open_method::USE_BGZF_OPEN => {
-            test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf, mode, c"test_write_read".as_ptr())
+            test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf.as_ptr(), mode, b"test_write_read")
         }
     };
     if bgz.is_null() {
@@ -777,7 +718,7 @@ pub unsafe fn test_test_bgzf_c_435_test_write_read(
     }
 
     if nthreads > 0
-        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, c"test_write_read".as_ptr()) != 0
+        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, b"test_write_read") != 0
     {
         bgzf_close(bgz);
         return -1;
@@ -785,17 +726,17 @@ pub unsafe fn test_test_bgzf_c_435_test_write_read(
 
     let bg_put = test_test_bgzf_c_190_try_bgzf_write(
         bgz,
-        (*f).text.cast(),
+        (*f).text.as_ptr().cast(),
         (*f).ltext,
-        (*f).tmp_bgzf,
-        c"test_write_read".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_write_read",
     );
     if bg_put < 0 {
         bgzf_close(bgz);
         return -1;
     }
 
-    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf, c"test_write_read".as_ptr(), 0)
+    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf.as_ptr(), b"test_write_read", 0)
         != 0
     {
         return -1;
@@ -803,19 +744,19 @@ pub unsafe fn test_test_bgzf_c_435_test_write_read(
 
     bgz = match method {
         Open_method::USE_BGZF_DOPEN => test_test_bgzf_c_120_try_bgzf_dopen(
-            (*f).tmp_bgzf,
-            c"r".as_ptr(),
-            c"test_write_read".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"r\0".as_ptr(),
+            b"test_write_read",
         ),
         Open_method::USE_BGZF_HOPEN => test_test_bgzf_c_141_try_bgzf_hopen(
-            (*f).tmp_bgzf,
-            c"r".as_ptr(),
-            c"test_write_read".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"r\0".as_ptr(),
+            b"test_write_read",
         ),
         Open_method::USE_BGZF_OPEN => test_test_bgzf_c_109_try_bgzf_open(
-            (*f).tmp_bgzf,
-            c"r".as_ptr(),
-            c"test_write_read".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"r\0".as_ptr(),
+            b"test_write_read",
         ),
     };
     if bgz.is_null() {
@@ -823,7 +764,7 @@ pub unsafe fn test_test_bgzf_c_435_test_write_read(
     }
 
     if nthreads > 0
-        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, c"test_write_read".as_ptr()) != 0
+        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, b"test_write_read") != 0
     {
         bgzf_close(bgz);
         return -1;
@@ -832,8 +773,8 @@ pub unsafe fn test_test_bgzf_c_435_test_write_read(
     if test_test_bgzf_c_203_try_bgzf_compression(
         bgz,
         expected_compression,
-        (*f).tmp_bgzf,
-        c"test_write_read".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_write_read",
     ) != 0
     {
         bgzf_close(bgz);
@@ -845,8 +786,8 @@ pub unsafe fn test_test_bgzf_c_435_test_write_read(
             bgz,
             bg_buf.as_mut_ptr().cast(),
             BUFSZ,
-            (*f).tmp_bgzf,
-            c"test_write_read".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_write_read",
         );
         if bg_got < 0 {
             bgzf_close(bgz);
@@ -859,12 +800,13 @@ pub unsafe fn test_test_bgzf_c_435_test_write_read(
             } else {
                 (*f).ltext - pos
             };
-            if libc::memcmp((*f).text.add(pos).cast(), bg_buf.as_ptr().cast(), cmp_len) != 0 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"%s : Got wrong data from %s, pos %zu\n".as_ptr(),
-                    c"test_write_read".as_ptr(),
-                    (*f).tmp_bgzf,
+            if std::slice::from_raw_parts((*f).text.as_ptr().add(pos), cmp_len)
+                != std::slice::from_raw_parts(bg_buf.as_ptr(), cmp_len)
+            {
+                eprintln!(
+                    "{:?} : Got wrong data from {:?}, pos {}",
+                    b"test_write_read",
+                    (*f).tmp_bgzf.as_ptr(),
                     pos,
                 );
                 bgzf_close(bgz);
@@ -879,10 +821,9 @@ pub unsafe fn test_test_bgzf_c_435_test_write_read(
     }
 
     if pos != bg_put as usize {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : bgzf_read got %zd bytes; expected %zd\n".as_ptr(),
-            c"test_write_read".as_ptr(),
+        eprintln!(
+            "{:?} : bgzf_read got {} bytes; expected {}",
+            b"test_write_read",
             pos,
             bg_put,
         );
@@ -890,7 +831,7 @@ pub unsafe fn test_test_bgzf_c_435_test_write_read(
         return -1;
     }
 
-    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf, c"test_write_read".as_ptr(), 0)
+    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf.as_ptr(), b"test_write_read", 0)
         != 0
     {
         return -1;
@@ -902,21 +843,21 @@ pub unsafe fn test_test_bgzf_c_435_test_write_read(
 // original: test_embed_eof (htslib/test/test_bgzf.c:511)
 pub unsafe fn test_test_bgzf_c_511_test_embed_eof(
     f: *mut Files,
-    mode: *const c_char,
-    nthreads: c_int,
-) -> c_int {
+    mode: *const u8,
+    nthreads: i32,
+) -> i32 {
     let mut pos = 0usize;
     let half = if BUFSZ < (*f).ltext {
         BUFSZ
     } else {
         (*f).ltext / 2
     };
-    let mut append_mode = [0 as c_char; 16];
+    let mut append_mode = [0u8; 16];
     let mut bg_buf = [0u8; BUFSZ];
 
     while pos < append_mode.len() - 1 && *mode.add(pos) != 0 {
-        append_mode[pos] = if *mode.add(pos) == b'w' as c_char {
-            b'a' as c_char
+        append_mode[pos] = if *mode.add(pos) == b'w' {
+            b'a'
         } else {
             *mode.add(pos)
         };
@@ -925,59 +866,59 @@ pub unsafe fn test_test_bgzf_c_511_test_embed_eof(
     append_mode[pos] = 0;
 
     let mut bgz =
-        test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf, mode, c"test_embed_eof".as_ptr());
+        test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf.as_ptr(), mode, b"test_embed_eof");
     if bgz.is_null() {
         return -1;
     }
     if nthreads > 0
-        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, c"test_embed_eof".as_ptr()) != 0
+        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, b"test_embed_eof") != 0
     {
         bgzf_close(bgz);
         return -1;
     }
     if test_test_bgzf_c_190_try_bgzf_write(
         bgz,
-        (*f).text.cast(),
+        (*f).text.as_ptr().cast(),
         half,
-        (*f).tmp_bgzf,
-        c"test_embed_eof".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_embed_eof",
     ) < 0
     {
         bgzf_close(bgz);
         return -1;
     }
-    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf, c"test_embed_eof".as_ptr(), 0)
+    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf.as_ptr(), b"test_embed_eof", 0)
         != 0
     {
         return -1;
     }
 
     bgz = test_test_bgzf_c_109_try_bgzf_open(
-        (*f).tmp_bgzf,
+        (*f).tmp_bgzf.as_ptr(),
         append_mode.as_ptr(),
-        c"test_embed_eof".as_ptr(),
+        b"test_embed_eof",
     );
     if bgz.is_null() {
         return -1;
     }
     if nthreads > 0
-        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, c"test_embed_eof".as_ptr()) != 0
+        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, b"test_embed_eof") != 0
     {
         bgzf_close(bgz);
         return -1;
     }
     if test_test_bgzf_c_190_try_bgzf_write(
         bgz,
-        (*f).text.add(half).cast(),
+        (*f).text.as_ptr().add(half).cast(),
         (*f).ltext - half,
-        (*f).tmp_bgzf,
-        c"test_embed_eof".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_embed_eof",
     ) < 0
     {
         bgzf_close(bgz);
         return -1;
     }
-    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf, c"test_embed_eof".as_ptr(), 0)
+    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf.as_ptr(), b"test_embed_eof", 0)
         != 0
     {
         return -1;
@@ -985,15 +926,15 @@ pub unsafe fn test_test_bgzf_c_511_test_embed_eof(
 
     pos = 0;
     bgz = test_test_bgzf_c_109_try_bgzf_open(
-        (*f).tmp_bgzf,
-        c"r".as_ptr(),
-        c"test_embed_eof".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"r\0".as_ptr(),
+        b"test_embed_eof",
     );
     if bgz.is_null() {
         return -1;
     }
     if nthreads > 0
-        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, c"test_embed_eof".as_ptr()) != 0
+        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, b"test_embed_eof") != 0
     {
         bgzf_close(bgz);
         return -1;
@@ -1004,8 +945,8 @@ pub unsafe fn test_test_bgzf_c_511_test_embed_eof(
             bgz,
             bg_buf.as_mut_ptr().cast(),
             BUFSZ,
-            (*f).tmp_bgzf,
-            c"test_embed_eof".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_embed_eof",
         );
         if bg_got < 0 {
             bgzf_close(bgz);
@@ -1017,12 +958,13 @@ pub unsafe fn test_test_bgzf_c_511_test_embed_eof(
             } else {
                 (*f).ltext - pos
             };
-            if libc::memcmp((*f).text.add(pos).cast(), bg_buf.as_ptr().cast(), cmp_len) != 0 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"%s : Got wrong data from %s, pos %zu\n".as_ptr(),
-                    c"test_embed_eof".as_ptr(),
-                    (*f).tmp_bgzf,
+            if std::slice::from_raw_parts((*f).text.as_ptr().add(pos), cmp_len)
+                != std::slice::from_raw_parts(bg_buf.as_ptr(), cmp_len)
+            {
+                eprintln!(
+                    "{:?} : Got wrong data from {:?}, pos {}",
+                    b"test_embed_eof",
+                    (*f).tmp_bgzf.as_ptr(),
                     pos,
                 );
                 bgzf_close(bgz);
@@ -1036,10 +978,9 @@ pub unsafe fn test_test_bgzf_c_511_test_embed_eof(
     }
 
     if pos != (*f).ltext {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : bgzf_read got %zd bytes; expected %zd\n".as_ptr(),
-            c"test_embed_eof".as_ptr(),
+        eprintln!(
+            "{:?} : bgzf_read got {} bytes; expected {}",
+            b"test_embed_eof",
             pos,
             (*f).ltext,
         );
@@ -1047,7 +988,7 @@ pub unsafe fn test_test_bgzf_c_511_test_embed_eof(
         return -1;
     }
 
-    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf, c"test_embed_eof".as_ptr(), 0)
+    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf.as_ptr(), b"test_embed_eof", 0)
         != 0
     {
         return -1;
@@ -1057,11 +998,11 @@ pub unsafe fn test_test_bgzf_c_511_test_embed_eof(
 }
 
 // original: test_index_load_dump (htslib/test/test_bgzf.c:584)
-pub unsafe fn test_test_bgzf_c_584_test_index_load_dump(f: *mut Files) -> c_int {
+pub unsafe fn test_test_bgzf_c_584_test_index_load_dump(f: *mut Files) -> i32 {
     let mut bgz = test_test_bgzf_c_109_try_bgzf_open(
-        (*f).src_bgzf,
-        c"r".as_ptr(),
-        c"test_index_load_dump".as_ptr(),
+        (*f).src_bgzf.as_ptr(),
+        b"r\0".as_ptr(),
+        b"test_index_load_dump",
     );
     let mut buf_src = [0u8; BUFSZ];
     let mut buf_dest = [0u8; BUFSZ];
@@ -1070,9 +1011,9 @@ pub unsafe fn test_test_bgzf_c_584_test_index_load_dump(f: *mut Files) -> c_int 
     }
     if test_test_bgzf_c_235_try_bgzf_index_load(
         bgz,
-        (*f).src_bgzf,
-        IDX_SUFFIX,
-        c"test_index_load_dump".as_ptr(),
+        (*f).src_bgzf.as_ptr(),
+        IDX_SUFFIX.as_ptr(),
+        b"test_index_load_dump",
     ) != 0
     {
         bgzf_close(bgz);
@@ -1080,23 +1021,23 @@ pub unsafe fn test_test_bgzf_c_584_test_index_load_dump(f: *mut Files) -> c_int 
     }
     if test_test_bgzf_c_245_try_bgzf_index_dump(
         bgz,
-        (*f).tmp_bgzf,
-        IDX_SUFFIX,
-        c"test_index_load_dump".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        IDX_SUFFIX.as_ptr(),
+        b"test_index_load_dump",
     ) != 0
     {
         bgzf_close(bgz);
         return -1;
     }
 
-    let mut fdest = test_test_bgzf_c_68_try_fopen((*f).tmp_idx, c"r".as_ptr());
+    let mut fdest = test_test_bgzf_c_68_try_fopen((*f).tmp_idx.as_ptr(), b"r\0".as_ptr());
     loop {
         let got_src = test_test_bgzf_c_89_try_fread(
             (*f).f_idx,
             buf_src.as_mut_ptr().cast(),
             BUFSZ,
-            c"test_index_load_dump".as_ptr(),
-            (*f).src_idx,
+            b"test_index_load_dump",
+            (*f).src_idx.as_ptr(),
         );
         if got_src < 0 {
             libc::fclose(fdest);
@@ -1107,8 +1048,8 @@ pub unsafe fn test_test_bgzf_c_584_test_index_load_dump(f: *mut Files) -> c_int 
             fdest,
             buf_dest.as_mut_ptr().cast(),
             BUFSZ,
-            c"test_index_load_dump".as_ptr(),
-            (*f).tmp_idx,
+            b"test_index_load_dump",
+            (*f).tmp_idx.as_ptr(),
         );
         if got_dest < 0 {
             libc::fclose(fdest);
@@ -1120,9 +1061,9 @@ pub unsafe fn test_test_bgzf_c_584_test_index_load_dump(f: *mut Files) -> c_int 
             buf_dest.as_ptr(),
             got_src as usize,
             got_dest as usize,
-            (*f).src_idx,
-            (*f).tmp_idx,
-            c"test_index_load_dump".as_ptr(),
+            (*f).src_idx.as_ptr(),
+            (*f).tmp_idx.as_ptr(),
+            b"test_index_load_dump",
         ) != 0
         {
             libc::fclose(fdest);
@@ -1133,7 +1074,7 @@ pub unsafe fn test_test_bgzf_c_584_test_index_load_dump(f: *mut Files) -> c_int 
             break;
         }
     }
-    if test_test_bgzf_c_77_try_fclose(&mut fdest, (*f).tmp_idx, c"test_index_load_dump".as_ptr())
+    if test_test_bgzf_c_77_try_fclose(&mut fdest, (*f).tmp_idx.as_ptr(), b"test_index_load_dump")
         != 0
     {
         bgzf_close(bgz);
@@ -1141,8 +1082,8 @@ pub unsafe fn test_test_bgzf_c_584_test_index_load_dump(f: *mut Files) -> c_int 
     }
     if test_test_bgzf_c_163_try_bgzf_close(
         &mut bgz,
-        (*f).src_bgzf,
-        c"test_index_load_dump".as_ptr(),
+        (*f).src_bgzf.as_ptr(),
+        b"test_index_load_dump",
         0,
     ) != 0
     {
@@ -1152,18 +1093,17 @@ pub unsafe fn test_test_bgzf_c_584_test_index_load_dump(f: *mut Files) -> c_int 
 }
 
 // original: test_check_EOF (htslib/test/test_bgzf.c:622)
-pub unsafe fn test_test_bgzf_c_622_test_check_EOF(name: *mut c_char, expected: c_int) -> c_int {
+pub unsafe fn test_test_bgzf_c_622_test_check_EOF(name: *mut u8, expected: i32) -> i32 {
     let mut bgz =
-        test_test_bgzf_c_109_try_bgzf_open(name, c"r".as_ptr(), c"test_check_EOF".as_ptr());
+        test_test_bgzf_c_109_try_bgzf_open(name, b"r\0".as_ptr(), b"test_check_EOF");
     if bgz.is_null() {
         return -1;
     }
     let eof = bgzf_check_EOF(bgz);
     if eof != expected {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s : Unexpected result %d from bgzf_check_EOF on %s; expected %d\n".as_ptr(),
-            c"test_check_EOF".as_ptr(),
+        eprintln!(
+            "{:?} : Unexpected result {} from bgzf_check_EOF on {:?}; expected {}",
+            b"test_check_EOF",
             eof,
             name,
             expected,
@@ -1171,45 +1111,45 @@ pub unsafe fn test_test_bgzf_c_622_test_check_EOF(name: *mut c_char, expected: c
         bgzf_close(bgz);
         return -1;
     }
-    test_test_bgzf_c_163_try_bgzf_close(&mut bgz, name, c"test_check_EOF".as_ptr(), 0)
+    test_test_bgzf_c_163_try_bgzf_close(&mut bgz, name, b"test_check_EOF", 0)
 }
 
 // original: test_index_useek_getc (htslib/test/test_bgzf.c:638)
 pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
     f: *mut Files,
-    mode: *const c_char,
-    cache_size: c_int,
-    nthreads: c_int,
-) -> c_int {
+    mode: *const u8,
+    cache_size: i32,
+    nthreads: i32,
+) -> i32 {
     let mut bgz: *mut BGZF =
-        test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf, mode, c"test_index_useek_getc".as_ptr());
+        test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf.as_ptr(), mode, b"test_index_useek_getc");
     let iskip = (*f).ltext / 10;
-    let is_uncompressed = !libc::strchr(mode, b'u' as c_int).is_null();
+    let is_uncompressed = !libc::strchr(mode.cast(), b'u' as i32).is_null();
     let offsets = [0usize, 100, 50];
     if bgz.is_null() {
         return -1;
     }
     if test_test_bgzf_c_225_try_bgzf_index_build_init(
         bgz,
-        (*f).tmp_bgzf,
-        c"test_index_useek_getc".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_index_useek_getc",
     ) != 0
     {
         bgzf_close(bgz);
         return -1;
     }
     if nthreads > 0
-        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, c"test_index_useek_getc".as_ptr()) != 0
+        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, b"test_index_useek_getc") != 0
     {
         bgzf_close(bgz);
         return -1;
     }
     if test_test_bgzf_c_190_try_bgzf_write(
         bgz,
-        (*f).text.cast(),
+        (*f).text.as_ptr().cast(),
         (*f).ltext,
-        (*f).tmp_bgzf,
-        c"test_index_useek_getc".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_index_useek_getc",
     ) < 0
     {
         bgzf_close(bgz);
@@ -1218,9 +1158,9 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
     if !is_uncompressed
         && test_test_bgzf_c_245_try_bgzf_index_dump(
             bgz,
-            (*f).tmp_idx,
+            (*f).tmp_idx.as_ptr(),
             ptr::null(),
-            c"test_index_useek_getc".as_ptr(),
+            b"test_index_useek_getc",
         ) != 0
     {
         bgzf_close(bgz);
@@ -1228,8 +1168,8 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
     }
     if test_test_bgzf_c_163_try_bgzf_close(
         &mut bgz,
-        (*f).tmp_bgzf,
-        c"test_index_useek_getc".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_index_useek_getc",
         0,
     ) != 0
     {
@@ -1237,15 +1177,15 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
     }
 
     bgz = test_test_bgzf_c_109_try_bgzf_open(
-        (*f).tmp_bgzf,
-        c"r".as_ptr(),
-        c"test_index_useek_getc".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"r\0".as_ptr(),
+        b"test_index_useek_getc",
     );
     if bgz.is_null() {
         return -1;
     }
     if nthreads > 0
-        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, c"test_index_useek_getc".as_ptr()) != 0
+        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, b"test_index_useek_getc") != 0
     {
         bgzf_close(bgz);
         return -1;
@@ -1253,9 +1193,9 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
     if !is_uncompressed
         && test_test_bgzf_c_235_try_bgzf_index_load(
             bgz,
-            (*f).tmp_bgzf,
-            IDX_SUFFIX,
-            c"test_index_useek_getc".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            IDX_SUFFIX.as_ptr(),
+            b"test_index_useek_getc",
         ) != 0
     {
         bgzf_close(bgz);
@@ -1267,10 +1207,10 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
         for &o in &offsets {
             if test_test_bgzf_c_288_try_bgzf_useek(
                 bgz,
-                (i + o) as libc::c_long,
+                (i + o) as i64,
                 libc::SEEK_SET,
-                (*f).tmp_bgzf,
-                c"test_index_useek_getc".as_ptr(),
+                (*f).tmp_bgzf.as_ptr(),
+                b"test_index_useek_getc",
             ) != 0
             {
                 bgzf_close(bgz);
@@ -1281,9 +1221,9 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
                 if test_test_bgzf_c_298_try_bgzf_getc(
                     bgz,
                     i + o + j,
-                    *(*f).text.add(i + o + j) as c_int,
-                    (*f).tmp_bgzf,
-                    c"test_index_useek_getc".as_ptr(),
+                    *(*f).text.as_ptr().add(i + o + j) as i32,
+                    (*f).tmp_bgzf.as_ptr(),
+                    b"test_index_useek_getc",
                 ) < 0
                 {
                     bgzf_close(bgz);
@@ -1299,8 +1239,8 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
         bgz,
         0,
         libc::SEEK_SET,
-        (*f).tmp_bgzf,
-        c"test_index_useek_getc".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_index_useek_getc",
     ) != 0
     {
         bgzf_close(bgz);
@@ -1311,9 +1251,9 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
         if test_test_bgzf_c_298_try_bgzf_getc(
             bgz,
             j,
-            *(*f).text.add(j) as c_int,
-            (*f).tmp_bgzf,
-            c"test_index_useek_getc".as_ptr(),
+            *(*f).text.as_ptr().add(j) as i32,
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_index_useek_getc",
         ) < 0
         {
             bgzf_close(bgz);
@@ -1330,8 +1270,8 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
                 bgz,
                 0,
                 libc::SEEK_SET,
-                (*f).tmp_bgzf,
-                c"test_index_useek_getc".as_ptr(),
+                (*f).tmp_bgzf.as_ptr(),
+                b"test_index_useek_getc",
             ) != 0
             {
                 bgzf_close(bgz);
@@ -1342,9 +1282,9 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
                 if test_test_bgzf_c_298_try_bgzf_getc(
                     bgz,
                     j,
-                    *(*f).text.add(j) as c_int,
-                    (*f).tmp_bgzf,
-                    c"test_index_useek_getc".as_ptr(),
+                    *(*f).text.as_ptr().add(j) as i32,
+                    (*f).tmp_bgzf.as_ptr(),
+                    b"test_index_useek_getc",
                 ) < 0
                 {
                     bgzf_close(bgz);
@@ -1354,10 +1294,10 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
             }
             if test_test_bgzf_c_288_try_bgzf_useek(
                 bgz,
-                mid as libc::c_long,
+                mid as i64,
                 libc::SEEK_SET,
-                (*f).tmp_bgzf,
-                c"test_index_useek_getc".as_ptr(),
+                (*f).tmp_bgzf.as_ptr(),
+                b"test_index_useek_getc",
             ) != 0
             {
                 bgzf_close(bgz);
@@ -1368,9 +1308,9 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
                 if test_test_bgzf_c_298_try_bgzf_getc(
                     bgz,
                     j + mid,
-                    *(*f).text.add(j + mid) as c_int,
-                    (*f).tmp_bgzf,
-                    c"test_index_useek_getc".as_ptr(),
+                    *(*f).text.as_ptr().add(j + mid) as i32,
+                    (*f).tmp_bgzf.as_ptr(),
+                    b"test_index_useek_getc",
                 ) < 0
                 {
                     bgzf_close(bgz);
@@ -1383,8 +1323,8 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
 
     if test_test_bgzf_c_163_try_bgzf_close(
         &mut bgz,
-        (*f).tmp_bgzf,
-        c"test_index_useek_getc".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_index_useek_getc",
         0,
     ) != 0
     {
@@ -1396,23 +1336,23 @@ pub unsafe fn test_test_bgzf_c_638_test_index_useek_getc(
 // original: test_tell_seek_getc (htslib/test/test_bgzf.c:730)
 pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
     f: *mut Files,
-    mode: *const c_char,
-    cache_size: c_int,
-    nthreads: c_int,
-) -> c_int {
+    mode: *const u8,
+    cache_size: i32,
+    nthreads: i32,
+) -> i32 {
     let num_points = 10usize;
     let iskip = (*f).ltext / num_points;
     let offsets = [0usize, 100, 50];
     let mut points = vec![0usize; num_points];
     let mut point_vos = vec![0i64; num_points];
     let mut bgz =
-        test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf, mode, c"test_tell_seek_getc".as_ptr());
+        test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf.as_ptr(), mode, b"test_tell_seek_getc");
     if bgz.is_null() {
         return -1;
     }
     for (i, (point, point_vo)) in points.iter_mut().zip(point_vos.iter_mut()).enumerate() {
         *point_vo =
-            test_test_bgzf_c_255_try_bgzf_tell(bgz, (*f).tmp_bgzf, c"test_tell_seek_getc".as_ptr());
+            test_test_bgzf_c_255_try_bgzf_tell(bgz, (*f).tmp_bgzf.as_ptr(), b"test_tell_seek_getc");
         if *point_vo < 0 {
             bgzf_close(bgz);
             return -1;
@@ -1420,10 +1360,10 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
         *point = i * iskip;
         if test_test_bgzf_c_190_try_bgzf_write(
             bgz,
-            (*f).text.add(i * iskip).cast(),
+            (*f).text.as_ptr().add(i * iskip).cast(),
             iskip,
-            (*f).tmp_bgzf,
-            c"test_tell_seek_getc".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_tell_seek_getc",
         ) < 0
         {
             bgzf_close(bgz);
@@ -1432,8 +1372,8 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
     }
     if test_test_bgzf_c_163_try_bgzf_close(
         &mut bgz,
-        (*f).tmp_bgzf,
-        c"test_tell_seek_getc".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_tell_seek_getc",
         0,
     ) != 0
     {
@@ -1441,15 +1381,15 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
     }
 
     bgz = test_test_bgzf_c_109_try_bgzf_open(
-        (*f).tmp_bgzf,
-        c"r".as_ptr(),
-        c"test_tell_seek_getc".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"r\0".as_ptr(),
+        b"test_tell_seek_getc",
     );
     if bgz.is_null() {
         return -1;
     }
     if nthreads > 0
-        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, c"test_tell_seek_getc".as_ptr()) != 0
+        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, b"test_tell_seek_getc") != 0
     {
         bgzf_close(bgz);
         return -1;
@@ -1462,20 +1402,20 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
                 bgz,
                 point_vos[i / iskip],
                 libc::SEEK_SET,
-                (*f).tmp_bgzf,
-                c"test_tell_seek_getc".as_ptr(),
+                (*f).tmp_bgzf.as_ptr(),
+                b"test_tell_seek_getc",
             ) != 0
                 || test_test_bgzf_c_267_try_bgzf_tell_expect(
                     bgz,
                     point_vos[i / iskip],
-                    (*f).tmp_bgzf,
-                    c"test_tell_seek_getc".as_ptr(),
+                    (*f).tmp_bgzf.as_ptr(),
+                    b"test_tell_seek_getc",
                 ) < 0
                 || test_test_bgzf_c_311_try_skip(
                     bgz,
                     o,
-                    (*f).tmp_bgzf,
-                    c"test_tell_seek_getc".as_ptr(),
+                    (*f).tmp_bgzf.as_ptr(),
+                    b"test_tell_seek_getc",
                 ) != 0
             {
                 bgzf_close(bgz);
@@ -1486,9 +1426,9 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
                 if test_test_bgzf_c_298_try_bgzf_getc(
                     bgz,
                     i + o + j,
-                    *(*f).text.add(i + o + j) as c_int,
-                    (*f).tmp_bgzf,
-                    c"test_tell_seek_getc".as_ptr(),
+                    *(*f).text.as_ptr().add(i + o + j) as i32,
+                    (*f).tmp_bgzf.as_ptr(),
+                    b"test_tell_seek_getc",
                 ) < 0
                 {
                     bgzf_close(bgz);
@@ -1504,14 +1444,14 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
         bgz,
         0,
         libc::SEEK_SET,
-        (*f).tmp_bgzf,
-        c"test_tell_seek_getc".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_tell_seek_getc",
     ) != 0
         || test_test_bgzf_c_267_try_bgzf_tell_expect(
             bgz,
             0,
-            (*f).tmp_bgzf,
-            c"test_tell_seek_getc".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_tell_seek_getc",
         ) < 0
     {
         bgzf_close(bgz);
@@ -1522,9 +1462,9 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
         if test_test_bgzf_c_298_try_bgzf_getc(
             bgz,
             j,
-            *(*f).text.add(j) as c_int,
-            (*f).tmp_bgzf,
-            c"test_tell_seek_getc".as_ptr(),
+            *(*f).text.as_ptr().add(j) as i32,
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_tell_seek_getc",
         ) < 0
         {
             bgzf_close(bgz);
@@ -1542,14 +1482,14 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
                 bgz,
                 0,
                 libc::SEEK_SET,
-                (*f).tmp_bgzf,
-                c"test_tell_seek_getc".as_ptr(),
+                (*f).tmp_bgzf.as_ptr(),
+                b"test_tell_seek_getc",
             ) != 0
                 || test_test_bgzf_c_267_try_bgzf_tell_expect(
                     bgz,
                     0,
-                    (*f).tmp_bgzf,
-                    c"test_tell_seek_getc".as_ptr(),
+                    (*f).tmp_bgzf.as_ptr(),
+                    b"test_tell_seek_getc",
                 ) < 0
             {
                 bgzf_close(bgz);
@@ -1560,9 +1500,9 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
                 if test_test_bgzf_c_298_try_bgzf_getc(
                     bgz,
                     j,
-                    *(*f).text.add(j) as c_int,
-                    (*f).tmp_bgzf,
-                    c"test_tell_seek_getc".as_ptr(),
+                    *(*f).text.as_ptr().add(j) as i32,
+                    (*f).tmp_bgzf.as_ptr(),
+                    b"test_tell_seek_getc",
                 ) < 0
                 {
                     bgzf_close(bgz);
@@ -1574,14 +1514,14 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
                 bgz,
                 mid_vo,
                 libc::SEEK_SET,
-                (*f).tmp_bgzf,
-                c"test_tell_seek_getc".as_ptr(),
+                (*f).tmp_bgzf.as_ptr(),
+                b"test_tell_seek_getc",
             ) != 0
                 || test_test_bgzf_c_267_try_bgzf_tell_expect(
                     bgz,
                     mid_vo,
-                    (*f).tmp_bgzf,
-                    c"test_tell_seek_getc".as_ptr(),
+                    (*f).tmp_bgzf.as_ptr(),
+                    b"test_tell_seek_getc",
                 ) < 0
             {
                 bgzf_close(bgz);
@@ -1592,9 +1532,9 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
                 if test_test_bgzf_c_298_try_bgzf_getc(
                     bgz,
                     j + mid,
-                    *(*f).text.add(j + mid) as c_int,
-                    (*f).tmp_bgzf,
-                    c"test_tell_seek_getc".as_ptr(),
+                    *(*f).text.as_ptr().add(j + mid) as i32,
+                    (*f).tmp_bgzf.as_ptr(),
+                    b"test_tell_seek_getc",
                 ) < 0
                 {
                     bgzf_close(bgz);
@@ -1607,8 +1547,8 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
 
     if test_test_bgzf_c_163_try_bgzf_close(
         &mut bgz,
-        (*f).tmp_bgzf,
-        c"test_tell_seek_getc".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_tell_seek_getc",
         0,
     ) != 0
     {
@@ -1618,52 +1558,45 @@ pub unsafe fn test_test_bgzf_c_730_test_tell_seek_getc(
 }
 
 // original: test_tell_read (htslib/test/test_bgzf.c:831)
-pub unsafe fn test_test_bgzf_c_831_test_tell_read(f: *mut Files, mode: *const c_char) -> c_int {
+pub unsafe fn test_test_bgzf_c_831_test_tell_read(f: *mut Files, mode: *const u8) -> i32 {
     let num_points = 10usize;
     let iskip = (*f).ltext / num_points;
     let mut point_vos = vec![0i64; num_points];
-    let bg_buf = libc::calloc(iskip + 1, 1).cast::<u8>();
-    if bg_buf.is_null() {
-        return -1;
-    }
+    let mut bg_buf = vec![0u8; iskip + 1];
     let mut bgz =
-        test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf, mode, c"test_tell_read".as_ptr());
+        test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf.as_ptr(), mode, b"test_tell_read");
     if bgz.is_null() {
-        libc::free(bg_buf.cast());
         return -1;
     }
 
     for (i, point_vo) in point_vos.iter_mut().enumerate() {
         *point_vo =
-            test_test_bgzf_c_255_try_bgzf_tell(bgz, (*f).tmp_bgzf, c"test_tell_read".as_ptr());
+            test_test_bgzf_c_255_try_bgzf_tell(bgz, (*f).tmp_bgzf.as_ptr(), b"test_tell_read");
         if *point_vo < 0
             || test_test_bgzf_c_190_try_bgzf_write(
                 bgz,
-                (*f).text.add(i * iskip).cast(),
+                (*f).text.as_ptr().add(i * iskip).cast(),
                 iskip,
-                (*f).tmp_bgzf,
-                c"test_tell_read".as_ptr(),
+                (*f).tmp_bgzf.as_ptr(),
+                b"test_tell_read",
             ) < 0
         {
             bgzf_close(bgz);
-            libc::free(bg_buf.cast());
             return -1;
         }
     }
-    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf, c"test_tell_read".as_ptr(), 0)
+    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf.as_ptr(), b"test_tell_read", 0)
         != 0
     {
-        libc::free(bg_buf.cast());
         return -1;
     }
 
     bgz = test_test_bgzf_c_109_try_bgzf_open(
-        (*f).tmp_bgzf,
-        c"r".as_ptr(),
-        c"test_tell_read".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"r\0".as_ptr(),
+        b"test_tell_read",
     );
     if bgz.is_null() {
-        libc::free(bg_buf.cast());
         return -1;
     }
 
@@ -1672,69 +1605,62 @@ pub unsafe fn test_test_bgzf_c_831_test_tell_read(f: *mut Files, mode: *const c_
         if test_test_bgzf_c_267_try_bgzf_tell_expect(
             bgz,
             point_vos[i / iskip],
-            (*f).tmp_bgzf,
-            c"test_tell_read".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_tell_read",
         ) < 0
             || test_test_bgzf_c_180_try_bgzf_read(
                 bgz,
-                bg_buf.cast(),
+                bg_buf.as_mut_ptr().cast(),
                 iskip,
-                (*f).tmp_bgzf,
-                c"test_tell_read".as_ptr(),
+                (*f).tmp_bgzf.as_ptr(),
+                b"test_tell_read",
             ) < 0
             || test_test_bgzf_c_327_compare_buffers(
-                (*f).text.add(i),
-                bg_buf,
+                (*f).text.as_ptr().add(i),
+                bg_buf.as_ptr(),
                 iskip,
                 iskip,
-                (*f).tmp_bgzf,
-                (*f).tmp_bgzf,
-                c"test_tell_read".as_ptr(),
+                (*f).tmp_bgzf.as_ptr(),
+                (*f).tmp_bgzf.as_ptr(),
+                b"test_tell_read",
             ) != 0
         {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"%s: failed\n".as_ptr(),
-                c"test_tell_read".as_ptr(),
-            );
+            eprintln!("{:?}: failed", b"test_tell_read");
             bgzf_close(bgz);
-            libc::free(bg_buf.cast());
             return -1;
         }
         i += iskip;
     }
-    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf, c"test_tell_read".as_ptr(), 0)
+    if test_test_bgzf_c_163_try_bgzf_close(&mut bgz, (*f).tmp_bgzf.as_ptr(), b"test_tell_read", 0)
         != 0
     {
-        libc::free(bg_buf.cast());
         return -1;
     }
-    libc::free(bg_buf.cast());
     0
 }
 
 // original: test_useek_read_small (htslib/test/test_bgzf.c:881)
 pub unsafe fn test_test_bgzf_c_881_test_useek_read_small(
     f: *mut Files,
-    mode: *const c_char,
-) -> c_int {
-    let mut bg_buf = [0 as c_char; 99];
+    mode: *const u8,
+) -> i32 {
+    let mut bg_buf = [0u8; 99];
     let mut bgz =
-        test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf, mode, c"test_useek_read_small".as_ptr());
+        test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf.as_ptr(), mode, b"test_useek_read_small");
     if bgz.is_null() {
         return -1;
     }
     if test_test_bgzf_c_190_try_bgzf_write(
         bgz,
-        c"#>Hello, World!\n".as_ptr().cast(),
+        b"#>Hello, World!\n".as_ptr().cast(),
         16,
-        (*f).tmp_bgzf,
-        c"test_useek_read_small".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_useek_read_small",
     ) != 16
         || test_test_bgzf_c_163_try_bgzf_close(
             &mut bgz,
-            (*f).tmp_bgzf,
-            c"test_useek_read_small".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_useek_read_small",
             0,
         ) != 0
     {
@@ -1745,9 +1671,9 @@ pub unsafe fn test_test_bgzf_c_881_test_useek_read_small(
     }
 
     bgz = test_test_bgzf_c_109_try_bgzf_open(
-        (*f).tmp_bgzf,
-        c"r".as_ptr(),
-        c"test_useek_read_small".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"r\0".as_ptr(),
+        b"test_useek_read_small",
     );
     if bgz.is_null() {
         return -1;
@@ -1755,53 +1681,49 @@ pub unsafe fn test_test_bgzf_c_881_test_useek_read_small(
     if test_test_bgzf_c_298_try_bgzf_getc(
         bgz,
         0,
-        b'#' as c_int,
-        (*f).tmp_bgzf,
-        c"test_useek_read_small".as_ptr(),
+        b'#' as i32,
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_useek_read_small",
     ) < 0
         || test_test_bgzf_c_298_try_bgzf_getc(
             bgz,
             1,
-            b'>' as c_int,
-            (*f).tmp_bgzf,
-            c"test_useek_read_small".as_ptr(),
+            b'>' as i32,
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_useek_read_small",
         ) < 0
         || test_test_bgzf_c_180_try_bgzf_read(
             bgz,
             bg_buf.as_mut_ptr().cast(),
             5,
-            (*f).tmp_bgzf,
-            c"test_useek_read_small".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_useek_read_small",
         ) != 5
-        || libc::memcmp(bg_buf.as_ptr().cast(), c"Hello".as_ptr().cast(), 5) != 0
+        || bg_buf[..5] != b"Hello"[..]
         || test_test_bgzf_c_288_try_bgzf_useek(
             bgz,
             9,
             libc::SEEK_SET,
-            (*f).tmp_bgzf,
-            c"test_useek_read_small".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_useek_read_small",
         ) < 0
         || test_test_bgzf_c_180_try_bgzf_read(
             bgz,
             bg_buf.as_mut_ptr().cast(),
             5,
-            (*f).tmp_bgzf,
-            c"test_useek_read_small".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_useek_read_small",
         ) != 5
-        || libc::memcmp(bg_buf.as_ptr().cast(), c"World".as_ptr().cast(), 5) != 0
+        || bg_buf[..5] != b"World"[..]
     {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s: failed\n".as_ptr(),
-            c"test_useek_read_small".as_ptr(),
-        );
+        eprintln!("{:?}: failed", b"test_useek_read_small");
         bgzf_close(bgz);
         return -1;
     }
     if test_test_bgzf_c_163_try_bgzf_close(
         &mut bgz,
-        (*f).tmp_bgzf,
-        c"test_useek_read_small".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_useek_read_small",
         0,
     ) != 0
     {
@@ -1813,33 +1735,33 @@ pub unsafe fn test_test_bgzf_c_881_test_useek_read_small(
 // original: test_bgzf_getline (htslib/test/test_bgzf.c:924)
 pub unsafe fn test_test_bgzf_c_924_test_bgzf_getline(
     f: *mut Files,
-    mode: *const c_char,
-    nthreads: c_int,
-) -> c_int {
+    mode: *const u8,
+    nthreads: i32,
+) -> i32 {
     let mut str_: kstring_t = kstring_t::default();
-    let text = (*f).text.cast::<c_char>();
+    let text = (*f).text.as_ptr();
     let mut bgz =
-        test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf, mode, c"test_bgzf_getline".as_ptr());
+        test_test_bgzf_c_109_try_bgzf_open((*f).tmp_bgzf.as_ptr(), mode, b"test_bgzf_getline");
     if bgz.is_null() {
         return -1;
     }
     if nthreads > 0
-        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, c"test_bgzf_getline".as_ptr()) != 0
+        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, b"test_bgzf_getline") != 0
     {
         bgzf_close(bgz);
         return -1;
     }
     if test_test_bgzf_c_190_try_bgzf_write(
         bgz,
-        (*f).text.cast(),
+        (*f).text.as_ptr().cast(),
         (*f).ltext,
-        (*f).tmp_bgzf,
-        c"test_bgzf_getline".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_bgzf_getline",
     ) < 0
         || test_test_bgzf_c_163_try_bgzf_close(
             &mut bgz,
-            (*f).tmp_bgzf,
-            c"test_bgzf_getline".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_bgzf_getline",
             0,
         ) != 0
     {
@@ -1850,15 +1772,15 @@ pub unsafe fn test_test_bgzf_c_924_test_bgzf_getline(
     }
 
     bgz = test_test_bgzf_c_109_try_bgzf_open(
-        (*f).tmp_bgzf,
-        c"r".as_ptr(),
-        c"test_bgzf_getline".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"r\0".as_ptr(),
+        b"test_bgzf_getline",
     );
     if bgz.is_null() {
         return -1;
     }
     if nthreads > 0
-        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, c"test_bgzf_getline".as_ptr()) != 0
+        && test_test_bgzf_c_216_try_bgzf_mt(bgz, nthreads, b"test_bgzf_getline") != 0
     {
         bgzf_close(bgz);
         return -1;
@@ -1866,47 +1788,38 @@ pub unsafe fn test_test_bgzf_c_924_test_bgzf_getline(
 
     let mut pos = 0usize;
     while pos < (*f).ltext {
-        let end = libc::strchr(text.add(pos), b'\n' as c_int);
+        let end = libc::strchr(text.add(pos).cast(), b'\n' as i32).cast::<u8>();
         let l = if end.is_null() {
             (*f).ltext - pos
         } else {
             end.offset_from(text.add(pos)) as usize
         };
-        let res = bgzf_getline(bgz, b'\n' as c_int, &mut str_);
+        let res = bgzf_getline(bgz, b'\n' as i32, &mut str_);
         if res < 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"%s : %s from bgzf_getline on %s : %s\n".as_ptr(),
-                c"test_bgzf_getline".as_ptr(),
+            eprintln!(
+                "{:?} : {} from bgzf_getline on {:?} : errno {}",
+                b"test_bgzf_getline",
                 if res < -1 {
-                    c"Error".as_ptr()
+                    "Error"
                 } else {
-                    c"Unexpected EOF".as_ptr()
+                    "Unexpected EOF"
                 },
-                (*f).tmp_bgzf,
-                if res < -1 {
-                    libc::strerror(*crate::htslib_rs::c_compat::__errno_location())
-                } else {
-                    c"EOF".as_ptr()
-                },
+                (*f).tmp_bgzf.as_ptr(),
+                *libc::__errno_location(),
             );
             bgzf_close(bgz);
             ks_release(&mut str_);
             return -1;
         }
         if str_.data.len() != l
-            || libc::memcmp(text.add(pos).cast(), str_.data.as_ptr().cast(), l) != 0
+            || std::slice::from_raw_parts(text.add(pos), l) != &str_.data[..l]
         {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"%s : Unexpected data from bgzf_getline on %s\nExpected : %.*s\nGot      : %.*s\n"
-                    .as_ptr(),
-                c"test_bgzf_getline".as_ptr(),
-                (*f).tmp_bgzf,
-                l as c_int,
-                (*f).text.add(pos).cast::<c_char>(),
-                str_.data.len() as c_int,
-                str_.data.as_ptr(),
+            eprintln!(
+                "{:?} : Unexpected data from bgzf_getline on {:?}\nExpected : {:?}\nGot      : {:?}",
+                b"test_bgzf_getline",
+                (*f).tmp_bgzf.as_ptr(),
+                std::slice::from_raw_parts((*f).text.as_ptr().add(pos), l),
+                &str_.data[..],
             );
             bgzf_close(bgz);
             ks_release(&mut str_);
@@ -1916,8 +1829,8 @@ pub unsafe fn test_test_bgzf_c_924_test_bgzf_getline(
     }
     if test_test_bgzf_c_163_try_bgzf_close(
         &mut bgz,
-        (*f).tmp_bgzf,
-        c"test_bgzf_getline".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_bgzf_getline",
         0,
     ) != 0
     {
@@ -1931,18 +1844,18 @@ pub unsafe fn test_test_bgzf_c_924_test_bgzf_getline(
 // original: test_bgzf_getline_on_truncated_file (htslib/test/test_bgzf.c:981)
 pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
     f: *mut Files,
-    mode: *const c_char,
-    nthreads: c_int,
-) -> c_int {
+    mode: *const u8,
+    nthreads: i32,
+) -> i32 {
     let mut str_: kstring_t = kstring_t::default();
-    let text = (*f).text.cast::<c_char>();
+    let text = (*f).text.as_ptr();
     let lvl = hts_get_log_level();
     hts_set_log_level(HTS_LOG_OFF);
 
     let mut bgz = test_test_bgzf_c_109_try_bgzf_open(
-        (*f).tmp_bgzf,
+        (*f).tmp_bgzf.as_ptr(),
         mode,
-        c"test_bgzf_getline_on_truncated_file".as_ptr(),
+        b"test_bgzf_getline_on_truncated_file",
     );
     if bgz.is_null() {
         hts_set_log_level(lvl);
@@ -1952,20 +1865,20 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
         && test_test_bgzf_c_216_try_bgzf_mt(
             bgz,
             nthreads,
-            c"test_bgzf_getline_on_truncated_file".as_ptr(),
+            b"test_bgzf_getline_on_truncated_file",
         ) != 0
     {
         hts_set_log_level(lvl);
         bgzf_close(bgz);
         return -1;
     }
-    let text_line2 = libc::strchr(text, b'\n' as c_int).add(1);
+    let text_line2 = libc::strchr(text.cast(), b'\n' as i32).cast::<u8>().add(1);
     if test_test_bgzf_c_190_try_bgzf_write(
         bgz,
         text.cast(),
         text_line2.offset_from(text) as usize,
-        (*f).tmp_bgzf,
-        c"test_bgzf_getline_on_truncated_file".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_bgzf_getline_on_truncated_file",
     ) < 0
         || bgzf_flush(bgz) < 0
     {
@@ -1974,13 +1887,13 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
         return -1;
     }
     let block2_start = (*bgz).block_address;
-    let text_line3 = libc::strchr(text_line2, b'\n' as c_int).add(1);
+    let text_line3 = libc::strchr(text_line2.cast(), b'\n' as i32).cast::<u8>().add(1);
     if test_test_bgzf_c_190_try_bgzf_write(
         bgz,
         text_line2.cast(),
         text_line3.offset_from(text_line2) as usize,
-        (*f).tmp_bgzf,
-        c"test_bgzf_getline_on_truncated_file".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_bgzf_getline_on_truncated_file",
     ) < 0
         || bgzf_flush(bgz) < 0
     {
@@ -1991,8 +1904,8 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
     let block3_start = (*bgz).block_address;
     if test_test_bgzf_c_163_try_bgzf_close(
         &mut bgz,
-        (*f).tmp_bgzf,
-        c"test_bgzf_getline_on_truncated_file".as_ptr(),
+        (*f).tmp_bgzf.as_ptr(),
+        b"test_bgzf_getline_on_truncated_file",
         0,
     ) != 0
     {
@@ -2002,15 +1915,15 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
 
     let mut newsize = block3_start - 1;
     while newsize > block2_start {
-        if libc::truncate((*f).tmp_bgzf, newsize) != 0 {
+        if libc::truncate((*f).tmp_bgzf.as_ptr().cast(), newsize) != 0 {
             hts_set_log_level(lvl);
             ks_release(&mut str_);
             return -1;
         }
         bgz = test_test_bgzf_c_109_try_bgzf_open(
-            (*f).tmp_bgzf,
-            c"r".as_ptr(),
-            c"test_bgzf_getline_on_truncated_file".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"r\0".as_ptr(),
+            b"test_bgzf_getline_on_truncated_file",
         );
         if bgz.is_null() {
             hts_set_log_level(lvl);
@@ -2021,7 +1934,7 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
             && test_test_bgzf_c_216_try_bgzf_mt(
                 bgz,
                 nthreads,
-                c"test_bgzf_getline_on_truncated_file".as_ptr(),
+                b"test_bgzf_getline_on_truncated_file",
             ) != 0
         {
             hts_set_log_level(lvl);
@@ -2032,22 +1945,21 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
 
         let mut pos = 0usize;
         while pos < (*f).ltext {
-            let end = libc::strchr(text.add(pos), b'\n' as c_int);
+            let end = libc::strchr(text.add(pos).cast(), b'\n' as i32).cast::<u8>();
             let l = if end.is_null() {
                 (*f).ltext - pos
             } else {
                 end.offset_from(text.add(pos)) as usize
             };
-            let res = bgzf_getline(bgz, b'\n' as c_int, &mut str_);
+            let res = bgzf_getline(bgz, b'\n' as i32, &mut str_);
             if res < -1 {
                 break;
             } else if res == -1 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"%s : %s from bgzf_getline on %s\n".as_ptr(),
-                    c"test_bgzf_getline_on_truncated_file".as_ptr(),
-                    c"Unexpected EOF".as_ptr(),
-                    (*f).tmp_bgzf,
+                eprintln!(
+                    "{:?} : {} from bgzf_getline on {:?}",
+                    b"test_bgzf_getline_on_truncated_file",
+                    "Unexpected EOF",
+                    (*f).tmp_bgzf.as_ptr(),
                 );
                 hts_set_log_level(lvl);
                 bgzf_close(bgz);
@@ -2055,17 +1967,14 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
                 return -1;
             }
             if str_.data.len() != l
-                || libc::memcmp(text.add(pos).cast(), str_.data.as_ptr().cast(), l) != 0
+                || std::slice::from_raw_parts(text.add(pos), l) != &str_.data[..l]
             {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"%s : Unexpected data from bgzf_getline on %s\nExpected : %.*s\nGot      : %.*s\n".as_ptr(),
-                    c"test_bgzf_getline_on_truncated_file".as_ptr(),
-                    (*f).tmp_bgzf,
-                    l as c_int,
-                    (*f).text.add(pos).cast::<c_char>(),
-                    str_.data.len() as c_int,
-                    str_.data.as_ptr(),
+                eprintln!(
+                    "{:?} : Unexpected data from bgzf_getline on {:?}\nExpected : {:?}\nGot      : {:?}",
+                    b"test_bgzf_getline_on_truncated_file",
+                    (*f).tmp_bgzf.as_ptr(),
+                    std::slice::from_raw_parts((*f).text.as_ptr().add(pos), l),
+                    &str_.data[..],
                 );
                 hts_set_log_level(lvl);
                 bgzf_close(bgz);
@@ -2076,12 +1985,11 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
         }
 
         for _ in 0..3 {
-            let res = bgzf_getline(bgz, b'\n' as c_int, &mut str_);
+            let res = bgzf_getline(bgz, b'\n' as i32, &mut str_);
             if res > -2 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"%s : unexpected bgzf_getline result %d\n".as_ptr(),
-                    c"test_bgzf_getline_on_truncated_file".as_ptr(),
+                eprintln!(
+                    "{:?} : unexpected bgzf_getline result {}",
+                    b"test_bgzf_getline_on_truncated_file",
                     res,
                 );
                 hts_set_log_level(lvl);
@@ -2092,8 +2000,8 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
         }
         if test_test_bgzf_c_163_try_bgzf_close(
             &mut bgz,
-            (*f).tmp_bgzf,
-            c"test_bgzf_getline_on_truncated_file".as_ptr(),
+            (*f).tmp_bgzf.as_ptr(),
+            b"test_bgzf_getline_on_truncated_file",
             1,
         ) == 0
         {
@@ -2109,27 +2017,23 @@ pub unsafe fn test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
 }
 
 // original: main (htslib/test/test_bgzf.c:1073)
-pub unsafe fn test_test_bgzf_c_1073_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_test_bgzf_c_1073_main(argc: i32, argv: *mut *mut u8) -> i32 {
     let mut f = Files {
-        src_plain: ptr::null_mut(),
-        src_bgzf: ptr::null_mut(),
-        src_idx: ptr::null_mut(),
-        tmp_bgzf: ptr::null_mut(),
-        tmp_idx: ptr::null_mut(),
+        src_plain: Vec::new(),
+        src_bgzf: Vec::new(),
+        src_idx: Vec::new(),
+        tmp_bgzf: Vec::new(),
+        tmp_idx: Vec::new(),
         f_plain: ptr::null_mut(),
         f_bgzf: ptr::null_mut(),
         f_idx: ptr::null_mut(),
-        text: ptr::null(),
+        text: Vec::new(),
         ltext: 0,
     };
     let mut retval = libc::EXIT_FAILURE;
 
     if argc != 2 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Usage: %s <source file>\n".as_ptr(),
-            *argv,
-        );
+        eprintln!("Usage: {:?} <source file>", *argv);
         return libc::EXIT_FAILURE;
     }
 
@@ -2147,222 +2051,222 @@ pub unsafe fn test_test_bgzf_c_1073_main(argc: c_int, argv: *mut *mut c_char) ->
         };
     }
 
-    run!(test_test_bgzf_c_622_test_check_EOF(f.src_bgzf, 1));
+    run!(test_test_bgzf_c_622_test_check_EOF(f.src_bgzf.as_mut_ptr(), 1));
     run!(test_test_bgzf_c_403_test_read(&mut f));
     run!(test_test_bgzf_c_435_test_write_read(
         &mut f,
-        c"wu".as_ptr(),
+        b"wu\0".as_ptr(),
         Open_method::USE_BGZF_OPEN,
         0,
         0
     ));
-    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf, 0));
+    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf.as_mut_ptr(), 0));
     run!(test_test_bgzf_c_435_test_write_read(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         Open_method::USE_BGZF_OPEN,
         0,
         2
     ));
-    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf, 1));
+    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf.as_mut_ptr(), 1));
     run!(test_test_bgzf_c_435_test_write_read(
         &mut f,
-        c"w0".as_ptr(),
+        b"w0\0".as_ptr(),
         Open_method::USE_BGZF_OPEN,
         0,
         2
     ));
-    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf, 1));
+    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf.as_mut_ptr(), 1));
     run!(test_test_bgzf_c_435_test_write_read(
         &mut f,
-        c"w1".as_ptr(),
+        b"w1\0".as_ptr(),
         Open_method::USE_BGZF_DOPEN,
         0,
         2
     ));
-    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf, 1));
+    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf.as_mut_ptr(), 1));
     run!(test_test_bgzf_c_435_test_write_read(
         &mut f,
-        c"w9".as_ptr(),
+        b"w9\0".as_ptr(),
         Open_method::USE_BGZF_HOPEN,
         0,
         2
     ));
-    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf, 1));
+    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf.as_mut_ptr(), 1));
     run!(test_test_bgzf_c_435_test_write_read(
         &mut f,
-        c"wg".as_ptr(),
+        b"wg\0".as_ptr(),
         Open_method::USE_BGZF_OPEN,
         0,
         1
     ));
-    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf, 0));
+    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf.as_mut_ptr(), 0));
     run!(test_test_bgzf_c_435_test_write_read(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         Open_method::USE_BGZF_OPEN,
         1,
         2
     ));
-    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf, 1));
+    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf.as_mut_ptr(), 1));
     run!(test_test_bgzf_c_435_test_write_read(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         Open_method::USE_BGZF_OPEN,
         2,
         2
     ));
-    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf, 1));
+    run!(test_test_bgzf_c_622_test_check_EOF(f.tmp_bgzf.as_mut_ptr(), 1));
     run!(test_test_bgzf_c_511_test_embed_eof(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         0
     ));
     run!(test_test_bgzf_c_511_test_embed_eof(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         1
     ));
     run!(test_test_bgzf_c_511_test_embed_eof(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         2
     ));
     run!(test_test_bgzf_c_584_test_index_load_dump(&mut f));
     run!(test_test_bgzf_c_638_test_index_useek_getc(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         1000000,
         0
     ));
     run!(test_test_bgzf_c_638_test_index_useek_getc(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         1000000,
         1
     ));
     run!(test_test_bgzf_c_638_test_index_useek_getc(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         1000000,
         2
     ));
     run!(test_test_bgzf_c_638_test_index_useek_getc(
         &mut f,
-        c"wu".as_ptr(),
+        b"wu\0".as_ptr(),
         0,
         0
     ));
     run!(test_test_bgzf_c_730_test_tell_seek_getc(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         0,
         0
     ));
     run!(test_test_bgzf_c_730_test_tell_seek_getc(
         &mut f,
-        c"wu".as_ptr(),
+        b"wu\0".as_ptr(),
         0,
         0
     ));
     run!(test_test_bgzf_c_730_test_tell_seek_getc(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         1000000,
         0
     ));
     run!(test_test_bgzf_c_730_test_tell_seek_getc(
         &mut f,
-        c"wu".as_ptr(),
+        b"wu\0".as_ptr(),
         1000000,
         0
     ));
     run!(test_test_bgzf_c_730_test_tell_seek_getc(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         0,
         1
     ));
     run!(test_test_bgzf_c_730_test_tell_seek_getc(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         0,
         2
     ));
     run!(test_test_bgzf_c_730_test_tell_seek_getc(
         &mut f,
-        c"wu".as_ptr(),
+        b"wu\0".as_ptr(),
         0,
         1
     ));
     run!(test_test_bgzf_c_730_test_tell_seek_getc(
         &mut f,
-        c"wu".as_ptr(),
+        b"wu\0".as_ptr(),
         0,
         2
     ));
     run!(test_test_bgzf_c_730_test_tell_seek_getc(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         1000000,
         1
     ));
     run!(test_test_bgzf_c_730_test_tell_seek_getc(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         1000000,
         2
     ));
     run!(test_test_bgzf_c_730_test_tell_seek_getc(
         &mut f,
-        c"wu".as_ptr(),
+        b"wu\0".as_ptr(),
         1000000,
         1
     ));
     run!(test_test_bgzf_c_730_test_tell_seek_getc(
         &mut f,
-        c"wu".as_ptr(),
+        b"wu\0".as_ptr(),
         1000000,
         2
     ));
-    run!(test_test_bgzf_c_831_test_tell_read(&mut f, c"w".as_ptr()));
-    run!(test_test_bgzf_c_831_test_tell_read(&mut f, c"wu".as_ptr()));
+    run!(test_test_bgzf_c_831_test_tell_read(&mut f, b"w\0".as_ptr()));
+    run!(test_test_bgzf_c_831_test_tell_read(&mut f, b"wu\0".as_ptr()));
     run!(test_test_bgzf_c_881_test_useek_read_small(
         &mut f,
-        c"w".as_ptr()
+        b"w\0".as_ptr()
     ));
     run!(test_test_bgzf_c_881_test_useek_read_small(
         &mut f,
-        c"wu".as_ptr()
+        b"wu\0".as_ptr()
     ));
     run!(test_test_bgzf_c_924_test_bgzf_getline(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         0
     ));
     run!(test_test_bgzf_c_924_test_bgzf_getline(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         1
     ));
     run!(test_test_bgzf_c_924_test_bgzf_getline(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         2
     ));
     run!(test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         0
     ));
     run!(test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         1
     ));
     run!(test_test_bgzf_c_981_test_bgzf_getline_on_truncated_file(
         &mut f,
-        c"w".as_ptr(),
+        b"w\0".as_ptr(),
         2
     ));
 

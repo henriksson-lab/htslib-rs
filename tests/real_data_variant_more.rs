@@ -9,19 +9,19 @@ use htslib_rs::{
     hts_idx_destroy, hts_itr_destroy, hts_itr_next, hts_itr_query, hts_open, hts_pos_t,
     vcf_hdr_read, vcf_read, BGZF, VCF_INS,
 };
-use std::ffi::{CStr, CString};
-use std::os::raw::{c_int, c_void};
 use std::process::Command;
 
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().as_bytes().to_vec();
+    bytes.push(0);
+    bytes
 }
 
 unsafe fn count_variant_records(path: &str) -> usize {
-    let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let path_z = c_fixture(path);
+    let fp = hts_open(path_z.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(!fp.is_null(), "failed to open {}", path);
 
     let hdr = bcf_hdr_read(fp);
     assert!(!hdr.is_null());
@@ -45,37 +45,37 @@ unsafe fn count_variant_records(path: &str) -> usize {
 
 unsafe extern "C" fn bcf_readrec_adapter(
     fp: *mut BGZF,
-    data: *mut c_void,
-    rec: *mut c_void,
-    tid: *mut c_int,
+    data: *mut std::ffi::c_void,
+    rec: *mut std::ffi::c_void,
+    tid: *mut i32,
     beg: *mut hts_pos_t,
     end: *mut hts_pos_t,
-) -> c_int {
+) -> i32 {
     unsafe { bcf_readrec(fp, data, rec, tid, beg, end) }
 }
 
-fn bcf_gt_unphased(idx: c_int) -> c_int {
+fn bcf_gt_unphased(idx: i32) -> i32 {
     (idx + 1) << 1
 }
 
 unsafe fn count_indexed_variant_records(
     path: &str,
     index_path: &str,
-    chrom: &CStr,
+    chrom: &[u8],
     beg: hts_pos_t,
     end: hts_pos_t,
 ) -> usize {
-    let path = c_fixture(path);
-    let index_path = c_fixture(index_path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let path_z = c_fixture(path);
+    let index_path_z = c_fixture(index_path);
+    let fp = hts_open(path_z.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(!fp.is_null(), "failed to open {}", path);
 
     let hdr = vcf_hdr_read(fp);
     assert!(!hdr.is_null());
-    let tid = bcf_hdr_name2id(hdr, chrom.as_ptr());
+    let tid = bcf_hdr_name2id(hdr, chrom.as_ptr().cast());
     assert!(tid >= 0);
 
-    let idx = bcf_index_load2(path.as_ptr(), index_path.as_ptr());
+    let idx = bcf_index_load2(path_z.as_ptr().cast(), index_path_z.as_ptr().cast());
     assert!(!idx.is_null());
     let itr = hts_itr_query(idx, tid, beg, end, Some(bcf_readrec_adapter));
     assert!(!itr.is_null());
@@ -108,19 +108,20 @@ fn tmp_fixture_path(label: &str, ext: &str) -> std::path::PathBuf {
     ))
 }
 
-unsafe fn make_indexed_bcf_from_vcf(vcf_path: &str, label: &str) -> CString {
+unsafe fn make_indexed_bcf_from_vcf(vcf_path: &str, label: &str) -> Vec<u8> {
     let bcf_path = tmp_fixture_path(label, "bcf");
-    let c_bcf_path = CString::new(bcf_path.to_string_lossy().as_bytes()).unwrap();
+    let mut c_bcf_path = bcf_path.to_string_lossy().as_bytes().to_vec();
+    c_bcf_path.push(0);
     let _ = std::fs::remove_file(&bcf_path);
     let _ = std::fs::remove_file(bcf_path.with_extension("bcf.csi"));
 
     let in_path = c_fixture(vcf_path);
-    let in_fp = hts_open(in_path.as_ptr(), c"r".as_ptr());
+    let in_fp = hts_open(in_path.as_ptr().cast(), b"r\0".as_ptr().cast());
     assert!(!in_fp.is_null(), "failed to open {}", vcf_path);
     let hdr = vcf_hdr_read(in_fp);
     assert!(!hdr.is_null());
 
-    let out_fp = hts_open(c_bcf_path.as_ptr(), c"wb".as_ptr());
+    let out_fp = hts_open(c_bcf_path.as_ptr().cast(), b"wb\0".as_ptr().cast());
     assert!(!out_fp.is_null(), "failed to create {}", bcf_path.display());
     assert_eq!(bcf_hdr_write(out_fp, hdr), 0);
 
@@ -134,38 +135,39 @@ unsafe fn make_indexed_bcf_from_vcf(vcf_path: &str, label: &str) -> CString {
     assert_eq!(hts_close(out_fp), 0);
     bcf_hdr_destroy(hdr);
     assert_eq!(hts_close(in_fp), 0);
-    assert_eq!(bcf_index_build(c_bcf_path.as_ptr(), 14), 0);
+    assert_eq!(bcf_index_build(c_bcf_path.as_ptr().cast(), 14), 0);
 
     c_bcf_path
 }
 
-fn remove_indexed_bcf(path: &CStr) {
-    let path = std::path::Path::new(path.to_str().unwrap());
+fn remove_indexed_bcf(path: &[u8]) {
+    let path = std::path::Path::new(std::str::from_utf8(path).unwrap());
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(path.with_extension("bcf.csi"));
 }
 
 unsafe fn synced_reader_vcf_output(
-    path: &CStr,
-    region_or_target: &CStr,
+    path: &[u8],
+    region_or_target: &[u8],
     use_targets: bool,
     label: &str,
 ) -> String {
     let out_path = tmp_fixture_path(label, "vcf");
-    let c_out_path = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
+    let mut c_out_path = out_path.to_string_lossy().as_bytes().to_vec();
+    c_out_path.push(0);
     let _ = std::fs::remove_file(&out_path);
 
     let sr = bcf_sr_init();
     assert!(!sr.is_null());
     let set_ret = if use_targets {
-        bcf_sr_set_targets(&mut *sr, region_or_target.to_bytes(), 0, 0)
+        bcf_sr_set_targets(&mut *sr, region_or_target, 0, 0)
     } else {
-        bcf_sr_set_regions(&mut *sr, region_or_target.to_bytes(), 0)
+        bcf_sr_set_regions(&mut *sr, region_or_target, 0)
     };
     assert_eq!(set_ret, 0, "failed to set {:?}", region_or_target);
-    assert_eq!(bcf_sr_add_reader(&mut *sr, path.to_bytes()), 1);
+    assert_eq!(bcf_sr_add_reader(&mut *sr, path), 1);
 
-    let out_fp = hts_open(c_out_path.as_ptr(), c"w".as_ptr());
+    let out_fp = hts_open(c_out_path.as_ptr().cast(), b"w\0".as_ptr().cast());
     assert!(!out_fp.is_null());
     let hdr = bcf_sr_get_header(&*sr, 0).map_or(std::ptr::null_mut(), |h| {
         h as *const bcf_hdr_t as *mut bcf_hdr_t
@@ -193,13 +195,13 @@ unsafe fn synced_reader_summary_no_index(paths: &[&str]) -> String {
     assert!(!sr.is_null());
     assert_eq!(bcf_sr_set_opt_allow_no_idx(&mut *sr), 0);
     assert_eq!(
-        bcf_sr_set_opt_pair_logic(&mut *sr, hts_sys::BCF_SR_PAIR_ANY as c_int),
+        bcf_sr_set_opt_pair_logic(&mut *sr, hts_sys::BCF_SR_PAIR_ANY as i32),
         0
     );
     for path in paths {
         let c_path = c_fixture(path);
         assert_eq!(
-            bcf_sr_add_reader(&mut *sr, c_path.to_bytes()),
+            bcf_sr_add_reader(&mut *sr, &c_path[..c_path.len() - 1]),
             1,
             "failed on {path}"
         );
@@ -215,7 +217,12 @@ unsafe fn synced_reader_summary_no_index(paths: &[&str]) -> String {
                     .map_or(std::ptr::null_mut(), |r| r as *const bcf1_t as *mut bcf1_t);
                 assert!(!hdr.is_null());
                 assert!(!rec.is_null());
-                out.push_str(CStr::from_ptr(bcf_seqname(hdr, rec)).to_str().unwrap());
+                let seqname = bcf_seqname(hdr, rec);
+                let seqname_len = (0..).take_while(|&k| *seqname.add(k) != 0).count();
+                out.push_str(
+                    std::str::from_utf8(std::slice::from_raw_parts(seqname.cast::<u8>(), seqname_len))
+                        .unwrap(),
+                );
                 out.push(':');
                 out.push_str(&((*rec).pos + 1).to_string());
                 break;
@@ -229,7 +236,7 @@ unsafe fn synced_reader_summary_no_index(paths: &[&str]) -> String {
             }
             let rec = bcf_sr_get_line(&*sr, i)
                 .map_or(std::ptr::null_mut(), |r| r as *const bcf1_t as *mut bcf1_t);
-            assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
+            assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as i32), 0);
             let n_allele = (*rec).n_allele();
             if n_allele > 1 {
                 let d = &(*rec).d;
@@ -249,17 +256,17 @@ unsafe fn synced_reader_summary_no_index(paths: &[&str]) -> String {
     out
 }
 
-unsafe fn synced_reader_no_index_status(paths: &[&str]) -> (c_int, c_int, u32) {
+unsafe fn synced_reader_no_index_status(paths: &[&str]) -> (i32, i32, u32) {
     let sr = bcf_sr_init();
     assert!(!sr.is_null());
     assert_eq!(bcf_sr_set_opt_allow_no_idx(&mut *sr), 0);
     assert_eq!(
-        bcf_sr_set_opt_pair_logic(&mut *sr, hts_sys::BCF_SR_PAIR_ANY as c_int),
+        bcf_sr_set_opt_pair_logic(&mut *sr, hts_sys::BCF_SR_PAIR_ANY as i32),
         0
     );
     for path in paths {
         let c_path = c_fixture(path);
-        let add_ret = bcf_sr_add_reader(&mut *sr, c_path.to_bytes());
+        let add_ret = bcf_sr_add_reader(&mut *sr, &c_path[..c_path.len() - 1]);
         if add_ret != 1 {
             let errnum = (*sr).errnum;
             bcf_sr_destroy(sr);
@@ -304,26 +311,41 @@ fn scans_additional_real_vcf_text_fixtures_with_exact_counts() {
 fn reads_real_bcf_fixture_record_metadata() {
     unsafe {
         let bcf = c_fixture("htslib/test/tabix/vcf_file.bcf");
-        let fp = hts_open(bcf.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(bcf.as_ptr().cast(), b"r\0".as_ptr().cast());
         assert!(!fp.is_null());
 
         let hdr = bcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(bcf_hdr_name2id(hdr, c"1".as_ptr()), 0);
-        assert_eq!(bcf_hdr_name2id(hdr, c"4".as_ptr()), 3);
+        assert_eq!(bcf_hdr_name2id(hdr, b"1\0".as_ptr().cast()), 0);
+        assert_eq!(bcf_hdr_name2id(hdr, b"4\0".as_ptr().cast()), 3);
 
         let mut nseqs = 0;
         let seqs = bcf_hdr_seqnames(hdr, &mut nseqs);
         assert!(!seqs.is_null());
         assert_eq!(nseqs, 4);
-        assert_eq!(CStr::from_ptr(*seqs), c"1");
-        assert_eq!(CStr::from_ptr(*seqs.add(3)), c"4");
+        let seq0 = *seqs;
+        let seq0_len = (0..).take_while(|&k| *seq0.add(k) != 0).count();
+        assert_eq!(
+            std::slice::from_raw_parts(seq0.cast::<u8>(), seq0_len),
+            b"1"
+        );
+        let seq3 = *seqs.add(3);
+        let seq3_len = (0..).take_while(|&k| *seq3.add(k) != 0).count();
+        assert_eq!(
+            std::slice::from_raw_parts(seq3.cast::<u8>(), seq3_len),
+            b"4"
+        );
         libc::free(seqs.cast());
 
         let rec = bcf_init();
         assert!(!rec.is_null());
         assert!(bcf_read(fp, hdr, rec) >= 0);
-        assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec)), c"1");
+        let seqname = bcf_seqname(hdr, rec);
+        let seqname_len = (0..).take_while(|&k| *seqname.add(k) != 0).count();
+        assert_eq!(
+            std::slice::from_raw_parts(seqname.cast::<u8>(), seqname_len),
+            b"1"
+        );
         assert_eq!((*rec).pos, 3_000_149);
         assert_eq!((*rec).rlen, 1);
 
@@ -333,7 +355,7 @@ fn reads_real_bcf_fixture_record_metadata() {
             bcf_get_info_values(
                 hdr,
                 rec,
-                c"AC".as_ptr(),
+                b"AC\0".as_ptr().cast(),
                 &mut ac,
                 &mut nac,
                 hts_sys::BCF_HT_INT as i32,
@@ -358,7 +380,7 @@ fn reads_real_bcf_fixture_record_metadata() {
 fn index_vcf_first_record_decodes_real_info_and_format_arrays() {
     unsafe {
         let vcf = c_fixture("htslib/test/index.vcf");
-        let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(vcf.as_ptr().cast(), b"r\0".as_ptr().cast());
         assert!(!fp.is_null());
 
         let hdr = vcf_hdr_read(fp);
@@ -366,11 +388,16 @@ fn index_vcf_first_record_decodes_real_info_and_format_arrays() {
         let rec = bcf_init();
         assert!(!rec.is_null());
         assert_eq!(bcf_read(fp, hdr, rec), 0);
-        assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec)), c"1");
+        let seqname = bcf_seqname(hdr, rec);
+        let seqname_len = (0..).take_while(|&k| *seqname.add(k) != 0).count();
+        assert_eq!(
+            std::slice::from_raw_parts(seqname.cast::<u8>(), seqname_len),
+            b"1"
+        );
         assert_eq!((*rec).pos, 9_999_918);
         assert_eq!((*rec).rlen, 1);
         assert_eq!((*rec).n_sample(), 1);
-        assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
+        assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as i32), 0);
         let d = &(*rec).d;
         assert_eq!(d.allele[0].as_slice(), b"G");
         assert_eq!(d.allele[1].as_slice(), b"<*>");
@@ -381,10 +408,10 @@ fn index_vcf_first_record_decodes_real_info_and_format_arrays() {
             bcf_get_info_values(
                 hdr,
                 rec,
-                c"DP".as_ptr(),
+                b"DP\0".as_ptr().cast(),
                 &mut dp,
                 &mut ndp,
-                hts_sys::BCF_HT_INT as c_int,
+                hts_sys::BCF_HT_INT as i32,
             ),
             1
         );
@@ -398,10 +425,10 @@ fn index_vcf_first_record_decodes_real_info_and_format_arrays() {
             bcf_get_info_values(
                 hdr,
                 rec,
-                c"I16".as_ptr(),
+                b"I16\0".as_ptr().cast(),
                 &mut i16,
                 &mut ni16,
-                hts_sys::BCF_HT_REAL as c_int,
+                hts_sys::BCF_HT_REAL as i32,
             ),
             16
         );
@@ -425,10 +452,10 @@ fn index_vcf_first_record_decodes_real_info_and_format_arrays() {
             bcf_get_info_values(
                 hdr,
                 rec,
-                c"QS".as_ptr(),
+                b"QS\0".as_ptr().cast(),
                 &mut qs,
                 &mut nqs,
-                hts_sys::BCF_HT_REAL as c_int,
+                hts_sys::BCF_HT_REAL as i32,
             ),
             2
         );
@@ -451,10 +478,10 @@ fn index_vcf_first_record_decodes_real_info_and_format_arrays() {
             bcf_get_format_values(
                 hdr,
                 rec,
-                c"PL".as_ptr(),
+                b"PL\0".as_ptr().cast(),
                 &mut pl,
                 &mut npl,
-                hts_sys::BCF_HT_INT as c_int,
+                hts_sys::BCF_HT_INT as i32,
             ),
             3
         );
@@ -472,7 +499,7 @@ fn index_vcf_first_record_decodes_real_info_and_format_arrays() {
 fn tabix_vcf_fixture_variant_type_matrix_matches_htslib_classification() {
     unsafe {
         let vcf = c_fixture("htslib/test/tabix/vcf_file.vcf");
-        let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(vcf.as_ptr().cast(), b"r\0".as_ptr().cast());
         assert!(!fp.is_null());
 
         let hdr = vcf_hdr_read(fp);
@@ -487,13 +514,13 @@ fn tabix_vcf_fixture_variant_type_matrix_matches_htslib_classification() {
                 pos,
                 3_000_150 | 3_062_915 | 3_106_154 | 3_177_144 | 3_199_812
             ) {
-                assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
+                assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as i32), 0);
                 let d = &(*rec).d;
                 seen.push((
                     pos,
                     String::from_utf8_lossy(&d.allele[0]).into_owned(),
                     (1..(*rec).n_allele())
-                        .map(|i| bcf_get_variant_type(rec, i as c_int))
+                        .map(|i| bcf_get_variant_type(rec, i as i32))
                         .collect::<Vec<_>>(),
                     bcf_get_variant_types(rec),
                 ));
@@ -506,45 +533,45 @@ fn tabix_vcf_fixture_variant_type_matrix_matches_htslib_classification() {
                 (
                     3_000_150,
                     "C".to_string(),
-                    vec![hts_sys::VCF_SNP as c_int],
-                    hts_sys::VCF_SNP as c_int
+                    vec![hts_sys::VCF_SNP as i32],
+                    hts_sys::VCF_SNP as i32
                 ),
                 (
                     3_062_915,
                     "GTTT".to_string(),
-                    vec![hts_sys::VCF_INDEL as c_int],
-                    hts_sys::VCF_INDEL as c_int
+                    vec![hts_sys::VCF_INDEL as i32],
+                    hts_sys::VCF_INDEL as i32
                 ),
                 (
                     3_062_915,
                     "G".to_string(),
-                    vec![hts_sys::VCF_SNP as c_int, hts_sys::VCF_SNP as c_int],
-                    hts_sys::VCF_SNP as c_int
+                    vec![hts_sys::VCF_SNP as i32, hts_sys::VCF_SNP as i32],
+                    hts_sys::VCF_SNP as i32
                 ),
                 (
                     3_106_154,
                     "CAAA".to_string(),
-                    vec![hts_sys::VCF_INDEL as c_int],
-                    hts_sys::VCF_INDEL as c_int
+                    vec![hts_sys::VCF_INDEL as i32],
+                    hts_sys::VCF_INDEL as i32
                 ),
                 (
                     3_106_154,
                     "C".to_string(),
-                    vec![hts_sys::VCF_INDEL as c_int],
-                    hts_sys::VCF_INDEL as c_int
+                    vec![hts_sys::VCF_INDEL as i32],
+                    hts_sys::VCF_INDEL as i32
                 ),
                 (
                     3_177_144,
                     "G".to_string(),
-                    vec![hts_sys::VCF_SNP as c_int],
-                    hts_sys::VCF_SNP as c_int
+                    vec![hts_sys::VCF_SNP as i32],
+                    hts_sys::VCF_SNP as i32
                 ),
                 (3_177_144, "G".to_string(), vec![], 0),
                 (
                     3_199_812,
                     "G".to_string(),
-                    vec![hts_sys::VCF_INDEL as c_int, hts_sys::VCF_INDEL as c_int],
-                    hts_sys::VCF_INDEL as c_int
+                    vec![hts_sys::VCF_INDEL as i32, hts_sys::VCF_INDEL as i32],
+                    hts_sys::VCF_INDEL as i32
                 ),
             ]
         );
@@ -559,7 +586,7 @@ fn tabix_vcf_fixture_variant_type_matrix_matches_htslib_classification() {
 fn tabix_vcf_fixture_decodes_high_numbered_gt_alleles() {
     unsafe {
         let vcf = c_fixture("htslib/test/tabix/vcf_file.vcf");
-        let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(vcf.as_ptr().cast(), b"r\0".as_ptr().cast());
         assert!(!fp.is_null());
 
         let hdr = vcf_hdr_read(fp);
@@ -569,20 +596,25 @@ fn tabix_vcf_fixture_decodes_high_numbered_gt_alleles() {
 
         while bcf_read(fp, hdr, rec) >= 0 && (*rec).pos + 1 != 3_258_501 {}
         assert_eq!((*rec).pos + 1, 3_258_501);
-        assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
-        assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec)), c"4");
+        assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as i32), 0);
+        let seqname = bcf_seqname(hdr, rec);
+        let seqname_len = (0..).take_while(|&k| *seqname.add(k) != 0).count();
+        assert_eq!(
+            std::slice::from_raw_parts(seqname.cast::<u8>(), seqname_len),
+            b"4"
+        );
         let d = &(*rec).d;
         assert_eq!(d.allele[0].as_slice(), b"C");
         assert_eq!((*rec).n_allele(), 306);
         assert_eq!(
             bcf_has_variant_types(rec, hts_sys::VCF_SNP, 1),
-            hts_sys::VCF_SNP as c_int
+            hts_sys::VCF_SNP as i32
         );
         assert_eq!(
             bcf_has_variant_types(rec, hts_sys::VCF_INDEL | VCF_INS, 1),
-            (hts_sys::VCF_INDEL | VCF_INS) as c_int
+            (hts_sys::VCF_INDEL | VCF_INS) as i32
         );
-        assert_eq!(bcf_has_variant_type(rec, 300, VCF_INS), VCF_INS as c_int);
+        assert_eq!(bcf_has_variant_type(rec, 300, VCF_INS), VCF_INS as i32);
 
         let mut gt = std::ptr::null_mut();
         let mut ngt = 0;
@@ -590,10 +622,10 @@ fn tabix_vcf_fixture_decodes_high_numbered_gt_alleles() {
             bcf_get_format_values(
                 hdr,
                 rec,
-                c"GT".as_ptr(),
+                b"GT\0".as_ptr().cast(),
                 &mut gt,
                 &mut ngt,
-                hts_sys::BCF_HT_INT as c_int,
+                hts_sys::BCF_HT_INT as i32,
             ),
             4
         );
@@ -619,20 +651,30 @@ fn tabix_vcf_fixture_decodes_high_numbered_gt_alleles() {
 fn reads_real_vcf_header_with_colon_and_dash_contig_names() {
     unsafe {
         let vcf = c_fixture("htslib/test/bcf-sr/weird-chr-names.vcf");
-        let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(vcf.as_ptr().cast(), b"r\0".as_ptr().cast());
         assert!(!fp.is_null());
 
         let hdr = vcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(bcf_hdr_name2id(hdr, c"1".as_ptr()), 0);
-        assert_eq!(bcf_hdr_name2id(hdr, c"1:1".as_ptr()), 1);
-        assert_eq!(bcf_hdr_name2id(hdr, c"1:1-1".as_ptr()), 2);
-        assert_eq!(CStr::from_ptr(bcf_hdr_id2name(hdr, 2)), c"1:1-1");
+        assert_eq!(bcf_hdr_name2id(hdr, b"1\0".as_ptr().cast()), 0);
+        assert_eq!(bcf_hdr_name2id(hdr, b"1:1\0".as_ptr().cast()), 1);
+        assert_eq!(bcf_hdr_name2id(hdr, b"1:1-1\0".as_ptr().cast()), 2);
+        let id2name = bcf_hdr_id2name(hdr, 2);
+        let id2name_len = (0..).take_while(|&k| *id2name.add(k) != 0).count();
+        assert_eq!(
+            std::slice::from_raw_parts(id2name.cast::<u8>(), id2name_len),
+            b"1:1-1"
+        );
 
         let rec = bcf_init();
         assert!(!rec.is_null());
         assert!(bcf_read(fp, hdr, rec) >= 0);
-        assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec)), c"1");
+        let seqname = bcf_seqname(hdr, rec);
+        let seqname_len = (0..).take_while(|&k| *seqname.add(k) != 0).count();
+        assert_eq!(
+            std::slice::from_raw_parts(seqname.cast::<u8>(), seqname_len),
+            b"1"
+        );
         assert_eq!((*rec).pos, 0);
 
         bcf_destroy(rec);
@@ -645,30 +687,30 @@ fn reads_real_vcf_header_with_colon_and_dash_contig_names() {
 fn synced_bcf_reader_disambiguates_braced_weird_chromosome_regions() {
     unsafe {
         let bcf = make_indexed_bcf_from_vcf("htslib/test/bcf-sr/weird-chr-names.vcf", "weird");
-        let cases = [
-            (c"1", "htslib/test/bcf-sr/weird-chr-names.1.out"),
-            (c"1:1-2", "htslib/test/bcf-sr/weird-chr-names.1.out"),
-            (c"1:1,1:2", "htslib/test/bcf-sr/weird-chr-names.1.out"),
-            (c"1:1-1", "htslib/test/bcf-sr/weird-chr-names.2.out"),
-            (c"{1:1}", "htslib/test/bcf-sr/weird-chr-names.3.out"),
-            (c"{1:1}:1-2", "htslib/test/bcf-sr/weird-chr-names.3.out"),
+        let cases: [(&[u8], &str); 12] = [
+            (b"1", "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (b"1:1-2", "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (b"1:1,1:2", "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (b"1:1-1", "htslib/test/bcf-sr/weird-chr-names.2.out"),
+            (b"{1:1}", "htslib/test/bcf-sr/weird-chr-names.3.out"),
+            (b"{1:1}:1-2", "htslib/test/bcf-sr/weird-chr-names.3.out"),
             (
-                c"{1:1}:1,{1:1}:2",
+                b"{1:1}:1,{1:1}:2",
                 "htslib/test/bcf-sr/weird-chr-names.3.out",
             ),
-            (c"{1:1}:1-1", "htslib/test/bcf-sr/weird-chr-names.4.out"),
-            (c"{1:1-1}", "htslib/test/bcf-sr/weird-chr-names.5.out"),
-            (c"{1:1-1}:1-2", "htslib/test/bcf-sr/weird-chr-names.5.out"),
+            (b"{1:1}:1-1", "htslib/test/bcf-sr/weird-chr-names.4.out"),
+            (b"{1:1-1}", "htslib/test/bcf-sr/weird-chr-names.5.out"),
+            (b"{1:1-1}:1-2", "htslib/test/bcf-sr/weird-chr-names.5.out"),
             (
-                c"{1:1-1}:1,{1:1-1}:2",
+                b"{1:1-1}:1,{1:1-1}:2",
                 "htslib/test/bcf-sr/weird-chr-names.5.out",
             ),
-            (c"{1:1-1}:1-1", "htslib/test/bcf-sr/weird-chr-names.6.out"),
+            (b"{1:1-1}:1-1", "htslib/test/bcf-sr/weird-chr-names.6.out"),
         ];
 
         for (idx, (region, expected_path)) in cases.iter().enumerate() {
             let actual = synced_reader_vcf_output(
-                bcf.as_c_str(),
+                &bcf[..bcf.len() - 1],
                 region,
                 false,
                 &format!("weird-region-{idx}"),
@@ -682,9 +724,9 @@ fn synced_bcf_reader_disambiguates_braced_weird_chromosome_regions() {
 
         let sr = bcf_sr_init();
         assert!(!sr.is_null());
-        assert_ne!(bcf_sr_set_regions(&mut *sr, c"{1:1-1}-2".to_bytes(), 0), 0);
+        assert_ne!(bcf_sr_set_regions(&mut *sr, b"{1:1-1}-2", 0), 0);
         bcf_sr_destroy(sr);
-        remove_indexed_bcf(bcf.as_c_str());
+        remove_indexed_bcf(&bcf[..bcf.len() - 1]);
     }
 }
 
@@ -693,30 +735,30 @@ fn synced_bcf_reader_disambiguates_braced_weird_chromosome_targets() {
     unsafe {
         let bcf =
             make_indexed_bcf_from_vcf("htslib/test/bcf-sr/weird-chr-names.vcf", "weird-target");
-        let cases = [
-            (c"1", "htslib/test/bcf-sr/weird-chr-names.1.out"),
-            (c"1:1-2", "htslib/test/bcf-sr/weird-chr-names.1.out"),
-            (c"1:1,1:2", "htslib/test/bcf-sr/weird-chr-names.1.out"),
-            (c"1:1-1", "htslib/test/bcf-sr/weird-chr-names.2.out"),
-            (c"{1:1}", "htslib/test/bcf-sr/weird-chr-names.3.out"),
-            (c"{1:1}:1-2", "htslib/test/bcf-sr/weird-chr-names.3.out"),
+        let cases: [(&[u8], &str); 12] = [
+            (b"1", "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (b"1:1-2", "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (b"1:1,1:2", "htslib/test/bcf-sr/weird-chr-names.1.out"),
+            (b"1:1-1", "htslib/test/bcf-sr/weird-chr-names.2.out"),
+            (b"{1:1}", "htslib/test/bcf-sr/weird-chr-names.3.out"),
+            (b"{1:1}:1-2", "htslib/test/bcf-sr/weird-chr-names.3.out"),
             (
-                c"{1:1}:1,{1:1}:2",
+                b"{1:1}:1,{1:1}:2",
                 "htslib/test/bcf-sr/weird-chr-names.3.out",
             ),
-            (c"{1:1}:1-1", "htslib/test/bcf-sr/weird-chr-names.4.out"),
-            (c"{1:1-1}", "htslib/test/bcf-sr/weird-chr-names.5.out"),
-            (c"{1:1-1}:1-2", "htslib/test/bcf-sr/weird-chr-names.5.out"),
+            (b"{1:1}:1-1", "htslib/test/bcf-sr/weird-chr-names.4.out"),
+            (b"{1:1-1}", "htslib/test/bcf-sr/weird-chr-names.5.out"),
+            (b"{1:1-1}:1-2", "htslib/test/bcf-sr/weird-chr-names.5.out"),
             (
-                c"{1:1-1}:1,{1:1-1}:2",
+                b"{1:1-1}:1,{1:1-1}:2",
                 "htslib/test/bcf-sr/weird-chr-names.5.out",
             ),
-            (c"{1:1-1}:1-1", "htslib/test/bcf-sr/weird-chr-names.6.out"),
+            (b"{1:1-1}:1-1", "htslib/test/bcf-sr/weird-chr-names.6.out"),
         ];
 
         for (idx, (target, expected_path)) in cases.iter().enumerate() {
             let actual = synced_reader_vcf_output(
-                bcf.as_c_str(),
+                &bcf[..bcf.len() - 1],
                 target,
                 true,
                 &format!("weird-target-{idx}"),
@@ -730,9 +772,9 @@ fn synced_bcf_reader_disambiguates_braced_weird_chromosome_targets() {
 
         let sr = bcf_sr_init();
         assert!(!sr.is_null());
-        assert_ne!(bcf_sr_set_targets(&mut *sr, c"{1:1-1}-2".to_bytes(), 0, 0), 0);
+        assert_ne!(bcf_sr_set_targets(&mut *sr, b"{1:1-1}-2", 0, 0), 0);
         bcf_sr_destroy(sr);
-        remove_indexed_bcf(bcf.as_c_str());
+        remove_indexed_bcf(&bcf[..bcf.len() - 1]);
     }
 }
 
@@ -804,7 +846,7 @@ fn queries_real_compressed_vcf_csi_fixture_with_exact_empty_count() {
             count_indexed_variant_records(
                 "htslib/test/modhdr.vcf.gz",
                 "htslib/test/modhdr.vcf.gz.csi",
-                c"chr22",
+                b"chr22\0",
                 0,
                 51_304_566,
             ),

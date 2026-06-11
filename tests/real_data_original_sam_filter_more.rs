@@ -6,13 +6,14 @@ use htslib_rs::{
     sam_read1, BAM_CHARD_CLIP, BAM_CSOFT_CLIP, HTS_OPT_FILTER,
 };
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
 
 const BASES: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
 
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().as_bytes().to_vec();
+    bytes.push(0);
+    bytes
 }
 
 fn expected_count(text: &str) -> usize {
@@ -44,8 +45,12 @@ unsafe fn with_sam_records<R>(
     mut f: impl FnMut(*mut sam_hdr_t, *mut bam1_t) -> R,
 ) -> Vec<R> {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path)
+    );
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
     let rec = bam_init1();
@@ -72,8 +77,12 @@ unsafe fn filtered_sam(
     mut passes: impl FnMut(*mut sam_hdr_t, *mut bam1_t) -> bool,
 ) -> String {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path)
+    );
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
     let rec = bam_init1();
@@ -101,10 +110,14 @@ unsafe fn filtered_sam(
     out
 }
 
-unsafe fn filtered_sam_with_expression(path: &str, include_header: bool, expr: &CStr) -> String {
+unsafe fn filtered_sam_with_expression(path: &str, include_header: bool, expr: &[u8]) -> String {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path)
+    );
     assert_eq!(
         hts_set_opt_ptr(fp, HTS_OPT_FILTER, expr.as_ptr().cast_mut().cast()),
         0
@@ -134,21 +147,30 @@ unsafe fn filtered_sam_with_expression(path: &str, include_header: bool, expr: &
     out
 }
 
-unsafe fn filtered_count_with_expression(path: &str, expr: &CStr) -> usize {
+unsafe fn filtered_count_with_expression(path: &str, expr: &[u8]) -> usize {
     let output = filtered_sam_with_expression(path, false, expr);
     output.lines().filter(|line| !line.starts_with('@')).count()
 }
 
 unsafe fn qname(rec: *const bam1_t) -> String {
-    CStr::from_ptr(bam_get_qname(rec))
-        .to_string_lossy()
-        .into_owned()
+    let ptr = bam_get_qname(rec).cast::<u8>();
+    let mut len = 0;
+    while *ptr.add(len) != 0 {
+        len += 1;
+    }
+    let bytes = std::slice::from_raw_parts(ptr, len);
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 unsafe fn rname(hdr: *const sam_hdr_t, rec: *const bam1_t) -> String {
-    let name = sam_hdr_tid2name(&*hdr, (*rec).core.tid);
+    let name = sam_hdr_tid2name(&*hdr, (*rec).core.tid).cast::<u8>();
     assert!(!name.is_null());
-    CStr::from_ptr(name).to_string_lossy().into_owned()
+    let mut len = 0;
+    while *name.add(len) != 0 {
+        len += 1;
+    }
+    let bytes = std::slice::from_raw_parts(name, len);
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 unsafe fn cigar_string(rec: *const bam1_t) -> String {
@@ -206,25 +228,33 @@ unsafe fn record_library(
     libraries: &HashMap<String, String>,
     rec: *const bam1_t,
 ) -> Option<String> {
-    let rg = bam_aux_get(rec, c"RG".as_ptr());
+    let rg = bam_aux_get(rec, b"RG\0".as_ptr().cast());
     if rg.is_null() {
         return None;
     }
-    let id = CStr::from_ptr(bam_aux2Z(rg)).to_string_lossy();
+    let ptr = bam_aux2Z(rg).cast::<u8>();
+    let mut len = 0;
+    while *ptr.add(len) != 0 {
+        len += 1;
+    }
+    let id = String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len));
     libraries.get(id.as_ref()).cloned()
 }
 
-unsafe fn aux_i(rec: *const bam1_t, tag: &'static CStr) -> Option<i64> {
-    let value = bam_aux_get(rec, tag.as_ptr());
+unsafe fn aux_i(rec: *const bam1_t, tag: &'static [u8]) -> Option<i64> {
+    let value = bam_aux_get(rec, tag.as_ptr().cast());
     (!value.is_null()).then(|| bam_aux2i(value))
 }
 
-unsafe fn aux_z(rec: *const bam1_t, tag: &'static CStr) -> Option<String> {
-    let value = bam_aux_get(rec, tag.as_ptr());
+unsafe fn aux_z(rec: *const bam1_t, tag: &'static [u8]) -> Option<String> {
+    let value = bam_aux_get(rec, tag.as_ptr().cast());
     (!value.is_null()).then(|| {
-        CStr::from_ptr(bam_aux2Z(value))
-            .to_string_lossy()
-            .into_owned()
+        let ptr = bam_aux2Z(value).cast::<u8>();
+        let mut len = 0;
+        while *ptr.add(len) != 0 {
+            len += 1;
+        }
+        String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned()
     })
 }
 
@@ -293,43 +323,43 @@ fn actual_filter_expression_path_matches_original_outputs() {
             filtered_sam_with_expression(
                 "htslib/test/ce#1000.sam",
                 true,
-                c"qname =~ \"\\.1\" && cigar =~ \"D\""
+                b"qname =~ \"\\.1\" && cigar =~ \"D\"\0"
             ),
             include_str!("../htslib/test/sam_filter/string1.out")
         );
         assert_eq!(
-            filtered_sam_with_expression("htslib/test/xx#rg.sam", true, c"library!=\"x\""),
+            filtered_sam_with_expression("htslib/test/xx#rg.sam", true, b"library!=\"x\"\0"),
             include_str!("../htslib/test/sam_filter/string7.out")
         );
         assert_eq!(
-            filtered_count_with_expression("htslib/test/ce#1000.sam", c"pos % 23 == 11"),
+            filtered_count_with_expression("htslib/test/ce#1000.sam", b"pos % 23 == 11\0"),
             expected_count(include_str!("../htslib/test/sam_filter/int1.out"))
         );
         assert_eq!(
-            filtered_count_with_expression("htslib/test/ce#1000.sam", c"qlen/(flag*mapq+pos)>5"),
+            filtered_count_with_expression("htslib/test/ce#1000.sam", b"qlen/(flag*mapq+pos)>5\0"),
             expected_count(include_str!("../htslib/test/sam_filter/int2.out"))
         );
         assert_eq!(
             filtered_count_with_expression(
                 "htslib/test/ce#1000.sam",
-                c"[NM]>=10 || [MD]=~\"A.*A.*A\""
+                b"[NM]>=10 || [MD]=~\"A.*A.*A\"\0"
             ),
             expected_count(include_str!("../htslib/test/sam_filter/int3.out"))
         );
         assert_eq!(
-            filtered_sam_with_expression("htslib/test/realn02.sam", false, c"sclen>=20"),
+            filtered_sam_with_expression("htslib/test/realn02.sam", false, b"sclen>=20\0"),
             include_str!("../htslib/test/sam_filter/func5.out")
         );
         assert_eq!(
-            filtered_sam_with_expression("htslib/test/realn02.sam", false, c"rlen<50"),
+            filtered_sam_with_expression("htslib/test/realn02.sam", false, b"rlen<50\0"),
             include_str!("../htslib/test/sam_filter/func6.out")
         );
         assert_eq!(
-            filtered_sam_with_expression("htslib/test/realn02.sam", false, c"qlen>100"),
+            filtered_sam_with_expression("htslib/test/realn02.sam", false, b"qlen>100\0"),
             include_str!("../htslib/test/sam_filter/func7.out")
         );
         assert_eq!(
-            filtered_sam_with_expression("htslib/test/c1#clip.sam", false, c"hclen>=4"),
+            filtered_sam_with_expression("htslib/test/c1#clip.sam", false, b"hclen>=4\0"),
             include_str!("../htslib/test/sam_filter/func8.out")
         );
     }
@@ -342,7 +372,7 @@ fn actual_filter_expression_path_covers_remaining_original_outputs() {
             filtered_sam_with_expression(
                 "htslib/test/ce#5b.sam",
                 true,
-                c"rname == \"CHROMOSOME_II\""
+                b"rname == \"CHROMOSOME_II\"\0"
             ),
             include_str!("../htslib/test/sam_filter/string2.out")
         );
@@ -350,34 +380,34 @@ fn actual_filter_expression_path_covers_remaining_original_outputs() {
             filtered_sam_with_expression(
                 "htslib/test/ce#5b.sam",
                 true,
-                c"rname =~ \"CHROMOSOME_II\""
+                b"rname =~ \"CHROMOSOME_II\"\0"
             ),
             include_str!("../htslib/test/sam_filter/string3.out")
         );
         assert_eq!(
-            filtered_sam_with_expression("htslib/test/ce#1000.sam", true, c"cigar =~ \"D\""),
+            filtered_sam_with_expression("htslib/test/ce#1000.sam", true, b"cigar =~ \"D\"\0"),
             include_str!("../htslib/test/sam_filter/string4.out")
         );
         assert_eq!(
-            filtered_sam_with_expression("htslib/test/ce#1000.sam", true, c"seq =~ \"ATAT\""),
+            filtered_sam_with_expression("htslib/test/ce#1000.sam", true, b"seq =~ \"ATAT\"\0"),
             include_str!("../htslib/test/sam_filter/string5.out")
         );
         assert_eq!(
-            filtered_count_with_expression("htslib/test/ce#5b.sam", c"length(seq) != qlen"),
+            filtered_count_with_expression("htslib/test/ce#5b.sam", b"length(seq) != qlen\0"),
             expected_count(include_str!("../htslib/test/sam_filter/func1.out"))
         );
         assert_eq!(
-            filtered_count_with_expression("htslib/test/ce#1000.sam", c"min(qual) >= 20"),
+            filtered_count_with_expression("htslib/test/ce#1000.sam", b"min(qual) >= 20\0"),
             expected_count(include_str!("../htslib/test/sam_filter/func2.out"))
         );
         assert_eq!(
-            filtered_count_with_expression("htslib/test/ce#1000.sam", c"max(qual) <= 20"),
+            filtered_count_with_expression("htslib/test/ce#1000.sam", b"max(qual) <= 20\0"),
             expected_count(include_str!("../htslib/test/sam_filter/func3.out"))
         );
         assert_eq!(
             filtered_count_with_expression(
                 "htslib/test/ce#1000.sam",
-                c"avg(qual) >= 20 && avg(qual) <= 30"
+                b"avg(qual) >= 20 && avg(qual) <= 30\0"
             ),
             expected_count(include_str!("../htslib/test/sam_filter/func4.out"))
         );
@@ -439,8 +469,8 @@ fn numeric_and_aux_filters_match_original_sam_filter_expected_counts() {
         );
 
         let aux_match = with_sam_records("htslib/test/ce#1000.sam", |_, rec| {
-            aux_i(rec, c"NM").is_some_and(|nm| nm >= 10)
-                || aux_z(rec, c"MD").is_some_and(|md| {
+            aux_i(rec, b"NM\0").is_some_and(|nm| nm >= 10)
+                || aux_z(rec, b"MD\0").is_some_and(|md| {
                     let mut matches = md.match_indices('A');
                     matches.next().is_some() && matches.next().is_some() && matches.next().is_some()
                 })

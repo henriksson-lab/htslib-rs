@@ -2,31 +2,29 @@ use crate::htslib_rs::{
     hts::{htsFile, hts_close, hts_open, kstring_t},
     sam,
 };
-use std::ffi::{c_char, c_int, c_void};
-
 unsafe extern "C" {
-    static mut optind: c_int;
+    static mut optind: i32;
 }
 
 // original: ptest_t (htslib/test/pileup.c:56)
 #[repr(C)]
 pub struct ptest_t {
-    pub fname: *const c_char,
+    pub fname: *const u8,
     pub fp: *mut htsFile,
     pub fp_hdr: *mut sam::sam_hdr_t,
 }
 
 // original: readaln (htslib/test/pileup.c:62)
-pub unsafe extern "C" fn test_pileup_c_62_readaln(data: *mut c_void, b: *mut sam::bam1_t) -> c_int {
+pub unsafe extern "C" fn test_pileup_c_62_readaln(data: *mut (), b: *mut sam::bam1_t) -> i32 {
     let g = data.cast::<ptest_t>();
-    let mut ret: c_int;
+    let mut ret: i32;
 
     loop {
         ret = sam::sam_read1((*g).fp, (*g).fp_hdr, b);
         if ret < 0 {
             break;
         }
-        if ((*b).core.flag as c_int
+        if ((*b).core.flag as i32
             & (sam::BAM_FUNMAP | sam::BAM_FSECONDARY | sam::BAM_FQCFAIL | sam::BAM_FDUP))
             != 0
         {
@@ -41,17 +39,17 @@ pub unsafe extern "C" fn test_pileup_c_62_readaln(data: *mut c_void, b: *mut sam
 // original: print_pileup_seq (htslib/test/pileup.c:76)
 pub unsafe fn test_pileup_c_76_print_pileup_seq(
     mut p: *const sam::bam_pileup1_t,
-    n: c_int,
-) -> c_int {
+    n: i32,
+) -> i32 {
     const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
     let mut ks = kstring_t::default();
     for _ in 0..n {
         let seq = sam::bam_get_seq((*p).b);
-        let is_rev = ((*(*p).b).core.flag as c_int & sam::BAM_FREVERSE) != 0;
+        let is_rev = ((*(*p).b).core.flag as i32 & sam::BAM_FREVERSE) != 0;
 
         if sam::bam_pileup1_is_head(p) != 0 {
-            libc::putchar(b'^' as c_int);
-            libc::putchar(b'!' as c_int + std::cmp::min((*(*p).b).core.qual, 93) as c_int);
+            print!("{}", '^');
+            print!("{}", (b'!' + std::cmp::min((*(*p).b).core.qual, 93)) as char);
         }
 
         if sam::bam_pileup1_is_del(p) != 0 {
@@ -64,7 +62,7 @@ pub unsafe fn test_pileup_c_76_print_pileup_seq(
             } else {
                 b'*'
             };
-            libc::putchar(c as c_int);
+            print!("{}", c as char);
         } else {
             let byte = *seq.add((*p).qpos as usize / 2);
             let base = if ((*p).qpos & 1) == 0 {
@@ -73,10 +71,10 @@ pub unsafe fn test_pileup_c_76_print_pileup_seq(
                 byte & 0x0f
             };
             let c = SEQ_NT16_STR[base as usize];
-            libc::putchar(if is_rev {
-                libc::tolower(c as c_int)
+            print!("{}", if is_rev {
+                (c as char).to_ascii_lowercase()
             } else {
-                libc::toupper(c as c_int)
+                (c as char).to_ascii_uppercase()
             });
         }
 
@@ -84,25 +82,25 @@ pub unsafe fn test_pileup_c_76_print_pileup_seq(
         if (*p).indel > 0 {
             let len = sam::bam_plp_insertion(p, &mut ks, &mut del_len);
             if len < 0 {
-                libc::perror(c"bam_plp_insertion".as_ptr());
+                eprintln!("bam_plp_insertion");
                 return -1;
             }
-            libc::printf(c"%+d(".as_ptr(), len);
+            print!("{:+}(", len);
             for j in 0..len {
                 let c = ks.data[j as usize];
-                libc::putchar(if is_rev {
-                    libc::tolower(c as c_int)
+                print!("{}", if is_rev {
+                    (c as u8 as char).to_ascii_lowercase()
                 } else {
-                    libc::toupper(c as c_int)
+                    (c as u8 as char).to_ascii_uppercase()
                 });
             }
-            libc::putchar(b')' as c_int);
+            print!("{}", ')');
         }
         if del_len > 0 {
-            libc::printf(c"-%d()".as_ptr(), del_len);
+            print!("-{}()", del_len);
         }
         if sam::bam_pileup1_is_tail(p) != 0 {
-            libc::putchar(b'$' as c_int);
+            print!("{}", '$');
         }
         p = p.add(1);
     }
@@ -110,27 +108,27 @@ pub unsafe fn test_pileup_c_76_print_pileup_seq(
 }
 
 // original: print_pileup_qual (htslib/test/pileup.c:122)
-pub unsafe fn test_pileup_c_122_print_pileup_qual(mut p: *const sam::bam_pileup1_t, n: c_int) {
+pub unsafe fn test_pileup_c_122_print_pileup_qual(mut p: *const sam::bam_pileup1_t, n: i32) {
     for _ in 0..n {
         let qual = sam::bam_get_qual((*p).b);
         let mut q = b'~';
         if (*p).qpos < (*(*p).b).core.l_qseq && *qual.add((*p).qpos as usize) + 33 < b'~' {
             q = *qual.add((*p).qpos as usize) + 33;
         }
-        libc::putchar(q as c_int);
+        print!("{}", q as char);
         p = p.add(1);
     }
 }
 
 // original: test_pileup (htslib/test/pileup.c:135)
-pub unsafe fn test_pileup_c_135_test_pileup(input: *mut ptest_t) -> c_int {
+pub unsafe fn test_pileup_c_135_test_pileup(input: *mut ptest_t) -> i32 {
     let mut tid = 0;
     let mut pos = 0;
     let mut n = 0;
 
     let plp = sam::bam_plp_init(Some(test_pileup_c_62_readaln), input.cast());
     if plp.is_null() {
-        libc::perror(c"bam_plp_init".as_ptr());
+        eprintln!("bam_plp_init");
         return -1;
     }
     loop {
@@ -142,9 +140,8 @@ pub unsafe fn test_pileup_c_135_test_pileup(input: *mut ptest_t) -> c_int {
             break;
         }
         if tid >= (*(*input).fp_hdr).n_targets {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"bam_plp_auto returned tid %d >= header n_targets %d\n".as_ptr(),
+            eprintln!(
+                "bam_plp_auto returned tid {} >= header n_targets {}",
                 tid,
                 (*(*input).fp_hdr).n_targets,
             );
@@ -152,9 +149,13 @@ pub unsafe fn test_pileup_c_135_test_pileup(input: *mut ptest_t) -> c_int {
             return -1;
         }
 
-        libc::printf(
-            c"%s\t%d\t%d\t".as_ptr(),
-            *(*(*input).fp_hdr).target_name.add(tid as usize),
+        let target_name = std::ffi::CStr::from_ptr(
+            (*(*(*input).fp_hdr).target_name.add(tid as usize)).cast(),
+        )
+        .to_bytes();
+        print!(
+            "{}\t{}\t{}\t",
+            String::from_utf8_lossy(target_name),
             pos + 1,
             n,
         );
@@ -162,15 +163,14 @@ pub unsafe fn test_pileup_c_135_test_pileup(input: *mut ptest_t) -> c_int {
             sam::bam_plp_destroy(plp);
             return -1;
         }
-        libc::putchar(b'\t' as c_int);
+        print!("{}", '\t');
         test_pileup_c_122_print_pileup_qual(p, n);
-        libc::putchar(b'\n' as c_int);
+        println!();
     }
     if n < 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"bam_plp_auto failed for \"%s\"\n".as_ptr(),
-            (*input).fname,
+        eprintln!(
+            "bam_plp_auto failed for \"{}\"",
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr((*input).fname.cast()).to_bytes()),
         );
         sam::bam_plp_destroy(plp);
         return -1;
@@ -181,26 +181,26 @@ pub unsafe fn test_pileup_c_135_test_pileup(input: *mut ptest_t) -> c_int {
 }
 
 // original: test_mpileup (htslib/test/pileup.c:177)
-pub unsafe fn test_pileup_c_177_test_mpileup(input: *mut ptest_t) -> c_int {
-    let mut data = input.cast::<c_void>();
-    let data_ptr = &mut data as *mut *mut c_void;
+pub unsafe fn test_pileup_c_177_test_mpileup(input: *mut ptest_t) -> i32 {
+    let mut data = input.cast::<()>();
+    let data_ptr = &mut data as *mut *mut ();
     let mut pileups = [std::ptr::null::<sam::bam_pileup1_t>(); 1];
-    let mut n_plp = [0 as c_int; 1];
+    let mut n_plp = [0 as i32; 1];
     let mut tid = 0;
     let mut pos = 0;
 
     let iter = sam::bam_mplp_init(1, Some(test_pileup_c_62_readaln), data_ptr);
     if iter.is_null() {
-        libc::perror(c"bam_plp_init".as_ptr());
+        eprintln!("bam_plp_init");
         return -1;
     }
     if sam::bam_mplp_init_overlaps(iter) < 0 {
-        libc::perror(c"bam_mplp_init_overlaps".as_ptr());
+        eprintln!("bam_mplp_init_overlaps");
         sam::bam_mplp_destroy(iter);
         return -1;
     }
 
-    let mut n: c_int;
+    let mut n: i32;
     loop {
         n = sam::bam_mplp_auto(
             iter,
@@ -216,9 +216,8 @@ pub unsafe fn test_pileup_c_177_test_mpileup(input: *mut ptest_t) -> c_int {
             break;
         }
         if tid >= (*(*input).fp_hdr).n_targets {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"bam_mplp_auto returned tid %d >= header n_targets %d\n".as_ptr(),
+            eprintln!(
+                "bam_mplp_auto returned tid {} >= header n_targets {}",
                 tid,
                 (*(*input).fp_hdr).n_targets,
             );
@@ -226,9 +225,13 @@ pub unsafe fn test_pileup_c_177_test_mpileup(input: *mut ptest_t) -> c_int {
             return -1;
         }
 
-        libc::printf(
-            c"%s\t%d\t%d\t".as_ptr(),
-            *(*(*input).fp_hdr).target_name.add(tid as usize),
+        let target_name = std::ffi::CStr::from_ptr(
+            (*(*(*input).fp_hdr).target_name.add(tid as usize)).cast(),
+        )
+        .to_bytes();
+        print!(
+            "{}\t{}\t{}\t",
+            String::from_utf8_lossy(target_name),
             pos + 1,
             n_plp[0],
         );
@@ -236,15 +239,14 @@ pub unsafe fn test_pileup_c_177_test_mpileup(input: *mut ptest_t) -> c_int {
             sam::bam_mplp_destroy(iter);
             return -1;
         }
-        libc::putchar(b'\t' as c_int);
+        print!("{}", '\t');
         test_pileup_c_122_print_pileup_qual(pileups[0], n_plp[0]);
-        libc::putchar(b'\n' as c_int);
+        println!();
     }
     if n < 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"bam_plp_auto failed for \"%s\"\n".as_ptr(),
-            (*input).fname,
+        eprintln!(
+            "bam_plp_auto failed for \"{}\"",
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr((*input).fname.cast()).to_bytes()),
         );
         sam::bam_mplp_destroy(iter);
         return -1;
@@ -255,7 +257,7 @@ pub unsafe fn test_pileup_c_177_test_mpileup(input: *mut ptest_t) -> c_int {
 }
 
 // original: main (htslib/test/pileup.c:225)
-pub unsafe fn test_pileup_c_225_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_pileup_c_225_main(argc: i32, argv: *mut *mut u8) -> i32 {
     let mut g = ptest_t {
         fname: std::ptr::null(),
         fp: std::ptr::null_mut(),
@@ -264,17 +266,16 @@ pub unsafe fn test_pileup_c_225_main(argc: c_int, argv: *mut *mut c_char) -> c_i
     let mut use_mpileup = 0;
 
     loop {
-        let opt = libc::getopt(argc, argv, c"m".as_ptr());
+        let opt = libc::getopt(argc, argv.cast(), c"m".as_ptr());
         if opt == -1 {
             break;
         }
         match opt {
-            c if c == b'm' as c_int => use_mpileup = 1,
+            c if c == b'm' as i32 => use_mpileup = 1,
             _ => {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Usage: %s [-m] <sorted.sam>\n".as_ptr(),
-                    *argv,
+                eprintln!(
+                    "Usage: {} [-m] <sorted.sam>",
+                    String::from_utf8_lossy(std::ffi::CStr::from_ptr((*argv).cast()).to_bytes()),
                 );
                 return libc::EXIT_FAILURE;
             }
@@ -282,32 +283,29 @@ pub unsafe fn test_pileup_c_225_main(argc: c_int, argv: *mut *mut c_char) -> c_i
     }
 
     if optind >= argc {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Usage: %s [-m] <sorted.sam>\n".as_ptr(),
-            *argv,
+        eprintln!(
+            "Usage: {} [-m] <sorted.sam>",
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr((*argv).cast()).to_bytes()),
         );
         return libc::EXIT_FAILURE;
     }
 
     g.fname = *argv.add(optind as usize);
-    g.fp = hts_open(g.fname, c"r".as_ptr());
+    g.fp = hts_open(g.fname.cast(), c"r".as_ptr());
     if g.fp.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Couldn't open \"%s\" : %s".as_ptr(),
-            g.fname,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+        eprint!(
+            "Couldn't open \"{}\" : {}",
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr(g.fname.cast()).to_bytes()),
+            std::io::Error::last_os_error(),
         );
         return libc::EXIT_FAILURE;
     }
     g.fp_hdr = sam::sam_hdr_read(g.fp);
     if g.fp_hdr.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Couldn't read header from \"%s\" : %s".as_ptr(),
-            g.fname,
-            libc::strerror(*crate::htslib_rs::c_compat::__errno_location()),
+        eprint!(
+            "Couldn't read header from \"{}\" : {}",
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr(g.fname.cast()).to_bytes()),
+            std::io::Error::last_os_error(),
         );
         hts_close(g.fp);
         return libc::EXIT_FAILURE;

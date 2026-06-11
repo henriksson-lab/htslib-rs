@@ -12,50 +12,49 @@ use super::request_handler::{
 use super::server::ref_cache_server_c_352_client_add_transaction;
 use super::server::RefCacheClientsLayout;
 use super::transaction::TransactionId;
-use std::ffi::{c_int, c_uchar, c_uint, c_ulong};
 
 const REF_CACHE_MAX_UA_LEN: usize = 128;
 const REF_CACHE_MAX_REFERRER_LEN: usize = 128;
-const REF_CACHE_READING_REQUEST_LINE: c_int = 0;
-const REF_CACHE_READING_HEADERS: c_int = 1;
-const REF_CACHE_READING_CHUNK_HEADER: c_int = 2;
-const REF_CACHE_READING_CHUNK: c_int = 3;
-const REF_CACHE_READING_CHUNK_TRAILER: c_int = 4;
-const REF_CACHE_READING_BODY: c_int = 5;
-const REF_CACHE_GOT_REQUEST: c_int = 6;
-const REF_CACHE_SHUTTING_DOWN: c_int = 7;
-const REF_CACHE_ERR_BAD_REQUEST: c_int = 400;
-const REF_CACHE_ERR_TOO_LARGE: c_int = 413;
-const REF_CACHE_ERR_LONG_URI: c_int = 414;
-const REF_CACHE_ERR_INTERNAL: c_int = 500;
-const REF_CACHE_ERR_UNIMPLEMENTED: c_int = 501;
-const REF_CACHE_ERR_HTTP_VERS: c_int = 505;
-const REF_CACHE_REQ_OPTIONS: c_int = 0;
-const REF_CACHE_REQ_GET: c_int = 1;
-const REF_CACHE_REQ_HEAD: c_int = 2;
-const REF_CACHE_REQ_POST: c_int = 3;
-const REF_CACHE_REQ_PUT: c_int = 4;
-const REF_CACHE_REQ_DELETE: c_int = 5;
-const REF_CACHE_REQ_TRACE: c_int = 6;
-const REF_CACHE_REQ_CONNECT: c_int = 7;
-const REF_CACHE_REQ_OTHER: c_int = 8;
-const REF_CACHE_HTTP_0_9: c_int = 0;
-const HTTP_1_0: c_int = 1;
-const HTTP_1_1: c_int = 2;
-const REF_CACHE_TE_IDENT: c_int = 0;
-const REF_CACHE_TE_CHUNKED: c_int = 1;
-const REF_CACHE_READ_BLOCKED: c_int = 0;
-const REF_CACHE_READ_MORE: c_int = 1;
-const REF_CACHE_READ_EOF: c_int = 2;
-const REF_CACHE_READ_ERROR: c_int = 3;
-const TRANSACT_KEEP_ALIVE: c_uint = 2;
-const TRANSACT_RANGE_FROM: c_uint = 8;
-const TRANSACT_RANGE_TO: c_uint = 16;
-const TRANSACT_RANGE_SUFFIX: c_uint = 32;
-const REF_CACHE_BUF_SZ: c_uint = 0x400;
-const REF_CACHE_BUF_MASK: c_uint = REF_CACHE_BUF_SZ - 1;
+const REF_CACHE_READING_REQUEST_LINE: i32 = 0;
+const REF_CACHE_READING_HEADERS: i32 = 1;
+const REF_CACHE_READING_CHUNK_HEADER: i32 = 2;
+const REF_CACHE_READING_CHUNK: i32 = 3;
+const REF_CACHE_READING_CHUNK_TRAILER: i32 = 4;
+const REF_CACHE_READING_BODY: i32 = 5;
+const REF_CACHE_GOT_REQUEST: i32 = 6;
+const REF_CACHE_SHUTTING_DOWN: i32 = 7;
+const REF_CACHE_ERR_BAD_REQUEST: i32 = 400;
+const REF_CACHE_ERR_TOO_LARGE: i32 = 413;
+const REF_CACHE_ERR_LONG_URI: i32 = 414;
+const REF_CACHE_ERR_INTERNAL: i32 = 500;
+const REF_CACHE_ERR_UNIMPLEMENTED: i32 = 501;
+const REF_CACHE_ERR_HTTP_VERS: i32 = 505;
+const REF_CACHE_REQ_OPTIONS: i32 = 0;
+const REF_CACHE_REQ_GET: i32 = 1;
+const REF_CACHE_REQ_HEAD: i32 = 2;
+const REF_CACHE_REQ_POST: i32 = 3;
+const REF_CACHE_REQ_PUT: i32 = 4;
+const REF_CACHE_REQ_DELETE: i32 = 5;
+const REF_CACHE_REQ_TRACE: i32 = 6;
+const REF_CACHE_REQ_CONNECT: i32 = 7;
+const REF_CACHE_REQ_OTHER: i32 = 8;
+const REF_CACHE_HTTP_0_9: i32 = 0;
+const HTTP_1_0: i32 = 1;
+const HTTP_1_1: i32 = 2;
+const REF_CACHE_TE_IDENT: i32 = 0;
+const REF_CACHE_TE_CHUNKED: i32 = 1;
+const REF_CACHE_READ_BLOCKED: i32 = 0;
+const REF_CACHE_READ_MORE: i32 = 1;
+const REF_CACHE_READ_EOF: i32 = 2;
+const REF_CACHE_READ_ERROR: i32 = 3;
+const TRANSACT_KEEP_ALIVE: u32 = 2;
+const TRANSACT_RANGE_FROM: u32 = 8;
+const TRANSACT_RANGE_TO: u32 = 16;
+const TRANSACT_RANGE_SUFFIX: u32 = 32;
+const REF_CACHE_BUF_SZ: u32 = 0x400;
+const REF_CACHE_BUF_MASK: u32 = REF_CACHE_BUF_SZ - 1;
 
-static REF_CACHE_LWS_CHARS: [c_uchar; 256] = [
+static REF_CACHE_LWS_CHARS: [u8; 256] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -66,7 +65,7 @@ static REF_CACHE_LWS_CHARS: [c_uchar; 256] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
-static REF_CACHE_TOKEN_CHARS: [c_uchar; 256] = [
+static REF_CACHE_TOKEN_CHARS: [u8; 256] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
     0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1,
@@ -84,12 +83,12 @@ static REF_CACHE_TOKEN_CHARS: [c_uchar; 256] = [
 // see `src/ref_cache/main.rs` and `src/ref_cache/server.rs`).
 
 pub struct HttpParser {
-    state: c_int,
-    req_type: c_int,
-    http_vers: c_int,
-    trans_enc: c_int,
-    content_length: c_ulong,
-    bytes: c_ulong,
+    state: i32,
+    req_type: i32,
+    http_vers: i32,
+    trans_enc: i32,
+    content_length: u64,
+    bytes: u64,
     // Header key/value accumulators. These hold the logical bytes only (no
     // trailing NUL); `.len()` is the used length.
     uri: Vec<u8>,
@@ -99,42 +98,42 @@ pub struct HttpParser {
     referrer: Vec<u8>,
     // Ring buffer of received bytes.
     buffer: Vec<u8>,
-    range_from: libc::off_t,
-    range_to: libc::off_t,
-    upstream: c_int,
-    flags: c_uint,
-    in_: c_uint,
-    out: c_uint,
-    pos: c_uint,
-    used: c_uint,
+    range_from: i64,
+    range_to: i64,
+    upstream: i32,
+    flags: u32,
+    in_: u32,
+    out: u32,
+    pos: u32,
+    used: u32,
 }
 
 impl HttpParser {
     pub fn uri(&self) -> &[u8] {
         &self.uri
     }
-    pub fn upstream(&self) -> c_int {
+    pub fn upstream(&self) -> i32 {
         self.upstream
     }
-    pub fn req_type(&self) -> c_int {
+    pub fn req_type(&self) -> i32 {
         self.req_type
     }
-    pub fn http_vers(&self) -> c_int {
+    pub fn http_vers(&self) -> i32 {
         self.http_vers
     }
-    pub fn flags(&self) -> c_uint {
+    pub fn flags(&self) -> u32 {
         self.flags
     }
-    pub fn state(&self) -> c_int {
+    pub fn state(&self) -> i32 {
         self.state
     }
-    pub fn set_state(&mut self, state: c_int) {
+    pub fn set_state(&mut self, state: i32) {
         self.state = state;
     }
-    pub fn range_from(&self) -> libc::off_t {
+    pub fn range_from(&self) -> i64 {
         self.range_from
     }
-    pub fn range_to(&self) -> libc::off_t {
+    pub fn range_to(&self) -> i64 {
         self.range_to
     }
     // Move the accumulated User-Agent / Referer out of the parser into the
@@ -147,11 +146,11 @@ impl HttpParser {
     }
 }
 
-fn ref_cache_http_parser_is_lws(ch: c_uchar) -> bool {
+fn ref_cache_http_parser_is_lws(ch: u8) -> bool {
     REF_CACHE_LWS_CHARS[ch as usize] != 0
 }
 
-fn ref_cache_http_parser_is_token(ch: c_uchar) -> bool {
+fn ref_cache_http_parser_is_token(ch: u8) -> bool {
     REF_CACHE_TOKEN_CHARS[ch as usize] != 0
 }
 
@@ -173,20 +172,20 @@ fn tok_spn_bytes(s: &[u8]) -> usize {
         .count()
 }
 
-fn parse_decimal_c_ulong(bytes: &[u8]) -> Option<c_ulong> {
+fn parse_decimal_c_ulong(bytes: &[u8]) -> Option<u64> {
     if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
         return None;
     }
-    let mut out: c_ulong = 0;
+    let mut out: u64 = 0;
     for &digit in bytes {
         out = out
             .checked_mul(10)?
-            .checked_add((digit - b'0') as c_ulong)?;
+            .checked_add((digit - b'0') as u64)?;
     }
     Some(out)
 }
 
-fn parse_decimal_off_t(bytes: &[u8]) -> Option<(libc::off_t, usize)> {
+fn parse_decimal_off_t(bytes: &[u8]) -> Option<(i64, usize)> {
     let digits = bytes.iter().take_while(|&&ch| ch.is_ascii_digit()).count();
     if digits == 0 {
         return None;
@@ -197,16 +196,12 @@ fn parse_decimal_off_t(bytes: &[u8]) -> Option<(libc::off_t, usize)> {
         out = out.checked_mul(10)?.checked_add((digit - b'0') as i128)?;
     }
 
-    let off_max = if std::mem::size_of::<libc::off_t>() < 8 {
-        i32::MAX as i128
-    } else {
-        i64::MAX as i128
-    };
+    let off_max = i64::MAX as i128;
     if out > off_max {
         return None;
     }
 
-    Some((out as libc::off_t, digits))
+    Some((out as i64, digits))
 }
 
 fn limited_header_value(src: &[u8], max_len: usize) -> Vec<u8> {
@@ -226,11 +221,7 @@ fn limited_header_value(src: &[u8], max_len: usize) -> Vec<u8> {
 
 fn parse_range_bytes(parser: &mut HttpParser) {
     let mut v = parser.val.as_slice();
-    let off_max: libc::off_t = if std::mem::size_of::<libc::off_t>() < 8 {
-        i32::MAX as libc::off_t
-    } else {
-        i64::MAX as libc::off_t
-    };
+    let off_max: i64 = i64::MAX;
 
     if v.len() < 5 || !v[..5].eq_ignore_ascii_case(b"bytes") {
         parser.flags &= !(TRANSACT_RANGE_FROM | TRANSACT_RANGE_TO | TRANSACT_RANGE_SUFFIX);
@@ -318,7 +309,7 @@ pub fn ref_cache_http_parser_c_105_tok_spn(s: &[u8]) -> usize {
 }
 
 // original: init_http_parser (htslib/ref_cache/http_parser.c:111)
-pub fn ref_cache_http_parser_c_111_init_http_parser(upstream: c_int) -> HttpParser {
+pub fn ref_cache_http_parser_c_111_init_http_parser(upstream: i32) -> HttpParser {
     HttpParser {
         state: 0,
         req_type: 0,
@@ -400,7 +391,7 @@ pub fn ref_cache_http_parser_c_158_parser_get_line(parser: &mut HttpParser) -> O
 }
 
 // original: parser_read_input (htslib/ref_cache/http_parser.c:201)
-pub fn ref_cache_http_parser_c_201_parser_read_input(parser: &mut HttpParser, fd: c_int) -> c_int {
+pub fn ref_cache_http_parser_c_201_parser_read_input(parser: &mut HttpParser, fd: i32) -> i32 {
     assert!(parser.used <= REF_CACHE_BUF_SZ);
     if parser.used == REF_CACHE_BUF_SZ {
         return REF_CACHE_READ_MORE;
@@ -449,8 +440,8 @@ pub fn ref_cache_http_parser_c_201_parser_read_input(parser: &mut HttpParser, fd
         return REF_CACHE_READ_BLOCKED;
     }
 
-    parser.in_ = (parser.in_ + res as c_uint) & REF_CACHE_BUF_MASK;
-    parser.used += res as c_uint;
+    parser.in_ = (parser.in_ + res as u32) & REF_CACHE_BUF_MASK;
+    parser.used += res as u32;
 
     if res == 0 {
         REF_CACHE_READ_EOF
@@ -551,7 +542,7 @@ pub fn ref_cache_http_parser_c_333_parse_range(parser: &mut HttpParser) {
 }
 
 // original: parser_parse_header (htslib/ref_cache/http_parser.c:394)
-pub fn ref_cache_http_parser_c_394_parser_parse_header(parser: &mut HttpParser) -> c_int {
+pub fn ref_cache_http_parser_c_394_parser_parse_header(parser: &mut HttpParser) -> i32 {
     let mut res = 0;
 
     let key = std::mem::take(&mut parser.key);
@@ -683,9 +674,9 @@ pub fn ref_cache_http_parser_c_529_read_chunk_header(parser: &mut HttpParser) {
         .iter()
         .take_while(|b| b.is_ascii_hexdigit())
         .count();
-    let mut bytes: c_ulong = 0;
+    let mut bytes: u64 = 0;
     for &b in &line[start..start + digits] {
-        bytes = bytes.wrapping_mul(16).wrapping_add((b as char).to_digit(16).unwrap() as c_ulong);
+        bytes = bytes.wrapping_mul(16).wrapping_add((b as char).to_digit(16).unwrap() as u64);
     }
     let end = &line[start + digits..];
     if let Some(&ch) = end.first() {
@@ -705,7 +696,7 @@ pub fn ref_cache_http_parser_c_529_read_chunk_header(parser: &mut HttpParser) {
 
 // original: eat_data (htslib/ref_cache/http_parser.c:546)
 pub fn ref_cache_http_parser_c_546_eat_data(parser: &mut HttpParser) {
-    let mut l: c_uint;
+    let mut l: u32;
 
     if parser.used == 0 {
         assert!(parser.in_ == parser.out);
@@ -715,22 +706,22 @@ pub fn ref_cache_http_parser_c_546_eat_data(parser: &mut HttpParser) {
 
     if parser.in_ <= parser.out {
         l = REF_CACHE_BUF_SZ - parser.out;
-        if (l as c_ulong) > parser.bytes {
-            l = parser.bytes as c_uint;
+        if (l as u64) > parser.bytes {
+            l = parser.bytes as u32;
         }
         assert!(l <= parser.used);
         parser.out = (parser.out + l) & REF_CACHE_BUF_MASK;
-        parser.bytes -= l as c_ulong;
+        parser.bytes -= l as u64;
         parser.used -= l;
     }
     if parser.out < parser.in_ {
         l = parser.in_ - parser.out;
-        if (l as c_ulong) > parser.bytes {
-            l = parser.bytes as c_uint;
+        if (l as u64) > parser.bytes {
+            l = parser.bytes as u32;
         }
         assert!(l <= parser.used);
         parser.out += l;
-        parser.bytes -= l as c_ulong;
+        parser.bytes -= l as u64;
         parser.used -= l;
     }
     parser.pos = parser.out;
@@ -773,8 +764,8 @@ pub unsafe fn ref_cache_http_parser_c_601_parser_read_data(
     clients: &mut RefCacheClientsLayout,
     client: usize,
     parser: &mut HttpParser,
-    fd: c_int,
-) -> c_int {
+    fd: i32,
+) -> i32 {
     let res = ref_cache_http_parser_c_201_parser_read_input(parser, fd);
     if res == REF_CACHE_READ_EOF || res == REF_CACHE_READ_ERROR {
         return res;

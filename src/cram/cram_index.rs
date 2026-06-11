@@ -1,7 +1,6 @@
 // Functions translated from htslib/cram/cram_index.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_int, CStr};
 use std::ptr::NonNull;
 
 use super::*;
@@ -99,7 +98,7 @@ impl<'a> KStringParser<'a> {
         }
     }
 
-    fn parse_i32(&self, pos: &mut usize, val_p: &mut i32) -> c_int {
+    fn parse_i32(&self, pos: &mut usize, val_p: &mut i32) -> i32 {
         let mut out = 0_i64;
         let ret = self.parse_i64(pos, &mut out);
         if ret == 0 {
@@ -108,7 +107,7 @@ impl<'a> KStringParser<'a> {
         ret
     }
 
-    fn parse_i64(&self, pos: &mut usize, val_p: &mut i64) -> c_int {
+    fn parse_i64(&self, pos: &mut usize, val_p: &mut i64) -> i32 {
         let mut sign: i64 = 1;
         let mut val: i64 = 0;
         let mut p = *pos;
@@ -151,7 +150,7 @@ unsafe fn take_index_buckets(fd: &mut cram_fd_layout) -> Vec<cram_index_layout> 
 
 fn install_index_buckets(fd: &mut cram_fd_layout, buckets: Vec<cram_index_layout>) {
     let mut buckets = buckets.into_boxed_slice();
-    fd.index_sz = buckets.len() as c_int;
+    fd.index_sz = buckets.len() as i32;
     fd.index = buckets.as_mut_ptr().cast();
     std::mem::forget(buckets);
 }
@@ -171,8 +170,8 @@ unsafe fn take_index_children(node: &mut cram_index_layout) -> Vec<cram_index_la
 }
 
 fn install_index_children(node: &mut cram_index_layout, mut children: Vec<cram_index_layout>) {
-    node.nslice = children.len() as c_int;
-    node.nalloc = children.capacity() as c_int;
+    node.nslice = children.len() as i32;
+    node.nalloc = children.capacity() as i32;
     node.e = if children.capacity() == 0 {
         std::ptr::null_mut()
     } else {
@@ -188,9 +187,9 @@ fn install_index_children(node: &mut cram_index_layout, mut children: Vec<cram_i
 //   0  on success
 //  -1  on a general failure (seek failed)
 //  -2  when no overlapping slice exists (most commonly: empty chromosome)
-pub unsafe fn cram_seek_to_refpos(fd: &mut cram_fd_layout, r: &mut cram_range_layout) -> c_int {
+pub unsafe fn cram_seek_to_refpos(fd: &mut cram_fd_layout, r: &mut cram_range_layout) -> i32 {
     use crate::htslib_rs::hts::{HTS_IDX_NOCOOR, HTS_IDX_NONE, HTS_IDX_REST, HTS_IDX_START};
-    let mut ret: c_int = 0;
+    let mut ret: i32 = 0;
 
     if r.refid == HTS_IDX_NONE {
         ret = -2;
@@ -199,7 +198,7 @@ pub unsafe fn cram_seek_to_refpos(fd: &mut cram_fd_layout, r: &mut cram_range_la
         if let Some(e) = e {
             if 0 != cram_seek(
                 (fd as *mut cram_fd_layout).cast(),
-                e.as_ref().offset as libc::off_t,
+                e.as_ref().offset as i64,
                 libc::SEEK_SET,
             ) {
                 ret = -1;
@@ -251,13 +250,13 @@ pub unsafe fn cram_seek_to_refpos(fd: &mut cram_fd_layout, r: &mut cram_range_la
 pub unsafe fn cram_index_build_multiref(
     sl: &mut cram_slice_layout,
     fp: &mut crate::htslib_rs::hts::BGZF,
-    cpos: libc::off_t,
+    cpos: i64,
     landmark: i32,
-    sz: c_int,
-) -> c_int {
+    sz: i32,
+) -> i32 {
     let mut ref_: i32 = -2;
     let mut ref_start: i64 = 0;
-    let mut ref_end: i64 = c_int::MIN as i64;
+    let mut ref_end: i64 = i32::MIN as i64;
 
     let mut last_ref: i32 = -9;
     let mut last_pos: i64 = -9;
@@ -329,11 +328,11 @@ pub unsafe fn cram_index_slice(
     c: *mut cram_container,
     sl: &mut cram_slice_layout,
     fp: &mut crate::htslib_rs::hts::BGZF,
-    cpos: libc::off_t,
-    spos: libc::off_t,
-    sz: libc::off_t,
-) -> c_int {
-    if sz > c_int::MAX as libc::off_t {
+    cpos: i64,
+    spos: i64,
+    sz: i64,
+) -> i32 {
+    if sz > i32::MAX as i64 {
         eprintln!("CRAM slice is too big ({} bytes)", sz);
         return -1;
     }
@@ -347,8 +346,8 @@ pub unsafe fn cram_index_slice(
             (*sl.hdr).ref_seq_start,
             (*sl.hdr).ref_seq_span,
             cpos,
-            spos as c_int,
-            sz as c_int,
+            spos as i32,
+            sz as i32,
         );
         if crate::htslib_rs::bgzf::bgzf_write(fp, line.as_ptr().cast(), line.len()) >= 0 {
             0
@@ -366,7 +365,7 @@ pub unsafe fn cram_index_slice(
 // outside the data; otherwise the matching `cram_index_layout *`.
 pub unsafe fn cram_index_query(
     fd: &cram_fd_layout,
-    mut refid: c_int,
+    mut refid: i32,
     mut pos: crate::htslib_rs::hts::hts_pos_t,
     from: Option<NonNull<cram_index_layout>>,
 ) -> Option<NonNull<cram_index_layout>> {
@@ -429,9 +428,9 @@ pub unsafe fn cram_index_query(
     };
 
     // Binary search to find an overlapping bin.
-    let mut i: c_int = 0;
-    let mut j: c_int = entries.len() as c_int - 1;
-    let mut k: c_int = j / 2;
+    let mut i: i32 = 0;
+    let mut j: i32 = entries.len() as i32 - 1;
+    let mut k: i32 = j / 2;
     while k != i {
         let entry = &entries[k as usize];
         if entry.refid > refid {
@@ -469,7 +468,7 @@ pub unsafe fn cram_index_query(
     }
 
     // And forward if our candidate doesn't cover pos.
-    while i + 1 < entries.len() as c_int
+    while i + 1 < entries.len() as i32
         && (entries[i as usize].refid < refid
             || (entries[i as usize].end as crate::htslib_rs::hts::hts_pos_t) < pos)
     {
@@ -574,7 +573,7 @@ pub unsafe fn link_index(fd: &mut cram_fd_layout) {
 // Parses a signed 32-bit decimal integer from the kstring starting at
 // `*pos`, skipping leading spaces/tabs. Returns 0 on success (and advances
 // `*pos`), -1 if no digit is found.
-pub unsafe fn kget_int32(k: &kstring_t, pos: &mut usize, val_p: &mut i32) -> c_int {
+pub unsafe fn kget_int32(k: &kstring_t, pos: &mut usize, val_p: &mut i32) -> i32 {
     let Some(parser) = KStringParser::from_kstring(k) else {
         return -1;
     };
@@ -584,21 +583,21 @@ pub unsafe fn kget_int32(k: &kstring_t, pos: &mut usize, val_p: &mut i32) -> c_i
 // original: kget_int64 (htslib/cram/cram_index.c:146)
 //
 // Same as `kget_int32` but reads into an `i64`.
-pub unsafe fn kget_int64(k: &kstring_t, pos: &mut usize, val_p: &mut i64) -> c_int {
+pub unsafe fn kget_int64(k: &kstring_t, pos: &mut usize, val_p: &mut i64) -> i32 {
     let Some(parser) = KStringParser::from_kstring(k) else {
         return -1;
     };
     parser.parse_i64(pos, val_p)
 }
 
-struct ResolvedCraiIndexFilename(NonNull<c_char>);
+struct ResolvedCraiIndexFilename(NonNull<u8>);
 
 impl ResolvedCraiIndexFilename {
-    fn new(ptr: *mut c_char) -> Option<Self> {
+    fn new(ptr: *mut u8) -> Option<Self> {
         NonNull::new(ptr).map(Self)
     }
 
-    fn as_ptr(&self) -> *const c_char {
+    fn as_ptr(&self) -> *const u8 {
         self.0.as_ptr()
     }
 }
@@ -606,7 +605,7 @@ impl ResolvedCraiIndexFilename {
 impl Drop for ResolvedCraiIndexFilename {
     fn drop(&mut self) {
         unsafe {
-            free(self.0.as_ptr().cast());
+            libc::free(self.0.as_ptr().cast());
         }
     }
 }
@@ -616,18 +615,16 @@ struct OwnedCraiIndexFilename {
 }
 
 impl OwnedCraiIndexFilename {
-    unsafe fn from_base(fn_base: *const c_char) -> Option<Self> {
-        let fn_base = fn_base.as_ref()?;
-        let fn_base = CStr::from_ptr(fn_base);
-        let mut bytes = Vec::with_capacity(fn_base.to_bytes().len() + b".crai".len() + 1);
-        bytes.extend_from_slice(fn_base.to_bytes());
+    unsafe fn from_base(fn_base: &[u8]) -> Option<Self> {
+        let mut bytes = Vec::with_capacity(fn_base.len() + b".crai".len() + 1);
+        bytes.extend_from_slice(fn_base);
         bytes.extend_from_slice(b".crai");
         bytes.push(0);
         Some(Self { bytes })
     }
 
-    fn as_ptr(&self) -> *const c_char {
-        self.bytes.as_ptr().cast()
+    fn as_ptr(&self) -> *const u8 {
+        self.bytes.as_ptr()
     }
 }
 
@@ -637,8 +634,8 @@ struct MallocOwnedIndexBytes {
 }
 
 impl MallocOwnedIndexBytes {
-    fn new(ptr: *mut c_char, len: usize) -> Option<Self> {
-        NonNull::new(ptr.cast::<u8>()).map(|ptr| Self { ptr, len })
+    fn new(ptr: *mut u8, len: usize) -> Option<Self> {
+        NonNull::new(ptr).map(|ptr| Self { ptr, len })
     }
 
     unsafe fn as_bytes(&self) -> &[u8] {
@@ -649,7 +646,7 @@ impl MallocOwnedIndexBytes {
 impl Drop for MallocOwnedIndexBytes {
     fn drop(&mut self) {
         unsafe {
-            free(self.ptr.as_ptr().cast());
+            libc::free(self.ptr.as_ptr().cast());
         }
     }
 }
@@ -662,9 +659,9 @@ impl Drop for MallocOwnedIndexBytes {
 // failure (also frees any half-built index on failure).
 pub unsafe fn cram_cram_index_c_176_cram_index_load(
     fd: *mut cram_fd,
-    fn_: *const c_char,
-    mut fn_idx: *const c_char,
-) -> c_int {
+    fn_: *const u8,
+    mut fn_idx: *const u8,
+) -> i32 {
     let Some(fdl) = fd_layout_mut(fd) else {
         return -1;
     };
@@ -698,8 +695,8 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
         None => return -1,
     };
     idx.as_mut().refid = -1;
-    idx.as_mut().start = c_int::MIN;
-    idx.as_mut().end = c_int::MAX;
+    idx.as_mut().start = i32::MIN;
+    idx.as_mut().end = i32::MAX;
 
     if idx_stack.try_reserve(1).is_err() {
         fail!();
@@ -707,7 +704,11 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
     idx_stack.push(idx);
 
     // Support pathX.cram##idx##pathY.crai
-    let fn_bytes = CStr::from_ptr(fn_).to_bytes();
+    let mut fn_len = 0usize;
+    while *fn_.add(fn_len) != 0 {
+        fn_len += 1;
+    }
+    let fn_bytes = std::slice::from_raw_parts(fn_, fn_len);
     let needle: &[u8] = &HTS_IDX_DELIM[..HTS_IDX_DELIM.len() - 1];
     let fn_delim = fn_bytes
         .windows(needle.len())
@@ -717,21 +718,23 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
     }
 
     let _resolved_idx_filename = if fn_idx.is_null() {
-        let mut resolved_idx: *mut c_char = std::ptr::null_mut();
+        let mut resolved_idx: *mut u8 = std::ptr::null_mut();
         if crate::htslib_rs::hts::hts_c_4756_hts_idx_check_local(
-            fn_,
+            fn_.cast(),
             crate::htslib_rs::hts::HTS_FMT_CRAI,
-            &mut resolved_idx,
+            (&mut resolved_idx as *mut *mut u8).cast(),
         ) == 0
-            && hisremote(fn_) != 0
+            && hisremote(fn_.cast()) != 0
         {
-            resolved_idx = crate::htslib_rs::hts::hts_c_4915_hts_idx_getfn(fn_, c".crai".as_ptr());
+            resolved_idx =
+                crate::htslib_rs::hts::hts_c_4915_hts_idx_getfn(fn_.cast(), c".crai".as_ptr())
+                    .cast();
         }
 
         let Some(resolved_idx_filename) = ResolvedCraiIndexFilename::new(resolved_idx) else {
             eprintln!(
                 "Could not retrieve index file for '{}'",
-                String::from_utf8_lossy(CStr::from_ptr(fn_).to_bytes())
+                String::from_utf8_lossy(fn_bytes)
             );
             fail!();
         };
@@ -741,11 +744,15 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
         None
     };
 
-    let fp = hopen(fn_idx, c"r".as_ptr());
+    let fp = hopen(fn_idx.cast(), c"r".as_ptr());
     if fp.is_null() {
+        let mut idx_len = 0usize;
+        while *fn_idx.add(idx_len) != 0 {
+            idx_len += 1;
+        }
         eprintln!(
             "Could not open index file '{}'",
-            String::from_utf8_lossy(CStr::from_ptr(fn_idx).to_bytes())
+            String::from_utf8_lossy(std::slice::from_raw_parts(fn_idx, idx_len))
         );
         fail!();
     }
@@ -781,7 +788,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
             fail!();
         }
 
-        let Some(inflated) = MallocOwnedIndexBytes::new(s, l) else {
+        let Some(inflated) = MallocOwnedIndexBytes::new(s.cast(), l) else {
             fail!();
         };
         let mut inflated_data = Vec::new();
@@ -837,8 +844,8 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
             )
             .expect("index bucket pointer derived from non-null index");
             idx.as_mut().refid = e.refid;
-            idx.as_mut().start = c_int::MIN;
-            idx.as_mut().end = c_int::MAX;
+            idx.as_mut().start = i32::MIN;
+            idx.as_mut().end = i32::MAX;
             idx.as_mut().nslice = 0;
             idx.as_mut().nalloc = 0;
             idx.as_mut().e = std::ptr::null_mut();
@@ -863,7 +870,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
                 let Some(new_nalloc) = old_nalloc.checked_mul(2) else {
                     fail!();
                 };
-                if new_nalloc > c_int::MAX as usize {
+                if new_nalloc > i32::MAX as usize {
                     fail!();
                 }
                 new_nalloc
@@ -919,7 +926,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
 // genuine last slice.
 pub unsafe fn cram_index_last(
     fd: &cram_fd_layout,
-    refid: c_int,
+    refid: i32,
     from: Option<NonNull<cram_index_layout>>,
 ) -> Option<NonNull<cram_index_layout>> {
     if refid + 1 < 0 || refid + 1 >= fd.index_sz {
@@ -960,7 +967,7 @@ pub unsafe fn cram_index_last(
 // multiple index entries at the same offset).
 pub unsafe fn cram_index_query_last(
     fd: &cram_fd_layout,
-    refid: c_int,
+    refid: i32,
     end: crate::htslib_rs::hts::hts_pos_t,
 ) -> Option<NonNull<cram_index_layout>> {
     let mut e: Option<NonNull<cram_index_layout>> = None;
@@ -1007,17 +1014,17 @@ pub unsafe fn cram_index_container(
     fd: &mut cram_fd_layout,
     c: &mut cram_container_layout,
     fp: &mut crate::htslib_rs::hts::BGZF,
-    cpos: libc::off_t,
-) -> c_int {
-    let mut j: c_int = 0;
+    cpos: i64,
+) -> i32 {
+    let mut j: i32 = 0;
 
     // 2.0 format
     while j < c.num_landmarks {
         let spos = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fd.fp);
-        if spos - cpos - c.offset as libc::off_t != *c.landmark.add(j as usize) as libc::off_t {
+        if spos - cpos - c.offset as i64 != *c.landmark.add(j as usize) as i64 {
             eprintln!(
                 "CRAM slice offset {} does not match landmark {} in container header ({})",
-                (spos - cpos - c.offset as libc::off_t) as i64,
+                (spos - cpos - c.offset as i64) as i64,
                 j,
                 *c.landmark.add(j as usize),
             );
@@ -1037,7 +1044,7 @@ pub unsafe fn cram_index_container(
                 s,
                 fp,
                 cpos,
-                *c.landmark.add(j as usize) as libc::off_t,
+                *c.landmark.add(j as usize) as i64,
                 sz,
             )
         } else {
@@ -1064,9 +1071,9 @@ pub unsafe fn cram_index_container(
 // up front (needed for multi-ref slice decoding inside multiref builder).
 pub unsafe fn cram_cram_index_c_779_cram_index_build(
     fd: *mut cram_fd,
-    fn_base: *const c_char,
-    mut fn_idx: *const c_char,
-) -> c_int {
+    fn_base: *const u8,
+    mut fn_idx: *const u8,
+) -> i32 {
     let Some(fdl) = fd_layout_mut(fd) else {
         return -1;
     };
@@ -1097,7 +1104,13 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
     }
 
     if fn_idx.is_null() {
-        let Some(buf) = OwnedCraiIndexFilename::from_base(fn_base) else {
+        let mut base_len = 0usize;
+        while *fn_base.add(base_len) != 0 {
+            base_len += 1;
+        }
+        let Some(buf) =
+            OwnedCraiIndexFilename::from_base(std::slice::from_raw_parts(fn_base, base_len))
+        else {
             return -4;
         };
         fn_idx = buf.as_ptr();
@@ -1106,11 +1119,15 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
         fn_idx_buf = None;
     }
 
-    let fp = bgzf_open(fn_idx, c"wg".as_ptr());
+    let fp = bgzf_open(fn_idx.cast(), c"wg".as_ptr());
     if fp.is_null() {
+        let mut idx_len = 0usize;
+        while *fn_idx.add(idx_len) != 0 {
+            idx_len += 1;
+        }
         eprintln!(
             "{}: {}",
-            String::from_utf8_lossy(CStr::from_ptr(fn_idx).to_bytes()),
+            String::from_utf8_lossy(std::slice::from_raw_parts(fn_idx, idx_len)),
             std::io::Error::last_os_error()
         );
         return -4;
@@ -1165,7 +1182,7 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
         }
 
         let next_cpos = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fdl.fp);
-        if next_cpos != hpos + (*cl).length as libc::off_t {
+        if next_cpos != hpos + (*cl).length as i64 {
             eprintln!(
                 "Length {} in container header at offset {} does not match block lengths ({})",
                 (*cl).length,

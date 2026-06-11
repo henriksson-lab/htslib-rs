@@ -2,33 +2,37 @@ use htslib_rs::{
     hts_close, hts_open, hts_pos_t, sam_hdr_destroy, sam_hdr_read, sam_hdr_t, sam_parse_region,
     HTS_PARSE_LIST, HTS_PARSE_ONE_COORD, HTS_POS_MAX,
 };
-use libc::c_int;
-use std::ffi::{CStr, CString};
 
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().as_bytes().to_vec();
+    bytes.push(0);
+    bytes
 }
 
 unsafe fn expect_region(
     hdr: *mut sam_hdr_t,
     region: &str,
-    flags: c_int,
+    flags: i32,
     expected_rest: Option<&str>,
-    expected_tid: c_int,
+    expected_tid: i32,
     expected_beg: hts_pos_t,
     expected_end: hts_pos_t,
 ) {
-    let region = CString::new(region).unwrap();
+    let mut region_c = region.as_bytes().to_vec();
+    region_c.push(0);
     let mut tid = -1;
     let mut beg = -1;
     let mut end = -1;
-    let rest = sam_parse_region(hdr, region.as_ptr(), &mut tid, &mut beg, &mut end, flags);
+    let rest = sam_parse_region(hdr, region_c.as_ptr(), &mut tid, &mut beg, &mut end, flags);
 
     match expected_rest {
         Some(expected_rest) => {
             assert!(!rest.is_null(), "failed to parse {:?}", region);
-            assert_eq!(CStr::from_ptr(rest).to_bytes(), expected_rest.as_bytes());
+            assert_eq!(
+                std::ffi::CStr::from_ptr(rest.cast()).to_bytes(),
+                expected_rest.as_bytes()
+            );
             assert_eq!((tid, beg, end), (expected_tid, expected_beg, expected_end));
         }
         None => assert!(rest.is_null(), "unexpectedly parsed {:?}", region),
@@ -38,18 +42,19 @@ unsafe fn expect_region(
 unsafe fn parse_region_once(
     hdr: *mut sam_hdr_t,
     region: &str,
-    flags: c_int,
-) -> Option<(String, c_int, hts_pos_t, hts_pos_t)> {
-    let region = CString::new(region).unwrap();
+    flags: i32,
+) -> Option<(String, i32, hts_pos_t, hts_pos_t)> {
+    let mut region_c = region.as_bytes().to_vec();
+    region_c.push(0);
     let mut tid = -1;
     let mut beg = -1;
     let mut end = -1;
-    let rest = sam_parse_region(hdr, region.as_ptr(), &mut tid, &mut beg, &mut end, flags);
+    let rest = sam_parse_region(hdr, region_c.as_ptr(), &mut tid, &mut beg, &mut end, flags);
     if rest.is_null() {
         None
     } else {
         Some((
-            CStr::from_ptr(rest).to_string_lossy().into_owned(),
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr(rest.cast()).to_bytes()).into_owned(),
             tid,
             beg,
             end,
@@ -59,8 +64,12 @@ unsafe fn parse_region_once(
 
 unsafe fn with_colons_header(test: impl FnOnce(*mut sam_hdr_t)) {
     let path = c_fixture("htslib/test/colons.bam");
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), c"r".as_ptr());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path[..path.len() - 1])
+    );
 
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());

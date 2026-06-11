@@ -60,7 +60,7 @@ pub unsafe fn bgzip_c_68_confirm_overwrite(fn_: &[u8]) -> i32 {
 }
 
 unsafe fn bgzip_confirm_overwrite(fn_: &[u8]) -> i32 {
-    let save_errno = *crate::htslib_rs::c_compat::__errno_location();
+    let save_errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
     let mut ret = 0;
 
     if libc::isatty(libc::STDIN_FILENO) != 0 {
@@ -73,7 +73,7 @@ unsafe fn bgzip_confirm_overwrite(fn_: &[u8]) -> i32 {
         }
     }
 
-    *crate::htslib_rs::c_compat::__errno_location() = save_errno;
+    libc::__errno_location().write(save_errno);
     ret
 }
 
@@ -150,7 +150,7 @@ unsafe fn bgzip_setfilespec(path: &[u8], status: &libc::stat) -> i32 {
     ];
     let mut path_z = path.to_vec();
     path_z.push(0);
-    if crate::htslib_rs::c_compat::utimes(path_z.as_ptr().cast(), tval.as_ptr()) < 0 {
+    if libc::utimes(path_z.as_ptr().cast(), tval.as_ptr()) < 0 {
         eprintln!("[bgzip] Failed to set file specifications.");
         return -1;
     }
@@ -592,7 +592,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         },
                     );
                     if fp.is_none()
-                        && *crate::htslib_rs::c_compat::__errno_location() == libc::EEXIST
+                        && std::io::Error::last_os_error().raw_os_error() == Some(libc::EEXIST)
                     {
                         if bgzip_confirm_overwrite(&name_buf[..name_buf.len() - 1]) != 0 {
                             fp = bgzip_open_bgzf(
@@ -620,7 +620,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     statfilename = Some(name_buf);
                 }
             } else if !pstdout
-                && libc::isatty(libc::fileno(crate::htslib_rs::c_compat::stdout.cast())) != 0
+                && libc::isatty(libc::STDOUT_FILENO) != 0
             {
                 return bgzip_c_192_bgzip_main_usage(true, 1);
             } else if index && index_fname.is_none() {
@@ -989,7 +989,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                 }
 
                 if pstdout || test {
-                    f_dst = libc::fileno(crate::htslib_rs::c_compat::stdout.cast());
+                    f_dst = libc::STDOUT_FILENO;
                 } else {
                     let wrflags = libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC;
                     // NUL-terminated buffer holding the input filename; gets
@@ -1044,7 +1044,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         );
 
                         if f_dst < 0
-                            && *crate::htslib_rs::c_compat::__errno_location() == libc::EEXIST
+                            && std::io::Error::last_os_error().raw_os_error() == Some(libc::EEXIST)
                         {
                             if bgzip_confirm_overwrite(&output_name[..output_name.len() - 1]) != 0 {
                                 f_dst = libc::open(output_name.as_ptr().cast(), wrflags, 0o666);
@@ -1071,11 +1071,11 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     statfilename = Some(name_buf);
                 }
             } else if !pstdout
-                && libc::isatty(libc::fileno(crate::htslib_rs::c_compat::stdin.cast())) != 0
+                && libc::isatty(libc::STDIN_FILENO) != 0
             {
                 return bgzip_c_192_bgzip_main_usage(true, 1);
             } else {
-                f_dst = libc::fileno(crate::htslib_rs::c_compat::stdout.cast());
+                f_dst = libc::STDOUT_FILENO;
                 fp = bgzip_open_bgzf(c"-", c"r");
                 if fp.is_none() {
                     eprintln!(
@@ -1112,7 +1112,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         }
                     }
                 } else {
-                    f_dst = libc::fileno(crate::htslib_rs::c_compat::stdout.cast());
+                    f_dst = libc::STDOUT_FILENO;
                 }
             }
 
@@ -1165,7 +1165,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
             let end_reg = end;
             if end < 0 && start == 0 {
                 loop {
-                    let mut block_data: *const libc::c_void = ptr::null();
+                    let mut block_data: *const std::ffi::c_void = ptr::null();
                     let fp_ref = fp.as_mut().unwrap().as_mut();
                     c = bgzf_read_block_data(fp_ref, &mut block_data) as i32;
                     if c == 0 {
@@ -1181,8 +1181,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                         std::process::exit(1);
                     }
                     if !test
-                        && crate::htslib_rs::c_compat::fd_write(f_dst, block_data, c as usize)
-                            != c as libc::ssize_t
+                        && libc::write(f_dst, block_data.cast(), c as usize) != c as isize
                     {
                         eprintln!("Could not write {c} bytes");
                         std::process::exit(1);
@@ -1214,8 +1213,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     }
                     start += c as i64;
                     if !test
-                        && crate::htslib_rs::c_compat::fd_write(f_dst, buffer.cast(), c as usize)
-                            != c as libc::ssize_t
+                        && libc::write(f_dst, buffer.cast(), c as usize) != c as isize
                     {
                         eprintln!("Could not write {c} bytes");
                         std::process::exit(1);
@@ -1265,14 +1263,12 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
     }
 
     if usedstdout && !reindex {
-        if libc::fclose(crate::htslib_rs::c_compat::stdout.cast()) != 0
-            && *crate::htslib_rs::c_compat::__errno_location() != libc::EBADF
-        {
-            eprint!(
-                "[bgzip] Failed to close stdout, errno {}",
-                *crate::htslib_rs::c_compat::__errno_location()
-            );
-            ret = 1;
+        if libc::close(libc::STDOUT_FILENO) != 0 {
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            if errno != libc::EBADF {
+                eprint!("[bgzip] Failed to close stdout, errno {errno}");
+                ret = 1;
+            }
         }
     } else if let Some(write_fname) = write_fname {
         if compress {

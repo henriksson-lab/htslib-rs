@@ -3,12 +3,13 @@ use htslib_rs::{
     fai_parse_region, faidx_fetch_qual64, faidx_fetch_seq64, faidx_has_seq, faidx_iseq,
     faidx_seq_len, faidx_seq_len64, hts_pos_t, FAI_FASTA, FAI_FASTQ,
 };
-use std::ffi::{CStr, CString};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 fn unique_temp_path(name: &str, extension: &str) -> std::path::PathBuf {
@@ -26,8 +27,8 @@ unsafe fn load_fastq_fai() -> *mut htslib_rs::faidx_t {
     let input = c_fixture("htslib/test/faidx/fastqs.fq");
     let index = c_fixture("htslib/test/faidx/fastqs.fq.expected.fai");
     let fai = fai_load3_format(
-        input.as_ptr(),
-        index.as_ptr(),
+        input.as_ptr().cast(),
+        index.as_ptr().cast(),
         std::ptr::null(),
         0,
         FAI_FASTQ,
@@ -40,8 +41,8 @@ unsafe fn load_fasta_fai() -> *mut htslib_rs::faidx_t {
     let input = c_fixture("htslib/test/faidx/faidx.fa");
     let index = c_fixture("htslib/test/faidx/faidx.fa.expected.fai");
     let fai = fai_load3_format(
-        input.as_ptr(),
-        index.as_ptr(),
+        input.as_ptr().cast(),
+        index.as_ptr().cast(),
         std::ptr::null(),
         0,
         FAI_FASTA,
@@ -50,12 +51,12 @@ unsafe fn load_fasta_fai() -> *mut htslib_rs::faidx_t {
     fai
 }
 
-unsafe fn fetched_string(ptr: *mut libc::c_char, len: hts_pos_t) -> String {
+unsafe fn fetched_string(ptr: *mut u8, len: hts_pos_t) -> String {
     assert!(!ptr.is_null());
     assert!(len >= 0);
-    let text = CStr::from_ptr(ptr).to_string_lossy().into_owned();
+    let bytes = std::slice::from_raw_parts(ptr, len as usize).to_vec();
+    let text = String::from_utf8_lossy(&bytes).into_owned();
     assert_eq!(text.len(), len as usize);
-    libc::free(ptr.cast());
     text
 }
 
@@ -68,31 +69,35 @@ fn append_wrapped(out: &mut String, text: &str) {
 
 unsafe fn format_adjusted_fastq_records(
     fai: *const htslib_rs::faidx_t,
-    regions: &[&'static CStr],
+    regions: &[&'static [u8]],
 ) -> String {
     let mut out = String::new();
     for &region in regions {
         let mut tid = 0;
         let mut beg = 0;
         let mut end = 0;
-        assert!(!fai_parse_region(fai, region.as_ptr(), &mut tid, &mut beg, &mut end, 0).is_null());
+        assert!(
+            !fai_parse_region(fai, region.as_ptr().cast(), &mut tid, &mut beg, &mut end, 0)
+                .is_null()
+        );
         assert!(fai_adjust_region(&*fai, tid, &mut beg, &mut end) >= 0);
 
-        let name = CString::new(faidx_iseq(&*fai, tid).unwrap()).unwrap();
+        let mut name = faidx_iseq(&*fai, tid).unwrap().to_vec();
+        name.push(0);
         let mut seq_len = 0;
         let seq = fetched_string(
-            faidx_fetch_seq64(fai, name.as_ptr(), beg, end - 1, &mut seq_len),
+            faidx_fetch_seq64(fai, name.as_ptr().cast(), beg, end - 1, &mut seq_len).cast(),
             seq_len,
         );
         let mut qual_len = 0;
         let qual = fetched_string(
-            faidx_fetch_qual64(fai, name.as_ptr(), beg, end - 1, &mut qual_len),
+            faidx_fetch_qual64(fai, name.as_ptr().cast(), beg, end - 1, &mut qual_len).cast(),
             qual_len,
         );
         assert_eq!(seq_len, qual_len);
 
         out.push('@');
-        out.push_str(region.to_str().unwrap());
+        out.push_str(std::str::from_utf8(&region[..region.len() - 1]).unwrap());
         out.push_str(" length: ");
         out.push_str(&seq_len.to_string());
         out.push('\n');
@@ -105,25 +110,29 @@ unsafe fn format_adjusted_fastq_records(
 
 unsafe fn format_adjusted_fasta_records(
     fai: *const htslib_rs::faidx_t,
-    regions: &[&'static CStr],
+    regions: &[&'static [u8]],
 ) -> String {
     let mut out = String::new();
     for &region in regions {
         let mut tid = 0;
         let mut beg = 0;
         let mut end = 0;
-        assert!(!fai_parse_region(fai, region.as_ptr(), &mut tid, &mut beg, &mut end, 0).is_null());
+        assert!(
+            !fai_parse_region(fai, region.as_ptr().cast(), &mut tid, &mut beg, &mut end, 0)
+                .is_null()
+        );
         assert!(fai_adjust_region(&*fai, tid, &mut beg, &mut end) >= 0);
 
-        let name = CString::new(faidx_iseq(&*fai, tid).unwrap()).unwrap();
+        let mut name = faidx_iseq(&*fai, tid).unwrap().to_vec();
+        name.push(0);
         let mut seq_len = 0;
         let seq = fetched_string(
-            faidx_fetch_seq64(fai, name.as_ptr(), beg, end - 1, &mut seq_len),
+            faidx_fetch_seq64(fai, name.as_ptr().cast(), beg, end - 1, &mut seq_len).cast(),
             seq_len,
         );
 
         out.push('>');
-        out.push_str(region.to_str().unwrap());
+        out.push_str(std::str::from_utf8(&region[..region.len() - 1]).unwrap());
         out.push_str(" length: ");
         out.push_str(&seq_len.to_string());
         out.push('\n');
@@ -132,10 +141,10 @@ unsafe fn format_adjusted_fasta_records(
     out
 }
 
-unsafe fn fetch_region_len(fai: *const htslib_rs::faidx_t, region: &'static CStr) -> hts_pos_t {
+unsafe fn fetch_region_len(fai: *const htslib_rs::faidx_t, region: &'static [u8]) -> hts_pos_t {
     let mut len = 0;
-    let seq = fai_fetch64(fai, region.as_ptr(), &mut len);
-    let _ = fetched_string(seq, len);
+    let seq = fai_fetch64(fai, region.as_ptr().cast(), &mut len);
+    let _ = fetched_string(seq.cast(), len);
     len
 }
 
@@ -144,13 +153,25 @@ fn original_fastq_faidx_tst_named_helper_edges_match_expected_index() {
     unsafe {
         let fai = load_fastq_fai();
 
-        assert_eq!(fai_line_length(fai, c"FAKE0005_3".as_ptr()), 63);
-        assert_eq!(fai_line_length(fai, c"SRR014849.203935_3".as_ptr()), 144);
-        assert_eq!(faidx_has_seq(fai, c"SRR014849.203935_3".as_ptr()), 1);
-        assert_eq!(faidx_has_seq(fai, c"absent".as_ptr()), 0);
-        assert_eq!(faidx_iseq(&*fai, 0).unwrap(), c"FAKE0005_1".to_bytes());
-        assert_eq!(faidx_seq_len(fai, c"FSRRS4401CM938_1".as_ptr()), 453);
-        assert_eq!(faidx_seq_len64(fai, c"FSRRS4401AOV6A_4".as_ptr()), 309);
+        assert_eq!(fai_line_length(fai, b"FAKE0005_3\0".as_ptr().cast()), 63);
+        assert_eq!(
+            fai_line_length(fai, b"SRR014849.203935_3\0".as_ptr().cast()),
+            144
+        );
+        assert_eq!(
+            faidx_has_seq(fai, b"SRR014849.203935_3\0".as_ptr().cast()),
+            1
+        );
+        assert_eq!(faidx_has_seq(fai, b"absent\0".as_ptr().cast()), 0);
+        assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"FAKE0005_1");
+        assert_eq!(
+            faidx_seq_len(fai, b"FSRRS4401CM938_1\0".as_ptr().cast()),
+            453
+        );
+        assert_eq!(
+            faidx_seq_len64(fai, b"FSRRS4401AOV6A_4\0".as_ptr().cast()),
+            309
+        );
 
         fai_destroy(fai);
     }
@@ -159,11 +180,11 @@ fn original_fastq_faidx_tst_named_helper_edges_match_expected_index() {
 #[test]
 fn original_fastq_faidx_adjust_region_matches_expected_fastq_output() {
     const EXPECTED_FASTQ: &str = include_str!("../htslib/test/faidx/fastqs.1.expected.fq");
-    const REGIONS: &[&CStr] = &[
-        c"FAKE0006_1:4-12",
-        c"FSRRS4401BE7HA_1:81-120",
-        c"FAKE0010_2",
-        c"SRR014849.50939_3:71-90",
+    const REGIONS: &[&[u8]] = &[
+        b"FAKE0006_1:4-12\0",
+        b"FSRRS4401BE7HA_1:81-120\0",
+        b"FAKE0010_2\0",
+        b"SRR014849.50939_3:71-90\0",
     ];
 
     unsafe {
@@ -176,11 +197,11 @@ fn original_fastq_faidx_adjust_region_matches_expected_fastq_output() {
 #[test]
 fn original_fastq_faidx_adjust_region_matches_expected_fasta_output() {
     const EXPECTED_FASTA: &str = include_str!("../htslib/test/faidx/fastqs.2.expected.fa");
-    const REGIONS: &[&CStr] = &[
-        c"FAKE0006_1:4-12",
-        c"FSRRS4401BE7HA_1:81-120",
-        c"FAKE0010_2",
-        c"SRR014849.50939_3:71-90",
+    const REGIONS: &[&[u8]] = &[
+        b"FAKE0006_1:4-12\0",
+        b"FSRRS4401BE7HA_1:81-120\0",
+        b"FAKE0010_2\0",
+        b"SRR014849.50939_3:71-90\0",
     ];
 
     unsafe {
@@ -193,7 +214,11 @@ fn original_fastq_faidx_adjust_region_matches_expected_fasta_output() {
 #[test]
 fn original_fasta_faidx_adjust_region_matches_expected_fasta_output() {
     const EXPECTED_FASTA: &str = include_str!("../htslib/test/faidx/faidx.1.expected.fa");
-    const REGIONS: &[&CStr] = &[c"trailingblank2:28-33", c"trailingblank3:4-5", c"bar:4-5"];
+    const REGIONS: &[&[u8]] = &[
+        b"trailingblank2:28-33\0",
+        b"trailingblank3:4-5\0",
+        b"bar:4-5\0",
+    ];
 
     unsafe {
         let fai = load_fasta_fai();
@@ -207,10 +232,10 @@ fn original_fastq_faidx_whole_record_and_slice_lengths_match_expected_regions() 
     unsafe {
         let fai = load_fastq_fai();
 
-        assert_eq!(fetch_region_len(fai, c"FAKE0006_1:4-12"), 9);
-        assert_eq!(fetch_region_len(fai, c"FSRRS4401BE7HA_1:81-120"), 40);
-        assert_eq!(fetch_region_len(fai, c"FAKE0010_2"), 30);
-        assert_eq!(fetch_region_len(fai, c"SRR014849.50939_3:71-90"), 20);
+        assert_eq!(fetch_region_len(fai, b"FAKE0006_1:4-12\0"), 9);
+        assert_eq!(fetch_region_len(fai, b"FSRRS4401BE7HA_1:81-120\0"), 40);
+        assert_eq!(fetch_region_len(fai, b"FAKE0010_2\0"), 30);
+        assert_eq!(fetch_region_len(fai, b"SRR014849.50939_3:71-90\0"), 20);
 
         fai_destroy(fai);
     }
@@ -222,26 +247,26 @@ fn original_fasta_faidx_handles_empty_name_and_crlf_line_metadata() {
         let input = c_fixture("htslib/test/faidx/faidx.fa");
         let index = c_fixture("htslib/test/faidx/faidx.fa.expected.fai");
         let fai = fai_load3_format(
-            input.as_ptr(),
-            index.as_ptr(),
+            input.as_ptr().cast(),
+            index.as_ptr().cast(),
             std::ptr::null(),
             0,
             FAI_FASTA,
         );
         assert!(!fai.is_null());
 
-        assert_eq!(faidx_has_seq(fai, c"".as_ptr()), 1);
-        assert_eq!(faidx_seq_len64(fai, c"".as_ptr()), 4);
-        assert_eq!(faidx_iseq(&*fai, 0).unwrap(), c"".to_bytes());
+        assert_eq!(faidx_has_seq(fai, b"\0".as_ptr().cast()), 1);
+        assert_eq!(faidx_seq_len64(fai, b"\0".as_ptr().cast()), 4);
+        assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"");
 
         let mut len = 0;
-        let seq = faidx_fetch_seq64(fai, c"".as_ptr(), 0, 3, &mut len);
-        assert_eq!(fetched_string(seq, len), "ATGC");
+        let seq = faidx_fetch_seq64(fai, b"\0".as_ptr().cast(), 0, 3, &mut len);
+        assert_eq!(fetched_string(seq.cast(), len), "ATGC");
 
-        assert_eq!(faidx_seq_len64(fai, c"trailingblank3".as_ptr()), 5);
-        assert_eq!(fai_line_length(fai, c"trailingblank3".as_ptr()), 4);
-        let seq = fai_fetch64(fai, c"trailingblank3:1-5".as_ptr(), &mut len);
-        assert_eq!(fetched_string(seq, len), "ACGTA");
+        assert_eq!(faidx_seq_len64(fai, b"trailingblank3\0".as_ptr().cast()), 5);
+        assert_eq!(fai_line_length(fai, b"trailingblank3\0".as_ptr().cast()), 4);
+        let seq = fai_fetch64(fai, b"trailingblank3:1-5\0".as_ptr().cast(), &mut len);
+        assert_eq!(fetched_string(seq.cast(), len), "ACGTA");
 
         fai_destroy(fai);
     }
@@ -255,16 +280,17 @@ fn original_fai_read_matches_sscanf_trailing_final_field_junk() {
         std::fs::write(&fasta, b">chr1\nACGT\n").unwrap();
         std::fs::write(&fasta_fai, b"chr1\t4\t6\t4\t5junk\n").unwrap();
 
-        let fasta_c = CString::new(fasta.to_string_lossy().as_bytes()).unwrap();
+        let mut fasta_c = fasta.to_string_lossy().into_owned().into_bytes();
+        fasta_c.push(0);
         let fai = fai_load3_format(
-            fasta_c.as_ptr(),
+            fasta_c.as_ptr().cast(),
             std::ptr::null(),
             std::ptr::null(),
             0,
             FAI_FASTA,
         );
         assert!(!fai.is_null());
-        assert_eq!(faidx_seq_len64(fai, c"chr1".as_ptr()), 4);
+        assert_eq!(faidx_seq_len64(fai, b"chr1\0".as_ptr().cast()), 4);
         fai_destroy(fai);
 
         let fastq = unique_temp_path("sscanf-fastq", "fq");
@@ -272,16 +298,17 @@ fn original_fai_read_matches_sscanf_trailing_final_field_junk() {
         std::fs::write(&fastq, b"@r1\nACGT\n+\n!!!!\n").unwrap();
         std::fs::write(&fastq_fai, b"r1\t4\t4\t4\t5\t11junk\n").unwrap();
 
-        let fastq_c = CString::new(fastq.to_string_lossy().as_bytes()).unwrap();
+        let mut fastq_c = fastq.to_string_lossy().into_owned().into_bytes();
+        fastq_c.push(0);
         let fai = fai_load3_format(
-            fastq_c.as_ptr(),
+            fastq_c.as_ptr().cast(),
             std::ptr::null(),
             std::ptr::null(),
             0,
             FAI_FASTQ,
         );
         assert!(!fai.is_null());
-        assert_eq!(faidx_seq_len64(fai, c"r1".as_ptr()), 4);
+        assert_eq!(faidx_seq_len64(fai, b"r1\0".as_ptr().cast()), 4);
         fai_destroy(fai);
 
         let _ = std::fs::remove_file(fasta);
@@ -299,9 +326,10 @@ fn original_fai_read_rejects_trailing_junk_before_required_fields() {
         std::fs::write(&fasta, b">chr1\nACGT\n").unwrap();
         std::fs::write(&fasta_fai, b"chr1\t4\t6junk\t4\t5\n").unwrap();
 
-        let fasta_c = CString::new(fasta.to_string_lossy().as_bytes()).unwrap();
+        let mut fasta_c = fasta.to_string_lossy().into_owned().into_bytes();
+        fasta_c.push(0);
         let fai = fai_load3_format(
-            fasta_c.as_ptr(),
+            fasta_c.as_ptr().cast(),
             std::ptr::null(),
             std::ptr::null(),
             0,

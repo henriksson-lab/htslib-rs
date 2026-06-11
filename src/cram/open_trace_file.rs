@@ -18,7 +18,7 @@ pub fn cram_open_trace_file_c_90_is_file(fn_: &[u8]) -> bool {
         return false;
     }
     let buf = unsafe { buf.assume_init() };
-    crate::htslib_rs::c_compat::stat_mode_matches(buf.st_mode, libc::S_IFMT, libc::S_IFREG)
+    (u64::from(buf.st_mode) & u64::from(libc::S_IFMT)) == u64::from(libc::S_IFREG)
 }
 
 pub fn cram_open_trace_file_c_108_tokenise_search_path(searchpath: Option<&[u8]>) -> Vec<u8> {
@@ -116,7 +116,7 @@ impl HfileHandle {
         .map(Self)
     }
 
-    unsafe fn read(&mut self, buf: &mut [u8]) -> libc::ssize_t {
+    unsafe fn read(&mut self, buf: &mut [u8]) -> isize {
         crate::htslib_rs::hfile::hread(self.0.as_mut(), buf)
     }
 
@@ -145,7 +145,7 @@ struct OwnedMfile(MfilePtr);
 
 impl OwnedMfile {
     unsafe fn create_empty() -> Option<Self> {
-        NonNull::new(cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0)).map(Self)
+        NonNull::new(cram_mFILE_c_207_mfcreate(None, 0)).map(Self)
     }
 
     unsafe fn write_all(&mut self, bytes: &[u8]) -> bool {
@@ -153,7 +153,7 @@ impl OwnedMfile {
             return true;
         }
         cram_mFILE_c_527_mfwrite(
-            bytes.as_ptr().cast_mut().cast(),
+            bytes,
             bytes.len(),
             1,
             self.0.as_ptr(),
@@ -311,8 +311,8 @@ unsafe fn open_trace_find_file_dir(file: &[u8], dirname: &[u8]) -> Option<MfileP
         path_z.extend_from_slice(&path);
         path_z.push(0);
         NonNull::new(cram_mFILE_c_347_mfopen(
-            path_z.as_ptr().cast(),
-            b"rbm\0".as_ptr().cast(),
+            Some(&path_z),
+            Some(b"rbm\0"),
         ))
     } else {
         None

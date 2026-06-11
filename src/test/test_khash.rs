@@ -1,5 +1,3 @@
-use std::ffi::{c_char, c_int, CStr};
-
 type khint_t = u32;
 
 const MAX_ENTRIES: usize = 99_999_999;
@@ -11,8 +9,8 @@ pub struct kh_str2int_t {
     n_occupied: khint_t,
     upper_bound: khint_t,
     flags: *mut khint_t,
-    keys: *mut *mut c_char,
-    vals: *mut c_int,
+    keys: *mut *mut u8,
+    vals: *mut i32,
 }
 
 unsafe fn kh_isempty(flags: *const khint_t, i: khint_t) -> bool {
@@ -36,29 +34,37 @@ unsafe fn kh_set_isdel_true(flags: *mut khint_t, i: khint_t) {
         (*flags.add((i >> 4) as usize) & !(2 << ((i & 0x0f) << 1))) | (1 << ((i & 0x0f) << 1));
 }
 
-unsafe fn kh_str_hash_func(key: *const c_char) -> khint_t {
-    crate::htslib_rs::hts::__ac_FNV1a_hash_string(key)
+unsafe fn kh_str_hash_func(key: *const u8) -> khint_t {
+    crate::htslib_rs::hts::__ac_FNV1a_hash_string(key.cast())
 }
 
-unsafe fn kh_str_hash_equal(a: *const c_char, b: *const c_char) -> bool {
-    !a.is_null() && !b.is_null() && CStr::from_ptr(a) == CStr::from_ptr(b)
+unsafe fn kh_str_hash_equal(a: *const u8, b: *const u8) -> bool {
+    !a.is_null() && !b.is_null() && libc::strcmp(a.cast(), b.cast()) == 0
 }
 
 unsafe fn kh_init_str2int() -> *mut kh_str2int_t {
-    libc::calloc(1, std::mem::size_of::<kh_str2int_t>()).cast::<kh_str2int_t>()
+    Box::into_raw(Box::new(kh_str2int_t {
+        n_buckets: 0,
+        size: 0,
+        n_occupied: 0,
+        upper_bound: 0,
+        flags: std::ptr::null_mut(),
+        keys: std::ptr::null_mut(),
+        vals: std::ptr::null_mut(),
+    }))
 }
 
 unsafe fn kh_destroy_str2int(h: *mut kh_str2int_t) {
     if h.is_null() {
         return;
     }
-    libc::free((*h).flags.cast());
-    libc::free((*h).keys.cast());
-    libc::free((*h).vals.cast());
-    libc::free(h.cast());
+    drop(Vec::from_raw_parts((*h).flags, 0, 0));
+    drop(Vec::from_raw_parts((*h).keys, 0, 0));
+    drop(Vec::from_raw_parts((*h).vals, 0, 0));
+    drop(Box::from_raw(h));
 }
 
-unsafe fn kh_resize_str2int(h: *mut kh_str2int_t, mut new_n_buckets: khint_t) -> c_int {
+unsafe fn kh_resize_str2int(h: *mut kh_str2int_t, mut new_n_buckets: khint_t) -> i32 {
     if new_n_buckets < 4 {
         new_n_buckets = 4;
     }
@@ -72,38 +78,31 @@ unsafe fn kh_resize_str2int(h: *mut kh_str2int_t, mut new_n_buckets: khint_t) ->
     } else {
         new_n_buckets >> 4
     };
-    let new_flags =
-        libc::malloc(n_flags as usize * std::mem::size_of::<khint_t>()).cast::<khint_t>();
-    if new_flags.is_null() {
-        return -1;
-    }
-    libc::memset(
-        new_flags.cast(),
-        0xaa,
-        n_flags as usize * std::mem::size_of::<khint_t>(),
-    );
+    let mut new_flags_vec: Vec<khint_t> = vec![0xaaaa_aaaa; n_flags as usize];
+    let new_flags = new_flags_vec.as_mut_ptr();
+    std::mem::forget(new_flags_vec);
 
     if (*h).n_buckets < new_n_buckets {
-        let new_keys = libc::realloc(
-            (*h).keys.cast(),
-            new_n_buckets as usize * std::mem::size_of::<*mut c_char>(),
-        )
-        .cast::<*mut c_char>();
-        if new_keys.is_null() {
-            libc::free(new_flags.cast());
-            return -1;
+        // On the first resize the table is empty (n_buckets == 0) and keys/vals
+        // are NULL: C's realloc(NULL, ..) allocates fresh, but Vec::from_raw_parts
+        // requires a non-null pointer, so allocate new Vecs in that case.
+        if (*h).keys.is_null() {
+            let mut keys_vec: Vec<*mut u8> = vec![std::ptr::null_mut(); new_n_buckets as usize];
+            (*h).keys = keys_vec.as_mut_ptr();
+            std::mem::forget(keys_vec);
+            let mut vals_vec: Vec<i32> = vec![0; new_n_buckets as usize];
+            (*h).vals = vals_vec.as_mut_ptr();
+            std::mem::forget(vals_vec);
+        } else {
+            let mut keys_vec = Vec::from_raw_parts((*h).keys, (*h).n_buckets as usize, (*h).n_buckets as usize);
+            keys_vec.resize(new_n_buckets as usize, std::ptr::null_mut());
+            (*h).keys = keys_vec.as_mut_ptr();
+            std::mem::forget(keys_vec);
+            let mut vals_vec = Vec::from_raw_parts((*h).vals, (*h).n_buckets as usize, (*h).n_buckets as usize);
+            vals_vec.resize(new_n_buckets as usize, 0);
+            (*h).vals = vals_vec.as_mut_ptr();
+            std::mem::forget(vals_vec);
         }
-        (*h).keys = new_keys;
-        let new_vals = libc::realloc(
-            (*h).vals.cast(),
-            new_n_buckets as usize * std::mem::size_of::<c_int>(),
-        )
-        .cast::<c_int>();
-        if new_vals.is_null() {
-            libc::free(new_flags.cast());
-            return -1;
-        }
-        (*h).vals = new_vals;
     }
 
     let old_n_buckets = (*h).n_buckets;
@@ -141,29 +140,22 @@ unsafe fn kh_resize_str2int(h: *mut kh_str2int_t, mut new_n_buckets: khint_t) ->
     }
 
     if (*h).n_buckets > new_n_buckets {
-        let new_keys = libc::realloc(
-            (*h).keys.cast(),
-            new_n_buckets as usize * std::mem::size_of::<*mut c_char>(),
-        )
-        .cast::<*mut c_char>();
-        if new_keys.is_null() {
-            libc::free(new_flags.cast());
-            return -1;
-        }
-        (*h).keys = new_keys;
-        let new_vals = libc::realloc(
-            (*h).vals.cast(),
-            new_n_buckets as usize * std::mem::size_of::<c_int>(),
-        )
-        .cast::<c_int>();
-        if new_vals.is_null() {
-            libc::free(new_flags.cast());
-            return -1;
-        }
-        (*h).vals = new_vals;
+        let mut keys_vec = Vec::from_raw_parts((*h).keys, (*h).n_buckets as usize, (*h).n_buckets as usize);
+        keys_vec.truncate(new_n_buckets as usize);
+        keys_vec.shrink_to_fit();
+        (*h).keys = keys_vec.as_mut_ptr();
+        std::mem::forget(keys_vec);
+        let mut vals_vec = Vec::from_raw_parts((*h).vals, (*h).n_buckets as usize, (*h).n_buckets as usize);
+        vals_vec.truncate(new_n_buckets as usize);
+        vals_vec.shrink_to_fit();
+        (*h).vals = vals_vec.as_mut_ptr();
+        std::mem::forget(vals_vec);
     }
 
-    libc::free((*h).flags.cast());
+    // On the first resize the old flags pointer is NULL; only reclaim a real one.
+    if !(*h).flags.is_null() {
+        drop(Vec::from_raw_parts((*h).flags, 0, 0));
+    }
     (*h).flags = new_flags;
     (*h).n_buckets = new_n_buckets;
     (*h).n_occupied = (*h).size;
@@ -174,7 +166,7 @@ unsafe fn kh_resize_str2int(h: *mut kh_str2int_t, mut new_n_buckets: khint_t) ->
     0
 }
 
-unsafe fn kh_put_str2int(h: *mut kh_str2int_t, key: *mut c_char, ret: *mut c_int) -> khint_t {
+unsafe fn kh_put_str2int(h: *mut kh_str2int_t, key: *mut u8, ret: *mut i32) -> khint_t {
     if (*h).n_occupied >= (*h).upper_bound {
         if (*h).n_buckets > (*h).size << 1 {
             if kh_resize_str2int(h, (*h).n_buckets - 1) < 0 {
@@ -237,7 +229,7 @@ unsafe fn kh_put_str2int(h: *mut kh_str2int_t, key: *mut c_char, ret: *mut c_int
     x
 }
 
-unsafe fn kh_get_str2int(h: *const kh_str2int_t, key: *const c_char) -> khint_t {
+unsafe fn kh_get_str2int(h: *const kh_str2int_t, key: *const u8) -> khint_t {
     if (*h).n_buckets != 0 {
         let mask = (*h).n_buckets - 1;
         let k = kh_str_hash_func(key);
@@ -275,16 +267,15 @@ unsafe fn kh_stats_str2int(
     deleted: *mut khint_t,
     hist_size: *mut khint_t,
     hist_out: *mut *mut khint_t,
-) -> c_int {
-    let mut hist = libc::calloc(1, std::mem::size_of::<khint_t>()).cast::<khint_t>();
+) -> i32 {
+    let mut hist_vec: Vec<khint_t> = vec![0; 1];
+    let mut hist = hist_vec.as_mut_ptr();
+    std::mem::forget(hist_vec);
     let mut dist_max = 0;
     let mask = (*h).n_buckets - 1;
     *empty = 0;
     *deleted = 0;
     *hist_size = 0;
-    if hist.is_null() {
-        return -1;
-    }
     let mut i = 0;
     while i < (*h).n_buckets {
         if kh_isempty((*h).flags, i) {
@@ -306,21 +297,11 @@ unsafe fn kh_stats_str2int(
             k = (k + step) & mask;
         }
         if dist_max <= dist {
-            let new_hist = libc::realloc(
-                hist.cast(),
-                (dist as usize + 1) * std::mem::size_of::<khint_t>(),
-            )
-            .cast::<khint_t>();
-            if new_hist.is_null() {
-                libc::free(hist.cast());
-                return -1;
-            }
-            let mut k = dist_max + 1;
-            while k <= dist {
-                *new_hist.add(k as usize) = 0;
-                k += 1;
-            }
-            hist = new_hist;
+            let old_len = dist_max as usize + 1;
+            let mut hist_vec = Vec::from_raw_parts(hist, old_len, old_len);
+            hist_vec.resize(dist as usize + 1, 0);
+            hist = hist_vec.as_mut_ptr();
+            std::mem::forget(hist_vec);
             dist_max = dist;
         }
         *hist.add(dist as usize) += 1;
@@ -352,34 +333,36 @@ pub unsafe fn test_test_khash_c_50_write_stats_str2int(h: *mut kh_str2int_t) {
     let mut hist: *mut khint_t = std::ptr::null_mut();
 
     if kh_stats_str2int(h, &mut empty, &mut deleted, &mut hist_size, &mut hist) == 0 {
-        libc::printf(c"n_buckets = %u\n".as_ptr(), (*h).n_buckets);
-        libc::printf(c"empty     = %u\n".as_ptr(), empty);
-        libc::printf(c"deleted   = %u\n".as_ptr(), deleted);
+        println!("n_buckets = {}", (*h).n_buckets);
+        println!("empty     = {}", empty);
+        println!("deleted   = {}", deleted);
         let mut i = 0;
         while i < hist_size {
-            libc::printf(c"dist[ %8u ] = %u\n".as_ptr(), i, *hist.add(i as usize));
+            println!("dist[ {:8} ] = {}", i, *hist.add(i as usize));
             i += 1;
         }
-        libc::free(hist.cast());
+        drop(Vec::from_raw_parts(hist, hist_size as usize, hist_size as usize));
     }
 }
 
 // original: make_keys (htslib/test/test_khash.c:66)
-pub unsafe fn test_test_khash_c_66_make_keys(num: usize, kl: usize) -> *mut c_char {
+pub unsafe fn test_test_khash_c_66_make_keys(num: usize, kl: usize) -> *mut u8 {
     if num > MAX_ENTRIES {
         return std::ptr::null_mut();
     }
-    let keys = libc::malloc(kl * num).cast::<c_char>();
-    if keys.is_null() {
-        libc::perror(std::ptr::null());
-        return std::ptr::null_mut();
-    }
+    let mut keys_vec: Vec<u8> = vec![0; kl * num];
+    let keys = keys_vec.as_mut_ptr();
+    std::mem::forget(keys_vec);
     let mut i = 0;
     while i < num {
-        if libc::snprintf(keys.add(kl * i), kl, c"test%zu".as_ptr(), i) as usize >= kl {
-            libc::free(keys.cast());
+        let s = format!("test{}", i);
+        if s.len() + 1 > kl {
+            drop(Vec::from_raw_parts(keys, kl * num, kl * num));
             return std::ptr::null_mut();
         }
+        let dst = std::slice::from_raw_parts_mut(keys.add(kl * i), s.len() + 1);
+        dst[..s.len()].copy_from_slice(s.as_bytes());
+        dst[s.len()] = 0;
         i += 1;
     }
 
@@ -389,66 +372,61 @@ pub unsafe fn test_test_khash_c_66_make_keys(num: usize, kl: usize) -> *mut c_ch
 // original: add_str2int_entry (htslib/test/test_khash.c:86)
 pub unsafe fn test_test_khash_c_86_add_str2int_entry(
     h: *mut kh_str2int_t,
-    key: *mut c_char,
+    key: *mut u8,
     val: khint_t,
-) -> c_int {
+) -> i32 {
     let mut ret = 0;
     let k = kh_put_str2int(h, key, &mut ret);
 
     if ret != 1 && ret != 2 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Unexpected return from kh_put(%s) : %d\n".as_ptr(),
-            key,
+        eprintln!(
+            "Unexpected return from kh_put({}) : {}",
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr(key.cast()).to_bytes()),
             ret,
         );
         return -1;
     }
-    *(*h).vals.add(k as usize) = val as c_int;
+    *(*h).vals.add(k as usize) = val as i32;
     0
 }
 
 // original: check_str2int_entry (htslib/test/test_khash.c:98)
 pub unsafe fn test_test_khash_c_98_check_str2int_entry(
     h: *mut kh_str2int_t,
-    key: *mut c_char,
+    key: *mut u8,
     val: khint_t,
     is_deleted: u8,
-) -> c_int {
+) -> i32 {
     let k = kh_get_str2int(h, key);
     if is_deleted != 0 {
         if k >= (*h).n_buckets {
             return 0;
         }
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Found deleted entry %s in hash table\n".as_ptr(),
-            key,
+        eprintln!(
+            "Found deleted entry {} in hash table",
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr(key.cast()).to_bytes()),
         );
         return -1;
     }
 
     if k >= (*h).n_buckets {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Couldn't find %s in hash table\n".as_ptr(),
-            key,
+        eprintln!(
+            "Couldn't find {} in hash table",
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr(key.cast()).to_bytes()),
         );
         return -1;
     }
-    if libc::strcmp(*(*h).keys.add(k as usize), key) != 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Wrong key in hash table, expected %s got %s\n".as_ptr(),
-            key,
-            *(*h).keys.add(k as usize),
+    if libc::strcmp((*(*h).keys.add(k as usize)).cast(), key.cast()) != 0 {
+        eprintln!(
+            "Wrong key in hash table, expected {} got {}",
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr(key.cast()).to_bytes()),
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr((*(*h).keys.add(k as usize)).cast()).to_bytes()),
         );
         return -1;
     }
-    if *(*h).vals.add(k as usize) != val as c_int {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Wrong value in hash table, expected %u got %u\n".as_ptr(),
+    if *(*h).vals.add(k as usize) != val as i32 {
+        eprintln!(
+            "Wrong value in hash table, expected {} got {}",
             val,
             *(*h).vals.add(k as usize),
         );
@@ -460,14 +438,13 @@ pub unsafe fn test_test_khash_c_98_check_str2int_entry(
 // original: del_str2int_entry (htslib/test/test_khash.c:127)
 pub unsafe fn test_test_khash_c_127_del_str2int_entry(
     h: *mut kh_str2int_t,
-    key: *mut c_char,
-) -> c_int {
+    key: *mut u8,
+) -> i32 {
     let k = kh_get_str2int(h, key);
     if k >= (*h).n_buckets {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Couldn't find %s to delete from hash table\n".as_ptr(),
-            key,
+        eprintln!(
+            "Couldn't find {} to delete from hash table",
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr(key.cast()).to_bytes()),
         );
         return -1;
     }
@@ -479,8 +456,8 @@ pub unsafe fn test_test_khash_c_127_del_str2int_entry(
 pub unsafe fn test_test_khash_c_137_test_str2int(
     max: usize,
     to_del: usize,
-    show_stats: c_int,
-) -> c_int {
+    show_stats: i32,
+) -> i32 {
     let kl = 16;
     let mut mask = max;
     let keys = test_test_khash_c_66_make_keys(max, kl);
@@ -493,8 +470,7 @@ pub unsafe fn test_test_khash_c_137_test_str2int(
 
     let h = kh_init_str2int();
     if h.is_null() {
-        libc::perror(std::ptr::null());
-        libc::free(keys.cast());
+        drop(Vec::from_raw_parts(keys, max * kl, max * kl));
         return -1;
     }
 
@@ -503,8 +479,10 @@ pub unsafe fn test_test_khash_c_137_test_str2int(
     while i < max {
         if test_test_khash_c_86_add_str2int_entry(h, keys.add(i * kl), i as khint_t) != 0 {
             kh_destroy_str2int(h);
-            libc::free(keys.cast());
-            libc::free(flags.cast());
+            drop(Vec::from_raw_parts(keys, max * kl, max * kl));
+            if !flags.is_null() {
+                drop(Vec::from_raw_parts(flags, max, max));
+            }
             return -1;
         }
         i += 1;
@@ -515,26 +493,24 @@ pub unsafe fn test_test_khash_c_137_test_str2int(
     while i < max {
         if test_test_khash_c_98_check_str2int_entry(h, keys.add(i * kl), i as khint_t, 0) != 0 {
             kh_destroy_str2int(h);
-            libc::free(keys.cast());
-            libc::free(flags.cast());
+            drop(Vec::from_raw_parts(keys, max * kl, max * kl));
+            if !flags.is_null() {
+                drop(Vec::from_raw_parts(flags, max, max));
+            }
             return -1;
         }
         i += 1;
     }
 
     if show_stats != 0 {
-        libc::printf(c"Initial fill:\n".as_ptr());
+        println!("Initial fill:");
         test_test_khash_c_50_write_stats_str2int(h);
     }
 
     // Delete a random selection
-    flags = libc::calloc(max, std::mem::size_of::<u8>()).cast::<u8>();
-    if flags.is_null() {
-        libc::perror(c"".as_ptr());
-        kh_destroy_str2int(h);
-        libc::free(keys.cast());
-        return -1;
-    }
+    let mut flags_vec: Vec<u8> = vec![0; max];
+    flags = flags_vec.as_mut_ptr();
+    std::mem::forget(flags_vec);
 
     mask = kroundup_size_t(mask);
     mask -= 1;
@@ -555,8 +531,10 @@ pub unsafe fn test_test_khash_c_137_test_str2int(
         }
         if test_test_khash_c_127_del_str2int_entry(h, keys.add(victim * kl)) != 0 {
             kh_destroy_str2int(h);
-            libc::free(keys.cast());
-            libc::free(flags.cast());
+            drop(Vec::from_raw_parts(keys, max * kl, max * kl));
+            if !flags.is_null() {
+                drop(Vec::from_raw_parts(flags, max, max));
+            }
             return -1;
         }
         *flags.add(victim) = 1;
@@ -574,15 +552,17 @@ pub unsafe fn test_test_khash_c_137_test_str2int(
         ) != 0
         {
             kh_destroy_str2int(h);
-            libc::free(keys.cast());
-            libc::free(flags.cast());
+            drop(Vec::from_raw_parts(keys, max * kl, max * kl));
+            if !flags.is_null() {
+                drop(Vec::from_raw_parts(flags, max, max));
+            }
             return -1;
         }
         i += 1;
     }
 
     if show_stats != 0 {
-        libc::printf(c"\nAfter deletion:\n".as_ptr());
+        println!("\nAfter deletion:");
         test_test_khash_c_50_write_stats_str2int(h);
     }
 
@@ -593,8 +573,10 @@ pub unsafe fn test_test_khash_c_137_test_str2int(
             && test_test_khash_c_86_add_str2int_entry(h, keys.add(i * kl), i as khint_t) != 0
         {
             kh_destroy_str2int(h);
-            libc::free(keys.cast());
-            libc::free(flags.cast());
+            drop(Vec::from_raw_parts(keys, max * kl, max * kl));
+            if !flags.is_null() {
+                drop(Vec::from_raw_parts(flags, max, max));
+            }
             return -1;
         }
         i += 1;
@@ -605,32 +587,34 @@ pub unsafe fn test_test_khash_c_137_test_str2int(
     while i < max {
         if test_test_khash_c_98_check_str2int_entry(h, keys.add(i * kl), i as khint_t, 0) != 0 {
             kh_destroy_str2int(h);
-            libc::free(keys.cast());
-            libc::free(flags.cast());
+            drop(Vec::from_raw_parts(keys, max * kl, max * kl));
+            if !flags.is_null() {
+                drop(Vec::from_raw_parts(flags, max, max));
+            }
             return -1;
         }
         i += 1;
     }
 
     if show_stats != 0 {
-        libc::printf(c"\nAfter re-insert:\n".as_ptr());
+        println!("\nAfter re-insert:");
         test_test_khash_c_50_write_stats_str2int(h);
     }
 
     kh_destroy_str2int(h);
-    libc::free(keys.cast());
-    libc::free(flags.cast());
+    drop(Vec::from_raw_parts(keys, max * kl, max * kl));
+    drop(Vec::from_raw_parts(flags, max, max));
 
     0
 }
 
 // original: read_keys (htslib/test/test_khash.c:236)
 pub unsafe fn test_test_khash_c_236_read_keys(
-    keys_file: *const c_char,
-    keys_out: *mut *mut c_char,
-    key_locations_out: *mut *mut *mut c_char,
+    keys_file: *const u8,
+    keys_out: *mut *mut u8,
+    key_locations_out: *mut *mut *mut u8,
 ) -> usize {
-    let mut in_ = libc::fopen(keys_file, c"r".as_ptr());
+    let mut in_ = libc::fopen(keys_file.cast(), c"r".as_ptr());
     let mut keys_size = 1_000_000usize;
     let mut keys_used = 0usize;
     let mut nkeys = 0usize;
@@ -645,29 +629,18 @@ pub unsafe fn test_test_khash_c_236_read_keys(
         keys_size = fileinfo.st_size as usize;
     }
 
-    let mut keys = libc::malloc(keys_size + 1).cast::<c_char>();
-    if keys.is_null() {
-        if !in_.is_null() {
-            libc::fclose(in_);
-        }
-        *keys_out = std::ptr::null_mut();
-        *key_locations_out = std::ptr::null_mut();
-        return 0;
-    }
+    let mut keys_vec: Vec<u8> = vec![0; keys_size + 1];
+    let mut keys = keys_vec.as_mut_ptr();
+    std::mem::forget(keys_vec);
 
     loop {
         let mut avail = keys_size - keys_used;
         if avail == 0 {
             let new_size = keys_size + 1_000_000;
-            let new_keys = libc::realloc(keys.cast(), new_size + 1).cast::<c_char>();
-            if new_keys.is_null() {
-                libc::fclose(in_);
-                libc::free(keys.cast());
-                *keys_out = std::ptr::null_mut();
-                *key_locations_out = std::ptr::null_mut();
-                return 0;
-            }
-            keys = new_keys;
+            let mut grown = Vec::from_raw_parts(keys, keys_size + 1, keys_size + 1);
+            grown.resize(new_size + 1, 0);
+            keys = grown.as_mut_ptr();
+            std::mem::forget(grown);
             keys_size = new_size;
             avail = keys_size - keys_used;
         }
@@ -681,13 +654,13 @@ pub unsafe fn test_test_khash_c_236_read_keys(
 
     if libc::ferror(in_) != 0 {
         libc::fclose(in_);
-        libc::free(keys.cast());
+        drop(Vec::from_raw_parts(keys, keys_size + 1, keys_size + 1));
         *keys_out = std::ptr::null_mut();
         *key_locations_out = std::ptr::null_mut();
         return 0;
     }
     if libc::fclose(in_) < 0 {
-        libc::free(keys.cast());
+        drop(Vec::from_raw_parts(keys, keys_size + 1, keys_size + 1));
         *keys_out = std::ptr::null_mut();
         *key_locations_out = std::ptr::null_mut();
         return 0;
@@ -698,31 +671,23 @@ pub unsafe fn test_test_khash_c_236_read_keys(
     let end = keys.add(keys_used);
     let mut key = keys;
     while !key.is_null() {
-        while *key == b'\n' as c_char {
+        while *key == b'\n' {
             key = key.add(1);
         }
         if key < end {
             nkeys += 1;
         }
-        key = libc::memchr(key.cast(), b'\n' as c_int, end.offset_from(key) as usize).cast();
+        key = libc::memchr(key.cast(), b'\n' as i32, end.offset_from(key) as usize).cast();
     }
 
-    let key_locations =
-        libc::malloc(nkeys * std::mem::size_of::<*mut c_char>()).cast::<*mut c_char>();
-    if key_locations.is_null() {
-        if !in_.is_null() {
-            libc::fclose(in_);
-        }
-        libc::free(keys.cast());
-        *keys_out = std::ptr::null_mut();
-        *key_locations_out = std::ptr::null_mut();
-        return 0;
-    }
+    let mut key_locations_vec: Vec<*mut u8> = vec![std::ptr::null_mut(); nkeys];
+    let key_locations = key_locations_vec.as_mut_ptr();
+    std::mem::forget(key_locations_vec);
 
     nkeys = 0;
     key = keys;
     while !key.is_null() {
-        while *key == b'\n' as c_char {
+        while *key == b'\n' {
             *key = 0;
             key = key.add(1);
         }
@@ -730,7 +695,7 @@ pub unsafe fn test_test_khash_c_236_read_keys(
             *key_locations.add(nkeys) = key;
             nkeys += 1;
         }
-        key = libc::memchr(key.cast(), b'\n' as c_int, end.offset_from(key) as usize).cast();
+        key = libc::memchr(key.cast(), b'\n' as i32, end.offset_from(key) as usize).cast();
     }
     *keys_out = keys;
     *key_locations_out = key_locations;
@@ -740,34 +705,32 @@ pub unsafe fn test_test_khash_c_236_read_keys(
 // original: get_time (htslib/test/test_khash.c:312)
 pub unsafe fn test_test_khash_c_312_get_time() -> i64 {
     let mut tv: libc::timeval = std::mem::zeroed();
-    if crate::htslib_rs::c_compat::gettimeofday(&mut tv, std::ptr::null_mut()) < 0 {
-        libc::perror(c"gettimeofday".as_ptr());
+    if libc::gettimeofday(&mut tv, std::ptr::null_mut()) < 0 {
+        eprintln!("gettimeofday: {}", std::io::Error::last_os_error());
         return -1;
     }
     tv.tv_sec as i64 * 1_000_000 + tv.tv_usec as i64
 }
 
 // original: fmt_time (htslib/test/test_khash.c:330)
-pub unsafe fn test_test_khash_c_330_fmt_time(elapsed: i64) -> *mut c_char {
-    static mut BUF: [c_char; 64] = [0; 64];
+pub unsafe fn test_test_khash_c_330_fmt_time(elapsed: i64) -> *mut u8 {
+    static mut BUF: [u8; 64] = [0; 64];
     let sec = elapsed / 1_000_000;
     let usec = elapsed % 1_000_000;
-    libc::snprintf(
-        std::ptr::addr_of_mut!(BUF).cast::<c_char>(),
-        64,
-        c"%lld.%06lld wall-time seconds".as_ptr(),
-        sec,
-        usec,
-    );
-    std::ptr::addr_of_mut!(BUF).cast::<c_char>()
+    let s = format!("{}.{:06} wall-time seconds", sec, usec);
+    let n = s.len().min(63);
+    let buf = std::ptr::addr_of_mut!(BUF).cast::<u8>();
+    std::slice::from_raw_parts_mut(buf, n).copy_from_slice(&s.as_bytes()[..n]);
+    *buf.add(n) = 0;
+    buf
 }
 
 // original: benchmark (htslib/test/test_khash.c:344)
-pub unsafe fn test_test_khash_c_344_benchmark(keys_file: *const c_char) -> c_int {
+pub unsafe fn test_test_khash_c_344_benchmark(keys_file: *const u8) -> i32 {
     let kl = 16;
     let mut max = 50_000_000usize;
-    let mut keys: *mut c_char = std::ptr::null_mut();
-    let mut key_locations: *mut *mut c_char = std::ptr::null_mut();
+    let mut keys: *mut u8 = std::ptr::null_mut();
+    let mut key_locations: *mut *mut u8 = std::ptr::null_mut();
 
     if !keys_file.is_null() {
         max = test_test_khash_c_236_read_keys(keys_file, &mut keys, &mut key_locations);
@@ -781,14 +744,14 @@ pub unsafe fn test_test_khash_c_344_benchmark(keys_file: *const c_char) -> c_int
 
     let h = kh_init_str2int();
     if h.is_null() {
-        libc::free(keys.cast());
+        drop(Vec::from_raw_parts(keys, max * kl, max * kl));
         return -1;
     }
 
     let mut start = test_test_khash_c_312_get_time();
     if start < 0 {
         kh_destroy_str2int(h);
-        libc::free(keys.cast());
+        drop(Vec::from_raw_parts(keys, max * kl, max * kl));
         return -1;
     }
 
@@ -798,17 +761,16 @@ pub unsafe fn test_test_khash_c_344_benchmark(keys_file: *const c_char) -> c_int
             let mut ret = 0;
             let k = kh_put_str2int(h, *key_locations.add(i), &mut ret);
             if ret < 0 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Unexpected return from kh_put(%s) : %d\n".as_ptr(),
-                    *key_locations.add(i),
+                eprintln!(
+                    "Unexpected return from kh_put({}) : {}",
+                    String::from_utf8_lossy(std::ffi::CStr::from_ptr((*key_locations.add(i)).cast()).to_bytes()),
                     ret,
                 );
                 kh_destroy_str2int(h);
-                libc::free(keys.cast());
+                drop(Vec::from_raw_parts(keys, max * kl, max * kl));
                 return -1;
             }
-            *(*h).vals.add(k as usize) = i as c_int;
+            *(*h).vals.add(k as usize) = i as i32;
             i += 1;
         }
     } else {
@@ -816,17 +778,16 @@ pub unsafe fn test_test_khash_c_344_benchmark(keys_file: *const c_char) -> c_int
             let mut ret = 0;
             let k = kh_put_str2int(h, keys.add(i * kl), &mut ret);
             if ret <= 0 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Unexpected return from kh_put(%s) : %d\n".as_ptr(),
-                    keys.add(i * kl),
+                eprintln!(
+                    "Unexpected return from kh_put({}) : {}",
+                    String::from_utf8_lossy(std::ffi::CStr::from_ptr(keys.add(i * kl).cast()).to_bytes()),
                     ret,
                 );
                 kh_destroy_str2int(h);
-                libc::free(keys.cast());
+                drop(Vec::from_raw_parts(keys, max * kl, max * kl));
                 return -1;
             }
-            *(*h).vals.add(k as usize) = i as c_int;
+            *(*h).vals.add(k as usize) = i as i32;
             i += 1;
         }
     }
@@ -834,20 +795,20 @@ pub unsafe fn test_test_khash_c_344_benchmark(keys_file: *const c_char) -> c_int
     let mut end = test_test_khash_c_312_get_time();
     if end < 0 {
         kh_destroy_str2int(h);
-        libc::free(keys.cast());
+        drop(Vec::from_raw_parts(keys, max * kl, max * kl));
         return -1;
     }
 
-    libc::printf(
-        c"Insert %zu %s\n".as_ptr(),
+    println!(
+        "Insert {} {}",
         max,
-        test_test_khash_c_330_fmt_time(end - start),
+        String::from_utf8_lossy(std::ffi::CStr::from_ptr(test_test_khash_c_330_fmt_time(end - start).cast()).to_bytes()),
     );
 
     start = test_test_khash_c_312_get_time();
     if start < 0 {
         kh_destroy_str2int(h);
-        libc::free(keys.cast());
+        drop(Vec::from_raw_parts(keys, max * kl, max * kl));
         return -1;
     }
 
@@ -856,13 +817,12 @@ pub unsafe fn test_test_khash_c_344_benchmark(keys_file: *const c_char) -> c_int
         while i < max {
             let k = kh_get_str2int(h, *key_locations.add(i));
             if k >= (*h).n_buckets {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Couldn't find %s in hash table\n".as_ptr(),
-                    *key_locations.add(i),
+                eprintln!(
+                    "Couldn't find {} in hash table",
+                    String::from_utf8_lossy(std::ffi::CStr::from_ptr((*key_locations.add(i)).cast()).to_bytes()),
                 );
                 kh_destroy_str2int(h);
-                libc::free(keys.cast());
+                drop(Vec::from_raw_parts(keys, max * kl, max * kl));
                 return -1;
             }
             i += 1;
@@ -871,13 +831,12 @@ pub unsafe fn test_test_khash_c_344_benchmark(keys_file: *const c_char) -> c_int
         while i < max {
             let k = kh_get_str2int(h, keys.add(i * kl));
             if k >= (*h).n_buckets {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Couldn't find %s in hash table\n".as_ptr(),
-                    keys.add(i * kl),
+                eprintln!(
+                    "Couldn't find {} in hash table",
+                    String::from_utf8_lossy(std::ffi::CStr::from_ptr(keys.add(i * kl).cast()).to_bytes()),
                 );
                 kh_destroy_str2int(h);
-                libc::free(keys.cast());
+                drop(Vec::from_raw_parts(keys, max * kl, max * kl));
                 return -1;
             }
             i += 1;
@@ -887,97 +846,93 @@ pub unsafe fn test_test_khash_c_344_benchmark(keys_file: *const c_char) -> c_int
     end = test_test_khash_c_312_get_time();
     if end < 0 {
         kh_destroy_str2int(h);
-        libc::free(keys.cast());
+        drop(Vec::from_raw_parts(keys, max * kl, max * kl));
         return -1;
     }
 
-    libc::printf(
-        c"Lookup %zu %s\n".as_ptr(),
+    println!(
+        "Lookup {} {}",
         max,
-        test_test_khash_c_330_fmt_time(end - start),
+        String::from_utf8_lossy(std::ffi::CStr::from_ptr(test_test_khash_c_330_fmt_time(end - start).cast()).to_bytes()),
     );
 
     test_test_khash_c_50_write_stats_str2int(h);
 
     kh_destroy_str2int(h);
-    libc::free(keys.cast());
-    libc::free(key_locations.cast());
+    drop(Vec::from_raw_parts(keys, max * kl, max * kl));
+    if !key_locations.is_null() {
+        drop(Vec::from_raw_parts(key_locations, max, max));
+    }
 
     0
 }
 
 // original: show_usage (htslib/test/test_khash.c:437)
-pub unsafe fn test_test_khash_c_437_show_usage(out: *mut libc::FILE, prog: *mut c_char) {
-    libc::fprintf(out, c"Usage : %s [-t <test>] [-i <file>]\n".as_ptr(), prog);
-    libc::fprintf(out, c" Options:\n".as_ptr());
-    libc::fprintf(
-        out,
-        c"  -t <TEST>   Test to run (str2int, benchmark)\n".as_ptr(),
-    );
-    libc::fprintf(
-        out,
-        c"  -i <FILE>   Optional input file for benchmark\n".as_ptr(),
-    );
-    libc::fprintf(out, c"  -n <INT>    Number of items to add\n".as_ptr());
-    libc::fprintf(
-        out,
-        c"  -f <FRAC>   Fraction to delete and re-insert\n".as_ptr(),
-    );
-    libc::fprintf(out, c"  -d          Dump hash table stats\n".as_ptr());
-    libc::fprintf(out, c"  -h          Show this help\n".as_ptr());
+pub unsafe fn test_test_khash_c_437_show_usage(to_stderr: bool, prog: *const u8) {
+    let prog = String::from_utf8_lossy(std::ffi::CStr::from_ptr(prog.cast()).to_bytes()).into_owned();
+    let lines = [
+        format!("Usage : {} [-t <test>] [-i <file>]", prog),
+        " Options:".to_string(),
+        "  -t <TEST>   Test to run (str2int, benchmark)".to_string(),
+        "  -i <FILE>   Optional input file for benchmark".to_string(),
+        "  -n <INT>    Number of items to add".to_string(),
+        "  -f <FRAC>   Fraction to delete and re-insert".to_string(),
+        "  -d          Dump hash table stats".to_string(),
+        "  -h          Show this help".to_string(),
+    ];
+    for line in lines {
+        if to_stderr {
+            eprintln!("{}", line);
+        } else {
+            println!("{}", line);
+        }
+    }
 }
 
 // original: main (htslib/test/test_khash.c:448)
-pub unsafe fn test_test_khash_c_448_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_test_khash_c_448_main(argc: i32, argv: *mut *mut u8) -> i32 {
     let mut res = libc::EXIT_SUCCESS;
-    let mut test: *mut c_char = std::ptr::null_mut();
-    let mut input_file: *mut c_char = std::ptr::null_mut();
+    let mut test: *mut u8 = std::ptr::null_mut();
+    let mut input_file: *mut u8 = std::ptr::null_mut();
     let mut max = 1000usize;
     let mut del_frac = 0.25f64;
     let mut show_stats = 0;
 
     loop {
-        let opt = libc::getopt(argc, argv, c"df:hi:n:t:".as_ptr());
+        let opt = libc::getopt(argc, argv.cast(), c"df:hi:n:t:".as_ptr());
         if opt == -1 {
             break;
         }
         match opt {
-            c if c == b'd' as c_int => show_stats = 1,
-            c if c == b'f' as c_int => {
+            c if c == b'd' as i32 => show_stats = 1,
+            c if c == b'f' as i32 => {
                 del_frac = libc::strtod(optarg, std::ptr::null_mut());
                 if !(0.0..=1.0).contains(&del_frac) {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Error: -d must be between 0.0 and 1.0\n".as_ptr(),
-                    );
+                    eprintln!("Error: -d must be between 0.0 and 1.0");
                     return libc::EXIT_FAILURE;
                 }
             }
-            c if c == b'h' as c_int => {
-                test_test_khash_c_437_show_usage(crate::htslib_rs::c_compat::stdout.cast(), *argv);
+            c if c == b'h' as i32 => {
+                test_test_khash_c_437_show_usage(false, (*argv).cast_const());
                 return libc::EXIT_SUCCESS;
             }
-            c if c == b'i' as c_int => input_file = optarg,
-            c if c == b'n' as c_int => {
+            c if c == b'i' as i32 => input_file = optarg.cast(),
+            c if c == b'n' as i32 => {
                 max = libc::strtoul(optarg, std::ptr::null_mut(), 0) as usize;
                 if !(1..=MAX_ENTRIES).contains(&max) {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Error: -n must be between 1 and %u\n".as_ptr(),
-                        MAX_ENTRIES as c_int,
-                    );
+                    eprintln!("Error: -n must be between 1 and {}", MAX_ENTRIES);
                     return libc::EXIT_FAILURE;
                 }
             }
-            c if c == b't' as c_int => test = optarg,
+            c if c == b't' as i32 => test = optarg.cast(),
             _ => {
-                test_test_khash_c_437_show_usage(crate::htslib_rs::c_compat::stderr.cast(), *argv);
+                test_test_khash_c_437_show_usage(true, (*argv).cast_const());
                 return libc::EXIT_FAILURE;
             }
         }
     }
 
-    if (test.is_null() || libc::strcmp(test, c"str2int".as_ptr()) == 0)
+    if (test.is_null() || libc::strcmp(test.cast(), c"str2int".as_ptr()) == 0)
         && test_test_khash_c_137_test_str2int(max, (max as f64 * del_frac) as usize, show_stats)
             != 0
     {
@@ -985,8 +940,8 @@ pub unsafe fn test_test_khash_c_448_main(argc: c_int, argv: *mut *mut c_char) ->
     }
 
     if !test.is_null()
-        && libc::strcmp(test, c"benchmark".as_ptr()) == 0
-        && test_test_khash_c_344_benchmark(input_file) != 0
+        && libc::strcmp(test.cast(), c"benchmark".as_ptr()) == 0
+        && test_test_khash_c_344_benchmark(input_file.cast_const()) != 0
     {
         res = libc::EXIT_FAILURE;
     }
@@ -995,25 +950,24 @@ pub unsafe fn test_test_khash_c_448_main(argc: c_int, argv: *mut *mut c_char) ->
 }
 
 unsafe extern "C" {
-    static mut optarg: *mut c_char;
-    static mut optind: c_int;
+    static mut optarg: *mut std::ffi::c_char;
+    static mut optind: i32;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
     use std::fs;
 
-    unsafe fn run_main(args: &[CString]) -> c_int {
+    unsafe fn run_main(args: &[Vec<u8>]) -> i32 {
         // NOTE: callers must already hold `ORIGINAL_MAIN_LOCK` (see
         // src/test/mod.rs) — this manipulates the libc getopt globals.
         let mut argv = args
             .iter()
             .map(|arg| arg.as_ptr().cast_mut())
-            .collect::<Vec<_>>();
+            .collect::<Vec<*mut u8>>();
         optind = 0;
-        test_test_khash_c_448_main(argv.len() as c_int, argv.as_mut_ptr())
+        test_test_khash_c_448_main(argv.len() as i32, argv.as_mut_ptr())
     }
 
     #[test]
@@ -1025,13 +979,13 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         unsafe {
             let argv = [
-                CString::new("test_khash").unwrap(),
-                CString::new("-t").unwrap(),
-                CString::new("str2int").unwrap(),
-                CString::new("-n").unwrap(),
-                CString::new("1").unwrap(),
-                CString::new("-f").unwrap(),
-                CString::new("0.0").unwrap(),
+                b"test_khash\0".to_vec(),
+                b"-t\0".to_vec(),
+                b"str2int\0".to_vec(),
+                b"-n\0".to_vec(),
+                b"1\0".to_vec(),
+                b"-f\0".to_vec(),
+                b"0.0\0".to_vec(),
             ];
             assert_eq!(run_main(&argv), libc::EXIT_SUCCESS);
         }
@@ -1046,11 +1000,11 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         unsafe {
             let argv = [
-                CString::new("test_khash").unwrap(),
-                CString::new("-t").unwrap(),
-                CString::new("str2int").unwrap(),
-                CString::new("-n").unwrap(),
-                CString::new("0").unwrap(),
+                b"test_khash\0".to_vec(),
+                b"-t\0".to_vec(),
+                b"str2int\0".to_vec(),
+                b"-n\0".to_vec(),
+                b"0\0".to_vec(),
             ];
             assert_eq!(run_main(&argv), libc::EXIT_FAILURE);
         }
@@ -1084,7 +1038,8 @@ mod tests {
             b"alpha\nbeta\ngamma\nalpha\ndelta\nbucket-collision-candidate\n",
         )
         .unwrap();
-        let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        let mut path_c = path.to_string_lossy().as_bytes().to_vec();
+        path_c.push(0);
 
         unsafe {
             assert_eq!(test_test_khash_c_344_benchmark(path_c.as_ptr()), 0);

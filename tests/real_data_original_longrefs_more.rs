@@ -5,11 +5,13 @@ use htslib_rs::{
     sam_hdr_destroy, sam_hdr_length, sam_hdr_read, sam_hdr_str, sam_hdr_write, sam_index_build3,
     sam_index_load2, sam_itr_next, sam_itr_querys, sam_read1, vcf_format, vcf_hdr_read,
 };
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 unsafe fn kstring_text(ks: &kstring_t) -> String {
@@ -48,15 +50,16 @@ unsafe fn append_formatted_record(
 
 unsafe fn build_longref_bgzf_sam_with_csi(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     let in_path = c_fixture("htslib/test/longrefs/longref.sam");
-    let in_fp = hts_open(in_path.as_ptr(), c"r".as_ptr());
+    let in_fp = hts_open(in_path.as_ptr().cast(), c"r".as_ptr());
     assert!(!in_fp.is_null(), "failed to open longref.sam");
     let hdr = sam_hdr_read(in_fp);
     assert!(!hdr.is_null());
 
     let out_path = temp_longrefs_path(name);
     let out_index_path = std::path::PathBuf::from(format!("{}.csi", out_path.display()));
-    let out_path_c = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
-    let out_fp = hts_open(out_path_c.as_ptr(), c"wz".as_ptr());
+    let mut out_path_c = out_path.to_string_lossy().into_owned().into_bytes();
+    out_path_c.push(0);
+    let out_fp = hts_open(out_path_c.as_ptr().cast(), c"wz".as_ptr());
     assert!(!out_fp.is_null(), "failed to open temp BGZF SAM output");
     assert_eq!(sam_hdr_write(out_fp, hdr), 0);
 
@@ -76,9 +79,10 @@ unsafe fn build_longref_bgzf_sam_with_csi(name: &str) -> (std::path::PathBuf, st
     assert_eq!(hts_close(in_fp), 0);
     assert_eq!(hts_close(out_fp), 0);
 
-    let out_index_path_c = CString::new(out_index_path.to_string_lossy().as_bytes()).unwrap();
+    let mut out_index_path_c = out_index_path.to_string_lossy().into_owned().into_bytes();
+    out_index_path_c.push(0);
     assert_eq!(
-        sam_index_build3(out_path_c.as_ptr(), out_index_path_c.as_ptr(), 14, 0),
+        sam_index_build3(out_path_c.as_ptr().cast(), out_index_path_c.as_ptr().cast(), 14, 0),
         0
     );
     (out_path, out_index_path)
@@ -88,23 +92,25 @@ unsafe fn render_longref_single_region(
     path: &std::path::Path,
     index_path: &std::path::Path,
 ) -> String {
-    render_longref_region(path, index_path, c"CHROMOSOME_I:10000000000-10000000003")
+    render_longref_region(path, index_path, b"CHROMOSOME_I:10000000000-10000000003\0")
 }
 
 unsafe fn render_longref_region(
     path: &std::path::Path,
     index_path: &std::path::Path,
-    region: &CStr,
+    region: &[u8],
 ) -> String {
-    let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
-    let index_path_c = CString::new(index_path.to_string_lossy().as_bytes()).unwrap();
-    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+    let mut path_c = path.to_string_lossy().into_owned().into_bytes();
+    path_c.push(0);
+    let mut index_path_c = index_path.to_string_lossy().into_owned().into_bytes();
+    index_path_c.push(0);
+    let fp = hts_open(path_c.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null(), "failed to open temp BGZF SAM input");
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
-    let idx = sam_index_load2(fp, path_c.as_ptr(), index_path_c.as_ptr());
+    let idx = sam_index_load2(fp, path_c.as_ptr().cast(), index_path_c.as_ptr().cast());
     assert!(!idx.is_null());
-    let iter = sam_itr_querys(idx, hdr, region.as_ptr());
+    let iter = sam_itr_querys(idx, hdr, region.as_ptr().cast());
     assert!(!iter.is_null());
     let rec = bam_init1();
     assert!(!rec.is_null());
@@ -133,21 +139,23 @@ unsafe fn render_longref_multi_region(
     path: &std::path::Path,
     index_path: &std::path::Path,
 ) -> String {
-    let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
-    let index_path_c = CString::new(index_path.to_string_lossy().as_bytes()).unwrap();
-    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+    let mut path_c = path.to_string_lossy().into_owned().into_bytes();
+    path_c.push(0);
+    let mut index_path_c = index_path.to_string_lossy().into_owned().into_bytes();
+    index_path_c.push(0);
+    let fp = hts_open(path_c.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null(), "failed to open temp BGZF SAM input");
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
-    let idx = sam_index_load2(fp, path_c.as_ptr(), index_path_c.as_ptr());
+    let idx = sam_index_load2(fp, path_c.as_ptr().cast(), index_path_c.as_ptr().cast());
     assert!(!idx.is_null());
     let mut regions = [
-        CString::new("CHROMOSOME_I:10000000000-10000000003").unwrap(),
-        CString::new("CHROMOSOME_I:10000000100-10000000110").unwrap(),
+        b"CHROMOSOME_I:10000000000-10000000003\0".to_vec(),
+        b"CHROMOSOME_I:10000000100-10000000110\0".to_vec(),
     ];
     let mut region_ptrs = regions
         .iter_mut()
-        .map(|region| region.as_ptr().cast_mut())
+        .map(|region| region.as_mut_ptr().cast())
         .collect::<Vec<_>>();
     let iter = sam_c_1768_sam_itr_regarray(idx, hdr, region_ptrs.as_mut_ptr(), 2);
     assert!(!iter.is_null());
@@ -181,8 +189,12 @@ fn remove_temp_longrefs(path: &std::path::Path, index_path: &std::path::Path) {
 
 unsafe fn formatted_vcf_records(path: &str) -> Vec<String> {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), c"r".as_ptr());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path)
+    );
 
     let hdr = vcf_hdr_read(fp);
     assert!(!hdr.is_null());
@@ -208,14 +220,18 @@ unsafe fn formatted_vcf_records(path: &str) -> Vec<String> {
 fn longrefs_vcf_header_keeps_original_large_contig_and_record_count() {
     unsafe {
         let path = c_fixture("htslib/test/longrefs/index.vcf");
-        let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-        assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+        let fp = hts_open(path.as_ptr().cast(), c"r".as_ptr());
+        assert!(
+            !fp.is_null(),
+            "failed to open {}",
+            String::from_utf8_lossy(&path)
+        );
 
         let hdr = vcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(CStr::from_ptr(bcf_hdr_get_version(hdr)), c"VCFv4.2");
-        assert_eq!(bcf_hdr_name2id(hdr, c"1".as_ptr()), 0);
-        assert_eq!(CStr::from_ptr(bcf_hdr_id2name(hdr, 0)), c"1");
+        assert_eq!(CStr::from_ptr(bcf_hdr_get_version(hdr)).to_bytes(), b"VCFv4.2");
+        assert_eq!(bcf_hdr_name2id(hdr, b"1\0".as_ptr().cast()), 0);
+        assert_eq!(CStr::from_ptr(bcf_hdr_id2name(hdr, 0)).to_bytes(), b"1");
 
         let rec = bcf_init();
         assert!(!rec.is_null());
@@ -275,8 +291,11 @@ fn longrefs_sam_single_region_iterator_matches_original_expected_output_exactly(
 fn longrefs_sam_empty_region_iterator_returns_header_only() {
     unsafe {
         let (path, index_path) = build_longref_bgzf_sam_with_csi("empty");
-        let actual =
-            render_longref_region(&path, &index_path, c"CHROMOSOME_I:10000900000-10000900100");
+        let actual = render_longref_region(
+            &path,
+            &index_path,
+            b"CHROMOSOME_I:10000900000-10000900100\0",
+        );
         remove_temp_longrefs(&path, &index_path);
         assert_eq!(actual, "@SQ\tSN:CHROMOSOME_I\tLN:10001009800\n");
     }

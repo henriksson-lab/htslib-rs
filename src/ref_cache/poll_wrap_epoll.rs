@@ -1,8 +1,6 @@
-use std::ffi::c_int;
-
 use super::poll_wrap::{Pw_fd_type, Pw_item};
 
-const INIT_EPOLL_SIZE: c_int = 128;
+const INIT_EPOLL_SIZE: i32 = 128;
 
 // original: Pw_events (htslib/ref_cache/poll_wrap.h:53)
 pub type Pw_events = libc::epoll_event;
@@ -17,7 +15,7 @@ pub type Pw_events = libc::epoll_event;
 pub struct Poll_wrap {
     items: Vec<Option<Pw_item>>,
     free: Vec<usize>,
-    epfd: c_int,
+    epfd: i32,
     debug: bool,
 }
 
@@ -61,7 +59,7 @@ impl Poll_wrap {
 // the handle to refer to it later (mod/remove/wait).
 pub fn ref_cache_poll_wrap_epoll_c_78_pw_register(
     pw: &mut Poll_wrap,
-    fd: c_int,
+    fd: i32,
     fd_type: Pw_fd_type,
     init_events: u32,
     userp: usize,
@@ -71,7 +69,7 @@ pub fn ref_cache_poll_wrap_epoll_c_78_pw_register(
             "pw_register({:p}, {}, {}, 0x{:04x}, {})",
             pw as *const Poll_wrap,
             fd,
-            fd_type as c_int,
+            fd_type as i32,
             init_events,
             userp,
         );
@@ -108,7 +106,7 @@ pub fn ref_cache_poll_wrap_epoll_c_106_pw_mod(
     pw: &mut Poll_wrap,
     item: usize,
     events: u32,
-) -> c_int {
+) -> i32 {
     let Some(fd) = pw.items.get(item).and_then(|i| i.as_ref()).map(|i| i.fd) else {
         return -1;
     };
@@ -128,13 +126,13 @@ pub fn ref_cache_poll_wrap_epoll_c_106_pw_mod(
 pub fn ref_cache_poll_wrap_epoll_c_120_pw_wait(
     pw: &mut Poll_wrap,
     events: &mut [Pw_events],
-    timeout: c_int,
-) -> c_int {
+    timeout: i32,
+) -> i32 {
     unsafe {
         libc::epoll_wait(
             pw.epfd,
             events.as_mut_ptr(),
-            events.len() as c_int,
+            events.len() as i32,
             timeout,
         )
     }
@@ -145,7 +143,7 @@ pub fn ref_cache_poll_wrap_epoll_c_126_pw_remove(
     pw: &mut Poll_wrap,
     item: usize,
     do_close: bool,
-) -> c_int {
+) -> i32 {
     let Some(fd) = pw.items.get(item).and_then(|i| i.as_ref()).map(|i| i.fd) else {
         return -1;
     };

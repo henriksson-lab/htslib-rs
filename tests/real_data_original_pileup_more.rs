@@ -6,8 +6,7 @@ use htslib_rs::{
     sam_hdr_read, sam_hdr_t, sam_hdr_tid2name, sam_read1, BAM_FDUP, BAM_FQCFAIL, BAM_FREVERSE,
     BAM_FSECONDARY, BAM_FUNMAP,
 };
-use std::ffi::{CStr, CString};
-use std::os::raw::{c_int, c_void};
+use std::ffi::CStr;
 
 const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
 
@@ -15,8 +14,10 @@ fn fixture(path: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
 }
 
-fn c_fixture(path: &str) -> CString {
-    CString::new(fixture(path).to_string_lossy().as_bytes()).unwrap()
+fn c_fixture(path: &str) -> Vec<u8> {
+    let mut bytes = fixture(path).to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 fn expected_lines(path: &str) -> Vec<String> {
@@ -35,23 +36,26 @@ struct SamReader {
 impl SamReader {
     unsafe fn open(path: &str) -> Self {
         let path = c_fixture(path);
-        let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-        assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+        let fp = hts_open(path.as_ptr().cast(), c"r".as_ptr());
+        assert!(
+            !fp.is_null(),
+            "failed to open {}",
+            String::from_utf8_lossy(&path)
+        );
 
         let hdr = sam_hdr_read(fp);
         assert!(
             !hdr.is_null(),
             "failed to read header from {}",
-            path.to_string_lossy()
+            String::from_utf8_lossy(&path)
         );
 
         Self { fp, hdr }
     }
 
-    unsafe fn target_name(&self, tid: c_int) -> String {
-        CStr::from_ptr(sam_hdr_tid2name(&*self.hdr, tid))
-            .to_string_lossy()
-            .into_owned()
+    unsafe fn target_name(&self, tid: i32) -> String {
+        let name: &[u8] = CStr::from_ptr(sam_hdr_tid2name(&*self.hdr, tid).cast()).to_bytes();
+        String::from_utf8_lossy(name).into_owned()
     }
 }
 
@@ -64,7 +68,7 @@ impl Drop for SamReader {
     }
 }
 
-unsafe extern "C" fn read_original_pileup_record(data: *mut c_void, rec: *mut bam1_t) -> c_int {
+unsafe extern "C" fn read_original_pileup_record(data: *mut (), rec: *mut bam1_t) -> i32 {
     let reader = &mut *(data.cast::<SamReader>());
 
     loop {
@@ -72,18 +76,17 @@ unsafe extern "C" fn read_original_pileup_record(data: *mut c_void, rec: *mut ba
         if ret < 0 {
             return ret;
         }
-        if ((*rec).core.flag as c_int & (BAM_FUNMAP | BAM_FSECONDARY | BAM_FQCFAIL | BAM_FDUP)) == 0
-        {
+        if ((*rec).core.flag as i32 & (BAM_FUNMAP | BAM_FSECONDARY | BAM_FQCFAIL | BAM_FDUP)) == 0 {
             return ret;
         }
     }
 }
 
-unsafe fn push_original_pileup_seq(out: &mut String, mut p: *const bam_pileup1_t, n: c_int) {
+unsafe fn push_original_pileup_seq(out: &mut String, mut p: *const bam_pileup1_t, n: i32) {
     let mut ks = kstring_t::default();
 
     for _ in 0..n {
-        let is_rev = ((*(*p).b).core.flag as c_int & BAM_FREVERSE) != 0;
+        let is_rev = ((*(*p).b).core.flag as i32 & BAM_FREVERSE) != 0;
 
         if bam_pileup1_is_head(p) != 0 {
             out.push('^');
@@ -137,7 +140,7 @@ unsafe fn push_original_pileup_seq(out: &mut String, mut p: *const bam_pileup1_t
     ks_free(&mut ks);
 }
 
-unsafe fn push_original_pileup_qual(out: &mut String, mut p: *const bam_pileup1_t, n: c_int) {
+unsafe fn push_original_pileup_qual(out: &mut String, mut p: *const bam_pileup1_t, n: i32) {
     for _ in 0..n {
         let qual = bam_get_qual((*p).b);
         let q = if (*p).qpos < (*(*p).b).core.l_qseq {
@@ -157,9 +160,9 @@ unsafe fn push_original_pileup_qual(out: &mut String, mut p: *const bam_pileup1_
 
 unsafe fn format_original_column(
     reader: &SamReader,
-    tid: c_int,
-    pos: c_int,
-    n: c_int,
+    tid: i32,
+    pos: i32,
+    n: i32,
     pileup: *const bam_pileup1_t,
 ) -> String {
     let mut out = format!("{}\t{}\t{}\t", reader.target_name(tid), pos + 1, n);
@@ -197,7 +200,7 @@ unsafe fn collect_plp_lines(path: &str) -> Vec<String> {
 
 unsafe fn collect_mplp_lines(path: &str) -> Vec<String> {
     let mut reader = SamReader::open(path);
-    let mut data = (&mut reader as *mut SamReader).cast::<c_void>();
+    let mut data = (&mut reader as *mut SamReader).cast::<()>();
     let iter = bam_mplp_init(1, Some(read_original_pileup_record), &mut data);
     assert!(!iter.is_null());
     assert_eq!(bam_mplp_init_overlaps(iter), 0);

@@ -4,16 +4,19 @@ use htslib_rs::{
     sam_hdr_destroy, sam_hdr_read, sam_read1, FASTQ_OPT_AUX, FASTQ_OPT_BARCODE, FASTQ_OPT_CASAVA,
     FASTQ_OPT_NAME2,
 };
-use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
-fn c_path(path: &Path) -> CString {
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+fn c_path(path: &Path) -> Vec<u8> {
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 fn optional_external_hifi_fastq() -> Option<PathBuf> {
@@ -32,26 +35,28 @@ struct FastqRecord {
 }
 
 impl FastqRecord {
-    unsafe fn from_record(rec: *const bam1_t, aux_tags: &[&'static CStr]) -> Self {
+    unsafe fn from_record(rec: *const bam1_t, aux_tags: &[&'static [u8]]) -> Self {
         Self {
-            qname: CStr::from_ptr(bam_get_qname(rec))
-                .to_string_lossy()
-                .into_owned(),
+            qname: String::from_utf8_lossy(
+                std::ffi::CStr::from_ptr(bam_get_qname(rec).cast()).to_bytes(),
+            )
+            .into_owned(),
             flag: (*rec).core.flag,
             seq: seq_string(rec),
             qual: qual_string(rec),
             aux_z: aux_tags
                 .iter()
                 .filter_map(|tag| {
-                    let aux = bam_aux_get(rec, tag.as_ptr());
+                    let aux = bam_aux_get(rec, tag.as_ptr().cast());
                     if aux.is_null() {
                         None
                     } else {
                         Some((
-                            tag.to_str().unwrap(),
-                            CStr::from_ptr(bam_aux2Z(aux))
-                                .to_string_lossy()
-                                .into_owned(),
+                            std::str::from_utf8(&tag[..tag.len() - 1]).unwrap(),
+                            String::from_utf8_lossy(
+                                std::ffi::CStr::from_ptr(bam_aux2Z(aux).cast()).to_bytes(),
+                            )
+                            .into_owned(),
                         ))
                     }
                 })
@@ -85,7 +90,7 @@ unsafe fn set_fastq_flag(fp: *mut htslib_rs::htsFile, opt: i32) {
     assert_eq!(hts_set_opt_int(fp, opt as hts_fmt_option, 1), 0);
 }
 
-unsafe fn set_fastq_string(fp: *mut htslib_rs::htsFile, opt: i32, value: Option<&CStr>) {
+unsafe fn set_fastq_string(fp: *mut htslib_rs::htsFile, opt: i32, value: Option<&[u8]>) {
     assert_eq!(
         hts_set_opt_ptr(
             fp,
@@ -99,11 +104,15 @@ unsafe fn set_fastq_string(fp: *mut htslib_rs::htsFile, opt: i32, value: Option<
 unsafe fn read_fastq_records(
     path: &str,
     configure: impl FnOnce(*mut htslib_rs::htsFile),
-    aux_tags: &[&'static CStr],
+    aux_tags: &[&'static [u8]],
 ) -> Vec<FastqRecord> {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path[..path.len() - 1])
+    );
     configure(fp);
 
     let rec = bam_init1();
@@ -123,10 +132,14 @@ unsafe fn read_fastq_records(
     records
 }
 
-unsafe fn read_sam_records(path: &str, aux_tags: &[&'static CStr]) -> Vec<FastqRecord> {
+unsafe fn read_sam_records(path: &str, aux_tags: &[&'static [u8]]) -> Vec<FastqRecord> {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path[..path.len() - 1])
+    );
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
 
@@ -159,8 +172,12 @@ struct FastqStats {
 
 unsafe fn scan_fastq_path(path: &Path) -> FastqStats {
     let path = c_path(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path[..path.len() - 1])
+    );
     let rec = bam_init1();
     assert!(!rec.is_null());
 
@@ -184,9 +201,10 @@ unsafe fn scan_fastq_path(path: &Path) -> FastqStats {
         assert!(!bam_get_qname(rec).is_null());
         if stats.qname_samples.len() < 3 {
             stats.qname_samples.push(
-                CStr::from_ptr(bam_get_qname(rec))
-                    .to_string_lossy()
-                    .into_owned(),
+                String::from_utf8_lossy(
+                    std::ffi::CStr::from_ptr(bam_get_qname(rec).cast()).to_bytes(),
+                )
+                .into_owned(),
             );
         }
 
@@ -235,7 +253,7 @@ fn reads_minimal_fastq_record_with_exact_sam_payload() {
 #[test]
 fn reads_single_fastq_aux_tags_and_exact_first_records() {
     unsafe {
-        let aux_tags = &[c"RG"];
+        let aux_tags: &[&'static [u8]] = &[b"RG\0"];
         let actual = read_fastq_records(
             "htslib/test/fastq/single.fq",
             |fp| set_fastq_string(fp, FASTQ_OPT_AUX, None),
@@ -263,7 +281,7 @@ fn reads_single_fastq_aux_tags_and_exact_first_records() {
 #[test]
 fn reads_interleaved_casava_filter_flags_and_barcode_tags() {
     unsafe {
-        let aux_tags = &[c"BC"];
+        let aux_tags: &[&'static [u8]] = &[b"BC\0"];
         let actual = read_fastq_records(
             "htslib/test/fastq/filter_casava.fq",
             |fp| set_fastq_flag(fp, FASTQ_OPT_CASAVA),
@@ -285,12 +303,12 @@ fn reads_interleaved_casava_filter_flags_and_barcode_tags() {
 #[test]
 fn reads_casava_fastq_with_custom_barcode_aux_tag() {
     unsafe {
-        let ox = CString::new("OX").unwrap();
-        let aux_tags = &[c"OX"];
+        let ox = b"OX\0";
+        let aux_tags: &[&'static [u8]] = &[b"OX\0"];
         let actual = read_fastq_records(
             "htslib/test/fastq/interleaved_casava.fq",
             |fp| {
-                set_fastq_string(fp, FASTQ_OPT_BARCODE, Some(ox.as_c_str()));
+                set_fastq_string(fp, FASTQ_OPT_BARCODE, Some(ox));
                 set_fastq_flag(fp, FASTQ_OPT_CASAVA);
             },
             aux_tags,

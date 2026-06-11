@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    ffi::{c_char, c_int, c_uint, c_ulong, c_void, CStr},
+    ffi::{c_char, c_void, CStr},
     ptr::{self, NonNull},
     slice,
     sync::OnceLock,
@@ -10,7 +10,6 @@ use std::{
 use flate2::{read::GzDecoder, Decompress, FlushDecompress, Status};
 
 use super::{
-    c_compat,
     hts::{
         ed_is_big, ed_swap_8, hts_c_2538_hts_idx_check_range, hts_idx_push, hts_idx_t, hts_pos_t,
         ks_expand, kstring_t, BGZF,
@@ -28,22 +27,22 @@ const BGZF_ERR_IO: u32 = 4;
 const BGZF_ERR_MISUSE: u32 = 8;
 const BGZF_ERR_CRC: u32 = 32;
 
-const SEEK_SET: c_int = 0;
-const Z_OK: c_int = 0;
-const Z_STREAM_END: c_int = 1;
-const Z_NEED_DICT: c_int = 2;
-const Z_ERRNO: c_int = -1;
-const Z_STREAM_ERROR: c_int = -2;
-const Z_DATA_ERROR: c_int = -3;
-const Z_MEM_ERROR: c_int = -4;
-const Z_BUF_ERROR: c_int = -5;
-const Z_VERSION_ERROR: c_int = -6;
-const Z_SYNC_FLUSH: c_int = 2;
-const Z_PARTIAL_FLUSH: c_int = 1;
-const Z_FINISH: c_int = 4;
-const Z_DEFLATED: c_int = 8;
-const Z_DEFAULT_COMPRESSION: c_int = -1;
-const Z_DEFAULT_STRATEGY: c_int = 0;
+const SEEK_SET: i32 = 0;
+const Z_OK: i32 = 0;
+const Z_STREAM_END: i32 = 1;
+const Z_NEED_DICT: i32 = 2;
+const Z_ERRNO: i32 = -1;
+const Z_STREAM_ERROR: i32 = -2;
+const Z_DATA_ERROR: i32 = -3;
+const Z_MEM_ERROR: i32 = -4;
+const Z_BUF_ERROR: i32 = -5;
+const Z_VERSION_ERROR: i32 = -6;
+const Z_SYNC_FLUSH: i32 = 2;
+const Z_PARTIAL_FLUSH: i32 = 1;
+const Z_FINISH: i32 = 4;
+const Z_DEFLATED: i32 = 8;
+const Z_DEFAULT_COMPRESSION: i32 = -1;
+const Z_DEFAULT_STRATEGY: i32 = 0;
 const EOF_BLOCK: [u8; 28] = [
     31, 139, 8, 4, 0, 0, 0, 0, 0, 255, 6, 0, 66, 67, 2, 0, 27, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
@@ -59,84 +58,84 @@ const EOF_BLOCK: [u8; 28] = [
 // `bgzf_zerr`'s callers ever assume (they print/copy synchronously, and
 // any subsequent call from the same thread overwrites it).
 thread_local! {
-    static BGZF_ZERR_BUFFER: std::cell::UnsafeCell<[c_char; 32]> =
+    static BGZF_ZERR_BUFFER: std::cell::UnsafeCell<[u8; 32]> =
         const { std::cell::UnsafeCell::new([0; 32]) };
 }
 
 #[repr(C)]
 pub(crate) struct z_stream {
     pub(crate) next_in: *mut u8,
-    pub(crate) avail_in: c_uint,
-    pub(crate) total_in: c_ulong,
+    pub(crate) avail_in: u32,
+    pub(crate) total_in: u64,
     pub(crate) next_out: *mut u8,
-    pub(crate) avail_out: c_uint,
-    pub(crate) total_out: c_ulong,
+    pub(crate) avail_out: u32,
+    pub(crate) total_out: u64,
     pub(crate) msg: *mut c_char,
     pub(crate) state: *mut c_void,
-    pub(crate) zalloc: Option<unsafe extern "C" fn(*mut c_void, c_uint, c_uint) -> *mut c_void>,
+    pub(crate) zalloc: Option<unsafe extern "C" fn(*mut c_void, u32, u32) -> *mut c_void>,
     pub(crate) zfree: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
     pub(crate) opaque: *mut c_void,
-    pub(crate) data_type: c_int,
-    pub(crate) adler: c_ulong,
-    pub(crate) reserved: c_ulong,
+    pub(crate) data_type: i32,
+    pub(crate) adler: u64,
+    pub(crate) reserved: u64,
 }
 
 pub(crate) type DeflateInit2Fn = unsafe extern "C" fn(
     strm: *mut z_stream,
-    level: c_int,
-    method: c_int,
-    window_bits: c_int,
-    mem_level: c_int,
-    strategy: c_int,
+    level: i32,
+    method: i32,
+    window_bits: i32,
+    mem_level: i32,
+    strategy: i32,
     version: *const c_char,
-    stream_size: c_int,
-) -> c_int;
-pub(crate) type DeflateFn = unsafe extern "C" fn(strm: *mut z_stream, flush: c_int) -> c_int;
-pub(crate) type DeflateEndFn = unsafe extern "C" fn(strm: *mut z_stream) -> c_int;
+    stream_size: i32,
+) -> i32;
+pub(crate) type DeflateFn = unsafe extern "C" fn(strm: *mut z_stream, flush: i32) -> i32;
+pub(crate) type DeflateEndFn = unsafe extern "C" fn(strm: *mut z_stream) -> i32;
 pub(crate) type InflateInit2Fn = unsafe extern "C" fn(
     strm: *mut z_stream,
-    window_bits: c_int,
+    window_bits: i32,
     version: *const c_char,
-    stream_size: c_int,
-) -> c_int;
-pub(crate) type InflateFn = unsafe extern "C" fn(strm: *mut z_stream, flush: c_int) -> c_int;
-pub(crate) type InflateResetFn = unsafe extern "C" fn(strm: *mut z_stream) -> c_int;
-pub(crate) type InflateEndFn = unsafe extern "C" fn(strm: *mut z_stream) -> c_int;
+    stream_size: i32,
+) -> i32;
+pub(crate) type InflateFn = unsafe extern "C" fn(strm: *mut z_stream, flush: i32) -> i32;
+pub(crate) type InflateResetFn = unsafe extern "C" fn(strm: *mut z_stream) -> i32;
+pub(crate) type InflateEndFn = unsafe extern "C" fn(strm: *mut z_stream) -> i32;
 pub(crate) type Crc32Fn =
-    unsafe extern "C" fn(crc: c_ulong, buf: *const u8, len: c_uint) -> c_ulong;
+    unsafe extern "C" fn(crc: u64, buf: *const u8, len: u32) -> u64;
 pub(crate) type ZlibVersionFn = unsafe extern "C" fn() -> *const c_char;
 
 unsafe extern "C" {
     #[link_name = "deflateInit2_"]
     fn linked_deflate_init2(
         strm: *mut z_stream,
-        level: c_int,
-        method: c_int,
-        window_bits: c_int,
-        mem_level: c_int,
-        strategy: c_int,
+        level: i32,
+        method: i32,
+        window_bits: i32,
+        mem_level: i32,
+        strategy: i32,
         version: *const c_char,
-        stream_size: c_int,
-    ) -> c_int;
+        stream_size: i32,
+    ) -> i32;
     #[link_name = "deflate"]
-    fn linked_deflate(strm: *mut z_stream, flush: c_int) -> c_int;
+    fn linked_deflate(strm: *mut z_stream, flush: i32) -> i32;
     #[link_name = "deflateEnd"]
-    fn linked_deflate_end(strm: *mut z_stream) -> c_int;
+    fn linked_deflate_end(strm: *mut z_stream) -> i32;
     #[link_name = "inflateInit2_"]
     fn linked_inflate_init2(
         strm: *mut z_stream,
-        window_bits: c_int,
+        window_bits: i32,
         version: *const c_char,
-        stream_size: c_int,
-    ) -> c_int;
+        stream_size: i32,
+    ) -> i32;
     #[link_name = "inflate"]
-    fn linked_inflate(strm: *mut z_stream, flush: c_int) -> c_int;
+    fn linked_inflate(strm: *mut z_stream, flush: i32) -> i32;
     #[link_name = "inflateReset"]
-    fn linked_inflate_reset(strm: *mut z_stream) -> c_int;
+    fn linked_inflate_reset(strm: *mut z_stream) -> i32;
     #[link_name = "inflateEnd"]
-    fn linked_inflate_end(strm: *mut z_stream) -> c_int;
+    fn linked_inflate_end(strm: *mut z_stream) -> i32;
     #[link_name = "crc32"]
-    fn linked_crc32(crc: c_ulong, buf: *const u8, len: c_uint) -> c_ulong;
+    fn linked_crc32(crc: u64, buf: *const u8, len: u32) -> u64;
     #[link_name = "zlibVersion"]
     fn linked_zlib_version() -> *const c_char;
 }
@@ -156,7 +155,7 @@ unsafe extern "C" {
 // BGZF would auto-`free()` a non-heap value).
 pub enum BgzfFp {
     None,
-    EncodedFd(c_int),
+    EncodedFd(i32),
     HFile(Box<super::hts::hFILE>),
 }
 
@@ -184,7 +183,7 @@ pub struct GzipStream {
     zs: z_stream,
 }
 
-unsafe fn gzip_stream_new_deflate(level: c_int) -> Option<NonNull<GzipStream>> {
+unsafe fn gzip_stream_new_deflate(level: i32) -> Option<NonNull<GzipStream>> {
     let mut stream = Box::new(GzipStream {
         zs: std::mem::zeroed(),
     });
@@ -254,19 +253,19 @@ pub(crate) unsafe fn system_zlib() -> Option<&'static ZlibFns> {
 #[repr(C)]
 pub struct z_stream_s {
     pub next_in: *const u8,
-    pub avail_in: c_uint,
-    pub total_in: c_ulong,
+    pub avail_in: u32,
+    pub total_in: u64,
     pub next_out: *mut u8,
-    pub avail_out: c_uint,
-    pub total_out: c_ulong,
+    pub avail_out: u32,
+    pub total_out: u64,
     pub msg: *mut c_char,
     pub state: *mut c_void,
     pub zalloc: *mut c_void,
     pub zfree: *mut c_void,
     pub opaque: *mut c_void,
-    pub data_type: c_int,
-    pub adler: c_ulong,
-    pub reserved: c_ulong,
+    pub data_type: i32,
+    pub adler: u64,
+    pub reserved: u64,
 }
 
 #[repr(C)]
@@ -277,8 +276,8 @@ pub struct bgzidx1_t {
 
 #[repr(C)]
 pub struct bgzidx_t {
-    pub noffs: c_int,
-    pub moffs: c_int,
+    pub noffs: i32,
+    pub moffs: i32,
     pub offs: *mut bgzidx1_t,
     pub ublock_addr: u64,
 }
@@ -290,9 +289,9 @@ pub struct bgzf_job {
     pub comp_len: usize,
     pub uncomp_data: [u8; BGZF_MAX_BLOCK_SIZE],
     pub uncomp_len: usize,
-    pub errcode: c_int,
+    pub errcode: i32,
     pub block_address: i64,
-    pub hit_eof: c_int,
+    pub hit_eof: i32,
 }
 
 // original: mtaux_cmd (htslib/bgzf.c:104)
@@ -312,8 +311,8 @@ pub enum mtaux_cmd {
 pub struct hts_idx_cache_entry {
     pub beg: hts_pos_t,
     pub end: hts_pos_t,
-    pub tid: c_int,
-    pub is_mapped: c_int,
+    pub tid: i32,
+    pub is_mapped: i32,
     pub offset: u64,
     pub block_number: u64,
 }
@@ -327,23 +326,23 @@ pub struct hts_idx_cache_t {
 // original: bgzf_mtaux_t (htslib/bgzf.c:125)
 pub struct bgzf_mtaux_t {
     pub curr_job: Option<Box<bgzf_job>>,
-    pub n_threads: c_int,
-    pub own_pool: c_int,
+    pub n_threads: i32,
+    pub own_pool: i32,
     pub pool: Option<NonNull<super::thread_pool::hts_tpool>>,
     pub out_queue: Option<NonNull<super::thread_pool::hts_tpool_process>>,
-    pub io_task: crate::htslib_rs::c_compat::pthread_t,
-    pub job_pool_m: crate::htslib_rs::c_compat::pthread_mutex_t,
-    pub jobs_pending: c_int,
-    pub flush_pending: c_int,
+    pub io_task: libc::pthread_t,
+    pub job_pool_m: libc::pthread_mutex_t,
+    pub jobs_pending: i32,
+    pub flush_pending: i32,
     pub free_block: Option<NonNull<c_void>>,
-    pub hit_eof: c_int,
-    pub errcode: c_int,
+    pub hit_eof: i32,
+    pub errcode: i32,
     pub block_address: u64,
-    pub eof: c_int,
-    pub command_m: crate::htslib_rs::c_compat::pthread_mutex_t,
-    pub command_c: crate::htslib_rs::c_compat::pthread_cond_t,
+    pub eof: i32,
+    pub command_m: libc::pthread_mutex_t,
+    pub command_c: libc::pthread_cond_t,
     pub command: mtaux_cmd,
-    pub idx_m: crate::htslib_rs::c_compat::pthread_mutex_t,
+    pub idx_m: libc::pthread_mutex_t,
     pub hts_idx: Option<NonNull<hts_idx_t>>,
     pub block_number: u64,
     pub block_written: u64,
@@ -385,13 +384,13 @@ pub type BgzfPrivateDataCleanupFunc = unsafe extern "C" fn(*mut c_void);
 #[derive(Default)]
 pub struct bgzf_cache_t {
     h: Option<Box<BgzfBlockCache>>,
-    pub last_pos: c_uint,
+    pub last_pos: u32,
     pub private_data: Option<NonNull<c_void>>,
     pub private_data_cleanup: Option<BgzfPrivateDataCleanupFunc>,
 }
 
 struct BgzfCachedBlock {
-    size: c_int,
+    size: i32,
     end_offset: i64,
     block: Box<[u8; BGZF_MAX_BLOCK_SIZE]>,
 }
@@ -405,12 +404,12 @@ struct BgzfBlockCache {
 pub unsafe fn bgzf_c_189_bgzf_idx_push(
     fp: *mut BGZF,
     hidx: *mut hts_idx_t,
-    tid: c_int,
+    tid: i32,
     beg: hts_pos_t,
     end: hts_pos_t,
     offset: u64,
-    is_mapped: c_int,
-) -> c_int {
+    is_mapped: i32,
+) -> i32 {
     let mt = bgzf_mt_ptr(fp);
 
     if mt.is_null() {
@@ -421,11 +420,11 @@ pub unsafe fn bgzf_c_189_bgzf_idx_push(
         return -1;
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*mt).idx_m);
+    libc::pthread_mutex_lock(&mut (*mt).idx_m);
 
     (*mt).hts_idx = NonNull::new(hidx);
     if (*mt).idx_cache.entries.try_reserve(1).is_err() {
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
+        libc::pthread_mutex_unlock(&mut (*mt).idx_m);
         return -1;
     }
     (*mt).idx_cache.entries.push(hts_idx_cache_entry {
@@ -437,7 +436,7 @@ pub unsafe fn bgzf_c_189_bgzf_idx_push(
         block_number: (*mt).block_number,
     });
 
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
+    libc::pthread_mutex_unlock(&mut (*mt).idx_m);
 
     0
 }
@@ -447,7 +446,7 @@ pub unsafe fn bgzf_c_228_bgzf_idx_flush(
     fp: *mut BGZF,
     block_uncomp_len: usize,
     block_comp_len: usize,
-) -> c_int {
+) -> i32 {
     let mt = bgzf_mt_ptr(fp);
 
     if (*mt).idx_cache.entries.is_empty() {
@@ -455,12 +454,12 @@ pub unsafe fn bgzf_c_228_bgzf_idx_flush(
         return 0;
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*mt).idx_m);
+    libc::pthread_mutex_lock(&mut (*mt).idx_m);
 
     let mut i = 0;
     {
         let entries = &(*mt).idx_cache.entries;
-        while i < entries.len() as c_int && entries[i as usize].block_number == (*mt).block_written
+        while i < entries.len() as i32 && entries[i as usize].block_number == (*mt).block_written
         {
             let entry = &entries[i as usize];
             let hts_idx = (*mt)
@@ -478,7 +477,7 @@ pub unsafe fn bgzf_c_228_bgzf_idx_flush(
                     entry.is_mapped,
                 ) < 0
                 {
-                    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
+                    libc::pthread_mutex_unlock(&mut (*mt).idx_m);
                     return -1;
                 }
                 i += 1;
@@ -494,7 +493,7 @@ pub unsafe fn bgzf_c_228_bgzf_idx_flush(
                 entry.is_mapped,
             ) < 0
             {
-                crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
+                libc::pthread_mutex_unlock(&mut (*mt).idx_m);
                 return -1;
             }
             i += 1;
@@ -504,7 +503,7 @@ pub unsafe fn bgzf_c_228_bgzf_idx_flush(
     (*mt).idx_cache.entries.drain(..i as usize);
     (*mt).block_written += 1;
 
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*mt).idx_m);
+    libc::pthread_mutex_unlock(&mut (*mt).idx_m);
 
     0
 }
@@ -644,7 +643,7 @@ unsafe fn bgzf_take_fp(fp: *mut BGZF) -> BgzfFp {
 // Close (and consume) a taken `BgzfFp`: EncodedFd => close(2); HFile => hclose
 // (which drops the owning Box); None => no-op. Returns the close result.
 #[inline]
-unsafe fn bgzf_close_fp(fp: BgzfFp) -> c_int {
+unsafe fn bgzf_close_fp(fp: BgzfFp) -> i32 {
     match fp {
         BgzfFp::None => 0,
         BgzfFp::EncodedFd(fd) => libc::close(fd),
@@ -707,7 +706,7 @@ fn add_errcode(fp: &mut BGZF, err: u32) {
     fp.bitfields |= err & 0xffff;
 }
 
-fn set_compress_level(fp: &mut BGZF, level: c_int) {
+fn set_compress_level(fp: &mut BGZF, level: i32) {
     fp.bitfields &= !(0x1ff << 20);
     fp.bitfields |= ((level as u32) & 0x1ff) << 20;
 }
@@ -725,8 +724,8 @@ pub unsafe fn packInt16(buffer: *mut u8, value: u16) {
     *buffer.add(1) = (value >> 8) as u8;
 }
 
-pub unsafe fn unpackInt16(buffer: *const u8) -> c_int {
-    *buffer.add(0) as c_int | ((*buffer.add(1) as c_int) << 8)
+pub unsafe fn unpackInt16(buffer: *const u8) -> i32 {
+    *buffer.add(0) as i32 | ((*buffer.add(1) as i32) << 8)
 }
 
 pub unsafe fn packInt32(buffer: *mut u8, value: u32) {
@@ -736,7 +735,7 @@ pub unsafe fn packInt32(buffer: *mut u8, value: u32) {
     *buffer.add(3) = (value >> 24) as u8;
 }
 
-unsafe fn bgzf_zerr_unknown(errnum: c_int) -> *const c_char {
+unsafe fn bgzf_zerr_unknown(errnum: i32) -> *const c_char {
     // Pointer into the *current thread's* BGZF_ZERR_BUFFER. The TLS slot lives
     // for the thread's lifetime, so the pointer remains valid for the rest of
     // this thread's existence; a later same-thread `bgzf_zerr` is the only
@@ -746,13 +745,13 @@ unsafe fn bgzf_zerr_unknown(errnum: c_int) -> *const c_char {
     buffer.cast()
 }
 
-pub unsafe fn bgzf_zerr(errnum: c_int, zs: *mut z_stream_s) -> *const c_char {
+pub unsafe fn bgzf_zerr(errnum: i32, zs: *mut z_stream_s) -> *const c_char {
     if !zs.is_null() && !(*zs).msg.is_null() {
         return (*zs).msg;
     }
 
     match errnum {
-        Z_ERRNO => libc::strerror(*c_compat::__errno_location()),
+        Z_ERRNO => libc::strerror(*libc::__errno_location()),
         Z_STREAM_ERROR => c"invalid parameter/compression level, or inconsistent stream state"
             .as_ptr()
             .cast(),
@@ -768,7 +767,7 @@ pub unsafe fn bgzf_zerr(errnum: c_int, zs: *mut z_stream_s) -> *const c_char {
     }
 }
 
-pub unsafe fn check_header(header: *const u8) -> c_int {
+pub unsafe fn check_header(header: *const u8) -> i32 {
     if *header.add(0) != 31 || *header.add(1) != 139 || *header.add(2) != 8 {
         return -2;
     }
@@ -808,12 +807,12 @@ pub unsafe fn hts_crc32(crc: u32, buf: *const c_void, len: usize) -> u32 {
         return crc32_update(crc, &[]);
     }
     if let Some(zlib) = system_zlib() {
-        let mut crc = crc as c_ulong;
+        let mut crc = crc as u64;
         let mut ptr = buf.cast::<u8>();
         let mut remaining = len;
         while remaining > 0 {
-            let chunk = remaining.min(c_uint::MAX as usize);
-            crc = (zlib.crc32)(crc, ptr, chunk as c_uint);
+            let chunk = remaining.min(u32::MAX as usize);
+            crc = (zlib.crc32)(crc, ptr, chunk as u32);
             ptr = ptr.add(chunk);
             remaining -= chunk;
         }
@@ -835,8 +834,8 @@ pub unsafe fn bgzf_compress(
     dlen: *mut usize,
     src: *const c_void,
     slen: usize,
-    level: c_int,
-) -> c_int {
+    level: i32,
+) -> i32 {
     let src_bytes = slice::from_raw_parts(src.cast::<u8>(), slen);
     let dst_bytes = slice::from_raw_parts_mut(dst.cast::<u8>(), *dlen);
 
@@ -852,9 +851,9 @@ pub unsafe fn bgzf_compress(
         let out_len = *dlen - BLOCK_HEADER_LENGTH - BLOCK_FOOTER_LENGTH;
         let mut zs: z_stream = std::mem::zeroed();
         zs.next_in = src.cast::<u8>().cast_mut();
-        zs.avail_in = slen as c_uint;
+        zs.avail_in = slen as u32;
         zs.next_out = dst_bytes.as_mut_ptr().add(BLOCK_HEADER_LENGTH);
-        zs.avail_out = out_len as c_uint;
+        zs.avail_out = out_len as u32;
 
         let ret = (zlib.deflate_init2)(
             &mut zs,
@@ -868,7 +867,7 @@ pub unsafe fn bgzf_compress(
             8,
             Z_DEFAULT_STRATEGY,
             (zlib.zlib_version)(),
-            std::mem::size_of::<z_stream>() as c_int,
+            std::mem::size_of::<z_stream>() as i32,
         );
         if ret != Z_OK {
             return -1;
@@ -933,8 +932,8 @@ pub unsafe fn bgzf_c_561_bgzf_compress(
     dlen: *mut usize,
     src: *const c_void,
     slen: usize,
-    level: c_int,
-) -> c_int {
+    level: i32,
+) -> i32 {
     bgzf_compress(dst, dlen, src, slen, level)
 }
 
@@ -943,8 +942,8 @@ pub unsafe fn bgzf_c_624_bgzf_compress(
     dlen: *mut usize,
     src: *const c_void,
     slen: usize,
-    level: c_int,
-) -> c_int {
+    level: i32,
+) -> i32 {
     bgzf_compress(dst, dlen, src, slen, level)
 }
 
@@ -954,17 +953,17 @@ pub unsafe fn bgzf_uncompress(
     src: *const u8,
     slen: usize,
     expected_crc: u32,
-) -> c_int {
+) -> i32 {
     let Some(zlib) = system_zlib() else {
         return -1;
     };
 
     let mut zs = z_stream {
         next_in: src.cast_mut(),
-        avail_in: slen as c_uint,
+        avail_in: slen as u32,
         total_in: 0,
         next_out: dst,
-        avail_out: *dlen as c_uint,
+        avail_out: *dlen as u32,
         total_out: 0,
         msg: ptr::null_mut(),
         state: ptr::null_mut(),
@@ -980,7 +979,7 @@ pub unsafe fn bgzf_uncompress(
         &mut zs,
         -15,
         (zlib.zlib_version)(),
-        std::mem::size_of::<z_stream>() as c_int,
+        std::mem::size_of::<z_stream>() as i32,
     ) != Z_OK
     {
         return -1;
@@ -1005,7 +1004,7 @@ pub unsafe fn bgzf_c_730_bgzf_uncompress(
     src: *const u8,
     slen: usize,
     expected_crc: u32,
-) -> c_int {
+) -> i32 {
     bgzf_uncompress(dst, dlen, src, slen, expected_crc)
 }
 
@@ -1015,7 +1014,7 @@ pub unsafe fn bgzf_c_762_bgzf_uncompress(
     src: *const u8,
     slen: usize,
     expected_crc: u32,
-) -> c_int {
+) -> i32 {
     bgzf_uncompress(dst, dlen, src, slen, expected_crc)
 }
 
@@ -1023,19 +1022,19 @@ fn mode_has(mode: &[u8], needle: u8) -> bool {
     mode.contains(&needle)
 }
 
-unsafe fn fd_read(fd: c_int, buffer: *mut c_void, nbytes: usize) -> isize {
-    crate::htslib_rs::c_compat::fd_read(fd, buffer, nbytes) as isize
+unsafe fn fd_read(fd: i32, buffer: *mut c_void, nbytes: usize) -> isize {
+    libc::read(fd, buffer, nbytes) as isize
 }
 
-unsafe fn fd_write(fd: c_int, buffer: *const c_void, nbytes: usize) -> isize {
-    crate::htslib_rs::c_compat::fd_write(fd, buffer, nbytes) as isize
+unsafe fn fd_write(fd: i32, buffer: *const c_void, nbytes: usize) -> isize {
+    libc::write(fd, buffer, nbytes) as isize
 }
 
-unsafe fn fd_seek(fd: c_int, offset: i64, whence: c_int) -> i64 {
+unsafe fn fd_seek(fd: i32, offset: i64, whence: i32) -> i64 {
     libc::lseek(fd, offset as libc::off_t, whence) as i64
 }
 
-unsafe fn fd_tell(fd: c_int) -> i64 {
+unsafe fn fd_tell(fd: i32) -> i64 {
     fd_seek(fd, 0, libc::SEEK_CUR)
 }
 
@@ -1064,7 +1063,7 @@ unsafe fn bgzf_hwrite_ptr(fp: *mut BgzfFp, buffer: *const c_void, nbytes: usize)
     }
 }
 
-unsafe fn bgzf_hseek_ptr(fp: *mut BgzfFp, offset: i64, whence: c_int) -> i64 {
+unsafe fn bgzf_hseek_ptr(fp: *mut BgzfFp, offset: i64, whence: i32) -> i64 {
     match &mut *fp {
         BgzfFp::None => -1,
         BgzfFp::EncodedFd(fd) => fd_seek(*fd, offset, whence),
@@ -1078,7 +1077,7 @@ unsafe fn bgzf_htell_ptr(fp: *mut BgzfFp) -> i64 {
     bgzf_hseek_ptr(fp, 0, libc::SEEK_CUR)
 }
 
-unsafe fn bgzf_hflush_ptr(fp: *mut BgzfFp) -> c_int {
+unsafe fn bgzf_hflush_ptr(fp: *mut BgzfFp) -> i32 {
     match &mut *fp {
         BgzfFp::None | BgzfFp::EncodedFd(_) => 0,
         BgzfFp::HFile(boxed) => super::hfile::hflush(&mut **boxed),
@@ -1098,14 +1097,14 @@ unsafe fn bgzf_hpeek_ptr(fp: *mut BgzfFp, buffer: *mut c_void, nbytes: usize) ->
     }
 }
 
-fn mode2level(mode: &[u8]) -> c_int {
+fn mode2level(mode: &[u8]) -> i32 {
     if mode_has(mode, b'u') {
         return -2;
     }
     mode.iter()
         .copied()
         .find(u8::is_ascii_digit)
-        .map(|b| (b - b'0') as c_int)
+        .map(|b| (b - b'0') as i32)
         .unwrap_or(-1)
 }
 
@@ -1138,7 +1137,7 @@ unsafe fn bgzf_block_cache(fp: &mut BGZF) -> Option<&mut BgzfBlockCache> {
 }
 
 // original: load_block_from_cache (htslib/bgzf.c:903)
-unsafe fn load_block_from_cache(fp: &mut BGZF, block_address: i64) -> c_int {
+unsafe fn load_block_from_cache(fp: &mut BGZF, block_address: i64) -> i32 {
     let Some(cache) = fp.cache.as_deref_mut() else {
         return 0;
     };
@@ -1170,16 +1169,16 @@ unsafe fn load_block_from_cache(fp: &mut BGZF, block_address: i64) -> c_int {
 }
 
 // original: load_block_from_cache (htslib/bgzf.c:918)
-pub unsafe fn bgzf_c_918_load_block_from_cache(fp: *mut BGZF, block_address: i64) -> c_int {
+pub unsafe fn bgzf_c_918_load_block_from_cache(fp: *mut BGZF, block_address: i64) -> i32 {
     load_block_from_cache(&mut *fp, block_address)
 }
 
 // original: cache_block (htslib/bgzf.c:925)
-unsafe fn cache_block(fp: &mut BGZF, compressed_size: c_int) {
-    if (*fp).cache_size <= BGZF_MAX_BLOCK_SIZE as c_int {
+unsafe fn cache_block(fp: &mut BGZF, compressed_size: i32) {
+    if (*fp).cache_size <= BGZF_MAX_BLOCK_SIZE as i32 {
         return;
     }
-    if (*fp).block_length < 0 || (*fp).block_length > BGZF_MAX_BLOCK_SIZE as c_int {
+    if (*fp).block_length < 0 || (*fp).block_length > BGZF_MAX_BLOCK_SIZE as i32 {
         return;
     }
 
@@ -1216,7 +1215,7 @@ unsafe fn cache_block(fp: &mut BGZF, compressed_size: c_int) {
             (*cache_ptr).last_pos = if h.order.is_empty() {
                 0
             } else {
-                (index % h.order.len()) as c_uint
+                (index % h.order.len()) as u32
             };
         }
     }
@@ -1235,7 +1234,7 @@ unsafe fn cache_block(fp: &mut BGZF, compressed_size: c_int) {
 }
 
 // original: cache_block (htslib/bgzf.c:940)
-pub unsafe fn bgzf_c_940_cache_block(fp: *mut BGZF, compressed_size: c_int) {
+pub unsafe fn bgzf_c_940_cache_block(fp: *mut BGZF, compressed_size: i32) {
     cache_block(&mut *fp, compressed_size)
 }
 
@@ -1246,8 +1245,8 @@ pub unsafe fn bgzf_c_686_bgzf_gzip_compress(
     dlen: *mut usize,
     src: *const c_void,
     slen: usize,
-    _level: c_int,
-) -> c_int {
+    _level: i32,
+) -> i32 {
     let Some(zlib) = system_zlib() else {
         add_errcode(&mut *fp, BGZF_ERR_ZLIB);
         return -1;
@@ -1267,9 +1266,9 @@ pub unsafe fn bgzf_c_686_bgzf_gzip_compress(
         .as_mut();
     let original_len = *dlen;
     stream.zs.next_in = src.cast::<u8>().cast_mut();
-    stream.zs.avail_in = slen as c_uint;
+    stream.zs.avail_in = slen as u32;
     stream.zs.next_out = dst.cast::<u8>();
-    stream.zs.avail_out = original_len as c_uint;
+    stream.zs.avail_out = original_len as u32;
 
     let ret = (zlib.deflate)(
         &mut stream.zs,
@@ -1287,7 +1286,7 @@ pub unsafe fn bgzf_c_686_bgzf_gzip_compress(
     0
 }
 
-unsafe fn gzip_stream_init(zs: *mut z_stream) -> c_int {
+unsafe fn gzip_stream_init(zs: *mut z_stream) -> i32 {
     let Some(zlib) = system_zlib() else {
         return Z_STREAM_ERROR;
     };
@@ -1295,11 +1294,11 @@ unsafe fn gzip_stream_init(zs: *mut z_stream) -> c_int {
         zs,
         15 + 16,
         (zlib.zlib_version)(),
-        std::mem::size_of::<z_stream>() as c_int,
+        std::mem::size_of::<z_stream>() as i32,
     )
 }
 
-unsafe fn gzip_deflate_stream_init(zs: *mut z_stream, level: c_int) -> c_int {
+unsafe fn gzip_deflate_stream_init(zs: *mut z_stream, level: i32) -> i32 {
     let Some(zlib) = system_zlib() else {
         return Z_STREAM_ERROR;
     };
@@ -1311,11 +1310,11 @@ unsafe fn gzip_deflate_stream_init(zs: *mut z_stream, level: c_int) -> c_int {
         8,
         Z_DEFAULT_STRATEGY,
         (zlib.zlib_version)(),
-        std::mem::size_of::<z_stream>() as c_int,
+        std::mem::size_of::<z_stream>() as i32,
     )
 }
 
-unsafe fn gzip_stream_reset(stream: &mut GzipStream) -> c_int {
+unsafe fn gzip_stream_reset(stream: &mut GzipStream) -> i32 {
     let Some(zlib) = system_zlib() else {
         return Z_STREAM_ERROR;
     };
@@ -1333,7 +1332,7 @@ unsafe fn gzip_stream_reset(stream: &mut GzipStream) -> c_int {
     ret
 }
 
-unsafe fn raw_inflate_stream_init(zs: *mut z_stream) -> c_int {
+unsafe fn raw_inflate_stream_init(zs: *mut z_stream) -> i32 {
     let Some(zlib) = system_zlib() else {
         return Z_STREAM_ERROR;
     };
@@ -1341,7 +1340,7 @@ unsafe fn raw_inflate_stream_init(zs: *mut z_stream) -> c_int {
         zs,
         -15,
         (zlib.zlib_version)(),
-        std::mem::size_of::<z_stream>() as c_int,
+        std::mem::size_of::<z_stream>() as i32,
     )
 }
 
@@ -1378,7 +1377,7 @@ unsafe fn bgzf_read_init_hfile(hfp: &mut BgzfFp) -> *mut BGZF {
         && (magic[3] & 4) != 0
         && &magic[12..16] == b"RAZF"
     {
-        *c_compat::__errno_location() = c_compat::ENOEXEC;
+        *libc::__errno_location() = libc::ENOEXEC;
         return ptr::null_mut();
     }
 
@@ -1399,7 +1398,7 @@ unsafe fn bgzf_read_init_hfile(hfp: &mut BgzfFp) -> *mut BGZF {
         } else {
             fp.uncompressed_block[..preloaded].copy_from_slice(&magic[..preloaded]);
         }
-        fp.block_clength = -(n as c_int);
+        fp.block_clength = -(n as i32);
     }
     set_flag(&mut fp, 17, false);
     set_flag(
@@ -1479,7 +1478,7 @@ unsafe fn bgzf_free_without_hclose(fp: *mut BGZF) {
     drop(Box::from_raw(fp));
 }
 
-fn compress_level(fp: &BGZF) -> c_int {
+fn compress_level(fp: &BGZF) -> i32 {
     let raw = ((fp.bitfields >> 20) & 0x1ff) as i32;
     if raw & 0x100 != 0 {
         raw | !0x1ff
@@ -1488,7 +1487,7 @@ fn compress_level(fp: &BGZF) -> c_int {
     }
 }
 
-unsafe fn deflate_block(fp: &mut BGZF, block_length: usize) -> c_int {
+unsafe fn deflate_block(fp: &mut BGZF, block_length: usize) -> i32 {
     let mut comp_size = BGZF_MAX_BLOCK_SIZE;
     let ret = bgzf_compress(
         (*fp).compressed_block.as_mut_ptr().cast(),
@@ -1502,10 +1501,10 @@ unsafe fn deflate_block(fp: &mut BGZF, block_length: usize) -> c_int {
         return -1;
     }
     (*fp).block_offset = 0;
-    comp_size as c_int
+    comp_size as i32
 }
 
-pub unsafe fn bgzf_flush(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_flush(fp: *mut BGZF) -> i32 {
     if !flag(&*fp, 17) {
         return 0;
     }
@@ -1547,7 +1546,7 @@ pub unsafe fn bgzf_flush(fp: *mut BGZF) -> c_int {
     0
 }
 
-unsafe fn bgzf_gzip_flush(fp: &mut BGZF, flush: c_int) -> c_int {
+unsafe fn bgzf_gzip_flush(fp: &mut BGZF, flush: i32) -> i32 {
     let Some(zlib) = system_zlib() else {
         add_errcode(&mut *fp, BGZF_ERR_ZLIB);
         return -1;
@@ -1570,11 +1569,11 @@ unsafe fn bgzf_gzip_flush(fp: &mut BGZF, flush: c_int) -> c_int {
         .expect("BGZF gzip stream is initialized")
         .as_mut();
     stream.zs.next_in = uncompressed_ptr;
-    stream.zs.avail_in = block_offset as c_uint;
+    stream.zs.avail_in = block_offset as u32;
 
     loop {
         stream.zs.next_out = compressed_ptr;
-        stream.zs.avail_out = BGZF_MAX_BLOCK_SIZE as c_uint;
+        stream.zs.avail_out = BGZF_MAX_BLOCK_SIZE as u32;
         let ret = (zlib.deflate)(&mut stream.zs, flush);
         if ret != Z_OK && !(flush == Z_FINISH && ret == Z_STREAM_END) {
             add_errcode(&mut *fp, BGZF_ERR_ZLIB);
@@ -1643,8 +1642,8 @@ pub unsafe fn bgzf_c_315_razf_info(hfp: *mut super::hts::hFILE, mut filename: *c
                 .unwrap_or_default();
                 crate::htslib_rs::hts::hts_log_cstr(
                     crate::htslib_rs::hts::HTS_LOG_ERROR,
-                    c"bgzf".as_ptr(),
-                    msg.as_ptr(),
+                    b"bgzf",
+                    msg.as_bytes(),
                 );
                 return;
             }
@@ -1658,8 +1657,8 @@ pub unsafe fn bgzf_c_315_razf_info(hfp: *mut super::hts::hFILE, mut filename: *c
     .unwrap_or_default();
     crate::htslib_rs::hts::hts_log_cstr(
         crate::htslib_rs::hts::HTS_LOG_ERROR,
-        c"bgzf".as_ptr(),
-        msg.as_ptr(),
+        b"bgzf",
+        msg.as_bytes(),
     );
 }
 
@@ -1677,7 +1676,7 @@ unsafe fn bgzf_filename_lossy(filename: *const c_char) -> std::borrow::Cow<'stat
     }
 }
 
-unsafe fn inflate_block(fp: &mut BGZF, block_length: usize) -> c_int {
+unsafe fn inflate_block(fp: &mut BGZF, block_length: usize) -> i32 {
     if block_length < BLOCK_HEADER_LENGTH + BLOCK_FOOTER_LENGTH {
         add_errcode(&mut *fp, BGZF_ERR_HEADER);
         return -1;
@@ -1716,9 +1715,9 @@ unsafe fn inflate_block(fp: &mut BGZF, block_length: usize) -> c_int {
         .expect("BGZF gzip stream is initialized")
         .as_mut();
     stream.zs.next_in = compressed_ptr.add(BLOCK_HEADER_LENGTH);
-    stream.zs.avail_in = (block_length - BLOCK_HEADER_LENGTH) as c_uint;
+    stream.zs.avail_in = (block_length - BLOCK_HEADER_LENGTH) as u32;
     stream.zs.next_out = uncompressed_ptr;
-    stream.zs.avail_out = BGZF_MAX_BLOCK_SIZE as c_uint;
+    stream.zs.avail_out = BGZF_MAX_BLOCK_SIZE as u32;
 
     if (zlib.inflate)(&mut stream.zs, Z_FINISH) != Z_STREAM_END {
         add_errcode(&mut *fp, BGZF_ERR_ZLIB);
@@ -1730,10 +1729,10 @@ unsafe fn inflate_block(fp: &mut BGZF, block_length: usize) -> c_int {
         add_errcode(&mut *fp, BGZF_ERR_CRC);
         return -1;
     }
-    written as c_int
+    written as i32
 }
 
-unsafe fn inflate_gzip_block(fp: &mut BGZF) -> c_int {
+unsafe fn inflate_gzip_block(fp: &mut BGZF) -> i32 {
     if (*fp).gz_stream.is_none() {
         let Some(stream) = gzip_stream_new_inflate() else {
             add_errcode(&mut *fp, BGZF_ERR_ZLIB);
@@ -1757,7 +1756,7 @@ unsafe fn inflate_gzip_block(fp: &mut BGZF) -> c_int {
         .as_mut();
     let mut input_eof = false;
     stream.zs.next_out = uncompressed_ptr.add(block_offset);
-    stream.zs.avail_out = (BGZF_MAX_BLOCK_SIZE - block_offset) as c_uint;
+    stream.zs.avail_out = (BGZF_MAX_BLOCK_SIZE - block_offset) as u32;
 
     while stream.zs.avail_out != 0 {
         if !input_eof && stream.zs.avail_in == 0 {
@@ -1773,11 +1772,11 @@ unsafe fn inflate_gzip_block(fp: &mut BGZF) -> c_int {
             };
             if n < 0 {
                 add_errcode(&mut *fp, BGZF_ERR_IO);
-                return n as c_int;
+                return n as i32;
             }
             stream.zs.next_in = compressed_ptr;
-            stream.zs.avail_in = n as c_uint;
-            if !from_preload && stream.zs.avail_in < BGZF_BLOCK_SIZE as c_uint {
+            stream.zs.avail_in = n as u32;
+            if !from_preload && stream.zs.avail_in < BGZF_BLOCK_SIZE as u32 {
                 input_eof = true;
             }
         }
@@ -1811,15 +1810,15 @@ unsafe fn inflate_gzip_block(fp: &mut BGZF) -> c_int {
         }
     }
 
-    (BGZF_MAX_BLOCK_SIZE - stream.zs.avail_out as usize) as c_int
+    (BGZF_MAX_BLOCK_SIZE - stream.zs.avail_out as usize) as i32
 }
 
 // original: inflate_gzip_block (htslib/bgzf.c:829)
-pub unsafe fn bgzf_c_829_inflate_gzip_block(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_c_829_inflate_gzip_block(fp: *mut BGZF) -> i32 {
     inflate_gzip_block(&mut *fp)
 }
 
-unsafe fn bgzf_read_block(fp: &mut BGZF) -> c_int {
+unsafe fn bgzf_read_block(fp: &mut BGZF) -> i32 {
     if errcode(&*fp) != 0 {
         return -1;
     }
@@ -1855,7 +1854,7 @@ unsafe fn bgzf_read_block(fp: &mut BGZF) -> c_int {
             (*fp).block_offset = 0;
         }
         (*fp).block_address = block_address;
-        (*fp).block_length = count as c_int;
+        (*fp).block_length = count as i32;
         return 0;
     }
 
@@ -1938,13 +1937,13 @@ unsafe fn bgzf_read_block(fp: &mut BGZF) -> c_int {
                 (*fp).block_offset = 0;
             }
             (*fp).block_address = block_address;
-            (*fp).block_clength = block_length as c_int;
+            (*fp).block_clength = block_length as i32;
             (*fp).block_length = count;
             if (*fp).idx_build_otf != 0 {
                 bgzf_index_add_block(ptr::from_mut(fp));
                 (*bgzf_idx_ptr(fp)).ublock_addr += count as u64;
             }
-            cache_block(&mut *fp, block_length as c_int);
+            cache_block(&mut *fp, block_length as i32);
             return 0;
         }
         block_address += block_length as i64;
@@ -1971,12 +1970,12 @@ pub unsafe extern "C" fn bgzf_c_1322_job_cleanup(arg: *mut c_void) {
         return;
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     drop(job);
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
 }
 
-unsafe fn bgzf_encode_job(job: *mut bgzf_job, level: c_int) -> *mut c_void {
+unsafe fn bgzf_encode_job(job: *mut bgzf_job, level: i32) -> *mut c_void {
     if job.is_null() {
         return ptr::null_mut();
     }
@@ -1991,7 +1990,7 @@ unsafe fn bgzf_encode_job(job: *mut bgzf_job, level: c_int) -> *mut c_void {
         level,
     ) != 0
     {
-        (*job).errcode = BGZF_ERR_ZLIB as c_int;
+        (*job).errcode = BGZF_ERR_ZLIB as i32;
     }
     job.cast()
 }
@@ -2026,7 +2025,7 @@ pub unsafe extern "C" fn bgzf_decode_func(arg: *mut c_void) -> *mut c_void {
     if (*job).comp_len < BLOCK_HEADER_LENGTH + BLOCK_FOOTER_LENGTH
         || check_header((*job).comp_data.as_ptr()) != 0
     {
-        (*job).errcode = BGZF_ERR_HEADER as c_int;
+        (*job).errcode = BGZF_ERR_HEADER as i32;
         return job.cast();
     }
 
@@ -2035,7 +2034,7 @@ pub unsafe extern "C" fn bgzf_decode_func(arg: *mut c_void) -> *mut c_void {
     if block_len > (*job).comp_len
         || !(BLOCK_HEADER_LENGTH + BLOCK_FOOTER_LENGTH..=BGZF_MAX_BLOCK_SIZE).contains(&block_len)
     {
-        (*job).errcode = BGZF_ERR_HEADER as c_int;
+        (*job).errcode = BGZF_ERR_HEADER as i32;
         return job.cast();
     }
 
@@ -2050,8 +2049,8 @@ pub unsafe extern "C" fn bgzf_decode_func(arg: *mut c_void) -> *mut c_void {
         expected_crc,
     ) {
         0 => (*job).uncomp_len = out_len,
-        -2 => (*job).errcode = BGZF_ERR_CRC as c_int,
-        _ => (*job).errcode = BGZF_ERR_ZLIB as c_int,
+        -2 => (*job).errcode = BGZF_ERR_CRC as i32,
+        _ => (*job).errcode = BGZF_ERR_ZLIB as i32,
     }
     job.cast()
 }
@@ -2062,11 +2061,11 @@ unsafe fn bgzf_mt_alloc_job(fp: *mut BGZF) -> Option<Box<bgzf_job>> {
         return None;
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     // Jobs are now owned via Box (no shared cram pool); allocate a zeroed
     // bgzf_job directly on the heap.
     let mut job = Box::<bgzf_job>::new_zeroed().assume_init();
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
     job.fp = NonNull::new(fp);
     Some(job)
 }
@@ -2079,16 +2078,16 @@ unsafe fn bgzf_mt_free_job(fp: *mut BGZF, job: Option<Box<bgzf_job>>) {
     if mt.is_null() {
         return;
     }
-    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     drop(job);
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
 }
 
 unsafe fn bgzf_mt_dispatch(
     fp: *mut BGZF,
     job: Option<Box<bgzf_job>>,
     worker: super::thread_pool::hts_tpool_worker,
-) -> c_int {
+) -> i32 {
     let mt = bgzf_mt_ptr(fp);
     if mt.is_null() {
         return -1;
@@ -2116,9 +2115,9 @@ unsafe fn bgzf_mt_dispatch(
     // same mutex; otherwise a concurrent main-thread ++ and a writer-thread
     // -- can race and drop the writer's decrement, pinning jobs_pending above
     // zero forever and deadlocking mt_flush_queue.
-    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     (*mt).jobs_pending += 1;
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
     0
 }
 
@@ -2149,17 +2148,17 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
         let idx = bgzf_idx_ptr(fp);
         (*idx).moffs = 1;
         (*idx).noffs = 1;
-        (*idx).offs = c_compat::calloc(1, std::mem::size_of::<bgzidx1_t>() as u64)
+        (*idx).offs = libc::calloc(1, std::mem::size_of::<bgzidx1_t>())
             .cast::<bgzidx1_t>();
         if (*idx).offs.is_null() {
             add_errcode(&mut *fp, BGZF_ERR_IO);
-            (*mt).errcode = BGZF_ERR_IO as c_int;
+            (*mt).errcode = BGZF_ERR_IO as i32;
             return ptr::null_mut();
         }
     }
 
     let mut hflush_counter: u32 = 0;
-    let mut sticky_err: c_int = 0;
+    let mut sticky_err: i32 = 0;
 
     loop {
         let result = super::thread_pool::hts_tpool_next_result_wait(out_queue.as_ptr());
@@ -2174,7 +2173,7 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
         if job.as_deref().is_none_or(|j| j.errcode != 0) {
             if sticky_err == 0 {
                 sticky_err = match job.as_deref() {
-                    None => BGZF_ERR_IO as c_int,
+                    None => BGZF_ERR_IO as i32,
                     Some(j) => j.errcode,
                 };
             }
@@ -2196,10 +2195,10 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
                     rounded |= rounded >> 8;
                     rounded |= rounded >> 16;
                     rounded = rounded.wrapping_add(1);
-                    (*idx).moffs = rounded as c_int;
-                    let tmp = c_compat::realloc(
+                    (*idx).moffs = rounded as i32;
+                    let tmp = libc::realloc(
                         (*idx).offs.cast(),
-                        ((*idx).moffs as usize * std::mem::size_of::<bgzidx1_t>()) as u64,
+                        (*idx).moffs as usize * std::mem::size_of::<bgzidx1_t>(),
                     )
                     .cast::<bgzidx1_t>();
                     if tmp.is_null() {
@@ -2219,27 +2218,27 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
                 false
             };
             if gzi_failed {
-                sticky_err = BGZF_ERR_IO as c_int;
+                sticky_err = BGZF_ERR_IO as i32;
             } else if (*fp).idx_build_otf != 0
                 && bgzf_c_228_bgzf_idx_flush(fp, j.uncomp_len, j.comp_len) < 0
             {
-                sticky_err = BGZF_ERR_IO as c_int;
+                sticky_err = BGZF_ERR_IO as i32;
             } else {
                 let written =
                     bgzf_hwrite_ptr(&mut (*fp).fp, j.comp_data.as_ptr().cast(), j.comp_len);
                 if written != j.comp_len as isize {
-                    sticky_err = BGZF_ERR_IO as c_int;
+                    sticky_err = BGZF_ERR_IO as i32;
                 } else {
-                    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).idx_m));
+                    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).idx_m));
                     (*mt).block_address += j.comp_len as u64;
                     (*fp).block_address = (*mt).block_address as i64;
-                    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(
+                    libc::pthread_mutex_unlock(ptr::addr_of_mut!(
                         (*mt).idx_m
                     ));
 
                     hflush_counter = hflush_counter.wrapping_add(1);
                     if hflush_counter.is_multiple_of(512) && bgzf_hflush_ptr(&mut (*fp).fp) != 0 {
-                        sticky_err = BGZF_ERR_IO as c_int;
+                        sticky_err = BGZF_ERR_IO as i32;
                     }
                 }
             }
@@ -2247,10 +2246,10 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
 
         super::thread_pool::hts_tpool_delete_result(result, 0);
         if let Some(job) = job {
-            crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+            libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
             drop(job);
             (*mt).jobs_pending -= 1;
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+            libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
         }
     }
 
@@ -2273,7 +2272,7 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
 // concatenated stream): the C reader does this via the `if (!j->hit_eof &&
 // j->uncomp_len == 0) goto again;` arm of bgzf_read_block. We mirror that here
 // by looping until we either decode a non-empty block or hit a real EOF.
-pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> i32 {
     if fp.is_null() || (*fp).mt.is_none() {
         return bgzf_read_block(&mut *fp);
     }
@@ -2284,7 +2283,7 @@ pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
     let mt = bgzf_mt_ptr(fp);
     let Some(out_queue) = (*mt).out_queue else {
         add_errcode(&mut *fp, BGZF_ERR_IO);
-        (*mt).errcode = BGZF_ERR_IO as c_int;
+        (*mt).errcode = BGZF_ERR_IO as i32;
         return -1;
     };
 
@@ -2317,7 +2316,7 @@ pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
         }
         if count != header.len() as isize || check_header(header.as_ptr()) != 0 {
             add_errcode(&mut *fp, BGZF_ERR_HEADER);
-            (*mt).errcode = BGZF_ERR_HEADER as c_int;
+            (*mt).errcode = BGZF_ERR_HEADER as i32;
             return -1;
         }
 
@@ -2326,13 +2325,13 @@ pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
             .contains(&block_length)
         {
             add_errcode(&mut *fp, BGZF_ERR_HEADER);
-            (*mt).errcode = BGZF_ERR_HEADER as c_int;
+            (*mt).errcode = BGZF_ERR_HEADER as i32;
             return -1;
         }
 
         let Some(mut job) = bgzf_mt_alloc_job(fp) else {
             add_errcode(&mut *fp, BGZF_ERR_IO);
-            (*mt).errcode = BGZF_ERR_IO as c_int;
+            (*mt).errcode = BGZF_ERR_IO as i32;
             return -1;
         };
         ptr::copy_nonoverlapping(header.as_ptr(), job.comp_data.as_mut_ptr(), header.len());
@@ -2345,7 +2344,7 @@ pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
         if read != remaining as isize {
             bgzf_mt_free_job(fp, Some(job));
             add_errcode(&mut *fp, BGZF_ERR_IO);
-            (*mt).errcode = BGZF_ERR_IO as c_int;
+            (*mt).errcode = BGZF_ERR_IO as i32;
             return -1;
         }
         job.comp_len = block_length;
@@ -2354,7 +2353,7 @@ pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
         // bgzf_mt_dispatch consumes the owned job and frees it itself on failure.
         if bgzf_mt_dispatch(fp, Some(job), Some(bgzf_decode_func)) != 0 {
             add_errcode(&mut *fp, BGZF_ERR_IO);
-            (*mt).errcode = BGZF_ERR_IO as c_int;
+            (*mt).errcode = BGZF_ERR_IO as i32;
             return -1;
         }
 
@@ -2362,7 +2361,7 @@ pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
         if result.is_null() {
             (*mt).jobs_pending -= 1;
             add_errcode(&mut *fp, BGZF_ERR_IO);
-            (*mt).errcode = BGZF_ERR_IO as c_int;
+            (*mt).errcode = BGZF_ERR_IO as i32;
             return -1;
         }
         // Recover ownership of the job the worker handed back through the
@@ -2407,8 +2406,8 @@ pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
             job.uncomp_len,
         );
         (*fp).block_address = job.block_address;
-        (*fp).block_clength = job.comp_len as c_int;
-        (*fp).block_length = job.uncomp_len as c_int;
+        (*fp).block_clength = job.comp_len as i32;
+        (*fp).block_length = job.uncomp_len as i32;
         set_flag(&mut *fp, 29, job.uncomp_len == 0);
 
         if job.uncomp_len != 0 && (*fp).idx_build_otf != 0 {
@@ -2434,26 +2433,26 @@ unsafe fn bgzf_mt_reader_impl(arg: *mut c_void) -> *mut c_void {
     let mt = bgzf_mt_ptr(fp);
 
     loop {
-        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
+        libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
         while (*mt).command == mtaux_cmd::NONE {
-            crate::htslib_rs::c_compat::pthread_cond_wait(
+            libc::pthread_cond_wait(
                 ptr::addr_of_mut!((*mt).command_c),
                 ptr::addr_of_mut!((*mt).command_m),
             );
         }
         let command = (*mt).command;
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
+        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
 
         match command {
             mtaux_cmd::SEEK => bgzf_c_1583_bgzf_mt_seek(fp),
             mtaux_cmd::HAS_EOF => bgzf_c_1566_bgzf_mt_eof(fp),
             mtaux_cmd::CLOSE => break,
             mtaux_cmd::SEEK_DONE | mtaux_cmd::HAS_EOF_DONE | mtaux_cmd::NONE => {
-                crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
+                libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
                 if (*mt).command == command {
                     (*mt).command = mtaux_cmd::NONE;
                 }
-                crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(
+                libc::pthread_mutex_unlock(ptr::addr_of_mut!(
                     (*mt).command_m
                 ));
             }
@@ -2464,31 +2463,31 @@ unsafe fn bgzf_mt_reader_impl(arg: *mut c_void) -> *mut c_void {
 }
 
 // original: mt_destroy (htslib/bgzf.c:1805)
-pub unsafe fn bgzf_c_1805_mt_destroy(mt: *mut bgzf_mtaux_t) -> c_int {
-    let mut ret: c_int;
+pub unsafe fn bgzf_c_1805_mt_destroy(mt: *mut bgzf_mtaux_t) -> i32 {
+    let mut ret: i32;
     let Some(out_queue) = (*mt).out_queue else {
         return -1;
     };
 
-    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
+    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
     (*mt).command = mtaux_cmd::CLOSE;
-    crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
+    libc::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
     super::thread_pool::hts_tpool_wake_dispatch(out_queue.as_ptr());
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
+    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
 
-    ret = -((super::thread_pool::hts_tpool_process_is_shutdown(out_queue.as_ptr()) > 1) as c_int);
+    ret = -((super::thread_pool::hts_tpool_process_is_shutdown(out_queue.as_ptr()) > 1) as i32);
     super::thread_pool::hts_tpool_process_destroy(out_queue.as_ptr());
 
     let mut retval: *mut c_void = ptr::null_mut();
-    crate::htslib_rs::c_compat::pthread_join((*mt).io_task, ptr::addr_of_mut!(retval));
+    libc::pthread_join((*mt).io_task, ptr::addr_of_mut!(retval));
     if !retval.is_null() || (*mt).errcode != 0 {
         ret = -1;
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).job_pool_m));
-    crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).command_m));
-    crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).idx_m));
-    crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!((*mt).command_c));
+    libc::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).command_m));
+    libc::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).idx_m));
+    libc::pthread_cond_destroy(ptr::addr_of_mut!((*mt).command_c));
 
     // curr_job is an owned Box; dropping it frees the job (no shared pool).
     if let Some(curr_job) = (*mt).curr_job.take() {
@@ -2510,7 +2509,7 @@ pub unsafe fn bgzf_c_1805_mt_destroy(mt: *mut bgzf_mtaux_t) -> c_int {
 }
 
 // original: mt_queue (htslib/bgzf.c:1852)
-pub unsafe fn bgzf_c_1852_mt_queue(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_c_1852_mt_queue(fp: *mut BGZF) -> i32 {
     if fp.is_null() || (*fp).mt.is_none() {
         return bgzf_flush(fp);
     }
@@ -2521,7 +2520,7 @@ pub unsafe fn bgzf_c_1852_mt_queue(fp: *mut BGZF) -> c_int {
     let mt = bgzf_mt_ptr(fp);
     let Some(mut job) = bgzf_mt_alloc_job(fp) else {
         add_errcode(&mut *fp, BGZF_ERR_IO);
-        (*mt).errcode = BGZF_ERR_IO as c_int;
+        (*mt).errcode = BGZF_ERR_IO as i32;
         return -1;
     };
 
@@ -2546,7 +2545,7 @@ pub unsafe fn bgzf_c_1852_mt_queue(fp: *mut BGZF) -> c_int {
     // bgzf_mt_dispatch consumes the owned job and frees it itself on failure.
     if bgzf_mt_dispatch(fp, Some(job), worker) != 0 {
         add_errcode(&mut *fp, BGZF_ERR_IO);
-        (*mt).errcode = BGZF_ERR_IO as c_int;
+        (*mt).errcode = BGZF_ERR_IO as i32;
         return -1;
     }
     (*mt).block_number += 1;
@@ -2555,7 +2554,7 @@ pub unsafe fn bgzf_c_1852_mt_queue(fp: *mut BGZF) -> c_int {
 }
 
 // original: mt_flush_queue (htslib/bgzf.c:1897)
-pub unsafe fn bgzf_c_1897_mt_flush_queue(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_c_1897_mt_flush_queue(fp: *mut BGZF) -> i32 {
     if fp.is_null() || (*fp).mt.is_none() {
         return 0;
     }
@@ -2569,7 +2568,7 @@ pub unsafe fn bgzf_c_1897_mt_flush_queue(fp: *mut BGZF) -> c_int {
     // out_queue; the writer thread drains them and decrements jobs_pending.
     if super::thread_pool::hts_tpool_process_flush(&mut *out_queue.as_ptr()) != 0 {
         add_errcode(&mut *fp, BGZF_ERR_IO);
-        (*mt).errcode = BGZF_ERR_IO as c_int;
+        (*mt).errcode = BGZF_ERR_IO as i32;
         return -1;
     }
 
@@ -2578,18 +2577,18 @@ pub unsafe fn bgzf_c_1897_mt_flush_queue(fp: *mut BGZF) -> c_int {
     // the queue ourselves here: that would race with the writer thread and
     // either drop a block on the floor or reorder writes. Mirrors the
     // jobs_pending loop in C mt_flush_queue (htslib/bgzf.c:1907).
-    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     while (*mt).jobs_pending != 0 {
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+        libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
         if super::thread_pool::hts_tpool_process_is_shutdown(out_queue.as_ptr()) != 0 {
             add_errcode(&mut *fp, BGZF_ERR_IO);
-            (*mt).errcode = BGZF_ERR_IO as c_int;
+            (*mt).errcode = BGZF_ERR_IO as i32;
             return -1;
         }
-        crate::htslib_rs::c_compat::usleep(10_000);
-        crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+        libc::usleep(10_000);
+        libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     }
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
 
     if (*mt).errcode != 0 {
         add_errcode(&mut *fp, (*mt).errcode as u32);
@@ -2605,7 +2604,7 @@ pub unsafe fn bgzf_c_1897_mt_flush_queue(fp: *mut BGZF) -> c_int {
 // fp->uncompressed_block pointer must be cleared so we don't double-free
 // the buffer that the reader thread already owns. Then mt_destroy joins
 // the I/O thread and frees the mtaux_t.
-pub unsafe fn bgzf_c_2071_bgzf_close_mt(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_c_2071_bgzf_close_mt(fp: *mut BGZF) -> i32 {
     if fp.is_null() || (*fp).mt.is_none() {
         return 0;
     }
@@ -2630,7 +2629,7 @@ pub unsafe fn bgzf_c_2071_bgzf_close_mt(fp: *mut BGZF) -> c_int {
 
 pub unsafe fn bgzf_open(path: *const c_char, mode: *const c_char) -> *mut BGZF {
     if path.is_null() || mode.is_null() {
-        *c_compat::__errno_location() = c_compat::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return ptr::null_mut();
     }
     let mode_bytes = CStr::from_ptr(mode).to_bytes();
@@ -2665,14 +2664,14 @@ pub unsafe fn bgzf_open(path: *const c_char, mode: *const c_char) -> *mut BGZF {
         set_flag(&mut *fp, 19, ed_is_big() != 0);
         fp
     } else {
-        *c_compat::__errno_location() = c_compat::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         ptr::null_mut()
     }
 }
 
-pub unsafe fn bgzf_dopen(fd: c_int, mode: *const c_char) -> *mut BGZF {
+pub unsafe fn bgzf_dopen(fd: i32, mode: *const c_char) -> *mut BGZF {
     if mode.is_null() {
-        *c_compat::__errno_location() = c_compat::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return ptr::null_mut();
     }
     let mode_bytes = CStr::from_ptr(mode).to_bytes();
@@ -2706,14 +2705,14 @@ pub unsafe fn bgzf_dopen(fd: c_int, mode: *const c_char) -> *mut BGZF {
         set_flag(&mut *fp, 19, ed_is_big() != 0);
         fp
     } else {
-        *c_compat::__errno_location() = c_compat::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         ptr::null_mut()
     }
 }
 
 pub unsafe fn bgzf_hopen(hfp: *mut super::hts::hFILE, mode: *const c_char) -> *mut BGZF {
     if hfp.is_null() || mode.is_null() {
-        *c_compat::__errno_location() = c_compat::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return ptr::null_mut();
     }
     let mode_bytes = CStr::from_ptr(mode).to_bytes();
@@ -2741,13 +2740,13 @@ pub unsafe fn bgzf_hopen(hfp: *mut super::hts::hFILE, mode: *const c_char) -> *m
         set_flag(&mut *fp, 19, ed_is_big() != 0);
         fp
     } else {
-        *c_compat::__errno_location() = c_compat::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         forget_fp(hfp);
         ptr::null_mut()
     }
 }
 
-pub unsafe fn bgzf_close(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_close(fp: *mut BGZF) -> i32 {
     if fp.is_null() {
         return -1;
     }
@@ -2863,7 +2862,7 @@ pub unsafe fn bgzf_read(fp: *mut BGZF, data: *mut c_void, length: usize) -> isiz
             output,
             copy_length,
         );
-        (*fp).block_offset += copy_length as c_int;
+        (*fp).block_offset += copy_length as i32;
         output = output.add(copy_length);
         bytes_read += copy_length;
         if (*fp).block_offset == (*fp).block_length {
@@ -2886,7 +2885,7 @@ pub unsafe fn bgzf_read_small(fp: *mut BGZF, data: *mut c_void, length: usize) -
             data.cast::<u8>(),
             length,
         );
-        (*fp).block_offset += length as c_int;
+        (*fp).block_offset += length as i32;
         (*fp).uncompressed_address += length as i64;
         length as isize
     } else {
@@ -2944,7 +2943,7 @@ pub unsafe fn bgzf_raw_read(fp: *mut BGZF, data: *mut c_void, length: usize) -> 
         ptr::copy_nonoverlapping(src, data.cast::<u8>(), copy_len);
         if copy_len < preloaded {
             ptr::copy(src.add(copy_len), src, preloaded - copy_len);
-            (*fp).block_clength = -((preloaded - copy_len) as c_int);
+            (*fp).block_clength = -((preloaded - copy_len) as i32);
             return copy_len as isize;
         }
         (*fp).block_clength = 0;
@@ -2975,7 +2974,7 @@ pub unsafe fn bgzf_write(fp: *mut BGZF, data: *const c_void, length: usize) -> i
     }
     if !flag(&*fp, 30) {
         let push = length + (*fp).block_offset as usize;
-        (*fp).block_offset = (push % BGZF_MAX_BLOCK_SIZE) as c_int;
+        (*fp).block_offset = (push % BGZF_MAX_BLOCK_SIZE) as i32;
         (*fp).block_address += (push - (*fp).block_offset as usize) as i64;
         let written = bgzf_hwrite_ptr(&mut (*fp).fp, data, length);
         if written < 0 {
@@ -2995,7 +2994,7 @@ pub unsafe fn bgzf_write(fp: *mut BGZF, data: *const c_void, length: usize) -> i
                 .add((*fp).block_offset as usize),
             copy_length,
         );
-        (*fp).block_offset += copy_length as c_int;
+        (*fp).block_offset += copy_length as i32;
         written += copy_length;
         if (*fp).block_offset as usize == BGZF_BLOCK_SIZE && lazy_flush(fp) != 0 {
             return -1;
@@ -3012,14 +3011,14 @@ pub unsafe fn bgzf_raw_write(fp: *mut BGZF, data: *const c_void, length: usize) 
     ret
 }
 
-pub unsafe fn bgzf_flush_try(fp: *mut BGZF, size: isize) -> c_int {
+pub unsafe fn bgzf_flush_try(fp: *mut BGZF, size: isize) -> i32 {
     if (*fp).block_offset as isize + size > BGZF_BLOCK_SIZE as isize {
         return lazy_flush(fp);
     }
     0
 }
 
-pub unsafe fn bgzf_c_1942_lazy_flush(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_c_1942_lazy_flush(fp: *mut BGZF) -> i32 {
     // C lazy_flush (htslib/bgzf.c:1927): in MT mode, enqueue the current
     // block for the worker pool but do NOT block the caller draining the
     // result queue -- the bgzf_mt_writer thread takes care of that. Falling
@@ -3032,7 +3031,7 @@ pub unsafe fn bgzf_c_1942_lazy_flush(fp: *mut BGZF) -> c_int {
 }
 
 // original: lazy_flush (htslib/bgzf.c:1927)
-pub unsafe fn lazy_flush(fp: *mut BGZF) -> c_int {
+pub unsafe fn lazy_flush(fp: *mut BGZF) -> i32 {
     bgzf_c_1942_lazy_flush(fp)
 }
 
@@ -3045,7 +3044,7 @@ pub unsafe fn bgzf_block_write(fp: *mut BGZF, data: *const c_void, length: usize
     }
     if !flag(&*fp, 30) {
         let push = length + (*fp).block_offset as usize;
-        (*fp).block_offset = (push % BGZF_MAX_BLOCK_SIZE) as c_int;
+        (*fp).block_offset = (push % BGZF_MAX_BLOCK_SIZE) as i32;
         (*fp).block_address += (push - (*fp).block_offset as usize) as i64;
         let written = bgzf_hwrite_ptr(&mut (*fp).fp, data, length);
         if written < 0 {
@@ -3067,7 +3066,7 @@ pub unsafe fn bgzf_block_write(fp: *mut BGZF, data: *const c_void, length: usize
         } else {
             BGZF_MAX_BLOCK_SIZE as u64
         };
-        let mut copy_length = (ublock_size as c_int - (*fp).block_offset) as usize;
+        let mut copy_length = (ublock_size as i32 - (*fp).block_offset) as usize;
         if copy_length > remaining {
             copy_length = remaining;
         }
@@ -3079,7 +3078,7 @@ pub unsafe fn bgzf_block_write(fp: *mut BGZF, data: *const c_void, length: usize
                 .add((*fp).block_offset as usize),
             copy_length,
         );
-        (*fp).block_offset += copy_length as c_int;
+        (*fp).block_offset += copy_length as i32;
         consumed += copy_length;
         remaining -= copy_length;
         if (*fp).block_offset as u64 == ublock_size {
@@ -3116,7 +3115,7 @@ pub unsafe fn bgzf_write_direct_block(fp: *mut BGZF, data: *const c_void, length
         let mt = bgzf_mt_ptr(fp);
         let Some(mut job) = bgzf_mt_alloc_job(fp) else {
             add_errcode(&mut *fp, BGZF_ERR_IO);
-            (*mt).errcode = BGZF_ERR_IO as c_int;
+            (*mt).errcode = BGZF_ERR_IO as i32;
             return -1;
         };
         if (*fp).idx_build_otf != 0 {
@@ -3135,7 +3134,7 @@ pub unsafe fn bgzf_write_direct_block(fp: *mut BGZF, data: *const c_void, length
         // frees the Box itself, so no explicit free is needed here.
         if bgzf_mt_dispatch(fp, Some(job), worker) != 0 {
             add_errcode(&mut *fp, BGZF_ERR_IO);
-            (*mt).errcode = BGZF_ERR_IO as c_int;
+            (*mt).errcode = BGZF_ERR_IO as i32;
             return -1;
         }
         (*mt).block_number += 1;
@@ -3174,7 +3173,7 @@ pub unsafe fn bgzf_write_direct_block(fp: *mut BGZF, data: *const c_void, length
     length as isize
 }
 
-pub unsafe fn bgzf_set_cache_size(fp: *mut BGZF, cache_size: c_int) {
+pub unsafe fn bgzf_set_cache_size(fp: *mut BGZF, cache_size: i32) {
     if !fp.is_null() && (*fp).mt.is_some() {
         return;
     }
@@ -3193,14 +3192,14 @@ pub unsafe fn bgzf_write_small(fp: *mut BGZF, data: *const c_void, length: usize
                 .add((*fp).block_offset as usize),
             length,
         );
-        (*fp).block_offset += length as c_int;
+        (*fp).block_offset += length as i32;
         length as isize
     } else {
         bgzf_write(fp, data, length)
     }
 }
 
-pub unsafe fn bgzf_seek(fp: *mut BGZF, pos: i64, whence: c_int) -> i64 {
+pub unsafe fn bgzf_seek(fp: *mut BGZF, pos: i64, whence: i32) -> i64 {
     if fp.is_null() || flag(&*fp, 17) || whence != SEEK_SET || flag(&*fp, 31) {
         if !fp.is_null() {
             add_errcode(&mut *fp, BGZF_ERR_MISUSE);
@@ -3208,13 +3207,13 @@ pub unsafe fn bgzf_seek(fp: *mut BGZF, pos: i64, whence: c_int) -> i64 {
         return -1;
     }
     (*fp).seeked = pos;
-    bgzf_c_2175_bgzf_seek_common(fp, pos >> 16, (pos & 0xffff) as c_int)
+    bgzf_c_2175_bgzf_seek_common(fp, pos >> 16, (pos & 0xffff) as i32)
 }
 
 pub unsafe fn bgzf_c_2175_bgzf_seek_common(
     fp: *mut BGZF,
     block_address: i64,
-    block_offset: c_int,
+    block_offset: i32,
 ) -> i64 {
     if bgzf_hseek_ptr(&mut (*fp).fp, block_address, SEEK_SET) < 0 {
         add_errcode(&mut *fp, BGZF_ERR_IO);
@@ -3227,7 +3226,7 @@ pub unsafe fn bgzf_c_2175_bgzf_seek_common(
     0
 }
 
-pub unsafe fn bgzf_useek(fp: *mut BGZF, uoffset: i64, where_: c_int) -> c_int {
+pub unsafe fn bgzf_useek(fp: *mut BGZF, uoffset: i64, where_: i32) -> i32 {
     if fp.is_null() || flag(&*fp, 17) || where_ != SEEK_SET || flag(&*fp, 31) {
         if !fp.is_null() {
             add_errcode(&mut *fp, BGZF_ERR_MISUSE);
@@ -3238,7 +3237,7 @@ pub unsafe fn bgzf_useek(fp: *mut BGZF, uoffset: i64, where_: c_int) -> c_int {
         && uoffset
             < (*fp).uncompressed_address + (*fp).block_length as i64 - (*fp).block_offset as i64
     {
-        (*fp).block_offset += (uoffset - (*fp).uncompressed_address) as c_int;
+        (*fp).block_offset += (uoffset - (*fp).uncompressed_address) as i32;
         (*fp).uncompressed_address = uoffset;
         return 0;
     }
@@ -3304,13 +3303,13 @@ pub unsafe fn bgzf_useek(fp: *mut BGZF, uoffset: i64, where_: c_int) -> c_int {
         return -1;
     }
     if block_offset > 0 {
-        (*fp).block_offset = block_offset as c_int;
+        (*fp).block_offset = block_offset as i32;
     }
     (*fp).uncompressed_address = uoffset;
     0
 }
 
-pub unsafe fn bgzf_check_EOF(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_check_EOF(fp: *mut BGZF) -> i32 {
     if fp.is_null() || !flag(&*fp, 30) || flag(&*fp, 31) {
         return 0;
     }
@@ -3319,11 +3318,11 @@ pub unsafe fn bgzf_check_EOF(fp: *mut BGZF) -> c_int {
     has_eof
 }
 
-pub unsafe fn bgzf_c_1542_bgzf_check_EOF_common(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_c_1542_bgzf_check_EOF_common(fp: *mut BGZF) -> i32 {
     let offset = bgzf_htell_ptr(&mut (*fp).fp);
     let mut buf = [0u8; 28];
     if bgzf_hseek_ptr(&mut (*fp).fp, -(EOF_BLOCK.len() as i64), libc::SEEK_END) < 0 {
-        let errno = *c_compat::__errno_location();
+        let errno = *libc::__errno_location();
         if errno == libc::ESPIPE {
             bgzf_hclearerr_ptr(&mut (*fp).fp);
             return 2;
@@ -3355,11 +3354,11 @@ pub unsafe fn bgzf_c_1542_bgzf_check_EOF_common(fp: *mut BGZF) -> c_int {
 pub unsafe fn bgzf_c_1566_bgzf_mt_eof(fp: *mut BGZF) {
     let mt = bgzf_mt_ptr(fp);
 
-    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     (*mt).eof = bgzf_c_1542_bgzf_check_EOF_common(fp);
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
     (*mt).command = mtaux_cmd::HAS_EOF_DONE;
-    crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
+    libc::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
 }
 
 // original: bgzf_mt_seek (htslib/bgzf.c:1583)
@@ -3367,25 +3366,25 @@ pub unsafe fn bgzf_c_1583_bgzf_mt_seek(fp: *mut BGZF) {
     let mt = bgzf_mt_ptr(fp);
 
     let Some(out_queue) = (*mt).out_queue else {
-        (*mt).errcode = BGZF_ERR_IO as c_int;
+        (*mt).errcode = BGZF_ERR_IO as i32;
         (*mt).command = mtaux_cmd::SEEK_DONE;
-        crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
+        libc::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
         return;
     };
     super::thread_pool::hts_tpool_process_reset(&mut *out_queue.as_ptr(), 0);
-    crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     (*mt).errcode = 0;
 
     if bgzf_hseek_ptr(&mut (*fp).fp, (*mt).block_address as i64, SEEK_SET) < 0 {
-        (*mt).errcode = *c_compat::__errno_location();
+        (*mt).errcode = *libc::__errno_location();
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
+    libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).job_pool_m));
     (*mt).command = mtaux_cmd::SEEK_DONE;
-    crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
+    libc::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
 }
 
-pub unsafe fn bgzf_is_bgzf(fn_: *const c_char) -> c_int {
+pub unsafe fn bgzf_is_bgzf(fn_: *const c_char) -> i32 {
     let fd = libc::open(fn_, libc::O_RDONLY);
     if fd < 0 {
         return 0;
@@ -3405,7 +3404,7 @@ pub unsafe fn bgzf_is_bgzf(fn_: *const c_char) -> c_int {
     }
 }
 
-pub unsafe fn bgzf_compression(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_compression(fp: *mut BGZF) -> i32 {
     if !flag(&*fp, 30) {
         0
     } else if flag(&*fp, 31) {
@@ -3426,7 +3425,7 @@ pub unsafe fn bgzf_utell(fp: *mut BGZF) -> i64 {
     (*fp).uncompressed_address
 }
 
-pub unsafe fn bgzf_getc(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_getc(fp: *mut BGZF) -> i32 {
     if (*fp).block_offset + 1 < (*fp).block_length {
         (*fp).uncompressed_address += 1;
         let c = *(*fp)
@@ -3434,7 +3433,7 @@ pub unsafe fn bgzf_getc(fp: *mut BGZF) -> c_int {
             .as_mut_ptr()
             .add((*fp).block_offset as usize);
         (*fp).block_offset += 1;
-        return c as c_int;
+        return c as i32;
     }
 
     if (*fp).block_offset >= (*fp).block_length {
@@ -3456,10 +3455,10 @@ pub unsafe fn bgzf_getc(fp: *mut BGZF) -> c_int {
         (*fp).block_length = 0;
     }
     (*fp).uncompressed_address += 1;
-    c as c_int
+    c as i32
 }
 
-pub unsafe fn bgzf_getline(fp: *mut BGZF, delim: c_int, str_: *mut kstring_t) -> c_int {
+pub unsafe fn bgzf_getline(fp: *mut BGZF, delim: i32, str_: *mut kstring_t) -> i32 {
     let mut state = 0;
     (*str_).data.clear();
 
@@ -3484,7 +3483,7 @@ pub unsafe fn bgzf_getline(fp: *mut BGZF, delim: c_int, str_: *mut kstring_t) ->
         let mut l = if found.is_null() {
             (*fp).block_length
         } else {
-            found.cast::<u8>().offset_from(buf) as c_int
+            found.cast::<u8>().offset_from(buf) as i32
         };
 
         if l < (*fp).block_length {
@@ -3517,7 +3516,7 @@ pub unsafe fn bgzf_getline(fp: *mut BGZF, delim: c_int, str_: *mut kstring_t) ->
         return state;
     }
     (*fp).uncompressed_address += (*str_).data.len() as i64 + 1;
-    if delim == b'\n' as c_int
+    if delim == b'\n' as i32
         && !(*str_).data.is_empty()
         && {
             let d = &(*str_).data;
@@ -3526,21 +3525,21 @@ pub unsafe fn bgzf_getline(fp: *mut BGZF, delim: c_int, str_: *mut kstring_t) ->
     {
         (*str_).data.pop();
     }
-    if (*str_).data.len() <= c_int::MAX as usize {
-        (*str_).data.len() as c_int
+    if (*str_).data.len() <= i32::MAX as usize {
+        (*str_).data.len() as i32
     } else {
-        c_int::MAX
+        i32::MAX
     }
 }
 
 unsafe fn bgzf_mt_init(
     fp: *mut BGZF,
     pool: *mut super::thread_pool::hts_tpool,
-    qsize: c_int,
-    own_pool: c_int,
-) -> c_int {
+    qsize: i32,
+    own_pool: i32,
+) -> i32 {
     if fp.is_null() || pool.is_null() {
-        *c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
     if !flag(&*fp, 30) || flag(&*fp, 31) {
@@ -3566,19 +3565,19 @@ unsafe fn bgzf_mt_init(
     };
     (*mt).out_queue = Some(out_queue);
 
-    if crate::htslib_rs::c_compat::pthread_mutex_init(
+    if libc::pthread_mutex_init(
         ptr::addr_of_mut!((*mt).job_pool_m),
         ptr::null(),
     ) != 0
-        || crate::htslib_rs::c_compat::pthread_mutex_init(
+        || libc::pthread_mutex_init(
             ptr::addr_of_mut!((*mt).command_m),
             ptr::null(),
         ) != 0
-        || crate::htslib_rs::c_compat::pthread_mutex_init(
+        || libc::pthread_mutex_init(
             ptr::addr_of_mut!((*mt).idx_m),
             ptr::null(),
         ) != 0
-        || crate::htslib_rs::c_compat::pthread_cond_init(
+        || libc::pthread_cond_init(
             ptr::addr_of_mut!((*mt).command_c),
             ptr::null(),
         ) != 0
@@ -3611,7 +3610,7 @@ unsafe fn bgzf_mt_init(
         super::thread_pool::hts_tpool_process_ref_incr(out_queue.as_ptr());
     }
 
-    if crate::htslib_rs::c_compat::pthread_create(
+    if libc::pthread_create(
         ptr::addr_of_mut!((*mt).io_task),
         ptr::null(),
         start,
@@ -3624,10 +3623,10 @@ unsafe fn bgzf_mt_init(
         // Detach the owning box from the field; it is dropped at the end of this
         // error path (after the in-place pthread teardown via the `mt` alias).
         let mt_box = bgzf_take_mt(fp);
-        crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!((*mt).command_c));
-        crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).idx_m));
-        crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).command_m));
-        crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).job_pool_m));
+        libc::pthread_cond_destroy(ptr::addr_of_mut!((*mt).command_c));
+        libc::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).idx_m));
+        libc::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).command_m));
+        libc::pthread_mutex_destroy(ptr::addr_of_mut!((*mt).job_pool_m));
         super::thread_pool::hts_tpool_process_destroy(out_queue.as_ptr());
         if own_pool != 0 {
             super::thread_pool::hts_tpool_destroy(pool.cast());
@@ -3642,10 +3641,10 @@ unsafe fn bgzf_mt_init(
 pub unsafe fn bgzf_thread_pool(
     fp: *mut BGZF,
     pool: *mut super::thread_pool::hts_tpool,
-    qsize: c_int,
-) -> c_int {
+    qsize: i32,
+) -> i32 {
     if fp.is_null() {
-        *c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
     if !flag(&*fp, 30) {
@@ -3655,18 +3654,18 @@ pub unsafe fn bgzf_thread_pool(
         return -2;
     }
     if pool.is_null() {
-        *c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
     bgzf_mt_init(fp, pool, qsize, 0)
 }
 
-pub unsafe fn bgzf_mt(fp: *mut BGZF, n_threads: c_int, n_sub_blks: c_int) -> c_int {
+pub unsafe fn bgzf_mt(fp: *mut BGZF, n_threads: i32, n_sub_blks: i32) -> i32 {
     if n_threads <= 1 {
         return 0;
     }
     if fp.is_null() {
-        *c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
     if !flag(&*fp, 30) || flag(&*fp, 31) {
@@ -3688,12 +3687,12 @@ pub unsafe fn bgzf_index_destroy(fp: *mut BGZF) {
     };
     // The inner offs[] is still a C-malloc'd array; free it before the Box for
     // the bgzidx_t header is dropped here.
-    c_compat::free(idx.offs.cast());
+    libc::free(idx.offs.cast());
     drop(idx);
     (*fp).idx_build_otf = 0;
 }
 
-pub unsafe fn bgzf_index_build_init(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_index_build_init(fp: *mut BGZF) -> i32 {
     bgzf_index_destroy(fp);
     bgzf_set_idx(
         fp,
@@ -3708,7 +3707,7 @@ pub unsafe fn bgzf_index_build_init(fp: *mut BGZF) -> c_int {
     0
 }
 
-pub unsafe fn bgzf_index_add_block(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_index_add_block(fp: *mut BGZF) -> i32 {
     let idx = bgzf_idx_ptr(fp);
     (*idx).noffs += 1;
     if (*idx).noffs > (*idx).moffs {
@@ -3721,10 +3720,10 @@ pub unsafe fn bgzf_index_add_block(fp: *mut BGZF) -> c_int {
         rounded |= rounded >> 8;
         rounded |= rounded >> 16;
         rounded = rounded.wrapping_add(1);
-        (*idx).moffs = rounded as c_int;
-        let tmp = c_compat::realloc(
+        (*idx).moffs = rounded as i32;
+        let tmp = libc::realloc(
             (*idx).offs.cast(),
-            ((*idx).moffs as usize * std::mem::size_of::<bgzidx1_t>()) as u64,
+            (*idx).moffs as usize * std::mem::size_of::<bgzidx1_t>(),
         )
         .cast::<bgzidx1_t>();
         if tmp.is_null() {
@@ -3742,9 +3741,9 @@ pub unsafe fn bgzf_index_dump_hfile(
     fp: *mut BGZF,
     idx_file: *mut BgzfFp,
     _name: *const c_char,
-) -> c_int {
+) -> i32 {
     if (*fp).idx.is_none() {
-        *c_compat::__errno_location() = c_compat::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
     if bgzf_flush(fp) != 0 {
@@ -3780,9 +3779,9 @@ pub unsafe fn bgzf_index_dump_hfile(
     0
 }
 
-pub unsafe fn bgzf_index_dump(fp: *mut BGZF, bname: *const c_char, suffix: *const c_char) -> c_int {
+pub unsafe fn bgzf_index_dump(fp: *mut BGZF, bname: *const c_char, suffix: *const c_char) -> i32 {
     if (*fp).idx.is_none() {
-        *c_compat::__errno_location() = c_compat::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
 
@@ -3799,17 +3798,17 @@ pub unsafe fn bgzf_index_dump(fp: *mut BGZF, bname: *const c_char, suffix: *cons
 
     let fd = libc::open(name, libc::O_CREAT | libc::O_WRONLY | libc::O_TRUNC, 0o666);
     if fd < 0 {
-        c_compat::free(tmp.cast());
+        libc::free(tmp.cast());
         return -1;
     }
 
     let mut idx_file = BgzfFp::EncodedFd(fd);
     let ret = bgzf_index_dump_hfile(fp, &mut idx_file, name);
     if libc::close(fd) < 0 || ret != 0 {
-        c_compat::free(tmp.cast());
+        libc::free(tmp.cast());
         return -1;
     }
-    c_compat::free(tmp.cast());
+    libc::free(tmp.cast());
     0
 }
 
@@ -3817,7 +3816,7 @@ pub unsafe fn bgzf_index_load_hfile(
     fp: *mut BGZF,
     idx_file: *mut BgzfFp,
     _name: *const c_char,
-) -> c_int {
+) -> i32 {
     bgzf_set_idx(
         fp,
         Box::new(bgzidx_t {
@@ -3839,10 +3838,10 @@ pub unsafe fn bgzf_index_load_hfile(
         return -1;
     }
 
-    (*idx).noffs = x.wrapping_add(1) as c_int;
+    (*idx).noffs = x.wrapping_add(1) as i32;
     (*idx).moffs = (*idx).noffs;
     (*idx).offs =
-        c_compat::malloc(((*idx).moffs as usize * std::mem::size_of::<bgzidx1_t>()) as u64)
+        libc::malloc((*idx).moffs as usize * std::mem::size_of::<bgzidx1_t>())
             .cast::<bgzidx1_t>();
     if (*idx).offs.is_null() {
         bgzf_index_destroy(fp);
@@ -3868,7 +3867,7 @@ pub unsafe fn bgzf_index_load_hfile(
     0
 }
 
-pub unsafe fn bgzf_index_load(fp: *mut BGZF, bname: *const c_char, suffix: *const c_char) -> c_int {
+pub unsafe fn bgzf_index_load(fp: *mut BGZF, bname: *const c_char, suffix: *const c_char) -> i32 {
     let mut tmp = ptr::null_mut();
     let name = if !suffix.is_null() {
         tmp = get_name_suffix(bname, suffix);
@@ -3882,21 +3881,21 @@ pub unsafe fn bgzf_index_load(fp: *mut BGZF, bname: *const c_char, suffix: *cons
 
     let fd = libc::open(name, libc::O_RDONLY);
     if fd < 0 {
-        c_compat::free(tmp.cast());
+        libc::free(tmp.cast());
         return -1;
     }
 
     let mut idx_file = BgzfFp::EncodedFd(fd);
     let ret = bgzf_index_load_hfile(fp, &mut idx_file, name);
     if libc::close(fd) != 0 || ret != 0 {
-        c_compat::free(tmp.cast());
+        libc::free(tmp.cast());
         return -1;
     }
-    c_compat::free(tmp.cast());
+    libc::free(tmp.cast());
     0
 }
 
-pub unsafe fn bgzf_peek(fp: *mut BGZF) -> c_int {
+pub unsafe fn bgzf_peek(fp: *mut BGZF) -> i32 {
     if fp.is_null() {
         return -2;
     }
@@ -3910,13 +3909,13 @@ pub unsafe fn bgzf_peek(fp: *mut BGZF) -> c_int {
         *(*fp)
             .uncompressed_block
             .as_mut_ptr()
-            .add((*fp).block_offset as usize) as c_int
+            .add((*fp).block_offset as usize) as i32
     } else {
         -1
     }
 }
 
-pub unsafe fn hwrite_uint64(mut x: u64, f: *mut BgzfFp) -> c_int {
+pub unsafe fn hwrite_uint64(mut x: u64, f: *mut BgzfFp) -> i32 {
     if ed_is_big() != 0 {
         x = ed_swap_8(x);
     }
@@ -3928,7 +3927,7 @@ pub unsafe fn hwrite_uint64(mut x: u64, f: *mut BgzfFp) -> c_int {
     0
 }
 
-pub unsafe fn hread_uint64(xptr: *mut u64, f: *mut BgzfFp) -> c_int {
+pub unsafe fn hread_uint64(xptr: *mut u64, f: *mut BgzfFp) -> i32 {
     if bgzf_hread_ptr(f, xptr.cast::<c_void>(), std::mem::size_of::<u64>())
         != std::mem::size_of::<u64>() as isize
     {
@@ -3942,7 +3941,7 @@ pub unsafe fn hread_uint64(xptr: *mut u64, f: *mut BgzfFp) -> c_int {
 
 pub unsafe fn get_name_suffix(bname: *const c_char, suffix: *const c_char) -> *mut c_char {
     let len = libc::strlen(bname) + libc::strlen(suffix) + 1;
-    let buff = c_compat::malloc(len as u64).cast::<c_char>();
+    let buff = libc::malloc(len).cast::<c_char>();
     if buff.is_null() {
         return ptr::null_mut();
     }
@@ -4000,7 +3999,7 @@ mod tests {
             assert_eq!(bgzf_check_EOF(fp), 1);
 
             assert_eq!(bgzf_seek(fp, 0, 0), 0);
-            assert_eq!(bgzf_peek(fp), b'a' as c_int);
+            assert_eq!(bgzf_peek(fp), b'a' as i32);
 
             let mut small = [0u8; 6];
             assert_eq!(bgzf_read(fp, small.as_mut_ptr().cast(), small.len()), 6);
@@ -4069,7 +4068,7 @@ mod tests {
         unsafe {
             let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
-            bgzf_set_cache_size(fp, (BGZF_MAX_BLOCK_SIZE * 2) as c_int);
+            bgzf_set_cache_size(fp, (BGZF_MAX_BLOCK_SIZE * 2) as i32);
 
             let mut byte = [0u8; 1];
             assert_eq!(bgzf_read(fp, byte.as_mut_ptr().cast(), 1), 1);
@@ -4082,7 +4081,7 @@ mod tests {
 
             assert_eq!(bgzf_seek(fp, 0, SEEK_SET), 0);
             assert_eq!(bgzf_htell_ptr(&mut (*fp).fp), 0);
-            assert_eq!(bgzf_peek(fp), payload[0] as c_int);
+            assert_eq!(bgzf_peek(fp), payload[0] as i32);
             assert_eq!(bgzf_htell_ptr(&mut (*fp).fp), end_offset);
 
             assert_eq!(bgzf_close(fp), 0);
@@ -4673,15 +4672,15 @@ mod tests {
         let path_c = CString::new(super::super::path_bytes(&path).as_ref()).unwrap();
 
         unsafe {
-            *c_compat::__errno_location() = 0;
+            *libc::__errno_location() = 0;
             let fd = libc::open(path_c.as_ptr(), libc::O_RDONLY);
             assert!(fd >= 0);
             let fp = bgzf_dopen(fd, c"r".as_ptr());
             assert!(fp.is_null());
-            assert_eq!(*c_compat::__errno_location(), c_compat::ENOEXEC);
-            *c_compat::__errno_location() = 0;
+            assert_eq!(*libc::__errno_location(), libc::ENOEXEC);
+            *libc::__errno_location() = 0;
             assert_eq!(libc::close(fd), -1);
-            assert_eq!(*c_compat::__errno_location(), libc::EBADF);
+            assert_eq!(*libc::__errno_location(), libc::EBADF);
         }
 
         let _ = std::fs::remove_file(path);
@@ -4813,14 +4812,14 @@ mod tests {
 
             let mut mt = Box::new(bgzf_mtaux_t::default());
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_init(
+                libc::pthread_mutex_init(
                     ptr::addr_of_mut!(mt.job_pool_m),
                     ptr::null()
                 ),
                 0
             );
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_cond_init(
+                libc::pthread_cond_init(
                     ptr::addr_of_mut!(mt.command_c),
                     ptr::null()
                 ),
@@ -4840,11 +4839,11 @@ mod tests {
             // sync primitives, then let the box drop.
             let mut mt = bgzf_take_mt(fp).expect("mt set above");
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(mt.command_c)),
+                libc::pthread_cond_destroy(ptr::addr_of_mut!(mt.command_c)),
                 0
             );
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(mt.job_pool_m)),
+                libc::pthread_mutex_destroy(ptr::addr_of_mut!(mt.job_pool_m)),
                 0
             );
             drop(mt);
@@ -4881,14 +4880,14 @@ mod tests {
 
             let mut mt = Box::new(bgzf_mtaux_t::default());
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_init(
+                libc::pthread_mutex_init(
                     ptr::addr_of_mut!(mt.job_pool_m),
                     ptr::null()
                 ),
                 0
             );
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_cond_init(
+                libc::pthread_cond_init(
                     ptr::addr_of_mut!(mt.command_c),
                     ptr::null()
                 ),
@@ -4909,11 +4908,11 @@ mod tests {
 
             let mut mt = bgzf_take_mt(fp).expect("mt set above");
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_cond_destroy(ptr::addr_of_mut!(mt.command_c)),
+                libc::pthread_cond_destroy(ptr::addr_of_mut!(mt.command_c)),
                 0
             );
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(mt.job_pool_m)),
+                libc::pthread_mutex_destroy(ptr::addr_of_mut!(mt.job_pool_m)),
                 0
             );
             drop(mt);
@@ -4931,7 +4930,7 @@ mod tests {
             let mut fp: BGZF = BGZF::default();
             let mut mt = Box::new(bgzf_mtaux_t::default());
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_init(
+                libc::pthread_mutex_init(
                     ptr::addr_of_mut!(mt.job_pool_m),
                     ptr::null()
                 ),
@@ -4951,7 +4950,7 @@ mod tests {
             // doesn't drop it on a destroyed primitive.
             let mut mt = bgzf_take_mt(&mut fp).expect("mt set above");
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(mt.job_pool_m)),
+                libc::pthread_mutex_destroy(ptr::addr_of_mut!(mt.job_pool_m)),
                 0
             );
             drop(mt);
@@ -4961,14 +4960,14 @@ mod tests {
     extern "C" fn mt_destroy_test_io_thread(arg: *mut c_void) -> *mut c_void {
         unsafe {
             let mt = arg.cast::<bgzf_mtaux_t>();
-            crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
+            libc::pthread_mutex_lock(ptr::addr_of_mut!((*mt).command_m));
             while (*mt).command != mtaux_cmd::CLOSE {
-                crate::htslib_rs::c_compat::pthread_cond_wait(
+                libc::pthread_cond_wait(
                     ptr::addr_of_mut!((*mt).command_c),
                     ptr::addr_of_mut!((*mt).command_m),
                 );
             }
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
+            libc::pthread_mutex_unlock(ptr::addr_of_mut!((*mt).command_m));
         }
         ptr::null_mut()
     }
@@ -4978,28 +4977,28 @@ mod tests {
         unsafe {
             let mt = Box::into_raw(Box::new(bgzf_mtaux_t::default()));
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_init(
+                libc::pthread_mutex_init(
                     ptr::addr_of_mut!((*mt).job_pool_m),
                     ptr::null()
                 ),
                 0
             );
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_init(
+                libc::pthread_mutex_init(
                     ptr::addr_of_mut!((*mt).command_m),
                     ptr::null()
                 ),
                 0
             );
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_init(
+                libc::pthread_mutex_init(
                     ptr::addr_of_mut!((*mt).idx_m),
                     ptr::null()
                 ),
                 0
             );
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_cond_init(
+                libc::pthread_cond_init(
                     ptr::addr_of_mut!((*mt).command_c),
                     ptr::null()
                 ),
@@ -5020,7 +5019,7 @@ mod tests {
             (*mt).own_pool = 1;
 
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_create(
+                libc::pthread_create(
                     ptr::addr_of_mut!((*mt).io_task),
                     ptr::null(),
                     mt_destroy_test_io_thread,
@@ -5038,28 +5037,28 @@ mod tests {
         unsafe {
             let mt = Box::into_raw(Box::new(bgzf_mtaux_t::default()));
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_init(
+                libc::pthread_mutex_init(
                     ptr::addr_of_mut!((*mt).job_pool_m),
                     ptr::null()
                 ),
                 0
             );
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_init(
+                libc::pthread_mutex_init(
                     ptr::addr_of_mut!((*mt).command_m),
                     ptr::null()
                 ),
                 0
             );
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_init(
+                libc::pthread_mutex_init(
                     ptr::addr_of_mut!((*mt).idx_m),
                     ptr::null()
                 ),
                 0
             );
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_cond_init(
+                libc::pthread_cond_init(
                     ptr::addr_of_mut!((*mt).command_c),
                     ptr::null()
                 ),
@@ -5074,10 +5073,10 @@ mod tests {
             ));
             assert!((*mt).out_queue.is_some());
             (*mt).own_pool = 1;
-            (*mt).errcode = BGZF_ERR_IO as c_int;
+            (*mt).errcode = BGZF_ERR_IO as i32;
 
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_create(
+                libc::pthread_create(
                     ptr::addr_of_mut!((*mt).io_task),
                     ptr::null(),
                     mt_destroy_test_io_thread,
@@ -5207,15 +5206,15 @@ mod tests {
                 BLOCK_HEADER_LENGTH + 5 + payload.len() + BLOCK_FOOTER_LENGTH
             );
             assert_eq!(check_header(out.as_ptr()), 0);
-            assert_eq!(unpackInt16(out.as_ptr().add(16)), dlen as c_int - 1);
+            assert_eq!(unpackInt16(out.as_ptr().add(16)), dlen as i32 - 1);
             assert_eq!(out[BLOCK_HEADER_LENGTH], 1);
             assert_eq!(
                 unpackInt16(out.as_ptr().add(BLOCK_HEADER_LENGTH + 1)),
-                payload.len() as c_int
+                payload.len() as i32
             );
             assert_eq!(
                 unpackInt16(out.as_ptr().add(BLOCK_HEADER_LENGTH + 3)),
-                (!(payload.len() as u16)) as c_int
+                (!(payload.len() as u16)) as i32
             );
             assert_eq!(
                 &out[BLOCK_HEADER_LENGTH + 5..BLOCK_HEADER_LENGTH + 5 + payload.len()],
@@ -5308,7 +5307,7 @@ mod tests {
             job.uncomp_len = 0;
 
             bgzf_decode_func(ptr::addr_of_mut!(job).cast());
-            assert_eq!(job.errcode, BGZF_ERR_CRC as c_int);
+            assert_eq!(job.errcode, BGZF_ERR_CRC as i32);
         }
     }
 
@@ -5530,7 +5529,7 @@ mod tests {
             let suffix = get_name_suffix(c"base".as_ptr(), c".gzi".as_ptr());
             assert!(!suffix.is_null());
             assert_eq!(CStr::from_ptr(suffix).to_bytes(), b"base.gzi");
-            c_compat::free(suffix.cast());
+            libc::free(suffix.cast());
         }
     }
 
@@ -5605,8 +5604,8 @@ mod tests {
             let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             assert_eq!(bgzf_utell(fp), 0);
-            assert_eq!(bgzf_getc(fp), b'a' as c_int);
-            assert_eq!(bgzf_getc(fp), b'b' as c_int);
+            assert_eq!(bgzf_getc(fp), b'a' as i32);
+            assert_eq!(bgzf_getc(fp), b'b' as i32);
             assert_eq!(bgzf_utell(fp), 2);
             assert_eq!(bgzf_close(fp), 0);
         }
@@ -5872,13 +5871,13 @@ mod tests {
             assert!(!fp.is_null());
             let mut line = kstring_t { data: Vec::new() };
 
-            assert_eq!(bgzf_getline(fp, b'\n' as c_int, &mut line), 5);
+            assert_eq!(bgzf_getline(fp, b'\n' as i32, &mut line), 5);
             assert_eq!(line.data.as_slice(), b"alpha");
-            assert_eq!(bgzf_getline(fp, b'\n' as c_int, &mut line), 4);
+            assert_eq!(bgzf_getline(fp, b'\n' as i32, &mut line), 4);
             assert_eq!(line.data.as_slice(), b"beta");
-            assert_eq!(bgzf_getline(fp, b'\n' as c_int, &mut line), 4);
+            assert_eq!(bgzf_getline(fp, b'\n' as i32, &mut line), 4);
             assert_eq!(line.data.as_slice(), b"last");
-            assert_eq!(bgzf_getline(fp, b'\n' as c_int, &mut line), -1);
+            assert_eq!(bgzf_getline(fp, b'\n' as i32, &mut line), -1);
 
             assert_eq!(bgzf_close(fp), 0);
         }
@@ -5943,7 +5942,7 @@ mod tests {
 
             let mut mt = Box::new(bgzf_mtaux_t::default());
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_init(&mut mt.idx_m, ptr::null()),
+                libc::pthread_mutex_init(&mut mt.idx_m, ptr::null()),
                 0
             );
             mt.hts_idx = NonNull::new(hidx);
@@ -5977,7 +5976,7 @@ mod tests {
                 },
             ];
 
-            let fp_idx = c_compat::calloc(1, std::mem::size_of::<bgzidx_t>() as u64);
+            let fp_idx = libc::calloc(1, std::mem::size_of::<bgzidx_t>());
             assert!(!fp_idx.is_null());
             (*(fp_idx.cast::<bgzidx_t>())).ublock_addr = 55;
             let mut fp = BGZF {
@@ -6016,8 +6015,8 @@ mod tests {
             // drops; free fp_idx via C (it was calloc'd, not Box-allocated).
             let mut mt = bgzf_take_mt(&mut fp).expect("mt set above");
             let _ = Box::into_raw(bgzf_forget_idx(&mut fp).expect("idx set above"));
-            c_compat::free(fp_idx);
-            crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut mt.idx_m);
+            libc::free(fp_idx);
+            libc::pthread_mutex_destroy(&mut mt.idx_m);
             drop(mt);
             super::super::hts::hts_idx_destroy(hidx);
         }
@@ -6031,7 +6030,7 @@ mod tests {
 
             let mut mt = Box::new(bgzf_mtaux_t::default());
             assert_eq!(
-                crate::htslib_rs::c_compat::pthread_mutex_init(&mut mt.idx_m, ptr::null()),
+                libc::pthread_mutex_init(&mut mt.idx_m, ptr::null()),
                 0
             );
             mt.block_number = 12;
@@ -6104,7 +6103,7 @@ mod tests {
             assert_eq!((*hidx).z.n_unmapped, 1);
 
             let mut mt = bgzf_take_mt(&mut fp).expect("mt set above");
-            crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut mt.idx_m);
+            libc::pthread_mutex_destroy(&mut mt.idx_m);
             drop(mt);
             super::super::hts::hts_idx_destroy(hidx);
         }
@@ -6156,7 +6155,7 @@ mod tests {
             (*idx).noffs = 3;
             (*idx).moffs = 3;
             (*idx).offs =
-                c_compat::calloc(3, std::mem::size_of::<bgzidx1_t>() as u64).cast::<bgzidx1_t>();
+                libc::calloc(3, std::mem::size_of::<bgzidx1_t>()).cast::<bgzidx1_t>();
             assert!(!(*idx).offs.is_null());
             (*(*idx).offs.add(1)).caddr = 11;
             (*(*idx).offs.add(1)).uaddr = 101;
@@ -6236,7 +6235,7 @@ mod tests {
             (*idx).noffs = 2;
             (*idx).moffs = 2;
             (*idx).offs =
-                c_compat::calloc(2, std::mem::size_of::<bgzidx1_t>() as u64).cast::<bgzidx1_t>();
+                libc::calloc(2, std::mem::size_of::<bgzidx1_t>()).cast::<bgzidx1_t>();
             assert!(!(*idx).offs.is_null());
             (*(*idx).offs.add(1)).caddr = 333;
             (*(*idx).offs.add(1)).uaddr = 444;
@@ -6461,7 +6460,7 @@ mod tests {
                 bgzf_write(fp, first.as_ptr().cast(), first.len()),
                 first.len() as isize
             );
-            assert_eq!((*fp).block_offset, first.len() as c_int);
+            assert_eq!((*fp).block_offset, first.len() as i32);
             assert_eq!(bgzf_c_1942_lazy_flush(fp), 0);
             assert_eq!((*fp).block_offset, 0);
             assert!((*fp).block_address > 0);
@@ -6504,7 +6503,7 @@ mod tests {
 
         unsafe {
             assert_eq!(bgzf_mt(ptr::null_mut(), 2, 256), -1);
-            assert_eq!(*c_compat::__errno_location(), libc::EINVAL);
+            assert_eq!(*libc::__errno_location(), libc::EINVAL);
 
             let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!fp.is_null());
@@ -6557,7 +6556,7 @@ mod tests {
             assert!(!pool.is_null());
 
             assert_eq!(bgzf_thread_pool(ptr::null_mut(), pool, 0), -1);
-            assert_eq!(*c_compat::__errno_location(), libc::EINVAL);
+            assert_eq!(*libc::__errno_location(), libc::EINVAL);
 
             let fp = bgzf_open(path_c.as_ptr(), c"w".as_ptr());
             assert!(!fp.is_null());
@@ -6793,13 +6792,13 @@ mod tests {
                 // The codes that matter for the race are the ones that fall
                 // through to the default `Z_OK | _` formatter (any code we
                 // pass that isn't one of the explicit Z_* constants).
-                let probes: [c_int; 6] = [
-                    7777 + tid as c_int,
+                let probes: [i32; 6] = [
+                    7777 + tid as i32,
                     Z_MEM_ERROR,
                     Z_DATA_ERROR,
                     9999,
                     Z_BUF_ERROR,
-                    1234567 + tid as c_int,
+                    1234567 + tid as i32,
                 ];
                 for iter in 0..1000usize {
                     let code = probes[iter % probes.len()];

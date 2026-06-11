@@ -1,9 +1,8 @@
-use std::ffi::c_int;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
 // original: check_running (htslib/ref_cache/ping.c:39)
-pub fn ref_cache_ping_c_39_check_running(port_num: c_int) -> c_int {
+pub fn ref_cache_ping_c_39_check_running(port_num: i32) -> i32 {
     let request = b"GET /hello HTTP/1.0\r\n\r\n";
     let expected = b"HTTP/1.0 200 OK\r\n";
     let len = expected.len();

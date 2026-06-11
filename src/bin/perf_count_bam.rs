@@ -20,9 +20,9 @@ fn main() {
 
         let mut count = 0u64;
         if let Some(region) = &region {
-            let idx = htslib_rs::sam_index_load(fp, path.as_ptr());
+            let idx = htslib_rs::sam_index_load(fp, path.as_ptr().cast());
             assert!(!idx.is_null(), "failed to load index");
-            let itr = htslib_rs::sam_itr_querys(idx, hdr, region.as_ptr());
+            let itr = htslib_rs::sam_itr_querys(idx, hdr, region.as_ptr().cast());
             assert!(!itr.is_null(), "failed to build iterator");
             while htslib_rs::sam_itr_next(fp, itr, rec) >= 0 {
                 count += 1;

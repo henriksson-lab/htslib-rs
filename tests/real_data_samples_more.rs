@@ -11,19 +11,24 @@ use htslib_rs::{
     HTS_FORMAT_FASTA_FORMAT, HTS_FORMAT_FASTQ_FORMAT, HTS_FORMAT_REGION_LIST, HTS_FORMAT_SAM,
     HTS_FORMAT_SEQUENCE_DATA,
 };
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::path::PathBuf;
 
-fn c_fixture(path: &str) -> CString {
+// Build a NUL-terminated byte buffer for callees that still take a raw `*const u8`.
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
-fn c_path(path: PathBuf) -> CString {
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+fn c_path(path: PathBuf) -> Vec<u8> {
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
-fn temp_index_path(label: &str, suffix: &str) -> CString {
+fn temp_index_path(label: &str, suffix: &str) -> Vec<u8> {
     let path = std::env::temp_dir().join(format!(
         "htslib_rs-real-data-samples-more-{}-{}{}",
         std::process::id(),
@@ -33,23 +38,23 @@ fn temp_index_path(label: &str, suffix: &str) -> CString {
     c_path(path)
 }
 
-unsafe fn argv_from_cstrings(args: &mut [CString]) -> Vec<*mut std::ffi::c_char> {
-    args.iter_mut().map(|arg| arg.as_ptr().cast_mut()).collect()
+unsafe fn argv_from_cstrings(args: &mut [Vec<u8>]) -> Vec<*mut u8> {
+    args.iter_mut().map(|arg| arg.as_mut_ptr()).collect()
 }
 
 unsafe fn run_sample_stdout(
-    args: &mut [CString],
+    args: &mut [Vec<u8>],
     out_path: &std::path::Path,
-    main_fn: unsafe fn(i32, *mut *mut std::ffi::c_char) -> i32,
+    main_fn: impl FnOnce(&mut [Vec<u8>]) -> i32,
 ) -> i32 {
     run_sample_output(args, out_path, false, main_fn)
 }
 
 unsafe fn run_sample_output(
-    args: &mut [CString],
+    args: &mut [Vec<u8>],
     out_path: &std::path::Path,
     capture_stderr: bool,
-    main_fn: unsafe fn(i32, *mut *mut std::ffi::c_char) -> i32,
+    main_fn: impl FnOnce(&mut [Vec<u8>]) -> i32,
 ) -> i32 {
     let _ = std::fs::remove_file(out_path);
     let pid = libc::fork();
@@ -57,7 +62,7 @@ unsafe fn run_sample_output(
     if pid == 0 {
         let out_c = c_path(out_path.to_path_buf());
         let out_fd = libc::open(
-            out_c.as_ptr(),
+            out_c.as_ptr().cast(),
             libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
             0o600,
         );
@@ -76,8 +81,7 @@ unsafe fn run_sample_output(
                 libc::close(null_fd);
             }
         }
-        let mut argv = argv_from_cstrings(args);
-        let ret = main_fn(argv.len() as i32, argv.as_mut_ptr());
+        let ret = main_fn(args);
         libc::fflush(std::ptr::null_mut());
         libc::_exit(ret);
     }
@@ -90,7 +94,7 @@ unsafe fn run_sample_output(
 
 unsafe fn count_sam_records_and_read_flags(path: &std::path::Path) -> (usize, usize, usize) {
     let c_path = c_path(path.to_path_buf());
-    let fp = htslib_rs::hts_open(c_path.as_ptr(), c"r".as_ptr());
+    let fp = htslib_rs::hts_open(c_path.as_ptr().cast(), c"r".as_ptr().cast());
     assert!(!fp.is_null(), "failed to open {}", path.display());
 
     let hdr = sam_hdr_read(fp);
@@ -133,9 +137,12 @@ unsafe fn count_cram_records_with_reference(
 ) -> usize {
     let cram_c = c_path(path.to_path_buf());
     let c_reference = c_path(reference_path.to_path_buf());
-    let fp = htslib_rs::hts_open(cram_c.as_ptr(), c"r".as_ptr());
+    let fp = htslib_rs::hts_open(cram_c.as_ptr().cast(), c"r".as_ptr().cast());
     assert!(!fp.is_null(), "failed to open {}", path.display());
-    assert_eq!(htslib_rs::hts_set_fai_filename(fp, c_reference.as_ptr()), 0);
+    assert_eq!(
+        htslib_rs::hts_set_fai_filename(fp, c_reference.as_ptr().cast()),
+        0
+    );
 
     let hdr = sam_hdr_read(fp);
     assert!(
@@ -165,9 +172,9 @@ unsafe fn count_cram_records_with_reference(
 unsafe fn write_bam_copy(input_path: &std::path::Path, output_path: &std::path::Path) {
     let input_c = c_path(input_path.to_path_buf());
     let output_c = c_path(output_path.to_path_buf());
-    let in_fp = htslib_rs::hts_open(input_c.as_ptr(), c"r".as_ptr());
+    let in_fp = htslib_rs::hts_open(input_c.as_ptr().cast(), c"r".as_ptr().cast());
     assert!(!in_fp.is_null(), "failed to open {}", input_path.display());
-    let out_fp = htslib_rs::hts_open(output_c.as_ptr(), c"wb".as_ptr());
+    let out_fp = htslib_rs::hts_open(output_c.as_ptr().cast(), c"wb".as_ptr().cast());
     assert!(
         !out_fp.is_null(),
         "failed to create {}",
@@ -196,7 +203,7 @@ unsafe fn write_bam_copy(input_path: &std::path::Path, output_path: &std::path::
 
 unsafe fn collect_qtask_ordered_xr(path: &std::path::Path) -> Vec<(String, f64)> {
     let c_path = c_path(path.to_path_buf());
-    let fp = htslib_rs::hts_open(c_path.as_ptr(), c"r".as_ptr());
+    let fp = htslib_rs::hts_open(c_path.as_ptr().cast(), c"r".as_ptr().cast());
     assert!(!fp.is_null(), "failed to open {}", path.display());
 
     let hdr = sam_hdr_read(fp);
@@ -215,18 +222,17 @@ unsafe fn collect_qtask_ordered_xr(path: &std::path::Path) -> Vec<(String, f64)>
         if ret < 0 {
             break;
         }
-        let aux = bam_aux_get(rec, c"xr".as_ptr());
+        let aux = bam_aux_get(rec, c"xr".as_ptr().cast());
         assert!(
             !aux.is_null(),
             "missing xr aux tag on {}",
-            CStr::from_ptr(bam_get_qname(rec)).to_string_lossy()
+            String::from_utf8_lossy(CStr::from_ptr(bam_get_qname(rec).cast()).to_bytes())
         );
         let ratio = bam_aux2f(aux);
         assert!(ratio.is_finite());
         assert!((0.0..=1.0).contains(&ratio));
         values.push((
-            CStr::from_ptr(bam_get_qname(rec))
-                .to_string_lossy()
+            String::from_utf8_lossy(CStr::from_ptr(bam_get_qname(rec).cast()).to_bytes())
                 .into_owned(),
             ratio,
         ));
@@ -241,31 +247,35 @@ unsafe fn collect_qtask_ordered_xr(path: &std::path::Path) -> Vec<(String, f64)>
 fn detect_fixture_format(path: &str) -> htsFormat {
     unsafe {
         let path = c_fixture(path);
-        let fp = hopen(path.as_ptr(), c"r".as_ptr());
-        assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+        let fp = hopen(path.as_ptr().cast(), c"r".as_ptr().cast());
+        assert!(
+            !fp.is_null(),
+            "failed to open {}",
+            String::from_utf8_lossy(&path)
+        );
 
         let mut fmt: htsFormat = std::mem::zeroed();
-        assert_eq!(hts_detect_format2(fp, path.as_ptr(), &mut fmt), 0);
+        assert_eq!(hts_detect_format2(fp, path.as_ptr().cast(), &mut fmt), 0);
         assert_eq!(hclose(fp), 0);
         fmt
     }
 }
 
-unsafe fn fetch_text(fai: *const htslib_rs::faidx_t, region: &CStr) -> String {
+unsafe fn fetch_text(fai: *const htslib_rs::faidx_t, region: &[u8]) -> String {
     let mut len = 0;
-    let seq = fai_fetch(fai, region.as_ptr(), &mut len);
+    let seq = fai_fetch(fai, region.as_ptr().cast(), &mut len);
     assert!(!seq.is_null());
-    let text = CStr::from_ptr(seq).to_string_lossy().into_owned();
+    let text = String::from_utf8_lossy(CStr::from_ptr(seq.cast()).to_bytes()).into_owned();
     assert_eq!(text.len(), len as usize);
     libc::free(seq.cast());
     text
 }
 
-unsafe fn fetch_qual_text(fai: *const htslib_rs::faidx_t, region: &CStr) -> String {
+unsafe fn fetch_qual_text(fai: *const htslib_rs::faidx_t, region: &[u8]) -> String {
     let mut len = 0;
-    let qual = fai_fetchqual(fai, region.as_ptr(), &mut len);
+    let qual = fai_fetchqual(fai, region.as_ptr().cast(), &mut len);
     assert!(!qual.is_null());
-    let text = CStr::from_ptr(qual).to_string_lossy().into_owned();
+    let text = String::from_utf8_lossy(CStr::from_ptr(qual.cast()).to_bytes()).into_owned();
     assert_eq!(text.len(), len as usize);
     libc::free(qual.cast());
     text
@@ -298,14 +308,24 @@ fn detects_demo_sample_fixture_formats() {
 fn reads_demo_sample_sam_header_and_exact_records() {
     unsafe {
         let path = c_fixture("htslib/samples/sample.sam");
-        let fp = htslib_rs::hts_open(path.as_ptr(), c"r".as_ptr());
-        assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+        let fp = htslib_rs::hts_open(path.as_ptr().cast(), c"r".as_ptr().cast());
+        assert!(
+            !fp.is_null(),
+            "failed to open {}",
+            String::from_utf8_lossy(&path)
+        );
 
         let hdr = sam_hdr_read(fp);
         assert!(!hdr.is_null());
         assert_eq!(sam_hdr_nref(&*hdr), 2);
-        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(&*hdr, 0)), c"T1");
-        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(&*hdr, 1)), c"T2");
+        assert_eq!(
+            CStr::from_ptr(sam_hdr_tid2name(&*hdr, 0).cast()).to_bytes(),
+            b"T1"
+        );
+        assert_eq!(
+            CStr::from_ptr(sam_hdr_tid2name(&*hdr, 1).cast()).to_bytes(),
+            b"T2"
+        );
         assert_eq!(sam_hdr_tid2len(&*hdr, 0), 40);
         assert_eq!(sam_hdr_tid2len(&*hdr, 1), 40);
 
@@ -313,7 +333,10 @@ fn reads_demo_sample_sam_header_and_exact_records() {
         assert!(!rec.is_null());
 
         assert!(sam_read1(fp, hdr, rec) >= 0);
-        assert_eq!(CStr::from_ptr(bam_get_qname(rec)), c"ITR1");
+        assert_eq!(
+            CStr::from_ptr(bam_get_qname(rec).cast()).to_bytes(),
+            b"ITR1"
+        );
         assert_eq!((*rec).core.flag, 99);
         assert_eq!((*rec).core.tid, 0);
         assert_eq!((*rec).core.pos, 4);
@@ -331,8 +354,7 @@ fn reads_demo_sample_sam_header_and_exact_records() {
                 break;
             }
             names.push(
-                CStr::from_ptr(bam_get_qname(rec))
-                    .to_string_lossy()
+                String::from_utf8_lossy(CStr::from_ptr(bam_get_qname(rec).cast()).to_bytes())
                     .into_owned(),
             );
         }
@@ -355,13 +377,17 @@ fn indexes_and_fetches_demo_sample_fasta_sequences() {
         let fasta = c_fixture("htslib/samples/sample.ref.fa");
         let fai_path = temp_index_path("sample-ref-fa", ".fai");
         assert_eq!(
-            fai_build3(fasta.as_ptr(), fai_path.as_ptr(), std::ptr::null()),
+            fai_build3(
+                fasta.as_ptr().cast(),
+                fai_path.as_ptr().cast(),
+                std::ptr::null()
+            ),
             0
         );
 
         let fai = fai_load3_format(
-            fasta.as_ptr(),
-            fai_path.as_ptr(),
+            fasta.as_ptr().cast(),
+            fai_path.as_ptr().cast(),
             std::ptr::null(),
             0,
             FAI_FASTA,
@@ -371,15 +397,15 @@ fn indexes_and_fetches_demo_sample_fasta_sequences() {
         assert_eq!(faidx_nseq(fai), 2);
         assert_eq!(faidx_iseq(&*fai, 0), Some(&b"T1"[..]));
         assert_eq!(faidx_iseq(&*fai, 1), Some(&b"T2"[..]));
-        assert_eq!(faidx_has_seq(fai, c"T1".as_ptr()), 1);
-        assert_eq!(faidx_has_seq(fai, c"T3".as_ptr()), 0);
-        assert_eq!(faidx_seq_len(fai, c"T1".as_ptr()), 40);
-        assert_eq!(faidx_seq_len(fai, c"T2".as_ptr()), 40);
+        assert_eq!(faidx_has_seq(fai, c"T1".as_ptr().cast()), 1);
+        assert_eq!(faidx_has_seq(fai, c"T3".as_ptr().cast()), 0);
+        assert_eq!(faidx_seq_len(fai, c"T1".as_ptr().cast()), 40);
+        assert_eq!(faidx_seq_len(fai, c"T2".as_ptr().cast()), 40);
 
-        assert_eq!(fetch_text(fai, c"T1:1-12"), "AAAAACTGAAAA");
-        assert_eq!(fetch_text(fai, c"T1:33-40"), "CAGTTTTT");
-        assert_eq!(fetch_text(fai, c"T2:1-12"), "TTTTCCCCACTG");
-        assert_eq!(fetch_text(fai, c"T2:29-40"), "ACTGTTAACAGT");
+        assert_eq!(fetch_text(fai, b"T1:1-12\0"), "AAAAACTGAAAA");
+        assert_eq!(fetch_text(fai, b"T1:33-40\0"), "CAGTTTTT");
+        assert_eq!(fetch_text(fai, b"T2:1-12\0"), "TTTTCCCCACTG");
+        assert_eq!(fetch_text(fai, b"T2:29-40\0"), "ACTGTTAACAGT");
 
         fai_destroy(fai);
     }
@@ -391,13 +417,17 @@ fn indexes_and_fetches_demo_sample_fastq_sequences_and_qualities() {
         let fastq = c_fixture("htslib/samples/sample.ref.fq");
         let fqi_path = temp_index_path("sample-ref-fq", ".fqi");
         assert_eq!(
-            fai_build3(fastq.as_ptr(), fqi_path.as_ptr(), std::ptr::null()),
+            fai_build3(
+                fastq.as_ptr().cast(),
+                fqi_path.as_ptr().cast(),
+                std::ptr::null()
+            ),
             0
         );
 
         let fai = fai_load3_format(
-            fastq.as_ptr(),
-            fqi_path.as_ptr(),
+            fastq.as_ptr().cast(),
+            fqi_path.as_ptr().cast(),
             std::ptr::null(),
             0,
             FAI_FASTQ,
@@ -409,15 +439,15 @@ fn indexes_and_fetches_demo_sample_fastq_sequences_and_qualities() {
         assert_eq!(faidx_iseq(&*fai, 1), Some(&b"T2"[..]));
         assert_eq!(faidx_iseq(&*fai, 2), Some(&b"T3"[..]));
         assert_eq!(faidx_iseq(&*fai, 3), Some(&b"T4"[..]));
-        assert_eq!(faidx_seq_len(fai, c"T1".as_ptr()), 40);
-        assert_eq!(faidx_seq_len(fai, c"T3".as_ptr()), 20);
-        assert_eq!(faidx_seq_len(fai, c"T4".as_ptr()), 100);
+        assert_eq!(faidx_seq_len(fai, c"T1".as_ptr().cast()), 40);
+        assert_eq!(faidx_seq_len(fai, c"T3".as_ptr().cast()), 20);
+        assert_eq!(faidx_seq_len(fai, c"T4".as_ptr().cast()), 100);
 
-        assert_eq!(fetch_text(fai, c"T1:1-12"), "AAAAACTGAAAA");
-        assert_eq!(fetch_qual_text(fai, c"T1:1-12"), "AAAAACTGAAAA");
-        assert_eq!(fetch_text(fai, c"T3:1-20"), "TTTTGGGGACTGTTAACAGT");
-        assert_eq!(fetch_qual_text(fai, c"T3:1-20"), "TTTTGGGGACTGTTAACAGT");
-        assert_eq!(fetch_text(fai, c"T4:81-100"), "TTTTGGGGACTGTTAACAGT");
+        assert_eq!(fetch_text(fai, b"T1:1-12\0"), "AAAAACTGAAAA");
+        assert_eq!(fetch_qual_text(fai, b"T1:1-12\0"), "AAAAACTGAAAA");
+        assert_eq!(fetch_text(fai, b"T3:1-20\0"), "TTTTGGGGACTGTTAACAGT");
+        assert_eq!(fetch_qual_text(fai, b"T3:1-20\0"), "TTTTGGGGACTGTTAACAGT");
+        assert_eq!(fetch_text(fai, b"T4:81-100\0"), "TTTTGGGGACTGTTAACAGT");
 
         fai_destroy(fai);
     }
@@ -432,14 +462,14 @@ fn read_fast_sample_command_prints_demo_fasta_and_fastq_payloads() {
         let fastq_out = base.with_extension("fq.out");
 
         let mut fasta_args = [
-            CString::new("read_fast").unwrap(),
+            b"read_fast\0".to_vec(),
             c_fixture("htslib/samples/sample.ref.fa"),
         ];
         assert_eq!(
             run_sample_stdout(
                 &mut fasta_args,
                 &fasta_out,
-                htslib_rs::samples::read_fast::samples_read_fast_c_49_main,
+                |a| htslib_rs::samples::read_fast::samples_read_fast_c_49_main(a),
             ),
             libc::EXIT_SUCCESS
         );
@@ -450,14 +480,14 @@ fn read_fast_sample_command_prints_demo_fasta_and_fastq_payloads() {
         );
 
         let mut fastq_args = [
-            CString::new("read_fast").unwrap(),
+            b"read_fast\0".to_vec(),
             c_fixture("htslib/samples/sample.ref.fq"),
         ];
         assert_eq!(
             run_sample_stdout(
                 &mut fastq_args,
                 &fastq_out,
-                htslib_rs::samples::read_fast::samples_read_fast_c_49_main,
+                |a| htslib_rs::samples::read_fast::samples_read_fast_c_49_main(a),
             ),
             libc::EXIT_SUCCESS
         );
@@ -484,17 +514,18 @@ fn flags_htsopt_field_sample_counts_demo_read_pair_flags() {
             std::process::id()
         ));
         let sample = c_fixture("htslib/samples/sample.sam");
-        let sample_text = sample.to_string_lossy().into_owned();
-        let mut args = [
-            CString::new("flags_field").unwrap(),
-            CString::new(sample.as_bytes()).unwrap(),
-        ];
+        let sample_text = String::from_utf8_lossy(&sample[..sample.len() - 1]).into_owned();
+        let mut args = [b"flags_field\0".to_vec(), sample.clone()];
 
         assert_eq!(
             run_sample_stdout(
                 &mut args,
                 &out_path,
-                htslib_rs::samples::flags_htsopt_field::samples_flags_htsopt_field_c_50_main,
+                |a| {
+                    htslib_rs::samples::flags_htsopt_field::samples_flags_htsopt_field_c_50_main(
+                        &a.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -515,17 +546,20 @@ fn add_header_sample_appends_expected_demo_header_lines() {
             std::process::id()
         ));
         let sample = c_fixture("htslib/samples/sample.sam");
-        let sample_text = sample.to_string_lossy().into_owned();
-        let mut args = [
-            CString::new("add_header").unwrap(),
-            CString::new(sample.as_bytes()).unwrap(),
-        ];
+        let sample_text = String::from_utf8_lossy(&sample[..sample.len() - 1]).into_owned();
+        let mut args = [b"add_header\0".to_vec(), sample.clone()];
 
         assert_eq!(
             run_sample_stdout(
                 &mut args,
                 &out_path,
-                htslib_rs::samples::add_header::samples_add_header_c_49_main,
+                |a| {
+                    let mut argv = argv_from_cstrings(a);
+                    htslib_rs::samples::add_header::samples_add_header_c_49_main(
+                        argv.len() as i32,
+                        argv.as_mut_ptr(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -552,19 +586,25 @@ fn update_header_sample_rewrites_demo_sq_length() {
             std::process::id()
         ));
         let mut args = [
-            CString::new("update_header").unwrap(),
+            b"update_header\0".to_vec(),
             c_fixture("htslib/samples/sample.sam"),
-            CString::new("SQ").unwrap(),
-            CString::new("T1").unwrap(),
-            CString::new("LN").unwrap(),
-            CString::new("38").unwrap(),
+            b"SQ\0".to_vec(),
+            b"T1\0".to_vec(),
+            b"LN\0".to_vec(),
+            b"38\0".to_vec(),
         ];
 
         assert_eq!(
             run_sample_stdout(
                 &mut args,
                 &out_path,
-                htslib_rs::samples::update_header::samples_update_header_c_49_main,
+                |a| {
+                    let mut argv = argv_from_cstrings(a);
+                    htslib_rs::samples::update_header::samples_update_header_c_49_main(
+                        argv.len() as i32,
+                        argv.as_mut_ptr(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -588,17 +628,23 @@ fn qtask_unordered_sample_counts_demo_bases_with_small_chunks() {
             std::process::id()
         ));
         let mut args = [
-            CString::new("qtask_unordered").unwrap(),
+            b"qtask_unordered\0".to_vec(),
             c_fixture("htslib/samples/sample.sam"),
-            CString::new("2").unwrap(),
-            CString::new("3").unwrap(),
+            b"2\0".to_vec(),
+            b"3\0".to_vec(),
         ];
 
         assert_eq!(
             run_sample_stdout(
                 &mut args,
                 &out_path,
-                htslib_rs::samples::qtask_unordered::samples_qtask_unordered_c_181_main,
+                |a| {
+                    let mut argv = argv_from_cstrings(a);
+                    htslib_rs::samples::qtask_unordered::samples_qtask_unordered_c_181_main(
+                        argv.len() as i32,
+                        argv.as_mut_ptr(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -644,11 +690,11 @@ fn qtask_ordered_sample_writes_ordered_bam_with_gc_ratio_aux_tags() {
         );
 
         let mut args = [
-            CString::new("qtask_ordered").unwrap(),
+            b"qtask_ordered\0".to_vec(),
             c_path(in_bam.clone()),
-            CString::new("2").unwrap(),
+            b"2\0".to_vec(),
             c_path(base.clone()),
-            CString::new("3").unwrap(),
+            b"3\0".to_vec(),
         ];
 
         assert_eq!(
@@ -656,7 +702,13 @@ fn qtask_ordered_sample_writes_ordered_bam_with_gc_ratio_aux_tags() {
                 &mut args,
                 &out_capture,
                 true,
-                htslib_rs::samples::qtask_ordered::samples_qtask_ordered_c_223_main,
+                |a| {
+                    let mut argv = argv_from_cstrings(a);
+                    htslib_rs::samples::qtask_ordered::samples_qtask_ordered_c_223_main(
+                        argv.len() as i32,
+                        argv.as_mut_ptr(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -690,7 +742,7 @@ fn split2_sample_writes_read1_and_read2_outputs() {
         std::fs::create_dir_all(&base).unwrap();
 
         let mut args = [
-            CString::new("split2").unwrap(),
+            b"split2\0".to_vec(),
             c_fixture("htslib/samples/sample.sam"),
             c_path(base.clone()),
         ];
@@ -699,7 +751,7 @@ fn split2_sample_writes_read1_and_read2_outputs() {
             run_sample_stdout(
                 &mut args,
                 &out_capture,
-                htslib_rs::samples::split2::samples_split2_c_50_main,
+                |a| htslib_rs::samples::split2::samples_split2_c_50_main(a),
             ),
             libc::EXIT_SUCCESS
         );
@@ -726,7 +778,7 @@ fn split_sample_writes_read1_sam_and_read2_bam_outputs() {
         std::fs::create_dir_all(&base).unwrap();
 
         let mut args = [
-            CString::new("split").unwrap(),
+            b"split\0".to_vec(),
             c_fixture("htslib/samples/sample.sam"),
             c_path(base.clone()),
         ];
@@ -735,7 +787,13 @@ fn split_sample_writes_read1_sam_and_read2_bam_outputs() {
             run_sample_stdout(
                 &mut args,
                 &out_capture,
-                htslib_rs::samples::split::samples_split_c_50_main,
+                |a| {
+                    let mut argv = argv_from_cstrings(a);
+                    htslib_rs::samples::split::samples_split_c_50_main(
+                        argv.len() as i32,
+                        argv.as_mut_ptr(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -764,7 +822,7 @@ fn split_thread1_sample_writes_threaded_read1_sam_and_read2_bam_outputs() {
         std::fs::create_dir_all(&base).unwrap();
 
         let mut args = [
-            CString::new("split_t1").unwrap(),
+            b"split_t1\0".to_vec(),
             c_fixture("htslib/samples/sample.sam"),
             c_path(base.clone()),
         ];
@@ -773,7 +831,11 @@ fn split_thread1_sample_writes_threaded_read1_sam_and_read2_bam_outputs() {
             run_sample_stdout(
                 &mut args,
                 &out_capture,
-                htslib_rs::samples::split_thread1::samples_split_thread1_c_50_main,
+                |a| {
+                    htslib_rs::samples::split_thread1::samples_split_thread1_c_50_main(
+                        &a.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -802,7 +864,7 @@ fn split_thread2_sample_writes_thread_pool_read1_sam_and_read2_bam_outputs() {
         std::fs::create_dir_all(&base).unwrap();
 
         let mut args = [
-            CString::new("split_t2").unwrap(),
+            b"split_t2\0".to_vec(),
             c_fixture("htslib/samples/sample.sam"),
             c_path(base.clone()),
         ];
@@ -811,7 +873,11 @@ fn split_thread2_sample_writes_thread_pool_read1_sam_and_read2_bam_outputs() {
             run_sample_stdout(
                 &mut args,
                 &out_capture,
-                htslib_rs::samples::split_thread2::samples_split_thread2_c_51_main,
+                |a| {
+                    htslib_rs::samples::split_thread2::samples_split_thread2_c_51_main(
+                        &a.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -845,12 +911,12 @@ fn cram_sample_writes_all_reference_modes_as_readable_cram() {
         .unwrap();
         let reference_c = c_path(reference.clone());
         assert_eq!(
-            fai_build3(reference_c.as_ptr(), std::ptr::null(), std::ptr::null()),
+            fai_build3(reference_c.as_ptr().cast(), std::ptr::null(), std::ptr::null()),
             0
         );
 
         let mut args = [
-            CString::new("cram").unwrap(),
+            b"cram\0".to_vec(),
             c_fixture("htslib/samples/sample.sam"),
             reference_c,
             c_path(base.clone()),
@@ -860,7 +926,11 @@ fn cram_sample_writes_all_reference_modes_as_readable_cram() {
             run_sample_stdout(
                 &mut args,
                 &out_capture,
-                htslib_rs::samples::cram::samples_cram_c_53_main,
+                |a| {
+                    htslib_rs::samples::cram::samples_cram_c_53_main(
+                        &a.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -893,9 +963,9 @@ fn index_write_sample_creates_compressed_sam_and_loadable_indexes() {
             std::fs::create_dir_all(&base).unwrap();
 
             let mut args = [
-                CString::new("idx_on_write").unwrap(),
+                b"idx_on_write\0".to_vec(),
                 c_fixture("htslib/test/index.sam"),
-                CString::new(shift).unwrap(),
+                format!("{shift}\0").into_bytes(),
                 c_path(base.clone()),
             ];
 
@@ -903,7 +973,7 @@ fn index_write_sample_creates_compressed_sam_and_loadable_indexes() {
                 run_sample_stdout(
                     &mut args,
                     &out_capture,
-                    htslib_rs::samples::index_write::samples_index_write_c_50_main,
+                    |a| htslib_rs::samples::index_write::samples_index_write_c_50_main(a),
                 ),
                 libc::EXIT_SUCCESS
             );
@@ -916,9 +986,9 @@ fn index_write_sample_creates_compressed_sam_and_loadable_indexes() {
 
             let out_c = c_path(out_path);
             let index_c = c_path(index_path);
-            let fp = htslib_rs::hts_open(out_c.as_ptr(), c"r".as_ptr());
+            let fp = htslib_rs::hts_open(out_c.as_ptr().cast(), c"r".as_ptr().cast());
             assert!(!fp.is_null());
-            let idx = sam_index_load2(fp, out_c.as_ptr(), index_c.as_ptr());
+            let idx = sam_index_load2(fp, out_c.as_ptr().cast(), index_c.as_ptr().cast());
             assert!(!idx.is_null(), "failed to load {suffix} index");
             htslib_rs::hts_idx_destroy(idx);
             assert_eq!(htslib_rs::hts_close(fp), 0);
@@ -945,17 +1015,23 @@ fn read_fast_index_sample_command_fetches_single_and_multi_regions() {
         .unwrap();
 
         let mut single_args = [
-            CString::new("read_fast_i").unwrap(),
+            b"read_fast_i\0".to_vec(),
             c_path(fq_path.clone()),
-            CString::new("Q").unwrap(),
-            CString::new("0").unwrap(),
-            CString::new("T1:6-13").unwrap(),
+            b"Q\0".to_vec(),
+            b"0\0".to_vec(),
+            b"T1:6-13\0".to_vec(),
         ];
         assert_eq!(
             run_sample_stdout(
                 &mut single_args,
                 &out_path,
-                htslib_rs::samples::read_fast_index::samples_read_fast_index_c_53_main,
+                |a| {
+                    let mut argv = argv_from_cstrings(a);
+                    htslib_rs::samples::read_fast_index::samples_read_fast_index_c_53_main(
+                        argv.len() as i32,
+                        argv.as_mut_ptr(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -965,17 +1041,23 @@ fn read_fast_index_sample_command_fetches_single_and_multi_regions() {
         );
 
         let mut multi_args = [
-            CString::new("read_fast_i").unwrap(),
+            b"read_fast_i\0".to_vec(),
             c_path(fq_path.clone()),
-            CString::new("Q").unwrap(),
-            CString::new("1").unwrap(),
-            CString::new("T2:1-4,T3:17-20,T4:97-100").unwrap(),
+            b"Q\0".to_vec(),
+            b"1\0".to_vec(),
+            b"T2:1-4,T3:17-20,T4:97-100\0".to_vec(),
         ];
         assert_eq!(
             run_sample_stdout(
                 &mut multi_args,
                 &out_path,
-                htslib_rs::samples::read_fast_index::samples_read_fast_index_c_53_main,
+                |a| {
+                    let mut argv = argv_from_cstrings(a);
+                    htslib_rs::samples::read_fast_index::samples_read_fast_index_c_53_main(
+                        argv.len() as i32,
+                        argv.as_mut_ptr(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -1005,15 +1087,19 @@ fn write_fast_sample_command_appends_fasta_and_fastq_records() {
         let _ = std::fs::remove_file(&fq_path);
 
         let mut fa_args = [
-            CString::new("write_fast").unwrap(),
+            b"write_fast\0".to_vec(),
             c_path(fa_path.clone()),
-            CString::new("ACTGN").unwrap(),
+            b"ACTGN\0".to_vec(),
         ];
         assert_eq!(
             run_sample_stdout(
                 &mut fa_args,
                 &out_path,
-                htslib_rs::samples::write_fast::samples_write_fast_c_51_main,
+                |a| {
+                    htslib_rs::samples::write_fast::samples_write_fast_c_51_main(
+                        &a.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -1023,16 +1109,20 @@ fn write_fast_sample_command_appends_fasta_and_fastq_records() {
         assert!(!fa.contains("\n+\n"));
 
         let mut fq_args = [
-            CString::new("write_fast").unwrap(),
+            b"write_fast\0".to_vec(),
             c_path(fq_path.clone()),
-            CString::new("ACTGN").unwrap(),
-            CString::new("ABCDE").unwrap(),
+            b"ACTGN\0".to_vec(),
+            b"ABCDE\0".to_vec(),
         ];
         assert_eq!(
             run_sample_stdout(
                 &mut fq_args,
                 &out_path,
-                htslib_rs::samples::write_fast::samples_write_fast_c_51_main,
+                |a| {
+                    htslib_rs::samples::write_fast::samples_write_fast_c_51_main(
+                        &a.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -1050,7 +1140,7 @@ fn write_fast_sample_command_appends_fasta_and_fastq_records() {
 fn parses_demo_sample_bed_with_regidx_and_queries_overlaps() {
     unsafe {
         let path = c_fixture("htslib/samples/sample.bed");
-        let mut idx = regidx_c_246_regidx_init(Some(path.as_bytes()), None, None, 0, None)
+        let mut idx = regidx_c_246_regidx_init(Some(&path[..path.len() - 1]), None, None, 0, None)
             .expect("regidx_init failed");
 
         assert_eq!(regidx_c_98_regidx_nregs(&idx), 4);
@@ -1107,11 +1197,10 @@ fn index_multireg_sample_emits_expected_records_and_preserves_status_bug() {
             std::process::id()
         ));
         let mut args = [
-            CString::new("read_multireg").unwrap(),
+            b"read_multireg\0".to_vec(),
             c_fixture("htslib/test/range.bam"),
-            CString::new("11").unwrap(),
-            CString::new(
-                "CHROMOSOME_I:1122-1122,\
+            b"11\0".to_vec(),
+            b"CHROMOSOME_I:1122-1122,\
 CHROMOSOME_II:1136-1136,\
 CHROMOSOME_II:1241-1241,\
 CHROMOSOME_II:1267-1267,\
@@ -1121,16 +1210,15 @@ CHROMOSOME_II:1353-1353,\
 CHROMOSOME_II:1366-1366,\
 CHROMOSOME_II:1416-1416,\
 CHROMOSOME_II:1459-1459,\
-CHROMOSOME_II:1536-1536",
-            )
-            .unwrap(),
+CHROMOSOME_II:1536-1536\0"
+                .to_vec(),
         ];
 
         assert_eq!(
             run_sample_stdout(
                 &mut args,
                 &out_path,
-                htslib_rs::samples::index_multireg_read::samples_index_multireg_read_c_50_main,
+                |a| htslib_rs::samples::index_multireg_read::samples_index_multireg_read_c_50_main(a),
             ),
             libc::EXIT_FAILURE
         );
@@ -1164,17 +1252,21 @@ fn index_reg_read_sample_emits_expected_range_records() {
             std::process::id()
         ));
         let mut args = [
-            CString::new("read_reg").unwrap(),
+            b"read_reg\0".to_vec(),
             c_fixture("htslib/test/range.bam"),
             c_fixture("htslib/test/range.bam.bai"),
-            CString::new("CHROMOSOME_II:2976-3070").unwrap(),
+            b"CHROMOSOME_II:2976-3070\0".to_vec(),
         ];
 
         assert_eq!(
             run_sample_stdout(
                 &mut args,
                 &out_path,
-                htslib_rs::samples::index_reg_read::samples_index_reg_read_c_55_main,
+                |a| {
+                    htslib_rs::samples::index_reg_read::samples_index_reg_read_c_55_main(
+                        &a.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -1210,7 +1302,7 @@ fn mod_bam_cigar_update_preserves_single_aux_payload_copy() {
         if pid == 0 {
             let out_c = c_path(out_path.clone());
             let out_fd = libc::open(
-                out_c.as_ptr(),
+                out_c.as_ptr().cast(),
                 libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
                 0o600,
             );
@@ -1225,11 +1317,11 @@ fn mod_bam_cigar_update_preserves_single_aux_payload_copy() {
                 libc::close(null_fd);
             }
             let mut args = [
-                CString::new("mod_bam").unwrap(),
+                b"mod_bam\0".to_vec(),
                 c_path(in_path.clone()),
-                CString::new("r1").unwrap(),
-                CString::new("6").unwrap(),
-                CString::new("2M2M").unwrap(),
+                b"r1\0".to_vec(),
+                b"6\0".to_vec(),
+                b"2M2M\0".to_vec(),
             ];
             let mut argv = argv_from_cstrings(&mut args);
             let ret = htslib_rs::samples::mod_bam::samples_mod_bam_c_50_main(
@@ -1269,7 +1361,7 @@ fn mod_bam_no_matching_qname_streams_original_sample_records() {
         if pid == 0 {
             let out_c = c_path(out_path.clone());
             let out_fd = libc::open(
-                out_c.as_ptr(),
+                out_c.as_ptr().cast(),
                 libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
                 0o600,
             );
@@ -1284,11 +1376,11 @@ fn mod_bam_no_matching_qname_streams_original_sample_records() {
                 libc::close(null_fd);
             }
             let mut args = [
-                CString::new("mod_bam").unwrap(),
+                b"mod_bam\0".to_vec(),
                 c_fixture("htslib/samples/sample.sam"),
-                CString::new("missing-qname").unwrap(),
-                CString::new("5").unwrap(),
-                CString::new("17").unwrap(),
+                b"missing-qname\0".to_vec(),
+                b"5\0".to_vec(),
+                b"17\0".to_vec(),
             ];
             let mut argv = argv_from_cstrings(&mut args);
             let ret = htslib_rs::samples::mod_bam::samples_mod_bam_c_50_main(
@@ -1332,17 +1424,23 @@ fn mod_bam_sample_updates_sequence_and_quality_fields_case_insensitively() {
         ));
 
         let mut seq_args = [
-            CString::new("mod_bam").unwrap(),
+            b"mod_bam\0".to_vec(),
             c_fixture("htslib/samples/sample.sam"),
-            CString::new("a4").unwrap(),
-            CString::new("10").unwrap(),
-            CString::new("CCT").unwrap(),
+            b"a4\0".to_vec(),
+            b"10\0".to_vec(),
+            b"CCT\0".to_vec(),
         ];
         assert_eq!(
             run_sample_stdout(
                 &mut seq_args,
                 &out_path,
-                htslib_rs::samples::mod_bam::samples_mod_bam_c_50_main,
+                |a| {
+                    let mut argv = argv_from_cstrings(a);
+                    htslib_rs::samples::mod_bam::samples_mod_bam_c_50_main(
+                        argv.len() as i32,
+                        argv.as_mut_ptr(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );
@@ -1354,17 +1452,23 @@ fn mod_bam_sample_updates_sequence_and_quality_fields_case_insensitively() {
         assert_eq!(seq_line, "A4\t99\tT2\t12\t50\t3M\t=\t23\t5\tCCT\t()(");
 
         let mut qual_args = [
-            CString::new("mod_bam").unwrap(),
+            b"mod_bam\0".to_vec(),
             c_fixture("htslib/samples/sample.sam"),
-            CString::new("a4").unwrap(),
-            CString::new("11").unwrap(),
-            CString::new("ABC").unwrap(),
+            b"a4\0".to_vec(),
+            b"11\0".to_vec(),
+            b"ABC\0".to_vec(),
         ];
         assert_eq!(
             run_sample_stdout(
                 &mut qual_args,
                 &out_path,
-                htslib_rs::samples::mod_bam::samples_mod_bam_c_50_main,
+                |a| {
+                    let mut argv = argv_from_cstrings(a);
+                    htslib_rs::samples::mod_bam::samples_mod_bam_c_50_main(
+                        argv.len() as i32,
+                        argv.as_mut_ptr(),
+                    )
+                },
             ),
             libc::EXIT_SUCCESS
         );

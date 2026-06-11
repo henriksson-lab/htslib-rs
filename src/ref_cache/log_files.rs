@@ -1,5 +1,4 @@
 use super::options::Options;
-use std::ffi::c_int;
 use std::io::Write;
 use std::ptr::NonNull;
 
@@ -23,7 +22,7 @@ impl DirHandle {
         self.0.as_ptr()
     }
 
-    unsafe fn fd(&self) -> c_int {
+    unsafe fn fd(&self) -> i32 {
         libc::dirfd(self.as_ptr())
     }
 }
@@ -76,17 +75,23 @@ pub struct Logfiles {
     dir_handle: Option<DirHandle>,
     curr_log: LogDestination,
     logs: Vec<Logfile>,
-    log_dir_fd: c_int,
+    log_dir_fd: i32,
 }
 
 // original: rotate_logs (htslib/ref_cache/log_files.c:69)
 pub unsafe fn ref_cache_log_files_c_69_rotate_logs(
     logfiles: &mut Logfiles,
     opts: &Options,
-) -> c_int {
+) -> i32 {
     let now = libc::time(std::ptr::null_mut());
-    let (year, month, day, hour, minute, second, _) =
-        crate::htslib_rs::c_compat::unix_time_utc_parts(now);
+    let mut tm: libc::tm = std::mem::zeroed();
+    libc::gmtime_r(&now, &mut tm);
+    let year = tm.tm_year + 1900;
+    let month = tm.tm_mon + 1;
+    let day = tm.tm_mday;
+    let hour = tm.tm_hour;
+    let minute = tm.tm_min;
+    let second = tm.tm_sec;
     let mut log_fd = -1;
     let mut name: Vec<u8> = b"ref_cache.log".to_vec();
 
@@ -106,26 +111,24 @@ pub unsafe fn ref_cache_log_files_c_69_rotate_logs(
                 libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
                 0o644,
             );
-            if !(log_fd < 0 && *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR) {
+            if !(log_fd < 0 && *libc::__errno_location() == libc::EINTR) {
                 break;
             }
         }
         if log_fd >= 0 {
             break;
         }
-        if *crate::htslib_rs::c_compat::__errno_location() != libc::EEXIST {
+        if *libc::__errno_location() != libc::EEXIST {
             break;
         }
     }
 
     if log_fd < 0 {
-        let errno = *crate::htslib_rs::c_compat::__errno_location();
-        let err = std::ffi::CStr::from_ptr(libc::strerror(errno));
         eprintln!(
             "Couldn't open {}/{} for writing: {}",
             String::from_utf8_lossy(opts.log_dir.as_deref().unwrap_or(b"")),
             String::from_utf8_lossy(&name),
-            err.to_string_lossy(),
+            std::io::Error::last_os_error(),
         );
         return -1;
     }
@@ -141,13 +144,11 @@ pub unsafe fn ref_cache_log_files_c_69_rotate_logs(
         let mut name_c = old_log.name.clone();
         name_c.push(0);
         if libc::unlinkat(logfiles.log_dir_fd, name_c.as_ptr().cast(), 0) != 0 {
-            let errno = *crate::htslib_rs::c_compat::__errno_location();
-            let err = std::ffi::CStr::from_ptr(libc::strerror(errno));
             eprintln!(
                 "Warning: Couldn't remove old log file {}/{}: {}",
                 String::from_utf8_lossy(opts.log_dir.as_deref().unwrap_or(b"")),
                 String::from_utf8_lossy(&old_log.name),
-                err.to_string_lossy(),
+                std::io::Error::last_os_error(),
             );
         }
     }
@@ -185,12 +186,10 @@ pub unsafe fn ref_cache_log_files_c_148_open_logs(opts: &Options) -> Option<Box<
     logfiles.dir_handle = DirHandle::open(log_dir);
 
     if logfiles.dir_handle.is_none() {
-        let errno = *crate::htslib_rs::c_compat::__errno_location();
-        let err = std::ffi::CStr::from_ptr(libc::strerror(errno));
         eprintln!(
             "Couldn't open directory {}: {}",
             String::from_utf8_lossy(log_dir),
-            err.to_string_lossy(),
+            std::io::Error::last_os_error(),
         );
         return None;
     }
@@ -198,17 +197,15 @@ pub unsafe fn ref_cache_log_files_c_148_open_logs(opts: &Options) -> Option<Box<
     logfiles.logs = Vec::with_capacity(opts.nlogs as usize + 1);
     logfiles.log_dir_fd = logfiles.dir_handle.as_ref().unwrap().fd();
     if logfiles.log_dir_fd < 0 {
-        let errno = *crate::htslib_rs::c_compat::__errno_location();
-        let err = std::ffi::CStr::from_ptr(libc::strerror(errno));
         eprintln!(
             "Couldn't get descriptor for {} : {}",
             String::from_utf8_lossy(log_dir),
-            err.to_string_lossy(),
+            std::io::Error::last_os_error(),
         );
         return None;
     }
 
-    *crate::htslib_rs::c_compat::__errno_location() = 0;
+    *libc::__errno_location() = 0;
     loop {
         let ent = libc::readdir(logfiles.dir_handle.as_ref().unwrap().as_ptr());
         if ent.is_null() {
@@ -271,13 +268,11 @@ pub unsafe fn ref_cache_log_files_c_148_open_logs(opts: &Options) -> Option<Box<
             libc::AT_SYMLINK_NOFOLLOW,
         ) != 0
         {
-            let errno = *crate::htslib_rs::c_compat::__errno_location();
-            let err = std::ffi::CStr::from_ptr(libc::strerror(errno));
             eprintln!(
                 "Warning: Couldn't stat {}/{} : {}",
                 String::from_utf8_lossy(log_dir),
                 String::from_utf8_lossy(&entry_name),
-                err.to_string_lossy(),
+                std::io::Error::last_os_error(),
             );
             continue;
         }
@@ -322,7 +317,7 @@ pub unsafe fn ref_cache_log_files_c_266_write_to_log(
     logfiles: &mut Logfiles,
     opts: &Options,
     msg: &[u8],
-) -> c_int {
+) -> i32 {
     let len = msg.len();
     let mut written = 0usize;
     if !logfiles.curr_log.is_open() {
@@ -359,8 +354,7 @@ pub unsafe fn ref_cache_log_files_c_266_write_to_log(
     }
 
     if written < len {
-        let errno = *crate::htslib_rs::c_compat::__errno_location();
-        let err = std::ffi::CStr::from_ptr(libc::strerror(errno)).to_string_lossy();
+        let err = std::io::Error::last_os_error();
         if let Some(log_dir) = opts.log_dir.as_deref() {
             let empty = Vec::new();
             let name = logfiles.logs.first().map_or(&empty, |log| &log.name);

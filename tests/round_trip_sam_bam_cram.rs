@@ -12,16 +12,21 @@ use htslib_rs::{
     hts_set_fai_filename, kstring_t, sam_c_4553_sam_write1, sam_format1, sam_hdr_destroy,
     sam_hdr_read, sam_hdr_write, sam_read1,
 };
-use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 
-fn c_fixture(path: &str) -> CString {
+// Build a NUL-terminated byte buffer for the production C-pointer boundaries
+// (hts_open / hts_set_fai_filename / hts_opt_add still take `*const c_char`).
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
-fn c_path(path: &Path) -> CString {
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+fn c_path(path: &Path) -> Vec<u8> {
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 fn tmp_path(label: &str, ext: &str) -> PathBuf {
@@ -37,11 +42,11 @@ fn tmp_path(label: &str, ext: &str) -> PathBuf {
 /// rendering.  The reference (if any) is required for CRAM inputs.
 unsafe fn collect_formatted_records(path: &Path, reference: Option<&str>) -> Vec<String> {
     let c_path = c_path(path);
-    let fp = hts_open(c_path.as_ptr(), c"r".as_ptr());
+    let fp = hts_open(c_path.as_ptr().cast(), b"r\0".as_ptr().cast());
     assert!(!fp.is_null(), "failed to open {}", path.display());
     if let Some(reference) = reference {
         let reference = c_fixture(reference);
-        assert_eq!(hts_set_fai_filename(fp, reference.as_ptr()), 0);
+        assert_eq!(hts_set_fai_filename(fp, reference.as_ptr().cast()), 0);
     }
 
     let hdr = sam_hdr_read(fp);
@@ -82,18 +87,18 @@ unsafe fn collect_formatted_records(path: &Path, reference: Option<&str>) -> Vec
 unsafe fn copy_alignments(
     input: &Path,
     output: &Path,
-    out_mode: &CStr,
+    out_mode: &[u8],
     reference: Option<&str>,
     out_opts: &[&str],
 ) {
     let in_path = c_path(input);
     let out_path = c_path(output);
 
-    let in_fp = hts_open(in_path.as_ptr(), c"r".as_ptr());
+    let in_fp = hts_open(in_path.as_ptr().cast(), b"r\0".as_ptr().cast());
     assert!(!in_fp.is_null(), "failed to open {}", input.display());
     if let Some(reference) = reference {
         let reference = c_fixture(reference);
-        assert_eq!(hts_set_fai_filename(in_fp, reference.as_ptr()), 0);
+        assert_eq!(hts_set_fai_filename(in_fp, reference.as_ptr().cast()), 0);
     }
     let hdr = sam_hdr_read(in_fp);
     assert!(
@@ -102,18 +107,19 @@ unsafe fn copy_alignments(
         input.display()
     );
 
-    let out_fp = hts_open(out_path.as_ptr(), out_mode.as_ptr());
+    let out_fp = hts_open(out_path.as_ptr().cast(), out_mode.as_ptr().cast());
     assert!(!out_fp.is_null(), "failed to create {}", output.display());
     if let Some(reference) = reference {
         let reference = c_fixture(reference);
-        assert_eq!(hts_set_fai_filename(out_fp, reference.as_ptr()), 0);
+        assert_eq!(hts_set_fai_filename(out_fp, reference.as_ptr().cast()), 0);
     }
     if !out_opts.is_empty() {
         let mut opts: *mut htslib_rs::hts_opt = std::ptr::null_mut();
         for opt in out_opts {
-            let opt_c = CString::new(*opt).unwrap();
+            let mut opt_c = opt.as_bytes().to_vec();
+            opt_c.push(0);
             assert_eq!(
-                hts_opt_add(&mut opts, opt_c.as_ptr()),
+                hts_opt_add(&mut opts, opt_c.as_ptr().cast()),
                 0,
                 "bad option {opt}"
             );
@@ -176,7 +182,7 @@ fn round_trip_sam_to_bam_preserves_formatted_records() {
         let original = collect_formatted_records(&input, None);
         assert!(!original.is_empty(), "input SAM was empty");
 
-        copy_alignments(&input, &bam, c"wb", None, &[]);
+        copy_alignments(&input, &bam, b"wb\0", None, &[]);
         let round_tripped = collect_formatted_records(&bam, None);
 
         assert_eq!(round_tripped, original, "SAM->BAM->SAM record parity");
@@ -206,12 +212,12 @@ fn round_trip_bam_to_cram_preserves_formatted_records() {
         copy_alignments(
             &input,
             &cram,
-            c"wc",
+            b"wc\0",
             Some("htslib/test/ce.fa"),
             &["no_ref=1", "store_md=0", "store_nm=0"],
         );
         // CRAM -> BAM (back to a lossless container)
-        copy_alignments(&cram, &bam, c"wb", Some("htslib/test/ce.fa"), &[]);
+        copy_alignments(&cram, &bam, b"wb\0", Some("htslib/test/ce.fa"), &[]);
 
         let round_tripped = collect_formatted_records(&bam, None);
 
@@ -254,11 +260,11 @@ fn round_trip_sam_to_cram_preserves_formatted_records() {
         copy_alignments(
             &input,
             &cram,
-            c"wc",
+            b"wc\0",
             Some("htslib/test/auxf.fa"),
             &["embed_ref=2"],
         );
-        copy_alignments(&cram, &sam, c"w", Some("htslib/test/auxf.fa"), &[]);
+        copy_alignments(&cram, &sam, b"w\0", Some("htslib/test/auxf.fa"), &[]);
 
         let round_tripped = collect_formatted_records(&sam, None);
 
@@ -295,8 +301,8 @@ fn round_trip_multi_reference_sam_to_bam_preserves_records() {
         let original = collect_formatted_records(&input, None);
         assert!(original.len() > 100, "index.sam should hold many records");
 
-        copy_alignments(&input, &bam, c"wb", None, &[]);
-        copy_alignments(&bam, &sam, c"w", None, &[]);
+        copy_alignments(&input, &bam, b"wb\0", None, &[]);
+        copy_alignments(&bam, &sam, b"w\0", None, &[]);
 
         let round_tripped = collect_formatted_records(&sam, None);
         assert_eq!(round_tripped, original, "multi-ref SAM->BAM->SAM parity");

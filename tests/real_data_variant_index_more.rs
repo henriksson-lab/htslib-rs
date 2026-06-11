@@ -4,20 +4,24 @@ use htslib_rs::{
     hts_idx_destroy, hts_idx_get_n_no_coor, hts_idx_nseq, hts_itr_destroy, hts_itr_next,
     hts_itr_query, hts_open, hts_pos_t, vcf_hdr_read, BGZF,
 };
-use std::ffi::{CStr, CString};
-use std::os::raw::{c_int, c_void};
+use std::ffi::CStr;
+use std::os::raw::c_void;
 
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().as_bytes().to_vec();
+    bytes.push(0);
+    bytes
 }
 
 fn fixture_path(path: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
 }
 
-fn c_path(path: &std::path::Path) -> CString {
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+fn c_path(path: &std::path::Path) -> Vec<u8> {
+    let mut bytes = path.to_string_lossy().as_bytes().to_vec();
+    bytes.push(0);
+    bytes
 }
 
 fn temp_path(name: &str) -> std::path::PathBuf {
@@ -30,29 +34,29 @@ unsafe extern "C" fn bcf_readrec_adapter(
     fp: *mut BGZF,
     data: *mut c_void,
     rec: *mut c_void,
-    tid: *mut c_int,
+    tid: *mut i32,
     beg: *mut hts_pos_t,
     end: *mut hts_pos_t,
-) -> c_int {
+) -> i32 {
     unsafe { bcf_readrec(fp, data, rec, tid, beg, end) }
 }
 
 unsafe fn count_indexed_records(
-    path: &CStr,
-    index_path: &CStr,
-    chrom: &CStr,
+    path: &[u8],
+    index_path: &[u8],
+    chrom: &[u8],
     beg: hts_pos_t,
     end: hts_pos_t,
 ) -> usize {
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
+    let fp = hts_open(path.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null());
 
     let hdr = vcf_hdr_read(fp);
     assert!(!hdr.is_null());
-    let tid = bcf_hdr_name2id(hdr, chrom.as_ptr());
+    let tid = bcf_hdr_name2id(hdr, chrom.as_ptr().cast());
     assert!(tid >= 0);
 
-    let idx = bcf_index_load2(path.as_ptr(), index_path.as_ptr());
+    let idx = bcf_index_load2(path.as_ptr().cast(), index_path.as_ptr().cast());
     assert!(!idx.is_null());
     let itr = hts_itr_query(idx, tid, beg, end, Some(bcf_readrec_adapter));
     assert!(!itr.is_null());
@@ -81,18 +85,18 @@ fn modhdr_csi_preserves_sparse_header_contig_id_and_translated_index_shape() {
     unsafe {
         let vcf = c_fixture("htslib/test/modhdr.vcf.gz");
         let csi = c_fixture("htslib/test/modhdr.vcf.gz.csi");
-        let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(vcf.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
 
         let hdr = vcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(CStr::from_ptr(bcf_hdr_get_version(hdr)), c"VCFv4.3");
+        assert_eq!(CStr::from_ptr(bcf_hdr_get_version(hdr)).to_bytes(), b"VCFv4.3");
         assert!(bcf_hdr_id2name(hdr, 0).is_null());
-        assert_eq!(CStr::from_ptr(bcf_hdr_id2name(hdr, 1)), c"chr22");
+        assert_eq!(CStr::from_ptr(bcf_hdr_id2name(hdr, 1)).to_bytes(), b"chr22");
         let tid = bcf_hdr_name2id(hdr, c"chr22".as_ptr());
         assert_eq!(tid, 1);
 
-        let idx = bcf_index_load2(vcf.as_ptr(), csi.as_ptr());
+        let idx = bcf_index_load2(vcf.as_ptr().cast(), csi.as_ptr().cast());
         assert!(!idx.is_null());
         assert_eq!(hts_idx_nseq(idx), 0);
         assert_eq!(hts_idx_get_n_no_coor(idx), 0);
@@ -111,18 +115,18 @@ fn generated_bcf_csi_queries_original_tabix_variant_fixture_intervals() {
         let _ = std::fs::remove_file(&csi_path);
         let csi = c_path(&csi_path);
 
-        assert_eq!(bcf_index_build2(bcf.as_ptr(), csi.as_ptr(), 14), 0);
+        assert_eq!(bcf_index_build2(bcf.as_ptr().cast(), csi.as_ptr().cast(), 14), 0);
 
         assert_eq!(
-            count_indexed_records(&bcf, &csi, c"1", 3_000_150, 3_000_151),
+            count_indexed_records(&bcf, &csi, b"1\0", 3_000_150, 3_000_151),
             1
         );
         assert_eq!(
-            count_indexed_records(&bcf, &csi, c"1", 3_062_914, 3_062_915),
+            count_indexed_records(&bcf, &csi, b"1\0", 3_062_914, 3_062_915),
             2
         );
         assert_eq!(
-            count_indexed_records(&bcf, &csi, c"4", 3_258_447, 3_258_456),
+            count_indexed_records(&bcf, &csi, b"4\0", 3_258_447, 3_258_456),
             1
         );
 
@@ -135,7 +139,7 @@ fn modhdr_csi_missing_header_contig_does_not_create_query_iterator() {
     unsafe {
         let vcf = c_fixture("htslib/test/modhdr.vcf.gz");
         let csi = c_fixture("htslib/test/modhdr.vcf.gz.csi");
-        let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(vcf.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
 
         let hdr = vcf_hdr_read(fp);
@@ -143,7 +147,7 @@ fn modhdr_csi_missing_header_contig_does_not_create_query_iterator() {
         let missing_tid = bcf_hdr_name2id(hdr, c"chr1".as_ptr());
         assert_eq!(missing_tid, -1);
 
-        let idx = bcf_index_load2(vcf.as_ptr(), csi.as_ptr());
+        let idx = bcf_index_load2(vcf.as_ptr().cast(), csi.as_ptr().cast());
         assert!(!idx.is_null());
         assert!(hts_itr_query(idx, missing_tid, 0, 1, Some(bcf_readrec_adapter),).is_null());
 

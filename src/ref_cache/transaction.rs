@@ -9,32 +9,31 @@ use super::ref_files::{
 };
 use super::sendfile_wrap::ref_cache_sendfile_wrap;
 use super::server::{ref_cache_server_c_395_queue_transaction_write, RefCacheClientsLayout};
-use std::ffi::{c_int, c_uint};
 
-const TRANSACT_KEEP_ALIVE: c_uint = 2;
-const TRANSACT_TEXT_CONST: c_uint = 1;
-const TRANSACT_WAITING_TEXT: c_int = 0;
-const TRANSACT_GOT_TEXT: c_int = 1;
-const TRANSACT_SENDING_TEXT: c_int = 2;
-const TRANSACT_SENDING_FILE: c_int = 3;
-const TRANSACT_FINISHED: c_int = 4;
-const TRANSACT_RANGE_FROM: c_uint = 8;
-const TRANSACT_RANGE_TO: c_uint = 16;
-const TRANSACT_RANGE_SUFFIX: c_uint = 32;
-const REF_CACHE_TRANSACT_MASK: c_uint = 0x3ff;
+const TRANSACT_KEEP_ALIVE: u32 = 2;
+const TRANSACT_TEXT_CONST: u32 = 1;
+const TRANSACT_WAITING_TEXT: i32 = 0;
+const TRANSACT_GOT_TEXT: i32 = 1;
+const TRANSACT_SENDING_TEXT: i32 = 2;
+const TRANSACT_SENDING_FILE: i32 = 3;
+const TRANSACT_FINISHED: i32 = 4;
+const TRANSACT_RANGE_FROM: u32 = 8;
+const TRANSACT_RANGE_TO: u32 = 16;
+const TRANSACT_RANGE_SUFFIX: u32 = 32;
+const REF_CACHE_TRANSACT_MASK: u32 = 0x3ff;
 const REF_CACHE_MAX_REQUEST_LEN: usize = 64;
-const HTTP_1_0: c_int = 1;
-const HTTP_1_1: c_int = 2;
-const REF_CACHE_WRITE_BLOCKED: c_int = 0;
-const REF_CACHE_WRITE_BLOCKED_UPSTREAM: c_int = 1;
-const REF_CACHE_WRITE_COMPLETE: c_int = 3;
-const REF_CACHE_WRITE_ERROR: c_int = 5;
+const HTTP_1_0: i32 = 1;
+const HTTP_1_1: i32 = 2;
+const REF_CACHE_WRITE_BLOCKED: i32 = 0;
+const REF_CACHE_WRITE_BLOCKED_UPSTREAM: i32 = 1;
+const REF_CACHE_WRITE_COMPLETE: i32 = 3;
+const REF_CACHE_WRITE_ERROR: i32 = 5;
 
-fn ref_cache_errno_is_would_block(errno: c_int) -> bool {
+fn ref_cache_errno_is_would_block(errno: i32) -> bool {
     errno == libc::EAGAIN || (libc::EWOULDBLOCK != libc::EAGAIN && errno == libc::EWOULDBLOCK)
 }
 
-fn ref_cache_errno_is_transient_write(errno: c_int) -> bool {
+fn ref_cache_errno_is_transient_write(errno: i32) -> bool {
     ref_cache_errno_is_would_block(errno) || errno == libc::EINTR
 }
 
@@ -58,8 +57,8 @@ fn ref_cache_errno_is_transient_write(errno: c_int) -> bool {
 //
 // SAFETY: single-threaded daemon worker.
 pub struct Transaction {
-    state: c_int,
-    flags: c_uint,
+    state: i32,
+    flags: u32,
     next: Option<TransactionId>,
     next_id: Option<TransactionId>,
     // Id of the owning client (an index into the server's client arena); the
@@ -78,8 +77,8 @@ pub struct Transaction {
     ref_: Option<usize>,
     fd_sz: libc::off_t,
     fd_sent: libc::off_t,
-    rc: c_uint,
-    http_vers: c_int,
+    rc: u32,
+    http_vers: i32,
 }
 
 /// Index of a live transaction in `TRANSACTION_ARENA`.
@@ -141,7 +140,7 @@ impl Transaction {
     }
 }
 
-fn http_vers_bytes(http_vers: c_int) -> Option<&'static [u8]> {
+fn http_vers_bytes(http_vers: i32) -> Option<&'static [u8]> {
     match http_vers {
         HTTP_1_0 => Some(b"HTTP/1.0"),
         HTTP_1_1 => Some(b"HTTP/1.1"),
@@ -254,8 +253,8 @@ pub unsafe fn ref_cache_transaction_c_210_transaction_get_client(
 // original: transaction_get_keep_alive (htslib/ref_cache/transaction.c:214)
 pub unsafe fn ref_cache_transaction_c_214_transaction_get_keep_alive(
     transact: TransactionId,
-) -> c_int {
-    ((txn!(transact).flags & TRANSACT_KEEP_ALIVE) != 0) as c_int
+) -> i32 {
+    ((txn!(transact).flags & TRANSACT_KEEP_ALIVE) != 0) as i32
 }
 
 // original: transaction_set_ref (htslib/ref_cache/transaction.c:218)
@@ -325,7 +324,7 @@ pub unsafe fn ref_cache_transaction_c_264_transaction_set_req_str(
 
 // original: transaction_by_id (htslib/ref_cache/transaction.c:270)
 pub unsafe fn ref_cache_transaction_c_270_transaction_by_id(
-    id: c_uint,
+    id: u32,
     start: Option<TransactionId>,
 ) -> Option<TransactionId> {
     let mut r = match start {
@@ -345,7 +344,7 @@ pub unsafe fn ref_cache_transaction_c_270_transaction_by_id(
 }
 
 // original: set_error_response (htslib/ref_cache/transaction.c:277)
-pub unsafe fn ref_cache_transaction_c_277_set_error_response(transact: TransactionId, code: c_uint) {
+pub unsafe fn ref_cache_transaction_c_277_set_error_response(transact: TransactionId, code: u32) {
     if txn!(transact).state >= TRANSACT_SENDING_TEXT {
         let t = txn!(transact);
         t.state = TRANSACT_FINISHED;
@@ -402,7 +401,7 @@ pub unsafe fn ref_cache_transaction_c_322_set_ref_file_response(
     len: i64,
     range_start: libc::off_t,
     range_end: libc::off_t,
-) -> c_int {
+) -> i32 {
     let Some(vers) = http_vers_bytes(txn!(transact).http_vers) else {
         ref_cache_transaction_c_277_set_error_response(transact, 505);
         return -1;
@@ -500,8 +499,8 @@ pub unsafe fn ref_cache_transaction_c_408_set_message_response(
 // original: send_file (htslib/ref_cache/transaction.c:460)
 pub unsafe fn ref_cache_transaction_c_460_send_file(
     transact: TransactionId,
-    out_fd: c_int,
-    in_fd: c_int,
+    out_fd: i32,
+    in_fd: i32,
     end: libc::off_t,
 ) -> libc::ssize_t {
     let transact = txn!(transact);
@@ -513,8 +512,8 @@ pub unsafe fn ref_cache_transaction_c_460_send_file(
 // original: transaction_send_data (htslib/ref_cache/transaction.c:556)
 pub unsafe fn ref_cache_transaction_c_556_transaction_send_data(
     transact: TransactionId,
-    fd: c_int,
-) -> c_int {
+    fd: i32,
+) -> i32 {
     if txn!(transact).state == TRANSACT_GOT_TEXT {
         txn!(transact).state = TRANSACT_SENDING_TEXT;
     }
@@ -525,7 +524,7 @@ pub unsafe fn ref_cache_transaction_c_556_transaction_send_data(
         let remaining = &t.text[t.out..];
         let bytes = libc::write(fd, remaining.as_ptr().cast(), remaining.len());
         if bytes < 0 {
-            let errno = *crate::htslib_rs::c_compat::__errno_location();
+            let errno = *libc::__errno_location();
             if !ref_cache_errno_is_transient_write(errno) {
                 eprintln!(
                     "Error from fd #{} : {}",
@@ -569,7 +568,7 @@ pub unsafe fn ref_cache_transaction_c_556_transaction_send_data(
             }
             let sent = ref_cache_transaction_c_460_send_file(transact, fd, ref_fd, end);
             if sent < 0 {
-                let errno = *crate::htslib_rs::c_compat::__errno_location();
+                let errno = *libc::__errno_location();
                 if !ref_cache_errno_is_would_block(errno) {
                     eprintln!(
                         "sendfile fd #{} : {}",
@@ -604,8 +603,8 @@ pub unsafe fn ref_cache_transaction_c_556_transaction_send_data(
 // original: transaction_have_content (htslib/ref_cache/transaction.c:619)
 pub unsafe fn ref_cache_transaction_c_619_transaction_have_content(
     transact: TransactionId,
-) -> c_int {
-    (txn!(transact).state > TRANSACT_WAITING_TEXT) as c_int
+) -> i32 {
+    (txn!(transact).state > TRANSACT_WAITING_TEXT) as i32
 }
 
 // original: transaction_set_next (htslib/ref_cache/transaction.c:623)
@@ -621,7 +620,7 @@ pub unsafe fn ref_cache_transaction_c_623_transaction_set_next(
 // original: transaction_has_data_to_send (htslib/ref_cache/transaction.c:628)
 pub unsafe fn ref_cache_transaction_c_628_transaction_has_data_to_send(
     transact: TransactionId,
-) -> c_int {
+) -> i32 {
     let mut have_data = 0;
 
     match txn!(transact).state {
@@ -657,7 +656,7 @@ pub unsafe fn ref_cache_transaction_c_628_transaction_has_data_to_send(
 pub unsafe fn ref_cache_transaction_c_654_set_transaction_file_range(
     transact: TransactionId,
     size: i64,
-    ref_data_available: c_int,
+    ref_data_available: i32,
 ) {
     let mut res = 0;
     let mut range_start: libc::off_t = -1;
@@ -695,7 +694,7 @@ pub unsafe fn ref_cache_transaction_c_671_update_with_initial_size(
     clients: &mut RefCacheClientsLayout,
     mut transact: Option<TransactionId>,
     size: i64,
-    ref_id: c_uint,
+    ref_id: u32,
     write_stack: &mut usize,
 ) {
     while let Some(cur) = transact {
@@ -708,9 +707,9 @@ pub unsafe fn ref_cache_transaction_c_671_update_with_initial_size(
 // original: got_download_started (htslib/ref_cache/transaction.c:680)
 pub unsafe fn ref_cache_transaction_c_680_got_download_started(
     clients: &mut RefCacheClientsLayout,
-    id: c_uint,
+    id: u32,
     val: i64,
-    fd: c_int,
+    fd: i32,
     write_stack: &mut usize,
 ) {
     let Some(transact) = ref_cache_transaction_c_270_transaction_by_id(id, None) else {
@@ -734,7 +733,7 @@ pub unsafe fn ref_cache_transaction_c_680_got_download_started(
 // original: got_download_part (htslib/ref_cache/transaction.c:698)
 pub unsafe fn ref_cache_transaction_c_698_got_download_part(
     clients: &mut RefCacheClientsLayout,
-    id: c_uint,
+    id: u32,
     val: i64,
     write_stack: &mut usize,
 ) {
@@ -757,7 +756,7 @@ pub unsafe fn ref_cache_transaction_c_698_got_download_part(
 // original: got_download_clen (htslib/ref_cache/transaction.c:715)
 pub unsafe fn ref_cache_transaction_c_715_got_download_clen(
     clients: &mut RefCacheClientsLayout,
-    id: c_uint,
+    id: u32,
     val: i64,
     write_stack: &mut usize,
 ) {
@@ -782,7 +781,7 @@ pub unsafe fn ref_cache_transaction_c_715_got_download_clen(
 // original: got_download_result (htslib/ref_cache/transaction.c:730)
 pub unsafe fn ref_cache_transaction_c_730_got_download_result(
     clients: &mut RefCacheClientsLayout,
-    id: c_uint,
+    id: u32,
     val: i64,
     write_stack: &mut usize,
 ) {
@@ -795,7 +794,7 @@ pub unsafe fn ref_cache_transaction_c_730_got_download_result(
     if val != 200 {
         let mut transact = Some(first);
         while let Some(cur) = transact {
-            ref_cache_transaction_c_277_set_error_response(cur, val as c_uint);
+            ref_cache_transaction_c_277_set_error_response(cur, val as u32);
             ref_cache_server_c_395_queue_transaction_write(clients, cur, write_stack);
             transact = ref_cache_transaction_c_270_transaction_by_id(id, Some(cur));
         }
@@ -838,8 +837,15 @@ pub unsafe fn ref_cache_transaction_c_769_make_log_message(
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
-    let (year, month, day, hour, minute, second, _) =
-        crate::htslib_rs::c_compat::unix_time_utc_parts(time);
+    // Break the UTC timestamp into calendar parts via the genuine OS boundary.
+    let mut tm: libc::tm = std::mem::zeroed();
+    libc::gmtime_r(&time, &mut tm);
+    let year = tm.tm_year + 1900;
+    let month = (tm.tm_mon + 1) as u32;
+    let day = tm.tm_mday as u32;
+    let hour = tm.tm_hour as u32;
+    let minute = tm.tm_min as u32;
+    let second = tm.tm_sec as u32;
     let timestamp = format!(
         "{:02}/{}/{:04}:{:02}:{:02}:{:02} +0000",
         day,
@@ -858,7 +864,7 @@ pub unsafe fn ref_cache_transaction_c_769_make_log_message(
     out.extend_from_slice(b" \"");
     out.extend_from_slice(&t.req_str);
     out.extend_from_slice(b"\" ");
-    out.extend_from_slice(format!("{}", t.rc as c_int).as_bytes());
+    out.extend_from_slice(format!("{}", t.rc as i32).as_bytes());
     out.push(b' ');
     out.extend_from_slice(format!("{}", t.out + t.fd_sent as usize).as_bytes());
     out.extend_from_slice(b" \"");

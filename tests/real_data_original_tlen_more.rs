@@ -2,24 +2,20 @@ use htslib_rs::{
     bam_destroy1, bam_get_qname, bam_init1, hts_close, hts_open, kstring_t, sam_c_4553_sam_write1,
     sam_format1, sam_hdr_destroy, sam_hdr_read, sam_hdr_write, sam_read1,
 };
-use std::ffi::{CStr, CString};
-
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 unsafe fn formatted_alignment_records(path: &str) -> Vec<String> {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), c"r".as_ptr());
+    assert!(!fp.is_null(), "failed to open {path:?}");
 
     let hdr = sam_hdr_read(fp);
-    assert!(
-        !hdr.is_null(),
-        "failed to read header from {}",
-        path.to_string_lossy()
-    );
+    assert!(!hdr.is_null(), "failed to read header from {path:?}");
 
     let rec = bam_init1();
     assert!(!rec.is_null());
@@ -49,8 +45,8 @@ unsafe fn assert_cram_matches_original_tlen_sam(stem: &str) {
 
 unsafe fn qname_isize_pairs(path: &str) -> Vec<(String, i64)> {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), c"r".as_ptr());
+    assert!(!fp.is_null(), "failed to open {path:?}");
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
     let rec = bam_init1();
@@ -62,10 +58,15 @@ unsafe fn qname_isize_pairs(path: &str) -> Vec<(String, i64)> {
         if ret < 0 {
             break;
         }
+        let qname_ptr = bam_get_qname(rec);
+        let mut qname_bytes = Vec::new();
+        let mut i = 0;
+        while *qname_ptr.add(i) != 0 {
+            qname_bytes.push(*qname_ptr.add(i));
+            i += 1;
+        }
         pairs.push((
-            CStr::from_ptr(bam_get_qname(rec))
-                .to_string_lossy()
-                .into_owned(),
+            String::from_utf8_lossy(&qname_bytes).into_owned(),
             (*rec).core.isize,
         ));
     }
@@ -78,7 +79,7 @@ unsafe fn qname_isize_pairs(path: &str) -> Vec<(String, i64)> {
 
 unsafe fn copy_alignment_to_cram(input_path: &str, output_name: &str) -> std::path::PathBuf {
     let in_path = c_fixture(input_path);
-    let in_fp = hts_open(in_path.as_ptr(), c"r".as_ptr());
+    let in_fp = hts_open(in_path.as_ptr().cast(), c"r".as_ptr());
     assert!(!in_fp.is_null(), "failed to open {input_path}");
     let hdr = sam_hdr_read(in_fp);
     assert!(!hdr.is_null(), "failed to read header from {input_path}");
@@ -88,8 +89,9 @@ unsafe fn copy_alignment_to_cram(input_path: &str, output_name: &str) -> std::pa
         std::process::id(),
         line!()
     ));
-    let out_path_c = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
-    let out_fp = hts_open(out_path_c.as_ptr(), c"wc".as_ptr());
+    let mut out_path_c = out_path.to_string_lossy().into_owned().into_bytes();
+    out_path_c.push(0);
+    let out_fp = hts_open(out_path_c.as_ptr().cast(), c"wc".as_ptr());
     assert!(!out_fp.is_null(), "failed to open temp CRAM output");
     assert_eq!(sam_hdr_write(out_fp, hdr), 0);
 

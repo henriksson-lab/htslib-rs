@@ -1,134 +1,123 @@
-use std::ffi::{c_char, c_int, CStr};
-
 use crate::htslib_rs::{hts::kstring_t, sam};
+use std::io::Write;
 
 // original: print_usage (htslib/samples/read_header.c:37)
-pub unsafe fn samples_read_header_c_37_print_usage(fp: *mut libc::FILE) {
-    libc::fprintf(
-        fp,
-        c"Usage: read_header infile header [id val] [tag]\nThis shows given tag from given header or the whole line\n".as_ptr(),
-    );
+pub unsafe fn samples_read_header_c_37_print_usage() {
+    eprint!("Usage: read_header infile header [id val] [tag]\nThis shows given tag from given header or the whole line\n");
 }
 
 // original: main (htslib/samples/read_header.c:49)
-pub unsafe fn samples_read_header_c_49_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
-    let mut ret = libc::EXIT_FAILURE;
+pub unsafe fn samples_read_header_c_49_main(args: &[Vec<u8>]) -> i32 {
+    let mut __out = std::io::stdout();
+    let mut ret = 1;
     let mut data = kstring_t { data: Vec::new() };
 
+    let argc = args.len();
     if !(3..=6).contains(&argc) {
-        samples_read_header_c_37_print_usage(crate::htslib_rs::c_compat::stderr.cast());
+        samples_read_header_c_37_print_usage();
         return ret;
     }
 
-    let inname = *argv.add(1);
-    let header = *argv.add(2);
-    let mut tag: *mut c_char = std::ptr::null_mut();
-    let mut id: *mut c_char = std::ptr::null_mut();
-    let mut idval: *mut c_char = std::ptr::null_mut();
+    let inname: &[u8] = &args[1];
+    let header: &[u8] = &args[2];
+    let mut tag: Option<&[u8]> = None;
+    let mut id: Option<&[u8]> = None;
+    let mut idval: Option<&[u8]> = None;
 
     if argc == 4 {
-        tag = *argv.add(3);
-        if *header == b'H' as c_char && *header.add(1) == b'D' as c_char {
-            id = std::ptr::null_mut();
-        } else if *header == b'S' as c_char && *header.add(1) == b'Q' as c_char {
-            id = c"SN".as_ptr().cast_mut();
-        } else if (*header == b'R' as c_char || *header == b'P' as c_char)
-            && *header.add(1) == b'G' as c_char
+        tag = Some(&args[3]);
+        if header.first() == Some(&b'H') && header.get(1) == Some(&b'D') {
+            id = None;
+        } else if header.first() == Some(&b'S') && header.get(1) == Some(&b'Q') {
+            id = Some(b"SN");
+        } else if (header.first() == Some(&b'R') || header.first() == Some(&b'P'))
+            && header.get(1) == Some(&b'G')
         {
-            id = c"ID".as_ptr().cast_mut();
-        } else if *header == b'C' as c_char && *header.add(1) == b'O' as c_char {
-            id = c"".as_ptr().cast_mut();
+            id = Some(b"ID");
+        } else if header.first() == Some(&b'C') && header.get(1) == Some(&b'O') {
+            id = Some(b"");
         } else {
-            libc::printf(c"Invalid header type\n".as_ptr());
+            write!(__out, "Invalid header type\n").unwrap();
+            __out.flush().unwrap();
             return ret;
         }
     } else if argc == 5 {
-        id = *argv.add(3);
-        idval = *argv.add(4);
+        id = Some(&args[3]);
+        idval = Some(&args[4]);
     } else if argc == 6 {
-        id = *argv.add(3);
-        idval = *argv.add(4);
-        tag = *argv.add(5);
+        id = Some(&args[3]);
+        idval = Some(&args[4]);
+        tag = Some(&args[5]);
     }
 
-    let infile = crate::htslib_rs::hts::hts_open(inname, c"r".as_ptr());
+    // hts_open is still a raw-ptr C-ABI API in another file: build NUL-terminated
+    // byte buffers and pass them at the boundary.
+    let mut inname_c = inname.to_vec();
+    inname_c.push(0);
+    let infile = crate::htslib_rs::hts::hts_open(inname_c.as_ptr().cast(), b"r\0".as_ptr().cast());
     if infile.is_null() {
-        libc::printf(c"Could not open %s\n".as_ptr(), inname);
+        write!(__out, "Could not open {}\n", String::from_utf8_lossy(inname)).unwrap();
+        __out.flush().unwrap();
         return ret;
     }
 
     let in_samhdr = sam::sam_hdr_read(infile);
     if in_samhdr.is_null() {
-        libc::printf(c"Failed to read header from file!\n".as_ptr());
+        write!(__out, "Failed to read header from file!\n").unwrap();
+        __out.flush().unwrap();
         crate::htslib_rs::hts::hts_close(infile);
         return ret;
     }
 
-    if !id.is_null() && !idval.is_null() {
-        ret = if !tag.is_null() {
+    if let (Some(id), Some(idval)) = (id, idval) {
+        ret = if let Some(tag) = tag {
             sam::sam_hdr_find_tag_id(
                 &mut *in_samhdr,
-                CStr::from_ptr(header),
-                Some((CStr::from_ptr(id), CStr::from_ptr(idval))),
-                CStr::from_ptr(tag),
+                header,
+                Some((id, idval)),
+                tag,
                 &mut data,
             )
         } else {
-            sam::sam_hdr_find_line_id(
-                &mut *in_samhdr,
-                CStr::from_ptr(header),
-                CStr::from_ptr(id),
-                CStr::from_ptr(idval),
-                &mut data,
-            )
+            sam::sam_hdr_find_line_id(&mut *in_samhdr, header, id, idval, &mut data)
         };
 
         if ret == 0 {
-            let mut data_cstr = data.data.clone();
-            data_cstr.push(0);
-            libc::printf(c"%s\n".as_ptr(), data_cstr.as_ptr());
+            write!(__out, "{}\n", String::from_utf8_lossy(&data.data)).unwrap();
         } else if ret == -1 {
-            libc::printf(c"No matching tag found\n".as_ptr());
-            ret = libc::EXIT_FAILURE;
+            write!(__out, "No matching tag found\n").unwrap();
+            ret = 1;
         } else {
-            libc::printf(c"Failed to find header line\n".as_ptr());
-            ret = libc::EXIT_FAILURE;
+            write!(__out, "Failed to find header line\n").unwrap();
+            ret = 1;
         }
     } else {
-        let linecnt = sam::sam_hdr_count_lines(&mut *in_samhdr, CStr::from_ptr(header));
+        let linecnt = sam::sam_hdr_count_lines(&mut *in_samhdr, header);
         if linecnt == 0 {
-            libc::printf(c"No matching line found\n".as_ptr());
+            write!(__out, "No matching line found\n").unwrap();
         } else {
             let mut ok = true;
             for c in 0..linecnt {
-                ret = if !tag.is_null() {
-                    sam::sam_hdr_find_tag_pos(
-                        &mut *in_samhdr,
-                        CStr::from_ptr(header),
-                        c,
-                        CStr::from_ptr(tag),
-                        &mut data,
-                    )
+                ret = if let Some(tag) = tag {
+                    sam::sam_hdr_find_tag_pos(&mut *in_samhdr, header, c, tag, &mut data)
                 } else {
-                    sam::sam_hdr_find_line_pos(&mut *in_samhdr, CStr::from_ptr(header), c, &mut data)
+                    sam::sam_hdr_find_line_pos(&mut *in_samhdr, header, c, &mut data)
                 };
 
                 if ret == 0 {
-                    let mut data_cstr = data.data.clone();
-                    data_cstr.push(0);
-                    libc::printf(c"%s\n".as_ptr(), data_cstr.as_ptr());
+                    write!(__out, "{}\n", String::from_utf8_lossy(&data.data)).unwrap();
                 } else if ret == -1 {
-                    libc::printf(c"Tag not present\n".as_ptr());
+                    write!(__out, "Tag not present\n").unwrap();
                 } else {
-                    libc::printf(c"Failed to get tag\n".as_ptr());
+                    write!(__out, "Failed to get tag\n").unwrap();
                     ok = false;
                     break;
                 }
             }
             if ok {
-                ret = libc::EXIT_SUCCESS;
+                ret = 0;
             } else {
-                ret = libc::EXIT_FAILURE;
+                ret = 1;
             }
         }
     }
@@ -136,5 +125,6 @@ pub unsafe fn samples_read_header_c_49_main(argc: c_int, argv: *mut *mut c_char)
     sam::sam_hdr_destroy(in_samhdr);
     crate::htslib_rs::hts::hts_close(infile);
     crate::htslib_rs::hts::ks_free(&mut data);
+    __out.flush().unwrap();
     ret
 }

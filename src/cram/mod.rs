@@ -1,14 +1,11 @@
 use std::{
     collections::HashMap,
-    ffi::{c_char, c_int, c_uint, c_void, CStr},
+    ffi::{c_char, c_void},
     io::Read,
     ptr::NonNull,
 };
 
 use crate::htslib_rs::bgzf::{bgzf_close, bgzf_index_load, bgzf_open, bgzf_read, bgzf_useek};
-use crate::htslib_rs::c_compat::{
-    __errno_location, calloc, free, malloc, memcpy, realloc, strdup, EINVAL, ENOMEM,
-};
 use crate::htslib_rs::faidx::fai_build;
 use crate::htslib_rs::hfile::{hclose, hclose_abruptly, hgets, hisremote, hopen};
 use crate::htslib_rs::hfile::{
@@ -99,9 +96,9 @@ pub struct refs_t {
 }
 
 // Value-type aliases — `cram_content_type` and `cram_block_method` are
-// `c_int` enums in hts-sys bindings.
-pub type cram_content_type = c_int;
-pub type cram_block_method = c_int;
+// `i32` enums in hts-sys bindings.
+pub type cram_content_type = i32;
+pub type cram_block_method = i32;
 
 // Native cram_block_method enum values (cram/cram_structs.h).
 pub const CRAM_BLOCK_METHOD_RAW: cram_block_method = 0;
@@ -120,12 +117,12 @@ pub const CRAM_CONTENT_TYPE_CORE: cram_content_type = 5;
 
 // Native cram_DS_ID enum values used by the container/slice primitives
 // (htslib/cram/cram_structs.h). Only the ones referenced here are declared.
-const DS_AUX: c_int = 1;
-const DS_RN: c_int = 11;
-const DS_QS: c_int = 12;
-const DS_IN: c_int = 13;
-const DS_SC: c_int = 14;
-const DS_TN: c_int = 39;
+const DS_AUX: i32 = 1;
+const DS_RN: i32 = 11;
+const DS_QS: i32 = 12;
+const DS_IN: i32 = 13;
+const DS_SC: i32 = 14;
+const DS_TN: i32 = 39;
 
 // Native hts_fmt_option enum values (htslib/hts.h) not already defined in hts.rs.
 pub const CRAM_OPT_DECODE_MD: hts_fmt_option = 0;
@@ -154,37 +151,37 @@ pub const CRAM_OPT_STORE_NM: hts_fmt_option = 22;
 pub const HTS_OPT_COMPRESSION_LEVEL: hts_fmt_option = 100;
 
 // Native sam_fields bitflags (htslib/sam.h).
-pub const SAM_RNAME: c_uint = 4;
-pub const SAM_POS: c_uint = 8;
-pub const SAM_CIGAR: c_uint = 32;
+pub const SAM_RNAME: u32 = 4;
+pub const SAM_POS: u32 = 8;
+pub const SAM_CIGAR: u32 = 32;
 
 // Native HTS_IDX_DELIM separator (htslib/hts.h).
 pub(crate) const HTS_IDX_DELIM: &[u8; 8] = b"##idx##\0";
 
 #[derive(Clone, Copy)]
 struct cram_ds_list {
-    data_series: c_int,
-    next: c_int,
+    data_series: i32,
+    next: i32,
 }
 
 pub struct cram_cid2ds_t {
     ds: Vec<cram_ds_list>,
-    hash: HashMap<c_int, c_int>,
-    ds_a: Vec<c_int>,
+    hash: HashMap<i32, i32>,
+    ds_a: Vec<i32>,
 }
 
 #[repr(C)]
 pub struct cram_method_details {
     pub method: cram_block_method,
-    pub level: c_int,
-    pub order: c_int,
-    pub rle: c_int,
-    pub pack: c_int,
-    pub stripe: c_int,
-    pub cat: c_int,
-    pub nosz: c_int,
-    pub nway: c_int,
-    pub ext: c_int,
+    pub level: i32,
+    pub order: i32,
+    pub rle: i32,
+    pub pack: i32,
+    pub stripe: i32,
+    pub cat: i32,
+    pub nosz: i32,
+    pub nway: i32,
+    pub ext: i32,
 }
 
 #[repr(C)]
@@ -223,28 +220,28 @@ unsafe extern "C" {
 }
 
 pub const CRAM_STRING_ALLOC_MIN_STR_SIZE: usize = 1024;
-const TRIAL_SPAN: c_int = 70;
-const NTRIALS: c_int = 3;
-const CRAM_FPAIRED: c_int = 256;
-const CRAM_FPROPER_PAIR: c_int = 128;
-const CRAM_FUNMAP: c_int = 64;
-const CRAM_FREVERSE: c_int = 32;
-const CRAM_FREAD1: c_int = 16;
-const CRAM_FREAD2: c_int = 8;
-const CRAM_FSECONDARY: c_int = 4;
-const CRAM_FQCFAIL: c_int = 2;
-const CRAM_FDUP: c_int = 1;
+const TRIAL_SPAN: i32 = 70;
+const NTRIALS: i32 = 3;
+const CRAM_FPAIRED: i32 = 256;
+const CRAM_FPROPER_PAIR: i32 = 128;
+const CRAM_FUNMAP: i32 = 64;
+const CRAM_FREVERSE: i32 = 32;
+const CRAM_FREAD1: i32 = 16;
+const CRAM_FREAD2: i32 = 8;
+const CRAM_FSECONDARY: i32 = 4;
+const CRAM_FQCFAIL: i32 = 2;
+const CRAM_FDUP: i32 = 1;
 const CRAM_SUBST_MATRIX: &[u8; 20] = b"CGTNGTANCATNGCANACGT";
 
 pub unsafe fn cram_read_block(fd: *mut cram_fd) -> *mut cram_block {
     cram_io::cram_read_block(&mut *fd.cast())
 }
 
-pub unsafe fn int32_put_blk(b: *mut cram_block, val: i32) -> c_int {
+pub unsafe fn int32_put_blk(b: *mut cram_block, val: i32) -> i32 {
     cram_io::int32_put_blk(&mut *b.cast(), val)
 }
 
-pub unsafe fn int32_get_blk(b: *mut cram_block, val: *mut i32) -> c_int {
+pub unsafe fn int32_get_blk(b: *mut cram_block, val: *mut i32) -> i32 {
     cram_io::int32_get_blk(&mut *b.cast(), &mut *val)
 }
 
@@ -252,11 +249,11 @@ pub unsafe fn cram_block_size(b: *mut cram_block) -> u32 {
     cram_cram_io_c_1490_cram_block_size(b)
 }
 
-pub unsafe fn cram_write_block(fd: *mut cram_fd, b: *mut cram_block) -> c_int {
+pub unsafe fn cram_write_block(fd: *mut cram_fd, b: *mut cram_block) -> i32 {
     cram_io::cram_write_block(&mut *fd.cast(), &mut *b.cast())
 }
 
-pub unsafe fn cram_uncompress_block(b: *mut cram_block) -> c_int {
+pub unsafe fn cram_uncompress_block(b: *mut cram_block) -> i32 {
     cram_io::cram_uncompress_block(&mut *b.cast())
 }
 
@@ -264,17 +261,17 @@ pub unsafe fn cram_compress_block(
     fd: *mut cram_fd,
     b: *mut cram_block,
     metrics: *mut cram_metrics,
-    method: c_int,
-    level: c_int,
-) -> c_int {
+    method: i32,
+    level: i32,
+) -> i32 {
     cram_cram_io_c_2323_cram_compress_block(fd, b, metrics, method, level)
 }
 
-pub unsafe fn cram_set_header(fd: *mut cram_fd, hdr: *mut sam_hdr_t) -> c_int {
+pub unsafe fn cram_set_header(fd: *mut cram_fd, hdr: *mut sam_hdr_t) -> i32 {
     cram_cram_io_c_2866_cram_set_header(fd.cast(), hdr.cast())
 }
 
-pub unsafe fn cram_new_container(nrec: c_int, nslice: c_int) -> *mut cram_container {
+pub unsafe fn cram_new_container(nrec: i32, nslice: i32) -> *mut cram_container {
     cram_cram_io_c_3639_cram_new_container(nrec, nslice)
 }
 
@@ -327,10 +324,10 @@ pub unsafe fn kh_str_x31_hash(mut s: *const c_char) -> u32 {
 /// khash STR resize, faithful translation of `kh_resize_map` from
 /// htslib/htslib/khash.h for the preservation-map (`const char*` keys,
 /// 8-byte `pmap_t` values). Returns 0 on success, -1 on alloc failure.
-pub unsafe fn kh_resize_map(h: *mut kh_generic_layout, mut new_n_buckets: u32) -> c_int {
+pub unsafe fn kh_resize_map(h: *mut kh_generic_layout, mut new_n_buckets: u32) -> i32 {
     const HASH_UPPER: f64 = 0.77;
-    let key_sz = std::mem::size_of::<*const c_char>() as u64;
-    let val_sz = std::mem::size_of::<pmap_val>() as u64;
+    let key_sz = std::mem::size_of::<*const c_char>() as usize;
+    let val_sz = std::mem::size_of::<pmap_val>() as usize;
 
     // kroundup32
     new_n_buckets = new_n_buckets.wrapping_sub(1);
@@ -356,7 +353,7 @@ pub unsafe fn kh_resize_map(h: *mut kh_generic_layout, mut new_n_buckets: u32) -
     if ((*h).size as f64) >= (new_n_buckets as f64 * HASH_UPPER + 0.5) {
         j = 0; // requested size too small
     } else {
-        new_flags = malloc(fsize(new_n_buckets) as u64 * 4).cast::<u32>();
+        new_flags = libc::malloc(fsize(new_n_buckets) as usize * 4).cast::<u32>();
         if new_flags.is_null() {
             return -1;
         }
@@ -365,16 +362,16 @@ pub unsafe fn kh_resize_map(h: *mut kh_generic_layout, mut new_n_buckets: u32) -
         }
         if (*h).n_buckets < new_n_buckets {
             let new_keys =
-                realloc((*h).keys.cast(), new_n_buckets as u64 * key_sz).cast::<*const c_char>();
+                libc::realloc((*h).keys.cast(), new_n_buckets as usize * key_sz).cast::<*const c_char>();
             if new_keys.is_null() {
-                free(new_flags.cast());
+                libc::free(new_flags.cast());
                 return -1;
             }
             (*h).keys = new_keys.cast();
             let new_vals =
-                realloc((*h).vals.cast(), new_n_buckets as u64 * val_sz).cast::<pmap_val>();
+                libc::realloc((*h).vals.cast(), new_n_buckets as usize * val_sz).cast::<pmap_val>();
             if new_vals.is_null() {
-                free(new_flags.cast());
+                libc::free(new_flags.cast());
                 return -1;
             }
             (*h).vals = new_vals.cast();
@@ -421,10 +418,10 @@ pub unsafe fn kh_resize_map(h: *mut kh_generic_layout, mut new_n_buckets: u32) -
             jj += 1;
         }
         if (*h).n_buckets > new_n_buckets {
-            (*h).keys = realloc((*h).keys.cast(), new_n_buckets as u64 * key_sz).cast();
-            (*h).vals = realloc((*h).vals.cast(), new_n_buckets as u64 * val_sz).cast();
+            (*h).keys = libc::realloc((*h).keys.cast(), new_n_buckets as usize * key_sz).cast();
+            (*h).vals = libc::realloc((*h).vals.cast(), new_n_buckets as usize * val_sz).cast();
         }
-        free((*h).flags.cast());
+        libc::free((*h).flags.cast());
         (*h).flags = new_flags;
         (*h).n_buckets = new_n_buckets;
         (*h).n_occupied = (*h).size;
@@ -440,7 +437,7 @@ pub unsafe fn kh_resize_map(h: *mut kh_generic_layout, mut new_n_buckets: u32) -
 /// copy strings); the preservation-map keys are always static literals, so no
 /// ownership transfer occurs and `cram_free_compression_header` only frees the
 /// three khash arrays + struct. Faithful translation of `kh_put_map`.
-pub unsafe fn kh_put_map(h: *mut kh_generic_layout, key: *const c_char, ret: *mut c_int) -> u32 {
+pub unsafe fn kh_put_map(h: *mut kh_generic_layout, key: *const c_char, ret: *mut i32) -> u32 {
     if (*h).n_occupied >= (*h).upper_bound {
         if (*h).n_buckets > ((*h).size << 1) {
             if kh_resize_map(h, (*h).n_buckets - 1) < 0 {
@@ -527,7 +524,7 @@ pub unsafe fn cram_container_get_num_bases(c: *mut cram_container) -> i64 {
 
 pub unsafe fn cram_container_get_coords(
     c: *mut cram_container,
-    refid: *mut c_int,
+    refid: *mut i32,
     start: *mut i64,
     span: *mut i64,
 ) {
@@ -538,7 +535,7 @@ pub unsafe fn cram_read_container(fd: *mut cram_fd) -> *mut cram_container {
     cram_cram_io_c_3788_cram_read_container(fd.cast())
 }
 
-pub unsafe fn cram_container_size(c: *mut cram_container) -> c_int {
+pub unsafe fn cram_container_size(c: *mut cram_container) -> i32 {
     cram_cram_io_c_3947_cram_container_size(c)
 }
 
@@ -546,12 +543,12 @@ pub unsafe fn cram_store_container(
     fd: *mut cram_fd,
     c: *mut cram_container,
     dat: *mut c_char,
-    size: *mut c_int,
-) -> c_int {
+    size: *mut i32,
+) -> i32 {
     cram_cram_io_c_3960_cram_store_container(fd.cast(), c.cast(), dat, size)
 }
 
-pub unsafe fn cram_write_container(fd: *mut cram_fd, h: *mut cram_container) -> c_int {
+pub unsafe fn cram_write_container(fd: *mut cram_fd, h: *mut cram_container) -> i32 {
     cram_cram_io_c_4023_cram_write_container(fd.cast(), h.cast())
 }
 
@@ -568,20 +565,20 @@ pub unsafe fn cram_update_cid2ds_map(
 
 pub unsafe fn cram_cid2ds_query(
     c2d: *mut cram_cid2ds_t,
-    content_id: c_int,
-    n: *mut c_int,
-) -> *mut c_int {
+    content_id: i32,
+    n: *mut i32,
+) -> *mut i32 {
     cram_external::cram_cid2ds_query(c2d.as_mut(), content_id, &mut *n)
         .map_or(std::ptr::null_mut(), |p| p.as_ptr())
 }
 
-pub unsafe fn cram_codec_get_content_ids(c: *mut cram_codec, ids: *mut c_int) {
+pub unsafe fn cram_codec_get_content_ids(c: *mut cram_codec, ids: *mut i32) {
     unsafe {
         *ids = cram_cram_codecs_c_3968_cram_codec_to_id(c.cast(), ids.add(1));
     }
 }
 
-pub unsafe fn cram_codec_describe(c: *mut cram_codec, ks: *mut kstring_t) -> c_int {
+pub unsafe fn cram_codec_describe(c: *mut cram_codec, ks: *mut kstring_t) -> i32 {
     unsafe { cram_cram_codecs_c_4185_cram_codec_describe(c.cast(), ks) }
 }
 
@@ -589,13 +586,13 @@ pub unsafe fn cram_filter_container(
     in_: *mut cram_fd,
     out: *mut cram_fd,
     c: *mut cram_container,
-    ref_id: *mut c_int,
-) -> c_int {
+    ref_id: *mut i32,
+) -> i32 {
     unsafe { cram_cram_external_c_776_cram_filter_container(in_, out, c, ref_id) }
 }
 
 pub unsafe fn cram_open(filename: *const c_char, mode: *const c_char) -> *mut cram_fd {
-    cram_cram_io_c_5264_cram_open(filename, mode)
+    cram_cram_io_c_5264_cram_open(filename.cast::<u8>(), mode.cast::<u8>())
 }
 
 pub unsafe fn cram_dopen(
@@ -603,18 +600,18 @@ pub unsafe fn cram_dopen(
     filename: *const c_char,
     mode: *const c_char,
 ) -> *mut cram_fd {
-    cram_cram_io_c_5289_cram_dopen(fp, filename, mode)
+    cram_cram_io_c_5289_cram_dopen(fp, filename.cast::<u8>(), mode.cast::<u8>())
 }
 
-pub unsafe fn cram_seek(fd: *mut cram_fd, offset: libc::off_t, whence: c_int) -> c_int {
+pub unsafe fn cram_seek(fd: *mut cram_fd, offset: libc::off_t, whence: i32) -> i32 {
     cram_io::cram_seek(&mut *fd.cast(), offset, whence)
 }
 
-pub unsafe fn cram_flush(fd: *mut cram_fd) -> c_int {
+pub unsafe fn cram_flush(fd: *mut cram_fd) -> i32 {
     cram_cram_io_c_5446_cram_flush(fd)
 }
 
-pub unsafe fn cram_close(fd: *mut cram_fd) -> c_int {
+pub unsafe fn cram_close(fd: *mut cram_fd) -> i32 {
     cram_cram_io_c_5558_cram_close(fd)
 }
 
@@ -623,19 +620,19 @@ pub unsafe fn cram_close(fd: *mut cram_fd) -> c_int {
 // type-system noise: production's `cram_fd` / `cram_container` are aliases
 // onto `hts_sys::*`, which are #[repr(C)] and byte-identical to the
 // concrete struct types the mirror exposes.
-pub unsafe fn cram_flush_container(fd: *mut cram_fd, c: *mut cram_container) -> c_int {
+pub unsafe fn cram_flush_container(fd: *mut cram_fd, c: *mut cram_container) -> i32 {
     cram_cram_io_c_4143_cram_flush_container(fd, c)
 }
 
-pub unsafe fn cram_flush_container_mt(fd: *mut cram_fd, c: *mut cram_container) -> c_int {
+pub unsafe fn cram_flush_container_mt(fd: *mut cram_fd, c: *mut cram_container) -> i32 {
     cram_cram_io_c_4275_cram_flush_container_mt(fd, c)
 }
 
-pub unsafe fn cram_write_eof_block(fd: *mut cram_fd) -> c_int {
+pub unsafe fn cram_write_eof_block(fd: *mut cram_fd) -> i32 {
     cram_cram_io_c_5474_cram_write_eof_block(fd)
 }
 
-pub unsafe fn cram_eof(fd: *mut cram_fd) -> c_int {
+pub unsafe fn cram_eof(fd: *mut cram_fd) -> i32 {
     cram_io::cram_eof(&*fd.cast())
 }
 
@@ -648,18 +645,18 @@ pub unsafe fn cram_set_required_fields_pos(fd: *mut cram_fd) {
         return;
     }
     let fdl = fd.cast::<cram_fd_layout>();
-    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).range_lock);
+    libc::pthread_mutex_lock(&mut (*fdl).range_lock);
     if (*fdl).range.refid != -2 {
         (*fdl).required_fields |= crate::htslib_rs::cram::SAM_POS;
     }
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).range_lock);
+    libc::pthread_mutex_unlock(&mut (*fdl).range_lock);
 }
 
 pub unsafe fn cram_set_voption(
     fd: *mut cram_fd,
     opt: hts_fmt_option,
     args: *mut crate::htslib_rs::c_compat::__va_list_tag,
-) -> c_int {
+) -> i32 {
     unsafe { cram_cram_io_c_5692_cram_set_voption(fd, opt, args) }
 }
 
@@ -683,8 +680,8 @@ unsafe fn cram_voption_va_arg_word(args: *mut crate::htslib_rs::c_compat::__va_l
     }
 }
 
-unsafe fn cram_voption_va_arg_int(args: *mut crate::htslib_rs::c_compat::__va_list_tag) -> c_int {
-    unsafe { cram_voption_va_arg_word(args) as c_int }
+unsafe fn cram_voption_va_arg_int(args: *mut crate::htslib_rs::c_compat::__va_list_tag) -> i32 {
+    unsafe { cram_voption_va_arg_word(args) as i32 }
 }
 
 unsafe fn cram_voption_va_arg_ptr<T>(
@@ -693,27 +690,29 @@ unsafe fn cram_voption_va_arg_ptr<T>(
     unsafe { cram_voption_va_arg_word(args) as *mut T }
 }
 
-unsafe fn cram_voption_set_version(fd: *mut cram_fd, s: *const c_char) -> c_int {
+unsafe fn cram_voption_set_version(fd: *mut cram_fd, s: *const u8) -> i32 {
     unsafe {
         if s.is_null() {
-            *__errno_location() = EINVAL;
+            *libc::__errno_location() = libc::EINVAL;
             return -1;
         }
 
-        let Ok(ver) = CStr::from_ptr(s).to_str() else {
-            *__errno_location() = EINVAL;
+        let mut len = 0usize;
+        while *s.add(len) != 0 {
+            len += 1;
+        }
+        let ver = std::slice::from_raw_parts(s, len);
+        let Some(dot) = ver.iter().position(|&b| b == b'.') else {
+            *libc::__errno_location() = libc::EINVAL;
             return -1;
         };
-        let Some((major_s, minor_s)) = ver.split_once('.') else {
-            *__errno_location() = EINVAL;
+        let (major_s, minor_s) = (&ver[..dot], &ver[dot + 1..]);
+        let Ok(major) = std::str::from_utf8(major_s).unwrap_or("").parse::<i32>() else {
+            *libc::__errno_location() = libc::EINVAL;
             return -1;
         };
-        let Ok(major) = major_s.parse::<c_int>() else {
-            *__errno_location() = EINVAL;
-            return -1;
-        };
-        let Ok(minor) = minor_s.parse::<c_int>() else {
-            *__errno_location() = EINVAL;
+        let Ok(minor) = std::str::from_utf8(minor_s).unwrap_or("").parse::<i32>() else {
+            *libc::__errno_location() = libc::EINVAL;
             return -1;
         };
 
@@ -722,7 +721,7 @@ unsafe fn cram_voption_set_version(fd: *mut cram_fd, s: *const c_char) -> c_int 
             || (major == 3 && (minor == 0 || minor == 1))
             || (major == 4 && minor == 0);
         if !valid {
-            *__errno_location() = EINVAL;
+            *libc::__errno_location() = libc::EINVAL;
             return -1;
         }
 
@@ -739,15 +738,15 @@ unsafe fn cram_voption_set_version(fd: *mut cram_fd, s: *const c_char) -> c_int 
     }
 }
 
-unsafe fn cram_voption_set_range_noseek(fd: *mut cram_fd, r: *const cram_range_layout) -> c_int {
+unsafe fn cram_voption_set_range_noseek(fd: *mut cram_fd, r: *const cram_range_layout) -> i32 {
     unsafe {
         if r.is_null() {
-            *__errno_location() = EINVAL;
+            *libc::__errno_location() = libc::EINVAL;
             return -1;
         }
 
         let fd = fd.cast::<cram_fd_layout>();
-        crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fd).range_lock);
+        libc::pthread_mutex_lock(&mut (*fd).range_lock);
         (*fd).range = *r;
         if (*r).refid == HTS_IDX_NOCOOR {
             (*fd).range.refid = -1;
@@ -760,16 +759,16 @@ unsafe fn cram_voption_set_range_noseek(fd: *mut cram_fd, r: *const cram_range_l
         }
         (*fd).ooc = 0;
         (*fd).eof = 0;
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fd).range_lock);
+        libc::pthread_mutex_unlock(&mut (*fd).range_lock);
         0
     }
 }
 
-pub unsafe fn cram_check_EOF(fd: *mut cram_fd) -> c_int {
+pub unsafe fn cram_check_EOF(fd: *mut cram_fd) -> i32 {
     cram_io::cram_check_eof(&mut *fd.cast())
 }
 
-pub unsafe fn cram_copy_slice(in_: *mut cram_fd, out: *mut cram_fd, num_slice: i32) -> c_int {
+pub unsafe fn cram_copy_slice(in_: *mut cram_fd, out: *mut cram_fd, num_slice: i32) -> i32 {
     cram_cram_external_c_683_cram_copy_slice(in_, out, num_slice)
 }
 
@@ -777,10 +776,10 @@ pub unsafe fn cram_transcode_rg(
     in_: *mut cram_fd,
     out: *mut cram_fd,
     c: *mut cram_container,
-    nrg: c_int,
-    in_rg: *mut c_int,
-    out_rg: *mut c_int,
-) -> c_int {
+    nrg: i32,
+    in_rg: *mut i32,
+    out_rg: *mut i32,
+) -> i32 {
     unsafe { cram_cram_external_c_934_cram_transcode_rg(in_, out, c, nrg, in_rg, out_rg) }
 }
 
@@ -792,19 +791,19 @@ pub struct mFILE {
     pub fp: Option<*mut libc::FILE>,
     pub data: Vec<u8>,
     pub eof: bool,
-    pub mode: c_int,
+    pub mode: i32,
     pub size: usize,
     pub offset: usize,
     pub flush_pos: usize,
 }
 
-pub const MF_READ: c_int = 1;
-pub const MF_WRITE: c_int = 2;
-pub const MF_APPEND: c_int = 4;
-pub const MF_BINARY: c_int = 8;
-pub const MF_TRUNC: c_int = 16;
-pub const MF_MODEX: c_int = 32;
-pub const MF_MMAP: c_int = 64;
+pub const MF_READ: i32 = 1;
+pub const MF_WRITE: i32 = 2;
+pub const MF_APPEND: i32 = 4;
+pub const MF_BINARY: i32 = 8;
+pub const MF_TRUNC: i32 = 16;
+pub const MF_MODEX: i32 = 32;
+pub const MF_MMAP: i32 = 64;
 pub const POOLED_ALLOC_PSIZE: usize = 1024 * 1024;
 
 /// Owned handle for a fixed-size slot carved out of a pool's backing store.
@@ -831,8 +830,8 @@ pub struct pool_alloc_t {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct cram_block_layout {
-    method: c_int,
-    orig_method: c_int,
+    method: i32,
+    orig_method: i32,
     content_type: cram_content_type,
     content_id: i32,
     comp_size: i32,
@@ -842,9 +841,9 @@ struct cram_block_layout {
     data: *mut u8,
     alloc: usize,
     byte: usize,
-    bit: c_int,
+    bit: i32,
     m: *mut cram_metrics_layout,
-    crc32_checked: c_int,
+    crc32_checked: i32,
     crc_part: u32,
 }
 
@@ -868,41 +867,41 @@ pub(crate) struct cram_container_layout {
     pub(crate) offset: usize,
     comp_hdr: *mut cram_block_compression_hdr_layout,
     comp_hdr_block: *mut cram_block_layout,
-    pub(crate) max_slice: c_int,
-    pub(crate) curr_slice: c_int,
-    curr_slice_mt: c_int,
-    max_rec: c_int,
-    curr_rec: c_int,
-    max_c_rec: c_int,
-    curr_c_rec: c_int,
-    slice_rec: c_int,
-    curr_ref: c_int,
+    pub(crate) max_slice: i32,
+    pub(crate) curr_slice: i32,
+    curr_slice_mt: i32,
+    max_rec: i32,
+    curr_rec: i32,
+    max_c_rec: i32,
+    curr_c_rec: i32,
+    slice_rec: i32,
+    curr_ref: i32,
     last_pos: i64,
     slices: *mut *mut cram_slice_layout,
     pub(crate) slice: *mut cram_slice_layout,
-    pos_sorted: c_int,
+    pos_sorted: i32,
     max_apos: i64,
-    last_slice: c_int,
-    multi_seq: c_int,
-    unsorted: c_int,
-    qs_seq_orient: c_int,
-    ref_id: c_int,
+    last_slice: i32,
+    multi_seq: i32,
+    unsorted: i32,
+    qs_seq_orient: i32,
+    ref_id: i32,
     ref_start: i64,
     first_base: i64,
     last_base: i64,
     ref_end: i64,
     ref_: *mut c_char,
-    embed_ref: c_int,
-    no_ref: c_int,
+    embed_ref: i32,
+    no_ref: i32,
     bams: *mut *mut bam1_t,
     stats: [Option<Box<cram_stats_layout>>; CRAM_DS_END],
     tags_used: *mut kh_generic_layout,
-    refs_used: *mut c_int,
+    refs_used: *mut i32,
     crc32: u32,
     s_num_bases: u64,
     s_aux_bytes: u64,
     n_mapped: u32,
-    ref_free: c_int,
+    ref_free: i32,
 }
 
 #[repr(C)]
@@ -926,7 +925,7 @@ struct cram_block_slice_hdr_layout {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) union cram_feature_layout {
-    fields: [c_int; 4],
+    fields: [i32; 4],
 }
 
 // original: cram_record (htslib/cram/cram_structs.h:486)
@@ -955,7 +954,7 @@ pub(crate) struct cram_record_layout {
     aux_size: u32,
     // TN_external is NOT defined in the htslib build, so the TN_idx variant is used.
     tn_idx: i32,
-    tl: c_int,
+    tl: i32,
     seq: u32,
     qual: u32,
     cigar: u32,
@@ -989,8 +988,8 @@ pub(crate) struct cram_slice_layout {
     afeatures: u32,
     // TN_external is NOT defined: TN[]/nTN/aTN variant is in effect.
     tn: *mut u32,
-    n_tn: c_int,
-    a_tn: c_int,
+    n_tn: i32,
+    a_tn: i32,
     name_blk: *mut cram_block_layout,
     seqs_blk: *mut cram_block_layout,
     qual_blk: *mut cram_block_layout,
@@ -1002,14 +1001,14 @@ pub(crate) struct cram_slice_layout {
     ref_: *mut c_char,
     ref_start: i64,
     ref_end: i64,
-    ref_id: c_int,
-    naux_block: c_int,
+    ref_id: i32,
+    naux_block: i32,
     aux_block: *mut *mut cram_block_layout,
-    data_series: c_uint,
-    decode_md: c_int,
-    pub(crate) max_rec: c_int,
-    pub(crate) curr_rec: c_int,
-    slice_num: c_int,
+    data_series: u32,
+    decode_md: i32,
+    pub(crate) max_rec: i32,
+    pub(crate) curr_rec: i32,
+    slice_num: i32,
 }
 
 const CRAM_DS_END: usize = 47;
@@ -1017,7 +1016,7 @@ const CRAM_DS_END: usize = 47;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct cram_range_layout {
-    pub refid: c_int,
+    pub refid: i32,
     pub start: i64,
     pub end: i64,
 }
@@ -1033,109 +1032,109 @@ pub struct cram_file_def_layout {
 #[repr(C)]
 pub struct cram_fd_layout {
     fp: *mut hFILE,
-    mode: c_int,
-    version: c_int,
+    mode: i32,
+    version: i32,
     file_def: *mut c_void,
     header: *mut crate::htslib_rs::sam::sam_hdr_t,
     prefix: *mut c_char,
     record_counter: i64,
-    err: c_int,
+    err: i32,
     pub(crate) ctr: *mut cram_container_layout,
     pub(crate) ctr_mt: *mut cram_container_layout,
-    first_base: c_int,
-    last_base: c_int,
+    first_base: i32,
+    last_base: i32,
     refs: *mut refs_t_layout,
     ref_: *mut c_char,
     ref_free: *mut c_char,
-    ref_id: c_int,
+    ref_id: i32,
     ref_start: i64,
     ref_end: i64,
     ref_fn: *mut c_char,
-    level: c_int,
+    level: i32,
     m: [*mut cram_metrics_layout; CRAM_DS_END],
     tags_used: *mut c_void,
-    decode_md: c_int,
-    seqs_per_slice: c_int,
-    bases_per_slice: c_int,
-    slices_per_container: c_int,
-    embed_ref: c_int,
-    no_ref: c_int,
-    no_ref_counter: c_int,
-    ignore_md5: c_int,
-    use_bz2: c_int,
-    use_rans: c_int,
-    use_lzma: c_int,
-    use_fqz: c_int,
-    use_tok: c_int,
-    use_arith: c_int,
-    shared_ref: c_int,
-    required_fields: c_uint,
-    store_md: c_int,
-    store_nm: c_int,
+    decode_md: i32,
+    seqs_per_slice: i32,
+    bases_per_slice: i32,
+    slices_per_container: i32,
+    embed_ref: i32,
+    no_ref: i32,
+    no_ref_counter: i32,
+    ignore_md5: i32,
+    use_bz2: i32,
+    use_rans: i32,
+    use_lzma: i32,
+    use_fqz: i32,
+    use_tok: i32,
+    use_arith: i32,
+    shared_ref: i32,
+    required_fields: u32,
+    store_md: i32,
+    store_nm: i32,
     range: cram_range_layout,
-    bam_flag_swap: [c_uint; 0x1000],
-    cram_flag_swap: [c_uint; 0x1000],
+    bam_flag_swap: [u32; 0x1000],
+    cram_flag_swap: [u32; 0x1000],
     l1: [u8; 256],
     l2: [u8; 256],
     cram_sub_matrix: [[c_char; 32]; 32],
-    index_sz: c_int,
+    index_sz: i32,
     index: *mut c_void,
     pub(crate) first_container: libc::off_t,
     pub(crate) curr_position: libc::off_t,
-    eof: c_int,
-    last_slice: c_int,
-    last_ri_count: c_int,
-    multi_seq: c_int,
-    multi_seq_user: c_int,
-    unsorted: c_int,
-    last_mapped: c_int,
-    empty_container: c_int,
-    own_pool: c_int,
+    eof: i32,
+    last_slice: i32,
+    last_ri_count: i32,
+    multi_seq: i32,
+    multi_seq_user: i32,
+    unsorted: i32,
+    last_mapped: i32,
+    empty_container: i32,
+    own_pool: i32,
     pool: *mut c_void,
     rqueue: *mut c_void,
-    metrics_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
-    ref_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
-    range_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
+    metrics_lock: libc::pthread_mutex_t,
+    ref_lock: libc::pthread_mutex_t,
+    range_lock: libc::pthread_mutex_t,
     bl: *mut c_void,
-    bam_list_lock: crate::htslib_rs::c_compat::pthread_mutex_t,
+    bam_list_lock: libc::pthread_mutex_t,
     job_pending: *mut c_void,
-    pub(crate) ooc: c_int,
-    lossy_read_names: c_int,
-    tlen_approx: c_int,
-    tlen_zero: c_int,
+    pub(crate) ooc: i32,
+    lossy_read_names: i32,
+    tlen_approx: i32,
+    tlen_zero: i32,
     idxfp: *mut BGZF,
     vv: varint_vec_layout,
-    ap_delta: c_int,
+    ap_delta: i32,
 }
 
-const HFILE_MOBILE: c_uint = 1 << 1;
-const CRAM_DEFAULT_LEVEL: c_int = 5;
-const CRAM_DEFAULT_SEQS_PER_SLICE: c_int = 10000;
-const CRAM_DEFAULT_BASES_PER_SLICE: c_int = CRAM_DEFAULT_SEQS_PER_SLICE * 500;
+const HFILE_MOBILE: u32 = 1 << 1;
+const CRAM_DEFAULT_LEVEL: i32 = 5;
+const CRAM_DEFAULT_SEQS_PER_SLICE: i32 = 10000;
+const CRAM_DEFAULT_BASES_PER_SLICE: i32 = CRAM_DEFAULT_SEQS_PER_SLICE * 500;
 
 pub struct cram_stats_layout {
-    freqs: [c_int; 1024],
+    freqs: [i32; 1024],
     h: Option<Box<kh_m_i2i_layout>>,
-    nsamp: c_int,
-    nvals: c_int,
+    nsamp: i32,
+    nvals: i32,
     min_val: i64,
     max_val: i64,
 }
 
 #[repr(C)]
 struct cram_metrics_layout {
-    trial: c_int,
-    next_trial: c_int,
-    consistency: c_int,
-    sz: [c_int; 32],
-    input_avg_sz: c_int,
-    input_avg_delta: c_int,
-    method: c_int,
-    revised_method: c_int,
-    strat: c_int,
-    cnt: [c_int; 32],
+    trial: i32,
+    next_trial: i32,
+    consistency: i32,
+    sz: [i32; 32],
+    input_avg_sz: i32,
+    input_avg_delta: i32,
+    method: i32,
+    revised_method: i32,
+    strat: i32,
+    cnt: [i32; 32],
     extra: [f64; 32],
-    unpackable: c_int,
+    unpackable: i32,
 }
 
 struct ref_entry_layout {
@@ -1144,13 +1143,13 @@ struct ref_entry_layout {
     length: i64,
     ln_length: i64,
     offset: i64,
-    bases_per_line: c_int,
-    line_length: c_int,
+    bases_per_line: i32,
+    line_length: i32,
     count: i64,
     seq: Vec<u8>,
     mf: *mut mFILE,
-    is_md5: c_int,
-    validated_md5: c_int,
+    is_md5: i32,
+    validated_md5: i32,
 }
 
 #[repr(C)]
@@ -1180,7 +1179,7 @@ pub struct kh_generic_layout {
 #[repr(C)]
 #[derive(Clone, Copy)]
 union pmap_val {
-    i: c_int,
+    i: i32,
     p: *mut c_char,
 }
 
@@ -1188,30 +1187,30 @@ pub(crate) struct refs_t_layout {
     pool: Option<Box<StringPool>>,
     h_meta: *mut kh_refs_layout,
     ref_id: *mut *mut ref_entry_layout,
-    nref: c_int,
+    nref: i32,
     fn_: Vec<u8>,
     fp: *mut BGZF,
-    count: c_int,
-    lock: crate::htslib_rs::c_compat::pthread_mutex_t,
+    count: i32,
+    lock: libc::pthread_mutex_t,
     last: *mut ref_entry_layout,
-    last_id: c_int,
+    last_id: i32,
 }
 
 #[repr(C)]
 struct sam_hrec_tag_layout {
     next: *mut sam_hrec_tag_layout,
     str_: *const c_char,
-    len: c_int,
+    len: i32,
 }
 
 type CramCodecFreeFn = unsafe extern "C" fn(*mut cram_codec_base_layout);
 
 #[repr(C)]
 struct cram_codec_base_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: Option<CramCodecFreeFn>,
 }
 
@@ -1222,7 +1221,7 @@ struct kh_m_i2i_layout {
     upper_bound: u32,
     flags: Vec<u32>,
     keys: Vec<i64>,
-    vals: Vec<c_int>,
+    vals: Vec<i32>,
 }
 
 pub(crate) struct cram_block_compression_hdr_layout {
@@ -1254,10 +1253,10 @@ pub(crate) struct cram_block_compression_hdr_layout {
 
 #[repr(C)]
 struct cram_map_layout {
-    key: c_int,
-    encoding: c_int,
-    offset: c_int,
-    size: c_int,
+    key: i32,
+    encoding: i32,
+    offset: i32,
+    size: i32,
     codec: *mut c_void,
     next: *mut cram_map_layout,
 }
@@ -1266,36 +1265,36 @@ struct cram_map_layout {
 struct cram_codec_iter_layout {
     hdr: *mut cram_block_compression_hdr_layout,
     curr_map: *mut cram_map_layout,
-    idx: c_int,
-    is_tag: c_int,
+    idx: i32,
+    is_tag: i32,
 }
 
-type VarintGet32Fn = unsafe extern "C" fn(*mut *mut c_char, *const c_char, *mut c_int) -> i64;
-type VarintGet64Fn = unsafe extern "C" fn(*mut *mut c_char, *const c_char, *mut c_int) -> i64;
-type VarintPut32Fn = unsafe extern "C" fn(*mut c_char, *mut c_char, i32) -> c_int;
-type VarintPut64Fn = unsafe extern "C" fn(*mut c_char, *mut c_char, i64) -> c_int;
-type VarintPut32BlkFn = unsafe extern "C" fn(*mut cram_block, i32) -> c_int;
-type VarintPut64BlkFn = unsafe extern "C" fn(*mut cram_block, i64) -> c_int;
-type VarintSizeFn = unsafe extern "C" fn(i64) -> c_int;
+type VarintGet32Fn = unsafe extern "C" fn(*mut *mut u8, *const u8, *mut i32) -> i64;
+type VarintGet64Fn = unsafe extern "C" fn(*mut *mut u8, *const u8, *mut i32) -> i64;
+type VarintPut32Fn = unsafe extern "C" fn(*mut u8, *mut u8, i32) -> i32;
+type VarintPut64Fn = unsafe extern "C" fn(*mut u8, *mut u8, i64) -> i32;
+type VarintPut32BlkFn = unsafe extern "C" fn(*mut cram_block, i32) -> i32;
+type VarintPut64BlkFn = unsafe extern "C" fn(*mut cram_block, i64) -> i32;
+type VarintSizeFn = unsafe extern "C" fn(i64) -> i32;
 type CramCodecDecodeFn = unsafe extern "C" fn(
     *mut cram_slice,
     *mut c_void,
     *mut cram_block,
     *mut c_char,
-    *mut c_int,
-) -> c_int;
+    *mut i32,
+) -> i32;
 type CramCodecEncodeFn =
-    unsafe extern "C" fn(*mut cram_slice, *mut c_void, *mut c_char, c_int) -> c_int;
-type CramCodecFlushFn = unsafe extern "C" fn(*mut c_void) -> c_int;
+    unsafe extern "C" fn(*mut cram_slice, *mut c_void, *mut c_char, i32) -> i32;
+type CramCodecFlushFn = unsafe extern "C" fn(*mut c_void) -> i32;
 type CramCodecStoreFn =
-    unsafe extern "C" fn(*mut c_void, *mut cram_block, *mut c_char, c_int) -> c_int;
-type CramCodecDescribeFn = unsafe extern "C" fn(*mut c_void, *mut kstring_t) -> c_int;
-type CramCodecSizeFn = unsafe extern "C" fn(*mut cram_slice, *mut c_void) -> c_int;
+    unsafe extern "C" fn(*mut c_void, *mut cram_block, *mut c_char, i32) -> i32;
+type CramCodecDescribeFn = unsafe extern "C" fn(*mut c_void, *mut kstring_t) -> i32;
+type CramCodecSizeFn = unsafe extern "C" fn(*mut cram_slice, *mut c_void) -> i32;
 type CramCodecGetBlockFn = unsafe extern "C" fn(*mut cram_slice, *mut c_void) -> *mut cram_block;
 type CramCodecDecodeInitFn =
-    unsafe fn(*mut c_void, *mut c_char, c_int, c_int, c_int, c_int, *mut c_void) -> *mut c_void;
+    unsafe fn(*mut c_void, *mut c_char, i32, i32, i32, i32, *mut c_void) -> *mut c_void;
 type CramCodecEncodeInitFn =
-    unsafe fn(*mut c_void, c_int, c_int, *mut c_void, c_int, *mut c_void) -> *mut c_void;
+    unsafe fn(*mut c_void, i32, i32, *mut c_void, i32, *mut c_void) -> *mut c_void;
 
 #[repr(C)]
 struct varint_vec_layout {
@@ -1321,7 +1320,7 @@ struct varint_vec_layout {
 #[derive(Clone, Copy)]
 struct cram_external_decoder_layout {
     content_id: i32,
-    type_: c_int,
+    type_: i32,
 }
 
 #[repr(C)]
@@ -1329,16 +1328,16 @@ struct cram_external_decoder_layout {
 struct cram_varint_decoder_layout {
     content_id: i32,
     offset: i64,
-    type_: c_int,
+    type_: i32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct cram_codec_external_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: *mut c_void,
     decode: *mut c_void,
     encode: *mut c_void,
@@ -1352,10 +1351,10 @@ struct cram_codec_external_layout {
 
 #[repr(C)]
 struct cram_codec_varint_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: *mut c_void,
     decode: *mut c_void,
     encode: *mut c_void,
@@ -1375,10 +1374,10 @@ struct cram_const_codec_layout {
 
 #[repr(C)]
 struct cram_codec_const_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: *mut c_void,
     decode: *mut c_void,
     encode: *mut c_void,
@@ -1399,10 +1398,10 @@ struct cram_beta_decoder_layout {
 
 #[repr(C)]
 struct cram_codec_beta_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: *mut c_void,
     decode: *mut c_void,
     encode: *mut c_void,
@@ -1418,20 +1417,20 @@ struct cram_codec_beta_layout {
 #[derive(Clone, Copy)]
 struct cram_xpack_decoder_layout {
     nbits: i32,
-    sub_encoding: c_int,
+    sub_encoding: i32,
     sub_codec_dat: *mut c_void,
     sub_codec: *mut c_void,
-    nval: c_int,
+    nval: i32,
     rmap: [u32; 256],
-    map: [c_int; 256],
+    map: [i32; 256],
 }
 
 #[repr(C)]
 struct cram_codec_xpack_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: *mut c_void,
     decode: *mut c_void,
     encode: *mut c_void,
@@ -1448,17 +1447,17 @@ struct cram_codec_xpack_layout {
 struct cram_xdelta_decoder_layout {
     last: i64,
     word_size: u8,
-    sub_encoding: c_int,
+    sub_encoding: i32,
     sub_codec_dat: *mut c_void,
     sub_codec: *mut c_void,
 }
 
 #[repr(C)]
 struct cram_codec_xdelta_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: *mut c_void,
     decode: *mut c_void,
     encode: *mut c_void,
@@ -1473,15 +1472,15 @@ struct cram_codec_xdelta_layout {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct cram_xrle_decoder_layout {
-    len_encoding: c_int,
-    lit_encoding: c_int,
+    len_encoding: i32,
+    lit_encoding: i32,
     len_dat: *mut c_void,
     lit_dat: *mut c_void,
     len_codec: *mut c_void,
     lit_codec: *mut c_void,
-    cur_len: c_int,
-    cur_lit: c_int,
-    rep_score: [c_int; 256],
+    cur_len: i32,
+    cur_lit: i32,
+    rep_score: [i32; 256],
     to_flush: *mut c_char,
     to_flush_size: usize,
 }
@@ -1489,10 +1488,10 @@ struct cram_xrle_decoder_layout {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct cram_codec_xrle_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: *mut c_void,
     decode: *mut c_void,
     encode: *mut c_void,
@@ -1513,10 +1512,10 @@ struct cram_subexp_decoder_layout {
 
 #[repr(C)]
 struct cram_codec_subexp_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: *mut c_void,
     decode: *mut c_void,
     encode: *mut c_void,
@@ -1536,10 +1535,10 @@ struct cram_gamma_decoder_layout {
 
 #[repr(C)]
 struct cram_codec_gamma_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: *mut c_void,
     decode: *mut c_void,
     encode: *mut c_void,
@@ -1563,17 +1562,17 @@ struct cram_huffman_code_layout {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct cram_huffman_decoder_layout {
-    ncodes: c_int,
+    ncodes: i32,
     codes: *mut cram_huffman_code_layout,
-    option: c_int,
+    option: i32,
 }
 
 #[repr(C)]
 struct cram_codec_huffman_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: *mut c_void,
     decode: *mut c_void,
     encode: *mut c_void,
@@ -1588,17 +1587,17 @@ struct cram_codec_huffman_layout {
 #[repr(C)]
 struct cram_huffman_encoder_layout {
     codes: *mut cram_huffman_code_layout,
-    nvals: c_int,
-    val2code: [c_int; 129],
-    option: c_int,
+    nvals: i32,
+    val2code: [i32; 129],
+    option: i32,
 }
 
 #[repr(C)]
 struct cram_codec_huffman_encoder_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: *mut c_void,
     decode: *mut c_void,
     encode: *mut c_void,
@@ -1619,8 +1618,8 @@ struct cram_byte_array_len_decoder_layout {
 
 #[repr(C)]
 struct cram_byte_array_len_encoder_dat_layout {
-    len_encoding: c_int,
-    val_encoding: c_int,
+    len_encoding: i32,
+    val_encoding: i32,
     len_dat: *mut c_void,
     val_dat: *mut c_void,
     len_codec: *mut c_void,
@@ -1629,10 +1628,10 @@ struct cram_byte_array_len_encoder_dat_layout {
 
 #[repr(C)]
 struct cram_codec_byte_array_len_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: *mut c_void,
     decode: *mut c_void,
     encode: *mut c_void,
@@ -1653,10 +1652,10 @@ struct cram_byte_array_stop_decoder_layout {
 
 #[repr(C)]
 struct cram_codec_byte_array_stop_layout {
-    codec: c_int,
+    codec: i32,
     out: *mut cram_block_layout,
     vv: *mut varint_vec_layout,
-    codec_id: c_int,
+    codec_id: i32,
     free: *mut c_void,
     decode: *mut c_void,
     encode: *mut c_void,
@@ -1673,68 +1672,68 @@ struct cram_codec_byte_array_stop_layout {
 // =======================================================================
 
 /// cram_encoding enum values (htslib/cram/cram_structs.h).
-const E_EXTERNAL_ENC: c_uint = 1;
-const E_GOLOMB_ENC: c_uint = 2;
-const E_HUFFMAN_ENC: c_uint = 3;
-const E_BYTE_ARRAY_LEN_ENC: c_uint = 4;
-const E_BYTE_ARRAY_STOP_ENC: c_uint = 5;
-const E_BETA_ENC: c_uint = 6;
-const E_SUBEXP_ENC: c_uint = 7;
-const E_GOLOMB_RICE_ENC: c_uint = 8;
-const E_GAMMA_ENC: c_uint = 9;
-const E_VARINT_UNSIGNED_ENC: c_uint = 41;
-const E_VARINT_SIGNED_ENC: c_uint = 42;
-const E_CONST_BYTE_ENC: c_uint = 43;
-const E_CONST_INT_ENC: c_uint = 44;
-const E_XPACK_ENC: c_uint = 51;
-const E_XRLE_ENC: c_uint = 52;
-const E_XDELTA_ENC: c_uint = 53;
+const E_EXTERNAL_ENC: u32 = 1;
+const E_GOLOMB_ENC: u32 = 2;
+const E_HUFFMAN_ENC: u32 = 3;
+const E_BYTE_ARRAY_LEN_ENC: u32 = 4;
+const E_BYTE_ARRAY_STOP_ENC: u32 = 5;
+const E_BETA_ENC: u32 = 6;
+const E_SUBEXP_ENC: u32 = 7;
+const E_GOLOMB_RICE_ENC: u32 = 8;
+const E_GAMMA_ENC: u32 = 9;
+const E_VARINT_UNSIGNED_ENC: u32 = 41;
+const E_VARINT_SIGNED_ENC: u32 = 42;
+const E_CONST_BYTE_ENC: u32 = 43;
+const E_CONST_INT_ENC: u32 = 44;
+const E_XPACK_ENC: u32 = 51;
+const E_XRLE_ENC: u32 = 52;
+const E_XDELTA_ENC: u32 = 53;
 
 // cram_encode-related DS constants not yet defined above. We reuse the
 // production DS_* set declared near the top (DS_AUX, DS_RN, DS_QS, DS_IN,
 // DS_SC, DS_TN) and add the rest needed by the slice-encode family.
-const DS_ENC_END: c_int = 47;
-const DS_ENC_CORE: c_int = 0;
-const DS_ENC_aux: c_int = 1;
-const DS_ENC_aux_oz: c_int = 9;
-const DS_ENC_ref: c_int = 10;
-const DS_ENC_BF: c_int = 15;
-const DS_ENC_CF: c_int = 16;
-const DS_ENC_AP: c_int = 17;
-const DS_ENC_RG: c_int = 18;
-const DS_ENC_MQ: c_int = 19;
-const DS_ENC_NS: c_int = 20;
-const DS_ENC_MF: c_int = 21;
-const DS_ENC_TS: c_int = 22;
-const DS_ENC_NP: c_int = 23;
-const DS_ENC_NF: c_int = 24;
-const DS_ENC_RL: c_int = 25;
-const DS_ENC_FN: c_int = 26;
-const DS_ENC_FC: c_int = 27;
-const DS_ENC_FP: c_int = 28;
-const DS_ENC_DL: c_int = 29;
-const DS_ENC_BA: c_int = 30;
-const DS_ENC_BS: c_int = 31;
-const DS_ENC_TL: c_int = 32;
-const DS_ENC_RI: c_int = 33;
-const DS_ENC_RS: c_int = 34;
-const DS_ENC_PD: c_int = 35;
-const DS_ENC_HC: c_int = 36;
-const DS_ENC_BB: c_int = 37;
-const DS_ENC_TC: c_int = 44;
+const DS_ENC_END: i32 = 47;
+const DS_ENC_CORE: i32 = 0;
+const DS_ENC_aux: i32 = 1;
+const DS_ENC_aux_oz: i32 = 9;
+const DS_ENC_ref: i32 = 10;
+const DS_ENC_BF: i32 = 15;
+const DS_ENC_CF: i32 = 16;
+const DS_ENC_AP: i32 = 17;
+const DS_ENC_RG: i32 = 18;
+const DS_ENC_MQ: i32 = 19;
+const DS_ENC_NS: i32 = 20;
+const DS_ENC_MF: i32 = 21;
+const DS_ENC_TS: i32 = 22;
+const DS_ENC_NP: i32 = 23;
+const DS_ENC_NF: i32 = 24;
+const DS_ENC_RL: i32 = 25;
+const DS_ENC_FN: i32 = 26;
+const DS_ENC_FC: i32 = 27;
+const DS_ENC_FP: i32 = 28;
+const DS_ENC_DL: i32 = 29;
+const DS_ENC_BA: i32 = 30;
+const DS_ENC_BS: i32 = 31;
+const DS_ENC_TL: i32 = 32;
+const DS_ENC_RI: i32 = 33;
+const DS_ENC_RS: i32 = 34;
+const DS_ENC_PD: i32 = 35;
+const DS_ENC_HC: i32 = 36;
+const DS_ENC_BB: i32 = 37;
+const DS_ENC_TC: i32 = 44;
 
 // CRAM record cram_flags bits (cram_structs.h:71).
-const CRAM_FLAG_DETACHED_ENC: c_int = 1 << 1;
-const CRAM_FLAG_MATE_DOWNSTREAM_ENC: c_int = 1 << 2;
-const CRAM_FLAG_EXPLICIT_TLEN_ENC: c_int = 1 << 4;
-const CRAM_FLAG_MASK_ENC: c_int = (1 << 5) - 1;
+const CRAM_FLAG_DETACHED_ENC: i32 = 1 << 1;
+const CRAM_FLAG_MATE_DOWNSTREAM_ENC: i32 = 1 << 2;
+const CRAM_FLAG_EXPLICIT_TLEN_ENC: i32 = 1 << 4;
+const CRAM_FLAG_MASK_ENC: i32 = (1 << 5) - 1;
 // `(1U << 31)` cast through the unsigned-then-int-bitcast (htslib defines it
 // as `1U<<31`). Stored in the signed `cram_flags: i32`.
 const CRAM_FLAG_DISCARD_NAME_ENC: i32 = i32::MIN;
 
 // BAM_FUNMAP (htslib/sam.h:1184) — duplicated locally to avoid the sam.rs
 // re-export drift; matches the import already used at the top of cram.rs.
-const BAM_FUNMAP_ENC: c_int = 4;
+const BAM_FUNMAP_ENC: i32 = 4;
 
 /// Feature variant layouts used by `cram_encode_slice_read`. All variants
 /// alias the same union of 4 ints with named fields; cast `*mut cram_feature_layout`
@@ -1742,56 +1741,56 @@ const BAM_FUNMAP_ENC: c_int = 4;
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct cram_feature_X_layout {
-    pos: c_int,
-    code: c_int,
-    base: c_int,
+    pos: i32,
+    code: i32,
+    base: i32,
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct cram_feature_i_layout {
-    pos: c_int,
-    code: c_int,
-    base: c_int,
+    pos: i32,
+    code: i32,
+    base: i32,
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct cram_feature_B_layout {
-    pos: c_int,
-    code: c_int,
-    base: c_int,
-    qual: c_int,
+    pos: i32,
+    code: i32,
+    base: i32,
+    qual: i32,
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct cram_feature_D_layout {
-    pos: c_int,
-    code: c_int,
-    len: c_int,
+    pos: i32,
+    code: i32,
+    len: i32,
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct cram_feature_b_layout {
-    pos: c_int,
-    code: c_int,
-    seq_idx: c_int,
-    len: c_int,
+    pos: i32,
+    code: i32,
+    seq_idx: i32,
+    len: i32,
 }
 // Used by S (soft-clip) and I (insertion) variants; shape (pos, code, len, seq_idx).
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct cram_feature_S_layout {
-    pos: c_int,
-    code: c_int,
-    len: c_int,
-    seq_idx: c_int,
+    pos: i32,
+    code: i32,
+    len: i32,
+    seq_idx: i32,
 }
 // Used by Q (quality) variant; shape (pos, code, qual).
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct cram_feature_Q_layout {
-    pos: c_int,
-    code: c_int,
-    qual: c_int,
+    pos: i32,
+    code: i32,
+    qual: i32,
 }
 
 /// Invoke a codec's `encode` function pointer. The codec base is opaque to
@@ -1802,8 +1801,8 @@ unsafe fn cram_codec_encode(
     codec: *mut c_void,
     s: *mut cram_slice,
     inp: *mut c_char,
-    in_size: c_int,
-) -> c_int {
+    in_size: i32,
+) -> i32 {
     let cv = codec.cast::<cram_codec_external_layout>();
     let encode: CramCodecEncodeFn = cram_fn((*cv).encode);
     encode(s, codec, inp, in_size)
@@ -1811,7 +1810,7 @@ unsafe fn cram_codec_encode(
 
 /// Invoke a codec's `flush` function pointer.
 #[inline]
-unsafe fn cram_codec_flush(codec: *mut c_void) -> c_int {
+unsafe fn cram_codec_flush(codec: *mut c_void) -> i32 {
     let cv = codec.cast::<cram_codec_external_layout>();
     let flush: CramCodecFlushFn = cram_fn((*cv).flush);
     flush(codec)
@@ -1828,14 +1827,14 @@ unsafe fn cram_codec_flush(codec: *mut c_void) -> c_int {
 // DS_ index constants shared by the cram_add_* feature-builder helpers below
 // (mirror of the local constants used inside cram_encode_compression_header).
 // Values come from htslib/cram/cram_structs.h cram_DS_ID enum.
-const DS_FC_ENC: c_int = 27;
-const DS_FP_ENC: c_int = 28;
-const DS_DL_ENC: c_int = 29;
-const DS_BA_ENC: c_int = 30;
-const DS_BS_ENC: c_int = 31;
-const DS_RS_ENC: c_int = 34;
-const DS_PD_ENC: c_int = 35;
-const DS_HC_ENC: c_int = 36;
+const DS_FC_ENC: i32 = 27;
+const DS_FP_ENC: i32 = 28;
+const DS_DL_ENC: i32 = 29;
+const DS_BA_ENC: i32 = 30;
+const DS_BS_ENC: i32 = 31;
+const DS_RS_ENC: i32 = 34;
+const DS_PD_ENC: i32 = 35;
+const DS_HC_ENC: i32 = 36;
 
 // cram_tag_map: cram/cram_structs.h:386. 4 ptrs: codec, blk, blk2, m.
 #[repr(C)]
@@ -1881,7 +1880,7 @@ struct kh_m_s2i_layout {
     upper_bound: u32,
     flags: *mut u32,
     keys: *mut *const c_char,
-    vals: *mut c_int,
+    vals: *mut i32,
 }
 
 // __ac_X31_hash_string: htslib/khash.h. Used by the legacy KHASH_MAP_INIT_STR
@@ -1908,10 +1907,10 @@ unsafe fn kh_resize_int_ptr<T>(
     keys_field: *mut *mut u32,
     vals_field: *mut *mut *mut T,
     mut new_n_buckets: u32,
-) -> c_int {
+) -> i32 {
     const HASH_UPPER: f64 = 0.77;
-    let key_sz = std::mem::size_of::<u32>() as u64;
-    let val_sz = std::mem::size_of::<*mut T>() as u64;
+    let key_sz = std::mem::size_of::<u32>() as usize;
+    let val_sz = std::mem::size_of::<*mut T>() as usize;
 
     new_n_buckets = new_n_buckets.wrapping_sub(1);
     new_n_buckets |= new_n_buckets >> 1;
@@ -1936,7 +1935,7 @@ unsafe fn kh_resize_int_ptr<T>(
     if (*size_field as f64) >= (new_n_buckets as f64 * HASH_UPPER + 0.5) {
         j = 0;
     } else {
-        new_flags = malloc(fsize(new_n_buckets) as u64 * 4).cast::<u32>();
+        new_flags = libc::malloc(fsize(new_n_buckets) as usize * 4).cast::<u32>();
         if new_flags.is_null() {
             return -1;
         }
@@ -1945,16 +1944,16 @@ unsafe fn kh_resize_int_ptr<T>(
         }
         if *n_buckets_field < new_n_buckets {
             let new_keys =
-                realloc((*keys_field).cast(), new_n_buckets as u64 * key_sz).cast::<u32>();
+                libc::realloc((*keys_field).cast(), new_n_buckets as usize * key_sz).cast::<u32>();
             if new_keys.is_null() {
-                free(new_flags.cast());
+                libc::free(new_flags.cast());
                 return -1;
             }
             *keys_field = new_keys;
             let new_vals =
-                realloc((*vals_field).cast(), new_n_buckets as u64 * val_sz).cast::<*mut T>();
+                libc::realloc((*vals_field).cast(), new_n_buckets as usize * val_sz).cast::<*mut T>();
             if new_vals.is_null() {
-                free(new_flags.cast());
+                libc::free(new_flags.cast());
                 return -1;
             }
             *vals_field = new_vals;
@@ -1996,10 +1995,10 @@ unsafe fn kh_resize_int_ptr<T>(
             jj += 1;
         }
         if *n_buckets_field > new_n_buckets {
-            *keys_field = realloc((*keys_field).cast(), new_n_buckets as u64 * key_sz).cast();
-            *vals_field = realloc((*vals_field).cast(), new_n_buckets as u64 * val_sz).cast();
+            *keys_field = libc::realloc((*keys_field).cast(), new_n_buckets as usize * key_sz).cast();
+            *vals_field = libc::realloc((*vals_field).cast(), new_n_buckets as usize * val_sz).cast();
         }
-        free((*flags_field).cast());
+        libc::free((*flags_field).cast());
         *flags_field = new_flags;
         *n_buckets_field = new_n_buckets;
         *n_occupied_field = *size_field;
@@ -2018,7 +2017,7 @@ unsafe fn kh_put_int_ptr<T>(
     keys_field: *mut *mut u32,
     vals_field: *mut *mut *mut T,
     key: u32,
-    ret: *mut c_int,
+    ret: *mut i32,
 ) -> u32 {
     if *n_occupied_field >= *upper_bound_field {
         if *n_buckets_field > (*size_field << 1) {
@@ -2122,7 +2121,7 @@ unsafe fn kh_del_int_ptr(
 }
 
 #[inline]
-unsafe fn kh_put_m_tagmap(h: *mut kh_m_tagmap_layout, key: u32, ret: *mut c_int) -> u32 {
+unsafe fn kh_put_m_tagmap(h: *mut kh_m_tagmap_layout, key: u32, ret: *mut i32) -> u32 {
     kh_put_int_ptr::<cram_tag_map_layout>(
         &raw mut (*h).n_buckets,
         &raw mut (*h).size,
@@ -2137,7 +2136,7 @@ unsafe fn kh_put_m_tagmap(h: *mut kh_m_tagmap_layout, key: u32, ret: *mut c_int)
 }
 
 #[inline]
-unsafe fn kh_put_m_metrics(h: *mut kh_m_metrics_layout, key: u32, ret: *mut c_int) -> u32 {
+unsafe fn kh_put_m_metrics(h: *mut kh_m_metrics_layout, key: u32, ret: *mut i32) -> u32 {
     kh_put_int_ptr::<cram_metrics_layout>(
         &raw mut (*h).n_buckets,
         &raw mut (*h).size,
@@ -2163,10 +2162,10 @@ unsafe fn kh_del_m_metrics(h: *mut kh_m_metrics_layout, x: u32) {
 
 // kh_put for STR->int (FNV1a, equality strcmp == 0). Matches header.h:169
 // KHASH_MAP_INIT_STR(m_s2i, int). Used here to populate comp_hdr->TD_hash.
-unsafe fn kh_resize_m_s2i(h: *mut kh_m_s2i_layout, mut new_n_buckets: u32) -> c_int {
+unsafe fn kh_resize_m_s2i(h: *mut kh_m_s2i_layout, mut new_n_buckets: u32) -> i32 {
     const HASH_UPPER: f64 = 0.77;
-    let key_sz = std::mem::size_of::<*const c_char>() as u64;
-    let val_sz = std::mem::size_of::<c_int>() as u64;
+    let key_sz = std::mem::size_of::<*const c_char>() as usize;
+    let val_sz = std::mem::size_of::<i32>() as usize;
 
     new_n_buckets = new_n_buckets.wrapping_sub(1);
     new_n_buckets |= new_n_buckets >> 1;
@@ -2191,7 +2190,7 @@ unsafe fn kh_resize_m_s2i(h: *mut kh_m_s2i_layout, mut new_n_buckets: u32) -> c_
     if ((*h).size as f64) >= (new_n_buckets as f64 * HASH_UPPER + 0.5) {
         j = 0;
     } else {
-        new_flags = malloc(fsize(new_n_buckets) as u64 * 4).cast::<u32>();
+        new_flags = libc::malloc(fsize(new_n_buckets) as usize * 4).cast::<u32>();
         if new_flags.is_null() {
             return -1;
         }
@@ -2200,15 +2199,15 @@ unsafe fn kh_resize_m_s2i(h: *mut kh_m_s2i_layout, mut new_n_buckets: u32) -> c_
         }
         if (*h).n_buckets < new_n_buckets {
             let new_keys =
-                realloc((*h).keys.cast(), new_n_buckets as u64 * key_sz).cast::<*const c_char>();
+                libc::realloc((*h).keys.cast(), new_n_buckets as usize * key_sz).cast::<*const c_char>();
             if new_keys.is_null() {
-                free(new_flags.cast());
+                libc::free(new_flags.cast());
                 return -1;
             }
             (*h).keys = new_keys;
-            let new_vals = realloc((*h).vals.cast(), new_n_buckets as u64 * val_sz).cast::<c_int>();
+            let new_vals = libc::realloc((*h).vals.cast(), new_n_buckets as usize * val_sz).cast::<i32>();
             if new_vals.is_null() {
-                free(new_flags.cast());
+                libc::free(new_flags.cast());
                 return -1;
             }
             (*h).vals = new_vals;
@@ -2250,10 +2249,10 @@ unsafe fn kh_resize_m_s2i(h: *mut kh_m_s2i_layout, mut new_n_buckets: u32) -> c_
             jj += 1;
         }
         if (*h).n_buckets > new_n_buckets {
-            (*h).keys = realloc((*h).keys.cast(), new_n_buckets as u64 * key_sz).cast();
-            (*h).vals = realloc((*h).vals.cast(), new_n_buckets as u64 * val_sz).cast();
+            (*h).keys = libc::realloc((*h).keys.cast(), new_n_buckets as usize * key_sz).cast();
+            (*h).vals = libc::realloc((*h).vals.cast(), new_n_buckets as usize * val_sz).cast();
         }
-        free((*h).flags.cast());
+        libc::free((*h).flags.cast());
         (*h).flags = new_flags;
         (*h).n_buckets = new_n_buckets;
         (*h).n_occupied = (*h).size;
@@ -2262,7 +2261,7 @@ unsafe fn kh_resize_m_s2i(h: *mut kh_m_s2i_layout, mut new_n_buckets: u32) -> c_
     0
 }
 
-unsafe fn kh_put_m_s2i(h: *mut kh_m_s2i_layout, key: *const c_char, ret: *mut c_int) -> u32 {
+unsafe fn kh_put_m_s2i(h: *mut kh_m_s2i_layout, key: *const c_char, ret: *mut i32) -> u32 {
     if (*h).n_occupied >= (*h).upper_bound {
         if (*h).n_buckets > ((*h).size << 1) {
             if kh_resize_m_s2i(h, (*h).n_buckets - 1) < 0 {
@@ -2357,10 +2356,10 @@ unsafe fn kh_fnv1a_hash(mut s: *const c_char) -> u32 {
     h
 }
 
-unsafe fn kh_resize_m_s2u64(h: *mut kh_m_s2u64_layout, mut new_n_buckets: u32) -> c_int {
+unsafe fn kh_resize_m_s2u64(h: *mut kh_m_s2u64_layout, mut new_n_buckets: u32) -> i32 {
     const HASH_UPPER: f64 = 0.77;
-    let key_sz = std::mem::size_of::<*const c_char>() as u64;
-    let val_sz = std::mem::size_of::<u64>() as u64;
+    let key_sz = std::mem::size_of::<*const c_char>() as usize;
+    let val_sz = std::mem::size_of::<u64>() as usize;
 
     new_n_buckets = new_n_buckets.wrapping_sub(1);
     new_n_buckets |= new_n_buckets >> 1;
@@ -2385,7 +2384,7 @@ unsafe fn kh_resize_m_s2u64(h: *mut kh_m_s2u64_layout, mut new_n_buckets: u32) -
     if ((*h).size as f64) >= (new_n_buckets as f64 * HASH_UPPER + 0.5) {
         j = 0;
     } else {
-        new_flags = malloc(fsize(new_n_buckets) as u64 * 4).cast::<u32>();
+        new_flags = libc::malloc(fsize(new_n_buckets) as usize * 4).cast::<u32>();
         if new_flags.is_null() {
             return -1;
         }
@@ -2394,15 +2393,15 @@ unsafe fn kh_resize_m_s2u64(h: *mut kh_m_s2u64_layout, mut new_n_buckets: u32) -
         }
         if (*h).n_buckets < new_n_buckets {
             let new_keys =
-                realloc((*h).keys.cast(), new_n_buckets as u64 * key_sz).cast::<*const c_char>();
+                libc::realloc((*h).keys.cast(), new_n_buckets as usize * key_sz).cast::<*const c_char>();
             if new_keys.is_null() {
-                free(new_flags.cast());
+                libc::free(new_flags.cast());
                 return -1;
             }
             (*h).keys = new_keys;
-            let new_vals = realloc((*h).vals.cast(), new_n_buckets as u64 * val_sz).cast::<u64>();
+            let new_vals = libc::realloc((*h).vals.cast(), new_n_buckets as usize * val_sz).cast::<u64>();
             if new_vals.is_null() {
-                free(new_flags.cast());
+                libc::free(new_flags.cast());
                 return -1;
             }
             (*h).vals = new_vals;
@@ -2444,10 +2443,10 @@ unsafe fn kh_resize_m_s2u64(h: *mut kh_m_s2u64_layout, mut new_n_buckets: u32) -
             jj += 1;
         }
         if (*h).n_buckets > new_n_buckets {
-            (*h).keys = realloc((*h).keys.cast(), new_n_buckets as u64 * key_sz).cast();
-            (*h).vals = realloc((*h).vals.cast(), new_n_buckets as u64 * val_sz).cast();
+            (*h).keys = libc::realloc((*h).keys.cast(), new_n_buckets as usize * key_sz).cast();
+            (*h).vals = libc::realloc((*h).vals.cast(), new_n_buckets as usize * val_sz).cast();
         }
-        free((*h).flags.cast());
+        libc::free((*h).flags.cast());
         (*h).flags = new_flags;
         (*h).n_buckets = new_n_buckets;
         (*h).n_occupied = (*h).size;
@@ -2456,7 +2455,7 @@ unsafe fn kh_resize_m_s2u64(h: *mut kh_m_s2u64_layout, mut new_n_buckets: u32) -
     0
 }
 
-unsafe fn kh_put_m_s2u64(h: *mut kh_m_s2u64_layout, key: *const c_char, ret: *mut c_int) -> u32 {
+unsafe fn kh_put_m_s2u64(h: *mut kh_m_s2u64_layout, key: *const c_char, ret: *mut i32) -> u32 {
     if (*h).n_occupied >= (*h).upper_bound {
         if (*h).n_buckets > ((*h).size << 1) {
             if kh_resize_m_s2u64(h, (*h).n_buckets - 1) < 0 {
@@ -2555,15 +2554,15 @@ unsafe fn kh_destroy_m_s2u64(h: *mut kh_m_s2u64_layout) {
     if h.is_null() {
         return;
     }
-    free((*h).flags.cast());
-    free((*h).keys.cast());
-    free((*h).vals.cast());
-    free(h.cast());
+    libc::free((*h).flags.cast());
+    libc::free((*h).keys.cast());
+    libc::free((*h).vals.cast());
+    libc::free(h.cast());
 }
 
 pub unsafe fn cram_cram_io_h_183_cram_get_block_by_id(
     slice: *mut cram_slice,
-    id: c_int,
+    id: i32,
 ) -> *mut cram_block {
     let slice = slice.cast::<cram_slice_layout>();
     let mut v = id as u32;
@@ -2594,9 +2593,9 @@ pub unsafe fn cram_cram_io_h_183_cram_get_block_by_id(
     std::ptr::null_mut()
 }
 
-pub unsafe fn cram_cram_io_h_216_block_resize_exact(b: *mut cram_block, len: usize) -> c_int {
+pub unsafe fn cram_cram_io_h_216_block_resize_exact(b: *mut cram_block, len: usize) -> i32 {
     let b = b.cast::<cram_block_layout>();
-    let tmp = realloc((*b).data.cast(), len as u64).cast::<u8>();
+    let tmp = libc::realloc((*b).data.cast(), len).cast::<u8>();
     if tmp.is_null() {
         return -1;
     }
@@ -2605,7 +2604,7 @@ pub unsafe fn cram_cram_io_h_216_block_resize_exact(b: *mut cram_block, len: usi
     0
 }
 
-pub unsafe fn cram_cram_io_h_226_block_resize(b: *mut cram_block, len: usize) -> c_int {
+pub unsafe fn cram_cram_io_h_226_block_resize(b: *mut cram_block, len: usize) -> i32 {
     let block = b.cast::<cram_block_layout>();
     if (*block).alloc > len {
         return 0;
@@ -2616,7 +2615,7 @@ pub unsafe fn cram_cram_io_h_226_block_resize(b: *mut cram_block, len: usize) ->
     cram_cram_io_h_216_block_resize_exact(b, alloc)
 }
 
-pub unsafe fn cram_cram_io_h_243_block_grow(b: *mut cram_block, len: usize) -> c_int {
+pub unsafe fn cram_cram_io_h_243_block_grow(b: *mut cram_block, len: usize) -> i32 {
     let block = b.cast::<cram_block_layout>();
     cram_cram_io_h_226_block_resize(b, (*block).byte + len)
 }
@@ -2625,32 +2624,32 @@ pub unsafe fn cram_cram_io_h_248_block_append(
     b: *mut cram_block,
     s: *const c_void,
     len: usize,
-) -> c_int {
+) -> i32 {
     if cram_cram_io_h_243_block_grow(b, len) < 0 {
         return -1;
     }
 
     if len != 0 {
         let block = b.cast::<cram_block_layout>();
-        memcpy((*block).data.add((*block).byte).cast(), s, len as u64);
+        std::ptr::copy_nonoverlapping(s.cast::<u8>(), (*block).data.add((*block).byte), len);
         (*block).byte += len;
     }
 
     0
 }
 
-pub unsafe fn cram_cram_io_h_261_block_append_char(b: *mut cram_block, c: c_char) -> c_int {
+pub unsafe fn cram_cram_io_h_261_block_append_char(b: *mut cram_block, c: u8) -> i32 {
     if cram_cram_io_h_243_block_grow(b, 1) < 0 {
         return -1;
     }
 
     let block = b.cast::<cram_block_layout>();
-    *(*block).data.add((*block).byte) = c as u8;
+    *(*block).data.add((*block).byte) = c;
     (*block).byte += 1;
     0
 }
 
-pub unsafe fn cram_cram_io_h_271_block_append_uint(b: *mut cram_block, i: libc::c_uint) -> c_int {
+pub unsafe fn cram_cram_io_h_271_block_append_uint(b: *mut cram_block, i: u32) -> i32 {
     if cram_cram_io_h_243_block_grow(b, 11) < 0 {
         return -1;
     }
@@ -2758,7 +2757,7 @@ struct cram_decode_job_layout {
     c: Option<NonNull<cram_container_layout>>,
     s: Option<NonNull<cram_slice_layout>>,
     _h: Option<NonNull<sam_hdr_t>>,
-    _exit_code: c_int,
+    _exit_code: i32,
 }
 
 // Layout-mirror for the per-encode-job state in the rqueue. Mirrors
@@ -2774,8 +2773,8 @@ struct cram_job_layout {
 // Drains the WRITE-mode encoder result queue: for each completed job, run
 // `cram_flush_container2` (write the encoded container to disk) and free the
 // per-container slices + container. Returns 0 on success, -1 on error.
-unsafe fn cram_flush_result_native(fd_in: *mut cram_fd) -> c_int {
-    let ret: c_int = 0;
+unsafe fn cram_flush_result_native(fd_in: *mut cram_fd) -> i32 {
+    let ret: i32 = 0;
     let mut lc: *mut cram_container_layout = std::ptr::null_mut();
     let fdl_in = fd_in.cast::<cram_fd_layout>();
     let rqueue = (*fdl_in)
@@ -2805,7 +2804,7 @@ unsafe fn cram_flush_result_native(fd_in: *mut cram_fd) -> c_int {
         let c = job_container.as_ptr();
         let fdl = current_fd.cast::<cram_fd_layout>();
 
-        if (*fdl).mode == b'w' as c_int
+        if (*fdl).mode == b'w' as i32
             && cram_cram_io_c_4089_cram_flush_container2(current_fd, c.cast()) != 0
         {
             return -1;
@@ -2934,7 +2933,7 @@ unsafe fn cram_drain_rqueue_native(fdl: *mut cram_fd_layout) {
             }
             cram_cram_io_c_4421_cram_free_slice(s.cast());
         }
-        crate::htslib_rs::c_compat::free(j.cast());
+        libc::free(j.cast());
         (*fdl).job_pending = std::ptr::null_mut();
     }
 
@@ -2957,7 +2956,7 @@ unsafe fn cram_dup_to_malloc(src: &[u8]) -> *mut u8 {
     if src.is_empty() {
         return std::ptr::null_mut();
     }
-    let p = malloc(src.len() as u64).cast::<u8>();
+    let p = libc::malloc(src.len()).cast::<u8>();
     if !p.is_null() {
         std::ptr::copy_nonoverlapping(src.as_ptr(), p, src.len());
     }
@@ -2968,45 +2967,45 @@ unsafe fn cram_dup_to_malloc(src: &[u8]) -> *mut u8 {
 // Externally-visible values share names with the public CRAM_BLOCK_METHOD_*
 // constants but the encoder dispatch operates on the *internal* enum, which
 // includes the parameterised forms (GZIP_RLE, RANS_PR*, ARITH_PR*, FQZ_*, TOKA).
-const CBMI_RAW: c_int = 0;
-const CBMI_GZIP: c_int = 1;
-const CBMI_BZIP2: c_int = 2;
-const CBMI_LZMA: c_int = 3;
-const CBMI_RANS0: c_int = 4;
-const CBMI_RANS_PR0: c_int = 5;
-const CBMI_ARITH_PR0: c_int = 6;
-const CBMI_FQZ: c_int = 7;
-const CBMI_TOK3: c_int = 8;
-const CBMI_GZIP_RLE: c_int = 11;
-const CBMI_GZIP_1: c_int = 12;
-const CBMI_FQZ_B: c_int = 13;
-const CBMI_FQZ_C: c_int = 14;
-const CBMI_FQZ_D: c_int = 15;
-const CBMI_RANS1: c_int = 16;
-const CBMI_RANS_PR1: c_int = 17;
-const CBMI_RANS_PR64: c_int = 18;
-const CBMI_RANS_PR9: c_int = 19;
-const CBMI_RANS_PR128: c_int = 20;
-const CBMI_RANS_PR129: c_int = 21;
-const CBMI_RANS_PR192: c_int = 22;
-const CBMI_RANS_PR193: c_int = 23;
-const CBMI_TOKA: c_int = 24;
-const CBMI_ARITH_PR1: c_int = 25;
-const CBMI_ARITH_PR64: c_int = 26;
-const CBMI_ARITH_PR9: c_int = 27;
-const CBMI_ARITH_PR128: c_int = 28;
-const CBMI_ARITH_PR129: c_int = 29;
-const CBMI_ARITH_PR192: c_int = 30;
-const CBMI_ARITH_PR193: c_int = 31;
+const CBMI_RAW: i32 = 0;
+const CBMI_GZIP: i32 = 1;
+const CBMI_BZIP2: i32 = 2;
+const CBMI_LZMA: i32 = 3;
+const CBMI_RANS0: i32 = 4;
+const CBMI_RANS_PR0: i32 = 5;
+const CBMI_ARITH_PR0: i32 = 6;
+const CBMI_FQZ: i32 = 7;
+const CBMI_TOK3: i32 = 8;
+const CBMI_GZIP_RLE: i32 = 11;
+const CBMI_GZIP_1: i32 = 12;
+const CBMI_FQZ_B: i32 = 13;
+const CBMI_FQZ_C: i32 = 14;
+const CBMI_FQZ_D: i32 = 15;
+const CBMI_RANS1: i32 = 16;
+const CBMI_RANS_PR1: i32 = 17;
+const CBMI_RANS_PR64: i32 = 18;
+const CBMI_RANS_PR9: i32 = 19;
+const CBMI_RANS_PR128: i32 = 20;
+const CBMI_RANS_PR129: i32 = 21;
+const CBMI_RANS_PR192: i32 = 22;
+const CBMI_RANS_PR193: i32 = 23;
+const CBMI_TOKA: i32 = 24;
+const CBMI_ARITH_PR1: i32 = 25;
+const CBMI_ARITH_PR64: i32 = 26;
+const CBMI_ARITH_PR9: i32 = 27;
+const CBMI_ARITH_PR128: i32 = 28;
+const CBMI_ARITH_PR129: i32 = 29;
+const CBMI_ARITH_PR192: i32 = 30;
+const CBMI_ARITH_PR193: i32 = 31;
 
 const CRAM_MAX_METHOD: usize = 32;
 
 // zlib strategy constants.
-const Z_FILTERED: c_int = 1;
-const Z_DEFAULT_STRATEGY: c_int = 0;
-const Z_RLE: c_int = 3;
+const Z_FILTERED: i32 = 1;
+const Z_DEFAULT_STRATEGY: i32 = 0;
+const Z_RLE: i32 = 3;
 
-const DS_RN_LOCAL: c_int = 11;
+const DS_RN_LOCAL: i32 = 11;
 
 /// `zlib_mem_deflate` (htslib/cram/cram_io.c:1222). GZIP wrapper deflate
 /// for `[data, data+size)` at the given level/strategy. Returns a libc
@@ -3019,19 +3018,19 @@ const DS_RN_LOCAL: c_int = 11;
 /// and produced bytes that differed from C's CRAM output even on identical
 /// input. Matching C exactly here is what makes bam_to_cram byte-identical.
 unsafe fn cram_cram_io_c_1222_zlib_mem_deflate(
-    data: *mut c_char,
+    data: *mut u8,
     size: usize,
     cdata_size: *mut usize,
-    level: c_int,
-    strat: c_int,
-) -> *mut c_char {
+    level: i32,
+    strat: i32,
+) -> *mut u8 {
     use crate::htslib_rs::bgzf;
     // zlib return codes / flush modes / methods.
-    const Z_OK: c_int = 0;
-    const Z_STREAM_END: c_int = 1;
-    const Z_NO_FLUSH: c_int = 0;
-    const Z_FINISH: c_int = 4;
-    const Z_DEFLATED: c_int = 8;
+    const Z_OK: i32 = 0;
+    const Z_STREAM_END: i32 = 1;
+    const Z_NO_FLUSH: i32 = 0;
+    const Z_FINISH: i32 = 4;
+    const Z_DEFLATED: i32 = 8;
 
     *cdata_size = 0;
 
@@ -3041,16 +3040,16 @@ unsafe fn cram_cram_io_c_1222_zlib_mem_deflate(
 
     // C uses size*1.05 + 100 as initial allocation (cram_io.c:1231).
     let cdata_alloc = ((size as f64) * 1.05 + 100.0) as usize;
-    let cdata = malloc(cdata_alloc.max(1) as u64).cast::<c_char>();
+    let cdata = libc::malloc(cdata_alloc.max(1)).cast::<u8>();
     if cdata.is_null() {
         return std::ptr::null_mut();
     }
 
     let mut zs: bgzf::z_stream = std::mem::zeroed();
     zs.next_in = data.cast::<u8>();
-    zs.avail_in = size as c_uint;
+    zs.avail_in = size as u32;
     zs.next_out = cdata.cast::<u8>();
-    zs.avail_out = cdata_alloc as c_uint;
+    zs.avail_out = cdata_alloc as u32;
     // Z_BINARY = 0 (default after zeroed()).
 
     let ret = (zlib.deflate_init2)(
@@ -3061,10 +3060,10 @@ unsafe fn cram_cram_io_c_1222_zlib_mem_deflate(
         9,       // memLevel
         strat,
         (zlib.zlib_version)(),
-        std::mem::size_of::<bgzf::z_stream>() as c_int,
+        std::mem::size_of::<bgzf::z_stream>() as i32,
     );
     if ret != Z_OK {
-        free(cdata.cast());
+        libc::free(cdata.cast());
         return std::ptr::null_mut();
     }
 
@@ -3072,10 +3071,10 @@ unsafe fn cram_cram_io_c_1222_zlib_mem_deflate(
     let mut cdata_pos: usize = 0;
     while zs.avail_in != 0 {
         zs.next_out = cdata.cast::<u8>().add(cdata_pos);
-        zs.avail_out = (cdata_alloc - cdata_pos) as c_uint;
+        zs.avail_out = (cdata_alloc - cdata_pos) as u32;
         if cdata_alloc <= cdata_pos {
             (zlib.deflate_end)(&mut zs);
-            free(cdata.cast());
+            libc::free(cdata.cast());
             return std::ptr::null_mut();
         }
         let r = (zlib.deflate)(&mut zs, Z_NO_FLUSH);
@@ -3087,12 +3086,12 @@ unsafe fn cram_cram_io_c_1222_zlib_mem_deflate(
     let fin = (zlib.deflate)(&mut zs, Z_FINISH);
     if fin != Z_STREAM_END {
         (zlib.deflate_end)(&mut zs);
-        free(cdata.cast());
+        libc::free(cdata.cast());
         return std::ptr::null_mut();
     }
     let total = zs.total_out as usize;
     if (zlib.deflate_end)(&mut zs) != Z_OK {
-        free(cdata.cast());
+        libc::free(cdata.cast());
         return std::ptr::null_mut();
     }
     *cdata_size = total;
@@ -3110,14 +3109,14 @@ unsafe fn cram_cram_io_c_1222_zlib_mem_deflate(
 #[allow(clippy::too_many_arguments)]
 unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
     s: *mut cram_slice_layout,
-    in_: *mut c_char,
+    in_: *mut u8,
     in_size: usize,
-    _content_id: c_int,
+    _content_id: i32,
     out_size: *mut usize,
-    method: c_int,
-    level: c_int,
-    strat: c_int,
-) -> *mut c_char {
+    method: i32,
+    level: i32,
+    strat: i32,
+) -> *mut u8 {
     match method {
         CBMI_GZIP | CBMI_GZIP_RLE | CBMI_GZIP_1 => {
             cram_cram_io_c_1222_zlib_mem_deflate(in_, in_size, out_size, level, strat)
@@ -3178,12 +3177,12 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
             }
             *out_size = v.len();
             let alloc = v.len().max(1);
-            let p = malloc(alloc as u64).cast::<c_char>();
+            let p = libc::malloc(alloc).cast::<u8>();
             if p.is_null() {
                 *out_size = 0;
                 return std::ptr::null_mut();
             }
-            memcpy(p.cast(), v.as_ptr().cast(), v.len() as u64);
+            std::ptr::copy_nonoverlapping(v.as_ptr(), p, v.len());
             // Honour the C contract: write the codec-reported size.
             let _ = out_sz_local;
             p
@@ -3197,18 +3196,18 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
         }
 
         CBMI_RANS0 | CBMI_RANS1 => {
-            let order: c_int = if method == CBMI_RANS0 { 0 } else { 1 };
+            let order: i32 = if method == CBMI_RANS0 { 0 } else { 1 };
             let input = std::slice::from_raw_parts(in_.cast::<u8>(), in_size);
             let v = crate::htslib_rs::htscodecs::rans_static::rans_compress(input, order);
             match v {
                 Some(buf) if !buf.is_empty() => {
                     *out_size = buf.len();
-                    let p = malloc(buf.len().max(1) as u64).cast::<c_char>();
+                    let p = libc::malloc(buf.len().max(1)).cast::<u8>();
                     if p.is_null() {
                         *out_size = 0;
                         return std::ptr::null_mut();
                     }
-                    memcpy(p.cast(), buf.as_ptr().cast(), buf.len() as u64);
+                    std::ptr::copy_nonoverlapping(buf.as_ptr(), p, buf.len());
                     p
                 }
                 _ => {
@@ -3221,7 +3220,7 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
         CBMI_RANS_PR0 | CBMI_RANS_PR1 | CBMI_RANS_PR64 | CBMI_RANS_PR9 | CBMI_RANS_PR128
         | CBMI_RANS_PR129 | CBMI_RANS_PR192 | CBMI_RANS_PR193 => {
             // methmap maps RANS_PR1..RANS_PR193 to order bit-fields.
-            const METHMAP: [c_int; 7] = [1, 64, 9, 128, 129, 192, 193];
+            const METHMAP: [i32; 7] = [1, 64, 9, 128, 129, 192, 193];
             let m_order = if method == CBMI_RANS_PR0 {
                 0
             } else {
@@ -3238,18 +3237,18 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
             if v.is_empty() {
                 return std::ptr::null_mut();
             }
-            let p = malloc(v.len().max(1) as u64).cast::<c_char>();
+            let p = libc::malloc(v.len().max(1)).cast::<u8>();
             if p.is_null() {
                 *out_size = 0;
                 return std::ptr::null_mut();
             }
-            memcpy(p.cast(), v.as_ptr().cast(), v.len() as u64);
+            std::ptr::copy_nonoverlapping(v.as_ptr(), p, v.len());
             p
         }
 
         CBMI_ARITH_PR0 | CBMI_ARITH_PR1 | CBMI_ARITH_PR64 | CBMI_ARITH_PR9 | CBMI_ARITH_PR128
         | CBMI_ARITH_PR129 | CBMI_ARITH_PR192 | CBMI_ARITH_PR193 => {
-            const METHMAP: [c_int; 7] = [1, 64, 9, 128, 129, 192, 193];
+            const METHMAP: [i32; 7] = [1, 64, 9, 128, 129, 192, 193];
             let order = if method == CBMI_ARITH_PR0 {
                 0
             } else {
@@ -3267,12 +3266,12 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
             if v.is_empty() {
                 return std::ptr::null_mut();
             }
-            let p = malloc(v.len().max(1) as u64).cast::<c_char>();
+            let p = libc::malloc(v.len().max(1)).cast::<u8>();
             if p.is_null() {
                 *out_size = 0;
                 return std::ptr::null_mut();
             }
-            memcpy(p.cast(), v.as_ptr().cast(), v.len() as u64);
+            std::ptr::copy_nonoverlapping(v.as_ptr(), p, v.len());
             p
         }
 
@@ -3298,12 +3297,12 @@ unsafe fn cram_cram_io_c_1757_cram_compress_by_method(
                     if buf.is_empty() {
                         return std::ptr::null_mut();
                     }
-                    let p = malloc(buf.len().max(1) as u64).cast::<c_char>();
+                    let p = libc::malloc(buf.len().max(1)).cast::<u8>();
                     if p.is_null() {
                         *out_size = 0;
                         return std::ptr::null_mut();
                     }
-                    memcpy(p.cast(), buf.as_ptr().cast(), buf.len() as u64);
+                    std::ptr::copy_nonoverlapping(buf.as_ptr(), p, buf.len());
                     p
                 }
                 None => std::ptr::null_mut(),
@@ -3327,22 +3326,22 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
     s: *mut cram_slice_layout,
     b: *mut cram_block_layout,
     metrics: *mut cram_metrics_layout,
-    mut method: c_int,
-    mut level: c_int,
-    recurse: c_int,
-) -> c_int {
+    mut method: i32,
+    mut level: i32,
+    recurse: i32,
+) -> i32 {
     if b.is_null() {
         return 0;
     }
 
     let orig_method = method;
-    let comp: *mut c_char;
+    let comp: *mut u8;
     let mut comp_size: usize = 0;
-    let strat: c_int;
+    let strat: i32;
 
     // methmap (cram_io.c:1929): maps internal enum to the "external" enum
     // for the on-wire b->method field.
-    const METHMAP: [c_int; 32] = [
+    const METHMAP: [i32; 32] = [
         0, 1, 2, 3, 4, 5, 6, 7, 8, // RAW..TOK3
         0, 0, // reserved
         1, 1, // GZIP_RLE, GZIP_1 -> GZIP
@@ -3389,7 +3388,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
     }
 
     if !metrics.is_null() {
-        crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).metrics_lock);
+        libc::pthread_mutex_lock(&mut (*fdl).metrics_lock);
         // Sudden changes in size trigger a retrial.
         if (*metrics).input_avg_sz != 0
             && ((*b).uncomp_size / 4 - 750 > (*metrics).input_avg_sz
@@ -3406,16 +3405,16 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
             let unpackable = (*metrics).unpackable;
             let mut sz_best: usize = (*b).uncomp_size as usize;
             let mut sz: [usize; CRAM_MAX_METHOD] = [0; CRAM_MAX_METHOD];
-            let mut method_best: c_int = 0; // RAW
-            let mut c_best: *mut c_char = std::ptr::null_mut();
+            let mut method_best: i32 = 0; // RAW
+            let mut c_best: *mut u8 = std::ptr::null_mut();
 
             (*metrics).input_avg_delta = (0.9
                 * ((*metrics).input_avg_delta as f64
                     + abs_i32((*b).uncomp_size - (*metrics).input_avg_sz) as f64))
-                as c_int;
+                as i32;
 
-            (*metrics).input_avg_sz += ((*b).uncomp_size as f64 * 0.2) as c_int;
-            (*metrics).input_avg_sz = ((*metrics).input_avg_sz as f64 * 0.8) as c_int;
+            (*metrics).input_avg_sz += ((*b).uncomp_size as f64 * 0.2) as i32;
+            (*metrics).input_avg_sz = ((*metrics).input_avg_sz as f64 * 0.8) as i32;
 
             if (*metrics).revised_method != 0 {
                 method = (*metrics).revised_method;
@@ -3457,18 +3456,18 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                 if (method & (1 << CBMI_ARITH_PR192)) != 0 {
                     method = (method | (1 << CBMI_ARITH_PR64)) & !(1 << CBMI_ARITH_PR192);
                 }
-                if (method & (1u32 << CBMI_ARITH_PR193) as c_int) != 0 {
+                if (method & (1u32 << CBMI_ARITH_PR193) as i32) != 0 {
                     method = (method | (1 << CBMI_ARITH_PR64) | (1 << CBMI_ARITH_PR1))
-                        & !((1u32 << CBMI_ARITH_PR193) as c_int);
+                        & !((1u32 << CBMI_ARITH_PR193) as i32);
                 }
             }
 
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
+            libc::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
 
-            for m in 0..CRAM_MAX_METHOD as c_int {
-                if (method & (1u32 << m) as c_int) != 0 {
+            for m in 0..CRAM_MAX_METHOD as i32 {
+                if (method & (1u32 << m) as i32) != 0 {
                     let mut lvl = level;
-                    let mstrat: c_int = match m {
+                    let mstrat: i32 = match m {
                         x if x == CBMI_GZIP => Z_FILTERED,
                         x if x == CBMI_GZIP_1 => {
                             lvl = 1;
@@ -3486,7 +3485,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
 
                     let c = cram_cram_io_c_1757_cram_compress_by_method(
                         s,
-                        (*b).data.cast::<c_char>(),
+                        (*b).data,
                         (*b).uncomp_size as usize,
                         (*b).content_id,
                         &mut sz[m as usize],
@@ -3499,42 +3498,42 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                         sz_best = sz[m as usize];
                         method_best = m;
                         if !c_best.is_null() {
-                            free(c_best.cast());
+                            libc::free(c_best.cast());
                         }
                         c_best = c;
                     } else if !c.is_null() {
-                        free(c.cast());
+                        libc::free(c.cast());
                     } else {
-                        sz[m as usize] = c_uint::MAX as usize;
+                        sz[m as usize] = u32::MAX as usize;
                     }
                 } else {
-                    sz[m as usize] = c_uint::MAX as usize;
+                    sz[m as usize] = u32::MAX as usize;
                 }
             }
 
             if !c_best.is_null() {
-                free((*b).data.cast());
+                libc::free((*b).data.cast());
                 (*b).data = c_best.cast::<u8>();
                 (*b).method = method_best;
                 (*b).comp_size = sz_best as i32;
             }
 
             // Accumulate stats for all methods tried.
-            crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).metrics_lock);
+            libc::pthread_mutex_lock(&mut (*fdl).metrics_lock);
             for (metric_sz, &method_sz) in (*metrics)
                 .sz
                 .iter_mut()
                 .zip(sz.iter())
                 .take(CRAM_MAX_METHOD)
             {
-                *metric_sz = (*metric_sz as usize).saturating_add(method_sz + 2000) as c_int;
+                *metric_sz = (*metric_sz as usize).saturating_add(method_sz + 2000) as i32;
             }
 
             // When enough trials performed, find the best on average.
             (*metrics).trial -= 1;
             if (*metrics).trial == 0 {
-                let mut best_method: c_int = CBMI_RAW;
-                let mut best_sz: c_int = c_int::MAX;
+                let mut best_method: i32 = CBMI_RAW;
+                let mut best_sz: i32 = i32::MAX;
 
                 // Relative costs of methods. See cram_io.c:2117.
                 let mut meth_cost: [f64; 32] = [
@@ -3552,7 +3551,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                         .zip(meth_cost.iter())
                         .take(CRAM_MAX_METHOD)
                     {
-                        *metric_sz = (*metric_sz as f64 * (1.0 + (cost - 1.0) * 4.0)) as c_int;
+                        *metric_sz = (*metric_sz as f64 * (1.0 + (cost - 1.0) * 4.0)) as i32;
                     }
                 } else if fd_level <= 3 {
                     for (metric_sz, &cost) in (*metrics)
@@ -3561,7 +3560,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                         .zip(meth_cost.iter())
                         .take(CRAM_MAX_METHOD)
                     {
-                        *metric_sz = (*metric_sz as f64 * (1.0 + (cost - 1.0))) as c_int;
+                        *metric_sz = (*metric_sz as f64 * (1.0 + (cost - 1.0))) as i32;
                     }
                 } else if fd_level <= 6 {
                     for (metric_sz, &cost) in (*metrics)
@@ -3570,7 +3569,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                         .zip(meth_cost.iter())
                         .take(CRAM_MAX_METHOD)
                     {
-                        *metric_sz = (*metric_sz as f64 * (1.0 + (cost - 1.0) / 2.0)) as c_int;
+                        *metric_sz = (*metric_sz as f64 * (1.0 + (cost - 1.0) / 2.0)) as i32;
                     }
                 } else if fd_level <= 7 {
                     for (metric_sz, &cost) in (*metrics)
@@ -3579,16 +3578,16 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                         .zip(meth_cost.iter())
                         .take(CRAM_MAX_METHOD)
                     {
-                        *metric_sz = (*metric_sz as f64 * (1.0 + (cost - 1.0) / 3.0)) as c_int;
+                        *metric_sz = (*metric_sz as f64 * (1.0 + (cost - 1.0) / 3.0)) as i32;
                     }
                 }
 
                 // Ensure these are never used; BSC and ZSTD slots.
-                (*metrics).sz[9] = c_int::MAX;
-                (*metrics).sz[10] = c_int::MAX;
+                (*metrics).sz[9] = i32::MAX;
+                (*metrics).sz[10] = i32::MAX;
 
-                for m in 0..CRAM_MAX_METHOD as c_int {
-                    if (*metrics).sz[m as usize] == 0 || (method & (1u32 << m) as c_int) == 0 {
+                for m in 0..CRAM_MAX_METHOD as i32 {
+                    if (*metrics).sz[m as usize] == 0 || (method & (1u32 << m) as i32) == 0 {
                         continue;
                     }
                     if best_sz > (*metrics).sz[m as usize] {
@@ -3601,7 +3600,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                     (*metrics).consistency = 0;
                 } else {
                     let factor = 2.0f64.min(1.0 + (*metrics).consistency as f64 / 4.0);
-                    (*metrics).next_trial = ((*metrics).next_trial as f64 * factor) as c_int;
+                    (*metrics).next_trial = ((*metrics).next_trial as f64 * factor) as i32;
                     (*metrics).consistency += 1;
                 }
 
@@ -3622,8 +3621,8 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
 
                 // MAXDELTA=0.20, MAXFAILS=4.
                 const MAXDELTA: f64 = 0.20;
-                const MAXFAILS: c_int = 4;
-                for m in 0..CRAM_MAX_METHOD as c_int {
+                const MAXFAILS: i32 = 4;
+                for m in 0..CRAM_MAX_METHOD as i32 {
                     if best_method == m {
                         (*metrics).cnt[m as usize] = 0;
                         (*metrics).extra[m as usize] = 0.0;
@@ -3634,7 +3633,7 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                         if (*metrics).cnt[m as usize] >= MAXFAILS * mul {
                             (*metrics).extra[m as usize] += r;
                             if (*metrics).extra[m as usize] >= MAXDELTA * mul as f64 {
-                                method &= !(1u32 << m) as c_int;
+                                method &= !(1u32 << m) as i32;
                             }
                         }
 
@@ -3642,30 +3641,30 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                         if (m == CBMI_FQZ || m == CBMI_FQZ_B || m == CBMI_FQZ_C || m == CBMI_FQZ_D)
                             && (*metrics).sz[m as usize] > best_sz
                         {
-                            method &= !(1u32 << m) as c_int;
+                            method &= !(1u32 << m) as i32;
                         }
                     }
                 }
 
                 (*metrics).revised_method = method;
             }
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
+            libc::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
         } else {
             (*metrics).input_avg_delta = (0.9
                 * ((*metrics).input_avg_delta as f64
                     + abs_i32((*b).uncomp_size - (*metrics).input_avg_sz) as f64))
-                as c_int;
+                as i32;
 
-            (*metrics).input_avg_sz += ((*b).uncomp_size as f64 * 0.2) as c_int;
-            (*metrics).input_avg_sz = ((*metrics).input_avg_sz as f64 * 0.8) as c_int;
+            (*metrics).input_avg_sz += ((*b).uncomp_size as f64 * 0.2) as i32;
+            (*metrics).input_avg_sz = ((*metrics).input_avg_sz as f64 * 0.8) as i32;
 
             strat = (*metrics).strat;
             let cached_method = (*metrics).method;
 
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
+            libc::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
             comp = cram_cram_io_c_1757_cram_compress_by_method(
                 s,
-                (*b).data.cast::<c_char>(),
+                (*b).data,
                 (*b).uncomp_size as usize,
                 (*b).content_id,
                 &mut comp_size,
@@ -3681,14 +3680,14 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
                 if recurse == 0 {
                     hts_log_cstr(
                         HTS_LOG_WARNING,
-                        c"cram_compress_block".as_ptr(),
-                        c"Compressed block method failed, redoing trial".as_ptr(),
+                        b"cram_compress_block",
+                        b"Compressed block method failed, redoing trial",
                     );
-                    crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).metrics_lock);
+                    libc::pthread_mutex_lock(&mut (*fdl).metrics_lock);
                     (*metrics).trial = NTRIALS;
                     (*metrics).next_trial = TRIAL_SPAN;
                     (*metrics).revised_method = orig_method;
-                    crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
+                    libc::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
                     return cram_cram_io_c_1913_cram_compress_block3(
                         fd, s, b, metrics, method, level, 1,
                     );
@@ -3697,19 +3696,19 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
             }
 
             if comp_size < (*b).uncomp_size as usize {
-                free((*b).data.cast());
+                libc::free((*b).data.cast());
                 (*b).data = comp.cast::<u8>();
                 (*b).comp_size = comp_size as i32;
                 (*b).method = cached_method;
             } else {
-                free(comp.cast());
+                libc::free(comp.cast());
             }
         }
     } else {
         // No cached metrics — just do GZIP.
         comp = cram_cram_io_c_1757_cram_compress_by_method(
             s,
-            (*b).data.cast::<c_char>(),
+            (*b).data,
             (*b).uncomp_size as usize,
             (*b).content_id,
             &mut comp_size,
@@ -3720,18 +3719,18 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
         if comp.is_null() {
             hts_log_cstr(
                 HTS_LOG_ERROR,
-                c"cram_compress_block".as_ptr(),
-                c"Compression failed!".as_ptr(),
+                b"cram_compress_block",
+                b"Compression failed!",
             );
             return -1;
         }
         if comp_size < (*b).uncomp_size as usize {
-            free((*b).data.cast());
+            libc::free((*b).data.cast());
             (*b).data = comp.cast::<u8>();
             (*b).comp_size = comp_size as i32;
             (*b).method = CBMI_GZIP;
         } else {
-            free(comp.cast());
+            libc::free(comp.cast());
         }
         strat = Z_FILTERED;
         let _ = strat;
@@ -3744,8 +3743,8 @@ unsafe fn cram_cram_io_c_1913_cram_compress_block3(
 }
 
 // Default CRAM version numbers (htslib/cram/cram_io.c:5254).
-const CRAM_OPEN_DEFAULT_MAJOR: c_int = 3;
-const CRAM_OPEN_DEFAULT_MINOR: c_int = 1;
+const CRAM_OPEN_DEFAULT_MAJOR: i32 = 3;
+const CRAM_OPEN_DEFAULT_MINOR: i32 = 1;
 
 // Internal helper: free up a partially-built cram_fd from the C `err:` label
 // of cram_dopen (htslib/cram/cram_io.c:5418). Mirrors the cascading free path
@@ -3755,26 +3754,26 @@ unsafe fn cram_cram_io_c_5560_cram_dopen_cleanup_err(fd: *mut cram_fd_layout) {
     // metrics
     for k in 0..CRAM_DS_END {
         if !(*fd).m[k].is_null() {
-            free((*fd).m[k].cast());
+            libc::free((*fd).m[k].cast());
         }
     }
     if !(*fd).tags_used.is_null() {
         let h = (*fd).tags_used.cast::<kh_generic_layout>();
         if !(*h).flags.is_null() {
-            free((*h).flags.cast());
+            libc::free((*h).flags.cast());
         }
         if !(*h).keys.is_null() {
-            free((*h).keys.cast());
+            libc::free((*h).keys.cast());
         }
         if !(*h).vals.is_null() {
-            free((*h).vals.cast());
+            libc::free((*h).vals.cast());
         }
-        free(h.cast());
+        libc::free(h.cast());
     }
-    crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut (*fd).metrics_lock);
-    crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut (*fd).ref_lock);
-    crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut (*fd).range_lock);
-    crate::htslib_rs::c_compat::pthread_mutex_destroy(&mut (*fd).bam_list_lock);
+    libc::pthread_mutex_destroy(&mut (*fd).metrics_lock);
+    libc::pthread_mutex_destroy(&mut (*fd).ref_lock);
+    libc::pthread_mutex_destroy(&mut (*fd).range_lock);
+    libc::pthread_mutex_destroy(&mut (*fd).bam_list_lock);
     if !(*fd).refs.is_null() {
         cram_cram_io_c_2427_refs_free((*fd).refs.cast());
     }
@@ -3785,9 +3784,9 @@ unsafe fn cram_cram_io_c_5560_cram_dopen_cleanup_err(fd: *mut cram_fd_layout) {
         crate::htslib_rs::sam::sam_hdr_destroy((*fd).header.cast());
     }
     if !(*fd).prefix.is_null() {
-        free((*fd).prefix.cast());
+        libc::free((*fd).prefix.cast());
     }
-    free(fd.cast());
+    libc::free(fd.cast());
 }
 
 // Native equivalents of the CRAM record encoder entry points
@@ -3812,7 +3811,7 @@ struct spare_bams_layout {
 }
 
 // Native cram_update_curr_slice (htslib/cram/cram_encode.c:3262).
-unsafe fn cram_update_curr_slice_native(c: *mut cram_container_layout, version: c_int) {
+unsafe fn cram_update_curr_slice_native(c: *mut cram_container_layout, version: i32) {
     let s = (*c).slice;
     let hdr = (*s).hdr;
     if (*c).multi_seq != 0 {
@@ -3897,11 +3896,11 @@ unsafe fn cram_next_container_native(
         (*fdl).ctr = new_ctr.cast();
         c = (*fdl).ctr;
 
-        crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).ref_lock);
+        libc::pthread_mutex_lock(&mut (*fdl).ref_lock);
         (*c).no_ref = (*fdl).no_ref;
         (*c).embed_ref = (*fdl).embed_ref;
         (*c).record_counter = (*fdl).record_counter;
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+        libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
         (*c).curr_ref = bref;
     }
 
@@ -3943,9 +3942,9 @@ unsafe fn cram_next_container_native(
 // 32-bit signed/unsigned share one shape; 64-bit another. They are kept in the
 // `vv` table as *mut c_void and are transmuted back here for invocation.
 type CramVarintDecode32 =
-    unsafe fn(*mut crate::htslib_rs::hts::cram_fd, *mut i32, *mut u32) -> c_int;
+    unsafe fn(*mut crate::htslib_rs::hts::cram_fd, *mut i32, *mut u32) -> i32;
 type CramVarintDecode64 =
-    unsafe fn(*mut crate::htslib_rs::hts::cram_fd, *mut i64, *mut u32) -> c_int;
+    unsafe fn(*mut crate::htslib_rs::hts::cram_fd, *mut i64, *mut u32) -> i32;
 
 #[inline]
 unsafe fn vv_decode32(
@@ -3953,7 +3952,7 @@ unsafe fn vv_decode32(
     fd: *mut crate::htslib_rs::hts::cram_fd,
     val: *mut i32,
     crc: *mut u32,
-) -> c_int {
+) -> i32 {
     let f: CramVarintDecode32 = cram_fn(vv.varint_decode32_crc);
     f(fd, val, crc)
 }
@@ -3963,7 +3962,7 @@ unsafe fn vv_decode32s(
     fd: *mut crate::htslib_rs::hts::cram_fd,
     val: *mut i32,
     crc: *mut u32,
-) -> c_int {
+) -> i32 {
     let f: CramVarintDecode32 = cram_fn(vv.varint_decode32s_crc);
     f(fd, val, crc)
 }
@@ -3973,7 +3972,7 @@ unsafe fn vv_decode64(
     fd: *mut crate::htslib_rs::hts::cram_fd,
     val: *mut i64,
     crc: *mut u32,
-) -> c_int {
+) -> i32 {
     let f: CramVarintDecode64 = cram_fn(vv.varint_decode64_crc);
     f(fd, val, crc)
 }
@@ -3992,8 +3991,8 @@ unsafe fn cram_cram_io_c_3960_cram_store_container(
     fd: *mut cram_fd_layout,
     c: *mut cram_container_layout,
     dat: *mut c_char,
-    size: *mut c_int,
-) -> c_int {
+    size: *mut i32,
+) -> i32 {
     let fdl = fd;
     let cl = c;
 
@@ -4003,7 +4002,7 @@ unsafe fn cram_cram_io_c_3960_cram_store_container(
 
     let dat_start = dat;
     let mut cp = dat;
-    let null_end: *mut c_char = std::ptr::null_mut();
+    let null_end: *mut u8 = std::ptr::null_mut();
 
     let major = (*fdl).version >> 8;
 
@@ -4024,41 +4023,41 @@ unsafe fn cram_cram_io_c_3960_cram_store_container(
     }
 
     if (*cl).multi_seq != 0 {
-        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, -2) as usize);
-        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, 0) as usize);
-        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, 0) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, -2) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, 0) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, 0) as usize);
     } else {
-        cp = cp.add(((*fdl).vv.varint_put32s.unwrap())(cp, null_end, (*cl).ref_seq_id) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32s.unwrap())(cp.cast::<u8>(), null_end, (*cl).ref_seq_id) as usize);
         if major >= 4 {
             cp = cp
-                .add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_start) as usize);
+                .add(((*fdl).vv.varint_put64.unwrap())(cp.cast::<u8>(), null_end, (*cl).ref_seq_start) as usize);
             cp = cp
-                .add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_span) as usize);
+                .add(((*fdl).vv.varint_put64.unwrap())(cp.cast::<u8>(), null_end, (*cl).ref_seq_span) as usize);
         } else {
             cp = cp.add(
-                ((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_start as i32)
+                ((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, (*cl).ref_seq_start as i32)
                     as usize,
             );
             cp = cp.add(
-                ((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_span as i32) as usize,
+                ((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, (*cl).ref_seq_span as i32) as usize,
             );
         }
     }
-    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_records) as usize);
+    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, (*cl).num_records) as usize);
     if major == 2 {
-        cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).record_counter) as usize);
+        cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp.cast::<u8>(), null_end, (*cl).record_counter) as usize);
     } else if major >= 3 {
         cp = cp.add(
-            ((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).record_counter as i32) as usize,
+            ((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, (*cl).record_counter as i32) as usize,
         );
     }
-    cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).num_bases) as usize);
-    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_blocks) as usize);
-    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_landmarks) as usize);
+    cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp.cast::<u8>(), null_end, (*cl).num_bases) as usize);
+    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, (*cl).num_blocks) as usize);
+    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, (*cl).num_landmarks) as usize);
     let mut i = 0;
     while i < (*cl).num_landmarks {
         let lm = *(*cl).landmark.add(i as usize);
-        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, lm) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, lm) as usize);
         i += 1;
     }
 
@@ -4072,7 +4071,7 @@ unsafe fn cram_cram_io_c_3960_cram_store_container(
         cp = cp.add(4);
     }
 
-    *size = cp.offset_from(dat_start) as c_int;
+    *size = cp.offset_from(dat_start) as i32;
     0
 }
 
@@ -4087,14 +4086,14 @@ unsafe fn cram_cram_io_c_3960_cram_store_container(
 unsafe fn cram_cram_io_c_4023_cram_write_container(
     fd: *mut cram_fd_layout,
     c: *mut cram_container_layout,
-) -> c_int {
+) -> i32 {
     let fdl = fd;
     let cl = c;
 
     let mut buf_a = [0u8; 1024];
     let need = 61 + (*cl).num_landmarks * 10;
     let (buf, owned): (*mut c_char, bool) = if need >= 1024 {
-        let p = malloc(need as u64).cast::<c_char>();
+        let p = libc::malloc(need as usize).cast::<c_char>();
         if p.is_null() {
             return -1;
         }
@@ -4104,7 +4103,7 @@ unsafe fn cram_cram_io_c_4023_cram_write_container(
     };
 
     let mut cp = buf;
-    let null_end: *mut c_char = std::ptr::null_mut();
+    let null_end: *mut u8 = std::ptr::null_mut();
     let major = (*fdl).version >> 8;
 
     // length: v1 → itf8; v2..=3 → raw LE int32; v4+ → varint32.
@@ -4117,46 +4116,46 @@ unsafe fn cram_cram_io_c_4023_cram_write_container(
         std::ptr::write_unaligned(cp.cast::<i32>(), (*cl).length.to_le());
         cp = cp.add(4);
     } else {
-        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).length) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, (*cl).length) as usize);
     }
 
     if (*cl).multi_seq != 0 {
         // C uses (uint32_t)-2 here; varint_put32 takes int32_t, so -2 is identical.
-        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, -2) as usize);
-        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, 0) as usize);
-        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, 0) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, -2) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, 0) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, 0) as usize);
     } else {
-        cp = cp.add(((*fdl).vv.varint_put32s.unwrap())(cp, null_end, (*cl).ref_seq_id) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32s.unwrap())(cp.cast::<u8>(), null_end, (*cl).ref_seq_id) as usize);
         if major >= 4 {
             cp = cp
-                .add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_start) as usize);
+                .add(((*fdl).vv.varint_put64.unwrap())(cp.cast::<u8>(), null_end, (*cl).ref_seq_start) as usize);
             cp = cp
-                .add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).ref_seq_span) as usize);
+                .add(((*fdl).vv.varint_put64.unwrap())(cp.cast::<u8>(), null_end, (*cl).ref_seq_span) as usize);
         } else {
             cp = cp.add(
-                ((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_start as i32)
+                ((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, (*cl).ref_seq_start as i32)
                     as usize,
             );
             cp = cp.add(
-                ((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).ref_seq_span as i32) as usize,
+                ((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, (*cl).ref_seq_span as i32) as usize,
             );
         }
     }
-    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_records) as usize);
+    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, (*cl).num_records) as usize);
     if major >= 3 {
-        cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).record_counter) as usize);
+        cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp.cast::<u8>(), null_end, (*cl).record_counter) as usize);
     } else {
         cp = cp.add(
-            ((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).record_counter as i32) as usize,
+            ((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, (*cl).record_counter as i32) as usize,
         );
     }
-    cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp, null_end, (*cl).num_bases) as usize);
-    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_blocks) as usize);
-    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, (*cl).num_landmarks) as usize);
+    cp = cp.add(((*fdl).vv.varint_put64.unwrap())(cp.cast::<u8>(), null_end, (*cl).num_bases) as usize);
+    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, (*cl).num_blocks) as usize);
+    cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, (*cl).num_landmarks) as usize);
     let mut i = 0;
     while i < (*cl).num_landmarks {
         let lm = *(*cl).landmark.add(i as usize);
-        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp, null_end, lm) as usize);
+        cp = cp.add(((*fdl).vv.varint_put32.unwrap())(cp.cast::<u8>(), null_end, lm) as usize);
         i += 1;
     }
 
@@ -4173,14 +4172,14 @@ unsafe fn cram_cram_io_c_4023_cram_write_container(
     let nbytes = cp.offset_from(buf) as usize;
     let fp = (*fdl).fp;
     let wrote = htslib_hfile_h_292_hwrite(fp, buf.cast(), nbytes);
-    if wrote != nbytes as libc::ssize_t {
+    if wrote != nbytes as isize {
         if owned {
-            free(buf.cast());
+            libc::free(buf.cast());
         }
         return -1;
     }
     if owned {
-        free(buf.cast());
+        libc::free(buf.cast());
     }
     0
 }
@@ -4192,23 +4191,23 @@ unsafe fn cram_cram_io_c_4023_cram_write_container(
 // walk the tree without going through the cram-mirror tree.
 #[repr(C)]
 pub struct cram_index_layout {
-    pub nslice: c_int,
-    pub nalloc: c_int,
+    pub nslice: i32,
+    pub nalloc: i32,
     pub e: *mut cram_index_layout,
-    pub refid: c_int,
-    pub start: c_int,
-    pub end: c_int,
-    pub nseq: c_int,
-    pub slice: c_int,
-    pub len: c_int,
+    pub refid: i32,
+    pub start: i32,
+    pub end: i32,
+    pub nseq: i32,
+    pub slice: i32,
+    pub len: i32,
     pub offset: i64,
     pub e_next: *mut cram_index_layout,
 }
 
 pub unsafe fn cram_cram_codecs_h_230_cram_not_enough_bits(
     blk: *mut cram_block,
-    nbits: c_int,
-) -> c_int {
+    nbits: i32,
+) -> i32 {
     let blk = blk.cast::<cram_block_layout>();
     if nbits < 0 {
         return 1;
@@ -4232,9 +4231,9 @@ pub unsafe fn cram_cram_codecs_h_230_cram_not_enough_bits(
 
 #[repr(C)]
 struct pooled_alloc_test_xyz {
-    x: c_int,
-    y: c_int,
-    z: c_int,
+    x: i32,
+    y: i32,
+    z: i32,
 }
 
 pub fn cram_os_h_155_le_int4(x: u32) -> u32 {
@@ -4287,7 +4286,7 @@ pub fn cram_os_h_158_le_int2(x: u16) -> u16 {
 pub unsafe fn cram_get_bam_seq_native(
     fd: *mut crate::htslib_rs::hts::cram_fd,
     bam: *mut crate::htslib_rs::sam::bam1_t,
-) -> c_int {
+) -> i32 {
     // Stash the caller's bam1_t* in a local so we can hand a `**bam1_t` to the
     // inner pipeline (which matches the C `cram_get_bam_seq(fd, bam1_t **b)`
     // signature). The pipeline reads `*bam_0` to find the target bam1_t and
@@ -4325,7 +4324,7 @@ mod tests {
         fd: *mut cram_fd,
         opt: hts_fmt_option,
         words: &mut [usize],
-    ) -> c_int {
+    ) -> i32 {
         let mut reg_save = [0usize; 6];
         let mut overflow = [0usize; 8];
         for (i, word) in words.iter().copied().enumerate() {
@@ -4422,7 +4421,7 @@ mod tests {
             assert_eq!(fd.use_fqz, 1);
             assert_eq!(fd.seqs_per_slice, 25000);
 
-            free(fd.prefix.cast());
+            libc::free(fd.prefix.cast());
         }
     }
 
@@ -4456,7 +4455,7 @@ mod tests {
                 ),
                 -1
             );
-            assert_eq!(*__errno_location(), EINVAL);
+            assert_eq!(*libc::__errno_location(), libc::EINVAL);
 
             let mut words = [0usize];
             assert_eq!(
@@ -4467,11 +4466,11 @@ mod tests {
                 ),
                 -1
             );
-            assert_eq!(*__errno_location(), libc::EBADF);
+            assert_eq!(*libc::__errno_location(), libc::EBADF);
 
             let mut words = [0usize];
             assert_eq!(call_cram_voption_words(fd_ptr, 9999, &mut words), -1);
-            assert_eq!(*__errno_location(), EINVAL);
+            assert_eq!(*libc::__errno_location(), libc::EINVAL);
         }
     }
 
@@ -4532,15 +4531,15 @@ mod tests {
         unsafe {
             let mut key = *b"ACGT";
             assert_eq!(
-                cram_cram_encode_c_70_sub_idx(key.as_mut_ptr().cast(), b'A' as c_char),
+                cram_cram_encode_c_70_sub_idx(key.as_mut_ptr().cast(), b'A'),
                 0
             );
             assert_eq!(
-                cram_cram_encode_c_70_sub_idx(key.as_mut_ptr().cast(), b'T' as c_char),
+                cram_cram_encode_c_70_sub_idx(key.as_mut_ptr().cast(), b'T'),
                 3
             );
             assert_eq!(
-                cram_cram_encode_c_70_sub_idx(key.as_mut_ptr().cast(), b'N' as c_char),
+                cram_cram_encode_c_70_sub_idx(key.as_mut_ptr().cast(), b'N'),
                 4
             );
         }
@@ -4610,7 +4609,7 @@ mod tests {
             b.data = sa_data;
             assert_eq!(
                 cram_cram_encode_c_1301_expected_template_count(&mut b),
-                c_int::MAX
+                i32::MAX
             );
 
             let no_aux = vec![0];
@@ -4985,7 +4984,7 @@ mod tests {
         unsafe {
             assert_eq!(
                 cram_ds_to_key(17),
-                256 * b'R' as c_int + b'G' as c_int
+                256 * b'R' as i32 + b'G' as i32
             );
             assert_eq!(cram_ds_to_key(42), -1);
 
@@ -5125,7 +5124,7 @@ mod tests {
                 .map(|p| p.as_ptr()),
                 Some((&mut ds_codec as *mut cram_codec_external_layout).cast())
             );
-            assert_eq!(key, 256 * b'R' as c_int + b'N' as c_int);
+            assert_eq!(key, 256 * b'R' as i32 + b'N' as i32);
             assert_eq!(
                 cram_codec_iter_next(
                     &mut iter,
@@ -5356,7 +5355,7 @@ mod tests {
                 cram_cram_io_h_248_block_append(b, b"abc".as_ptr().cast(), 3),
                 0
             );
-            assert_eq!(cram_cram_io_h_261_block_append_char(b, b'/' as c_char), 0);
+            assert_eq!(cram_cram_io_h_261_block_append_char(b, b'/'), 0);
             assert_eq!(cram_cram_io_h_271_block_append_uint(b, 12345), 0);
             assert_eq!(
                 std::slice::from_raw_parts(block.data, block.byte),
@@ -5378,7 +5377,7 @@ mod tests {
             let len = end.offset_from(buf.as_mut_ptr()) as usize;
             assert_eq!(&buf[..len], b"18446744073709551615");
 
-            free(block.data.cast());
+            libc::free(block.data.cast());
         }
     }
 
@@ -5437,23 +5436,23 @@ mod tests {
                 0x1f_ffff,
             );
             assert_eq!(len, 3);
-            let mut cp = safe.as_mut_ptr().cast::<c_char>();
-            let endp = safe.as_ptr().add(len as usize).cast::<c_char>();
+            let mut cp = safe.as_mut_ptr().cast::<u8>();
+            let endp = safe.as_ptr().add(len as usize).cast::<u8>();
             let mut err = 0;
             assert_eq!(
                 cram_cram_io_c_644_safe_itf8_get(&mut cp, endp, &mut err),
                 0x1f_ffff
             );
             assert_eq!(err, 0);
-            assert_eq!(cp, endp as *mut c_char);
+            assert_eq!(cp, endp as *mut u8);
 
             let mut truncated = [0x80u8];
-            let mut cp = truncated.as_mut_ptr().cast::<c_char>();
-            let endp = truncated.as_ptr().add(truncated.len()).cast::<c_char>();
+            let mut cp = truncated.as_mut_ptr().cast::<u8>();
+            let endp = truncated.as_ptr().add(truncated.len()).cast::<u8>();
             let mut err = 0;
             assert_eq!(cram_cram_io_c_644_safe_itf8_get(&mut cp, endp, &mut err), 0);
             assert_eq!(err, 1);
-            assert_eq!(cp, truncated.as_mut_ptr().cast::<c_char>());
+            assert_eq!(cp, truncated.as_mut_ptr().cast::<u8>());
 
             let len = cram_cram_io_c_751_safe_ltf8_put(
                 safe.as_mut_ptr().cast(),
@@ -5461,23 +5460,23 @@ mod tests {
                 0x1_0000_0000,
             );
             assert_eq!(len, 5);
-            let mut cp = safe.as_mut_ptr().cast::<c_char>();
-            let endp = safe.as_ptr().add(len as usize).cast::<c_char>();
+            let mut cp = safe.as_mut_ptr().cast::<u8>();
+            let endp = safe.as_ptr().add(len as usize).cast::<u8>();
             let mut err = 0;
             assert_eq!(
                 cram_cram_io_c_673_safe_ltf8_get(&mut cp, endp, &mut err),
                 0x1_0000_0000
             );
             assert_eq!(err, 0);
-            assert_eq!(cp, endp as *mut c_char);
+            assert_eq!(cp, endp as *mut u8);
 
             let mut truncated = [0xf8u8, 0x01, 0x02];
-            let mut cp = truncated.as_mut_ptr().cast::<c_char>();
-            let endp = truncated.as_ptr().add(truncated.len()).cast::<c_char>();
+            let mut cp = truncated.as_mut_ptr().cast::<u8>();
+            let endp = truncated.as_ptr().add(truncated.len()).cast::<u8>();
             let mut err = 0;
             assert_eq!(cram_cram_io_c_673_safe_ltf8_get(&mut cp, endp, &mut err), 0);
             assert_eq!(err, 1);
-            assert_eq!(cp, truncated.as_mut_ptr().cast::<c_char>());
+            assert_eq!(cp, truncated.as_mut_ptr().cast::<u8>());
 
             assert_eq!(cram_cram_io_c_755_itf8_size(0x7f), 1);
             assert_eq!(cram_cram_io_c_755_itf8_size(0x80), 2);
@@ -5676,23 +5675,23 @@ mod tests {
             );
             assert_eq!(&buf[..3], &[0x81, 0x80, 0x00]);
 
-            let mut cp = buf.as_mut_ptr().cast::<c_char>();
-            let endp = buf.as_ptr().add(3).cast::<c_char>();
+            let mut cp = buf.as_mut_ptr().cast::<u8>();
+            let endp = buf.as_ptr().add(3).cast::<u8>();
             let mut err = 0;
             assert_eq!(
                 cram_cram_io_c_772_uint7_get_32(&mut cp, endp, &mut err),
                 0x4000
             );
             assert_eq!(err, 0);
-            assert_eq!(cp, endp as *mut c_char);
+            assert_eq!(cp, endp as *mut u8);
 
             assert_eq!(
                 cram_cram_io_c_808_sint7_put_32(buf.as_mut_ptr().cast(), std::ptr::null_mut(), -1),
                 1
             );
             assert_eq!(&buf[..1], &[0x01]);
-            let mut cp = buf.as_mut_ptr().cast::<c_char>();
-            let endp = buf.as_ptr().add(1).cast::<c_char>();
+            let mut cp = buf.as_mut_ptr().cast::<u8>();
+            let endp = buf.as_ptr().add(1).cast::<u8>();
             let mut err = 0;
             assert_eq!(cram_cram_io_c_780_sint7_get_32(&mut cp, endp, &mut err), -1);
             assert_eq!(err, 0);
@@ -5706,8 +5705,8 @@ mod tests {
                 6
             );
             assert_eq!(&buf[..6], &[0x81, 0x80, 0x80, 0x80, 0x80, 0x00]);
-            let mut cp = buf.as_mut_ptr().cast::<c_char>();
-            let endp = buf.as_ptr().add(6).cast::<c_char>();
+            let mut cp = buf.as_mut_ptr().cast::<u8>();
+            let endp = buf.as_ptr().add(6).cast::<u8>();
             let mut err = 0;
             assert_eq!(
                 cram_cram_io_c_788_uint7_get_64(&mut cp, endp, &mut err),
@@ -5720,8 +5719,8 @@ mod tests {
                 2
             );
             assert_eq!(&buf[..2], &[0x81, 0x01]);
-            let mut cp = buf.as_mut_ptr().cast::<c_char>();
-            let endp = buf.as_ptr().add(2).cast::<c_char>();
+            let mut cp = buf.as_mut_ptr().cast::<u8>();
+            let endp = buf.as_ptr().add(2).cast::<u8>();
             let mut err = 0;
             assert_eq!(
                 cram_cram_io_c_796_sint7_get_64(&mut cp, endp, &mut err),
@@ -5739,7 +5738,7 @@ mod tests {
                 0
             );
             let mut truncated = [0x81u8];
-            let mut cp = truncated.as_mut_ptr().cast::<c_char>();
+            let mut cp = truncated.as_mut_ptr().cast::<u8>();
             let mut err = 0;
             assert_eq!(
                 cram_cram_io_c_772_uint7_get_32(
@@ -5750,7 +5749,7 @@ mod tests {
                 1
             );
             assert_eq!(err, 0);
-            assert_eq!(cp, truncated.as_mut_ptr().add(1).cast::<c_char>());
+            assert_eq!(cp, truncated.as_mut_ptr().add(1).cast::<u8>());
 
             let b = cram_cram_io_c_1388_cram_new_block(
                 crate::htslib_rs::cram::CRAM_CONTENT_TYPE_EXTERNAL,
@@ -5961,7 +5960,7 @@ mod tests {
             assert!(!vv3.varint_decode32s_crc.is_null());
             assert!(!vv3.varint_decode64_crc.is_null());
 
-            let mut buf = [0 as c_char; 8];
+            let mut buf = [0u8; 8];
             assert_eq!(
                 (vv4.varint_put32.unwrap())(buf.as_mut_ptr(), buf.as_mut_ptr().add(8), 128),
                 2
@@ -5974,7 +5973,7 @@ mod tests {
             );
             assert_eq!(err, 0);
 
-            let mut buf = [0 as c_char; 8];
+            let mut buf = [0u8; 8];
             assert_eq!(
                 (vv3.varint_put32.unwrap())(buf.as_mut_ptr(), buf.as_mut_ptr().add(8), 128),
                 2
@@ -5993,42 +5992,42 @@ mod tests {
     fn cram_io_uint7_getters_consume_overlong_and_short_buffers_like_htscodecs() {
         unsafe {
             let mut over32 = [0xffu8; 6];
-            let mut cp = over32.as_mut_ptr().cast::<c_char>();
+            let mut cp = over32.as_mut_ptr().cast::<u8>();
             let mut err = 0;
             assert_eq!(
                 cram_cram_io_c_772_uint7_get_32(&mut cp, std::ptr::null(), &mut err),
                 0xffff_ffff
             );
-            assert_eq!(cp, over32.as_mut_ptr().add(6).cast::<c_char>());
+            assert_eq!(cp, over32.as_mut_ptr().add(6).cast::<u8>());
             assert_eq!(err, 0);
 
-            cp = over32.as_mut_ptr().cast::<c_char>();
+            cp = over32.as_mut_ptr().cast::<u8>();
             assert_eq!(
                 cram_cram_io_c_772_uint7_get_32(&mut cp, over32.as_ptr().add(5).cast(), &mut err,),
                 0xffff_ffff
             );
-            assert_eq!(cp, over32.as_mut_ptr().add(5).cast::<c_char>());
+            assert_eq!(cp, over32.as_mut_ptr().add(5).cast::<u8>());
             assert_eq!(err, 0);
 
-            cp = over32.as_mut_ptr().cast::<c_char>();
+            cp = over32.as_mut_ptr().cast::<u8>();
             assert_eq!(
                 cram_cram_io_c_772_uint7_get_32(&mut cp, over32.as_ptr().cast(), &mut err),
                 0
             );
-            assert_eq!(cp, over32.as_mut_ptr().cast::<c_char>());
+            assert_eq!(cp, over32.as_mut_ptr().cast::<u8>());
             assert_eq!(err, 1);
 
             let mut over64 = [0xffu8; 11];
-            let mut cp64 = over64.as_mut_ptr().cast::<c_char>();
+            let mut cp64 = over64.as_mut_ptr().cast::<u8>();
             err = 0;
             assert_eq!(
                 cram_cram_io_c_788_uint7_get_64(&mut cp64, std::ptr::null(), &mut err),
                 -1
             );
-            assert_eq!(cp64, over64.as_mut_ptr().add(11).cast::<c_char>());
+            assert_eq!(cp64, over64.as_mut_ptr().add(11).cast::<u8>());
             assert_eq!(err, 0);
 
-            cp64 = over64.as_mut_ptr().cast::<c_char>();
+            cp64 = over64.as_mut_ptr().cast::<u8>();
             assert_eq!(
                 cram_cram_io_c_788_uint7_get_64(
                     &mut cp64,
@@ -6037,7 +6036,7 @@ mod tests {
                 ),
                 -1
             );
-            assert_eq!(cp64, over64.as_mut_ptr().add(10).cast::<c_char>());
+            assert_eq!(cp64, over64.as_mut_ptr().add(10).cast::<u8>());
             assert_eq!(err, 0);
         }
     }
@@ -6071,11 +6070,11 @@ mod tests {
             fd1.version = 1 << 8;
             cram_cram_io_c_5170_cram_init_tables((&mut fd1 as *mut cram_fd_layout).cast());
             assert_eq!(
-                fd1.bam_flag_swap[(CRAM_FPAIRED | CRAM_FREVERSE | CRAM_FDUP) as usize] as c_int,
+                fd1.bam_flag_swap[(CRAM_FPAIRED | CRAM_FREVERSE | CRAM_FDUP) as usize] as i32,
                 BAM_FPAIRED | BAM_FREVERSE | BAM_FDUP
             );
             assert_eq!(
-                fd1.cram_flag_swap[(BAM_FPAIRED | BAM_FREAD1 | BAM_FQCFAIL) as usize] as c_int,
+                fd1.cram_flag_swap[(BAM_FPAIRED | BAM_FREAD1 | BAM_FQCFAIL) as usize] as i32,
                 CRAM_FPAIRED | CRAM_FREAD1 | CRAM_FQCFAIL
             );
             assert_eq!(
@@ -6103,7 +6102,7 @@ mod tests {
             assert!(!out.is_null());
             assert_eq!(size, payload.len());
             assert_eq!(std::slice::from_raw_parts(out.cast::<u8>(), size), payload);
-            free(out.cast());
+            libc::free(out.cast());
 
             let mut hinted_size = 1usize;
             let out = cram_cram_io_c_1068_zlib_mem_inflate(
@@ -6117,7 +6116,7 @@ mod tests {
                 std::slice::from_raw_parts(out.cast::<u8>(), hinted_size),
                 payload
             );
-            free(out.cast());
+            libc::free(out.cast());
 
             let mut bad = [0u8, 1, 2, 3];
             let out =
@@ -6489,7 +6488,7 @@ mod tests {
                 (*block).orig_method = crate::htslib_rs::cram::CRAM_BLOCK_METHOD_RAW;
                 (*block).comp_size = 0;
                 (*block).uncomp_size = 0;
-                free((*block).data.cast());
+                libc::free((*block).data.cast());
                 (*block).data = std::ptr::null_mut();
                 (*block).alloc = 0;
                 (*block).byte = 0;
@@ -6772,7 +6771,7 @@ mod tests {
             assert!((*metrics).sz.iter().all(|&v| v == 0));
             assert!((*metrics).cnt.iter().all(|&v| v == 0));
             assert!((*metrics).extra.iter().all(|&v| v == 0.0));
-            free(m.cast());
+            libc::free(m.cast());
         }
     }
 
@@ -6844,8 +6843,8 @@ mod tests {
             }
             assert_eq!((*m0).cnt[1], 3);
 
-            free(m0.cast());
-            free(m3.cast());
+            libc::free(m0.cast());
+            libc::free(m3.cast());
         }
     }
 
@@ -6872,10 +6871,8 @@ mod tests {
             assert!(heap_entry.seq.is_empty());
             assert!(heap_entry.mf.is_null());
 
-            let mf_data = malloc(4).cast::<c_char>();
-            assert!(!mf_data.is_null());
-            std::ptr::copy_nonoverlapping(c"TGA".as_ptr(), mf_data, 4);
-            let mf = cram_mFILE_c_207_mfcreate(mf_data, 4);
+            let mf_data: [u8; 4] = *b"TGA\0";
+            let mf = cram_mFILE_c_207_mfcreate(Some(&mf_data), 4);
             assert!(!mf.is_null());
             let mut mfile_entry = ref_entry_layout {
                 name: Vec::new(),
@@ -6931,9 +6928,9 @@ mod tests {
             (*h).size = 1;
             (*h).n_occupied = 1;
             (*h).upper_bound = 1;
-            (*h).flags = malloc(std::mem::size_of::<u32>() as u64).cast::<u32>();
-            (*h).keys = malloc(std::mem::size_of::<*const c_char>() as u64).cast::<*const c_char>();
-            (*h).vals = malloc(std::mem::size_of::<*mut ref_entry_layout>() as u64)
+            (*h).flags = libc::malloc(std::mem::size_of::<u32>()).cast::<u32>();
+            (*h).keys = libc::malloc(std::mem::size_of::<*const c_char>()).cast::<*const c_char>();
+            (*h).vals = libc::malloc(std::mem::size_of::<*mut ref_entry_layout>())
                 .cast::<*mut ref_entry_layout>();
             assert!(!(*h).flags.is_null());
             assert!(!(*h).keys.is_null());
@@ -6941,14 +6938,14 @@ mod tests {
             *(*h).flags = 0;
             *(*h).keys = c"chr1".as_ptr();
 
-            let entry = calloc(1, std::mem::size_of::<ref_entry_layout>() as u64)
+            let entry = libc::calloc(1, std::mem::size_of::<ref_entry_layout>())
                 .cast::<ref_entry_layout>();
             assert!(!entry.is_null());
             (*entry).seq = b"NNN\0".to_vec();
             assert!(!(*entry).seq.is_empty());
             *(*h).vals = entry;
 
-            (*refs).ref_id = malloc(std::mem::size_of::<*mut ref_entry_layout>() as u64)
+            (*refs).ref_id = libc::malloc(std::mem::size_of::<*mut ref_entry_layout>())
                 .cast::<*mut ref_entry_layout>();
             assert!(!(*refs).ref_id.is_null());
             *(*refs).ref_id = entry;
@@ -6974,7 +6971,7 @@ mod tests {
             let mode = CString::new("r").unwrap();
             let fp = cram_cram_io_c_2503_bgzf_open_ref(
                 &uri,
-                mode.as_ptr().cast_mut(),
+                mode.as_ptr().cast::<u8>().cast_mut(),
                 0,
             );
             assert!(!fp.is_null());
@@ -6994,13 +6991,13 @@ mod tests {
             assert!(!r.is_null());
             let refs = r.cast::<refs_t_layout>();
             (*refs).nref = 2;
-            (*refs).ref_id = malloc(2 * std::mem::size_of::<*mut ref_entry_layout>() as u64)
+            (*refs).ref_id = libc::malloc(2 * std::mem::size_of::<*mut ref_entry_layout>())
                 .cast::<*mut ref_entry_layout>();
             assert!(!(*refs).ref_id.is_null());
 
-            let entry0 = calloc(1, std::mem::size_of::<ref_entry_layout>() as u64)
+            let entry0 = libc::calloc(1, std::mem::size_of::<ref_entry_layout>())
                 .cast::<ref_entry_layout>();
-            let entry1 = calloc(1, std::mem::size_of::<ref_entry_layout>() as u64)
+            let entry1 = libc::calloc(1, std::mem::size_of::<ref_entry_layout>())
                 .cast::<ref_entry_layout>();
             assert!(!entry0.is_null());
             assert!(!entry1.is_null());
@@ -7034,8 +7031,8 @@ mod tests {
             assert_eq!((*entry0).length, 0);
 
             cram_cram_io_c_2417_ref_entry_free_seq(entry1.cast());
-            free(entry0.cast());
-            free(entry1.cast());
+            libc::free(entry0.cast());
+            libc::free(entry1.cast());
             cram_cram_io_c_2427_refs_free(r);
         }
     }
@@ -7066,7 +7063,7 @@ mod tests {
                 fn_: Vec::new(),
                 fp: std::ptr::null_mut(),
                 count: 0,
-                lock: crate::htslib_rs::c_compat::PTHREAD_MUTEX_INITIALIZER,
+                lock: libc::PTHREAD_MUTEX_INITIALIZER,
                 last: std::ptr::null_mut(),
                 last_id: 1,
             };
@@ -7126,7 +7123,7 @@ mod tests {
             );
             assert!(!raw_seq.is_null());
             assert_eq!(std::slice::from_raw_parts(raw_seq.cast::<u8>(), 4), b"CGTN");
-            free(raw_seq.cast());
+            libc::free(raw_seq.cast());
             assert_eq!(bgzf_close(raw_fp), 0);
 
             let wrapped_c = CString::new(wrapped_path.to_string_lossy().as_bytes()).unwrap();
@@ -7157,7 +7154,7 @@ mod tests {
                 std::slice::from_raw_parts(wrapped_seq.cast::<u8>(), 4),
                 b"CGTN"
             );
-            free(wrapped_seq.cast());
+            libc::free(wrapped_seq.cast());
             assert_eq!(bgzf_close(wrapped_fp), 0);
 
             std::fs::remove_file(raw_path).unwrap();
@@ -7184,10 +7181,10 @@ mod tests {
             let refs = r.cast::<refs_t_layout>();
             (*refs).fn_ = path_c.as_bytes().to_vec();
             (*refs).nref = 1;
-            (*refs).ref_id = malloc(std::mem::size_of::<*mut ref_entry_layout>() as u64)
+            (*refs).ref_id = libc::malloc(std::mem::size_of::<*mut ref_entry_layout>())
                 .cast::<*mut ref_entry_layout>();
             assert!(!(*refs).ref_id.is_null());
-            let entry = calloc(1, std::mem::size_of::<ref_entry_layout>() as u64)
+            let entry = libc::calloc(1, std::mem::size_of::<ref_entry_layout>())
                 .cast::<ref_entry_layout>();
             assert!(!entry.is_null());
             (*entry).fn_ = path_c.as_bytes().to_vec();
@@ -7211,7 +7208,7 @@ mod tests {
             assert_eq!((*entry).count, 2);
 
             cram_cram_io_c_2417_ref_entry_free_seq(entry.cast());
-            free(entry.cast());
+            libc::free(entry.cast());
             cram_cram_io_c_2427_refs_free(r);
             std::fs::remove_file(path).unwrap();
             std::fs::remove_file(fai).unwrap();
@@ -7232,7 +7229,7 @@ mod tests {
             std::fs::write(&path, b">chr1\nACGT\n>chr2\nnnac\n").unwrap();
 
             let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
-            let refs = cram_cram_io_c_2541_refs_load_fai(std::ptr::null_mut(), path_c.as_ptr(), 1);
+            let refs = cram_cram_io_c_2541_refs_load_fai(std::ptr::null_mut(), path_c.as_ptr().cast::<u8>(), 1);
             assert!(!refs.is_null());
             assert!(fai.exists());
             let refs_l = refs.cast::<refs_t_layout>();
@@ -7288,7 +7285,7 @@ mod tests {
                 idx_path.to_string_lossy()
             ))
             .unwrap();
-            let refs = cram_cram_io_c_2541_refs_load_fai(std::ptr::null_mut(), spec.as_ptr(), 1);
+            let refs = cram_cram_io_c_2541_refs_load_fai(std::ptr::null_mut(), spec.as_ptr().cast::<u8>(), 1);
             assert!(!refs.is_null());
             let refs_l = refs.cast::<refs_t_layout>();
             assert_eq!((*refs_l).nref, 1);
@@ -7326,7 +7323,7 @@ mod tests {
             std::fs::write(&path, b">chr1\nACGT\n>chr2\nAACCGG\n").unwrap();
 
             let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
-            let refs = cram_cram_io_c_2541_refs_load_fai(std::ptr::null_mut(), path_c.as_ptr(), 1);
+            let refs = cram_cram_io_c_2541_refs_load_fai(std::ptr::null_mut(), path_c.as_ptr().cast::<u8>(), 1);
             assert!(!refs.is_null());
             let refs_l = refs.cast::<refs_t_layout>();
             let chr1 = *(*refs_l).ref_id;
@@ -7338,23 +7335,23 @@ mod tests {
             let chr1_name = CString::new((*chr1).name.clone()).unwrap();
             let mut header_refs = [
                 crate::htslib_rs::sam::sam_hrec_sq_t {
-                    name: chr2_name.as_ptr(),
+                    name: chr2_name.as_ptr().cast::<u8>(),
                     len: 1,
                     ty: std::ptr::null_mut(),
                 },
                 crate::htslib_rs::sam::sam_hrec_sq_t {
-                    name: chr1_name.as_ptr(),
+                    name: chr1_name.as_ptr().cast::<u8>(),
                     len: 2,
                     ty: std::ptr::null_mut(),
                 },
                 crate::htslib_rs::sam::sam_hrec_sq_t {
-                    name: c"missing".as_ptr(),
+                    name: c"missing".as_ptr().cast::<u8>(),
                     len: 9,
                     ty: std::ptr::null_mut(),
                 },
             ];
             let mut hrecs: crate::htslib_rs::sam::sam_hrecs_t = std::mem::zeroed();
-            hrecs.nref = header_refs.len() as c_int;
+            hrecs.nref = header_refs.len() as i32;
             hrecs.ref_ = header_refs.as_mut_ptr();
             let mut hdr: sam_hdr_t = std::mem::zeroed();
             hdr.hrecs = &mut hrecs;
@@ -7392,18 +7389,18 @@ mod tests {
             let chr2 = c"chr2";
             let mut header_refs = [
                 crate::htslib_rs::sam::sam_hrec_sq_t {
-                    name: chr1.as_ptr(),
+                    name: chr1.as_ptr().cast::<u8>(),
                     len: 123,
                     ty: std::ptr::null_mut(),
                 },
                 crate::htslib_rs::sam::sam_hrec_sq_t {
-                    name: chr2.as_ptr(),
+                    name: chr2.as_ptr().cast::<u8>(),
                     len: 456,
                     ty: std::ptr::null_mut(),
                 },
             ];
             let mut hrecs: crate::htslib_rs::sam::sam_hrecs_t = std::mem::zeroed();
-            hrecs.nref = header_refs.len() as c_int;
+            hrecs.nref = header_refs.len() as i32;
             hrecs.ref_ = header_refs.as_mut_ptr();
             let mut hdr: sam_hdr_t = std::mem::zeroed();
             hdr.hrecs = &mut hrecs;
@@ -7461,7 +7458,7 @@ mod tests {
 
             let chr2 = c"chr2";
             let mut header_refs = [crate::htslib_rs::sam::sam_hrec_sq_t {
-                name: chr2.as_ptr(),
+                name: chr2.as_ptr().cast::<u8>(),
                 len: 1,
                 ty: std::ptr::null_mut(),
             }];
@@ -7472,13 +7469,13 @@ mod tests {
             hdr.hrecs = &mut hrecs;
             let mut fd: cram_fd_layout = std::mem::zeroed();
             fd.header = (&mut hdr as *mut sam_hdr_t).cast();
-            fd.mode = b'r' as c_int;
+            fd.mode = b'r' as i32;
 
             let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
             assert_eq!(
                 cram_cram_io_c_3597_cram_load_reference(
                     (&mut fd as *mut cram_fd_layout).cast(),
-                    path_c.as_ptr().cast_mut(),
+                    path_c.as_ptr().cast::<u8>().cast_mut(),
                 ),
                 0
             );
@@ -7497,7 +7494,7 @@ mod tests {
 
             let refs = cram_cram_io_c_2467_refs_create();
             let mut header_refs = [crate::htslib_rs::sam::sam_hrec_sq_t {
-                name: c"header_only".as_ptr(),
+                name: c"header_only".as_ptr().cast::<u8>(),
                 len: 77,
                 ty: std::ptr::null_mut(),
             }];
@@ -7542,7 +7539,7 @@ mod tests {
             let refs_l = refs.cast::<refs_t_layout>();
 
             let mut header_refs = [crate::htslib_rs::sam::sam_hrec_sq_t {
-                name: c"chr_set".as_ptr(),
+                name: c"chr_set".as_ptr().cast::<u8>(),
                 len: 30,
                 ty: std::ptr::null_mut(),
             }];
@@ -7788,7 +7785,7 @@ mod tests {
             assert_eq!(*block.data, 0b1011_0000);
 
             let bytes = *b"xy";
-            let bytes_signed: &[c_char] = std::slice::from_raw_parts(bytes.as_ptr().cast(), 2);
+            let bytes_signed: &[u8] = std::slice::from_raw_parts(bytes.as_ptr(), 2);
             cram_store_bytes_MSB(&mut block, bytes_signed);
             assert_eq!(block.byte, 3);
             assert_eq!(std::slice::from_raw_parts(block.data, 3), b"\xb0xy");
@@ -7801,7 +7798,7 @@ mod tests {
             assert_eq!(cram_get_bits_MSB(&mut block, 8), b'x' as i64);
             assert_eq!(cram_get_bits_MSB(&mut block, 8), b'y' as i64);
 
-            free(block.data.cast());
+            libc::free(block.data.cast());
         }
     }
 
@@ -7895,7 +7892,7 @@ mod tests {
 
             codec.beta.nbits = 0;
             codec.beta.offset = -5;
-            let mut bytes = [0 as c_char; 3];
+            let mut bytes = [0u8; 3];
             out_size = 3;
             assert_eq!(
                 cram_cram_codecs_c_1108_cram_beta_decode_char(
@@ -7960,7 +7957,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     ints.as_mut_ptr().cast(),
-                    ints.len() as c_int
+                    ints.len() as i32
                 ),
                 0
             );
@@ -7978,7 +7975,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     longs.as_mut_ptr().cast(),
-                    longs.len() as c_int
+                    longs.len() as i32
                 ),
                 0
             );
@@ -7996,7 +7993,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     bytes.as_mut_ptr().cast(),
-                    bytes.len() as c_int
+                    bytes.len() as i32
                 ),
                 0
             );
@@ -8053,7 +8050,7 @@ mod tests {
             assert_eq!((*enc).beta.nbits, 3);
             cram_cram_codecs_c_1243_cram_beta_encode_free(enc.cast());
 
-            free(out_block.data.cast());
+            libc::free(out_block.data.cast());
         }
     }
 
@@ -8167,7 +8164,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     syms.as_mut_ptr().cast(),
-                    syms.len() as c_int
+                    syms.len() as i32
                 ),
                 0
             );
@@ -8185,7 +8182,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     long_syms.as_mut_ptr().cast(),
-                    long_syms.len() as c_int
+                    long_syms.len() as i32
                 ),
                 0
             );
@@ -8200,7 +8197,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     raw.as_mut_ptr().cast(),
-                    raw.len() as c_int
+                    raw.len() as i32
                 ),
                 0
             );
@@ -8343,7 +8340,7 @@ mod tests {
                 ),
                 4
             );
-            let mut unpacked = [0 as c_char; 4];
+            let mut unpacked = [0u8; 4];
             let mut unpacked_size = 4;
             assert_eq!(
                 cram_cram_codecs_c_1408_cram_xpack_decode_char(
@@ -8376,7 +8373,7 @@ mod tests {
                 (&mut hdr as *mut cram_block_compression_hdr_layout).cast(),
                 51,
                 xpack_header.as_mut_ptr().cast(),
-                xpack_header.len() as c_int,
+                xpack_header.len() as i32,
                 3,
                 3 << 8,
                 (&mut vv as *mut varint_vec_layout).cast(),
@@ -8445,7 +8442,7 @@ mod tests {
                 9
             );
             cram_cram_codecs_c_1612_cram_xpack_encode_free(xpack_enc.cast());
-            free(out_block.data.cast());
+            libc::free(out_block.data.cast());
         }
     }
 
@@ -8813,7 +8810,7 @@ mod tests {
                 (&mut hdr as *mut cram_block_compression_hdr_layout).cast(),
                 53,
                 xdelta_header.as_mut_ptr().cast(),
-                xdelta_header.len() as c_int,
+                xdelta_header.len() as i32,
                 5,
                 3 << 8,
                 (&mut full_vv as *mut varint_vec_layout).cast(),
@@ -8871,7 +8868,7 @@ mod tests {
                     std::ptr::null_mut(),
                     (&mut codec as *mut cram_codec_xdelta_layout).cast(),
                     delta_payload.as_mut_ptr().cast(),
-                    delta_payload.len() as c_int,
+                    delta_payload.len() as i32,
                 ),
                 0
             );
@@ -9022,7 +9019,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     first.as_mut_ptr().cast(),
-                    first.len() as c_int
+                    first.len() as i32
                 ),
                 0
             );
@@ -9035,7 +9032,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     second.as_mut_ptr().cast(),
-                    second.len() as c_int
+                    second.len() as i32
                 ),
                 0
             );
@@ -9051,7 +9048,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     third.as_mut_ptr().cast(),
-                    third.len() as c_int
+                    third.len() as i32
                 ),
                 0
             );
@@ -9130,7 +9127,7 @@ mod tests {
                 b"aaabbc"
             );
             let mut decoded = [0u8; 4];
-            let mut out_size = decoded.len() as c_int;
+            let mut out_size = decoded.len() as i32;
             assert_eq!(
                 cram_cram_codecs_c_2125_cram_xrle_decode_char(
                     s,
@@ -9281,7 +9278,7 @@ mod tests {
                 (&mut hdr as *mut cram_block_compression_hdr_layout).cast(),
                 52,
                 header.as_mut_ptr().cast(),
-                header.len() as c_int,
+                header.len() as i32,
                 4,
                 3 << 8,
                 (&mut vv as *mut varint_vec_layout).cast(),
@@ -9439,7 +9436,7 @@ mod tests {
             let subexp_init = cram_cram_codecs_c_2508_cram_subexp_decode_init(
                 std::ptr::null_mut(),
                 subexp_header.as_mut_ptr().cast(),
-                subexp_header.len() as c_int,
+                subexp_header.len() as i32,
                 7,
                 1,
                 3 << 8,
@@ -9519,7 +9516,7 @@ mod tests {
             let gamma_init = cram_cram_codecs_c_2580_cram_gamma_decode_init(
                 std::ptr::null_mut(),
                 gamma_header.as_mut_ptr().cast(),
-                gamma_header.len() as c_int,
+                gamma_header.len() as i32,
                 9,
                 1,
                 3 << 8,
@@ -9599,7 +9596,7 @@ mod tests {
             };
             let block_ptr = (&mut block as *mut cram_block_layout).cast();
             let mut out_size = 3;
-            let mut chars = [0 as c_char; 3];
+            let mut chars = [0u8; 3];
             assert_eq!(
                 cram_cram_codecs_c_2660_cram_huffman_decode_char(
                     std::ptr::null_mut(),
@@ -9655,7 +9652,7 @@ mod tests {
             }];
             codec.huffman.ncodes = 1;
             codec.huffman.codes = zero_code.as_mut_ptr();
-            let mut zero_chars = [0 as c_char; 2];
+            let mut zero_chars = [0u8; 2];
             out_size = 2;
             assert_eq!(
                 cram_cram_codecs_c_2646_cram_huffman_decode_char0(
@@ -9743,7 +9740,7 @@ mod tests {
             let huff_init = cram_cram_codecs_c_2814_cram_huffman_decode_init(
                 std::ptr::null_mut(),
                 huff_header.as_mut_ptr().cast(),
-                huff_header.len() as c_int,
+                huff_header.len() as i32,
                 3,
                 3,
                 3 << 8,
@@ -9809,7 +9806,7 @@ mod tests {
                 describe: std::ptr::null_mut(),
                 huffman: cram_huffman_encoder_layout {
                     codes: codes.as_mut_ptr(),
-                    nvals: codes.len() as c_int,
+                    nvals: codes.len() as i32,
                     val2code,
                     option: 0,
                 },
@@ -9831,7 +9828,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     chars.as_mut_ptr().cast(),
-                    chars.len() as c_int
+                    chars.len() as i32
                 ),
                 0
             );
@@ -9859,7 +9856,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     ints.as_mut_ptr().cast(),
-                    ints.len() as c_int
+                    ints.len() as i32
                 ),
                 0
             );
@@ -9886,7 +9883,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     longs.as_mut_ptr().cast(),
-                    longs.len() as c_int
+                    longs.len() as i32
                 ),
                 0
             );
@@ -10047,8 +10044,8 @@ mod tests {
                 },
             };
             let c = (&mut codec as *mut cram_codec_byte_array_len_layout).cast();
-            let mut out = [0 as c_char; 8];
-            let mut out_size = out.len() as c_int;
+            let mut out = [0u8; 8];
+            let mut out_size = out.len() as i32;
             assert_eq!(
                 cram_cram_codecs_c_3371_cram_byte_array_len_decode(
                     std::ptr::null_mut(),
@@ -10088,7 +10085,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     payload.as_mut_ptr().cast(),
-                    payload.len() as c_int
+                    payload.len() as i32
                 ),
                 0
             );
@@ -10151,7 +10148,7 @@ mod tests {
                 (&mut hdr as *mut cram_block_compression_hdr_layout).cast(),
                 4,
                 init_header.as_mut_ptr().cast(),
-                init_header.len() as c_int,
+                init_header.len() as i32,
                 3,
                 3 << 8,
                 (&mut vv as *mut varint_vec_layout).cast(),
@@ -10281,7 +10278,7 @@ mod tests {
             };
             let s = (&mut slice as *mut cram_slice_layout).cast();
             let c = (&mut codec as *mut cram_codec_byte_array_stop_layout).cast();
-            let mut out = [0 as c_char; 8];
+            let mut out = [0u8; 8];
             let mut out_size = 8;
             assert_eq!(
                 cram_cram_codecs_c_3586_cram_byte_array_stop_decode_char(
@@ -10350,7 +10347,7 @@ mod tests {
                     std::ptr::null_mut(),
                     (&mut codec as *mut cram_codec_byte_array_stop_layout).cast(),
                     payload.as_mut_ptr().cast(),
-                    payload.len() as c_int
+                    payload.len() as i32
                 ),
                 0
             );
@@ -10367,11 +10364,11 @@ mod tests {
     fn cram_codecs_byte_array_describe_init_and_encoding_names_match_c() {
         unsafe {
             assert_eq!(
-                std::ffi::CStr::from_ptr(cram_cram_codecs_c_3811_cram_encoding2str(4)).to_bytes(),
+                std::ffi::CStr::from_ptr(cram_cram_codecs_c_3811_cram_encoding2str(4).cast()).to_bytes(),
                 b"BYTE_ARRAY_LEN"
             );
             assert_eq!(
-                std::ffi::CStr::from_ptr(cram_cram_codecs_c_3811_cram_encoding2str(53)).to_bytes(),
+                std::ffi::CStr::from_ptr(cram_cram_codecs_c_3811_cram_encoding2str(53).cast()).to_bytes(),
                 b"?"
             );
 
@@ -10471,7 +10468,7 @@ mod tests {
             let dec = cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
                 std::ptr::null_mut(),
                 header.as_mut_ptr().cast(),
-                header.len() as c_int,
+                header.len() as i32,
                 5,
                 4,
                 3 << 8,
@@ -10488,7 +10485,7 @@ mod tests {
             );
             cram_cram_codecs_c_3669_cram_byte_array_stop_decode_free(dec.cast());
 
-            let mut dat = [b';' as c_int, 77];
+            let mut dat = [b';' as i32, 77];
             let enc = cram_cram_codecs_c_3785_cram_byte_array_stop_encode_init(
                 std::ptr::null_mut(),
                 5,
@@ -10592,7 +10589,7 @@ mod tests {
             let ext_dec = cram_cram_codecs_c_459_cram_external_decode_init(
                 std::ptr::null_mut(),
                 external_header.as_mut_ptr().cast(),
-                external_header.len() as c_int,
+                external_header.len() as i32,
                 1,
                 3,
                 3 << 8,
@@ -10611,7 +10608,7 @@ mod tests {
                 std::ptr::null_mut(),
                 1,
                 1,
-                test_void_token(7),
+                test_void_token(7).cast(),
                 3 << 8,
                 std::ptr::null_mut(),
             )
@@ -10676,7 +10673,7 @@ mod tests {
             let var_dec = cram_cram_codecs_c_760_cram_varint_decode_init(
                 std::ptr::null_mut(),
                 varint_header.as_mut_ptr().cast(),
-                varint_header.len() as c_int,
+                varint_header.len() as i32,
                 42,
                 7,
                 4 << 8,
@@ -10724,7 +10721,7 @@ mod tests {
                 (&mut st as *mut cram_stats_layout).cast(),
                 42,
                 1,
-                test_void_token(11),
+                test_void_token(11).cast(),
                 4 << 8,
                 std::ptr::null_mut(),
             )
@@ -10767,7 +10764,7 @@ mod tests {
             let const_dec = cram_cram_codecs_c_981_cram_const_decode_init(
                 std::ptr::null_mut(),
                 const_header.as_mut_ptr().cast(),
-                const_header.len() as c_int,
+                const_header.len() as i32,
                 44,
                 1,
                 4 << 8,
@@ -10781,10 +10778,10 @@ mod tests {
                 *mut c_void,
                 *mut cram_block,
                 *mut c_char,
-                *mut c_int,
-            ) -> c_int = cram_fn((*const_dec).decode);
+                *mut i32,
+            ) -> i32 = cram_fn((*const_dec).decode);
             let mut decoded = [0i32; 2];
-            let mut decoded_len = decoded.len() as c_int;
+            let mut decoded_len = decoded.len() as i32;
             assert_eq!(
                 decode(
                     std::ptr::null_mut(),
@@ -10872,7 +10869,7 @@ mod tests {
             let beta_dec = cram_cram_codecs_c_1142_cram_beta_decode_init(
                 std::ptr::null_mut(),
                 beta_header.as_mut_ptr().cast(),
-                beta_header.len() as c_int,
+                beta_header.len() as i32,
                 6,
                 1,
                 3 << 8,
@@ -11100,9 +11097,9 @@ mod tests {
                 stop_codec.encode,
                 cram_fn_ptr(cram_cram_codecs_c_3733_cram_byte_array_stop_encode as usize)
             );
-            let huff_conv = calloc(
+            let huff_conv = libc::calloc(
                 1,
-                std::mem::size_of::<cram_codec_huffman_encoder_layout>() as u64,
+                std::mem::size_of::<cram_codec_huffman_encoder_layout>(),
             )
             .cast::<cram_codec_huffman_layout>();
             let mut huff_codes = [
@@ -11123,7 +11120,7 @@ mod tests {
             (*huff_conv).vv = &mut vv;
             (*huff_conv).decode =
                 cram_fn_ptr(cram_cram_codecs_c_2708_cram_huffman_decode_int as usize);
-            (*huff_conv).huffman.ncodes = huff_codes.len() as c_int;
+            (*huff_conv).huffman.ncodes = huff_codes.len() as i32;
             (*huff_conv).huffman.codes = huff_codes.as_mut_ptr();
             (*huff_conv).huffman.option = 1;
             assert_eq!(
@@ -11141,16 +11138,16 @@ mod tests {
             assert_eq!((*huff_enc).huffman.nvals, 2);
             assert_eq!((*huff_enc).huffman.val2code[6], 0);
             assert_eq!((*huff_enc).huffman.val2code[7], 1);
-            free(huff_conv.cast());
+            libc::free(huff_conv.cast());
         }
     }
 
-    unsafe extern "C" fn test_codec_describe_len(_c: *mut c_void, ks: *mut kstring_t) -> c_int {
-        (kputsn(b"LEN", 3, &mut *ks) < 0) as c_int
+    unsafe extern "C" fn test_codec_describe_len(_c: *mut c_void, ks: *mut kstring_t) -> i32 {
+        (kputsn(b"LEN", 3, &mut *ks) < 0) as i32
     }
 
-    unsafe extern "C" fn test_codec_describe_val(_c: *mut c_void, ks: *mut kstring_t) -> c_int {
-        (kputsn(b"VAL", 3, &mut *ks) < 0) as c_int
+    unsafe extern "C" fn test_codec_describe_val(_c: *mut c_void, ks: *mut kstring_t) -> i32 {
+        (kputsn(b"VAL", 3, &mut *ks) < 0) as i32
     }
 
     unsafe extern "C" fn test_byte_array_len_decode_len(
@@ -11158,8 +11155,8 @@ mod tests {
         c: *mut c_void,
         _in: *mut cram_block,
         out: *mut c_char,
-        _out_size: *mut c_int,
-    ) -> c_int {
+        _out_size: *mut i32,
+    ) -> i32 {
         *(out.cast::<i32>()) = (*(c.cast::<cram_codec_byte_array_len_layout>())).codec_id;
         0
     }
@@ -11169,9 +11166,13 @@ mod tests {
         _c: *mut c_void,
         _in: *mut cram_block,
         out: *mut c_char,
-        out_size: *mut c_int,
-    ) -> c_int {
-        memcpy(out.cast(), c"XYZ".as_ptr().cast(), *out_size as u64);
+        out_size: *mut i32,
+    ) -> i32 {
+        std::ptr::copy_nonoverlapping(
+            b"XYZ".as_ptr(),
+            out.cast::<u8>(),
+            *out_size as usize,
+        );
         0
     }
 
@@ -11179,19 +11180,19 @@ mod tests {
         _slice: *mut cram_slice,
         c: *mut c_void,
         in_: *mut c_char,
-        _in_size: c_int,
-    ) -> c_int {
+        _in_size: i32,
+    ) -> i32 {
         let val = *(in_.cast::<i32>()) as u8;
         let c = c.cast::<cram_codec_byte_array_len_layout>();
-        cram_cram_io_h_261_block_append_char((*c).out.cast(), val as c_char)
+        cram_cram_io_h_261_block_append_char((*c).out.cast(), val)
     }
 
     unsafe extern "C" fn test_byte_array_len_encode_val(
         _slice: *mut cram_slice,
         c: *mut c_void,
         in_: *mut c_char,
-        in_size: c_int,
-    ) -> c_int {
+        in_size: i32,
+    ) -> i32 {
         let c = c.cast::<cram_codec_byte_array_len_layout>();
         cram_cram_io_h_248_block_append((*c).out.cast(), in_.cast(), in_size as usize)
     }
@@ -11201,8 +11202,8 @@ mod tests {
         _c: *mut c_void,
         in_: *mut cram_block,
         out: *mut c_char,
-        _out_size: *mut c_int,
-    ) -> c_int {
+        _out_size: *mut i32,
+    ) -> i32 {
         let block = in_.cast::<cram_block_layout>();
         let idx = (*block).idx as usize;
         *(out.cast::<u32>()) = *((*block).data.cast::<u32>()).add(idx);
@@ -11214,22 +11215,22 @@ mod tests {
         _c: *mut c_void,
         b: *mut cram_block,
         _prefix: *mut c_char,
-        _version: c_int,
-    ) -> c_int {
+        _version: i32,
+    ) -> i32 {
         let mut bytes = *b"L";
         cram_cram_io_h_248_block_append(b, bytes.as_mut_ptr().cast(), bytes.len());
-        bytes.len() as c_int
+        bytes.len() as i32
     }
 
     unsafe extern "C" fn test_byte_array_len_store_val(
         _c: *mut c_void,
         b: *mut cram_block,
         _prefix: *mut c_char,
-        _version: c_int,
-    ) -> c_int {
+        _version: i32,
+    ) -> i32 {
         let mut bytes = *b"VA";
         cram_cram_io_h_248_block_append(b, bytes.as_mut_ptr().cast(), bytes.len());
-        bytes.len() as c_int
+        bytes.len() as i32
     }
 
     unsafe extern "C" fn test_xdelta_get_block(
@@ -11246,7 +11247,7 @@ mod tests {
         (*(c.cast::<cram_codec_xrle_layout>())).out.cast()
     }
 
-    unsafe extern "C" fn test_xrle_size(_slice: *mut cram_slice, c: *mut c_void) -> c_int {
+    unsafe extern "C" fn test_xrle_size(_slice: *mut cram_slice, c: *mut c_void) -> i32 {
         let b = (*(c.cast::<cram_codec_xrle_layout>()))
             .out
             .cast::<cram_block_layout>();
@@ -11254,19 +11255,19 @@ mod tests {
     }
 
     unsafe extern "C" fn test_xdelta_varint_get32(
-        cp: *mut *mut c_char,
-        _endp: *const c_char,
-        _err: *mut c_int,
+        cp: *mut *mut u8,
+        _endp: *const u8,
+        _err: *mut i32,
     ) -> i64 {
-        let val = **cp as u8;
+        let val = **cp;
         *cp = (*cp).add(1);
         val as i64
     }
 
     unsafe extern "C" fn test_varint_get32(
-        cp: *mut *mut c_char,
-        _endp: *const c_char,
-        _err: *mut c_int,
+        cp: *mut *mut u8,
+        _endp: *const u8,
+        _err: *mut i32,
     ) -> i64 {
         unsafe {
             *cp = (*cp).add(2);
@@ -11274,20 +11275,20 @@ mod tests {
         0x1234
     }
 
-    unsafe extern "C" fn test_varint_put32(cp: *mut c_char, _endp: *mut c_char, val: i32) -> c_int {
-        *cp = val as c_char;
+    unsafe extern "C" fn test_varint_put32(cp: *mut u8, _endp: *mut u8, val: i32) -> i32 {
+        *cp = val as u8;
         1
     }
 
-    unsafe extern "C" fn test_varint_put64(cp: *mut c_char, _endp: *mut c_char, val: i64) -> c_int {
-        *cp = val as c_char;
+    unsafe extern "C" fn test_varint_put64(cp: *mut u8, _endp: *mut u8, val: i64) -> i32 {
+        *cp = val as u8;
         1
     }
 
     unsafe extern "C" fn test_varint_get64(
-        cp: *mut *mut c_char,
-        _endp: *const c_char,
-        _err: *mut c_int,
+        cp: *mut *mut u8,
+        _endp: *const u8,
+        _err: *mut i32,
     ) -> i64 {
         unsafe {
             *cp = (*cp).add(3);
@@ -11296,15 +11297,15 @@ mod tests {
     }
 
     unsafe extern "C" fn test_varint_put64s(
-        cp: *mut c_char,
-        _endp: *mut c_char,
+        cp: *mut u8,
+        _endp: *mut u8,
         val: i64,
-    ) -> c_int {
-        *cp = val as c_char;
+    ) -> i32 {
+        *cp = val as u8;
         1
     }
 
-    unsafe extern "C" fn test_varint_put32_blk(blk: *mut cram_block, val: i32) -> c_int {
+    unsafe extern "C" fn test_varint_put32_blk(blk: *mut cram_block, val: i32) -> i32 {
         unsafe {
             let b = blk.cast::<cram_block_layout>();
             (*b).idx = val;
@@ -11312,17 +11313,17 @@ mod tests {
         1
     }
 
-    unsafe extern "C" fn test_varint_put32_blk_append(blk: *mut cram_block, val: i32) -> c_int {
+    unsafe extern "C" fn test_varint_put32_blk_append(blk: *mut cram_block, val: i32) -> i32 {
         let mut byte = val as u8;
         cram_cram_io_h_248_block_append(blk, (&mut byte as *mut u8).cast(), 1);
         1
     }
 
-    unsafe extern "C" fn test_varint_size(_val: i64) -> c_int {
+    unsafe extern "C" fn test_varint_size(_val: i64) -> i32 {
         1
     }
 
-    unsafe extern "C" fn test_varint_put32s_blk(blk: *mut cram_block, val: i32) -> c_int {
+    unsafe extern "C" fn test_varint_put32s_blk(blk: *mut cram_block, val: i32) -> i32 {
         unsafe {
             let b = blk.cast::<cram_block_layout>();
             (*b).idx = -val;
@@ -11330,7 +11331,7 @@ mod tests {
         1
     }
 
-    unsafe extern "C" fn test_varint_put64_blk(blk: *mut cram_block, val: i64) -> c_int {
+    unsafe extern "C" fn test_varint_put64_blk(blk: *mut cram_block, val: i64) -> i32 {
         unsafe {
             let b = blk.cast::<cram_block_layout>();
             (*b).idx = val as i32;
@@ -11338,7 +11339,7 @@ mod tests {
         1
     }
 
-    unsafe extern "C" fn test_varint_put64s_blk(blk: *mut cram_block, val: i64) -> c_int {
+    unsafe extern "C" fn test_varint_put64s_blk(blk: *mut cram_block, val: i64) -> i32 {
         unsafe {
             let b = blk.cast::<cram_block_layout>();
             (*b).idx = (-val) as i32;
@@ -11356,7 +11357,7 @@ mod tests {
             assert!(cram_cram_codecs_c_459_cram_external_decode_init(
                 std::ptr::null_mut(),
                 header.as_mut_ptr().cast(),
-                header.len() as c_int,
+                header.len() as i32,
                 1,
                 1,
                 4 << 8,
@@ -11366,7 +11367,7 @@ mod tests {
             assert!(cram_cram_codecs_c_459_cram_external_decode_init(
                 std::ptr::null_mut(),
                 header.as_mut_ptr().cast(),
-                header.len() as c_int,
+                header.len() as i32,
                 2,
                 3,
                 4 << 8,
@@ -11377,7 +11378,7 @@ mod tests {
             let dec = cram_cram_codecs_c_459_cram_external_decode_init(
                 std::ptr::null_mut(),
                 header.as_mut_ptr().cast(),
-                header.len() as c_int,
+                header.len() as i32,
                 1,
                 5,
                 4 << 8,
@@ -11460,7 +11461,7 @@ mod tests {
                 assert!(cram_cram_codecs_c_459_cram_external_decode_init(
                     std::ptr::null_mut(),
                     header.as_mut_ptr().cast(),
-                    header.len() as c_int,
+                    header.len() as i32,
                     1,
                     if version >= 4 { 5 } else { 1 },
                     version << 8,
@@ -11496,7 +11497,7 @@ mod tests {
             let dec = cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
                 std::ptr::null_mut(),
                 header.as_mut_ptr().cast(),
-                header.len() as c_int,
+                header.len() as i32,
                 5,
                 4,
                 1 << 8,
@@ -11512,7 +11513,7 @@ mod tests {
             assert!(cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
                 std::ptr::null_mut(),
                 short.as_mut_ptr().cast(),
-                short.len() as c_int,
+                short.len() as i32,
                 5,
                 4,
                 1 << 8,
@@ -11524,7 +11525,7 @@ mod tests {
             assert!(cram_cram_codecs_c_3682_cram_byte_array_stop_decode_init(
                 std::ptr::null_mut(),
                 extra.as_mut_ptr().cast(),
-                extra.len() as c_int,
+                extra.len() as i32,
                 5,
                 4,
                 1 << 8,
@@ -11532,7 +11533,7 @@ mod tests {
             )
             .is_null());
 
-            let mut dat = [b';' as c_int, 0x1234_5678];
+            let mut dat = [b';' as i32, 0x1234_5678];
             let enc = cram_cram_codecs_c_3785_cram_byte_array_stop_encode_init(
                 std::ptr::null_mut(),
                 5,
@@ -11658,7 +11659,7 @@ mod tests {
             );
 
             let mut out_size = 3;
-            let mut out = [0 as c_char; 4];
+            let mut out = [0u8; 4];
             assert_eq!(
                 cram_cram_codecs_c_390_cram_external_decode_char(
                     s,
@@ -11698,7 +11699,7 @@ mod tests {
                     s,
                     c,
                     std::ptr::null_mut(),
-                    (&mut out_block as *mut cram_block_layout).cast::<c_char>(),
+                    (&mut out_block as *mut cram_block_layout).cast::<u8>(),
                     &mut out_size
                 ),
                 0
@@ -11707,7 +11708,7 @@ mod tests {
                 std::slice::from_raw_parts(out_block.data, out_block.byte),
                 b"ef"
             );
-            free(out_block.data.cast());
+            libc::free(out_block.data.cast());
 
             let mut iout = 0i32;
             out_size = 99;
@@ -11824,7 +11825,7 @@ mod tests {
                 ref_seq_span: 0,
                 num_records: 0,
                 record_counter: 0,
-                num_blocks: blocks.len() as c_int,
+                num_blocks: blocks.len() as i32,
                 num_content_ids: 0,
                 block_content_ids: std::ptr::null_mut(),
                 ref_base_id: 0,
@@ -11960,7 +11961,7 @@ mod tests {
                     std::ptr::null_mut(),
                     c,
                     bytes.as_mut_ptr().cast(),
-                    bytes.len() as c_int
+                    bytes.len() as i32
                 ),
                 0
             );
@@ -11968,7 +11969,7 @@ mod tests {
                 std::slice::from_raw_parts(out_block.data, out_block.byte),
                 b"raw"
             );
-            free(out_block.data.cast());
+            libc::free(out_block.data.cast());
         }
     }
 
@@ -12282,7 +12283,7 @@ mod tests {
             let c = (&mut codec as *mut cram_codec_const_layout).cast();
 
             let mut out_size = 4;
-            let mut bytes = [0 as c_char; 4];
+            let mut bytes = [0u8; 4];
             assert_eq!(
                 cram_cram_codecs_c_932_cram_const_decode_byte(
                     std::ptr::null_mut(),
@@ -12357,30 +12358,30 @@ mod tests {
     fn cram_io_method_and_content_type_strings_match_c_switches() {
         unsafe {
             assert_eq!(
-                CStr::from_ptr(cram_cram_io_c_2341_cram_block_method2str(0)).to_bytes(),
+                CStr::from_ptr(cram_cram_io_c_2341_cram_block_method2str(0).cast()).to_bytes(),
                 b"RAW"
             );
             assert_eq!(
-                CStr::from_ptr(cram_cram_io_c_2341_cram_block_method2str(16)).to_bytes(),
+                CStr::from_ptr(cram_cram_io_c_2341_cram_block_method2str(16).cast()).to_bytes(),
                 b"RANS1"
             );
             assert_eq!(
-                CStr::from_ptr(cram_cram_io_c_2341_cram_block_method2str(31)).to_bytes(),
+                CStr::from_ptr(cram_cram_io_c_2341_cram_block_method2str(31).cast()).to_bytes(),
                 b"ARITH_PR193"
             );
             assert_eq!(
-                CStr::from_ptr(cram_cram_io_c_2341_cram_block_method2str(10)).to_bytes(),
+                CStr::from_ptr(cram_cram_io_c_2341_cram_block_method2str(10).cast()).to_bytes(),
                 b"?"
             );
             assert_eq!(
                 CStr::from_ptr(cram_cram_io_c_2378_cram_content_type2str(
                     crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE
-                ))
+                ).cast())
                 .to_bytes(),
                 b"CORE"
             );
             assert_eq!(
-                CStr::from_ptr(cram_cram_io_c_2378_cram_content_type2str(-1)).to_bytes(),
+                CStr::from_ptr(cram_cram_io_c_2378_cram_content_type2str(-1).cast()).to_bytes(),
                 b"?"
             );
         }
@@ -12390,7 +12391,7 @@ mod tests {
     fn cram_io_safe_varint_getters_report_truncation_without_advancing() {
         unsafe {
             let mut itf8 = [0xf0u8, 0x12, 0x34, 0x56];
-            let mut cp = itf8.as_mut_ptr().cast::<c_char>();
+            let mut cp = itf8.as_mut_ptr().cast::<u8>();
             let start = cp;
             let mut err = 0;
             assert_eq!(
@@ -12405,7 +12406,7 @@ mod tests {
             assert_eq!(err, 1);
 
             let mut ltf8 = [0xffu8, 1, 2, 3, 4, 5, 6, 7];
-            let mut cp = ltf8.as_mut_ptr().cast::<c_char>();
+            let mut cp = ltf8.as_mut_ptr().cast::<u8>();
             let start = cp;
             err = 0;
             assert_eq!(
@@ -12425,11 +12426,11 @@ mod tests {
     fn cram_io_is_directory_matches_stat_directory_bit() {
         unsafe {
             let dir = CString::new("/tmp").unwrap();
-            assert_eq!(cram_cram_io_c_2873_is_directory(dir.as_ptr().cast_mut()), 1);
+            assert_eq!(cram_cram_io_c_2873_is_directory(dir.as_ptr().cast::<u8>().cast_mut()), 1);
 
             let missing = CString::new("/tmp/htslib_rs-missing-directory-probe").unwrap();
             assert_eq!(
-                cram_cram_io_c_2873_is_directory(missing.as_ptr().cast_mut()),
+                cram_cram_io_c_2873_is_directory(missing.as_ptr().cast::<u8>().cast_mut()),
                 0
             );
         }
@@ -12493,7 +12494,7 @@ mod tests {
 
     #[test]
     fn cram_open_trace_file_expand_path_matches_percent_rules() {
-        let out = cram_open_trace_file_c_230_expand_path(b"abcdef", b"root/%2s/%s", c_int::MAX);
+        let out = cram_open_trace_file_c_230_expand_path(b"abcdef", b"root/%2s/%s", i32::MAX);
         assert_eq!(out.as_slice(), b"root/ab/cdef");
 
         let out = cram_open_trace_file_c_230_expand_path(b"/tmp/ref.fa", b".", 1);
@@ -12509,7 +12510,7 @@ mod tests {
     #[test]
     fn cram_open_trace_file_expand_path_consumes_file_across_multiple_percent_tokens() {
         let out =
-            cram_open_trace_file_c_230_expand_path(b"abcdef", b"root/%1s/%2s/%s", c_int::MAX);
+            cram_open_trace_file_c_230_expand_path(b"abcdef", b"root/%1s/%2s/%s", i32::MAX);
         assert_eq!(out.as_slice(), b"root/a/bc/def");
     }
 
@@ -12643,18 +12644,18 @@ mod tests {
     #[test]
     fn cram_io_expand_cache_path_replaces_percent_patterns_like_c() {
         unsafe {
-            let mut path = vec![0 as c_char; crate::htslib_rs::c_compat::PATH_MAX as usize];
+            let mut path = vec![0u8; libc::PATH_MAX as usize];
             let mut dir = CString::new("/cache/%2s/%s").unwrap().into_bytes_with_nul();
             let file = CString::new("abcdef").unwrap();
             assert_eq!(
                 cram_cram_io_c_2884_expand_cache_path(
                     path.as_mut_ptr(),
-                    dir.as_mut_ptr().cast(),
-                    file.as_ptr()
+                    dir.as_mut_ptr(),
+                    file.as_ptr().cast::<u8>()
                 ),
                 0
             );
-            assert_eq!(CStr::from_ptr(path.as_ptr()).to_bytes(), b"/cache/ab/cdef");
+            assert_eq!(CStr::from_ptr(path.as_ptr().cast()).to_bytes(), b"/cache/ab/cdef");
 
             path.fill(0);
             let mut dir = CString::new("/cache/%x").unwrap().into_bytes_with_nul();
@@ -12662,13 +12663,13 @@ mod tests {
             assert_eq!(
                 cram_cram_io_c_2884_expand_cache_path(
                     path.as_mut_ptr(),
-                    dir.as_mut_ptr().cast(),
-                    file.as_ptr()
+                    dir.as_mut_ptr(),
+                    file.as_ptr().cast::<u8>()
                 ),
                 0
             );
             assert_eq!(
-                CStr::from_ptr(path.as_ptr()).to_bytes(),
+                CStr::from_ptr(path.as_ptr().cast()).to_bytes(),
                 b"/cache/%x/ref.fa"
             );
 
@@ -12678,12 +12679,12 @@ mod tests {
             assert_eq!(
                 cram_cram_io_c_2884_expand_cache_path(
                     path.as_mut_ptr(),
-                    dir.as_mut_ptr().cast(),
-                    file.as_ptr()
+                    dir.as_mut_ptr(),
+                    file.as_ptr().cast::<u8>()
                 ),
                 0
             );
-            assert_eq!(CStr::from_ptr(path.as_ptr()).to_bytes(), b"/cache/ref.fa");
+            assert_eq!(CStr::from_ptr(path.as_ptr().cast()).to_bytes(), b"/cache/ref.fa");
         }
     }
 
@@ -12723,32 +12724,32 @@ mod tests {
     #[test]
     fn cram_io_full_path_preserves_absolute_and_expands_local_paths() {
         unsafe {
-            let mut out = vec![0 as c_char; crate::htslib_rs::c_compat::PATH_MAX as usize];
+            let mut out = vec![0u8; libc::PATH_MAX as usize];
 
             let abs = CString::new("/tmp/reference.fa").unwrap();
-            cram_cram_io_c_4850_full_path(out.as_mut_ptr(), abs.as_ptr().cast_mut());
+            cram_cram_io_c_4850_full_path(out.as_mut_ptr(), abs.as_ptr().cast::<u8>().cast_mut());
             assert_eq!(
-                CStr::from_ptr(out.as_ptr()).to_bytes(),
+                CStr::from_ptr(out.as_ptr().cast()).to_bytes(),
                 b"/tmp/reference.fa"
             );
 
             out.fill(0);
             let unknown_scheme = CString::new("http://example.invalid/ref.fa").unwrap();
-            cram_cram_io_c_4850_full_path(out.as_mut_ptr(), unknown_scheme.as_ptr().cast_mut());
+            cram_cram_io_c_4850_full_path(out.as_mut_ptr(), unknown_scheme.as_ptr().cast::<u8>().cast_mut());
             let expected_unknown = std::env::current_dir()
                 .unwrap()
                 .join("http://example.invalid/ref.fa");
             assert_eq!(
-                CStr::from_ptr(out.as_ptr()).to_bytes(),
+                CStr::from_ptr(out.as_ptr().cast()).to_bytes(),
                 expected_unknown.to_string_lossy().as_bytes()
             );
 
             out.fill(0);
             let rel = CString::new("ref.fa").unwrap();
-            cram_cram_io_c_4850_full_path(out.as_mut_ptr(), rel.as_ptr().cast_mut());
+            cram_cram_io_c_4850_full_path(out.as_mut_ptr(), rel.as_ptr().cast::<u8>().cast_mut());
             let expected = std::env::current_dir().unwrap().join("ref.fa");
             assert_eq!(
-                CStr::from_ptr(out.as_ptr()).to_bytes(),
+                CStr::from_ptr(out.as_ptr().cast()).to_bytes(),
                 expected.to_string_lossy().as_bytes()
             );
         }
@@ -12757,7 +12758,7 @@ mod tests {
     #[test]
     fn cram_io_free_bam_list_destroys_each_record_and_array() {
         unsafe {
-            let bams = calloc(3, std::mem::size_of::<*mut bam1_t>() as u64).cast::<*mut bam1_t>();
+            let bams = libc::calloc(3, std::mem::size_of::<*mut bam1_t>()).cast::<*mut bam1_t>();
             assert!(!bams.is_null());
             *bams.add(0) = crate::htslib_rs::sam::bam_init1();
             *bams.add(1) = crate::htslib_rs::sam::bam_init1();
@@ -12796,11 +12797,11 @@ mod tests {
                 pool: None,
                 h_meta: std::ptr::null_mut(),
                 ref_id: ref_id.as_mut_ptr(),
-                nref: ref_id.len() as c_int,
+                nref: ref_id.len() as i32,
                 fn_: Vec::new(),
                 fp: std::ptr::null_mut(),
                 count: 0,
-                lock: crate::htslib_rs::c_compat::PTHREAD_MUTEX_INITIALIZER,
+                lock: libc::PTHREAD_MUTEX_INITIALIZER,
                 last: &mut e1,
                 last_id: 1,
             };
@@ -12858,17 +12859,16 @@ mod tests {
     #[test]
     fn cram_mfile_append_write_and_truncate_minus_one_match_c_edges() {
         unsafe {
-            let data = malloc(16).cast::<c_char>();
-            std::ptr::copy_nonoverlapping(b"abcdef".as_ptr().cast::<c_char>(), data, 6);
-            let mf = cram_mFILE_c_207_mfcreate(data, 6);
+            let data: [u8; 6] = *b"abcdef";
+            let mf = cram_mFILE_c_207_mfcreate(Some(&data), 6);
             assert!(!mf.is_null());
             (*mf).mode = MF_READ | MF_WRITE | MF_APPEND;
             (*mf).offset = 2;
             (*mf).flush_pos = 6;
 
-            let mut suffix = *b"XY";
+            let suffix = *b"XY";
             assert_eq!(
-                cram_mFILE_c_527_mfwrite(suffix.as_mut_ptr().cast(), 1, suffix.len(), mf),
+                cram_mFILE_c_527_mfwrite(&suffix, 1, suffix.len(), mf),
                 suffix.len()
             );
             assert_eq!((*mf).offset, 8);
@@ -12882,9 +12882,9 @@ mod tests {
             assert_eq!((*mf).size, 3);
 
             (*mf).mode = MF_READ;
-            let mut ignored = *b"zz";
+            let ignored = *b"zz";
             assert_eq!(
-                cram_mFILE_c_527_mfwrite(ignored.as_mut_ptr().cast(), 1, ignored.len(), mf),
+                cram_mFILE_c_527_mfwrite(&ignored, 1, ignored.len(), mf),
                 0
             );
             assert_eq!((*mf).size, 3);
@@ -12896,13 +12896,13 @@ mod tests {
     #[test]
     fn cram_mfile_create_recreate_read_write_and_destroy_follow_memory_ownership() {
         unsafe {
-            let mf = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
+            let mf = cram_mFILE_c_207_mfcreate(None, 0);
             assert!(!mf.is_null());
             assert_eq!((*mf).mode, MF_READ | MF_WRITE);
 
-            let mut input = *b"hello";
+            let input = *b"hello";
             assert_eq!(
-                cram_mFILE_c_527_mfwrite(input.as_mut_ptr().cast(), 1, input.len(), mf),
+                cram_mFILE_c_527_mfwrite(&input, 1, input.len(), mf),
                 input.len()
             );
             assert_eq!((*mf).size, 5);
@@ -12911,15 +12911,14 @@ mod tests {
             cram_mFILE_c_475_mrewind(mf);
             let mut out = [0u8; 8];
             assert_eq!(
-                cram_mFILE_c_502_mfread(out.as_mut_ptr().cast(), 2, 4, mf),
+                cram_mFILE_c_502_mfread(&mut out, 2, 4, mf),
                 2
             );
             assert_eq!(&out[..5], b"hello");
             assert!((*mf).eof);
 
-            let repl = malloc(4).cast::<c_char>();
-            std::ptr::copy_nonoverlapping(c"abc".as_ptr(), repl, 4);
-            cram_mFILE_c_225_mfrecreate(mf, repl, 4);
+            let repl: [u8; 4] = *b"abc\0";
+            cram_mFILE_c_225_mfrecreate(mf, Some(&repl), 4);
             assert_eq!((*mf).size, 4);
             assert_eq!((*mf).offset, 0);
             assert_eq!(cram_mFILE_c_408_mfdestroy(mf), 0);
@@ -12937,11 +12936,11 @@ mod tests {
             let fp = libc::fopen(c_path.as_ptr(), c"w+b".as_ptr());
             assert!(!fp.is_null());
 
-            let mf = cram_mFILE_c_264_mfreopen(c_path.as_ptr(), c"w+b".as_ptr(), fp);
+            let mf = cram_mFILE_c_264_mfreopen(Some(c_path.to_bytes()), Some(b"w+b"), fp);
             assert!(!mf.is_null());
-            let mut bytes = *b"abcdef";
+            let bytes = *b"abcdef";
             assert_eq!(
-                cram_mFILE_c_527_mfwrite(bytes.as_mut_ptr().cast(), 1, bytes.len(), mf),
+                cram_mFILE_c_527_mfwrite(&bytes, 1, bytes.len(), mf),
                 bytes.len()
             );
             (*mf).flush_pos = 3;
@@ -12968,18 +12967,13 @@ mod tests {
 
             let fp = libc::fopen(c_path.as_ptr(), mode.as_ptr());
             assert!(!fp.is_null());
-            let mut size = 0usize;
-            let data = cram_mFILE_c_75_mfload(fp, c_path.as_ptr(), &mut size, 1);
-            assert!(!data.is_null());
-            assert_eq!(size, 6);
-            assert_eq!(
-                std::slice::from_raw_parts(data.cast::<u8>(), size),
-                b"abcdef"
-            );
-            free(data.cast());
+            let data = cram_mFILE_c_75_mfload(fp, Some(c_path.to_bytes()), 1);
+            let data = data.expect("loaded data");
+            assert_eq!(data.len(), 6);
+            assert_eq!(data.as_slice(), b"abcdef");
             libc::fclose(fp);
 
-            let mf = cram_mFILE_c_347_mfopen(c_path.as_ptr(), c"rb".as_ptr());
+            let mf = cram_mFILE_c_347_mfopen(Some(c_path.to_bytes()), Some(b"rb"));
             assert!(!mf.is_null());
             assert_eq!((*mf).size, 6);
             let data = &(*mf).data;
@@ -12989,7 +12983,7 @@ mod tests {
 
             let fp = libc::fopen(c_path.as_ptr(), mode.as_ptr());
             assert!(!fp.is_null());
-            let mf = cram_mFILE_c_246_mfcreate_from(c_path.as_ptr(), c"rb".as_ptr(), fp);
+            let mf = cram_mFILE_c_246_mfcreate_from(Some(c_path.to_bytes()), Some(b"rb"), fp);
             assert!(!mf.is_null());
             assert!((*mf).fp.is_none());
             let data = &(*mf).data;
@@ -13011,7 +13005,7 @@ mod tests {
             let fp = libc::fopen(c_path.as_ptr(), c"wb".as_ptr());
             assert!(!fp.is_null());
 
-            let mf = cram_mFILE_c_264_mfreopen(c_path.as_ptr(), c"wb".as_ptr(), fp);
+            let mf = cram_mFILE_c_264_mfreopen(Some(c_path.to_bytes()), Some(b"wb"), fp);
             assert!(!mf.is_null());
             assert_eq!((*mf).size, 0);
             assert_eq!((*mf).offset, 0);
@@ -13031,22 +13025,17 @@ mod tests {
     #[test]
     fn cram_mfile_character_line_ascii_and_steal_behaviour_matches_c() {
         unsafe {
-            let line_bytes = *b"a\r\nbc\nz\0\0\0\0";
-            let data = malloc(12).cast::<c_char>();
-            std::ptr::copy_nonoverlapping(line_bytes.as_ptr().cast::<c_char>(), data, 11);
-            let mf = cram_mFILE_c_207_mfcreate(data, 7);
+            let line_bytes: [u8; 11] = *b"a\r\nbc\nz\0\0\0\0";
+            let mf = cram_mFILE_c_207_mfcreate(Some(&line_bytes), 7);
             assert!(!mf.is_null());
 
-            assert_eq!(cram_mFILE_c_557_mfgetc(mf), b'a' as c_int);
-            assert_eq!(cram_mFILE_c_567_mungetc(b'X' as c_int, mf), b'X' as c_int);
-            assert_eq!(cram_mFILE_c_557_mfgetc(mf), b'X' as c_int);
+            assert_eq!(cram_mFILE_c_557_mfgetc(mf), b'a' as i32);
+            assert_eq!(cram_mFILE_c_567_mungetc(b'X' as i32, mf), b'X' as i32);
+            assert_eq!(cram_mFILE_c_557_mfgetc(mf), b'X' as i32);
 
-            let mut line = [0 as c_char; 8];
-            assert_eq!(
-                cram_mFILE_c_577_mfgets(line.as_mut_ptr(), 8, mf),
-                line.as_mut_ptr()
-            );
-            assert_eq!(CStr::from_ptr(line.as_ptr()).to_bytes(), b"\r\n");
+            let mut line = [0u8; 8];
+            assert!(cram_mFILE_c_577_mfgets(&mut line, mf));
+            assert_eq!(CStr::from_ptr(line.as_ptr().cast()).to_bytes(), b"\r\n");
 
             cram_mFILE_c_475_mrewind(mf);
             cram_mFILE_c_656_mfascii(mf);
@@ -13054,31 +13043,29 @@ mod tests {
             let data = &(*mf).data;
             assert_eq!(&data[..6], b"X\nbc\nz");
 
-            let mut stolen_size = 0usize;
-            let stolen = cram_mFILE_c_428_mfsteal(mf, &mut stolen_size);
-            assert!(!stolen.is_null());
-            assert_eq!(stolen_size, 6);
-            free(stolen);
-            assert!(cram_mFILE_c_428_mfsteal(std::ptr::null_mut(), std::ptr::null_mut()).is_null());
+            let stolen = cram_mFILE_c_428_mfsteal(mf);
+            assert!(stolen.is_some());
+            assert_eq!(stolen.unwrap().as_slice(), b"X\nbc\nz");
+            assert!(cram_mFILE_c_428_mfsteal(std::ptr::null_mut()).is_none());
         }
     }
 
     #[test]
     fn cram_mfile_empty_read_ungetc_and_gets_set_eof_like_c() {
         unsafe {
-            let mf = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
+            let mf = cram_mFILE_c_207_mfcreate(None, 0);
             assert!(!mf.is_null());
 
             assert_eq!(cram_mFILE_c_557_mfgetc(mf), -1);
             assert!((*mf).eof);
 
             (*mf).eof = false;
-            assert_eq!(cram_mFILE_c_567_mungetc(b'Z' as c_int, mf), -1);
+            assert_eq!(cram_mFILE_c_567_mungetc(b'Z' as i32, mf), -1);
             assert!((*mf).eof);
 
             (*mf).eof = false;
-            let mut line = [b'x' as c_char; 4];
-            assert!(cram_mFILE_c_577_mfgets(line.as_mut_ptr(), line.len() as c_int, mf).is_null());
+            let mut line = [b'x'; 4];
+            assert!(!cram_mFILE_c_577_mfgets(&mut line, mf));
             assert_eq!(line[0], 0);
             assert!((*mf).eof);
             assert_eq!((*mf).offset, 0);
@@ -13109,9 +13096,9 @@ mod tests {
             assert!(!tmp_fp.is_null());
             (*out1).fp = Some(tmp_fp);
 
-            let mut msg = *b"x";
+            let msg = *b"x";
             assert_eq!(
-                cram_mFILE_c_527_mfwrite((&mut msg as *mut u8).cast(), 1, 1, out1,),
+                cram_mFILE_c_527_mfwrite(&msg, 1, 1, out1,),
                 1
             );
             assert_eq!(cram_mFILE_c_607_mfflush(out1), 0);
@@ -13706,7 +13693,7 @@ mod tests {
         // the externs live here, gated to the parity feature.
         unsafe extern "C" {
             #[link_name = "cram_get_bam_seq"]
-            fn htslib_cram_get_bam_seq(fd: *mut cram_fd, bam: *mut *mut c_void) -> c_int;
+            fn htslib_cram_get_bam_seq(fd: *mut cram_fd, bam: *mut *mut c_void) -> i32;
             // The C oracle fills a libhts-ABI bam1_t (the repr(C) mirror,
             // bam1_c_t). It must be allocated/freed by libhts so its data
             // pointer is realloc/free-compatible with the C decode pipeline.
@@ -13751,7 +13738,7 @@ mod tests {
                         orig_refs_n = (*fnl).refs;
                         let new_refs = cram_cram_io_c_2541_refs_load_fai(
                             std::ptr::null_mut(),
-                            rf_c.as_ptr(),
+                            rf_c.as_ptr().cast(),
                             0,
                         );
                         native_refs_n = new_refs.cast();
@@ -13821,7 +13808,7 @@ mod tests {
                     feq!(isize);
 
                     let lc = (*bam_c).l_data;
-                    let ln = (*bam_n).data.len() as c_int;
+                    let ln = (*bam_n).data.len() as i32;
                     assert_eq!(
                         lc, ln,
                         "{cram}: record {nrec} l_data differs (C={lc} native={ln})"
@@ -13856,4 +13843,5 @@ mod tests {
         assert!(tested > 0, "no CRAM read fixture found under htslib/test/");
         eprintln!("[parity] native decode-pipeline fixtures tested: {tested}");
     }
+
 }

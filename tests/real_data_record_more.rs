@@ -4,17 +4,18 @@ use htslib_rs::{
     bam_init1, hts_close, hts_open, hts_set_fai_filename, kstring_t, sam_format1, sam_hdr_destroy,
     sam_hdr_read, sam_read1, BAM_CIGAR_TABLE,
 };
-use std::ffi::{CStr, CString};
 
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 unsafe fn with_sam_records(path: &str, mut f: impl FnMut(usize, *mut htslib_rs::bam1_t)) {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(!fp.is_null(), "failed to open fixture");
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
     let rec = bam_init1();
@@ -47,11 +48,11 @@ fn expected_sam_record_lines(path: &str) -> Vec<String> {
 
 unsafe fn formatted_alignment_records(path: &str, reference: Option<&str>) -> Vec<String> {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(!fp.is_null(), "failed to open fixture");
     if let Some(reference) = reference {
         let reference = c_fixture(reference);
-        assert_eq!(hts_set_fai_filename(fp, reference.as_ptr()), 0);
+        assert_eq!(hts_set_fai_filename(fp, reference.as_ptr().cast()), 0);
     }
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
@@ -146,8 +147,8 @@ unsafe fn assert_sam_formats_to_original_records(path: &str) {
     assert_eq!(actual, expected, "formatted record parity for {path}");
 }
 
-unsafe fn aux(rec: *mut htslib_rs::bam1_t, tag: &'static CStr) -> *mut u8 {
-    let ptr = bam_aux_get(rec, tag.as_ptr());
+unsafe fn aux(rec: *mut htslib_rs::bam1_t, tag: &'static [u8]) -> *mut u8 {
+    let ptr = bam_aux_get(rec, tag.as_ptr().cast());
     assert!(!ptr.is_null(), "missing aux tag {:?}", tag);
     ptr
 }
@@ -156,8 +157,8 @@ unsafe fn aux(rec: *mut htslib_rs::bam1_t, tag: &'static CStr) -> *mut u8 {
 fn real_sam_header_cigar_tab_matches_htslib_character_mapping() {
     unsafe {
         let path = c_fixture("htslib/test/fieldarith.sam");
-        let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-        assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+        let fp = hts_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
+        assert!(!fp.is_null(), "failed to open fixture");
         let hdr = sam_hdr_read(fp);
         assert!(!hdr.is_null());
 
@@ -265,7 +266,7 @@ fn real_fieldarith_records_match_cigar_length_aux_expectations() {
     unsafe {
         let mut seen = 0;
         with_sam_records("htslib/test/fieldarith.sam", |_, rec| {
-            let qname = CStr::from_ptr(bam_get_qname(rec)).to_bytes();
+            let qname = std::ffi::CStr::from_ptr(bam_get_qname(rec).cast()).to_bytes();
             let cigar = bam_get_cigar(rec);
             let n_cigar = (*rec).core.n_cigar as i32;
 
@@ -273,9 +274,9 @@ fn real_fieldarith_records_match_cigar_length_aux_expectations() {
             let rlen = bam_cigar2rlen(n_cigar, cigar);
             let end = bam_endpos(rec);
 
-            assert_eq!(qlen, bam_aux2i(aux(rec, c"XQ")));
-            assert_eq!(rlen, bam_aux2i(aux(rec, c"XR")));
-            assert_eq!(end, bam_aux2i(aux(rec, c"XE")));
+            assert_eq!(qlen, bam_aux2i(aux(rec, b"XQ\0")));
+            assert_eq!(rlen, bam_aux2i(aux(rec, b"XR\0")));
+            assert_eq!(end, bam_aux2i(aux(rec, b"XE\0")));
 
             match qname {
                 b"r1" => assert_eq!((qlen, rlen, end), (8, 8, 57)),
@@ -295,17 +296,26 @@ fn real_aux_value_fixture_preserves_scalar_aux_tags() {
         let mut seen = 0;
         with_sam_records("htslib/test/auxf#values.sam", |idx, rec| {
             if idx == 0 {
-                assert_eq!(CStr::from_ptr(bam_get_qname(rec)), c"Fred");
-                assert_eq!(bam_aux2A(aux(rec, c"A!")), b'!' as i8);
-                assert_eq!(bam_aux2A(aux(rec, c"Ac")), b'c' as i8);
-                assert_eq!(bam_aux2A(aux(rec, c"AC")), b'C' as i8);
-                assert_eq!(bam_aux2i(aux(rec, c"I0")), 0);
-                assert_eq!(bam_aux2i(aux(rec, c"I7")), 32768);
-                assert_eq!(bam_aux2i(aux(rec, c"IA")), 2_147_483_647);
-                assert_eq!(bam_aux2i(aux(rec, c"iA")), -2_147_483_647);
-                assert_eq!(bam_aux2i(aux(rec, c"iB")), -2_147_483_648);
-                assert_eq!(CStr::from_ptr(bam_aux2Z(aux(rec, c"Z0"))), c"space space");
-                assert_eq!(CStr::from_ptr(bam_aux2Z(aux(rec, c"Zn"))), c"");
+                assert_eq!(
+                    std::ffi::CStr::from_ptr(bam_get_qname(rec).cast()).to_bytes(),
+                    b"Fred"
+                );
+                assert_eq!(bam_aux2A(aux(rec, b"A!\0")), b'!');
+                assert_eq!(bam_aux2A(aux(rec, b"Ac\0")), b'c');
+                assert_eq!(bam_aux2A(aux(rec, b"AC\0")), b'C');
+                assert_eq!(bam_aux2i(aux(rec, b"I0\0")), 0);
+                assert_eq!(bam_aux2i(aux(rec, b"I7\0")), 32768);
+                assert_eq!(bam_aux2i(aux(rec, b"IA\0")), 2_147_483_647);
+                assert_eq!(bam_aux2i(aux(rec, b"iA\0")), -2_147_483_647);
+                assert_eq!(bam_aux2i(aux(rec, b"iB\0")), -2_147_483_648);
+                assert_eq!(
+                    std::ffi::CStr::from_ptr(bam_aux2Z(aux(rec, b"Z0\0")).cast()).to_bytes(),
+                    b"space space"
+                );
+                assert_eq!(
+                    std::ffi::CStr::from_ptr(bam_aux2Z(aux(rec, b"Zn\0")).cast()).to_bytes(),
+                    b""
+                );
             }
             seen += 1;
         });
@@ -318,16 +328,19 @@ fn real_aux_value_fixture_preserves_array_aux_tags() {
     unsafe {
         with_sam_records("htslib/test/auxf#values.sam", |idx, rec| {
             if idx == 1 {
-                assert_eq!(CStr::from_ptr(bam_get_qname(rec)), c"Jim");
+                assert_eq!(
+                    std::ffi::CStr::from_ptr(bam_get_qname(rec).cast()).to_bytes(),
+                    b"Jim"
+                );
 
-                let bc = aux(rec, c"BC");
+                let bc = aux(rec, b"BC\0");
                 assert_eq!(bam_auxB_len(bc), 4);
                 assert_eq!(bam_auxB2i(bc, 0), 0);
                 assert_eq!(bam_auxB2i(bc, 1), 127);
                 assert_eq!(bam_auxB2i(bc, 2), 128);
                 assert_eq!(bam_auxB2i(bc, 3), 255);
 
-                let bi = aux(rec, c"Bi");
+                let bi = aux(rec, b"Bi\0");
                 assert_eq!(bam_auxB_len(bi), 4);
                 assert_eq!(bam_auxB2i(bi, 0), -2_147_483_648);
                 assert_eq!(bam_auxB2i(bi, 1), -2_147_483_647);
@@ -345,14 +358,20 @@ fn real_base_modification_fixture_exposes_mm_ml_aux_payloads() {
     unsafe {
         let mut seen = 0;
         with_sam_records("htslib/test/base_mods/MM-explicit.sam", |idx, rec| {
-            let mm = aux(rec, c"Mm");
-            let ml = aux(rec, c"Ml");
+            let mm = aux(rec, b"Mm\0");
+            let ml = aux(rec, b"Ml\0");
             assert!(!bam_aux2Z(mm).is_null());
             assert!(bam_auxB_len(ml) >= 4);
 
             if idx == 0 {
-                assert_eq!(CStr::from_ptr(bam_get_qname(rec)), c"r1");
-                assert_eq!(CStr::from_ptr(bam_aux2Z(mm)), c"C+mh,2,0,1;");
+                assert_eq!(
+                    std::ffi::CStr::from_ptr(bam_get_qname(rec).cast()).to_bytes(),
+                    b"r1"
+                );
+                assert_eq!(
+                    std::ffi::CStr::from_ptr(bam_aux2Z(mm).cast()).to_bytes(),
+                    b"C+mh,2,0,1;"
+                );
                 assert_eq!(bam_auxB2i(ml, 0), 200);
                 assert_eq!(bam_auxB2i(ml, 1), 10);
             }

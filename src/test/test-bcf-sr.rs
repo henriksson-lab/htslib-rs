@@ -30,69 +30,33 @@ use crate::htslib_rs::{
     hts::{htsExactFormat, hts_readlist},
     vcf::{bcf_hdr_t, bcf_seqname_safe, bcf_srs_t},
 };
-use std::ffi::{c_char, c_int};
 
 unsafe extern "C" {
-    static mut optarg: *mut c_char;
-    static mut optind: c_int;
+    static mut optarg: *mut u8;
+    static mut optind: i32;
 }
 
 macro_rules! error {
     ($fmt:expr $(, $arg:expr)* $(,)?) => {{
-        libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), $fmt.as_ptr() $(, $arg)*);
+        libc::fprintf(libc::fdopen(2, c"w".as_ptr()), $fmt.as_ptr() $(, $arg)*);
         libc::exit(libc::EXIT_FAILURE);
     }};
 }
 
 // original: usage (htslib/test/test-bcf-sr.c:54)
-pub unsafe fn test_test_bcf_sr_c_54_usage(exit_code: c_int) -> ! {
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"Usage: test-bcf-sr [OPTIONS] vcf-list.txt\n".as_ptr(),
-    );
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"       test-bcf-sr [OPTIONS] --args file1.bcf [...]\n".as_ptr(),
-    );
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"Options:\n".as_ptr(),
-    );
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"       --args                   pass filenames directly in argument list\n".as_ptr(),
-    );
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"       --no-index               allow streaming\n".as_ptr(),
-    );
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"   -o, --output <file>          output file (stdout if not set)\n".as_ptr(),
-    );
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"   -O, --output-fmt <fmt>       fmt: vcf,bcf,summary\n".as_ptr(),
-    );
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"   -p, --pair <logic[+ref]>     logic: snps,indels,both,snps+ref,indels+ref,both+ref,exact,some,all\n"
-            .as_ptr(),
-    );
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"   -r, --regions <reg_list>     comma-separated list of regions\n".as_ptr(),
-    );
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"   -t, --targets <reg_list>     comma-separated list of targets\n".as_ptr(),
-    );
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"   -u, --usefptr                use hfile pointer interface on reader addition\n"
-            .as_ptr(),
-    );
-    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"\n".as_ptr());
+pub unsafe fn test_test_bcf_sr_c_54_usage(exit_code: i32) -> ! {
+    eprint!("Usage: test-bcf-sr [OPTIONS] vcf-list.txt\n");
+    eprint!("       test-bcf-sr [OPTIONS] --args file1.bcf [...]\n");
+    eprint!("Options:\n");
+    eprint!("       --args                   pass filenames directly in argument list\n");
+    eprint!("       --no-index               allow streaming\n");
+    eprint!("   -o, --output <file>          output file (stdout if not set)\n");
+    eprint!("   -O, --output-fmt <fmt>       fmt: vcf,bcf,summary\n");
+    eprint!("   -p, --pair <logic[+ref]>     logic: snps,indels,both,snps+ref,indels+ref,both+ref,exact,some,all\n");
+    eprint!("   -r, --regions <reg_list>     comma-separated list of regions\n");
+    eprint!("   -t, --targets <reg_list>     comma-separated list of targets\n");
+    eprint!("   -u, --usefptr                use hfile pointer interface on reader addition\n");
+    eprint!("\n");
     libc::exit(exit_code);
 }
 
@@ -144,13 +108,13 @@ pub unsafe fn test_test_bcf_sr_c_71_write_summary_format(sr: *mut bcf_srs_t, out
             } else {
                 b".\0".to_vec()
             };
-            libc::fprintf(out, c"%s".as_ptr(), allele1.as_ptr().cast::<c_char>());
+            libc::fprintf(out, c"%s".as_ptr(), allele1.as_ptr().cast::<i8>());
             let mut j = 2;
-            while j < (*rec).n_allele() as c_int {
+            while j < (*rec).n_allele() as i32 {
                 let d = &(*rec).d;
                 let mut a = d.allele[j as usize].clone();
                 a.push(0);
-                libc::fprintf(out, c",%s".as_ptr(), a.as_ptr().cast::<c_char>());
+                libc::fprintf(out, c",%s".as_ptr(), a.as_ptr().cast::<i8>());
                 j += 1;
             }
             i += 1;
@@ -164,7 +128,7 @@ pub unsafe fn test_test_bcf_sr_c_107_write_vcf_bcf_format(
     sr: *mut bcf_srs_t,
     hdr: *mut bcf_hdr_t,
     vcf_out: *mut crate::htslib_rs::hts::htsFile,
-    fmt_type: *const c_char,
+    fmt_type: *const u8,
 ) {
     let mut n;
     if crate::htslib_rs::vcf::bcf_hdr_write(vcf_out, hdr) != 0 {
@@ -193,49 +157,49 @@ pub unsafe fn test_test_bcf_sr_c_107_write_vcf_bcf_format(
     }
 }
 
-const BCF_SR_PAIR_SNPS: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_SNPS as c_int;
-const BCF_SR_PAIR_INDELS: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_INDELS as c_int;
-const BCF_SR_PAIR_ANY: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_ANY as c_int;
-const BCF_SR_PAIR_SOME: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_SOME as c_int;
-const BCF_SR_PAIR_SNP_REF: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_SNP_REF as c_int;
-const BCF_SR_PAIR_INDEL_REF: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_INDEL_REF as c_int;
-const BCF_SR_PAIR_EXACT: c_int = crate::htslib_rs::vcf::BCF_SR_PAIR_EXACT as c_int;
-const BCF_SR_PAIR_BOTH: c_int = BCF_SR_PAIR_SNPS | BCF_SR_PAIR_INDELS;
-const BCF_SR_PAIR_BOTH_REF: c_int =
+const BCF_SR_PAIR_SNPS: i32 = crate::htslib_rs::vcf::BCF_SR_PAIR_SNPS as i32;
+const BCF_SR_PAIR_INDELS: i32 = crate::htslib_rs::vcf::BCF_SR_PAIR_INDELS as i32;
+const BCF_SR_PAIR_ANY: i32 = crate::htslib_rs::vcf::BCF_SR_PAIR_ANY as i32;
+const BCF_SR_PAIR_SOME: i32 = crate::htslib_rs::vcf::BCF_SR_PAIR_SOME as i32;
+const BCF_SR_PAIR_SNP_REF: i32 = crate::htslib_rs::vcf::BCF_SR_PAIR_SNP_REF as i32;
+const BCF_SR_PAIR_INDEL_REF: i32 = crate::htslib_rs::vcf::BCF_SR_PAIR_INDEL_REF as i32;
+const BCF_SR_PAIR_EXACT: i32 = crate::htslib_rs::vcf::BCF_SR_PAIR_EXACT as i32;
+const BCF_SR_PAIR_BOTH: i32 = BCF_SR_PAIR_SNPS | BCF_SR_PAIR_INDELS;
+const BCF_SR_PAIR_BOTH_REF: i32 =
     BCF_SR_PAIR_SNPS | BCF_SR_PAIR_INDELS | BCF_SR_PAIR_SNP_REF | BCF_SR_PAIR_INDEL_REF;
 const BCF_SR_ALLOW_NO_IDX: crate::htslib_rs::vcf::bcf_sr_opt_t = 2;
 // original: main (htslib/test/test-bcf-sr.c:126)
-pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_test_bcf_sr_c_126_main(argc: i32, argv: *mut *mut u8) -> i32 {
     static mut LOPTIONS: [libc::option; 9] = [
         libc::option {
             name: c"help".as_ptr(),
             has_arg: 0,
             flag: std::ptr::null_mut(),
-            val: b'h' as c_int,
+            val: b'h' as i32,
         },
         libc::option {
             name: c"output-fmt".as_ptr(),
             has_arg: 1,
             flag: std::ptr::null_mut(),
-            val: b'O' as c_int,
+            val: b'O' as i32,
         },
         libc::option {
             name: c"pair".as_ptr(),
             has_arg: 1,
             flag: std::ptr::null_mut(),
-            val: b'p' as c_int,
+            val: b'p' as i32,
         },
         libc::option {
             name: c"regions".as_ptr(),
             has_arg: 1,
             flag: std::ptr::null_mut(),
-            val: b'r' as c_int,
+            val: b'r' as i32,
         },
         libc::option {
             name: c"targets".as_ptr(),
             has_arg: 1,
             flag: std::ptr::null_mut(),
-            val: b't' as c_int,
+            val: b't' as i32,
         },
         libc::option {
             name: c"no-index".as_ptr(),
@@ -253,7 +217,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
             name: c"usefptr".as_ptr(),
             has_arg: 0,
             flag: std::ptr::null_mut(),
-            val: b'u' as c_int,
+            val: b'u' as i32,
         },
         libc::option {
             name: std::ptr::null(),
@@ -269,15 +233,15 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
     let mut use_fofn = 1;
     let mut usefptr = 0;
     let mut out_fmt: htsExactFormat = crate::htslib_rs::hts::HTS_FORMAT_TEXT_FORMAT;
-    let mut out_fn: *const c_char = std::ptr::null();
-    let mut regions: *const c_char = std::ptr::null();
-    let mut targets: *const c_char = std::ptr::null();
-    let mut htsfp: *mut *mut crate::htslib_rs::hts::htsFile = std::ptr::null_mut();
+    let mut out_fn: *const u8 = std::ptr::null();
+    let mut regions: *const u8 = std::ptr::null();
+    let mut targets: *const u8 = std::ptr::null();
+    let mut htsfp: Vec<*mut crate::htslib_rs::hts::htsFile> = Vec::new();
 
     while {
         c = libc::getopt_long(
             argc,
-            argv,
+            argv.cast(),
             c"o:O:p:r:t:hu".as_ptr(),
             std::ptr::addr_of_mut!(LOPTIONS).cast(),
             std::ptr::null_mut(),
@@ -285,53 +249,53 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
         c >= 0
     } {
         match c {
-            x if x == b'o' as c_int => {
+            x if x == b'o' as i32 => {
                 out_fn = optarg;
             }
-            x if x == b'O' as c_int => {
-                if libc::strcasecmp(optarg, c"vcf".as_ptr()) == 0 {
+            x if x == b'O' as i32 => {
+                if libc::strcasecmp(optarg.cast(), c"vcf".as_ptr()) == 0 {
                     out_fmt = crate::htslib_rs::hts::HTS_FORMAT_VCF;
-                } else if libc::strcasecmp(optarg, c"bcf".as_ptr()) == 0 {
+                } else if libc::strcasecmp(optarg.cast(), c"bcf".as_ptr()) == 0 {
                     out_fmt = crate::htslib_rs::hts::HTS_FORMAT_BCF;
-                } else if libc::strcasecmp(optarg, c"summary".as_ptr()) == 0 {
+                } else if libc::strcasecmp(optarg.cast(), c"summary".as_ptr()) == 0 {
                     out_fmt = crate::htslib_rs::hts::HTS_FORMAT_TEXT_FORMAT;
                 } else {
                     error!(c"Unknown output format \"%s\"\n", optarg);
                 }
             }
-            x if x == b'p' as c_int => {
-                if libc::strcmp(optarg, c"snps".as_ptr()) == 0 {
+            x if x == b'p' as i32 => {
+                if libc::strcmp(optarg.cast(), c"snps".as_ptr()) == 0 {
                     pair |= BCF_SR_PAIR_SNPS;
-                } else if libc::strcmp(optarg, c"snp+ref".as_ptr()) == 0
-                    || libc::strcmp(optarg, c"snps+ref".as_ptr()) == 0
+                } else if libc::strcmp(optarg.cast(), c"snp+ref".as_ptr()) == 0
+                    || libc::strcmp(optarg.cast(), c"snps+ref".as_ptr()) == 0
                 {
                     pair |= BCF_SR_PAIR_SNPS | BCF_SR_PAIR_SNP_REF;
-                } else if libc::strcmp(optarg, c"indels".as_ptr()) == 0 {
+                } else if libc::strcmp(optarg.cast(), c"indels".as_ptr()) == 0 {
                     pair |= BCF_SR_PAIR_INDELS;
-                } else if libc::strcmp(optarg, c"indel+ref".as_ptr()) == 0
-                    || libc::strcmp(optarg, c"indels+ref".as_ptr()) == 0
+                } else if libc::strcmp(optarg.cast(), c"indel+ref".as_ptr()) == 0
+                    || libc::strcmp(optarg.cast(), c"indels+ref".as_ptr()) == 0
                 {
                     pair |= BCF_SR_PAIR_INDELS | BCF_SR_PAIR_INDEL_REF;
-                } else if libc::strcmp(optarg, c"both".as_ptr()) == 0 {
+                } else if libc::strcmp(optarg.cast(), c"both".as_ptr()) == 0 {
                     pair |= BCF_SR_PAIR_BOTH;
-                } else if libc::strcmp(optarg, c"both+ref".as_ptr()) == 0 {
+                } else if libc::strcmp(optarg.cast(), c"both+ref".as_ptr()) == 0 {
                     pair |= BCF_SR_PAIR_BOTH_REF;
-                } else if libc::strcmp(optarg, c"any".as_ptr()) == 0
-                    || libc::strcmp(optarg, c"all".as_ptr()) == 0
+                } else if libc::strcmp(optarg.cast(), c"any".as_ptr()) == 0
+                    || libc::strcmp(optarg.cast(), c"all".as_ptr()) == 0
                 {
                     pair |= BCF_SR_PAIR_ANY;
-                } else if libc::strcmp(optarg, c"some".as_ptr()) == 0 {
+                } else if libc::strcmp(optarg.cast(), c"some".as_ptr()) == 0 {
                     pair |= BCF_SR_PAIR_SOME;
-                } else if libc::strcmp(optarg, c"exact".as_ptr()) == 0 {
+                } else if libc::strcmp(optarg.cast(), c"exact".as_ptr()) == 0 {
                     pair = BCF_SR_PAIR_EXACT;
                 } else {
                     error!(c"The --pair logic \"%s\" not recognised.\n", optarg);
                 }
             }
-            x if x == b'r' as c_int => {
+            x if x == b'r' as i32 => {
                 regions = optarg;
             }
-            x if x == b't' as c_int => {
+            x if x == b't' as i32 => {
                 targets = optarg;
             }
             1000 => {
@@ -340,10 +304,10 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
             1001 => {
                 use_fofn = 0;
             }
-            x if x == b'u' as c_int => {
+            x if x == b'u' as i32 => {
                 usefptr = 1;
             }
-            x if x == b'h' as c_int => {
+            x if x == b'h' as i32 => {
                 test_test_bcf_sr_c_54_usage(libc::EXIT_SUCCESS);
             }
             _ => test_test_bcf_sr_c_54_usage(libc::EXIT_FAILURE),
@@ -357,9 +321,9 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
     }
 
     let mut nvcf = 0;
-    let vcfs: *mut *mut c_char;
+    let vcfs: *mut *mut u8;
     if use_fofn != 0 {
-        vcfs = hts_readlist(*argv.add(optind as usize), 1, &mut nvcf);
+        vcfs = hts_readlist((*argv.add(optind as usize)).cast(), 1, &mut nvcf).cast();
         if vcfs.is_null() {
             error!(c"Could not parse %s\n", *argv.add(optind as usize));
         }
@@ -382,7 +346,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
     if !regions.is_null()
         && crate::htslib_rs::vcf::bcf_sr_set_regions(
             &mut *sr,
-            std::ffi::CStr::from_ptr(regions).to_bytes(),
+            std::ffi::CStr::from_ptr(regions.cast()).to_bytes(),
             0,
         ) != 0
     {
@@ -392,7 +356,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
     if !targets.is_null()
         && crate::htslib_rs::vcf::bcf_sr_set_targets(
             &mut *sr,
-            std::ffi::CStr::from_ptr(targets).to_bytes(),
+            std::ffi::CStr::from_ptr(targets.cast()).to_bytes(),
             0,
             0,
         ) != 0
@@ -401,13 +365,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
     }
 
     if usefptr != 0 {
-        htsfp = libc::malloc(
-            std::mem::size_of::<*mut crate::htslib_rs::hts::htsFile>() * nvcf as usize,
-        )
-        .cast();
-        if htsfp.is_null() {
-            error!(c"Failed to allocate memory\n");
-        }
+        htsfp = vec![std::ptr::null_mut(); nvcf as usize];
     }
 
     let mut i = 0;
@@ -415,23 +373,23 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
         if usefptr == 0 {
             if crate::htslib_rs::vcf::bcf_sr_add_reader(
                 &mut *sr,
-                std::ffi::CStr::from_ptr(*vcfs.add(i as usize)).to_bytes(),
+                std::ffi::CStr::from_ptr((*vcfs.add(i as usize)).cast()).to_bytes(),
             ) == 0
             {
                 error!(
                     c"Failed to open %s: %s\n",
                     *vcfs.add(i as usize),
-                    crate::htslib_rs::vcf::bcf_sr_strerror((*sr).errnum as c_int)
+                    crate::htslib_rs::vcf::bcf_sr_strerror((*sr).errnum as i32)
                 );
             }
         } else {
-            *htsfp.add(i as usize) =
-                crate::htslib_rs::hts::hts_open(*vcfs.add(i as usize), c"r".as_ptr());
-            if (*htsfp.add(i as usize)).is_null() {
+            htsfp[i as usize] =
+                crate::htslib_rs::hts::hts_open((*vcfs.add(i as usize)).cast(), c"r".as_ptr());
+            if htsfp[i as usize].is_null() {
                 error!(
                     c"Failed to open %s: %s\n",
                     *vcfs.add(i as usize),
-                    crate::htslib_rs::vcf::bcf_sr_strerror((*sr).errnum as c_int)
+                    crate::htslib_rs::vcf::bcf_sr_strerror((*sr).errnum as i32)
                 );
             }
 
@@ -440,7 +398,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
               w/o name it has to be along with file with default naming
             */
             let mut idxname = libc::strstr(
-                *vcfs.add(i as usize),
+                (*vcfs.add(i as usize)).cast(),
                 crate::htslib_rs::hts::HTS_IDX_DELIM.as_ptr().cast(),
             );
             if !idxname.is_null() {
@@ -455,7 +413,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
             };
             if crate::htslib_rs::vcf::bcf_sr_add_hreader(
                 &mut *sr,
-                &mut *(*htsfp.add(i as usize)),
+                &mut *htsfp[i as usize],
                 1,
                 idxname_arg,
             ) == 0
@@ -463,7 +421,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
                 error!(
                     c"Failed to add reader %s: %s\n",
                     *vcfs.add(i as usize),
-                    crate::htslib_rs::vcf::bcf_sr_strerror((*sr).errnum as c_int)
+                    crate::htslib_rs::vcf::bcf_sr_strerror((*sr).errnum as i32)
                 );
             }
         }
@@ -475,14 +433,14 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
     }
 
     if out_fmt == crate::htslib_rs::hts::HTS_FORMAT_TEXT_FORMAT {
-        let mut out = crate::htslib_rs::c_compat::stdout.cast::<libc::FILE>();
+        let mut out = libc::fdopen(1, c"w".as_ptr());
         if !out_fn.is_null() {
-            out = libc::fopen(out_fn, c"w".as_ptr());
+            out = libc::fopen(out_fn.cast(), c"w".as_ptr());
             if out.is_null() {
                 error!(
                     c"Couldn't open \"%s\" for writing: %s\n",
                     out_fn,
-                    libc::strerror(*crate::htslib_rs::c_compat::__errno_location())
+                    libc::strerror(*libc::__errno_location())
                 );
             }
         }
@@ -491,14 +449,14 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
             error!(
                 c"Error on closing %s : %s\n",
                 out_fn,
-                libc::strerror(*crate::htslib_rs::c_compat::__errno_location())
+                libc::strerror(*libc::__errno_location())
             );
         }
     } else {
-        let fmt_type = if out_fmt == crate::htslib_rs::hts::HTS_FORMAT_VCF {
-            c"VCF".as_ptr()
+        let fmt_type: *const u8 = if out_fmt == crate::htslib_rs::hts::HTS_FORMAT_VCF {
+            c"VCF".as_ptr().cast()
         } else {
-            c"BCF".as_ptr()
+            c"BCF".as_ptr().cast()
         };
 
         let hdr = (*(*sr).readers).header;
@@ -507,10 +465,10 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
         }
 
         if out_fn.is_null() {
-            out_fn = c"-".as_ptr();
+            out_fn = c"-".as_ptr().cast();
         }
         let vcf_out = crate::htslib_rs::hts::hts_open(
-            out_fn,
+            out_fn.cast(),
             if out_fmt == crate::htslib_rs::hts::HTS_FORMAT_VCF {
                 c"w".as_ptr()
             } else {
@@ -521,7 +479,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
             error!(
                 c"Couldn't open \"%s\" for writing: %s\n",
                 out_fn,
-                libc::strerror(*crate::htslib_rs::c_compat::__errno_location())
+                libc::strerror(*libc::__errno_location())
             );
         }
         test_test_bcf_sr_c_107_write_vcf_bcf_format(sr, hdr, vcf_out, fmt_type);
@@ -533,7 +491,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
     if (*sr).errnum != 0 {
         error!(
             c"Synced reader error: %s\n",
-            crate::htslib_rs::vcf::bcf_sr_strerror((*sr).errnum as c_int)
+            crate::htslib_rs::vcf::bcf_sr_strerror((*sr).errnum as i32)
         );
     }
 
@@ -546,9 +504,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
         }
         libc::free(vcfs.cast());
     }
-    if usefptr != 0 {
-        libc::free(htsfp.cast());
-    }
+    drop(htsfp);
 
     0
 }
@@ -556,7 +512,7 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::{CStr, CString};
+    use std::ffi::CStr;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
@@ -566,8 +522,10 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
     }
 
-    fn c_path(path: &Path) -> CString {
-        CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    fn c_path(path: &Path) -> Vec<u8> {
+        let mut v = path.to_string_lossy().as_bytes().to_vec();
+        v.push(0);
+        v
     }
 
     fn temp_path(label: &str, ext: &str) -> PathBuf {
@@ -579,7 +537,7 @@ mod tests {
         ))
     }
 
-    unsafe fn run_main(args: &mut [CString]) -> c_int {
+    unsafe fn run_main(args: &mut [Vec<u8>]) -> i32 {
         // NOTE: callers must already hold `ORIGINAL_MAIN_LOCK` (see
         // src/test/mod.rs). The per-file `GETOPT_LOCK` is retained so direct
         // helper-level callers (none today) remain safe; std `Mutex` is not
@@ -594,8 +552,8 @@ mod tests {
             let mut argv = args
                 .iter_mut()
                 .map(|arg| arg.as_ptr().cast_mut())
-                .collect::<Vec<_>>();
-            let ret = test_test_bcf_sr_c_126_main(argv.len() as c_int, argv.as_mut_ptr());
+                .collect::<Vec<*mut u8>>();
+            let ret = test_test_bcf_sr_c_126_main(argv.len() as i32, argv.as_mut_ptr());
             libc::fflush(std::ptr::null_mut());
             libc::_exit(ret);
         }
@@ -608,7 +566,7 @@ mod tests {
 
     unsafe fn read_bcf_sites(path: &Path) -> Vec<String> {
         let path = c_path(path);
-        let fp = crate::htslib_rs::hts::hts_open(path.as_ptr(), c"r".as_ptr());
+        let fp = crate::htslib_rs::hts::hts_open(path.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
         let hdr = crate::htslib_rs::vcf::bcf_hdr_read(fp);
         assert!(!hdr.is_null());
@@ -618,7 +576,7 @@ mod tests {
         let mut sites = Vec::new();
         while crate::htslib_rs::vcf::bcf_read(fp, hdr, rec) >= 0 {
             assert_eq!(
-                crate::htslib_rs::vcf::bcf_unpack(rec, crate::htslib_rs::vcf::BCF_UN_STR as c_int),
+                crate::htslib_rs::vcf::bcf_unpack(rec, crate::htslib_rs::vcf::BCF_UN_STR as i32),
                 0
             );
             let chrom = CStr::from_ptr(crate::htslib_rs::vcf::bcf_seqname(hdr, rec))
@@ -654,12 +612,12 @@ mod tests {
         let c_bcf_path = c_path(&bcf_path);
         let c_csi_path = c_path(&csi_path);
 
-        let in_fp = crate::htslib_rs::hts::hts_open(c_vcf_path.as_ptr(), c"r".as_ptr());
+        let in_fp = crate::htslib_rs::hts::hts_open(c_vcf_path.as_ptr().cast(), c"r".as_ptr());
         assert!(!in_fp.is_null());
         let hdr = crate::htslib_rs::vcf::bcf_hdr_read(in_fp);
         assert!(!hdr.is_null());
 
-        let out_fp = crate::htslib_rs::hts::hts_open(c_bcf_path.as_ptr(), c"wb".as_ptr());
+        let out_fp = crate::htslib_rs::hts::hts_open(c_bcf_path.as_ptr().cast(), c"wb".as_ptr());
         assert!(!out_fp.is_null());
         assert_eq!(crate::htslib_rs::vcf::bcf_hdr_write(out_fp, hdr), 0);
 
@@ -674,7 +632,7 @@ mod tests {
         crate::htslib_rs::vcf::bcf_hdr_destroy(hdr);
         assert_eq!(crate::htslib_rs::hts::hts_close(in_fp), 0);
         assert_eq!(
-            crate::htslib_rs::vcf::bcf_index_build2(c_bcf_path.as_ptr(), c_csi_path.as_ptr(), 14),
+            crate::htslib_rs::vcf::bcf_index_build2(c_bcf_path.as_ptr().cast(), c_csi_path.as_ptr().cast(), 14),
             0
         );
 
@@ -693,14 +651,14 @@ mod tests {
         let _ = std::fs::remove_file(&out);
 
         let mut args = vec![
-            CString::new("test-bcf-sr").unwrap(),
-            CString::new("--args").unwrap(),
-            CString::new("--no-index").unwrap(),
-            CString::new("-O").unwrap(),
-            CString::new("summary").unwrap(),
-            CString::new("-p").unwrap(),
-            CString::new("any").unwrap(),
-            CString::new("-o").unwrap(),
+            b"test-bcf-sr\0".to_vec(),
+            b"--args\0".to_vec(),
+            b"--no-index\0".to_vec(),
+            b"-O\0".to_vec(),
+            b"summary\0".to_vec(),
+            b"-p\0".to_vec(),
+            b"any\0".to_vec(),
+            b"-o\0".to_vec(),
             c_path(&out),
             c_path(&fixture("htslib/test/bcf-sr/merge.noidx.a.vcf")),
             c_path(&fixture("htslib/test/bcf-sr/merge.noidx.b.vcf")),
@@ -739,11 +697,11 @@ mod tests {
         .unwrap();
 
         let mut args = vec![
-            CString::new("test-bcf-sr").unwrap(),
-            CString::new("--no-index").unwrap(),
-            CString::new("-O").unwrap(),
-            CString::new("vcf").unwrap(),
-            CString::new("-o").unwrap(),
+            b"test-bcf-sr\0".to_vec(),
+            b"--no-index\0".to_vec(),
+            b"-O\0".to_vec(),
+            b"vcf\0".to_vec(),
+            b"-o\0".to_vec(),
             c_path(&out),
             c_path(&list),
         ];
@@ -819,14 +777,22 @@ mod tests {
             let out = temp_path(label, "vcf");
             let _ = std::fs::remove_file(&out);
             let mut args = vec![
-                CString::new("test-bcf-sr").unwrap(),
-                CString::new("--args").unwrap(),
-                CString::new("-O").unwrap(),
-                CString::new("vcf").unwrap(),
-                CString::new("-o").unwrap(),
+                b"test-bcf-sr\0".to_vec(),
+                b"--args\0".to_vec(),
+                b"-O\0".to_vec(),
+                b"vcf\0".to_vec(),
+                b"-o\0".to_vec(),
                 c_path(&out),
-                CString::new(flag).unwrap(),
-                CString::new(range).unwrap(),
+                {
+                    let mut v = flag.as_bytes().to_vec();
+                    v.push(0);
+                    v
+                },
+                {
+                    let mut v = range.as_bytes().to_vec();
+                    v.push(0);
+                    v
+                },
                 c_path(&bcf),
             ];
 
@@ -854,12 +820,12 @@ mod tests {
         let _ = std::fs::remove_file(&out);
 
         let mut args = vec![
-            CString::new("test-bcf-sr").unwrap(),
-            CString::new("--args").unwrap(),
-            CString::new("--no-index").unwrap(),
-            CString::new("-O").unwrap(),
-            CString::new("bcf").unwrap(),
-            CString::new("-o").unwrap(),
+            b"test-bcf-sr\0".to_vec(),
+            b"--args\0".to_vec(),
+            b"--no-index\0".to_vec(),
+            b"-O\0".to_vec(),
+            b"bcf\0".to_vec(),
+            b"-o\0".to_vec(),
             c_path(&out),
             c_path(&fixture("htslib/test/bcf-sr/weird-chr-names.vcf")),
         ];

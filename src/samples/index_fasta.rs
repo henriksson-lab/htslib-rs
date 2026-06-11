@@ -1,31 +1,28 @@
-use std::ffi::{c_char, c_int};
+use std::io::Write;
 
 // original: print_usage (htslib/samples/index_fasta.c:39)
-pub unsafe fn samples_index_fasta_c_39_print_usage(fp: *mut libc::FILE) {
-    libc::fprintf(
-        fp,
-        c"Usage: index_fasta <file>\nIndexes a fasta/fastq file and saves along with source.\n"
-            .as_ptr(),
-    );
+pub unsafe fn samples_index_fasta_c_39_print_usage() {
+    let mut __out = std::io::stdout();
+    write!(__out, "Usage: index_fasta <file>\nIndexes a fasta/fastq file and saves along with source.\n").unwrap();
 }
 
 // original: main (htslib/samples/index_fasta.c:51)
-pub unsafe fn samples_index_fasta_c_51_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
-    let mut ret = libc::EXIT_FAILURE;
+pub unsafe fn samples_index_fasta_c_51_main(argc: i32, argv: *mut *mut u8) -> i32 {
+    let mut ret = 1;
+    let mut __out = std::io::stdout();
 
     if argc != 2 {
-        samples_index_fasta_c_39_print_usage(crate::htslib_rs::c_compat::stdout.cast());
+        samples_index_fasta_c_39_print_usage();
         return ret;
     }
     let filename = *argv.add(1);
 
-    if crate::htslib_rs::faidx::fai_build3(filename, std::ptr::null(), std::ptr::null()) == -1 {
-        libc::printf(
-            c"Indexing failed with %d\n".as_ptr(),
-            *crate::htslib_rs::c_compat::__errno_location(),
-        );
+    if crate::htslib_rs::faidx::fai_build3(filename.cast(), std::ptr::null(), std::ptr::null()) == -1
+    {
+        writeln!(__out, "Indexing failed with {}", std::io::Error::last_os_error().raw_os_error().unwrap_or(0)).unwrap();
     } else {
-        ret = libc::EXIT_SUCCESS;
+        ret = 0;
     }
+    __out.flush().unwrap();
     ret
 }

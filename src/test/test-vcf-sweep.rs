@@ -1,15 +1,12 @@
-use std::ffi::{c_char, c_int, c_void, CStr};
-
-pub unsafe fn test_test_vcf_sweep_c_31_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_test_vcf_sweep_c_31_main(argc: i32, argv: *mut *mut u8) -> i32 {
+    use std::io::Write;
     if argc != 2 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Usage: test-vcf-sweep <file.bcf|file.vcf>\n".as_ptr(),
-        );
+        eprint!("Usage: test-vcf-sweep <file.bcf|file.vcf>\n");
         return 1;
     }
+    let mut __out = std::io::stdout();
 
-    let fname = CStr::from_ptr(*argv.add(1)).to_bytes();
+    let fname = std::ffi::CStr::from_ptr((*argv.add(1)).cast()).to_bytes();
     let mut sw = crate::htslib_rs::vcf::bcf_sweep_init(fname);
     let Some(sw_ref) = sw.as_mut() else {
         return 1;
@@ -19,31 +16,31 @@ pub unsafe fn test_test_vcf_sweep_c_31_main(argc: c_int, argv: *mut *mut c_char)
         return 1;
     };
     let hdr = hdr as *mut crate::htslib_rs::vcf::bcf_hdr_t;
-    let mut chksum: c_int = 0;
+    let mut chksum: i32 = 0;
 
     while let Some(rec) = crate::htslib_rs::vcf::bcf_sweep_fwd(sw.as_mut().unwrap().as_mut()) {
-        chksum += (rec.pos + 1) as c_int;
+        chksum += (rec.pos + 1) as i32;
     }
-    libc::printf(c"fwd position chksum: %d\n".as_ptr(), chksum);
+    write!(__out, "fwd position chksum: {}\n", chksum).unwrap();
 
     chksum = 0;
     while let Some(rec) = crate::htslib_rs::vcf::bcf_sweep_bwd(sw.as_mut().unwrap().as_mut()) {
-        chksum += (rec.pos + 1) as c_int;
+        chksum += (rec.pos + 1) as i32;
     }
-    libc::printf(c"bwd position chksum: %d\n".as_ptr(), chksum);
+    write!(__out, "bwd position chksum: {}\n", chksum).unwrap();
 
-    let mut m_pls: c_int = 0;
-    let mut n_pls: c_int;
+    let mut m_pls: i32 = 0;
+    let mut n_pls: i32;
     let mut pls: *mut i32 = std::ptr::null_mut();
     chksum = 0;
     while let Some(rec) = crate::htslib_rs::vcf::bcf_sweep_fwd(sw.as_mut().unwrap().as_mut()) {
         n_pls = crate::htslib_rs::vcf::bcf_get_format_values(
             hdr,
             rec as *mut crate::htslib_rs::vcf::bcf1_t,
-            c"PL".as_ptr(),
-            (&mut pls as *mut *mut i32).cast::<*mut c_void>(),
+            b"PL\0".as_ptr().cast(),
+            (&mut pls as *mut *mut i32).cast::<*mut std::os::raw::c_void>(),
             &mut m_pls,
-            crate::htslib_rs::vcf::BCF_HT_INT as c_int,
+            crate::htslib_rs::vcf::BCF_HT_INT as i32,
         );
         if n_pls <= 0 {
             continue;
@@ -66,17 +63,17 @@ pub unsafe fn test_test_vcf_sweep_c_31_main(argc: c_int, argv: *mut *mut c_char)
             ptr = ptr.add(nvals as usize);
         }
     }
-    libc::printf(c"fwd PL chksum: %d\n".as_ptr(), chksum);
+    write!(__out, "fwd PL chksum: {}\n", chksum).unwrap();
 
     chksum = 0;
     while let Some(rec) = crate::htslib_rs::vcf::bcf_sweep_bwd(sw.as_mut().unwrap().as_mut()) {
         n_pls = crate::htslib_rs::vcf::bcf_get_format_values(
             hdr,
             rec as *mut crate::htslib_rs::vcf::bcf1_t,
-            c"PL".as_ptr(),
-            (&mut pls as *mut *mut i32).cast::<*mut c_void>(),
+            b"PL\0".as_ptr().cast(),
+            (&mut pls as *mut *mut i32).cast::<*mut std::os::raw::c_void>(),
             &mut m_pls,
-            crate::htslib_rs::vcf::BCF_HT_INT as c_int,
+            crate::htslib_rs::vcf::BCF_HT_INT as i32,
         );
         if n_pls <= 0 {
             continue;
@@ -99,24 +96,26 @@ pub unsafe fn test_test_vcf_sweep_c_31_main(argc: c_int, argv: *mut *mut c_char)
             ptr = ptr.add(nvals as usize);
         }
     }
-    libc::printf(c"bwd PL chksum: %d\n".as_ptr(), chksum);
+    write!(__out, "bwd PL chksum: {}\n", chksum).unwrap();
 
     crate::htslib_rs::vcf::bcf_sweep_destroy(sw);
+    __out.flush().unwrap();
     0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
     use std::path::{Path, PathBuf};
 
     fn fixture(path: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
     }
 
-    fn c_path(path: &Path) -> CString {
-        CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    fn c_path(path: &Path) -> Vec<u8> {
+        let mut v = path.to_string_lossy().as_bytes().to_vec();
+        v.push(0);
+        v
     }
 
     fn temp_output(label: &str) -> PathBuf {
@@ -135,7 +134,7 @@ mod tests {
         ))
     }
 
-    unsafe fn run_main_capture_stdout(args: &mut [CString], out_path: &Path) -> c_int {
+    unsafe fn run_main_capture_stdout(args: &mut [Vec<u8>], out_path: &Path) -> i32 {
         let _ = std::fs::remove_file(out_path);
         libc::fflush(std::ptr::null_mut());
 
@@ -145,7 +144,7 @@ mod tests {
         if pid == 0 {
             let out_c = c_path(out_path);
             let out_fd = libc::open(
-                out_c.as_ptr(),
+                out_c.as_ptr().cast(),
                 libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
                 0o600,
             );
@@ -160,9 +159,9 @@ mod tests {
 
             let mut argv = args
                 .iter_mut()
-                .map(|arg| arg.as_ptr().cast_mut())
+                .map(|arg| arg.as_mut_ptr())
                 .collect::<Vec<_>>();
-            let ret = test_test_vcf_sweep_c_31_main(argv.len() as c_int, argv.as_mut_ptr());
+            let ret = test_test_vcf_sweep_c_31_main(argv.len() as i32, argv.as_mut_ptr());
             libc::fflush(std::ptr::null_mut());
             libc::_exit(ret);
         }
@@ -204,7 +203,7 @@ mod tests {
         .unwrap();
 
         let out = temp_output("input");
-        let mut args = [CString::new("test-vcf-sweep").unwrap(), c_path(&input)];
+        let mut args = [b"test-vcf-sweep\0".to_vec(), c_path(&input)];
 
         unsafe {
             assert_eq!(run_main_capture_stdout(&mut args, &out), libc::EXIT_SUCCESS);

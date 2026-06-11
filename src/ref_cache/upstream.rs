@@ -29,11 +29,9 @@ use super::misc::{ref_cache_misc_h_38_hexval, ref_cache_misc_h_55_do_write_all};
 use super::options::Options;
 use super::poll_wrap::{Pw_fd_type, PW_ERR, PW_HUP, PW_IN, PW_OUT};
 use super::poll_wrap_epoll as poll_impl;
-use crate::htslib_rs::c_compat::__errno_location;
 use crate::htslib_rs::md5::{
     hts_md5_context, hts_md5_final, hts_md5_init, hts_md5_update,
 };
-use std::ffi::{c_char, c_int, c_long, c_uint, c_void};
 
 // Concurrency note (audit 2026-05):
 //
@@ -52,27 +50,27 @@ use std::ffi::{c_char, c_int, c_long, c_uint, c_void};
 //
 // SAFETY: single-threaded daemon worker; do not introduce additional
 // threads in this module without revisiting every `static mut` here.
-static mut CURL_VERSION_NUM: c_uint = 0;
+static mut CURL_VERSION_NUM: u32 = 0;
 
 const MD5_LEN: usize = 32;
 
-const DL_OK: c_int = 1;
-const DL_CLENGTH: c_int = 2;
-const DL_WAITING: c_int = 4;
-const DL_ABANDON: c_int = 8;
+const DL_OK: i32 = 1;
+const DL_CLENGTH: i32 = 2;
+const DL_WAITING: i32 = 4;
+const DL_ABANDON: i32 = 8;
 
 const ACTIVE_SIZE: usize = 0x4000;
-const ACTIVE_MASK: c_int = 0x3fff;
-const MAX_EVENTS: c_int = 128;
+const ACTIVE_MASK: i32 = 0x3fff;
+const MAX_EVENTS: i32 = 128;
 
-type CURLcode = c_int;
-type CURLMcode = c_int;
-type CURLoption = c_int;
-type CURLMoption = c_int;
-type Curlinfo = c_int;
-type CURLversion = c_int;
+type CURLcode = i32;
+type CURLMcode = i32;
+type CURLoption = i32;
+type CURLMoption = i32;
+type Curlinfo = i32;
+type CURLversion = i32;
 type curl_off_t = i64;
-type curl_socket_t = c_int;
+type curl_socket_t = i32;
 
 #[repr(C)]
 pub struct CURL {
@@ -87,35 +85,35 @@ pub struct CURLM {
 #[repr(C)]
 struct curl_version_info_data {
     age: CURLversion,
-    version: *const c_char,
-    version_num: c_uint,
+    version: *const u8,
+    version_num: u32,
 }
 
 #[repr(C)]
 struct CURLMsg {
-    msg: c_int,
+    msg: i32,
     easy_handle: *mut CURL,
     data: CURLMsgData,
 }
 
 #[repr(C)]
 union CURLMsgData {
-    whatever: *mut c_void,
+    whatever: *mut (),
     result: CURLcode,
 }
 
 const CURLE_OK: CURLcode = 0;
 const CURLM_CALL_MULTI_PERFORM: CURLMcode = -1;
 const CURLM_OK: CURLMcode = 0;
-const CURLMSG_DONE: c_int = 1;
-const CURL_POLL_IN: c_int = 1;
-const CURL_POLL_OUT: c_int = 2;
-const CURL_POLL_REMOVE: c_int = 4;
+const CURLMSG_DONE: i32 = 1;
+const CURL_POLL_IN: i32 = 1;
+const CURL_POLL_OUT: i32 = 2;
+const CURL_POLL_REMOVE: i32 = 4;
 const CURL_SOCKET_TIMEOUT: curl_socket_t = -1;
-const CURL_CSELECT_IN: c_int = 0x01;
-const CURL_CSELECT_OUT: c_int = 0x02;
-const CURL_CSELECT_ERR: c_int = 0x04;
-const CURL_GLOBAL_ALL: c_long = 3;
+const CURL_CSELECT_IN: i32 = 0x01;
+const CURL_CSELECT_OUT: i32 = 0x02;
+const CURL_CSELECT_ERR: i32 = 0x04;
+const CURL_GLOBAL_ALL: i64 = 3;
 const CURLVERSION_NOW: CURLversion = 9;
 
 const CURLOPT_WRITEDATA: CURLoption = 10001;
@@ -137,40 +135,40 @@ const CURLINFO_CONTENT_LENGTH_DOWNLOAD_T: Curlinfo = 0x600000 + 15;
 const CURLINFO_PRIVATE: Curlinfo = 0x100000 + 21;
 
 type WriteCallback = unsafe extern "C" fn(
-    buffer: *mut c_void,
+    buffer: *mut (),
     size: usize,
     nmemb: usize,
-    userp: *mut c_void,
+    userp: *mut (),
 ) -> usize;
 type XferInfoCallback = unsafe extern "C" fn(
-    clientp: *mut c_void,
+    clientp: *mut (),
     dltotal: curl_off_t,
     dlnow: curl_off_t,
     ultotal: curl_off_t,
     ulnow: curl_off_t,
-) -> c_int;
+) -> i32;
 type ProgressCallback = unsafe extern "C" fn(
-    clientp: *mut c_void,
+    clientp: *mut (),
     dltotal: f64,
     dlnow: f64,
     ultotal: f64,
     ulnow: f64,
-) -> c_int;
+) -> i32;
 type SocketCallback = unsafe extern "C" fn(
     easy: *mut CURL,
     s: curl_socket_t,
-    action: c_int,
-    userp: *mut c_void,
-    socketp: *mut c_void,
-) -> c_int;
+    action: i32,
+    userp: *mut (),
+    socketp: *mut (),
+) -> i32;
 type TimerCallback =
-    unsafe extern "C" fn(multi: *mut CURLM, timeout_ms: c_long, userp: *mut c_void) -> c_int;
+    unsafe extern "C" fn(multi: *mut CURLM, timeout_ms: i64, userp: *mut ()) -> i32;
 
 #[link(name = "curl")]
 #[allow(clashing_extern_declarations)]
 extern "C" {
     #[link_name = "curl_global_init"]
-    fn curl_global_init(flags: c_long) -> CURLcode;
+    fn curl_global_init(flags: i64) -> CURLcode;
     #[link_name = "curl_global_cleanup"]
     fn curl_global_cleanup();
     #[link_name = "curl_version_info"]
@@ -180,21 +178,21 @@ extern "C" {
     #[link_name = "curl_easy_cleanup"]
     fn curl_easy_cleanup(curl: *mut CURL);
     #[link_name = "curl_easy_strerror"]
-    fn curl_easy_strerror(code: CURLcode) -> *const c_char;
+    fn curl_easy_strerror(code: CURLcode) -> *const u8;
     #[link_name = "curl_easy_setopt"]
     fn curl_easy_setopt_ptr(
         curl: *mut CURL,
         option: CURLoption,
-        parameter: *mut c_void,
+        parameter: *mut (),
     ) -> CURLcode;
     #[link_name = "curl_easy_setopt"]
     fn curl_easy_setopt_cstr(
         curl: *mut CURL,
         option: CURLoption,
-        parameter: *const c_char,
+        parameter: *const u8,
     ) -> CURLcode;
     #[link_name = "curl_easy_setopt"]
-    fn curl_easy_setopt_long(curl: *mut CURL, option: CURLoption, parameter: c_long) -> CURLcode;
+    fn curl_easy_setopt_long(curl: *mut CURL, option: CURLoption, parameter: i64) -> CURLcode;
     #[link_name = "curl_easy_setopt"]
     fn curl_easy_setopt_write_callback(
         curl: *mut CURL,
@@ -214,18 +212,18 @@ extern "C" {
         parameter: Option<ProgressCallback>,
     ) -> CURLcode;
     #[link_name = "curl_easy_getinfo"]
-    fn curl_easy_getinfo_long(curl: *mut CURL, info: Curlinfo, value: *mut c_long) -> CURLcode;
+    fn curl_easy_getinfo_long(curl: *mut CURL, info: Curlinfo, value: *mut i64) -> CURLcode;
     #[link_name = "curl_easy_getinfo"]
     fn curl_easy_getinfo_off_t(curl: *mut CURL, info: Curlinfo, value: *mut curl_off_t)
         -> CURLcode;
     #[link_name = "curl_easy_getinfo"]
-    fn curl_easy_getinfo_ptr(curl: *mut CURL, info: Curlinfo, value: *mut *mut c_void) -> CURLcode;
+    fn curl_easy_getinfo_ptr(curl: *mut CURL, info: Curlinfo, value: *mut *mut ()) -> CURLcode;
     #[link_name = "curl_multi_init"]
     fn curl_multi_init() -> *mut CURLM;
     #[link_name = "curl_multi_cleanup"]
     fn curl_multi_cleanup(multi_handle: *mut CURLM) -> CURLMcode;
     #[link_name = "curl_multi_strerror"]
-    fn curl_multi_strerror(code: CURLMcode) -> *const c_char;
+    fn curl_multi_strerror(code: CURLMcode) -> *const u8;
     #[link_name = "curl_multi_add_handle"]
     fn curl_multi_add_handle(multi_handle: *mut CURLM, curl_handle: *mut CURL) -> CURLMcode;
     #[link_name = "curl_multi_remove_handle"]
@@ -234,22 +232,22 @@ extern "C" {
     fn curl_multi_socket_action(
         multi_handle: *mut CURLM,
         s: curl_socket_t,
-        ev_bitmask: c_int,
-        running_handles: *mut c_int,
+        ev_bitmask: i32,
+        running_handles: *mut i32,
     ) -> CURLMcode;
     #[link_name = "curl_multi_info_read"]
-    fn curl_multi_info_read(multi_handle: *mut CURLM, msgs_in_queue: *mut c_int) -> *mut CURLMsg;
+    fn curl_multi_info_read(multi_handle: *mut CURLM, msgs_in_queue: *mut i32) -> *mut CURLMsg;
     #[link_name = "curl_multi_assign"]
     fn curl_multi_assign(
         multi_handle: *mut CURLM,
         sockfd: curl_socket_t,
-        sockp: *mut c_void,
+        sockp: *mut (),
     ) -> CURLMcode;
     #[link_name = "curl_multi_setopt"]
     fn curl_multi_setopt_ptr(
         multi_handle: *mut CURLM,
         option: CURLMoption,
-        parameter: *mut c_void,
+        parameter: *mut (),
     ) -> CURLMcode;
     #[link_name = "curl_multi_setopt"]
     fn curl_multi_setopt_socket_callback(
@@ -279,7 +277,7 @@ pub enum Upstream_msg_code {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Upstream_msg {
-    pub id: c_uint,
+    pub id: u32,
     pub code: Upstream_msg_code,
     pub val: i64,
 }
@@ -308,11 +306,11 @@ pub struct Download {
     file: Vec<u8>,
     url: Vec<u8>,
     curl: *mut CURL,
-    cmd_fd: c_int,
-    curlid: c_int,
-    flags: c_int,
-    cache_fd: c_int,
-    file_fd: c_int,
+    cmd_fd: i32,
+    curlid: i32,
+    flags: i32,
+    cache_fd: i32,
+    file_fd: i32,
     size: libc::off_t,
     received: libc::off_t,
 }
@@ -325,8 +323,8 @@ pub struct Downstream {
     download: Option<usize>,
     prev: Option<usize>,
     next: Option<usize>,
-    cmd_fd: c_int,
-    id: c_uint,
+    cmd_fd: i32,
+    id: u32,
 }
 
 // original: Multi_data (htslib/ref_cache/upstream.c:106)
@@ -337,7 +335,7 @@ pub struct Downstream {
 pub struct Multi_data {
     multi: *mut CURLM,
     pw: Option<Box<poll_impl::Poll_wrap>>,
-    timeout: c_long,
+    timeout: i64,
     downloads: Vec<Option<usize>>,
     downloads_arena: Vec<Option<Download>>,
     download_free: Vec<usize>,
@@ -345,9 +343,9 @@ pub struct Multi_data {
     downstream_free: Vec<usize>,
     waiting: Option<usize>,
     last_waiting: Option<usize>,
-    ncurls: c_uint,
-    free_curls: c_uint,
-    running: c_int,
+    ncurls: u32,
+    free_curls: u32,
+    running: i32,
     curls: Vec<*mut CURL>,
 }
 
@@ -380,10 +378,10 @@ macro_rules! ds {
 
 // original: upstream_send_cmd (htslib/ref_cache/upstream.c:122)
 pub unsafe fn ref_cache_upstream_c_122_upstream_send_cmd(
-    cmd_fd: c_int,
+    cmd_fd: i32,
     hexmd5: &[u8],
-    mut id: c_uint,
-) -> c_int {
+    mut id: u32,
+) -> i32 {
     let mut msg: libc::msghdr = std::mem::zeroed();
     let mut iov = [
         libc::iovec {
@@ -391,7 +389,7 @@ pub unsafe fn ref_cache_upstream_c_122_upstream_send_cmd(
             iov_len: MD5_LEN,
         },
         libc::iovec {
-            iov_base: (&mut id as *mut c_uint).cast(),
+            iov_base: (&mut id as *mut u32).cast(),
             iov_len: std::mem::size_of_val(&id),
         },
     ];
@@ -405,14 +403,14 @@ pub unsafe fn ref_cache_upstream_c_122_upstream_send_cmd(
     loop {
         res = libc::sendmsg(cmd_fd, &msg, 0);
         if !(res == -1
-            && (*__errno_location() == libc::EINTR
-                || *__errno_location() == libc::EAGAIN
-                || *__errno_location() == libc::EWOULDBLOCK))
+            && (*libc::__errno_location() == libc::EINTR
+                || *libc::__errno_location() == libc::EAGAIN
+                || *libc::__errno_location() == libc::EWOULDBLOCK))
         {
             break;
         }
     }
-    if res == (MD5_LEN + std::mem::size_of::<c_int>()) as libc::ssize_t {
+    if res == (MD5_LEN + std::mem::size_of::<i32>()) as libc::ssize_t {
         0
     } else {
         -1
@@ -421,9 +419,9 @@ pub unsafe fn ref_cache_upstream_c_122_upstream_send_cmd(
 
 // original: recv_cmd_data (htslib/ref_cache/upstream.c:146)
 unsafe fn ref_cache_upstream_c_146_recv_cmd_data(
-    cmd_fd: c_int,
+    cmd_fd: i32,
     hexmd5: &mut [u8],
-    id: &mut c_uint,
+    id: &mut u32,
 ) -> libc::ssize_t {
     let mut msg: libc::msghdr = std::mem::zeroed();
     let mut iov = [
@@ -432,8 +430,8 @@ unsafe fn ref_cache_upstream_c_146_recv_cmd_data(
             iov_len: MD5_LEN,
         },
         libc::iovec {
-            iov_base: (id as *mut c_uint).cast(),
-            iov_len: std::mem::size_of::<c_uint>(),
+            iov_base: (id as *mut u32).cast(),
+            iov_len: std::mem::size_of::<u32>(),
         },
     ];
 
@@ -446,9 +444,9 @@ unsafe fn ref_cache_upstream_c_146_recv_cmd_data(
     loop {
         res = libc::recvmsg(cmd_fd, &mut msg, 0);
         if !(res == -1
-            && (*__errno_location() == libc::EINTR
-                || *__errno_location() == libc::EAGAIN
-                || *__errno_location() == libc::EWOULDBLOCK))
+            && (*libc::__errno_location() == libc::EINTR
+                || *libc::__errno_location() == libc::EAGAIN
+                || *libc::__errno_location() == libc::EWOULDBLOCK))
         {
             break;
         }
@@ -456,7 +454,7 @@ unsafe fn ref_cache_upstream_c_146_recv_cmd_data(
     if res == 0 {
         return 0;
     }
-    if res != (MD5_LEN + std::mem::size_of::<c_uint>()) as libc::ssize_t {
+    if res != (MD5_LEN + std::mem::size_of::<u32>()) as libc::ssize_t {
         return -1;
     }
     res
@@ -464,10 +462,10 @@ unsafe fn ref_cache_upstream_c_146_recv_cmd_data(
 
 // original: upstream_send_msg (htslib/ref_cache/upstream.c:172)
 unsafe fn ref_cache_upstream_c_172_upstream_send_msg(
-    cmd_fd: c_int,
+    cmd_fd: i32,
     umsg: &Upstream_msg,
-    fd: c_int,
-) -> c_int {
+    fd: i32,
+) -> i32 {
     let mut msg: libc::msghdr = std::mem::zeroed();
     let mut iov = [libc::iovec {
         iov_base: (umsg as *const Upstream_msg as *mut Upstream_msg).cast(),
@@ -491,9 +489,9 @@ unsafe fn ref_cache_upstream_c_172_upstream_send_msg(
     loop {
         res = libc::sendmsg(cmd_fd, &msg, 0);
         if !(res == -1
-            && (*__errno_location() == libc::EINTR
-                || *__errno_location() == libc::EAGAIN
-                || *__errno_location() == libc::EWOULDBLOCK))
+            && (*libc::__errno_location() == libc::EINTR
+                || *libc::__errno_location() == libc::EAGAIN
+                || *libc::__errno_location() == libc::EWOULDBLOCK))
         {
             break;
         }
@@ -511,7 +509,7 @@ unsafe fn ref_cache_upstream_c_204_send_msg_all(
     download: usize,
     code: Upstream_msg_code,
     val: i64,
-) -> c_int {
+) -> i32 {
     let mut d = dl!(download).downstream;
     let mut res = 0;
     while let Some(cur) = d {
@@ -530,10 +528,10 @@ unsafe fn ref_cache_upstream_c_204_send_msg_all(
 
 // original: upstream_recv_msg (htslib/ref_cache/upstream.c:215)
 pub unsafe fn ref_cache_upstream_c_215_upstream_recv_msg(
-    cmd_fd: c_int,
+    cmd_fd: i32,
     umsg: &mut Upstream_msg,
-    fd: &mut c_int,
-) -> c_int {
+    fd: &mut i32,
+) -> i32 {
     let mut msg: libc::msghdr = std::mem::zeroed();
     let mut iov = [libc::iovec {
         iov_base: (umsg as *mut Upstream_msg).cast(),
@@ -557,9 +555,9 @@ pub unsafe fn ref_cache_upstream_c_215_upstream_recv_msg(
     loop {
         res = libc::recvmsg(cmd_fd, &mut msg, 0);
         if !(res == -1
-            && (*__errno_location() == libc::EINTR
-                || *__errno_location() == libc::EAGAIN
-                || *__errno_location() == libc::EWOULDBLOCK))
+            && (*libc::__errno_location() == libc::EINTR
+                || *libc::__errno_location() == libc::EAGAIN
+                || *libc::__errno_location() == libc::EWOULDBLOCK))
         {
             break;
         }
@@ -583,7 +581,7 @@ pub unsafe fn ref_cache_upstream_c_215_upstream_recv_msg(
 }
 
 // original: make_subdir (htslib/ref_cache/upstream.c:252)
-unsafe fn ref_cache_upstream_c_252_make_subdir(opts: &Options, hexmd5: &[u8]) -> c_int {
+unsafe fn ref_cache_upstream_c_252_make_subdir(opts: &Options, hexmd5: &[u8]) -> i32 {
     let cache_dir = opts.cache_dir.as_deref().unwrap_or(b"");
 
     // NUL-terminated only at the mkdirat(2) boundary; the path content itself
@@ -593,7 +591,7 @@ unsafe fn ref_cache_upstream_c_252_make_subdir(opts: &Options, hexmd5: &[u8]) ->
     path[..2].copy_from_slice(&hexmd5[..2]);
     path[2] = 0;
     if libc::mkdirat((*opts).cache_fd, path.as_ptr().cast(), 0o1755) != 0
-        && *__errno_location() != libc::EEXIST
+        && *libc::__errno_location() != libc::EEXIST
     {
         eprintln!(
             "Couldn't make directory {}/{} : {}",
@@ -608,7 +606,7 @@ unsafe fn ref_cache_upstream_c_252_make_subdir(opts: &Options, hexmd5: &[u8]) ->
     path[3..5].copy_from_slice(&hexmd5[2..4]);
     path[5] = 0;
     if libc::mkdirat((*opts).cache_fd, path.as_ptr().cast(), 0o1755) != 0
-        && *__errno_location() != libc::EEXIST
+        && *libc::__errno_location() != libc::EEXIST
     {
         eprintln!(
             "Couldn't make directory {}/{} : {}",
@@ -622,14 +620,14 @@ unsafe fn ref_cache_upstream_c_252_make_subdir(opts: &Options, hexmd5: &[u8]) ->
 }
 
 // original: get_free_curl (htslib/ref_cache/upstream.c:277)
-unsafe fn ref_cache_upstream_c_277_get_free_curl() -> c_int {
+unsafe fn ref_cache_upstream_c_277_get_free_curl() -> i32 {
     if mdata!().free_curls == 0 {
         return -1;
     }
     for i in 0..mdata!().ncurls {
         if (mdata!().free_curls & (1u32 << i)) != 0 {
             mdata!().free_curls &= !(1u32 << i);
-            return i as c_int;
+            return i as i32;
         }
     }
     -1
@@ -646,7 +644,7 @@ unsafe fn ref_cache_upstream_c_290_release_curl(download: usize) {
 // original: new_downstream (htslib/ref_cache/upstream.c:296)
 //
 // Allocates an owned downstream arena slot and returns its index.
-unsafe fn ref_cache_upstream_c_296_new_downstream(cmd_fd: c_int, downstream_id: c_uint) -> usize {
+unsafe fn ref_cache_upstream_c_296_new_downstream(cmd_fd: i32, downstream_id: u32) -> usize {
     let ds = Downstream {
         download: None,
         prev: None,
@@ -786,7 +784,7 @@ unsafe fn ref_cache_upstream_c_331_free_download(download: usize) {
 }
 
 // original: start_new_download (htslib/ref_cache/upstream.c:385)
-unsafe fn ref_cache_upstream_c_385_start_new_download(multi: *mut CURLM) -> c_int {
+unsafe fn ref_cache_upstream_c_385_start_new_download(multi: *mut CURLM) -> i32 {
     let Some(download) = mdata!().waiting else {
         return 0;
     };
@@ -816,7 +814,7 @@ unsafe fn ref_cache_upstream_c_385_start_new_download(multi: *mut CURLM) -> c_in
         eprintln!(
             "Couldn't set URL {} : {}",
             String::from_utf8_lossy(&dl!(download).url),
-            std::ffi::CStr::from_ptr(curl_easy_strerror(cc)).to_string_lossy()
+            std::ffi::CStr::from_ptr(curl_easy_strerror(cc).cast::<i8>()).to_string_lossy()
         );
         ref_cache_upstream_c_331_free_download(download);
         return -1;
@@ -824,29 +822,29 @@ unsafe fn ref_cache_upstream_c_385_start_new_download(multi: *mut CURLM) -> c_in
     // CURLOPT_WRITEDATA / CURLOPT_PRIVATE / CURLOPT_XFERINFODATA all carry the
     // integer download arena index across the FFI boundary (cast to a void*),
     // NOT a Rust borrow; the callbacks recover it with `userp as usize`.
-    cc = curl_easy_setopt_ptr(curl, CURLOPT_WRITEDATA, download as *mut c_void);
+    cc = curl_easy_setopt_ptr(curl, CURLOPT_WRITEDATA, download as *mut ());
     if cc != CURLE_OK {
         eprintln!(
             "Couldn't set user data in CURL handle : {}",
-            std::ffi::CStr::from_ptr(curl_easy_strerror(cc)).to_string_lossy()
+            std::ffi::CStr::from_ptr(curl_easy_strerror(cc).cast::<i8>()).to_string_lossy()
         );
         ref_cache_upstream_c_331_free_download(download);
         return -1;
     }
-    cc = curl_easy_setopt_ptr(curl, CURLOPT_PRIVATE, download as *mut c_void);
+    cc = curl_easy_setopt_ptr(curl, CURLOPT_PRIVATE, download as *mut ());
     if cc != CURLE_OK {
         eprintln!(
             "Couldn't set private data in CURL handle : {}",
-            std::ffi::CStr::from_ptr(curl_easy_strerror(cc)).to_string_lossy()
+            std::ffi::CStr::from_ptr(curl_easy_strerror(cc).cast::<i8>()).to_string_lossy()
         );
         ref_cache_upstream_c_331_free_download(download);
         return -1;
     }
-    cc = curl_easy_setopt_ptr(curl, CURLOPT_XFERINFODATA, download as *mut c_void);
+    cc = curl_easy_setopt_ptr(curl, CURLOPT_XFERINFODATA, download as *mut ());
     if cc != CURLE_OK {
         eprintln!(
             "Couldn't set progress data in CURL handle : {}",
-            std::ffi::CStr::from_ptr(curl_easy_strerror(cc)).to_string_lossy()
+            std::ffi::CStr::from_ptr(curl_easy_strerror(cc).cast::<i8>()).to_string_lossy()
         );
         ref_cache_upstream_c_331_free_download(download);
         return -1;
@@ -856,7 +854,7 @@ unsafe fn ref_cache_upstream_c_385_start_new_download(multi: *mut CURLM) -> c_in
     if mc != CURLM_OK {
         eprintln!(
             "Couldn't add handle to curl_multi : {}",
-            std::ffi::CStr::from_ptr(curl_multi_strerror(mc)).to_string_lossy()
+            std::ffi::CStr::from_ptr(curl_multi_strerror(mc).cast::<i8>()).to_string_lossy()
         );
         ref_cache_upstream_c_331_free_download(download);
         return -1;
@@ -922,7 +920,7 @@ unsafe fn ref_cache_upstream_c_445_get_download(
         return Some(download);
     }
 
-    if *__errno_location() != libc::ENOENT {
+    if *libc::__errno_location() != libc::ENOENT {
         eprintln!(
             "Couldn't open {}/{} : {}",
             String::from_utf8_lossy(cache_dir),
@@ -970,14 +968,14 @@ unsafe fn ref_cache_upstream_c_445_get_download(
                 0o644,
             );
             dl!(download).file_fd = fd;
-            if !(fd == -1 && *__errno_location() == libc::EINTR) {
+            if !(fd == -1 && *libc::__errno_location() == libc::EINTR) {
                 break;
             }
         }
         if dl!(download).file_fd >= 0 {
             break;
         }
-        if *__errno_location() != libc::EEXIST {
+        if *libc::__errno_location() != libc::EEXIST {
             break;
         }
     }
@@ -1015,11 +1013,11 @@ unsafe fn ref_cache_upstream_c_445_get_download(
 
 // original: get_cmd_multi (htslib/ref_cache/upstream.c:563)
 unsafe fn ref_cache_upstream_c_563_get_cmd_multi(
-    cmd_fd: c_int,
+    cmd_fd: i32,
     opts: &Options,
     multi: *mut CURLM,
-    running: c_int,
-) -> c_int {
+    running: i32,
+) -> i32 {
     let mut hexmd5 = [0u8; MD5_LEN];
     let mut downstream: Option<usize> = None;
     let mut msg = Upstream_msg {
@@ -1028,7 +1026,7 @@ unsafe fn ref_cache_upstream_c_563_get_cmd_multi(
         val: 0,
     };
     let res = -1;
-    let mut downstream_id: c_uint = 0;
+    let mut downstream_id: u32 = 0;
 
     let clen = ref_cache_upstream_c_146_recv_cmd_data(cmd_fd, &mut hexmd5, &mut downstream_id);
     if clen < 0 {
@@ -1123,7 +1121,7 @@ unsafe fn ref_cache_upstream_c_563_get_cmd_multi(
 }
 
 // original: send_result_code (htslib/ref_cache/upstream.c:635)
-unsafe fn ref_cache_upstream_c_635_send_result_code(downstream: usize, code: c_int) -> c_int {
+unsafe fn ref_cache_upstream_c_635_send_result_code(downstream: usize, code: i32) -> i32 {
     let msg = Upstream_msg {
         id: ds!(downstream).id,
         code: Upstream_msg_code::US_RESULT,
@@ -1141,7 +1139,7 @@ unsafe fn ref_cache_upstream_c_635_send_result_code(downstream: usize, code: c_i
 }
 
 // original: send_result_code_all (htslib/ref_cache/upstream.c:646)
-unsafe fn ref_cache_upstream_c_646_send_result_code_all(download: usize, code: c_int) -> c_int {
+unsafe fn ref_cache_upstream_c_646_send_result_code_all(download: usize, code: i32) -> i32 {
     let mut res = 0;
     let mut d = dl!(download).downstream;
     while let Some(cur) = d {
@@ -1153,12 +1151,12 @@ unsafe fn ref_cache_upstream_c_646_send_result_code_all(download: usize, code: c
 
 // original: progress_callback (htslib/ref_cache/upstream.c:656)
 unsafe extern "C" fn ref_cache_upstream_c_656_progress_callback(
-    clientp: *mut c_void,
+    clientp: *mut (),
     _dltotal: curl_off_t,
     _dlnow: curl_off_t,
     _ultotal: curl_off_t,
     _ulnow: curl_off_t,
-) -> c_int {
+) -> i32 {
     // `clientp` carries the download arena index, not a pointer.
     let download = clientp as usize;
     if (dl!(download).flags & DL_ABANDON) == 0 {
@@ -1170,12 +1168,12 @@ unsafe extern "C" fn ref_cache_upstream_c_656_progress_callback(
 
 // original: progress_callback (htslib/ref_cache/upstream.c:666)
 unsafe extern "C" fn ref_cache_upstream_c_666_progress_callback(
-    clientp: *mut c_void,
+    clientp: *mut (),
     _dltotal: f64,
     _dlnow: f64,
     _ultotal: f64,
     _ulnow: f64,
-) -> c_int {
+) -> i32 {
     let download = clientp as usize;
     if (dl!(download).flags & DL_ABANDON) == 0 {
         0
@@ -1186,10 +1184,10 @@ unsafe extern "C" fn ref_cache_upstream_c_666_progress_callback(
 
 // original: multi_receive_data (htslib/ref_cache/upstream.c:675)
 unsafe extern "C" fn ref_cache_upstream_c_675_multi_receive_data(
-    buffer: *mut c_void,
+    buffer: *mut (),
     size: usize,
     nmemb: usize,
-    userp: *mut c_void,
+    userp: *mut (),
 ) -> usize {
     // `userp` carries the download arena index, not a pointer.
     let download = userp as usize;
@@ -1203,13 +1201,13 @@ unsafe extern "C" fn ref_cache_upstream_c_675_multi_receive_data(
 
     if (dl!(download).flags & DL_CLENGTH) == 0 {
         let mut clen: curl_off_t = 0;
-        let mut rcode: c_long = 500;
+        let mut rcode: i64 = 500;
         let curl = dl!(download).curl;
         if curl_easy_getinfo_long(curl, CURLINFO_RESPONSE_CODE, &mut rcode) != CURLE_OK {
             return 0;
         }
         if rcode != 200 {
-            if ref_cache_upstream_c_646_send_result_code_all(download, rcode as c_int) != 0 {
+            if ref_cache_upstream_c_646_send_result_code_all(download, rcode as i32) != 0 {
                 return 0;
             }
             dl!(download).flags |= DL_ABANDON;
@@ -1277,10 +1275,10 @@ unsafe extern "C" fn ref_cache_upstream_c_675_multi_receive_data(
 unsafe extern "C" fn ref_cache_upstream_c_753_sock_func(
     _easy: *mut CURL,
     s: curl_socket_t,
-    action: c_int,
-    userp: *mut c_void,
-    socketp: *mut c_void,
-) -> c_int {
+    action: i32,
+    userp: *mut (),
+    socketp: *mut (),
+) -> i32 {
     // CURLMOPT_SOCKETDATA still hands back the owning `Multi_data` (the single
     // per-worker structure); curl_multi_assign stashes a poller arena index + 1
     // per-socket, recovered here (0 meaning "not yet registered").
@@ -1296,7 +1294,7 @@ unsafe extern "C" fn ref_cache_upstream_c_753_sock_func(
         let polled = polled.expect("curl removes a registered socket");
         let res = poll_impl::ref_cache_poll_wrap_epoll_c_126_pw_remove(pw, polled, false);
         if res != 0 {
-            if *__errno_location() == libc::EBADF {
+            if *libc::__errno_location() == libc::EBADF {
                 return 0;
             }
             eprintln!(
@@ -1309,7 +1307,7 @@ unsafe extern "C" fn ref_cache_upstream_c_753_sock_func(
         if mc != CURLM_OK {
             eprintln!(
                 "curl_multi_assign failed : {}",
-                std::ffi::CStr::from_ptr(curl_multi_strerror(mc)).to_string_lossy()
+                std::ffi::CStr::from_ptr(curl_multi_strerror(mc).cast::<i8>()).to_string_lossy()
             );
             return -1;
         }
@@ -1338,11 +1336,11 @@ unsafe extern "C" fn ref_cache_upstream_c_753_sock_func(
                 return -1;
             };
             // Store index+1 so that a null socketp (0) still means "unregistered".
-            let mc = curl_multi_assign((*mdata).multi, s, (polled + 1) as *mut c_void);
+            let mc = curl_multi_assign((*mdata).multi, s, (polled + 1) as *mut ());
             if mc != CURLM_OK {
                 eprintln!(
                     "curl_multi_assign failed : {}",
-                    std::ffi::CStr::from_ptr(curl_multi_strerror(mc)).to_string_lossy()
+                    std::ffi::CStr::from_ptr(curl_multi_strerror(mc).cast::<i8>()).to_string_lossy()
                 );
                 return -1;
             }
@@ -1357,9 +1355,9 @@ unsafe extern "C" fn ref_cache_upstream_c_753_sock_func(
 // original: timer_func (htslib/ref_cache/upstream.c:801)
 unsafe extern "C" fn ref_cache_upstream_c_801_timer_func(
     _multi: *mut CURLM,
-    timeout: c_long,
-    userp: *mut c_void,
-) -> c_int {
+    timeout: i64,
+    userp: *mut (),
+) -> i32 {
     let mdata = userp.cast::<Multi_data>();
     (*mdata).timeout = timeout;
     0
@@ -1394,7 +1392,7 @@ unsafe fn ref_cache_upstream_c_808_get_multi(mdata: *mut Multi_data) -> *mut CUR
     if mc != CURLM_OK {
         eprintln!(
             "Failed to set options for curl multi handle : {}",
-            std::ffi::CStr::from_ptr(curl_multi_strerror(mc)).to_string_lossy()
+            std::ffi::CStr::from_ptr(curl_multi_strerror(mc).cast::<i8>()).to_string_lossy()
         );
         curl_multi_cleanup(multi);
         return std::ptr::null_mut();
@@ -1406,7 +1404,7 @@ unsafe fn ref_cache_upstream_c_808_get_multi(mdata: *mut Multi_data) -> *mut CUR
 unsafe fn ref_cache_upstream_c_838_init_multi_data(
     multi: *mut CURLM,
     mdata: *mut Multi_data,
-) -> c_int {
+) -> i32 {
     (*mdata).multi = multi;
     (*mdata).pw = poll_impl::ref_cache_poll_wrap_epoll_c_49_pw_init(false);
     if (&(*mdata).pw).is_none() {
@@ -1456,7 +1454,7 @@ unsafe fn ref_cache_upstream_c_838_init_multi_data(
         if cc != CURLE_OK {
             eprintln!(
                 "Couldn't set WRITEFUNCTION on curl handle : {}",
-                std::ffi::CStr::from_ptr(curl_easy_strerror(cc)).to_string_lossy()
+                std::ffi::CStr::from_ptr(curl_easy_strerror(cc).cast::<i8>()).to_string_lossy()
             );
             for j in 0..(*mdata).ncurls {
                 if !(&(*mdata).curls)[j as usize].is_null() {
@@ -1476,7 +1474,7 @@ unsafe fn ref_cache_upstream_c_838_init_multi_data(
         if cc != CURLE_OK {
             eprintln!(
                 "Couldn't set progress callback in CURL handle : {}",
-                std::ffi::CStr::from_ptr(curl_easy_strerror(cc)).to_string_lossy()
+                std::ffi::CStr::from_ptr(curl_easy_strerror(cc).cast::<i8>()).to_string_lossy()
             );
             for j in 0..(*mdata).ncurls {
                 if !(&(*mdata).curls)[j as usize].is_null() {
@@ -1491,7 +1489,7 @@ unsafe fn ref_cache_upstream_c_838_init_multi_data(
 }
 
 // original: rename_download_file (htslib/ref_cache/upstream.c:897)
-unsafe fn ref_cache_upstream_c_897_rename_download_file(download: usize) -> c_int {
+unsafe fn ref_cache_upstream_c_897_rename_download_file(download: usize) -> i32 {
     if (dl!(download).flags & DL_OK) != 0 {
         // Final "aa/bb/cccc..." path (md5 split 0..2 / 2..4 / 4..32); no NUL.
         let mut dest = Vec::with_capacity(MD5_LEN + 2);
@@ -1535,8 +1533,8 @@ unsafe fn ref_cache_upstream_c_916_finish_download(
     download: usize,
     multi: *mut CURLM,
     msg: *mut CURLMsg,
-) -> c_int {
-    let mut rcode: c_long = 500;
+) -> i32 {
+    let mut rcode: i64 = 500;
     let cc = (*msg).data.result;
     let mut md5 = [0u8; 16];
     let curl = dl!(download).curl;
@@ -1545,16 +1543,16 @@ unsafe fn ref_cache_upstream_c_916_finish_download(
         eprintln!(
             "Download of {} failed: {}",
             String::from_utf8_lossy(&dl!(download).hexmd5),
-            std::ffi::CStr::from_ptr(curl_easy_strerror(cc)).to_string_lossy()
+            std::ffi::CStr::from_ptr(curl_easy_strerror(cc).cast::<i8>()).to_string_lossy()
         );
-        if ref_cache_upstream_c_646_send_result_code_all(download, rcode as c_int) != 0 {
+        if ref_cache_upstream_c_646_send_result_code_all(download, rcode as i32) != 0 {
             return -1;
         }
         let mc = curl_multi_remove_handle(multi, curl);
         if mc != CURLM_OK {
             eprintln!(
                 "Couldn't remove easy handle from curl_multi : {}",
-                std::ffi::CStr::from_ptr(curl_multi_strerror(mc)).to_string_lossy()
+                std::ffi::CStr::from_ptr(curl_multi_strerror(mc).cast::<i8>()).to_string_lossy()
             );
             return -1;
         }
@@ -1565,19 +1563,19 @@ unsafe fn ref_cache_upstream_c_916_finish_download(
     if curl_easy_getinfo_long((*msg).easy_handle, CURLINFO_RESPONSE_CODE, &mut rcode) != CURLE_OK {
         eprintln!(
             "Couldn't get response code : {}",
-            std::ffi::CStr::from_ptr(curl_easy_strerror(cc)).to_string_lossy()
+            std::ffi::CStr::from_ptr(curl_easy_strerror(cc).cast::<i8>()).to_string_lossy()
         );
         return -1;
     }
     if rcode != 200 {
-        if ref_cache_upstream_c_646_send_result_code_all(download, rcode as c_int) != 0 {
+        if ref_cache_upstream_c_646_send_result_code_all(download, rcode as i32) != 0 {
             return -1;
         }
         let mc = curl_multi_remove_handle(multi, curl);
         if mc != CURLM_OK {
             eprintln!(
                 "Couldn't remove easy handle from curl_multi : {}",
-                std::ffi::CStr::from_ptr(curl_multi_strerror(mc)).to_string_lossy()
+                std::ffi::CStr::from_ptr(curl_multi_strerror(mc).cast::<i8>()).to_string_lossy()
             );
             return -1;
         }
@@ -1592,8 +1590,8 @@ unsafe fn ref_cache_upstream_c_916_finish_download(
         eprintln!(
             "Downloading {} : Content-Length was a lie. Expected {}, got {}",
             String::from_utf8_lossy(&dl!(download).hexmd5),
-            dl!(download).size as c_long,
-            dl!(download).received as c_long
+            dl!(download).size as i64,
+            dl!(download).received as i64
         );
         if ref_cache_upstream_c_646_send_result_code_all(download, 502) != 0 {
             return -1;
@@ -1602,7 +1600,7 @@ unsafe fn ref_cache_upstream_c_916_finish_download(
         if mc != CURLM_OK {
             eprintln!(
                 "Couldn't remove easy handle from curl_multi : {}",
-                std::ffi::CStr::from_ptr(curl_multi_strerror(mc)).to_string_lossy()
+                std::ffi::CStr::from_ptr(curl_multi_strerror(mc).cast::<i8>()).to_string_lossy()
             );
             return -1;
         }
@@ -1617,7 +1615,7 @@ unsafe fn ref_cache_upstream_c_916_finish_download(
     for (i, md5_byte) in md5.iter().enumerate() {
         let byte = (ref_cache_misc_h_38_hexval(dl!(download).hexmd5[i * 2]) << 4)
             | ref_cache_misc_h_38_hexval(dl!(download).hexmd5[i * 2 + 1]);
-        if byte != *md5_byte as c_int {
+        if byte != *md5_byte as i32 {
             eprintln!(
                 "Downloading {} : MD5 checksum didn't match.",
                 String::from_utf8_lossy(&dl!(download).hexmd5)
@@ -1629,7 +1627,7 @@ unsafe fn ref_cache_upstream_c_916_finish_download(
             if mc != CURLM_OK {
                 eprintln!(
                     "Couldn't remove easy handle from curl_multi : {}",
-                    std::ffi::CStr::from_ptr(curl_multi_strerror(mc)).to_string_lossy()
+                    std::ffi::CStr::from_ptr(curl_multi_strerror(mc).cast::<i8>()).to_string_lossy()
                 );
                 return -1;
             }
@@ -1647,7 +1645,7 @@ unsafe fn ref_cache_upstream_c_916_finish_download(
     if mc != CURLM_OK {
         eprintln!(
             "Couldn't remove easy handle from curl_multi : {}",
-            std::ffi::CStr::from_ptr(curl_multi_strerror(mc)).to_string_lossy()
+            std::ffi::CStr::from_ptr(curl_multi_strerror(mc).cast::<i8>()).to_string_lossy()
         );
         return -1;
     }
@@ -1662,9 +1660,9 @@ unsafe fn ref_cache_upstream_c_916_finish_download(
 // original: handle_curl_socket (htslib/ref_cache/upstream.c:996)
 unsafe fn ref_cache_upstream_c_996_handle_curl_socket(
     multi: *mut CURLM,
-    events: c_int,
-    fd: c_int,
-) -> c_int {
+    events: i32,
+    fd: i32,
+) -> i32 {
     let mut running = 0;
     let mut mc;
     loop {
@@ -1678,7 +1676,7 @@ unsafe fn ref_cache_upstream_c_996_handle_curl_socket(
         eprintln!(
             "Error from curl socket #{}: {}",
             fd,
-            std::ffi::CStr::from_ptr(curl_multi_strerror(mc)).to_string_lossy()
+            std::ffi::CStr::from_ptr(curl_multi_strerror(mc).cast::<i8>()).to_string_lossy()
         );
         return -1;
     }
@@ -1694,12 +1692,12 @@ unsafe fn ref_cache_upstream_c_996_handle_curl_socket(
             if (*msg).msg == CURLMSG_DONE {
                 // CURLINFO_PRIVATE returns the download arena index we stored as
                 // a void* in start_new_download; recover it as `usize`.
-                let mut download: *mut c_void = std::ptr::null_mut();
+                let mut download: *mut () = std::ptr::null_mut();
                 let c = curl_easy_getinfo_ptr((*msg).easy_handle, CURLINFO_PRIVATE, &mut download);
                 if c != CURLE_OK {
                     eprintln!(
                         "curl_easy_getinfo failed: {}",
-                        std::ffi::CStr::from_ptr(curl_easy_strerror(c)).to_string_lossy()
+                        std::ffi::CStr::from_ptr(curl_easy_strerror(c).cast::<i8>()).to_string_lossy()
                     );
                     return -1;
                 }
@@ -1732,9 +1730,9 @@ unsafe fn ref_cache_upstream_c_996_handle_curl_socket(
 // original: run_epoll_loop (htslib/ref_cache/upstream.c:1047)
 unsafe fn ref_cache_upstream_c_1047_run_epoll_loop(
     opts: &Options,
-    nfds: c_uint,
-    cmd_fds: &[c_int],
-    liveness_fd: c_int,
+    nfds: u32,
+    cmd_fds: &[i32],
+    liveness_fd: i32,
     multi: *mut CURLM,
 ) {
     let mut events: [libc::epoll_event; MAX_EVENTS as usize] = std::mem::zeroed();
@@ -1780,16 +1778,16 @@ unsafe fn ref_cache_upstream_c_1047_run_epoll_loop(
 
     if npolled == nfds + 1 {
         while running != 0 || mdata!().running > 0 {
-            let timeout = if mdata!().timeout < c_int::MAX as c_long {
-                mdata!().timeout as c_int
+            let timeout = if mdata!().timeout < i32::MAX as i64 {
+                mdata!().timeout as i32
             } else {
-                c_int::MAX
+                i32::MAX
             };
             let pw = mdata!().pw.as_deref_mut().expect("poller initialised");
             let nevents =
                 poll_impl::ref_cache_poll_wrap_epoll_c_120_pw_wait(pw, &mut events, timeout);
             if nevents == -1 {
-                if *__errno_location() == libc::EINTR {
+                if *libc::__errno_location() == libc::EINTR {
                     continue;
                 }
                 eprintln!("poll_wait: {}", std::io::Error::last_os_error());
@@ -1866,9 +1864,9 @@ unsafe fn ref_cache_upstream_c_1047_run_epoll_loop(
 // original: run_multi_upstream_handler (htslib/ref_cache/upstream.c:1131)
 unsafe fn ref_cache_upstream_c_1131_run_multi_upstream_handler(
     opts: &Options,
-    cmd_fds: &[c_int],
-    liveness_fd: c_int,
-) -> c_int {
+    cmd_fds: &[i32],
+    liveness_fd: i32,
+) -> i32 {
     let res = -1;
     let mut mdata = Box::new(Multi_data {
         multi: std::ptr::null_mut(),
@@ -1903,7 +1901,7 @@ unsafe fn ref_cache_upstream_c_1131_run_multi_upstream_handler(
 
     ref_cache_upstream_c_1047_run_epoll_loop(
         opts,
-        opts.max_kids as c_uint,
+        opts.max_kids as u32,
         cmd_fds,
         liveness_fd,
         multi,
@@ -1921,9 +1919,9 @@ unsafe fn ref_cache_upstream_c_1131_run_multi_upstream_handler(
 // original: run_upstream_handler (htslib/ref_cache/upstream.c:1157)
 pub unsafe fn ref_cache_upstream_c_1157_run_upstream_handler(
     opts: &Options,
-    sockets: &[c_int],
-    liveness_fd: c_int,
-) -> c_int {
+    sockets: &[i32],
+    liveness_fd: i32,
+) -> i32 {
     let mut sa: libc::sigaction = std::mem::zeroed();
     let mut old_sa: libc::sigaction = std::mem::zeroed();
 

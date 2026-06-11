@@ -1,8 +1,7 @@
-use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
+use std::ffi::{c_char, c_void, CStr};
 use std::mem::size_of;
 use std::ptr::NonNull;
 
-use crate::htslib_rs::c_compat;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::bgzf::{
@@ -15,7 +14,7 @@ use super::hts::{
     htsFile, hts_close, hts_get_bgzfp, hts_getline, hts_idx_t, hts_itr_t, hts_open, hts_pos_t,
     hts_str2dbl, hts_str2int, hts_str2uint, i16_to_le, i32_to_le, i64_to_le, kbitset_t, kputc,
     kputc_, kputd, kputs, kputsn, kputw, ks_resize, kstring_t, kstrtok, le_to_float, le_to_i16,
-    le_to_i32, le_to_i64, le_to_i8, le_to_u16, le_to_u32, size_t, toupper_c, BGZF,
+    le_to_i32, le_to_i64, le_to_i8, le_to_u16, le_to_u32, toupper_c, BGZF,
     HTS_COMPRESSION_BGZF, HTS_COMPRESSION_NO_COMPRESSION, HTS_FORMAT_BCF, HTS_FORMAT_BINARY_FORMAT,
     HTS_FORMAT_TEXT_FORMAT, HTS_FORMAT_VARIANT_DATA, HTS_FORMAT_VCF, HTS_POS_MAX, KS_SEP_LINE,
 };
@@ -162,10 +161,10 @@ where
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct bcf_hrec_t {
-    pub type_: c_int,
+    pub type_: i32,
     pub key: *mut c_char,
     pub value: *mut c_char,
-    pub nkeys: c_int,
+    pub nkeys: i32,
     pub keys: *mut *mut c_char,
     pub vals: *mut *mut c_char,
 }
@@ -176,7 +175,7 @@ pub struct bcf_hrec_t {
 pub struct bcf_idinfo_t {
     pub info: [u64; 3usize],
     pub hrec: [*mut bcf_hrec_t; 3usize],
-    pub id: c_int,
+    pub id: i32,
 }
 
 // original: bcf_idpair_t (htslib/vcf.h)
@@ -196,11 +195,11 @@ pub struct bcf_hdr_t {
     pub dict: [*mut c_void; 3usize],
     pub samples: *mut *mut c_char,
     pub hrec: *mut *mut bcf_hrec_t,
-    pub nhrec: c_int,
-    pub dirty: c_int,
-    pub ntransl: c_int,
-    pub transl: [*mut c_int; 2usize],
-    pub nsamples_ori: c_int,
+    pub nhrec: i32,
+    pub dirty: i32,
+    pub ntransl: i32,
+    pub transl: [*mut i32; 2usize],
+    pub nsamples_ori: i32,
     pub keep_samples: *mut u8,
     pub mem: kstring_t,
     pub m: [i32; 3usize],
@@ -210,18 +209,18 @@ pub struct bcf_hdr_t {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct bcf_variant_t {
-    pub type_: c_int,
-    pub n: c_int,
+    pub type_: i32,
+    pub n: i32,
 }
 
 // original: bcf_fmt_t (htslib/vcf.h)
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct bcf_fmt_t {
-    pub id: c_int,
-    pub n: c_int,
-    pub size: c_int,
-    pub type_: c_int,
+    pub id: i32,
+    pub n: i32,
+    pub size: i32,
+    pub type_: i32,
     pub p: *mut u8,
     pub p_len: u32,
     pub _bitfield_align_1: [u32; 0],
@@ -256,14 +255,14 @@ pub union bcf_info_t__bindgen_ty_1 {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct bcf_info_t {
-    pub key: c_int,
-    pub type_: c_int,
+    pub key: i32,
+    pub type_: i32,
     pub v1: bcf_info_t__bindgen_ty_1,
     pub vptr: *mut u8,
     pub vptr_len: u32,
     pub _bitfield_align_1: [u32; 0],
     pub _bitfield_1: __BcfBitfieldUnit<[u8; 4usize]>,
-    pub len: c_int,
+    pub len: i32,
 }
 impl bcf_info_t {
     #[inline]
@@ -310,7 +309,7 @@ impl bcf_info_t {
 pub struct bcf_dec_t {
     /// FILTER ids. Logical count is `flt.len()` (the old `n_flt`/`m_flt`
     /// collapse into the Vec; `n_flt` field removed — use `flt.len()`).
-    pub flt: Vec<c_int>,
+    pub flt: Vec<i32>,
     /// ID string, NO trailing NUL (old `id` + `m_id`).
     pub id: Vec<u8>,
     /// Alleles, REF first then ALTs; each owned, NO trailing NUL
@@ -324,9 +323,9 @@ pub struct bcf_dec_t {
     /// Per-allele variant classification (old `var` + `m_var`/`n_var`).
     /// Logical count is `var.len()`; `n_var` field removed.
     pub var: Vec<bcf_variant_t>,
-    pub var_type: c_int,
-    pub shared_dirty: c_int,
-    pub indiv_dirty: c_int,
+    pub var_type: i32,
+    pub shared_dirty: i32,
+    pub indiv_dirty: i32,
 }
 
 // PARITY MIRROR for `bcf_dec_t`. Keeps the ORIGINAL raw `#[repr(C)]` layout
@@ -337,24 +336,24 @@ pub struct bcf_dec_t {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct bcf_dec_c_t {
-    pub m_fmt: c_int,
-    pub m_info: c_int,
-    pub m_id: c_int,
-    pub m_als: c_int,
-    pub m_allele: c_int,
-    pub m_flt: c_int,
-    pub n_flt: c_int,
-    pub flt: *mut c_int,
+    pub m_fmt: i32,
+    pub m_info: i32,
+    pub m_id: i32,
+    pub m_als: i32,
+    pub m_allele: i32,
+    pub m_flt: i32,
+    pub n_flt: i32,
+    pub flt: *mut i32,
     pub id: *mut c_char,
     pub als: *mut c_char,
     pub allele: *mut *mut c_char,
     pub info: *mut bcf_info_t,
     pub fmt: *mut bcf_fmt_t,
     pub var: *mut bcf_variant_t,
-    pub n_var: c_int,
-    pub var_type: c_int,
-    pub shared_dirty: c_int,
-    pub indiv_dirty: c_int,
+    pub n_var: i32,
+    pub var_type: i32,
+    pub shared_dirty: i32,
+    pub indiv_dirty: i32,
 }
 
 // original: bcf1_t (htslib/vcf.h) — one BCF record. Bitfield layout:
@@ -376,10 +375,10 @@ pub struct bcf1_t {
     pub shared: kstring_t,
     pub indiv: kstring_t,
     pub d: bcf_dec_t,
-    pub max_unpack: c_int,
-    pub unpacked: c_int,
-    pub unpack_size: [c_int; 3usize],
-    pub errcode: c_int,
+    pub max_unpack: i32,
+    pub unpacked: i32,
+    pub unpack_size: [i32; 3usize],
+    pub errcode: i32,
 }
 
 // PARITY MIRROR for `bcf1_t`. Keeps the ORIGINAL raw `#[repr(C)]` layout
@@ -398,10 +397,10 @@ pub struct bcf1_c_t {
     pub shared: crate::htslib_rs::hts::kstring_c_t,
     pub indiv: crate::htslib_rs::hts::kstring_c_t,
     pub d: bcf_dec_c_t,
-    pub max_unpack: c_int,
-    pub unpacked: c_int,
-    pub unpack_size: [c_int; 3usize],
-    pub errcode: c_int,
+    pub max_unpack: i32,
+    pub unpacked: i32,
+    pub unpack_size: [i32; 3usize],
+    pub errcode: i32,
 }
 impl bcf1_t {
     #[inline]
@@ -454,26 +453,26 @@ pub struct bcf_sr_regions_t {
     pub line: kstring_t,
     pub file: *mut htsFile,
     pub fname: *mut c_char,
-    pub is_bin: c_int,
+    pub is_bin: i32,
     pub als: *mut *mut c_char,
     pub als_str: kstring_t,
-    pub nals: c_int,
-    pub mals: c_int,
-    pub als_type: c_int,
+    pub nals: i32,
+    pub mals: i32,
+    pub als_type: i32,
     pub missed_reg_handler:
         Option<unsafe extern "C" fn(arg1: *mut bcf_sr_regions_t, arg2: *mut c_void)>,
     pub missed_reg_data: *mut c_void,
     pub regs: *mut bcf_sr_region_t,
     pub seq_hash: *mut c_void,
     pub seq_names: *mut *mut c_char,
-    pub nseqs: c_int,
-    pub iseq: c_int,
+    pub nseqs: i32,
+    pub iseq: i32,
     pub start: crate::htslib_rs::hts::hts_pos_t,
     pub end: crate::htslib_rs::hts::hts_pos_t,
-    pub prev_seq: c_int,
+    pub prev_seq: i32,
     pub prev_start: crate::htslib_rs::hts::hts_pos_t,
     pub prev_end: crate::htslib_rs::hts::hts_pos_t,
-    pub overlap: c_int,
+    pub overlap: i32,
 }
 
 impl Default for bcf_sr_regions_t {
@@ -518,12 +517,12 @@ pub struct bcf_sr_t {
     pub itr: *mut hts_itr_t,
     pub fname: *mut c_char,
     pub buffer: *mut *mut bcf1_t,
-    pub nbuffer: c_int,
-    pub mbuffer: c_int,
-    pub nfilter_ids: c_int,
-    pub filter_ids: *mut c_int,
-    pub samples: *mut c_int,
-    pub n_smpl: c_int,
+    pub nbuffer: i32,
+    pub mbuffer: i32,
+    pub nfilter_ids: i32,
+    pub filter_ids: *mut i32,
+    pub samples: *mut i32,
+    pub n_smpl: i32,
 }
 
 // original: bcf_srs_t (htslib/synced_bcf_reader.h) — collection of synced
@@ -531,24 +530,24 @@ pub struct bcf_sr_t {
 #[repr(C)]
 #[derive(Clone)]
 pub struct bcf_srs_t {
-    pub collapse: c_int,
+    pub collapse: i32,
     pub apply_filters: *mut c_char,
-    pub require_index: c_int,
-    pub max_unpack: c_int,
-    pub has_line: *mut c_int,
+    pub require_index: i32,
+    pub max_unpack: i32,
+    pub has_line: *mut i32,
     pub errnum: bcf_sr_error,
     pub readers: *mut bcf_sr_t,
-    pub nreaders: c_int,
-    pub streaming: c_int,
-    pub explicit_regs: c_int,
+    pub nreaders: i32,
+    pub streaming: i32,
+    pub explicit_regs: i32,
     pub samples: *mut *mut c_char,
     pub regions: *mut bcf_sr_regions_t,
     pub targets: *mut bcf_sr_regions_t,
-    pub targets_als: c_int,
-    pub targets_exclude: c_int,
+    pub targets_als: i32,
+    pub targets_exclude: i32,
     pub tmps: kstring_t,
-    pub n_smpl: c_int,
-    pub n_threads: c_int,
+    pub n_smpl: i32,
+    pub n_threads: i32,
     pub p: *mut crate::htslib_rs::hts::htsThreadPool,
     pub aux: *mut BcfSrAux,
 }
@@ -579,7 +578,7 @@ impl Default for bcf_srs_t {
         }
     }
 }
-pub type bcf_variant_match = c_int;
+pub type bcf_variant_match = i32;
 
 // Native BCF/VCF enum constants and sentinel values (values from the C headers /
 // hts-sys bindings), replacing the hts_sys:: references throughout the VCF code.
@@ -680,8 +679,8 @@ pub const BCF_SR_PAIR_INDEL_REF: u32 = 32;
 pub const BCF_SR_PAIR_EXACT: u32 = 64;
 
 // Synced-reader error codes (`bcf_sr_error` enum in
-// htslib/synced_bcf_reader.h). Underlying type is `c_uint` per bindgen.
-pub type bcf_sr_error = c_uint;
+// htslib/synced_bcf_reader.h). Underlying type is `u32` per bindgen.
+pub type bcf_sr_error = u32;
 pub const bcf_sr_error_open_failed: bcf_sr_error = 0;
 pub const bcf_sr_error_not_bgzf: bcf_sr_error = 1;
 pub const bcf_sr_error_idx_load_failed: bcf_sr_error = 2;
@@ -701,38 +700,38 @@ pub const GT_HET_AA: u32 = 3;
 pub const GT_HAPL_R: u32 = 4;
 pub const GT_HAPL_A: u32 = 5;
 pub const GT_UNKN: u32 = 6;
-const BCF_IS_64BIT: c_int = 1 << 30;
-const BCF_HT_LONG: c_int = BCF_HT_INT as c_int | 0x100;
+const BCF_IS_64BIT: i32 = 1 << 30;
+const BCF_HT_LONG: i32 = BCF_HT_INT as i32 | 0x100;
 const BCF_MIN_BT_INT32: i64 = -2_147_483_640;
 const BCF_MIN_BT_INT64: i64 = -9_223_372_036_854_775_800;
-pub(crate) const REQUIRE_IDX_: c_int = 1;
-pub(crate) const ALLOW_NO_IDX_: c_int = 2;
+pub(crate) const REQUIRE_IDX_: i32 = 1;
+pub(crate) const ALLOW_NO_IDX_: i32 = 2;
 pub(crate) const MAX_CSI_COOR: hts_pos_t = (1_i64 << 44) - 1;
-const BCF_VL_P: c_int = 5;
-const BCF_VL_LA: c_int = 6;
-const BCF_VL_LG: c_int = 7;
-const BCF_VL_LR: c_int = 8;
-const BCF_VL_M: c_int = 9;
+const BCF_VL_P: i32 = 5;
+const BCF_VL_LA: i32 = 6;
+const BCF_VL_LG: i32 = 7;
+const BCF_VL_LR: i32 = 8;
+const BCF_VL_M: i32 = 9;
 const BCF_VL_NUMBER: u64 = 0xfffff;
-const VCF_DEF: c_int = 4_002_000;
-const VCF44: c_int = 4_004_000;
-const VCF45: c_int = 4_005_000;
+const VCF_DEF: i32 = 4_002_000;
+const VCF44: i32 = 4_004_000;
+const VCF45: i32 = 4_005_000;
 const BCF_TYPE_SHIFT: [usize; 16] = [0, 0, 1, 2, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
 #[repr(C)]
 pub struct BcfSrSort {
     pub(crate) score: [u8; 256],
-    pub(crate) nvar: c_int,
-    pub(crate) mvar: c_int,
+    pub(crate) nvar: i32,
+    pub(crate) mvar: i32,
     pub(crate) var: *mut c_void,
-    pub(crate) nvset: c_int,
-    pub(crate) mvset: c_int,
-    pub(crate) mpmat: c_int,
-    pub(crate) pmat: *mut c_int,
-    pub(crate) ngrp: c_int,
-    pub(crate) mgrp: c_int,
-    pub(crate) mcnt: c_int,
-    pub(crate) cnt: *mut c_int,
+    pub(crate) nvset: i32,
+    pub(crate) mvset: i32,
+    pub(crate) mpmat: i32,
+    pub(crate) pmat: *mut i32,
+    pub(crate) ngrp: i32,
+    pub(crate) mgrp: i32,
+    pub(crate) mcnt: i32,
+    pub(crate) cnt: *mut i32,
     pub(crate) grp: *mut c_void,
     pub(crate) vset: *mut c_void,
     pub(crate) vcf_buf: *mut c_void,
@@ -740,19 +739,19 @@ pub struct BcfSrSort {
     pub(crate) grp_str2int: *mut c_void,
     pub(crate) var_str2int: *mut c_void,
     pub(crate) str_: kstring_t,
-    pub(crate) moff: c_int,
-    pub(crate) noff: c_int,
-    pub(crate) off: *mut c_int,
-    pub(crate) mcharp: c_int,
+    pub(crate) moff: i32,
+    pub(crate) noff: i32,
+    pub(crate) off: *mut i32,
+    pub(crate) mcharp: i32,
     pub(crate) charp: *mut *mut c_char,
     pub(crate) chr: *const c_char,
     pub(crate) pos: hts_pos_t,
-    pub(crate) nsr: c_int,
-    pub(crate) msr: c_int,
-    pub(crate) pair: c_int,
-    pub(crate) nactive: c_int,
-    pub(crate) mactive: c_int,
-    pub(crate) active: *mut c_int,
+    pub(crate) nsr: i32,
+    pub(crate) msr: i32,
+    pub(crate) pair: i32,
+    pub(crate) nactive: i32,
+    pub(crate) mactive: i32,
+    pub(crate) active: *mut i32,
 }
 
 impl Default for BcfSrSort {
@@ -796,19 +795,19 @@ impl Default for BcfSrSort {
 
 #[repr(C)]
 pub(crate) struct BcfSrSortVcfBuf {
-    pub(crate) nrec: c_int,
-    pub(crate) mrec: c_int,
+    pub(crate) nrec: i32,
+    pub(crate) mrec: i32,
     pub(crate) rec: *mut *mut bcf1_t,
 }
 
 #[repr(C)]
 pub(crate) struct BcfSrSortVar {
     pub(crate) str_: *mut c_char,
-    pub(crate) type_: c_int,
-    pub(crate) nalt: c_int,
-    pub(crate) nvcf: c_int,
-    pub(crate) mvcf: c_int,
-    pub(crate) vcf: *mut c_int,
+    pub(crate) type_: i32,
+    pub(crate) nalt: i32,
+    pub(crate) nvcf: i32,
+    pub(crate) mvcf: i32,
+    pub(crate) vcf: *mut i32,
     pub(crate) rec: *mut *mut bcf1_t,
     pub(crate) mask: *mut kbitset_t,
 }
@@ -816,27 +815,27 @@ pub(crate) struct BcfSrSortVar {
 #[repr(C)]
 pub(crate) struct BcfSrSortGrp {
     pub(crate) key: *mut c_char,
-    pub(crate) nvar: c_int,
-    pub(crate) mvar: c_int,
-    pub(crate) var: *mut c_int,
-    pub(crate) nvcf: c_int,
+    pub(crate) nvar: i32,
+    pub(crate) mvar: i32,
+    pub(crate) var: *mut i32,
+    pub(crate) nvcf: i32,
 }
 
 #[repr(C)]
 pub(crate) struct BcfSrSortVarSet {
-    pub(crate) nvar: c_int,
-    pub(crate) mvar: c_int,
-    pub(crate) var: *mut c_int,
-    pub(crate) cnt: c_int,
+    pub(crate) nvar: i32,
+    pub(crate) mvar: i32,
+    pub(crate) var: *mut i32,
+    pub(crate) cnt: i32,
     pub(crate) mask: *mut kbitset_t,
 }
 
 #[repr(C)]
 pub struct BcfSrAux {
     pub(crate) sort: BcfSrSort,
-    pub(crate) regions_overlap: c_int,
-    pub(crate) targets_overlap: c_int,
-    pub(crate) closefile: *mut c_int,
+    pub(crate) regions_overlap: i32,
+    pub(crate) targets_overlap: i32,
+    pub(crate) closefile: *mut i32,
 }
 
 impl Default for BcfSrAux {
@@ -861,16 +860,16 @@ pub(crate) struct BcfSrRegion1 {
 #[derive(Clone, Copy)]
 pub(crate) struct BcfSrRegion {
     pub(crate) regs: *mut BcfSrRegion1,
-    pub(crate) nregs: c_int,
-    pub(crate) mregs: c_int,
-    pub(crate) creg: c_int,
+    pub(crate) nregs: i32,
+    pub(crate) mregs: i32,
+    pub(crate) creg: i32,
 }
 
 pub(crate) unsafe fn bcf_sr_aux_mut(readers: *mut bcf_srs_t) -> *mut BcfSrAux {
     unsafe { (*readers).aux }
 }
 
-pub(crate) unsafe fn bcf_sr_sort_reserve_active(srt: *mut BcfSrSort, need: c_int) -> c_int {
+pub(crate) unsafe fn bcf_sr_sort_reserve_active(srt: *mut BcfSrSort, need: i32) -> i32 {
     unsafe {
         if srt.is_null() {
             return -1;
@@ -880,7 +879,7 @@ pub(crate) unsafe fn bcf_sr_sort_reserve_active(srt: *mut BcfSrSort, need: c_int
         }
 
         let active =
-            libc::realloc((*srt).active.cast(), need as usize * size_of::<c_int>()).cast::<c_int>();
+            libc::realloc((*srt).active.cast(), need as usize * size_of::<i32>()).cast::<i32>();
         if active.is_null() {
             return -1;
         }
@@ -893,7 +892,7 @@ pub(crate) unsafe fn bcf_sr_sort_reserve_active(srt: *mut BcfSrSort, need: c_int
 pub(crate) unsafe fn bcf_sr_sort_reserve_vcf_buf(
     readers: *mut bcf_srs_t,
     srt: *mut BcfSrSort,
-) -> c_int {
+) -> i32 {
     unsafe {
         if readers.is_null() || srt.is_null() || (*readers).nreaders < 0 {
             return -1;
@@ -926,7 +925,7 @@ pub(crate) unsafe fn bcf_sr_sort_reserve_vcf_buf(
     }
 }
 
-pub(crate) unsafe fn bcf_sr_sort_shift_reader_buffer(reader: *mut bcf_sr_t, j: c_int) -> c_int {
+pub(crate) unsafe fn bcf_sr_sort_shift_reader_buffer(reader: *mut bcf_sr_t, j: i32) -> i32 {
     unsafe {
         if reader.is_null() || (*reader).buffer.is_null() || j < 1 || j > (*reader).nbuffer {
             return -1;
@@ -944,7 +943,7 @@ pub(crate) unsafe fn bcf_sr_sort_shift_reader_buffer(reader: *mut bcf_sr_t, j: c
     }
 }
 
-unsafe fn bcf_sr_sort_reserve_row(buf: *mut BcfSrSortVcfBuf, need: c_int) -> c_int {
+unsafe fn bcf_sr_sort_reserve_row(buf: *mut BcfSrSortVcfBuf, need: i32) -> i32 {
     unsafe {
         if buf.is_null() || need < 0 {
             return -1;
@@ -965,8 +964,8 @@ unsafe fn bcf_sr_sort_reserve_row(buf: *mut BcfSrSortVcfBuf, need: c_int) -> c_i
 
 pub(crate) unsafe fn bcf_sr_sort_append_empty_row(
     vcf_buf: *mut BcfSrSortVcfBuf,
-    nreaders: c_int,
-) -> c_int {
+    nreaders: i32,
+) -> i32 {
     unsafe {
         if vcf_buf.is_null() || nreaders <= 0 {
             return -1;
@@ -990,10 +989,10 @@ pub(crate) unsafe fn bcf_sr_sort_record_key(
     rec: *mut bcf1_t,
 ) -> Option<Vec<u8>> {
     unsafe {
-        if rec.is_null() || bcf_unpack(rec, BCF_UN_STR as c_int) < 0 {
+        if rec.is_null() || bcf_unpack(rec, BCF_UN_STR as i32) < 0 {
             return None;
         }
-        let n_allele = (*rec).n_allele() as c_int;
+        let n_allele = (*rec).n_allele() as i32;
         let d = &(*rec).d;
         if n_allele <= 0 || d.allele.is_empty() || d.allele[0].is_empty() {
             return None;
@@ -1022,7 +1021,7 @@ pub(crate) unsafe fn bcf_sr_sort_record_key(
         }
 
         if has_symbolic_alt && !hdr.is_null() {
-            if bcf_unpack(rec, BCF_UN_INFO as c_int) < 0 {
+            if bcf_unpack(rec, BCF_UN_INFO as i32) < 0 {
                 return None;
             }
             let info = bcf_get_info(hdr, rec, c"END".as_ptr());
@@ -1040,8 +1039,8 @@ pub(crate) unsafe fn bcf_sr_sort_record_key(
 
 pub(crate) fn bcf_sr_sort_disambiguate_duplicate_key(
     key: &mut Vec<u8>,
-    seen: &[(Vec<u8>, c_int, *mut bcf1_t)],
-    reader_idx: c_int,
+    seen: &[(Vec<u8>, i32, *mut bcf1_t)],
+    reader_idx: i32,
 ) {
     let base_len = key.len();
     let mut duplicate_idx = 0;
@@ -1058,16 +1057,16 @@ pub(crate) fn bcf_sr_sort_disambiguate_duplicate_key(
     }
 }
 
-unsafe fn bcf_sr_regions_overlap_ptr(regions: *mut bcf_sr_regions_t) -> *mut c_int {
+unsafe fn bcf_sr_regions_overlap_ptr(regions: *mut bcf_sr_regions_t) -> *mut i32 {
     unsafe {
         regions
             .cast::<u8>()
             .add(size_of::<bcf_sr_regions_t>())
-            .cast::<c_int>()
+            .cast::<i32>()
     }
 }
 
-pub(crate) unsafe fn bcf_sr_regions_set_overlap(regions: *mut bcf_sr_regions_t, overlap: c_int) {
+pub(crate) unsafe fn bcf_sr_regions_set_overlap(regions: *mut bcf_sr_regions_t, overlap: i32) {
     unsafe {
         *bcf_sr_regions_overlap_ptr(regions) = overlap;
     }
@@ -1094,7 +1093,7 @@ pub(crate) unsafe fn bcf_sr_regions_add(
     chr: *const c_char,
     mut start: hts_pos_t,
     mut end: hts_pos_t,
-) -> c_int {
+) -> i32 {
     unsafe {
         if reg.is_null() || chr.is_null() {
             return -1;
@@ -1109,14 +1108,14 @@ pub(crate) unsafe fn bcf_sr_regions_add(
         }
 
         if (*reg).seq_hash.is_null() {
-            (*reg).seq_hash = super::sam::khash_str2int_init();
+            (*reg).seq_hash = super::sam::khash_str2int_init().cast();
             if (*reg).seq_hash.is_null() {
                 return -1;
             }
         }
 
         let mut iseq = -1;
-        if super::sam::khash_str2int_get((*reg).seq_hash, chr, &mut iseq) < 0 {
+        if super::sam::khash_str2int_get((*reg).seq_hash.cast(), chr.cast::<u8>(), &mut iseq) < 0 {
             iseq = (*reg).nseqs;
             let new_nseqs = (*reg).nseqs + 1;
 
@@ -1151,7 +1150,7 @@ pub(crate) unsafe fn bcf_sr_regions_add(
                 mregs: 0,
                 creg: -1,
             };
-            if super::sam::khash_str2int_set((*reg).seq_hash, seq_name, iseq) < 0 {
+            if super::sam::khash_str2int_set((*reg).seq_hash.cast(), seq_name.cast::<u8>(), iseq) < 0 {
                 return -1;
             }
             (*reg).nseqs = new_nseqs;
@@ -1209,7 +1208,7 @@ pub(crate) unsafe fn regions_merge(reg: *mut BcfSrRegion) {
     }
 }
 
-pub(crate) unsafe fn advance_creg(reg: *mut BcfSrRegion) -> c_int {
+pub(crate) unsafe fn advance_creg(reg: *mut BcfSrRegion) -> i32 {
     unsafe {
         if reg.is_null() {
             return -1;
@@ -1229,7 +1228,7 @@ pub(crate) unsafe fn advance_creg(reg: *mut BcfSrRegion) -> c_int {
     }
 }
 
-unsafe fn bcf_vcf45_number_code(number: *const c_char) -> Option<c_int> {
+unsafe fn bcf_vcf45_number_code(number: *const c_char) -> Option<i32> {
     unsafe {
         if number.is_null() {
             None
@@ -1258,7 +1257,7 @@ unsafe fn bcf_hdr_fix_vcf45_vl_types(hdr: *mut bcf_hdr_t) {
         for i in 0..(*hdr).nhrec {
             let hrec = *(*hdr).hrec.add(i as usize);
             if hrec.is_null()
-                || ((*hrec).type_ != BCF_HL_INFO as c_int && (*hrec).type_ != BCF_HL_FMT as c_int)
+                || ((*hrec).type_ != BCF_HL_INFO as i32 && (*hrec).type_ != BCF_HL_FMT as i32)
             {
                 continue;
             }
@@ -1276,7 +1275,7 @@ unsafe fn bcf_hdr_fix_vcf45_vl_types(hdr: *mut bcf_hdr_t) {
             if id_idx < 0 {
                 continue;
             }
-            let id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, *(*hrec).vals.add(id_idx as usize));
+            let id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, *(*hrec).vals.add(id_idx as usize));
             if id < 0 {
                 continue;
             }
@@ -1296,13 +1295,13 @@ unsafe fn bcf_hdr_fix_vcf45_vl_types(hdr: *mut bcf_hdr_t) {
 
 pub unsafe fn vcf_c_796_bcf_hdr_set_idx(
     hdr: *mut bcf_hdr_t,
-    dict_type: c_int,
+    dict_type: i32,
     tag: *const c_char,
     idinfo: *mut bcf_idinfo_t,
-) -> c_int {
+) -> i32 {
     unsafe {
         if hdr.is_null() || idinfo.is_null() || !(0..3).contains(&dict_type) {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+            *libc::__errno_location() = libc::EINVAL;
             return -1;
         }
 
@@ -1310,7 +1309,7 @@ pub unsafe fn vcf_c_796_bcf_hdr_set_idx(
         if (*idinfo).id == -1 {
             (*idinfo).id = (*hdr).n[dict];
         } else if (*idinfo).id < 0 {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+            *libc::__errno_location() = libc::EINVAL;
             return -1;
         } else if (*idinfo).id < (*hdr).n[dict]
             && !(*(*hdr).id[dict].add((*idinfo).id as usize)).key.is_null()
@@ -1324,10 +1323,10 @@ pub unsafe fn vcf_c_796_bcf_hdr_set_idx(
             .unwrap_or_default();
             crate::htslib_rs::hts::hts_log_cstr(
                 crate::htslib_rs::hts::HTS_LOG_ERROR,
-                c"bcf_hdr_set_idx".as_ptr(),
-                msg.as_ptr(),
+                b"bcf_hdr_set_idx",
+                msg.to_bytes(),
             );
-            *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+            *libc::__errno_location() = libc::EINVAL;
             return -1;
         }
 
@@ -1365,10 +1364,10 @@ pub unsafe fn vcf_c_1026_bcf_hdr_unregister_hrec(hdr: *mut bcf_hdr_t, hrec: *mut
             return;
         }
         let hrec_type = (*hrec).type_;
-        if hrec_type != BCF_HL_FLT as c_int
-            && hrec_type != BCF_HL_INFO as c_int
-            && hrec_type != BCF_HL_FMT as c_int
-            && hrec_type != BCF_HL_CTG as c_int
+        if hrec_type != BCF_HL_FLT as i32
+            && hrec_type != BCF_HL_INFO as i32
+            && hrec_type != BCF_HL_FMT as i32
+            && hrec_type != BCF_HL_CTG as i32
         {
             return;
         }
@@ -1382,10 +1381,10 @@ pub unsafe fn vcf_c_1026_bcf_hdr_unregister_hrec(hdr: *mut bcf_hdr_t, hrec: *mut
             return;
         }
 
-        let dict_type = if hrec_type == BCF_HL_CTG as c_int {
-            BCF_DT_CTG as c_int
+        let dict_type = if hrec_type == BCF_HL_CTG as i32 {
+            BCF_DT_CTG as i32
         } else {
-            BCF_DT_ID as c_int
+            BCF_DT_ID as i32
         };
         let id = bcf_hdr_id2int(hdr, dict_type, id_value);
         if id < 0 || id >= (*hdr).n[dict_type as usize] {
@@ -1396,7 +1395,7 @@ pub unsafe fn vcf_c_1026_bcf_hdr_unregister_hrec(hdr: *mut bcf_hdr_t, hrec: *mut
             return;
         }
         let idinfo = (*idpair).val.cast_mut();
-        let hrec_index = if hrec_type == BCF_HL_CTG as c_int {
+        let hrec_index = if hrec_type == BCF_HL_CTG as i32 {
             0
         } else {
             hrec_type
@@ -1455,7 +1454,7 @@ pub(crate) unsafe fn bcf_sr_regions_destroy_translated(reg: *mut bcf_sr_regions_
         }
         libc::free((*reg).regs.cast());
         libc::free((*reg).seq_names.cast());
-        super::sam::khash_str2int_destroy((*reg).seq_hash);
+        super::sam::khash_str2int_destroy((*reg).seq_hash.cast());
         libc::free(reg.cast());
     }
 }
@@ -1586,14 +1585,14 @@ pub(crate) unsafe fn regions_init_string(str_: *const c_char) -> *mut bcf_sr_reg
 #[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn regions_parse_line(
     line: *mut c_char,
-    ichr: c_int,
-    ifrom: c_int,
-    ito: c_int,
+    ichr: i32,
+    ifrom: i32,
+    ito: i32,
     chr: *mut *mut c_char,
     chr_end: *mut *mut c_char,
     from: *mut hts_pos_t,
     to: *mut hts_pos_t,
-) -> c_int {
+) -> i32 {
     unsafe {
         if line.is_null()
             || chr.is_null()
@@ -1703,10 +1702,10 @@ pub(crate) unsafe fn regions_parse_line(
 unsafe fn init_filters(
     hdr: *const bcf_hdr_t,
     filters: *const c_char,
-    nfilters: *mut c_int,
-) -> *mut c_int {
+    nfilters: *mut i32,
+) -> *mut i32 {
     unsafe {
-        let mut out: *mut c_int = std::ptr::null_mut();
+        let mut out: *mut i32 = std::ptr::null_mut();
         let mut nout = 0;
         let mut prev = filters;
         let mut tmp = filters;
@@ -1714,8 +1713,8 @@ unsafe fn init_filters(
         loop {
             let ch = *tmp;
             if ch == b',' as c_char || ch == 0 {
-                let otmp = libc::realloc(out.cast(), (nout as usize + 1) * size_of::<c_int>())
-                    .cast::<c_int>();
+                let otmp = libc::realloc(out.cast(), (nout as usize + 1) * size_of::<i32>())
+                    .cast::<i32>();
                 if otmp.is_null() {
                     libc::free(out.cast());
                     return std::ptr::null_mut();
@@ -1736,7 +1735,7 @@ unsafe fn init_filters(
                     }
                     let mut str_cstr = str_.data.clone();
                     str_cstr.push(0);
-                    let id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, str_cstr.as_ptr().cast());
+                    let id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, str_cstr.as_ptr().cast());
                     if id >= 0 {
                         *out.add(nout as usize) = id;
                         nout += 1;
@@ -1774,31 +1773,31 @@ pub(crate) unsafe fn bcf_sr_seek_start(readers: *mut bcf_srs_t) {
 }
 
 #[cfg(test)]
-unsafe fn bcf_sr_regions_get_overlap(regions: *mut bcf_sr_regions_t) -> c_int {
+unsafe fn bcf_sr_regions_get_overlap(regions: *mut bcf_sr_regions_t) -> i32 {
     unsafe { *bcf_sr_regions_overlap_ptr(regions) }
 }
 
 // Native translation of htslib/vcf_sweep.c struct bcf_sweep_t.
-pub(crate) const SW_FWD: c_int = 0;
-pub(crate) const SW_BWD: c_int = 1;
+pub(crate) const SW_FWD: i32 = 0;
+pub(crate) const SW_BWD: i32 = 1;
 
 pub struct bcf_sweep_t {
     pub(crate) file: *mut htsFile,
     pub(crate) hdr: *mut bcf_hdr_t,
     pub(crate) fp: *mut BGZF,
 
-    pub(crate) direction: c_int,
-    pub(crate) block_size: c_int,
+    pub(crate) direction: i32,
+    pub(crate) block_size: i32,
     pub(crate) rec: Vec<bcf1_t>,
     pub(crate) nrec: usize,
-    pub(crate) lrid: c_int,
-    pub(crate) lpos: c_int,
-    pub(crate) lnals: c_int,
+    pub(crate) lrid: i32,
+    pub(crate) lpos: i32,
+    pub(crate) lnals: i32,
     pub(crate) lals: Vec<u8>,
 
     pub(crate) idx: Vec<u64>,
     pub(crate) iidx: usize,
-    pub(crate) idx_done: c_int,
+    pub(crate) idx_done: i32,
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_init().
@@ -1860,7 +1859,7 @@ pub unsafe fn bcf_hdr_init(mode: *const c_char) -> *mut bcf_hdr_t {
     libc::free((*h).dict[0]); // free the original kh_vdict_t shell (arrays now owned by aux.dict)
     (*h).dict[0] = aux.cast();
 
-    if !libc::strchr(mode, b'w' as c_int).is_null() {
+    if !libc::strchr(mode, b'w' as i32).is_null() {
         bcf_hdr_append(h, c"##fileformat=VCFv4.2".as_ptr());
         // The filter PASS must appear first in the dictionary
         bcf_hdr_append(
@@ -1912,7 +1911,7 @@ pub unsafe fn bcf_hdr_destroy(h: *mut bcf_hdr_t) {
         libc::free((*h).id[i].cast());
         i += 1;
     }
-    let mut i: c_int = 0;
+    let mut i: i32 = 0;
     while i < (*h).nhrec {
         bcf_hrec_destroy(*(*h).hrec.add(i as usize));
         i += 1;
@@ -2020,7 +2019,7 @@ pub unsafe fn bcf_clear(v: *mut bcf1_t) {
 // For bgzf-backed files this uses the virtual-offset aware bgzf_useek(); for a
 // plain hFILE it seeks the buffered handle (NOT the raw fd) so it stays in sync
 // with the buffer-aware tell below.
-unsafe fn sw_useek(fp: *mut htsFile, uoffset: i64, where_: c_int) -> c_int {
+unsafe fn sw_useek(fp: *mut htsFile, uoffset: i64, where_: i32) -> i32 {
     if ((*fp).bitfields & (1 << 4)) != 0 {
         bgzf_useek((*fp).fp.bgzf, uoffset, where_)
     } else if hseek((*fp).fp.hfile, uoffset as libc::off_t, libc::SEEK_SET) >= 0 {
@@ -2041,7 +2040,7 @@ pub(crate) unsafe fn sw_utell(fp: *mut htsFile) -> i64 {
 
 // htslib/htslib/vcf.h: #define bcf_read1(fp,h,v) bcf_read((fp),(h),(v))
 #[inline]
-pub(crate) unsafe fn bcf_read1(fp: *mut htsFile, h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int {
+pub(crate) unsafe fn bcf_read1(fp: *mut htsFile, h: *const bcf_hdr_t, v: *mut bcf1_t) -> i32 {
     bcf_read(fp, h, v)
 }
 
@@ -2052,14 +2051,14 @@ pub(crate) unsafe fn bcf_empty1(v: *mut bcf1_t) {
 }
 
 // Native translation of htslib/vcf_sweep.c sw_rec_equal().
-unsafe fn sw_rec_equal(sw: &bcf_sweep_t, rec: &bcf1_t) -> c_int {
+unsafe fn sw_rec_equal(sw: &bcf_sweep_t, rec: &bcf1_t) -> i32 {
     if sw.lrid != rec.rid {
         return 0;
     }
-    if sw.lpos != rec.pos as c_int {
+    if sw.lpos != rec.pos as i32 {
         return 0;
     }
-    if sw.lnals != rec.n_allele() as c_int {
+    if sw.lnals != rec.n_allele() as i32 {
         return 0;
     }
 
@@ -2080,7 +2079,7 @@ unsafe fn sw_rec_equal(sw: &bcf_sweep_t, rec: &bcf1_t) -> c_int {
 }
 
 // Native translation of htslib/vcf_sweep.c sw_rec_save().
-unsafe fn sw_rec_save(sw: &mut bcf_sweep_t, rec: &bcf1_t) -> c_int {
+unsafe fn sw_rec_save(sw: &mut bcf_sweep_t, rec: &bcf1_t) -> i32 {
     let (lrid, lpos, lnals, alleles) = sw_rec_snapshot(rec);
     sw.lrid = lrid;
     sw.lpos = lpos;
@@ -2091,8 +2090,8 @@ unsafe fn sw_rec_save(sw: &mut bcf_sweep_t, rec: &bcf1_t) -> c_int {
     0 // FIXME: check for errs in this function
 }
 
-unsafe fn sw_rec_snapshot(rec: &bcf1_t) -> (c_int, c_int, c_int, Vec<u8>) {
-    let nals = rec.n_allele() as c_int;
+unsafe fn sw_rec_snapshot(rec: &bcf1_t) -> (i32, i32, i32, Vec<u8>) {
+    let nals = rec.n_allele() as i32;
     // The C code snapshotted the packed NUL-separated allele block from REF
     // through the last ALT (NULs between alleles, none trailing). Rebuild the
     // same byte string from the owned per-allele Vecs.
@@ -2103,11 +2102,11 @@ unsafe fn sw_rec_snapshot(rec: &bcf1_t) -> (c_int, c_int, c_int, Vec<u8>) {
         }
         alleles.extend_from_slice(&rec.d.allele[i]);
     }
-    (rec.rid, rec.pos as c_int, nals, alleles)
+    (rec.rid, rec.pos as i32, nals, alleles)
 }
 
 // Native translation of htslib/vcf_sweep.c sw_fill_buffer().
-pub(crate) unsafe fn sw_fill_buffer(sw: &mut bcf_sweep_t) -> c_int {
+pub(crate) unsafe fn sw_fill_buffer(sw: &mut bcf_sweep_t) -> i32 {
     if sw.iidx == 0 {
         return 0;
     }
@@ -2122,7 +2121,7 @@ pub(crate) unsafe fn sw_fill_buffer(sw: &mut bcf_sweep_t) -> c_int {
     }
     let mut rec = sw.rec.as_mut_ptr().add(sw.nrec);
     while bcf_read1(sw.file, sw.hdr, rec) == 0 {
-        bcf_unpack(rec, BCF_UN_STR as c_int);
+        bcf_unpack(rec, BCF_UN_STR as i32);
 
         // if not in the last block, stop at the saved record
         if sw.iidx + 1 < sw.idx.len() && sw_rec_equal(sw, &*rec) != 0 {
@@ -2146,7 +2145,7 @@ pub(crate) unsafe fn sw_fill_buffer(sw: &mut bcf_sweep_t) -> c_int {
 }
 
 // Native translation of htslib/vcf_sweep.c sw_seek().
-pub(crate) unsafe fn sw_seek(sw: &mut bcf_sweep_t, direction: c_int) {
+pub(crate) unsafe fn sw_seek(sw: &mut bcf_sweep_t, direction: i32) {
     sw.direction = direction;
     if direction == SW_FWD {
         if let Some(offset) = sw.idx.first().copied() {
@@ -2160,7 +2159,7 @@ pub(crate) unsafe fn sw_seek(sw: &mut bcf_sweep_t, direction: c_int) {
 
 // Native translation of htslib's hts_expand() macro for char arrays:
 //   if requested n exceeds current allocation m, grow m and realloc the buffer.
-unsafe fn hts_expand_char(n: c_int, m: *mut c_int, ptr: *mut *mut c_char) {
+unsafe fn hts_expand_char(n: i32, m: *mut i32, ptr: *mut *mut c_char) {
     if n > *m {
         let mut new_m = n;
         kroundup32(&mut new_m);
@@ -2170,7 +2169,7 @@ unsafe fn hts_expand_char(n: c_int, m: *mut c_int, ptr: *mut *mut c_char) {
 }
 
 // Native translation of htslib's hts_expand() macro for uint64_t arrays.
-pub(crate) unsafe fn hts_expand_u64(n: c_int, m: *mut c_int, ptr: *mut *mut u64) {
+pub(crate) unsafe fn hts_expand_u64(n: i32, m: *mut i32, ptr: *mut *mut u64) {
     if n > *m {
         let mut new_m = n;
         kroundup32(&mut new_m);
@@ -2181,7 +2180,7 @@ pub(crate) unsafe fn hts_expand_u64(n: c_int, m: *mut c_int, ptr: *mut *mut u64)
 
 // Native translation of htslib's hts_expand0() macro for bcf1_t arrays:
 //   like hts_expand() but zero-initialises the newly allocated tail.
-unsafe fn hts_expand0_bcf1(n: c_int, m: *mut c_int, ptr: *mut *mut bcf1_t) {
+unsafe fn hts_expand0_bcf1(n: i32, m: *mut i32, ptr: *mut *mut bcf1_t) {
     if n > *m {
         let old_m = *m;
         let mut new_m = n;
@@ -2193,7 +2192,7 @@ unsafe fn hts_expand0_bcf1(n: c_int, m: *mut c_int, ptr: *mut *mut bcf1_t) {
 }
 
 // Native translation of htslib kroundup32(): round up to the next power of two.
-fn kroundup32(x: &mut c_int) {
+fn kroundup32(x: &mut i32) {
     let mut v = *x as u32;
     v -= 1;
     v |= v >> 1;
@@ -2202,7 +2201,7 @@ fn kroundup32(x: &mut c_int) {
     v |= v >> 8;
     v |= v >> 16;
     v += 1;
-    *x = v as c_int;
+    *x = v as i32;
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_read().
@@ -2259,7 +2258,7 @@ unsafe fn bcf_hdr_read_native(hfp: *mut htsFile) -> *mut bcf_hdr_t {
         | ((buf[2] as usize) << 16)
         | ((buf[3] as usize) << 24);
     if hlen == usize::MAX {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *libc::__errno_location() = libc::ENOMEM;
         return fail(htxt, h);
     }
     htxt = libc::malloc(hlen + 1).cast::<c_char>();
@@ -2289,8 +2288,8 @@ unsafe fn bcf_hdr_read_native(hfp: *mut htsFile) -> *mut bcf_hdr_t {
 pub unsafe fn bcf_hdr_set_samples(
     hdr: *mut bcf_hdr_t,
     samples: *const c_char,
-    is_file: c_int,
-) -> c_int {
+    is_file: i32,
+) -> i32 {
     if !samples.is_null() && libc::strcmp(c"-".as_ptr(), samples) == 0 {
         return 0; // keep all samples
     }
@@ -2335,15 +2334,15 @@ pub unsafe fn bcf_hdr_set_samples(
         }
     }
 
-    let mut ret: c_int = 0;
-    let mut n: c_int = 0;
+    let mut ret: i32 = 0;
+    let mut n: i32 = 0;
     let list_arg = if exclude { samples.add(1) } else { samples };
     let smpls = crate::htslib_rs::hts::hts_readlist(list_arg, is_file, &mut n);
     if smpls.is_null() {
         return -1;
     }
     for i in 0..n {
-        let idx = bcf_hdr_id2int(hdr, BCF_DT_SAMPLE as c_int, *smpls.add(i as usize));
+        let idx = bcf_hdr_id2int(hdr, BCF_DT_SAMPLE as i32, *smpls.add(i as usize));
         if idx < 0 {
             if ret == 0 {
                 ret = i + 1;
@@ -2389,7 +2388,7 @@ pub unsafe fn bcf_hdr_set_samples(
             if bit_array_test((*hdr).keep_samples, i) {
                 let sname = *(*hdr).samples.add(i as usize);
                 *samples_new.add(idx as usize) = sname;
-                let mut res: c_int = 0;
+                let mut res: i32 = 0;
                 let k = kh_put_vdict(new_dict, sname, &mut res);
                 if res < 0 {
                     libc::free(samples_new.cast());
@@ -2438,9 +2437,9 @@ pub unsafe fn bcf_hdr_set_samples(
 pub(crate) unsafe fn bcf_sr_add_hreader_impl(
     files: *mut bcf_srs_t,
     file_ptr: *mut htsFile,
-    autoclose: c_int,
+    autoclose: i32,
     idxname: *const c_char,
-) -> c_int {
+) -> i32 {
     unsafe {
         if file_ptr.is_null() {
             (*files).errnum = bcf_sr_error_open_failed;
@@ -2449,10 +2448,10 @@ pub(crate) unsafe fn bcf_sr_add_hreader_impl(
 
         (*files).has_line = hts_realloc_p_cc(
             (*files).has_line.cast(),
-            size_of::<c_int>(),
+            size_of::<i32>(),
             (*files).nreaders as usize + 1,
         )
-        .cast::<c_int>();
+        .cast::<i32>();
         *(*files).has_line.add((*files).nreaders as usize) = 0;
         (*files).readers = hts_realloc_p_cc(
             (*files).readers.cast(),
@@ -2485,7 +2484,15 @@ pub(crate) unsafe fn bcf_sr_add_hreader_impl(
                     (*files).errnum = bcf_sr_error_not_bgzf;
                     return 0;
                 }
-                (*reader).tbx_idx = super::tbx::tbx_index_load2((*file_ptr).fn_, idxname).cast();
+                (*reader).tbx_idx = super::tbx::tbx_index_load2(
+                    CStr::from_ptr((*file_ptr).fn_).to_bytes(),
+                    if idxname.is_null() {
+                        None
+                    } else {
+                        Some(CStr::from_ptr(idxname).to_bytes())
+                    },
+                )
+                .cast();
                 if (*reader).tbx_idx.is_null() {
                     (*files).errnum = bcf_sr_error_idx_load_failed;
                     return 0;
@@ -2519,11 +2526,7 @@ pub(crate) unsafe fn bcf_sr_add_hreader_impl(
         if (*files).streaming != 0 && (*files).nreaders > 1 {
             if (*files).require_index == ALLOW_NO_IDX_ {
                 if !SR_NO_INDEX_WARNED.swap(true, Ordering::Relaxed) {
-                    libc::fprintf(
-                        c_compat::stderr.cast(),
-                        c"[W::bcf_sr_add_reader] Using multiple unindexed files may produce errors, make sure chromosomes are in the same order!\n"
-                            .as_ptr(),
-                    );
+                    eprintln!("[W::bcf_sr_add_reader] Using multiple unindexed files may produce errors, make sure chromosomes are in the same order!");
                 }
             } else {
                 (*files).errnum = bcf_sr_error_api_usage_error;
@@ -2556,16 +2559,22 @@ pub(crate) unsafe fn bcf_sr_add_hreader_impl(
                     return 0;
                 }
             }
-            let mut n = 0;
-            let names = if !(*reader).tbx_idx.is_null() {
-                super::tbx::tbx_seqnames(&*(*reader).tbx_idx.cast::<super::tbx::tbx_t>(), &mut n)
+            let names: Vec<Vec<u8>> = if !(*reader).tbx_idx.is_null() {
+                super::tbx::tbx_seqnames(&*(*reader).tbx_idx.cast::<super::tbx::tbx_t>())
             } else {
-                bcf_hdr_seqnames((*reader).header, &mut n)
+                let mut n = 0;
+                let raw = bcf_hdr_seqnames((*reader).header, &mut n);
+                let v = (0..n as usize)
+                    .map(|i| CStr::from_ptr(*raw.add(i)).to_bytes().to_vec())
+                    .collect();
+                libc::free(raw.cast());
+                v
             };
-            for i in 0..n as usize {
-                bcf_sr_regions_add((*files).regions, *names.add(i), -1, -1);
+            for name in &names {
+                let mut chr = name.clone();
+                chr.push(0);
+                bcf_sr_regions_add((*files).regions, chr.as_ptr().cast(), -1, -1);
             }
-            libc::free(names.cast());
             regions_sort_and_merge((*files).regions);
         }
 
@@ -2588,10 +2597,10 @@ pub(crate) unsafe fn bcf_sr_add_hreader_impl(
         if !auxdata.is_null() {
             let tmp = hts_realloc_p_cc(
                 (*auxdata).closefile.cast(),
-                size_of::<c_int>(),
+                size_of::<i32>(),
                 (*files).nreaders as usize,
             )
-            .cast::<c_int>();
+            .cast::<i32>();
             if tmp.is_null() {
                 return 0;
             }
@@ -2606,7 +2615,7 @@ pub(crate) unsafe fn bcf_sr_add_hreader_impl(
 static SR_NO_INDEX_WARNED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-pub unsafe fn bcf_subset_format(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> c_int {
+pub unsafe fn bcf_subset_format(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> i32 {
     let ret = bcf_subset_format_core(hdr, rec);
     if ret == 0 {
         bcf_canonicalize_duplicate_format(rec);
@@ -2615,7 +2624,7 @@ pub unsafe fn bcf_subset_format(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> c_in
 }
 
 // Native translation of htslib/vcf.c bcf_subset_format().
-unsafe fn bcf_subset_format_core(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> c_int {
+unsafe fn bcf_subset_format_core(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> i32 {
     if (*hdr).keep_samples.is_null() {
         return 0;
     }
@@ -2626,12 +2635,12 @@ unsafe fn bcf_subset_format_core(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> c_i
     }
 
     let keep = (*hdr).keep_samples;
-    let bit_array_test = |i: c_int| (*keep.add((i / 8) as usize) & (1 << (i % 8))) != 0;
+    let bit_array_test = |i: i32| (*keep.add((i / 8) as usize) & (1 << (i % 8))) != 0;
 
     let mut ptr = (*rec).indiv.data.as_mut_ptr();
     let mut dst: *mut u8 = std::ptr::null_mut();
-    let n_fmt = (*rec).n_fmt() as c_int;
-    let n_sample = (*rec).n_sample() as c_int;
+    let n_fmt = (*rec).n_fmt() as i32;
+    let n_sample = (*rec).n_sample() as i32;
     (*rec).d.fmt.resize_with(n_fmt as usize, || std::mem::zeroed::<bcf_fmt_t>());
     for i in 0..n_fmt as usize {
         let d = &mut (*rec).d;
@@ -2674,16 +2683,16 @@ unsafe fn bcf_subset_format_core(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> c_i
         let d = &mut (*rec).d;
         d.fmt[i].p_len = (dst as usize - fmt_i.p as usize) as u32;
     }
-    (*rec).unpacked |= BCF_UN_FMT as c_int;
+    (*rec).unpacked |= BCF_UN_FMT as i32;
 
     (*rec).set_n_sample((*hdr).n[BCF_DT_SAMPLE as usize] as u32);
     0
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_write().
-pub unsafe fn bcf_hdr_write(hfp: *mut htsFile, h: *mut bcf_hdr_t) -> c_int {
+pub unsafe fn bcf_hdr_write(hfp: *mut htsFile, h: *mut bcf_hdr_t) -> i32 {
     if h.is_null() {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
     if (*h).dirty != 0 && bcf_hdr_sync(h) < 0 {
@@ -2703,7 +2712,7 @@ pub unsafe fn bcf_hdr_write(hfp: *mut htsFile, h: *mut bcf_hdr_t) -> c_int {
     if bcf_hdr_format(h, 1, &mut htxt) < 0 {
         return -1;
     }
-    kputc(b'\0' as c_int, &mut htxt); // include the \0 byte
+    kputc(b'\0' as i32, &mut htxt); // include the \0 byte
 
     let fp = hts_get_bgzfp(hfp);
     if bgzf_write(fp, c"BCF\x02\x02".as_ptr().cast(), 5) != 5 {
@@ -2744,7 +2753,7 @@ pub unsafe fn bcf_hdr_write(hfp: *mut htsFile, h: *mut bcf_hdr_t) -> c_int {
 const MAX_N_FMT: usize = 255; // Limited by size of bcf1_t n_fmt field
 
 #[inline]
-pub(crate) unsafe fn bcf_hdr_nsamples_native(h: *const bcf_hdr_t) -> c_int {
+pub(crate) unsafe fn bcf_hdr_nsamples_native(h: *const bcf_hdr_t) -> i32 {
     (*h).n[BCF_DT_SAMPLE as usize]
 }
 
@@ -2756,36 +2765,36 @@ unsafe fn vdict_val(d: *const kh_vdict_t, k: u32) -> *const bcf_idinfo_t {
 
 // bit_array_test(a,i): ((a)[(i)/8] & (1 << ((i)%8)))
 #[inline]
-unsafe fn bit_array_test(a: *const u8, i: c_int) -> bool {
+unsafe fn bit_array_test(a: *const u8, i: i32) -> bool {
     (*a.add((i / 8) as usize) & (1u8 << (i % 8) as u32)) != 0
 }
 
 // bit_array_size(n): ((n)/8+1)
 #[inline]
-fn bit_array_size(n: c_int) -> c_int {
+fn bit_array_size(n: i32) -> i32 {
     n / 8 + 1
 }
 
 // bit_array_set(a,i): ((a)[(i)/8] |= 1 << ((i)%8))
 #[inline]
-unsafe fn bit_array_set(a: *mut u8, i: c_int) {
+unsafe fn bit_array_set(a: *mut u8, i: i32) {
     *a.add((i / 8) as usize) |= 1u8 << (i % 8) as u32;
 }
 
 // bit_array_clear(a,i): ((a)[(i)/8] &= ~(1 << ((i)%8)))
 #[inline]
-unsafe fn bit_array_clear(a: *mut u8, i: c_int) {
+unsafe fn bit_array_clear(a: *mut u8, i: i32) {
     *a.add((i / 8) as usize) &= !(1u8 << (i % 8) as u32);
 }
 
 // align_mem(): pad kstring to an 8-byte boundary.
 #[inline]
-unsafe fn align_mem(s: *mut kstring_t) -> c_int {
+unsafe fn align_mem(s: *mut kstring_t) -> i32 {
     let mut e = 0;
     if (*s).data.len() & 7 != 0 {
         let zero: [u8; 8] = [0; 8];
         let pad = 8 - ((*s).data.len() & 7);
-        e = (kputsn(&zero, pad as size_t, &mut *s) < 0) as c_int;
+        e = (kputsn(&zero, pad as usize, &mut *s) < 0) as i32;
     }
     if e == 0 {
         0
@@ -2797,12 +2806,12 @@ unsafe fn align_mem(s: *mut kstring_t) -> c_int {
 // fmt_aux_t mirror of the C struct used while pivoting FORMAT data.
 #[derive(Clone, Copy)]
 struct FmtAux {
-    offset: c_int, // offset of buf into h->mem
-    key: c_int,    // BCF_DT_ID id
+    offset: i32, // offset of buf into h->mem
+    key: i32,    // BCF_DT_ID id
     max_m: u32,    // max number of values per array (sample)
     max_g: u32,    // max number of allele indexes (is_gt)
     max_l: u32,    // max length of field
-    size: c_int,   // per-sample byte size
+    size: i32,   // per-sample byte size
     is_gt: bool,
     y: u32, // h->id[0][key].val->info[BCF_HL_FMT]
     buf: *mut u8,
@@ -2850,7 +2859,7 @@ unsafe fn vcf_parse_format_empty1(
     v: *mut bcf1_t,
     p: *const c_char,
     q: *const c_char,
-) -> c_int {
+) -> i32 {
     let end = (*s).data.as_ptr().add((*s).data.len()) as *const c_char;
     if q >= end {
         vcf_log_error(format!(
@@ -2858,7 +2867,7 @@ unsafe fn vcf_parse_format_empty1(
             vcf_seqname_safe_str(h, v),
             (*v).pos + 1
         ));
-        (*v).errcode |= BCF_ERR_NCOLS as c_int;
+        (*v).errcode |= BCF_ERR_NCOLS as i32;
         return -1;
     }
 
@@ -2880,7 +2889,7 @@ unsafe fn vcf_parse_format_dict2(
     p: *mut c_char,
     _q: *mut c_char,
     fmt: *mut FmtAux,
-) -> c_int {
+) -> i32 {
     let d = (*h).dict[BCF_DT_ID as usize].cast::<kh_vdict_t>();
     let mut aux1 = super::hts::ks_tokaux_t {
         tab: [0; 4],
@@ -2892,7 +2901,7 @@ unsafe fn vcf_parse_format_dict2(
     let mut t = kstrtok(Some(CStr::from_ptr(p).to_bytes()), Some(b":"), &mut aux1);
     while !t.is_null() {
         if j >= MAX_N_FMT {
-            (*v).errcode |= BCF_ERR_LIMITS as c_int;
+            (*v).errcode |= BCF_ERR_LIMITS as i32;
             vcf_log_error(format!(
                 "FORMAT column at {}:{} lists more identifiers than htslib can handle",
                 vcf_seqname_safe_str(h, v),
@@ -2902,18 +2911,18 @@ unsafe fn vcf_parse_format_dict2(
         }
 
         *(aux1.p as *mut c_char) = 0;
-        let mut k = kh_get_vdict(d, t);
+        let mut k = kh_get_vdict(d, t.cast());
         if k == (*d).n_buckets || ((*vdict_val(d, k)).info[BCF_HL_FMT as usize] == 15) {
-            if *t == b'.' as c_char && *t.add(1) == 0 {
+            if *t == b'.' && *t.add(1) == 0 {
                 vcf_log_error(format!(
                     "Invalid FORMAT tag name '.' at {}:{}",
                     vcf_seqname_safe_str(h, v),
                     (*v).pos + 1
                 ));
-                (*v).errcode |= BCF_ERR_TAG_INVALID as c_int;
+                (*v).errcode |= BCF_ERR_TAG_INVALID as i32;
                 return -1;
             }
-            let tag = CStr::from_ptr(t).to_string_lossy().into_owned();
+            let tag = CStr::from_ptr(t.cast()).to_string_lossy().into_owned();
             vcf_log_warning(format!(
                 "FORMAT '{}' at {}:{} is not defined in the header, assuming Type=String",
                 tag,
@@ -2925,7 +2934,7 @@ unsafe fn vcf_parse_format_dict2(
                 tag
             ))
             .unwrap_or_default();
-            let mut l: c_int = 0;
+            let mut l: i32 = 0;
             let hrec = bcf_hdr_parse_line(h, tmp.as_ptr(), &mut l);
             let mut res = if !hrec.is_null() {
                 bcf_hdr_add_hrec(h.cast_mut(), hrec)
@@ -2938,8 +2947,8 @@ unsafe fn vcf_parse_format_dict2(
             if res > 0 {
                 res = bcf_hdr_sync(h.cast_mut());
             }
-            k = kh_get_vdict(d, t);
-            (*v).errcode |= BCF_ERR_TAG_UNDEF as c_int;
+            k = kh_get_vdict(d, t.cast());
+            (*v).errcode |= BCF_ERR_TAG_UNDEF as i32;
             if res != 0 || k == (*d).n_buckets {
                 vcf_log_error(format!(
                     "Could not add dummy header for FORMAT '{}' at {}:{}",
@@ -2947,7 +2956,7 @@ unsafe fn vcf_parse_format_dict2(
                     vcf_seqname_safe_str(h, v),
                     (*v).pos + 1
                 ));
-                (*v).errcode |= BCF_ERR_TAG_INVALID as c_int;
+                (*v).errcode |= BCF_ERR_TAG_INVALID as i32;
                 return -1;
             }
         }
@@ -2956,7 +2965,7 @@ unsafe fn vcf_parse_format_dict2(
         f.max_m = 0;
         f.max_g = 0;
         f.key = (*vdict_val(d, k)).id;
-        f.is_gt = *t == b'G' as c_char && *t.add(1) == b'T' as c_char && *t.add(2) == 0;
+        f.is_gt = *t == b'G' && *t.add(1) == b'T' && *t.add(2) == 0;
         f.y = (*(*(*h).id[0].add(f.key as usize)).val).info[BCF_HL_FMT as usize] as u32;
         (*v).set_n_fmt((*v).n_fmt() + 1);
 
@@ -2986,8 +2995,8 @@ unsafe fn vcf_parse_format_max3(
     _p: *mut c_char,
     q: *mut c_char,
     fmt: *mut FmtAux,
-) -> c_int {
-    let mut n_sample_ori: c_int = -1;
+) -> i32 {
+    let mut n_sample_ori: i32 = -1;
     let mut r = q.add(1); // r: position in the format string
     let mut l: u32;
     let mut m: u32 = 1;
@@ -3063,7 +3072,7 @@ unsafe fn vcf_parse_format_max3(
                                 chrom,
                                 (*v).pos + 1
                             ));
-                            (*v).errcode |= BCF_ERR_NCOLS as c_int;
+                            (*v).errcode |= BCF_ERR_NCOLS as i32;
                             return -1;
                         }
                     } else {
@@ -3078,7 +3087,7 @@ unsafe fn vcf_parse_format_max3(
         }
         // end_for:
         (*v).set_n_sample((*v).n_sample() + 1);
-        if (*v).n_sample() as c_int == bcf_hdr_nsamples_native(h) {
+        if (*v).n_sample() as i32 == bcf_hdr_nsamples_native(h) {
             break;
         }
         r = r.add(1);
@@ -3095,7 +3104,7 @@ unsafe fn vcf_parse_format_alloc4(
     _p: *const c_char,
     _q: *const c_char,
     fmt: *mut FmtAux,
-) -> c_int {
+) -> i32 {
     let mem: *mut kstring_t = std::ptr::addr_of!((*h).mem) as *mut kstring_t;
 
     for j in 0..(*v).n_fmt() as usize {
@@ -3107,12 +3116,12 @@ unsafe fn vcf_parse_format_alloc4(
         let htype = f.y >> 4 & 0xf;
         if htype == BCF_HT_STR {
             f.size = if f.is_gt {
-                (f.max_g << 2) as c_int
+                (f.max_g << 2) as i32
             } else {
-                f.max_l as c_int
+                f.max_l as i32
             };
         } else if htype == BCF_HT_REAL || htype == BCF_HT_INT {
-            f.size = (f.max_m << 2) as c_int;
+            f.size = (f.max_m << 2) as i32;
         } else {
             vcf_log_error(format!(
                 "The format type {} at {}:{} is currently not supported",
@@ -3120,7 +3129,7 @@ unsafe fn vcf_parse_format_alloc4(
                 vcf_seqname_safe_str(h, v),
                 (*v).pos + 1
             ));
-            (*v).errcode |= BCF_ERR_TAG_INVALID as c_int;
+            (*v).errcode |= BCF_ERR_TAG_INVALID as i32;
             return -1;
         }
 
@@ -3130,32 +3139,32 @@ unsafe fn vcf_parse_format_alloc4(
                 vcf_seqname_safe_str(h, v),
                 (*v).pos + 1
             ));
-            (*v).errcode |= BCF_ERR_LIMITS as c_int;
+            (*v).errcode |= BCF_ERR_LIMITS as i32;
             return -1;
         }
 
         // Limit the total memory to ~2Gb per VCF row.
-        if (*mem).data.len() as u64 + (*v).n_sample() as u64 * f.size as u64 > c_int::MAX as u64 {
+        if (*mem).data.len() as u64 + (*v).n_sample() as u64 * f.size as u64 > i32::MAX as u64 {
             vcf_log_warning(format!(
                 "Excessive memory required by FORMAT fields at {}:{}",
                 vcf_seqname_safe_str(h, v),
                 (*v).pos + 1
             ));
-            (*v).errcode |= BCF_ERR_LIMITS as c_int;
+            (*v).errcode |= BCF_ERR_LIMITS as i32;
             f.size = -1;
             f.offset = 0;
             continue;
         }
 
-        f.offset = (*mem).data.len() as c_int;
-        let mem_new_len = (*mem).data.len() + (*v).n_sample() as size_t * f.size as size_t;
+        f.offset = (*mem).data.len() as i32;
+        let mem_new_len = (*mem).data.len() + (*v).n_sample() as usize * f.size as usize;
         if super::hts::ks_resize(&mut *mem, mem_new_len) < 0 {
             vcf_log_error(format!(
                 "Memory allocation failure at {}:{}",
                 vcf_seqname_safe_str(h, v),
                 (*v).pos + 1
             ));
-            (*v).errcode |= BCF_ERR_LIMITS as c_int;
+            (*v).errcode |= BCF_ERR_LIMITS as i32;
             return -1;
         }
         (*mem).data.resize(mem_new_len, 0);
@@ -3177,9 +3186,9 @@ unsafe fn vcf_parse_format_fill5(
     _p: *const c_char,
     q: *const c_char,
     fmt: *mut FmtAux,
-) -> c_int {
+) -> i32 {
     const BCF_MAX_BT_INT32: i64 = 0x7fff_ffff;
-    let mut n_sample_ori: c_int = -1;
+    let mut n_sample_ori: i32 = -1;
     // At beginning of the loop t points to the first char of a format
     let mut t = q.add(1) as *mut c_char;
     let mut m: usize = 0; // m: sample id
@@ -3199,7 +3208,7 @@ unsafe fn vcf_parse_format_fill5(
                 continue;
             }
         }
-        if m as c_int == nsamples {
+        if m as i32 == nsamples {
             break;
         }
 
@@ -3215,7 +3224,7 @@ unsafe fn vcf_parse_format_fill5(
                     vcf_seqname_safe_str(h, v),
                     (*v).pos + 1
                 ));
-                (*v).errcode |= BCF_ERR_LIMITS as c_int;
+                (*v).errcode |= BCF_ERR_LIMITS as i32;
                 return -1;
             }
 
@@ -3232,12 +3241,12 @@ unsafe fn vcf_parse_format_fill5(
                     let x = z.buf.add(z.size as usize * m).cast::<u32>();
                     let mut unreadable: u32 = 0;
                     let mut max: u32 = 0;
-                    let mut overflow: c_int = 0;
+                    let mut overflow: i32 = 0;
                     let mut l: usize = 0;
-                    let mut ploidy: c_int = 0;
-                    let mut anyunphased: c_int = 0;
-                    let mut phasingprfx: c_int = 0;
-                    let mut unknown1: c_int = 0;
+                    let mut ploidy: i32 = 0;
+                    let mut anyunphased: i32 = 0;
+                    let mut phasingprfx: i32 = 0;
+                    let mut unknown1: i32 = 0;
 
                     // with prefixed phasing, it is explicitly given for 1st one
                     // with non-prefixed, set based on ploidy and phasing of other
@@ -3273,7 +3282,7 @@ unsafe fn vcf_parse_format_fill5(
                                 val = hts_str2uint(
                                     t,
                                     &mut te,
-                                    size_of::<u32>() as c_int * c_char::MAX as c_int - 2,
+                                    size_of::<u32>() as i32 * c_char::MAX as i32 - 2,
                                     &mut overflow,
                                 ) as u32;
                                 unreadable |= (tt == te) as u32;
@@ -3285,7 +3294,7 @@ unsafe fn vcf_parse_format_fill5(
                             *x.add(l) = (val + 1) << 1 | is_phased as u32;
                             l += 1;
                         }
-                        anyunphased |= ((ploidy != 1) && is_phased == 0) as c_int;
+                        anyunphased |= ((ploidy != 1) && is_phased == 0) as i32;
                         is_phased = (*t == b'|' as c_char) as i32;
                         if *t != b'|' as c_char && *t != b'/' as c_char {
                             break;
@@ -3357,10 +3366,10 @@ unsafe fn vcf_parse_format_fill5(
                         l += 1;
                         t = t.add(1); // ++t to skip "."
                     } else {
-                        let mut overflow: c_int = 0;
+                        let mut overflow: i32 = 0;
                         let mut te: *mut c_char = std::ptr::null_mut();
                         let mut tmp_val =
-                            hts_str2int(t, &mut te, i64::BITS as c_int, &mut overflow);
+                            hts_str2int(t, &mut te, i64::BITS as i32, &mut overflow);
                         if te == t
                             || overflow != 0
                             || !(BCF_MIN_BT_INT32..=BCF_MAX_BT_INT32).contains(&tmp_val)
@@ -3389,12 +3398,12 @@ unsafe fn vcf_parse_format_fill5(
                 let x = z.buf.add(z.size as usize * m).cast::<f32>();
                 let mut l: usize = 0;
                 loop {
-                    if *t == b'.' as c_char && libc::isdigit(*t.add(1) as c_int) == 0 {
+                    if *t == b'.' as c_char && libc::isdigit(*t.add(1) as i32) == 0 {
                         *x.add(l) = f32::from_bits(bcf_float_missing);
                         l += 1;
                         t = t.add(1); // ++t to skip "."
                     } else {
-                        let mut overflow: c_int = 0;
+                        let mut overflow: i32 = 0;
                         let mut te: *mut c_char = std::ptr::null_mut();
                         let tmp_val = hts_str2dbl(t, &mut te, &mut overflow) as f32;
                         *x.add(l) = tmp_val;
@@ -3422,7 +3431,7 @@ unsafe fn vcf_parse_format_fill5(
                     vcf_seqname_safe_str(h, v),
                     (*v).pos + 1
                 ));
-                (*v).errcode |= BCF_ERR_TAG_INVALID as c_int;
+                (*v).errcode |= BCF_ERR_TAG_INVALID as i32;
                 return -1;
             }
 
@@ -3445,7 +3454,7 @@ unsafe fn vcf_parse_format_fill5(
                     vcf_seqname_safe_str(h, v),
                     (*v).pos + 1
                 ));
-                (*v).errcode |= BCF_ERR_CHAR as c_int;
+                (*v).errcode |= BCF_ERR_CHAR as i32;
                 return -1;
             }
         }
@@ -3514,7 +3523,7 @@ unsafe fn vcf_parse_format_gt6(
     _p: *const c_char,
     _q: *const c_char,
     fmt: *mut FmtAux,
-) -> c_int {
+) -> i32 {
     let str_: *mut kstring_t = std::ptr::addr_of_mut!((*v).indiv).cast::<kstring_t>();
     let mut need_downsize = 0;
     if (*v).n_sample() > 0 {
@@ -3527,26 +3536,26 @@ unsafe fn vcf_parse_format_gt6(
             bcf_enc_int1(str_, z.key);
             let htype = z.y >> 4 & 0xf;
             if htype == BCF_HT_STR && !z.is_gt {
-                bcf_enc_size(str_, z.size, BCF_BT_CHAR as c_int);
-                let kputsn_len = z.size as size_t * (*v).n_sample() as size_t;
+                bcf_enc_size(str_, z.size, BCF_BT_CHAR as i32);
+                let kputsn_len = z.size as usize * (*v).n_sample() as usize;
                 let kputsn_slice = std::slice::from_raw_parts(z.buf, kputsn_len);
                 kputsn(kputsn_slice, kputsn_len, &mut *str_);
             } else if htype == BCF_HT_INT || z.is_gt {
                 bcf_enc_vint(
                     str_,
-                    (z.size >> 2) * (*v).n_sample() as c_int,
+                    (z.size >> 2) * (*v).n_sample() as i32,
                     z.buf.cast::<i32>(),
                     z.size >> 2,
                 );
             } else {
-                bcf_enc_size(str_, z.size >> 2, BCF_BT_FLOAT as c_int);
+                bcf_enc_size(str_, z.size >> 2, BCF_BT_FLOAT as i32);
                 if serialize_float_array(
                     str_,
                     (z.size >> 2) as usize * (*v).n_sample() as usize,
                     z.buf.cast::<f32>(),
                 ) != 0
                 {
-                    (*v).errcode |= BCF_ERR_LIMITS as c_int;
+                    (*v).errcode |= BCF_ERR_LIMITS as i32;
                     vcf_log_error(format!(
                         "Out of memory at {}:{}",
                         vcf_seqname_safe_str(h, v),
@@ -3573,8 +3582,8 @@ unsafe fn vcf_parse_format_gt6(
 }
 
 // validity checking
-unsafe fn vcf_parse_format_check7(h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int {
-    if (*v).n_sample() as c_int != bcf_hdr_nsamples_native(h) {
+unsafe fn vcf_parse_format_check7(h: *const bcf_hdr_t, v: *mut bcf1_t) -> i32 {
+    if (*v).n_sample() as i32 != bcf_hdr_nsamples_native(h) {
         vcf_log_error(format!(
             "Number of columns at {}:{} does not match the number of samples ({} vs {})",
             vcf_seqname_safe_str(h, v),
@@ -3582,7 +3591,7 @@ unsafe fn vcf_parse_format_check7(h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int 
             (*v).n_sample(),
             bcf_hdr_nsamples_native(h)
         ));
-        (*v).errcode |= BCF_ERR_NCOLS as c_int;
+        (*v).errcode |= BCF_ERR_NCOLS as i32;
         return -1;
     }
     if (*v).indiv.data.len() > 0xffff_ffff {
@@ -3591,7 +3600,7 @@ unsafe fn vcf_parse_format_check7(h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int 
             vcf_seqname_safe_str(h, v),
             (*v).pos + 1
         ));
-        (*v).errcode |= BCF_ERR_LIMITS as c_int;
+        (*v).errcode |= BCF_ERR_LIMITS as i32;
         (*v).set_n_fmt(0);
         return -1;
     }
@@ -3605,7 +3614,7 @@ unsafe fn vcf_parse_format(
     v: *mut bcf1_t,
     p: *mut c_char,
     q: *mut c_char,
-) -> c_int {
+) -> i32 {
     if bcf_hdr_nsamples_native(h) == 0 {
         return 0;
     }
@@ -3653,7 +3662,7 @@ unsafe fn vcf_parse_format(
 unsafe fn fix_chromosome(h: *const bcf_hdr_t, d: *mut kh_vdict_t, p: *const c_char) -> u32 {
     let name = CStr::from_ptr(p).to_string_lossy().into_owned();
     let tmp = std::ffi::CString::new(format!("##contig=<ID={}>", name)).unwrap_or_default();
-    let mut l: c_int = 0;
+    let mut l: i32 = 0;
     let hrec = bcf_hdr_parse_line(h, tmp.as_ptr(), &mut l);
     let res = if !hrec.is_null() {
         bcf_hdr_add_hrec(h.cast_mut(), hrec)
@@ -3675,8 +3684,8 @@ unsafe fn vcf_parse_filter(
     v: *mut bcf1_t,
     p: *mut c_char,
     q: *mut c_char,
-) -> c_int {
-    let mut n_flt: c_int = 1;
+) -> i32 {
+    let mut n_flt: i32 = 1;
     let d = (*h).dict[BCF_DT_ID as usize].cast::<kh_vdict_t>();
     // count the number of filters
     if *q.sub(1) == b';' as c_char {
@@ -3689,14 +3698,14 @@ unsafe fn vcf_parse_filter(
         }
         r = r.add(1);
     }
-    let mut a_flt: Vec<c_int> = Vec::new();
+    let mut a_flt: Vec<i32> = Vec::new();
     if a_flt.try_reserve_exact(n_flt as usize).is_err() {
         vcf_log_error(format!(
             "Could not allocate memory at {}:{}",
             vcf_seqname_safe_str(h, v),
             (*v).pos + 1
         ));
-        (*v).errcode |= BCF_ERR_LIMITS as c_int;
+        (*v).errcode |= BCF_ERR_LIMITS as i32;
         return -1;
     }
     a_flt.resize(n_flt as usize, 0);
@@ -3712,14 +3721,14 @@ unsafe fn vcf_parse_filter(
     let mut t = kstrtok(Some(CStr::from_ptr(p).to_bytes()), Some(b";"), &mut aux1);
     while !t.is_null() {
         *(aux1.p as *mut c_char) = 0;
-        let mut k = kh_get_vdict(d, t);
+        let mut k = kh_get_vdict(d, t.cast());
         if k == (*d).n_buckets {
-            let tag = CStr::from_ptr(t).to_string_lossy().into_owned();
+            let tag = CStr::from_ptr(t.cast()).to_string_lossy().into_owned();
             vcf_log_warning(format!("FILTER '{}' is not defined in the header", tag));
             let tmp =
                 std::ffi::CString::new(format!("##FILTER=<ID={},Description=\"Dummy\">", tag))
                     .unwrap_or_default();
-            let mut l: c_int = 0;
+            let mut l: i32 = 0;
             let hrec = bcf_hdr_parse_line(h, tmp.as_ptr(), &mut l);
             let mut res = if !hrec.is_null() {
                 bcf_hdr_add_hrec(h.cast_mut(), hrec)
@@ -3732,8 +3741,8 @@ unsafe fn vcf_parse_filter(
             if res > 0 {
                 res = bcf_hdr_sync(h.cast_mut());
             }
-            k = kh_get_vdict(d, t);
-            (*v).errcode |= BCF_ERR_TAG_UNDEF as c_int;
+            k = kh_get_vdict(d, t.cast());
+            (*v).errcode |= BCF_ERR_TAG_UNDEF as i32;
             if res != 0 || k == (*d).n_buckets {
                 vcf_log_error(format!(
                     "Could not add dummy header for FILTER '{}' at {}:{}",
@@ -3741,7 +3750,7 @@ unsafe fn vcf_parse_filter(
                     vcf_seqname_safe_str(h, v),
                     (*v).pos + 1
                 ));
-                (*v).errcode |= BCF_ERR_TAG_INVALID as c_int;
+                (*v).errcode |= BCF_ERR_TAG_INVALID as i32;
                 return -1;
             }
         }
@@ -3761,9 +3770,9 @@ unsafe fn vcf_parse_info(
     v: *mut bcf1_t,
     p: *mut c_char,
     q: *mut c_char,
-) -> c_int {
+) -> i32 {
     const BCF_MAX_BT_INT32: i64 = 0x7fff_ffff;
-    let mut max_n_val: c_int = 0;
+    let mut max_n_val: i32 = 0;
     let d = (*h).dict[BCF_DT_ID as usize].cast::<kh_vdict_t>();
     let mut a_val: *mut i32 = std::ptr::null_mut();
 
@@ -3795,7 +3804,7 @@ unsafe fn vcf_parse_info(
                 vcf_seqname_safe_str(h, v),
                 (*v).pos + 1
             ));
-            (*v).errcode |= BCF_ERR_LIMITS as c_int;
+            (*v).errcode |= BCF_ERR_LIMITS as i32;
             break 'outer -1;
         }
         let mut c = *r;
@@ -3831,7 +3840,7 @@ unsafe fn vcf_parse_info(
                 keyname
             ))
             .unwrap_or_default();
-            let mut l: c_int = 0;
+            let mut l: i32 = 0;
             let hrec = bcf_hdr_parse_line(h, tmp.as_ptr(), &mut l);
             let mut res = if !hrec.is_null() {
                 bcf_hdr_add_hrec(h.cast_mut(), hrec)
@@ -3845,7 +3854,7 @@ unsafe fn vcf_parse_info(
                 res = bcf_hdr_sync(h.cast_mut());
             }
             k = kh_get_vdict(d, key);
-            (*v).errcode |= BCF_ERR_TAG_UNDEF as c_int;
+            (*v).errcode |= BCF_ERR_TAG_UNDEF as i32;
             if res != 0 || k == (*d).n_buckets {
                 vcf_log_error(format!(
                     "Could not add dummy header for INFO '{}' at {}:{}",
@@ -3853,7 +3862,7 @@ unsafe fn vcf_parse_info(
                     vcf_seqname_safe_str(h, v),
                     (*v).pos + 1
                 ));
-                (*v).errcode |= BCF_ERR_TAG_INVALID as c_int;
+                (*v).errcode |= BCF_ERR_TAG_INVALID as i32;
                 break 'outer -1;
             }
         }
@@ -3861,13 +3870,13 @@ unsafe fn vcf_parse_info(
         (*v).set_n_info((*v).n_info() + 1);
         bcf_enc_int1(str_, (*vdict_val(d, k)).id);
         if val.is_null() {
-            bcf_enc_size(str_, 0, BCF_BT_NULL as c_int);
+            bcf_enc_size(str_, 0, BCF_BT_NULL as i32);
         } else if (y >> 4 & 0xf) == BCF_HT_FLAG || (y >> 4 & 0xf) == BCF_HT_STR {
             // if Flag has a value, treat it as a string
-            bcf_enc_vchar(str_, (end_p as usize - val as usize) as c_int, val);
+            bcf_enc_vchar(str_, (end_p as usize - val as usize) as i32, val);
         } else {
             // int/float value/array
-            let mut n_val: c_int = 1;
+            let mut n_val: i32 = 1;
             let mut tt = val;
             while *tt != 0 {
                 if *tt == b',' as c_char {
@@ -3877,14 +3886,14 @@ unsafe fn vcf_parse_info(
             }
             if n_val > max_n_val {
                 let a_tmp =
-                    libc::realloc(a_val.cast(), n_val as size_t * size_of::<i32>()).cast::<i32>();
+                    libc::realloc(a_val.cast(), n_val as usize * size_of::<i32>()).cast::<i32>();
                 if a_tmp.is_null() {
                     vcf_log_error(format!(
                         "Could not allocate memory at {}:{}",
                         vcf_seqname_safe_str(h, v),
                         (*v).pos + 1
                     ));
-                    (*v).errcode |= BCF_ERR_LIMITS as c_int;
+                    (*v).errcode |= BCF_ERR_LIMITS as i32;
                     break 'outer -1;
                 }
                 a_val = a_tmp;
@@ -3896,9 +3905,9 @@ unsafe fn vcf_parse_info(
                 // VCF_ALLOW_INT64 not defined: simple int32 path.
                 let mut i = 0;
                 while i < n_val {
-                    let mut overflow: c_int = 0;
+                    let mut overflow: i32 = 0;
                     let mut te: *mut c_char = std::ptr::null_mut();
-                    let mut tmp_val = hts_str2int(t, &mut te, i64::BITS as c_int, &mut overflow);
+                    let mut tmp_val = hts_str2int(t, &mut te, i64::BITS as i32, &mut overflow);
                     if te == t
                         || overflow != 0
                         || !(BCF_MIN_BT_INT32..=BCF_MAX_BT_INT32).contains(&tmp_val)
@@ -3942,7 +3951,7 @@ unsafe fn vcf_parse_info(
                 let mut t = val;
                 let mut i = 0;
                 while i < n_val {
-                    let mut overflow: c_int = 0;
+                    let mut overflow: i32 = 0;
                     let mut te: *mut c_char = std::ptr::null_mut();
                     let fv = hts_str2dbl(t, &mut te, &mut overflow) as f32;
                     if te == t || overflow != 0 {
@@ -3974,8 +3983,8 @@ unsafe fn vcf_parse_info(
 }
 
 // int vcf_parse(kstring_t *s, const bcf_hdr_t *h, bcf1_t *v)
-unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int {
-    let ret: c_int = -2;
+unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_t) -> i32 {
+    let ret: i32 = -2;
 
     // NOT_DOT(p): memcmp(p, ".\0", 2) != 0
     macro_rules! not_dot {
@@ -4007,7 +4016,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
         p: std::ptr::null(),
     };
 
-    let mut overflow: c_int;
+    let mut overflow: i32;
 
     // CHROM
     let mut p = kstrtok(
@@ -4022,18 +4031,18 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     *q = 0;
 
     let d_ctg = (*h).dict[BCF_DT_CTG as usize].cast::<kh_vdict_t>();
-    let mut k = kh_get_vdict(d_ctg, p);
+    let mut k = kh_get_vdict(d_ctg, p.cast());
     if k == (*d_ctg).n_buckets {
-        let name = CStr::from_ptr(p).to_string_lossy().into_owned();
+        let name = CStr::from_ptr(p.cast()).to_string_lossy().into_owned();
         vcf_log_warning(format!(
             "Contig '{}' is not defined in the header. (Quick workaround: index the file with tabix.)",
             name
         ));
-        (*v).errcode = BCF_ERR_CTG_UNDEF as c_int;
-        k = fix_chromosome(h, d_ctg, p);
+        (*v).errcode = BCF_ERR_CTG_UNDEF as i32;
+        k = fix_chromosome(h, d_ctg, p.cast());
         if k == (*d_ctg).n_buckets {
             vcf_log_error(format!("Could not add dummy header for contig '{}'", name));
-            (*v).errcode |= BCF_ERR_CTG_INVALID as c_int;
+            (*v).errcode |= BCF_ERR_CTG_INVALID as i32;
             return ret;
         }
     }
@@ -4050,13 +4059,13 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     overflow = 0;
     let tmp = p;
     let mut pp: *mut c_char = std::ptr::null_mut();
-    (*v).pos = hts_str2uint(p, &mut pp, 63, &mut overflow) as hts_pos_t;
+    (*v).pos = hts_str2uint(p.cast(), &mut pp, 63, &mut overflow) as hts_pos_t;
     if overflow != 0 {
-        let name = CStr::from_ptr(tmp).to_string_lossy().into_owned();
+        let name = CStr::from_ptr(tmp.cast()).to_string_lossy().into_owned();
         vcf_log_error(format!("Position value '{}' is too large", name));
         return ret;
     } else if *pp != 0 {
-        let name = CStr::from_ptr(tmp).to_string_lossy().into_owned();
+        let name = CStr::from_ptr(tmp.cast()).to_string_lossy().into_owned();
         vcf_log_error(format!("Could not parse the position '{}'", name));
         return ret;
     } else {
@@ -4075,9 +4084,9 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     *q = 0;
 
     if not_dot!(p) {
-        bcf_enc_vchar(str_, (q as usize - p as usize) as c_int, p);
+        bcf_enc_vchar(str_, (q as usize - p as usize) as i32, p.cast());
     } else {
-        bcf_enc_size(str_, 0, BCF_BT_CHAR as c_int);
+        bcf_enc_size(str_, 0, BCF_BT_CHAR as i32);
     }
 
     // REF
@@ -4088,7 +4097,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     q = aux.p as *mut c_char;
     *q = 0;
 
-    bcf_enc_vchar(str_, (q as usize - p as usize) as c_int, p);
+    bcf_enc_vchar(str_, (q as usize - p as usize) as i32, p.cast());
     (*v).set_n_allele(1);
     (*v).rlen = (q as usize - p as usize) as hts_pos_t;
 
@@ -4104,21 +4113,21 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
         let mut r = p;
         let mut t = p;
         loop {
-            if *r == b',' as c_char || *r == 0 {
+            if *r == b',' || *r == 0 {
                 if (*v).n_allele() == u16::MAX as u32 {
                     vcf_log_error(format!(
                         "Too many ALT alleles at {}:{}",
                         vcf_seqname_safe_str(h, v),
                         (*v).pos + 1
                     ));
-                    (*v).errcode |= BCF_ERR_LIMITS as c_int;
+                    (*v).errcode |= BCF_ERR_LIMITS as i32;
                     return ret;
                 }
-                bcf_enc_vchar(str_, (r as usize - t as usize) as c_int, t);
+                bcf_enc_vchar(str_, (r as usize - t as usize) as i32, t.cast());
                 t = r.add(1);
                 (*v).set_n_allele((*v).n_allele() + 1);
             }
-            if r == q {
+            if r == q.cast() {
                 break;
             }
             r = r.add(1);
@@ -4134,7 +4143,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     *q = 0;
 
     if not_dot!(p) {
-        (*v).qual = libc::atof(p) as f32;
+        (*v).qual = libc::atof(p.cast()) as f32;
     } else {
         (*v).qual = f32::from_bits(bcf_float_missing);
     }
@@ -4151,7 +4160,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     *q = 0;
 
     if not_dot!(p) {
-        if vcf_parse_filter(str_, h, v, p, q) != 0 {
+        if vcf_parse_filter(str_, h, v, p.cast(), q) != 0 {
             return ret;
         }
     } else {
@@ -4169,7 +4178,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     q = aux.p as *mut c_char;
     *q = 0;
 
-    if not_dot!(p) && vcf_parse_info(str_, h, v, p, q) != 0 {
+    if not_dot!(p) && vcf_parse_info(str_, h, v, p.cast(), q) != 0 {
         return ret;
     }
     if (*v).max_unpack != 0 && (*v).max_unpack >> 3 == 0 {
@@ -4181,7 +4190,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     if !p.is_null() {
         q = aux.p as *mut c_char;
         *q = 0;
-        if vcf_parse_format(s, h, v, p, q) == 0 {
+        if vcf_parse_format(s, h, v, p.cast(), q) == 0 {
             0
         } else {
             -2
@@ -4191,7 +4200,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     }
 }
 
-pub unsafe fn vcf_parse(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int {
+pub unsafe fn vcf_parse(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_t) -> i32 {
     let end = vcf_line_info_end_i64(s);
     let symbolic_svlen_rlen = vcf_line_symbolic_svlen_rlen(s);
     let format_len_rlen = vcf_line_format_len_rlen(s);
@@ -4337,11 +4346,11 @@ unsafe fn vcf44_repair_prefixed_gt_phasing(
     rec: *mut bcf1_t,
     sample_phasing: &[i8],
 ) {
-    if sample_phasing.is_empty() || bcf_unpack(rec, BCF_UN_FMT as c_int) != 0 {
+    if sample_phasing.is_empty() || bcf_unpack(rec, BCF_UN_FMT as i32) != 0 {
         return;
     }
 
-    let gt_id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"GT".as_ptr());
+    let gt_id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, c"GT".as_ptr());
     if gt_id < 0 {
         return;
     }
@@ -4364,14 +4373,14 @@ unsafe fn vcf44_repair_prefixed_gt_phasing(
             vcf44_infer_first_gt_phase(fmt, ptr)
         };
         match (*fmt).type_ {
-            x if x == BCF_BT_INT8 as c_int => {
+            x if x == BCF_BT_INT8 as i32 => {
                 *ptr = (*ptr & !1) | inferred;
             }
-            x if x == BCF_BT_INT16 as c_int => {
+            x if x == BCF_BT_INT16 as i32 => {
                 let val = le_to_i16(ptr) as u16;
                 i16_to_le(((val & !1) | inferred as u16) as i16, ptr);
             }
-            x if x == BCF_BT_INT32 as c_int => {
+            x if x == BCF_BT_INT32 as i32 => {
                 let val = le_to_i32(ptr) as u32;
                 i32_to_le(((val & !1) | inferred as u32) as i32, ptr);
             }
@@ -4385,14 +4394,14 @@ unsafe fn vcf44_infer_first_gt_phase(fmt: *const bcf_fmt_t, ptr: *const u8) -> u
     let mut values = Vec::new();
     for i in 0..(*fmt).n as usize {
         let val = match (*fmt).type_ {
-            x if x == BCF_BT_INT8 as c_int => le_to_i8(ptr.add(i)) as i32,
-            x if x == BCF_BT_INT16 as c_int => le_to_i16(ptr.add(i * size_of::<i16>())) as i32,
-            x if x == BCF_BT_INT32 as c_int => le_to_i32(ptr.add(i * size_of::<i32>())),
+            x if x == BCF_BT_INT8 as i32 => le_to_i8(ptr.add(i)) as i32,
+            x if x == BCF_BT_INT16 as i32 => le_to_i16(ptr.add(i * size_of::<i16>())) as i32,
+            x if x == BCF_BT_INT32 as i32 => le_to_i32(ptr.add(i * size_of::<i32>())),
             _ => return 0,
         };
         let vector_end = match (*fmt).type_ {
-            x if x == BCF_BT_INT8 as c_int => bcf_int8_vector_end,
-            x if x == BCF_BT_INT16 as c_int => bcf_int16_vector_end,
+            x if x == BCF_BT_INT8 as i32 => bcf_int8_vector_end,
+            x if x == BCF_BT_INT16 as i32 => bcf_int16_vector_end,
             _ => bcf_int32_vector_end,
         };
         if val == vector_end {
@@ -4412,7 +4421,7 @@ unsafe fn vcf44_infer_first_gt_phase(fmt: *const bcf_fmt_t, ptr: *const u8) -> u
 
 // Native translation of htslib/vcf.c vcf_format(). The v44 phasing is handled
 // directly by bcf_format_gt_v2(), so no post-processing pass is needed.
-pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_t) -> c_int {
+pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_t) -> i32 {
     let v = v.cast_mut();
     let max_dt_id = (*h).n[BCF_DT_ID as usize];
     let chrom = bcf_seqname(h, v);
@@ -4423,11 +4432,11 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
         ))
         .unwrap_or_default();
         c_log_error(msg.as_ptr());
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
 
-    bcf_unpack(v, (BCF_UN_ALL & !(BCF_UN_INFO | BCF_UN_FMT)) as c_int);
+    bcf_unpack(v, (BCF_UN_ALL & !(BCF_UN_INFO | BCF_UN_FMT)) as i32);
 
     // Cache of key lengths in the header aux struct.
     let aux = get_hdr_aux(h);
@@ -4444,9 +4453,9 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
     let idtbl = (*h).id[BCF_DT_ID as usize];
 
     kputs(CStr::from_ptr(chrom).to_bytes(), &mut *s); // CHROM
-    kputc_(b'\t' as c_int, &mut *s);
+    kputc_(b'\t' as i32, &mut *s);
     super::hts::kputll((*v).pos + 1, &mut *s); // POS
-    kputc_(b'\t' as c_int, &mut *s); // ID
+    kputc_(b'\t' as i32, &mut *s); // ID
     let d = &(*v).d;
     kputs(
         if d.id.is_empty() {
@@ -4456,32 +4465,32 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
         },
         &mut *s,
     );
-    kputc_(b'\t' as c_int, &mut *s); // REF
+    kputc_(b'\t' as i32, &mut *s); // REF
     if (*v).n_allele() > 0 {
         let d = &(*v).d;
         kputs(d.allele[0].as_slice(), &mut *s);
     } else {
-        kputc_(b'.' as c_int, &mut *s);
+        kputc_(b'.' as i32, &mut *s);
     }
-    kputc_(b'\t' as c_int, &mut *s); // ALT
+    kputc_(b'\t' as i32, &mut *s); // ALT
     if (*v).n_allele() > 1 {
         for i in 1..(*v).n_allele() as usize {
             if i > 1 {
-                kputc_(b',' as c_int, &mut *s);
+                kputc_(b',' as i32, &mut *s);
             }
             let d = &(*v).d;
             kputs(d.allele[i].as_slice(), &mut *s);
         }
     } else {
-        kputc_(b'.' as c_int, &mut *s);
+        kputc_(b'.' as i32, &mut *s);
     }
-    kputc_(b'\t' as c_int, &mut *s); // QUAL
+    kputc_(b'\t' as i32, &mut *s); // QUAL
     if (*v).qual.to_bits() == bcf_float_missing {
-        kputc_(b'.' as c_int, &mut *s);
+        kputc_(b'.' as i32, &mut *s);
     } else {
         kputd((*v).qual as f64, &mut *s);
     }
-    kputc_(b'\t' as c_int, &mut *s); // FILTER
+    kputc_(b'\t' as i32, &mut *s); // FILTER
     if !(*v).d.flt.is_empty() {
         for i in 0..(*v).d.flt.len() {
             let idx = (&(*v).d.flt)[i];
@@ -4494,11 +4503,11 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
                 ))
                 .unwrap_or_default();
                 c_log_error(msg.as_ptr());
-                *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 return -1;
             }
             if i != 0 {
-                kputc_(b';' as c_int, &mut *s);
+                kputc_(b';' as i32, &mut *s);
             }
             if *key_len.add(idx as usize) == 0 {
                 *key_len.add(idx as usize) = libc::strlen((*idtbl.add(idx as usize)).key);
@@ -4509,10 +4518,10 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
             kputsn(key_slice, key_len_idx, &mut *s);
         }
     } else {
-        kputc_(b'.' as c_int, &mut *s);
+        kputc_(b'.' as i32, &mut *s);
     }
 
-    kputc_(b'\t' as c_int, &mut *s); // INFO
+    kputc_(b'\t' as i32, &mut *s); // INFO
     if (*v).n_info() != 0 {
         let mut ptr = if !(*v).shared.data.is_empty() {
             (*v).shared
@@ -4526,7 +4535,7 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
         };
         let mut first = true;
         let info: *mut bcf_info_t = (*v).d.info.as_ptr().cast_mut();
-        let info_packed = (*v).unpacked & BCF_UN_INFO as c_int == 0 && !(*v).shared.data.is_empty();
+        let info_packed = (*v).unpacked & BCF_UN_INFO as i32 == 0 && !(*v).shared.data.is_empty();
         let mut local_in: bcf_info_t = std::mem::zeroed();
         for i in 0..(*v).n_info() as usize {
             let z: *mut bcf_info_t;
@@ -4569,7 +4578,7 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
                 ))
                 .unwrap_or_default();
                 c_log_error(msg.as_ptr());
-                *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 return -1;
             }
 
@@ -4596,15 +4605,15 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
 
             if (*z).len != 1 || info_packed {
                 bcf_fmt_array(s, (*z).len, (*z).type_, (*z).vptr.cast());
-            } else if (*z).type_ == BCF_BT_FLOAT as c_int {
+            } else if (*z).type_ == BCF_BT_FLOAT as i32 {
                 if (*z).v1.f.to_bits() == bcf_float_missing {
-                    kputc_(b'.' as c_int, &mut *s);
+                    kputc_(b'.' as i32, &mut *s);
                 } else {
                     kputd((*z).v1.f as f64, &mut *s);
                 }
-            } else if (*z).type_ == BCF_BT_CHAR as c_int {
-                kputc_((*z).v1.i as c_int, &mut *s);
-            } else if (*z).type_ < BCF_BT_INT64 as c_int {
+            } else if (*z).type_ == BCF_BT_CHAR as i32 {
+                kputc_((*z).v1.i as i32, &mut *s);
+            } else if (*z).type_ < BCF_BT_INT64 as i32 {
                 let missing = [
                     0i64,
                     bcf_int8_missing as i64,
@@ -4612,13 +4621,13 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
                     bcf_int32_missing as i64,
                 ];
                 if (*z).v1.i == missing[(*z).type_ as usize] {
-                    kputc_(b'.' as c_int, &mut *s);
+                    kputc_(b'.' as i32, &mut *s);
                 } else {
-                    kputw((*z).v1.i as c_int, &mut *s);
+                    kputw((*z).v1.i as i32, &mut *s);
                 }
-            } else if (*z).type_ == BCF_BT_INT64 as c_int {
+            } else if (*z).type_ == BCF_BT_INT64 as i32 {
                 if (*z).v1.i == bcf_int64_missing {
-                    kputc_(b'.' as c_int, &mut *s);
+                    kputc_(b'.' as i32, &mut *s);
                 } else {
                     super::hts::kputll((*z).v1.i, &mut *s);
                 }
@@ -4631,23 +4640,23 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
                 ))
                 .unwrap_or_default();
                 c_log_error(msg.as_ptr());
-                *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 return -1;
             }
         }
         if first {
-            kputc_(b'.' as c_int, &mut *s);
+            kputc_(b'.' as i32, &mut *s);
         }
     } else {
-        kputc_(b'.' as c_int, &mut *s);
+        kputc_(b'.' as i32, &mut *s);
     }
 
     // FORMAT and individual information
     if (*v).n_sample() != 0 {
         if (*v).n_fmt() != 0 {
             let mut ptr = (*v).indiv.data.as_ptr().cast::<u8>().cast_mut();
-            let mut gt_i: c_int = -1;
-            let fmt_packed = (*v).unpacked & BCF_UN_FMT as c_int == 0;
+            let mut gt_i: i32 = -1;
+            let fmt_packed = (*v).unpacked & BCF_UN_FMT as i32 == 0;
             let fmt: *mut bcf_fmt_t = if fmt_packed {
                 let p = libc::malloc(size_of::<bcf_fmt_t>() * (*v).n_fmt() as usize)
                     .cast::<bcf_fmt_t>();
@@ -4676,7 +4685,7 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
                 if (*z).p.is_null() {
                     continue;
                 }
-                kputc_(if !first { b':' } else { b'\t' } as c_int, &mut *s);
+                kputc_(if !first { b':' } else { b'\t' } as i32, &mut *s);
                 first = false;
 
                 let id = if (*z).id >= 0 && (*z).id < max_dt_id {
@@ -4693,7 +4702,7 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
                     ))
                     .unwrap_or_default();
                     c_log_error(msg.as_ptr());
-                    *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+                    *libc::__errno_location() = libc::EINVAL;
                     if fmt_packed {
                         libc::free(fmt.cast());
                     }
@@ -4713,7 +4722,7 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
                     && *(*id).key == b'G' as c_char
                     && *(*id).key.add(1) == b'T' as c_char
                 {
-                    gt_i = i as c_int;
+                    gt_i = i as i32;
                 }
             }
             if first {
@@ -4727,7 +4736,7 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
 
             // VALUES per sample
             for j in 0..(*v).n_sample() as usize {
-                kputc_(b'\t' as c_int, &mut *s);
+                kputc_(b'\t' as i32, &mut *s);
                 first = true;
                 let mut i = 0usize;
                 while i < (*v).n_fmt() as usize {
@@ -4737,11 +4746,11 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
                         continue;
                     }
                     if !first {
-                        kputc_(b':' as c_int, &mut *s);
+                        kputc_(b':' as i32, &mut *s);
                     }
                     first = false;
-                    if gt_i == i as c_int {
-                        let ret = bcf_format_gt_v2_inner(v44, f, j as c_int, s);
+                    if gt_i == i as i32 {
+                        let ret = bcf_format_gt_v2_inner(v44, f, j as i32, s);
                         if ret < 0 {
                             let msg = std::ffi::CString::new(format!(
                                 "Failed to format GT value for sample {}, returned {}",
@@ -4749,7 +4758,7 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
                             ))
                             .unwrap_or_default();
                             c_log_error(msg.as_ptr());
-                            *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+                            *libc::__errno_location() = libc::EINVAL;
                             if fmt_packed {
                                 libc::free(fmt.cast());
                             }
@@ -4777,7 +4786,7 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
                         i += 1;
                         continue;
                     }
-                    kputc_(b':' as c_int, &mut *s);
+                    kputc_(b':' as i32, &mut *s);
                     if (*f).n == 1 {
                         bcf_fmt_array1(s, (*f).type_, (*f).p.add(j * (*f).size as usize).cast());
                     } else {
@@ -4791,7 +4800,7 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
                     i += 1;
                 }
                 if first {
-                    kputc_(b'.' as c_int, &mut *s);
+                    kputc_(b'.' as i32, &mut *s);
                 }
             }
             if fmt_packed {
@@ -4803,7 +4812,7 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
             }
         }
     }
-    kputc(b'\n' as c_int, &mut *s);
+    kputc(b'\n' as i32, &mut *s);
     0
 }
 
@@ -4811,14 +4820,14 @@ unsafe fn vcf44_format_gt_fields(
     hdr: *const bcf_hdr_t,
     rec: *mut bcf1_t,
     line: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     if line.is_null() || (*line).data.is_empty() {
         return 0;
     }
-    if bcf_unpack(rec, BCF_UN_FMT as c_int) != 0 {
+    if bcf_unpack(rec, BCF_UN_FMT as i32) != 0 {
         return -1;
     }
-    let gt_id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"GT".as_ptr());
+    let gt_id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, c"GT".as_ptr());
     if gt_id < 0 {
         return 0;
     }
@@ -4898,7 +4907,7 @@ unsafe fn vcf44_format_gt_fields(
     0
 }
 
-unsafe fn vcf44_format_gt(fmt: *mut bcf_fmt_t, sample: usize, out: *mut kstring_t) -> c_int {
+unsafe fn vcf44_format_gt(fmt: *mut bcf_fmt_t, sample: usize, out: *mut kstring_t) -> i32 {
     if fmt.is_null() || (*fmt).p.is_null() {
         return kputsn(c".".to_bytes(), 1, &mut *out);
     }
@@ -4907,15 +4916,15 @@ unsafe fn vcf44_format_gt(fmt: *mut bcf_fmt_t, sample: usize, out: *mut kstring_
     let ptr = (*fmt).p.add(sample * (*fmt).size as usize);
     for i in 0..(*fmt).n as usize {
         let val = match (*fmt).type_ {
-            x if x == BCF_BT_INT8 as c_int => le_to_i8(ptr.add(i)) as i32,
-            x if x == BCF_BT_INT16 as c_int => le_to_i16(ptr.add(i * size_of::<i16>())) as i32,
-            x if x == BCF_BT_INT32 as c_int => le_to_i32(ptr.add(i * size_of::<i32>())),
-            x if x == BCF_BT_NULL as c_int => break,
+            x if x == BCF_BT_INT8 as i32 => le_to_i8(ptr.add(i)) as i32,
+            x if x == BCF_BT_INT16 as i32 => le_to_i16(ptr.add(i * size_of::<i16>())) as i32,
+            x if x == BCF_BT_INT32 as i32 => le_to_i32(ptr.add(i * size_of::<i32>())),
+            x if x == BCF_BT_NULL as i32 => break,
             _ => return -2,
         };
         let vector_end = match (*fmt).type_ {
-            x if x == BCF_BT_INT8 as c_int => bcf_int8_vector_end,
-            x if x == BCF_BT_INT16 as c_int => bcf_int16_vector_end,
+            x if x == BCF_BT_INT8 as i32 => bcf_int8_vector_end,
+            x if x == BCF_BT_INT16 as i32 => bcf_int16_vector_end,
             _ => bcf_int32_vector_end,
         };
         if val == vector_end {
@@ -4971,7 +4980,7 @@ unsafe fn vcf44_format_gt(fmt: *mut bcf_fmt_t, sample: usize, out: *mut kstring_
 }
 
 // Native translation of htslib/vcf.c bcf_read1_core().
-unsafe fn bcf_read1_core(fp: *mut BGZF, v: *mut bcf1_t) -> c_int {
+unsafe fn bcf_read1_core(fp: *mut BGZF, v: *mut bcf1_t) -> i32 {
     let mut x = [0u8; 32];
     let ret = bgzf_read(fp, x.as_mut_ptr().cast(), 32);
     if ret != 32 {
@@ -4990,7 +4999,7 @@ unsafe fn bcf_read1_core(fp: *mut BGZF, v: *mut bcf1_t) -> c_int {
     if ks_resize(
         &mut (*v).shared,
         if shared_len != 0 {
-            shared_len as size_t
+            shared_len as usize
         } else {
             1
         },
@@ -5001,7 +5010,7 @@ unsafe fn bcf_read1_core(fp: *mut BGZF, v: *mut bcf1_t) -> c_int {
     if ks_resize(
         &mut (*v).indiv,
         if indiv_len != 0 {
-            indiv_len as size_t
+            indiv_len as usize
         } else {
             1
         },
@@ -5040,7 +5049,7 @@ unsafe fn bcf_read1_core(fp: *mut BGZF, v: *mut bcf1_t) -> c_int {
 }
 
 // Native translation of htslib/vcf.c bcf_read().
-pub unsafe fn bcf_read(fp: *mut htsFile, mut h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int {
+pub unsafe fn bcf_read(fp: *mut htsFile, mut h: *const bcf_hdr_t, v: *mut bcf1_t) -> i32 {
     if (*fp).format.format == HTS_FORMAT_VCF {
         // htslib/vcf.c vcf_read(): getline + vcf_parse. Inlined here because
         // our public vcf_read() delegates to bcf_read().
@@ -5070,7 +5079,7 @@ const HTS_MAX_EXT_LEN: usize = 9;
 pub(crate) const HTS_IDX_DELIM: &[u8] = b"##idx##";
 
 // Native translation of htslib/hts_internal.h find_file_extension().
-unsafe fn find_file_extension(fn_: *const c_char, ext_out: *mut c_char) -> c_int {
+unsafe fn find_file_extension(fn_: *const c_char, ext_out: *mut c_char) -> i32 {
     if fn_.is_null() {
         return -1;
     }
@@ -5119,7 +5128,7 @@ unsafe fn find_file_extension(fn_: *const c_char, ext_out: *mut c_char) -> c_int
     0
 }
 
-pub unsafe fn vcf_open_mode(mode: *mut c_char, fn_: *const c_char, format: *const c_char) -> c_int {
+pub unsafe fn vcf_open_mode(mode: *mut c_char, fn_: *const c_char, format: *const c_char) -> i32 {
     // Native translation of htslib/vcf.c vcf_open_mode().
     if format.is_null() {
         // Try to pick a format based on the filename extension
@@ -5144,17 +5153,17 @@ pub unsafe fn vcf_open_mode(mode: *mut c_char, fn_: *const c_char, format: *cons
 }
 
 // Native translation of htslib's hts_expand() macro for int arrays.
-unsafe fn hts_expand_int(n: c_int, m: *mut c_int, ptr: *mut *mut c_int) {
+unsafe fn hts_expand_int(n: i32, m: *mut i32, ptr: *mut *mut i32) {
     if n > *m {
         let mut new_m = n;
         kroundup32(&mut new_m);
         *m = new_m;
-        *ptr = libc::realloc((*ptr).cast(), *m as usize * size_of::<c_int>()).cast();
+        *ptr = libc::realloc((*ptr).cast(), *m as usize * size_of::<i32>()).cast();
     }
 }
 
 // Native translation of htslib's hts_expand() macro for bcf_info_t arrays.
-unsafe fn hts_expand_info(n: c_int, m: *mut c_int, ptr: *mut *mut bcf_info_t) {
+unsafe fn hts_expand_info(n: i32, m: *mut i32, ptr: *mut *mut bcf_info_t) {
     if n > *m {
         let mut new_m = n;
         kroundup32(&mut new_m);
@@ -5164,7 +5173,7 @@ unsafe fn hts_expand_info(n: c_int, m: *mut c_int, ptr: *mut *mut bcf_info_t) {
 }
 
 // Native translation of htslib's hts_expand() macro for bcf_fmt_t arrays.
-unsafe fn hts_expand_fmt(n: c_int, m: *mut c_int, ptr: *mut *mut bcf_fmt_t) {
+unsafe fn hts_expand_fmt(n: i32, m: *mut i32, ptr: *mut *mut bcf_fmt_t) {
     if n > *m {
         let mut new_m = n;
         kroundup32(&mut new_m);
@@ -5174,7 +5183,7 @@ unsafe fn hts_expand_fmt(n: c_int, m: *mut c_int, ptr: *mut *mut bcf_fmt_t) {
 }
 
 // Native translation of htslib's hts_expand() macro for char* arrays.
-unsafe fn hts_expand_charptr(n: c_int, m: *mut c_int, ptr: *mut *mut *mut c_char) {
+unsafe fn hts_expand_charptr(n: i32, m: *mut i32, ptr: *mut *mut *mut c_char) {
     if n > *m {
         let mut new_m = n;
         kroundup32(&mut new_m);
@@ -5184,26 +5193,26 @@ unsafe fn hts_expand_charptr(n: c_int, m: *mut c_int, ptr: *mut *mut *mut c_char
 }
 
 // Native translation of htslib/vcf.c bcf_unpack().
-pub unsafe fn bcf_unpack(b: *mut bcf1_t, mut which: c_int) -> c_int {
+pub unsafe fn bcf_unpack(b: *mut bcf1_t, mut which: i32) -> i32 {
     if (*b).shared.data.is_empty() {
         // Building a new BCF record from scratch
         return 0;
     }
     let mut ptr = (*b).shared.data.as_ptr().cast::<u8>().cast_mut();
     let d = &mut (*b).d;
-    if which & BCF_UN_FLT as c_int != 0 {
-        which |= BCF_UN_STR as c_int;
+    if which & BCF_UN_FLT as i32 != 0 {
+        which |= BCF_UN_STR as i32;
     }
-    if which & BCF_UN_INFO as c_int != 0 {
-        which |= BCF_UN_SHR as c_int;
+    if which & BCF_UN_INFO as i32 != 0 {
+        which |= BCF_UN_SHR as i32;
     }
-    if which & BCF_UN_STR as c_int != 0 && (*b).unpacked & BCF_UN_STR as c_int == 0 {
+    if which & BCF_UN_STR as i32 != 0 && (*b).unpacked & BCF_UN_STR as i32 == 0 {
         let mut tmp = kstring_t::default();
 
         // ID
         let mut ptr_ori = ptr;
         ptr = bcf_fmt_sized_array(&mut tmp, ptr);
-        (*b).unpack_size[0] = ptr.offset_from(ptr_ori) as c_int;
+        (*b).unpack_size[0] = ptr.offset_from(ptr_ori) as i32;
         // Store the freshly built ID bytes directly into the owned d.id Vec
         // (NO trailing NUL).
         d.id.clear();
@@ -5221,10 +5230,10 @@ pub unsafe fn bcf_unpack(b: *mut bcf1_t, mut which: c_int) -> c_int {
             ptr = bcf_fmt_sized_array(&mut tmp, ptr);
             d.allele.push(tmp.data.clone());
         }
-        (*b).unpack_size[1] = ptr.offset_from(ptr_ori) as c_int;
-        (*b).unpacked |= BCF_UN_STR as c_int;
+        (*b).unpack_size[1] = ptr.offset_from(ptr_ori) as i32;
+        (*b).unpacked |= BCF_UN_STR as i32;
     }
-    if which & BCF_UN_FLT as c_int != 0 && (*b).unpacked & BCF_UN_FLT as c_int == 0 {
+    if which & BCF_UN_FLT as i32 != 0 && (*b).unpacked & BCF_UN_FLT as i32 == 0 {
         // FILTER
         ptr = (*b)
             .shared
@@ -5247,10 +5256,10 @@ pub unsafe fn bcf_unpack(b: *mut bcf1_t, mut which: c_int) -> c_int {
             ptr = ptr.add(1);
             d.flt.clear();
         }
-        (*b).unpack_size[2] = ptr.offset_from(ptr_ori) as c_int;
-        (*b).unpacked |= BCF_UN_FLT as c_int;
+        (*b).unpack_size[2] = ptr.offset_from(ptr_ori) as i32;
+        (*b).unpacked |= BCF_UN_FLT as i32;
     }
-    if which & BCF_UN_INFO as c_int != 0 && (*b).unpacked & BCF_UN_INFO as c_int == 0 {
+    if which & BCF_UN_INFO as i32 != 0 && (*b).unpacked & BCF_UN_INFO as i32 == 0 {
         // INFO
         ptr = (*b)
             .shared
@@ -5267,11 +5276,11 @@ pub unsafe fn bcf_unpack(b: *mut bcf1_t, mut which: c_int) -> c_int {
         for i in 0..n_info {
             ptr = bcf_unpack_info_core1_rs(ptr, &mut d.info[i]);
         }
-        (*b).unpacked |= BCF_UN_INFO as c_int;
+        (*b).unpacked |= BCF_UN_INFO as i32;
     }
-    if which & BCF_UN_FMT as c_int != 0
+    if which & BCF_UN_FMT as i32 != 0
         && (*b).n_sample() != 0
-        && (*b).unpacked & BCF_UN_FMT as c_int == 0
+        && (*b).unpacked & BCF_UN_FMT as i32 == 0
     {
         // FORMAT
         let mut ptr = (*b).indiv.data.as_ptr().cast::<u8>().cast_mut();
@@ -5281,18 +5290,18 @@ pub unsafe fn bcf_unpack(b: *mut bcf1_t, mut which: c_int) -> c_int {
             d.fmt[i].set_p_free(0);
         }
         for i in 0..n_fmt {
-            ptr = bcf_unpack_fmt_core1_rs(ptr, (*b).n_sample() as c_int, &mut d.fmt[i]);
+            ptr = bcf_unpack_fmt_core1_rs(ptr, (*b).n_sample() as i32, &mut d.fmt[i]);
         }
-        (*b).unpacked |= BCF_UN_FMT as c_int;
+        (*b).unpacked |= BCF_UN_FMT as i32;
     }
     0
 }
 
-pub unsafe fn bcf_has_variant_type(rec: *mut bcf1_t, ith_allele: c_int, bitmask: u32) -> c_int {
+pub unsafe fn bcf_has_variant_type(rec: *mut bcf1_t, ith_allele: i32, bitmask: u32) -> i32 {
     vcf_c_5501_bcf_has_variant_type(rec, ith_allele, bitmask)
 }
 
-pub unsafe fn bcf_variant_length(rec: *mut bcf1_t, ith_allele: c_int) -> c_int {
+pub unsafe fn bcf_variant_length(rec: *mut bcf1_t, ith_allele: i32) -> i32 {
     vcf_c_5513_bcf_variant_length(rec, ith_allele)
 }
 
@@ -5300,7 +5309,7 @@ pub unsafe fn bcf_has_variant_types(
     rec: *mut bcf1_t,
     bitmask: u32,
     mode: bcf_variant_match,
-) -> c_int {
+) -> i32 {
     vcf_c_5522_bcf_has_variant_types(rec, bitmask, mode)
 }
 
@@ -5346,7 +5355,7 @@ fn vcf_line_may_have_info_end(bytes: &[u8]) -> bool {
         let Some(rel) = (unsafe {
             let ptr = libc::memchr(
                 bytes.as_ptr().add(offset).cast(),
-                b'E' as c_int,
+                b'E' as i32,
                 bytes.len() - offset,
             );
             (!ptr.is_null()).then_some(ptr.cast::<u8>().offset_from(bytes.as_ptr()) as usize)
@@ -5373,7 +5382,7 @@ unsafe fn vcf_line_symbolic_svlen_rlen(line: *const kstring_t) -> Option<hts_pos
     let bytes = (*line).data.as_slice();
     // Cheap reject: symbolic spanning alts only appear with '<' in the line.
     // memchr is far cheaper than collecting fields/splitting ALT for every record.
-    let has_lt = libc::memchr(bytes.as_ptr().cast(), b'<' as c_int, bytes.len());
+    let has_lt = libc::memchr(bytes.as_ptr().cast(), b'<' as i32, bytes.len());
     if has_lt.is_null() {
         return None;
     }
@@ -5416,7 +5425,7 @@ unsafe fn vcf_line_format_len_rlen(line: *const kstring_t) -> Option<hts_pos_t> 
     let bytes = (*line).data.as_slice();
     // Cheap reject: the format-LEN handling only fires when ALT contains "<*>".
     // Skip the full-line tab split (per-record Vec allocation) when '<' is absent.
-    let has_lt = libc::memchr(bytes.as_ptr().cast(), b'<' as c_int, bytes.len());
+    let has_lt = libc::memchr(bytes.as_ptr().cast(), b'<' as i32, bytes.len());
     if has_lt.is_null() {
         return None;
     }
@@ -5474,7 +5483,7 @@ fn vcf_line_all_fields(bytes: &[u8]) -> Vec<&[u8]> {
     bytes.split(|&b| b == b'\t').collect()
 }
 
-unsafe fn vcf_repair_info_end_i64(h: *const bcf_hdr_t, v: *mut bcf1_t, end: i64) -> c_int {
+unsafe fn vcf_repair_info_end_i64(h: *const bcf_hdr_t, v: *mut bcf1_t, end: i64) -> i32 {
     if h.is_null() || v.is_null() {
         return 0;
     }
@@ -5485,11 +5494,11 @@ unsafe fn vcf_repair_info_end_i64(h: *const bcf_hdr_t, v: *mut bcf1_t, end: i64)
         return 0;
     }
 
-    let end_id = bcf_hdr_id2int(h, BCF_DT_ID as c_int, c"END".as_ptr());
+    let end_id = bcf_hdr_id2int(h, BCF_DT_ID as i32, c"END".as_ptr());
     if end_id < 0 {
         return 0;
     }
-    if bcf_unpack(v, BCF_UN_INFO as c_int) < 0 {
+    if bcf_unpack(v, BCF_UN_INFO as i32) < 0 {
         return -1;
     }
 
@@ -5497,13 +5506,13 @@ unsafe fn vcf_repair_info_end_i64(h: *const bcf_hdr_t, v: *mut bcf1_t, end: i64)
     if info.is_null() || (*info).len != 1 {
         return 0;
     }
-    if (*info).type_ == BCF_BT_INT64 as c_int && (*info).v1.i == end {
+    if (*info).type_ == BCF_BT_INT64 as i32 && (*info).v1.i == end {
         return 0;
     }
 
     let mut str_ = kstring_t::default();
     let enc_ok = bcf_enc_int1(&mut str_, end_id) >= 0
-        && bcf_enc_size(&mut str_, 1, BCF_BT_INT64 as c_int) >= 0;
+        && bcf_enc_size(&mut str_, 1, BCF_BT_INT64 as i32) >= 0;
     let resize_target = str_.data.len() + size_of::<i64>();
     if !enc_ok || ks_resize(&mut str_, resize_target) < 0 {
         super::hts::ks_free(&mut str_);
@@ -5528,7 +5537,7 @@ unsafe fn vcf_repair_info_end_i64(h: *const bcf_hdr_t, v: *mut bcf1_t, end: i64)
         libc::free((*info).vptr.sub((*info).vptr_off() as usize).cast());
     }
     (*info).key = end_id;
-    (*info).type_ = BCF_BT_INT64 as c_int;
+    (*info).type_ = BCF_BT_INT64 as i32;
     (*info).v1.i = end;
     (*info).vptr = info_buf.add(vptr_off);
     (*info).vptr_len = size_of::<i64>() as u32;
@@ -5537,8 +5546,8 @@ unsafe fn vcf_repair_info_end_i64(h: *const bcf_hdr_t, v: *mut bcf1_t, end: i64)
     if end > (*v).pos {
         (*v).rlen = (*v).rlen.max(end - (*v).pos);
     }
-    (*v).unpacked |= BCF_IS_64BIT | BCF_UN_INFO as c_int;
-    (*v).d.shared_dirty |= BCF1_DIRTY_INF as c_int;
+    (*v).unpacked |= BCF_IS_64BIT | BCF_UN_INFO as i32;
+    (*v).d.shared_dirty |= BCF1_DIRTY_INF as i32;
     0
 }
 
@@ -5549,48 +5558,48 @@ pub unsafe fn vcf_c_5373_bcf_set_variant_type(
 ) {
     if *alt == b'*' as c_char && *alt.add(1) == 0 {
         (*var).n = 0;
-        (*var).type_ = VCF_OVERLAP as c_int;
+        (*var).type_ = VCF_OVERLAP as i32;
         return;
     }
 
     if *ref_.add(1) == 0 && *alt.add(1) == 0 {
         if *alt == b'.' as c_char || *ref_ == *alt {
             (*var).n = 0;
-            (*var).type_ = VCF_REF as c_int;
+            (*var).type_ = VCF_REF as i32;
             return;
         }
         if *alt == b'X' as c_char {
             (*var).n = 0;
-            (*var).type_ = VCF_REF as c_int;
+            (*var).type_ = VCF_REF as i32;
             return;
         }
         (*var).n = 1;
-        (*var).type_ = VCF_SNP as c_int;
+        (*var).type_ = VCF_SNP as i32;
         return;
     }
 
     if *alt == b'<' as c_char {
         if *alt.add(1) == b'X' as c_char && *alt.add(2) == b'>' as c_char {
             (*var).n = 0;
-            (*var).type_ = VCF_REF as c_int;
+            (*var).type_ = VCF_REF as i32;
             return;
         }
         if *alt.add(1) == b'*' as c_char && *alt.add(2) == b'>' as c_char {
             (*var).n = 0;
-            (*var).type_ = VCF_REF as c_int;
+            (*var).type_ = VCF_REF as i32;
             return;
         }
         if libc::strcmp(c"NON_REF>".as_ptr(), alt.add(1)) == 0 {
             (*var).n = 0;
-            (*var).type_ = VCF_REF as c_int;
+            (*var).type_ = VCF_REF as i32;
             return;
         }
-        (*var).type_ = VCF_OTHER as c_int;
+        (*var).type_ = VCF_OTHER as i32;
         return;
     }
 
     if *alt == b']' as c_char || *alt == b'[' as c_char {
-        (*var).type_ = VCF_BND as c_int;
+        (*var).type_ = VCF_BND as i32;
         return;
     }
 
@@ -5606,22 +5615,22 @@ pub unsafe fn vcf_c_5373_bcf_set_variant_type(
             a = a.add(1);
         }
         if *a.sub(1) == b']' as c_char || *a.sub(1) == b'[' as c_char {
-            (*var).type_ = VCF_BND as c_int;
+            (*var).type_ = VCF_BND as i32;
             return;
         }
-        (*var).n = a.offset_from(alt) as c_int - r.offset_from(ref_) as c_int;
-        (*var).type_ = (VCF_INDEL | VCF_INS) as c_int;
+        (*var).n = a.offset_from(alt) as i32 - r.offset_from(ref_) as i32;
+        (*var).type_ = (VCF_INDEL | VCF_INS) as i32;
         return;
     } else if *r != 0 && *a == 0 {
         while *r != 0 {
             r = r.add(1);
         }
-        (*var).n = a.offset_from(alt) as c_int - r.offset_from(ref_) as c_int;
-        (*var).type_ = (VCF_INDEL | VCF_DEL) as c_int;
+        (*var).n = a.offset_from(alt) as i32 - r.offset_from(ref_) as i32;
+        (*var).type_ = (VCF_INDEL | VCF_DEL) as i32;
         return;
     } else if *r == 0 && *a == 0 {
         (*var).n = 0;
-        (*var).type_ = VCF_REF as c_int;
+        (*var).type_ = VCF_REF as i32;
         return;
     }
 
@@ -5634,7 +5643,7 @@ pub unsafe fn vcf_c_5373_bcf_set_variant_type(
         ae = ae.add(1);
     }
     if *ae == b']' as c_char || *ae == b'[' as c_char {
-        (*var).type_ = VCF_BND as c_int;
+        (*var).type_ = VCF_BND as i32;
         return;
     }
     while re > r && ae > a && toupper_c(*re) == toupper_c(*ae) {
@@ -5645,35 +5654,35 @@ pub unsafe fn vcf_c_5373_bcf_set_variant_type(
     if ae == a {
         if re == r {
             (*var).n = 1;
-            (*var).type_ = VCF_SNP as c_int;
+            (*var).type_ = VCF_SNP as i32;
             return;
         }
-        (*var).n = -re.offset_from(r) as c_int;
+        (*var).n = -re.offset_from(r) as i32;
         if toupper_c(*re) == toupper_c(*ae) {
-            (*var).type_ = (VCF_INDEL | VCF_DEL) as c_int;
+            (*var).type_ = (VCF_INDEL | VCF_DEL) as i32;
             return;
         }
-        (*var).type_ = VCF_OTHER as c_int;
+        (*var).type_ = VCF_OTHER as i32;
         return;
     } else if re == r {
-        (*var).n = ae.offset_from(a) as c_int;
+        (*var).n = ae.offset_from(a) as i32;
         if toupper_c(*re) == toupper_c(*ae) {
-            (*var).type_ = (VCF_INDEL | VCF_INS) as c_int;
+            (*var).type_ = (VCF_INDEL | VCF_INS) as i32;
             return;
         }
-        (*var).type_ = VCF_OTHER as c_int;
+        (*var).type_ = VCF_OTHER as i32;
         return;
     }
 
     (*var).type_ = if re.offset_from(r) == ae.offset_from(a) {
-        VCF_MNP as c_int
+        VCF_MNP as i32
     } else {
-        VCF_OTHER as c_int
+        VCF_OTHER as i32
     };
     (*var).n = if re.offset_from(r) > ae.offset_from(a) {
-        -(re.offset_from(r) as c_int + 1)
+        -(re.offset_from(r) as i32 + 1)
     } else {
-        ae.offset_from(a) as c_int + 1
+        ae.offset_from(a) as i32 + 1
     };
 }
 
@@ -5681,7 +5690,7 @@ unsafe fn bcf_canonicalize_duplicate_format(rec: *mut bcf1_t) {
     if rec.is_null() || (*rec).n_fmt() < 2 || (*rec).n_sample() == 0 {
         return;
     }
-    if bcf_unpack(rec, BCF_UN_FMT as c_int) != 0 {
+    if bcf_unpack(rec, BCF_UN_FMT as i32) != 0 {
         return;
     }
 
@@ -5729,9 +5738,9 @@ unsafe fn bcf_clear_owned_format_storage(fmt: *mut bcf_fmt_t) {
     }
 }
 
-pub unsafe fn vcf_c_5444_bcf_set_variant_types(b: *mut bcf1_t) -> c_int {
-    if (*b).unpacked & BCF_UN_STR as c_int == 0 {
-        bcf_unpack(b, BCF_UN_STR as c_int);
+pub unsafe fn vcf_c_5444_bcf_set_variant_types(b: *mut bcf1_t) -> i32 {
+    if (*b).unpacked & BCF_UN_STR as i32 == 0 {
+        bcf_unpack(b, BCF_UN_STR as i32);
     }
     let n_allele = (*b).n_allele() as usize;
     let d = &mut (*b).d;
@@ -5746,7 +5755,7 @@ pub unsafe fn vcf_c_5444_bcf_set_variant_types(b: *mut bcf1_t) -> c_int {
     }
     let d = &mut (*b).d;
     d.var_type = 0;
-    d.var[0].type_ = VCF_REF as c_int;
+    d.var[0].type_ = VCF_REF as i32;
     d.var[0].n = 0;
     // The C-style classifier reads NUL-terminated allele strings; build NUL
     // temporaries from the owned (non-NUL) allele bytes at this boundary.
@@ -5768,72 +5777,72 @@ pub unsafe fn vcf_c_5444_bcf_set_variant_types(b: *mut bcf1_t) -> c_int {
 
 const ORIG_VAR_TYPES: u32 = VCF_SNP | VCF_MNP | VCF_INDEL | VCF_OTHER | VCF_BND | VCF_OVERLAP;
 
-pub unsafe fn vcf_c_5474_bcf_get_variant_types(rec: *mut bcf1_t) -> c_int {
+pub unsafe fn vcf_c_5474_bcf_get_variant_types(rec: *mut bcf1_t) -> i32 {
     if (*rec).d.var_type == -1 && vcf_c_5444_bcf_set_variant_types(rec) != 0 {
         let err = CStr::from_ptr(libc::strerror(
-            *crate::htslib_rs::c_compat::__errno_location(),
+            *libc::__errno_location(),
         ))
         .to_string_lossy();
         let msg = std::ffi::CString::new(format!("Couldn't get variant types: {}", err))
             .unwrap_or_default();
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_ERROR,
-            c"bcf_get_variant_types".as_ptr(),
-            msg.as_ptr(),
+            b"bcf_get_variant_types",
+            msg.to_bytes(),
         );
         libc::exit(1);
     }
-    (*rec).d.var_type & ORIG_VAR_TYPES as c_int
+    (*rec).d.var_type & ORIG_VAR_TYPES as i32
 }
 
-pub unsafe fn vcf_c_5485_bcf_get_variant_type(rec: *mut bcf1_t, ith_allele: c_int) -> c_int {
+pub unsafe fn vcf_c_5485_bcf_get_variant_type(rec: *mut bcf1_t, ith_allele: i32) -> i32 {
     if (*rec).d.var_type == -1 && vcf_c_5444_bcf_set_variant_types(rec) != 0 {
         let err = CStr::from_ptr(libc::strerror(
-            *crate::htslib_rs::c_compat::__errno_location(),
+            *libc::__errno_location(),
         ))
         .to_string_lossy();
         let msg = std::ffi::CString::new(format!("Couldn't get variant types: {}", err))
             .unwrap_or_default();
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_ERROR,
-            c"bcf_get_variant_type".as_ptr(),
-            msg.as_ptr(),
+            b"bcf_get_variant_type",
+            msg.to_bytes(),
         );
         libc::exit(1);
     }
-    if ith_allele < 0 || ith_allele >= (*rec).n_allele() as c_int {
+    if ith_allele < 0 || ith_allele >= (*rec).n_allele() as i32 {
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_ERROR,
-            c"bcf_get_variant_type".as_ptr(),
-            c"Requested allele outside valid range".as_ptr(),
+            b"bcf_get_variant_type",
+            b"Requested allele outside valid range",
         );
         libc::exit(1);
     }
-    (&(*rec).d).var[ith_allele as usize].type_ & ORIG_VAR_TYPES as c_int
+    (&(*rec).d).var[ith_allele as usize].type_ & ORIG_VAR_TYPES as i32
 }
 
 pub unsafe fn vcf_c_5501_bcf_has_variant_type(
     rec: *mut bcf1_t,
-    ith_allele: c_int,
+    ith_allele: i32,
     bitmask: u32,
-) -> c_int {
+) -> i32 {
     if (*rec).d.var_type == -1 && vcf_c_5444_bcf_set_variant_types(rec) != 0 {
         return -1;
     }
-    if ith_allele < 0 || ith_allele >= (*rec).n_allele() as c_int {
+    if ith_allele < 0 || ith_allele >= (*rec).n_allele() as i32 {
         return -1;
     }
     if bitmask == VCF_REF {
-        return ((&(*rec).d).var[ith_allele as usize].type_ == VCF_REF as c_int) as c_int;
+        return ((&(*rec).d).var[ith_allele as usize].type_ == VCF_REF as i32) as i32;
     }
-    (bitmask as c_int) & (&(*rec).d).var[ith_allele as usize].type_
+    (bitmask as i32) & (&(*rec).d).var[ith_allele as usize].type_
 }
 
-pub unsafe fn vcf_c_5513_bcf_variant_length(rec: *mut bcf1_t, ith_allele: c_int) -> c_int {
+pub unsafe fn vcf_c_5513_bcf_variant_length(rec: *mut bcf1_t, ith_allele: i32) -> i32 {
     if (*rec).d.var_type == -1 && vcf_c_5444_bcf_set_variant_types(rec) != 0 {
         return bcf_int32_missing;
     }
-    if ith_allele < 0 || ith_allele >= (*rec).n_allele() as c_int {
+    if ith_allele < 0 || ith_allele >= (*rec).n_allele() as i32 {
         return bcf_int32_missing;
     }
     (&(*rec).d).var[ith_allele as usize].n
@@ -5843,13 +5852,13 @@ pub unsafe fn vcf_c_5522_bcf_has_variant_types(
     rec: *mut bcf1_t,
     bitmask: u32,
     mode: bcf_variant_match,
-) -> c_int {
+) -> i32 {
     if (*rec).d.var_type == -1 && vcf_c_5444_bcf_set_variant_types(rec) != 0 {
         return -1;
     }
     let mut type_ = (*rec).d.var_type as u32;
     if mode == 1 {
-        return (bitmask & type_) as c_int;
+        return (bitmask & type_) as i32;
     }
 
     if bitmask & (VCF_INS | VCF_DEL) != 0 && bitmask & VCF_INDEL == 0 {
@@ -5862,12 +5871,12 @@ pub unsafe fn vcf_c_5522_bcf_has_variant_types(
         if !bitmask & type_ != 0 {
             0
         } else {
-            (bitmask & type_) as c_int
+            (bitmask & type_) as i32
         }
     } else if bitmask == VCF_REF {
-        (type_ == bitmask) as c_int
+        (type_ == bitmask) as i32
     } else if type_ == bitmask {
-        type_ as c_int
+        type_ as i32
     } else {
         0
     }
@@ -5875,14 +5884,14 @@ pub unsafe fn vcf_c_5522_bcf_has_variant_types(
 
 // Native translation of htslib/vcf.c errdesc_bcf[] table (typedef struct err_desc).
 // (BCF_ERR_* bit flags are defined near the top of this module as u32.)
-const ERRDESC_BCF: &[(c_int, &CStr)] = &[
-    (BCF_ERR_CTG_UNDEF as c_int, c"Contig not defined in header"),
-    (BCF_ERR_TAG_UNDEF as c_int, c"Tag not defined in header"),
-    (BCF_ERR_NCOLS as c_int, c"Incorrect number of columns"),
-    (BCF_ERR_LIMITS as c_int, c"Limits reached"),
-    (BCF_ERR_CHAR as c_int, c"Invalid character"),
-    (BCF_ERR_CTG_INVALID as c_int, c"Invalid contig"),
-    (BCF_ERR_TAG_INVALID as c_int, c"Invalid tag"),
+const ERRDESC_BCF: &[(i32, &CStr)] = &[
+    (BCF_ERR_CTG_UNDEF as i32, c"Contig not defined in header"),
+    (BCF_ERR_TAG_UNDEF as i32, c"Tag not defined in header"),
+    (BCF_ERR_NCOLS as i32, c"Incorrect number of columns"),
+    (BCF_ERR_LIMITS as i32, c"Limits reached"),
+    (BCF_ERR_CHAR as i32, c"Invalid character"),
+    (BCF_ERR_CTG_INVALID as i32, c"Invalid contig"),
+    (BCF_ERR_TAG_INVALID as i32, c"Invalid tag"),
 ];
 
 // Native translation of htslib/vcf.c add_desc_to_buffer().
@@ -5892,7 +5901,7 @@ unsafe fn add_desc_to_buffer(
     offset: *mut usize,
     maxbuffer: usize,
     description: *const c_char,
-) -> c_int {
+) -> i32 {
     if description.is_null() || buffer.is_null() || offset.is_null() || maxbuffer < 4 {
         return -1;
     }
@@ -5928,12 +5937,12 @@ unsafe fn add_desc_to_buffer(
 // Native translation of htslib/vcf.c bcf_strerror().
 // get description for given error code. return NULL on error
 pub unsafe fn bcf_strerror(
-    mut errorcode: c_int,
+    mut errorcode: i32,
     buffer: *mut c_char,
     maxbuffer: usize,
 ) -> *const c_char {
     let mut usedup: usize = 0;
-    let mut ret: c_int = 0;
+    let mut ret: i32 = 0;
 
     if buffer.is_null() || maxbuffer < 4 {
         return std::ptr::null(); // invalid / insufficient buffer
@@ -5965,9 +5974,9 @@ pub unsafe fn bcf_strerror(
 pub unsafe fn bcf_format_gt_v2(
     hdr: *const bcf_hdr_t,
     fmt: *mut bcf_fmt_t,
-    isample: c_int,
+    isample: i32,
     str_: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     let v44 = !hdr.is_null() && vcf_hdr_version_ge_44(hdr);
     bcf_format_gt_v2_inner(v44, fmt, isample, str_)
 }
@@ -5976,9 +5985,9 @@ pub unsafe fn bcf_format_gt_v2(
 unsafe fn bcf_format_gt_v2_inner(
     v44: bool,
     fmt: *mut bcf_fmt_t,
-    isample: c_int,
+    isample: i32,
     str_: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     if fmt.is_null() || str_.is_null() {
         return -1;
     }
@@ -5999,39 +6008,39 @@ unsafe fn bcf_format_gt_v2_inner(
                 if i == 0 {
                     val0 = val as i32;
                 } else {
-                    if kputc(if val & 1 != 0 { b'|' } else { b'/' } as c_int, &mut *str_) < 0 {
+                    if kputc(if val & 1 != 0 { b'|' } else { b'/' } as i32, &mut *str_) < 0 {
                         return -1;
                     }
                     any_unphased |= val & 1 == 0;
                 }
                 if val >> 1 == 0 {
-                    if kputc(b'.' as c_int, &mut *str_) < 0 {
+                    if kputc(b'.' as i32, &mut *str_) < 0 {
                         return -1;
                     }
-                } else if kputw((val >> 1) as c_int - 1, &mut *str_) < 0 {
+                } else if kputw((val >> 1) as i32 - 1, &mut *str_) < 0 {
                     return -1;
                 }
                 ploidy = i + 1;
                 ptr = ptr.add($step);
             }
-            if ploidy == 0 && kputc(b'.' as c_int, &mut *str_) < 0 {
+            if ploidy == 0 && kputc(b'.' as i32, &mut *str_) < 0 {
                 return -1;
             }
         }};
     }
 
     match (*fmt).type_ {
-        x if x == BCF_BT_INT8 as c_int => {
+        x if x == BCF_BT_INT8 as i32 => {
             branch!(le_to_i8, 1, bcf_int8_vector_end as i8);
         }
-        x if x == BCF_BT_INT16 as c_int => {
+        x if x == BCF_BT_INT16 as i32 => {
             branch!(le_to_i16, size_of::<i16>(), bcf_int16_vector_end as i16);
         }
-        x if x == BCF_BT_INT32 as c_int => {
+        x if x == BCF_BT_INT32 as i32 => {
             branch!(le_to_i32, size_of::<i32>(), bcf_int32_vector_end);
         }
-        x if x == BCF_BT_NULL as c_int => {
-            if kputc(b'.' as c_int, &mut *str_) < 0 {
+        x if x == BCF_BT_NULL as i32 => {
+            if kputc(b'.' as i32, &mut *str_) < 0 {
                 return -1;
             }
         }
@@ -6051,11 +6060,11 @@ unsafe fn bcf_format_gt_v2_inner(
     0
 }
 
-pub unsafe fn bcf_format_gt(fmt: *mut bcf_fmt_t, isample: c_int, str_: *mut kstring_t) -> c_int {
+pub unsafe fn bcf_format_gt(fmt: *mut bcf_fmt_t, isample: i32, str_: *mut kstring_t) -> i32 {
     unsafe { bcf_format_gt_v2(std::ptr::null(), fmt, isample, str_) }
 }
 
-unsafe fn kstring_insert_char(str_: *mut kstring_t, pos: usize, c: c_char) -> c_int {
+unsafe fn kstring_insert_char(str_: *mut kstring_t, pos: usize, c: c_char) -> i32 {
     if pos > (*str_).data.len() {
         return -1;
     }
@@ -6093,7 +6102,7 @@ pub unsafe fn bcf_copy(dst: *mut bcf1_t, src: *mut bcf1_t) -> *mut bcf1_t {
 }
 
 // Native translation of htslib/vcf.c bcf_write().
-pub unsafe fn bcf_write(hfp: *mut htsFile, h: *mut bcf_hdr_t, v: *mut bcf1_t) -> c_int {
+pub unsafe fn bcf_write(hfp: *mut htsFile, h: *mut bcf_hdr_t, v: *mut bcf1_t) -> i32 {
     if (*h).dirty != 0 && bcf_hdr_sync(h) < 0 {
         return -1;
     }
@@ -6114,7 +6123,7 @@ pub unsafe fn bcf_write(hfp: *mut htsFile, h: *mut bcf_hdr_t, v: *mut bcf1_t) ->
         return vcf_write(hfp, h, v);
     }
 
-    if (*v).errcode & !(BCF_ERR_LIMITS as c_int) != 0 {
+    if (*v).errcode & !(BCF_ERR_LIMITS as i32) != 0 {
         let mut errdescription = [0 as c_char; 1024];
         let err = bcf_strerror(
             (*v).errcode,
@@ -6191,7 +6200,7 @@ pub unsafe fn bcf_write(hfp: *mut htsFile, h: *mut bcf_hdr_t, v: *mut bcf1_t) ->
 }
 
 // Native translation of htslib/vcf.c add_missing_contig_hrec().
-unsafe fn add_missing_contig_hrec(h: *mut bcf_hdr_t, name: *const c_char) -> c_int {
+unsafe fn add_missing_contig_hrec(h: *mut bcf_hdr_t, name: *const c_char) -> i32 {
     let hrec = libc::calloc(1, size_of::<bcf_hrec_t>()).cast::<bcf_hrec_t>();
     if hrec.is_null() {
         return add_missing_contig_hrec_fail(hrec);
@@ -6212,15 +6221,15 @@ unsafe fn add_missing_contig_hrec(h: *mut bcf_hdr_t, name: *const c_char) -> c_i
     0
 }
 
-unsafe fn add_missing_contig_hrec_fail(hrec: *mut bcf_hrec_t) -> c_int {
-    let save_errno = *crate::htslib_rs::c_compat::__errno_location();
+unsafe fn add_missing_contig_hrec_fail(hrec: *mut bcf_hrec_t) -> i32 {
+    let save_errno = *libc::__errno_location();
     c_log_error(libc::strerror(
-        *crate::htslib_rs::c_compat::__errno_location(),
+        *libc::__errno_location(),
     ));
     if !hrec.is_null() {
         bcf_hrec_destroy(hrec);
     }
-    *crate::htslib_rs::c_compat::__errno_location() = save_errno;
+    *libc::__errno_location() = save_errno;
     -1
 }
 
@@ -6242,17 +6251,13 @@ unsafe fn vcf_hdr_read_text(fp: *mut htsFile) -> *mut bcf_hdr_t {
     }
     let mut txt = kstring_t::default();
     let mut idx: *mut super::tbx::tbx_t = std::ptr::null_mut();
-    let mut names: *mut *const c_char = std::ptr::null_mut();
-
     let error = |idx: *mut super::tbx::tbx_t,
-                 names: *mut *const c_char,
                  txt: *mut kstring_t,
                  h: *mut bcf_hdr_t|
      -> *mut bcf_hdr_t {
         if !idx.is_null() {
             super::tbx::tbx_destroy(idx);
         }
-        libc::free(names.cast());
         super::hts::ks_free(&mut *txt);
         if !h.is_null() {
             bcf_hdr_destroy(h);
@@ -6264,7 +6269,7 @@ unsafe fn vcf_hdr_read_text(fp: *mut htsFile) -> *mut bcf_hdr_t {
         let ret = hts_getline(fp, KS_SEP_LINE, s);
         if ret < 0 {
             if ret < -1 {
-                return error(idx, names, &mut txt, h);
+                return error(idx, &mut txt, h);
             }
             break;
         }
@@ -6275,7 +6280,7 @@ unsafe fn vcf_hdr_read_text(fp: *mut htsFile) -> *mut bcf_hdr_t {
         let s_data = &(*s).data;
         if s_data[0] != b'#' {
             c_log_error(c"No sample line".as_ptr());
-            return error(idx, names, &mut txt, h);
+            return error(idx, &mut txt, h);
         }
         if s_data.get(1) != Some(&b'#') && !(*fp).fn_aux.is_null() {
             // insert contigs here
@@ -6289,7 +6294,7 @@ unsafe fn vcf_hdr_read_text(fp: *mut htsFile) -> *mut bcf_hdr_t {
                 .unwrap_or_default();
                 c_log_error(msg.as_ptr());
                 super::hts::ks_free(&mut tmp);
-                return error(idx, names, &mut txt, h);
+                return error(idx, &mut txt, h);
             }
             loop {
                 tmp.data.clear();
@@ -6317,17 +6322,17 @@ unsafe fn vcf_hdr_read_text(fp: *mut htsFile) -> *mut bcf_hdr_t {
                 ))
                 .unwrap_or_default();
                 c_log_error(msg.as_ptr());
-                return error(idx, names, &mut txt, h);
+                return error(idx, &mut txt, h);
             }
             if e {
-                return error(idx, names, &mut txt, h);
+                return error(idx, &mut txt, h);
             }
         }
         if kputsn(&(*s).data, (*s).data.len(), &mut txt) < 0 {
-            return error(idx, names, &mut txt, h);
+            return error(idx, &mut txt, h);
         }
-        if kputc(b'\n' as c_int, &mut txt) < 0 {
-            return error(idx, names, &mut txt, h);
+        if kputc(b'\n' as i32, &mut txt) < 0 {
+            return error(idx, &mut txt, h);
         }
         if (&(*s).data).get(1) != Some(&b'#') {
             break;
@@ -6335,43 +6340,44 @@ unsafe fn vcf_hdr_read_text(fp: *mut htsFile) -> *mut bcf_hdr_t {
     }
     if txt.data.is_empty() {
         c_log_error(c"Could not read the header".as_ptr());
-        return error(idx, names, &mut txt, h);
+        return error(idx, &mut txt, h);
     }
     let mut txt_cstr = txt.data.clone();
     txt_cstr.push(0);
     if bcf_hdr_parse(h, txt_cstr.as_mut_ptr().cast()) < 0 {
-        return error(idx, names, &mut txt, h);
+        return error(idx, &mut txt, h);
     }
 
     // check tabix index, are all contigs listed in the header? add the missing ones
-    idx = super::tbx::tbx_index_load3((*fp).fn_, std::ptr::null(), super::hts::HTS_IDX_SILENT_FAIL);
+    idx = super::tbx::tbx_index_load3(
+        CStr::from_ptr((*fp).fn_).to_bytes(),
+        None,
+        super::hts::HTS_IDX_SILENT_FAIL,
+    );
     if !idx.is_null() {
-        let mut n: c_int = 0;
         let mut need_sync = 0;
-        names = super::tbx::tbx_seqnames(&*idx, &mut n);
-        if names.is_null() {
-            return error(idx, names, &mut txt, h);
-        }
-        for i in 0..n as usize {
+        let names = super::tbx::tbx_seqnames(&*idx);
+        for name in &names {
+            let mut name_c = name.clone();
+            name_c.push(0);
             let hrec = bcf_hdr_get_hrec(
                 h,
-                BCF_HL_CTG as c_int,
+                BCF_HL_CTG as i32,
                 c"ID".as_ptr(),
-                *names.add(i),
+                name_c.as_ptr().cast(),
                 std::ptr::null(),
             );
             if !hrec.is_null() {
                 continue;
             }
-            if add_missing_contig_hrec(h, *names.add(i)) < 0 {
-                return error(idx, names, &mut txt, h);
+            if add_missing_contig_hrec(h, name_c.as_ptr().cast()) < 0 {
+                return error(idx, &mut txt, h);
             }
             need_sync = 1;
         }
         if need_sync != 0 && bcf_hdr_sync(h) < 0 {
-            return error(idx, names, &mut txt, h);
+            return error(idx, &mut txt, h);
         }
-        libc::free(names.cast());
         super::tbx::tbx_destroy(idx);
     }
     super::hts::ks_free(&mut txt);
@@ -6379,7 +6385,7 @@ unsafe fn vcf_hdr_read_text(fp: *mut htsFile) -> *mut bcf_hdr_t {
 }
 
 // Native translation of htslib/vcf.c vcf_hdr_write().
-pub unsafe fn vcf_hdr_write(fp: *mut htsFile, h: *const bcf_hdr_t) -> c_int {
+pub unsafe fn vcf_hdr_write(fp: *mut htsFile, h: *const bcf_hdr_t) -> i32 {
     let mut htxt = kstring_t::default();
     if bcf_hdr_format(h, 0, &mut htxt) < 0 {
         return -1;
@@ -6391,7 +6397,7 @@ pub unsafe fn vcf_hdr_write(fp: *mut htsFile, h: *const bcf_hdr_t) -> c_int {
     let ret;
     let htxt_len = htxt.data.len();
     if (*fp).format.compression != HTS_COMPRESSION_NO_COMPRESSION {
-        ret = bgzf_write(hts_get_bgzfp(fp), htxt.data.as_ptr().cast(), htxt_len) as c_int;
+        ret = bgzf_write(hts_get_bgzfp(fp), htxt.data.as_ptr().cast(), htxt_len) as i32;
         if bgzf_flush(hts_get_bgzfp(fp)) != 0 {
             return -1;
         }
@@ -6400,7 +6406,7 @@ pub unsafe fn vcf_hdr_write(fp: *mut htsFile, h: *const bcf_hdr_t) -> c_int {
             (*fp).fp.hfile,
             htxt.data.as_ptr().cast(),
             htxt_len,
-        ) as c_int;
+        ) as i32;
     }
     if ret < 0 {
         -1
@@ -6409,12 +6415,12 @@ pub unsafe fn vcf_hdr_write(fp: *mut htsFile, h: *const bcf_hdr_t) -> c_int {
     }
 }
 
-pub unsafe fn vcf_read(fp: *mut htsFile, h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int {
+pub unsafe fn vcf_read(fp: *mut htsFile, h: *const bcf_hdr_t, v: *mut bcf1_t) -> i32 {
     bcf_read(fp, h, v)
 }
 
 // Native translation of htslib/vcf.c vcf_write().
-pub unsafe fn vcf_write(fp: *mut htsFile, h: *const bcf_hdr_t, v: *mut bcf1_t) -> c_int {
+pub unsafe fn vcf_write(fp: *mut htsFile, h: *const bcf_hdr_t, v: *mut bcf1_t) -> i32 {
     (*fp).line.data.clear();
     if vcf_format(h, v, &mut (*fp).line) != 0 {
         return -1;
@@ -6472,10 +6478,10 @@ pub unsafe fn bcf_readrec(
     fp: *mut BGZF,
     _null: *mut c_void,
     vv: *mut c_void,
-    tid: *mut c_int,
+    tid: *mut i32,
     beg: *mut hts_pos_t,
     end: *mut hts_pos_t,
-) -> c_int {
+) -> i32 {
     let v = vv.cast::<bcf1_t>();
     let hdr = bgzf_internal_h_67_bgzf_get_private_data(&*fp).cast::<bcf_hdr_t>();
     let mut ret = bcf_read1_core(fp, v);
@@ -6491,9 +6497,9 @@ pub unsafe fn bcf_readrec(
 }
 
 // Native translation of htslib/vcf.c vcf_write_line().
-pub unsafe fn vcf_write_line(fp: *mut htsFile, line: *mut kstring_t) -> c_int {
+pub unsafe fn vcf_write_line(fp: *mut htsFile, line: *mut kstring_t) -> i32 {
     if (*line).data.last() != Some(&b'\n') {
-        kputc(b'\n' as c_int, &mut *line);
+        kputc(b'\n' as i32, &mut *line);
     }
     let line_len = (*line).data.len();
     let ret = if (*fp).format.compression != HTS_COMPRESSION_NO_COMPRESSION {
@@ -6513,8 +6519,8 @@ pub unsafe fn bcf_hdr_dup(hdr: *const bcf_hdr_t) -> *mut bcf_hdr_t {
     if hout.is_null() {
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_ERROR,
-            c"bcf_hdr_dup".as_ptr(),
-            c"Failed to allocate bcf header".as_ptr(),
+            b"bcf_hdr_dup",
+            b"Failed to allocate bcf header",
         );
         return std::ptr::null_mut();
     }
@@ -6540,8 +6546,8 @@ unsafe fn bcf_hdr_combine_check_tag(
     dst: *const bcf_hdr_t,
     src: *const bcf_hdr_t,
     hrec: *const bcf_hrec_t,
-    rec_type: c_int,
-) -> c_int {
+    rec_type: i32,
+) -> i32 {
     // Check that both records are of the same type. The bcf_hdr_id2length
     // macro cannot be used here because dst header is not synced yet.
     let d_src = (*src).dict[BCF_DT_ID as usize].cast::<kh_vdict_t>();
@@ -6574,7 +6580,7 @@ unsafe fn bcf_hdr_combine_check_tag(
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_combine().
-pub unsafe fn bcf_hdr_combine(dst: *mut bcf_hdr_t, src: *const bcf_hdr_t) -> c_int {
+pub unsafe fn bcf_hdr_combine(dst: *mut bcf_hdr_t, src: *const bcf_hdr_t) -> i32 {
     let ndst_ori = (*dst).nhrec;
     let mut need_sync = 0;
     let mut ret = 0;
@@ -6751,7 +6757,7 @@ pub unsafe fn bcf_translate(
     dst_hdr: *const bcf_hdr_t,
     src_hdr: *mut bcf_hdr_t,
     src_line: *mut bcf1_t,
-) -> c_int {
+) -> i32 {
     let line = src_line;
     if (*line).errcode != 0 {
         let mut errordescription = [0 as c_char; 1024];
@@ -6772,8 +6778,8 @@ pub unsafe fn bcf_translate(
         .unwrap_or_default();
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_ERROR,
-            c"bcf_translate".as_ptr(),
-            msg.as_ptr(),
+            b"bcf_translate",
+            msg.to_bytes(),
         );
         libc::exit(1);
     }
@@ -6786,7 +6792,7 @@ pub unsafe fn bcf_translate(
         for dict in 0..2usize {
             let n = (*src_hdr).n[dict] as usize;
             (*src_hdr).transl[dict] =
-                libc::malloc(n.saturating_mul(size_of::<c_int>())).cast::<c_int>();
+                libc::malloc(n.saturating_mul(size_of::<i32>())).cast::<i32>();
             if n != 0 && (*src_hdr).transl[dict].is_null() {
                 return -1;
             }
@@ -6797,9 +6803,9 @@ pub unsafe fn bcf_translate(
                     *(*src_hdr).transl[dict].add(i) = -1;
                     continue;
                 }
-                let dst_id = bcf_hdr_id2int(dst_hdr, dict as c_int, key);
+                let dst_id = bcf_hdr_id2int(dst_hdr, dict as i32, key);
                 *(*src_hdr).transl[dict].add(i) = dst_id;
-                if dst_id != -1 && i as c_int != dst_id {
+                if dst_id != -1 && i as i32 != dst_id {
                     (*src_hdr).ntransl += 1;
                 }
             }
@@ -6817,7 +6823,7 @@ pub unsafe fn bcf_translate(
         }
     }
 
-    bcf_unpack(line, BCF_UN_ALL as c_int);
+    bcf_unpack(line, BCF_UN_ALL as i32);
 
     let ctg_transl = (*src_hdr).transl[BCF_DT_CTG as usize];
     if !ctg_transl.is_null() && (*line).rid >= 0 {
@@ -6835,7 +6841,7 @@ pub unsafe fn bcf_translate(
             let d = &mut (*line).d;
             d.flt[i] = dst_id;
         }
-        (*line).d.shared_dirty |= BCF1_DIRTY_FLT as c_int;
+        (*line).d.shared_dirty |= BCF1_DIRTY_FLT as i32;
     }
 
     for i in 0..(*line).n_info() {
@@ -6885,7 +6891,7 @@ pub unsafe fn bcf_translate(
             (*info).set_vptr_off(vptr_off as u32);
             (*info).vptr = info_buf.add((*info).vptr_off() as usize);
             (*info).set_vptr_free(1);
-            (*line).d.shared_dirty |= BCF1_DIRTY_INF as c_int;
+            (*line).d.shared_dirty |= BCF1_DIRTY_INF as i32;
         }
     }
 
@@ -6942,37 +6948,37 @@ pub unsafe fn bcf_translate(
     0
 }
 
-unsafe fn bcf_translate_id_size(id: c_int) -> c_int {
+unsafe fn bcf_translate_id_size(id: i32) -> i32 {
     if id >> 7 != 0 {
         if id >> 15 != 0 {
-            BCF_BT_INT32 as c_int
+            BCF_BT_INT32 as i32
         } else {
-            BCF_BT_INT16 as c_int
+            BCF_BT_INT16 as i32
         }
     } else {
-        BCF_BT_INT8 as c_int
+        BCF_BT_INT8 as i32
     }
 }
 
-unsafe fn bcf_translate_store_id(ptr: *mut u8, id: c_int, size: c_int) {
-    if size == BCF_BT_INT8 as c_int {
+unsafe fn bcf_translate_store_id(ptr: *mut u8, id: i32, size: i32) {
+    if size == BCF_BT_INT8 as i32 {
         *ptr = id as u8;
-    } else if size == BCF_BT_INT16 as c_int {
+    } else if size == BCF_BT_INT16 as i32 {
         i16_to_le(id as i16, ptr);
     } else {
         i32_to_le(id, ptr);
     }
 }
 
-unsafe fn bcf_translate_store_info_id(ptr: *mut u8, id: c_int, size: c_int) {
-    if size == BCF_BT_INT8 as c_int {
+unsafe fn bcf_translate_store_info_id(ptr: *mut u8, id: i32, size: i32) {
+    if size == BCF_BT_INT8 as i32 {
         *ptr.add(1) = id as u8;
     } else {
         bcf_translate_store_id(ptr, id, size);
     }
 }
 
-unsafe fn bcf_enc_size(s: *mut kstring_t, size: c_int, type_: c_int) -> c_int {
+unsafe fn bcf_enc_size(s: *mut kstring_t, size: i32, type_: i32) -> i32 {
     if size < 15 {
         if super::hts::ks_resize(&mut *s, (*s).data.len() + 1) < 0 {
             return -1;
@@ -6986,15 +6992,15 @@ unsafe fn bcf_enc_size(s: *mut kstring_t, size: c_int, type_: c_int) -> c_int {
     }
     (*s).data.push(((15 << 4) | type_) as u8);
     if size < 128 {
-        (*s).data.push(((1 << 4) | BCF_BT_INT8 as c_int) as u8);
+        (*s).data.push(((1 << 4) | BCF_BT_INT8 as i32) as u8);
         (*s).data.push(size as u8);
     } else if size < 32768 {
-        (*s).data.push(((1 << 4) | BCF_BT_INT16 as c_int) as u8);
+        (*s).data.push(((1 << 4) | BCF_BT_INT16 as i32) as u8);
         let mut tmp = [0u8; size_of::<i16>()];
         i16_to_le(size as i16, tmp.as_mut_ptr());
         (*s).data.extend_from_slice(&tmp);
     } else {
-        (*s).data.push(((1 << 4) | BCF_BT_INT32 as c_int) as u8);
+        (*s).data.push(((1 << 4) | BCF_BT_INT32 as i32) as u8);
         let mut tmp = [0u8; size_of::<i32>()];
         i32_to_le(size, tmp.as_mut_ptr());
         (*s).data.extend_from_slice(&tmp);
@@ -7002,26 +7008,26 @@ unsafe fn bcf_enc_size(s: *mut kstring_t, size: c_int, type_: c_int) -> c_int {
     0
 }
 
-unsafe fn bcf_enc_int1(s: *mut kstring_t, x: c_int) -> c_int {
+unsafe fn bcf_enc_int1(s: *mut kstring_t, x: i32) -> i32 {
     if super::hts::ks_resize(&mut *s, (*s).data.len() + 5) < 0 {
         return -1;
     }
     if x == bcf_int32_vector_end {
-        (*s).data.push(((1 << 4) | BCF_BT_INT8 as c_int) as u8);
+        (*s).data.push(((1 << 4) | BCF_BT_INT8 as i32) as u8);
         (*s).data.push(bcf_int8_vector_end as u8);
     } else if x == bcf_int32_missing {
-        (*s).data.push(((1 << 4) | BCF_BT_INT8 as c_int) as u8);
+        (*s).data.push(((1 << 4) | BCF_BT_INT8 as i32) as u8);
         (*s).data.push(bcf_int8_missing as u8);
     } else if (-120..=0x7f).contains(&x) {
-        (*s).data.push(((1 << 4) | BCF_BT_INT8 as c_int) as u8);
+        (*s).data.push(((1 << 4) | BCF_BT_INT8 as i32) as u8);
         (*s).data.push(x as u8);
     } else if (-32760..=0x7fff).contains(&x) {
-        (*s).data.push(((1 << 4) | BCF_BT_INT16 as c_int) as u8);
+        (*s).data.push(((1 << 4) | BCF_BT_INT16 as i32) as u8);
         let mut tmp = [0u8; size_of::<i16>()];
         i16_to_le(x as i16, tmp.as_mut_ptr());
         (*s).data.extend_from_slice(&tmp);
     } else {
-        (*s).data.push(((1 << 4) | BCF_BT_INT32 as c_int) as u8);
+        (*s).data.push(((1 << 4) | BCF_BT_INT32 as i32) as u8);
         let mut tmp = [0u8; size_of::<i32>()];
         i32_to_le(x, tmp.as_mut_ptr());
         (*s).data.extend_from_slice(&tmp);
@@ -7030,22 +7036,22 @@ unsafe fn bcf_enc_int1(s: *mut kstring_t, x: c_int) -> c_int {
 }
 
 // Native translation of htslib/vcf.c bcf_enc_long1() (VCF_ALLOW_INT64 path).
-unsafe fn bcf_enc_long1(s: *mut kstring_t, x: i64) -> c_int {
+unsafe fn bcf_enc_long1(s: *mut kstring_t, x: i64) -> i32 {
     const BCF_MAX_BT_INT32: i64 = 0x7fff_ffff;
     const BCF_INT64_VECTOR_END: i64 = i64::MIN + 1;
     if (BCF_MIN_BT_INT32..=BCF_MAX_BT_INT32).contains(&x) {
-        return bcf_enc_int1(s, x as c_int);
+        return bcf_enc_int1(s, x as i32);
     }
     let mut e = 0;
     if x == BCF_INT64_VECTOR_END {
-        e |= bcf_enc_size(s, 1, BCF_BT_INT8 as c_int);
-        e |= (kputc(bcf_int8_vector_end, &mut *s) < 0) as c_int;
+        e |= bcf_enc_size(s, 1, BCF_BT_INT8 as i32);
+        e |= (kputc(bcf_int8_vector_end, &mut *s) < 0) as i32;
     } else if x == bcf_int64_missing {
-        e |= bcf_enc_size(s, 1, BCF_BT_INT8 as c_int);
-        e |= (kputc(bcf_int8_missing, &mut *s) < 0) as c_int;
+        e |= bcf_enc_size(s, 1, BCF_BT_INT8 as i32);
+        e |= (kputc(bcf_int8_missing, &mut *s) < 0) as i32;
     } else {
-        e |= bcf_enc_size(s, 1, BCF_BT_INT64 as c_int);
-        e |= (super::hts::ks_expand(&mut *s, 8) < 0) as c_int;
+        e |= bcf_enc_size(s, 1, BCF_BT_INT64 as i32);
+        e |= (super::hts::ks_expand(&mut *s, 8) < 0) as i32;
         if e == 0 {
             let mut tmp = [0u8; 8];
             super::hts::u64_to_le(x as u64, tmp.as_mut_ptr());
@@ -7060,7 +7066,7 @@ unsafe fn bcf_enc_long1(s: *mut kstring_t, x: i64) -> c_int {
 }
 
 // Native translation of htslib/vcf.c serialize_float_array().
-unsafe fn serialize_float_array(s: *mut kstring_t, n: usize, a: *const f32) -> c_int {
+unsafe fn serialize_float_array(s: *mut kstring_t, n: usize, a: *const f32) -> i32 {
     let bytes = n.wrapping_mul(size_of::<f32>());
     if n != 0 && bytes / size_of::<f32>() != n {
         return -1;
@@ -7080,14 +7086,14 @@ unsafe fn serialize_float_array(s: *mut kstring_t, n: usize, a: *const f32) -> c
 
 // Native translation of htslib/vcf.c bcf_dec_typed_int1() (unbounded; used on
 // our own freshly-encoded buffers where bounds are guaranteed).
-unsafe fn bcf_dec_typed_int1_unsafe(p: *const u8, q: *mut *const u8) -> c_int {
-    let t = (*p & 0xf) as c_int;
-    if t == BCF_BT_INT8 as c_int {
+unsafe fn bcf_dec_typed_int1_unsafe(p: *const u8, q: *mut *const u8) -> i32 {
+    let t = (*p & 0xf) as i32;
+    if t == BCF_BT_INT8 as i32 {
         *q = p.add(2);
-        le_to_i8(p.add(1)) as c_int
-    } else if t == BCF_BT_INT16 as c_int {
+        le_to_i8(p.add(1)) as i32
+    } else if t == BCF_BT_INT16 as i32 {
         *q = p.add(3);
-        le_to_i16(p.add(1)) as c_int
+        le_to_i16(p.add(1)) as i32
     } else {
         *q = p.add(5);
         le_to_i32(p.add(1))
@@ -7095,11 +7101,11 @@ unsafe fn bcf_dec_typed_int1_unsafe(p: *const u8, q: *mut *const u8) -> c_int {
 }
 
 // Native translation of htslib/vcf.c bcf_dec_size() (unbounded).
-unsafe fn bcf_dec_size_unsafe(p: *const u8, q: *mut *const u8, type_: *mut c_int) -> c_int {
-    *type_ = (*p & 0xf) as c_int;
+unsafe fn bcf_dec_size_unsafe(p: *const u8, q: *mut *const u8, type_: *mut i32) -> i32 {
+    *type_ = (*p & 0xf) as i32;
     if *p >> 4 != 15 {
         *q = p.add(1);
-        (*p >> 4) as c_int
+        (*p >> 4) as i32
     } else {
         let mut next: *const u8 = std::ptr::null();
         let r = bcf_dec_typed_int1_unsafe(p.add(1), &mut next);
@@ -7116,7 +7122,7 @@ unsafe fn bcf_unpack_info_core1_rs(ptr: *mut u8, info: *mut bcf_info_t) -> *mut 
     let mut type_ = 0;
     let len = bcf_dec_size_unsafe(p, &mut p, &mut type_) as i64;
     (*info).type_ = type_;
-    (*info).len = len as c_int;
+    (*info).len = len as i32;
     let mut ptr = p as *mut u8;
     (*info).vptr = ptr;
     (*info).set_vptr_off((ptr as usize - ptr_start as usize) as u32);
@@ -7125,22 +7131,22 @@ unsafe fn bcf_unpack_info_core1_rs(ptr: *mut u8, info: *mut bcf_info_t) -> *mut 
     let mut adv = len;
     if len == 1 {
         match type_ {
-            x if x == BCF_BT_INT8 as c_int || x == BCF_BT_CHAR as c_int => {
+            x if x == BCF_BT_INT8 as i32 || x == BCF_BT_CHAR as i32 => {
                 (*info).v1.i = le_to_i8(ptr) as i64;
             }
-            x if x == BCF_BT_INT16 as c_int => {
+            x if x == BCF_BT_INT16 as i32 => {
                 (*info).v1.i = le_to_i16(ptr) as i64;
                 adv <<= 1;
             }
-            x if x == BCF_BT_INT32 as c_int => {
+            x if x == BCF_BT_INT32 as i32 => {
                 (*info).v1.i = le_to_i32(ptr) as i64;
                 adv <<= 2;
             }
-            x if x == BCF_BT_FLOAT as c_int => {
+            x if x == BCF_BT_FLOAT as i32 => {
                 (*info).v1.f = le_to_float(ptr);
                 adv <<= 2;
             }
-            x if x == BCF_BT_INT64 as c_int => {
+            x if x == BCF_BT_INT64 as i32 => {
                 (*info).v1.i = le_to_i64(ptr);
                 adv <<= 3;
             }
@@ -7155,7 +7161,7 @@ unsafe fn bcf_unpack_info_core1_rs(ptr: *mut u8, info: *mut bcf_info_t) -> *mut 
 }
 
 // Native translation of htslib/vcf.c bcf_unpack_fmt_core1().
-unsafe fn bcf_unpack_fmt_core1_rs(ptr: *mut u8, n_sample: c_int, fmt: *mut bcf_fmt_t) -> *mut u8 {
+unsafe fn bcf_unpack_fmt_core1_rs(ptr: *mut u8, n_sample: i32, fmt: *mut bcf_fmt_t) -> *mut u8 {
     let ptr_start = ptr;
     let mut p: *const u8 = ptr;
     (*fmt).id = bcf_dec_typed_int1_unsafe(p, &mut p);
@@ -7177,26 +7183,26 @@ unsafe fn bcf_dec_typed_int1_safe_rs(
     end: *const u8,
     q: *mut *const u8,
     val: *mut i32,
-) -> c_int {
+) -> i32 {
     unsafe {
         if p.is_null() || end.is_null() || q.is_null() || val.is_null() || end.offset_from(p) < 2 {
             return -1;
         }
-        let type_ = (*p & 0xf) as c_int;
+        let type_ = (*p & 0xf) as i32;
         let ptr = p.add(1);
         match type_ {
-            x if x == BCF_BT_INT8 as c_int => {
+            x if x == BCF_BT_INT8 as i32 => {
                 *val = le_to_i8(ptr) as i32;
                 *q = ptr.add(1);
             }
-            x if x == BCF_BT_INT16 as c_int => {
+            x if x == BCF_BT_INT16 as i32 => {
                 if end.offset_from(ptr) < size_of::<i16>() as isize {
                     return -1;
                 }
                 *val = le_to_i16(ptr) as i32;
                 *q = ptr.add(size_of::<i16>());
             }
-            x if x == BCF_BT_INT32 as c_int => {
+            x if x == BCF_BT_INT32 as i32 => {
                 if end.offset_from(ptr) < size_of::<i32>() as isize {
                     return -1;
                 }
@@ -7213,9 +7219,9 @@ unsafe fn bcf_dec_size_safe_rs(
     p: *const u8,
     end: *const u8,
     q: *mut *const u8,
-    num: *mut c_int,
-    type_: *mut c_int,
-) -> c_int {
+    num: *mut i32,
+    type_: *mut i32,
+) -> i32 {
     unsafe {
         if p.is_null()
             || end.is_null()
@@ -7226,31 +7232,31 @@ unsafe fn bcf_dec_size_safe_rs(
         {
             return -1;
         }
-        *type_ = (*p & 0xf) as c_int;
+        *type_ = (*p & 0xf) as i32;
         if *p >> 4 != 15 {
             *q = p.add(1);
-            *num = (*p >> 4) as c_int;
+            *num = (*p >> 4) as i32;
             return 0;
         }
         if bcf_dec_typed_int1_safe_rs(p.add(1), end, q, num) != 0 {
             return -1;
         }
-        (*num >= 0) as c_int - 1
+        (*num >= 0) as i32 - 1
     }
 }
 
-unsafe fn bcf_dec_int1_rs(p: *const u8, type_: c_int, q: *mut *const u8) -> i32 {
+unsafe fn bcf_dec_int1_rs(p: *const u8, type_: i32, q: *mut *const u8) -> i32 {
     unsafe {
         match type_ {
-            x if x == BCF_BT_INT8 as c_int => {
+            x if x == BCF_BT_INT8 as i32 => {
                 *q = p.add(1);
                 le_to_i8(p) as i32
             }
-            x if x == BCF_BT_INT16 as c_int => {
+            x if x == BCF_BT_INT16 as i32 => {
                 *q = p.add(size_of::<i16>());
                 le_to_i16(p) as i32
             }
-            x if x == BCF_BT_INT32 as c_int => {
+            x if x == BCF_BT_INT32 as i32 => {
                 *q = p.add(size_of::<i32>());
                 le_to_i32(p)
             }
@@ -7262,7 +7268,7 @@ unsafe fn bcf_dec_int1_rs(p: *const u8, type_: c_int, q: *mut *const u8) -> i32 
     }
 }
 
-unsafe fn bcf_record_check_id_valid(hdr: *const bcf_hdr_t, max_id: c_int, key: c_int) -> bool {
+unsafe fn bcf_record_check_id_valid(hdr: *const bcf_hdr_t, max_id: i32, key: i32) -> bool {
     unsafe {
         key >= 0
             && (hdr.is_null()
@@ -7277,10 +7283,10 @@ unsafe fn bcf_record_update_phasing(
     p: *mut u8,
     end: *const u8,
     q: *mut *const u8,
-    samples: c_int,
-    ploidy: c_int,
-    type_: c_int,
-) -> c_int {
+    samples: i32,
+    ploidy: i32,
+    type_: i32,
+) -> i32 {
     unsafe {
         if p.is_null() || end.is_null() || q.is_null() || samples < 0 || ploidy < 0 {
             return 1;
@@ -7296,7 +7302,7 @@ unsafe fn bcf_record_update_phasing(
         else {
             return 1;
         };
-        if end.offset_from(p.cast()) < bytes as isize {
+        if end.offset_from(p.cast::<u8>()) < bytes as isize {
             return 1;
         }
 
@@ -7331,7 +7337,7 @@ unsafe fn bcf_record_update_phasing(
     }
 }
 
-pub unsafe fn vcf_c_2040_bcf_record_check(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> c_int {
+pub unsafe fn vcf_c_2040_bcf_record_check(hdr: *const bcf_hdr_t, rec: *mut bcf1_t) -> i32 {
     unsafe {
         if rec.is_null() {
             return -2;
@@ -7348,7 +7354,7 @@ pub unsafe fn vcf_c_2040_bcf_record_check(hdr: *const bcf_hdr_t, rec: *mut bcf1_
         let gt_id = if hdr.is_null() || vcf_hdr_version_ge_44(hdr) {
             -1
         } else {
-            bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"GT".as_ptr())
+            bcf_hdr_id2int(hdr, BCF_DT_ID as i32, c"GT".as_ptr())
         };
 
         if (*rec).rid < 0
@@ -7370,7 +7376,7 @@ pub unsafe fn vcf_c_2040_bcf_record_check(hdr: *const bcf_hdr_t, rec: *mut bcf1_
         if bcf_dec_size_safe_rs(ptr, end, &mut next, &mut num, &mut type_) != 0 {
             return -2;
         }
-        if type_ != BCF_BT_CHAR as c_int {
+        if type_ != BCF_BT_CHAR as i32 {
             err |= BCF_ERR_TAG_INVALID;
         }
         let mut bytes = (num as usize) << BCF_TYPE_SHIFT[type_ as usize];
@@ -7386,7 +7392,7 @@ pub unsafe fn vcf_c_2040_bcf_record_check(hdr: *const bcf_hdr_t, rec: *mut bcf1_
             if bcf_dec_size_safe_rs(ptr, end, &mut next, &mut num, &mut type_) != 0 {
                 return -2;
             }
-            if type_ != BCF_BT_CHAR as c_int {
+            if type_ != BCF_BT_CHAR as i32 {
                 err |= BCF_ERR_CHAR;
             }
             bytes = (num as usize) << BCF_TYPE_SHIFT[type_ as usize];
@@ -7433,7 +7439,7 @@ pub unsafe fn vcf_c_2040_bcf_record_check(hdr: *const bcf_hdr_t, rec: *mut bcf1_
             if bcf_dec_size_safe_rs(ptr, end, &mut next, &mut num, &mut type_) != 0 {
                 return -2;
             }
-            if ((1u32 << type_) & is_valid_type) == 0 || (type_ == BCF_BT_NULL as c_int && num > 0)
+            if ((1u32 << type_) & is_valid_type) == 0 || (type_ == BCF_BT_NULL as i32 && num > 0)
             {
                 err |= BCF_ERR_TAG_INVALID;
             }
@@ -7458,7 +7464,7 @@ pub unsafe fn vcf_c_2040_bcf_record_check(hdr: *const bcf_hdr_t, rec: *mut bcf1_
             if bcf_dec_size_safe_rs(ptr, indiv_end, &mut next, &mut num, &mut type_) != 0 {
                 return -2;
             }
-            if ((1u32 << type_) & is_valid_type) == 0 || (type_ == BCF_BT_NULL as c_int && num > 0)
+            if ((1u32 << type_) & is_valid_type) == 0 || (type_ == BCF_BT_NULL as i32 && num > 0)
             {
                 err |= BCF_ERR_TAG_INVALID;
             }
@@ -7467,7 +7473,7 @@ pub unsafe fn vcf_c_2040_bcf_record_check(hdr: *const bcf_hdr_t, rec: *mut bcf1_
                     next.cast_mut(),
                     indiv_end,
                     &mut next,
-                    (*rec).n_sample() as c_int,
+                    (*rec).n_sample() as i32,
                     num,
                     type_,
                 ) != 0
@@ -7489,7 +7495,7 @@ pub unsafe fn vcf_c_2040_bcf_record_check(hdr: *const bcf_hdr_t, rec: *mut bcf1_
             let rlen = vcf_get_rlen_decoded(hdr, rec);
             (*rec).rlen = rlen.max(0);
         }
-        (*rec).errcode |= err as c_int;
+        (*rec).errcode |= err as i32;
         if err == 0 {
             0
         } else {
@@ -7498,7 +7504,7 @@ pub unsafe fn vcf_c_2040_bcf_record_check(hdr: *const bcf_hdr_t, rec: *mut bcf1_
     }
 }
 
-pub unsafe fn vcf_c_2278_bcf1_sync_id(line: *mut bcf1_t, str_: *mut kstring_t) -> c_int {
+pub unsafe fn vcf_c_2278_bcf1_sync_id(line: *mut bcf1_t, str_: *mut kstring_t) -> i32 {
     unsafe {
         if line.is_null() || str_.is_null() {
             return -1;
@@ -7506,16 +7512,16 @@ pub unsafe fn vcf_c_2278_bcf1_sync_id(line: *mut bcf1_t, str_: *mut kstring_t) -
         if !(*line).d.id.is_empty() && (*line).d.id.as_slice() != b"." {
             bcf_enc_vchar(
                 str_,
-                (*line).d.id.len() as c_int,
+                (*line).d.id.len() as i32,
                 (*line).d.id.as_ptr().cast::<c_char>(),
             )
         } else {
-            bcf_enc_size(str_, 0, BCF_BT_CHAR as c_int)
+            bcf_enc_size(str_, 0, BCF_BT_CHAR as i32)
         }
     }
 }
 
-pub unsafe fn vcf_c_2287_bcf1_sync_alleles(line: *mut bcf1_t, str_: *mut kstring_t) -> c_int {
+pub unsafe fn vcf_c_2287_bcf1_sync_alleles(line: *mut bcf1_t, str_: *mut kstring_t) -> i32 {
     unsafe {
         if line.is_null() || str_.is_null() {
             return -1;
@@ -7523,7 +7529,7 @@ pub unsafe fn vcf_c_2287_bcf1_sync_alleles(line: *mut bcf1_t, str_: *mut kstring
         for i in 0..(*line).n_allele() as usize {
             let d = &(*line).d;
             let allele = &d.allele[i];
-            if bcf_enc_vchar(str_, allele.len() as c_int, allele.as_ptr().cast::<c_char>()) < 0 {
+            if bcf_enc_vchar(str_, allele.len() as i32, allele.as_ptr().cast::<c_char>()) < 0 {
                 return -1;
             }
         }
@@ -7538,28 +7544,28 @@ pub unsafe fn vcf_c_2287_bcf1_sync_alleles(line: *mut bcf1_t, str_: *mut kstring
     }
 }
 
-pub unsafe fn vcf_c_2298_bcf1_sync_filter(line: *mut bcf1_t, str_: *mut kstring_t) -> c_int {
+pub unsafe fn vcf_c_2298_bcf1_sync_filter(line: *mut bcf1_t, str_: *mut kstring_t) -> i32 {
     unsafe {
         if line.is_null() || str_.is_null() {
             return -1;
         }
         if !(&(*line).d).flt.is_empty() {
             let d = &mut (*line).d;
-            bcf_enc_vint(str_, d.flt.len() as c_int, d.flt.as_mut_ptr(), -1)
+            bcf_enc_vint(str_, d.flt.len() as i32, d.flt.as_mut_ptr(), -1)
         } else {
             bcf_enc_vint(str_, 0, std::ptr::null_mut(), -1)
         }
     }
 }
 
-pub unsafe fn vcf_c_2308_bcf1_sync_info(line: *mut bcf1_t, str_: *mut kstring_t) -> c_int {
+pub unsafe fn vcf_c_2308_bcf1_sync_info(line: *mut bcf1_t, str_: *mut kstring_t) -> i32 {
     unsafe {
         if line.is_null() || str_.is_null() {
             return -1;
         }
         let mut remove_index = -1;
         let mut error = false;
-        for i in 0..(*line).n_info() as c_int {
+        for i in 0..(*line).n_info() as i32 {
             let info = (&(*line).d).info[i as usize];
             if info.vptr.is_null() {
                 if remove_index < 0 {
@@ -7592,7 +7598,7 @@ pub unsafe fn vcf_c_2308_bcf1_sync_info(line: *mut bcf1_t, str_: *mut kstring_t)
     }
 }
 
-pub unsafe fn vcf_c_2332_bcf1_sync(line: *mut bcf1_t) -> c_int {
+pub unsafe fn vcf_c_2332_bcf1_sync(line: *mut bcf1_t) -> i32 {
     unsafe {
         if line.is_null() {
             return -1;
@@ -7604,21 +7610,21 @@ pub unsafe fn vcf_c_2332_bcf1_sync(line: *mut bcf1_t) -> c_int {
             if vcf_c_2278_bcf1_sync_id(line, &mut tmp) < 0 {
                 return -1;
             }
-            (*line).unpack_size[0] = tmp.data.len() as c_int;
+            (*line).unpack_size[0] = tmp.data.len() as i32;
             let mut prev_len = tmp.data.len();
 
             if vcf_c_2287_bcf1_sync_alleles(line, &mut tmp) < 0 {
                 super::hts::ks_free(&mut tmp);
                 return -1;
             }
-            (*line).unpack_size[1] = (tmp.data.len() - prev_len) as c_int;
+            (*line).unpack_size[1] = (tmp.data.len() - prev_len) as i32;
             prev_len = tmp.data.len();
 
             if vcf_c_2298_bcf1_sync_filter(line, &mut tmp) < 0 {
                 super::hts::ks_free(&mut tmp);
                 return -1;
             }
-            (*line).unpack_size[2] = (tmp.data.len() - prev_len) as c_int;
+            (*line).unpack_size[2] = (tmp.data.len() - prev_len) as i32;
 
             if vcf_c_2308_bcf1_sync_info(line, &mut tmp) < 0 {
                 super::hts::ks_free(&mut tmp);
@@ -7626,12 +7632,12 @@ pub unsafe fn vcf_c_2332_bcf1_sync(line: *mut bcf1_t) -> c_int {
             }
             (*line).shared.data = std::mem::take(&mut tmp.data);
         } else if (*line).d.shared_dirty != 0 {
-            if (*line).unpacked & BCF_UN_STR as c_int == 0 {
-                bcf_unpack(line, BCF_UN_STR as c_int);
+            if (*line).unpacked & BCF_UN_STR as i32 == 0 {
+                bcf_unpack(line, BCF_UN_STR as i32);
             }
             let mut ptr_ori = (*line).shared.data.as_ptr().cast::<u8>().cast_mut();
 
-            if (*line).d.shared_dirty & BCF1_DIRTY_ID as c_int != 0 {
+            if (*line).d.shared_dirty & BCF1_DIRTY_ID as i32 != 0 {
                 if vcf_c_2278_bcf1_sync_id(line, &mut tmp) < 0 {
                     super::hts::ks_free(&mut tmp);
                     return -1;
@@ -7645,10 +7651,10 @@ pub unsafe fn vcf_c_2332_bcf1_sync(line: *mut bcf1_t) -> c_int {
                 }
             }
             ptr_ori = ptr_ori.add((*line).unpack_size[0] as usize);
-            (*line).unpack_size[0] = tmp.data.len() as c_int;
+            (*line).unpack_size[0] = tmp.data.len() as i32;
             let mut prev_len = tmp.data.len();
 
-            if (*line).d.shared_dirty & BCF1_DIRTY_ALS as c_int != 0 {
+            if (*line).d.shared_dirty & BCF1_DIRTY_ALS as i32 != 0 {
                 if vcf_c_2287_bcf1_sync_alleles(line, &mut tmp) < 0 {
                     super::hts::ks_free(&mut tmp);
                     return -1;
@@ -7669,11 +7675,11 @@ pub unsafe fn vcf_c_2332_bcf1_sync(line: *mut bcf1_t) -> c_int {
                 }
             }
             ptr_ori = ptr_ori.add((*line).unpack_size[1] as usize);
-            (*line).unpack_size[1] = (tmp.data.len() - prev_len) as c_int;
+            (*line).unpack_size[1] = (tmp.data.len() - prev_len) as i32;
             prev_len = tmp.data.len();
 
-            if (*line).unpacked & BCF_UN_FLT as c_int != 0 {
-                if (*line).d.shared_dirty & BCF1_DIRTY_FLT as c_int != 0 {
+            if (*line).unpacked & BCF_UN_FLT as i32 != 0 {
+                if (*line).d.shared_dirty & BCF1_DIRTY_FLT as i32 != 0 {
                     if vcf_c_2298_bcf1_sync_filter(line, &mut tmp) < 0 {
                         super::hts::ks_free(&mut tmp);
                         return -1;
@@ -7690,10 +7696,10 @@ pub unsafe fn vcf_c_2332_bcf1_sync(line: *mut bcf1_t) -> c_int {
                     return -1;
                 }
                 ptr_ori = ptr_ori.add((*line).unpack_size[2] as usize);
-                (*line).unpack_size[2] = (tmp.data.len() - prev_len) as c_int;
+                (*line).unpack_size[2] = (tmp.data.len() - prev_len) as i32;
 
-                if (*line).unpacked & BCF_UN_INFO as c_int != 0
-                    && (*line).d.shared_dirty & BCF1_DIRTY_INF as c_int != 0
+                if (*line).unpacked & BCF_UN_INFO as i32 != 0
+                    && (*line).d.shared_dirty & BCF1_DIRTY_INF as i32 != 0
                 {
                     if vcf_c_2308_bcf1_sync_info(line, &mut tmp) < 0 {
                         super::hts::ks_free(&mut tmp);
@@ -7727,7 +7733,7 @@ pub unsafe fn vcf_c_2332_bcf1_sync(line: *mut bcf1_t) -> c_int {
             (*line).shared.data = std::mem::take(&mut tmp.data);
         }
 
-        if (*line).shared.data.as_ptr() != shared_ori && (*line).unpacked & BCF_UN_INFO as c_int != 0
+        if (*line).shared.data.as_ptr() != shared_ori && (*line).unpacked & BCF_UN_INFO as i32 != 0
         {
             let mut off_new =
                 ((*line).unpack_size[0] + (*line).unpack_size[1] + (*line).unpack_size[2]) as usize;
@@ -7760,7 +7766,7 @@ pub unsafe fn vcf_c_2332_bcf1_sync(line: *mut bcf1_t) -> c_int {
         {
             let mut tmp = kstring_t::default();
             let mut remove_index = -1;
-            for i in 0..(*line).n_fmt() as c_int {
+            for i in 0..(*line).n_fmt() as i32 {
                 let fmt = (&(*line).d).fmt[i as usize];
                 if fmt.p.is_null() {
                     if remove_index < 0 {
@@ -7829,8 +7835,8 @@ unsafe fn vcf_get_rlen_decoded(hdr: *const bcf_hdr_t, line: *mut bcf1_t) -> hts_
             return -1;
         }
         let mut len_ref = 0;
-        if (*line).unpacked & BCF_UN_STR as c_int == 0 {
-            let _ = bcf_unpack(line, BCF_UN_STR as c_int);
+        if (*line).unpacked & BCF_UN_STR as i32 == 0 {
+            let _ = bcf_unpack(line, BCF_UN_STR as i32);
         }
         if (*line).n_allele() != 0 && !(&(*line).d).allele.is_empty() && !(&(*line).d).allele[0].is_empty()
         {
@@ -7850,14 +7856,14 @@ unsafe fn vcf_get_rlen_decoded(hdr: *const bcf_hdr_t, line: *mut bcf1_t) -> hts_
             if !svlen.is_null() && !(*svlen).vptr.is_null() {
                 for i in 0..(*svlen).len.max(0) as usize {
                     let value = match (*svlen).type_ {
-                        x if x == BCF_BT_INT8 as c_int => le_to_i8((*svlen).vptr.add(i)) as i64,
-                        x if x == BCF_BT_INT16 as c_int => {
+                        x if x == BCF_BT_INT8 as i32 => le_to_i8((*svlen).vptr.add(i)) as i64,
+                        x if x == BCF_BT_INT16 as i32 => {
                             le_to_i16((*svlen).vptr.add(i * size_of::<i16>())) as i64
                         }
-                        x if x == BCF_BT_INT32 as c_int => {
+                        x if x == BCF_BT_INT32 as i32 => {
                             le_to_i32((*svlen).vptr.add(i * size_of::<i32>())) as i64
                         }
-                        x if x == BCF_BT_INT64 as c_int => {
+                        x if x == BCF_BT_INT64 as i32 => {
                             le_to_i64((*svlen).vptr.add(i * size_of::<i64>()))
                         }
                         _ => 0,
@@ -7878,14 +7884,14 @@ unsafe fn vcf_get_rlen_decoded(hdr: *const bcf_hdr_t, line: *mut bcf1_t) -> hts_
                     let base = (*len).p.add(sample * (*len).size as usize);
                     for i in 0..(*len).n.max(0) as usize {
                         let value = match (*len).type_ {
-                            x if x == BCF_BT_INT8 as c_int => le_to_i8(base.add(i)) as i64,
-                            x if x == BCF_BT_INT16 as c_int => {
+                            x if x == BCF_BT_INT8 as i32 => le_to_i8(base.add(i)) as i64,
+                            x if x == BCF_BT_INT16 as i32 => {
                                 le_to_i16(base.add(i * size_of::<i16>())) as i64
                             }
-                            x if x == BCF_BT_INT32 as c_int => {
+                            x if x == BCF_BT_INT32 as i32 => {
                                 le_to_i32(base.add(i * size_of::<i32>())) as i64
                             }
-                            x if x == BCF_BT_INT64 as c_int => {
+                            x if x == BCF_BT_INT64 as i32 => {
                                 le_to_i64(base.add(i * size_of::<i64>()))
                             }
                             _ => 0,
@@ -7908,13 +7914,13 @@ pub unsafe fn vcf_c_6420_get_rlen(hdr: *const bcf_hdr_t, line: *mut bcf1_t) -> i
 pub unsafe fn vcf_c_5884__bcf1_sync_alleles(
     hdr: *const bcf_hdr_t,
     line: *mut bcf1_t,
-    nals: c_int,
-) -> c_int {
+    nals: i32,
+) -> i32 {
     unsafe {
         if line.is_null() || nals < 0 {
             return -1;
         }
-        (*line).d.shared_dirty |= BCF1_DIRTY_ALS as c_int;
+        (*line).d.shared_dirty |= BCF1_DIRTY_ALS as i32;
         (*line).d.var_type = -1;
         (*line).set_n_allele(nals as u32);
 
@@ -7950,9 +7956,9 @@ unsafe fn find_chrom_header_line(s: *mut c_char) -> *mut c_char {
 // counts this function handles).
 pub unsafe fn bcf_hdr_subset(
     h0: *const bcf_hdr_t,
-    n: c_int,
+    n: i32,
     samples: *const *mut c_char,
-    imap: *mut c_int,
+    imap: *mut i32,
 ) -> *mut bcf_hdr_t {
     let mut htxt = kstring_t::default();
     let mut str_ = kstring_t::default();
@@ -7973,8 +7979,8 @@ pub unsafe fn bcf_hdr_subset(
     if h.is_null() {
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_ERROR,
-            c"bcf_hdr_subset".as_ptr(),
-            c"Failed to allocate bcf header".as_ptr(),
+            b"bcf_hdr_subset",
+            b"Failed to allocate bcf header",
         );
         fail(&mut h, &mut str_, &mut htxt);
         return std::ptr::null_mut();
@@ -7982,8 +7988,8 @@ pub unsafe fn bcf_hdr_subset(
     if bcf_hdr_format(h0, 1, &mut htxt) < 0 {
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_ERROR,
-            c"bcf_hdr_subset".as_ptr(),
-            c"Failed to get header text".as_ptr(),
+            b"bcf_hdr_subset",
+            b"Failed to get header text",
         );
         fail(&mut h, &mut str_, &mut htxt);
         return std::ptr::null_mut();
@@ -8005,7 +8011,7 @@ pub unsafe fn bcf_hdr_subset(
             if p.is_null() {
                 break;
             }
-            p = libc::strchr(p, b'\t' as c_int);
+            p = libc::strchr(p, b'\t' as i32);
             if p.is_null() || i >= end {
                 break;
             }
@@ -8015,8 +8021,8 @@ pub unsafe fn bcf_hdr_subset(
         if i != end {
             crate::htslib_rs::hts::hts_log_cstr(
                 crate::htslib_rs::hts::HTS_LOG_ERROR,
-                c"bcf_hdr_subset".as_ptr(),
-                c"Wrong number of columns in header #CHROM line".as_ptr(),
+                b"bcf_hdr_subset",
+                b"Wrong number of columns in header #CHROM line",
             );
             fail(&mut h, &mut str_, &mut htxt);
             return std::ptr::null_mut();
@@ -8035,18 +8041,18 @@ pub unsafe fn bcf_hdr_subset(
                 .unwrap_or_default();
                 crate::htslib_rs::hts::hts_log_cstr(
                     crate::htslib_rs::hts::HTS_LOG_ERROR,
-                    c"bcf_hdr_subset".as_ptr(),
-                    msg.as_ptr(),
+                    b"bcf_hdr_subset",
+                    msg.to_bytes(),
                 );
                 fail(&mut h, &mut str_, &mut htxt);
                 return std::ptr::null_mut();
             }
-            let mapped = bcf_hdr_id2int(h0, BCF_DT_SAMPLE as c_int, sample_i);
+            let mapped = bcf_hdr_id2int(h0, BCF_DT_SAMPLE as i32, sample_i);
             *imap.offset(i) = mapped;
             if mapped < 0 {
                 continue;
             }
-            r |= kputc(b'\t' as c_int, &mut str_) < 0;
+            r |= kputc(b'\t' as i32, &mut str_) < 0;
             r |= kputs(CStr::from_ptr(sample_i).to_bytes(), &mut str_) < 0;
             seen.push(sample_i);
         }
@@ -8059,13 +8065,13 @@ pub unsafe fn bcf_hdr_subset(
     {
         str_.data.pop();
     }
-    r |= kputc(b'\n' as c_int, &mut str_) < 0;
+    r |= kputc(b'\n' as i32, &mut str_) < 0;
     if r {
-        let err = libc::strerror(*crate::htslib_rs::c_compat::__errno_location());
+        let err = libc::strerror(*libc::__errno_location());
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_ERROR,
-            c"bcf_hdr_subset".as_ptr(),
-            err,
+            b"bcf_hdr_subset",
+            CStr::from_ptr(err).to_bytes(),
         );
         fail(&mut h, &mut str_, &mut htxt);
         return std::ptr::null_mut();
@@ -8082,7 +8088,7 @@ pub unsafe fn bcf_hdr_subset(
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_add_sample_len().
-unsafe fn bcf_hdr_add_sample_len(h: *mut bcf_hdr_t, s: *const c_char, len: usize) -> c_int {
+unsafe fn bcf_hdr_add_sample_len(h: *mut bcf_hdr_t, s: *const c_char, len: usize) -> i32 {
     use super::hts::isspace_c;
     let mut ss = s;
     // while ( *ss && isspace_c(*ss) && ss - s < len) ss++;
@@ -8095,7 +8101,7 @@ unsafe fn bcf_hdr_add_sample_len(h: *mut bcf_hdr_t, s: *const c_char, len: usize
     }
 
     let d = (*h).dict[BCF_DT_SAMPLE as usize].cast::<kh_vdict_t>();
-    let mut ret: c_int = 0;
+    let mut ret: i32 = 0;
     let sdup = libc::malloc(len + 1).cast::<c_char>();
     if sdup.is_null() {
         return -1;
@@ -8122,7 +8128,7 @@ unsafe fn bcf_hdr_add_sample_len(h: *mut bcf_hdr_t, s: *const c_char, len: usize
         // absent
         let valp = (*d).vals().add(k as usize);
         *valp = bcf_idinfo_def();
-        (*valp).id = n as c_int;
+        (*valp).id = n as i32;
     } else {
         let msg = std::ffi::CString::new(format!(
             "Duplicated sample name '{}'",
@@ -8139,7 +8145,7 @@ unsafe fn bcf_hdr_add_sample_len(h: *mut bcf_hdr_t, s: *const c_char, len: usize
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_add_sample().
-pub unsafe fn bcf_hdr_add_sample(hdr: *mut bcf_hdr_t, sample: *const c_char) -> c_int {
+pub unsafe fn bcf_hdr_add_sample(hdr: *mut bcf_hdr_t, sample: *const c_char) -> i32 {
     if sample.is_null() {
         // Allowed for backwards-compatibility, calling with s == NULL
         // used to trigger bcf_hdr_sync(h);
@@ -8149,25 +8155,25 @@ pub unsafe fn bcf_hdr_add_sample(hdr: *mut bcf_hdr_t, sample: *const c_char) -> 
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_set().
-pub unsafe fn bcf_hdr_set(hdr: *mut bcf_hdr_t, fname: *const c_char) -> c_int {
-    let mut n: c_int = 0;
+pub unsafe fn bcf_hdr_set(hdr: *mut bcf_hdr_t, fname: *const c_char) -> i32 {
+    let mut n: i32 = 0;
     let lines = crate::htslib_rs::hts::hts_readlines(fname, &mut n);
     if lines.is_null() {
         return 1;
     }
-    let mut i: c_int = 0;
-    let fail = |i: &mut c_int, n: c_int, lines: *mut *mut c_char| -> c_int {
-        let save_errno = *crate::htslib_rs::c_compat::__errno_location();
+    let mut i: i32 = 0;
+    let fail = |i: &mut i32, n: i32, lines: *mut *mut c_char| -> i32 {
+        let save_errno = *libc::__errno_location();
         while *i < n {
             libc::free((*lines.add(*i as usize)).cast());
             *i += 1;
         }
         libc::free(lines.cast());
-        *crate::htslib_rs::c_compat::__errno_location() = save_errno;
+        *libc::__errno_location() = save_errno;
         1
     };
     while i < n - 1 {
-        let mut k: c_int = 0;
+        let mut k: i32 = 0;
         let hrec = bcf_hdr_parse_line(hdr, *lines.add(i as usize), &mut k);
         if hrec.is_null() {
             return fail(&mut i, n, lines);
@@ -8192,7 +8198,7 @@ pub unsafe fn bcf_hdr_set(hdr: *mut bcf_hdr_t, fname: *const c_char) -> c_int {
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_format().
-pub unsafe fn bcf_hdr_format(hdr: *const bcf_hdr_t, is_bcf: c_int, str_: *mut kstring_t) -> c_int {
+pub unsafe fn bcf_hdr_format(hdr: *const bcf_hdr_t, is_bcf: i32, str_: *mut kstring_t) -> i32 {
     let mut r = false;
     for i in 0..(*hdr).nhrec as usize {
         r |= bcf_hdr_format_native_hrec(*(*hdr).hrec.add(i), is_bcf, str_) < 0;
@@ -8207,11 +8213,11 @@ pub unsafe fn bcf_hdr_format(hdr: *const bcf_hdr_t, is_bcf: c_int, str_: *mut ks
     if nsamples != 0 {
         r |= kputs(c"\tFORMAT".to_bytes(), &mut *str_) < 0;
         for i in 0..nsamples as usize {
-            r |= kputc(b'\t' as c_int, &mut *str_) < 0;
+            r |= kputc(b'\t' as i32, &mut *str_) < 0;
             r |= kputs(CStr::from_ptr(*(*hdr).samples.add(i)).to_bytes(), &mut *str_) < 0;
         }
     }
-    r |= kputc(b'\n' as c_int, &mut *str_) < 0;
+    r |= kputc(b'\n' as i32, &mut *str_) < 0;
 
     if r {
         -1
@@ -8223,24 +8229,24 @@ pub unsafe fn bcf_hdr_format(hdr: *const bcf_hdr_t, is_bcf: c_int, str_: *mut ks
 #[inline]
 unsafe fn bcf_hdr_format_native_hrec(
     hrec: *const bcf_hrec_t,
-    is_bcf: c_int,
+    is_bcf: i32,
     str_: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     bcf_hrec_format_native(hrec, is_bcf, str_)
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_fmt_text().
 pub unsafe fn bcf_hdr_fmt_text(
     hdr: *const bcf_hdr_t,
-    is_bcf: c_int,
-    len: *mut c_int,
+    is_bcf: i32,
+    len: *mut i32,
 ) -> *mut c_char {
     let mut txt = kstring_t::default();
     if bcf_hdr_format(hdr, is_bcf, &mut txt) < 0 {
         return std::ptr::null_mut();
     }
     if !len.is_null() {
-        *len = txt.data.len() as c_int;
+        *len = txt.data.len() as i32;
     }
     // Return a libc-owned NUL-terminated copy (callers free via libc::free).
     let out = libc::malloc(txt.data.len() + 1).cast::<c_char>();
@@ -8255,8 +8261,8 @@ pub unsafe fn bcf_hdr_fmt_text(
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_append().
-pub unsafe fn bcf_hdr_append(h: *mut bcf_hdr_t, line: *const c_char) -> c_int {
-    let mut len: c_int = 0;
+pub unsafe fn bcf_hdr_append(h: *mut bcf_hdr_t, line: *const c_char) -> i32 {
+    let mut len: i32 = 0;
     let hrec = bcf_hdr_parse_line(h, line, &mut len);
     if hrec.is_null() {
         return -1;
@@ -8272,7 +8278,7 @@ pub unsafe fn bcf_hdr_append(h: *mut bcf_hdr_t, line: *const c_char) -> c_int {
 pub unsafe fn bcf_hdr_get_version(hdr: *const bcf_hdr_t) -> *const c_char {
     let hrec = bcf_hdr_get_hrec(
         hdr,
-        BCF_HL_GEN as c_int,
+        BCF_HL_GEN as i32,
         c"fileformat".as_ptr(),
         std::ptr::null(),
         std::ptr::null(),
@@ -8280,8 +8286,8 @@ pub unsafe fn bcf_hdr_get_version(hdr: *const bcf_hdr_t) -> *const c_char {
     if hrec.is_null() {
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_WARNING,
-            c"bcf_hdr_get_version".as_ptr(),
-            c"No version string found, assuming VCFv4.2".as_ptr(),
+            b"bcf_hdr_get_version",
+            b"No version string found, assuming VCFv4.2",
         );
         return c"VCFv4.2".as_ptr();
     }
@@ -8289,16 +8295,16 @@ pub unsafe fn bcf_hdr_get_version(hdr: *const bcf_hdr_t) -> *const c_char {
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_set_version().
-pub unsafe fn bcf_hdr_set_version(hdr: *mut bcf_hdr_t, version: *const c_char) -> c_int {
+pub unsafe fn bcf_hdr_set_version(hdr: *mut bcf_hdr_t, version: *const c_char) -> i32 {
     let hrec = bcf_hdr_get_hrec(
         hdr,
-        BCF_HL_GEN as c_int,
+        BCF_HL_GEN as i32,
         c"fileformat".as_ptr(),
         std::ptr::null(),
         std::ptr::null(),
     );
     if hrec.is_null() {
-        let mut len: c_int = 0;
+        let mut len: i32 = 0;
         let mut str_ = kstring_t::default();
         if ks_build(&mut str_, &[c"##fileformat=".as_ptr(), version]) < 0 {
             super::hts::ks_free(&mut str_);
@@ -8392,13 +8398,13 @@ unsafe fn bcf_hdr_remove_from_hdict(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) 
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_remove().
-pub unsafe fn bcf_hdr_remove(hdr: *mut bcf_hdr_t, type_: c_int, key: *const c_char) {
-    let mut i: c_int = 0;
+pub unsafe fn bcf_hdr_remove(hdr: *mut bcf_hdr_t, type_: i32, key: *const c_char) {
+    let mut i: i32 = 0;
     let mut hrec: *mut bcf_hrec_t;
     if key.is_null() {
         // no key, remove all entries of this type
         while i < (*hdr).nhrec {
-            if (*(*(*hdr).hrec.add(i as usize))).type_ as c_int != type_ {
+            if (*(*(*hdr).hrec.add(i as usize))).type_ as i32 != type_ {
                 i += 1;
                 continue;
             }
@@ -8454,7 +8460,7 @@ pub unsafe fn bcf_hdr_remove(hdr: *mut bcf_hdr_t, type_: c_int, key: *const c_ch
             i = 0;
             while i < (*hdr).nhrec {
                 let h_i = *(*hdr).hrec.add(i as usize);
-                if (*h_i).type_ as c_int != type_ {
+                if (*h_i).type_ as i32 != type_ {
                     i += 1;
                     continue;
                 }
@@ -8492,17 +8498,17 @@ pub unsafe fn bcf_hdr_remove(hdr: *mut bcf_hdr_t, type_: c_int, key: *const c_ch
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_seqnames().
-pub unsafe fn bcf_hdr_seqnames(h: *const bcf_hdr_t, nseqs: *mut c_int) -> *mut *const c_char {
+pub unsafe fn bcf_hdr_seqnames(h: *const bcf_hdr_t, nseqs: *mut i32) -> *mut *const c_char {
     let d = (*h).dict[BCF_DT_CTG as usize].cast::<kh_vdict_t>();
-    let mut m = if d.is_null() { 0 } else { (*d).size } as c_int; // kh_size
+    let mut m = if d.is_null() { 0 } else { (*d).size } as i32; // kh_size
     let mut names =
         libc::calloc(m.max(0) as usize, size_of::<*const c_char>()).cast::<*const c_char>();
     if names.is_null() && m > 0 {
         let msg = c"Failed to allocate memory";
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_ERROR,
-            c"bcf_hdr_seqnames".as_ptr(),
-            msg.as_ptr(),
+            b"bcf_hdr_seqnames",
+            msg.to_bytes(),
         );
         *nseqs = 0;
         return std::ptr::null_mut();
@@ -8520,10 +8526,10 @@ pub unsafe fn bcf_hdr_seqnames(h: *const bcf_hdr_t, nseqs: *mut c_int) -> *mut *
             if tid >= m {
                 // Can happen after a contig was removed via bcf_hdr_remove().
                 if super::hts::hts_resize_array_(
-                    size_of::<*const c_char>() as size_t,
-                    (tid + 1) as size_t,
-                    size_of::<c_int>() as size_t,
-                    (&mut m as *mut c_int).cast(),
+                    size_of::<*const c_char>() as usize,
+                    (tid + 1) as usize,
+                    size_of::<i32>() as usize,
+                    (&mut m as *mut i32).cast(),
                     (&mut names as *mut *mut *const c_char).cast(),
                     super::hts::HTS_RESIZE_CLEAR,
                     c"bcf_hdr_seqnames".as_ptr(),
@@ -8532,8 +8538,8 @@ pub unsafe fn bcf_hdr_seqnames(h: *const bcf_hdr_t, nseqs: *mut c_int) -> *mut *
                     let msg = c"Failed to allocate memory";
                     crate::htslib_rs::hts::hts_log_cstr(
                         crate::htslib_rs::hts::HTS_LOG_ERROR,
-                        c"bcf_hdr_seqnames".as_ptr(),
-                        msg.as_ptr(),
+                        b"bcf_hdr_seqnames",
+                        msg.to_bytes(),
                     );
                     *nseqs = 0;
                     libc::free(names.cast());
@@ -8566,9 +8572,9 @@ pub unsafe fn bcf_hdr_seqnames(h: *const bcf_hdr_t, nseqs: *mut c_int) -> *mut *
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_parse().
-pub unsafe fn bcf_hdr_parse(hdr: *mut bcf_hdr_t, htxt: *mut c_char) -> c_int {
-    let mut len: c_int = 0;
-    let mut done: c_int = 0;
+pub unsafe fn bcf_hdr_parse(hdr: *mut bcf_hdr_t, htxt: *mut c_char) -> i32 {
+    let mut len: i32 = 0;
+    let mut done: i32 = 0;
     let mut p = htxt;
 
     // Check sanity: "fileformat" string must come as first
@@ -8623,7 +8629,7 @@ pub unsafe fn bcf_hdr_parse(hdr: *mut bcf_hdr_t, htxt: *mut c_char) -> c_int {
         if libc::strncmp(c"#CHROM\t".as_ptr(), p, 7) != 0
             && libc::strncmp(c"#CHROM ".as_ptr(), p, 7) != 0
         {
-            let eol = libc::strchr(p, b'\n' as c_int);
+            let eol = libc::strchr(p, b'\n' as i32);
             if *p != 0 {
                 c_log_warning(c"Could not parse header line".as_ptr());
             }
@@ -8658,7 +8664,7 @@ pub unsafe fn bcf_hdr_parse(hdr: *mut bcf_hdr_t, htxt: *mut c_char) -> c_int {
 
 // Native translation of htslib/vcf.c bcf_hdr_sync(): rebuild id[]/samples/n[]
 // from the dicts and invalidate the key-length cache.
-unsafe fn bcf_hdr_sync_native(h: *mut bcf_hdr_t) -> c_int {
+unsafe fn bcf_hdr_sync_native(h: *mut bcf_hdr_t) -> i32 {
     let mut i = 0usize;
     while i < 3 {
         let d = (*h).dict[i].cast::<kh_vdict_t>();
@@ -8671,7 +8677,7 @@ unsafe fn bcf_hdr_sync_native(h: *mut bcf_hdr_t) -> c_int {
             if new_idpair.is_null() {
                 return -1;
             }
-            (*h).n[i] = dsize as c_int;
+            (*h).n[i] = dsize as i32;
             (*h).id[i] = new_idpair;
         }
         let mut k: u32 = 0;
@@ -8699,7 +8705,7 @@ unsafe fn bcf_hdr_sync_native(h: *mut bcf_hdr_t) -> c_int {
     0
 }
 
-pub unsafe fn bcf_hdr_sync(h: *mut bcf_hdr_t) -> c_int {
+pub unsafe fn bcf_hdr_sync(h: *mut bcf_hdr_t) -> i32 {
     let ret = bcf_hdr_sync_native(h);
     if ret == 0 {
         bcf_hdr_fix_vcf45_vl_types(h);
@@ -8710,7 +8716,7 @@ pub unsafe fn bcf_hdr_sync(h: *mut bcf_hdr_t) -> c_int {
 pub unsafe fn vcf_c_286_bcf_hdr_parse_sample_line(
     hdr: *mut bcf_hdr_t,
     str_: *const c_char,
-) -> c_int {
+) -> i32 {
     unsafe {
         if hdr.is_null() || str_.is_null() {
             return -1;
@@ -8727,8 +8733,8 @@ pub unsafe fn vcf_c_286_bcf_hdr_parse_sample_line(
             .unwrap_or_default();
             crate::htslib_rs::hts::hts_log_cstr(
                 crate::htslib_rs::hts::HTS_LOG_ERROR,
-                c"bcf_hdr_parse_sample_line".as_ptr(),
-                msg.as_ptr(),
+                b"bcf_hdr_parse_sample_line",
+                msg.to_bytes(),
             );
             return -1;
         }
@@ -8748,8 +8754,8 @@ pub unsafe fn vcf_c_286_bcf_hdr_parse_sample_line(
             .unwrap_or_default();
             crate::htslib_rs::hts::hts_log_cstr(
                 crate::htslib_rs::hts::HTS_LOG_ERROR,
-                c"bcf_hdr_parse_sample_line".as_ptr(),
-                msg.as_ptr(),
+                b"bcf_hdr_parse_sample_line",
+                msg.to_bytes(),
             );
             return -1;
         }
@@ -8782,10 +8788,10 @@ pub unsafe fn vcf_c_286_bcf_hdr_parse_sample_line(
 struct HeaderSanityTag {
     name: &'static CStr,
     number_text: &'static CStr,
-    number: c_int,
-    fixed_number: c_int,
-    version: c_int,
-    type_: c_int,
+    number: i32,
+    fixed_number: i32,
+    version: i32,
+    type_: i32,
 }
 
 static BCF_HDR_CHECK_SANITY_INFO_WARNED: AtomicU64 = AtomicU64::new(0);
@@ -8795,170 +8801,170 @@ const HEADER_SANITY_INFO_TAGS: &[HeaderSanityTag] = &[
     HeaderSanityTag {
         name: c"AD",
         number_text: c"R",
-        number: BCF_VL_R as c_int,
+        number: BCF_VL_R as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"ADF",
         number_text: c"R",
-        number: BCF_VL_R as c_int,
+        number: BCF_VL_R as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"ADR",
         number_text: c"R",
-        number: BCF_VL_R as c_int,
+        number: BCF_VL_R as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"AC",
         number_text: c"A",
-        number: BCF_VL_A as c_int,
+        number: BCF_VL_A as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"AF",
         number_text: c"A",
-        number: BCF_VL_A as c_int,
+        number: BCF_VL_A as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_REAL as c_int,
+        type_: BCF_HT_REAL as i32,
     },
     HeaderSanityTag {
         name: c"CIGAR",
         number_text: c"A",
-        number: BCF_VL_A as c_int,
+        number: BCF_VL_A as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_STR as c_int,
+        type_: BCF_HT_STR as i32,
     },
     HeaderSanityTag {
         name: c"AA",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_STR as c_int,
+        type_: BCF_HT_STR as i32,
     },
     HeaderSanityTag {
         name: c"AN",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"BQ",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_REAL as c_int,
+        type_: BCF_HT_REAL as i32,
     },
     HeaderSanityTag {
         name: c"DB",
         number_text: c"0",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_FLAG as c_int,
+        type_: BCF_HT_FLAG as i32,
     },
     HeaderSanityTag {
         name: c"DP",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"END",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"H2",
         number_text: c"0",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_FLAG as c_int,
+        type_: BCF_HT_FLAG as i32,
     },
     HeaderSanityTag {
         name: c"H3",
         number_text: c"0",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_FLAG as c_int,
+        type_: BCF_HT_FLAG as i32,
     },
     HeaderSanityTag {
         name: c"MQ",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_REAL as c_int,
+        type_: BCF_HT_REAL as i32,
     },
     HeaderSanityTag {
         name: c"MQ0",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"NS",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"SB",
         number_text: c"4",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 4,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"SOMATIC",
         number_text: c"0",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_FLAG as c_int,
+        type_: BCF_HT_FLAG as i32,
     },
     HeaderSanityTag {
         name: c"VALIDATED",
         number_text: c"0",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_FLAG as c_int,
+        type_: BCF_HT_FLAG as i32,
     },
     HeaderSanityTag {
         name: c"1000G",
         number_text: c"0",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_FLAG as c_int,
+        type_: BCF_HT_FLAG as i32,
     },
 ];
 
@@ -8966,138 +8972,138 @@ const HEADER_SANITY_FMT_TAGS: &[HeaderSanityTag] = &[
     HeaderSanityTag {
         name: c"AD",
         number_text: c"R",
-        number: BCF_VL_R as c_int,
+        number: BCF_VL_R as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"ADF",
         number_text: c"R",
-        number: BCF_VL_R as c_int,
+        number: BCF_VL_R as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"ADR",
         number_text: c"R",
-        number: BCF_VL_R as c_int,
+        number: BCF_VL_R as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"EC",
         number_text: c"A",
-        number: BCF_VL_A as c_int,
+        number: BCF_VL_A as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"GL",
         number_text: c"G",
-        number: BCF_VL_G as c_int,
+        number: BCF_VL_G as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_REAL as c_int,
+        type_: BCF_HT_REAL as i32,
     },
     HeaderSanityTag {
         name: c"GP",
         number_text: c"G",
-        number: BCF_VL_G as c_int,
+        number: BCF_VL_G as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_REAL as c_int,
+        type_: BCF_HT_REAL as i32,
     },
     HeaderSanityTag {
         name: c"PL",
         number_text: c"G",
-        number: BCF_VL_G as c_int,
+        number: BCF_VL_G as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"PP",
         number_text: c"G",
-        number: BCF_VL_G as c_int,
+        number: BCF_VL_G as i32,
         fixed_number: 0,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"DP",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"LEN",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"FT",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_STR as c_int,
+        type_: BCF_HT_STR as i32,
     },
     HeaderSanityTag {
         name: c"GQ",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"GT",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_STR as c_int,
+        type_: BCF_HT_STR as i32,
     },
     HeaderSanityTag {
         name: c"HQ",
         number_text: c"2",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 2,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"MQ",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"PQ",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"PS",
         number_text: c"1",
-        number: BCF_VL_FIXED as c_int,
+        number: BCF_VL_FIXED as i32,
         fixed_number: 1,
         version: VCF_DEF,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"PSL",
@@ -9105,7 +9111,7 @@ const HEADER_SANITY_FMT_TAGS: &[HeaderSanityTag] = &[
         number: BCF_VL_P,
         fixed_number: 0,
         version: VCF44,
-        type_: BCF_HT_STR as c_int,
+        type_: BCF_HT_STR as i32,
     },
     HeaderSanityTag {
         name: c"PSO",
@@ -9113,7 +9119,7 @@ const HEADER_SANITY_FMT_TAGS: &[HeaderSanityTag] = &[
         number: BCF_VL_P,
         fixed_number: 0,
         version: VCF44,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"PSQ",
@@ -9121,7 +9127,7 @@ const HEADER_SANITY_FMT_TAGS: &[HeaderSanityTag] = &[
         number: BCF_VL_P,
         fixed_number: 0,
         version: VCF44,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"LGL",
@@ -9129,7 +9135,7 @@ const HEADER_SANITY_FMT_TAGS: &[HeaderSanityTag] = &[
         number: BCF_VL_LG,
         fixed_number: 0,
         version: VCF45,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"LGP",
@@ -9137,7 +9143,7 @@ const HEADER_SANITY_FMT_TAGS: &[HeaderSanityTag] = &[
         number: BCF_VL_LG,
         fixed_number: 0,
         version: VCF45,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"LPL",
@@ -9145,7 +9151,7 @@ const HEADER_SANITY_FMT_TAGS: &[HeaderSanityTag] = &[
         number: BCF_VL_LG,
         fixed_number: 0,
         version: VCF45,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"LPP",
@@ -9153,7 +9159,7 @@ const HEADER_SANITY_FMT_TAGS: &[HeaderSanityTag] = &[
         number: BCF_VL_LG,
         fixed_number: 0,
         version: VCF45,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"LEC",
@@ -9161,7 +9167,7 @@ const HEADER_SANITY_FMT_TAGS: &[HeaderSanityTag] = &[
         number: BCF_VL_LA,
         fixed_number: 0,
         version: VCF45,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"LAD",
@@ -9169,7 +9175,7 @@ const HEADER_SANITY_FMT_TAGS: &[HeaderSanityTag] = &[
         number: BCF_VL_LR,
         fixed_number: 0,
         version: VCF45,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"LADF",
@@ -9177,7 +9183,7 @@ const HEADER_SANITY_FMT_TAGS: &[HeaderSanityTag] = &[
         number: BCF_VL_LR,
         fixed_number: 0,
         version: VCF45,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
     HeaderSanityTag {
         name: c"LADR",
@@ -9185,13 +9191,13 @@ const HEADER_SANITY_FMT_TAGS: &[HeaderSanityTag] = &[
         number: BCF_VL_LR,
         fixed_number: 0,
         version: VCF45,
-        type_: BCF_HT_INT as c_int,
+        type_: BCF_HT_INT as i32,
     },
 ];
 
-unsafe fn bcf_hdr_idinfo_exists_rs(hdr: *const bcf_hdr_t, type_: c_int, int_id: c_int) -> bool {
+unsafe fn bcf_hdr_idinfo_exists_rs(hdr: *const bcf_hdr_t, type_: i32, int_id: i32) -> bool {
     unsafe {
-        if hdr.is_null() || int_id < 0 || int_id >= (*hdr).n[BCF_DT_ID as usize] as c_int {
+        if hdr.is_null() || int_id < 0 || int_id >= (*hdr).n[BCF_DT_ID as usize] as i32 {
             return false;
         }
         let val = (*(*hdr).id[BCF_DT_ID as usize].add(int_id as usize)).val;
@@ -9199,39 +9205,39 @@ unsafe fn bcf_hdr_idinfo_exists_rs(hdr: *const bcf_hdr_t, type_: c_int, int_id: 
     }
 }
 
-unsafe fn bcf_hdr_id2length_rs(hdr: *const bcf_hdr_t, type_: c_int, int_id: c_int) -> c_int {
+unsafe fn bcf_hdr_id2length_rs(hdr: *const bcf_hdr_t, type_: i32, int_id: i32) -> i32 {
     unsafe {
         (((*(*(*hdr).id[BCF_DT_ID as usize].add(int_id as usize)).val).info[type_ as usize] >> 8)
-            & 0xf) as c_int
+            & 0xf) as i32
     }
 }
 
-unsafe fn bcf_hdr_id2number_rs(hdr: *const bcf_hdr_t, type_: c_int, int_id: c_int) -> c_int {
+unsafe fn bcf_hdr_id2number_rs(hdr: *const bcf_hdr_t, type_: i32, int_id: i32) -> i32 {
     unsafe {
         ((*(*(*hdr).id[BCF_DT_ID as usize].add(int_id as usize)).val).info[type_ as usize] >> 12)
-            as c_int
+            as i32
     }
 }
 
-unsafe fn bcf_hdr_id2type_rs(hdr: *const bcf_hdr_t, type_: c_int, int_id: c_int) -> c_int {
+unsafe fn bcf_hdr_id2type_rs(hdr: *const bcf_hdr_t, type_: i32, int_id: i32) -> i32 {
     unsafe {
         (((*(*(*hdr).id[BCF_DT_ID as usize].add(int_id as usize)).val).info[type_ as usize] >> 4)
-            & 0xf) as c_int
+            & 0xf) as i32
     }
 }
 
-unsafe fn bcf_hdr_id2coltype_rs(hdr: *const bcf_hdr_t, type_: c_int, int_id: c_int) -> c_int {
+unsafe fn bcf_hdr_id2coltype_rs(hdr: *const bcf_hdr_t, type_: i32, int_id: i32) -> i32 {
     unsafe {
         ((*(*(*hdr).id[BCF_DT_ID as usize].add(int_id as usize)).val).info[type_ as usize] & 0xf)
-            as c_int
+            as i32
     }
 }
 
-fn bcf_hdr_check_sanity_type_name(type_: c_int) -> *const c_char {
+fn bcf_hdr_check_sanity_type_name(type_: i32) -> *const c_char {
     match type_ {
-        x if x == BCF_HT_FLAG as c_int => c"Flag".as_ptr(),
-        x if x == BCF_HT_INT as c_int => c"Integer".as_ptr(),
-        x if x == BCF_HT_REAL as c_int => c"Float".as_ptr(),
+        x if x == BCF_HT_FLAG as i32 => c"Flag".as_ptr(),
+        x if x == BCF_HT_INT as i32 => c"Integer".as_ptr(),
+        x if x == BCF_HT_REAL as i32 => c"Float".as_ptr(),
         _ => c"String".as_ptr(),
     }
 }
@@ -9246,8 +9252,8 @@ unsafe fn bcf_hdr_check_sanity_warn_number(tag: &HeaderSanityTag) {
         .unwrap_or_default();
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_WARNING,
-            c"bcf_hdr_check_sanity".as_ptr(),
-            msg.as_ptr(),
+            b"bcf_hdr_check_sanity",
+            msg.to_bytes(),
         );
     }
 }
@@ -9263,8 +9269,8 @@ unsafe fn bcf_hdr_check_sanity_warn_type(tag: &HeaderSanityTag) {
         .unwrap_or_default();
         crate::htslib_rs::hts::hts_log_cstr(
             crate::htslib_rs::hts::HTS_LOG_WARNING,
-            c"bcf_hdr_check_sanity".as_ptr(),
-            msg.as_ptr(),
+            b"bcf_hdr_check_sanity",
+            msg.to_bytes(),
         );
     }
 }
@@ -9275,22 +9281,22 @@ unsafe fn bcf_hdr_check_sanity_info_tag(hdr: *mut bcf_hdr_t, index: usize, tag: 
         if BCF_HDR_CHECK_SANITY_INFO_WARNED.load(Ordering::Relaxed) & bit != 0 {
             return;
         }
-        let id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, tag.name.as_ptr());
-        if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_INFO as c_int, id) {
+        let id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, tag.name.as_ptr());
+        if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_INFO as i32, id) {
             return;
         }
 
-        let length = bcf_hdr_id2length_rs(hdr, BCF_HL_INFO as c_int, id);
-        let warned = (length != tag.number && length != BCF_VL_VAR as c_int)
-            || (length == BCF_VL_FIXED as c_int
-                && bcf_hdr_id2number_rs(hdr, BCF_HL_INFO as c_int, id) != tag.fixed_number);
+        let length = bcf_hdr_id2length_rs(hdr, BCF_HL_INFO as i32, id);
+        let warned = (length != tag.number && length != BCF_VL_VAR as i32)
+            || (length == BCF_VL_FIXED as i32
+                && bcf_hdr_id2number_rs(hdr, BCF_HL_INFO as i32, id) != tag.fixed_number);
 
         if warned {
             BCF_HDR_CHECK_SANITY_INFO_WARNED.fetch_or(bit, Ordering::Relaxed);
             bcf_hdr_check_sanity_warn_number(tag);
         }
 
-        if bcf_hdr_id2type_rs(hdr, BCF_HL_INFO as c_int, id) != tag.type_ {
+        if bcf_hdr_id2type_rs(hdr, BCF_HL_INFO as i32, id) != tag.type_ {
             BCF_HDR_CHECK_SANITY_INFO_WARNED.fetch_or(bit, Ordering::Relaxed);
             bcf_hdr_check_sanity_warn_type(tag);
         }
@@ -9299,7 +9305,7 @@ unsafe fn bcf_hdr_check_sanity_info_tag(hdr: *mut bcf_hdr_t, index: usize, tag: 
 
 unsafe fn bcf_hdr_check_sanity_fmt_tag(
     hdr: *mut bcf_hdr_t,
-    version: c_int,
+    version: i32,
     index: usize,
     tag: &HeaderSanityTag,
 ) {
@@ -9308,21 +9314,21 @@ unsafe fn bcf_hdr_check_sanity_fmt_tag(
         if BCF_HDR_CHECK_SANITY_FMT_WARNED.load(Ordering::Relaxed) & bit != 0 {
             return;
         }
-        let id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, tag.name.as_ptr());
-        if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_FMT as c_int, id) {
+        let id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, tag.name.as_ptr());
+        if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_FMT as i32, id) {
             return;
         }
 
-        let length = bcf_hdr_id2length_rs(hdr, BCF_HL_FMT as c_int, id);
+        let length = bcf_hdr_id2length_rs(hdr, BCF_HL_FMT as i32, id);
         let mut warned = false;
         if length != tag.number {
-            if (version < VCF44 && length != BCF_VL_VAR as c_int)
+            if (version < VCF44 && length != BCF_VL_VAR as i32)
                 || (version >= VCF44 && version >= tag.version)
             {
                 warned = true;
             }
-        } else if length == BCF_VL_FIXED as c_int
-            && bcf_hdr_id2number_rs(hdr, BCF_HL_FMT as c_int, id) != tag.fixed_number
+        } else if length == BCF_VL_FIXED as i32
+            && bcf_hdr_id2number_rs(hdr, BCF_HL_FMT as i32, id) != tag.fixed_number
         {
             warned = true;
         }
@@ -9332,7 +9338,7 @@ unsafe fn bcf_hdr_check_sanity_fmt_tag(
             bcf_hdr_check_sanity_warn_number(tag);
         }
 
-        if bcf_hdr_id2type_rs(hdr, BCF_HL_FMT as c_int, id) != tag.type_ {
+        if bcf_hdr_id2type_rs(hdr, BCF_HL_FMT as i32, id) != tag.type_ {
             BCF_HDR_CHECK_SANITY_FMT_WARNED.fetch_or(bit, Ordering::Relaxed);
             bcf_hdr_check_sanity_warn_type(tag);
         }
@@ -9346,7 +9352,7 @@ pub unsafe fn bcf_hdr_check_sanity(hdr: *mut bcf_hdr_t) {
         }
         let version = match std::ptr::NonNull::new(bcf_hdr_get_version(hdr).cast_mut()) {
             Some(version) => vcf_version_number(CStr::from_ptr(version.as_ptr()).to_bytes())
-                .unwrap_or(VCF_DEF as i64) as c_int,
+                .unwrap_or(VCF_DEF as i64) as i32,
             None => VCF_DEF,
         };
 
@@ -9376,7 +9382,7 @@ unsafe fn is_escaped(min: *const c_char, mut str_: *const c_char) -> bool {
 pub unsafe fn bcf_hdr_parse_line(
     _h: *const bcf_hdr_t,
     line: *const c_char,
-    len: *mut c_int,
+    len: *mut i32,
 ) -> *mut bcf_hrec_t {
     use super::hts::{isalnum_c, isalpha_c, isspace_c};
 
@@ -9399,7 +9405,7 @@ pub unsafe fn bcf_hdr_parse_line(
             q = q.add(1);
         }
         c_log_error(c"Could not parse the header line".as_ptr());
-        *len = (q.offset_from(line) + if *q != 0 { 1 } else { 0 }) as c_int;
+        *len = (q.offset_from(line) + if *q != 0 { 1 } else { 0 }) as i32;
         bcf_hrec_destroy(hrec);
         return std::ptr::null_mut();
     }
@@ -9435,12 +9441,12 @@ pub unsafe fn bcf_hdr_parse_line(
         }
         libc::memcpy((*hrec).value.cast(), p.cast(), vlen as usize);
         *(*hrec).value.add(vlen as usize) = 0;
-        *len = (q.offset_from(line) + if *q != 0 { 1 } else { 0 }) as c_int;
+        *len = (q.offset_from(line) + if *q != 0 { 1 } else { 0 }) as i32;
         return hrec;
     }
 
     // structured line
-    let mut nopen: c_int = 1;
+    let mut nopen: i32 = 1;
     while *q != 0 && *q != b'\n' as c_char && nopen > 0 {
         q = q.add(1);
         p = q;
@@ -9456,7 +9462,7 @@ pub unsafe fn bcf_hdr_parse_line(
             }
         }
         n = q.offset_from(p);
-        let mut m: c_int = 0;
+        let mut m: i32 = 0;
         while *q != 0 && *q == b' ' as c_char {
             q = q.add(1);
             m += 1;
@@ -9467,7 +9473,7 @@ pub unsafe fn bcf_hdr_parse_line(
                 q = q.add(1);
             }
             c_log_error(c"Could not parse the header line".as_ptr());
-            *len = (q.offset_from(line) + if *q != 0 { 1 } else { 0 }) as c_int;
+            *len = (q.offset_from(line) + if *q != 0 { 1 } else { 0 }) as i32;
             bcf_hrec_destroy(hrec);
             return std::ptr::null_mut();
         }
@@ -9567,33 +9573,33 @@ pub unsafe fn bcf_hdr_parse_line(
     // Skip to end of line
     let mut nonspace = 0;
     while *q != 0 && *q != b'\n' as c_char {
-        nonspace |= (isspace_c(*q) == 0) as c_int;
+        nonspace |= (isspace_c(*q) == 0) as i32;
         q = q.add(1);
     }
     if nonspace != 0 {
         c_log_warning(c"Dropped trailing junk from header line".as_ptr());
     }
 
-    *len = (q.offset_from(line) + if *q != 0 { 1 } else { 0 }) as c_int;
+    *len = (q.offset_from(line) + if *q != 0 { 1 } else { 0 }) as i32;
     hrec
 }
 
 #[inline]
 unsafe fn c_log_error(msg: *const c_char) {
-    super::hts::hts_log_cstr(super::hts::HTS_LOG_ERROR, c"vcf".as_ptr(), msg);
+    super::hts::hts_log_cstr(super::hts::HTS_LOG_ERROR, b"vcf", CStr::from_ptr(msg).to_bytes());
 }
 
 #[inline]
 unsafe fn c_log_warning(msg: *const c_char) {
-    super::hts::hts_log_cstr(super::hts::HTS_LOG_WARNING, c"vcf".as_ptr(), msg);
+    super::hts::hts_log_cstr(super::hts::HTS_LOG_WARNING, b"vcf", CStr::from_ptr(msg).to_bytes());
 }
 
 // Native translation of htslib/vcf.c _bcf_hrec_format().
 unsafe fn bcf_hrec_format_native(
     hrec: *const bcf_hrec_t,
-    is_bcf: c_int,
+    is_bcf: i32,
     str_: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     let mut e = false;
     if (*hrec).value.is_null() {
         let mut nout = 0;
@@ -9608,11 +9614,11 @@ unsafe fn bcf_hrec_format_native(
                 continue;
             }
             if nout != 0 {
-                e |= kputc(b',' as c_int, &mut *str_) < 0;
+                e |= kputc(b',' as i32, &mut *str_) < 0;
             }
             // ksprintf(str,"%s=%s", hrec->keys[j], hrec->vals[j])
             e |= kputs(CStr::from_ptr(key_j).to_bytes(), &mut *str_) < 0;
-            e |= kputc(b'=' as c_int, &mut *str_) < 0;
+            e |= kputc(b'=' as i32, &mut *str_) < 0;
             e |= kputs(CStr::from_ptr(*(*hrec).vals.add(j)).to_bytes(), &mut *str_) < 0;
             nout += 1;
         }
@@ -9622,9 +9628,9 @@ unsafe fn bcf_hrec_format_native(
         // ksprintf(str,"##%s=%s\n", hrec->key,hrec->value)
         e |= kputsn(c"##".to_bytes(), 2, &mut *str_) < 0;
         e |= kputs(CStr::from_ptr((*hrec).key).to_bytes(), &mut *str_) < 0;
-        e |= kputc(b'=' as c_int, &mut *str_) < 0;
+        e |= kputc(b'=' as i32, &mut *str_) < 0;
         e |= kputs(CStr::from_ptr((*hrec).value).to_bytes(), &mut *str_) < 0;
-        e |= kputc(b'\n' as c_int, &mut *str_) < 0;
+        e |= kputc(b'\n' as i32, &mut *str_) < 0;
     }
     if e {
         -1
@@ -9633,7 +9639,7 @@ unsafe fn bcf_hrec_format_native(
     }
 }
 
-pub unsafe fn bcf_hrec_format(hrec: *const bcf_hrec_t, str_: *mut kstring_t) -> c_int {
+pub unsafe fn bcf_hrec_format(hrec: *const bcf_hrec_t, str_: *mut kstring_t) -> i32 {
     bcf_hrec_format_native(hrec, 0, str_)
 }
 
@@ -9645,20 +9651,20 @@ unsafe fn cc_strdup(s: *const c_char) -> *mut c_char {
 
 // Parse a version string ("VCFv4.x") to the encoded int, like vcf.c
 // bcf_get_version(NULL, verstr) which returns VCF_DEF when the format is bad.
-unsafe fn bcf_get_version_str(verstr: *const c_char) -> c_int {
+unsafe fn bcf_get_version_str(verstr: *const c_char) -> i32 {
     if verstr.is_null() {
         return VCF_DEF;
     }
     let bytes = CStr::from_ptr(verstr).to_bytes();
     match vcf_version_number(bytes) {
-        Some(v) => v as c_int,
+        Some(v) => v as i32,
         None => VCF_DEF,
     }
 }
 
 // Native translation of htslib/vcf.c bcf_get_version() (the hdr-aware form).
 // Returns the cached aux->version when present, else parses verstr.
-unsafe fn bcf_get_version(hdr: *const bcf_hdr_t, verstr: *const c_char) -> c_int {
+unsafe fn bcf_get_version(hdr: *const bcf_hdr_t, verstr: *const c_char) -> i32 {
     if hdr.is_null() && verstr.is_null() {
         return VCF_DEF;
     }
@@ -9676,7 +9682,7 @@ unsafe fn bcf_get_version(hdr: *const bcf_hdr_t, verstr: *const c_char) -> c_int
 
 // Build "##<a><b><c>..." style strings into a fresh kstring (libc-allocated .s).
 // Mirrors the ksprintf("##%s=%s", ...) patterns used in vcf.c. Returns -1 on OOM.
-unsafe fn ks_build(str_: *mut kstring_t, parts: &[*const c_char]) -> c_int {
+unsafe fn ks_build(str_: *mut kstring_t, parts: &[*const c_char]) -> i32 {
     for p in parts {
         if super::hts::kputs(CStr::from_ptr(*p).to_bytes(), &mut *str_) < 0 {
             return -1;
@@ -9689,17 +9695,17 @@ unsafe fn ks_build(str_: *mut kstring_t, parts: &[*const c_char]) -> c_int {
 unsafe fn bcf_hrec_set_type(hrec: *mut bcf_hrec_t) {
     let key = (*hrec).key;
     if libc::strcmp(key, c"contig".as_ptr()) == 0 {
-        (*hrec).type_ = BCF_HL_CTG as c_int;
+        (*hrec).type_ = BCF_HL_CTG as i32;
     } else if libc::strcmp(key, c"INFO".as_ptr()) == 0 {
-        (*hrec).type_ = BCF_HL_INFO as c_int;
+        (*hrec).type_ = BCF_HL_INFO as i32;
     } else if libc::strcmp(key, c"FILTER".as_ptr()) == 0 {
-        (*hrec).type_ = BCF_HL_FLT as c_int;
+        (*hrec).type_ = BCF_HL_FLT as i32;
     } else if libc::strcmp(key, c"FORMAT".as_ptr()) == 0 {
-        (*hrec).type_ = BCF_HL_FMT as c_int;
+        (*hrec).type_ = BCF_HL_FMT as i32;
     } else if (*hrec).nkeys > 0 {
-        (*hrec).type_ = BCF_HL_STR as c_int;
+        (*hrec).type_ = BCF_HL_STR as i32;
     } else {
-        (*hrec).type_ = BCF_HL_GEN as c_int;
+        (*hrec).type_ = BCF_HL_GEN as i32;
     }
 }
 
@@ -9725,7 +9731,7 @@ const VALID_TAG: [u8; 256] = [
 ];
 
 // Native translation of htslib/vcf.c bcf_hrec_check().
-unsafe fn bcf_hrec_check(hrec: *mut bcf_hrec_t) -> c_int {
+unsafe fn bcf_hrec_check(hrec: *mut bcf_hrec_t) -> i32 {
     bcf_hrec_set_type(hrec);
     let t = (*hrec).type_ as u32;
     if t == BCF_HL_CTG {
@@ -9782,10 +9788,10 @@ unsafe fn bcf_hrec_check(hrec: *mut bcf_hrec_t) -> c_int {
 // Native translation of htslib/vcf.c bcf_hdr_set_idx().
 unsafe fn bcf_hdr_set_idx(
     hdr: *mut bcf_hdr_t,
-    dict_type: c_int,
+    dict_type: i32,
     tag: *const c_char,
     idinfo: *mut bcf_idinfo_t,
-) -> c_int {
+) -> i32 {
     // If available, preserve existing IDX
     if (*idinfo).id == -1 {
         (*idinfo).id = (*hdr).n[dict_type as usize];
@@ -9795,7 +9801,7 @@ unsafe fn bcf_hdr_set_idx(
             .is_null()
     {
         c_log_error(c"Conflicting IDX lines in the header dictionary".as_ptr());
-        *c_compat::__errno_location() = c_compat::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
 
@@ -9808,7 +9814,7 @@ unsafe fn bcf_hdr_set_idx(
         size_of::<bcf_idpair_t>(),
         new_n,
         4, // sizeof(hdr->m[dict_type]) == sizeof(int)
-        (&mut (*hdr).m[dict_type as usize]) as *mut c_int as *mut c_void,
+        (&mut (*hdr).m[dict_type as usize]) as *mut i32 as *mut c_void,
         (&mut (*hdr).id[dict_type as usize]) as *mut *mut bcf_idpair_t as *mut *mut c_void,
         super::hts::HTS_RESIZE_CLEAR,
         c"bcf_hdr_set_idx".as_ptr(),
@@ -9816,7 +9822,7 @@ unsafe fn bcf_hdr_set_idx(
     {
         return -1;
     }
-    (*hdr).n[dict_type as usize] = new_n as c_int;
+    (*hdr).n[dict_type as usize] = new_n as i32;
 
     // NB: the next kh_put call can invalidate the idinfo pointer, therefore
     // we leave it unassigned here. It must be set explicitly in bcf_hdr_sync.
@@ -9826,8 +9832,8 @@ unsafe fn bcf_hdr_set_idx(
 
 // Native translation of htslib/vcf.c bcf_hdr_register_hrec().
 // returns: 1 when hdr needs to be synced, -1 on error, 0 otherwise
-unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c_int {
-    let mut ret: c_int = 0;
+unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> i32 {
+    let mut ret: i32 = 0;
     let mut replacing = 0;
 
     bcf_hrec_set_type(hrec);
@@ -9877,8 +9883,8 @@ unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c
         if idx != -1 {
             let v = *(*hrec).vals.add(idx as usize);
             let mut tmp: *mut c_char = v;
-            idx = libc::strtol(v, &mut tmp, 10) as c_int;
-            if *tmp != 0 || !(0..c_int::MAX - 1).contains(&idx) {
+            idx = libc::strtol(v, &mut tmp, 10) as i32;
+            if *tmp != 0 || !(0..i32::MAX - 1).contains(&idx) {
                 if replacing == 0 {
                     kh_del_vdict(d, k);
                     libc::free(str_.cast());
@@ -9893,7 +9899,7 @@ unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c
         (*valp).id = idx;
         (*valp).info[0] = len as u64;
         (*valp).hrec[0] = hrec;
-        if bcf_hdr_set_idx(hdr, BCF_DT_CTG as c_int, *(*d).keys().add(k as usize), valp) < 0 {
+        if bcf_hdr_set_idx(hdr, BCF_DT_CTG as i32, *(*d).keys().add(k as usize), valp) < 0 {
             if replacing == 0 {
                 kh_del_vdict(d, k);
                 libc::free(str_.cast());
@@ -9920,9 +9926,9 @@ unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c
     let mut id: *mut c_char = std::ptr::null_mut();
     let mut type_v: u32 = u32::MAX;
     let mut var: u32 = u32::MAX;
-    let mut num: c_int = -1;
-    let mut idx: c_int = -1;
-    let mut i: c_int = 0;
+    let mut num: i32 = -1;
+    let mut idx: i32 = -1;
+    let mut i: i32 = 0;
     while i < (*hrec).nkeys {
         let ki = *(*hrec).keys.add(i as usize);
         let vi = *(*hrec).vals.add(i as usize);
@@ -9930,8 +9936,8 @@ unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c
             id = vi;
         } else if libc::strcmp(ki, c"IDX".as_ptr()) == 0 {
             let mut tmp: *mut c_char = vi;
-            idx = libc::strtol(vi, &mut tmp, 10) as c_int;
-            if *tmp != 0 || !(0..c_int::MAX - 1).contains(&idx) {
+            idx = libc::strtol(vi, &mut tmp, 10) as i32;
+            if *tmp != 0 || !(0..i32::MAX - 1).contains(&idx) {
                 c_log_warning(c"Error parsing the IDX tag, skipping".as_ptr());
                 return 0;
             }
@@ -9970,7 +9976,7 @@ unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c
                 var = BCF_VL_LG as u32;
             } else if is_fmt && libc::strcmp(vi, c"M".as_ptr()) == 0 {
                 var = BCF_VL_M as u32;
-            } else if libc::sscanf(vi, c"%d".as_ptr(), &mut num as *mut c_int) == 1 {
+            } else if libc::sscanf(vi, c"%d".as_ptr(), &mut num as *mut i32) == 1 {
                 var = BCF_VL_FIXED;
             }
             if var != BCF_VL_FIXED {
@@ -10033,7 +10039,7 @@ unsafe fn bcf_hdr_register_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c
     (*valp).info[(info & 0xf) as usize] = info as u64;
     (*valp).hrec[(info & 0xf) as usize] = hrec;
     (*valp).id = idx;
-    if bcf_hdr_set_idx(hdr, BCF_DT_ID as c_int, *(*d).keys().add(k as usize), valp) < 0 {
+    if bcf_hdr_set_idx(hdr, BCF_DT_ID as i32, *(*d).keys().add(k as usize), valp) < 0 {
         kh_del_vdict(d, k);
         libc::free(str_.cast());
         return -1;
@@ -10066,7 +10072,7 @@ unsafe fn bcf_hdr_unregister_hrec_native(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hre
 }
 
 // Native translation of htslib/vcf.c bcf_hdr_add_hrec().
-pub unsafe fn bcf_hdr_add_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c_int {
+pub unsafe fn bcf_hdr_add_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> i32 {
     let mut str_ = kstring_t::default();
     let aux = get_hdr_aux(hdr);
 
@@ -10110,7 +10116,7 @@ pub unsafe fn bcf_hdr_add_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c_
         }
     }
 
-    let i: c_int;
+    let i: i32;
     if (*hrec).type_ as u32 == BCF_HL_STR && {
         i = bcf_hrec_find_key(hrec, c"ID".as_ptr());
         i >= 0
@@ -10153,7 +10159,7 @@ pub unsafe fn bcf_hdr_add_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c_
     (*hdr).hrec = new_hrec;
 
     if !str_.data.is_empty() {
-        let mut res2: c_int = 0;
+        let mut res2: i32 = 0;
         let gen = (*aux).gen();
         // The dict owns its key buffer (libc-allocated, freed by the dict on
         // destroy); hand it a NUL-terminated libc copy of the built string.
@@ -10176,7 +10182,7 @@ pub unsafe fn bcf_hdr_add_hrec(hdr: *mut bcf_hdr_t, hrec: *mut bcf_hrec_t) -> c_
 
     *(*hdr).hrec.add((*hdr).nhrec as usize) = hrec;
     (*hdr).dirty = 1;
-    (*hdr).nhrec = n as c_int;
+    (*hdr).nhrec = n as i32;
 
     if (*hrec).type_ as u32 == BCF_HL_GEN {
         0
@@ -10190,9 +10196,9 @@ pub unsafe fn bcf_hdr_update_hrec(
     hdr: *mut bcf_hdr_t,
     hrec: *mut bcf_hrec_t,
     tmp: *const bcf_hrec_t,
-) -> c_int {
+) -> i32 {
     debug_assert!((*hrec).type_ as u32 == BCF_HL_GEN);
-    let mut ret: c_int = 0;
+    let mut ret: i32 = 0;
     let aux = get_hdr_aux(hdr);
     let gen = (*aux).gen();
     // Find the bucket whose value is `hrec`.
@@ -10251,7 +10257,7 @@ pub unsafe fn bcf_hdr_update_hrec(
 // Native translation of htslib/vcf.c bcf_hdr_get_hrec().
 pub unsafe fn bcf_hdr_get_hrec(
     hdr: *const bcf_hdr_t,
-    type_: c_int,
+    type_: i32,
     key: *const c_char,
     value: *const c_char,
     str_class: *const c_char,
@@ -10271,7 +10277,7 @@ pub unsafe fn bcf_hdr_get_hrec(
             }
             return *(*gen).vals().add(k as usize);
         }
-        let mut i: c_int = 0;
+        let mut i: i32 = 0;
         while i < (*hdr).nhrec {
             let hr = *(*hdr).hrec.add(i as usize);
             if (*hr).type_ == type_ && libc::strcmp((*hr).key, key) == 0 {
@@ -10309,7 +10315,7 @@ pub unsafe fn bcf_hdr_get_hrec(
             }
             return *(*gen).vals().add(k as usize);
         }
-        let mut i: c_int = 0;
+        let mut i: i32 = 0;
         while i < (*hdr).nhrec {
             let hr = *(*hdr).hrec.add(i as usize);
             if (*hr).type_ == type_ && libc::strcmp((*hr).key, str_class) == 0 {
@@ -10343,7 +10349,7 @@ pub unsafe fn bcf_hdr_get_hrec(
 #[inline]
 pub(crate) unsafe fn hts_realloc_p_cc(ptr: *mut c_void, size: usize, n: usize) -> *mut c_void {
     if n != 0 && size > usize::MAX / n {
-        *c_compat::__errno_location() = c_compat::ENOMEM;
+        *libc::__errno_location() = libc::ENOMEM;
         return std::ptr::null_mut();
     }
     libc::realloc(ptr, size.wrapping_mul(n))
@@ -10391,8 +10397,8 @@ pub unsafe fn bcf_hrec_dup(hrec: *mut bcf_hrec_t) -> *mut bcf_hrec_t {
         bcf_hrec_destroy(out);
         return std::ptr::null_mut();
     }
-    let mut j: c_int = 0;
-    let mut i: c_int = 0;
+    let mut j: i32 = 0;
+    let mut i: i32 = 0;
     while i < (*hrec).nkeys {
         let ki = *(*hrec).keys.add(i as usize);
         if !ki.is_null() && libc::strcmp(c"IDX".as_ptr(), ki) == 0 {
@@ -10424,7 +10430,7 @@ pub unsafe fn bcf_hrec_dup(hrec: *mut bcf_hrec_t) -> *mut bcf_hrec_t {
 }
 
 // Native translation of htslib/vcf.c bcf_hrec_add_key().
-pub unsafe fn bcf_hrec_add_key(hrec: *mut bcf_hrec_t, str_: *const c_char, len: usize) -> c_int {
+pub unsafe fn bcf_hrec_add_key(hrec: *mut bcf_hrec_t, str_: *const c_char, len: usize) -> i32 {
     let n = (*hrec).nkeys as usize + 1;
     let tmp = hts_realloc_p_cc((*hrec).keys.cast(), size_of::<*mut c_char>(), n);
     if tmp.is_null() {
@@ -10447,18 +10453,18 @@ pub unsafe fn bcf_hrec_add_key(hrec: *mut bcf_hrec_t, str_: *const c_char, len: 
     libc::memcpy(key_buf.cast(), str_.cast(), len);
     *key_buf.add(len) = 0;
     *(*hrec).vals.add(nk) = std::ptr::null_mut();
-    (*hrec).nkeys = n as c_int;
+    (*hrec).nkeys = n as i32;
     0
 }
 
 // Native translation of htslib/vcf.c bcf_hrec_set_val().
 pub unsafe fn bcf_hrec_set_val(
     hrec: *mut bcf_hrec_t,
-    i: c_int,
+    i: i32,
     str_: *const c_char,
     len: usize,
-    is_quoted: c_int,
-) -> c_int {
+    is_quoted: i32,
+) -> i32 {
     let slot = (*hrec).vals.add(i as usize);
     if !(*slot).is_null() {
         libc::free((*slot).cast());
@@ -10469,7 +10475,7 @@ pub unsafe fn bcf_hrec_set_val(
     }
     if is_quoted != 0 {
         if len >= usize::MAX - 3 {
-            *c_compat::__errno_location() = c_compat::ENOMEM;
+            *libc::__errno_location() = libc::ENOMEM;
             return -1;
         }
         let buf = libc::malloc(len + 3).cast::<c_char>();
@@ -10483,7 +10489,7 @@ pub unsafe fn bcf_hrec_set_val(
         *buf.add(len + 2) = 0;
     } else {
         if len == usize::MAX {
-            *c_compat::__errno_location() = c_compat::ENOMEM;
+            *libc::__errno_location() = libc::ENOMEM;
             return -1;
         }
         let buf = libc::malloc(len + 1).cast::<c_char>();
@@ -10498,8 +10504,8 @@ pub unsafe fn bcf_hrec_set_val(
 }
 
 // Native translation of htslib/vcf.c bcf_hrec_find_key().
-pub unsafe fn bcf_hrec_find_key(hrec: *mut bcf_hrec_t, key: *const c_char) -> c_int {
-    let mut i: c_int = 0;
+pub unsafe fn bcf_hrec_find_key(hrec: *mut bcf_hrec_t, key: *const c_char) -> i32 {
+    let mut i: i32 = 0;
     while i < (*hrec).nkeys {
         if libc::strcasecmp(key, *(*hrec).keys.add(i as usize)) == 0 {
             return i;
@@ -10510,7 +10516,7 @@ pub unsafe fn bcf_hrec_find_key(hrec: *mut bcf_hrec_t, key: *const c_char) -> c_
 }
 
 // Native translation of htslib/vcf.c hrec_add_idx().
-pub unsafe fn hrec_add_idx(hrec: *mut bcf_hrec_t, idx: c_int) -> c_int {
+pub unsafe fn hrec_add_idx(hrec: *mut bcf_hrec_t, idx: i32) -> i32 {
     let n = (*hrec).nkeys as usize + 1;
     let tmp = hts_realloc_p_cc((*hrec).keys.cast(), size_of::<*mut c_char>(), n);
     if tmp.is_null() {
@@ -10546,7 +10552,7 @@ pub unsafe fn hrec_add_idx(hrec: *mut bcf_hrec_t, idx: c_int) -> c_int {
     *val_buf.add(str_.data.len()) = 0;
     super::hts::ks_free(&mut str_);
     *(*hrec).vals.add(nk) = val_buf;
-    (*hrec).nkeys = n as c_int;
+    (*hrec).nkeys = n as i32;
     0
 }
 
@@ -10559,7 +10565,7 @@ pub unsafe fn bcf_hrec_destroy(hrec: *mut bcf_hrec_t) {
     if !(*hrec).value.is_null() {
         libc::free((*hrec).value.cast());
     }
-    let mut i: c_int = 0;
+    let mut i: i32 = 0;
     while i < (*hrec).nkeys {
         libc::free((*(*hrec).keys.add(i as usize)).cast());
         libc::free((*(*hrec).vals.add(i as usize)).cast());
@@ -10574,16 +10580,16 @@ pub unsafe fn bcf_hrec_destroy(hrec: *mut bcf_hrec_t) {
 pub unsafe fn bcf_subset(
     _h: *const bcf_hdr_t,
     v: *mut bcf1_t,
-    n: c_int,
-    imap: *mut c_int,
-) -> c_int {
+    n: i32,
+    imap: *mut i32,
+) -> i32 {
     const MAX_N_FMT: usize = 255;
     let mut ind = kstring_t::default();
     if n != 0 {
         let mut fmt = [std::mem::zeroed::<bcf_fmt_t>(); MAX_N_FMT];
         let mut ptr = (*v).indiv.data.as_ptr().cast::<u8>().cast_mut();
-        let n_fmt = (*v).n_fmt() as c_int;
-        let n_sample = (*v).n_sample() as c_int;
+        let n_fmt = (*v).n_fmt() as i32;
+        let n_sample = (*v).n_sample() as i32;
         for f in fmt.iter_mut().take(n_fmt as usize) {
             ptr = bcf_unpack_fmt_core1_rs(ptr, n_sample, f);
         }
@@ -10594,9 +10600,9 @@ pub unsafe fn bcf_subset(
                 if *imap.add(j) >= 0 {
                     let kputsn_slice = std::slice::from_raw_parts(
                         f.p.add((*imap.add(j) * f.size) as usize),
-                        f.size as size_t,
+                        f.size as usize,
                     );
-                    kputsn(kputsn_slice, f.size as size_t, &mut ind);
+                    kputsn(kputsn_slice, f.size as usize, &mut ind);
                 }
             }
         }
@@ -10615,21 +10621,21 @@ pub unsafe fn bcf_subset(
     }
     (*v).indiv.data = std::mem::take(&mut ind.data);
     // Only BCF is ready for output; VCF will need to unpack again.
-    (*v).unpacked &= !(BCF_UN_FMT as c_int);
+    (*v).unpacked &= !(BCF_UN_FMT as i32);
     0
 }
 
-pub unsafe fn bcf_get_variant_types(rec: *mut bcf1_t) -> c_int {
+pub unsafe fn bcf_get_variant_types(rec: *mut bcf1_t) -> i32 {
     vcf_c_5474_bcf_get_variant_types(rec)
 }
 
-pub unsafe fn bcf_get_variant_type(rec: *mut bcf1_t, ith_allele: c_int) -> c_int {
+pub unsafe fn bcf_get_variant_type(rec: *mut bcf1_t, ith_allele: i32) -> i32 {
     vcf_c_5485_bcf_get_variant_type(rec, ith_allele)
 }
 
-pub unsafe fn bcf_is_snp(v: *mut bcf1_t) -> c_int {
-    bcf_unpack(v, BCF_UN_STR as c_int);
-    let n_allele = (*v).n_allele() as c_int;
+pub unsafe fn bcf_is_snp(v: *mut bcf1_t) -> i32 {
+    bcf_unpack(v, BCF_UN_STR as i32);
+    let n_allele = (*v).n_allele() as i32;
     let mut i = 0;
     while i < n_allele {
         let d = &(*v).d;
@@ -10661,44 +10667,44 @@ pub unsafe fn bcf_is_snp(v: *mut bcf1_t) -> c_int {
         }
         break;
     }
-    (i == n_allele) as c_int
+    (i == n_allele) as i32
 }
 
 // Native equivalent of the hts_expand(type_t, n, m, ptr) macro for the
 // bcf1_t dynamic arrays. `m` is an i32 field (m_flt/m_info/m_fmt/m_allele).
 unsafe fn bcf_hts_expand_i32(
-    n: c_int,
-    m: *mut c_int,
+    n: i32,
+    m: *mut i32,
     ptr: *mut *mut c_void,
     elem_size: usize,
-    clear: c_int,
+    clear: i32,
 ) {
     if n > *m {
         let new_m = crate::htslib_rs::hts::hts_realloc_or_die(
-            if n >= 1 { n as size_t } else { 1 },
-            *m as size_t,
-            size_of::<c_int>() as size_t,
-            elem_size as size_t,
+            if n >= 1 { n as usize } else { 1 },
+            *m as usize,
+            size_of::<i32>() as usize,
+            elem_size as usize,
             clear,
             ptr,
-            c"bcf_update".as_ptr(),
+            b"bcf_update",
         );
-        *m = new_m as c_int;
+        *m = new_m as i32;
     }
 }
 
 pub unsafe fn bcf_update_filter(
     hdr: *const bcf_hdr_t,
     line: *mut bcf1_t,
-    flt_ids: *mut c_int,
-    n: c_int,
-) -> c_int {
+    flt_ids: *mut i32,
+    n: i32,
+) -> i32 {
     // Native translation of htslib/vcf.c bcf_update_filter().
     let _ = hdr;
-    if (*line).unpacked & BCF_UN_FLT as c_int == 0 {
-        bcf_unpack(line, BCF_UN_FLT as c_int);
+    if (*line).unpacked & BCF_UN_FLT as i32 == 0 {
+        bcf_unpack(line, BCF_UN_FLT as i32);
     }
-    (*line).d.shared_dirty |= BCF1_DIRTY_FLT as c_int;
+    (*line).d.shared_dirty |= BCF1_DIRTY_FLT as i32;
     (*line).d.flt.clear();
     if n == 0 {
         return 0;
@@ -10709,11 +10715,11 @@ pub unsafe fn bcf_update_filter(
     0
 }
 
-pub unsafe fn bcf_add_filter(hdr: *const bcf_hdr_t, line: *mut bcf1_t, flt_id: c_int) -> c_int {
+pub unsafe fn bcf_add_filter(hdr: *const bcf_hdr_t, line: *mut bcf1_t, flt_id: i32) -> i32 {
     // Native translation of htslib/vcf.c bcf_add_filter().
     let _ = hdr;
-    if (*line).unpacked & BCF_UN_FLT as c_int == 0 {
-        bcf_unpack(line, BCF_UN_FLT as c_int);
+    if (*line).unpacked & BCF_UN_FLT as i32 == 0 {
+        bcf_unpack(line, BCF_UN_FLT as i32);
     }
     let mut i = 0;
     while i < (*line).d.flt.len() {
@@ -10725,7 +10731,7 @@ pub unsafe fn bcf_add_filter(hdr: *const bcf_hdr_t, line: *mut bcf1_t, flt_id: c
     if i < (*line).d.flt.len() {
         return 0; // this filter is already set
     }
-    (*line).d.shared_dirty |= BCF1_DIRTY_FLT as c_int;
+    (*line).d.shared_dirty |= BCF1_DIRTY_FLT as i32;
     if flt_id == 0 {
         // set to PASS
         (*line).d.flt.clear();
@@ -10743,12 +10749,12 @@ pub unsafe fn bcf_add_filter(hdr: *const bcf_hdr_t, line: *mut bcf1_t, flt_id: c
 pub unsafe fn bcf_remove_filter(
     hdr: *const bcf_hdr_t,
     line: *mut bcf1_t,
-    flt_id: c_int,
-    pass: c_int,
-) -> c_int {
+    flt_id: i32,
+    pass: i32,
+) -> i32 {
     // Native translation of htslib/vcf.c bcf_remove_filter().
-    if (*line).unpacked & BCF_UN_FLT as c_int == 0 {
-        bcf_unpack(line, BCF_UN_FLT as c_int);
+    if (*line).unpacked & BCF_UN_FLT as i32 == 0 {
+        bcf_unpack(line, BCF_UN_FLT as i32);
     }
     let mut i = 0;
     while i < (*line).d.flt.len() {
@@ -10760,7 +10766,7 @@ pub unsafe fn bcf_remove_filter(
     if i == (*line).d.flt.len() {
         return 0; // the filter is not present
     }
-    (*line).d.shared_dirty |= BCF1_DIRTY_FLT as c_int;
+    (*line).d.shared_dirty |= BCF1_DIRTY_FLT as i32;
     (*line).d.flt.remove(i);
     if (*line).d.flt.is_empty() && pass != 0 {
         bcf_add_filter(hdr, line, 0);
@@ -10772,19 +10778,19 @@ pub unsafe fn bcf_has_filter(
     hdr: *const bcf_hdr_t,
     line: *mut bcf1_t,
     filter: *mut c_char,
-) -> c_int {
+) -> i32 {
     // "." resolves to "PASS"
     let filter = if *filter == b'.' as c_char && *filter.add(1) == 0 {
         c"PASS".as_ptr()
     } else {
         filter as *const c_char
     };
-    let id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, filter);
-    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_FLT as c_int, id) {
+    let id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, filter);
+    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_FLT as i32, id) {
         return -1;
     }
-    if (*line).unpacked & BCF_UN_FLT as c_int == 0 {
-        bcf_unpack(line, BCF_UN_FLT as c_int);
+    if (*line).unpacked & BCF_UN_FLT as i32 == 0 {
+        bcf_unpack(line, BCF_UN_FLT as i32);
     }
     if id == 0 && (*line).d.flt.is_empty() {
         return 1; // PASS
@@ -10801,11 +10807,11 @@ pub unsafe fn bcf_update_alleles(
     hdr: *const bcf_hdr_t,
     line: *mut bcf1_t,
     alleles: *mut *const c_char,
-    nals: c_int,
-) -> c_int {
+    nals: i32,
+) -> i32 {
     // Native translation of htslib/vcf.c bcf_update_alleles().
-    if (*line).unpacked & BCF_UN_STR as c_int == 0 {
-        bcf_unpack(line, BCF_UN_STR as c_int);
+    if (*line).unpacked & BCF_UN_STR as i32 == 0 {
+        bcf_unpack(line, BCF_UN_STR as i32);
     }
 
     // The C version copied the (NUL-terminated) input allele strings through a
@@ -10828,10 +10834,10 @@ pub unsafe fn bcf_update_alleles_str(
     hdr: *const bcf_hdr_t,
     line: *mut bcf1_t,
     alleles_string: *const c_char,
-) -> c_int {
+) -> i32 {
     // Native translation of htslib/vcf.c bcf_update_alleles_str().
-    if (*line).unpacked & BCF_UN_STR as c_int == 0 {
-        bcf_unpack(line, BCF_UN_STR as c_int);
+    if (*line).unpacked & BCF_UN_STR as i32 == 0 {
+        bcf_unpack(line, BCF_UN_STR as i32);
     }
     // The C version copied the comma-separated string into the packed `d.als`
     // buffer and split it in place on ',' (replacing each comma with NUL),
@@ -10839,15 +10845,15 @@ pub unsafe fn bcf_update_alleles_str(
     // source bytes on ',' directly into per-allele Vec<u8> (NO trailing NUL).
     let src = CStr::from_ptr(alleles_string).to_bytes();
     (*line).d.allele = src.split(|&b| b == b',').map(|a| a.to_vec()).collect();
-    let nals = (*line).d.allele.len() as c_int;
+    let nals = (*line).d.allele.len() as i32;
     vcf_c_5884__bcf1_sync_alleles(hdr, line, nals)
 }
 
-pub unsafe fn bcf_update_id(hdr: *const bcf_hdr_t, line: *mut bcf1_t, id: *const c_char) -> c_int {
+pub unsafe fn bcf_update_id(hdr: *const bcf_hdr_t, line: *mut bcf1_t, id: *const c_char) -> i32 {
     // Native translation of htslib/vcf.c bcf_update_id().
     let _ = hdr;
-    if (*line).unpacked & BCF_UN_STR as c_int == 0 {
-        bcf_unpack(line, BCF_UN_STR as c_int);
+    if (*line).unpacked & BCF_UN_STR as i32 == 0 {
+        bcf_unpack(line, BCF_UN_STR as i32);
     }
     // Store the new ID bytes (NO trailing NUL) directly into the owned d.id.
     (*line).d.id.clear();
@@ -10856,17 +10862,17 @@ pub unsafe fn bcf_update_id(hdr: *const bcf_hdr_t, line: *mut bcf1_t, id: *const
     } else {
         (*line).d.id.push(b'.');
     }
-    (*line).d.shared_dirty |= BCF1_DIRTY_ID as c_int;
+    (*line).d.shared_dirty |= BCF1_DIRTY_ID as i32;
     0
 }
 
 // Native translation of htslib/vcf.c bcf_add_id().
-pub unsafe fn bcf_add_id(_hdr: *const bcf_hdr_t, line: *mut bcf1_t, id: *const c_char) -> c_int {
+pub unsafe fn bcf_add_id(_hdr: *const bcf_hdr_t, line: *mut bcf1_t, id: *const c_char) -> i32 {
     if id.is_null() {
         return 0;
     }
-    if (*line).unpacked & BCF_UN_STR as c_int == 0 {
-        bcf_unpack(line, BCF_UN_STR as c_int);
+    if (*line).unpacked & BCF_UN_STR as i32 == 0 {
+        bcf_unpack(line, BCF_UN_STR as i32);
     }
 
     let id_bytes = CStr::from_ptr(id).to_bytes();
@@ -10904,7 +10910,7 @@ pub unsafe fn bcf_add_id(_hdr: *const bcf_hdr_t, line: *mut bcf1_t, id: *const c
         (*line).d.id.clear();
         (*line).d.id.extend_from_slice(id_bytes);
     }
-    (*line).d.shared_dirty |= BCF1_DIRTY_ID as c_int;
+    (*line).d.shared_dirty |= BCF1_DIRTY_ID as i32;
     0
 }
 
@@ -10913,16 +10919,16 @@ pub unsafe fn bcf_update_info(
     line: *mut bcf1_t,
     key: *const c_char,
     values: *const c_void,
-    n: c_int,
-    type_: c_int,
-) -> c_int {
+    n: i32,
+    type_: i32,
+) -> i32 {
     // Native translation of htslib/vcf.c bcf_update_info().
-    let inf_id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, key);
-    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_INFO as c_int, inf_id) {
+    let inf_id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, key);
+    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_INFO as i32, inf_id) {
         return -1; // No such INFO field in the header
     }
-    if (*line).unpacked & BCF_UN_INFO as c_int == 0 {
-        bcf_unpack(line, BCF_UN_INFO as c_int);
+    if (*line).unpacked & BCF_UN_INFO as i32 == 0 {
+        bcf_unpack(line, BCF_UN_INFO as i32);
     }
 
     let keyb = CStr::from_ptr(key).to_bytes();
@@ -10930,27 +10936,27 @@ pub unsafe fn bcf_update_info(
     let is_svlen_tag = keyb == b"SVLEN";
 
     let mut i = 0;
-    while i < (*line).n_info() as c_int {
+    while i < (*line).n_info() as i32 {
         if inf_id == (&(*line).d).info[i as usize].key {
             break;
         }
         i += 1;
     }
-    let mut inf: *mut bcf_info_t = if i == (*line).n_info() as c_int {
+    let mut inf: *mut bcf_info_t = if i == (*line).n_info() as i32 {
         std::ptr::null_mut()
     } else {
         let d = &mut (*line).d;
         &mut d.info[i as usize]
     };
 
-    if n == 0 || (type_ == BCF_HT_STR as c_int && values.is_null()) {
+    if n == 0 || (type_ == BCF_HT_STR as i32 && values.is_null()) {
         if !inf.is_null() {
             // Mark the tag for removal, free existing memory if necessary
             if (*inf).vptr_free() != 0 {
                 libc::free((*inf).vptr.sub((*inf).vptr_off() as usize).cast());
                 (*inf).set_vptr_free(0);
             }
-            (*line).d.shared_dirty |= BCF1_DIRTY_INF as c_int;
+            (*line).d.shared_dirty |= BCF1_DIRTY_INF as i32;
             (*inf).vptr = std::ptr::null_mut();
             (*inf).set_vptr_off(0);
             (*inf).vptr_len = 0;
@@ -10963,11 +10969,11 @@ pub unsafe fn bcf_update_info(
 
     if is_end_tag {
         if n != 1 {
-            (*line).errcode |= BCF_ERR_TAG_INVALID as c_int;
+            (*line).errcode |= BCF_ERR_TAG_INVALID as i32;
             return -1;
         }
-        if type_ != BCF_HT_INT as c_int && type_ != BCF_HT_LONG {
-            (*line).errcode |= BCF_ERR_TAG_INVALID as c_int;
+        if type_ != BCF_HT_INT as i32 && type_ != BCF_HT_LONG {
+            (*line).errcode |= BCF_ERR_TAG_INVALID as i32;
             return -1;
         }
     }
@@ -10975,17 +10981,17 @@ pub unsafe fn bcf_update_info(
     // Encode the values and determine the size required to accommodate the values
     let mut str_ = kstring_t::default();
     bcf_enc_int1(&mut str_, inf_id);
-    if type_ == BCF_HT_INT as c_int {
+    if type_ == BCF_HT_INT as i32 {
         bcf_enc_vint(&mut str_, n, values as *mut i32, -1);
-    } else if type_ == BCF_HT_REAL as c_int {
+    } else if type_ == BCF_HT_REAL as i32 {
         bcf_enc_vfloat(&mut str_, n, values as *mut f32);
-    } else if type_ == BCF_HT_FLAG as c_int || type_ == BCF_HT_STR as c_int {
+    } else if type_ == BCF_HT_FLAG as i32 || type_ == BCF_HT_STR as i32 {
         if values.is_null() {
-            bcf_enc_size(&mut str_, 0, BCF_BT_NULL as c_int);
+            bcf_enc_size(&mut str_, 0, BCF_BT_NULL as i32);
         } else {
             bcf_enc_vchar(
                 &mut str_,
-                libc::strlen(values.cast::<c_char>()) as c_int,
+                libc::strlen(values.cast::<c_char>()) as i32,
                 values.cast::<c_char>(),
             );
         }
@@ -11014,7 +11020,7 @@ pub unsafe fn bcf_update_info(
         if !(*inf).vptr.is_null() && str_len <= (*inf).vptr_len as usize + (*inf).vptr_off() as usize
         {
             if str_len != (*inf).vptr_len as usize + (*inf).vptr_off() as usize {
-                (*line).d.shared_dirty |= BCF1_DIRTY_INF as c_int;
+                (*line).d.shared_dirty |= BCF1_DIRTY_INF as i32;
             }
             let ptr = (*inf).vptr.sub((*inf).vptr_off() as usize);
             std::ptr::copy(str_s.cast::<u8>(), ptr, str_len);
@@ -11028,7 +11034,7 @@ pub unsafe fn bcf_update_info(
             }
             bcf_unpack_info_core1_rs(str_s.cast::<u8>(), inf);
             (*inf).set_vptr_free(1);
-            (*line).d.shared_dirty |= BCF1_DIRTY_INF as c_int;
+            (*line).d.shared_dirty |= BCF1_DIRTY_INF as i32;
         }
     } else {
         // The tag is not present, create new one
@@ -11041,9 +11047,9 @@ pub unsafe fn bcf_update_info(
         inf = &mut d.info[n_info - 1];
         bcf_unpack_info_core1_rs(str_s.cast::<u8>(), inf);
         (*inf).set_vptr_free(1);
-        (*line).d.shared_dirty |= BCF1_DIRTY_INF as c_int;
+        (*line).d.shared_dirty |= BCF1_DIRTY_INF as i32;
     }
-    (*line).unpacked |= BCF_UN_INFO as c_int;
+    (*line).unpacked |= BCF_UN_INFO as i32;
 
     if is_svlen_tag || is_end_tag {
         (*line).rlen = vcf_get_rlen_decoded(hdr, line);
@@ -11056,8 +11062,8 @@ pub unsafe fn bcf_update_info_int64(
     line: *mut bcf1_t,
     key: *const c_char,
     values: *const i64,
-    n: c_int,
-) -> c_int {
+    n: i32,
+) -> i32 {
     unsafe { bcf_update_info(hdr, line, key, values.cast::<c_void>(), n, BCF_HT_LONG) }
 }
 
@@ -11066,11 +11072,11 @@ pub unsafe fn bcf_update_format_string(
     line: *mut bcf1_t,
     key: *const c_char,
     values: *mut *const c_char,
-    n: c_int,
-) -> c_int {
+    n: i32,
+) -> i32 {
     // Native translation of htslib/vcf.c bcf_update_format_string().
     if n == 0 {
-        return bcf_update_format(hdr, line, key, std::ptr::null(), 0, BCF_HT_STR as c_int);
+        return bcf_update_format(hdr, line, key, std::ptr::null(), 0, BCF_HT_STR as i32);
     }
     let mut max_len = 0usize;
     for i in 0..n as usize {
@@ -11101,8 +11107,8 @@ pub unsafe fn bcf_update_format_string(
         line,
         key,
         out.cast::<c_void>(),
-        (max_len * n as usize) as c_int,
-        BCF_HT_STR as c_int,
+        (max_len * n as usize) as i32,
+        BCF_HT_STR as i32,
     );
     libc::free(out.cast());
     ret
@@ -11113,30 +11119,30 @@ pub unsafe fn bcf_update_format(
     line: *mut bcf1_t,
     key: *const c_char,
     values: *const c_void,
-    n: c_int,
-    type_: c_int,
-) -> c_int {
+    n: i32,
+    type_: i32,
+) -> i32 {
     // Native translation of htslib/vcf.c bcf_update_format().
-    let fmt_id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, key);
-    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_FMT as c_int, fmt_id) {
+    let fmt_id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, key);
+    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_FMT as i32, fmt_id) {
         if n == 0 {
             return 0;
         }
         return -1; // the key not present in the header
     }
 
-    if (*line).unpacked & BCF_UN_FMT as c_int == 0 {
-        bcf_unpack(line, BCF_UN_FMT as c_int);
+    if (*line).unpacked & BCF_UN_FMT as i32 == 0 {
+        bcf_unpack(line, BCF_UN_FMT as i32);
     }
 
     let mut i = 0;
-    while i < (*line).n_fmt() as c_int {
+    while i < (*line).n_fmt() as i32 {
         if (&(*line).d).fmt[i as usize].id == fmt_id {
             break;
         }
         i += 1;
     }
-    let mut fmt: *mut bcf_fmt_t = if i == (*line).n_fmt() as c_int {
+    let mut fmt: *mut bcf_fmt_t = if i == (*line).n_fmt() as i32 {
         std::ptr::null_mut()
     } else {
         let d = &mut (*line).d;
@@ -11169,13 +11175,13 @@ pub unsafe fn bcf_update_format(
     let mut str_ = kstring_t::default();
     bcf_enc_int1(&mut str_, fmt_id);
     assert!(!values.is_null());
-    if type_ == BCF_HT_INT as c_int {
+    if type_ == BCF_HT_INT as i32 {
         bcf_enc_vint(&mut str_, n, values as *mut i32, nps);
-    } else if type_ == BCF_HT_REAL as c_int {
-        bcf_enc_size(&mut str_, nps, BCF_BT_FLOAT as c_int);
+    } else if type_ == BCF_HT_REAL as i32 {
+        bcf_enc_size(&mut str_, nps, BCF_BT_FLOAT as i32);
         serialize_float_array(&mut str_, (nps * nsamples) as usize, values.cast::<f32>());
-    } else if type_ == BCF_HT_STR as c_int {
-        bcf_enc_size(&mut str_, nps, BCF_BT_CHAR as c_int);
+    } else if type_ == BCF_HT_STR as i32 {
+        bcf_enc_size(&mut str_, nps, BCF_BT_CHAR as i32);
         let kputsn_slice =
             std::slice::from_raw_parts(values.cast::<u8>(), (nps * nsamples) as usize);
         kputsn(kputsn_slice, (nps * nsamples) as usize, &mut str_);
@@ -11243,7 +11249,7 @@ pub unsafe fn bcf_update_format(
             (*line).d.indiv_dirty = 1;
         }
     }
-    (*line).unpacked |= BCF_UN_FMT as c_int;
+    (*line).unpacked |= BCF_UN_FMT as i32;
 
     if is_len {
         (*line).rlen = vcf_get_rlen_decoded(hdr, line);
@@ -11256,8 +11262,8 @@ pub unsafe fn bcf_get_fmt(
     line: *mut bcf1_t,
     key: *const c_char,
 ) -> *mut bcf_fmt_t {
-    let id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, key);
-    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_FMT as c_int, id) {
+    let id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, key);
+    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_FMT as i32, id) {
         return std::ptr::null_mut();
     }
     bcf_get_fmt_id(line, id)
@@ -11268,8 +11274,8 @@ pub unsafe fn bcf_get_info(
     line: *mut bcf1_t,
     key: *const c_char,
 ) -> *mut bcf_info_t {
-    let id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, key);
-    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_INFO as c_int, id) {
+    let id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, key);
+    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_INFO as i32, id) {
         return std::ptr::null_mut();
     }
     bcf_get_info_id(line, id)
@@ -11278,19 +11284,19 @@ pub unsafe fn bcf_get_info(
 pub unsafe fn bcf_get_format_string(
     hdr: *const bcf_hdr_t,
     line: *mut bcf1_t,
-    tag: *const c_char,
-    dst: *mut *mut *mut c_char,
-    ndst: *mut c_int,
-) -> c_int {
-    let tag_id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, tag);
-    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_FMT as c_int, tag_id) {
+    tag: *const u8,
+    dst: *mut *mut *mut u8,
+    ndst: *mut i32,
+) -> i32 {
+    let tag_id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, tag.cast());
+    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_FMT as i32, tag_id) {
         return -1;
     }
-    if bcf_hdr_id2type_rs(hdr, BCF_HL_FMT as c_int, tag_id) != BCF_HT_STR as c_int {
+    if bcf_hdr_id2type_rs(hdr, BCF_HL_FMT as i32, tag_id) != BCF_HT_STR as i32 {
         return -2;
     }
-    if (*line).unpacked & BCF_UN_FMT as c_int == 0 {
-        bcf_unpack(line, BCF_UN_FMT as c_int);
+    if (*line).unpacked & BCF_UN_FMT as i32 == 0 {
+        bcf_unpack(line, BCF_UN_FMT as i32);
     }
 
     let n_fmt = (*line).n_fmt() as usize;
@@ -11311,9 +11317,7 @@ pub unsafe fn bcf_get_format_string(
 
     let nsmpl = (*hdr).n[BCF_DT_SAMPLE as usize];
     if (*dst).is_null() {
-        *dst =
-            crate::htslib_rs::c_compat::malloc((size_of::<*mut c_char>() as u64) * (nsmpl as u64))
-                .cast::<*mut c_char>();
+        *dst = libc::malloc((size_of::<*mut u8>()) * (nsmpl as usize)).cast::<*mut u8>();
         if (*dst).is_null() {
             return -4;
         }
@@ -11322,8 +11326,7 @@ pub unsafe fn bcf_get_format_string(
     let fmt_n = fmt.n;
     let n = (fmt_n + 1) * nsmpl;
     if *ndst < n {
-        let base = crate::htslib_rs::c_compat::realloc((*(*dst)).cast::<c_void>(), n as u64)
-            .cast::<c_char>();
+        let base = libc::realloc((*(*dst)).cast::<libc::c_void>(), n as usize).cast::<u8>();
         if base.is_null() {
             return -4;
         }
@@ -11346,24 +11349,24 @@ pub unsafe fn bcf_get_format_values(
     line: *mut bcf1_t,
     tag: *const c_char,
     dst: *mut *mut c_void,
-    ndst: *mut c_int,
-    type_: c_int,
-) -> c_int {
-    let tag_id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, tag);
-    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_FMT as c_int, tag_id) {
+    ndst: *mut i32,
+    type_: i32,
+) -> i32 {
+    let tag_id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, tag);
+    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_FMT as i32, tag_id) {
         return -1;
     }
     // Ugly: GT field is considered a string by the VCF header but BCF
     // represents it as INT.
     if *tag == b'G' as c_char && *tag.add(1) == b'T' as c_char && *tag.add(2) == 0 {
-        if bcf_hdr_id2type_rs(hdr, BCF_HL_FMT as c_int, tag_id) != BCF_HT_STR as c_int {
+        if bcf_hdr_id2type_rs(hdr, BCF_HL_FMT as i32, tag_id) != BCF_HT_STR as i32 {
             return -2;
         }
-    } else if bcf_hdr_id2type_rs(hdr, BCF_HL_FMT as c_int, tag_id) != type_ {
+    } else if bcf_hdr_id2type_rs(hdr, BCF_HL_FMT as i32, tag_id) != type_ {
         return -2;
     }
-    if (*line).unpacked & BCF_UN_FMT as c_int == 0 {
-        bcf_unpack(line, BCF_UN_FMT as c_int);
+    if (*line).unpacked & BCF_UN_FMT as i32 == 0 {
+        bcf_unpack(line, BCF_UN_FMT as i32);
     }
 
     let n_fmt = (*line).n_fmt() as usize;
@@ -11387,10 +11390,10 @@ pub unsafe fn bcf_get_format_values(
     let fmt_p = fmt.p;
     let nsmpl = (*hdr).n[BCF_DT_SAMPLE as usize];
 
-    if type_ == BCF_HT_STR as c_int {
+    if type_ == BCF_HT_STR as i32 {
         let n = fmt_n * nsmpl;
         if *ndst < n {
-            *dst = crate::htslib_rs::c_compat::realloc(*dst, n as u64);
+            *dst = libc::realloc(*dst, n as usize);
             if (*dst).is_null() {
                 return -4;
             }
@@ -11400,14 +11403,14 @@ pub unsafe fn bcf_get_format_values(
         return n;
     }
 
-    let size1 = if type_ == BCF_HT_INT as c_int {
+    let size1 = if type_ == BCF_HT_INT as i32 {
         size_of::<i32>()
     } else {
         size_of::<f32>()
     };
     if *ndst < fmt_n * nsmpl {
         *ndst = fmt_n * nsmpl;
-        *dst = crate::htslib_rs::c_compat::realloc(*dst, (*ndst as u64) * (size1 as u64));
+        *dst = libc::realloc(*dst, (*ndst as usize) * size1);
         if (*dst).is_null() {
             return -4;
         }
@@ -11480,12 +11483,12 @@ pub unsafe fn bcf_get_format_values(
     nsmpl * fmt_n
 }
 
-pub unsafe fn bcf_get_fmt_id(line: *mut bcf1_t, id: c_int) -> *mut bcf_fmt_t {
+pub unsafe fn bcf_get_fmt_id(line: *mut bcf1_t, id: i32) -> *mut bcf_fmt_t {
     if line.is_null() {
         return std::ptr::null_mut();
     }
-    if (*line).unpacked & BCF_UN_FMT as c_int == 0 {
-        bcf_unpack(line, BCF_UN_FMT as c_int);
+    if (*line).unpacked & BCF_UN_FMT as i32 == 0 {
+        bcf_unpack(line, BCF_UN_FMT as i32);
     }
     for i in 0..(*line).n_fmt() as usize {
         let d = &mut (*line).d;
@@ -11497,12 +11500,12 @@ pub unsafe fn bcf_get_fmt_id(line: *mut bcf1_t, id: c_int) -> *mut bcf_fmt_t {
     std::ptr::null_mut()
 }
 
-pub unsafe fn bcf_get_info_id(line: *mut bcf1_t, id: c_int) -> *mut bcf_info_t {
+pub unsafe fn bcf_get_info_id(line: *mut bcf1_t, id: i32) -> *mut bcf_info_t {
     if line.is_null() {
         return std::ptr::null_mut();
     }
-    if (*line).unpacked & BCF_UN_INFO as c_int == 0 {
-        bcf_unpack(line, BCF_UN_INFO as c_int);
+    if (*line).unpacked & BCF_UN_INFO as i32 == 0 {
+        bcf_unpack(line, BCF_UN_INFO as i32);
     }
     for i in 0..(*line).n_info() as usize {
         let d = &mut (*line).d;
@@ -11519,18 +11522,18 @@ pub unsafe fn bcf_get_info_values(
     line: *mut bcf1_t,
     tag: *const c_char,
     dst: *mut *mut c_void,
-    ndst: *mut c_int,
-    type_: c_int,
-) -> c_int {
-    let tag_id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, tag);
-    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_INFO as c_int, tag_id) {
+    ndst: *mut i32,
+    type_: i32,
+) -> i32 {
+    let tag_id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, tag);
+    if !bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_INFO as i32, tag_id) {
         return -1;
     }
-    if bcf_hdr_id2type_rs(hdr, BCF_HL_INFO as c_int, tag_id) != (type_ & 0xff) {
+    if bcf_hdr_id2type_rs(hdr, BCF_HL_INFO as i32, tag_id) != (type_ & 0xff) {
         return -2;
     }
-    if (*line).unpacked & BCF_UN_INFO as c_int == 0 {
-        bcf_unpack(line, BCF_UN_INFO as c_int);
+    if (*line).unpacked & BCF_UN_INFO as i32 == 0 {
+        bcf_unpack(line, BCF_UN_INFO as i32);
     }
 
     let n_info = (*line).n_info() as usize;
@@ -11542,9 +11545,9 @@ pub unsafe fn bcf_get_info_values(
         }
     }
     if idx == n_info {
-        return if type_ == BCF_HT_FLAG as c_int { 0 } else { -3 };
+        return if type_ == BCF_HT_FLAG as i32 { 0 } else { -3 };
     }
-    if type_ == BCF_HT_FLAG as c_int {
+    if type_ == BCF_HT_FLAG as i32 {
         return 1;
     }
 
@@ -11554,10 +11557,10 @@ pub unsafe fn bcf_get_info_values(
     }
     let info_len = info.len;
 
-    if type_ == BCF_HT_STR as c_int {
+    if type_ == BCF_HT_STR as i32 {
         if *ndst < info_len + 1 {
             *ndst = info_len + 1;
-            *dst = crate::htslib_rs::c_compat::realloc(*dst, *ndst as u64);
+            *dst = libc::realloc(*dst, *ndst as usize);
         }
         std::ptr::copy_nonoverlapping(info.vptr, (*dst).cast::<u8>(), info_len as usize);
         *(*dst).cast::<u8>().add(info_len as usize) = 0;
@@ -11572,13 +11575,13 @@ pub unsafe fn bcf_get_info_values(
     };
     if *ndst < info_len {
         *ndst = info_len;
-        *dst = crate::htslib_rs::c_compat::realloc(*dst, (*ndst as u64) * (size1 as u64));
+        *dst = libc::realloc(*dst, (*ndst as usize) * size1);
     }
 
     let info_type = info.type_;
     let vptr = info.vptr;
-    let is_long = type_ == BCF_HT_LONG as c_int;
-    let ret: c_int;
+    let is_long = type_ == BCF_HT_LONG as i32;
+    let ret: i32;
 
     macro_rules! branch_int {
         ($read:expr, $sz:expr, $missing:expr, $vend:expr) => {{
@@ -11647,8 +11650,8 @@ pub unsafe fn bcf_get_info_int64(
     line: *mut bcf1_t,
     tag: *const c_char,
     dst: *mut *mut i64,
-    ndst: *mut c_int,
-) -> c_int {
+    ndst: *mut i32,
+) -> i32 {
     unsafe { bcf_get_info_values(hdr, line, tag, dst.cast::<*mut c_void>(), ndst, BCF_HT_LONG) }
 }
 
@@ -11776,7 +11779,7 @@ struct bcf_hdr_aux_t {
     dict: kh_vdict_t,
     gen: Option<NonNull<kh_hdict_t>>,
     key_len: Option<NonNull<usize>>,
-    version: c_int,
+    version: i32,
     ref_count: u32,
 }
 
@@ -11884,7 +11887,7 @@ unsafe fn kh_destroy_vdict(h: *mut kh_vdict_t) {
 }
 
 // kh_resize(vdict): faithful port (string keys, value bcf_idinfo_t).
-unsafe fn kh_resize_vdict(h: *mut kh_vdict_t, mut new_n_buckets: u32) -> c_int {
+unsafe fn kh_resize_vdict(h: *mut kh_vdict_t, mut new_n_buckets: u32) -> i32 {
     let mut new_flags: *mut u32 = std::ptr::null_mut();
     let mut j: u32 = 1;
     {
@@ -11983,7 +11986,7 @@ unsafe fn kh_resize_vdict(h: *mut kh_vdict_t, mut new_n_buckets: u32) -> c_int {
 
 // kh_put(vdict): faithful port. Sets *ret to 1 (absent/new), 2 (deleted slot
 // reused), 0 (present), or -1 (error). Returns bucket index.
-unsafe fn kh_put_vdict(h: *mut kh_vdict_t, key: *const c_char, ret: *mut c_int) -> u32 {
+unsafe fn kh_put_vdict(h: *mut kh_vdict_t, key: *const c_char, ret: *mut i32) -> u32 {
     if (*h).n_occupied >= (*h).upper_bound {
         if (*h).n_buckets > ((*h).size << 1) {
             if kh_resize_vdict(h, (*h).n_buckets - 1) < 0 {
@@ -12102,7 +12105,7 @@ unsafe fn kh_get_hdict(h: *const kh_hdict_t, key: *const c_char) -> u32 {
     }
 }
 
-unsafe fn kh_resize_hdict(h: *mut kh_hdict_t, mut new_n_buckets: u32) -> c_int {
+unsafe fn kh_resize_hdict(h: *mut kh_hdict_t, mut new_n_buckets: u32) -> i32 {
     let mut new_flags: *mut u32 = std::ptr::null_mut();
     let mut j: u32 = 1;
     {
@@ -12198,7 +12201,7 @@ unsafe fn kh_resize_hdict(h: *mut kh_hdict_t, mut new_n_buckets: u32) -> c_int {
     0
 }
 
-unsafe fn kh_put_hdict(h: *mut kh_hdict_t, key: *const c_char, ret: *mut c_int) -> u32 {
+unsafe fn kh_put_hdict(h: *mut kh_hdict_t, key: *const c_char, ret: *mut i32) -> u32 {
     if (*h).n_occupied >= (*h).upper_bound {
         if (*h).n_buckets > ((*h).size << 1) {
             if kh_resize_hdict(h, (*h).n_buckets - 1) < 0 {
@@ -12272,7 +12275,7 @@ fn bcf_idinfo_def() -> bcf_idinfo_t {
     }
 }
 
-pub unsafe fn bcf_hdr_id2int(hdr: *const bcf_hdr_t, type_: c_int, id: *const c_char) -> c_int {
+pub unsafe fn bcf_hdr_id2int(hdr: *const bcf_hdr_t, type_: i32, id: *const c_char) -> i32 {
     if hdr.is_null() || !(0..=2).contains(&type_) || id.is_null() {
         return -1;
     }
@@ -12288,11 +12291,11 @@ pub unsafe fn bcf_hdr_id2int(hdr: *const bcf_hdr_t, type_: c_int, id: *const c_c
     }
 }
 
-pub unsafe fn bcf_hdr_name2id(hdr: *const bcf_hdr_t, id: *const c_char) -> c_int {
-    bcf_hdr_id2int(hdr, BCF_DT_CTG as c_int, id)
+pub unsafe fn bcf_hdr_name2id(hdr: *const bcf_hdr_t, id: *const c_char) -> i32 {
+    bcf_hdr_id2int(hdr, BCF_DT_CTG as i32, id)
 }
 
-pub unsafe fn bcf_hdr_id2name(hdr: *const bcf_hdr_t, rid: c_int) -> *const c_char {
+pub unsafe fn bcf_hdr_id2name(hdr: *const bcf_hdr_t, rid: i32) -> *const c_char {
     if hdr.is_null() || rid < 0 || rid >= (*hdr).n[BCF_DT_CTG as usize] {
         return std::ptr::null();
     }
@@ -12314,53 +12317,53 @@ pub unsafe fn bcf_seqname_safe(hdr: *const bcf_hdr_t, rec: *const bcf1_t) -> *co
 
 // Native translation of htslib/vcf.c bcf_fmt_array().
 // Native translation of htslib/vcf.c bcf_fmt_array1().
-unsafe fn bcf_fmt_array1(s: *mut kstring_t, type_: c_int, data: *mut c_void) -> c_int {
+unsafe fn bcf_fmt_array1(s: *mut kstring_t, type_: i32, data: *mut c_void) -> i32 {
     let mut e = false;
     let p = data.cast::<u8>();
     match type_ {
-        x if x == BCF_BT_CHAR as c_int => {
+        x if x == BCF_BT_CHAR as i32 => {
             let c = if *p as u32 == bcf_str_missing {
-                b'.' as c_int
+                b'.' as i32
             } else {
-                *p as c_int
+                *p as i32
             };
             e |= kputc_(c, &mut *s) < 0;
         }
-        x if x == BCF_BT_INT8 as c_int => {
+        x if x == BCF_BT_INT8 as i32 => {
             let v = le_to_i8(p) as i32;
             if v != bcf_int8_vector_end {
                 e |= (if v == bcf_int8_missing {
-                    kputc_(b'.' as c_int, &mut *s)
+                    kputc_(b'.' as i32, &mut *s)
                 } else {
                     kputw(v, &mut *s)
                 }) < 0;
             }
         }
-        x if x == BCF_BT_INT16 as c_int => {
+        x if x == BCF_BT_INT16 as i32 => {
             let v = le_to_i16(p) as i32;
             if v != bcf_int16_vector_end {
                 e |= (if v == bcf_int16_missing {
-                    kputc_(b'.' as c_int, &mut *s)
+                    kputc_(b'.' as i32, &mut *s)
                 } else {
                     kputw(v, &mut *s)
                 }) < 0;
             }
         }
-        x if x == BCF_BT_INT32 as c_int => {
+        x if x == BCF_BT_INT32 as i32 => {
             let v = le_to_i32(p);
             if v != bcf_int32_vector_end {
                 e |= (if v == bcf_int32_missing {
-                    kputc_(b'.' as c_int, &mut *s)
+                    kputc_(b'.' as i32, &mut *s)
                 } else {
                     kputw(v, &mut *s)
                 }) < 0;
             }
         }
-        x if x == BCF_BT_FLOAT as c_int => {
+        x if x == BCF_BT_FLOAT as i32 => {
             let v = le_to_u32(p);
             if v != bcf_float_vector_end {
                 e |= (if v == bcf_float_missing {
-                    kputc_(b'.' as c_int, &mut *s)
+                    kputc_(b'.' as i32, &mut *s)
                 } else {
                     kputd(le_to_float(p) as f64, &mut *s)
                 }) < 0;
@@ -12380,13 +12383,13 @@ unsafe fn bcf_fmt_array1(s: *mut kstring_t, type_: c_int, data: *mut c_void) -> 
     }
 }
 
-pub unsafe fn bcf_fmt_array(s: *mut kstring_t, n: c_int, type_: c_int, data: *mut c_void) -> c_int {
+pub unsafe fn bcf_fmt_array(s: *mut kstring_t, n: i32, type_: i32, data: *mut c_void) -> i32 {
     let mut e: u32 = 0;
     if n == 0 {
-        return if kputc_(b'.' as c_int, &mut *s) >= 0 { 0 } else { -1 };
+        return if kputc_(b'.' as i32, &mut *s) >= 0 { 0 } else { -1 };
     }
 
-    if type_ == BCF_BT_CHAR as c_int {
+    if type_ == BCF_BT_CHAR as i32 {
         let p = data.cast::<c_char>();
         // bcf_str_missing is already handled by the n==0 branch above.
         if n >= 8 {
@@ -12397,12 +12400,12 @@ pub unsafe fn bcf_fmt_array(s: *mut kstring_t, n: c_int, type_: c_int, data: *mu
                 (p_end as usize) - (data as usize)
             };
             let p_slice = std::slice::from_raw_parts(p.cast::<u8>(), len);
-            e |= (kputsn(p_slice, len as size_t, &mut *s) < 0) as u32;
+            e |= (kputsn(p_slice, len as usize, &mut *s) < 0) as u32;
         } else {
             let mut j = 0;
             let mut pp = p;
             while j < n && *pp != 0 {
-                e |= (kputc(*pp as c_int, &mut *s) < 0) as u32;
+                e |= (kputc(*pp as i32, &mut *s) < 0) as u32;
                 j += 1;
                 pp = pp.add(1);
             }
@@ -12418,10 +12421,10 @@ pub unsafe fn bcf_fmt_array(s: *mut kstring_t, n: c_int, type_: c_int, data: *mu
                         break;
                     }
                     if j != 0 {
-                        e |= (kputc_(b',' as c_int, &mut *s) < 0) as u32;
+                        e |= (kputc_(b',' as i32, &mut *s) < 0) as u32;
                     }
                     e |= ((if $is_missing(v) {
-                        kputc(b'.' as c_int, &mut *s)
+                        kputc(b'.' as i32, &mut *s)
                     } else {
                         $kprint(p, v)
                     }) < 0) as u32;
@@ -12431,28 +12434,28 @@ pub unsafe fn bcf_fmt_array(s: *mut kstring_t, n: c_int, type_: c_int, data: *mu
             }};
         }
         match type_ {
-            x if x == BCF_BT_INT8 as c_int => branch!(
+            x if x == BCF_BT_INT8 as i32 => branch!(
                 |p| le_to_i8(p) as i32,
                 1usize,
                 |v| v == bcf_int8_missing,
                 |v| v == bcf_int8_vector_end,
                 |_p, v| kputw(v, &mut *s)
             ),
-            x if x == BCF_BT_INT16 as c_int => branch!(
+            x if x == BCF_BT_INT16 as i32 => branch!(
                 |p| le_to_i16(p) as i32,
                 2usize,
                 |v| v == bcf_int16_missing,
                 |v| v == bcf_int16_vector_end,
                 |_p, v| kputw(v, &mut *s)
             ),
-            x if x == BCF_BT_INT32 as c_int => branch!(
+            x if x == BCF_BT_INT32 as i32 => branch!(
                 |p| le_to_i32(p),
                 4usize,
                 |v| v == bcf_int32_missing,
                 |v| v == bcf_int32_vector_end,
                 |_p, v| kputw(v, &mut *s)
             ),
-            x if x == BCF_BT_FLOAT as c_int => branch!(
+            x if x == BCF_BT_FLOAT as i32 => branch!(
                 |p| le_to_u32(p),
                 4usize,
                 |v| v == bcf_float_missing,
@@ -12464,8 +12467,8 @@ pub unsafe fn bcf_fmt_array(s: *mut kstring_t, n: c_int, type_: c_int, data: *mu
                     .unwrap_or_default();
                 crate::htslib_rs::hts::hts_log_cstr(
                     crate::htslib_rs::hts::HTS_LOG_ERROR,
-                    c"bcf_fmt_array".as_ptr(),
-                    msg.as_ptr(),
+                    b"bcf_fmt_array",
+                    msg.to_bytes(),
                 );
                 libc::exit(1);
             }
@@ -12489,22 +12492,22 @@ pub unsafe fn bcf_fmt_sized_array(s: *mut kstring_t, ptr: *mut u8) -> *mut u8 {
 }
 
 // Native translation of htslib/vcf.c bcf_enc_vchar().
-pub unsafe fn bcf_enc_vchar(s: *mut kstring_t, l: c_int, a: *const c_char) -> c_int {
-    bcf_enc_size(s, l, BCF_BT_CHAR as c_int);
+pub unsafe fn bcf_enc_vchar(s: *mut kstring_t, l: i32, a: *const c_char) -> i32 {
+    bcf_enc_size(s, l, BCF_BT_CHAR as i32);
     let a_slice = std::slice::from_raw_parts(a.cast::<u8>(), l as usize);
-    kputsn(a_slice, l as size_t, &mut *s);
+    kputsn(a_slice, l as usize, &mut *s);
     0 // FIXME: check for errs in this function (matches htslib)
 }
 
 // Native translation of htslib/vcf.c bcf_enc_vint().
-pub unsafe fn bcf_enc_vint(s: *mut kstring_t, n: c_int, a: *mut i32, mut wsize: c_int) -> c_int {
+pub unsafe fn bcf_enc_vint(s: *mut kstring_t, n: i32, a: *mut i32, mut wsize: i32) -> i32 {
     const BCF_MAX_BT_INT8: i32 = 127;
     const BCF_MIN_BT_INT8: i32 = -120;
     const BCF_MAX_BT_INT16: i32 = 32767;
     const BCF_MIN_BT_INT16: i32 = -32760;
 
     if n <= 0 {
-        return bcf_enc_size(s, 0, BCF_BT_NULL as c_int);
+        return bcf_enc_size(s, 0, BCF_BT_NULL as i32);
     } else if n == 1 {
         return bcf_enc_int1(s, *a);
     }
@@ -12526,8 +12529,8 @@ pub unsafe fn bcf_enc_vint(s: *mut kstring_t, n: c_int, a: *mut i32, mut wsize: 
     }
 
     if max <= BCF_MAX_BT_INT8 && min >= BCF_MIN_BT_INT8 {
-        let target = (*s).data.len() + n as size_t;
-        if bcf_enc_size(s, wsize, BCF_BT_INT8 as c_int) < 0
+        let target = (*s).data.len() + n as usize;
+        if bcf_enc_size(s, wsize, BCF_BT_INT8 as i32) < 0
             || super::hts::ks_resize(&mut *s, target) < 0
         {
             return -1;
@@ -12547,8 +12550,8 @@ pub unsafe fn bcf_enc_vint(s: *mut kstring_t, n: c_int, a: *mut i32, mut wsize: 
             p = p.add(1);
         }
     } else if max <= BCF_MAX_BT_INT16 && min >= BCF_MIN_BT_INT16 {
-        let target = (*s).data.len() + n as size_t * size_of::<i16>();
-        if bcf_enc_size(s, wsize, BCF_BT_INT16 as c_int) < 0
+        let target = (*s).data.len() + n as usize * size_of::<i16>();
+        if bcf_enc_size(s, wsize, BCF_BT_INT16 as i32) < 0
             || super::hts::ks_resize(&mut *s, target) < 0
         {
             return -1;
@@ -12569,8 +12572,8 @@ pub unsafe fn bcf_enc_vint(s: *mut kstring_t, n: c_int, a: *mut i32, mut wsize: 
             p = p.add(size_of::<i16>());
         }
     } else {
-        let target = (*s).data.len() + n as size_t * size_of::<i32>();
-        if bcf_enc_size(s, wsize, BCF_BT_INT32 as c_int) < 0
+        let target = (*s).data.len() + n as usize * size_of::<i32>();
+        if bcf_enc_size(s, wsize, BCF_BT_INT32 as i32) < 0
             || super::hts::ks_resize(&mut *s, target) < 0
         {
             return -1;
@@ -12588,8 +12591,8 @@ pub unsafe fn bcf_enc_vint(s: *mut kstring_t, n: c_int, a: *mut i32, mut wsize: 
 }
 
 // Native translation of htslib/vcf.c bcf_enc_vfloat().
-pub unsafe fn bcf_enc_vfloat(s: *mut kstring_t, n: c_int, a: *mut f32) -> c_int {
-    bcf_enc_size(s, n, BCF_BT_FLOAT as c_int);
+pub unsafe fn bcf_enc_vfloat(s: *mut kstring_t, n: i32, a: *mut f32) -> i32 {
+    bcf_enc_size(s, n, BCF_BT_FLOAT as i32);
     serialize_float_array(s, n as usize, a);
     0 // FIXME: check for errs in this function (matches htslib)
 }
@@ -12599,10 +12602,10 @@ pub unsafe fn bcf_enc_vfloat(s: *mut kstring_t, n: c_int, a: *mut f32) -> c_int 
 // list.  Also returns number of contigs in *nids_out.
 unsafe fn idx_calc_n_lvls_ids(
     h: *const bcf_hdr_t,
-    min_shift_in_out: *mut c_int,
-    starting_n_lvls: c_int,
-    nids_out: *mut c_int,
-) -> c_int {
+    min_shift_in_out: *mut i32,
+    starting_n_lvls: i32,
+    nids_out: *mut i32,
+) -> i32 {
     let mut n_lvls = starting_n_lvls;
     let mut nids = 0;
     let mut max_len: i64 = 0;
@@ -12640,7 +12643,7 @@ unsafe fn bcf_bgzf_tell(fp: *const BGZF) -> u64 {
 }
 
 // Native translation of htslib/vcf.c bcf_index().
-unsafe fn bcf_index(fp: *mut htsFile, mut min_shift: c_int) -> *mut hts_idx_t {
+unsafe fn bcf_index(fp: *mut htsFile, mut min_shift: i32) -> *mut hts_idx_t {
     let h = bcf_hdr_read(fp);
     if h.is_null() {
         return std::ptr::null_mut();
@@ -12708,7 +12711,7 @@ pub unsafe fn bcf_index_load2(fn_: *const c_char, fnidx: *const c_char) -> *mut 
 pub unsafe fn bcf_index_load3(
     fn_: *const c_char,
     fnidx: *const c_char,
-    flags: c_int,
+    flags: i32,
 ) -> *mut hts_idx_t {
     crate::htslib_rs::hts::hts_idx_load3(fn_, fnidx, crate::htslib_rs::hts::HTS_FMT_CSI, flags)
 }
@@ -12717,9 +12720,9 @@ pub unsafe fn bcf_index_load3(
 pub unsafe fn bcf_index_build3(
     fn_: *const c_char,
     fnidx: *const c_char,
-    min_shift: c_int,
-    n_threads: c_int,
-) -> c_int {
+    min_shift: i32,
+    n_threads: i32,
+) -> i32 {
     let fp = hts_open(fn_, c"rb".as_ptr());
     if fp.is_null() {
         return -2;
@@ -12787,13 +12790,13 @@ pub unsafe fn bcf_index_build3(
 pub unsafe fn bcf_index_build2(
     fn_: *const c_char,
     fnidx: *const c_char,
-    min_shift: c_int,
-) -> c_int {
+    min_shift: i32,
+) -> i32 {
     bcf_index_build3(fn_, fnidx, min_shift, 0)
 }
 
 // Native translation of htslib/vcf.c bcf_index_build().
-pub unsafe fn bcf_index_build(fn_: *const c_char, min_shift: c_int) -> c_int {
+pub unsafe fn bcf_index_build(fn_: *const c_char, min_shift: i32) -> i32 {
     bcf_index_build3(fn_, std::ptr::null(), min_shift, 0)
 }
 
@@ -12802,10 +12805,10 @@ pub unsafe fn bcf_index_build(fn_: *const c_char, min_shift: c_int) -> c_int {
 unsafe fn vcf_idx_init(
     fp: *mut htsFile,
     h: *mut bcf_hdr_t,
-    mut min_shift: c_int,
+    mut min_shift: i32,
     fnidx: *const c_char,
-) -> c_int {
-    const TBX_MAX_SHIFT: c_int = 31;
+) -> i32 {
+    const TBX_MAX_SHIFT: i32 = 31;
     const TBX_VCF: u32 = 2;
     let n_lvls;
     let fmt;
@@ -12865,9 +12868,9 @@ unsafe fn vcf_idx_init(
 pub unsafe fn bcf_idx_init(
     fp: *mut htsFile,
     h: *mut bcf_hdr_t,
-    mut min_shift: c_int,
+    mut min_shift: i32,
     fnidx: *const c_char,
-) -> c_int {
+) -> i32 {
     let mut nids = 0;
 
     if (*fp).format.compression != HTS_COMPRESSION_BGZF {
@@ -12901,7 +12904,7 @@ pub unsafe fn bcf_idx_init(
     0
 }
 
-pub unsafe fn bcf_idx_save(fp: *mut htsFile) -> c_int {
+pub unsafe fn bcf_idx_save(fp: *mut htsFile) -> i32 {
     super::sam::sam_idx_save(fp)
 }
 
@@ -12912,16 +12915,16 @@ unsafe extern "C" fn sr_bcf_readrec_adapter(
     fp: *mut BGZF,
     data: *mut c_void,
     r: *mut c_void,
-    tid: *mut c_int,
+    tid: *mut i32,
     beg: *mut hts_pos_t,
     end: *mut hts_pos_t,
-) -> c_int {
+) -> i32 {
     unsafe { bcf_readrec(fp, data, r, tid, beg, end) }
 }
 
 unsafe fn sr_bcf_itr_queryi(
     idx: *const hts_idx_t,
-    tid: c_int,
+    tid: i32,
     beg: hts_pos_t,
     end: hts_pos_t,
 ) -> *mut hts_itr_t {
@@ -12930,7 +12933,7 @@ unsafe fn sr_bcf_itr_queryi(
 
 unsafe fn sr_tbx_itr_queryi(
     tbx: *mut super::tbx::tbx_t,
-    tid: c_int,
+    tid: i32,
     beg: hts_pos_t,
     end: hts_pos_t,
 ) -> *mut hts_itr_t {
@@ -12945,7 +12948,7 @@ unsafe fn sr_tbx_itr_queryi(
     }
 }
 
-unsafe fn sr_bcf_itr_next(htsfp: *mut htsFile, itr: *mut hts_itr_t, r: *mut bcf1_t) -> c_int {
+unsafe fn sr_bcf_itr_next(htsfp: *mut htsFile, itr: *mut hts_itr_t, r: *mut bcf1_t) -> i32 {
     unsafe {
         super::hts::hts_itr_next((*htsfp).fp.bgzf.cast(), itr, r.cast(), std::ptr::null_mut())
     }
@@ -12956,14 +12959,14 @@ pub(crate) unsafe fn sr_tbx_itr_next(
     tbx: *mut super::tbx::tbx_t,
     itr: *mut hts_itr_t,
     str_: *mut kstring_t,
-) -> c_int {
+) -> i32 {
     unsafe {
         super::hts::hts_itr_next((*fp).fp.bgzf.cast(), itr, str_.cast(), tbx.cast::<c_void>())
     }
 }
 
 // original: has_filter (htslib/synced_bcf_reader.c:546)
-unsafe fn sr_has_filter(reader: *mut bcf_sr_t, line: *mut bcf1_t) -> c_int {
+unsafe fn sr_has_filter(reader: *mut bcf_sr_t, line: *mut bcf1_t) -> i32 {
     unsafe {
         if (*line).d.flt.is_empty() {
             for j in 0..(*reader).nfilter_ids as usize {
@@ -12990,7 +12993,7 @@ pub(crate) unsafe fn sr_reader_seek(
     seq: *const c_char,
     start: hts_pos_t,
     end: hts_pos_t,
-) -> c_int {
+) -> i32 {
     unsafe {
         if end >= MAX_CSI_COOR {
             libc::abort();
@@ -13024,7 +13027,7 @@ pub(crate) unsafe fn sr_reader_seek(
 }
 
 // original: _readers_next_region (htslib/synced_bcf_reader.c:599)
-unsafe fn sr_readers_next_region(files: *mut bcf_srs_t) -> c_int {
+unsafe fn sr_readers_next_region(files: *mut bcf_srs_t) -> i32 {
     unsafe {
         let mut eos = 0;
         for i in 0..(*files).nreaders as usize {
@@ -13063,7 +13066,7 @@ unsafe fn sr_set_variant_boundaries(rec: *mut bcf1_t, beg: *mut hts_pos_t, end: 
         let off;
         if (*rec).n_allele() != 0 {
             let mut o = (*rec).rlen;
-            bcf_unpack(rec, BCF_UN_STR as c_int);
+            bcf_unpack(rec, BCF_UN_STR as i32);
             for i in 1..(*rec).n_allele() as usize {
                 let mut j = 0;
                 let d = &(*rec).d;
@@ -13089,7 +13092,7 @@ unsafe fn sr_set_variant_boundaries(rec: *mut bcf1_t, beg: *mut hts_pos_t, end: 
 }
 
 // original: _reader_fill_buffer (htslib/synced_bcf_reader.c:656)
-unsafe fn sr_reader_fill_buffer(files: *mut bcf_srs_t, reader: *mut bcf_sr_t) -> c_int {
+unsafe fn sr_reader_fill_buffer(files: *mut bcf_srs_t, reader: *mut bcf_sr_t) -> i32 {
     unsafe {
         // Return if the buffer is full: the coordinate of the last buffered
         // record differs.
@@ -13129,7 +13132,7 @@ unsafe fn sr_reader_fill_buffer(files: *mut bcf_srs_t, reader: *mut bcf_sr_t) ->
             let tmps_ptr: *mut kstring_t = (&raw mut (*files).tmps).cast();
             if (*files).streaming != 0 {
                 if (*rfile).format.format == HTS_FORMAT_VCF {
-                    ret = hts_getline(rfile, KS_SEP_LINE as c_int, tmps_ptr);
+                    ret = hts_getline(rfile, KS_SEP_LINE as i32, tmps_ptr);
                     if ret < -1 {
                         (*files).errnum = bcf_sr_error_bcf_read_error;
                     }
@@ -13210,11 +13213,11 @@ unsafe fn sr_reader_fill_buffer(files: *mut bcf_srs_t, reader: *mut bcf_sr_t) ->
 
             // apply filter
             if (*reader).nfilter_ids == 0 {
-                bcf_unpack(*(*reader).buffer.add(slot), BCF_UN_STR as c_int);
+                bcf_unpack(*(*reader).buffer.add(slot), BCF_UN_STR as i32);
             } else {
                 bcf_unpack(
                     *(*reader).buffer.add(slot),
-                    (BCF_UN_STR | BCF_UN_FLT) as c_int,
+                    (BCF_UN_STR | BCF_UN_FLT) as i32,
                 );
                 if sr_has_filter(reader, *(*reader).buffer.add(slot)) == 0 {
                     continue;
@@ -13266,7 +13269,7 @@ unsafe fn sr_reader_shift_buffer(reader: *mut bcf_sr_t) {
 }
 
 // original: next_line (htslib/synced_bcf_reader.c:782)
-pub(crate) unsafe fn sr_next_line(files: *mut bcf_srs_t) -> c_int {
+pub(crate) unsafe fn sr_next_line(files: *mut bcf_srs_t) -> i32 {
     unsafe {
         let mut chr: *const c_char = std::ptr::null();
         let mut min_pos = HTS_POS_MAX;
@@ -13307,12 +13310,12 @@ pub(crate) unsafe fn sr_next_line(files: *mut bcf_srs_t) -> c_int {
                     chr = bcf_seqname((*r).header, *(*r).buffer.add(1));
                     bcf_sr_sort_set_active(
                         &mut (*bcf_sr_aux_mut(files)).sort,
-                        i as c_int,
+                        i as i32,
                     );
                 } else if min_pos == pos {
                     bcf_sr_sort_add_active(
                         &mut (*bcf_sr_aux_mut(files)).sort,
-                        i as c_int,
+                        i as i32,
                     );
                 }
             }
@@ -13388,7 +13391,7 @@ pub(crate) unsafe fn sr_next_line(files: *mut bcf_srs_t) -> c_int {
     }
 }
 
-pub(crate) unsafe fn bcf_sr_destroy1(reader: *mut bcf_sr_t, closefile: c_int) {
+pub(crate) unsafe fn bcf_sr_destroy1(reader: *mut bcf_sr_t, closefile: i32) {
     unsafe {
         if reader.is_null() {
             return;
@@ -13420,14 +13423,14 @@ pub(crate) unsafe fn bcf_sr_destroy1(reader: *mut bcf_sr_t, closefile: c_int) {
     }
 }
 
-pub(crate) const BCF_SR_ERROR_NOIDX_ERROR: c_int = 10;
+pub(crate) const BCF_SR_ERROR_NOIDX_ERROR: i32 = 10;
 
 // original: _regions_match_alleles (htslib/synced_bcf_reader.c:1471)
 pub(crate) unsafe fn sr_regions_match_alleles(
     reg: *mut bcf_sr_regions_t,
-    als_idx: c_int,
+    als_idx: i32,
     rec: *mut bcf1_t,
-) -> c_int {
+) -> i32 {
     unsafe {
         if !(*reg).regs.is_null() {
             // payload is not supported for in-memory regions
@@ -13458,7 +13461,7 @@ pub(crate) unsafe fn sr_regions_match_alleles(
             let als_str_ptr: *mut kstring_t = (&raw mut (*reg).als_str).cast();
             ks_resize(
                 &mut *als_str_ptr,
-                (se.offset_from(ss) + 1 + (*reg).nals as isize) as size_t,
+                (se.offset_from(ss) + 1 + (*reg).nals as isize) as usize,
             );
             (*reg).als_str.data.clear();
             let need = (*reg).nals;
@@ -13516,20 +13519,20 @@ pub(crate) unsafe fn sr_regions_match_alleles(
             }
             (*reg).nals += 1;
             (*reg).als_type = if max_len > 1 {
-                VCF_INDEL as c_int
+                VCF_INDEL as i32
             } else {
-                VCF_SNP as c_int
+                VCF_SNP as i32
             };
         }
         let type_ = bcf_get_variant_types(rec);
-        if (*reg).als_type & VCF_INDEL as c_int != 0 {
-            return if type_ & VCF_INDEL as c_int != 0 {
+        if (*reg).als_type & VCF_INDEL as i32 != 0 {
+            return if type_ & VCF_INDEL as i32 != 0 {
                 1
             } else {
                 0
             };
         }
-        if type_ & VCF_INDEL as c_int == 0 {
+        if type_ & VCF_INDEL as i32 == 0 {
             1
         } else {
             0
@@ -13542,11 +13545,11 @@ pub(crate) unsafe fn bcf_sr_regions_overlap_inner(
     seq: *const c_char,
     start: hts_pos_t,
     end: hts_pos_t,
-    mut missed_reg_handler: c_int,
-) -> c_int {
+    mut missed_reg_handler: i32,
+) -> i32 {
     unsafe {
         let mut iseq = -1;
-        if super::sam::khash_str2int_get((*reg).seq_hash, seq, &mut iseq) < 0 {
+        if super::sam::khash_str2int_get((*reg).seq_hash.cast(), seq.cast::<u8>(), &mut iseq) < 0 {
             return -1;
         }
         if missed_reg_handler != 0 && (*reg).missed_reg_handler.is_none() {
@@ -13598,17 +13601,17 @@ mod tests {
     // tests. Declared here (test-only) so we can compare the native
     // translation in this module against the C implementation.
     mod libhts_sweep {
-        use std::ffi::{c_char, c_int};
+        use std::ffi::c_char;
         unsafe extern "C" {
             #[link_name = "vcf_open_mode"]
             pub fn vcf_open_mode(
                 mode: *mut c_char,
                 fn_: *const c_char,
                 format: *const c_char,
-            ) -> c_int;
+            ) -> i32;
             #[link_name = "bcf_strerror"]
             pub fn bcf_strerror(
-                errorcode: c_int,
+                errorcode: i32,
                 buffer: *mut c_char,
                 maxbuffer: usize,
             ) -> *const c_char;
@@ -13927,8 +13930,8 @@ mod tests {
 
             bcf_hdr_check_sanity(hdr);
 
-            assert!(bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"DP".as_ptr()) >= 0);
-            assert!(bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"GT".as_ptr()) >= 0);
+            assert!(bcf_hdr_id2int(hdr, BCF_DT_ID as i32, c"DP".as_ptr()) >= 0);
+            assert!(bcf_hdr_id2int(hdr, BCF_DT_ID as i32, c"GT".as_ptr()) >= 0);
             bcf_hdr_destroy(hdr);
         }
     }
@@ -13950,16 +13953,16 @@ mod tests {
 
             bcf_hdr_check_sanity(hdr);
 
-            let id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"DP".as_ptr());
+            let id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, c"DP".as_ptr());
             assert!(id >= 0);
-            assert!(bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_INFO as c_int, id));
+            assert!(bcf_hdr_idinfo_exists_rs(hdr, BCF_HL_INFO as i32, id));
             assert_eq!(
-                bcf_hdr_id2length_rs(hdr, BCF_HL_INFO as c_int, id),
-                BCF_VL_A as c_int
+                bcf_hdr_id2length_rs(hdr, BCF_HL_INFO as i32, id),
+                BCF_VL_A as i32
             );
             assert_eq!(
-                bcf_hdr_id2type_rs(hdr, BCF_HL_INFO as c_int, id),
-                BCF_HT_STR as c_int
+                bcf_hdr_id2type_rs(hdr, BCF_HL_INFO as i32, id),
+                BCF_HT_STR as i32
             );
             bcf_hdr_destroy(hdr);
         }
@@ -13981,11 +13984,11 @@ mod tests {
             assert_eq!(bcf_hdr_sync(hdr), 0);
             assert_eq!((*hdr).n[BCF_DT_SAMPLE as usize], 2);
             assert_eq!(
-                bcf_hdr_id2int(hdr, BCF_DT_SAMPLE as c_int, c"S1".as_ptr()),
+                bcf_hdr_id2int(hdr, BCF_DT_SAMPLE as i32, c"S1".as_ptr()),
                 0
             );
             assert_eq!(
-                bcf_hdr_id2int(hdr, BCF_DT_SAMPLE as c_int, c"S2".as_ptr()),
+                bcf_hdr_id2int(hdr, BCF_DT_SAMPLE as i32, c"S2".as_ptr()),
                 1
             );
 
@@ -14064,7 +14067,7 @@ mod tests {
                     c"END".as_ptr(),
                     end.as_ptr().cast(),
                     1,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -14078,7 +14081,7 @@ mod tests {
                     c"SVLEN".as_ptr(),
                     svlen.as_ptr().cast(),
                     1,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -14106,7 +14109,7 @@ mod tests {
             assert_eq!(vcf_c_2332_bcf1_sync(rec), 0);
 
             assert_eq!(vcf_c_2040_bcf_record_check(hdr, rec), -2);
-            assert_ne!((*rec).errcode & BCF_ERR_CTG_INVALID as c_int, 0);
+            assert_ne!((*rec).errcode & BCF_ERR_CTG_INVALID as i32, 0);
 
             bcf_destroy(rec);
             bcf_hdr_destroy(hdr);
@@ -14152,7 +14155,7 @@ mod tests {
                     c"GT".as_ptr(),
                     gt.as_ptr().cast(),
                     2,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -14164,7 +14167,7 @@ mod tests {
                     c"GQ".as_ptr(),
                     gq.as_ptr().cast(),
                     1,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -14175,7 +14178,7 @@ mod tests {
                     c"GQ".as_ptr(),
                     std::ptr::null(),
                     0,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -14216,7 +14219,7 @@ mod tests {
             assert_eq!(d.allele[0].as_slice(), b"AT");
             assert_eq!(d.allele[1].as_slice(), b"A");
             assert_eq!((*rec).rlen, 2);
-            assert_ne!((*rec).d.shared_dirty & BCF1_DIRTY_ALS as c_int, 0);
+            assert_ne!((*rec).d.shared_dirty & BCF1_DIRTY_ALS as i32, 0);
 
             bcf_destroy(rec);
             bcf_hdr_destroy(hdr);
@@ -14250,7 +14253,7 @@ mod tests {
 
             let filter_hrec = bcf_hdr_get_hrec(
                 hdr,
-                BCF_HL_FLT as c_int,
+                BCF_HL_FLT as i32,
                 c"ID".as_ptr(),
                 c"LowQ".as_ptr(),
                 std::ptr::null(),
@@ -14263,7 +14266,7 @@ mod tests {
             (*rec).pos = 9;
             assert_eq!(bcf_update_alleles_str(hdr, rec, c"A,C".as_ptr()), 0);
 
-            let lowq = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"LowQ".as_ptr());
+            let lowq = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, c"LowQ".as_ptr());
             assert!(lowq >= 0);
             assert_eq!(bcf_add_filter(hdr, rec, lowq), 1);
             assert_eq!(bcf_has_filter(hdr, rec, c"LowQ".as_ptr().cast_mut()), 1);
@@ -14325,7 +14328,7 @@ mod tests {
 
             let info = bcf_hdr_get_hrec(
                 hdr,
-                BCF_HL_INFO as c_int,
+                BCF_HL_INFO as i32,
                 c"ID".as_ptr(),
                 c"DP".as_ptr(),
                 std::ptr::null(),
@@ -14335,7 +14338,7 @@ mod tests {
 
             let contig = bcf_hdr_get_hrec(
                 hdr,
-                BCF_HL_CTG as c_int,
+                BCF_HL_CTG as i32,
                 c"ID".as_ptr(),
                 c"DP".as_ptr(),
                 std::ptr::null(),
@@ -14360,7 +14363,7 @@ mod tests {
                 id: -1,
             };
             assert_eq!(
-                vcf_c_796_bcf_hdr_set_idx(hdr, BCF_DT_ID as c_int, c"DP".as_ptr(), &mut first,),
+                vcf_c_796_bcf_hdr_set_idx(hdr, BCF_DT_ID as i32, c"DP".as_ptr(), &mut first,),
                 0
             );
             assert_eq!(first.id, start_n);
@@ -14378,7 +14381,7 @@ mod tests {
                 id: start_n + 3,
             };
             assert_eq!(
-                vcf_c_796_bcf_hdr_set_idx(hdr, BCF_DT_ID as c_int, c"AF".as_ptr(), &mut explicit,),
+                vcf_c_796_bcf_hdr_set_idx(hdr, BCF_DT_ID as i32, c"AF".as_ptr(), &mut explicit,),
                 0
             );
             assert_eq!((*hdr).n[BCF_DT_ID as usize], explicit.id + 1);
@@ -14401,7 +14404,7 @@ mod tests {
                 id: first.id,
             };
             assert_eq!(
-                vcf_c_796_bcf_hdr_set_idx(hdr, BCF_DT_ID as c_int, c"MQ".as_ptr(), &mut conflict,),
+                vcf_c_796_bcf_hdr_set_idx(hdr, BCF_DT_ID as i32, c"MQ".as_ptr(), &mut conflict,),
                 -1
             );
 
@@ -14426,14 +14429,14 @@ mod tests {
 
             let hrec = bcf_hdr_get_hrec(
                 hdr,
-                BCF_HL_INFO as c_int,
+                BCF_HL_INFO as i32,
                 c"ID".as_ptr(),
                 c"DP".as_ptr(),
                 std::ptr::null(),
             );
             assert!(!hrec.is_null());
 
-            let id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"DP".as_ptr());
+            let id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, c"DP".as_ptr());
             assert!(id >= 0);
             let idpair = (*hdr).id[BCF_DT_ID as usize].add(id as usize);
             let idinfo = (*idpair).val.cast_mut();
@@ -14441,7 +14444,7 @@ mod tests {
 
             vcf_c_1026_bcf_hdr_unregister_hrec(hdr, hrec);
             assert!((*idinfo).hrec[BCF_HL_INFO as usize].is_null());
-            assert_eq!(bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"DP".as_ptr()), id);
+            assert_eq!(bcf_hdr_id2int(hdr, BCF_DT_ID as i32, c"DP".as_ptr()), id);
 
             bcf_hdr_destroy(hdr);
         }
@@ -14496,14 +14499,14 @@ mod tests {
 
             let mut ac = [0; 3];
             assert_eq!(
-                vcfutils_c_32_bcf_calc_ac(&*hdr, &mut *rec, &mut ac, BCF_UN_INFO as c_int),
+                vcfutils_c_32_bcf_calc_ac(&*hdr, &mut *rec, &mut ac, BCF_UN_INFO as i32),
                 1
             );
             assert_eq!(ac, [1, 1, 2]);
 
             let mut gt_ac = [0; 3];
             assert_eq!(
-                vcfutils_c_32_bcf_calc_ac(&*hdr, &mut *rec, &mut gt_ac, BCF_UN_FMT as c_int),
+                vcfutils_c_32_bcf_calc_ac(&*hdr, &mut *rec, &mut gt_ac, BCF_UN_FMT as i32),
                 1
             );
             assert_eq!(gt_ac, [1, 1, 2]);
@@ -14514,13 +14517,13 @@ mod tests {
             let mut jal = -1;
             assert_eq!(
                 vcfutils_c_134_bcf_gt_type(&*fmt, 0, Some(&mut ial), Some(&mut jal)),
-                GT_HET_RA as c_int
+                GT_HET_RA as i32
             );
             assert_eq!(ial, 1);
             assert_eq!(jal, 0);
             assert_eq!(
                 vcfutils_c_134_bcf_gt_type(&*fmt, 1, Some(&mut ial), Some(&mut jal)),
-                GT_HOM_AA as c_int
+                GT_HOM_AA as i32
             );
             assert_eq!(ial, 2);
 
@@ -14536,11 +14539,11 @@ mod tests {
             let fmt_int = |fmt: *mut bcf_fmt_t, sample: usize, idx: usize| -> i32 {
                 let p = (*fmt).p.add(sample * (*fmt).size as usize);
                 match (*fmt).type_ {
-                    x if x == BCF_BT_INT8 as c_int => le_to_i8(p.add(idx)) as i32,
-                    x if x == BCF_BT_INT16 as c_int => {
+                    x if x == BCF_BT_INT8 as i32 => le_to_i8(p.add(idx)) as i32,
+                    x if x == BCF_BT_INT16 as i32 => {
                         le_to_i16(p.add(idx * size_of::<i16>())) as i32
                     }
-                    x if x == BCF_BT_INT32 as c_int => le_to_i32(p.add(idx * size_of::<i32>())),
+                    x if x == BCF_BT_INT32 as i32 => le_to_i32(p.add(idx * size_of::<i32>())),
                     _ => bcf_int32_missing,
                 }
             };
@@ -14643,12 +14646,12 @@ mod tests {
             );
             assert_eq!(vcf_parse(&mut line, hdr, rec), 0);
 
-            let end_id = bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"END".as_ptr());
+            let end_id = bcf_hdr_id2int(hdr, BCF_DT_ID as i32, c"END".as_ptr());
             assert!(end_id >= 0);
             assert_eq!(vcf_repair_info_end_i64(hdr, rec, BCF_MIN_BT_INT32 - 1), 0);
             let info = bcf_get_info_id(rec, end_id);
             assert!(!info.is_null());
-            assert_eq!((*info).type_, BCF_BT_INT64 as c_int);
+            assert_eq!((*info).type_, BCF_BT_INT64 as i32);
             assert_eq!((*info).v1.i, BCF_MIN_BT_INT32 - 1);
             assert_eq!(le_to_i64((*info).vptr), BCF_MIN_BT_INT32 - 1);
 
@@ -14664,7 +14667,7 @@ mod tests {
             assert_eq!(vcf_repair_info_end_i64(hdr, rec, BCF_MIN_BT_INT64 - 1), 0);
             let info = bcf_get_info_id(rec, end_id);
             assert!(!info.is_null());
-            assert!((*info).type_ != BCF_BT_INT64 as c_int || (*info).v1.i != BCF_MIN_BT_INT64 - 1);
+            assert!((*info).type_ != BCF_BT_INT64 as i32 || (*info).v1.i != BCF_MIN_BT_INT64 - 1);
 
             super::super::hts::ks_free(&mut line);
             bcf_destroy(rec);
@@ -14748,8 +14751,8 @@ mod tests {
                     rec,
                     c"GT".as_ptr(),
                     gt.as_ptr().cast(),
-                    gt.len() as c_int,
-                    BCF_HT_INT as c_int,
+                    gt.len() as i32,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -14771,36 +14774,36 @@ mod tests {
         unsafe {
             let mut str_ = kstring_t::default();
 
-            assert_eq!(bcf_enc_size(&mut str_, 14, BCF_BT_INT8 as c_int), 0);
+            assert_eq!(bcf_enc_size(&mut str_, 14, BCF_BT_INT8 as i32), 0);
             assert_eq!(str_.data.len(), 1);
             assert_eq!(
                 str_.data[0],
-                ((14 << 4) | BCF_BT_INT8 as c_int) as u8
+                ((14 << 4) | BCF_BT_INT8 as i32) as u8
             );
 
             str_.data.clear();
-            assert_eq!(bcf_enc_size(&mut str_, 15, BCF_BT_INT16 as c_int), 0);
+            assert_eq!(bcf_enc_size(&mut str_, 15, BCF_BT_INT16 as i32), 0);
             assert_eq!(str_.data.len(), 3);
             assert_eq!(
                 str_.data[0],
-                ((15 << 4) | BCF_BT_INT16 as c_int) as u8
+                ((15 << 4) | BCF_BT_INT16 as i32) as u8
             );
             assert_eq!(
                 str_.data[1],
-                ((1 << 4) | BCF_BT_INT8 as c_int) as u8
+                ((1 << 4) | BCF_BT_INT8 as i32) as u8
             );
             assert_eq!(str_.data[2], 15);
 
             str_.data.clear();
-            assert_eq!(bcf_enc_size(&mut str_, 32768, BCF_BT_INT32 as c_int), 0);
+            assert_eq!(bcf_enc_size(&mut str_, 32768, BCF_BT_INT32 as i32), 0);
             assert_eq!(str_.data.len(), 6);
             assert_eq!(
                 str_.data[0],
-                ((15 << 4) | BCF_BT_INT32 as c_int) as u8
+                ((15 << 4) | BCF_BT_INT32 as i32) as u8
             );
             assert_eq!(
                 str_.data[1],
-                ((1 << 4) | BCF_BT_INT32 as c_int) as u8
+                ((1 << 4) | BCF_BT_INT32 as i32) as u8
             );
             assert_eq!(le_to_i32(str_.data.as_ptr().add(2)), 32768);
 
@@ -14809,7 +14812,7 @@ mod tests {
             assert_eq!(str_.data.len(), 2);
             assert_eq!(
                 str_.data[0],
-                ((1 << 4) | BCF_BT_INT8 as c_int) as u8
+                ((1 << 4) | BCF_BT_INT8 as i32) as u8
             );
             assert_eq!(le_to_i8(str_.data.as_ptr().add(1)) as i32, -120);
 
@@ -14818,7 +14821,7 @@ mod tests {
             assert_eq!(str_.data.len(), 3);
             assert_eq!(
                 str_.data[0],
-                ((1 << 4) | BCF_BT_INT16 as c_int) as u8
+                ((1 << 4) | BCF_BT_INT16 as i32) as u8
             );
             assert_eq!(le_to_i16(str_.data.as_ptr().add(1)) as i32, -121);
 
@@ -14827,7 +14830,7 @@ mod tests {
             assert_eq!(str_.data.len(), 5);
             assert_eq!(
                 str_.data[0],
-                ((1 << 4) | BCF_BT_INT32 as c_int) as u8
+                ((1 << 4) | BCF_BT_INT32 as i32) as u8
             );
             assert_eq!(le_to_i32(str_.data.as_ptr().add(1)), 32768);
 
@@ -14836,7 +14839,7 @@ mod tests {
             assert_eq!(str_.data.len(), 2);
             assert_eq!(
                 str_.data[0],
-                ((1 << 4) | BCF_BT_INT8 as c_int) as u8
+                ((1 << 4) | BCF_BT_INT8 as i32) as u8
             );
             assert_eq!(le_to_i8(str_.data.as_ptr().add(1)) as i32, bcf_int8_missing);
 
@@ -14845,7 +14848,7 @@ mod tests {
             assert_eq!(str_.data.len(), 2);
             assert_eq!(
                 str_.data[0],
-                ((1 << 4) | BCF_BT_INT8 as c_int) as u8
+                ((1 << 4) | BCF_BT_INT8 as i32) as u8
             );
             assert_eq!(le_to_i8(str_.data.as_ptr().add(1)) as i32, bcf_int8_vector_end);
 
@@ -14862,8 +14865,8 @@ mod tests {
                 7u8,
             ];
             let mut info: bcf_info_t = std::mem::zeroed();
-            info.len = int8_values.len() as c_int;
-            info.type_ = BCF_BT_INT8 as c_int;
+            info.len = int8_values.len() as i32;
+            info.type_ = BCF_BT_INT8 as i32;
             info.vptr = int8_values.as_mut_ptr();
 
             assert_eq!(
@@ -14883,7 +14886,7 @@ mod tests {
                 int16_values.as_mut_ptr().add(size_of::<i16>()),
             );
             info.len = 2;
-            info.type_ = BCF_BT_INT16 as c_int;
+            info.type_ = BCF_BT_INT16 as i32;
             info.vptr = int16_values.as_mut_ptr();
 
             assert_eq!(
@@ -15003,9 +15006,9 @@ mod tests {
             assert_eq!(bcf_update_alleles_str(hdr1, rec, c"G,A".as_ptr()), 0);
 
             let mut ids = [
-                bcf_hdr_id2int(hdr1, BCF_DT_ID as c_int, c"FLT1".as_ptr()),
-                bcf_hdr_id2int(hdr1, BCF_DT_ID as c_int, c"FLT2".as_ptr()),
-                bcf_hdr_id2int(hdr1, BCF_DT_ID as c_int, c"FLT3".as_ptr()),
+                bcf_hdr_id2int(hdr1, BCF_DT_ID as i32, c"FLT1".as_ptr()),
+                bcf_hdr_id2int(hdr1, BCF_DT_ID as i32, c"FLT2".as_ptr()),
+                bcf_hdr_id2int(hdr1, BCF_DT_ID as i32, c"FLT3".as_ptr()),
             ];
             assert_eq!(bcf_update_filter(hdr1, rec, ids.as_mut_ptr(), 3), 0);
 
@@ -15017,7 +15020,7 @@ mod tests {
                     c"INF1".as_ptr(),
                     tmp.as_ptr().cast(),
                     1,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -15028,7 +15031,7 @@ mod tests {
                     c"INF2".as_ptr(),
                     tmp.as_ptr().add(1).cast(),
                     1,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -15040,7 +15043,7 @@ mod tests {
                     c"INF3".as_ptr(),
                     tmp.as_ptr().cast(),
                     1,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -15052,7 +15055,7 @@ mod tests {
                     c"FMT1".as_ptr(),
                     tmp.as_ptr().cast(),
                     2,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -15064,7 +15067,7 @@ mod tests {
                     c"FMT2".as_ptr(),
                     tmp.as_ptr().cast(),
                     2,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -15076,7 +15079,7 @@ mod tests {
                     c"FMT3".as_ptr(),
                     tmp.as_ptr().cast(),
                     2,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -15085,7 +15088,7 @@ mod tests {
                 bcf_remove_filter(
                     hdr1,
                     rec,
-                    bcf_hdr_id2int(hdr1, BCF_DT_ID as c_int, c"FLT2".as_ptr()),
+                    bcf_hdr_id2int(hdr1, BCF_DT_ID as i32, c"FLT2".as_ptr()),
                     0,
                 ),
                 0
@@ -15097,7 +15100,7 @@ mod tests {
                     c"INF2".as_ptr(),
                     std::ptr::null(),
                     0,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -15108,7 +15111,7 @@ mod tests {
                     c"FMT2".as_ptr(),
                     std::ptr::null(),
                     0,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -15136,35 +15139,35 @@ mod tests {
             let mut var = bcf_variant_t { type_: -1, n: -1 };
 
             vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"C".as_ptr(), &mut var);
-            assert_eq!(var.type_, VCF_SNP as c_int);
+            assert_eq!(var.type_, VCF_SNP as i32);
             assert_eq!(var.n, 1);
 
             vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"A".as_ptr(), &mut var);
-            assert_eq!(var.type_, VCF_REF as c_int);
+            assert_eq!(var.type_, VCF_REF as i32);
             assert_eq!(var.n, 0);
 
             vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"AC".as_ptr(), &mut var);
-            assert_eq!(var.type_, (VCF_INDEL | VCF_INS) as c_int);
+            assert_eq!(var.type_, (VCF_INDEL | VCF_INS) as i32);
             assert_eq!(var.n, 1);
 
             vcf_c_5373_bcf_set_variant_type(c"AT".as_ptr(), c"A".as_ptr(), &mut var);
-            assert_eq!(var.type_, (VCF_INDEL | VCF_DEL) as c_int);
+            assert_eq!(var.type_, (VCF_INDEL | VCF_DEL) as i32);
             assert_eq!(var.n, -1);
 
             vcf_c_5373_bcf_set_variant_type(c"AC".as_ptr(), c"GT".as_ptr(), &mut var);
-            assert_eq!(var.type_, VCF_MNP as c_int);
+            assert_eq!(var.type_, VCF_MNP as i32);
             assert_eq!(var.n, 2);
 
             vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"*".as_ptr(), &mut var);
-            assert_eq!(var.type_, VCF_OVERLAP as c_int);
+            assert_eq!(var.type_, VCF_OVERLAP as i32);
             assert_eq!(var.n, 0);
 
             vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"<NON_REF>".as_ptr(), &mut var);
-            assert_eq!(var.type_, VCF_REF as c_int);
+            assert_eq!(var.type_, VCF_REF as i32);
             assert_eq!(var.n, 0);
 
             vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"]chr1:10]A".as_ptr(), &mut var);
-            assert_eq!(var.type_, VCF_BND as c_int);
+            assert_eq!(var.type_, VCF_BND as i32);
         }
     }
 
@@ -15174,31 +15177,31 @@ mod tests {
             let mut var = bcf_variant_t { type_: -1, n: -99 };
 
             vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c".".as_ptr(), &mut var);
-            assert_eq!(var.type_, VCF_REF as c_int);
+            assert_eq!(var.type_, VCF_REF as i32);
             assert_eq!(var.n, 0);
 
             vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"X".as_ptr(), &mut var);
-            assert_eq!(var.type_, VCF_REF as c_int);
+            assert_eq!(var.type_, VCF_REF as i32);
             assert_eq!(var.n, 0);
 
             vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"<X>".as_ptr(), &mut var);
-            assert_eq!(var.type_, VCF_REF as c_int);
+            assert_eq!(var.type_, VCF_REF as i32);
             assert_eq!(var.n, 0);
 
             vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"<*>".as_ptr(), &mut var);
-            assert_eq!(var.type_, VCF_REF as c_int);
+            assert_eq!(var.type_, VCF_REF as i32);
             assert_eq!(var.n, 0);
 
             var.n = -99;
             vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"<DEL>".as_ptr(), &mut var);
-            assert_eq!(var.type_, VCF_OTHER as c_int);
+            assert_eq!(var.type_, VCF_OTHER as i32);
             assert_eq!(var.n, -99);
 
             vcf_c_5373_bcf_set_variant_type(c"A".as_ptr(), c"AC]chr2:3]".as_ptr(), &mut var);
-            assert_eq!(var.type_, VCF_BND as c_int);
+            assert_eq!(var.type_, VCF_BND as i32);
 
             vcf_c_5373_bcf_set_variant_type(c"ACG".as_ptr(), c"AT".as_ptr(), &mut var);
-            assert_eq!(var.type_, VCF_OTHER as c_int);
+            assert_eq!(var.type_, VCF_OTHER as i32);
             assert_eq!(var.n, -1);
         }
     }
@@ -15226,13 +15229,13 @@ mod tests {
             assert_eq!(vcf_c_5444_bcf_set_variant_types(rec), 0);
             let d = &(*rec).d;
             assert_eq!(d.var.len(), 4);
-            assert_eq!(d.var[0].type_, VCF_REF as c_int);
-            assert_eq!(d.var[1].type_, VCF_SNP as c_int);
-            assert_eq!(d.var[2].type_, (VCF_INDEL | VCF_INS) as c_int);
-            assert_eq!(d.var[3].type_, VCF_OVERLAP as c_int);
+            assert_eq!(d.var[0].type_, VCF_REF as i32);
+            assert_eq!(d.var[1].type_, VCF_SNP as i32);
+            assert_eq!(d.var[2].type_, (VCF_INDEL | VCF_INS) as i32);
+            assert_eq!(d.var[3].type_, VCF_OVERLAP as i32);
             assert_eq!(
                 (*rec).d.var_type,
-                (VCF_SNP | VCF_INDEL | VCF_INS | VCF_OVERLAP) as c_int
+                (VCF_SNP | VCF_INDEL | VCF_INS | VCF_OVERLAP) as i32
             );
 
             super::super::hts::ks_free(&mut line);
@@ -15261,12 +15264,12 @@ mod tests {
             );
             assert_eq!(vcf_parse(&mut line, hdr, rec), 0);
 
-            assert_eq!(bcf_has_variant_types(rec, VCF_INS, 0), VCF_INS as c_int);
-            assert_eq!(bcf_has_variant_types(rec, VCF_INDEL, 0), VCF_INDEL as c_int);
+            assert_eq!(bcf_has_variant_types(rec, VCF_INS, 0), VCF_INS as i32);
+            assert_eq!(bcf_has_variant_types(rec, VCF_INDEL, 0), VCF_INDEL as i32);
             assert_eq!(bcf_has_variant_types(rec, VCF_DEL, 0), 0);
             assert_eq!(
                 bcf_has_variant_types(rec, VCF_INDEL | VCF_INS, 2),
-                (VCF_INDEL | VCF_INS) as c_int
+                (VCF_INDEL | VCF_INS) as i32
             );
 
             bcf_clear(rec);
@@ -15277,11 +15280,11 @@ mod tests {
             );
             assert_eq!(vcf_parse(&mut line, hdr, rec), 0);
 
-            assert_eq!(bcf_has_variant_types(rec, VCF_INDEL, 0), VCF_INDEL as c_int);
+            assert_eq!(bcf_has_variant_types(rec, VCF_INDEL, 0), VCF_INDEL as i32);
             assert_eq!(bcf_has_variant_types(rec, VCF_INS, 0), 0);
             assert_eq!(
                 bcf_has_variant_types(rec, VCF_INS | VCF_DEL, 1),
-                (VCF_INS | VCF_DEL) as c_int
+                (VCF_INS | VCF_DEL) as i32
             );
 
             super::super::hts::ks_free(&mut line);
@@ -15312,9 +15315,9 @@ mod tests {
 
             assert_eq!(bcf_has_variant_type(rec, 0, VCF_REF), 1);
             assert_eq!(bcf_variant_length(rec, 0), 0);
-            assert_eq!(bcf_has_variant_type(rec, 1, VCF_INS), VCF_INS as c_int);
+            assert_eq!(bcf_has_variant_type(rec, 1, VCF_INS), VCF_INS as i32);
             assert_eq!(bcf_variant_length(rec, 1), 1);
-            assert_eq!(bcf_has_variant_type(rec, 2, VCF_SNP), VCF_SNP as c_int);
+            assert_eq!(bcf_has_variant_type(rec, 2, VCF_SNP), VCF_SNP as i32);
             assert_eq!(bcf_variant_length(rec, 2), 1);
             assert_eq!(bcf_has_variant_type(rec, -1, VCF_REF), -1);
             assert_eq!(bcf_has_variant_type(rec, 3, VCF_REF), -1);
@@ -15384,7 +15387,7 @@ mod tests {
                     c"INF".as_ptr(),
                     (&info_val as *const i32).cast(),
                     1,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -15395,19 +15398,19 @@ mod tests {
                     c"FMT".as_ptr(),
                     (&fmt_val as *const i32).cast(),
                     1,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
 
-            let src_info_id = bcf_hdr_id2int(hdr1, BCF_DT_ID as c_int, c"INF".as_ptr());
-            let dst_info_id = bcf_hdr_id2int(hdr2, BCF_DT_ID as c_int, c"INF".as_ptr());
-            let src_fmt_id = bcf_hdr_id2int(hdr1, BCF_DT_ID as c_int, c"FMT".as_ptr());
-            let dst_fmt_id = bcf_hdr_id2int(hdr2, BCF_DT_ID as c_int, c"FMT".as_ptr());
-            assert_eq!(bcf_translate_id_size(src_info_id), BCF_BT_INT8 as c_int);
-            assert_eq!(bcf_translate_id_size(src_fmt_id), BCF_BT_INT8 as c_int);
-            assert!(bcf_translate_id_size(dst_info_id) > BCF_BT_INT8 as c_int);
-            assert!(bcf_translate_id_size(dst_fmt_id) > BCF_BT_INT8 as c_int);
+            let src_info_id = bcf_hdr_id2int(hdr1, BCF_DT_ID as i32, c"INF".as_ptr());
+            let dst_info_id = bcf_hdr_id2int(hdr2, BCF_DT_ID as i32, c"INF".as_ptr());
+            let src_fmt_id = bcf_hdr_id2int(hdr1, BCF_DT_ID as i32, c"FMT".as_ptr());
+            let dst_fmt_id = bcf_hdr_id2int(hdr2, BCF_DT_ID as i32, c"FMT".as_ptr());
+            assert_eq!(bcf_translate_id_size(src_info_id), BCF_BT_INT8 as i32);
+            assert_eq!(bcf_translate_id_size(src_fmt_id), BCF_BT_INT8 as i32);
+            assert!(bcf_translate_id_size(dst_info_id) > BCF_BT_INT8 as i32);
+            assert!(bcf_translate_id_size(dst_fmt_id) > BCF_BT_INT8 as i32);
 
             assert_eq!(bcf_translate(hdr2, hdr1, rec), 0);
             let info = bcf_get_info(hdr2, rec, c"INF".as_ptr());
@@ -15429,11 +15432,11 @@ mod tests {
     #[test]
     fn bcf_translate_id_size_uses_htslib_width_boundaries() {
         unsafe {
-            assert_eq!(bcf_translate_id_size(0), BCF_BT_INT8 as c_int);
-            assert_eq!(bcf_translate_id_size(127), BCF_BT_INT8 as c_int);
-            assert_eq!(bcf_translate_id_size(128), BCF_BT_INT16 as c_int);
-            assert_eq!(bcf_translate_id_size(32767), BCF_BT_INT16 as c_int);
-            assert_eq!(bcf_translate_id_size(32768), BCF_BT_INT32 as c_int);
+            assert_eq!(bcf_translate_id_size(0), BCF_BT_INT8 as i32);
+            assert_eq!(bcf_translate_id_size(127), BCF_BT_INT8 as i32);
+            assert_eq!(bcf_translate_id_size(128), BCF_BT_INT16 as i32);
+            assert_eq!(bcf_translate_id_size(32767), BCF_BT_INT16 as i32);
+            assert_eq!(bcf_translate_id_size(32768), BCF_BT_INT32 as i32);
         }
     }
 
@@ -15459,11 +15462,11 @@ mod tests {
     fn synced_bcf_reader_strerror_matches_htslib_messages() {
         unsafe {
             assert_eq!(
-                bcf_sr_strerror(bcf_sr_error_not_bgzf as c_int).as_slice(),
+                bcf_sr_strerror(bcf_sr_error_not_bgzf as i32).as_slice(),
                 b"not compressed with bgzip"
             );
             assert_eq!(
-                bcf_sr_strerror(bcf_sr_error_idx_load_failed as c_int).as_slice(),
+                bcf_sr_strerror(bcf_sr_error_idx_load_failed as i32).as_slice(),
                 b"could not load index"
             );
             assert_eq!(
@@ -15477,11 +15480,11 @@ mod tests {
     #[test]
     fn synced_bcf_reader_strerror_open_failed_uses_errno() {
         unsafe {
-            let errno = crate::htslib_rs::c_compat::__errno_location();
+            let errno = libc::__errno_location();
             let saved_errno = *errno;
             *errno = libc::ENOENT;
             assert_eq!(
-                bcf_sr_strerror(bcf_sr_error_open_failed as c_int).as_slice(),
+                bcf_sr_strerror(bcf_sr_error_open_failed as i32).as_slice(),
                 std::io::Error::from_raw_os_error(libc::ENOENT)
                     .to_string()
                     .as_bytes()
@@ -15526,7 +15529,7 @@ mod tests {
             assert!(!(*reg).seq_names.is_null());
             *(*reg).seq_names = c"chr1".as_ptr().cast_mut();
             (*reg).nseqs = 1;
-            (*reg).seq_hash = super::super::sam::khash_str2int_init();
+            (*reg).seq_hash = super::super::sam::khash_str2int_init().cast();
             assert!(!(*reg).seq_hash.is_null());
 
             bcf_sr_regions_destroy(&mut *reg);
@@ -15568,7 +15571,11 @@ mod tests {
 
             let mut iseq = -1;
             assert_eq!(
-                super::super::sam::khash_str2int_get((*reg).seq_hash, c"chr2".as_ptr(), &mut iseq),
+                super::super::sam::khash_str2int_get(
+                    (*reg).seq_hash.cast(),
+                    c"chr2".as_ptr().cast::<u8>(),
+                    &mut iseq
+                ),
                 0
             );
             assert_eq!(iseq, 0);
@@ -15656,7 +15663,7 @@ mod tests {
 
     unsafe extern "C" fn count_missed_region(_reg: *mut bcf_sr_regions_t, data: *mut c_void) {
         unsafe {
-            *(data.cast::<c_int>()) += 1;
+            *(data.cast::<i32>()) += 1;
         }
     }
 
@@ -15680,7 +15687,7 @@ mod tests {
             assert_eq!(bcf_sr_regions_overlap(&mut *reg, b"chr2", 4, 4), 0);
             let mut missed = 0;
             (*reg).missed_reg_handler = Some(count_missed_region);
-            (*reg).missed_reg_data = (&mut missed as *mut c_int).cast();
+            (*reg).missed_reg_data = (&mut missed as *mut i32).cast();
             assert_eq!(bcf_sr_regions_flush(&mut *reg), 0);
             assert_eq!(missed, 0);
 
@@ -15873,8 +15880,8 @@ mod tests {
             *reader.buffer.add(1) = bcf_init();
             assert!(!(*reader.buffer.add(0)).is_null());
             assert!(!(*reader.buffer.add(1)).is_null());
-            reader.samples = libc::malloc(size_of::<c_int>()).cast();
-            reader.filter_ids = libc::malloc(size_of::<c_int>()).cast();
+            reader.samples = libc::malloc(size_of::<i32>()).cast();
+            reader.filter_ids = libc::malloc(size_of::<i32>()).cast();
             assert!(!reader.samples.is_null());
             assert!(!reader.filter_ids.is_null());
 
@@ -15958,12 +15965,12 @@ mod tests {
             assert_eq!(nfilters, 3);
             assert_eq!(
                 *filter_ids.add(0),
-                bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"LowQ".as_ptr())
+                bcf_hdr_id2int(hdr, BCF_DT_ID as i32, c"LowQ".as_ptr())
             );
             assert_eq!(*filter_ids.add(1), -1);
             assert_eq!(
                 *filter_ids.add(2),
-                bcf_hdr_id2int(hdr, BCF_DT_ID as c_int, c"Site".as_ptr())
+                bcf_hdr_id2int(hdr, BCF_DT_ID as i32, c"Site".as_ptr())
             );
 
             libc::free(filter_ids.cast());
@@ -16002,12 +16009,12 @@ mod tests {
             assert_eq!((*readers).require_index, 2);
 
             assert_eq!(
-                bcf_sr_set_opt_pair_logic(&mut *readers, hts_sys::BCF_SR_PAIR_BOTH as c_int),
+                bcf_sr_set_opt_pair_logic(&mut *readers, hts_sys::BCF_SR_PAIR_BOTH as i32),
                 0
             );
             assert_eq!(
                 (*bcf_sr_aux_mut(readers)).sort.pair,
-                hts_sys::BCF_SR_PAIR_BOTH as c_int
+                hts_sys::BCF_SR_PAIR_BOTH as i32
             );
             assert_eq!(bcf_sr_set_opt_regions_overlap(&mut *readers, 2), 0);
             assert_eq!((*bcf_sr_aux_mut(readers)).regions_overlap, 2);
@@ -16070,13 +16077,13 @@ mod tests {
                 bcf_sr_set_opt(
                     &mut *readers,
                     BCF_SR_PAIR_LOGIC,
-                    hts_sys::BCF_SR_PAIR_EXACT as c_int
+                    hts_sys::BCF_SR_PAIR_EXACT as i32
                 ),
                 0
             );
             assert_eq!(
                 (*bcf_sr_aux_mut(readers)).sort.pair,
-                hts_sys::BCF_SR_PAIR_EXACT as c_int
+                hts_sys::BCF_SR_PAIR_EXACT as i32
             );
 
             assert_eq!(bcf_sr_set_opt(&mut *readers, BCF_SR_REGIONS_OVERLAP, 2), 0);
@@ -16143,12 +16150,12 @@ mod tests {
             assert!(sort.active.is_null());
 
             sort.chr = c"chr1".as_ptr();
-            sort.active = libc::malloc(size_of::<c_int>()).cast::<c_int>();
+            sort.active = libc::malloc(size_of::<i32>()).cast::<i32>();
             sort.str_.data = vec![0u8; 8];
-            sort.off = libc::malloc(2 * size_of::<c_int>()).cast::<c_int>();
+            sort.off = libc::malloc(2 * size_of::<i32>()).cast::<i32>();
             sort.charp = libc::malloc(size_of::<*mut c_char>()).cast::<*mut c_char>();
-            sort.cnt = libc::malloc(size_of::<c_int>()).cast::<c_int>();
-            sort.pmat = libc::malloc(size_of::<c_int>()).cast::<c_int>();
+            sort.cnt = libc::malloc(size_of::<i32>()).cast::<i32>();
+            sort.pmat = libc::malloc(size_of::<i32>()).cast::<i32>();
 
             sort.nsr = 1;
             sort.vcf_buf = libc::calloc(1, size_of::<BcfSrSortVcfBuf>())
@@ -16163,7 +16170,7 @@ mod tests {
                 .cast();
             let var = sort.var.cast::<BcfSrSortVar>();
             (*var).str_ = libc::malloc(4).cast::<c_char>();
-            (*var).vcf = libc::malloc(size_of::<c_int>()).cast::<c_int>();
+            (*var).vcf = libc::malloc(size_of::<i32>()).cast::<i32>();
             (*var).rec = libc::malloc(size_of::<*mut bcf1_t>()).cast::<*mut bcf1_t>();
 
             sort.mgrp = 1;
@@ -16171,14 +16178,14 @@ mod tests {
                 .cast::<BcfSrSortGrp>()
                 .cast();
             (*sort.grp.cast::<BcfSrSortGrp>()).var =
-                libc::malloc(size_of::<c_int>()).cast::<c_int>();
+                libc::malloc(size_of::<i32>()).cast::<i32>();
 
             sort.mvset = 1;
             sort.vset = libc::calloc(1, size_of::<BcfSrSortVarSet>())
                 .cast::<BcfSrSortVarSet>()
                 .cast();
             (*sort.vset.cast::<BcfSrSortVarSet>()).var =
-                libc::malloc(size_of::<c_int>()).cast::<c_int>();
+                libc::malloc(size_of::<i32>()).cast::<i32>();
 
             bcf_sr_sort_reset(&mut sort);
             assert!(sort.chr.is_null());
@@ -16555,9 +16562,9 @@ mod tests {
                     hdr,
                     rec0,
                     c"END".as_ptr(),
-                    (&mut end0 as *mut c_int).cast(),
+                    (&mut end0 as *mut i32).cast(),
                     1,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -16566,9 +16573,9 @@ mod tests {
                     hdr,
                     rec1,
                     c"END".as_ptr(),
-                    (&mut end1 as *mut c_int).cast(),
+                    (&mut end1 as *mut i32).cast(),
                     1,
-                    BCF_HT_INT as c_int,
+                    BCF_HT_INT as i32,
                 ),
                 0
             );
@@ -16637,7 +16644,7 @@ mod tests {
             ];
             let mut regions: bcf_sr_regions_t = bcf_sr_regions_t::default();
             regions.regs = seq_regions.as_mut_ptr().cast();
-            regions.nseqs = seq_regions.len() as c_int;
+            regions.nseqs = seq_regions.len() as i32;
             regions.iseq = 1;
             regions.start = 11;
             regions.end = 22;
@@ -17047,7 +17054,7 @@ mod tests {
 
             // (samples-spec-or-null, is_file). Covers: keep subset, exclude one,
             // keep nonexistent (ret>0), and exclude-all (NULL).
-            let cases: &[(Option<&CStr>, c_int)] = &[
+            let cases: &[(Option<&CStr>, i32)] = &[
                 (Some(c"sampleB"), 0),
                 (Some(c"^sampleA"), 0),
                 (Some(c"sampleA,doesNotExist"), 0),
@@ -17106,7 +17113,7 @@ mod tests {
     ];
 
     // Read all (key -> (id, info[0..3])) entries from a vdict, sorted by key.
-    unsafe fn dump_vdict(d: *const kh_vdict_t) -> Vec<(String, c_int, [u64; 3])> {
+    unsafe fn dump_vdict(d: *const kh_vdict_t) -> Vec<(String, i32, [u64; 3])> {
         let mut out = Vec::new();
         if d.is_null() {
             return out;
@@ -17206,8 +17213,8 @@ mod tests {
                 (c"chr1", BCF_DT_CTG),
                 (c"chrMT", BCF_DT_CTG),
             ] {
-                let native_id = bcf_hdr_id2int(nat, t as c_int, id_name.as_ptr());
-                let c_id = hts_sys::bcf_hdr_id2int(nat.cast(), t as c_int, id_name.as_ptr());
+                let native_id = bcf_hdr_id2int(nat, t as i32, id_name.as_ptr());
+                let c_id = hts_sys::bcf_hdr_id2int(nat.cast(), t as i32, id_name.as_ptr());
                 assert!(native_id >= 0, "native lookup failed for {id_name:?}");
                 assert_eq!(
                     native_id, c_id,
@@ -17232,14 +17239,14 @@ mod tests {
             // BCF_HL_GEN by value
             let n_ff = bcf_hdr_get_hrec(
                 nat,
-                BCF_HL_GEN as c_int,
+                BCF_HL_GEN as i32,
                 c"fileformat".as_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
             );
             let c_ff = hts_sys::bcf_hdr_get_hrec(
                 cref.cast(),
-                BCF_HL_GEN as c_int,
+                BCF_HL_GEN as i32,
                 c"fileformat".as_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
@@ -17255,14 +17262,14 @@ mod tests {
             ] {
                 let nh = bcf_hdr_get_hrec(
                     nat,
-                    t as c_int,
+                    t as i32,
                     c"ID".as_ptr(),
                     id.as_ptr(),
                     std::ptr::null(),
                 );
                 let ch = hts_sys::bcf_hdr_get_hrec(
                     cref.cast(),
-                    t as c_int,
+                    t as i32,
                     c"ID".as_ptr(),
                     id.as_ptr(),
                     std::ptr::null(),
@@ -17275,14 +17282,14 @@ mod tests {
             // BCF_HL_STR structured (ALT) by ID via str_class
             let ns = bcf_hdr_get_hrec(
                 nat,
-                BCF_HL_STR as c_int,
+                BCF_HL_STR as i32,
                 c"ID".as_ptr(),
                 c"NON_REF".as_ptr(),
                 c"ALT".as_ptr(),
             );
             let cs = hts_sys::bcf_hdr_get_hrec(
                 cref.cast(),
-                BCF_HL_STR as c_int,
+                BCF_HL_STR as i32,
                 c"ID".as_ptr(),
                 c"NON_REF".as_ptr(),
                 c"ALT".as_ptr(),
@@ -17355,7 +17362,7 @@ mod tests {
                         let reader = readers.add(i as usize);
                         let buffer = (*reader).buffer;
                         let rec = *buffer;
-                        bcf_unpack(rec, BCF_UN_STR as c_int);
+                        bcf_unpack(rec, BCF_UN_STR as i32);
                         let d = &(*rec).d;
                         let refa = String::from_utf8_lossy(&d.allele[0]).into_owned();
                         let alt = if (*rec).n_allele() > 1 {
@@ -17390,7 +17397,7 @@ mod tests {
                         }
                         let reader = (*sr).readers.add(i as usize);
                         let rec = *(*reader).buffer;
-                        hts_sys::bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int);
+                        hts_sys::bcf_unpack(rec, hts_sys::BCF_UN_STR as i32);
                         let refa = CStr::from_ptr(*(*rec).d.allele)
                             .to_string_lossy()
                             .into_owned();

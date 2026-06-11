@@ -28,13 +28,11 @@ use super::transaction::{
 use super::upstream::{
     ref_cache_upstream_c_215_upstream_recv_msg, Upstream_msg, Upstream_msg_code,
 };
-use std::ffi::{c_int, c_uchar, c_uint};
-
-const REF_CACHE_ON_READ_LIST: c_uint = 0x01;
-const REF_CACHE_ON_WRITE_LIST: c_uint = 0x02;
-const REF_CACHE_READ_CLOSED: c_uint = 0x04;
-const REF_CACHE_READ_DRAIN: c_uint = 0x08;
-const REF_CACHE_CAN_WRITE: c_uint = 0x10;
+const REF_CACHE_ON_READ_LIST: u32 = 0x01;
+const REF_CACHE_ON_WRITE_LIST: u32 = 0x02;
+const REF_CACHE_READ_CLOSED: u32 = 0x04;
+const REF_CACHE_READ_DRAIN: u32 = 0x08;
+const REF_CACHE_CAN_WRITE: u32 = 0x10;
 
 const REF_CACHE_SV_LISTENER: Pw_fd_type = Pw_fd_type::SV_LISTENER;
 const REF_CACHE_SV_UPSTREAM: Pw_fd_type = Pw_fd_type::SV_UPSTREAM;
@@ -42,27 +40,27 @@ const REF_CACHE_SV_LOG: Pw_fd_type = Pw_fd_type::SV_LOG;
 const REF_CACHE_SV_CLIENT: Pw_fd_type = Pw_fd_type::SV_CLIENT;
 
 const REF_CACHE_NI_MAXHOST: usize = 1025;
-const REF_CACHE_MAX_EVENTS: c_int = 128;
+const REF_CACHE_MAX_EVENTS: i32 = 128;
 const REF_CACHE_MAX_UA_LEN: usize = 128;
 const REF_CACHE_MAX_REFERRER_LEN: usize = 128;
 const REF_CACHE_MAX_REQUEST_LEN: usize = 64;
 
-const REF_CACHE_US_START: c_int = 0;
-const REF_CACHE_US_CONTENT_LENGTH: c_int = 1;
-const REF_CACHE_US_PARTIAL_LENGTH: c_int = 2;
-const REF_CACHE_US_RESULT: c_int = 3;
+const REF_CACHE_US_START: i32 = 0;
+const REF_CACHE_US_CONTENT_LENGTH: i32 = 1;
+const REF_CACHE_US_PARTIAL_LENGTH: i32 = 2;
+const REF_CACHE_US_RESULT: i32 = 3;
 
-const REF_CACHE_READ_BLOCKED: c_int = 0;
-const REF_CACHE_READ_MORE: c_int = 1;
-const REF_CACHE_READ_EOF: c_int = 2;
-const REF_CACHE_READ_ERROR: c_int = 3;
+const REF_CACHE_READ_BLOCKED: i32 = 0;
+const REF_CACHE_READ_MORE: i32 = 1;
+const REF_CACHE_READ_EOF: i32 = 2;
+const REF_CACHE_READ_ERROR: i32 = 3;
 
-const REF_CACHE_WRITE_BLOCKED: c_int = 0;
-const REF_CACHE_WRITE_BLOCKED_UPSTREAM: c_int = 1;
-const REF_CACHE_WRITE_MORE: c_int = 2;
-const REF_CACHE_WRITE_COMPLETE: c_int = 3;
-const REF_CACHE_WRITE_EOF: c_int = 4;
-const REF_CACHE_WRITE_ERROR: c_int = 5;
+const REF_CACHE_WRITE_BLOCKED: i32 = 0;
+const REF_CACHE_WRITE_BLOCKED_UPSTREAM: i32 = 1;
+const REF_CACHE_WRITE_MORE: i32 = 2;
+const REF_CACHE_WRITE_COMPLETE: i32 = 3;
+const REF_CACHE_WRITE_EOF: i32 = 4;
+const REF_CACHE_WRITE_ERROR: i32 = 5;
 
 const REF_CACHE_LOG_BUF_SZ: usize = 0x10000;
 const REF_CACHE_LOG_BUF_MASK: usize = REF_CACHE_LOG_BUF_SZ - 1;
@@ -86,7 +84,7 @@ pub struct Client {
     polled: Option<usize>,
     // The client's socket fd, cached here so do_reads/do_writes don't have to
     // round-trip through the poller arena to recover it.
-    fd: c_int,
+    fd: i32,
     prev: usize,
     next: usize,
     prev_write: usize,
@@ -95,7 +93,7 @@ pub struct Client {
     transact: Option<TransactionId>,
     last_transact: Option<TransactionId>,
     parser: HttpParser,
-    flags: c_uint,
+    flags: u32,
     // True when this arena slot is occupied by a live client.
     in_use: bool,
 }
@@ -168,7 +166,7 @@ pub struct SocketAddress {
 }
 
 // original: init_clients (htslib/ref_cache/server.c:107)
-pub fn ref_cache_server_c_107_init_clients(clients: &mut RefCacheClientsLayout) -> c_int {
+pub fn ref_cache_server_c_107_init_clients(clients: &mut RefCacheClientsLayout) -> i32 {
     clients.arena = Vec::new();
     clients.free_slots = Vec::new();
     clients.can_read = NO_CLIENT;
@@ -347,10 +345,10 @@ pub unsafe fn ref_cache_server_c_222_check_addr_allowed(
     mut family: libc::sa_family_t,
     addr: &SocketAddress,
     addrlen: libc::socklen_t,
-) -> c_int {
+) -> i32 {
     let start;
     let end;
-    let mut addrp: *const c_uchar;
+    let mut addrp: *const u8;
 
     if opts.match_addrs_storage.is_empty() {
         return 0;
@@ -367,7 +365,7 @@ pub unsafe fn ref_cache_server_c_222_check_addr_allowed(
     } else if family == libc::AF_INET6 as libc::sa_family_t
         && addrlen as usize == std::mem::size_of::<libc::sockaddr_in6>()
     {
-        let v4mapped_prefix: [c_uchar; 12] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff];
+        let v4mapped_prefix: [u8; 12] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff];
         let in6 = addr.cast::<libc::sockaddr_in6>();
         addrp = (&(*in6).sin6_addr as *const libc::in6_addr).cast();
         let prefix = std::slice::from_raw_parts(addrp, v4mapped_prefix.len());
@@ -402,8 +400,8 @@ pub unsafe fn ref_cache_server_c_222_check_addr_allowed(
 // original: handle_incoming (htslib/ref_cache/server.c:268)
 pub unsafe fn ref_cache_server_c_268_handle_incoming(
     opts: &Options,
-    listener: c_int,
-    upstream: c_int,
+    listener: i32,
+    upstream: i32,
     pw: &mut Poll_wrap,
     clients: &mut RefCacheClientsLayout,
 ) {
@@ -538,9 +536,9 @@ pub unsafe fn ref_cache_server_c_352_client_add_transaction(
 
 // original: handle_upstream (htslib/ref_cache/server.c:362)
 pub unsafe fn ref_cache_server_c_362_handle_upstream(
-    upstream: c_int,
+    upstream: i32,
     clients: &mut RefCacheClientsLayout,
-    verbosity: c_int,
+    verbosity: i32,
 ) {
     let mut msg = Upstream_msg {
         id: 0,
@@ -611,7 +609,7 @@ pub unsafe fn ref_cache_server_c_395_queue_transaction_write(
 }
 
 // original: eat_input (htslib/ref_cache/server.c:422)
-pub unsafe fn ref_cache_server_c_422_eat_input(fd: c_int) -> c_int {
+pub unsafe fn ref_cache_server_c_422_eat_input(fd: i32) -> i32 {
     let mut buffer = vec![0u8; 65536];
     let mut bytes;
 
@@ -692,8 +690,8 @@ pub unsafe fn ref_cache_server_c_436_queue_log_msg(
 // original: send_to_log (htslib/ref_cache/server.c:470)
 pub unsafe fn ref_cache_server_c_470_send_to_log(
     log_buf: &mut RefCacheLogBufferLayout,
-    log_fd: c_int,
-) -> c_int {
+    log_fd: i32,
+) -> i32 {
     let mut bytes;
 
     if log_buf.out == log_buf.in_ {
@@ -767,20 +765,20 @@ pub unsafe fn ref_cache_server_c_509_handle_client_events(
     opts: &Options,
     pw: &mut Poll_wrap,
     client: usize,
-    evts: c_uint,
+    evts: u32,
 ) {
     let fd = clients.arena[client].fd;
 
     if opts.verbosity > 2 {
         eprintln!("Events {:04x} for fd #{}", evts, fd);
     }
-    if (evts & libc::EPOLLHUP as c_uint) != 0 {
+    if (evts & libc::EPOLLHUP as u32) != 0 {
         if opts.verbosity > 1 {
             eprintln!("Got hangup on fd#{}", fd);
         }
         ref_cache_server_c_194_close_client(clients, client, pw);
         return;
-    } else if (evts & (libc::EPOLLIN | libc::EPOLLERR) as c_uint) != 0 {
+    } else if (evts & (libc::EPOLLIN | libc::EPOLLERR) as u32) != 0 {
         if (clients.arena[client].flags & REF_CACHE_READ_CLOSED) == 0 {
             let mut can_read = clients.can_read;
             ref_cache_server_c_115_read_stack_push(clients, client, &mut can_read);
@@ -790,7 +788,7 @@ pub unsafe fn ref_cache_server_c_509_handle_client_events(
         }
     }
 
-    if (evts & libc::EPOLLOUT as c_uint) != 0 {
+    if (evts & libc::EPOLLOUT as u32) != 0 {
         clients.arena[client].flags |= REF_CACHE_CAN_WRITE;
         if (clients.arena[client].flags & REF_CACHE_ON_WRITE_LIST) == 0 {
             if let Some(transact) = clients.arena[client].transact {
@@ -1007,9 +1005,9 @@ pub unsafe fn ref_cache_server_c_642_do_writes(
 pub unsafe fn ref_cache_server_c_721_run_poll_loop(
     opts: &Options,
     lsocks: &mut Listeners,
-    upstream: c_int,
-    log_fd: c_int,
-) -> c_int {
+    upstream: i32,
+    log_fd: i32,
+) -> i32 {
     let mut clients = RefCacheClientsLayout::default();
     let mut events = vec![std::mem::zeroed::<libc::epoll_event>(); REF_CACHE_MAX_EVENTS as usize];
     let mut log_buf = RefCacheLogBufferLayout::default();
@@ -1114,7 +1112,7 @@ pub unsafe fn ref_cache_server_c_721_run_poll_loop(
                     ref_cache_server_c_362_handle_upstream(
                         upstream,
                         &mut clients,
-                        opts.verbosity as c_int,
+                        opts.verbosity as i32,
                     );
                 }
                 REF_CACHE_SV_LOG => {
@@ -1143,7 +1141,7 @@ pub unsafe fn ref_cache_server_c_721_run_poll_loop(
                     );
                 }
                 _ => {
-                    eprintln!("Unexpected polled item type {}", fd_type as c_int);
+                    eprintln!("Unexpected polled item type {}", fd_type as i32);
                     return -1;
                 }
             }

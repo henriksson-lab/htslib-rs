@@ -1,18 +1,17 @@
 use super::misc::ref_cache_misc_h_38_hexval;
 use super::options::Options;
 use super::upstream::ref_cache_upstream_c_122_upstream_send_cmd;
-use std::ffi::{c_int, c_uint};
 
 pub const MD5_LEN: usize = 32;
-pub const REF_WAITING_UPSTREAM: c_int = 0;
-pub const REF_NOT_FOUND: c_int = 1;
-pub const REF_DOWNLOAD_STARTED: c_int = 2;
-pub const REF_IS_COMPLETE: c_int = 3;
+pub const REF_WAITING_UPSTREAM: i32 = 0;
+pub const REF_NOT_FOUND: i32 = 1;
+pub const REF_DOWNLOAD_STARTED: i32 = 2;
+pub const REF_IS_COMPLETE: i32 = 3;
 
 const HASH_SZ: usize = 0x10000;
-const HASH_MASK: c_int = (HASH_SZ as c_int) - 1;
+const HASH_MASK: i32 = (HASH_SZ as i32) - 1;
 
-pub type RefFileStatus = c_int;
+pub type RefFileStatus = i32;
 
 // original: RefFile (htslib/ref_cache/ref_files.c:43)
 //
@@ -26,14 +25,14 @@ pub struct RefFile {
     next_md5: Option<usize>,
     size: libc::off_t,
     available: libc::off_t,
-    ref_count: c_uint,
-    id: c_uint,
+    ref_count: u32,
+    id: u32,
     status: RefFileStatus,
-    fd: c_int,
+    fd: i32,
 }
 
 impl RefFile {
-    fn new(hexmd5: [u8; MD5_LEN], id: c_uint) -> Self {
+    fn new(hexmd5: [u8; MD5_LEN], id: u32) -> Self {
         Self {
             hexmd5,
             prev_md5: None,
@@ -57,7 +56,7 @@ pub struct RefFiles {
     slots: Vec<Option<RefFile>>,
     free: Vec<usize>,
     by_md5: Vec<Option<usize>>,
-    id: c_uint,
+    id: u32,
 }
 
 // Concurrency note (audit 2026-05):
@@ -153,7 +152,7 @@ fn ref_cache_ref_files_c_62_get_ref_placeholder(md5: &[u8; MD5_LEN]) -> usize {
 pub fn ref_cache_ref_files_c_94_get_ref_file(
     opts: &Options,
     md5: &[u8; MD5_LEN],
-    upstream_fd: c_int,
+    upstream_fd: i32,
 ) -> Option<usize> {
     let idx = ref_cache_ref_files_c_62_get_ref_placeholder(md5);
 
@@ -229,24 +228,24 @@ pub fn ref_cache_ref_files_c_149_get_ref_available(ref_: usize) -> libc::off_t {
 }
 
 // original: get_ref_id (htslib/ref_cache/ref_files.c:153)
-pub fn ref_cache_ref_files_c_153_get_ref_id(ref_: usize) -> c_uint {
+pub fn ref_cache_ref_files_c_153_get_ref_id(ref_: usize) -> u32 {
     refs().slots[ref_].as_ref().unwrap().id
 }
 
 // original: get_ref_complete (htslib/ref_cache/ref_files.c:157)
-pub fn ref_cache_ref_files_c_157_get_ref_complete(ref_: usize) -> c_int {
-    (refs().slots[ref_].as_ref().unwrap().status == REF_IS_COMPLETE) as c_int
+pub fn ref_cache_ref_files_c_157_get_ref_complete(ref_: usize) -> i32 {
+    (refs().slots[ref_].as_ref().unwrap().status == REF_IS_COMPLETE) as i32
 }
 
 // original: get_ref_fd (htslib/ref_cache/ref_files.c:161)
-pub fn ref_cache_ref_files_c_161_get_ref_fd(ref_: usize) -> c_int {
+pub fn ref_cache_ref_files_c_161_get_ref_fd(ref_: usize) -> i32 {
     refs().slots[ref_].as_ref().unwrap().fd
 }
 
 // original: update_ref_download_started (htslib/ref_cache/ref_files.c:165)
 pub fn ref_cache_ref_files_c_165_update_ref_download_started(
     ref_: usize,
-    fd: c_int,
+    fd: i32,
     size_if_complete: i64,
 ) {
     let ref_file = refs().slots[ref_].as_mut().unwrap();
@@ -275,16 +274,16 @@ pub fn ref_cache_ref_files_c_179_update_ref_with_content_len(ref_: usize, size: 
 }
 
 // original: set_ref_complete (htslib/ref_cache/ref_files.c:185)
-pub fn ref_cache_ref_files_c_185_set_ref_complete(ref_: usize) -> c_int {
+pub fn ref_cache_ref_files_c_185_set_ref_complete(ref_: usize) -> i32 {
     let ref_file = refs().slots[ref_].as_mut().unwrap();
-    let no_content_length = (ref_file.size == 0) as c_int;
+    let no_content_length = (ref_file.size == 0) as i32;
     ref_file.status = REF_IS_COMPLETE;
     ref_file.size = ref_file.available;
     no_content_length
 }
 
 // original: release_ref_file (htslib/ref_cache/ref_files.c:193)
-pub fn ref_cache_ref_files_c_193_release_ref_file(ref_: usize) -> c_int {
+pub fn ref_cache_ref_files_c_193_release_ref_file(ref_: usize) -> i32 {
     let refs = refs();
 
     {

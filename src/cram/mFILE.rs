@@ -1,10 +1,7 @@
 // Functions translated from htslib/cram/mFILE.c.
 // Extracted from src/cram/mod.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_int, c_void};
 use std::ptr::NonNull;
-
-use crate::htslib_rs::c_compat::{__errno_location, EINVAL};
 
 use super::*;
 
@@ -30,7 +27,7 @@ impl OwnedFILE {
         fp
     }
 
-    pub fn close(self) -> c_int {
+    pub fn close(self) -> i32 {
         let fp = self.into_raw();
         unsafe { libc::fclose(fp) }
     }
@@ -45,16 +42,16 @@ impl Drop for OwnedFILE {
 }
 
 pub struct MmapRegion {
-    ptr: NonNull<c_void>,
+    ptr: NonNull<()>,
     len: usize,
 }
 
 impl MmapRegion {
-    pub unsafe fn from_raw(ptr: *mut c_void, len: usize) -> Option<Self> {
+    pub unsafe fn from_raw(ptr: *mut (), len: usize) -> Option<Self> {
         if len == 0 || ptr.is_null() || {
             #[cfg(not(windows))]
             {
-                ptr == libc::MAP_FAILED
+                ptr == libc::MAP_FAILED.cast::<()>()
             }
             #[cfg(windows)]
             {
@@ -66,7 +63,7 @@ impl MmapRegion {
         NonNull::new(ptr).map(|ptr| Self { ptr, len })
     }
 
-    pub fn as_ptr(&self) -> *mut c_void {
+    pub fn as_ptr(&self) -> *mut () {
         self.ptr.as_ptr()
     }
 
@@ -78,7 +75,7 @@ impl MmapRegion {
         self.len == 0
     }
 
-    pub fn into_raw(self) -> (*mut c_void, usize) {
+    pub fn into_raw(self) -> (*mut (), usize) {
         let parts = (self.ptr.as_ptr(), self.len);
         std::mem::forget(self);
         parts
@@ -90,7 +87,7 @@ impl Drop for MmapRegion {
         unsafe {
             #[cfg(not(windows))]
             {
-                libc::munmap(self.ptr.as_ptr(), self.len);
+                libc::munmap(self.ptr.as_ptr().cast(), self.len);
             }
             #[cfg(windows)]
             {
@@ -111,7 +108,7 @@ unsafe fn mfload_buffer(fp: *mut libc::FILE, path: Option<&[u8]>) -> Option<Vec<
 
     if let Some(path) = path {
         // path is a NUL-terminated byte slice owned by the caller.
-        if libc::stat(path.as_ptr().cast::<c_char>(), sb.as_mut_ptr()) != -1 {
+        if libc::stat(path.as_ptr().cast::<libc::c_char>(), sb.as_mut_ptr()) != -1 {
             let sb = sb.assume_init();
             target_size = Some(sb.st_size as usize);
             if data.try_reserve_exact(sb.st_size as usize).is_err() {
@@ -149,35 +146,12 @@ unsafe fn mfload_buffer(fp: *mut libc::FILE, path: Option<&[u8]>) -> Option<Vec<
 
 pub unsafe fn cram_mFILE_c_75_mfload(
     fp: *mut libc::FILE,
-    fn_: *const c_char,
-    size: *mut usize,
-    _binary: c_int,
-) -> *mut c_char {
-    let path = if fn_.is_null() {
-        None
-    } else {
-        let mut len = 0usize;
-        while *fn_.add(len) != 0 {
-            len += 1;
-        }
-        Some(std::slice::from_raw_parts(fn_.cast::<u8>(), len + 1))
-    };
-    let Some(buffer) = mfload_buffer(fp, path) else {
-        return std::ptr::null_mut();
-    };
-    let content_len = buffer.len();
-    // Hand ownership of the buffer to the (C-style) caller. Allocate at least
-    // one byte so the returned pointer is never null for an empty file.
-    let mut out = buffer;
-    if out.capacity() == 0 {
-        out.reserve_exact(1);
-    }
-    let ptr = out.as_mut_ptr().cast::<c_char>();
-    std::mem::forget(out);
-    if !size.is_null() {
-        *size = content_len;
-    }
-    ptr
+    fn_: Option<&[u8]>,
+    _binary: i32,
+) -> Option<Vec<u8>> {
+    // `fn_` is a NUL-terminated byte slice (or None). Hand the loaded contents
+    // back to the caller as an owned buffer; its length is the content size.
+    mfload_buffer(fp, fn_)
 }
 
 /// Replace `mf`'s owned buffer with `buffer`, setting the logical content size.
@@ -189,27 +163,18 @@ fn install_mfile_buffer(mf: &mut mFILE, buffer: Vec<u8>, size: usize) {
 pub unsafe fn cram_mFILE_c_127_mfmmap(
     mf: *mut mFILE,
     fp: *mut libc::FILE,
-    fn_: *const c_char,
-) -> c_int {
+    fn_: Option<&[u8]>,
+) -> i32 {
     let Some(mf) = mf.as_mut() else {
         return -1;
     };
     mfmmap_borrowed(mf, fp, fn_)
 }
 
-unsafe fn mfmmap_borrowed(mf: &mut mFILE, fp: *mut libc::FILE, fn_: *const c_char) -> c_int {
+unsafe fn mfmmap_borrowed(mf: &mut mFILE, fp: *mut libc::FILE, fn_: Option<&[u8]>) -> i32 {
     #[cfg(windows)]
     {
-        let path = if fn_.is_null() {
-            None
-        } else {
-            let mut len = 0usize;
-            while *fn_.add(len) != 0 {
-                len += 1;
-            }
-            Some(std::slice::from_raw_parts(fn_.cast::<u8>(), len + 1))
-        };
-        let Some(buffer) = mfload_buffer(fp, path) else {
+        let Some(buffer) = mfload_buffer(fp, fn_) else {
             return -1;
         };
         let size = buffer.len();
@@ -220,8 +185,12 @@ unsafe fn mfmmap_borrowed(mf: &mut mFILE, fp: *mut libc::FILE, fn_: *const c_cha
 
     #[cfg(not(windows))]
     {
+        // `fn_` is a NUL-terminated byte slice; pass it straight to stat.
+        let Some(fn_) = fn_ else {
+            return -1;
+        };
         let mut sb = std::mem::MaybeUninit::<libc::stat>::uninit();
-        if libc::stat(fn_, sb.as_mut_ptr()) != 0 {
+        if libc::stat(fn_.as_ptr().cast::<libc::c_char>(), sb.as_mut_ptr()) != 0 {
             return -1;
         }
         let sb = sb.assume_init();
@@ -234,14 +203,14 @@ unsafe fn mfmmap_borrowed(mf: &mut mFILE, fp: *mut libc::FILE, fn_: *const c_cha
             libc::fileno(fp),
             0,
         );
-        let Some(mapping) = MmapRegion::from_raw(data, mf.size) else {
+        let Some(mapping) = MmapRegion::from_raw(data.cast::<()>(), mf.size) else {
             return -1;
         };
         let (data, len) = mapping.into_raw();
 
         // Adopt the mapped region as the owned buffer for the lifetime of mf.
         // It is reclaimed via munmap in cram_mFILE_c_361_mfclose.
-        mf.data = Vec::from_raw_parts(data.cast::<u8>(), len, len);
+        mf.data = Vec::from_raw_parts(data as *mut u8, len, len);
         0
     }
 }
@@ -301,23 +270,13 @@ pub unsafe fn cram_mFILE_c_192_mstderr() -> *mut mFILE {
     mf.as_ptr()
 }
 
-pub unsafe fn cram_mFILE_c_207_mfcreate(data: *mut c_char, size: c_int) -> *mut mFILE {
+pub unsafe fn cram_mFILE_c_207_mfcreate(data: Option<&[u8]>, size: i32) -> *mut mFILE {
     let mut mf = new_empty_mfile();
-    if !data.is_null() && size > 0 {
-        let bytes = std::slice::from_raw_parts(data.cast::<u8>(), size as usize);
-        adopt_buffer_bytes(&mut mf, Some(bytes));
-    } else {
-        adopt_buffer_bytes(&mut mf, None);
-    }
-    if !data.is_null() {
-        // The caller transferred ownership of `data` (originally malloc'd by C).
-        // Reclaim it as a Vec so it is dropped here.
-        drop(Vec::from_raw_parts(
-            data.cast::<u8>(),
-            size.max(0) as usize,
-            size.max(0) as usize,
-        ));
-    }
+    let bytes = match data {
+        Some(data) if size > 0 => Some(&data[..size as usize]),
+        _ => None,
+    };
+    adopt_buffer_bytes(&mut mf, bytes);
     Box::into_raw(Box::new(mf))
 }
 
@@ -333,24 +292,16 @@ fn new_empty_mfile() -> mFILE {
     }
 }
 
-pub unsafe fn cram_mFILE_c_225_mfrecreate(mf: *mut mFILE, data: *mut c_char, size: c_int) {
-    let bytes = if !data.is_null() && size > 0 {
-        Some(std::slice::from_raw_parts(data.cast::<u8>(), size as usize))
-    } else {
-        None
+pub unsafe fn cram_mFILE_c_225_mfrecreate(mf: *mut mFILE, data: Option<&[u8]>, size: i32) {
+    let bytes = match data {
+        Some(data) if size > 0 => Some(&data[..size as usize]),
+        _ => None,
     };
     if let Some(mf) = mf.as_mut() {
         adopt_buffer_bytes(mf, bytes);
         mf.eof = false;
         mf.offset = 0;
         mf.flush_pos = 0;
-    }
-    if !data.is_null() {
-        drop(Vec::from_raw_parts(
-            data.cast::<u8>(),
-            size.max(0) as usize,
-            size.max(0) as usize,
-        ));
     }
 }
 
@@ -369,8 +320,8 @@ fn adopt_buffer_bytes(mf: &mut mFILE, data: Option<&[u8]>) {
 }
 
 pub unsafe fn cram_mFILE_c_246_mfcreate_from(
-    path: *const c_char,
-    mode_str: *const c_char,
+    path: Option<&[u8]>,
+    mode_str: Option<&[u8]>,
     fp: *mut libc::FILE,
 ) -> *mut mFILE {
     let mf = cram_mFILE_c_264_mfreopen(path, mode_str, fp);
@@ -381,8 +332,8 @@ pub unsafe fn cram_mFILE_c_246_mfcreate_from(
 }
 
 pub unsafe fn cram_mFILE_c_264_mfreopen(
-    path: *const c_char,
-    mode_str: *const c_char,
+    path: Option<&[u8]>,
+    mode_str: Option<&[u8]>,
     fp: *mut libc::FILE,
 ) -> *mut mFILE {
     let mut r = false;
@@ -391,15 +342,14 @@ pub unsafe fn cram_mFILE_c_264_mfreopen(
     let mut x = false;
     let mut mode = 0;
 
-    if mode_str.is_null() {
+    let Some(mode_str) = mode_str else {
         return std::ptr::null_mut();
-    }
-
-    let mut len = 0usize;
-    while *mode_str.add(len) != 0 {
-        len += 1;
-    }
-    let mode_bytes = std::slice::from_raw_parts(mode_str.cast::<u8>(), len);
+    };
+    // Mode string may carry a trailing NUL; ignore it when scanning flags.
+    let mode_bytes = match mode_str.iter().position(|&b| b == 0) {
+        Some(nul) => &mode_str[..nul],
+        None => mode_str,
+    };
     if mode_bytes.contains(&b'r') {
         r = true;
         mode |= MF_READ;
@@ -432,7 +382,7 @@ pub unsafe fn cram_mFILE_c_264_mfreopen(
 
     let mf;
     if r {
-        mf = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
+        mf = cram_mFILE_c_207_mfcreate(None, 0);
         if mf.is_null() {
             return std::ptr::null_mut();
         }
@@ -443,15 +393,6 @@ pub unsafe fn cram_mFILE_c_264_mfreopen(
                 mode &= !MF_MMAP;
             }
             if mf_ref.data.is_empty() {
-                let path = if path.is_null() {
-                    None
-                } else {
-                    let mut plen = 0usize;
-                    while *path.add(plen) != 0 {
-                        plen += 1;
-                    }
-                    Some(std::slice::from_raw_parts(path.cast::<u8>(), plen + 1))
-                };
                 let Some(buffer) = mfload_buffer(fp, path) else {
                     drop(Box::from_raw(mf));
                     return std::ptr::null_mut();
@@ -464,7 +405,7 @@ pub unsafe fn cram_mFILE_c_264_mfreopen(
             }
         }
     } else if w {
-        mf = cram_mFILE_c_207_mfcreate(std::ptr::null_mut(), 0);
+        mf = cram_mFILE_c_207_mfcreate(None, 0);
         if mf.is_null() {
             return std::ptr::null_mut();
         }
@@ -486,15 +427,22 @@ pub unsafe fn cram_mFILE_c_264_mfreopen(
     mf
 }
 
-pub unsafe fn cram_mFILE_c_347_mfopen(path: *const c_char, mode: *const c_char) -> *mut mFILE {
-    let fp = libc::fopen(path, mode);
+pub unsafe fn cram_mFILE_c_347_mfopen(path: Option<&[u8]>, mode: Option<&[u8]>) -> *mut mFILE {
+    // path and mode are NUL-terminated byte slices passed straight to fopen.
+    let (Some(path), Some(mode)) = (path, mode) else {
+        return std::ptr::null_mut();
+    };
+    let fp = libc::fopen(
+        path.as_ptr().cast::<libc::c_char>(),
+        mode.as_ptr().cast::<libc::c_char>(),
+    );
     if fp.is_null() {
         return std::ptr::null_mut();
     }
-    cram_mFILE_c_264_mfreopen(path, mode, fp)
+    cram_mFILE_c_264_mfreopen(Some(path), Some(mode), fp)
 }
 
-pub unsafe fn cram_mFILE_c_361_mfclose(mf: *mut mFILE) -> c_int {
+pub unsafe fn cram_mFILE_c_361_mfclose(mf: *mut mFILE) -> i32 {
     let Some(mut mf) = NonNull::new(mf) else {
         return -1;
     };
@@ -505,7 +453,7 @@ pub unsafe fn cram_mFILE_c_361_mfclose(mf: *mut mFILE) -> c_int {
         // and avoid dropping it as an ordinary Vec.
         let buf = std::mem::take(&mut mf_ref.data);
         let len = buf.len();
-        let ptr = buf.as_ptr() as *mut c_void;
+        let ptr = buf.as_ptr() as *mut ();
         std::mem::forget(buf);
         drop(MmapRegion::from_raw(ptr, len));
     }
@@ -516,14 +464,14 @@ pub unsafe fn cram_mFILE_c_361_mfclose(mf: *mut mFILE) -> c_int {
     0
 }
 
-pub unsafe fn cram_mFILE_c_389_mfdetach(mf: *mut mFILE) -> c_int {
+pub unsafe fn cram_mFILE_c_389_mfdetach(mf: *mut mFILE) -> i32 {
     let Some(mf) = mf.as_mut() else {
         return -1;
     };
     mfdetach_borrowed(mf)
 }
 
-unsafe fn mfdetach_borrowed(mf: &mut mFILE) -> c_int {
+unsafe fn mfdetach_borrowed(mf: &mut mFILE) -> i32 {
     if mfflush_borrowed(mf) != 0 {
         return -1;
     }
@@ -536,7 +484,7 @@ unsafe fn mfdetach_borrowed(mf: &mut mFILE) -> c_int {
     0
 }
 
-pub unsafe fn cram_mFILE_c_408_mfdestroy(mf: *mut mFILE) -> c_int {
+pub unsafe fn cram_mFILE_c_408_mfdestroy(mf: *mut mFILE) -> i32 {
     let Some(mf) = NonNull::new(mf) else {
         return -1;
     };
@@ -557,48 +505,26 @@ unsafe fn mfdestroy_owned(mf: NonNull<mFILE>) {
     drop(Box::from_raw(mf.as_ptr()));
 }
 
-pub unsafe fn cram_mFILE_c_428_mfsteal(mf: *mut mFILE, size_out: *mut usize) -> *mut c_void {
-    let Some(mut mf) = NonNull::new(mf) else {
-        return std::ptr::null_mut();
-    };
+pub unsafe fn cram_mFILE_c_428_mfsteal(mf: *mut mFILE) -> Option<Vec<u8>> {
+    let mut mf = NonNull::new(mf)?;
     let mf_ref = mf.as_mut();
-    if !size_out.is_null() {
-        *size_out = mf_ref.size;
-    }
     if mfdetach_borrowed(mf_ref) != 0 {
-        return std::ptr::null_mut();
+        return None;
     }
-    let data = if mf_ref.data.is_empty() {
-        std::ptr::null_mut()
-    } else {
-        // Hand the first `size` bytes to the C-style caller as an owned buffer.
-        let mut out: Vec<u8> = mf_ref.data[..mf_ref.size].to_vec();
-        if out.capacity() == 0 {
-            out.reserve_exact(1);
-        }
-        let ptr = out.as_mut_ptr().cast::<c_void>();
-        std::mem::forget(out);
-        ptr
-    };
-    if data.is_null() && mf_ref.size != 0 {
-        return std::ptr::null_mut();
-    }
+    // Hand the first `size` bytes back to the caller as an owned buffer.
+    let data = mf_ref.data[..mf_ref.size].to_vec();
     mfdestroy_owned(mf);
-    data
+    Some(data)
 }
 
-pub unsafe fn cram_mFILE_c_451_mfseek(
-    mf: *mut mFILE,
-    offset: libc::c_long,
-    whence: c_int,
-) -> c_int {
+pub unsafe fn cram_mFILE_c_451_mfseek(mf: *mut mFILE, offset: i64, whence: i32) -> i32 {
     let Some(mf) = mf.as_mut() else {
         return -1;
     };
     mfseek_borrowed(mf, offset, whence)
 }
 
-unsafe fn mfseek_borrowed(mf: &mut mFILE, offset: libc::c_long, whence: c_int) -> c_int {
+fn mfseek_borrowed(mf: &mut mFILE, offset: i64, whence: i32) -> i32 {
     match whence {
         libc::SEEK_SET => {
             mf.offset = offset as usize;
@@ -610,7 +536,8 @@ unsafe fn mfseek_borrowed(mf: &mut mFILE, offset: libc::c_long, whence: c_int) -
             mf.offset = mf.size.wrapping_add(offset as usize);
         }
         _ => {
-            *__errno_location() = EINVAL;
+            // Invalid whence: the C original set errno to EINVAL; the caller
+            // only observes the -1 return.
             return -1;
         }
     }
@@ -619,10 +546,8 @@ unsafe fn mfseek_borrowed(mf: &mut mFILE, offset: libc::c_long, whence: c_int) -
     0
 }
 
-pub unsafe fn cram_mFILE_c_471_mftell(mf: *mut mFILE) -> libc::c_long {
-    mf.as_ref()
-        .map(|mf| mf.offset as libc::c_long)
-        .unwrap_or(-1)
+pub unsafe fn cram_mFILE_c_471_mftell(mf: *mut mFILE) -> i64 {
+    mf.as_ref().map(|mf| mf.offset as i64).unwrap_or(-1)
 }
 
 pub unsafe fn cram_mFILE_c_475_mrewind(mf: *mut mFILE) {
@@ -636,13 +561,13 @@ fn mrewind_borrowed(mf: &mut mFILE) {
     mf.eof = false;
 }
 
-pub unsafe fn cram_mFILE_c_488_mftruncate(mf: *mut mFILE, offset: libc::c_long) {
+pub unsafe fn cram_mFILE_c_488_mftruncate(mf: *mut mFILE, offset: i64) {
     if let Some(mf) = mf.as_mut() {
         mftruncate_borrowed(mf, offset);
     }
 }
 
-fn mftruncate_borrowed(mf: &mut mFILE, offset: libc::c_long) {
+fn mftruncate_borrowed(mf: &mut mFILE, offset: i64) {
     mf.size = if offset != -1 {
         offset as usize
     } else {
@@ -653,12 +578,12 @@ fn mftruncate_borrowed(mf: &mut mFILE, offset: libc::c_long) {
     }
 }
 
-pub unsafe fn cram_mFILE_c_494_mfeof(mf: *mut mFILE) -> c_int {
-    mf.as_ref().map(|mf| mf.eof as c_int).unwrap_or(1)
+pub unsafe fn cram_mFILE_c_494_mfeof(mf: *mut mFILE) -> i32 {
+    mf.as_ref().map(|mf| mf.eof as i32).unwrap_or(1)
 }
 
 pub unsafe fn cram_mFILE_c_502_mfread(
-    ptr: *mut c_void,
+    out: &mut [u8],
     size: usize,
     nmemb: usize,
     mf: *mut mFILE,
@@ -666,13 +591,12 @@ pub unsafe fn cram_mFILE_c_502_mfread(
     let Some(mf) = mf.as_mut() else {
         return 0;
     };
-    if ptr.is_null() || size == 0 {
+    if size == 0 {
         return 0;
     }
-    let Some(wanted) = size.checked_mul(nmemb) else {
+    if size.checked_mul(nmemb).is_none() {
         return 0;
-    };
-    let out = std::slice::from_raw_parts_mut(ptr.cast::<u8>(), wanted);
+    }
     mfread_borrowed(out, size, nmemb, mf)
 }
 
@@ -704,7 +628,7 @@ fn mfread_borrowed(out: &mut [u8], size: usize, nmemb: usize, mf: &mut mFILE) ->
 }
 
 pub unsafe fn cram_mFILE_c_527_mfwrite(
-    ptr: *mut c_void,
+    input: &[u8],
     size: usize,
     nmemb: usize,
     mf: *mut mFILE,
@@ -718,10 +642,6 @@ pub unsafe fn cram_mFILE_c_527_mfwrite(
     if wanted == 0 {
         return nmemb;
     }
-    if ptr.is_null() {
-        return 0;
-    }
-    let input = std::slice::from_raw_parts(ptr.cast::<u8>(), wanted);
     mfwrite_borrowed(input, size, nmemb, mf)
 }
 
@@ -777,33 +697,33 @@ fn mfwrite_borrowed(input: &[u8], size: usize, nmemb: usize, mf: &mut mFILE) -> 
     nmemb
 }
 
-pub unsafe fn cram_mFILE_c_557_mfgetc(mf: *mut mFILE) -> c_int {
+pub unsafe fn cram_mFILE_c_557_mfgetc(mf: *mut mFILE) -> i32 {
     let Some(mf) = mf.as_mut() else {
         return -1;
     };
     mfgetc_borrowed(mf)
 }
 
-fn mfgetc_borrowed(mf: &mut mFILE) -> c_int {
+fn mfgetc_borrowed(mf: &mut mFILE) -> i32 {
     let data = &mf.data[..mf.size];
     if mf.offset < data.len() {
         let c = data[mf.offset];
         mf.offset += 1;
-        return c as c_int;
+        return c as i32;
     }
 
     mf.eof = true;
     -1
 }
 
-pub unsafe fn cram_mFILE_c_567_mungetc(c: c_int, mf: *mut mFILE) -> c_int {
+pub unsafe fn cram_mFILE_c_567_mungetc(c: i32, mf: *mut mFILE) -> i32 {
     let Some(mf) = mf.as_mut() else {
         return -1;
     };
     mungetc_borrowed(c, mf)
 }
 
-fn mungetc_borrowed(c: c_int, mf: &mut mFILE) -> c_int {
+fn mungetc_borrowed(c: i32, mf: &mut mFILE) -> i32 {
     if mf.offset > 0 {
         let new_offset = mf.offset - 1;
         if new_offset >= mf.data.len() {
@@ -818,19 +738,14 @@ fn mungetc_borrowed(c: c_int, mf: &mut mFILE) -> c_int {
     -1
 }
 
-pub unsafe fn cram_mFILE_c_577_mfgets(s: *mut c_char, size: c_int, mf: *mut mFILE) -> *mut c_char {
+pub unsafe fn cram_mFILE_c_577_mfgets(s: &mut [u8], mf: *mut mFILE) -> bool {
     let Some(mf) = mf.as_mut() else {
-        return std::ptr::null_mut();
+        return false;
     };
-    if s.is_null() || size <= 0 {
-        return std::ptr::null_mut();
+    if s.is_empty() {
+        return false;
     }
-    let out = std::slice::from_raw_parts_mut(s.cast::<u8>(), size as usize);
-    if mfgets_borrowed(out, mf) {
-        s
-    } else {
-        std::ptr::null_mut()
-    }
+    mfgets_borrowed(s, mf)
 }
 
 /// Read a line (up to and including a trailing `\n`) into `s`, NUL-terminating
@@ -860,14 +775,14 @@ fn mfgets_borrowed(s: &mut [u8], mf: &mut mFILE) -> bool {
     i != 0
 }
 
-pub unsafe fn cram_mFILE_c_607_mfflush(mf: *mut mFILE) -> c_int {
+pub unsafe fn cram_mFILE_c_607_mfflush(mf: *mut mFILE) -> i32 {
     let Some(mf) = mf.as_mut() else {
         return -1;
     };
     mfflush_borrowed(mf)
 }
 
-unsafe fn mfflush_borrowed(mf: &mut mFILE) -> c_int {
+unsafe fn mfflush_borrowed(mf: &mut mFILE) -> i32 {
     let Some(fp) = mf.fp else {
         return 0;
     };
@@ -908,7 +823,7 @@ unsafe fn mfflush_borrowed(mf: &mut mFILE) -> c_int {
             }
         }
         let pos = libc::ftell(fp);
-        if pos != -1 && crate::htslib_rs::c_compat::ftruncate(libc::fileno(fp), pos) == -1 {
+        if pos != -1 && libc::ftruncate(libc::fileno(fp), pos as libc::off_t) == -1 {
             return -1;
         }
         mf.flush_pos = mf.size;
@@ -949,7 +864,6 @@ fn mfascii_borrowed(mf: &mut mFILE) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
 
     #[test]
     fn owned_file_closes_or_releases_raw_file_pointer() {
@@ -958,8 +872,9 @@ mod tests {
 
             let path = std::env::temp_dir()
                 .join(format!("htslib-rs-owned-file-{}-a.tmp", std::process::id()));
-            let c_path = CString::new(path.to_string_lossy().as_bytes()).unwrap();
-            let fp = libc::fopen(c_path.as_ptr(), c"w+b".as_ptr());
+            let mut c_path = path.to_string_lossy().as_bytes().to_vec();
+            c_path.push(0);
+            let fp = libc::fopen(c_path.as_ptr().cast::<libc::c_char>(), c"w+b".as_ptr());
             assert!(!fp.is_null());
             let owned = OwnedFILE::from_raw(fp).expect("non-null FILE");
             assert_eq!(owned.as_ptr(), fp);
@@ -973,8 +888,9 @@ mod tests {
 
             let path = std::env::temp_dir()
                 .join(format!("htslib-rs-owned-file-{}-b.tmp", std::process::id()));
-            let c_path = CString::new(path.to_string_lossy().as_bytes()).unwrap();
-            let fp = libc::fopen(c_path.as_ptr(), c"w+b".as_ptr());
+            let mut c_path = path.to_string_lossy().as_bytes().to_vec();
+            c_path.push(0);
+            let fp = libc::fopen(c_path.as_ptr().cast::<libc::c_char>(), c"w+b".as_ptr());
             assert!(!fp.is_null());
             let owned = OwnedFILE::from_raw(fp).expect("non-null FILE");
             let raw = owned.into_raw();
@@ -989,7 +905,7 @@ mod tests {
     fn mmap_region_releases_or_returns_raw_mapping() {
         unsafe {
             assert!(MmapRegion::from_raw(std::ptr::null_mut(), 4).is_none());
-            assert!(MmapRegion::from_raw(libc::MAP_FAILED, 4).is_none());
+            assert!(MmapRegion::from_raw(libc::MAP_FAILED.cast::<()>(), 4).is_none());
             let mut zero_len_marker = 0u8;
             assert!(MmapRegion::from_raw((&mut zero_len_marker as *mut u8).cast(), 0).is_none());
 
@@ -1002,13 +918,13 @@ mod tests {
                 0,
             );
             assert_ne!(ptr, libc::MAP_FAILED);
-            let region = MmapRegion::from_raw(ptr, 4096).expect("anonymous mmap");
-            assert_eq!(region.as_ptr(), ptr);
+            let region = MmapRegion::from_raw(ptr.cast::<()>(), 4096).expect("anonymous mmap");
+            assert_eq!(region.as_ptr(), ptr.cast::<()>());
             assert_eq!(region.len(), 4096);
             assert!(!region.is_empty());
             let (raw, len) = region.into_raw();
-            assert_eq!((raw, len), (ptr, 4096));
-            assert_eq!(libc::munmap(raw, len), 0);
+            assert_eq!((raw, len), (ptr.cast::<()>(), 4096));
+            assert_eq!(libc::munmap(raw.cast(), len), 0);
 
             let ptr = libc::mmap(
                 std::ptr::null_mut(),
@@ -1019,7 +935,7 @@ mod tests {
                 0,
             );
             assert_ne!(ptr, libc::MAP_FAILED);
-            let _region = MmapRegion::from_raw(ptr, 4096).expect("anonymous mmap");
+            let _region = MmapRegion::from_raw(ptr.cast::<()>(), 4096).expect("anonymous mmap");
         }
     }
 }

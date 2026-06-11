@@ -1,16 +1,14 @@
-use std::ffi::{c_char, c_int};
-
 unsafe fn run_thrash_threads1(
-    input: *const c_char,
+    input: *const u8,
     iterations: usize,
-    n_threads: c_int,
+    n_threads: i32,
     verbose: bool,
-) -> c_int {
+) -> i32 {
     for i in 0..iterations {
         if verbose {
-            libc::printf(c"i=%d\n".as_ptr(), i as c_int);
+            eprintln!("i={}", i);
         }
-        let fpin = crate::htslib_rs::bgzf::bgzf_open(input, c"r".as_ptr());
+        let fpin = crate::htslib_rs::bgzf::bgzf_open(input.cast(), b"r\0".as_ptr().cast());
         if fpin.is_null() {
             return libc::EXIT_FAILURE;
         }
@@ -27,12 +25,9 @@ unsafe fn run_thrash_threads1(
 }
 
 // original: main (htslib/test/thrash_threads1.c:34)
-pub unsafe fn test_thrash_threads1_c_34_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_thrash_threads1_c_34_main(argc: i32, argv: *mut *mut u8) -> i32 {
     if argc <= 1 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Usage: thrash_threads1 input.bam\n".as_ptr(),
-        );
+        eprintln!("Usage: thrash_threads1 input.bam");
         libc::exit(1);
     }
 
@@ -42,7 +37,6 @@ pub unsafe fn test_thrash_threads1_c_34_main(argc: c_int, argv: *mut *mut c_char
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::{c_void, CString};
     use std::os::unix::ffi::OsStrExt;
 
     fn temp_bgzf_path(label: &str) -> std::path::PathBuf {
@@ -52,19 +46,20 @@ mod tests {
     #[test]
     fn deterministic_thrash_threads1_reopens_bgzf_reader() {
         let path = temp_bgzf_path("thrash-threads1.bgz");
-        let path_c = CString::new(path.as_os_str().as_bytes()).unwrap();
+        let mut path_c = path.as_os_str().as_bytes().to_vec();
+        path_c.push(0);
 
         unsafe {
-            let fp = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr(), c"w".as_ptr());
+            let fp = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr().cast(), b"w\0".as_ptr().cast());
             assert!(!fp.is_null());
             let data = b"bounded thrash_threads1 input\n";
             assert_eq!(
-                crate::htslib_rs::bgzf::bgzf_write(fp, data.as_ptr().cast::<c_void>(), data.len()),
+                crate::htslib_rs::bgzf::bgzf_write(fp, data.as_ptr().cast::<libc::c_void>(), data.len()),
                 data.len() as isize
             );
             assert_eq!(crate::htslib_rs::bgzf::bgzf_close(fp), 0);
 
-            assert_eq!(run_thrash_threads1(path_c.as_ptr(), 4, 1, false), 0);
+            assert_eq!(run_thrash_threads1(path_c.as_ptr().cast(), 4, 1, false), 0);
         }
 
         let _ = std::fs::remove_file(path);

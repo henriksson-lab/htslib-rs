@@ -4,12 +4,11 @@ use htslib_rs::{
     bcf_hdr_read, bcf_hdr_seqnames, bcf_init, bcf_read, bcf_seqname, bcf_unpack, hts_close,
     hts_open, ks_free, kstring_t, vcf_format, vcf_hdr_read,
 };
-use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_int};
-
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().as_bytes().to_vec();
+    bytes.push(0);
+    bytes
 }
 
 fn fixture_text(path: &str) -> String {
@@ -31,15 +30,15 @@ unsafe fn header_text(hdr: *const htslib_rs::bcf_hdr_t) -> String {
     let mut len = 0;
     let text = bcf_hdr_fmt_text(hdr, 0, &mut len);
     assert!(!text.is_null());
-    let out = CStr::from_ptr(text).to_string_lossy().into_owned();
+    let bytes = std::ffi::CStr::from_ptr(text).to_bytes();
+    let out = String::from_utf8_lossy(bytes).into_owned();
     assert_eq!(out.len(), len as usize);
-    libc::free(text.cast());
     out
 }
 
 unsafe fn render_vcf(path: &str) -> String {
     let vcf = c_fixture(path);
-    let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+    let fp = hts_open(vcf.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null());
 
     let hdr = vcf_hdr_read(fp);
@@ -73,20 +72,20 @@ unsafe fn assert_sample_names(hdr: *const htslib_rs::bcf_hdr_t, expected: &[&[u8
     for (i, name) in expected.iter().enumerate() {
         let sample = *(*hdr).samples.add(i);
         assert!(!sample.is_null());
-        assert_eq!(CStr::from_ptr(sample).to_bytes(), *name);
+        assert_eq!(std::ffi::CStr::from_ptr(sample).to_bytes(), *name);
         assert_eq!(
-            bcf_hdr_id2int(hdr, hts_sys::BCF_DT_SAMPLE as c_int, sample.cast_const()),
-            i as c_int
+            bcf_hdr_id2int(hdr, hts_sys::BCF_DT_SAMPLE as i32, sample.cast_const()),
+            i as i32
         );
     }
 }
 
-unsafe fn assert_alleles(rec: *mut htslib_rs::bcf1_t, expected: &[&CStr]) {
-    assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
+unsafe fn assert_alleles(rec: *mut htslib_rs::bcf1_t, expected: &[&[u8]]) {
+    assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as i32), 0);
     assert_eq!((*rec).n_allele() as usize, expected.len());
     for (i, allele) in expected.iter().enumerate() {
         let d = &(*rec).d;
-        assert_eq!(&d.allele[i][..], allele.to_bytes());
+        assert_eq!(&d.allele[i][..], *allele);
     }
 }
 
@@ -124,14 +123,14 @@ fn vcf44_explicit_and_implicit_phasing_markers_render_like_htslib() {
 fn formatcols_vcf_preserves_utf8_samples_and_string_format_values() {
     unsafe {
         let vcf = c_fixture("htslib/test/formatcols.vcf");
-        let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(vcf.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
 
         let hdr = vcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(CStr::from_ptr(bcf_hdr_get_version(hdr)), c"VCFv4.3");
+        assert_eq!(std::ffi::CStr::from_ptr(bcf_hdr_get_version(hdr)).to_bytes(), b"VCFv4.3");
         assert_eq!(bcf_hdr_name2id(hdr, c"1".as_ptr()), 0);
-        assert_eq!(CStr::from_ptr(bcf_hdr_id2name(hdr, 0)), c"1");
+        assert_eq!(std::ffi::CStr::from_ptr(bcf_hdr_id2name(hdr, 0)).to_bytes(), b"1");
         assert_sample_names(hdr, &[b"S1", b"S\xc2\xb2", b"S3"]);
 
         let text = header_text(hdr);
@@ -141,24 +140,22 @@ fn formatcols_vcf_preserves_utf8_samples_and_string_format_values() {
         let rec = bcf_init();
         assert!(!rec.is_null());
         assert!(bcf_read(fp, hdr, rec) >= 0);
-        assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec)), c"1");
+        assert_eq!(std::ffi::CStr::from_ptr(bcf_seqname(hdr, rec)).to_bytes(), b"1");
         assert_eq!((*rec).pos, 99);
         assert_eq!((*rec).rlen, 1);
         assert_eq!((*rec).n_sample(), 3);
-        assert_alleles(rec, &[c"A", c"T"]);
+        assert_alleles(rec, &[b"A", b"T"]);
 
-        let mut values: *mut *mut c_char = std::ptr::null_mut();
+        let mut values: *mut *mut u8 = std::ptr::null_mut();
         let mut nvalues = 0;
         assert_eq!(
-            bcf_get_format_string(hdr, rec, c"S".as_ptr(), &mut values, &mut nvalues),
+            bcf_get_format_string(hdr, rec, c"S".as_ptr().cast(), &mut values, &mut nvalues),
             30
         );
         assert!(nvalues >= 3);
-        assert_eq!(CStr::from_ptr(*values), c"a");
-        assert_eq!(CStr::from_ptr(*values.add(1)), c"bbbbbbb");
-        assert_eq!(CStr::from_ptr(*values.add(2)), c"ccccccccc");
-        libc::free((*values).cast());
-        libc::free(values.cast());
+        assert_eq!(std::ffi::CStr::from_ptr((*values).cast()).to_bytes(), b"a");
+        assert_eq!(std::ffi::CStr::from_ptr((*values.add(1)).cast()).to_bytes(), b"bbbbbbb");
+        assert_eq!(std::ffi::CStr::from_ptr((*values.add(2)).cast()).to_bytes(), b"ccccccccc");
 
         bcf_destroy(rec);
         bcf_hdr_destroy(hdr);
@@ -170,12 +167,12 @@ fn formatcols_vcf_preserves_utf8_samples_and_string_format_values() {
 fn test_vcf_hdr_in_keeps_loose_format_metadata_and_first_record_values() {
     unsafe {
         let vcf = c_fixture("htslib/test/test-vcf-hdr-in.vcf");
-        let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(vcf.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
 
         let hdr = vcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(CStr::from_ptr(bcf_hdr_get_version(hdr)), c"VCFv4.1");
+        assert_eq!(std::ffi::CStr::from_ptr(bcf_hdr_get_version(hdr)).to_bytes(), b"VCFv4.1");
         assert_sample_names(hdr, &[b"NA00001"]);
 
         let text = header_text(hdr);
@@ -191,11 +188,11 @@ fn test_vcf_hdr_in_keeps_loose_format_metadata_and_first_record_values() {
         let rec = bcf_init();
         assert!(!rec.is_null());
         assert!(bcf_read(fp, hdr, rec) >= 0);
-        assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec)), c"1");
+        assert_eq!(std::ffi::CStr::from_ptr(bcf_seqname(hdr, rec)).to_bytes(), b"1");
         assert_eq!((*rec).pos, 12_065_946);
         assert_eq!((*rec).rlen, 1);
         assert_eq!((*rec).n_sample(), 1);
-        assert_alleles(rec, &[c"C", c"T", c"A"]);
+        assert_alleles(rec, &[b"C", b"T", b"A"]);
 
         let mut ad = std::ptr::null_mut();
         let mut nad = 0;
@@ -206,13 +203,12 @@ fn test_vcf_hdr_in_keeps_loose_format_metadata_and_first_record_values() {
                 c"AD".as_ptr(),
                 &mut ad,
                 &mut nad,
-                hts_sys::BCF_HT_INT as c_int,
+                hts_sys::BCF_HT_INT as i32,
             ),
             2
         );
         assert!(nad >= 2);
         assert_eq!(std::slice::from_raw_parts(ad.cast::<i32>(), 2), &[3, 2]);
-        libc::free(ad);
 
         let mut dp = std::ptr::null_mut();
         let mut ndp = 0;
@@ -223,13 +219,12 @@ fn test_vcf_hdr_in_keeps_loose_format_metadata_and_first_record_values() {
                 c"DP".as_ptr(),
                 &mut dp,
                 &mut ndp,
-                hts_sys::BCF_HT_INT as c_int,
+                hts_sys::BCF_HT_INT as i32,
             ),
             1
         );
         assert!(ndp >= 1);
         assert_eq!(*dp.cast::<i32>(), 5);
-        libc::free(dp);
 
         bcf_destroy(rec);
         bcf_hdr_destroy(hdr);
@@ -251,12 +246,12 @@ fn vcf_meta_meta_vcf_renders_exact_original_fixture() {
 fn vcf_meta_meta_header_keeps_meta_records_and_deletion_metadata() {
     unsafe {
         let vcf = c_fixture("htslib/test/vcf_meta_meta.vcf");
-        let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(vcf.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
 
         let hdr = vcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(CStr::from_ptr(bcf_hdr_get_version(hdr)), c"VCFv4.3");
+        assert_eq!(std::ffi::CStr::from_ptr(bcf_hdr_get_version(hdr)).to_bytes(), b"VCFv4.3");
         assert_eq!((*hdr).n[hts_sys::BCF_DT_SAMPLE as usize], 0);
         assert_eq!(bcf_hdr_name2id(hdr, c"1".as_ptr()), 0);
 
@@ -274,11 +269,11 @@ fn vcf_meta_meta_header_keeps_meta_records_and_deletion_metadata() {
         let rec = bcf_init();
         assert!(!rec.is_null());
         assert!(bcf_read(fp, hdr, rec) >= 0);
-        assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec)), c"1");
+        assert_eq!(std::ffi::CStr::from_ptr(bcf_seqname(hdr, rec)).to_bytes(), b"1");
         assert_eq!((*rec).pos, 122);
         assert_eq!((*rec).rlen, 2);
         assert_eq!((*rec).n_info(), 0);
-        assert_alleles(rec, &[c"TC", c"T"]);
+        assert_alleles(rec, &[b"TC", b"T"]);
 
         bcf_destroy(rec);
         bcf_hdr_destroy(hdr);
@@ -290,12 +285,12 @@ fn vcf_meta_meta_header_keeps_meta_records_and_deletion_metadata() {
 fn large_chr_vcf_preserves_contig_order_lengths_and_terminal_record_metadata() {
     unsafe {
         let vcf = c_fixture("htslib/test/tabix/large_chr.vcf");
-        let fp = hts_open(vcf.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(vcf.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
 
         let hdr = bcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(CStr::from_ptr(bcf_hdr_get_version(hdr)), c"VCFv4.2");
+        assert_eq!(std::ffi::CStr::from_ptr(bcf_hdr_get_version(hdr)).to_bytes(), b"VCFv4.2");
         assert_eq!(bcf_hdr_name2id(hdr, c"chr11".as_ptr()), 0);
         assert_eq!(bcf_hdr_name2id(hdr, c"chr20".as_ptr()), 1);
 
@@ -303,9 +298,8 @@ fn large_chr_vcf_preserves_contig_order_lengths_and_terminal_record_metadata() {
         let seqs = bcf_hdr_seqnames(hdr, &mut nseqs);
         assert!(!seqs.is_null());
         assert_eq!(nseqs, 2);
-        assert_eq!(CStr::from_ptr(*seqs), c"chr11");
-        assert_eq!(CStr::from_ptr(*seqs.add(1)), c"chr20");
-        libc::free(seqs.cast());
+        assert_eq!(std::ffi::CStr::from_ptr(*seqs).to_bytes(), b"chr11");
+        assert_eq!(std::ffi::CStr::from_ptr(*seqs.add(1)).to_bytes(), b"chr20");
 
         let text = header_text(hdr);
         assert!(text.contains("##reference=file:///seq/references/long_chrom.fasta\n"));
@@ -318,11 +312,11 @@ fn large_chr_vcf_preserves_contig_order_lengths_and_terminal_record_metadata() {
         while bcf_read(fp, hdr, rec) >= 0 {
             count += 1;
             if count == 12 {
-                assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec)), c"chr20");
+                assert_eq!(std::ffi::CStr::from_ptr(bcf_seqname(hdr, rec)).to_bytes(), b"chr20");
                 assert_eq!((*rec).pos, 2_147_483_646);
                 assert_eq!((*rec).rlen, 1);
                 assert_eq!((*rec).n_info(), 0);
-                assert_alleles(rec, &[c"A", c"T"]);
+                assert_alleles(rec, &[b"A", b"T"]);
             }
         }
         assert_eq!(count, 12);
@@ -360,8 +354,9 @@ fn large_info_end_repair_keeps_packed_info_prefix() {
     .unwrap();
 
     unsafe {
-        let input_c = CString::new(input.to_string_lossy().as_bytes()).unwrap();
-        let fp = hts_open(input_c.as_ptr(), c"r".as_ptr());
+        let mut input_c = input.to_string_lossy().as_bytes().to_vec();
+        input_c.push(0);
+        let fp = hts_open(input_c.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
         let hdr = vcf_hdr_read(fp);
         assert!(!hdr.is_null());
@@ -371,7 +366,7 @@ fn large_info_end_repair_keeps_packed_info_prefix() {
 
         let end_info = bcf_get_info(hdr, rec, c"END".as_ptr());
         assert!(!end_info.is_null());
-        assert_eq!((*end_info).type_, hts_sys::BCF_BT_INT64 as c_int);
+        assert_eq!((*end_info).type_, hts_sys::BCF_BT_INT64 as i32);
         assert_eq!((*end_info).v1.i, 3_000_000_000);
         assert_eq!((*rec).rlen, 3_000_000_000);
         assert_eq!((*end_info).vptr_len, std::mem::size_of::<i64>() as u32);
@@ -386,7 +381,7 @@ fn large_info_end_repair_keeps_packed_info_prefix() {
         assert_eq!(vcf_format(hdr, rec, &mut line), 0);
         assert_eq!(
             &line.data[..],
-            c"chr1\t1\t.\tA\t<DEL>\t.\t.\tEND=3000000000\n".to_bytes()
+            b"chr1\t1\t.\tA\t<DEL>\t.\t.\tEND=3000000000\n"
         );
 
         ks_free(&mut line);

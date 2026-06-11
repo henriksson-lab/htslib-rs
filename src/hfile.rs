@@ -1,9 +1,9 @@
-use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
+use std::ffi::{c_char, c_void, CStr};
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::sync::{Mutex, OnceLock};
 
-use super::hts::{hFILE, isalnum_c, kgetline, kputs, kputsn, kstring_t, size_t, tolower_c};
+use super::hts::{hFILE, isalnum_c, kgetline, kputs, kputsn, kstring_t, tolower_c};
 
 #[repr(C)]
 pub struct knetFile {
@@ -27,13 +27,13 @@ pub struct hFILE_plugin {
 }
 
 type HFileOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut hFILE;
-type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> c_int;
+type HFileIsRemoteFn = unsafe extern "C" fn(*const c_char) -> i32;
 type HFileVOpenFn = unsafe extern "C" fn(
     *const c_char,
     *const c_char,
     *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE;
-type HFilePluginInitFn = unsafe extern "C" fn(*mut hFILE_plugin) -> c_int;
+type HFilePluginInitFn = unsafe extern "C" fn(*mut hFILE_plugin) -> i32;
 type HFilePluginDestroyFn = unsafe extern "C" fn();
 
 unsafe fn hfile_plugin_destroy_fn(ptr: *const c_void) -> HFilePluginDestroyFn {
@@ -109,7 +109,7 @@ pub enum HFileBackend {
     None,
     /// OS file descriptor / socket backend (was `hfile_fd_layout`).
     /// `fd` + `flags` (HFILE_FD_IS_SOCKET / HFILE_FD_IS_SHARED) moved inline.
-    Fd { fd: i32, flags: c_uint },
+    Fd { fd: i32, flags: u32 },
     /// in-memory buffer backend (was MEM_BACKEND); all state lives in the
     /// hFILE buffer itself, so the variant is stateless.
     Mem,
@@ -155,18 +155,18 @@ impl HFileBackend {
     /// Was `(*backend).read(fp, buf, n)`; reads into `dest`, returns bytes read
     /// or -1 (errno set). Returns -1/EINVAL for backends without a read body.
     pub unsafe fn read(fp: &mut hFILE, dest: &mut [u8]) -> libc::ssize_t {
-        let nbytes = dest.len() as size_t;
+        let nbytes = dest.len() as usize;
         let ptr = dest.as_mut_ptr().cast::<c_void>();
         match &fp.backend {
             HFileBackend::Fd { fd, flags } => {
                 let (fd, flags) = (*fd, *flags);
                 loop {
                     let n = if (flags & HFILE_FD_IS_SOCKET) != 0 {
-                        crate::htslib_rs::c_compat::socket_recv(fd, ptr, nbytes, 0)
+                        libc::recv(fd, ptr, nbytes, 0)
                     } else {
-                        crate::htslib_rs::c_compat::fd_read(fd, ptr, nbytes)
+                        libc::read(fd, ptr, nbytes)
                     };
-                    if !(n < 0 && *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR) {
+                    if !(n < 0 && *libc::__errno_location() == libc::EINTR) {
                         return n;
                     }
                 }
@@ -190,11 +190,11 @@ impl HFileBackend {
             // S3/Mem/None have no read body (old vtable `read: None`)
             #[cfg(feature = "s3")]
             HFileBackend::S3(_) => {
-                *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 -1
             }
             HFileBackend::Mem | HFileBackend::None => {
-                *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 -1
             }
         }
@@ -203,18 +203,18 @@ impl HFileBackend {
     /// Was `(*backend).write(fp, buf, n)`; writes `src`, returns bytes written
     /// or -1 (errno set).
     pub unsafe fn write(fp: &mut hFILE, src: &[u8]) -> libc::ssize_t {
-        let nbytes = src.len() as size_t;
+        let nbytes = src.len() as usize;
         let ptr = src.as_ptr().cast::<c_void>();
         match &fp.backend {
             HFileBackend::Fd { fd, flags } => {
                 let (fd, flags) = (*fd, *flags);
                 loop {
                     let n = if (flags & HFILE_FD_IS_SOCKET) != 0 {
-                        crate::htslib_rs::c_compat::socket_send(fd, ptr, nbytes, 0)
+                        libc::send(fd, ptr, nbytes, 0)
                     } else {
-                        crate::htslib_rs::c_compat::fd_write(fd, ptr, nbytes)
+                        libc::write(fd, ptr, nbytes)
                     };
-                    if !(n < 0 && *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR) {
+                    if !(n < 0 && *libc::__errno_location() == libc::EINTR) {
                         return n;
                     }
                 }
@@ -232,22 +232,22 @@ impl HFileBackend {
                 crate::htslib_rs::hfile_s3::hfile_s3_c_1625_s3_write(fp, ptr, nbytes)
             }
             HFileBackend::Multipart(_) => {
-                crate::htslib_rs::multipart::multipart_c_114_multipart_write(fp, ptr, nbytes)
+                crate::htslib_rs::multipart::multipart_c_114_multipart_write(fp, ptr.cast(), nbytes)
             }
             HFileBackend::Mem | HFileBackend::None => {
-                *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 -1
             }
         }
     }
 
     /// Was `(*backend).seek(fp, offset, whence)`; returns new offset or -1.
-    pub unsafe fn seek(fp: &mut hFILE, offset: libc::off_t, whence: c_int) -> libc::off_t {
+    pub unsafe fn seek(fp: &mut hFILE, offset: libc::off_t, whence: i32) -> libc::off_t {
         match &fp.backend {
             HFileBackend::Fd { fd, .. } => libc::lseek(*fd, offset, whence),
             HFileBackend::Mem => {
                 // old hfile_c_810_mem_seek: not seekable
-                *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 -1
             }
             #[cfg(feature = "libcurl")]
@@ -266,7 +266,7 @@ impl HFileBackend {
                 crate::htslib_rs::multipart::multipart_c_120_multipart_seek(fp, offset, whence)
             }
             HFileBackend::None => {
-                *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 -1
             }
         }
@@ -274,7 +274,7 @@ impl HFileBackend {
 
     /// Was `(*backend).flush`; no-op for backends whose old vtable slot was
     /// `flush: None`. Returns 0 on success, -1 (errno set) on failure.
-    pub unsafe fn flush(fp: &mut hFILE) -> c_int {
+    pub unsafe fn flush(fp: &mut hFILE) -> i32 {
         match &fp.backend {
             HFileBackend::Fd { fd, flags } => {
                 let (fd, flags) = (*fd, *flags);
@@ -283,14 +283,14 @@ impl HFileBackend {
                 }
                 loop {
                     #[cfg(any(target_os = "linux", target_os = "android"))]
-                    let mut ret = crate::htslib_rs::c_compat::fdatasync(fd);
+                    let mut ret = libc::fdatasync(fd);
                     #[cfg(not(any(target_os = "linux", target_os = "android")))]
-                    let mut ret = crate::htslib_rs::c_compat::fsync(fd);
-                    let errno = *crate::htslib_rs::c_compat::__errno_location();
+                    let mut ret = libc::fsync(fd);
+                    let errno = *libc::__errno_location();
                     if ret < 0 && (errno == libc::EINVAL || errno == libc::ENOTSUP) {
                         ret = 0;
                     }
-                    if !(ret < 0 && *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR) {
+                    if !(ret < 0 && *libc::__errno_location() == libc::EINTR) {
                         return ret;
                     }
                 }
@@ -302,7 +302,7 @@ impl HFileBackend {
 
     /// Was `(*backend).close(fp)`; releases the backend resource. Returns 0 on
     /// success, -1 (errno set) on failure.
-    pub unsafe fn close(fp: &mut hFILE) -> c_int {
+    pub unsafe fn close(fp: &mut hFILE) -> i32 {
         match &fp.backend {
             HFileBackend::Fd { fd, flags } => {
                 let (fd, flags) = (*fd, *flags);
@@ -311,7 +311,7 @@ impl HFileBackend {
                 }
                 loop {
                     let ret = libc::close(fd);
-                    if !(ret < 0 && *crate::htslib_rs::c_compat::__errno_location() == libc::EINTR) {
+                    if !(ret < 0 && *libc::__errno_location() == libc::EINTR) {
                         return ret;
                     }
                 }
@@ -357,7 +357,7 @@ impl OwnedHFile {
         ptr
     }
 
-    pub fn close(self) -> c_int {
+    pub fn close(self) -> i32 {
         let ptr = self.into_raw();
         unsafe { hclose(ptr) }
     }
@@ -415,13 +415,13 @@ fn hfile_mode_is_readonly(mode: &[u8]) -> bool {
     hfile_mode_has(mode, b'r') && !hfile_mode_has(mode, b'+')
 }
 
-const HFILE_FD_IS_SOCKET: c_uint = 1 << 0;
-const HFILE_FD_IS_SHARED: c_uint = 1 << 1;
+const HFILE_FD_IS_SOCKET: u32 = 1 << 0;
+const HFILE_FD_IS_SHARED: u32 = 1 << 1;
 
-const HFILE_AT_EOF: c_uint = 1 << 0;
-const HFILE_MOBILE: c_uint = 1 << 1;
-const HFILE_READONLY: c_uint = 1 << 2;
-const HFILE_PRESERVE: c_uint = 1 << 3;
+const HFILE_AT_EOF: u32 = 1 << 0;
+const HFILE_MOBILE: u32 = 1 << 1;
+const HFILE_READONLY: u32 = 1 << 2;
+const HFILE_PRESERVE: u32 = 1 << 3;
 
 // SEAM: the standalone mem/fd backend body functions (hfile_c_810_mem_seek,
 // hfile_c_816_mem_close, hfile_c_557_fd_read, hfile_c_568_fd_write,
@@ -430,44 +430,44 @@ const HFILE_PRESERVE: c_uint = 1 << 3;
 // inline in the HFileBackend::{read,write,seek,flush,close} match arms above
 // for the `Mem` and `Fd { fd, flags }` variants.
 
-pub unsafe fn hfile_c_1011_priority(handler: *const hFILE_scheme_handler) -> c_int {
+pub unsafe fn hfile_c_1011_priority(handler: *const hFILE_scheme_handler) -> i32 {
     (*(handler.cast::<hfile_scheme_handler_layout>())).priority % 1000
 }
 
 pub unsafe fn hfile_c_1026_try_exe_add_scheme_handler(
     _scheme: *const c_char,
     _handler: *const hFILE_scheme_handler,
-) -> c_int {
+) -> i32 {
     -1
 }
 
 pub unsafe fn hfile_c_1046_try_exe_add_scheme_handler(
     _scheme: *const c_char,
     _handler: *const hFILE_scheme_handler,
-) -> c_int {
+) -> i32 {
     -1
 }
 
-pub unsafe fn hfile_init(struct_size: size_t, mode: *const c_char, capacity: size_t) -> *mut hFILE {
+pub unsafe fn hfile_init(struct_size: usize, mode: *const c_char, capacity: usize) -> *mut hFILE {
     hfile_c_104_hfile_init(struct_size, mode, capacity)
 }
 
 pub unsafe fn hfile_c_104_hfile_init(
-    struct_size: size_t,
+    struct_size: usize,
     mode: *const c_char,
-    capacity: size_t,
+    capacity: usize,
 ) -> *mut hFILE {
     let Some(mode) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     hfile_init_bytes(struct_size, mode, capacity)
 }
 
 pub unsafe fn hfile_init_bytes(
-    _struct_size: size_t,
+    _struct_size: usize,
     mode: &[u8],
-    mut capacity: size_t,
+    mut capacity: usize,
 ) -> *mut hFILE {
     // SEAM: the hFILE is now an owned Rust struct with a Vec<u8> buffer.
     // `_struct_size` (the old C-style subclass size) is irrelevant: backend
@@ -483,7 +483,7 @@ pub unsafe fn hfile_init_bytes(
 
     let mut buffer: Vec<u8> = Vec::new();
     if buffer.try_reserve_exact(capacity).is_err() {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *libc::__errno_location() = libc::ENOMEM;
         return std::ptr::null_mut();
     }
     buffer.resize(capacity, 0);
@@ -506,36 +506,36 @@ pub unsafe fn hfile_init_bytes(
 }
 
 pub unsafe fn hfile_c_141_hfile_init_fixed(
-    struct_size: size_t,
+    struct_size: usize,
     mode: *const c_char,
     buffer: *mut c_char,
-    buf_filled: size_t,
-    buf_size: size_t,
+    buf_filled: usize,
+    buf_size: usize,
 ) -> *mut hFILE {
     let Some(mode) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     hfile_init_fixed(struct_size, mode, buffer, buf_filled, buf_size)
 }
 
 pub unsafe fn hfile_init_fixed(
-    _struct_size: size_t,
+    _struct_size: usize,
     mode: &[u8],
     buffer: NonNull<u8>,
-    buf_filled: size_t,
-    buf_size: size_t,
+    buf_filled: usize,
+    buf_size: usize,
 ) -> *mut hFILE {
     // SEAM: the supplied fixed buffer is copied into the owned Vec<u8> (sized to
     // `buf_size`, with `buf_filled` valid bytes). The hFILE now owns its buffer;
     // the caller's original allocation is its own to free.
     let mut buf: Vec<u8> = Vec::new();
     if buf.try_reserve_exact(buf_size).is_err() {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *libc::__errno_location() = libc::ENOMEM;
         return std::ptr::null_mut();
     }
     buf.resize(buf_size, 0);
@@ -567,20 +567,20 @@ pub unsafe fn hfile_destroy(fp: *mut hFILE) {
 pub unsafe fn hfile_c_162_hfile_destroy(fp: *mut hFILE) {
     // SEAM: the hFILE owns its buffer (Vec<u8>) and backend state, so dropping
     // the reconstituted Box frees everything. errno is preserved across drop.
-    let save = *crate::htslib_rs::c_compat::__errno_location();
+    let save = *libc::__errno_location();
     if !fp.is_null() {
         drop(Box::from_raw(fp));
     }
-    *crate::htslib_rs::c_compat::__errno_location() = save;
+    *libc::__errno_location() = save;
 }
 
-pub unsafe fn hfile_writebuffer_is_nonempty(fp: &hFILE) -> c_int {
+pub unsafe fn hfile_writebuffer_is_nonempty(fp: &hFILE) -> i32 {
     // SEAM: begin/end are usize byte indices; `begin > end` still flags a
     // pending write buffer.
-    (fp.begin > fp.end) as c_int
+    (fp.begin > fp.end) as i32
 }
 
-pub unsafe fn herrno(fp: &hFILE) -> c_int {
+pub unsafe fn herrno(fp: &hFILE) -> i32 {
     fp.has_errno
 }
 
@@ -592,18 +592,18 @@ pub unsafe fn htell(fp: &hFILE) -> libc::off_t {
     fp.offset + fp.begin as libc::off_t
 }
 
-pub unsafe fn hgetc(fp: &mut hFILE) -> c_int {
+pub unsafe fn hgetc(fp: &mut hFILE) -> i32 {
     if fp.end > fp.begin {
         let c = fp.buffer[fp.begin];
         fp.begin += 1;
-        c as c_int
+        c as i32
     } else {
         hgetc2_impl(fp)
     }
 }
 
 pub unsafe fn hgetln(buffer: &mut [u8], fp: &mut hFILE) -> libc::ssize_t {
-    hgetdelim_impl(buffer, b'\n' as c_int, fp)
+    hgetdelim_impl(buffer, b'\n' as i32, fp)
 }
 
 pub unsafe fn hread(fp: &mut hFILE, buffer: &mut [u8]) -> libc::ssize_t {
@@ -620,7 +620,7 @@ pub unsafe fn hread(fp: &mut hFILE, buffer: &mut [u8]) -> libc::ssize_t {
     }
 }
 
-pub unsafe fn hputc(c: c_int, fp: &mut hFILE) -> c_int {
+pub unsafe fn hputc(c: i32, fp: &mut hFILE) -> i32 {
     if fp.begin < fp.limit {
         fp.buffer[fp.begin] = c as u8;
         fp.begin += 1;
@@ -630,7 +630,7 @@ pub unsafe fn hputc(c: c_int, fp: &mut hFILE) -> c_int {
     }
 }
 
-pub unsafe fn hputs(text: &[u8], fp: &mut hFILE) -> c_int {
+pub unsafe fn hputs(text: &[u8], fp: &mut hFILE) -> i32 {
     let mut n = fp.limit - fp.begin;
     if n > text.len() {
         n = text.len();
@@ -673,7 +673,7 @@ pub unsafe fn hwrite(fp: &mut hFILE, buffer: &[u8]) -> libc::ssize_t {
     }
 }
 
-pub unsafe fn htslib_hfile_h_134_herrno(fp: *mut hFILE) -> c_int {
+pub unsafe fn htslib_hfile_h_134_herrno(fp: *mut hFILE) -> i32 {
     let Some(fp) = fp.as_ref() else {
         return libc::EINVAL;
     };
@@ -693,7 +693,7 @@ pub unsafe fn htslib_hfile_h_155_htell(fp: *mut hFILE) -> libc::off_t {
     htell(fp)
 }
 
-pub unsafe fn htslib_hfile_h_163_hgetc(fp: *mut hFILE) -> c_int {
+pub unsafe fn htslib_hfile_h_163_hgetc(fp: *mut hFILE) -> i32 {
     let Some(fp) = fp.as_mut() else {
         return libc::EOF;
     };
@@ -706,11 +706,11 @@ pub unsafe fn htslib_hfile_h_195_hgetln(
     fp: *mut hFILE,
 ) -> libc::ssize_t {
     let Some(fp) = fp.as_mut() else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hgetln(std::slice::from_raw_parts_mut(buffer.as_ptr(), size), fp)
@@ -722,24 +722,24 @@ pub unsafe fn htslib_hfile_h_247_hread(
     nbytes: usize,
 ) -> libc::ssize_t {
     let Some(fp) = fp.as_mut() else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hread(fp, std::slice::from_raw_parts_mut(buffer.as_ptr(), nbytes))
 }
 
-pub unsafe fn htslib_hfile_h_263_hputc(c: c_int, fp: *mut hFILE) -> c_int {
+pub unsafe fn htslib_hfile_h_263_hputc(c: i32, fp: *mut hFILE) -> i32 {
     let Some(fp) = fp.as_mut() else {
         return libc::EOF;
     };
     hputc(c, fp)
 }
 
-pub unsafe fn htslib_hfile_h_275_hputs(text: *const c_char, fp: *mut hFILE) -> c_int {
+pub unsafe fn htslib_hfile_h_275_hputs(text: *const c_char, fp: *mut hFILE) -> i32 {
     let Some(fp) = fp.as_mut() else {
         return libc::EOF;
     };
@@ -755,11 +755,11 @@ pub unsafe fn htslib_hfile_h_292_hwrite(
     nbytes: usize,
 ) -> libc::ssize_t {
     let Some(fp) = fp.as_mut() else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     let Some(buffer) = NonNull::new(buffer.cast_mut().cast::<u8>()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hwrite(fp, std::slice::from_raw_parts(buffer.as_ptr(), nbytes))
@@ -792,7 +792,7 @@ pub unsafe fn hfile_refill_buffer(fp: &mut hFILE) -> libc::ssize_t {
             fp.buffer[end..end + n].copy_from_slice(&scratch[..n]);
         }
         if ret < 0 {
-            fp.has_errno = *crate::htslib_rs::c_compat::__errno_location();
+            fp.has_errno = *libc::__errno_location();
             return ret;
         } else if ret == 0 {
             fp.flags |= HFILE_AT_EOF;
@@ -804,7 +804,7 @@ pub unsafe fn hfile_refill_buffer(fp: &mut hFILE) -> libc::ssize_t {
     n
 }
 
-pub unsafe fn hfile_set_blksize_impl(fp: &mut hFILE, mut bufsiz: size_t) -> c_int {
+pub unsafe fn hfile_set_blksize_impl(fp: &mut hFILE, mut bufsiz: usize) -> i32 {
     // SEAM: resize the owned Vec<u8>; begin/end/limit are usize byte indices.
     let curr_used = if fp.begin > fp.end { fp.begin } else { fp.end };
 
@@ -816,7 +816,7 @@ pub unsafe fn hfile_set_blksize_impl(fp: &mut hFILE, mut bufsiz: size_t) -> c_in
     }
 
     if fp.buffer.try_reserve_exact(bufsiz.saturating_sub(fp.buffer.len())).is_err() {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *libc::__errno_location() = libc::ENOMEM;
         return -1;
     }
     fp.buffer.resize(bufsiz, 0);
@@ -824,9 +824,9 @@ pub unsafe fn hfile_set_blksize_impl(fp: &mut hFILE, mut bufsiz: size_t) -> c_in
     0
 }
 
-pub unsafe fn hgetc2_impl(fp: &mut hFILE) -> c_int {
+pub unsafe fn hgetc2_impl(fp: &mut hFILE) -> i32 {
     if hfile_refill_buffer(fp) > 0 {
-        let c = fp.buffer[fp.begin] as c_int;
+        let c = fp.buffer[fp.begin] as i32;
         fp.begin += 1;
         c
     } else {
@@ -836,17 +836,17 @@ pub unsafe fn hgetc2_impl(fp: &mut hFILE) -> c_int {
 
 pub unsafe fn hgetdelim_impl(
     buffer: &mut [u8],
-    delim: c_int,
+    delim: i32,
     fp: &mut hFILE,
 ) -> libc::ssize_t {
-    if buffer.is_empty() || buffer.len() > libc::ssize_t::MAX as size_t {
+    if buffer.is_empty() || buffer.len() > libc::ssize_t::MAX as usize {
         fp.has_errno = libc::EINVAL;
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
     if fp.begin > fp.end {
         fp.has_errno = libc::EBADF;
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EBADF;
+        *libc::__errno_location() = libc::EBADF;
         return -1;
     }
 
@@ -891,15 +891,15 @@ pub unsafe fn hgetdelim_impl(
 pub unsafe fn hgets_impl(buffer: &mut [u8], fp: &mut hFILE) -> bool {
     if buffer.is_empty() {
         fp.has_errno = libc::EINVAL;
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return false;
     }
-    hgetdelim_impl(buffer, b'\n' as c_int, fp) > 0
+    hgetdelim_impl(buffer, b'\n' as i32, fp) > 0
 }
 
 pub unsafe extern "C" fn hfile_c_301_hgets_wrapper(
     buffer: *mut c_char,
-    size: c_int,
+    size: i32,
     fp: *mut c_void,
 ) -> *mut c_char {
     let Some(fp) = hfile_mut(fp.cast()) else {
@@ -907,7 +907,7 @@ pub unsafe extern "C" fn hfile_c_301_hgets_wrapper(
     };
     if size < 1 {
         fp.has_errno = libc::EINVAL;
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     }
     if buffer.is_null() {
@@ -921,7 +921,7 @@ pub unsafe extern "C" fn hfile_c_301_hgets_wrapper(
     }
 }
 
-pub unsafe fn hfile_khgetline(kstr: *mut kstring_t, fp: &mut hFILE) -> c_int {
+pub unsafe fn hfile_khgetline(kstr: *mut kstring_t, fp: &mut hFILE) -> i32 {
     if kstr.is_null() {
         return libc::EOF;
     }
@@ -937,7 +937,7 @@ pub unsafe fn hpeek_impl(fp: &mut hFILE, buffer: &mut [u8]) -> libc::ssize_t {
         } else if ret == 0 {
             break;
         } else {
-            n += ret as size_t;
+            n += ret as usize;
         }
     }
 
@@ -951,7 +951,7 @@ pub unsafe fn hpeek_impl(fp: &mut hFILE, buffer: &mut [u8]) -> libc::ssize_t {
 
 pub unsafe fn hread2_impl(
     fp: &mut hFILE,
-    nread: size_t,
+    nread: usize,
     dest: &mut [u8],
 ) -> libc::ssize_t {
     // SEAM: Vec<u8> buffer with usize indices; dispatch via HFileBackend::read.
@@ -964,7 +964,7 @@ pub unsafe fn hread2_impl(
     while remaining * 2 >= capacity && (fp.flags & HFILE_AT_EOF) == 0 {
         let n = HFileBackend::read(fp, &mut dest[dest_pos..dest_pos + remaining]);
         if n < 0 {
-            fp.has_errno = *crate::htslib_rs::c_compat::__errno_location();
+            fp.has_errno = *libc::__errno_location();
             return n;
         } else if n == 0 {
             fp.flags |= HFILE_AT_EOF;
@@ -973,8 +973,8 @@ pub unsafe fn hread2_impl(
         }
         fp.offset += n as libc::off_t;
         dest_pos += n as usize;
-        remaining -= n as size_t;
-        total_read += n as size_t;
+        remaining -= n as usize;
+        total_read += n as usize;
     }
 
     if buffer_invalidated != 0 {
@@ -1013,7 +1013,7 @@ pub unsafe fn hfile_flush_buffer(fp: &mut hFILE) -> libc::ssize_t {
         let chunk = fp.buffer[pos..begin].to_vec();
         let n = HFileBackend::write(fp, &chunk);
         if n < 0 {
-            fp.has_errno = *crate::htslib_rs::c_compat::__errno_location();
+            fp.has_errno = *libc::__errno_location();
             return n;
         }
         pos += n as usize;
@@ -1024,18 +1024,18 @@ pub unsafe fn hfile_flush_buffer(fp: &mut hFILE) -> libc::ssize_t {
     0
 }
 
-pub unsafe fn hflush_impl(fp: &mut hFILE) -> c_int {
+pub unsafe fn hflush_impl(fp: &mut hFILE) -> i32 {
     if hfile_flush_buffer(fp) < 0 {
         return libc::EOF;
     }
     if HFileBackend::flush(fp) < 0 {
-        fp.has_errno = *crate::htslib_rs::c_compat::__errno_location();
+        fp.has_errno = *libc::__errno_location();
         return libc::EOF;
     }
     0
 }
 
-pub unsafe fn hputc2_impl(c: c_int, fp: &mut hFILE) -> c_int {
+pub unsafe fn hputc2_impl(c: i32, fp: &mut hFILE) -> i32 {
     if hfile_flush_buffer(fp) < 0 {
         return libc::EOF;
     }
@@ -1047,7 +1047,7 @@ pub unsafe fn hputc2_impl(c: c_int, fp: &mut hFILE) -> c_int {
 
 pub unsafe fn hwrite2_impl(
     fp: &mut hFILE,
-    ncopied: size_t,
+    ncopied: usize,
     src: &[u8],
 ) -> libc::ssize_t {
     // SEAM: Vec<u8> buffer with usize indices; dispatch via HFileBackend::write.
@@ -1063,12 +1063,12 @@ pub unsafe fn hwrite2_impl(
     while remaining * 2 >= capacity {
         let n = HFileBackend::write(fp, &src[src_pos..src_pos + remaining]);
         if n < 0 {
-            fp.has_errno = *crate::htslib_rs::c_compat::__errno_location();
+            fp.has_errno = *libc::__errno_location();
             return n;
         }
         fp.offset += n as libc::off_t;
         src_pos += n as usize;
-        remaining -= n as size_t;
+        remaining -= n as usize;
     }
 
     let begin = fp.begin;
@@ -1078,7 +1078,7 @@ pub unsafe fn hwrite2_impl(
     src.len() as libc::ssize_t
 }
 
-pub unsafe fn hputs2_impl(text: &[u8], ncopied: size_t, fp: &mut hFILE) -> c_int {
+pub unsafe fn hputs2_impl(text: &[u8], ncopied: usize, fp: &mut hFILE) -> i32 {
     if hwrite2_impl(fp, ncopied, text) >= 0 {
         0
     } else {
@@ -1089,7 +1089,7 @@ pub unsafe fn hputs2_impl(text: &[u8], ncopied: size_t, fp: &mut hFILE) -> c_int
 pub unsafe fn hseek_impl(
     fp: &mut hFILE,
     mut offset: libc::off_t,
-    mut whence: c_int,
+    mut whence: i32,
 ) -> libc::off_t {
     // SEAM: usize indices; dispatch via HFileBackend::seek.
     let should_flush = fp.begin > fp.end && (fp.flags & HFILE_MOBILE) != 0;
@@ -1112,10 +1112,10 @@ pub unsafe fn hseek_impl(
                 let err = if offset < 0 {
                     libc::EINVAL
                 } else {
-                    crate::htslib_rs::c_compat::EOVERFLOW
+                    libc::EOVERFLOW
                 };
                 fp.has_errno = err;
-                *crate::htslib_rs::c_compat::__errno_location() = err;
+                *libc::__errno_location() = err;
                 return -1;
             }
         }
@@ -1123,7 +1123,7 @@ pub unsafe fn hseek_impl(
         let length = fp.end as libc::off_t;
         if offset > 0 || -offset > length {
             fp.has_errno = libc::EINVAL;
-            *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+            *libc::__errno_location() = libc::EINVAL;
             return -1;
         }
 
@@ -1142,7 +1142,7 @@ pub unsafe fn hseek_impl(
 
     let pos = HFileBackend::seek(fp, offset, whence);
     if pos < 0 {
-        fp.has_errno = *crate::htslib_rs::c_compat::__errno_location();
+        fp.has_errno = *libc::__errno_location();
         return pos;
     }
 
@@ -1153,7 +1153,7 @@ pub unsafe fn hseek_impl(
     pos
 }
 
-pub unsafe fn hclose_impl(fp: &mut hFILE) -> c_int {
+pub unsafe fn hclose_impl(fp: &mut hFILE) -> i32 {
     // SEAM: dispatch via HFileBackend::close. Deallocation is now the owner's
     // responsibility: the caller holds `Box<hFILE>` and drops it after this
     // returns (the old hfile_destroy alloc/free is gone).
@@ -1164,12 +1164,12 @@ pub unsafe fn hclose_impl(fp: &mut hFILE) -> c_int {
     }
     if (fp.flags & HFILE_PRESERVE) == 0 {
         if HFileBackend::close(fp) < 0 {
-            err = *crate::htslib_rs::c_compat::__errno_location();
+            err = *libc::__errno_location();
         }
     }
 
     if err != 0 {
-        *crate::htslib_rs::c_compat::__errno_location() = err;
+        *libc::__errno_location() = err;
         libc::EOF
     } else {
         0
@@ -1177,33 +1177,29 @@ pub unsafe fn hclose_impl(fp: &mut hFILE) -> c_int {
 }
 
 pub unsafe fn hclose_abruptly_impl(fp: &mut hFILE) {
-    let save = *crate::htslib_rs::c_compat::__errno_location();
+    let save = *libc::__errno_location();
     if (fp.flags & HFILE_PRESERVE) != 0 {
         return;
     }
     let _ = HFileBackend::close(fp);
-    *crate::htslib_rs::c_compat::__errno_location() = save;
+    *libc::__errno_location() = save;
 }
 
 // SEAM: hfile_c_607_fd_flush / hfile_c_625_fd_close bodies moved inline into
 // HFileBackend::flush / HFileBackend::close `Fd { fd, flags }` arms.
 
-pub unsafe fn hfile_c_648_blksize(fd: c_int) -> size_t {
+pub unsafe fn hfile_c_648_blksize(fd: i32) -> usize {
     let mut sbuf: libc::stat = std::mem::zeroed();
     if libc::fstat(fd, &mut sbuf) != 0 {
         return 0;
     }
 
-    if crate::htslib_rs::c_compat::stat_mode_matches(
-        sbuf.st_mode,
-        libc::S_IFMT,
-        crate::htslib_rs::c_compat::S_IFIFO,
-    ) {
+    if (sbuf.st_mode as u64 & libc::S_IFMT as u64) == libc::S_IFIFO as u64 {
         128 * 1024
     } else {
         #[cfg(not(windows))]
         {
-            sbuf.st_blksize as size_t
+            sbuf.st_blksize as usize
         }
         #[cfg(windows)]
         {
@@ -1214,7 +1210,7 @@ pub unsafe fn hfile_c_648_blksize(fd: c_int) -> size_t {
 
 pub unsafe fn hfile_c_664_hopen_fd(filename: *const c_char, mode: *const c_char) -> *mut hFILE {
     let Some(mode_bytes) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     let fd = libc::open(filename, hfile_oflags_bytes(mode_bytes), 0o666);
@@ -1224,9 +1220,9 @@ pub unsafe fn hfile_c_664_hopen_fd(filename: *const c_char, mode: *const c_char)
 
     let fp = hfile_init(0, mode, hfile_c_648_blksize(fd));
     if fp.is_null() {
-        let save = *crate::htslib_rs::c_compat::__errno_location();
+        let save = *libc::__errno_location();
         let _ = libc::close(fd);
-        *crate::htslib_rs::c_compat::__errno_location() = save;
+        *libc::__errno_location() = save;
         return std::ptr::null_mut();
     }
 
@@ -1245,7 +1241,7 @@ pub unsafe fn hpreload_impl(fp: &mut hFILE) -> *mut hFILE {
     let len: libc::ssize_t = loop {
         if buf.capacity() - buf.len() < 5000 {
             if buf.try_reserve_exact(buf_inc).is_err() {
-                *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+                *libc::__errno_location() = libc::ENOMEM;
                 hclose_abruptly(fp_raw);
                 return std::ptr::null_mut();
             }
@@ -1276,7 +1272,7 @@ pub unsafe fn hpreload_impl(fp: &mut hFILE) -> *mut hFILE {
         // no bytes read: build an empty mem hFILE without dereferencing a buffer
         let mut empty: Vec<u8> = Vec::new();
         if empty.try_reserve_exact(buf_a).is_err() {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+            *libc::__errno_location() = libc::ENOMEM;
             hclose_abruptly(fp_raw);
             return std::ptr::null_mut();
         }
@@ -1285,14 +1281,14 @@ pub unsafe fn hpreload_impl(fp: &mut hFILE) -> *mut hFILE {
             NonNull::new_unchecked(empty.as_mut_ptr()),
             b"r",
             0,
-            buf_a as size_t,
+            buf_a as usize,
         )
     } else {
         create_hfile_mem_bytes(
             NonNull::new_unchecked(buf.as_mut_ptr()),
             b"r",
-            buf_sz as size_t,
-            buf_a as size_t,
+            buf_sz as usize,
+            buf_a as usize,
         )
     };
     if mem_fp.is_null() {
@@ -1307,7 +1303,7 @@ pub unsafe fn hpreload_impl(fp: &mut hFILE) -> *mut hFILE {
     mem_fp
 }
 
-pub unsafe fn hfile_c_726_is_preload_url_remote(url: *const c_char) -> c_int {
+pub unsafe fn hfile_c_726_is_preload_url_remote(url: *const c_char) -> i32 {
     hisremote(url.add(8))
 }
 
@@ -1320,14 +1316,14 @@ pub unsafe fn hfile_c_730_hopen_preload(url: *const c_char, mode: *const c_char)
     }
 }
 
-pub unsafe fn hfile_c_735_hdopen(fd: c_int, mode: *const c_char) -> *mut hFILE {
+pub unsafe fn hfile_c_735_hdopen(fd: i32, mode: *const c_char) -> *mut hFILE {
     let Some(mode_bytes) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     #[cfg(windows)]
     if hfile_mode_has(mode_bytes, b's') {
-        *crate::htslib_rs::c_compat::__errno_location() = crate::htslib_rs::c_compat::ENOSYS;
+        *libc::__errno_location() = libc::ENOSYS;
         return std::ptr::null_mut();
     }
 
@@ -1356,7 +1352,7 @@ pub unsafe fn hfile_c_747_hopen_fd_fileuri(
     } else if libc::strncmp(url, c"file:///".as_ptr(), 8) == 0 {
         url = url.add(7);
     } else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EPROTONOSUPPORT;
+        *libc::__errno_location() = libc::EPROTONOSUPPORT;
         return std::ptr::null_mut();
     }
 
@@ -1365,7 +1361,7 @@ pub unsafe fn hfile_c_747_hopen_fd_fileuri(
 
 pub unsafe fn hfile_c_761_hopen_fd_stdinout(mode: *const c_char) -> *mut hFILE {
     let Some(mode_bytes) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     let fd = if hfile_mode_has(mode_bytes, b'r') {
@@ -1380,14 +1376,14 @@ pub unsafe fn hfile_c_761_hopen_fd_stdinout(mode: *const c_char) -> *mut hFILE {
     hfile_c_735_hdopen(fd, mode_shared.as_ptr().cast())
 }
 
-pub unsafe fn hfile_c_772_hfile_oflags(mode: *const c_char) -> c_int {
+pub unsafe fn hfile_c_772_hfile_oflags(mode: *const c_char) -> i32 {
     let Some(mode) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
         return 0;
     };
     hfile_oflags_bytes(mode)
 }
 
-pub fn hfile_oflags_bytes(mode: &[u8]) -> c_int {
+pub fn hfile_oflags_bytes(mode: &[u8]) -> i32 {
     let mut rdwr = 0;
     let mut flags = 0;
 
@@ -1422,7 +1418,7 @@ pub fn hfile_oflags_bytes(mode: &[u8]) -> c_int {
     rdwr | flags
 }
 
-pub unsafe fn hfile_c_826_cmp_prefix(mut key: *const c_char, mut s: *const c_char) -> c_int {
+pub unsafe fn hfile_c_826_cmp_prefix(mut key: *const c_char, mut s: *const c_char) -> i32 {
     while *key != 0 {
         if tolower_c(*s) != *key {
             return 1;
@@ -1524,15 +1520,15 @@ fn hfile_decode_base64_bytes(data: &[u8]) -> Vec<u8> {
 pub unsafe fn hfile_c_835_create_hfile_mem(
     buffer: *mut c_char,
     mode: *const c_char,
-    buf_filled: size_t,
-    buf_size: size_t,
+    buf_filled: usize,
+    buf_size: usize,
 ) -> *mut hFILE {
     let Some(mode) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     create_hfile_mem_bytes(buffer, mode, buf_filled, buf_size)
@@ -1541,8 +1537,8 @@ pub unsafe fn hfile_c_835_create_hfile_mem(
 pub unsafe fn create_hfile_mem_bytes(
     buffer: NonNull<u8>,
     mode: &[u8],
-    buf_filled: size_t,
-    buf_size: size_t,
+    buf_filled: usize,
+    buf_size: usize,
 ) -> *mut hFILE {
     let fp = hfile_init_fixed(0, mode, buffer, buf_filled, buf_size);
     if fp.is_null() {
@@ -1558,22 +1554,22 @@ pub unsafe extern "C" fn hfile_c_845_hopen_mem(
     mode: *const c_char,
 ) -> *mut hFILE {
     let Some(url) = (!url.is_null()).then(|| CStr::from_ptr(url).to_bytes()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     let Some(mode_bytes) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     let Some(comma) = url.iter().position(|&c| c == b',') else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     let metadata = &url[..comma];
     let data = &url[comma + 1..];
 
     if !hfile_mode_has(mode_bytes, b'r') {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EROFS;
+        *libc::__errno_location() = libc::EROFS;
         return std::ptr::null_mut();
     }
 
@@ -1597,7 +1593,7 @@ pub unsafe extern "C" fn hfile_c_845_hopen_mem(
     // copies it into the owned hFILE buffer, so this Vec is freed on return.
     let mut buf: Vec<u8> = Vec::new();
     if buf.try_reserve_exact(size).is_err() {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *libc::__errno_location() = libc::ENOMEM;
         return std::ptr::null_mut();
     }
     buf.resize(size, 0);
@@ -1617,13 +1613,13 @@ pub unsafe fn hfile_c_878_hopenv_mem(
     _filename: *const c_char,
     mode: *const c_char,
     buffer: *mut c_char,
-    sz: size_t,
+    sz: usize,
 ) -> *mut hFILE {
     // SEAM: create_hfile_mem now copies the caller's buffer into the owned hFILE
     // Vec, so we always free the caller-supplied buffer here (it took ownership
     // in the old C contract regardless of success).
     let hf = hfile_c_835_create_hfile_mem(buffer, mode, sz, sz);
-    crate::htslib_rs::c_compat::free(buffer.cast());
+    libc::free(buffer.cast());
     hf
 }
 
@@ -1646,27 +1642,27 @@ unsafe extern "C" fn hfile_c_878_hopenv_mem_va(
     args: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     if args.is_null() {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     }
     let buffer = hfile_c_va_arg_word(args) as *mut c_char;
-    let sz = hfile_c_va_arg_word(args) as size_t;
+    let sz = hfile_c_va_arg_word(args) as usize;
     hfile_c_878_hopenv_mem(filename, mode, buffer, sz)
 }
 
 pub unsafe fn hfile_mem_get_buffer_impl(
     file: &mut hFILE,
-    length: Option<&mut size_t>,
+    length: Option<&mut usize>,
 ) -> *mut c_char {
     // SEAM: only the in-memory backend exposes its buffer; the buffer is the
     // owned Vec<u8> and its usable length is `limit` (the allocated capacity).
     if !matches!(file.backend, HFileBackend::Mem) {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     }
 
     if let Some(length) = length {
-        *length = file.limit as size_t;
+        *length = file.limit as usize;
     }
 
     file.buffer.as_mut_ptr().cast::<c_char>()
@@ -1674,7 +1670,7 @@ pub unsafe fn hfile_mem_get_buffer_impl(
 
 pub unsafe fn hfile_mem_steal_buffer_impl(
     file: &mut hFILE,
-    length: Option<&mut size_t>,
+    length: Option<&mut usize>,
 ) -> *mut c_char {
     // SEAM: the owned Vec can't be handed to a C caller that will `free()` it,
     // so copy the usable bytes into a malloc'd block, then detach the hFILE's
@@ -1684,13 +1680,13 @@ pub unsafe fn hfile_mem_steal_buffer_impl(
         return buf;
     }
 
-    let capacity = file.limit as size_t;
-    let stolen = crate::htslib_rs::c_compat::malloc(capacity as u64).cast::<c_char>();
+    let capacity = file.limit as usize;
+    let stolen = libc::malloc(capacity as usize).cast::<c_char>();
     if stolen.is_null() {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *libc::__errno_location() = libc::ENOMEM;
         return std::ptr::null_mut();
     }
-    crate::htslib_rs::c_compat::memcpy(stolen.cast(), buf.cast(), capacity as u64);
+    libc::memcpy(stolen.cast(), buf.cast(), capacity as usize);
 
     file.buffer = Vec::new();
     file.begin = 0;
@@ -1699,7 +1695,7 @@ pub unsafe fn hfile_mem_steal_buffer_impl(
     stolen
 }
 
-pub unsafe fn hfile_c_171_writebuffer_is_nonempty(fp: *mut hFILE) -> c_int {
+pub unsafe fn hfile_c_171_writebuffer_is_nonempty(fp: *mut hFILE) -> i32 {
     let Some(fp) = fp.as_ref() else {
         return 0;
     };
@@ -1708,20 +1704,20 @@ pub unsafe fn hfile_c_171_writebuffer_is_nonempty(fp: *mut hFILE) -> c_int {
 
 pub unsafe fn hfile_c_179_refill_buffer(fp: *mut hFILE) -> libc::ssize_t {
     let Some(fp) = fp.as_mut() else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hfile_refill_buffer(fp)
 }
 
-pub unsafe fn hfile_c_212_hfile_set_blksize(fp: *mut hFILE, bufsiz: size_t) -> c_int {
+pub unsafe fn hfile_c_212_hfile_set_blksize(fp: *mut hFILE, bufsiz: usize) -> i32 {
     let Some(fp) = fp.as_mut() else {
         return -1;
     };
     hfile_set_blksize_impl(fp, bufsiz)
 }
 
-pub unsafe fn hfile_c_235_hgetc2(fp: *mut hFILE) -> c_int {
+pub unsafe fn hfile_c_235_hgetc2(fp: *mut hFILE) -> i32 {
     let Some(fp) = fp.as_mut() else {
         return libc::EOF;
     };
@@ -1730,16 +1726,16 @@ pub unsafe fn hfile_c_235_hgetc2(fp: *mut hFILE) -> c_int {
 
 pub unsafe fn hfile_c_241_hgetdelim(
     buffer: *mut c_char,
-    size: size_t,
-    delim: c_int,
+    size: usize,
+    delim: i32,
     fp: *mut hFILE,
 ) -> libc::ssize_t {
     let Some(fp) = fp.as_mut() else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hgetdelim_impl(
@@ -1749,13 +1745,13 @@ pub unsafe fn hfile_c_241_hgetdelim(
     )
 }
 
-pub unsafe fn hfile_c_291_hgets(buffer: *mut c_char, size: c_int, fp: *mut hFILE) -> *mut c_char {
+pub unsafe fn hfile_c_291_hgets(buffer: *mut c_char, size: i32, fp: *mut hFILE) -> *mut c_char {
     let Some(fp) = fp.as_mut() else {
         return std::ptr::null_mut();
     };
     if size < 1 {
         fp.has_errno = libc::EINVAL;
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     }
     if buffer.is_null() {
@@ -1771,7 +1767,7 @@ pub unsafe fn hfile_c_291_hgets(buffer: *mut c_char, size: c_int, fp: *mut hFILE
     }
 }
 
-pub unsafe fn hfile_c_306_khgetline(kstr: *mut kstring_t, fp: *mut hFILE) -> c_int {
+pub unsafe fn hfile_c_306_khgetline(kstr: *mut kstring_t, fp: *mut hFILE) -> i32 {
     let Some(fp) = fp.as_mut() else {
         return libc::EOF;
     };
@@ -1781,14 +1777,14 @@ pub unsafe fn hfile_c_306_khgetline(kstr: *mut kstring_t, fp: *mut hFILE) -> c_i
 pub unsafe fn hfile_c_313_hpeek(
     fp: *mut hFILE,
     buffer: *mut c_void,
-    nbytes: size_t,
+    nbytes: usize,
 ) -> libc::ssize_t {
     let Some(fp) = fp.as_mut() else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hpeek_impl(fp, std::slice::from_raw_parts_mut(buffer.as_ptr(), nbytes))
@@ -1797,15 +1793,15 @@ pub unsafe fn hfile_c_313_hpeek(
 pub unsafe fn hfile_c_330_hread2(
     fp: *mut hFILE,
     destv: *mut c_void,
-    nbytes: size_t,
-    nread: size_t,
+    nbytes: usize,
+    nread: usize,
 ) -> libc::ssize_t {
     let Some(fp) = fp.as_mut() else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     let Some(dest) = NonNull::new(destv.cast::<u8>()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hread2_impl(
@@ -1817,20 +1813,20 @@ pub unsafe fn hfile_c_330_hread2(
 
 pub unsafe fn hfile_c_376_flush_buffer(fp: *mut hFILE) -> libc::ssize_t {
     let Some(fp) = fp.as_mut() else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hfile_flush_buffer(fp)
 }
 
-pub unsafe fn hfile_c_390_hflush(fp: *mut hFILE) -> c_int {
+pub unsafe fn hfile_c_390_hflush(fp: *mut hFILE) -> i32 {
     let Some(fp) = fp.as_mut() else {
         return libc::EOF;
     };
     hflush_impl(fp)
 }
 
-pub unsafe fn hfile_c_400_hputc2(c: c_int, fp: *mut hFILE) -> c_int {
+pub unsafe fn hfile_c_400_hputc2(c: i32, fp: *mut hFILE) -> i32 {
     let Some(fp) = fp.as_mut() else {
         return libc::EOF;
     };
@@ -1840,15 +1836,15 @@ pub unsafe fn hfile_c_400_hputc2(c: c_int, fp: *mut hFILE) -> c_int {
 pub unsafe fn hfile_c_412_hwrite2(
     fp: *mut hFILE,
     srcv: *const c_void,
-    totalbytes: size_t,
-    ncopied: size_t,
+    totalbytes: usize,
+    ncopied: usize,
 ) -> libc::ssize_t {
     let Some(fp) = fp.as_mut() else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     let Some(src) = NonNull::new(srcv.cast_mut().cast::<u8>()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hwrite2_impl(
@@ -1860,10 +1856,10 @@ pub unsafe fn hfile_c_412_hwrite2(
 
 pub unsafe fn hfile_c_440_hputs2(
     text: *const c_char,
-    totalbytes: size_t,
-    ncopied: size_t,
+    totalbytes: usize,
+    ncopied: usize,
     fp: *mut hFILE,
-) -> c_int {
+) -> i32 {
     let Some(fp) = fp.as_mut() else {
         return libc::EOF;
     };
@@ -1877,15 +1873,15 @@ pub unsafe fn hfile_c_440_hputs2(
     )
 }
 
-pub unsafe fn hfile_c_446_hseek(fp: *mut hFILE, offset: libc::off_t, whence: c_int) -> libc::off_t {
+pub unsafe fn hfile_c_446_hseek(fp: *mut hFILE, offset: libc::off_t, whence: i32) -> libc::off_t {
     let Some(fp) = fp.as_mut() else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hseek_impl(fp, offset, whence)
 }
 
-pub unsafe fn hfile_c_503_hclose(fp: *mut hFILE) -> c_int {
+pub unsafe fn hfile_c_503_hclose(fp: *mut hFILE) -> i32 {
     // SEAM: owns the hFILE (C hclose semantics); drops the Box after dispatch.
     if fp.is_null() {
         return 0;
@@ -1911,10 +1907,10 @@ pub unsafe fn hfile_c_689_hpreload(fp: *mut hFILE) -> *mut hFILE {
 
 pub unsafe fn hfile_c_894_hfile_mem_get_buffer(
     file: *mut hFILE,
-    length: *mut size_t,
+    length: *mut usize,
 ) -> *mut c_char {
     let Some(file) = file.as_mut() else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     hfile_mem_get_buffer_impl(file, length.as_mut())
@@ -1922,10 +1918,10 @@ pub unsafe fn hfile_c_894_hfile_mem_get_buffer(
 
 pub unsafe fn hfile_c_906_hfile_mem_steal_buffer(
     file: *mut hFILE,
-    length: *mut size_t,
+    length: *mut usize,
 ) -> *mut c_char {
     let Some(file) = file.as_mut() else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     hfile_mem_steal_buffer_impl(file, length.as_mut())
@@ -1935,7 +1931,7 @@ pub unsafe extern "C" fn hfile_c_915_hopen_not_supported(
     _fname: *const c_char,
     _mode: *const c_char,
 ) -> *mut hFILE {
-    *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+    *libc::__errno_location() = libc::EINVAL;
     std::ptr::null_mut()
 }
 
@@ -1948,11 +1944,11 @@ pub unsafe extern "C" fn hfile_c_935_crypt4gh_needed(
     } else {
         url
     };
-    *crate::htslib_rs::c_compat::__errno_location() = libc::EPROTONOSUPPORT;
+    *libc::__errno_location() = libc::EPROTONOSUPPORT;
     std::ptr::null_mut()
 }
 
-pub unsafe fn hfile_c_920_hfile_plugin_init_mem(self_: *mut hFILE_plugin) -> c_int {
+pub unsafe fn hfile_c_920_hfile_plugin_init_mem(self_: *mut hFILE_plugin) -> i32 {
     static HANDLER: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
         open: Some(hfile_c_915_hopen_not_supported),
         isremote: Some(hfile_c_1342_hfile_always_remote),
@@ -1969,7 +1965,7 @@ pub unsafe fn hfile_c_920_hfile_plugin_init_mem(self_: *mut hFILE_plugin) -> c_i
     0
 }
 
-pub unsafe fn hfile_c_956_hfile_plugin_init_crypt4gh_needed(self_: *mut hFILE_plugin) -> c_int {
+pub unsafe fn hfile_c_956_hfile_plugin_init_crypt4gh_needed(self_: *mut hFILE_plugin) -> i32 {
     static HANDLER: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
         open: Some(hfile_c_935_crypt4gh_needed),
         isremote: Some(hfile_c_1339_hfile_always_local),
@@ -2057,9 +2053,9 @@ unsafe fn hfile_c_1079_init_add_plugin_impl<F>(
     obj: *mut c_void,
     init: F,
     pluginname: *const c_char,
-) -> c_int
+) -> i32
 where
-    F: FnOnce(*mut hFILE_plugin) -> c_int,
+    F: FnOnce(*mut hFILE_plugin) -> i32,
 {
     let mut p = Box::new(hFILE_plugin_list {
         plugin: hfile_plugin_layout {
@@ -2088,9 +2084,9 @@ where
 
 pub unsafe fn hfile_c_1079_init_add_plugin(
     obj: *mut c_void,
-    init: unsafe fn(*mut hFILE_plugin) -> c_int,
+    init: unsafe fn(*mut hFILE_plugin) -> i32,
     pluginname: *const c_char,
-) -> c_int {
+) -> i32 {
     hfile_c_1079_init_add_plugin_impl(obj, |plugin| init(plugin), pluginname)
 }
 
@@ -2098,7 +2094,7 @@ unsafe fn hfile_c_1079_init_add_dynamic_plugin(
     obj: *mut c_void,
     init: HFilePluginInitFn,
     pluginname: *const c_char,
-) -> c_int {
+) -> i32 {
     hfile_c_1079_init_add_plugin_impl(obj, |plugin| init(plugin), pluginname)
 }
 
@@ -2123,7 +2119,7 @@ unsafe extern "C" fn hfile_c_1116_preload_open(
     hfile_c_730_hopen_preload(fname, mode)
 }
 
-unsafe extern "C" fn hfile_c_1116_preload_isremote(fname: *const c_char) -> c_int {
+unsafe extern "C" fn hfile_c_1116_preload_isremote(fname: *const c_char) -> i32 {
     hfile_c_726_is_preload_url_remote(fname)
 }
 
@@ -2168,7 +2164,7 @@ static HFILE_C_1116_PRELOAD_HANDLER: hfile_scheme_handler_layout = hfile_scheme_
 // (Uninit / Loading-with-condvar / Loaded) plus reentry detection. Not
 // undertaken here because the race window is narrow and tests pass at
 // `--test-threads <= 4`.
-pub unsafe fn hfile_c_1111_load_hfile_plugins() -> c_int {
+pub unsafe fn hfile_c_1111_load_hfile_plugins() -> i32 {
     {
         let mut state = hfile_plugin_state().lock().unwrap();
         if state.schemes.is_some() {
@@ -2228,7 +2224,7 @@ unsafe extern "C" fn hfile_c_1168_unknown_open(
     hfile_c_1168_hopen_unknown_scheme(fname, mode)
 }
 
-unsafe extern "C" fn hfile_c_1178_unknown_isremote(fname: *const c_char) -> c_int {
+unsafe extern "C" fn hfile_c_1178_unknown_isremote(fname: *const c_char) -> i32 {
     hfile_c_1339_hfile_always_local(fname)
 }
 
@@ -2280,7 +2276,7 @@ pub unsafe fn hfile_c_1176_find_scheme_handler(s: *const c_char) -> *const hFILE
     (&HFILE_C_1178_UNKNOWN_SCHEME as *const hfile_scheme_handler_layout).cast()
 }
 
-pub unsafe fn hfile_c_983_hfile_shutdown(do_close_plugin: c_int) {
+pub unsafe fn hfile_c_983_hfile_shutdown(do_close_plugin: i32) {
     let mut state = hfile_plugin_state().lock().unwrap();
     state.schemes = None;
     while let Some(p) = state.plugins.pop() {
@@ -2301,8 +2297,8 @@ pub unsafe fn hfile_c_1168_hopen_unknown_scheme(
     mode: *const c_char,
 ) -> *mut hFILE {
     let fp = hfile_c_664_hopen_fd(fname, mode);
-    if fp.is_null() && *crate::htslib_rs::c_compat::__errno_location() == libc::ENOENT {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EPROTONOSUPPORT;
+    if fp.is_null() && *libc::__errno_location() == libc::ENOENT {
+        *libc::__errno_location() = libc::EPROTONOSUPPORT;
     }
     fp
 }
@@ -2313,7 +2309,7 @@ pub unsafe fn hfile_c_1317_hopen_vargs(
     args: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> *mut hFILE {
     let Some(mode_bytes) = (!mode.is_null()).then(|| CStr::from_ptr(mode).to_bytes()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     let handler = hfile_c_1176_find_scheme_handler(fname);
@@ -2326,7 +2322,7 @@ pub unsafe fn hfile_c_1317_hopen_vargs(
             return (*handler).open.expect("hFILE open handler")(fname, mode);
         }
         if args.is_null() {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+            *libc::__errno_location() = libc::EINVAL;
             return std::ptr::null_mut();
         }
         return (*handler).vopen.expect("hFILE vopen handler")(fname, mode, args);
@@ -2343,11 +2339,11 @@ pub unsafe fn hfile_c_1317_hopen(fname: *const c_char, mode: *const c_char) -> *
     hfile_c_1317_hopen_vargs(fname, mode, std::ptr::null_mut())
 }
 
-pub unsafe extern "C" fn hfile_c_1339_hfile_always_local(_fname: *const c_char) -> c_int {
+pub unsafe extern "C" fn hfile_c_1339_hfile_always_local(_fname: *const c_char) -> i32 {
     0
 }
 
-pub unsafe extern "C" fn hfile_c_1342_hfile_always_remote(_fname: *const c_char) -> c_int {
+pub unsafe extern "C" fn hfile_c_1342_hfile_always_remote(_fname: *const c_char) -> i32 {
     1
 }
 
@@ -2355,8 +2351,8 @@ pub unsafe extern "C" fn hfile_c_1342_hfile_always_remote(_fname: *const c_char)
 pub unsafe fn hfile_c_1218_hfile_list_schemes(
     plugin: *const c_char,
     sc_list: *mut *const c_char,
-    nschemes: *mut c_int,
-) -> c_int {
+    nschemes: *mut i32,
+) -> i32 {
     {
         let needs_load = hfile_plugin_state().lock().unwrap().schemes.is_none();
         if needs_load && hfile_c_1111_load_hfile_plugins() < 0 {
@@ -2389,8 +2385,8 @@ pub unsafe fn hfile_c_1218_hfile_list_schemes(
 // original: hfile_list_plugins (htslib/hfile.c:1257)
 pub unsafe fn hfile_c_1257_hfile_list_plugins(
     plist: *mut *const c_char,
-    nplugins: *mut c_int,
-) -> c_int {
+    nplugins: *mut i32,
+) -> i32 {
     {
         let needs_load = hfile_plugin_state().lock().unwrap().schemes.is_none();
         if needs_load && hfile_c_1111_load_hfile_plugins() < 0 {
@@ -2419,7 +2415,7 @@ pub unsafe fn hfile_c_1257_hfile_list_plugins(
 }
 
 // original: hfile_has_plugin (htslib/hfile.c:1293)
-pub unsafe fn hfile_c_1293_hfile_has_plugin(name: *const c_char) -> c_int {
+pub unsafe fn hfile_c_1293_hfile_has_plugin(name: *const c_char) -> i32 {
     {
         let needs_load = hfile_plugin_state().lock().unwrap().schemes.is_none();
         if needs_load && hfile_c_1111_load_hfile_plugins() < 0 {
@@ -2437,7 +2433,7 @@ pub unsafe fn hfile_c_1293_hfile_has_plugin(name: *const c_char) -> c_int {
     0
 }
 
-pub unsafe fn hfile_c_1345_hisremote(fname: *const c_char) -> c_int {
+pub unsafe fn hfile_c_1345_hisremote(fname: *const c_char) -> i32 {
     let handler = hfile_c_1176_find_scheme_handler(fname);
     if !handler.is_null() {
         return (*(handler.cast::<hfile_scheme_handler_layout>()))
@@ -2466,7 +2462,7 @@ pub unsafe fn hfile_c_1353_strip_extension(
 pub unsafe fn hfile_c_1364_haddextension(
     buffer: *mut kstring_t,
     filename: *const c_char,
-    replace: c_int,
+    replace: i32,
     new_extension: *const c_char,
 ) -> *mut c_char {
     let trailing = if !hfile_c_1176_find_scheme_handler(filename).is_null() {
@@ -2515,7 +2511,7 @@ pub unsafe fn hfile_c_1364_haddextension(
 
 pub unsafe fn hfile_c_1416_knet_open(fn_: *const c_char, mode: *const c_char) -> *mut knetFile {
     let Some(filename) = (!fn_.is_null()).then(|| CStr::from_ptr(fn_).to_bytes()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     let hf = if filename == b"-" {
@@ -2538,7 +2534,7 @@ pub unsafe fn hfile_c_1416_knet_open(fn_: *const c_char, mode: *const c_char) ->
     Box::into_raw(Box::new(knet_file_layout { fd, offset: 0, hf })).cast()
 }
 
-pub unsafe fn hfile_c_1433_knet_dopen(fd: c_int, mode: *const c_char) -> *mut knetFile {
+pub unsafe fn hfile_c_1433_knet_dopen(fd: i32, mode: *const c_char) -> *mut knetFile {
     let Some(hf) = OwnedHFile::from_raw(hdopen(fd, mode)) else {
         return std::ptr::null_mut();
     };
@@ -2548,7 +2544,7 @@ pub unsafe fn hfile_c_1433_knet_dopen(fd: c_int, mode: *const c_char) -> *mut kn
 pub unsafe fn hfile_c_1445_knet_read(
     fp: *mut knetFile,
     buf: *mut c_void,
-    len: size_t,
+    len: usize,
 ) -> libc::ssize_t {
     let fp = fp.cast::<knet_file_layout>();
     let r = htslib_hfile_h_247_hread((*fp).hf.as_ptr(), buf, len);
@@ -2561,7 +2557,7 @@ pub unsafe fn hfile_c_1445_knet_read(
 pub unsafe fn hfile_c_1452_knet_seek(
     fp: *mut knetFile,
     off: libc::off_t,
-    whence: c_int,
+    whence: i32,
 ) -> libc::off_t {
     let fp = fp.cast::<knet_file_layout>();
     let r = hseek((*fp).hf.as_ptr(), off, whence);
@@ -2571,33 +2567,33 @@ pub unsafe fn hfile_c_1452_knet_seek(
     r
 }
 
-pub unsafe fn hfile_c_1460_knet_close(fp: *mut knetFile) -> c_int {
+pub unsafe fn hfile_c_1460_knet_close(fp: *mut knetFile) -> i32 {
     let fp = *Box::from_raw(fp.cast::<knet_file_layout>());
     fp.hf.close()
 }
 
-pub unsafe fn hfile_oflags(mode: *const c_char) -> c_int {
+pub unsafe fn hfile_oflags(mode: *const c_char) -> i32 {
     hfile_c_772_hfile_oflags(mode)
 }
 
-pub unsafe fn hdopen(fd: c_int, mode: *const c_char) -> *mut hFILE {
+pub unsafe fn hdopen(fd: i32, mode: *const c_char) -> *mut hFILE {
     hfile_c_735_hdopen(fd, mode)
 }
 
-pub unsafe fn hisremote(filename: *const c_char) -> c_int {
+pub unsafe fn hisremote(filename: *const c_char) -> i32 {
     hfile_c_1345_hisremote(filename)
 }
 
 pub unsafe fn haddextension(
     buffer: *mut kstring_t,
     filename: *const c_char,
-    replace: c_int,
+    replace: i32,
     extension: *const c_char,
 ) -> *mut c_char {
     hfile_c_1364_haddextension(buffer, filename, replace, extension)
 }
 
-pub unsafe fn hclose(fp: *mut hFILE) -> c_int {
+pub unsafe fn hclose(fp: *mut hFILE) -> i32 {
     // SEAM: hclose takes ownership (C semantics): dispatch the close, then drop
     // the owning Box to free the hFILE (buffer Vec + backend state).
     if fp.is_null() {
@@ -2615,22 +2611,22 @@ pub unsafe fn hclose_abruptly(fp: *mut hFILE) {
     hclose_abruptly_impl(&mut fp)
 }
 
-pub unsafe fn hseek(fp: *mut hFILE, offset: libc::off_t, whence: c_int) -> libc::off_t {
+pub unsafe fn hseek(fp: *mut hFILE, offset: libc::off_t, whence: i32) -> libc::off_t {
     let Some(fp) = hfile_mut(fp) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hseek_impl(fp, offset, whence)
 }
 
-pub unsafe fn hfile_set_blksize(fp: *mut hFILE, bufsiz: size_t) -> c_int {
+pub unsafe fn hfile_set_blksize(fp: *mut hFILE, bufsiz: usize) -> i32 {
     let Some(fp) = hfile_mut(fp) else {
         return -1;
     };
     hfile_set_blksize_impl(fp, bufsiz)
 }
 
-pub unsafe fn hgetc2(fp: *mut hFILE) -> c_int {
+pub unsafe fn hgetc2(fp: *mut hFILE) -> i32 {
     let Some(fp) = hfile_mut(fp) else {
         return libc::EOF;
     };
@@ -2639,16 +2635,16 @@ pub unsafe fn hgetc2(fp: *mut hFILE) -> c_int {
 
 pub unsafe fn hgetdelim(
     buffer: *mut c_char,
-    size: size_t,
-    delim: c_int,
+    size: usize,
+    delim: i32,
     fp: *mut hFILE,
 ) -> libc::ssize_t {
     let Some(fp) = hfile_mut(fp) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hgetdelim_impl(
@@ -2658,13 +2654,13 @@ pub unsafe fn hgetdelim(
     )
 }
 
-pub unsafe fn hgets(buffer: *mut c_char, size: c_int, fp: *mut hFILE) -> *mut c_char {
+pub unsafe fn hgets(buffer: *mut c_char, size: i32, fp: *mut hFILE) -> *mut c_char {
     let Some(fp) = hfile_mut(fp) else {
         return std::ptr::null_mut();
     };
     if size < 1 {
         fp.has_errno = libc::EINVAL;
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     }
     if buffer.is_null() {
@@ -2680,20 +2676,20 @@ pub unsafe fn hgets(buffer: *mut c_char, size: c_int, fp: *mut hFILE) -> *mut c_
     }
 }
 
-pub unsafe fn khgetline(kstr: *mut kstring_t, fp: *mut hFILE) -> c_int {
+pub unsafe fn khgetline(kstr: *mut kstring_t, fp: *mut hFILE) -> i32 {
     let Some(fp) = hfile_mut(fp) else {
         return libc::EOF;
     };
     hfile_khgetline(kstr, fp)
 }
 
-pub unsafe fn hpeek(fp: *mut hFILE, buffer: *mut c_void, nbytes: size_t) -> libc::ssize_t {
+pub unsafe fn hpeek(fp: *mut hFILE, buffer: *mut c_void, nbytes: usize) -> libc::ssize_t {
     let Some(fp) = hfile_mut(fp) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     let Some(buffer) = NonNull::new(buffer.cast::<u8>()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hpeek_impl(fp, std::slice::from_raw_parts_mut(buffer.as_ptr(), nbytes))
@@ -2702,15 +2698,15 @@ pub unsafe fn hpeek(fp: *mut hFILE, buffer: *mut c_void, nbytes: size_t) -> libc
 pub unsafe fn hread2(
     fp: *mut hFILE,
     destv: *mut c_void,
-    nbytes: size_t,
-    nread: size_t,
+    nbytes: usize,
+    nread: usize,
 ) -> libc::ssize_t {
     let Some(fp) = hfile_mut(fp) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     let Some(dest) = NonNull::new(destv.cast::<u8>()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hread2_impl(
@@ -2720,7 +2716,7 @@ pub unsafe fn hread2(
     )
 }
 
-pub unsafe fn hputc2(c: c_int, fp: *mut hFILE) -> c_int {
+pub unsafe fn hputc2(c: i32, fp: *mut hFILE) -> i32 {
     let Some(fp) = hfile_mut(fp) else {
         return libc::EOF;
     };
@@ -2730,15 +2726,15 @@ pub unsafe fn hputc2(c: c_int, fp: *mut hFILE) -> c_int {
 pub unsafe fn hwrite2(
     fp: *mut hFILE,
     srcv: *const c_void,
-    totalbytes: size_t,
-    ncopied: size_t,
+    totalbytes: usize,
+    ncopied: usize,
 ) -> libc::ssize_t {
     let Some(fp) = hfile_mut(fp) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     let Some(src) = NonNull::new(srcv.cast_mut().cast::<u8>()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     };
     hwrite2_impl(
@@ -2750,10 +2746,10 @@ pub unsafe fn hwrite2(
 
 pub unsafe fn hputs2(
     text: *const c_char,
-    totalbytes: size_t,
-    ncopied: size_t,
+    totalbytes: usize,
+    ncopied: usize,
     fp: *mut hFILE,
-) -> c_int {
+) -> i32 {
     let Some(fp) = hfile_mut(fp) else {
         return libc::EOF;
     };
@@ -2767,24 +2763,24 @@ pub unsafe fn hputs2(
     )
 }
 
-pub unsafe fn hflush(fp: *mut hFILE) -> c_int {
+pub unsafe fn hflush(fp: *mut hFILE) -> i32 {
     let Some(fp) = hfile_mut(fp) else {
         return libc::EOF;
     };
     hflush_impl(fp)
 }
 
-pub unsafe fn hfile_mem_get_buffer(file: *mut hFILE, length: *mut size_t) -> *mut c_char {
+pub unsafe fn hfile_mem_get_buffer(file: *mut hFILE, length: *mut usize) -> *mut c_char {
     let Some(file) = hfile_mut(file) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     hfile_mem_get_buffer_impl(file, length.as_mut())
 }
 
-pub unsafe fn hfile_mem_steal_buffer(file: *mut hFILE, length: *mut size_t) -> *mut c_char {
+pub unsafe fn hfile_mem_steal_buffer(file: *mut hFILE, length: *mut usize) -> *mut c_char {
     let Some(file) = hfile_mut(file) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
     hfile_mem_steal_buffer_impl(file, length.as_mut())
@@ -2793,16 +2789,16 @@ pub unsafe fn hfile_mem_steal_buffer(file: *mut hFILE, length: *mut size_t) -> *
 pub unsafe fn hfile_list_schemes(
     plugin: *const c_char,
     sc_list: *mut *const c_char,
-    nschemes: *mut c_int,
-) -> c_int {
+    nschemes: *mut i32,
+) -> i32 {
     hfile_c_1218_hfile_list_schemes(plugin, sc_list, nschemes)
 }
 
-pub unsafe fn hfile_list_plugins(plist: *mut *const c_char, nplugins: *mut c_int) -> c_int {
+pub unsafe fn hfile_list_plugins(plist: *mut *const c_char, nplugins: *mut i32) -> i32 {
     hfile_c_1257_hfile_list_plugins(plist, nplugins)
 }
 
-pub unsafe fn hfile_has_plugin(name: *const c_char) -> c_int {
+pub unsafe fn hfile_has_plugin(name: *const c_char) -> i32 {
     hfile_c_1293_hfile_has_plugin(name)
 }
 
@@ -2821,19 +2817,19 @@ pub unsafe fn knet_open(fn_: *const c_char, mode: *const c_char) -> *mut knetFil
     hfile_c_1416_knet_open(fn_, mode)
 }
 
-pub unsafe fn knet_dopen(fd: c_int, mode: *const c_char) -> *mut knetFile {
+pub unsafe fn knet_dopen(fd: i32, mode: *const c_char) -> *mut knetFile {
     hfile_c_1433_knet_dopen(fd, mode)
 }
 
-pub unsafe fn knet_read(fp: *mut knetFile, buf: *mut c_void, len: size_t) -> libc::ssize_t {
+pub unsafe fn knet_read(fp: *mut knetFile, buf: *mut c_void, len: usize) -> libc::ssize_t {
     hfile_c_1445_knet_read(fp, buf, len)
 }
 
-pub unsafe fn knet_seek(fp: *mut knetFile, off: libc::off_t, whence: c_int) -> libc::off_t {
+pub unsafe fn knet_seek(fp: *mut knetFile, off: libc::off_t, whence: i32) -> libc::off_t {
     hfile_c_1452_knet_seek(fp, off, whence)
 }
 
-pub unsafe fn knet_close(fp: *mut knetFile) -> c_int {
+pub unsafe fn knet_close(fp: *mut knetFile) -> i32 {
     hfile_c_1460_knet_close(fp)
 }
 
@@ -2908,27 +2904,27 @@ mod tests {
         unsafe {
             let fp = hfile_c_104_hfile_init(0, c"r".as_ptr(), 16);
             assert!(!fp.is_null());
-            *crate::htslib_rs::c_compat::__errno_location() = libc::E2BIG;
+            *libc::__errno_location() = libc::E2BIG;
             hfile_c_162_hfile_destroy(fp);
-            assert_eq!(*crate::htslib_rs::c_compat::__errno_location(), libc::E2BIG);
+            assert_eq!(*libc::__errno_location(), libc::E2BIG);
 
             // None-backend abrupt close is a no-op that preserves errno, then we
             // free the owned Box ourselves.
             let abrupt = hfile_c_104_hfile_init(0, c"r".as_ptr(), 16);
             assert!(!abrupt.is_null());
-            *crate::htslib_rs::c_compat::__errno_location() = libc::E2BIG;
+            *libc::__errno_location() = libc::E2BIG;
             hfile_c_520_hclose_abruptly(abrupt);
-            assert_eq!(*crate::htslib_rs::c_compat::__errno_location(), libc::E2BIG);
+            assert_eq!(*libc::__errno_location(), libc::E2BIG);
         }
     }
 
     #[test]
     fn hfile_init_reports_allocation_failure_without_leaking() {
         unsafe {
-            *crate::htslib_rs::c_compat::__errno_location() = 0;
+            *libc::__errno_location() = 0;
             let fp = hfile_c_104_hfile_init(0, c"w".as_ptr(), usize::MAX);
             assert!(fp.is_null());
-            assert_eq!(*crate::htslib_rs::c_compat::__errno_location(), libc::ENOMEM);
+            assert_eq!(*libc::__errno_location(), libc::ENOMEM);
         }
     }
 
@@ -2974,7 +2970,7 @@ mod tests {
             drop(owned);
             // fd was closed by the backend close, so a second close fails EBADF
             assert_eq!(libc::close(fd), -1);
-            assert_eq!(*crate::htslib_rs::c_compat::__errno_location(), libc::EBADF);
+            assert_eq!(*libc::__errno_location(), libc::EBADF);
 
             std::fs::remove_file(path).unwrap();
         }
@@ -3005,7 +3001,7 @@ mod tests {
             // 0 here, so exercise the backend op directly — this mirrors the
             // pre-refactor test that called the now-inlined hfile_c_810_mem_seek.)
             assert_eq!(HFileBackend::seek(&mut *fp, 0, libc::SEEK_SET), -1);
-            assert_eq!(*crate::htslib_rs::c_compat::__errno_location(), libc::EINVAL);
+            assert_eq!(*libc::__errno_location(), libc::EINVAL);
             assert_eq!(hclose(fp), 0);
 
             let fp64 = hfile_c_845_hopen_mem(c"data:;base64,QUJDRA==".as_ptr(), c"r".as_ptr());
@@ -3023,13 +3019,13 @@ mod tests {
             // after stealing, the hFILE's buffer is detached (empty Vec, limit 0)
             assert_eq!((*fp64).limit, 0);
             assert!((*fp64).buffer.is_empty());
-            crate::htslib_rs::c_compat::free(stolen.cast());
+            libc::free(stolen.cast());
             assert_eq!(hclose(fp64), 0);
 
             assert!(hfile_c_845_hopen_mem(c"data:,x".as_ptr(), c"w".as_ptr()).is_null());
-            assert_eq!(*crate::htslib_rs::c_compat::__errno_location(), libc::EROFS);
+            assert_eq!(*libc::__errno_location(), libc::EROFS);
             assert!(hfile_c_915_hopen_not_supported(c"mem".as_ptr(), c"r".as_ptr()).is_null());
-            assert_eq!(*crate::htslib_rs::c_compat::__errno_location(), libc::EINVAL);
+            assert_eq!(*libc::__errno_location(), libc::EINVAL);
         }
     }
 
@@ -3037,18 +3033,18 @@ mod tests {
     fn hfile_mem_steal_buffer_rejects_non_mem_backend() {
         unsafe {
             let payload = b"owned";
-            let buffer = crate::htslib_rs::c_compat::malloc(8).cast::<c_char>();
+            let buffer = libc::malloc(8).cast::<c_char>();
             assert!(!buffer.is_null());
-            crate::htslib_rs::c_compat::memcpy(
+            libc::memcpy(
                 buffer.cast(),
                 payload.as_ptr().cast(),
-                payload.len() as u64,
+                payload.len(),
             );
 
             let fp = hfile_c_835_create_hfile_mem(buffer, c"r".as_ptr(), payload.len(), 8);
             assert!(!fp.is_null());
             // create_hfile_mem copied the buffer; we own the original.
-            crate::htslib_rs::c_compat::free(buffer.cast());
+            libc::free(buffer.cast());
 
             let mut length = 0usize;
             let got = hfile_c_894_hfile_mem_get_buffer(fp, &mut length);
@@ -3060,14 +3056,14 @@ mod tests {
             assert_eq!(length, 8);
             assert_eq!((*fp).limit, 0);
             assert_eq!(hclose(fp), 0);
-            crate::htslib_rs::c_compat::free(stolen.cast());
+            libc::free(stolen.cast());
 
             // get_buffer on a non-mem backend (None) is EINVAL.
             let nonmem = hfile_c_104_hfile_init(0, c"r".as_ptr(), 8);
             assert!(!nonmem.is_null());
             let mut len2 = 0usize;
             assert!(hfile_c_894_hfile_mem_get_buffer(nonmem, &mut len2).is_null());
-            assert_eq!(*crate::htslib_rs::c_compat::__errno_location(), libc::EINVAL);
+            assert_eq!(*libc::__errno_location(), libc::EINVAL);
             hfile_c_162_hfile_destroy(nonmem);
         }
     }
@@ -3076,7 +3072,7 @@ mod tests {
     fn hfile_data_url_decoder_keeps_edge_case_semantics() {
         unsafe {
             assert!(hfile_c_845_hopen_mem(c"data:no-comma".as_ptr(), c"r".as_ptr()).is_null());
-            assert_eq!(*crate::htslib_rs::c_compat::__errno_location(), libc::EINVAL);
+            assert_eq!(*libc::__errno_location(), libc::EINVAL);
 
             let fp = hfile_c_845_hopen_mem(c"data:text/plain,kept%ZZ%2f".as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
@@ -3111,17 +3107,17 @@ mod tests {
             assert!(!fp.is_null());
             (*fp).backend = HFileBackend::Mem;
 
-            assert_eq!(htslib_hfile_h_163_hgetc(fp), b'a' as c_int);
+            assert_eq!(htslib_hfile_h_163_hgetc(fp), b'a' as i32);
 
             let mut line = [0 as c_char; 8];
             assert_eq!(
-                hfile_c_241_hgetdelim(line.as_mut_ptr(), line.len(), b'\n' as c_int, fp),
+                hfile_c_241_hgetdelim(line.as_mut_ptr(), line.len(), b'\n' as i32, fp),
                 2
             );
             assert_eq!(std::ffi::CStr::from_ptr(line.as_ptr()).to_bytes(), b"b\n");
 
             assert_eq!(
-                hfile_c_291_hgets(line.as_mut_ptr(), line.len() as c_int, fp),
+                hfile_c_291_hgets(line.as_mut_ptr(), line.len() as i32, fp),
                 line.as_mut_ptr()
             );
             assert_eq!(std::ffi::CStr::from_ptr(line.as_ptr()).to_bytes(), b"cdef\n");
@@ -3194,7 +3190,7 @@ mod tests {
             (*fp).has_errno = 0;
             (*fp).offset = libc::off_t::MAX - 1;
             assert_eq!(hseek(fp, 4, libc::SEEK_CUR), -1);
-            assert_eq!((*fp).has_errno, crate::htslib_rs::c_compat::EOVERFLOW);
+            assert_eq!((*fp).has_errno, libc::EOVERFLOW);
 
             // The failing hseek left a sticky has_errno, so hclose would return
             // EOF (it propagates has_errno, like C). Tear down the hand-built
@@ -3257,7 +3253,7 @@ mod tests {
             )
             .is_null());
             assert_eq!(
-                *crate::htslib_rs::c_compat::__errno_location(),
+                *libc::__errno_location(),
                 libc::EPROTONOSUPPORT
             );
 
@@ -3288,7 +3284,7 @@ mod tests {
                 hclose(writer),
                 0,
                 "socket writer hclose errno {}",
-                *crate::htslib_rs::c_compat::__errno_location()
+                *libc::__errno_location()
             );
 
             let mut got = [0 as c_char; 4];
@@ -3313,7 +3309,7 @@ mod tests {
 
             let fp = hfile_c_664_hopen_fd(c_path.as_ptr(), c"w".as_ptr());
             assert!(!fp.is_null());
-            assert_eq!(htslib_hfile_h_263_hputc(b'a' as c_int, fp), b'a' as c_int);
+            assert_eq!(htslib_hfile_h_263_hputc(b'a' as i32, fp), b'a' as i32);
             assert_eq!(htslib_hfile_h_275_hputs(c"bc".as_ptr(), fp), 0);
             assert_eq!(htslib_hfile_h_292_hwrite(fp, c"def".as_ptr().cast(), 3), 3);
             assert_eq!(hclose(fp), 0);
@@ -3461,7 +3457,7 @@ mod tests {
                 hfile_c_1168_hopen_unknown_scheme(c"missing-scheme:test".as_ptr(), c"r".as_ptr());
             assert!(missing.is_null());
             assert_eq!(
-                *crate::htslib_rs::c_compat::__errno_location(),
+                *libc::__errno_location(),
                 libc::EPROTONOSUPPORT
             );
 
@@ -3485,10 +3481,10 @@ mod tests {
             let payload = b"mem-vopen";
             let buffer = libc::malloc(payload.len()).cast::<c_char>();
             assert!(!buffer.is_null());
-            crate::htslib_rs::c_compat::memcpy(
+            libc::memcpy(
                 buffer.cast(),
                 payload.as_ptr().cast(),
-                payload.len() as u64,
+                payload.len(),
             );
 
             let mut reg_save = [buffer as usize, payload.len()];
@@ -3520,14 +3516,14 @@ mod tests {
         let _guard = hfile_plugin_test_lock().lock().unwrap();
         unsafe {
             let mut plugins = [std::ptr::null(); 1];
-            let mut nplugins = plugins.len() as c_int;
+            let mut nplugins = plugins.len() as i32;
             let total = hfile_c_1257_hfile_list_plugins(plugins.as_mut_ptr(), &mut nplugins);
             assert!(total >= 1);
             assert_eq!(nplugins, 1);
             assert_eq!(CStr::from_ptr(plugins[0]).to_bytes(), b"built-in");
 
             let mut schemes = [std::ptr::null(); 1];
-            let mut nschemes = schemes.len() as c_int;
+            let mut nschemes = schemes.len() as i32;
             let total_schemes = hfile_c_1218_hfile_list_schemes(
                 c"built-in".as_ptr(),
                 schemes.as_mut_ptr(),
@@ -3575,7 +3571,7 @@ mod tests {
                 hfile_c_935_crypt4gh_needed(c"crypt4gh:/tmp/x".as_ptr(), c"r".as_ptr()).is_null()
             );
             assert_eq!(
-                *crate::htslib_rs::c_compat::__errno_location(),
+                *libc::__errno_location(),
                 libc::EPROTONOSUPPORT
             );
         }

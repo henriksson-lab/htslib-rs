@@ -4,11 +4,14 @@ use htslib_rs::{
     sam_c_4553_sam_write1, sam_hdr_destroy, sam_hdr_read, sam_read1, FASTQ_OPT_AUX,
     FASTQ_OPT_BARCODE, FASTQ_OPT_CASAVA, FASTQ_OPT_NAME2, FASTQ_OPT_RNUM, FASTQ_OPT_UMI,
 };
-use std::ffi::{CStr, CString};
 
-fn c_fixture(path: &str) -> CString {
+// Build a NUL-terminated byte buffer for production APIs that still take a raw
+// `*const u8` (C-string boundary). Caller keeps the Vec alive while the pointer is used.
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -21,26 +24,28 @@ struct FastqRecord {
 }
 
 impl FastqRecord {
-    unsafe fn from_record(rec: *const bam1_t, aux_tags: &[&'static CStr]) -> Self {
+    unsafe fn from_record(rec: *const bam1_t, aux_tags: &[&'static [u8]]) -> Self {
         Self {
-            qname: CStr::from_ptr(bam_get_qname(rec))
-                .to_string_lossy()
-                .into_owned(),
+            qname: String::from_utf8_lossy(
+                std::ffi::CStr::from_ptr(bam_get_qname(rec).cast()).to_bytes(),
+            )
+            .into_owned(),
             flag: (*rec).core.flag,
             seq: seq_string(rec),
             qual: qual_string(rec),
             aux_z: aux_tags
                 .iter()
                 .filter_map(|tag| {
-                    let aux = bam_aux_get(rec, tag.as_ptr());
+                    let aux = bam_aux_get(rec, tag.as_ptr().cast());
                     if aux.is_null() {
                         None
                     } else {
                         Some((
-                            tag.to_str().unwrap(),
-                            CStr::from_ptr(bam_aux2Z(aux))
-                                .to_string_lossy()
-                                .into_owned(),
+                            std::str::from_utf8(&tag[..tag.len() - 1]).unwrap(),
+                            String::from_utf8_lossy(
+                                std::ffi::CStr::from_ptr(bam_aux2Z(aux).cast()).to_bytes(),
+                            )
+                            .into_owned(),
                         ))
                     }
                 })
@@ -77,7 +82,7 @@ unsafe fn set_fastq_flag(fp: *mut htslib_rs::htsFile, opt: i32) {
     assert_eq!(hts_set_opt_int(fp, opt as hts_fmt_option, 1), 0);
 }
 
-unsafe fn set_fastq_string(fp: *mut htslib_rs::htsFile, opt: i32, value: Option<&CStr>) {
+unsafe fn set_fastq_string(fp: *mut htslib_rs::htsFile, opt: i32, value: Option<&[u8]>) {
     assert_eq!(
         hts_set_opt_ptr(
             fp,
@@ -91,11 +96,15 @@ unsafe fn set_fastq_string(fp: *mut htslib_rs::htsFile, opt: i32, value: Option<
 unsafe fn read_fastq_records(
     path: &str,
     configure: impl FnOnce(*mut htslib_rs::htsFile),
-    aux_tags: &[&'static CStr],
+    aux_tags: &[&'static [u8]],
 ) -> Vec<FastqRecord> {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), c"r".as_ptr());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path[..path.len() - 1])
+    );
     configure(fp);
 
     let rec = bam_init1();
@@ -115,10 +124,14 @@ unsafe fn read_fastq_records(
     records
 }
 
-unsafe fn read_sam_records(path: &str, aux_tags: &[&'static CStr]) -> Vec<FastqRecord> {
+unsafe fn read_sam_records(path: &str, aux_tags: &[&'static [u8]]) -> Vec<FastqRecord> {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), c"r".as_ptr());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path[..path.len() - 1])
+    );
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
 
@@ -144,7 +157,7 @@ unsafe fn assert_read_case(
     input: &str,
     expected_sam: &str,
     configure: impl FnOnce(*mut htslib_rs::htsFile),
-    aux_tags: &[&'static CStr],
+    aux_tags: &[&'static [u8]],
 ) -> Vec<FastqRecord> {
     let actual = read_fastq_records(input, configure, aux_tags);
     let expected = read_sam_records(expected_sam, aux_tags);
@@ -164,26 +177,27 @@ fn temp_output_path(case: &str, extension: &str) -> std::path::PathBuf {
 
 unsafe fn write_sam_as_sequence_file(
     input_sam: &str,
-    mode: &'static CStr,
+    mode: &'static [u8],
     out_path: &std::path::Path,
     configure: impl FnOnce(*mut htslib_rs::htsFile),
 ) {
     let input = c_fixture(input_sam);
-    let in_fp = hts_open(input.as_ptr(), c"r".as_ptr());
+    let in_fp = hts_open(input.as_ptr().cast(), c"r".as_ptr());
     assert!(
         !in_fp.is_null(),
         "failed to open {}",
-        input.to_string_lossy()
+        String::from_utf8_lossy(&input[..input.len() - 1])
     );
     let hdr = sam_hdr_read(in_fp);
     assert!(!hdr.is_null());
 
-    let output = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
-    let out_fp = hts_open(output.as_ptr(), mode.as_ptr());
+    let mut output = out_path.to_string_lossy().into_owned().into_bytes();
+    output.push(0);
+    let out_fp = hts_open(output.as_ptr().cast(), mode.as_ptr().cast());
     assert!(
         !out_fp.is_null(),
         "failed to open {}",
-        output.to_string_lossy()
+        String::from_utf8_lossy(&output[..output.len() - 1])
     );
     configure(out_fp);
 
@@ -209,7 +223,7 @@ unsafe fn write_sam_as_sequence_file(
 unsafe fn assert_write_case(
     input_sam: &str,
     expected_output: &str,
-    mode: &'static CStr,
+    mode: &'static [u8],
     extension: &str,
     configure: impl FnOnce(*mut htslib_rs::htsFile),
 ) -> String {
@@ -290,7 +304,7 @@ fn original_fastq_single_file_noaux_and_fasta_aux_cases_match_expected_sam() {
             &[],
         );
 
-        let aux_tags = &[c"RG"];
+        let aux_tags: &[&[u8]] = &[b"RG\0"];
         let single_fa_aux = assert_read_case(
             "htslib/test/fastq/single.fa",
             "htslib/test/fastq/single_aux-q.sam",
@@ -319,7 +333,7 @@ fn original_fastq_interleaved_noaux_and_aux_cases_match_expected_sam() {
             &[],
         );
 
-        let aux_tags = &[c"RG", c"BC", c"QT"];
+        let aux_tags: &[&[u8]] = &[b"RG\0", b"BC\0", b"QT\0"];
         let inter_fq_aux = assert_read_case(
             "htslib/test/fastq/interleaved.fq",
             "htslib/test/fastq/inter_aux.sam",
@@ -351,7 +365,7 @@ fn original_fastq_interleaved_noaux_and_aux_cases_match_expected_sam() {
 #[test]
 fn original_fastq_interleaved_casava_fasta_cases_match_expected_sam() {
     unsafe {
-        let bc_tags = &[c"BC"];
+        let bc_tags: &[&[u8]] = &[b"BC\0"];
         let casava_fq = assert_read_case(
             "htslib/test/fastq/interleaved_casava.fq",
             "htslib/test/fastq/inter_casava.sam",
@@ -372,13 +386,13 @@ fn original_fastq_interleaved_casava_fasta_cases_match_expected_sam() {
         assert_eq!(casava_fa[0].qual, "*");
         assert_eq!(casava_fa[0].aux_z, vec![("BC", "NGTCTATC".to_string())]);
 
-        let ox = CString::new("OX").unwrap();
-        let ox_tags = &[c"OX"];
+        let ox = b"OX\0";
+        let ox_tags: &[&[u8]] = &[b"OX\0"];
         let casava_ox_fa = assert_read_case(
             "htslib/test/fastq/interleaved_casava.fa",
             "htslib/test/fastq/inter_casavaOX-q.sam",
             |fp| {
-                set_fastq_string(fp, FASTQ_OPT_BARCODE, Some(ox.as_c_str()));
+                set_fastq_string(fp, FASTQ_OPT_BARCODE, Some(ox));
                 set_fastq_flag(fp, FASTQ_OPT_CASAVA);
             },
             ox_tags,
@@ -390,7 +404,7 @@ fn original_fastq_interleaved_casava_fasta_cases_match_expected_sam() {
 #[test]
 fn original_fastq_filter_casava_fasta_case_matches_expected_sam() {
     unsafe {
-        let aux_tags = &[c"BC"];
+        let aux_tags: &[&[u8]] = &[b"BC\0"];
         let records = assert_read_case(
             "htslib/test/fastq/filter_casava.fa",
             "htslib/test/fastq/filter_casava-q.sam",
@@ -409,7 +423,7 @@ fn original_fastq_filter_casava_fasta_case_matches_expected_sam() {
 #[test]
 fn original_fastq_paired_r1_r2_inputs_match_expected_sam() {
     unsafe {
-        let aux_tags = &[c"RG", c"BC", c"QT"];
+        let aux_tags: &[&[u8]] = &[b"RG\0", b"BC\0", b"QT\0"];
         let r1 = assert_read_case(
             "htslib/test/fastq/r1.fq",
             "htslib/test/fastq/r1.sam",
@@ -473,8 +487,8 @@ fn original_fastq_umi_barcodes_match_expected_sam() {
         let umi = assert_read_case(
             "htslib/test/fastq/UMI.fq",
             "htslib/test/fastq/UMI.sam",
-            |fp| set_fastq_string(fp, FASTQ_OPT_UMI, Some(c"RX")),
-            &[c"RX"],
+            |fp| set_fastq_string(fp, FASTQ_OPT_UMI, Some(b"RX\0")),
+            &[b"RX\0"],
         );
         assert_eq!(umi.len(), 7);
         assert_eq!(umi[0].qname, "HS25:09827:FID:2:1201:1505:59794");
@@ -493,7 +507,7 @@ fn original_fastq_write_minimal_and_aux_cases_match_expected_fixtures() {
         let minimal_fq = assert_write_case(
             "htslib/test/fastq/minimal.sam",
             "htslib/test/fastq/minimal.fq",
-            c"wf",
+            b"wf\0",
             "fq",
             |_| {},
         );
@@ -502,7 +516,7 @@ fn original_fastq_write_minimal_and_aux_cases_match_expected_fixtures() {
         let minimal_fa = assert_write_case(
             "htslib/test/fastq/minimal.sam",
             "htslib/test/fastq/minimal.fa",
-            c"wF",
+            b"wF\0",
             "fa",
             |_| {},
         );
@@ -511,7 +525,7 @@ fn original_fastq_write_minimal_and_aux_cases_match_expected_fixtures() {
         let single_fq = assert_write_case(
             "htslib/test/fastq/single_aux.sam",
             "htslib/test/fastq/single.fq",
-            c"wf",
+            b"wf\0",
             "fq",
             |fp| set_fastq_string(fp, FASTQ_OPT_AUX, None),
         );
@@ -520,7 +534,7 @@ fn original_fastq_write_minimal_and_aux_cases_match_expected_fixtures() {
         let single_fa = assert_write_case(
             "htslib/test/fastq/single_aux.sam",
             "htslib/test/fastq/single.fa",
-            c"wF",
+            b"wF\0",
             "fa",
             |fp| set_fastq_string(fp, FASTQ_OPT_AUX, None),
         );
@@ -535,7 +549,7 @@ fn original_fastq_write_rnum_casava_barcode_and_umi_cases_match_expected_fixture
         let interleaved = assert_write_case(
             "htslib/test/fastq/inter_aux.sam",
             "htslib/test/fastq/interleaved.fq",
-            c"wf",
+            b"wf\0",
             "fq",
             |fp| {
                 set_fastq_string(fp, FASTQ_OPT_AUX, None);
@@ -548,7 +562,7 @@ fn original_fastq_write_rnum_casava_barcode_and_umi_cases_match_expected_fixture
         let interleaved_fa = assert_write_case(
             "htslib/test/fastq/inter_aux.sam",
             "htslib/test/fastq/interleaved.fa",
-            c"wF",
+            b"wF\0",
             "fa",
             |fp| {
                 set_fastq_string(fp, FASTQ_OPT_AUX, None);
@@ -561,20 +575,20 @@ fn original_fastq_write_rnum_casava_barcode_and_umi_cases_match_expected_fixture
         let casava = assert_write_case(
             "htslib/test/fastq/inter_casava.sam",
             "htslib/test/fastq/interleaved_casava.fq",
-            c"wf",
+            b"wf\0",
             "fq",
             |fp| set_fastq_flag(fp, FASTQ_OPT_CASAVA),
         );
         assert!(casava.starts_with("@HS25_09827:2:1201:1505:59795#49 1:N:0:NGTCTATC\n"));
 
-        let ox = CString::new("OX").unwrap();
+        let ox = b"OX\0";
         let casava_ox_fa = assert_write_case(
             "htslib/test/fastq/inter_casavaOX.sam",
             "htslib/test/fastq/interleaved_casava.fa",
-            c"wF",
+            b"wF\0",
             "fa",
             |fp| {
-                set_fastq_string(fp, FASTQ_OPT_BARCODE, Some(ox.as_c_str()));
+                set_fastq_string(fp, FASTQ_OPT_BARCODE, Some(ox));
                 set_fastq_flag(fp, FASTQ_OPT_CASAVA);
             },
         );
@@ -584,7 +598,7 @@ fn original_fastq_write_rnum_casava_barcode_and_umi_cases_match_expected_fixture
         let filter_casava = assert_write_case(
             "htslib/test/fastq/filter_casava.sam",
             "htslib/test/fastq/filter_casava.fq",
-            c"wf",
+            b"wf\0",
             "fq",
             |fp| set_fastq_flag(fp, FASTQ_OPT_CASAVA),
         );
@@ -593,7 +607,7 @@ fn original_fastq_write_rnum_casava_barcode_and_umi_cases_match_expected_fixture
         let umi = assert_write_case(
             "htslib/test/fastq/UMI.sam",
             "htslib/test/fastq/UMI.fq",
-            c"wf",
+            b"wf\0",
             "fq",
             |fp| {
                 set_fastq_flag(fp, FASTQ_OPT_RNUM);

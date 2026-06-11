@@ -1,31 +1,24 @@
-use std::ffi::{c_char, c_int};
-
 // original: test_normalised (htslib/test/test_time_funcs.c:36)
 pub unsafe fn test_test_time_funcs_c_36_test_normalised(
     start: libc::time_t,
     end: libc::time_t,
     incr: libc::time_t,
-) -> c_int {
+) -> i32 {
     let mut i = start;
     while i < end {
         let (year, month, day, hour, min, sec, wday) =
             crate::htslib_rs::c_compat::unix_time_utc_parts(i);
         let mut utc: libc::tm = std::mem::zeroed();
-        utc.tm_sec = sec as c_int;
-        utc.tm_min = min as c_int;
-        utc.tm_hour = hour as c_int;
-        utc.tm_mday = day as c_int;
-        utc.tm_mon = month as c_int - 1;
+        utc.tm_sec = sec as i32;
+        utc.tm_min = min as i32;
+        utc.tm_hour = hour as i32;
+        utc.tm_mday = day as i32;
+        utc.tm_mon = month as i32 - 1;
         utc.tm_year = year - 1900;
-        utc.tm_wday = wday as c_int;
+        utc.tm_wday = wday as i32;
         let j = crate::htslib_rs::hts::hts_time_gm(&mut utc);
         if i != j {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"hts_time_gm() failed, got %ld expected %ld\n".as_ptr(),
-                j as libc::c_long,
-                i as libc::c_long,
-            );
+            eprintln!("hts_time_gm() failed, got {} expected {}", j as i64, i as i64);
             return 1;
         }
         i += incr;
@@ -35,14 +28,14 @@ pub unsafe fn test_test_time_funcs_c_36_test_normalised(
 
 // original: test_specific (htslib/test/test_time_funcs.c:53)
 pub unsafe fn test_test_time_funcs_c_53_test_specific(
-    year: c_int,
-    mon: c_int,
-    mday: c_int,
-    hour: c_int,
-    min: c_int,
-    sec: c_int,
+    year: i32,
+    mon: i32,
+    mday: i32,
+    hour: i32,
+    min: i32,
+    sec: i32,
     expected: libc::time_t,
-) -> c_int {
+) -> i32 {
     let mut utc: libc::tm = std::mem::zeroed();
     utc.tm_sec = sec;
     utc.tm_min = min;
@@ -56,18 +49,9 @@ pub unsafe fn test_test_time_funcs_c_53_test_specific(
 
     let res = crate::htslib_rs::hts::hts_time_gm(&mut utc);
     if res != expected {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"hts_time_gm() failed for %4d/%02d/%02d %02d:%02d:%02d : got %ld expected %ld\n"
-                .as_ptr(),
-            year,
-            mon,
-            mday,
-            hour,
-            min,
-            sec,
-            res as libc::c_long,
-            expected as libc::c_long,
+        eprintln!(
+            "hts_time_gm() failed for {:4}/{:02}/{:02} {:02}:{:02}:{:02} : got {} expected {}",
+            year, mon, mday, hour, min, sec, res as i64, expected as i64
         );
         return 1;
     }
@@ -75,9 +59,9 @@ pub unsafe fn test_test_time_funcs_c_53_test_specific(
 }
 
 // original: main (htslib/test/test_time_funcs.c:68)
-pub unsafe fn test_test_time_funcs_c_68_main(_argc: c_int, _argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_test_time_funcs_c_68_main(_argc: i32, _argv: *mut *mut u8) -> i32 {
     let mut res = 0;
-    let int_max = c_int::MAX as libc::time_t;
+    let int_max = i32::MAX as libc::time_t;
 
     if test_test_time_funcs_c_36_test_normalised(0, int_max - 1000, 1000) != 0 {
         return libc::EXIT_FAILURE;
@@ -85,7 +69,7 @@ pub unsafe fn test_test_time_funcs_c_68_main(_argc: c_int, _argv: *mut *mut c_ch
     if std::mem::size_of::<libc::time_t>() >= 8
         && test_test_time_funcs_c_36_test_normalised(
             int_max - 1000,
-            ((c_int::MAX as i64) * 2) as libc::time_t,
+            ((i32::MAX as i64) * 2) as libc::time_t,
             1000,
         ) != 0
     {
@@ -125,7 +109,7 @@ pub unsafe fn test_test_time_funcs_c_68_main(_argc: c_int, _argv: *mut *mut c_ch
     // 1970-01-01 00:00:00
     res |= test_test_time_funcs_c_53_test_specific(1970, 1, 1, 0, 0, 0, 0);
     // 2038-01-19 03:14:07
-    res |= test_test_time_funcs_c_53_test_specific(1970, 1, 1, 0, 0, c_int::MAX, int_max);
+    res |= test_test_time_funcs_c_53_test_specific(1970, 1, 1, 0, 0, i32::MAX, int_max);
     // 2038-01-19 03:14:07
     res |= test_test_time_funcs_c_53_test_specific(2038, 1, 19, 3, 14, 7, int_max);
     if std::mem::size_of::<libc::time_t>() < 8 {

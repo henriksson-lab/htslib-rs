@@ -4,19 +4,17 @@ use super::poll_wrap_epoll::{
     ref_cache_poll_wrap_epoll_c_126_pw_remove, ref_cache_poll_wrap_epoll_c_78_pw_register,
     Poll_wrap,
 };
-use std::ffi::c_int;
-
 // original: Listeners (htslib/ref_cache/listener.c:46)
 pub struct Listeners {
-    sockets: Vec<c_int>,
+    sockets: Vec<i32>,
 }
 
 // original: open_socket (htslib/ref_cache/listener.c:51)
 // Returns the new socket fd on success, or Err(cause) naming the failed step.
 pub unsafe fn ref_cache_listener_c_51_open_socket(
     addr: &mut libc::addrinfo,
-) -> Result<c_int, &'static [u8]> {
-    let mut val: c_int = 1;
+) -> Result<i32, &'static [u8]> {
+    let mut val: i32 = 1;
 
     let s = libc::socket(addr.ai_family, addr.ai_socktype, addr.ai_protocol);
     if s == -1 {
@@ -27,13 +25,13 @@ pub unsafe fn ref_cache_listener_c_51_open_socket(
         s,
         libc::SOL_SOCKET,
         libc::SO_REUSEADDR,
-        (&mut val as *mut c_int).cast(),
+        (&mut val as *mut i32).cast(),
         std::mem::size_of_val(&val) as libc::socklen_t,
     ) < 0
     {
-        let serrno = *crate::htslib_rs::c_compat::__errno_location();
+        let serrno = *libc::__errno_location();
         libc::close(s);
-        *crate::htslib_rs::c_compat::__errno_location() = serrno;
+        *libc::__errno_location() = serrno;
         return Err(b"setsockopt");
     }
 
@@ -42,34 +40,34 @@ pub unsafe fn ref_cache_listener_c_51_open_socket(
             s,
             libc::IPPROTO_IPV6,
             libc::IPV6_V6ONLY,
-            (&mut val as *mut c_int).cast(),
+            (&mut val as *mut i32).cast(),
             std::mem::size_of_val(&val) as libc::socklen_t,
         ) < 0
     {
-        let serrno = *crate::htslib_rs::c_compat::__errno_location();
+        let serrno = *libc::__errno_location();
         libc::close(s);
-        *crate::htslib_rs::c_compat::__errno_location() = serrno;
+        *libc::__errno_location() = serrno;
         return Err(b"setsockopt");
     }
 
     if libc::bind(s, addr.ai_addr, addr.ai_addrlen) == -1 {
-        let serrno = *crate::htslib_rs::c_compat::__errno_location();
+        let serrno = *libc::__errno_location();
         libc::close(s);
-        *crate::htslib_rs::c_compat::__errno_location() = serrno;
+        *libc::__errno_location() = serrno;
         return Err(b"bind");
     }
 
     if ref_cache_misc_h_40_setnonblock(s) != 0 {
-        let serrno = *crate::htslib_rs::c_compat::__errno_location();
+        let serrno = *libc::__errno_location();
         libc::close(s);
-        *crate::htslib_rs::c_compat::__errno_location() = serrno;
+        *libc::__errno_location() = serrno;
         return Err(b"setnonblock");
     }
 
     if libc::listen(s, libc::SOMAXCONN) != 0 {
-        let serrno = *crate::htslib_rs::c_compat::__errno_location();
+        let serrno = *libc::__errno_location();
         libc::close(s);
-        *crate::htslib_rs::c_compat::__errno_location() = serrno;
+        *libc::__errno_location() = serrno;
         return Err(b"listen");
     }
 
@@ -77,7 +75,7 @@ pub unsafe fn ref_cache_listener_c_51_open_socket(
 }
 
 // original: get_listen_sockets (htslib/ref_cache/listener.c:95)
-pub unsafe fn ref_cache_listener_c_95_get_listen_sockets(port: c_int) -> Option<Box<Listeners>> {
+pub unsafe fn ref_cache_listener_c_95_get_listen_sockets(port: i32) -> Option<Box<Listeners>> {
     let mut hints: libc::addrinfo = std::mem::zeroed();
     let mut addr_list: *mut libc::addrinfo = std::ptr::null_mut();
     let pnum = format!("{port}\0").into_bytes();
@@ -93,7 +91,7 @@ pub unsafe fn ref_cache_listener_c_95_get_listen_sockets(port: c_int) -> Option<
 
     let res = libc::getaddrinfo(
         std::ptr::null(),
-        pnum.as_ptr().cast::<std::ffi::c_char>(),
+        pnum.as_ptr().cast::<libc::c_char>(),
         &hints,
         &mut addr_list,
     );
@@ -140,11 +138,7 @@ pub unsafe fn ref_cache_listener_c_95_get_listen_sockets(port: c_int) -> Option<
     libc::freeaddrinfo(addr_list);
 
     if lsocks.sockets.is_empty() {
-        let err = std::ffi::CStr::from_ptr(libc::strerror(
-            *crate::htslib_rs::c_compat::__errno_location(),
-        ))
-        .to_string_lossy()
-        .into_owned();
+        let err = std::io::Error::last_os_error();
         eprintln!(
             "Failure in {} while getting socket: {}",
             String::from_utf8_lossy(cause),
@@ -157,10 +151,10 @@ pub unsafe fn ref_cache_listener_c_95_get_listen_sockets(port: c_int) -> Option<
 }
 
 // original: should_adopt_socket (htslib/ref_cache/listener.c:160)
-pub unsafe fn ref_cache_listener_c_160_should_adopt_socket(fd: c_int) -> bool {
+pub unsafe fn ref_cache_listener_c_160_should_adopt_socket(fd: i32) -> bool {
     let mut statbuf: libc::stat = std::mem::zeroed();
-    let mut sock_type: c_int = 0;
-    let mut accepting: c_int = 0;
+    let mut sock_type: i32 = 0;
+    let mut accepting: i32 = 0;
     let mut addr: libc::sockaddr = std::mem::zeroed();
     let mut len: libc::socklen_t;
     let mut addrlen: libc::socklen_t;
@@ -177,7 +171,7 @@ pub unsafe fn ref_cache_listener_c_160_should_adopt_socket(fd: c_int) -> bool {
         fd,
         libc::SOL_SOCKET,
         libc::SO_TYPE,
-        (&mut sock_type as *mut c_int).cast(),
+        (&mut sock_type as *mut i32).cast(),
         &mut len,
     ) < 0
         || len != std::mem::size_of_val(&sock_type) as libc::socklen_t
@@ -189,7 +183,7 @@ pub unsafe fn ref_cache_listener_c_160_should_adopt_socket(fd: c_int) -> bool {
     addrlen = std::mem::size_of_val(&addr) as libc::socklen_t;
     if libc::getsockname(fd, &mut addr, &mut addrlen) < 0
         || addrlen < std::mem::size_of::<libc::sa_family_t>() as libc::socklen_t
-        || (addr.sa_family as c_int != libc::AF_INET && addr.sa_family as c_int != libc::AF_INET6)
+        || (addr.sa_family as i32 != libc::AF_INET && addr.sa_family as i32 != libc::AF_INET6)
     {
         return false;
     }
@@ -199,7 +193,7 @@ pub unsafe fn ref_cache_listener_c_160_should_adopt_socket(fd: c_int) -> bool {
         fd,
         libc::SOL_SOCKET,
         libc::SO_ACCEPTCONN,
-        (&mut accepting as *mut c_int).cast(),
+        (&mut accepting as *mut i32).cast(),
         &mut len,
     ) < 0
         || len != std::mem::size_of_val(&accepting) as libc::socklen_t
@@ -219,10 +213,10 @@ pub unsafe fn ref_cache_listener_c_160_should_adopt_socket(fd: c_int) -> bool {
 
 // original: adopt_listen_sockets (htslib/ref_cache/listener.c:203)
 pub unsafe fn ref_cache_listener_c_203_adopt_listen_sockets(
-    min_sock_fd: c_int,
-    num_fds: c_int,
+    min_sock_fd: i32,
+    num_fds: i32,
 ) -> Option<Box<Listeners>> {
-    assert!(min_sock_fd > 0 && num_fds > 0 && num_fds < c_int::MAX - min_sock_fd);
+    assert!(min_sock_fd > 0 && num_fds > 0 && num_fds < i32::MAX - min_sock_fd);
 
     let mut lsocks = Box::new(Listeners {
         sockets: Vec::new(),
@@ -266,7 +260,7 @@ pub unsafe fn ref_cache_listener_c_235_close_listen_sockets(lsocks: Box<Listener
 pub unsafe fn ref_cache_listener_c_242_register_listener_pollers(
     lsocks: &Listeners,
     pw: &mut Poll_wrap,
-) -> c_int {
+) -> i32 {
     // Poller arena indices of the registered listener sockets (was a
     // Vec<*mut Pw_item>); the new poll API returns an `Option<usize>` handle.
     let mut polled_items: Vec<usize> = Vec::new();

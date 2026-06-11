@@ -1,35 +1,31 @@
-use std::ffi::{c_char, c_int};
-
 use crate::htslib_rs::{hts, sam};
 
 // original: code (htslib/test/test_mod.c:76)
-pub unsafe fn test_test_mod_c_76_code(id: c_int) -> *mut c_char {
-    static mut CODE: [c_char; 20] = [0; 20];
-    let code = std::ptr::addr_of_mut!(CODE).cast::<c_char>();
+pub unsafe fn test_test_mod_c_76_code(id: i32) -> Vec<u8> {
     if id > 0 {
-        *code = id as c_char;
-        *code.add(1) = 0;
+        vec![id as u8]
     } else {
-        libc::snprintf(code, 20, c"(%d)".as_ptr(), -id);
+        format!("({})", -id).into_bytes()
     }
-    code
 }
 
 // original: main (htslib/test/test_mod.c:88)
-pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_test_mod_c_88_main(mut argc: i32, mut argv: *mut *mut u8) -> i32 {
+    use std::io::Write;
+    let mut __out = std::io::stdout();
     const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
 
     let mut extended = 0;
     let mut flags = 0_u32;
 
-    if argc > 1 && libc::strcmp(*argv.add(1), c"-x".as_ptr()) == 0 {
+    if argc > 1 && libc::strcmp((*argv.add(1)).cast(), c"-x".as_ptr()) == 0 {
         extended = 1;
         argv = argv.add(1);
         argc -= 1;
     }
 
-    if argc > 2 && libc::strcmp(*argv.add(1), c"-f".as_ptr()) == 0 {
-        flags = libc::atoi(*argv.add(2)) as u32;
+    if argc > 2 && libc::strcmp((*argv.add(1)).cast(), c"-f".as_ptr()) == 0 {
+        flags = libc::atoi((*argv.add(2)).cast()) as u32;
         argv = argv.add(2);
         argc -= 2;
     }
@@ -38,7 +34,7 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
         return 1;
     }
 
-    let in_ = hts::hts_open(*argv.add(1), c"r".as_ptr());
+    let in_ = hts::hts_open((*argv.add(1)).cast(), c"r".as_ptr());
     if in_.is_null() {
         return 1;
     }
@@ -61,10 +57,7 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
         }
 
         if sam::bam_parse_basemod2(&*b, &mut m, flags) < 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed to parse MM/ML aux tags\n".as_ptr(),
-            );
+            eprintln!("Failed to parse MM/ML aux tags");
             sam::bam_destroy1(b);
             sam::sam_hdr_destroy(h);
             sam::hts_base_mod_state_free(Some(m));
@@ -79,30 +72,28 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
         }; 5];
         let mut i = 0;
         while i < (*b).core.l_qseq {
-            let mut sp = b'\t' as c_char;
+            let mut sp = b'\t';
             let n = sam::bam_mods_at_next_pos(&*b, &mut m, &mut mods);
-            libc::printf(
-                c"%d\t%c".as_ptr(),
+            write!(
+                __out,
+                "{}\t{}",
                 i,
-                SEQ_NT16_STR[sam::bam_seqi(sam::bam_get_seq(b), i as usize) as usize] as c_int,
-            );
+                SEQ_NT16_STR[sam::bam_seqi(sam::bam_get_seq(b), i as usize) as usize] as char,
+            ).unwrap();
             let mut j = 0;
             while j < n && j < 5 {
-                let mut qstr = [0 as c_char; 10];
-                if mods[j as usize].qual == sam::HTS_MOD_UNCHECKED {
-                    qstr[0] = b'#' as c_char;
-                    qstr[1] = 0;
+                let qstr: Vec<u8> = if mods[j as usize].qual == sam::HTS_MOD_UNCHECKED {
+                    vec![b'#']
                 } else if mods[j as usize].qual == sam::HTS_MOD_UNKNOWN {
-                    qstr[0] = b'.' as c_char;
-                    qstr[1] = 0;
+                    vec![b'.']
                 } else {
-                    libc::snprintf(qstr.as_mut_ptr(), 10, c"%d".as_ptr(), mods[j as usize].qual);
-                }
+                    format!("{}", mods[j as usize].qual).into_bytes()
+                };
 
                 if extended != 0 {
                     let mut m_strand = 0;
                     let mut m_implicit = 0;
-                    let mut m_canonical: c_char = 0;
+                    let mut m_canonical: u8 = 0;
                     let ret = sam::bam_mods_query_type(
                         &m,
                         mods[j as usize].modified_base,
@@ -111,7 +102,7 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
                         Some(&mut m_canonical),
                     );
                     if ret < 0
-                        || m_canonical as c_int != mods[j as usize].canonical_base
+                        || m_canonical as i32 != mods[j as usize].canonical_base
                         || m_strand != mods[j as usize].strand
                     {
                         sam::bam_destroy1(b);
@@ -119,44 +110,46 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
                         sam::hts_base_mod_state_free(Some(m));
                         return if hts::hts_close(in_) != 0 { 1 } else { 2 };
                     }
-                    libc::printf(
-                        c"%c%c%c%s%c%s".as_ptr(),
-                        sp as c_int,
-                        mods[j as usize].canonical_base,
-                        *b"+-".as_ptr().add(mods[j as usize].strand as usize) as c_int,
-                        test_test_mod_c_76_code(mods[j as usize].modified_base),
-                        *b"?.".as_ptr().add(m_implicit as usize) as c_int,
-                        qstr.as_ptr(),
-                    );
+                    write!(
+                        __out,
+                        "{}{}{}{}{}{}",
+                        sp as char,
+                        mods[j as usize].canonical_base as u8 as char,
+                        b"+-"[mods[j as usize].strand as usize] as char,
+                        String::from_utf8_lossy(&test_test_mod_c_76_code(mods[j as usize].modified_base)),
+                        b"?."[m_implicit as usize] as char,
+                        String::from_utf8_lossy(&qstr),
+                    ).unwrap();
                 } else {
-                    libc::printf(
-                        c"%c%c%c%s%s".as_ptr(),
-                        sp as c_int,
-                        mods[j as usize].canonical_base,
-                        *b"+-".as_ptr().add(mods[j as usize].strand as usize) as c_int,
-                        test_test_mod_c_76_code(mods[j as usize].modified_base),
-                        qstr.as_ptr(),
-                    );
+                    write!(
+                        __out,
+                        "{}{}{}{}{}",
+                        sp as char,
+                        mods[j as usize].canonical_base as u8 as char,
+                        b"+-"[mods[j as usize].strand as usize] as char,
+                        String::from_utf8_lossy(&test_test_mod_c_76_code(mods[j as usize].modified_base)),
+                        String::from_utf8_lossy(&qstr),
+                    ).unwrap();
                 }
-                sp = b' ' as c_char;
+                sp = b' ';
                 j += 1;
             }
-            libc::putchar(b'\n' as c_int);
+            writeln!(__out).unwrap();
             i += 1;
         }
 
-        libc::puts(c"---".as_ptr());
+        writeln!(__out, "---").unwrap();
 
         sam::bam_parse_basemod2(&*b, &mut m, flags);
 
         let mut all_mods_n = 0;
         let all_mods = sam::bam_mods_recorded(&mut m, &mut all_mods_n).to_vec();
-        libc::printf(c"Present:".as_ptr());
+        write!(__out, "Present:").unwrap();
         i = 0;
         while i < all_mods_n {
             let mut m_strand = 0;
             let mut m_implicit = 0;
-            let mut m_canonical: c_char = 0;
+            let mut m_canonical: u8 = 0;
             sam::bam_mods_queryi(
                 &m,
                 i,
@@ -164,18 +157,15 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
                 Some(&mut m_implicit),
                 Some(&mut m_canonical),
             );
-            libc::printf(
-                if all_mods[i as usize] > 0 {
-                    c" %c".as_ptr()
-                } else {
-                    c" #%d".as_ptr()
-                },
-                all_mods[i as usize],
-            );
-            libc::putchar(*b"?.".as_ptr().add(m_implicit as usize) as c_int);
+            if all_mods[i as usize] > 0 {
+                write!(__out, " {}", all_mods[i as usize] as u8 as char).unwrap();
+            } else {
+                write!(__out, " #{}", all_mods[i as usize]).unwrap();
+            }
+            write!(__out, "{}", b"?."[m_implicit as usize] as char).unwrap();
             i += 1;
         }
-        libc::putchar(b'\n' as c_int);
+        writeln!(__out).unwrap();
 
         let mut pos = 0;
         loop {
@@ -189,43 +179,42 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
                 }
                 break;
             }
-            let mut sp = b'\t' as c_char;
-            libc::printf(
-                c"%d\t%c".as_ptr(),
+            let mut sp = b'\t';
+            write!(
+                __out,
+                "{}\t{}",
                 pos,
-                SEQ_NT16_STR[sam::bam_seqi(sam::bam_get_seq(b), pos as usize) as usize] as c_int,
-            );
+                SEQ_NT16_STR[sam::bam_seqi(sam::bam_get_seq(b), pos as usize) as usize] as char,
+            ).unwrap();
             let mut j = 0;
             while j < n && j < 5 {
-                let mut qstr = [0 as c_char; 10];
-                if mods[j as usize].qual == sam::HTS_MOD_UNCHECKED {
-                    qstr[0] = b'#' as c_char;
-                    qstr[1] = 0;
+                let qstr: Vec<u8> = if mods[j as usize].qual == sam::HTS_MOD_UNCHECKED {
+                    vec![b'#']
                 } else if mods[j as usize].qual == sam::HTS_MOD_UNKNOWN {
-                    qstr[0] = b'.' as c_char;
-                    qstr[1] = 0;
+                    vec![b'.']
                 } else {
-                    libc::snprintf(qstr.as_mut_ptr(), 10, c"%d".as_ptr(), mods[j as usize].qual);
-                }
+                    format!("{}", mods[j as usize].qual).into_bytes()
+                };
 
-                libc::printf(
-                    c"%c%c%c%s%s".as_ptr(),
-                    sp as c_int,
-                    mods[j as usize].canonical_base,
-                    *b"+-".as_ptr().add(mods[j as usize].strand as usize) as c_int,
-                    test_test_mod_c_76_code(mods[j as usize].modified_base),
-                    qstr.as_ptr(),
-                );
-                sp = b' ' as c_char;
+                write!(
+                    __out,
+                    "{}{}{}{}{}",
+                    sp as char,
+                    mods[j as usize].canonical_base as u8 as char,
+                    b"+-"[mods[j as usize].strand as usize] as char,
+                    String::from_utf8_lossy(&test_test_mod_c_76_code(mods[j as usize].modified_base)),
+                    String::from_utf8_lossy(&qstr),
+                ).unwrap();
+                sp = b' ';
                 j += 1;
             }
-            libc::putchar(b'\n' as c_int);
+            writeln!(__out).unwrap();
         }
 
-        libc::puts(c"\n===\n".as_ptr());
+        writeln!(__out, "\n===\n").unwrap();
     }
 
-    libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
+    let _ = __out.flush();
     let mut ret = 0;
     if hts::hts_close(in_) != 0 || r < -1 {
         ret = 1;
@@ -240,15 +229,16 @@ pub unsafe fn test_test_mod_c_88_main(mut argc: c_int, mut argv: *mut *mut c_cha
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
     use std::path::{Path, PathBuf};
 
     fn fixture(path: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
     }
 
-    fn c_path(path: &Path) -> CString {
-        CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    fn c_path(path: &Path) -> Vec<u8> {
+        let mut v = path.to_string_lossy().as_bytes().to_vec();
+        v.push(0);
+        v
     }
 
     fn temp_output(label: &str) -> PathBuf {
@@ -259,7 +249,7 @@ mod tests {
         ))
     }
 
-    unsafe fn run_main_capture_stdout(args: &mut [CString], out_path: &Path) -> c_int {
+    unsafe fn run_main_capture_stdout(args: &mut [Vec<u8>], out_path: &Path) -> i32 {
         let _ = std::fs::remove_file(out_path);
         libc::fflush(std::ptr::null_mut());
         let pid = libc::fork();
@@ -268,7 +258,7 @@ mod tests {
         if pid == 0 {
             let out_c = c_path(out_path);
             let out_fd = libc::open(
-                out_c.as_ptr(),
+                out_c.as_ptr().cast(),
                 libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
                 0o600,
             );
@@ -283,9 +273,9 @@ mod tests {
 
             let mut argv = args
                 .iter_mut()
-                .map(|arg| arg.as_ptr().cast_mut())
+                .map(|arg| arg.as_mut_ptr())
                 .collect::<Vec<_>>();
-            let ret = test_test_mod_c_88_main(argv.len() as c_int, argv.as_mut_ptr());
+            let ret = test_test_mod_c_88_main(argv.len() as i32, argv.as_mut_ptr());
             libc::fflush(std::ptr::null_mut());
             libc::_exit(ret);
         }
@@ -296,7 +286,7 @@ mod tests {
         libc::WEXITSTATUS(status)
     }
 
-    fn assert_main_output(label: &str, mut args: Vec<CString>, expected: &str) {
+    fn assert_main_output(label: &str, mut args: Vec<Vec<u8>>, expected: &str) {
         let out = temp_output(label);
         unsafe {
             assert_eq!(run_main_capture_stdout(&mut args, &out), 0);
@@ -317,7 +307,7 @@ mod tests {
         assert_main_output(
             "chebi-default",
             vec![
-                CString::new("test_mod").unwrap(),
+                b"test_mod\0".to_vec(),
                 c_path(&fixture("htslib/test/base_mods/MM-chebi.sam")),
             ],
             "htslib/test/base_mods/MM-chebi.out",
@@ -325,8 +315,8 @@ mod tests {
         assert_main_output(
             "explicit-extended",
             vec![
-                CString::new("test_mod").unwrap(),
-                CString::new("-x").unwrap(),
+                b"test_mod\0".to_vec(),
+                b"-x\0".to_vec(),
                 c_path(&fixture("htslib/test/base_mods/MM-explicit.sam")),
             ],
             "htslib/test/base_mods/MM-explicit-x.out",
@@ -334,9 +324,9 @@ mod tests {
         assert_main_output(
             "explicit-flags",
             vec![
-                CString::new("test_mod").unwrap(),
-                CString::new("-f").unwrap(),
-                CString::new("1").unwrap(),
+                b"test_mod\0".to_vec(),
+                b"-f\0".to_vec(),
+                b"1\0".to_vec(),
                 c_path(&fixture("htslib/test/base_mods/MM-explicit.sam")),
             ],
             "htslib/test/base_mods/MM-explicit-f.out",

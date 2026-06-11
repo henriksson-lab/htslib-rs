@@ -1,11 +1,12 @@
-use std::ffi::{c_char, c_int, c_uint};
+use std::ffi::c_char;
+use std::io::Write;
 
 use crate::htslib_rs::{hts::kstring_t, sam};
 
-unsafe fn printauxdata(fp: *mut libc::FILE, type_: c_char, idx: i32, data: *const u8) -> c_int {
-    match type_ as u8 {
+unsafe fn printauxdata(__out: &mut impl Write, type_: u8, idx: i32, data: *const u8) -> i32 {
+    match type_ {
         b'A' => {
-            libc::fprintf(fp, c"%c".as_ptr(), sam::bam_aux2A(data) as c_int);
+            write!(__out, "{}", sam::bam_aux2A(data) as u8 as char).unwrap();
         }
         b'c' => {
             let value = if idx > -1 {
@@ -13,7 +14,7 @@ unsafe fn printauxdata(fp: *mut libc::FILE, type_: c_char, idx: i32, data: *cons
             } else {
                 sam::bam_aux2i(data)
             };
-            libc::fprintf(fp, c"%d".as_ptr(), value as i8 as c_int);
+            write!(__out, "{}", value as i8 as i32).unwrap();
         }
         b'C' => {
             let value = if idx > -1 {
@@ -21,7 +22,7 @@ unsafe fn printauxdata(fp: *mut libc::FILE, type_: c_char, idx: i32, data: *cons
             } else {
                 sam::bam_aux2i(data)
             };
-            libc::fprintf(fp, c"%u".as_ptr(), value as u8 as c_uint);
+            write!(__out, "{}", value as u8 as u32).unwrap();
         }
         b's' => {
             let value = if idx > -1 {
@@ -29,7 +30,7 @@ unsafe fn printauxdata(fp: *mut libc::FILE, type_: c_char, idx: i32, data: *cons
             } else {
                 sam::bam_aux2i(data)
             };
-            libc::fprintf(fp, c"%d".as_ptr(), value as i16 as c_int);
+            write!(__out, "{}", value as i16 as i32).unwrap();
         }
         b'S' => {
             let value = if idx > -1 {
@@ -37,7 +38,7 @@ unsafe fn printauxdata(fp: *mut libc::FILE, type_: c_char, idx: i32, data: *cons
             } else {
                 sam::bam_aux2i(data)
             };
-            libc::fprintf(fp, c"%u".as_ptr(), value as u16 as c_uint);
+            write!(__out, "{}", value as u16 as u32).unwrap();
         }
         b'i' => {
             let value = if idx > -1 {
@@ -45,7 +46,7 @@ unsafe fn printauxdata(fp: *mut libc::FILE, type_: c_char, idx: i32, data: *cons
             } else {
                 sam::bam_aux2i(data)
             };
-            libc::fprintf(fp, c"%d".as_ptr(), value as i32);
+            write!(__out, "{}", value as i32).unwrap();
         }
         b'I' => {
             let value = if idx > -1 {
@@ -53,7 +54,7 @@ unsafe fn printauxdata(fp: *mut libc::FILE, type_: c_char, idx: i32, data: *cons
             } else {
                 sam::bam_aux2i(data)
             };
-            libc::fprintf(fp, c"%u".as_ptr(), value as u32);
+            write!(__out, "{}", value as u32).unwrap();
         }
         b'f' | b'd' => {
             let value = if idx > -1 {
@@ -61,55 +62,57 @@ unsafe fn printauxdata(fp: *mut libc::FILE, type_: c_char, idx: i32, data: *cons
             } else {
                 sam::bam_aux2f(data)
             };
-            libc::fprintf(fp, c"%g".as_ptr(), value as f32 as f64);
+            write!(__out, "{}", value as f32 as f64).unwrap();
         }
         b'H' | b'Z' => {
-            libc::fprintf(fp, c"%s".as_ptr(), sam::bam_aux2Z(data));
+            let z = sam::bam_aux2Z(data);
+            let bytes = std::ffi::CStr::from_ptr(z.cast()).to_bytes();
+            write!(__out, "{}", String::from_utf8_lossy(bytes)).unwrap();
         }
         b'B' => {
             let aux_b_count = sam::bam_auxB_len(data);
-            let aux_b_type = sam::bam_aux_type(data.add(1));
-            libc::fprintf(fp, c"%c".as_ptr(), aux_b_type as c_int);
+            let aux_b_type = sam::bam_aux_type(data.add(1)) as u8;
+            write!(__out, "{}", aux_b_type as char).unwrap();
             for i in 0..aux_b_count {
-                libc::fprintf(fp, c",".as_ptr());
-                if printauxdata(fp, aux_b_type, i as i32, data) == libc::EXIT_FAILURE {
-                    return libc::EXIT_FAILURE;
+                write!(__out, ",").unwrap();
+                if printauxdata(__out, aux_b_type, i as i32, data) == 1 {
+                    return 1;
                 }
             }
         }
         _ => {
-            libc::printf(c"Invalid aux tag?\n".as_ptr());
-            return libc::EXIT_FAILURE;
+            writeln!(__out, "Invalid aux tag?").unwrap();
+            return 1;
         }
     }
-    libc::EXIT_SUCCESS
+    0
 }
 
 // original: print_usage (htslib/samples/read_aux.c:37)
-pub unsafe fn samples_read_aux_c_37_print_usage(fp: *mut libc::FILE) {
-    libc::fprintf(
-        fp,
-        c"Usage: read_aux infile tag\nRead the given aux tag from alignments either as SAM string or as raw data\n".as_ptr(),
+pub unsafe fn samples_read_aux_c_37_print_usage() {
+    eprintln!(
+        "Usage: read_aux infile tag\nRead the given aux tag from alignments either as SAM string or as raw data"
     );
 }
 
 // original: printauxdata (htslib/samples/read_aux.c:51)
 pub unsafe fn samples_read_aux_c_51_printauxdata(
-    fp: *mut libc::FILE,
-    type_: c_char,
+    __out: &mut impl Write,
+    type_: u8,
     idx: i32,
     data: *const u8,
-) -> c_int {
-    printauxdata(fp, type_, idx, data)
+) -> i32 {
+    printauxdata(__out, type_, idx, data)
 }
 
 // original: main (htslib/samples/read_aux.c:114)
-pub unsafe fn samples_read_aux_c_114_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
-    let mut ret = libc::EXIT_FAILURE;
+pub unsafe fn samples_read_aux_c_114_main(argc: i32, argv: *mut *mut c_char) -> i32 {
+    let mut ret = 1;
+    let mut __out = std::io::stdout();
     let mut sdata = kstring_t { data: Vec::new() };
 
     if argc != 3 {
-        samples_read_aux_c_37_print_usage(crate::htslib_rs::c_compat::stderr.cast());
+        samples_read_aux_c_37_print_usage();
         return ret;
     }
     let inname = *argv.add(1);
@@ -117,18 +120,19 @@ pub unsafe fn samples_read_aux_c_114_main(argc: c_int, argv: *mut *mut c_char) -
 
     let bamdata = sam::bam_init1();
     if bamdata.is_null() {
-        libc::printf(c"Failed to allocate data memory!\n".as_ptr());
+        writeln!(__out, "Failed to allocate data memory!").unwrap();
         return ret;
     }
     let infile = crate::htslib_rs::hts::hts_open(inname, c"r".as_ptr());
     if infile.is_null() {
-        libc::printf(c"Could not open %s\n".as_ptr(), inname);
+        let inname_bytes = std::ffi::CStr::from_ptr(inname).to_bytes();
+        writeln!(__out, "Could not open {}", String::from_utf8_lossy(inname_bytes)).unwrap();
         sam::bam_destroy1(bamdata);
         return ret;
     }
     let in_samhdr = sam::sam_hdr_read(infile);
     if in_samhdr.is_null() {
-        libc::printf(c"Failed to read header from file!\n".as_ptr());
+        writeln!(__out, "Failed to read header from file!").unwrap();
         crate::htslib_rs::hts::hts_close(infile);
         sam::bam_destroy1(bamdata);
         return ret;
@@ -141,18 +145,16 @@ pub unsafe fn samples_read_aux_c_114_main(argc: c_int, argv: *mut *mut c_char) -
         i += 1;
         crate::htslib_rs::hts::ks_clear(&mut sdata);
         if i % 2 != 0 {
-            let c = sam::bam_aux_get_str(bamdata, tag, &mut sdata);
+            let c = sam::bam_aux_get_str(bamdata, tag.cast(), &mut sdata);
             if c == 1 {
-                let mut sdata_cstr = sdata.data.clone();
-                sdata_cstr.push(0);
-                libc::printf(c"%s\n".as_ptr(), sdata_cstr.as_ptr() as *const c_char);
+                writeln!(__out, "{}", String::from_utf8_lossy(&sdata.data)).unwrap();
             } else if c == 0
                 && *crate::htslib_rs::c_compat::__errno_location()
-                    == crate::htslib_rs::c_compat::ENOENT as c_int
+                    == crate::htslib_rs::c_compat::ENOENT as i32
             {
-                libc::printf(c"Tag not present\n".as_ptr());
+                writeln!(__out, "Tag not present").unwrap();
             } else {
-                libc::printf(c"Failed to get tag\n".as_ptr());
+                writeln!(__out, "Failed to get tag").unwrap();
                 sam::sam_hdr_destroy(in_samhdr);
                 crate::htslib_rs::hts::hts_close(infile);
                 sam::bam_destroy1(bamdata);
@@ -160,44 +162,39 @@ pub unsafe fn samples_read_aux_c_114_main(argc: c_int, argv: *mut *mut c_char) -
                 return ret;
             }
         } else {
-            let data = sam::bam_aux_get(bamdata, tag);
+            let data = sam::bam_aux_get(bamdata, tag.cast());
             if data.is_null() {
                 if *crate::htslib_rs::c_compat::__errno_location()
-                    == crate::htslib_rs::c_compat::ENOENT as c_int
+                    == crate::htslib_rs::c_compat::ENOENT as i32
                 {
-                    libc::printf(c"Tag not present\n".as_ptr());
+                    writeln!(__out, "Tag not present").unwrap();
                 } else {
-                    libc::printf(c"Invalid aux data\n".as_ptr());
+                    writeln!(__out, "Invalid aux data").unwrap();
                 }
             } else {
-                if samples_read_aux_c_51_printauxdata(
-                    crate::htslib_rs::c_compat::stdout.cast(),
-                    sam::bam_aux_type(data),
-                    -1,
-                    data,
-                ) == libc::EXIT_FAILURE
-                {
-                    libc::printf(c"Failed to read aux data\n".as_ptr());
+                if samples_read_aux_c_51_printauxdata(&mut __out, sam::bam_aux_type(data) as u8, -1, data) == 1 {
+                    writeln!(__out, "Failed to read aux data").unwrap();
                     sam::sam_hdr_destroy(in_samhdr);
                     crate::htslib_rs::hts::hts_close(infile);
                     sam::bam_destroy1(bamdata);
                     crate::htslib_rs::hts::ks_free(&mut sdata);
                     return ret;
                 }
-                libc::printf(c"\n".as_ptr());
+                writeln!(__out).unwrap();
             }
         }
         ret_r = sam::sam_read1(infile, in_samhdr, bamdata);
     }
     if ret_r < -1 {
-        libc::printf(c"Failed to read data\n".as_ptr());
+        writeln!(__out, "Failed to read data").unwrap();
     } else {
-        ret = libc::EXIT_SUCCESS;
+        ret = 0;
     }
 
     sam::sam_hdr_destroy(in_samhdr);
     crate::htslib_rs::hts::hts_close(infile);
     sam::bam_destroy1(bamdata);
     crate::htslib_rs::hts::ks_free(&mut sdata);
+    __out.flush().unwrap();
     ret
 }

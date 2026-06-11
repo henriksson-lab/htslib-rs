@@ -5,7 +5,6 @@ mod htslib_rs {
 #[path = "../src/annot_tsv.rs"]
 mod annot_tsv;
 
-use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -32,24 +31,39 @@ fn run_annot_tsv(src: &str, dst: &str, args: &[&str]) -> String {
     let src = fixture(&format!("htslib/test/annot-tsv/{src}"));
     let dst = fixture(&format!("htslib/test/annot-tsv/{dst}"));
 
-    let mut argv = vec![
-        CString::new("annot-tsv").unwrap(),
-        CString::new("-s").unwrap(),
-        CString::new(src.to_string_lossy().as_bytes()).unwrap(),
-        CString::new("-t").unwrap(),
-        CString::new(dst.to_string_lossy().as_bytes()).unwrap(),
-        CString::new("-o").unwrap(),
-        CString::new(out.to_string_lossy().as_bytes()).unwrap(),
+    let mut argv: Vec<Vec<u8>> = vec![
+        b"annot-tsv\0".to_vec(),
+        b"-s\0".to_vec(),
+        {
+            let mut v = src.to_string_lossy().as_bytes().to_vec();
+            v.push(0);
+            v
+        },
+        b"-t\0".to_vec(),
+        {
+            let mut v = dst.to_string_lossy().as_bytes().to_vec();
+            v.push(0);
+            v
+        },
+        b"-o\0".to_vec(),
+        {
+            let mut v = out.to_string_lossy().as_bytes().to_vec();
+            v.push(0);
+            v
+        },
     ];
-    argv.extend(args.iter().map(|arg| CString::new(*arg).unwrap()));
+    argv.extend(args.iter().map(|arg| {
+        let mut v = arg.as_bytes().to_vec();
+        v.push(0);
+        v
+    }));
     let mut ptrs = argv
         .iter()
-        .map(|arg| arg.as_ptr().cast_mut())
+        .map(|arg| arg.as_ptr().cast::<i8>().cast_mut())
         .collect::<Vec<_>>();
 
     let _guard = ANNOT_TSV_LOCK.lock().unwrap();
-    let ret =
-        unsafe { annot_tsv::annot_tsv_c_956_main(ptrs.len() as libc::c_int, ptrs.as_mut_ptr()) };
+    let ret = unsafe { annot_tsv::annot_tsv_c_956_main(ptrs.len() as i32, ptrs.as_mut_ptr()) };
     assert_eq!(ret, 0);
     std::fs::read_to_string(out).unwrap()
 }

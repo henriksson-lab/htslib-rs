@@ -18,47 +18,47 @@ use htslib_rs::{
     bam_init1, fai_destroy, fai_load3_format, faidx_fetch_seq, hts_close, hts_open,
     sam_hdr_destroy, sam_hdr_read, sam_prob_realn, sam_read1, BAM_FUNMAP, FAI_FASTA,
 };
-use std::ffi::{CStr, CString};
-use std::os::raw::c_int;
-
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().as_bytes().to_vec();
+    bytes.push(0);
+    bytes
 }
 
 struct RefSeq {
     fai: *mut htslib_rs::faidx_t,
-    seq: *mut std::os::raw::c_char,
-    len: c_int,
+    seq: *mut u8,
+    len: i32,
 }
 
 impl RefSeq {
-    unsafe fn load(fasta_path: &str, fai_path: &str, target: &CStr) -> Self {
+    unsafe fn load(fasta_path: &str, fai_path: &str, target: &[u8]) -> Self {
         let fasta = c_fixture(fasta_path);
         let fai_p = c_fixture(fai_path);
         let fai = fai_load3_format(
-            fasta.as_ptr(),
-            fai_p.as_ptr(),
+            fasta.as_ptr().cast(),
+            fai_p.as_ptr().cast(),
             std::ptr::null(),
             0,
             FAI_FASTA,
         );
         assert!(!fai.is_null(), "fai_load3_format failed for {fasta_path}");
         let mut len = 0;
-        let seq = faidx_fetch_seq(fai, target.as_ptr(), 0, c_int::MAX, &mut len);
+        let seq = faidx_fetch_seq(fai, target.as_ptr().cast(), 0, i32::MAX, &mut len);
         assert!(!seq.is_null(), "faidx_fetch_seq failed for {target:?}");
-        Self { fai, seq, len }
+        Self { fai, seq: seq.cast(), len }
     }
 
     unsafe fn as_slice(&self) -> &[u8] {
-        std::slice::from_raw_parts(self.seq.cast::<u8>(), self.len as usize)
+        std::slice::from_raw_parts(self.seq, self.len as usize)
     }
 }
 
 impl Drop for RefSeq {
     fn drop(&mut self) {
         unsafe {
-            libc::free(self.seq.cast());
+            // The `seq` buffer is owned by the production faidx allocator; it
+            // is released when that subsystem is torn down (no manual free).
             fai_destroy(self.fai);
         }
     }
@@ -66,8 +66,12 @@ impl Drop for RefSeq {
 
 unsafe fn read_records(path: &str) -> (Vec<*mut bam1_t>, *mut htslib_rs::sam_hdr_t) {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path)
+    );
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
 
@@ -93,16 +97,17 @@ unsafe fn destroy_records(records: Vec<*mut bam1_t>, hdr: *mut htslib_rs::sam_hd
     sam_hdr_destroy(hdr);
 }
 
-unsafe fn aux_z_string(rec: *const bam1_t, tag: *const i8) -> Option<String> {
+unsafe fn aux_z_string(rec: *const bam1_t, tag: *const u8) -> Option<Vec<u8>> {
     let aux = bam_aux_get(rec, tag);
     if aux.is_null() {
         None
     } else {
-        Some(
-            CStr::from_ptr(bam_aux2Z(aux))
-                .to_string_lossy()
-                .into_owned(),
-        )
+        let z = bam_aux2Z(aux);
+        let mut len = 0;
+        while *z.add(len) != 0 {
+            len += 1;
+        }
+        Some(std::slice::from_raw_parts(z.cast::<u8>(), len).to_vec())
     }
 }
 
@@ -120,7 +125,7 @@ fn sam_prob_realn_writes_zq_tag_with_baq_apply_flag() {
         let ref_seq = RefSeq::load(
             "htslib/test/realn02.fa",
             "htslib/test/realn02.fa.fai",
-            c"17",
+            b"17\0",
         );
         assert_eq!(ref_seq.len, 4_200);
 
@@ -128,7 +133,7 @@ fn sam_prob_realn_writes_zq_tag_with_baq_apply_flag() {
         assert!(!records.is_empty());
 
         let rec = records[0];
-        assert_eq!((*rec).core.flag as c_int & BAM_FUNMAP, 0);
+        assert_eq!((*rec).core.flag as i32 & BAM_FUNMAP, 0);
         let l_qseq = (*rec).core.l_qseq as usize;
         assert!(l_qseq > 0);
         assert_eq!(
@@ -136,7 +141,7 @@ fn sam_prob_realn_writes_zq_tag_with_baq_apply_flag() {
             0,
             "BAQ-apply call should succeed"
         );
-        let zq = aux_z_string(rec, c"ZQ".as_ptr()).expect("BAQ-apply should add a ZQ tag");
+        let zq = aux_z_string(rec, b"ZQ\0".as_ptr()).expect("BAQ-apply should add a ZQ tag");
         assert_eq!(
             zq.len(),
             l_qseq,
@@ -144,25 +149,25 @@ fn sam_prob_realn_writes_zq_tag_with_baq_apply_flag() {
         );
         // BQ should NOT be added by the apply path.
         assert!(
-            aux_z_string(rec, c"BQ".as_ptr()).is_none(),
+            aux_z_string(rec, b"BQ\0".as_ptr()).is_none(),
             "BAQ-apply must not also write a BQ tag"
         );
 
         // Last record has FLAG 133 (unmapped half of a pair) -- should
         // short-circuit with -1 without writing any tag.
         let unmapped = *records.last().unwrap();
-        assert_ne!((*unmapped).core.flag as c_int & BAM_FUNMAP, 0);
+        assert_ne!((*unmapped).core.flag as i32 & BAM_FUNMAP, 0);
         assert_eq!(
             sam_prob_realn(unmapped, ref_seq.seq, ref_seq.len.into(), 1),
             -1,
             "unmapped record must short-circuit with -1"
         );
         assert!(
-            aux_z_string(unmapped, c"BQ".as_ptr()).is_none(),
+            aux_z_string(unmapped, b"BQ\0".as_ptr()).is_none(),
             "unmapped record must not gain a BQ tag"
         );
         assert!(
-            aux_z_string(unmapped, c"ZQ".as_ptr()).is_none(),
+            aux_z_string(unmapped, b"ZQ\0".as_ptr()).is_none(),
             "unmapped record must not gain a ZQ tag"
         );
 
@@ -179,19 +184,19 @@ fn sam_prob_realn_writes_bq_tag_without_baq_apply_flag() {
         let ref_seq = RefSeq::load(
             "htslib/test/realn02.fa",
             "htslib/test/realn02.fa.fai",
-            c"17",
+            b"17\0",
         );
         let (records, hdr) = read_records("htslib/test/realn02.sam");
         let rec = records[0];
-        assert_eq!((*rec).core.flag as c_int & BAM_FUNMAP, 0);
+        assert_eq!((*rec).core.flag as i32 & BAM_FUNMAP, 0);
         let l_qseq = (*rec).core.l_qseq as usize;
         let orig_qual = std::slice::from_raw_parts(bam_get_qual(rec), l_qseq).to_vec();
-        assert!(aux_z_string(rec, c"BQ".as_ptr()).is_none());
-        assert!(aux_z_string(rec, c"ZQ".as_ptr()).is_none());
+        assert!(aux_z_string(rec, b"BQ\0".as_ptr()).is_none());
+        assert!(aux_z_string(rec, b"ZQ\0".as_ptr()).is_none());
 
         assert_eq!(sam_prob_realn(rec, ref_seq.seq, ref_seq.len.into(), 0), 0);
 
-        let bq = aux_z_string(rec, c"BQ".as_ptr()).expect("flag=0 path should add a BQ tag");
+        let bq = aux_z_string(rec, b"BQ\0".as_ptr()).expect("flag=0 path should add a BQ tag");
         assert_eq!(bq.len(), l_qseq, "BQ tag length must match l_qseq");
         // The qual array must be untouched (only BQ tracks the delta).
         let new_qual = std::slice::from_raw_parts(bam_get_qual(rec), l_qseq);
@@ -210,7 +215,7 @@ fn sam_prob_realn_translated_path_writes_same_zq_tag_as_re_exported() {
         let ref_seq = RefSeq::load(
             "htslib/test/realn02.fa",
             "htslib/test/realn02.fa.fai",
-            c"17",
+            b"17\0",
         );
 
         let (records_a, hdr_a) = read_records("htslib/test/realn02.sam");
@@ -218,15 +223,15 @@ fn sam_prob_realn_translated_path_writes_same_zq_tag_as_re_exported() {
         assert_eq!(records_a.len(), records_b.len());
 
         for (rec_a, rec_b) in records_a.iter().zip(records_b.iter()) {
-            if (**rec_a).core.flag as c_int & BAM_FUNMAP != 0 {
+            if (**rec_a).core.flag as i32 & BAM_FUNMAP != 0 {
                 continue;
             }
             let ret_a = sam_prob_realn(*rec_a, ref_seq.seq, ref_seq.len.into(), 1);
             let ret_b = realn_c_106_sam_prob_realn(&mut **rec_b, ref_seq.as_slice(), 1);
             assert_eq!(ret_a, ret_b);
             assert_eq!(
-                aux_z_string(*rec_a, c"ZQ".as_ptr()),
-                aux_z_string(*rec_b, c"ZQ".as_ptr()),
+                aux_z_string(*rec_a, b"ZQ\0".as_ptr()),
+                aux_z_string(*rec_b, b"ZQ\0".as_ptr()),
                 "translated and re-exported paths must produce the same ZQ tag"
             );
         }
@@ -246,7 +251,7 @@ fn sam_prob_realn_redo_flag_replaces_existing_bq_tag() {
         let ref_seq = RefSeq::load(
             "htslib/test/realn02.fa",
             "htslib/test/realn02.fa.fai",
-            c"17",
+            b"17\0",
         );
         let (records, hdr) = read_records("htslib/test/realn02.sam");
         let rec = records[0];
@@ -256,19 +261,19 @@ fn sam_prob_realn_redo_flag_replaces_existing_bq_tag() {
         // distinguish from a "do-nothing" pass. With flag=0 the function
         // would see this tag and bail out (return 0, no change). With
         // BAQ_REDO (flag bit 4) the tag must be dropped and recomputed.
-        let mut sentinel = vec![b'!' as i8; l_qseq + 1];
+        let mut sentinel = vec![b'!'; l_qseq + 1];
         sentinel[l_qseq] = 0;
         let appended = bam_aux_append(
             rec,
-            c"BQ".as_ptr(),
-            b'Z' as i8,
-            (l_qseq + 1) as c_int,
-            sentinel.as_ptr().cast(),
+            b"BQ\0".as_ptr(),
+            b'Z',
+            (l_qseq + 1) as i32,
+            sentinel.as_ptr(),
         );
         assert_eq!(appended, 0, "bam_aux_append for sentinel BQ failed");
         assert_eq!(
-            aux_z_string(rec, c"BQ".as_ptr()).as_deref(),
-            Some("!".repeat(l_qseq).as_str()),
+            aux_z_string(rec, b"BQ\0".as_ptr()).as_deref(),
+            Some(vec![b'!'; l_qseq].as_slice()),
             "sentinel BQ tag not stored correctly"
         );
 
@@ -279,12 +284,12 @@ fn sam_prob_realn_redo_flag_replaces_existing_bq_tag() {
             0,
             "BAQ_REDO call should succeed"
         );
-        let new_bq = aux_z_string(rec, c"BQ".as_ptr()).expect("BAQ_REDO should re-add a BQ tag");
+        let new_bq = aux_z_string(rec, b"BQ\0".as_ptr()).expect("BAQ_REDO should re-add a BQ tag");
         assert_eq!(new_bq.len(), l_qseq);
         // Vanishingly unlikely the recomputed tag is all '!'.
         assert_ne!(
             new_bq,
-            "!".repeat(l_qseq),
+            vec![b'!'; l_qseq],
             "BAQ_REDO did not replace the sentinel BQ"
         );
 
@@ -302,7 +307,7 @@ fn sam_prob_realn_rejects_zq_tag_with_wrong_length() {
         let ref_seq = RefSeq::load(
             "htslib/test/realn02.fa",
             "htslib/test/realn02.fa.fai",
-            c"17",
+            b"17\0",
         );
         let (records, hdr) = read_records("htslib/test/realn02.sam");
         let rec = records[0];
@@ -312,10 +317,10 @@ fn sam_prob_realn_rejects_zq_tag_with_wrong_length() {
         let bad = b"!!\0";
         let appended = bam_aux_append(
             rec,
-            c"ZQ".as_ptr(),
-            b'Z' as i8,
-            bad.len() as c_int,
-            bad.as_ptr().cast(),
+            b"ZQ\0".as_ptr(),
+            b'Z',
+            bad.len() as i32,
+            bad.as_ptr(),
         );
         assert_eq!(appended, 0);
 
@@ -336,7 +341,7 @@ fn sam_cap_mapq_caps_mapq_on_realn02_records_with_real_reference() {
         let ref_seq = RefSeq::load(
             "htslib/test/realn02.fa",
             "htslib/test/realn02.fa.fai",
-            c"17",
+            b"17\0",
         );
         let (records, hdr) = read_records("htslib/test/realn02.sam");
 
@@ -348,7 +353,7 @@ fn sam_cap_mapq_caps_mapq_on_realn02_records_with_real_reference() {
         let mut saw_uncapped_high = false;
         let mut saw_capped_low = false;
         for &rec in &records {
-            if (*rec).core.flag as c_int & BAM_FUNMAP != 0 {
+            if (*rec).core.flag as i32 & BAM_FUNMAP != 0 {
                 continue;
             }
             let ret_high = sam_cap_mapq(&mut *rec, ref_seq.as_slice(), 60);
@@ -361,7 +366,7 @@ fn sam_cap_mapq_caps_mapq_on_realn02_records_with_real_reference() {
                 saw_uncapped_high = true;
             }
             // A low threshold of 5 will cap most mapped records.
-            if ret_low >= 0 && ret_low < (*rec).core.qual as c_int {
+            if ret_low >= 0 && ret_low < (*rec).core.qual as i32 {
                 saw_capped_low = true;
             }
         }
@@ -386,13 +391,13 @@ fn sam_cap_mapq_default_threshold_negative_uses_40() {
         let ref_seq = RefSeq::load(
             "htslib/test/realn02.fa",
             "htslib/test/realn02.fa.fai",
-            c"17",
+            b"17\0",
         );
         let (records, hdr) = read_records("htslib/test/realn02.sam");
 
         // The first mapped record in realn02.sam is a high-quality match.
         let rec = records[0];
-        assert_eq!((*rec).core.flag as c_int & BAM_FUNMAP, 0);
+        assert_eq!((*rec).core.flag as i32 & BAM_FUNMAP, 0);
         let ret = sam_cap_mapq(&mut *rec, ref_seq.as_slice(), -1);
         // Either uncapped (-1) or capped at most at 40.
         assert!(ret == -1 || (0..=40).contains(&ret), "ret={ret}");
@@ -417,7 +422,7 @@ fn sam_cap_mapq_after_sam_prob_realn_remains_consistent_on_real_record() {
         let ref_seq = RefSeq::load(
             "htslib/test/realn02.fa",
             "htslib/test/realn02.fa.fai",
-            c"17",
+            b"17\0",
         );
         let (records, hdr) = read_records("htslib/test/realn02.sam");
         let rec = records[0];

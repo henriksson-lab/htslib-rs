@@ -1,7 +1,6 @@
 use std::ptr::NonNull;
 
 use crate::htslib_rs::{
-    c_compat::{__errno_location, ENOMEM},
     hts::{htsLogLevel, hts_pos_t, HTS_LOG_ERROR, HTS_LOG_WARNING},
     probaln::{probaln_glocal, probaln_par_t},
     sam::{
@@ -59,7 +58,7 @@ unsafe fn realn_bam_aux_append(b: &mut bam1_t, tag: &[u8], type_: i8, len: i32, 
     nul_tag.extend_from_slice(tag);
     nul_tag.push(0);
 
-    bam_aux_append(b, nul_tag.as_ptr().cast(), type_, len, data.as_ptr())
+    bam_aux_append(b, nul_tag.as_ptr().cast(), type_ as u8, len, data.as_ptr())
 }
 
 unsafe fn realn_check_tag(
@@ -265,13 +264,11 @@ unsafe fn sam_prob_realn_impl(b: &mut bam1_t, ref_: &[u8], flag: i32) -> i32 {
         let align_lqseq = ((l_qseq as usize + 1) | 0xf) + 1;
         // Overflow check - 3 for *bq, sizeof(int) for *state
         if (usize::MAX - lref) / (3 + std::mem::size_of::<i32>()) < align_lqseq {
-            *__errno_location() = ENOMEM as i32;
             return -4;
         }
 
         debug_assert!(bq.is_none()); // bq was used above, but should now be NULL
         let Some(total) = align_lqseq.checked_mul(3).and_then(|n| n.checked_add(lref)) else {
-            *__errno_location() = ENOMEM as i32;
             return -4;
         };
         let mut bq_buf = vec![0_u8; total];

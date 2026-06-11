@@ -24,21 +24,22 @@ DEALINGS IN THE SOFTWARE.  */
 
 use crate::htslib_rs::{
     hfile::{self, HFileBackend},
-    hts::{hFILE, hts_json_token, ks_free, kstring_t, size_t},
+    hts::{hFILE, hts_json_token, ks_free, kstring_t},
     textutils::{hts_json_fnext, hts_json_fskip_value},
 };
-use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::ptr::NonNull;
 
 // hFILE flag bits (mirrors hfile.rs). Multipart is a mobile (streaming),
 // read-only backend.
-const HFILE_MOBILE: c_uint = 1 << 1;
-const HFILE_READONLY: c_uint = 1 << 2;
+const HFILE_MOBILE: u32 = 1 << 1;
+const HFILE_READONLY: u32 = 1 << 2;
 
 // Synthesize a System V AMD64 __va_list_tag from pointer-sized words so the
 // recursive open can be routed through native hfile_c_1317_hopen_vargs instead
 // of the C variadic hopen. Mirrors the pattern used by hfile_s3 and hts.rs.
-unsafe fn multipart_hopen_vargs(url: &CStr, mode: &CStr, words: &[usize]) -> *mut hFILE {
+// `url`/`mode` are NUL-terminated byte slices because the variadic hopen
+// boundary still expects C strings.
+unsafe fn multipart_hopen_vargs(url: &[u8], mode: &[u8], words: &[usize]) -> *mut hFILE {
     let mut reg_save = [0usize; 6];
     let mut overflow = vec![0usize; words.len().saturating_sub(reg_save.len())];
     for (i, word) in words.iter().copied().enumerate() {
@@ -54,29 +55,36 @@ unsafe fn multipart_hopen_vargs(url: &CStr, mode: &CStr, words: &[usize]) -> *mu
         overflow_arg_area: overflow.as_mut_ptr().cast(),
         reg_save_area: reg_save.as_mut_ptr().cast(),
     };
-    hfile::hfile_c_1317_hopen_vargs(url.as_ptr(), mode.as_ptr(), &mut args)
+    hfile::hfile_c_1317_hopen_vargs(url.as_ptr().cast(), mode.as_ptr().cast(), &mut args)
 }
 
 // original: hfile_part (htslib/multipart.c:41)
+//
+// URL and header strings are owned as NUL-terminated `Vec<u8>` because they are
+// ultimately handed to the variadic hopen boundary as C strings. The trailing
+// NUL is kept in the buffer; `as_bytes()` returns the payload without it.
 pub struct KStringCString {
-    value: CString,
+    value: Vec<u8>,
 }
 
 impl KStringCString {
-    fn from_raw(bytes: Vec<u8>) -> Option<Self> {
-        // The owned kstring_t carries no trailing NUL; CString::new appends one.
-        // Interior NULs make this fail, matching the old "stop at NUL" behaviour
-        // by yielding None for malformed input.
-        let value = CString::new(bytes).ok()?;
-        Some(Self { value })
+    fn from_raw(mut bytes: Vec<u8>) -> Option<Self> {
+        // The owned kstring_t carries no trailing NUL. An interior NUL would
+        // truncate the C view at the variadic boundary; reject such malformed
+        // input to match the old "stop at NUL" behaviour.
+        if bytes.contains(&0) {
+            return None;
+        }
+        bytes.push(0);
+        Some(Self { value: bytes })
     }
 
-    fn as_ptr(&self) -> *const c_char {
+    fn as_ptr(&self) -> *const u8 {
         self.value.as_ptr()
     }
 
-    fn as_c_str(&self) -> &CStr {
-        self.value.as_c_str()
+    fn as_bytes(&self) -> &[u8] {
+        &self.value[..self.value.len() - 1]
     }
 }
 
@@ -119,57 +127,56 @@ pub fn multipart_c_66_free_all_parts(fp: &mut hFILE_multipart) {
 }
 
 // original: multipart_read (htslib/multipart.c:73)
-pub unsafe fn multipart_read(fp: &mut hFILE_multipart, buffer: &mut [u8]) -> libc::ssize_t {
+pub unsafe fn multipart_read(fp: &mut hFILE_multipart, buffer: &mut [u8]) -> isize {
     loop {
         if fp.currentfp.is_none() {
             if fp.current < fp.parts.len() {
                 let current = fp.current;
                 let nparts = fp.parts.len();
-                let (url, headers) = {
-                    let p = fp.part_mut(current);
-                    (
-                        p.url.as_ref().expect("multipart part URL").as_c_str(),
-                        &p.headers,
-                    )
-                };
-                let url_cstr = url.to_bytes();
-                let truncate = url_cstr.len() > 120;
-                let shown = std::str::from_utf8(if truncate { &url_cstr[..120] } else { url_cstr })
-                    .unwrap_or("");
-                let msg = std::ffi::CString::new(format!(
+                let part = &fp.parts[current];
+                // NUL-terminated URL buffer (the trailing NUL is the last byte);
+                // the variadic hopen boundary needs the C-string pointer.
+                let url = part.url.as_ref().expect("multipart part URL");
+                let url_bytes = url.as_bytes();
+                let truncate = url_bytes.len() > 120;
+                let shown =
+                    std::str::from_utf8(if truncate { &url_bytes[..120] } else { url_bytes })
+                        .unwrap_or("");
+                let msg = format!(
                     "Opening part #{} of {}: \"{}{}\"",
                     current + 1,
                     nparts,
                     shown,
                     if truncate { "..." } else { "" },
-                ))
-                .unwrap_or_default();
+                );
                 crate::htslib_rs::hts::hts_log_cstr(
                     crate::htslib_rs::hts::HTS_LOG_DEBUG,
-                    c"multipart".as_ptr(),
-                    msg.as_ptr(),
+                    b"multipart",
+                    msg.as_bytes(),
                 );
 
-                fp.currentfp = if !headers.is_empty() {
-                    let mut header_ptrs: Vec<*const c_char> =
-                        headers.iter().map(KStringCString::as_ptr).collect();
+                let url_buf = &url.value;
+                let new_currentfp = if !part.headers.is_empty() {
+                    let mut header_ptrs: Vec<*const u8> =
+                        part.headers.iter().map(KStringCString::as_ptr).collect();
                     header_ptrs.push(std::ptr::null());
                     let words: [usize; 5] = [
                         c"httphdr:v".as_ptr() as usize,
                         header_ptrs.as_mut_ptr() as usize,
                         c"auth_token_enabled".as_ptr() as usize,
                         c"false".as_ptr() as usize,
-                        std::ptr::null::<c_void>() as usize,
+                        std::ptr::null::<()>() as usize,
                     ];
-                    hfile::OwnedHFile::from_raw(multipart_hopen_vargs(url, c"r:", &words))
+                    hfile::OwnedHFile::from_raw(multipart_hopen_vargs(url_buf, b"r:\0", &words))
                 } else {
                     let words: [usize; 3] = [
                         c"auth_token_enabled".as_ptr() as usize,
                         c"false".as_ptr() as usize,
-                        std::ptr::null::<c_void>() as usize,
+                        std::ptr::null::<()>() as usize,
                     ];
-                    hfile::OwnedHFile::from_raw(multipart_hopen_vargs(url, c"r:", &words))
+                    hfile::OwnedHFile::from_raw(multipart_hopen_vargs(url_buf, b"r:\0", &words))
                 };
+                fp.currentfp = new_currentfp;
 
                 if fp.currentfp.is_none() {
                     return -1;
@@ -191,7 +198,7 @@ pub unsafe fn multipart_read(fp: &mut hFILE_multipart, buffer: &mut [u8]) -> lib
             hfile::htslib_hfile_h_247_hread(
                 sub as *mut hFILE,
                 buffer.as_mut_ptr().cast(),
-                buffer.len() as size_t,
+                buffer.len(),
             )
         };
 
@@ -212,9 +219,9 @@ pub unsafe fn multipart_read(fp: &mut hFILE_multipart, buffer: &mut [u8]) -> lib
 // original: multipart_write (htslib/multipart.c:114)
 pub unsafe fn multipart_c_114_multipart_write(
     _fp: &mut hFILE,
-    _buffer: *const c_void,
-    _nbytes: size_t,
-) -> libc::ssize_t {
+    _buffer: *const (),
+    _nbytes: usize,
+) -> isize {
     *crate::htslib_rs::c_compat::__errno_location() = libc::EROFS;
     -1
 }
@@ -222,15 +229,15 @@ pub unsafe fn multipart_c_114_multipart_write(
 // original: multipart_seek (htslib/multipart.c:120)
 pub unsafe fn multipart_c_120_multipart_seek(
     _fp: &mut hFILE,
-    _offset: libc::off_t,
-    _whence: c_int,
-) -> libc::off_t {
+    _offset: i64,
+    _whence: i32,
+) -> i64 {
     *crate::htslib_rs::c_compat::__errno_location() = libc::ESPIPE;
     -1
 }
 
 // original: multipart_close (htslib/multipart.c:126)
-pub unsafe fn multipart_c_126_multipart_close(fp: &mut hFILE) -> c_int {
+pub unsafe fn multipart_c_126_multipart_close(fp: &mut hFILE) -> i32 {
     let HFileBackend::Multipart(m) = &mut fp.backend else {
         *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
         return -1;
@@ -247,7 +254,7 @@ pub unsafe fn multipart_c_126_multipart_close(fp: &mut hFILE) -> c_int {
     0
 }
 
-unsafe fn multipart_reserve_parts(fp: &mut hFILE_multipart) -> c_int {
+unsafe fn multipart_reserve_parts(fp: &mut hFILE_multipart) -> i32 {
     if fp.parts.try_reserve(1).is_err() {
         *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
         return -1;
@@ -261,28 +268,38 @@ pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
     json: &mut hFILE,
     b: &mut kstring_t,
     header: &mut kstring_t,
-) -> c_char {
+) -> i8 {
     let mut t = hts_json_token {
         type_: 0,
         str_: std::ptr::null_mut(),
     };
 
-    if hts_json_fnext(json, &mut t, b) != b'{' as c_char {
+    if hts_json_fnext(json, &mut t, b) != b'{' as i8 {
         return t.type_;
     }
-    while hts_json_fnext(json, &mut t, b) != b'}' as c_char {
-        if t.type_ != b's' as c_char {
-            return b'?' as c_char;
+    while hts_json_fnext(json, &mut t, b) != b'}' as i8 {
+        if t.type_ != b's' as i8 {
+            return b'?' as i8;
         }
 
-        if CStr::from_ptr(t.str_) == c"urls" {
-            if hts_json_fnext(json, &mut t, b) != b'[' as c_char {
+        // `t.str_` is a NUL-terminated text buffer owned by the JSON tokeniser;
+        // view it as a byte slice for the literal comparisons below.
+        let key = {
+            let mut len = 0usize;
+            while *t.str_.add(len) != 0 {
+                len += 1;
+            }
+            std::slice::from_raw_parts(t.str_.cast::<u8>(), len)
+        };
+
+        if key == b"urls" {
+            if hts_json_fnext(json, &mut t, b) != b'[' as i8 {
                 return t.type_;
             }
 
-            while hts_json_fnext(json, &mut t, b) != b']' as c_char {
+            while hts_json_fnext(json, &mut t, b) != b']' as i8 {
                 if multipart_reserve_parts(fp) != 0 {
-                    return b'?' as c_char;
+                    return b'?' as i8;
                 }
                 fp.parts.push(hfile_part {
                     url: None,
@@ -290,40 +307,55 @@ pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
                 });
                 let part_index = fp.parts.len() - 1;
 
-                if t.type_ != b'{' as c_char {
+                if t.type_ != b'{' as i8 {
                     return t.type_;
                 }
-                while hts_json_fnext(json, &mut t, b) != b'}' as c_char {
-                    if t.type_ != b's' as c_char {
-                        return b'?' as c_char;
+                while hts_json_fnext(json, &mut t, b) != b'}' as i8 {
+                    if t.type_ != b's' as i8 {
+                        return b'?' as i8;
                     }
 
-                    if CStr::from_ptr(t.str_) == c"url" {
-                        if hts_json_fnext(json, &mut t, b) != b's' as c_char {
+                    let inner_key = {
+                        let mut len = 0usize;
+                        while *t.str_.add(len) != 0 {
+                            len += 1;
+                        }
+                        std::slice::from_raw_parts(t.str_.cast::<u8>(), len)
+                    };
+
+                    if inner_key == b"url" {
+                        if hts_json_fnext(json, &mut t, b) != b's' as i8 {
                             return t.type_;
                         }
                         fp.part_mut(part_index).url =
                             KStringCString::from_raw(crate::htslib_rs::hts::ks_release(b));
-                    } else if CStr::from_ptr(t.str_) == c"headers" {
-                        if hts_json_fnext(json, &mut t, b) != b'{' as c_char {
+                    } else if inner_key == b"headers" {
+                        if hts_json_fnext(json, &mut t, b) != b'{' as i8 {
                             return t.type_;
                         }
 
-                        while hts_json_fnext(json, &mut t, header) != b'}' as c_char {
-                            if t.type_ != b's' as c_char {
-                                return b'?' as c_char;
+                        while hts_json_fnext(json, &mut t, header) != b'}' as i8 {
+                            if t.type_ != b's' as i8 {
+                                return b'?' as i8;
                             }
 
-                            if hts_json_fnext(json, &mut t, b) != b's' as c_char {
+                            if hts_json_fnext(json, &mut t, b) != b's' as i8 {
                                 return t.type_;
                             }
 
+                            let value = {
+                                let mut len = 0usize;
+                                while *t.str_.add(len) != 0 {
+                                    len += 1;
+                                }
+                                std::slice::from_raw_parts(t.str_.cast::<u8>(), len)
+                            };
                             crate::htslib_rs::hts::kputs(b": ", header);
-                            crate::htslib_rs::hts::kputs(CStr::from_ptr(t.str_).to_bytes(), header);
+                            crate::htslib_rs::hts::kputs(value, header);
                             let part = fp.part_mut(part_index);
                             if part.headers.try_reserve(1).is_err() {
                                 *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
-                                return b'?' as c_char;
+                                return b'?' as i8;
                             }
                             if let Some(header) =
                                 KStringCString::from_raw(crate::htslib_rs::hts::ks_release(header))
@@ -331,37 +363,43 @@ pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
                                 part.headers.push(header);
                             }
                         }
-                    } else if hts_json_fskip_value(json, 0) != b'v' as c_char {
-                        return b'?' as c_char;
+                    } else if hts_json_fskip_value(json, 0) != b'v' as i8 {
+                        return b'?' as i8;
                     }
                 }
 
                 if fp.part_mut(part_index).url.is_none() {
-                    return b'i' as c_char;
+                    return b'i' as i8;
                 }
             }
-        } else if CStr::from_ptr(t.str_) == c"format" {
-            if hts_json_fnext(json, &mut t, b) != b's' as c_char {
+        } else if key == b"format" {
+            if hts_json_fnext(json, &mut t, b) != b's' as i8 {
                 return t.type_;
             }
 
-            let format_name = std::ffi::CStr::from_ptr(t.str_).to_string_lossy();
-            let msg = std::ffi::CString::new(format!(
+            let format_name = {
+                let mut len = 0usize;
+                while *t.str_.add(len) != 0 {
+                    len += 1;
+                }
+                String::from_utf8_lossy(std::slice::from_raw_parts(t.str_.cast::<u8>(), len))
+                    .into_owned()
+            };
+            let msg = format!(
                 "GA4GH JSON redirection to multipart {} data",
                 format_name,
-            ))
-            .unwrap_or_default();
+            );
             crate::htslib_rs::hts::hts_log_cstr(
                 crate::htslib_rs::hts::HTS_LOG_DEBUG,
-                c"multipart".as_ptr(),
-                msg.as_ptr(),
+                b"multipart",
+                msg.as_bytes(),
             );
-        } else if hts_json_fskip_value(json, 0) != b'v' as c_char {
-            return b'?' as c_char;
+        } else if hts_json_fskip_value(json, 0) != b'v' as i8 {
+            return b'?' as i8;
         }
     }
 
-    b'v' as c_char
+    b'v' as i8
 }
 
 // original: parse_ga4gh_redirect_json (htslib/multipart.c:220)
@@ -370,41 +408,49 @@ pub unsafe fn multipart_c_220_parse_ga4gh_redirect_json(
     json: &mut hFILE,
     b: &mut kstring_t,
     header: &mut kstring_t,
-) -> c_char {
+) -> i8 {
     let mut t = hts_json_token {
         type_: 0,
         str_: std::ptr::null_mut(),
     };
 
-    if hts_json_fnext(json, &mut t, b) != b'{' as c_char {
+    if hts_json_fnext(json, &mut t, b) != b'{' as i8 {
         return t.type_;
     }
-    while hts_json_fnext(json, &mut t, b) != b'}' as c_char {
-        if t.type_ != b's' as c_char {
-            return b'?' as c_char;
+    while hts_json_fnext(json, &mut t, b) != b'}' as i8 {
+        if t.type_ != b's' as i8 {
+            return b'?' as i8;
         }
 
-        if CStr::from_ptr(t.str_) == c"htsget" {
+        let key = {
+            let mut len = 0usize;
+            while *t.str_.add(len) != 0 {
+                len += 1;
+            }
+            std::slice::from_raw_parts(t.str_.cast::<u8>(), len)
+        };
+
+        if key == b"htsget" {
             let ret = multipart_c_149_parse_ga4gh_body_json(fp, json, b, header);
-            if ret != b'v' as c_char {
+            if ret != b'v' as i8 {
                 return ret;
             }
         } else {
-            return b'?' as c_char;
+            return b'?' as i8;
         }
     }
 
     if hts_json_fnext(json, &mut t, b) != 0 {
-        return b'?' as c_char;
+        return b'?' as i8;
     }
 
-    b'v' as c_char
+    b'v' as i8
 }
 
 // original: hopen_htsget_redirect (htslib/multipart.c:241)
 pub unsafe fn multipart_hopen_htsget_redirect(
     mut hfile: NonNull<hFILE>,
-    mode: &CStr,
+    mode: &[u8],
 ) -> *mut hFILE {
     let mut s1: kstring_t = kstring_t::default();
     let mut s2: kstring_t = kstring_t::default();
@@ -420,9 +466,9 @@ pub unsafe fn multipart_hopen_htsget_redirect(
     let ret = multipart_c_220_parse_ga4gh_redirect_json(&mut m, hfile.as_mut(), &mut s1, &mut s2);
     ks_free(&mut s1);
     ks_free(&mut s2);
-    if ret != b'v' as c_char {
+    if ret != b'v' as i8 {
         multipart_c_66_free_all_parts(&mut m);
-        *crate::htslib_rs::c_compat::__errno_location() = if ret == b'?' as c_char || ret == 0 {
+        *crate::htslib_rs::c_compat::__errno_location() = if ret == b'?' as i8 || ret == 0 {
             libc::EPROTO
         } else {
             libc::EINVAL
@@ -437,7 +483,7 @@ pub unsafe fn multipart_hopen_htsget_redirect(
     // the default read capacity; begin/end/limit are byte indices. The backend
     // is the enum variant carrying the multipart payload inline. Ownership is
     // handed to the caller as a raw pointer (Box::into_raw); hclose reclaims it.
-    let readonly = hfile_mode_is_readonly(mode.to_bytes());
+    let readonly = hfile_mode_is_readonly(mode);
     let mut flags = HFILE_MOBILE;
     if readonly {
         flags |= HFILE_READONLY;

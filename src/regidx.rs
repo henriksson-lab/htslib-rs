@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::htslib_rs::hts::{
-    hts_close, hts_getline, hts_open, hts_parse_decimal, hts_pos_t, isspace_c, ks_free, kstring_t,
+    hts_close, hts_getline, hts_open, hts_parse_decimal, hts_pos_t, ks_free, kstring_t,
 };
 
 pub const REGIDX_MAX: hts_pos_t = 1_i64 << 35;
@@ -278,7 +278,7 @@ pub fn regidx_c_209_regidx_init_string(
 
     let mut ss = 0;
     while ss < string.len() {
-        while ss < string.len() && isspace_c(string[ss] as i8) != 0 {
+        while ss < string.len() && string[ss].is_ascii_whitespace() {
             ss += 1;
         }
         let mut se = ss;
@@ -288,7 +288,7 @@ pub fn regidx_c_209_regidx_init_string(
         if regidx_insert(&mut idx, &string[ss..se]) < 0 {
             return None;
         }
-        while se < string.len() && isspace_c(string[se] as i8) != 0 {
+        while se < string.len() && string[se].is_ascii_whitespace() {
             se += 1;
         }
         ss = se;
@@ -565,7 +565,7 @@ pub fn regidx_c_466_regidx_parse_bed(
     buf.push(0);
 
     let mut ss = 0;
-    while line.get(ss).is_some_and(|&c| isspace_c(c as i8) != 0) {
+    while line.get(ss).is_some_and(u8::is_ascii_whitespace) {
         ss += 1;
     }
     if ss >= line.len() {
@@ -576,7 +576,7 @@ pub fn regidx_c_466_regidx_parse_bed(
     }
 
     let mut se = ss;
-    while se < line.len() && isspace_c(line[se] as i8) == 0 {
+    while se < line.len() && !line[se].is_ascii_whitespace() {
         se += 1;
     }
 
@@ -624,7 +624,7 @@ pub fn regidx_c_498_regidx_parse_tab(
     buf.push(0);
 
     let mut ss = 0;
-    while line.get(ss).is_some_and(|&c| isspace_c(c as i8) != 0) {
+    while line.get(ss).is_some_and(u8::is_ascii_whitespace) {
         ss += 1;
     }
     if ss >= line.len() {
@@ -635,7 +635,7 @@ pub fn regidx_c_498_regidx_parse_tab(
     }
 
     let mut se = ss;
-    while se < line.len() && isspace_c(line[se] as i8) == 0 {
+    while se < line.len() && !line[se].is_ascii_whitespace() {
         se += 1;
     }
 
@@ -673,7 +673,7 @@ pub fn regidx_c_498_regidx_parse_tab(
             out.end = hts_parse_decimal(start, &mut end, 0);
             ss + end.offset_from(start) as usize
         };
-        if ss == se || (se < line.len() && isspace_c(line[se] as i8) == 0) {
+        if ss == se || (se < line.len() && !line[se].is_ascii_whitespace()) {
             out.end = out.beg;
         } else if out.end == 0 {
             return -2;
@@ -708,7 +708,7 @@ pub fn regidx_c_545_regidx_parse_reg(
     buf.push(0);
 
     let mut ss = 0;
-    while line.get(ss).is_some_and(|&c| isspace_c(c as i8) != 0) {
+    while line.get(ss).is_some_and(u8::is_ascii_whitespace) {
         ss += 1;
     }
     if ss >= line.len() {

@@ -5,16 +5,16 @@ use htslib_rs::{
     },
     BGZF,
 };
-use std::ffi::CString;
-
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().as_bytes().to_vec();
+    bytes.push(0);
+    bytes
 }
 
 unsafe fn open_bgziptest() -> *mut BGZF {
     let path = c_fixture("htslib/test/bgziptest.txt.gz");
-    let fp = bgzf_open(path.as_ptr(), c"r".as_ptr());
+    let fp = bgzf_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
     assert!(!fp.is_null());
     fp
 }
@@ -25,7 +25,7 @@ fn real_bgzf_gzi_loads_exact_block_index_offsets() {
         let fp = open_bgziptest();
         let gzi = c_fixture("htslib/test/bgziptest.txt.gz.gzi");
 
-        assert_eq!(bgzf_index_load(fp, gzi.as_ptr(), std::ptr::null()), 0);
+        assert_eq!(bgzf_index_load(fp, gzi.as_ptr().cast(), std::ptr::null()), 0);
         assert!((*fp).idx.is_some());
 
         let idx: &bgzidx_t = (*fp).idx.as_deref().unwrap();

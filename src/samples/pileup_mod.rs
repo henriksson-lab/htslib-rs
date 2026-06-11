@@ -1,4 +1,4 @@
-use std::ffi::{c_char, c_int, c_void};
+use std::io::Write;
 
 use crate::htslib_rs::hts::{htsFile, kstring_t};
 use crate::htslib_rs::sam;
@@ -6,25 +6,22 @@ use crate::htslib_rs::sam;
 // original: plpconf (htslib/samples/pileup_mod.c:45)
 #[repr(C)]
 struct PlpConf {
-    inname: *mut c_char,
+    inname: Vec<u8>,
     infile: *mut htsFile,
     in_samhdr: *mut sam::sam_hdr_t,
 }
 
 // original: print_usage (htslib/samples/pileup_mod.c:38)
-pub unsafe fn samples_pileup_mod_c_38_print_usage(fp: *mut libc::FILE) {
-    libc::fprintf(
-        fp,
-        c"Usage: pileup_mod infile\nShows the pileup api usage with base modification.\n".as_ptr(),
-    );
+pub unsafe fn samples_pileup_mod_c_38_print_usage() {
+    eprint!("Usage: pileup_mod infile\nShows the pileup api usage with base modification.\n");
 }
 
 // original: plpconstructor (htslib/samples/pileup_mod.c:56)
 pub unsafe extern "C" fn samples_pileup_mod_c_56_plpconstructor(
-    _data: *mut c_void,
+    _data: *mut (),
     b: *const sam::bam1_t,
     cd: *mut sam::bam_pileup_cd,
-) -> c_int {
+) -> i32 {
     if cd.is_null() {
         return 1;
     }
@@ -41,10 +38,10 @@ pub unsafe extern "C" fn samples_pileup_mod_c_56_plpconstructor(
 
 // original: plpdestructor (htslib/samples/pileup_mod.c:70)
 pub unsafe extern "C" fn samples_pileup_mod_c_70_plpdestructor(
-    _data: *mut c_void,
+    _data: *mut (),
     _b: *const sam::bam1_t,
     cd: *mut sam::bam_pileup_cd,
-) -> c_int {
+) -> i32 {
     if !cd.is_null() && !(*cd).p.is_null() {
         sam::hts_base_mod_state_free(Some(Box::from_raw(
             (*cd).p.cast::<sam::hts_base_mod_state>(),
@@ -56,9 +53,9 @@ pub unsafe extern "C" fn samples_pileup_mod_c_70_plpdestructor(
 
 // original: readdata (htslib/samples/pileup_mod.c:82)
 pub unsafe extern "C" fn samples_pileup_mod_c_82_readdata(
-    data: *mut c_void,
+    data: *mut (),
     b: *mut sam::bam1_t,
-) -> c_int {
+) -> i32 {
     let conf = data.cast::<PlpConf>();
     if conf.is_null() || (*conf).infile.is_null() {
         return -2;
@@ -67,37 +64,44 @@ pub unsafe extern "C" fn samples_pileup_mod_c_82_readdata(
 }
 
 // original: main (htslib/samples/pileup_mod.c:98)
-pub unsafe fn samples_pileup_mod_c_98_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn samples_pileup_mod_c_98_main(args: Vec<Vec<u8>>) -> i32 {
     const SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
     const NMODS: usize = 5;
-    let mut ret = libc::EXIT_FAILURE;
+    let mut ret = 1;
+    let mut __out = std::io::stdout();
     let mut conf = PlpConf {
-        inname: std::ptr::null_mut(),
+        inname: Vec::new(),
         infile: std::ptr::null_mut(),
         in_samhdr: std::ptr::null_mut(),
     };
     let mut insdata = kstring_t { data: Vec::new() };
 
-    if argc != 2 {
-        samples_pileup_mod_c_38_print_usage(crate::htslib_rs::c_compat::stderr.cast());
+    if args.len() != 2 {
+        samples_pileup_mod_c_38_print_usage();
         return ret;
     }
-    conf.inname = *argv.add(1);
+    conf.inname = args[1].clone();
+    // ensure NUL-terminated for raw C-ABI callees expecting *const c_char
+    conf.inname.push(0);
 
     let bamdata = sam::bam_init1();
     if bamdata.is_null() {
-        libc::printf(c"Failed to initialize bamdata\n".as_ptr());
+        write!(__out, "Failed to initialize bamdata\n").unwrap();
         return ret;
     }
-    conf.infile = crate::htslib_rs::hts::hts_open(conf.inname, c"r".as_ptr());
+    conf.infile = crate::htslib_rs::hts::hts_open(conf.inname.as_ptr().cast(), c"r".as_ptr());
     if conf.infile.is_null() {
-        libc::printf(c"Could not open %s\n".as_ptr(), conf.inname);
+        write!(
+            __out,
+            "Could not open {}\n",
+            String::from_utf8_lossy(&conf.inname[..conf.inname.len() - 1])
+        ).unwrap();
         sam::bam_destroy1(bamdata);
         return ret;
     }
     conf.in_samhdr = sam::sam_hdr_read(conf.infile);
     if conf.in_samhdr.is_null() {
-        libc::printf(c"Failed to read header from file!\n".as_ptr());
+        write!(__out, "Failed to read header from file!\n").unwrap();
         crate::htslib_rs::hts::hts_close(conf.infile);
         sam::bam_destroy1(bamdata);
         return ret;
@@ -108,7 +112,7 @@ pub unsafe fn samples_pileup_mod_c_98_main(argc: c_int, argv: *mut *mut c_char) 
         (&mut conf as *mut PlpConf).cast(),
     );
     if plpiter.is_null() {
-        libc::printf(c"Failed to initialize pileup data\n".as_ptr());
+        write!(__out, "Failed to initialize pileup data\n").unwrap();
         sam::sam_hdr_destroy(conf.in_samhdr);
         crate::htslib_rs::hts::hts_close(conf.infile);
         sam::bam_destroy1(bamdata);
@@ -132,13 +136,18 @@ pub unsafe fn samples_pileup_mod_c_98_main(argc: c_int, argv: *mut *mut c_char) 
         if plp.is_null() {
             break;
         }
-        libc::memset(mods.as_mut_ptr().cast(), 0, std::mem::size_of_val(&mods));
-        libc::printf(c"%d\t%d\t".as_ptr(), tid + 1, refpos + 1);
+        mods = [sam::hts_base_mod {
+            modified_base: 0,
+            canonical_base: 0,
+            strand: 0,
+            qual: 0,
+        }; NMODS];
+        write!(__out, "{}\t{}\t", tid + 1, refpos + 1).unwrap();
         for j in 0..depth {
             let p = plp.add(j as usize);
             let mut dellen = 0;
             if sam::bam_pileup1_is_del(p) != 0 || sam::bam_pileup1_is_refskip(p) != 0 {
-                libc::printf(c"*".as_ptr());
+                write!(__out, "*").unwrap();
                 continue;
             }
 
@@ -149,7 +158,7 @@ pub unsafe fn samples_pileup_mod_c_98_main(argc: c_int, argv: *mut *mut c_char) 
                 &mut mods,
             );
             if modlen == -1 {
-                libc::printf(c"Failed to get modifications\n".as_ptr());
+                write!(__out, "Failed to get modifications\n").unwrap();
                 sam::sam_hdr_destroy(conf.in_samhdr);
                 crate::htslib_rs::hts::hts_close(conf.infile);
                 sam::bam_destroy1(bamdata);
@@ -160,7 +169,7 @@ pub unsafe fn samples_pileup_mod_c_98_main(argc: c_int, argv: *mut *mut c_char) 
 
             let inslen = sam::bam_plp_insertion_mod(p, (*p).cd.p.cast(), &mut insdata, &mut dellen);
             if inslen == -1 {
-                libc::printf(c"Failed to get insertion status\n".as_ptr());
+                write!(__out, "Failed to get insertion status\n").unwrap();
                 sam::sam_hdr_destroy(conf.in_samhdr);
                 crate::htslib_rs::hts::hts_close(conf.infile);
                 sam::bam_destroy1(bamdata);
@@ -170,52 +179,51 @@ pub unsafe fn samples_pileup_mod_c_98_main(argc: c_int, argv: *mut *mut c_char) 
             }
 
             let seq = sam::bam_get_seq((*p).b);
-            let base = SEQ_NT16_STR[sam::bam_seqi(seq, (*p).qpos as usize) as usize] as c_int;
-            libc::printf(
-                c"%c%c%c".as_ptr(),
-                if sam::bam_pileup1_is_head(p) != 0 || sam::bam_pileup1_is_tail(p) != 0 {
-                    libc::toupper(base)
-                } else {
-                    libc::tolower(base)
-                },
-                if modlen > 0 {
-                    (if mods[0].strand != 0 { b'-' } else { b'+' }) as c_int
-                } else {
-                    0
-                },
-                if modlen > 0 { mods[0].modified_base } else { 0 },
-            );
+            let base = SEQ_NT16_STR[sam::bam_seqi(seq, (*p).qpos as usize) as usize];
+            let base_char = if sam::bam_pileup1_is_head(p) != 0 || sam::bam_pileup1_is_tail(p) != 0 {
+                base.to_ascii_uppercase()
+            } else {
+                base.to_ascii_lowercase()
+            };
+            write!(__out, "{}", base_char as char).unwrap();
+            if modlen > 0 {
+                let strand_char = if mods[0].strand != 0 { b'-' } else { b'+' };
+                write!(__out, "{}", strand_char as char).unwrap();
+                if mods[0].modified_base != 0 {
+                    write!(__out, "{}", (mods[0].modified_base as u8) as char).unwrap();
+                }
+            }
             if (*p).indel > 0 {
-                let mut insdata_cstr = insdata.data.clone();
-                insdata_cstr.push(0);
-                libc::printf(
-                    c"+%d%s".as_ptr(),
+                write!(
+                    __out,
+                    "+{}{}",
                     (*p).indel,
-                    insdata_cstr.as_ptr().cast::<c_char>(),
-                );
+                    String::from_utf8_lossy(&insdata.data)
+                ).unwrap();
                 if dellen != 0 {
-                    libc::printf(c"-%d".as_ptr(), dellen);
+                    write!(__out, "-{}", dellen).unwrap();
                     for _ in 0..dellen {
-                        libc::printf(c"?".as_ptr());
+                        write!(__out, "?").unwrap();
                     }
                 }
             } else if (*p).indel < 0 {
-                libc::printf(c"%d".as_ptr(), (*p).indel);
+                write!(__out, "{}", (*p).indel).unwrap();
                 for _ in 0..(-(*p).indel) {
-                    libc::printf(c"?".as_ptr());
+                    write!(__out, "?").unwrap();
                 }
             }
-            libc::printf(c" ".as_ptr());
+            write!(__out, " ").unwrap();
         }
-        libc::printf(c"\n".as_ptr());
-        libc::fflush(crate::htslib_rs::c_compat::stdout.cast());
+        write!(__out, "\n").unwrap();
+        let _ = __out.flush();
     }
 
-    ret = libc::EXIT_SUCCESS;
+    ret = 0;
     sam::sam_hdr_destroy(conf.in_samhdr);
     crate::htslib_rs::hts::hts_close(conf.infile);
     sam::bam_destroy1(bamdata);
     sam::bam_plp_destroy(plpiter);
     crate::htslib_rs::hts::ks_free(&mut insdata);
+    __out.flush().unwrap();
     ret
 }

@@ -1,8 +1,6 @@
 // Functions translated from htslib/cram/cram_stats.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::c_int;
-
 use super::*;
 
 const CRAM_STATS_SMALL_LIMIT: usize = 1024;
@@ -68,7 +66,7 @@ fn kh_alloc(n_buckets: u32) -> Box<kh_m_i2i_layout> {
         upper_bound,
         flags: vec![0xaaaa_aaaau32; flags_n as usize],
         keys: vec![0i64; n_buckets as usize],
-        vals: vec![0 as c_int; n_buckets as usize],
+        vals: vec![0i32; n_buckets as usize],
     })
 }
 
@@ -105,7 +103,7 @@ fn kh_find_occupied(h: &kh_m_i2i_layout, key: i64) -> Option<u32> {
     }
 }
 
-fn kh_insert_absent(h: &mut kh_m_i2i_layout, key: i64, val: c_int) {
+fn kh_insert_absent(h: &mut kh_m_i2i_layout, key: i64, val: i32) {
     let mask = h.n_buckets - 1;
     let mut x = h.n_buckets;
     let mut site = h.n_buckets;
@@ -178,10 +176,10 @@ fn kh_resize(old_h: &kh_m_i2i_layout) -> Box<kh_m_i2i_layout> {
     new_h
 }
 
-fn cram_stats_add(st: &mut cram_stats_layout, val: c_int) {
+fn cram_stats_add(st: &mut cram_stats_layout, val: i32) {
     st.nsamp += 1;
 
-    if (0..CRAM_STATS_SMALL_LIMIT as c_int).contains(&val) {
+    if (0..CRAM_STATS_SMALL_LIMIT as i32).contains(&val) {
         st.freqs[val as usize] += 1;
         return;
     }
@@ -201,14 +199,14 @@ fn cram_stats_add(st: &mut cram_stats_layout, val: c_int) {
     kh_insert_absent(st.h.as_mut().unwrap(), val as i64, 1);
 }
 
-pub fn cram_cram_stats_c_52_cram_stats_add(st: &mut cram_stats_layout, val: c_int) {
+pub fn cram_cram_stats_c_52_cram_stats_add(st: &mut cram_stats_layout, val: i32) {
     cram_stats_add(st, val);
 }
 
-fn cram_stats_del(st: &mut cram_stats_layout, val: c_int) {
+fn cram_stats_del(st: &mut cram_stats_layout, val: i32) {
     st.nsamp -= 1;
 
-    if (0..CRAM_STATS_SMALL_LIMIT as c_int).contains(&val) {
+    if (0..CRAM_STATS_SMALL_LIMIT as i32).contains(&val) {
         st.freqs[val as usize] -= 1;
         debug_assert!(st.freqs[val as usize] >= 0);
         return;
@@ -228,11 +226,11 @@ fn cram_stats_del(st: &mut cram_stats_layout, val: c_int) {
     st.nsamp += 1;
 }
 
-pub fn cram_cram_stats_c_80_cram_stats_del(st: &mut cram_stats_layout, val: c_int) {
+pub fn cram_cram_stats_c_80_cram_stats_del(st: &mut cram_stats_layout, val: i32) {
     cram_stats_del(st, val);
 }
 
-fn kh_occupied_entries(h: &kh_m_i2i_layout, mut f: impl FnMut(i64, c_int)) {
+fn kh_occupied_entries(h: &kh_m_i2i_layout, mut f: impl FnMut(i64, i32)) {
     for k in 0..h.n_buckets {
         if kh_flag_at(&h.flags, k) != 0 {
             continue;
@@ -262,7 +260,7 @@ pub fn cram_cram_stats_c_105_cram_stats_dump(st: &cram_stats_layout) {
     cram_stats_dump(st);
 }
 
-fn cram_stats_encoding(fd: &cram_fd_layout, st: &mut cram_stats_layout) -> c_int {
+fn cram_stats_encoding(fd: &cram_fd_layout, st: &mut cram_stats_layout) -> i32 {
     let mut nvals = 0i32;
     let mut max_val = 0i32;
     let mut min_val = i32::MAX;
@@ -311,7 +309,7 @@ fn cram_stats_encoding(fd: &cram_fd_layout, st: &mut cram_stats_layout) -> c_int
 pub fn cram_cram_stats_c_134_cram_stats_encoding(
     fd: &cram_fd_layout,
     st: &mut cram_stats_layout,
-) -> c_int {
+) -> i32 {
     cram_stats_encoding(fd, st)
 }
 

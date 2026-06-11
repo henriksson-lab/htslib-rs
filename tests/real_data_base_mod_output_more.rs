@@ -7,16 +7,14 @@ use htslib_rs::{
     sam_hdr_destroy, sam_hdr_read, sam_hdr_t, sam_hdr_tid2name, sam_read1, HTS_MOD_UNCHECKED,
     HTS_MOD_UNKNOWN,
 };
-use std::ffi::CStr;
-use std::ffi::CString;
-use std::os::raw::{c_int, c_void};
-
 fn fixture_path(path: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
 }
 
-fn c_fixture(path: &str) -> CString {
-    CString::new(fixture_path(path).to_string_lossy().as_bytes()).unwrap()
+fn c_fixture(path: &str) -> Vec<u8> {
+    let mut bytes = fixture_path(path).to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 fn base_label(code: u8) -> char {
@@ -74,9 +72,9 @@ fn rendered_mod(m: &hts_base_mod) -> String {
 
 fn rendered_extended_mod(state: &htslib_rs::hts_base_mod_state, m: &hts_base_mod) -> String {
     unsafe {
-        let mut strand: c_int = 0;
+        let mut strand: i32 = 0;
         let mut implicit = 0;
-        let mut canonical: i8 = 0;
+        let mut canonical: u8 = 0;
         assert_eq!(
             bam_mods_query_type(
                 state,
@@ -87,8 +85,8 @@ fn rendered_extended_mod(state: &htslib_rs::hts_base_mod_state, m: &hts_base_mod
             ),
             0
         );
-        assert_eq!(canonical, m.canonical_base as i8);
-        assert_eq!(strand, m.strand as c_int);
+        assert_eq!(canonical, m.canonical_base as u8);
+        assert_eq!(strand, m.strand as i32);
         let implicit_marker = if implicit == 0 { '?' } else { '.' };
         let strand = if m.strand == 0 { '+' } else { '-' };
         format!(
@@ -127,12 +125,12 @@ unsafe fn append_mod_line(
 
 unsafe fn append_present_line(out: &mut String, state: &mut htslib_rs::hts_base_mod_state) {
     let mut ntype = 0;
-    let types: Vec<c_int> = bam_mods_recorded(state, &mut ntype).to_vec();
+    let types: Vec<i32> = bam_mods_recorded(state, &mut ntype).to_vec();
     out.push_str("Present:");
     for i in 0..ntype {
-        let mut strand: c_int = 0;
+        let mut strand: i32 = 0;
         let mut implicit = 0;
-        let mut canonical: i8 = 0;
+        let mut canonical: u8 = 0;
         assert_eq!(
             bam_mods_queryi(
                 state,
@@ -156,8 +154,8 @@ unsafe fn append_present_line(out: &mut String, state: &mut htslib_rs::hts_base_
 
 unsafe fn render_test_mod_fixture(path: &str, extended: bool, flags: u32) -> String {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(!fp.is_null(), "failed to open fixture");
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
     let rec = bam_init1();
@@ -239,30 +237,30 @@ struct SamReader {
     hdr: *mut sam_hdr_t,
 }
 
-unsafe extern "C" fn read_record(data: *mut c_void, rec: *mut bam1_t) -> c_int {
+unsafe extern "C" fn read_record(data: *mut (), rec: *mut bam1_t) -> i32 {
     let reader = &mut *(data as *mut SamReader);
     sam_read1(reader.fp, reader.hdr, rec)
 }
 
 unsafe extern "C" fn pileup_cd_create(
-    _data: *mut c_void,
+    _data: *mut (),
     rec: *const bam1_t,
     cd: *mut htslib_rs::bam_pileup_cd,
-) -> c_int {
+) -> i32 {
     let mut state = hts_base_mod_state_alloc();
     if bam_parse_basemod(&*rec, &mut *state) < 0 {
         hts_base_mod_state_free(Some(state));
         return -1;
     }
-    (*cd).p = Box::into_raw(state) as *mut c_void;
+    (*cd).p = Box::into_raw(state) as *mut ();
     0
 }
 
 unsafe extern "C" fn pileup_cd_destroy(
-    _data: *mut c_void,
+    _data: *mut (),
     _rec: *const bam1_t,
     cd: *mut htslib_rs::bam_pileup_cd,
-) -> c_int {
+) -> i32 {
     hts_base_mod_state_free(Some(Box::from_raw(
         (*cd).p as *mut htslib_rs::hts_base_mod_state,
     )));
@@ -273,13 +271,13 @@ unsafe fn append_pileup_mod_line(
     out: &mut String,
     hdr: *mut sam_hdr_t,
     pileup: *const bam_pileup1_t,
-    tid: c_int,
-    pos: c_int,
-    depth: c_int,
+    tid: i32,
+    pos: i32,
+    depth: i32,
 ) {
-    let rname = CStr::from_ptr(sam_hdr_tid2name(&*hdr, tid))
-        .to_str()
-        .unwrap();
+    let name_ptr = sam_hdr_tid2name(&*hdr, tid);
+    let name_len = (0..).take_while(|&i| *name_ptr.add(i) != 0).count();
+    let rname = std::str::from_utf8(std::slice::from_raw_parts(name_ptr.cast(), name_len)).unwrap();
     out.push_str(&format!("{rname}\t{pos}\t"));
     let mut quals = String::new();
     for i in 0..depth {
@@ -325,8 +323,8 @@ unsafe fn append_pileup_mod_line(
 
 unsafe fn render_pileup_mod_fixture(path: &str) -> String {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(!fp.is_null(), "failed to open fixture");
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
     let mut reader = SamReader { fp, hdr };

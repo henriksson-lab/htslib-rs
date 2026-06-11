@@ -22,16 +22,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.  */
 
-use std::ffi::{c_char, c_int, c_uchar, c_ulong};
-
 use crate::htslib_rs::sam;
 
 unsafe extern "C" {
-    static mut optarg: *mut c_char;
+    static mut optarg: *mut u8;
 }
 
-static mut NIBBLE: [c_uchar; 5000] = [0; 5000];
-static mut BUF: [c_char; 10000] = [0; 10000];
+static mut NIBBLE: [u8; 5000] = [0; 5000];
+static mut BUF: [u8; 10000] = [0; 10000];
 
 // original: gettime (htslib/test/test_nibbles.c:41)
 pub unsafe fn test_test_nibbles_c_41_gettime() -> i64 {
@@ -41,14 +39,14 @@ pub unsafe fn test_test_nibbles_c_41_gettime() -> i64 {
 }
 
 // original: fmttime (htslib/test/test_nibbles.c:53)
-pub unsafe fn test_test_nibbles_c_53_fmttime(elapsed: i64) -> *mut c_char {
-    static mut BUF: [c_char; 64] = [0; 64];
+pub unsafe fn test_test_nibbles_c_53_fmttime(elapsed: i64) -> *mut u8 {
+    static mut BUF: [u8; 64] = [0; 64];
 
     let sec = elapsed / 1_000_000_000;
     let nsec = elapsed % 1_000_000_000;
-    let buf = std::ptr::addr_of_mut!(BUF).cast::<c_char>();
+    let buf = std::ptr::addr_of_mut!(BUF).cast::<u8>();
     libc::sprintf(
-        buf,
+        buf.cast(),
         c"%lld.%09lld processor seconds".as_ptr(),
         sec as libc::c_longlong,
         nsec as libc::c_longlong,
@@ -58,30 +56,30 @@ pub unsafe fn test_test_nibbles_c_53_fmttime(elapsed: i64) -> *mut c_char {
 
 // original: nibble2base_single (htslib/test/test_nibbles.c:69)
 pub unsafe fn test_test_nibbles_c_69_nibble2base_single(
-    nib: *mut c_uchar,
-    seq: *mut c_char,
-    len: c_int,
+    nib: *mut u8,
+    seq: *mut u8,
+    len: i32,
 ) {
     static SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
 
     let mut i = 0;
     while i < len {
-        *seq.add(i as usize) = SEQ_NT16_STR[sam::bam_seqi(nib, i as usize) as usize] as c_char;
+        *seq.add(i as usize) = SEQ_NT16_STR[sam::bam_seqi(nib, i as usize) as usize];
         i += 1;
     }
 }
 
 // original: validate_nibble2base (htslib/test/test_nibbles.c:78)
-pub unsafe fn test_test_nibbles_c_78_validate_nibble2base() -> c_int {
-    let mut defbuf = [0 as c_char; 500];
-    let nibble = std::ptr::addr_of_mut!(NIBBLE).cast::<c_uchar>();
-    let buf = std::ptr::addr_of_mut!(BUF).cast::<c_char>();
-    let mut total = 0 as libc::c_ulonglong;
-    let mut failed = 0 as libc::c_ulonglong;
+pub unsafe fn test_test_nibbles_c_78_validate_nibble2base() -> i32 {
+    let mut defbuf = [0u8; 500];
+    let nibble = std::ptr::addr_of_mut!(NIBBLE).cast::<u8>();
+    let buf = std::ptr::addr_of_mut!(BUF).cast::<u8>();
+    let mut total = 0u64;
+    let mut failed = 0u64;
 
     let mut i = 0usize;
     while i < 5000 {
-        *nibble.add(i) = (i % 256) as c_uchar;
+        *nibble.add(i) = (i % 256) as u8;
         i += 1;
     }
 
@@ -89,22 +87,23 @@ pub unsafe fn test_test_nibbles_c_78_validate_nibble2base() -> c_int {
     while start < 80 {
         let mut len = 0;
         while len < 400 {
-            libc::memset(
-                defbuf.as_mut_ptr().cast(),
-                b'\0' as c_int,
-                std::mem::size_of_val(&defbuf),
-            );
+            defbuf.fill(0);
             test_test_nibbles_c_69_nibble2base_single(nibble.add(start), defbuf.as_mut_ptr(), len);
 
-            libc::memset(buf.cast(), b'\0' as c_int, std::mem::size_of_val(&defbuf));
+            std::slice::from_raw_parts_mut(buf, defbuf.len()).fill(0);
             let seq_len = len as usize;
             let packed = std::slice::from_raw_parts(nibble.add(start), seq_len.div_ceil(2));
             let out = std::slice::from_raw_parts_mut(buf, seq_len);
             sam::nibble2base(packed, out);
 
             total += 1;
-            if libc::strcmp(defbuf.as_ptr(), buf) != 0 {
-                libc::printf(c"%s expected\n%s FAIL\n\n".as_ptr(), defbuf.as_ptr(), buf);
+            let buf_slice = std::slice::from_raw_parts(buf, seq_len);
+            if defbuf[..seq_len] != *buf_slice {
+                eprintln!(
+                    "{} expected\n{} FAIL\n",
+                    String::from_utf8_lossy(&defbuf[..seq_len]),
+                    String::from_utf8_lossy(buf_slice)
+                );
                 failed += 1;
             }
 
@@ -114,12 +113,7 @@ pub unsafe fn test_test_nibbles_c_78_validate_nibble2base() -> c_int {
     }
 
     if failed > 0 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failures: %llu (out of %llu tests)\n".as_ptr(),
-            failed,
-            total,
-        );
+        eprintln!("Failures: {failed} (out of {total} tests)");
         return 1;
     }
 
@@ -127,22 +121,18 @@ pub unsafe fn test_test_nibbles_c_78_validate_nibble2base() -> c_int {
 }
 
 // original: time_nibble2base (htslib/test/test_nibbles.c:109)
-pub unsafe fn test_test_nibbles_c_109_time_nibble2base(length: c_int, count: c_ulong) -> c_int {
-    let nibble = std::ptr::addr_of_mut!(NIBBLE).cast::<c_uchar>();
-    let buf = std::ptr::addr_of_mut!(BUF).cast::<c_char>();
-    let mut total = 0 as c_ulong;
+pub unsafe fn test_test_nibbles_c_109_time_nibble2base(length: i32, count: u64) -> i32 {
+    let nibble = std::ptr::addr_of_mut!(NIBBLE).cast::<u8>();
+    let buf = std::ptr::addr_of_mut!(BUF).cast::<u8>();
+    let mut total = 0u64;
 
-    let mut i = 0 as c_ulong;
-    while i < length as c_ulong {
-        *nibble.add(i as usize) = (i % 256) as c_uchar;
+    let mut i = 0u64;
+    while i < length as u64 {
+        *nibble.add(i as usize) = (i % 256) as u8;
         i += 1;
     }
 
-    libc::printf(
-        c"Timing %lu nibble2base iterations with read length %d...\n".as_ptr(),
-        count,
-        length,
-    );
+    println!("Timing {count} nibble2base iterations with read length {length}...");
     let start = test_test_nibbles_c_41_gettime();
 
     i = 0;
@@ -151,47 +141,43 @@ pub unsafe fn test_test_nibbles_c_109_time_nibble2base(length: c_int, count: c_u
         let packed = std::slice::from_raw_parts(nibble, len.div_ceil(2));
         let out = std::slice::from_raw_parts_mut(buf, len);
         sam::nibble2base(packed, out);
-        total = total.wrapping_add(*buf.add((i % length as c_ulong) as usize) as c_ulong);
+        total = total.wrapping_add(*buf.add((i % length as u64) as usize) as u64);
         i += 1;
     }
 
     let stop = test_test_nibbles_c_41_gettime();
-    libc::printf(
-        c"%s (summing to %lu)\n".as_ptr(),
-        test_test_nibbles_c_53_fmttime(stop - start),
-        total,
-    );
+    let fmt = test_test_nibbles_c_53_fmttime(stop - start);
+    let fmt_str = std::ffi::CStr::from_ptr(fmt.cast()).to_string_lossy();
+    println!("{fmt_str} (summing to {total})");
     0
 }
 
 // original: main (htslib/test/test_nibbles.c:128)
-pub unsafe fn test_test_nibbles_c_128_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_test_nibbles_c_128_main(argc: i32, argv: *mut *mut u8) -> i32 {
     let mut readlen = 5000;
-    let mut count = 1_000_000 as c_ulong;
+    let mut count = 1_000_000u64;
     let mut status = 0;
 
     if argc == 1 {
-        libc::printf(
-            c"Usage: test_nibbles [-c NUM] [-r NUM] [-n|-v]...\nOptions:\n  -c NUM  Specify number of iterations [%lu]\n  -n      Run nibble2base speed tests\n  -r NUM  Specify read length [%d]\n  -v      Run all validation tests\n".as_ptr(),
-            count,
-            readlen,
+        println!(
+            "Usage: test_nibbles [-c NUM] [-r NUM] [-n|-v]...\nOptions:\n  -c NUM  Specify number of iterations [{count}]\n  -n      Run nibble2base speed tests\n  -r NUM  Specify read length [{readlen}]\n  -v      Run all validation tests"
         );
     }
 
     loop {
-        let c = libc::getopt(argc, argv, c"c:nr:v".as_ptr());
+        let c = libc::getopt(argc, argv.cast(), c"c:nr:v".as_ptr());
         if c < 0 {
             break;
         }
         match c as u8 {
             b'c' => {
-                count = libc::strtoul(optarg, std::ptr::null_mut(), 0);
+                count = libc::strtoul(optarg.cast(), std::ptr::null_mut(), 0);
             }
             b'n' => {
                 status += test_test_nibbles_c_109_time_nibble2base(readlen, count);
             }
             b'r' => {
-                readlen = libc::atoi(optarg);
+                readlen = libc::atoi(optarg.cast());
             }
             b'v' => {
                 status += test_test_nibbles_c_78_validate_nibble2base();

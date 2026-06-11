@@ -1,16 +1,12 @@
-use std::ffi::{c_char, c_int, c_void};
-
 // original: job (htslib/test/thrash_threads7.c:43)
-pub unsafe extern "C" fn test_thrash_threads7_c_43_job(v: *mut c_void) -> *mut c_void {
-    let usecs = v.cast::<c_uint>();
+pub unsafe extern "C" fn test_thrash_threads7_c_43_job(v: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
+    let usecs = v.cast::<u32>();
     crate::htslib_rs::hts::hts_usleep(*usecs as i64);
     std::ptr::null_mut()
 }
 
-type c_uint = libc::c_uint;
-
 // original: main (htslib/test/thrash_threads7.c:49)
-pub unsafe fn test_thrash_threads7_c_49_main(_argc: c_int, _argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_thrash_threads7_c_49_main(_argc: i32, _argv: *mut *mut u8) -> i32 {
     let run_for_secs: libc::time_t = 120;
     let num_threads = 8;
     let num_jobs = 8;
@@ -34,37 +30,29 @@ pub unsafe fn test_thrash_threads7_c_49_main(_argc: c_int, _argv: *mut *mut c_ch
         }
     }
 
-    if crate::htslib_rs::c_compat::gettimeofday(&mut end, std::ptr::null_mut()) != 0 {
+    if libc::gettimeofday(&mut end, std::ptr::null_mut()) != 0 {
         libc::perror(c"gettimeofday".as_ptr());
         libc::exit(libc::EXIT_FAILURE);
     }
     end.tv_sec += run_for_secs;
 
     loop {
-        let qnum = (libc::rand() % n_proc as c_int) as usize;
-        let t = libc::malloc(num_jobs * std::mem::size_of::<c_uint>()).cast::<c_uint>();
-        if t.is_null() {
-            libc::perror(c"malloc".as_ptr());
-            libc::exit(libc::EXIT_FAILURE);
-        }
+        let qnum = (libc::rand() % n_proc as i32) as usize;
+        let mut t = vec![0_u32; num_jobs];
 
         count += 1;
         if (count & 15) == 1 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"\r%d ".as_ptr(),
-                count,
-            );
+            eprint!("\r{} ", count);
             libc::alarm(10);
         }
 
         for i in 0..num_jobs {
-            *t.add(i) = 1000;
+            t[i] = 1000;
             if crate::htslib_rs::thread_pool::hts_tpool_dispatch(
                 p,
                 q[qnum],
                 Some(test_thrash_threads7_c_43_job),
-                t.add(i).cast(),
+                (&mut t[i] as *mut u32).cast(),
             ) < 0
             {
                 libc::perror(c"hts_tpool_dispatch".as_ptr());
@@ -74,14 +62,14 @@ pub unsafe fn test_thrash_threads7_c_49_main(_argc: c_int, _argv: *mut *mut c_ch
 
         crate::htslib_rs::thread_pool::hts_tpool_process_flush(&mut *q[qnum]);
         crate::htslib_rs::thread_pool::hts_tpool_process_destroy(q[qnum]);
-        libc::free(t.cast());
+        drop(t);
         q[qnum] = crate::htslib_rs::thread_pool::hts_tpool_process_init(p, 10, 1);
         if q[qnum].is_null() {
             libc::perror(c"hts_tpool_process_init".as_ptr());
             libc::exit(libc::EXIT_FAILURE);
         }
 
-        if crate::htslib_rs::c_compat::gettimeofday(&mut now, std::ptr::null_mut()) != 0 {
+        if libc::gettimeofday(&mut now, std::ptr::null_mut()) != 0 {
             libc::perror(c"gettimeofday".as_ptr());
             libc::exit(libc::EXIT_FAILURE);
         }
@@ -95,7 +83,7 @@ pub unsafe fn test_thrash_threads7_c_49_main(_argc: c_int, _argv: *mut *mut c_ch
         crate::htslib_rs::thread_pool::hts_tpool_process_destroy(*queue);
     }
     crate::htslib_rs::thread_pool::hts_tpool_destroy(p);
-    libc::fprintf(crate::htslib_rs::c_compat::stderr.cast(), c"\n".as_ptr());
+    eprint!("\n");
 
     libc::EXIT_SUCCESS
 }
@@ -125,7 +113,7 @@ mod tests {
                             pool,
                             queues[queue_index],
                             Some(test_thrash_threads7_c_43_job),
-                            delay as *mut c_uint as *mut c_void,
+                            delay as *mut u32 as *mut std::ffi::c_void,
                         ),
                         0
                     );

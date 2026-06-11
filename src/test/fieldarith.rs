@@ -1,18 +1,16 @@
-use std::ffi::{c_char, c_int};
-
 use crate::htslib_rs::{hts, sam};
 
-static mut TEST_FIELDARITH_NTESTS: c_int = 0;
-static mut TEST_FIELDARITH_NFAILURES: c_int = 0;
+static mut TEST_FIELDARITH_NTESTS: i32 = 0;
+static mut TEST_FIELDARITH_NFAILURES: i32 = 0;
 
 // original: check (htslib/test/fieldarith.c:34)
 pub unsafe fn test_fieldarith_c_34_check(
     aln: *const sam::bam1_t,
-    testname: *const c_char,
-    tag: *const c_char,
-    value: c_int,
+    testname: &[u8],
+    tag: &[u8],
+    value: i32,
 ) {
-    let aux = sam::bam_aux_get(aln, tag);
+    let aux = sam::bam_aux_get(aln, tag.as_ptr());
     if aux.is_null() {
         return;
     }
@@ -20,26 +18,27 @@ pub unsafe fn test_fieldarith_c_34_check(
     TEST_FIELDARITH_NTESTS += 1;
     let refvalue = sam::bam_aux2i(aux);
     if value as i64 != refvalue {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"%s FAIL for %s: computed %d != %d expected\n".as_ptr(),
-            testname,
-            sam::bam_get_qname(aln),
+        eprintln!(
+            "{} FAIL for {}: computed {} != {} expected",
+            String::from_utf8_lossy(testname),
+            String::from_utf8_lossy(
+                std::ffi::CStr::from_ptr(sam::bam_get_qname(aln).cast()).to_bytes()
+            ),
             value,
-            refvalue as c_int,
+            refvalue as i32,
         );
         TEST_FIELDARITH_NFAILURES += 1;
     }
 }
 
 // original: main (htslib/test/fieldarith.c:48)
-pub unsafe fn test_fieldarith_c_48_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_fieldarith_c_48_main(argc: i32, argv: *mut *mut u8) -> i32 {
     let aln = sam::bam_init1();
 
     for i in 1..argc {
-        let in_ = hts::hts_open(*argv.add(i as usize), c"r".as_ptr());
+        let in_ = hts::hts_open((*argv.add(i as usize)).cast(), c"r".as_ptr());
         if in_.is_null() {
-            libc::perror(*argv.add(1));
+            libc::perror(*argv.add(1).cast());
             return 1;
         }
 
@@ -47,21 +46,21 @@ pub unsafe fn test_fieldarith_c_48_main(argc: c_int, argv: *mut *mut c_char) -> 
         while sam::sam_read1(in_, header, aln) >= 0 {
             test_fieldarith_c_34_check(
                 aln,
-                c"cigar2qlen".as_ptr(),
-                c"XQ".as_ptr(),
-                sam::bam_cigar2qlen((*aln).core.n_cigar as c_int, sam::bam_get_cigar(aln)) as c_int,
+                b"cigar2qlen",
+                b"XQ",
+                sam::bam_cigar2qlen((*aln).core.n_cigar as i32, sam::bam_get_cigar(aln)) as i32,
             );
             test_fieldarith_c_34_check(
                 aln,
-                c"cigar2rlen".as_ptr(),
-                c"XR".as_ptr(),
-                sam::bam_cigar2rlen((*aln).core.n_cigar as c_int, sam::bam_get_cigar(aln)) as c_int,
+                b"cigar2rlen",
+                b"XR",
+                sam::bam_cigar2rlen((*aln).core.n_cigar as i32, sam::bam_get_cigar(aln)) as i32,
             );
             test_fieldarith_c_34_check(
                 aln,
-                c"endpos".as_ptr(),
-                c"XE".as_ptr(),
-                sam::bam_endpos(aln) as c_int,
+                b"endpos",
+                b"XE",
+                sam::bam_endpos(aln) as i32,
             );
         }
 
@@ -71,5 +70,5 @@ pub unsafe fn test_fieldarith_c_48_main(argc: c_int, argv: *mut *mut c_char) -> 
 
     sam::bam_destroy1(aln);
 
-    (TEST_FIELDARITH_NFAILURES > 0) as c_int
+    (TEST_FIELDARITH_NFAILURES > 0) as i32
 }

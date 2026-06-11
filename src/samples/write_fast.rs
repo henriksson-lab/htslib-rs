@@ -1,73 +1,84 @@
-use std::ffi::{c_char, c_int};
-
 use crate::htslib_rs::{hts::htsFile, sam};
+use std::io::Write;
 
 // original: print_usage (htslib/samples/write_fast.c:39)
-pub unsafe fn samples_write_fast_c_39_print_usage(fp: *mut libc::FILE) {
-    libc::fprintf(
-        fp,
-        c"Usage: write_fast <file> <sequence> [<qualities]\nAppends a fasta/fastq file.\n".as_ptr(),
-    );
+pub fn samples_write_fast_c_39_print_usage() {
+    eprint!("Usage: write_fast <file> <sequence> [<qualities]\nAppends a fasta/fastq file.\n");
 }
 
 // original: main (htslib/samples/write_fast.c:51)
-pub unsafe fn samples_write_fast_c_51_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
-    let mut ret = libc::EXIT_FAILURE;
-    let mut mode = [b'a' as c_char, 0, 0, 0];
-    let mut qual: *const c_char = std::ptr::null();
-    let mut name = [0 as c_char; 256];
+pub unsafe fn samples_write_fast_c_51_main(argv: &[&[u8]]) -> i32 {
+    let mut ret = 1;
+    let mut __out = std::io::stdout();
+    let mut mode = [b'a', 0, 0, 0];
+    let mut qual: &[u8] = &[];
+    let mut name = [0u8; 256];
 
+    let argc = argv.len();
     if !(3..=4).contains(&argc) {
-        samples_write_fast_c_39_print_usage(crate::htslib_rs::c_compat::stdout.cast());
+        samples_write_fast_c_39_print_usage();
         return ret;
     }
 
-    let outname = *argv.add(1);
-    let data = *argv.add(2);
+    // argv entries are NUL-terminated C strings; use bytes up to the first NUL.
+    let outname = &argv[1][..argv[1].iter().position(|&b| b == 0).unwrap_or(argv[1].len())];
+    let data = &argv[2][..argv[2].iter().position(|&b| b == 0).unwrap_or(argv[2].len())];
     if argc == 4 {
-        qual = *argv.add(3);
-        if libc::strlen(data) != libc::strlen(qual) {
-            libc::printf(c"Incorrect reference and quality data\n".as_ptr());
+        qual = &argv[3][..argv[3].iter().position(|&b| b == 0).unwrap_or(argv[3].len())];
+        if data.len() != qual.len() {
+            write!(__out, "Incorrect reference and quality data\n").unwrap();
+            __out.flush().unwrap();
             return ret;
         }
     }
 
     let bamdata = sam::bam_init1();
     if bamdata.is_null() {
-        libc::printf(c"Failed to initialize bamdata\n".as_ptr());
+        write!(__out, "Failed to initialize bamdata\n").unwrap();
+        __out.flush().unwrap();
         return ret;
     }
 
-    if sam::sam_open_mode(mode.as_mut_ptr().add(1), outname, std::ptr::null()) < 0 {
-        libc::printf(c"Invalid file name\n".as_ptr());
+    // NUL-terminated copies for the still-raw C-ABI callees.
+    let mut outname_c = outname.to_vec();
+    outname_c.push(0);
+
+    if sam::sam_open_mode(mode.as_mut_ptr().add(1).cast(), outname_c.as_ptr().cast(), std::ptr::null()) < 0 {
+        write!(__out, "Invalid file name\n").unwrap();
+        __out.flush().unwrap();
         sam::bam_destroy1(bamdata);
         return ret;
     }
 
-    let hfile = crate::htslib_rs::hfile::hopen(outname, mode.as_ptr());
+    let hfile = crate::htslib_rs::hfile::hopen(outname_c.as_ptr().cast(), mode.as_ptr().cast());
     if hfile.is_null() {
-        libc::printf(c"Could not open %s\n".as_ptr(), outname);
+        write!(__out, "Could not open {}\n", String::from_utf8_lossy(outname)).unwrap();
+        __out.flush().unwrap();
         sam::bam_destroy1(bamdata);
         return ret;
     }
-    let outfile: *mut htsFile = crate::htslib_rs::hts::hts_hopen(hfile, outname, mode.as_ptr());
+    let outfile: *mut htsFile = crate::htslib_rs::hts::hts_hopen(hfile, outname_c.as_ptr().cast(), mode.as_ptr().cast());
     if outfile.is_null() {
-        libc::printf(c"Could not open %s\n".as_ptr(), outname);
+        write!(__out, "Could not open {}\n", String::from_utf8_lossy(outname)).unwrap();
+        __out.flush().unwrap();
         crate::htslib_rs::hfile::hclose(hfile);
         sam::bam_destroy1(bamdata);
         return ret;
     }
 
-    libc::snprintf(
-        name.as_mut_ptr(),
-        name.len(),
-        c"Test_%ld".as_ptr(),
-        libc::time(std::ptr::null_mut()) as libc::c_long,
-    );
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let label = format!("Test_{}", now);
+    let n = label.len().min(name.len() - 1);
+    name[..n].copy_from_slice(&label.as_bytes()[..n]);
+    name[n] = 0;
+
     if sam::bam_set1(
         bamdata,
-        libc::strlen(name.as_ptr()),
-        name.as_ptr(),
+        label.len(),
+        name.as_ptr().cast(),
         sam::BAM_FUNMAP as u16,
         -1,
         -1,
@@ -77,20 +88,21 @@ pub unsafe fn samples_write_fast_c_51_main(argc: c_int, argv: *mut *mut c_char) 
         -1,
         -1,
         0,
-        libc::strlen(data),
-        data,
-        qual,
+        data.len(),
+        data.as_ptr().cast(),
+        if qual.is_empty() { std::ptr::null() } else { qual.as_ptr().cast() },
         0,
     ) < 0
     {
-        libc::printf(c"Failed to set data\n".as_ptr());
+        write!(__out, "Failed to set data\n").unwrap();
     } else if sam::sam_c_4553_sam_write1(outfile, std::ptr::null(), bamdata) < 0 {
-        libc::printf(c"Failed to write data\n".as_ptr());
+        write!(__out, "Failed to write data\n").unwrap();
     } else {
-        ret = libc::EXIT_SUCCESS;
+        ret = 0;
     }
 
     crate::htslib_rs::hts::hts_close(outfile);
     sam::bam_destroy1(bamdata);
+    __out.flush().unwrap();
     ret
 }

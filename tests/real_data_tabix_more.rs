@@ -5,16 +5,16 @@ use htslib_rs::{
     tbx_c_96_tbx_parse1, tbx_conf_bed, tbx_conf_gff, tbx_conf_vcf, tbx_destroy, tbx_index_build2,
     tbx_index_load, tbx_index_load2, tbx_intv_t, tbx_itr_querys1, tbx_seqnames,
 };
-use std::ffi::{CStr, CString};
-use std::os::raw::c_void;
 use std::process::Command;
 
 fn fixture(path: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
 }
 
-fn c_path(path: &std::path::Path) -> CString {
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+fn c_path(path: &std::path::Path) -> Vec<u8> {
+    let mut bytes = path.to_string_lossy().as_bytes().to_vec();
+    bytes.push(0);
+    bytes
 }
 
 fn temp_path(name: &str) -> std::path::PathBuf {
@@ -26,10 +26,10 @@ fn temp_path(name: &str) -> std::path::PathBuf {
 unsafe fn bgzip_copy(src: &std::path::Path, dst: &std::path::Path) {
     let bytes = std::fs::read(src).unwrap();
     let dst_c = c_path(dst);
-    let fp = bgzf_open(dst_c.as_ptr(), c"w".as_ptr());
+    let fp = bgzf_open(dst_c.as_ptr().cast(), c"w".as_ptr());
     assert!(!fp.is_null(), "failed to create {}", dst.display());
     assert_eq!(
-        bgzf_write(fp, bytes.as_ptr().cast::<c_void>(), bytes.len()),
+        bgzf_write(fp, bytes.as_ptr().cast(), bytes.len()),
         bytes.len() as isize
     );
     assert_eq!(bgzf_close(fp), 0);
@@ -40,7 +40,7 @@ unsafe fn query_tabix_rows(
     index_suffix: &str,
     min_shift: i32,
     conf: &htslib_rs::tbx_conf_t,
-    region: &CStr,
+    region: &[u8],
 ) -> Vec<String> {
     let bgz = temp_path(&format!("{src}.{index_suffix}.gz").replace('/', "_"));
     let idx = temp_path(&format!("{src}.{index_suffix}.gz.{index_suffix}").replace('/', "_"));
@@ -51,15 +51,20 @@ unsafe fn query_tabix_rows(
     let bgz_c = c_path(&bgz);
     let idx_c = c_path(&idx);
     assert_eq!(
-        tbx_index_build2(bgz_c.as_ptr(), idx_c.as_ptr(), min_shift, conf),
+        tbx_index_build2(
+            &bgz_c[..bgz_c.len() - 1],
+            Some(&idx_c[..idx_c.len() - 1]),
+            min_shift,
+            conf
+        ),
         0
     );
 
-    let tbx = tbx_index_load2(bgz_c.as_ptr(), idx_c.as_ptr());
+    let tbx = tbx_index_load2(&bgz_c[..bgz_c.len() - 1], Some(&idx_c[..idx_c.len() - 1]));
     assert!(!tbx.is_null());
-    let fp = hts_open(bgz_c.as_ptr(), c"r".as_ptr());
+    let fp = hts_open(bgz_c.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null());
-    let itr = tbx_itr_querys1(&mut *tbx, region.as_ptr());
+    let itr = tbx_itr_querys1(&mut *tbx, region);
     assert!(!itr.is_null());
 
     let mut line = kstring_t::default();
@@ -68,8 +73,8 @@ unsafe fn query_tabix_rows(
         let ret = hts_itr_next(
             hts_get_bgzfp(fp),
             itr,
-            (&mut line as *mut kstring_t).cast::<c_void>(),
-            tbx.cast::<c_void>(),
+            (&mut line as *mut kstring_t).cast(),
+            tbx.cast(),
         );
         if ret < 0 {
             break;
@@ -90,15 +95,15 @@ unsafe fn query_tabix_rows(
 unsafe fn query_tabix_rows_from_paths(
     bgz: &std::path::Path,
     idx: &std::path::Path,
-    region: &CStr,
+    region: &[u8],
 ) -> Vec<String> {
     let bgz_c = c_path(bgz);
     let idx_c = c_path(idx);
-    let tbx = tbx_index_load2(bgz_c.as_ptr(), idx_c.as_ptr());
+    let tbx = tbx_index_load2(&bgz_c[..bgz_c.len() - 1], Some(&idx_c[..idx_c.len() - 1]));
     assert!(!tbx.is_null());
-    let fp = hts_open(bgz_c.as_ptr(), c"r".as_ptr());
+    let fp = hts_open(bgz_c.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null());
-    let itr = tbx_itr_querys1(&mut *tbx, region.as_ptr());
+    let itr = tbx_itr_querys1(&mut *tbx, region);
     assert!(!itr.is_null());
 
     let mut line = kstring_t::default();
@@ -107,8 +112,8 @@ unsafe fn query_tabix_rows_from_paths(
         let ret = hts_itr_next(
             hts_get_bgzfp(fp),
             itr,
-            (&mut line as *mut kstring_t).cast::<c_void>(),
-            tbx.cast::<c_void>(),
+            (&mut line as *mut kstring_t).cast(),
+            tbx.cast(),
         );
         if ret < 0 {
             break;
@@ -165,7 +170,12 @@ unsafe fn build_large_generated_index_vcf(
     let bgz_c = c_path(&bgz);
     let tbi_c = c_path(&tbi);
     assert_eq!(
-        tbx_index_build2(bgz_c.as_ptr(), tbi_c.as_ptr(), 0, &conf),
+        tbx_index_build2(
+            &bgz_c[..bgz_c.len() - 1],
+            Some(&tbi_c[..tbi_c.len() - 1]),
+            0,
+            &conf
+        ),
         0
     );
     let _ = std::fs::remove_file(plain);
@@ -202,7 +212,12 @@ unsafe fn build_large_generated_bed(
     let bgz_c = c_path(&bgz);
     let tbi_c = c_path(&tbi);
     assert_eq!(
-        tbx_index_build2(bgz_c.as_ptr(), tbi_c.as_ptr(), 0, &conf),
+        tbx_index_build2(
+            &bgz_c[..bgz_c.len() - 1],
+            Some(&tbi_c[..tbi_c.len() - 1]),
+            0,
+            &conf
+        ),
         0
     );
     let _ = std::fs::remove_file(plain);
@@ -243,13 +258,13 @@ fn run_tabix_args(program: &std::path::Path, args: &[&std::path::Path]) -> Vec<u
 
 unsafe fn read_bgzf_to_string(path: &std::path::Path) -> String {
     let path_c = c_path(path);
-    let fp = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+    let fp = bgzf_open(path_c.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null(), "failed to open {}", path.display());
 
     let mut out = Vec::new();
     let mut buf = [0u8; 8192];
     loop {
-        let n = bgzf_read(fp, buf.as_mut_ptr().cast::<c_void>(), buf.len());
+        let n = bgzf_read(fp, buf.as_mut_ptr().cast(), buf.len());
         assert!(n >= 0, "bgzf_read failed for {}", path.display());
         if n == 0 {
             break;
@@ -261,7 +276,7 @@ unsafe fn read_bgzf_to_string(path: &std::path::Path) -> String {
 }
 
 unsafe fn parse_interval(conf: &htslib_rs::tbx_conf_t, line: &str) -> (String, i64, i64) {
-    let bytes = CString::new(line).unwrap().into_bytes_with_nul();
+    let bytes = line.as_bytes();
     let mut intv = tbx_intv_t {
         beg: 0,
         end: 0,
@@ -269,15 +284,17 @@ unsafe fn parse_interval(conf: &htslib_rs::tbx_conf_t, line: &str) -> (String, i
         se: None,
         tid: 0,
     };
-    let line_len = bytes.len() - 1;
-    assert_eq!(tbx_c_96_tbx_parse1(conf, &bytes[..line_len], &mut intv), 0);
+    assert_eq!(tbx_c_96_tbx_parse1(conf, bytes, &mut intv), 0);
     let ss = intv.ss.expect("parsed interval sequence start");
     let name = if let Some(se) = intv.se {
         String::from_utf8_lossy(&bytes[ss..se]).into_owned()
     } else {
-        CStr::from_ptr(bytes.as_ptr().add(ss).cast())
-            .to_string_lossy()
-            .into_owned()
+        let end = bytes[ss..]
+            .iter()
+            .position(|&b| b == 0)
+            .map(|p| ss + p)
+            .unwrap_or(bytes.len());
+        String::from_utf8_lossy(&bytes[ss..end]).into_owned()
     };
     (name, intv.beg, intv.end)
 }
@@ -376,7 +393,7 @@ fn original_tabix_main_builds_vcf_tbi_and_csi_indexes() {
         );
         assert!(tbi.exists(), "tabix main did not create {}", tbi.display());
         assert_eq!(
-            query_tabix_rows_from_paths(&tbi_bgz, &tbi, c"2:3199812-3199812"),
+            query_tabix_rows_from_paths(&tbi_bgz, &tbi, b"2:3199812-3199812"),
             ["2\t3199812\t.\tG\tGTT,GT\t82.7\tPASS\tAN=4;AC=2,2\tGT:GQ:DP\t1/2:322:26\t1/2:322:26"]
         );
 
@@ -395,7 +412,7 @@ fn original_tabix_main_builds_vcf_tbi_and_csi_indexes() {
             ],
         );
         assert!(csi.exists(), "tabix main did not create {}", csi.display());
-        let rows = query_tabix_rows_from_paths(&csi_bgz, &csi, c"chr20:2147483647-2147483647");
+        let rows = query_tabix_rows_from_paths(&csi_bgz, &csi, b"chr20:2147483647-2147483647");
         assert_eq!(rows, ["chr20\t2147483647\t.\tA\tT\t999\tPASS\t."]);
 
         assert_eq!(
@@ -404,7 +421,7 @@ fn original_tabix_main_builds_vcf_tbi_and_csi_indexes() {
                 "tbi",
                 0,
                 &conf,
-                c"1:3000151-3000151",
+                b"1:3000151-3000151",
             ),
             ["1\t3000151\t.\tC\tT\t59.2\tPASS\tAN=4;AC=2\tGT:DP:GQ\t0/1:32:245\t0/1:32:245"]
         );
@@ -465,7 +482,7 @@ fn bed_tabix_query_keeps_half_open_overlap_at_right_edge() {
                 "tbi",
                 0,
                 &conf,
-                c"Y:100700-100700",
+                b"Y:100700-100700",
             ),
             [
                 "Y\t100000\t100900\tY1\t600\t+\t100000\t100900\t255,0,0",
@@ -521,7 +538,7 @@ fn csi_tabix_query_returns_large_coordinate_fixture_rows_exactly() {
             "csi",
             14,
             &conf,
-            c"chr20:1-2147483647",
+            b"chr20:1-2147483647",
         );
 
         let mut got = rows.join("\n");
@@ -567,24 +584,23 @@ fn generated_tbi_for_htslib_index_vcf_loads_exact_reference_names() {
         let bgz_c = c_path(&bgz);
         let tbi_c = c_path(&tbi);
         assert_eq!(
-            tbx_index_build2(bgz_c.as_ptr(), tbi_c.as_ptr(), 0, &conf),
+            tbx_index_build2(
+                &bgz_c[..bgz_c.len() - 1],
+                Some(&tbi_c[..tbi_c.len() - 1]),
+                0,
+                &conf
+            ),
             0
         );
 
-        let tbx = tbx_index_load2(bgz_c.as_ptr(), tbi_c.as_ptr());
+        let tbx = tbx_index_load2(&bgz_c[..bgz_c.len() - 1], Some(&tbi_c[..tbi_c.len() - 1]));
         assert!(!tbx.is_null());
-        let mut n = 0;
-        let names = tbx_seqnames(&*tbx, &mut n);
-        assert!(!names.is_null());
-        assert_eq!(n, 3);
-        let got = (0..n)
-            .map(|i| {
-                CStr::from_ptr(*names.add(i as usize))
-                    .to_string_lossy()
-                    .into_owned()
-            })
+        let names = tbx_seqnames(&*tbx);
+        assert_eq!(names.len(), 3);
+        let got = names
+            .iter()
+            .map(|name| String::from_utf8_lossy(name).into_owned())
             .collect::<Vec<_>>();
-        libc::free(names.cast());
         tbx_destroy(tbx);
         assert_eq!(got, ["1", "2", "10"]);
     }
@@ -603,17 +619,23 @@ fn custom_idx_decorated_tabix_lookup_matches_htslib_tabix_out_exactly() {
         let bgz_c = c_path(&bgz);
         let tbi_c = c_path(&tbi);
         assert_eq!(
-            tbx_index_build2(bgz_c.as_ptr(), tbi_c.as_ptr(), 0, &conf),
+            tbx_index_build2(
+                &bgz_c[..bgz_c.len() - 1],
+                Some(&tbi_c[..tbi_c.len() - 1]),
+                0,
+                &conf
+            ),
             0
         );
 
-        let decorated = CString::new(format!("{}##idx##{}", bgz.display(), tbi.display())).unwrap();
-        let tbx = tbx_index_load(decorated.as_ptr());
+        let mut decorated = format!("{}##idx##{}", bgz.display(), tbi.display()).into_bytes();
+        decorated.push(0);
+        let tbx = tbx_index_load(&decorated[..decorated.len() - 1]);
         assert!(!tbx.is_null());
 
-        let fp = hts_open(decorated.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(decorated.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
-        let itr = tbx_itr_querys1(&mut *tbx, c"1:10000060-10000060".as_ptr());
+        let itr = tbx_itr_querys1(&mut *tbx, b"1:10000060-10000060");
         assert!(!itr.is_null());
 
         let mut line = kstring_t::default();
@@ -622,8 +644,8 @@ fn custom_idx_decorated_tabix_lookup_matches_htslib_tabix_out_exactly() {
             let ret = hts_itr_next(
                 hts_get_bgzfp(fp),
                 itr,
-                (&mut line as *mut kstring_t).cast::<c_void>(),
-                tbx.cast::<c_void>(),
+                (&mut line as *mut kstring_t).cast(),
+                tbx.cast(),
             );
             if ret < 0 {
                 break;
@@ -649,7 +671,7 @@ fn generated_large_vcf_reads_all_records_through_vcf_parser() {
         let record_count = 100_000usize;
         let (bgz, tbi) = build_large_generated_index_vcf(record_count, "large-index-read");
         let bgz_c = c_path(&bgz);
-        let fp = hts_open(bgz_c.as_ptr(), c"r".as_ptr());
+        let fp = hts_open(bgz_c.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null());
         let hdr = bcf_hdr_read(fp);
         assert!(!hdr.is_null());
@@ -660,7 +682,9 @@ fn generated_large_vcf_reads_all_records_through_vcf_parser() {
         let mut sampled_names = Vec::new();
         while bcf_read(fp, hdr, rec) >= 0 {
             if seen == 0 || seen == record_count / 2 || seen + 1 == record_count {
-                sampled_names.push(CStr::from_ptr(bcf_seqname(hdr, rec)).to_bytes().to_vec());
+                let name = bcf_seqname(hdr, rec);
+                let len = (0..).take_while(|&i| *name.add(i) != 0).count();
+                sampled_names.push(std::slice::from_raw_parts(name.cast::<u8>(), len).to_vec());
             }
             assert_eq!((*rec).pos, seen as i64);
             seen += 1;
@@ -683,17 +707,17 @@ fn generated_large_vcf_reads_all_records_through_vcf_parser() {
 fn generated_large_vcf_tabix_queries_cover_dense_regions_exactly() {
     unsafe {
         let (bgz, tbi) = build_large_generated_index_vcf(120_000, "large-index-query");
-        let rows = query_tabix_rows_from_paths(&bgz, &tbi, c"1:40000-50000");
+        let rows = query_tabix_rows_from_paths(&bgz, &tbi, b"1:40000-50000");
         assert_eq!(rows.len(), 10_001);
         assert!(rows.first().unwrap().starts_with("1\t40000\t"));
         assert!(rows.last().unwrap().starts_with("1\t50000\t"));
 
-        let tail_rows = query_tabix_rows_from_paths(&bgz, &tbi, c"1:119990-120010");
+        let tail_rows = query_tabix_rows_from_paths(&bgz, &tbi, b"1:119990-120010");
         assert_eq!(tail_rows.len(), 11);
         assert!(tail_rows.first().unwrap().starts_with("1\t119990\t"));
         assert!(tail_rows.last().unwrap().starts_with("1\t120000\t"));
 
-        let empty_rows = query_tabix_rows_from_paths(&bgz, &tbi, c"1:130000-131000");
+        let empty_rows = query_tabix_rows_from_paths(&bgz, &tbi, b"1:130000-131000");
         assert!(empty_rows.is_empty());
 
         let _ = std::fs::remove_file(bgz);

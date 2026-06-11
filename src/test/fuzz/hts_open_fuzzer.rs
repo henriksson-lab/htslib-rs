@@ -1,5 +1,5 @@
 use crate::htslib_rs::{hfile, hts, sam, vcf};
-use std::ffi::{c_char, c_int};
+use std::ffi::c_char;
 
 unsafe extern "C" {
     #[link_name = "hopen"]
@@ -17,18 +17,16 @@ pub unsafe fn test_fuzz_hts_open_fuzzer_c_40_hts_close_or_abort(file: *mut hts::
 pub unsafe fn test_fuzz_hts_open_fuzzer_c_46_view_sam(
     data: *const u8,
     size: usize,
-    mode: *mut c_char,
-    close_abort: c_int,
+    mode: &[u8],
+    close_abort: i32,
 ) {
-    let copy = unsafe { libc::malloc(size).cast::<u8>() };
-    if copy.is_null() {
-        unsafe { libc::abort() };
-    }
-    unsafe { libc::memcpy(copy.cast(), data.cast(), size) };
+    let mut copy = vec![0u8; size];
+    copy.copy_from_slice(unsafe { std::slice::from_raw_parts(data, size) });
 
-    let memfile = unsafe { htslib_hopen_variadic(c"mem:".as_ptr(), c"rb:".as_ptr(), copy, size) };
+    let memfile = unsafe {
+        htslib_hopen_variadic(c"mem:".as_ptr(), c"rb:".as_ptr(), copy.as_ptr(), size)
+    };
     if memfile.is_null() {
-        unsafe { libc::free(copy.cast()) };
         return;
     }
 
@@ -40,7 +38,7 @@ pub unsafe fn test_fuzz_hts_open_fuzzer_c_46_view_sam(
         return;
     }
 
-    let out = unsafe { hts::hts_open(c"/dev/null".as_ptr(), mode.cast_const()) };
+    let out = unsafe { hts::hts_open(c"/dev/null".as_ptr(), mode.as_ptr().cast()) };
     if out.is_null() {
         unsafe { libc::abort() };
     }
@@ -74,7 +72,7 @@ pub unsafe fn test_fuzz_hts_open_fuzzer_c_46_view_sam(
     }
 
     // This will force the header to be parsed.
-    unsafe { sam::sam_hdr_count_lines(&mut *hdr, c"SQ") };
+    unsafe { sam::sam_hdr_count_lines(&mut *hdr, b"SQ") };
 
     if unsafe { sam::sam_hdr_write(out, hdr) } != 0 {
         unsafe { sam::sam_hdr_destroy(hdr) };
@@ -110,17 +108,15 @@ pub unsafe fn test_fuzz_hts_open_fuzzer_c_46_view_sam(
 pub unsafe fn test_fuzz_hts_open_fuzzer_c_121_view_vcf(
     data: *const u8,
     size: usize,
-    mode: *mut c_char,
+    mode: &[u8],
 ) {
-    let copy = unsafe { libc::malloc(size).cast::<u8>() };
-    if copy.is_null() {
-        unsafe { libc::abort() };
-    }
-    unsafe { libc::memcpy(copy.cast(), data.cast(), size) };
+    let mut copy = vec![0u8; size];
+    copy.copy_from_slice(unsafe { std::slice::from_raw_parts(data, size) });
 
-    let memfile = unsafe { htslib_hopen_variadic(c"mem:".as_ptr(), c"rb:".as_ptr(), copy, size) };
+    let memfile = unsafe {
+        htslib_hopen_variadic(c"mem:".as_ptr(), c"rb:".as_ptr(), copy.as_ptr(), size)
+    };
     if memfile.is_null() {
-        unsafe { libc::free(copy.cast()) };
         return;
     }
 
@@ -132,7 +128,7 @@ pub unsafe fn test_fuzz_hts_open_fuzzer_c_121_view_vcf(
         return;
     }
 
-    let out = unsafe { hts::hts_open(c"/dev/null".as_ptr(), mode.cast_const()) };
+    let out = unsafe { hts::hts_open(c"/dev/null".as_ptr(), mode.as_ptr().cast()) };
     if out.is_null() {
         unsafe { libc::abort() };
     }
@@ -170,17 +166,15 @@ pub unsafe fn test_fuzz_hts_open_fuzzer_c_121_view_vcf(
 pub unsafe fn test_fuzz_hts_open_fuzzer_c_171_LLVMFuzzerTestOneInput(
     data: *const u8,
     size: usize,
-) -> c_int {
+) -> i32 {
     // Only data as a mem file purely for purposes of determining format
-    let copy = unsafe { libc::malloc(size).cast::<u8>() };
-    if copy.is_null() {
-        unsafe { libc::abort() };
-    }
-    unsafe { libc::memcpy(copy.cast(), data.cast(), size) };
+    let mut copy = vec![0u8; size];
+    copy.copy_from_slice(unsafe { std::slice::from_raw_parts(data, size) });
     // hopen does not take ownership of `copy`, but hts_hopen does.
-    let memfile = unsafe { htslib_hopen_variadic(c"mem:".as_ptr(), c"rb:".as_ptr(), copy, size) };
+    let memfile = unsafe {
+        htslib_hopen_variadic(c"mem:".as_ptr(), c"rb:".as_ptr(), copy.as_ptr(), size)
+    };
     if memfile.is_null() {
-        unsafe { libc::free(copy.cast()) };
         return 0;
     }
 
@@ -199,23 +193,13 @@ pub unsafe fn test_fuzz_hts_open_fuzzer_c_171_LLVMFuzzerTestOneInput(
     // (Although we could just ignore ftype and do all 5 for all inputs)
     match ftype {
         hts::HTS_FORMAT_SEQUENCE_DATA => {
-            unsafe {
-                test_fuzz_hts_open_fuzzer_c_46_view_sam(data, size, c"w".as_ptr().cast_mut(), 1)
-            };
-            unsafe {
-                test_fuzz_hts_open_fuzzer_c_46_view_sam(data, size, c"wb".as_ptr().cast_mut(), 1)
-            };
-            unsafe {
-                test_fuzz_hts_open_fuzzer_c_46_view_sam(data, size, c"wc".as_ptr().cast_mut(), 0)
-            };
+            unsafe { test_fuzz_hts_open_fuzzer_c_46_view_sam(data, size, b"w\0", 1) };
+            unsafe { test_fuzz_hts_open_fuzzer_c_46_view_sam(data, size, b"wb\0", 1) };
+            unsafe { test_fuzz_hts_open_fuzzer_c_46_view_sam(data, size, b"wc\0", 0) };
         }
         hts::HTS_FORMAT_VARIANT_DATA => {
-            unsafe {
-                test_fuzz_hts_open_fuzzer_c_121_view_vcf(data, size, c"w".as_ptr().cast_mut())
-            };
-            unsafe {
-                test_fuzz_hts_open_fuzzer_c_121_view_vcf(data, size, c"wb".as_ptr().cast_mut())
-            };
+            unsafe { test_fuzz_hts_open_fuzzer_c_121_view_vcf(data, size, b"w\0") };
+            unsafe { test_fuzz_hts_open_fuzzer_c_121_view_vcf(data, size, b"wb\0") };
         }
         _ => {}
     }

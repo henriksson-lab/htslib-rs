@@ -1,7 +1,6 @@
 // Functions translated from htslib/cram/cram_external.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_int, c_void};
 use std::ptr::NonNull;
 
 use super::*;
@@ -101,13 +100,13 @@ pub fn cram_slice_hdr_get_num_blocks(hdr: &cram_block_slice_hdr) -> i32 {
     unsafe { slice_hdr_layout(hdr).num_blocks }
 }
 
-pub fn cram_slice_hdr_get_embed_ref_id(h: &cram_block_slice_hdr) -> c_int {
+pub fn cram_slice_hdr_get_embed_ref_id(h: &cram_block_slice_hdr) -> i32 {
     unsafe { slice_hdr_layout(h).ref_base_id }
 }
 
 pub fn cram_slice_hdr_get_coords(
     h: &cram_block_slice_hdr,
-    refid: Option<&mut c_int>,
+    refid: Option<&mut i32>,
     start: Option<&mut crate::htslib_rs::hts::hts_pos_t>,
     span: Option<&mut crate::htslib_rs::hts::hts_pos_t>,
 ) {
@@ -148,19 +147,19 @@ pub fn cram_fd_set_header(
     unsafe { cram_fd_layout_mut(fd).header = hdr.map_or(std::ptr::null_mut(), NonNull::as_ptr) };
 }
 
-pub fn cram_fd_get_version(fd: &crate::htslib_rs::hts::cram_fd) -> c_int {
+pub fn cram_fd_get_version(fd: &crate::htslib_rs::hts::cram_fd) -> i32 {
     unsafe { cram_fd_layout(fd).version }
 }
 
-pub fn cram_fd_set_version(fd: &mut crate::htslib_rs::hts::cram_fd, vers: c_int) {
+pub fn cram_fd_set_version(fd: &mut crate::htslib_rs::hts::cram_fd, vers: i32) {
     unsafe { cram_fd_layout_mut(fd).version = vers };
 }
 
-pub fn cram_major_vers(fd: &crate::htslib_rs::hts::cram_fd) -> c_int {
+pub fn cram_major_vers(fd: &crate::htslib_rs::hts::cram_fd) -> i32 {
     cram_fd_get_version(fd) >> 8
 }
 
-pub fn cram_minor_vers(fd: &crate::htslib_rs::hts::cram_fd) -> c_int {
+pub fn cram_minor_vers(fd: &crate::htslib_rs::hts::cram_fd) -> i32 {
     cram_fd_get_version(fd) & 0xff
 }
 
@@ -219,13 +218,13 @@ pub fn cram_container_set_landmarks(c: &mut cram_container, landmarks: &mut [i32
 
 pub unsafe fn cram_cram_external_c_120_cram_container_is_empty(
     fd: *mut crate::htslib_rs::hts::cram_fd,
-) -> c_int {
+) -> i32 {
     unsafe { raw_const(fd) }.map_or(0, |fd| unsafe { cram_fd_layout(fd).empty_container })
 }
 
 pub fn cram_container_get_coords(
     c: &cram_container,
-    refid: Option<&mut c_int>,
+    refid: Option<&mut i32>,
     start: Option<&mut i64>,
     span: Option<&mut i64>,
 ) {
@@ -244,8 +243,8 @@ pub fn cram_container_get_coords(
 pub fn cram_block_compression_hdr_set_ds(
     ch: &mut cram_block_compression_hdr_layout,
     ds: usize,
-    new_rg: c_int,
-) -> c_int {
+    new_rg: i32,
+) -> i32 {
     let Some(&co) = ch.codecs.get(ds) else {
         return -1;
     };
@@ -253,7 +252,7 @@ pub fn cram_block_compression_hdr_set_ds(
         return -1;
     };
 
-    match unsafe { *(co.as_ptr().cast::<c_int>()) } {
+    match unsafe { *(co.as_ptr().cast::<i32>()) } {
         3 => {
             let co = unsafe {
                 raw_mut(co.as_ptr().cast::<cram_codec_huffman_layout>())
@@ -284,9 +283,9 @@ pub fn cram_block_compression_hdr_set_ds(
 }
 
 pub unsafe fn cram_cram_external_c_177_cram_block_compression_hdr_set_rg(
-    ch: *mut c_void,
-    new_rg: c_int,
-) -> c_int {
+    ch: *mut (),
+    new_rg: i32,
+) -> i32 {
     let Some(ch) = (unsafe { raw_mut(ch.cast::<cram_block_compression_hdr_layout>()) }) else {
         return -1;
     };
@@ -294,12 +293,12 @@ pub unsafe fn cram_cram_external_c_177_cram_block_compression_hdr_set_rg(
 }
 
 pub fn cram_block_compression_hdr_decoder2encoder(
-    fd: Option<NonNull<c_void>>,
+    fd: Option<NonNull<()>>,
     ch: &mut cram_block_compression_hdr_layout,
-) -> c_int {
+) -> i32 {
     let fd = fd.map_or(std::ptr::null_mut(), NonNull::as_ptr);
     for codec in ch.codecs.iter().take(46).filter_map(|&co| NonNull::new(co)) {
-        if unsafe { cram_cram_codecs_c_4031_cram_codec_decoder2encoder(fd, codec.as_ptr()) } == -1 {
+        if unsafe { cram_cram_codecs_c_4031_cram_codec_decoder2encoder(fd, codec.as_ptr().cast::<()>()) } == -1 {
             return -1;
         }
     }
@@ -316,40 +315,40 @@ pub fn cram_codec_iter_init(
     iter.is_tag = 0;
 }
 
-pub fn cram_ds_to_key(ds: c_int) -> c_int {
+pub fn cram_ds_to_key(ds: i32) -> i32 {
     match ds {
-        10 => 256 * b'R' as c_int + b'N' as c_int,
-        11 => 256 * b'Q' as c_int + b'S' as c_int,
-        12 => 256 * b'I' as c_int + b'N' as c_int,
-        13 => 256 * b'S' as c_int + b'C' as c_int,
-        14 => 256 * b'B' as c_int + b'F' as c_int,
-        15 => 256 * b'C' as c_int + b'F' as c_int,
-        16 => 256 * b'A' as c_int + b'P' as c_int,
-        17 => 256 * b'R' as c_int + b'G' as c_int,
-        18 => 256 * b'M' as c_int + b'Q' as c_int,
-        19 => 256 * b'N' as c_int + b'S' as c_int,
-        20 => 256 * b'M' as c_int + b'F' as c_int,
-        21 => 256 * b'T' as c_int + b'S' as c_int,
-        22 => 256 * b'N' as c_int + b'P' as c_int,
-        23 => 256 * b'N' as c_int + b'F' as c_int,
-        24 => 256 * b'R' as c_int + b'L' as c_int,
-        25 => 256 * b'F' as c_int + b'N' as c_int,
-        26 => 256 * b'F' as c_int + b'C' as c_int,
-        27 => 256 * b'F' as c_int + b'P' as c_int,
-        28 => 256 * b'D' as c_int + b'L' as c_int,
-        29 => 256 * b'B' as c_int + b'A' as c_int,
-        30 => 256 * b'B' as c_int + b'S' as c_int,
-        31 => 256 * b'T' as c_int + b'L' as c_int,
-        32 => 256 * b'R' as c_int + b'I' as c_int,
-        33 => 256 * b'R' as c_int + b'S' as c_int,
-        34 => 256 * b'P' as c_int + b'D' as c_int,
-        35 => 256 * b'H' as c_int + b'C' as c_int,
-        36 => 256 * b'B' as c_int + b'B' as c_int,
-        37 => 256 * b'Q' as c_int + b'Q' as c_int,
-        38 => 256 * b'T' as c_int + b'N' as c_int,
-        43 => 256 * b'T' as c_int + b'C' as c_int,
-        44 => 256 * b'T' as c_int + b'M' as c_int,
-        45 => 256 * b'T' as c_int + b'V' as c_int,
+        10 => 256 * b'R' as i32 + b'N' as i32,
+        11 => 256 * b'Q' as i32 + b'S' as i32,
+        12 => 256 * b'I' as i32 + b'N' as i32,
+        13 => 256 * b'S' as i32 + b'C' as i32,
+        14 => 256 * b'B' as i32 + b'F' as i32,
+        15 => 256 * b'C' as i32 + b'F' as i32,
+        16 => 256 * b'A' as i32 + b'P' as i32,
+        17 => 256 * b'R' as i32 + b'G' as i32,
+        18 => 256 * b'M' as i32 + b'Q' as i32,
+        19 => 256 * b'N' as i32 + b'S' as i32,
+        20 => 256 * b'M' as i32 + b'F' as i32,
+        21 => 256 * b'T' as i32 + b'S' as i32,
+        22 => 256 * b'N' as i32 + b'P' as i32,
+        23 => 256 * b'N' as i32 + b'F' as i32,
+        24 => 256 * b'R' as i32 + b'L' as i32,
+        25 => 256 * b'F' as i32 + b'N' as i32,
+        26 => 256 * b'F' as i32 + b'C' as i32,
+        27 => 256 * b'F' as i32 + b'P' as i32,
+        28 => 256 * b'D' as i32 + b'L' as i32,
+        29 => 256 * b'B' as i32 + b'A' as i32,
+        30 => 256 * b'B' as i32 + b'S' as i32,
+        31 => 256 * b'T' as i32 + b'L' as i32,
+        32 => 256 * b'R' as i32 + b'I' as i32,
+        33 => 256 * b'R' as i32 + b'S' as i32,
+        34 => 256 * b'P' as i32 + b'D' as i32,
+        35 => 256 * b'H' as i32 + b'C' as i32,
+        36 => 256 * b'B' as i32 + b'B' as i32,
+        37 => 256 * b'Q' as i32 + b'Q' as i32,
+        38 => 256 * b'T' as i32 + b'N' as i32,
+        43 => 256 * b'T' as i32 + b'C' as i32,
+        44 => 256 * b'T' as i32 + b'M' as i32,
+        45 => 256 * b'T' as i32 + b'V' as i32,
         _ => -1,
     }
 }
@@ -357,7 +356,7 @@ pub fn cram_ds_to_key(ds: c_int) -> c_int {
 struct CramCodecIter<'a> {
     hdr: &'a cram_block_compression_hdr_layout,
     curr_map: Option<NonNull<cram_map_layout>>,
-    idx: c_int,
+    idx: i32,
     is_tag: bool,
 }
 
@@ -371,7 +370,7 @@ impl<'a> CramCodecIter<'a> {
         }
     }
 
-    unsafe fn next(&mut self, key: &mut c_int) -> Option<NonNull<c_void>> {
+    unsafe fn next(&mut self, key: &mut i32) -> Option<NonNull<()>> {
         if !self.is_tag {
             while let Some(&cc) = self.hdr.codecs.get(self.idx as usize) {
                 let ds = self.idx;
@@ -417,8 +416,8 @@ impl<'a> CramCodecIter<'a> {
 
 pub fn cram_codec_iter_next(
     iter: &mut cram_codec_iter_layout,
-    key: &mut c_int,
-) -> Option<NonNull<c_void>> {
+    key: &mut i32,
+) -> Option<NonNull<()>> {
     let hdr = NonNull::new(iter.hdr)?;
     let hdr = unsafe { hdr.as_ref() };
 
@@ -428,7 +427,7 @@ pub fn cram_codec_iter_next(
             iter.idx += 1;
             if let Some(codec) = NonNull::new(cc) {
                 *key = cram_ds_to_key(ds);
-                return Some(codec);
+                return Some(codec.cast::<()>());
             }
         }
 
@@ -455,7 +454,7 @@ pub fn cram_codec_iter_next(
         if let Some(codec) = NonNull::new(curr_map_ref.codec) {
             *key = curr_map_ref.key;
             iter.curr_map = curr_map_ref.next;
-            return Some(codec);
+            return Some(codec.cast::<()>());
         }
         if iter.idx >= 32 {
             break;
@@ -494,7 +493,7 @@ unsafe fn cram_update_cid2ds_map(
                 }
 
                 if dsi == -1 {
-                    let new_idx = c2d.ds.len() as c_int;
+                    let new_idx = c2d.ds.len() as i32;
                     c2d.ds.push(cram_ds_list {
                         data_series: key,
                         next: *head_ref,
@@ -502,7 +501,7 @@ unsafe fn cram_update_cid2ds_map(
                     *head_ref = new_idx;
                 }
             } else {
-                let new_idx = c2d.ds.len() as c_int;
+                let new_idx = c2d.ds.len() as i32;
                 c2d.ds.push(cram_ds_list {
                     data_series: key,
                     next: -1,
@@ -533,9 +532,9 @@ pub unsafe fn cram_cram_external_c_342_cram_update_cid2ds_map(
 
 pub fn cram_cid2ds_query(
     c2d: Option<&mut cram_cid2ds_t>,
-    content_id: c_int,
-    n: &mut c_int,
-) -> Option<NonNull<c_int>> {
+    content_id: i32,
+    n: &mut i32,
+) -> Option<NonNull<i32>> {
     *n = 0;
     let Some(c2d) = c2d else {
         return None;
@@ -552,14 +551,14 @@ pub fn cram_cid2ds_query(
         dsi = ds.next;
     }
 
-    *n = c2d.ds_a.len() as c_int;
+    *n = c2d.ds_a.len() as i32;
     NonNull::new(c2d.ds_a.as_mut_ptr())
 }
 
 pub unsafe fn cram_describe_encodings(
     hdr: &cram_block_compression_hdr_layout,
     ks: &mut kstring_t,
-) -> c_int {
+) -> i32 {
     let mut citer = CramCodecIter::new(hdr);
     let mut r = 0;
     let mut key = 0;
@@ -571,13 +570,13 @@ pub unsafe fn cram_describe_encodings(
         key_s.push(((key >> 8) & 0xff) as u8);
         key_s.push((key & 0xff) as u8);
 
-        r |= (kputc(b'\t' as c_int, ks) < 0) as c_int;
-        r |= (kputsn(&key_s, key_s.len(), ks) < 0) as c_int;
-        r |= (kputc(b'\t' as c_int, ks) < 0) as c_int;
+        r |= (kputc(b'\t' as i32, ks) < 0) as i32;
+        r |= (kputsn(&key_s, key_s.len(), ks) < 0) as i32;
+        r |= (kputc(b'\t' as i32, ks) < 0) as i32;
         r |= (unsafe {
             cram_cram_codecs_c_4185_cram_codec_describe(codec.as_ptr(), ks as *mut kstring_t)
-        } < 0) as c_int;
-        r |= (kputc(b'\n' as c_int, ks) < 0) as c_int;
+        } < 0) as i32;
+        r |= (kputc(b'\n' as i32, ks) < 0) as i32;
     }
 
     if r != 0 {
@@ -641,7 +640,7 @@ pub fn cram_block_set_data(b: &mut cram_block, data: Option<NonNull<u8>>) {
     unsafe { block_layout_mut(b).data = data.map_or(std::ptr::null_mut(), NonNull::as_ptr).cast() };
 }
 
-pub fn cram_block_append(b: &mut cram_block, data: &[u8]) -> c_int {
+pub fn cram_block_append(b: &mut cram_block, data: &[u8]) -> i32 {
     unsafe { cram_cram_io_h_248_block_append(b, data.as_ptr().cast(), data.len()) }
 }
 
@@ -720,7 +719,7 @@ pub fn cram_expand_method(data: &[u8], mut comp: cram_block_method) -> Box<cram_
         }
         CRAM_COMP_BZIP2 => {
             if data.len() > 3 && data[3] >= b'1' && data[3] <= b'9' {
-                cm.level = (data[3] - b'0') as c_int;
+                cm.level = (data[3] - b'0') as i32;
             }
         }
         CRAM_COMP_RANS4X8 => {
@@ -734,25 +733,25 @@ pub fn cram_expand_method(data: &[u8], mut comp: cram_block_method) -> Box<cram_
         CRAM_COMP_RANSNX16 => {
             if !data.is_empty() {
                 let flags = data[0];
-                cm.order = (flags & 1) as c_int;
+                cm.order = (flags & 1) as i32;
                 cm.nway = if flags & RANS_ORDER_X32 != 0 { 32 } else { 4 };
-                cm.rle = (flags & RANS_ORDER_RLE != 0) as c_int;
-                cm.pack = (flags & RANS_ORDER_PACK != 0) as c_int;
-                cm.cat = (flags & RANS_ORDER_CAT != 0) as c_int;
-                cm.stripe = (flags & RANS_ORDER_STRIPE != 0) as c_int;
-                cm.nosz = (flags & RANS_ORDER_NOSZ != 0) as c_int;
+                cm.rle = (flags & RANS_ORDER_RLE != 0) as i32;
+                cm.pack = (flags & RANS_ORDER_PACK != 0) as i32;
+                cm.cat = (flags & RANS_ORDER_CAT != 0) as i32;
+                cm.stripe = (flags & RANS_ORDER_STRIPE != 0) as i32;
+                cm.nosz = (flags & RANS_ORDER_NOSZ != 0) as i32;
             }
         }
         CRAM_COMP_ARITH => {
             if !data.is_empty() {
                 let flags = data[0];
-                cm.order = (flags & 3) as c_int;
-                cm.rle = (flags & RANS_ORDER_RLE != 0) as c_int;
-                cm.pack = (flags & RANS_ORDER_PACK != 0) as c_int;
-                cm.cat = (flags & RANS_ORDER_CAT != 0) as c_int;
-                cm.stripe = (flags & RANS_ORDER_STRIPE != 0) as c_int;
-                cm.nosz = (flags & RANS_ORDER_NOSZ != 0) as c_int;
-                cm.ext = (flags & 4 != 0) as c_int;
+                cm.order = (flags & 3) as i32;
+                cm.rle = (flags & RANS_ORDER_RLE != 0) as i32;
+                cm.pack = (flags & RANS_ORDER_PACK != 0) as i32;
+                cm.cat = (flags & RANS_ORDER_CAT != 0) as i32;
+                cm.stripe = (flags & RANS_ORDER_STRIPE != 0) as i32;
+                cm.nosz = (flags & RANS_ORDER_NOSZ != 0) as i32;
+                cm.ext = (flags & 4 != 0) as i32;
             }
         }
         CRAM_COMP_TOK3 => {
@@ -770,7 +769,7 @@ pub fn cram_expand_method(data: &[u8], mut comp: cram_block_method) -> Box<cram_
     cm
 }
 
-pub unsafe fn cram_codec_get_content_ids(c: NonNull<c_void>, ids: &mut [c_int; 2]) {
+pub unsafe fn cram_codec_get_content_ids(c: NonNull<()>, ids: &mut [i32; 2]) {
     ids[0] = unsafe { cram_cram_codecs_c_3968_cram_codec_to_id(c.as_ptr(), &mut ids[1]) };
 }
 
@@ -778,7 +777,7 @@ pub unsafe fn cram_cram_external_c_683_cram_copy_slice(
     in_: *mut cram_fd,
     out: *mut cram_fd,
     num_slice: i32,
-) -> c_int {
+) -> i32 {
     if in_.is_null() || out.is_null() || num_slice < 0 {
         return -1;
     }
@@ -826,7 +825,7 @@ pub unsafe fn cram_cram_external_c_683_cram_copy_slice(
 pub unsafe fn cram_cram_external_c_725_cram_skip_container(
     in_: *mut cram_fd,
     c: *mut cram_container,
-) -> c_int {
+) -> i32 {
     if in_.is_null() {
         return -1;
     }
@@ -877,9 +876,9 @@ pub unsafe fn cram_cram_external_c_776_cram_filter_container(
     in_: *mut cram_fd,
     out: *mut cram_fd,
     c: *mut cram_container,
-    ref_id: *mut c_int,
-) -> c_int {
-    const E_HUFFMAN: c_int = 3;
+    ref_id: *mut i32,
+) -> i32 {
+    const E_HUFFMAN: i32 = 3;
     const DS_RI: usize = 32;
 
     let (Some(in_fd), Some(c_ref)) = (unsafe { raw_mut(in_) }, unsafe { raw_mut(c) }) else {
@@ -922,17 +921,17 @@ pub unsafe fn cram_cram_external_c_776_cram_filter_container(
         };
         let cd = ch.codecs[DS_RI];
         if !cd.is_null()
-            && *(cd.cast::<c_int>()) == E_HUFFMAN
+            && *(cd.cast::<i32>()) == E_HUFFMAN
             && (*cd.cast::<cram_codec_huffman_layout>()).huffman.ncodes == 1
             && NonNull::new((*cd.cast::<cram_codec_huffman_layout>()).huffman.codes)
-                .is_some_and(|codes| rid == (*codes.as_ptr()).symbol as c_int)
+                .is_some_and(|codes| rid == (*codes.as_ptr()).symbol as i32)
             && in_fd.range.start <= 1
             && in_fd.range.end >= (i64::MAX & ((0xffff_ffff_u64 << 32) as i64))
         {
             if let Some(ref_id) = unsafe { ref_id.as_mut() } {
                 *ref_id = rid;
             }
-            err |= (cram_write_container(out, c) < 0) as c_int;
+            err |= (cram_write_container(out, c) < 0) as i32;
             err |= cram_write_block(out, blk);
             return cram_cram_external_c_683_cram_copy_slice(in_, out, c_layout.num_landmarks)
                 | -err;
@@ -1002,7 +1001,7 @@ pub unsafe fn cram_cram_external_c_776_cram_filter_container(
                 rec
             },
             (&mut b as *mut *mut bam1_t).cast(),
-        ) < 0) as c_int;
+        ) < 0) as i32;
 
         if cram_cram_encode_c_4049_cram_put_bam_seq(out, b) < 0 {
             err |= 1;
@@ -1030,10 +1029,10 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     in_: *mut cram_fd,
     out: *mut cram_fd,
     c: *mut cram_container,
-    nrg: c_int,
-    _in_rg: *mut c_int,
-    out_rg: *mut c_int,
-) -> c_int {
+    nrg: i32,
+    _in_rg: *mut i32,
+    out_rg: *mut i32,
+) -> i32 {
     let (Some(in_fd), Some(new_rg)) = (unsafe { raw_const(in_) }, unsafe { raw_const(out_rg) })
     else {
         return -1;
@@ -1044,8 +1043,8 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     if nrg != 1 {
         hts_log_cstr(
             HTS_LOG_ERROR,
-            c"cram_transcode_rg".as_ptr(),
-            c"CRAM transcode supports only a single RG".as_ptr(),
+            b"cram_transcode_rg",
+            b"CRAM transcode supports only a single RG",
         );
         return -2;
     }
@@ -1054,7 +1053,7 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     if o_blk.is_null() {
         return -1;
     }
-    let old_size = cram_block_size(o_blk) as c_int;
+    let old_size = cram_block_size(o_blk) as i32;
     let ch = cram_decode_compression_header(in_, o_blk);
     if ch.is_null() {
         cram_free_block(o_blk);
@@ -1066,7 +1065,7 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
         return -1;
     }
     if {
-        let fd = NonNull::new(in_.cast::<c_void>());
+        let fd = NonNull::new(in_.cast::<()>());
         match unsafe { raw_mut(ch.cast::<cram_block_compression_hdr_layout>()) } {
             Some(ch) => cram_block_compression_hdr_decoder2encoder(fd, ch),
             None => -1,
@@ -1094,8 +1093,8 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
         cram_free_block(n_blk);
         return -1;
     };
-    let mut cp = data.as_ptr().cast_mut().cast::<c_char>();
-    let endp = cp.add(data.len());
+    let mut cp = data.as_ptr().cast_mut();
+    let endp: *const u8 = cp.add(data.len());
     let mut err = 0;
     let varint_get32 = in_fd.vv.varint_get32.expect("cram_fd varint_get32 is NULL");
 
@@ -1119,7 +1118,7 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     };
     cram_block_set_size(n_blk_mut, cram_block_get_size(n_blk_mut) - 2);
     {
-        let data = unsafe { raw_slice(op.cast::<u8>(), i32_.max(0) as usize) };
+        let data = unsafe { raw_slice(op, i32_.max(0) as usize) };
         if let Some(data) = data {
             cram_block_append(n_blk_mut, data);
         }
@@ -1128,7 +1127,7 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     n_blk_layout.comp_size = n_blk_layout.byte as i32;
     n_blk_layout.uncomp_size = n_blk_layout.byte as i32;
 
-    let new_size = cram_block_size(n_blk) as c_int;
+    let new_size = cram_block_size(n_blk) as i32;
 
     let Some(c_ref) = (unsafe { raw_mut(c) }) else {
         cram_free_block(o_blk);
@@ -1136,7 +1135,7 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
         return -1;
     };
     let landmarks = cram_container_get_landmarks(c_ref);
-    let num_landmarks = landmarks.len() as c_int;
+    let num_landmarks = landmarks.len() as i32;
 
     if old_size != new_size {
         let diff = new_size - old_size;

@@ -1,6 +1,4 @@
-use std::ffi::c_int;
-
-pub const FIRST_SD_LISTEN_FD: c_int = 3;
+pub const FIRST_SD_LISTEN_FD: i32 = 3;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,9 +28,9 @@ pub struct Options {
     // C string carried as owned bytes (no trailing NUL); length is `.len()`.
     pub upstream_url: Option<Vec<u8>>,
     pub first_ip6: usize,
-    pub max_log_sz: libc::off_t,
-    pub cache_fd: c_int,
-    pub listen_fds: c_int,
+    pub max_log_sz: i64,
+    pub cache_fd: i32,
+    pub listen_fds: i32,
     pub daemon: DaemonType,
     pub port: u16,
     pub nlogs: u16,

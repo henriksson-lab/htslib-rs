@@ -18,18 +18,21 @@ use htslib_rs::{
     bam_parse_basemod2, bam_seqi, hts_base_mod, hts_base_mod_state, hts_base_mod_state_alloc,
     hts_base_mod_state_free, hts_close, hts_open, sam_hdr_destroy, sam_hdr_read, sam_read1,
 };
-use std::ffi::CString;
-use std::os::raw::c_int;
-
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().as_bytes().to_vec();
+    bytes.push(0);
+    bytes
 }
 
 unsafe fn read_records(path: &str) -> Vec<*mut bam1_t> {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path[..path.len() - 1])
+    );
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
 
@@ -72,7 +75,7 @@ unsafe fn base_at(rec: *const bam1_t, qpos: i32) -> char {
 
 /// Collect the (sorted) set of recorded mod type codes via `bam_mods_recorded`.
 unsafe fn recorded_types(state: &mut hts_base_mod_state) -> Vec<i32> {
-    let mut ntype: c_int = 0;
+    let mut ntype: i32 = 0;
     let types = bam_mods_recorded(state, &mut ntype);
     let mut out: Vec<i32> = (0..ntype as usize).map(|i| types[i]).collect();
     out.sort();
@@ -155,7 +158,7 @@ fn mods_recorded_is_zero_when_record_has_no_mm_tag() {
         // and recorded mods are empty.
         for idx in [1usize, 3usize] {
             assert_eq!(bam_parse_basemod(&*records[idx], &mut *state), 0);
-            let mut ntype: c_int = 0;
+            let mut ntype: i32 = 0;
             let types = bam_mods_recorded(&mut *state, &mut ntype);
             assert_eq!(ntype, 0, "record {idx} should have no recorded mods");
             // `types` is the inline state buffer slice;
@@ -185,11 +188,11 @@ fn mods_query_type_and_queryi_agree_on_orient_top_and_bottom_strands() {
             assert_eq!(bam_parse_basemod(&*records[0], &mut *state), 0);
             let mut strand_a = 0;
             let mut implicit_a = 0;
-            let mut canonical_a: i8 = 0;
+            let mut canonical_a: u8 = 0;
             assert_eq!(
                 bam_mods_query_type(
                     &*state,
-                    b'm' as c_int,
+                    b'm' as i32,
                     Some(&mut strand_a),
                     Some(&mut implicit_a),
                     Some(&mut canonical_a),
@@ -198,7 +201,7 @@ fn mods_query_type_and_queryi_agree_on_orient_top_and_bottom_strands() {
             );
             let mut strand_b = 0;
             let mut implicit_b = 0;
-            let mut canonical_b: i8 = 0;
+            let mut canonical_b: u8 = 0;
             assert_eq!(
                 bam_mods_queryi(
                     &*state,
@@ -224,11 +227,11 @@ fn mods_query_type_and_queryi_agree_on_orient_top_and_bottom_strands() {
             assert_eq!(bam_parse_basemod(&*records[2], &mut *state), 0);
             let mut strand = 0;
             let mut implicit = 0;
-            let mut canonical: i8 = 0;
+            let mut canonical: u8 = 0;
             assert_eq!(
                 bam_mods_query_type(
                     &*state,
-                    b'm' as c_int,
+                    b'm' as i32,
                     Some(&mut strand),
                     Some(&mut implicit),
                     Some(&mut canonical),
@@ -252,11 +255,11 @@ fn mods_query_type_returns_minus_one_for_unrecorded_code() {
         // 'x' is never recorded in MM-double; expect -1.
         let mut strand = 0;
         let mut implicit = 0;
-        let mut canonical: i8 = 0;
+        let mut canonical: u8 = 0;
         assert_eq!(
             bam_mods_query_type(
                 &*state,
-                b'x' as c_int,
+                b'x' as i32,
                 Some(&mut strand),
                 Some(&mut implicit),
                 Some(&mut canonical),
@@ -290,10 +293,10 @@ fn mods_query_type_reports_implicit_default_for_chebi_fixture() {
 
         // 'm' has no explicit '?' marker => implicit == 1 (default-zero).
         // ChEBI numeric code -76792 same.
-        for &code in &[b'm' as c_int, b'n' as c_int, -76792i32] {
+        for &code in &[b'm' as i32, b'n' as i32, -76792i32] {
             let mut strand = 0;
-            let mut implicit: c_int = -1;
-            let mut canonical: i8 = 0;
+            let mut implicit: i32 = -1;
+            let mut canonical: u8 = 0;
             assert_eq!(
                 bam_mods_query_type(
                     &*state,

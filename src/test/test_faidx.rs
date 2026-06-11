@@ -1,30 +1,31 @@
-use std::ffi::{c_char, c_int, c_uint};
-
 use crate::htslib_rs::{faidx, hts::hts_pos_t};
 
 unsafe extern "C" {
-    static mut optarg: *mut c_char;
-    static mut optind: c_int;
+    static mut optarg: *mut u8;
+    static mut optind: i32;
+    // The C standard streams, linked directly from the C runtime.
+    static mut stdout: *mut libc::FILE;
+    static mut stderr: *mut libc::FILE;
 }
 
 // original: file_compare (htslib/test/test_faidx.c:33)
 pub unsafe fn test_test_faidx_c_33_file_compare(
-    file1: *const c_char,
-    file2: *const c_char,
-) -> c_int {
+    file1: *const u8,
+    file2: *const u8,
+) -> i32 {
     let mut buf1 = [0u8; 1024];
     let mut buf2 = [0u8; 1024];
-    let mut lno: c_uint = 1;
+    let mut lno: u32 = 1;
     let mut ret = -1;
 
-    let f1 = libc::fopen(file1, c"rb".as_ptr());
+    let f1 = libc::fopen(file1.cast(), c"rb".as_ptr());
     if f1.is_null() {
-        libc::perror(file1);
+        libc::perror(file1.cast());
         return -1;
     }
-    let f2 = libc::fopen(file2, c"rb".as_ptr());
+    let f2 = libc::fopen(file2.cast(), c"rb".as_ptr());
     if f2.is_null() {
-        libc::perror(file2);
+        libc::perror(file2.cast());
         libc::fclose(f1);
         return -1;
     }
@@ -40,25 +41,28 @@ pub unsafe fn test_test_faidx_c_33_file_compare(
             i += 1;
         }
         if i < got1 || i < got2 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"%s and %s differ at line %u\n".as_ptr(),
-                file1,
-                file2,
+            eprintln!(
+                "{} and {} differ at line {}",
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(file1.cast()).to_bytes()),
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(file2.cast()).to_bytes()),
                 lno,
             );
             break;
         }
         if got1 == 0 || got2 == 0 {
             if libc::ferror(f1) != 0 {
-                libc::perror(file1);
+                libc::perror(file1.cast());
             } else if libc::ferror(f2) != 0 {
-                libc::perror(file2);
+                libc::perror(file2.cast());
             } else if got1 > 0 || got2 > 0 {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"EOF on %s at line %u\n".as_ptr(),
-                    if got1 > 0 { file2 } else { file1 },
+                eprintln!(
+                    "EOF on {} at line {}",
+                    String::from_utf8_lossy(
+                        std::ffi::CStr::from_ptr(
+                            if got1 > 0 { file2 } else { file1 }.cast()
+                        )
+                        .to_bytes()
+                    ),
                     lno,
                 );
             } else {
@@ -75,30 +79,37 @@ pub unsafe fn test_test_faidx_c_33_file_compare(
 
 // original: load_index (htslib/test/test_faidx.c:87)
 pub unsafe fn test_test_faidx_c_87_load_index(
-    fn_: *const c_char,
-    fnfai: *const c_char,
-    fngzi: *const c_char,
-    flags: c_int,
+    fn_: *const u8,
+    fnfai: *const u8,
+    fngzi: *const u8,
+    flags: i32,
     format: crate::htslib_rs::faidx::fai_format_options,
 ) -> *mut crate::htslib_rs::faidx::faidx_t {
-    let fai = crate::htslib_rs::faidx::fai_load3_format(fn_, fnfai, fngzi, flags, format);
+    let fai = crate::htslib_rs::faidx::fai_load3_format(
+        fn_.cast(),
+        fnfai.cast(),
+        fngzi.cast(),
+        flags,
+        format,
+    );
     if fai.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Failed: fai_load3(%s, %s, %s, %d, %d)\n".as_ptr(),
-            fn_,
+        eprintln!(
+            "Failed: fai_load3({}, {}, {}, {}, {})",
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr(fn_.cast()).to_bytes()),
             if fnfai.is_null() {
-                c"NULL".as_ptr()
+                "NULL".to_string()
             } else {
-                fnfai
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(fnfai.cast()).to_bytes())
+                    .into_owned()
             },
             if fngzi.is_null() {
-                c"NULL".as_ptr()
+                "NULL".to_string()
             } else {
-                fngzi
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(fngzi.cast()).to_bytes())
+                    .into_owned()
             },
             flags,
-            format as c_int,
+            format as i32,
         );
     }
     fai
@@ -107,41 +118,41 @@ pub unsafe fn test_test_faidx_c_87_load_index(
 // original: do_retrieval (htslib/test/test_faidx.c:99)
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn test_test_faidx_c_99_do_retrieval(
-    fn_: *const c_char,
-    fnfai: *const c_char,
-    fngzi: *const c_char,
-    flags: c_int,
+    fn_: *const u8,
+    fnfai: *const u8,
+    fngzi: *const u8,
+    flags: i32,
     format: crate::htslib_rs::faidx::fai_format_options,
-    fnout: *const c_char,
-    interface: *const c_char,
-    nreg: c_int,
-    regions: *mut *mut c_char,
-) -> c_int {
+    fnout: *const u8,
+    interface: *const u8,
+    nreg: i32,
+    regions: *mut *mut u8,
+) -> i32 {
     let mut use_64bit = 1;
     let mut use_parse_reg = 0;
     let mut use_adjust_reg = 0;
-    let mut out = crate::htslib_rs::c_compat::stdout.cast::<libc::FILE>();
+    let mut out = stdout.cast::<libc::FILE>();
 
     if !interface.is_null() {
-        if libc::strcmp(interface, c"fai_fetch".as_ptr()) == 0 {
+        let interface_bytes = std::ffi::CStr::from_ptr(interface.cast()).to_bytes();
+        if interface_bytes == b"fai_fetch" {
             use_64bit = 0;
-        } else if libc::strcmp(interface, c"faidx_fetch_seq".as_ptr()) == 0 {
+        } else if interface_bytes == b"faidx_fetch_seq" {
             use_64bit = 0;
             use_parse_reg = 1;
-        } else if libc::strcmp(interface, c"faidx_fetch_seq64".as_ptr()) == 0
-            || libc::strcmp(interface, c"fai_parse_region".as_ptr()) == 0
+        } else if interface_bytes == b"faidx_fetch_seq64" || interface_bytes == b"fai_parse_region"
         {
             use_parse_reg = 1;
-        } else if libc::strcmp(interface, c"fai_adjust_region".as_ptr()) == 0 {
+        } else if interface_bytes == b"fai_adjust_region" {
             use_parse_reg = 1;
             use_adjust_reg = 1;
         }
     }
 
     if !fnout.is_null() {
-        out = libc::fopen(fnout, c"wb".as_ptr());
+        out = libc::fopen(fnout.cast(), c"wb".as_ptr());
         if out.is_null() {
-            libc::perror(fnout);
+            libc::perror(fnout.cast());
             return -1;
         }
     }
@@ -159,18 +170,17 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
         let mut len: hts_pos_t = 0;
         let mut beg: hts_pos_t = 0;
         let mut end: hts_pos_t = 0;
-        let mut tid: c_int = 0;
-        let seq: *mut c_char;
+        let mut tid: i32 = 0;
+        let seq: *mut u8;
 
         if use_parse_reg != 0 {
             let e = crate::htslib_rs::faidx::fai_parse_region(
-                fai, region, &mut tid, &mut beg, &mut end, 0,
+                fai, region.cast(), &mut tid, &mut beg, &mut end, 0,
             );
             if e.is_null() {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Failed: fai_parse_region(fai, %s, &tid, &beg, &end, 0)\n".as_ptr(),
-                    region,
+                eprintln!(
+                    "Failed: fai_parse_region(fai, {}, &tid, &beg, &end, 0)",
+                    String::from_utf8_lossy(std::ffi::CStr::from_ptr(region.cast()).to_bytes()),
                 );
                 crate::htslib_rs::faidx::fai_destroy(fai);
                 if !fnout.is_null() {
@@ -186,16 +196,15 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
                     || (((r & 1) != 0) ^ (beg != orig_beg))
                     || (((r & 2) != 0) ^ (end != orig_end))
                 {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Failed: fai_adjust_region(fai, %d, %lld, %lld) returned %d\nAfter: beg = %lld end = %lld\n".as_ptr(),
+                    eprintln!(
+                        "Failed: fai_adjust_region(fai, {}, {}, {}) returned {}\nAfter: beg = {} end = {}",
                         tid,
-                        orig_beg as libc::c_longlong,
-                        orig_end as libc::c_longlong,
+                        orig_beg as i64,
+                        orig_end as i64,
                         r,
-                        beg as libc::c_longlong,
-                        end as libc::c_longlong,
-                        );
+                        beg as i64,
+                        end as i64,
+                    );
                     crate::htslib_rs::faidx::fai_destroy(fai);
                     if !fnout.is_null() {
                         libc::fclose(out);
@@ -203,36 +212,41 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
                     return -1;
                 }
             }
-            let name = crate::htslib_rs::faidx::faidx_iseq(&*fai, tid)
-                .map(|b| std::ffi::CString::new(b).unwrap());
+            let name = crate::htslib_rs::faidx::faidx_iseq(&*fai, tid).map(|b| {
+                let mut v = b.to_vec();
+                v.push(0);
+                v
+            });
             let name = name
                 .as_ref()
-                .map_or(std::ptr::null(), |c| c.as_ptr());
+                .map_or(std::ptr::null(), |b| b.as_ptr().cast());
             if use_64bit != 0 {
-                seq = crate::htslib_rs::faidx::faidx_fetch_seq64(fai, name, beg, end - 1, &mut len);
+                seq = crate::htslib_rs::faidx::faidx_fetch_seq64(fai, name, beg, end - 1, &mut len)
+                    .cast();
             } else {
-                let mut ilen: c_int = 0;
+                let mut ilen: i32 = 0;
                 seq = crate::htslib_rs::faidx::faidx_fetch_seq(
                     fai,
                     name,
-                    beg as c_int,
-                    (end - 1) as c_int,
+                    beg as i32,
+                    (end - 1) as i32,
                     &mut ilen,
-                );
+                )
+                .cast();
                 len = ilen as hts_pos_t;
             }
             if seq.is_null() {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Failed: faidx_fetch_seq%s(fai, %s, %lld, %lld, &len)\n".as_ptr(),
-                    if use_64bit != 0 {
-                        c"64".as_ptr()
+                eprintln!(
+                    "Failed: faidx_fetch_seq{}(fai, {}, {}, {}, &len)",
+                    if use_64bit != 0 { "64" } else { "" },
+                    if name.is_null() {
+                        String::new()
                     } else {
-                        c"".as_ptr()
+                        String::from_utf8_lossy(std::ffi::CStr::from_ptr(name).to_bytes())
+                            .into_owned()
                     },
-                    name,
-                    beg as libc::c_longlong,
-                    end as libc::c_longlong,
+                    beg as i64,
+                    end as i64,
                 );
                 crate::htslib_rs::faidx::fai_destroy(fai);
                 if !fnout.is_null() {
@@ -242,22 +256,17 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
             }
         } else {
             if use_64bit != 0 {
-                seq = crate::htslib_rs::faidx::fai_fetch64(fai, region, &mut len);
+                seq = crate::htslib_rs::faidx::fai_fetch64(fai, region.cast(), &mut len).cast();
             } else {
-                let mut ilen: c_int = 0;
-                seq = crate::htslib_rs::faidx::fai_fetch(fai, region, &mut ilen);
+                let mut ilen: i32 = 0;
+                seq = crate::htslib_rs::faidx::fai_fetch(fai, region.cast(), &mut ilen).cast();
                 len = ilen as hts_pos_t;
             }
             if seq.is_null() {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Failed: fai_fetch%s(fai, %s, &len)\n".as_ptr(),
-                    if use_64bit != 0 {
-                        c"64".as_ptr()
-                    } else {
-                        c"".as_ptr()
-                    },
-                    region,
+                eprintln!(
+                    "Failed: fai_fetch{}(fai, {}, &len)",
+                    if use_64bit != 0 { "64" } else { "" },
+                    String::from_utf8_lossy(std::ffi::CStr::from_ptr(region.cast()).to_bytes()),
                 );
                 crate::htslib_rs::faidx::fai_destroy(fai);
                 if !fnout.is_null() {
@@ -267,34 +276,41 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
             }
         }
 
-        let l = libc::strlen(seq);
-        libc::fprintf(
-            out,
-            c"%c%s length: %lld\n".as_ptr(),
-            if format == crate::htslib_rs::faidx::FAI_FASTQ {
-                b'@' as c_int
-            } else {
-                b'>' as c_int
-            },
-            region,
-            len as libc::c_longlong,
-        );
+        let l = libc::strlen(seq.cast());
+        {
+            let line = format!(
+                "{}{} length: {}\n",
+                if format == crate::htslib_rs::faidx::FAI_FASTQ {
+                    '@'
+                } else {
+                    '>'
+                },
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(region.cast()).to_bytes()),
+                len as i64,
+            );
+            libc::fwrite(line.as_ptr().cast(), 1, line.len(), out);
+        }
         let mut pos = 0usize;
         while pos < l {
-            libc::fprintf(out, c"%.*s\n".as_ptr(), 50, seq.add(pos));
+            let chunk = std::cmp::min(50, l - pos);
+            libc::fwrite(seq.add(pos).cast(), 1, chunk, out);
+            libc::fwrite(b"\n".as_ptr().cast(), 1, 1, out);
             pos += 50;
         }
         libc::free(seq.cast());
 
         if format == crate::htslib_rs::faidx::FAI_FASTQ {
             let mut qual_len: hts_pos_t = 0;
-            let qual: *mut c_char;
+            let qual: *mut u8;
             if use_parse_reg != 0 {
-                let name = crate::htslib_rs::faidx::faidx_iseq(&*fai, tid)
-                    .map(|b| std::ffi::CString::new(b).unwrap());
+                let name = crate::htslib_rs::faidx::faidx_iseq(&*fai, tid).map(|b| {
+                    let mut v = b.to_vec();
+                    v.push(0);
+                    v
+                });
                 let name = name
                     .as_ref()
-                    .map_or(std::ptr::null(), |c| c.as_ptr());
+                    .map_or(std::ptr::null(), |b| b.as_ptr().cast());
                 if use_64bit != 0 {
                     qual = crate::htslib_rs::faidx::faidx_fetch_qual64(
                         fai,
@@ -302,25 +318,28 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
                         beg,
                         end - 1,
                         &mut qual_len,
-                    );
+                    )
+                    .cast();
                 } else {
-                    let mut ilen: c_int = 0;
+                    let mut ilen: i32 = 0;
                     qual = crate::htslib_rs::faidx::faidx_fetch_qual(
                         fai,
                         name,
-                        beg as c_int,
-                        (end - 1) as c_int,
+                        beg as i32,
+                        (end - 1) as i32,
                         &mut ilen,
-                    );
+                    )
+                    .cast();
                     qual_len = ilen as hts_pos_t;
                 }
             } else if use_64bit != 0 {
-                qual = crate::htslib_rs::faidx::fai_fetchqual64(fai, region, &mut qual_len);
+                qual =
+                    crate::htslib_rs::faidx::fai_fetchqual64(fai, region.cast(), &mut qual_len)
+                        .cast();
                 if qual.is_null() {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Failed: fai_fetchqual64(fai, %s, &len)\n".as_ptr(),
-                        region,
+                    eprintln!(
+                        "Failed: fai_fetchqual64(fai, {}, &len)",
+                        String::from_utf8_lossy(std::ffi::CStr::from_ptr(region.cast()).to_bytes()),
                     );
                     crate::htslib_rs::faidx::fai_destroy(fai);
                     if !fnout.is_null() {
@@ -329,14 +348,13 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
                     return -1;
                 }
             } else {
-                let mut ilen: c_int = 0;
-                qual = crate::htslib_rs::faidx::fai_fetchqual(fai, region, &mut ilen);
+                let mut ilen: i32 = 0;
+                qual = crate::htslib_rs::faidx::fai_fetchqual(fai, region.cast(), &mut ilen).cast();
                 qual_len = ilen as hts_pos_t;
                 if qual.is_null() {
-                    libc::fprintf(
-                        crate::htslib_rs::c_compat::stderr.cast(),
-                        c"Failed: fai_fetchqual64(fai, %s, &len)\n".as_ptr(),
-                        region,
+                    eprintln!(
+                        "Failed: fai_fetchqual64(fai, {}, &len)",
+                        String::from_utf8_lossy(std::ffi::CStr::from_ptr(region.cast()).to_bytes()),
                     );
                     crate::htslib_rs::faidx::fai_destroy(fai);
                     if !fnout.is_null() {
@@ -346,11 +364,10 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
                 }
             }
             if qual_len != len {
-                libc::fprintf(
-                    crate::htslib_rs::c_compat::stderr.cast(),
-                    c"Sequence and quality lengths differ for %s %s\n".as_ptr(),
-                    fn_,
-                    region,
+                eprintln!(
+                    "Sequence and quality lengths differ for {} {}",
+                    String::from_utf8_lossy(std::ffi::CStr::from_ptr(fn_.cast()).to_bytes()),
+                    String::from_utf8_lossy(std::ffi::CStr::from_ptr(region.cast()).to_bytes()),
                 );
                 libc::free(qual.cast());
                 crate::htslib_rs::faidx::fai_destroy(fai);
@@ -359,11 +376,13 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
                 }
                 return -1;
             }
-            libc::fprintf(out, c"+\n".as_ptr());
-            let l = libc::strlen(qual);
+            libc::fwrite(b"+\n".as_ptr().cast(), 1, 2, out);
+            let l = libc::strlen(qual.cast());
             let mut pos = 0usize;
             while pos < l {
-                libc::fprintf(out, c"%.*s\n".as_ptr(), 50, qual.add(pos));
+                let chunk = std::cmp::min(50, l - pos);
+                libc::fwrite(qual.add(pos).cast(), 1, chunk, out);
+                libc::fwrite(b"\n".as_ptr().cast(), 1, 1, out);
                 pos += 50;
             }
             libc::free(qual.cast());
@@ -372,7 +391,7 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
 
     crate::htslib_rs::faidx::fai_destroy(fai);
     if !fnout.is_null() && libc::fclose(out) != 0 {
-        libc::perror(fnout);
+        libc::perror(fnout.cast());
         return -1;
     }
     0
@@ -380,112 +399,108 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
 
 // original: test_fai_line_length (htslib/test/test_faidx.c:260)
 pub unsafe fn test_test_faidx_c_260_test_fai_line_length(
-    fn_: *const c_char,
-    fnfai: *const c_char,
-    fngzi: *const c_char,
+    fn_: *const u8,
+    fnfai: *const u8,
+    fngzi: *const u8,
     format: crate::htslib_rs::faidx::fai_format_options,
-    expected: *const c_char,
-    reg: *const c_char,
-) -> c_int {
+    expected: *const u8,
+    reg: *const u8,
+) -> i32 {
     let fai = test_test_faidx_c_87_load_index(fn_, fnfai, fngzi, 0, format);
     if fai.is_null() {
         return -1;
     }
-    let found_len = crate::htslib_rs::faidx::fai_line_length(fai, reg);
+    let found_len = crate::htslib_rs::faidx::fai_line_length(fai, reg.cast());
     crate::htslib_rs::faidx::fai_destroy(fai);
     if !expected.is_null() {
-        let exp_len = libc::strtoll(expected, std::ptr::null_mut(), 10);
+        let exp_len = libc::strtoll(expected.cast(), std::ptr::null_mut(), 10);
         if found_len != exp_len {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Unexpected result %lld from fai_line_length, expected %s\n".as_ptr(),
+            eprintln!(
+                "Unexpected result {} from fai_line_length, expected {}",
                 found_len,
-                expected,
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(expected.cast()).to_bytes()),
             );
             return -1;
         }
     } else {
-        libc::printf(c"%lld\n".as_ptr(), found_len);
+        println!("{}", found_len);
     }
     0
 }
 
 // original: test_faidx_has_seq (htslib/test/test_faidx.c:285)
 pub unsafe fn test_test_faidx_c_285_test_faidx_has_seq(
-    fn_: *const c_char,
-    fnfai: *const c_char,
-    fngzi: *const c_char,
+    fn_: *const u8,
+    fnfai: *const u8,
+    fngzi: *const u8,
     format: crate::htslib_rs::faidx::fai_format_options,
-    expected: *const c_char,
-    seq: *const c_char,
-) -> c_int {
+    expected: *const u8,
+    seq: *const u8,
+) -> i32 {
     let fai = test_test_faidx_c_87_load_index(fn_, fnfai, fngzi, 0, format);
     if fai.is_null() {
         return -1;
     }
-    let res = crate::htslib_rs::faidx::faidx_has_seq(fai, seq);
+    let res = crate::htslib_rs::faidx::faidx_has_seq(fai, seq.cast());
     crate::htslib_rs::faidx::fai_destroy(fai);
     if !expected.is_null() {
-        let exp_res = libc::strtol(expected, std::ptr::null_mut(), 10);
-        if res as libc::c_long != exp_res {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Unexpected result %d from faidx_has_seq(%s) expected %s\n".as_ptr(),
+        let exp_res = libc::strtol(expected.cast(), std::ptr::null_mut(), 10);
+        if res as i64 != exp_res {
+            eprintln!(
+                "Unexpected result {} from faidx_has_seq({}) expected {}",
                 res,
-                seq,
-                expected,
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(seq.cast()).to_bytes()),
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(expected.cast()).to_bytes()),
             );
             return -1;
         }
     } else {
-        libc::printf(c"%d\n".as_ptr(), res);
+        println!("{}", res);
     }
     0
 }
 
 // original: test_faidx_iseq (htslib/test/test_faidx.c:310)
 pub unsafe fn test_test_faidx_c_310_test_faidx_iseq(
-    fn_: *const c_char,
-    fnfai: *const c_char,
-    fngzi: *const c_char,
+    fn_: *const u8,
+    fnfai: *const u8,
+    fngzi: *const u8,
     format: crate::htslib_rs::faidx::fai_format_options,
-    expected: *const c_char,
-    index: *const c_char,
-) -> c_int {
-    let idx = libc::atoi(index);
+    expected: *const u8,
+    index: *const u8,
+) -> i32 {
+    let idx = libc::atoi(index.cast());
     let fai = test_test_faidx_c_87_load_index(fn_, fnfai, fngzi, 0, format);
     if fai.is_null() {
         return -1;
     }
-    let found_name = crate::htslib_rs::faidx::faidx_iseq(&*fai, idx)
-        .map(|b| std::ffi::CString::new(b).unwrap());
-    let found_name = found_name
-        .as_ref()
-        .map_or(std::ptr::null(), |c| c.as_ptr());
+    let found_name = crate::htslib_rs::faidx::faidx_iseq(&*fai, idx);
+    let expected_bytes = if expected.is_null() {
+        None
+    } else {
+        Some(std::ffi::CStr::from_ptr(expected.cast()).to_bytes())
+    };
     let mut ret = 0;
-    if !expected.is_null() {
-        if found_name.is_null() || libc::strcmp(found_name, expected) != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Unexpected result %s from faidx_iseq(fai, %d), expected %s\n".as_ptr(),
-                if found_name.is_null() {
-                    c"(null)".as_ptr()
-                } else {
-                    found_name
-                },
+    if let Some(expected_bytes) = expected_bytes {
+        if found_name.as_deref() != Some(expected_bytes) {
+            eprintln!(
+                "Unexpected result {} from faidx_iseq(fai, {}), expected {}",
+                found_name
+                    .as_ref()
+                    .map_or_else(|| "(null)".to_string(), |b| String::from_utf8_lossy(b)
+                        .into_owned()),
                 idx,
-                expected,
+                String::from_utf8_lossy(expected_bytes),
             );
             ret = -1;
         }
     } else {
-        libc::printf(
-            c"%s\n".as_ptr(),
-            if found_name.is_null() {
-                c"(null)".as_ptr()
-            } else {
-                found_name
-            },
+        println!(
+            "{}",
+            found_name
+                .as_ref()
+                .map_or_else(|| "(null)".to_string(), |b| String::from_utf8_lossy(b)
+                    .into_owned()),
         );
     }
     crate::htslib_rs::faidx::fai_destroy(fai);
@@ -494,104 +509,97 @@ pub unsafe fn test_test_faidx_c_310_test_faidx_iseq(
 
 // original: test_faidx_seq_len (htslib/test/test_faidx.c:339)
 pub unsafe fn test_test_faidx_c_339_test_faidx_seq_len(
-    fn_: *const c_char,
-    fnfai: *const c_char,
-    fngzi: *const c_char,
+    fn_: *const u8,
+    fnfai: *const u8,
+    fngzi: *const u8,
     format: crate::htslib_rs::faidx::fai_format_options,
-    expected: *const c_char,
-    seq: *const c_char,
-) -> c_int {
+    expected: *const u8,
+    seq: *const u8,
+) -> i32 {
     let fai = test_test_faidx_c_87_load_index(fn_, fnfai, fngzi, 0, format);
     if fai.is_null() {
         return -1;
     }
-    let found_len = crate::htslib_rs::faidx::faidx_seq_len(fai, seq);
+    let found_len = crate::htslib_rs::faidx::faidx_seq_len(fai, seq.cast());
     crate::htslib_rs::faidx::fai_destroy(fai);
     if !expected.is_null() {
-        let exp_len = libc::atoi(expected);
+        let exp_len = libc::atoi(expected.cast());
         if found_len != exp_len {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Unexpected result %d from faidx_seq_len(fai, %s) expected %s\n".as_ptr(),
+            eprintln!(
+                "Unexpected result {} from faidx_seq_len(fai, {}) expected {}",
                 found_len,
-                seq,
-                expected,
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(seq.cast()).to_bytes()),
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(expected.cast()).to_bytes()),
             );
             return -1;
         }
     } else {
-        libc::printf(c"%d\n".as_ptr(), found_len);
+        println!("{}", found_len);
     }
     0
 }
 
 // original: test_faidx_seq_len64 (htslib/test/test_faidx.c:366)
 pub unsafe fn test_test_faidx_c_366_test_faidx_seq_len64(
-    fn_: *const c_char,
-    fnfai: *const c_char,
-    fngzi: *const c_char,
+    fn_: *const u8,
+    fnfai: *const u8,
+    fngzi: *const u8,
     format: crate::htslib_rs::faidx::fai_format_options,
-    expected: *const c_char,
-    seq: *const c_char,
-) -> c_int {
+    expected: *const u8,
+    seq: *const u8,
+) -> i32 {
     let fai = test_test_faidx_c_87_load_index(fn_, fnfai, fngzi, 0, format);
     if fai.is_null() {
         return -1;
     }
-    let found_len = crate::htslib_rs::faidx::faidx_seq_len(fai, seq) as hts_pos_t;
+    let found_len = crate::htslib_rs::faidx::faidx_seq_len(fai, seq.cast()) as hts_pos_t;
     crate::htslib_rs::faidx::fai_destroy(fai);
     if !expected.is_null() {
-        let exp_len = libc::strtoll(expected, std::ptr::null_mut(), 10);
+        let exp_len = libc::strtoll(expected.cast(), std::ptr::null_mut(), 10);
         if found_len != exp_len {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Unexpected result %lld from fai_seq_len64(fai, %s) expected %s\n".as_ptr(),
+            eprintln!(
+                "Unexpected result {} from fai_seq_len64(fai, {}) expected {}",
                 found_len,
-                seq,
-                expected,
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(seq.cast()).to_bytes()),
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(expected.cast()).to_bytes()),
             );
             return -1;
         }
     } else {
-        libc::printf(c"%lld\n".as_ptr(), found_len);
+        println!("{}", found_len);
     }
     0
 }
 
 // original: usage (htslib/test/test_faidx.c:394)
-pub unsafe fn test_test_faidx_c_394_usage(out: *mut libc::FILE, arg0: *const c_char) {
-    libc::fprintf(
-        out,
-        c"Usage: %s [-c] -i fasta/q [-f fai_file] [-g gzi_file] [-e expected_fai]\n       %s [-cQ] -i fasta/q [-f fai_file] [-g gzi_file] [region]\n       %s -t FUNC -i fasta/q [-f fai_file] [-g gzi_file] [-e expected] <PARAM>\n       %s -h\n".as_ptr(),
-        arg0,
-        arg0,
-        arg0,
-        arg0,
+pub unsafe fn test_test_faidx_c_394_usage(out: *mut libc::FILE, arg0: *const u8) {
+    let arg0 = String::from_utf8_lossy(std::ffi::CStr::from_ptr(arg0.cast()).to_bytes());
+    let msg = format!(
+        "Usage: {arg0} [-c] -i fasta/q [-f fai_file] [-g gzi_file] [-e expected_fai]\n       {arg0} [-cQ] -i fasta/q [-f fai_file] [-g gzi_file] [region]\n       {arg0} -t FUNC -i fasta/q [-f fai_file] [-g gzi_file] [-e expected] <PARAM>\n       {arg0} -h\n",
     );
+    libc::fwrite(msg.as_ptr().cast(), 1, msg.len(), out);
 }
 
 // original: help (htslib/test/test_faidx.c:403)
-pub unsafe fn test_test_faidx_c_403_help(out: *mut libc::FILE, arg0: *const c_char) {
+pub unsafe fn test_test_faidx_c_403_help(out: *mut libc::FILE, arg0: *const u8) {
     test_test_faidx_c_394_usage(out, arg0);
-    libc::fprintf(
-        out,
-        c"Options:\n  -i FILE      Input file\n  -f FILE      Fasta/q index file name\n  -g FILE      Bgzip index file name\n  -o FILE      Output file name\n  -e FILE|STR  Expected output\n  -c           Set FAI_CREATE flag\n  -Q           Output fastq format\n  -t FUNC      Test function\n  -h           Print this help\n\nExpected output is compared to the FAI file in indexing mode; the output file\nin retrieval mode; expected output for various -t function tests.\n\nUnit tests (-t option):\n   fai_line_length, faidx_has_seq, faidx_iseq, faidx_seq_len, faidx_seq_len64\nIn retrieval mode, -t can change the functions used to fetch data:\n   fai_fetch, fai_fetch64, faidx_fetch_seq, faidx_fetch_seq64,\n   fai_parse_region, fai_adjust_region\n\n".as_ptr(),
-    );
+    let msg = "Options:\n  -i FILE      Input file\n  -f FILE      Fasta/q index file name\n  -g FILE      Bgzip index file name\n  -o FILE      Output file name\n  -e FILE|STR  Expected output\n  -c           Set FAI_CREATE flag\n  -Q           Output fastq format\n  -t FUNC      Test function\n  -h           Print this help\n\nExpected output is compared to the FAI file in indexing mode; the output file\nin retrieval mode; expected output for various -t function tests.\n\nUnit tests (-t option):\n   fai_line_length, faidx_has_seq, faidx_iseq, faidx_seq_len, faidx_seq_len64\nIn retrieval mode, -t can change the functions used to fetch data:\n   fai_fetch, fai_fetch64, faidx_fetch_seq, faidx_fetch_seq64,\n   fai_parse_region, fai_adjust_region\n\n";
+    libc::fwrite(msg.as_ptr().cast(), 1, msg.len(), out);
 }
 
 // original: main (htslib/test/test_faidx.c:430)
-pub unsafe fn test_test_faidx_c_430_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
-    let mut fn_: *const c_char = std::ptr::null();
-    let mut fnout: *const c_char = std::ptr::null();
-    let mut fnfai: *const c_char = std::ptr::null();
-    let mut fngzi: *const c_char = std::ptr::null();
-    let mut expected: *const c_char = std::ptr::null();
-    let mut func: *const c_char = c"".as_ptr();
-    let mut flags: c_int = 0;
+pub unsafe fn test_test_faidx_c_430_main(argc: i32, argv: *mut *mut u8) -> i32 {
+    let mut fn_: *const u8 = std::ptr::null();
+    let mut fnout: *const u8 = std::ptr::null();
+    let mut fnfai: *const u8 = std::ptr::null();
+    let mut fngzi: *const u8 = std::ptr::null();
+    let mut expected: *const u8 = std::ptr::null();
+    let mut func: *const u8 = c"".as_ptr().cast();
+    let mut flags: i32 = 0;
     let mut format = faidx::FAI_FASTA;
 
     loop {
-        let opt = libc::getopt(argc, argv, c"i:f:g:o:e:t:cQh".as_ptr());
+        let opt = libc::getopt(argc, argv.cast(), c"i:f:g:o:e:t:cQh".as_ptr());
         if opt <= 0 {
             break;
         }
@@ -605,44 +613,46 @@ pub unsafe fn test_test_faidx_c_430_main(argc: c_int, argv: *mut *mut c_char) ->
             b'Q' => format = faidx::FAI_FASTQ,
             b't' => func = optarg,
             b'h' => {
-                test_test_faidx_c_403_help(crate::htslib_rs::c_compat::stdout.cast(), *argv);
+                test_test_faidx_c_403_help(stdout.cast(), *argv);
                 return libc::EXIT_SUCCESS;
             }
             _ => {
-                test_test_faidx_c_394_usage(crate::htslib_rs::c_compat::stderr.cast(), *argv);
+                test_test_faidx_c_394_usage(stderr.cast(), *argv);
                 return libc::EXIT_FAILURE;
             }
         }
     }
 
     if fn_.is_null() {
-        test_test_faidx_c_394_usage(crate::htslib_rs::c_compat::stderr.cast(), *argv);
+        test_test_faidx_c_394_usage(stderr.cast(), *argv);
         return libc::EXIT_FAILURE;
     }
 
+    let func_bytes = std::ffi::CStr::from_ptr(func.cast()).to_bytes();
     let res = if optind == argc {
-        let mut res = faidx::fai_build3(fn_, fnfai, fngzi);
+        let mut res = faidx::fai_build3(fn_.cast(), fnfai.cast(), fngzi.cast());
         if res != 0 {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed: fai_build3(%s, %s, %s)\n".as_ptr(),
-                fn_,
+            eprintln!(
+                "Failed: fai_build3({}, {}, {})",
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(fn_.cast()).to_bytes()),
                 if fnfai.is_null() {
-                    c"NULL".as_ptr()
+                    "NULL".to_string()
                 } else {
-                    fnfai
+                    String::from_utf8_lossy(std::ffi::CStr::from_ptr(fnfai.cast()).to_bytes())
+                        .into_owned()
                 },
                 if fngzi.is_null() {
-                    c"NULL".as_ptr()
+                    "NULL".to_string()
                 } else {
-                    fngzi
+                    String::from_utf8_lossy(std::ffi::CStr::from_ptr(fngzi.cast()).to_bytes())
+                        .into_owned()
                 },
             );
         } else if !expected.is_null() {
             res = test_test_faidx_c_33_file_compare(fnfai, expected);
         }
         res
-    } else if libc::strcmp(func, c"fai_line_length".as_ptr()) == 0 {
+    } else if func_bytes == b"fai_line_length" {
         test_test_faidx_c_260_test_fai_line_length(
             fn_,
             fnfai,
@@ -651,7 +661,7 @@ pub unsafe fn test_test_faidx_c_430_main(argc: c_int, argv: *mut *mut c_char) ->
             expected,
             *argv.add(optind as usize),
         )
-    } else if libc::strcmp(func, c"faidx_has_seq".as_ptr()) == 0 {
+    } else if func_bytes == b"faidx_has_seq" {
         test_test_faidx_c_285_test_faidx_has_seq(
             fn_,
             fnfai,
@@ -660,7 +670,7 @@ pub unsafe fn test_test_faidx_c_430_main(argc: c_int, argv: *mut *mut c_char) ->
             expected,
             *argv.add(optind as usize),
         )
-    } else if libc::strcmp(func, c"faidx_iseq".as_ptr()) == 0 {
+    } else if func_bytes == b"faidx_iseq" {
         test_test_faidx_c_310_test_faidx_iseq(
             fn_,
             fnfai,
@@ -669,7 +679,7 @@ pub unsafe fn test_test_faidx_c_430_main(argc: c_int, argv: *mut *mut c_char) ->
             expected,
             *argv.add(optind as usize),
         )
-    } else if libc::strcmp(func, c"faidx_seq_len".as_ptr()) == 0 {
+    } else if func_bytes == b"faidx_seq_len" {
         test_test_faidx_c_339_test_faidx_seq_len(
             fn_,
             fnfai,
@@ -678,7 +688,7 @@ pub unsafe fn test_test_faidx_c_430_main(argc: c_int, argv: *mut *mut c_char) ->
             expected,
             *argv.add(optind as usize),
         )
-    } else if libc::strcmp(func, c"faidx_seq_len64".as_ptr()) == 0 {
+    } else if func_bytes == b"faidx_seq_len64" {
         test_test_faidx_c_366_test_faidx_seq_len64(
             fn_,
             fnfai,
@@ -715,16 +725,17 @@ pub unsafe fn test_test_faidx_c_430_main(argc: c_int, argv: *mut *mut c_char) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static GETOPT_LOCK: Mutex<()> = Mutex::new(());
 
-    fn fixture(path: &str) -> CString {
+    fn fixture(path: &str) -> Vec<u8> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-        CString::new(path.to_string_lossy().as_bytes()).unwrap()
+        let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+        bytes.push(0);
+        bytes
     }
 
     fn temp_path(name: &str) -> PathBuf {
@@ -738,7 +749,7 @@ mod tests {
         ))
     }
 
-    unsafe fn run_main(args: &[CString]) -> c_int {
+    unsafe fn run_main(args: &[Vec<u8>]) -> i32 {
         // NOTE: callers must already hold `ORIGINAL_MAIN_LOCK` (see
         // src/test/mod.rs). `GETOPT_LOCK` is retained for backward-compat
         // but is now effectively a no-op while the global lock is held.
@@ -748,9 +759,9 @@ mod tests {
         optind = 0;
         let mut argv = args
             .iter()
-            .map(|arg| arg.as_ptr() as *mut c_char)
+            .map(|arg| arg.as_ptr() as *mut u8)
             .collect::<Vec<_>>();
-        test_test_faidx_c_430_main(argv.len() as c_int, argv.as_mut_ptr())
+        test_test_faidx_c_430_main(argv.len() as i32, argv.as_mut_ptr())
     }
 
     #[test]
@@ -761,22 +772,23 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let out_path = temp_path("fastq-retrieval").with_extension("fq");
-        let out = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
+        let mut out = out_path.to_string_lossy().into_owned().into_bytes();
+        out.push(0);
         let args = vec![
-            c"test_faidx".into(),
-            c"-i".into(),
+            b"test_faidx\0".to_vec(),
+            b"-i\0".to_vec(),
             fixture("htslib/test/faidx/fastqs.fq"),
-            c"-f".into(),
+            b"-f\0".to_vec(),
             fixture("htslib/test/faidx/fastqs.fq.expected.fai"),
-            c"-o".into(),
+            b"-o\0".to_vec(),
             out.clone(),
-            c"-e".into(),
+            b"-e\0".to_vec(),
             fixture("htslib/test/faidx/fastqs.1.expected.fq"),
-            c"-Q".into(),
-            c"FAKE0006_1:4-12".into(),
-            c"FSRRS4401BE7HA_1:81-120".into(),
-            c"FAKE0010_2".into(),
-            c"SRR014849.50939_3:71-90".into(),
+            b"-Q\0".to_vec(),
+            b"FAKE0006_1:4-12\0".to_vec(),
+            b"FSRRS4401BE7HA_1:81-120\0".to_vec(),
+            b"FAKE0010_2\0".to_vec(),
+            b"SRR014849.50939_3:71-90\0".to_vec(),
         ];
 
         unsafe {

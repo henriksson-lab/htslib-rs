@@ -7,14 +7,14 @@ use htslib_rs::{
     sam_idx_save, sam_index_load, sam_itr_next, sam_itr_querys, sam_read1, vcf_format,
     vcf_hdr_read, vcf_read, HTS_FORMAT_BAM, HTS_FORMAT_CRAM, HTS_FORMAT_VCF,
 };
-use std::ffi::{CStr, CString};
-
 fn fixture(path: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
 }
 
-fn c_fixture(path: &str) -> CString {
-    CString::new(fixture(path).to_string_lossy().as_bytes()).unwrap()
+fn c_fixture(path: &str) -> Vec<u8> {
+    let mut bytes = fixture(path).to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 unsafe fn sam_header_text(hdr: *mut htslib_rs::sam_hdr_t) -> String {
@@ -58,12 +58,13 @@ unsafe fn render_alignment_path_through_sam_writer(
     path: &std::path::Path,
     reference: Option<&str>,
 ) -> String {
-    let in_path = CString::new(path.to_string_lossy().as_bytes()).unwrap();
-    let in_fp = hts_open(in_path.as_ptr(), c"r".as_ptr());
+    let mut in_path = path.to_string_lossy().into_owned().into_bytes();
+    in_path.push(0);
+    let in_fp = hts_open(in_path.as_ptr().cast(), c"r".as_ptr());
     assert!(!in_fp.is_null(), "failed to open {}", path.display());
     if let Some(reference) = reference {
         let reference_c = c_fixture(reference);
-        assert_eq!(hts_set_fai_filename(in_fp, reference_c.as_ptr()), 0);
+        assert_eq!(hts_set_fai_filename(in_fp, reference_c.as_ptr().cast()), 0);
     }
     let hdr = sam_hdr_read(in_fp);
     assert!(
@@ -73,8 +74,9 @@ unsafe fn render_alignment_path_through_sam_writer(
     );
 
     let out_path = temp_output_path("view");
-    let out_path_c = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
-    let out_fp = hts_open(out_path_c.as_ptr(), c"w".as_ptr());
+    let mut out_path_c = out_path.to_string_lossy().into_owned().into_bytes();
+    out_path_c.push(0);
+    let out_fp = hts_open(out_path_c.as_ptr().cast(), c"w".as_ptr());
     assert!(!out_fp.is_null(), "failed to open temp SAM output");
     assert_eq!(sam_hdr_write(out_fp, hdr), 0);
 
@@ -103,7 +105,7 @@ unsafe fn copy_alignment_to_cram_with_index(
     output_opts: &[&str],
 ) -> std::path::PathBuf {
     let in_path = c_fixture(input_path);
-    let in_fp = hts_open(in_path.as_ptr(), c"r".as_ptr());
+    let in_fp = hts_open(in_path.as_ptr().cast(), c"r".as_ptr());
     assert!(!in_fp.is_null(), "failed to open {input_path}");
     let hdr = sam_hdr_read(in_fp);
     assert!(
@@ -113,16 +115,19 @@ unsafe fn copy_alignment_to_cram_with_index(
 
     let out_path = temp_output_path(output_name).with_extension("cram");
     let out_index_path = out_path.with_extension("cram.crai");
-    let out_path_c = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
-    let out_index_path_c = CString::new(out_index_path.to_string_lossy().as_bytes()).unwrap();
-    let out_fp = hts_open(out_path_c.as_ptr(), c"wc".as_ptr());
+    let mut out_path_c = out_path.to_string_lossy().into_owned().into_bytes();
+    out_path_c.push(0);
+    let mut out_index_path_c = out_index_path.to_string_lossy().into_owned().into_bytes();
+    out_index_path_c.push(0);
+    let out_fp = hts_open(out_path_c.as_ptr().cast(), c"wc".as_ptr());
     assert!(!out_fp.is_null(), "failed to open temp CRAM output");
 
     let mut opts: *mut htslib_rs::hts_opt = std::ptr::null_mut();
     for opt in output_opts {
-        let opt_c = CString::new(*opt).unwrap();
+        let mut opt_c = opt.as_bytes().to_vec();
+        opt_c.push(0);
         assert_eq!(
-            hts_opt_add(&mut opts, opt_c.as_ptr()),
+            hts_opt_add(&mut opts, opt_c.as_ptr().cast()),
             0,
             "bad option {opt}"
         );
@@ -131,7 +136,7 @@ unsafe fn copy_alignment_to_cram_with_index(
     hts_opt_free(opts);
 
     assert_eq!(sam_hdr_write(out_fp, hdr), 0);
-    assert_eq!(sam_idx_init(out_fp, hdr, 0, out_index_path_c.as_ptr()), 0);
+    assert_eq!(sam_idx_init(out_fp, hdr, 0, out_index_path_c.as_ptr().cast()), 0);
 
     let rec = bam_init1();
     assert!(!rec.is_null());
@@ -159,7 +164,7 @@ unsafe fn copy_alignment_to_cram(
     reference: Option<&str>,
 ) -> std::path::PathBuf {
     let in_path = c_fixture(input_path);
-    let in_fp = hts_open(in_path.as_ptr(), c"r".as_ptr());
+    let in_fp = hts_open(in_path.as_ptr().cast(), c"r".as_ptr());
     assert!(!in_fp.is_null(), "failed to open {input_path}");
     let hdr = sam_hdr_read(in_fp);
     assert!(
@@ -172,19 +177,21 @@ unsafe fn copy_alignment_to_cram(
     }
 
     let out_path = temp_output_path(output_name).with_extension("cram");
-    let out_path_c = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
-    let out_fp = hts_open(out_path_c.as_ptr(), c"wc".as_ptr());
+    let mut out_path_c = out_path.to_string_lossy().into_owned().into_bytes();
+    out_path_c.push(0);
+    let out_fp = hts_open(out_path_c.as_ptr().cast(), c"wc".as_ptr());
     assert!(!out_fp.is_null(), "failed to open temp CRAM output");
     if let Some(reference) = reference {
         let reference_c = c_fixture(reference);
-        assert_eq!(hts_set_fai_filename(out_fp, reference_c.as_ptr()), 0);
+        assert_eq!(hts_set_fai_filename(out_fp, reference_c.as_ptr().cast()), 0);
     }
 
     let mut opts: *mut htslib_rs::hts_opt = std::ptr::null_mut();
     for opt in output_opts {
-        let opt_c = CString::new(*opt).unwrap();
+        let mut opt_c = opt.as_bytes().to_vec();
+        opt_c.push(0);
         assert_eq!(
-            hts_opt_add(&mut opts, opt_c.as_ptr()),
+            hts_opt_add(&mut opts, opt_c.as_ptr().cast()),
             0,
             "bad option {opt}"
         );
@@ -214,7 +221,7 @@ unsafe fn copy_alignment_to_cram(
 
 unsafe fn alignment_max_ref_ends(input_path: &str) -> Vec<i64> {
     let in_path = c_fixture(input_path);
-    let in_fp = hts_open(in_path.as_ptr(), c"r".as_ptr());
+    let in_fp = hts_open(in_path.as_ptr().cast(), c"r".as_ptr());
     assert!(!in_fp.is_null(), "failed to open {input_path}");
     let hdr = sam_hdr_read(in_fp);
     assert!(
@@ -301,7 +308,12 @@ unsafe fn rewrite_header_text_reference_lengths(hdr: *mut htslib_rs::sam_hdr_t) 
         };
         let mut tid = None;
         for i in 0..(*hdr).n_targets {
-            let name = CStr::from_ptr(*(*hdr).target_name.add(i as usize)).to_string_lossy();
+            let name_ptr = (*(*hdr).target_name.add(i as usize)).cast::<u8>();
+            let mut len = 0usize;
+            while *name_ptr.add(len) != 0 {
+                len += 1;
+            }
+            let name = String::from_utf8_lossy(std::slice::from_raw_parts(name_ptr, len));
             if name == sn {
                 tid = Some(i as usize);
                 break;
@@ -324,14 +336,12 @@ unsafe fn rewrite_header_text_reference_lengths(hdr: *mut htslib_rs::sam_hdr_t) 
         }
     }
 
-    let bytes = out.into_bytes();
-    let new_text = libc::malloc(bytes.len() + 1).cast::<u8>();
-    assert!(!new_text.is_null());
-    std::ptr::copy_nonoverlapping(bytes.as_ptr(), new_text, bytes.len());
-    *new_text.add(bytes.len()) = 0;
-    libc::free((*hdr).text.cast());
+    let mut bytes = out.into_bytes();
+    let l_text = bytes.len();
+    bytes.push(0);
+    let new_text = Box::leak(bytes.into_boxed_slice()).as_mut_ptr();
     (*hdr).text = new_text.cast();
-    (*hdr).l_text = bytes.len();
+    (*hdr).l_text = l_text;
 }
 
 fn compare_sam_record_key(line: &str) -> Vec<String> {
@@ -432,11 +442,11 @@ unsafe fn render_alignment_regions(
     regions: &[&str],
 ) -> (String, htsExactFormat) {
     let path_c = c_fixture(path);
-    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+    let fp = hts_open(path_c.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null(), "failed to open {path}");
     if let Some(reference) = reference {
         let reference_c = c_fixture(reference);
-        assert_eq!(hts_set_fai_filename(fp, reference_c.as_ptr()), 0);
+        assert_eq!(hts_set_fai_filename(fp, reference_c.as_ptr().cast()), 0);
     }
 
     let format = (*hts_get_format(fp)).format;
@@ -444,15 +454,16 @@ unsafe fn render_alignment_regions(
     assert!(!hdr.is_null(), "failed to read SAM header from {path}");
     let mut out = sam_header_text(hdr);
 
-    let idx = sam_index_load(fp, path_c.as_ptr());
+    let idx = sam_index_load(fp, path_c.as_ptr().cast());
     assert!(!idx.is_null(), "failed to load index for {path}");
     let rec = bam_init1();
     assert!(!rec.is_null());
     let mut line: kstring_t = kstring_t::default();
 
     for region in regions {
-        let region_c = CString::new(*region).unwrap();
-        let iter = sam_itr_querys(idx, hdr, region_c.as_ptr());
+        let mut region_c = region.as_bytes().to_vec();
+        region_c.push(0);
+        let iter = sam_itr_querys(idx, hdr, region_c.as_ptr().cast());
         assert!(!iter.is_null(), "failed to query {path}:{region}");
         loop {
             let ret = sam_itr_next(fp, iter, rec);
@@ -478,11 +489,11 @@ unsafe fn render_alignment_multiregion(
     regions: &[&str],
 ) -> (String, htsExactFormat) {
     let path_c = c_fixture(path);
-    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+    let fp = hts_open(path_c.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null(), "failed to open {path}");
     if let Some(reference) = reference {
         let reference_c = c_fixture(reference);
-        assert_eq!(hts_set_fai_filename(fp, reference_c.as_ptr()), 0);
+        assert_eq!(hts_set_fai_filename(fp, reference_c.as_ptr().cast()), 0);
     }
 
     let format = (*hts_get_format(fp)).format;
@@ -490,26 +501,31 @@ unsafe fn render_alignment_multiregion(
     assert!(!hdr.is_null(), "failed to read SAM header from {path}");
 
     let out_path = temp_output_path("multiregion");
-    let out_path_c = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
-    let out_fp = hts_open(out_path_c.as_ptr(), c"w".as_ptr());
+    let mut out_path_c = out_path.to_string_lossy().into_owned().into_bytes();
+    out_path_c.push(0);
+    let out_fp = hts_open(out_path_c.as_ptr().cast(), c"w".as_ptr());
     assert!(!out_fp.is_null(), "failed to open temp SAM output");
     assert_eq!(sam_hdr_write(out_fp, hdr), 0);
 
-    let idx = sam_index_load(fp, path_c.as_ptr());
+    let idx = sam_index_load(fp, path_c.as_ptr().cast());
     assert!(!idx.is_null(), "failed to load index for {path}");
     let rec = bam_init1();
     assert!(!rec.is_null());
 
-    let mut region_cstrings: Vec<CString> = regions
+    let mut region_cstrings: Vec<Vec<u8>> = regions
         .iter()
-        .map(|region| CString::new(*region).unwrap())
+        .map(|region| {
+            let mut bytes = region.as_bytes().to_vec();
+            bytes.push(0);
+            bytes
+        })
         .collect();
-    let mut region_ptrs: Vec<*mut libc::c_char> = region_cstrings
+    let mut region_ptrs: Vec<*mut u8> = region_cstrings
         .iter_mut()
-        .map(|region| region.as_ptr().cast_mut())
+        .map(|region| region.as_mut_ptr())
         .collect();
     let iter =
-        sam_c_1768_sam_itr_regarray(idx, hdr, region_ptrs.as_mut_ptr(), region_ptrs.len() as u32);
+        sam_c_1768_sam_itr_regarray(idx, hdr, region_ptrs.as_mut_ptr().cast(), region_ptrs.len() as u32);
     assert!(!iter.is_null(), "failed to multi-query {path}");
     loop {
         let ret = sam_itr_next(fp, iter, rec);
@@ -533,7 +549,7 @@ unsafe fn render_alignment_multiregion(
 
 unsafe fn render_vcf(path: &str) -> (String, htsExactFormat) {
     let path_c = c_fixture(path);
-    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+    let fp = hts_open(path_c.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null(), "failed to open {path}");
     let format = (*hts_get_format(fp)).format;
 
@@ -543,9 +559,9 @@ unsafe fn render_vcf(path: &str) -> (String, htsExactFormat) {
     let mut len = 0;
     let header_text = bcf_hdr_fmt_text(hdr, 0, &mut len);
     assert!(!header_text.is_null());
-    let mut out = CStr::from_ptr(header_text).to_string_lossy().into_owned();
+    let header_bytes = std::slice::from_raw_parts(header_text.cast::<u8>(), len as usize);
+    let mut out = String::from_utf8_lossy(header_bytes).into_owned();
     assert_eq!(out.len(), len as usize);
-    libc::free(header_text.cast());
 
     let rec = bcf_init();
     assert!(!rec.is_null());
@@ -603,11 +619,11 @@ fn original_view_sam_hdr_read_caches_bam_and_cram_headers_on_file() {
             ("htslib/test/range.cram", Some("htslib/test/ce.fa")),
         ] {
             let path_c = c_fixture(path);
-            let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+            let fp = hts_open(path_c.as_ptr().cast(), c"r".as_ptr());
             assert!(!fp.is_null(), "failed to open {path}");
             if let Some(reference) = reference {
                 let reference_c = c_fixture(reference);
-                assert_eq!(hts_set_fai_filename(fp, reference_c.as_ptr()), 0);
+                assert_eq!(hts_set_fai_filename(fp, reference_c.as_ptr().cast()), 0);
             }
 
             let hdr = sam_hdr_read(fp);
@@ -624,14 +640,15 @@ fn original_view_sam_hdr_read_caches_bam_and_cram_headers_on_file() {
 fn original_view_plain_sam_header_write_is_flushed_before_close() {
     unsafe {
         let in_path = c_fixture("htslib/test/range.bam");
-        let in_fp = hts_open(in_path.as_ptr(), c"r".as_ptr());
+        let in_fp = hts_open(in_path.as_ptr().cast(), c"r".as_ptr());
         assert!(!in_fp.is_null());
         let hdr = sam_hdr_read(in_fp);
         assert!(!hdr.is_null());
 
         let out_path = temp_output_path("hdr-flush");
-        let out_path_c = CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
-        let out_fp = hts_open(out_path_c.as_ptr(), c"w".as_ptr());
+        let mut out_path_c = out_path.to_string_lossy().into_owned().into_bytes();
+        out_path_c.push(0);
+        let out_fp = hts_open(out_path_c.as_ptr().cast(), c"w".as_ptr());
         assert!(!out_fp.is_null());
         assert_eq!(sam_hdr_write(out_fp, hdr), 0);
 
@@ -772,8 +789,9 @@ fn original_view_index3_cram_region_matches_expected_container_skipping_output()
             "index3-container-skip",
             &["seqs_per_slice=2", "embed_ref=2"],
         );
-        let cram_path_c = CString::new(cram_path.to_string_lossy().as_bytes()).unwrap();
-        let fp = hts_open(cram_path_c.as_ptr(), c"r".as_ptr());
+        let mut cram_path_c = cram_path.to_string_lossy().into_owned().into_bytes();
+        cram_path_c.push(0);
+        let fp = hts_open(cram_path_c.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null(), "failed to open generated index3 CRAM");
         let hdr = sam_hdr_read(fp);
         assert!(
@@ -782,13 +800,14 @@ fn original_view_index3_cram_region_matches_expected_container_skipping_output()
         );
         let mut actual = sam_header_text(hdr);
 
-        let idx = sam_index_load(fp, cram_path_c.as_ptr());
+        let idx = sam_index_load(fp, cram_path_c.as_ptr().cast());
         assert!(!idx.is_null(), "failed to load generated index3 CRAI");
         let rec = bam_init1();
         assert!(!rec.is_null());
         let mut line: kstring_t = kstring_t::default();
-        let region = CString::new("CHROMOSOME_I:5000-5100").unwrap();
-        let iter = sam_itr_querys(idx, hdr, region.as_ptr());
+        let mut region = b"CHROMOSOME_I:5000-5100".to_vec();
+        region.push(0);
+        let iter = sam_itr_querys(idx, hdr, region.as_ptr().cast());
         assert!(!iter.is_null(), "failed to query generated index3 CRAM");
         loop {
             let ret = sam_itr_next(fp, iter, rec);
@@ -823,8 +842,9 @@ fn original_view_index3_cram_multiregion_matches_expected_container_skipping_out
             "index3-container-skip-multi",
             &["seqs_per_slice=2", "embed_ref=2"],
         );
-        let cram_path_c = CString::new(cram_path.to_string_lossy().as_bytes()).unwrap();
-        let fp = hts_open(cram_path_c.as_ptr(), c"r".as_ptr());
+        let mut cram_path_c = cram_path.to_string_lossy().into_owned().into_bytes();
+        cram_path_c.push(0);
+        let fp = hts_open(cram_path_c.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null(), "failed to open generated index3 CRAM");
         let hdr = sam_hdr_read(fp);
         assert!(
@@ -833,14 +853,15 @@ fn original_view_index3_cram_multiregion_matches_expected_container_skipping_out
         );
         let mut actual = sam_header_text(hdr);
 
-        let idx = sam_index_load(fp, cram_path_c.as_ptr());
+        let idx = sam_index_load(fp, cram_path_c.as_ptr().cast());
         assert!(!idx.is_null(), "failed to load generated index3 CRAI");
         let rec = bam_init1();
         assert!(!rec.is_null());
         let mut line: kstring_t = kstring_t::default();
-        let region = CString::new("CHROMOSOME_I:5000-5100").unwrap();
-        let mut regions = [region.as_ptr().cast_mut()];
-        let iter = sam_c_1768_sam_itr_regarray(idx, hdr, regions.as_mut_ptr(), 1);
+        let mut region = b"CHROMOSOME_I:5000-5100".to_vec();
+        region.push(0);
+        let mut regions = [region.as_mut_ptr()];
+        let iter = sam_c_1768_sam_itr_regarray(idx, hdr, regions.as_mut_ptr().cast(), 1);
         assert!(
             !iter.is_null(),
             "failed to multi-query generated index3 CRAM"
@@ -878,8 +899,9 @@ fn original_view_index3_cram_eof_and_threaded_decode_match_original_records() {
             "index3-threaded-eof",
             &["seqs_per_slice=2", "embed_ref=2"],
         );
-        let cram_path_c = CString::new(cram_path.to_string_lossy().as_bytes()).unwrap();
-        let fp = hts_open(cram_path_c.as_ptr(), c"r".as_ptr());
+        let mut cram_path_c = cram_path.to_string_lossy().into_owned().into_bytes();
+        cram_path_c.push(0);
+        let fp = hts_open(cram_path_c.as_ptr().cast(), c"r".as_ptr());
         assert!(!fp.is_null(), "failed to open generated index3 CRAM");
         assert_eq!(hts_set_threads(fp, 2), 0);
         assert_eq!(hts_c_2208_hts_check_EOF(fp), 1);

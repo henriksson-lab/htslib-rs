@@ -4,17 +4,12 @@ use htslib_rs::{
     hts_close, hts_open, sam_hdr_destroy, sam_hdr_read, sam_read1, HTS_MOD_UNCHECKED,
     HTS_MOD_UNKNOWN,
 };
-use std::ffi::CString;
-
-fn c_fixture(path: &str) -> CString {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
-}
-
 unsafe fn read_records(path: &str) -> Vec<*mut bam1_t> {
-    let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let full_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+    let mut path_bytes = full_path.to_string_lossy().as_bytes().to_vec();
+    path_bytes.push(0);
+    let fp = hts_open(path_bytes.as_ptr().cast(), b"r\0".as_ptr().cast());
+    assert!(!fp.is_null(), "failed to open {}", full_path.display());
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
 

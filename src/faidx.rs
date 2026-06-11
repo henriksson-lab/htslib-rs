@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    ffi::{c_void, CStr},
+    ffi::CStr,
     fs,
     io::{BufWriter, Write},
     ptr,
@@ -31,7 +31,7 @@ const HTS_PARSE_ONE_COORD: i32 = 2;
 const HTS_PARSE_LIST: i32 = 4;
 
 extern "C" {
-    fn free(ptr: *mut c_void);
+    fn free(ptr: *mut ());
 }
 
 pub fn isgraph_(c: u8) -> i32 {
@@ -706,8 +706,8 @@ pub fn faidx_iseq(fai: &faidx_t, i: i32) -> Option<&[u8]> {
     (i >= 0)
         .then_some(i as usize)
         .filter(|&i| i < fai.name.len())
-        // names are stored NUL-terminated; the idiomatic byte API returns them
-        // without the trailing NUL.
+        // Names are stored NUL-terminated; the idiomatic byte API returns the
+        // name CONTENT without the trailing NUL (matches `CStr::to_bytes`).
         .map(|i| fai.name_bytes(i))
 }
 
@@ -835,7 +835,7 @@ pub unsafe fn faidx_fetch_seq(
     ret
 }
 
-unsafe extern "C" fn fai_name2id(v: *mut c_void, ref_: *const i8) -> i32 {
+unsafe extern "C" fn fai_name2id(v: *mut std::ffi::c_void, ref_: *const i8) -> i32 {
     if v.is_null() || ref_.is_null() {
         return -1;
     }
@@ -1399,7 +1399,7 @@ mod tests {
             assert_eq!(faidx_has_seq(std::ptr::null(), present.as_ptr()), 0);
             assert_eq!(faidx_fetch_nseq(&fai), 1);
             assert_eq!(faidx_nseq(&fai), 1);
-            assert_eq!(faidx_iseq(&fai, 0).unwrap(), present.as_bytes_with_nul());
+            assert_eq!(faidx_iseq(&fai, 0).unwrap(), present.as_bytes());
             assert_eq!(faidx_seq_len64(&fai, present.as_ptr()), 100);
             assert_eq!(faidx_seq_len64(&fai, absent.as_ptr()), -1);
             assert_eq!(faidx_seq_len(&fai, present.as_ptr()), 100);
@@ -1917,8 +1917,8 @@ mod tests {
             let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
-            assert_eq!(faidx_iseq(&*fai, 0).unwrap().strip_suffix(&[0]).unwrap(), b"dup");
-            assert_eq!(faidx_iseq(&*fai, 1).unwrap().strip_suffix(&[0]).unwrap(), b"other");
+            assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"dup");
+            assert_eq!(faidx_iseq(&*fai, 1).unwrap(), b"other");
             assert_eq!(faidx_seq_len64(fai, dup.as_ptr()), 4);
             assert_eq!(faidx_seq_len64(fai, other.as_ptr()), 2);
             fai_destroy(fai);
@@ -1991,8 +1991,8 @@ mod tests {
             let fai = fai_load3_format(path_c.as_ptr(), ptr::null(), ptr::null(), 0, FAI_FASTQ);
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
-            assert_eq!(faidx_iseq(&*fai, 0).unwrap().strip_suffix(&[0]).unwrap(), b"r1");
-            assert_eq!(faidx_iseq(&*fai, 1).unwrap().strip_suffix(&[0]).unwrap(), b"r2");
+            assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"r1");
+            assert_eq!(faidx_iseq(&*fai, 1).unwrap(), b"r2");
 
             let mut len = 0;
             let qual = faidx_fetch_qual64(fai, r1.as_ptr(), 0, 3, &mut len);
@@ -2138,8 +2138,8 @@ mod tests {
             let fai = fai_load3(path_c.as_ptr(), std::ptr::null(), std::ptr::null(), 0);
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
-            assert_eq!(faidx_iseq(&*fai, 0).unwrap().strip_suffix(&[0]).unwrap(), b"chr1");
-            assert_eq!(faidx_iseq(&*fai, 1).unwrap().strip_suffix(&[0]).unwrap(), b"chr2");
+            assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"chr1");
+            assert_eq!(faidx_iseq(&*fai, 1).unwrap(), b"chr2");
             assert_eq!(faidx_seq_len64(fai, chr1.as_ptr()), 8);
             assert_eq!(faidx_seq_len64(fai, chr2.as_ptr()), 4);
 
@@ -2183,7 +2183,7 @@ mod tests {
             assert!(!fai.is_null());
             assert!(fai_path.exists());
             assert_eq!(faidx_nseq(fai), 1);
-            assert_eq!(faidx_iseq(&*fai, 0).unwrap().strip_suffix(&[0]).unwrap(), b"sq\xff");
+            assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"sq\xff");
             assert_eq!(faidx_seq_len64(fai, seq_name.as_ptr()), 5);
 
             let mut len = 0;
@@ -2407,7 +2407,7 @@ mod tests {
             assert!(!resolved.is_null());
             assert_eq!(CStr::from_ptr(resolved).to_bytes(), expected.as_slice());
             assert!(path_from_bytes(&expected).exists());
-            free(resolved.cast());
+            faidx_free_returned_c_bytes(resolved);
         }
 
         let _ = fs::remove_file(path_from_bytes(&expected));
@@ -2471,8 +2471,8 @@ mod tests {
 
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
-            assert_eq!(faidx_iseq(&*fai, 0).unwrap().strip_suffix(&[0]).unwrap(), b"r1");
-            assert_eq!(faidx_iseq(&*fai, 1).unwrap().strip_suffix(&[0]).unwrap(), b"r2");
+            assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"r1");
+            assert_eq!(faidx_iseq(&*fai, 1).unwrap(), b"r2");
             assert_eq!(faidx_seq_len64(fai, c"r1".as_ptr()), 4);
             assert_eq!(faidx_seq_len64(fai, c"r2".as_ptr()), 2);
             fai_destroy(fai);
@@ -2503,8 +2503,8 @@ mod tests {
 
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
-            assert_eq!(faidx_iseq(&*fai, 0).unwrap().strip_suffix(&[0]).unwrap(), b"r1");
-            assert_eq!(faidx_iseq(&*fai, 1).unwrap().strip_suffix(&[0]).unwrap(), b"r2");
+            assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"r1");
+            assert_eq!(faidx_iseq(&*fai, 1).unwrap(), b"r2");
             assert_eq!(faidx_seq_len64(fai, c"r1".as_ptr()), 3);
             assert_eq!(faidx_seq_len64(fai, c"r2".as_ptr()), 1);
             fai_destroy(fai);

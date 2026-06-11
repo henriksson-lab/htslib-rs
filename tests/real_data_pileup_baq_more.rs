@@ -7,12 +7,12 @@ use htslib_rs::{
     sam_hdr_read, sam_hdr_t, sam_hdr_tid2len, sam_hdr_tid2name, sam_prob_realn, sam_read1,
     FAI_FASTA,
 };
-use std::ffi::{CStr, CString};
-use std::os::raw::{c_int, c_void};
 
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 struct SamReader {
@@ -23,23 +23,30 @@ struct SamReader {
 impl SamReader {
     unsafe fn open(path: &str) -> Self {
         let path = c_fixture(path);
-        let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-        assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+        let fp = hts_open(path.as_ptr().cast(), c"r".as_ptr());
+        assert!(
+            !fp.is_null(),
+            "failed to open {}",
+            String::from_utf8_lossy(&path[..path.len() - 1])
+        );
 
         let hdr = sam_hdr_read(fp);
         assert!(
             !hdr.is_null(),
             "failed to read header from {}",
-            path.to_string_lossy()
+            String::from_utf8_lossy(&path[..path.len() - 1])
         );
 
         Self { fp, hdr }
     }
 
-    unsafe fn target_name(&self, tid: c_int) -> String {
-        CStr::from_ptr(sam_hdr_tid2name(&*self.hdr, tid))
-            .to_string_lossy()
-            .into_owned()
+    unsafe fn target_name(&self, tid: i32) -> String {
+        let name = sam_hdr_tid2name(&*self.hdr, tid);
+        let bytes: Vec<u8> = (0..)
+            .map(|i| *name.add(i))
+            .take_while(|&b| b != 0)
+            .collect();
+        String::from_utf8_lossy(&bytes).into_owned()
     }
 }
 
@@ -52,7 +59,7 @@ impl Drop for SamReader {
     }
 }
 
-unsafe extern "C" fn read_record(data: *mut c_void, rec: *mut bam1_t) -> c_int {
+unsafe extern "C" fn read_record(data: *mut (), rec: *mut bam1_t) -> i32 {
     let reader = &mut *(data.cast::<SamReader>());
     sam_read1(reader.fp, reader.hdr, rec)
 }
@@ -111,11 +118,12 @@ unsafe fn collect_pileup(path: &str, overlaps: bool) -> Vec<PileupColumn> {
             column.refskips += bam_pileup1_is_refskip(p) as i32;
             column.indels.push(p.indel);
             column.qpos.push(p.qpos);
-            column.qnames.push(
-                CStr::from_ptr(bam_get_qname(p.b))
-                    .to_string_lossy()
-                    .into_owned(),
-            );
+            let qname = bam_get_qname(p.b);
+            let bytes: Vec<u8> = (0..)
+                .map(|i| *qname.add(i))
+                .take_while(|&b| b != 0)
+                .collect();
+            column.qnames.push(String::from_utf8_lossy(&bytes).into_owned());
         }
 
         columns.push(column);
@@ -127,14 +135,18 @@ unsafe fn collect_pileup(path: &str, overlaps: bool) -> Vec<PileupColumn> {
 
 unsafe fn read_all_records(path: &str) -> (*mut sam_hdr_t, Vec<*mut bam1_t>) {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), c"r".as_ptr());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path[..path.len() - 1])
+    );
 
     let hdr = sam_hdr_read(fp);
     assert!(
         !hdr.is_null(),
         "failed to read header from {}",
-        path.to_string_lossy()
+        String::from_utf8_lossy(&path[..path.len() - 1])
     );
 
     let mut records = Vec::new();
@@ -153,24 +165,22 @@ unsafe fn read_all_records(path: &str) -> (*mut sam_hdr_t, Vec<*mut bam1_t>) {
     (hdr, records)
 }
 
-unsafe fn aux_z(rec: *const bam1_t, tag: *const i8) -> String {
+unsafe fn aux_z(rec: *const bam1_t, tag: *const u8) -> String {
     let aux = bam_aux_get(rec, tag);
     assert!(!aux.is_null());
-    CStr::from_ptr(bam_aux2Z(aux))
-        .to_string_lossy()
-        .into_owned()
+    let z = bam_aux2Z(aux);
+    let bytes: Vec<u8> = (0..).map(|i| *z.add(i)).take_while(|&b| b != 0).collect();
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
-unsafe fn maybe_aux_z(rec: *const bam1_t, tag: *const i8) -> Option<String> {
+unsafe fn maybe_aux_z(rec: *const bam1_t, tag: *const u8) -> Option<String> {
     let aux = bam_aux_get(rec, tag);
     if aux.is_null() {
         None
     } else {
-        Some(
-            CStr::from_ptr(bam_aux2Z(aux))
-                .to_string_lossy()
-                .into_owned(),
-        )
+        let z = bam_aux2Z(aux);
+        let bytes: Vec<u8> = (0..).map(|i| *z.add(i)).take_while(|&b| b != 0).collect();
+        Some(String::from_utf8_lossy(&bytes).into_owned())
     }
 }
 
@@ -185,18 +195,18 @@ unsafe fn qual_text(rec: *const bam1_t) -> String {
 unsafe fn assert_realigned_records_match_expected(
     fasta_path: &str,
     fai_path: &str,
-    target_name: &CStr,
-    expected_ref_len: c_int,
+    target_name: &[u8],
+    expected_ref_len: i32,
     input_path: &str,
     expected_path: &str,
-    flags: c_int,
+    flags: i32,
 ) {
     unsafe fn sam_prob_realn_ref(
         rec: &mut bam1_t,
-        ref_seq: *const i8,
+        ref_seq: *const u8,
         ref_len: hts_pos_t,
-        flags: c_int,
-    ) -> c_int {
+        flags: i32,
+    ) -> i32 {
         sam_prob_realn(rec, ref_seq, ref_len, flags)
     }
 
@@ -214,11 +224,11 @@ unsafe fn assert_realigned_records_match_expected(
 
 unsafe fn realn_module_prob_realn_adapter(
     rec: &mut bam1_t,
-    ref_seq: *const i8,
+    ref_seq: *const u8,
     ref_len: hts_pos_t,
-    flags: c_int,
-) -> c_int {
-    let ref_seq = std::slice::from_raw_parts(ref_seq.cast::<u8>(), ref_len as usize);
+    flags: i32,
+) -> i32 {
+    let ref_seq = std::slice::from_raw_parts(ref_seq, ref_len as usize);
     realn_c_106_sam_prob_realn(rec, ref_seq, flags)
 }
 
@@ -226,25 +236,27 @@ unsafe fn realn_module_prob_realn_adapter(
 unsafe fn assert_realigned_records_match_expected_with(
     fasta_path: &str,
     fai_path: &str,
-    target_name: &CStr,
-    expected_ref_len: c_int,
+    target_name: &[u8],
+    expected_ref_len: i32,
     input_path: &str,
     expected_path: &str,
-    flags: c_int,
-    realign: unsafe fn(&mut bam1_t, *const i8, hts_pos_t, c_int) -> c_int,
+    flags: i32,
+    realign: unsafe fn(&mut bam1_t, *const u8, hts_pos_t, i32) -> i32,
 ) {
     let fasta = c_fixture(fasta_path);
     let fai_path = c_fixture(fai_path);
     let fai = fai_load3_format(
-        fasta.as_ptr(),
-        fai_path.as_ptr(),
+        fasta.as_ptr().cast(),
+        fai_path.as_ptr().cast(),
         std::ptr::null(),
         0,
         FAI_FASTA,
     );
     assert!(!fai.is_null());
     let mut ref_len = 0;
-    let ref_seq = faidx_fetch_seq(fai, target_name.as_ptr(), 0, c_int::MAX, &mut ref_len);
+    let mut target = target_name.to_vec();
+    target.push(0);
+    let ref_seq = faidx_fetch_seq(fai, target.as_ptr().cast(), 0, i32::MAX, &mut ref_len);
     assert!(!ref_seq.is_null());
     assert_eq!(ref_len, expected_ref_len);
 
@@ -258,14 +270,21 @@ unsafe fn assert_realigned_records_match_expected_with(
 
     for (observed, expected) in input_records.iter().zip(expected_records.iter()) {
         if (**observed).core.tid >= 0 {
-            let ret = realign(&mut **observed, ref_seq, ref_len.into(), flags);
+            let ret = realign(&mut **observed, ref_seq.cast(), ref_len.into(), flags);
             assert!(ret > -4, "sam_prob_realn returned {ret}");
         }
 
-        assert_eq!(
-            CStr::from_ptr(bam_get_qname(*observed)).to_bytes(),
-            CStr::from_ptr(bam_get_qname(*expected)).to_bytes()
-        );
+        let observed_qname = bam_get_qname(*observed);
+        let observed_qname: Vec<u8> = (0..)
+            .map(|i| *observed_qname.add(i))
+            .take_while(|&b| b != 0)
+            .collect();
+        let expected_qname = bam_get_qname(*expected);
+        let expected_qname: Vec<u8> = (0..)
+            .map(|i| *expected_qname.add(i))
+            .take_while(|&b| b != 0)
+            .collect();
+        assert_eq!(observed_qname, expected_qname);
         assert_eq!((**observed).core.tid, (**expected).core.tid);
         assert_eq!((**observed).core.pos, (**expected).core.pos);
         assert_eq!((**observed).core.flag, (**expected).core.flag);
@@ -273,12 +292,12 @@ unsafe fn assert_realigned_records_match_expected_with(
         assert_eq!((**observed).core.l_qseq, (**expected).core.l_qseq);
         assert_eq!(qual_text(*observed), qual_text(*expected));
         assert_eq!(
-            maybe_aux_z(*observed, c"BQ".as_ptr()),
-            maybe_aux_z(*expected, c"BQ".as_ptr())
+            maybe_aux_z(*observed, b"BQ".as_ptr()),
+            maybe_aux_z(*expected, b"BQ".as_ptr())
         );
         assert_eq!(
-            maybe_aux_z(*observed, c"ZQ".as_ptr()),
-            maybe_aux_z(*expected, c"ZQ".as_ptr())
+            maybe_aux_z(*observed, b"ZQ".as_ptr()),
+            maybe_aux_z(*expected, b"ZQ".as_ptr())
         );
     }
 
@@ -290,7 +309,7 @@ unsafe fn assert_realigned_records_match_expected_with(
     }
     sam_hdr_destroy(input_hdr);
     sam_hdr_destroy(expected_hdr);
-    libc::free(ref_seq.cast());
+    drop(Box::from_raw(ref_seq));
     fai_destroy(fai);
 }
 
@@ -599,9 +618,14 @@ fn mpileup_overlap_fixture_reports_overlap_adjusted_qualities() {
         assert_eq!(
             entries
                 .iter()
-                .map(|p| CStr::from_ptr(bam_get_qname(p.b))
-                    .to_string_lossy()
-                    .into_owned())
+                .map(|p| {
+                    let qname = bam_get_qname(p.b);
+                    let bytes: Vec<u8> = (0..)
+                        .map(|i| *qname.add(i))
+                        .take_while(|&b| b != 0)
+                        .collect();
+                    String::from_utf8_lossy(&bytes).into_owned()
+                })
                 .collect::<Vec<_>>(),
             vec!["r1", "r1"]
         );
@@ -625,7 +649,12 @@ fn mpileup_small_bam_skips_all_insert_softclip_record_but_keeps_neighbor_columns
         let (_hdr, records) = read_all_records("htslib/test/mpileup/small.bam");
         assert_eq!(records.len(), 8);
         assert!(records.iter().any(|rec| {
-            CStr::from_ptr(bam_get_qname(*rec)).to_bytes() == b"HS23_15644:7:2210:15769:16789#30"
+            let qname = bam_get_qname(*rec);
+            let bytes: Vec<u8> = (0..)
+                .map(|i| *qname.add(i))
+                .take_while(|&b| b != 0)
+                .collect();
+            bytes == b"HS23_15644:7:2210:15769:16789#30"
                 && (**rec).core.pos == 647
                 && (**rec).core.n_cigar == 3
         }));
@@ -681,19 +710,26 @@ fn realn_baq_expected_fixture_exposes_exact_baq_tags_and_metadata() {
         let (hdr, records) = read_all_records("htslib/test/realn03_exp.sam");
         assert_eq!(records.len(), 2);
         assert_eq!(sam_hdr_tid2len(&*hdr, 0), 11);
-        assert_eq!(CStr::from_ptr(sam_hdr_tid2name(&*hdr, 0)), c"MX");
+        let name = sam_hdr_tid2name(&*hdr, 0);
+        let name_bytes: Vec<u8> = (0..)
+            .map(|i| *name.add(i))
+            .take_while(|&b| b != 0)
+            .collect();
+        assert_eq!(name_bytes, b"MX");
 
         for (rec, qname) in records.iter().zip(["M", "X"]) {
-            assert_eq!(
-                CStr::from_ptr(bam_get_qname(*rec)).to_bytes(),
-                qname.as_bytes()
-            );
+            let rec_qname = bam_get_qname(*rec);
+            let rec_qname: Vec<u8> = (0..)
+                .map(|i| *rec_qname.add(i))
+                .take_while(|&b| b != 0)
+                .collect();
+            assert_eq!(rec_qname, qname.as_bytes());
             assert_eq!((**rec).core.tid, 0);
             assert_eq!((**rec).core.pos, 0);
             assert_eq!((**rec).core.qual, 60);
             assert_eq!((**rec).core.flag, 64);
             assert_eq!((**rec).core.l_qseq, 11);
-            assert_eq!(aux_z(*rec, c"BQ".as_ptr()), "D@@@@@@@@@D");
+            assert_eq!(aux_z(*rec, b"BQ".as_ptr()), "D@@@@@@@@@D");
         }
 
         for rec in records {
@@ -709,7 +745,7 @@ fn realn01_baq_default_matches_upstream_expected_fixture() {
         assert_realigned_records_match_expected(
             "htslib/test/realn01.fa",
             "htslib/test/realn01.fa.fai",
-            c"000000F",
+            b"000000F",
             686,
             "htslib/test/realn01.sam",
             "htslib/test/realn01_exp.sam",
@@ -724,7 +760,7 @@ fn realn01_baq_apply_matches_upstream_expected_fixture() {
         assert_realigned_records_match_expected(
             "htslib/test/realn01.fa",
             "htslib/test/realn01.fa.fai",
-            c"000000F",
+            b"000000F",
             686,
             "htslib/test/realn01.sam",
             "htslib/test/realn01_exp-a.sam",
@@ -739,7 +775,7 @@ fn realn01_baq_extend_matches_upstream_expected_fixture() {
         assert_realigned_records_match_expected(
             "htslib/test/realn01.fa",
             "htslib/test/realn01.fa.fai",
-            c"000000F",
+            b"000000F",
             686,
             "htslib/test/realn01.sam",
             "htslib/test/realn01_exp-e.sam",
@@ -754,7 +790,7 @@ fn realn02_baq_apply_matches_upstream_expected_fixture() {
         assert_realigned_records_match_expected(
             "htslib/test/realn02.fa",
             "htslib/test/realn02.fa.fai",
-            c"17",
+            b"17",
             4200,
             "htslib/test/realn02.sam",
             "htslib/test/realn02_exp-a.sam",
@@ -769,7 +805,7 @@ fn realn02_baq_revert_matches_upstream_expected_fixture() {
         assert_realigned_records_match_expected(
             "htslib/test/realn02.fa",
             "htslib/test/realn02.fa.fai",
-            c"17",
+            b"17",
             4200,
             "htslib/test/realn02_exp-a.sam",
             "htslib/test/realn02_exp.sam",
@@ -784,7 +820,7 @@ fn realn02_baq_redo_matches_upstream_expected_fixture() {
         assert_realigned_records_match_expected(
             "htslib/test/realn02.fa",
             "htslib/test/realn02.fa.fai",
-            c"17",
+            b"17",
             4200,
             "htslib/test/realn02-r.sam",
             "htslib/test/realn02_exp.sam",
@@ -799,7 +835,7 @@ fn realn03_baq_extend_matches_upstream_expected_fixture() {
         assert_realigned_records_match_expected(
             "htslib/test/realn03.fa",
             "htslib/test/realn03.fa.fai",
-            c"MX",
+            b"MX",
             11,
             "htslib/test/realn03.sam",
             "htslib/test/realn03_exp.sam",
@@ -814,7 +850,7 @@ fn translated_realn_module_trims_reference_window_like_upstream_fixture() {
         assert_realigned_records_match_expected_with(
             "htslib/test/realn03.fa",
             "htslib/test/realn03.fa.fai",
-            c"MX",
+            b"MX",
             11,
             "htslib/test/realn03.sam",
             "htslib/test/realn03_exp.sam",

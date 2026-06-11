@@ -5,16 +5,19 @@ use htslib_rs::{
     sam_index_build, sam_index_load, sam_index_load2, sam_itr_next, sam_itr_querys, sam_read1,
     HTS_FMT_BAI,
 };
-use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 
-fn c_fixture(path: &str) -> CString {
+fn c_fixture(path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
-fn c_path(path: &Path) -> CString {
-    CString::new(path.to_string_lossy().as_bytes()).unwrap()
+fn c_path(path: &Path) -> Vec<u8> {
+    let mut bytes = path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes
 }
 
 fn optional_external_cellsnp_bam() -> Option<PathBuf> {
@@ -43,11 +46,15 @@ unsafe fn query_alignment_names_with_index(
     max_records: usize,
 ) -> Vec<String> {
     let path = c_fixture(path);
-    let fp = hts_open(path.as_ptr(), c"r".as_ptr());
-    assert!(!fp.is_null(), "failed to open {}", path.to_string_lossy());
+    let fp = hts_open(path.as_ptr().cast(), c"r".as_ptr());
+    assert!(
+        !fp.is_null(),
+        "failed to open {}",
+        String::from_utf8_lossy(&path[..path.len() - 1])
+    );
     if let Some(reference) = reference {
         let reference = c_fixture(reference);
-        assert_eq!(hts_set_fai_filename(fp, reference.as_ptr()), 0);
+        assert_eq!(hts_set_fai_filename(fp, reference.as_ptr().cast()), 0);
     }
 
     let hdr = sam_hdr_read(fp);
@@ -55,14 +62,15 @@ unsafe fn query_alignment_names_with_index(
     let index_c;
     let idx = if let Some(index) = index {
         index_c = c_fixture(index);
-        sam_index_load2(fp, path.as_ptr(), index_c.as_ptr())
+        sam_index_load2(fp, path.as_ptr().cast(), index_c.as_ptr().cast())
     } else {
-        sam_index_load(fp, path.as_ptr())
+        sam_index_load(fp, path.as_ptr().cast())
     };
     assert!(!idx.is_null());
 
-    let region = CString::new(region).unwrap();
-    let itr = sam_itr_querys(idx, hdr, region.as_ptr());
+    let mut region = region.as_bytes().to_vec();
+    region.push(0);
+    let itr = sam_itr_querys(idx, hdr, region.as_ptr().cast());
     assert!(!itr.is_null());
 
     let rec = bam_init1();
@@ -73,11 +81,9 @@ unsafe fn query_alignment_names_with_index(
         if ret < 0 {
             break;
         }
-        names.push(
-            CStr::from_ptr(bam_get_qname(rec))
-                .to_string_lossy()
-                .into_owned(),
-        );
+        let qname = bam_get_qname(rec);
+        let bytes = std::ffi::CStr::from_ptr(qname.cast()).to_bytes();
+        names.push(String::from_utf8_lossy(bytes).into_owned());
     }
 
     bam_destroy1(rec);
@@ -88,15 +94,15 @@ unsafe fn query_alignment_names_with_index(
     names
 }
 
-unsafe fn query_alignment_count_for_path(path: &Path, region: &CStr) -> usize {
+unsafe fn query_alignment_count_for_path(path: &Path, region: &[u8]) -> usize {
     let path_c = c_path(path);
-    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+    let fp = hts_open(path_c.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null(), "failed to open {}", path.display());
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
-    let idx = sam_index_load(fp, path_c.as_ptr());
+    let idx = sam_index_load(fp, path_c.as_ptr().cast());
     assert!(!idx.is_null());
-    let itr = sam_itr_querys(idx, hdr, region.as_ptr());
+    let itr = sam_itr_querys(idx, hdr, region.as_ptr().cast());
     assert!(!itr.is_null());
     let rec = bam_init1();
     assert!(!rec.is_null());
@@ -120,7 +126,7 @@ unsafe fn query_alignment_count_for_path(path: &Path, region: &CStr) -> usize {
 
 unsafe fn scan_alignment_prefix_for_path(path: &Path, limit: usize) -> (usize, usize, i64, i64) {
     let path_c = c_path(path);
-    let fp = hts_open(path_c.as_ptr(), c"r".as_ptr());
+    let fp = hts_open(path_c.as_ptr().cast(), c"r".as_ptr());
     assert!(!fp.is_null(), "failed to open {}", path.display());
     let hdr = sam_hdr_read(fp);
     assert!(!hdr.is_null());
@@ -251,8 +257,11 @@ fn external_cellsnp_chr22_bam_index_query_counts_all_real_records_when_available
         return;
     };
     unsafe {
-        assert_eq!(query_alignment_count_for_path(&path, c"chr22"), 5_000_000);
-        assert_eq!(query_alignment_count_for_path(&path, c"chr22:1-1000000"), 0);
+        assert_eq!(query_alignment_count_for_path(&path, b"chr22\0"), 5_000_000);
+        assert_eq!(
+            query_alignment_count_for_path(&path, b"chr22:1-1000000\0"),
+            0
+        );
     }
 }
 
@@ -285,14 +294,15 @@ fn repo_temp_name(label: &str) -> String {
 unsafe fn build_index2_bam(label: &str) -> std::path::PathBuf {
     let sam_path = c_fixture("htslib/test/index2.sam");
     let bam_path = temp_index2_bam(label);
-    let bam_path_c = CString::new(bam_path.to_string_lossy().as_bytes()).unwrap();
+    let mut bam_path_c = bam_path.to_string_lossy().into_owned().into_bytes();
+    bam_path_c.push(0);
 
-    let in_fp = hts_open(sam_path.as_ptr(), c"r".as_ptr());
+    let in_fp = hts_open(sam_path.as_ptr().cast(), c"r".as_ptr());
     assert!(!in_fp.is_null());
     let hdr = sam_hdr_read(in_fp);
     assert!(!hdr.is_null());
 
-    let out_fp = hts_open(bam_path_c.as_ptr(), c"wb".as_ptr());
+    let out_fp = hts_open(bam_path_c.as_ptr().cast(), c"wb".as_ptr());
     assert!(!out_fp.is_null());
     assert_eq!(sam_hdr_write(out_fp, hdr), 0);
 
@@ -311,7 +321,7 @@ unsafe fn build_index2_bam(label: &str) -> std::path::PathBuf {
     sam_hdr_destroy(hdr);
     assert_eq!(hts_close(in_fp), 0);
 
-    assert_eq!(sam_index_build(bam_path_c.as_ptr(), 0), 0);
+    assert_eq!(sam_index_build(bam_path_c.as_ptr().cast(), 0), 0);
     bam_path
 }
 
@@ -347,16 +357,19 @@ fn remote_index_check_probes_local_basename_like_htslib() {
         let csi = format!("{base}.csi");
         std::fs::write(&csi, b"not read by hts_idx_check_local").unwrap();
 
-        let remote = CString::new(format!("mem:/path/{base}")).unwrap();
+        let mut remote = format!("mem:/path/{base}").into_bytes();
+        remote.push(0);
         let mut fnidx = std::ptr::null_mut();
         assert_eq!(
-            hts_c_4756_hts_idx_check_local(remote.as_ptr(), HTS_FMT_BAI, &mut fnidx),
+            hts_c_4756_hts_idx_check_local(remote.as_ptr().cast(), HTS_FMT_BAI, &mut fnidx),
             1
         );
         assert!(!fnidx.is_null());
-        assert_eq!(CStr::from_ptr(fnidx).to_bytes(), csi.as_bytes());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(fnidx.cast()).to_bytes(),
+            csi.as_bytes()
+        );
 
-        libc::free(fnidx.cast());
         std::fs::remove_file(csi).unwrap();
     }
 }

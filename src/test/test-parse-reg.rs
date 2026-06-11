@@ -1,14 +1,12 @@
-use std::ffi::{c_char, c_int};
-
 use crate::htslib_rs::{hts, sam};
 
 // original: reg_expected (htslib/test/test-parse-reg.c:50)
 pub unsafe fn test_test_parse_reg_c_50_reg_expected(
     hdr: *mut sam::sam_hdr_t,
-    reg: *const c_char,
-    flags: c_int,
-    reg_exp: *const c_char,
-    tid_exp: c_int,
+    reg: *const u8,
+    flags: i32,
+    reg_exp: *const u8,
+    tid_exp: i32,
     beg_exp: hts::hts_pos_t,
     end_exp: hts::hts_pos_t,
 ) {
@@ -21,40 +19,33 @@ pub unsafe fn test_test_parse_reg_c_50_reg_expected(
     let has_reg_exp = !reg_exp.is_null();
 
     if (has_reg_out != has_reg_exp)
-        || (has_reg_out && has_reg_exp && libc::strcmp(reg_out, reg_exp) != 0)
+        || (has_reg_out && has_reg_exp && libc::strcmp(reg_out.cast(), reg_exp.cast()) != 0)
         || (has_reg_exp && tid_out != tid_exp)
         || (has_reg_exp && beg_out != beg_exp)
         || (has_reg_exp && end_out != end_exp)
     {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Parsing \"%s\" expected return \"%s\", %d:%lld-%lld, but got \"%s\", %d:%lld-%lld\n"
-                .as_ptr(),
-            reg,
-            if has_reg_exp {
-                reg_exp
-            } else {
-                c"(null)".as_ptr()
-            },
-            tid_exp,
-            beg_exp,
-            end_exp,
-            if has_reg_out {
-                reg_out
-            } else {
-                c"(null)".as_ptr()
-            },
-            tid_out,
-            beg_out,
-            end_out,
+        let reg_str = String::from_utf8_lossy(std::ffi::CStr::from_ptr(reg.cast()).to_bytes());
+        let exp_str = if has_reg_exp {
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr(reg_exp.cast()).to_bytes()).into_owned()
+        } else {
+            "(null)".to_string()
+        };
+        let out_str = if has_reg_out {
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr(reg_out.cast()).to_bytes()).into_owned()
+        } else {
+            "(null)".to_string()
+        };
+        eprintln!(
+            "Parsing \"{}\" expected return \"{}\", {}:{}-{}, but got \"{}\", {}:{}-{}",
+            reg_str, exp_str, tid_exp, beg_exp, end_exp, out_str, tid_out, beg_out, end_out,
         );
         libc::exit(1);
     }
 }
 
 // original: reg_test (htslib/test/test-parse-reg.c:72)
-pub unsafe fn test_test_parse_reg_c_72_reg_test(fn_: *const c_char) -> c_int {
-    let fp = hts::hts_open(fn_, c"r".as_ptr());
+pub unsafe fn test_test_parse_reg_c_72_reg_test(fn_: *const u8) -> i32 {
+    let fp = hts::hts_open(fn_.cast(), c"r".as_ptr().cast());
     if fp.is_null() {
         return 1;
     }
@@ -74,59 +65,64 @@ pub unsafe fn test_test_parse_reg_c_72_reg_test(fn_: *const c_char) -> c_int {
     // Check range extensions.
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr1".as_ptr(),
+        c"chr1".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         0,
         0,
         hts::HTS_POS_MAX,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr1:50".as_ptr(),
+        c"chr1:50".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         0,
         49,
         hts::HTS_POS_MAX,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr1:50".as_ptr(),
+        c"chr1:50".as_ptr().cast(),
         hts::HTS_PARSE_ONE_COORD,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         0,
         49,
         50,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr1:50-100".as_ptr(),
+        c"chr1:50-100".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         0,
         49,
         100,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr1:50-".as_ptr(),
+        c"chr1:50-".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         0,
         49,
         hts::HTS_POS_MAX,
     );
-    test_test_parse_reg_c_50_reg_expected(hdr, c"chr1:-50".as_ptr(), 0, c"".as_ptr(), 0, 0, 50);
-
-    // Check quoting
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"Expected error: ".as_ptr(),
-    );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr1:100-200".as_ptr(),
+        c"chr1:-50".as_ptr().cast(),
+        0,
+        c"".as_ptr().cast(),
+        0,
+        0,
+        50,
+    );
+
+    // Check quoting
+    eprint!("Expected error: ");
+    test_test_parse_reg_c_50_reg_expected(
+        hdr,
+        c"chr1:100-200".as_ptr().cast(),
         0,
         std::ptr::null(),
         0,
@@ -135,54 +131,54 @@ pub unsafe fn test_test_parse_reg_c_72_reg_test(fn_: *const c_char) -> c_int {
     ); // ambiguous
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"{chr1}:100-200".as_ptr(),
+        c"{chr1}:100-200".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         0,
         99,
         200,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"{chr1:100-200}".as_ptr(),
+        c"{chr1:100-200}".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         2,
         0,
         hts::HTS_POS_MAX,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"{chr1:100-200}:100-200".as_ptr(),
+        c"{chr1:100-200}:100-200".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         2,
         99,
         200,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"{chr2:100-200}:100-200".as_ptr(),
+        c"{chr2:100-200}:100-200".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         3,
         99,
         200,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr2:100-200:100-200".as_ptr(),
+        c"chr2:100-200:100-200".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         3,
         99,
         200,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr2:100-200".as_ptr(),
+        c"chr2:100-200".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         3,
         0,
         hts::HTS_POS_MAX,
@@ -191,63 +187,63 @@ pub unsafe fn test_test_parse_reg_c_72_reg_test(fn_: *const c_char) -> c_int {
     // Check numerics
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr3".as_ptr(),
+        c"chr3".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         4,
         0,
         hts::HTS_POS_MAX,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr3:".as_ptr(),
+        c"chr3:".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         4,
         0,
         hts::HTS_POS_MAX,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr3:1000-1500".as_ptr(),
+        c"chr3:1000-1500".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         4,
         999,
         1500,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr3:1,000-1,500".as_ptr(),
+        c"chr3:1,000-1,500".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         4,
         999,
         1500,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr3:1k-1.5K".as_ptr(),
+        c"chr3:1k-1.5K".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         4,
         999,
         1500,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr3:1e3-1.5e3".as_ptr(),
+        c"chr3:1e3-1.5e3".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         4,
         999,
         1500,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr3:1e3-15e2".as_ptr(),
+        c"chr3:1e3-15e2".as_ptr().cast(),
         0,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         4,
         999,
         1500,
@@ -256,20 +252,17 @@ pub unsafe fn test_test_parse_reg_c_72_reg_test(fn_: *const c_char) -> c_int {
     // Check list mode
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr1,chr3".as_ptr(),
+        c"chr1,chr3".as_ptr().cast(),
         hts::HTS_PARSE_LIST,
-        c"chr3".as_ptr(),
+        c"chr3".as_ptr().cast(),
         0,
         0,
         hts::HTS_POS_MAX,
     );
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"Expected error: ".as_ptr(),
-    );
+    eprint!("Expected error: ");
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr1:100-200,chr3".as_ptr(),
+        c"chr1:100-200,chr3".as_ptr().cast(),
         hts::HTS_PARSE_LIST,
         std::ptr::null(),
         0,
@@ -278,18 +271,18 @@ pub unsafe fn test_test_parse_reg_c_72_reg_test(fn_: *const c_char) -> c_int {
     ); // ambiguous
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"{chr1,chr3}".as_ptr(),
+        c"{chr1,chr3}".as_ptr().cast(),
         hts::HTS_PARSE_LIST,
-        c"".as_ptr(),
+        c"".as_ptr().cast(),
         5,
         0,
         hts::HTS_POS_MAX,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"{chr1,chr3},chr1".as_ptr(),
+        c"{chr1,chr3},chr1".as_ptr().cast(),
         hts::HTS_PARSE_LIST,
-        c"chr1".as_ptr(),
+        c"chr1".as_ptr().cast(),
         5,
         0,
         hts::HTS_POS_MAX,
@@ -297,41 +290,85 @@ pub unsafe fn test_test_parse_reg_c_72_reg_test(fn_: *const c_char) -> c_int {
     // incorrect usage; first reg is valid (but not what user expects).
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr3:1,000-1,500".as_ptr(),
+        c"chr3:1,000-1,500".as_ptr().cast(),
         hts::HTS_PARSE_LIST | hts::HTS_PARSE_ONE_COORD,
-        c"000-1,500".as_ptr(),
+        c"000-1,500".as_ptr().cast(),
         4,
         0,
         1,
     );
 
     // More expected failures
-    test_test_parse_reg_c_50_reg_expected(hdr, c"chr2".as_ptr(), 0, std::ptr::null(), 0, 0, 0);
-    test_test_parse_reg_c_50_reg_expected(hdr, c"chr1,".as_ptr(), 0, std::ptr::null(), 0, 0, 0);
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"Expected error: ".as_ptr(),
-    );
-    test_test_parse_reg_c_50_reg_expected(hdr, c"{chr1".as_ptr(), 0, std::ptr::null(), 0, 0, 0);
-    test_test_parse_reg_c_50_reg_expected(hdr, c"chr1:10-10".as_ptr(), 0, c"".as_ptr(), 0, 9, 10); // OK
-    test_test_parse_reg_c_50_reg_expected(hdr, c"chr1:10-9".as_ptr(), 0, std::ptr::null(), 0, 0, 0); // Issue#353
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"Expected error: ".as_ptr(),
-    );
-    test_test_parse_reg_c_50_reg_expected(hdr, c"chr1:x".as_ptr(), 0, std::ptr::null(), 0, 0, 0);
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"Expected error: ".as_ptr(),
-    );
-    test_test_parse_reg_c_50_reg_expected(hdr, c"chr1:1-y".as_ptr(), 0, std::ptr::null(), 0, 0, 0);
-    libc::fprintf(
-        crate::htslib_rs::c_compat::stderr.cast(),
-        c"Expected error: ".as_ptr(),
+    test_test_parse_reg_c_50_reg_expected(
+        hdr,
+        c"chr2".as_ptr().cast(),
+        0,
+        std::ptr::null(),
+        0,
+        0,
+        0,
     );
     test_test_parse_reg_c_50_reg_expected(
         hdr,
-        c"chr1:1,chr3".as_ptr(),
+        c"chr1,".as_ptr().cast(),
+        0,
+        std::ptr::null(),
+        0,
+        0,
+        0,
+    );
+    eprint!("Expected error: ");
+    test_test_parse_reg_c_50_reg_expected(
+        hdr,
+        c"{chr1".as_ptr().cast(),
+        0,
+        std::ptr::null(),
+        0,
+        0,
+        0,
+    );
+    test_test_parse_reg_c_50_reg_expected(
+        hdr,
+        c"chr1:10-10".as_ptr().cast(),
+        0,
+        c"".as_ptr().cast(),
+        0,
+        9,
+        10,
+    ); // OK
+    test_test_parse_reg_c_50_reg_expected(
+        hdr,
+        c"chr1:10-9".as_ptr().cast(),
+        0,
+        std::ptr::null(),
+        0,
+        0,
+        0,
+    ); // Issue#353
+    eprint!("Expected error: ");
+    test_test_parse_reg_c_50_reg_expected(
+        hdr,
+        c"chr1:x".as_ptr().cast(),
+        0,
+        std::ptr::null(),
+        0,
+        0,
+        0,
+    );
+    eprint!("Expected error: ");
+    test_test_parse_reg_c_50_reg_expected(
+        hdr,
+        c"chr1:1-y".as_ptr().cast(),
+        0,
+        std::ptr::null(),
+        0,
+        0,
+        0,
+    );
+    eprint!("Expected error: ");
+    test_test_parse_reg_c_50_reg_expected(
+        hdr,
+        c"chr1:1,chr3".as_ptr().cast(),
         0,
         std::ptr::null(),
         0,
@@ -346,18 +383,18 @@ pub unsafe fn test_test_parse_reg_c_72_reg_test(fn_: *const c_char) -> c_int {
 }
 
 // original: main (htslib/test/test-parse-reg.c:145)
-pub unsafe fn test_test_parse_reg_c_145_main(mut argc: c_int, mut argv: *mut *mut c_char) -> c_int {
+pub unsafe fn test_test_parse_reg_c_145_main(mut argc: i32, mut argv: *mut *mut u8) -> i32 {
     let mut flags = 0;
 
     while argc > 1 {
-        if libc::strcmp(*argv.add(1), c"-m".as_ptr()) == 0 {
+        if libc::strcmp((*argv.add(1)).cast(), c"-m".as_ptr()) == 0 {
             flags |= hts::HTS_PARSE_LIST;
             argc -= 1;
             argv = argv.add(1);
             continue;
         }
 
-        if libc::strcmp(*argv.add(1), c"-c".as_ptr()) == 0 {
+        if libc::strcmp((*argv.add(1)).cast(), c"-c".as_ptr()) == 0 {
             flags |= hts::HTS_PARSE_ONE_COORD;
             argc -= 1;
             argv = argv.add(1);
@@ -365,7 +402,7 @@ pub unsafe fn test_test_parse_reg_c_145_main(mut argc: c_int, mut argv: *mut *mu
         }
 
         // Automatic mode for test harness
-        if libc::strcmp(*argv.add(1), c"-t".as_ptr()) == 0 {
+        if libc::strcmp((*argv.add(1)).cast(), c"-t".as_ptr()) == 0 {
             test_test_parse_reg_c_72_reg_test(*argv.add(2));
         }
 
@@ -374,25 +411,19 @@ pub unsafe fn test_test_parse_reg_c_145_main(mut argc: c_int, mut argv: *mut *mu
 
     // Interactive mode for debugging
     if argc != 3 {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Usage: test-parse-reg [-m] [-c] region[,region]...\n".as_ptr(),
-        );
+        eprintln!("Usage: test-parse-reg [-m] [-c] region[,region]...");
         libc::exit(1);
     }
 
-    let fp = hts::hts_open(*argv.add(1), c"r".as_ptr());
+    let fp = hts::hts_open((*argv.add(1)).cast(), c"r".as_ptr().cast());
     if fp.is_null() {
-        libc::perror(*argv.add(1));
+        libc::perror((*argv.add(1)).cast());
         libc::exit(1);
     }
 
     let hdr = sam::sam_hdr_read(fp);
     if hdr.is_null() {
-        libc::fprintf(
-            crate::htslib_rs::c_compat::stderr.cast(),
-            c"Couldn't read header\n".as_ptr(),
-        );
+        eprintln!("Couldn't read header");
         libc::exit(1);
     }
 
@@ -403,22 +434,19 @@ pub unsafe fn test_test_parse_reg_c_145_main(mut argc: c_int, mut argv: *mut *mu
         let mut end = 0;
         reg = sam::sam_parse_region(hdr, reg, &mut tid, &mut beg, &mut end, flags);
         if reg.is_null() {
-            libc::fprintf(
-                crate::htslib_rs::c_compat::stderr.cast(),
-                c"Failed to parse region\n".as_ptr(),
-            );
+            eprintln!("Failed to parse region");
             libc::exit(1);
         }
-        libc::printf(
-            c"%-20s %12lld %12lld\n".as_ptr(),
-            if tid == -1 {
-                c"*".as_ptr()
-            } else {
-                *(*hdr).target_name.add(tid as usize)
-            },
-            beg,
-            end,
-        );
+        let name = if tid == -1 {
+            "*".to_string()
+        } else {
+            String::from_utf8_lossy(
+                std::ffi::CStr::from_ptr((*(*hdr).target_name.add(tid as usize)).cast())
+                    .to_bytes(),
+            )
+            .into_owned()
+        };
+        println!("{:<20} {:>12} {:>12}", name, beg, end);
     }
 
     sam::sam_hdr_destroy(hdr);
@@ -430,17 +458,23 @@ pub unsafe fn test_test_parse_reg_c_145_main(mut argc: c_int, mut argv: *mut *mu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
 
-    unsafe fn run_main(args: &[&str]) -> c_int {
-        let c_args: Vec<CString> = args.iter().map(|arg| CString::new(*arg).unwrap()).collect();
-        let mut argv: Vec<*mut c_char> = c_args
+    unsafe fn run_main(args: &[&str]) -> i32 {
+        let mut c_args: Vec<Vec<u8>> = args
             .iter()
-            .map(|arg| arg.as_ptr().cast_mut())
+            .map(|arg| {
+                let mut v = arg.as_bytes().to_vec();
+                v.push(0);
+                v
+            })
+            .collect();
+        let mut argv: Vec<*mut u8> = c_args
+            .iter_mut()
+            .map(|arg| arg.as_mut_ptr())
             .chain(std::iter::once(std::ptr::null_mut()))
             .collect();
 
-        test_test_parse_reg_c_145_main(args.len() as c_int, argv.as_mut_ptr())
+        test_test_parse_reg_c_145_main(args.len() as i32, argv.as_mut_ptr())
     }
 
     #[test]

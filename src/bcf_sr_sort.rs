@@ -569,8 +569,8 @@ pub fn bcf_sr_sort_reset(srt: &mut BcfSrSort) {
 pub unsafe fn bcf_sr_sort_destroy(srt: &mut BcfSrSort) {
     unsafe {
         drop(take_active_vec(srt));
-        crate::sam::khash_str2int_destroy_free(srt.var_str2int);
-        crate::sam::khash_str2int_destroy_free(srt.grp_str2int);
+        crate::sam::khash_str2int_destroy_free(srt.var_str2int.cast());
+        crate::sam::khash_str2int_destroy_free(srt.grp_str2int.cast());
 
         let nbuf = srt.msr.max(srt.nsr).max(0);
         let vcf_buf = srt.vcf_buf.cast::<BcfSrSortVcfBuf>();
