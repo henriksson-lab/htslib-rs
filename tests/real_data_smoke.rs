@@ -401,7 +401,7 @@ fn reads_multiple_real_fasta_indexes() {
         let fai = fai_load3_format(c1.as_ptr(), c1_fai.as_ptr(), std::ptr::null(), 0, FAI_FASTA);
         assert!(!fai.is_null());
         assert_eq!(faidx_nseq(fai), 1);
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)), c"c1");
+        assert_eq!(faidx_iseq(&*fai, 0), Some(c"c1".to_bytes()));
         assert_eq!(faidx_seq_len(fai, c"c1".as_ptr()), 10);
         fai_destroy(fai);
 
@@ -410,7 +410,7 @@ fn reads_multiple_real_fasta_indexes() {
         let fai = fai_load3_format(c2.as_ptr(), c2_fai.as_ptr(), std::ptr::null(), 0, FAI_FASTA);
         assert!(!fai.is_null());
         assert_eq!(faidx_nseq(fai), 1);
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)), c"c2");
+        assert_eq!(faidx_iseq(&*fai, 0), Some(c"c2".to_bytes()));
         assert_eq!(faidx_seq_len(fai, c"c2".as_ptr()), 9);
         fai_destroy(fai);
 
@@ -419,9 +419,9 @@ fn reads_multiple_real_fasta_indexes() {
         let fai = fai_load3_format(xx.as_ptr(), xx_fai.as_ptr(), std::ptr::null(), 0, FAI_FASTA);
         assert!(!fai.is_null());
         assert_eq!(faidx_nseq(fai), 3);
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)), c"xx");
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 1)), c"yy");
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 2)), c"zz");
+        assert_eq!(faidx_iseq(&*fai, 0), Some(c"xx".to_bytes()));
+        assert_eq!(faidx_iseq(&*fai, 1), Some(c"yy".to_bytes()));
+        assert_eq!(faidx_iseq(&*fai, 2), Some(c"zz".to_bytes()));
         assert_eq!(faidx_seq_len(fai, c"xx".as_ptr()), 20);
         assert_eq!(faidx_seq_len(fai, c"yy".as_ptr()), 20);
         assert_eq!(faidx_seq_len(fai, c"zz".as_ptr()), 30);
@@ -756,7 +756,7 @@ fn reads_real_fastq_index_quality_fixture() {
         assert!(!fai.is_null());
 
         assert!(faidx_nseq(fai) > 0);
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)), c"FAKE0005_1");
+        assert_eq!(faidx_iseq(&*fai, 0), Some(c"FAKE0005_1".to_bytes()));
         assert_eq!(faidx_seq_len(fai, c"FAKE0005_1".as_ptr()), 63);
 
         let mut len = 0;

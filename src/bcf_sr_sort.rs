@@ -3,7 +3,7 @@
 
 use crate::htslib_rs::hts::{hts_pos_t, kbs_destroy};
 use crate::htslib_rs::vcf::*;
-use std::ffi::{c_char, c_int, CStr};
+use std::ffi::{c_int, CStr};
 use std::mem::zeroed;
 use std::ptr::NonNull;
 
@@ -224,7 +224,7 @@ unsafe fn bcf_sr_sort_append_empty_row(vcf_buf: &mut [BcfSrSortVcfBuf]) -> c_int
     }
 }
 
-unsafe fn bcf_sr_sort_shift_reader_buffer_ref(reader: &mut bcf_sr_t, j: c_int) -> c_int {
+unsafe fn bcf_sr_sort_shift_reader_buffer(reader: &mut bcf_sr_t, j: c_int) -> c_int {
     unsafe {
         if reader.buffer.is_null() || j < 1 || j > reader.nbuffer {
             return -1;
@@ -262,7 +262,7 @@ fn bcf_sr_sort_disambiguate_duplicate_key_nonnull(
     }
 }
 
-unsafe fn bcf_sr_sort_set_active_ref(srt: &mut BcfSrSort, idx: c_int) -> c_int {
+pub unsafe fn bcf_sr_sort_set_active(srt: &mut BcfSrSort, idx: c_int) -> c_int {
     unsafe {
         let Some(need) = idx.checked_add(1) else {
             return -1;
@@ -281,17 +281,7 @@ unsafe fn bcf_sr_sort_set_active_ref(srt: &mut BcfSrSort, idx: c_int) -> c_int {
     }
 }
 
-pub unsafe fn bcf_sr_sort_c_324_bcf_sr_sort_set_active(
-    srt: Option<&mut BcfSrSort>,
-    idx: c_int,
-) -> c_int {
-    unsafe {
-        let Some(srt) = srt else { return -1 };
-        bcf_sr_sort_set_active_ref(srt, idx)
-    }
-}
-
-unsafe fn bcf_sr_sort_add_active_ref(srt: &mut BcfSrSort, idx: c_int) -> c_int {
+pub unsafe fn bcf_sr_sort_add_active(srt: &mut BcfSrSort, idx: c_int) -> c_int {
     unsafe {
         if idx < 0 {
             return -1;
@@ -318,17 +308,7 @@ unsafe fn bcf_sr_sort_add_active_ref(srt: &mut BcfSrSort, idx: c_int) -> c_int {
     }
 }
 
-pub unsafe fn bcf_sr_sort_c_331_bcf_sr_sort_add_active(
-    srt: Option<&mut BcfSrSort>,
-    idx: c_int,
-) -> c_int {
-    unsafe {
-        let Some(srt) = srt else { return -1 };
-        bcf_sr_sort_add_active_ref(srt, idx)
-    }
-}
-
-unsafe fn bcf_sr_sort_set_ref(
+pub unsafe fn bcf_sr_sort_set(
     readers: &mut bcf_srs_t,
     srt: &mut BcfSrSort,
     chr: &CStr,
@@ -449,24 +429,7 @@ unsafe fn bcf_sr_sort_set_ref(
     }
 }
 
-pub unsafe fn bcf_sr_sort_c_338_bcf_sr_sort_set(
-    readers: *mut bcf_srs_t,
-    srt: *mut BcfSrSort,
-    chr: *const c_char,
-    min_pos: hts_pos_t,
-) -> c_int {
-    unsafe {
-        let (Some(readers), Some(srt)) = (readers.as_mut(), srt.as_mut()) else {
-            return -1;
-        };
-        let Some(chr) = (!chr.is_null()).then(|| CStr::from_ptr(chr)) else {
-            return -1;
-        };
-        bcf_sr_sort_set_ref(readers, srt, chr, min_pos)
-    }
-}
-
-unsafe fn bcf_sr_sort_next_ref(
+pub unsafe fn bcf_sr_sort_next(
     readers: &mut bcf_srs_t,
     srt: &mut BcfSrSort,
     chr: &CStr,
@@ -504,7 +467,7 @@ unsafe fn bcf_sr_sort_next_ref(
             {
                 return -1;
             }
-            if bcf_sr_sort_shift_reader_buffer_ref(reader, 1) < 0 {
+            if bcf_sr_sort_shift_reader_buffer(reader, 1) < 0 {
                 return -1;
             }
             has_line[active as usize] = 1;
@@ -514,7 +477,7 @@ unsafe fn bcf_sr_sort_next_ref(
         if (srt.chr.is_null()
             || srt.pos != min_pos
             || CStr::from_ptr(srt.chr).to_bytes() != chr.to_bytes())
-            && bcf_sr_sort_set_ref(readers, srt, chr, min_pos) < 0
+            && bcf_sr_sort_set(readers, srt, chr, min_pos) < 0
         {
             return -1;
         }
@@ -548,7 +511,7 @@ unsafe fn bcf_sr_sort_next_ref(
                     return -1;
                 };
                 let j = (pos + 1) as c_int;
-                if bcf_sr_sort_shift_reader_buffer_ref(reader, j) < 0 {
+                if bcf_sr_sort_shift_reader_buffer(reader, j) < 0 {
                     return -1;
                 }
                 nret += 1;
@@ -575,35 +538,7 @@ unsafe fn bcf_sr_sort_next_ref(
     }
 }
 
-pub unsafe fn bcf_sr_sort_c_593_bcf_sr_sort_next(
-    readers: *mut bcf_srs_t,
-    srt: *mut BcfSrSort,
-    chr: *const c_char,
-    min_pos: hts_pos_t,
-) -> c_int {
-    unsafe {
-        let (Some(readers), Some(srt)) = (readers.as_mut(), srt.as_mut()) else {
-            return -1;
-        };
-        let Some(chr) = (!chr.is_null()).then(|| CStr::from_ptr(chr)) else {
-            return -1;
-        };
-        bcf_sr_sort_next_ref(readers, srt, chr, min_pos)
-    }
-}
-
-pub unsafe fn bcf_sr_sort_c_662_bcf_sr_sort_remove_reader(
-    _readers: Option<&mut bcf_srs_t>,
-    srt: Option<&mut BcfSrSort>,
-    i: c_int,
-) {
-    unsafe {
-        let Some(srt) = srt else { return };
-        bcf_sr_sort_remove_reader_ref(srt, i);
-    }
-}
-
-unsafe fn bcf_sr_sort_remove_reader_ref(srt: &mut BcfSrSort, i: c_int) {
+pub unsafe fn bcf_sr_sort_remove_reader(srt: &mut BcfSrSort, i: c_int) {
     unsafe {
         if srt.vcf_buf.is_null() || i < 0 || i >= srt.nsr {
             return;
@@ -623,42 +558,15 @@ unsafe fn bcf_sr_sort_remove_reader_ref(srt: &mut BcfSrSort, i: c_int) {
     }
 }
 
-fn bcf_sr_sort_new_box() -> Box<BcfSrSort> {
-    Box::new(BcfSrSort::default())
-}
-
-fn bcf_sr_sort_init_ref(srt: &mut BcfSrSort) {
+pub fn bcf_sr_sort_init(srt: &mut BcfSrSort) {
     *srt = BcfSrSort::default();
 }
 
-pub unsafe fn bcf_sr_sort_c_675_bcf_sr_sort_init(srt: *mut BcfSrSort) -> *mut BcfSrSort {
-    unsafe {
-        if srt.is_null() {
-            return Box::into_raw(bcf_sr_sort_new_box());
-        }
-        bcf_sr_sort_init_ref(&mut *srt);
-        srt
-    }
-}
-
-pub unsafe fn bcf_sr_sort_c_681_bcf_sr_sort_reset(srt: Option<&mut BcfSrSort>) {
-    if let Some(srt) = srt {
-        bcf_sr_sort_reset_ref(srt);
-    }
-}
-
-fn bcf_sr_sort_reset_ref(srt: &mut BcfSrSort) {
+pub fn bcf_sr_sort_reset(srt: &mut BcfSrSort) {
     srt.chr = std::ptr::null();
 }
 
-pub unsafe fn bcf_sr_sort_c_685_bcf_sr_sort_destroy(srt: Option<&mut BcfSrSort>) {
-    unsafe {
-        let Some(srt) = srt else { return };
-        bcf_sr_sort_destroy_ref(srt);
-    }
-}
-
-unsafe fn bcf_sr_sort_destroy_ref(srt: &mut BcfSrSort) {
+pub unsafe fn bcf_sr_sort_destroy(srt: &mut BcfSrSort) {
     unsafe {
         drop(take_active_vec(srt));
         crate::sam::khash_str2int_destroy_free(srt.var_str2int);

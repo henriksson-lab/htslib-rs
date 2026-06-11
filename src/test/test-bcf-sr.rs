@@ -100,7 +100,7 @@ pub unsafe fn test_test_bcf_sr_c_54_usage(exit_code: c_int) -> ! {
 pub unsafe fn test_test_bcf_sr_c_71_write_summary_format(sr: *mut bcf_srs_t, out: *mut libc::FILE) {
     let mut n;
     while {
-        n = crate::htslib_rs::vcf::bcf_sr_next_line(sr);
+        n = crate::htslib_rs::vcf::bcf_sr_next_line(&mut *sr);
         n > 0
     } {
         let mut i = 0;
@@ -172,7 +172,7 @@ pub unsafe fn test_test_bcf_sr_c_107_write_vcf_bcf_format(
     }
 
     while {
-        n = crate::htslib_rs::vcf::bcf_sr_next_line(sr);
+        n = crate::htslib_rs::vcf::bcf_sr_next_line(&mut *sr);
         n > 0
     } {
         let mut i = 0;
@@ -372,18 +372,31 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
     if sr.is_null() {
         error!(c"bcf_sr_init() failed\n");
     }
-    crate::htslib_rs::vcf::bcf_sr_set_opt(sr, crate::htslib_rs::vcf::BCF_SR_PAIR_LOGIC, pair);
+    crate::htslib_rs::vcf::bcf_sr_set_opt(&mut *sr, crate::htslib_rs::vcf::BCF_SR_PAIR_LOGIC, pair);
     if use_index != 0 {
-        crate::htslib_rs::vcf::bcf_sr_set_opt(sr, crate::htslib_rs::vcf::BCF_SR_REQUIRE_IDX, 0);
+        crate::htslib_rs::vcf::bcf_sr_set_opt(&mut *sr, crate::htslib_rs::vcf::BCF_SR_REQUIRE_IDX, 0);
     } else {
-        crate::htslib_rs::vcf::bcf_sr_set_opt(sr, BCF_SR_ALLOW_NO_IDX, 0);
+        crate::htslib_rs::vcf::bcf_sr_set_opt(&mut *sr, BCF_SR_ALLOW_NO_IDX, 0);
     }
 
-    if !regions.is_null() && crate::htslib_rs::vcf::bcf_sr_set_regions(sr, regions, 0) != 0 {
+    if !regions.is_null()
+        && crate::htslib_rs::vcf::bcf_sr_set_regions(
+            &mut *sr,
+            std::ffi::CStr::from_ptr(regions).to_bytes(),
+            0,
+        ) != 0
+    {
         error!(c"Failed to set regions\n");
     }
 
-    if !targets.is_null() && crate::htslib_rs::vcf::bcf_sr_set_targets(sr, targets, 0, 0) != 0 {
+    if !targets.is_null()
+        && crate::htslib_rs::vcf::bcf_sr_set_targets(
+            &mut *sr,
+            std::ffi::CStr::from_ptr(targets).to_bytes(),
+            0,
+            0,
+        ) != 0
+    {
         error!(c"Failed to set targets\n");
     }
 
@@ -400,7 +413,11 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
     let mut i = 0;
     while i < nvcf {
         if usefptr == 0 {
-            if crate::htslib_rs::vcf::bcf_sr_add_reader(sr, *vcfs.add(i as usize)) == 0 {
+            if crate::htslib_rs::vcf::bcf_sr_add_reader(
+                &mut *sr,
+                std::ffi::CStr::from_ptr(*vcfs.add(i as usize)).to_bytes(),
+            ) == 0
+            {
                 error!(
                     c"Failed to open %s: %s\n",
                     *vcfs.add(i as usize),
@@ -431,8 +448,17 @@ pub unsafe fn test_test_bcf_sr_c_126_main(argc: c_int, argv: *mut *mut c_char) -
                     crate::htslib_rs::hts::HTS_IDX_DELIM.as_ptr().cast(),
                 ));
             }
-            if crate::htslib_rs::vcf::bcf_sr_add_hreader(sr, *htsfp.add(i as usize), 1, idxname)
-                == 0
+            let idxname_arg = if idxname.is_null() {
+                None
+            } else {
+                Some(std::ffi::CStr::from_ptr(idxname).to_bytes())
+            };
+            if crate::htslib_rs::vcf::bcf_sr_add_hreader(
+                &mut *sr,
+                &mut *(*htsfp.add(i as usize)),
+                1,
+                idxname_arg,
+            ) == 0
             {
                 error!(
                     c"Failed to add reader %s: %s\n",

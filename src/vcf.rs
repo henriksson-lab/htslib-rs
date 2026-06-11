@@ -2889,7 +2889,7 @@ unsafe fn vcf_parse_format_dict2(
         p: std::ptr::null(),
     };
     let mut j: usize = 0;
-    let mut t = kstrtok(p, c":".as_ptr(), &mut aux1);
+    let mut t = kstrtok(Some(CStr::from_ptr(p).to_bytes()), Some(b":"), &mut aux1);
     while !t.is_null() {
         if j >= MAX_N_FMT {
             (*v).errcode |= BCF_ERR_LIMITS as c_int;
@@ -2961,7 +2961,7 @@ unsafe fn vcf_parse_format_dict2(
         (*v).set_n_fmt((*v).n_fmt() + 1);
 
         j += 1;
-        t = kstrtok(std::ptr::null(), std::ptr::null(), &mut aux1);
+        t = kstrtok(None, None, &mut aux1);
     }
     0
 }
@@ -3709,7 +3709,7 @@ unsafe fn vcf_parse_filter(
         p: std::ptr::null(),
     };
     let mut i: usize = 0;
-    let mut t = kstrtok(p, c";".as_ptr(), &mut aux1);
+    let mut t = kstrtok(Some(CStr::from_ptr(p).to_bytes()), Some(b";"), &mut aux1);
     while !t.is_null() {
         *(aux1.p as *mut c_char) = 0;
         let mut k = kh_get_vdict(d, t);
@@ -3747,7 +3747,7 @@ unsafe fn vcf_parse_filter(
         }
         a_flt[i] = (*vdict_val(d, k)).id;
         i += 1;
-        t = kstrtok(std::ptr::null(), std::ptr::null(), &mut aux1);
+        t = kstrtok(None, None, &mut aux1);
     }
 
     bcf_enc_vint(str_, n_flt, a_flt.as_mut_ptr(), -1);
@@ -4010,7 +4010,11 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     let mut overflow: c_int;
 
     // CHROM
-    let mut p = kstrtok((*s).data.as_ptr().cast(), c"\t".as_ptr(), &mut aux);
+    let mut p = kstrtok(
+        Some(CStr::from_ptr((*s).data.as_ptr().cast()).to_bytes()),
+        Some(b"\t"),
+        &mut aux,
+    );
     if p.is_null() {
         return ret;
     }
@@ -4036,7 +4040,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     (*v).rid = (*vdict_val(d_ctg, k)).id;
 
     // POS
-    p = kstrtok(std::ptr::null(), std::ptr::null(), &mut aux);
+    p = kstrtok(None, None, &mut aux);
     if p.is_null() {
         return ret;
     }
@@ -4063,7 +4067,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     }
 
     // ID
-    p = kstrtok(std::ptr::null(), std::ptr::null(), &mut aux);
+    p = kstrtok(None, None, &mut aux);
     if p.is_null() {
         return ret;
     }
@@ -4077,7 +4081,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     }
 
     // REF
-    p = kstrtok(std::ptr::null(), std::ptr::null(), &mut aux);
+    p = kstrtok(None, None, &mut aux);
     if p.is_null() {
         return ret;
     }
@@ -4089,7 +4093,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     (*v).rlen = (q as usize - p as usize) as hts_pos_t;
 
     // ALT
-    p = kstrtok(std::ptr::null(), std::ptr::null(), &mut aux);
+    p = kstrtok(None, None, &mut aux);
     if p.is_null() {
         return ret;
     }
@@ -4122,7 +4126,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     }
 
     // QUAL
-    p = kstrtok(std::ptr::null(), std::ptr::null(), &mut aux);
+    p = kstrtok(None, None, &mut aux);
     if p.is_null() {
         return ret;
     }
@@ -4139,7 +4143,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     }
 
     // FILTER
-    p = kstrtok(std::ptr::null(), std::ptr::null(), &mut aux);
+    p = kstrtok(None, None, &mut aux);
     if p.is_null() {
         return ret;
     }
@@ -4158,7 +4162,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     }
 
     // INFO
-    p = kstrtok(std::ptr::null(), std::ptr::null(), &mut aux);
+    p = kstrtok(None, None, &mut aux);
     if p.is_null() {
         return ret;
     }
@@ -4173,7 +4177,7 @@ unsafe fn vcf_parse_native(s: *mut kstring_t, h: *const bcf_hdr_t, v: *mut bcf1_
     }
 
     // FORMAT; optional
-    p = kstrtok(std::ptr::null(), std::ptr::null(), &mut aux);
+    p = kstrtok(None, None, &mut aux);
     if !p.is_null() {
         q = aux.p as *mut c_char;
         *q = 0;
@@ -4475,7 +4479,7 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
     if (*v).qual.to_bits() == bcf_float_missing {
         kputc_(b'.' as c_int, &mut *s);
     } else {
-        kputd((*v).qual as f64, s);
+        kputd((*v).qual as f64, &mut *s);
     }
     kputc_(b'\t' as c_int, &mut *s); // FILTER
     if !(*v).d.flt.is_empty() {
@@ -4596,7 +4600,7 @@ pub unsafe fn vcf_format(h: *const bcf_hdr_t, v: *const bcf1_t, s: *mut kstring_
                 if (*z).v1.f.to_bits() == bcf_float_missing {
                     kputc_(b'.' as c_int, &mut *s);
                 } else {
-                    kputd((*z).v1.f as f64, s);
+                    kputd((*z).v1.f as f64, &mut *s);
                 }
             } else if (*z).type_ == BCF_BT_CHAR as c_int {
                 kputc_((*z).v1.i as c_int, &mut *s);
@@ -12358,7 +12362,7 @@ unsafe fn bcf_fmt_array1(s: *mut kstring_t, type_: c_int, data: *mut c_void) -> 
                 e |= (if v == bcf_float_missing {
                     kputc_(b'.' as c_int, &mut *s)
                 } else {
-                    kputd(le_to_float(p) as f64, s)
+                    kputd(le_to_float(p) as f64, &mut *s)
                 }) < 0;
             }
         }
@@ -12453,7 +12457,7 @@ pub unsafe fn bcf_fmt_array(s: *mut kstring_t, n: c_int, type_: c_int, data: *mu
                 4usize,
                 |v| v == bcf_float_missing,
                 |v| v == bcf_float_vector_end,
-                |p, _v| kputd(le_to_float(p) as f64, s)
+                |p, _v| kputd(le_to_float(p) as f64, &mut *s)
             ),
             _ => {
                 let msg = std::ffi::CString::new(format!("Unexpected type {}", type_))
@@ -13036,7 +13040,7 @@ unsafe fn sr_readers_next_region(files: *mut bcf_srs_t) -> c_int {
         let reg = (*files).regions;
         let prev_iseq = (*reg).iseq;
         let prev_end = (*reg).end;
-        if bcf_sr_regions_next(reg) < 0 {
+        if bcf_sr_regions_next(&mut *reg) < 0 {
             return -1;
         }
         (*reg).prev_end = if prev_iseq == (*reg).iseq {
@@ -13301,13 +13305,13 @@ pub(crate) unsafe fn sr_next_line(files: *mut bcf_srs_t) -> c_int {
                 if min_pos > pos {
                     min_pos = pos;
                     chr = bcf_seqname((*r).header, *(*r).buffer.add(1));
-                    bcf_sr_sort_c_324_bcf_sr_sort_set_active(
-                        Some(&mut (*bcf_sr_aux_mut(files)).sort),
+                    bcf_sr_sort_set_active(
+                        &mut (*bcf_sr_aux_mut(files)).sort,
                         i as c_int,
                     );
                 } else if min_pos == pos {
-                    bcf_sr_sort_c_331_bcf_sr_sort_add_active(
-                        Some(&mut (*bcf_sr_aux_mut(files)).sort),
+                    bcf_sr_sort_add_active(
+                        &mut (*bcf_sr_aux_mut(files)).sort,
                         i as c_int,
                     );
                 }
@@ -13344,7 +13348,13 @@ pub(crate) unsafe fn sr_next_line(files: *mut bcf_srs_t) -> c_int {
                     } else {
                         libc::abort();
                     }
-                    let overlap = if bcf_sr_regions_overlap((*files).targets, chr, beg, end) == 0 {
+                    let overlap = if bcf_sr_regions_overlap(
+                        &mut *(*files).targets,
+                        CStr::from_ptr(chr).to_bytes(),
+                        beg,
+                        end,
+                    ) == 0
+                    {
                         1
                     } else {
                         0
@@ -13369,7 +13379,12 @@ pub(crate) unsafe fn sr_next_line(files: *mut bcf_srs_t) -> c_int {
             return 0;
         }
 
-        bcf_sr_sort_c_593_bcf_sr_sort_next(files, &mut (*bcf_sr_aux_mut(files)).sort, chr, min_pos)
+        bcf_sr_sort_next(
+            &mut *files,
+            &mut (*bcf_sr_aux_mut(files)).sort,
+            CStr::from_ptr(chr),
+            min_pos,
+        )
     }
 }
 
@@ -13540,9 +13555,9 @@ pub(crate) unsafe fn bcf_sr_regions_overlap_inner(
 
         if (*reg).prev_seq == -1 || iseq != (*reg).prev_seq || (*reg).prev_start > start {
             if missed_reg_handler != 0 && (*reg).prev_seq != -1 && (*reg).iseq != -1 {
-                bcf_sr_regions_flush(reg);
+                bcf_sr_regions_flush(&mut *reg);
             }
-            bcf_sr_regions_seek(reg, seq);
+            bcf_sr_regions_seek(&mut *reg, CStr::from_ptr(seq).to_bytes());
             (*reg).start = -1;
             (*reg).end = -1;
         }
@@ -13556,7 +13571,7 @@ pub(crate) unsafe fn bcf_sr_regions_overlap_inner(
             if !(iseq == (*reg).iseq && (*reg).end < start) {
                 break;
             }
-            if bcf_sr_regions_next(reg) < 0 {
+            if bcf_sr_regions_next(&mut *reg) < 0 {
                 return -2;
             }
             if (*reg).iseq != iseq {
@@ -15434,8 +15449,8 @@ mod tests {
             // (e.g. 99) is what yields the empty string.
             assert!(!bcf_sr_strerror(0).is_empty());
             assert!(bcf_sr_strerror(99).is_empty());
-            assert_eq!(bcf_sr_set_threads(readers, 0), 0);
-            bcf_sr_destroy_threads(readers);
+            assert_eq!(bcf_sr_set_threads(&mut *readers, 0), 0);
+            bcf_sr_destroy_threads(&mut *readers);
             bcf_sr_destroy(readers);
         }
     }
@@ -15496,8 +15511,6 @@ mod tests {
     #[test]
     fn synced_bcf_reader_regions_destroy_releases_public_region_storage() {
         unsafe {
-            bcf_sr_regions_destroy(std::ptr::null_mut());
-
             let reg = libc::calloc(1, size_of::<bcf_sr_regions_t>()).cast::<bcf_sr_regions_t>();
             assert!(!reg.is_null());
             (*reg).fname = libc::strdup(c"regions.bed.gz".as_ptr());
@@ -15516,7 +15529,7 @@ mod tests {
             (*reg).seq_hash = super::super::sam::khash_str2int_init();
             assert!(!(*reg).seq_hash.is_null());
 
-            bcf_sr_regions_destroy(reg);
+            bcf_sr_regions_destroy(&mut *reg);
         }
     }
 
@@ -15577,7 +15590,7 @@ mod tests {
             assert_eq!(bcf_sr_regions_add(reg, c"chr2".as_ptr(), 5, 8), 0);
             assert_eq!(bcf_sr_regions_add(reg, c"chr2".as_ptr(), 1, 4), 0);
 
-            synced_bcf_reader_c_1085__regions_sort_and_merge(reg);
+            regions_sort_and_merge(reg);
 
             let regs = (*reg).regs.cast::<BcfSrRegion>();
             let chr1 = regs.add(0);
@@ -15608,35 +15621,36 @@ mod tests {
     fn synced_bcf_reader_regions_next_and_seek_iterate_in_memory_regions() {
         unsafe {
             let reg = bcf_sr_regions_init(
-                c"chr1:30-31,chr1:10-20,chr1:18-25,chr2:5-8".as_ptr(),
+                b"chr1:30-31,chr1:10-20,chr1:18-25,chr2:5-8",
                 0,
                 0,
                 1,
                 2,
-            );
+            )
+            .map_or(std::ptr::null_mut(), |p| p.as_ptr());
             assert!(!reg.is_null());
 
-            assert_eq!(bcf_sr_regions_seek(reg, c"chr1".as_ptr()), 0);
-            assert_eq!(bcf_sr_regions_next(reg), 0);
+            assert_eq!(bcf_sr_regions_seek(&mut *reg, b"chr1"), 0);
+            assert_eq!(bcf_sr_regions_next(&mut *reg), 0);
             assert_eq!((*reg).iseq, 0);
             assert_eq!((*reg).start, 9);
             assert_eq!((*reg).end, 24);
 
-            assert_eq!(bcf_sr_regions_next(reg), 0);
+            assert_eq!(bcf_sr_regions_next(&mut *reg), 0);
             assert_eq!((*reg).iseq, 0);
             assert_eq!((*reg).start, 29);
             assert_eq!((*reg).end, 30);
 
-            assert_eq!(bcf_sr_regions_next(reg), 0);
+            assert_eq!(bcf_sr_regions_next(&mut *reg), 0);
             assert_eq!((*reg).iseq, 1);
             assert_eq!((*reg).start, 4);
             assert_eq!((*reg).end, 7);
 
-            assert_eq!(bcf_sr_regions_next(reg), -1);
+            assert_eq!(bcf_sr_regions_next(&mut *reg), -1);
             assert_eq!((*reg).iseq, -1);
-            assert_eq!(bcf_sr_regions_seek(reg, c"missing".as_ptr()), -1);
+            assert_eq!(bcf_sr_regions_seek(&mut *reg, b"missing"), -1);
 
-            bcf_sr_regions_destroy(reg);
+            bcf_sr_regions_destroy(&mut *reg);
         }
     }
 
@@ -15649,39 +15663,40 @@ mod tests {
     #[test]
     fn synced_bcf_reader_regions_overlap_and_flush_use_translated_in_memory_path() {
         unsafe {
-            let reg = bcf_sr_regions_init(c"chr1:10-20,chr1:30-40,chr2:5-8".as_ptr(), 0, 0, 1, 2);
+            let reg = bcf_sr_regions_init(b"chr1:10-20,chr1:30-40,chr2:5-8", 0, 0, 1, 2)
+                .map_or(std::ptr::null_mut(), |p| p.as_ptr());
             assert!(!reg.is_null());
 
-            assert_eq!(bcf_sr_regions_overlap(reg, c"missing".as_ptr(), 0, 10), -1);
-            assert_eq!(bcf_sr_regions_overlap(reg, c"chr1".as_ptr(), 9, 9), 0);
+            assert_eq!(bcf_sr_regions_overlap(&mut *reg, b"missing", 0, 10), -1);
+            assert_eq!(bcf_sr_regions_overlap(&mut *reg, b"chr1", 9, 9), 0);
             assert_eq!((*reg).start, 9);
             assert_eq!((*reg).end, 19);
-            assert_eq!(bcf_sr_regions_overlap(reg, c"chr1".as_ptr(), 20, 28), -1);
-            assert_eq!(bcf_sr_regions_overlap(reg, c"chr1".as_ptr(), 29, 35), 0);
+            assert_eq!(bcf_sr_regions_overlap(&mut *reg, b"chr1", 20, 28), -1);
+            assert_eq!(bcf_sr_regions_overlap(&mut *reg, b"chr1", 29, 35), 0);
             assert_eq!((*reg).start, 29);
             assert_eq!((*reg).end, 39);
-            assert_eq!(bcf_sr_regions_overlap(reg, c"chr1".as_ptr(), 100, 110), -1);
+            assert_eq!(bcf_sr_regions_overlap(&mut *reg, b"chr1", 100, 110), -1);
 
-            assert_eq!(bcf_sr_regions_overlap(reg, c"chr2".as_ptr(), 4, 4), 0);
+            assert_eq!(bcf_sr_regions_overlap(&mut *reg, b"chr2", 4, 4), 0);
             let mut missed = 0;
             (*reg).missed_reg_handler = Some(count_missed_region);
             (*reg).missed_reg_data = (&mut missed as *mut c_int).cast();
-            assert_eq!(bcf_sr_regions_flush(reg), 0);
+            assert_eq!(bcf_sr_regions_flush(&mut *reg), 0);
             assert_eq!(missed, 0);
 
-            assert_eq!(bcf_sr_regions_overlap(reg, c"chr1".as_ptr(), 9, 9), 0);
-            assert_eq!(bcf_sr_regions_flush(reg), 0);
+            assert_eq!(bcf_sr_regions_overlap(&mut *reg, b"chr1", 9, 9), 0);
+            assert_eq!(bcf_sr_regions_flush(&mut *reg), 0);
             assert_eq!(missed, 1);
 
-            bcf_sr_regions_destroy(reg);
+            bcf_sr_regions_destroy(&mut *reg);
         }
     }
 
     #[test]
     fn synced_bcf_reader_regions_init_string_parses_lists_and_braced_names() {
         unsafe {
-            let reg =
-                bcf_sr_regions_init(c"chr2:10-20,{chr:odd}:7,chr1,chr2:30-".as_ptr(), 0, 0, 1, 2);
+            let reg = bcf_sr_regions_init(b"chr2:10-20,{chr:odd}:7,chr1,chr2:30-", 0, 0, 1, 2)
+                .map_or(std::ptr::null_mut(), |p| p.as_ptr());
             assert!(!reg.is_null());
             assert_eq!((*reg).nseqs, 3);
 
@@ -15724,9 +15739,9 @@ mod tests {
     #[test]
     fn synced_bcf_reader_regions_init_string_rejects_malformed_regions() {
         unsafe {
-            assert!(bcf_sr_regions_init(c"chr1:abc".as_ptr(), 0, 0, 1, 2).is_null());
-            assert!(bcf_sr_regions_init(c"{chr1:1-2".as_ptr(), 0, 0, 1, 2).is_null());
-            assert!(bcf_sr_regions_init(c"chr1:1+x".as_ptr(), 0, 0, 1, 2).is_null());
+            assert!(bcf_sr_regions_init(b"chr1:abc", 0, 0, 1, 2).is_none());
+            assert!(bcf_sr_regions_init(b"{chr1:1-2", 0, 0, 1, 2).is_none());
+            assert!(bcf_sr_regions_init(b"chr1:1+x", 0, 0, 1, 2).is_none());
         }
     }
 
@@ -15821,7 +15836,7 @@ mod tests {
     #[test]
     fn synced_bcf_reader_destroy1_accepts_null_reader() {
         unsafe {
-            synced_bcf_reader_c_461_bcf_sr_destroy1(std::ptr::null_mut(), 1);
+            bcf_sr_destroy1(std::ptr::null_mut(), 1);
         }
     }
 
@@ -15863,46 +15878,18 @@ mod tests {
             assert!(!reader.samples.is_null());
             assert!(!reader.filter_ids.is_null());
 
-            synced_bcf_reader_c_461_bcf_sr_destroy1(&mut reader, 0);
+            bcf_sr_destroy1(&mut reader, 0);
             assert_eq!(hts_close(fp), 0);
             let _ = std::fs::remove_file(path);
         }
     }
 
-    #[test]
-    fn synced_bcf_reader_add_hreader_rejects_null_inputs_locally() {
-        unsafe {
-            let errno = crate::htslib_rs::c_compat::__errno_location();
-            let saved_errno = *errno;
-
-            *errno = 0;
-            assert_eq!(
-                bcf_sr_add_hreader(
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    0,
-                    std::ptr::null()
-                ),
-                0
-            );
-            assert_eq!(*errno, libc::EINVAL);
-
-            let readers = bcf_sr_init();
-            assert!(!readers.is_null());
-            (*readers).errnum = bcf_sr_error_open_failed;
-
-            *errno = 0;
-            assert_eq!(
-                bcf_sr_add_hreader(readers, std::ptr::null_mut(), 0, std::ptr::null()),
-                0
-            );
-            assert_eq!(*errno, libc::EINVAL);
-            assert_eq!((*readers).errnum, bcf_sr_error_api_usage_error);
-
-            bcf_sr_destroy(readers);
-            *errno = saved_errno;
-        }
-    }
+    // REMOVED: `synced_bcf_reader_add_hreader_rejects_null_inputs_locally`.
+    // The collapse refactor changed `bcf_sr_add_hreader` to take
+    // `&mut bcf_srs_t`/`&mut htsFile`, which makes null pointers
+    // impossible to pass, and deleted the EINVAL/api_usage_error
+    // null-guard wrapper this test exercised. The behaviour it asserted
+    // no longer exists in the ref-based API, so the test is obsolete.
 
     #[test]
     fn synced_bcf_reader_add_hreader_reopens_named_handle_without_private_symbol() {
@@ -15926,10 +15913,10 @@ mod tests {
 
             let readers = bcf_sr_init();
             assert!(!readers.is_null());
-            assert_eq!(bcf_sr_add_hreader(readers, fp, 1, std::ptr::null()), 1);
+            assert_eq!(bcf_sr_add_hreader(&mut *readers, &mut *fp, 1, None), 1);
             assert_eq!((*readers).nreaders, 1);
             assert!(!(*readers).readers.is_null());
-            assert_eq!(bcf_sr_next_line(readers), 1);
+            assert_eq!(bcf_sr_next_line(&mut *readers), 1);
 
             bcf_sr_destroy(readers);
             let _ = std::fs::remove_file(path);
@@ -16008,23 +15995,23 @@ mod tests {
             let readers = bcf_sr_init();
             assert!(!readers.is_null());
 
-            assert_eq!(bcf_sr_set_opt_require_idx(readers), 0);
+            assert_eq!(bcf_sr_set_opt_require_idx(&mut *readers), 0);
             assert_eq!((*readers).require_index, 1);
 
-            assert_eq!(bcf_sr_set_opt_allow_no_idx(readers), 0);
+            assert_eq!(bcf_sr_set_opt_allow_no_idx(&mut *readers), 0);
             assert_eq!((*readers).require_index, 2);
 
             assert_eq!(
-                bcf_sr_set_opt_pair_logic(readers, hts_sys::BCF_SR_PAIR_BOTH as c_int),
+                bcf_sr_set_opt_pair_logic(&mut *readers, hts_sys::BCF_SR_PAIR_BOTH as c_int),
                 0
             );
             assert_eq!(
                 (*bcf_sr_aux_mut(readers)).sort.pair,
                 hts_sys::BCF_SR_PAIR_BOTH as c_int
             );
-            assert_eq!(bcf_sr_set_opt_regions_overlap(readers, 2), 0);
+            assert_eq!(bcf_sr_set_opt_regions_overlap(&mut *readers, 2), 0);
             assert_eq!((*bcf_sr_aux_mut(readers)).regions_overlap, 2);
-            assert_eq!(bcf_sr_set_opt_targets_overlap(readers, 1), 0);
+            assert_eq!(bcf_sr_set_opt_targets_overlap(&mut *readers, 1), 0);
             assert_eq!((*bcf_sr_aux_mut(readers)).targets_overlap, 1);
 
             bcf_sr_destroy(readers);
@@ -16036,22 +16023,24 @@ mod tests {
         unsafe {
             let readers = bcf_sr_init();
             assert!(!readers.is_null());
-            let regions = bcf_sr_regions_init(c"chr1:1-10".as_ptr(), 0, 0, 1, 2);
-            let targets = bcf_sr_regions_init(c"chr2:5-9".as_ptr(), 0, 0, 1, 2);
+            let regions = bcf_sr_regions_init(b"chr1:1-10", 0, 0, 1, 2)
+                .map_or(std::ptr::null_mut(), |p| p.as_ptr());
+            let targets = bcf_sr_regions_init(b"chr2:5-9", 0, 0, 1, 2)
+                .map_or(std::ptr::null_mut(), |p| p.as_ptr());
             assert!(!regions.is_null());
             assert!(!targets.is_null());
 
             (*readers).regions = regions;
             (*readers).targets = targets;
-            assert_eq!(bcf_sr_set_opt_regions_overlap(readers, 1), 0);
+            assert_eq!(bcf_sr_set_opt_regions_overlap(&mut *readers, 1), 0);
             assert_eq!(bcf_sr_regions_get_overlap(regions), 1);
-            assert_eq!(bcf_sr_set_opt_targets_overlap(readers, 2), 0);
+            assert_eq!(bcf_sr_set_opt_targets_overlap(&mut *readers, 2), 0);
             assert_eq!(bcf_sr_regions_get_overlap(targets), 2);
 
             (*readers).regions = std::ptr::null_mut();
             (*readers).targets = std::ptr::null_mut();
-            bcf_sr_regions_destroy(regions);
-            bcf_sr_regions_destroy(targets);
+            bcf_sr_regions_destroy(&mut *regions);
+            bcf_sr_regions_destroy(&mut *targets);
             bcf_sr_destroy(readers);
         }
     }
@@ -16061,23 +16050,25 @@ mod tests {
         unsafe {
             let readers = bcf_sr_init();
             assert!(!readers.is_null());
-            let regions = bcf_sr_regions_init(c"chr1:1-10".as_ptr(), 0, 0, 1, 2);
-            let targets = bcf_sr_regions_init(c"chr2:5-9".as_ptr(), 0, 0, 1, 2);
+            let regions = bcf_sr_regions_init(b"chr1:1-10", 0, 0, 1, 2)
+                .map_or(std::ptr::null_mut(), |p| p.as_ptr());
+            let targets = bcf_sr_regions_init(b"chr2:5-9", 0, 0, 1, 2)
+                .map_or(std::ptr::null_mut(), |p| p.as_ptr());
             assert!(!regions.is_null());
             assert!(!targets.is_null());
 
             (*readers).regions = regions;
             (*readers).targets = targets;
 
-            assert_eq!(bcf_sr_set_opt(readers, BCF_SR_REQUIRE_IDX, 0), 0);
+            assert_eq!(bcf_sr_set_opt(&mut *readers, BCF_SR_REQUIRE_IDX, 0), 0);
             assert_eq!((*readers).require_index, REQUIRE_IDX_);
 
-            assert_eq!(bcf_sr_set_opt(readers, BCF_SR_ALLOW_NO_IDX, 0), 0);
+            assert_eq!(bcf_sr_set_opt(&mut *readers, BCF_SR_ALLOW_NO_IDX, 0), 0);
             assert_eq!((*readers).require_index, ALLOW_NO_IDX_);
 
             assert_eq!(
                 bcf_sr_set_opt(
-                    readers,
+                    &mut *readers,
                     BCF_SR_PAIR_LOGIC,
                     hts_sys::BCF_SR_PAIR_EXACT as c_int
                 ),
@@ -16088,20 +16079,20 @@ mod tests {
                 hts_sys::BCF_SR_PAIR_EXACT as c_int
             );
 
-            assert_eq!(bcf_sr_set_opt(readers, BCF_SR_REGIONS_OVERLAP, 2), 0);
+            assert_eq!(bcf_sr_set_opt(&mut *readers, BCF_SR_REGIONS_OVERLAP, 2), 0);
             assert_eq!((*bcf_sr_aux_mut(readers)).regions_overlap, 2);
             assert_eq!(bcf_sr_regions_get_overlap(regions), 2);
 
-            assert_eq!(bcf_sr_set_opt(readers, BCF_SR_TARGETS_OVERLAP, 1), 0);
+            assert_eq!(bcf_sr_set_opt(&mut *readers, BCF_SR_TARGETS_OVERLAP, 1), 0);
             assert_eq!((*bcf_sr_aux_mut(readers)).targets_overlap, 1);
             assert_eq!(bcf_sr_regions_get_overlap(targets), 1);
 
-            assert_eq!(bcf_sr_set_opt(readers, 99, 0), 1);
+            assert_eq!(bcf_sr_set_opt(&mut *readers, 99, 0), 1);
 
             (*readers).regions = std::ptr::null_mut();
             (*readers).targets = std::ptr::null_mut();
-            bcf_sr_regions_destroy(regions);
-            bcf_sr_regions_destroy(targets);
+            bcf_sr_regions_destroy(&mut *regions);
+            bcf_sr_regions_destroy(&mut *targets);
             bcf_sr_destroy(readers);
         }
     }
@@ -16111,18 +16102,18 @@ mod tests {
         unsafe {
             let mut sort: BcfSrSort = BcfSrSort::default();
 
-            assert_eq!(bcf_sr_sort_c_324_bcf_sr_sort_set_active(Some(&mut sort), 2), 0);
+            assert_eq!(bcf_sr_sort_set_active(&mut sort, 2), 0);
             assert_eq!(sort.nactive, 1);
             assert!(sort.mactive >= 3);
             assert_eq!(*sort.active, 2);
 
-            assert_eq!(bcf_sr_sort_c_331_bcf_sr_sort_add_active(Some(&mut sort), 5), 0);
+            assert_eq!(bcf_sr_sort_add_active(&mut sort, 5), 0);
             assert_eq!(sort.nactive, 2);
             assert!(sort.mactive >= 6);
             assert_eq!(*sort.active.add(0), 2);
             assert_eq!(*sort.active.add(1), 5);
 
-            assert_eq!(bcf_sr_sort_c_324_bcf_sr_sort_set_active(Some(&mut sort), 1), 0);
+            assert_eq!(bcf_sr_sort_set_active(&mut sort, 1), 0);
             assert_eq!(sort.nactive, 1);
             assert_eq!(*sort.active, 1);
 
@@ -16135,16 +16126,8 @@ mod tests {
         unsafe {
             let mut sort: BcfSrSort = BcfSrSort::default();
 
-            assert_eq!(
-                bcf_sr_sort_c_324_bcf_sr_sort_set_active(None, 0),
-                -1
-            );
-            assert_eq!(bcf_sr_sort_c_324_bcf_sr_sort_set_active(Some(&mut sort), -1), -1);
-            assert_eq!(
-                bcf_sr_sort_c_331_bcf_sr_sort_add_active(None, 0),
-                -1
-            );
-            assert_eq!(bcf_sr_sort_c_331_bcf_sr_sort_add_active(Some(&mut sort), -1), -1);
+            assert_eq!(bcf_sr_sort_set_active(&mut sort, -1), -1);
+            assert_eq!(bcf_sr_sort_add_active(&mut sort, -1), -1);
             assert!(sort.active.is_null());
             assert_eq!(sort.nactive, 0);
         }
@@ -16153,19 +16136,9 @@ mod tests {
     #[test]
     fn synced_bcf_reader_sort_lifecycle_init_reset_and_destroy_buffers() {
         unsafe {
-            let allocated = bcf_sr_sort_c_675_bcf_sr_sort_init(std::ptr::null_mut());
-            assert!(!allocated.is_null());
-            assert_eq!((*allocated).nactive, 0);
-            assert!((*allocated).active.is_null());
-            bcf_sr_sort_c_685_bcf_sr_sort_destroy(allocated.as_mut());
-            libc::free(allocated.cast());
-
             let mut sort: BcfSrSort = BcfSrSort::default();
             sort.nactive = 7;
-            assert!(std::ptr::eq(
-                bcf_sr_sort_c_675_bcf_sr_sort_init(&mut sort),
-                &sort
-            ));
+            bcf_sr_sort_init(&mut sort);
             assert_eq!(sort.nactive, 0);
             assert!(sort.active.is_null());
 
@@ -16207,10 +16180,10 @@ mod tests {
             (*sort.vset.cast::<BcfSrSortVarSet>()).var =
                 libc::malloc(size_of::<c_int>()).cast::<c_int>();
 
-            bcf_sr_sort_c_681_bcf_sr_sort_reset(Some(&mut sort));
+            bcf_sr_sort_reset(&mut sort);
             assert!(sort.chr.is_null());
 
-            bcf_sr_sort_c_685_bcf_sr_sort_destroy(Some(&mut sort));
+            bcf_sr_sort_destroy(&mut sort);
             assert!(sort.active.is_null());
             assert!(sort.vcf_buf.is_null());
             assert!(sort.var.is_null());
@@ -16240,7 +16213,7 @@ mod tests {
             (*vcf_buf.add(1)).nrec = 22;
             (*vcf_buf.add(2)).nrec = 33;
 
-            bcf_sr_sort_c_662_bcf_sr_sort_remove_reader(None, Some(&mut sort), 0);
+            bcf_sr_sort_remove_reader(&mut sort, 0);
 
             assert_eq!((*vcf_buf.add(0)).rec, second);
             assert_eq!((*vcf_buf.add(0)).nrec, 22);
@@ -16249,7 +16222,7 @@ mod tests {
             assert!((*vcf_buf.add(2)).rec.is_null());
             assert_eq!((*vcf_buf.add(2)).nrec, 0);
 
-            bcf_sr_sort_c_685_bcf_sr_sort_destroy(Some(&mut sort));
+            bcf_sr_sort_destroy(&mut sort);
         }
     }
 
@@ -16277,10 +16250,10 @@ mod tests {
             readers.has_line = has_line.as_mut_ptr();
 
             let mut sort: BcfSrSort = BcfSrSort::default();
-            assert_eq!(bcf_sr_sort_c_324_bcf_sr_sort_set_active(Some(&mut sort), 0), 0);
+            assert_eq!(bcf_sr_sort_set_active(&mut sort, 0), 0);
 
             assert_eq!(
-                bcf_sr_sort_c_593_bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".as_ptr(), 41),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 41),
                 1
             );
             assert_eq!(reader_arr[0].nbuffer, 1);
@@ -16292,7 +16265,7 @@ mod tests {
             bcf_destroy(tmp);
             bcf_destroy(first);
             bcf_destroy(second);
-            bcf_sr_sort_c_685_bcf_sr_sort_destroy(Some(&mut sort));
+            bcf_sr_sort_destroy(&mut sort);
         }
     }
 
@@ -16329,8 +16302,8 @@ mod tests {
             readers.has_line = has_line.as_mut_ptr();
 
             let mut sort: BcfSrSort = BcfSrSort::default();
-            assert_eq!(bcf_sr_sort_c_324_bcf_sr_sort_set_active(Some(&mut sort), 0), 0);
-            assert_eq!(bcf_sr_sort_c_331_bcf_sr_sort_add_active(Some(&mut sort), 1), 0);
+            assert_eq!(bcf_sr_sort_set_active(&mut sort, 0), 0);
+            assert_eq!(bcf_sr_sort_add_active(&mut sort, 1), 0);
             sort.sr = &mut readers;
             sort.nsr = 2;
             sort.chr = c"chr2".as_ptr();
@@ -16349,7 +16322,7 @@ mod tests {
             *(*vcf_buf.add(1)).rec = rec1;
 
             assert_eq!(
-                bcf_sr_sort_c_593_bcf_sr_sort_next(&mut readers, &mut sort, c"chr2".as_ptr(), 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr2", 9),
                 2
             );
             assert_eq!(reader_arr[0].nbuffer, 0);
@@ -16364,7 +16337,7 @@ mod tests {
             bcf_destroy(rec0);
             bcf_destroy(tmp1);
             bcf_destroy(rec1);
-            bcf_sr_sort_c_685_bcf_sr_sort_destroy(Some(&mut sort));
+            bcf_sr_sort_destroy(&mut sort);
         }
     }
 
@@ -16421,10 +16394,10 @@ mod tests {
             readers.has_line = has_line.as_mut_ptr();
 
             let mut sort: BcfSrSort = BcfSrSort::default();
-            assert_eq!(bcf_sr_sort_c_324_bcf_sr_sort_set_active(Some(&mut sort), 0), 0);
-            assert_eq!(bcf_sr_sort_c_331_bcf_sr_sort_add_active(Some(&mut sort), 1), 0);
+            assert_eq!(bcf_sr_sort_set_active(&mut sort, 0), 0);
+            assert_eq!(bcf_sr_sort_add_active(&mut sort, 1), 0);
             assert_eq!(
-                bcf_sr_sort_c_593_bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".as_ptr(), 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 9),
                 2
             );
             assert_eq!(has_line, [1, 1]);
@@ -16432,21 +16405,21 @@ mod tests {
             assert_eq!(*reader_arr[1].buffer.add(0), rec1a);
 
             assert_eq!(
-                bcf_sr_sort_c_593_bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".as_ptr(), 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 9),
                 1
             );
             assert_eq!(has_line, [1, 0]);
             assert_eq!(*reader_arr[0].buffer.add(0), rec0b);
 
             assert_eq!(
-                bcf_sr_sort_c_593_bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".as_ptr(), 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 9),
                 1
             );
             assert_eq!(has_line, [0, 1]);
             assert_eq!(*reader_arr[1].buffer.add(0), rec1b);
 
             assert_eq!(
-                bcf_sr_sort_c_593_bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".as_ptr(), 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 9),
                 0
             );
             assert_eq!(reader_arr[0].nbuffer, 0);
@@ -16459,7 +16432,7 @@ mod tests {
             bcf_destroy(rec1a);
             bcf_destroy(rec1b);
             bcf_hdr_destroy(hdr);
-            bcf_sr_sort_c_685_bcf_sr_sort_destroy(Some(&mut sort));
+            bcf_sr_sort_destroy(&mut sort);
         }
     }
 
@@ -16511,11 +16484,11 @@ mod tests {
             readers.has_line = has_line.as_mut_ptr();
 
             let mut sort: BcfSrSort = BcfSrSort::default();
-            assert_eq!(bcf_sr_sort_c_324_bcf_sr_sort_set_active(Some(&mut sort), 0), 0);
-            assert_eq!(bcf_sr_sort_c_331_bcf_sr_sort_add_active(Some(&mut sort), 1), 0);
+            assert_eq!(bcf_sr_sort_set_active(&mut sort, 0), 0);
+            assert_eq!(bcf_sr_sort_add_active(&mut sort, 1), 0);
 
             assert_eq!(
-                bcf_sr_sort_c_593_bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".as_ptr(), 14),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 14),
                 2
             );
             assert_eq!(has_line, [1, 1]);
@@ -16523,7 +16496,7 @@ mod tests {
             assert_eq!(*reader_arr[1].buffer.add(0), rec1);
 
             assert_eq!(
-                bcf_sr_sort_c_593_bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".as_ptr(), 14),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 14),
                 1
             );
             assert_eq!(has_line, [1, 0]);
@@ -16535,7 +16508,7 @@ mod tests {
             bcf_destroy(tmp1);
             bcf_destroy(rec1);
             bcf_hdr_destroy(hdr);
-            bcf_sr_sort_c_685_bcf_sr_sort_destroy(Some(&mut sort));
+            bcf_sr_sort_destroy(&mut sort);
         }
     }
 
@@ -16616,18 +16589,18 @@ mod tests {
             readers.has_line = has_line.as_mut_ptr();
 
             let mut sort: BcfSrSort = BcfSrSort::default();
-            assert_eq!(bcf_sr_sort_c_324_bcf_sr_sort_set_active(Some(&mut sort), 0), 0);
-            assert_eq!(bcf_sr_sort_c_331_bcf_sr_sort_add_active(Some(&mut sort), 1), 0);
+            assert_eq!(bcf_sr_sort_set_active(&mut sort, 0), 0);
+            assert_eq!(bcf_sr_sort_add_active(&mut sort, 1), 0);
 
             assert_eq!(
-                bcf_sr_sort_c_593_bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".as_ptr(), 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 9),
                 1
             );
             assert_eq!(has_line, [1, 0]);
             assert_eq!(*reader_arr[0].buffer.add(0), rec0);
 
             assert_eq!(
-                bcf_sr_sort_c_593_bcf_sr_sort_next(&mut readers, &mut sort, c"chr1".as_ptr(), 9),
+                bcf_sr_sort_next(&mut readers, &mut sort, c"chr1", 9),
                 1
             );
             assert_eq!(has_line, [0, 1]);
@@ -16638,7 +16611,7 @@ mod tests {
             bcf_destroy(tmp1);
             bcf_destroy(rec1);
             bcf_hdr_destroy(hdr);
-            bcf_sr_sort_c_685_bcf_sr_sort_destroy(Some(&mut sort));
+            bcf_sr_sort_destroy(&mut sort);
         }
     }
 
@@ -16675,7 +16648,7 @@ mod tests {
             (*readers).regions = &mut regions;
             (*bcf_sr_aux_mut(readers)).sort.chr = c"chr2".as_ptr();
 
-            assert_eq!(bcf_sr_seek(readers, std::ptr::null(), 0), 0);
+            assert_eq!(bcf_sr_seek(&mut *readers, None, 0), 0);
             assert_eq!(seq_regions[0].creg, -1);
             assert_eq!(seq_regions[1].creg, -1);
             assert_eq!(regions.iseq, 0);
@@ -17368,11 +17341,11 @@ mod tests {
             let native = {
                 let sr = bcf_sr_init();
                 assert!(!sr.is_null());
-                bcf_sr_set_opt(sr, BCF_SR_REQUIRE_IDX, 0);
-                assert_eq!(bcf_sr_add_reader(sr, a_c.as_ptr()), 1);
-                assert_eq!(bcf_sr_add_reader(sr, b_c.as_ptr()), 1);
+                bcf_sr_set_opt(&mut *sr, BCF_SR_REQUIRE_IDX, 0);
+                assert_eq!(bcf_sr_add_reader(&mut *sr, a_c.to_bytes()), 1);
+                assert_eq!(bcf_sr_add_reader(&mut *sr, b_c.to_bytes()), 1);
                 let mut out: Vec<String> = Vec::new();
-                while bcf_sr_next_line(sr) > 0 {
+                while bcf_sr_next_line(&mut *sr) > 0 {
                     for i in 0..(*sr).nreaders {
                         if *(*sr).has_line.add(i as usize) == 0 {
                             out.push(format!("{i}\t-"));

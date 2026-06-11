@@ -76,17 +76,17 @@ unsafe fn format_adjusted_fastq_records(
         let mut beg = 0;
         let mut end = 0;
         assert!(!fai_parse_region(fai, region.as_ptr(), &mut tid, &mut beg, &mut end, 0).is_null());
-        assert!(fai_adjust_region(fai, tid, &mut beg, &mut end) >= 0);
+        assert!(fai_adjust_region(&*fai, tid, &mut beg, &mut end) >= 0);
 
-        let name = faidx_iseq(fai, tid);
+        let name = CString::new(faidx_iseq(&*fai, tid).unwrap()).unwrap();
         let mut seq_len = 0;
         let seq = fetched_string(
-            faidx_fetch_seq64(fai, name, beg, end - 1, &mut seq_len),
+            faidx_fetch_seq64(fai, name.as_ptr(), beg, end - 1, &mut seq_len),
             seq_len,
         );
         let mut qual_len = 0;
         let qual = fetched_string(
-            faidx_fetch_qual64(fai, name, beg, end - 1, &mut qual_len),
+            faidx_fetch_qual64(fai, name.as_ptr(), beg, end - 1, &mut qual_len),
             qual_len,
         );
         assert_eq!(seq_len, qual_len);
@@ -113,12 +113,12 @@ unsafe fn format_adjusted_fasta_records(
         let mut beg = 0;
         let mut end = 0;
         assert!(!fai_parse_region(fai, region.as_ptr(), &mut tid, &mut beg, &mut end, 0).is_null());
-        assert!(fai_adjust_region(fai, tid, &mut beg, &mut end) >= 0);
+        assert!(fai_adjust_region(&*fai, tid, &mut beg, &mut end) >= 0);
 
-        let name = faidx_iseq(fai, tid);
+        let name = CString::new(faidx_iseq(&*fai, tid).unwrap()).unwrap();
         let mut seq_len = 0;
         let seq = fetched_string(
-            faidx_fetch_seq64(fai, name, beg, end - 1, &mut seq_len),
+            faidx_fetch_seq64(fai, name.as_ptr(), beg, end - 1, &mut seq_len),
             seq_len,
         );
 
@@ -148,7 +148,7 @@ fn original_fastq_faidx_tst_named_helper_edges_match_expected_index() {
         assert_eq!(fai_line_length(fai, c"SRR014849.203935_3".as_ptr()), 144);
         assert_eq!(faidx_has_seq(fai, c"SRR014849.203935_3".as_ptr()), 1);
         assert_eq!(faidx_has_seq(fai, c"absent".as_ptr()), 0);
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)), c"FAKE0005_1");
+        assert_eq!(faidx_iseq(&*fai, 0).unwrap(), c"FAKE0005_1".to_bytes());
         assert_eq!(faidx_seq_len(fai, c"FSRRS4401CM938_1".as_ptr()), 453);
         assert_eq!(faidx_seq_len64(fai, c"FSRRS4401AOV6A_4".as_ptr()), 309);
 
@@ -232,7 +232,7 @@ fn original_fasta_faidx_handles_empty_name_and_crlf_line_metadata() {
 
         assert_eq!(faidx_has_seq(fai, c"".as_ptr()), 1);
         assert_eq!(faidx_seq_len64(fai, c"".as_ptr()), 4);
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)), c"");
+        assert_eq!(faidx_iseq(&*fai, 0).unwrap(), c"".to_bytes());
 
         let mut len = 0;
         let seq = faidx_fetch_seq64(fai, c"".as_ptr(), 0, 3, &mut len);

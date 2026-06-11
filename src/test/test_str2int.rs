@@ -190,7 +190,13 @@ pub unsafe fn test_test_str2int_c_141_check_strprint2(
     expect: *const c_char,
 ) -> c_int {
     let mut buf = [0 as c_char; 100];
-    crate::htslib_rs::hts::hts_strprint(buf.as_mut_ptr(), destlen, quote, str_, len);
+    let slen = if len == usize::MAX {
+        libc::strlen(str_)
+    } else {
+        len
+    };
+    let s = std::slice::from_raw_parts(str_.cast::<u8>(), slen);
+    crate::htslib_rs::hts::hts_strprint(&mut buf[..destlen], quote, s);
     if libc::strcmp(buf.as_ptr(), expect) != 0 {
         libc::fprintf(
             crate::htslib_rs::c_compat::stderr.cast(),

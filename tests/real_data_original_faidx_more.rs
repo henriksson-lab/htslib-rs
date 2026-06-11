@@ -169,14 +169,14 @@ unsafe fn adjusted_fetch_seq64_record(
 
     let orig_beg = beg;
     let orig_end = end;
-    let adjusted = fai_adjust_region(fai, tid, &mut beg, &mut end);
+    let adjusted = fai_adjust_region(&*fai, tid, &mut beg, &mut end);
     assert!(adjusted >= 0);
     assert_eq!((adjusted & 1) != 0, beg != orig_beg);
     assert_eq!((adjusted & 2) != 0, end != orig_end);
 
     let mut len = 0;
-    let name = faidx_iseq(fai, tid);
-    let seq = faidx_fetch_seq64(fai, name, beg, end - 1, &mut len);
+    let name = CString::new(faidx_iseq(&*fai, tid).unwrap()).unwrap();
+    let seq = faidx_fetch_seq64(fai, name.as_ptr(), beg, end - 1, &mut len);
     (fetched_string(seq, len), len)
 }
 
@@ -226,16 +226,16 @@ unsafe fn fastq_fetch_seq64_record(
     let mut end = 0;
     assert!(!fai_parse_region(fai, region.as_ptr(), &mut tid, &mut beg, &mut end, 0).is_null());
 
-    let name = faidx_iseq(fai, tid);
+    let name = CString::new(faidx_iseq(&*fai, tid).unwrap()).unwrap();
     let mut seq_len = 0;
     let seq = fetched_string(
-        faidx_fetch_seq64(fai, name, beg, end - 1, &mut seq_len),
+        faidx_fetch_seq64(fai, name.as_ptr(), beg, end - 1, &mut seq_len),
         seq_len,
     );
 
     let mut qual_len = 0;
     let qual = fetched_string(
-        faidx_fetch_qual64(fai, name, beg, end - 1, &mut qual_len),
+        faidx_fetch_qual64(fai, name.as_ptr(), beg, end - 1, &mut qual_len),
         qual_len,
     );
     assert_eq!(seq_len, qual_len);
@@ -305,18 +305,18 @@ unsafe fn expected_read_fast_index_multi_fastq(path: &std::path::Path, regions: 
         if remaining.is_null() {
             break;
         }
-        assert_eq!(fai_adjust_region(fai, tid, &mut beg, &mut end), 0);
+        assert_eq!(fai_adjust_region(&*fai, tid, &mut beg, &mut end), 0);
 
-        let name = faidx_iseq(fai, tid);
+        let name = CString::new(faidx_iseq(&*fai, tid).unwrap()).unwrap();
         let mut len = 0;
-        let seq = faidx_fetch_seq64(fai, name, beg, end, &mut len);
+        let seq = faidx_fetch_seq64(fai, name.as_ptr(), beg, end, &mut len);
         assert!(!seq.is_null());
         expected.extend_from_slice(
             format!("Data: {len} {}\n", CStr::from_ptr(seq).to_string_lossy()).as_bytes(),
         );
         libc::free(seq.cast());
 
-        let qual = faidx_fetch_qual64(fai, name, beg, end, &mut len);
+        let qual = faidx_fetch_qual64(fai, name.as_ptr(), beg, end, &mut len);
         assert!(!qual.is_null());
         expected.extend_from_slice(
             format!("Qual: {len} {}\n", CStr::from_ptr(qual).to_string_lossy()).as_bytes(),
@@ -343,10 +343,7 @@ fn fastq_expected_index_metadata_matches_faidx_apis() {
         assert_eq!(faidx_nseq(fai), rows.len() as i32);
         for (i, row) in rows.iter().enumerate() {
             let name = CString::new(row.name.as_bytes()).unwrap();
-            assert_eq!(
-                CStr::from_ptr(faidx_iseq(fai, i as i32)).to_bytes(),
-                row.name.as_bytes()
-            );
+            assert_eq!(faidx_iseq(&*fai, i as i32).unwrap(), row.name.as_bytes());
             assert_eq!(faidx_has_seq(fai, name.as_ptr()), 1);
             assert_eq!(faidx_seq_len(fai, name.as_ptr()), row.len as i32);
             assert_eq!(faidx_seq_len64(fai, name.as_ptr()), row.len);
@@ -372,7 +369,7 @@ fn fai_none_format_matches_original_existing_index_reading_rules() {
         );
         assert!(!fai.is_null());
         assert_eq!(faidx_nseq(fai), 105);
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)), c"FAKE0005_1");
+        assert_eq!(faidx_iseq(&*fai, 0).unwrap(), c"FAKE0005_1".to_bytes());
         fai_destroy(fai);
 
         let fasta = c_fixture("htslib/test/faidx/faidx.fa");

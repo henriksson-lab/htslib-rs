@@ -68,8 +68,17 @@ pub unsafe fn samples_update_header_c_49_main(argc: c_int, argv: *mut *mut c_cha
     // variadic C entry-point would write a C-allocated sam_hrecs_t into
     // (*h).hrecs that our native sam_hdr_rebuild/sam_hdr_write cannot
     // interpret afterwards.
-    if sam::sam_hdr_update_line(&mut *in_samhdr, CStr::from_ptr(header), id, idval, &[(tag, val)])
-        < 0
+    let id_pair = if id.is_null() {
+        None
+    } else {
+        Some((CStr::from_ptr(id), CStr::from_ptr(idval)))
+    };
+    if sam::sam_hdr_update_line(
+        &mut *in_samhdr,
+        CStr::from_ptr(header),
+        id_pair,
+        &[(tag, val)],
+    ) < 0
     {
         libc::printf(c"Failed to update data\n".as_ptr());
     } else if sam::sam_hdr_write(outfile, in_samhdr) < 0 {

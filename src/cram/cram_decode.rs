@@ -32,7 +32,7 @@ pub(crate) unsafe fn cram_cram_decode_c_71_cram_decode_TD(
             c"cram_decode_TD".as_ptr(),
             c"More than one TD block found in compression header".as_ptr(),
         );
-        cram_cram_io_c_1565_cram_free_block((*h).td_blk.cast());
+        cram_free_block((*h).td_blk.cast());
         free((*h).tl.cast());
         (*h).td_blk = std::ptr::null_mut();
         (*h).tl = std::ptr::null_mut();
@@ -44,16 +44,16 @@ pub(crate) unsafe fn cram_cram_decode_c_71_cram_decode_TD(
     let blk_size = (vv.varint_get32.unwrap())(&mut cp, endp, &mut err) as i32;
     if blk_size == 0 {
         (*h).ntl = 0;
-        cram_cram_io_c_1565_cram_free_block(b);
+        cram_free_block(b);
         return cp.offset_from(op) as c_int;
     }
     if err != 0 || blk_size < 0 || (endp.offset_from(cp) as i64) < blk_size as i64 {
-        cram_cram_io_c_1565_cram_free_block(b);
+        cram_free_block(b);
         return -1;
     }
 
     if cram_cram_io_h_248_block_append(b, cp.cast(), blk_size as usize) < 0 {
-        cram_cram_io_c_1565_cram_free_block(b);
+        cram_free_block(b);
         return -1;
     }
     cp = cp.add(blk_size as usize);
@@ -62,7 +62,7 @@ pub(crate) unsafe fn cram_cram_decode_c_71_cram_decode_TD(
     if *(*bl).data.add((*bl).byte - 1) != 0
         && cram_cram_io_h_261_block_append_char(b, b'\0' as c_char) < 0
     {
-        cram_cram_io_c_1565_cram_free_block(b);
+        cram_free_block(b);
         return -1;
     }
 
@@ -80,7 +80,7 @@ pub(crate) unsafe fn cram_cram_decode_c_71_cram_decode_TD(
 
     (*h).tl = calloc(ntl as u64, std::mem::size_of::<*mut u8>() as u64).cast::<*mut u8>();
     if (*h).tl.is_null() {
-        cram_cram_io_c_1565_cram_free_block(b);
+        cram_free_block(b);
         return -1;
     }
     let mut nidx: c_int = 0;
@@ -102,8 +102,8 @@ pub(crate) unsafe fn cram_cram_decode_c_71_cram_decode_TD(
 pub(crate) mod decode_pipeline {
     use super::{
         cram_cram_codecs_c_3968_cram_codec_to_id,
-        cram_cram_decode_c_145_cram_decode_compression_header, cram_cram_io_c_1565_cram_free_block,
-        cram_cram_io_c_1576_cram_uncompress_block, cram_cram_io_c_3213_cram_ref_decr,
+        cram_cram_decode_c_145_cram_decode_compression_header,
+        cram_cram_io_c_3213_cram_ref_decr,
         cram_cram_io_c_3409_cram_get_ref, cram_cram_io_c_3705_cram_free_container,
         cram_cram_io_c_3788_cram_read_container, cram_cram_io_c_4421_cram_free_slice,
         cram_cram_io_c_4568_cram_read_slice, cram_cram_io_h_183_cram_get_block_by_id,
@@ -647,7 +647,7 @@ pub(crate) mod decode_pipeline {
     // hts_sys / layout types the native functions expect, and delegate.
     // =======================================================================
     unsafe fn cram_uncompress_block(b: *mut cram_block) -> c_int {
-        cram_cram_io_c_1576_cram_uncompress_block(b.cast())
+        super::cram_uncompress_block(&mut *b.cast())
     }
     unsafe fn cram_get_block_by_id(s: *mut cram_slice, id: c_int) -> *mut cram_block {
         cram_cram_io_h_183_cram_get_block_by_id(s.cast(), id).cast()
@@ -685,7 +685,7 @@ pub(crate) mod decode_pipeline {
         cram_cram_io_c_3213_cram_ref_decr(r.cast(), id);
     }
     unsafe fn cram_free_block(b: *mut cram_block) {
-        cram_cram_io_c_1565_cram_free_block(b.cast());
+        super::cram_free_block(b.cast());
     }
     unsafe fn cram_read_container(fd: *mut cram_fd) -> *mut cram_container {
         cram_cram_io_c_3788_cram_read_container(fd.cast()).cast()
@@ -3134,8 +3134,7 @@ pub(crate) mod decode_pipeline {
                 let _ = sam_hdr_find_tag_id(
                     &mut *sh,
                     c"SQ",
-                    b"SN\0" as *const u8 as *const c_char,
-                    rname,
+                    Some((c"SN", std::ffi::CStr::from_ptr(rname))),
                     c"M5",
                     &mut ks,
                 );
@@ -3774,7 +3773,7 @@ pub(crate) mod decode_pipeline {
                 exit_code: 0,
             },
         );
-        let nonblock = if hts_tpool_process_sz((*fd).rqueue.cast()) != 0 {
+        let nonblock = if hts_tpool_process_sz(&mut *(*fd).rqueue.cast()) != 0 {
             1
         } else {
             0
@@ -4220,7 +4219,7 @@ pub(crate) mod decode_pipeline {
                 if !(*fd).job_pending.is_null() {
                     break;
                 }
-                if hts_tpool_process_len((*fd).rqueue.cast())
+                if hts_tpool_process_len(&mut *(*fd).rqueue.cast())
                     > hts_tpool_process_qsize((*fd).rqueue.cast())
                 {
                     break;
@@ -4231,12 +4230,12 @@ pub(crate) mod decode_pipeline {
             s_curr = std::ptr::null_mut();
         }
         if !(*fd).pool.is_null() {
-            if (*fd).ooc != 0 && hts_tpool_process_empty((*fd).rqueue.cast()) != 0 {
+            if (*fd).ooc != 0 && hts_tpool_process_empty(&mut *(*fd).rqueue.cast()) != 0 {
                 (*fd).eof = 1;
                 return std::ptr::null_mut();
             }
             let res = hts_tpool_next_result_wait((*fd).rqueue.cast());
-            if res.is_null() || hts_tpool_result_data(res).is_null() {
+            if res.is_null() || hts_tpool_result_data(&mut *res).is_null() {
                 hts_log!(
                     HTS_LOG_ERROR,
                     b"cram_next_slice\0" as *const u8 as *const c_char,
@@ -4244,7 +4243,7 @@ pub(crate) mod decode_pipeline {
                 );
                 return std::ptr::null_mut();
             }
-            let j_0 = hts_tpool_result_data(res) as *mut cram_decode_job;
+            let j_0 = hts_tpool_result_data(&mut *res) as *mut cram_decode_job;
             let (Some(c), Some(s)) = ((*j_0).c, (*j_0).s) else {
                 hts_log!(
                     HTS_LOG_ERROR,
@@ -4420,7 +4419,7 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
     }
 
     if (*bl).method != CRAM_BLOCK_METHOD_RAW
-        && cram_cram_io_c_1576_cram_uncompress_block(b.cast()) != 0
+        && cram_uncompress_block(&mut *b.cast()) != 0
     {
         free(hdr.cast());
         return std::ptr::null_mut();
@@ -4920,7 +4919,7 @@ pub unsafe fn cram_cram_decode_c_955_cram_decode_slice_header(
 
     // Uncompress in place if the block is not stored RAW.
     if (*bl).method != CRAM_BLOCK_METHOD_RAW
-        && cram_cram_io_c_1576_cram_uncompress_block(b.cast()) < 0
+        && cram_uncompress_block(&mut *b.cast()) < 0
     {
         return std::ptr::null_mut();
     }

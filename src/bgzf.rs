@@ -2168,7 +2168,7 @@ unsafe fn bgzf_mt_writer_impl(arg: *mut c_void) -> *mut c_void {
         }
         // Recover ownership of the job from the tpool's raw `*mut c_void`
         // result-data hand-off (the genuine cross-thread FFI boundary).
-        let job = NonNull::new(super::thread_pool::hts_tpool_result_data(result).cast::<bgzf_job>())
+        let job = NonNull::new(super::thread_pool::hts_tpool_result_data(&mut *result).cast::<bgzf_job>())
             .map(|p| Box::from_raw(p.as_ptr()));
 
         if job.as_deref().is_none_or(|j| j.errcode != 0) {
@@ -2367,7 +2367,7 @@ pub unsafe fn bgzf_c_1485_bgzf_mt_read_block(fp: *mut BGZF) -> c_int {
         }
         // Recover ownership of the job the worker handed back through the
         // tpool's raw `*mut c_void` result-data hand-off.
-        let job = Box::from_raw(super::thread_pool::hts_tpool_result_data(result).cast::<bgzf_job>());
+        let job = Box::from_raw(super::thread_pool::hts_tpool_result_data(&mut *result).cast::<bgzf_job>());
         super::thread_pool::hts_tpool_delete_result(result, 0);
         (*mt).jobs_pending -= 1;
 
@@ -2567,7 +2567,7 @@ pub unsafe fn bgzf_c_1897_mt_flush_queue(fp: *mut BGZF) -> c_int {
     // Wait for the worker pool to finish executing every dispatched job
     // (n_input == 0 && n_processing == 0). Workers move results to the
     // out_queue; the writer thread drains them and decrements jobs_pending.
-    if super::thread_pool::hts_tpool_process_flush(out_queue.as_ptr()) != 0 {
+    if super::thread_pool::hts_tpool_process_flush(&mut *out_queue.as_ptr()) != 0 {
         add_errcode(&mut *fp, BGZF_ERR_IO);
         (*mt).errcode = BGZF_ERR_IO as c_int;
         return -1;
@@ -3372,7 +3372,7 @@ pub unsafe fn bgzf_c_1583_bgzf_mt_seek(fp: *mut BGZF) {
         crate::htslib_rs::c_compat::pthread_cond_signal(ptr::addr_of_mut!((*mt).command_c));
         return;
     };
-    super::thread_pool::hts_tpool_process_reset(out_queue.as_ptr(), 0);
+    super::thread_pool::hts_tpool_process_reset(&mut *out_queue.as_ptr(), 0);
     crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!((*mt).job_pool_m));
     (*mt).errcode = 0;
 

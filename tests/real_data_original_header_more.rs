@@ -58,8 +58,7 @@ unsafe fn assert_sam_tag_by_id(
         sam_hdr_find_tag_id(
             &mut *hdr,
             type_,
-            id_key.as_ptr(),
-            id_value.as_ptr(),
+            Some((id_key, id_value)),
             key,
             &mut ks,
         ),

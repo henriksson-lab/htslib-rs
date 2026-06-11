@@ -3306,9 +3306,9 @@ pub unsafe fn hfile_s3_c_2436_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> c_int {
     (*self_.cast::<hFILE_plugin_layout>()).name = c"Amazon S3".as_ptr();
     (*self_.cast::<hFILE_plugin_layout>()).destroy = Some(hfile_s3_c_2426_s3_exit);
     hfile_s3_c_2426_s3_exit();
-    crate::htslib_rs::kstring::kstring_c_177_ksprintf(
-        std::ptr::addr_of_mut!(HFILE_S3_USERAGENT),
-        c"htslib/%s".as_ptr(),
+    crate::htslib_rs::kstring::ksprintf(
+        &mut *std::ptr::addr_of_mut!(HFILE_S3_USERAGENT),
+        b"htslib/%s",
         &[crate::htslib_rs::kstring::KsPrintfArg::Str(
             crate::htslib_rs::hts::hts_version(),
         )],

@@ -178,7 +178,7 @@ fn reads_realn_fasta_indexes_with_exact_lengths_and_substrings() {
     unsafe {
         let realn01 = load_indexed_fasta("htslib/test/realn01.fa", "htslib/test/realn01.fa.fai");
         assert_eq!(faidx_nseq(realn01), 1);
-        assert_eq!(CStr::from_ptr(faidx_iseq(realn01, 0)), c"000000F");
+        assert_eq!(faidx_iseq(&*realn01, 0), Some(c"000000F".to_bytes()));
         assert_eq!(faidx_seq_len(realn01, c"000000F".as_ptr()), 686);
         assert_eq!(fetch_text(realn01, c"000000F:1-12"), "CAGACAAACATA");
         assert_eq!(fetch_text(realn01, c"000000F:675-686"), "GATATTTGTTAT");
@@ -186,14 +186,14 @@ fn reads_realn_fasta_indexes_with_exact_lengths_and_substrings() {
 
         let realn02 = load_indexed_fasta("htslib/test/realn02.fa", "htslib/test/realn02.fa.fai");
         assert_eq!(faidx_nseq(realn02), 1);
-        assert_eq!(CStr::from_ptr(faidx_iseq(realn02, 0)), c"17");
+        assert_eq!(faidx_iseq(&*realn02, 0), Some(c"17".to_bytes()));
         assert_eq!(faidx_seq_len(realn02, c"17".as_ptr()), 4200);
         assert_eq!(fetch_text(realn02, c"17:1-14"), "AAGCTTCTCACCCT");
         fai_destroy(realn02);
 
         let realn03 = load_indexed_fasta("htslib/test/realn03.fa", "htslib/test/realn03.fa.fai");
         assert_eq!(faidx_nseq(realn03), 1);
-        assert_eq!(CStr::from_ptr(faidx_iseq(realn03, 0)), c"MX");
+        assert_eq!(faidx_iseq(&*realn03, 0), Some(c"MX".to_bytes()));
         assert_eq!(faidx_seq_len(realn03, c"MX".as_ptr()), 11);
         assert_eq!(fetch_text(realn03, c"MX:1-11"), "CGTCTACTACG");
         fai_destroy(realn03);
@@ -209,9 +209,9 @@ fn fetches_fastq_sequences_and_quality_slices_from_expected_fai() {
         );
 
         assert_eq!(faidx_nseq(fai), 105);
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)), c"FAKE0005_1");
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 1)), c"FAKE0006_1");
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 8)), c"FSRRS4401BE7HA_1");
+        assert_eq!(faidx_iseq(&*fai, 0), Some(c"FAKE0005_1".to_bytes()));
+        assert_eq!(faidx_iseq(&*fai, 1), Some(c"FAKE0006_1".to_bytes()));
+        assert_eq!(faidx_iseq(&*fai, 8), Some(c"FSRRS4401BE7HA_1".to_bytes()));
         assert_eq!(faidx_seq_len(fai, c"FAKE0005_1".as_ptr()), 63);
         assert_eq!(faidx_seq_len(fai, c"FAKE0006_1".as_ptr()), 63);
         assert_eq!(faidx_seq_len(fai, c"FSRRS4401BE7HA_1".as_ptr()), 395);
@@ -343,7 +343,7 @@ fn fasta_index_presence_checks_use_real_fixture_names() {
         let fai = load_indexed_fasta("htslib/test/auxf.fa", "htslib/test/auxf.fa.fai");
 
         assert_eq!(faidx_nseq(fai), 1);
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)), c"Sheila");
+        assert_eq!(faidx_iseq(&*fai, 0), Some(c"Sheila".to_bytes()));
         assert_eq!(faidx_has_seq(fai, c"Sheila".as_ptr()), 1);
         assert_eq!(faidx_has_seq(fai, c"sheila".as_ptr()), 0);
         assert_eq!(faidx_seq_len(fai, c"Sheila".as_ptr()), 20);

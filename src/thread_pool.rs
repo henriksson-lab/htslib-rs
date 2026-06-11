@@ -323,14 +323,7 @@ pub unsafe fn hts_tpool_next_result_wait(q: *mut hts_tpool_process) -> *mut hts_
 }
 
 // original: hts_tpool_process_empty (htslib/thread_pool.c:258)
-pub unsafe fn hts_tpool_process_empty(q: *mut hts_tpool_process) -> i32 {
-    let Some(q) = (unsafe { process_mut(q) }) else {
-        return 1;
-    };
-    unsafe { hts_tpool_process_empty_ref(q) }
-}
-
-pub unsafe fn hts_tpool_process_empty_ref(q: &mut HtsTpoolProcess) -> i32 {
+pub unsafe fn hts_tpool_process_empty(q: &mut HtsTpoolProcess) -> i32 {
     let Some(p) = (unsafe { q_pool_mut(q) }) else {
         return 1;
     };
@@ -376,14 +369,7 @@ pub unsafe fn hts_tpool_process_ref_decr(q: *mut hts_tpool_process) {
 }
 
 // original: hts_tpool_process_len (htslib/thread_pool.c:289)
-pub unsafe fn hts_tpool_process_len(q: *mut hts_tpool_process) -> i32 {
-    let Some(q) = (unsafe { process_mut(q) }) else {
-        return 0;
-    };
-    unsafe { hts_tpool_process_len_ref(q) }
-}
-
-pub unsafe fn hts_tpool_process_len_ref(q: &mut HtsTpoolProcess) -> i32 {
+pub unsafe fn hts_tpool_process_len(q: &mut HtsTpoolProcess) -> i32 {
     let Some(p) = (unsafe { q_pool_mut(q) }) else {
         return 0;
     };
@@ -394,14 +380,7 @@ pub unsafe fn hts_tpool_process_len_ref(q: &mut HtsTpoolProcess) -> i32 {
 }
 
 // original: hts_tpool_process_sz (htslib/thread_pool.c:303)
-pub unsafe fn hts_tpool_process_sz(q: *mut hts_tpool_process) -> i32 {
-    let Some(q) = (unsafe { process_mut(q) }) else {
-        return 0;
-    };
-    unsafe { hts_tpool_process_sz_ref(q) }
-}
-
-pub unsafe fn hts_tpool_process_sz_ref(q: &mut HtsTpoolProcess) -> i32 {
+pub unsafe fn hts_tpool_process_sz(q: &mut HtsTpoolProcess) -> i32 {
     let Some(p) = (unsafe { q_pool_mut(q) }) else {
         return 0;
     };
@@ -460,14 +439,7 @@ pub unsafe fn hts_tpool_delete_result(r: *mut hts_tpool_result, _free_data: i32)
 }
 
 // original: hts_tpool_result_data (htslib/thread_pool.c:358)
-pub unsafe fn hts_tpool_result_data(r: *mut hts_tpool_result) -> *mut c_void {
-    let Some(r) = (unsafe { result_mut(r) }) else {
-        return ptr::null_mut();
-    };
-    hts_tpool_result_data_ref(r)
-}
-
-pub fn hts_tpool_result_data_ref(r: &mut HtsTpoolResult) -> *mut c_void {
+pub fn hts_tpool_result_data(r: &mut HtsTpoolResult) -> *mut c_void {
     r.data.map_or(ptr::null_mut(), NonNull::as_ptr)
 }
 
@@ -522,7 +494,7 @@ pub unsafe fn hts_tpool_process_destroy(q: *mut hts_tpool_process) {
         q.no_more_input = true;
         crate::htslib_rs::c_compat::pthread_mutex_unlock(ptr::addr_of_mut!(p.pool_m));
 
-        hts_tpool_process_reset_ref(q, 0);
+        hts_tpool_process_reset(q, 0);
 
         crate::htslib_rs::c_compat::pthread_mutex_lock(ptr::addr_of_mut!(p.pool_m));
         hts_tpool_process_detach_locked(p, q);
@@ -999,14 +971,7 @@ pub unsafe fn hts_tpool_wake_dispatch(q: *mut hts_tpool_process) {
 }
 
 // original: hts_tpool_process_flush (htslib/thread_pool.c:941)
-pub unsafe fn hts_tpool_process_flush(q: *mut hts_tpool_process) -> i32 {
-    let Some(q) = (unsafe { process_mut(q) }) else {
-        return -1;
-    };
-    unsafe { hts_tpool_process_flush_ref(q) }
-}
-
-unsafe fn hts_tpool_process_flush_ref(q: &mut HtsTpoolProcess) -> i32 {
+pub unsafe fn hts_tpool_process_flush(q: &mut HtsTpoolProcess) -> i32 {
     let Some(p) = (unsafe { q_pool_mut(q) }) else {
         return -1;
     };
@@ -1070,14 +1035,7 @@ unsafe fn hts_tpool_process_flush_ref(q: &mut HtsTpoolProcess) -> i32 {
 }
 
 // original: hts_tpool_process_reset (htslib/thread_pool.c:1013)
-pub unsafe fn hts_tpool_process_reset(q: *mut hts_tpool_process, _free_results: i32) -> i32 {
-    let Some(q) = (unsafe { process_mut(q) }) else {
-        return -1;
-    };
-    unsafe { hts_tpool_process_reset_ref(q, _free_results) }
-}
-
-unsafe fn hts_tpool_process_reset_ref(q: &mut HtsTpoolProcess, _free_results: i32) -> i32 {
+pub unsafe fn hts_tpool_process_reset(q: &mut HtsTpoolProcess, _free_results: i32) -> i32 {
     let (mut input, mut output) = unsafe {
         let Some(p) = q_pool_mut(q) else {
             return -1;
@@ -1108,7 +1066,7 @@ unsafe fn hts_tpool_process_reset_ref(q: &mut HtsTpoolProcess, _free_results: i3
             }
         }
 
-        if hts_tpool_process_flush_ref(q) != 0 {
+        if hts_tpool_process_flush(q) != 0 {
             return -1;
         }
 
@@ -1518,7 +1476,7 @@ mod tests {
                 return ptr::null_mut();
             }
 
-            let job = unsafe { hts_tpool_result_data(result).cast::<PipeJob>() };
+            let job = unsafe { hts_tpool_result_data(&mut *result).cast::<PipeJob>() };
             unsafe {
                 hts_tpool_delete_result(result, 0);
                 if hts_tpool_dispatch((*(*job).opt).pool, (*opt).q2, Some(pipe_stage2), job.cast())
@@ -1553,7 +1511,7 @@ mod tests {
                 return ptr::null_mut();
             }
 
-            let job = unsafe { hts_tpool_result_data(result).cast::<PipeJob>() };
+            let job = unsafe { hts_tpool_result_data(&mut *result).cast::<PipeJob>() };
             unsafe {
                 hts_tpool_delete_result(result, 0);
                 if hts_tpool_dispatch((*(*job).opt).pool, (*opt).q3, Some(pipe_stage3), job.cast())
@@ -1588,7 +1546,7 @@ mod tests {
                 return ptr::null_mut();
             }
 
-            let job = unsafe { hts_tpool_result_data(result).cast::<PipeJob>() };
+            let job = unsafe { hts_tpool_result_data(&mut *result).cast::<PipeJob>() };
             let (x, eof) = unsafe { ((*job).x, (*job).eof != 0) };
             let expected = unsafe { (*opt).output_next.fetch_add(1, Ordering::SeqCst) + 1 };
             if x != ((expected as u32) << 24) {
@@ -1639,7 +1597,7 @@ mod tests {
 
         RESULT_CLEANUPS.store(0, Ordering::SeqCst);
         assert_eq!(
-            hts_tpool_result_data_ref(&mut result),
+            hts_tpool_result_data(&mut result),
             test_marker_ptr(0x1234)
         );
         assert_eq!(RESULT_CLEANUPS.load(Ordering::SeqCst), 0);
@@ -1654,8 +1612,8 @@ mod tests {
 
             let queue = hts_tpool_process_init(pool, 2, 0);
             assert!(!queue.is_null());
-            assert_eq!(hts_tpool_process_empty(queue), 1);
-            assert_eq!(hts_tpool_process_len(queue), 0);
+            assert_eq!(hts_tpool_process_empty(&mut *queue), 1);
+            assert_eq!(hts_tpool_process_len(&mut *queue), 0);
             assert_eq!(hts_tpool_process_qsize(queue), 2);
 
             hts_tpool_process_destroy(queue);
@@ -1714,14 +1672,14 @@ mod tests {
             for value in 0..6 {
                 let result = hts_tpool_next_result_wait(queue);
                 assert!(!result.is_null());
-                let data = hts_tpool_result_data(result).cast::<i32>();
+                let data = hts_tpool_result_data(&mut *result).cast::<i32>();
                 assert_eq!(*data, value * value);
                 drop(Box::from_raw(data));
                 hts_tpool_delete_result(result, 0);
             }
 
             assert_eq!(WORKER_ID_FAILURES.load(Ordering::SeqCst), 0);
-            assert_eq!(hts_tpool_process_empty(queue), 1);
+            assert_eq!(hts_tpool_process_empty(&mut *queue), 1);
 
             hts_tpool_process_destroy(queue);
             hts_tpool_destroy(pool);
@@ -1753,7 +1711,7 @@ mod tests {
 
                     let result = hts_tpool_next_result(queue);
                     if !result.is_null() {
-                        let data = hts_tpool_result_data(result).cast::<i32>();
+                        let data = hts_tpool_result_data(&mut *result).cast::<i32>();
                         assert_eq!(*data, next_result_value * next_result_value);
                         next_result_value += 1;
                         drop(Box::from_raw(data));
@@ -1769,14 +1727,14 @@ mod tests {
                 }
             }
 
-            assert_eq!(hts_tpool_process_flush(queue), 0);
+            assert_eq!(hts_tpool_process_flush(&mut *queue), 0);
 
             loop {
                 let result = hts_tpool_next_result(queue);
                 if result.is_null() {
                     break;
                 }
-                let data = hts_tpool_result_data(result).cast::<i32>();
+                let data = hts_tpool_result_data(&mut *result).cast::<i32>();
                 assert_eq!(*data, next_result_value * next_result_value);
                 next_result_value += 1;
                 drop(Box::from_raw(data));
@@ -1784,7 +1742,7 @@ mod tests {
             }
 
             assert_eq!(next_result_value, TASK_SIZE);
-            assert_eq!(hts_tpool_process_empty(queue), 1);
+            assert_eq!(hts_tpool_process_empty(&mut *queue), 1);
 
             hts_tpool_process_destroy(queue);
             hts_tpool_destroy(pool);
@@ -1811,12 +1769,12 @@ mod tests {
                 );
             }
 
-            assert_eq!(hts_tpool_process_flush(queue), 0);
+            assert_eq!(hts_tpool_process_flush(&mut *queue), 0);
             assert_eq!(
                 UNORDERED_SQUARE_JOBS.load(Ordering::SeqCst),
                 TASK_SIZE as usize
             );
-            assert_eq!(hts_tpool_process_empty(queue), 1);
+            assert_eq!(hts_tpool_process_empty(&mut *queue), 1);
 
             hts_tpool_process_destroy(queue);
             hts_tpool_destroy(pool);
@@ -1855,7 +1813,7 @@ mod tests {
             loop {
                 let result = hts_tpool_next_result_wait(queue);
                 assert!(!result.is_null());
-                let data = hts_tpool_result_data(result).cast::<i32>();
+                let data = hts_tpool_result_data(&mut *result).cast::<i32>();
                 let value = *data;
                 drop(Box::from_raw(data));
                 hts_tpool_delete_result(result, 0);
@@ -1868,7 +1826,7 @@ mod tests {
             }
 
             assert_eq!(next_result_value, TASK_SIZE);
-            assert_eq!(hts_tpool_process_flush(queue), 0);
+            assert_eq!(hts_tpool_process_flush(&mut *queue), 0);
             assert!(hts_tpool_next_result(queue).is_null());
 
             hts_tpool_process_destroy(queue);
@@ -1977,9 +1935,9 @@ mod tests {
                 opt.output_checksum.load(Ordering::SeqCst),
                 expected_checksum
             );
-            assert_eq!(hts_tpool_process_empty(q1), 1);
-            assert_eq!(hts_tpool_process_empty(q2), 1);
-            assert_eq!(hts_tpool_process_empty(q3), 1);
+            assert_eq!(hts_tpool_process_empty(&mut *q1), 1);
+            assert_eq!(hts_tpool_process_empty(&mut *q2), 1);
+            assert_eq!(hts_tpool_process_empty(&mut *q3), 1);
 
             hts_tpool_process_destroy(q1);
             hts_tpool_process_destroy(q2);
@@ -2033,9 +1991,9 @@ mod tests {
             queue.n_output = 4;
             queue.ref_count = 1;
 
-            assert_eq!(hts_tpool_process_empty_ref(&mut queue), 0);
-            assert_eq!(hts_tpool_process_len_ref(&mut queue), 4);
-            assert_eq!(hts_tpool_process_sz_ref(&mut queue), 9);
+            assert_eq!(hts_tpool_process_empty(&mut queue), 0);
+            assert_eq!(hts_tpool_process_len(&mut queue), 4);
+            assert_eq!(hts_tpool_process_sz(&mut queue), 9);
             assert_eq!(hts_tpool_process_qsize(ptr::addr_of_mut!(queue).cast()), 7);
 
             hts_tpool_process_ref_incr(ptr::addr_of_mut!(queue).cast());
@@ -2046,8 +2004,8 @@ mod tests {
             queue.n_input = 0;
             queue.n_processing = 0;
             queue.n_output = 0;
-            assert_eq!(hts_tpool_process_empty_ref(&mut queue), 1);
-            assert_eq!(hts_tpool_process_sz_ref(&mut queue), 0);
+            assert_eq!(hts_tpool_process_empty(&mut queue), 1);
+            assert_eq!(hts_tpool_process_sz(&mut queue), 0);
 
             assert_eq!(
                 crate::htslib_rs::c_compat::pthread_mutex_destroy(ptr::addr_of_mut!(pool.pool_m)),
@@ -2416,7 +2374,7 @@ mod tests {
             assert!(queue.input.back().unwrap().result_cleanup.is_some());
 
             assert_eq!(
-                hts_tpool_process_reset(ptr::addr_of_mut!(queue).cast(), 0),
+                hts_tpool_process_reset(&mut queue, 0),
                 0
             );
             destroy_test_process_conds(&mut queue);
@@ -2510,7 +2468,7 @@ mod tests {
             }));
 
             assert_eq!(
-                hts_tpool_process_reset(ptr::addr_of_mut!(queue).cast(), 1),
+                hts_tpool_process_reset(&mut queue, 1),
                 0
             );
 

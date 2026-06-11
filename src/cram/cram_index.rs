@@ -188,27 +188,14 @@ fn install_index_children(node: &mut cram_index_layout, mut children: Vec<cram_i
 //   0  on success
 //  -1  on a general failure (seek failed)
 //  -2  when no overlapping slice exists (most commonly: empty chromosome)
-pub unsafe fn cram_cram_index_c_573_cram_seek_to_refpos(
-    fd: *mut cram_fd,
-    r: *mut cram_range_layout,
-) -> c_int {
-    let Some(fd) = fd_layout_mut(fd) else {
-        return -1;
-    };
-    let Some(r) = range_layout_mut(r) else {
-        return -1;
-    };
-    cram_seek_to_refpos_ref(fd, r)
-}
-
-unsafe fn cram_seek_to_refpos_ref(fd: &mut cram_fd_layout, r: &mut cram_range_layout) -> c_int {
+pub unsafe fn cram_seek_to_refpos(fd: &mut cram_fd_layout, r: &mut cram_range_layout) -> c_int {
     use crate::htslib_rs::hts::{HTS_IDX_NOCOOR, HTS_IDX_NONE, HTS_IDX_REST, HTS_IDX_START};
     let mut ret: c_int = 0;
 
     if r.refid == HTS_IDX_NONE {
         ret = -2;
     } else {
-        let e = cram_index_query_ref(fd, r.refid, r.start, None);
+        let e = cram_index_query(fd, r.refid, r.start, None);
         if let Some(e) = e {
             if 0 != cram_seek(
                 (fd as *mut cram_fd_layout).cast(),
@@ -261,25 +248,7 @@ unsafe fn cram_seek_to_refpos_ref(fd: &mut cram_fd_layout, r: &mut cram_range_la
 // already has its crecs filled by the encoder, so the decode is skipped.
 //
 // Emits one CRAI line per ref/pos run within the multiref slice.
-pub unsafe fn cram_cram_index_c_632_cram_index_build_multiref(
-    _fd: *mut cram_fd,
-    _c: *mut cram_container,
-    s: *mut cram_slice,
-    fp: *mut crate::htslib_rs::hts::BGZF,
-    cpos: libc::off_t,
-    landmark: i32,
-    sz: c_int,
-) -> c_int {
-    let Some(sl) = slice_layout_mut(s) else {
-        return -1;
-    };
-    let Some(fp) = fp.as_mut() else {
-        return -4;
-    };
-    cram_index_build_multiref_ref(sl, fp, cpos, landmark, sz)
-}
-
-unsafe fn cram_index_build_multiref_ref(
+pub unsafe fn cram_index_build_multiref(
     sl: &mut cram_slice_layout,
     fp: &mut crate::htslib_rs::hts::BGZF,
     cpos: libc::off_t,
@@ -355,25 +324,7 @@ unsafe fn cram_index_build_multiref_ref(
 // Emits one or more CRAI lines for a slice. Simple case (single-ref): one
 // line. Multi-ref slice (ref_seq_id == -2): one line per ref/pos run via
 // cram_index_build_multiref above.
-pub unsafe fn cram_cram_index_c_695_cram_index_slice(
-    fd: *mut cram_fd,
-    c: *mut cram_container,
-    s: *mut cram_slice,
-    fp: *mut crate::htslib_rs::hts::BGZF,
-    cpos: libc::off_t,
-    spos: libc::off_t,
-    sz: libc::off_t,
-) -> c_int {
-    let Some(sl) = slice_layout_mut(s) else {
-        return -1;
-    };
-    let Some(fp) = fp.as_mut() else {
-        return -4;
-    };
-    cram_index_slice_ref(fd, c, sl, fp, cpos, spos, sz)
-}
-
-unsafe fn cram_index_slice_ref(
+pub unsafe fn cram_index_slice(
     fd: *mut cram_fd,
     c: *mut cram_container,
     sl: &mut cram_slice_layout,
@@ -388,7 +339,7 @@ unsafe fn cram_index_slice_ref(
     }
 
     if (*sl.hdr).ref_seq_id == -2 {
-        cram_index_build_multiref_ref(sl, fp, cpos, spos as i32, sz as i32)
+        cram_index_build_multiref(sl, fp, cpos, spos as i32, sz as i32)
     } else {
         let line = format!(
             "{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -413,21 +364,7 @@ unsafe fn cram_index_slice_ref(
 // (refid, pos). When `from` is non-null this is a continuation search down
 // the e_next linked list. Returns NULL when the position is unindexed or
 // outside the data; otherwise the matching `cram_index_layout *`.
-pub unsafe fn cram_cram_index_c_404_cram_index_query(
-    fd: *mut cram_fd,
-    refid: c_int,
-    pos: crate::htslib_rs::hts::hts_pos_t,
-    from: *mut cram_index_layout,
-) -> *mut cram_index_layout {
-    let Some(fd) = fd_layout(fd) else {
-        return std::ptr::null_mut();
-    };
-    cram_index_query_ref(fd, refid, pos, NonNull::new(from))
-        .map(NonNull::as_ptr)
-        .unwrap_or_else(std::ptr::null_mut)
-}
-
-unsafe fn cram_index_query_ref(
+pub unsafe fn cram_index_query(
     fd: &cram_fd_layout,
     mut refid: c_int,
     mut pos: crate::htslib_rs::hts::hts_pos_t,
@@ -543,18 +480,11 @@ unsafe fn cram_index_query_ref(
 }
 
 // original: cram_index_free_recurse (htslib/cram/cram_index.c:364)
-pub unsafe fn cram_cram_index_c_364_cram_index_free_recurse(e: *mut cram_index_layout) {
-    let Some(e) = e.as_mut() else {
-        return;
-    };
-    cram_index_free_recurse_ref(e);
-}
-
-unsafe fn cram_index_free_recurse_ref(node: &mut cram_index_layout) {
+pub unsafe fn cram_index_free_recurse(node: &mut cram_index_layout) {
     let child_array = node.e;
     if let Some(children) = index_node_children_mut(node) {
         for child in children {
-            cram_index_free_recurse_ref(child);
+            cram_index_free_recurse(child);
         }
         drop(Vec::from_raw_parts(
             child_array,
@@ -568,20 +498,13 @@ unsafe fn cram_index_free_recurse_ref(node: &mut cram_index_layout) {
 //
 // Walks the top-level CRAI tree (one entry per reference) and recursively
 // frees each subtree, then releases the index array and clears the fd field.
-pub unsafe fn cram_cram_index_c_374_cram_index_free(fd: *mut cram_fd) {
-    let Some(fd) = fd_layout_mut(fd) else {
-        return;
-    };
-    cram_index_free_ref(fd);
-}
-
-unsafe fn cram_index_free_ref(fd: &mut cram_fd_layout) {
+pub unsafe fn cram_index_free(fd: &mut cram_fd_layout) {
     let Some(index) = NonNull::new(fd.index.cast::<cram_index_layout>()) else {
         return;
     };
     let mut buckets = take_index_buckets(fd);
     for bucket in &mut buckets {
-        cram_index_free_recurse_ref(bucket);
+        cram_index_free_recurse(bucket);
     }
 }
 
@@ -631,14 +554,7 @@ pub unsafe fn cram_cram_index_c_92_link_index_(
 //
 // Drives `link_index_` across every ref-bucket so the entries can be walked
 // in file order without descending the nested tree on each step.
-pub unsafe fn cram_cram_index_c_108_link_index(fd: *mut cram_fd) {
-    let Some(fd) = fd_layout_mut(fd) else {
-        return;
-    };
-    link_index_ref(fd);
-}
-
-unsafe fn link_index_ref(fd: &mut cram_fd_layout) {
+pub unsafe fn link_index(fd: &mut cram_fd_layout) {
     let Some(buckets) = index_buckets_mut(fd) else {
         return;
     };
@@ -658,18 +574,7 @@ unsafe fn link_index_ref(fd: &mut cram_fd_layout) {
 // Parses a signed 32-bit decimal integer from the kstring starting at
 // `*pos`, skipping leading spaces/tabs. Returns 0 on success (and advances
 // `*pos`), -1 if no digit is found.
-pub unsafe fn cram_cram_index_c_120_kget_int32(
-    k: &kstring_t,
-    pos: &mut usize,
-    val_p: &mut i32,
-) -> c_int {
-    let Some(parser) = KStringParser::from_kstring(k) else {
-        return -1;
-    };
-    parser.parse_i32(pos, val_p)
-}
-
-unsafe fn kget_int32_ref(k: &kstring_t, pos: &mut usize, val_p: &mut i32) -> c_int {
+pub unsafe fn kget_int32(k: &kstring_t, pos: &mut usize, val_p: &mut i32) -> c_int {
     let Some(parser) = KStringParser::from_kstring(k) else {
         return -1;
     };
@@ -679,18 +584,7 @@ unsafe fn kget_int32_ref(k: &kstring_t, pos: &mut usize, val_p: &mut i32) -> c_i
 // original: kget_int64 (htslib/cram/cram_index.c:146)
 //
 // Same as `kget_int32` but reads into an `i64`.
-pub unsafe fn cram_cram_index_c_145_kget_int64(
-    k: &kstring_t,
-    pos: &mut usize,
-    val_p: &mut i64,
-) -> c_int {
-    let Some(parser) = KStringParser::from_kstring(k) else {
-        return -1;
-    };
-    parser.parse_i64(pos, val_p)
-}
-
-unsafe fn kget_int64_ref(k: &kstring_t, pos: &mut usize, val_p: &mut i64) -> c_int {
+pub unsafe fn kget_int64(k: &kstring_t, pos: &mut usize, val_p: &mut i64) -> c_int {
     let Some(parser) = KStringParser::from_kstring(k) else {
         return -1;
     };
@@ -782,7 +676,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
 
     macro_rules! fail {
         () => {{
-            cram_index_free_ref(fdl); // Also sets fd->index = NULL
+            cram_index_free(fdl); // Also sets fd->index = NULL
             return -1;
         }};
     }
@@ -1011,7 +905,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
     }
 
     // Convert NCList to linear linked list
-    link_index_ref(fdl);
+    link_index(fdl);
 
     //dump_index(fd);
 
@@ -1023,20 +917,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
 // Returns the index entry for the last slice on a specific reference,
 // descending the `e_next` chain so multi-slice containers resolve to the
 // genuine last slice.
-pub unsafe fn cram_cram_index_c_503_cram_index_last(
-    fd: *mut cram_fd,
-    refid: c_int,
-    from: *mut cram_index_layout,
-) -> *mut cram_index_layout {
-    let Some(fd) = fd_layout(fd) else {
-        return std::ptr::null_mut();
-    };
-    cram_index_last_ref(fd, refid, NonNull::new(from))
-        .map(NonNull::as_ptr)
-        .unwrap_or_else(std::ptr::null_mut)
-}
-
-unsafe fn cram_index_last_ref(
+pub unsafe fn cram_index_last(
     fd: &cram_fd_layout,
     refid: c_int,
     from: Option<NonNull<cram_index_layout>>,
@@ -1077,20 +958,7 @@ unsafe fn cram_index_last_ref(
 // keeps iterating `e_next` until offset changes to land on the genuine
 // file-offset for the end of the container (multi-ref containers may emit
 // multiple index entries at the same offset).
-pub unsafe fn cram_cram_index_c_531_cram_index_query_last(
-    fd: *mut cram_fd,
-    refid: c_int,
-    end: crate::htslib_rs::hts::hts_pos_t,
-) -> *mut cram_index_layout {
-    let Some(fd) = fd_layout(fd) else {
-        return std::ptr::null_mut();
-    };
-    cram_index_query_last_ref(fd, refid, end)
-        .map(NonNull::as_ptr)
-        .unwrap_or_else(std::ptr::null_mut)
-}
-
-unsafe fn cram_index_query_last_ref(
+pub unsafe fn cram_index_query_last(
     fd: &cram_fd_layout,
     refid: c_int,
     end: crate::htslib_rs::hts::hts_pos_t,
@@ -1099,7 +967,7 @@ unsafe fn cram_index_query_last_ref(
     let mut prev_e: Option<NonNull<cram_index_layout>>;
     loop {
         prev_e = e;
-        e = cram_index_query_ref(fd, refid, end, prev_e);
+        e = cram_index_query(fd, refid, end, prev_e);
         if e.is_none() {
             break;
         }
@@ -1135,25 +1003,7 @@ unsafe fn cram_index_query_last_ref(
 // match the in-memory ones, reads each slice and indexes it via
 // `cram_index_slice`, then frees the slice. Returns 0 on success or the
 // error code from the failing step.
-pub unsafe fn cram_cram_index_c_727_cram_index_container(
-    fd: *mut cram_fd,
-    c: *mut cram_container,
-    fp: *mut crate::htslib_rs::hts::BGZF,
-    cpos: libc::off_t,
-) -> c_int {
-    let Some(fd) = fd_layout_mut(fd) else {
-        return -1;
-    };
-    let Some(c) = container_layout_mut(c) else {
-        return -1;
-    };
-    let Some(fp) = fp.as_mut() else {
-        return -1;
-    };
-    cram_index_container_ref(fd, c, fp, cpos)
-}
-
-unsafe fn cram_index_container_ref(
+pub unsafe fn cram_index_container(
     fd: &mut cram_fd_layout,
     c: &mut cram_container_layout,
     fp: &mut crate::htslib_rs::hts::BGZF,
@@ -1181,7 +1031,7 @@ unsafe fn cram_index_container_ref(
 
         let sz = crate::htslib_rs::hfile::htslib_hfile_h_155_htell(fd.fp) - spos;
         let ret = if let Some(s) = s.cast::<cram_slice_layout>().as_mut() {
-            cram_index_slice_ref(
+            cram_index_slice(
                 (fd as *mut cram_fd_layout).cast(),
                 (c as *mut cram_container_layout).cast(),
                 s,
@@ -1305,7 +1155,7 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
         last_start = (*cl).ref_seq_start;
 
         let index_ret = if let (Some(cl), Some(fp)) = (cl.as_mut(), fp.as_mut()) {
-            cram_index_container_ref(fdl, cl, fp, cpos)
+            cram_index_container(fdl, cl, fp, cpos)
         } else {
             -1
         };

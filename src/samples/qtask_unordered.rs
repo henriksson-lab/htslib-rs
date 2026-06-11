@@ -241,7 +241,7 @@ pub unsafe fn samples_qtask_unordered_c_181_main(argc: c_int, argv: *mut *mut c_
                         }
 
                         if c == -1 {
-                            if thread_pool::hts_tpool_process_flush(queue) == -1 {
+                            if thread_pool::hts_tpool_process_flush(&mut *queue) == -1 {
                                 libc::fprintf(
                                     crate::htslib_rs::c_compat::stderr.cast(),
                                     c"Failed to flush queue\n".as_ptr(),

@@ -117,7 +117,7 @@ impl HfileHandle {
     }
 
     unsafe fn read(&mut self, buf: &mut [u8]) -> libc::ssize_t {
-        crate::htslib_rs::hfile::htslib_hfile_h_247_hread_ref(self.0.as_mut(), buf)
+        crate::htslib_rs::hfile::hread(self.0.as_mut(), buf)
     }
 
     unsafe fn close(self) -> i32 {

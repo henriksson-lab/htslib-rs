@@ -52,7 +52,7 @@ fn bam_is_reverse(b: &bam1_t) -> bool {
 // Returns the aux value as a byte slice that runs from the located tag's value
 // byte to the end of the bam record's data block. The caller inspects the type
 // byte and slices out the payload.
-unsafe fn bam_aux_get_ref<'a>(b: &'a bam1_t, tag: &[u8]) -> Option<&'a [u8]> {
+unsafe fn bam_aux_get_slice<'a>(b: &'a bam1_t, tag: &[u8]) -> Option<&'a [u8]> {
     if tag.contains(&0) {
         return None;
     }
@@ -72,7 +72,7 @@ unsafe fn bam_aux_get_ref<'a>(b: &'a bam1_t, tag: &[u8]) -> Option<&'a [u8]> {
 
 // The Z-string payload, NUL terminator removed.
 unsafe fn aux_z_bytes<'a>(b: &'a bam1_t, tags: &[&[u8]]) -> Result<Option<&'a [u8]>, c_int> {
-    let Some(aux) = tags.iter().find_map(|tag| bam_aux_get_ref(b, tag)) else {
+    let Some(aux) = tags.iter().find_map(|tag| bam_aux_get_slice(b, tag)) else {
         return Ok(None);
     };
     if aux.first() != Some(&b'Z') {
@@ -86,7 +86,7 @@ unsafe fn aux_z_bytes<'a>(b: &'a bam1_t, tags: &[&[u8]]) -> Result<Option<&'a [u
 
 // The ML/Ml B,C array payload as a byte slice.
 unsafe fn aux_ml_bytes<'a>(b: &'a bam1_t) -> Result<Option<&'a [u8]>, c_int> {
-    let Some(aux) = bam_aux_get_ref(b, b"ML").or_else(|| bam_aux_get_ref(b, b"Ml")) else {
+    let Some(aux) = bam_aux_get_slice(b, b"ML").or_else(|| bam_aux_get_slice(b, b"Ml")) else {
         return Ok(None);
     };
     if aux.first() != Some(&b'B') || aux.get(1) != Some(&b'C') {
@@ -124,7 +124,7 @@ fn parse_u31(bytes: &[u8], start: usize) -> Option<(c_int, usize)> {
     (pos != start).then_some((value as c_int, pos))
 }
 
-pub unsafe fn seq_freq_ref(b: &bam1_t, freq: &mut [c_int; 16]) {
+pub unsafe fn seq_freq(b: &bam1_t, freq: &mut [c_int; 16]) {
     freq.fill(0);
     let mut i = 0;
     while i < b.core.l_qseq {
@@ -132,10 +132,6 @@ pub unsafe fn seq_freq_ref(b: &bam1_t, freq: &mut [c_int; 16]) {
         i += 1;
     }
     freq[15] = b.core.l_qseq;
-}
-
-pub unsafe fn seq_freq(b: &bam1_t, freq: &mut [c_int; 16]) {
-    seq_freq_ref(b, freq);
 }
 
 pub fn hts_base_mod_state_new() -> Box<hts_base_mod_state> {
@@ -150,7 +146,7 @@ pub fn hts_base_mod_state_free(state: Option<Box<hts_base_mod_state>>) {
     drop(state);
 }
 
-pub fn bam_mods_recorded_ref<'a>(
+pub fn bam_mods_recorded<'a>(
     state: &'a mut hts_base_mod_state,
     ntype: &mut c_int,
 ) -> &'a mut [c_int] {
@@ -158,14 +154,7 @@ pub fn bam_mods_recorded_ref<'a>(
     &mut state.type_[..state.nmods as usize]
 }
 
-pub fn bam_mods_recorded<'a>(
-    state: &'a mut hts_base_mod_state,
-    ntype: &mut c_int,
-) -> &'a mut [c_int] {
-    bam_mods_recorded_ref(state, ntype)
-}
-
-fn bam_mods_query_type_ref(
+fn bam_mods_query_type_lookup(
     state: &hts_base_mod_state,
     code: c_int,
 ) -> Option<(c_int, c_int, c_char)> {
@@ -194,31 +183,13 @@ fn bam_mods_query_type_write(
     outputs: ModQueryOutputs<'_>,
 ) -> c_int {
     let Some((strand_value, implicit_value, canonical_value)) =
-        bam_mods_query_type_ref(state, code)
+        bam_mods_query_type_lookup(state, code)
     else {
         return -1;
     };
 
     outputs.write(strand_value, implicit_value, canonical_value);
     0
-}
-
-pub fn bam_mods_query_type_ref_outputs(
-    state: &hts_base_mod_state,
-    code: c_int,
-    strand: Option<&mut c_int>,
-    implicit: Option<&mut c_int>,
-    canonical: Option<&mut c_char>,
-) -> c_int {
-    bam_mods_query_type_write(
-        state,
-        code,
-        ModQueryOutputs {
-            strand,
-            implicit,
-            canonical,
-        },
-    )
 }
 
 pub fn bam_mods_query_type(
@@ -239,7 +210,7 @@ pub fn bam_mods_query_type(
     )
 }
 
-fn bam_mods_queryi_ref(state: &hts_base_mod_state, i: c_int) -> Option<(c_int, c_int, c_char)> {
+fn bam_mods_queryi_lookup(state: &hts_base_mod_state, i: c_int) -> Option<(c_int, c_int, c_char)> {
     if i < 0 || i >= state.nmods {
         return None;
     }
@@ -257,31 +228,13 @@ fn bam_mods_queryi_write(
     i: c_int,
     outputs: ModQueryOutputs<'_>,
 ) -> c_int {
-    let Some((strand_value, implicit_value, canonical_value)) = bam_mods_queryi_ref(state, i)
+    let Some((strand_value, implicit_value, canonical_value)) = bam_mods_queryi_lookup(state, i)
     else {
         return -1;
     };
 
     outputs.write(strand_value, implicit_value, canonical_value);
     0
-}
-
-pub fn bam_mods_queryi_ref_outputs(
-    state: &hts_base_mod_state,
-    i: c_int,
-    strand: Option<&mut c_int>,
-    implicit: Option<&mut c_int>,
-    canonical: Option<&mut c_char>,
-) -> c_int {
-    bam_mods_queryi_write(
-        state,
-        i,
-        ModQueryOutputs {
-            strand,
-            implicit,
-            canonical,
-        },
-    )
 }
 
 pub fn bam_mods_queryi(
@@ -302,7 +255,7 @@ pub fn bam_mods_queryi(
     )
 }
 
-pub unsafe fn bam_parse_basemod2_ref(
+pub unsafe fn bam_parse_basemod2(
     b: &bam1_t,
     state: &mut hts_base_mod_state,
     flags: u32,
@@ -317,7 +270,7 @@ pub unsafe fn bam_parse_basemod2_ref(
         Err(ret) => return ret,
     };
 
-    if let Some(mi) = bam_aux_get_ref(b, b"MN") {
+    if let Some(mi) = bam_aux_get_slice(b, b"MN") {
         if bam_aux2i(mi.as_ptr()) != b.core.l_qseq as i64 && b.core.l_qseq != 0 {
             return -1;
         }
@@ -330,7 +283,7 @@ pub unsafe fn bam_parse_basemod2_ref(
     let mut ml_pos = 0usize;
 
     let mut freq = [0; 16];
-    seq_freq_ref(b, &mut freq);
+    seq_freq(b, &mut freq);
 
     let mm_bytes = mm;
     let mm_ptr = mm_bytes.as_ptr();
@@ -500,23 +453,11 @@ pub unsafe fn bam_parse_basemod2_ref(
     0
 }
 
-pub unsafe fn bam_parse_basemod2(
-    b: &bam1_t,
-    state: &mut hts_base_mod_state,
-    flags: u32,
-) -> c_int {
-    bam_parse_basemod2_ref(b, state, flags)
-}
-
 pub unsafe fn bam_parse_basemod(b: &bam1_t, state: &mut hts_base_mod_state) -> c_int {
-    bam_parse_basemod_ref(b, state)
+    bam_parse_basemod2(b, state, 0)
 }
 
-pub unsafe fn bam_parse_basemod_ref(b: &bam1_t, state: &mut hts_base_mod_state) -> c_int {
-    bam_parse_basemod2_ref(b, state, 0)
-}
-
-pub unsafe fn bam_mods_at_next_pos_ref(
+pub unsafe fn bam_mods_at_next_pos(
     b: &bam1_t,
     state: &mut hts_base_mod_state,
     mods: &mut [hts_base_mod],
@@ -638,15 +579,7 @@ pub unsafe fn bam_mods_at_next_pos_ref(
     n
 }
 
-pub unsafe fn bam_mods_at_next_pos(
-    b: &bam1_t,
-    state: &mut hts_base_mod_state,
-    mods: &mut [hts_base_mod],
-) -> c_int {
-    bam_mods_at_next_pos_ref(b, state, mods)
-}
-
-pub unsafe fn bam_next_basemod_ref(
+pub unsafe fn bam_next_basemod(
     b: &bam1_t,
     state: &mut hts_base_mod_state,
     mods: &mut [hts_base_mod],
@@ -708,7 +641,7 @@ pub unsafe fn bam_next_basemod_ref(
         return 0;
     }
 
-    let r = bam_mods_at_next_pos_ref(b, state, mods);
+    let r = bam_mods_at_next_pos(b, state, mods);
     if r > 0 {
         r
     } else {
@@ -716,16 +649,7 @@ pub unsafe fn bam_next_basemod_ref(
     }
 }
 
-pub unsafe fn bam_next_basemod(
-    b: &bam1_t,
-    state: &mut hts_base_mod_state,
-    mods: &mut [hts_base_mod],
-    pos: &mut c_int,
-) -> c_int {
-    bam_next_basemod_ref(b, state, mods, pos)
-}
-
-pub unsafe fn bam_mods_at_qpos_ref(
+pub unsafe fn bam_mods_at_qpos(
     b: &bam1_t,
     qpos: c_int,
     state: &mut hts_base_mod_state,
@@ -736,19 +660,10 @@ pub unsafe fn bam_mods_at_qpos_ref(
         if state.seq_pos > qpos {
             break;
         }
-        r = bam_mods_at_next_pos_ref(b, state, mods);
+        r = bam_mods_at_next_pos(b, state, mods);
         if r < 0 {
             break;
         }
     }
     r
-}
-
-pub unsafe fn bam_mods_at_qpos(
-    b: &bam1_t,
-    qpos: c_int,
-    state: &mut hts_base_mod_state,
-    mods: &mut [hts_base_mod],
-) -> c_int {
-    bam_mods_at_qpos_ref(b, qpos, state, mods)
 }

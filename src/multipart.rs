@@ -25,7 +25,7 @@ DEALINGS IN THE SOFTWARE.  */
 use crate::htslib_rs::{
     hfile::{self, HFileBackend},
     hts::{hFILE, hts_json_token, ks_free, kstring_t, size_t},
-    textutils::{textutils_hts_json_fnext_ref, textutils_hts_json_fskip_value_ref},
+    textutils::{hts_json_fnext, hts_json_fskip_value},
 };
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::ptr::NonNull;
@@ -118,7 +118,8 @@ pub fn multipart_c_66_free_all_parts(fp: &mut hFILE_multipart) {
     fp.parts.clear();
 }
 
-unsafe fn multipart_read_ref(fp: &mut hFILE_multipart, buffer: &mut [u8]) -> libc::ssize_t {
+// original: multipart_read (htslib/multipart.c:73)
+pub unsafe fn multipart_read(fp: &mut hFILE_multipart, buffer: &mut [u8]) -> libc::ssize_t {
     loop {
         if fp.currentfp.is_none() {
             if fp.current < fp.parts.len() {
@@ -208,25 +209,6 @@ unsafe fn multipart_read_ref(fp: &mut hFILE_multipart, buffer: &mut [u8]) -> lib
     }
 }
 
-// original: multipart_read (htslib/multipart.c:73)
-pub unsafe fn multipart_c_73_multipart_read(
-    fp: &mut hFILE,
-    buffer: *mut c_void,
-    nbytes: size_t,
-) -> libc::ssize_t {
-    let HFileBackend::Multipart(m) = &mut fp.backend else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
-        return -1;
-    };
-    if buffer.is_null() && nbytes != 0 {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
-        return -1;
-    }
-    let m: &mut hFILE_multipart = &mut *m;
-    let buffer = std::slice::from_raw_parts_mut(buffer.cast::<u8>(), nbytes);
-    multipart_read_ref(m, buffer)
-}
-
 // original: multipart_write (htslib/multipart.c:114)
 pub unsafe fn multipart_c_114_multipart_write(
     _fp: &mut hFILE,
@@ -285,20 +267,20 @@ pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
         str_: std::ptr::null_mut(),
     };
 
-    if textutils_hts_json_fnext_ref(json, &mut t, b) != b'{' as c_char {
+    if hts_json_fnext(json, &mut t, b) != b'{' as c_char {
         return t.type_;
     }
-    while textutils_hts_json_fnext_ref(json, &mut t, b) != b'}' as c_char {
+    while hts_json_fnext(json, &mut t, b) != b'}' as c_char {
         if t.type_ != b's' as c_char {
             return b'?' as c_char;
         }
 
         if CStr::from_ptr(t.str_) == c"urls" {
-            if textutils_hts_json_fnext_ref(json, &mut t, b) != b'[' as c_char {
+            if hts_json_fnext(json, &mut t, b) != b'[' as c_char {
                 return t.type_;
             }
 
-            while textutils_hts_json_fnext_ref(json, &mut t, b) != b']' as c_char {
+            while hts_json_fnext(json, &mut t, b) != b']' as c_char {
                 if multipart_reserve_parts(fp) != 0 {
                     return b'?' as c_char;
                 }
@@ -311,28 +293,28 @@ pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
                 if t.type_ != b'{' as c_char {
                     return t.type_;
                 }
-                while textutils_hts_json_fnext_ref(json, &mut t, b) != b'}' as c_char {
+                while hts_json_fnext(json, &mut t, b) != b'}' as c_char {
                     if t.type_ != b's' as c_char {
                         return b'?' as c_char;
                     }
 
                     if CStr::from_ptr(t.str_) == c"url" {
-                        if textutils_hts_json_fnext_ref(json, &mut t, b) != b's' as c_char {
+                        if hts_json_fnext(json, &mut t, b) != b's' as c_char {
                             return t.type_;
                         }
                         fp.part_mut(part_index).url =
                             KStringCString::from_raw(crate::htslib_rs::hts::ks_release(b));
                     } else if CStr::from_ptr(t.str_) == c"headers" {
-                        if textutils_hts_json_fnext_ref(json, &mut t, b) != b'{' as c_char {
+                        if hts_json_fnext(json, &mut t, b) != b'{' as c_char {
                             return t.type_;
                         }
 
-                        while textutils_hts_json_fnext_ref(json, &mut t, header) != b'}' as c_char {
+                        while hts_json_fnext(json, &mut t, header) != b'}' as c_char {
                             if t.type_ != b's' as c_char {
                                 return b'?' as c_char;
                             }
 
-                            if textutils_hts_json_fnext_ref(json, &mut t, b) != b's' as c_char {
+                            if hts_json_fnext(json, &mut t, b) != b's' as c_char {
                                 return t.type_;
                             }
 
@@ -349,7 +331,7 @@ pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
                                 part.headers.push(header);
                             }
                         }
-                    } else if textutils_hts_json_fskip_value_ref(json, 0) != b'v' as c_char {
+                    } else if hts_json_fskip_value(json, 0) != b'v' as c_char {
                         return b'?' as c_char;
                     }
                 }
@@ -359,7 +341,7 @@ pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
                 }
             }
         } else if CStr::from_ptr(t.str_) == c"format" {
-            if textutils_hts_json_fnext_ref(json, &mut t, b) != b's' as c_char {
+            if hts_json_fnext(json, &mut t, b) != b's' as c_char {
                 return t.type_;
             }
 
@@ -374,7 +356,7 @@ pub unsafe fn multipart_c_149_parse_ga4gh_body_json(
                 c"multipart".as_ptr(),
                 msg.as_ptr(),
             );
-        } else if textutils_hts_json_fskip_value_ref(json, 0) != b'v' as c_char {
+        } else if hts_json_fskip_value(json, 0) != b'v' as c_char {
             return b'?' as c_char;
         }
     }
@@ -394,10 +376,10 @@ pub unsafe fn multipart_c_220_parse_ga4gh_redirect_json(
         str_: std::ptr::null_mut(),
     };
 
-    if textutils_hts_json_fnext_ref(json, &mut t, b) != b'{' as c_char {
+    if hts_json_fnext(json, &mut t, b) != b'{' as c_char {
         return t.type_;
     }
-    while textutils_hts_json_fnext_ref(json, &mut t, b) != b'}' as c_char {
+    while hts_json_fnext(json, &mut t, b) != b'}' as c_char {
         if t.type_ != b's' as c_char {
             return b'?' as c_char;
         }
@@ -412,7 +394,7 @@ pub unsafe fn multipart_c_220_parse_ga4gh_redirect_json(
         }
     }
 
-    if textutils_hts_json_fnext_ref(json, &mut t, b) != 0 {
+    if hts_json_fnext(json, &mut t, b) != 0 {
         return b'?' as c_char;
     }
 
@@ -420,18 +402,7 @@ pub unsafe fn multipart_c_220_parse_ga4gh_redirect_json(
 }
 
 // original: hopen_htsget_redirect (htslib/multipart.c:241)
-pub unsafe fn multipart_c_241_hopen_htsget_redirect(
-    hfile: *mut hFILE,
-    mode: *const c_char,
-) -> *mut hFILE {
-    let (Some(hfile), Some(mode)) = (NonNull::new(hfile), mode.as_ref()) else {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
-        return std::ptr::null_mut();
-    };
-    multipart_hopen_htsget_redirect_ref(hfile, CStr::from_ptr(mode))
-}
-
-unsafe fn multipart_hopen_htsget_redirect_ref(
+pub unsafe fn multipart_hopen_htsget_redirect(
     mut hfile: NonNull<hFILE>,
     mode: &CStr,
 ) -> *mut hFILE {

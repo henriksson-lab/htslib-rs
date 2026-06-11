@@ -69,8 +69,7 @@ pub unsafe fn samples_read_header_c_49_main(argc: c_int, argv: *mut *mut c_char)
             sam::sam_hdr_find_tag_id(
                 &mut *in_samhdr,
                 CStr::from_ptr(header),
-                id,
-                idval,
+                Some((CStr::from_ptr(id), CStr::from_ptr(idval))),
                 CStr::from_ptr(tag),
                 &mut data,
             )

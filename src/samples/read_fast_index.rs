@@ -84,13 +84,14 @@ pub unsafe fn samples_read_fast_index_c_53_main(argc: c_int, argv: *mut *mut c_c
             if remaining.is_null() {
                 break;
             }
-            if crate::htslib_rs::faidx::fai_adjust_region(idx, tid, &mut beg, &mut end) == -1 {
+            if crate::htslib_rs::faidx::fai_adjust_region(&*idx, tid, &mut beg, &mut end) == -1 {
                 libc::printf(c"Error in adjusting region for tid %d\n".as_ptr(), tid);
                 crate::htslib_rs::faidx::fai_destroy(idx);
                 return ret;
             }
 
-            let name = crate::htslib_rs::faidx::faidx_iseq(idx, tid);
+            let name = crate::htslib_rs::faidx::faidx_iseq(&*idx, tid)
+                .map_or(std::ptr::null(), |s| s.as_ptr() as *const c_char);
             let mut len: hts_pos_t = 0;
             let mut data =
                 crate::htslib_rs::faidx::faidx_fetch_seq64(idx, name, beg, end, &mut len);

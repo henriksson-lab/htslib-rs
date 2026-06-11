@@ -757,15 +757,13 @@ pub unsafe fn test_sam_c_705_use_header_api() {
     if sam::sam_hdr_remove_tag_id(
         &mut *header,
         c"HD",
-        std::ptr::null(),
-        std::ptr::null(),
+        None,
         c"GO",
     ) != 0
         || sam::sam_hdr_update_line(
             &mut *header,
             c"HD",
-            std::ptr::null(),
-            std::ptr::null(),
+            None,
             &[(c"VN".as_ptr(), c"1.5".as_ptr())],
         ) != 0
         || sam::sam_hdr_add_line(
@@ -779,8 +777,7 @@ pub unsafe fn test_sam_c_705_use_header_api() {
         || sam::sam_hdr_update_line(
             &mut *header,
             c"SQ",
-            c"SN".as_ptr(),
-            c"ref1".as_ptr(),
+            Some((c"SN", c"ref1")),
             &[(c"M5".as_ptr(), c"kja8u34a2q3".as_ptr())],
         ) != 0
         || sam::sam_hdr_add_pg(
@@ -812,22 +809,20 @@ pub unsafe fn test_sam_c_705_use_header_api() {
         ) < 0
         || sam::sam_hdr_line_index(&mut *header, c"RG", c"run4") != 3
         || sam::sam_hdr_line_index(&mut *header, c"RG", c"run5") != -1
-        || sam::sam_hdr_remove_line_id(&mut *header, c"RG", c"ID".as_ptr(), c"run2".as_ptr()) < 0
+        || sam::sam_hdr_remove_line_id(&mut *header, c"RG", Some((c"ID", c"run2"))) < 0
         || sam::sam_hdr_remove_line_pos(&mut *header, c"RG", 1) < 0
-        || sam::sam_hdr_remove_line_id(&mut *header, c"SQ", c"SN".as_ptr(), c"ref0".as_ptr()) < 0
+        || sam::sam_hdr_remove_line_id(&mut *header, c"SQ", Some((c"SN", c"ref0"))) < 0
         || sam::sam_hdr_remove_line_pos(&mut *header, c"SQ", 1) < 0
         || sam::sam_hdr_remove_tag_id(
             &mut *header,
             c"HD",
-            std::ptr::null(),
-            std::ptr::null(),
+            None,
             c"SS",
         ) < 0
         || sam::sam_hdr_update_line(
             &mut *header,
             c"HD",
-            std::ptr::null(),
-            std::ptr::null(),
+            None,
             &[(c"SO".as_ptr(), c"coordinate".as_ptr())],
         ) < 0
         || test_sam_c_669_check_target_names(
@@ -1029,29 +1024,25 @@ pub unsafe fn test_sam_c_1087_test_header_updates() {
     if sam::sam_hdr_update_line(
         &mut *header,
         c"SQ",
-        c"SN".as_ptr(),
-        c"chr2".as_ptr(),
+        Some((c"SN", c"chr2")),
         &[(c"LN".as_ptr(), c"2000".as_ptr())],
     ) != 0
         || sam::sam_hdr_update_line(
             &mut *header,
             c"SQ",
-            c"SN".as_ptr(),
-            c"chr1".as_ptr(),
+            Some((c"SN", c"chr1")),
             &[(c"SN".as_ptr(), c"1".as_ptr())],
         ) != 0
         || sam::sam_hdr_update_line(
             &mut *header,
             c"RG",
-            c"ID".as_ptr(),
-            c"run1".as_ptr(),
+            Some((c"ID", c"run1")),
             &[(c"DS".as_ptr(), c"hello".as_ptr())],
         ) != 0
         || sam::sam_hdr_update_line(
             &mut *header,
             c"RG",
-            c"ID".as_ptr(),
-            c"run2".as_ptr(),
+            Some((c"ID", c"run2")),
             &[(c"ID".as_ptr(), c"aliquot2".as_ptr())],
         ) != 0
         || test_sam_c_669_check_target_names(
@@ -1101,12 +1092,12 @@ pub unsafe fn test_sam_c_1182_test_header_remove_lines() {
         let chr1 = libc::strdup(c"chr1".as_ptr());
         sam::khash_str2int_set(rh, chr3, 1);
         sam::khash_str2int_set(rh, chr1, 1);
-        if sam::sam_hdr_remove_lines(&mut *header, c"SQ", c"SN".as_ptr(), rh) != 0
+        if sam::sam_hdr_remove_lines(&mut *header, c"SQ", Some(c"SN"), std::ptr::NonNull::new(rh)) != 0
             || sam::sam_hdr_remove_lines(
                 &mut *header,
                 c"RG",
-                c"ID".as_ptr(),
-                std::ptr::null_mut(),
+                Some(c"ID"),
+                None,
             ) != 0
         {
             test_sam_bam_set1_fail(
@@ -1192,7 +1183,7 @@ pub unsafe fn test_sam_c_1258_test_header_ref_altnames() {
             c"barney added lookup failed".as_ptr(),
         );
     }
-    if sam::sam_hdr_remove_line_id(&mut *header, c"SQ", c"SN".as_ptr(), c"chr2".as_ptr()) < 0
+    if sam::sam_hdr_remove_line_id(&mut *header, c"SQ", Some((c"SN", c"chr2"))) < 0
         || sam::sam_hdr_name2tid(&mut *header, c"2") != -1
         || sam::sam_hdr_name2tid(&mut *header, c"chr2") != -1
     {
@@ -1204,8 +1195,7 @@ pub unsafe fn test_sam_c_1258_test_header_ref_altnames() {
     if sam::sam_hdr_remove_tag_id(
         &mut *header,
         c"SQ",
-        c"SN".as_ptr(),
-        c"1".as_ptr(),
+        Some((c"SN", c"1")),
         c"AN",
     ) < 0
         || sam::sam_hdr_name2tid(&mut *header, c"chr1") != -1
@@ -2728,8 +2718,7 @@ pub unsafe fn test_sam_c_2227_test_bam_set1_write_and_read_back() {
         || sam::sam_hdr_find_tag_id(
             &mut *r_header,
             c"SQ",
-            std::ptr::null(),
-            std::ptr::null(),
+            None,
             c"SN",
             &mut ks,
         ) != 0

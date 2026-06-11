@@ -394,7 +394,7 @@ pub unsafe fn htsfile_c_152_view_raw(fp: &mut hts::hFILE, filename: &CFilename) 
     let mut prev = b'\n' as i32;
     let mut out = std::io::stdout().lock();
     loop {
-        let c = hfile::htslib_hfile_h_163_hgetc_ref(fp);
+        let c = hfile::htslib_hfile_h_163_hgetc(fp);
         if c == libc::EOF {
             break;
         }
@@ -415,7 +415,7 @@ pub unsafe fn htsfile_c_152_view_raw(fp: &mut hts::hFILE, filename: &CFilename) 
     }
     drop(out);
 
-    let herrno = hfile::htslib_hfile_h_134_herrno_ref(fp);
+    let herrno = hfile::htslib_hfile_h_134_herrno(fp);
     if herrno != 0 {
         error!(herrno, format!("reading \"{}\" failed", filename.display()));
     }
@@ -451,11 +451,11 @@ pub unsafe fn htsfile_c_169_copy_raw(srcfilename: &CFilename, destfilename: &CFi
 
     let mut n: isize;
     loop {
-        n = hfile::htslib_hfile_h_247_hread_ref(src.as_mut(), &mut buffer);
+        n = hfile::hread(src.as_mut(), &mut buffer);
         if n <= 0 {
             break;
         }
-        if hfile::htslib_hfile_h_292_hwrite_ref(dest.as_mut(), &buffer[..n as usize]) != n {
+        if hfile::hwrite(dest.as_mut(), &buffer[..n as usize]) != n {
             error!(
                 std::io::Error::last_os_error().raw_os_error().unwrap_or(0),
                 format!("writing to \"{}\" failed", destfilename.display())

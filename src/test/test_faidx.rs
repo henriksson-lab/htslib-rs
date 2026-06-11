@@ -181,7 +181,7 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
             if use_adjust_reg != 0 {
                 let orig_beg = beg;
                 let orig_end = end;
-                let r = crate::htslib_rs::faidx::fai_adjust_region(fai, tid, &mut beg, &mut end);
+                let r = crate::htslib_rs::faidx::fai_adjust_region(&*fai, tid, &mut beg, &mut end);
                 if r < 0
                     || (((r & 1) != 0) ^ (beg != orig_beg))
                     || (((r & 2) != 0) ^ (end != orig_end))
@@ -203,7 +203,11 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
                     return -1;
                 }
             }
-            let name = crate::htslib_rs::faidx::faidx_iseq(fai, tid);
+            let name = crate::htslib_rs::faidx::faidx_iseq(&*fai, tid)
+                .map(|b| std::ffi::CString::new(b).unwrap());
+            let name = name
+                .as_ref()
+                .map_or(std::ptr::null(), |c| c.as_ptr());
             if use_64bit != 0 {
                 seq = crate::htslib_rs::faidx::faidx_fetch_seq64(fai, name, beg, end - 1, &mut len);
             } else {
@@ -286,7 +290,11 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
             let mut qual_len: hts_pos_t = 0;
             let qual: *mut c_char;
             if use_parse_reg != 0 {
-                let name = crate::htslib_rs::faidx::faidx_iseq(fai, tid);
+                let name = crate::htslib_rs::faidx::faidx_iseq(&*fai, tid)
+                    .map(|b| std::ffi::CString::new(b).unwrap());
+                let name = name
+                    .as_ref()
+                    .map_or(std::ptr::null(), |c| c.as_ptr());
                 if use_64bit != 0 {
                     qual = crate::htslib_rs::faidx::faidx_fetch_qual64(
                         fai,
@@ -449,7 +457,11 @@ pub unsafe fn test_test_faidx_c_310_test_faidx_iseq(
     if fai.is_null() {
         return -1;
     }
-    let found_name = crate::htslib_rs::faidx::faidx_iseq(fai, idx);
+    let found_name = crate::htslib_rs::faidx::faidx_iseq(&*fai, idx)
+        .map(|b| std::ffi::CString::new(b).unwrap());
+    let found_name = found_name
+        .as_ref()
+        .map_or(std::ptr::null(), |c| c.as_ptr());
     let mut ret = 0;
     if !expected.is_null() {
         if found_name.is_null() || libc::strcmp(found_name, expected) != 0 {

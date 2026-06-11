@@ -396,7 +396,7 @@ pub unsafe fn cram_cram_encode_c_2810_cram_encode_compression_header(
     );
     (*cb_l).uncomp_size = (*cb_l).byte as i32;
     (*cb_l).comp_size = (*cb_l).uncomp_size;
-    cram_cram_io_c_1565_cram_free_block(map);
+    cram_free_block(map);
     if r >= 0 {
         return cb;
     }
@@ -573,7 +573,7 @@ pub unsafe fn cram_cram_encode_c_512_cram_encode_slice_header(
                 c"cram_encode_slice_header".as_ptr(),
                 c"Reference position too large for CRAM 3".as_ptr(),
             );
-            cram_cram_io_c_1565_cram_free_block(b);
+            cram_free_block(b);
             return std::ptr::null_mut::<cram_block>();
         }
         cp = cp.offset(
@@ -658,7 +658,7 @@ pub unsafe fn cram_cram_encode_c_512_cram_encode_slice_header(
     debug_assert!(written as i64 <= (22 + 16 + 5 * (8 + (*hdr).num_blocks)) as i64);
     let bl = b.cast::<cram_block_layout>();
     if cram_cram_io_h_248_block_append(b, buf.as_ptr().cast(), written) < 0 {
-        cram_cram_io_c_1565_cram_free_block(b);
+        cram_free_block(b);
         return std::ptr::null_mut::<cram_block>();
     }
     (*bl).uncomp_size = written as i32;
@@ -1532,7 +1532,7 @@ pub unsafe fn cram_cram_encode_c_1097_cram_encode_slice(
 
     // Transfer staging blocks (base/qual/name/soft) over into slice block[].
     if !(*(*sll).block.offset(DS_IN as isize)).is_null() {
-        cram_cram_io_c_1565_cram_free_block(
+        cram_free_block(
             (*(*sll).block.offset(DS_IN as isize)).cast::<cram_block>(),
         );
     }
@@ -1540,7 +1540,7 @@ pub unsafe fn cram_cram_encode_c_1097_cram_encode_slice(
     (*sll).base_blk = std::ptr::null_mut();
 
     if !(*(*sll).block.offset(DS_QS as isize)).is_null() {
-        cram_cram_io_c_1565_cram_free_block(
+        cram_free_block(
             (*(*sll).block.offset(DS_QS as isize)).cast::<cram_block>(),
         );
     }
@@ -1548,7 +1548,7 @@ pub unsafe fn cram_cram_encode_c_1097_cram_encode_slice(
     (*sll).qual_blk = std::ptr::null_mut();
 
     if !(*(*sll).block.offset(DS_RN as isize)).is_null() {
-        cram_cram_io_c_1565_cram_free_block(
+        cram_free_block(
             (*(*sll).block.offset(DS_RN as isize)).cast::<cram_block>(),
         );
     }
@@ -1556,7 +1556,7 @@ pub unsafe fn cram_cram_encode_c_1097_cram_encode_slice(
     (*sll).name_blk = std::ptr::null_mut();
 
     if !(*(*sll).block.offset(DS_SC as isize)).is_null() {
-        cram_cram_io_c_1565_cram_free_block(
+        cram_free_block(
             (*(*sll).block.offset(DS_SC as isize)).cast::<cram_block>(),
         );
     }
@@ -1606,7 +1606,7 @@ pub unsafe fn cram_cram_encode_c_1097_cram_encode_slice(
         let bp = *(*sll).block.offset(i as isize);
         if !bp.is_null() && bp != *(*sll).block.offset(0) {
             if (*bp).uncomp_size == 0 {
-                cram_cram_io_c_1565_cram_free_block(bp.cast::<cram_block>());
+                cram_free_block(bp.cast::<cram_block>());
                 *(*sll).block.offset(i as isize) = std::ptr::null_mut();
             } else {
                 *(*sll).block.offset(j as isize) = bp;
@@ -2101,8 +2101,10 @@ pub unsafe fn cram_cram_encode_c_1798_validate_md5(fd: *mut cram_fd, ref_id: c_i
     let ty = crate::htslib_rs::sam::sam_hrecs_find_type_id(
         &mut *hrecs,
         std::ffi::CStr::from_ptr(sq_tag.as_ptr()),
-        sn_tag.as_ptr(),
-        ref_name,
+        Some((
+            std::ffi::CStr::from_ptr(sn_tag.as_ptr()),
+            std::ffi::CStr::from_ptr(ref_name),
+        )),
     );
     let ty = match ty {
         Some(ty) => ty,
@@ -2112,8 +2114,8 @@ pub unsafe fn cram_cram_encode_c_1798_validate_md5(fd: *mut cram_fd, ref_id: c_i
     let m5tag = crate::htslib_rs::sam::sam_hrecs_find_key(
         &mut *ty.as_ptr(),
         std::ffi::CStr::from_ptr(m5_tag.as_ptr()),
-        None,
     )
+    .0
     .map_or(std::ptr::null_mut(), |p| p.as_ptr());
     if m5tag.is_null() {
         return 0;

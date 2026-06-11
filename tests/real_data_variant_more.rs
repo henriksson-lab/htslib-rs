@@ -1,6 +1,6 @@
 use htslib_rs::{
-    bcf_destroy, bcf_get_format_values, bcf_get_info_values, bcf_get_variant_type,
-    bcf_get_variant_types, bcf_has_variant_type, bcf_has_variant_types, bcf_hdr_destroy,
+    bcf1_t, bcf_destroy, bcf_get_format_values, bcf_get_info_values, bcf_get_variant_type,
+    bcf_get_variant_types, bcf_has_variant_type, bcf_has_variant_types, bcf_hdr_destroy, bcf_hdr_t,
     bcf_hdr_id2name, bcf_hdr_name2id, bcf_hdr_read, bcf_hdr_seqnames, bcf_hdr_write,
     bcf_index_build, bcf_index_load2, bcf_init, bcf_read, bcf_readrec, bcf_seqname,
     bcf_sr_add_reader, bcf_sr_destroy, bcf_sr_get_header, bcf_sr_get_line, bcf_sr_has_line,
@@ -158,20 +158,24 @@ unsafe fn synced_reader_vcf_output(
     let sr = bcf_sr_init();
     assert!(!sr.is_null());
     let set_ret = if use_targets {
-        bcf_sr_set_targets(sr, region_or_target.as_ptr(), 0, 0)
+        bcf_sr_set_targets(&mut *sr, region_or_target.to_bytes(), 0, 0)
     } else {
-        bcf_sr_set_regions(sr, region_or_target.as_ptr(), 0)
+        bcf_sr_set_regions(&mut *sr, region_or_target.to_bytes(), 0)
     };
     assert_eq!(set_ret, 0, "failed to set {:?}", region_or_target);
-    assert_eq!(bcf_sr_add_reader(sr, path.as_ptr()), 1);
+    assert_eq!(bcf_sr_add_reader(&mut *sr, path.to_bytes()), 1);
 
     let out_fp = hts_open(c_out_path.as_ptr(), c"w".as_ptr());
     assert!(!out_fp.is_null());
-    let hdr = bcf_sr_get_header(sr, 0);
+    let hdr = bcf_sr_get_header(&*sr, 0).map_or(std::ptr::null_mut(), |h| {
+        h as *const bcf_hdr_t as *mut bcf_hdr_t
+    });
     assert!(!hdr.is_null());
     assert_eq!(bcf_hdr_write(out_fp, hdr), 0);
-    while bcf_sr_next_line(sr) > 0 {
-        let rec = bcf_sr_get_line(sr, 0);
+    while bcf_sr_next_line(&mut *sr) > 0 {
+        let rec = bcf_sr_get_line(&*sr, 0).map_or(std::ptr::null_mut(), |r| {
+            r as *const bcf1_t as *mut bcf1_t
+        });
         assert!(!rec.is_null());
         assert_eq!(bcf_write(out_fp, hdr, rec), 0);
     }
@@ -187,26 +191,28 @@ unsafe fn synced_reader_vcf_output(
 unsafe fn synced_reader_summary_no_index(paths: &[&str]) -> String {
     let sr = bcf_sr_init();
     assert!(!sr.is_null());
-    assert_eq!(bcf_sr_set_opt_allow_no_idx(sr), 0);
+    assert_eq!(bcf_sr_set_opt_allow_no_idx(&mut *sr), 0);
     assert_eq!(
-        bcf_sr_set_opt_pair_logic(sr, hts_sys::BCF_SR_PAIR_ANY as c_int),
+        bcf_sr_set_opt_pair_logic(&mut *sr, hts_sys::BCF_SR_PAIR_ANY as c_int),
         0
     );
     for path in paths {
         let c_path = c_fixture(path);
         assert_eq!(
-            bcf_sr_add_reader(sr, c_path.as_ptr()),
+            bcf_sr_add_reader(&mut *sr, c_path.to_bytes()),
             1,
             "failed on {path}"
         );
     }
 
     let mut out = String::new();
-    while bcf_sr_next_line(sr) > 0 {
+    while bcf_sr_next_line(&mut *sr) > 0 {
         for i in 0..(*sr).nreaders {
-            if bcf_sr_has_line(sr, i) != 0 {
-                let hdr = bcf_sr_get_header(sr, i);
-                let rec = bcf_sr_get_line(sr, i);
+            if bcf_sr_has_line(&*sr, i) != 0 {
+                let hdr = bcf_sr_get_header(&*sr, i)
+                    .map_or(std::ptr::null_mut(), |h| h as *const bcf_hdr_t as *mut bcf_hdr_t);
+                let rec = bcf_sr_get_line(&*sr, i)
+                    .map_or(std::ptr::null_mut(), |r| r as *const bcf1_t as *mut bcf1_t);
                 assert!(!hdr.is_null());
                 assert!(!rec.is_null());
                 out.push_str(CStr::from_ptr(bcf_seqname(hdr, rec)).to_str().unwrap());
@@ -217,11 +223,12 @@ unsafe fn synced_reader_summary_no_index(paths: &[&str]) -> String {
         }
         for i in 0..(*sr).nreaders {
             out.push('\t');
-            if bcf_sr_has_line(sr, i) == 0 {
+            if bcf_sr_has_line(&*sr, i) == 0 {
                 out.push('-');
                 continue;
             }
-            let rec = bcf_sr_get_line(sr, i);
+            let rec = bcf_sr_get_line(&*sr, i)
+                .map_or(std::ptr::null_mut(), |r| r as *const bcf1_t as *mut bcf1_t);
             assert_eq!(bcf_unpack(rec, hts_sys::BCF_UN_STR as c_int), 0);
             let n_allele = (*rec).n_allele();
             if n_allele > 1 {
@@ -245,14 +252,14 @@ unsafe fn synced_reader_summary_no_index(paths: &[&str]) -> String {
 unsafe fn synced_reader_no_index_status(paths: &[&str]) -> (c_int, c_int, u32) {
     let sr = bcf_sr_init();
     assert!(!sr.is_null());
-    assert_eq!(bcf_sr_set_opt_allow_no_idx(sr), 0);
+    assert_eq!(bcf_sr_set_opt_allow_no_idx(&mut *sr), 0);
     assert_eq!(
-        bcf_sr_set_opt_pair_logic(sr, hts_sys::BCF_SR_PAIR_ANY as c_int),
+        bcf_sr_set_opt_pair_logic(&mut *sr, hts_sys::BCF_SR_PAIR_ANY as c_int),
         0
     );
     for path in paths {
         let c_path = c_fixture(path);
-        let add_ret = bcf_sr_add_reader(sr, c_path.as_ptr());
+        let add_ret = bcf_sr_add_reader(&mut *sr, c_path.to_bytes());
         if add_ret != 1 {
             let errnum = (*sr).errnum;
             bcf_sr_destroy(sr);
@@ -262,7 +269,7 @@ unsafe fn synced_reader_no_index_status(paths: &[&str]) -> (c_int, c_int, u32) {
 
     let mut ret;
     loop {
-        ret = bcf_sr_next_line(sr);
+        ret = bcf_sr_next_line(&mut *sr);
         if ret <= 0 {
             break;
         }
@@ -675,7 +682,7 @@ fn synced_bcf_reader_disambiguates_braced_weird_chromosome_regions() {
 
         let sr = bcf_sr_init();
         assert!(!sr.is_null());
-        assert_ne!(bcf_sr_set_regions(sr, c"{1:1-1}-2".as_ptr(), 0), 0);
+        assert_ne!(bcf_sr_set_regions(&mut *sr, c"{1:1-1}-2".to_bytes(), 0), 0);
         bcf_sr_destroy(sr);
         remove_indexed_bcf(bcf.as_c_str());
     }
@@ -723,7 +730,7 @@ fn synced_bcf_reader_disambiguates_braced_weird_chromosome_targets() {
 
         let sr = bcf_sr_init();
         assert!(!sr.is_null());
-        assert_ne!(bcf_sr_set_targets(sr, c"{1:1-1}-2".as_ptr(), 0, 0), 0);
+        assert_ne!(bcf_sr_set_targets(&mut *sr, c"{1:1-1}-2".to_bytes(), 0, 0), 0);
         bcf_sr_destroy(sr);
         remove_indexed_bcf(bcf.as_c_str());
     }

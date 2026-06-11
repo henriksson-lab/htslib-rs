@@ -141,7 +141,7 @@ pub extern "C" fn samples_qtask_ordered_c_176_threadfn_orderedwrite(
             if r.is_null() {
                 break;
             }
-            let bamdata = thread_pool::hts_tpool_result_data(r).cast::<QTaskOrderedData>();
+            let bamdata = thread_pool::hts_tpool_result_data(&mut *r).cast::<QTaskOrderedData>();
             if bamdata.is_null() {
                 thread_pool::hts_tpool_delete_result(r, 0);
                 break;

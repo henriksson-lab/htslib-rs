@@ -66,15 +66,25 @@ pub unsafe fn samples_rem_header_c_49_main(argc: c_int, argv: *mut *mut c_char) 
         sam::sam_hdr_remove_line_id(
             &mut *in_samhdr,
             std::ffi::CStr::from_ptr(header),
-            id,
-            idval,
+            if id.is_null() {
+                None
+            } else {
+                Some((
+                    std::ffi::CStr::from_ptr(id),
+                    std::ffi::CStr::from_ptr(idval),
+                ))
+            },
         )
     } else {
         sam::sam_hdr_remove_lines(
             &mut *in_samhdr,
             std::ffi::CStr::from_ptr(header),
-            id,
-            std::ptr::null_mut(),
+            if id.is_null() {
+                None
+            } else {
+                Some(std::ffi::CStr::from_ptr(id))
+            },
+            None,
         )
     };
     if remove_ret != 0 {

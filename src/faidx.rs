@@ -42,14 +42,7 @@ fn is_graph_byte(c: u8) -> bool {
     c > b' ' && c <= b'~'
 }
 
-pub unsafe fn bgzf_getc_(fp: *mut BGZF) -> i32 {
-    let Some(fp) = fp.as_mut() else {
-        return -1;
-    };
-    bgzf_getc_ref(fp)
-}
-
-unsafe fn bgzf_getc_ref(fp: &mut BGZF) -> i32 {
+unsafe fn faidx_bgzf_getc(fp: &mut BGZF) -> i32 {
     if fp.block_offset + 1 < fp.block_length {
         let c = fp.uncompressed_block[fp.block_offset as usize];
         fp.block_offset += 1;
@@ -709,18 +702,13 @@ pub unsafe fn faidx_nseq(_fai: *const faidx_t) -> i32 {
     (*_fai).n
 }
 
-pub unsafe fn faidx_iseq(_fai: *const faidx_t, _i: i32) -> *const i8 {
-    match _fai.as_ref().and_then(|fai| faidx_iseq_ref(fai, _i)) {
-        Some(seq) => seq.as_ptr().cast(),
-        None => ptr::null(),
-    }
-}
-
-fn faidx_iseq_ref(fai: &faidx_t, i: i32) -> Option<&[u8]> {
+pub fn faidx_iseq(fai: &faidx_t, i: i32) -> Option<&[u8]> {
     (i >= 0)
         .then_some(i as usize)
         .filter(|&i| i < fai.name.len())
-        .map(|i| fai.name[i].as_slice())
+        // names are stored NUL-terminated; the idiomatic byte API returns them
+        // without the trailing NUL.
+        .map(|i| fai.name_bytes(i))
 }
 
 pub unsafe fn faidx_seq_len64(_fai: *const faidx_t, _seq: *const i8) -> hts_pos_t {
@@ -746,19 +734,7 @@ pub unsafe fn faidx_seq_len(_fai: *const faidx_t, _seq: *const i8) -> i32 {
     }
 }
 
-pub unsafe fn fai_adjust_region(
-    _fai: *const faidx_t,
-    _tid: i32,
-    _beg: *mut hts_pos_t,
-    _end: *mut hts_pos_t,
-) -> i32 {
-    match (_fai.as_ref(), _beg.as_mut(), _end.as_mut()) {
-        (Some(fai), Some(beg), Some(end)) => fai_adjust_region_ref(fai, _tid, beg, end),
-        _ => -1,
-    }
-}
-
-fn fai_adjust_region_ref(fai: &faidx_t, tid: i32, beg: &mut hts_pos_t, end: &mut hts_pos_t) -> i32 {
+pub fn fai_adjust_region(fai: &faidx_t, tid: i32, beg: &mut hts_pos_t, end: &mut hts_pos_t) -> i32 {
     if tid < 0 || tid >= fai.n {
         return -1;
     }
@@ -891,36 +867,23 @@ pub unsafe fn fai_parse_region(
     flags: i32,
 ) -> *const i8 {
     hts_parse_region(
-        s,
-        tid,
-        beg,
-        end,
+        CStr::from_ptr(s),
+        &mut *tid,
+        &mut *beg,
+        &mut *end,
         Some(fai_name2id),
         fai.cast_mut().cast(),
         flags,
     )
 }
 
-pub unsafe fn fai_set_cache_size(fai: *mut faidx_t, cache_size: i32) {
-    if let Some(fai) = fai.as_mut() {
-        fai_set_cache_size_ref(fai, cache_size);
-    }
-}
-
-fn fai_set_cache_size_ref(fai: &mut faidx_t, cache_size: i32) {
+pub fn fai_set_cache_size(fai: &mut faidx_t, cache_size: i32) {
     unsafe {
         bgzf_set_cache_size(fai.bgzf_ptr(), cache_size);
     }
 }
 
-pub unsafe fn fai_thread_pool(fai: *mut faidx_t, pool: *mut hts_tpool, qsize: i32) -> i32 {
-    let Some(fai) = fai.as_mut() else {
-        return -1;
-    };
-    fai_thread_pool_ref(fai, NonNull::new(pool), qsize)
-}
-
-fn fai_thread_pool_ref(fai: &mut faidx_t, pool: Option<NonNull<hts_tpool>>, qsize: i32) -> i32 {
+pub fn fai_thread_pool(fai: &mut faidx_t, pool: Option<NonNull<hts_tpool>>, qsize: i32) -> i32 {
     unsafe {
         bgzf_thread_pool(
             fai.bgzf_ptr(),
@@ -1428,7 +1391,7 @@ mod tests {
 
         unsafe {
             assert_eq!(
-                faidx_c_93_fai_insert_index(&mut fai, present.as_ptr(), 100, 80, 81, 10, 0),
+                faidx_insert_index(&mut fai, present.to_bytes(), 100, 80, 81, 10, 0),
                 0
             );
             assert_eq!(faidx_has_seq(&fai, present.as_ptr()), 1);
@@ -1436,7 +1399,7 @@ mod tests {
             assert_eq!(faidx_has_seq(std::ptr::null(), present.as_ptr()), 0);
             assert_eq!(faidx_fetch_nseq(&fai), 1);
             assert_eq!(faidx_nseq(&fai), 1);
-            assert_eq!(CStr::from_ptr(faidx_iseq(&fai, 0)), present.as_c_str());
+            assert_eq!(faidx_iseq(&fai, 0).unwrap(), present.as_bytes_with_nul());
             assert_eq!(faidx_seq_len64(&fai, present.as_ptr()), 100);
             assert_eq!(faidx_seq_len64(&fai, absent.as_ptr()), -1);
             assert_eq!(faidx_seq_len(&fai, present.as_ptr()), 100);
@@ -1954,8 +1917,8 @@ mod tests {
             let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
-            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)).to_bytes(), b"dup");
-            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 1)).to_bytes(), b"other");
+            assert_eq!(faidx_iseq(&*fai, 0).unwrap().strip_suffix(&[0]).unwrap(), b"dup");
+            assert_eq!(faidx_iseq(&*fai, 1).unwrap().strip_suffix(&[0]).unwrap(), b"other");
             assert_eq!(faidx_seq_len64(fai, dup.as_ptr()), 4);
             assert_eq!(faidx_seq_len64(fai, other.as_ptr()), 2);
             fai_destroy(fai);
@@ -2028,8 +1991,8 @@ mod tests {
             let fai = fai_load3_format(path_c.as_ptr(), ptr::null(), ptr::null(), 0, FAI_FASTQ);
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
-            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)).to_bytes(), b"r1");
-            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 1)).to_bytes(), b"r2");
+            assert_eq!(faidx_iseq(&*fai, 0).unwrap().strip_suffix(&[0]).unwrap(), b"r1");
+            assert_eq!(faidx_iseq(&*fai, 1).unwrap().strip_suffix(&[0]).unwrap(), b"r2");
 
             let mut len = 0;
             let qual = faidx_fetch_qual64(fai, r1.as_ptr(), 0, 3, &mut len);
@@ -2175,8 +2138,8 @@ mod tests {
             let fai = fai_load3(path_c.as_ptr(), std::ptr::null(), std::ptr::null(), 0);
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
-            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)).to_bytes(), b"chr1");
-            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 1)).to_bytes(), b"chr2");
+            assert_eq!(faidx_iseq(&*fai, 0).unwrap().strip_suffix(&[0]).unwrap(), b"chr1");
+            assert_eq!(faidx_iseq(&*fai, 1).unwrap().strip_suffix(&[0]).unwrap(), b"chr2");
             assert_eq!(faidx_seq_len64(fai, chr1.as_ptr()), 8);
             assert_eq!(faidx_seq_len64(fai, chr2.as_ptr()), 4);
 
@@ -2220,7 +2183,7 @@ mod tests {
             assert!(!fai.is_null());
             assert!(fai_path.exists());
             assert_eq!(faidx_nseq(fai), 1);
-            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)).to_bytes(), b"sq\xff");
+            assert_eq!(faidx_iseq(&*fai, 0).unwrap().strip_suffix(&[0]).unwrap(), b"sq\xff");
             assert_eq!(faidx_seq_len64(fai, seq_name.as_ptr()), 5);
 
             let mut len = 0;
@@ -2408,7 +2371,7 @@ mod tests {
             seeked: 0,
         };
         unsafe {
-            assert_eq!(bgzf_getc_(&mut fp), b'x' as i32);
+            assert_eq!(faidx_bgzf_getc(&mut fp), b'x' as i32);
             assert_eq!(fp.block_offset, 1);
             assert_eq!(fp.uncompressed_address, 1);
 
@@ -2508,8 +2471,8 @@ mod tests {
 
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
-            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)).to_bytes(), b"r1");
-            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 1)).to_bytes(), b"r2");
+            assert_eq!(faidx_iseq(&*fai, 0).unwrap().strip_suffix(&[0]).unwrap(), b"r1");
+            assert_eq!(faidx_iseq(&*fai, 1).unwrap().strip_suffix(&[0]).unwrap(), b"r2");
             assert_eq!(faidx_seq_len64(fai, c"r1".as_ptr()), 4);
             assert_eq!(faidx_seq_len64(fai, c"r2".as_ptr()), 2);
             fai_destroy(fai);
@@ -2540,8 +2503,8 @@ mod tests {
 
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
-            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)).to_bytes(), b"r1");
-            assert_eq!(CStr::from_ptr(faidx_iseq(fai, 1)).to_bytes(), b"r2");
+            assert_eq!(faidx_iseq(&*fai, 0).unwrap().strip_suffix(&[0]).unwrap(), b"r1");
+            assert_eq!(faidx_iseq(&*fai, 1).unwrap().strip_suffix(&[0]).unwrap(), b"r2");
             assert_eq!(faidx_seq_len64(fai, c"r1".as_ptr()), 3);
             assert_eq!(faidx_seq_len64(fai, c"r2".as_ptr()), 1);
             fai_destroy(fai);
@@ -2549,30 +2512,6 @@ mod tests {
 
         let _ = fs::remove_file(&path);
     }
-}
-
-// original: fai_insert_index (htslib/faidx.c:93)
-pub unsafe fn faidx_c_93_fai_insert_index(
-    idx: *mut faidx_t,
-    name: *const i8,
-    len: u64,
-    line_len: u32,
-    line_blen: u32,
-    seq_offset: u64,
-    qual_offset: u64,
-) -> i32 {
-    if idx.is_null() || name.is_null() {
-        return -1;
-    }
-    faidx_insert_index_bytes_ref(
-        &mut *idx,
-        CStr::from_ptr(name).to_bytes(),
-        len,
-        line_len,
-        line_blen,
-        seq_offset,
-        qual_offset,
-    )
 }
 
 // original: fai_build_core (htslib/faidx.c:132)
@@ -2644,7 +2583,7 @@ unsafe fn faidx_build_core_boxed(bgzf: &mut BGZF) -> Option<Box<faidx_t>> {
                     if name.contains(&0) {
                         return None;
                     }
-                    if faidx_insert_index_bytes_ref(
+                    if faidx_insert_index(
                         &mut idx,
                         &name,
                         seq_len,
@@ -2818,7 +2757,7 @@ unsafe fn faidx_build_core_boxed(bgzf: &mut BGZF) -> Option<Box<faidx_t>> {
         if name.contains(&0) {
             return None;
         }
-        if faidx_insert_index_bytes_ref(
+        if faidx_insert_index(
             &mut idx,
             &name,
             seq_len,
@@ -2915,7 +2854,7 @@ unsafe fn faidx_read_owned(fp: &mut hFILE, format: i32) -> Option<Box<faidx_t>> 
             return None;
         }
 
-        if faidx_insert_index_bytes_ref(
+        if faidx_insert_index(
             &mut fai,
             name,
             len,
@@ -3173,8 +3112,8 @@ pub unsafe fn faidx_c_1033_fai_thread_pool(
     bgzf_thread_pool((*fai).bgzf_ptr(), pool, qsize)
 }
 
-fn faidx_insert_index_bytes_ref(
-    idx_ref: &mut faidx_t,
+pub fn faidx_insert_index(
+    idx: &mut faidx_t,
     name: &[u8],
     len: u64,
     line_len: u32,
@@ -3182,7 +3121,7 @@ fn faidx_insert_index_bytes_ref(
     seq_offset: u64,
     qual_offset: u64,
 ) -> i32 {
-    if kh_get_s_bytes(idx_ref, name) != idx_ref.hash.n_buckets {
+    if kh_get_s_bytes(idx, name) != idx.hash.n_buckets {
         return 0;
     }
     let mut val = faidx1_t {
@@ -3193,7 +3132,7 @@ fn faidx_insert_index_bytes_ref(
         seq_offset,
         qual_offset,
     };
-    faidx_insert_owned_name(idx_ref, name.to_vec(), &mut val)
+    faidx_insert_owned_name(idx, name.to_vec(), &mut val)
 }
 
 fn faidx_insert_owned_name(idx: &mut faidx_t, mut name_key: Vec<u8>, val: &mut faidx1_t) -> i32 {

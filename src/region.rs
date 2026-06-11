@@ -1,4 +1,4 @@
-use std::ffi::c_void;
+use std::ffi::{c_void, CStr};
 
 use super::hts::{
     hts_name2id_f, hts_pair_pos_t, hts_parse_region, hts_pos_t, HTS_IDX_NOCOOR, HTS_IDX_START,
@@ -267,7 +267,7 @@ pub unsafe fn region_c_177_hts_reglist_create(
             region.push(0);
             unsafe {
                 !hts_parse_region(
-                    region.as_ptr().cast(),
+                    CStr::from_ptr(region.as_ptr().cast()),
                     &mut tid,
                     &mut beg,
                     &mut end,

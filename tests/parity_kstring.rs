@@ -101,22 +101,8 @@ fn parity_kputd_various_values() {
 unsafe fn ksplit_core_native(input: &str, delim: c_int) -> (c_int, Vec<u8>, Vec<c_int>) {
     // ksplit_core writes NUL bytes into the input buffer — work on a copy.
     let mut buf: Vec<u8> = input.bytes().chain(std::iter::once(0u8)).collect();
-    let mut max: c_int = 0;
-    let mut offsets: *mut c_int = std::ptr::null_mut();
-    let n = htslib_rs::kstring::ksplit_core(
-        buf.as_mut_ptr().cast::<c_char>(),
-        delim,
-        &mut max,
-        &mut offsets,
-    );
-    let off_slice = if offsets.is_null() {
-        Vec::new()
-    } else {
-        std::slice::from_raw_parts(offsets, n as usize).to_vec()
-    };
-    if !offsets.is_null() {
-        libc::free(offsets.cast());
-    }
+    let off_slice = htslib_rs::kstring::ksplit_core(&mut buf, delim, true).unwrap_or_default();
+    let n = off_slice.len() as c_int;
     (n, buf, off_slice)
 }
 
@@ -209,7 +195,7 @@ unsafe fn run_kstrtok_native(input: &CStr, sep: &CStr) -> Vec<(isize, c_int)> {
     let mut aux: ks_tokaux_t = std::mem::zeroed();
     let mut results = Vec::new();
     let base = input.as_ptr();
-    let mut p = htslib_rs::kstring::kstrtok(base, sep.as_ptr(), &mut aux);
+    let mut p = htslib_rs::kstring::kstrtok(Some(input.to_bytes()), Some(sep.to_bytes()), &mut aux);
     while !p.is_null() {
         let start = p.offset_from(base);
         // aux.p points at the separator (or terminator) — distance to start is
@@ -217,7 +203,7 @@ unsafe fn run_kstrtok_native(input: &CStr, sep: &CStr) -> Vec<(isize, c_int)> {
         let end = aux.p;
         let len = end.offset_from(p) as c_int;
         results.push((start, len));
-        p = htslib_rs::kstring::kstrtok(std::ptr::null(), std::ptr::null(), &mut aux);
+        p = htslib_rs::kstring::kstrtok(None, None, &mut aux);
         if results.len() > 1024 {
             break; // safety
         }
@@ -296,12 +282,15 @@ fn parity_kstrstr_substring_search() {
         for (haystack, needle) in cases {
             let mut prep_n: *mut c_int = std::ptr::null_mut();
             let mut prep_c: *mut c_int = std::ptr::null_mut();
-            let nptr = htslib_rs::kstring::kstrstr(haystack.as_ptr(), needle.as_ptr(), &mut prep_n);
+            let n_res = htslib_rs::kstring::kstrstr(
+                haystack.to_bytes(),
+                needle.to_bytes(),
+                Some(&mut prep_n),
+            );
             let cptr = hts_sys::kstrstr(haystack.as_ptr(), needle.as_ptr(), &mut prep_c);
-            let n_off = if nptr.is_null() {
-                -1
-            } else {
-                nptr.offset_from(haystack.as_ptr())
+            let n_off = match n_res {
+                None => -1,
+                Some(off) => off as isize,
             };
             let c_off = if cptr.is_null() {
                 -1
@@ -342,13 +331,16 @@ fn parity_kstrnstr_bounded_search() {
         for (haystack, needle, n) in cases {
             let mut prep_n: *mut c_int = std::ptr::null_mut();
             let mut prep_c: *mut c_int = std::ptr::null_mut();
-            let nptr =
-                htslib_rs::kstring::kstrnstr(haystack.as_ptr(), needle.as_ptr(), *n, &mut prep_n);
+            let n_res = htslib_rs::kstring::kstrnstr(
+                haystack.to_bytes(),
+                needle.to_bytes(),
+                if *n >= 0 { *n as usize } else { 0 },
+                Some(&mut prep_n),
+            );
             let cptr = hts_sys::kstrnstr(haystack.as_ptr(), needle.as_ptr(), *n, &mut prep_c);
-            let n_off = if nptr.is_null() {
-                -1
-            } else {
-                nptr.offset_from(haystack.as_ptr())
+            let n_off = match n_res {
+                None => -1,
+                Some(off) => off as isize,
             };
             let c_off = if cptr.is_null() {
                 -1

@@ -1,7 +1,7 @@
 // Functions translated from htslib/synced_bcf_reader.c.
 // Extracted from src/vcf.rs.
 
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, CStr, CString};
 use std::mem::size_of;
 use std::ptr::NonNull;
 
@@ -12,23 +12,7 @@ use crate::htslib_rs::vcf::*;
 
 // (extracted functions in src/vcf.rs order)
 
-pub unsafe fn synced_bcf_reader_c_1070_regions_merge(reg: *mut c_void) {
-    unsafe {
-        if let Some(reg) = reg.cast::<BcfSrRegion>().as_mut() {
-            regions_merge_ref(reg);
-        }
-    }
-}
-
-pub unsafe fn synced_bcf_reader_c_1085__regions_sort_and_merge(reg: *mut bcf_sr_regions_t) {
-    unsafe {
-        if let Some(reg) = reg.as_mut() {
-            regions_sort_and_merge_ref(reg);
-        }
-    }
-}
-
-pub(crate) unsafe fn regions_sort_and_merge_ref(reg: &mut bcf_sr_regions_t) {
+pub(crate) unsafe fn regions_sort_and_merge(reg: &mut bcf_sr_regions_t) {
     unsafe {
         let regs = if reg.regs.is_null() || reg.nseqs <= 0 {
             &mut [][..]
@@ -41,12 +25,12 @@ pub(crate) unsafe fn regions_sort_and_merge_ref(reg: &mut bcf_sr_regions_t) {
                     std::slice::from_raw_parts_mut(seq_reg.regs, seq_reg.nregs as usize);
                 intervals.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
             }
-            regions_merge_ref(seq_reg);
+            regions_merge(seq_reg);
         }
     }
 }
 
-unsafe fn regions_merge_ref(reg: &mut BcfSrRegion) {
+unsafe fn regions_merge(reg: &mut BcfSrRegion) {
     unsafe {
         let intervals = if reg.regs.is_null() || reg.nregs <= 0 {
             &mut [][..]
@@ -69,30 +53,7 @@ unsafe fn regions_merge_ref(reg: &mut BcfSrRegion) {
     }
 }
 
-pub unsafe fn bcf_sr_add_hreader(
-    readers: *mut bcf_srs_t,
-    file_ptr: *mut htsFile,
-    autoclose: c_int,
-    idxname: *const c_char,
-) -> c_int {
-    unsafe {
-        // Defensive guards (Rust-safety nicety not present in the C library,
-        // which would dereference a NULL readers pointer): bail out cleanly.
-        let Some(readers) = readers.as_mut() else {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
-            return 0;
-        };
-        if file_ptr.is_null() {
-            readers.errnum = bcf_sr_error_api_usage_error;
-            *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
-            return 0;
-        }
-        let idxname = idxname.as_ref().map(|_| CStr::from_ptr(idxname).to_bytes());
-        bcf_sr_add_hreader_ref(readers, &mut *file_ptr, autoclose, idxname)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_add_hreader_ref(
+pub(crate) unsafe fn bcf_sr_add_hreader(
     readers: &mut bcf_srs_t,
     file: &mut htsFile,
     autoclose: c_int,
@@ -106,11 +67,11 @@ pub(crate) unsafe fn bcf_sr_add_hreader_ref(
     }
 }
 
-unsafe fn bcf_sr_aux_ref(readers: &bcf_srs_t) -> Option<&BcfSrAux> {
+unsafe fn bcf_sr_aux_borrow(readers: &bcf_srs_t) -> Option<&BcfSrAux> {
     unsafe { readers.aux.cast::<BcfSrAux>().as_ref() }
 }
 
-unsafe fn bcf_sr_aux_ref_mut(readers: &mut bcf_srs_t) -> Option<&mut BcfSrAux> {
+unsafe fn bcf_sr_aux_borrow_mut(readers: &mut bcf_srs_t) -> Option<&mut BcfSrAux> {
     unsafe { readers.aux.cast::<BcfSrAux>().as_mut() }
 }
 
@@ -120,22 +81,14 @@ pub unsafe fn bcf_sr_init() -> *mut bcf_srs_t {
         let aux = Box::new(BcfSrAux::default());
         files.aux = Box::into_raw(aux);
         let files = Box::into_raw(files);
-        bcf_sr_sort_c_675_bcf_sr_sort_init(&mut (*bcf_sr_aux_mut(files)).sort);
-        bcf_sr_set_opt_ref(&mut *files, BCF_SR_REGIONS_OVERLAP, 1);
-        bcf_sr_set_opt_ref(&mut *files, BCF_SR_TARGETS_OVERLAP, 0);
+        bcf_sr_sort_init(&mut (*bcf_sr_aux_mut(files)).sort);
+        bcf_sr_set_opt(&mut *files, BCF_SR_REGIONS_OVERLAP, 1);
+        bcf_sr_set_opt(&mut *files, BCF_SR_TARGETS_OVERLAP, 0);
         files
     }
 }
 
-pub unsafe fn synced_bcf_reader_c_461_bcf_sr_destroy1(reader: *mut bcf_sr_t, closefile: c_int) {
-    unsafe {
-        if let Some(reader) = reader.as_mut() {
-            bcf_sr_destroy1_ref(reader, closefile);
-        }
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_destroy1_ref(reader: &mut bcf_sr_t, closefile: c_int) {
+pub(crate) unsafe fn bcf_sr_destroy1(reader: &mut bcf_sr_t, closefile: c_int) {
     unsafe {
         if !reader.file.is_null() && closefile != 0 {
             let _ = hts_close(reader.file.cast());
@@ -178,7 +131,7 @@ pub(crate) unsafe fn bcf_sr_destroy1_ref(reader: &mut bcf_sr_t, closefile: c_int
     }
 }
 
-pub(crate) unsafe fn bcf_sr_regions_set_overlap_ref(
+pub(crate) unsafe fn bcf_sr_regions_set_overlap(
     regions: &mut bcf_sr_regions_t,
     overlap: c_int,
 ) {
@@ -191,7 +144,7 @@ pub(crate) unsafe fn bcf_sr_regions_set_overlap_ref(
     }
 }
 
-pub(crate) unsafe fn bcf_sr_regions_destroy_ref(regions: &mut bcf_sr_regions_t) {
+pub(crate) unsafe fn bcf_sr_regions_destroy(regions: &mut bcf_sr_regions_t) {
     unsafe { bcf_sr_regions_destroy_translated(regions as *mut bcf_sr_regions_t) }
 }
 
@@ -201,7 +154,7 @@ pub unsafe fn bcf_sr_destroy(files: *mut bcf_srs_t) {
             return;
         };
         let mut files = Box::from_raw(files_ptr.as_ptr());
-        let autoclose = bcf_sr_aux_ref(&files).map_or(std::ptr::null_mut(), |aux| aux.closefile);
+        let autoclose = bcf_sr_aux_borrow(&files).map_or(std::ptr::null_mut(), |aux| aux.closefile);
         let readers = if files.readers.is_null() || files.nreaders <= 0 {
             &mut [][..]
         } else {
@@ -213,7 +166,7 @@ pub unsafe fn bcf_sr_destroy(files: *mut bcf_srs_t) {
             } else {
                 *autoclose.add(i)
             };
-            bcf_sr_destroy1_ref(reader, cf);
+            bcf_sr_destroy1(reader, cf);
         }
         if !files.has_line.is_null() && files.nreaders > 0 {
             drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
@@ -241,19 +194,19 @@ pub unsafe fn bcf_sr_destroy(files: *mut bcf_srs_t) {
             }
         }
         if let Some(targets) = files.targets.as_mut() {
-            bcf_sr_regions_destroy_ref(targets);
+            bcf_sr_regions_destroy(targets);
         }
         if let Some(regions) = files.regions.as_mut() {
-            bcf_sr_regions_destroy_ref(regions);
+            bcf_sr_regions_destroy(regions);
         }
         if files.tmps.data.capacity() != 0 {
             files.tmps.data = Vec::new();
         }
         if files.n_threads != 0 {
-            bcf_sr_destroy_threads_ref(&mut files);
+            bcf_sr_destroy_threads(&mut files);
         }
-        if let Some(aux) = bcf_sr_aux_ref_mut(&mut files) {
-            bcf_sr_sort_c_685_bcf_sr_sort_destroy(Some(&mut aux.sort));
+        if let Some(aux) = bcf_sr_aux_borrow_mut(&mut files) {
+            bcf_sr_sort_destroy(&mut aux.sort);
         }
         if !autoclose.is_null() && files.nreaders >= 0 {
             // `closefile` is the autoclose array sized to the reader count.
@@ -293,16 +246,7 @@ pub unsafe fn bcf_sr_strerror(errnum: c_int) -> Vec<u8> {
 }
 
 // original: bcf_sr_set_threads (htslib/synced_bcf_reader.c:228)
-pub unsafe fn bcf_sr_set_threads(files: *mut bcf_srs_t, n_threads: c_int) -> c_int {
-    unsafe {
-        let Some(files) = files.as_mut() else {
-            return -1;
-        };
-        bcf_sr_set_threads_ref(files, n_threads)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_set_threads_ref(files: &mut bcf_srs_t, n_threads: c_int) -> c_int {
+pub(crate) unsafe fn bcf_sr_set_threads(files: &mut bcf_srs_t, n_threads: c_int) -> c_int {
     files.n_threads = n_threads;
     if n_threads == 0 {
         return 0;
@@ -318,39 +262,22 @@ pub(crate) unsafe fn bcf_sr_set_threads_ref(files: &mut bcf_srs_t, n_threads: c_
     0
 }
 
-pub unsafe fn bcf_sr_set_opt_require_idx(readers: *mut bcf_srs_t) -> c_int {
-    unsafe { readers.as_mut().map_or(-1, bcf_sr_set_opt_require_idx_ref) }
-}
-
-pub(crate) fn bcf_sr_set_opt_require_idx_ref(readers: &mut bcf_srs_t) -> c_int {
+pub(crate) fn bcf_sr_set_opt_require_idx(readers: &mut bcf_srs_t) -> c_int {
     readers.require_index = REQUIRE_IDX_;
     0
 }
 
-pub unsafe fn bcf_sr_set_opt_allow_no_idx(readers: *mut bcf_srs_t) -> c_int {
-    unsafe { readers.as_mut().map_or(-1, bcf_sr_set_opt_allow_no_idx_ref) }
-}
-
-pub(crate) fn bcf_sr_set_opt_allow_no_idx_ref(readers: &mut bcf_srs_t) -> c_int {
+pub fn bcf_sr_set_opt_allow_no_idx(readers: &mut bcf_srs_t) -> c_int {
     readers.require_index = ALLOW_NO_IDX_;
     0
 }
 
-pub unsafe fn bcf_sr_set_opt_pair_logic(readers: *mut bcf_srs_t, pair_logic: c_int) -> c_int {
-    unsafe {
-        let Some(readers) = readers.as_mut() else {
-            return -1;
-        };
-        bcf_sr_set_opt_pair_logic_ref(readers, pair_logic)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_set_opt_pair_logic_ref(
+pub unsafe fn bcf_sr_set_opt_pair_logic(
     readers: &mut bcf_srs_t,
     pair_logic: c_int,
 ) -> c_int {
     unsafe {
-        let Some(aux) = bcf_sr_aux_ref_mut(readers) else {
+        let Some(aux) = bcf_sr_aux_borrow_mut(readers) else {
             return -1;
         };
         aux.sort.pair = pair_logic;
@@ -358,90 +285,55 @@ pub(crate) unsafe fn bcf_sr_set_opt_pair_logic_ref(
     0
 }
 
-pub unsafe fn bcf_sr_set_opt_regions_overlap(readers: *mut bcf_srs_t, overlap: c_int) -> c_int {
-    unsafe {
-        let Some(readers) = readers.as_mut() else {
-            return -1;
-        };
-        bcf_sr_set_opt_regions_overlap_ref(readers, overlap)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_set_opt_regions_overlap_ref(
+pub(crate) unsafe fn bcf_sr_set_opt_regions_overlap(
     readers: &mut bcf_srs_t,
     overlap: c_int,
 ) -> c_int {
     unsafe {
-        let Some(aux) = bcf_sr_aux_ref_mut(readers) else {
+        let Some(aux) = bcf_sr_aux_borrow_mut(readers) else {
             return -1;
         };
         aux.regions_overlap = overlap;
         if let Some(regions) = readers.regions.as_mut() {
-            bcf_sr_regions_set_overlap_ref(regions, overlap);
+            bcf_sr_regions_set_overlap(regions, overlap);
         }
     }
     0
 }
 
-pub unsafe fn bcf_sr_set_opt_targets_overlap(readers: *mut bcf_srs_t, overlap: c_int) -> c_int {
-    unsafe {
-        let Some(readers) = readers.as_mut() else {
-            return -1;
-        };
-        bcf_sr_set_opt_targets_overlap_ref(readers, overlap)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_set_opt_targets_overlap_ref(
+pub(crate) unsafe fn bcf_sr_set_opt_targets_overlap(
     readers: &mut bcf_srs_t,
     overlap: c_int,
 ) -> c_int {
     unsafe {
-        let Some(aux) = bcf_sr_aux_ref_mut(readers) else {
+        let Some(aux) = bcf_sr_aux_borrow_mut(readers) else {
             return -1;
         };
         aux.targets_overlap = overlap;
         if let Some(targets) = readers.targets.as_mut() {
-            bcf_sr_regions_set_overlap_ref(targets, overlap);
+            bcf_sr_regions_set_overlap(targets, overlap);
         }
     }
     0
 }
 
-pub unsafe fn bcf_sr_set_opt(readers: *mut bcf_srs_t, opt: bcf_sr_opt_t, value: c_int) -> c_int {
-    unsafe {
-        let Some(readers) = readers.as_mut() else {
-            return -1;
-        };
-        bcf_sr_set_opt_ref(readers, opt, value)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_set_opt_ref(
+pub(crate) unsafe fn bcf_sr_set_opt(
     readers: &mut bcf_srs_t,
     opt: bcf_sr_opt_t,
     value: c_int,
 ) -> c_int {
     match opt {
-        BCF_SR_REQUIRE_IDX => bcf_sr_set_opt_require_idx_ref(readers),
-        BCF_SR_ALLOW_NO_IDX => bcf_sr_set_opt_allow_no_idx_ref(readers),
-        BCF_SR_PAIR_LOGIC => unsafe { bcf_sr_set_opt_pair_logic_ref(readers, value) },
-        BCF_SR_REGIONS_OVERLAP => unsafe { bcf_sr_set_opt_regions_overlap_ref(readers, value) },
-        BCF_SR_TARGETS_OVERLAP => unsafe { bcf_sr_set_opt_targets_overlap_ref(readers, value) },
+        BCF_SR_REQUIRE_IDX => bcf_sr_set_opt_require_idx(readers),
+        BCF_SR_ALLOW_NO_IDX => bcf_sr_set_opt_allow_no_idx(readers),
+        BCF_SR_PAIR_LOGIC => unsafe { bcf_sr_set_opt_pair_logic(readers, value) },
+        BCF_SR_REGIONS_OVERLAP => unsafe { bcf_sr_set_opt_regions_overlap(readers, value) },
+        BCF_SR_TARGETS_OVERLAP => unsafe { bcf_sr_set_opt_targets_overlap(readers, value) },
         _ => 1,
     }
 }
 
 // original: bcf_sr_destroy_threads (htslib/synced_bcf_reader.c:244)
-pub unsafe fn bcf_sr_destroy_threads(files: *mut bcf_srs_t) {
-    unsafe {
-        if let Some(files) = files.as_mut() {
-            bcf_sr_destroy_threads_ref(files);
-        }
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_destroy_threads_ref(files: &mut bcf_srs_t) {
+pub(crate) unsafe fn bcf_sr_destroy_threads(files: &mut bcf_srs_t) {
     unsafe {
         let Some(p) = NonNull::new(files.p.cast::<crate::hts::htsThreadPool>()) else {
             return;
@@ -454,19 +346,7 @@ pub(crate) unsafe fn bcf_sr_destroy_threads_ref(files: &mut bcf_srs_t) {
     }
 }
 
-pub unsafe fn bcf_sr_add_reader(files: *mut bcf_srs_t, fname: *const c_char) -> c_int {
-    unsafe {
-        let Some(files) = files.as_mut() else {
-            return 0;
-        };
-        let Some(fname) = fname.as_ref().map(|_| CStr::from_ptr(fname).to_bytes()) else {
-            return 0;
-        };
-        bcf_sr_add_reader_ref(files, fname)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_add_reader_ref(files: &mut bcf_srs_t, fname: &[u8]) -> c_int {
+pub unsafe fn bcf_sr_add_reader(files: &mut bcf_srs_t, fname: &[u8]) -> c_int {
     unsafe {
         // Re-NUL-terminate at the libhts boundary.
         let fname_c = CString::new(fname).unwrap();
@@ -483,7 +363,7 @@ pub(crate) unsafe fn bcf_sr_add_reader_ref(files: &mut bcf_srs_t, fname: &[u8]) 
             .windows(HTS_IDX_DELIM.len())
             .position(|w| w == HTS_IDX_DELIM)
             .map(|pos| &fname[pos + HTS_IDX_DELIM.len()..]);
-        let ret = bcf_sr_add_hreader_ref(files, &mut *file_ptr, 1, idxname);
+        let ret = bcf_sr_add_hreader(files, &mut *file_ptr, 1, idxname);
         if ret == 0 {
             let _ = hts_close(file_ptr);
         }
@@ -492,31 +372,19 @@ pub(crate) unsafe fn bcf_sr_add_reader_ref(files: &mut bcf_srs_t, fname: &[u8]) 
 }
 
 // original: bcf_sr_remove_reader (htslib/synced_bcf_reader.c:504)
-pub unsafe fn bcf_sr_remove_reader(files: *mut bcf_srs_t, i: c_int) {
-    unsafe {
-        if let Some(files) = files.as_mut() {
-            bcf_sr_remove_reader_ref(files, i);
-        }
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_remove_reader_ref(files: &mut bcf_srs_t, i: c_int) {
+pub(crate) unsafe fn bcf_sr_remove_reader(files: &mut bcf_srs_t, i: c_int) {
     unsafe {
         // assert( !files->samples );  // not ready for this yet
         let files_ptr = files as *mut bcf_srs_t;
         let autoclose = (*bcf_sr_aux_mut(files_ptr)).closefile;
 
-        bcf_sr_sort_c_662_bcf_sr_sort_remove_reader(
-            Some(&mut *files_ptr),
-            Some(&mut (*bcf_sr_aux_mut(files_ptr)).sort),
-            i,
-        );
+        bcf_sr_sort_remove_reader(&mut (*bcf_sr_aux_mut(files_ptr)).sort, i);
         let cf = if autoclose.is_null() {
             0
         } else {
             *autoclose.add(i as usize)
         };
-        bcf_sr_destroy1_ref(&mut *files.readers.add(i as usize), cf);
+        bcf_sr_destroy1(&mut *files.readers.add(i as usize), cf);
         if i + 1 < files.nreaders {
             let n = (files.nreaders - i - 1) as usize;
             std::ptr::copy(
@@ -542,16 +410,7 @@ pub(crate) unsafe fn bcf_sr_remove_reader_ref(files: &mut bcf_srs_t, i: c_int) {
 }
 
 // original: bcf_sr_next_line (htslib/synced_bcf_reader.c:869)
-pub unsafe fn bcf_sr_next_line(files: *mut bcf_srs_t) -> c_int {
-    unsafe {
-        let Some(files) = files.as_mut() else {
-            return 0;
-        };
-        bcf_sr_next_line_ref(files)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_next_line_ref(files: &mut bcf_srs_t) -> c_int {
+pub unsafe fn bcf_sr_next_line(files: &mut bcf_srs_t) -> c_int {
     unsafe {
         let files_ptr = files as *mut bcf_srs_t;
         if files.targets_als == 0 {
@@ -603,16 +462,7 @@ pub(crate) unsafe fn bcf_sr_next_line_ref(files: &mut bcf_srs_t) -> c_int {
     }
 }
 
-pub unsafe fn bcf_sr_has_line(readers: *mut bcf_srs_t, i: c_int) -> c_int {
-    unsafe {
-        let Some(readers) = readers.as_ref() else {
-            return 0;
-        };
-        bcf_sr_has_line_ref(readers, i)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_has_line_ref(readers: &bcf_srs_t, i: c_int) -> c_int {
+pub unsafe fn bcf_sr_has_line(readers: &bcf_srs_t, i: c_int) -> c_int {
     unsafe {
         if i < 0 || i >= readers.nreaders || readers.has_line.is_null() {
             return 0;
@@ -621,20 +471,9 @@ pub(crate) unsafe fn bcf_sr_has_line_ref(readers: &bcf_srs_t, i: c_int) -> c_int
     }
 }
 
-pub unsafe fn bcf_sr_get_line(readers: *mut bcf_srs_t, i: c_int) -> *mut bcf1_t {
+pub unsafe fn bcf_sr_get_line(readers: &bcf_srs_t, i: c_int) -> Option<&bcf1_t> {
     unsafe {
-        let Some(readers) = readers.as_ref() else {
-            return std::ptr::null_mut();
-        };
-        bcf_sr_get_line_ref(readers, i)
-            .map(|line| line as *const bcf1_t as *mut bcf1_t)
-            .unwrap_or(std::ptr::null_mut())
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_get_line_ref(readers: &bcf_srs_t, i: c_int) -> Option<&bcf1_t> {
-    unsafe {
-        if bcf_sr_has_line_ref(readers, i) == 0 || readers.readers.is_null() {
+        if bcf_sr_has_line(readers, i) == 0 || readers.readers.is_null() {
             return None;
         }
         let reader = readers.readers.add(i as usize);
@@ -645,18 +484,7 @@ pub(crate) unsafe fn bcf_sr_get_line_ref(readers: &bcf_srs_t, i: c_int) -> Optio
     }
 }
 
-pub unsafe fn bcf_sr_get_header(readers: *mut bcf_srs_t, i: c_int) -> *mut bcf_hdr_t {
-    unsafe {
-        let Some(readers) = readers.as_ref() else {
-            return std::ptr::null_mut();
-        };
-        bcf_sr_get_header_ref(readers, i)
-            .map(|header| header as *const bcf_hdr_t as *mut bcf_hdr_t)
-            .unwrap_or(std::ptr::null_mut())
-    }
-}
-
-pub(crate) fn bcf_sr_get_header_ref(readers: &bcf_srs_t, i: c_int) -> Option<&bcf_hdr_t> {
+pub fn bcf_sr_get_header(readers: &bcf_srs_t, i: c_int) -> Option<&bcf_hdr_t> {
     unsafe {
         if i < 0 || i >= readers.nreaders || readers.readers.is_null() {
             return None;
@@ -666,16 +494,7 @@ pub(crate) fn bcf_sr_get_header_ref(readers: &bcf_srs_t, i: c_int) -> Option<&bc
 }
 
 // original: bcf_sr_seek (htslib/synced_bcf_reader.c:911)
-pub unsafe fn bcf_sr_seek(readers: *mut bcf_srs_t, seq: *const c_char, pos: hts_pos_t) -> c_int {
-    unsafe {
-        let Some(readers) = readers.as_mut() else {
-            return 0;
-        };
-        bcf_sr_seek_ref(readers, seq.as_ref().map(|_| CStr::from_ptr(seq).to_bytes()), pos)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_seek_ref(
+pub(crate) unsafe fn bcf_sr_seek(
     readers: &mut bcf_srs_t,
     seq: Option<&[u8]>,
     pos: hts_pos_t,
@@ -688,8 +507,8 @@ pub(crate) unsafe fn bcf_sr_seek_ref(
         // Re-NUL-terminate the sequence name at the libhts boundary.
         let seq_c = seq.map(|s| CString::new(s).unwrap());
         let seq_ptr = seq_c.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
-        if let Some(aux) = bcf_sr_aux_ref_mut(readers) {
-            bcf_sr_sort_c_681_bcf_sr_sort_reset(Some(&mut aux.sort));
+        if let Some(aux) = bcf_sr_aux_borrow_mut(readers) {
+            bcf_sr_sort_reset(&mut aux.sort);
         }
         if seq.is_none() && pos == 0 {
             bcf_sr_seek_start(readers_ptr);
@@ -702,7 +521,7 @@ pub(crate) unsafe fn bcf_sr_seek_ref(
             (*readers.regions).iseq = i;
         }
         if let Some(seq) = seq {
-            bcf_sr_regions_overlap_inner_ref(&mut *readers.regions, seq, pos, pos, 0);
+            bcf_sr_regions_overlap_inner(&mut *readers.regions, seq, pos, pos, 0);
         }
 
         let mut nret = 0;
@@ -714,23 +533,7 @@ pub(crate) unsafe fn bcf_sr_seek_ref(
 }
 
 // original: bcf_sr_set_samples (htslib/synced_bcf_reader.c:940)
-pub unsafe fn bcf_sr_set_samples(
-    files: *mut bcf_srs_t,
-    fname: *const c_char,
-    is_file: c_int,
-) -> c_int {
-    unsafe {
-        let Some(files) = files.as_mut() else {
-            return 0;
-        };
-        let Some(fname) = fname.as_ref().map(|_| CStr::from_ptr(fname).to_bytes()) else {
-            return 0;
-        };
-        bcf_sr_set_samples_ref(files, fname, is_file)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_set_samples_ref(
+pub(crate) unsafe fn bcf_sr_set_samples(
     files: &mut bcf_srs_t,
     fname: &[u8],
     is_file: c_int,
@@ -847,23 +650,6 @@ pub(crate) unsafe fn bcf_sr_set_samples_ref(
 
 // original: bcf_sr_set_targets (htslib/synced_bcf_reader.c:209)
 pub unsafe fn bcf_sr_set_targets(
-    readers: *mut bcf_srs_t,
-    targets: *const c_char,
-    is_file: c_int,
-    alleles: c_int,
-) -> c_int {
-    unsafe {
-        let Some(readers) = readers.as_mut() else {
-            return -1;
-        };
-        let Some(targets) = targets.as_ref().map(|_| CStr::from_ptr(targets).to_bytes()) else {
-            return -1;
-        };
-        bcf_sr_set_targets_ref(readers, targets, is_file, alleles)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_set_targets_ref(
     readers: &mut bcf_srs_t,
     targets: &[u8],
     is_file: c_int,
@@ -878,13 +664,13 @@ pub(crate) unsafe fn bcf_sr_set_targets_ref(
             readers.targets_exclude = 1;
             targets = &targets[1..];
         }
-        let Some(regions) = bcf_sr_regions_init_ref(targets, is_file, 0, 1, -2) else {
+        let Some(regions) = bcf_sr_regions_init(targets, is_file, 0, 1, -2) else {
             return -1;
         };
         readers.targets = regions.as_ptr();
         readers.targets_als = alleles;
-        if let Some(targets_overlap) = bcf_sr_aux_ref(readers).map(|aux| aux.targets_overlap) {
-            bcf_sr_regions_set_overlap_ref(&mut *readers.targets, targets_overlap);
+        if let Some(targets_overlap) = bcf_sr_aux_borrow(readers).map(|aux| aux.targets_overlap) {
+            bcf_sr_regions_set_overlap(&mut *readers.targets, targets_overlap);
         }
         0
     }
@@ -892,22 +678,6 @@ pub(crate) unsafe fn bcf_sr_set_targets_ref(
 
 // original: bcf_sr_set_regions (htslib/synced_bcf_reader.c:191)
 pub unsafe fn bcf_sr_set_regions(
-    readers: *mut bcf_srs_t,
-    regions: *const c_char,
-    is_file: c_int,
-) -> c_int {
-    unsafe {
-        let Some(readers) = readers.as_mut() else {
-            return -1;
-        };
-        let Some(regions) = regions.as_ref().map(|_| CStr::from_ptr(regions).to_bytes()) else {
-            return -1;
-        };
-        bcf_sr_set_regions_ref(readers, regions, is_file)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_set_regions_ref(
     readers: &mut bcf_srs_t,
     regions: &[u8],
     is_file: c_int,
@@ -916,45 +686,29 @@ pub(crate) unsafe fn bcf_sr_set_regions_ref(
         let readers_ptr = readers as *mut bcf_srs_t;
         if readers.nreaders != 0 || !readers.regions.is_null() {
             if let Some(regions) = readers.regions.as_mut() {
-                bcf_sr_regions_destroy_ref(regions);
+                bcf_sr_regions_destroy(regions);
             }
-            readers.regions = bcf_sr_regions_init_ref(regions, is_file, 0, 1, -2)
+            readers.regions = bcf_sr_regions_init(regions, is_file, 0, 1, -2)
                 .map_or(std::ptr::null_mut(), NonNull::as_ptr);
             bcf_sr_seek_start(readers_ptr);
             return 0;
         }
 
-        let Some(regions) = bcf_sr_regions_init_ref(regions, is_file, 0, 1, -2) else {
+        let Some(regions) = bcf_sr_regions_init(regions, is_file, 0, 1, -2) else {
             return -1;
         };
         readers.regions = regions.as_ptr();
         readers.explicit_regs = 1;
         readers.require_index = REQUIRE_IDX_;
-        if let Some(regions_overlap) = bcf_sr_aux_ref(readers).map(|aux| aux.regions_overlap) {
-            bcf_sr_regions_set_overlap_ref(&mut *readers.regions, regions_overlap);
+        if let Some(regions_overlap) = bcf_sr_aux_borrow(readers).map(|aux| aux.regions_overlap) {
+            bcf_sr_regions_set_overlap(&mut *readers.regions, regions_overlap);
         }
         0
     }
 }
 
 // original: bcf_sr_regions_init (htslib/synced_bcf_reader.c:1248)
-pub unsafe fn bcf_sr_regions_init(
-    regions: *const c_char,
-    is_file: c_int,
-    ichr: c_int,
-    ifrom: c_int,
-    ito: c_int,
-) -> *mut bcf_sr_regions_t {
-    unsafe {
-        regions
-            .as_ref()
-            .map(|_| CStr::from_ptr(regions).to_bytes())
-            .and_then(|regions| bcf_sr_regions_init_ref(regions, is_file, ichr, ifrom, ito))
-            .map_or(std::ptr::null_mut(), NonNull::as_ptr)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_regions_init_ref(
+pub(crate) unsafe fn bcf_sr_regions_init(
     regions: &[u8],
     is_file: c_int,
     ichr: c_int,
@@ -967,7 +721,7 @@ pub(crate) unsafe fn bcf_sr_regions_init_ref(
         if is_file == 0 {
             let reg = regions_init_string(regions_c.as_ptr());
             if let Some(reg) = reg.as_mut() {
-                regions_sort_and_merge_ref(reg);
+                regions_sort_and_merge(reg);
             }
             return NonNull::new(reg);
         }
@@ -979,7 +733,7 @@ pub(crate) unsafe fn bcf_sr_regions_init_ref(
 
         (*reg).file = hts_open(regions_c.as_ptr(), c"rb".as_ptr()).cast();
         if (*reg).file.is_null() {
-            bcf_sr_regions_destroy_ref(&mut *reg);
+            bcf_sr_regions_destroy(&mut *reg);
             return None;
         }
 
@@ -1037,7 +791,7 @@ pub(crate) unsafe fn bcf_sr_regions_init_ref(
                         );
                     }
                     if ret < 0 {
-                        bcf_sr_regions_destroy_ref(&mut *reg);
+                        bcf_sr_regions_destroy(&mut *reg);
                         return None;
                     }
                     ito = ifrom;
@@ -1057,10 +811,10 @@ pub(crate) unsafe fn bcf_sr_regions_init_ref(
             let _ = hts_close((*reg).file.cast());
             (*reg).file = std::ptr::null_mut();
             if (*reg).nseqs == 0 {
-                bcf_sr_regions_destroy_ref(&mut *reg);
+                bcf_sr_regions_destroy(&mut *reg);
                 return None;
             }
-            regions_sort_and_merge_ref(&mut *reg);
+            regions_sort_and_merge(&mut *reg);
             return NonNull::new(reg);
         }
 
@@ -1078,28 +832,8 @@ pub(crate) unsafe fn bcf_sr_regions_init_ref(
     }
 }
 
-pub unsafe fn bcf_sr_regions_destroy(regions: *mut bcf_sr_regions_t) {
-    unsafe {
-        if let Some(regions) = regions.as_mut() {
-            bcf_sr_regions_destroy_ref(regions);
-        }
-    }
-}
-
 // original: bcf_sr_regions_seek (htslib/synced_bcf_reader.c:1352)
-pub unsafe fn bcf_sr_regions_seek(reg: *mut bcf_sr_regions_t, seq: *const c_char) -> c_int {
-    unsafe {
-        let Some(reg) = reg.as_mut() else {
-            return -1;
-        };
-        let Some(seq) = seq.as_ref().map(|_| CStr::from_ptr(seq).to_bytes()) else {
-            return -1;
-        };
-        bcf_sr_regions_seek_ref(reg, seq)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_regions_seek_ref(reg: &mut bcf_sr_regions_t, seq: &[u8]) -> c_int {
+pub(crate) unsafe fn bcf_sr_regions_seek(reg: &mut bcf_sr_regions_t, seq: &[u8]) -> c_int {
     unsafe {
         let seq_c = CString::new(seq).unwrap();
         let seq_ptr = seq_c.as_ptr();
@@ -1131,16 +865,7 @@ pub(crate) unsafe fn bcf_sr_regions_seek_ref(reg: &mut bcf_sr_regions_t, seq: &[
     }
 }
 
-pub unsafe fn bcf_sr_regions_next(reg: *mut bcf_sr_regions_t) -> c_int {
-    unsafe {
-        let Some(reg) = reg.as_mut() else {
-            return -1;
-        };
-        bcf_sr_regions_next_ref(reg)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_regions_next_ref(reg: &mut bcf_sr_regions_t) -> c_int {
+pub(crate) unsafe fn bcf_sr_regions_next(reg: &mut bcf_sr_regions_t) -> c_int {
     unsafe {
         if reg.iseq < 0 {
             return -1;
@@ -1220,7 +945,7 @@ pub(crate) unsafe fn bcf_sr_regions_next_ref(reg: &mut bcf_sr_regions_t) -> c_in
                     let _ = hts_close(reg.file.cast());
                     reg.file = hts_open(reg.fname, c"r".as_ptr()).cast();
                     if reg.file.is_null() {
-                        bcf_sr_regions_destroy_ref(reg);
+                        bcf_sr_regions_destroy(reg);
                         return -1;
                     }
                     reg.is_bin = 0;
@@ -1266,33 +991,16 @@ pub(crate) unsafe fn bcf_sr_regions_next_ref(reg: &mut bcf_sr_regions_t) -> c_in
 }
 
 // original: bcf_sr_regions_overlap (htslib/synced_bcf_reader.c:1525)
-pub unsafe fn bcf_sr_regions_overlap(
-    reg: *mut bcf_sr_regions_t,
-    seq: *const c_char,
-    start: hts_pos_t,
-    end: hts_pos_t,
-) -> c_int {
-    unsafe {
-        let Some(reg) = reg.as_mut() else {
-            return -1;
-        };
-        let Some(seq) = seq.as_ref().map(|_| CStr::from_ptr(seq).to_bytes()) else {
-            return -1;
-        };
-        bcf_sr_regions_overlap_ref(reg, seq, start, end)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_regions_overlap_ref(
+pub(crate) unsafe fn bcf_sr_regions_overlap(
     reg: &mut bcf_sr_regions_t,
     seq: &[u8],
     start: hts_pos_t,
     end: hts_pos_t,
 ) -> c_int {
-    unsafe { bcf_sr_regions_overlap_inner_ref(reg, seq, start, end, 1) }
+    unsafe { bcf_sr_regions_overlap_inner(reg, seq, start, end, 1) }
 }
 
-unsafe fn bcf_sr_regions_overlap_inner_ref(
+unsafe fn bcf_sr_regions_overlap_inner(
     reg: &mut bcf_sr_regions_t,
     seq: &[u8],
     start: hts_pos_t,
@@ -1311,9 +1019,9 @@ unsafe fn bcf_sr_regions_overlap_inner_ref(
 
         if reg.prev_seq == -1 || iseq != reg.prev_seq || reg.prev_start > start {
             if missed_reg_handler != 0 && reg.prev_seq != -1 && reg.iseq != -1 {
-                bcf_sr_regions_flush_ref(reg);
+                bcf_sr_regions_flush(reg);
             }
-            bcf_sr_regions_seek_ref(reg, seq);
+            bcf_sr_regions_seek(reg, seq);
             reg.start = -1;
             reg.end = -1;
         }
@@ -1327,7 +1035,7 @@ unsafe fn bcf_sr_regions_overlap_inner_ref(
             if !(iseq == reg.iseq && reg.end < start) {
                 break;
             }
-            if bcf_sr_regions_next_ref(reg) < 0 {
+            if bcf_sr_regions_next(reg) < 0 {
                 return -2;
             }
             if reg.iseq != iseq {
@@ -1347,16 +1055,7 @@ unsafe fn bcf_sr_regions_overlap_inner_ref(
 }
 
 // original: bcf_sr_regions_flush (htslib/synced_bcf_reader.c:1559)
-pub unsafe fn bcf_sr_regions_flush(reg: *mut bcf_sr_regions_t) -> c_int {
-    unsafe {
-        let Some(reg) = reg.as_mut() else {
-            return -1;
-        };
-        bcf_sr_regions_flush_ref(reg)
-    }
-}
-
-pub(crate) unsafe fn bcf_sr_regions_flush_ref(reg: &mut bcf_sr_regions_t) -> c_int {
+pub(crate) unsafe fn bcf_sr_regions_flush(reg: &mut bcf_sr_regions_t) -> c_int {
     unsafe {
         let Some(handler) = reg.missed_reg_handler else {
             return 0;
@@ -1364,7 +1063,7 @@ pub(crate) unsafe fn bcf_sr_regions_flush_ref(reg: &mut bcf_sr_regions_t) -> c_i
         if reg.prev_seq == -1 {
             return 0;
         }
-        while bcf_sr_regions_next_ref(reg) == 0 {
+        while bcf_sr_regions_next(reg) == 0 {
             handler(reg as *mut bcf_sr_regions_t, reg.missed_reg_data);
         }
         0

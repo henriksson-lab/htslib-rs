@@ -338,7 +338,7 @@ fn cols_clear(cols: &mut AnnotTsvCols) {
     cols.cols.clear();
 }
 
-fn parse_tab_with_payload_ref(line: &[u8], dat: &mut AnnotTsvDat) -> Option<ParsedTab> {
+fn annot_tsv_parse_tab_with_payload(line: &[u8], dat: &mut AnnotTsvDat) -> Option<ParsedTab> {
     if line.first() == Some(&b'#') {
         return None;
     }
@@ -1090,7 +1090,7 @@ unsafe fn write_annots(args: &mut AnnotTsvArgs) {
             // C uses kputd (a custom %g-style formatter that culls trailing
             // zeros, htslib/annot-tsv.c:727), not a fixed-precision %f.
             let mut frac_kstr = kstring_t { data: Vec::new() };
-            crate::htslib_rs::kstring::kputd_ref(len as f64 / frac_denominator, &mut frac_kstr);
+            crate::htslib_rs::kstring::kputd(len as f64 / frac_denominator, &mut frac_kstr);
             out.extend_from_slice(&frac_kstr.data);
         } else if ann == ANNOT_TSV_ANN_CNT {
             out.extend_from_slice(cnt.to_string().as_bytes());
@@ -1106,7 +1106,7 @@ pub unsafe fn annot_tsv_c_709_write_annots(args: &mut AnnotTsvArgs) {
 
 // original: process_line (htslib/annot-tsv.c:737)
 pub unsafe fn annot_tsv_c_737_process_line(args: &mut AnnotTsvArgs, line: &[u8]) {
-    let Some(parsed) = parse_tab_with_payload_ref(line, &mut args.dst) else {
+    let Some(parsed) = annot_tsv_parse_tab_with_payload(line, &mut args.dst) else {
         return;
     };
     let chr = parsed.chr.clone();

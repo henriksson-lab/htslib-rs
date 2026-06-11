@@ -24,10 +24,9 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.  */
 
 use crate::htslib_rs::hfile::{
-    hfile_c_212_hfile_set_blksize_ref as hfile_set_blksize,
-    hfile_c_235_hgetc2_ref as hgetc2, hfile_c_241_hgetdelim_ref as hgetdelim,
-    hfile_c_330_hread2_ref as hread2, hfile_c_400_hputc2_ref as hputc2,
-    hfile_c_412_hwrite2_ref as hwrite2, hfile_c_440_hputs2_ref as hputs2,
+    hfile_set_blksize_impl as hfile_set_blksize, hgetc2_impl as hgetc2,
+    hgetdelim_impl as hgetdelim, hputc2_impl as hputc2, hputs2_impl as hputs2,
+    hread2_impl as hread2, hwrite2_impl as hwrite2,
 };
 use crate::htslib_rs::hts::hFILE as hFILE_layout;
 

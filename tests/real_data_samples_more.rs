@@ -369,8 +369,8 @@ fn indexes_and_fetches_demo_sample_fasta_sequences() {
         assert!(!fai.is_null());
 
         assert_eq!(faidx_nseq(fai), 2);
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)), c"T1");
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 1)), c"T2");
+        assert_eq!(faidx_iseq(&*fai, 0), Some(&b"T1"[..]));
+        assert_eq!(faidx_iseq(&*fai, 1), Some(&b"T2"[..]));
         assert_eq!(faidx_has_seq(fai, c"T1".as_ptr()), 1);
         assert_eq!(faidx_has_seq(fai, c"T3".as_ptr()), 0);
         assert_eq!(faidx_seq_len(fai, c"T1".as_ptr()), 40);
@@ -405,10 +405,10 @@ fn indexes_and_fetches_demo_sample_fastq_sequences_and_qualities() {
         assert!(!fai.is_null());
 
         assert_eq!(faidx_nseq(fai), 4);
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 0)), c"T1");
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 1)), c"T2");
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 2)), c"T3");
-        assert_eq!(CStr::from_ptr(faidx_iseq(fai, 3)), c"T4");
+        assert_eq!(faidx_iseq(&*fai, 0), Some(&b"T1"[..]));
+        assert_eq!(faidx_iseq(&*fai, 1), Some(&b"T2"[..]));
+        assert_eq!(faidx_iseq(&*fai, 2), Some(&b"T3"[..]));
+        assert_eq!(faidx_iseq(&*fai, 3), Some(&b"T4"[..]));
         assert_eq!(faidx_seq_len(fai, c"T1".as_ptr()), 40);
         assert_eq!(faidx_seq_len(fai, c"T3".as_ptr()), 20);
         assert_eq!(faidx_seq_len(fai, c"T4".as_ptr()), 100);

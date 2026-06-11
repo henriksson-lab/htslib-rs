@@ -6,16 +6,12 @@ use std::ptr::NonNull;
 
 use super::*;
 
-unsafe fn raw_ref<'a, T>(ptr: *const T) -> Option<&'a T> {
+unsafe fn raw_const<'a, T>(ptr: *const T) -> Option<&'a T> {
     unsafe { ptr.as_ref() }
 }
 
 unsafe fn raw_mut<'a, T>(ptr: *mut T) -> Option<&'a mut T> {
     unsafe { ptr.as_mut() }
-}
-
-fn opt_ptr<T>(ptr: Option<NonNull<T>>) -> *mut T {
-    ptr.map_or(std::ptr::null_mut(), NonNull::as_ptr)
 }
 
 unsafe fn raw_slice<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
@@ -54,14 +50,14 @@ unsafe fn cid2ds_free_raw(cid2ds: *mut cram_cid2ds_t) {
 
 unsafe fn slice_hdr_layout(hdr: &cram_block_slice_hdr) -> &cram_block_slice_hdr_layout {
     unsafe {
-        raw_ref((hdr as *const cram_block_slice_hdr).cast::<cram_block_slice_hdr_layout>())
+        raw_const((hdr as *const cram_block_slice_hdr).cast::<cram_block_slice_hdr_layout>())
             .expect("reference-derived layout pointer is non-null")
     }
 }
 
 unsafe fn block_layout(b: &cram_block) -> &cram_block_layout {
     unsafe {
-        raw_ref((b as *const cram_block).cast::<cram_block_layout>())
+        raw_const((b as *const cram_block).cast::<cram_block_layout>())
             .expect("reference-derived layout pointer is non-null")
     }
 }
@@ -75,7 +71,7 @@ unsafe fn block_layout_mut(b: &mut cram_block) -> &mut cram_block_layout {
 
 unsafe fn container_layout(c: &cram_container) -> &cram_container_layout {
     unsafe {
-        raw_ref((c as *const cram_container).cast::<cram_container_layout>())
+        raw_const((c as *const cram_container).cast::<cram_container_layout>())
             .expect("reference-derived layout pointer is non-null")
     }
 }
@@ -87,9 +83,9 @@ unsafe fn container_layout_mut(c: &mut cram_container) -> &mut cram_container_la
     }
 }
 
-unsafe fn cram_fd_layout_ref(fd: &crate::htslib_rs::hts::cram_fd) -> &cram_fd_layout {
+unsafe fn cram_fd_layout(fd: &crate::htslib_rs::hts::cram_fd) -> &cram_fd_layout {
     unsafe {
-        raw_ref((fd as *const crate::htslib_rs::hts::cram_fd).cast::<cram_fd_layout>())
+        raw_const((fd as *const crate::htslib_rs::hts::cram_fd).cast::<cram_fd_layout>())
             .expect("reference-derived layout pointer is non-null")
     }
 }
@@ -101,27 +97,15 @@ unsafe fn cram_fd_layout_mut(fd: &mut crate::htslib_rs::hts::cram_fd) -> &mut cr
     }
 }
 
-fn cram_slice_hdr_get_num_blocks_ref(hdr: &cram_block_slice_hdr) -> i32 {
+pub fn cram_slice_hdr_get_num_blocks(hdr: &cram_block_slice_hdr) -> i32 {
     unsafe { slice_hdr_layout(hdr).num_blocks }
 }
 
-pub unsafe fn cram_cram_external_c_500_cram_slice_hdr_get_num_blocks(
-    hdr: *mut cram_block_slice_hdr,
-) -> i32 {
-    unsafe { raw_ref(hdr) }.map_or(0, cram_slice_hdr_get_num_blocks_ref)
-}
-
-fn cram_slice_hdr_get_embed_ref_id_ref(h: &cram_block_slice_hdr) -> c_int {
+pub fn cram_slice_hdr_get_embed_ref_id(h: &cram_block_slice_hdr) -> c_int {
     unsafe { slice_hdr_layout(h).ref_base_id }
 }
 
-pub unsafe fn cram_cram_external_c_504_cram_slice_hdr_get_embed_ref_id(
-    h: *mut cram_block_slice_hdr,
-) -> c_int {
-    unsafe { raw_ref(h) }.map_or(-1, cram_slice_hdr_get_embed_ref_id_ref)
-}
-
-fn cram_slice_hdr_get_coords_ref(
+pub fn cram_slice_hdr_get_coords(
     h: &cram_block_slice_hdr,
     refid: Option<&mut c_int>,
     start: Option<&mut crate::htslib_rs::hts::hts_pos_t>,
@@ -139,256 +123,90 @@ fn cram_slice_hdr_get_coords_ref(
     }
 }
 
-pub unsafe fn cram_cram_external_c_508_cram_slice_hdr_get_coords(
-    h: *mut cram_block_slice_hdr,
-    refid: *mut c_int,
-    start: *mut crate::htslib_rs::hts::hts_pos_t,
-    span: *mut crate::htslib_rs::hts::hts_pos_t,
-) {
-    let Some(h) = (unsafe { raw_ref(h) }) else {
-        return;
-    };
-    cram_slice_hdr_get_coords_ref(
-        h,
-        unsafe { refid.as_mut() },
-        unsafe { start.as_mut() },
-        unsafe { span.as_mut() },
-    );
-}
-
-fn cram_block_get_size_ref(b: &cram_block) -> i32 {
+pub fn cram_block_get_size(b: &cram_block) -> i32 {
     unsafe { block_layout(b).byte as i32 }
 }
 
-pub unsafe fn cram_cram_external_c_529_cram_block_get_size(b: *mut cram_block) -> i32 {
-    unsafe { raw_ref(b) }.map_or(0, cram_block_get_size_ref)
-}
-
-fn cram_block_get_method_ref(b: &cram_block) -> cram_block_method {
+pub fn cram_block_get_method(b: &cram_block) -> cram_block_method {
     unsafe { block_layout(b).orig_method }
 }
 
-pub unsafe fn cram_cram_external_c_530_cram_block_get_method(
-    b: *mut cram_block,
-) -> cram_block_method {
-    unsafe { raw_ref(b) }.map_or(0, cram_block_get_method_ref)
-}
-
-fn cram_block_set_size_ref(b: &mut cram_block, size: i32) {
+pub fn cram_block_set_size(b: &mut cram_block, size: i32) {
     unsafe { block_layout_mut(b).byte = size as usize };
 }
 
-pub unsafe fn cram_cram_external_c_542_cram_block_set_size(b: *mut cram_block, size: i32) {
-    if let Some(b) = unsafe { raw_mut(b) } {
-        cram_block_set_size_ref(b, size);
-    }
-}
-
-fn cram_fd_get_header_ref(
+pub fn cram_fd_get_header(
     fd: &crate::htslib_rs::hts::cram_fd,
 ) -> Option<NonNull<crate::htslib_rs::sam::sam_hdr_t>> {
-    unsafe { NonNull::new(cram_fd_layout_ref(fd).header) }
+    unsafe { NonNull::new(cram_fd_layout(fd).header) }
 }
 
-pub unsafe fn cram_cram_external_c_58_cram_fd_get_header(
-    fd: *mut crate::htslib_rs::hts::cram_fd,
-) -> *mut crate::htslib_rs::sam::sam_hdr_t {
-    unsafe { raw_ref(fd) }
-        .and_then(cram_fd_get_header_ref)
-        .map_or(std::ptr::null_mut(), NonNull::as_ptr)
-}
-
-fn cram_fd_set_header_ref(
+pub fn cram_fd_set_header(
     fd: &mut crate::htslib_rs::hts::cram_fd,
     hdr: Option<NonNull<crate::htslib_rs::sam::sam_hdr_t>>,
 ) {
     unsafe { cram_fd_layout_mut(fd).header = hdr.map_or(std::ptr::null_mut(), NonNull::as_ptr) };
 }
 
-pub unsafe fn cram_cram_external_c_59_cram_fd_set_header(
-    fd: *mut crate::htslib_rs::hts::cram_fd,
-    hdr: *mut crate::htslib_rs::sam::sam_hdr_t,
-) {
-    if let Some(fd) = unsafe { raw_mut(fd) } {
-        cram_fd_set_header_ref(fd, NonNull::new(hdr));
-    }
+pub fn cram_fd_get_version(fd: &crate::htslib_rs::hts::cram_fd) -> c_int {
+    unsafe { cram_fd_layout(fd).version }
 }
 
-fn cram_fd_get_version_ref(fd: &crate::htslib_rs::hts::cram_fd) -> c_int {
-    unsafe { cram_fd_layout_ref(fd).version }
-}
-
-pub unsafe fn cram_cram_external_c_61_cram_fd_get_version(
-    fd: *mut crate::htslib_rs::hts::cram_fd,
-) -> c_int {
-    unsafe { raw_ref(fd) }.map_or(0, cram_fd_get_version_ref)
-}
-
-fn cram_fd_set_version_ref(fd: &mut crate::htslib_rs::hts::cram_fd, vers: c_int) {
+pub fn cram_fd_set_version(fd: &mut crate::htslib_rs::hts::cram_fd, vers: c_int) {
     unsafe { cram_fd_layout_mut(fd).version = vers };
 }
 
-pub unsafe fn cram_cram_external_c_62_cram_fd_set_version(
-    fd: *mut crate::htslib_rs::hts::cram_fd,
-    vers: c_int,
-) {
-    if let Some(fd) = unsafe { raw_mut(fd) } {
-        cram_fd_set_version_ref(fd, vers);
-    }
+pub fn cram_major_vers(fd: &crate::htslib_rs::hts::cram_fd) -> c_int {
+    cram_fd_get_version(fd) >> 8
 }
 
-fn cram_major_vers_ref(fd: &crate::htslib_rs::hts::cram_fd) -> c_int {
-    cram_fd_get_version_ref(fd) >> 8
+pub fn cram_minor_vers(fd: &crate::htslib_rs::hts::cram_fd) -> c_int {
+    cram_fd_get_version(fd) & 0xff
 }
 
-pub unsafe fn cram_cram_external_c_64_cram_major_vers(
-    fd: *mut crate::htslib_rs::hts::cram_fd,
-) -> c_int {
-    unsafe { raw_ref(fd) }.map_or(0, cram_major_vers_ref)
-}
-
-fn cram_minor_vers_ref(fd: &crate::htslib_rs::hts::cram_fd) -> c_int {
-    cram_fd_get_version_ref(fd) & 0xff
-}
-
-pub unsafe fn cram_cram_external_c_65_cram_minor_vers(
-    fd: *mut crate::htslib_rs::hts::cram_fd,
-) -> c_int {
-    unsafe { raw_ref(fd) }.map_or(0, cram_minor_vers_ref)
-}
-
-fn cram_fd_get_fp_ref(
+pub fn cram_fd_get_fp(
     fd: &crate::htslib_rs::hts::cram_fd,
 ) -> Option<NonNull<crate::htslib_rs::hts::hFILE>> {
-    unsafe { NonNull::new(cram_fd_layout_ref(fd).fp.cast()) }
+    unsafe { NonNull::new(cram_fd_layout(fd).fp.cast()) }
 }
 
-pub unsafe fn cram_cram_external_c_67_cram_fd_get_fp(
-    fd: *mut crate::htslib_rs::hts::cram_fd,
-) -> *mut crate::htslib_rs::hts::hFILE {
-    unsafe { raw_ref(fd) }
-        .and_then(cram_fd_get_fp_ref)
-        .map_or(std::ptr::null_mut(), NonNull::as_ptr)
-}
-
-fn cram_fd_set_fp_ref(
+pub fn cram_fd_set_fp(
     fd: &mut crate::htslib_rs::hts::cram_fd,
     fp: Option<NonNull<crate::htslib_rs::hts::hFILE>>,
 ) {
     unsafe { cram_fd_layout_mut(fd).fp = fp.map_or(std::ptr::null_mut(), NonNull::as_ptr).cast() };
 }
 
-pub unsafe fn cram_cram_external_c_68_cram_fd_set_fp(
-    fd: *mut crate::htslib_rs::hts::cram_fd,
-    fp: *mut crate::htslib_rs::hts::hFILE,
-) {
-    if let Some(fd) = unsafe { raw_mut(fd) } {
-        cram_fd_set_fp_ref(fd, NonNull::new(fp));
-    }
-}
-
-fn cram_container_get_length_ref(c: &cram_container) -> i32 {
+pub fn cram_container_get_length(c: &cram_container) -> i32 {
     unsafe { container_layout(c).length }
 }
 
-pub unsafe fn cram_cram_external_c_75_cram_container_get_length(c: *mut cram_container) -> i32 {
-    unsafe { raw_ref(c) }.map_or(0, cram_container_get_length_ref)
-}
-
-fn cram_container_set_length_ref(c: &mut cram_container, length: i32) {
+pub fn cram_container_set_length(c: &mut cram_container, length: i32) {
     unsafe { container_layout_mut(c).length = length };
 }
 
-pub unsafe fn cram_cram_external_c_79_cram_container_set_length(
-    c: *mut cram_container,
-    length: i32,
-) {
-    if let Some(c) = unsafe { raw_mut(c) } {
-        cram_container_set_length_ref(c, length);
-    }
-}
-
-fn cram_container_get_num_blocks_ref(c: &cram_container) -> i32 {
+pub fn cram_container_get_num_blocks(c: &cram_container) -> i32 {
     unsafe { container_layout(c).num_blocks }
 }
 
-pub unsafe fn cram_cram_external_c_84_cram_container_get_num_blocks(c: *mut cram_container) -> i32 {
-    unsafe { raw_ref(c) }.map_or(0, cram_container_get_num_blocks_ref)
-}
-
-fn cram_container_set_num_blocks_ref(c: &mut cram_container, num_blocks: i32) {
+pub fn cram_container_set_num_blocks(c: &mut cram_container, num_blocks: i32) {
     unsafe { container_layout_mut(c).num_blocks = num_blocks };
 }
 
-pub unsafe fn cram_cram_external_c_88_cram_container_set_num_blocks(
-    c: *mut cram_container,
-    num_blocks: i32,
-) {
-    if let Some(c) = unsafe { raw_mut(c) } {
-        cram_container_set_num_blocks_ref(c, num_blocks);
-    }
-}
-
-fn cram_container_get_num_records_ref(c: &cram_container) -> i32 {
+pub fn cram_container_get_num_records(c: &cram_container) -> i32 {
     unsafe { container_layout(c).num_records }
 }
 
-pub unsafe fn cram_cram_external_c_92_cram_container_get_num_records(
-    c: *mut cram_container,
-) -> i32 {
-    unsafe { raw_ref(c) }.map_or(0, cram_container_get_num_records_ref)
-}
-
-fn cram_container_get_num_bases_ref(c: &cram_container) -> i64 {
+pub fn cram_container_get_num_bases(c: &cram_container) -> i64 {
     unsafe { container_layout(c).num_bases }
 }
 
-pub unsafe fn cram_cram_external_c_96_cram_container_get_num_bases(c: *mut cram_container) -> i64 {
-    unsafe { raw_ref(c) }.map_or(0, cram_container_get_num_bases_ref)
-}
-
-fn cram_container_landmarks_ref(c: &mut cram_container) -> &mut [i32] {
+pub fn cram_container_get_landmarks(c: &mut cram_container) -> &mut [i32] {
     let c = unsafe { container_layout_mut(c) };
     unsafe { raw_slice_mut(c.landmark, c.num_landmarks.max(0) as usize) }.unwrap_or(&mut [])
 }
 
-fn cram_container_get_landmarks_ref(c: &mut cram_container) -> &mut [i32] {
-    cram_container_landmarks_ref(c)
-}
-
-pub unsafe fn cram_cram_external_c_104_cram_container_get_landmarks(
-    c: *mut cram_container,
-    num_landmarks: *mut i32,
-) -> *mut i32 {
-    let Some(c) = (unsafe { raw_mut(c) }) else {
-        if let Some(num_landmarks) = unsafe { num_landmarks.as_mut() } {
-            *num_landmarks = 0;
-        }
-        return std::ptr::null_mut();
-    };
-    let landmarks = cram_container_get_landmarks_ref(c);
-    if let Some(num_landmarks) = unsafe { num_landmarks.as_mut() } {
-        *num_landmarks = landmarks.len() as i32;
-    }
-    landmarks.as_mut_ptr()
-}
-
-pub unsafe fn cram_cram_external_c_112_cram_container_set_landmarks(
-    c: *mut cram_container,
-    num_landmarks: i32,
-    landmarks: *mut i32,
-) {
-    let Some(c) = (unsafe { raw_mut(c) }) else {
-        return;
-    };
-    let len = num_landmarks.max(0) as usize;
-    let Some(landmark_slice) = (unsafe { raw_slice_mut(landmarks, len) }) else {
-        return;
-    };
-    cram_container_set_landmarks_ref(c, landmark_slice);
-}
-
-fn cram_container_set_landmarks_ref(c: &mut cram_container, landmarks: &mut [i32]) {
+pub fn cram_container_set_landmarks(c: &mut cram_container, landmarks: &mut [i32]) {
     let c = unsafe { container_layout_mut(c) };
     let num_landmarks = landmarks.len() as i32;
     c.num_landmarks = num_landmarks;
@@ -402,27 +220,10 @@ fn cram_container_set_landmarks_ref(c: &mut cram_container, landmarks: &mut [i32
 pub unsafe fn cram_cram_external_c_120_cram_container_is_empty(
     fd: *mut crate::htslib_rs::hts::cram_fd,
 ) -> c_int {
-    unsafe { raw_ref(fd) }.map_or(0, |fd| unsafe { cram_fd_layout_ref(fd).empty_container })
+    unsafe { raw_const(fd) }.map_or(0, |fd| unsafe { cram_fd_layout(fd).empty_container })
 }
 
-pub unsafe fn cram_cram_external_c_124_cram_container_get_coords(
-    c: *mut cram_container,
-    refid: *mut c_int,
-    start: *mut i64,
-    span: *mut i64,
-) {
-    let Some(c) = (unsafe { raw_ref(c) }) else {
-        return;
-    };
-    cram_container_get_coords_ref(
-        c,
-        unsafe { refid.as_mut() },
-        unsafe { start.as_mut() },
-        unsafe { span.as_mut() },
-    );
-}
-
-fn cram_container_get_coords_ref(
+pub fn cram_container_get_coords(
     c: &cram_container,
     refid: Option<&mut c_int>,
     start: Option<&mut i64>,
@@ -440,21 +241,7 @@ fn cram_container_get_coords_ref(
     }
 }
 
-pub unsafe fn cram_cram_external_c_152_cram_block_compression_hdr_set_DS(
-    ch: *mut c_void,
-    ds: c_int,
-    new_rg: c_int,
-) -> c_int {
-    if ds < 0 {
-        return -1;
-    }
-    let Some(ch) = (unsafe { raw_mut(ch.cast::<cram_block_compression_hdr_layout>()) }) else {
-        return -1;
-    };
-    cram_block_compression_hdr_set_ds_ref(ch, ds as usize, new_rg)
-}
-
-fn cram_block_compression_hdr_set_ds_ref(
+pub fn cram_block_compression_hdr_set_ds(
     ch: &mut cram_block_compression_hdr_layout,
     ds: usize,
     new_rg: c_int,
@@ -500,20 +287,13 @@ pub unsafe fn cram_cram_external_c_177_cram_block_compression_hdr_set_rg(
     ch: *mut c_void,
     new_rg: c_int,
 ) -> c_int {
-    cram_cram_external_c_152_cram_block_compression_hdr_set_DS(ch, 17, new_rg)
-}
-
-pub unsafe fn cram_cram_external_c_189_cram_block_compression_hdr_decoder2encoder(
-    fd: *mut c_void,
-    ch: *mut c_void,
-) -> c_int {
     let Some(ch) = (unsafe { raw_mut(ch.cast::<cram_block_compression_hdr_layout>()) }) else {
         return -1;
     };
-    cram_block_compression_hdr_decoder2encoder_ref(NonNull::new(fd), ch)
+    cram_block_compression_hdr_set_ds(ch, 17, new_rg)
 }
 
-fn cram_block_compression_hdr_decoder2encoder_ref(
+pub fn cram_block_compression_hdr_decoder2encoder(
     fd: Option<NonNull<c_void>>,
     ch: &mut cram_block_compression_hdr_layout,
 ) -> c_int {
@@ -526,17 +306,7 @@ fn cram_block_compression_hdr_decoder2encoder_ref(
     0
 }
 
-pub unsafe fn cram_cram_external_c_215_cram_codec_iter_init(hdr: *mut c_void, iter: *mut c_void) {
-    let (Some(hdr), Some(iter)) = (
-        unsafe { raw_mut(hdr.cast::<cram_block_compression_hdr_layout>()) },
-        unsafe { raw_mut(iter.cast::<cram_codec_iter_layout>()) },
-    ) else {
-        return;
-    };
-    cram_codec_iter_init_ref(hdr, iter);
-}
-
-fn cram_codec_iter_init_ref(
+pub fn cram_codec_iter_init(
     hdr: &mut cram_block_compression_hdr_layout,
     iter: &mut cram_codec_iter_layout,
 ) {
@@ -546,7 +316,7 @@ fn cram_codec_iter_init_ref(
     iter.is_tag = 0;
 }
 
-pub fn cram_cram_external_c_224_cram_ds_to_key(ds: c_int) -> c_int {
+pub fn cram_ds_to_key(ds: c_int) -> c_int {
     match ds {
         10 => 256 * b'R' as c_int + b'N' as c_int,
         11 => 256 * b'Q' as c_int + b'S' as c_int,
@@ -607,7 +377,7 @@ impl<'a> CramCodecIter<'a> {
                 let ds = self.idx;
                 self.idx += 1;
                 if let Some(codec) = NonNull::new(cc) {
-                    *key = cram_cram_external_c_224_cram_ds_to_key(ds);
+                    *key = cram_ds_to_key(ds);
                     return Some(codec.cast());
                 }
             }
@@ -645,20 +415,7 @@ impl<'a> CramCodecIter<'a> {
     }
 }
 
-pub unsafe fn cram_cram_external_c_264_cram_codec_iter_next(
-    iter: *mut c_void,
-    key: *mut c_int,
-) -> *mut c_void {
-    let (Some(iter), Some(key)) = (
-        unsafe { raw_mut(iter.cast::<cram_codec_iter_layout>()) },
-        unsafe { raw_mut(key) },
-    ) else {
-        return std::ptr::null_mut();
-    };
-    opt_ptr(cram_codec_iter_next_ref(iter, key))
-}
-
-fn cram_codec_iter_next_ref(
+pub fn cram_codec_iter_next(
     iter: &mut cram_codec_iter_layout,
     key: &mut c_int,
 ) -> Option<NonNull<c_void>> {
@@ -670,7 +427,7 @@ fn cram_codec_iter_next_ref(
             let ds = iter.idx;
             iter.idx += 1;
             if let Some(codec) = NonNull::new(cc) {
-                *key = cram_cram_external_c_224_cram_ds_to_key(ds);
+                *key = cram_ds_to_key(ds);
                 return Some(codec);
             }
         }
@@ -712,7 +469,7 @@ pub unsafe fn cram_cram_external_c_320_cram_cid2ds_free(cid2ds: *mut cram_cid2ds
     cid2ds_free_raw(cid2ds);
 }
 
-unsafe fn cram_update_cid2ds_map_ref(
+unsafe fn cram_update_cid2ds_map(
     hdr: &cram_block_compression_hdr_layout,
     c2d: &mut cram_cid2ds_t,
 ) {
@@ -720,7 +477,7 @@ unsafe fn cram_update_cid2ds_map_ref(
     let mut key = 0;
     while let Some(codec) = unsafe { citer.next(&mut key) } {
         let mut bnum = [-2; 2];
-        unsafe { cram_codec_get_content_ids_ref(codec.cast(), &mut bnum) };
+        unsafe { cram_codec_get_content_ids(codec.cast(), &mut bnum) };
         for block_id in bnum {
             if block_id <= -2 {
                 continue;
@@ -760,28 +517,21 @@ pub unsafe fn cram_cram_external_c_342_cram_update_cid2ds_map(
     hdr: *mut cram_block_compression_hdr,
     cid2ds: *mut cram_cid2ds_t,
 ) -> *mut cram_cid2ds_t {
-    let Some(hdr) = (unsafe { raw_ref(hdr.cast::<cram_block_compression_hdr_layout>()) }) else {
+    let Some(hdr) = (unsafe { raw_const(hdr.cast::<cram_block_compression_hdr_layout>()) }) else {
         return cid2ds;
     };
 
-    opt_ptr(unsafe { cram_update_cid2ds_map_owned_ref(hdr, NonNull::new(cid2ds)) })
-}
-
-unsafe fn cram_update_cid2ds_map_owned_ref(
-    hdr: &cram_block_compression_hdr_layout,
-    cid2ds: Option<NonNull<cram_cid2ds_t>>,
-) -> Option<NonNull<cram_cid2ds_t>> {
-    if let Some(mut c2d) = cid2ds {
-        unsafe { cram_update_cid2ds_map_ref(hdr, c2d.as_mut()) };
-        Some(c2d)
+    if let Some(mut c2d) = NonNull::new(cid2ds) {
+        unsafe { cram_update_cid2ds_map(hdr, c2d.as_mut()) };
+        cid2ds
     } else {
         let mut c2d = cid2ds_new_box();
-        unsafe { cram_update_cid2ds_map_ref(hdr, &mut c2d) };
-        NonNull::new(Box::into_raw(c2d))
+        unsafe { cram_update_cid2ds_map(hdr, &mut c2d) };
+        Box::into_raw(c2d)
     }
 }
 
-fn cram_cid2ds_query_ref(
+pub fn cram_cid2ds_query(
     c2d: Option<&mut cram_cid2ds_t>,
     content_id: c_int,
     n: &mut c_int,
@@ -806,22 +556,7 @@ fn cram_cid2ds_query_ref(
     NonNull::new(c2d.ds_a.as_mut_ptr())
 }
 
-pub unsafe fn cram_cram_external_c_443_cram_cid2ds_query(
-    c2d: *mut cram_cid2ds_t,
-    content_id: c_int,
-    n: *mut c_int,
-) -> *mut c_int {
-    let Some(n) = (unsafe { raw_mut(n) }) else {
-        return std::ptr::null_mut();
-    };
-    opt_ptr(cram_cid2ds_query_ref(
-        unsafe { raw_mut(c2d) },
-        content_id,
-        n,
-    ))
-}
-
-unsafe fn cram_describe_encodings_ref(
+pub unsafe fn cram_describe_encodings(
     hdr: &cram_block_compression_hdr_layout,
     ks: &mut kstring_t,
 ) -> c_int {
@@ -852,20 +587,7 @@ unsafe fn cram_describe_encodings_ref(
     }
 }
 
-pub unsafe fn cram_cram_external_c_476_cram_describe_encodings(
-    hdr: *mut cram_block_compression_hdr,
-    ks: *mut kstring_t,
-) -> c_int {
-    let (Some(hdr), Some(ks)) = (
-        unsafe { raw_ref(hdr.cast::<cram_block_compression_hdr_layout>()) },
-        unsafe { raw_mut(ks) },
-    ) else {
-        return -1;
-    };
-    unsafe { cram_describe_encodings_ref(hdr, ks) }
-}
-
-fn cram_block_get_content_id_ref(b: &cram_block) -> i32 {
+pub fn cram_block_get_content_id(b: &cram_block) -> i32 {
     let b = unsafe { block_layout(b) };
     if b.content_type == crate::htslib_rs::cram::CRAM_CONTENT_TYPE_CORE {
         -1
@@ -874,161 +596,70 @@ fn cram_block_get_content_id_ref(b: &cram_block) -> i32 {
     }
 }
 
-pub unsafe fn cram_cram_external_c_522_cram_block_get_content_id(b: *mut cram_block) -> i32 {
-    unsafe { raw_ref(b) }.map_or(-1, cram_block_get_content_id_ref)
-}
-
-fn cram_block_get_comp_size_ref(b: &cram_block) -> i32 {
+pub fn cram_block_get_comp_size(b: &cram_block) -> i32 {
     unsafe { block_layout(b).comp_size }
 }
 
-pub unsafe fn cram_cram_external_c_525_cram_block_get_comp_size(b: *mut cram_block) -> i32 {
-    unsafe { raw_ref(b) }.map_or(0, cram_block_get_comp_size_ref)
-}
-
-fn cram_block_get_uncomp_size_ref(b: &cram_block) -> i32 {
+pub fn cram_block_get_uncomp_size(b: &cram_block) -> i32 {
     unsafe { block_layout(b).uncomp_size }
 }
 
-pub unsafe fn cram_cram_external_c_526_cram_block_get_uncomp_size(b: *mut cram_block) -> i32 {
-    unsafe { raw_ref(b) }.map_or(0, cram_block_get_uncomp_size_ref)
-}
-
-fn cram_block_get_crc32_ref(b: &cram_block) -> i32 {
+pub fn cram_block_get_crc32(b: &cram_block) -> i32 {
     unsafe { block_layout(b).crc32 as i32 }
 }
 
-pub unsafe fn cram_cram_external_c_527_cram_block_get_crc32(b: *mut cram_block) -> i32 {
-    unsafe { raw_ref(b) }.map_or(0, cram_block_get_crc32_ref)
-}
-
-fn cram_block_get_data_ref(b: &cram_block) -> Option<NonNull<u8>> {
+pub fn cram_block_get_data(b: &cram_block) -> Option<NonNull<u8>> {
     unsafe { NonNull::new(block_layout(b).data.cast()) }
 }
 
-fn cram_block_data_ref(b: &cram_block) -> Option<&[u8]> {
+pub fn cram_block_data(b: &cram_block) -> Option<&[u8]> {
     let b = unsafe { block_layout(b) };
     unsafe { raw_slice(b.data.cast::<u8>().cast_const(), b.uncomp_size.max(0) as usize) }
 }
 
-pub unsafe fn cram_cram_external_c_528_cram_block_get_data(b: *mut cram_block) -> *mut c_void {
-    unsafe { raw_ref(b) }
-        .and_then(cram_block_get_data_ref)
-        .map_or(std::ptr::null_mut(), |data| data.as_ptr().cast())
-}
-
-fn cram_block_get_content_type_ref(b: &cram_block) -> cram_content_type {
+pub fn cram_block_get_content_type(b: &cram_block) -> cram_content_type {
     unsafe { block_layout(b).content_type }
 }
 
-pub unsafe fn cram_cram_external_c_533_cram_block_get_content_type(
-    b: *mut cram_block,
-) -> cram_content_type {
-    unsafe { raw_ref(b) }.map_or(0, cram_block_get_content_type_ref)
-}
-
-fn cram_block_set_content_id_ref(b: &mut cram_block, id: i32) {
+pub fn cram_block_set_content_id(b: &mut cram_block, id: i32) {
     unsafe { block_layout_mut(b).content_id = id };
 }
 
-pub unsafe fn cram_cram_external_c_537_cram_block_set_content_id(b: *mut cram_block, id: i32) {
-    if let Some(b) = unsafe { raw_mut(b) } {
-        cram_block_set_content_id_ref(b, id);
-    }
-}
-
-fn cram_block_set_comp_size_ref(b: &mut cram_block, size: i32) {
+pub fn cram_block_set_comp_size(b: &mut cram_block, size: i32) {
     unsafe { block_layout_mut(b).comp_size = size };
 }
 
-pub unsafe fn cram_cram_external_c_538_cram_block_set_comp_size(b: *mut cram_block, size: i32) {
-    if let Some(b) = unsafe { raw_mut(b) } {
-        cram_block_set_comp_size_ref(b, size);
-    }
-}
-
-fn cram_block_set_uncomp_size_ref(b: &mut cram_block, size: i32) {
+pub fn cram_block_set_uncomp_size(b: &mut cram_block, size: i32) {
     unsafe { block_layout_mut(b).uncomp_size = size };
 }
 
-pub unsafe fn cram_cram_external_c_539_cram_block_set_uncomp_size(b: *mut cram_block, size: i32) {
-    if let Some(b) = unsafe { raw_mut(b) } {
-        cram_block_set_uncomp_size_ref(b, size);
-    }
-}
-
-fn cram_block_set_crc32_ref(b: &mut cram_block, crc: i32) {
+pub fn cram_block_set_crc32(b: &mut cram_block, crc: i32) {
     unsafe { block_layout_mut(b).crc32 = crc as u32 };
 }
 
-pub unsafe fn cram_cram_external_c_540_cram_block_set_crc32(b: *mut cram_block, crc: i32) {
-    if let Some(b) = unsafe { raw_mut(b) } {
-        cram_block_set_crc32_ref(b, crc);
-    }
-}
-
-fn cram_block_set_data_ref(b: &mut cram_block, data: Option<NonNull<u8>>) {
+pub fn cram_block_set_data(b: &mut cram_block, data: Option<NonNull<u8>>) {
     unsafe { block_layout_mut(b).data = data.map_or(std::ptr::null_mut(), NonNull::as_ptr).cast() };
 }
 
-pub unsafe fn cram_cram_external_c_541_cram_block_set_data(b: *mut cram_block, data: *mut c_void) {
-    if let Some(b) = unsafe { raw_mut(b) } {
-        cram_block_set_data_ref(b, NonNull::new(data.cast()));
-    }
-}
-
-pub unsafe fn cram_cram_external_c_544_cram_block_append(
-    b: *mut cram_block,
-    data: *const c_void,
-    size: c_int,
-) -> c_int {
-    if size < 0 {
-        return -1;
-    }
-    let Some(b) = (unsafe { raw_mut(b) }) else {
-        return -1;
-    };
-    let Some(data) = (unsafe { raw_slice(data.cast::<u8>(), size as usize) }) else {
-        return -1;
-    };
-    cram_block_append_ref(b, data)
-}
-
-fn cram_block_append_ref(b: &mut cram_block, data: &[u8]) -> c_int {
+pub fn cram_block_append(b: &mut cram_block, data: &[u8]) -> c_int {
     unsafe { cram_cram_io_h_248_block_append(b, data.as_ptr().cast(), data.len()) }
 }
 
-pub unsafe fn cram_cram_external_c_551_cram_block_update_size(b: *mut cram_block) {
-    if let Some(b) = unsafe { raw_mut(b) } {
-        cram_block_update_size_ref(b);
-    }
-}
-
-fn cram_block_update_size_ref(b: &mut cram_block) {
+pub fn cram_block_update_size(b: &mut cram_block) {
     let b = unsafe { block_layout_mut(b) };
     b.comp_size = b.byte as i32;
     b.uncomp_size = b.byte as i32;
 }
 
-pub unsafe fn cram_cram_external_c_554_cram_block_get_offset(b: *mut cram_block) -> u64 {
-    unsafe { raw_ref(b) }.map_or(0, cram_block_get_offset_ref)
-}
-
-fn cram_block_get_offset_ref(b: &cram_block) -> u64 {
+pub fn cram_block_get_offset(b: &cram_block) -> u64 {
     unsafe { block_layout(b).byte as u64 }
 }
 
-pub unsafe fn cram_cram_external_c_555_cram_block_set_offset(b: *mut cram_block, offset: u64) {
-    if let Some(b) = unsafe { raw_mut(b) } {
-        cram_block_set_offset_ref(b, offset);
-    }
-}
-
-fn cram_block_set_offset_ref(b: &mut cram_block, offset: u64) {
+pub fn cram_block_set_offset(b: &mut cram_block, offset: u64) {
     unsafe { block_layout_mut(b).byte = offset as usize };
 }
 
-fn cram_expand_method_ref(data: &[u8], mut comp: cram_block_method) -> Box<cram_method_details> {
+pub fn cram_expand_method(data: &[u8], mut comp: cram_block_method) -> Box<cram_method_details> {
     const CRAM_COMP_UNKNOWN: cram_block_method = -1;
     const CRAM_COMP_GZIP: cram_block_method = 1;
     const CRAM_COMP_BZIP2: cram_block_method = 2;
@@ -1139,34 +770,8 @@ fn cram_expand_method_ref(data: &[u8], mut comp: cram_block_method) -> Box<cram_
     cm
 }
 
-pub unsafe fn cram_cram_external_c_568_cram_expand_method(
-    data: *mut u8,
-    size: i32,
-    comp: cram_block_method,
-) -> *mut cram_method_details {
-    if size < 0 {
-        return std::ptr::null_mut();
-    }
-    let Some(data) = (unsafe { raw_slice(data, size as usize) }) else {
-        return std::ptr::null_mut();
-    };
-    let cm = cram_expand_method_ref(data, comp);
-    Box::into_raw(cm)
-}
-
-unsafe fn cram_codec_get_content_ids_ref(c: NonNull<c_void>, ids: &mut [c_int; 2]) {
+pub unsafe fn cram_codec_get_content_ids(c: NonNull<c_void>, ids: &mut [c_int; 2]) {
     ids[0] = unsafe { cram_cram_codecs_c_3968_cram_codec_to_id(c.as_ptr(), &mut ids[1]) };
-}
-
-pub unsafe fn cram_cram_external_c_665_cram_codec_get_content_ids(c: *mut c_void, ids: *mut c_int) {
-    let Some(ids) = (unsafe { raw_slice_mut(ids, 2) }) else {
-        return;
-    };
-    let mut tmp = [-2; 2];
-    if let Some(c) = NonNull::new(c) {
-        unsafe { cram_codec_get_content_ids_ref(c, &mut tmp) };
-    }
-    ids.copy_from_slice(&tmp);
 }
 
 pub unsafe fn cram_cram_external_c_683_cram_copy_slice(
@@ -1186,31 +791,31 @@ pub unsafe fn cram_cram_external_c_683_cram_copy_slice(
 
         let hdr = cram_decode_slice_header(in_, blk);
         if hdr.is_null() {
-            cram_cram_io_c_1565_cram_free_block(blk);
+            cram_free_block(blk);
             return -1;
         }
 
         if cram_write_block(out, blk) != 0 {
             cram_free_slice_header(hdr);
-            cram_cram_io_c_1565_cram_free_block(blk);
+            cram_free_block(blk);
             return -1;
         }
-        cram_cram_io_c_1565_cram_free_block(blk);
+        cram_free_block(blk);
 
-        let Some(hdr_ref) = (unsafe { raw_ref(hdr) }) else {
+        let Some(hdr_ref) = (unsafe { raw_const(hdr) }) else {
             cram_free_slice_header(hdr);
             return -1;
         };
-        let num_blocks = cram_slice_hdr_get_num_blocks_ref(hdr_ref);
+        let num_blocks = cram_slice_hdr_get_num_blocks(hdr_ref);
         for _ in 0..num_blocks {
             blk = cram_read_block(in_);
             if blk.is_null() || cram_write_block(out, blk) != 0 {
                 if !blk.is_null() {
-                    cram_cram_io_c_1565_cram_free_block(blk);
+                    cram_free_block(blk);
                 }
                 return -1;
             }
-            cram_cram_io_c_1565_cram_free_block(blk);
+            cram_free_block(blk);
         }
         cram_free_slice_header(hdr);
     }
@@ -1225,7 +830,7 @@ pub unsafe fn cram_cram_external_c_725_cram_skip_container(
     if in_.is_null() {
         return -1;
     }
-    let Some(c_ref) = (unsafe { raw_ref(c) }) else {
+    let Some(c_ref) = (unsafe { raw_const(c) }) else {
         return -1;
     };
     let c_layout = unsafe { container_layout(c_ref) };
@@ -1234,7 +839,7 @@ pub unsafe fn cram_cram_external_c_725_cram_skip_container(
     if blk.is_null() {
         return -1;
     }
-    cram_cram_io_c_1565_cram_free_block(blk);
+    cram_free_block(blk);
 
     for _ in 0..c_layout.num_landmarks {
         blk = cram_read_block(in_);
@@ -1243,23 +848,23 @@ pub unsafe fn cram_cram_external_c_725_cram_skip_container(
         }
         let hdr = cram_decode_slice_header(in_, blk);
         if hdr.is_null() {
-            cram_cram_io_c_1565_cram_free_block(blk);
+            cram_free_block(blk);
             return -1;
         }
-        cram_cram_io_c_1565_cram_free_block(blk);
+        cram_free_block(blk);
 
-        let Some(hdr_ref) = (unsafe { raw_ref(hdr) }) else {
+        let Some(hdr_ref) = (unsafe { raw_const(hdr) }) else {
             cram_free_slice_header(hdr);
             return -1;
         };
-        let num_blocks = cram_slice_hdr_get_num_blocks_ref(hdr_ref);
+        let num_blocks = cram_slice_hdr_get_num_blocks(hdr_ref);
         for _ in 0..num_blocks {
             blk = cram_read_block(in_);
             if blk.is_null() {
                 cram_free_slice_header(hdr);
                 return -1;
             }
-            cram_cram_io_c_1565_cram_free_block(blk);
+            cram_free_block(blk);
         }
         cram_free_slice_header(hdr);
     }
@@ -1311,8 +916,8 @@ pub unsafe fn cram_cram_external_c_776_cram_filter_container(
 
     if c_layout.ref_seq_id == -2 {
         let ch = c_layout.comp_hdr;
-        let Some(ch) = (unsafe { raw_ref(ch) }) else {
-            cram_cram_io_c_1565_cram_free_block(blk);
+        let Some(ch) = (unsafe { raw_const(ch) }) else {
+            cram_free_block(blk);
             return -1;
         };
         let cd = ch.codecs[DS_RI];
@@ -1415,7 +1020,7 @@ pub unsafe fn cram_cram_external_c_776_cram_filter_container(
     in_fd.ctr_mt = std::ptr::null_mut();
 
     err |= cram_cram_io_c_5446_cram_flush(out);
-    cram_cram_io_c_1565_cram_free_block(blk);
+    cram_free_block(blk);
 
     -err
 }
@@ -1429,10 +1034,11 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     _in_rg: *mut c_int,
     out_rg: *mut c_int,
 ) -> c_int {
-    let (Some(in_fd), Some(new_rg)) = (unsafe { raw_ref(in_) }, unsafe { raw_ref(out_rg) }) else {
+    let (Some(in_fd), Some(new_rg)) = (unsafe { raw_const(in_) }, unsafe { raw_const(out_rg) })
+    else {
         return -1;
     };
-    let in_fd = unsafe { cram_fd_layout_ref(in_fd) };
+    let in_fd = unsafe { cram_fd_layout(in_fd) };
     let new_rg = *new_rg;
 
     if nrg != 1 {
@@ -1451,36 +1057,41 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     let old_size = cram_block_size(o_blk) as c_int;
     let ch = cram_decode_compression_header(in_, o_blk);
     if ch.is_null() {
-        cram_cram_io_c_1565_cram_free_block(o_blk);
+        cram_free_block(o_blk);
         return -1;
     }
     if cram_cram_external_c_177_cram_block_compression_hdr_set_rg(ch.cast(), new_rg) != 0 {
         cram_free_compression_header(ch);
-        cram_cram_io_c_1565_cram_free_block(o_blk);
+        cram_free_block(o_blk);
         return -1;
     }
-    if cram_cram_external_c_189_cram_block_compression_hdr_decoder2encoder(in_.cast(), ch.cast())
-        != 0
+    if {
+        let fd = NonNull::new(in_.cast::<c_void>());
+        match unsafe { raw_mut(ch.cast::<cram_block_compression_hdr_layout>()) } {
+            Some(ch) => cram_block_compression_hdr_decoder2encoder(fd, ch),
+            None => -1,
+        }
+    } != 0
     {
         cram_free_compression_header(ch);
-        cram_cram_io_c_1565_cram_free_block(o_blk);
+        cram_free_block(o_blk);
         return -1;
     }
     let n_blk = cram_cram_encode_c_2810_cram_encode_compression_header(in_, c, ch, in_fd.embed_ref);
     cram_free_compression_header(ch);
     if n_blk.is_null() {
-        cram_cram_io_c_1565_cram_free_block(o_blk);
+        cram_free_block(o_blk);
         return -1;
     }
 
-    let Some(o_blk_ref) = (unsafe { raw_ref(o_blk) }) else {
-        cram_cram_io_c_1565_cram_free_block(o_blk);
-        cram_cram_io_c_1565_cram_free_block(n_blk);
+    let Some(o_blk_ref) = (unsafe { raw_const(o_blk) }) else {
+        cram_free_block(o_blk);
+        cram_free_block(n_blk);
         return -1;
     };
-    let Some(data) = cram_block_data_ref(o_blk_ref) else {
-        cram_cram_io_c_1565_cram_free_block(o_blk);
-        cram_cram_io_c_1565_cram_free_block(n_blk);
+    let Some(data) = cram_block_data(o_blk_ref) else {
+        cram_free_block(o_blk);
+        cram_free_block(n_blk);
         return -1;
     };
     let mut cp = data.as_ptr().cast_mut().cast::<c_char>();
@@ -1496,18 +1107,23 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     i32_ = varint_get32(&mut cp, endp, &mut err) as i32;
     i32_ += cp.offset_from(op) as i32;
     if err != 0 {
-        cram_cram_io_c_1565_cram_free_block(o_blk);
-        cram_cram_io_c_1565_cram_free_block(n_blk);
+        cram_free_block(o_blk);
+        cram_free_block(n_blk);
         return -2;
     }
 
     let Some(n_blk_mut) = (unsafe { raw_mut(n_blk) }) else {
-        cram_cram_io_c_1565_cram_free_block(o_blk);
-        cram_cram_io_c_1565_cram_free_block(n_blk);
+        cram_free_block(o_blk);
+        cram_free_block(n_blk);
         return -1;
     };
-    cram_block_set_size_ref(n_blk_mut, cram_block_get_size_ref(n_blk_mut) - 2);
-    cram_cram_external_c_544_cram_block_append(n_blk, op.cast(), i32_);
+    cram_block_set_size(n_blk_mut, cram_block_get_size(n_blk_mut) - 2);
+    {
+        let data = unsafe { raw_slice(op.cast::<u8>(), i32_.max(0) as usize) };
+        if let Some(data) = data {
+            cram_block_append(n_blk_mut, data);
+        }
+    }
     let n_blk_layout = unsafe { block_layout_mut(n_blk_mut) };
     n_blk_layout.comp_size = n_blk_layout.byte as i32;
     n_blk_layout.uncomp_size = n_blk_layout.byte as i32;
@@ -1515,11 +1131,11 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     let new_size = cram_block_size(n_blk) as c_int;
 
     let Some(c_ref) = (unsafe { raw_mut(c) }) else {
-        cram_cram_io_c_1565_cram_free_block(o_blk);
-        cram_cram_io_c_1565_cram_free_block(n_blk);
+        cram_free_block(o_blk);
+        cram_free_block(n_blk);
         return -1;
     };
-    let landmarks = cram_container_get_landmarks_ref(c_ref);
+    let landmarks = cram_container_get_landmarks(c_ref);
     let num_landmarks = landmarks.len() as c_int;
 
     if old_size != new_size {
@@ -1537,19 +1153,19 @@ pub unsafe fn cram_cram_external_c_934_cram_transcode_rg(
     }
 
     cram_write_block(out, n_blk);
-    cram_cram_io_c_1565_cram_free_block(o_blk);
-    cram_cram_io_c_1565_cram_free_block(n_blk);
+    cram_free_block(o_blk);
+    cram_free_block(n_blk);
 
     cram_cram_external_c_683_cram_copy_slice(in_, out, num_landmarks)
 }
 
 pub unsafe fn cram_cram_external_c_1029_cram_get_refs(fd: *mut htsFile) -> *mut refs_t {
-    let Some(fd) = (unsafe { raw_ref(fd) }) else {
+    let Some(fd) = (unsafe { raw_const(fd) }) else {
         return std::ptr::null_mut();
     };
     if fd.format.format == HTS_FORMAT_CRAM {
-        unsafe { raw_ref(fd.fp.cram) }.map_or(std::ptr::null_mut(), |cram| unsafe {
-            cram_fd_layout_ref(cram).refs.cast()
+        unsafe { raw_const(fd.fp.cram) }.map_or(std::ptr::null_mut(), |cram| unsafe {
+            cram_fd_layout(cram).refs.cast()
         })
     } else {
         std::ptr::null_mut()

@@ -1044,7 +1044,7 @@ pub(crate) unsafe fn sam_hdr_add_line_hrecs(
     // sam_hrecs_vadd sets dirty; clear the cached text so the next read/write
     // rebuilds from hrecs (matches the redact_header_text call in htslib C's
     // sam_hdr_add_line).
-    header_c_1530_redact_header_text(&mut *h);
+    redact_header_text(&mut *h);
     0
 }
 
@@ -2164,10 +2164,9 @@ unsafe fn sam_hrec_set_tag_value(
         return -1;
     }
 
-    let mut prev: Option<NonNull<sam_hrec_tag_t>> = None;
     let key_cstr = [key[0], key[1], 0];
-    let found =
-        sam_hrecs_find_key(&mut *type_, CStr::from_bytes_with_nul_unchecked(&key_cstr), Some(&mut prev));
+    let (found, prev) =
+        sam_hrecs_find_key(&mut *type_, CStr::from_bytes_with_nul_unchecked(&key_cstr));
     let mut tag = found.map_or(std::ptr::null_mut(), |p| p.as_ptr());
     if tag.is_null() {
         tag = crate::htslib_rs::c_compat::calloc(1, std::mem::size_of::<sam_hrec_tag_t>() as u64)
@@ -2251,12 +2250,7 @@ unsafe fn sam_hrecs_vadd(
 
     // @HD is a singleton: update the existing line rather than adding a second.
     if &type_bytes == b"HD" {
-        let hd = sam_hrecs_find_type_id(
-            &mut *hrecs,
-            CStr::from_ptr(type_),
-            std::ptr::null(),
-            std::ptr::null(),
-        );
+        let hd = sam_hrecs_find_type_id(&mut *hrecs, CStr::from_ptr(type_), None);
         if let Some(hd) = hd {
             return sam_hrecs_update_pairs(hrecs, hd.as_ptr(), tags);
         }
@@ -3135,7 +3129,12 @@ pub(crate) unsafe fn header_c_1784_sam_hdr_remove_line_id_hrecs(
         return -1;
     }
 
-    let type_found = sam_hrecs_find_type_id(&mut *hrecs, CStr::from_ptr(type_), id_key, id_value);
+    let id = if id_key.is_null() {
+        None
+    } else {
+        Some((CStr::from_ptr(id_key), CStr::from_ptr(id_value)))
+    };
+    let type_found = sam_hrecs_find_type_id(&mut *hrecs, CStr::from_ptr(type_), id);
     let type_found = match type_found {
         None => return 0,
         Some(t) => t.as_ptr(),
@@ -3147,7 +3146,7 @@ pub(crate) unsafe fn header_c_1784_sam_hdr_remove_line_id_hrecs(
             return -1;
         }
         if (*hrecs).dirty != 0 {
-            header_c_1530_redact_header_text(&mut *bh);
+            redact_header_text(&mut *bh);
         }
     }
 
@@ -3188,7 +3187,7 @@ pub(crate) unsafe fn header_c_1823_sam_hdr_remove_line_pos_hrecs(
             return -1;
         }
         if (*hrecs).dirty != 0 {
-            header_c_1530_redact_header_text(&mut *bh);
+            redact_header_text(&mut *bh);
         }
     }
 
@@ -3225,9 +3224,13 @@ pub(crate) unsafe fn header_c_2015_sam_hdr_remove_except_hrecs(
     let mut ret: c_int = 1;
     let mut remove_all: c_int = if id_key.is_null() { 1 } else { 0 };
 
-    let mut type_found =
-        sam_hrecs_find_type_id(&mut *hrecs, CStr::from_ptr(type_), id_key, id_value)
-            .map_or(std::ptr::null_mut(), |t| t.as_ptr());
+    let id = if id_key.is_null() {
+        None
+    } else {
+        Some((CStr::from_ptr(id_key), CStr::from_ptr(id_value)))
+    };
+    let mut type_found = sam_hrecs_find_type_id(&mut *hrecs, CStr::from_ptr(type_), id)
+        .map_or(std::ptr::null_mut(), |t| t.as_ptr());
     if type_found.is_null() {
         // Could not match an exception — drop the whole type group, if any.
         // The C reaches the same point via kh_get(sam_hrecs_t, hrecs->h,
@@ -3267,7 +3270,7 @@ pub(crate) unsafe fn header_c_2015_sam_hdr_remove_except_hrecs(
     }
 
     if ret == 0 && (*hrecs).dirty != 0 {
-        header_c_1530_redact_header_text(&mut *bh);
+        redact_header_text(&mut *bh);
     }
 
     0
@@ -3320,7 +3323,8 @@ pub(crate) unsafe fn header_c_2071_sam_hdr_remove_lines_hrecs(
     let mut ret: c_int = 0;
     let mut step = (*head).next;
     while step != head {
-        let tag = sam_hrecs_find_key(&mut *step, CStr::from_ptr(id), None)
+        let tag = sam_hrecs_find_key(&mut *step, CStr::from_ptr(id))
+            .0
             .map_or(std::ptr::null_mut(), |t| t.as_ptr());
         if !tag.is_null() && !(*tag).str_.is_null() && (*tag).len >= 3 {
             let value = (*tag).str_.add(3);
@@ -3342,7 +3346,8 @@ pub(crate) unsafe fn header_c_2071_sam_hdr_remove_lines_hrecs(
     // we removed it via the loop above (but that loop never inspects head
     // itself); we re-fetch via the same find_type_pos to be defensive.
     let mut head = head;
-    let tag = sam_hrecs_find_key(&mut *head, CStr::from_ptr(id), None)
+    let tag = sam_hrecs_find_key(&mut *head, CStr::from_ptr(id))
+        .0
         .map_or(std::ptr::null_mut(), |t| t.as_ptr());
     if !tag.is_null() && !(*tag).str_.is_null() && (*tag).len >= 3 {
         let value = (*tag).str_.add(3);
@@ -3364,7 +3369,7 @@ pub(crate) unsafe fn header_c_2071_sam_hdr_remove_lines_hrecs(
     }
 
     if ret == 0 && (*hrecs).dirty != 0 {
-        header_c_1530_redact_header_text(&mut *bh);
+        redact_header_text(&mut *bh);
     }
 
     ret
@@ -3389,7 +3394,12 @@ pub(crate) unsafe fn header_c_2346_sam_hdr_remove_tag_id_hrecs(
     }
     let hrecs = (*bh).hrecs;
 
-    let ty = sam_hrecs_find_type_id(&mut *hrecs, CStr::from_ptr(type_), id_key, id_value);
+    let id = if id_key.is_null() {
+        None
+    } else {
+        Some((CStr::from_ptr(id_key), CStr::from_ptr(id_value)))
+    };
+    let ty = sam_hrecs_find_type_id(&mut *hrecs, CStr::from_ptr(type_), id);
     let ty = match ty {
         None => return -1,
         Some(t) => t.as_ptr(),
@@ -3397,7 +3407,7 @@ pub(crate) unsafe fn header_c_2346_sam_hdr_remove_tag_id_hrecs(
 
     let ret = sam_hrecs_remove_key(&mut *hrecs, &mut *ty, CStr::from_ptr(key));
     if ret == 0 && (*hrecs).dirty != 0 {
-        header_c_1530_redact_header_text(&mut *bh);
+        redact_header_text(&mut *bh);
     }
 
     ret
@@ -3540,12 +3550,7 @@ pub(crate) unsafe fn sam_c_2157_sam_hdr_change_HD_hrecs(
         // missing HD record returns -1 in the hrecs path; without this branch
         // callers would see a regression vs the text-mode entry-point.
         let hrecs = (*h).hrecs;
-        let hd = sam_hrecs_find_type_id(
-            &mut *hrecs,
-            c"HD",
-            std::ptr::null(),
-            std::ptr::null(),
-        );
+        let hd = sam_hrecs_find_type_id(&mut *hrecs, c"HD", None);
         if hd.is_none() {
             if sam_hdr_add_line(
                 &mut *h,
@@ -3555,23 +3560,10 @@ pub(crate) unsafe fn sam_c_2157_sam_hdr_change_HD_hrecs(
             {
                 return -1;
             }
-        } else if sam_hdr_update_line(
-            &mut *h,
-            c"HD",
-            std::ptr::null(),
-            std::ptr::null(),
-            &[(key, val)],
-        ) != 0
-        {
+        } else if sam_hdr_update_line(&mut *h, c"HD", None, &[(key, val)]) != 0 {
             return -1;
         }
-    } else if sam_hdr_remove_tag_id(
-        &mut *h,
-        c"HD",
-        std::ptr::null(),
-        std::ptr::null(),
-        CStr::from_ptr(key),
-    ) < 0
+    } else if sam_hdr_remove_tag_id(&mut *h, c"HD", None, CStr::from_ptr(key)) < 0
     {
         // sam_hdr_remove_tag_id returns 1 on actual removal and 0 on no-op
         // (mirroring htslib); both are success. Only -1 (find_type_id failed
@@ -4228,8 +4220,7 @@ unsafe fn sam_c_1173_bam_get_library(h: *const sam_hdr_t, b: *const bam1_t) -> *
     if sam_hdr_find_tag_id(
         &mut *h.cast_mut(),
         c"RG",
-        c"ID".as_ptr(),
-        rg.add(1).cast(),
+        Some((c"ID", CStr::from_ptr(rg.add(1).cast()))),
         c"LB",
         &mut lib,
     ) < 0
@@ -5395,10 +5386,10 @@ pub unsafe fn sam_parse_region(
     flags: c_int,
 ) -> *const c_char {
     hts_parse_region(
-        s,
-        tid,
-        beg,
-        end,
+        CStr::from_ptr(s),
+        &mut *tid,
+        &mut *beg,
+        &mut *end,
         Some(sam_c_418_bam_name2id_wrapper),
         h.cast(),
         flags,
@@ -7448,7 +7439,7 @@ unsafe extern "C" fn sam_c_1638_bam_ptell(fp: *mut c_void) -> i64 {
 // function pointer matching the `hts_seek_func` C signature.
 unsafe extern "C" fn sam_c_1582_cram_pseek(fp: *mut c_void, offset: i64, _whence: c_int) -> c_int {
     use crate::htslib_rs::cram::{
-        cram_cram_io_c_3705_cram_free_container, cram_cram_io_c_5431_cram_seek, cram_fd_layout,
+        cram_cram_io_c_3705_cram_free_container, cram_fd_layout, cram_seek,
     };
     use crate::htslib_rs::hts::cram_fd;
     let fd = fp.cast::<cram_fd>();
@@ -7457,8 +7448,8 @@ unsafe extern "C" fn sam_c_1582_cram_pseek(fp: *mut c_void, offset: i64, _whence
     }
     let fdl = fd.cast::<cram_fd_layout>();
 
-    if cram_cram_io_c_5431_cram_seek(fd, offset as libc::off_t, libc::SEEK_SET) != 0
-        && cram_cram_io_c_5431_cram_seek(
+    if cram_seek(fd, offset as libc::off_t, libc::SEEK_SET) != 0
+        && cram_seek(
             fd,
             {
                 #[cfg(windows)]
@@ -7566,7 +7557,7 @@ unsafe extern "C" fn sam_c_1552_cram_readrec(
     loop {
         let ret = crate::htslib_rs::cram::cram_get_bam_seq_native(cram_fd, b);
         if ret < 0 {
-            return if crate::htslib_rs::cram::cram_cram_io_c_5662_cram_eof(cram_fd) != 0 {
+            return if crate::htslib_rs::cram::cram_eof(cram_fd) != 0 {
                 -1
             } else {
                 -2
@@ -7704,8 +7695,10 @@ unsafe fn sam_cram_itr_query(
         // cram_seek_to_refpos, then OR SAM_POS into required_fields if not
         // the special "-2" case set by HTS_IDX_START/HTS_IDX_REST.
         let cram_fd = (*cidx).cram;
-        let ret =
-            crate::htslib_rs::cram::cram_cram_index_c_573_cram_seek_to_refpos(cram_fd, &mut r);
+        let ret = crate::htslib_rs::cram::cram_seek_to_refpos(
+            &mut *cram_fd.cast::<crate::htslib_rs::cram::cram_fd_layout>(),
+            &mut r,
+        );
         // After cram_seek_to_refpos, propagate required_fields |= SAM_POS like
         // cram_set_voption does. We touch the layout-mirrored field directly.
         cram_set_required_pos_if_needed(cram_fd);
@@ -7799,11 +7792,10 @@ unsafe extern "C" fn sam_c_1754_cram_name2id(fdv: *mut c_void, ref_: *const c_ch
     if fdv.is_null() || ref_.is_null() {
         return -1;
     }
-    let hdr = crate::htslib_rs::cram::cram_cram_external_c_58_cram_fd_get_header(fdv.cast())
-        .cast::<sam_hdr_t>();
-    if hdr.is_null() {
-        return -1;
-    }
+    let hdr = match crate::htslib_rs::cram::cram_fd_get_header(&*fdv.cast()) {
+        Some(h) => h.as_ptr(),
+        None => return -1,
+    };
     sam_hdr_name2tid(&mut *hdr, CStr::from_ptr(ref_))
 }
 
@@ -7858,8 +7850,7 @@ pub unsafe fn sam_c_1768_sam_itr_regarray(
     }
     let itr = hts_itr_regions(
         idx,
-        reglist,
-        reg_count,
+        std::slice::from_raw_parts_mut(reglist, reg_count as usize),
         getid,
         hdr_arg,
         multi_query,
@@ -7919,8 +7910,7 @@ pub unsafe fn sam_c_1798_sam_itr_regions(
 
     hts_itr_regions(
         idx,
-        reglist,
-        regcount as c_int,
+        std::slice::from_raw_parts_mut(reglist, regcount as usize),
         getid,
         hdr_arg,
         multi_query,
@@ -8258,7 +8248,7 @@ unsafe fn sam_read1_cram_native_decode(
     let cram_fd = (*fp).fp.cram;
     let ret = crate::htslib_rs::cram::cram_get_bam_seq_native(cram_fd, b);
     if ret < 0 {
-        return if crate::htslib_rs::cram::cram_cram_io_c_5662_cram_eof(cram_fd) != 0 {
+        return if crate::htslib_rs::cram::cram_eof(cram_fd) != 0 {
             -1
         } else {
             -2
@@ -11748,7 +11738,7 @@ pub unsafe fn bam_set_seqi(s: *mut u8, i: usize, b: u8) {
     *s.add(i >> 1) = (*s.add(i >> 1) & (0xf0 >> shift)) | (b << shift);
 }
 
-pub fn nibble2base_default_ref(nib: &[u8], seq: &mut [c_char]) {
+pub fn nibble2base_default(nib: &[u8], seq: &mut [c_char]) {
     static CODE2BASE: &[u8; 512] = b"===A=C=M=G=R=S=V=T=W=Y=H=K=D=B=N\
 A=AAACAMAGARASAVATAWAYAHAKADABAN\
 C=CACCCMCGCRCSCVCTCWCYCHCKCDCBCN\
@@ -11767,9 +11757,10 @@ B=BABCBMBGBRBSBVBTBWBYBHBKBDBBBN\
 N=NANCNMNGNRNSNVNTNWNYNHNKNDNBNN";
     static SEQ_NT16_STR: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
 
-    if seq.is_empty() {
+    let Some(seq0) = seq.first_mut() else {
         return;
-    }
+    };
+    *seq0 = 0;
 
     let len = seq.len();
     let len2 = len / 2;
@@ -11786,18 +11777,6 @@ N=NANCNMNGNRNSNVNTNWNYNHNKNDNBNN";
         let code = (nib[i / 2] >> (((!i) & 1) << 2)) & 0x0f;
         seq[i] = SEQ_NT16_STR[code as usize] as c_char;
     }
-}
-
-pub unsafe fn nibble2base_default(nib: &[u8], seq: &mut [c_char]) {
-    let Some(seq0) = seq.first_mut() else {
-        return;
-    };
-    *seq0 = 0;
-    nibble2base_default_ref(nib, seq);
-}
-
-pub fn nibble2base_ref(nib: &[u8], seq: &mut [c_char]) {
-    nibble2base_default_ref(nib, seq);
 }
 
 pub unsafe fn nibble2base(nib: &[u8], seq: &mut [c_char]) {
@@ -12605,11 +12584,11 @@ mod tests {
             assert!(khash_str2int_set((*hrecs).rg_hash, c"rg1".as_ptr(), 0) >= 0);
 
             assert_eq!(
-                sam_hrecs_find_type_id(&mut *hrecs, c"SQ", c"SN".as_ptr(), c"chr1".as_ptr()),
+                sam_hrecs_find_type_id(&mut *hrecs, c"SQ", Some((c"SN", c"chr1"))),
                 Some(NonNull::from(&sq))
             );
             assert_eq!(
-                sam_hrecs_find_type_id(&mut *hrecs, c"RG", c"ID".as_ptr(), c"rg1".as_ptr()),
+                sam_hrecs_find_type_id(&mut *hrecs, c"RG", Some((c"ID", c"rg1"))),
                 Some(NonNull::from(&rg))
             );
             assert!(std::ptr::eq(
@@ -12617,15 +12596,12 @@ mod tests {
                 &rg
             ));
             assert_eq!(
-                sam_hrecs_find_type_id(&mut *hrecs, c"RG", c"ID".as_ptr(), c"missing".as_ptr()),
+                sam_hrecs_find_type_id(&mut *hrecs, c"RG", Some((c"ID", c"missing"))),
                 None
             );
 
-            let mut prev = None;
-            assert_eq!(
-                sam_hrecs_find_key(&mut sq, c"LN", Some(&mut prev)),
-                Some(NonNull::from(&sq_len))
-            );
+            let (found, prev) = sam_hrecs_find_key(&mut sq, c"LN");
+            assert_eq!(found, Some(NonNull::from(&sq_len)));
             assert_eq!(prev, Some(NonNull::from(&sq_sn)));
             (*hrecs).ref_ = std::ptr::null_mut();
             (*hrecs).rg = std::ptr::null_mut();
@@ -12755,8 +12731,7 @@ mod tests {
                 sam_hdr_update_line(
                     &mut *hdr,
                     c"SQ",
-                    c"SN".as_ptr(),
-                    c"chr2".as_ptr(),
+                    Some((c"SN", c"chr2")),
                     &[
                         (c"LN".as_ptr(), c"250".as_ptr()),
                         (c"AN".as_ptr(), c"two,dos".as_ptr())
@@ -12768,8 +12743,7 @@ mod tests {
                 sam_hdr_update_line(
                     &mut *hdr,
                     c"SQ",
-                    c"SN".as_ptr(),
-                    c"chr1".as_ptr(),
+                    Some((c"SN", c"chr1")),
                     &[(c"SN".as_ptr(), c"chrA".as_ptr())],
                 ),
                 0
@@ -12778,8 +12752,7 @@ mod tests {
                 sam_hdr_update_line(
                     &mut *hdr,
                     c"RG",
-                    c"ID".as_ptr(),
-                    c"run1".as_ptr(),
+                    Some((c"ID", c"run1")),
                     &[(c"DS".as_ptr(), c"hello".as_ptr())],
                 ),
                 0
@@ -12796,8 +12769,7 @@ mod tests {
                 sam_hdr_update_line(
                     &mut *hdr,
                     c"SQ",
-                    c"SN".as_ptr(),
-                    c"chrA".as_ptr(),
+                    Some((c"SN", c"chrA")),
                     &[(c"SN".as_ptr(), c"chr2".as_ptr())],
                 ),
                 -1
@@ -12982,8 +12954,7 @@ mod tests {
                 sam_hdr_find_tag_id(
                     &mut *hdr,
                     c"SQ",
-                    c"SN".as_ptr(),
-                    c"ref2".as_ptr(),
+                    Some((c"SN", c"ref2")),
                     c"M5",
                     &mut ks
                 ),
@@ -12994,8 +12965,7 @@ mod tests {
                 sam_hdr_find_tag_id(
                     &mut *hdr,
                     c"RG",
-                    c"ID".as_ptr(),
-                    c"run1".as_ptr(),
+                    Some((c"ID", c"run1")),
                     c"SM",
                     &mut ks
                 ),
@@ -13016,8 +12986,7 @@ mod tests {
                 sam_hdr_find_tag_id(
                     &mut *hdr,
                     c"SQ",
-                    c"SN".as_ptr(),
-                    c"ref2".as_ptr(),
+                    Some((c"SN", c"ref2")),
                     c"AS",
                     &mut ks
                 ),
@@ -13313,11 +13282,11 @@ mod tests {
             assert_eq!(sam_hdr_nref(&*hdr), 3);
 
             assert_eq!(
-                sam_hdr_remove_line_id(&mut *hdr, c"RG", c"ID".as_ptr(), c"missing".as_ptr()),
+                sam_hdr_remove_line_id(&mut *hdr, c"RG", Some((c"ID", c"missing"))),
                 0
             );
             assert_eq!(
-                sam_hdr_remove_line_id(&mut *hdr, c"RG", c"ID".as_ptr(), c"run1".as_ptr()),
+                sam_hdr_remove_line_id(&mut *hdr, c"RG", Some((c"ID", c"run1"))),
                 0
             );
             assert_eq!(sam_hdr_count_lines(&mut *hdr, c"RG"), 1);
@@ -13334,7 +13303,7 @@ mod tests {
             assert_eq!(sam_hdr_tid2len(&*hdr, 1), 30);
             assert_eq!(sam_hdr_remove_line_pos(&mut *hdr, c"SQ", 9), -1);
             assert_eq!(
-                sam_hdr_remove_line_id(&mut *hdr, c"PG", c"ID".as_ptr(), c"prog1".as_ptr()),
+                sam_hdr_remove_line_id(&mut *hdr, c"PG", Some((c"ID", c"prog1"))),
                 -1
             );
             assert_eq!(sam_hdr_remove_line_pos(&mut *hdr, c"PG", 0), -1);
@@ -13359,7 +13328,7 @@ mod tests {
             assert!(!(*hdr).hrecs.is_null());
 
             assert_eq!(
-                sam_hdr_remove_except(&mut *hdr, c"RG", c"ID".as_ptr(), c"run2".as_ptr()),
+                sam_hdr_remove_except(&mut *hdr, c"RG", Some((c"ID", c"run2"))),
                 0
             );
             assert_eq!(sam_hdr_count_lines(&mut *hdr, c"RG"), 1);
@@ -13368,17 +13337,17 @@ mod tests {
                 b"run2"
             );
             assert_eq!(
-                sam_hdr_remove_except(&mut *hdr, c"RG", c"ID".as_ptr(), c"missing".as_ptr()),
+                sam_hdr_remove_except(&mut *hdr, c"RG", Some((c"ID", c"missing"))),
                 0
             );
             assert_eq!(sam_hdr_count_lines(&mut *hdr, c"RG"), 0);
             assert_eq!(
-                sam_hdr_remove_except(&mut *hdr, c"PG", c"ID".as_ptr(), c"prog1".as_ptr()),
+                sam_hdr_remove_except(&mut *hdr, c"PG", Some((c"ID", c"prog1"))),
                 -1
             );
 
             assert_eq!(
-                sam_hdr_remove_except(&mut *hdr, c"SQ", c"SN".as_ptr(), c"ref2".as_ptr()),
+                sam_hdr_remove_except(&mut *hdr, c"SQ", Some((c"SN", c"ref2"))),
                 0
             );
             assert_eq!(sam_hdr_nref(&*hdr), 1);
@@ -13408,59 +13377,27 @@ mod tests {
             assert_eq!(sam_hdr_name2tid(&mut *hdr, c"chr1"), 0);
 
             assert_eq!(
-                sam_hdr_remove_tag_id(
-                    &mut *hdr,
-                    c"RG",
-                    c"ID".as_ptr(),
-                    c"run1".as_ptr(),
-                    c"SM",
-                ),
+                sam_hdr_remove_tag_id(&mut *hdr, c"RG", Some((c"ID", c"run1")), c"SM"),
                 0
             );
             let mut ks = kstring_t::default();
             assert_eq!(
-                sam_hdr_find_tag_id(
-                    &mut *hdr,
-                    c"RG",
-                    c"ID".as_ptr(),
-                    c"run1".as_ptr(),
-                    c"SM",
-                    &mut ks,
-                ),
+                sam_hdr_find_tag_id(&mut *hdr, c"RG", Some((c"ID", c"run1")), c"SM", &mut ks),
                 -1
             );
             assert_eq!(
-                sam_hdr_find_tag_id(
-                    &mut *hdr,
-                    c"RG",
-                    c"ID".as_ptr(),
-                    c"run1".as_ptr(),
-                    c"LB",
-                    &mut ks,
-                ),
+                sam_hdr_find_tag_id(&mut *hdr, c"RG", Some((c"ID", c"run1")), c"LB", &mut ks),
                 0
             );
             assert_eq!(ks.data.as_slice(), b"lib1");
             assert_eq!(
-                sam_hdr_remove_tag_id(
-                    &mut *hdr,
-                    c"SQ",
-                    c"SN".as_ptr(),
-                    c"ref1".as_ptr(),
-                    c"AN",
-                ),
+                sam_hdr_remove_tag_id(&mut *hdr, c"SQ", Some((c"SN", c"ref1")), c"AN"),
                 0
             );
             assert_eq!(sam_hdr_name2tid(&mut *hdr, c"ref1"), 0);
             assert_eq!(sam_hdr_name2tid(&mut *hdr, c"chr1"), -1);
             assert_eq!(
-                sam_hdr_remove_tag_id(
-                    &mut *hdr,
-                    c"RG",
-                    c"ID".as_ptr(),
-                    c"run2".as_ptr(),
-                    c"LB",
-                ),
+                sam_hdr_remove_tag_id(&mut *hdr, c"RG", Some((c"ID", c"run2")), c"LB"),
                 -1
             );
 
@@ -13482,11 +13419,11 @@ mod tests {
             let packed = [0x12, 0x48, 0xf3, 0x50];
             let mut seq = [0 as c_char; 9];
 
-            nibble2base_default_ref(&packed, &mut seq[..7]);
+            nibble2base_default(&packed, &mut seq[..7]);
             assert_eq!(CStr::from_ptr(seq.as_ptr()).to_bytes(), b"ACGTNMR");
 
             seq.fill(0);
-            nibble2base_ref(&packed, &mut seq[..8]);
+            nibble2base(&packed, &mut seq[..8]);
             assert_eq!(CStr::from_ptr(seq.as_ptr()).to_bytes(), b"ACGTNMR=");
 
             seq.fill(0);
@@ -13559,7 +13496,7 @@ mod tests {
             state.canonical[1] = 15;
 
             let mut ntype = 0;
-            let types = bam_mods_recorded_ref(&mut state, &mut ntype);
+            let types = bam_mods_recorded(&mut state, &mut ntype);
             assert_eq!(ntype, 2);
             assert_eq!(types[0], b'm' as c_int);
             assert_eq!(types[1], -1234);
@@ -13568,7 +13505,7 @@ mod tests {
             let mut implicit = 0;
             let mut canonical = 0;
             assert_eq!(
-                bam_mods_query_type_ref_outputs(
+                bam_mods_query_type(
                     &state,
                     b'm' as c_int,
                     Some(&mut strand),
@@ -13582,7 +13519,7 @@ mod tests {
             assert_eq!(canonical, b'C' as c_char);
 
             assert_eq!(
-                bam_mods_queryi_ref_outputs(
+                bam_mods_queryi(
                     &state,
                     1,
                     Some(&mut strand),
@@ -13595,10 +13532,10 @@ mod tests {
             assert_eq!(implicit, 0);
             assert_eq!(canonical, b'N' as c_char);
             assert_eq!(
-                bam_mods_query_type_ref_outputs(&state, b'h' as c_int, None, None, None,),
+                bam_mods_query_type(&state, b'h' as c_int, None, None, None,),
                 -1
             );
-            assert_eq!(bam_mods_queryi_ref_outputs(&state, 2, None, None, None), -1);
+            assert_eq!(bam_mods_queryi(&state, 2, None, None, None), -1);
 
             let b = bam_init1();
             assert!(!b.is_null());
@@ -13625,7 +13562,7 @@ mod tests {
                 20
             );
             let mut freq = [99; 16];
-            seq_freq_ref(b.as_ref().unwrap(), &mut freq);
+            seq_freq(b.as_ref().unwrap(), &mut freq);
             assert_eq!(freq[1], 1);
             assert_eq!(freq[2], 1);
             assert_eq!(freq[4], 1);
@@ -13683,7 +13620,7 @@ mod tests {
             }];
             let mut pos = -1;
             assert_eq!(
-                bam_next_basemod_ref(b.as_ref().unwrap(), &mut state, &mut mods, &mut pos),
+                bam_next_basemod(b.as_ref().unwrap(), &mut state, &mut mods, &mut pos),
                 1
             );
             assert_eq!(pos, 2);
@@ -13692,7 +13629,7 @@ mod tests {
             assert_eq!(mods[0].strand, 0);
             assert_eq!(mods[0].qual, 42);
             assert_eq!(
-                bam_next_basemod_ref(b.as_ref().unwrap(), &mut state, &mut mods, &mut pos),
+                bam_next_basemod(b.as_ref().unwrap(), &mut state, &mut mods, &mut pos),
                 0
             );
 
@@ -13701,7 +13638,7 @@ mod tests {
             state.mm[0] = mm_end.as_mut_ptr().cast();
             state.ml[0] = ml.as_mut_ptr();
             assert_eq!(
-                bam_mods_at_qpos_ref(b.as_ref().unwrap(), 2, &mut state, &mut mods),
+                bam_mods_at_qpos(b.as_ref().unwrap(), 2, &mut state, &mut mods),
                 1
             );
             assert_eq!(mods[0].qual, 42);
@@ -13713,7 +13650,7 @@ mod tests {
             state.implicit[0] = 0;
             state.flags = HTS_MOD_REPORT_UNCHECKED;
             assert_eq!(
-                bam_mods_at_next_pos_ref(b.as_ref().unwrap(), &mut state, &mut mods),
+                bam_mods_at_next_pos(b.as_ref().unwrap(), &mut state, &mut mods),
                 1
             );
             assert_eq!(mods[0].qual, HTS_MOD_UNCHECKED);
@@ -13772,7 +13709,7 @@ mod tests {
 
             let mut state = hts_base_mod_state_new();
             assert_eq!(
-                bam_parse_basemod2_ref(b.as_ref().unwrap(), &mut state, 0),
+                bam_parse_basemod2(b.as_ref().unwrap(), &mut state, 0),
                 0
             );
             assert_eq!(state.nmods, 1);
@@ -13790,7 +13727,7 @@ mod tests {
             }];
             let mut pos = -1;
             assert_eq!(
-                bam_next_basemod_ref(b.as_ref().unwrap(), &mut state, &mut mods, &mut pos),
+                bam_next_basemod(b.as_ref().unwrap(), &mut state, &mut mods, &mut pos),
                 1
             );
             assert_eq!(pos, 2);
@@ -13822,7 +13759,7 @@ mod tests {
             );
             let mut state = hts_base_mod_state_new();
             assert_eq!(
-                bam_parse_basemod2_ref(b.as_ref().unwrap(), &mut state, 0),
+                bam_parse_basemod2(b.as_ref().unwrap(), &mut state, 0),
                 0
             );
             assert_eq!(state.nmods, 0);
@@ -13870,7 +13807,7 @@ mod tests {
 
             let mut state = hts_base_mod_state_new();
             assert_eq!(
-                bam_parse_basemod2_ref(b.as_ref().unwrap(), &mut state, 0),
+                bam_parse_basemod2(b.as_ref().unwrap(), &mut state, 0),
                 0
             );
             assert_eq!(state.nmods, 1);
@@ -13884,7 +13821,7 @@ mod tests {
             }];
             let mut pos = -1;
             assert_eq!(
-                bam_next_basemod_ref(b.as_ref().unwrap(), &mut state, &mut mods, &mut pos),
+                bam_next_basemod(b.as_ref().unwrap(), &mut state, &mut mods, &mut pos),
                 -1
             );
 
@@ -13936,7 +13873,7 @@ mod tests {
 
             let mut state = hts_base_mod_state_new();
             assert_eq!(
-                bam_parse_basemod2_ref(b.as_ref().unwrap(), &mut state, 0),
+                bam_parse_basemod2(b.as_ref().unwrap(), &mut state, 0),
                 -1
             );
 
@@ -18159,39 +18096,39 @@ mod tests {
             assert_eq!(header_h_58_TYPEKEY(c"SQ".as_ptr()), 0x5351);
 
             assert_eq!(
-                header_c_1325_valid_sam_header_type(c"@HD\tVN:1.6"),
+                valid_sam_header_type(c"@HD\tVN:1.6"),
                 1
             );
             assert_eq!(
-                header_c_1325_valid_sam_header_type(c"@SQ\tSN:chr1"),
+                valid_sam_header_type(c"@SQ\tSN:chr1"),
                 1
             );
             assert_eq!(
-                header_c_1325_valid_sam_header_type(c"@RG\tID:rg1"),
+                valid_sam_header_type(c"@RG\tID:rg1"),
                 1
             );
             assert_eq!(
-                header_c_1325_valid_sam_header_type(c"@PG\tID:pg1"),
+                valid_sam_header_type(c"@PG\tID:pg1"),
                 1
             );
             assert_eq!(
-                header_c_1325_valid_sam_header_type(c"@COcomment text"),
+                valid_sam_header_type(c"@COcomment text"),
                 1
             );
             assert_eq!(
-                header_c_1325_valid_sam_header_type(c"@HD VN:1.6"),
+                valid_sam_header_type(c"@HD VN:1.6"),
                 0
             );
             assert_eq!(
-                header_c_1325_valid_sam_header_type(c"@SQ SN:chr1"),
+                valid_sam_header_type(c"@SQ SN:chr1"),
                 0
             );
             assert_eq!(
-                header_c_1325_valid_sam_header_type(c"@XX\tID:x"),
+                valid_sam_header_type(c"@XX\tID:x"),
                 0
             );
             assert_eq!(
-                header_c_1325_valid_sam_header_type(c"not-a-header"),
+                valid_sam_header_type(c"not-a-header"),
                 0
             );
         }

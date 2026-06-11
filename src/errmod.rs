@@ -109,7 +109,7 @@ pub fn errmod_destroy(em: Option<Box<errmod_t>>) {
     drop(em);
 }
 
-pub fn errmod_cal_ref(em: &errmod_t, bases: &mut [u16], m: usize, q: &mut [f32]) -> i32 {
+pub fn errmod_cal(em: &errmod_t, bases: &mut [u16], m: usize, q: &mut [f32]) -> i32 {
     if q.len() < m.saturating_mul(m) {
         return -1;
     }
@@ -210,10 +210,6 @@ pub fn errmod_cal_ref(em: &errmod_t, bases: &mut [u16], m: usize, q: &mut [f32])
         j += 1;
     }
     0
-}
-
-pub fn errmod_cal(em: &errmod_t, bases: &mut [u16], m: usize, q: &mut [f32]) -> i32 {
-    errmod_cal_ref(em, bases, m, q)
 }
 
 #[cfg(test)]

@@ -34,7 +34,7 @@ unsafe fn bam_qual_slice_mut<'a>(b: &mut bam1_t) -> &'a mut [u8] {
     std::slice::from_raw_parts_mut(bam_get_qual(b).cast_mut(), b.core.l_qseq as usize)
 }
 
-unsafe fn bam_aux_get_ref(b: &bam1_t, tag: &[u8]) -> Option<NonNull<u8>> {
+unsafe fn realn_bam_aux_get(b: &bam1_t, tag: &[u8]) -> Option<NonNull<u8>> {
     if tag.contains(&0) {
         return None;
     }
@@ -46,11 +46,11 @@ unsafe fn bam_aux_get_ref(b: &bam1_t, tag: &[u8]) -> Option<NonNull<u8>> {
     NonNull::new(bam_aux_get(b, nul_tag.as_ptr().cast()))
 }
 
-unsafe fn bam_aux_del_ref(b: &mut bam1_t, s: NonNull<u8>) -> i32 {
+unsafe fn realn_bam_aux_del(b: &mut bam1_t, s: NonNull<u8>) -> i32 {
     bam_aux_del(b, s.as_ptr())
 }
 
-unsafe fn bam_aux_append_ref(b: &mut bam1_t, tag: &[u8], type_: i8, len: i32, data: &[u8]) -> i32 {
+unsafe fn realn_bam_aux_append(b: &mut bam1_t, tag: &[u8], type_: i8, len: i32, data: &[u8]) -> i32 {
     if tag.contains(&0) {
         return -1;
     }
@@ -136,14 +136,14 @@ unsafe fn sam_prob_realn_impl(b: &mut bam1_t, ref_: &[u8], flag: i32) -> i32 {
     }
 
     // test if BQ or ZQ is present, and make sanity checks
-    let mut bq = bam_aux_get_ref(b, b"BQ");
+    let mut bq = realn_bam_aux_get(b, b"BQ");
     if let Some(bq_tag) = bq {
         if redo_baq == 0 && realn_check_tag(bq_tag, HTS_LOG_WARNING, b"BQ", b) < 0 {
             fix_bq = 1;
         }
         bq = NonNull::new(bq_tag.as_ptr().add(1));
     }
-    let mut zq = bam_aux_get_ref(b, b"ZQ");
+    let mut zq = realn_bam_aux_get(b, b"ZQ");
     if let Some(zq_tag) = zq {
         if realn_check_tag(zq_tag, HTS_LOG_ERROR, b"ZQ", b) < 0 {
             return -4;
@@ -151,18 +151,18 @@ unsafe fn sam_prob_realn_impl(b: &mut bam1_t, ref_: &[u8], flag: i32) -> i32 {
         zq = NonNull::new(zq_tag.as_ptr().add(1));
     }
     if let Some(bq_ptr) = bq.filter(|_| redo_baq != 0) {
-        bam_aux_del_ref(b, NonNull::new_unchecked(bq_ptr.as_ptr().sub(1)));
+        realn_bam_aux_del(b, NonNull::new_unchecked(bq_ptr.as_ptr().sub(1)));
         bq = None;
     }
     if bq.is_some() && zq.is_some() {
         // remove the ZQ tag
-        bam_aux_del_ref(b, NonNull::new_unchecked(zq.unwrap().as_ptr().sub(1)));
+        realn_bam_aux_del(b, NonNull::new_unchecked(zq.unwrap().as_ptr().sub(1)));
         zq = None;
     }
     if zq.is_none() && fix_bq != 0 {
         // Need to fix invalid BQ tag (by realigning)
         debug_assert!(bq.is_some());
-        bam_aux_del_ref(b, NonNull::new_unchecked(bq.unwrap().as_ptr().sub(1)));
+        realn_bam_aux_del(b, NonNull::new_unchecked(bq.unwrap().as_ptr().sub(1)));
         bq = None;
     }
 
@@ -483,9 +483,9 @@ unsafe fn sam_prob_realn_impl(b: &mut bam1_t, ref_: &[u8], flag: i32) -> i32 {
                     ((qual[i as usize] as i32) - ((bq[i as usize] as i32) - 64)) as u8; // modify qual
                 i += 1;
             }
-            bam_aux_append_ref(b, b"ZQ", b'Z' as _, l_qseq + 1, bq);
+            realn_bam_aux_append(b, b"ZQ", b'Z' as _, l_qseq + 1, bq);
         } else {
-            bam_aux_append_ref(b, b"BQ", b'Z' as _, l_qseq + 1, bq);
+            realn_bam_aux_append(b, b"BQ", b'Z' as _, l_qseq + 1, bq);
         }
     }
 

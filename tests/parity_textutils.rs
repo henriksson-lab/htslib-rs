@@ -64,7 +64,7 @@ extern "C" {
 unsafe fn decode_percent_native(input: &CStr) -> (Vec<u8>, usize) {
     let mut buf = vec![0i8; input.to_bytes().len() + 1];
     let mut len: usize = 0;
-    let ret = htslib_rs::textutils::hts_decode_percent(buf.as_mut_ptr(), &mut len, input.as_ptr());
+    let ret = htslib_rs::textutils::hts_decode_percent(&mut buf, &mut len, input.to_bytes());
     assert_eq!(ret, 0);
     let bytes = std::slice::from_raw_parts(buf.as_ptr() as *const u8, len).to_vec();
     (bytes, len)
@@ -135,7 +135,7 @@ fn parity_hts_decode_base64() {
             let cap_n = htslib_rs::textutils::hts_base64_decoded_length(input.to_bytes().len()) + 8;
             let mut buf_n = vec![0i8; cap_n];
             let mut len_n: usize = 0;
-            htslib_rs::textutils::hts_decode_base64(buf_n.as_mut_ptr(), &mut len_n, input.as_ptr());
+            htslib_rs::textutils::hts_decode_base64(&mut buf_n, &mut len_n, input.to_bytes());
 
             let cap_c = hts_base64_decoded_length(input.to_bytes().len()) + 8;
             let mut buf_c = vec![0i8; cap_c];
@@ -170,13 +170,13 @@ unsafe fn parse_json_native(json: &mut [u8]) -> Vec<(c_char, Vec<u8>)> {
         let t = htslib_rs::textutils::hts_json_snext(
             json.as_mut_ptr().cast::<c_char>(),
             &mut state,
-            token,
+            &mut *token,
         );
         if t == 0 {
             break;
         }
         let type_ = htslib_rs::textutils::hts_json_token_type(token);
-        let str_ = htslib_rs::textutils::hts_json_token_str(token);
+        let str_ = htslib_rs::textutils::hts_json_token_str(&*token);
         let val = if !str_.is_null() {
             CStr::from_ptr(str_).to_bytes().to_vec()
         } else {
@@ -268,7 +268,7 @@ fn parity_hts_json_sskip_value() {
             let mut state_n: usize = 0;
             // advance to the first token to set up a type
             let t0_n =
-                htslib_rs::textutils::hts_json_snext(a.as_mut_ptr().cast(), &mut state_n, tok_n);
+                htslib_rs::textutils::hts_json_snext(a.as_mut_ptr().cast(), &mut state_n, &mut *tok_n);
             let after_n = htslib_rs::textutils::hts_json_sskip_value(
                 a.as_mut_ptr().cast(),
                 &mut state_n,
@@ -342,7 +342,9 @@ fn parity_stringify_argv() {
 
 unsafe fn strprint_native(quote: c_char, s: &CStr, len: usize, buflen: usize) -> Vec<u8> {
     let mut buf = vec![0i8; buflen];
-    htslib_rs::textutils::hts_strprint(buf.as_mut_ptr(), buflen, quote, s.as_ptr(), len);
+    let sb = s.to_bytes();
+    let s_slice = &sb[..len.min(sb.len())];
+    htslib_rs::textutils::hts_strprint(&mut buf, quote, s_slice);
     // Read up to first NUL
     let s = CStr::from_ptr(buf.as_ptr()).to_bytes().to_vec();
     s
@@ -396,8 +398,11 @@ fn native_sscan_string_smoke() {
     // move from src/hts.rs to src/textutils.rs).
     let mut buf = b"hello\\nworld\"trail\0".to_vec();
     unsafe {
-        let rest = htslib_rs::textutils::sscan_string(buf.as_mut_ptr().cast::<c_char>());
-        assert!(!rest.is_null());
+        let rest = htslib_rs::textutils::sscan_string(std::slice::from_raw_parts_mut(
+            buf.as_mut_ptr().cast::<c_char>(),
+            buf.len(),
+        ));
+        assert!(rest.is_some());
         let parsed = CStr::from_ptr(buf.as_ptr().cast()).to_bytes();
         assert_eq!(parsed, b"hello\nworld");
     }
@@ -422,7 +427,7 @@ fn parity_hts_json_alloc_and_free() {
         // Freshly allocated tokens have type 0 and str = NULL (calloc zeros).
         assert_eq!(htslib_rs::textutils::hts_json_token_type(n), 0);
         assert_eq!(hts_json_token_type(c), 0);
-        assert!(htslib_rs::textutils::hts_json_token_str(n).is_null());
+        assert!(htslib_rs::textutils::hts_json_token_str(&*n).is_null());
         assert!(hts_json_token_str(c).is_null());
         htslib_rs::textutils::hts_json_free_token(n);
         hts_json_free_token(c);

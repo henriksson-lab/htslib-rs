@@ -71,7 +71,7 @@ unsafe fn const_codec_mut<'a>(codec: *mut c_void) -> Option<&'a mut cram_codec_c
     codec.cast::<cram_codec_const_layout>().as_mut()
 }
 
-fn cram_cram_codecs_c_73_get_bit_MSB_ref(block: &mut cram_block_layout) -> c_int {
+pub fn cram_get_bit_MSB(block: &mut cram_block_layout) -> c_int {
     unsafe {
         if block.byte > block.alloc {
             return -1;
@@ -88,14 +88,7 @@ fn cram_cram_codecs_c_73_get_bit_MSB_ref(block: &mut cram_block_layout) -> c_int
     }
 }
 
-pub unsafe fn cram_cram_codecs_c_73_get_bit_MSB(block: *mut cram_block) -> c_int {
-    let Some(block) = block.as_mut() else {
-        return -1;
-    };
-    cram_cram_codecs_c_73_get_bit_MSB_ref(cram_block_layout_mut(block))
-}
-
-fn cram_cram_codecs_c_95_get_one_bits_MSB_ref(block: &mut cram_block_layout) -> c_int {
+pub fn cram_get_one_bits_MSB(block: &mut cram_block_layout) -> c_int {
     unsafe {
         let mut n = 0;
         if block.byte >= block.uncomp_size as usize {
@@ -122,14 +115,7 @@ fn cram_cram_codecs_c_95_get_one_bits_MSB_ref(block: &mut cram_block_layout) -> 
     }
 }
 
-pub unsafe fn cram_cram_codecs_c_95_get_one_bits_MSB(block: *mut cram_block) -> c_int {
-    let Some(block) = block.as_mut() else {
-        return -1;
-    };
-    cram_cram_codecs_c_95_get_one_bits_MSB_ref(cram_block_layout_mut(block))
-}
-
-fn cram_cram_codecs_c_113_get_zero_bits_MSB_ref(block: &mut cram_block_layout) -> c_int {
+pub fn cram_get_zero_bits_MSB(block: &mut cram_block_layout) -> c_int {
     unsafe {
         let mut n = 0;
         if block.byte >= block.uncomp_size as usize {
@@ -156,14 +142,7 @@ fn cram_cram_codecs_c_113_get_zero_bits_MSB_ref(block: &mut cram_block_layout) -
     }
 }
 
-pub unsafe fn cram_cram_codecs_c_113_get_zero_bits_MSB(block: *mut cram_block) -> c_int {
-    let Some(block) = block.as_mut() else {
-        return -1;
-    };
-    cram_cram_codecs_c_113_get_zero_bits_MSB_ref(cram_block_layout_mut(block))
-}
-
-fn cram_cram_codecs_c_133_store_bit_MSB_ref(block: &mut cram_block_layout, bit: libc::c_uint) {
+pub fn cram_store_bit_MSB(block: &mut cram_block_layout, bit: libc::c_uint) {
     unsafe {
         if block.byte >= block.alloc {
             block.alloc = if block.alloc != 0 {
@@ -187,13 +166,7 @@ fn cram_cram_codecs_c_133_store_bit_MSB_ref(block: &mut cram_block_layout, bit: 
     }
 }
 
-pub unsafe fn cram_cram_codecs_c_133_store_bit_MSB(block: *mut cram_block, bit: libc::c_uint) {
-    if let Some(block) = block.as_mut() {
-        cram_cram_codecs_c_133_store_bit_MSB_ref(cram_block_layout_mut(block), bit);
-    }
-}
-
-fn cram_cram_codecs_c_169_get_bits_MSB_ref(block: &mut cram_block_layout, mut nbits: c_int) -> i64 {
+pub fn cram_get_bits_MSB(block: &mut cram_block_layout, mut nbits: c_int) -> i64 {
     unsafe {
         let mut val = 0u64;
 
@@ -223,18 +196,7 @@ fn cram_cram_codecs_c_169_get_bits_MSB_ref(block: &mut cram_block_layout, mut nb
     }
 }
 
-pub unsafe fn cram_cram_codecs_c_169_get_bits_MSB(block: *mut cram_block, nbits: c_int) -> i64 {
-    let Some(block) = block.as_mut() else {
-        return -1;
-    };
-    cram_cram_codecs_c_169_get_bits_MSB_ref(cram_block_layout_mut(block), nbits)
-}
-
-fn cram_cram_codecs_c_259_store_bits_MSB_ref(
-    block: &mut cram_block_layout,
-    val: u64,
-    mut nbits: c_int,
-) -> c_int {
+pub fn cram_store_bits_MSB(block: &mut cram_block_layout, val: u64, mut nbits: c_int) -> c_int {
     unsafe {
         if block.byte + 8 >= block.alloc {
             if block.byte != 0 {
@@ -292,18 +254,7 @@ fn cram_cram_codecs_c_259_store_bits_MSB_ref(
     }
 }
 
-pub unsafe fn cram_cram_codecs_c_259_store_bits_MSB(
-    block: *mut cram_block,
-    val: u64,
-    nbits: c_int,
-) -> c_int {
-    let Some(block) = block.as_mut() else {
-        return -1;
-    };
-    cram_cram_codecs_c_259_store_bits_MSB_ref(cram_block_layout_mut(block), val, nbits)
-}
-
-fn cram_cram_codecs_c_152_store_bytes_MSB_ref(block: &mut cram_block_layout, bytes: &[c_char]) {
+pub fn cram_store_bytes_MSB(block: &mut cram_block_layout, bytes: &[c_char]) {
     unsafe {
         if block.bit != 7 {
             block.bit = 7;
@@ -326,18 +277,6 @@ fn cram_cram_codecs_c_152_store_bytes_MSB_ref(block: &mut cram_block_layout, byt
         );
         block.byte += bytes.len();
     }
-}
-
-pub unsafe fn cram_cram_codecs_c_152_store_bytes_MSB(
-    block: *mut cram_block,
-    bytes: *mut c_char,
-    len: c_int,
-) {
-    if block.is_null() || len < 0 || (bytes.is_null() && len != 0) {
-        return;
-    }
-    let bytes = std::slice::from_raw_parts(bytes, len as usize);
-    cram_cram_codecs_c_152_store_bytes_MSB_ref(&mut *block.cast::<cram_block_layout>(), bytes);
 }
 
 pub unsafe fn cram_cram_codecs_c_319_cram_extract_block(
@@ -1341,7 +1280,7 @@ pub unsafe fn cram_cram_codecs_c_1072_cram_beta_decode_long(
         }
         for i in 0..n {
             *out_i.add(i as usize) =
-                cram_cram_codecs_c_169_get_bits_MSB(in_, (*c).beta.nbits) - (*c).beta.offset as i64;
+                cram_get_bits_MSB(&mut *in_.cast::<cram_block_layout>(), (*c).beta.nbits) - (*c).beta.offset as i64;
         }
     } else {
         for i in 0..n {
@@ -1367,7 +1306,7 @@ pub unsafe fn cram_cram_codecs_c_1090_cram_beta_decode_int(
         }
         for i in 0..n {
             *out_i.add(i as usize) =
-                cram_cram_codecs_c_169_get_bits_MSB(in_, (*c).beta.nbits) as i32 - (*c).beta.offset;
+                cram_get_bits_MSB(&mut *in_.cast::<cram_block_layout>(), (*c).beta.nbits) as i32 - (*c).beta.offset;
         }
     } else {
         for i in 0..n {
@@ -1392,13 +1331,13 @@ pub unsafe fn cram_cram_codecs_c_1108_cram_beta_decode_char(
         }
         if !out.is_null() {
             for i in 0..n {
-                *out.add(i as usize) = (cram_cram_codecs_c_169_get_bits_MSB(in_, (*c).beta.nbits)
+                *out.add(i as usize) = (cram_get_bits_MSB(&mut *in_.cast::<cram_block_layout>(), (*c).beta.nbits)
                     as i32
                     - (*c).beta.offset) as c_char;
             }
         } else {
             for _ in 0..n {
-                cram_cram_codecs_c_169_get_bits_MSB(in_, (*c).beta.nbits);
+                cram_get_bits_MSB(&mut *in_.cast::<cram_block_layout>(), (*c).beta.nbits);
             }
         }
     } else if !out.is_null() {
@@ -1535,8 +1474,8 @@ pub unsafe fn cram_cram_codecs_c_1207_cram_beta_encode_long(
     let syms = in_.cast::<i64>();
     let mut r = 0;
     for i in 0..in_size {
-        r |= cram_cram_codecs_c_259_store_bits_MSB(
-            (*c).out.cast(),
+        r |= cram_store_bits_MSB(
+            &mut *(*c).out.cast::<cram_block_layout>(),
             (*syms.add(i as usize) + (*c).beta.offset as i64) as u64,
             (*c).beta.nbits,
         );
@@ -1554,8 +1493,8 @@ pub unsafe fn cram_cram_codecs_c_1219_cram_beta_encode_int(
     let syms = in_.cast::<c_int>();
     let mut r = 0;
     for i in 0..in_size {
-        r |= cram_cram_codecs_c_259_store_bits_MSB(
-            (*c).out.cast(),
+        r |= cram_store_bits_MSB(
+            &mut *(*c).out.cast::<cram_block_layout>(),
             (*syms.add(i as usize) + (*c).beta.offset) as u64,
             (*c).beta.nbits,
         );
@@ -1573,8 +1512,8 @@ pub unsafe fn cram_cram_codecs_c_1231_cram_beta_encode_char(
     let syms = in_.cast::<u8>();
     let mut r = 0;
     for i in 0..in_size {
-        r |= cram_cram_codecs_c_259_store_bits_MSB(
-            (*c).out.cast(),
+        r |= cram_store_bits_MSB(
+            &mut *(*c).out.cast::<cram_block_layout>(),
             (*syms.add(i as usize) as i32 + (*c).beta.offset) as u64,
             (*c).beta.nbits,
         );
@@ -1698,7 +1637,7 @@ pub unsafe fn cram_cram_codecs_c_1344_cram_xpack_decode_long(
     let n = *out_size;
     if (*c).xpack.nbits != 0 {
         for i in 0..n {
-            let idx = cram_cram_codecs_c_169_get_bits_MSB(in_, (*c).xpack.nbits) as usize;
+            let idx = cram_get_bits_MSB(&mut *in_.cast::<cram_block_layout>(), (*c).xpack.nbits) as usize;
             *out_i.add(i as usize) = (*c).xpack.rmap[idx] as i64;
         }
     } else {
@@ -1724,7 +1663,7 @@ pub unsafe fn cram_cram_codecs_c_1359_cram_xpack_decode_int(
             return -1;
         }
         for i in 0..n {
-            let idx = cram_cram_codecs_c_169_get_bits_MSB(in_, (*c).xpack.nbits) as usize;
+            let idx = cram_get_bits_MSB(&mut *in_.cast::<cram_block_layout>(), (*c).xpack.nbits) as usize;
             *out_i.add(i as usize) = (*c).xpack.rmap[idx] as i32;
         }
     } else {
@@ -2000,8 +1939,8 @@ pub unsafe fn cram_cram_codecs_c_1581_cram_xpack_encode_long(
     let syms = in_.cast::<i64>();
     let mut r = 0;
     for i in 0..in_size {
-        r |= cram_cram_codecs_c_259_store_bits_MSB(
-            (*c).out.cast(),
+        r |= cram_store_bits_MSB(
+            &mut *(*c).out.cast::<cram_block_layout>(),
             (*c).xpack.map[*syms.add(i as usize) as usize] as u64,
             (*c).xpack.nbits,
         );
@@ -2019,8 +1958,8 @@ pub unsafe fn cram_cram_codecs_c_1592_cram_xpack_encode_int(
     let syms = in_.cast::<c_int>();
     let mut r = 0;
     for i in 0..in_size {
-        r |= cram_cram_codecs_c_259_store_bits_MSB(
-            (*c).out.cast(),
+        r |= cram_store_bits_MSB(
+            &mut *(*c).out.cast::<cram_block_layout>(),
             (*c).xpack.map[*syms.add(i as usize) as usize] as u64,
             (*c).xpack.nbits,
         );
@@ -2054,7 +1993,7 @@ pub unsafe fn cram_cram_codecs_c_1612_cram_xpack_encode_free(c: *mut c_void) {
             free_fn((*c_xpack).xpack.sub_codec);
         }
     }
-    cram_cram_io_c_1565_cram_free_block((*c_xpack).out.cast());
+    cram_free_block((*c_xpack).out.cast());
     drop(Box::from_raw(c_xpack));
 }
 
@@ -2158,10 +2097,10 @@ pub unsafe fn cram_cram_codecs_c_1537_cram_xpack_encode_store(
         (*(tb.cast::<cram_block_layout>())).byte,
     ) != 0
     {
-        cram_cram_io_c_1565_cram_free_block(tb);
+        cram_free_block(tb);
         return -1;
     }
-    cram_cram_io_c_1565_cram_free_block(tb);
+    cram_free_block(tb);
 
     if r > 0 {
         len + len2
@@ -2506,7 +2445,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_1835_cram_xdelta_encode_flush(c: *mu
             }
         }
         _ => {
-            cram_cram_io_c_1565_cram_free_block(b);
+            cram_free_block(b);
             return -1;
         }
     }
@@ -2525,7 +2464,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_1835_cram_xdelta_encode_flush(c: *mu
         r = 0;
     }
 
-    cram_cram_io_c_1565_cram_free_block(b);
+    cram_free_block(b);
     r
 }
 
@@ -2571,10 +2510,10 @@ pub unsafe fn cram_cram_codecs_c_1930_cram_xdelta_encode_store(
 
     let tb_layout = tb.cast::<cram_block_layout>();
     if cram_cram_io_h_248_block_append(b, (*tb_layout).data.cast(), (*tb_layout).byte) != 0 {
-        cram_cram_io_c_1565_cram_free_block(tb);
+        cram_free_block(tb);
         return -1;
     }
-    cram_cram_io_c_1565_cram_free_block(tb);
+    cram_free_block(tb);
 
     if r > 0 {
         len + len2
@@ -2655,7 +2594,7 @@ pub unsafe fn cram_cram_codecs_c_2011_cram_xdelta_encode_free(c: *mut c_void) {
             free_fn((*c_xdelta).xdelta.sub_codec);
         }
     }
-    cram_cram_io_c_1565_cram_free_block((*c_xdelta).out.cast());
+    cram_free_block((*c_xdelta).out.cast());
     drop(Box::from_raw(c_xdelta));
 }
 
@@ -3138,7 +3077,7 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2303_cram_xrle_encode_store(
     let tc = (*c_xrle).xrle.len_codec;
     let b_len = cram_cram_io_c_1388_cram_new_block(0, 0);
     if b_len.is_null() {
-        cram_cram_io_c_1565_cram_free_block(b_rle);
+        cram_free_block(b_rle);
         return -1;
     }
     let store: CramCodecStoreFn = cram_fn((*(tc.cast::<cram_codec_xrle_layout>())).store);
@@ -3147,8 +3086,8 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2303_cram_xrle_encode_store(
     let tc = (*c_xrle).xrle.lit_codec;
     let b_lit = cram_cram_io_c_1388_cram_new_block(0, 0);
     if b_lit.is_null() {
-        cram_cram_io_c_1565_cram_free_block(b_rle);
-        cram_cram_io_c_1565_cram_free_block(b_len);
+        cram_free_block(b_rle);
+        cram_free_block(b_len);
         return -1;
     }
     let store: CramCodecStoreFn = cram_fn((*(tc.cast::<cram_codec_xrle_layout>())).store);
@@ -3169,29 +3108,29 @@ pub unsafe extern "C" fn cram_cram_codecs_c_2303_cram_xrle_encode_store(
 
     let b_rle_layout = b_rle.cast::<cram_block_layout>();
     if cram_cram_io_h_248_block_append(b, (*b_rle_layout).data.cast(), (*b_rle_layout).byte) != 0 {
-        cram_cram_io_c_1565_cram_free_block(b_rle);
-        cram_cram_io_c_1565_cram_free_block(b_len);
-        cram_cram_io_c_1565_cram_free_block(b_lit);
+        cram_free_block(b_rle);
+        cram_free_block(b_len);
+        cram_free_block(b_lit);
         return -1;
     }
     let b_len_layout = b_len.cast::<cram_block_layout>();
     if cram_cram_io_h_248_block_append(b, (*b_len_layout).data.cast(), (*b_len_layout).byte) != 0 {
-        cram_cram_io_c_1565_cram_free_block(b_rle);
-        cram_cram_io_c_1565_cram_free_block(b_len);
-        cram_cram_io_c_1565_cram_free_block(b_lit);
+        cram_free_block(b_rle);
+        cram_free_block(b_len);
+        cram_free_block(b_lit);
         return -1;
     }
     let b_lit_layout = b_lit.cast::<cram_block_layout>();
     if cram_cram_io_h_248_block_append(b, (*b_lit_layout).data.cast(), (*b_lit_layout).byte) != 0 {
-        cram_cram_io_c_1565_cram_free_block(b_rle);
-        cram_cram_io_c_1565_cram_free_block(b_len);
-        cram_cram_io_c_1565_cram_free_block(b_lit);
+        cram_free_block(b_rle);
+        cram_free_block(b_len);
+        cram_free_block(b_lit);
         return -1;
     }
 
-    cram_cram_io_c_1565_cram_free_block(b_rle);
-    cram_cram_io_c_1565_cram_free_block(b_len);
-    cram_cram_io_c_1565_cram_free_block(b_lit);
+    cram_free_block(b_rle);
+    cram_free_block(b_len);
+    cram_free_block(b_lit);
 
     if r > 0 {
         len + len1 + len2 + len3
@@ -3257,7 +3196,7 @@ pub unsafe fn cram_cram_codecs_c_2396_cram_xrle_encode_free(c: *mut c_void) {
             free_fn((*c_xrle).xrle.lit_codec);
         }
     }
-    cram_cram_io_c_1565_cram_free_block((*c_xrle).out.cast());
+    cram_free_block((*c_xrle).out.cast());
     drop(Box::from_raw(c_xrle));
 }
 
@@ -3353,7 +3292,7 @@ pub unsafe fn cram_cram_codecs_c_2452_cram_subexp_decode(
     let out_i = out.cast::<i32>();
     let k = (*c).subexp.k;
     for count in 0..*out_size {
-        let i = cram_cram_codecs_c_95_get_one_bits_MSB(in_);
+        let i = cram_get_one_bits_MSB(&mut *in_.cast::<cram_block_layout>());
         if i < 0
             || cram_cram_codecs_h_230_cram_not_enough_bits(in_, if i > 0 { i + k - 1 } else { k })
                 != 0
@@ -3363,13 +3302,13 @@ pub unsafe fn cram_cram_codecs_c_2452_cram_subexp_decode(
         let val = if i != 0 {
             let tail = i + k - 1;
             let bits = if tail != 0 {
-                cram_cram_codecs_c_169_get_bits_MSB(in_, tail) as i32
+                cram_get_bits_MSB(&mut *in_.cast::<cram_block_layout>(), tail) as i32
             } else {
                 0
             };
             bits + (1 << tail)
         } else if k != 0 {
-            cram_cram_codecs_c_169_get_bits_MSB(in_, k) as i32
+            cram_get_bits_MSB(&mut *in_.cast::<cram_block_layout>(), k) as i32
         } else {
             0
         };
@@ -3453,14 +3392,14 @@ pub unsafe fn cram_cram_codecs_c_2546_cram_gamma_decode(
     let c = c.cast::<cram_codec_gamma_layout>();
     let out_i = out.cast::<i32>();
     for i in 0..*out_size {
-        let mut nz = cram_cram_codecs_c_113_get_zero_bits_MSB(in_);
+        let mut nz = cram_get_zero_bits_MSB(&mut *in_.cast::<cram_block_layout>());
         if cram_cram_codecs_h_230_cram_not_enough_bits(in_, nz) != 0 {
             return -1;
         }
         let mut val = 1;
         while nz > 0 {
             val <<= 1;
-            val |= cram_cram_codecs_c_73_get_bit_MSB(in_);
+            val |= cram_get_bit_MSB(&mut *in_.cast::<cram_block_layout>());
             nz -= 1;
         }
         *out_i.add(i as usize) = val - (*c).gamma.offset;
@@ -3799,7 +3738,7 @@ pub unsafe fn cram_cram_codecs_c_2660_cram_huffman_decode_char(
             };
             while dlen != 0 {
                 val <<= 1;
-                val |= cram_cram_codecs_c_73_get_bit_MSB(in_);
+                val |= cram_get_bit_MSB(&mut *in_.cast::<cram_block_layout>());
                 dlen -= 1;
             }
             idx = val - (*codes.add(idx as usize)).p;
@@ -3860,7 +3799,7 @@ pub unsafe fn cram_cram_codecs_c_2708_cram_huffman_decode_int(
             };
             while dlen != 0 {
                 val <<= 1;
-                val |= cram_cram_codecs_c_73_get_bit_MSB(in_);
+                val |= cram_get_bit_MSB(&mut *in_.cast::<cram_block_layout>());
                 dlen -= 1;
             }
             idx = val - (*codes.add(idx as usize)).p;
@@ -3919,7 +3858,7 @@ pub unsafe fn cram_cram_codecs_c_2758_cram_huffman_decode_long(
             };
             while dlen != 0 {
                 val <<= 1;
-                val |= cram_cram_codecs_c_73_get_bit_MSB(in_);
+                val |= cram_get_bit_MSB(&mut *in_.cast::<cram_block_layout>());
                 dlen -= 1;
             }
             idx = val - (*codes.add(idx as usize)).p;
@@ -3964,7 +3903,7 @@ pub unsafe fn cram_cram_codecs_c_2994_cram_huffman_encode_char(
         };
         let code = (*(*c).huffman.codes.add(i as usize)).code;
         let len = (*(*c).huffman.codes.add(i as usize)).len;
-        r |= cram_cram_codecs_c_259_store_bits_MSB((*c).out.cast(), code as u64, len);
+        r |= cram_store_bits_MSB(&mut *(*c).out.cast::<cram_block_layout>(), code as u64, len);
         in_size -= 1;
     }
     r
@@ -3999,7 +3938,7 @@ pub unsafe fn cram_cram_codecs_c_3030_cram_huffman_encode_int(
         };
         let code = (*(*c).huffman.codes.add(i as usize)).code;
         let len = (*(*c).huffman.codes.add(i as usize)).len;
-        r |= cram_cram_codecs_c_259_store_bits_MSB((*c).out.cast(), code as u64, len);
+        r |= cram_store_bits_MSB(&mut *(*c).out.cast::<cram_block_layout>(), code as u64, len);
         in_size -= 1;
     }
     r
@@ -4034,7 +3973,7 @@ pub unsafe fn cram_cram_codecs_c_3067_cram_huffman_encode_long(
         };
         let code = (*(*c).huffman.codes.add(i as usize)).code;
         let len = (*(*c).huffman.codes.add(i as usize)).len;
-        r |= cram_cram_codecs_c_259_store_bits_MSB((*c).out.cast(), code as u64, len);
+        r |= cram_store_bits_MSB(&mut *(*c).out.cast::<cram_block_layout>(), code as u64, len);
         in_size -= 1;
     }
     r
@@ -4604,7 +4543,7 @@ pub unsafe fn cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
     let store: CramCodecStoreFn = cram_fn((*(tc.cast::<cram_codec_byte_array_len_layout>())).store);
     let len2 = store(tc, b_len, std::ptr::null_mut(), version);
     if len2 < 0 {
-        cram_cram_io_c_1565_cram_free_block(b_len);
+        cram_free_block(b_len);
         return -1;
     }
 
@@ -4614,14 +4553,14 @@ pub unsafe fn cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
         0,
     );
     if b_val.is_null() {
-        cram_cram_io_c_1565_cram_free_block(b_len);
+        cram_free_block(b_len);
         return -1;
     }
     let store: CramCodecStoreFn = cram_fn((*(tc.cast::<cram_codec_byte_array_len_layout>())).store);
     let len3 = store(tc, b_val, std::ptr::null_mut(), version);
     if len3 < 0 {
-        cram_cram_io_c_1565_cram_free_block(b_len);
-        cram_cram_io_c_1565_cram_free_block(b_val);
+        cram_free_block(b_len);
+        cram_free_block(b_val);
         return -1;
     }
 
@@ -4642,13 +4581,13 @@ pub unsafe fn cram_cram_codecs_c_3506_cram_byte_array_len_encode_store(
             (*(b_val.cast::<cram_block_layout>())).byte,
         ) != 0
     {
-        cram_cram_io_c_1565_cram_free_block(b_len);
-        cram_cram_io_c_1565_cram_free_block(b_val);
+        cram_free_block(b_len);
+        cram_free_block(b_val);
         return -1;
     }
 
-    cram_cram_io_c_1565_cram_free_block(b_len);
-    cram_cram_io_c_1565_cram_free_block(b_val);
+    cram_free_block(b_len);
+    cram_free_block(b_val);
 
     if r > 0 {
         len + len2 + len3

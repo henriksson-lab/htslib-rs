@@ -18,8 +18,7 @@ use super::hfile::{
 use super::{path_bytes, path_from_bytes};
 
 use crate::htslib_rs::cram::{
-    cram_cram_index_c_404_cram_index_query, cram_cram_index_c_503_cram_index_last,
-    cram_cram_index_c_531_cram_index_query_last,
+    cram_fd_layout, cram_index_last, cram_index_query, cram_index_query_last,
 };
 
 const BGZF_HTS_OPEN_FAST_BAM_READ: u32 = 1 << 16;
@@ -1338,7 +1337,7 @@ pub unsafe fn hts_memrchr(s: *const c_void, c: c_int, n: size_t) -> *mut c_void 
     std::ptr::null_mut()
 }
 
-unsafe fn hts_parse_region_ref(
+pub unsafe fn hts_parse_region(
     s: &CStr,
     tid: &mut c_int,
     beg: &mut hts_pos_t,
@@ -1486,29 +1485,6 @@ unsafe fn hts_parse_region_ref(
         return std::ptr::null();
     }
     s_end
-}
-
-pub unsafe fn hts_parse_region(
-    s: *const c_char,
-    tid: *mut c_int,
-    beg: *mut hts_pos_t,
-    end: *mut hts_pos_t,
-    getid: hts_name2id_f,
-    hdr: *mut c_void,
-    flags: c_int,
-) -> *const c_char {
-    if s.is_null() || tid.is_null() || beg.is_null() || end.is_null() {
-        return std::ptr::null();
-    }
-    hts_parse_region_ref(
-        CStr::from_ptr(s),
-        &mut *tid,
-        &mut *beg,
-        &mut *end,
-        getid,
-        hdr,
-        flags,
-    )
 }
 
 pub unsafe fn hts_parse_reg64(
@@ -2525,7 +2501,7 @@ pub unsafe fn kvsprintf(
     fmt: *const c_char,
     ap: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> c_int {
-    crate::htslib_rs::kstring::kstring_c_142_kvsprintf(s, fmt, ap)
+    crate::htslib_rs::kstring::kvsprintf(s, CStr::from_ptr(fmt).to_bytes(), &mut *ap)
 }
 
 #[repr(C)]
@@ -2811,10 +2787,9 @@ pub unsafe fn hts_open_tmpfile(
         // ksprintf(tmpname, "%s.tmp_%d_%d_%u", fname, pid, n, t)
         // Our portable ksprintf supports %s/%d; %u is the same shape, format
         // as int via the same Int variant since values fit.
-        let fmt = c"%s.tmp_%d_%d_%d".as_ptr();
-        let r = crate::htslib_rs::kstring::kstring_c_177_ksprintf(
-            tmpname,
-            fmt,
+        let r = crate::htslib_rs::kstring::ksprintf(
+            &mut *tmpname,
+            b"%s.tmp_%d_%d_%d",
             &[
                 crate::htslib_rs::kstring::KsPrintfArg::Str(fname),
                 crate::htslib_rs::kstring::KsPrintfArg::Int(pid),
@@ -4388,7 +4363,7 @@ pub unsafe fn hts_getline(fp: *mut htsFile, delimiter: c_int, str: *mut kstring_
             // is equivalent for our purposes (it empties the Vec without freeing),
             // so it is safe on a not-yet-allocated kstring and a no-op once empty.
             (*str).data.truncate(0);
-            let mut ret = kgetline2(str, Some(hgetln_wrapper), (*fp).fp.hfile.cast::<c_void>());
+            let mut ret = kgetline2(&mut *str, Some(hgetln_wrapper), (*fp).fp.hfile.cast::<c_void>());
             if ret >= 0 {
                 ret = if (*str).data.len() <= c_int::MAX as usize {
                     (*str).data.len() as c_int
@@ -5040,7 +5015,7 @@ pub unsafe fn hts_idx_destroy(idx: *mut hts_idx_t) {
         // CRAI b-tree owned by the cram_fd, then the wrapper allocation
         // itself. Matches htslib/hts.c:2696.
         let cidx = idx.cast::<hts_cram_idx_t>();
-        crate::htslib_rs::cram::cram_cram_index_c_374_cram_index_free((*cidx).cram);
+        crate::htslib_rs::cram::cram_index_free(&mut *(*cidx).cram.cast::<cram_fd_layout>());
         crate::htslib_rs::c_compat::free(cidx.cast());
         return;
     }
@@ -6909,26 +6884,22 @@ pub unsafe fn hts_c_3748_hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut ht
 
                 let beg = (*curr_intv).beg;
                 let end = (*curr_intv).end;
-                let mut e = cram_cram_index_c_404_cram_index_query(
-                    (*cidx).cram,
-                    tid,
-                    beg + 1,
-                    std::ptr::null_mut(),
-                );
-                if e.is_null() {
+                let Some(e) = cram_index_query(&*(*cidx).cram.cast::<cram_fd_layout>(), tid, beg + 1, None) else {
                     continue;
-                }
+                };
+                let e = e.as_ptr();
 
                 (*off_ptr.add(n_off)).u = (*e).offset as u64;
                 (*off_ptr.add(n_off)).max = ((tid as u64) << 32) | j as u64;
 
-                e = if end >= HTS_POS_MAX {
-                    cram_cram_index_c_503_cram_index_last((*cidx).cram, tid, std::ptr::null_mut())
+                let e = if end >= HTS_POS_MAX {
+                    cram_index_last(&*(*cidx).cram.cast::<cram_fd_layout>(), tid, None)
                 } else {
-                    cram_cram_index_c_531_cram_index_query_last((*cidx).cram, tid, end + 1)
+                    cram_index_query_last(&*(*cidx).cram.cast::<cram_fd_layout>(), tid, end + 1)
                 };
 
-                if !e.is_null() {
+                if let Some(e) = e {
+                    let e = e.as_ptr();
                     let e_next = (*e).e_next;
                     (*off_ptr.add(n_off)).v = if !e_next.is_null() {
                         (*e_next).offset as u64
@@ -6947,13 +6918,9 @@ pub unsafe fn hts_c_3748_hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut ht
         } else {
             match tid {
                 HTS_IDX_NOCOOR => {
-                    let e = cram_cram_index_c_404_cram_index_query(
-                        (*cidx).cram,
-                        tid,
-                        1,
-                        std::ptr::null_mut(),
-                    );
-                    if !e.is_null() {
+                    let e = cram_index_query(&*(*cidx).cram.cast::<cram_fd_layout>(), tid, 1, None);
+                    if let Some(e) = e {
+                        let e = e.as_ptr();
                         (*iter).bitfields |= 1 << 3;
                         (*iter).nocoor_off = (*e).offset as u64;
                     } else {
@@ -6965,13 +6932,9 @@ pub unsafe fn hts_c_3748_hts_itr_multi_cram(idx: *const hts_idx_t, iter: *mut ht
                     }
                 }
                 HTS_IDX_START => {
-                    let e = cram_cram_index_c_404_cram_index_query(
-                        (*cidx).cram,
-                        tid,
-                        1,
-                        std::ptr::null_mut(),
-                    );
-                    if !e.is_null() {
+                    let e = cram_index_query(&*(*cidx).cram.cast::<cram_fd_layout>(), tid, 1, None);
+                    if let Some(e) = e {
+                        let e = e.as_ptr();
                         (*iter).bitfields |= 1;
                         let Some(tmp) = NonNull::new(
                             c_compat::realloc(
@@ -7058,7 +7021,7 @@ pub unsafe fn hts_itr_querys(
         });
     }
 
-    if hts_parse_region_ref(
+    if hts_parse_region(
         CStr::from_ptr(reg),
         &mut tid,
         &mut beg,
@@ -7075,7 +7038,8 @@ pub unsafe fn hts_itr_querys(
     itr_query.map_or(std::ptr::null_mut(), |f| f(idx, tid, beg, end, readrec))
 }
 
-unsafe fn hts_itr_regions_ref(
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn hts_itr_regions(
     idx: *const hts_idx_t,
     regs: &mut [hts_reglist_t],
     getid: hts_name2id_f,
@@ -7129,7 +7093,7 @@ unsafe fn hts_itr_regions_ref(
     }
 
     if regs.len() > 1 {
-        regs.sort_by(|a, b| compare_regions_ref(a, b).cmp(&0));
+        regs.sort_by(|a, b| compare_regions(a, b).cmp(&0));
     }
 
     if itr_specific.map_or(-1, |f| f(idx, itr)) != 0 {
@@ -7145,35 +7109,7 @@ unsafe fn hts_itr_regions_ref(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub unsafe fn hts_itr_regions(
-    idx: *const hts_idx_t,
-    reglist: *mut hts_reglist_t,
-    count: c_int,
-    getid: hts_name2id_f,
-    hdr: *mut c_void,
-    itr_specific: hts_itr_multi_query_func,
-    readrec: hts_readrec_func,
-    seek: hts_seek_func,
-    tell: hts_tell_func,
-) -> *mut hts_itr_t {
-    if reglist.is_null() || count < 0 {
-        return std::ptr::null_mut();
-    }
-
-    hts_itr_regions_ref(
-        idx,
-        std::slice::from_raw_parts_mut(reglist, count as usize),
-        getid,
-        hdr,
-        itr_specific,
-        readrec,
-        seek,
-        tell,
-    )
-}
-
-fn compare_regions_ref(reg1: &hts_reglist_t, reg2: &hts_reglist_t) -> c_int {
+fn compare_regions(reg1: &hts_reglist_t, reg2: &hts_reglist_t) -> c_int {
     if reg1.tid < 0 && reg2.tid >= 0 {
         1
     } else if reg1.tid >= 0 && reg2.tid < 0 {
@@ -9102,7 +9038,7 @@ mod tests {
             let mut out = [0 as c_char; 32];
             let mut out_len = 0usize;
             assert_eq!(
-                hts_decode_percent(out.as_mut_ptr(), &mut out_len, input.as_ptr()),
+                hts_decode_percent(&mut out, &mut out_len, input.as_bytes()),
                 0
             );
             assert_eq!(out_len, 8);
@@ -9119,7 +9055,7 @@ mod tests {
             let mut decoded = [0 as c_char; 16];
             out_len = 0;
             assert_eq!(
-                hts_decode_base64(decoded.as_mut_ptr(), &mut out_len, input.as_ptr()),
+                hts_decode_base64(&mut decoded, &mut out_len, input.as_bytes()),
                 0
             );
             assert_eq!(out_len, 3);
@@ -9131,7 +9067,7 @@ mod tests {
             let input = CString::new("TWE=").unwrap();
             out_len = 0;
             assert_eq!(
-                hts_decode_base64(decoded.as_mut_ptr(), &mut out_len, input.as_ptr()),
+                hts_decode_base64(&mut decoded, &mut out_len, input.as_bytes()),
                 0
             );
             assert_eq!(out_len, 2);
@@ -9143,7 +9079,7 @@ mod tests {
             let input = CString::new("TQ==").unwrap();
             out_len = 0;
             assert_eq!(
-                hts_decode_base64(decoded.as_mut_ptr(), &mut out_len, input.as_ptr()),
+                hts_decode_base64(&mut decoded, &mut out_len, input.as_bytes()),
                 0
             );
             assert_eq!(out_len, 1);
@@ -9155,7 +9091,7 @@ mod tests {
             let input = CString::new("TWFu!ignored").unwrap();
             out_len = 0;
             assert_eq!(
-                hts_decode_base64(decoded.as_mut_ptr(), &mut out_len, input.as_ptr()),
+                hts_decode_base64(&mut decoded, &mut out_len, input.as_bytes()),
                 0
             );
             assert_eq!(out_len, 3);
@@ -9196,8 +9132,14 @@ mod tests {
             );
 
             let mut json_string = b"a\\n\\t\\u00a3\\\"z\"tail\0".to_vec();
-            let after = sscan_string(json_string.as_mut_ptr().cast());
-            assert_eq!(after.offset_from(json_string.as_ptr().cast()), 15);
+            let after = {
+                let s = std::slice::from_raw_parts_mut(
+                    json_string.as_mut_ptr().cast::<i8>(),
+                    json_string.len(),
+                );
+                sscan_string(s)
+            };
+            assert_eq!(after.unwrap(), 15);
             assert_eq!(
                 CStr::from_ptr(json_string.as_ptr().cast()).to_bytes(),
                 b"a\n\t\xc2\xa3\"z"
@@ -9206,11 +9148,11 @@ mod tests {
             let token = hts_json_alloc_token();
             assert!(!token.is_null());
             assert_eq!(hts_json_token_type(token), 0);
-            assert!(hts_json_token_str(token).is_null());
+            assert!(hts_json_token_str(&*token).is_null());
             (*token).type_ = b'n' as c_char;
             (*token).str_ = c"123".as_ptr().cast_mut();
             assert_eq!(hts_json_token_type(token), b'n' as c_char);
-            assert_eq!(hts_json_token_str(token), c"123".as_ptr().cast_mut());
+            assert_eq!(hts_json_token_str(&*token), c"123".as_ptr().cast_mut());
 
             (*token).str_ = c"false".as_ptr().cast_mut();
             assert_eq!(token_type(token), b'b' as c_char);
@@ -9376,45 +9318,18 @@ mod tests {
         unsafe {
             let mut buf = [0 as c_char; 64];
             let input = CString::new("a\nb\t\"\\").unwrap();
-            assert_eq!(
-                hts_strprint(
-                    buf.as_mut_ptr(),
-                    buf.len(),
-                    b'"' as c_char,
-                    input.as_ptr(),
-                    size_t::MAX,
-                ),
-                buf.as_ptr()
-            );
+            assert!(hts_strprint(&mut buf, b'"' as c_char, input.as_bytes()));
             assert_eq!(
                 CStr::from_ptr(buf.as_ptr()).to_bytes(),
                 b"\"a\\nb\\t\\\"\\\\\""
             );
 
             let bytes = [b'a', 0, 1, b'z'];
-            assert_eq!(
-                hts_strprint(
-                    buf.as_mut_ptr(),
-                    buf.len(),
-                    0,
-                    bytes.as_ptr().cast(),
-                    bytes.len(),
-                ),
-                buf.as_ptr()
-            );
+            assert!(hts_strprint(&mut buf, 0, &bytes));
             assert_eq!(CStr::from_ptr(buf.as_ptr()).to_bytes(), b"a\\0\\x01z");
 
             let input = CString::new("abcdef").unwrap();
-            assert_eq!(
-                hts_strprint(
-                    buf.as_mut_ptr(),
-                    8,
-                    b'\'' as c_char,
-                    input.as_ptr(),
-                    size_t::MAX,
-                ),
-                buf.as_ptr()
-            );
+            assert!(hts_strprint(&mut buf[..8], b'\'' as c_char, input.as_bytes()));
             assert_eq!(CStr::from_ptr(buf.as_ptr()).to_bytes(), b"'ab'...");
         }
     }
@@ -11386,7 +11301,7 @@ mod tests {
             let mut ks = kstring_t {
                 data: b"  alpha\tbeta gamma  ".to_vec(),
             };
-            let offsets = crate::htslib_rs::kstring::ksplit_vec_ref(&mut ks, 0).unwrap();
+            let offsets = crate::htslib_rs::kstring::ksplit_vec(&mut ks, 0).unwrap();
             assert_eq!(offsets, [2, 8, 13]);
             assert_eq!(
                 CStr::from_ptr(ks.data.as_ptr().add(2).cast()).to_bytes(),
@@ -11406,29 +11321,27 @@ mod tests {
                 p: std::ptr::null(),
             };
             let mut starts = Vec::new();
-            let mut tok = kstrtok(input.as_ptr().cast(), sep.as_ptr().cast(), &mut aux);
+            let mut tok = kstrtok(
+                Some(&input[..input.len() - 1]),
+                Some(&sep[..sep.len() - 1]),
+                &mut aux,
+            );
             while !tok.is_null() {
                 starts.push(tok.offset_from(input.as_ptr().cast::<c_char>()));
-                tok = kstrtok(std::ptr::null(), std::ptr::null(), &mut aux);
+                tok = kstrtok(None, None, &mut aux);
             }
             assert_eq!(starts, [0, 3, 7, 10, 14, 15]);
 
-            let hay = b"xxACGTACGTyy\0";
-            let pat = b"ACGTyy\0";
+            let hay = b"xxACGTACGTyy";
+            let pat = b"ACGTyy";
             let mut prep: *mut c_int = std::ptr::null_mut();
-            let found = kstrstr(hay.as_ptr().cast(), pat.as_ptr().cast(), &mut prep);
-            assert_eq!(found.offset_from(hay.as_ptr().cast::<c_char>()), 6);
+            let found = kstrstr(hay, pat, Some(&mut prep));
+            assert_eq!(found.unwrap(), 6);
             assert!(!prep.is_null());
             crate::htslib_rs::c_compat::free(prep.cast());
 
             let with_nul = b"abc\0needle\0";
-            assert!(kstrnstr(
-                with_nul.as_ptr().cast(),
-                c"needle".as_ptr(),
-                with_nul.len() as c_int,
-                std::ptr::null_mut()
-            )
-            .is_null());
+            assert!(kstrnstr(with_nul, b"needle", with_nul.len(), None).is_none());
 
             let mem = b"0123456789";
             let mem_found = kmemmem(
@@ -12289,7 +12202,7 @@ mod tests {
             let mut beg = -1;
             let mut end = -1;
             let ret = hts_parse_region(
-                c"chr1:7-9".as_ptr(),
+                c"chr1:7-9",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12301,7 +12214,7 @@ mod tests {
             assert_eq!((tid, beg, end), (0, 6, 9));
 
             let ret = hts_parse_region(
-                c"chr1:7".as_ptr(),
+                c"chr1:7",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12313,7 +12226,7 @@ mod tests {
             assert_eq!((tid, beg, end), (0, 6, HTS_POS_MAX));
 
             let ret = hts_parse_region(
-                c"chr1:7".as_ptr(),
+                c"chr1:7",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12325,7 +12238,7 @@ mod tests {
             assert_eq!((tid, beg, end), (0, 6, 7));
 
             let ret = hts_parse_region(
-                c"chr1:7-0".as_ptr(),
+                c"chr1:7-0",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12337,7 +12250,7 @@ mod tests {
             assert_eq!((tid, beg, end), (0, 6, HTS_POS_MAX));
 
             let ret = hts_parse_region(
-                c"{HLA-DRB1*12:17}:3-3,chr1".as_ptr(),
+                c"{HLA-DRB1*12:17}:3-3,chr1",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12350,7 +12263,7 @@ mod tests {
             assert_eq!((tid, beg, end), (2, 2, 3));
 
             let ret = hts_parse_region(
-                c"{chr1,chr3},chr1".as_ptr(),
+                c"{chr1,chr3},chr1",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12363,7 +12276,7 @@ mod tests {
             assert_eq!((tid, beg, end), (4, 0, HTS_POS_MAX));
 
             let ret = hts_parse_region(
-                c"chr3:1,000-1,500".as_ptr(),
+                c"chr3:1,000-1,500",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12376,7 +12289,7 @@ mod tests {
             assert_eq!((tid, beg, end), (3, 0, 1));
 
             let invalid_comma = hts_parse_region(
-                c"chr1:1,chr3".as_ptr(),
+                c"chr1:1,chr3",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12387,7 +12300,7 @@ mod tests {
             assert!(invalid_comma.is_null());
 
             let invalid_negative_start = hts_parse_region(
-                c"chr1:-1-10".as_ptr(),
+                c"chr1:-1-10",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12398,7 +12311,7 @@ mod tests {
             assert!(invalid_negative_start.is_null());
 
             let mismatched_brace = hts_parse_region(
-                c"{chr1".as_ptr(),
+                c"{chr1",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12410,7 +12323,7 @@ mod tests {
             assert_eq!(tid, -1);
 
             let ambiguous = hts_parse_region(
-                c"chr1:100-200".as_ptr(),
+                c"chr1:100-200",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12430,27 +12343,7 @@ mod tests {
             let mut beg = 0;
             let mut end = 0;
             assert!(hts_parse_region(
-                std::ptr::null(),
-                &mut tid,
-                &mut beg,
-                &mut end,
-                Some(test_name2id),
-                std::ptr::null_mut(),
-                0,
-            )
-            .is_null());
-            assert!(hts_parse_region(
-                c"chr1".as_ptr(),
-                std::ptr::null_mut(),
-                &mut beg,
-                &mut end,
-                Some(test_name2id),
-                std::ptr::null_mut(),
-                0,
-            )
-            .is_null());
-            assert!(hts_parse_region(
-                c"chr1".as_ptr(),
+                c"chr1",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12483,7 +12376,7 @@ mod tests {
             let mut beg = -1;
             let mut end = -1;
             let next = hts_parse_region(
-                c"chr1:5-,chr3".as_ptr(),
+                c"chr1:5-,chr3",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12496,7 +12389,7 @@ mod tests {
             assert_eq!((tid, beg, end), (0, 4, HTS_POS_MAX));
 
             let next = hts_parse_region(
-                c"chr1:5-5,chr3".as_ptr(),
+                c"chr1:5-5,chr3",
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -12509,7 +12402,7 @@ mod tests {
             assert_eq!((tid, beg, end), (0, 4, 5));
 
             let empty_coord = hts_parse_region(
-                c"chr1:".as_ptr(),
+                c"chr1:",
                 &mut tid,
                 &mut beg,
                 &mut end,

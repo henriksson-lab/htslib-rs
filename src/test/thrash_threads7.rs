@@ -72,7 +72,7 @@ pub unsafe fn test_thrash_threads7_c_49_main(_argc: c_int, _argv: *mut *mut c_ch
             }
         }
 
-        crate::htslib_rs::thread_pool::hts_tpool_process_flush(q[qnum]);
+        crate::htslib_rs::thread_pool::hts_tpool_process_flush(&mut *q[qnum]);
         crate::htslib_rs::thread_pool::hts_tpool_process_destroy(q[qnum]);
         libc::free(t.cast());
         q[qnum] = crate::htslib_rs::thread_pool::hts_tpool_process_init(p, 10, 1);
@@ -91,7 +91,7 @@ pub unsafe fn test_thrash_threads7_c_49_main(_argc: c_int, _argv: *mut *mut c_ch
     }
 
     for queue in q.iter().take(n_proc) {
-        crate::htslib_rs::thread_pool::hts_tpool_process_flush(*queue);
+        crate::htslib_rs::thread_pool::hts_tpool_process_flush(&mut **queue);
         crate::htslib_rs::thread_pool::hts_tpool_process_destroy(*queue);
     }
     crate::htslib_rs::thread_pool::hts_tpool_destroy(p);
@@ -132,11 +132,15 @@ mod tests {
                 }
 
                 assert_eq!(
-                    crate::htslib_rs::thread_pool::hts_tpool_process_flush(queues[queue_index]),
+                    crate::htslib_rs::thread_pool::hts_tpool_process_flush(
+                        &mut *queues[queue_index]
+                    ),
                     0
                 );
                 assert_eq!(
-                    crate::htslib_rs::thread_pool::hts_tpool_process_empty(queues[queue_index]),
+                    crate::htslib_rs::thread_pool::hts_tpool_process_empty(
+                        &mut *queues[queue_index]
+                    ),
                     1
                 );
                 crate::htslib_rs::thread_pool::hts_tpool_process_destroy(queues[queue_index]);
@@ -148,7 +152,7 @@ mod tests {
 
             for queue in queues {
                 assert_eq!(
-                    crate::htslib_rs::thread_pool::hts_tpool_process_flush(queue),
+                    crate::htslib_rs::thread_pool::hts_tpool_process_flush(&mut *queue),
                     0
                 );
                 crate::htslib_rs::thread_pool::hts_tpool_process_destroy(queue);

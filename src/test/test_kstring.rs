@@ -772,15 +772,12 @@ pub unsafe fn test_test_kstring_c_586_test_kmemmem() -> c_int {
         }
 
         let found = crate::htslib_rs::hts::karp_rabin(
-            str_.as_ptr().cast(),
-            *slen as usize,
-            pat.as_ptr().cast(),
-            *plen as usize,
+            &str_[..*slen as usize],
+            &pat[..*plen as usize],
         );
-        let loc = if found.is_null() {
-            -1
-        } else {
-            found.cast::<u8>().offset_from(str_.as_ptr())
+        let loc = match found {
+            None => -1,
+            Some(off) => off as isize,
         };
         if loc != *expected {
             pass = 0;
@@ -814,11 +811,12 @@ pub unsafe fn test_test_kstring_c_638_test_kstrstr() -> c_int {
     ];
     let mut pass = 1;
     for (i, (str_, pat, expected)) in tests.iter().enumerate() {
-        let found = crate::htslib_rs::hts::kstrstr(*str_, *pat, std::ptr::null_mut());
-        let loc = if found.is_null() {
-            -1
-        } else {
-            found.offset_from(*str_)
+        let str_bytes = std::ffi::CStr::from_ptr(*str_).to_bytes();
+        let pat_bytes = std::ffi::CStr::from_ptr(*pat).to_bytes();
+        let found = crate::htslib_rs::hts::kstrstr(str_bytes, pat_bytes, None);
+        let loc = match found {
+            None => -1,
+            Some(off) => off as isize,
         };
         if loc != *expected {
             pass = 0;
@@ -861,11 +859,13 @@ pub unsafe fn test_test_kstring_c_673_test_kstrnstr() -> c_int {
     ];
     let mut pass = 1;
     for (i, (str_, pat, n, expected)) in tests.iter().enumerate() {
-        let found = crate::htslib_rs::hts::kstrnstr(*str_, *pat, *n, std::ptr::null_mut());
-        let loc = if found.is_null() {
-            -1
-        } else {
-            found.offset_from(*str_)
+        let nn = *n as usize;
+        let str_bytes = std::slice::from_raw_parts((*str_).cast::<u8>(), nn);
+        let pat_bytes = std::ffi::CStr::from_ptr(*pat).to_bytes();
+        let found = crate::htslib_rs::hts::kstrnstr(str_bytes, pat_bytes, nn, None);
+        let loc = match found {
+            None => -1,
+            Some(off) => off as isize,
         };
         if loc != *expected {
             pass = 0;

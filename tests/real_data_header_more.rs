@@ -96,8 +96,7 @@ fn find_tag_id_returns_specific_sq_and_rg_fields_for_xx_rg() {
             sam_hdr_find_tag_id(
                 &mut *hdr,
                 c"SQ",
-                c"SN".as_ptr(),
-                c"xx".as_ptr(),
+                Some((c"SN", c"xx")),
                 c"LN",
                 &mut ks,
             ),
@@ -109,8 +108,7 @@ fn find_tag_id_returns_specific_sq_and_rg_fields_for_xx_rg() {
             sam_hdr_find_tag_id(
                 &mut *hdr,
                 c"SQ",
-                c"SN".as_ptr(),
-                c"xx".as_ptr(),
+                Some((c"SN", c"xx")),
                 c"M5",
                 &mut ks,
             ),
@@ -123,8 +121,7 @@ fn find_tag_id_returns_specific_sq_and_rg_fields_for_xx_rg() {
             sam_hdr_find_tag_id(
                 &mut *hdr,
                 c"RG",
-                c"ID".as_ptr(),
-                c"x2".as_ptr(),
+                Some((c"ID", c"x2")),
                 c"LB",
                 &mut ks,
             ),
@@ -135,8 +132,7 @@ fn find_tag_id_returns_specific_sq_and_rg_fields_for_xx_rg() {
             sam_hdr_find_tag_id(
                 &mut *hdr,
                 c"RG",
-                c"ID".as_ptr(),
-                c"x2".as_ptr(),
+                Some((c"ID", c"x2")),
                 c"PI",
                 &mut ks,
             ),
@@ -149,8 +145,7 @@ fn find_tag_id_returns_specific_sq_and_rg_fields_for_xx_rg() {
             sam_hdr_find_tag_id(
                 &mut *hdr,
                 c"RG",
-                c"ID".as_ptr(),
-                c"x2".as_ptr(),
+                Some((c"ID", c"x2")),
                 c"ZZ",
                 &mut ks,
             ),
@@ -432,8 +427,7 @@ fn update_line_modifies_pg_tag_value_on_real_header() {
             sam_hdr_update_line(
                 &mut *hdr,
                 c"PG",
-                c"ID".as_ptr(),
-                id.as_ptr(),
+                Some((c"ID", id.as_c_str())),
                 &[(c"VN".as_ptr(), vn_val.as_ptr())],
             ),
             0
@@ -444,8 +438,7 @@ fn update_line_modifies_pg_tag_value_on_real_header() {
             sam_hdr_find_tag_id(
                 &mut *hdr,
                 c"PG",
-                c"ID".as_ptr(),
-                id.as_ptr(),
+                Some((c"ID", id.as_c_str())),
                 c"VN",
                 &mut ks,
             ),
@@ -459,8 +452,7 @@ fn update_line_modifies_pg_tag_value_on_real_header() {
             sam_hdr_update_line(
                 &mut *hdr,
                 c"PG",
-                c"ID".as_ptr(),
-                id.as_ptr(),
+                Some((c"ID", id.as_c_str())),
                 &[(c"ID".as_ptr(), new_id.as_ptr())],
             ),
             -1
@@ -482,7 +474,7 @@ fn remove_line_id_drops_rg_and_count_decreases() {
         assert_eq!(sam_hdr_count_lines(&mut *hdr, c"RG"), 2);
 
         assert_eq!(
-            sam_hdr_remove_line_id(&mut *hdr, c"RG", c"ID".as_ptr(), c"x2".as_ptr(),),
+            sam_hdr_remove_line_id(&mut *hdr, c"RG", Some((c"ID", c"x2"))),
             0
         );
         assert_eq!(sam_hdr_count_lines(&mut *hdr, c"RG"), 1);
@@ -531,8 +523,7 @@ fn remove_tag_id_drops_specific_tag_from_rg_line() {
             sam_hdr_find_tag_id(
                 &mut *hdr,
                 c"RG",
-                c"ID".as_ptr(),
-                c"x2".as_ptr(),
+                Some((c"ID", c"x2")),
                 c"PI",
                 &mut ks,
             ),
@@ -545,8 +536,7 @@ fn remove_tag_id_drops_specific_tag_from_rg_line() {
             sam_hdr_remove_tag_id(
                 &mut *hdr,
                 c"RG",
-                c"ID".as_ptr(),
-                c"x2".as_ptr(),
+                Some((c"ID", c"x2")),
                 c"PI",
             ),
             0
@@ -555,8 +545,7 @@ fn remove_tag_id_drops_specific_tag_from_rg_line() {
             sam_hdr_find_tag_id(
                 &mut *hdr,
                 c"RG",
-                c"ID".as_ptr(),
-                c"x2".as_ptr(),
+                Some((c"ID", c"x2")),
                 c"PI",
                 &mut ks,
             ),
@@ -567,8 +556,7 @@ fn remove_tag_id_drops_specific_tag_from_rg_line() {
             sam_hdr_remove_tag_id(
                 &mut *hdr,
                 c"RG",
-                c"ID".as_ptr(),
-                c"x2".as_ptr(),
+                Some((c"ID", c"x2")),
                 c"ZZ",
             ),
             -1
@@ -639,7 +627,7 @@ fn header_text_reflects_added_co_and_removed_rg() {
             0
         );
         assert_eq!(
-            sam_hdr_remove_line_id(&mut *hdr, c"RG", c"ID".as_ptr(), c"x1".as_ptr(),),
+            sam_hdr_remove_line_id(&mut *hdr, c"RG", Some((c"ID", c"x1"))),
             0
         );
 

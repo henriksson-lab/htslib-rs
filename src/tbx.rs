@@ -1092,7 +1092,7 @@ pub unsafe fn tbx_c_649_tbx_itr_querys1(
     }
 
     if hts_parse_region(
-        region_ptr,
+        CStr::from_ptr(region_ptr),
         &mut tid,
         &mut beg,
         &mut end,
