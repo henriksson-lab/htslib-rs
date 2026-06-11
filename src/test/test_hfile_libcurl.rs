@@ -237,7 +237,7 @@ pub unsafe fn test_test_hfile_libcurl_c_196_hfile_read_all(
     url: &[u8],
     size_out: *mut usize,
 ) -> Option<Vec<u8>> {
-    let fp = crate::htslib_rs::hfile::hopen(url.as_ptr().cast(), c"r".as_ptr());
+    let fp = crate::htslib_rs::hfile::hopen(url.as_ptr().cast(), c"r".as_ptr().cast());
     if fp.is_null() {
         return None;
     }
@@ -446,7 +446,7 @@ pub unsafe fn test_test_hfile_libcurl_c_376_test_404_no_retry() {
     libc::setenv(c"HTS_RETRY_MAX".as_ptr(), c"3".as_ptr(), 1);
     libc::setenv(c"HTS_RETRY_DELAY".as_ptr(), c"50".as_ptr(), 1);
 
-    let fp = crate::htslib_rs::hfile::hopen(url.as_ptr().cast(), c"r".as_ptr());
+    let fp = crate::htslib_rs::hfile::hopen(url.as_ptr().cast(), c"r".as_ptr().cast());
     let errno = *libc::__errno_location();
     if !fp.is_null() {
         fail!(name, "hopen should have failed for 404");
@@ -484,7 +484,7 @@ pub unsafe fn test_test_hfile_libcurl_c_407_test_retry_exhaustion() {
     libc::setenv(c"HTS_RETRY_MAX".as_ptr(), c"2".as_ptr(), 1);
     libc::setenv(c"HTS_RETRY_DELAY".as_ptr(), c"50".as_ptr(), 1);
 
-    let fp = crate::htslib_rs::hfile::hopen(url.as_ptr().cast(), c"r".as_ptr());
+    let fp = crate::htslib_rs::hfile::hopen(url.as_ptr().cast(), c"r".as_ptr().cast());
     if !fp.is_null() {
         fail!(name, "hopen should have failed after retry exhaustion");
         crate::htslib_rs::hfile::hclose_abruptly(fp);
@@ -513,7 +513,7 @@ pub unsafe fn test_test_hfile_libcurl_c_436_test_retry_disabled() {
     libc::setenv(c"HTS_RETRY_MAX".as_ptr(), c"0".as_ptr(), 1);
     libc::setenv(c"HTS_RETRY_DELAY".as_ptr(), c"50".as_ptr(), 1);
 
-    let fp = crate::htslib_rs::hfile::hopen(url.as_ptr().cast(), c"r".as_ptr());
+    let fp = crate::htslib_rs::hfile::hopen(url.as_ptr().cast(), c"r".as_ptr().cast());
     if !fp.is_null() {
         fail!(name, "hopen should have failed with retries disabled");
         crate::htslib_rs::hfile::hclose_abruptly(fp);
@@ -535,7 +535,7 @@ pub unsafe fn test_test_hfile_libcurl_c_464_main() -> i32 {
     }
 
     libc::setenv(c"HTS_RETRY_MAX".as_ptr(), c"0".as_ptr(), 1);
-    let probe = crate::htslib_rs::hfile::hopen(c"http://0.0.0.0:1/probe".as_ptr(), c"r".as_ptr());
+    let probe = crate::htslib_rs::hfile::hopen(c"http://0.0.0.0:1/probe".as_ptr().cast(), c"r".as_ptr().cast());
     libc::unsetenv(c"HTS_RETRY_MAX".as_ptr());
     if !probe.is_null() {
         crate::htslib_rs::hfile::hclose_abruptly(probe);

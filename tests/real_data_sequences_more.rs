@@ -28,7 +28,7 @@ fn detect_fixture_format_with_name(path: &str, format_name: &str) -> htsFormat {
     unsafe {
         let path = c_fixture(path);
         let format_name = c_fixture(format_name);
-        let fp = hopen(path.as_ptr().cast(), c"r".as_ptr());
+        let fp = hopen(path.as_ptr().cast(), c"r".as_ptr().cast());
         assert!(!fp.is_null());
 
         let mut fmt: htsFormat = std::mem::zeroed();
@@ -421,7 +421,7 @@ fn bgzf_fixture_reads_payload_lines_and_reports_eof_marker() {
         let gz = c_fixture("htslib/test/bgziptest.txt.gz");
         assert_eq!(bgzf_is_bgzf(gz.as_ptr().cast()), 1);
 
-        let fp = bgzf_open(gz.as_ptr().cast(), c"r".as_ptr());
+        let fp = bgzf_open(gz.as_ptr().cast(), c"r".as_ptr().cast());
         assert!(!fp.is_null());
         assert_eq!(bgzf_compression(fp), hts_sys::htsCompression_bgzf as i32);
 
@@ -440,7 +440,7 @@ fn bgzf_fixture_reads_payload_lines_and_reports_eof_marker() {
 fn bgzf_fixture_read_matches_uncompressed_text_bytes() {
     unsafe {
         let gz = c_fixture("htslib/test/bgziptest.txt.gz");
-        let fp = bgzf_open(gz.as_ptr().cast(), c"r".as_ptr());
+        let fp = bgzf_open(gz.as_ptr().cast(), c"r".as_ptr().cast());
         assert!(!fp.is_null());
 
         let mut buf = [0u8; 32];

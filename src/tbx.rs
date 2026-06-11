@@ -839,7 +839,7 @@ pub unsafe fn tbx_c_526_tbx_index_build3(
     let mut fn_c = Vec::with_capacity(fn_.len() + 1);
     fn_c.extend_from_slice(fn_);
     fn_c.push(0);
-    let fp = bgzf_open(fn_c.as_ptr().cast::<c_char>(), b"r\0".as_ptr().cast::<c_char>());
+    let fp = bgzf_open(fn_c.as_ptr().cast::<u8>(), b"r\0".as_ptr().cast::<u8>());
     if fp.is_null() {
         return -1;
     }
@@ -1091,7 +1091,7 @@ pub unsafe fn tbx_c_649_tbx_itr_querys1(
         &mut beg,
         &mut end,
         Some(tbx_c_644_tbx_name2id_wrapper),
-        (tbx as *mut tbx_t).cast::<c_void>(),
+        (tbx as *mut tbx_t).cast::<()>(),
         HTS_PARSE_THOUSANDS_SEP,
     )
     .is_null()
@@ -1748,7 +1748,7 @@ mod tests {
             let path_c = std::ffi::CString::new(path.to_string_lossy().into_owned()).unwrap();
             let payload = b"##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr2\t2\t.\tA\tC\t.\t.\t.\nchr1\t3\t.\tG\tT\t.\t.\t.\n";
 
-            let out = super::super::bgzf::bgzf_open(path_c.as_ptr(), b"w\0".as_ptr().cast());
+            let out = super::super::bgzf::bgzf_open(path_c.as_ptr().cast(), b"w\0".as_ptr().cast());
             assert!(!out.is_null());
             assert_eq!(
                 super::super::bgzf::bgzf_write(out, payload.as_ptr().cast(), payload.len()),
@@ -1756,7 +1756,7 @@ mod tests {
             );
             assert_eq!(super::super::bgzf::bgzf_close(out), 0);
 
-            let fp = super::super::bgzf::bgzf_open(path_c.as_ptr(), b"r\0".as_ptr().cast());
+            let fp = super::super::bgzf::bgzf_open(path_c.as_ptr().cast(), b"r\0".as_ptr().cast());
             assert!(!fp.is_null());
             let conf = tbx_conf_vcf();
             let tbx = tbx_c_437_tbx_index(fp, 0, &conf);

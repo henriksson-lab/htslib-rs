@@ -37,7 +37,7 @@ unsafe extern "C" fn bcf_hdr_name2id_adapter(
     data: *mut std::ffi::c_void,
     name: *const std::ffi::c_char,
 ) -> i32 {
-    vcf::bcf_hdr_name2id(data.cast(), name)
+    vcf::bcf_hdr_name2id(data.cast(), name.cast())
 }
 
 unsafe extern "C" fn bcf_readrec_adapter(
@@ -48,7 +48,7 @@ unsafe extern "C" fn bcf_readrec_adapter(
     beg: *mut hts_pos_t,
     end: *mut hts_pos_t,
 ) -> i32 {
-    vcf::bcf_readrec(fp, data, r, tid, beg, end)
+    vcf::bcf_readrec(fp, data.cast(), r.cast(), tid, beg, end)
 }
 
 unsafe fn bcf_itr_querys1(
@@ -280,7 +280,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     if fp.is_null() {
         fail_open(fname);
     }
-    let hdr = vcf::bcf_hdr_init(c"w".as_ptr());
+    let hdr = vcf::bcf_hdr_init(c"w".as_ptr().cast());
     if hdr.is_null() {
         fail_errno(c"bcf_hdr_init".as_ptr().cast());
     }
@@ -294,148 +294,148 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
 
     // Create VCF header
     let str_: kstring_t = kstring_t { data: Vec::new() };
-    check0!(vcf::bcf_hdr_append(hdr, c"##fileDate=20090805".as_ptr()));
+    check0!(vcf::bcf_hdr_append(hdr, c"##fileDate=20090805".as_ptr().cast()));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##FORMAT=<ID=UF,Number=1,Type=Integer,Description=\"Unused FORMAT\">".as_ptr()
+        c"##FORMAT=<ID=UF,Number=1,Type=Integer,Description=\"Unused FORMAT\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##INFO=<ID=UI,Number=1,Type=Integer,Description=\"Unused INFO\">".as_ptr()
+        c"##INFO=<ID=UI,Number=1,Type=Integer,Description=\"Unused INFO\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##FILTER=<ID=Flt,Description=\"Unused FILTER\">".as_ptr()
+        c"##FILTER=<ID=Flt,Description=\"Unused FILTER\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##unused=<XX=AA,Description=\"Unused generic\">".as_ptr()
+        c"##unused=<XX=AA,Description=\"Unused generic\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##unused=<ID=BB,Description=\"Unused generic with ID\">".as_ptr()
+        c"##unused=<ID=BB,Description=\"Unused generic with ID\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##unused=unformatted text 1".as_ptr()
+        c"##unused=unformatted text 1".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##unused=unformatted text 2".as_ptr()
+        c"##unused=unformatted text 2".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##contig=<ID=Unused,length=1>".as_ptr()
+        c"##contig=<ID=Unused,length=1>".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##source=myImputationProgramV3.1".as_ptr()
+        c"##source=myImputationProgramV3.1".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##reference=file:///seq/references/1000GenomesPilot-NCBI36.fasta".as_ptr()
+        c"##reference=file:///seq/references/1000GenomesPilot-NCBI36.fasta".as_ptr().cast()
     ));
-    check0!(vcf::bcf_hdr_append(hdr, c"##contig=<ID=20,length=62435964,assembly=B36,md5=f126cdf8a6e0c7f379d618ff66beb2da,species=\"Homo sapiens\",taxonomy=x>".as_ptr()));
-    check0!(vcf::bcf_hdr_append(hdr, c"##phasing=partial".as_ptr()));
+    check0!(vcf::bcf_hdr_append(hdr, c"##contig=<ID=20,length=62435964,assembly=B36,md5=f126cdf8a6e0c7f379d618ff66beb2da,species=\"Homo sapiens\",taxonomy=x>".as_ptr().cast()));
+    check0!(vcf::bcf_hdr_append(hdr, c"##phasing=partial".as_ptr().cast()));
     check0!(vcf::bcf_hdr_append(
         hdr,
         c"##INFO=<ID=NS,Number=1,Type=Integer,Description=\"Number of Samples With Data\">"
-            .as_ptr()
+            .as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Total Depth\">".as_ptr()
+        c"##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Total Depth\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##INFO=<ID=NEG,Number=.,Type=Integer,Description=\"Test -ve Numbers\">".as_ptr()
+        c"##INFO=<ID=NEG,Number=.,Type=Integer,Description=\"Test -ve Numbers\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##INFO=<ID=AF,Number=A,Type=Float,Description=\"Allele Frequency\">".as_ptr()
+        c"##INFO=<ID=AF,Number=A,Type=Float,Description=\"Allele Frequency\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##INFO=<ID=AA,Number=1,Type=String,Description=\"Ancestral Allele\">".as_ptr()
+        c"##INFO=<ID=AA,Number=1,Type=String,Description=\"Ancestral Allele\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##INFO=<ID=DB,Number=0,Type=Flag,Description=\"dbSNP membership, build 129\">".as_ptr()
+        c"##INFO=<ID=DB,Number=0,Type=Flag,Description=\"dbSNP membership, build 129\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##INFO=<ID=H2,Number=0,Type=Flag,Description=\"HapMap2 membership\">".as_ptr()
+        c"##INFO=<ID=H2,Number=0,Type=Flag,Description=\"HapMap2 membership\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##FILTER=<ID=q10,Description=\"Quality below 10\">".as_ptr()
+        c"##FILTER=<ID=q10,Description=\"Quality below 10\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##FILTER=<ID=s50,Description=\"Less than half of samples have data\">".as_ptr()
+        c"##FILTER=<ID=s50,Description=\"Less than half of samples have data\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">".as_ptr()
+        c"##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##FORMAT=<ID=GQ,Number=1,Type=Integer,Description=\"Genotype Quality\">".as_ptr()
+        c"##FORMAT=<ID=GQ,Number=1,Type=Integer,Description=\"Genotype Quality\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Read Depth\">".as_ptr()
+        c"##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Read Depth\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##FORMAT=<ID=HQ,Number=2,Type=Integer,Description=\"Haplotype Quality\">".as_ptr()
+        c"##FORMAT=<ID=HQ,Number=2,Type=Integer,Description=\"Haplotype Quality\">".as_ptr().cast()
     ));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##FORMAT=<ID=TS,Number=1,Type=String,Description=\"Test String 1\">".as_ptr()
+        c"##FORMAT=<ID=TS,Number=1,Type=String,Description=\"Test String 1\">".as_ptr().cast()
     ));
 
     // Try a few header modifications
     vcf::bcf_hdr_remove(
         hdr,
         crate::htslib_rs::vcf::BCF_HL_CTG as i32,
-        c"Unused".as_ptr(),
+        c"Unused".as_ptr().cast(),
     );
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##contig=<ID=Unused,length=62435964>".as_ptr()
+        c"##contig=<ID=Unused,length=62435964>".as_ptr().cast()
     ));
     vcf::bcf_hdr_remove(
         hdr,
         crate::htslib_rs::vcf::BCF_HL_FMT as i32,
-        c"TS".as_ptr(),
+        c"TS".as_ptr().cast(),
     );
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##FORMAT=<ID=TS,Number=1,Type=String,Description=\"Test String\">".as_ptr()
+        c"##FORMAT=<ID=TS,Number=1,Type=String,Description=\"Test String\">".as_ptr().cast()
     ));
     vcf::bcf_hdr_remove(
         hdr,
         crate::htslib_rs::vcf::BCF_HL_INFO as i32,
-        c"NEG".as_ptr(),
+        c"NEG".as_ptr().cast(),
     );
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##INFO=<ID=NEG,Number=.,Type=Integer,Description=\"Test Negative Numbers\">".as_ptr()
+        c"##INFO=<ID=NEG,Number=.,Type=Integer,Description=\"Test Negative Numbers\">".as_ptr().cast()
     ));
     vcf::bcf_hdr_remove(
         hdr,
         crate::htslib_rs::vcf::BCF_HL_FLT as i32,
-        c"s50".as_ptr(),
+        c"s50".as_ptr().cast(),
     );
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##FILTER=<ID=s50,Description=\"Less than 50% of samples have data\">".as_ptr()
+        c"##FILTER=<ID=s50,Description=\"Less than 50% of samples have data\">".as_ptr().cast()
     ));
 
-    check0!(vcf::bcf_hdr_add_sample(hdr, c"NA00001".as_ptr()));
-    check0!(vcf::bcf_hdr_add_sample(hdr, c"NA00002".as_ptr()));
-    check0!(vcf::bcf_hdr_add_sample(hdr, c"NA00003".as_ptr()));
+    check0!(vcf::bcf_hdr_add_sample(hdr, c"NA00001".as_ptr().cast()));
+    check0!(vcf::bcf_hdr_add_sample(hdr, c"NA00002".as_ptr().cast()));
+    check0!(vcf::bcf_hdr_add_sample(hdr, c"NA00003".as_ptr().cast()));
     check0!(vcf::bcf_hdr_add_sample(hdr, ptr::null()));
     if vcf::bcf_hdr_write(fp, hdr) != 0 {
         eprintln!(
@@ -448,15 +448,15 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     // Add a record
     // 20     14370   rs6054257 G      A       29   PASS   NS=3;DP=14;NEG=-127;AF=0.5;DB;H2           GT:GQ:DP:HQ 0|0:48:1:51,51 1|0:48:8:51,51 1/1:43:5:.,.
     // .. CHROM
-    (*rec).rid = vcf::bcf_hdr_name2id(hdr, c"20".as_ptr());
+    (*rec).rid = vcf::bcf_hdr_name2id(hdr, c"20".as_ptr().cast());
     // .. POS
     (*rec).pos = 14369;
     // .. ID
-    check0!(vcf::bcf_update_id(hdr, rec, c"rs6054257".as_ptr()));
+    check0!(vcf::bcf_update_id(hdr, rec, c"rs6054257".as_ptr().cast()));
     // .. REF and ALT
     test_test_vcf_api_c_71_test_update_alleles(hdr, rec);
     let mut alleles: [*const u8; 2] = [c"G".as_ptr().cast(), c"A".as_ptr().cast()];
-    check0!(vcf::bcf_update_alleles_str(hdr, rec, c"G,A".as_ptr()));
+    check0!(vcf::bcf_update_alleles_str(hdr, rec, c"G,A".as_ptr().cast()));
     check0!(test_test_vcf_api_c_51_check_alleles(
         rec,
         alleles.as_mut_ptr(),
@@ -468,7 +468,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     let mut tmpi = vcf::bcf_hdr_id2int(
         hdr,
         crate::htslib_rs::vcf::BCF_DT_ID as i32,
-        c"PASS".as_ptr(),
+        c"PASS".as_ptr().cast(),
     );
     check0!(vcf::bcf_update_filter(hdr, rec, &mut tmpi, 1));
     // .. INFO
@@ -476,7 +476,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"NS".as_ptr(),
+        c"NS".as_ptr().cast(),
         (&tmpi as *const i32).cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -485,7 +485,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"DP".as_ptr(),
+        c"DP".as_ptr().cast(),
         (&tmpi as *const i32).cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -494,7 +494,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"DP".as_ptr(),
+        c"DP".as_ptr().cast(),
         (&tmpi as *const i32).cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -503,7 +503,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"DP".as_ptr(),
+        c"DP".as_ptr().cast(),
         (&tmpi as *const i32).cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -512,7 +512,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"NEG".as_ptr(),
+        c"NEG".as_ptr().cast(),
         (&tmpi as *const i32).cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -521,7 +521,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"AF".as_ptr(),
+        c"AF".as_ptr().cast(),
         (&tmpf as *const f32).cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_REAL as i32
@@ -529,7 +529,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"DB".as_ptr(),
+        c"DB".as_ptr().cast(),
         ptr::null(),
         1,
         crate::htslib_rs::vcf::BCF_HT_FLAG as i32
@@ -537,7 +537,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"H2".as_ptr(),
+        c"H2".as_ptr().cast(),
         ptr::null(),
         1,
         crate::htslib_rs::vcf::BCF_HT_FLAG as i32
@@ -554,7 +554,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_format(
         hdr,
         rec,
-        c"GT".as_ptr(),
+        c"GT".as_ptr().cast(),
         tmpia.as_ptr().cast(),
         nsamples * 2,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -565,7 +565,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_format(
         hdr,
         rec,
-        c"GQ".as_ptr(),
+        c"GQ".as_ptr().cast(),
         tmpia.as_ptr().cast(),
         nsamples,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -576,7 +576,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_format(
         hdr,
         rec,
-        c"DP".as_ptr(),
+        c"DP".as_ptr().cast(),
         tmpia.as_ptr().cast(),
         nsamples,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -587,7 +587,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_format(
         hdr,
         rec,
-        c"DP".as_ptr(),
+        c"DP".as_ptr().cast(),
         tmpia.as_ptr().cast(),
         nsamples,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -598,7 +598,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_format(
         hdr,
         rec,
-        c"DP".as_ptr(),
+        c"DP".as_ptr().cast(),
         tmpia.as_ptr().cast(),
         nsamples,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -612,7 +612,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_format(
         hdr,
         rec,
-        c"HQ".as_ptr(),
+        c"HQ".as_ptr().cast(),
         tmpia.as_ptr().cast(),
         nsamples * 2,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -625,24 +625,24 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_format_string(
         hdr,
         rec,
-        c"TS".as_ptr(),
-        tmp_str.as_mut_ptr(),
+        c"TS".as_ptr().cast(),
+        tmp_str.as_mut_ptr().cast(),
         3
     ));
     tmp_str[0] = c"LongerStringRequiringBufferReallocation".as_ptr();
     check0!(vcf::bcf_update_format_string(
         hdr,
         rec,
-        c"TS".as_ptr(),
-        tmp_str.as_mut_ptr(),
+        c"TS".as_ptr().cast(),
+        tmp_str.as_mut_ptr().cast(),
         3
     ));
     tmp_str[0] = c"String1".as_ptr();
     check0!(vcf::bcf_update_format_string(
         hdr,
         rec,
-        c"TS".as_ptr(),
-        tmp_str.as_mut_ptr(),
+        c"TS".as_ptr().cast(),
+        tmp_str.as_mut_ptr().cast(),
         3
     ));
     if vcf::bcf_write(fp, hdr, rec) != 0 {
@@ -655,15 +655,15 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
 
     // 20     1110696 . A      G,T     67   .   NS=2;DP=10;NEG=-128;AF=0.333,.;AA=T;DB GT 2 1   ./.
     vcf::bcf_clear(rec);
-    (*rec).rid = vcf::bcf_hdr_name2id(hdr, c"20".as_ptr());
+    (*rec).rid = vcf::bcf_hdr_name2id(hdr, c"20".as_ptr().cast());
     (*rec).pos = 1110695;
-    check0!(vcf::bcf_update_alleles_str(hdr, rec, c"A,G,T".as_ptr()));
+    check0!(vcf::bcf_update_alleles_str(hdr, rec, c"A,G,T".as_ptr().cast()));
     (*rec).qual = 67.0;
     tmpi = 2;
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"NS".as_ptr(),
+        c"NS".as_ptr().cast(),
         (&tmpi as *const i32).cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -672,7 +672,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"DP".as_ptr(),
+        c"DP".as_ptr().cast(),
         (&tmpi as *const i32).cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -681,7 +681,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"NEG".as_ptr(),
+        c"NEG".as_ptr().cast(),
         (&tmpi as *const i32).cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -692,7 +692,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"AF".as_ptr(),
+        c"AF".as_ptr().cast(),
         tmpfa.as_ptr().cast(),
         2,
         crate::htslib_rs::vcf::BCF_HT_REAL as i32
@@ -700,7 +700,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"AA".as_ptr(),
+        c"AA".as_ptr().cast(),
         c"SHORT".as_ptr().cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_STR as i32
@@ -708,7 +708,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"AA".as_ptr(),
+        c"AA".as_ptr().cast(),
         c"LONGSTRING".as_ptr().cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_STR as i32
@@ -716,7 +716,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"AA".as_ptr(),
+        c"AA".as_ptr().cast(),
         c"T".as_ptr().cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_STR as i32
@@ -724,7 +724,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"DB".as_ptr(),
+        c"DB".as_ptr().cast(),
         ptr::null(),
         1,
         crate::htslib_rs::vcf::BCF_HT_FLAG as i32
@@ -738,7 +738,7 @@ pub unsafe fn test_test_vcf_api_c_110_write_bcf(fname: *mut u8) {
     check0!(vcf::bcf_update_format(
         hdr,
         rec,
-        c"GT".as_ptr(),
+        c"GT".as_ptr().cast(),
         tmpia.as_ptr().cast(),
         nsamples * 2,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -805,9 +805,9 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
     if vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_STR as i32,
-        c"ID".as_ptr(),
-        c"BB".as_ptr(),
-        c"unused".as_ptr(),
+        c"ID".as_ptr().cast(),
+        c"BB".as_ptr().cast(),
+        c"unused".as_ptr().cast(),
     )
     .is_null()
     {
@@ -816,14 +816,14 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
     vcf::bcf_hdr_remove(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_STR as i32,
-        c"BB".as_ptr(),
+        c"BB".as_ptr().cast(),
     );
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_STR as i32,
-        c"ID".as_ptr(),
-        c"BB".as_ptr(),
-        c"unused".as_ptr(),
+        c"ID".as_ptr().cast(),
+        c"BB".as_ptr().cast(),
+        c"unused".as_ptr().cast(),
     )
     .is_null()
     {
@@ -835,8 +835,8 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
     if vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_GEN as i32,
-        c"unused".as_ptr(),
-        c"unformatted text 1".as_ptr(),
+        c"unused".as_ptr().cast(),
+        c"unformatted text 1".as_ptr().cast(),
         ptr::null(),
     )
     .is_null()
@@ -846,13 +846,13 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
     vcf::bcf_hdr_remove(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_GEN as i32,
-        c"unused".as_ptr(),
+        c"unused".as_ptr().cast(),
     );
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_GEN as i32,
-        c"unused".as_ptr(),
-        c"unformatted text 1".as_ptr(),
+        c"unused".as_ptr().cast(),
+        c"unformatted text 1".as_ptr().cast(),
         ptr::null(),
     )
     .is_null()
@@ -865,8 +865,8 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
     if vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_FLT as i32,
-        c"ID".as_ptr(),
-        c"Flt".as_ptr(),
+        c"ID".as_ptr().cast(),
+        c"Flt".as_ptr().cast(),
         ptr::null(),
     )
     .is_null()
@@ -876,13 +876,13 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
     vcf::bcf_hdr_remove(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_FLT as i32,
-        c"Flt".as_ptr(),
+        c"Flt".as_ptr().cast(),
     );
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_FLT as i32,
-        c"ID".as_ptr(),
-        c"Flt".as_ptr(),
+        c"ID".as_ptr().cast(),
+        c"Flt".as_ptr().cast(),
         ptr::null(),
     )
     .is_null()
@@ -895,8 +895,8 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
     if vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_INFO as i32,
-        c"ID".as_ptr(),
-        c"UI".as_ptr(),
+        c"ID".as_ptr().cast(),
+        c"UI".as_ptr().cast(),
         ptr::null(),
     )
     .is_null()
@@ -906,13 +906,13 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
     vcf::bcf_hdr_remove(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_INFO as i32,
-        c"UI".as_ptr(),
+        c"UI".as_ptr().cast(),
     );
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_INFO as i32,
-        c"ID".as_ptr(),
-        c"UI".as_ptr(),
+        c"ID".as_ptr().cast(),
+        c"UI".as_ptr().cast(),
         ptr::null(),
     )
     .is_null()
@@ -923,8 +923,8 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
     if vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_FMT as i32,
-        c"ID".as_ptr(),
-        c"UF".as_ptr(),
+        c"ID".as_ptr().cast(),
+        c"UF".as_ptr().cast(),
         ptr::null(),
     )
     .is_null()
@@ -934,13 +934,13 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
     vcf::bcf_hdr_remove(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_FMT as i32,
-        c"UF".as_ptr(),
+        c"UF".as_ptr().cast(),
     );
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_FMT as i32,
-        c"ID".as_ptr(),
-        c"UF".as_ptr(),
+        c"ID".as_ptr().cast(),
+        c"UF".as_ptr().cast(),
         ptr::null(),
     )
     .is_null()
@@ -951,8 +951,8 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
     if vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_CTG as i32,
-        c"ID".as_ptr(),
-        c"Unused".as_ptr(),
+        c"ID".as_ptr().cast(),
+        c"Unused".as_ptr().cast(),
         ptr::null(),
     )
     .is_null()
@@ -962,13 +962,13 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
     vcf::bcf_hdr_remove(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_CTG as i32,
-        c"Unused".as_ptr(),
+        c"Unused".as_ptr().cast(),
     );
     if !vcf::bcf_hdr_get_hrec(
         hdr_out,
         crate::htslib_rs::vcf::BCF_HL_FMT as i32,
-        c"ID".as_ptr(),
-        c"Unused".as_ptr(),
+        c"ID".as_ptr().cast(),
+        c"Unused".as_ptr().cast(),
         ptr::null(),
     )
     .is_null()
@@ -1010,7 +1010,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
         check0!(vcf::bcf_update_format(
             hdr,
             rec,
-            c"GQ".as_ptr(),
+            c"GQ".as_ptr().cast(),
             ptr::null(),
             0,
             crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -1026,12 +1026,12 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
         }
         vcf::bcf_destroy(dup);
 
-        check0!(vcf::bcf_update_alleles_str(hdr_out, rec, c"G,A".as_ptr()));
+        check0!(vcf::bcf_update_alleles_str(hdr_out, rec, c"G,A".as_ptr().cast()));
         let tmpi: i32 = 99;
         check0!(vcf::bcf_update_info(
             hdr_out,
             rec,
-            c"DP".as_ptr(),
+            c"DP".as_ptr().cast(),
             (&tmpi as *const i32).cast(),
             1,
             crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -1040,7 +1040,7 @@ pub unsafe fn test_test_vcf_api_c_287_bcf_to_vcf(fname: *mut u8) {
         check0!(vcf::bcf_update_format(
             hdr_out,
             rec,
-            c"DP".as_ptr(),
+            c"DP".as_ptr().cast(),
             tmpia.as_ptr().cast(),
             3,
             crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -1170,7 +1170,7 @@ pub unsafe fn test_test_vcf_api_c_434_test_get_info_values(fname: *const u8) {
         let ret = vcf::bcf_get_info_values(
             hdr,
             line,
-            c"AF".as_ptr(),
+            c"AF".as_ptr().cast(),
             (&mut afs as *mut *mut f32).cast(),
             &mut count,
             crate::htslib_rs::vcf::BCF_HT_REAL as i32,
@@ -1193,7 +1193,7 @@ pub unsafe fn test_test_vcf_api_c_434_test_get_info_values(fname: *const u8) {
         let ret = vcf::bcf_get_info_values(
             hdr,
             line,
-            c"NEG".as_ptr(),
+            c"NEG".as_ptr().cast(),
             (&mut negs as *mut *mut i32).cast(),
             &mut count,
             crate::htslib_rs::vcf::BCF_HT_INT as i32,
@@ -1231,7 +1231,7 @@ pub unsafe fn test_test_vcf_api_c_491_write_format_values(fname: *const u8) {
     if fp.is_null() {
         fail_open(fname);
     }
-    let hdr = vcf::bcf_hdr_init(c"w".as_ptr());
+    let hdr = vcf::bcf_hdr_init(c"w".as_ptr().cast());
     if hdr.is_null() {
         fail_errno(c"bcf_hdr_init".as_ptr().cast());
     }
@@ -1241,12 +1241,12 @@ pub unsafe fn test_test_vcf_api_c_491_write_format_values(fname: *const u8) {
     }
 
     // Create VCF header
-    check0!(vcf::bcf_hdr_append(hdr, c"##contig=<ID=1>".as_ptr()));
+    check0!(vcf::bcf_hdr_append(hdr, c"##contig=<ID=1>".as_ptr().cast()));
     check0!(vcf::bcf_hdr_append(
         hdr,
-        c"##FORMAT=<ID=TF,Number=1,Type=Float,Description=\"Test Float\">".as_ptr()
+        c"##FORMAT=<ID=TF,Number=1,Type=Float,Description=\"Test Float\">".as_ptr().cast()
     ));
-    check0!(vcf::bcf_hdr_add_sample(hdr, c"S".as_ptr()));
+    check0!(vcf::bcf_hdr_add_sample(hdr, c"S".as_ptr().cast()));
     check0!(vcf::bcf_hdr_add_sample(hdr, ptr::null()));
     if vcf::bcf_hdr_write(fp, hdr) != 0 {
         eprintln!(
@@ -1266,7 +1266,7 @@ pub unsafe fn test_test_vcf_api_c_491_write_format_values(fname: *const u8) {
     check0!(vcf::bcf_update_format(
         hdr,
         rec,
-        c"TF".as_ptr(),
+        c"TF".as_ptr().cast(),
         test.as_ptr().cast(),
         4,
         crate::htslib_rs::vcf::BCF_HT_REAL as i32
@@ -1304,7 +1304,7 @@ pub unsafe fn test_test_vcf_api_c_528_check_format_values(fname: *const u8) {
         let ret = vcf::bcf_get_format_values(
             hdr,
             line,
-            c"TF".as_ptr(),
+            c"TF".as_ptr().cast(),
             (&mut values as *mut *mut f32).cast(),
             &mut count,
             crate::htslib_rs::vcf::BCF_HT_REAL as i32,
@@ -1385,7 +1385,7 @@ X	86470038	rs59780433b	T	TGGTT,T	.	.	END=86470047
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"END".as_ptr(),
+        c"END".as_ptr().cast(),
         (&tmpi as *const i32).cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -1418,7 +1418,7 @@ pub unsafe fn test_test_vcf_api_c_630_test_open_format() {
     let mut mode = [0u8; 5];
     mode[0] = b'r';
     mode[1] = 0;
-    let mut ret = vcf::vcf_open_mode(mode.as_mut_ptr().add(1).cast(), c"mode1.bcf".as_ptr(), ptr::null());
+    let mut ret = vcf::vcf_open_mode(mode.as_mut_ptr().add(1).cast(), c"mode1.bcf".as_ptr().cast(), ptr::null());
     if &mode[..2] != b"rb" || ret != 0 {
         eprintln!(
             "Mode '{}' does not match the expected value '{}'",
@@ -1428,7 +1428,7 @@ pub unsafe fn test_test_vcf_api_c_630_test_open_format() {
         std::process::exit(-1);
     }
     mode[1] = 0;
-    ret = vcf::vcf_open_mode(mode.as_mut_ptr().add(1).cast(), c"mode1.vcf".as_ptr(), ptr::null());
+    ret = vcf::vcf_open_mode(mode.as_mut_ptr().add(1).cast(), c"mode1.vcf".as_ptr().cast(), ptr::null());
     if &mode[..1] != b"r" || ret != 0 {
         eprintln!(
             "Mode '{}' does not match the expected value '{}'",
@@ -1440,7 +1440,7 @@ pub unsafe fn test_test_vcf_api_c_630_test_open_format() {
     mode[1] = 0;
     ret = vcf::vcf_open_mode(
         mode.as_mut_ptr().add(1).cast(),
-        c"mode1.vcf.gz".as_ptr(),
+        c"mode1.vcf.gz".as_ptr().cast(),
         ptr::null(),
     );
     if &mode[..2] != b"rz" || ret != 0 {
@@ -1454,7 +1454,7 @@ pub unsafe fn test_test_vcf_api_c_630_test_open_format() {
     mode[1] = 0;
     ret = vcf::vcf_open_mode(
         mode.as_mut_ptr().add(1).cast(),
-        c"mode1.vcf.bgz".as_ptr(),
+        c"mode1.vcf.bgz".as_ptr().cast(),
         ptr::null(),
     );
     if &mode[..2] != b"rz" || ret != 0 {
@@ -1466,14 +1466,14 @@ pub unsafe fn test_test_vcf_api_c_630_test_open_format() {
         std::process::exit(-1);
     }
     mode[1] = 0;
-    ret = vcf::vcf_open_mode(mode.as_mut_ptr().add(1).cast(), c"mode1.xcf".as_ptr(), ptr::null());
+    ret = vcf::vcf_open_mode(mode.as_mut_ptr().add(1).cast(), c"mode1.xcf".as_ptr().cast(), ptr::null());
     if ret == 0 {
         test_test_vcf_api_c_38_error(c"Expected failure for wrong extension 'xcf'".to_bytes());
     }
     mode[1] = 0;
     ret = vcf::vcf_open_mode(
         mode.as_mut_ptr().add(1).cast(),
-        c"mode1.vcf.gbz".as_ptr(),
+        c"mode1.vcf.gbz".as_ptr().cast(),
         ptr::null(),
     );
     if ret == 0 {
@@ -1482,7 +1482,7 @@ pub unsafe fn test_test_vcf_api_c_630_test_open_format() {
     mode[1] = 0;
     ret = vcf::vcf_open_mode(
         mode.as_mut_ptr().add(1).cast(),
-        c"mode1.bvcf.bgz".as_ptr(),
+        c"mode1.bvcf.bgz".as_ptr().cast(),
         ptr::null(),
     );
     if ret == 0 {
@@ -1592,19 +1592,19 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
         std::process::exit(-1);
     }
     id += 1;
-    check0!(vcf::bcf_update_alleles_str(hdr, rec, c"G,AT".as_ptr()));
+    check0!(vcf::bcf_update_alleles_str(hdr, rec, c"G,AT".as_ptr().cast()));
     if (*rec).rlen != 1 {
         eprintln!("Incorrect rlen set, expected 1 got {} @ {}", (*rec).rlen, id);
         std::process::exit(-1);
     }
     id += 1;
-    check0!(vcf::bcf_update_alleles_str(hdr, rec, c"GC,A".as_ptr()));
+    check0!(vcf::bcf_update_alleles_str(hdr, rec, c"GC,A".as_ptr().cast()));
     if (*rec).rlen != 2 {
         eprintln!("Incorrect rlen set, expected 2 got {} @ {}", (*rec).rlen, id);
         std::process::exit(-1);
     }
     id += 1;
-    check0!(vcf::bcf_update_alleles_str(hdr, rec, c"G,<*>".as_ptr()));
+    check0!(vcf::bcf_update_alleles_str(hdr, rec, c"G,<*>".as_ptr().cast()));
     if (*rec).rlen != 1 {
         eprintln!("Incorrect rlen set, expected 1 got {} @ {}", (*rec).rlen, id);
         std::process::exit(-1);
@@ -1614,7 +1614,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"END".as_ptr(),
+        c"END".as_ptr().cast(),
         (&tmpi as *const i32).cast(),
         1,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -1627,7 +1627,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     check0!(vcf::bcf_update_format(
         hdr,
         rec,
-        c"LEN".as_ptr(),
+        c"LEN".as_ptr().cast(),
         val.as_ptr().cast(),
         2,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -1640,7 +1640,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"END".as_ptr(),
+        c"END".as_ptr().cast(),
         (&tmpi as *const i32).cast(),
         0,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -1653,7 +1653,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     check0!(vcf::bcf_update_format(
         hdr,
         rec,
-        c"LEN".as_ptr(),
+        c"LEN".as_ptr().cast(),
         (&tmpi as *const i32).cast(),
         0,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -1663,7 +1663,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
         std::process::exit(-1);
     }
     id += 1;
-    check0!(vcf::bcf_update_alleles_str(hdr, rec, c"G,T,<DEL>".as_ptr()));
+    check0!(vcf::bcf_update_alleles_str(hdr, rec, c"G,T,<DEL>".as_ptr().cast()));
     if (*rec).rlen != 1 {
         eprintln!("Incorrect rlen set, expected 1 got {} @ {}", (*rec).rlen, id);
         std::process::exit(-1);
@@ -1674,7 +1674,7 @@ pub unsafe fn test_test_vcf_api_c_664_test_rlen_values() {
     check0!(vcf::bcf_update_info(
         hdr,
         rec,
-        c"SVLEN".as_ptr(),
+        c"SVLEN".as_ptr().cast(),
         val.as_ptr().cast(),
         2,
         crate::htslib_rs::vcf::BCF_HT_INT as i32
@@ -1846,7 +1846,7 @@ pub unsafe fn test_test_vcf_api_c_807_test_vl_types() {
         test_test_vcf_api_c_38_error(c"Failed to read BCF header".to_bytes());
     }
     for exp in &expected {
-        let id_num = vcf::bcf_hdr_id2int(hdr, crate::htslib_rs::vcf::BCF_DT_ID as i32, exp.id);
+        let id_num = vcf::bcf_hdr_id2int(hdr, crate::htslib_rs::vcf::BCF_DT_ID as i32, exp.id.cast());
         let id_str = String::from_utf8_lossy(std::ffi::CStr::from_ptr(exp.id.cast()).to_bytes())
             .into_owned();
         if id_num < 0 {
@@ -2011,7 +2011,7 @@ pub unsafe fn test_test_vcf_api_c_933_test_bcf_remove_allele_set() {
 
     let mut kstr = kstring_t { data: Vec::new() };
 
-    let hdr = vcf::bcf_hdr_init(c"r".as_ptr());
+    let hdr = vcf::bcf_hdr_init(c"r".as_ptr().cast());
     let rec = vcf::bcf_init();
     let rm_set = kbs_init(3);
 
@@ -2028,7 +2028,7 @@ pub unsafe fn test_test_vcf_api_c_933_test_bcf_remove_allele_set() {
     }
 
     check0!(ks_resize(&mut kstr, 1000));
-    check0!(vcf::bcf_hdr_parse(hdr, header.as_ptr().cast_mut()));
+    check0!(vcf::bcf_hdr_parse(hdr, header.as_ptr().cast_mut().cast()));
     for (i, &input) in inputs.iter().enumerate() {
         check0!(test_test_vcf_api_c_909_read_vcf_line(
             input.cast(),
@@ -2260,13 +2260,13 @@ mod tests {
 
         unsafe {
             test_test_vcf_api_c_110_write_bcf(bcf_path_c.as_ptr().cast_mut().cast::<u8>());
-            assert_eq!(vcf::bcf_index_build(bcf_path_c.as_ptr(), 14), 0);
+            assert_eq!(vcf::bcf_index_build(bcf_path_c.as_ptr().cast(), 14), 0);
 
             let fp = hts_open(bcf_path_c.as_ptr(), c"r".as_ptr());
             assert!(!fp.is_null());
             let hdr = vcf::bcf_hdr_read(fp);
             assert!(!hdr.is_null());
-            let idx = vcf::bcf_index_load2(bcf_path_c.as_ptr(), ptr::null());
+            let idx = vcf::bcf_index_load2(bcf_path_c.as_ptr().cast(), ptr::null());
             assert!(!idx.is_null());
             let iter = bcf_itr_querys1(idx.cast(), hdr, c"20:1110600-1110800".as_ptr().cast());
             assert!(!iter.is_null());

@@ -19,7 +19,7 @@ unsafe fn run_thrash_threads6(
     scripted_ops: Option<&[i32]>,
 ) -> i32 {
     let mut buf = [0u8; 100000];
-    let fpin = crate::htslib_rs::bgzf::bgzf_open(input.cast(), c"r".as_ptr());
+    let fpin = crate::htslib_rs::bgzf::bgzf_open(input.cast(), c"r".as_ptr().cast());
     if fpin.is_null() {
         return libc::EXIT_FAILURE;
     }
@@ -56,7 +56,7 @@ unsafe fn run_thrash_threads6(
         if verbose {
             print!("i={i}\t");
         }
-        let fpin = crate::htslib_rs::bgzf::bgzf_open(input.cast(), c"r".as_ptr());
+        let fpin = crate::htslib_rs::bgzf::bgzf_open(input.cast(), c"r".as_ptr().cast());
         if fpin.is_null() {
             return libc::EXIT_FAILURE;
         }
@@ -160,7 +160,7 @@ mod tests {
         let payload = (0..2_000_000).map(|i| (i % 251) as u8).collect::<Vec<_>>();
 
         unsafe {
-            let fp = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr().cast(), c"w".as_ptr());
+            let fp = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr().cast(), c"w".as_ptr().cast());
             assert!(!fp.is_null());
             assert_eq!(
                 crate::htslib_rs::bgzf::bgzf_write(

@@ -1663,7 +1663,7 @@ pub unsafe fn test_sam_c_1781_test_parse_decimal1(
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
 
-    let mut end: *mut i8 = std::ptr::null_mut();
+    let mut end: *mut u8 = std::ptr::null_mut();
     val = crate::htslib_rs::hts::hts_parse_decimal(str_.cast(), &mut end, flags);
     if val != exp {
         eprintln!(
@@ -1673,7 +1673,7 @@ pub unsafe fn test_sam_c_1781_test_parse_decimal1(
         TEST_SAM_STATUS = libc::EXIT_FAILURE;
     }
 
-    let consumed = end.offset_from(str_.cast::<i8>()) as usize;
+    let consumed = end.offset_from(str_.cast::<u8>()) as usize;
     if consumed != exp_consumed {
         eprintln!(
             "Failed: hts_parse_decimal(\"{}\", ..., {}) consumed {} chars, expected {}",

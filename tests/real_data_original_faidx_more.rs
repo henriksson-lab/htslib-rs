@@ -58,7 +58,7 @@ unsafe fn bgzip_fixture_with_gzi(
     let mut gzi_c = gzi_path.to_string_lossy().into_owned().into_bytes();
     gzi_c.push(0);
 
-    let fp = bgzf_open(bgz_c.as_ptr().cast(), c"w".as_ptr());
+    let fp = bgzf_open(bgz_c.as_ptr().cast(), c"w".as_ptr().cast());
     assert!(!fp.is_null());
     assert_eq!(bgzf_index_build_init(fp), 0);
     assert_eq!(
@@ -95,7 +95,7 @@ fn expected_index_rows(text: &str) -> Vec<ExpectedIndexRow> {
         .collect()
 }
 
-unsafe fn fetched_string(ptr: *mut i8, len: hts_pos_t) -> String {
+unsafe fn fetched_string(ptr: *mut u8, len: hts_pos_t) -> String {
     assert!(!ptr.is_null());
     assert!(len >= 0);
     let text = CStr::from_ptr(ptr.cast())
@@ -373,7 +373,7 @@ fn fastq_expected_index_metadata_matches_faidx_apis() {
             assert_eq!(faidx_seq_len64(fai, name.as_ptr().cast()), row.len);
             assert_eq!(fai_line_length(fai, name.as_ptr().cast()), row.line_blen);
         }
-        assert_eq!(faidx_has_seq(fai, c"absent".as_ptr()), 0);
+        assert_eq!(faidx_has_seq(fai, c"absent".as_ptr().cast()), 0);
 
         fai_destroy(fai);
     }
@@ -475,7 +475,7 @@ fn bgzipped_fasta_existing_fai_missing_gzi_rebuilds_with_create_flag() {
         let mut bgz_c = bgz_path.to_string_lossy().into_owned().into_bytes();
         bgz_c.push(0);
 
-        let fp = bgzf_open(bgz_c.as_ptr().cast(), c"w".as_ptr());
+        let fp = bgzf_open(bgz_c.as_ptr().cast(), c"w".as_ptr().cast());
         assert!(!fp.is_null());
         assert_eq!(
             bgzf_write(fp, source.as_ptr().cast(), source.len()),
@@ -507,7 +507,7 @@ fn bgzipped_fasta_existing_fai_missing_gzi_rebuilds_with_create_flag() {
         assert!(gzi_path.exists());
 
         let mut len = 0;
-        let seq = faidx_fetch_seq64(fai, c"foo".as_ptr(), 0, 7, &mut len);
+        let seq = faidx_fetch_seq64(fai, c"foo".as_ptr().cast(), 0, 7, &mut len);
         assert_eq!(fetched_string(seq, len), "TGCATGCA");
 
         fai_destroy(fai);

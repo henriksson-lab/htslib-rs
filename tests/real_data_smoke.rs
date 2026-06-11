@@ -29,7 +29,7 @@ fn c_fixture(path: &str) -> Vec<u8> {
 fn detect_fixture_format(path: &str) -> htsFormat {
     unsafe {
         let path = c_fixture(path);
-        let fp = hopen(path.as_ptr().cast(), c"r".as_ptr());
+        let fp = hopen(path.as_ptr().cast(), c"r".as_ptr().cast());
         assert!(!fp.is_null());
         let mut fmt: htsFormat = std::mem::zeroed();
         assert_eq!(hts_detect_format2(fp, path.as_ptr().cast(), &mut fmt), 0);
@@ -100,7 +100,7 @@ unsafe extern "C" fn bcf_readrec_adapter(
     beg: *mut hts_pos_t,
     end: *mut hts_pos_t,
 ) -> i32 {
-    unsafe { bcf_readrec(fp, data, rec, tid, beg, end) }
+    unsafe { bcf_readrec(fp, data.cast(), rec.cast(), tid, beg, end) }
 }
 
 unsafe fn expect_sam_region(
@@ -132,7 +132,7 @@ unsafe fn expect_sam_region(
 fn reads_real_bgzf_fixture() {
     unsafe {
         let path = c_fixture("htslib/test/bgziptest.txt.gz");
-        let fp = bgzf_open(path.as_ptr().cast(), c"r".as_ptr());
+        let fp = bgzf_open(path.as_ptr().cast(), c"r".as_ptr().cast());
         assert!(!fp.is_null());
 
         let mut buf = [0u8; 32];
@@ -150,7 +150,7 @@ fn checks_real_bgzf_fixture_eof_marker() {
         let path = c_fixture("htslib/test/bgziptest.txt.gz");
         assert_eq!(bgzf_is_bgzf(path.as_ptr().cast()), 1);
 
-        let fp = bgzf_open(path.as_ptr().cast(), c"r".as_ptr());
+        let fp = bgzf_open(path.as_ptr().cast(), c"r".as_ptr().cast());
         assert!(!fp.is_null());
         assert_eq!(bgzf_check_EOF(fp), 1);
 
@@ -412,7 +412,7 @@ fn reads_multiple_real_fasta_indexes() {
         assert!(!fai.is_null());
         assert_eq!(faidx_nseq(fai), 1);
         assert_eq!(faidx_iseq(&*fai, 0), Some(c"c1".to_bytes()));
-        assert_eq!(faidx_seq_len(fai, c"c1".as_ptr()), 10);
+        assert_eq!(faidx_seq_len(fai, c"c1".as_ptr().cast()), 10);
         fai_destroy(fai);
 
         let c2 = c_fixture("htslib/test/c2.fa");
@@ -427,7 +427,7 @@ fn reads_multiple_real_fasta_indexes() {
         assert!(!fai.is_null());
         assert_eq!(faidx_nseq(fai), 1);
         assert_eq!(faidx_iseq(&*fai, 0), Some(c"c2".to_bytes()));
-        assert_eq!(faidx_seq_len(fai, c"c2".as_ptr()), 9);
+        assert_eq!(faidx_seq_len(fai, c"c2".as_ptr().cast()), 9);
         fai_destroy(fai);
 
         let xx = c_fixture("htslib/test/xx.fa");
@@ -444,9 +444,9 @@ fn reads_multiple_real_fasta_indexes() {
         assert_eq!(faidx_iseq(&*fai, 0), Some(c"xx".to_bytes()));
         assert_eq!(faidx_iseq(&*fai, 1), Some(c"yy".to_bytes()));
         assert_eq!(faidx_iseq(&*fai, 2), Some(c"zz".to_bytes()));
-        assert_eq!(faidx_seq_len(fai, c"xx".as_ptr()), 20);
-        assert_eq!(faidx_seq_len(fai, c"yy".as_ptr()), 20);
-        assert_eq!(faidx_seq_len(fai, c"zz".as_ptr()), 30);
+        assert_eq!(faidx_seq_len(fai, c"xx".as_ptr().cast()), 20);
+        assert_eq!(faidx_seq_len(fai, c"yy".as_ptr().cast()), 20);
+        assert_eq!(faidx_seq_len(fai, c"zz".as_ptr().cast()), 30);
         fai_destroy(fai);
     }
 }
@@ -649,21 +649,21 @@ fn reads_real_vcf_fixture() {
 
         let hdr = vcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(bcf_hdr_name2id(hdr, c"1".as_ptr()), 0);
-        assert_eq!(CStr::from_ptr(bcf_hdr_id2name(hdr, 0)), c"1");
+        assert_eq!(bcf_hdr_name2id(hdr, c"1".as_ptr().cast()), 0);
+        assert_eq!(CStr::from_ptr(bcf_hdr_id2name(hdr, 0).cast()), c"1");
 
         let mut nseqs = 0;
         let seqs = bcf_hdr_seqnames(hdr, &mut nseqs);
         assert!(!seqs.is_null());
         assert!(nseqs > 0);
-        assert_eq!(CStr::from_ptr(*seqs), c"1");
+        assert_eq!(CStr::from_ptr((*seqs).cast()), c"1");
 
-        assert_eq!(bcf_hdr_set_samples(hdr, c"ERS220911".as_ptr(), 0), 0);
+        assert_eq!(bcf_hdr_set_samples(hdr, c"ERS220911".as_ptr().cast(), 0), 0);
 
         let rec = bcf_init();
         assert!(!rec.is_null());
         assert!(bcf_read(fp, hdr, rec) >= 0);
-        assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec)), c"1");
+        assert_eq!(CStr::from_ptr(bcf_seqname(hdr, rec).cast()), c"1");
         assert_eq!((*rec).pos, 9_999_918);
 
         let mut pl = std::ptr::null_mut();
@@ -672,7 +672,7 @@ fn reads_real_vcf_fixture() {
             bcf_get_format_values(
                 hdr,
                 rec,
-                c"PL".as_ptr(),
+                c"PL".as_ptr().cast(),
                 &mut pl,
                 &mut npl,
                 hts_sys::BCF_HT_INT as i32,
@@ -697,13 +697,13 @@ fn reads_real_compressed_vcf_header_fixture() {
 
         let hdr = vcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(bcf_hdr_name2id(hdr, c"chr22".as_ptr()), 1);
+        assert_eq!(bcf_hdr_name2id(hdr, c"chr22".as_ptr().cast()), 1);
 
         let mut nseqs = 0;
         let seqs = bcf_hdr_seqnames(hdr, &mut nseqs);
         assert!(!seqs.is_null());
         assert_eq!(nseqs, 1);
-        assert_eq!(CStr::from_ptr(*seqs), c"chr22");
+        assert_eq!(CStr::from_ptr((*seqs).cast()), c"chr22");
 
         bcf_hdr_destroy(hdr);
         assert_eq!(hts_close(fp), 0);
@@ -720,7 +720,7 @@ fn queries_real_indexed_compressed_vcf_fixture() {
 
         let hdr = vcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        let tid = bcf_hdr_name2id(hdr, c"chr22".as_ptr());
+        let tid = bcf_hdr_name2id(hdr, c"chr22".as_ptr().cast());
         assert_eq!(tid, 1);
 
         let idx = bcf_index_load2(vcf.as_ptr().cast(), csi.as_ptr().cast());
@@ -751,10 +751,10 @@ fn reads_real_fasta_index_fixture() {
         assert!(!fai.is_null());
 
         let mut len = 0;
-        assert_eq!(faidx_has_seq(fai, c"Sheila".as_ptr()), 1);
-        assert_eq!(faidx_has_seq(fai, c"missing-contig".as_ptr()), 0);
+        assert_eq!(faidx_has_seq(fai, c"Sheila".as_ptr().cast()), 1);
+        assert_eq!(faidx_has_seq(fai, c"missing-contig".as_ptr().cast()), 0);
 
-        let seq = fai_fetch(fai, c"Sheila".as_ptr(), &mut len);
+        let seq = fai_fetch(fai, c"Sheila".as_ptr().cast(), &mut len);
         assert!(!seq.is_null());
         assert!(len > 0);
 
@@ -778,18 +778,18 @@ fn reads_real_fastq_index_quality_fixture() {
 
         assert!(faidx_nseq(fai) > 0);
         assert_eq!(faidx_iseq(&*fai, 0), Some(c"FAKE0005_1".to_bytes()));
-        assert_eq!(faidx_seq_len(fai, c"FAKE0005_1".as_ptr()), 63);
+        assert_eq!(faidx_seq_len(fai, c"FAKE0005_1".as_ptr().cast()), 63);
 
         let mut len = 0;
-        let seq = fai_fetch(fai, c"FAKE0005_1:1-4".as_ptr(), &mut len);
+        let seq = fai_fetch(fai, c"FAKE0005_1:1-4".as_ptr().cast(), &mut len);
         assert!(!seq.is_null());
         assert_eq!(len, 4);
-        assert_eq!(CStr::from_ptr(seq).to_bytes(), b"ACGT");
+        assert_eq!(CStr::from_ptr(seq.cast()).to_bytes(), b"ACGT");
 
-        let qual = fai_fetchqual(fai, c"FAKE0005_1:1-4".as_ptr(), &mut len);
+        let qual = fai_fetchqual(fai, c"FAKE0005_1:1-4".as_ptr().cast(), &mut len);
         assert!(!qual.is_null());
         assert_eq!(len, 4);
-        assert_eq!(CStr::from_ptr(qual).to_bytes(), b"@ABC");
+        assert_eq!(CStr::from_ptr(qual.cast()).to_bytes(), b"@ABC");
 
         fai_destroy(fai);
     }

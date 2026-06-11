@@ -34,17 +34,17 @@ pub fn test_test_regidx_c_75_custom_parse(
     }
 
     let mut ss = 0usize;
-    while ss < line.len() && isspace_c(line[ss] as i8) != 0 {
+    while ss < line.len() && isspace_c(line[ss]) != 0 {
         ss += 1;
     }
     for _i in 0..3 {
-        while ss < line.len() && isspace_c(line[ss] as i8) == 0 {
+        while ss < line.len() && isspace_c(line[ss]) == 0 {
             ss += 1;
         }
         if ss >= line.len() {
             return -2;
         }
-        while ss < line.len() && isspace_c(line[ss] as i8) != 0 {
+        while ss < line.len() && isspace_c(line[ss]) != 0 {
             ss += 1;
         }
     }
@@ -53,7 +53,7 @@ pub fn test_test_regidx_c_75_custom_parse(
     }
 
     let mut se = ss;
-    while se < line.len() && isspace_c(line[se] as i8) == 0 {
+    while se < line.len() && isspace_c(line[se]) == 0 {
         se += 1;
     }
     let field = &line[ss..se];

@@ -351,10 +351,10 @@ pub unsafe fn test_test_kstring_c_294_test_kputll(mut start: i64, mut end: i64) 
 
 // original: mock_fgets (htslib/test/test_kstring.c:347)
 pub unsafe extern "C" fn test_test_kstring_c_347_mock_fgets(
-    str_: *mut std::ffi::c_char,
+    str_: *mut u8,
     _num: i32,
-    p: *mut std::ffi::c_void,
-) -> *mut std::ffi::c_char {
+    p: *mut (),
+) -> *mut u8 {
     let mock_state = p.cast::<i32>();
     *mock_state += 1;
     match *mock_state {

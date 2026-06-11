@@ -188,7 +188,7 @@ pub unsafe fn func_expr(
                 }
                 *end = (*end).add(1);
                 let mut val = expr_val_init();
-                if expression(filt, data, sym_func, ws((*end).cast::<i8>()).cast::<u8>(), end, &mut val) != 0 {
+                if expression(filt, data, sym_func, ws(*end), end, &mut val) != 0 {
                     return -1;
                 }
                 func_ok = 1;
@@ -262,7 +262,7 @@ pub unsafe fn func_expr(
                 }
                 *end = (*end).add(1);
                 let mut val = expr_val_init();
-                if expression(filt, data, sym_func, ws((*end).cast::<i8>()).cast::<u8>(), end, &mut val) != 0 {
+                if expression(filt, data, sym_func, ws(*end), end, &mut val) != 0 {
                     return -1;
                 }
                 if !expr_val_exists(&*res) || !expr_val_exists(&val) {
@@ -301,7 +301,7 @@ pub unsafe fn func_expr(
         return -1;
     }
 
-    let str_ = ws((*end).cast::<i8>()).cast::<u8>();
+    let str_ = ws(*end);
     if *str_ != b')' {
         eprintln!("Missing ')'");
         return -1;
@@ -319,12 +319,12 @@ pub unsafe fn simple_expr(
     end: &mut *mut u8,
     res: &mut hts_expr_val_t,
 ) -> i32 {
-    str_ = ws(str_.cast::<i8>()).cast::<u8>();
+    str_ = ws(str_);
     if *str_ == b'(' {
         if expression(filt, data, sym_func, str_.add(1), end, res) != 0 {
             return -1;
         }
-        let e = ws((*end).cast::<i8>()).cast::<u8>();
+        let e = ws(*end);
         if *e != b')' {
             eprintln!("Missing ')'");
             return -1;
@@ -335,8 +335,8 @@ pub unsafe fn simple_expr(
 
     let mut fail = 0;
     let d = hts_str2dbl(
-        str_.cast::<i8>(),
-        (end as *mut *mut u8).cast::<*mut i8>(),
+        str_,
+        end as *mut *mut u8,
         &mut fail,
     );
     if str_ != *end {
@@ -418,7 +418,7 @@ pub unsafe fn unary_expr(
     end: &mut *mut u8,
     res: &mut hts_expr_val_t,
 ) -> i32 {
-    str_ = ws(str_.cast::<i8>()).cast::<u8>();
+    str_ = ws(str_);
     let err;
     if *str_ == b'+' || *str_ == b'-' {
         err = simple_expr(filt, data, sym_func, str_.add(1), end, res);
@@ -485,7 +485,7 @@ pub unsafe fn mul_expr(
     let mut str_ = *end;
     let mut val = expr_val_init();
     while *str_ != 0 {
-        str_ = ws(str_.cast::<i8>()).cast::<u8>();
+        str_ = ws(str_);
         if *str_ == b'*' || *str_ == b'/' || *str_ == b'%' {
             if unary_expr(filt, data, sym_func, str_.add(1), end, &mut val) != 0 {
                 return -1;
@@ -532,7 +532,7 @@ pub unsafe fn add_expr(
     let mut str_ = *end;
     let mut val = expr_val_init();
     while *str_ != 0 {
-        str_ = ws(str_.cast::<i8>()).cast::<u8>();
+        str_ = ws(str_);
         let mut undef = 0;
         if *str_ == b'+' || *str_ == b'-' {
             if mul_expr(filt, data, sym_func, str_.add(1), end, &mut val) != 0 {
@@ -587,7 +587,7 @@ unsafe fn bit_expr(
     let mut val = expr_val_init();
     let mut undef = 0;
     loop {
-        let str_ = ws((*end).cast::<i8>()).cast::<u8>();
+        let str_ = ws(*end);
         let is_op = match op {
             b'&' => *str_ == b'&' && *str_.add(1) != b'&',
             b'|' => *str_ == b'|' && *str_.add(1) != b'|',
@@ -669,7 +669,7 @@ pub unsafe fn cmp_expr(
     if bitor_expr(filt, data, sym_func, str_, end, res) != 0 {
         return -1;
     }
-    let str_ = ws((*end).cast::<i8>()).cast::<u8>();
+    let str_ = ws(*end);
     let mut val = expr_val_init();
     let mut err = 0;
     let mut cmp_done = 0;
@@ -744,7 +744,7 @@ pub unsafe fn eq_expr(
     if cmp_expr(filt, data, sym_func, str_, end, res) != 0 {
         return -1;
     }
-    let str_ = ws((*end).cast::<i8>()).cast::<u8>();
+    let str_ = ws(*end);
     let mut val = expr_val_init();
     let mut err = 0;
     let mut eq_done = 0;
@@ -898,7 +898,7 @@ pub unsafe fn and_expr(
     }
     loop {
         let mut val = expr_val_init();
-        let str_ = ws((*end).cast::<i8>()).cast::<u8>();
+        let str_ = ws(*end);
         if *str_ == b'&' && *str_.add(1) == b'&' {
             if eq_expr(filt, data, sym_func, str_.add(2), end, &mut val) != 0 {
                 return -1;
@@ -1009,7 +1009,7 @@ unsafe fn hts_filter_eval_inner(
     if expression(filt, data, sym_func, expr, &mut end, res) != 0 {
         return -1;
     }
-    if !end.is_null() && *ws(end.cast::<i8>()).cast::<u8>() != 0 {
+    if !end.is_null() && *ws(end) != 0 {
         let text_len = filt.expr.iter().position(|&b| b == 0).unwrap_or(filt.expr.len());
         eprintln!(
             "Unable to parse expression at {}",

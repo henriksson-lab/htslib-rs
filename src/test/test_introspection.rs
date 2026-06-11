@@ -114,12 +114,12 @@ pub unsafe fn test_test_introspection_c_31_main() -> i32 {
 
         println!(
             "    {}:",
-            String::from_utf8_lossy(std::ffi::CStr::from_ptr(plugins[i as usize]).to_bytes())
+            String::from_utf8_lossy(std::ffi::CStr::from_ptr(plugins[i as usize].cast()).to_bytes())
         );
         for j in 0..nschemes {
             println!(
                 "\t{}",
-                String::from_utf8_lossy(std::ffi::CStr::from_ptr(sc_list[j as usize]).to_bytes())
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(sc_list[j as usize].cast()).to_bytes())
             );
         }
         println!();

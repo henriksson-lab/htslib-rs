@@ -229,9 +229,9 @@ fn longrefs_vcf_header_keeps_original_large_contig_and_record_count() {
 
         let hdr = vcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(CStr::from_ptr(bcf_hdr_get_version(hdr)).to_bytes(), b"VCFv4.2");
+        assert_eq!(CStr::from_ptr(bcf_hdr_get_version(hdr).cast()).to_bytes(), b"VCFv4.2");
         assert_eq!(bcf_hdr_name2id(hdr, b"1\0".as_ptr().cast()), 0);
-        assert_eq!(CStr::from_ptr(bcf_hdr_id2name(hdr, 0)).to_bytes(), b"1");
+        assert_eq!(CStr::from_ptr(bcf_hdr_id2name(hdr, 0).cast()).to_bytes(), b"1");
 
         let rec = bcf_init();
         assert!(!rec.is_null());

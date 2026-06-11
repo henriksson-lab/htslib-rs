@@ -38,7 +38,7 @@ pub unsafe fn test_test_vcf_sweep_c_31_main(argc: i32, argv: *mut *mut u8) -> i3
             hdr,
             rec as *mut crate::htslib_rs::vcf::bcf1_t,
             b"PL\0".as_ptr().cast(),
-            (&mut pls as *mut *mut i32).cast::<*mut std::os::raw::c_void>(),
+            (&mut pls as *mut *mut i32).cast::<*mut ()>(),
             &mut m_pls,
             crate::htslib_rs::vcf::BCF_HT_INT as i32,
         );
@@ -71,7 +71,7 @@ pub unsafe fn test_test_vcf_sweep_c_31_main(argc: i32, argv: *mut *mut u8) -> i3
             hdr,
             rec as *mut crate::htslib_rs::vcf::bcf1_t,
             b"PL\0".as_ptr().cast(),
-            (&mut pls as *mut *mut i32).cast::<*mut std::os::raw::c_void>(),
+            (&mut pls as *mut *mut i32).cast::<*mut ()>(),
             &mut m_pls,
             crate::htslib_rs::vcf::BCF_HT_INT as i32,
         );

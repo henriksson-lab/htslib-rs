@@ -1,7 +1,7 @@
 // original: check_str2int (htslib/test/test_str2int.c:41)
 pub unsafe fn test_test_str2int_c_41_check_str2int(verbose: i32) -> i32 {
     let mut buffer = [0u8; 64];
-    let mut end: *mut std::ffi::c_char = std::ptr::null_mut();
+    let mut end: *mut u8 = std::ptr::null_mut();
     let mut failed = 0;
     let sentinel = b'#';
 

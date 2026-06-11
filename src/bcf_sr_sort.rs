@@ -321,7 +321,7 @@ pub unsafe fn bcf_sr_sort_set(
         // srt.chr is a shared (repr(C)) *const c_char field that the still-C-mirror
         // grouping code dereferences as a NUL-terminated string, so it must alias the
         // caller-owned NUL-terminated buffer that `chr` borrows; keep it as a CStr.
-        let chr_ptr = chr.as_ptr();
+        let chr_ptr = chr.as_ptr().cast::<u8>();
 
         let nsr = srt.nsr;
         let active = match active_slice(srt) {
@@ -476,7 +476,7 @@ pub unsafe fn bcf_sr_sort_next(
 
         if (srt.chr.is_null()
             || srt.pos != min_pos
-            || CStr::from_ptr(srt.chr).to_bytes() != chr.to_bytes())
+            || CStr::from_ptr(srt.chr.cast()).to_bytes() != chr.to_bytes())
             && bcf_sr_sort_set(readers, srt, chr, min_pos) < 0
         {
             return -1;
@@ -590,7 +590,7 @@ pub unsafe fn bcf_sr_sort_destroy(srt: &mut BcfSrSort) {
                 kbs_destroy(var.mask);
             }
         }
-        libc::free(srt.var);
+        libc::free(srt.var.cast());
 
         let grp = srt.grp.cast::<BcfSrSortGrp>();
         if !grp.is_null() {
@@ -598,7 +598,7 @@ pub unsafe fn bcf_sr_sort_destroy(srt: &mut BcfSrSort) {
                 libc::free(grp.var.cast());
             }
         }
-        libc::free(srt.grp);
+        libc::free(srt.grp.cast());
 
         let vset = srt.vset.cast::<BcfSrSortVarSet>();
         if !vset.is_null() {
@@ -607,7 +607,7 @@ pub unsafe fn bcf_sr_sort_destroy(srt: &mut BcfSrSort) {
                 libc::free(vset.var.cast());
             }
         }
-        libc::free(srt.vset);
+        libc::free(srt.vset.cast());
 
         crate::htslib_rs::hts::ks_free(&mut srt.str_);
         libc::free(srt.off.cast());

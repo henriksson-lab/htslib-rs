@@ -3,7 +3,7 @@ unsafe fn run_thrash_threads2(iterations: usize, n_threads: i32, verbose: bool) 
         if verbose {
             eprintln!("i={}", i);
         }
-        let fp = crate::htslib_rs::bgzf::bgzf_open(c"/dev/null".as_ptr(), c"w".as_ptr());
+        let fp = crate::htslib_rs::bgzf::bgzf_open(c"/dev/null".as_ptr().cast(), c"w".as_ptr().cast());
         if crate::htslib_rs::bgzf::bgzf_mt(fp, n_threads, 256) != 0 {
             crate::htslib_rs::bgzf::bgzf_close(fp);
             return libc::EXIT_FAILURE;

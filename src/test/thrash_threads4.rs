@@ -6,7 +6,7 @@ unsafe fn run_thrash_threads4(
     sleep_usecs: i64,
     verbose: bool,
 ) -> i32 {
-    let mut fpin = crate::htslib_rs::bgzf::bgzf_open(input.cast(), c"r".as_ptr());
+    let mut fpin = crate::htslib_rs::bgzf::bgzf_open(input.cast(), c"r".as_ptr().cast());
     if fpin.is_null() {
         return libc::EXIT_FAILURE;
     }
@@ -27,7 +27,7 @@ unsafe fn run_thrash_threads4(
         if verbose {
             eprintln!("i={i}");
         }
-        fpin = crate::htslib_rs::bgzf::bgzf_open(input.cast(), c"r".as_ptr());
+        fpin = crate::htslib_rs::bgzf::bgzf_open(input.cast(), c"r".as_ptr().cast());
         if fpin.is_null() {
             return libc::EXIT_FAILURE;
         }
@@ -77,11 +77,11 @@ mod tests {
         path_c.push(0);
 
         unsafe {
-            let fp = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr().cast(), c"w".as_ptr());
+            let fp = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr().cast(), c"w".as_ptr().cast());
             assert!(!fp.is_null());
             let data = vec![b'A'; 70_000];
             assert_eq!(
-                crate::htslib_rs::bgzf::bgzf_write(fp, data.as_ptr().cast::<libc::c_void>(), data.len()),
+                crate::htslib_rs::bgzf::bgzf_write(fp, data.as_ptr().cast::<()>(), data.len()),
                 data.len() as isize
             );
             assert_eq!(crate::htslib_rs::bgzf::bgzf_close(fp), 0);

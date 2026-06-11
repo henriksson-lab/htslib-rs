@@ -239,7 +239,7 @@ unsafe extern "C" fn bcf_readrec_adapter(
     beg: *mut hts_pos_t,
     end: *mut hts_pos_t,
 ) -> i32 {
-    unsafe { bcf_readrec(fp, data, rec, tid, beg, end) }
+    unsafe { bcf_readrec(fp, data.cast(), rec.cast(), tid, beg, end) }
 }
 
 unsafe fn bcf_csi_region_count(
@@ -302,8 +302,8 @@ unsafe fn vcf_tabix_region_count(bgz_path: &Path, tbi_path: &Path, region: &[u8]
         let ret = hts_itr_next(
             hts_get_bgzfp(fp),
             itr,
-            (&mut line as *mut kstring_t).cast::<std::os::raw::c_void>(),
-            tbx.cast::<std::os::raw::c_void>(),
+            (&mut line as *mut kstring_t).cast::<()>(),
+            tbx.cast::<()>(),
         );
         if ret < 0 {
             break;

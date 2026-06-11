@@ -1,6 +1,5 @@
 // Functions translated from htslib/vcfutils.c.
 
-use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr::NonNull;
 
@@ -156,7 +155,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
 
     let mut str_cstr = str_.data.clone();
     str_cstr.push(0);
-    if vcf::bcf_update_alleles_str(header, line, str_cstr.as_ptr().cast::<i8>()) < 0 {
+    if vcf::bcf_update_alleles_str(header, line, str_cstr.as_ptr()) < 0 {
         return -1;
     }
 
@@ -209,7 +208,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
             header,
             line,
             id,
-            (&mut dat_ptr as *mut *mut ()).cast::<*mut c_void>(),
+            &mut dat_ptr as *mut *mut (),
             &mut mdat,
             type_,
         );
@@ -482,8 +481,8 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
         let mut nret = vcf::bcf_get_format_values(
             header,
             line,
-            c"GT".as_ptr(),
-            (&mut dat_ptr as *mut *mut ()).cast::<*mut c_void>(),
+            c"GT".as_ptr().cast(),
+            &mut dat_ptr as *mut *mut (),
             &mut mdat,
             BCF_HT_INT as i32,
         );
@@ -516,7 +515,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
             if vcf::bcf_update_format(
                 header,
                 line,
-                c"GT".as_ptr(),
+                c"GT".as_ptr().cast(),
                 dat.cast(),
                 nret * n_sample,
                 BCF_HT_INT as i32,
@@ -531,8 +530,8 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
     let num_laa = vcf::bcf_get_format_values(
         header,
         line,
-        c"LAA".as_ptr(),
-        (&mut laa_ptr as *mut *mut ()).cast::<*mut c_void>(),
+        c"LAA".as_ptr().cast(),
+        &mut laa_ptr as *mut *mut (),
         &mut laa_size,
         BCF_HT_INT as i32,
     );
@@ -621,7 +620,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
             if vcf::bcf_update_format(
                 header,
                 line,
-                c"LAA".as_ptr(),
+                c"LAA".as_ptr().cast(),
                 laa.cast(),
                 new_num_laa,
                 BCF_HT_INT as i32,
@@ -661,7 +660,7 @@ unsafe fn vcfutils_bcf_remove_allele_set_rs(
             header,
             line,
             id,
-            (&mut dat_ptr as *mut *mut ()).cast::<*mut c_void>(),
+            &mut dat_ptr as *mut *mut (),
             &mut mdat,
             type_,
         );
@@ -1519,8 +1518,8 @@ pub unsafe fn vcfutils_c_561_fixup_cnv_tr_info_tags(
     num_alt_orig: usize,
     rm_set: &kbitset_t,
 ) -> i32 {
-    let rn_ptr = NonNull::new(bcf_get_info(header, line, c"RN".as_ptr()));
-    let ruc_ptr = NonNull::new(bcf_get_info(header, line, c"RUC".as_ptr()));
+    let rn_ptr = NonNull::new(bcf_get_info(header, line, c"RN".as_ptr().cast()));
+    let ruc_ptr = NonNull::new(bcf_get_info(header, line, c"RUC".as_ptr().cast()));
     let rn = rn_ptr.map(|ptr| ptr.as_ref());
     let ruc = ruc_ptr.as_ref().map(|ptr| ptr.as_ref());
     let mut orig_total_repeats = 0i64;
@@ -1628,7 +1627,7 @@ pub unsafe fn vcfutils_c_186_bcf_trim_alleles(
 unsafe fn vcfutils_bcf_trim_alleles_rs(header: &bcf_hdr_t, line: &mut bcf1_t) -> i32 {
     let mut ret = 0;
     let mut nrm = 0;
-    let gt_ptr = bcf_get_fmt(header, line, c"GT".as_ptr());
+    let gt_ptr = bcf_get_fmt(header, line, c"GT".as_ptr().cast());
     if gt_ptr.is_null() {
         return 0;
     }
@@ -1760,8 +1759,8 @@ unsafe fn vcfutils_bcf_calc_ac_rs(
 
     if (which & BCF_UN_INFO as i32) != 0 {
         bcf_unpack(line, BCF_UN_INFO as i32);
-        let an_id = bcf_hdr_id2int(header, BCF_DT_ID as i32, c"AN".as_ptr());
-        let ac_id = bcf_hdr_id2int(header, BCF_DT_ID as i32, c"AC".as_ptr());
+        let an_id = bcf_hdr_id2int(header, BCF_DT_ID as i32, c"AN".as_ptr().cast());
+        let ac_id = bcf_hdr_id2int(header, BCF_DT_ID as i32, c"AC".as_ptr().cast());
         let mut an = -1;
         let mut ac_len = 0;
         let mut ac_type = 0;
@@ -1806,7 +1805,7 @@ unsafe fn vcfutils_bcf_calc_ac_rs(
     }
 
     if (which & BCF_UN_FMT as i32) != 0 {
-        let gt_id = bcf_hdr_id2int(header, BCF_DT_ID as i32, c"GT".as_ptr());
+        let gt_id = bcf_hdr_id2int(header, BCF_DT_ID as i32, c"GT".as_ptr().cast());
         if gt_id < 0 {
             return 0;
         }

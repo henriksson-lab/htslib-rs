@@ -1,11 +1,20 @@
 // Functions translated from htslib/cram/cram_encode.c.
 // Extracted from src/cram.rs (cut-over completed 2026-06-01).
 
-use std::ffi::{c_char, c_void};
-
-use crate::htslib_rs::c_compat::{__errno_location, calloc, free, malloc, realloc, EINVAL};
+// `c_char` is retained only for genuine external-ABI boundary casts (CStr::from_ptr,
+// hts_str2uint) whose signatures take `*const c_char`; all in-crate text is `u8`.
+use std::ffi::c_char;
 
 use super::*;
+
+// RECONVERGE: cram-block allocator keystone. The malloc/calloc/realloc/free below
+// allocate cram `*_layout` struct fields (slice block[]/aux_block[], hdr
+// block_content_ids, container landmark/refs_used/bams, slice features/cigar,
+// kh_* maps, tag-map/spare-bams) that are freed elsewhere (cram_io
+// `cram_free_block`/`cram_free_*`) via `libc::free`. They are kept on the libc
+// allocator to avoid mixing allocators (heap-corruption UB); converting them to
+// Vec/Box requires the coordinated cross-file cram-block keystone.
+use libc::{calloc, free, malloc, realloc};
 
 // (all extracted functions, preserving src/cram.rs order)
 
@@ -110,58 +119,58 @@ pub unsafe fn cram_cram_encode_c_2810_cram_encode_compression_header(
         let mut r_0: i32 = 0;
         // Inline kh_init_map: zero-initialised kh_generic_layout.
         (*hl).preservation_map =
-            calloc(1, std::mem::size_of::<kh_generic_layout>() as u64).cast::<c_void>();
+            calloc(1, std::mem::size_of::<kh_generic_layout>()).cast::<()>();
         if (*hl).preservation_map.is_null() {
             return std::ptr::null_mut::<cram_block>();
         }
         let pm = (*hl).preservation_map.cast::<kh_generic_layout>();
-        k = kh_put_map(pm, c"RN".as_ptr(), &raw mut r_0);
+        k = kh_put_map(pm, c"RN".as_ptr().cast::<u8>(), &raw mut r_0);
         if -1 == r_0 {
             return std::ptr::null_mut::<cram_block>();
         }
         (*(*pm).vals.cast::<pmap_val>().offset(k as isize)).i =
             ((*fdl).lossy_read_names == 0) as i32;
         if (*fdl).version >> 8 == 1 {
-            k = kh_put_map(pm, c"PI".as_ptr(), &raw mut r_0);
+            k = kh_put_map(pm, c"PI".as_ptr().cast::<u8>(), &raw mut r_0);
             if -1 == r_0 {
                 return std::ptr::null_mut::<cram_block>();
             }
             (*(*pm).vals.cast::<pmap_val>().offset(k as isize)).i = 0;
-            k = kh_put_map(pm, c"UI".as_ptr(), &raw mut r_0);
+            k = kh_put_map(pm, c"UI".as_ptr().cast::<u8>(), &raw mut r_0);
             if -1 == r_0 {
                 return std::ptr::null_mut::<cram_block>();
             }
             (*(*pm).vals.cast::<pmap_val>().offset(k as isize)).i = 1;
-            k = kh_put_map(pm, c"MI".as_ptr(), &raw mut r_0);
+            k = kh_put_map(pm, c"MI".as_ptr().cast::<u8>(), &raw mut r_0);
             if -1 == r_0 {
                 return std::ptr::null_mut::<cram_block>();
             }
             (*(*pm).vals.cast::<pmap_val>().offset(k as isize)).i = 1;
         } else {
-            k = kh_put_map(pm, c"SM".as_ptr(), &raw mut r_0);
+            k = kh_put_map(pm, c"SM".as_ptr().cast::<u8>(), &raw mut r_0);
             if -1 == r_0 {
                 return std::ptr::null_mut::<cram_block>();
             }
             (*(*pm).vals.cast::<pmap_val>().offset(k as isize)).i = 0;
-            k = kh_put_map(pm, c"TD".as_ptr(), &raw mut r_0);
+            k = kh_put_map(pm, c"TD".as_ptr().cast::<u8>(), &raw mut r_0);
             if -1 == r_0 {
                 return std::ptr::null_mut::<cram_block>();
             }
             (*(*pm).vals.cast::<pmap_val>().offset(k as isize)).i = 0;
-            k = kh_put_map(pm, c"AP".as_ptr(), &raw mut r_0);
+            k = kh_put_map(pm, c"AP".as_ptr().cast::<u8>(), &raw mut r_0);
             if -1 == r_0 {
                 return std::ptr::null_mut::<cram_block>();
             }
             (*(*pm).vals.cast::<pmap_val>().offset(k as isize)).i = (*hl).ap_delta;
             if (*fdl).version >> 8 >= 4 {
-                k = kh_put_map(pm, c"QO".as_ptr(), &raw mut r_0);
+                k = kh_put_map(pm, c"QO".as_ptr().cast::<u8>(), &raw mut r_0);
                 if -1 == r_0 {
                     return std::ptr::null_mut::<cram_block>();
                 }
                 (*(*pm).vals.cast::<pmap_val>().offset(k as isize)).i = (*hl).qs_seq_orient;
             }
             if no_ref != 0 || embed_ref > 0 {
-                k = kh_put_map(pm, c"RR".as_ptr(), &raw mut r_0);
+                k = kh_put_map(pm, c"RR".as_ptr().cast::<u8>(), &raw mut r_0);
                 if -1 == r_0 {
                     return std::ptr::null_mut::<cram_block>();
                 }
@@ -267,9 +276,9 @@ pub unsafe fn cram_cram_encode_c_2810_cram_encode_compression_header(
                 let store: CramCodecStoreFn = cram_fn((*cd).store);
                 if -1
                     == store(
-                        cd.cast::<c_void>(),
+                        cd.cast::<()>(),
                         map,
-                        $name.as_ptr() as *mut c_char,
+                        $name.as_ptr() as *mut u8,
                         (*fdl).version,
                     )
                 {
@@ -360,9 +369,9 @@ pub unsafe fn cram_cram_encode_c_2810_cram_encode_compression_header(
             let store: CramCodecStoreFn = cram_fn((*cd).store);
             if -1
                 == store(
-                    cd.cast::<c_void>(),
+                    cd.cast::<()>(),
                     map,
-                    std::ptr::null_mut::<c_char>(),
+                    std::ptr::null_mut::<u8>(),
                     (*fdl).version,
                 )
             {
@@ -696,7 +705,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
     r |= cram_codec_encode(
         (*hl).codecs[DS_ENC_BF as usize],
         s,
-        &raw mut i32v as *mut c_char,
+        &raw mut i32v as *mut u8,
         1,
     );
 
@@ -705,7 +714,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
     r |= cram_codec_encode(
         (*hl).codecs[DS_ENC_CF as usize],
         s,
-        &raw mut i32v as *mut c_char,
+        &raw mut i32v as *mut u8,
         1,
     );
 
@@ -714,7 +723,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
         r |= cram_codec_encode(
             (*hl).codecs[DS_ENC_RI as usize],
             s,
-            &raw mut (*crl).ref_id as *mut c_char,
+            &raw mut (*crl).ref_id as *mut u8,
             1,
         );
     }
@@ -723,7 +732,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
     r |= cram_codec_encode(
         (*hl).codecs[DS_ENC_RL as usize],
         s,
-        &raw mut (*crl).len as *mut c_char,
+        &raw mut (*crl).len as *mut u8,
         1,
     );
 
@@ -734,7 +743,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
             r |= cram_codec_encode(
                 (*hl).codecs[DS_ENC_AP as usize],
                 s,
-                &raw mut i64v as *mut c_char,
+                &raw mut i64v as *mut u8,
                 1,
             );
         } else {
@@ -742,7 +751,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
             r |= cram_codec_encode(
                 (*hl).codecs[DS_ENC_AP as usize],
                 s,
-                &raw mut i32v as *mut c_char,
+                &raw mut i32v as *mut u8,
                 1,
             );
         }
@@ -752,7 +761,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
         r |= cram_codec_encode(
             (*hl).codecs[DS_ENC_AP as usize],
             s,
-            &raw mut i64v as *mut c_char,
+            &raw mut i64v as *mut u8,
             1,
         );
     } else {
@@ -760,7 +769,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
         r |= cram_codec_encode(
             (*hl).codecs[DS_ENC_AP as usize],
             s,
-            &raw mut i32v as *mut c_char,
+            &raw mut i32v as *mut u8,
             1,
         );
     }
@@ -769,7 +778,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
     r |= cram_codec_encode(
         (*hl).codecs[DS_ENC_RG as usize],
         s,
-        &raw mut (*crl).rg as *mut c_char,
+        &raw mut (*crl).rg as *mut u8,
         1,
     );
 
@@ -779,14 +788,14 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
         r |= cram_codec_encode(
             (*hl).codecs[DS_ENC_MF as usize],
             s,
-            &raw mut i32v as *mut c_char,
+            &raw mut i32v as *mut u8,
             1,
         );
         // DS_NS: mate ref id
         r |= cram_codec_encode(
             (*hl).codecs[DS_ENC_NS as usize],
             s,
-            &raw mut (*crl).mate_ref_id as *mut c_char,
+            &raw mut (*crl).mate_ref_id as *mut u8,
             1,
         );
         if (*fdl).version >> 8 >= 4 {
@@ -794,14 +803,14 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
             r |= cram_codec_encode(
                 (*hl).codecs[DS_ENC_NP as usize],
                 s,
-                &raw mut (*crl).mate_pos as *mut c_char,
+                &raw mut (*crl).mate_pos as *mut u8,
                 1,
             );
             // DS_TS: tlen (64-bit)
             r |= cram_codec_encode(
                 (*hl).codecs[DS_ENC_TS as usize],
                 s,
-                &raw mut (*crl).tlen as *mut c_char,
+                &raw mut (*crl).tlen as *mut u8,
                 1,
             );
         } else {
@@ -809,14 +818,14 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
             r |= cram_codec_encode(
                 (*hl).codecs[DS_ENC_NP as usize],
                 s,
-                &raw mut i32v as *mut c_char,
+                &raw mut i32v as *mut u8,
                 1,
             );
             i32v = (*crl).tlen as i32;
             r |= cram_codec_encode(
                 (*hl).codecs[DS_ENC_TS as usize],
                 s,
-                &raw mut i32v as *mut c_char,
+                &raw mut i32v as *mut u8,
                 1,
             );
         }
@@ -825,7 +834,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
             r |= cram_codec_encode(
                 (*hl).codecs[DS_ENC_NF as usize],
                 s,
-                &raw mut (*crl).mate_line as *mut c_char,
+                &raw mut (*crl).mate_line as *mut u8,
                 1,
             );
         }
@@ -833,7 +842,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
             r |= cram_codec_encode(
                 (*hl).codecs[DS_ENC_TS as usize],
                 s,
-                &raw mut (*crl).tlen as *mut c_char,
+                &raw mut (*crl).tlen as *mut u8,
                 1,
             );
         }
@@ -845,7 +854,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
         r |= cram_codec_encode(
             (*hl).codecs[DS_ENC_TC as usize],
             s,
-            &raw mut uc as *mut c_char,
+            &raw mut uc as *mut u8,
             1,
         );
         let mut jj: i32 = 0;
@@ -854,7 +863,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
             r |= cram_codec_encode(
                 (*hl).codecs[DS_TN as usize],
                 s,
-                &raw mut tn_v as *mut c_char,
+                &raw mut tn_v as *mut u8,
                 1,
             );
             jj += 1;
@@ -864,7 +873,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
         r |= cram_codec_encode(
             (*hl).codecs[DS_ENC_TL as usize],
             s,
-            &raw mut (*crl).tl as *mut c_char,
+            &raw mut (*crl).tl as *mut u8,
             1,
         );
     }
@@ -876,7 +885,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
         r |= cram_codec_encode(
             (*hl).codecs[DS_ENC_FN as usize],
             s,
-            &raw mut (*crl).nfeature as *mut c_char,
+            &raw mut (*crl).nfeature as *mut u8,
             1,
         );
         let mut j_feat: u32 = 0;
@@ -891,14 +900,14 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
             r |= cram_codec_encode(
                 (*hl).codecs[DS_ENC_FC as usize],
                 s,
-                &raw mut uc as *mut c_char,
+                &raw mut uc as *mut u8,
                 1,
             );
             i32v = ((*fx).pos - prev_pos) as i32;
             r |= cram_codec_encode(
                 (*hl).codecs[DS_ENC_FP as usize],
                 s,
-                &raw mut i32v as *mut c_char,
+                &raw mut i32v as *mut u8,
                 1,
             );
             prev_pos = (*fx).pos;
@@ -909,7 +918,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
                     r |= cram_codec_encode(
                         (*hl).codecs[DS_ENC_BS as usize],
                         s,
-                        &raw mut uc as *mut c_char,
+                        &raw mut uc as *mut u8,
                         1,
                     );
                 }
@@ -920,7 +929,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
                     r |= cram_codec_encode(
                         (*hl).codecs[DS_ENC_BA as usize],
                         s,
-                        &raw mut uc as *mut c_char,
+                        &raw mut uc as *mut u8,
                         1,
                     );
                 }
@@ -931,7 +940,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
                     r |= cram_codec_encode(
                         (*hl).codecs[DS_ENC_DL as usize],
                         s,
-                        &raw mut i32v as *mut c_char,
+                        &raw mut i32v as *mut u8,
                         1,
                     );
                 }
@@ -942,7 +951,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
                     r |= cram_codec_encode(
                         (*hl).codecs[DS_ENC_BA as usize],
                         s,
-                        &raw mut uc as *mut c_char,
+                        &raw mut uc as *mut u8,
                         1,
                     );
                 }
@@ -953,7 +962,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
                     r |= cram_codec_encode(
                         (*hl).codecs[DS_ENC_BB as usize],
                         s,
-                        seqs_data.offset((*fbb).seq_idx as isize).cast::<i8>(),
+                        seqs_data.offset((*fbb).seq_idx as isize),
                         (*fbb).len,
                     );
                 }
@@ -968,7 +977,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
                     r |= cram_codec_encode(
                         (*hl).codecs[DS_ENC_RS as usize],
                         s,
-                        &raw mut i32v as *mut c_char,
+                        &raw mut i32v as *mut u8,
                         1,
                     );
                 }
@@ -979,7 +988,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
                     r |= cram_codec_encode(
                         (*hl).codecs[DS_ENC_PD as usize],
                         s,
-                        &raw mut i32v as *mut c_char,
+                        &raw mut i32v as *mut u8,
                         1,
                     );
                 }
@@ -990,7 +999,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
                     r |= cram_codec_encode(
                         (*hl).codecs[DS_ENC_HC as usize],
                         s,
-                        &raw mut i32v as *mut c_char,
+                        &raw mut i32v as *mut u8,
                         1,
                     );
                 }
@@ -1009,7 +1018,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
         r |= cram_codec_encode(
             (*hl).codecs[DS_ENC_MQ as usize],
             s,
-            &raw mut (*crl).mqual as *mut c_char,
+            &raw mut (*crl).mqual as *mut u8,
             1,
         );
     } else {
@@ -1019,7 +1028,7 @@ pub unsafe fn cram_cram_encode_c_573_cram_encode_slice_read(
             .cast::<u8>()
             .offset((*crl).seq as isize);
         if (*crl).len != 0 {
-            r |= cram_codec_encode((*hl).codecs[DS_ENC_BA as usize], s, seq.cast::<c_char>(), (*crl).len);
+            r |= cram_codec_encode((*hl).codecs[DS_ENC_BA as usize], s, seq, (*crl).len);
         }
     }
 
@@ -1140,7 +1149,7 @@ pub unsafe fn cram_cram_encode_c_804_cram_compress_slice(
         }
     }
 
-    crate::htslib_rs::c_compat::pthread_mutex_lock(&raw mut (*fdl).metrics_lock);
+    libc::pthread_mutex_lock(&raw mut (*fdl).metrics_lock);
     let mut i: i32 = 0;
     while i < DS_ENC_END {
         if !(*cl).stats[i as usize].is_none() && (*cl).stats[i as usize].as_ref().unwrap().nvals > 16 {
@@ -1148,7 +1157,7 @@ pub unsafe fn cram_cram_encode_c_804_cram_compress_slice(
         }
         i += 1;
     }
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).metrics_lock);
+    libc::pthread_mutex_unlock(&raw mut (*fdl).metrics_lock);
 
     // DS_IN: insertion sequences
     if cram_cram_io_c_2317_cram_compress_block2(
@@ -1453,12 +1462,12 @@ pub unsafe fn cram_cram_encode_c_1097_cram_encode_slice(
         0
     };
     (*sll).block = calloc(
-        (DS_ENC_END + ntags * 2) as u64,
-        std::mem::size_of::<*mut cram_block_layout>() as u64,
+        (DS_ENC_END + ntags * 2) as usize,
+        std::mem::size_of::<*mut cram_block_layout>(),
     )
     .cast::<*mut cram_block_layout>();
     (*(*sll).hdr).block_content_ids =
-        malloc((DS_ENC_END as u64).wrapping_mul(std::mem::size_of::<i32>() as u64)).cast::<i32>();
+        malloc((DS_ENC_END as usize).wrapping_mul(std::mem::size_of::<i32>())).cast::<i32>();
     if (*sll).block.is_null() || (*(*sll).hdr).block_content_ids.is_null() {
         return -1;
     }
@@ -1490,7 +1499,7 @@ pub unsafe fn cram_cram_encode_c_1097_cram_encode_slice(
         let ref_off = ((*(*sll).hdr).ref_seq_start - (*cl).ref_start) as isize;
         if cram_cram_io_h_248_block_append(
             blk,
-            (*cl).ref_.offset(ref_off).cast::<c_void>(),
+            (*cl).ref_.offset(ref_off).cast::<()>(),
             (*(*sll).hdr).ref_seq_span as usize,
         ) < 0
         {
@@ -1597,8 +1606,8 @@ pub unsafe fn cram_cram_encode_c_1097_cram_encode_slice(
 
     // Compact the block list: drop empty blocks, fill block_content_ids, update num_blocks.
     (*(*sll).hdr).block_content_ids = realloc(
-        (*(*sll).hdr).block_content_ids.cast::<c_void>(),
-        ((*(*sll).hdr).num_blocks as u64).wrapping_mul(std::mem::size_of::<i32>() as u64),
+        (*(*sll).hdr).block_content_ids.cast::<libc::c_void>(),
+        ((*(*sll).hdr).num_blocks as usize).wrapping_mul(std::mem::size_of::<i32>()),
     )
     .cast::<i32>();
     if (*(*sll).hdr).block_content_ids.is_null() {
@@ -1670,7 +1679,7 @@ pub unsafe fn cram_cram_encode_c_1508_extend_ref(
     {
         return -2;
     }
-    let tmp = realloc((*ref_0).cast::<c_void>(), (new_end - ref_start + 1) as u64).cast::<u8>();
+    let tmp = realloc((*ref_0).cast::<libc::c_void>(), (new_end - ref_start + 1) as usize).cast::<u8>();
     if tmp.is_null() {
         return -1;
     }
@@ -1758,8 +1767,8 @@ pub unsafe fn cram_cram_encode_c_1557_cram_add_to_ref_MD(
         if (*md).is_ascii_digit() {
             let mut overflow: i32 = 0;
             let mut len: i32 = crate::htslib_rs::hts::hts_str2uint(
-                md.cast::<c_char>(),
-                (&raw mut md).cast::<*mut c_char>(),
+                md,
+                (&raw mut md).cast::<*mut u8>(),
                 31,
                 &raw mut overflow,
             ) as i32;
@@ -2054,7 +2063,7 @@ pub unsafe fn cram_cram_encode_c_1737_cram_generate_reference(
         r2 += 1;
     }
     if failed {
-        free(ref_buf.cast::<c_void>());
+        free(ref_buf.cast::<libc::c_void>());
         return -1;
     }
     // Resolve unspecified bases by majority-vote in the histogram.
@@ -2075,7 +2084,7 @@ pub unsafe fn cram_cram_encode_c_1737_cram_generate_reference(
         }
         i += 1;
     }
-    (*cl).ref_ = ref_buf.cast::<c_char>();
+    (*cl).ref_ = ref_buf;
     (*cl).ref_start = ref_start + 1;
     (*cl).ref_end = ref_end + 1;
     (*cl).ref_free = 1;
@@ -2181,7 +2190,7 @@ pub unsafe fn cram_cram_encode_c_1344_lossy_read_names(
 
     // Allocate a kh_m_s2u64 (FNV1a-hashed const-char* -> uint64_t).
     let names =
-        calloc(1, std::mem::size_of::<kh_m_s2u64_layout>() as u64).cast::<kh_m_s2u64_layout>();
+        calloc(1, std::mem::size_of::<kh_m_s2u64_layout>()).cast::<kh_m_s2u64_layout>();
     if names.is_null() {
         return -1;
     }
@@ -2197,7 +2206,7 @@ pub unsafe fn cram_cram_encode_c_1344_lossy_read_names(
         let e: u64 = cram_cram_encode_c_1301_expected_template_count(b) as u64;
         // Pack u.counts.e (low 32 bits) | u.counts.c (high 32 bits).
         let u_initial: u64 = (e as u32 as u64) | ((1u32 as u64) << 32);
-        let k = kh_put_m_s2u64(names, (*b).data.as_ptr().cast::<c_char>(), &raw mut n);
+        let k = kh_put_m_s2u64(names, (*b).data.as_ptr(), &raw mut n);
         if n == -1 {
             hash_fail = true;
             break;
@@ -2233,7 +2242,7 @@ pub unsafe fn cram_cram_encode_c_1344_lossy_read_names(
         while r2 < (*(*sl).hdr).num_records {
             let cr = (*sl).crecs.offset(r2 as isize);
             let b = *(*cl).bams.offset(r1 as isize);
-            let k = kh_get_m_s2u64(names, (*b).data.as_ptr().cast::<c_char>());
+            let k = kh_get_m_s2u64(names, (*b).data.as_ptr());
             if k == (*names).n_buckets {
                 ok = false;
                 break;
@@ -2281,7 +2290,7 @@ pub unsafe fn cram_cram_encode_c_1437_add_read_names(
                 let nul: u8 = 0;
                 if cram_cram_io_h_248_block_append(
                     (*sl).name_blk.cast::<cram_block>(),
-                    (&raw const nul).cast::<c_void>(),
+                    (&raw const nul).cast::<()>(),
                     1,
                 ) < 0
                 {
@@ -2292,7 +2301,7 @@ pub unsafe fn cram_cram_encode_c_1437_add_read_names(
                 let nlen = (*b).core.l_qname as i32 - (*b).core.l_extranul as i32;
                 if cram_cram_io_h_248_block_append(
                     (*sl).name_blk.cast::<cram_block>(),
-                    (*b).data.as_ptr().cast::<c_void>(),
+                    (*b).data.as_ptr().cast::<()>(),
                     nlen as usize,
                 ) < 0
                 {
@@ -2333,8 +2342,8 @@ unsafe fn cram_encode_add_feature(
             1024
         };
         sl.features = realloc(
-            sl.features.cast::<c_void>(),
-            (sl.afeatures as u64).wrapping_mul(std::mem::size_of::<cram_feature_layout>() as u64),
+            sl.features.cast::<libc::c_void>(),
+            (sl.afeatures as usize).wrapping_mul(std::mem::size_of::<cram_feature_layout>()),
         )
         .cast::<cram_feature_layout>();
         if sl.features.is_null() {
@@ -2568,7 +2577,7 @@ pub(crate) unsafe fn cram_cram_encode_c_2687_cram_add_softclip(
             (*fs).seq_idx = (*(*sl).base_blk).byte as i32;
             cram_cram_io_h_248_block_append(
                 (*sl).base_blk.cast::<cram_block>(),
-                base.cast::<c_void>(),
+                base.cast::<()>(),
                 len as usize,
             ) >= 0
                 && cram_cram_io_h_261_block_append_char((*sl).base_blk.cast::<cram_block>(), 0) >= 0
@@ -2579,7 +2588,7 @@ pub(crate) unsafe fn cram_cram_encode_c_2687_cram_add_softclip(
             if !base.is_null() {
                 if cram_cram_io_h_248_block_append(
                     (*sl).soft_blk.cast::<cram_block>(),
-                    base.cast::<c_void>(),
+                    base.cast::<()>(),
                     len as usize,
                 ) < 0
                 {
@@ -2733,7 +2742,7 @@ pub(crate) unsafe fn cram_cram_encode_c_2753_cram_add_insertion(
         if !base.is_null() {
             if cram_cram_io_h_248_block_append(
                 (*sl).base_blk.cast::<cram_block>(),
-                base.cast::<c_void>(),
+                base.cast::<()>(),
                 len as usize,
             ) < 0
             {
@@ -3009,7 +3018,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                 }
             }
         }
-        if cram_cram_io_h_248_block_append(td_b, aux as *const c_void, 3) < 0 {
+        if cram_cram_io_h_248_block_append(td_b, aux as *const (), 3) < 0 {
             current_block = 9865445363914956224;
             break;
         }
@@ -3027,11 +3036,11 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
         }
         let k_global: u32;
         if r == 1 {
-            crate::htslib_rs::c_compat::pthread_mutex_lock(&raw mut (*fdl).metrics_lock);
+            libc::pthread_mutex_lock(&raw mut (*fdl).metrics_lock);
             let metrics_h = (*fdl).tags_used.cast::<kh_m_metrics_layout>();
             k_global = kh_put_m_metrics(metrics_h, key_0 as u32, &raw mut r);
             if -1 == r {
-                crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).metrics_lock);
+                libc::pthread_mutex_unlock(&raw mut (*fdl).metrics_lock);
                 current_block = 9865445363914956224;
                 break;
             } else {
@@ -3040,18 +3049,18 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                         cram_cram_io_c_2327_cram_new_metrics().cast();
                     if (*(*metrics_h).vals.offset(k_global as isize)).is_null() {
                         kh_del_m_metrics(metrics_h, k_global);
-                        crate::htslib_rs::c_compat::pthread_mutex_unlock(
+                        libc::pthread_mutex_unlock(
                             &raw mut (*fdl).metrics_lock,
                         );
                         current_block = 9865445363914956224;
                         break;
                     }
                 }
-                crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).metrics_lock);
+                libc::pthread_mutex_unlock(&raw mut (*fdl).metrics_lock);
                 let mut i2: [i32; 2] = [b'\t' as i32, key_0];
                 let sk: usize = key_0 as usize;
                 let m: *mut cram_tag_map_layout =
-                    calloc(1, std::mem::size_of::<cram_tag_map_layout>() as u64)
+                    calloc(1, std::mem::size_of::<cram_tag_map_layout>())
                         .cast::<cram_tag_map_layout>();
                 if m.is_null() {
                     current_block = 9865445363914956224;
@@ -3098,7 +3107,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                         cram_cram_stats_c_52_cram_stats_add(&mut st, 1);
                         cram_cram_stats_c_134_cram_stats_encoding(&*fdl, &mut st);
                         e.val_encoding = E_EXTERNAL;
-                        e.val_dat = sk as *mut c_void;
+                        e.val_dat = sk as *mut ();
                         c_0 = cram_cram_codecs_c_3928_cram_encoder_init(
                             E_BYTE_ARRAY_LEN,
                             Some(&mut st),
@@ -3136,7 +3145,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                         cram_cram_stats_c_52_cram_stats_add(&mut st_0, 2);
                         cram_cram_stats_c_134_cram_stats_encoding(&*fdl, &mut st_0);
                         e_0.val_encoding = E_EXTERNAL;
-                        e_0.val_dat = sk as *mut c_void;
+                        e_0.val_dat = sk as *mut ();
                         c_0 = cram_cram_codecs_c_3928_cram_encoder_init(
                             E_BYTE_ARRAY_LEN,
                             Some(&mut st_0),
@@ -3174,7 +3183,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                         cram_cram_stats_c_52_cram_stats_add(&mut st_1, 4);
                         cram_cram_stats_c_134_cram_stats_encoding(&*fdl, &mut st_1);
                         e_1.val_encoding = E_EXTERNAL;
-                        e_1.val_dat = sk as *mut c_void;
+                        e_1.val_dat = sk as *mut ();
                         c_0 = cram_cram_codecs_c_3928_cram_encoder_init(
                             E_BYTE_ARRAY_LEN,
                             Some(&mut st_1),
@@ -3199,9 +3208,9 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                         } else {
                             E_EXTERNAL
                         };
-                        e_2.len_dat = sk as *mut c_void;
+                        e_2.len_dat = sk as *mut ();
                         e_2.val_encoding = E_EXTERNAL;
-                        e_2.val_dat = sk as *mut c_void;
+                        e_2.val_dat = sk as *mut ();
                         c_0 = cram_cram_codecs_c_3928_cram_encoder_init(
                             E_BYTE_ARRAY_LEN,
                             None,
@@ -3226,13 +3235,13 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                     break;
                 }
                 (*m).codec = c_0;
-                crate::htslib_rs::c_compat::pthread_mutex_lock(&raw mut (*fdl).metrics_lock);
+                libc::pthread_mutex_lock(&raw mut (*fdl).metrics_lock);
                 (*m).m = if k_global != 0 {
                     *(*metrics_h).vals.offset(k_global as isize)
                 } else {
                     std::ptr::null_mut()
                 };
-                crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).metrics_lock);
+                libc::pthread_mutex_unlock(&raw mut (*fdl).metrics_lock);
             }
         }
         let tm: *mut cram_tag_map_layout = *(*tagmap).vals.offset(k as isize);
@@ -3292,7 +3301,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                     .out = (*tm).blk.cast();
                 }
                 aux = aux.offset(3);
-                if cram_cram_io_h_248_block_append((*tm).blk, aux as *const c_void, 2) < 0 {
+                if cram_cram_io_h_248_block_append((*tm).blk, aux as *const (), 2) < 0 {
                     current_block = 9865445363914956224;
                     break;
                 }
@@ -3318,7 +3327,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                     .out = (*tm).blk.cast();
                 }
                 aux = aux.offset(3);
-                if cram_cram_io_h_248_block_append((*tm).blk, aux as *const c_void, 4) < 0 {
+                if cram_cram_io_h_248_block_append((*tm).blk, aux as *const (), 4) < 0 {
                     current_block = 9865445363914956224;
                     break;
                 }
@@ -3344,7 +3353,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                     .out = (*tm).blk.cast();
                 }
                 aux = aux.offset(3);
-                if cram_cram_io_h_248_block_append((*tm).blk, aux as *const c_void, 8) < 0 {
+                if cram_cram_io_h_248_block_append((*tm).blk, aux as *const (), 8) < 0 {
                     current_block = 9865445363914956224;
                     break;
                 }
@@ -3388,7 +3397,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                             .cast::<cram_codec_external_layout>()))
                         .encode,
                     );
-                    if encode(s, codec.cast(), aux_s.cast::<c_char>(), aux.offset_from(aux_s) as i32) < 0 {
+                    if encode(s, codec.cast(), aux_s, aux.offset_from(aux_s) as i32) < 0 {
                         current_block = 9865445363914956224;
                         break;
                     }
@@ -3472,7 +3481,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                 }
                 let encode: CramCodecEncodeFn =
                     cram_fn((*(codec.cast::<cram_codec_external_layout>())).encode);
-                if encode(s, codec.cast(), aux.cast::<c_char>(), blen as i32) < 0 {
+                if encode(s, codec.cast(), aux, blen as i32) < 0 {
                     current_block = 9865445363914956224;
                     break;
                 }
@@ -3495,7 +3504,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
             .data
             .add(TD_blk_size as usize) as *mut u8;
         let td_hash = (*(*cl).comp_hdr).td_hash.cast::<kh_m_s2i_layout>();
-        k = kh_put_m_s2i(td_hash, key_ptr as *const c_char, &raw mut new_);
+        k = kh_put_m_s2i(td_hash, key_ptr as *const u8, &raw mut new_);
         if new_ >= 0 {
             let mut td_ok = true;
             if new_ == 0 {
@@ -3519,7 +3528,7 @@ pub unsafe fn cram_cram_encode_c_2788_cram_encode_aux(
                 if pooled_key.is_null() {
                     td_ok = false;
                 } else {
-                    *(*td_hash).keys.offset(k as isize) = pooled_key as *const c_char;
+                    *(*td_hash).keys.offset(k as isize) = pooled_key as *const u8;
                     *(*td_hash).vals.offset(k as isize) = (*(*cl).comp_hdr).ntl;
                     (*(*cl).comp_hdr).ntl += 1;
                 }
@@ -3736,8 +3745,8 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
                 1024
             };
             (*sl).cigar = realloc(
-                (*sl).cigar.cast::<c_void>(),
-                (*sl).cigar_alloc as u64 * std::mem::size_of::<u32>() as u64,
+                (*sl).cigar.cast::<libc::c_void>(),
+                (*sl).cigar_alloc as usize * std::mem::size_of::<u32>(),
             )
             .cast::<u32>();
             if (*sl).cigar.is_null() {
@@ -4211,7 +4220,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
             let pair_h = (*sl).pair[sec].cast::<kh_m_s2i_layout>();
             let qname = (*b).data.as_ptr() as *const u8;
             new_ = 0;
-            k = kh_put_m_s2i(pair_h, qname.cast::<c_char>(), &raw mut new_);
+            k = kh_put_m_s2i(pair_h, qname, &raw mut new_);
             if new_ == -1 {
                 return -1;
             } else if new_ > 0 {
@@ -4230,7 +4239,7 @@ pub unsafe fn cram_cram_encode_c_3389_process_one_read(
                 if key.is_null() {
                     return -1;
                 }
-                *(*pair_h).keys.add(k as usize) = key.cast::<c_char>();
+                *(*pair_h).keys.add(k as usize) = key;
                 let r1_bit = ((((*crl).flags & BAM_FREAD1) != 0) as i32) << 30;
                 let r2_bit = ((((*crl).flags & BAM_FREAD2) != 0) as i32) << 31;
                 *(*pair_h).vals.add(k as usize) = rnum | r1_bit | r2_bit;
@@ -4593,7 +4602,7 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
     }
 
     // Don't try embed ref if we repeatedly fail.
-    crate::htslib_rs::c_compat::pthread_mutex_lock(&raw mut (*fdl).ref_lock);
+    libc::pthread_mutex_lock(&raw mut (*fdl).ref_lock);
     let mut failed_embed: i32 = ((*fdl).no_ref_counter >= 5) as i32;
     if failed_embed == 0 && (*cl).embed_ref == -2 && (*cl).ref_id >= 0 {
         hts_log_cstr(
@@ -4614,15 +4623,15 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
         (*cl).embed_ref = 0;
         (*fdl).embed_ref = 0;
     }
-    crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).ref_lock);
+    libc::pthread_mutex_unlock(&raw mut (*fdl).ref_lock);
 
     // Outer `restart:` label is mirrored as a labeled loop. On failure paths
     // that should `goto err` we return -1 immediately. Paths that `continue`
     // the restart loop use `continue 'restart`.
     'restart: loop {
-        crate::htslib_rs::c_compat::pthread_mutex_lock(&raw mut (*fdl).ref_lock);
+        libc::pthread_mutex_lock(&raw mut (*fdl).ref_lock);
         nref = (*(*fdl).refs).nref;
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).ref_lock);
+        libc::pthread_mutex_unlock(&raw mut (*fdl).ref_lock);
         embed_ref = (*cl).embed_ref;
         no_ref = (*cl).no_ref;
 
@@ -4647,12 +4656,12 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                             b"cram_encode_container",
                             b"Switching to non-ref mode",
                         );
-                        crate::htslib_rs::c_compat::pthread_mutex_lock(&raw mut (*fdl).ref_lock);
+                        libc::pthread_mutex_lock(&raw mut (*fdl).ref_lock);
                         (*fdl).embed_ref = 0;
                         (*cl).embed_ref = 0;
                         (*fdl).no_ref = 1;
                         (*cl).no_ref = 1;
-                        crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).ref_lock);
+                        libc::pthread_mutex_unlock(&raw mut (*fdl).ref_lock);
                         continue 'restart;
                     }
                     if (*cl).multi_seq != 0 || embed_ref == 0 {
@@ -4680,11 +4689,11 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                             b"NOTE: the CRAM file will be bigger than using an external reference",
                         );
                     }
-                    crate::htslib_rs::c_compat::pthread_mutex_lock(&raw mut (*fdl).ref_lock);
+                    libc::pthread_mutex_lock(&raw mut (*fdl).ref_lock);
                     (*fdl).embed_ref = 2;
                     (*cl).embed_ref = 2;
                     embed_ref = 2;
-                    crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).ref_lock);
+                    libc::pthread_mutex_unlock(&raw mut (*fdl).ref_lock);
                     do_auto_ref = true;
                 } else {
                     if !ref_0.is_null()
@@ -4697,7 +4706,7 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                         (*cl).ref_seq_id = (*cl).ref_id;
                         let entry = *(*(*fdl).refs).ref_id.offset((*cl).ref_seq_id as isize);
                         // ref_ is a borrow into the entry's owned seq buffer (ref_free=0).
-                        (*cl).ref_ = (*entry).seq.as_ptr() as *mut c_char;
+                        (*cl).ref_ = (*entry).seq.as_ptr() as *mut u8;
                         (*cl).ref_start = 1;
                         (*cl).ref_end = (*entry).length;
                     }
@@ -4792,21 +4801,21 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                             b"Failed to build reference, switching to non-ref mode",
                         );
                     }
-                    crate::htslib_rs::c_compat::pthread_mutex_lock(&raw mut (*fdl).ref_lock);
+                    libc::pthread_mutex_lock(&raw mut (*fdl).ref_lock);
                     (*fdl).embed_ref = -2;
                     (*cl).embed_ref = -2;
                     (*fdl).no_ref = 1;
                     (*cl).no_ref = 1;
                     (*fdl).no_ref_counter += 1;
-                    crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).ref_lock);
+                    libc::pthread_mutex_unlock(&raw mut (*fdl).ref_lock);
                     failed_embed = 1;
                     let _ = failed_embed;
                     continue_restart = true;
                     break;
                 } else {
-                    crate::htslib_rs::c_compat::pthread_mutex_lock(&raw mut (*fdl).ref_lock);
+                    libc::pthread_mutex_lock(&raw mut (*fdl).ref_lock);
                     (*fdl).no_ref_counter -= ((*fdl).no_ref_counter > 0) as i32;
-                    crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).ref_lock);
+                    libc::pthread_mutex_unlock(&raw mut (*fdl).ref_lock);
                 }
                 let entry = *(*(*fdl).refs).ref_id.offset((*cl).ref_id as isize);
                 let rlen: i64 = if (*entry).ln_length > (*entry).length {
@@ -4852,7 +4861,7 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
                         return -1;
                     }
                     // ref_ is a borrow into the entry's owned seq buffer (ref_free=0).
-                    (*cl).ref_ = (*entry).seq.as_ptr() as *mut c_char;
+                    (*cl).ref_ = (*entry).seq.as_ptr() as *mut u8;
                     (*cl).ref_start = 1;
                     (*cl).ref_end = (*entry).length;
                 }
@@ -4911,8 +4920,8 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
             if !(*cl).tags_used.is_null() && (*(*cl).tags_used).n_occupied != 0 {
                 let ntags: i32 = (*(*cl).tags_used).n_occupied as i32;
                 (*sl_layout).aux_block = calloc(
-                    (ntags as u64).wrapping_mul(2),
-                    std::mem::size_of::<*mut cram_block_layout>() as u64,
+                    (ntags as usize).wrapping_mul(2),
+                    std::mem::size_of::<*mut cram_block_layout>(),
                 )
                 .cast::<*mut cram_block_layout>();
                 if (*sl_layout).aux_block.is_null() {
@@ -4965,23 +4974,23 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
 
         // Link our bams[] array onto the spare bam list for reuse.
         let spares =
-            malloc(std::mem::size_of::<spare_bams_layout>() as u64).cast::<spare_bams_layout>();
+            malloc(std::mem::size_of::<spare_bams_layout>()).cast::<spare_bams_layout>();
         if spares.is_null() {
             return -1;
         }
-        crate::htslib_rs::c_compat::pthread_mutex_lock(&raw mut (*fdl).bam_list_lock);
+        libc::pthread_mutex_lock(&raw mut (*fdl).bam_list_lock);
         (*spares).bams = (*cl).bams;
         (*spares).next = (*fdl).bl.cast::<spare_bams_layout>();
-        (*fdl).bl = spares.cast::<c_void>();
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).bam_list_lock);
+        (*fdl).bl = spares.cast::<()>();
+        libc::pthread_mutex_unlock(&raw mut (*fdl).bam_list_lock);
         (*cl).bams = std::ptr::null_mut();
 
         // Detect if a multi-seq container.
         cram_cram_stats_c_134_cram_stats_encoding(&*fdl, (*cl).stats[DS_RI].as_deref_mut().unwrap());
         multi_ref = ((*cl).stats[DS_RI].as_ref().unwrap().nvals > 1) as i32;
-        crate::htslib_rs::c_compat::pthread_mutex_lock(&raw mut (*fdl).metrics_lock);
+        libc::pthread_mutex_lock(&raw mut (*fdl).metrics_lock);
         (*fdl).last_ri_count = (*cl).stats[DS_RI].as_ref().unwrap().nvals;
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(&raw mut (*fdl).metrics_lock);
+        libc::pthread_mutex_unlock(&raw mut (*fdl).metrics_lock);
 
         if multi_ref != 0 {
             hts_log_cstr(
@@ -5527,7 +5536,7 @@ pub unsafe fn cram_cram_encode_c_1850_cram_encode_container(
         // Compute landmarks.
         (*cl).num_landmarks = (*cl).curr_slice;
         (*cl).landmark =
-            malloc((std::mem::size_of::<i32>() as u64).wrapping_mul((*cl).num_landmarks as u64))
+            malloc((std::mem::size_of::<i32>()).wrapping_mul((*cl).num_landmarks as usize))
                 .cast::<i32>();
         if (*cl).landmark.is_null() {
             return -1;
@@ -5645,48 +5654,48 @@ pub unsafe fn cram_cram_encode_c_1253_bam_aux2i_end(
     match type_ {
         b'c' => {
             if aux_end.offset_from(aux) < 1 {
-                *__errno_location() = EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 return 0;
             }
             *(aux.cast::<i8>()) as i32
         }
         b'C' => {
             if aux_end.offset_from(aux) < 1 {
-                *__errno_location() = EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 return 0;
             }
             *aux as i32
         }
         b's' => {
             if aux_end.offset_from(aux) < 2 {
-                *__errno_location() = EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 return 0;
             }
             i16::from_le_bytes([*aux, *aux.add(1)]) as i32
         }
         b'S' => {
             if aux_end.offset_from(aux) < 2 {
-                *__errno_location() = EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 return 0;
             }
             u16::from_le_bytes([*aux, *aux.add(1)]) as i32
         }
         b'i' => {
             if aux_end.offset_from(aux) < 4 {
-                *__errno_location() = EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 return 0;
             }
             i32::from_le_bytes([*aux, *aux.add(1), *aux.add(2), *aux.add(3)]) as i32
         }
         b'I' => {
             if aux_end.offset_from(aux) < 4 {
-                *__errno_location() = EINVAL;
+                *libc::__errno_location() = libc::EINVAL;
                 return 0;
             }
             u32::from_le_bytes([*aux, *aux.add(1), *aux.add(2), *aux.add(3)]) as i32
         }
         _ => {
-            *__errno_location() = EINVAL;
+            *libc::__errno_location() = libc::EINVAL;
             0
         }
     }
@@ -5791,10 +5800,10 @@ pub unsafe fn cram_cram_encode_c_4049_cram_put_bam_seq(fd: *mut cram_fd, b: *mut
         }
         (*fdl).ctr = new_ctr.cast();
         (*(*fdl).ctr).record_counter = (*fdl).record_counter;
-        crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).ref_lock);
+        libc::pthread_mutex_lock(&mut (*fdl).ref_lock);
         (*(*fdl).ctr).no_ref = (*fdl).no_ref;
         (*(*fdl).ctr).embed_ref = (*fdl).embed_ref;
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+        libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
     }
     let mut c = (*fdl).ctr;
     let embed_ref = (*c).embed_ref;
@@ -5820,11 +5829,11 @@ pub unsafe fn cram_cram_encode_c_4049_cram_put_bam_seq(fd: *mut cram_fd, b: *mut
         {
             multi_seq = 1;
         } else if (*fdl).multi_seq == 1 {
-            crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).metrics_lock);
+            libc::pthread_mutex_lock(&mut (*fdl).metrics_lock);
             if (*fdl).last_ri_count <= (*c).max_slice && (*fdl).multi_seq_user != 1 {
                 multi_seq = 0;
             }
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
+            libc::pthread_mutex_unlock(&mut (*fdl).metrics_lock);
         }
         let slice_rec = (*c).slice_rec;
         let curr_rec_snapshot = (*c).curr_rec;
@@ -5850,23 +5859,20 @@ pub unsafe fn cram_cram_encode_c_4049_cram_put_bam_seq(fd: *mut cram_fd, b: *mut
             (*fdl).multi_seq = 1;
             (*c).multi_seq = 1;
             (*c).pos_sorted = 0;
-            crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).ref_lock);
+            libc::pthread_mutex_lock(&mut (*fdl).ref_lock);
             if (*fdl).embed_ref > 0 && (*c).curr_rec == 0 && (*c).curr_slice == 0 {
                 (*fdl).embed_ref = 0;
                 (*c).embed_ref = (*fdl).embed_ref;
                 (*fdl).no_ref = 1;
                 (*c).no_ref = (*fdl).no_ref;
             }
-            crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+            libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
             if (*c).refs_used.is_null() {
-                crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).ref_lock);
+                libc::pthread_mutex_lock(&mut (*fdl).ref_lock);
                 let nref = (*(*fdl).refs.cast::<refs_t_layout>()).nref;
-                (*c).refs_used = crate::htslib_rs::c_compat::calloc(
-                    nref as u64,
-                    std::mem::size_of::<i32>() as u64,
-                )
+                (*c).refs_used = calloc(nref as usize, std::mem::size_of::<i32>())
                 .cast();
-                crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+                libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
                 if (*c).refs_used.is_null() {
                     return -1;
                 }
@@ -5882,22 +5888,19 @@ pub unsafe fn cram_cram_encode_c_4049_cram_put_bam_seq(fd: *mut cram_fd, b: *mut
             && multi_seq != 0
         {
             if (*c).refs_used.is_null() {
-                crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).ref_lock);
+                libc::pthread_mutex_lock(&mut (*fdl).ref_lock);
                 let nref = (*(*fdl).refs.cast::<refs_t_layout>()).nref;
-                (*c).refs_used = crate::htslib_rs::c_compat::calloc(
-                    nref as u64,
-                    std::mem::size_of::<i32>() as u64,
-                )
+                (*c).refs_used = calloc(nref as usize, std::mem::size_of::<i32>())
                 .cast();
-                crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+                libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
                 if (*c).refs_used.is_null() {
                     return -1;
                 }
             } else if !(*c).refs_used.is_null() && *(*c).refs_used.add(core_tid as usize) != 0 {
-                crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).ref_lock);
+                libc::pthread_mutex_lock(&mut (*fdl).ref_lock);
                 (*fdl).unsorted = 1;
                 (*fdl).multi_seq = 1;
-                crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).ref_lock);
+                libc::pthread_mutex_unlock(&mut (*fdl).ref_lock);
             }
         }
         (*c).curr_ref = core_tid;
@@ -5907,24 +5910,24 @@ pub unsafe fn cram_cram_encode_c_4049_cram_put_bam_seq(fd: *mut cram_fd, b: *mut
     }
 
     if (*c).bams.is_null() {
-        crate::htslib_rs::c_compat::pthread_mutex_lock(&mut (*fdl).bam_list_lock);
+        libc::pthread_mutex_lock(&mut (*fdl).bam_list_lock);
         if !(*fdl).bl.is_null() {
             let spare = (*fdl).bl.cast::<spare_bams_layout>();
             (*c).bams = (*spare).bams;
             (*fdl).bl = (*spare).next.cast();
-            crate::htslib_rs::c_compat::free(spare.cast());
+            free(spare.cast());
         } else {
-            (*c).bams = crate::htslib_rs::c_compat::calloc(
-                (*c).max_c_rec as u64,
-                std::mem::size_of::<*mut bam1_t>() as u64,
+            (*c).bams = calloc(
+                (*c).max_c_rec as usize,
+                std::mem::size_of::<*mut bam1_t>(),
             )
             .cast();
             if (*c).bams.is_null() {
-                crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).bam_list_lock);
+                libc::pthread_mutex_unlock(&mut (*fdl).bam_list_lock);
                 return -1;
             }
         }
-        crate::htslib_rs::c_compat::pthread_mutex_unlock(&mut (*fdl).bam_list_lock);
+        libc::pthread_mutex_unlock(&mut (*fdl).bam_list_lock);
     }
 
     let slot = (*c).bams.add((*c).curr_c_rec as usize);

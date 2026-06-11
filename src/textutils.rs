@@ -671,7 +671,7 @@ fn hts_strprint_chunk(quote: Option<u8>, c: u8) -> Vec<u8> {
         0 => b"\\0".to_vec(),
         b'\\' => b"\\\\".to_vec(),
         c if Some(c) == quote => vec![b'\\', c],
-        c if isprint_c(c as i8) != 0 => vec![c],
+        c if isprint_c(c) != 0 => vec![c],
         c => {
             const HEX: &[u8; 16] = b"0123456789ABCDEF";
             vec![

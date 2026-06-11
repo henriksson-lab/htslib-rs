@@ -37,7 +37,7 @@ fn c_fixture(path: &str) -> Vec<u8> {
 
 unsafe fn open_bgzf_fixture(path: &str) -> *mut BGZF {
     let path = c_fixture(path);
-    let fp = bgzf_open(path.as_ptr().cast(), c"r".as_ptr());
+    let fp = bgzf_open(path.as_ptr().cast(), c"r".as_ptr().cast());
     assert!(!fp.is_null());
     fp
 }
@@ -135,7 +135,7 @@ fn lazy_flush_non_mt_writes_current_partial_block_without_closing_stream() {
     let second = b"second partial block\n";
 
     unsafe {
-        let fp = bgzf_open(out_c.as_ptr().cast(), c"w".as_ptr());
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"w".as_ptr().cast());
         assert!(!fp.is_null());
         assert_eq!(
             bgzf_write(fp, first.as_ptr().cast(), first.len()),
@@ -161,7 +161,7 @@ fn lazy_flush_non_mt_writes_current_partial_block_without_closing_stream() {
     assert_eq!(&raw[raw.len() - BGZF_EOF_MARKER.len()..], BGZF_EOF_MARKER);
 
     unsafe {
-        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr());
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr().cast());
         assert!(!fp.is_null());
         let mut observed = vec![0_u8; first.len() + second.len()];
         assert_eq!(
@@ -245,7 +245,7 @@ fn bgzip_stdout_compresses_real_sam_to_stdout_not_literal_dash_file() {
         std::fs::write(&out, &compressed).unwrap();
         let mut out_c = out.to_string_lossy().into_owned().into_bytes();
         out_c.push(0);
-        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr());
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr().cast());
         assert!(!fp.is_null());
         let mut actual = Vec::new();
         loop {
@@ -322,7 +322,7 @@ fn bgzip_thread_options_round_trip_with_synchronous_bgzf_backend() {
             let mut path_c = path.to_string_lossy().into_owned().into_bytes();
             path_c.push(0);
             unsafe {
-                let fp = bgzf_open(path_c.as_ptr().cast(), c"r".as_ptr());
+                let fp = bgzf_open(path_c.as_ptr().cast(), c"r".as_ptr().cast());
                 assert!(!fp.is_null());
                 let mut actual = vec![0_u8; expected.len()];
                 assert_eq!(
@@ -357,7 +357,7 @@ fn bgzf_open_reads_ordinary_gzip_stream_like_upstream() {
     out_c.push(0);
 
     unsafe {
-        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr());
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr().cast());
         assert!(!fp.is_null());
         assert_eq!(bgzf_compression(fp), 1);
 
@@ -395,7 +395,7 @@ fn bgzf_open_reads_concatenated_ordinary_gzip_members_like_upstream() {
     out_c.push(0);
 
     unsafe {
-        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr());
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr().cast());
         assert!(!fp.is_null());
         assert_eq!(bgzf_compression(fp), 1);
 
@@ -435,7 +435,7 @@ fn bgzf_open_reads_large_ordinary_gzip_stream_across_internal_blocks() {
     out_c.push(0);
 
     unsafe {
-        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr());
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"r".as_ptr().cast());
         assert!(!fp.is_null());
         assert_eq!(bgzf_compression(fp), 1);
 
@@ -470,7 +470,7 @@ fn bgziptest_rebgzip_reconstructs_exact_original_bgzf_stream() {
     let gzi = c_fixture("htslib/test/bgziptest.txt.gz.gzi");
 
     unsafe {
-        let fp = bgzf_open(out_c.as_ptr().cast(), c"w".as_ptr());
+        let fp = bgzf_open(out_c.as_ptr().cast(), c"w".as_ptr().cast());
         assert!(!fp.is_null());
         assert_eq!(bgzf_index_load(fp, gzi.as_ptr().cast(), std::ptr::null()), 0);
         assert_eq!(
@@ -582,7 +582,7 @@ fn real_bgzf_probes_and_eof_checks_match_original_fixture_markers() {
             let c_path = c_fixture(path);
             assert_eq!(bgzf_is_bgzf(c_path.as_ptr().cast()), 1, "{path}");
 
-            let fp = bgzf_open(c_path.as_ptr().cast(), c"r".as_ptr());
+            let fp = bgzf_open(c_path.as_ptr().cast(), c"r".as_ptr().cast());
             assert!(!fp.is_null(), "{path}");
             assert_eq!(bgzf_check_EOF(fp), 1, "{path}");
             assert_eq!(bgzf_utell(fp), 0, "{path}");

@@ -157,11 +157,11 @@ unsafe extern "C" fn hts_itr_query_adapter(
 }
 
 unsafe extern "C" fn bcf_hdr_name2id_adapter(data: *mut c_void, name: *const c_char) -> c_int {
-    vcf::bcf_hdr_name2id(data.cast(), name)
+    vcf::bcf_hdr_name2id(data.cast(), name.cast())
 }
 
 unsafe extern "C" fn bcf_hdr_id2name_adapter(data: *mut c_void, id: c_int) -> *const c_char {
-    vcf::bcf_hdr_id2name(data.cast(), id)
+    vcf::bcf_hdr_id2name(data.cast(), id).cast()
 }
 
 unsafe extern "C" fn bcf_readrec_adapter(
@@ -172,7 +172,7 @@ unsafe extern "C" fn bcf_readrec_adapter(
     beg: *mut hts_pos_t,
     end: *mut hts_pos_t,
 ) -> c_int {
-    vcf::bcf_readrec(fp, data, r, tid, beg, end)
+    vcf::bcf_readrec(fp, data.cast(), r.cast(), tid, beg, end)
 }
 
 unsafe fn bcf_itr_querys1(
@@ -442,7 +442,7 @@ unsafe fn tabix_c_206_query_regions(
             ));
         }
         let idx = vcf::bcf_index_load3(
-            fname_ptr,
+            fname_ptr.cast(),
             ptr::null(),
             if args.download_index != 0 {
                 HTS_IDX_SAVE_REMOTE
@@ -492,7 +492,7 @@ unsafe fn tabix_c_206_query_regions(
                         }
                         if regidx::regidx_c_401_regidx_overlap(
                             reg_idx,
-                            std::ffi::CStr::from_ptr(chr).to_bytes(),
+                            std::ffi::CStr::from_ptr(chr.cast()).to_bytes(),
                             (*rec).pos,
                             (*rec).pos + (*rec).rlen as hts_pos_t - 1,
                             None,
@@ -695,7 +695,7 @@ pub unsafe fn tabix_c_396_query_chroms(fname: &[u8], download: i32) -> i32 {
         }
         hts::hts_close(fp);
         let idx = vcf::bcf_index_load3(
-            fname_ptr,
+            fname_ptr.cast(),
             ptr::null(),
             if download != 0 {
                 HTS_IDX_SAVE_REMOTE
@@ -761,7 +761,7 @@ pub unsafe fn tabix_c_437_reheader_file(
         None
     };
     if (ftype & IS_TXT) != 0 || ftype == 0 {
-        let fp = bgzf::bgzf_open(fname_ptr, c"r".as_ptr());
+        let fp = bgzf::bgzf_open(fname_ptr.cast(), c"r".as_ptr().cast());
         if fp.is_null() {
             return -1;
         }
@@ -822,7 +822,7 @@ pub unsafe fn tabix_c_437_reheader_file(
         };
         let page_size = 32768usize;
         let mut buf = vec![0u8; page_size];
-        let bgzf_out = bgzf::bgzf_open(c"-".as_ptr(), c"w".as_ptr());
+        let bgzf_out = bgzf::bgzf_open(c"-".as_ptr().cast(), c"w".as_ptr().cast());
 
         if bgzf_out.is_null() {
             error_errno_message(Some("Couldn't open output stream".to_string()));
@@ -1384,7 +1384,7 @@ pub unsafe fn tabix_c_614_main(argc: i32, argv: *mut *mut c_char) -> i32 {
         0
     } else if do_csi != 0 {
         if ftype == IS_BCF {
-            if vcf::bcf_index_build3(fname_ptr, ptr::null(), min_shift, args.threads) != 0 {
+            if vcf::bcf_index_build3(fname_ptr.cast(), ptr::null(), min_shift, args.threads) != 0 {
                 error_message(format!(
                     "bcf_index_build failed: {}\n",
                     bytes_to_string(&fname)

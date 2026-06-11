@@ -744,7 +744,7 @@ pub unsafe fn cram_cram_index_c_176_cram_index_load(
         None
     };
 
-    let fp = hopen(fn_idx.cast(), c"r".as_ptr());
+    let fp = hopen(fn_idx.cast(), b"r\0".as_ptr());
     if fp.is_null() {
         let mut idx_len = 0usize;
         while *fn_idx.add(idx_len) != 0 {
@@ -1090,16 +1090,16 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
         let mut reg_save = [0usize; 6];
         let overflow = [0usize; 8];
         reg_save[0] = (SAM_RNAME | SAM_POS | SAM_CIGAR) as usize;
-        let mut args = crate::htslib_rs::c_compat::__va_list_tag {
+        let mut args = super::__va_list_tag {
             gp_offset: 0,
             fp_offset: 48,
-            overflow_arg_area: overflow.as_ptr() as *mut _,
+            overflow_arg_area: overflow.as_ptr() as *mut () as *mut _,
             reg_save_area: reg_save.as_mut_ptr().cast(),
         };
         cram_cram_io_c_5692_cram_set_voption(
             (fdl as *mut cram_fd_layout).cast(),
             CRAM_OPT_REQUIRED_FIELDS,
-            &mut args,
+            &raw mut args,
         );
     }
 
@@ -1119,7 +1119,7 @@ pub unsafe fn cram_cram_index_c_779_cram_index_build(
         fn_idx_buf = None;
     }
 
-    let fp = bgzf_open(fn_idx.cast(), c"wg".as_ptr());
+    let fp = bgzf_open(fn_idx.cast(), b"wg\0".as_ptr());
     if fp.is_null() {
         let mut idx_len = 0usize;
         while *fn_idx.add(idx_len) != 0 {

@@ -33,7 +33,7 @@ unsafe fn render_vcf_path(path: &std::path::Path) -> String {
     let mut len = 0;
     let header_text = bcf_hdr_fmt_text(hdr, 0, &mut len);
     assert!(!header_text.is_null());
-    let header_bytes = std::ffi::CStr::from_ptr(header_text).to_bytes();
+    let header_bytes = std::ffi::CStr::from_ptr(header_text.cast()).to_bytes();
     let mut out = String::from_utf8_lossy(header_bytes).into_owned();
     assert_eq!(out.len(), len as usize);
     // header_text was C-allocated; ownership handled at the FFI boundary.

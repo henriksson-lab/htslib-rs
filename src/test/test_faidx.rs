@@ -242,7 +242,7 @@ pub unsafe fn test_test_faidx_c_99_do_retrieval(
                     if name.is_null() {
                         String::new()
                     } else {
-                        String::from_utf8_lossy(std::ffi::CStr::from_ptr(name).to_bytes())
+                        String::from_utf8_lossy(std::ffi::CStr::from_ptr(name.cast()).to_bytes())
                             .into_owned()
                     },
                     beg as i64,

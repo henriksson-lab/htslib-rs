@@ -592,7 +592,7 @@ pub unsafe fn hfile_libcurl_c_270_multi_errno(errm: i32) -> i32 {
 }
 
 unsafe fn hfile_libcurl_set_callback_failure_errno() {
-    let errno = crate::htslib_rs::c_compat::__errno_location();
+    let errno = libc::__errno_location();
     if *errno == 0 {
         *errno = libc::EIO;
     }
@@ -917,7 +917,7 @@ unsafe fn hfile_libcurl_renew_auth_token(
     // `tok.path` is NUL-terminated; pass it straight to hopen at the boundary.
     let auth_fp = hopen(tok.path.as_ptr().cast(), c"rR".as_ptr());
     if auth_fp.is_null() {
-        if *crate::htslib_rs::c_compat::__errno_location() != libc::ENOENT {
+        if *libc::__errno_location() != libc::ENOENT {
             tok.failed = true;
             return -1;
         }
@@ -1115,7 +1115,7 @@ unsafe fn hfile_libcurl_wait_perform(fp: &mut hFILE_libcurl) -> i32 {
             &mut numfds,
         );
         if errm != CURLM_OK {
-            *crate::htslib_rs::c_compat::__errno_location() = hfile_libcurl_c_270_multi_errno(errm);
+            *libc::__errno_location() = hfile_libcurl_c_270_multi_errno(errm);
             return -1;
         }
     }
@@ -1126,7 +1126,7 @@ unsafe fn hfile_libcurl_wait_perform(fp: &mut hFILE_libcurl) -> i32 {
     if errm == CURLM_CALL_MULTI_PERFORM {
         fp.flags |= HFILE_LIBCURL_PERFORM_AGAIN;
     } else if errm != CURLM_OK {
-        *crate::htslib_rs::c_compat::__errno_location() = hfile_libcurl_c_270_multi_errno(errm);
+        *libc::__errno_location() = hfile_libcurl_c_270_multi_errno(errm);
         return -1;
     }
     if nrunning < fp.nrunning {
@@ -1308,7 +1308,7 @@ pub unsafe fn hfile_libcurl_c_876_libcurl_read(
         if (fp.flags & HFILE_LIBCURL_FINISHED) == 0 {
             let err = curl_easy_pause(fp.easy, CURLPAUSE_CONT);
             if err != CURLE_OK {
-                *crate::htslib_rs::c_compat::__errno_location() =
+                *libc::__errno_location() =
                     hfile_libcurl_c_153_easy_errno(fp.easy, err);
                 return -1;
             }
@@ -1357,7 +1357,7 @@ pub unsafe fn hfile_libcurl_c_876_libcurl_read(
             {
                 continue;
             }
-            *crate::htslib_rs::c_compat::__errno_location() =
+            *libc::__errno_location() =
                 hfile_libcurl_c_153_easy_errno(fp.easy, err);
             return -1;
         }
@@ -1430,7 +1430,7 @@ pub unsafe fn hfile_libcurl_c_1024_libcurl_write(
     fp.flags &= !HFILE_LIBCURL_PAUSED;
     let err = curl_easy_pause(fp.easy, CURLPAUSE_CONT);
     if err != CURLE_OK {
-        *crate::htslib_rs::c_compat::__errno_location() =
+        *libc::__errno_location() =
             hfile_libcurl_c_153_easy_errno(fp.easy, err);
         return -1;
     }
@@ -1449,7 +1449,7 @@ pub unsafe fn hfile_libcurl_c_1024_libcurl_write(
     fp.buffer.ptr = None;
     fp.buffer.len = 0;
     if (fp.flags & HFILE_LIBCURL_FINISHED) != 0 && fp.final_result != CURLE_OK {
-        *crate::htslib_rs::c_compat::__errno_location() =
+        *libc::__errno_location() =
             hfile_libcurl_c_153_easy_errno(fp.easy, fp.final_result);
         return -1;
     }
@@ -1501,7 +1501,7 @@ pub unsafe fn hfile_libcurl_c_1071_libcurl_seek(
         return -1;
     };
     if (fp.flags & HFILE_LIBCURL_IS_READ) == 0 || (fp.flags & HFILE_LIBCURL_CAN_SEEK) == 0 {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::ESPIPE;
+        *libc::__errno_location() = libc::ESPIPE;
         return -1;
     }
     let origin = match whence {
@@ -1516,27 +1516,27 @@ pub unsafe fn hfile_libcurl_c_1071_libcurl_seek(
                     } else {
                         libc::EOVERFLOW
                     };
-                    *crate::htslib_rs::c_compat::__errno_location() = err;
+                    *libc::__errno_location() = err;
                     return -1;
                 }
             }
         }
         libc::SEEK_END => {
             if fp.file_size < 0 {
-                *crate::htslib_rs::c_compat::__errno_location() = libc::ESPIPE;
+                *libc::__errno_location() = libc::ESPIPE;
                 return -1;
             }
             fp.file_size
         }
         _ => {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+            *libc::__errno_location() = libc::EINVAL;
             return -1;
         }
     };
     if (offset < 0 && origin + offset < 0)
         || (offset >= 0 && fp.file_size >= 0 && offset > fp.file_size - origin)
     {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
     let pos = origin + offset;
@@ -1549,7 +1549,7 @@ pub unsafe fn hfile_libcurl_c_1071_libcurl_seek(
         return pos;
     }
     if hfile_libcurl_restart_from_position(fp, pos) < 0 {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::ESPIPE;
+        *libc::__errno_location() = libc::ESPIPE;
         return -1;
     }
     fp.flags |= HFILE_LIBCURL_TRIED_SEEK;
@@ -1588,7 +1588,7 @@ unsafe fn hfile_libcurl_restart_from_position(fp: &mut hFILE_libcurl, pos: i64) 
         if let Some(list) = hfile_libcurl_get_header_list(fp) {
             let err = curl_easy_setopt(fp.easy, CURLOPT_HTTPHEADER, list.as_ptr());
             if err != CURLE_OK {
-                *crate::htslib_rs::c_compat::__errno_location() =
+                *libc::__errno_location() =
                     hfile_libcurl_c_153_easy_errno(fp.easy, err);
                 return -1;
             }
@@ -1618,7 +1618,7 @@ unsafe fn hfile_libcurl_restart_from_position(fp: &mut hFILE_libcurl, pos: i64) 
         save_errno = hfile_libcurl_c_153_easy_errno(temp_fp.easy, err);
         curl_easy_cleanup(temp_fp.easy);
         fp.flags &= !HFILE_LIBCURL_CAN_SEEK;
-        *crate::htslib_rs::c_compat::__errno_location() = save_errno;
+        *libc::__errno_location() = save_errno;
         return -1;
     }
 
@@ -1629,7 +1629,7 @@ unsafe fn hfile_libcurl_restart_from_position(fp: &mut hFILE_libcurl, pos: i64) 
         save_errno = hfile_libcurl_c_270_multi_errno(errm);
         curl_easy_cleanup(temp_fp.easy);
         fp.flags &= !HFILE_LIBCURL_CAN_SEEK;
-        *crate::htslib_rs::c_compat::__errno_location() = save_errno;
+        *libc::__errno_location() = save_errno;
         return -1;
     }
     fp.nrunning += 1;
@@ -1639,14 +1639,14 @@ unsafe fn hfile_libcurl_restart_from_position(fp: &mut hFILE_libcurl, pos: i64) 
         && (temp_fp.flags & HFILE_LIBCURL_FINISHED) == 0
     {
         if hfile_libcurl_wait_perform(&mut temp_fp) < 0 {
-            save_errno = *crate::htslib_rs::c_compat::__errno_location();
+            save_errno = *libc::__errno_location();
             errm = curl_multi_remove_handle(fp.multi, temp_fp.easy);
             if errm == CURLM_OK {
                 fp.nrunning -= 1;
             }
             curl_easy_cleanup(temp_fp.easy);
             fp.flags &= !HFILE_LIBCURL_CAN_SEEK;
-            *crate::htslib_rs::c_compat::__errno_location() = save_errno;
+            *libc::__errno_location() = save_errno;
             return -1;
         }
     }
@@ -1656,7 +1656,7 @@ unsafe fn hfile_libcurl_restart_from_position(fp: &mut hFILE_libcurl, pos: i64) 
         fp.nrunning -= 1;
         curl_easy_cleanup(temp_fp.easy);
         fp.flags &= !HFILE_LIBCURL_CAN_SEEK;
-        *crate::htslib_rs::c_compat::__errno_location() = save_errno;
+        *libc::__errno_location() = save_errno;
         return -1;
     }
 
@@ -1665,7 +1665,7 @@ unsafe fn hfile_libcurl_restart_from_position(fp: &mut hFILE_libcurl, pos: i64) 
         curl_multi_remove_handle(fp.multi, temp_fp.easy);
         fp.nrunning -= 1;
         curl_easy_cleanup(temp_fp.easy);
-        *crate::htslib_rs::c_compat::__errno_location() = hfile_libcurl_c_270_multi_errno(errm);
+        *libc::__errno_location() = hfile_libcurl_c_270_multi_errno(errm);
         return -1;
     }
     fp.nrunning -= 1;
@@ -1676,7 +1676,7 @@ unsafe fn hfile_libcurl_restart_from_position(fp: &mut hFILE_libcurl, pos: i64) 
     if err != CURLE_OK {
         save_errno = hfile_libcurl_c_153_easy_errno(fp.easy, err);
         curl_easy_reset(fp.easy);
-        *crate::htslib_rs::c_compat::__errno_location() = save_errno;
+        *libc::__errno_location() = save_errno;
         return -1;
     }
     fp.buffer.len = 0;
@@ -1711,7 +1711,7 @@ pub unsafe fn hfile_libcurl_c_1266_libcurl_close(fp: &mut hFILE) -> i32 {
         && (fp.flags & HFILE_LIBCURL_FINISHED) == 0
     {
         if hfile_libcurl_wait_perform(fp) < 0 {
-            save_errno = *crate::htslib_rs::c_compat::__errno_location();
+            save_errno = *libc::__errno_location();
         }
     }
     if (fp.flags & HFILE_LIBCURL_FINISHED) != 0 && fp.final_result != CURLE_OK {
@@ -1731,7 +1731,7 @@ pub unsafe fn hfile_libcurl_c_1266_libcurl_close(fp: &mut hFILE) -> i32 {
     hfile_libcurl_c_372_free_headers(&mut fp.headers.extra, 1);
     drop(std::mem::take(&mut fp.preserved));
     if save_errno != 0 {
-        *crate::htslib_rs::c_compat::__errno_location() = save_errno;
+        *libc::__errno_location() = save_errno;
         -1
     } else {
         0
@@ -1745,7 +1745,7 @@ pub unsafe fn hfile_libcurl_c_1313_libcurl_open(
     headers: *mut HFileLibcurlHeaders,
 ) -> *mut hFILE {
     if url.is_null() || modes.is_null() {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     }
     // `url` / `modes` are NUL-terminated C strings; carry them as byte slices.
@@ -1766,7 +1766,7 @@ pub unsafe fn hfile_libcurl_c_1313_libcurl_open(
     }
     let mode = seen_mode.unwrap_or(0);
     if mode != b'r' && mode != b'w' {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     }
 
@@ -1777,7 +1777,7 @@ pub unsafe fn hfile_libcurl_c_1313_libcurl_open(
         if !fp.is_null() {
             return fp;
         }
-        let err = *crate::htslib_rs::c_compat::__errno_location();
+        let err = *libc::__errno_location();
         if attempt >= HFILE_LIBCURL_RETRY_MAX
             || !matches!(
                 err,
@@ -1829,13 +1829,13 @@ unsafe fn hfile_libcurl_open_once(
     (*fp).easy = std::ptr::null_mut();
     (*fp).multi = curl_multi_init();
     if (*fp).multi.is_null() {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *libc::__errno_location() = libc::ENOMEM;
         goto_open_error(fp);
         return std::ptr::null_mut();
     }
     (*fp).easy = curl_easy_init();
     if (*fp).easy.is_null() {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::ENOMEM;
+        *libc::__errno_location() = libc::ENOMEM;
         goto_open_error(fp);
         return std::ptr::null_mut();
     }
@@ -1927,7 +1927,7 @@ unsafe fn hfile_libcurl_open_once(
         err |= curl_easy_setopt((*fp).easy, CURLOPT_FOLLOWLOCATION, 1_i64);
     }
     if err != CURLE_OK {
-        *crate::htslib_rs::c_compat::__errno_location() =
+        *libc::__errno_location() =
             hfile_libcurl_c_153_easy_errno((*fp).easy, err);
         goto_open_error(fp);
         return std::ptr::null_mut();
@@ -1935,7 +1935,7 @@ unsafe fn hfile_libcurl_open_once(
 
     let errm = curl_multi_add_handle((*fp).multi, (*fp).easy);
     if errm != CURLM_OK {
-        *crate::htslib_rs::c_compat::__errno_location() = hfile_libcurl_c_270_multi_errno(errm);
+        *libc::__errno_location() = hfile_libcurl_c_270_multi_errno(errm);
         goto_open_error(fp);
         return std::ptr::null_mut();
     }
@@ -1955,7 +1955,7 @@ unsafe fn hfile_libcurl_open_once(
         *response_ptr.as_mut() = response;
     }
     if ((*fp).flags & HFILE_LIBCURL_FINISHED) != 0 && (*fp).final_result != CURLE_OK {
-        *crate::htslib_rs::c_compat::__errno_location() =
+        *libc::__errno_location() =
             hfile_libcurl_c_153_easy_errno((*fp).easy, (*fp).final_result);
         curl_multi_remove_handle((*fp).multi, (*fp).easy);
         (*fp).nrunning -= 1;
@@ -1999,7 +1999,7 @@ unsafe fn hfile_libcurl_open_once(
             );
             err |= curl_easy_setopt((*fp).easy, CURLOPT_HEADERDATA, std::ptr::null::<c_void>());
             if err != CURLE_OK {
-                *crate::htslib_rs::c_compat::__errno_location() =
+                *libc::__errno_location() =
                     hfile_libcurl_c_153_easy_errno((*fp).easy, err);
                 goto_open_error(fp);
                 return std::ptr::null_mut();
@@ -2012,7 +2012,7 @@ unsafe fn hfile_libcurl_open_once(
                 curl_easy_getinfo_long((*fp).easy, CURLINFO_RESPONSE_CODE, response_ptr.as_ptr());
             }
             if ((*fp).flags & HFILE_LIBCURL_FINISHED) != 0 && (*fp).final_result != CURLE_OK {
-                *crate::htslib_rs::c_compat::__errno_location() =
+                *libc::__errno_location() =
                     hfile_libcurl_c_153_easy_errno((*fp).easy, (*fp).final_result);
                 curl_multi_remove_handle((*fp).multi, (*fp).easy);
                 (*fp).nrunning -= 1;
@@ -2027,7 +2027,7 @@ unsafe fn hfile_libcurl_open_once(
             );
             err |= curl_easy_setopt((*fp).easy, CURLOPT_HEADERDATA, std::ptr::null::<c_void>());
             if err != CURLE_OK {
-                *crate::htslib_rs::c_compat::__errno_location() =
+                *libc::__errno_location() =
                     hfile_libcurl_c_153_easy_errno((*fp).easy, err);
                 goto_open_error(fp);
                 return std::ptr::null_mut();
@@ -2048,7 +2048,7 @@ unsafe fn hfile_libcurl_open_once(
     // the curl handles already point at. Replaces the old
     // `(*fp).base.backend = &LIBCURL_BACKEND; fp.cast()`.
     // `fp` (raw payload pointer) is no longer used; `payload` Box still owns it.
-    let owned = Box::new(libcurl_build_owned_hfile(payload, modes.to_bytes()));
+    let owned = Box::new(libcurl_build_owned_hfile(payload, modes)); // RECONVERGE: modes is already &[u8]
     Box::into_raw(owned)
 }
 
@@ -2081,7 +2081,7 @@ unsafe fn libcurl_build_owned_hfile(payload: Box<hFILE_libcurl>, mode: &[u8]) ->
 // curl handles; the Box's Drop releases the headers / preserved buffers. (Was:
 // also called hfile_destroy() to free the malloc'd struct + buffer.)
 unsafe fn goto_open_error(fp: *mut hFILE_libcurl) {
-    let save = *crate::htslib_rs::c_compat::__errno_location();
+    let save = *libc::__errno_location();
     if !fp.is_null() {
         if !(*fp).easy.is_null() {
             curl_easy_cleanup((*fp).easy);
@@ -2095,7 +2095,7 @@ unsafe fn goto_open_error(fp: *mut hFILE_libcurl) {
         hfile_libcurl_c_372_free_headers(&mut (*fp).headers.extra, 1);
         drop(std::mem::take(&mut (*fp).preserved));
     }
-    *crate::htslib_rs::c_compat::__errno_location() = save;
+    *libc::__errno_location() = save;
 }
 
 // original: hopen_libcurl (htslib/hfile_libcurl.c:1549)
@@ -2125,7 +2125,7 @@ pub unsafe fn hfile_libcurl_c_1554_parse_va_list(
     args: *mut crate::htslib_rs::c_compat::__va_list_tag,
 ) -> i32 {
     if headers.is_null() || args.is_null() {
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+        *libc::__errno_location() = libc::EINVAL;
         return -1;
     }
 
@@ -2218,7 +2218,7 @@ pub unsafe fn hfile_libcurl_c_1554_parse_va_list(
         } else if argtype_bytes == b"fail_on_error" {
             (*headers).fail_on_error = hfile_libcurl_va_arg_word(args) as i32;
         } else {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::EINVAL;
+            *libc::__errno_location() = libc::EINVAL;
             return -1;
         }
     }
@@ -2254,14 +2254,14 @@ pub unsafe fn hfile_libcurl_c_1679_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> i3
 
     let err = curl_global_init(CURL_GLOBAL_ALL);
     if err != CURLE_OK {
-        *crate::htslib_rs::c_compat::__errno_location() =
+        *libc::__errno_location() =
             hfile_libcurl_c_153_easy_errno(std::ptr::null_mut(), err);
         return -1;
     }
     HFILE_LIBCURL_SHARE = curl_share_init();
     if HFILE_LIBCURL_SHARE.is_null() {
         curl_global_cleanup();
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EIO;
+        *libc::__errno_location() = libc::EIO;
         return -1;
     }
     let mut errsh = curl_share_setopt(
@@ -2283,7 +2283,7 @@ pub unsafe fn hfile_libcurl_c_1679_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> i3
         curl_share_cleanup(HFILE_LIBCURL_SHARE);
         HFILE_LIBCURL_SHARE = std::ptr::null_mut();
         curl_global_cleanup();
-        *crate::htslib_rs::c_compat::__errno_location() = libc::EIO;
+        *libc::__errno_location() = libc::EIO;
         return -1;
     }
 
@@ -2509,13 +2509,13 @@ mod tests {
     fn libcurl_parse_va_list_rejects_unknown_option() {
         unsafe {
             let mut headers = HFileLibcurlHeaders::default();
-            *crate::htslib_rs::c_compat::__errno_location() = 0;
+            *libc::__errno_location() = 0;
             assert_eq!(
                 parse_words(&mut headers, &[c"unknown".as_ptr() as usize, 0]),
                 -1
             );
             assert_eq!(
-                *crate::htslib_rs::c_compat::__errno_location(),
+                *libc::__errno_location(),
                 libc::EINVAL
             );
         }
@@ -2538,16 +2538,16 @@ mod tests {
     #[test]
     fn libcurl_callback_failure_errno_preserves_callback_error_or_defaults_to_eio() {
         unsafe {
-            *crate::htslib_rs::c_compat::__errno_location() = libc::EACCES;
+            *libc::__errno_location() = libc::EACCES;
             hfile_libcurl_set_callback_failure_errno();
             assert_eq!(
-                *crate::htslib_rs::c_compat::__errno_location(),
+                *libc::__errno_location(),
                 libc::EACCES
             );
 
-            *crate::htslib_rs::c_compat::__errno_location() = 0;
+            *libc::__errno_location() = 0;
             hfile_libcurl_set_callback_failure_errno();
-            assert_eq!(*crate::htslib_rs::c_compat::__errno_location(), libc::EIO);
+            assert_eq!(*libc::__errno_location(), libc::EIO);
         }
     }
 

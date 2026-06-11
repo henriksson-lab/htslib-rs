@@ -39,7 +39,7 @@ unsafe fn assert_sample_names(hdr: *const htslib_rs::bcf_hdr_t, expected: &[&[u8
     assert!(!(*hdr).samples.is_null());
     for (i, sample) in expected.iter().enumerate() {
         let p = *(*hdr).samples.add(i);
-        assert_eq!(std::ffi::CStr::from_ptr(p).to_bytes(), *sample);
+        assert_eq!(std::ffi::CStr::from_ptr(p.cast()).to_bytes(), *sample);
     }
 }
 
@@ -88,7 +88,7 @@ unsafe fn get_format_i32(
     rec: *mut htslib_rs::bcf1_t,
     tag: &[u8],
 ) -> Vec<i32> {
-    let mut values: *mut std::ffi::c_void = std::ptr::null_mut();
+    let mut values: *mut () = std::ptr::null_mut();
     let mut nvalues = 0;
     let ret = bcf_get_format_values(
         hdr,
@@ -128,7 +128,7 @@ fn test_vcf_api_out_preserves_header_samples_and_record_order() {
         let hdr = bcf_hdr_read(fp);
         assert!(!hdr.is_null());
         assert_eq!(
-            std::ffi::CStr::from_ptr(bcf_hdr_get_version(hdr)).to_bytes(),
+            std::ffi::CStr::from_ptr(bcf_hdr_get_version(hdr).cast()).to_bytes(),
             b"VCFv4.2"
         );
         assert_eq!(bcf_hdr_name2id(hdr, b"20\0".as_ptr().cast()), 0);
@@ -140,7 +140,7 @@ fn test_vcf_api_out_preserves_header_samples_and_record_order() {
         assert!(!rec.is_null());
         let mut seen = Vec::new();
         while bcf_read(fp, hdr, rec) >= 0 {
-            assert_eq!(std::ffi::CStr::from_ptr(bcf_seqname(hdr, rec)).to_bytes(), b"20");
+            assert_eq!(std::ffi::CStr::from_ptr(bcf_seqname(hdr, rec).cast()).to_bytes(), b"20");
             seen.push(((*rec).pos, (*rec).rlen, (*rec).qual.round() as i32));
         }
         assert_eq!(
@@ -258,7 +258,7 @@ fn test_vcf_api_out_keeps_haploid_and_missing_genotype_sentinel_layout() {
             assert_eq!(bcf_read(fp, hdr, rec), 0);
         }
         assert_eq!(bcf_read(fp, hdr, rec), 0);
-        assert_eq!(std::ffi::CStr::from_ptr(bcf_seqname(hdr, rec)).to_bytes(), b"20");
+        assert_eq!(std::ffi::CStr::from_ptr(bcf_seqname(hdr, rec).cast()).to_bytes(), b"20");
         assert_eq!((*rec).pos, 1_110_695);
         assert_alleles(rec, &[b"A", b"G", b"T"]);
         // NOTE (2026-05-29): htslib v1.23 made haploid genotypes implicitly
@@ -342,7 +342,7 @@ fn test_vcf_sweep_matches_original_fixture_output() {
                 let Some(rec) = rec else {
                     break;
                 };
-                let mut pls: *mut std::ffi::c_void = std::ptr::null_mut();
+                let mut pls: *mut () = std::ptr::null_mut();
                 let mut m_pls = 0;
                 let n_pls = bcf_get_format_values(
                     hdr,

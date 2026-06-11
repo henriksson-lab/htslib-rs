@@ -990,15 +990,15 @@ pub unsafe fn annot_tsv_c_515_init_data(args: &mut AnnotTsvArgs) {
             || (name.len() >= 4 && name[name.len() - 4..].eq_ignore_ascii_case(b".bgz"));
         let path = std::ffi::CString::new(name.as_slice()).unwrap();
         bgzf::bgzf_open(
-            path.as_ptr(),
+            path.as_ptr().cast(),
             if compress_output {
-                c"wg".as_ptr()
+                c"wg".as_ptr().cast()
             } else {
-                c"wu".as_ptr()
+                c"wu".as_ptr().cast()
             },
         )
     } else {
-        bgzf::bgzf_open(c"-".as_ptr(), c"wu".as_ptr())
+        bgzf::bgzf_open(c"-".as_ptr().cast(), c"wu".as_ptr().cast())
     };
     if args.out_fp.is_null() {
         std::process::abort();

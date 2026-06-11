@@ -58,7 +58,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use std::ffi::{c_int, c_void};
 
-use crate::htslib_rs::c_compat::__va_list_tag;
+use crate::htslib_rs::cram::__va_list_tag;
 use crate::htslib_rs::cram::cram_cram_io_c_5692_cram_set_voption;
 use crate::htslib_rs::hts::{cram_fd, hts_fmt_option};
 
@@ -94,7 +94,7 @@ pub unsafe fn cram_set_option_int(fd: &mut cram_fd, opt: hts_fmt_option, val: c_
         overflow_arg_area: overflow.as_mut_ptr().cast(),
         reg_save_area: reg_save.as_mut_ptr().cast(),
     };
-    cram_cram_io_c_5692_cram_set_voption(fd, opt, &mut va)
+    cram_cram_io_c_5692_cram_set_voption(fd, opt, &mut va as *mut __va_list_tag)
 }
 
 // htslib/cram/cram_io.c:5674
@@ -129,5 +129,5 @@ pub unsafe fn cram_set_option_ptr(
         overflow_arg_area: overflow.as_mut_ptr().cast(),
         reg_save_area: reg_save.as_mut_ptr().cast(),
     };
-    cram_cram_io_c_5692_cram_set_voption(fd, opt, &mut va)
+    cram_cram_io_c_5692_cram_set_voption(fd, opt, &mut va as *mut __va_list_tag)
 }

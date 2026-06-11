@@ -1,6 +1,5 @@
 use std::{
     collections::HashSet,
-    ffi::CStr,
     fs,
     io::{BufWriter, Write},
     ptr,
@@ -53,11 +52,15 @@ unsafe fn faidx_bgzf_getc(fp: &mut BGZF) -> i32 {
     bgzf_getc(fp)
 }
 
-pub unsafe fn fai_path(fa: *const i8) -> *mut i8 {
+pub unsafe fn fai_path(fa: *const u8) -> *mut u8 {
     if fa.is_null() {
         return std::ptr::null_mut();
     }
-    let fa_bytes = CStr::from_ptr(fa).to_bytes();
+    let mut fa_len = 0usize;
+    while *fa.add(fa_len) != 0 {
+        fa_len += 1;
+    }
+    let fa_bytes = std::slice::from_raw_parts(fa, fa_len);
     let delim = b"##idx##";
     if let Some(pos) = fa_bytes.windows(delim.len()).position(|w| w == delim) {
         let tail = &fa_bytes[pos + delim.len()..];
@@ -67,19 +70,20 @@ pub unsafe fn fai_path(fa: *const i8) -> *mut i8 {
         return malloc_copy_c_bytes(&owned);
     }
 
-    if hisremote(fa) != 0 {
-        return hts_c_4920_hts_idx_locatefn(fa, c".fai".as_ptr());
+    // RECONVERGE: hisremote/hts_idx_locatefn/hts_idx_check_local still take *const i8 (C ABI); cast at boundary.
+    if hisremote(fa.cast()) != 0 {
+        return hts_c_4920_hts_idx_locatefn(fa.cast(), c".fai".as_ptr()).cast();
     }
 
     let mut fai = std::ptr::null_mut();
-    if hts_c_4756_hts_idx_check_local(fa, HTS_FMT_FAI, &mut fai) == 0
+    if hts_c_4756_hts_idx_check_local(fa.cast(), HTS_FMT_FAI, &mut fai) == 0
         && !fai.is_null()
-        && fai_build3(fa, fai, std::ptr::null()) == -1
+        && fai_build3(fa, fai.cast(), std::ptr::null()) == -1
     {
         free(fai.cast());
         return std::ptr::null_mut();
     }
-    fai
+    fai.cast()
 }
 
 #[repr(C)]
@@ -171,44 +175,44 @@ impl Drop for faidx_t {
 }
 
 pub unsafe fn fai_load3(
-    fn_: *const i8,
-    fnfai: *const i8,
-    fngzi: *const i8,
+    fn_: *const u8,
+    fnfai: *const u8,
+    fngzi: *const u8,
     flags: i32,
 ) -> *mut faidx_t {
     fai_load3_core(fn_, fnfai, fngzi, flags, FAI_FASTA)
 }
 
-pub unsafe fn fai_load(_fn_: *const i8) -> *mut faidx_t {
+pub unsafe fn fai_load(_fn_: *const u8) -> *mut faidx_t {
     fai_load3(_fn_, std::ptr::null(), std::ptr::null(), FAI_CREATE)
 }
 
-pub unsafe fn fai_build3(fn_: *const i8, fnfai: *const i8, fngzi: *const i8) -> i32 {
+pub unsafe fn fai_build3(fn_: *const u8, fnfai: *const u8, fngzi: *const u8) -> i32 {
     faidx_c_557_fai_build3(fn_, fnfai, fngzi)
 }
 
-pub unsafe fn fai_build(fn_: *const i8) -> i32 {
+pub unsafe fn fai_build(fn_: *const u8) -> i32 {
     fai_build3(fn_, std::ptr::null(), std::ptr::null())
 }
 
 pub unsafe fn fai_load3_format(
-    fn_: *const i8,
-    fnfai: *const i8,
-    fngzi: *const i8,
+    fn_: *const u8,
+    fnfai: *const u8,
+    fngzi: *const u8,
     flags: i32,
     format: fai_format_options,
 ) -> *mut faidx_t {
     fai_load3_core(fn_, fnfai, fngzi, flags, format)
 }
 
-pub unsafe fn fai_load_format(fn_: *const i8, format: fai_format_options) -> *mut faidx_t {
+pub unsafe fn fai_load_format(fn_: *const u8, format: fai_format_options) -> *mut faidx_t {
     fai_load3_core(fn_, ptr::null(), ptr::null(), FAI_CREATE, format)
 }
 
 unsafe fn fai_load3_core(
-    fn_: *const i8,
-    fnfai: *const i8,
-    fngzi: *const i8,
+    fn_: *const u8,
+    fnfai: *const u8,
+    fngzi: *const u8,
     flags: i32,
     format: i32,
 ) -> *mut faidx_t {
@@ -225,7 +229,8 @@ unsafe fn fai_load3_core(
     }
     let mut build_index = !fai_path.as_ref().unwrap().exists();
     if !build_index {
-        let bgzf = bgzf_open(fn_, c"r".as_ptr());
+        // RECONVERGE: bgzf_open still takes *const c_char (C ABI); cast at boundary.
+        let bgzf = bgzf_open(fn_.cast(), c"r".as_ptr().cast());
         if bgzf.is_null() {
             return ptr::null_mut();
         }
@@ -250,11 +255,12 @@ unsafe fn fai_load3_core(
     Box::into_raw(fai)
 }
 
-unsafe fn fai_build3_core(fn_: *const i8, fnfai: *const i8, fngzi: *const i8) -> i32 {
+unsafe fn fai_build3_core(fn_: *const u8, fnfai: *const u8, fngzi: *const u8) -> i32 {
     if fn_.is_null() {
         return -1;
     }
-    let bgzf = bgzf_open(fn_, c"r".as_ptr());
+    // RECONVERGE: bgzf_open still takes *const c_char (C ABI); cast at boundary.
+    let bgzf = bgzf_open(fn_.cast(), c"r".as_ptr().cast());
     if bgzf.is_null() {
         return -1;
     }
@@ -287,8 +293,8 @@ unsafe fn fai_build3_core(fn_: *const i8, fnfai: *const i8, fngzi: *const i8) ->
 }
 
 fn resolved_index_path(
-    fn_: *const i8,
-    explicit: *const i8,
+    fn_: *const u8,
+    explicit: *const u8,
     suffix: &[u8],
 ) -> Option<std::path::PathBuf> {
     unsafe {
@@ -296,19 +302,27 @@ fn resolved_index_path(
             return None;
         }
         if explicit.is_null() {
-            let fasta_path = path_from_bytes(CStr::from_ptr(fn_).to_bytes());
+            let mut len = 0usize;
+            while *fn_.add(len) != 0 {
+                len += 1;
+            }
+            let fasta_path = path_from_bytes(std::slice::from_raw_parts(fn_, len));
             let mut bytes = path_bytes(&fasta_path).into_owned();
             bytes.extend_from_slice(suffix);
             Some(path_from_bytes(&bytes))
         } else {
-            Some(path_from_bytes(CStr::from_ptr(explicit).to_bytes()))
+            let mut len = 0usize;
+            while *explicit.add(len) != 0 {
+                len += 1;
+            }
+            Some(path_from_bytes(std::slice::from_raw_parts(explicit, len)))
         }
     }
 }
 
-unsafe fn fai_read(fn_: *const i8, fnfai: *const i8, format: i32) -> Option<Box<faidx_t>> {
+unsafe fn fai_read(fn_: *const u8, fnfai: *const u8, format: i32) -> Option<Box<faidx_t>> {
     let fai_name = owned_index_c_bytes(fn_, fnfai, b".fai")?;
-    let fp = hopen(fai_name.as_ptr().cast(), c"rb".as_ptr());
+    let fp = hopen(fai_name.as_ptr().cast(), c"rb".as_ptr().cast());
     if fp.is_null() {
         return None;
     }
@@ -321,7 +335,8 @@ unsafe fn fai_read(fn_: *const i8, fnfai: *const i8, format: i32) -> Option<Box<
         return None;
     }
 
-    if !fai.set_bgzf(NonNull::new(bgzf_open(fn_, c"rb".as_ptr()))) {
+    // RECONVERGE: bgzf_open still takes *const c_char (C ABI); cast at boundary.
+    if !fai.set_bgzf(NonNull::new(bgzf_open(fn_.cast(), c"rb".as_ptr().cast()))) {
         return None;
     }
     Some(fai)
@@ -560,17 +575,25 @@ fn parse_fasta_fastq_index_rows(data: &[u8]) -> Option<(FaidxRows, i32)> {
     }
 }
 
-unsafe fn fai_load_existing(fn_: *const i8, fnfai: *const i8) -> Option<Box<faidx_t>> {
+unsafe fn fai_load_existing(fn_: *const u8, fnfai: *const u8) -> Option<Box<faidx_t>> {
     if fn_.is_null() {
         return None;
     }
-    let fasta_path = path_from_bytes(CStr::from_ptr(fn_).to_bytes());
+    let mut fn_len = 0usize;
+    while *fn_.add(fn_len) != 0 {
+        fn_len += 1;
+    }
+    let fasta_path = path_from_bytes(std::slice::from_raw_parts(fn_, fn_len));
     let fai_path = if fnfai.is_null() {
         let mut bytes = path_bytes(&fasta_path).into_owned();
         bytes.extend_from_slice(b".fai");
         path_from_bytes(&bytes)
     } else {
-        path_from_bytes(CStr::from_ptr(fnfai).to_bytes())
+        let mut len = 0usize;
+        while *fnfai.add(len) != 0 {
+            len += 1;
+        }
+        path_from_bytes(std::slice::from_raw_parts(fnfai, len))
     };
     let text = fs::read_to_string(&fai_path).ok()?;
     let mut rows = Vec::new();
@@ -606,12 +629,13 @@ unsafe fn fai_load_existing(fn_: *const i8, fnfai: *const i8) -> Option<Box<faid
     fai_from_rows(fn_, rows, FAI_FASTA)
 }
 
-unsafe fn fai_from_rows(fn_: *const i8, rows: FaidxRows, format: i32) -> Option<Box<faidx_t>> {
+unsafe fn fai_from_rows(fn_: *const u8, rows: FaidxRows, format: i32) -> Option<Box<faidx_t>> {
     let mut fai = Box::new(faidx_t::new(format));
     fai.name.reserve(rows.len());
     fai.m = fai.name.capacity() as i32;
     fai.hash.clear_with_capacity((rows.len() * 2).max(4));
-    if !fn_.is_null() && !fai.set_bgzf(NonNull::new(bgzf_open(fn_, c"r".as_ptr()))) {
+    // RECONVERGE: bgzf_open still takes *const c_char (C ABI); cast at boundary.
+    if !fn_.is_null() && !fai.set_bgzf(NonNull::new(bgzf_open(fn_.cast(), c"r".as_ptr().cast()))) {
         return None;
     }
 
@@ -632,20 +656,29 @@ unsafe fn fai_from_rows(fn_: *const i8, rows: FaidxRows, format: i32) -> Option<
     Some(fai)
 }
 
-unsafe fn fai_build_plain_fasta(fn_: *const i8, fnfai: *const i8) -> Option<Box<faidx_t>> {
+unsafe fn fai_build_plain_fasta(fn_: *const u8, fnfai: *const u8) -> Option<Box<faidx_t>> {
     if fn_.is_null() {
         return None;
     }
-    let fasta_path = path_from_bytes(CStr::from_ptr(fn_).to_bytes());
+    let mut fn_len = 0usize;
+    while *fn_.add(fn_len) != 0 {
+        fn_len += 1;
+    }
+    let fasta_path = path_from_bytes(std::slice::from_raw_parts(fn_, fn_len));
     let fai_path = if fnfai.is_null() {
         let mut bytes = path_bytes(&fasta_path).into_owned();
         bytes.extend_from_slice(b".fai");
         path_from_bytes(&bytes)
     } else {
-        path_from_bytes(CStr::from_ptr(fnfai).to_bytes())
+        let mut len = 0usize;
+        while *fnfai.add(len) != 0 {
+            len += 1;
+        }
+        path_from_bytes(std::slice::from_raw_parts(fnfai, len))
     };
 
-    let bgzf = bgzf_open(fn_, c"r".as_ptr());
+    // RECONVERGE: bgzf_open still takes *const c_char (C ABI); cast at boundary.
+    let bgzf = bgzf_open(fn_.cast(), c"r".as_ptr().cast());
     if bgzf.is_null() {
         return None;
     }
@@ -661,7 +694,8 @@ unsafe fn fai_build_plain_fasta(fn_: *const i8, fnfai: *const i8) -> Option<Box<
         return None;
     }
 
-    if !fai.set_bgzf(NonNull::new(bgzf_open(fn_, c"r".as_ptr()))) {
+    // RECONVERGE: bgzf_open still takes *const c_char (C ABI); cast at boundary.
+    if !fai.set_bgzf(NonNull::new(bgzf_open(fn_.cast(), c"r".as_ptr().cast()))) {
         return None;
     }
 
@@ -683,9 +717,15 @@ fn close_fai_bgzf(fai: &mut faidx_t) {
     }
 }
 
-pub unsafe fn faidx_has_seq(_fai: *const faidx_t, _seq: *const i8) -> i32 {
+pub unsafe fn faidx_has_seq(_fai: *const faidx_t, _seq: *const u8) -> i32 {
     match (_fai.as_ref(), _seq.as_ref()) {
-        (Some(fai), Some(_)) => faidx_has_seq_bytes(fai, CStr::from_ptr(_seq).to_bytes()) as i32,
+        (Some(fai), Some(_)) => {
+            let mut len = 0usize;
+            while *_seq.add(len) != 0 {
+                len += 1;
+            }
+            faidx_has_seq_bytes(fai, std::slice::from_raw_parts(_seq, len)) as i32
+        }
         _ => 0,
     }
 }
@@ -711,10 +751,14 @@ pub fn faidx_iseq(fai: &faidx_t, i: i32) -> Option<&[u8]> {
         .map(|i| fai.name_bytes(i))
 }
 
-pub unsafe fn faidx_seq_len64(_fai: *const faidx_t, _seq: *const i8) -> hts_pos_t {
+pub unsafe fn faidx_seq_len64(_fai: *const faidx_t, _seq: *const u8) -> hts_pos_t {
     match (_fai.as_ref(), _seq.as_ref()) {
         (Some(fai), Some(_)) => {
-            faidx_seq_len64_bytes(fai, CStr::from_ptr(_seq).to_bytes()).unwrap_or(-1)
+            let mut len = 0usize;
+            while *_seq.add(len) != 0 {
+                len += 1;
+            }
+            faidx_seq_len64_bytes(fai, std::slice::from_raw_parts(_seq, len)).unwrap_or(-1)
         }
         _ => -1,
     }
@@ -725,7 +769,7 @@ fn faidx_seq_len64_bytes(fai: &faidx_t, seq: &[u8]) -> Option<hts_pos_t> {
     (k != fai.hash.n_buckets).then(|| fai.hash.buckets[k as usize].unwrap().val.len as hts_pos_t)
 }
 
-pub unsafe fn faidx_seq_len(_fai: *const faidx_t, _seq: *const i8) -> i32 {
+pub unsafe fn faidx_seq_len(_fai: *const faidx_t, _seq: *const u8) -> i32 {
     let len = faidx_seq_len64(_fai, _seq);
     if len < i32::MAX as hts_pos_t {
         len as i32
@@ -755,25 +799,27 @@ pub fn fai_adjust_region(fai: &faidx_t, tid: i32, beg: &mut hts_pos_t, end: &mut
 
 pub unsafe fn faidx_fetch_seq64(
     fai: *const faidx_t,
-    c_name: *const i8,
+    c_name: *const u8,
     p_beg_i: hts_pos_t,
     p_end_i: hts_pos_t,
     len: *mut hts_pos_t,
-) -> *mut i8 {
+) -> *mut u8 {
     let Some((fai, name, len)) = fai
         .as_ref()
         .zip(c_name.as_ref())
         .zip(len.as_mut())
-        .map(|((fai, _), len)| (fai, CStr::from_ptr(c_name), len))
+        .map(|((fai, _), len)| {
+            let mut name_len = 0usize;
+            while *c_name.add(name_len) != 0 {
+                name_len += 1;
+            }
+            (fai, std::slice::from_raw_parts(c_name, name_len), len)
+        })
     else {
         return ptr::null_mut();
     };
     malloc_retrieved_c_bytes(faidx_fetch_seq64_bytes(
-        fai,
-        name.to_bytes(),
-        p_beg_i,
-        p_end_i,
-        len,
+        fai, name, p_beg_i, p_end_i, len,
     ))
 }
 
@@ -811,11 +857,11 @@ unsafe fn faidx_fetch_seq64_bytes(
 
 pub unsafe fn faidx_fetch_seq(
     fai: *const faidx_t,
-    c_name: *const i8,
+    c_name: *const u8,
     p_beg_i: i32,
     p_end_i: i32,
     len: *mut i32,
-) -> *mut i8 {
+) -> *mut u8 {
     if len.is_null() {
         return ptr::null_mut();
     }
@@ -835,13 +881,19 @@ pub unsafe fn faidx_fetch_seq(
     ret
 }
 
+// RECONVERGE: handed to hts_parse_region as the C-ABI hts_name2id_f callback
+// (extern "C" fn(*mut c_void, *const c_char)); keep the ABI, body is native.
 unsafe extern "C" fn fai_name2id(v: *mut std::ffi::c_void, ref_: *const i8) -> i32 {
     if v.is_null() || ref_.is_null() {
         return -1;
     }
     let fai = &*v.cast::<faidx_t>();
-    let ref_ = CStr::from_ptr(ref_);
-    let k = kh_get_s_bytes(fai, ref_.to_bytes());
+    let ref_ = ref_.cast::<u8>();
+    let mut len = 0usize;
+    while *ref_.add(len) != 0 {
+        len += 1;
+    }
+    let k = kh_get_s_bytes(fai, std::slice::from_raw_parts(ref_, len));
     if k == fai.hash.n_buckets {
         -1
     } else {
@@ -860,14 +912,16 @@ fn fai_name2id_bytes(fai: &faidx_t, ref_: &[u8]) -> i32 {
 
 pub unsafe fn fai_parse_region(
     fai: *const faidx_t,
-    s: *const i8,
+    s: *const u8,
     tid: *mut i32,
     beg: *mut hts_pos_t,
     end: *mut hts_pos_t,
     flags: i32,
-) -> *const i8 {
+) -> *const u8 {
+    // RECONVERGE: hts_parse_region still takes &CStr / *mut c_void and returns
+    // *const c_char (C ABI); borrow the byte string as a CStr and cast at boundary.
     hts_parse_region(
-        CStr::from_ptr(s),
+        std::ffi::CStr::from_ptr(s.cast()),
         &mut *tid,
         &mut *beg,
         &mut *end,
@@ -875,6 +929,7 @@ pub unsafe fn fai_parse_region(
         fai.cast_mut().cast(),
         flags,
     )
+    .cast()
 }
 
 pub fn fai_set_cache_size(fai: &mut faidx_t, cache_size: i32) {
@@ -944,7 +999,7 @@ unsafe fn fai_get_val(
     0
 }
 
-pub unsafe fn fai_line_length(fai: *const faidx_t, str_: *const i8) -> hts_pos_t {
+pub unsafe fn fai_line_length(fai: *const faidx_t, str_: *const u8) -> hts_pos_t {
     if fai.is_null() || str_.is_null() {
         return -1;
     }
@@ -959,9 +1014,13 @@ pub unsafe fn fai_line_length(fai: *const faidx_t, str_: *const i8) -> hts_pos_t
     let mut beg = 0;
     let mut end = 0;
     let mut len = 0;
+    let mut str_len = 0usize;
+    while *str_.add(str_len) != 0 {
+        str_len += 1;
+    }
     if fai_get_val(
         &*fai,
-        CStr::from_ptr(str_).to_bytes(),
+        std::slice::from_raw_parts(str_, str_len),
         &mut len,
         &mut val,
         &mut beg,
@@ -974,12 +1033,18 @@ pub unsafe fn fai_line_length(fai: *const faidx_t, str_: *const i8) -> hts_pos_t
     }
 }
 
-pub unsafe fn fai_fetch64(fai: *const faidx_t, str_: *const i8, len: *mut hts_pos_t) -> *mut i8 {
+pub unsafe fn fai_fetch64(fai: *const faidx_t, str_: *const u8, len: *mut hts_pos_t) -> *mut u8 {
     let Some((fai, str_, len)) = fai
         .as_ref()
         .zip(str_.as_ref())
         .zip(len.as_mut())
-        .map(|((fai, _), len)| (fai, CStr::from_ptr(str_).to_bytes(), len))
+        .map(|((fai, _), len)| {
+            let mut n = 0usize;
+            while *str_.add(n) != 0 {
+                n += 1;
+            }
+            (fai, std::slice::from_raw_parts(str_, n), len)
+        })
     else {
         return ptr::null_mut();
     };
@@ -1004,7 +1069,7 @@ unsafe fn fai_fetch64_bytes(fai: &faidx_t, str_: &[u8], len: &mut hts_pos_t) -> 
     fai_retrieve_bytes(fai, &val, val.seq_offset, beg, end, len)
 }
 
-pub unsafe fn fai_fetch(fai: *const faidx_t, str_: *const i8, len: *mut i32) -> *mut i8 {
+pub unsafe fn fai_fetch(fai: *const faidx_t, str_: *const u8, len: *mut i32) -> *mut u8 {
     if len.is_null() {
         return ptr::null_mut();
     }
@@ -1020,14 +1085,20 @@ pub unsafe fn fai_fetch(fai: *const faidx_t, str_: *const i8, len: *mut i32) -> 
 
 pub unsafe fn fai_fetchqual64(
     fai: *const faidx_t,
-    str_: *const i8,
+    str_: *const u8,
     len: *mut hts_pos_t,
-) -> *mut i8 {
+) -> *mut u8 {
     let Some((fai, str_, len)) = fai
         .as_ref()
         .zip(str_.as_ref())
         .zip(len.as_mut())
-        .map(|((fai, _), len)| (fai, CStr::from_ptr(str_).to_bytes(), len))
+        .map(|((fai, _), len)| {
+            let mut n = 0usize;
+            while *str_.add(n) != 0 {
+                n += 1;
+            }
+            (fai, std::slice::from_raw_parts(str_, n), len)
+        })
     else {
         return ptr::null_mut();
     };
@@ -1056,7 +1127,7 @@ unsafe fn fai_fetchqual64_bytes(
     fai_retrieve_bytes(fai, &val, val.qual_offset, beg, end, len)
 }
 
-pub unsafe fn fai_fetchqual(fai: *const faidx_t, str_: *const i8, len: *mut i32) -> *mut i8 {
+pub unsafe fn fai_fetchqual(fai: *const faidx_t, str_: *const u8, len: *mut i32) -> *mut u8 {
     if len.is_null() {
         return ptr::null_mut();
     }
@@ -1072,16 +1143,22 @@ pub unsafe fn fai_fetchqual(fai: *const faidx_t, str_: *const i8, len: *mut i32)
 
 pub unsafe fn faidx_fetch_qual64(
     fai: *const faidx_t,
-    c_name: *const i8,
+    c_name: *const u8,
     p_beg_i: hts_pos_t,
     p_end_i: hts_pos_t,
     len: *mut hts_pos_t,
-) -> *mut i8 {
+) -> *mut u8 {
     let Some((fai, name, len)) = fai
         .as_ref()
         .zip(c_name.as_ref())
         .zip(len.as_mut())
-        .map(|((fai, _), len)| (fai, CStr::from_ptr(c_name).to_bytes(), len))
+        .map(|((fai, _), len)| {
+            let mut n = 0usize;
+            while *c_name.add(n) != 0 {
+                n += 1;
+            }
+            (fai, std::slice::from_raw_parts(c_name, n), len)
+        })
     else {
         return ptr::null_mut();
     };
@@ -1122,11 +1199,11 @@ unsafe fn faidx_fetch_qual64_bytes(
 
 pub unsafe fn faidx_fetch_qual(
     fai: *const faidx_t,
-    c_name: *const i8,
+    c_name: *const u8,
     p_beg_i: i32,
     p_end_i: i32,
     len: *mut i32,
-) -> *mut i8 {
+) -> *mut u8 {
     if len.is_null() {
         return ptr::null_mut();
     }
@@ -1313,14 +1390,14 @@ unsafe fn fai_retrieve_bytes(
     Some(buffer)
 }
 
-unsafe fn malloc_retrieved_c_bytes(bytes: Option<Vec<u8>>) -> *mut i8 {
+unsafe fn malloc_retrieved_c_bytes(bytes: Option<Vec<u8>>) -> *mut u8 {
     match bytes {
         Some(bytes) => vec_into_returned_c_bytes(bytes),
         None => ptr::null_mut(),
     }
 }
 
-unsafe fn malloc_copy_c_bytes(bytes: &[u8]) -> *mut i8 {
+unsafe fn malloc_copy_c_bytes(bytes: &[u8]) -> *mut u8 {
     let mut out = Vec::new();
     if out.try_reserve(bytes.len().saturating_add(1)).is_err() {
         return ptr::null_mut();
@@ -1329,7 +1406,9 @@ unsafe fn malloc_copy_c_bytes(bytes: &[u8]) -> *mut i8 {
     vec_into_returned_c_bytes(out)
 }
 
-unsafe fn vec_into_returned_c_bytes(mut bytes: Vec<u8>) -> *mut i8 {
+// Returns an owned (leaked Box<[u8]>) NUL-terminated buffer; reclaimed by
+// `faidx_free_returned_c_bytes` in this module — no C allocator involved.
+unsafe fn vec_into_returned_c_bytes(mut bytes: Vec<u8>) -> *mut u8 {
     if !bytes.ends_with(&[0]) {
         if bytes.try_reserve(1).is_err() {
             return ptr::null_mut();
@@ -1337,20 +1416,20 @@ unsafe fn vec_into_returned_c_bytes(mut bytes: Vec<u8>) -> *mut i8 {
         bytes.push(0);
     }
     let mut bytes = bytes.into_boxed_slice();
-    let ptr = bytes.as_mut_ptr().cast::<i8>();
+    let ptr = bytes.as_mut_ptr();
     std::mem::forget(bytes);
     ptr
 }
 
-pub unsafe fn faidx_free_returned_c_bytes(ptr: *mut i8) {
+pub unsafe fn faidx_free_returned_c_bytes(ptr: *mut u8) {
     if ptr.is_null() {
         return;
     }
-    let len = CStr::from_ptr(ptr).to_bytes_with_nul().len();
-    drop(Box::from_raw(ptr::slice_from_raw_parts_mut(
-        ptr.cast::<u8>(),
-        len,
-    )));
+    let mut len = 0usize;
+    while *ptr.add(len) != 0 {
+        len += 1;
+    }
+    drop(Box::from_raw(ptr::slice_from_raw_parts_mut(ptr, len + 1)));
 }
 
 fn kh_str_hash_bytes(bytes: &[u8]) -> u32 {
@@ -1368,7 +1447,7 @@ fn kh_str_hash_bytes(bytes: &[u8]) -> u32 {
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use std::{
-        ffi::CString,
+        ffi::{CStr, CString},
         fs,
         mem::{align_of, size_of},
         ptr,
@@ -1394,16 +1473,16 @@ mod tests {
                 faidx_insert_index(&mut fai, present.to_bytes(), 100, 80, 81, 10, 0),
                 0
             );
-            assert_eq!(faidx_has_seq(&fai, present.as_ptr()), 1);
-            assert_eq!(faidx_has_seq(&fai, absent.as_ptr()), 0);
-            assert_eq!(faidx_has_seq(std::ptr::null(), present.as_ptr()), 0);
+            assert_eq!(faidx_has_seq(&fai, present.as_ptr().cast()), 1);
+            assert_eq!(faidx_has_seq(&fai, absent.as_ptr().cast()), 0);
+            assert_eq!(faidx_has_seq(std::ptr::null(), present.as_ptr().cast()), 0);
             assert_eq!(faidx_fetch_nseq(&fai), 1);
             assert_eq!(faidx_nseq(&fai), 1);
             assert_eq!(faidx_iseq(&fai, 0).unwrap(), present.as_bytes());
-            assert_eq!(faidx_seq_len64(&fai, present.as_ptr()), 100);
-            assert_eq!(faidx_seq_len64(&fai, absent.as_ptr()), -1);
-            assert_eq!(faidx_seq_len(&fai, present.as_ptr()), 100);
-            assert_eq!(faidx_seq_len(&fai, absent.as_ptr()), -1);
+            assert_eq!(faidx_seq_len64(&fai, present.as_ptr().cast()), 100);
+            assert_eq!(faidx_seq_len64(&fai, absent.as_ptr().cast()), -1);
+            assert_eq!(faidx_seq_len(&fai, present.as_ptr().cast()), 100);
+            assert_eq!(faidx_seq_len(&fai, absent.as_ptr().cast()), -1);
 
             let mut beg = -5;
             let mut end = 150;
@@ -1448,48 +1527,48 @@ mod tests {
         unsafe {
             let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
             let chr1 = CString::new("chr1").unwrap();
-            let fai = fai_load(path_c.as_ptr());
+            let fai = fai_load(path_c.as_ptr().cast());
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
-            assert_eq!(faidx_has_seq(fai, chr1.as_ptr()), 1);
-            assert_eq!(faidx_seq_len64(fai, chr1.as_ptr()), 8);
+            assert_eq!(faidx_has_seq(fai, chr1.as_ptr().cast()), 1);
+            assert_eq!(faidx_seq_len64(fai, chr1.as_ptr().cast()), 8);
 
             let mut len = 0;
-            let seq = faidx_fetch_seq64(fai, chr1.as_ptr(), 2, 6, &mut len);
+            let seq = faidx_fetch_seq64(fai, chr1.as_ptr().cast(), 2, 6, &mut len);
             assert!(!seq.is_null());
             assert_eq!(len, 5);
-            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"GTTGC");
+            assert_eq!(CStr::from_ptr(seq.cast()).to_bytes(), b"GTTGC");
             faidx_free_returned_c_bytes(seq);
 
-            let seq = faidx_fetch_seq64(fai, chr1.as_ptr(), 1, 2, &mut len);
+            let seq = faidx_fetch_seq64(fai, chr1.as_ptr().cast(), 1, 2, &mut len);
             assert!(!seq.is_null());
             assert_eq!(len, 2);
-            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"CG");
+            assert_eq!(CStr::from_ptr(seq.cast()).to_bytes(), b"CG");
             faidx_free_returned_c_bytes(seq);
 
             let mut len32 = 0;
-            let seq = faidx_fetch_seq(fai, chr1.as_ptr(), 2, 6, &mut len32);
+            let seq = faidx_fetch_seq(fai, chr1.as_ptr().cast(), 2, 6, &mut len32);
             assert!(!seq.is_null());
             assert_eq!(len32, 5);
-            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"GTTGC");
+            assert_eq!(CStr::from_ptr(seq.cast()).to_bytes(), b"GTTGC");
             faidx_free_returned_c_bytes(seq);
 
             let reg = CString::new("chr1:3-7").unwrap();
-            assert_eq!(fai_line_length(fai, reg.as_ptr()), 4);
-            let seq = fai_fetch64(fai, reg.as_ptr(), &mut len);
+            assert_eq!(fai_line_length(fai, reg.as_ptr().cast()), 4);
+            let seq = fai_fetch64(fai, reg.as_ptr().cast(), &mut len);
             assert!(!seq.is_null());
             assert_eq!(len, 5);
-            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"GTTGC");
+            assert_eq!(CStr::from_ptr(seq.cast()).to_bytes(), b"GTTGC");
             faidx_free_returned_c_bytes(seq);
 
-            let seq = fai_fetch(fai, reg.as_ptr(), &mut len32);
+            let seq = fai_fetch(fai, reg.as_ptr().cast(), &mut len32);
             assert!(!seq.is_null());
             assert_eq!(len32, 5);
-            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"GTTGC");
+            assert_eq!(CStr::from_ptr(seq.cast()).to_bytes(), b"GTTGC");
             faidx_free_returned_c_bytes(seq);
 
             let absent = CString::new("absent").unwrap();
-            let seq = faidx_fetch_seq64(fai, absent.as_ptr(), 0, 1, &mut len);
+            let seq = faidx_fetch_seq64(fai, absent.as_ptr().cast(), 0, 1, &mut len);
             assert!(seq.is_null());
             assert_eq!(len, -2);
 
@@ -1518,26 +1597,26 @@ mod tests {
         unsafe {
             let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
             let chr1 = CString::new("chr1").unwrap();
-            let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
+            let fai = fai_load3(path_c.as_ptr().cast(), ptr::null(), ptr::null(), 0);
             assert!(!fai.is_null());
 
             let mut len = 0;
-            let seq = faidx_fetch_seq64(fai, chr1.as_ptr(), -5, 2, &mut len);
+            let seq = faidx_fetch_seq64(fai, chr1.as_ptr().cast(), -5, 2, &mut len);
             assert!(!seq.is_null());
             assert_eq!(len, 3);
-            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"ACG");
+            assert_eq!(CStr::from_ptr(seq.cast()).to_bytes(), b"ACG");
             faidx_free_returned_c_bytes(seq);
 
-            let seq = faidx_fetch_seq64(fai, chr1.as_ptr(), 6, 2, &mut len);
+            let seq = faidx_fetch_seq64(fai, chr1.as_ptr().cast(), 6, 2, &mut len);
             assert!(!seq.is_null());
             assert_eq!(len, 1);
-            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"G");
+            assert_eq!(CStr::from_ptr(seq.cast()).to_bytes(), b"G");
             faidx_free_returned_c_bytes(seq);
 
-            let seq = faidx_fetch_seq64(fai, chr1.as_ptr(), 99, 120, &mut len);
+            let seq = faidx_fetch_seq64(fai, chr1.as_ptr().cast(), 99, 120, &mut len);
             assert!(!seq.is_null());
             assert_eq!(len, 0);
-            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"");
+            assert_eq!(CStr::from_ptr(seq.cast()).to_bytes(), b"");
             faidx_free_returned_c_bytes(seq);
 
             fai_destroy(fai);
@@ -1564,7 +1643,7 @@ mod tests {
 
         unsafe {
             let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
-            let fai = fai_load3(path_c.as_ptr(), std::ptr::null(), std::ptr::null(), 0);
+            let fai = fai_load3(path_c.as_ptr().cast(), std::ptr::null(), std::ptr::null(), 0);
             assert!(!fai.is_null());
 
             let mut tid = -1;
@@ -1573,26 +1652,26 @@ mod tests {
 
             let reg = CString::new("chr1:2-4").unwrap();
             assert!(
-                !fai_parse_region(fai, reg.as_ptr(), &mut tid, &mut beg, &mut end, 0).is_null()
+                !fai_parse_region(fai, reg.as_ptr().cast(), &mut tid, &mut beg, &mut end, 0).is_null()
             );
             assert_eq!((tid, beg, end), (0, 1, 4));
 
             let reg = CString::new("{chr1:alt}:1-2").unwrap();
             assert!(
-                !fai_parse_region(fai, reg.as_ptr(), &mut tid, &mut beg, &mut end, 0).is_null()
+                !fai_parse_region(fai, reg.as_ptr().cast(), &mut tid, &mut beg, &mut end, 0).is_null()
             );
             assert_eq!((tid, beg, end), (1, 0, 2));
 
             let reg = CString::new("chr1:3").unwrap();
             assert!(
-                !fai_parse_region(fai, reg.as_ptr(), &mut tid, &mut beg, &mut end, 0).is_null()
+                !fai_parse_region(fai, reg.as_ptr().cast(), &mut tid, &mut beg, &mut end, 0).is_null()
             );
             assert_eq!((tid, beg, end), (0, 2, HTS_POS_MAX));
 
             let reg = CString::new("chr1:3").unwrap();
             assert!(!fai_parse_region(
                 fai,
-                reg.as_ptr(),
+                reg.as_ptr().cast(),
                 &mut tid,
                 &mut beg,
                 &mut end,
@@ -1602,7 +1681,7 @@ mod tests {
             assert_eq!((tid, beg, end), (0, 2, 3));
 
             let reg = CString::new("chr1:alt").unwrap();
-            assert!(fai_parse_region(fai, reg.as_ptr(), &mut tid, &mut beg, &mut end, 0).is_null());
+            assert!(fai_parse_region(fai, reg.as_ptr().cast(), &mut tid, &mut beg, &mut end, 0).is_null());
             assert_eq!(tid, -1);
 
             fai_destroy(fai);
@@ -1650,14 +1729,14 @@ mod tests {
             let mut end = -1;
             let reg = CString::new("{chr1:alt}").unwrap();
             let fai_ptr = &mut *fai as *mut faidx_t;
-            let rest = fai_parse_region(fai_ptr, reg.as_ptr(), &mut tid, &mut beg, &mut end, 0);
+            let rest = fai_parse_region(fai_ptr, reg.as_ptr().cast(), &mut tid, &mut beg, &mut end, 0);
             assert!(!rest.is_null());
-            assert_eq!(CStr::from_ptr(rest).to_bytes(), b"");
+            assert_eq!(CStr::from_ptr(rest.cast()).to_bytes(), b"");
             assert_eq!((tid, beg, end), (1, 0, HTS_POS_MAX));
 
             let reg = CString::new("{chr1:alt}:2-1").unwrap();
             assert!(
-                fai_parse_region(fai_ptr, reg.as_ptr(), &mut tid, &mut beg, &mut end, 0).is_null()
+                fai_parse_region(fai_ptr, reg.as_ptr().cast(), &mut tid, &mut beg, &mut end, 0).is_null()
             );
         }
     }
@@ -1696,9 +1775,9 @@ mod tests {
             .unwrap();
 
             let fai_ptr = &mut *fai as *mut faidx_t;
-            assert_eq!(fai_line_length(fai_ptr, c"chr1:2-3".as_ptr()), 80);
-            assert_eq!(fai_line_length(fai_ptr, c"{chr1:alt}:2-3".as_ptr()), 50);
-            assert_eq!(fai_line_length(fai_ptr, c"missing:1-2".as_ptr()), -1);
+            assert_eq!(fai_line_length(fai_ptr, c"chr1:2-3".as_ptr().cast()), 80);
+            assert_eq!(fai_line_length(fai_ptr, c"{chr1:alt}:2-3".as_ptr().cast()), 50);
+            assert_eq!(fai_line_length(fai_ptr, c"missing:1-2".as_ptr().cast()), -1);
         }
     }
 
@@ -1742,27 +1821,27 @@ mod tests {
             let fai_ptr = &mut *fai as *mut faidx_t;
             let rest = fai_parse_region(
                 fai_ptr,
-                reg.as_ptr(),
+                reg.as_ptr().cast(),
                 &mut tid,
                 &mut beg,
                 &mut end,
                 HTS_PARSE_LIST,
             );
             assert!(!rest.is_null());
-            assert_eq!(CStr::from_ptr(rest).to_bytes(), b"chr3");
+            assert_eq!(CStr::from_ptr(rest.cast()).to_bytes(), b"chr3");
             assert_eq!((tid, beg, end), (0, 0, HTS_POS_MAX));
 
             let reg = CString::new("chr3:1,000-1,500").unwrap();
             let rest = fai_parse_region(
                 fai_ptr,
-                reg.as_ptr(),
+                reg.as_ptr().cast(),
                 &mut tid,
                 &mut beg,
                 &mut end,
                 HTS_PARSE_LIST | HTS_PARSE_ONE_COORD,
             );
             assert!(!rest.is_null());
-            assert_eq!(CStr::from_ptr(rest).to_bytes(), b"000-1,500");
+            assert_eq!(CStr::from_ptr(rest.cast()).to_bytes(), b"000-1,500");
             assert_eq!((tid, beg, end), (1, 0, 1));
         }
     }
@@ -1792,21 +1871,21 @@ mod tests {
             let mut end = -1;
             let reg = CString::new("chr1:1,000-1,002").unwrap();
             let fai_ptr = &mut *fai as *mut faidx_t;
-            let rest = fai_parse_region(fai_ptr, reg.as_ptr(), &mut tid, &mut beg, &mut end, 0);
+            let rest = fai_parse_region(fai_ptr, reg.as_ptr().cast(), &mut tid, &mut beg, &mut end, 0);
             assert!(!rest.is_null());
-            assert_eq!(CStr::from_ptr(rest).to_bytes(), b"");
+            assert_eq!(CStr::from_ptr(rest.cast()).to_bytes(), b"");
             assert_eq!((tid, beg, end), (0, 999, 1002));
 
             let rest = fai_parse_region(
                 fai_ptr,
-                reg.as_ptr(),
+                reg.as_ptr().cast(),
                 &mut tid,
                 &mut beg,
                 &mut end,
                 HTS_PARSE_LIST,
             );
             assert!(!rest.is_null());
-            assert_eq!(CStr::from_ptr(rest).to_bytes(), b"000-1,002");
+            assert_eq!(CStr::from_ptr(rest.cast()).to_bytes(), b"000-1,002");
             assert_eq!((tid, beg, end), (0, 0, HTS_POS_MAX));
         }
     }
@@ -1817,16 +1896,16 @@ mod tests {
         let explicit_fai = CString::new("/tmp/custom.index").unwrap();
         let explicit_gzi = CString::new("/tmp/custom.gzi").unwrap();
 
-        let inferred = resolved_index_path(fasta.as_ptr(), ptr::null(), b".fai").unwrap();
+        let inferred = resolved_index_path(fasta.as_ptr().cast(), ptr::null(), b".fai").unwrap();
         assert_eq!(path_bytes(&inferred).as_ref(), b"/tmp/ref.fa.fai");
 
-        let explicit = resolved_index_path(fasta.as_ptr(), explicit_fai.as_ptr(), b".fai").unwrap();
+        let explicit = resolved_index_path(fasta.as_ptr().cast(), explicit_fai.as_ptr().cast(), b".fai").unwrap();
         assert_eq!(path_bytes(&explicit).as_ref(), b"/tmp/custom.index");
 
-        let explicit = resolved_index_path(fasta.as_ptr(), explicit_gzi.as_ptr(), b".gzi").unwrap();
+        let explicit = resolved_index_path(fasta.as_ptr().cast(), explicit_gzi.as_ptr().cast(), b".gzi").unwrap();
         assert_eq!(path_bytes(&explicit).as_ref(), b"/tmp/custom.gzi");
 
-        assert!(resolved_index_path(ptr::null(), explicit_fai.as_ptr(), b".fai").is_none());
+        assert!(resolved_index_path(ptr::null(), explicit_fai.as_ptr().cast(), b".fai").is_none());
     }
 
     #[test]
@@ -1848,11 +1927,11 @@ mod tests {
             let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
             let chr1 = CString::new("chr1").unwrap();
             let chr2 = CString::new("chr2").unwrap();
-            let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
+            let fai = fai_load3(path_c.as_ptr().cast(), ptr::null(), ptr::null(), 0);
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
-            assert_eq!(faidx_seq_len64(fai, chr1.as_ptr()), 4);
-            assert_eq!(faidx_seq_len64(fai, chr2.as_ptr()), 4);
+            assert_eq!(faidx_seq_len64(fai, chr1.as_ptr().cast()), 4);
+            assert_eq!(faidx_seq_len64(fai, chr2.as_ptr().cast()), 4);
             fai_destroy(fai);
         }
 
@@ -1879,11 +1958,11 @@ mod tests {
             let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
             let chr1 = CString::new("chr1").unwrap();
             let chr2 = CString::new("chr2").unwrap();
-            let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
+            let fai = fai_load3(path_c.as_ptr().cast(), ptr::null(), ptr::null(), 0);
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
-            assert_eq!(faidx_seq_len64(fai, chr1.as_ptr()), 4);
-            assert_eq!(faidx_seq_len64(fai, chr2.as_ptr()), 4);
+            assert_eq!(faidx_seq_len64(fai, chr1.as_ptr().cast()), 4);
+            assert_eq!(faidx_seq_len64(fai, chr2.as_ptr().cast()), 4);
             fai_destroy(fai);
         }
 
@@ -1914,13 +1993,13 @@ mod tests {
             let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
             let dup = CString::new("dup").unwrap();
             let other = CString::new("other").unwrap();
-            let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
+            let fai = fai_load3(path_c.as_ptr().cast(), ptr::null(), ptr::null(), 0);
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
             assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"dup");
             assert_eq!(faidx_iseq(&*fai, 1).unwrap(), b"other");
-            assert_eq!(faidx_seq_len64(fai, dup.as_ptr()), 4);
-            assert_eq!(faidx_seq_len64(fai, other.as_ptr()), 2);
+            assert_eq!(faidx_seq_len64(fai, dup.as_ptr().cast()), 4);
+            assert_eq!(faidx_seq_len64(fai, other.as_ptr().cast()), 2);
             fai_destroy(fai);
         }
 
@@ -1950,14 +2029,14 @@ mod tests {
                 b"chr1\t4\t6\t5\t4\n".as_slice(),
             ] {
                 fs::write(&fai_path, row).unwrap();
-                let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
+                let fai = fai_load3(path_c.as_ptr().cast(), ptr::null(), ptr::null(), 0);
                 assert!(!fai.is_null());
-                assert_eq!(faidx_seq_len64(fai, chr1.as_ptr()), 4);
+                assert_eq!(faidx_seq_len64(fai, chr1.as_ptr().cast()), 4);
                 fai_destroy(fai);
             }
 
             fs::write(&fai_path, b"chr1\t4\tbad\t4\t5\n").unwrap();
-            let fai = fai_load3(path_c.as_ptr(), ptr::null(), ptr::null(), 0);
+            let fai = fai_load3(path_c.as_ptr().cast(), ptr::null(), ptr::null(), 0);
             assert!(fai.is_null());
         }
 
@@ -1988,19 +2067,19 @@ mod tests {
             let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
             let r1 = CString::new("r1").unwrap();
             let r2 = CString::new("r2").unwrap();
-            let fai = fai_load3_format(path_c.as_ptr(), ptr::null(), ptr::null(), 0, FAI_FASTQ);
+            let fai = fai_load3_format(path_c.as_ptr().cast(), ptr::null(), ptr::null(), 0, FAI_FASTQ);
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
             assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"r1");
             assert_eq!(faidx_iseq(&*fai, 1).unwrap(), b"r2");
 
             let mut len = 0;
-            let qual = faidx_fetch_qual64(fai, r1.as_ptr(), 0, 3, &mut len);
+            let qual = faidx_fetch_qual64(fai, r1.as_ptr().cast(), 0, 3, &mut len);
             assert!(!qual.is_null());
             assert_eq!(len, 4);
-            assert_eq!(CStr::from_ptr(qual).to_bytes(), b"!!!!");
+            assert_eq!(CStr::from_ptr(qual.cast()).to_bytes(), b"!!!!");
             faidx_free_returned_c_bytes(qual);
-            assert_eq!(faidx_seq_len64(fai, r2.as_ptr()), 2);
+            assert_eq!(faidx_seq_len64(fai, r2.as_ptr().cast()), 2);
             fai_destroy(fai);
 
             for row in [
@@ -2008,7 +2087,7 @@ mod tests {
                 b"r1\t4\t4\t4\t5\tbad\n".as_slice(),
             ] {
                 fs::write(&fai_path, row).unwrap();
-                let fai = fai_load3_format(path_c.as_ptr(), ptr::null(), ptr::null(), 0, FAI_FASTQ);
+                let fai = fai_load3_format(path_c.as_ptr().cast(), ptr::null(), ptr::null(), 0, FAI_FASTQ);
                 assert!(fai.is_null());
             }
 
@@ -2017,7 +2096,7 @@ mod tests {
                 b"r1\t4\t4\t5\t4\t11\n".as_slice(),
             ] {
                 fs::write(&fai_path, row).unwrap();
-                let fai = fai_load3_format(path_c.as_ptr(), ptr::null(), ptr::null(), 0, FAI_FASTQ);
+                let fai = fai_load3_format(path_c.as_ptr().cast(), ptr::null(), ptr::null(), 0, FAI_FASTQ);
                 assert!(!fai.is_null());
                 fai_destroy(fai);
             }
@@ -2090,13 +2169,13 @@ mod tests {
             let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
             let name = CString::new("chr1").unwrap();
             let fai = fai_load3(
-                path_c.as_ptr(),
+                path_c.as_ptr().cast(),
                 std::ptr::null(),
                 std::ptr::null(),
                 FAI_CREATE,
             );
             assert!(!fai.is_null());
-            assert_eq!(faidx_seq_len64(fai, name.as_ptr()), 4);
+            assert_eq!(faidx_seq_len64(fai, name.as_ptr().cast()), 4);
             fai_destroy(fai);
         }
 
@@ -2135,19 +2214,19 @@ mod tests {
             let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
             let chr1 = CString::new("chr1").unwrap();
             let chr2 = CString::new("chr2").unwrap();
-            let fai = fai_load3(path_c.as_ptr(), std::ptr::null(), std::ptr::null(), 0);
+            let fai = fai_load3(path_c.as_ptr().cast(), std::ptr::null(), std::ptr::null(), 0);
             assert!(!fai.is_null());
             assert_eq!(faidx_nseq(fai), 2);
             assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"chr1");
             assert_eq!(faidx_iseq(&*fai, 1).unwrap(), b"chr2");
-            assert_eq!(faidx_seq_len64(fai, chr1.as_ptr()), 8);
-            assert_eq!(faidx_seq_len64(fai, chr2.as_ptr()), 4);
+            assert_eq!(faidx_seq_len64(fai, chr1.as_ptr().cast()), 8);
+            assert_eq!(faidx_seq_len64(fai, chr2.as_ptr().cast()), 4);
 
             let mut len = 0;
-            let seq = faidx_fetch_seq64(fai, chr1.as_ptr(), 4, 7, &mut len);
+            let seq = faidx_fetch_seq64(fai, chr1.as_ptr().cast(), 4, 7, &mut len);
             assert!(!seq.is_null());
             assert_eq!(len, 4);
-            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"TGCA");
+            assert_eq!(CStr::from_ptr(seq.cast()).to_bytes(), b"TGCA");
             faidx_free_returned_c_bytes(seq);
 
             fai_destroy(fai);
@@ -2175,7 +2254,7 @@ mod tests {
             let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
             let seq_name = CString::new(b"sq\xff".as_slice()).unwrap();
             let fai = fai_load3(
-                path_c.as_ptr(),
+                path_c.as_ptr().cast(),
                 std::ptr::null(),
                 std::ptr::null(),
                 FAI_CREATE,
@@ -2184,13 +2263,13 @@ mod tests {
             assert!(fai_path.exists());
             assert_eq!(faidx_nseq(fai), 1);
             assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"sq\xff");
-            assert_eq!(faidx_seq_len64(fai, seq_name.as_ptr()), 5);
+            assert_eq!(faidx_seq_len64(fai, seq_name.as_ptr().cast()), 5);
 
             let mut len = 0;
-            let seq = faidx_fetch_seq64(fai, seq_name.as_ptr(), 0, 4, &mut len);
+            let seq = faidx_fetch_seq64(fai, seq_name.as_ptr().cast(), 0, 4, &mut len);
             assert!(!seq.is_null());
             assert_eq!(len, 5);
-            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"ACGTT");
+            assert_eq!(CStr::from_ptr(seq.cast()).to_bytes(), b"ACGTT");
             faidx_free_returned_c_bytes(seq);
             fai_destroy(fai);
         }
@@ -2219,7 +2298,7 @@ mod tests {
             let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
             let name = CString::new("r1").unwrap();
             let fai = fai_load3_format(
-                path_c.as_ptr(),
+                path_c.as_ptr().cast(),
                 std::ptr::null(),
                 std::ptr::null(),
                 FAI_CREATE,
@@ -2228,13 +2307,13 @@ mod tests {
             assert!(!fai.is_null());
             assert!(fai_path.exists());
             assert_eq!((*fai).format, FAI_NONE);
-            assert_eq!(faidx_seq_len64(fai, name.as_ptr()), 4);
+            assert_eq!(faidx_seq_len64(fai, name.as_ptr().cast()), 4);
 
             let mut len = 0;
-            let qual = faidx_fetch_qual64(fai, name.as_ptr(), 1, 3, &mut len);
+            let qual = faidx_fetch_qual64(fai, name.as_ptr().cast(), 1, 3, &mut len);
             assert!(!qual.is_null());
             assert_eq!(len, 3);
-            assert_eq!(CStr::from_ptr(qual).to_bytes(), b"!!!");
+            assert_eq!(CStr::from_ptr(qual.cast()).to_bytes(), b"!!!");
             faidx_free_returned_c_bytes(qual);
             fai_destroy(fai);
         }
@@ -2263,7 +2342,7 @@ mod tests {
             let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
             let name = CString::new("r1").unwrap();
             let fai = fai_load3_format(
-                path_c.as_ptr(),
+                path_c.as_ptr().cast(),
                 ptr::null(),
                 ptr::null(),
                 FAI_CREATE,
@@ -2272,22 +2351,22 @@ mod tests {
             assert!(!fai.is_null());
 
             let mut len = 0;
-            let seq = faidx_fetch_seq64(fai, name.as_ptr(), 2, 5, &mut len);
+            let seq = faidx_fetch_seq64(fai, name.as_ptr().cast(), 2, 5, &mut len);
             assert!(!seq.is_null());
             assert_eq!(len, 4);
-            assert_eq!(CStr::from_ptr(seq).to_bytes(), b"GTTG");
+            assert_eq!(CStr::from_ptr(seq.cast()).to_bytes(), b"GTTG");
             faidx_free_returned_c_bytes(seq);
 
-            let qual = faidx_fetch_qual64(fai, name.as_ptr(), 3, 5, &mut len);
+            let qual = faidx_fetch_qual64(fai, name.as_ptr().cast(), 3, 5, &mut len);
             assert!(!qual.is_null());
             assert_eq!(len, 3);
-            assert_eq!(CStr::from_ptr(qual).to_bytes(), b"!??");
+            assert_eq!(CStr::from_ptr(qual.cast()).to_bytes(), b"!??");
             faidx_free_returned_c_bytes(qual);
 
-            let empty = faidx_fetch_seq64(fai, name.as_ptr(), 6, 99, &mut len);
+            let empty = faidx_fetch_seq64(fai, name.as_ptr().cast(), 6, 99, &mut len);
             assert!(!empty.is_null());
             assert_eq!(len, 0);
-            assert_eq!(CStr::from_ptr(empty).to_bytes(), b"");
+            assert_eq!(CStr::from_ptr(empty.cast()).to_bytes(), b"");
             faidx_free_returned_c_bytes(empty);
 
             fai_destroy(fai);
@@ -2375,9 +2454,9 @@ mod tests {
             assert_eq!(fp.block_offset, 1);
             assert_eq!(fp.uncompressed_address, 1);
 
-            let explicit = fai_path(c"ref.fa##idx##custom.fai".as_ptr());
+            let explicit = fai_path(c"ref.fa##idx##custom.fai".as_ptr().cast());
             assert!(!explicit.is_null());
-            assert_eq!(CStr::from_ptr(explicit).to_bytes(), b"custom.fai");
+            assert_eq!(CStr::from_ptr(explicit.cast()).to_bytes(), b"custom.fai");
             faidx_free_returned_c_bytes(explicit);
         }
     }
@@ -2403,9 +2482,9 @@ mod tests {
 
         unsafe {
             let path_c = CString::new(fai_path_buf).unwrap();
-            let resolved = fai_path(path_c.as_ptr());
+            let resolved = fai_path(path_c.as_ptr().cast());
             assert!(!resolved.is_null());
-            assert_eq!(CStr::from_ptr(resolved).to_bytes(), expected.as_slice());
+            assert_eq!(CStr::from_ptr(resolved.cast()).to_bytes(), expected.as_slice());
             assert!(path_from_bytes(&expected).exists());
             faidx_free_returned_c_bytes(resolved);
         }
@@ -2464,7 +2543,7 @@ mod tests {
 
         unsafe {
             let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
-            let bgzf = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+            let bgzf = bgzf_open(path_c.as_ptr().cast(), c"r".as_ptr().cast());
             assert!(!bgzf.is_null());
             let fai = faidx_c_132_fai_build_core(bgzf);
             bgzf_close(bgzf);
@@ -2473,8 +2552,8 @@ mod tests {
             assert_eq!(faidx_nseq(fai), 2);
             assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"r1");
             assert_eq!(faidx_iseq(&*fai, 1).unwrap(), b"r2");
-            assert_eq!(faidx_seq_len64(fai, c"r1".as_ptr()), 4);
-            assert_eq!(faidx_seq_len64(fai, c"r2".as_ptr()), 2);
+            assert_eq!(faidx_seq_len64(fai, c"r1".as_ptr().cast()), 4);
+            assert_eq!(faidx_seq_len64(fai, c"r2".as_ptr().cast()), 2);
             fai_destroy(fai);
         }
 
@@ -2496,7 +2575,7 @@ mod tests {
 
         unsafe {
             let path_c = CString::new(path_bytes(&path).as_ref()).unwrap();
-            let bgzf = bgzf_open(path_c.as_ptr(), c"r".as_ptr());
+            let bgzf = bgzf_open(path_c.as_ptr().cast(), c"r".as_ptr().cast());
             assert!(!bgzf.is_null());
             let fai = faidx_c_132_fai_build_core(bgzf);
             bgzf_close(bgzf);
@@ -2505,8 +2584,8 @@ mod tests {
             assert_eq!(faidx_nseq(fai), 2);
             assert_eq!(faidx_iseq(&*fai, 0).unwrap(), b"r1");
             assert_eq!(faidx_iseq(&*fai, 1).unwrap(), b"r2");
-            assert_eq!(faidx_seq_len64(fai, c"r1".as_ptr()), 3);
-            assert_eq!(faidx_seq_len64(fai, c"r2".as_ptr()), 1);
+            assert_eq!(faidx_seq_len64(fai, c"r1".as_ptr().cast()), 3);
+            assert_eq!(faidx_seq_len64(fai, c"r2".as_ptr().cast()), 1);
             fai_destroy(fai);
         }
 
@@ -2815,7 +2894,7 @@ unsafe fn faidx_save_hfile(fai_ref: &faidx_t, fp: &mut hFILE) -> i32 {
 }
 
 // original: fai_read (htslib/faidx.c:380)
-pub unsafe fn faidx_c_380_fai_read(fp: *mut hFILE, _fname: *const i8, format: i32) -> *mut faidx_t {
+pub unsafe fn faidx_c_380_fai_read(fp: *mut hFILE, _fname: *const u8, format: i32) -> *mut faidx_t {
     let Some(fp) = fp.as_mut() else {
         return ptr::null_mut();
     };
@@ -2919,11 +2998,12 @@ fn scan_ascii_u64(buf: &[u8], cur: &mut usize) -> Option<u64> {
 
 // original: fai_build3_core (htslib/faidx.c:460)
 pub unsafe fn faidx_c_460_fai_build3_core(
-    fn_: *const i8,
-    fnfai: *const i8,
-    fngzi: *const i8,
+    fn_: *const u8,
+    fnfai: *const u8,
+    fngzi: *const u8,
 ) -> i32 {
-    let bgzf = bgzf_open(fn_, c"r".as_ptr());
+    // RECONVERGE: bgzf_open still takes *const c_char (C ABI); cast at boundary.
+    let bgzf = bgzf_open(fn_.cast(), c"r".as_ptr().cast());
     if bgzf.is_null() {
         return -1;
     }
@@ -2964,7 +3044,7 @@ pub unsafe fn faidx_c_460_fai_build3_core(
         return -1;
     }
 
-    let fp = hopen(fai_name.as_ptr().cast(), c"wb".as_ptr());
+    let fp = hopen(fai_name.as_ptr().cast(), c"wb".as_ptr().cast());
     if fp.is_null() {
         return -1;
     }
@@ -2986,20 +3066,20 @@ pub unsafe fn faidx_c_460_fai_build3_core(
 }
 
 // original: fai_build3 (htslib/faidx.c:557)
-pub unsafe fn faidx_c_557_fai_build3(fn_: *const i8, fnfai: *const i8, fngzi: *const i8) -> i32 {
+pub unsafe fn faidx_c_557_fai_build3(fn_: *const u8, fnfai: *const u8, fngzi: *const u8) -> i32 {
     faidx_c_460_fai_build3_core(fn_, fnfai, fngzi)
 }
 
 // original: fai_build (htslib/faidx.c:562)
-pub unsafe fn faidx_c_562_fai_build(fn_: *const i8) -> i32 {
+pub unsafe fn faidx_c_562_fai_build(fn_: *const u8) -> i32 {
     faidx_c_557_fai_build3(fn_, ptr::null(), ptr::null())
 }
 
 // original: fai_load3_core (htslib/faidx.c:567)
 pub unsafe fn faidx_c_567_fai_load3_core(
-    fn_: *const i8,
-    fnfai: *const i8,
-    fngzi: *const i8,
+    fn_: *const u8,
+    fnfai: *const u8,
+    fngzi: *const u8,
     flags: i32,
     format: i32,
 ) -> *mut faidx_t {
@@ -3016,17 +3096,18 @@ pub unsafe fn faidx_c_567_fai_load3_core(
         return ptr::null_mut();
     };
 
-    let mut fp = hopen(fai_name.as_ptr().cast(), c"rb".as_ptr());
+    let mut fp = hopen(fai_name.as_ptr().cast(), c"rb".as_ptr().cast());
     let mut gzi_index_needed = false;
 
     if !fp.is_null() {
-        let bgzf = bgzf_open(fn_, c"rb".as_ptr());
+        // RECONVERGE: bgzf_open still takes *const c_char (C ABI); cast at boundary.
+        let bgzf = bgzf_open(fn_.cast(), c"rb".as_ptr().cast());
         if bgzf.is_null() {
             hclose_abruptly(fp);
             return ptr::null_mut();
         }
         if bgzf_compression(bgzf) == 2 {
-            let gz = hopen(gzi_name.as_ptr().cast(), c"rb".as_ptr());
+            let gz = hopen(gzi_name.as_ptr().cast(), c"rb".as_ptr().cast());
             if gz.is_null() {
                 if (flags & FAI_CREATE) == 0 {
                     bgzf_close(bgzf);
@@ -3056,7 +3137,7 @@ pub unsafe fn faidx_c_567_fai_load3_core(
         {
             return ptr::null_mut();
         }
-        fp = hopen(fai_name.as_ptr().cast(), c"rb".as_ptr());
+        fp = hopen(fai_name.as_ptr().cast(), c"rb".as_ptr().cast());
         if fp.is_null() {
             return ptr::null_mut();
         }
@@ -3071,7 +3152,8 @@ pub unsafe fn faidx_c_567_fai_load3_core(
         return ptr::null_mut();
     }
 
-    if !fai.set_bgzf(NonNull::new(bgzf_open(fn_, c"rb".as_ptr()))) {
+    // RECONVERGE: bgzf_open still takes *const c_char (C ABI); cast at boundary.
+    if !fai.set_bgzf(NonNull::new(bgzf_open(fn_.cast(), c"rb".as_ptr().cast()))) {
         return ptr::null_mut();
     }
 
@@ -3086,9 +3168,9 @@ pub unsafe fn faidx_c_567_fai_load3_core(
 
 // original: fai_load3_format (htslib/faidx.c:705)
 pub unsafe fn faidx_c_705_fai_load3_format(
-    fn_: *const i8,
-    fnfai: *const i8,
-    fngzi: *const i8,
+    fn_: *const u8,
+    fnfai: *const u8,
+    fngzi: *const u8,
     flags: i32,
     format: fai_format_options,
 ) -> *mut faidx_t {
@@ -3097,7 +3179,7 @@ pub unsafe fn faidx_c_705_fai_load3_format(
 
 // original: fai_load_format (htslib/faidx.c:711)
 pub unsafe fn faidx_c_711_fai_load_format(
-    fn_: *const i8,
+    fn_: *const u8,
     format: fai_format_options,
 ) -> *mut faidx_t {
     faidx_c_705_fai_load3_format(fn_, ptr::null(), ptr::null(), FAI_CREATE, format)
@@ -3198,15 +3280,16 @@ fn kh_resize_s(idx: &mut faidx_t, new_n_buckets: u32) -> i32 {
 }
 
 unsafe fn owned_index_c_bytes(
-    fn_: *const i8,
-    explicit: *const i8,
+    fn_: *const u8,
+    explicit: *const u8,
     suffix: &[u8],
 ) -> Option<Vec<u8>> {
-    let mut bytes = if explicit.is_null() {
-        CStr::from_ptr(fn_).to_bytes().to_vec()
-    } else {
-        CStr::from_ptr(explicit).to_bytes().to_vec()
-    };
+    let src = if explicit.is_null() { fn_ } else { explicit };
+    let mut src_len = 0usize;
+    while *src.add(src_len) != 0 {
+        src_len += 1;
+    }
+    let mut bytes = std::slice::from_raw_parts(src, src_len).to_vec();
     if bytes.contains(&0) {
         return None;
     }

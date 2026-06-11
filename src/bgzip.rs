@@ -202,11 +202,11 @@ unsafe fn bgzip_check_name_and_extension(name: &mut [u8], forced: &mut i32) -> i
 }
 
 unsafe fn bgzip_open_bgzf(path: &CStr, mode: &CStr) -> Option<NonNull<BGZF>> {
-    NonNull::new(bgzf_open(path.as_ptr(), mode.as_ptr()))
+    NonNull::new(bgzf_open(path.as_ptr().cast(), mode.as_ptr().cast()))
 }
 
 unsafe fn bgzip_dopen_bgzf(fd: i32, mode: &CStr) -> Option<NonNull<BGZF>> {
-    NonNull::new(bgzf_dopen(fd, mode.as_ptr()))
+    NonNull::new(bgzf_dopen(fd, mode.as_ptr().cast()))
 }
 
 unsafe fn bgzip_close_bgzf(fp: &mut Option<NonNull<BGZF>>) -> (i32, u32) {
@@ -532,11 +532,11 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
             }
             let f_src = hopen(
                 if !isstdin {
-                    *argv.add(optind as usize)
+                    (*argv.add(optind as usize)).cast::<u8>().cast_const()
                 } else {
-                    c"-".as_ptr().cast_mut()
+                    c"-".as_ptr().cast::<u8>()
                 },
-                c"r".as_ptr(),
+                c"r".as_ptr().cast::<u8>(),
             );
             if f_src.is_null() {
                 let src_name = if isstdin {
@@ -649,7 +649,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
             if rebgzip {
                 if bgzf_index_load(
                     fp.as_mut().unwrap().as_mut(),
-                    index_fname.map_or(ptr::null(), CStr::as_ptr),
+                    index_fname.map_or(ptr::null(), |s| s.as_ptr().cast::<u8>()),
                     ptr::null(),
                 ) < 0
                 {
@@ -820,7 +820,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                 if let Some(index_fname) = index_fname {
                     if bgzf_index_dump(
                         fp.as_mut().unwrap().as_mut(),
-                        index_fname.as_ptr(),
+                        index_fname.as_ptr().cast::<u8>(),
                         ptr::null(),
                     ) < 0
                     {
@@ -833,8 +833,8 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                 } else if !isstdin {
                     if bgzf_index_dump(
                         fp.as_mut().unwrap().as_mut(),
-                        *argv.add(optind as usize),
-                        c".gz.gzi".as_ptr(),
+                        (*argv.add(optind as usize)).cast::<u8>().cast_const(),
+                        c".gz.gzi".as_ptr().cast::<u8>(),
                     ) < 0
                     {
                         eprintln!(
@@ -929,7 +929,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
             if let Some(index_fname) = index_fname {
                 if bgzf_index_dump(
                     fp.as_mut().unwrap().as_mut(),
-                    index_fname.as_ptr(),
+                    index_fname.as_ptr().cast::<u8>(),
                     ptr::null(),
                 ) < 0
                 {
@@ -942,8 +942,8 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
             } else if !isstdin {
                 if bgzf_index_dump(
                     fp.as_mut().unwrap().as_mut(),
-                    *argv.add(optind as usize),
-                    c".gzi".as_ptr(),
+                    (*argv.add(optind as usize)).cast::<u8>().cast_const(),
+                    c".gzi".as_ptr().cast::<u8>(),
                 ) < 0
                 {
                     eprintln!(
@@ -1122,7 +1122,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                 if let Some(index_fname) = index_fname {
                     if bgzf_index_load(
                         fp.as_mut().unwrap().as_mut(),
-                        index_fname.as_ptr(),
+                        index_fname.as_ptr().cast::<u8>(),
                         ptr::null(),
                     ) < 0
                     {
@@ -1138,8 +1138,8 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     }
                     if bgzf_index_load(
                         fp.as_mut().unwrap().as_mut(),
-                        *argv.add(optind as usize),
-                        c".gzi".as_ptr(),
+                        (*argv.add(optind as usize)).cast::<u8>().cast_const(),
+                        c".gzi".as_ptr().cast::<u8>(),
                     ) < 0
                     {
                         eprintln!(
@@ -1165,7 +1165,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
             let end_reg = end;
             if end < 0 && start == 0 {
                 loop {
-                    let mut block_data: *const std::ffi::c_void = ptr::null();
+                    let mut block_data: *const () = ptr::null();
                     let fp_ref = fp.as_mut().unwrap().as_mut();
                     c = bgzf_read_block_data(fp_ref, &mut block_data) as i32;
                     if c == 0 {
@@ -1276,7 +1276,7 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                 if let Some(index_fname) = index_fname {
                     if bgzf_index_dump(
                         fp.as_mut().unwrap().as_mut(),
-                        index_fname.as_ptr(),
+                        index_fname.as_ptr().cast::<u8>(),
                         ptr::null(),
                     ) < 0
                     {
@@ -1288,8 +1288,8 @@ pub unsafe fn bgzip_c_217_main(argc: i32, argv: *mut *mut i8) -> i32 {
                     }
                 } else if bgzf_index_dump(
                     fp.as_mut().unwrap().as_mut(),
-                    write_fname.as_ptr(),
-                    c".gzi".as_ptr(),
+                    write_fname.as_ptr().cast::<u8>(),
+                    c".gzi".as_ptr().cast::<u8>(),
                 ) < 0
                 {
                     eprintln!(

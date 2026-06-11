@@ -107,12 +107,12 @@ pub unsafe fn test_hfile_c_85_reopen(infname: *const u8, outfname: *const u8) {
         test_hfile_c_38_fail!(c"hclose(output)".as_ptr());
     }
 
-    TEST_HFILE_FIN = hopen(infname.cast(), c"r".as_ptr());
+    TEST_HFILE_FIN = hopen(infname.cast(), c"r".as_ptr().cast());
     if TEST_HFILE_FIN.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"%s\")".as_ptr(), infname);
     }
 
-    TEST_HFILE_FOUT = hopen(outfname.cast(), c"w".as_ptr());
+    TEST_HFILE_FOUT = hopen(outfname.cast(), c"w".as_ptr().cast());
     if TEST_HFILE_FOUT.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"%s\")".as_ptr(), outfname);
     }
@@ -308,7 +308,7 @@ pub unsafe fn test_hfile_c_97_main() -> i32 {
         test_hfile_c_38_fail!(c"hclose(output)".as_ptr());
     }
 
-    TEST_HFILE_FOUT = hopen(c"test/hfile_chars.tmp".as_ptr(), c"w".as_ptr());
+    TEST_HFILE_FOUT = hopen(c"test/hfile_chars.tmp".as_ptr().cast(), c"w".as_ptr().cast());
     if TEST_HFILE_FOUT.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"test/hfile_chars.tmp\")".as_ptr());
     }
@@ -321,7 +321,7 @@ pub unsafe fn test_hfile_c_97_main() -> i32 {
         test_hfile_c_38_fail!(c"hclose(test/hfile_chars.tmp)".as_ptr());
     }
 
-    TEST_HFILE_FIN = hopen(c"test/hfile_chars.tmp".as_ptr(), c"r".as_ptr());
+    TEST_HFILE_FIN = hopen(c"test/hfile_chars.tmp".as_ptr().cast(), c"r".as_ptr().cast());
     if TEST_HFILE_FIN.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"test/hfile_chars.tmp\") for reading".as_ptr());
     }
@@ -345,7 +345,7 @@ pub unsafe fn test_hfile_c_97_main() -> i32 {
         test_hfile_c_38_fail!(c"hclose(test/hfile_chars.tmp) for reading".as_ptr());
     }
 
-    TEST_HFILE_FIN = hopen(c"preload:test/hfile_chars.tmp".as_ptr(), c"r".as_ptr());
+    TEST_HFILE_FIN = hopen(c"preload:test/hfile_chars.tmp".as_ptr().cast(), c"r".as_ptr().cast());
     if TEST_HFILE_FIN.is_null() {
         test_hfile_c_38_fail!(c"preloading \"test/hfile_chars.tmp\" for reading".as_ptr());
     }
@@ -369,11 +369,11 @@ pub unsafe fn test_hfile_c_97_main() -> i32 {
         test_hfile_c_38_fail!(c"preloading hclose(test/hfile_chars.tmp) for reading".as_ptr());
     }
 
-    let mut test_string = libc::strdup(c"Test string".as_ptr());
+    let mut test_string = libc::strdup(c"Test string".as_ptr()).cast::<u8>();
     // Native hopen is non-variadic, so route the mem-buffer open through the
     // function the variadic mem vopen handler dispatches to, giving a native
     // MEM_BACKEND hfile that the native hfile_mem_get_buffer recognises.
-    TEST_HFILE_FIN = hfile_c_878_hopenv_mem(c"mem:".as_ptr(), c"r:".as_ptr(), test_string, 12usize);
+    TEST_HFILE_FIN = hfile_c_878_hopenv_mem(c"mem:".as_ptr().cast(), c"r:".as_ptr().cast(), test_string, 12usize);
     if TEST_HFILE_FIN.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"mem:\", \"r:\", ...)".as_ptr());
     }
@@ -400,9 +400,9 @@ pub unsafe fn test_hfile_c_97_main() -> i32 {
         test_hfile_c_38_fail!(c"hclose mem for reading".as_ptr());
     }
 
-    test_string = libc::strdup(c"Test string".as_ptr());
+    test_string = libc::strdup(c"Test string".as_ptr()).cast::<u8>();
     TEST_HFILE_FIN =
-        hfile_c_878_hopenv_mem(c"mem:".as_ptr(), c"wr:".as_ptr(), test_string, 12usize);
+        hfile_c_878_hopenv_mem(c"mem:".as_ptr().cast(), c"wr:".as_ptr().cast(), test_string, 12usize);
     if TEST_HFILE_FIN.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"mem:\", \"w:\", ...)".as_ptr());
     }
@@ -434,7 +434,7 @@ pub unsafe fn test_hfile_c_97_main() -> i32 {
         test_hfile_c_38_fail!(c"hclose mem for writing".as_ptr());
     }
 
-    TEST_HFILE_FIN = hopen(c"data:,hello, world!%0A".as_ptr(), c"r".as_ptr());
+    TEST_HFILE_FIN = hopen(c"data:,hello, world!%0A".as_ptr().cast(), c"r".as_ptr().cast());
     if TEST_HFILE_FIN.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"data:...\")".as_ptr());
     }
@@ -450,7 +450,7 @@ pub unsafe fn test_hfile_c_97_main() -> i32 {
         test_hfile_c_38_fail!(c"hclose(\"data:...\")".as_ptr());
     }
 
-    TEST_HFILE_FIN = hopen(c"test/emptyfile".as_ptr(), c"r".as_ptr());
+    TEST_HFILE_FIN = hopen(c"test/emptyfile".as_ptr().cast(), c"r".as_ptr().cast());
     if TEST_HFILE_FIN.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"test/emptyfile\") for reading".as_ptr());
     }
@@ -461,7 +461,7 @@ pub unsafe fn test_hfile_c_97_main() -> i32 {
         test_hfile_c_38_fail!(c"hclose(\"test/emptyfile\") for reading".as_ptr());
     }
 
-    TEST_HFILE_FIN = hopen(c"data:,".as_ptr(), c"r".as_ptr());
+    TEST_HFILE_FIN = hopen(c"data:,".as_ptr().cast(), c"r".as_ptr().cast());
     if TEST_HFILE_FIN.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"data:\") for reading".as_ptr());
     }
@@ -479,8 +479,9 @@ IHNpbmd1bGFyIHBhc3Npb24gZnJvbSBvdGhlciBhbmltYWxzLCB3aGljaCBpcyBhIGx1c3Qgb2Yg\
 dGhlIG1pbmQsIHRoYXQgYnkgYSBwZXJzZXZlcmFuY2Ugb2YgZGVsaWdodCBpbiB0aGUgY29udGlu\
 dWVkIGFuZCBpbmRlZmF0aWdhYmxlIGdlbmVyYXRpb24gb2Yga25vd2xlZGdlLCBleGNlZWRzIHRo\
 ZSBzaG9ydCB2ZWhlbWVuY2Ugb2YgYW55IGNhcm5hbCBwbGVhc3VyZS4="
-            .as_ptr(),
-        c"r".as_ptr(),
+            .as_ptr()
+            .cast(),
+        c"r".as_ptr().cast(),
     );
     if TEST_HFILE_FIN.is_null() {
         test_hfile_c_38_fail!(c"hopen(\"data:;base64,...\")".as_ptr());
@@ -508,42 +509,42 @@ of knowledge, exceeds the short vehemence of any carnal pleasure."
     let mut kstr = kstring_t { data: Vec::new() };
 
     if libc::strcmp(
-        haddextension(&mut kstr, c"foo/bar.bam".as_ptr(), 0, c".bai".as_ptr()),
+        haddextension(&mut kstr, c"foo/bar.bam".as_ptr().cast(), 0, c".bai".as_ptr().cast()).cast(),
         c"foo/bar.bam.bai".as_ptr(),
     ) != 0
     {
         test_hfile_c_38_fail!(c"haddextension foo/bar.bam[.bai]".as_ptr());
     }
     if libc::strcmp(
-        haddextension(&mut kstr, c"foo/bar.bam".as_ptr(), 1, c".bai".as_ptr()),
+        haddextension(&mut kstr, c"foo/bar.bam".as_ptr().cast(), 1, c".bai".as_ptr().cast()).cast(),
         c"foo/bar.bai".as_ptr(),
     ) != 0
     {
         test_hfile_c_38_fail!(c"haddextension foo/bar[.bai]".as_ptr());
     }
     if libc::strcmp(
-        haddextension(&mut kstr, c"foo.bar/baz".as_ptr(), 1, c".bai".as_ptr()),
+        haddextension(&mut kstr, c"foo.bar/baz".as_ptr().cast(), 1, c".bai".as_ptr().cast()).cast(),
         c"foo.bar/baz.bai".as_ptr(),
     ) != 0
     {
         test_hfile_c_38_fail!(c"haddextension foo.bar/baz[.bai]".as_ptr());
     }
     if libc::strcmp(
-        haddextension(&mut kstr, c"foo#bar.bam".as_ptr(), 0, c".bai".as_ptr()),
+        haddextension(&mut kstr, c"foo#bar.bam".as_ptr().cast(), 0, c".bai".as_ptr().cast()).cast(),
         c"foo#bar.bam.bai".as_ptr(),
     ) != 0
     {
         test_hfile_c_38_fail!(c"haddextension foo#bar.bam[.bai]".as_ptr());
     }
     if libc::strcmp(
-        haddextension(&mut kstr, c".bam".as_ptr(), 1, c".bai".as_ptr()),
+        haddextension(&mut kstr, c".bam".as_ptr().cast(), 1, c".bai".as_ptr().cast()).cast(),
         c".bai".as_ptr(),
     ) != 0
     {
         test_hfile_c_38_fail!(c"haddextension [.bai]".as_ptr());
     }
     if libc::strcmp(
-        haddextension(&mut kstr, c"foo".as_ptr(), 1, c".csi".as_ptr()),
+        haddextension(&mut kstr, c"foo".as_ptr().cast(), 1, c".csi".as_ptr().cast()).cast(),
         c"foo.csi".as_ptr(),
     ) != 0
     {
@@ -553,10 +554,11 @@ of knowledge, exceeds the short vehemence of any carnal pleasure."
     if libc::strcmp(
         haddextension(
             &mut kstr,
-            c"http://host/bar.cram?a&b&c".as_ptr(),
+            c"http://host/bar.cram?a&b&c".as_ptr().cast(),
             0,
-            c".crai".as_ptr(),
-        ),
+            c".crai".as_ptr().cast(),
+        )
+        .cast(),
         c"http://host/bar.cram.crai?a&b&c".as_ptr(),
     ) != 0
     {
@@ -566,10 +568,11 @@ of knowledge, exceeds the short vehemence of any carnal pleasure."
     if libc::strcmp(
         haddextension(
             &mut kstr,
-            c"http://host/bar.cram#frag".as_ptr(),
+            c"http://host/bar.cram#frag".as_ptr().cast(),
             1,
-            c".crai".as_ptr(),
-        ),
+            c".crai".as_ptr().cast(),
+        )
+        .cast(),
         c"http://host/bar.crai#frag".as_ptr(),
     ) != 0
     {

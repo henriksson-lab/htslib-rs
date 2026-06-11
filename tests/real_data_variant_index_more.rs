@@ -38,7 +38,7 @@ unsafe extern "C" fn bcf_readrec_adapter(
     beg: *mut hts_pos_t,
     end: *mut hts_pos_t,
 ) -> i32 {
-    unsafe { bcf_readrec(fp, data, rec, tid, beg, end) }
+    unsafe { bcf_readrec(fp, data.cast(), rec.cast(), tid, beg, end) }
 }
 
 unsafe fn count_indexed_records(
@@ -90,10 +90,10 @@ fn modhdr_csi_preserves_sparse_header_contig_id_and_translated_index_shape() {
 
         let hdr = vcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        assert_eq!(CStr::from_ptr(bcf_hdr_get_version(hdr)).to_bytes(), b"VCFv4.3");
+        assert_eq!(CStr::from_ptr(bcf_hdr_get_version(hdr).cast()).to_bytes(), b"VCFv4.3");
         assert!(bcf_hdr_id2name(hdr, 0).is_null());
-        assert_eq!(CStr::from_ptr(bcf_hdr_id2name(hdr, 1)).to_bytes(), b"chr22");
-        let tid = bcf_hdr_name2id(hdr, c"chr22".as_ptr());
+        assert_eq!(CStr::from_ptr(bcf_hdr_id2name(hdr, 1).cast()).to_bytes(), b"chr22");
+        let tid = bcf_hdr_name2id(hdr, c"chr22".as_ptr().cast());
         assert_eq!(tid, 1);
 
         let idx = bcf_index_load2(vcf.as_ptr().cast(), csi.as_ptr().cast());
@@ -144,7 +144,7 @@ fn modhdr_csi_missing_header_contig_does_not_create_query_iterator() {
 
         let hdr = vcf_hdr_read(fp);
         assert!(!hdr.is_null());
-        let missing_tid = bcf_hdr_name2id(hdr, c"chr1".as_ptr());
+        let missing_tid = bcf_hdr_name2id(hdr, c"chr1".as_ptr().cast());
         assert_eq!(missing_tid, -1);
 
         let idx = bcf_index_load2(vcf.as_ptr().cast(), csi.as_ptr().cast());

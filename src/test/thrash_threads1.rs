@@ -54,7 +54,7 @@ mod tests {
             assert!(!fp.is_null());
             let data = b"bounded thrash_threads1 input\n";
             assert_eq!(
-                crate::htslib_rs::bgzf::bgzf_write(fp, data.as_ptr().cast::<libc::c_void>(), data.len()),
+                crate::htslib_rs::bgzf::bgzf_write(fp, data.as_ptr().cast::<()>(), data.len()),
                 data.len() as isize
             );
             assert_eq!(crate::htslib_rs::bgzf::bgzf_close(fp), 0);

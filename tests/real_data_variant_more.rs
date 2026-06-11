@@ -51,7 +51,7 @@ unsafe extern "C" fn bcf_readrec_adapter(
     beg: *mut hts_pos_t,
     end: *mut hts_pos_t,
 ) -> i32 {
-    unsafe { bcf_readrec(fp, data, rec, tid, beg, end) }
+    unsafe { bcf_readrec(fp, data.cast(), rec.cast(), tid, beg, end) }
 }
 
 fn bcf_gt_unphased(idx: i32) -> i32 {
@@ -364,7 +364,7 @@ fn reads_real_bcf_fixture_record_metadata() {
         );
         assert!(nac >= 1);
         assert_eq!(*ac.cast::<i32>(), 2);
-        libc::free(ac);
+        libc::free(ac.cast());
 
         bcf_destroy(rec);
         bcf_hdr_destroy(hdr);
@@ -417,7 +417,7 @@ fn index_vcf_first_record_decodes_real_info_and_format_arrays() {
         );
         assert!(ndp >= 1);
         assert_eq!(*dp.cast::<i32>(), 1);
-        libc::free(dp);
+        libc::free(dp.cast());
 
         let mut i16 = std::ptr::null_mut();
         let mut ni16 = 0;
@@ -470,7 +470,7 @@ fn index_vcf_first_record_decodes_real_info_and_format_arrays() {
                 .map(|value| value.to_bits())
                 .collect::<Vec<_>>()
         );
-        libc::free(qs);
+        libc::free(qs.cast());
 
         let mut pl = std::ptr::null_mut();
         let mut npl = 0;
@@ -487,7 +487,7 @@ fn index_vcf_first_record_decodes_real_info_and_format_arrays() {
         );
         assert!(npl >= 3);
         assert_eq!(std::slice::from_raw_parts(pl.cast::<i32>(), 3), &[0, 3, 26]);
-        libc::free(pl);
+        libc::free(pl.cast());
 
         bcf_destroy(rec);
         bcf_hdr_destroy(hdr);
@@ -639,7 +639,7 @@ fn tabix_vcf_fixture_decodes_high_numbered_gt_alleles() {
                 bcf_gt_unphased(260),
             ]
         );
-        libc::free(gt);
+        libc::free(gt.cast());
 
         bcf_destroy(rec);
         bcf_hdr_destroy(hdr);

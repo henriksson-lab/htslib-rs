@@ -579,7 +579,7 @@ mod tests {
                 crate::htslib_rs::vcf::bcf_unpack(rec, crate::htslib_rs::vcf::BCF_UN_STR as i32),
                 0
             );
-            let chrom = CStr::from_ptr(crate::htslib_rs::vcf::bcf_seqname(hdr, rec))
+            let chrom = CStr::from_ptr(crate::htslib_rs::vcf::bcf_seqname(hdr, rec).cast())
                 .to_str()
                 .unwrap();
             let d = &(*rec).d;

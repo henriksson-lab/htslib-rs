@@ -688,7 +688,7 @@ pub(crate) mod decode_pipeline {
         cram_cram_io_h_226_block_resize(b.cast(), len)
     }
     unsafe fn block_append(b: *mut cram_block, s: *const (), len: size_t) -> i32 {
-        cram_cram_io_h_248_block_append(b.cast(), s.cast::<std::ffi::c_void>(), len)
+        cram_cram_io_h_248_block_append(b.cast(), s, len)
     }
     unsafe fn block_append_char(b: *mut cram_block, c: u8) -> i32 {
         cram_cram_io_h_261_block_append_char(b.cast(), c)
@@ -4489,7 +4489,7 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
 
     // hdr->preservation_map = kh_init(map): calloc(1, sizeof(kh_map_t)).
     (*hdr).preservation_map =
-        libc::calloc(1, std::mem::size_of::<kh_generic_layout>());
+        libc::calloc(1, std::mem::size_of::<kh_generic_layout>()).cast::<()>();
     // rec/tag_encoding_map were zeroed by calloc already (memset to 0 in C).
     if (*hdr).preservation_map.is_null() {
         cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
@@ -4541,7 +4541,7 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
             K_RN => {
                 hd.i = *cp as i32;
                 cp = cp.add(1);
-                let k = kh_put_map(pmap, c"RN".as_ptr(), &mut r);
+                let k = kh_put_map(pmap, b"RN\0".as_ptr(), &mut r);
                 if r == -1 {
                     cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
                     return std::ptr::null_mut();
@@ -4552,7 +4552,7 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
             K_AP => {
                 hd.i = *cp as i32;
                 cp = cp.add(1);
-                let k = kh_put_map(pmap, c"AP".as_ptr(), &mut r);
+                let k = kh_put_map(pmap, b"AP\0".as_ptr(), &mut r);
                 if r == -1 {
                     cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
                     return std::ptr::null_mut();
@@ -4563,7 +4563,7 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
             K_RR => {
                 hd.i = *cp as i32;
                 cp = cp.add(1);
-                let k = kh_put_map(pmap, c"RR".as_ptr(), &mut r);
+                let k = kh_put_map(pmap, b"RR\0".as_ptr(), &mut r);
                 if r == -1 {
                     cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
                     return std::ptr::null_mut();
@@ -4574,7 +4574,7 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
             K_QO => {
                 hd.i = *cp as i32;
                 cp = cp.add(1);
-                let k = kh_put_map(pmap, c"QO".as_ptr(), &mut r);
+                let k = kh_put_map(pmap, b"QO\0".as_ptr(), &mut r);
                 if r == -1 {
                     cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
                     return std::ptr::null_mut();
@@ -4589,29 +4589,29 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
                 }
                 let sm = &mut (*hdr).substitution_matrix;
                 let cb = |o: isize| -> i32 { *cp.offset(o) as i32 };
-                sm[0][((cb(0) >> 6) & 3) as usize] = b'C' as i8;
-                sm[0][((cb(0) >> 4) & 3) as usize] = b'G' as i8;
-                sm[0][((cb(0) >> 2) & 3) as usize] = b'T' as i8;
-                sm[0][(cb(0) & 3) as usize] = b'N' as i8;
-                sm[1][((cb(1) >> 6) & 3) as usize] = b'A' as i8;
-                sm[1][((cb(1) >> 4) & 3) as usize] = b'G' as i8;
-                sm[1][((cb(1) >> 2) & 3) as usize] = b'T' as i8;
-                sm[1][(cb(1) & 3) as usize] = b'N' as i8;
-                sm[2][((cb(2) >> 6) & 3) as usize] = b'A' as i8;
-                sm[2][((cb(2) >> 4) & 3) as usize] = b'C' as i8;
-                sm[2][((cb(2) >> 2) & 3) as usize] = b'T' as i8;
-                sm[2][(cb(2) & 3) as usize] = b'N' as i8;
-                sm[3][((cb(3) >> 6) & 3) as usize] = b'A' as i8;
-                sm[3][((cb(3) >> 4) & 3) as usize] = b'C' as i8;
-                sm[3][((cb(3) >> 2) & 3) as usize] = b'G' as i8;
-                sm[3][(cb(3) & 3) as usize] = b'N' as i8;
-                sm[4][((cb(4) >> 6) & 3) as usize] = b'A' as i8;
-                sm[4][((cb(4) >> 4) & 3) as usize] = b'C' as i8;
-                sm[4][((cb(4) >> 2) & 3) as usize] = b'G' as i8;
-                sm[4][(cb(4) & 3) as usize] = b'T' as i8;
-                hd.p = cp.cast::<std::os::raw::c_char>();
+                sm[0][((cb(0) >> 6) & 3) as usize] = b'C' as u8;
+                sm[0][((cb(0) >> 4) & 3) as usize] = b'G' as u8;
+                sm[0][((cb(0) >> 2) & 3) as usize] = b'T' as u8;
+                sm[0][(cb(0) & 3) as usize] = b'N' as u8;
+                sm[1][((cb(1) >> 6) & 3) as usize] = b'A' as u8;
+                sm[1][((cb(1) >> 4) & 3) as usize] = b'G' as u8;
+                sm[1][((cb(1) >> 2) & 3) as usize] = b'T' as u8;
+                sm[1][(cb(1) & 3) as usize] = b'N' as u8;
+                sm[2][((cb(2) >> 6) & 3) as usize] = b'A' as u8;
+                sm[2][((cb(2) >> 4) & 3) as usize] = b'C' as u8;
+                sm[2][((cb(2) >> 2) & 3) as usize] = b'T' as u8;
+                sm[2][(cb(2) & 3) as usize] = b'N' as u8;
+                sm[3][((cb(3) >> 6) & 3) as usize] = b'A' as u8;
+                sm[3][((cb(3) >> 4) & 3) as usize] = b'C' as u8;
+                sm[3][((cb(3) >> 2) & 3) as usize] = b'G' as u8;
+                sm[3][(cb(3) & 3) as usize] = b'N' as u8;
+                sm[4][((cb(4) >> 6) & 3) as usize] = b'A' as u8;
+                sm[4][((cb(4) >> 4) & 3) as usize] = b'C' as u8;
+                sm[4][((cb(4) >> 2) & 3) as usize] = b'G' as u8;
+                sm[4][(cb(4) & 3) as usize] = b'T' as u8;
+                hd.p = cp.cast::<u8>();
                 cp = cp.add(5);
-                let k = kh_put_map(pmap, c"SM".as_ptr(), &mut r);
+                let k = kh_put_map(pmap, b"SM\0".as_ptr(), &mut r);
                 if r == -1 {
                     cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
                     return std::ptr::null_mut();
@@ -4624,9 +4624,9 @@ pub unsafe fn cram_cram_decode_c_145_cram_decode_compression_header(
                     cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
                     return std::ptr::null_mut();
                 }
-                hd.p = cp.cast::<std::os::raw::c_char>();
+                hd.p = cp.cast::<u8>();
                 cp = cp.add(sz as usize);
-                let k = kh_put_map(pmap, c"TD".as_ptr(), &mut r);
+                let k = kh_put_map(pmap, b"TD\0".as_ptr(), &mut r);
                 if r == -1 {
                     cram_cram_io_c_4356_cram_free_compression_header(hdr.cast());
                     return std::ptr::null_mut();

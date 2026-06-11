@@ -26,7 +26,7 @@ fn temp_path(name: &str) -> std::path::PathBuf {
 unsafe fn bgzip_copy(src: &std::path::Path, dst: &std::path::Path) {
     let bytes = std::fs::read(src).unwrap();
     let dst_c = c_path(dst);
-    let fp = bgzf_open(dst_c.as_ptr().cast(), c"w".as_ptr());
+    let fp = bgzf_open(dst_c.as_ptr().cast(), c"w".as_ptr().cast());
     assert!(!fp.is_null(), "failed to create {}", dst.display());
     assert_eq!(
         bgzf_write(fp, bytes.as_ptr().cast(), bytes.len()),
@@ -258,7 +258,7 @@ fn run_tabix_args(program: &std::path::Path, args: &[&std::path::Path]) -> Vec<u
 
 unsafe fn read_bgzf_to_string(path: &std::path::Path) -> String {
     let path_c = c_path(path);
-    let fp = bgzf_open(path_c.as_ptr().cast(), c"r".as_ptr());
+    let fp = bgzf_open(path_c.as_ptr().cast(), c"r".as_ptr().cast());
     assert!(!fp.is_null(), "failed to open {}", path.display());
 
     let mut out = Vec::new();

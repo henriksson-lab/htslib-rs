@@ -11,19 +11,19 @@ unsafe fn run_thrash_threads3(
         if verbose {
             eprintln!("i={i}");
         }
-        let fpin = crate::htslib_rs::bgzf::bgzf_open(input.cast::<i8>(), c"r".as_ptr());
+        let fpin = crate::htslib_rs::bgzf::bgzf_open(input.cast::<u8>(), c"r".as_ptr().cast());
         if fpin.is_null() {
             return libc::EXIT_FAILURE;
         }
         let len = i * 10;
-        if crate::htslib_rs::bgzf::bgzf_read(fpin, buf.as_mut_ptr().cast::<core::ffi::c_void>(), len) < 0 {
+        if crate::htslib_rs::bgzf::bgzf_read(fpin, buf.as_mut_ptr().cast::<()>(), len) < 0 {
             libc::abort();
         }
         if crate::htslib_rs::bgzf::bgzf_mt(fpin, n_threads, n_sub_blks) != 0 {
             crate::htslib_rs::bgzf::bgzf_close(fpin);
             return libc::EXIT_FAILURE;
         }
-        if crate::htslib_rs::bgzf::bgzf_read(fpin, buf.as_mut_ptr().cast::<core::ffi::c_void>(), len) < 0 {
+        if crate::htslib_rs::bgzf::bgzf_read(fpin, buf.as_mut_ptr().cast::<()>(), len) < 0 {
             libc::abort();
         }
         if crate::htslib_rs::bgzf::bgzf_close(fpin) < 0 {
@@ -60,11 +60,11 @@ mod tests {
         path_c.push(0);
 
         unsafe {
-            let fp = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr().cast(), c"w".as_ptr());
+            let fp = crate::htslib_rs::bgzf::bgzf_open(path_c.as_ptr().cast(), c"w".as_ptr().cast());
             assert!(!fp.is_null());
             let data = b"bounded thrash_threads3 input\n".repeat(32);
             assert_eq!(
-                crate::htslib_rs::bgzf::bgzf_write(fp, data.as_ptr().cast::<core::ffi::c_void>(), data.len()),
+                crate::htslib_rs::bgzf::bgzf_write(fp, data.as_ptr().cast::<()>(), data.len()),
                 data.len() as isize
             );
             assert_eq!(crate::htslib_rs::bgzf::bgzf_close(fp), 0);

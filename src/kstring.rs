@@ -311,10 +311,10 @@ pub unsafe fn kgetline(s: &mut kstring_t, fgets_fn: kgets_func, fp: *mut ()) -> 
 }
 
 pub unsafe extern "C" fn fgets_wrapper(
-    buffer: *mut std::os::raw::c_char,
+    buffer: *mut u8,
     size: i32,
-    stream: *mut std::ffi::c_void,
-) -> *mut std::os::raw::c_char {
+    stream: *mut (),
+) -> *mut u8 {
     libc::fgets(buffer.cast(), size, stream.cast::<libc::FILE>()).cast()
 }
 

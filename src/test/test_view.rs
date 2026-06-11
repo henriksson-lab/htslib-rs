@@ -26,7 +26,7 @@ unsafe extern "C" fn bcf_hdr_name2id_adapter(
     data: *mut std::ffi::c_void,
     name: *const std::ffi::c_char,
 ) -> i32 {
-    vcf::bcf_hdr_name2id(data.cast(), name)
+    vcf::bcf_hdr_name2id(data.cast(), name.cast())
 }
 
 unsafe extern "C" fn bcf_readrec_adapter(
@@ -37,7 +37,7 @@ unsafe extern "C" fn bcf_readrec_adapter(
     beg: *mut hts_pos_t,
     end: *mut hts_pos_t,
 ) -> i32 {
-    vcf::bcf_readrec(fp, data, r, tid, beg, end)
+    vcf::bcf_readrec(fp, data.cast(), r.cast(), tid, beg, end)
 }
 
 unsafe fn bcf_itr_querys1(
