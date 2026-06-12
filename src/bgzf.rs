@@ -2,11 +2,12 @@ use std::{
     collections::HashMap,
     ptr::{self, NonNull},
     slice,
-    sync::OnceLock,
 };
 
+use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, Status};
+
 #[cfg(test)]
-use flate2::{read::GzDecoder, Decompress, FlushDecompress, Status};
+use flate2::read::GzDecoder;
 
 use super::{
     hts::{
@@ -27,8 +28,10 @@ const BGZF_ERR_MISUSE: u32 = 8;
 const BGZF_ERR_CRC: u32 = 32;
 
 const SEEK_SET: i32 = 0;
+// zlib status/level constants still referenced by `bgzf_zerr` (error-message
+// mapping) and the gzip-flush dispatch (Z_SYNC_FLUSH/Z_FINISH select the flate2
+// flush mode). The deflate/inflate *codec* now runs through flate2.
 const Z_OK: i32 = 0;
-const Z_STREAM_END: i32 = 1;
 const Z_NEED_DICT: i32 = 2;
 const Z_ERRNO: i32 = -1;
 const Z_STREAM_ERROR: i32 = -2;
@@ -37,11 +40,8 @@ const Z_MEM_ERROR: i32 = -4;
 const Z_BUF_ERROR: i32 = -5;
 const Z_VERSION_ERROR: i32 = -6;
 const Z_SYNC_FLUSH: i32 = 2;
-const Z_PARTIAL_FLUSH: i32 = 1;
 const Z_FINISH: i32 = 4;
-const Z_DEFLATED: i32 = 8;
 const Z_DEFAULT_COMPRESSION: i32 = -1;
-const Z_DEFAULT_STRATEGY: i32 = 0;
 const EOF_BLOCK: [u8; 28] = [
     31, 139, 8, 4, 0, 0, 0, 0, 0, 255, 6, 0, 66, 67, 2, 0, 27, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
@@ -59,92 +59,6 @@ const EOF_BLOCK: [u8; 28] = [
 thread_local! {
     static BGZF_ZERR_BUFFER: std::cell::UnsafeCell<[u8; 32]> =
         const { std::cell::UnsafeCell::new([0; 32]) };
-}
-
-// RECONVERGE: `z_stream` is a #[repr(C)] struct crossing the zlib ABI (passed to
-// deflate*/inflate* below). Its `msg`/`state`/`zalloc`/`zfree`/`opaque` fields
-// keep their C types because zlib reads/writes them directly.
-#[repr(C)]
-pub(crate) struct z_stream {
-    pub(crate) next_in: *mut u8,
-    pub(crate) avail_in: u32,
-    pub(crate) total_in: u64,
-    pub(crate) next_out: *mut u8,
-    pub(crate) avail_out: u32,
-    pub(crate) total_out: u64,
-    pub(crate) msg: *mut std::ffi::c_char,
-    pub(crate) state: *mut std::ffi::c_void,
-    pub(crate) zalloc: Option<
-        unsafe extern "C" fn(*mut std::ffi::c_void, u32, u32) -> *mut std::ffi::c_void,
-    >,
-    pub(crate) zfree: Option<unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void)>,
-    pub(crate) opaque: *mut std::ffi::c_void,
-    pub(crate) data_type: i32,
-    pub(crate) adler: u64,
-    pub(crate) reserved: u64,
-}
-
-// PRESERVE: these fn-pointer type aliases mirror the zlib C ABI; `version`
-// arguments and the zlibVersion return are C strings zlib defines.
-pub(crate) type DeflateInit2Fn = unsafe extern "C" fn(
-    strm: *mut z_stream,
-    level: i32,
-    method: i32,
-    window_bits: i32,
-    mem_level: i32,
-    strategy: i32,
-    version: *const std::ffi::c_char,
-    stream_size: i32,
-) -> i32;
-pub(crate) type DeflateFn = unsafe extern "C" fn(strm: *mut z_stream, flush: i32) -> i32;
-pub(crate) type DeflateEndFn = unsafe extern "C" fn(strm: *mut z_stream) -> i32;
-pub(crate) type InflateInit2Fn = unsafe extern "C" fn(
-    strm: *mut z_stream,
-    window_bits: i32,
-    version: *const std::ffi::c_char,
-    stream_size: i32,
-) -> i32;
-pub(crate) type InflateFn = unsafe extern "C" fn(strm: *mut z_stream, flush: i32) -> i32;
-pub(crate) type InflateResetFn = unsafe extern "C" fn(strm: *mut z_stream) -> i32;
-pub(crate) type InflateEndFn = unsafe extern "C" fn(strm: *mut z_stream) -> i32;
-pub(crate) type Crc32Fn =
-    unsafe extern "C" fn(crc: u64, buf: *const u8, len: u32) -> u64;
-pub(crate) type ZlibVersionFn = unsafe extern "C" fn() -> *const std::ffi::c_char;
-
-// PRESERVE: extern "C" block linking the system zlib.
-unsafe extern "C" {
-    #[link_name = "deflateInit2_"]
-    fn linked_deflate_init2(
-        strm: *mut z_stream,
-        level: i32,
-        method: i32,
-        window_bits: i32,
-        mem_level: i32,
-        strategy: i32,
-        version: *const std::ffi::c_char,
-        stream_size: i32,
-    ) -> i32;
-    #[link_name = "deflate"]
-    fn linked_deflate(strm: *mut z_stream, flush: i32) -> i32;
-    #[link_name = "deflateEnd"]
-    fn linked_deflate_end(strm: *mut z_stream) -> i32;
-    #[link_name = "inflateInit2_"]
-    fn linked_inflate_init2(
-        strm: *mut z_stream,
-        window_bits: i32,
-        version: *const std::ffi::c_char,
-        stream_size: i32,
-    ) -> i32;
-    #[link_name = "inflate"]
-    fn linked_inflate(strm: *mut z_stream, flush: i32) -> i32;
-    #[link_name = "inflateReset"]
-    fn linked_inflate_reset(strm: *mut z_stream) -> i32;
-    #[link_name = "inflateEnd"]
-    fn linked_inflate_end(strm: *mut z_stream) -> i32;
-    #[link_name = "crc32"]
-    fn linked_crc32(crc: u64, buf: *const u8, len: u32) -> u64;
-    #[link_name = "zlibVersion"]
-    fn linked_zlib_version() -> *const std::ffi::c_char;
 }
 
 // === BGZF underlying-file handle ===
@@ -173,92 +87,56 @@ impl BgzfFp {
     }
 }
 
-pub(crate) struct ZlibFns {
-    pub(crate) deflate_init2: DeflateInit2Fn,
-    pub(crate) deflate: DeflateFn,
-    pub(crate) deflate_end: DeflateEndFn,
-    pub(crate) inflate_init2: InflateInit2Fn,
-    pub(crate) inflate: InflateFn,
-    pub(crate) inflate_reset: InflateResetFn,
-    pub(crate) inflate_end: InflateEndFn,
-    pub(crate) crc32: Crc32Fn,
-    pub(crate) zlib_version: ZlibVersionFn,
+// Persistent gzip codec state for the streaming (plain-gzip) read path and the
+// `g`-mode gzip write path. The BGZF *block* codec is per-block and stateless,
+// so it does NOT use this — it constructs a fresh `flate2::Compress`/`Decompress`
+// per call (see `bgzf_compress`/`bgzf_uncompress`/`inflate_block`).
+//
+// This replaces the old `GzipStream { zs: z_stream }` zlib handle:
+//   * `Deflate`    — `g`-mode gzip writer (windowBits 15|16 ⇒ gzip wrapping).
+//   * `Inflate`    — plain-gzip streaming reader (multi-member gzip; the
+//                    decoder auto-detects the gzip header and `reset`s between
+//                    concatenated members, mirroring the C inflateReset loop).
+pub enum GzipState {
+    Deflate(Box<Compress>),
+    Inflate(Box<GzipInflateState>),
 }
 
-#[repr(C)]
-pub struct GzipStream {
-    zs: z_stream,
+// Persistent plain-gzip streaming-read state. zlib's `inflate` retains
+// unconsumed input across calls in the z_stream (`avail_in`/`next_in`); flate2's
+// `decompress` is fed a slice per call, so we hold the still-unconsumed
+// compressed bytes (`pending`) ourselves between `inflate_gzip_block` calls.
+pub struct GzipInflateState {
+    dec: Decompress,
+    pending: Vec<u8>,
 }
 
-unsafe fn gzip_stream_new_deflate(level: i32) -> Option<NonNull<GzipStream>> {
-    let mut stream = Box::new(GzipStream {
-        zs: std::mem::zeroed(),
-    });
-    if gzip_deflate_stream_init(&mut stream.zs, level) != Z_OK {
-        None
-    } else {
-        NonNull::new(Box::into_raw(stream))
+impl GzipState {
+    fn new_gzip_deflate(level: i32) -> Box<GzipState> {
+        Box::new(GzipState::Deflate(Box::new(Compress::new_gzip(
+            flate2_level(level),
+            15,
+        ))))
+    }
+
+    fn new_gzip_inflate() -> Box<GzipState> {
+        Box::new(GzipState::Inflate(Box::new(GzipInflateState {
+            dec: Decompress::new_gzip(15),
+            pending: Vec::new(),
+        })))
     }
 }
 
-unsafe fn gzip_stream_new_inflate() -> Option<NonNull<GzipStream>> {
-    let mut stream = Box::new(GzipStream {
-        zs: std::mem::zeroed(),
-    });
-    if gzip_stream_init(&mut stream.zs) != Z_OK {
-        None
+// Map an htslib/zlib compression level to a `flate2::Compression`.
+// `Z_DEFAULT_COMPRESSION (-1)` ⇒ 6 (zlib default); otherwise clamp to 0..=9.
+fn flate2_level(level: i32) -> Compression {
+    if level < 0 {
+        Compression::new(6)
     } else {
-        NonNull::new(Box::into_raw(stream))
+        Compression::new((level as u32).min(9))
     }
 }
 
-unsafe fn gzip_stream_new_raw_inflate() -> Option<NonNull<GzipStream>> {
-    let mut stream = Box::new(GzipStream {
-        zs: std::mem::zeroed(),
-    });
-    if raw_inflate_stream_init(&mut stream.zs) != Z_OK {
-        None
-    } else {
-        NonNull::new(Box::into_raw(stream))
-    }
-}
-
-unsafe fn gzip_stream_free(stream: NonNull<GzipStream>, is_deflate: bool) {
-    if is_deflate {
-        gzip_deflate_stream_end(stream.as_ptr());
-    } else {
-        gzip_stream_end(stream.as_ptr());
-    }
-    drop(Box::from_raw(stream.as_ptr()));
-}
-
-pub(crate) unsafe fn system_zlib() -> Option<&'static ZlibFns> {
-    static ZLIB: OnceLock<Option<ZlibFns>> = OnceLock::new();
-    ZLIB.get_or_init(|| unsafe {
-        // This translation uses the statically linked zlib provider from
-        // libz-sys. Avoid runtime dlopen()/dlsym() probing so portability
-        // depends on Cargo linkage rather than platform dynamic-loader APIs.
-        if !linked_zlib_version().is_null() {
-            return Some(ZlibFns {
-                deflate_init2: linked_deflate_init2,
-                deflate: linked_deflate,
-                deflate_end: linked_deflate_end,
-                inflate_init2: linked_inflate_init2,
-                inflate: linked_inflate,
-                inflate_reset: linked_inflate_reset,
-                inflate_end: linked_inflate_end,
-                crc32: linked_crc32,
-                zlib_version: linked_zlib_version,
-            });
-        }
-
-        None
-    })
-    .as_ref()
-}
-
-// RECONVERGE: `z_stream_s` is a #[repr(C)] zlib-shaped struct; `bgzf_zerr` reads
-// its `msg` C-string field, so the C pointer field types are preserved.
 #[repr(C)]
 pub struct z_stream_s {
     pub next_in: *const u8,
@@ -792,7 +670,17 @@ pub unsafe fn check_header(header: *const u8) -> i32 {
     }
 }
 
+// CRC-32 (zlib/IEEE) over `bytes`, continuing from a prior `crc` value so
+// callers can compute a running checksum across chunks (matching the C
+// `crc32(crc, buf, len)` contract). For the common `crc == 0` start we defer
+// to `flate2::Crc`; otherwise we fold in `bytes` with the standard table-free
+// reflected algorithm (flate2::Crc cannot be seeded with a prior value).
 fn crc32_update(crc: u32, bytes: &[u8]) -> u32 {
+    if crc == 0 {
+        let mut c = flate2::Crc::new();
+        c.update(bytes);
+        return c.sum();
+    }
     let mut crc = !crc;
     for &byte in bytes {
         crc ^= byte as u32;
@@ -813,19 +701,7 @@ fn crc32(bytes: &[u8]) -> u32 {
 
 pub unsafe fn hts_crc32(crc: u32, buf: *const (), len: usize) -> u32 {
     if len == 0 {
-        return crc32_update(crc, &[]);
-    }
-    if let Some(zlib) = system_zlib() {
-        let mut crc = crc as u64;
-        let mut ptr = buf.cast::<u8>();
-        let mut remaining = len;
-        while remaining > 0 {
-            let chunk = remaining.min(u32::MAX as usize);
-            crc = (zlib.crc32)(crc, ptr, chunk as u32);
-            ptr = ptr.add(chunk);
-            remaining -= chunk;
-        }
-        return crc as u32;
+        return crc;
     }
     crc32_update(crc, slice::from_raw_parts(buf.cast::<u8>(), len))
 }
@@ -851,55 +727,30 @@ pub unsafe fn bgzf_compress(
     let mut store_uncompressed = level == 0;
     let mut total_len = 0usize;
     if !store_uncompressed {
-        let Some(zlib) = system_zlib() else {
-            return -1;
-        };
         if *dlen < BLOCK_HEADER_LENGTH + BLOCK_FOOTER_LENGTH {
             return -1;
         }
         let out_len = *dlen - BLOCK_HEADER_LENGTH - BLOCK_FOOTER_LENGTH;
-        let mut zs: z_stream = std::mem::zeroed();
-        zs.next_in = src.cast::<u8>().cast_mut();
-        zs.avail_in = slen as u32;
-        zs.next_out = dst_bytes.as_mut_ptr().add(BLOCK_HEADER_LENGTH);
-        zs.avail_out = out_len as u32;
-
-        let ret = (zlib.deflate_init2)(
-            &mut zs,
-            if level < 0 {
-                Z_DEFAULT_COMPRESSION
-            } else {
-                level
-            },
-            Z_DEFLATED,
-            -15,
-            8,
-            Z_DEFAULT_STRATEGY,
-            (zlib.zlib_version)(),
-            std::mem::size_of::<z_stream>() as i32,
+        // RAW DEFLATE (zlib_header = false) into the block body, mirroring C's
+        // `deflateInit2(..., windowBits = -15, ...)` + `deflate(Z_FINISH)`.
+        let out = slice::from_raw_parts_mut(
+            dst_bytes.as_mut_ptr().add(BLOCK_HEADER_LENGTH),
+            out_len,
         );
-        if ret != Z_OK {
-            return -1;
-        }
-
-        let ret = (zlib.deflate)(&mut zs, Z_FINISH);
-        if ret != Z_STREAM_END {
-            if ret == Z_OK && zs.avail_out == 0 {
-                (zlib.deflate_end)(&mut zs);
+        let mut compressor = Compress::new(flate2_level(level), false);
+        match compressor.compress(src_bytes, out, FlushCompress::Finish) {
+            Ok(Status::StreamEnd) => {
+                // Whole block compressed; `total_out` is the compressed body length.
+                let compressed_len = compressor.total_out() as usize;
+                total_len = compressed_len + BLOCK_HEADER_LENGTH + BLOCK_FOOTER_LENGTH;
+            }
+            Ok(_) => {
+                // Output buffer filled before finishing: the data did not shrink,
+                // so fall back to storing it uncompressed (matches C's avail_out==0
+                // recovery path).
                 store_uncompressed = true;
-            } else {
-                (zlib.deflate_end)(&mut zs);
-                return -1;
             }
-        } else if zs.avail_out == 0 {
-            (zlib.deflate_end)(&mut zs);
-            store_uncompressed = true;
-        } else {
-            let compressed_len = zs.total_out as usize;
-            if (zlib.deflate_end)(&mut zs) != Z_OK {
-                return -1;
-            }
-            total_len = compressed_len + BLOCK_HEADER_LENGTH + BLOCK_FOOTER_LENGTH;
+            Err(_) => return -1,
         }
     }
 
@@ -963,44 +814,17 @@ pub unsafe fn bgzf_uncompress(
     slen: usize,
     expected_crc: u32,
 ) -> i32 {
-    let Some(zlib) = system_zlib() else {
-        return -1;
-    };
-
-    let mut zs = z_stream {
-        next_in: src.cast_mut(),
-        avail_in: slen as u32,
-        total_in: 0,
-        next_out: dst,
-        avail_out: *dlen as u32,
-        total_out: 0,
-        msg: ptr::null_mut(),
-        state: ptr::null_mut(),
-        zalloc: None,
-        zfree: None,
-        opaque: ptr::null_mut(),
-        data_type: 0,
-        adler: 0,
-        reserved: 0,
-    };
-
-    if (zlib.inflate_init2)(
-        &mut zs,
-        -15,
-        (zlib.zlib_version)(),
-        std::mem::size_of::<z_stream>() as i32,
-    ) != Z_OK
-    {
-        return -1;
+    // RAW INFLATE (zlib_header = false) of the block body, mirroring C's
+    // `inflateInit2(-15)` + `inflate(Z_FINISH)`.
+    let input = slice::from_raw_parts(src, slen);
+    let out = slice::from_raw_parts_mut(dst, *dlen);
+    let mut decompressor = Decompress::new(false);
+    match decompressor.decompress(input, out, FlushDecompress::Finish) {
+        Ok(Status::StreamEnd) => {}
+        _ => return -1,
     }
 
-    let inflate_ret = (zlib.inflate)(&mut zs, Z_FINISH);
-    let end_ret = (zlib.inflate_end)(&mut zs);
-    if inflate_ret != Z_STREAM_END || end_ret != Z_OK {
-        return -1;
-    }
-
-    *dlen = zs.total_out as usize;
+    *dlen = decompressor.total_out() as usize;
     if hts_crc32(0, dst.cast(), *dlen) != expected_crc {
         return -2;
     }
@@ -1256,113 +1080,47 @@ pub unsafe fn bgzf_c_686_bgzf_gzip_compress(
     slen: usize,
     _level: i32,
 ) -> i32 {
-    let Some(zlib) = system_zlib() else {
+    if (*fp).gz_stream.is_none() {
+        (*fp).gz_stream = Some(GzipState::new_gzip_deflate(compress_level(&*fp)));
+    }
+
+    let Some(GzipState::Deflate(compressor)) = (*fp).gz_stream.as_mut().map(|s| s.as_mut()) else {
         add_errcode(&mut *fp, BGZF_ERR_ZLIB);
         return -1;
     };
-    if (*fp).gz_stream.is_none() {
-        let Some(stream) = gzip_stream_new_deflate(compress_level(&*fp)) else {
+
+    let original_len = *dlen;
+    // `src` may be null on the finishing (slen == 0) call; avoid forming a slice
+    // from a null pointer (UB) by using an empty slice in that case.
+    let input: &[u8] = if slen == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(src.cast::<u8>(), slen)
+    };
+    let out = slice::from_raw_parts_mut(dst.cast::<u8>(), original_len);
+    // Mirror C: `Z_PARTIAL_FLUSH` while there is input, `Z_FINISH` on the closing
+    // empty call. A single call must consume all input (the caller sizes `dst`
+    // to fit); if not, the stream cannot make progress and we error out.
+    let flush = if slen != 0 {
+        FlushCompress::Partial
+    } else {
+        FlushCompress::Finish
+    };
+    let before_in = compressor.total_in();
+    let before_out = compressor.total_out();
+    match compressor.compress(input, out, flush) {
+        Ok(_) => {}
+        Err(_) => {
             add_errcode(&mut *fp, BGZF_ERR_ZLIB);
             return -1;
-        };
-        (*fp).gz_stream = Some(stream);
+        }
     }
-
-    let stream = (*fp)
-        .gz_stream
-        .as_mut()
-        .expect("BGZF gzip stream is initialized")
-        .as_mut();
-    let original_len = *dlen;
-    stream.zs.next_in = src.cast::<u8>().cast_mut();
-    stream.zs.avail_in = slen as u32;
-    stream.zs.next_out = dst.cast::<u8>();
-    stream.zs.avail_out = original_len as u32;
-
-    let ret = (zlib.deflate)(
-        &mut stream.zs,
-        if slen != 0 { Z_PARTIAL_FLUSH } else { Z_FINISH },
-    );
-    if ret == Z_STREAM_ERROR {
+    if (compressor.total_in() - before_in) as usize != slen {
         add_errcode(&mut *fp, BGZF_ERR_ZLIB);
         return -1;
     }
-    if stream.zs.avail_in != 0 {
-        add_errcode(&mut *fp, BGZF_ERR_ZLIB);
-        return -1;
-    }
-    *dlen = original_len - stream.zs.avail_out as usize;
+    *dlen = (compressor.total_out() - before_out) as usize;
     0
-}
-
-unsafe fn gzip_stream_init(zs: *mut z_stream) -> i32 {
-    let Some(zlib) = system_zlib() else {
-        return Z_STREAM_ERROR;
-    };
-    (zlib.inflate_init2)(
-        zs,
-        15 + 16,
-        (zlib.zlib_version)(),
-        std::mem::size_of::<z_stream>() as i32,
-    )
-}
-
-unsafe fn gzip_deflate_stream_init(zs: *mut z_stream, level: i32) -> i32 {
-    let Some(zlib) = system_zlib() else {
-        return Z_STREAM_ERROR;
-    };
-    (zlib.deflate_init2)(
-        zs,
-        level,
-        Z_DEFLATED,
-        15 + 16,
-        8,
-        Z_DEFAULT_STRATEGY,
-        (zlib.zlib_version)(),
-        std::mem::size_of::<z_stream>() as i32,
-    )
-}
-
-unsafe fn gzip_stream_reset(stream: &mut GzipStream) -> i32 {
-    let Some(zlib) = system_zlib() else {
-        return Z_STREAM_ERROR;
-    };
-    let next_in = stream.zs.next_in;
-    let avail_in = stream.zs.avail_in;
-    let next_out = stream.zs.next_out;
-    let avail_out = stream.zs.avail_out;
-    let ret = (zlib.inflate_reset)(&mut stream.zs);
-    if ret == Z_OK {
-        stream.zs.next_in = next_in;
-        stream.zs.avail_in = avail_in;
-        stream.zs.next_out = next_out;
-        stream.zs.avail_out = avail_out;
-    }
-    ret
-}
-
-unsafe fn raw_inflate_stream_init(zs: *mut z_stream) -> i32 {
-    let Some(zlib) = system_zlib() else {
-        return Z_STREAM_ERROR;
-    };
-    (zlib.inflate_init2)(
-        zs,
-        -15,
-        (zlib.zlib_version)(),
-        std::mem::size_of::<z_stream>() as i32,
-    )
-}
-
-unsafe fn gzip_stream_end(stream: *mut GzipStream) {
-    if let Some(zlib) = system_zlib() {
-        (zlib.inflate_end)(&mut (*stream).zs);
-    }
-}
-
-unsafe fn gzip_deflate_stream_end(stream: *mut GzipStream) {
-    if let Some(zlib) = system_zlib() {
-        (zlib.deflate_end)(&mut (*stream).zs);
-    }
 }
 
 // `hfp` is borrowed: on failure the BGZF is not created and the caller still
@@ -1460,11 +1218,7 @@ unsafe fn bgzf_write_init_hfile(_hfp: &mut BgzfFp, mode: &[u8]) -> *mut BGZF {
         },
     );
     if mode_has(mode, b'g') {
-        let Some(stream) = gzip_stream_new_deflate(compress_level(&fp)) else {
-            bgzf_free_cache(&mut fp);
-            return ptr::null_mut();
-        };
-        fp.gz_stream = Some(stream);
+        fp.gz_stream = Some(GzipState::new_gzip_deflate(compress_level(&fp)));
     }
     Box::into_raw(fp)
 }
@@ -1475,9 +1229,8 @@ unsafe fn bgzf_free_without_hclose(fp: *mut BGZF) {
     }
     bgzf_index_destroy(fp);
     bgzf_free_cache(&mut *fp);
-    if let Some(stream) = (*fp).gz_stream.take() {
-        gzip_stream_free(stream, flag(&*fp, 17) && flag(&*fp, 31));
-    }
+    // Drop the owned gzip codec state (flate2 Compress/Decompress).
+    let _ = (*fp).gz_stream.take();
     // The caller (bgzf_close error paths) has already closed the underlying
     // file via bgzf_close_fp(bgzf_take_fp(..)), so (*fp).fp is already
     // BgzfFp::None here; take it again defensively (no-op) so the final
@@ -1556,44 +1309,46 @@ pub unsafe fn bgzf_flush(fp: *mut BGZF) -> i32 {
 }
 
 unsafe fn bgzf_gzip_flush(fp: &mut BGZF, flush: i32) -> i32 {
-    let Some(zlib) = system_zlib() else {
+    if (*fp).gz_stream.is_none() {
+        (*fp).gz_stream = Some(GzipState::new_gzip_deflate(compress_level(&*fp)));
+    }
+
+    let uncompressed_ptr = (*fp).uncompressed_block.as_ptr();
+    let hfp = ptr::addr_of_mut!((*fp).fp);
+    let block_offset = (*fp).block_offset as usize;
+    let flush_finish = flush == Z_FINISH;
+    let Some(GzipState::Deflate(compressor)) = (*fp).gz_stream.as_mut().map(|s| s.as_mut()) else {
         add_errcode(&mut *fp, BGZF_ERR_ZLIB);
         return -1;
     };
-    if (*fp).gz_stream.is_none() {
-        let Some(stream) = gzip_stream_new_deflate(compress_level(&*fp)) else {
-            add_errcode(&mut *fp, BGZF_ERR_ZLIB);
-            return -1;
-        };
-        (*fp).gz_stream = Some(stream);
-    }
 
-    let uncompressed_ptr = (*fp).uncompressed_block.as_mut_ptr();
-    let compressed_ptr = (*fp).compressed_block.as_mut_ptr();
-    let hfp = ptr::addr_of_mut!((*fp).fp);
-    let block_offset = (*fp).block_offset;
-    let stream = (*fp)
-        .gz_stream
-        .as_mut()
-        .expect("BGZF gzip stream is initialized")
-        .as_mut();
-    stream.zs.next_in = uncompressed_ptr;
-    stream.zs.avail_in = block_offset as u32;
-
+    let mut input = slice::from_raw_parts(uncompressed_ptr, block_offset);
+    let mut out = vec![0u8; BGZF_MAX_BLOCK_SIZE];
+    let flush_mode = if flush_finish {
+        FlushCompress::Finish
+    } else {
+        FlushCompress::Sync
+    };
     loop {
-        stream.zs.next_out = compressed_ptr;
-        stream.zs.avail_out = BGZF_MAX_BLOCK_SIZE as u32;
-        let ret = (zlib.deflate)(&mut stream.zs, flush);
-        if ret != Z_OK && !(flush == Z_FINISH && ret == Z_STREAM_END) {
-            add_errcode(&mut *fp, BGZF_ERR_ZLIB);
-            return -1;
-        }
-        let have = BGZF_MAX_BLOCK_SIZE - stream.zs.avail_out as usize;
-        if have != 0 && bgzf_hwrite_ptr(hfp, compressed_ptr.cast(), have) != have as isize {
+        let before_in = compressor.total_in();
+        let before_out = compressor.total_out();
+        let status = match compressor.compress(input, &mut out, flush_mode) {
+            Ok(s) => s,
+            Err(_) => {
+                add_errcode(&mut *fp, BGZF_ERR_ZLIB);
+                return -1;
+            }
+        };
+        let consumed = (compressor.total_in() - before_in) as usize;
+        input = &input[consumed..];
+        let have = (compressor.total_out() - before_out) as usize;
+        if have != 0 && bgzf_hwrite_ptr(hfp, out.as_ptr().cast(), have) != have as isize {
             add_errcode(&mut *fp, BGZF_ERR_IO);
             return -1;
         }
-        if stream.zs.avail_out != 0 || ret == Z_STREAM_END {
+        // Done when: the output buffer was not filled (all pending output flushed
+        // and all input consumed) — or the stream signalled end on Z_FINISH.
+        if status == Status::StreamEnd || (input.is_empty() && have < out.len()) {
             break;
         }
     }
@@ -1691,48 +1446,26 @@ unsafe fn inflate_block(fp: &mut BGZF, block_length: usize) -> i32 {
     }
     let payload_end = block_length - BLOCK_FOOTER_LENGTH;
     let expected_crc = unpack_u32(&(*fp).compressed_block[payload_end..payload_end + 4]);
-    let Some(zlib) = system_zlib() else {
-        add_errcode(&mut *fp, BGZF_ERR_ZLIB);
-        return -1;
-    };
 
-    if (*fp).gz_stream.is_none() {
-        let Some(stream) = gzip_stream_new_raw_inflate() else {
+    // Each BGZF block is a self-contained RAW DEFLATE body, so a fresh per-call
+    // `Decompress` (zlib_header = false) is correct — no persistent stream.
+    let compressed_ptr = (*fp).compressed_block.as_ptr();
+    let uncompressed_ptr = (*fp).uncompressed_block.as_mut_ptr();
+    let input = slice::from_raw_parts(
+        compressed_ptr.add(BLOCK_HEADER_LENGTH),
+        block_length - BLOCK_HEADER_LENGTH,
+    );
+    let out = slice::from_raw_parts_mut(uncompressed_ptr, BGZF_MAX_BLOCK_SIZE);
+    let mut decompressor = Decompress::new(false);
+    match decompressor.decompress(input, out, FlushDecompress::Finish) {
+        Ok(Status::StreamEnd) => {}
+        _ => {
             add_errcode(&mut *fp, BGZF_ERR_ZLIB);
             return -1;
-        };
-        (*fp).gz_stream = Some(stream);
-    } else if (zlib.inflate_reset)(
-        &mut (*fp)
-            .gz_stream
-            .as_mut()
-            .expect("BGZF gzip stream is initialized")
-            .as_mut()
-            .zs,
-    ) != Z_OK
-    {
-        add_errcode(&mut *fp, BGZF_ERR_ZLIB);
-        return -1;
+        }
     }
 
-    let compressed_ptr = (*fp).compressed_block.as_mut_ptr();
-    let uncompressed_ptr = (*fp).uncompressed_block.as_mut_ptr();
-    let stream = (*fp)
-        .gz_stream
-        .as_mut()
-        .expect("BGZF gzip stream is initialized")
-        .as_mut();
-    stream.zs.next_in = compressed_ptr.add(BLOCK_HEADER_LENGTH);
-    stream.zs.avail_in = (block_length - BLOCK_HEADER_LENGTH) as u32;
-    stream.zs.next_out = uncompressed_ptr;
-    stream.zs.avail_out = BGZF_MAX_BLOCK_SIZE as u32;
-
-    if (zlib.inflate)(&mut stream.zs, Z_FINISH) != Z_STREAM_END {
-        add_errcode(&mut *fp, BGZF_ERR_ZLIB);
-        return -1;
-    }
-
-    let written = stream.zs.total_out as usize;
+    let written = decompressor.total_out() as usize;
     if hts_crc32(0, uncompressed_ptr.cast(), written) != expected_crc {
         add_errcode(&mut *fp, BGZF_ERR_CRC);
         return -1;
@@ -1742,83 +1475,113 @@ unsafe fn inflate_block(fp: &mut BGZF, block_length: usize) -> i32 {
 
 unsafe fn inflate_gzip_block(fp: &mut BGZF) -> i32 {
     if (*fp).gz_stream.is_none() {
-        let Some(stream) = gzip_stream_new_inflate() else {
-            add_errcode(&mut *fp, BGZF_ERR_ZLIB);
-            return -1;
-        };
-        (*fp).gz_stream = Some(stream);
+        (*fp).gz_stream = Some(GzipState::new_gzip_inflate());
     }
 
-    let Some(zlib) = system_zlib() else {
-        add_errcode(&mut *fp, BGZF_ERR_ZLIB);
-        return -1;
-    };
     let uncompressed_ptr = (*fp).uncompressed_block.as_mut_ptr();
     let compressed_ptr = (*fp).compressed_block.as_mut_ptr();
     let hfp = ptr::addr_of_mut!((*fp).fp);
     let block_offset = (*fp).block_offset as usize;
-    let stream = (*fp)
-        .gz_stream
-        .as_mut()
-        .expect("BGZF gzip stream is initialized")
-        .as_mut();
-    let mut input_eof = false;
-    stream.zs.next_out = uncompressed_ptr.add(block_offset);
-    stream.zs.avail_out = (BGZF_MAX_BLOCK_SIZE - block_offset) as u32;
 
-    while stream.zs.avail_out != 0 {
-        if !input_eof && stream.zs.avail_in == 0 {
-            let (n, from_preload) = if (*fp).block_clength < 0 {
+    let mut out_pos = block_offset;
+    let mut input_eof = false;
+
+    // Move the inflate state out so we can hold &mut to it while also reading
+    // from the file via `fp`. We put it back before returning.
+    let Some(GzipState::Inflate(mut state)) = (*fp).gz_stream.take().map(|b| *b) else {
+        add_errcode(&mut *fp, BGZF_ERR_ZLIB);
+        return -1;
+    };
+
+    let result = loop {
+        if out_pos >= BGZF_MAX_BLOCK_SIZE {
+            break (out_pos - block_offset) as i32;
+        }
+        // Refill pending input when empty and not yet at EOF.
+        if !input_eof && state.pending.is_empty() {
+            let n = if (*fp).block_clength < 0 {
                 let preloaded = (-(*fp).block_clength) as usize;
                 (*fp).block_clength = 0;
-                (preloaded as isize, true)
+                state.pending.clear();
+                state
+                    .pending
+                    .extend_from_slice(slice::from_raw_parts(compressed_ptr, preloaded));
+                preloaded as isize
             } else {
-                (
-                    bgzf_hread_ptr(hfp, compressed_ptr.cast(), BGZF_BLOCK_SIZE),
-                    false,
-                )
+                let n = bgzf_hread_ptr(hfp, compressed_ptr.cast(), BGZF_BLOCK_SIZE);
+                if n < 0 {
+                    add_errcode(&mut *fp, BGZF_ERR_IO);
+                    break n as i32;
+                }
+                state.pending.clear();
+                state
+                    .pending
+                    .extend_from_slice(slice::from_raw_parts(compressed_ptr, n as usize));
+                if (n as usize) < BGZF_BLOCK_SIZE {
+                    input_eof = true;
+                }
+                n
             };
-            if n < 0 {
-                add_errcode(&mut *fp, BGZF_ERR_IO);
-                return n as i32;
-            }
-            stream.zs.next_in = compressed_ptr;
-            stream.zs.avail_in = n as u32;
-            if !from_preload && stream.zs.avail_in < BGZF_BLOCK_SIZE as u32 {
-                input_eof = true;
-            }
+            let _ = n;
         }
 
-        let ret = (zlib.inflate)(&mut stream.zs, Z_SYNC_FLUSH);
+        let out = slice::from_raw_parts_mut(
+            uncompressed_ptr.add(out_pos),
+            BGZF_MAX_BLOCK_SIZE - out_pos,
+        );
+        let before_in = state.dec.total_in();
+        let before_out = state.dec.total_out();
+        let status = match state.dec.decompress(&state.pending, out, FlushDecompress::None) {
+            Ok(s) => s,
+            Err(_) => {
+                add_errcode(&mut *fp, BGZF_ERR_ZLIB);
+                break -1;
+            }
+        };
+        let consumed = (state.dec.total_in() - before_in) as usize;
+        let produced = (state.dec.total_out() - before_out) as usize;
+        if consumed != 0 {
+            state.pending.drain(..consumed);
+        }
+        out_pos += produced;
 
-        match ret {
-            Z_STREAM_END => {
+        match status {
+            Status::StreamEnd => {
                 let mut peeked = 0u8;
-                let has_more_input = stream.zs.avail_in > 0
+                let has_more_input = !state.pending.is_empty()
                     || bgzf_hpeek_ptr(hfp, (&mut peeked as *mut u8).cast(), 1) == 1;
                 if has_more_input {
-                    if gzip_stream_reset(stream) != Z_OK {
-                        add_errcode(&mut *fp, BGZF_ERR_ZLIB);
-                        return -1;
-                    }
+                    // Next concatenated gzip member: fresh decoder.
+                    state.dec = Decompress::new_gzip(15);
                     continue;
                 }
-                break;
+                break (out_pos - block_offset) as i32;
             }
-            Z_OK | Z_BUF_ERROR => {
-                if ret == Z_BUF_ERROR && input_eof && stream.zs.avail_out > 0 {
-                    add_errcode(&mut *fp, BGZF_ERR_IO);
-                    return -1;
+            Status::Ok | Status::BufError => {
+                if produced == 0 && consumed == 0 {
+                    if input_eof && state.pending.is_empty() {
+                        // Truncated stream: cannot make progress.
+                        if out_pos == block_offset {
+                            add_errcode(&mut *fp, BGZF_ERR_IO);
+                            break -1;
+                        }
+                        break (out_pos - block_offset) as i32;
+                    }
+                    if out_pos >= BGZF_MAX_BLOCK_SIZE {
+                        break (out_pos - block_offset) as i32;
+                    }
                 }
             }
-            _ => {
-                add_errcode(&mut *fp, BGZF_ERR_ZLIB);
-                return -1;
-            }
         }
-    }
 
-    (BGZF_MAX_BLOCK_SIZE - stream.zs.avail_out as usize) as i32
+        if out_pos >= BGZF_MAX_BLOCK_SIZE {
+            break (out_pos - block_offset) as i32;
+        }
+    };
+
+    // Restore the inflate state for the next call.
+    (*fp).gz_stream = Some(Box::new(GzipState::Inflate(state)));
+    result
 }
 
 // original: inflate_gzip_block (htslib/bgzf.c:829)
@@ -2828,9 +2591,8 @@ pub unsafe fn bgzf_close(fp: *mut BGZF) -> i32 {
     let ret = bgzf_close_fp(bgzf_take_fp(fp));
     bgzf_index_destroy(fp);
     bgzf_free_cache(&mut *fp);
-    if let Some(stream) = (*fp).gz_stream.take() {
-        gzip_stream_free(stream, flag(&*fp, 17) && flag(&*fp, 31));
-    }
+    // Drop the owned gzip codec state (flate2 Compress/Decompress).
+    let _ = (*fp).gz_stream.take();
     // uncompressed_block / compressed_block are owned Vecs freed by Box::drop.
     drop(Box::from_raw(fp));
     if ret != 0 || had_error {
@@ -4176,9 +3938,7 @@ mod tests {
                 .unwrap();
             assert_eq!(decoded, payload);
 
-            if let Some(stream) = fp.gz_stream.take() {
-                gzip_stream_free(stream, true);
-            }
+            let _ = fp.gz_stream.take();
         }
     }
 

@@ -3026,12 +3026,14 @@ const DS_RN_LOCAL: i32 = 11;
 /// for `[data, data+size)` at the given level/strategy. Returns a libc
 /// malloc-owned buffer of size `*cdata_size`, or null on failure.
 ///
-/// Calls system zlib directly with `deflateInit2(level, Z_DEFLATED, 15|16,
-/// 9, strat)` — windowBits=15|16 selects gzip wrapping, memLevel=9 matches
-/// htslib's `cram_io.c:1248`. Going through `flate2::write::GzEncoder`
-/// (the previous implementation) hardcoded `Z_DEFAULT_STRATEGY` and OS=0xff
-/// and produced bytes that differed from C's CRAM output even on identical
-/// input. Matching C exactly here is what makes bam_to_cram byte-identical.
+/// This used to call the system C zlib directly (`deflateInit2(level,
+/// Z_DEFLATED, 15|16, 9, strat)`). The C zlib dependency (`libz-sys`) was
+/// removed in favour of the pure-Rust `zlib-rs` (already the `flate2` backend),
+/// whose `compress_slice`/`DeflateConfig` reproduce those exact params —
+/// gzip wrapper (15|16), memLevel 9, AND the `strategy` (so CRAM's GZIP_RLE
+/// passes Z_RLE), which flate2's higher-level wrapper cannot express. Output
+/// may not be byte-identical to C zlib but is a valid gzip stream that CRAM
+/// round-trips through `zlib_mem_inflate`.
 unsafe fn cram_cram_io_c_1222_zlib_mem_deflate(
     data: *mut u8,
     size: usize,
@@ -3039,76 +3041,33 @@ unsafe fn cram_cram_io_c_1222_zlib_mem_deflate(
     level: i32,
     strat: i32,
 ) -> *mut u8 {
-    use crate::htslib_rs::bgzf;
-    // zlib return codes / flush modes / methods.
-    const Z_OK: i32 = 0;
-    const Z_STREAM_END: i32 = 1;
-    const Z_NO_FLUSH: i32 = 0;
-    const Z_FINISH: i32 = 4;
-    const Z_DEFLATED: i32 = 8;
-
     *cdata_size = 0;
 
-    let Some(zlib) = bgzf::system_zlib() else {
-        return std::ptr::null_mut();
+    let input = std::slice::from_raw_parts(data, size);
+    // Mirror htslib's zlib_mem_deflate: deflateInit2(level, Z_DEFLATED,
+    // 15|16 (gzip wrapper), memLevel 9, strat). zlib-rs honors the gzip
+    // `strategy` (e.g. CRAM's GZIP_RLE passes Z_RLE) that flate2's wrapper
+    // cannot express. `compress_bound` assumes the zlib wrap (~6 bytes); the
+    // gzip wrapper is ~12 bytes larger, so pad it.
+    let config = zlib_rs::DeflateConfig {
+        level,
+        method: zlib_rs::Method::Deflated,
+        window_bits: 15 + 16,
+        mem_level: 9,
+        strategy: zlib_rs::Strategy::try_from(strat).unwrap_or(zlib_rs::Strategy::Default),
     };
+    let mut out = vec![0u8; zlib_rs::compress_bound(size) + 32];
+    let (compressed, rc) = zlib_rs::compress_slice(&mut out, input, config);
+    if rc != zlib_rs::ReturnCode::Ok {
+        return std::ptr::null_mut();
+    }
 
-    // C uses size*1.05 + 100 as initial allocation (cram_io.c:1231).
-    let cdata_alloc = ((size as f64) * 1.05 + 100.0) as usize;
-    let cdata = libc::malloc(cdata_alloc.max(1)).cast::<u8>();
+    let total = compressed.len();
+    let cdata = libc::malloc(total.max(1)).cast::<u8>();
     if cdata.is_null() {
         return std::ptr::null_mut();
     }
-
-    let mut zs: bgzf::z_stream = std::mem::zeroed();
-    zs.next_in = data.cast::<u8>();
-    zs.avail_in = size as u32;
-    zs.next_out = cdata.cast::<u8>();
-    zs.avail_out = cdata_alloc as u32;
-    // Z_BINARY = 0 (default after zeroed()).
-
-    let ret = (zlib.deflate_init2)(
-        &mut zs,
-        level,
-        Z_DEFLATED,
-        15 | 16, // gzip wrapping
-        9,       // memLevel
-        strat,
-        (zlib.zlib_version)(),
-        std::mem::size_of::<bgzf::z_stream>() as i32,
-    );
-    if ret != Z_OK {
-        libc::free(cdata.cast());
-        return std::ptr::null_mut();
-    }
-
-    // Loop with Z_NO_FLUSH while we still have input; then Z_FINISH to flush.
-    let mut cdata_pos: usize = 0;
-    while zs.avail_in != 0 {
-        zs.next_out = cdata.cast::<u8>().add(cdata_pos);
-        zs.avail_out = (cdata_alloc - cdata_pos) as u32;
-        if cdata_alloc <= cdata_pos {
-            (zlib.deflate_end)(&mut zs);
-            libc::free(cdata.cast());
-            return std::ptr::null_mut();
-        }
-        let r = (zlib.deflate)(&mut zs, Z_NO_FLUSH);
-        cdata_pos = cdata_alloc - zs.avail_out as usize;
-        if r != Z_OK {
-            break;
-        }
-    }
-    let fin = (zlib.deflate)(&mut zs, Z_FINISH);
-    if fin != Z_STREAM_END {
-        (zlib.deflate_end)(&mut zs);
-        libc::free(cdata.cast());
-        return std::ptr::null_mut();
-    }
-    let total = zs.total_out as usize;
-    if (zlib.deflate_end)(&mut zs) != Z_OK {
-        libc::free(cdata.cast());
-        return std::ptr::null_mut();
-    }
+    std::ptr::copy_nonoverlapping(compressed.as_ptr(), cdata, total);
     *cdata_size = total;
     cdata
 }

@@ -2007,7 +2007,7 @@ pub struct BGZF {
     /// owned on-the-fly GZI index (None when not indexing)
     pub idx: Option<Box<crate::htslib_rs::bgzf::bgzidx_t>>,
     pub idx_build_otf: i32,
-    pub gz_stream: Option<NonNull<crate::htslib_rs::bgzf::GzipStream>>,
+    pub gz_stream: Option<Box<crate::htslib_rs::bgzf::GzipState>>,
     pub seeked: i64,
 }
 

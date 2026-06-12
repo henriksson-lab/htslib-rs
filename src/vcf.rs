@@ -16823,7 +16823,8 @@ mod tests {
         }
     }
 
-    // Native bcf_index_build must produce a byte-identical CSI to hts_sys.
+    // Native bcf_index_build must produce a CSI whose (decompressed) index
+    // content is identical to hts_sys (compressed bytes may differ — flate2).
     #[test]
     fn vcf_bcf_index_build_parity_native_vs_hts_sys() {
         unsafe {
@@ -16859,9 +16860,22 @@ mod tests {
             assert_eq!(bcf_index_build((nat_c.as_ptr()).cast(), 14), 0);
             assert_eq!(hts_sys::bcf_index_build(csys_c.as_ptr(), 14), 0);
 
+            // The .csi index is itself BGZF-compressed. The native writer uses
+            // flate2 (zlib-rs) while hts_sys uses C zlib, so the compressed bytes
+            // differ legitimately; compare the DECOMPRESSED index content, which
+            // must be identical.
+            use std::io::Read as _;
             let a = std::fs::read(nat.with_extension("bcf.csi")).unwrap();
             let b = std::fs::read(csys.with_extension("bcf.csi")).unwrap();
-            assert_eq!(a, b, "native CSI bytes differ from hts_sys");
+            let mut a_dec = Vec::new();
+            flate2::read::MultiGzDecoder::new(&a[..])
+                .read_to_end(&mut a_dec)
+                .unwrap();
+            let mut b_dec = Vec::new();
+            flate2::read::MultiGzDecoder::new(&b[..])
+                .read_to_end(&mut b_dec)
+                .unwrap();
+            assert_eq!(a_dec, b_dec, "native CSI index content differs from hts_sys");
 
             let _ = std::fs::remove_file(&nat);
             let _ = std::fs::remove_file(nat.with_extension("bcf.csi"));
